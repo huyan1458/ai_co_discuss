@@ -41936,8 +41936,8 @@ var eW = {
 				id: Number(r.dataset.messageId),
 				range: i,
 				touch: s,
-				left: o.right + 4,
-				top: o.top - 28
+				left: Math.min(o.right - 8, window.innerWidth - 90),
+				top: o.bottom + 6
 			};
 		}
 		function ae() {
@@ -42900,7 +42900,7 @@ var eW = {
 			s("copy", `${i.value.room_site}/r/${P.value.id}/messages/${e.id}`);
 		}
 		return (e, t) => {
-			let o = MA, h = pA, g = sA, _ = RV, w = rH, E = tH, D = kV, O = $V, k = XV, ee = PV, te = JV, ne = BV;
+			let o = MA, h = pA, g = sA, _ = rH, w = tH, E = RV, D = kV, O = $V, k = XV, ee = PV, te = JV, ne = BV;
 			return U(), W("section", eW, [
 				I(i).query || I(i).mention_only || I(i).host_only ? (U(), W("div", tW, [K("span", null, N([
 					I(i).query && `“${I(i).query}”`,
@@ -43029,24 +43029,19 @@ var eW = {
 					"style",
 					"onKeydown"
 				])) : Y("", !0)])),
-				C.value && !C.value.touch ? (U(), G(_, {
+				C.value && !C.value.touch ? (U(), W("button", {
 					key: 2,
-					text: "从这里朗读",
-					content: { side: "top" }
-				}, {
-					default: L(() => [K("button", {
-						type: "button",
-						class: "channel-listen-mark",
-						style: pe({
-							left: `${C.value.left}px`,
-							top: `${C.value.top}px`
-						}),
-						"aria-label": "从选中处开始朗读",
-						onMousedown: t[3] ||= uu(() => {}, ["prevent"]),
-						onClick: ae
-					}, [q(g, { name: "i-lucide-headphones" })], 36)]),
-					_: 1
-				})) : Y("", !0),
+					type: "button",
+					class: "channel-listen-mark",
+					style: pe({
+						left: `${C.value.left}px`,
+						top: `${C.value.top}px`
+					}),
+					title: "从选中处开始朗读",
+					"aria-label": "从选中处开始朗读",
+					onMousedown: t[3] ||= uu(() => {}, ["prevent"]),
+					onClick: ae
+				}, [q(g, { name: "i-lucide-headphones" }), t[32] ||= J("朗读", -1)], 36)) : Y("", !0),
 				nc([
 					yn.value,
 					Sn.value,
@@ -43090,7 +43085,7 @@ var eW = {
 					(U(!0), W(H, null, B(yn.value, (e) => (U(), W("div", {
 						key: e.key,
 						class: "channel-message-group"
-					}, [q(w, {
+					}, [q(_, {
 						label: e.label,
 						class: "channel-date-divider"
 					}, null, 8, ["label"]), (U(!0), W(H, null, B(e.messages, (e) => (U(), W(H, { key: e.id }, [
@@ -43112,7 +43107,7 @@ var eW = {
 							text: L(() => [J("主持人安排：" + N(Dt.value.get(e.arrangement.after_message_id)?.find((t) => t.id === e.arrangement.id)?.label), 1), e.arrangement.after_message_id ? (U(), W("small", pW, "耗时 " + N(Nt(Ft(e.arrangement, I(i).messages.find((t) => t.id === e.arrangement.after_message_id)))), 1)) : Y("", !0)]),
 							default: L(() => [(U(!0), W(H, null, B(e.arrangement.turns, (t) => (U(), W("p", { key: `${e.id}-${t.expert}-${t.question}` }, [K("span", null, N(I(a).display_name(t.expert)) + "：" + N(t.question), 1)]))), 128))]),
 							_: 2
-						}, 1024)) : e.cancelled_turn || e.cancelled_execution ? (U(), G(E, {
+						}, 1024)) : e.cancelled_turn || e.cancelled_execution ? (U(), G(w, {
 							key: 3,
 							id: e.id,
 							"data-author": I(a).identities[e.author]?.style,
@@ -43153,7 +43148,7 @@ var eW = {
 								}, [K("summary", { "aria-label": `查看 ${I(a).display_name(e.member)} 未采纳的回答` }, "未采纳的回答", 8, SW), K("div", CW, N(Ke.value.get(e.id)?.text ?? "正在读取…"), 1)], 40, xW)) : Y("", !0)], 64))), 128))
 							]),
 							_: 2
-						}, 1032, ["id", "data-author"])) : e.slot_card && !e.failure ? (U(), G(E, {
+						}, 1032, ["id", "data-author"])) : e.slot_card && !e.failure ? (U(), G(w, {
 							key: 4,
 							id: `execution-${e.id}`,
 							"data-author": I(a).identities[e.author]?.style,
@@ -43181,7 +43176,7 @@ var eW = {
 									"text",
 									"alt",
 									"class"
-								]), K("div", TW, [K("div", EW, [K("strong", null, N(I(a).display_name(e.author)), 1)]), K("div", DW, [e.created_at ? (U(), W(H, { key: 0 }, [K("time", { title: (/* @__PURE__ */ new Date(e.created_at * 1e3)).toLocaleString("zh-CN") }, N(I(a).format_time(e.created_at * 1e3)), 9, OW), t[32] ||= J(" · ", -1)], 64)) : Y("", !0), J(N(e.waiting ? `手动启动${e.created_at ? ` · 已等 ${Nt(Math.max(0, Ue.value - e.created_at))}` : ""}` : `已用 ${Nt(Math.max(0, Ue.value - e.created_at))}`), 1)])])]),
+								]), K("div", TW, [K("div", EW, [K("strong", null, N(I(a).display_name(e.author)), 1)]), K("div", DW, [e.created_at ? (U(), W(H, { key: 0 }, [K("time", { title: (/* @__PURE__ */ new Date(e.created_at * 1e3)).toLocaleString("zh-CN") }, N(I(a).format_time(e.created_at * 1e3)), 9, OW), t[33] ||= J(" · ", -1)], 64)) : Y("", !0), J(N(e.waiting ? `手动启动${e.created_at ? ` · 已等 ${Nt(Math.max(0, Ue.value - e.created_at))}` : ""}` : `已用 ${Nt(Math.max(0, Ue.value - e.created_at))}`), 1)])])]),
 								K("div", kW, [(U(!0), W(H, null, B([Xe(e)], (t) => (U(), W("div", {
 									key: e.id,
 									class: j(["channel-message-text", { "channel-working-warning": t.warning }]),
@@ -43202,7 +43197,7 @@ var eW = {
 									"beat",
 									"silent",
 									"muted"
-								])) : (U(), W("span", MW, N(t.text), 1))], 10, AW))), 128)), !e.retry && I(i).access?.can_manage ? (U(), W("div", NW, [Fe.value?.expert === e.author && e.discussion_request ? (U(), W(H, { key: 0 }, [q(_, { text: "暂停讨论" }, {
+								])) : (U(), W("span", MW, N(t.text), 1))], 10, AW))), 128)), !e.retry && I(i).access?.can_manage ? (U(), W("div", NW, [Fe.value?.expert === e.author && e.discussion_request ? (U(), W(H, { key: 0 }, [q(E, { text: "暂停讨论" }, {
 									default: L(() => [q(o, {
 										icon: "i-lucide-pause",
 										size: "sm",
@@ -43218,7 +43213,7 @@ var eW = {
 										"loading"
 									])]),
 									_: 2
-								}, 1024), q(_, { text: "停止本次发言，轮到下一位" }, {
+								}, 1024), q(E, { text: "停止本次发言，轮到下一位" }, {
 									default: L(() => [q(o, {
 										variant: "solid",
 										color: "neutral",
@@ -43228,7 +43223,7 @@ var eW = {
 										loading: I(c) === "skip_turn",
 										onClick: t[7] ||= (e) => I(s)("skip_turn")
 									}, {
-										default: L(() => [...t[33] ||= [K("span", { class: "channel-stop-square" }, null, -1)]]),
+										default: L(() => [...t[34] ||= [K("span", { class: "channel-stop-square" }, null, -1)]]),
 										_: 1
 									}, 8, [
 										"aria-label",
@@ -43236,7 +43231,7 @@ var eW = {
 										"loading"
 									])]),
 									_: 2
-								}, 1024)], 64)) : (U(), G(_, {
+								}, 1024)], 64)) : (U(), G(E, {
 									key: 1,
 									text: "停止"
 								}, {
@@ -43252,7 +43247,7 @@ var eW = {
 											action: "interrupt"
 										})
 									}, {
-										default: L(() => [...t[34] ||= [K("span", { class: "channel-stop-square" }, null, -1)]]),
+										default: L(() => [...t[35] ||= [K("span", { class: "channel-stop-square" }, null, -1)]]),
 										_: 1
 									}, 8, [
 										"aria-label",
@@ -43336,7 +43331,7 @@ var eW = {
 								}, [K("time", { title: new Date(t).toLocaleString("zh-CN") }, N(I(a).format_time(t)), 9, HW), K("span", null, "执行 #" + N(e.failure.id), 1)]))), 128))]),
 								e.failure.elapsed_seconds == null ? Y("", !0) : (U(), W("span", UW, "耗时 " + N(Nt(e.failure.elapsed_seconds)), 1))
 							]),
-							K("div", WW, [K("p", GW, N(e.failure.result || "执行失败，未提供原因"), 1), ar(e.failure) ? (U(), W("div", KW, [q(_, { text: "重试" }, {
+							K("div", WW, [K("p", GW, N(e.failure.result || "执行失败，未提供原因"), 1), ar(e.failure) ? (U(), W("div", KW, [q(E, { text: "重试" }, {
 								default: L(() => [q(o, {
 									icon: "i-lucide-rotate-cw",
 									variant: "solid",
@@ -43445,7 +43440,7 @@ var eW = {
 								mt.value === e.id,
 								Ye(e)?.notes,
 								Ge.value.get(Ye(e)?.id)
-							], () => q(E, {
+							], () => q(w, {
 								id: String(e.id),
 								"data-message-id": e.id,
 								"data-author": I(a).identities[e.author]?.style,
@@ -43495,7 +43490,7 @@ var eW = {
 												variant: "soft",
 												class: "channel-source"
 											}, {
-												default: L(() => [...t[35] ||= [J("主持人", -1)]]),
+												default: L(() => [...t[36] ||= [J("主持人", -1)]]),
 												_: 1
 											})) : Y("", !0),
 											e.kind === "receipt" ? (U(), G(D, {
@@ -43505,7 +43500,7 @@ var eW = {
 												variant: "soft",
 												class: "channel-source"
 											}, {
-												default: L(() => [...t[36] ||= [J("运行回执", -1)]]),
+												default: L(() => [...t[37] ||= [J("运行回执", -1)]]),
 												_: 1
 											})) : Y("", !0),
 											dt(e) ? (U(), G(D, {
@@ -43516,7 +43511,7 @@ var eW = {
 												class: "channel-source",
 												title: Fe.value ? `${I(a).display_name(Fe.value.expert)} 说完后交给主持人处理` : "等待主持人处理"
 											}, {
-												default: L(() => [...t[37] ||= [J("待主持人处理", -1)]]),
+												default: L(() => [...t[38] ||= [J("待主持人处理", -1)]]),
 												_: 1
 											}, 8, ["title"])) : Y("", !0),
 											(U(!0), W(H, null, B(lt.value.get(e.id) || [], (e) => (U(), G(D, {
@@ -43626,7 +43621,7 @@ var eW = {
 										"aria-controls",
 										"onClick"
 									])) : Y("", !0)])),
-									e.summary ? (U(), W("div", fG, [K("small", null, [t[38] ||= J("回答摘要", -1), e.summary_by && e.summary_by !== e.author ? (U(), W("span", pG, " · " + N(I(a).display_name(e.summary_by)) + " 整理", 1)) : Y("", !0)]), K("div", {
+									e.summary ? (U(), W("div", fG, [K("small", null, [t[39] ||= J("回答摘要", -1), e.summary_by && e.summary_by !== e.author ? (U(), W("span", pG, " · " + N(I(a).display_name(e.summary_by)) + " 整理", 1)) : Y("", !0)]), K("div", {
 										class: "channel-message-text markdown-body",
 										innerHTML: e.rendered_summary
 									}, null, 8, mG)])) : Y("", !0),
@@ -43655,9 +43650,9 @@ var eW = {
 											class: "channel-recommendation-icon"
 										}),
 										e.status === "open" ? (U(), W("span", gG, [
-											t[39] ||= J("智能调度建议让 ", -1),
+											t[40] ||= J("智能调度建议让 ", -1),
 											K("strong", null, N(I(a).display_name(e.member)), 1),
-											t[40] ||= J(" 回答", -1),
+											t[41] ||= J(" 回答", -1),
 											K("small", { title: `${e.label}，置信度 ${Number(e.confidence).toFixed(2)}` }, "置信度 " + N(Number(e.confidence).toFixed(2)) + " · " + N(e.remaining) + " 秒", 9, _G)
 										])) : e.status === "waiting" ? (U(), W("span", vG, "智能调度：主持人答完后请 " + N(I(a).display_name(e.member)) + " 回答", 1)) : (U(), W("span", yG, "智能调度：" + N(e.mode === "interrupt" ? `已打断主持人，改由 ${I(a).display_name(e.member)} 回答` : `已请 ${I(a).display_name(e.member)} 回答`), 1)),
 										e.can_adopt ? (U(), W(H, { key: 3 }, [mt.value === e.message_id ? (U(), W(H, { key: 1 }, [
@@ -43729,7 +43724,7 @@ var eW = {
 									], 8, bG))), 128))
 								]),
 								header: L(() => [K("div", CG, [K("div", wG, [
-									pr(e) ? Y("", !0) : (U(), G(_, {
+									pr(e) ? Y("", !0) : (U(), G(E, {
 										key: 0,
 										text: "回复"
 									}, {
@@ -43743,7 +43738,7 @@ var eW = {
 										}, null, 8, ["aria-label", "onClick"])]),
 										_: 2
 									}, 1024)),
-									mr(e) && gr.value.id !== e.id ? (U(), G(_, {
+									mr(e) && gr.value.id !== e.id ? (U(), G(E, {
 										key: 1,
 										text: "撤回"
 									}, {
@@ -43757,7 +43752,7 @@ var eW = {
 										}, null, 8, ["aria-label", "onClick"])]),
 										_: 2
 									}, 1024)) : Y("", !0),
-									pr(e) && gr.value.id !== e.id ? (U(), G(_, {
+									pr(e) && gr.value.id !== e.id ? (U(), G(E, {
 										key: 2,
 										text: "编辑"
 									}, {
@@ -43771,7 +43766,7 @@ var eW = {
 										}, null, 8, ["aria-label", "onClick"])]),
 										_: 2
 									}, 1024)) : Y("", !0),
-									!T.value && e.kind !== "receipt" && gr.value.id !== e.id ? (U(), G(_, {
+									!T.value && e.kind !== "receipt" && gr.value.id !== e.id ? (U(), G(E, {
 										key: 3,
 										text: I(v).state.message_id === e.id ? "停止朗读" : "朗读"
 									}, {
@@ -43892,9 +43887,9 @@ var eW = {
 									key: e.id,
 									class: "channel-schedule-input"
 								}, [
-									n.background ? (U(), W("p", FG, [t[41] ||= K("b", null, "固定背景", -1), K("span", { title: n.background }, N(n.background), 9, IG)])) : Y("", !0),
-									K("p", null, [t[42] ||= K("b", null, "房间与成员", -1), K("span", { title: n.facts }, N(n.facts), 9, LG)]),
-									K("p", null, [t[43] ||= K("b", null, "对话上下文", -1), K("span", null, [J("近期消息 " + N(n.messages), 1), n.pending ? (U(), W(H, { key: 0 }, [J("；待处理 " + N(n.pending), 1)], 64)) : Y("", !0)])]),
+									n.background ? (U(), W("p", FG, [t[42] ||= K("b", null, "固定背景", -1), K("span", { title: n.background }, N(n.background), 9, IG)])) : Y("", !0),
+									K("p", null, [t[43] ||= K("b", null, "房间与成员", -1), K("span", { title: n.facts }, N(n.facts), 9, LG)]),
+									K("p", null, [t[44] ||= K("b", null, "对话上下文", -1), K("span", null, [J("近期消息 " + N(n.messages), 1), n.pending ? (U(), W(H, { key: 0 }, [J("；待处理 " + N(n.pending), 1)], 64)) : Y("", !0)])]),
 									(U(!0), W(H, null, B(n.questions, (e, t) => (U(), W(H, { key: t }, [K("p", null, [K("b", null, "问题" + N(n.questions.length > 1 ? ` ${t + 1}` : ""), 1), K("span", { title: e.instructions }, N(e.instructions), 9, RG)]), (U(!0), W(H, null, B(e.choices, (e) => (U(), W("p", {
 										key: e.name,
 										class: "is-choice"
@@ -43911,7 +43906,7 @@ var eW = {
 								class: "channel-schedule-correction",
 								onSubmit: uu((t) => At(e), ["prevent"])
 							}, [
-								K("label", null, [t[44] ||= J("应该由谁回答", -1), q(k, {
+								K("label", null, [t[45] ||= J("应该由谁回答", -1), q(k, {
 									"model-value": Ot.value.should_be || ZK,
 									items: jt.value,
 									"aria-label": "应该由谁回答",
@@ -43949,7 +43944,7 @@ var eW = {
 							], 40, BG)) : Y("", !0)], 64))), 128))
 						], 64))
 					], 64))), 128))]))), 128)),
-					I(i).sending_preview ? (U(), W("div", VG, [q(E, {
+					I(i).sending_preview ? (U(), W("div", VG, [q(w, {
 						id: "channel-sending-message",
 						"data-author": I(a).identities[I(i).sending_preview.author]?.style,
 						role: "user",
@@ -44029,7 +44024,7 @@ var eW = {
 					"aria-label": "从选中处开始朗读",
 					onMousedown: t[17] ||= uu(() => {}, ["prevent"]),
 					onClick: ae
-				}, [q(g, { name: "i-lucide-headphones" }), t[45] ||= J("听当前", -1)], 32)) : Y("", !0), dn.value.length && !Pe.value ? (U(), G(o, {
+				}, [q(g, { name: "i-lucide-headphones" }), t[46] ||= J("听当前", -1)], 32)) : Y("", !0), dn.value.length && !Pe.value ? (U(), G(o, {
 					key: 1,
 					icon: "i-lucide-arrow-down",
 					color: "neutral",
@@ -44067,7 +44062,7 @@ var eW = {
 						ui: { content: "channel-select-menu channel-mention-menu" },
 						"onUpdate:open": t[19] ||= (e) => !e && (Ut.value = null)
 					}, {
-						content: L(() => [t[46] ||= K("div", { class: "channel-mention-heading" }, [K("span", null, "选择成员"), K("small", null, "↑↓ 选择 · Enter 确认")], -1), K("div", {
+						content: L(() => [t[47] ||= K("div", { class: "channel-mention-heading" }, [K("span", null, "选择成员"), K("small", null, "↑↓ 选择 · Enter 确认")], -1), K("div", {
 							id: "channel-mention-list",
 							ref_key: "mention_list",
 							ref: Xt,
@@ -44197,7 +44192,7 @@ var eW = {
 							])) : Y("", !0),
 							I(i).editing_queued ? (U(), W("div", dK, [
 								q(g, { name: "i-lucide-pencil" }),
-								t[47] ||= K("span", null, "编辑排队消息：发送即保存修改，仍按原位置排队", -1),
+								t[48] ||= K("span", null, "编辑排队消息：发送即保存修改，仍按原位置排队", -1),
 								q(o, {
 									icon: "i-lucide-x",
 									color: "neutral",
@@ -44241,7 +44236,7 @@ var eW = {
 								key: t,
 								style: pe({ transform: `scaleY(${.15 + e * .85})` })
 							}, null, 4))), 128)), K("small", null, N(S(I(x).state.seconds)), 1)], 8, mK)) : Y("", !0),
-							b.value ? (U(), G(_, {
+							b.value ? (U(), G(E, {
 								key: 1,
 								text: I(y).on.value ? "关闭语音播报" : "语音播报：新回复自动朗读摘要"
 							}, {
@@ -44262,7 +44257,7 @@ var eW = {
 								])]),
 								_: 1
 							}, 8, ["text"])) : Y("", !0),
-							q(_, { text: I(x).state.status === "recording" ? "结束并转成文字" : I(x).state.status === "transcribing" ? "正在识别…" : "语音输入" }, {
+							q(E, { text: I(x).state.status === "recording" ? "结束并转成文字" : I(x).state.status === "transcribing" ? "正在识别…" : "语音输入" }, {
 								default: L(() => [q(o, {
 									type: "button",
 									icon: I(x).state.status === "recording" ? "i-lucide-square" : "i-lucide-mic",
@@ -44319,7 +44314,7 @@ var eW = {
 					K("div", hK, [K("span", null, N(Ze.value), 1), K("span", gK, [u.value ? (U(), W("span", {
 						key: 0,
 						class: j({ "is-near-limit": d.value })
-					}, [J(N(u.value) + " / " + N(I(a).max_message_length), 1), t[48] ||= K("span", { class: "channel-note-divider" }, "·", -1)], 2)) : Y("", !0), t[49] ||= K("span", { class: "channel-key-hint" }, [
+					}, [J(N(u.value) + " / " + N(I(a).max_message_length), 1), t[49] ||= K("span", { class: "channel-note-divider" }, "·", -1)], 2)) : Y("", !0), t[50] ||= K("span", { class: "channel-key-hint" }, [
 						K("kbd", null, "Enter"),
 						J(" 发送"),
 						K("span", { class: "channel-note-divider" }, "·"),
@@ -44332,7 +44327,7 @@ var eW = {
 			]);
 		};
 	}
-}, [["__scopeId", "data-v-096bc8c4"]]), nq = { class: "page-heading" }, rq = { class: "topic-brief" }, iq = {
+}, [["__scopeId", "data-v-8c088a8a"]]), nq = { class: "page-heading" }, rq = { class: "topic-brief" }, iq = {
 	key: 0,
 	class: "host-progress"
 }, aq = {

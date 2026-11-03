@@ -89,11 +89,11 @@ async function track_selection() {
   if (!card) { listen_here.value = null; return; }
   const kept = range.cloneRange();
   if (!await speech_configured() || pointer_down) return;
-  // A small mark just above where the selection ends, clear of the selected text.
+  // A small pill just under where the selection ends, clear of the selected text.
   const rects = kept.getClientRects(), end = rects[rects.length - 1] || kept.getBoundingClientRect();
   // On touch screens the system's own selection menu sits next to the selection, so the button waits above the composer instead.
   const touch = window.matchMedia("(pointer: coarse)").matches;
-  listen_here.value = { id: Number(card.dataset.messageId), range: kept, touch, left: end.right + 4, top: end.top - 28 };
+  listen_here.value = { id: Number(card.dataset.messageId), range: kept, touch, left: Math.min(end.right - 8, window.innerWidth - 90), top: end.bottom + 6 };
 }
 /** Start reading where the selection begins and continue to the latest message. */
 function listen_from_selection() {
@@ -1299,7 +1299,7 @@ function copy_message(message) { act("copy", `${view.value.room_site}/r/${room.v
         </div>
       </motion.div>
     </Teleport>
-    <UTooltip v-if="listen_here && !listen_here.touch" text="从这里朗读" :content="{ side: 'top' }"><button type="button" class="channel-listen-mark" :style="{ left: `${listen_here.left}px`, top: `${listen_here.top}px` }" aria-label="从选中处开始朗读" @mousedown.prevent @click="listen_from_selection"><UIcon name="i-lucide-headphones" /></button></UTooltip>
+    <button v-if="listen_here && !listen_here.touch" type="button" class="channel-listen-mark" :style="{ left: `${listen_here.left}px`, top: `${listen_here.top}px` }" title="从选中处开始朗读" aria-label="从选中处开始朗读" @mousedown.prevent @click="listen_from_selection"><UIcon name="i-lucide-headphones" />朗读</button>
     <div ref="transcript" v-memo="[message_groups, message_round_labels, free, room.session, view.access, active_message, expanded_answers.size, reader.state.message_id, room.title, view.query, view.mention_only, view.host_only, topic_anchor, end_anchor, request_badges, execution_reports, recommendations, adopting, scheduler_decisions, host_arrangements, correcting, pending, execution_notes, editing, rewound_runs]" class="channel-transcript" aria-label="聊天记录" @scroll="track_scroll" @wheel.passive="resume_tracking" @touchstart.passive="resume_tracking" @keydown="resume_tracking">
       <div v-if="!view.query && !view.mention_only && !view.host_only && !topic_anchor" class="channel-message-group channel-topic-group"><TopicCard :ref="(card) => topic_card = card" @edit="emit('edit')" /></div>
       <div v-for="group in message_groups" :key="group.key" class="channel-message-group">
