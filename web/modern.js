@@ -41782,7 +41782,7 @@ var $U = {
 }, yW = { class: "channel-message-text channel-stop-note" }, bW = ["onToggle"], xW = ["aria-label"], SW = { class: "channel-message-text channel-late-answer" }, CW = { class: "channel-message-byline" }, wW = { class: "channel-message-meta" }, TW = { class: "channel-message-author" }, EW = { class: "channel-message-provenance" }, DW = ["title"], OW = { class: "channel-working-row" }, kW = ["aria-label", "title"], AW = { key: 0 }, jW = { key: 2 }, MW = {
 	key: 0,
 	class: "channel-working-actions"
-}, NW = { class: "channel-message-text channel-failure-reason" }, PW = { class: "channel-failure-actions" }, FW = { class: "channel-message-provenance" }, IW = [
+}, NW = { class: "channel-message-text channel-failure-reason is-warning" }, PW = { class: "channel-failure-actions" }, FW = { class: "channel-message-provenance" }, IW = [
 	"id",
 	"data-author",
 	"aria-label"
@@ -44307,7 +44307,7 @@ var $U = {
 			]);
 		};
 	}
-}, [["__scopeId", "data-v-eb3b1165"]]), eq = { class: "page-heading" }, tq = { class: "topic-brief" }, nq = {
+}, [["__scopeId", "data-v-99b4622d"]]), eq = { class: "page-heading" }, tq = { class: "topic-brief" }, nq = {
 	key: 0,
 	class: "host-progress"
 }, rq = {

@@ -1343,7 +1343,7 @@ function copy_message(message) { act("copy", `${view.value.room_site}/r/${room.v
               </div>
             </div>
             <template v-if="message.retry">
-              <p class="channel-message-text channel-failure-reason">{{ message.retry.reason }}</p>
+              <p class="channel-message-text channel-failure-reason is-warning">{{ message.retry.reason }}</p>
               <div class="channel-failure-actions">
                 <span class="channel-message-provenance">{{ message.retry.retry_at > free_now ? `${message.retry.retry_at - free_now} 秒后自动重试` : '正在重试' }}（第 {{ message.retry.attempt }}/{{ MAX_DELIVERY_RETRIES }} 次）</span>
                 <template v-if="view.access?.can_manage">
