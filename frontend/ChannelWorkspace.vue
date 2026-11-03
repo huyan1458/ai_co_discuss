@@ -8,6 +8,7 @@ import FreeBoard from "./FreeBoard.vue";
 import DiscussionHistory from "./DiscussionHistory.vue";
 import RoomOverview from "./RoomOverview.vue";
 import ExecutionTimeline from "./ExecutionTimeline.vue";
+import ProjectFiles from "./ProjectFiles.vue";
 
 const { view, bridge, field, act, pending } = inject("discussion");
 const room = computed(() => view.value.room);
@@ -94,12 +95,16 @@ onMounted(() => {
 onBeforeUnmount(() => topbar_observer?.disconnect());
 onBeforeUnmount(() => document.removeEventListener("pointerdown", collapse_brief_outside));
 const selected_tab = computed({ get: () => view.value.tab, set: (value) => act("tab", value) });
-/** The same three tools in every room; each page shows only the parts that apply to the room's current mode. */
-const tabs = [
+const project_directory = computed(() => view.value.launch.room_models?.room_id === room.value?.id
+  ? view.value.launch.room_models?.project_directory || "" : "");
+/** Room tools keep their positions; files require a saved project directory. */
+const tabs = computed(() => [
   { value: "discussion", label: "消息", icon: "i-lucide-message-square" },
   { value: "timeline", label: "执行", icon: "i-lucide-chart-gantt" },
   { value: "overview", label: "房间", icon: "i-lucide-sliders-horizontal" },
-];
+  { value: "files", label: "文件", icon: "i-lucide-files", disabled: !project_directory.value,
+    title: project_directory.value || "设置项目目录后启用" },
+]);
 // Retired pages: consensus and discussion history open from the host brief, access moved into the room page.
 const MERGED_TABS = { context: "discussion", history: "discussion", access: "overview" };
 const free_room = computed(() => !["active", "paused"].includes(room.value?.session?.status));
@@ -328,6 +333,9 @@ function resize_nav_by_key(event) {
         </div>
         <div v-if="view.tab === 'timeline'" class="content-page merged-page" role="tabpanel" aria-label="执行">
           <ExecutionTimeline @detail="open_detail" />
+        </div>
+        <div v-if="view.tab === 'files'" class="content-page" role="tabpanel" aria-label="文件">
+          <ProjectFiles :key="room.id" :directory="project_directory" />
         </div>
         </div>
       </div>

@@ -2453,9 +2453,9 @@ async function retry_launch_connection() {
 /** Read saved choices for the active room without using drafts or delaying discussion refreshes. */
 async function load_room_models() {
   const room = state.room;
-  // Only members this computer wakes make the models worth reading.
+  // The saved project directory also applies to rooms containing only manual members.
   const woken = (room?.members || []).filter(member => member.access === "runner").map(member => member.name);
-  if (!state.launch.available || !woken.length) return;
+  if (!state.launch.available || !room) return;
   // The woken names are part of the key; each new execution may run another model, which only its session log tells, so the latest executions are too.
   const executions = (room.free?.members || []).map(member => member.execution?.id || 0).join(",");
   const revision = `${woken.join(",")}:${executions}`;
@@ -2463,13 +2463,15 @@ async function load_room_models() {
   if (previous?.room_id === room.id && previous.revision === revision
     && (previous.loading || previous.participants)) return;
   // The last answer stays on screen while the new one is read.
-  const current = { room_id: room.id, revision, loading: true, participants: previous?.room_id === room.id ? previous.participants : null };
+  const current = { room_id: room.id, revision, loading: true, participants: previous?.room_id === room.id ? previous.participants : null,
+    project_directory: previous?.room_id === room.id ? previous.project_directory : "" };
   state.launch.room_models = current;
   const live = () => state.launch.room_models === current && state.room?.id === room.id;
   // agy is run to name its default model, which takes seconds; everything else is shown first and agy follows.
   try {
     const result = await local_launch_request("room-models", { room_id: room.id, quick: true });
-    if (live() && result.room_id === room.id) Object.assign(current, { participants: result.participants, registered: result.registered, scheduler: result.scheduler || null });
+    if (live() && result.room_id === room.id) Object.assign(current, { participants: result.participants, registered: result.registered,
+      scheduler: result.scheduler || null, project_directory: result.project_directory || "" });
   } catch (error) {
     // Unavailable or older bridges leave the model unknown; the failure is kept so the page can say so, and the next refresh retries.
     Object.assign(current, { participants: null, error: error.message || "读取失败" });
@@ -2492,6 +2494,11 @@ async function load_room_models() {
 function reload_room_models() {
   state.launch.room_models = null;
   return load_room_models();
+}
+
+/** Read a directory or file from the room's saved project through the authenticated local connection. */
+function read_room_files(room_id, path = "", offset = 0) {
+  return local_launch_request("room-files", { room_id, path, offset, token: localStorage.getItem(`discuss-access:${room_id}`) });
 }
 
 /**
@@ -4168,7 +4175,7 @@ window.discuss_view = { snapshot: view_snapshot, write_field: write_view_field, 
   admin: { register: register_admin, login: login_admin, logout: logout_admin,
     update_profile: update_admin_profile, avatar_from_file: admin_avatar_from_file, validate: validate_admin_form },
   request: request_json, rewind_plan, identities: IDENTITIES, display_name, mention_handles, mentioned_members, sources: SOURCE_LABELS,
-  set_member_access, set_member_model, allow_denials, set_member_adapter, reload_room_models, limits_label, stop_reason_label, participant_model, participant_files, participant_session_hint, participant_access,
+  set_member_access, set_member_model, allow_denials, set_member_adapter, reload_room_models, read_room_files, limits_label, stop_reason_label, participant_model, participant_files, participant_session_hint, participant_access,
   turn_label, turn_guidance, round_groups, limit_rounds, progress_speaker, brief_meta, max_message_length: MAX_MESSAGE_LENGTH, provenance: message_provenance, format_time };
 
 restore_theme();

@@ -207,6 +207,16 @@ test('a page without the local service runs operations on the paired computer en
   assert.deepEqual(await page, { member: 'Antigravity' });
   assert.deepEqual(ran[0].input, { room_id: 'room-1', action: 'add', name: 'Antigravity', site: 'https://discussion.test', entry: 'web' });
 
+  const { read_project_files } = await import('../runner/project_files.mjs');
+  await writeFile(join(home, 'preview.txt'), '\\'.repeat(300000));
+  const preview = read_project_files(home, 'preview.txt');
+  const file_page = relay_command('room-files', { room_id: 'room-1', path: 'preview.txt' });
+  await Promise.all(await relay_commands(home, { wait: 5, run: async command => {
+    assert.equal(command.command, 'room-files');
+    return { status: 200, body: read_project_files(home, command.input.path) };
+  } }));
+  assert.deepEqual(await file_page, preview, 'escaped text fits the encrypted queue response and reaches the page intact');
+
   const secret = 'sk-never-on-the-site';
   const failing = relay_command('api-key', { base_url: 'nope', api_key: secret });
   const stored = [];

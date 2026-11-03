@@ -365,7 +365,7 @@ test('voice input joins ordered parts into one WAV and returns the recognized te
     assert.deepEqual(await stt_part(home, { upload_id, index: 0, data: Buffer.from([1, 0, 2, 0]).toString('base64') }, recognize), { received: 0 });
     assert.deepEqual(await stt_part(home, { upload_id, index: 1, data: Buffer.from([3, 0]).toString('base64'), final: true }, recognize), { text: '你好世界' });
     assert.equal(sent.init.headers['X-Api-Key'], SECRET);
-    assert.equal(sent.init.headers['X-Api-Resource-Id'], 'volc.bigasr.auc_turbo');
+    assert.equal(sent.init.headers['X-Api-Resource-Id'], 'volc.seedasr.auc');
     const wav = Buffer.from(JSON.parse(sent.init.body).audio.data, 'base64');
     assert.equal(wav.subarray(0, 4).toString(), 'RIFF');
     assert.deepEqual([...wav.subarray(44)], [1, 0, 2, 0, 3, 0]);

@@ -10,7 +10,9 @@ import { read_saved_api_key } from './discussion_api.mjs';
 import { TTS_BASE_URL, tts_settings } from './tts.mjs';
 
 const STT_ENDPOINT = `${TTS_BASE_URL}/api/v3/auc/bigmodel/recognize/flash`;
-const STT_RESOURCE_ID = 'volc.bigasr.auc_turbo';
+// The console's “录音文件识别2.0” grants this resource; it answers on the flash route (verified 2026-11-03). The 1.0
+// flash resource `volc.bigasr.auc_turbo` is a separate product and is refused with 45000030 when only 2.0 is enabled.
+const STT_RESOURCE_ID = 'volc.seedasr.auc';
 const STT_DONE_CODE = '20000000';
 const STT_SILENT_CODE = '20000003';
 const STT_TIMEOUT_MS = 50_000;
@@ -22,6 +24,7 @@ const STALE_MS = 60 * 60 * 1000;
 const STATUS_MESSAGES = {
   45000001: '请求参数有误',
   45000002: '没有录到声音',
+  45000030: '火山引擎未授权该识别服务：请在控制台开通「录音文件识别2.0」',
   45000151: '音频格式不受支持',
   55000031: '火山引擎语音识别繁忙，请稍后再试',
 };
@@ -54,8 +57,8 @@ async function recognize(key, wav, request) {
         'X-Api-Request-Id': randomUUID(), 'X-Api-Sequence': '-1' },
       body: JSON.stringify({ user: { uid: 'codiscuss' }, audio: { data: wav.toString('base64') }, request: { model_name: 'bigmodel', enable_punc: true, enable_itn: true } }) });
   } catch { throw new Error('语音识别请求超时或连接失败，请检查网络后重试'); }
-  if (response.status === 401 || response.status === 403) throw new Error('火山引擎拒绝了请求：API Key 无效或未开通录音文件识别 2.0');
   const code = response.headers.get('X-Api-Status-Code');
+  if ((response.status === 401 || response.status === 403) && !STATUS_MESSAGES[code]) throw new Error('火山引擎拒绝了请求：API Key 无效或未开通录音文件识别 2.0');
   if (code === STT_SILENT_CODE) return '';
   if (code !== STT_DONE_CODE) {
     const message = STATUS_MESSAGES[code] || response.headers.get('X-Api-Message') || `HTTP ${response.status}`;

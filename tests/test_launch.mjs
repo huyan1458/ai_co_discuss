@@ -2,7 +2,7 @@ import assert from 'node:assert/strict';
 import { spawn, spawnSync } from 'node:child_process';
 import { randomUUID } from 'node:crypto';
 import { EventEmitter } from 'node:events';
-import { mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync, existsSync } from 'node:fs';
+import { mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync, existsSync, symlinkSync } from 'node:fs';
 import { request as http_request } from 'node:http';
 import { tmpdir } from 'node:os';
 import { dirname, join, resolve } from 'node:path';
@@ -10,7 +10,8 @@ import { PassThrough } from 'node:stream';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import { test } from 'node:test';
 
-import { adopt_member_profile, borrowed_session, launch_discussion, launch_settings, room_configuration, room_member, room_member_model, save_launch_projects, save_launch_settings } from '../runner/discussion_launch.mjs';
+import { adopt_member_profile, borrowed_session, launch_discussion, launch_settings, room_configuration, room_files, room_models, room_member, room_member_model, save_launch_projects, save_launch_settings } from '../runner/discussion_launch.mjs';
+import { read_project_files } from '../runner/project_files.mjs';
 import { api, DiscussionStore, load_config } from '../runner/discussion_runner.mjs';
 import { FreeRoomRunner } from '../runner/free_runner.mjs';
 import { DiscussionService, read_registry } from '../runner/discussion_service.mjs';
@@ -214,6 +215,85 @@ async function request(site, path, body, headers = {}) {
     outgoing.end(text);
   });
 }
+
+test('room files use the saved project and require the authenticated bridge and room owner', async t => {
+  const f = await fixture(t);
+  const project = join(f.directory, 'project');
+  mkdirSync(project);
+  writeFileSync(join(project, '报告.md'), '# 项目报告\n正文');
+  const launched = await launch_discussion(f.home, { ...f.input, cwd: project }, f.options);
+  const config = load_config(launched.config_path);
+  const input = { site: f.site, room_id: config.room, token: config.token };
+  const models = await room_models(f.home, input, { read_defaults: async () => ({}), read_session: () => ({}) });
+  assert.equal(models.project_directory, project);
+  assert.deepEqual((await room_files(f.home, input)).entries.map(item => item.name), ['报告.md']);
+  assert.equal((await room_files(f.home, { ...input, path: '报告.md', cwd: f.directory })).text, '# 项目报告\n正文');
+  await assert.rejects(room_files(f.home, { ...input, token: '' }), /控制凭据/);
+  await assert.rejects(room_files(f.home, { ...input, token: 'invalid-owner' }), /403/);
+  const body = { room_id: config.room, path: '报告.md' };
+  assert.equal((await request(f.site, '/api/local/room-files', body)).status, 403);
+  const local = await request(f.site, '/api/local/room-files', body, { 'X-CoDiscuss-Local': '1' });
+  assert.equal(local.status, 200, JSON.stringify(local.body));
+  assert.equal(local.body.text, '# 项目报告\n正文', 'another local browser uses its administrator authority');
+  const denied = await request(f.site, '/api/local/room-files', { ...body, token: 'invalid-owner' }, { 'X-CoDiscuss-Local': '1' });
+  assert.equal(denied.status, 400);
+  assert.match(denied.body.error, /403/);
+  const { computer_command } = await import('../runner/relay_channel.mjs');
+  const { relayed_command } = await import('../runner/remote_launch.mjs');
+  writeFileSync(join(f.home, 'local-settings.json'), JSON.stringify({ port: Number(new URL(f.site).port) }));
+  const command = computer_command(f.home, 'https://paired.test', 'room-files', body);
+  assert.equal(command.command, 'room-files');
+  assert.equal((await room_files(f.home, command.input)).text, local.body.text);
+  assert.equal(relayed_command(f.site, 'room-files', { ...input, site: 'https://evil.test', access_file: 'ignored' }).input.access_file, undefined);
+  assert.equal(relayed_command(f.site, 'room-files', { ...input, site: 'https://evil.test' }).input.site, f.site);
+  const saved = JSON.parse(readFileSync(launched.config_path, 'utf8'));
+  delete saved.cwd;
+  saved.participants.Codex.cwd = project;
+  writeFileSync(launched.config_path, JSON.stringify(saved));
+  const no_project = await room_models(f.home, input, { read_defaults: async () => ({}), read_session: () => ({}) });
+  assert.equal(no_project.project_directory, '', 'a member directory does not enable the room project page');
+  await assert.rejects(room_files(f.home, input), /未设置项目目录/);
+});
+
+test('project file browsing blocks traversal, absolute paths and links outside the saved root', t => {
+  const directory = mkdtempSync(join(tmpdir(), 'codiscuss-files-'));
+  t.after(() => rmSync(directory, { recursive: true, force: true }));
+  const project = join(directory, 'project');
+  mkdirSync(project);
+  writeFileSync(join(directory, 'private.txt'), 'outside');
+  mkdirSync(join(project, '文档'));
+  writeFileSync(join(project, '文档', '说明.txt'), 'inside');
+  assert.throws(() => read_project_files('', ''), /未设置项目目录/);
+  for (const path of ['../private.txt', '..\\private.txt', join(directory, 'private.txt'), 'C:\\private.txt', '说明.txt:stream', 'bad\0']) {
+    assert.throws(() => read_project_files(project, path), /相对路径/);
+  }
+  assert.equal(read_project_files(project, '文档/说明.txt').text, 'inside');
+  symlinkSync(directory, join(project, '外部链接'), process.platform === 'win32' ? 'junction' : 'dir');
+  assert.throws(() => read_project_files(project, '外部链接/private.txt'), /目录之外/);
+  assert.equal(read_project_files(project).entries.find(item => item.name === '外部链接').kind, 'unavailable');
+});
+
+test('project text previews handle binary, empty, UTF-16 and large files and paginate directories', t => {
+  const project = mkdtempSync(join(tmpdir(), 'codiscuss-preview-'));
+  t.after(() => rmSync(project, { recursive: true, force: true }));
+  writeFileSync(join(project, 'empty.txt'), '');
+  writeFileSync(join(project, 'binary.dat'), Buffer.from([0, 1, 2, 3]));
+  writeFileSync(join(project, 'utf16.txt'), Buffer.from('\ufeff中文说明', 'utf16le'));
+  writeFileSync(join(project, 'large.txt'), '中'.repeat(200000));
+  assert.equal(read_project_files(project, 'empty.txt').text, '');
+  assert.equal(read_project_files(project, 'binary.dat').text, null);
+  assert.equal(read_project_files(project, 'utf16.txt').text, '中文说明');
+  const large = read_project_files(project, 'large.txt');
+  assert.equal(large.truncated, true);
+  assert.equal(large.size, 600000);
+  assert.ok(large.text && Buffer.byteLength(large.text) <= large.limit);
+  for (let index = 0; index < 205; index++) writeFileSync(join(project, `item-${index}.txt`), 'x');
+  const first = read_project_files(project);
+  const last = read_project_files(project, '', first.next_offset);
+  assert.equal(first.entries.length, 200);
+  assert.equal(last.next_offset, null);
+  assert.equal(new Set([...first.entries, ...last.entries].map(item => item.path)).size, first.total);
+});
 
 test('connected website needs its own credential and CORS preflight never starts or configures anything', async t => {
   const f = await fixture(t);

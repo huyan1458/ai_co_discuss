@@ -37,6 +37,12 @@ codiscuss setup
 
 Run `codiscuss local open`, click **New Room** (新建房间), add members and pick a host. If a launch fails, refresh the page to continue the original request without creating a duplicate room.
 
+### Browse Project Files
+
+When a room has a project directory, its **Files** page below **Room** lists that computer's files and folders, sizes and modification times. Click a file to open a floating text preview, with rendered Markdown and static HTML views. Rooms without a project directory show a disabled entry.
+
+Other devices read the same directory over the paired computer's encrypted connection. Previews include up to 128 KB and support UTF-8 and BOM-marked UTF-16. HTML previews display inline styles and embedded images. Access stays within the room's project directory.
+
 ### From an AI Chat
 
 In the local agent that should host, invoke `discuss-host` and `discuss-participant` and describe the site, topic, participants and limits. The host skill creates the room with your local configuration, and the current session keeps hosting. `agy` cannot host a fully automatic discussion from its own chat.

@@ -9,7 +9,7 @@ const { view, bridge, field } = inject("discussion");
 const author = field("author-select");
 const tools_open = ref(true);
 const view_links = computed(() => props.tabs.map((item) => ({
-  ...item, active: !!view.value.room && view.value.tab === item.value, disabled: !view.value.room, onSelect: () => emit("tab", item.value),
+  ...item, active: !!view.value.room && view.value.tab === item.value, disabled: !view.value.room || item.disabled, onSelect: () => emit("tab", item.value),
 })));
 /** The footer's second line: the account call to action until signed in, then the site connection. */
 const account_status = computed(() => {

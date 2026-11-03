@@ -1743,7 +1743,7 @@ class DiscussionHandler(BaseHTTPRequestHandler):
         """Forward authenticated browser requests to the shared Node entrypoint and pin their website."""
         site = self.local_request_site(method)
         route = parts[2:]
-        if method == "OPTIONS" and route in (["settings"], ["launch"], ["room-models"], ["room-member"], ["room-member-access"], ["room-member-allow"], ["room-member-adapter"], ["room-member-model"], ["room-profiles"], ["room-restore"], ["room-fork"], ["models"], ["api-key"], ["api-check"],
+        if method == "OPTIONS" and route in (["settings"], ["launch"], ["room-models"], ["room-files"], ["room-member"], ["room-member-access"], ["room-member-allow"], ["room-member-adapter"], ["room-member-model"], ["room-profiles"], ["room-restore"], ["room-fork"], ["models"], ["api-key"], ["api-check"],
                                              ["scheduler-check"], ["tts-settings"], ["tts"], ["stt"], ["pick-directory"], ["projects"], ["presets"], ["machine-link"], ["admin-account"]):
             return self.respond({"ok": True})
         if route == ["settings"] and method in ("GET", "POST"):
@@ -1766,7 +1766,7 @@ class DiscussionHandler(BaseHTTPRequestHandler):
             command = route[0]
         elif route in (["room-member"], ["room-member-access"], ["room-member-allow"], ["room-member-adapter"], ["room-member-model"]) and method == "POST":
             command = route[0]
-        elif route in (["room-profiles"], ["room-restore"], ["room-fork"]) and method == "POST":
+        elif route in (["room-profiles"], ["room-files"], ["room-restore"], ["room-fork"]) and method == "POST":
             command = route[0]
         elif route == ["pick-directory"] and method == "POST":
             command = "pick-directory"
@@ -1785,9 +1785,13 @@ class DiscussionHandler(BaseHTTPRequestHandler):
             if self.headers.get_content_type() != "application/json":
                 raise ValueError("本机操作须使用 application/json")
             payload = self.read_payload()
-            if command in ("start", "room-config", "room-models", "room-member", "room-member-access", "room-member-allow", "room-member-adapter", "room-member-model", "room-profiles", "room-restore", "room-fork"):
+            if command in ("start", "room-config", "room-models", "room-files", "room-member", "room-member-access", "room-member-allow", "room-member-adapter", "room-member-model", "room-profiles", "room-restore", "room-fork"):
                 payload.pop("access_file", None)
                 payload.update(site=site, entry="web")
+            if command == "room-files" and not payload.get("token") and not self.bridge_origin:
+                with closing(connect_db(self.server.database)) as connection:
+                    self.admin_as_owner(connection, payload.get("room_id", ""))
+                    payload["token"] = self.headers.get("X-Discussion-Token", "")
             if command == "machine-link":
                 payload = {"site": site}
             if command == "admin-account":

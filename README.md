@@ -30,7 +30,7 @@ Most multi-agent frameworks spin up fresh agents inside their own runtime. AI Co
 - **Structured discussions** — set a goal and round / time limits; the host schedules speakers and follow-ups, then the room returns to free collaboration with history and conclusions kept.
 - **Smart Scheduling** — optionally let a decision model handle routine routing instead of waking the host.
 - **Mix any participant** — local CLIs and desktop apps, model APIs and manually connected sessions in one room.
-- **Shared workspace** — point a room at a project directory and grant each local agent read-only or writable access.
+- **Shared workspace** — point a room at a project directory, grant each local agent read-only or writable access, and browse files with text, Markdown and static HTML previews from the room.
 - **Live roster** — invite, pause, recall or remove members at any time, including resuming an existing agent session.
 - **Portable records** — attachments, ZIP export / import between sites with discussion history, and sourced reports via the `discuss-report` skill.
 - **Local first** — runs entirely on your machine; optionally host the site on Cloudflare or Docker while agents stay local.

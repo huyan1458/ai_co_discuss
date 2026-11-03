@@ -10,6 +10,7 @@ import { pathToFileURL } from 'node:url';
 import { parseArgs } from 'node:util';
 
 import { atomic_json } from './files.mjs';
+import { read_project_files } from './project_files.mjs';
 import { setup_sidecar } from './adapters/antigravity_app.mjs';
 import { adapter_of, adoption_adapter, BRANCHABLE_ADAPTERS, branch_session, session_settings, software_defaults, software_effort, software_models } from './adapters/index.mjs';
 import { ADAPTER_IDS, ADAPTER_PROFILES, adapter_profile, platform_adapters, same_session_family } from './adapters/profiles.mjs';
@@ -54,6 +55,7 @@ const HELP = `用法：codiscuss launch settings [--file FILE]
       codiscuss launch start --file FILE [--dry-run]
       codiscuss launch room-config --file FILE
       codiscuss launch room-models --file FILE
+      codiscuss launch room-files --file FILE
       codiscuss launch models --file FILE
       codiscuss launch api-key --file FILE
       codiscuss launch api-check --file FILE
@@ -79,6 +81,7 @@ settings 读取本机软件默认配置；指定文件时保存，不启动 AI�
 start 使用启动 JSON 创建或接入房间并启动；--dry-run 只校验和预览。
 room-config 修正已暂停房间的软件路径或切换 Codex App / CLI，不启动讨论；须提供 site、room_id、token。
 room-models 只读指定 site、room_id 的本机登记模型与思考强度，不启动讨论；quick 为 true 时不查询 agy 的默认模型（较慢），该成员标 defaults_pending。
+room-files 只读房间已保存的项目目录，须提供 site、room_id、token，可选相对 path 和目录分页 offset；文件返回最多前 128 KiB 文本。
 models 按 adapter、executable 或 API profile 读取模型目录，不启动讨论或生成回答。
 api-key 将 base_url、api_key 保存于本机私有目录，只返回 api_key_ref。
 api-check 用 API profile 向模型发送一次极短请求，核对地址、密钥、协议与模型是否可用。
@@ -303,7 +306,13 @@ export async function room_models(home, raw, { read_defaults = software_defaults
   })));
   // Smart scheduling is a local choice; only which model decides is shown, never its key.
   const scheduler = config.scheduler ? { provider: config.scheduler.provider, model: config.scheduler.model, mode: config.scheduler.mode || DEFAULT_SCHEDULER_MODE } : null;
-  return { room_id: input.room_id, registered: paths.length > 0, participants, scheduler };
+  return { room_id: input.room_id, registered: paths.length > 0, participants, scheduler, project_directory: config.cwd || '' };
+}
+
+/** Read the owner's saved room project, never a directory supplied by the request. */
+export async function room_files(home, raw) {
+  const { input, config } = await member_room_context(home, raw);
+  return { room_id: input.room_id, ...read_project_files(config.cwd, input.path, input.offset) };
 }
 
 /** Save only reusable client settings; room credentials and session bindings are never defaults. */
@@ -1308,6 +1317,7 @@ export async function launch_main(args = process.argv.slice(2), input_text) {
   else if (positionals[0] === 'tts' && input) result = await tts_speak(home, input);
   else if (positionals[0] === 'stt' && input) result = await stt_part(home, input);
   else if (positionals[0] === 'room-models' && input) result = await room_models(home, input);
+  else if (positionals[0] === 'room-files' && input) result = await room_files(home, input);
   else if (positionals[0] === 'models' && adapter_profile(input?.adapter)?.kind === 'api') result = await api_models(home, input);
   else if (positionals[0] === 'models' && input) {
     const saved = Object.values(launch_settings(home).participants).find(profile => profile.adapter === input.adapter);
