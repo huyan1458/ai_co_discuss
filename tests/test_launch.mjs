@@ -10,7 +10,7 @@ import { PassThrough } from 'node:stream';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import { test } from 'node:test';
 
-import { adopt_member_profile, borrowed_session, launch_discussion, launch_settings, room_configuration, room_member, save_launch_projects, save_launch_settings } from '../runner/discussion_launch.mjs';
+import { adopt_member_profile, borrowed_session, launch_discussion, launch_settings, room_configuration, room_member, room_member_model, save_launch_projects, save_launch_settings } from '../runner/discussion_launch.mjs';
 import { api, DiscussionStore, load_config } from '../runner/discussion_runner.mjs';
 import { FreeRoomRunner } from '../runner/free_runner.mjs';
 import { DiscussionService, read_registry } from '../runner/discussion_service.mjs';
@@ -379,11 +379,11 @@ test('missing software, current identity or invalid limits fail before creating 
   await assert.rejects(launch_discussion(f.home, { ...f.input, participants: { ...f.input.participants, Codex: { adapter: 'codex_cli', executable: process.execPath, effort: 'turbo' } } }, f.options), /effort 只能是 low/);
   await assert.rejects(launch_discussion(f.home, { ...f.input, participants: { ...f.input.participants, Claude: { adapter: 'claude', executable: process.execPath, effort: 'ultra' } } }, f.options), /effort 只能是 low/);
   const agy = { adapter: 'antigravity_cli', executable: process.execPath };
-  const agy_room = { ...f.input.room, host: 'Gemini', experts: { Gemini: 'cli', Claude: 'cli' } };
+  const agy_room = { ...f.input.room, host: 'Antigravity', experts: { Antigravity: 'cli', Claude: 'cli' } };
   await assert.rejects(launch_discussion(f.home, { ...f.input, room: agy_room, entry: 'conversation', current_session_id: 'agy-chat',
-    participants: { ...f.input.participants, Gemini: agy } }, f.options), /Antigravity CLI 不能绑定已有会话/);
+    participants: { ...f.input.participants, Antigravity: agy } }, f.options), /Antigravity CLI 不能绑定已有会话/);
   await assert.rejects(launch_discussion(f.home, { ...f.input, room: agy_room,
-    participants: { ...f.input.participants, Gemini: { ...agy, session_id: 'known-session' } } }, f.options), /Antigravity CLI 不能绑定已有会话/);
+    participants: { ...f.input.participants, Antigravity: { ...agy, session_id: 'known-session' } } }, f.options), /Antigravity CLI 不能绑定已有会话/);
   assert.equal((await request(f.site, '/api/rooms')).body.rooms.length, 0);
   assert.equal(f.starts.length, 0);
 });
@@ -732,12 +732,22 @@ test('members join, leave and return while a free room keeps running', async t =
     assert.notEqual(load_config(launched.config_path).members.Codex.token, old_token);
     assert.equal((await request(f.site, `${path}/messages`, { author: 'Codex', text: '旧凭证', submission_id: randomUUID() },
       { 'X-Discussion-Token': old_token })).status, 403);
-    const manual = await room_member(f.home, { site: f.site, room_id, token: owner, action: 'add', name: 'Gemini', access: 'manual' });
+    const manual = await room_member(f.home, { site: f.site, room_id, token: owner, action: 'add', name: 'Antigravity', access: 'manual' });
     const access = JSON.parse(readFileSync(manual.access_file, 'utf8'));
     assert.ok(!JSON.stringify(manual).includes(access.token));
-    assert.equal(manual.free.members.find(member => member.name === 'Gemini').access, 'manual');
-    assert.equal((await request(f.site, `${path}/messages`, { author: 'Gemini', text: '手动接入', source: 'cli', submission_id: randomUUID() },
+    assert.equal(manual.free.members.find(member => member.name === 'Antigravity').access, 'manual');
+    assert.equal((await request(f.site, `${path}/messages`, { author: 'Antigravity', text: '手动接入', source: 'cli', submission_id: randomUUID() },
       { 'X-Discussion-Token': access.token })).status, 201);
+    // A removed member's name stays bound locally, so inviting it again joins under the next free name.
+    assert.equal((await request(f.site, `${path}/members/${codex.id}`, { action: 'remove' }, auth)).status, 200);
+    const again = await room_member(f.home, { site: f.site, room_id, token: owner, action: 'add', name: 'Codex',
+      member_token: randomUUID() + randomUUID(), participants: { Codex: f.input.participants.Codex } });
+    assert.equal(again.member, 'Codex-2');
+    await room_member_model(f.home, { site: f.site, room_id, token: owner, name: 'Codex-2', model: 'gpt-x', effort: 'high' });
+    assert.deepEqual([load_config(launched.config_path).participants['Codex-2'].model, load_config(launched.config_path).participants['Codex-2'].effort], ['gpt-x', 'high']);
+    await assert.rejects(room_member_model(f.home, { site: f.site, room_id, token: owner, name: 'Codex-2', effort: 'huge' }), /不支持思考强度/);
+    await room_member_model(f.home, { site: f.site, room_id, token: owner, name: 'Codex-2', model: '', effort: '' });
+    assert.equal(Object.hasOwn(load_config(launched.config_path).participants['Codex-2'], 'model'), false);
   } finally { await service.close(); }
 });
 
@@ -750,10 +760,10 @@ test('a running discussion admits a woken or manual expert without pausing', asy
   const store = new DiscussionStore(join(f.directory, 'context-check'));
   try {
     store.context(load_config(launched.config_path));
-    const manual = await room_member(f.home, { site: f.site, room_id, token: owner, action: 'add', name: 'Gemini', access: 'manual' });
+    const manual = await room_member(f.home, { site: f.site, room_id, token: owner, action: 'add', name: 'Antigravity', access: 'manual' });
     const manual_room = (await request(f.site, `/api/rooms/${room_id}`)).body;
-    assert.deepEqual([manual_room.session.status, manual_room.experts.Gemini, manual.access], ['active', 'cli', 'manual']);
-    assert.equal(Object.hasOwn(load_config(launched.config_path).participants, 'Gemini'), false);
+    assert.deepEqual([manual_room.session.status, manual_room.experts.Antigravity, manual.access], ['active', 'cli', 'manual']);
+    assert.equal(Object.hasOwn(load_config(launched.config_path).participants, 'Antigravity'), false);
     const added = await room_member(f.home, { site: f.site, room_id, token: owner, action: 'add', name: 'Claude', new_instance: true,
       participants: { Claude: f.input.participants.Claude } });
     assert.equal(added.member, 'Claude-2');
@@ -781,7 +791,7 @@ test('an invited existing session must exist locally, and Claude resumes only fr
   assert.equal(borrowed_session('Claude', { adapter: 'claude', session_id: claude_id }, '', env).cwd, original, 'without a project the session keeps its directory');
   assert.equal(borrowed_session('Claude', { adapter: 'claude', session_id: claude_id }, original, env).cwd, original);
   assert.throws(() => borrowed_session('Claude', { adapter: 'claude', session_id: claude_id }, other, env), /只能在原目录续接/);
-  assert.throws(() => borrowed_session('Gemini', { adapter: 'antigravity_cli', session_id: claude_id }, '', env), /找不到 Antigravity CLI 会话/);
+  assert.throws(() => borrowed_session('Antigravity', { adapter: 'antigravity_cli', session_id: claude_id }, '', env), /找不到 Antigravity CLI 会话/);
   assert.throws(() => borrowed_session('Grok', { adapter: 'api', session_id: claude_id }, '', env), /只有 Codex CLI、Codex App、Claude Code、Antigravity CLI、Antigravity App 可以接入已有会话/);
   const owner = randomUUID() + randomUUID();
   const launched = await launch_discussion(f.home, { ...f.input, token: owner }, f.options);
@@ -842,20 +852,20 @@ test('a manual agy expert\'s reported conversation is hosted under its own proje
   const launched = await launch_discussion(f.home, { ...f.input, token: randomUUID() + randomUUID() }, f.options);
   mkdirSync(join(home, '.gemini', 'antigravity-cli', 'conversations'), { recursive: true });
   writeFileSync(join(home, '.gemini', 'antigravity-cli', 'conversations', `${conversation_id}.db`), '');
-  save_launch_settings(f.home, { participants: { Gemini: { adapter: 'antigravity_cli', executable: process.execPath } } });
+  save_launch_settings(f.home, { participants: { Antigravity: { adapter: 'antigravity_cli', executable: process.execPath } } });
   const previous = { HOME: process.env.HOME, USERPROFILE: process.env.USERPROFILE };
   process.env.HOME = process.env.USERPROFILE = home;
   try {
-    assert.throws(() => adopt_member_profile(f.home, launched.config_path, 'Gemini-2', randomUUID(), 'antigravity'), /找不到 Antigravity CLI 会话/);
-    assert.equal(adopt_member_profile(f.home, launched.config_path, 'Gemini-2', conversation_id, 'antigravity', randomUUID() + randomUUID()), 'antigravity_cli');
-    const profile = load_config(launched.config_path).participants['Gemini-2'];
+    assert.throws(() => adopt_member_profile(f.home, launched.config_path, 'Antigravity-2', randomUUID(), 'antigravity'), /找不到 Antigravity CLI 会话/);
+    assert.equal(adopt_member_profile(f.home, launched.config_path, 'Antigravity-2', conversation_id, 'antigravity', randomUUID() + randomUUID()), 'antigravity_cli');
+    const profile = load_config(launched.config_path).participants['Antigravity-2'];
     assert.deepEqual([profile.adapter, profile.session_id], ['antigravity_cli', conversation_id]);
     // An App conversation lives in the App's own store and is reached through a Sidecar the App starts for this room.
     const app_id = randomUUID();
     mkdirSync(join(home, '.gemini', 'antigravity', 'conversations'), { recursive: true });
     writeFileSync(join(home, '.gemini', 'antigravity', 'conversations', `${app_id}.db`), '');
-    assert.equal(adopt_member_profile(f.home, launched.config_path, 'Gemini-3', app_id, 'antigravity', randomUUID() + randomUUID()), 'antigravity');
-    const app = load_config(launched.config_path).participants['Gemini-3'];
+    assert.equal(adopt_member_profile(f.home, launched.config_path, 'Antigravity-3', app_id, 'antigravity', randomUUID() + randomUUID()), 'antigravity');
+    const app = load_config(launched.config_path).participants['Antigravity-3'];
     assert.deepEqual([app.adapter, app.session_id, app.project_access], ['antigravity', app_id, 'own']);
     const sidecars = JSON.parse(readFileSync(join(home, '.gemini', 'config', 'config.json'), 'utf8')).sidecars;
     assert.deepEqual(Object.values(sidecars).map(item => [item.enabled, item.projectId]), [[true, 'outside-of-project']]);
@@ -936,17 +946,17 @@ test('relayed commands are decrypted, pinned to the site and answered encrypted'
   const ephemeral = await crypto.subtle.generateKey({ name: 'ECDH', namedCurve: 'P-256' }, true, ['deriveBits']);
   const key = await relay_cipher(await crypto.subtle.exportKey('jwk', ephemeral.privateKey), machine_key);
   const { kty, crv, x, y } = await crypto.subtle.exportKey('jwk', ephemeral.publicKey);
-  const sealed = await seal(key, { action: 'room-member', payload: { room_id: 'r', action: 'add', name: 'Gemini' } }, 'command-0000000001');
+  const sealed = await seal(key, { action: 'room-member', payload: { room_id: 'r', action: 'add', name: 'Antigravity' } }, 'command-0000000001');
   commands = [{ id: 'command-0000000001', envelope: { ...sealed, key: { kty, crv, x, y } } },
     { id: 'command-0000000002', envelope: { ...sealed, key: { kty, crv, x, y } } }];
   const ran = [];
-  const running = await relay_commands(home, { wait: 0, run: async request => { ran.push(request); return { status: 200, body: { member: 'Gemini' } }; } });
+  const running = await relay_commands(home, { wait: 0, run: async request => { ran.push(request); return { status: 200, body: { member: 'Antigravity' } }; } });
   await Promise.all(running);
   assert.equal(calls[1].body.wait, 0);
-  assert.deepEqual(ran, [{ command: 'room-member', input: { room_id: 'r', action: 'add', name: 'Gemini', site: 'https://site.test', entry: 'web' }, browser: false }],
+  assert.deepEqual(ran, [{ command: 'room-member', input: { room_id: 'r', action: 'add', name: 'Antigravity', site: 'https://site.test', entry: 'web' }, browser: false }],
     'a command sealed under another id is not run');
   const answer = calls.find(call => call.url.endsWith('/commands/command-0000000001'));
-  assert.deepEqual(await unseal(key, answer.body.envelope, 'command-0000000001:response'), { status: 200, body: { member: 'Gemini' } });
+  assert.deepEqual(await unseal(key, answer.body.envelope, 'command-0000000001:response'), { status: 200, body: { member: 'Antigravity' } });
   assert.ok(!calls.some(call => call.url.endsWith('/commands/command-0000000002')));
 });
 
@@ -1033,7 +1043,7 @@ test('the relay channel reads and sends files in parts, and runs computer-room o
   const config_path = join(home, 'room.json');
   writeFileSync(config_path, JSON.stringify({ site: 'http://localhost:9876', room: 'abc123', token: 'owner-token' }));
   writeFileSync(join(home, 'rooms.json'), JSON.stringify({ configs: [config_path] }));
-  const command = computer_command(home, 'https://site.test', 'room-member', { room_id: 'abc123', token: null, action: 'add', name: 'Gemini' });
+  const command = computer_command(home, 'https://site.test', 'room-member', { room_id: 'abc123', token: null, action: 'add', name: 'Antigravity' });
   assert.equal(command.input.site, 'http://localhost:9876');
   assert.equal(command.input.token, 'owner-token');
   assert.equal(computer_command(home, 'https://site.test', 'room-member', { room_id: 'other', action: 'add' }).input.token, '', 'no credential for a room served elsewhere');

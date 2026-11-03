@@ -47,10 +47,11 @@ const RELAY_CIPHER_INFO = "codiscuss-relay-v1";
 const RELAY_PROTOCOL = "codiscuss-relay";
 const RELAY_PING_MS = 25000;
 const ROOM_RELAY_PATH = /^\/api\/(rooms|folders|revisions)(\/|\?|$)/;
-const ROOM_SOURCE_KEY = "discuss-room-source";
 // One part of a file sent to the computer stays well inside the relay's 1 MiB frame once encoded and encrypted.
 const RELAY_UPLOAD_PART_BYTES = 384 * 1024;
+const COMPUTER_UNREACHABLE = "电脑未连接：请登录管理员，并确认电脑开机且运行 codiscuss";
 let local_connection = null;
+let computer_connecting = false;
 let relay_machine = null;
 // Object URLs of files read from the computer's rooms, by their room route.
 const relay_files = new Map();
@@ -67,12 +68,14 @@ const PLATFORM_IDENTITIES = {
   "用户": { label: "User", initials: "U", style: "user", icon: "/icons/user.svg", description: "发起与协助" },
   Codex: { initials: "CX", style: "codex", icon: "/icons/openai.svg", description: "AI 身份" },
   Claude: { initials: "CL", style: "claude", icon: "/icons/claude.svg", description: "AI 身份" },
-  Gemini: { initials: "GM", style: "gemini", icon: "/icons/gemini.svg", description: "AI 身份" },
+  // The platform ID is Antigravity (the software); screens show its nickname Gemini.
+  Antigravity: { label: "Gemini", initials: "GM", style: "gemini", icon: "/icons/gemini.svg", description: "AI 身份" },
   DeepSeek: { initials: "DS", style: "deepseek", icon: "/icons/deepseek.svg", description: "AI 身份" },
   Qwen: { initials: "QW", style: "qwen", icon: "/icons/qwen.svg", description: "AI 身份" },
   Grok: { initials: "GK", style: "grok", description: "AI 身份" },
 };
-const IDENTITIES = by_platform(PLATFORM_IDENTITIES, (identity, name) => ({ ...identity, label: name, description: "AI 实例" }));
+// An instance shows its platform's nickname with its own suffix: Antigravity-2 → Gemini-2.
+const IDENTITIES = by_platform(PLATFORM_IDENTITIES, (identity, name) => ({ ...identity, label: identity.label ? identity.label + name.slice(platform_of(name).length) : name, description: "AI 实例" }));
 const state = { rooms: [], folders: [], room: null, page: 1, pages: 1, query: "", mention_only: false,
   named_followup: false, create_discussion: false,
   archive_view: false, directory_sort: "manual", management: null, dragged_room: null, folder_moves: new Map(), folder_version: 0,
@@ -118,13 +121,13 @@ state.admin = { loaded: false, local: false, registered: false, setup_available:
 state.launch = { available: false, remote: false, relay: null, connect_command: "", profiles: {}, projects: [], presets: [], builtin_presets: [], description_templates: {}, workspace: {}, scheduler: {}, error: "", recoveries: [] };
 const PLATFORM_CLIENTS = { Codex: [{ value: "codex_cli", label: "Codex CLI" }, { value: "codex", label: "Codex App" }],
   Claude: [{ value: "claude", label: "Claude Code CLI" }],
-  Gemini: [{ value: "antigravity_cli", label: "Antigravity CLI" }, { value: "antigravity", label: "Antigravity App" }] };
+  Antigravity: [{ value: "antigravity_cli", label: "Antigravity CLI" }, { value: "antigravity", label: "Antigravity App" }] };
 for (const name of Object.keys(PLATFORM_IDENTITIES).filter(name => name !== "用户")) {
-  (PLATFORM_CLIENTS[name] ||= []).push({ value: "api", label: `${name === "Codex" ? "OpenAI" : name} API` });
+  (PLATFORM_CLIENTS[name] ||= []).push({ value: "api", label: `${name === "Codex" ? "OpenAI" : PLATFORM_IDENTITIES[name].label || name} API` });
 }
-// A platform is a type; `Claude-评审` is another instance of it. Lookups by instance name fall back to the
+// A platform is a type; `Claude-review` is another instance of it. Lookups by instance name fall back to the
 // platform, while iteration still lists the platforms only.
-const INSTANCE_PATTERN = /^(Codex|Claude|Gemini|DeepSeek|Qwen|Grok)(?:-[0-9A-Za-z_\u4e00-\u9fff]{1,16})?$/;
+const INSTANCE_PATTERN = /^(Codex|Claude|Antigravity|DeepSeek|Qwen|Grok)(?:-[0-9A-Za-z_]{1,16})?$/;
 /** The platform of an AI instance name, or null for the user and invalid names. */
 function platform_of(name) { return INSTANCE_PATTERN.exec(String(name))?.[1] ?? null; }
 /** Resolve instance names to their platform's entry without listing instances as keys. */
@@ -211,7 +214,10 @@ function admin_headers() {
 
 /** Request JSON from the local or remotely hosted discussion service. */
 async function request_json(path, payload, access_token) {
-  if (state.remote_rooms && ROOM_RELAY_PATH.test(path)) return (await relay_room_request(path, payload)).body;
+  if (computer_rooms_only() && ROOM_RELAY_PATH.test(path)) {
+    if (!state.remote_rooms) throw Object.assign(new Error(COMPUTER_UNREACHABLE), { preflight: true });
+    return (await relay_room_request(path, payload)).body;
+  }
   const options = { cache: "no-store" };
   const target_room = path.match(/^\/api\/rooms\/([^/?]+)/)?.[1];
   const token = access_token || (target_room ? localStorage.getItem(`discuss-access:${target_room}`) : null);
@@ -245,7 +251,7 @@ function apply_admin_identity(profile) {
 function apply_admin_state(info) {
   const local = info.local === true;
   if (local || !info.logged_in) store_admin_token("");
-  Object.assign(state.admin, { loaded: true, local, registered: Boolean(info.registered), setup_available: Boolean(info.setup_available),
+  Object.assign(state.admin, { loaded: true, local, computer_rooms: info.computer_rooms === true, registered: Boolean(info.registered), setup_available: Boolean(info.setup_available),
     logged_in: Boolean(info.logged_in), profile: info.profile ? { username: info.profile.username, avatar: info.profile.avatar || "" } : null });
   apply_admin_identity(state.admin.profile);
   publish_view();
@@ -277,9 +283,9 @@ function admin_error(error) {
 /** Store the new session and show the owner's identity. */
 function accept_admin_session({ token, profile }) {
   store_admin_token(token);
-  apply_admin_state({ registered: true, setup_available: false, logged_in: true, profile });
+  apply_admin_state({ registered: true, setup_available: false, logged_in: true, profile, computer_rooms: state.admin.computer_rooms });
   // Pairing and the paired computer both need the session, so read them again now.
-  load_launch_settings();
+  computer_rooms_only() ? connect_computer_rooms() : load_launch_settings();
 }
 
 /** Create the single administrator account and sign in with it. */
@@ -309,7 +315,7 @@ async function logout_admin() {
   store_admin_token("");
   state.admin.logged_in = false;
   state.launch.relay = null;
-  if (state.remote_rooms) await set_room_source(false).catch(() => {});
+  if (state.remote_rooms) await show_computer_rooms(false).catch(() => {});
   // Operations through the paired computer need the session, so they stop with it.
   if (relay_machine) load_launch_settings();
   publish_view();
@@ -394,6 +400,9 @@ function new_submission_id() {
   crypto.getRandomValues(bytes);
   return Array.from(bytes, (value) => value.toString(16).padStart(2, "0")).join("");
 }
+
+/** The name an ID shows outside any room: its platform's nickname (Antigravity → Gemini, Antigravity-2 → Gemini-2), else the ID. */
+function default_name(name) { return IDENTITIES[name]?.label || name; }
 
 /** Resolve a UI label without changing stored identity values; the open room's member labels come first. */
 function display_name(name) { return state.room?.labels?.[name] || IDENTITIES[name]?.label || name; }
@@ -890,6 +899,13 @@ function cached_message_history(room_id) {
 /** Refresh a room with version guards so slower requests cannot change the active view. */
 async function refresh_room({ room: read_room = true } = {}) {
   if (state.dragged_room) return;
+  if (computer_rooms_only() && !state.remote_rooms) {
+    state.rooms = [];
+    set_folder_directory({});
+    render_rooms();
+    set_connection(true);
+    return;
+  }
   const version = ++state.refresh_version;
   const folder_version = state.folder_version;
   const archive_version = state.archive_version;
@@ -1122,7 +1138,7 @@ function expert_presets() {
   return [...state.launch.builtin_presets.filter(preset => !own.has(preset.name)), ...state.launch.presets];
 }
 
-/** A free instance name from a base: Claude → Claude-2, Codex-评审 → Codex-评审2. */
+/** A free instance name from a base: Claude → Claude-2, Codex-review → Codex-review2. */
 function unique_instance(base, taken) {
   if (!taken.has(base)) return base;
   let number = 2;
@@ -1142,6 +1158,18 @@ function apply_expert_preset(name, preset) {
   publish_view();
 }
 
+/** Rename one card before the room or invitation is submitted; empty goes back to its default name. */
+function write_label_draft(name, text) {
+  if (text) label_drafts[name] = text;
+  else delete label_drafts[name];
+  publish_view();
+}
+
+/** The display name a card was given, empty when it shows its default. */
+function label_draft(name) {
+  return label_drafts[name] || "";
+}
+
 /** The name a card shows: its preset label, else the room's or platform's display name. */
 function member_label(name) {
   return label_drafts[name] || display_name(name);
@@ -1150,13 +1178,17 @@ function member_label(name) {
 /** The instance a preset of this platform is saved under for a free name: the name itself when it is already one, else platform-name. */
 function preset_identity(name, label) {
   const platform = platform_of(name), text = label.trim();
-  if (platform_of(text) === platform) return text;
-  const suffix = Array.from(text.replace(/[^0-9A-Za-z_一-鿿]/g, "")).slice(0, 16).join("");
-  if (suffix) return `${platform}-${suffix}`;
+  // A name typed with the platform's nickname (Gemini-1) maps to the platform's ID (Antigravity-1).
+  const nickname = default_name(platform);
+  const own = nickname !== platform && text.startsWith(`${nickname}-`) ? platform + text.slice(nickname.length) : text;
+  if (platform_of(own) === platform) return own;
+  // An ID keeps only English letters, digits and underscores; a Chinese name becomes the label of a numbered ID.
+  const suffix = text.replace(/[^0-9A-Za-z_]/g, "").slice(0, 16);
+  if (suffix && suffix !== platform) return `${platform}-${suffix}`;
   const taken = new Set(expert_presets().map(preset => preset.name));
   let number = 1;
-  while (taken.has(`${platform}-预设${number}`)) number++;
-  return `${platform}-预设${number}`;
+  while (taken.has(`${platform}-preset${number}`)) number++;
+  return `${platform}-preset${number}`;
 }
 
 /** Add a preset to the new-room draft under a free name. */
@@ -1222,13 +1254,17 @@ async function send_chain_rounds(room_id, token, max_rounds) {
   catch (error) { notify("warning", `推进轮数未保存：${error.message}，房间沿用默认 ${DEFAULT_CHAIN_ROUNDS} 轮，可在房间页修改。`); }
 }
 
-/** Edit one member's description inside the room; the next decision by the scheduler or host uses it. */
-async function describe_member(name, text) {
+/**
+ * Edit one member's description inside the room, and its display name when one is given (empty removes it); the next
+ * decision by the scheduler or host uses the description, screens show the name.
+ */
+async function describe_member(name, text, label) {
   const room_id = state.room.id;
   try {
     const token = localStorage.getItem(`discuss-access:${room_id}`);
     if (!token) throw new Error("此浏览器缺少房间控制凭据，请使用创建房间的浏览器");
     await request_json(`/api/rooms/${room_id}/descriptions`, { descriptions: { [name]: text } }, token);
+    if (label !== undefined) await request_json(`/api/rooms/${room_id}/labels`, { labels: { [name]: label } }, token);
     if (state.room?.id === room_id) await refresh_room();
   } catch (error) { notify("error", error.message); throw error; }
 }
@@ -1267,6 +1303,15 @@ async function set_member_access({ name, project_access }) {
   await local_launch_request("room-member-access", { room_id, token: localStorage.getItem(`discuss-access:${room_id}`), name, project_access });
   if (state.room?.id !== room_id) return;
   // The saved choices are cached per runtime revision, which this change leaves alone.
+  state.launch.room_models = null;
+  await load_room_models();
+}
+
+/** Change a woken CLI member's model and effort; the local service applies them from its next run and keeps its session. */
+async function set_member_model({ name, model, effort }) {
+  const room_id = state.room.id;
+  await local_launch_request("room-member-model", { room_id, token: localStorage.getItem(`discuss-access:${room_id}`), name, model, effort });
+  if (state.room?.id !== room_id) return;
   state.launch.room_models = null;
   await load_room_models();
 }
@@ -1330,6 +1375,8 @@ async function invite_member({ name, access, project_access = "read", session_id
     result = await local_launch_request("room-member", { room_id, token, action: "add", name: record.member.name, access,
       member_token: record.member.token, participants, cwd: draft.cwd });
   } else result = await request_json(`/api/rooms/${room_id}/members`, record.member);
+  // A name a removed member once used stays bound locally, so the local service may admit this one under the next free name.
+  if (typeof result.member === "string" && result.member !== record.member.name) record.member = { ...record.member, name: result.member };
   finish_member_request(room_id, token, record, result);
   await send_descriptions(room_id, token, { [record.member.name]: description_draft(name) });
   await send_labels(room_id, token, { [record.member.name]: label_drafts[name] });
@@ -1792,7 +1839,7 @@ async function submit_room(event, folder_id = null) {
   if (state.directory_pending.has("create-room")) return;
   const payload = room_creation_payload(folder_id);
   // A room needs the local service only for members it wakes or for smart scheduling.
-  const launchable = state.launch.available || Boolean(state.launch.relay);
+  const launchable = state.launch.available || (!computer_rooms_only() && Boolean(state.launch.relay));
   const launching = Object.values(payload.experts).includes("cli") || (launchable && Boolean(creation_launch_options().scheduler || state.launch.workspace.cwd || state.launch.workspace.local_project));
   if (launching && !launchable) throw new Error("本机唤醒的成员需要连接本机服务；也可改为手动接入");
   const launch_draft = launching ? creation_launch_options() : null;
@@ -1865,7 +1912,8 @@ function restore_local_connection() {
 
 /** Use the local bridge directly, or the paired computer when this device has none; plaintext never goes to the public server. */
 async function local_launch_request(action, payload) {
-  if (!local_connection && relay_machine) return relay_command(action, payload);
+  // A website without rooms of its own reaches the computer only through the relay; pairing itself still needs the local bridge.
+  if (relay_machine && (!local_connection || computer_rooms_only() && action !== "machine-link")) return relay_command(action, payload);
   const headers = { "Content-Type": "application/json", "X-CoDiscuss-Local": "1" };
   if (local_connection) headers["X-CoDiscuss-Connection"] = local_connection.token;
   let response;
@@ -1930,7 +1978,7 @@ async function relay_exchange(action, payload, wait) {
   const machine = relay_machine;
   if (!machine) throw new Error("没有可用的已配对电脑，请在电脑上运行 codiscuss 并连接网站");
   const id = crypto.randomUUID();
-  const target = state.remote_rooms ? { target: "computer" } : {};
+  const target = computer_rooms_only() ? { target: "computer" } : {};
   const { key, envelope } = await seal_relay_request(machine, id, { action, payload, ...target });
   const result = await request_json(`/api/machines/${encodeURIComponent(machine.id)}/relay`, { id, envelope, ...(wait ? { wait } : {}) });
   if (result.status === "done") return open_relay_response(key, id, result.response);
@@ -1962,7 +2010,7 @@ async function relay_command(action, payload) {
   let answer;
   // A website without the relay, or a computer not connected to it (an older codiscuss), still serves the queue.
   try { answer = await relay_exchange(action, payload, limit); }
-  catch (error) { if (state.remote_rooms || (error.status !== 404 && !error.offline)) throw error; }
+  catch (error) { if (computer_rooms_only() || (error.status !== 404 && !error.offline)) throw error; }
   const { status, body } = answer ?? await queued_relay_command(action, payload, limit);
   if (status >= 400) throw Object.assign(new Error(body.error || "本机操作失败"), { launch: body.launch });
   return body;
@@ -2064,22 +2112,15 @@ async function load_remote_site() {
   state.remote_site = answer.body?.site || "";
 }
 
-/** Whether this page can show the paired computer's rooms: signed in here, without the local service, with an online computer. */
-function room_source_available() {
-  return Boolean(relay_machine) && !local_connection && !state.admin.local;
+/** Whether this website keeps no rooms of its own and lists only the paired computer's (the Cloudflare site). */
+function computer_rooms_only() {
+  return state.admin.computer_rooms === true;
 }
 
-/** The room list this browser chose last time. */
-function stored_room_source() {
-  try { return localStorage.getItem(ROOM_SOURCE_KEY) || ""; } catch { return ""; }
-}
-
-/** Show the rooms kept on the paired computer, or this website's own rooms; the list opens at its first room. */
-async function set_room_source(remote) {
-  if (remote && !room_source_available()) throw new Error("需要登录管理员，并有一台在线的已配对电脑");
+/** Show the paired computer's rooms, or an empty directory while it cannot be reached; the list opens at its first room. */
+async function show_computer_rooms(remote) {
   if (remote) await load_remote_site();
   state.remote_rooms = Boolean(remote);
-  try { remote ? localStorage.setItem(ROOM_SOURCE_KEY, "computer") : localStorage.removeItem(ROOM_SOURCE_KEY); } catch { /* Only this page remembers it. */ }
   // The two lists share no rooms, so nothing read from one may be shown for the other.
   room_views.clear();
   message_histories.clear();
@@ -2093,6 +2134,17 @@ async function set_room_source(remote) {
   start_live_updates({ refresh: false });
   // Opening no room reads the chosen directory and then opens its first room.
   await select_room(undefined);
+}
+
+/** Once signed in, find the paired computer and show its rooms; the poll calls this again until the computer answers. */
+async function connect_computer_rooms() {
+  if (!state.admin.logged_in || computer_connecting) return;
+  computer_connecting = true;
+  try {
+    await load_launch_settings();
+    if (relay_machine && !state.remote_rooms) await show_computer_rooms(true);
+  } catch (error) { console.warn("Connecting to the computer failed:", error.message); }
+  finally { computer_connecting = false; }
 }
 
 /** The relay's change notices for the computer's rooms, shaped like the website's update stream. */
@@ -2159,7 +2211,7 @@ async function submit_local_launch(input, title, direct = false, signature) {
   const id = input.room?.submission_id || `room-${input.room_id}`;
   const key = LAUNCH_PENDING_PREFIX + id;
   const previous = localStorage.getItem(key);
-  const relay = !direct && !state.launch.available ? state.launch.relay?.id : undefined;
+  const relay = !direct && !state.launch.available && !computer_rooms_only() ? state.launch.relay?.id : undefined;
   const record = previous ? JSON.parse(previous) : { id, title, input, room_id: input.room_id, direct, signature, ...(relay ? { machine_id: relay } : {}) };
   if (previous && JSON.stringify(record.input) !== JSON.stringify(input)) throw new Error("此房间有未完成的原启动请求，请先继续该请求，不要替换配置");
   record.attempt_id = crypto.randomUUID();
@@ -2238,7 +2290,9 @@ async function load_launch_settings() {
     local_connection = restore_local_connection();
     state.launch.remote = Boolean(local_connection);
     if (local_connection) state.launch.connect_command = `codiscuss local connect "${location.origin}"`;
-    if (!local_connection && !local) {
+    if (!local && (!local_connection || computer_rooms_only())) {
+      // Pair first, so the computer this page runs on can then be reached through the relay like any other device.
+      if (local_connection) await pair_local_machine();
       state.launch.relay = await load_relay_machine();
       // An online computer that publishes a command key does everything the local service would; an older one only creates rooms.
       if (!state.launch.relay?.online || !state.launch.relay.public_key) return;
@@ -2253,7 +2307,7 @@ async function load_launch_settings() {
       scheduler_providers: settings.scheduler_providers || {}, scheduler_modes: settings.scheduler_modes || {}, scheduler_default_mode: settings.scheduler_default_mode || "", error: "",
       notice: relay_machine ? `经电脑「${relay_machine.name}」执行本机操作` : local_connection ? "已连接本机服务，讨论保存在当前网站" : "" });
     Object.values(state.launch.profiles).forEach(fill_api_key);
-    if (local_connection) pair_local_machine();
+    if (local_connection && !relay_machine) pair_local_machine();
     move_browser_description_templates();
     // Settings arrive after the form was reset; only an untouched draft gets the default.
     if (!Object.keys(state.launch.scheduler).length) state.launch.scheduler = default_scheduler();
@@ -2434,8 +2488,7 @@ async function check_launch_api(name) {
 }
 
 /** Provide selectable software results without turning an unavailable list into a text field. */
-function launch_model_state(name, launch = state.launch) {
-  const profile = launch.profiles[name] || {};
+function launch_model_state(name, launch = state.launch, profile = launch.profiles[name] || {}) {
   if (profile.adapter === "api") {
     const catalog = launch.model_catalogs?.[model_catalog_key(profile)];
     const preset = launch.api_providers?.[platform_of(name)];
@@ -2459,8 +2512,7 @@ function launch_model_state(name, launch = state.launch) {
 }
 
 /** Read model metadata only; never launch an AI task or persist discovered choices as defaults. */
-async function load_launch_models(name, force = false) {
-  const profile = state.launch.profiles[name] || {};
+async function load_launch_models(name, force = false, profile = state.launch.profiles[name] || {}) {
   if (!state.launch.available || (!MODEL_CLIENTS.includes(profile.adapter) && profile.adapter !== "api")) return;
   if (profile.adapter === "api" && (!force || !profile.api_key_ref)) return;
   const catalogs = state.launch.model_catalogs ||= {}, key = model_catalog_key(profile);
@@ -3610,6 +3662,7 @@ function arm_update_poll() {
  * A site without revisions is read in full as before.
  */
 async function poll_live_updates() {
+  if (computer_rooms_only() && !state.remote_rooms) return connect_computer_rooms();
   if (!live_updates.source && typeof EventSource !== "undefined") start_live_updates({ refresh: false });
   const room_id = state.room?.id || "";
   const working = (state.room?.free?.members || []).some((member) => WORKING_STATUSES.includes(member.execution?.status));
@@ -3652,7 +3705,7 @@ async function refresh_live_progress(room_id, revision) {
 function start_live_updates({ refresh = true } = {}) {
   if (document.hidden) return;
   live_updates.enabled = true;
-  if (!live_updates.source && typeof EventSource !== "undefined") {
+  if (!live_updates.source && typeof EventSource !== "undefined" && (state.remote_rooms || !computer_rooms_only())) {
     const source = state.remote_rooms ? relay_event_source() : new EventSource("/api/updates");
     live_updates.source = source;
     source.addEventListener("open", () => {
@@ -3721,6 +3774,8 @@ async function initialize() {
     if (name && field === "model") write_launch_model(name, event.target.value);
     else if (name) write_launch_field(name, field, event.target.type === "checkbox" ? event.target.checked : event.target.value);
   });
+  // Whether this website keeps rooms of its own decides how settings and rooms are read.
+  await load_admin_state();
   const launch_settings = load_launch_settings();
   document.addEventListener("click", download_relay_file, true);
   new MutationObserver(() => { if (state.remote_rooms) show_relay_images(); }).observe(document.body, { childList: true, subtree: true });
@@ -3734,14 +3789,12 @@ async function initialize() {
     if (button?.dataset.launchDiscard) discard_launch(button.dataset.launchDiscard);
     if (button?.dataset.launchRoom) run_action(() => select_room(button.dataset.launchRoom));
   });
-  load_admin_state();
-  // The computer's rooms are shown again only once its connection is known.
-  if (stored_room_source() === "computer") {
+  if (computer_rooms_only()) {
     await launch_settings;
-    state.remote_rooms = room_source_available() && await load_remote_site().then(() => true, () => false);
+    state.remote_rooms = Boolean(relay_machine) && await load_remote_site().then(() => true, () => false);
   }
   try {
-    const result = await request_json("/api/rooms");
+    const result = computer_rooms_only() && !state.remote_rooms ? { rooms: [] } : await request_json("/api/rooms");
     state.rooms = result.rooms;
     set_folder_directory(result);
     const requested = new URLSearchParams(location.search).get("room");
@@ -3768,7 +3821,7 @@ function view_snapshot() {
     .map((control) => [control.id, control.value]));
   const experts = Object.fromEntries(["new-expert-modes"].map((id) =>
     [id, element(id) ? read_expert_inputs(id) : {}]));
-  return { room_source: { available: room_source_available(), remote: state.remote_rooms, online: state.remote_online, machine: relay_machine?.name || "" },
+  return { room_source: { computer: computer_rooms_only(), signed_in: state.admin.logged_in, remote: state.remote_rooms, online: state.remote_online },
     room_site: room_site(), rooms: ordered_rooms(), folders: state.folders, folder_groups: ordered_folders(), room: state.room, archive_view: state.archive_view, directory_sort: state.directory_sort, messages: state.messages, total: state.message_total,
     archive_pending: [...state.archive_changes.keys()], import_progress: structuredClone(state.import_progress),
     directory_pending: [...state.directory_pending.keys()], folder_pending: [...state.folder_moves.keys()], creating_room: state.creating_room,
@@ -3981,7 +4034,7 @@ async function execute_view_action(name, value) {
   if (!["refresh", "create"].includes(name)) state.navigation_version++;
   const event = { preventDefault() {} };
   const actions = { refresh: refresh_room, room: select_room, tab: select_tab,
-    archives: toggle_archives, room_source: set_room_source, backup: backup_room, backup_rooms, import_rooms, manage_channel, move_channel, create_folder, move_folder, rename_folder, delete_folder, sort_directory,
+    archives: toggle_archives, backup: backup_room, backup_rooms, import_rooms, manage_channel, move_channel, create_folder, move_folder, rename_folder, delete_folder, sort_directory,
     send: () => send_message(event), discard_sending: () => { state.sending_preview = null; }, choose_attachments: () => element("attachment-input").click(), remove_attachment, preview_attachment,
     create: (folder_id) => submit_room(event, folder_id),
     save_context: () => save_context(event), save_topic: () => save_topic(event),
@@ -4012,15 +4065,15 @@ function change_view_theme(theme) {
 }
 
 window.discuss_view = { snapshot: view_snapshot, write_field: write_view_field, notify, load_decision_input,
-  write_launch: write_launch_field, default_launch_entry, description_template, save_description_template, description_draft, write_description_draft, describe_member, set_chain_rounds, continue_chain, expert_presets, apply_expert_preset, unique_instance, member_label, preset_identity, save_expert_preset, delete_expert_preset, write_room_connection, write_room_adapter, launch_clients: LAUNCH_CLIENTS,
+  write_launch: write_launch_field, default_launch_entry, description_template, save_description_template, description_draft, write_description_draft, describe_member, set_chain_rounds, continue_chain, expert_presets, apply_expert_preset, unique_instance, member_label, default_name, label_draft, write_label_draft, preset_identity, save_expert_preset, delete_expert_preset, write_room_connection, write_room_adapter, launch_clients: LAUNCH_CLIENTS,
   launch_model_state, load_launch_models, write_launch_model, save_launch_api_key, write_scheduler, save_scheduler_api_key, check_scheduler, write_named_followup, write_create_discussion, write_create_chain_rounds, check_launch_api, launch_summary, launch_can_set_access, pick_launch_directory, browse_local_directory, save_launch_projects, restore_launch_profile, reset_create_form, empty_discussion_message,
-  start_drag: start_directory_drag, reconnect: reconnect_live_updates, stop_label,
+  start_drag: start_directory_drag, reconnect: reconnect_live_updates, stop_label, local_request: local_launch_request,
   attachment_markup, attachment_size, attachment_file_icon, drop_attachments, paste_attachments,
   write_expert: write_view_expert, add_instance: add_view_instance, add_preset: add_preset_instance, platform_of, execute: execute_view_action, theme: change_view_theme,
   admin: { register: register_admin, login: login_admin, logout: logout_admin,
     update_profile: update_admin_profile, avatar_from_file: admin_avatar_from_file, validate: validate_admin_form },
   request: request_json, rewind_plan, identities: IDENTITIES, display_name, sources: SOURCE_LABELS,
-  set_member_access, allow_denials, set_member_adapter, reload_room_models, limits_label, stop_reason_label, participant_model, participant_files, participant_session_hint, participant_access,
+  set_member_access, set_member_model, allow_denials, set_member_adapter, reload_room_models, limits_label, stop_reason_label, participant_model, participant_files, participant_session_hint, participant_access,
   turn_label, turn_guidance, round_groups, limit_rounds, progress_speaker, brief_meta, max_message_length: MAX_MESSAGE_LENGTH, provenance: message_provenance, format_time };
 
 restore_theme();

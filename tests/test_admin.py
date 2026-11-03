@@ -134,7 +134,7 @@ class AdminTests(unittest.TestCase):
         self.assertEqual(self.request(path + "/archive", {"actor": "用户"}, admin=admin)[0], 200)
         self.assertEqual(self.request(path + "/restore", {"actor": "用户"}, admin=admin)[0], 200)
         self.assertEqual(self.request(path + "/delete", {"actor": "用户", "confirm_title": "错误"}, admin=admin)[0], 400)
-        self.assertEqual(self.request(path + "/delete", {"actor": "Gemini", "confirm_title": "管理员验证"}, admin=admin)[0], 400)
+        self.assertEqual(self.request(path + "/delete", {"actor": "Antigravity", "confirm_title": "管理员验证"}, admin=admin)[0], 400)
         self.assertEqual(self.request(path + "/delete", {"actor": "用户", "confirm_title": "管理员验证"}, admin=admin)[0], 200)
         self.assertEqual(self.request(path)[0], 404)
 

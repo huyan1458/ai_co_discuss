@@ -39,7 +39,7 @@
 
 ```json
 [{"expert": "Claude", "question": "两种建议似乎采用了不同的失败容忍度。请判断这是否解释了分歧；若不是，指出决定选择的证据。"},
- {"expert": "Gemini", "question": "先读取最新回答，再对 Claude 的判断给出你的看法。"}]
+ {"expert": "Antigravity", "question": "先读取最新回答，再对 Claude 的判断给出你的看法。"}]
 ```
 
 - 安排须带本次读取的 `revision`；整轮计划还须包含 `waiting` 中的每位专家。`unregistered` 中尚未注册的手动专家不能排入，它注册后会自动加入本轮队列。名单变化后 `revision` 失效需重取，缺人或未带 `revision` 都会被拒绝；本轮不需要某人时先让其暂离。

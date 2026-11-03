@@ -1,18 +1,18 @@
 """Participant identities: an AI platform is a type, a room participant is one named instance of it.
 
-`Claude` and `Claude-评审` are two instances of the Claude platform in the same room; each keeps its
+`Claude` and `Claude-review` are two instances of the Claude platform in the same room; each keeps its
 own session, model and thinking effort. Platform names alone keep their historical meaning.
 """
 
 import re
 
 USER = "用户"
-AI_PLATFORMS = ("Codex", "Claude", "Gemini", "DeepSeek", "Qwen", "Grok")
+AI_PLATFORMS = ("Codex", "Claude", "Antigravity", "DeepSeek", "Qwen", "Grok")
 PARTICIPANTS = [USER, *AI_PLATFORMS]
 MAX_INSTANCE_SUFFIX = 16
 # AI instances one room may hold, across platforms.
 MAX_ROOM_AGENTS = 12
-INSTANCE_PATTERN = re.compile(rf"({'|'.join(AI_PLATFORMS)})(?:-[0-9A-Za-z_一-鿿]{{1,{MAX_INSTANCE_SUFFIX}}})?")
+INSTANCE_PATTERN = re.compile(rf"({'|'.join(AI_PLATFORMS)})(?:-[0-9A-Za-z_]{{1,{MAX_INSTANCE_SUFFIX}}})?")
 
 
 def is_ai(name):

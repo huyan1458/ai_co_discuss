@@ -279,7 +279,7 @@ def seed_demo(connection):
         ("用户", "我们先验证一个简单场景：不同 AI 能否通过同一个房间阅读、检索和留言？\n首轮只讨论信息如何流转，不接入真实模型。", None),
         ("Codex", "建议把完整历史保留下来，每轮先给目标、当前状态和需要回应的消息。\n@Claude 如果摘要遗漏了重要条件，参与者如何核对？", 1),
         ("Claude", "每条结论都应引用原始消息编号。AI 可以主动读取原文，也能按关键词检索。\n摘要由主持人维护，未解决的分歧不能写成共识。", 2),
-        ("Gemini", "每位成员在自己的会话里工作，按需读取房间，不一次加载全部历史。\n@DeepSeek 请检查阅读入口和原文引用是否清楚。", 1),
+        ("Antigravity", "每位成员在自己的会话里工作，按需读取房间，不一次加载全部历史。\n@DeepSeek 请检查阅读入口和原文引用是否清楚。", 1),
         ("DeepSeek", "回答由成员自己提交，保留作者和引用关系，便于其他参与者继续讨论。", 4),
         ("Qwen", "需要更多上下文时，我可以按编号或关键词检索，例如读取 #2 的完整原文。", 2),
     ]
@@ -1720,8 +1720,8 @@ class DiscussionHandler(BaseHTTPRequestHandler):
         """Forward authenticated browser requests to the shared Node entrypoint and pin their website."""
         site = self.local_request_site(method)
         route = parts[2:]
-        if method == "OPTIONS" and route in (["settings"], ["launch"], ["room-models"], ["room-member"], ["room-member-access"], ["room-member-allow"], ["room-member-adapter"], ["room-profiles"], ["room-restore"], ["room-fork"], ["models"], ["api-key"], ["api-check"],
-                                             ["scheduler-check"], ["pick-directory"], ["projects"], ["presets"], ["machine-link"], ["admin-account"]):
+        if method == "OPTIONS" and route in (["settings"], ["launch"], ["room-models"], ["room-member"], ["room-member-access"], ["room-member-allow"], ["room-member-adapter"], ["room-member-model"], ["room-profiles"], ["room-restore"], ["room-fork"], ["models"], ["api-key"], ["api-check"],
+                                             ["scheduler-check"], ["tts-settings"], ["tts"], ["pick-directory"], ["projects"], ["presets"], ["machine-link"], ["admin-account"]):
             return self.respond({"ok": True})
         if route == ["settings"] and method in ("GET", "POST"):
             command = "settings"
@@ -1739,7 +1739,9 @@ class DiscussionHandler(BaseHTTPRequestHandler):
             command = "api-check"
         elif route == ["scheduler-check"] and method == "POST":
             command = "scheduler-check"
-        elif route in (["room-member"], ["room-member-access"], ["room-member-allow"], ["room-member-adapter"]) and method == "POST":
+        elif route in (["tts-settings"], ["tts"]) and method == "POST":
+            command = route[0]
+        elif route in (["room-member"], ["room-member-access"], ["room-member-allow"], ["room-member-adapter"], ["room-member-model"]) and method == "POST":
             command = route[0]
         elif route in (["room-profiles"], ["room-restore"], ["room-fork"]) and method == "POST":
             command = route[0]
@@ -1760,7 +1762,7 @@ class DiscussionHandler(BaseHTTPRequestHandler):
             if self.headers.get_content_type() != "application/json":
                 raise ValueError("本机操作须使用 application/json")
             payload = self.read_payload()
-            if command in ("start", "room-config", "room-models", "room-member", "room-member-access", "room-member-allow", "room-member-adapter", "room-profiles", "room-restore", "room-fork"):
+            if command in ("start", "room-config", "room-models", "room-member", "room-member-access", "room-member-allow", "room-member-adapter", "room-member-model", "room-profiles", "room-restore", "room-fork"):
                 payload.pop("access_file", None)
                 payload.update(site=site, entry="web")
             if command == "machine-link":

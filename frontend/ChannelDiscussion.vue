@@ -7,6 +7,7 @@ import ExecutionDenials from "./ExecutionDenials.vue";
 import ExecutionNotes from "./ExecutionNotes.vue";
 import WorkingText from "./WorkingText.vue";
 import QueuedMessages from "./QueuedMessages.vue";
+import { use_read_aloud } from "./read-aloud.js";
 import { motion, useSpring, useTransform } from "motion-v";
 
 const emit = defineEmits(["detail", "edit"]);
@@ -21,6 +22,40 @@ const near_length_limit = computed(() => text_length.value >= bridge.max_message
 const search = field("search-input");
 const transcript = ref(null);
 const expanded_answers = ref(new Set());
+// Read-aloud runs on the local service; a long answer is shown in full before it is read so its sentences can be highlighted.
+const reader = use_read_aloud({ bridge, container: () => transcript.value,
+  author: (id) => view.value.messages.find((message) => message.id === id)?.author || "",
+  prepare: async (id) => {
+    if (!answer_previews.value.get(id)?.truncated || expanded_answers.value.has(id)) return;
+    expanded_answers.value.add(id);
+    await nextTick();
+  } });
+// Where "listen from here" shows for text selected in a message, with the selection kept for the click.
+const listen_here = ref(null);
+/** Offer reading from a selection made inside a message's text. */
+function track_selection() {
+  const selection = document.getSelection();
+  const range = selection?.rangeCount && !selection.isCollapsed ? selection.getRangeAt(0) : null;
+  const start = range && (range.startContainer.nodeType === Node.ELEMENT_NODE ? range.startContainer : range.startContainer.parentElement);
+  const body = start?.closest(".channel-answer > .channel-message-text");
+  const card = body && transcript.value?.contains(body) ? body.closest(".channel-message[data-message-id]") : null;
+  if (!card) { listen_here.value = null; return; }
+  const rect = range.getBoundingClientRect();
+  listen_here.value = { id: Number(card.dataset.messageId), range: range.cloneRange(), left: rect.left + rect.width / 2, top: rect.bottom + 8 };
+}
+/** Start reading where the selection begins and continue to the latest message. */
+function listen_from_selection() {
+  const { id, range } = listen_here.value;
+  listen_here.value = null;
+  document.getSelection()?.removeAllRanges();
+  reader.start(id, range);
+}
+onMounted(() => {
+  document.addEventListener("selectionchange", track_selection);
+  transcript.value?.addEventListener("scroll", track_selection, { passive: true });
+  watch(() => room.value?.id, () => reader.stop());
+});
+onBeforeUnmount(() => { document.removeEventListener("selectionchange", track_selection); reader.stop(); });
 const MESSAGE_PREVIEW_LENGTH = 160;
 const MESSAGE_PREVIEW_MIN_LENGTH = 100;
 const MESSAGE_PREVIEW_CODE_LINES = 4;
@@ -1191,7 +1226,8 @@ function copy_message(message) { act("copy", `${view.value.room_site}/r/${room.v
         </div>
       </motion.div>
     </Teleport>
-    <div ref="transcript" v-memo="[message_groups, message_round_labels, free, room.session, view.access, active_message, expanded_answers.size, room.title, view.query, view.mention_only, topic_anchor, end_anchor, request_badges, execution_reports, recommendations, adopting, scheduler_decisions, host_arrangements, correcting, pending, execution_notes, editing, rewound_runs]" class="channel-transcript" aria-label="聊天记录" @scroll="track_scroll" @wheel.passive="resume_tracking" @touchstart.passive="resume_tracking" @keydown="resume_tracking">
+    <UButton v-if="listen_here" label="听当前" icon="i-lucide-headphones" size="sm" color="neutral" variant="solid" class="channel-listen-here" :style="{ left: `${listen_here.left}px`, top: `${listen_here.top}px` }" aria-label="从选中处开始朗读" @mousedown.prevent @click="listen_from_selection" />
+    <div ref="transcript" v-memo="[message_groups, message_round_labels, free, room.session, view.access, active_message, expanded_answers.size, reader.state.message_id, room.title, view.query, view.mention_only, topic_anchor, end_anchor, request_badges, execution_reports, recommendations, adopting, scheduler_decisions, host_arrangements, correcting, pending, execution_notes, editing, rewound_runs]" class="channel-transcript" aria-label="聊天记录" @scroll="track_scroll" @wheel.passive="resume_tracking" @touchstart.passive="resume_tracking" @keydown="resume_tracking">
       <div v-if="!view.query && !view.mention_only && !topic_anchor" class="channel-message-group channel-topic-group"><TopicCard :ref="(card) => topic_card = card" @edit="emit('edit')" /></div>
       <div v-for="group in message_groups" :key="group.key" class="channel-message-group">
         <USeparator :label="group.label" class="channel-date-divider" />
@@ -1227,22 +1263,23 @@ function copy_message(message) { act("copy", `${view.value.room_site}/r/${room.v
               <UAvatar :src="bridge.identities[message.author]?.icon" :text="bridge.identities[message.author]?.initials || '?'" :alt="bridge.display_name(message.author)" size="md" class="channel-avatar" :class="bridge.identities[message.author]?.style" />
               <div class="channel-message-meta">
                 <div class="channel-message-author"><strong>{{ bridge.display_name(message.author) }}</strong></div>
-                <div v-if="message.created_at" class="channel-message-provenance"><time :title="new Date(message.created_at * 1000).toLocaleString('zh-CN')">{{ bridge.format_time(message.created_at * 1000) }}</time></div>
-              </div>
-              <span class="channel-message-provenance channel-message-elapsed">{{ message.waiting ? `手动启动${message.created_at ? ` · 已等 ${format_elapsed(Math.max(0, free_now - message.created_at))}` : ''}` : `已用 ${format_elapsed(Math.max(0, free_now - message.created_at))}` }}</span>
-              <div v-if="!message.retry && view.access?.can_manage" class="channel-working-actions">
-                <template v-if="speaking_turn?.expert === message.author && message.discussion_request">
-                  <UButton label="暂停" icon="i-lucide-pause" size="xs" variant="soft" color="neutral" :aria-label="`暂停讨论，停止 ${bridge.display_name(message.author)} 本次发言`" :disabled="!!pending" :loading="pending === 'pause_discussion'" @click="act('pause_discussion')" />
-                  <UButton label="跳过" icon="i-lucide-skip-forward" size="xs" variant="soft" color="neutral" :aria-label="`跳过 ${bridge.display_name(message.author)} 本次发言`" :disabled="!!pending" :loading="pending === 'skip_turn'" @click="act('skip_turn')" />
-                </template>
-                <UButton v-else label="停止" icon="i-lucide-circle-stop" size="xs" variant="soft" color="error" :aria-label="`停止 ${bridge.display_name(message.author)} 本次执行`" :disabled="!!pending"
-                  @click="act('change_member', { member_id: message.member_id, name: message.author, action: 'interrupt' })" />
+                <div class="channel-message-provenance"><template v-if="message.created_at"><time :title="new Date(message.created_at * 1000).toLocaleString('zh-CN')">{{ bridge.format_time(message.created_at * 1000) }}</time> · </template>{{ message.waiting ? `手动启动${message.created_at ? ` · 已等 ${format_elapsed(Math.max(0, free_now - message.created_at))}` : ''}` : `已用 ${format_elapsed(Math.max(0, free_now - message.created_at))}` }}</div>
               </div>
             </div>
-            <div v-for="status in [working_status(message)]" :key="message.id" class="channel-message-text" :class="{ 'channel-working-warning': status.warning }" role="status" :aria-label="`${bridge.display_name(message.author)} ${status.text}`" :title="shows_progress(message) ? undefined : '此接入方式看不到进度，可在原窗口查看'">
-              <span v-if="message.waiting">{{ message.text }}</span>
-              <WorkingText v-else-if="status.live" :text="status.text" :seed="message.author" :beat="message.activity_at" :silent="free_now - (message.activity_at || message.created_at)" dots :muted="!shows_progress(message)" />
-              <span v-else>{{ status.text }}</span>
+            <div class="channel-working-row">
+              <div v-for="status in [working_status(message)]" :key="message.id" class="channel-message-text" :class="{ 'channel-working-warning': status.warning }" role="status" :aria-label="`${bridge.display_name(message.author)} ${status.text}`" :title="shows_progress(message) ? undefined : '此接入方式看不到进度，可在原窗口查看'">
+                <span v-if="message.waiting">{{ message.text }}</span>
+                <WorkingText v-else-if="status.live" :text="status.text" :seed="message.author" :beat="message.activity_at" :silent="free_now - (message.activity_at || message.created_at)" dots :muted="!shows_progress(message)" />
+                <span v-else>{{ status.text }}</span>
+              </div>
+              <div v-if="!message.retry && view.access?.can_manage" class="channel-working-actions">
+                <template v-if="speaking_turn?.expert === message.author && message.discussion_request">
+                  <UTooltip text="暂停讨论"><UButton icon="i-lucide-pause" size="sm" variant="ghost" color="neutral" :aria-label="`暂停讨论，停止 ${bridge.display_name(message.author)} 本次发言`" :disabled="!!pending" :loading="pending === 'pause_discussion'" @click="act('pause_discussion')" /></UTooltip>
+                  <UTooltip text="跳过本次发言"><UButton icon="i-lucide-skip-forward" size="sm" variant="ghost" color="neutral" :aria-label="`跳过 ${bridge.display_name(message.author)} 本次发言`" :disabled="!!pending" :loading="pending === 'skip_turn'" @click="act('skip_turn')" /></UTooltip>
+                </template>
+                <UTooltip v-else text="停止"><UButton variant="solid" color="neutral" class="channel-stop-button" :aria-label="`停止 ${bridge.display_name(message.author)} 本次执行`" :disabled="!!pending"
+                  @click="act('change_member', { member_id: message.member_id, name: message.author, action: 'interrupt' })"><span class="channel-stop-square" /></UButton></UTooltip>
+              </div>
             </div>
             <template v-if="message.retry">
               <p class="channel-message-text channel-failure-reason">{{ message.retry.reason }}</p>
@@ -1291,7 +1328,7 @@ function copy_message(message) { act("copy", `${view.value.room_site}/r/${room.v
           </template>
         </div>
         <template v-else>
-        <UChatMessage :id="String(message.id)" v-memo="[message, can_take_back(message), can_branch(message), can_retract(message), view.admin?.identity_version, editing.id === message.id && editing.plan, editing.id === message.id && editing.error, editing.id === message.id, pending === 'rewind_and_send', message_round_labels.get(message.id), expanded_answers.has(message.id), active_message === message.id, waits_for_host(message), request_badges.get(message.id), execution_reports.get(message.id), message_elapsed(message), recommendations.get(message.id), adopting === message.id, answer_execution(message)?.notes, execution_notes.get(answer_execution(message)?.id)]" :data-message-id="message.id" :data-author="bridge.identities[message.author]?.style" tabindex="-1" :role="message.author === '用户' ? 'user' : 'assistant'" :parts="[]" side="left" variant="naked" color="neutral" class="channel-message" :class="{ 'channel-current-message': active_message === message.id }" :ui="{ header: 'channel-message-header', container: 'channel-message-container', body: 'channel-message-body' }">
+        <UChatMessage :id="String(message.id)" v-memo="[message, reader.state.message_id === message.id, can_take_back(message), can_branch(message), can_retract(message), view.admin?.identity_version, editing.id === message.id && editing.plan, editing.id === message.id && editing.error, editing.id === message.id, pending === 'rewind_and_send', message_round_labels.get(message.id), expanded_answers.has(message.id), active_message === message.id, waits_for_host(message), request_badges.get(message.id), execution_reports.get(message.id), message_elapsed(message), recommendations.get(message.id), adopting === message.id, answer_execution(message)?.notes, execution_notes.get(answer_execution(message)?.id)]" :data-message-id="message.id" :data-author="bridge.identities[message.author]?.style" tabindex="-1" :role="message.author === '用户' ? 'user' : 'assistant'" :parts="[]" side="left" variant="naked" color="neutral" class="channel-message" :class="{ 'channel-current-message': active_message === message.id }" :ui="{ header: 'channel-message-header', container: 'channel-message-container', body: 'channel-message-body' }">
           <template #body>
             <div class="channel-message-byline">
               <UAvatar :src="bridge.identities[message.author]?.icon" :text="bridge.identities[message.author]?.initials || '?'" :alt="bridge.display_name(message.author)" size="md" class="channel-avatar" :class="bridge.identities[message.author]?.style" />
@@ -1350,6 +1387,7 @@ function copy_message(message) { act("copy", `${view.value.room_site}/r/${room.v
             <UTooltip v-if="!can_take_back(message)" text="回复"><UButton icon="i-lucide-corner-up-left" size="xs" color="neutral" variant="ghost" :aria-label="`回复 #${message.id}`" @click="reply_to(message)" /></UTooltip>
             <UTooltip v-if="can_retract(message) && editing.id !== message.id" text="撤回"><UButton icon="i-lucide-undo-2" size="xs" color="neutral" variant="ghost" :aria-label="`撤回 #${message.id}`" @click="act('retract_message', message.id)" /></UTooltip>
             <UTooltip v-if="can_take_back(message) && editing.id !== message.id" text="编辑"><UButton icon="i-lucide-pencil" size="xs" color="neutral" variant="ghost" :aria-label="`编辑 #${message.id}，回退到它之前重新发送`" @click="start_edit(message)" /></UTooltip>
+            <UTooltip v-if="message.kind !== 'receipt' && editing.id !== message.id" :text="reader.state.message_id === message.id ? '停止朗读' : '朗读'"><UButton :icon="reader.state.message_id === message.id ? 'i-lucide-square' : 'i-lucide-volume-2'" size="xs" color="neutral" variant="ghost" :aria-label="reader.state.message_id === message.id ? '停止朗读' : `从 #${message.id} 开始朗读`" @click="reader.state.message_id === message.id ? reader.stop() : reader.start(message.id)" /></UTooltip>
             <UDropdownMenu :items="message_actions(message)" :content="{ align: 'end', sideOffset: 5 }" :ui="{ content: 'channel-menu' }"><UButton icon="i-lucide-ellipsis" size="xs" color="neutral" variant="ghost" :aria-label="`消息 #${message.id} 的更多操作`" /></UDropdownMenu>
           </div></div></template>
         </UChatMessage>
@@ -1478,5 +1516,11 @@ function copy_message(message) { act("copy", `${view.value.room_site}/r/${room.v
 .channel-free-recipients button.is-on { border-color: color-mix(in srgb, var(--channel-accent) 40%, transparent); background: color-mix(in srgb, var(--channel-accent) 14%, transparent); color: var(--ui-text-highlighted); }
 .channel-message-elapsed { align-self: center; margin-left: auto; white-space: nowrap; }
 .channel-working-warning { color: var(--ui-warning); }
+.channel-working-row { display: flex; align-items: center; gap: 12px; }
+.channel-working-row > .channel-message-text { flex: 1; min-width: 0; }
+.channel-listen-here { position: fixed; z-index: 40; transform: translateX(-50%); box-shadow: 0 6px 18px rgb(0 0 0 / 0.18); }
 .channel-working-actions { display: flex; align-items: center; gap: 6px; flex-shrink: 0; }
+.channel-stop-button { width: 32px; height: 32px; padding: 0; justify-content: center; border-radius: 999px; background: #b4524c; color: #fff; }
+.channel-stop-button:hover:not(:disabled) { background: #9c4540; }
+.channel-stop-square { width: 10px; height: 10px; border-radius: 2px; background: currentColor; }
 </style>

@@ -15,13 +15,15 @@ import { adapter_of, adoption_adapter, BRANCHABLE_ADAPTERS, branch_session, sess
 import { ADAPTER_IDS, ADAPTER_PROFILES, adapter_profile, platform_adapters, same_session_family } from './adapters/profiles.mjs';
 import { API_PROVIDERS, api_check, api_models, save_api_key, saved_api_keys, validate_api_profile } from './discussion_api.mjs';
 import { DEFAULT_SCHEDULER_MODE, SCHEDULER_MODES, SCHEDULER_PROVIDERS, scheduler_check } from './scheduler.mjs';
+import { save_tts_settings, tts_settings, tts_speak } from './tts.mjs';
 import { access_levels, BUILTIN_EXPERT_PRESETS, MAX_EXPERT_PROMPT, PROJECT_ACCESS } from './expert_prompts.mjs';
 import { acquire_lock, api, DiscussionStore, service_drafts, validate_config } from './discussion_runner.mjs';
 import { FreeRoomRunner, free_task_files } from './free_runner.mjs';
 import { assert_shared_home, CONNECTION_FIELDS, configuration_snapshot, read_registry, registered_identity, register_room, service_home, service_pid, start_service } from './discussion_service.mjs';
 
-// A platform is a type; `Claude-评审` is another Claude instance with its own session, model and effort.
-const INSTANCE_PATTERN = /^(Codex|Claude|Gemini|DeepSeek|Qwen|Grok)(?:-[0-9A-Za-z_一-鿿]{1,16})?$/;
+// A platform is a type; `Claude-review` is another Claude instance with its own session, model and effort. An ID is
+// English letters, digits and underscores only; a Chinese name is a display label.
+const INSTANCE_PATTERN = /^(Codex|Claude|Antigravity|DeepSeek|Qwen|Grok)(?:-[0-9A-Za-z_]{1,16})?$/;
 
 /** The platform of an AI instance name, or null. */
 export function platform_of(name) { return typeof name === 'string' ? INSTANCE_PATTERN.exec(name)?.[1] ?? null : null; }
@@ -30,6 +32,12 @@ export function platform_of(name) { return typeof name === 'string' ? INSTANCE_P
 export function next_instance(platform, taken) {
   if (!taken.has(platform)) return platform;
   for (let number = 2; ; number++) if (!taken.has(`${platform}-${number}`)) return `${platform}-${number}`;
+}
+
+/** A free name from a used one, as the website numbers copies: Codex → Codex-2, Codex-review → Codex-review2. */
+function free_instance(name, taken) {
+  if (!name.includes('-')) return next_instance(name, taken);
+  for (let number = 2; ; number++) if (!taken.has(`${name}${number}`)) return `${name}${number}`;
 }
 
 /** Supported local clients of an instance's platform. */
@@ -49,9 +57,12 @@ const HELP = `用法：codiscuss launch settings [--file FILE]
       codiscuss launch api-key --file FILE
       codiscuss launch api-check --file FILE
       codiscuss launch scheduler-check --file FILE
+      codiscuss launch tts-settings [--file FILE]
+      codiscuss launch tts --file FILE
       codiscuss launch room-member --file FILE
       codiscuss launch room-member-access --file FILE
       codiscuss launch room-member-allow --file FILE
+      codiscuss launch room-member-model --file FILE
       codiscuss launch room-member-adapter --file FILE
       codiscuss launch room-profiles --file FILE
       codiscuss launch room-restore --file FILE
@@ -70,6 +81,8 @@ models 按 adapter、executable 或 API profile 读取模型目录，不启动�
 api-key 将 base_url、api_key 保存于本机私有目录，只返回 api_key_ref。
 api-check 用 API profile 向模型发送一次极短请求，核对地址、密钥、协议与模型是否可用。
 scheduler-check 用智能调度配置（provider、model、api_key_ref）向决策模型发送一道是非题，核对供应商、模型与密钥是否可用。
+tts-settings 读取朗读设置；内容非空时保存（音色 speaker、语速 speech_rate、语气提示 context、api_key_ref）。
+tts 用朗读设置把 text（不超过 300 字）合成为 MP3，返回 base64。
 pick-directory 在本机弹出系统目录选择窗口，返回所选路径；取消时不返回路径。
 projects 读取本机已配置的项目（名称与绝对路径）；提供 JSON（projects 列表）时整体替换保存。
 presets 读取本机的专家预设（含内置预设）与各平台默认描述；提供 JSON（presets 列表和/或 description_templates）时替换对应部分。
@@ -78,6 +91,7 @@ admin-account 把在指定 site 注册的管理员用户名与密码保存到服
 room-member 为房间邀请、请回一位成员；须提供 site、room_id、token、action（add/rejoin）、name。
 room-member-access 修改一位本机唤醒成员的项目权限（project_access 为 read/write/auto/full），下次投递起生效、保留原会话；须提供 site、room_id、token、name、project_access。
 room-member-allow 把被拒绝的操作加入一位本机唤醒的 Claude Code 或 agy 成员的 allowed_tools，下次投递起生效；须提供 site、room_id、token、name、rules。
+room-member-model 修改一位本机唤醒 CLI 成员的模型与思考强度（空值恢复软件默认），下次投递起生效、保留原会话；须提供 site、room_id、token、name、model、effort。
 room-member-adapter 把自由房间里空闲的 Codex 成员在 App（codex）与 CLI（codex_cli）间切换，保留原会话；须提供 site、room_id、token、name、adapter。
 room-profiles 导出房间的本机成员软件配置与实际会话 ID（不含凭据），供备份附带；须提供 site、room_id、token。
 room-restore 把导入房间的本机成员配置登记到本机并核对原会话存在，Claude Code 成员保持手动；须提供 site、room_id、token、local_members。
@@ -338,11 +352,28 @@ const MAX_PRESET_FIELD = 200;
 const PRESET_FIELDS = ['name', 'label', 'description', 'system_prompt', 'project_access', 'model', 'effort'];
 const MAX_PRESET_LABEL = 32;
 
+/**
+ * Presets saved while IDs could hold Chinese: such an ID becomes `platform-presetN` and its old name the label, so the
+ * add row still shows it. The next save keeps the new form.
+ */
+function english_preset_ids(presets) {
+  const taken = new Set(presets.map(preset => preset.name));
+  return presets.map(preset => {
+    const platform = /^(Codex|Claude|Antigravity|DeepSeek|Qwen|Grok)(?:-|$)/.exec(preset.name || '')?.[1];
+    if (!platform || platform_of(preset.name)) return preset;
+    let number = 1;
+    while (taken.has(`${platform}-preset${number}`)) number++;
+    const name = `${platform}-preset${number}`;
+    taken.add(name);
+    return { ...preset, name, label: preset.label || preset.name };
+  });
+}
+
 /** The user's expert presets and per-platform default descriptions saved on this computer, plus the built-in presets. */
 export function expert_presets(home) {
   const path = join(home, 'expert-presets.json');
   const saved = existsSync(path) ? JSON.parse(readFileSync(path, 'utf8')) : {};
-  return { presets: saved.presets || [], description_templates: saved.description_templates || {}, builtin_presets: BUILTIN_EXPERT_PRESETS };
+  return { presets: english_preset_ids(saved.presets || []), description_templates: saved.description_templates || {}, builtin_presets: BUILTIN_EXPERT_PRESETS };
 }
 
 /** Replace the user's presets or default descriptions (whichever the input carries); every field is checked first. */
@@ -354,7 +385,7 @@ export function save_expert_presets(home, input) {
   const names = new Set();
   for (const preset of presets) {
     if (!preset || typeof preset !== 'object' || Object.keys(preset).some(key => !PRESET_FIELDS.includes(key))) throw new Error('预设只能包含名称、显示名、描述、提示词、项目权限、模型与强度');
-    if (!platform_of(preset.name) || !clients_of(preset.name)) throw new Error(`预设名称须为“平台名”或“平台名-后缀”：${preset.name}`);
+    if (!platform_of(preset.name) || !clients_of(preset.name)) throw new Error(`预设 ID 须为“平台名”或“平台名-后缀”，后缀只用英文、数字和下划线：${preset.name}`);
     if (names.has(preset.name)) throw new Error(`预设名称重复：${preset.name}`);
     names.add(preset.name);
     if (Object.values(preset).some(value => typeof value !== 'string')) throw new Error(`${preset.name} 的字段必须为文本`);
@@ -595,7 +626,16 @@ export async function room_member(home, raw, locked = false) {
       const view = await site_request(input.site, `/api/rooms/${input.room_id}/members/${current.id}`, input.token, { action: 'active', token: input.member_token });
       return { room_id: input.room_id, member: name, access: current.access, free: view, access_file: null };
     }
-    if (action === 'add' && !current && config.participants[name] && !locked) throw new Error(`${name} 曾在本房间使用过并绑定了会话；请换一个名称`);
+    if (action === 'add' && !current && config.participants[name] && !locked) {
+      // A removed member's name keeps its bound session locally, so the new one joins under the next free name; a retry
+      // finds the name its own credential was saved under.
+      const taken = new Set([...roster.map(member => member.name), ...Object.keys(config.participants), ...Object.keys(config.members || {})]);
+      const retried = Object.keys(config.members || {}).find(key => key !== name && input.member_token && config.members[key].token === input.member_token
+        && !roster.some(member => member.name === key));
+      const renamed = retried || free_instance(name, taken);
+      const participants = raw.participants?.[name] ? { participants: { ...raw.participants, [renamed]: raw.participants[name] } } : {};
+      return room_member(home, { ...raw, name: renamed, ...participants }, true);
+    }
     if (action === 'rejoin' && current?.status !== 'away') throw new Error(`${name} 不是离开状态，无需请回`);
     if (action === 'add' && current) throw new Error(`${name} 已是本房间成员；离开的成员请用请回`);
     const manual = action === 'rejoin' ? current.access === 'manual' : access === 'manual';
@@ -648,6 +688,35 @@ export async function room_member_access(home, raw) {
     validate_config(next, dirname(path));
     atomic_json(path, next);
     return { room_id: input.room_id, member: name, project_access };
+  } finally { release(); }
+}
+
+/**
+ * Change a woken CLI member's model and thinking effort after the room is created. Each run passes them to the CLI, and
+ * neither is part of the member's session context, so the change applies from its next delivery and keeps its session.
+ * An empty value goes back to the software's default.
+ */
+export async function room_member_model(home, raw) {
+  const { input, path } = await member_room_context(home, raw);
+  const { name } = input;
+  const model = typeof input.model === 'string' ? input.model.trim() : '';
+  const effort = typeof input.effort === 'string' ? input.effort.trim() : '';
+  const release = acquire_lock(join(dirname(path), 'configuration-edit'));
+  try {
+    const config = configuration_snapshot(path).config;
+    const profile = config.participants?.[name];
+    if (!profile) throw new Error(`${name} 不由本机唤醒，模型由它自己的会话决定`);
+    if (profile.project_access === 'own') throw new Error(`${name} 是手动接入的成员，模型与强度沿用它自己会话的设置`);
+    const facts = adapter_profile(profile.adapter);
+    if (!facts?.models) throw new Error(`${name} 的模型在 ${facts?.label || '它的软件'} 内设置`);
+    if (effort && !facts.efforts?.includes(effort)) throw new Error(`${facts.label} 不支持思考强度 ${effort}`);
+    const next = { ...profile, model, effort };
+    if (!model) delete next.model;
+    if (!effort) delete next.effort;
+    const updated = { ...config, participants: { ...config.participants, [name]: next } };
+    validate_config(updated, dirname(path));
+    atomic_json(path, updated);
+    return { room_id: input.room_id, member: name, model, effort };
   } finally { release(); }
 }
 
@@ -1232,6 +1301,8 @@ export async function launch_main(args = process.argv.slice(2), input_text) {
   else if (positionals[0] === 'api-key' && input) result = save_api_key(home, input);
   else if (positionals[0] === 'api-check' && input) result = await api_check(home, input);
   else if (positionals[0] === 'scheduler-check' && input) result = await scheduler_check(home, input);
+  else if (positionals[0] === 'tts-settings') result = input && Object.keys(input).length ? save_tts_settings(home, input) : tts_settings(home);
+  else if (positionals[0] === 'tts' && input) result = await tts_speak(home, input);
   else if (positionals[0] === 'room-models' && input) result = await room_models(home, input);
   else if (positionals[0] === 'models' && adapter_profile(input?.adapter)?.kind === 'api') result = await api_models(home, input);
   else if (positionals[0] === 'models' && input) {
@@ -1243,6 +1314,7 @@ export async function launch_main(args = process.argv.slice(2), input_text) {
   else if (positionals[0] === 'room-member-access' && input) result = await room_member_access(home, input);
   else if (positionals[0] === 'room-member-allow' && input) result = await room_member_allow(home, input);
   else if (positionals[0] === 'room-member-adapter' && input) result = await room_member_adapter(home, input);
+  else if (positionals[0] === 'room-member-model' && input) result = await room_member_model(home, input);
   else if (positionals[0] === 'room-profiles' && input) result = await room_profiles(home, input);
   else if (positionals[0] === 'room-restore' && input) result = await restore_room(home, input);
   else if (positionals[0] === 'room-fork' && input) result = await fork_room(home, input);

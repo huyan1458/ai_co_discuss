@@ -69,7 +69,7 @@ function mention_fixture() {
   const text = ref("");
   const room = ref({ id: "test", host: "用户", experts: { Codex: "cli", Claude: "cli" } });
   const free = ref(true);
-  const free_members = ref([{ name: "Codex" }, { name: "Claude-评审" }]);
+  const free_members = ref([{ name: "Codex" }, { name: "Claude-review" }]);
   const editor = { value: "", selectionStart: 0, selectionEnd: 0, focus() {}, setSelectionRange(start, end) { this.selectionStart = start; this.selectionEnd = end; } };
   const context = vm.createContext({ computed, ref, watch, nextTick, text, room, free, free_members,
     view: ref({ tab: "messages" }), prompt: ref({ textareaRef: editor }), bridge: { display_name: name => name } });
@@ -101,8 +101,8 @@ test("mention autocomplete excludes email, selected text, code and quotes, and f
   assert.deepEqual([...fixture.state.members.value], ["Codex"]);
   fixture.type("@不存在");
   assert.equal(fixture.state.members.value.length, 0);
-  fixture.type("@评审");
-  assert.deepEqual([...fixture.state.members.value], ["Claude-评审"]);
+  fixture.type("@rev");
+  assert.deepEqual([...fixture.state.members.value], ["Claude-review"]);
   fixture.free_members.value = [{ name: "Codex" }];
   assert.equal(fixture.state.members.value.length, 0, "departed members disappear from an open menu");
   fixture.free.value = false;
@@ -763,7 +763,7 @@ test("discussion resume refuses a replaced session after reading the current rev
   assert.equal(calls.length, 1, 'a revision for a different session is never used');
 });
 
-const skip_room = id => ({ id, session: { id: 3, status: 'active' }, current_turn: { id: 7, expert: 'Gemini', status: 'pending' } });
+const skip_room = id => ({ id, session: { id: 3, status: 'active' }, current_turn: { id: 7, expert: 'Antigravity', status: 'pending' } });
 
 test("skip stays bound to its original room and session during navigation", async () => {
   const { context, storage } = theme_fixture(), paths = [];
@@ -1011,10 +1011,10 @@ test("batch invitation stops at the first failure and keeps the remaining picks 
   controls.fail_invite_at = 2;
   vm.runInContext("inviting.value = true", context);
   await Promise.resolve();
-  vm.runInContext('invite_picks.value = ["Codex", "Claude", "Gemini"].map((name) => ({ name, mode: "manual" }));', context);
+  vm.runInContext('invite_picks.value = ["Codex", "Claude", "Antigravity"].map((name) => ({ name, mode: "manual" }));', context);
   await context.invite();
   assert.deepEqual(calls, ["invite_member", "invite_member"]);
-  assert.equal(vm.runInContext("invite_picks.value.map((pick) => pick.name).join()", context), "Claude,Gemini");
+  assert.equal(vm.runInContext("invite_picks.value.map((pick) => pick.name).join()", context), "Claude,Antigravity");
   assert.equal(vm.runInContext("invited_manual.value.join()", context), "Codex");
 });
 
@@ -1133,14 +1133,14 @@ test("a lost response is retained across reload while changed input cannot repla
 test("launch readback shows project access, per-AI overrides and never saves write access as a default", async () => {
   const fixture = theme_fixture();
   Object.assign(fixture.context.test_state.launch, { profiles: { Codex: { adapter: 'codex_cli' }, Claude: { adapter: 'claude', project_access: 'read' },
-    Gemini: { adapter: 'antigravity' } }, workspace: {} });
+    Antigravity: { adapter: 'antigravity' } }, workspace: {} });
   assert.equal(fixture.context.launch_summary('Codex').access, '无项目目录');
   fixture.context.write_launch_field('workspace', 'cwd', 'C:\\project');
   assert.equal(fixture.context.launch_summary('Codex').access, '项目只读');
   fixture.context.write_launch_field('workspace', 'project_access', 'write');
   assert.equal(fixture.context.launch_summary('Codex').access, '项目可写');
   assert.equal(fixture.context.launch_summary('Claude').access, '项目只读');
-  assert.equal(fixture.context.launch_summary('Gemini').access, '按 App 权限');
+  assert.equal(fixture.context.launch_summary('Antigravity').access, '按 App 权限');
   let saved;
   Object.assign(fixture.context, { render_launch_settings() {}, local_launch_request: async (_, body) => { saved = body; } });
   await fixture.context.save_launch_defaults();

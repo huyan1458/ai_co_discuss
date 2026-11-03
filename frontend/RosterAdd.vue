@@ -4,10 +4,10 @@ import { ref } from "vue";
 
 defineProps({
   label: { type: String, required: true },
-  // Each item: { value, name, icon, initials, style, title, aria_label, disabled, selected, separated }; separated starts a second row (the presets); selected marks the chip filling a single slot.
+  // Each item: { value, name, icon, initials, style, title, aria_label, disabled, selected, separated, removable }; separated starts a second row (the presets); selected marks the chip filling a single slot; removable adds a delete button that emits remove.
   items: { type: Array, required: true },
 });
-const emit = defineEmits(["add"]);
+const emit = defineEmits(["add", "remove"]);
 const row = ref(null);
 /** Return keyboard focus to the first chip that can still be added. */
 function focus_first() {
@@ -24,6 +24,7 @@ defineExpose({ focus_first });
       <button type="button" :class="{ 'is-selected': item.selected }" :disabled="item.disabled" :title="item.title" :aria-label="item.aria_label" :aria-pressed="item.selected === undefined ? undefined : item.selected" @click="emit('add', item.value)">
         <UAvatar :src="item.icon" :text="item.initials" :alt="item.name" size="3xs" class="channel-avatar" :class="item.style" />{{ item.name }}<UIcon :name="item.selected ? 'i-lucide-check' : 'i-lucide-plus'" />
       </button>
+      <button v-if="item.removable" type="button" class="roster-add-remove" :title="`删除预设「${item.name}」`" :aria-label="`删除预设 ${item.name}`" @click="emit('remove', item.value)"><UIcon name="i-lucide-x" /></button>
     </template>
   </div>
 </template>
@@ -36,6 +37,10 @@ defineExpose({ focus_first });
 .roster-add > button:disabled { opacity: .45; }
 .roster-add > button.is-selected { border-color: var(--channel-accent); color: var(--ui-text-highlighted); }
 .roster-add > button.is-selected > span:last-child { color: var(--channel-accent); }
+/* A user's own preset can be deleted from the row; the button sits against its chip. */
+.roster-add > button.roster-add-remove { min-height: 20px; margin-left: -4px; padding: 2px; border-color: transparent; color: var(--ui-text-muted); }
+.roster-add > button.roster-add-remove:hover { color: var(--ui-error, #e5484d); }
+.roster-add > button.roster-add-remove > span:last-child { color: inherit; }
 /* The presets start their own row under the platforms. */
 .roster-add-break { flex-basis: 100%; height: 0; }
 .roster-add .channel-avatar { flex-shrink: 0; width: 20px; height: 20px; font-size: 9px; }

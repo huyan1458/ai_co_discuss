@@ -106,7 +106,7 @@ flowchart LR
 
 ## 部署
 
-网站支持自托管于 **Cloudflare Pages + D1** 或 **Docker**；AI 与接入服务仍在你的电脑运行，本机与线上数据互不同步。见 [部署指南](docs/deployment.md)。
+网站支持自托管于 **Cloudflare Pages + D1** 或 **Docker**；AI 与接入服务仍在你的电脑运行。Docker 站点自己保存房间；Cloudflare 站点不保存房间，登录管理员后经加密中转显示已配对电脑上的房间。见 [部署指南](docs/deployment.md)。
 
 > [!WARNING]
 > 网站暂无用户登录与读取权限隔离，能访问站点的人即可阅读其中的房间。公开部署前请阅读 [安全说明](.github/SECURITY.md)。

@@ -121,10 +121,11 @@ function library_description(name) {
 
 // Presets follow the platforms, after a divider; each adds a named instance already set up for its job.
 const PRESET_PREFIX = "preset:";
-const library_items = computed(() => [...experts.map((name) => ({ value: name, name, ...bridge.identities[name],
+const library_items = computed(() => [...experts.map((name) => ({ value: name, name: bridge.display_name(name), ...bridge.identities[name],
   disabled: !bridge.launch_clients[name], title: library_description(name), aria_label: `添加 ${name} 实例` })),
   ...view.value && bridge.expert_presets().map((preset, index) => ({ value: PRESET_PREFIX + preset.name, name: preset.label || preset.name, ...bridge.identities[bridge.platform_of(preset.name)],
-    separated: index === 0, title: preset.description || "专家预设", aria_label: `添加预设 ${preset.label || preset.name}` }))]);
+    separated: index === 0, title: preset.description || "专家预设", aria_label: `添加预设 ${preset.label || preset.name}`,
+    removable: view.value.launch.presets.some((own) => own.name === preset.name) }))]);
 
 /** Admit one library role, woken by the local service until its card says otherwise; a preset adds its own named instance. */
 function add_expert(name) {
@@ -156,7 +157,7 @@ function submit() {
 
 const summary = computed(() => {
   const names = Object.keys(selected.value);
-  const parts = ["协作房间", names.length ? `${names.length} 位 AI` : "暂无成员", host.value ? `${host.value} 主持` : "暂无主持人"];
+  const parts = ["协作房间", names.length ? `${names.length} 位 AI` : "暂无成员", host.value ? `${bridge.member_label(host.value)} 主持` : "暂无主持人"];
   if (discussing.value) {
     const rounds = value("limit-max_rounds"), minutes = value("limit-max_minutes");
     parts.push("开启讨论", [rounds && Number(rounds) ? `${rounds} 轮` : "不限轮次", minutes && Number(minutes) ? format_duration(Number(minutes)) : "不限时长"].join(" / "));
@@ -183,7 +184,7 @@ const summary = computed(() => {
 
       <section class="create-section">
         <h3><span>2</span>谁来参与</h3>
-        <RosterAdd ref="library" label="添加 AI" :items="library_items" @add="add_expert" />
+        <RosterAdd ref="library" label="添加 AI" :items="library_items" @add="add_expert" @remove="(value) => bridge.delete_expert_preset(value.slice(PRESET_PREFIX.length))" />
         <div v-if="selected_names.length" class="create-experts" role="group" aria-label="参与的 AI">
           <ExpertCard v-for="name in selected_names" :key="name" :name="name" :mode="selected[name]" :choices="access_choices(name)"
             :status="expert_status(name)" :host="host === name" :hostable="host_options.includes(name)" hosting

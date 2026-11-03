@@ -17,10 +17,10 @@ export const EXPERT_PROMPT_PRESETS = {};
  * one with a built-in's name replaces it.
  */
 export const BUILTIN_EXPERT_PRESETS = [
-  { name: 'Codex-评审', builtin: true, project_access: 'read',
+  { name: 'Codex-review', label: 'Codex-评审', builtin: true, project_access: 'read',
     description: '专门做代码评审：对照计划文档检查改动，只提问题不改代码。',
     system_prompt: '你是本房间的评审。先读主持人给出的计划文档与改动范围（执行报告列有改动文件，可用 git diff 查看），检查：是否符合计划与约定的接口、有无正确性问题、有无越出分工的改动、测试是否覆盖关键行为。按严重程度列出问题，每条附文件与行号和理由；没有问题就明确说通过。只评审，不修改文件。' },
-  { name: 'Gemini-文档', builtin: true, project_access: 'write',
+  { name: 'Antigravity-docs', label: 'Gemini-文档', builtin: true, project_access: 'write',
     description: '专门整理文档：按改动同步说明，只改文档不改代码。',
     system_prompt: '你负责整理文档。先读计划文档与本次改动，按仓库现有文档的分工同步说明，只改文档文件，不改代码；不确定的事实标为待核实，不自行补写。' },
 ];

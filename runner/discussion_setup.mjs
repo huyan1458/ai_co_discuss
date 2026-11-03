@@ -27,7 +27,7 @@ const AGY_SKILL_CONFIG = ['.gemini', 'config', 'skills.json'];
 const CLIENTS = {
   codex: { name: 'Codex', commands: ['codex'], adapter: 'codex_cli', skills: ['.agents', 'skills'] },
   claude: { name: 'Claude', commands: ['claude'], adapter: 'claude', skills: ['.claude', 'skills'] },
-  antigravity: { name: 'Gemini', commands: ['agy'], adapter: 'antigravity_cli', skills: ['.gemini', 'config', 'skills'],
+  antigravity: { name: 'Antigravity', commands: ['agy'], adapter: 'antigravity_cli', skills: ['.gemini', 'config', 'skills'],
     legacy_skills: ['.gemini', 'antigravity-cli', 'skills'] },
   cursor: { name: 'Grok（Cursor CLI）', commands: ['agent', 'cursor-agent'], skills: ['.cursor', 'skills'] },
 };
@@ -46,7 +46,7 @@ install 将当前 npm 包安装为持久命令，再运行 setup；setup 配置�
   --no-start / --no-open     只配置 / 启动但不打开浏览器
   --prefix DIR              npm 安装前缀（install）
   --skills-home DIR         技能用户根目录（默认当前用户目录）
-Gemini 使用 agy；Grok 使用 Cursor CLI（agent / cursor-agent）。仅检测 CLI。
+Antigravity（显示名 Gemini）使用 agy；Grok 使用 Cursor CLI（agent / cursor-agent）。仅检测 CLI。
 Cursor 当前只安装技能，可手动参与；全自动接入尚未提供。已有软件设置保留。
 显式软件路径可更新已支持的 CLI 配置。安装不会开始讨论。
 中文摘要写入 stderr；输出被重定向或加 --json 时结果 JSON 写入 stdout；退出码 0=完成，2=配置待处理，1=失败。
@@ -219,16 +219,16 @@ export function remove_legacy_agy_rules(home, user_home) {
   const legacy = saved.rules || (saved.rule ? [saved.rule] : []);
   let settings = {};
   try { if (existsSync(path)) settings = JSON.parse(readFileSync(path, 'utf8')); }
-  catch { return { client: 'Gemini', status: 'invalid', path }; }
+  catch { return { client: 'Antigravity', status: 'invalid', path }; }
   const allow = settings.permissions?.allow ?? [];
-  if (!Array.isArray(allow)) return { client: 'Gemini', status: 'invalid', path };
+  if (!Array.isArray(allow)) return { client: 'Antigravity', status: 'invalid', path };
   const next = allow.filter(rule => !legacy.includes(rule));
   if (next.length !== allow.length) {
     copyFileSync(path, join(home, AGY_SETTINGS_BACKUP));
     atomic_json(path, { ...settings, permissions: { ...settings.permissions, allow: next } });
   }
   rmSync(record);
-  return { client: 'Gemini', status: next.length !== allow.length ? 'removed' : 'unchanged', path };
+  return { client: 'Antigravity', status: next.length !== allow.length ? 'removed' : 'unchanged', path };
 }
 
 /** Follow a linked skill directory so clients sharing one folder install a single copy. */

@@ -19,7 +19,7 @@ import { SessionDriver } from '../runner/session_driver.mjs';
 import { EXPERT_PROMPT_PRESETS, expert_prompt, free_task_text, software_rules } from '../runner/expert_prompts.mjs';
 import { participant_tools, system_prompt } from '../runner/adapters/api.mjs';
 import { glob_regex, open_project, run_file_tool } from '../runner/adapters/api_files.mjs';
-import { DiscussionService, migrate_service_home, read_registry, register_room, service_pid, service_ready, start_service, unregister_room } from '../runner/discussion_service.mjs';
+import { DiscussionService, migrate_platform_ids, migrate_service_home, read_registry, register_room, service_pid, service_ready, start_service, unregister_room } from '../runner/discussion_service.mjs';
 import { restore_room, room_profiles } from '../runner/discussion_launch.mjs';
 import { adapter_of, deliver_task } from '../runner/adapters/index.mjs';
 import { adopted_fork, claude_exit_error, claude_inbox_ready, claude_rule_path, standalone_claude_env } from '../runner/adapters/claude.mjs';
@@ -101,11 +101,11 @@ test('smart scheduling maps one neutral question set to both providers and reads
   assert.equal((await route_free_message(home, jev, input, reply('__all_seq__', limits.wide - 0.01))).action, 'host');
   // When the text names two or more members, each group of them is one choice; it needs the wide threshold.
   let named_sent;
-  const pair = { ...input, members: [...input.members, { name: 'Gemini', description: 'Gemini CLI' }], message: { id: 4, author: '用户', text: 'codex 和 Gemini 分别看一下' } };
-  const picked = await route_free_message(home, jev, pair, async (url, init) => { named_sent = JSON.parse(init.body); return reply('__some__:Codex、Gemini', limits.wide)(); });
-  assert.ok(Object.keys(named_sent.questions.handler.criteria).includes('__some__:Codex、Gemini'));
-  assert.deepEqual([picked.action, picked.members], ['some', ['Codex', 'Gemini']]);
-  assert.equal((await route_free_message(home, jev, pair, reply('__some__:Codex、Gemini', limits.wide - 0.01))).action, 'host');
+  const pair = { ...input, members: [...input.members, { name: 'Antigravity', description: 'Antigravity CLI' }], message: { id: 4, author: '用户', text: 'codex 和 Antigravity 分别看一下' } };
+  const picked = await route_free_message(home, jev, pair, async (url, init) => { named_sent = JSON.parse(init.body); return reply('__some__:Codex、Antigravity', limits.wide)(); });
+  assert.ok(Object.keys(named_sent.questions.handler.criteria).includes('__some__:Codex、Antigravity'));
+  assert.deepEqual([picked.action, picked.members], ['some', ['Codex', 'Antigravity']]);
+  assert.equal((await route_free_message(home, jev, pair, reply('__some__:Codex、Antigravity', limits.wide - 0.01))).action, 'host');
   await route_free_message(home, jev, input, async (url, init) => { named_sent = JSON.parse(init.body); return reply('__host__', 0.9)(); });
   assert.ok(!Object.keys(named_sent.questions.handler.criteria).some(key => key.startsWith('__some__')));
   assert.match(scheduler_state('房间', [], input.message), /#3 用户（回复 #2）：修一下登录/);
@@ -146,16 +146,16 @@ test('smart scheduling maps one neutral question set to both providers and reads
   assert.equal((await decide_interjection(home, jev, interjection, handling('__note__', limits.member - 0.01))).action, 'host');
   // Experts who already spoke are not options, so the model is told who has spoken and that such a message goes to the host.
   let interjected;
-  await decide_interjection(home, jev, { ...interjection, spoken: ['Gemini'] }, async (url, init) => { interjected = JSON.parse(init.body); return handling('__host__', 0.9)(); });
-  assert.match(interjected.state, /本轮已发言：Gemini；本轮尚未发言：Codex/);
+  await decide_interjection(home, jev, { ...interjection, spoken: ['Antigravity'] }, async (url, init) => { interjected = JSON.parse(init.body); return handling('__host__', 0.9)(); });
+  assert.match(interjected.state, /本轮已发言：Antigravity；本轮尚未发言：Codex/);
   assert.doesNotMatch(interjected.questions.handling.criteria.__host__, /本轮已发言的专家/);
   // A round continues only on a confident "continue", and never opens with the last speaker.
   let sent;
   const round = (next, confidence, first, first_confidence = 0.9) => async (url, init) => { sent = JSON.parse(init.body);
     return { ok: true, json: async () => ({ answers: { next: { type: 'choice', choice: next, confidence, probabilities: {} }, first: { type: 'choice', choice: first, confidence: first_confidence, probabilities: {} } } }) }; };
-  const discussion = { title: '讨论', context: [], host: 'Claude', experts: ['Codex', 'Gemini', 'Grok'], last_speaker: 'Grok' };
-  assert.deepEqual(without_detail(await decide_round(home, jev, discussion, round('continue', 0.9, 'Gemini'))), { action: 'continue', first: 'Gemini', confidence: 0.9, label: '继续下一轮，先请 Gemini 发言' });
-  assert.deepEqual(Object.keys(sent.questions.first.criteria), ['Codex', 'Gemini', '__host__']);
+  const discussion = { title: '讨论', context: [], host: 'Claude', experts: ['Codex', 'Antigravity', 'Grok'], last_speaker: 'Grok' };
+  assert.deepEqual(without_detail(await decide_round(home, jev, discussion, round('continue', 0.9, 'Antigravity'))), { action: 'continue', first: 'Antigravity', confidence: 0.9, label: '继续下一轮，先请 Antigravity 发言' });
+  assert.deepEqual(Object.keys(sent.questions.first.criteria), ['Codex', 'Antigravity', '__host__']);
   assert.equal((await decide_round(home, jev, discussion, round('continue', 0.9, 'Grok'))).action, 'host');
   assert.equal((await decide_round(home, jev, discussion, round('continue', 0.9, 'Codex', limits.member - 0.01))).action, 'host');
   assert.equal((await decide_round(home, jev, discussion, round('continue', 0.9, 'Codex', limits.member))).action, 'continue');
@@ -178,25 +178,25 @@ test('smart scheduling maps one neutral question set to both providers and reads
   assert.equal((await decide_round(home, jev, discussion, round('continue', 0.6, 'Codex'))).label, '倾向继续下一轮，把握不足，交给主持人');
   // Mid-round, the next speaker comes from the unspoken candidates; unsure or host goes back to the host.
   const speaker = (choice, confidence) => async () => ({ ok: true, json: async () => ({ answers: { speaker: { type: 'choice', choice, confidence, probabilities: {} } } }) });
-  const midround = { title: '讨论', context: [], host: 'Claude', candidates: ['Codex', 'Gemini'] };
+  const midround = { title: '讨论', context: [], host: 'Claude', candidates: ['Codex', 'Antigravity'] };
   const asked = [];
-  await decide_next_speaker(home, jev, { ...midround, brief: '甲出上句', focus: '接龙', arrangement: 'Codex：出句', spoken: ['Claude'] }, async (url, init) => { asked.push(JSON.parse(init.body)); return speaker('Gemini', 0.9)(); });
+  await decide_next_speaker(home, jev, { ...midround, brief: '甲出上句', focus: '接龙', arrangement: 'Codex：出句', spoken: ['Claude'] }, async (url, init) => { asked.push(JSON.parse(init.body)); return speaker('Antigravity', 0.9)(); });
   assert.match(asked[0].state, /主持简报[^\n]*甲出上句/);
-  assert.match(asked[0].state, /本轮已发言：Claude；本轮尚未发言：Codex、Gemini/);
+  assert.match(asked[0].state, /本轮已发言：Claude；本轮尚未发言：Codex、Antigravity/);
   assert.match(asked[0].state, /主持人最近的安排：Codex：出句/);
-  assert.equal(typeof (await decide_next_speaker(home, jev, midround, speaker('Gemini', 0.9))).detail[0].duration_ms, 'number');
-  assert.deepEqual(without_detail(await decide_next_speaker(home, jev, midround, speaker('Gemini', 0.9))), { action: 'next', expert: 'Gemini', confidence: 0.9, label: '本轮继续，请 Gemini 接着发言' });
-  assert.equal((await decide_next_speaker(home, jev, midround, speaker('Gemini', limits.member - 0.01))).action, 'host');
+  assert.equal(typeof (await decide_next_speaker(home, jev, midround, speaker('Antigravity', 0.9))).detail[0].duration_ms, 'number');
+  assert.deepEqual(without_detail(await decide_next_speaker(home, jev, midround, speaker('Antigravity', 0.9))), { action: 'next', expert: 'Antigravity', confidence: 0.9, label: '本轮继续，请 Antigravity 接着发言' });
+  assert.equal((await decide_next_speaker(home, jev, midround, speaker('Antigravity', limits.member - 0.01))).action, 'host');
   assert.equal((await decide_next_speaker(home, jev, midround, speaker('__host__', 0.95))).action, 'host');
   // One question; the guided wording explains that the host may have stopped on purpose, the stable one names it as no basis.
   assert.deepEqual(Object.keys(asked[0].questions), ['speaker']);
   assert.match(asked[0].questions.speaker.instructions, /有意只安排到这里/);
-  await decide_next_speaker(home, { ...jev, mode: 'stable' }, midround, async (url, init) => { asked.push(JSON.parse(init.body)); return speaker('Gemini', 0.9)(); });
+  await decide_next_speaker(home, { ...jev, mode: 'stable' }, midround, async (url, init) => { asked.push(JSON.parse(init.body)); return speaker('Antigravity', 0.9)(); });
   assert.match(asked.at(-1).questions.speaker.criteria.__host__, /仅仅是本轮还没发言不算依据/);
   // The guided interjection sees who speaks next, so a question to that expert can wait for the turn.
   let upcoming_sent;
-  await decide_interjection(home, jev, { ...interjection, upcoming: ['Gemini', 'Codex'] }, async (url, init) => { upcoming_sent = JSON.parse(init.body); return handling('__note__', 0.9)(); });
-  assert.match(upcoming_sent.state, /接下来按安排发言：Gemini → Codex/);
+  await decide_interjection(home, jev, { ...interjection, upcoming: ['Antigravity', 'Codex'] }, async (url, init) => { upcoming_sent = JSON.parse(init.body); return handling('__note__', 0.9)(); });
+  assert.match(upcoming_sent.state, /接下来按安排发言：Antigravity → Codex/);
 });
 
 /** Make task files without a website or a real model. */
@@ -309,6 +309,32 @@ test('a stopped legacy service directory moves with its paths and drafts rewritt
   assert.ok(!existsSync(from));
 });
 
+test('saved Gemini members move to the Antigravity ID once, keeping their sessions and display labels', () => {
+  const home = mkdtempSync(join(tmpdir(), 'platform-ids-')), room = join(home, 'launches', 'key');
+  mkdirSync(join(room, 'runtime'), { recursive: true });
+  writeFileSync(join(home, 'launch-settings.json'), JSON.stringify({ participants: { Gemini: { adapter: 'antigravity_cli' } } }));
+  writeFileSync(join(room, 'config.json'), JSON.stringify({ participants: { 'Gemini-2': { adapter: 'antigravity_cli' } }, members: { 'Gemini-2': { token: 't' } }, note: 'Gemini-文档' }));
+  writeFileSync(join(room, 'manual-Gemini.access.json'), JSON.stringify({ member: 'Gemini', token: 'm' }));
+  const store = new DiscussionStore(join(room, 'runtime'));
+  store.db.prepare('INSERT INTO bindings VALUES (?,?)').run('Gemini-2', 'session-1');
+  store.db.prepare('INSERT INTO metadata VALUES (?,?)').run('member-context:Gemini-2', '[["Gemini-2","antigravity_cli"]]');
+  store.close();
+  migrate_platform_ids(home);
+  assert.deepEqual(Object.keys(JSON.parse(readFileSync(join(home, 'launch-settings.json'), 'utf8')).participants), ['Antigravity']);
+  const config = JSON.parse(readFileSync(join(room, 'config.json'), 'utf8'));
+  assert.deepEqual([Object.keys(config.participants), Object.keys(config.members), config.note], [['Antigravity-2'], ['Antigravity-2'], 'Gemini-文档']);
+  assert.equal(JSON.parse(readFileSync(join(room, 'manual-Gemini.access.json'), 'utf8')).member, 'Antigravity');
+  const after = new DiscussionStore(join(room, 'runtime'));
+  try {
+    assert.equal(after.binding('Antigravity-2').session_id, 'session-1');
+    assert.equal(after.db.prepare('SELECT value FROM metadata WHERE key=?').get('member-context:Antigravity-2').value, '[["Antigravity-2","antigravity_cli"]]');
+  } finally { after.close(); }
+  // The marker keeps a later start from touching the files again.
+  writeFileSync(join(home, 'launch-settings.json'), JSON.stringify({ participants: { Gemini: {} } }));
+  migrate_platform_ids(home);
+  assert.deepEqual(Object.keys(JSON.parse(readFileSync(join(home, 'launch-settings.json'), 'utf8')).participants), ['Gemini']);
+});
+
 /** Exercise free-room execution delivery against an HTTP contract without starting real software. */
 async function fixture(t) {
   const directory = mkdtempSync(join(tmpdir(), 'discussion-test-'));
@@ -407,7 +433,7 @@ test('a backup carries local member sessions, and restoring it resumes them whil
     const ok = request.headers['x-discussion-token'] === token;
     response.writeHead(ok ? 200 : 403, { 'Content-Type': 'application/json' });
     response.end(JSON.stringify(!ok ? { error: '凭据无效' } : request.url.endsWith('/inbox') ? { requests: [] }
-      : { mode: 'free', free: { members: [{ name: 'Claude-评审', access: 'manual', status: 'away' }] } }));
+      : { mode: 'free', free: { members: [{ name: 'Claude-review', access: 'manual', status: 'away' }] } }));
   });
   await listen_local(server);
   t.after(async () => {
@@ -449,7 +475,7 @@ test('a backup carries local member sessions, and restoring it resumes them whil
   assert.equal(restored.room, 'restored');
   assert.deepEqual(Object.keys(restored.participants), ['Codex']);
   assert.equal(restored.participants.Codex.session_id, 'codex-session-1');
-  assert.deepEqual(restored.keep_manual, ['Claude-评审', 'Claude']);
+  assert.deepEqual(restored.keep_manual, ['Claude-review', 'Claude']);
   await assert.rejects(() => restore_room(home, { site, room_id: 'restored', token, local_members }), /已在本机登记/);
 
   const lost = structuredClone(local_members);
@@ -690,7 +716,7 @@ async function cli_delivery_fixture(t, adapter, options = {}) {
     }
     rmSync(root, { recursive: true, force: true });
   });
-  const task = { id: 'event-1', participant: 'Gemini', directory, draft_directory, access_path, prompt: '讨论中文 "quotes"\n$(literal); `literal`',
+  const task = { id: 'event-1', participant: 'Antigravity', directory, draft_directory, access_path, prompt: '讨论中文 "quotes"\n$(literal); `literal`',
     skills_directory: join(directory, 'skills'),
     on_binding: session => bindings.push(session), on_process: () => {},
     on_output: (path, chunk) => appendFileSync(path, chunk), on_failure: error => errors.push(error), on_exit: () => { exits++; }, on_denials: list => denials.push(...list) };
@@ -1249,7 +1275,7 @@ test('a delayed Sidecar request after its execution lease expires never invokes 
 function room_config(directory, site, room, name = room) {
   const path = join(directory, `${name}.json`);
   writeFileSync(path, JSON.stringify(with_members({ site, room, token: 'x'.repeat(32), data_directory: join(directory, `data-${name}`),
-    participants: { Gemini: { adapter: 'antigravity', ipc_directory: directory } } })));
+    participants: { Antigravity: { adapter: 'antigravity', ipc_directory: directory } } })));
   return path;
 }
 
@@ -1737,7 +1763,7 @@ async function review_runner_fixture(t) {
   f.state.claude_role = 'host';
   f.state.pending = [{ id: 1, message_id: 11, purpose: 'handoff', review: { batch_id: 11, phase: 'handoff' } }];
   f.state.review_ready = { ready: true, reason: '', revision: 'review-r1', original: { text: '实现导入并运行测试' },
-    plan: { reviewer_name: 'Codex-评审', scope: '核对实现' },
+    plan: { reviewer_name: 'Codex-review', scope: '核对实现' },
     deliveries: [{ status: 'completed', answer: '导入已完成，测试通过。', execution_status: 'completed', result: '完成' }] };
   return f;
 }
@@ -1799,8 +1825,8 @@ test('the session driver schedules an opening, relays a mid-round answer, then s
     speaker: { type: 'choice', choice: 'Codex', confidence: 0.9, probabilities: {} },
   }));
   const session = { id: 7, status: 'active', goal: '比较方案', phase: 'initial', named_followup: false };
-  const roster = { round: 1, waiting: ['Codex', 'Gemini'], experts: [
-    { name: 'Claude', host: true }, { name: 'Codex', host: false, registered: true }, { name: 'Gemini', host: false, registered: true },
+  const roster = { round: 1, waiting: ['Codex', 'Antigravity'], experts: [
+    { name: 'Claude', host: true }, { name: 'Codex', host: false, registered: true }, { name: 'Antigravity', host: false, registered: true },
   ] };
   const room = { latest_id: 20, title: '房间', host: 'Claude' };
   const first = await driver.plan(session, roster, [], { cause_kind: 'round_complete' }, room);
@@ -1808,13 +1834,13 @@ test('the session driver schedules an opening, relays a mid-round answer, then s
 
   const first_round_turns = [
     { round: 1, expert: 'Codex', status: 'answered', answer_id: 20 },
-    { round: 1, expert: 'Gemini', status: 'answered', answer_id: 21 },
+    { round: 1, expert: 'Antigravity', status: 'answered', answer_id: 21 },
   ];
   const second_driver = new SessionDriver(config, () => {}, scheduler_fetch({
-    speaker: { type: 'choice', choice: 'Gemini', confidence: 0.9, probabilities: {} },
+    speaker: { type: 'choice', choice: 'Antigravity', confidence: 0.9, probabilities: {} },
   }));
   const active_session = { ...session, phase: 'discussion' };
-  const midround = await second_driver.plan(active_session, { ...roster, waiting: ['Gemini'] }, [first_round_turns[0]],
+  const midround = await second_driver.plan(active_session, { ...roster, waiting: ['Antigravity'] }, [first_round_turns[0]],
     { cause_kind: 'speaker_answered' }, room);
   assert.equal(midround.action, 'schedule', JSON.stringify(midround));
   assert.equal(midround.turn.question, '请先阅读议题和已有回答，给出你的观点。');
@@ -1828,9 +1854,9 @@ test('the session driver schedules an opening, relays a mid-round answer, then s
   assert.match(new_round.turn.question, /第 2 轮/);
 
   const round_two_driver = new SessionDriver(config, () => {}, scheduler_fetch({
-    speaker: { type: 'choice', choice: 'Gemini', confidence: 0.9, probabilities: {} },
+    speaker: { type: 'choice', choice: 'Antigravity', confidence: 0.9, probabilities: {} },
   }));
-  const round_two_next = await round_two_driver.plan(active_session, { ...roster, round: 2, waiting: ['Gemini'] },
+  const round_two_next = await round_two_driver.plan(active_session, { ...roster, round: 2, waiting: ['Antigravity'] },
     [...first_round_turns, { round: 2, expert: 'Codex', status: 'answered', answer_id: 22 }],
     { cause_kind: 'speaker_answered' }, room);
   assert.match(round_two_next.turn.question, /第 2 轮/);
@@ -1843,7 +1869,7 @@ test('session scheduler failures and reached limits leave progression with the h
   state.room.phase = 'discussion';
   state.room.session = state.session;
   state.pending = [{ id: 9, purpose: 'discuss_host', session_id: 7, cause_kind: 'speaker_answered' }];
-  state.roster = { revision: 'r1', round: 1, waiting: ['Gemini'], experts: [{ name: 'Gemini', host: false, spoken: false, registered: true }] };
+  state.roster = { revision: 'r1', round: 1, waiting: ['Antigravity'], experts: [{ name: 'Antigravity', host: false, spoken: false, registered: true }] };
   const logs = [];
   const runner = new FreeRoomRunner(config, store, async () => ({ status: 'accepted' }), message => logs.push(message),
     async () => { throw new Error('scheduler unavailable'); });
@@ -1871,7 +1897,7 @@ test('session scheduler evaluates a host request at most once across overlapping
   state.session = { id: 7, status: 'active', goal: '目标', phase: 'discussion', named_followup: false };
   state.room.phase = 'discussion'; state.room.session = state.session;
   state.pending = [{ id: 9, purpose: 'discuss_host', session_id: 7, cause_kind: 'speaker_answered' }];
-  state.roster = { revision: 'r1', round: 1, waiting: ['Gemini'], experts: [{ name: 'Gemini', host: false, spoken: false, registered: true }] };
+  state.roster = { revision: 'r1', round: 1, waiting: ['Antigravity'], experts: [{ name: 'Antigravity', host: false, spoken: false, registered: true }] };
   let model_calls = 0;
   let release_model;
   let mark_model_started;
@@ -1905,7 +1931,7 @@ test('session auto-scheduling refuses to apply an old roster revision after the 
   state.session = { id: 7, status: 'active', goal: '目标', phase: 'discussion', named_followup: false };
   state.room.phase = 'discussion'; state.room.session = state.session;
   state.pending = [{ id: 9, purpose: 'discuss_host', session_id: 7, cause_kind: 'speaker_answered' }];
-  state.roster = { revision: 'r1', round: 1, waiting: ['Gemini'], experts: [{ name: 'Gemini', host: false, spoken: false, registered: true }] };
+  state.roster = { revision: 'r1', round: 1, waiting: ['Antigravity'], experts: [{ name: 'Antigravity', host: false, spoken: false, registered: true }] };
   let roster_reads = 0;
   const originalFetch = globalThis.fetch;
   globalThis.fetch = async (input, init) => {
@@ -1918,7 +1944,7 @@ test('session auto-scheduling refuses to apply an old roster revision after the 
   };
   t.after(() => { globalThis.fetch = originalFetch; });
   const driver = new SessionDriver(config, () => {}, async () => ({ ok: true, json: async () => ({ answers: {
-    speaker: { type: 'choice', choice: 'Gemini', confidence: 0.9, probabilities: {} },
+    speaker: { type: 'choice', choice: 'Antigravity', confidence: 0.9, probabilities: {} },
   } }) }));
   await driver.tick(state.room, { archived: false, members: [{ name: 'Claude', role: 'host', pending: state.pending }], executions: [] });
   assert.equal(state.plans?.length || 0, 0);
@@ -2115,7 +2141,7 @@ test('the agy command limit comes from the runner, so clearing the expert prompt
   assert.equal(software_rules({ adapter: 'claude' }, 'codiscuss'), '');
   assert.doesNotMatch(software_rules({ adapter: 'antigravity_cli', cwd: 'D:/project', project_access: 'write' }, 'codiscuss'), /run_command/, 'a writable agy runs any command');
   // agy shows no thinking, so writing progress is a fixed rule for it in every task, beside the skill's general note.
-  const agy = { cli: 'codiscuss', messages: '#3', task_path: 'free-7.task.json', name: 'Gemini', profile: { adapter: 'antigravity_cli', project_access: 'write', cwd: 'D:/project' } };
+  const agy = { cli: 'codiscuss', messages: '#3', task_path: 'free-7.task.json', name: 'Antigravity', profile: { adapter: 'antigravity_cli', project_access: 'write', cwd: 'D:/project' } };
   assert.match(free_task_text(agy).instructions, /关键转折处用一句话写出进展再继续/);
   assert.doesNotMatch(free_task_text({ ...agy, profile: { adapter: 'claude', project_access: 'read' } }).instructions, /写出进展/);
 });
@@ -2341,20 +2367,20 @@ test('changed files in a Git working tree are reported after the member exits', 
 
 test('two instances of one platform keep separate sessions and credentials', async t => {
   const { state, store, config } = await free_fixture(t);
-  config.participants['Claude-评审'] = { adapter: 'claude', model: 'opus' };
-  config.members['Claude-评审'] = { token: 'reviewer-credential'.repeat(2) };
-  state.others.push({ id: 8, name: 'Claude-评审', pending: [{ id: 3, message_id: 11 }] });
-  const sessions = { Claude: 'session-main', 'Claude-评审': 'session-review' };
+  config.participants['Claude-review'] = { adapter: 'claude', model: 'opus' };
+  config.members['Claude-review'] = { token: 'reviewer-credential'.repeat(2) };
+  state.others.push({ id: 8, name: 'Claude-review', pending: [{ id: 3, message_id: 11 }] });
+  const sessions = { Claude: 'session-main', 'Claude-review': 'session-review' };
   const delivered = [];
   const runner = new FreeRoomRunner(config, store, async (adapter, binding, task) => {
     delivered.push([task.participant, adapter.model || '', binding.session_id || '']);
     return { status: 'accepted', session_id: sessions[task.participant] };
   });
   await runner.tick();
-  assert.deepEqual(delivered, [['Claude', '', ''], ['Claude-评审', 'opus', '']]);
+  assert.deepEqual(delivered, [['Claude', '', ''], ['Claude-review', 'opus', '']]);
   assert.equal(store.binding('Claude').session_id, 'session-main');
-  assert.equal(store.binding('Claude-评审').session_id, 'session-review');
-  assert.equal(JSON.parse(readFileSync(join(config.directory, 'free-2.access.json'), 'utf8')).token, config.members['Claude-评审'].token);
+  assert.equal(store.binding('Claude-review').session_id, 'session-review');
+  assert.equal(JSON.parse(readFileSync(join(config.directory, 'free-2.access.json'), 'utf8')).token, config.members['Claude-review'].token);
 });
 
 test('codiscuss token writes only its hash through wrangler and the account is saved per site', async () => {

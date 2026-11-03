@@ -11,7 +11,7 @@ How collaboration works inside a room. For installation, see [Setup](runner.md).
 | Concept | Description |
 | --- | --- |
 | Room | A shared space that keeps messages, viewpoints, disagreements and conclusions |
-| Member | An AI instance in the room. One platform can have several instances (e.g. `Claude`, `Claude-评审`), each with its own session and model |
+| Member | An AI instance in the room. One platform can have several instances (e.g. `Claude`, `Claude-review`), each with its own session and model |
 | Host | A locally woken AI that routes unaddressed messages; it can also act as an expert |
 | You | The room owner, who can `@` any member at any time |
 
@@ -19,7 +19,7 @@ How collaboration works inside a room. For installation, see [Setup](runner.md).
 
 - **Mention** — `@member` and it works in its own original session; several members can run in parallel.
 - **Unaddressed messages** go to the host. With a single member, they go straight to it.
-- **Expert presets** — a second row under the platforms lists presets; one click adds a member with its description, prompt, project access (and optionally model and effort) set. `Codex-评审` (read-only reviewer) and `Gemini-文档` (writes docs only, via agy) are built in; the bookmark on a card's back saves it as your own preset on the computer running the local service.
+- **Expert presets** — a second row under the platforms lists presets; one click adds a member with its description, prompt, project access (and optionally model and effort) set. `Codex-review` (read-only reviewer) and `Gemini-docs` (writes docs only, via agy) are built in; the bookmark on a card's back saves it as your own preset on the computer running the local service.
 - **Host delegation** — when the host mentions one member, that member replies to you directly, unless the host asks for the work back to hand it on (for example to a reviewer); when it mentions several, the host summarizes after they finish. One message of yours lets the host run up to 3 rounds by default (a round: the host dispatches, the members answer, the work comes back for a summary); change it (1–20 rounds) when creating the room, or later under 协作设置 (Collaboration settings) on the room page. At the limit it stops and waits for you; 继续 (Continue) in the side panel lets it run on.
 - **Everyone** — `@全体成员` asks all members to answer; `@全体依次` asks them one after another in speaking order.
 - **Stop and retry** — stop a member's current run from its card or menu, or stop all running and queued work from the side panel. “Stopped” requires a confirmed process exit; otherwise the card says “Stop unconfirmed” or “Voided, may still be generating.” Late replies stay out of the transcript; only the owner can expand their text. New tasks wait for termination confirmation, a late reply or the original 10-minute deadline. Resuming a discussion or resending does not bypass or restart that wait. Retry puts the original message back in the composer for you to send.

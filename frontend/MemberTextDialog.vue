@@ -37,6 +37,7 @@ function save() {
   <UModal v-model:open="open" :title="title" :description="description" :ui="{ content: 'glass-panel studio-modal', body: 'dialog-body' }">
     <template #body>
       <form class="member-text" @submit.prevent="save">
+        <slot name="lead" />
         <details v-if="fixed" class="member-text-fixed">
           <summary><UIcon name="i-lucide-lock" />{{ fixed.summary }}<UIcon name="i-lucide-chevron-down" class="member-text-fixed-chevron" /></summary>
           <section v-for="section in fixed.sections" :key="section.label">

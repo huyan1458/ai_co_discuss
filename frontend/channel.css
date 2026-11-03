@@ -1187,3 +1187,6 @@ html[data-motion="off"] *, html[data-motion="off"] *::before, html[data-motion="
 .merged-page .consensus-card .markdown-body :is(ul, ol) { margin: .4em 0 .9em; }
 /* Hosts write the detail as one line per point; give each line room to be scanned. */
 .consensus-state p { margin-bottom: .9em; }
+
+/* The sentence being read aloud; a CSS highlight leaves the rendered message untouched. */
+::highlight(codiscuss-reading) { background-color: color-mix(in srgb, var(--ui-primary) 28%, transparent); }

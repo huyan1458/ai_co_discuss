@@ -41,10 +41,10 @@ class FreeRoomTests(unittest.TestCase):
     def review_member_id(self):
         """Invite one test reviewer using the adapter with enforced filesystem permissions."""
         self.review_token = uuid.uuid4().hex
-        status, view = self.request(f"{self.path}/members", {"name": "Codex-评审", "adapter": "codex_cli",
+        status, view = self.request(f"{self.path}/members", {"name": "Codex-review", "adapter": "codex_cli",
                                                             "token": self.review_token}, self.owner)
         self.assertEqual(status, 200, view)
-        return next(member["id"] for member in view["members"] if member["name"] == "Codex-评审")
+        return next(member["id"] for member in view["members"] if member["name"] == "Codex-review")
 
     def completed_review_batch(self):
         """Create a real implementation handoff for review endpoint integration tests."""
@@ -55,16 +55,16 @@ class FreeRoomTests(unittest.TestCase):
         state = self.request(path, token=self.owner)[1]
         self.request(path, {"revision": state["revision"], "read_only": True, "config_version": "a" * 64}, self.owner)
         implementer_token = uuid.uuid4().hex
-        status, members = self.request(f"{self.path}/members", {"name": "Codex-实现", "adapter": "codex_cli", "token": implementer_token}, self.owner)
-        implementer = next(item["id"] for item in members["members"] if item["name"] == "Codex-实现")
+        status, members = self.request(f"{self.path}/members", {"name": "Codex-impl", "adapter": "codex_cli", "token": implementer_token}, self.owner)
+        implementer = next(item["id"] for item in members["members"] if item["name"] == "Codex-impl")
         self.say("实现", to=["Claude"])
         execution = self.reserve()[1]
         roster = self.request(f"{self.path}/reviews/roster", token=self.member)[1]
-        status, result = self.answer(execution["id"], to=["Codex-实现"], next_review="Codex-评审", review_scope="验证实现",
+        status, result = self.answer(execution["id"], to=["Codex-impl"], next_review="Codex-review", review_scope="验证实现",
                                     review_roster=roster["revision"])
         self.assertEqual(status, 201, result)
         work = self.request(f"{self.path}/executions", {"member_id": implementer, "client_id": uuid.uuid4().hex}, self.owner)[1]
-        self.assertEqual(self.answer(work["id"], token=implementer_token, author="Codex-实现", text="已完成实现与验证")[0], 201)
+        self.assertEqual(self.answer(work["id"], token=implementer_token, author="Codex-impl", text="已完成实现与验证")[0], 201)
         return result["message"]["id"], reviewer
 
     def tearDown(self):
@@ -160,7 +160,7 @@ class SingleMemberTests(FreeRoomTests):
         self.assertEqual(self.request(path, payload, self.owner)[0], 200)
         status, roster = self.request(f"{self.path}/reviews/roster", token=self.owner)
         self.assertEqual(status, 200, roster)
-        self.assertEqual(roster["members"][0]["name"], "Codex-评审")
+        self.assertEqual(roster["members"][0]["name"], "Codex-review")
         self.assertNotIn("token_hash", json.dumps(roster))
         with closing(sqlite3.connect(self.database)) as connection, connection:
             connection.execute("UPDATE room_members SET status='away' WHERE id=?", (member_id,))
@@ -223,14 +223,14 @@ class SingleMemberTests(FreeRoomTests):
         path = f"{self.path}/members/{member_id}/review-capability"
         capability = self.request(path, token=self.owner)[1]
         self.request(path, {"revision": capability["revision"], "read_only": True, "config_version": "a" * 64}, self.owner)
-        self.request(f"{self.path}/members", {"name": "Gemini", "adapter": "gemini", "token": uuid.uuid4().hex}, self.owner)
+        self.request(f"{self.path}/members", {"name": "Antigravity", "adapter": "gemini", "token": uuid.uuid4().hex}, self.owner)
         self.say("实现功能后交评审", to=["Claude"])
         execution = self.reserve()[1]
         roster = self.request(f"{self.path}/reviews/roster", token=self.member)[1]
-        base = {"to": ["Gemini"], "next_review": "Codex-评审", "review_scope": "核对功能", "submission_id": "review-implementation-1"}
+        base = {"to": ["Antigravity"], "next_review": "Codex-review", "review_scope": "核对功能", "submission_id": "review-implementation-1"}
         self.assertEqual(self.answer(execution["id"], **base)[0], 400)
         self.assertEqual(self.answer(execution["id"], **base, review_roster="stale")[0], 409)
-        status, refused = self.answer(execution["id"], **{**base, "to": ["Codex-评审"]}, review_roster=roster["revision"])
+        status, refused = self.answer(execution["id"], **{**base, "to": ["Codex-review"]}, review_roster=roster["revision"])
         self.assertEqual(status, 400, refused)
         self.assertIn("实现者", refused["error"])
         status, saved = self.answer(execution["id"], **base, review_roster=roster["revision"])
@@ -572,7 +572,7 @@ class MultiMemberTests(FreeRoomTests):
     def test_a_free_room_starts_and_ends_a_discussion_and_stays_one_room(self):
         """A discussion session uses revisioned controls and leaves the room in free collaboration."""
         discussion = f"{self.path}/discussion"
-        self.request(f"{self.path}/members", {"name": "Gemini", "token": uuid.uuid4().hex, "access": "manual"}, self.owner)
+        self.request(f"{self.path}/members", {"name": "Antigravity", "token": uuid.uuid4().hex, "access": "manual"}, self.owner)
         first = self.say("先聊几句")[1]["message"]["id"]
         self.assertEqual(self.request(discussion, {"action": "start"}, self.member)[0], 403)
         initial = self.request(discussion)[1]
@@ -613,13 +613,13 @@ class MultiMemberTests(FreeRoomTests):
     def test_session_plans_require_fresh_roster_and_cover_all_waiting_experts(self):
         """Single and multi-speaker plans require a current roster, and a whole round must cover its waiting members."""
         gemini_token = uuid.uuid4().hex
-        self.request(f"{self.path}/members", {"name": "Gemini", "token": gemini_token}, self.owner)
-        self.request(f"{self.path}/members", {"name": "Claude-评审", "token": uuid.uuid4().hex}, self.owner)
+        self.request(f"{self.path}/members", {"name": "Antigravity", "token": gemini_token}, self.owner)
+        self.request(f"{self.path}/members", {"name": "Claude-review", "token": uuid.uuid4().hex}, self.owner)
         self.start_session(named_followup=True)
         self.assertTrue(self.request(self.path)[1]["named_followup"])
         self.assertTrue(self.request(f"{self.path}/discussion")[1]["session"]["named_followup"])
         roster = self.session_roster()
-        self.assertEqual(set(roster["waiting"]), {"Claude", "Gemini", "Claude-评审"})
+        self.assertEqual(set(roster["waiting"]), {"Claude", "Antigravity", "Claude-review"})
         turns = self.request(f"{self.path}/turns")[1]
         self.assertEqual(turns["total"], 0, "host system tasks are not public discussion turns")
         with closing(sqlite3.connect(self.database)) as connection:
@@ -628,13 +628,13 @@ class MultiMemberTests(FreeRoomTests):
         single = {"actor": "Codex", "expert": "Claude", "question": "单人安排", "submission_id": uuid.uuid4().hex}
         self.assertEqual(self.request(f"{self.path}/turns", single, self.codex)[0], 400)
         self.assertEqual(self.request(f"{self.path}/turns", {**single, "roster": "stale"}, self.codex)[0], 409)
-        full_round = [{"expert": name, "question": f"请回答 {name}"} for name in ("Claude", "Gemini", "Claude-评审")]
+        full_round = [{"expert": name, "question": f"请回答 {name}"} for name in ("Claude", "Antigravity", "Claude-review")]
         multi = {"actor": "Codex", "turns": full_round[:2], "submission_id": uuid.uuid4().hex}
         self.assertEqual(self.request(f"{self.path}/turns", multi, self.codex)[0], 400)
         self.assertEqual(self.request(f"{self.path}/turns", {**multi, "roster": "stale"}, self.codex)[0], 409)
         status, missing = self.arrange_session(full_round[:2], roster)
         self.assertEqual(status, 400, missing)
-        self.assertIn("Claude-评审", missing["error"])
+        self.assertIn("Claude-review", missing["error"])
         status, plan = self.arrange_session(full_round, roster)
         self.assertEqual(status, 201, plan)
         self.assertEqual((plan["turn"]["status"], plan["queued"][0]["status"]), ("open", "queued"))
@@ -642,10 +642,10 @@ class MultiMemberTests(FreeRoomTests):
     def test_session_relay_opens_one_request_and_does_not_merge_a_direct_question(self):
         """A direct ask and the next discussion request never share a live execution."""
         gemini_token = uuid.uuid4().hex
-        self.request(f"{self.path}/members", {"name": "Gemini", "token": gemini_token}, self.owner)
+        self.request(f"{self.path}/members", {"name": "Antigravity", "token": gemini_token}, self.owner)
         self.start_session()
         status, plan = self.arrange_session([{"expert": "Claude", "question": "先发言"},
-                                             {"expert": "Gemini", "question": "再发言"}])
+                                             {"expert": "Antigravity", "question": "再发言"}])
         self.assertEqual(status, 201, plan)
         inbox = self.request(f"{self.path}/inbox", token=self.owner)[1]
         pending = next(item for member in inbox["members"] if member["name"] == "Claude" for item in member["pending"]
@@ -654,8 +654,8 @@ class MultiMemberTests(FreeRoomTests):
                           pending["source_question"], pending["cause_kind"]),
                          (plan["turn"]["id"], plan["turn"]["session_id"], plan["turn"]["round"], plan["turn"]["position"],
                           "先发言", "scheduled_speaker"))
-        self.assertEqual(self.say("请 Gemini 另答一个问题", to=["Gemini"])[0], 201)
-        ask_execution = self.reserve_for("Gemini")[1]
+        self.assertEqual(self.say("请 Antigravity 另答一个问题", to=["Antigravity"])[0], 201)
+        ask_execution = self.reserve_for("Antigravity")[1]
         self.assertEqual([request["purpose"] for request in ask_execution["requests"]], ["ask"])
         execution = self.reserve_for("Claude")[1]
         self.assertEqual([request["purpose"] for request in execution["requests"]], ["discuss"])
@@ -670,14 +670,14 @@ class MultiMemberTests(FreeRoomTests):
         self.assertEqual(self.answer(execution["id"], token=self.member)[0], 201)
         turns = self.request(f"{self.path}/turns")[1]["turns"]
         self.assertEqual([(item["expert"], item["status"]) for item in turns if item["purpose"] == "discuss"],
-                         [("Claude", "answered"), ("Gemini", "open")])
-        self.assertEqual(self.reserve_for("Gemini")[0], 409, "the ask execution still owns Gemini's session")
-        ask_answer = {"author": "Gemini", "text": "普通提问答复", "source": "cli", "execution_id": ask_execution["id"],
+                         [("Claude", "answered"), ("Antigravity", "open")])
+        self.assertEqual(self.reserve_for("Antigravity")[0], 409, "the ask execution still owns Antigravity's session")
+        ask_answer = {"author": "Antigravity", "text": "普通提问答复", "source": "cli", "execution_id": ask_execution["id"],
                       "submission_id": uuid.uuid4().hex}
         self.assertEqual(self.request(f"{self.path}/messages", ask_answer, gemini_token)[0], 201)
         asks = [item for item in self.request(self.path)[1]["free"]["requests"] if item["purpose"] == "ask"]
-        self.assertEqual([(item["member"], item["status"]) for item in asks], [("Gemini", "completed")])
-        next_execution = self.reserve_for("Gemini")[1]
+        self.assertEqual([(item["member"], item["status"]) for item in asks], [("Antigravity", "completed")])
+        next_execution = self.reserve_for("Antigravity")[1]
         self.assertEqual([request["purpose"] for request in next_execution["requests"]], ["discuss"])
 
     def test_failed_session_request_returns_to_host_without_ending_session(self):
@@ -700,11 +700,11 @@ class MultiMemberTests(FreeRoomTests):
     def test_interrupting_open_discussion_speaker_cancels_plan_and_advances_queue(self):
         """Stopping a speaker ends its session row before the next queued speaker is opened."""
         gemini_token = uuid.uuid4().hex
-        self.request(f"{self.path}/members", {"name": "Gemini", "token": gemini_token}, self.owner)
+        self.request(f"{self.path}/members", {"name": "Antigravity", "token": gemini_token}, self.owner)
         self.start_session()
         status, plan = self.arrange_session([
             {"expert": "Claude", "question": "先发言"},
-            {"expert": "Gemini", "question": "接着发言"},
+            {"expert": "Antigravity", "question": "接着发言"},
         ])
         self.assertEqual(status, 201, plan)
         execution = self.reserve_for("Claude")[1]
@@ -714,18 +714,18 @@ class MultiMemberTests(FreeRoomTests):
         self.assertEqual(interrupted[0], 200, interrupted[1])
         turns = [item for item in self.request(f"{self.path}/turns")[1]["turns"] if item["purpose"] == "discuss"]
         self.assertEqual([(item["expert"], item["status"]) for item in turns],
-                         [("Claude", "cancelled"), ("Gemini", "open")])
+                         [("Claude", "cancelled"), ("Antigravity", "open")])
         self.assertEqual(self.request(f"{self.path}/executions/{execution['id']}", token=self.owner)[1]["status"], "cancelled")
-        self.assertEqual(self.reserve_for("Gemini")[0], 200)
+        self.assertEqual(self.reserve_for("Antigravity")[0], 200)
 
     def test_failed_session_speaker_does_not_freeze_round_progress(self):
         """A failed speaker can be retried, after which the next complete plan advances to round two."""
         gemini_token = uuid.uuid4().hex
-        self.request(f"{self.path}/members", {"name": "Gemini", "token": gemini_token}, self.owner)
+        self.request(f"{self.path}/members", {"name": "Antigravity", "token": gemini_token}, self.owner)
         self.start_session()
         status, plan = self.arrange_session([
             {"expert": "Claude", "question": "第一轮 Claude"},
-            {"expert": "Gemini", "question": "第一轮 Gemini"},
+            {"expert": "Antigravity", "question": "第一轮 Antigravity"},
         ])
         self.assertEqual(status, 201, plan)
         failed = self.reserve_for("Claude")[1]
@@ -736,8 +736,8 @@ class MultiMemberTests(FreeRoomTests):
         self.assertEqual(self.request(f"{self.path}/turns/continue", {
             "actor": "Codex", "revision": roster["revision"],
         }, self.codex)[0], 200)
-        gemini = self.reserve_for("Gemini")[1]
-        self.assertEqual(self.answer(gemini["id"], token=gemini_token, author="Gemini")[0], 201)
+        gemini = self.reserve_for("Antigravity")[1]
+        self.assertEqual(self.answer(gemini["id"], token=gemini_token, author="Antigravity")[0], 201)
         roster = self.session_roster()
         self.assertEqual(roster["waiting"], ["Claude"])
         status, retry = self.arrange_session([{"expert": "Claude", "question": "重试第一轮 Claude"}], roster)
@@ -749,14 +749,14 @@ class MultiMemberTests(FreeRoomTests):
         self.assertEqual(roster["round"], 1)
         status, second_round = self.arrange_session([
             {"expert": "Claude", "question": "第二轮 Claude"},
-            {"expert": "Gemini", "question": "第二轮 Gemini"},
+            {"expert": "Antigravity", "question": "第二轮 Antigravity"},
         ], roster)
         self.assertEqual(status, 201, second_round)
         self.assertEqual([second_round["turn"]["round"], second_round["queued"][0]["round"]], [2, 2])
 
     def test_initial_session_execution_reads_no_messages_when_cutoff_is_zero(self):
         """An initial independent opinion has a real empty read boundary and cannot read later user text."""
-        self.request(f"{self.path}/members", {"name": "Gemini", "token": uuid.uuid4().hex}, self.owner)
+        self.request(f"{self.path}/members", {"name": "Antigravity", "token": uuid.uuid4().hex}, self.owner)
         self.start_session()
         status, plan = self.arrange_session([{"expert": "Claude", "question": "独立观点"}])
         self.assertEqual(status, 201, plan)
@@ -767,8 +767,8 @@ class MultiMemberTests(FreeRoomTests):
         self.assertEqual(result[0], 200, result)
         self.assertEqual(result[1]["total"], 0)
         self.assertEqual(self.request(f"{self.path}/messages/{later}{query}", token=self.member)[0], 404)
-        self.say("Gemini 也请回答", to=["Gemini"])
-        other = self.reserve_for("Gemini")[1]
+        self.say("Antigravity 也请回答", to=["Antigravity"])
+        other = self.reserve_for("Antigravity")[1]
         self.assertEqual(self.request(f"{self.path}/messages?execution_id={other['id']}", token=self.member)[0], 403)
 
     def test_initial_session_anonymous_message_reads_keep_the_server_cutoff(self):
@@ -791,15 +791,15 @@ class MultiMemberTests(FreeRoomTests):
     def test_initial_session_hides_room_state_execution_details_timeline_and_backup(self):
         """Anonymous initial readers cannot reach later answers through summary and activity endpoints."""
         gemini_token = uuid.uuid4().hex
-        self.request(f"{self.path}/members", {"name": "Gemini", "token": gemini_token}, self.owner)
+        self.request(f"{self.path}/members", {"name": "Antigravity", "token": gemini_token}, self.owner)
         self.assertEqual(self.say("边界前普通任务")[0], 201)
         prior_execution = self.reserve_for("Claude")[1]
         with closing(sqlite3.connect(self.database)) as connection, connection:
             connection.execute("UPDATE member_executions SET status='failed',result=? WHERE id=?",
                                ("普通执行失败原因", prior_execution["id"]))
         self.start_session()
-        self.assertEqual(self.say("边界后私有失败任务", to=["Gemini"])[0], 201)
-        private_execution = self.reserve_for("Gemini")[1]
+        self.assertEqual(self.say("边界后私有失败任务", to=["Antigravity"])[0], 201)
+        private_execution = self.reserve_for("Antigravity")[1]
         with closing(sqlite3.connect(self.database)) as connection, connection:
             connection.execute("UPDATE member_executions SET status='failed',result=? WHERE id=?",
                                ("边界后私有失败原因", private_execution["id"]))
@@ -821,7 +821,7 @@ class MultiMemberTests(FreeRoomTests):
         hidden_free_failure = next(item for item in anonymous_room["free"]["executions"]
                                    if item["id"] == private_execution["id"])
         hidden_member_failure = next(item for item in anonymous_room["free"]["members"]
-                                     if item["name"] == "Gemini")["execution"]
+                                     if item["name"] == "Antigravity")["execution"]
         self.assertEqual((hidden_free_failure["result"], hidden_member_failure["result"]), ("", ""))
         member_room = self.request(self.path, token=gemini_token)[1]
         self.assertEqual(next(item for item in member_room["free"]["executions"]
@@ -830,7 +830,7 @@ class MultiMemberTests(FreeRoomTests):
         owner_free_failure = next(item for item in owner_room["free"]["executions"]
                                   if item["id"] == private_execution["id"])
         owner_member_failure = next(item for item in owner_room["free"]["members"]
-                                    if item["name"] == "Gemini")["execution"]
+                                    if item["name"] == "Antigravity")["execution"]
         self.assertEqual((owner_free_failure["result"], owner_member_failure["result"]),
                          ("边界后私有失败原因", "边界后私有失败原因"))
         self.assertIsNone(next(item for item in anonymous_room["free"]["executions"]
@@ -919,7 +919,7 @@ class MultiMemberTests(FreeRoomTests):
     def test_naming_two_members_creates_two_requests_that_run_in_parallel(self):
         """One message to both members queues one request each; both can execute at once."""
         self.assertEqual(self.say("一起看看", to=["Claude", "Codex", "Claude"])[0], 201)
-        self.assertEqual(self.say("不在场", to=["Gemini"])[0], 400)
+        self.assertEqual(self.say("不在场", to=["Antigravity"])[0], 400)
         requests = self.request(self.path)[1]["free"]["requests"]
         self.assertEqual(sorted(item["member"] for item in requests), ["Claude", "Codex"])
         self.assertEqual(self.reserve_for("Claude")[0], 200)
@@ -1015,8 +1015,8 @@ class MultiMemberTests(FreeRoomTests):
     def test_registered_manual_member_can_be_adopted_in_a_free_room(self):
         """Once registered and its CLI reported a session, the owner's service takes the member over like a woken one."""
         gemini = uuid.uuid4().hex
-        self.request(f"{self.path}/members", {"name": "Gemini", "token": gemini, "access": "manual"}, self.owner)
-        gemini_id = self.member_id("Gemini")
+        self.request(f"{self.path}/members", {"name": "Antigravity", "token": gemini, "access": "manual"}, self.owner)
+        gemini_id = self.member_id("Antigravity")
         renewed = uuid.uuid4().hex + uuid.uuid4().hex
         adopt = {"action": "adopt", "adapter": "antigravity_cli", "session_id": "session-1", "token": renewed}
         self.assertEqual(self.request(f"{self.path}/members/{gemini_id}", adopt, self.owner)[0], 400)
@@ -1028,36 +1028,36 @@ class MultiMemberTests(FreeRoomTests):
         self.assertEqual(self.request(f"{self.path}/members/{gemini_id}", {**adopt, "token": self.member}, self.owner)[0], 400, "a credential already in use")
         status, adopted = self.request(f"{self.path}/members/{gemini_id}", adopt, self.owner)
         self.assertEqual(status, 200, adopted)
-        member = next(item for item in adopted["members"] if item["name"] == "Gemini")
+        member = next(item for item in adopted["members"] if item["name"] == "Antigravity")
         self.assertEqual((member["access"], member["session_mode"]), ("runner", "borrowed"))
         # The service now answers with the credential it generated; the browser-made one no longer works.
         self.assertEqual(self.request(f"{self.path}/register", {}, gemini)[0], 403)
         inbox = self.request(f"{self.path}/inbox", token=self.owner)[1]
-        self.assertIn("Gemini", [item["name"] for item in inbox["members"]])
+        self.assertIn("Antigravity", [item["name"] for item in inbox["members"]])
 
     def test_manual_member_answers_by_request_and_is_never_delivered(self):
         """A manual member is skipped by the runner and closes only its own open requests."""
         gemini = uuid.uuid4().hex
-        self.request(f"{self.path}/members", {"name": "Gemini", "token": gemini, "access": "manual"}, self.owner)
-        self.assertEqual(self.say("先别点 Gemini", to=["Gemini"])[0], 400, "an unregistered manual member does not exist yet")
+        self.request(f"{self.path}/members", {"name": "Antigravity", "token": gemini, "access": "manual"}, self.owner)
+        self.assertEqual(self.say("先别点 Antigravity", to=["Antigravity"])[0], 400, "an unregistered manual member does not exist yet")
         self.assertEqual(self.request(f"{self.path}/inbox", token=self.owner)[1]["observers"], [])
         self.assertEqual(self.request(f"{self.path}/register", {}, gemini)[0], 200)
-        self.say("请 Gemini 看看", to=["Gemini", "Claude"])
+        self.say("请 Antigravity 看看", to=["Antigravity", "Claude"])
         inbox = self.request(f"{self.path}/inbox", token=self.owner)[1]
         self.assertEqual([member["name"] for member in inbox["members"]], ["Claude", "Codex"])
-        self.assertEqual([member["name"] for member in inbox["observers"]], ["Gemini"])
-        self.assertEqual(self.reserve_for("Gemini")[0], 404)
+        self.assertEqual([member["name"] for member in inbox["observers"]], ["Antigravity"])
+        self.assertEqual(self.reserve_for("Antigravity")[0], 404)
         requests = {item["member"]: item["id"] for item in self.request(self.path)[1]["free"]["requests"]}
 
         def post(**extra):
-            return self.request(f"{self.path}/messages", {"author": "Gemini", "text": "我的看法", "source": "cli",
+            return self.request(f"{self.path}/messages", {"author": "Antigravity", "text": "我的看法", "source": "cli",
                                                           "submission_id": uuid.uuid4().hex, **extra}, gemini)
         self.assertEqual(post(request_ids=[requests["Claude"]])[0], 409)
         self.assertEqual(post(execution_id=1)[0], 400)
-        self.assertEqual(post(request_ids=[requests["Gemini"]])[0], 201)
+        self.assertEqual(post(request_ids=[requests["Antigravity"]])[0], 201)
         self.assertEqual(post()[0], 201)
         states = {item["member"]: item["status"] for item in self.request(self.path)[1]["free"]["requests"]}
-        self.assertEqual(states, {"Gemini": "completed", "Claude": "pending"})
+        self.assertEqual(states, {"Antigravity": "completed", "Claude": "pending"})
 
     def test_overlapping_changes_to_the_same_file_are_reported_as_possible_conflicts(self):
         """Two members changing one file in overlapping windows are flagged; the report is recorded once."""
@@ -1085,14 +1085,14 @@ class HostTests(FreeRoomTests):
         return FreeRoomTests.say(self, text, token, **({"to": ["Claude"]} | extra))
 
     def setUp(self):
-        """Claude hosts; Codex and a third runner member, Gemini, work."""
+        """Claude hosts; Codex and a third runner member, Antigravity, work."""
         super().setUp()
         self.codex, self.gemini = uuid.uuid4().hex, uuid.uuid4().hex
         self.request(f"{self.path}/members", {"name": "Codex", "token": self.codex}, self.owner)
-        self.request(f"{self.path}/members", {"name": "Gemini", "token": self.gemini}, self.owner)
+        self.request(f"{self.path}/members", {"name": "Antigravity", "token": self.gemini}, self.owner)
         status, view = self.request(f"{self.path}/members/{self.member_id('Claude')}", {"action": "role", "role": "host"}, self.owner)
         self.assertEqual(status, 200, view)
-        self.tokens = {"Claude": self.member, "Codex": self.codex, "Gemini": self.gemini}
+        self.tokens = {"Claude": self.member, "Codex": self.codex, "Antigravity": self.gemini}
 
     def requests(self):
         """Current requests as (member, purpose, status) triples."""
@@ -1109,56 +1109,56 @@ class HostTests(FreeRoomTests):
     def test_host_dispatch_hands_back_once_after_every_member_finished(self):
         """Two dispatched members produce exactly one hand-off, after the last of them finishes."""
         FreeRoomTests.say(self, "请安排")
-        self.work("Claude", to=["Codex", "Gemini"])
-        self.assertEqual(self.requests()[1:], [("Codex", "ask", "pending"), ("Gemini", "ask", "pending")])
+        self.work("Claude", to=["Codex", "Antigravity"])
+        self.assertEqual(self.requests()[1:], [("Codex", "ask", "pending"), ("Antigravity", "ask", "pending")])
         self.work("Codex")
         self.assertNotIn(("Claude", "handoff", "pending"), self.requests())
-        self.work("Gemini")
+        self.work("Antigravity")
         self.assertEqual(self.requests().count(("Claude", "handoff", "pending")), 1)
 
     def test_sequential_mention_asks_the_host_first_and_each_next_member_after_the_previous_ends(self):
         """@全体依次 asks one member at a time: the host, then by joining order; a failed or departed member is passed over."""
-        FreeRoomTests.say(self, "依次说说", to=["Gemini", "Codex", "Claude"], sequential=True)
+        FreeRoomTests.say(self, "依次说说", to=["Antigravity", "Codex", "Claude"], sequential=True)
         self.assertEqual(self.requests(), [("Claude", "ask", "pending")])
         self.work("Claude")
         self.assertEqual(self.requests()[1:], [("Codex", "ask", "pending")])
         failing = self.reserve_for("Codex")[1]
         self.request(f"{self.path}/executions/{failing['id']}", {"action": "fail", "reason": "CLI 退出"}, self.owner)
-        self.assertEqual(self.requests()[1:], [("Codex", "ask", "failed"), ("Gemini", "ask", "pending")])
-        self.work("Gemini")
-        FreeRoomTests.say(self, "再来一次", to=["Gemini", "Codex"], sequential=True)
+        self.assertEqual(self.requests()[1:], [("Codex", "ask", "failed"), ("Antigravity", "ask", "pending")])
+        self.work("Antigravity")
+        FreeRoomTests.say(self, "再来一次", to=["Antigravity", "Codex"], sequential=True)
         self.assertEqual(self.requests()[3:], [("Codex", "ask", "pending")])
         self.request(f"{self.path}/members/{self.member_id('Codex')}", {"action": "away"}, self.owner)
-        self.assertEqual(self.requests()[3:], [("Codex", "ask", "cancelled"), ("Gemini", "ask", "pending")])
+        self.assertEqual(self.requests()[3:], [("Codex", "ask", "cancelled"), ("Antigravity", "ask", "pending")])
         order = self.request(self.path)[1]["speaking_order"]
         self.assertEqual((order["kind"], [(item["name"], item["state"]) for item in order["items"]]),
-                         ("queue", [("Gemini", "speaking"), ("Claude", "idle")]))
+                         ("queue", [("Antigravity", "speaking"), ("Claude", "idle")]))
 
     def test_owner_reorders_who_has_not_spoken_against_the_latest_revision(self):
         """Read the order, then send its revision: spoken and speaking members stay, the rest follow the new order at once."""
-        FreeRoomTests.say(self, "依次说说", to=["Claude", "Codex", "Gemini"], sequential=True)
+        FreeRoomTests.say(self, "依次说说", to=["Claude", "Codex", "Antigravity"], sequential=True)
         order = self.request(f"{self.path}/speaking-order")[1]
         self.assertEqual(([(item["name"], item["state"]) for item in order["items"]], order["movable"]),
-                         ([("Claude", "speaking"), ("Codex", "queued"), ("Gemini", "queued")], ["Codex", "Gemini"]))
+                         ([("Claude", "speaking"), ("Codex", "queued"), ("Antigravity", "queued")], ["Codex", "Antigravity"]))
         url = f"{self.path}/speaking-order"
-        self.assertEqual(self.request(url, {"order": ["Gemini", "Codex"]}, self.owner)[0], 400)
-        self.assertEqual(self.request(url, {"revision": order["revision"], "order": ["Gemini", "Codex"]}, self.member)[0], 403)
-        status, refused = self.request(url, {"revision": order["revision"], "order": ["Gemini", "Claude"]}, self.owner)
+        self.assertEqual(self.request(url, {"order": ["Antigravity", "Codex"]}, self.owner)[0], 400)
+        self.assertEqual(self.request(url, {"revision": order["revision"], "order": ["Antigravity", "Codex"]}, self.member)[0], 403)
+        status, refused = self.request(url, {"revision": order["revision"], "order": ["Antigravity", "Claude"]}, self.owner)
         self.assertEqual(status, 400)
         self.assertIn("缺少：Codex", refused["error"])
         self.assertIn("多出：Claude", refused["error"])
-        self.assertEqual(self.request(url, {"revision": "stale", "order": ["Gemini", "Codex"]}, self.owner)[0], 409)
-        status, room = self.request(url, {"revision": order["revision"], "order": ["Gemini", "Codex"]}, self.owner)
+        self.assertEqual(self.request(url, {"revision": "stale", "order": ["Antigravity", "Codex"]}, self.owner)[0], 409)
+        status, room = self.request(url, {"revision": order["revision"], "order": ["Antigravity", "Codex"]}, self.owner)
         self.assertEqual(status, 200, room)
-        self.assertEqual([item["name"] for item in room["speaking_order"]["items"]], ["Claude", "Gemini", "Codex"])
+        self.assertEqual([item["name"] for item in room["speaking_order"]["items"]], ["Claude", "Antigravity", "Codex"])
         self.work("Claude")
-        self.assertEqual(self.requests()[1:], [("Gemini", "ask", "pending")])
+        self.assertEqual(self.requests()[1:], [("Antigravity", "ask", "pending")])
 
     def test_partial_failure_still_hands_back_but_all_failed_halts(self):
         """One completed member is enough to hand back; a batch where all fail halts the chain."""
         FreeRoomTests.say(self, "第一链")
-        self.work("Claude", to=["Codex", "Gemini"])
-        failing = self.reserve_for("Gemini")[1]
+        self.work("Claude", to=["Codex", "Antigravity"])
+        failing = self.reserve_for("Antigravity")[1]
         self.request(f"{self.path}/executions/{failing['id']}", {"action": "fail", "reason": "CLI 退出"}, self.owner)
         self.work("Codex")
         self.assertEqual(self.requests().count(("Claude", "handoff", "pending")), 1)
@@ -1176,11 +1176,11 @@ class HostTests(FreeRoomTests):
         free_room.CHAIN_ROUNDS = 1
         try:
             FreeRoomTests.say(self, "轮数")
-            self.work("Claude", to=["Codex", "Gemini"])
+            self.work("Claude", to=["Codex", "Antigravity"])
             self.work("Codex")
-            self.work("Gemini")
+            self.work("Antigravity")
             self.assertEqual(self.requests()[-1], ("Claude", "handoff", "pending"), "the last round still gets its summary")
-            self.work("Claude", to=["Gemini"])
+            self.work("Claude", to=["Antigravity"])
             free = self.request(self.path)[1]["free"]
             self.assertEqual([item["reason"] for item in free["halted_chains"]], ["budget"])
             self.assertEqual(self.requests()[-1], ("Claude", "handoff", "completed"), "the dispatch past the limit is held")
@@ -1192,7 +1192,7 @@ class HostTests(FreeRoomTests):
                 self.assertEqual(self.request(url, {"action": "continue", "rounds": bad}, self.owner)[0], 400, bad)
             status, view = self.request(url, {"action": "continue", "rounds": 1}, self.owner)
             self.assertEqual(status, 200, view)
-            self.assertEqual(self.requests()[-1], ("Gemini", "ask", "pending"), "continuing sends the held dispatch")
+            self.assertEqual(self.requests()[-1], ("Antigravity", "ask", "pending"), "continuing sends the held dispatch")
             self.assertEqual((view["halted_chains"], view["chain_rounds"][0]["allowed"]), ([], 2))
             self.assertEqual(self.request(url, {"action": "continue", "rounds": 1}, self.owner)[0], 409, "a running chain needs no continuing")
             FreeRoomTests.say(self, "新的一链", to=["Claude"])
@@ -1227,14 +1227,14 @@ class HostTests(FreeRoomTests):
         everyone = FreeRoomTests.say(self, "都出来打个招呼")[1]["message"]["id"]
         status, result = self.request(f"{self.path}/recommendations/{everyone}", {"action": "all"}, self.owner)
         self.assertEqual(status, 200, result)
-        self.assertEqual(self.requests(), [("Claude", "all", "pending"), ("Codex", "all", "pending"), ("Gemini", "all", "pending")])
+        self.assertEqual(self.requests(), [("Claude", "all", "pending"), ("Codex", "all", "pending"), ("Antigravity", "all", "pending")])
         host = self.reserve_for("Claude")[1]
         payload = {"author": "Claude", "text": "派活", "source": "cli", "submission_id": uuid.uuid4().hex, "execution_id": host["id"], "to": ["Codex"]}
         self.assertEqual(self.request(f"{self.path}/messages", payload, self.member)[0], 400)
         del payload["to"]
         self.assertEqual(self.request(f"{self.path}/messages", {**payload, "submission_id": uuid.uuid4().hex}, self.member)[0], 201)
         self.work("Codex")
-        self.work("Gemini")
+        self.work("Antigravity")
         self.assertNotIn("handoff", [purpose for _, purpose, _ in self.requests()])
         thanks = FreeRoomTests.say(self, "好的，谢谢")[1]["message"]["id"]
         self.assertEqual(self.request(f"{self.path}/recommendations/{thanks}", {"action": "none"}, self.owner)[0], 200)
@@ -1245,14 +1245,14 @@ class HostTests(FreeRoomTests):
 
     def test_naming_everyone_waits_for_the_runner_to_choose_at_once_or_in_turn(self):
         """@全体成员 leaves the host an undeliverable group request; all asks everyone at once, sequential queues them."""
-        everyone = ["Claude", "Codex", "Gemini"]
+        everyone = ["Claude", "Codex", "Antigravity"]
         first = FreeRoomTests.say(self, "大家打个招呼", to=everyone, order="auto")[1]["message"]["id"]
         self.assertEqual(self.requests(), [("Claude", "group", "pending")])
         self.assertEqual(self.reserve_for("Claude")[0], 409)
         self.assertEqual(self.request(f"{self.path}/recommendations/{first}", {"action": "none"}, self.owner)[0], 400)
         revision = self.request(f"{self.path}/recommendations/{first}", token=self.owner)[1]["revision"]
         self.assertEqual(self.request(f"{self.path}/recommendations/{first}", {"action": "all", "revision": revision}, self.owner)[0], 200)
-        self.assertEqual(self.requests(), [("Claude", "all", "pending"), ("Codex", "all", "pending"), ("Gemini", "all", "pending")])
+        self.assertEqual(self.requests(), [("Claude", "all", "pending"), ("Codex", "all", "pending"), ("Antigravity", "all", "pending")])
         self.assertEqual(self.request(f"{self.path}/recommendations/{first}", {"action": "sequential"}, self.owner)[0], 409)
         for name in everyone:
             self.work(name)
@@ -1268,9 +1268,9 @@ class HostTests(FreeRoomTests):
         """Members suggest without dispatching; the host cannot name itself."""
         FreeRoomTests.say(self, "派活检查", to=["Codex", "Claude"])
         codex = self.reserve_for("Codex")[1]
-        payload = {"author": "Codex", "text": "越权", "source": "cli", "submission_id": uuid.uuid4().hex, "execution_id": codex["id"], "to": ["Gemini"]}
+        payload = {"author": "Codex", "text": "越权", "source": "cli", "submission_id": uuid.uuid4().hex, "execution_id": codex["id"], "to": ["Antigravity"]}
         self.assertEqual(self.request(f"{self.path}/messages", payload, self.codex)[0], 201)
-        self.assertFalse(any(item["member"] == "Gemini" for item in self.request(self.path)[1]["free"]["requests"]))
+        self.assertFalse(any(item["member"] == "Antigravity" for item in self.request(self.path)[1]["free"]["requests"]))
         host = self.reserve_for("Claude")[1]
         payload = {"author": "Claude", "text": "点名自己", "source": "cli", "submission_id": uuid.uuid4().hex, "execution_id": host["id"], "to": ["Claude"]}
         self.assertEqual(self.request(f"{self.path}/messages", payload, self.member)[0], 400)
@@ -1279,14 +1279,14 @@ class HostTests(FreeRoomTests):
         """Making Codex host demotes Claude; the host cannot step down, and when it leaves another member takes over."""
         self.request(f"{self.path}/members/{self.member_id('Codex')}", {"action": "role", "role": "host"}, self.owner)
         roles = {member["name"]: member["role"] for member in self.request(self.path)[1]["free"]["members"]}
-        self.assertEqual(roles, {"Claude": "member", "Codex": "host", "Gemini": "member"})
+        self.assertEqual(roles, {"Claude": "member", "Codex": "host", "Antigravity": "member"})
         self.assertEqual(self.request(self.path)[1]["host"], "Codex")
         self.assertEqual(self.request(f"{self.path}/members/{self.member_id('Codex')}", {"action": "role", "role": "member"}, self.owner)[0], 400)
         self.request(f"{self.path}/members/{self.member_id('Codex')}", {"action": "away"}, self.owner)
         self.assertEqual(self.request(self.path)[1]["host"], "Claude")
         self.request(f"{self.path}/members/{self.member_id('Codex')}", {"action": "active", "token": uuid.uuid4().hex}, self.owner)
         roles = {member["name"]: member["role"] for member in self.request(self.path)[1]["free"]["members"]}
-        self.assertEqual(roles, {"Claude": "host", "Codex": "member", "Gemini": "member"})
+        self.assertEqual(roles, {"Claude": "host", "Codex": "member", "Antigravity": "member"})
 
 class RetiredWebMemberTests(FreeRoomTests):
     """Web chatbots no longer join; nobody answers on a member's behalf."""
@@ -1303,21 +1303,21 @@ class InstanceTests(FreeRoomTests):
     """Two instances of one platform are separate members with their own credentials and requests."""
 
     def test_two_claude_instances_are_distinct_members(self):
-        """Claude and Claude-评审 receive separate requests and answer only with their own credential."""
+        """Claude and Claude-review receive separate requests and answer only with their own credential."""
         reviewer = uuid.uuid4().hex
-        self.assertEqual(self.request(f"{self.path}/members", {"name": "Claude-评审", "adapter": "claude", "token": reviewer}, self.owner)[0], 200)
+        self.assertEqual(self.request(f"{self.path}/members", {"name": "Claude-review", "adapter": "claude", "token": reviewer}, self.owner)[0], 200)
         for name in ("Claudex", "Claude-", "Foo-1", "Claude-a b"):
             self.assertEqual(self.request(f"{self.path}/members", {"name": name, "token": uuid.uuid4().hex}, self.owner)[0], 400, name)
-        self.say("请评审", to=["Claude-评审"])
+        self.say("请评审", to=["Claude-review"])
         requests = self.request(self.path)[1]["free"]["requests"]
-        self.assertEqual([item["member"] for item in requests], ["Claude-评审"])
-        member_id = next(member["id"] for member in self.request(self.path)[1]["free"]["members"] if member["name"] == "Claude-评审")
+        self.assertEqual([item["member"] for item in requests], ["Claude-review"])
+        member_id = next(member["id"] for member in self.request(self.path)[1]["free"]["members"] if member["name"] == "Claude-review")
         execution = self.request(f"{self.path}/executions", {"member_id": member_id, "client_id": uuid.uuid4().hex}, self.owner)[1]
         self.assertEqual(self.answer(execution["id"], token=reviewer)[0], 403)
-        payload = {"author": "Claude-评审", "text": "评审意见", "source": "cli", "submission_id": uuid.uuid4().hex, "execution_id": execution["id"]}
+        payload = {"author": "Claude-review", "text": "评审意见", "source": "cli", "submission_id": uuid.uuid4().hex, "execution_id": execution["id"]}
         self.assertEqual(self.request(f"{self.path}/messages", payload, self.member)[0], 403)
         status, saved = self.request(f"{self.path}/messages", payload, reviewer)
-        self.assertEqual((status, saved["message"]["author"]), (201, "Claude-评审"))
+        self.assertEqual((status, saved["message"]["author"]), (201, "Claude-review"))
 
 class MigrationTests(unittest.TestCase):
     """Databases from earlier builds are upgraded in place."""

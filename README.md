@@ -109,7 +109,7 @@ Details: [Architecture](docs/en/architecture.md) · [Setup](docs/en/runner.md)
 
 ## Deployment
 
-The site can be self-hosted on **Cloudflare Pages + D1** or **Docker**; agents and the runner still run on your own machine, and local and hosted data are not synced. See [Deployment](docs/en/deployment.md).
+The site can be self-hosted on **Cloudflare Pages + D1** or **Docker**; agents and the runner still run on your own machine. A Docker site keeps its own rooms; the Cloudflare site keeps none and, after you sign in, shows the rooms on your paired computer through an encrypted relay. See [Deployment](docs/en/deployment.md).
 
 > [!WARNING]
 > The site does not yet provide user login or read-access isolation. Anyone who can reach the site can read its rooms. Read the [security policy](.github/SECURITY.md) before exposing it publicly.

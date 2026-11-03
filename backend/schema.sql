@@ -1304,3 +1304,22 @@ BEGIN
     INSERT INTO room_revisions (room_id,revision) SELECT '',(SELECT COALESCE(MAX(revision),0)+1 FROM room_revisions)
         WHERE NOT EXISTS (SELECT 1 FROM room_revisions WHERE room_id='');
 END;
+-- The platform once called Gemini is identified as Antigravity (the software); screens still show the nickname Gemini.
+-- Member names move to the new ID, with any instance suffix (Gemini-2 → Antigravity-2); names inside stored JSON follow.
+-- Message text keeps what was written. Each statement only touches rows still holding the old ID, so reruns change nothing.
+UPDATE room_members SET name='Antigravity'||substr(name,7) WHERE name='Gemini' OR name GLOB 'Gemini-*';
+UPDATE messages SET author='Antigravity'||substr(author,7) WHERE author='Gemini' OR author GLOB 'Gemini-*';
+UPDATE message_summaries SET author='Antigravity'||substr(author,7) WHERE author='Gemini' OR author GLOB 'Gemini-*';
+UPDATE message_details SET submitted_by='Antigravity'||substr(submitted_by,7) WHERE submitted_by='Gemini' OR submitted_by GLOB 'Gemini-*';
+UPDATE attachments SET actor='Antigravity'||substr(actor,7) WHERE actor='Gemini' OR actor GLOB 'Gemini-*';
+UPDATE topic_settings SET host='Antigravity'||substr(host,7) WHERE host='Gemini' OR host GLOB 'Gemini-*';
+UPDATE member_descriptions SET name='Antigravity'||substr(name,7) WHERE name='Gemini' OR name GLOB 'Gemini-*';
+UPDATE member_labels SET name='Antigravity'||substr(name,7) WHERE name='Gemini' OR name GLOB 'Gemini-*';
+UPDATE scheduler_feedback SET should_be='Antigravity'||substr(should_be,7) WHERE should_be='Gemini' OR should_be GLOB 'Gemini-*';
+UPDATE scheduler_feedback_cases SET should_be='Antigravity'||substr(should_be,7) WHERE should_be='Gemini' OR should_be GLOB 'Gemini-*';
+UPDATE review_plans SET reviewer_name='Antigravity'||substr(reviewer_name,7) WHERE reviewer_name='Gemini' OR reviewer_name GLOB 'Gemini-*';
+UPDATE topic_settings SET experts=replace(replace(experts,'"Gemini"','"Antigravity"'),'"Gemini-','"Antigravity-') WHERE experts LIKE '%"Gemini%';
+UPDATE free_chain_holds SET names=replace(replace(names,'"Gemini"','"Antigravity"'),'"Gemini-','"Antigravity-') WHERE names LIKE '%"Gemini%';
+UPDATE room_creations SET request_text=replace(replace(request_text,'"Gemini"','"Antigravity"'),'"Gemini-','"Antigravity-') WHERE request_text LIKE '%"Gemini%';
+UPDATE session_start_submissions SET request_json=replace(replace(request_json,'"Gemini"','"Antigravity"'),'"Gemini-','"Antigravity-') WHERE request_json LIKE '%"Gemini%';
+UPDATE scheduler_decision_inputs SET input=replace(replace(input,'"Gemini"','"Antigravity"'),'"Gemini-','"Antigravity-') WHERE input LIKE '%"Gemini%';

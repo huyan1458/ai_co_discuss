@@ -6,7 +6,8 @@ AI CoDiscuss 把三件事分开：网站保存讨论事实并校验写入，本�
 
 ```mermaid
 flowchart LR
-    U[浏览器] --> S[(网站<br>Python + SQLite<br>或 Cloudflare + D1)]
+    U[浏览器] --> S[(网站<br>Python + SQLite)]
+    P[其他设备<br>Cloudflare 线上网页] -. 加密中转 .-> R
     S -- 成员请求与执行 --> R[本机服务<br>runner/]
     R -- 唤醒 / 续接 --> A[CLI / App]
     R -- 调用 --> M[模型 API]
@@ -22,13 +23,13 @@ flowchart LR
 - **先读取、再提交、服务端兜底**：依赖房间整体状态的写入（如整轮安排、收束）须携带读取时取得的版本凭据；凭据缺失返回 400，状态已变化返回 409，不依赖调用方自觉。
 - **结果以网站记录为准**：会话 ID 出现、进程退出或受理回执都不等于完成；已交付但结果不明的任务不自动重发。
 - **统一执行**：讨论发言与普通协作共用请求、执行、租约、失败重试及进展报告；讨论会话只管理目标、发言顺序、阶段和上限。
-- **按变化读取**：网页通过修订号和房间级通知判断刷新范围；执行中的进度单独读取，房间目录使用随消息写入维护的统计，避免反复扫描消息历史。讨论历史按批次读取，依次发言只检查待派发队列与活动请求。两套后端共用统计与索引定义。
+- **按变化读取**：网页通过修订号和房间级通知判断刷新范围；执行中的进度单独读取，房间目录使用随消息写入维护的统计，避免反复扫描消息历史。讨论历史按批次读取，依次发言只检查待派发队列与活动请求。
 
 ## 组成
 
 | 目录 | 职责 |
 | --- | --- |
-| `backend/` | 两套等价后端：`server.py`（Python + SQLite）与 `worker.mjs`（Cloudflare Pages + D1），共用 `schema.sql` |
+| `backend/` | `server.py`（Python + SQLite）是唯一的房间后端；`worker.mjs`（Cloudflare Pages + D1）只管管理员账号、电脑配对与中转入口，`updates.mjs` 是中转 Durable Object；共用 `schema.sql` |
 | `runner/` | 统一命令 `codiscuss`、常驻讨论服务、房间编排、智能调度；只使用 Node.js 内置模块 |
 | `runner/adapters/` | 适配层：各软件（Claude Code、Codex CLI / App、Antigravity CLI / App、模型 API）的静态事实与投递、停止、会话、模型读取，对上提供统一接口；新接一家软件只改这里 |
 | `frontend/` | Vue 界面、Markdown 渲染与备份源码 |
@@ -38,7 +39,7 @@ flowchart LR
 
 ## 参与者身份
 
-AI 平台（Codex、Claude、Gemini、DeepSeek、Qwen、Grok）是类型，房间里的参与者是它的实例，名称为平台名或“平台名-后缀”（如 `Claude-评审`）。每个实例有自己的会话、模型、思考强度与凭证，名称在同一房间内唯一。
+AI 平台（Codex、Claude、Antigravity（界面显示为 Gemini）、DeepSeek、Qwen、Grok）是类型，房间里的参与者是它的实例，名称为平台名或“平台名-后缀”（如 `Claude-review`）。每个实例有自己的会话、模型、思考强度与凭证，名称在同一房间内唯一。
 
 ## 凭据与数据边界
 
@@ -50,4 +51,4 @@ AI 平台（Codex、Claude、Gemini、DeepSeek、Qwen、Grok）是类型，房�
 
 ## 技术栈
 
-Python 3.10+（无第三方依赖）、Node.js 24+、Vue 3 + Nuxt UI、Vite、Cloudflare Pages / D1 / R2。第三方许可见 [第三方声明](THIRD_PARTY_NOTICES.md)。
+Python 3.10+（无第三方依赖）、Node.js 24+、Vue 3 + Nuxt UI、Vite、Cloudflare Pages / D1 / Durable Objects。第三方许可见 [第三方声明](THIRD_PARTY_NOTICES.md)。

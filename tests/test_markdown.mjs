@@ -15,7 +15,7 @@ test("emphasis closes after Chinese punctuation followed by Chinese text", () =>
 });
 
 test("code preserves literal Markdown, mentions, math, and HTML", () => {
-  const html = render_markdown('`@Codex **原文** $x$`\n\n```html\n<script>alert("test")</script>\n@Gemini **不是强调**\n```');
+  const html = render_markdown('`@Codex **原文** $x$`\n\n```html\n<script>alert("test")</script>\n@Antigravity **不是强调**\n```');
   assert.match(html, /<code>@Codex \*\*原文\*\* \$x\$<\/code>/);
   assert.ok(html.includes('&lt;script&gt;alert(&quot;test&quot;)&lt;/script&gt;'));
   assert.doesNotMatch(html, /<script|class="mention"|class="katex"|<strong>/);
@@ -28,9 +28,9 @@ test("untrusted HTML and unsafe links never become executable markup", () => {
 });
 
 test("safe links open separately and mentions do not rewrite destinations", () => {
-  const html = render_markdown("@Codex [资料](https://example.com/@Gemini) https://example.com\n\n@Codextra");
+  const html = render_markdown("@Codex [资料](https://example.com/@Antigravity) https://example.com\n\n@Codextra");
   assert.match(html, /<span class="mention">@Codex<\/span>/);
-  assert.match(html, /href="https:\/\/example.com\/@Gemini" target="_blank" rel="noopener noreferrer"/);
+  assert.match(html, /href="https:\/\/example.com\/@Antigravity" target="_blank" rel="noopener noreferrer"/);
   assert.doesNotMatch(html, /<span class="mention">@Codex<\/span>tra/);
 });
 

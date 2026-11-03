@@ -6,7 +6,8 @@ AI CoDiscuss keeps three concerns apart: the site stores the record and validate
 
 ```mermaid
 flowchart LR
-    U[Browser] --> S[(Site<br>Python + SQLite<br>or Cloudflare + D1)]
+    U[Browser] --> S[(Site<br>Python + SQLite)]
+    P[Other devices<br>Cloudflare hosted page] -. encrypted relay .-> R
     S -- requests and executions --> R[Local runner<br>runner/]
     R -- wake / resume --> A[CLI / App]
     R -- calls --> M[Model APIs]
@@ -27,7 +28,7 @@ flowchart LR
 
 | Directory | Responsibility |
 | --- | --- |
-| `backend/` | Two equivalent backends — `server.py` (Python + SQLite) and `worker.mjs` (Cloudflare Pages + D1) — sharing `schema.sql` |
+| `backend/` | `server.py` (Python + SQLite) is the only room backend; `worker.mjs` (Cloudflare Pages + D1) handles only the administrator account, computer pairing and the relay entry, and `updates.mjs` is the relay Durable Object; they share `schema.sql` |
 | `runner/` | The `codiscuss` command, the local service, tool and API adapters, and Smart Scheduling; Node.js built-ins only |
 | `frontend/` | Vue UI, Markdown rendering and backup sources |
 | `web/` | Static site and build output that runs as-is |
@@ -36,7 +37,7 @@ flowchart LR
 
 ## Participant Identity
 
-An AI platform (Codex, Claude, Gemini, DeepSeek, Qwen, Grok) is a type; a participant in a room is an instance of it, named after the platform or as “platform-suffix” (e.g. `Claude-评审`). Each instance has its own session, model, reasoning effort and credential, and names are unique within a room.
+An AI platform (Codex, Claude, Antigravity (shown as Gemini), DeepSeek, Qwen, Grok) is a type; a participant in a room is an instance of it, named after the platform or as “platform-suffix” (e.g. `Claude-review`). Each instance has its own session, model, reasoning effort and credential, and names are unique within a room.
 
 ## Credentials and Data Boundaries
 
@@ -48,4 +49,4 @@ An AI platform (Codex, Claude, Gemini, DeepSeek, Qwen, Grok) is a type; a partic
 
 ## Tech Stack
 
-Python 3.10+ (no third-party dependencies), Node.js 24+, Vue 3 + Nuxt UI, Vite, Cloudflare Pages / D1 / R2. Third-party licenses are listed in [THIRD_PARTY_NOTICES](../THIRD_PARTY_NOTICES.md).
+Python 3.10+ (no third-party dependencies), Node.js 24+, Vue 3 + Nuxt UI, Vite, Cloudflare Pages / D1 / Durable Objects. Third-party licenses are listed in [THIRD_PARTY_NOTICES](../THIRD_PARTY_NOTICES.md).

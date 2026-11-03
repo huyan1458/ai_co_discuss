@@ -27,9 +27,9 @@ SESSION_VARIABLES = (("CLAUDE_CODE_SESSION_ID", "claude"), ("CODEX_THREAD_ID", "
 MAX_TEXT_LENGTH = 32000
 MAX_SUMMARY_LENGTH = 1000
 MAX_BRIEF_LENGTH = 1600
-PARTICIPANTS = ("用户", "Codex", "Claude", "Gemini", "DeepSeek", "Qwen", "Grok")
-# A platform is a type; `Claude-评审` is a second Claude instance with its own session. Mirrors backend/identity.py.
-INSTANCE_PATTERN = re.compile(r"(Codex|Claude|Gemini|DeepSeek|Qwen|Grok)(?:-[0-9A-Za-z_一-鿿]{1,16})?")
+PARTICIPANTS = ("用户", "Codex", "Claude", "Antigravity", "DeepSeek", "Qwen", "Grok")
+# A platform is a type; `Claude-review` is a second Claude instance with its own session. Mirrors backend/identity.py.
+INSTANCE_PATTERN = re.compile(r"(Codex|Claude|Antigravity|DeepSeek|Qwen|Grok)(?:-[0-9A-Za-z_]{1,16})?")
 KINDS = ("opinion", "moderation", "chat")
 OVERVIEW_FIELDS = ("id", "title", "goal", "host", "phase", "focus", "message_count",
                    "latest_id", "state_until", "current_turn", "queued_turns", "held_since", "limits", "completed_rounds", "answered_turns", "duplicate", "submission_id",
@@ -103,9 +103,9 @@ def positive_int(value):
 
 
 def ai_name(value):
-    """Accept an AI platform or a named instance of one, such as Claude-评审."""
+    """Accept an AI platform or a named instance of one, such as Claude-review."""
     if not INSTANCE_PATTERN.fullmatch(value):
-        raise argparse.ArgumentTypeError("须为 Codex/Claude/Gemini/DeepSeek/Qwen/Grok，或平台名-后缀（后缀 1–16 个字母、数字、下划线或汉字）")
+        raise argparse.ArgumentTypeError("须为 Codex/Claude/Antigravity/DeepSeek/Qwen/Grok，或平台名-后缀（后缀 1–16 个英文字母、数字或下划线）")
     return value
 
 
@@ -188,7 +188,7 @@ def add_topic(parser, create=False):
     parser.add_argument("--host", type=participant, default=argparse.SUPPRESS,
                         help="主持人；创建时默认 --as 操作者")
     parser.add_argument("--experts-file", default=argparse.SUPPRESS,
-                        help='完整参与者映射 JSON，如 {"Codex":"cli","Gemini":"cli"}；替换整个映射')
+                        help='完整参与者映射 JSON，如 {"Codex":"cli","Antigravity":"cli"}；替换整个映射')
     for name in ("max-rounds", "max-minutes"):
         parser.add_argument(f"--{name}", type=non_negative_int, default=argparse.SUPPRESS)
     # Accepted so older scripts keep working; one execution has no time limit any more.

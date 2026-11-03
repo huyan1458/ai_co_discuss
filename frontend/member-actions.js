@@ -23,7 +23,7 @@ export function member_actions(member, { view, act, describe }) {
     disabled: locked, onSelect: () => act("change_member", { member_id: member.id, name: member.name, action, ...extra }) });
   return [[
     ...(member.access === "manual" ? [{ label: "复制启动指令（含凭证）", icon: "i-lucide-rocket", disabled: locked || !available, onSelect: () => act("copy_member_launch", member.name) }] : []),
-    { label: "编辑描述", icon: "i-lucide-user-pen", disabled: locked, onSelect: () => describe(member.name) },
+    { label: "名称与描述", icon: "i-lucide-user-pen", disabled: locked, onSelect: () => describe(member.name) },
     { label: "复制参与说明", icon: "i-lucide-copy", disabled: locked, onSelect: () => act("copy_member_join", member.name) },
     { label: "下载私有配置", icon: "i-lucide-download", disabled: locked || !available, onSelect: () => act("download_member_access", member.name) },
     ...(member.access === "manual" ? [{ label: "复制凭证文本", icon: "i-lucide-key-round", disabled: locked || !available, onSelect: () => act("copy_member_access_text", member.name) }] : []),

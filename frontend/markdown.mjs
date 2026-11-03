@@ -6,7 +6,7 @@ import markdown_it_cjk_friendly from "markdown-it-cjk-friendly";
 const markdown = new MarkdownIt({ html: false, breaks: true, linkify: true })
   .use(markdown_it_cjk_friendly)
   .use(katex, { delimiters: "all", throwOnError: false, trust: false, logger: () => "ignore" });
-const MENTION_PATTERN = /(@(?:Codex|Claude|Gemini|DeepSeek|Qwen|Grok|用户)(?!\w))/g;
+const MENTION_PATTERN = /(@(?:Codex|Claude|Antigravity|DeepSeek|Qwen|Grok|用户)(?!\w))/g;
 
 // Work on text tokens so mentions never alter code, URLs, or generated math.
 markdown.renderer.rules.text = (tokens, index) => markdown.utils.escapeHtml(tokens[index].content)

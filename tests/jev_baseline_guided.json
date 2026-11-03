@@ -1243,16 +1243,16 @@
       "id": "Q01",
       "scene": "route",
       "note": "三位专家，点名第三位补充",
-      "expect": "Gemini",
-      "choice": "Gemini",
-      "acted": "Gemini",
+      "expect": "Antigravity",
+      "choice": "Antigravity",
+      "acted": "Antigravity",
       "runs": 3,
       "confidence": 1,
       "expected_probability": 1,
       "probabilities": {
         "Claude": 0,
         "DeepSeek": 0,
-        "Gemini": 1,
+        "Antigravity": 1,
         "__host__": 0,
         "__all__": 0,
         "__all_seq__": 0,
@@ -1269,16 +1269,16 @@
       "id": "Q02",
       "scene": "route",
       "note": "按排除法指代唯一没发言的人",
-      "expect": "Gemini",
-      "choice": "Gemini",
-      "acted": "Gemini",
+      "expect": "Antigravity",
+      "choice": "Antigravity",
+      "acted": "Antigravity",
       "runs": 3,
       "confidence": 0.93,
       "expected_probability": 0.93,
       "probabilities": {
         "Claude": 0,
         "DeepSeek": 0,
-        "Gemini": 0.93,
+        "Antigravity": 0.93,
         "__host__": 0.03,
         "__all__": 0.03,
         "__all_seq__": 0.01,
@@ -2221,7 +2221,7 @@
       "confidence": 0.98,
       "expected_probability": 0.98,
       "probabilities": {
-        "Gemini": 0.01,
+        "Antigravity": 0.01,
         "DeepSeek": 0.01,
         "Codex": 0,
         "Claude": 0,
@@ -2246,7 +2246,7 @@
       "confidence": 0.97,
       "expected_probability": 0.97,
       "probabilities": {
-        "Gemini": 0.03,
+        "Antigravity": 0.03,
         "DeepSeek": 0,
         "Codex": 0,
         "Claude": 0,
@@ -2271,7 +2271,7 @@
       "confidence": 0.54,
       "expected_probability": 0.52,
       "probabilities": {
-        "Gemini": 0.01,
+        "Antigravity": 0.01,
         "DeepSeek": 0,
         "Codex": 0.52,
         "Claude": 0,
@@ -2296,7 +2296,7 @@
       "confidence": 0.88,
       "expected_probability": 0.88,
       "probabilities": {
-        "Gemini": 0,
+        "Antigravity": 0,
         "DeepSeek": 0,
         "Codex": 0,
         "Claude": 0,
@@ -2321,7 +2321,7 @@
       "confidence": 1,
       "expected_probability": 1,
       "probabilities": {
-        "Gemini": 0,
+        "Antigravity": 0,
         "DeepSeek": 0,
         "Codex": 0,
         "Claude": 0,
@@ -2347,7 +2347,7 @@
       "expected_probability": 0.69,
       "probabilities": {
         "Codex": 0.01,
-        "Gemini": 0,
+        "Antigravity": 0,
         "DeepSeek": 0,
         "Claude": 0.69,
         "__host__": 0.01,
@@ -2371,7 +2371,7 @@
       "confidence": 0.9,
       "expected_probability": 0.92,
       "probabilities": {
-        "Gemini": 0,
+        "Antigravity": 0,
         "DeepSeek": 0,
         "Codex": 0.06,
         "Claude": 0,
@@ -2396,7 +2396,7 @@
       "confidence": 0.94,
       "expected_probability": 0.93,
       "probabilities": {
-        "Gemini": 0,
+        "Antigravity": 0,
         "DeepSeek": 0.07,
         "Codex": 0,
         "Claude": 0,
@@ -2421,7 +2421,7 @@
       "confidence": 0.56,
       "expected_probability": 0.43,
       "probabilities": {
-        "Gemini": 0.01,
+        "Antigravity": 0.01,
         "DeepSeek": 0,
         "Codex": 0,
         "Claude": 0,
@@ -2446,7 +2446,7 @@
       "confidence": 0.39,
       "expected_probability": 0.43,
       "probabilities": {
-        "Gemini": 0,
+        "Antigravity": 0,
         "DeepSeek": 0.18,
         "Codex": 0,
         "Claude": 0,
@@ -2471,7 +2471,7 @@
       "confidence": 1,
       "expected_probability": 1,
       "probabilities": {
-        "Gemini": 0,
+        "Antigravity": 0,
         "DeepSeek": 0,
         "Codex": 0,
         "Claude": 0,
@@ -2489,14 +2489,14 @@
       "id": "N1",
       "scene": "next_speaker",
       "note": "简报规定了顺序",
-      "expect": "Gemini",
-      "choice": "Gemini",
-      "acted": "Gemini",
+      "expect": "Antigravity",
+      "choice": "Antigravity",
+      "acted": "Antigravity",
       "runs": 3,
       "confidence": 1,
       "expected_probability": 1,
       "probabilities": {
-        "Gemini": 1,
+        "Antigravity": 1,
         "DeepSeek": 0,
         "__host__": 0
       },
@@ -2553,14 +2553,14 @@
       "id": "N4",
       "scene": "next_speaker",
       "note": "安排只排了第一位，简报规定了顺序",
-      "expect": "Gemini",
-      "choice": "Gemini",
-      "acted": "Gemini",
+      "expect": "Antigravity",
+      "choice": "Antigravity",
+      "acted": "Antigravity",
       "runs": 3,
       "confidence": 1,
       "expected_probability": 1,
       "probabilities": {
-        "Gemini": 1,
+        "Antigravity": 1,
         "DeepSeek": 0,
         "__host__": 0
       },
@@ -2617,7 +2617,7 @@
       "first": "Codex",
       "first_probabilities": {
         "Codex": 0.98,
-        "Gemini": 0.01,
+        "Antigravity": 0.01,
         "__host__": 0.01
       }
     },
@@ -2835,7 +2835,7 @@
       "first": null,
       "first_probabilities": {
         "Codex": 0.02,
-        "Gemini": 0.09,
+        "Antigravity": 0.09,
         "__host__": 0.89
       }
     },
@@ -2859,12 +2859,12 @@
         0.73,
         0.74
       ],
-      "expect_first": "Gemini",
+      "expect_first": "Antigravity",
       "first_choice": "__host__",
       "first": null,
       "first_probabilities": {
         "Codex": 0.05,
-        "Gemini": 0.43,
+        "Antigravity": 0.43,
         "__host__": 0.52
       }
     },

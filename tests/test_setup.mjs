@@ -24,7 +24,7 @@ function fixture_cli(directory, name) {
 test('agy rule matches only codiscuss website subcommands without separators', () => {
   const pattern = new RegExp(agy_rule().slice('command(regex:'.length, -1));
   assert.ok(pattern.test('codiscuss execution enter room 1 --access-file C:/data/event-1.access.json'));
-  assert.ok(pattern.test('codiscuss message post room --as Gemini --file "D:/drafts/answer one.md"'));
+  assert.ok(pattern.test('codiscuss message post room --as Antigravity --file "D:/drafts/answer one.md"'));
   assert.ok(pattern.test('codiscuss --site http://127.0.0.1:8797 execution enter room 1 --access-file C:/x.json'));
   assert.ok(pattern.test('codiscuss.cmd room view room --site http://127.0.0.1:8797'));
   for (const command of ['codiscuss --site http://x service stop', 'codiscuss --site a b room view',

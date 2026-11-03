@@ -43,11 +43,11 @@ function backup_fixture() {
       rooms: [{ id: "one", title: "备份 / 中文", goal: "目标", state_text: "分歧", state_until: 46, created_at: timestamp }],
       room_directory: [{ room_id: "one", archived: 1 }],
       topic_settings: [], topic_folders: [], room_folder_assignments: [], room_creations: [], room_briefs: [],
-      messages: Array.from({ length: 46 }, (_, index) => ({ id: index + 1, room_id: "one", author: "Gemini",
+      messages: Array.from({ length: 46 }, (_, index) => ({ id: index + 1, room_id: "one", author: "Antigravity",
         text: `# 原文 ${index}\n${"完整中文🙂".repeat(500)}\n\`\`\`\n<script>不会执行</script>\n`,
         source: "host_proxy", reply_to: index ? 1 : null, submission_id: `message-${index}`, created_at: timestamp })),
       message_details: [{ message_id: 46, kind: "chat", submitted_by: "Codex" }],
-      message_summaries: [{ message_id: 46, text: "保留摘要", author: "Gemini" }],
+      message_summaries: [{ message_id: 46, text: "保留摘要", author: "Antigravity" }],
       ...Object.fromEntries(["discussion_sessions", "discussion_conclusions", "session_requests", "task_message_sources", "session_state",
         "session_limits", "session_round_budgets", "session_options", "session_pauses"].map(name => [name, []])),
     } };
@@ -99,7 +99,7 @@ test("standard ZIP reader recovers complete Unicode JSON, transcript and referen
   assert.deepEqual(JSON.parse(decoded["完整数据.json"]), snapshot);
   const markdown = decoded["讨论记录.md"];
   for (const message of snapshot.tables.messages) assert.ok(markdown.includes(message.text));
-  for (const reference of ["代发/提交者：Codex", "简述（作者：Gemini）", "#message-1", "id=\"message-46\""])
+  for (const reference of ["代发/提交者：Codex", "简述（作者：Antigravity）", "#message-1", "id=\"message-46\""])
     assert.ok(markdown.includes(reference), reference);
   assert.ok(markdown.includes("````text"));
   assert.ok(decoded["备份说明.txt"].includes("导入房间"));

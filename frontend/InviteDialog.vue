@@ -71,10 +71,11 @@ function add_invite(name) {
 
 // The same add row as the create form: platforms first, presets on their own row.
 const PRESET_PREFIX = "preset:";
-const library_items = computed(() => [...invite_choices.value.map((name) => ({ value: name, name, ...bridge.identities[name],
+const library_items = computed(() => [...invite_choices.value.map((name) => ({ value: name, name: bridge.display_name(name), ...bridge.identities[name],
   title: invite_count(name) ? `已在场 ${invite_count(name)} 位 · 将添加新实例` : "", aria_label: `添加 ${name} 实例` })),
   ...invite_presets.value.map((preset, index) => ({ value: PRESET_PREFIX + preset.name, name: preset.label || preset.name, ...bridge.identities[bridge.platform_of(preset.name)],
-    separated: index === 0, title: preset.description || "专家预设", aria_label: `添加预设 ${preset.label || preset.name}` }))]);
+    separated: index === 0, title: preset.description || "专家预设", aria_label: `添加预设 ${preset.label || preset.name}`,
+    removable: view.value.launch.presets.some((own) => own.name === preset.name) }))]);
 
 /** Add the platform or preset a chip names. */
 function add_library_item(value) {
@@ -129,7 +130,7 @@ async function invite() {
         <div class="pb-invite-footer"><UButton label="完成" class="channel-primary-button" @click="inviting = false" /></div>
       </div>
       <form v-else class="pb-invite" aria-label="邀请专家" @submit.prevent="invite">
-        <RosterAdd label="选择 AI（可多选）" :items="library_items" @add="add_library_item" />
+        <RosterAdd label="选择 AI（可多选）" :items="library_items" @add="add_library_item" @remove="(value) => bridge.delete_expert_preset(value.slice(PRESET_PREFIX.length))" />
         <div v-if="invite_picks.length" class="pb-invite-cards">
           <div v-for="pick in invite_picks" :key="pick.id" class="pb-invite-pick">
             <ExpertCard :name="pick.name" :mode="pick.mode" :choices="['cli', 'manual']" :status="invite_status(pick.name)" @mode="pick.mode = $event" @remove="invite_picks = invite_picks.filter((item) => item !== pick)" />

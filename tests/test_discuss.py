@@ -60,10 +60,10 @@ class CliTests(unittest.TestCase):
 
     def create_discussion_room(self):
         """Create a free room with a runner host and member credentials, then open a real session."""
-        names = ("Codex", "Claude", "Gemini", "DeepSeek", "Qwen", "Grok")
+        names = ("Codex", "Claude", "Antigravity", "DeepSeek", "Qwen", "Grok")
         owner = uuid.uuid4().hex
         tokens = {name: uuid.uuid4().hex for name in names}
-        adapters = {"Codex": "codex_cli", "Claude": "claude", "Gemini": "antigravity_cli",
+        adapters = {"Codex": "codex_cli", "Claude": "claude", "Antigravity": "antigravity_cli",
                     "DeepSeek": "api", "Qwen": "api", "Grok": "api"}
         members = [{"name": name, "token": tokens[name], "adapter": adapters[name], "access": "runner"} for name in names]
         payload = {"title": "CLI 讨论会话", "goal": "验证讨论回答绑定", "mode": "free", "host": "Codex",
@@ -201,9 +201,9 @@ class CliTests(unittest.TestCase):
         self.assertEqual(preview["body"]["request_ids"], [3])
         preview = self.cli(*args, "--execution", 4, "--to", "Codex", "--to", "Codex", "--submission-id", str(uuid.uuid4()), "--dry-run")
         self.assertEqual(preview["body"]["to"], ["Codex"])
-        preview = self.cli("message", "post", room["id"], "--as", "Claude-评审", "--kind", "chat", "--body", "x", "--to", "Codex-2",
+        preview = self.cli("message", "post", room["id"], "--as", "Claude-review", "--kind", "chat", "--body", "x", "--to", "Codex-2",
                            "--execution", 4, "--submission-id", str(uuid.uuid4()), "--dry-run")
-        self.assertEqual((preview["body"]["author"], preview["body"]["to"]), ("Claude-评审", ["Codex-2"]))
+        self.assertEqual((preview["body"]["author"], preview["body"]["to"]), ("Claude-review", ["Codex-2"]))
         self.assertIn("平台名-后缀", str(self.rejected(["message", "post", room["id"], "--as", "Claudex", "--body", "x",
                                                     "--submission-id", str(uuid.uuid4()), "--dry-run"])))
 
@@ -346,7 +346,7 @@ class CliTests(unittest.TestCase):
         self.cli("message", "post", self.room, "--as", "用户", "--body", "请补充依据", "--submission-id", str(uuid.uuid4()))
         roster = self.cli("turn", "roster", self.room)
         source = roster["host_requests"][0]
-        args = ["turn", "ask", self.room, "--as", "Codex", "--request", source["id"], "--expert", "Gemini",
+        args = ["turn", "ask", self.room, "--as", "Codex", "--request", source["id"], "--expert", "Antigravity",
                 "--roster", roster["revision"], "--submission-id", str(uuid.uuid4())]
         result = self.cli(*args)
         self.assertEqual((result["request"]["purpose"], result["request"]["message_id"]), ("ask", source["message_id"]))
@@ -356,18 +356,18 @@ class CliTests(unittest.TestCase):
         """A plan file queues later experts; an answer relays without returning to the host."""
         self.create_discussion_room()
         plan = json.dumps([{"expert": name, "question": "先答" if name == "Codex" else "再答"}
-                           for name in ("Codex", "Gemini", "Claude", "DeepSeek", "Qwen", "Grok")], ensure_ascii=False)
+                           for name in ("Codex", "Antigravity", "Claude", "DeepSeek", "Qwen", "Grok")], ensure_ascii=False)
         roster = self.cli("turn", "roster", self.room)
-        self.assertEqual(sorted(roster["waiting"]), ["Claude", "DeepSeek", "Gemini", "Grok", "Qwen"])
+        self.assertEqual(sorted(roster["waiting"]), ["Antigravity", "Claude", "DeepSeek", "Grok", "Qwen"])
         created = self.cli("turn", "create", self.room, "--plan-file", "-", "--as", "Codex", "--roster", roster["revision"],
                            "--submission-id", str(uuid.uuid4()), stdin=plan)
         current = self.cli("room", "view", self.room)
-        self.assertEqual((current["current_turn"]["expert"], [item["expert"] for item in current["queued_turns"]]), ("Codex", ["Gemini", "Claude", "DeepSeek", "Qwen", "Grok"]))
+        self.assertEqual((current["current_turn"]["expert"], [item["expert"] for item in current["queued_turns"]]), ("Codex", ["Antigravity", "Claude", "DeepSeek", "Qwen", "Grok"]))
         # The owner reads the speaking order, then moves Grok to the front of the queue against that revision.
         order = self.cli("turn", "order", self.room)
-        self.assertEqual(order["movable"], ["Gemini", "Claude", "DeepSeek", "Qwen", "Grok"])
+        self.assertEqual(order["movable"], ["Antigravity", "Claude", "DeepSeek", "Qwen", "Grok"])
         self.assertEqual(self.rejected(["turn", "reorder", self.room, "--revision", "stale", *[part for name in order["movable"] for part in ("--member", name)]], 1)["http_status"], 409)
-        moved = ["Grok", "Gemini", "Claude", "DeepSeek", "Qwen"]
+        moved = ["Grok", "Antigravity", "Claude", "DeepSeek", "Qwen"]
         self.cli("turn", "reorder", self.room, "--revision", order["revision"], *[part for name in moved for part in ("--member", name)])
         self.assertEqual([item["expert"] for item in self.cli("room", "view", self.room)["queued_turns"]], moved)
         self.assertEqual(self.rejected(["turn", "continue", self.room, "--as", "Codex", "--roster", "stale"], 1)["http_status"], 409)
@@ -376,7 +376,7 @@ class CliTests(unittest.TestCase):
                  "--summary", "摘要", "--submission-id", str(uuid.uuid4()))
         current = self.cli("room", "view", self.room)
         self.assertEqual((current["current_turn"]["expert"], [item["expert"] for item in current["queued_turns"]]),
-                         ("Grok", ["Gemini", "Claude", "DeepSeek", "Qwen"]))
+                         ("Grok", ["Antigravity", "Claude", "DeepSeek", "Qwen"]))
         self.rejected(["turn", "create", self.room, "--plan-file", "-", "--expert", "Codex", "--as", "Codex",
                        "--roster", "stale", "--submission-id", str(uuid.uuid4())])
 
@@ -444,14 +444,14 @@ class CliTests(unittest.TestCase):
         """Same identifier replays, changed content conflicts, and reads remain exact."""
         turn = self.plan_speech()
         execution = self.reserve_execution(turn)
-        args = ["message", "post", self.room, "--body", "@Gemini 成本 &= #1\n原文", "--as", "Codex",
+        args = ["message", "post", self.room, "--body", "@Antigravity 成本 &= #1\n原文", "--as", "Codex",
                 "--submission-id", "retry-original", "--execution", str(execution)]
         first = self.cli(*args)
         repeated = self.cli(*args)
         self.assertTrue(repeated["duplicate"])
         self.assertEqual(first["message"], repeated["message"])
         original = self.cli("message", "view", self.room, first["message"]["id"])
-        self.assertEqual(original["text"], "@Gemini 成本 &= #1\n原文")
+        self.assertEqual(original["text"], "@Antigravity 成本 &= #1\n原文")
         found = self.cli("message", "list", self.room, "--submission-id", "retry-original")
         self.assertEqual(found["messages"], [original])
         self.assertEqual(self.cli("message", "list", self.room, "--submission-id", "unknown-result")["messages"], [])
@@ -508,7 +508,7 @@ class CliTests(unittest.TestCase):
         self.assertEqual(self.cli("message", "list", other, "--submission-id", "room-a-message")["messages"], [])
         self.rejected(["message", "post", other, "--body", "跨房间引用", "--reply-to", message["id"],
                        "--as", "Codex", "--submission-id", "bad-reference"], 1)
-        self.rejected(["room", "update", self.room, "--focus", "错误操作者", "--as", "Gemini"], 1)
+        self.rejected(["room", "update", self.room, "--focus", "错误操作者", "--as", "Antigravity"], 1)
 
     def test_creation_response_loss_recovers_without_overwriting_later_edits(self):
         """A committed but unacknowledged creation is found and replayed exactly once."""
@@ -564,7 +564,7 @@ class CliContractTests(unittest.TestCase):
         args, _ = self.parse(["review", "roster", "room"])
         self.assertEqual(discuss.plan_review(args).path, "/api/rooms/room/reviews/roster")
         args, _ = self.parse(["message", "post", "room", "--as", "Claude", "--body", "实现", "--submission-id", "review-test-123",
-                              "--to", "Gemini", "--next-review", "Codex", "--review-scope", "功能", "--review-roster", "revision"])
+                              "--to", "Antigravity", "--next-review", "Codex", "--review-scope", "功能", "--review-roster", "revision"])
         plan = discuss.plan_message(args)
         self.assertEqual((plan.body["next_review"], plan.body["review_scope"], plan.body["review_roster"]), ("Codex", "功能", "revision"))
         args, _ = self.parse(["member", "review-capability", "room", "7"])

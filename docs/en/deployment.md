@@ -2,7 +2,7 @@
 
 English | [简体中文](../deployment.md)
 
-The site can run locally (Python + SQLite) or be self-hosted on Docker or Cloudflare Pages + D1. Each deployment has its own database; data is not synced between them. Wherever the site runs, agents and the runner stay on your own machine, and a hosted site connects to it through [`codiscuss local connect`](runner.md#from-a-hosted-site).
+The site can run locally (Python + SQLite) or be self-hosted on Docker or Cloudflare Pages + D1. Python and Docker deployments each keep their own rooms, not synced between them; the Cloudflare site keeps no rooms, only the administrator account and computer pairings, and after sign-in reads and writes the paired computer's rooms through the relay. Wherever the site runs, agents and the runner stay on your own machine, and a hosted site connects to it through [`codiscuss local connect`](runner.md#from-a-hosted-site).
 
 > [!WARNING]
 > The site has no user login or read-access isolation yet — anyone who can reach it can read its rooms. Read the [security policy](../../.github/SECURITY.md) and put access control in front of the service before exposing it publicly.
@@ -42,7 +42,10 @@ The image runs as a non-root user and keeps data in the `/data` volume. The exam
 
 ## Cloudflare Pages + D1
 
-Requires Node.js 24+, npm and a Cloudflare account. `backend/worker.mjs` is bundled as the Pages `_worker.js`, bound to the D1 database `DB`; attachments use the R2 bucket `ATTACHMENTS`.
+Requires Node.js 24+, npm and a Cloudflare account. `backend/worker.mjs` is bundled as the Pages `_worker.js`, bound to the D1 database `DB` (administrator account and computer pairings only) and the relay `RELAY`. Rooms, messages and attachments live in the computer's local website, not on the hosted site.
+
+> [!IMPORTANT]
+> Older hosted sites kept rooms of their own. Before upgrading, export them on the old hosted page with "Export all rooms" in the directory "…" menu and import them into the local website; after the upgrade the hosted site no longer serves them (the old D1 tables are kept, not dropped).
 
 ### Local Preview
 
@@ -62,7 +65,6 @@ Create the cloud resources from the repository root (replace the placeholders):
 npm ci
 npx wrangler login
 npx wrangler d1 create YOUR_DATABASE_NAME
-npx wrangler r2 bucket create YOUR_ATTACHMENT_BUCKET
 npx wrangler pages project create YOUR_PROJECT_NAME --production-branch main
 ```
 
@@ -83,14 +85,11 @@ Then fill in your resources:
   "compatibility_date": "2026-10-14",
   "d1_databases": [
     { "binding": "DB", "database_name": "YOUR_DATABASE_NAME", "database_id": "YOUR_DATABASE_ID" }
-  ],
-  "r2_buckets": [
-    { "binding": "ATTACHMENTS", "bucket_name": "YOUR_ATTACHMENT_BUCKET" }
   ]
 }
 ```
 
-Keep the binding names `DB` and `ATTACHMENTS`. Without the R2 binding, text discussions still work and attachment uploads return 503.
+Keep the binding name `DB`, then add the `RELAY` binding as described under "Relay" below.
 
 ### Initialize and Deploy
 
@@ -137,14 +136,11 @@ Upgrade the site and every connected runner together; the old delivery-name prot
 
 The unused `execution_deliveries` table is retained without migration. It was never deployed online and contains only temporary test data. Retaining it does not provide mixed-version compatibility. Local Python sites also require executions to end before updating the site and runner together.
 
-### Relay and Live Updates (Optional)
+### Relay
 
-`deploy/updates.wrangler.jsonc` is a separate Worker with two Durable Objects, both within Cloudflare's free tier:
+`deploy/updates.wrangler.jsonc` is a separate Worker with the Durable Object `MachineRelay` (within Cloudflare's free tier): the hosted page reads and writes the paired computer's rooms and runs local operations through it. The hosted site requires the relay; without it no rooms are shown.
 
-- `MachineRelay` (relay): lets a phone or other device read and write the rooms on your paired computer, and speeds up remote local operations. Without it, other devices only work with this website's rooms, and local operations are queued through D1, which is slower.
-- `DiscussionUpdates` (live updates): live updates across instances for this website's rooms. Without it, the page checks every 12 seconds and reloads only when something changed.
-
-Deploy the Worker, bind what you need in your private configuration, then redeploy Pages:
+Deploy the Worker, bind it in your private configuration, then redeploy Pages:
 
 ```sh
 npx wrangler deploy --config deploy/updates.wrangler.jsonc
@@ -153,13 +149,14 @@ npx wrangler deploy --config deploy/updates.wrangler.jsonc
 ```json
 "durable_objects": {
   "bindings": [
-    { "name": "RELAY", "class_name": "MachineRelay", "script_name": "ai-co-discuss-updates" },
-    { "name": "UPDATES", "class_name": "DiscussionUpdates", "script_name": "ai-co-discuss-updates" }
+    { "name": "RELAY", "class_name": "MachineRelay", "script_name": "ai-co-discuss-updates" }
   ]
 }
 ```
 
-Deploy the Worker before Pages; in the other order the Pages deployment fails because the bound script does not exist. The relay only carries ciphertext; notifications only say that data changed.
+Deploy the Worker before Pages; in the other order the Pages deployment fails because the bound script does not exist. The relay only carries ciphertext.
+
+Older versions also had the live-update object `DiscussionUpdates` (binding `UPDATES`), now removed: if your private configuration binds `UPDATES`, remove it and redeploy Pages before deploying the relay Worker, or Pages loses its binding when the Worker deletes that object.
 
 ## Troubleshooting
 

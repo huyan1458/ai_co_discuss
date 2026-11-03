@@ -39,7 +39,7 @@ class RuntimeTests(unittest.TestCase):
             self.thread.start()
             self.base = f"http://127.0.0.1:{self.server.server_port}"
         self.owner = uuid.uuid4().hex
-        self.tokens = {name: uuid.uuid4().hex for name in ("Codex", "Claude", "Gemini")}
+        self.tokens = {name: uuid.uuid4().hex for name in ("Codex", "Claude", "Antigravity")}
         status, room = self.request("/api/rooms", {
             "title": "会话运行验证", "goal": "验证讨论会话生命周期", "mode": "free", "host": "Codex",
             "members": [
@@ -206,7 +206,7 @@ class RuntimeTests(unittest.TestCase):
     def test_member_can_fail_only_its_own_active_execution(self):
         """An executing member may report its failure, while other lifecycle actions stay owner-only."""
         member_token = self.invite("Claude")
-        other_token = self.invite("Gemini")
+        other_token = self.invite("Antigravity")
         self.request(self.path + "/messages", {
             "author": "用户", "text": "请 Claude 处理", "to": ["Claude"],
             "submission_id": uuid.uuid4().hex,
@@ -248,25 +248,25 @@ class RuntimeTests(unittest.TestCase):
         status, plan = self.arrange([{"expert": "Claude", "question": "当前发言"}])
         self.assertEqual(status, 201, plan)
         stale_roster = self.roster()
-        self.invite("Gemini")
+        self.invite("Antigravity")
         stale = self.request(self.path + "/turns", {
-            "actor": "Codex", "turns": [{"expert": "Gemini", "question": "旧队列"}],
+            "actor": "Codex", "turns": [{"expert": "Antigravity", "question": "旧队列"}],
             "roster": stale_roster["revision"], "submission_id": uuid.uuid4().hex,
         }, self.tokens["Codex"])
         self.assertEqual(stale[0], 409)
         turns = self.request(self.path + "/turns")[1]["turns"]
         self.assertEqual([(item["expert"], item["status"]) for item in turns if item["purpose"] == "discuss"],
-                         [("Claude", "open"), ("Gemini", "queued")])
+                         [("Claude", "open"), ("Antigravity", "queued")])
         self.assertEqual(self.request(self.path + "/discussion")[1]["session"]["status"], "active")
 
     def test_member_away_recall_and_removal_update_the_active_session_roster(self):
         """Away, recall with a fresh credential, and removal keep the session active and update who can be planned."""
         self.start_session()
         claude = self.invite("Claude")
-        self.invite("Gemini")
+        self.invite("Antigravity")
         status, plan = self.arrange([
             {"expert": "Claude", "question": "Claude 发言"},
-            {"expert": "Gemini", "question": "Gemini 发言"},
+            {"expert": "Antigravity", "question": "Antigravity 发言"},
         ])
         self.assertEqual(status, 201, plan)
         claude_id = self.member_id("Claude")
@@ -277,20 +277,20 @@ class RuntimeTests(unittest.TestCase):
         renewed = uuid.uuid4().hex
         self.assertEqual(self.request(f"{self.path}/members/{claude_id}", {"action": "active", "token": renewed}, self.owner)[0], 200)
         self.assertIn("Claude", self.roster()["waiting"])
-        gemini_id = self.member_id("Gemini")
+        gemini_id = self.member_id("Antigravity")
         self.assertEqual(self.request(f"{self.path}/members/{gemini_id}", {"action": "remove"}, self.owner)[0], 200)
-        self.assertNotIn("Gemini", self.roster()["waiting"])
+        self.assertNotIn("Antigravity", self.roster()["waiting"])
         turns = self.request(self.path + "/turns")[1]["turns"]
-        self.assertFalse(any(item["expert"] == "Gemini" and item["status"] in ("open", "queued") for item in turns))
+        self.assertFalse(any(item["expert"] == "Antigravity" and item["status"] in ("open", "queued") for item in turns))
 
     def test_host_can_skip_a_failed_expert_and_resume_the_queued_plan(self):
         """A failed request remains historical; a revision-bound host continuation opens the next queued expert."""
         self.start_session()
         self.invite("Claude")
-        self.invite("Gemini")
+        self.invite("Antigravity")
         status, plan = self.arrange([
             {"expert": "Claude", "question": "失败的发言"},
-            {"expert": "Gemini", "question": "等待中的发言"},
+            {"expert": "Antigravity", "question": "等待中的发言"},
         ])
         self.assertEqual(status, 201, plan)
         execution = self.reserve("Claude")[1]
@@ -302,7 +302,7 @@ class RuntimeTests(unittest.TestCase):
         self.assertEqual(continued[0], 200, continued[1])
         turns = self.request(self.path + "/turns")[1]["turns"]
         self.assertEqual([(item["expert"], item["status"]) for item in turns if item["purpose"] == "discuss"],
-                         [("Claude", "failed"), ("Gemini", "open")])
+                         [("Claude", "failed"), ("Antigravity", "open")])
 
     def test_session_roster_revision_expires_after_direct_question_and_answer(self):
         """Visible interjections and their answers invalidate a previously read roster."""
@@ -331,26 +331,26 @@ class RuntimeTests(unittest.TestCase):
         """The session limit counts actual speakers, includes a scheduled host, and cancels a repeated queued expert."""
         session = self.start_session({"max_rounds": 1})["session"]
         self.invite("Claude")
-        self.invite("Gemini")
+        self.invite("Antigravity")
         roster = self.roster()
         payload = {"actor": "Codex", "turns": [
             {"expert": "Codex", "question": "主持人首轮发言"},
             {"expert": "Claude", "question": "Claude 首轮发言"},
-            {"expert": "Gemini", "question": "Gemini 首轮发言"},
+            {"expert": "Antigravity", "question": "Antigravity 首轮发言"},
             {"expert": "Claude", "question": "Claude 下一轮排队"},
         ], "roster": roster["revision"], "submission_id": uuid.uuid4().hex}
         status, plan = self.request(self.path + "/turns", payload, self.tokens["Codex"])
         self.assertEqual(status, 201, plan)
 
         last_answer = None
-        for name in ("Codex", "Claude", "Gemini"):
+        for name in ("Codex", "Claude", "Antigravity"):
             execution = self.reserve(name)[1]
             last_answer = {"author": name, "source": "cli", "kind": "chat",
                            "text": f"{name} 的首轮观点", "execution_id": execution["id"],
                            "submission_id": uuid.uuid4().hex}
             answer_status, answer = self.request(self.path + "/messages", last_answer, self.tokens[name])
             self.assertEqual(answer_status, 201, answer)
-            if name != "Gemini":
+            if name != "Antigravity":
                 self.assertEqual(self.request(self.path + "/discussion")[1]["session"]["status"], "active")
 
         self.assertIsNone(self.request(self.path + "/discussion")[1]["session"])
@@ -361,10 +361,10 @@ class RuntimeTests(unittest.TestCase):
             host_pending = connection.execute("SELECT COUNT(*) FROM session_requests WHERE session_id=? AND purpose='discuss_host' AND status='open'", (session["id"],)).fetchone()[0]
             stop_reason = connection.execute("SELECT stop_reason FROM session_limits WHERE session_id=?", (session["id"],)).fetchone()[0]
         self.assertEqual([(row[0], row[1]) for row in rows], [
-            ("Codex", "answered"), ("Claude", "answered"), ("Gemini", "answered"), ("Claude", "cancelled"),
+            ("Codex", "answered"), ("Claude", "answered"), ("Antigravity", "answered"), ("Claude", "cancelled"),
         ])
         self.assertEqual((host_pending, stop_reason), (0, "round_limit"))
-        self.assertEqual(self.request(self.path + "/messages", last_answer, self.tokens["Gemini"])[0], 200)
+        self.assertEqual(self.request(self.path + "/messages", last_answer, self.tokens["Antigravity"])[0], 200)
 
     def test_host_plan_completes_only_its_bound_request(self):
         """A user message arriving during host work remains pending after that host's plan is saved."""

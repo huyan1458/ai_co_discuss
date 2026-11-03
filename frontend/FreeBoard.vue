@@ -166,10 +166,10 @@ const describing = ref(""), describing_saving = ref(false);
 watch(() => room.value.id, () => { inviting.value = false; describing.value = ""; });
 
 /** Save one member's description in this room, and optionally as its platform's default for later rooms. */
-async function save_description({ text, as_template }) {
+async function save_description({ text, label, as_template }) {
   describing_saving.value = true;
   try {
-    await bridge.describe_member(describing.value, text);
+    await bridge.describe_member(describing.value, text, label);
     if (as_template) bridge.save_description_template(describing.value, text);
     describing.value = "";
   } catch { /* The controller shows the error as a toast. */ }
@@ -216,7 +216,7 @@ watch(() => room.value.id, () => { starting.value = false; });
           <template v-for="member in [member_named(item.name)].filter(Boolean)" :key="member.id">
             <UAvatar :src="bridge.identities[member.name]?.icon" :text="bridge.identities[member.name]?.initials" :alt="member.name" size="xs" class="channel-avatar" :class="bridge.identities[member.name]?.style" />
             <div class="pb-member-body">
-              <div class="pb-member-name" :title="room.descriptions?.[member.name] || undefined">{{ bridge.display_name(member.name) }}<UIcon v-if="member.role === 'host'" name="i-lucide-crown" title="主持人" /><small :title="member_model(member) || undefined">{{ member_tag(member) }}</small></div>
+              <div class="pb-member-name" :title="room.descriptions?.[member.name] || undefined">{{ bridge.display_name(member.name) }}<span v-if="bridge.display_name(member.name) !== member.name" class="member-id">{{ member.name }}</span><UIcon v-if="member.role === 'host'" name="i-lucide-crown" title="主持人" /><small :title="member_model(member) || undefined">{{ member_tag(member) }}</small></div>
               <div v-if="member_setup(member)" class="pb-member-model" :title="bridge.participant_session_hint(member.name, room, view.launch.room_models)">{{ member_setup(member) }}</div>
               <div class="pb-member-status" :class="`is-${member_tone(member)}`"><span class="pb-dot"></span><span class="pb-member-status-text" :title="member.execution?.status === 'failed' ? member.execution.result : member.held_until ? member_status(member, item.state) : undefined">{{ member_status(member, item.state) }}</span></div>
             </div>
@@ -244,8 +244,8 @@ watch(() => room.value.id, () => { starting.value = false; });
     </section>
   <StartDiscussionDialog v-model:open="starting" />
   <InviteDialog v-model:open="inviting" description="新成员加入后不打断其他成员；点卡片翻面可设置软件、模型、项目权限和要续接的已有会话。" />
-  <MemberDescriptionDialog :open="Boolean(describing)" :name="describing || ' '" :platform="describing ? bridge.platform_of(describing) : ''"
-    :text="room.descriptions?.[describing] || ''" :template="describing ? bridge.description_template(describing) : ''" :saving="describing_saving"
+  <MemberDescriptionDialog :open="Boolean(describing)" :name="describing || ' '" :platform="describing ? bridge.default_name(bridge.platform_of(describing)) : ''" :default_label="describing ? bridge.default_name(describing) : ''"
+    :text="room.descriptions?.[describing] || ''" :label="room.labels?.[describing] || ''" :template="describing ? bridge.description_template(describing) : ''" :saving="describing_saving"
     @update:open="(open) => { if (!open) describing = ''; }" @save="save_description" />
   </div>
 </template>
@@ -253,4 +253,6 @@ watch(() => room.value.id, () => { starting.value = false; });
 <style scoped>
 .pb-member.is-away { opacity: .6; }
 .pb-member-model { margin: 2px 0; color: var(--ui-text-muted); font-size: 11px; line-height: 1.5; overflow-wrap: anywhere; }
+/* A member with a nickname also shows its ID, which AI messages, @ and records use. */
+.member-id { margin-left: 4px; color: var(--ui-text-muted); font-size: 11px; font-weight: 400; }
 </style>

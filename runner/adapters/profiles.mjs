@@ -4,7 +4,7 @@
  * software's own module (see index.mjs). Product code reads these fields, never a software name (AGENTS.md red line 9).
  *
  * Fields of one profile:
- * - `platform`: the AI platform it serves (`Codex`, `Claude`, `Gemini`); '' serves any platform (model API).
+ * - `platform`: the AI platform it serves (`Codex`, `Claude`, `Antigravity`); '' serves any platform (model API).
  * - `label`: display name. `kind`: `cli` (a process the runner starts), `app` (a desktop App) or `api` (the runner's own call).
  * - `location`: the config field locating the installed software (`executable`, `ipc_directory`), or '' when none.
  * - `fields`: further config fields the user may set for it.
@@ -62,7 +62,7 @@ export const ADAPTER_PROFILES = {
     capabilities: { delivery: PROCESS, rewind: 'cut', project: true, access_env: true },
   },
   antigravity_cli: {
-    platform: 'Gemini', label: 'Antigravity CLI', kind: 'cli', location: 'executable', fields: ['project_id', 'project_name'],
+    platform: 'Antigravity', label: 'Antigravity CLI', kind: 'cli', location: 'executable', fields: ['project_id', 'project_name'],
     efforts: ['low', 'medium', 'high', 'xhigh', 'max'], efforts_per_model: true, models: true, defaults_by_query: true,
     // Headless agy refuses `--mode auto` ("not available for this account", 1.4.10–1.4.11), so 自动 is not offered.
     access_levels: ['read', 'write', 'full'], per_tool_allow: true,
@@ -79,7 +79,7 @@ export const ADAPTER_PROFILES = {
       + '多步任务中，在关键转折处用一句话写出进展再继续：agy 不输出思考过程，网页只能靠这些话显示你做到哪一步。',
   },
   antigravity: {
-    platform: 'Gemini', label: 'Antigravity App', kind: 'app', location: 'ipc_directory', fields: ['project_id', 'project_name'],
+    platform: 'Antigravity', label: 'Antigravity App', kind: 'app', location: 'ipc_directory', fields: ['project_id', 'project_name'],
     efforts: null, models: false, access_levels: null, per_tool_allow: false,
     client: 'antigravity', adopt: 'session', host_existing: true,
     capabilities: { delivery: IN_APP, rewind: 'kept', project: true },

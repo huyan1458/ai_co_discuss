@@ -24,7 +24,7 @@ class DiscussionTests(unittest.TestCase):
     def setUp(self):
         """Use an explicit test Worker URL, or start isolated local storage."""
         self.owner = uuid.uuid4().hex
-        self.member_tokens = {name: uuid.uuid4().hex for name in ("Codex", "Claude", "Gemini", "DeepSeek", "Qwen")}
+        self.member_tokens = {name: uuid.uuid4().hex for name in ("Codex", "Claude", "Antigravity", "DeepSeek", "Qwen")}
         # Members the local service wakes; the others answer as registered manual members.
         self.runner_members = {"Codex"}
         self.base = os.getenv("DISCUSS_TEST_URL", "").rstrip("/")
@@ -51,7 +51,7 @@ class DiscussionTests(unittest.TestCase):
 
     def create_group_room(self):
         """Create an isolated group request without starting a runner or model, also usable against a test Worker."""
-        names = ["Claude", "Codex", "Gemini"]
+        names = ["Claude", "Codex", "Antigravity"]
         status, room = self.request("/api/rooms", {"title": "全体安排校验", "mode": "free", "host": "Claude",
             "members": [{"name": name, "access": "runner", "token": self.member_tokens[name]} for name in names]})
         self.assertEqual(status, 201, room)
@@ -93,7 +93,7 @@ class DiscussionTests(unittest.TestCase):
                 self.assertEqual(self.request(url, {"action": "all"})[0], 400)
                 self.assertEqual(self.request(url, {"action": "sequential"})[0], 400)
                 if change == "members":
-                    target = next(member for member in plan["members"] if member["name"] == "Gemini")
+                    target = next(member for member in plan["members"] if member["name"] == "Antigravity")
                     self.assertEqual(self.request(f"{path}/members/{target['id']}", {"action": "away"})[0], 200)
                 elif change == "order":
                     order = self.request(path + "/speaking-order")[1]
@@ -373,8 +373,8 @@ class DiscussionTests(unittest.TestCase):
         self.configure_host(start=False)
         base = f"/api/rooms/{self.room['id']}"
         originals = [self.post(f"原文 {index} 🙂\n保留换行", f"backup-{index}")[1]["message"] for index in range(45)]
-        payload = {"author": "Gemini", "source": "cli", "text": "完整专家意见",
-                   "summary": "摘要", "summary_by": "Gemini", "submission_id": "backup-answer", "reply_to": originals[0]["id"]}
+        payload = {"author": "Antigravity", "source": "cli", "text": "完整专家意见",
+                   "summary": "摘要", "summary_by": "Antigravity", "submission_id": "backup-answer", "reply_to": originals[0]["id"]}
         status, answer = self.request(base + "/messages", payload)
         self.assertEqual(status, 201)
         answer = answer["message"]
@@ -396,8 +396,8 @@ class DiscussionTests(unittest.TestCase):
             self.assertEqual(row, {key: original[key] for key in row})
         details = next(row for row in tables["message_details"] if row["message_id"] == answer["id"])
         summary = next(row for row in tables["message_summaries"] if row["message_id"] == answer["id"])
-        self.assertEqual(details, {"message_id": answer["id"], "kind": "chat", "submitted_by": "Gemini"})
-        self.assertEqual((summary["text"], summary["author"]), ("摘要", "Gemini"))
+        self.assertEqual(details, {"message_id": answer["id"], "kind": "chat", "submitted_by": "Antigravity"})
+        self.assertEqual((summary["text"], summary["author"]), ("摘要", "Antigravity"))
         self.assertEqual(tables["rooms"][0]["state_text"], "保留分歧")
         self.assertEqual(tables["room_briefs"][0]["text"], "主持简报")
         self.assertEqual(tables["topic_settings"][0]["host"], "Codex")
@@ -436,13 +436,13 @@ class DiscussionTests(unittest.TestCase):
         file = json.loads(self.attachment_request(base + "/attachments?" + upload, data)[2])["attachment"]
         self.request(base + "/messages", {"author": "用户", "text": f"补充 #{first['id']}", "attachment_ids": [file["id"]],
                                           "submission_id": "import-second", "reply_to": first["id"]})
-        payload = {"author": "Gemini", "source": "cli", "text": f"回应 #{first['id']}",
-                   "summary": f"摘要 #{first['id']}", "summary_by": "Gemini", "submission_id": "import-answer"}
+        payload = {"author": "Antigravity", "source": "cli", "text": f"回应 #{first['id']}",
+                   "summary": f"摘要 #{first['id']}", "summary_by": "Antigravity", "submission_id": "import-answer"}
         answer = self.request(base + "/messages", payload)[1]["message"]
         backup = json.loads(json.dumps(self.request(base + "/backup")[1]).replace(self.room["id"], "importedroom"))
         backup["tables"]["scheduler_decisions"] = [{"id": 1, "after_message_id": first["id"], "kind": "interjection", "label": "交给主持人 Codex", "confidence": 0.66,
-                                                    "applied": 0, "provider": "jev", "created_at": "2026-10-25T00:00:00Z", "feedback": "bad", "should_be": "Gemini",
-                                                    "note": "该问 Gemini", "context": "{\"prompt\": 2}"}]
+                                                    "applied": 0, "provider": "jev", "created_at": "2026-10-25T00:00:00Z", "feedback": "bad", "should_be": "Antigravity",
+                                                    "note": "该问 Antigravity", "context": "{\"prompt\": 2}"}]
         backup["tables"]["topic_folders"] = [{"id": "sourcefolder", "name": "来源文件夹", "position": 1}]
         self.post("占用新编号", "import-later")
         status, result = self.request("/api/rooms/import", backup)
@@ -454,13 +454,13 @@ class DiscussionTests(unittest.TestCase):
         self.assertIsNone(room["folder_id"])
         self.assertEqual(self.request("/api/rooms")[1]["folders"], [])
         self.assertEqual([(item["feedback"], item["should_be"], item["note"], item["context"]) for item in room["scheduler_decisions"]],
-                         [("bad", "Gemini", "该问 Gemini", "{\"prompt\": 2}")])
+                         [("bad", "Antigravity", "该问 Antigravity", "{\"prompt\": 2}")])
         messages = self.request("/api/rooms/importedroom/messages")[1]["messages"]
         new_first, second, new_answer = sorted(messages, key=lambda message: message["id"])
         self.assertGreater(new_first["id"], answer["id"] + 1)
         self.assertEqual((second["text"], second["reply_to"]), (f"补充 #{new_first['id']}", new_first["id"]))
         self.assertEqual((new_answer["text"], new_answer["summary"], new_answer["submitted_by"]),
-                         (f"回应 #{new_first['id']}", f"摘要 #{new_first['id']}", "Gemini"))
+                         (f"回应 #{new_first['id']}", f"摘要 #{new_first['id']}", "Antigravity"))
         self.assertNotIn("turn_id", new_answer)
         self.assertIsNone(room["current_turn"])
         path = f"/api/rooms/importedroom/attachments/{result['attachments'][file['id']]}"
@@ -472,8 +472,8 @@ class DiscussionTests(unittest.TestCase):
 
     def test_room_backup_v2_imports_sessions_as_read_only_history(self):
         """Session history and task provenance are remapped without importing executable work."""
-        self.runner_members.add("Gemini")
-        self.configure_host(experts={"Codex": "cli", "Gemini": "cli"})
+        self.runner_members.add("Antigravity")
+        self.configure_host(experts={"Codex": "cli", "Antigravity": "cli"})
         base = f"/api/rooms/{self.room['id']}"
         before = self.post("讨论前的问题 #17", "session-backup-before")[1]["message"]
         host_execution = self.reserve_member("Codex")["execution_id"]
@@ -489,7 +489,7 @@ class DiscussionTests(unittest.TestCase):
         status, result = self.schedule("session-backup-plan")
         self.assertEqual(status, 201, result)
         plan = result["turn"]
-        execution = self.reserve_member("Gemini")["execution_id"]
+        execution = self.reserve_member("Antigravity")["execution_id"]
         self.assertNotEqual(host_execution, execution)
         with closing(connect_db(self.database)) as connection, connection:
             host_request = connection.execute("SELECT id FROM member_requests WHERE purpose='discuss_host' ORDER BY id LIMIT 1").fetchone()[0]
@@ -744,12 +744,12 @@ class DiscussionTests(unittest.TestCase):
         self.post("引用原文", "delete-reply-001", original["id"])
         turn = self.schedule()[1]["turn"]
         base = f"/api/rooms/{self.room['id']}"
-        answer = {"author": "Gemini", "text": "回答", "summary": "回答摘要", "submission_id": "delete-answer-001", "request_ids": [turn["member_request_id"]]}
+        answer = {"author": "Antigravity", "text": "回答", "summary": "回答摘要", "submission_id": "delete-answer-001", "request_ids": [turn["member_request_id"]]}
         self.assertEqual(self.request(base + "/messages", answer)[0], 201)
         self.assertEqual(self.request(base + "/state", {"actor": "Codex", "text": "状态", "brief": "主持简报"})[0], 200)
         other = self.request("/api/rooms", {"title": "保留频道"})[1]
         self.assertEqual(self.request(base + "/delete", {"actor": "用户", "confirm_title": "错误"})[0], 400)
-        self.assertEqual(self.request(base + "/delete", {"actor": "Gemini", "confirm_title": self.room["title"]})[0], 403)
+        self.assertEqual(self.request(base + "/delete", {"actor": "Antigravity", "confirm_title": self.room["title"]})[0], 403)
         self.assertEqual(self.request(base)[1]["message_count"], 3)
         self.assertEqual(self.request(base + "/delete", {"actor": "用户", "confirm_title": self.room["title"]})[0], 200)
         for suffix in ("", "/messages", f"/messages/{original['id']}", "/turns"):
@@ -779,9 +779,9 @@ class DiscussionTests(unittest.TestCase):
 
     def test_cli_publish_is_idempotent_and_rejects_changed_payload(self):
         """An execution's exact retries retain one original CLI record, even after completion."""
-        self.configure_host(experts={"Codex": "cli", "Gemini": "cli"})
-        payload = {"author": "Gemini", "text": "CLI 原文 & #测试", "submission_id": "cli-once-001", "source": "cli", "kind": "chat"}
-        payload.update(self.prepare_speech("Gemini"))
+        self.configure_host(experts={"Codex": "cli", "Antigravity": "cli"})
+        payload = {"author": "Antigravity", "text": "CLI 原文 & #测试", "submission_id": "cli-once-001", "source": "cli", "kind": "chat"}
+        payload.update(self.prepare_speech("Antigravity"))
         path = f"/api/rooms/{self.room['id']}/messages"
         status, first = self.request(path, payload)
         self.assertEqual(status, 201, first)
@@ -920,7 +920,7 @@ class DiscussionTests(unittest.TestCase):
         self.assertNotIn("floor", self.request(base)[1])
         self.assertEqual(self.request(base + "/floor")[0], 404)
         plan = self.schedule()[1]["turn"]
-        answer = {"author": "Gemini", "kind": "chat", "request_ids": [plan["member_request_id"]],
+        answer = {"author": "Antigravity", "kind": "chat", "request_ids": [plan["member_request_id"]],
                   "text": "被点名者的真实回答", "submission_id": "floor-answer"}
         self.assertIn(self.request(base + "/messages", {**answer, "author": "Qwen", "submission_id": "floor-wrong"})[0], (400, 403))
         self.assertEqual(self.post("补充约束", "floor-user")[0], 201)
@@ -938,7 +938,7 @@ class DiscussionTests(unittest.TestCase):
     def configure_host(self, start=True, experts=None):
         """Create a free room with an automatic host and explicit participant capabilities."""
         status, self.room = self.request("/api/rooms", {"title": "讨论请求回归", "host": "Codex",
-            "experts": experts or {"Codex": "cli", "Gemini": "cli"}})
+            "experts": experts or {"Codex": "cli", "Antigravity": "cli"}})
         self.assertEqual(status, 201, self.room)
         for name in self.room["experts"]:
             if name not in self.runner_members:
@@ -951,21 +951,21 @@ class DiscussionTests(unittest.TestCase):
         """Read the session roster and submit the host's versioned plan."""
         base = f"/api/rooms/{self.room['id']}"
         roster = self.request(base + "/turns/roster")[1]
-        payload = {"actor": "Codex", "expert": "Gemini", "question": "请检查尚未解决的分歧", "submission_id": submission_id}
+        payload = {"actor": "Codex", "expert": "Antigravity", "question": "请检查尚未解决的分歧", "submission_id": submission_id}
         return self.request(base + "/turns", {**payload, "roster": roster.get("revision"), **changes})
 
     def test_interjection_ask_keeps_queue_and_other_host_requests(self):
         """Versioned conversion closes only one source, even when a host execution contains two."""
-        self.configure_host(experts={"Codex": "cli", "Gemini": "cli", "Claude": "cli"})
+        self.configure_host(experts={"Codex": "cli", "Antigravity": "cli", "Claude": "cli"})
         base = f"/api/rooms/{self.room['id']}"
-        self.schedule("ask-queue-plan", turns=[{"expert": name, "question": "请分析"} for name in ("Gemini", "Claude")])
+        self.schedule("ask-queue-plan", turns=[{"expert": name, "question": "请分析"} for name in ("Antigravity", "Claude")])
         first = self.post("请解释第一处风险", "ask-source-one")[1]["message"]["id"]
         stale = self.request(base + "/turns/roster")[1]
         second = self.post("请解释第二处风险", "ask-source-two")[1]["message"]["id"]
         binding = self.reserve_member("Codex")
         roster = self.request(base + "/turns/roster")[1]
         source = next(item for item in roster["host_requests"] if item["message_id"] == first)
-        payload = {"actor": "Codex", "request_id": source["id"], "expert": "Gemini", "submission_id": "ask-convert-one"}
+        payload = {"actor": "Codex", "request_id": source["id"], "expert": "Antigravity", "submission_id": "ask-convert-one"}
         self.assertEqual(self.request(base + "/turns/ask", payload)[0], 400)
         self.assertEqual(self.request(base + "/turns/ask", {**payload, "revision": stale["revision"]})[0], 409)
         payload["revision"] = roster["revision"]
@@ -1017,17 +1017,17 @@ class DiscussionTests(unittest.TestCase):
         """Entry pages never inline background, state text, or mentioned messages."""
         self.configure_host()
         self.request(f"/api/rooms/{self.room['id']}/topic", {"actor": "Codex", "background": "BACKGROUND_ONLY", "boundaries": "BOUNDARIES_ONLY"})
-        self.post("@Gemini MESSAGE_ONLY", "progressive-001")
+        self.post("@Antigravity MESSAGE_ONLY", "progressive-001")
         self.request(f"/api/rooms/{self.room['id']}/state", {"actor": "Codex", "text": "STATE_ONLY"})
         base = f"/r/{self.room['id']}"
-        overview = self.request(base + "?participant=Gemini")[1]
+        overview = self.request(base + "?participant=Antigravity")[1]
         for marker in ("BACKGROUND_ONLY", "BOUNDARIES_ONLY", "STATE_ONLY", "MESSAGE_ONLY"):
             self.assertNotIn(marker, overview)
-        for route in ("/brief", "/state", "/search?mention=Gemini", "/messages?page=1"):
+        for route in ("/brief", "/state", "/search?mention=Antigravity", "/messages?page=1"):
             self.assertIn(route, overview)
         self.assertIn("BACKGROUND_ONLY", self.request(base + "/brief")[1])
         self.assertIn("STATE_ONLY", self.request(base + "/state")[1])
-        self.assertIn("MESSAGE_ONLY", self.request(base + "/search?mention=Gemini")[1])
+        self.assertIn("MESSAGE_ONLY", self.request(base + "/search?mention=Antigravity")[1])
         protocol = self.request(base + "/protocol")[1]
         self.assertIn("当前主持人：Codex", protocol)
         self.assertIn("--kind chat --execution", protocol)
@@ -1043,7 +1043,7 @@ class DiscussionTests(unittest.TestCase):
         binding = self.prepare_speech("Codex", "moderation")
         moderation = self.request(path, {**binding, "author": "Codex", "text": "请回到议题", "kind": "chat", "submission_id": "host-control-001"})[1]["message"]
         self.assertEqual(moderation["author"], "Codex")
-        forwarded = {"author": "Gemini", "submitted_by": "Codex", "text": "替他人回答", "reply_to": opinion["id"], "submission_id": "host-forward-001"}
+        forwarded = {"author": "Antigravity", "submitted_by": "Codex", "text": "替他人回答", "reply_to": opinion["id"], "submission_id": "host-forward-001"}
         self.assertEqual(self.request(path, forwarded, token=self.member_tokens["Codex"])[0], 403)
         original = self.request(f"/r/{self.room['id']}/messages/{opinion['id']}")[1]
         self.assertIn("提交者：Codex", original)
@@ -1083,7 +1083,7 @@ class DiscussionTests(unittest.TestCase):
         self.assertEqual(self.schedule(question="另一问题")[0], 409)
         self.assertEqual(self.request(path)[1]["status"], "open")
         self.assertEqual(self.request(path, {"actor": "Codex", "status": "notified"})[0], 400)
-        payload = {"author": "Gemini", "text": "专家的回答", "request_ids": [plan["member_request_id"]], "submission_id": "turn-answer-001"}
+        payload = {"author": "Antigravity", "text": "专家的回答", "request_ids": [plan["member_request_id"]], "submission_id": "turn-answer-001"}
         status, result = self.request(base + "/messages", payload)
         self.assertEqual(status, 201, result)
         self.assertEqual(self.request(path)[1]["status"], "answered")
@@ -1098,20 +1098,20 @@ class DiscussionTests(unittest.TestCase):
         base = f"/api/rooms/{self.room['id']}"
         self.assertEqual(self.request(base + "/discussion")[1]["session"]["phase"], "initial")
         plan = self.schedule()[1]["turn"]
-        answer = {"author": "Gemini", "text": "独立结论及依据", "request_ids": [plan["member_request_id"]], "submission_id": "initial-answer-001"}
+        answer = {"author": "Antigravity", "text": "独立结论及依据", "request_ids": [plan["member_request_id"]], "submission_id": "initial-answer-001"}
         self.session_action("pause")
         self.assertEqual(self.request(base + "/messages", answer)[0], 409)
         self.assertEqual(self.schedule("paused-turn-001")[0], 400)
         self.assertEqual(self.request(base + f"/turns/{plan['id']}")[1]["status"], "cancelled")
-        self.assertEqual(self.request(base + "/messages", {"author": "Gemini", "kind": "receipt", "text": "旧回执", "submission_id": "stop-receipt-001"})[0], 400)
+        self.assertEqual(self.request(base + "/messages", {"author": "Antigravity", "kind": "receipt", "text": "旧回执", "submission_id": "stop-receipt-001"})[0], 400)
         self.session_action("resume")
-        answer.update(self.prepare_speech("Gemini"))
+        answer.update(self.prepare_speech("Antigravity"))
         self.assertEqual(self.request(base + "/messages", answer)[0], 201)
         self.assertEqual(self.request(base + "/discussion")[1]["session"]["phase"], "discussing")
         self.assertEqual(self.request(base + "/topic", {"actor": "Codex", "phase": "reviewing"})[0], 400)
         self.session_action("end")
         self.assertTrue(self.request(base + "/messages", answer)[1]["duplicate"])
-        ordinary = {"author": "Gemini", "text": "自由协作原文", "submission_id": "late-chat-001"}
+        ordinary = {"author": "Antigravity", "text": "自由协作原文", "submission_id": "late-chat-001"}
         status, saved = self.request(base + "/messages", ordinary)
         self.assertEqual((status, saved["message"]["kind"]), (201, "chat"))
 
@@ -1121,7 +1121,7 @@ class DiscussionTests(unittest.TestCase):
         base=f"/api/rooms/{self.room['id']}"
         revision=self.request(base+"/turns/roster")[1]["revision"]
         def schedule(index):
-            return self.request(base+"/turns",{"actor":"Codex","expert":"Gemini","question":"并发安排","submission_id":f"schedule-race-{index}","roster":revision})
+            return self.request(base+"/turns",{"actor":"Codex","expert":"Antigravity","question":"并发安排","submission_id":f"schedule-race-{index}","roster":revision})
         with ThreadPoolExecutor(max_workers=5) as executor:
             results=list(executor.map(schedule,range(5)))
         self.assertEqual(sorted(status for status,_ in results),[201,409,409,409,409])
@@ -1133,7 +1133,7 @@ class DiscussionTests(unittest.TestCase):
         """One assignment accepts only one answer even with different submissions."""
         self.configure_host()
         turn = self.schedule()[1]["turn"]
-        payload = {"author": "Gemini", "text": "并发回答", "request_ids": [turn["member_request_id"]]}
+        payload = {"author": "Antigravity", "text": "并发回答", "request_ids": [turn["member_request_id"]]}
         path = f"/api/rooms/{self.room['id']}/messages"
         with ThreadPoolExecutor(max_workers=5) as executor:
             results = list(executor.map(lambda index: self.request(path, {**payload, "submission_id": f"answer-race-{index}"}), range(5)))
@@ -1150,7 +1150,7 @@ class DiscussionTests(unittest.TestCase):
             barrier.wait()
             if cancel:
                 return self.request(base+f"/turns/{plan['id']}",{"actor":"用户","status":"cancelled"})
-            return self.request(base+"/messages",{"author":"Gemini","text":"正在提交的回答","request_ids":[plan["member_request_id"]],"submission_id":"cancel-race-001"})
+            return self.request(base+"/messages",{"author":"Antigravity","text":"正在提交的回答","request_ids":[plan["member_request_id"]],"submission_id":"cancel-race-001"})
         with ThreadPoolExecutor(max_workers=2) as executor:
             results=list(executor.map(cancel_or_answer,[True,False]))
         stored=self.request(base+f"/turns/{plan['id']}")[1]
@@ -1177,11 +1177,11 @@ class SessionGuardTests(unittest.TestCase):
                 owner=uuid.uuid4().hex
                 room=create_room(connection,{"title":"并发会话校验","host":"Codex","members":[
                     {"name":"Codex","access":"runner","token":uuid.uuid4().hex},
-                    {"name":"Gemini","access":"runner","token":uuid.uuid4().hex}]},owner)
+                    {"name":"Antigravity","access":"runner","token":uuid.uuid4().hex}]},owner)
                 initial=session_room(connection,room["id"])
                 discussion_action(connection,room["id"],owner,{"action":"start","revision":initial["revision"],"goal":"守住事务"},room)
                 roster=roster_view(connection,room["id"])
-                payload={"actor":"Codex","expert":"Gemini","question":"问题","roster":roster["revision"],"submission_id":"guard-plan-001"}
+                payload={"actor":"Codex","expert":"Antigravity","question":"问题","roster":roster["revision"],"submission_id":"guard-plan-001"}
                 plan=create_plan(connection,room["id"],payload,room)["turn"]
                 connection.commit()
                 with self.assertRaises(FileExistsError),connection:

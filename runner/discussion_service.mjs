@@ -54,11 +54,82 @@ export function configuration_snapshot(path) {
 
 /** Private per-user directory holding the registry, lock, status and log; moves the legacy AppData location once. */
 export function service_home() {
-  if (process.env.DISCUSS_SERVICE_HOME) return resolve(process.env.DISCUSS_SERVICE_HOME);
+  if (process.env.DISCUSS_SERVICE_HOME) return migrate_platform_ids(resolve(process.env.DISCUSS_SERVICE_HOME));
   const home = join(homedir(), '.codiscuss');
   const legacy = join(process.env.LOCALAPPDATA || join(homedir(), '.local', 'state'), 'ai-codiscuss', 'service');
-  if (existsSync(home) || !existsSync(legacy)) return home;
-  return migrate_service_home(legacy, home) ? home : legacy;
+  if (existsSync(home) || !existsSync(legacy)) return migrate_platform_ids(home);
+  return migrate_platform_ids(migrate_service_home(legacy, home) ? home : legacy);
+}
+
+// The platform once called Gemini is identified as Antigravity (the software); screens still show the nickname Gemini.
+const PLATFORM_IDS_MARKER = 'platform-ids-v1';
+const OLD_PLATFORM = 'Gemini', NEW_PLATFORM = 'Antigravity';
+const PLATFORM_TOKEN = /"Gemini(-[0-9A-Za-z_]{1,16})?"/g;
+
+/** Rename the old platform ID wherever a JSON text names a member or platform: "Gemini", "Gemini-2" (never a label like "Gemini-文档"). */
+function rename_platform_text(text) {
+  return text.replace(PLATFORM_TOKEN, (_, suffix = '') => `"${NEW_PLATFORM}${suffix}"`);
+}
+
+/**
+ * Move this computer's saved members from the old platform ID to the new one, once per service directory: the machine
+ * defaults, presets, every room configuration, and each room's runtime store (session bindings, deliveries, member contexts).
+ * Execution logs, task files and drafts keep the old name as history.
+ */
+export function migrate_platform_ids(home) {
+  const marker = join(home, PLATFORM_IDS_MARKER);
+  if (!existsSync(home) || existsSync(marker)) return home;
+  try { rename_saved_members(home); }
+  // Without the marker the next start tries again; the service still runs, and members not yet renamed fail visibly.
+  catch (error) { process.stderr.write(`成员 ID 迁移（${OLD_PLATFORM} → ${NEW_PLATFORM}）未完成：${error.message}\n`); return home; }
+  writeFileSync(marker, `${new Date().toISOString()}\n`);
+  return home;
+}
+
+/** Rename the old platform ID in the service directory's files and runtime stores. */
+function rename_saved_members(home) {
+  const launches = join(home, 'launches');
+  const configs = new Set(read_registry(home));
+  if (existsSync(launches)) for (const entry of readdirSync(launches)) configs.add(join(launches, entry, 'config.json'));
+  const files = [join(home, 'launch-settings.json'), join(home, 'expert-presets.json')];
+  for (const path of configs) {
+    files.push(path, join(dirname(path), 'launch.json'));
+    // A manual member's credential file keeps its path, which the member's own session was given; only the name inside changes.
+    if (existsSync(dirname(path))) for (const entry of readdirSync(dirname(path))) if (/^manual-.+\.access\.json$/.test(entry)) files.push(join(dirname(path), entry));
+  }
+  for (const path of files) {
+    if (!existsSync(path)) continue;
+    const text = readFileSync(path, 'utf8'), renamed = rename_platform_text(text);
+    if (renamed !== text) atomic_json(path, JSON.parse(renamed));
+  }
+  for (const path of configs) {
+    const runtime = join(dirname(path), 'runtime', 'runtime.sqlite3');
+    if (existsSync(runtime)) migrate_runtime_ids(runtime);
+  }
+}
+
+/** Rename member names in one runtime store: exact values, member-context keys and member names inside stored JSON. */
+function migrate_runtime_ids(path) {
+  const db = new DatabaseSync(path);
+  try {
+    db.exec('BEGIN IMMEDIATE');
+    for (const { name: table } of db.prepare("SELECT name FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%'").all()) {
+      for (const { name: column, type } of db.prepare(`PRAGMA table_info("${table}")`).all()) {
+        if (type && !/TEXT/i.test(type)) continue;
+        db.prepare(`UPDATE "${table}" SET "${column}"=? || substr("${column}", ?) WHERE "${column}"=? OR "${column}" GLOB ?`)
+          .run(NEW_PLATFORM, OLD_PLATFORM.length + 1, OLD_PLATFORM, `${OLD_PLATFORM}-*`);
+        db.prepare(`UPDATE "${table}" SET "${column}"=? || substr("${column}", ?) WHERE "${column}" GLOB ?`)
+          .run(`member-context:${NEW_PLATFORM}`, `member-context:${OLD_PLATFORM}`.length + 1, `member-context:${OLD_PLATFORM}*`);
+        const update = db.prepare(`UPDATE "${table}" SET "${column}"=? WHERE rowid=?`);
+        for (const row of db.prepare(`SELECT rowid AS id, "${column}" AS value FROM "${table}" WHERE "${column}" LIKE ?`).all(`%"${OLD_PLATFORM}%`)) {
+          const renamed = rename_platform_text(row.value);
+          if (renamed !== row.value) update.run(renamed, row.id);
+        }
+      }
+    }
+    db.exec('COMMIT');
+  } catch (error) { db.exec('ROLLBACK'); throw error; }
+  finally { db.close(); }
 }
 
 /** Move a stopped service directory and rewrite absolute paths that pointed into it; a running one stays put. */

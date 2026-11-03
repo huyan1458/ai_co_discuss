@@ -35,7 +35,7 @@ async function run_case(item) {
   const free = fixtures.free;
   if (item.scene === 'review') {
     const result = await decide_review_completion(home, scheduler, { ready: true, original: { id: 1, author: '主持人', text: item.original },
-      plan: { reviewer_name: 'Codex-评审', scope: '核对本批实现和验证' },
+      plan: { reviewer_name: 'Codex-review', scope: '核对本批实现和验证' },
       deliveries: item.answers.map((answer, index) => ({ member: String.fromCharCode(65 + index), status: 'completed', answer,
         execution_status: item.reports[index], result: item.reports[index] })) });
     return { result, acted: result.action === 'review' ? 'review' : '__host__' };

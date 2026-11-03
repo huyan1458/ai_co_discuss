@@ -5,6 +5,7 @@
  */
 import { computed, inject, ref, watch } from "vue";
 import ChainRoundsField from "./ChainRoundsField.vue";
+import EffortSlider from "./EffortSlider.vue";
 import InviteDialog from "./InviteDialog.vue";
 import MemberDescriptionDialog from "./MemberDescriptionDialog.vue";
 import { member_actions } from "./member-actions.js";
@@ -103,6 +104,53 @@ async function switch_access(member, project_access) {
   finally { switching.value = ""; }
 }
 
+// CLIs whose model and effort this tool passes on each run; Apps choose their own and API members keep the model set at invitation.
+const MODEL_CLIENTS = ["codex_cli", "claude", "antigravity_cli"];
+const EFFORT_LABELS = { low: "Low", medium: "Medium", high: "High", xhigh: "Extra High", max: "Max", ultra: "Ultra" };
+
+/** Whether this member's model and effort can be changed here. */
+function model_editable(member) {
+  const profile = saved.value?.participants?.[member.name];
+  return member.access === "runner" && MODEL_CLIENTS.includes(profile?.adapter) && profile.project_access !== "own"
+    && !waiting(member.name) && view.value.access?.can_manage && view.value.launch.available;
+}
+
+// The member whose model is being changed, with the draft the dialog edits.
+const model_edit = ref(null), model_saving = ref(false);
+const model_state = computed(() => model_edit.value && bridge.launch_model_state(model_edit.value.name, view.value.launch, model_edit.value.draft));
+const model_efforts = computed(() => {
+  const levels = model_state.value?.efforts;
+  return levels?.length ? [{ label: "默认强度", value: "" }, ...levels.map((level) => ({ label: EFFORT_LABELS[level] || level, value: level }))] : null;
+});
+
+/** Open the dialog on the member's saved choices and read its software's model list. */
+function edit_model(member) {
+  const { adapter, model, effort } = saved.value.participants[member.name];
+  model_edit.value = { name: member.name, draft: { adapter, model: model || "", effort: effort || "" } };
+  bridge.load_launch_models(member.name, false, model_edit.value.draft);
+}
+
+/** Pick a model; an effort the new model does not offer goes back to the default. */
+function pick_model(value) {
+  const draft = model_edit.value.draft;
+  draft.model = value === "__default__" ? "" : value;
+  // agy reads its effort levels per model.
+  if (draft.adapter === "antigravity_cli") bridge.load_launch_models(model_edit.value.name, false, draft);
+  if (!model_state.value?.efforts?.includes(draft.effort)) draft.effort = "";
+}
+
+/** Save the model and effort; they apply from the member's next request and keep its session. */
+async function save_model() {
+  const { name, draft } = model_edit.value;
+  model_saving.value = true;
+  try {
+    await bridge.set_member_model({ name, model: draft.model, effort: draft.effort });
+    bridge.notify("info", `${bridge.display_name(name)} 的模型与强度已更新，下次处理请求起生效，保留原会话。`);
+    model_edit.value = null;
+  } catch (error) { bridge.notify("error", error.message); }
+  finally { model_saving.value = false; }
+}
+
 /** The smart scheduler lives in the local registration, so a page without the local service cannot tell. */
 const scheduler = computed(() => {
   if (local_state.value) return "—";
@@ -127,10 +175,10 @@ const describing = ref(""), describing_saving = ref(false);
 watch(() => room.value.id, () => { inviting.value = false; describing.value = ""; });
 
 /** Save one member's description in this room, and optionally as its platform's default for later rooms. */
-async function save_description({ text, as_template }) {
+async function save_description({ text, label, as_template }) {
   describing_saving.value = true;
   try {
-    await bridge.describe_member(describing.value, text);
+    await bridge.describe_member(describing.value, text, label);
     if (as_template) bridge.save_description_template(describing.value, text);
     describing.value = "";
   } catch { /* The controller shows the error as a toast. */ }
@@ -151,7 +199,7 @@ const created = computed(() => room.value.created_at ? new Date(room.value.creat
         <li v-for="member in members" :key="member.name" class="member-card">
           <header class="member-card-head">
             <UAvatar :src="bridge.identities[member.name]?.icon" :text="bridge.identities[member.name]?.initials" :alt="member.name" size="md" class="channel-avatar" :class="bridge.identities[member.name]?.style" />
-            <div class="member-card-name"><strong>{{ bridge.display_name(member.name) }}<UIcon v-if="member.role === 'host'" name="i-lucide-crown" title="主持人" /></strong><small v-if="room.descriptions?.[member.name]" :title="room.descriptions[member.name]">{{ room.descriptions[member.name] }}</small></div>
+            <div class="member-card-name"><strong>{{ bridge.display_name(member.name) }}<span v-if="bridge.display_name(member.name) !== member.name" class="member-id">{{ member.name }}</span><UIcon v-if="member.role === 'host'" name="i-lucide-crown" title="主持人" /></strong><small v-if="room.descriptions?.[member.name]" :title="room.descriptions[member.name]">{{ room.descriptions[member.name] }}</small></div>
             <UButton v-if="actions(member).host" :icon="actions(member).host.icon" :label="actions(member).host.label" size="xs" variant="ghost" color="neutral" :disabled="actions(member).host.disabled" @click="actions(member).host.onSelect()" />
             <UBadge :color="unregistered(member) ? 'warning' : member.status === 'active' ? 'success' : 'neutral'" variant="subtle" size="sm">{{ unregistered(member) ? '待注册' : STATUS_LABELS[member.status] || member.status }}</UBadge>
           </header>
@@ -163,7 +211,8 @@ const created = computed(() => room.value.created_at ? new Date(room.value.creat
               </div>
               <span v-else>{{ access(member).text }}</span>
             </dd></div>
-            <div><dt>模型</dt><dd class="overview-model" :class="{ 'overview-muted': waiting(member.name) }" :title="bridge.participant_model(member.name, room, saved) || undefined">{{ member.access === 'runner' ? bridge.participant_model(member.name, room, saved) || '—' : '在它自己的会话里设置' }}</dd></div>
+            <div><dt>模型</dt><dd class="overview-model" :class="{ 'overview-muted': waiting(member.name) }" :title="bridge.participant_model(member.name, room, saved) || undefined"><span>{{ member.access === 'runner' ? bridge.participant_model(member.name, room, saved) || '—' : '在它自己的会话里设置' }}</span>
+              <UButton v-if="model_editable(member)" icon="i-lucide-pencil" size="xs" variant="ghost" color="neutral" :aria-label="`更改 ${member.name} 的模型与强度`" title="更改模型与思考强度" @click="edit_model(member)" /></dd></div>
             <div><dt>项目文件</dt><dd>
               <div v-if="files(member).value" class="expert-card-modes overview-switch" :class="{ 'is-locked': !files(member).editable }" role="radiogroup" :aria-label="`${member.name} 的项目文件权限`" :aria-busy="switching === member.name" :title="files(member).hint || undefined">
                 <button v-for="option in access_options(saved?.participants?.[member.name]?.adapter)" :key="option.value" type="button" role="radio" :aria-checked="files(member).value === option.value" :title="option.hint"
@@ -195,8 +244,22 @@ const created = computed(() => room.value.created_at ? new Date(room.value.creat
       </dl>
     </section>
     <InviteDialog v-model:open="inviting" :description="free ? '新成员加入后不打断其他成员；点卡片翻面可设置软件、模型、项目权限和要续接的已有会话。' : '新专家由程序按本机软件配置启动，或由你手动启动，加入本轮发言队列。'" />
-    <MemberDescriptionDialog :open="Boolean(describing)" :name="describing || ' '" :platform="describing ? bridge.platform_of(describing) : ''"
-      :text="room.descriptions?.[describing] || ''" :template="describing ? bridge.description_template(describing) : ''" :saving="describing_saving"
+    <UModal :open="Boolean(model_edit)" :title="model_edit ? `${bridge.display_name(model_edit.name)} 的模型与强度` : ''" description="下次处理请求起生效，保留原会话。" :ui="{ content: 'glass-panel studio-modal', body: 'dialog-body' }" @update:open="(open) => { if (!open) model_edit = null; }">
+      <template #body>
+        <form v-if="model_edit" class="overview-model-form" @submit.prevent="save_model">
+          <label><span>模型</span><USelect :model-value="model_edit.draft.model || '__default__'" :items="model_state.items" :title="model_state.source" :aria-label="`${model_edit.name} 使用的模型`" class="w-full" @update:model-value="pick_model" /></label>
+          <p v-if="model_state.loading || model_state.error" class="overview-muted">{{ model_state.loading ? '正在读取软件模型列表…' : model_state.error }}</p>
+          <EffortSlider v-if="model_efforts" caption="强度" :items="model_efforts" :model-value="model_edit.draft.effort" :label="`${model_edit.name} 的思考强度`" @update:model-value="model_edit.draft.effort = $event" />
+          <p v-else class="overview-muted">{{ model_state.effort_note }}</p>
+          <div class="overview-model-actions">
+            <UButton label="取消" color="neutral" variant="ghost" @click="model_edit = null" />
+            <UButton type="submit" label="保存" class="channel-primary-button" :loading="model_saving" />
+          </div>
+        </form>
+      </template>
+    </UModal>
+    <MemberDescriptionDialog :open="Boolean(describing)" :name="describing || ' '" :platform="describing ? bridge.default_name(bridge.platform_of(describing)) : ''" :default_label="describing ? bridge.default_name(describing) : ''"
+      :text="room.descriptions?.[describing] || ''" :label="room.labels?.[describing] || ''" :template="describing ? bridge.description_template(describing) : ''" :saving="describing_saving"
       @update:open="(open) => { if (!open) describing = ''; }" @save="save_description" />
   </section>
 </template>
@@ -215,7 +278,12 @@ const created = computed(() => room.value.created_at ? new Date(room.value.creat
 .member-card-facts { display: grid; grid-template-columns: 120px minmax(0, 1fr) 210px; gap: 16px; margin: 0; padding: 12px 16px 14px 60px; font-size: 13px; }
 .member-card-facts dt { margin-bottom: 4px; color: var(--ui-text-muted); font-size: 12px; }
 .member-card-facts dd { display: flex; align-items: center; min-height: 28px; margin: 0; color: var(--ui-text); }
-.overview-model { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.overview-model { gap: 2px; min-width: 0; }
+.overview-model > span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.overview-model-form { display: flex; flex-direction: column; gap: 12px; }
+.overview-model-form label { display: grid; gap: 6px; color: var(--ui-text-muted); font-size: 12px; }
+.overview-model-form p { margin: 0; font-size: 12px; }
+.overview-model-actions { display: flex; justify-content: flex-end; gap: 8px; }
 .overview-muted { color: var(--ui-text-muted); }
 .overview-switch { width: max-content; max-width: 100%; }
 .overview-switch button { padding: 0 10px; white-space: nowrap; }
@@ -240,4 +308,6 @@ const created = computed(() => room.value.created_at ? new Date(room.value.creat
   .member-card-facts { grid-template-columns: 1fr 1fr; padding-left: 16px; }
   .member-card-facts > div:last-child { grid-column: 1 / -1; }
 }
+/* A member with a nickname also shows its ID, which AI messages, @ and records use. */
+.member-id { margin-left: 4px; color: var(--ui-text-muted); font-size: 11px; font-weight: 400; }
 </style>

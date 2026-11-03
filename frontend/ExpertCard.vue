@@ -55,7 +55,7 @@ const manual = computed(() => props.mode === "manual");
 // A manual card has nothing to configure, so the front states what testing showed about taking over a window that is already open.
 const MANUAL_NOTES = {
   Codex: "已实测：消息实时显示在已开窗口。",
-  Gemini: "已实测：App 会话实时显示；agy CLI 窗口需重启才显示后台发言。",
+  Antigravity: "已实测：App 会话实时显示；agy CLI 窗口需重启才显示后台发言。",
   Claude: "已实测：原窗口开着时消息实时送入；关闭后在后台续接同一会话。",
 };
 const manual_note = computed(() => MANUAL_NOTES[bridge.platform_of(props.name)] || "");
@@ -159,8 +159,9 @@ const describing = ref(false);
 const describe_title = computed(() => description.value ? `描述：${description.value}` : "添加描述：擅长什么、适合分到什么工作");
 
 /** Keep the card's description for the room or invitation, and optionally as this platform's default. */
-function save_description({ text, as_template }) {
+function save_description({ text, label, as_template }) {
   bridge.write_description_draft(props.name, text);
+  if (label !== undefined) bridge.write_label_draft(props.name, label);
   if (as_template) bridge.save_description_template(props.name, text);
   describing.value = false;
 }
@@ -170,7 +171,7 @@ const own_preset = computed(() => view.value.launch.presets.some((preset) => pre
 // A card not added from its own preset is saved under a name the user gives; the platform prefix is only a suggestion.
 const naming = ref(false), naming_draft = ref("");
 const naming_text = computed(() => naming_draft.value.trim());
-const naming_blank = computed(() => !naming_text.value || naming_text.value === `${bridge.platform_of(props.name)}-`);
+const naming_blank = computed(() => !naming_text.value || naming_text.value === `${bridge.default_name(bridge.platform_of(props.name))}-`);
 const naming_id = computed(() => view.value && !naming_blank.value ? bridge.preset_identity(props.name, naming_text.value) : "");
 const naming_note = computed(() => {
   if (!naming_id.value) return "预设名称会显示在“预设”行和房间里，可以不带平台前缀。";
@@ -186,8 +187,9 @@ function save_preset() {
   const taken = new Set(bridge.expert_presets().map((preset) => preset.name));
   const platform = bridge.platform_of(props.name);
   let number = 1;
-  while (taken.has(bridge.preset_identity(props.name, `${platform}-${number}`))) number += 1;
-  naming_draft.value = `${platform}-${number}`;
+  const nickname = bridge.default_name(platform);
+  while (taken.has(bridge.preset_identity(props.name, `${nickname}-${number}`))) number += 1;
+  naming_draft.value = `${nickname}-${number}`;
   naming.value = true;
 }
 
@@ -315,8 +317,8 @@ onBeforeUnmount(() => { document.removeEventListener("pointerdown", close_on_out
           <span class="expert-card-identity">
             <UAvatar :src="bridge.identities[name]?.icon" :text="bridge.identities[name]?.initials" :alt="name" size="sm" class="channel-avatar expert-card-avatar" :class="bridge.identities[name]?.style" />
             <span class="expert-card-names">
-              <span v-if="manual"><strong :title="name">{{ bridge.display_name(name) }}（手动）</strong><span v-if="host && !hostable" class="expert-card-badge">主持</span></span>
-              <span v-else><strong :title="bridge.member_label(name) === name ? undefined : name">{{ bridge.member_label(name) }}</strong><span v-if="host && !hostable" class="expert-card-badge">主持</span></span>
+              <span v-if="manual"><strong>{{ bridge.display_name(name) }}（手动）<span v-if="bridge.display_name(name) !== name" class="member-id">{{ name }}</span></strong><span v-if="host && !hostable" class="expert-card-badge">主持</span></span>
+              <span v-else><strong>{{ bridge.member_label(name) }}<span v-if="bridge.member_label(name) !== name" class="member-id">{{ name }}</span></strong><span v-if="host && !hostable" class="expert-card-badge">主持</span></span>
               <small v-if="description" :title="description">{{ description }}</small>
             </span>
           </span>
@@ -342,7 +344,7 @@ onBeforeUnmount(() => { document.removeEventListener("pointerdown", close_on_out
       </div>
       <div v-if="can_flip" class="expert-card-face expert-card-back" :inert="!visible_back" :aria-hidden="!visible_back">
         <div class="expert-card-back-body">
-        <div class="expert-card-heading"><strong>{{ bridge.member_label(name) }}<span>设置</span></strong>
+        <div class="expert-card-heading"><strong>{{ bridge.member_label(name) }}<span v-if="bridge.member_label(name) !== name">{{ name }}</span><span>设置</span></strong>
           <span class="expert-card-heading-tools">
           <button type="button" class="expert-card-back-tool" :class="{ 'is-set': description }" :aria-label="`编辑 ${name} 的描述`" :title="describe_title" @click="describing = true"><UIcon name="i-lucide-user-pen" /></button>
           <button v-if="profile.adapter" type="button" class="expert-card-back-tool" :class="{ 'is-set': prompt_text, 'is-own': prompt_own && prompt_text }" :title="prompt_title" :aria-label="`编辑 ${name} 的专属提示词`" @click="open_prompt"><UIcon name="i-lucide-scroll-text" /></button>
@@ -384,7 +386,7 @@ onBeforeUnmount(() => { document.removeEventListener("pointerdown", close_on_out
         </span>
       </div>
     </motion.div>
-    <MemberDescriptionDialog v-model:open="describing" :name="name" :platform="bridge.platform_of(name)" :text="description" :template="bridge.description_template(name)" @save="save_description" />
+    <MemberDescriptionDialog v-model:open="describing" :name="name" :platform="bridge.default_name(bridge.platform_of(name))" :default_label="bridge.default_name(name)" :text="description" :label="bridge.label_draft(name)" :template="bridge.description_template(name)" @save="save_description" />
     <MemberTextDialog v-model:open="prompt_open" v-model:draft="prompt_draft" :title="`${name} 的专属提示词`"
       description="只发给这位专家，补充它的做法与偏好；不改变权限和技能规则。" :label="`${name} 的专属提示词`"
       placeholder="例如：回答先给结论，控制在三段以内。" :max="MAX_EXPERT_PROMPT" :rows="8"
@@ -476,4 +478,6 @@ onBeforeUnmount(() => { document.removeEventListener("pointerdown", close_on_out
 .expert-card-manual { display: grid; gap: 4px; width: 100%; color: var(--ui-text-muted); font-size: 11px; line-height: 1.7; }
 .expert-card-manual > p { margin: 0; }
 .expert-card-note > span { flex-shrink: 0; width: 13px; height: 13px; margin-top: 3px; }
+/* A member with a nickname also shows its ID, which AI messages, @ and records use. */
+.member-id { margin-left: 4px; color: var(--ui-text-muted); font-size: 11px; font-weight: 400; }
 </style>

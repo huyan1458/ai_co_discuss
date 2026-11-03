@@ -49,17 +49,13 @@ If you deploy the site yourself, run this once on the machine running your agent
 codiscuss local connect https://your-site
 ```
 
-The hosted site can then create rooms whose agents run on this machine. The connection link grants local launch permission — do not share it. Revoke with `codiscuss local disconnect https://your-site`.
+Then sign in as the site administrator in this computer's browser to pair it; the hosted site then shows the rooms on this computer. The hosted site keeps no rooms of its own: every device, this computer included, reads and writes the computer's rooms through the relay, which must be deployed first (see "Relay" in the [deployment guide](deployment.md)). The connection link grants local launch permission — do not share it. Revoke with `codiscuss local disconnect https://your-site`.
 
 ### From Other Devices
 
-Sign in as the site administrator in the connected computer's browser to pair it. Then sign in with the same account on a phone or tablet to create rooms using the projects saved on that computer. Project paths and keys never leave the computer.
+Once paired, sign in with the same account on a phone or tablet. The directory lists the rooms on the computer: send messages and attachments, manage members, export backups, with live updates. Conversations stay on the computer; the website only passes encrypted content. Project paths and keys never leave the computer.
 
-### Opening the Computer's Rooms While Away
-
-When the website has the relay deployed (see "Relay and Live Updates" in the [deployment guide](deployment.md)), sign in as the administrator on your phone, open the "…" menu at the top of the directory, and choose "Rooms on the computer" under "Room source". You can then read and write the rooms of this computer's local website: send messages and attachments, manage members, export backups, with live updates. Conversations stay on the computer; the website only passes encrypted content.
-
-- Nothing opens while the computer is off or codiscuss is not running; the directory heading says the computer is offline. This website's own rooms are unaffected.
+- Nothing is listed while the computer is off or codiscuss is not running; the directory heading says the computer is not connected or offline, and the page connects on its own once the computer is back.
 - When the computer does not answer in time, the page reports the result as unconfirmed and never resends on its own; check the room before retrying.
 
 ### Through Cloudflare Tunnel While Away

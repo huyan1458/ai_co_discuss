@@ -91,7 +91,7 @@ function profiles(home, base_url) {
 
 test('provider presets preserve model IDs, separate identity from protocol and bind private keys to URLs', async t => {
   const f = await site_fixture(t);
-  assert.deepEqual(Object.keys(API_PROVIDERS), ['Codex', 'Claude', 'Gemini', 'DeepSeek', 'Qwen', 'Grok']);
+  assert.deepEqual(Object.keys(API_PROVIDERS), ['Codex', 'Claude', 'Antigravity', 'DeepSeek', 'Qwen', 'Grok']);
   assert.equal(api_base_url('https://openrouter.ai/api/v1/'), 'https://openrouter.ai/api/v1');
   assert.throws(() => api_base_url('https://key@example.test/v1'), /凭据/);
   const profile = profiles(f.home, 'https://openrouter.ai/api/v1').Grok;
@@ -172,7 +172,7 @@ test('API host schedules a real session round and providers answer through execu
   assert.ok(messages.messages.some(message => message.author === 'Codex' && message.kind === 'moderation'));
   assert.ok(messages.messages.every(message => message.source === 'api' && message.submitted_by === message.author));
   assert.ok(!readFileSync(r.started.config_path, 'utf8').includes(SECRET));
-  assert.ok(mock.calls.some(call => call.path.includes('/models/Gemini%2Fmodel.1:generateContent')));
+  assert.ok(mock.calls.some(call => call.path.includes('/models/Antigravity%2Fmodel.1:generateContent')));
   assert.equal(room.session.status, 'concluded');
 });
 
@@ -319,4 +319,26 @@ test('API participants load the shared skills and map CLI commands onto their ro
   assert.match(free, /# 自由协作房间/);
   assert.match(free, /handoff/, 'free-room API participants get the free-room rules, which live in a reference');
   assert.doesNotMatch(expert, /handoff/, 'discussion rooms do not carry the free-room rules');
+});
+
+test('read-aloud sends the saved key only to Volcengine and joins chunked audio', async () => {
+  const { save_tts_settings, tts_settings, tts_speak, TTS_BASE_URL } = await import('../runner/tts.mjs');
+  const home = mkdtempSync(join(tmpdir(), 'codiscuss-tts-'));
+  try {
+    await assert.rejects(tts_speak(home, { text: '你好' }), /尚未配置朗读/);
+    const { api_key_ref } = save_api_key(home, { base_url: TTS_BASE_URL, api_key: SECRET });
+    save_tts_settings(home, { speaker: 'zh_female_vv_uranus_bigtts', speech_rate: 20, context: '自然一点', api_key_ref });
+    assert.equal(JSON.stringify(tts_settings(home)).includes(SECRET), false);
+    let sent;
+    const body = `{"code":0,"data":"${Buffer.from('ab').toString('base64')}"}\n{"code":0,"data":null,"sentence":{"text":"}"}}{"code":0,"data":"${Buffer.from('c').toString('base64')}"}{"code":20000000,"message":"ok","data":null}`;
+    const result = await tts_speak(home, { text: '你好' }, async (url, init) => { sent = { url, init }; return new Response(body); });
+    assert.equal(Buffer.from(result.audio, 'base64').toString(), 'abc');
+    assert.equal(sent.url, `${TTS_BASE_URL}/api/v3/tts/unidirectional`);
+    assert.equal(sent.init.headers['X-Api-Key'], SECRET);
+    const request = JSON.parse(sent.init.body);
+    assert.equal(request.req_params.audio_params.speech_rate, 20);
+    assert.deepEqual(JSON.parse(request.req_params.additions).context_texts, ['自然一点']);
+    await assert.rejects(tts_speak(home, { text: '你好' }, async () => new Response('{"code":45000000,"message":"denied"}')), /音色不可用/);
+    await assert.rejects(tts_speak(home, { text: '字'.repeat(301) }), /不超过 300 字/);
+  } finally { rmSync(home, { recursive: true, force: true }); }
 });
