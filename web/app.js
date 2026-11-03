@@ -361,9 +361,10 @@ async function admin_avatar_from_file(file) {
   } finally { URL.revokeObjectURL(url); }
 }
 
-/** Whether this browser may write as the room owner: its own control credential, or a logged-in administrator session. */
+/** Whether this browser may write as the room owner: its own control credential, a logged-in administrator session, or the
+ *  loopback-only local site, whose server writes as the owner for every visitor (`admin_as_owner`). */
 function has_room_control(room_id) {
-  return Boolean(localStorage.getItem(`discuss-access:${room_id}`) || (state.admin.logged_in && admin_token()));
+  return Boolean(localStorage.getItem(`discuss-access:${room_id}`) || state.admin.local || (state.admin.logged_in && admin_token()));
 }
 
 /** Explain why a management write failed when this browser has neither credential. */
