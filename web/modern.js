@@ -41200,8 +41200,8 @@ var WH = /*#__PURE__*/ TH({
 	"BR",
 	"HR",
 	"PRE"
-]), xU = /[。！？!?；;…\n]/, SU = /[”’」』）)"'\]】]/, CU = /[，、,：:\s]/, wU = 120, TU = 200, EU = 80, DU = 2, OU = 350, kU = 700, AU = .12, jU = .75, MU = .3, NU = 60, PU = 200, FU = 20, IU = 3, LU = /[\p{L}\p{N}]/gu, RU = (e) => (e.match(LU) || []).length;
-function zU(e) {
+]), xU = /[。！？!?；;…\n]/, SU = /[”’」』）)"'\]】]/, CU = /[，、,：:\s]/, wU = 120, TU = 200, EU = 80, DU = 100, OU = 4, kU = 350, AU = 700, jU = .12, MU = .75, NU = .3, PU = 60, FU = 200, IU = 20, LU = 3, RU = /[\p{L}\p{N}]/gu, zU = (e) => (e.match(RU) || []).length;
+function BU(e) {
 	let t = [], n = [], r = () => {
 		t.length && t[t.length - 1] !== "\n" && (t.push("\n"), n.push(null));
 	}, i = (e) => {
@@ -41219,7 +41219,7 @@ function zU(e) {
 		points: n
 	};
 }
-function BU(e, t, n) {
+function VU(e, t, n) {
 	let r = [];
 	for (let i = t; i < n; i += 1) {
 		let t = e[i];
@@ -41234,7 +41234,7 @@ function BU(e, t, n) {
 	}
 	return r;
 }
-function VU({ text: e, points: t }, n = 0) {
+function HU({ text: e, points: t }, n = 0) {
 	let r = [], i = (n, i) => {
 		for (; n < i && /\s/.test(e[n]);) n += 1;
 		for (; i > n && /\s/.test(e[i - 1]);) --i;
@@ -41243,7 +41243,7 @@ function VU({ text: e, points: t }, n = 0) {
 		for (; a < e.length && e[a] !== "\n" && /\s/.test(e[a]);) a += 1;
 		r.push({
 			text: e.slice(n, i).replace(/\s+/g, " "),
-			ranges: BU(t, n, i),
+			ranges: VU(t, n, i),
 			paragraph_end: a >= e.length || e[a] === "\n"
 		});
 	}, a = n;
@@ -41258,11 +41258,11 @@ function VU({ text: e, points: t }, n = 0) {
 	}
 	return i(a, e.length), r;
 }
-function HU({ points: e }, t) {
+function UU({ points: e }, t) {
 	let n = e.findIndex((e) => e && t.comparePoint(e[0], e[1]) >= 0);
 	return Math.max(0, n);
 }
-function UU({ bridge: e, container: t, prepare: n, message_of: r, voice_for: i, title: a }) {
+function WU({ bridge: e, container: t, prepare: n, message_of: r, voice_for: i, title: a }) {
 	let o = /* @__PURE__ */ Yt({
 		message_id: 0,
 		loading: !1,
@@ -41316,8 +41316,8 @@ function UU({ bridge: e, container: t, prepare: n, message_of: r, voice_for: i, 
 		let e = t(), n = d?.firstElementChild;
 		if (!e || !n) return;
 		let r = e.getBoundingClientRect(), i = n.getBoundingClientRect();
-		i.top >= r.top + r.height * AU && i.bottom <= r.top + r.height * jU || e.scrollBy({
-			top: i.top - (r.top + r.height * MU),
+		i.top >= r.top + r.height * jU && i.bottom <= r.top + r.height * MU || e.scrollBy({
+			top: i.top - (r.top + r.height * NU),
 			behavior: "smooth"
 		});
 	}
@@ -41338,13 +41338,13 @@ function UU({ bridge: e, container: t, prepare: n, message_of: r, voice_for: i, 
 		}), e.setActionHandler("pause", () => {
 			o.paused || O();
 		}), e.setActionHandler("stop", () => {
-			fe(!1), de();
+			pe(!1), fe();
 		}), e.setActionHandler("nexttrack", () => {
-			if (m.length || o.broadcasting) return de();
+			if (m.length || o.broadcasting) return fe();
 			let e = x(o.message_id);
-			e && he(e);
+			e && ge(e);
 		}), e.setActionHandler("previoustrack", () => {
-			o.message_id > 0 && he(o.message_id);
+			o.message_id > 0 && ge(o.message_id);
 		});
 	}
 	function te(t) {
@@ -41365,21 +41365,21 @@ function UU({ bridge: e, container: t, prepare: n, message_of: r, voice_for: i, 
 				r.push(i = {
 					sentences: [],
 					text: e ? t : "",
-					prefix: e ? RU(t) : 0,
+					prefix: e ? zU(t) : 0,
 					silence: 0
 				});
 			}
-			i.sentences.at(-1)?.paragraph_end && (i.text += "\n"), i.sentences.push(a), i.text += a.text, i.silence = a.paragraph_end ? OU : 0;
+			i.sentences.at(-1)?.paragraph_end && (i.text += "\n"), i.sentences.push(a), i.text += a.text, i.silence = a.paragraph_end ? kU : 0;
 		}
-		return r.length && (r.at(-1).silence = kU), r;
+		return r.length && (r.at(-1).silence = AU), r;
 	}
 	function re(e, t, n) {
 		let r = [];
-		for (let e of t) for (let t = RU(e.w); t > 0; --t) r.push(e.t);
-		let i = e.prefix + e.sentences.reduce((e, t) => e + RU(t.text), 0), a = e.prefix;
+		for (let e of t) for (let t = zU(e.w); t > 0; --t) r.push(e.t);
+		let i = e.prefix + e.sentences.reduce((e, t) => e + zU(t.text), 0), a = e.prefix;
 		return e.sentences.map((e, t) => {
 			let o = t === 0 ? 0 : r.length >= i ? r[a] : a / Math.max(1, i) * n;
-			return a += RU(e.text), o;
+			return a += zU(e.text), o;
 		});
 	}
 	function ie(t, n, r) {
@@ -41398,7 +41398,7 @@ function UU({ bridge: e, container: t, prepare: n, message_of: r, voice_for: i, 
 				url: URL.createObjectURL(new Blob([Uint8Array.from(atob(e), (e) => e.charCodeAt(0))], { type: "audio/mpeg" })),
 				marks: t || []
 			}));
-			if (a.catch(() => _.delete(i)), _.set(i, a), _.size > NU) {
+			if (a.catch(() => _.delete(i)), _.set(i, a), _.size > PU) {
 				let [e] = _.keys();
 				_.get(e).then(({ url: e }) => URL.revokeObjectURL(e), () => {}), _.delete(e);
 			}
@@ -41434,7 +41434,7 @@ function UU({ bridge: e, container: t, prepare: n, message_of: r, voice_for: i, 
 		let o = y(e);
 		return {
 			id: e,
-			chunks: ne(o ? VU(zU(o), t) : [], r, a),
+			chunks: ne(o ? HU(BU(o), t) : [], r, a),
 			speaker: await i(v(e)),
 			pending: []
 		};
@@ -41442,10 +41442,10 @@ function UU({ bridge: e, container: t, prepare: n, message_of: r, voice_for: i, 
 	async function se(t) {
 		let n = r(t);
 		if (!n) return null;
-		let a = e.display_name(n.author), o = n.kind === "moderation" ? `主持人 ${a}：` : `${a}：`, s = await i(n.author), c = b(t), l = y(t), u = c ? VU(zU(c)) : l ? VU(zU(l)) : [], d = RU(n.text || "");
-		if (!c && d > PU) {
+		let a = e.display_name(n.author), o = n.kind === "moderation" ? `主持人 ${a}：` : `${a}：`, s = await i(n.author), c = b(t), l = y(t), u = c ? HU(BU(c)) : l ? HU(BU(l)) : [], d = zU(n.text || "");
+		if (!c && d > FU) {
 			let e = [];
-			for (let t of u) if (e.length && e.reduce((e, t) => e + t.text.length, 0) + t.text.length > PU || (e.push(t), t.paragraph_end && RU(e.map((e) => e.text).join("")) >= FU)) break;
+			for (let t of u) if (e.length && e.reduce((e, t) => e + t.text.length, 0) + t.text.length > FU || (e.push(t), t.paragraph_end && zU(e.map((e) => e.text).join("")) >= IU)) break;
 			u = [...e, A(`全文约 ${Math.round(d / 100) * 100 || d} 字，点开查看。`)];
 		}
 		return u.length ? {
@@ -41464,37 +41464,42 @@ function UU({ bridge: e, container: t, prepare: n, message_of: r, voice_for: i, 
 	function le(e, t, n) {
 		!e || t >= e.chunks.length || e.pending[t] || (e.pending[t] = ie(e.chunks[t], n, e.speaker), e.pending[t].catch(() => {}));
 	}
-	async function ue(e, t, n, r) {
+	function ue(e, t, n) {
+		le(e, t, n);
+		let r = DU, i = t + 1;
+		for (; r > 0 && i < e.chunks.length && i - t <= OU; i += 1) le(e, i, n), r -= zU(e.chunks[i].text);
+		return r > 0 && i >= e.chunks.length;
+	}
+	async function de(e, t, n, r) {
 		let { chunks: i } = e;
 		for (let a = 0; a < i.length; a += 1) {
-			for (let t = 0; t <= DU; t += 1) le(e, a + t, n);
-			a + DU >= i.length - 1 && r(), o.loading = !0;
+			ue(e, a, n) && r(), o.loading = !0;
 			let c = await e.pending[a];
 			if (o.loading = !1, t !== s || (await ae(i[a], c), t !== s)) return !1;
 		}
 		return !0;
 	}
-	function de() {
+	function fe() {
 		s += 1, l?.(), c && (c.pause(), c.removeAttribute("src")), Object.assign(o, {
 			message_id: 0,
 			loading: !1,
 			paused: !1
-		}), E(null), "mediaSession" in navigator && (navigator.mediaSession.metadata = null, navigator.mediaSession.playbackState = "none"), queueMicrotask(me);
+		}), E(null), "mediaSession" in navigator && (navigator.mediaSession.metadata = null, navigator.mediaSession.playbackState = "none"), queueMicrotask(he);
 	}
-	function fe(e) {
-		o.broadcasting = e, e ? (w(), g = crypto.randomUUID()) : (m = [], h && de());
+	function pe(e) {
+		o.broadcasting = e, e ? (w(), g = crypto.randomUUID()) : (m = [], h && fe());
 	}
-	function pe(...e) {
+	function me(...e) {
 		if (!o.broadcasting) return;
 		m.push(...e);
 		let t = m.filter((e) => e.message_id);
-		if (t.length > IU) {
+		if (t.length > LU) {
 			let e = new Set(t.slice(-3));
-			m = [{ text: `有 ${t.length} 条新回复，播最新 ${IU} 条。` }, ...m.filter((t) => !t.message_id || e.has(t))];
+			m = [{ text: `有 ${t.length} 条新回复，播最新 ${LU} 条。` }, ...m.filter((t) => !t.message_id || e.has(t))];
 		}
-		me();
+		he();
 	}
-	async function me() {
+	async function he() {
 		if (h || o.message_id || !o.broadcasting || !m.length) return;
 		h = !0;
 		let t = s;
@@ -41502,7 +41507,7 @@ function UU({ bridge: e, container: t, prepare: n, message_of: r, voice_for: i, 
 			for (; m.length && t === s && o.broadcasting;) {
 				let e = m.shift(), n = e.message_id ? await se(e.message_id) : ce(e.text);
 				if (n && t === s) {
-					if (o.message_id = n.id, te(n), !await ue(n, t, g, () => {})) break;
+					if (o.message_id = n.id, te(n), !await de(n, t, g, () => {})) break;
 					o.message_id = 0;
 				}
 			}
@@ -41512,11 +41517,11 @@ function UU({ bridge: e, container: t, prepare: n, message_of: r, voice_for: i, 
 			h = !1, t === s && (o.message_id = 0, E(null));
 		}
 	}
-	async function he(t, n = null) {
-		de();
+	async function ge(t, n = null) {
+		fe();
 		let r = s;
 		w();
-		let i = n && y(t), a = i ? HU(zU(i), n) : 0, c = crypto.randomUUID(), l = (t) => `${e.display_name(v(t))}：`;
+		let i = n && y(t), a = i ? UU(BU(i), n) : 0, c = crypto.randomUUID(), l = (t) => `${e.display_name(v(t))}：`;
 		o.message_id = t;
 		try {
 			let e = await oe(t, a, n ? "" : l(t), !0);
@@ -41527,11 +41532,10 @@ function UU({ bridge: e, container: t, prepare: n, message_of: r, voice_for: i, 
 						let t = x(e.id);
 						if (!t) return null;
 						let n = await oe(t, 0, l(t), !1);
-						for (let e = 0; e < DU; e += 1) le(n, e, c);
-						return n;
+						return n.chunks.length && ue(n, 0, c), n;
 					})();
 				};
-				if (e.chunks.length && !await ue(e, r, c, n)) return;
+				if (e.chunks.length && !await de(e, r, c, n)) return;
 				n();
 				let i = await t, a = i?.id || x(e.id);
 				if (r !== s) return;
@@ -41540,25 +41544,25 @@ function UU({ bridge: e, container: t, prepare: n, message_of: r, voice_for: i, 
 		} catch (t) {
 			r === s && e.notify("error", `朗读失败：${t.message}`);
 		}
-		r === s && de();
+		r === s && fe();
 	}
 	return window.addEventListener("resize", () => {
 		f && E(f);
 	}), {
 		state: o,
-		start: he,
-		stop: de,
+		start: ge,
+		stop: fe,
 		toggle_pause: O,
 		body_of: y,
 		unlock: w,
-		set_broadcast: fe,
-		announce: pe
+		set_broadcast: pe,
+		announce: me
 	};
 }
 //#endregion
 //#region frontend/broadcast.js
-var WU = 6e4;
-function GU({ view: e, bridge: t, reader: n }) {
+var GU = 6e4;
+function KU({ view: e, bridge: t, reader: n }) {
 	let r = /* @__PURE__ */ F(!1), i = null, a = {
 		text: "",
 		at: 0
@@ -41605,7 +41609,7 @@ function GU({ view: e, bridge: t, reader: n }) {
 			e.push({ text: `第 ${n} 轮开始${t.length ? `，依次是 ${t.join("、")}` : ""}。` }), c = t[0] || "";
 		}
 		if (r && r !== i.speaker) {
-			let t = s(r), n = Date.now() - a.at < WU && (a.text.includes(t) || a.text.includes(r));
+			let t = s(r), n = Date.now() - a.at < GU && (a.text.includes(t) || a.text.includes(r));
 			t !== c && !n && e.push({ text: `轮到 ${t}。` });
 		}
 		i.round = n || i.round, i.speaker = r;
@@ -41627,20 +41631,20 @@ function GU({ view: e, bridge: t, reader: n }) {
 }
 //#endregion
 //#region frontend/voice-input.js
-var KU = 16e3, qU = KU * 2 * 6, JU = 300, YU = 14, XU = 4096;
-function ZU(e) {
+var qU = 16e3, JU = qU * 2 * 6, YU = 300, XU = 14, ZU = 4096;
+function QU(e) {
 	let t = "";
 	for (let n = 0; n < e.length; n += 32768) t += String.fromCharCode(...e.subarray(n, n + 32768));
 	return btoa(t);
 }
-function QU({ bridge: e, on_text: t }) {
+function $U({ bridge: e, on_text: t }) {
 	let n = /* @__PURE__ */ Yt({
 		status: "",
-		levels: Array(YU).fill(0),
+		levels: Array(XU).fill(0),
 		seconds: 0
 	}), r = null;
 	function i(e, t) {
-		let n = e.rate / KU, r = [], i = e.position;
+		let n = e.rate / qU, r = [], i = e.position;
 		for (; i + n <= t.length;) {
 			let e = 0, a = 0;
 			for (let r = Math.floor(i); r < Math.floor(i + n); r += 1) e += t[r], a += 1;
@@ -41653,7 +41657,7 @@ function QU({ bridge: e, on_text: t }) {
 		return t.chain = t.chain.then(() => e.local_request("stt", {
 			upload_id: t.id,
 			index: i,
-			data: ZU(n),
+			data: QU(n),
 			final: r
 		})), t.chain;
 	}
@@ -41665,8 +41669,8 @@ function QU({ bridge: e, on_text: t }) {
 		let r = t.inputBuffer.getChannelData(0), s = 0;
 		for (let e of r) s += e * e;
 		n.levels = [...n.levels.slice(1), Math.min(1, Math.sqrt(s / r.length) * 6)];
-		for (let t of i(e, r)) e.pending[e.pending_length++] = Math.max(-32768, Math.min(32767, Math.round(t * 32767))), e.pending_length * 2 >= qU && a(e, o(e), !1).catch(() => {});
-		e.samples += r.length, n.seconds = Math.floor(e.samples / e.rate), n.seconds >= JU && u();
+		for (let t of i(e, r)) e.pending[e.pending_length++] = Math.max(-32768, Math.min(32767, Math.round(t * 32767))), e.pending_length * 2 >= JU && a(e, o(e), !1).catch(() => {});
+		e.samples += r.length, n.seconds = Math.floor(e.samples / e.rate), n.seconds >= YU && u();
 	}
 	function c(e) {
 		e.processor.disconnect(), e.source.disconnect(), e.stream.getTracks().forEach((e) => e.stop()), e.context.close();
@@ -41685,7 +41689,7 @@ function QU({ bridge: e, on_text: t }) {
 		} catch (t) {
 			throw e.close(), Error(t.name === "NotAllowedError" ? "没有麦克风权限，请在浏览器设置中允许本站使用麦克风" : `无法打开麦克风：${t.message}`);
 		}
-		let i = e.createMediaStreamSource(t), a = e.createScriptProcessor(XU, 1, 1), o = {
+		let i = e.createMediaStreamSource(t), a = e.createScriptProcessor(ZU, 1, 1), o = {
 			id: crypto.randomUUID(),
 			context: e,
 			stream: t,
@@ -41693,7 +41697,7 @@ function QU({ bridge: e, on_text: t }) {
 			processor: a,
 			rate: e.sampleRate,
 			position: 0,
-			pending: new Int16Array(qU),
+			pending: new Int16Array(JU),
 			pending_length: 0,
 			index: 0,
 			samples: 0,
@@ -41702,7 +41706,7 @@ function QU({ bridge: e, on_text: t }) {
 		a.onaudioprocess = (e) => s(o, e), i.connect(a), a.connect(e.destination), r = o, Object.assign(n, {
 			status: "recording",
 			seconds: 0,
-			levels: Array(YU).fill(0)
+			levels: Array(XU).fill(0)
 		});
 	}
 	async function u() {
@@ -41739,14 +41743,14 @@ function QU({ bridge: e, on_text: t }) {
 }
 //#endregion
 //#region frontend/ChannelDiscussion.vue
-var $U = {
+var eW = {
 	class: "channel-conversation",
 	role: "tabpanel",
 	"aria-label": "消息"
-}, eW = {
+}, tW = {
 	key: 0,
 	class: "channel-filter-summary"
-}, tW = ["onKeydown"], nW = { class: "channel-map-track" }, rW = [
+}, nW = ["onKeydown"], rW = { class: "channel-map-track" }, iW = [
 	"data-author",
 	"data-jump-id",
 	"data-round-jump",
@@ -41760,44 +41764,41 @@ var $U = {
 	"onFocus",
 	"onKeydown",
 	"onClick"
-], iW = {
+], aW = {
 	key: 0,
 	class: "channel-round-number",
 	"aria-hidden": "true"
-}, aW = {
+}, oW = {
 	key: 0,
 	class: "channel-nav-preview-round"
-}, oW = { class: "channel-nav-preview-header" }, sW = { class: "channel-nav-preview-meta" }, cW = { key: 0 }, lW = { key: 1 }, uW = ["innerHTML"], dW = {
+}, sW = { class: "channel-nav-preview-header" }, cW = { class: "channel-nav-preview-meta" }, lW = { key: 0 }, uW = { key: 1 }, dW = ["innerHTML"], fW = {
 	key: 0,
 	class: "channel-message-group channel-topic-group"
-}, fW = { key: 0 }, pW = { class: "channel-message-byline" }, mW = { class: "channel-message-meta" }, hW = { class: "channel-message-author" }, gW = {
+}, pW = { key: 0 }, mW = { class: "channel-message-byline" }, hW = { class: "channel-message-meta" }, gW = { class: "channel-message-author" }, _W = {
 	key: 0,
-	class: "channel-message-provenance channel-message-elapsed"
-}, _W = {
-	key: 1,
 	class: "channel-message-provenance channel-message-elapsed"
 }, vW = {
+	key: 1,
+	class: "channel-message-provenance channel-message-elapsed"
+}, yW = {
 	class: "channel-message-text",
 	role: "status"
-}, yW = { class: "channel-message-text channel-stop-note" }, bW = ["onToggle"], xW = ["aria-label"], SW = { class: "channel-message-text channel-late-answer" }, CW = { class: "channel-message-byline" }, wW = { class: "channel-message-meta" }, TW = { class: "channel-message-author" }, EW = { class: "channel-message-provenance" }, DW = ["title"], OW = { class: "channel-working-row" }, kW = ["aria-label", "title"], AW = { key: 0 }, jW = { key: 2 }, MW = {
+}, bW = { class: "channel-message-text channel-stop-note" }, xW = ["onToggle"], SW = ["aria-label"], CW = { class: "channel-message-text channel-late-answer" }, wW = { class: "channel-message-byline" }, TW = { class: "channel-message-meta" }, EW = { class: "channel-message-author" }, DW = { class: "channel-message-provenance" }, OW = ["title"], kW = { class: "channel-working-row" }, AW = ["aria-label", "title"], jW = { key: 0 }, MW = { key: 2 }, NW = {
 	key: 0,
 	class: "channel-working-actions"
-}, NW = { class: "channel-message-text channel-failure-reason is-warning" }, PW = { class: "channel-failure-actions" }, FW = { class: "channel-message-provenance" }, IW = [
+}, PW = { class: "channel-message-text channel-failure-reason is-warning" }, FW = { class: "channel-failure-actions" }, IW = { class: "channel-message-provenance" }, LW = [
 	"id",
 	"data-author",
 	"aria-label"
-], LW = { class: "channel-message-byline" }, RW = { class: "channel-message-meta" }, zW = { class: "channel-message-author" }, BW = {
+], RW = { class: "channel-message-byline" }, zW = { class: "channel-message-meta" }, BW = { class: "channel-message-author" }, VW = {
 	key: 0,
 	class: "channel-message-round"
-}, VW = ["title"], HW = {
+}, HW = ["title"], UW = {
 	key: 0,
 	class: "channel-message-provenance channel-message-elapsed"
-}, UW = { class: "channel-working-row" }, WW = { class: "channel-message-text channel-failure-reason" }, GW = {
+}, WW = { class: "channel-working-row" }, GW = { class: "channel-message-text channel-failure-reason" }, KW = {
 	key: 0,
 	class: "channel-working-actions"
-}, KW = {
-	key: 2,
-	class: "channel-failure-actions"
 }, qW = [
 	"id",
 	"data-message-id",
@@ -41889,7 +41890,7 @@ var $U = {
 			}
 			return g;
 		}
-		let v = UU({
+		let v = WU({
 			bridge: a,
 			container: () => p.value,
 			message_of: (e) => i.value.messages.find((t) => t.id === e),
@@ -41898,11 +41899,11 @@ var $U = {
 			prepare: async (e) => {
 				oe.value.get(e)?.truncated && !m.value.has(e) && (m.value.add(e), await Qn());
 			}
-		}), y = GU({
+		}), y = KU({
 			view: i,
 			bridge: a,
 			reader: v
-		}), b = /* @__PURE__ */ F(!1), x = QU({
+		}), b = /* @__PURE__ */ F(!1), x = $U({
 			bridge: a,
 			on_text: (e) => {
 				let t = Me.value?.textareaRef, n = l.value || "", r = t ? t.selectionStart : n.length, i = t ? t.selectionEnd : n.length;
@@ -42899,8 +42900,8 @@ var $U = {
 		}
 		return (e, t) => {
 			let o = MA, h = pA, g = sA, _ = RV, w = rH, E = tH, D = kV, O = $V, k = XV, ee = PV, te = JV, ne = BV;
-			return U(), W("section", $U, [
-				I(i).query || I(i).mention_only || I(i).host_only ? (U(), W("div", eW, [K("span", null, N([
+			return U(), W("section", eW, [
+				I(i).query || I(i).mention_only || I(i).host_only ? (U(), W("div", tW, [K("span", null, N([
 					I(i).query && `“${I(i).query}”`,
 					I(i).host_only && "只看主持",
 					I(i).mention_only && `@${I(a).display_name(e.author)}`
@@ -42929,7 +42930,7 @@ var $U = {
 					onFocusout: Wn,
 					onKeydown: fu(uu(Wn, ["stop"]), ["esc"]),
 					onContextmenu: Bn
-				}, [K("div", nW, [(U(!0), W(H, null, B(Cn.value, (e, t, n, r) => {
+				}, [K("div", rW, [(U(!0), W(H, null, B(Cn.value, (e, t, n, r) => {
 					let o = [
 						e,
 						he.value,
@@ -42960,16 +42961,16 @@ var $U = {
 						onFocus: (t) => Pn(e, t),
 						onKeydown: (t) => jn(t, e.index),
 						onClick: (t) => zn(e, t)
-					}, [e.round ? (U(), W("span", iW, N(e.number || "–"), 1)) : (U(), G(I(iV).span, {
+					}, [e.round ? (U(), W("span", aW, N(e.number || "–"), 1)) : (U(), G(I(iV).span, {
 						key: 1,
 						class: "channel-jump-tick",
 						"aria-hidden": "true",
 						initial: !1,
 						animate: Jn(e, e.index),
 						transition: ye
-					}, null, 8, ["animate"]))], 42, rW))), 128))], 4));
+					}, null, 8, ["animate"]))], 42, iW))), 128))], 4));
 					return s.memo = o, s;
-				}, t, 1), 128))])], 44, tW)) : Y("", !0),
+				}, t, 1), 128))])], 44, nW)) : Y("", !0),
 				(U(), G(Hr, { to: "body" }, [Oe.value ? (U(), G(I(iV).div, {
 					key: 0,
 					id: "channel-navigation-preview",
@@ -42996,8 +42997,8 @@ var $U = {
 						ref: ge,
 						class: "channel-nav-preview-content"
 					}, [
-						me.value ? (U(), W("h3", aW, N(Ae.value), 1)) : Y("", !0),
-						K("div", oW, [
+						me.value ? (U(), W("h3", oW, N(Ae.value), 1)) : Y("", !0),
+						K("div", sW, [
 							q(h, {
 								src: I(a).identities[Oe.value.author]?.icon,
 								text: I(a).identities[Oe.value.author]?.initials || "?",
@@ -43013,11 +43014,11 @@ var $U = {
 							K("strong", null, N(I(a).display_name(Oe.value.author)), 1),
 							K("span", null, "#" + N(Oe.value.id), 1)
 						]),
-						K("div", sW, [J(N(Ae.value) + " · " + N(I(a).sources[Oe.value.source]) + " · " + N(I(a).format_time(Oe.value.created_at)), 1), Oe.value.kind === "moderation" ? (U(), W("span", cW, " · 主持人")) : Oe.value.kind === "receipt" ? (U(), W("span", lW, " · 运行回执")) : Y("", !0)]),
+						K("div", cW, [J(N(Ae.value) + " · " + N(I(a).sources[Oe.value.source]) + " · " + N(I(a).format_time(Oe.value.created_at)), 1), Oe.value.kind === "moderation" ? (U(), W("span", lW, " · 主持人")) : Oe.value.kind === "receipt" ? (U(), W("span", uW, " · 运行回执")) : Y("", !0)]),
 						K("div", {
 							class: "channel-nav-preview-text markdown-body",
 							innerHTML: Oe.value.summary ? Oe.value.rendered_summary : Oe.value.rendered_text
-						}, null, 8, uW)
+						}, null, 8, dW)
 					], 512)]),
 					_: 1
 				}, 8, [
@@ -43081,7 +43082,7 @@ var $U = {
 					onTouchstartPassive: An,
 					onKeydown: An
 				}, [
-					!I(i).query && !I(i).mention_only && !I(i).host_only && !fn.value ? (U(), W("div", dW, [q(SH, {
+					!I(i).query && !I(i).mention_only && !I(i).host_only && !fn.value ? (U(), W("div", fW, [q(SH, {
 						ref: (e) => /* @__PURE__ */ ln(r) ? r.value = e : r = e,
 						onEdit: t[4] ||= (e) => n("edit")
 					}, null, 512)])) : Y("", !0),
@@ -43107,7 +43108,7 @@ var $U = {
 							label: "主持人安排",
 							"toggle-label": "展开或收起各专家的任务"
 						}, {
-							text: L(() => [J("主持人安排：" + N(Dt.value.get(e.arrangement.after_message_id)?.find((t) => t.id === e.arrangement.id)?.label), 1), e.arrangement.after_message_id ? (U(), W("small", fW, "耗时 " + N(Nt(Ft(e.arrangement, I(i).messages.find((t) => t.id === e.arrangement.after_message_id)))), 1)) : Y("", !0)]),
+							text: L(() => [J("主持人安排：" + N(Dt.value.get(e.arrangement.after_message_id)?.find((t) => t.id === e.arrangement.id)?.label), 1), e.arrangement.after_message_id ? (U(), W("small", pW, "耗时 " + N(Nt(Ft(e.arrangement, I(i).messages.find((t) => t.id === e.arrangement.after_message_id)))), 1)) : Y("", !0)]),
 							default: L(() => [(U(!0), W(H, null, B(e.arrangement.turns, (t) => (U(), W("p", { key: `${e.id}-${t.expert}-${t.question}` }, [K("span", null, N(I(a).display_name(t.expert)) + "：" + N(t.question), 1)]))), 128))]),
 							_: 2
 						}, 1024)) : e.cancelled_turn || e.cancelled_execution ? (U(), G(E, {
@@ -43127,7 +43128,7 @@ var $U = {
 							}
 						}, {
 							body: L(() => [
-								K("div", pW, [
+								K("div", mW, [
 									q(h, {
 										src: I(a).identities[e.author]?.icon,
 										text: I(a).identities[e.author]?.initials || "?",
@@ -43140,15 +43141,15 @@ var $U = {
 										"alt",
 										"class"
 									]),
-									K("div", mW, [K("div", hW, [K("strong", null, N(I(a).display_name(e.author)), 1)])]),
-									e.cancelled_turn ? (U(), W("span", gW, "已错过 · 安排 #" + N(e.cancelled_turn.display_id || e.cancelled_turn.id), 1)) : (U(), W("span", _W, N(st(e.cancelled_execution).label) + " · 执行 #" + N(e.execution_id), 1))
+									K("div", hW, [K("div", gW, [K("strong", null, N(I(a).display_name(e.author)), 1)])]),
+									e.cancelled_turn ? (U(), W("span", _W, "已错过 · 安排 #" + N(e.cancelled_turn.display_id || e.cancelled_turn.id), 1)) : (U(), W("span", vW, N(st(e.cancelled_execution).label) + " · 执行 #" + N(e.execution_id), 1))
 								]),
-								K("div", vW, N(e.cancelled_turn ? "本次发言已被跳过或取消，未回答。" : e.cancelled_execution.result || "本次执行已作废，未回答。"), 1),
-								(U(!0), W(H, null, B([e.cancelled_execution || (P.value.free?.executions || []).find((t) => t.id === e.execution_id)].filter((e) => e && st(e).note), (e) => (U(), W(H, { key: e.id }, [K("p", yW, N(st(e).note), 1), e.late_answer && I(i).access?.can_manage ? (U(), W("details", {
+								K("div", yW, N(e.cancelled_turn ? "本次发言已被跳过或取消，未回答。" : e.cancelled_execution.result || "本次执行已作废，未回答。"), 1),
+								(U(!0), W(H, null, B([e.cancelled_execution || (P.value.free?.executions || []).find((t) => t.id === e.execution_id)].filter((e) => e && st(e).note), (e) => (U(), W(H, { key: e.id }, [K("p", bW, N(st(e).note), 1), e.late_answer && I(i).access?.can_manage ? (U(), W("details", {
 									key: 0,
 									class: "channel-receipt",
 									onToggle: (t) => qe(e.id, t)
-								}, [K("summary", { "aria-label": `查看 ${I(a).display_name(e.member)} 未采纳的回答` }, "未采纳的回答", 8, xW), K("div", SW, N(Ke.value.get(e.id)?.text ?? "正在读取…"), 1)], 40, bW)) : Y("", !0)], 64))), 128))
+								}, [K("summary", { "aria-label": `查看 ${I(a).display_name(e.member)} 未采纳的回答` }, "未采纳的回答", 8, SW), K("div", CW, N(Ke.value.get(e.id)?.text ?? "正在读取…"), 1)], 40, xW)) : Y("", !0)], 64))), 128))
 							]),
 							_: 2
 						}, 1032, ["id", "data-author"])) : e.slot_card && !e.failure ? (U(), G(E, {
@@ -43168,7 +43169,7 @@ var $U = {
 							}
 						}, {
 							body: L(() => [
-								K("div", CW, [q(h, {
+								K("div", wW, [q(h, {
 									src: I(a).identities[e.author]?.icon,
 									text: I(a).identities[e.author]?.initials || "?",
 									alt: I(a).display_name(e.author),
@@ -43179,14 +43180,14 @@ var $U = {
 									"text",
 									"alt",
 									"class"
-								]), K("div", wW, [K("div", TW, [K("strong", null, N(I(a).display_name(e.author)), 1)]), K("div", EW, [e.created_at ? (U(), W(H, { key: 0 }, [K("time", { title: (/* @__PURE__ */ new Date(e.created_at * 1e3)).toLocaleString("zh-CN") }, N(I(a).format_time(e.created_at * 1e3)), 9, DW), t[32] ||= J(" · ", -1)], 64)) : Y("", !0), J(N(e.waiting ? `手动启动${e.created_at ? ` · 已等 ${Nt(Math.max(0, Ue.value - e.created_at))}` : ""}` : `已用 ${Nt(Math.max(0, Ue.value - e.created_at))}`), 1)])])]),
-								K("div", OW, [(U(!0), W(H, null, B([Xe(e)], (t) => (U(), W("div", {
+								]), K("div", TW, [K("div", EW, [K("strong", null, N(I(a).display_name(e.author)), 1)]), K("div", DW, [e.created_at ? (U(), W(H, { key: 0 }, [K("time", { title: (/* @__PURE__ */ new Date(e.created_at * 1e3)).toLocaleString("zh-CN") }, N(I(a).format_time(e.created_at * 1e3)), 9, OW), t[32] ||= J(" · ", -1)], 64)) : Y("", !0), J(N(e.waiting ? `手动启动${e.created_at ? ` · 已等 ${Nt(Math.max(0, Ue.value - e.created_at))}` : ""}` : `已用 ${Nt(Math.max(0, Ue.value - e.created_at))}`), 1)])])]),
+								K("div", kW, [(U(!0), W(H, null, B([Xe(e)], (t) => (U(), W("div", {
 									key: e.id,
 									class: j(["channel-message-text", { "channel-working-warning": t.warning }]),
 									role: "status",
 									"aria-label": `${I(a).display_name(e.author)} ${t.text}`,
 									title: ot(e) ? void 0 : "此接入方式看不到进度，可在原窗口查看"
-								}, [e.waiting ? (U(), W("span", AW, N(e.text), 1)) : t.live ? (U(), G(lU, {
+								}, [e.waiting ? (U(), W("span", jW, N(e.text), 1)) : t.live ? (U(), G(lU, {
 									key: 1,
 									text: t.text,
 									seed: e.author,
@@ -43200,7 +43201,7 @@ var $U = {
 									"beat",
 									"silent",
 									"muted"
-								])) : (U(), W("span", jW, N(t.text), 1))], 10, kW))), 128)), !e.retry && I(i).access?.can_manage ? (U(), W("div", MW, [Fe.value?.expert === e.author && e.discussion_request ? (U(), W(H, { key: 0 }, [q(_, { text: "暂停讨论" }, {
+								])) : (U(), W("span", MW, N(t.text), 1))], 10, AW))), 128)), !e.retry && I(i).access?.can_manage ? (U(), W("div", NW, [Fe.value?.expert === e.author && e.discussion_request ? (U(), W(H, { key: 0 }, [q(_, { text: "暂停讨论" }, {
 									default: L(() => [q(o, {
 										icon: "i-lucide-pause",
 										size: "sm",
@@ -43259,7 +43260,7 @@ var $U = {
 									])]),
 									_: 2
 								}, 1024))])) : Y("", !0)]),
-								e.retry ? (U(), W(H, { key: 0 }, [K("p", NW, N(e.retry.reason), 1), K("div", PW, [K("span", FW, N(e.retry.retry_at > Ue.value ? `${e.retry.retry_at - Ue.value} 秒后自动重试` : "正在重试") + "（第 " + N(e.retry.attempt) + "/" + N(JK) + " 次）", 1), I(i).access?.can_manage ? (U(), W(H, { key: 0 }, [q(o, {
+								e.retry ? (U(), W(H, { key: 0 }, [K("p", PW, N(e.retry.reason), 1), K("div", FW, [K("span", IW, N(e.retry.retry_at > Ue.value ? `${e.retry.retry_at - Ue.value} 秒后自动重试` : "正在重试") + "（第 " + N(e.retry.attempt) + "/" + N(JK) + " 次）", 1), I(i).access?.can_manage ? (U(), W(H, { key: 0 }, [q(o, {
 									label: "立即重试",
 									icon: "i-lucide-rotate-ccw",
 									size: "sm",
@@ -43306,7 +43307,7 @@ var $U = {
 							"data-author": I(a).identities[e.author]?.style,
 							"aria-label": `${I(a).display_name(e.author)} 执行失败`
 						}, [
-							K("div", LW, [
+							K("div", RW, [
 								q(h, {
 									src: I(a).identities[e.author]?.icon,
 									text: I(a).identities[e.author]?.initials || "?",
@@ -43319,9 +43320,9 @@ var $U = {
 									"alt",
 									"class"
 								]),
-								K("div", RW, [K("div", zW, [
+								K("div", zW, [K("div", BW, [
 									K("strong", null, N(I(a).display_name(e.author)), 1),
-									e.failure.role === "host" ? (U(), W("span", BW, "主持工作")) : Y("", !0),
+									e.failure.role === "host" ? (U(), W("span", VW, "主持工作")) : Y("", !0),
 									q(D, {
 										label: "执行失败",
 										color: "error",
@@ -43331,10 +43332,10 @@ var $U = {
 								]), (U(!0), W(H, null, B([e.slot_card ? e.created_at * 1e3 : e.created_at], (t) => (U(), W("div", {
 									key: e.id,
 									class: "channel-message-provenance"
-								}, [K("time", { title: new Date(t).toLocaleString("zh-CN") }, N(I(a).format_time(t)), 9, VW), K("span", null, "执行 #" + N(e.failure.id), 1)]))), 128))]),
-								e.failure.elapsed_seconds == null ? Y("", !0) : (U(), W("span", HW, "耗时 " + N(Nt(e.failure.elapsed_seconds)), 1))
+								}, [K("time", { title: new Date(t).toLocaleString("zh-CN") }, N(I(a).format_time(t)), 9, HW), K("span", null, "执行 #" + N(e.failure.id), 1)]))), 128))]),
+								e.failure.elapsed_seconds == null ? Y("", !0) : (U(), W("span", UW, "耗时 " + N(Nt(e.failure.elapsed_seconds)), 1))
 							]),
-							K("div", UW, [K("p", WW, N(e.failure.result || "执行失败，未提供原因"), 1), ar(e.failure) ? (U(), W("div", GW, [q(_, { text: "重试" }, {
+							K("div", WW, [K("p", GW, N(e.failure.result || "执行失败，未提供原因"), 1), ar(e.failure) ? (U(), W("div", KW, [q(_, { text: "重试" }, {
 								default: L(() => [q(o, {
 									icon: "i-lucide-rotate-cw",
 									variant: "solid",
@@ -43378,17 +43379,8 @@ var $U = {
 								"busy",
 								"error",
 								"onAllow"
-							])) : Y("", !0),
-							ir(e.failure) ? (U(), W("div", KW, [q(o, {
-								label: "重发",
-								icon: "i-lucide-rotate-ccw",
-								size: "sm",
-								variant: "soft",
-								color: "neutral",
-								"aria-label": `把执行 #${e.failure.id} 的原消息填回输入框重发`,
-								onClick: (t) => or(e.failure)
-							}, null, 8, ["aria-label", "onClick"])])) : Y("", !0)
-						], 8, IW)) : e.withdrawn ? (U(), W("div", {
+							])) : Y("", !0)
+						], 8, LW)) : e.withdrawn ? (U(), W("div", {
 							key: 6,
 							id: String(e.id),
 							"data-message-id": e.id,
@@ -44339,7 +44331,7 @@ var $U = {
 			]);
 		};
 	}
-}, [["__scopeId", "data-v-4be5b1e1"]]), nq = { class: "page-heading" }, rq = { class: "topic-brief" }, iq = {
+}, [["__scopeId", "data-v-096bc8c4"]]), nq = { class: "page-heading" }, rq = { class: "topic-brief" }, iq = {
 	key: 0,
 	class: "host-progress"
 }, aq = {
@@ -56961,16 +56953,23 @@ var N0 = {
 			}
 		};
 		document.documentElement.dataset.motion = "on", br("discussion", pV());
-		let n = NE();
-		function r({ detail: { level: e, message: r } }) {
-			let i = String(r);
-			n.add({
+		let n = {
+			onMousedown: (e) => e.preventDefault(),
+			onPointermove: (e) => {
+				e.pointerType !== "mouse" && e.stopPropagation();
+			}
+		}, r = { close: "pointer-coarse:p-2.5 pointer-coarse:-m-2.5" }, i = NE();
+		function a({ detail: { level: e, message: a } }) {
+			let o = String(a);
+			i.add({
 				...t[e] || t.info,
-				id: `${e}:${i}`,
-				title: i.length > i3 ? `${i.slice(0, 119)}…` : i
+				...n,
+				ui: r,
+				id: `${e}:${o}`,
+				title: o.length > i3 ? `${o.slice(0, 119)}…` : o
 			});
 		}
-		return document.addEventListener("discuss:notice", r), ta(() => document.removeEventListener("discuss:notice", r)), (e, t) => {
+		return document.addEventListener("discuss:notice", a), ta(() => document.removeEventListener("discuss:notice", a)), (e, t) => {
 			let n = HA;
 			return U(), G(n, {
 				locale: I(fV),

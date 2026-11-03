@@ -1392,9 +1392,6 @@ function copy_message(message) { act("copy", `${view.value.room_site}/r/${room.v
           <ExecutionNotes v-if="message.failure.notes" :count="message.failure.notes" :notes="execution_notes.get(message.failure.id)" @load="load_notes(message.failure.id)" />
           <ExecutionDenials v-if="message.failure.denials?.length" :denials="message.failure.denials" :allowable="Boolean(denial_allowance(message.failure))"
             :busy="allowing === message.failure.id" :error="allow_errors[message.failure.id]" @allow="allow_and_resend(message.failure)" />
-          <div v-if="failed_request_message(message.failure)" class="channel-failure-actions">
-            <UButton label="重发" icon="i-lucide-rotate-ccw" size="sm" variant="soft" color="neutral" :aria-label="`把执行 #${message.failure.id} 的原消息填回输入框重发`" @click="resend_failed(message.failure)" />
-          </div>
         </section>
         <div v-else-if="message.withdrawn" :id="String(message.id)" :data-message-id="message.id" class="channel-withdrawn" :data-author="bridge.identities[message.author]?.style">
           <UIcon :name="message.withdrawn === 'retracted' ? 'i-lucide-undo-2' : 'i-lucide-history'" class="channel-withdrawn-icon" />

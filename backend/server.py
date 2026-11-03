@@ -678,6 +678,23 @@ def list_rooms(connection, params=None):
             **folder_directory(connection)}
 
 
+def last_room(connection):
+    """The room last opened by the site's manager on any device, or '' when none or it no longer exists."""
+    row = connection.execute("""SELECT p.value FROM site_preferences p JOIN rooms r ON r.id=p.value
+        WHERE p.key='last_room'""").fetchone()
+    return row[0] if row else ""
+
+
+def remember_last_room(connection, payload):
+    """Remember the room the manager opened, so the next visit from any device reopens it."""
+    room_id = payload.get("room_id")
+    if not isinstance(room_id, str) or not connection.execute("SELECT 1 FROM rooms WHERE id=?", (room_id,)).fetchone():
+        raise LookupError("房间不存在")
+    connection.execute("INSERT INTO site_preferences (key,value) VALUES ('last_room',?) "
+                       "ON CONFLICT(key) DO UPDATE SET value=excluded.value", (room_id,))
+    return {"last_room": room_id}
+
+
 def folder_directory(connection):
     """Return real folders and the virtual group's index (null keeps it last)."""
     settings = connection.execute("SELECT uncategorized_position FROM directory_settings WHERE id=1").fetchone()
@@ -1564,8 +1581,9 @@ class DiscussionHandler(BaseHTTPRequestHandler):
         action = (getattr(self, "payload_cache", None) or {}).get("action")
         # Timeline segments are read by the timeline page on its own schedule, so they wake no other page.
         quiet_renewal = parts[3:4] == ["executions"] and action in ("renew", "segments")
+        # Remembering the opened room changes nothing another page shows, so it wakes none of them.
         if (self.command == "POST" and 200 <= status < 300 and parts[:2] in (["api", "rooms"], ["api", "folders"])
-                and not quiet_renewal):
+                and not quiet_renewal and parts != ["api", "rooms", "last"]):
             self.server.hub.notify_update(parts[2] if parts[:2] == ["api", "rooms"] and len(parts) > 3 else None)
         if content_type == "application/json":
             body = json.dumps(body, ensure_ascii=False)
@@ -1945,10 +1963,17 @@ class DiscussionHandler(BaseHTTPRequestHandler):
             return self.respond(room_revisions(connection, params))
         if parts == ["api", "rooms"]:
             if method == "GET":
-                return self.respond({**list_rooms(connection, params), "participants": PARTICIPANTS})
+                return self.respond({**list_rooms(connection, params), "participants": PARTICIPANTS, "last_room": last_room(connection)})
             room = create_room(connection, self.read_payload(), self.headers.get("X-Discussion-Token", ""))
             connection.commit()
             return self.respond(room, 200 if room["duplicate"] else 201)
+        if parts == ["api", "rooms", "last"] and method == "POST":
+            # Only the manager (this computer's page, a relayed device or a signed-in administrator) moves it.
+            if not (self.bridged or self.admin_session(connection)):
+                raise PermissionError("需要管理员身份")
+            result = remember_last_room(connection, self.read_payload())
+            connection.commit()
+            return self.respond(result)
         if parts == ["api", "rooms", "import"] and method == "POST":
             result = import_room(connection, self.read_payload(MAX_IMPORT_BYTES), self.headers.get("X-Discussion-Token", ""))
             connection.commit()

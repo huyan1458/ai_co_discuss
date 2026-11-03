@@ -23,11 +23,20 @@ document.documentElement.dataset.motion = MOTION_ENABLED ? "on" : "off";
 const discussion = use_discussion();
 provide("discussion", discussion);
 
+// Only a mouse resting on a notice pauses its countdown. A click or tap would otherwise focus the notice, and the toaster
+// keeps it paused while focus stays inside; a touch would pause it with nothing to resume it.
+const NOTICE_EVENTS = {
+  onMousedown: (event) => event.preventDefault(),
+  onPointermove: (event) => { if (event.pointerType !== "mouse") event.stopPropagation(); },
+};
+// The close button is a bare icon; on touch screens its tap area is widened without moving it.
+const NOTICE_UI = { close: "pointer-coarse:p-2.5 pointer-coarse:-m-2.5" };
+
 const toast = useToast();
 /** Show the controller's notices; a repeat of one still open restarts it instead of stacking a copy. */
 function show_notice({ detail: { level, message } }) {
   const text = String(message);
-  toast.add({ ...(NOTICE_LEVELS[level] || NOTICE_LEVELS.info), id: `${level}:${text}`,
+  toast.add({ ...(NOTICE_LEVELS[level] || NOTICE_LEVELS.info), ...NOTICE_EVENTS, ui: NOTICE_UI, id: `${level}:${text}`,
     title: text.length > NOTICE_MAX_LENGTH ? `${text.slice(0, NOTICE_MAX_LENGTH - 1)}…` : text });
 }
 document.addEventListener("discuss:notice", show_notice);

@@ -18,6 +18,11 @@ END;
 CREATE TABLE IF NOT EXISTS topic_folders (
     id TEXT PRIMARY KEY, name TEXT NOT NULL, position INTEGER NOT NULL DEFAULT 0
 );
+-- Site-wide preferences of the person managing the site; `last_room` is the room they last opened on any device.
+CREATE TABLE IF NOT EXISTS site_preferences (
+    key TEXT PRIMARY KEY,
+    value TEXT NOT NULL
+);
 CREATE TABLE IF NOT EXISTS directory_settings (
     id INTEGER PRIMARY KEY CHECK (id=1),
     uncategorized_position INTEGER CHECK (uncategorized_position>=0)

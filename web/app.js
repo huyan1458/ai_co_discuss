@@ -91,6 +91,8 @@ state.messages = [];
 state.message_history = null;
 // Whether the directory shows the paired computer's rooms, and whether that computer is currently connected.
 state.remote_rooms = false;
+// The room last opened on any device, as the computer's website keeps it; "" until the room list is read.
+state.last_room = "";
 state.remote_online = null;
 state.remote_site = "";
 // The last full view and transcript of recently opened rooms: reopening one shows it at once while the site is read again,
@@ -946,6 +948,7 @@ async function refresh_room({ room: read_room = true } = {}) {
     state.rooms = directory.rooms.map((room) => merge_room_folder(room, folder_version, archive_version, directory_version));
     set_folder_directory(directory);
   }
+  if (directory.last_room !== undefined && !state.room) state.last_room = directory.last_room;
   if (state.room && !state.rooms.some((item) => item.id === state.room.id)) return select_room(visible_rooms()[0]?.id);
   if (!state.room || !read_room) {
     if (!state.room && visible_rooms().length) return select_room(opening_room());
@@ -968,12 +971,23 @@ async function refresh_room({ room: read_room = true } = {}) {
 // The room last opened in this browser, reopened on the next visit instead of the first in the list.
 const LAST_ROOM_KEY = "ai-codiscuss-last-room";
 
-/** The room to open when none is chosen: the address's room, else the one last opened here, else the first listed. */
+/**
+ * The room to open when none is chosen: the address's room, else the one last opened on any device (kept by the
+ * computer's website), else the one last opened in this browser, else the first listed.
+ */
 function opening_room() {
   let last = null;
   try { last = localStorage.getItem(LAST_ROOM_KEY); } catch { /* Storage may be unavailable. */ }
-  const wanted = [new URLSearchParams(location.search).get("room"), last].find((id) => id && state.rooms.some((room) => room.id === id));
+  const wanted = [new URLSearchParams(location.search).get("room"), state.last_room, last].find((id) => id && state.rooms.some((room) => room.id === id));
   return wanted || visible_rooms()[0]?.id;
+}
+
+/** Tell the computer's website which room was opened, so another device opens it next; failures change nothing. */
+function remember_room(room_id) {
+  try { localStorage.setItem(LAST_ROOM_KEY, room_id); } catch { /* Keep working without remembering. */ }
+  if (state.last_room === room_id || (computer_rooms_only() && !state.remote_rooms)) return;
+  state.last_room = room_id;
+  request_json("/api/rooms/last", { room_id }).catch(() => {});
 }
 
 async function select_room(room_id) {
@@ -1003,7 +1017,7 @@ async function select_room(room_id) {
   cancel_reply();
   select_tab("discussion", { refresh: false });
   history.replaceState(null, "", state.room ? `/?room=${encodeURIComponent(room_id)}` : "/");
-  if (state.room) try { localStorage.setItem(LAST_ROOM_KEY, room_id); } catch { /* Keep working without remembering. */ }
+  if (state.room) remember_room(room_id);
   if (state.room) state.archive_view = Boolean(state.room.archived);
   else {
     element("host-brief-panel").hidden = true;
@@ -3874,6 +3888,7 @@ async function initialize() {
   try {
     const result = computer_rooms_only() && !state.remote_rooms ? { rooms: [] } : await request_json("/api/rooms");
     state.rooms = result.rooms;
+    state.last_room = result.last_room || "";
     set_folder_directory(result);
     await select_room(opening_room());
     set_connection(true);

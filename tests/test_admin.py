@@ -163,6 +163,14 @@ class AdminTests(unittest.TestCase):
         message = {"author": "用户", "text": "本机网页的发言", "submission_id": uuid.uuid4().hex}
         self.assertEqual(self.request(f"/api/rooms/{room}/messages", message)[0], 201)
         self.assertEqual(self.request(f"/api/rooms/{room}/messages", {**message, "submission_id": uuid.uuid4().hex}, token=uuid.uuid4().hex)[0], 403)
+        # The room last opened is kept by the site, so another device opens it next; a missing room is refused.
+        self.assertEqual(self.request("/api/rooms")[1]["last_room"], "")
+        self.assertEqual(self.request("/api/rooms/last", {"room_id": room})[0], 200)
+        self.assertEqual(self.request("/api/rooms")[1]["last_room"], room)
+        self.assertEqual(self.request("/api/rooms/last", {"room_id": "missing"})[0], 404)
+        self.server.local_site = False
+        self.assertEqual(self.request("/api/rooms/last", {"room_id": room})[0], 403, "a visitor who is not the manager cannot move it")
+        self.server.local_site = True
         self.assertEqual(self.request(f"/api/rooms/{room}/archive", {"actor": "用户"})[0], 200)
         self.assertEqual(self.request(f"/api/rooms/{room}/delete", {"actor": "用户", "confirm_title": "管理员验证"})[0], 200)
 

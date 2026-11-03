@@ -17,8 +17,11 @@ const MAX_SENTENCE = 120;
 // must stay small. The very first request is shorter so reading starts sooner.
 const MAX_CHUNK = 200;
 const FIRST_CHUNK = 80;
-// Requests kept ahead of playback: one relayed request takes seconds, longer than a short paragraph plays.
-const PREFETCH = 2;
+// Requests are started ahead of playback until the text after the one playing holds this many readable characters (about
+// 20 s of speech at the measured ~4.7 characters per second), so a relayed request's few seconds stay covered even when
+// the next requests are short paragraphs; at most MAX_AHEAD requests ahead, to bound what a stop leaves unheard.
+const AHEAD_CHARS = 100;
+const MAX_AHEAD = 4;
 // Silence added between paragraphs and between messages, on top of the service's own pauses.
 const PARAGRAPH_GAP_MS = 350;
 const MESSAGE_GAP_MS = 700;
@@ -370,12 +373,25 @@ export function use_read_aloud({ bridge, container, prepare, message_of, voice_f
     plan.pending[index].catch(() => {});
   }
 
-  /** Play one plan's requests with PREFETCH ahead; near its end, `on_tail` lets what follows start preparing. */
+  /**
+   * Start request `index` and those after it until AHEAD_CHARS readable characters follow it (or MAX_AHEAD requests).
+   * @returns {boolean} True when the plan ran out before the budget was met, so what follows should start preparing.
+   */
+  function fetch_ahead(plan, index, section_id) {
+    fetch_chunk(plan, index, section_id);
+    let left = AHEAD_CHARS, next = index + 1;
+    for (; left > 0 && next < plan.chunks.length && next - index <= MAX_AHEAD; next += 1) {
+      fetch_chunk(plan, next, section_id);
+      left -= readable_length(plan.chunks[next].text);
+    }
+    return left > 0 && next >= plan.chunks.length;
+  }
+
+  /** Play one plan's requests, keeping AHEAD_CHARS of text requested ahead; near its end, `on_tail` lets what follows start preparing. */
   async function read_plan(plan, token, section_id, on_tail) {
     const { chunks } = plan;
     for (let index = 0; index < chunks.length; index += 1) {
-      for (let ahead = 0; ahead <= PREFETCH; ahead += 1) fetch_chunk(plan, index + ahead, section_id);
-      if (index + PREFETCH >= chunks.length - 1) on_tail();
+      if (fetch_ahead(plan, index, section_id)) on_tail();
       state.loading = true;
       const audio = await plan.pending[index];
       state.loading = false;
@@ -471,7 +487,7 @@ export function use_read_aloud({ bridge, container, prepare, message_of, voice_f
             const next = next_message(plan.id);
             if (!next) return null;
             const ready = await plan_message(next, 0, prefix_of(next), false);
-            for (let ahead = 0; ahead < PREFETCH; ahead += 1) fetch_chunk(ready, ahead, section_id);
+            if (ready.chunks.length) fetch_ahead(ready, 0, section_id);
             return ready;
           })();
         };
