@@ -40806,6 +40806,7 @@ var WH = /*#__PURE__*/ TH({
 				}, null, 8, ["disabled"])]),
 				_: 1
 			}), q(o, {
+				content: { onInteractOutside: (e) => e.preventDefault() },
 				open: l.value,
 				"onUpdate:open": n[3] ||= (e) => l.value = e,
 				title: "继续讨论",
@@ -40840,10 +40841,10 @@ var WH = /*#__PURE__*/ TH({
 					disabled: !!I(i)
 				}, null, 8, ["loading", "disabled"])])], 32)]),
 				_: 1
-			}, 8, ["open"])], 64);
+			}, 8, ["content", "open"])], 64);
 		};
 	}
-}, [["__scopeId", "data-v-72209e62"]]), XH = { class: "channel-answer-summary channel-execution-denials" }, ZH = { class: "channel-message-text" }, QH = {
+}, [["__scopeId", "data-v-b6acab3c"]]), XH = { class: "channel-answer-summary channel-execution-denials" }, ZH = { class: "channel-message-text" }, QH = {
 	key: 1,
 	class: "channel-failure-error",
 	role: "alert"
@@ -46193,6 +46194,7 @@ var Yq = {
 		return (t, n) => {
 			let a = sA, c = DV, l = MA, u = vV;
 			return U(), G(u, {
+				content: { onInteractOutside: (e) => e.preventDefault() },
 				open: r.value,
 				"onUpdate:open": n[3] ||= (e) => r.value = e,
 				title: e.title,
@@ -46264,13 +46266,14 @@ var Yq = {
 				], 32)]),
 				_: 3
 			}, 8, [
+				"content",
 				"open",
 				"title",
 				"description"
 			]);
 		};
 	}
-}, [["__scopeId", "data-v-c05481cb"]]), dJ = { class: "member-label-field" }, fJ = 500, pJ = 32, mJ = /*#__PURE__*/ TH({
+}, [["__scopeId", "data-v-1e196329"]]), dJ = { class: "member-label-field" }, fJ = 500, pJ = 32, mJ = /*#__PURE__*/ TH({
 	__name: "MemberDescriptionDialog",
 	props: /*@__PURE__*/ Fa({
 		name: {
@@ -47279,6 +47282,7 @@ var NJ = ["data-identity", "data-face"], PJ = ["inert", "aria-hidden"], FJ = { c
 					"changed"
 				]),
 				q(te, {
+					content: { onInteractOutside: (e) => e.preventDefault() },
 					open: Ee.value,
 					"onUpdate:open": n[16] ||= (e) => Ee.value = e,
 					title: "存为专家预设",
@@ -47315,11 +47319,11 @@ var NJ = ["data-identity", "data-face"], PJ = ["inert", "aria-hidden"], FJ = { c
 						}, null, 8, ["disabled"])])
 					], 32)]),
 					_: 1
-				}, 8, ["open"])
+				}, 8, ["content", "open"])
 			], 42, NJ);
 		};
 	}
-}, [["__scopeId", "data-v-cd7e22b1"]]), OY = {
+}, [["__scopeId", "data-v-93ffb67e"]]), OY = {
 	key: 0,
 	class: "project-field"
 }, kY = ["disabled"], AY = {
@@ -47528,6 +47532,7 @@ var NJ = ["data-identity", "data-face"], PJ = ["inert", "aria-hidden"], FJ = { c
 					"disabled"
 				])) : Y("", !0)
 			], 2)), q(re, {
+				content: { onInteractOutside: (e) => e.preventDefault() },
 				open: g.value,
 				"onUpdate:open": n[7] ||= (e) => g.value = e,
 				title: "常用项目",
@@ -47672,10 +47677,10 @@ var NJ = ["data-identity", "data-face"], PJ = ["inert", "aria-hidden"], FJ = { c
 					}, null, 8, ["loading"])])
 				], 32)]),
 				_: 1
-			}, 8, ["open"])], 64);
+			}, 8, ["content", "open"])], 64);
 		};
 	}
-}, [["__scopeId", "data-v-f8468073"]]), WY = ["aria-label"], GY = [
+}, [["__scopeId", "data-v-2403ad40"]]), WY = ["aria-label"], GY = [
 	"disabled",
 	"title",
 	"aria-label",
@@ -50164,10 +50169,7 @@ var NJ = ["data-identity", "data-face"], PJ = ["inert", "aria-hidden"], FJ = { c
 					],
 					body: "dialog-body"
 				},
-				content: a.value === "create" ? {
-					onPointerDownOutside: ve,
-					onInteractOutside: ve
-				} : void 0,
+				content: { onInteractOutside: ve },
 				"onAfter:leave": _e
 			}, {
 				body: L(() => [a.value === "archives" ? (U(), W("section", pZ, [
@@ -52436,6 +52438,7 @@ var NJ = ["data-identity", "data-face"], PJ = ["inert", "aria-hidden"], FJ = { c
 		return (e, n) => {
 			let o = sA, s = MA, c = vV;
 			return U(), G(c, {
+				content: { onInteractOutside: (e) => e.preventDefault() },
 				open: t.value,
 				"onUpdate:open": n[1] ||= (e) => t.value = e,
 				title: "导入房间",
@@ -52492,6 +52495,7 @@ var NJ = ["data-identity", "data-face"], PJ = ["inert", "aria-hidden"], FJ = { c
 				]),
 				_: 1
 			}, 8, [
+				"content",
 				"open",
 				"description",
 				"dismissible",
@@ -52499,7 +52503,7 @@ var NJ = ["data-identity", "data-face"], PJ = ["inert", "aria-hidden"], FJ = { c
 			]);
 		};
 	}
-}, [["__scopeId", "data-v-03a2f1dd"]]), yQ = { class: "channel-directory-manager" }, bQ = { class: "channel-directory-heading" }, xQ = ["aria-expanded"], SQ = { class: "channel-directory-actions" }, CQ = {
+}, [["__scopeId", "data-v-c7d0eeb8"]]), yQ = { class: "channel-directory-manager" }, bQ = { class: "channel-directory-heading" }, xQ = ["aria-expanded"], SQ = { class: "channel-directory-actions" }, CQ = {
 	"aria-label": "协作房间列表",
 	class: "channel-room-list",
 	"data-room-directory": ""
@@ -53240,6 +53244,7 @@ var NJ = ["data-identity", "data-face"], PJ = ["inert", "aria-hidden"], FJ = { c
 		return (i, o) => {
 			let l = pA, f = MA, m = vV;
 			return U(), G(m, {
+				content: { onInteractOutside: (e) => e.preventDefault() },
 				open: t.value,
 				"onUpdate:open": o[3] ||= (e) => t.value = e,
 				title: "邀请成员",
@@ -53345,10 +53350,14 @@ var NJ = ["data-identity", "data-face"], PJ = ["inert", "aria-hidden"], FJ = { c
 					])])
 				], 32))]),
 				_: 1
-			}, 8, ["open", "description"]);
+			}, 8, [
+				"content",
+				"open",
+				"description"
+			]);
 		};
 	}
-}, [["__scopeId", "data-v-07d2029e"]]), s$ = { class: "start-discussion-footer" }, c$ = 3, l$ = /*#__PURE__*/ TH({
+}, [["__scopeId", "data-v-b5db88a3"]]), s$ = { class: "start-discussion-footer" }, c$ = 3, l$ = /*#__PURE__*/ TH({
 	__name: "StartDiscussionDialog",
 	props: {
 		open: {
@@ -53376,6 +53385,7 @@ var NJ = ["data-identity", "data-face"], PJ = ["inert", "aria-hidden"], FJ = { c
 		return (e, r) => {
 			let d = DV, f = wV, p = MA, m = vV;
 			return U(), G(m, {
+				content: { onInteractOutside: (e) => e.preventDefault() },
 				open: t.value,
 				"onUpdate:open": r[5] ||= (e) => t.value = e,
 				title: "开启讨论",
@@ -53435,10 +53445,10 @@ var NJ = ["data-identity", "data-face"], PJ = ["inert", "aria-hidden"], FJ = { c
 					}, null, 8, ["loading", "disabled"])])
 				], 32)]),
 				_: 1
-			}, 8, ["open"]);
+			}, 8, ["content", "open"]);
 		};
 	}
-}, [["__scopeId", "data-v-cacf6830"]]), u$ = { class: "pb-status-line" }, d$ = { role: "status" }, f$ = {
+}, [["__scopeId", "data-v-8c194097"]]), u$ = { class: "pb-status-line" }, d$ = { role: "status" }, f$ = {
 	key: 0,
 	class: "pb-status-detail"
 }, p$ = { class: "pb-meters" }, m$ = { class: "pb-meter-label" }, h$ = {
@@ -53589,6 +53599,7 @@ var NJ = ["data-identity", "data-face"], PJ = ["inert", "aria-hidden"], FJ = { c
 					}, null, 8, ["disabled"])
 				])),
 				q(s, {
+					content: { onInteractOutside: (e) => e.preventDefault() },
 					open: f.value,
 					"onUpdate:open": t[5] ||= (e) => f.value = e,
 					title: "结束讨论",
@@ -53605,7 +53616,7 @@ var NJ = ["data-identity", "data-face"], PJ = ["inert", "aria-hidden"], FJ = { c
 						onClick: v
 					}, [...t[8] ||= [K("strong", null, "结束讨论", -1), K("span", null, "保留全部记录，房间回到自由协作；需要总结时可直接请主持人写一份。", -1)]], 8, y$)])]),
 					_: 1
-				}, 8, ["open"])
+				}, 8, ["content", "open"])
 			], 64);
 		};
 	}
@@ -54768,6 +54779,7 @@ var L$ = { class: "progress-board is-docked" }, R$ = { class: "pb-header" }, z$ 
 					description: d.value ? "新成员加入后不打断其他成员；点卡片翻面可设置软件、模型、项目权限和要续接的已有会话。" : "新专家由程序按本机软件配置启动，或由你手动启动，加入本轮发言队列。"
 				}, null, 8, ["open", "description"]),
 				q(pe, {
+					content: { onInteractOutside: (e) => e.preventDefault() },
 					open: !!O.value,
 					title: O.value ? `${I(n).display_name(O.value.name)} 的模型与强度` : "",
 					description: "下次处理请求起生效，保留原会话。",
@@ -54823,7 +54835,11 @@ var L$ = { class: "progress-board is-docked" }, R$ = { class: "pb-header" }, z$ 
 						}, null, 8, ["loading"])])
 					], 32)) : Y("", !0)]),
 					_: 1
-				}, 8, ["open", "title"]),
+				}, 8, [
+					"content",
+					"open",
+					"title"
+				]),
 				q(mJ, {
 					open: !!se.value,
 					name: se.value || " ",
@@ -54850,7 +54866,7 @@ var L$ = { class: "progress-board is-docked" }, R$ = { class: "pb-header" }, z$ 
 			]);
 		};
 	}
-}, [["__scopeId", "data-v-ec7f9300"]]), a0 = {
+}, [["__scopeId", "data-v-ef56a3a6"]]), a0 = {
 	thinking: "思考",
 	command: "命令",
 	tool: "工具",
@@ -56748,6 +56764,7 @@ var N0 = {
 				]))]),
 				o.value ? (U(), G(Ne, {
 					key: 2,
+					content: { onInteractOutside: (e) => e.preventDefault() },
 					open: _e.value,
 					"onUpdate:open": r[18] ||= (e) => _e.value = e,
 					title: "共识与讨论记录",
@@ -56843,7 +56860,7 @@ var N0 = {
 						q(D1, { onDetail: xe })
 					])]),
 					_: 1
-				}, 8, ["open"])) : Y("", !0),
+				}, 8, ["content", "open"])) : Y("", !0),
 				ee.value ? (U(), W("div", {
 					key: 3,
 					class: "channel-rail-resizer",

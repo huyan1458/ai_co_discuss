@@ -244,7 +244,7 @@ const created = computed(() => room.value.created_at ? new Date(room.value.creat
       </dl>
     </section>
     <InviteDialog v-model:open="inviting" :description="free ? '新成员加入后不打断其他成员；点卡片翻面可设置软件、模型、项目权限和要续接的已有会话。' : '新专家由程序按本机软件配置启动，或由你手动启动，加入本轮发言队列。'" />
-    <UModal :open="Boolean(model_edit)" :title="model_edit ? `${bridge.display_name(model_edit.name)} 的模型与强度` : ''" description="下次处理请求起生效，保留原会话。" :ui="{ content: 'glass-panel studio-modal', body: 'dialog-body' }" @update:open="(open) => { if (!open) model_edit = null; }">
+    <UModal :content="{ onInteractOutside: (event) => event.preventDefault() }" :open="Boolean(model_edit)" :title="model_edit ? `${bridge.display_name(model_edit.name)} 的模型与强度` : ''" description="下次处理请求起生效，保留原会话。" :ui="{ content: 'glass-panel studio-modal', body: 'dialog-body' }" @update:open="(open) => { if (!open) model_edit = null; }">
       <template #body>
         <form v-if="model_edit" class="overview-model-form" @submit.prevent="save_model">
           <label><span>模型</span><USelect :model-value="model_edit.draft.model || '__default__'" :items="model_state.items" :title="model_state.source" :aria-label="`${model_edit.name} 使用的模型`" class="w-full" @update:model-value="pick_model" /></label>

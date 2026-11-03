@@ -34,7 +34,7 @@ function save() {
 </script>
 
 <template>
-  <UModal v-model:open="open" :title="title" :description="description" :ui="{ content: 'glass-panel studio-modal', body: 'dialog-body' }">
+  <UModal :content="{ onInteractOutside: (event) => event.preventDefault() }" v-model:open="open" :title="title" :description="description" :ui="{ content: 'glass-panel studio-modal', body: 'dialog-body' }">
     <template #body>
       <form class="member-text" @submit.prevent="save">
         <slot name="lead" />

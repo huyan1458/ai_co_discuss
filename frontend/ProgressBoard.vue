@@ -79,7 +79,7 @@ async function finish() {
     <UButton v-if="turn && !paused" icon="i-lucide-skip-forward" label="跳过" size="sm" color="neutral" variant="outline" class="pb-action" :title="`跳过 ${bridge.display_name(turn.expert)} 本次发言`" :disabled="!can_control || !!pending" :loading="pending === 'skip_turn'" @click="act('skip_turn')" />
     <UButton icon="i-lucide-flag" label="结束" size="sm" color="neutral" variant="outline" class="pb-action pb-end" :disabled="!can_control || !!pending" @click="ending = true" />
   </section>
-  <UModal v-model:open="ending" title="结束讨论" description="当前发言安排会被取消，已有消息全部保留。" :ui="{ content: 'glass-panel studio-modal', body: 'dialog-body' }">
+  <UModal :content="{ onInteractOutside: (event) => event.preventDefault() }" v-model:open="ending" title="结束讨论" description="当前发言安排会被取消，已有消息全部保留。" :ui="{ content: 'glass-panel studio-modal', body: 'dialog-body' }">
     <template #body><div class="progress-ending"><button type="button" class="progress-ending-option" :disabled="!!pending" @click="finish"><strong>结束讨论</strong><span>保留全部记录，房间回到自由协作；需要总结时可直接请主持人写一份。</span></button></div></template>
   </UModal>
 </template>

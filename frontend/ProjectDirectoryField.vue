@@ -128,7 +128,7 @@ async function save_projects() {
     <UButton v-if="browsable" icon="i-lucide-folder-open" color="neutral" variant="ghost" size="xs" class="project-browse" aria-label="在本机选择项目目录" :title="picking ? '目录选择窗口已打开，请在本机窗口中选择' : '在本机选择文件夹'" :loading="picking" :disabled="props.disabled" @click="pick_directory" />
   </div>
 
-  <UModal v-model:open="managing" title="常用项目" description="保存在运行 codiscuss 的这台电脑上。登录同一网站的手机、平板可直接选择，路径不会离开这台电脑。"
+  <UModal :content="{ onInteractOutside: (event) => event.preventDefault() }" v-model:open="managing" title="常用项目" description="保存在运行 codiscuss 的这台电脑上。登录同一网站的手机、平板可直接选择，路径不会离开这台电脑。"
     :ui="{ content: 'glass-panel studio-modal project-modal', body: 'dialog-body' }">
     <template #body>
       <form class="project-manager dialog-form" @submit.prevent="save_projects">

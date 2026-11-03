@@ -32,7 +32,7 @@ async function submit() {
 </script>
 
 <template>
-  <UModal v-model:open="open" title="开启讨论" description="主持人安排成员轮流发言；到上限或结束后，房间回到自由协作，记录全部保留。" :ui="{ content: 'glass-panel studio-modal', body: 'dialog-body' }">
+  <UModal :content="{ onInteractOutside: (event) => event.preventDefault() }" v-model:open="open" title="开启讨论" description="主持人安排成员轮流发言；到上限或结束后，房间回到自由协作，记录全部保留。" :ui="{ content: 'glass-panel studio-modal', body: 'dialog-body' }">
     <template #body>
       <form class="start-discussion" aria-label="开启讨论" @submit.prevent="submit">
         <UFormField label="讨论目标" description="写下问题、背景和顾虑，主持人据此推进；可留空，沿用房间目标。"><UTextarea v-model="goal" :maxlength="1000" :rows="4" autoresize :maxrows="10" placeholder="例如：我们在 A、B 两个方案之间犹豫，主要顾虑是成本和上线时间……" class="w-full" /></UFormField>

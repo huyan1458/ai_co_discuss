@@ -333,7 +333,7 @@ function resize_nav_by_key(event) {
       </div>
       <div v-else class="channel-empty"><UIcon name="i-lucide-hash" /><h2>新建一个协作房间</h2><p>邀请 AI 一起协作，随时 @ 提问；需要时开启讨论，保留所有人的观点。</p><UButton icon="i-lucide-plus" label="新建房间" color="neutral" @click="create_channel()" /></div>
     </main>
-    <UModal v-if="room" v-model:open="consensus_open" title="共识与讨论记录" description="主持人整理的结论、共识与分歧，以及每场讨论结束时的结论。" :ui="{ content: 'glass-panel studio-modal channel-consensus-modal', body: 'dialog-body' }">
+    <UModal :content="{ onInteractOutside: (event) => event.preventDefault() }" v-if="room" v-model:open="consensus_open" title="共识与讨论记录" description="主持人整理的结论、共识与分歧，以及每场讨论结束时的结论。" :ui="{ content: 'glass-panel studio-modal channel-consensus-modal', body: 'dialog-body' }">
       <template #body>
         <div class="merged-page channel-consensus-body">
           <TopicPanel v-if="!free_room" section="host" @open="open_from_consensus" @detail="detail_from_consensus" />

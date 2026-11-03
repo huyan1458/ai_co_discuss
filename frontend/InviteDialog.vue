@@ -114,7 +114,7 @@ async function invite() {
 </script>
 
 <template>
-  <UModal v-model:open="inviting" title="邀请成员" :description="description" :ui="{ content: 'glass-panel studio-modal pb-invite-modal', body: 'dialog-body' }">
+  <UModal :content="{ onInteractOutside: (event) => event.preventDefault() }" v-model:open="inviting" title="邀请成员" :description="description" :ui="{ content: 'glass-panel studio-modal pb-invite-modal', body: 'dialog-body' }">
     <template #body>
       <div v-if="invited_manual.length && !invite_picks.length" class="pb-invite" aria-label="启动手动成员">
         <p class="pb-invite-lead">{{ invited_manual.length > 1 ? `${invited_manual.length} 位手动成员已加入` : '手动成员已加入' }}，把启动指令交给各自的 AI 会话，注册后才算到场。</p>

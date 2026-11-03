@@ -23,7 +23,7 @@ const description = computed(() => {
 </script>
 
 <template>
-  <UModal v-model:open="open" title="导入房间" :description="description" :dismissible="progress.done" :close="progress.done"
+  <UModal :content="{ onInteractOutside: (event) => event.preventDefault() }" v-model:open="open" title="导入房间" :description="description" :dismissible="progress.done" :close="progress.done"
     :ui="{ content: 'glass-panel studio-modal channel-folder-modal channel-import-modal', body: 'dialog-body' }">
     <template #body>
       <p v-if="!progress.done && !progress.rooms.length" class="channel-import-reading">正在读取备份文件…</p>

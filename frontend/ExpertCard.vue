@@ -391,7 +391,7 @@ onBeforeUnmount(() => { document.removeEventListener("pointerdown", close_on_out
       description="只发给这位专家，补充它的做法与偏好；不改变权限和技能规则。" :label="`${name} 的专属提示词`"
       placeholder="例如：回答先给结论，控制在三段以内。" :max="MAX_EXPERT_PROMPT" :rows="8"
       :note="prompt_note" :source="prompt_source" :fixed="prompt_fixed" :changed="prompt_changed" @save="save_prompt" />
-    <UModal v-model:open="naming" title="存为专家预设" description="存下描述、提示词、项目权限、模型与强度，之后在“预设”行一键加入。" :ui="{ content: 'glass-panel studio-modal', body: 'dialog-body' }">
+    <UModal :content="{ onInteractOutside: (event) => event.preventDefault() }" v-model:open="naming" title="存为专家预设" description="存下描述、提示词、项目权限、模型与强度，之后在“预设”行一键加入。" :ui="{ content: 'glass-panel studio-modal', body: 'dialog-body' }">
       <template #body>
         <form class="expert-card-naming" @submit.prevent="save_named_preset">
           <UInput v-model="naming_draft" :maxlength="32" autofocus class="w-full" aria-label="预设名称" placeholder="预设名称，如 评审官" />
