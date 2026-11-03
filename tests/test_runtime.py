@@ -489,6 +489,9 @@ class RuntimeTests(unittest.TestCase):
         status, saved = self.request(self.path + "/messages", payload, self.tokens["Codex"])
         self.assertEqual(status, 201, saved)
         self.assertEqual(saved["message"]["kind"], "moderation")
+        hosted = self.request(self.path + "/messages?host=1", token=self.owner)[1]["messages"]
+        self.assertIn(saved["message"]["id"], [message["id"] for message in hosted])
+        self.assertTrue(all(message["kind"] == "moderation" or message["author"] == "Codex" for message in hosted))
         self.assertEqual(self.request(self.path + "/messages", payload, self.tokens["Codex"])[1]["duplicate"], True)
         collision = self.request(self.path + "/messages", {**payload, "summary": "禁止摘要"}, self.tokens["Codex"])
         self.assertEqual(collision[0], 400)

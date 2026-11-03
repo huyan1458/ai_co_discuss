@@ -76,7 +76,7 @@ const PLATFORM_IDENTITIES = {
 };
 // An instance shows its platform's nickname with its own suffix: Antigravity-2 → Gemini-2.
 const IDENTITIES = by_platform(PLATFORM_IDENTITIES, (identity, name) => ({ ...identity, label: identity.label ? identity.label + name.slice(platform_of(name).length) : name, description: "AI 实例" }));
-const state = { rooms: [], folders: [], room: null, page: 1, pages: 1, query: "", mention_only: false,
+const state = { rooms: [], folders: [], room: null, page: 1, pages: 1, query: "", mention_only: false, host_only: false,
   named_followup: false, create_discussion: false,
   archive_view: false, directory_sort: "manual", management: null, dragged_room: null, folder_moves: new Map(), folder_version: 0,
   reply_to: null, tab: "discussion", refresh_version: 0, context_dirty: false, topic_dirty: false,
@@ -862,17 +862,18 @@ function render_messages(result) {
   const is_near_bottom = container.scrollHeight - container.clientHeight - scroll_position < SCROLL_BOTTOM_THRESHOLD;
   state.pages = result.pages;
   container.innerHTML = state.messages.length ? state.messages.map(message_markup).join("") :
-    `<div class="empty-messages"><strong>${state.query || state.mention_only ? "没有找到匹配的发言" : "暂无讨论记录"}</strong><p>${state.query || state.mention_only ? "换个关键词，或清除筛选后查看完整记录。" : empty_discussion_message(state.room)}</p></div>`;
+    `<div class="empty-messages"><strong>${state.query || state.mention_only || state.host_only ? "没有找到匹配的发言" : "暂无讨论记录"}</strong><p>${state.query || state.mention_only || state.host_only ? "换个关键词，或清除筛选后查看完整记录。" : empty_discussion_message(state.room)}</p></div>`;
   for (const receipt of container.querySelectorAll(".message-receipt")) receipt.open = open_receipts.includes(receipt.dataset.receiptId);
   for (const answer of container.querySelectorAll(".message-answer")) answer.open = open_answers.includes(answer.dataset.answerId);
   container.scrollTop = is_near_bottom ? container.scrollHeight : scroll_position;
-  element("record-caption").textContent = state.query || state.mention_only ? `筛选结果 · ${result.total} 条` : "完整记录 · 按时间排列";
+  element("record-caption").textContent = state.query || state.mention_only || state.host_only ? `筛选结果 · ${result.total} 条` : "完整记录 · 按时间排列";
 }
 
 /** Join bounded cursor batches for the interactive transcript; refresh only new records. */
 async function load_message_history(room_id, version) {
   const params = new URLSearchParams({ q: state.query, withdrawn: "include" });
   if (state.mention_only) params.set("mention", element("author-select").value);
+  if (state.host_only) params.set("host", "1");
   const key = `${room_id}?${params}`;
   // Large batches: a long transcript loads in one round-trip, and the site counts the room's messages once, not per batch.
   params.set("limit", MESSAGE_HISTORY_BATCH);
@@ -957,6 +958,7 @@ async function select_room(room_id) {
   state.page = 1;
   state.query = "";
   state.mention_only = false;
+  state.host_only = false;
   state.context_dirty = false;
   state.topic_dirty = false;
   state.pending_submission = null;
@@ -1402,6 +1404,7 @@ async function finish_message(result, room_id, drafts) {
   cancel_reply();
   state.query = "";
   state.mention_only = false;
+  state.host_only = false;
   element("search-input").value = "";
   element("mention-filter").setAttribute("aria-pressed", "false");
   state.page = 1;
@@ -3828,7 +3831,7 @@ function view_snapshot() {
     connected: state.connected, reconnecting: state.reconnecting, backup_pending: Boolean(state.backup_pending), page: state.page, pages: state.pages, query: state.query,
     attachment_drafts: state.attachment_drafts.map(item => ({ id: item.id, file_name: item.file.name, size: item.file.size, preview_url: item.preview_url })),
     upload_status: state.upload_status, sending_message: state.sending_message, sending_preview: state.sending_preview,
-    mention_only: state.mention_only, reply_to: state.reply_to, editing_queued: state.editing_queued?.id ?? null,
+    mention_only: state.mention_only, host_only: state.host_only, reply_to: state.reply_to, editing_queued: state.editing_queued?.id ?? null,
     access: access_snapshot(), admin: admin_snapshot(),
     tab: state.tab, snapshot_id: state.snapshot_id, context_dirty: state.context_dirty,
     theme: document.documentElement.dataset.theme, fields, experts, launch: structuredClone(state.launch), named_followup: state.named_followup, create_discussion: state.create_discussion, create_chain_rounds: state.create_chain_rounds };
@@ -3888,9 +3891,10 @@ function set_view_reply(message) {
 }
 
 /** Apply filters to the continuous transcript through the existing controller. */
-async function filter_view({ query = state.query, mention = state.mention_only, page = 1 }) {
+async function filter_view({ query = state.query, mention = state.mention_only, host = state.host_only, page = 1 }) {
   state.query = query.trim();
   state.mention_only = mention;
+  state.host_only = host;
   state.page = page;
   element("search-input").value = state.query;
   element("mention-filter").setAttribute("aria-pressed", String(mention));

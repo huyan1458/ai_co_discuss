@@ -340,7 +340,13 @@ test('read-aloud sends the saved key only to Volcengine and joins chunked audio'
     assert.equal(request.req_params.audio_params.speech_rate, 20);
     assert.deepEqual(JSON.parse(request.req_params.additions), { context_texts: ['自然一点'], section_id });
     assert.equal(request.req_params.audio_params.enable_subtitle, true);
-    await assert.rejects(tts_speak(home, { text: '你好' }, async () => new Response('{"code":45000000,"message":"denied"}')), /音色不可用/);
+    // The same paragraph again comes from the local cache without calling the service.
+    assert.equal((await tts_speak(home, { text: '你好' }, async () => { throw new Error('not cached'); })).cached, true);
+    await tts_speak(home, { text: '再见', speaker: 'zh_male_m191_uranus_bigtts', silence_ms: 700 }, async (url, init) => { sent = { url, init }; return new Response(body); });
+    const other = JSON.parse(sent.init.body);
+    assert.equal(other.req_params.speaker, 'zh_male_m191_uranus_bigtts');
+    assert.equal(JSON.parse(other.req_params.additions).silence_duration, 700);
+    await assert.rejects(tts_speak(home, { text: '换一句' }, async () => new Response('{"code":45000000,"message":"denied"}')), /音色不可用/);
     await assert.rejects(tts_speak(home, { text: '字'.repeat(301) }), /不超过 300 字/);
   } finally { rmSync(home, { recursive: true, force: true }); }
 });

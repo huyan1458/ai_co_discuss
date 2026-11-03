@@ -8,6 +8,7 @@ import ExecutionNotes from "./ExecutionNotes.vue";
 import WorkingText from "./WorkingText.vue";
 import QueuedMessages from "./QueuedMessages.vue";
 import { use_read_aloud } from "./read-aloud.js";
+import { use_broadcast } from "./broadcast.js";
 import { use_voice_input } from "./voice-input.js";
 import { motion, useSpring, useTransform } from "motion-v";
 
@@ -23,14 +24,32 @@ const near_length_limit = computed(() => text_length.value >= bridge.max_message
 const search = field("search-input");
 const transcript = ref(null);
 const expanded_answers = ref(new Set());
+// Speech settings kept by the local service, read at most once a minute: whether a key is set, each platform's voice, following.
+const SPEECH_CHECK_MS = 60000;
+// Voices are re-read when a reading starts, so a change in settings is heard right away.
+const SPEECH_VOICE_MS = 10000;
+let speech_checked = 0, speech = {};
+/** Read the local speech settings, reusing an answer younger than `fresh_ms`. */
+async function speech_settings(fresh_ms = SPEECH_CHECK_MS) {
+  if (Date.now() - speech_checked < fresh_ms) return speech;
+  speech_checked = Date.now();
+  try { speech = await bridge.local_request("tts-settings", {}); } catch { speech = {}; }
+  return speech;
+}
 // Read-aloud runs on the local service; a long answer is shown in full before it is read so its sentences can be highlighted.
 const reader = use_read_aloud({ bridge, container: () => transcript.value,
-  author: (id) => view.value.messages.find((message) => message.id === id)?.author || "",
+  message_of: (id) => view.value.messages.find((message) => message.id === id),
+  // An AI member speaks in its platform's voice; the user, program messages and unset platforms use the default voice.
+  voice_for: async (name) => (await speech_settings(SPEECH_VOICE_MS)).member_voices?.[bridge.platform_of(name)] || "",
+  title: () => room.value?.title || "",
   prepare: async (id) => {
     if (!answer_previews.value.get(id)?.truncated || expanded_answers.value.has(id)) return;
     expanded_answers.value.add(id);
     await nextTick();
   } });
+// Voice broadcast announces new replies and room events while on; the switch sits beside the microphone.
+const broadcast = use_broadcast({ view, bridge, reader });
+const speech_ready = ref(false);
 // Voice input inserts recognized text where the caret was in the composer.
 const voice = use_voice_input({ bridge, on_text: (spoken) => {
   const area = prompt.value?.textareaRef, value = text.value || "";
@@ -45,18 +64,36 @@ const listen_here = ref(null);
 const narrow_query = window.matchMedia("(max-width: 700px)");
 const narrow = ref(narrow_query.matches);
 const track_narrow = (event) => { narrow.value = event.matches; };
+// "Listen from here" waits until a selection has settled (pointer released, no change for a moment), and shows only when
+// speech is configured on this computer; most selections are for copying.
+const LISTEN_SETTLE_MS = 350;
+let listen_timer = 0, pointer_down = false;
+const speech_configured = async () => Boolean((await speech_settings()).api_key_ref);
+/** Hide the offer while a selection is changing and check again once it settles. */
+function schedule_listen() {
+  listen_here.value = null;
+  window.clearTimeout(listen_timer);
+  if (!pointer_down) listen_timer = window.setTimeout(track_selection, LISTEN_SETTLE_MS);
+}
+// Pressing the offer itself must not hide it before its click lands.
+const on_offer = (event) => Boolean(event.target.closest?.(".channel-listen-mark, .channel-listen-pill"));
+const press = (event) => { if (!on_offer(event)) pointer_down = true; };
+const release = (event) => { if (on_offer(event)) return; pointer_down = false; schedule_listen(); };
 /** Offer reading from a selection made inside a message's text. */
-function track_selection() {
+async function track_selection() {
   const selection = document.getSelection();
   const range = selection?.rangeCount && !selection.isCollapsed ? selection.getRangeAt(0) : null;
   const start = range && (range.startContainer.nodeType === Node.ELEMENT_NODE ? range.startContainer : range.startContainer.parentElement);
   const body = start?.closest(".channel-answer > .channel-message-text");
   const card = body && transcript.value?.contains(body) ? body.closest(".channel-message[data-message-id]") : null;
   if (!card) { listen_here.value = null; return; }
-  const rect = range.getBoundingClientRect();
+  const kept = range.cloneRange();
+  if (!await speech_configured() || pointer_down) return;
+  // A small mark just above where the selection ends, clear of the selected text.
+  const rects = kept.getClientRects(), end = rects[rects.length - 1] || kept.getBoundingClientRect();
   // On touch screens the system's own selection menu sits next to the selection, so the button waits above the composer instead.
   const touch = window.matchMedia("(pointer: coarse)").matches;
-  listen_here.value = { id: Number(card.dataset.messageId), range: range.cloneRange(), touch, left: rect.left + rect.width / 2, top: rect.bottom + 8 };
+  listen_here.value = { id: Number(card.dataset.messageId), range: kept, touch, left: end.right + 4, top: end.top - 28 };
 }
 /** Start reading where the selection begins and continue to the latest message. */
 function listen_from_selection() {
@@ -66,12 +103,15 @@ function listen_from_selection() {
   reader.start(id, range);
 }
 onMounted(() => {
-  document.addEventListener("selectionchange", track_selection);
+  document.addEventListener("selectionchange", schedule_listen);
+  document.addEventListener("pointerdown", press);
+  document.addEventListener("pointerup", release);
   narrow_query.addEventListener("change", track_narrow);
-  transcript.value?.addEventListener("scroll", track_selection, { passive: true });
+  transcript.value?.addEventListener("scroll", schedule_listen, { passive: true });
   watch(() => room.value?.id, () => { reader.stop(); voice.cancel(); });
+  speech_configured().then((ready) => { speech_ready.value = ready; });
 });
-onBeforeUnmount(() => { document.removeEventListener("selectionchange", track_selection); narrow_query.removeEventListener("change", track_narrow); reader.stop(); voice.cancel(); });
+onBeforeUnmount(() => { document.removeEventListener("selectionchange", schedule_listen); document.removeEventListener("pointerdown", press); document.removeEventListener("pointerup", release); window.clearTimeout(listen_timer); narrow_query.removeEventListener("change", track_narrow); reader.stop(); voice.cancel(); });
 const MESSAGE_PREVIEW_LENGTH = 160;
 const MESSAGE_PREVIEW_MIN_LENGTH = 100;
 const MESSAGE_PREVIEW_CODE_LINES = 4;
@@ -178,7 +218,7 @@ watch(() => free_busy.value.length > 0, (busy, _previous, cleanup) => {
   const timer = setInterval(() => { free_now.value = Math.floor(Date.now() / 1000); }, 1000);
   cleanup(() => clearInterval(timer));
 }, { immediate: true });
-const free_working = computed(() => view.value.query || view.value.mention_only ? [] : free_busy.value);
+const free_working = computed(() => view.value.query || view.value.mention_only || view.value.host_only ? [] : free_busy.value);
 /** Progress notes per execution id; only counts come with the room, so texts are read when a card shows more or a fold opens. */
 const execution_notes = ref(new Map());
 /** Late text is owner-only and fetched only when its fold opens; never cache it across rooms or loss of access. */
@@ -409,7 +449,7 @@ function decision_odds(item) {
 /** The host's own plans stand beside the decisions, under the message they followed. */
 const host_arrangements = computed(() => {
   const rows = new Map();
-  if (view.value.query || view.value.mention_only) return rows;
+  if (view.value.query || view.value.mention_only || view.value.host_only) return rows;
   for (const item of room.value.host_arrangements || []) {
     rows.set(item.after_message_id, [...(rows.get(item.after_message_id) || []),
       { ...item, label: item.turns.map((turn) => bridge.display_name(turn.expert)).join(" → ") }]);
@@ -660,7 +700,7 @@ const end_anchor = computed(() => {
 });
 /** Failed free-room executions, shaped like working cards so a failure stays where its work was shown. */
 const free_failures = computed(() => {
-  if (view.value.query || view.value.mention_only) return [];
+  if (view.value.query || view.value.mention_only || view.value.host_only) return [];
   const names = new Map((room.value.free?.members || []).map((member) => [member.id, member.name]));
   return (room.value.free?.executions || []).filter((execution) => execution.status === "failed")
     .map((execution) => ({ id: `failed-${execution.id}`, author: execution.member || names.get(execution.member_id) || "成员", slot_card: true, created_at: execution.created_at,
@@ -708,7 +748,7 @@ const free_layout = computed(() => {
   const roots = messages.filter((message) => !place(message));
   // A failure whose request is no longer shown is dropped rather than piled at the end.
   free_failures.value.forEach(place);
-  if (!view.value.query && !view.value.mention_only) {
+  if (!view.value.query && !view.value.mention_only && !view.value.host_only) {
     for (const plan of room.value.host_arrangements || []) place({ id: plan.key || `plan-${plan.id}`, slot_card: true,
       arrangement: plan, created_at: new Date(plan.created_at).getTime() / 1000 });
     for (const turn of room.value.cancelled_turns || []) place({ id: `cancelled-${turn.key || turn.id}`, author: turn.expert,
@@ -815,7 +855,7 @@ async function follow_messages() {
   track_scroll();
 }
 watch([() => view.value.messages, free_working, free_failures], follow_messages, { immediate: true });
-watch([() => view.value.room?.id, () => view.value.query, () => view.value.mention_only], () => {
+watch([() => view.value.room?.id, () => view.value.query, () => view.value.mention_only, () => view.value.host_only], () => {
   jump_target.value = null;
   active_message.value = null;
   reset_preview();
@@ -1221,7 +1261,7 @@ function copy_message(message) { act("copy", `${view.value.room_site}/r/${room.v
 
 <template>
   <section class="channel-conversation" role="tabpanel" aria-label="消息">
-    <div v-if="view.query || view.mention_only" class="channel-filter-summary"><span>{{ view.query ? `“${view.query}”` : `@${bridge.display_name(author)}` }} · {{ view.total }} 条结果</span><UButton label="清除筛选" size="xs" variant="link" color="neutral" @click="search = ''; act('filter', { query: '', mention: false })" /></div>
+    <div v-if="view.query || view.mention_only || view.host_only" class="channel-filter-summary"><span>{{ [view.query && `“${view.query}”`, view.host_only && '只看主持', view.mention_only && `@${bridge.display_name(author)}`].filter(Boolean).join(' · ') }} · {{ view.total }} 条结果</span><UButton label="清除筛选" size="xs" variant="link" color="neutral" @click="search = ''; act('filter', { query: '', mention: false, host: false })" /></div>
     <nav v-if="view.messages.length" ref="message_map" class="channel-message-map" :style="{ '--nav-entry-height': `${NAV_ENTRY_HEIGHT}px` }" aria-label="发言快速导航" @wheel.stop.passive="browse_navigation" @pointerleave="close_preview" @focusout="close_preview" @keydown.esc.stop="close_preview" @contextmenu="navigation_context_menu">
       <div class="channel-map-track">
         <div v-for="section in navigation_sections" :key="section.entries[0].key"v-memo="[section, preview_open, active_round === section.number ? active_message : null, section_preview_position(section)]" class="channel-map-round" :style="{ '--round-message-count': section.count }">
@@ -1245,14 +1285,14 @@ function copy_message(message) { act("copy", `${view.value.room_site}/r/${room.v
         </div>
       </motion.div>
     </Teleport>
-    <button v-if="listen_here && !listen_here.touch" type="button" class="channel-listen-pill channel-listen-floating" :style="{ left: `${listen_here.left}px`, top: `${listen_here.top}px` }" aria-label="从选中处开始朗读" @mousedown.prevent @click="listen_from_selection"><UIcon name="i-lucide-headphones" />听当前</button>
-    <div ref="transcript" v-memo="[message_groups, message_round_labels, free, room.session, view.access, active_message, expanded_answers.size, reader.state.message_id, room.title, view.query, view.mention_only, topic_anchor, end_anchor, request_badges, execution_reports, recommendations, adopting, scheduler_decisions, host_arrangements, correcting, pending, execution_notes, editing, rewound_runs]" class="channel-transcript" aria-label="聊天记录" @scroll="track_scroll" @wheel.passive="resume_tracking" @touchstart.passive="resume_tracking" @keydown="resume_tracking">
-      <div v-if="!view.query && !view.mention_only && !topic_anchor" class="channel-message-group channel-topic-group"><TopicCard :ref="(card) => topic_card = card" @edit="emit('edit')" /></div>
+    <UTooltip v-if="listen_here && !listen_here.touch" text="从这里朗读" :content="{ side: 'top' }"><button type="button" class="channel-listen-mark" :style="{ left: `${listen_here.left}px`, top: `${listen_here.top}px` }" aria-label="从选中处开始朗读" @mousedown.prevent @click="listen_from_selection"><UIcon name="i-lucide-headphones" /></button></UTooltip>
+    <div ref="transcript" v-memo="[message_groups, message_round_labels, free, room.session, view.access, active_message, expanded_answers.size, reader.state.message_id, room.title, view.query, view.mention_only, view.host_only, topic_anchor, end_anchor, request_badges, execution_reports, recommendations, adopting, scheduler_decisions, host_arrangements, correcting, pending, execution_notes, editing, rewound_runs]" class="channel-transcript" aria-label="聊天记录" @scroll="track_scroll" @wheel.passive="resume_tracking" @touchstart.passive="resume_tracking" @keydown="resume_tracking">
+      <div v-if="!view.query && !view.mention_only && !view.host_only && !topic_anchor" class="channel-message-group channel-topic-group"><TopicCard :ref="(card) => topic_card = card" @edit="emit('edit')" /></div>
       <div v-for="group in message_groups" :key="group.key" class="channel-message-group">
         <USeparator :label="group.label" class="channel-date-divider" />
         <template v-for="message in group.messages" :key="message.id">
-        <DiscussionEndCard v-if="message.id === end_anchor && !view.query && !view.mention_only" />
-        <TopicCard v-if="message.id === topic_anchor && !view.query && !view.mention_only" :ref="(card) => topic_card = card" @edit="emit('edit')" />
+        <DiscussionEndCard v-if="message.id === end_anchor && !view.query && !view.mention_only && !view.host_only" />
+        <TopicCard v-if="message.id === topic_anchor && !view.query && !view.mention_only && !view.host_only" :ref="(card) => topic_card = card" @edit="emit('edit')" />
         <!-- A free-room working card holds the slot its answer will take. -->
         <ScheduleCard v-if="message.arrangement" icon="i-lucide-list-ordered" plain title="主持人创建的发言安排" label="主持人安排" toggle-label="展开或收起各专家的任务">
           <template #text>主持人安排：{{ host_arrangements.get(message.arrangement.after_message_id)?.find((plan) => plan.id === message.arrangement.id)?.label }}<small v-if="message.arrangement.after_message_id">耗时 {{ format_elapsed(arrangement_seconds(message.arrangement, view.messages.find((item) => item.id === message.arrangement.after_message_id))) }}</small></template>
@@ -1477,11 +1517,11 @@ function copy_message(message) { act("copy", `${view.value.room_site}/r/${room.v
           </template>
         </UChatMessage>
       </div>
-      <div v-if="(topic_anchor === 'end' || end_anchor === 'end') && !view.query && !view.mention_only" class="channel-message-group">
+      <div v-if="(topic_anchor === 'end' || end_anchor === 'end') && !view.query && !view.mention_only && !view.host_only" class="channel-message-group">
         <TopicCard v-if="topic_anchor === 'end'" :ref="(card) => topic_card = card" @edit="emit('edit')" />
         <DiscussionEndCard v-if="end_anchor === 'end'" />
       </div>
-      <div v-if="!transcript_messages.length && !free_working.length" class="channel-empty"><UIcon :name="view.query || view.mention_only ? 'i-lucide-search' : 'i-lucide-hash'" /><h2>{{ view.query || view.mention_only ? '没有找到消息' : room.title }}</h2><p>{{ view.query || view.mention_only ? '试试其他关键词，或清除筛选。' : bridge.empty_discussion_message(room) }}</p></div>
+      <div v-if="!transcript_messages.length && !free_working.length" class="channel-empty"><UIcon :name="view.query || view.mention_only || view.host_only ? 'i-lucide-search' : 'i-lucide-hash'" /><h2>{{ view.query || view.mention_only || view.host_only ? '没有找到消息' : room.title }}</h2><p>{{ view.query || view.mention_only || view.host_only ? '试试其他关键词，或清除筛选。' : bridge.empty_discussion_message(room) }}</p></div>
     </div>
     <div v-if="(transcript_messages.length && !follow_tail) || listen_here?.touch" class="channel-latest-dock">
       <button v-if="listen_here?.touch" type="button" class="channel-listen-pill" aria-label="从选中处开始朗读" @mousedown.prevent @click="listen_from_selection"><UIcon name="i-lucide-headphones" />听当前</button>
@@ -1524,6 +1564,7 @@ function copy_message(message) { act("copy", `${view.value.room_site}/r/${room.v
         <template #footer>
           <UButton type="button" icon="i-lucide-paperclip" aria-label="添加附件" title="图片、PDF 或其他文件 · 每个最多 20 MiB" color="neutral" variant="ghost" size="sm" :disabled="view.sending_message" @click="act('choose_attachments')" />
           <span v-if="voice.state.status === 'recording'" class="channel-voice-levels" role="status" :aria-label="`正在录音 ${format_voice_time(voice.state.seconds)}`"><i v-for="(level, index) in voice.state.levels" :key="index" :style="{ transform: `scaleY(${0.15 + level * 0.85})` }" /><small>{{ format_voice_time(voice.state.seconds) }}</small></span>
+          <UTooltip v-if="speech_ready" :text="broadcast.on.value ? '关闭语音播报' : '语音播报：新回复自动朗读摘要'"><UButton type="button" icon="i-lucide-radio" color="neutral" variant="ghost" size="sm" class="channel-voice-button channel-broadcast-button" :class="{ 'is-on': broadcast.on.value }" :aria-pressed="broadcast.on.value" :aria-label="broadcast.on.value ? '关闭语音播报' : '开启语音播报'" @click="broadcast.toggle()" /></UTooltip>
           <UTooltip :text="voice.state.status === 'recording' ? '结束并转成文字' : voice.state.status === 'transcribing' ? '正在识别…' : '语音输入'"><UButton type="button" :icon="voice.state.status === 'recording' ? 'i-lucide-square' : 'i-lucide-mic'" :loading="voice.state.status === 'transcribing'" color="neutral" variant="ghost" size="sm" class="channel-voice-button" :class="{ 'is-recording': voice.state.status === 'recording' }" :aria-label="voice.state.status === 'recording' ? '结束录音并转成文字' : '语音输入'" :disabled="view.sending_message || voice.state.status === 'transcribing'" @click="voice.toggle()" /></UTooltip>
           <UButton type="button" icon="i-lucide-arrow-up" color="neutral" size="sm" class="channel-primary-button channel-round-button channel-send" aria-label="发送" title="发送 · Enter" :disabled="!has_draft" :loading="pending === 'send' || view.sending_message" @click="send" />
         </template>

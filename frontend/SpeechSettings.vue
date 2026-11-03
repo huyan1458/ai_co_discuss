@@ -7,7 +7,9 @@ const SAVED_MARK = "••••••••••••";
 const PREVIEW_TEXT = "你好，我会用这个声音为你朗读房间里的消息。";
 const CONSOLE_URL = "https://console.volcengine.com/speech/new";
 const rates = [{ value: -20, label: "0.8×" }, { value: 0, label: "1×" }, { value: 20, label: "1.2×" }, { value: 50, label: "1.5×" }, { value: 100, label: "2×" }];
-const settings = reactive({ speaker: "", speech_rate: 0, context: "", api_key_ref: "", voices: [], key_base_url: "" });
+const settings = reactive({ speaker: "", speech_rate: 0, context: "", api_key_ref: "", member_voices: {}, voices: [], key_base_url: "" });
+// One voice per AI platform; members of an unset platform, the user and program messages use the default voice.
+const platforms = Object.keys(bridge.launch_clients).map((name) => ({ name, label: bridge.identities[name]?.label || name }));
 const loaded = ref(false), unavailable = ref(""), api_key = ref(""), busy = ref("");
 // Collapsed by default; the header still says whether speech is ready.
 const open = ref(false);
@@ -21,19 +23,23 @@ onMounted(async () => {
 
 /** Save every field together; the service validates and answers with what it kept. */
 async function save() {
-  const { speaker, speech_rate, context, api_key_ref } = settings;
-  try { Object.assign(settings, await bridge.local_request("tts-settings", { speaker, speech_rate, context, api_key_ref })); }
+  const { speaker, speech_rate, context, api_key_ref, member_voices } = settings;
+  try { Object.assign(settings, await bridge.local_request("tts-settings", { speaker, speech_rate, context, api_key_ref, member_voices })); }
   catch (error) { bridge.notify("error", error.message); }
 }
 
-// Known voices show by name; a typed ID enabled in the console is kept and shown as itself.
+// Known voices show by name; IDs typed earlier (enabled in the console) are kept and shown as themselves.
 const voice_items = computed(() => {
   const items = settings.voices.map((voice) => ({ label: voice.label, value: voice.id }));
-  return items.some((item) => item.value === settings.speaker) || !settings.speaker ? items : [...items, { label: settings.speaker, value: settings.speaker }];
+  const typed = [settings.speaker, ...Object.values(settings.member_voices)].filter((id) => id && !items.some((item) => item.value === id));
+  return [...items, ...[...new Set(typed)].map((id) => ({ label: id, value: id }))];
 });
-/** Use a voice ID typed into the search box. */
-function add_voice(id) {
-  settings.speaker = id.trim();
+const platform_items = computed(() => [{ label: "跟随通用", value: "" }, ...voice_items.value]);
+/** Set the default voice, or one platform's (empty follows the default), from a choice or a typed ID. */
+function set_voice(platform, id) {
+  const voice = String(id || "").trim();
+  if (platform) settings.member_voices = { ...settings.member_voices, [platform]: voice };
+  else if (voice) settings.speaker = voice;
   save();
 }
 
@@ -50,20 +56,18 @@ async function save_key() {
   finally { busy.value = ""; }
 }
 
-/** Play a short sample with the saved voice; the audio context is opened in the click so phones allow sound. */
-async function preview() {
-  if (navigator.audioSession) navigator.audioSession.type = "playback";
-  const context = new AudioContext();
-  context.resume();
-  busy.value = "preview";
+/** Play a short sample in one voice (the default when empty); the element is started in the click so phones allow sound. */
+async function preview(platform) {
+  const sample = new Audio();
+  sample.play().catch(() => {});
+  busy.value = `preview:${platform}`;
   try {
-    const { audio } = await bridge.local_request("tts", { text: PREVIEW_TEXT });
-    const source = context.createBufferSource();
-    source.buffer = await context.decodeAudioData(Uint8Array.from(atob(audio), (character) => character.charCodeAt(0)).buffer);
-    source.connect(context.destination);
-    source.onended = () => context.close();
-    source.start();
-  } catch (error) { bridge.notify("error", error.message); context.close(); }
+    const speaker = platform ? settings.member_voices[platform] || settings.speaker : settings.speaker;
+    const { audio } = await bridge.local_request("tts", { text: PREVIEW_TEXT, speaker });
+    sample.src = URL.createObjectURL(new Blob([Uint8Array.from(atob(audio), (character) => character.charCodeAt(0))], { type: "audio/mpeg" }));
+    sample.onended = () => URL.revokeObjectURL(sample.src);
+    await sample.play();
+  } catch (error) { bridge.notify("error", error.message); }
   finally { busy.value = ""; }
 }
 </script>
@@ -83,18 +87,26 @@ async function preview() {
               <UInput v-model="api_key" type="text" autocomplete="off" spellcheck="false" data-1p-ignore data-lpignore="true" :placeholder="settings.api_key_ref ? `${SAVED_MARK}（输入新 Key 可更换）` : '粘贴 API Key'" aria-label="火山引擎 API Key" size="sm" class="w-full speech-key" :loading="busy === 'key'" @change="save_key" />
             </label>
             <h4>朗读</h4>
-            <div class="speech-row"><span>音色</span>
+            <div class="speech-row"><span>通用</span>
               <div class="speech-inline">
-                <USelectMenu v-model="settings.speaker" :items="voice_items" value-key="value" create-item :search-input="{ placeholder: '搜索或输入音色 ID' }" aria-label="朗读音色" size="sm" class="min-w-0 flex-1" @update:model-value="save" @create="add_voice" />
-                <UButton label="试听" icon="i-lucide-volume-2" color="neutral" variant="soft" size="sm" :loading="busy === 'preview'" :disabled="!settings.api_key_ref || Boolean(busy)" @click="preview" />
+                <USelectMenu :model-value="settings.speaker" :items="voice_items" value-key="value" create-item :search-input="{ placeholder: '搜索或输入音色 ID' }" aria-label="通用音色" size="sm" class="min-w-0 flex-1" @update:model-value="set_voice('', $event)" @create="set_voice('', $event)" />
+                <UButton icon="i-lucide-volume-2" aria-label="试听通用音色" color="neutral" variant="ghost" size="sm" :loading="busy === 'preview:'" :disabled="!settings.api_key_ref || Boolean(busy)" @click="preview('')" />
               </div>
             </div>
+            <div v-for="platform in platforms" :key="platform.name" class="speech-row"><span :title="platform.label">{{ platform.label }}</span>
+              <div class="speech-inline">
+                <USelectMenu :model-value="settings.member_voices[platform.name] || ''" :items="platform_items" value-key="value" create-item :search-input="{ placeholder: '搜索或输入音色 ID' }" :aria-label="`${platform.label} 的音色`" size="sm" class="min-w-0 flex-1" @update:model-value="set_voice(platform.name, $event)" @create="set_voice(platform.name, $event)" />
+                <UButton icon="i-lucide-volume-2" :aria-label="`试听 ${platform.label} 的音色`" color="neutral" variant="ghost" size="sm" :loading="busy === `preview:${platform.name}`" :disabled="!settings.api_key_ref || Boolean(busy)" @click="preview(platform.name)" />
+              </div>
+            </div>
+            <p class="fine-print speech-note">没单独设置的 AI、你自己的消息和程序消息都用通用音色。</p>
             <div class="speech-row"><span>语速</span>
               <div class="speech-rates" role="group" aria-label="朗读语速"><UButton v-for="rate in rates" :key="rate.value" :label="rate.label" color="neutral" variant="ghost" size="xs" :class="{ chosen: settings.speech_rate === rate.value }" :aria-pressed="settings.speech_rate === rate.value" @click="settings.speech_rate = rate.value; save()" /></div>
             </div>
             <label class="speech-row"><span>语气</span>
               <UInput v-model="settings.context" :maxlength="200" placeholder="可选，如：像朋友聊天一样自然地读" aria-label="朗读语气提示" size="sm" class="w-full" @change="save" />
             </label>
+            <p class="fine-print speech-note">输入框右下角的播报按钮可开启语音播报：新回复自动朗读回答摘要，并提示轮次、失败与讨论结束。</p>
             <h4>语音输入</h4>
             <p class="fine-print">点输入框右下角的麦克风开始说话，再点一次转成文字，单次最长 5 分钟。</p>
           </template>
@@ -116,8 +128,11 @@ async function preview() {
 .speech-settings h4 { margin: 4px 0 0; color: var(--ui-text-muted); font-size: 12px; font-weight: 600; }
 .speech-settings .fine-print { margin: 0; }
 .speech-settings a { color: var(--ui-primary); text-decoration: underline; }
-.speech-row { display: grid; grid-template-columns: 36px minmax(0, 1fr); align-items: center; gap: 10px; color: var(--ui-text-dimmed); font-size: 12px; }
+.speech-row { display: grid; grid-template-columns: 56px minmax(0, 1fr); align-items: center; gap: 10px; color: var(--ui-text-dimmed); font-size: 12px; }
 .speech-inline { display: flex; gap: 6px; min-width: 0; }
+.speech-row > span:first-child { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.speech-settings .speech-note { padding-left: 66px; }
+.speech-follow { display: flex; align-items: center; gap: 8px; color: var(--ui-text-muted); cursor: pointer; }
 .speech-rates { display: flex; gap: 2px; padding: 2px; border-radius: 8px; background: var(--ui-bg-elevated); width: fit-content; }
 .speech-rates button { min-width: 44px; justify-content: center; color: var(--ui-text-muted); }
 .speech-rates button.chosen { background: var(--ui-bg-accented); color: var(--ui-text-highlighted); }

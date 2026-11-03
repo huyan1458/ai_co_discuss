@@ -667,7 +667,8 @@ def list_rooms(connection, params=None):
     identifier = submission_value(params["submission_id"]) if "submission_id" in params else None
     where = "WHERE EXISTS (SELECT 1 FROM room_creations WHERE room_id=rooms.id AND submission_id=?)" if identifier else ""
     rows = connection.execute(f"""SELECT rooms.*,
-        COALESCE(stats.message_count,0) AS message_count,COALESCE(stats.latest_id,0) AS latest_id
+        COALESCE(stats.message_count,0) AS message_count,COALESCE(stats.latest_id,0) AS latest_id,
+        (SELECT created_at FROM messages WHERE id=stats.latest_id) AS latest_at
         FROM rooms LEFT JOIN room_message_stats stats ON stats.room_id=rooms.id {where}
         GROUP BY rooms.id ORDER BY rooms.created_at, rooms.id""", (identifier,) if identifier else ())
     directory = {row["room_id"]: dict(row) for row in connection.execute("SELECT * FROM room_directory")}
@@ -1311,6 +1312,10 @@ def message_filters(room_id, params):
             raise ValueError("发言职责无效")
         clauses.append("COALESCE(details.kind,'opinion')=?")
         values.append(params["kind"])
+    if params.get("host") == "1":
+        # Host view: moderation notes plus whatever the current host said.
+        clauses.append("(COALESCE(details.kind,'opinion')='moderation' OR messages.author=(SELECT host FROM topic_settings WHERE room_id=?))")
+        values.append(room_id)
     if "submission_id" in params:
         clauses.append("submission_id=?")
         values.append(submission_value(params["submission_id"]))

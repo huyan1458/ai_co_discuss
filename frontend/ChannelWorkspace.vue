@@ -11,6 +11,12 @@ import ExecutionTimeline from "./ExecutionTimeline.vue";
 
 const { view, bridge, field, act, pending } = inject("discussion");
 const room = computed(() => view.value.room);
+const created_label = computed(() => {
+  const date = new Date(room.value?.created_at || "");
+  if (Number.isNaN(date.getTime())) return "";
+  const year = date.getFullYear() === new Date().getFullYear() ? "" : `${date.getFullYear()}年`;
+  return `创建于 ${year}${date.getMonth() + 1}月${date.getDate()}日`;
+});
 const modal = ref("");
 const managed_room = ref(null);
 const target_folder = ref(null);
@@ -278,14 +284,14 @@ function resize_nav_by_key(event) {
           <UButton v-else icon="i-lucide-panel-left" color="neutral" variant="ghost" size="sm" class="channel-mobile-nav channel-icon-button channel-panel-toggle" aria-label="打开房间导航" :aria-expanded="nav_open" @click="nav_open = true" />
           <span class="channel-title-icon"><UIcon name="i-lucide-hash" /></span>
           <div class="channel-title"><div class="channel-title-copy"><h1 :title="room?.title">{{ room?.title || '共议' }}</h1></div><UBadge v-if="room?.archived" color="neutral" variant="subtle" size="sm">已存档</UBadge></div>
-          <span v-if="room" class="channel-header-context">{{ tabs.find((item) => item.value === view.tab)?.label }}<span>·</span>{{ room.message_count }} 条记录</span>
+          <span v-if="room" class="channel-header-context">{{ tabs.find((item) => item.value === view.tab)?.label }}<span>·</span>{{ room.message_count }} 条记录<template v-if="created_label"><span>·</span><time :datetime="room.created_at" :title="new Date(room.created_at).toLocaleString('zh-CN', { hour12: false })">{{ created_label }}</time></template></span>
           <div class="channel-header-actions">
             <form v-if="view.tab === 'discussion'" class="channel-search" @submit.prevent="act('filter', { query: search })">
               <UInput v-model="search" icon="i-lucide-search" variant="none" size="sm" placeholder="搜索消息" aria-label="搜索讨论记录" :disabled="!room" class="channel-search-input">
                 <template #trailing><UButton v-if="search || view.query" icon="i-lucide-x" color="neutral" variant="ghost" size="xs" aria-label="清除搜索" @click="search = ''; act('filter', { query: '' })" /><UButton type="submit" icon="i-lucide-corner-down-left" color="neutral" variant="ghost" size="xs" aria-label="搜索" :disabled="!room" /></template>
               </UInput>
             </form>
-            <UTooltip v-if="view.tab === 'discussion'" text="只看提到当前身份的消息"><UButton icon="i-lucide-at-sign" :variant="view.mention_only ? 'soft' : 'ghost'" color="neutral" size="sm" class="channel-icon-button channel-mention-filter" :aria-pressed="view.mention_only" aria-label="提到我" :disabled="!room" @click="act('filter', { mention: !view.mention_only })" /></UTooltip>
+            <UTooltip v-if="view.tab === 'discussion'" text="只看主持：主持人的发言与主持说明（含讨论总结）"><UButton icon="i-lucide-crown" :variant="view.host_only ? 'soft' : 'ghost'" color="neutral" size="sm" class="channel-icon-button channel-host-filter" :aria-pressed="view.host_only" aria-label="只看主持" :disabled="!room" @click="act('filter', { host: !view.host_only })" /></UTooltip>
           </div>
           <UTooltip :text="info_label"><UButton icon="i-lucide-panel-right" color="neutral" variant="ghost" size="sm" class="channel-icon-button channel-panel-toggle channel-info-button" :aria-label="info_label" :disabled="!room && !(rail_inline && view.tab === 'discussion')" :aria-expanded="rail_inline && view.tab === 'discussion' ? show_rail : info_open" @click="toggle_info" /></UTooltip>
         </header>

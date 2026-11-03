@@ -46,6 +46,27 @@ function choose_imports(event) {
   import_open.value = true;
   act("import_rooms", { files, folder_id: import_folder });
 }
+/** Short relative last-activity label ("3小时前"); falls back to creation time. */
+function room_time(room) {
+  const time = new Date(room.latest_at || room.created_at || "").getTime();
+  if (Number.isNaN(time)) return "";
+  const minutes = Math.max(0, Math.floor((Date.now() - time) / 60000));
+  const days = Math.floor(minutes / 1440);
+  if (minutes < 1) return "刚刚";
+  if (minutes < 60) return `${minutes}分钟前`;
+  if (minutes < 1440) return `${Math.floor(minutes / 60)}小时前`;
+  if (days < 7) return `${days}天前`;
+  if (days < 30) return `${Math.floor(days / 7)}周前`;
+  if (days < 365) return `${Math.floor(days / 30)}个月前`;
+  return `${Math.floor(days / 365)}年前`;
+}
+
+/** Full timestamps for the row tooltip. */
+function room_time_title(room) {
+  const format = (value) => new Date(value).toLocaleString("zh-CN", { hour12: false });
+  return [room.title, room.latest_at && `最近发言 ${format(room.latest_at)}`, room.created_at && `创建于 ${format(room.created_at)}`]
+    .filter(Boolean).join("\n");
+}
 const rooms_open = ref(true);
 const collapsed = ref(read_collapsed());
 watch(() => view.value.room?.id, () => {
@@ -129,7 +150,7 @@ function actions(room, index, folder_id, folder_room_count) {
     <nav v-show="rooms_open" aria-label="协作房间列表" class="channel-room-list" data-room-directory>
       <section v-for="(folder, folder_index) in folders" :key="folder.order_id" class="channel-folder-section" :data-room-folder="folder.id" :data-drag-folder="folder.order_id">
        <div v-if="folder.id" class="channel-folder-row" :class="{ active: collapsed.has(folder.id) && view.room?.folder_id === folder.id }">
-       <button class="channel-folder-heading" data-drop-folder data-drag-handle type="button" :disabled="folder.pending" :aria-label="`${folder.name} ${folder.rooms.length}`" :aria-expanded="!collapsed.has(folder.id)" title="拖动文件夹排序；上下方向键移动" @pointerdown="!pending && bridge.start_drag($event)" @keydown.up.prevent="act('move_folder', { id: folder.order_id, direction: -1 })" @keydown.down.prevent="act('move_folder', { id: folder.order_id, direction: 1 })" @click="toggle_folder(folder.id)"><UIcon :name="collapsed.has(folder.id) ? 'i-lucide-chevron-right' : 'i-lucide-chevron-down'" /><UIcon name="i-lucide-folder" /><span class="channel-folder-name">{{ folder.name }}</span><small class="channel-directory-count" aria-hidden="true">{{ folder.pending ? '保存中' : folder.rooms.length }}</small></button>
+       <button class="channel-folder-heading" data-drop-folder data-drag-handle type="button" :disabled="folder.pending" :aria-label="`${folder.name} ${folder.rooms.length}`" :aria-expanded="!collapsed.has(folder.id)" title="拖动文件夹排序；上下方向键移动" @pointerdown="!pending && bridge.start_drag($event)" @keydown.up.prevent="act('move_folder', { id: folder.order_id, direction: -1 })" @keydown.down.prevent="act('move_folder', { id: folder.order_id, direction: 1 })" @click="toggle_folder(folder.id)"><UIcon :name="collapsed.has(folder.id) ? 'i-lucide-chevron-right' : 'i-lucide-chevron-down'" /><UIcon name="i-lucide-folder" /><span class="channel-folder-name">{{ folder.name }}</span><small class="channel-directory-count" aria-hidden="true">{{ folder.pending ? '保存中' : folder.rooms.length || '' }}</small></button>
         <div class="channel-folder-actions">
           <UTooltip :text="`在${folder.name}中新建对话`"><UButton icon="i-lucide-square-pen" :aria-label="`在${folder.name}中新建对话`" :disabled="folder.pending || view.directory_pending.includes('create-room')" size="xs" color="neutral" variant="ghost" @click="emit('create', folder.id ? folder : null)" /></UTooltip>
           <UDropdownMenu :items="folder_actions(folder, folder_index)" :content="{ align: 'start', side: 'bottom', sideOffset: 6 }" :ui="{ content: 'channel-menu channel-topic-menu' }"><UButton icon="i-lucide-ellipsis" :aria-label="`管理文件夹 ${folder.name}`" title="文件夹选项" size="xs" color="neutral" variant="ghost" /></UDropdownMenu>
@@ -140,7 +161,7 @@ function actions(room, index, folder_id, folder_room_count) {
       <UContextMenu v-for="(room, index) in folder.rooms" :key="room.id" :items="actions(room, index, room.folder_id || null, folder.rooms.length)" :ui="{ content: 'channel-menu channel-topic-menu' }">
         <div class="channel-room-row" :class="{ active: room.id === view.room?.id }" :data-drag-room="room.id">
           <button class="channel-room-grip" data-drag-handle :aria-label="`拖动 ${room.title}`" title="拖动排序；上下方向键移动" :disabled="Boolean(pending)" @pointerdown="bridge.start_drag($event)" @keydown.up.prevent="act('move_channel', { id: room.id, direction: -1, folder_id: room.folder_id || null })" @keydown.down.prevent="act('move_channel', { id: room.id, direction: 1, folder_id: room.folder_id || null })"><UIcon name="i-lucide-grip-vertical" /></button>
-          <button class="channel-room-select" data-drag-title :title="room.title" :aria-label="room.title" :aria-current="room.id === view.room?.id ? 'page' : undefined" @pointerdown="!pending && bridge.start_drag($event)" @click="emit('select', room.id)"><span>{{ room.title }}</span></button>
+          <button class="channel-room-select" data-drag-title :title="room_time_title(room)" :aria-label="room.title" :aria-current="room.id === view.room?.id ? 'page' : undefined" @pointerdown="!pending && bridge.start_drag($event)" @click="emit('select', room.id)"><span>{{ room.title }}</span><small class="channel-room-time" aria-hidden="true">{{ room_time(room) }}</small></button>
           <div class="channel-room-actions">
             <UTooltip :text="room.archived ? '恢复房间' : '存档房间'" :ui="{ content: 'channel-topic-tooltip' }">
               <UButton :icon="room.archived ? 'i-lucide-archive-restore' : 'i-lucide-archive'" :aria-label="`${room.archived ? '恢复' : '存档'} ${room.title}`" size="xs" color="neutral" variant="ghost" :disabled="Boolean(pending) || view.archive_pending.includes(room.id)" @click="emit('manage', { room, action: room.archived ? 'restore' : 'archive' })" />
