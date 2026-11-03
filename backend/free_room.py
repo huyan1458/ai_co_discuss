@@ -1699,6 +1699,8 @@ def execution_action(connection, room_id, execution_id, token, payload):
         connection.execute("""INSERT INTO execution_capabilities (execution_id,room_id,stoppable,progress) VALUES (?,?,?,?)
             ON CONFLICT(execution_id) DO UPDATE SET stoppable=excluded.stoppable,progress=excluded.progress""",
                            (execution_id, room_id, int(payload["stoppable"]), int(payload["progress"])))
+    elif action == "retry":
+        retry_failed(connection, room_id, row)
     elif row["status"] not in ACTIVE:
         raise FileExistsError("执行已结束")
     elif action == "renew":
@@ -1745,9 +1747,33 @@ def execution_action(connection, room_id, execution_id, token, payload):
         # Only for proven non-delivery: the requests return to the queue unchanged.
         finish_execution(connection, execution_id, "cancelled", str(payload.get("reason") or "未送达"), "pending")
     else:
-        raise ValueError("action 须为 renew、fail、release、report、segments、retry_wait、retry_start、retry_now 或 retry_stop")
+        raise ValueError("action 须为 renew、fail、release、report、segments、retry_wait、retry_start、retry_now、retry_stop 或 retry")
     detail = execution_detail(connection, connection.execute("SELECT * FROM member_executions WHERE id=?", (execution_id,)).fetchone())
     return {**detail, "duplicate": duplicate} if action == "stopped" else detail
+
+
+def retry_failed(connection, room_id, execution):
+    """Owner retry of a failed execution: its requests go back to the same member's queue and the runner delivers them anew.
+
+    The failed execution stays as history but no longer carries the requests, so a second retry is refused. A host batch
+    that failed as a whole reopens and its chain resumes, so the host still gets the answer back.
+    """
+    if execution["status"] != "failed":
+        raise FileExistsError("只有失败的执行可以重试")
+    requests = connection.execute("""SELECT id,batch_id,chain_id FROM member_requests r WHERE execution_id=? AND status='failed'
+        AND NOT EXISTS(SELECT 1 FROM session_requests s WHERE s.member_request_id=r.id)""", (execution["id"],)).fetchall()
+    if not requests:
+        raise FileExistsError("这次执行没有可重试的请求：已重试过，或是讨论发言（由主持人重新安排）")
+    if not connection.execute("SELECT 1 FROM room_members WHERE id=? AND status='active'", (execution["member_id"],)).fetchone():
+        raise FileExistsError("该成员已离开或暂离，无法重试")
+    connection.execute(f"UPDATE member_requests SET status='pending',execution_id=NULL WHERE id IN ({','.join('?' * len(requests))})",
+                       [request["id"] for request in requests])
+    for request in requests:
+        batch_id, chain_id = request["batch_id"], request["chain_id"]
+        if batch_id and not connection.execute(
+                "SELECT 1 FROM member_requests WHERE room_id=? AND batch_id=? AND status='completed'", (room_id, batch_id)).fetchone():
+            connection.execute("UPDATE free_batches SET settled=0 WHERE room_id=? AND batch_id=?", (room_id, batch_id))
+            connection.execute("DELETE FROM free_chains WHERE room_id=? AND chain_id=? AND reason='all_failed'", (room_id, chain_id))
 
 
 def owned_member(connection, room_id, member_id, token):

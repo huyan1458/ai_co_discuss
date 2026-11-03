@@ -1138,6 +1138,10 @@ function request_message(report) {
 function failed_request_message(report) {
   return report.status === "failed" ? request_message(report) : null;
 }
+/** A failed execution still holding its requests can be sent again as is; discussion turns are rearranged by the host instead. */
+function can_retry(report) {
+  return Boolean(view.value.access?.can_manage && report.requests?.length && !report.requests.some((request) => request.discussion_session_id));
+}
 /** Put the original text back in the input for the user to send again; a named request keeps its @member. */
 function resend_failed(report) {
   const original = request_message(report);
@@ -1377,7 +1381,14 @@ function copy_message(message) { act("copy", `${view.value.room_site}/r/${room.v
             </div>
             <span v-if="message.failure.elapsed_seconds != null" class="channel-message-provenance channel-message-elapsed">耗时 {{ format_elapsed(message.failure.elapsed_seconds) }}</span>
           </div>
-          <p class="channel-message-text channel-failure-reason">{{ message.failure.result || '执行失败，未提供原因' }}</p>
+          <!-- Same row as the working card it replaced: retry takes the stop button's place. -->
+          <div class="channel-working-row">
+            <p class="channel-message-text channel-failure-reason">{{ message.failure.result || '执行失败，未提供原因' }}</p>
+            <div v-if="can_retry(message.failure)" class="channel-working-actions">
+              <UTooltip text="重试"><UButton icon="i-lucide-rotate-cw" variant="solid" color="neutral" class="channel-stop-button channel-retry-button" :aria-label="`把执行 #${message.failure.id} 的请求重新派给 ${bridge.display_name(message.author)}`"
+                :disabled="!!pending" :loading="pending === 'retry_delivery'" @click="act('retry_delivery', { execution_id: message.failure.id, action: 'retry' })" /></UTooltip>
+            </div>
+          </div>
           <ExecutionNotes v-if="message.failure.notes" :count="message.failure.notes" :notes="execution_notes.get(message.failure.id)" @load="load_notes(message.failure.id)" />
           <ExecutionDenials v-if="message.failure.denials?.length" :denials="message.failure.denials" :allowable="Boolean(denial_allowance(message.failure))"
             :busy="allowing === message.failure.id" :error="allow_errors[message.failure.id]" @allow="allow_and_resend(message.failure)" />
@@ -1598,5 +1609,7 @@ function copy_message(message) { act("copy", `${view.value.room_site}/r/${room.v
 .channel-working-actions { display: flex; align-items: center; gap: 6px; flex-shrink: 0; }
 .channel-stop-button { width: 28px; height: 28px; padding: 0; justify-content: center; border-radius: 999px; background: color-mix(in srgb, var(--ui-error) 55%, #000); color: #f4e7e6; }
 .channel-stop-button:hover:not(:disabled) { background: color-mix(in srgb, var(--ui-error) 68%, #000); }
+.channel-retry-button { background: #ffffff14; color: var(--ui-text-highlighted); }
+.channel-retry-button:hover:not(:disabled) { background: #ffffff24; }
 .channel-stop-square { width: 9px; height: 9px; border-radius: 2px; background: currentColor; }
 </style>

@@ -947,7 +947,7 @@ async function refresh_room({ room: read_room = true } = {}) {
   }
   if (state.room && !state.rooms.some((item) => item.id === state.room.id)) return select_room(visible_rooms()[0]?.id);
   if (!state.room || !read_room) {
-    if (!state.room && visible_rooms().length) return select_room(visible_rooms()[0].id);
+    if (!state.room && visible_rooms().length) return select_room(opening_room());
     render_rooms();
     set_connection(true);
     return;
@@ -964,6 +964,17 @@ async function refresh_room({ room: read_room = true } = {}) {
 }
 
 /** Select a room and reset room-specific draft and filter state. */
+// The room last opened in this browser, reopened on the next visit instead of the first in the list.
+const LAST_ROOM_KEY = "ai-codiscuss-last-room";
+
+/** The room to open when none is chosen: the address's room, else the one last opened here, else the first listed. */
+function opening_room() {
+  let last = null;
+  try { last = localStorage.getItem(LAST_ROOM_KEY); } catch { /* Storage may be unavailable. */ }
+  const wanted = [new URLSearchParams(location.search).get("room"), last].find((id) => id && state.rooms.some((room) => room.id === id));
+  return wanted || visible_rooms()[0]?.id;
+}
+
 async function select_room(room_id) {
   state.navigation_version++;
   state.refresh_version++;
@@ -991,6 +1002,7 @@ async function select_room(room_id) {
   cancel_reply();
   select_tab("discussion", { refresh: false });
   history.replaceState(null, "", state.room ? `/?room=${encodeURIComponent(room_id)}` : "/");
+  if (state.room) try { localStorage.setItem(LAST_ROOM_KEY, room_id); } catch { /* Keep working without remembering. */ }
   if (state.room) state.archive_view = Boolean(state.room.archived);
   else {
     element("host-brief-panel").hidden = true;
@@ -3862,8 +3874,7 @@ async function initialize() {
     const result = computer_rooms_only() && !state.remote_rooms ? { rooms: [] } : await request_json("/api/rooms");
     state.rooms = result.rooms;
     set_folder_directory(result);
-    const requested = new URLSearchParams(location.search).get("room");
-    await select_room(state.rooms.some((room) => room.id === requested) ? requested : visible_rooms()[0]?.id);
+    await select_room(opening_room());
     set_connection(true);
   } catch (error) { set_connection(false); show_toast(error.message, true); }
   start_live_updates();

@@ -1169,6 +1169,23 @@ class HostTests(FreeRoomTests):
         self.assertEqual([item["reason"] for item in free["halted_chains"]], ["all_failed"])
         self.assertEqual(self.requests().count(("Claude", "handoff", "pending")), 0)
 
+    def test_owner_retries_a_failed_execution_once(self):
+        """Retry puts the failed request back for the same member; the halted chain resumes and the host still gets the answer."""
+        FreeRoomTests.say(self, "重试")
+        self.work("Claude", to=["Codex", "Antigravity"])
+        for name in ("Codex", "Antigravity"):
+            failing = self.reserve_for(name)[1]
+            self.request(f"{self.path}/executions/{failing['id']}", {"action": "fail", "reason": "投递失败"}, self.owner)
+        url = f"{self.path}/executions/{failing['id']}"
+        self.assertEqual(self.request(url, {"action": "retry"}, self.member)[0], 403)
+        status, retried = self.request(url, {"action": "retry"}, self.owner)
+        self.assertEqual((status, retried["status"], retried["requests"]), (200, "failed", []))
+        self.assertEqual(self.request(url, {"action": "retry"}, self.owner)[0], 409)
+        self.assertEqual(self.request(self.path)[1]["free"]["halted_chains"], [])
+        self.assertIn(("Antigravity", "ask", "pending"), self.requests())
+        self.work("Antigravity")
+        self.assertEqual(self.requests().count(("Claude", "handoff", "pending")), 1)
+
     def test_round_limit_holds_the_next_dispatch_until_the_owner_continues(self):
         """A round is a host dispatch: its hand-back always comes, the next dispatch past the limit is held, and continuing sends it."""
         from backend import free_room
