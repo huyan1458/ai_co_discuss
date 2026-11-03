@@ -238,6 +238,10 @@ async function load_late_answer(execution_id, event) {
     bridge.notify("error", `未采纳的回答读取失败：${error.message}`);
   }
 }
+/** Notes read so far for a working item's execution. */
+function working_notes(message) {
+  return execution_notes.value.get(message.execution_id) || [];
+}
 async function load_notes(execution_id) {
   try {
     const { notes } = await bridge.request(`/api/rooms/${room.value.id}/executions/${execution_id}/notes`);
@@ -1330,6 +1334,36 @@ function copy_message(message) { act("copy", `${view.value.room_site}/r/${room.v
             </template>
           </template>
         </UChatMessage>
+        <!-- Work in progress is a folded strip, not a card: one line with the latest note, the notes open below it. -->
+        <!-- The controls sit beside the fold, not inside its summary, so they are not buttons nested in a button. -->
+        <div v-else-if="message.slot_card && !message.failure && !message.retry" :id="`execution-${message.id}`" class="channel-working-strip" :data-author="bridge.identities[message.author]?.style">
+          <details class="channel-working-fold">
+          <summary @click="(event) => { if (!working_notes(message).length) event.preventDefault(); }">
+            <UAvatar :src="bridge.identities[message.author]?.icon" :text="bridge.identities[message.author]?.initials || '?'" :alt="bridge.display_name(message.author)" size="2xs" class="channel-avatar" :class="bridge.identities[message.author]?.style" />
+            <strong class="channel-working-name">{{ bridge.display_name(message.author) }}</strong>
+            <span v-for="status in [working_status(message)]" :key="message.id" class="channel-working-status" :class="{ 'channel-working-warning': status.warning }" role="status" :title="shows_progress(message) ? (message.waiting ? message.text : status.text) : '此接入方式看不到进度，可在原窗口查看'">
+              <span v-if="message.waiting">{{ message.text }}</span>
+              <WorkingText v-else-if="status.live" :text="status.text" :seed="message.author" :beat="message.activity_at" :silent="free_now - (message.activity_at || message.created_at)" dots :muted="!shows_progress(message)" />
+              <span v-else>{{ status.text }}</span>
+            </span>
+            <small class="channel-working-elapsed">{{ message.waiting ? `手动启动${message.created_at ? ` · 已等 ${format_elapsed(Math.max(0, free_now - message.created_at))}` : ''}` : `已用 ${format_elapsed(Math.max(0, free_now - message.created_at))}` }}</small>
+            <span class="channel-working-latest">{{ working_notes(message).at(-1)?.text }}</span>
+            <span v-if="working_notes(message).length" class="channel-working-count">{{ working_notes(message).length }} 段<UIcon name="i-lucide-chevron-down" /></span>
+          </summary>
+          <ol class="channel-working-notes"><li v-for="note in working_notes(message)" :key="note.seq">{{ note.text }}</li></ol>
+          </details>
+          <span v-if="view.access?.can_manage" class="channel-working-actions">
+              <!-- In a discussion, stopping the current speaker skips the turn so the next one speaks. -->
+              <template v-if="speaking_turn?.expert === message.author && message.discussion_request">
+                <UTooltip text="暂停讨论"><UButton icon="i-lucide-pause" size="xs" variant="ghost" color="neutral" :aria-label="`暂停讨论，停止 ${bridge.display_name(message.author)} 本次发言`" :disabled="!!pending" :loading="pending === 'pause_discussion'" @click="act('pause_discussion')" /></UTooltip>
+                <UTooltip text="停止本次发言，轮到下一位"><UButton variant="solid" color="neutral" class="channel-stop-button" :aria-label="`停止 ${bridge.display_name(message.author)} 本次发言，轮到下一位`" :disabled="!!pending" :loading="pending === 'skip_turn'"
+                  @click="act('skip_turn')"><span class="channel-stop-square" /></UButton></UTooltip>
+              </template>
+              <UTooltip v-else text="停止"><UButton variant="solid" color="neutral" class="channel-stop-button" :aria-label="`停止 ${bridge.display_name(message.author)} 本次执行`" :disabled="!!pending"
+                @click="act('change_member', { member_id: message.member_id, name: message.author, action: 'interrupt' })"><span class="channel-stop-square" /></UButton></UTooltip>
+          </span>
+        </div>
+        <!-- Waiting to redeliver keeps the full card: the reason and its buttons do not fit one line. -->
         <UChatMessage v-else-if="message.slot_card && !message.failure" :id="`execution-${message.id}`" :data-author="bridge.identities[message.author]?.style" role="assistant" :parts="[]" side="left" variant="naked" color="neutral" class="channel-message" :ui="{ header: 'channel-message-header', container: 'channel-message-container', body: 'channel-message-body' }">
           <template #body>
             <div class="channel-message-byline">
@@ -1344,16 +1378,6 @@ function copy_message(message) { act("copy", `${view.value.room_site}/r/${room.v
                 <span v-if="message.waiting">{{ message.text }}</span>
                 <WorkingText v-else-if="status.live" :text="status.text" :seed="message.author" :beat="message.activity_at" :silent="free_now - (message.activity_at || message.created_at)" dots :muted="!shows_progress(message)" />
                 <span v-else>{{ status.text }}</span>
-              </div>
-              <div v-if="!message.retry && view.access?.can_manage" class="channel-working-actions">
-                <!-- In a discussion, stopping the current speaker skips the turn so the next one speaks. -->
-                <template v-if="speaking_turn?.expert === message.author && message.discussion_request">
-                  <UTooltip text="暂停讨论"><UButton icon="i-lucide-pause" size="sm" variant="ghost" color="neutral" :aria-label="`暂停讨论，停止 ${bridge.display_name(message.author)} 本次发言`" :disabled="!!pending" :loading="pending === 'pause_discussion'" @click="act('pause_discussion')" /></UTooltip>
-                  <UTooltip text="停止本次发言，轮到下一位"><UButton variant="solid" color="neutral" class="channel-stop-button" :aria-label="`停止 ${bridge.display_name(message.author)} 本次发言，轮到下一位`" :disabled="!!pending" :loading="pending === 'skip_turn'"
-                    @click="act('skip_turn')"><span class="channel-stop-square" /></UButton></UTooltip>
-                </template>
-                <UTooltip v-else text="停止"><UButton variant="solid" color="neutral" class="channel-stop-button" :aria-label="`停止 ${bridge.display_name(message.author)} 本次执行`" :disabled="!!pending"
-                  @click="act('change_member', { member_id: message.member_id, name: message.author, action: 'interrupt' })"><span class="channel-stop-square" /></UButton></UTooltip>
               </div>
             </div>
             <template v-if="message.retry">
@@ -1606,7 +1630,13 @@ function copy_message(message) { act("copy", `${view.value.room_site}/r/${room.v
 .channel-working-actions { display: flex; align-items: center; gap: 6px; flex-shrink: 0; }
 .channel-stop-button { width: 28px; height: 28px; padding: 0; justify-content: center; border-radius: 999px; background: color-mix(in srgb, var(--ui-error) 55%, #000); color: #f4e7e6; }
 .channel-stop-button:hover:not(:disabled) { background: color-mix(in srgb, var(--ui-error) 68%, #000); }
+/* A dark red disc reads as a heavy blot on a white card: light uses the pale tint of 全部停止. */
+:root[data-theme="channel-light"] .channel-stop-button { background: color-mix(in srgb, var(--ui-error) 12%, transparent); color: var(--ui-error); }
+:root[data-theme="channel-light"] .channel-stop-button:hover:not(:disabled) { background: color-mix(in srgb, var(--ui-error) 20%, transparent); }
 .channel-retry-button { background: #ffffff14; color: var(--ui-text-highlighted); }
 .channel-retry-button:hover:not(:disabled) { background: #ffffff24; }
 .channel-stop-square { width: 9px; height: 9px; border-radius: 2px; background: currentColor; }
+/* In the one-line strip the stop key shrinks to the row. */
+.channel-working-strip .channel-stop-button { width: 24px; height: 24px; }
+.channel-working-strip .channel-stop-square { width: 8px; height: 8px; }
 </style>

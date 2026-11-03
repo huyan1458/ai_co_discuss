@@ -1,4 +1,4 @@
-/** Own the local website and only the discussion service started by this supervisor. */
+/** Own the local website and the discussion service it starts; local stop also stops a pre-existing service. */
 import { spawn } from 'node:child_process';
 import { createHash, randomBytes } from 'node:crypto';
 import { appendFileSync, closeSync, existsSync, mkdirSync, openSync, readFileSync, unlinkSync } from 'node:fs';
@@ -226,16 +226,15 @@ export function restart_reason(home = service_home()) {
   return null;
 }
 
-/** Ask the owned supervisor to stop, retaining its database and user configuration. */
+/** Stop the supervisor and any discussion service, retaining the database and user configuration. */
 async function stop_local(home) {
-  if (!local_status(home).pid) return local_status(home);
-  const path = join(home, 'local', 'stop.request');
-  atomic_json(path, { requested_at: Date.now() });
-  for (let waited = 0; waited < STOP_WAIT_MS; waited += POLL_MS) {
-    if (!local_status(home).pid) return local_status(home);
-    await sleep(POLL_MS);
+  if (local_status(home).pid) {
+    atomic_json(join(home, 'local', 'stop.request'), { requested_at: Date.now() });
+    for (let waited = 0; waited < STOP_WAIT_MS && local_status(home).pid; waited += POLL_MS) await sleep(POLL_MS);
+    if (local_status(home).pid) throw new Error('本机服务尚未停止，请查看 local/supervisor.log');
   }
-  throw new Error('本机服务尚未停止，请查看 local/supervisor.log');
+  if (service_pid(home)) await service_main(['stop'], () => {});
+  return local_status(home);
 }
 
 /** Open the supervisor's loopback URL or a website explicitly authorized by local connect. */
@@ -258,8 +257,7 @@ function local_summary(command, result, opened) {
     status: result.running ? [`本机网站运行中：${site}`]
       : result.website_running ? [`本机网站运行中：${site}，但讨论服务未运行；运行 codiscuss local open 恢复`]
         : ['本机网站未运行；运行 codiscuss local open 启动'],
-    stop: result.service_pid ? [`本机网站已停止；独立讨论服务仍在运行（PID ${result.service_pid}），可用 codiscuss service stop 单独停止；数据已保留`]
-      : ['本机网站与讨论服务已停止；数据已保留，运行 codiscuss local open 重新启动'],
+    stop: ['本机网站与讨论服务已停止；数据已保留，运行 codiscuss local open 重新启动'],
     connect: [`已连接 ${result.connected}；本机网站 ${tone.cyan(result.local_url || '')}`,
       opened ? '已在浏览器打开连接链接，请在该页面完成接入；连接链接不要转发' : `请在浏览器打开连接链接完成接入，链接不要转发：${result.url}`],
     disconnect: [`已撤销 ${result.disconnected} 的本机启动权限；正在运行的讨论需在进度看板暂停`],

@@ -43,7 +43,7 @@ const REPO_ROOT = dirname(dirname(SCRIPT));
 const SHORTCUT_NAME = 'AI CoDiscuss 讨论服务.lnk';
 const TICK_STATES = { undefined: 'running', waiting: 'paused', false: 'idle' };
 const STATUS_LABELS = { running: '运行中', paused: '已暂停', idle: '等待启动', error: '异常' };
-const USAGE = '用法: discussion_service.mjs start|stop|status|open|run|list|add|remove|clean|shortcut|autostart [--config 私有配置.json] [on|off]';
+const USAGE = '用法: discussion_service.mjs start|stop|restart|status|open|run|list|add|remove|clean|shortcut|autostart [--config 私有配置.json] [on|off]';
 export const CONNECTION_FIELDS = ['executable', 'ipc_directory'];
 
 /** Read one atomic configuration version for editing and worker acknowledgement. */
@@ -798,6 +798,7 @@ export async function main(args = process.argv.slice(2), print = value => proces
     case 'run': return run_service(home);
     case 'start': return print(await start_service(home));
     case 'stop': return print(await stop_service(home));
+    case 'restart': await stop_service(home); return print(await start_service(home));
     case 'status': return print(service_status(home));
     case 'open': return print({ ...(await start_service(home)), opened: open_sites(home) });
     case 'list': return print({ home, configs: read_registry(home) });

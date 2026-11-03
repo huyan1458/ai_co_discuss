@@ -110,6 +110,7 @@ API 成员可以担任专家或主持人。房间指定了项目目录时，它�
 | 打开本机网站 | `codiscuss local open` |
 | 查看状态 | `codiscuss local status` |
 | 停止 | `codiscuss local stop` |
+| 重启讨论服务（使新环境变量生效，须在已有新值的终端执行） | `codiscuss service restart` |
 | 登录时自动启动（Windows） | `codiscuss service autostart on` |
 
 ## 命令行

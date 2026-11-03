@@ -91,6 +91,7 @@ Permissions are set per automatically started CLI member and default to read-onl
 | Open the local site | `codiscuss local open` |
 | Show status | `codiscuss local status` |
 | Stop | `codiscuss local stop` |
+| Restart the discussion service (picks up new environment variables; run it from a terminal that has them) | `codiscuss service restart` |
 | Start at login (Windows) | `codiscuss service autostart on` |
 
 ## Command Line

@@ -159,7 +159,7 @@ test('setup restarts a stale or moved website only after interactive confirmatio
   }
 });
 
-test('local stop keeps a pre-existing service; occupied port cannot be mistaken for readiness', async () => {
+test('local stop also stops a pre-existing service; occupied port cannot be mistaken for readiness', async () => {
   const reservation = await reserve_port();
   const port = reservation.address().port;
   const state = fixture(port);
@@ -176,14 +176,14 @@ test('local stop keeps a pre-existing service; occupied port cannot be mistaken 
     assert(existsSync(join(state.home, 'local-settings.json')));
     await new Promise(done => reservation.close(done));
     const service = state.command(['service', 'start', '--json']);
+    const restarted = state.command(['service', 'restart', '--json']);
+    assert.equal(restarted.started, true);
+    assert.notEqual(restarted.pid, service.pid);
     state.command(['local', 'start']);
     const stopped = state.execute(['local', 'stop']);
     assert.equal(stopped.status, 0, stopped.stderr);
-    assert.match(stopped.stderr, /独立讨论服务仍在运行/);
-    assert.equal(JSON.parse(stopped.stdout).service_pid, service.pid);
-    const retained = state.command(['service', 'status', '--json']);
-    assert.equal(retained.pid, service.pid);
-    assert.equal(retained.running, true);
+    assert.equal(JSON.parse(stopped.stdout).service_pid, 0);
+    assert.equal(state.command(['service', 'status', '--json']).running, false);
   } finally {
     if (reservation.listening) await new Promise(done => reservation.close(done));
     state.execute(['local', 'stop']);
@@ -192,7 +192,7 @@ test('local stop keeps a pre-existing service; occupied port cannot be mistaken 
   }
 });
 
-for (const independent of [false, true]) test(`local restart ${independent ? 'preserves an independent replacement' : 'owns its replacement service'} without replacing the website`, async () => {
+for (const independent of [false, true]) test(`local restart ${independent ? 'reuses an independent replacement' : 'owns its replacement service'} without replacing the website`, async () => {
   const reservation = await reserve_port();
   const port = reservation.address().port;
   await new Promise(done => reservation.close(done));
@@ -216,7 +216,7 @@ for (const independent of [false, true]) test(`local restart ${independent ? 'pr
     assert.equal((service_log.match(/讨论服务已启动 pid=/g) || []).length, 2);
     assert.equal((service_log.match(/讨论服务已停止/g) || []).length, 1);
     state.command(['local', 'stop']);
-    assert.equal(state.command(['service', 'status', '--json']).running, independent);
+    assert.equal(state.command(['service', 'status', '--json']).running, false);
   } finally {
     state.execute(['local', 'stop']);
     state.execute(['service', 'stop', '--json']);

@@ -427,12 +427,12 @@ html[data-theme^="channel"] .channel-message.channel-topic-card { color: var(--u
 .channel-date-divider { padding: 12px 24px 14px; }
 .channel-date-divider [data-slot="border"] { border-color: #ffffff0d; }
 .channel-date-divider [data-slot="label"] { color: #959eab; background: transparent; font-size: 11px; font-weight: 500; padding: 0 3px; }
-.channel-message, .channel-message-jump { --speaker-accent: #bdc6d5; }
-:is(.channel-message, .channel-message-jump)[data-author="codex"] { --speaker-accent: #a6ccbe; }
-:is(.channel-message, .channel-message-jump)[data-author="claude"] { --speaker-accent: #dfb39b; }
-:is(.channel-message, .channel-message-jump)[data-author="gemini"] { --speaker-accent: #b5bdf8; }
-:is(.channel-message, .channel-message-jump)[data-author="deepseek"] { --speaker-accent: #98bcff; }
-:is(.channel-message, .channel-message-jump)[data-author="qwen"] { --speaker-accent: #c9b5eb; }
+.channel-message, .channel-message-jump, .channel-working-strip { --speaker-accent: #bdc6d5; }
+:is(.channel-message, .channel-message-jump, .channel-working-strip)[data-author="codex"] { --speaker-accent: #a6ccbe; }
+:is(.channel-message, .channel-message-jump, .channel-working-strip)[data-author="claude"] { --speaker-accent: #dfb39b; }
+:is(.channel-message, .channel-message-jump, .channel-working-strip)[data-author="gemini"] { --speaker-accent: #b5bdf8; }
+:is(.channel-message, .channel-message-jump, .channel-working-strip)[data-author="deepseek"] { --speaker-accent: #98bcff; }
+:is(.channel-message, .channel-message-jump, .channel-working-strip)[data-author="qwen"] { --speaker-accent: #c9b5eb; }
 .channel-message { position: relative; width: auto !important; margin: 0 16px 20px !important; padding: 20px 22px !important; border: 1px solid #ffffff0d; border-radius: 10px; background: #313338; box-shadow: none; transition: border-color .12s; }
 .channel-message:hover { border-color: #ffffff1d; }
 .channel-message-header { display: contents; }
@@ -919,12 +919,12 @@ html[data-motion="off"] *, html[data-motion="off"] *::before, html[data-motion="
   .channel-message-jump[data-author="qwen"] { --navigation-tick-fill: linear-gradient(to right, #6336e7 0 50%, #c8c8c8 50% 100%); }
   .channel-date-divider [data-slot="border"] { border-color: var(--ui-border-muted); }
   .channel-date-divider [data-slot="label"] { color: var(--ui-text-muted); }
-  .channel-message, .channel-message-jump { --speaker-accent: #555555; }
-  :is(.channel-message, .channel-message-jump)[data-author="codex"] { --speaker-accent: #1a7f64; }
-  :is(.channel-message, .channel-message-jump)[data-author="claude"] { --speaker-accent: #a65a38; }
-  :is(.channel-message, .channel-message-jump)[data-author="gemini"] { --speaker-accent: #5a58b5; }
-  :is(.channel-message, .channel-message-jump)[data-author="deepseek"] { --speaker-accent: #2969c0; }
-  :is(.channel-message, .channel-message-jump)[data-author="qwen"] { --speaker-accent: #8250b7; }
+  .channel-message, .channel-message-jump, .channel-working-strip { --speaker-accent: #555555; }
+  :is(.channel-message, .channel-message-jump, .channel-working-strip)[data-author="codex"] { --speaker-accent: #1a7f64; }
+  :is(.channel-message, .channel-message-jump, .channel-working-strip)[data-author="claude"] { --speaker-accent: #a65a38; }
+  :is(.channel-message, .channel-message-jump, .channel-working-strip)[data-author="gemini"] { --speaker-accent: #5a58b5; }
+  :is(.channel-message, .channel-message-jump, .channel-working-strip)[data-author="deepseek"] { --speaker-accent: #2969c0; }
+  :is(.channel-message, .channel-message-jump, .channel-working-strip)[data-author="qwen"] { --speaker-accent: #8250b7; }
   .channel-conversation { background: #f3f3f3; }
   .channel-message { background: #fff; border: 1px solid #d6d6d6; border-radius: 8px; box-shadow: none; }
   .channel-message:hover { background: #fff; border-color: #b7b7b7; }
@@ -1166,6 +1166,34 @@ html[data-motion="off"] *, html[data-motion="off"] *::before, html[data-motion="
 /* Same right inset as the message cards, which leave room for their action column. */
 @media (min-width: 701px) { .channel-schedule-card { margin-right: var(--message-inset-end); } }
 @media (max-width: 767px) { .channel-schedule-card { margin: -4px 8px 14px; } }
+/* A member at work is a folded strip in the flow: who, the stage, elapsed, the latest note; the notes open below. */
+.channel-working-strip { display: flex; align-items: flex-start; margin: 0 16px 16px; border: 1px solid color-mix(in srgb, var(--ui-border) 80%, transparent); border-radius: 10px; background: color-mix(in srgb, var(--ui-bg-elevated) 45%, transparent); color: var(--ui-text-muted); font-size: 12px; }
+.channel-working-fold { flex: 1; min-width: 0; }
+.channel-working-fold > summary { display: flex; align-items: center; gap: 8px; min-height: 40px; padding: 6px 4px 6px 12px; list-style: none; cursor: pointer; }
+.channel-working-fold > summary::-webkit-details-marker { display: none; }
+.channel-working-fold:not(:has(.channel-working-count)) > summary { cursor: default; }
+.channel-working-strip .channel-avatar { flex-shrink: 0; width: 20px; height: 20px; font-size: 8px; }
+.channel-working-name { flex-shrink: 0; color: var(--speaker-accent); font-size: 13px; font-weight: 650; }
+.channel-working-status { flex: 0 1 auto; min-width: 0; overflow: hidden; color: var(--ui-text-toned); text-overflow: ellipsis; white-space: nowrap; }
+.channel-working-elapsed { flex-shrink: 0; color: var(--ui-text-dimmed); font-variant-numeric: tabular-nums; white-space: nowrap; }
+.channel-working-latest { flex: 1 1 0; min-width: 0; overflow: hidden; color: var(--ui-text-dimmed); text-overflow: ellipsis; white-space: nowrap; }
+.channel-working-fold[open] .channel-working-latest { visibility: hidden; }
+.channel-working-count { display: inline-flex; flex-shrink: 0; align-items: center; gap: 2px; color: var(--ui-text-dimmed); white-space: nowrap; }
+.channel-working-count [class*="icon"] { width: 13px; height: 13px; transition: transform .12s; }
+.channel-working-fold[open] .channel-working-count [class*="icon"] { transform: rotate(180deg); }
+.channel-working-fold > summary:hover .channel-working-count { color: var(--ui-text-toned); }
+.channel-working-strip .channel-working-actions { display: inline-flex; flex-shrink: 0; align-items: center; gap: 4px; height: 40px; padding-right: 8px; }
+.channel-working-notes { display: grid; gap: 6px; margin: 0; padding: 2px 14px 12px 40px; list-style: none; color: var(--ui-text-muted); font-size: 13px; line-height: 1.6; white-space: pre-wrap; overflow-wrap: anywhere; }
+.channel-working-notes li { opacity: .65; }
+.channel-working-notes li:last-child { opacity: 1; }
+@media (min-width: 701px) { .channel-working-strip { margin-right: var(--message-inset-end); } }
+@media (max-width: 767px) {
+  .channel-working-strip { margin: 0 8px 12px; }
+  .channel-working-fold > summary { flex-wrap: wrap; }
+  .channel-working-latest { order: 10; flex-basis: 100%; padding-left: 28px; }
+  .channel-working-latest:empty { display: none; }
+  .channel-working-notes { padding-left: 36px; }
+}
 /* Dark composer matches the message cards (#313338, lit top rim) as one surface with its footer; the mention panel keeps the frosted float style. */
 :root[data-theme="channel"] .channel-composer { background: #313338 !important; }
 :root[data-theme="channel"] .channel-mention-heading { border-bottom: 1px solid #ffffff0d; }
