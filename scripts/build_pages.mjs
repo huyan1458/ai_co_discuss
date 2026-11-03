@@ -1,6 +1,7 @@
 /** Package the existing backend and built web assets as one Pages deployment. */
+import { createHash } from "node:crypto";
 import { existsSync } from "node:fs";
-import { cp, lstat, mkdir, readFile, rm } from "node:fs/promises";
+import { cp, lstat, mkdir, readFile, rm, writeFile } from "node:fs/promises";
 import { dirname, join, relative, resolve, sep } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 
@@ -42,7 +43,35 @@ export async function build_pages(source_root = PROJECT_ROOT, output_root = PROJ
   await cp(join(source, "LICENSE"), join(output, "LICENSE"));
   await cp(notices, join(output, "THIRD_PARTY_NOTICES.md"));
   await cp(worker, join(output, "_worker.js"));
+  await stamp_asset_versions(output);
   return output;
+}
+
+/** Assets referenced by fixed URLs; scoped Vue styles in modern.css only match the modern.js built with them. */
+const VERSIONED_ASSETS = ["modern.css", "modern.js", "markdown.css", "markdown.js", "backup.js", "app.js"];
+
+/**
+ * Append a content hash to each fixed asset URL so a browser never pairs a cached stylesheet or script
+ * from an older deployment with the current one (iOS Safari did, dropping every changed component's styles).
+ */
+async function stamp_asset_versions(output) {
+  const versions = new Map();
+  for (const name of VERSIONED_ASSETS) {
+    const content = await readFile(join(output, name)).catch(() => null);
+    if (content) versions.set(name, createHash("sha256").update(content).digest("hex").slice(0, 12));
+  }
+  if (!versions.size) return;
+  const pattern = new RegExp(`(["'])/(${[...versions.keys()].map((name) => name.replace(".", "\\.")).join("|")})\\1`, "g");
+  // app.js is stamped first so index.html points at its final content; app.js itself loads modern.js.
+  for (const name of ["app.js", "index.html"]) {
+    const path = join(output, name);
+    const text = await readFile(path, "utf8").catch(() => null);
+    if (text === null) continue;
+    await writeFile(path, text.replace(pattern, (_match, quote, asset) => `${quote}/${asset}?v=${versions.get(asset)}${quote}`));
+    if (name === "app.js" && versions.has("app.js")) {
+      versions.set("app.js", createHash("sha256").update(await readFile(path)).digest("hex").slice(0, 12));
+    }
+  }
 }
 
 if (process.argv[1] && import.meta.url === pathToFileURL(resolve(process.argv[1])).href) {
