@@ -21,6 +21,7 @@ import { stt_part } from './stt.mjs';
 import { access_levels, BUILTIN_EXPERT_PRESETS, MAX_EXPERT_PROMPT, PROJECT_ACCESS } from './expert_prompts.mjs';
 import { acquire_lock, api, DiscussionStore, service_drafts, validate_config } from './discussion_runner.mjs';
 import { FreeRoomRunner, free_task_files } from './free_runner.mjs';
+import { bind_room_workflow, delete_workflow, get_workflow, list_workflows, load_room_workflow, preview_workflow, save_workflow } from './workflows.mjs';
 import { assert_shared_home, CONNECTION_FIELDS, configuration_snapshot, read_registry, registered_identity, register_room, service_home, service_pid, start_service } from './discussion_service.mjs';
 
 // A platform is a type; `Claude-review` is another Claude instance with its own session, model and effort. An ID is
@@ -306,7 +307,16 @@ export async function room_models(home, raw, { read_defaults = software_defaults
   })));
   // Smart scheduling is a local choice; only which model decides is shown, never its key.
   const scheduler = config.scheduler ? { provider: config.scheduler.provider, model: config.scheduler.model, mode: config.scheduler.mode || DEFAULT_SCHEDULER_MODE } : null;
-  return { room_id: input.room_id, registered: paths.length > 0, participants, scheduler, project_directory: config.cwd || '' };
+  return { room_id: input.room_id, registered: paths.length > 0, participants, scheduler, project_directory: config.cwd || '',
+    workflow: room_workflow_status(config, home) };
+}
+
+/** The room's workflow as the right column shows it; `available` is false when its folder is gone or broken. */
+function room_workflow_status(config, home) {
+  if (!config.workflow?.id) return null;
+  const loaded = load_room_workflow({ ...config, api_home: config.api_home || home, workflow: { ...config.workflow, enabled: true } });
+  return { id: config.workflow.id, label: loaded.label || config.workflow.id, enabled: Boolean(config.workflow.enabled),
+    available: !loaded.error, members: config.workflow.members || {} };
 }
 
 /** Read the owner's saved room project, never a directory supplied by the request. */
@@ -388,6 +398,18 @@ export function expert_presets(home) {
   return { presets: english_preset_ids(saved.presets || []), description_templates: saved.description_templates || {}, builtin_presets: BUILTIN_EXPERT_PRESETS };
 }
 
+/** Check one expert preset; a workflow's agent card is a preset and obeys the same rule. */
+export function validate_preset(preset) {
+  if (!preset || typeof preset !== 'object' || Object.keys(preset).some(key => !PRESET_FIELDS.includes(key))) throw new Error('预设只能包含名称、显示名、描述、提示词、项目权限、模型与强度');
+  if (!platform_of(preset.name) || !clients_of(preset.name)) throw new Error(`预设 ID 须为“平台名”或“平台名-后缀”，后缀只用英文、数字和下划线：${preset.name}`);
+  if (Object.values(preset).some(value => typeof value !== 'string')) throw new Error(`${preset.name} 的字段必须为文本`);
+  if ((preset.label || '').trim().length > MAX_PRESET_LABEL) throw new Error(`${preset.name} 的显示名最多 ${MAX_PRESET_LABEL} 字`);
+  if ((preset.description || '').length > MAX_PRESET_DESCRIPTION) throw new Error(`${preset.name} 的描述最多 ${MAX_PRESET_DESCRIPTION} 字`);
+  if ((preset.system_prompt || '').length > MAX_EXPERT_PROMPT) throw new Error(`${preset.name} 的提示词最多 ${MAX_EXPERT_PROMPT} 字`);
+  if (preset.project_access && !PROJECT_ACCESS.includes(preset.project_access)) throw new Error(`${preset.name} 的项目权限须为 read、write、auto 或 full`);
+  if ([preset.model, preset.effort].some(value => (value || '').length > MAX_PRESET_FIELD)) throw new Error(`${preset.name} 的模型或强度过长`);
+}
+
 /** Replace the user's presets or default descriptions (whichever the input carries); every field is checked first. */
 export function save_expert_presets(home, input) {
   const current = expert_presets(home);
@@ -396,16 +418,9 @@ export function save_expert_presets(home, input) {
   if (!Array.isArray(presets) || presets.length > MAX_EXPERT_PRESETS) throw new Error(`presets 必须为列表，最多 ${MAX_EXPERT_PRESETS} 个`);
   const names = new Set();
   for (const preset of presets) {
-    if (!preset || typeof preset !== 'object' || Object.keys(preset).some(key => !PRESET_FIELDS.includes(key))) throw new Error('预设只能包含名称、显示名、描述、提示词、项目权限、模型与强度');
-    if (!platform_of(preset.name) || !clients_of(preset.name)) throw new Error(`预设 ID 须为“平台名”或“平台名-后缀”，后缀只用英文、数字和下划线：${preset.name}`);
+    validate_preset(preset);
     if (names.has(preset.name)) throw new Error(`预设名称重复：${preset.name}`);
     names.add(preset.name);
-    if (Object.values(preset).some(value => typeof value !== 'string')) throw new Error(`${preset.name} 的字段必须为文本`);
-    if ((preset.label || '').trim().length > MAX_PRESET_LABEL) throw new Error(`${preset.name} 的显示名最多 ${MAX_PRESET_LABEL} 字`);
-    if ((preset.description || '').length > MAX_PRESET_DESCRIPTION) throw new Error(`${preset.name} 的描述最多 ${MAX_PRESET_DESCRIPTION} 字`);
-    if ((preset.system_prompt || '').length > MAX_EXPERT_PROMPT) throw new Error(`${preset.name} 的提示词最多 ${MAX_EXPERT_PROMPT} 字`);
-    if (preset.project_access && !PROJECT_ACCESS.includes(preset.project_access)) throw new Error(`${preset.name} 的项目权限须为 read、write、auto 或 full`);
-    if ([preset.model, preset.effort].some(value => (value || '').length > MAX_PRESET_FIELD)) throw new Error(`${preset.name} 的模型或强度过长`);
   }
   if (!templates || typeof templates !== 'object' || Array.isArray(templates) || Object.entries(templates).some(([platform, text]) =>
     platform_of(platform) !== platform || typeof text !== 'string' || !text.trim() || text.length > MAX_PRESET_DESCRIPTION)) {
@@ -516,8 +531,12 @@ function free_launch_config(home, input, room, directory, options) {
   const names = room.members.filter(woken_member).map(member => typeof member === 'string' ? member : member.name);
   const participants = Object.fromEntries(names.map(name => [name, participant_profile(name, defaults, input, false)]));
   const members = launch_members(input, names, options);
+  // A workflow chosen at creation is written with the members, so the first wake already carries it.
+  const workflow = input.workflow ? bind_room_workflow({}, { ...input.workflow, enabled: true }).workflow : undefined;
+  if (workflow) get_workflow(home, workflow.id);
+  if (workflow && Object.values(workflow.members).some(name => !names.includes(name))) throw new Error('工作流成员须在本次邀请的成员中');
   return validate_config({ site: input.site, room: room.id || 'preview', token: options.token, mode: 'free', participants, members, api_home: home,
-    scheduler: input.scheduler || undefined, cwd: input.cwd, project_access: input.project_access || undefined,
+    scheduler: input.scheduler || undefined, cwd: input.cwd, project_access: input.project_access || undefined, workflow,
     data_directory: join(directory, 'runtime'), draft_directory: service_drafts(home, join(directory, 'runtime')) }, directory);
 }
 
@@ -1295,6 +1314,71 @@ async function perform_launch(home, context, options) {
   } catch (error) { error.launch = progress; throw error; }
 }
 
+/** The workflow library: list, read, save, delete, preview an import, or read a room's member cards. */
+export function workflows_command(home, input = {}) {
+  const action = input.action || 'list';
+  if (action === 'list') return { workflows: list_workflows(home) };
+  if (action === 'get') return get_workflow(home, input.id);
+  if (action === 'save') return save_workflow(home, input.workflow, validate_preset);
+  if (action === 'delete') return delete_workflow(home, input.id);
+  if (action === 'preview') {
+    const configured = launch_settings(home).participants;
+    return preview_workflow(input, validate_preset, name => Boolean(configured[platform_of(name)]));
+  }
+  if (action === 'room-cards') return room_cards(home, input);
+  throw new Error('action 须为 list、get、save、delete、preview 或 room-cards');
+}
+
+/** Cards made from a registered room's members as configured here, prompts verbatim; no credential or path is returned. */
+async function room_cards(home, raw) {
+  const input = launch_input({ ...raw, entry: 'web' });
+  if (!input.room_id) throw new Error('读取成员卡片须提供 room_id');
+  const path = registered_room_path(home, input.site, input.room_id);
+  if (!path) throw new Error('本机没有登记这个房间');
+  const config = configuration_snapshot(path).config;
+  const room = await api(config, ''), taken = new Set();
+  const members = new Set((room.free?.members || []).filter(member => member.status !== 'removed').map(member => member.name));
+  return { cards: Object.entries(config.participants || {}).filter(([name]) => members.has(name)).map(([name, profile]) => {
+    const suffix = name.split('-')[1] || platform_of(name).toLowerCase();
+    let card = suffix.slice(0, 16);
+    for (let number = 2; taken.has(card.toLowerCase()); number++) card = `${suffix.slice(0, 16 - String(number).length)}${number}`;
+    taken.add(card.toLowerCase());
+    return { card, name, label: room.labels?.[name] || '', description: room.descriptions?.[name] || '',
+      ...Object.fromEntries(['system_prompt', 'project_access', 'model', 'effort']
+      .filter(field => profile[field] && profile[field] !== 'own').map(field => [field, profile[field]])) };
+  }) };
+}
+
+/**
+ * Bind or release a room's workflow. Members are invited or brought back by the usual member commands first;
+ * enabling only records which card each member plays. Disabling sends those members away, except the host.
+ */
+export async function room_workflow(home, raw) {
+  const { input, path } = await member_room_context(home, raw);
+  const release = acquire_lock(join(dirname(path), 'configuration-edit'));
+  try {
+    const config = configuration_snapshot(path).config;
+    if (input.action === 'enable') {
+      get_workflow(home, input.workflow?.id);
+      if (config.workflow?.enabled && config.workflow.id !== input.workflow.id) throw new Error('本房间已启用另一个工作流，请先停用');
+      const next = bind_room_workflow(config, { ...input.workflow, enabled: true });
+      validate_config({ ...next, api_home: home }, dirname(path));
+      atomic_json(path, next);
+      return { room_id: input.room_id, workflow: room_workflow_status(next, home) };
+    }
+    if (input.action !== 'disable') throw new Error('action 须为 enable 或 disable');
+    if (!config.workflow?.enabled) return { room_id: input.room_id, workflow: room_workflow_status(config, home) };
+    const room = await site_request(input.site, `/api/rooms/${input.room_id}`, input.token);
+    const names = new Set(Object.values(config.workflow.members || {}));
+    for (const member of room.free.members.filter(item => names.has(item.name) && item.status === 'active' && item.role !== 'host')) {
+      await site_request(input.site, `/api/rooms/${input.room_id}/members/${member.id}`, input.token, { action: 'away' });
+    }
+    const next = { ...config, workflow: { ...config.workflow, enabled: false } };
+    atomic_json(path, next);
+    return { room_id: input.room_id, workflow: room_workflow_status(next, home) };
+  } finally { release(); }
+}
+
 /** CLI and local HTTP bridge use the same commands and configuration validation. */
 export async function launch_main(args = process.argv.slice(2), input_text) {
   const { values, positionals } = parseArgs({ args, allowPositionals: true, options: {
@@ -1307,9 +1391,11 @@ export async function launch_main(args = process.argv.slice(2), input_text) {
   assert_shared_home(home);
   let result;
   if (positionals[0] === 'settings') result = { ...(input ? save_launch_settings(home, input) : launch_settings(home)), api_providers: API_PROVIDERS,
-    scheduler_providers: SCHEDULER_PROVIDERS, scheduler_modes: SCHEDULER_MODES, scheduler_default_mode: DEFAULT_SCHEDULER_MODE, api_keys: saved_api_keys(home), projects: launch_projects(home).projects, ...expert_presets(home) };
+    scheduler_providers: SCHEDULER_PROVIDERS, scheduler_modes: SCHEDULER_MODES, scheduler_default_mode: DEFAULT_SCHEDULER_MODE, api_keys: saved_api_keys(home), projects: launch_projects(home).projects, ...expert_presets(home), workflows: list_workflows(home) };
   else if (positionals[0] === 'projects') result = input ? save_launch_projects(home, input) : launch_projects(home);
   else if (positionals[0] === 'presets') result = input ? save_expert_presets(home, input) : expert_presets(home);
+  else if (positionals[0] === 'workflows') result = await workflows_command(home, input || {});
+  else if (positionals[0] === 'room-workflow' && input) result = await room_workflow(home, input);
   else if (positionals[0] === 'api-key' && input) result = save_api_key(home, input);
   else if (positionals[0] === 'api-check' && input) result = await api_check(home, input);
   else if (positionals[0] === 'scheduler-check' && input) result = await scheduler_check(home, input);

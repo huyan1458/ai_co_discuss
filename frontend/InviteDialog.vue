@@ -3,8 +3,9 @@
 import { computed, inject, ref, watch } from "vue";
 import ExpertCard from "./ExpertCard.vue";
 import RosterAdd from "./RosterAdd.vue";
+import WorkflowPicker from "./WorkflowPicker.vue";
 
-const props = defineProps({ description: { type: String, default: "新成员由程序按本机软件配置启动，或由你手动启动。" } });
+const props = defineProps({ description: { type: String, default: "新成员由程序按本机软件配置启动，或由你手动启动。" }, workflowId: { type: String, default: "" } });
 const inviting = defineModel("open", { type: Boolean, default: false });
 const { view, bridge, act, pending } = inject("discussion");
 const room = computed(() => view.value.room);
@@ -52,14 +53,19 @@ function invite_status(name) {
   return ready ? { text: api ? "已配置 API" : "已配置本机软件", tone: "ready" } : { text: api ? "待补齐 API 配置" : "待补齐接入配置", tone: "warn" };
 }
 // Woken picks need the local service and a runnable entry; manual ones need neither.
-const invite_blocked = computed(() => !invite_picks.value.length
+const invite_blocked = computed(() => submitting.value || (!invite_picks.value.length && !invite_workflow.value?.existing.length && !Object.keys(invite_workflow.value?.members || {}).length)
   || invite_picks.value.some((pick) => pick.mode === "cli" && (!view.value.launch.available || invite_status(pick.name).tone === "warn")));
 // A fresh dialog starts with a clean choice; earlier notices belong to the board.
-watch(inviting, (open) => {
+// The workflow whose cards this invitation adds: { id, label }; enabled once all its cards have joined.
+const invite_workflow = ref(null);
+const submitting = ref(false);
+watch(inviting, async (open) => {
   if (!open) return;
+  invite_workflow.value = null;
   invite_picks.value = [];
   invite_tried.value = false;
   invited_manual.value = [];
+  if (props.workflowId) await choose_workflow(props.workflowId);
 });
 watch(() => room.value.id, () => { inviting.value = false; invite_picks.value = []; });
 
@@ -91,10 +97,42 @@ function add_invite_preset(preset) {
   invite_picks.value = [...invite_picks.value, { id: ++invite_pick_seq, name, mode: "cli", preset: true }];
 }
 
+/** Replace the workflow picks; reuse its still-present members and ask before recalling anyone who left. */
+async function choose_workflow(id) {
+  if (submitting.value) return;
+  if (!id) { invite_picks.value = invite_picks.value.filter(pick => !pick.card); invite_workflow.value = null; return; }
+  let workflow;
+  try { workflow = await bridge.local_request("workflows", { action: "get", id }); }
+  catch (error) { return bridge.notify("error", error.message); }
+  invite_picks.value = invite_picks.value.filter(pick => !pick.card);
+  const binding = view.value.launch.room_models?.workflow;
+  const existing = workflow.agents.map(agent => ({ ...record(binding?.id === id ? binding.members?.[agent.card] : ""), card: agent.card }))
+    .filter(member => ["active", "away"].includes(member.status));
+  invite_workflow.value = { id, label: workflow.label || id, existing, members: {} };
+  for (const agent of workflow.agents) {
+    if (existing.some(member => member.card === agent.card)) continue;
+    add_invite_preset(bridge.workflow_preset(agent));
+    invite_picks.value.at(-1).card = agent.card;
+  }
+}
+
 /** Invite one by one through the local service, which configures each expert from its card before the room admits it; stop at the first failure and keep the rest picked. */
 async function invite() {
+  if (invite_blocked.value) return;
+  submitting.value = true;
+  try { await submit_invitation(); }
+  finally { submitting.value = false; }
+}
+
+/** Keep admitted card names only in this dialog's draft, so a partial retry cannot leak into another invitation. */
+async function submit_invitation() {
   invite_tried.value = true;
   const manual_names = [];
+  const workflow = invite_workflow.value;
+  for (const member of workflow?.existing || []) {
+    if (record(member.name)?.status === "away" && !await act("change_member", { member_id: member.id, name: member.name, action: "rejoin" })) return;
+    workflow.members[member.card] = member.name;
+  }
   // Snapshot before the loop: removing invited picks would otherwise shift the names of the rest.
   const instances = new Map(pick_instances.value);
   for (const pick of [...ordered_picks.value]) {
@@ -102,13 +140,23 @@ async function invite() {
     const manual = pick.mode === "manual";
     const instance = instances.get(pick);
     const invited = await act("invite_member", { name: pick.name, access: manual ? "manual" : "runner",
-      project_access: profile.project_access || view.value.launch.workspace?.project_access || "read" });
-    if (!invited) break;
+      project_access: profile.project_access || view.value.launch.workspace?.project_access || "read",
+      ...(pick.card && !manual ? { card: pick.card, workflow_members: workflow.members } : {}) });
+    // Admission may already be durable when a later label/description update fails. Do not invite it twice on retry.
+    if (!invited) {
+      if (pick.card && workflow.members[pick.card]) invite_picks.value = invite_picks.value.filter((item) => item !== pick);
+      break;
+    }
     // A manual member only starts when its launch instruction reaches the user's own AI session, so the dialog stays for that step.
     if (manual) manual_names.push(instance);
     invite_picks.value = invite_picks.value.filter((item) => item !== pick);
   }
   invited_manual.value = [...invited_manual.value, ...manual_names];
+  // The workflow is bound once all its cards joined; a failure leaves the rest picked for a retry.
+  if (workflow && Object.keys(workflow.members).length && !invite_picks.value.some((pick) => pick.card)) {
+    if (!await act("enable_room_workflow", { id: workflow.id, members: workflow.members })) return;
+    invite_workflow.value = null;
+  }
   if (!invite_picks.value.length && !invited_manual.value.length) inviting.value = false;
 }
 </script>
@@ -131,9 +179,11 @@ async function invite() {
       </div>
       <form v-else class="pb-invite" aria-label="邀请专家" @submit.prevent="invite">
         <RosterAdd label="选择 AI（可多选）" :items="library_items" @add="add_library_item" @remove="(value) => bridge.delete_expert_preset(value.slice(PRESET_PREFIX.length))" />
+        <WorkflowPicker :selected="invite_workflow?.id || ''" :disabled="submitting" @choose="choose_workflow" />
+        <p v-for="member in invite_workflow?.existing || []" :key="member.card" class="fine-print">{{ bridge.display_name(member.name) }}：{{ record(member.name)?.status === 'away' ? '确认后请回，保留原会话' : '已在场，沿用原成员' }}</p>
         <div v-if="invite_picks.length" class="pb-invite-cards">
           <div v-for="pick in invite_picks" :key="pick.id" class="pb-invite-pick">
-            <ExpertCard :name="pick.name" :mode="pick.mode" :choices="['cli', 'manual']" :status="invite_status(pick.name)" @mode="pick.mode = $event" @remove="invite_picks = invite_picks.filter((item) => item !== pick)" />
+            <ExpertCard :name="pick.name" :mode="pick.mode" :choices="pick.card ? ['cli'] : ['cli', 'manual']" :status="invite_status(pick.name)" :workflow="pick.card ? invite_workflow?.label || '' : ''" @mode="pick.mode = $event" @remove="invite_picks = invite_picks.filter((item) => item !== pick)" />
             <p v-if="pick_instances.get(pick) !== pick.name" class="fine-print">同一 AI 已有实例，将以 {{ pick_instances.get(pick) }} 加入，使用独立会话。</p>
           </div>
         </div>
@@ -142,8 +192,8 @@ async function invite() {
         <p v-else class="pb-invite-empty">选择一位或多位 AI（同一 AI 可重复添加），点卡片翻面设置软件、模型与项目权限。</p>
         <p v-if="invite_picks.some((pick) => pick.mode === 'cli') && !view.launch.available" role="alert" class="fine-print">邀请需要本机服务，请在运行 AI 的电脑打开本机网站。</p>
         <div class="pb-invite-footer">
-          <UButton label="取消" color="neutral" variant="ghost" @click="inviting = false" />
-          <UButton type="submit" icon="i-lucide-user-plus" :label="invite_picks.length > 1 ? `邀请 ${invite_picks.length} 位` : '邀请'" class="channel-primary-button" :disabled="invite_blocked" :loading="pending === 'invite_member'" />
+          <UButton label="取消" color="neutral" variant="ghost" :disabled="submitting" @click="inviting = false" />
+          <UButton type="submit" icon="i-lucide-user-plus" :label="invite_workflow ? '确认成员并启用工作流' : invite_picks.length > 1 ? `邀请 ${invite_picks.length} 位` : '邀请'" class="channel-primary-button" :disabled="invite_blocked" :loading="submitting" />
         </div>
       </form>
     </template>

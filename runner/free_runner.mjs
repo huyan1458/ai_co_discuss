@@ -9,6 +9,7 @@ import { SegmentLog } from './execution_progress.mjs';
 import { free_task_text, TASK_SUBCOMMANDS, with_expert_prompt } from './expert_prompts.mjs';
 import { atomic_json } from './files.mjs';
 import { SessionDriver } from './session_driver.mjs';
+import { effective_profile, load_room_workflow, workflow_task_field } from './workflows.mjs';
 import { DEFAULT_SCHEDULER_MODE, REVIEW_CONFIDENCE, REVIEW_PROMPT_VERSION, ROUTE_CONFIDENCE, ROUTE_CONTEXT_MESSAGES, ROUTE_PROMPT_VERSION, ROUTE_WIDE_CONFIDENCE, decide_group_order, decide_review_completion, route_free_message, route_prompt_version, scheduler_thresholds, some_members } from './scheduler.mjs';
 
 const PACKAGE_VERSION = JSON.parse(readFileSync(new URL('../package.json', import.meta.url), 'utf8')).version;
@@ -78,13 +79,16 @@ export function changed_between(before, after) {
 }
 
 /** Write a non-secret task and a member-only credential file for one execution. */
-export function free_task_files(config, member, execution, binding, { session = null, suggestions = [], reviews = [], stopped = [], process_access = true } = {}) {
+export function free_task_files(config, member, execution, binding, { session = null, suggestions = [], reviews = [], stopped = [], process_access = true,
+  workflow = null, room_members = [] } = {}) {
   const id = `free-${execution.id}`;
   const draft_directory = config.draft_directory || `${config.directory}-drafts`;
   mkdirSync(draft_directory, { recursive: true });
   const access_path = join(config.directory, `${id}.access.json`);
   const task_path = join(config.directory, `${id}.task.json`);
-  const profile = config.participants[member.name];
+  // A workflow member's prompt is read from its card for this execution; everything else stays the room's setting.
+  const profile = effective_profile(config.participants[member.name], member.name, workflow);
+  const host_workflow = member.role === 'host' && workflow && !workflow.error ? workflow : null;
   atomic_json(access_path, { site: config.site, room: config.room, member: member.name, token: config.members[member.name].token,
     session_id: binding.session_id || '', execution_id: execution.id });
   const adapter = adapter_of(profile.adapter);
@@ -105,6 +109,8 @@ export function free_task_files(config, member, execution, binding, { session = 
       ...direct_question ? ['discuss-participant/references/free.md'] : []]
     : ['discuss-participant/SKILL.md', 'discuss-participant/references/free.md',
       ...member.role === 'host' ? ['discuss-host/SKILL.md', 'discuss-host/references/free.md'] : []];
+  const skills_directory = join(config.project, '.agents', 'skills');
+  const workflow_field = host_workflow ? workflow_task_field(host_workflow, room_members, config.participants) : null;
   atomic_json(task_path, { site: config.site, room: config.room, mode: 'free', member: member.name,
     execution_id: execution.id, requests, request_messages: execution.requests.map(item => item.message_id),
     request_purposes: execution.requests.map(item => item.purpose || 'ask'),
@@ -116,11 +122,13 @@ export function free_task_files(config, member, execution, binding, { session = 
     ...(stopped.length ? { stopped_executions: stopped } : {}),
     role: member.role || 'member',
     read_after: execution.read_until, cwd: profile.cwd || null, project_access: profile.project_access, draft_directory,
-    skills: skills.map(file => join(config.project, '.agents/skills', file)),
+    skills: [...skills.map(file => join(config.project, '.agents/skills', file)), ...(host_workflow ? [host_workflow.skill_path] : [])],
+    ...(workflow_field ? { workflow: workflow_field } : {}),
     cli, subcommands: TASK_SUBCOMMANDS,
     ...(bound_access ? { access_env: 'DISCUSS_ACCESS_FILE' } : { access_file: access_path }), instructions });
   return { id, participant: member.name, directory: config.directory, draft_directory,
-    skills_directory: join(config.project, '.agents', 'skills'), access_path, prompt: with_expert_prompt(prompt, profile), inbox };
+    skill_directories: [skills_directory, ...(host_workflow ? [host_workflow.directory] : [])], access_path, prompt: with_expert_prompt(prompt, profile), inbox,
+    profile, ...(workflow_field ? { workflow: { ...workflow_field, skill: host_workflow.skill } } : {}) };
 }
 
 
@@ -174,6 +182,8 @@ export class FreeRoomRunner {
     this.exited = new Map();
     // Executions whose software failed before any turn ran, as its adapter reported; safe to deliver again.
     this.not_started = new Set();
+    // Executions whose software failed in a way a retry meets again (a used-up limit, a lost login), as its adapter reported.
+    this.not_retryable = new Set();
     this.snapshots = new Map();
     // Execution id -> { phase, at, sent_phase, sent_at }: what the member's software last showed it doing.
     this.activity = new Map();
@@ -603,27 +613,32 @@ export class FreeRoomRunner {
       // Executions the user stopped that this session may still hold; a rewind already cut its own out, and a new session holds none.
       const rewound = new Set(execution.rewound_executions || []);
       const stopped = binding.session_id ? this.stopped_executions(member.name).filter(id => !rewound.has(id)) : [];
+      const workflow = load_room_workflow(this.config);
+      // An unreadable workflow leaves members on their room settings; it is logged once per error, not every execution.
+      if (workflow?.error && this.workflow_error !== workflow.error) this.log(`工作流 ${workflow.id} 不可用：${workflow.error}`);
+      this.workflow_error = workflow?.error || '';
       const task = free_task_files(this.config, member, execution, binding, {
-        session, suggestions: scheduler_suggestions, reviews: review_handoffs, stopped,
+        session, suggestions: scheduler_suggestions, reviews: review_handoffs, stopped, workflow, room_members: this.room?.members,
       });
       invoked = true;
       this.segments.start(execution.id);
       if (warning) this.note(execution.id, warning);
-      const result = await this.deliver(review_request ? structuredClone(adapter) : adapter, binding, { ...task, room_title: this.room_title,
+      const result = await this.deliver(review_request ? structuredClone(task.profile) : task.profile, binding, { ...task, room_title: this.room_title,
         ...(review_request ? { before_model_start: () => this.check_review_delivery(member, review_request) } : {}),
         api_context: { site: this.config.site, room: this.config.room, token: this.config.members[member.name].token,
           home: this.config.api_home, mode: 'free', role: member.role || 'member', execution_id: execution.id,
           cwd: directory, project_access: adapter.project_access,
           requests: execution.requests, read_after: execution.read_until, session, discussion_request: session_request,
-          scheduler_suggestions, review_handoffs },
+          scheduler_suggestions, review_handoffs, ...(task.workflow ? { workflow: task.workflow } : {}) },
         on_binding: session => this.store.bind(member.name, session),
         on_process: child => this.track(member.name, child, execution.id),
         on_output: (path, chunk) => { appendFileSync(path, chunk, { mode: 0o600 }); this.touch(execution.id); this.segments.mark(execution.id); },
         on_activity: (phase, tool) => { this.touch(execution.id, phase); this.segments.mark(execution.id, phase, tool); },
         on_note: text => this.note(execution.id, text),
         // A stopped process may report after the next execution started; only its own execution takes the result.
-        on_failure: (error, { not_started = false } = {}) => {
+        on_failure: (error, { not_started = false, retryable = true } = {}) => {
           if (not_started) this.not_started.add(execution.id);
+          if (!retryable) this.not_retryable.add(execution.id);
           try { if (this.row(member.name)?.execution_id === execution.id) this.save(member.name, { error }); } catch { /* Store may already be closed at shutdown. */ }
         },
         on_exit: denial => this.exited.set(execution.id, denial || ''),
@@ -853,6 +868,7 @@ export class FreeRoomRunner {
   async retry_or_fail(name, execution, reason) {
     const attempt = (execution.retry?.attempt || 0) + 1;
     const not_started = this.not_started.delete(execution.id);
+    if (this.not_retryable.delete(execution.id)) return this.fail(name, execution.id, reason);
     if (this.config.participants[name]?.project_access !== 'own' && !not_started) return this.fail(name, execution.id, reason);
     if (attempt > MAX_DELIVERY_RETRIES) return this.fail(name, execution.id, `${reason}（已自动重试 ${MAX_DELIVERY_RETRIES} 次）`);
     this.stop_member(name);
@@ -865,6 +881,7 @@ export class FreeRoomRunner {
   async fail(name, execution_id, reason) {
     this.activity.delete(execution_id);
     this.not_started.delete(execution_id);
+    this.not_retryable.delete(execution_id);
     await this.report_segments(execution_id, true);
     try { await api(this.config, `/executions/${execution_id}`, { action: 'fail', reason }); }
     catch (error) { if (!/HTTP 409/.test(error.message)) throw error; }

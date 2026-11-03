@@ -124,7 +124,9 @@ state.directory_pending = new Map();
 state.directory_version = 0;
 state.navigation_version = 0;
 state.admin = { loaded: false, local: false, registered: false, setup_available: false, logged_in: false, profile: null, identity_version: 0 };
-state.launch = { available: false, remote: false, relay: null, connect_command: "", profiles: {}, projects: [], presets: [], builtin_presets: [], description_templates: {}, workspace: {}, scheduler: {}, error: "", recoveries: [] };
+state.launch = { available: false, remote: false, relay: null, connect_command: "", profiles: {}, projects: [], presets: [], builtin_presets: [], workflows: [], description_templates: {}, workspace: {}, scheduler: {}, error: "", recoveries: [] };
+// The workflow chosen in the new-room form: { id, label, members: { card: instance } }; cards removed from the form drop out at submission.
+state.create_workflow = null;
 const PLATFORM_CLIENTS = { Codex: [{ value: "codex_cli", label: "Codex CLI" }, { value: "codex", label: "Codex App" }],
   Claude: [{ value: "claude", label: "Claude Code CLI" }],
   Antigravity: [{ value: "antigravity_cli", label: "Antigravity CLI" }, { value: "antigravity", label: "Antigravity App" }] };
@@ -1139,6 +1141,7 @@ function reset_create_form() {
   state.named_followup = false;
   state.create_discussion = false;
   state.create_chain_rounds = DEFAULT_CHAIN_ROUNDS;
+  state.create_workflow = null;
   state.launch.profiles = JSON.parse(JSON.stringify(state.launch.saved_profiles || {}));
   Object.values(state.launch.profiles).forEach(fill_api_key);
   render_launch_settings();
@@ -1444,7 +1447,7 @@ async function reorder_speakers({ revision, order }) {
 }
 
 /** Invite an independent member, retaining its credential before either delivery path runs. */
-async function invite_member({ name, access, project_access = "read", session_id = "" }) {
+async function invite_member({ name, access, project_access = "read", session_id = "", card = "", workflow_members = null }) {
   const room_id = state.room.id;
   const token = localStorage.getItem(`discuss-access:${room_id}`);
   if (!token) throw new Error("此浏览器缺少房间控制凭据，请使用创建房间的浏览器");
@@ -1465,6 +1468,7 @@ async function invite_member({ name, access, project_access = "read", session_id
   // A name a removed member once used stays bound locally, so the local service may admit this one under the next free name.
   if (typeof result.member === "string" && result.member !== record.member.name) record.member = { ...record.member, name: result.member };
   finish_member_request(room_id, token, record, result);
+  if (card && workflow_members) workflow_members[card] = record.member.name;
   await send_descriptions(room_id, token, { [record.member.name]: description_draft(name) });
   await send_labels(room_id, token, { [record.member.name]: label_drafts[name] });
   delete description_drafts[name];
@@ -2406,7 +2410,7 @@ async function load_launch_settings() {
     // Keep the saved machine defaults so every new form can start from them again.
     state.launch.saved_profiles = JSON.parse(JSON.stringify(settings.participants || {}));
     Object.assign(state.launch, { available: true, profiles: settings.participants, projects: settings.projects || [], api_providers: settings.api_providers || {}, api_keys: settings.api_keys || {},
-      presets: settings.presets || [], builtin_presets: settings.builtin_presets || [], description_templates: settings.description_templates || {},
+      presets: settings.presets || [], builtin_presets: settings.builtin_presets || [], workflows: settings.workflows || [], description_templates: settings.description_templates || {},
       scheduler_providers: settings.scheduler_providers || {}, scheduler_modes: settings.scheduler_modes || {}, scheduler_default_mode: settings.scheduler_default_mode || "", error: "",
       notice: relay_machine ? `经电脑「${relay_machine.name}」执行本机操作` : local_connection ? "已连接本机服务，讨论保存在当前网站" : "" });
     Object.values(state.launch.profiles).forEach(fill_api_key);
@@ -2482,7 +2486,7 @@ async function load_room_models() {
   try {
     const result = await local_launch_request("room-models", { room_id: room.id, quick: true });
     if (live() && result.room_id === room.id) Object.assign(current, { participants: result.participants, registered: result.registered,
-      scheduler: result.scheduler || null, project_directory: result.project_directory || "" });
+      scheduler: result.scheduler || null, project_directory: result.project_directory || "", workflow: result.workflow || null });
   } catch (error) {
     // Unavailable or older bridges leave the model unknown; the failure is kept so the page can say so, and the next refresh retries.
     Object.assign(current, { participants: null, error: error.message || "读取失败" });
@@ -2713,7 +2717,68 @@ function launch_options() {
 /** A new room also carries the optional smart scheduling choice; only a complete, enabled choice is sent. */
 function creation_launch_options() {
   const { enabled, provider, model, api_key_ref, mode } = state.launch.scheduler;
-  return { ...launch_options(), ...(enabled && provider && model && api_key_ref ? { scheduler: { provider, model, api_key_ref, ...(mode ? { mode } : {}) } } : {}) };
+  return { ...launch_options(), ...(enabled && provider && model && api_key_ref ? { scheduler: { provider, model, api_key_ref, ...(mode ? { mode } : {}) } } : {}),
+    ...creation_workflow() };
+}
+
+/** The new room's workflow, naming only the cards still in the form as woken members. */
+function creation_workflow() {
+  if (!state.create_workflow) return {};
+  const chosen = read_expert_inputs("new-expert-modes");
+  const members = Object.fromEntries(Object.entries(state.create_workflow.members).filter(([, name]) => chosen[name] === "cli"));
+  return Object.keys(members).length ? { workflow: { id: state.create_workflow.id, members } } : {};
+}
+
+// Workflows: a host's SKILL.md plus agent cards, kept on this computer and enabled per room.
+
+/** Read the workflow library again after it changed. */
+async function reload_workflows() {
+  const result = await local_launch_request("workflows", { action: "list" });
+  state.launch.workflows = result.workflows || [];
+  publish_view();
+  return state.launch.workflows;
+}
+
+/** A workflow card as an expert preset: the card ID is only the workflow's own handle. */
+function workflow_preset({ card, requested_access, needs_platform, ...preset }) {
+  return preset;
+}
+
+/** Fill the new-room form with a workflow's cards, each a preset-made instance, and remember which card each plays. */
+async function choose_create_workflow(id) {
+  const workflow = id ? await local_launch_request("workflows", { action: "get", id }) : null;
+  for (const name of Object.values(state.create_workflow?.members || {})) write_view_expert("new-expert-modes", name, "");
+  if (!workflow) { state.create_workflow = null; return publish_view(); }
+  const members = {};
+  for (const agent of workflow.agents) members[agent.card] = add_preset_instance("new-expert-modes", workflow_preset(agent), "cli");
+  state.create_workflow = { id, label: workflow.label || id, members };
+  publish_view();
+}
+
+/** The workflow a card in the new-room form or the invite dialog came from, for its read-only prompt. */
+function create_workflow_label(name) {
+  return state.create_workflow && Object.values(state.create_workflow.members).includes(name) ? state.create_workflow.label : "";
+}
+
+/** Bind a workflow to this room after its cards were invited (or brought back); the host reads it from the next task. */
+async function enable_room_workflow({ id, members }) {
+  const room_id = state.room.id;
+  const token = localStorage.getItem(`discuss-access:${room_id}`);
+  if (!token) throw new Error("此浏览器缺少房间控制凭据，请使用创建房间的浏览器");
+  await local_launch_request("room-workflow", { room_id, token, action: "enable", workflow: { id, members } });
+  notify("info", "工作流已启用，主持人下一次任务起按它组织工作");
+  await reload_room_models();
+}
+
+/** Release the room's workflow: its members leave (the host stays), and the host stops following it. */
+async function disable_room_workflow() {
+  const room_id = state.room.id;
+  const token = localStorage.getItem(`discuss-access:${room_id}`);
+  if (!token) throw new Error("此浏览器缺少房间控制凭据，请使用创建房间的浏览器");
+  await local_launch_request("room-workflow", { room_id, token, action: "disable" });
+  notify("info", "工作流已停用，它带来的成员已离开");
+  await refresh_room();
+  await reload_room_models();
 }
 
 /** Choose whether the new discussion's host writes named follow-ups for each expert between rounds. */
@@ -3943,7 +4008,7 @@ function view_snapshot() {
     mention_only: state.mention_only, host_only: state.host_only, reply_to: state.reply_to, editing_queued: state.editing_queued?.id ?? null,
     access: access_snapshot(), admin: admin_snapshot(),
     tab: state.tab, snapshot_id: state.snapshot_id, context_dirty: state.context_dirty,
-    theme: document.documentElement.dataset.theme, fields, experts, launch: structuredClone(state.launch), named_followup: state.named_followup, create_discussion: state.create_discussion, create_chain_rounds: state.create_chain_rounds };
+    theme: document.documentElement.dataset.theme, fields, experts, launch: structuredClone(state.launch), named_followup: state.named_followup, create_discussion: state.create_discussion, create_chain_rounds: state.create_chain_rounds, create_workflow: state.create_workflow };
 }
 
 /** Update a shared draft using the same input events as the original controls. */
@@ -4156,6 +4221,7 @@ async function execute_view_action(name, value) {
     download_member_access, copy_member_access_text, copy_member_join, copy_member_launch: name => copy_member_join(name, true), pause_discussion, restart_discussion, start_room_discussion, end_room_discussion,
     save_launch_defaults, resume_launch, discard_launch, retry_launch_connection, check_launch_connection: load_launch_settings,
     load_room_configuration, save_room_configuration, interrupt_member, retry_delivery, retract_message, retract_latest, stop_room, rewind_and_send, fork_room, change_member, reorder_speakers, invite_member,
+    choose_create_workflow, enable_room_workflow, disable_room_workflow,
     adopt_recommendation, rate_decision,
     queue_send: id => queue_request({ action: "send", id }), queue_delete: id => queue_request({ action: "delete", id }),
     queue_reorder: ids => queue_request({ action: "reorder", ids }), queue_resume: () => queue_request({ action: "resume" }),
@@ -4183,6 +4249,7 @@ window.discuss_view = { snapshot: view_snapshot, write_field: write_view_field, 
   start_drag: start_directory_drag, reconnect: reconnect_live_updates, stop_label, local_request: local_launch_request,
   attachment_markup, attachment_size, attachment_file_icon, drop_attachments, paste_attachments,
   write_expert: write_view_expert, add_instance: add_view_instance, add_preset: add_preset_instance, platform_of, execute: execute_view_action, theme: change_view_theme,
+  reload_workflows, workflow_preset, create_workflow_label,
   admin: { register: register_admin, login: login_admin, logout: logout_admin,
     update_profile: update_admin_profile, avatar_from_file: admin_avatar_from_file, validate: validate_admin_form },
   request: request_json, rewind_plan, identities: IDENTITIES, display_name, mention_handles, mentioned_members, render_room_markdown, sources: SOURCE_LABELS,

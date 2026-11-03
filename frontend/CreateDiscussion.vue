@@ -8,6 +8,7 @@ import ExpertCard from "./ExpertCard.vue";
 import ProjectDirectoryField from "./ProjectDirectoryField.vue";
 import RosterAdd from "./RosterAdd.vue";
 import SchedulerSettings from "./SchedulerSettings.vue";
+import WorkflowPicker from "./WorkflowPicker.vue";
 
 const props = defineProps({ targetFolder: { type: Object, default: null } });
 const emit = defineEmits(["submit", "cancel"]);
@@ -142,6 +143,15 @@ function add_expert(name) {
   ensure_host();
 }
 
+/** The workflow a card came from: its prompt then follows the workflow and is read-only here. */
+const workflow_of = (name) => view.value.create_workflow && Object.values(view.value.create_workflow.members).includes(name) ? view.value.create_workflow.label : "";
+
+/** Choosing a workflow adds its cards as preset-made members; choosing it again only forgets the choice, the cards stay. */
+async function choose_workflow(id) {
+  await act("choose_create_workflow", id);
+  ensure_host();
+}
+
 /** Remove a role, repair the host and return keyboard focus to the library entry. */
 function remove_expert(name) {
   set_expert_mode(name, "");
@@ -185,9 +195,10 @@ const summary = computed(() => {
       <section class="create-section">
         <h3><span>2</span>谁来参与</h3>
         <RosterAdd ref="library" label="添加 AI" :items="library_items" @add="add_expert" @remove="(value) => bridge.delete_expert_preset(value.slice(PRESET_PREFIX.length))" />
+        <WorkflowPicker :selected="view.create_workflow?.id || ''" @choose="choose_workflow" />
         <div v-if="selected_names.length" class="create-experts" role="group" aria-label="参与的 AI">
           <ExpertCard v-for="name in selected_names" :key="name" :name="name" :mode="selected[name]" :choices="access_choices(name)"
-            :status="expert_status(name)" :host="host === name" :hostable="host_options.includes(name)" hosting
+            :status="expert_status(name)" :host="host === name" :hostable="host_options.includes(name)" hosting :workflow="workflow_of(name)"
             @host="write('host', name)" @remove="remove_expert(name)" @mode="set_expert_mode(name, $event)" />
         </div>
         <p v-else class="create-experts-empty">请至少添加一位成员。同一平台可添加多位，各自独立会话。</p>

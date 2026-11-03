@@ -1837,7 +1837,7 @@ class DiscussionHandler(BaseHTTPRequestHandler):
         site = self.local_request_site(method)
         route = parts[2:]
         if method == "OPTIONS" and route in (["settings"], ["launch"], ["room-models"], ["room-files"], ["room-member"], ["room-member-access"], ["room-member-allow"], ["room-member-adapter"], ["room-member-model"], ["room-profiles"], ["room-restore"], ["room-fork"], ["models"], ["api-key"], ["api-check"],
-                                             ["scheduler-check"], ["tts-settings"], ["tts"], ["stt"], ["pick-directory"], ["projects"], ["presets"], ["machine-link"], ["admin-account"]):
+                                             ["scheduler-check"], ["tts-settings"], ["tts"], ["stt"], ["pick-directory"], ["projects"], ["presets"], ["workflows"], ["room-workflow"], ["machine-link"], ["admin-account"]):
             return self.respond({"ok": True})
         if route == ["settings"] and method in ("GET", "POST"):
             command = "settings"
@@ -1867,6 +1867,8 @@ class DiscussionHandler(BaseHTTPRequestHandler):
             command = "projects"
         elif route == ["presets"] and method == "POST":
             command = "presets"
+        elif route in (["workflows"], ["room-workflow"]) and method == "POST":
+            command = route[0]
         elif route == ["machine-link"] and method == "POST":
             command = "machine-link"
         elif route == ["admin-account"] and method == "POST":
@@ -1878,7 +1880,7 @@ class DiscussionHandler(BaseHTTPRequestHandler):
             if self.headers.get_content_type() != "application/json":
                 raise ValueError("本机操作须使用 application/json")
             payload = self.read_payload()
-            if command in ("start", "room-config", "room-models", "room-files", "room-member", "room-member-access", "room-member-allow", "room-member-adapter", "room-member-model", "room-profiles", "room-restore", "room-fork"):
+            if command in ("start", "room-config", "room-models", "room-files", "room-member", "room-member-access", "room-member-allow", "room-member-adapter", "room-member-model", "room-profiles", "room-restore", "room-fork", "room-workflow", "workflows"):
                 payload.pop("access_file", None)
                 payload.update(site=site, entry="web")
             if command == "room-files" and not payload.get("token") and not self.bridge_origin:

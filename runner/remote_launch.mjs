@@ -27,9 +27,9 @@ const RELAY_CIPHER_INFO = 'codiscuss-relay-v1';
 const LAUNCH_SCRIPT = fileURLToPath(new URL('./discussion_launch.mjs', import.meta.url));
 // What a connected browser may ask the local bridge for, minus the folder dialog nobody would see and pairing itself.
 const RELAYED_ACTIONS = new Set(['settings', 'launch', 'room-models', 'room-member', 'room-member-access', 'room-member-allow', 'room-member-adapter',
-  'room-member-model', 'room-profiles', 'room-files', 'room-restore', 'room-fork', 'models', 'api-key', 'api-check', 'scheduler-check', 'tts-settings', 'tts', 'stt', 'projects', 'presets', 'admin-account']);
+  'room-member-model', 'room-profiles', 'room-files', 'room-restore', 'room-fork', 'models', 'api-key', 'api-check', 'scheduler-check', 'tts-settings', 'tts', 'stt', 'projects', 'presets', 'workflows', 'room-workflow', 'admin-account']);
 export const ROOM_ACTIONS = new Set(['launch', 'room-models', 'room-member', 'room-member-access', 'room-member-allow', 'room-member-adapter',
-  'room-member-model', 'room-profiles', 'room-files', 'room-restore', 'room-fork']);
+  'room-member-model', 'room-profiles', 'room-files', 'room-restore', 'room-fork', 'room-workflow', 'workflows']);
 
 /** Read every site this computer is paired with. */
 export function machine_links(home) {
@@ -174,6 +174,8 @@ export function relayed_command(site, action, payload) {
     const { access_file, ...rest } = payload;
     input = { ...rest, site, entry: 'web' };
   }
+  // Choosing a folder belongs to the computer's own screen; another device imports by pasting.
+  if (action === 'workflows' && payload.folder) throw new Error('其他设备请用粘贴导入工作流');
   if (action === 'admin-account') input = { site, username: payload.username, password: payload.password };
   return { command: action === 'launch' ? 'start' : action, input, browser: action === 'launch' };
 }

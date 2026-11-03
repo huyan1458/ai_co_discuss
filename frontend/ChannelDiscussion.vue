@@ -1,5 +1,5 @@
 <script setup>
-import { computed, inject, nextTick, onBeforeUnmount, onMounted, ref, watch } from "vue";
+import { computed, inject, nextTick, onBeforeUnmount, onMounted, reactive, ref, watch } from "vue";
 import ScheduleCard from "./ScheduleCard.vue";
 import TopicCard from "./TopicCard.vue";
 import DiscussionEndCard from "./DiscussionEndCard.vue";
@@ -55,9 +55,83 @@ const voice = use_voice_input({ bridge, on_text: (spoken) => {
   const area = prompt.value?.textareaRef, value = text.value || "";
   const start = area ? area.selectionStart : value.length, end = area ? area.selectionEnd : value.length;
   text.value = `${value.slice(0, start)}${spoken}${value.slice(end)}`;
-  nextTick(() => { area?.focus(); area?.setSelectionRange(start + spoken.length, start + spoken.length); });
+  // On touch screens focusing would raise the keyboard over the send key, so the text is only inserted.
+  nextTick(() => { if (ENTER_SENDS) area?.focus(); area?.setSelectionRange(start + spoken.length, start + spoken.length); });
 } });
 const format_voice_time = (seconds) => `${Math.floor(seconds / 60)}:${String(seconds % 60).padStart(2, "0")}`;
+// Touch: hold the microphone to talk and let go to finish, slide up to discard; a short tap keeps recording until ✓.
+const VOICE_HOLD_MS = 300;
+const VOICE_CANCEL_SLIDE_PX = 60;
+// How the current recording is being held: "" (tap mode), "touch" or "space"; `discard` while slid up to cancel.
+const voice_hold = reactive({ by: "", discard: false });
+let voice_press = null, voice_touch_click = false;
+function voice_pointerdown(event) {
+  voice_touch_click = event.pointerType !== "mouse";
+  if (!voice_touch_click || voice.state.status || view.value.sending_message) return;
+  voice_press = { id: event.pointerId, y: event.clientY, at: event.timeStamp };
+  Object.assign(voice_hold, { by: "touch", discard: false });
+  // The button is replaced by the recording bar under the finger, so the rest of the press is followed on the window.
+  window.addEventListener("pointermove", voice_pointermove);
+  window.addEventListener("pointerup", voice_pointerup);
+  window.addEventListener("pointercancel", voice_pointerup);
+  voice.toggle();
+}
+function voice_pointermove(event) {
+  if (event.pointerId === voice_press?.id) voice_hold.discard = voice_press.y - event.clientY > VOICE_CANCEL_SLIDE_PX;
+}
+function voice_pointerup(event) {
+  if (event.pointerId !== voice_press?.id) return;
+  window.removeEventListener("pointermove", voice_pointermove);
+  window.removeEventListener("pointerup", voice_pointerup);
+  window.removeEventListener("pointercancel", voice_pointerup);
+  const held = event.type === "pointerup" && event.timeStamp - voice_press.at >= VOICE_HOLD_MS, { discard } = voice_hold;
+  voice_press = null;
+  Object.assign(voice_hold, { by: "", discard: false });
+  voice.resume();
+  if (discard) voice.cancel();
+  // A tap, or a hold the browser would not record yet (first permission prompt), stays on as tap mode.
+  else if (held && voice.state.status === "recording" && voice.state.capturing) voice.toggle();
+}
+/** Mouse clicks toggle recording; the click that ends a touch press is already handled by the press. */
+function voice_click() {
+  if (voice_touch_click) { voice_touch_click = false; return; }
+  voice.toggle();
+}
+// Desktop: holding Space in the composer (or with nothing focused) talks until it is let go. A hold is known once
+// the key starts repeating; the one space the first press typed is taken back.
+function voice_space_down(event) {
+  if (voice_hold.by === "space") { event.preventDefault(); return; }
+  const area = prompt.value?.textareaRef;
+  if (!event.repeat || voice.state.status || view.value.sending_message || ![area, document.body].includes(event.target)) return;
+  event.preventDefault();
+  const caret = area?.selectionStart ?? 0;
+  if (event.target === area && text.value?.[caret - 1] === " ") {
+    text.value = `${text.value.slice(0, caret - 1)}${text.value.slice(caret)}`;
+    nextTick(() => area.setSelectionRange(caret - 1, caret - 1));
+  }
+  voice_hold.by = "space";
+  voice.toggle();
+}
+function voice_keyup(event) {
+  if (event.code !== "Space" || voice_hold.by !== "space") return;
+  event.preventDefault();
+  voice_hold.by = "";
+  if (voice.state.status === "recording") voice.toggle();
+}
+/** While voice input is on, Esc discards it and Enter finishes it instead of sending; runs before the composer's keys. */
+function voice_keydown(event) {
+  if (event.isComposing) return;
+  if (event.code === "Space" && !(event.ctrlKey || event.metaKey || event.altKey || event.shiftKey)) return voice_space_down(event);
+  if (!voice.state.status) return;
+  const finish = event.key === "Enter" && ENTER_SENDS && !event.shiftKey;
+  if (event.key !== "Escape" && !finish) return;
+  event.preventDefault();
+  event.stopPropagation();
+  if (event.key === "Escape") voice.cancel();
+  else if (voice.state.status === "recording") voice.toggle();
+}
+onMounted(() => { window.addEventListener("keydown", voice_keydown, true); window.addEventListener("keyup", voice_keyup, true); });
+onBeforeUnmount(() => { window.removeEventListener("keydown", voice_keydown, true); window.removeEventListener("keyup", voice_keyup, true); });
 // Where "listen from here" shows for text selected in a message, with the selection kept for the click.
 const listen_here = ref(null);
 // The phone toolbar has room for three buttons, so read-aloud joins the "more" menu there.
@@ -1336,7 +1410,7 @@ function copy_message(message) { act("copy", `${view.value.room_site}/r/${room.v
       </motion.div>
     </Teleport>
     <button v-if="listen_here && !listen_here.touch" type="button" class="channel-listen-mark" :style="{ left: `${listen_here.left}px`, top: `${listen_here.top}px` }" title="从选中处开始朗读" aria-label="从选中处开始朗读" @mousedown.prevent @click="listen_from_selection"><UIcon name="i-lucide-headphones" />朗读</button>
-    <div ref="transcript" v-memo="[message_groups, message_round_labels, free, room.session, view.access, active_message, expanded_answers.size, reader.state.message_id, room.title, view.query, view.mention_only, view.host_only, topic_anchor, end_anchor, request_badges, execution_reports, recommendations, adopting, scheduler_decisions, host_arrangements, correcting, pending, execution_notes, editing, rewound_runs]" class="channel-transcript" aria-label="聊天记录" @scroll="track_scroll" @wheel.passive="resume_tracking($event); stop_following($event)" @touchstart.passive="resume_tracking" @touchmove.passive="stop_following" @pointerdown="stop_following" @keydown="resume_tracking($event); stop_following($event)">
+    <div ref="transcript" v-memo="[message_groups, message_round_labels, free, room.session, view.access, active_message, expanded_answers.size, reader.state.message_id, room.title, view.query, view.mention_only, view.host_only, topic_anchor, end_anchor, request_badges, execution_reports, recommendations, adopting, scheduler_decisions, host_arrangements, correcting, pending, execution_notes, open_working_notes, editing, rewound_runs]" class="channel-transcript" aria-label="聊天记录" @scroll="track_scroll" @wheel.passive="resume_tracking($event); stop_following($event)" @touchstart.passive="resume_tracking" @touchmove.passive="stop_following" @pointerdown="stop_following" @keydown="resume_tracking($event); stop_following($event)">
       <div v-if="!view.query && !view.mention_only && !view.host_only && !topic_anchor" class="channel-message-group channel-topic-group"><TopicCard :ref="(card) => topic_card = card" @edit="emit('edit')" /></div>
       <div v-for="group in message_groups" :key="group.key" class="channel-message-group">
         <USeparator :label="group.label" class="channel-date-divider" />
@@ -1391,11 +1465,11 @@ function copy_message(message) { act("copy", `${view.value.room_site}/r/${room.v
                 @click="act('change_member', { member_id: message.member_id, name: message.author, action: 'interrupt' })"><span class="channel-stop-square" /></UButton></UTooltip>
           </span>
           </div>
-          <div v-for="notes in [working_notes(message)].filter((list) => list.length)" :key="message.execution_id" class="channel-working-notes" :class="{ 'is-open': open_working_notes.has(message.execution_id) }">
+          <div v-for="notes in [working_notes(message)].filter((list) => list.length)" :key="message.execution_id" class="channel-working-notes" :class="{ 'is-open': open_working_notes.has(message.execution_id), 'is-single': notes.length === 1 }">
             <template v-if="open_working_notes.has(message.execution_id)"><p v-for="note in notes.slice(0, -1)" :key="note.seq">{{ note.text }}</p></template>
-            <p class="channel-working-latest" @click="open_working_notes.has(message.execution_id) || toggle_working_notes(message.execution_id)">
+            <p class="channel-working-latest" @click="notes.length === 1 || open_working_notes.has(message.execution_id) || toggle_working_notes(message.execution_id)">
               <span class="channel-working-latest-text">{{ notes.at(-1).text }}</span>
-              <button type="button" class="channel-working-count" :aria-expanded="open_working_notes.has(message.execution_id)" :aria-label="open_working_notes.has(message.execution_id) ? '收起过程说明' : `展开全部 ${notes.length} 段过程说明`" @click.stop="toggle_working_notes(message.execution_id)">{{ notes.length }} 段<UIcon name="i-lucide-chevron-down" /></button>
+              <button v-if="notes.length > 1" type="button" class="channel-working-count" :aria-expanded="open_working_notes.has(message.execution_id)" :aria-label="open_working_notes.has(message.execution_id) ? '收起过程说明' : `展开全部 ${notes.length} 段过程说明`" @click.stop="toggle_working_notes(message.execution_id)">{{ notes.length }} 段<UIcon name="i-lucide-chevron-down" /></button>
             </p>
           </div>
         </div>
@@ -1644,11 +1718,21 @@ function copy_message(message) { act("copy", `${view.value.room_site}/r/${room.v
         </template>
         <div v-if="mention_mirror" ref="mirror" class="channel-editor channel-editor-mirror" aria-hidden="true" v-html="mention_mirror"></div>
         <template #footer>
-          <UButton type="button" icon="i-lucide-paperclip" aria-label="添加附件" title="图片、PDF 或其他文件 · 每个最多 20 MiB" color="neutral" variant="ghost" size="sm" :disabled="view.sending_message" @click="act('choose_attachments')" />
-          <span v-if="voice.state.status === 'recording'" class="channel-voice-levels" role="status" :aria-label="`正在录音 ${format_voice_time(voice.state.seconds)}`"><i v-for="(level, index) in voice.state.levels" :key="index" :style="{ transform: `scaleY(${0.15 + level * 0.85})` }" /><small>{{ format_voice_time(voice.state.seconds) }}</small></span>
-          <UTooltip v-if="speech_ready" :text="broadcast.on.value ? '关闭语音播报' : '语音播报：新回复自动朗读摘要'"><UButton type="button" icon="i-lucide-radio" color="neutral" variant="ghost" size="sm" class="channel-voice-button channel-broadcast-button" :class="{ 'is-on': broadcast.on.value }" :aria-pressed="broadcast.on.value" :aria-label="broadcast.on.value ? '关闭语音播报' : '开启语音播报'" @click="broadcast.toggle()" /></UTooltip>
-          <UTooltip :text="voice.state.status === 'recording' ? '结束并转成文字' : voice.state.status === 'transcribing' ? '正在识别…' : '语音输入'"><UButton type="button" :icon="voice.state.status === 'recording' ? 'i-lucide-square' : 'i-lucide-mic'" :loading="voice.state.status === 'transcribing'" color="neutral" variant="ghost" size="sm" class="channel-voice-button" :class="{ 'is-recording': voice.state.status === 'recording' }" :aria-label="voice.state.status === 'recording' ? '结束录音并转成文字' : '语音输入'" :disabled="view.sending_message || voice.state.status === 'transcribing'" @click="voice.toggle()" /></UTooltip>
-          <UButton type="button" icon="i-lucide-arrow-up" color="neutral" size="sm" class="channel-primary-button channel-round-button channel-send" aria-label="发送" title="发送 · Enter" :disabled="!has_draft" :loading="pending === 'send' || view.sending_message" @click="send" />
+          <!-- Voice input takes over the whole footer: discard on the left, live levels in the middle, finish where send was. -->
+          <template v-if="voice.state.status">
+            <UTooltip :text="ENTER_SENDS ? '取消 · Esc' : '取消'"><UButton type="button" icon="i-lucide-x" color="neutral" variant="ghost" size="sm" class="channel-voice-button" aria-label="取消语音输入" @click="voice.cancel()" /></UTooltip>
+            <span class="channel-voice-levels" :class="{ 'is-discarding': voice_hold.discard }" role="status" :aria-label="voice.state.status === 'recording' ? `正在录音 ${format_voice_time(voice.state.seconds)}` : '正在识别'">
+              <template v-if="voice.state.status === 'recording'"><span class="channel-voice-bars"><i v-for="(level, index) in voice.state.levels" :key="index" :style="{ transform: `scaleY(${0.15 + level * 0.85})` }" /></span><small>{{ format_voice_time(voice.state.seconds) }}</small><small v-if="voice_hold.by" class="channel-voice-hint">{{ voice_hold.discard ? '松开取消' : voice_hold.by === 'touch' ? '松开转文字 · 上滑取消' : '松开空格转文字' }}</small></template>
+              <small v-else>正在识别…</small>
+            </span>
+            <UTooltip :text="ENTER_SENDS ? '完成，转成文字 · Enter' : '完成，转成文字'"><UButton type="button" icon="i-lucide-check" color="neutral" size="sm" class="channel-primary-button channel-round-button" aria-label="结束录音并转成文字" :loading="voice.state.status === 'transcribing'" @click="voice.toggle()" /></UTooltip>
+          </template>
+          <template v-else>
+            <UButton type="button" icon="i-lucide-paperclip" aria-label="添加附件" title="图片、PDF 或其他文件 · 每个最多 20 MiB" color="neutral" variant="ghost" size="sm" :disabled="view.sending_message" @click="act('choose_attachments')" />
+            <UTooltip v-if="speech_ready" :text="broadcast.on.value ? '关闭语音播报' : '语音播报：新回复自动朗读摘要'"><UButton type="button" icon="i-lucide-radio" color="neutral" variant="ghost" size="sm" class="channel-voice-button channel-broadcast-button" :class="{ 'is-on': broadcast.on.value }" :aria-pressed="broadcast.on.value" :aria-label="broadcast.on.value ? '关闭语音播报' : '开启语音播报'" @click="broadcast.toggle()" /></UTooltip>
+            <UTooltip :text="ENTER_SENDS ? '语音输入 · 也可按住空格说话' : '按住说话，或轻点开始'"><UButton type="button" icon="i-lucide-mic" color="neutral" variant="ghost" size="sm" class="channel-voice-button channel-voice-mic" aria-label="语音输入" :disabled="view.sending_message" @pointerdown="voice_pointerdown" @click="voice_click" @contextmenu.prevent /></UTooltip>
+            <UButton type="button" icon="i-lucide-arrow-up" color="neutral" size="sm" class="channel-primary-button channel-round-button channel-send" aria-label="发送" title="发送 · Enter" :disabled="!has_draft" :loading="pending === 'send' || view.sending_message" @click="send" />
+          </template>
         </template>
       </UChatPrompt>
       <div class="channel-composer-note"><span>{{ recipient_hint }}</span><span class="channel-draft-length"><span v-if="text_length" :class="{ 'is-near-limit': near_length_limit }">{{ text_length }} / {{ bridge.max_message_length }}<span class="channel-note-divider">·</span></span><span class="channel-key-hint"><kbd>Enter</kbd> 发送<span class="channel-note-divider">·</span><kbd>Shift</kbd>+<kbd>Enter</kbd> 换行</span></span></div>

@@ -29,6 +29,7 @@ Most multi-agent frameworks spin up fresh agents inside their own runtime. AI Co
 - **Delegate by mention** — `@` an agent and it works in its own original session; several can run in parallel. Unaddressed messages go to an AI host that routes the work.
 - **Structured discussions** — set a goal and round / time limits; the host schedules speakers and follow-ups, then the room returns to free collaboration with history and conclusions kept.
 - **Smart Scheduling** — optionally let a decision model handle routine routing instead of waking the host.
+- **Workflows** — save a way of working as a host playbook (`SKILL.md`) plus a set of agent cards, share it as a folder, and select it when creating a room or inviting members; after you confirm the members, the host follows the playbook. It brings the method and the people, not a guaranteed procedure. See [runner docs](docs/runner.md#工作流可选).
 - **Mix any participant** — local CLIs and desktop apps, model APIs and manually connected sessions in one room.
 - **Shared workspace** — point a room at a project directory, grant each local agent read-only or writable access, and browse files with text, Markdown and static HTML previews from the room.
 - **Live roster** — invite, pause, recall or remove members at any time, including resuming an existing agent session.

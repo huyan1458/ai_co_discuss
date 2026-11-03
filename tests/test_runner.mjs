@@ -22,7 +22,7 @@ import { glob_regex, open_project, run_file_tool } from '../runner/adapters/api_
 import { DiscussionService, migrate_platform_ids, migrate_service_home, read_registry, register_room, service_pid, service_ready, start_service, unregister_room } from '../runner/discussion_service.mjs';
 import { restore_room, room_profiles } from '../runner/discussion_launch.mjs';
 import { adapter_of, deliver_task } from '../runner/adapters/index.mjs';
-import { adopted_fork, claude_exit_error, claude_inbox_ready, claude_rule_path, standalone_claude_env } from '../runner/adapters/claude.mjs';
+import { adopted_fork, claude_api_error, claude_exit_error, claude_inbox_ready, claude_rule_path, standalone_claude_env, watch_window_turn } from '../runner/adapters/claude.mjs';
 import { codex_permissions } from '../runner/adapters/codex_cli.mjs';
 import { agy_rule, prepare_agy_project, remove_agy_projects } from '../runner/adapters/antigravity_cli.mjs';
 import { kill_process_tree, run_program, TASK_SUBCOMMANDS } from '../runner/adapters/common.mjs';
@@ -771,7 +771,7 @@ async function cli_delivery_fixture(t, adapter, options = {}) {
     rmSync(root, { recursive: true, force: true });
   });
   const task = { id: 'event-1', participant: 'Antigravity', directory, draft_directory, access_path, prompt: '讨论中文 "quotes"\n$(literal); `literal`',
-    skills_directory: join(directory, 'skills'),
+    skill_directories: [join(directory, 'skills')],
     on_binding: session => bindings.push(session), on_process: () => {},
     on_output: (path, chunk) => appendFileSync(path, chunk), on_failure: error => errors.push(error), on_exit: () => { exits++; }, on_denials: list => denials.push(...list) };
   const config = { adapter, executable: process.execPath, ...options.config };
@@ -822,7 +822,7 @@ test(`${adapter} starts headlessly, binds emitted identity and preserves UTF-8 p
     assert.deepEqual(f.config_calls[0].args.slice(1), call.args.slice(call.args.indexOf('-c'), call.args.indexOf('--json')));
     assert.ok(!call.args.includes('--add-dir'));
   } else {
-    assert.ok(call.args.includes(f.task.skills_directory));
+    assert.ok(call.args.includes(f.task.skill_directories[0]));
     assert.equal(call.args[call.args.indexOf('-p') + 1], f.task.prompt);
     assert.equal(call.args[call.args.indexOf('--output-format') + 1], 'stream-json');
     assert.equal(call.args[call.args.indexOf('--print-timeout') + 1], '0');
@@ -998,7 +998,7 @@ test('agy separates native project permissions from the selected project and pre
   assert.deepEqual(read.settings, {});
   assert.deepEqual(read.permissionGrants.permissionGrants.allow, [agy_rule(), rule(task.draft_directory)]);
   assert.ok(read.permissionGrants.permissionGrants.deny.includes(rule(join(f.config.directory, 'source'))));
-  for (const path of [task.directory, task.skills_directory, join(user_home, '.gemini')]) {
+  for (const path of [task.directory, ...task.skill_directories, join(user_home, '.gemini')]) {
     assert.ok(read.permissionGrants.permissionGrants.deny.includes(rule(path)));
   }
   assert.ok(read.permissionGrants.permissionGrants.deny.includes('mcp(*)'));
@@ -1055,8 +1055,9 @@ test('claude allows only codiscuss website subcommands and draft writes, then us
   assert.deepEqual(f.errors, []);
   assert.ok(!args.some(arg => arg.startsWith('--dangerously') || arg === '--permission-mode'));
   const directories = args.indexOf('--add-dir');
-  assert.deepEqual(args.slice(directories + 1, directories + 4), [f.directory, f.task.draft_directory, f.task.skills_directory]);
-  assert.deepEqual(args.slice(args.indexOf('--allowedTools') + 1, args.indexOf('--')),
+  assert.deepEqual(args.slice(directories + 1, directories + 4), [f.directory, f.task.draft_directory, f.task.skill_directories[0]]);
+  assert.deepEqual(args.slice(args.indexOf('--disallowedTools') + 1, args.indexOf('--')), [`Edit(${claude_rule_path(f.task.skill_directories[0])}/**)`]);
+  assert.deepEqual(args.slice(args.indexOf('--allowedTools') + 1, args.indexOf('--disallowedTools')),
     [...['room', 'message', 'turn', 'state', 'review', 'execution', 'health', 'schema']
       .flatMap(command => [`Bash(codiscuss ${command} *)`, `PowerShell(codiscuss ${command} *)`]),
     `Edit(${claude_rule_path(f.task.draft_directory)}/**)`, 'Read(//d/materials/**)']);
@@ -1159,6 +1160,31 @@ test('a taken-over Claude member whose own window is open gets its task through 
   assert.equal(JSON.parse(readFileSync(access_path, 'utf8')).session_id, original);
 });
 
+test('a Claude window turn that ends on a usage limit fails without retry, and one that ends plainly reports its end', async t => {
+  const home = mkdtempSync(join(tmpdir(), 'claude-window-')); t.after(() => rmSync(home, { recursive: true, force: true }));
+  const line = entry => `${JSON.stringify(entry)}\n`;
+  const prompt = line({ type: 'user', message: { role: 'user', content: 'Another Claude session sent a message: 读取 free-9.task.json' } });
+  const limit = line({ type: 'assistant', isApiErrorMessage: true, error: 'rate_limit',
+    message: { model: '<synthetic>', content: [{ type: 'text', text: "You've hit your 5-hour limit · resets 11:50am" }] } });
+  const turn_end = line({ type: 'system', subtype: 'turn_duration', durationMs: 4062 });
+  const follow = async (entries) => {
+    const file = join(home, `${randomUUID()}.jsonl`);
+    writeFileSync(file, line({ type: 'user', message: { content: 'an earlier turn naming free-9.task.json' } }) + turn_end);
+    const offset = readFileSync(file).length, seen = [];
+    watch_window_turn({ file, offset, pid: process.pid, marker: 'free-9.task.json' },
+      { on_failure: (error, options) => seen.push({ error, ...options }), on_exit: () => seen.push('exit') }, { interval: 10 });
+    appendFileSync(file, entries);
+    for (let waited = 0; !seen.length && waited < 2000; waited += 20) await delay(20);
+    return seen;
+  };
+  const [failed] = await follow(prompt + limit + turn_end);
+  assert.equal(failed.retryable, false);
+  assert.match(failed.error, /用量已达上限.*5-hour limit/);
+  assert.deepEqual(await follow(prompt + line({ type: 'assistant', message: { content: [{ type: 'text', text: '好' }] } }) + turn_end), ['exit']);
+  assert.equal(claude_api_error({ type: 'assistant', is_api_error_message: true, error: 'server_error',
+    message: { content: [{ type: 'text', text: 'API Error: 529 Overloaded' }] } }).lasting, false, 'an overloaded server is retried');
+});
+
 test('agy 全放开 skips its permission prompts, which no other level does', async t => {
   for (const project_access of ['read', 'write', 'full', 'own']) {
     const session = project_access === 'own' ? { session_id: 'actual-cli-session' } : {};
@@ -1241,7 +1267,7 @@ test('tasks direct website work to the approved codiscuss subcommands', t => {
   assert.match(expert.prompt, /发言请求/);
   assert.equal(read_task().skills.some(path => path.includes('discuss-host')), false);
   assert.equal(read_task().discussion_request.read_until, 0);
-  assert.equal(task.skills_directory, join(f.config.project, '.agents', 'skills'));
+  assert.deepEqual(task.skill_directories, [join(f.config.project, '.agents', 'skills')]);
 });
 
 test('one data directory cannot silently share bindings across rooms or sites', async t => {

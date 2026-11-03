@@ -85,7 +85,7 @@ function agy_project_grants(config, task, resources, user_home) {
   const folders = resources.map(resource => resource.gitFolder?.folderUri || resource.folder?.folderUri)
     .filter(uri => uri?.startsWith('file:')).map(uri => fileURLToPath(uri));
   const projects = [...new Set([project_directory(config), ...folders].filter(directory => directory && !same_path(directory, task.draft_directory)))];
-  const protected_paths = [task.directory, task.skills_directory, join(user_home, '.gemini'),
+  const protected_paths = [task.directory, ...task.skill_directories, join(user_home, '.gemini'),
     ...(config.project_access === 'read' ? projects : [])];
   if (protected_paths.some(directory => within_directory(directory, task.draft_directory))) {
     throw new Error('agy 草稿目录不能位于只读项目、运行目录、技能或 .gemini 配置目录中，未交付讨论任务');
@@ -147,7 +147,7 @@ export function remove_agy_projects(directory, user_home = homedir()) {
 function invocation(config, binding, task, user_home) {
   const project = config.session_id ? null : prepare_agy_project(config, binding, task, user_home);
   const args = ['--output-format', 'stream-json', '--print-timeout', '0', '--add-dir', task.directory,
-    '--add-dir', task.draft_directory, '--add-dir', task.skills_directory];
+    '--add-dir', task.draft_directory, ...task.skill_directories.flatMap(directory => ['--add-dir', directory])];
   // Headless agy refuses `--mode auto` ("not available for this account", 1.4.10–1.4.11) though its interactive window
   // offers it; 全放开 uses the flag its own denial message suggests on top of the open project grants.
   args.push('--mode', 'accept-edits', ...(config.project_access === 'full' ? ['--dangerously-skip-permissions'] : []),

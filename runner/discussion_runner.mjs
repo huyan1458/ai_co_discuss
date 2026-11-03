@@ -12,6 +12,7 @@ import { adapter_profile, same_session_family } from './adapters/profiles.mjs';
 import { read_api_key } from './discussion_api.mjs';
 import { access_levels, PROJECT_ACCESS, READ_RULE } from './expert_prompts.mjs';
 import { validate_scheduler } from './scheduler.mjs';
+import { bind_room_workflow } from './workflows.mjs';
 
 const POLL_MS = 2000;
 let rg_available;
@@ -75,6 +76,8 @@ export function validate_config(input, base_directory) {
   if (Object.keys(config.participants).some(name => typeof config.members?.[name]?.token !== 'string' || config.members[name].token.length < 32)) {
     throw new Error('房间配置须为每位成员保存成员凭证；旧版配置请重新接入房间');
   }
+  // A bound workflow only names a folder and which member plays which card; its content is read at each execution.
+  if (config.workflow) config.workflow = bind_room_workflow({}, config.workflow).workflow;
   // Smart scheduling is optional; without it every decision stays with the host.
   if (config.scheduler) config.scheduler = validate_scheduler(config.api_home, config.scheduler);
   return { ...config, mode: 'free', site: url.origin, project: resolve(config.project), directory: resolve(config.data_directory || join(base_directory, `discussion-${config.room}`)) };

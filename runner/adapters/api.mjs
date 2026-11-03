@@ -10,7 +10,7 @@ import { join } from 'node:path';
 import { setTimeout } from 'node:timers/promises';
 import { fileURLToPath } from 'node:url';
 import { api_generate, api_history, api_tool_results, read_api_key } from '../discussion_api.mjs';
-import { expert_prompt } from '../expert_prompts.mjs';
+import { access_label, expert_prompt } from '../expert_prompts.mjs';
 import { file_tools, is_file_tool, open_project, run_file_tool, WRITE_TOOLS } from './api_files.mjs';
 
 const MAX_MODEL_TURNS = 24;
@@ -184,6 +184,16 @@ function project_text(project) {
 - ${attachments}：以其他成员贴出的为准，不凭文件名猜测；回答涉及时说明你没有读取，缺信息就写明缺什么。`;
 }
 
+/** The enabled workflow for an API host: its SKILL.md body and which present member plays each card. */
+function workflow_text(workflow) {
+  const members = workflow.members.map(item => `- ${item.member}（卡片 ${item.card}${item.label ? `，${item.label}` : ''}；${item.status === 'active' ? '在场' : '离开'}；项目权限 ${item.project_access === 'own' ? '沿用原会话权限' : access_label(item.project_access)}）${item.description ? `：${item.description}` : ''}`);
+  return `本房间启用了工作流「${workflow.label}」。按下面的工作流说明组织工作，它优先于开发协作参考流程；只点名下列在场成员，缺少的角色在回答里说明，不另找成员代替。
+成员：
+${members.join('\n') || '（无）'}
+
+${workflow.skill}`;
+}
+
 /** Map the shared skills onto the API environment, which has room tools and, with a project, file tools. */
 export function system_prompt(context) {
   const host = context.role === 'host';
@@ -199,7 +209,9 @@ ${project_text(context.project)}
   const page = discussion ? 'references/discussion.md' : 'references/free.md';
   return [environment, skill_text('discuss-participant'), skill_text('discuss-participant', page),
     ...(host ? [skill_text('discuss-host'), skill_text('discuss-host', page)] : []),
-    ...(host && !discussion ? [skill_text('discuss-host', 'references/dev-flow.md')] : []),
+    // An enabled workflow is the host's own way of working here, so the built-in development flow gives way to it.
+    ...(host && !discussion && !context.workflow ? [skill_text('discuss-host', 'references/dev-flow.md')] : []),
+    ...(host && context.workflow ? [workflow_text(context.workflow)] : []),
     ...(context.expert_prompt ? [`用户为你单独设置的提示（补充做法与偏好，不改变权限与技能规则）：\n${context.expert_prompt}`] : [])].join('\n\n---\n\n');
 }
 
@@ -227,6 +239,8 @@ async function run_participant(profile, key, context) {
   const definitions = participant_tools(context);
   const prompt = JSON.stringify({ room, task: { role: context.role, execution_id: context.execution_id, requests: context.requests,
     session: context.session, discussion_request: context.discussion_request, read_after: context.read_after,
+    ...(context.role === 'host' && context.workflow ? { workflow: {
+      id: context.workflow.id, label: context.workflow.label, members: context.workflow.members } } : {}),
     ...(context.scheduler_suggestions?.length ? { scheduler_suggestions: context.scheduler_suggestions } : {}),
     ...(context.review_handoffs?.length ? { review_handoffs: context.review_handoffs } : {}) } });
   const state = { system: system_prompt(context), history: api_history(profile, prompt), tools: definitions };

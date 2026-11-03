@@ -5,7 +5,8 @@ import vm from "node:vm";
 import { computed, nextTick, reactive, ref, watch } from "vue";
 import { API_PROVIDERS } from "../runner/discussion_api.mjs";
 import { member_actions } from "../frontend/member-actions.js";
-import { access_label, access_options } from "../runner/expert_prompts.mjs";
+import { access_label, access_options, EXPERT_PROMPT_PRESETS } from "../runner/expert_prompts.mjs";
+import { adapter_profile } from "../runner/adapters/profiles.mjs";
 import { format_duration, snapshot_at, timeline_axis, timeline_rows, timeline_summary } from "../frontend/timeline-model.js";
 
 const source = readFileSync(new URL("../web/app.js", import.meta.url), "utf8").replace(/\nrestore_theme\(\);[\s\S]*$/, "");
@@ -270,6 +271,7 @@ function attachment_fixture() {
       return { message: { id: 1 } };
     } });
   vm.runInContext(source.slice(source.indexOf("function message_payload("), source.indexOf("/** Render immutable file cards")), context);
+  vm.runInContext(source.slice(source.indexOf("async function post_room_file("), source.indexOf("/** Read the bytes of a room file")), context);
   return { context, state, element, posts, uploads, revoked, notified, succeed() { fail = false; } };
 }
 
@@ -362,8 +364,9 @@ test("changing the uploader never reuses an earlier actor's receipt after upload
 });
 
 /** Run card face/focus transitions independently of the spring's browser clock. */
-function expert_card_fixture() {
+function expert_card_fixture(initial_preset = null) {
   const props = reactive({ name: "Codex", mode: "cli", choices: [], status: {} });
+  const preset = ref(initial_preset);
   const view = ref({ launch: { profiles: { Codex: { adapter: "codex_cli", model: "saved-model", effort: "high" } } } });
   const reduced = ref(false), calls = [], cleanups = [], listeners = new Set(), document = { activeElement: null, addEventListener() {}, removeEventListener() {} };
   const angle = { set: (target) => calls.push(["set", target]), jump(target) { calls.push(["jump", target]); this.advance(target); },
@@ -374,12 +377,13 @@ function expert_card_fixture() {
   const reads = [];
   const bridge = { launch_clients: { Codex: [{ value: "codex_cli", label: "Codex CLI" }, { value: "codex", label: "Codex App" }] },
     launch_can_set_access: (name, launch) => ['codex_cli', 'claude', 'antigravity_cli', 'api'].includes(launch.profiles[name]?.adapter),
-    launch_model_state: (name, launch) => ({ supported: launch.profiles[name]?.adapter === "codex_cli", efforts: ["low", "high"] }),
+    launch_model_state: (name, launch, profile = launch.profiles[name]) => ({ supported: profile?.adapter === "codex_cli", efforts: ["low", "high"] }),
     load_launch_models: name => reads.push(name),
     write_launch: (name, field, value) => { view.value.launch.profiles[name][field] = value; },
     restore_launch_profile: (name, profile) => { view.value.launch.profiles[name] = profile; },
-    description_draft: () => "" };
+    description_draft: () => "", platform_of: name => name.split('-')[0], default_name: name => name };
   const context = vm.createContext({ computed, ref, nextTick, defineProps: () => props, defineEmits: () => () => {}, access_label, access_options,
+    defineModel: () => preset, adapter_profile, EXPERT_PROMPT_PRESETS,
     inject: () => ({ view, bridge }), useSpring: () => angle, useReducedMotion: () => reduced, document,
     watch: (...args) => { const stop = watch(...args); cleanups.push(stop); return stop; },
     onBeforeUnmount: (callback) => cleanups.push(callback) });
@@ -390,7 +394,7 @@ function expert_card_fixture() {
   for (const name of ["card", "front_button", "back_button"]) {
     refs[name].value = { focus() { document.activeElement = refs[name].value; } };
   }
-  return { context, props, view, reduced, angle, refs, document, calls, listeners, reads,
+  return { context, props, preset, view, reduced, angle, refs, document, calls, listeners, reads,
     cleanup: () => cleanups.forEach((callback) => callback()) };
 }
 
@@ -407,6 +411,30 @@ test('expert card offers project permissions for CLI and API members and shows t
   assert.equal(project(), undefined, 'an App keeps its own file permissions, so the front shows no placeholder');
   assert.ok(vm.runInContext('connection.value.length', f.context) > 0, 'App connection fields remain available');
   f.cleanup();
+});
+
+test('editing and cancelling a workflow card never changes the same member in a room or copies its connection fields', () => {
+  const original = { card: 'role', name: 'Codex', label: '作者', description: '原描述', system_prompt: '原提示词', project_access: 'read' };
+  const f = expert_card_fixture({ ...original });
+  try {
+    const room_profile = JSON.stringify(f.view.value.launch.profiles);
+    f.context.flip(true);
+    f.context.write_model('new-model');
+    f.context.write_setting('project_access', 'write');
+    f.context.save_description({ text: '新描述', label: '执笔', as_template: true });
+    vm.runInContext('prompt_draft.value = "新提示词"', f.context);
+    f.context.save_prompt();
+    assert.equal(f.preset.value.system_prompt, '新提示词');
+    assert.equal(f.preset.value.label, '执笔');
+    assert.equal(f.preset.value.model, 'new-model');
+    assert.equal(JSON.stringify(f.view.value.launch.profiles), room_profile);
+    assert.equal(f.preset.value.adapter, undefined, 'software details stay out of the portable card');
+    f.context.cancel();
+    assert.deepEqual(JSON.parse(JSON.stringify(f.preset.value)), original);
+    assert.equal(JSON.stringify(f.view.value.launch.profiles), room_profile);
+    f.context.write_setting('system_prompt', '');
+    assert.equal(vm.runInContext('prompt_text.value', f.context), (EXPERT_PROMPT_PRESETS.codex_cli || '').trim());
+  } finally { f.cleanup(); }
 });
 
 /** Use actual create-form handlers with isolated drafts; no AI or website is started. */
@@ -996,6 +1024,7 @@ function participant_connection_fixture() {
     calls.push(name);
     if (name === "invite_member") invites.push(payload.name);
     if (name === "invite_member" && calls.filter((item) => item === "invite_member").length === controls.fail_invite_at) return false;
+    if (controls.on_action) return controls.on_action(name, payload);
     return true;
   };
   const dialog = vm.createContext({ computed, ref, watch, defineProps: () => ({}), defineModel: () => ref(false),
@@ -1016,6 +1045,67 @@ test("batch invitation stops at the first failure and keeps the remaining picks 
   assert.deepEqual(calls, ["invite_member", "invite_member"]);
   assert.equal(vm.runInContext("invite_picks.value.map((pick) => pick.name).join()", context), "Claude,Antigravity");
   assert.equal(vm.runInContext("invited_manual.value.join()", context), "Codex");
+});
+
+test('workflow invitations isolate partial admissions, retain them on retry and never enable a removed set of cards', async () => {
+  const f = participant_connection_fixture(), enabled = [];
+  const bridge = vm.runInContext('bridge', f.dialog);
+  const workflow = { id: 'writing', agents: [{ card: 'writer', name: 'Codex-writer' }, { card: 'editor', name: 'Claude-editor' }] };
+  Object.assign(bridge, { local_request: async () => workflow, workflow_preset: ({ card, ...preset }) => preset,
+    apply_expert_preset(name) { f.view.value.launch.profiles[name] = { adapter: 'claude', executable: 'fixture' }; } });
+  f.controls.on_action = async (action, payload) => {
+    if (action === 'invite_member') payload.workflow_members[payload.card] = `${payload.name}-joined`;
+    if (action === 'enable_room_workflow') enabled.push(JSON.parse(JSON.stringify(payload)));
+    return true;
+  };
+  vm.runInContext('inviting.value = true', f.dialog); await nextTick();
+  await f.dialog.choose_workflow('writing'); await f.dialog.choose_workflow(''); await f.dialog.choose_workflow('writing');
+  assert.equal(vm.runInContext('invite_picks.value.length', f.dialog), 2, 'deselecting never leaves duplicate cards');
+  f.controls.fail_invite_at = 2;
+  await f.dialog.invite();
+  assert.equal(enabled.length, 0);
+  await f.dialog.invite();
+  assert.deepEqual(enabled, [{ id: 'writing', members: { writer: 'Codex-writer-joined', editor: 'Claude-editor-joined' } }]);
+  await nextTick();
+  vm.runInContext('inviting.value = true', f.dialog); await nextTick();
+  await f.dialog.choose_workflow('writing');
+  vm.runInContext('invite_picks.value = []', f.dialog);
+  await f.dialog.invite();
+  assert.equal(enabled.length, 1, 'a new invitation cannot reuse another draft admission or enable empty cards');
+  await f.dialog.choose_workflow('writing');
+  const before = f.invites.length, on_action = f.controls.on_action;
+  let late_failure = true;
+  f.controls.on_action = async (action, payload) => {
+    await on_action(action, payload);
+    if (action === 'invite_member' && late_failure) { late_failure = false; return false; }
+    return true;
+  };
+  await f.dialog.invite(); await f.dialog.invite();
+  assert.equal(f.invites.length - before, 2, 'a durable admission followed by metadata failure is not invited again');
+  assert.equal(enabled.length, 2);
+});
+
+test('reenabling a workflow previews new cards, recalls existing members only on confirmation and keeps their original names', async () => {
+  const f = participant_connection_fixture(), enabled = [];
+  f.view.value.room.members = [{ id: 5, name: 'Claude-old', status: 'away' }];
+  f.view.value.launch.room_models = { workflow: { id: 'writing', enabled: false, members: { writer: 'Claude-old' } } };
+  const bridge = vm.runInContext('bridge', f.dialog);
+  Object.assign(bridge, { local_request: async () => ({ id: 'writing', agents: [
+    { card: 'writer', name: 'Claude-writer' }, { card: 'editor', name: 'Codex-editor' }] }),
+  workflow_preset: ({ card, ...preset }) => preset,
+  apply_expert_preset(name) { f.view.value.launch.profiles[name] = { adapter: 'claude', executable: 'fixture' }; } });
+  f.controls.on_action = async (action, payload) => {
+    if (action === 'change_member') f.view.value.room.members[0].status = 'active';
+    if (action === 'invite_member') payload.workflow_members[payload.card] = payload.name;
+    if (action === 'enable_room_workflow') enabled.push(JSON.parse(JSON.stringify(payload)));
+    return true;
+  };
+  await f.dialog.choose_workflow('writing');
+  assert.equal(f.calls.length, 0, 'selection does not recall or invite anyone');
+  assert.equal(vm.runInContext('invite_picks.value.map(pick => pick.name).join()', f.dialog), 'Codex-editor');
+  await f.dialog.invite();
+  assert.deepEqual(f.calls, ['change_member', 'invite_member', 'enable_room_workflow']);
+  assert.deepEqual(enabled, [{ id: 'writing', members: { writer: 'Claude-old', editor: 'Codex-editor' } }]);
 });
 
 test("model discovery shares executable catalogs without leaking a late response into another software draft", async () => {

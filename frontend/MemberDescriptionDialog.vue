@@ -51,7 +51,7 @@ function save() {
 
 <template>
   <MemberTextDialog v-model:open="open" v-model:draft="draft" :title="`${shown.label || shown.default} 的名称与描述`"
-    description="名称只改本房间里显示的名字，成员 ID 不变。描述写擅长什么、适合分到什么工作，智能调度和 AI 主持人分派时参考，房间所有成员都能看到。"
+    description="名称只改显示的名字，成员 ID 不变。描述写擅长什么、适合分到什么工作，智能调度和 AI 主持人分派时参考，房间所有成员都能看到。"
     :label="`${shown.name} 的描述`" placeholder="例如：擅长前端和交互细节，适合出方案、做评审；大段重构交给别人" :max="MAX_DESCRIPTION"
     :note="note" :source="source" :changed="changed" :saving="saving" @save="save">
     <template #lead>

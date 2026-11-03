@@ -8,7 +8,7 @@ const TARGET_RATE = 16000;
 // Six seconds per part keeps each relayed request (base64, then sealed and base64 again) under the 512 KiB body limit.
 const PART_BYTES = TARGET_RATE * 2 * 6;
 const MAX_SECONDS = 300;
-const LEVEL_BARS = 14;
+const LEVEL_BARS = 32;
 const PROCESSOR_SIZE = 4096;
 
 function to_base64(bytes) {
@@ -22,11 +22,14 @@ function to_base64(bytes) {
  * @param {object} options
  * @param {object} options.bridge Page bridge; uses local_request and notify.
  * @param {(text: string) => void} options.on_text Receives recognized text.
- * @returns {{ state: { status: string, levels: number[], seconds: number }, toggle: Function, cancel: Function }}
+ * @returns {{ state: { status: string, levels: number[], seconds: number, capturing: boolean }, toggle: Function, cancel: Function, resume: Function }}
  */
 export function use_voice_input({ bridge, on_text }) {
-  const state = reactive({ status: "", levels: Array(LEVEL_BARS).fill(0), seconds: 0 });
-  let session = null;
+  const state = reactive({ status: "", levels: Array(LEVEL_BARS).fill(0), seconds: 0, capturing: false });
+  let session = null, starting = null;
+  // Kept after the first recording: a touch press does not count as a user gesture, so a context made then may stay
+  // suspended, while one already running can be reused for press-and-hold.
+  let context = null;
 
   /** Average the input down to 16 kHz, carrying the fractional position across buffers. */
   function resample(recording, input) {
@@ -59,6 +62,7 @@ export function use_voice_input({ bridge, on_text }) {
     const input = event.inputBuffer.getChannelData(0);
     let energy = 0;
     for (const sample of input) energy += sample * sample;
+    state.capturing = true;
     state.levels = [...state.levels.slice(1), Math.min(1, Math.sqrt(energy / input.length) * 6)];
     for (const sample of resample(recording, input)) {
       recording.pending[recording.pending_length++] = Math.max(-32768, Math.min(32767, Math.round(sample * 32767)));
@@ -73,17 +77,20 @@ export function use_voice_input({ bridge, on_text }) {
     recording.processor.disconnect();
     recording.source.disconnect();
     recording.stream.getTracks().forEach((track) => track.stop());
-    recording.context.close();
   }
 
   async function begin() {
     if (!navigator.mediaDevices?.getUserMedia) throw new Error("此浏览器不支持录音；本机网页请用 127.0.0.1 打开，线上网页须为 HTTPS");
-    // Created inside the click so phones let it run.
-    const context = new AudioContext();
-    context.resume();
+    // Created inside the press so phones let it run.
+    context ??= new AudioContext();
+    context.resume().catch(() => {});
+    const token = starting = {};
     let stream;
     try { stream = await navigator.mediaDevices.getUserMedia({ audio: { channelCount: 1, echoCancellation: true, noiseSuppression: true } }); }
-    catch (error) { context.close(); throw new Error(error.name === "NotAllowedError" ? "没有麦克风权限，请在浏览器设置中允许本站使用麦克风" : `无法打开麦克风：${error.message}`); }
+    catch (error) { throw new Error(error.name === "NotAllowedError" ? "没有麦克风权限，请在浏览器设置中允许本站使用麦克风" : `无法打开麦克风：${error.message}`); }
+    finally { if (starting === token) starting = null; }
+    // Cancelled while the browser was still opening the microphone.
+    if (token.cancelled) { stream.getTracks().forEach((track) => track.stop()); return; }
     const source = context.createMediaStreamSource(stream);
     const processor = context.createScriptProcessor(PROCESSOR_SIZE, 1, 1);
     const recording = { id: crypto.randomUUID(), context, stream, source, processor, rate: context.sampleRate, position: 0,
@@ -92,7 +99,7 @@ export function use_voice_input({ bridge, on_text }) {
     source.connect(processor);
     processor.connect(context.destination);
     session = recording;
-    Object.assign(state, { status: "recording", seconds: 0, levels: Array(LEVEL_BARS).fill(0) });
+    Object.assign(state, { status: "recording", seconds: 0, capturing: false, levels: Array(LEVEL_BARS).fill(0) });
   }
 
   /** Stop recording and turn everything recorded into text. */
@@ -116,16 +123,20 @@ export function use_voice_input({ bridge, on_text }) {
   /** Start recording, or stop and recognize when already recording. */
   async function toggle() {
     if (state.status === "recording") return finish();
-    if (state.status) return;
+    if (state.status || starting) return;
     try { await begin(); } catch (error) { bridge.notify("error", error.message); }
   }
 
   /** Discard a recording in progress without recognizing it. */
   function cancel() {
+    if (starting) starting.cancelled = true;
     if (session && state.status === "recording") release(session);
     session = null;
     state.status = "";
   }
 
-  return { state, toggle, cancel };
+  /** Resume audio from inside a user gesture, for a press that could not start it. */
+  function resume() { context?.resume().catch(() => {}); }
+
+  return { state, toggle, cancel, resume };
 }

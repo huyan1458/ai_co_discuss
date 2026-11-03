@@ -18,6 +18,14 @@ const free = computed(() => room.value.free || {});
 const discussion = computed(() => ["active", "paused"].includes(room.value.session?.status));
 const current_round = computed(() => discussion.value ? room.value.current_turn?.round || (room.value.completed_rounds || 0) + 1 : 0);
 const host = computed(() => (free.value.members || []).find((member) => member.role === "host" && member.status === "active"));
+const workflow = computed(() => view.value.launch.room_models?.workflow || null);
+const in_workflow = (name) => Boolean(workflow.value?.enabled && Object.values(workflow.value.members || {}).includes(name));
+const invite_workflow_id = ref("");
+
+/** Stop the workflow's members only after the user confirms the effect on current work. */
+function disable_workflow() {
+  if (window.confirm(`停用工作流「${workflow.value.label}」？它带来的成员会离开（主持人保留），正在进行的工作随之停止。`)) act("disable_room_workflow");
+}
 // Rows follow the room's speaking order; members who left are listed after it.
 const member_named = (name) => (free.value.members || []).find((member) => member.name === name);
 const away_names = computed(() => (free.value.members || []).filter((member) => member.status === "away").map((member) => member.name));
@@ -209,6 +217,15 @@ watch(() => room.value.id, () => { starting.value = false; });
       <p class="pb-focus" :class="{ 'is-expanded': task_expanded }">{{ task }}</p>
       <button v-if="task.length > TASK_PREVIEW_LENGTH" type="button" class="pb-link" @click="task_expanded = !task_expanded">{{ task_expanded ? '收起' : '展开' }}</button>
     </section>
+    <section v-if="workflow" class="pb-section" aria-label="房间工作流">
+      <h4>工作流</h4>
+      <p class="pb-workflow-name">{{ workflow.label }} · {{ !workflow.available ? '不可用' : workflow.enabled ? '已启用' : '已停用' }}</p>
+      <p v-if="!workflow.available" class="pb-free-note">无法读取工作流，成员沿用房间里的提示词。</p>
+      <template v-if="view.access?.can_manage && !room.archived">
+        <UButton v-if="workflow.enabled" label="停用" size="sm" color="neutral" variant="outline" :disabled="Boolean(pending)" @click="disable_workflow" />
+        <UButton v-else-if="workflow.available" label="重新启用" size="sm" color="neutral" variant="outline" :disabled="Boolean(pending)" @click="invite_workflow_id = workflow.id; inviting = true" />
+      </template>
+    </section>
     <section class="pb-section" aria-label="发言顺序">
       <h4>发言顺序</h4>
       <SpeakingOrder :away="away_names" :round="current_round">
@@ -217,6 +234,7 @@ watch(() => room.value.id, () => { starting.value = false; });
             <UAvatar :src="bridge.identities[member.name]?.icon" :text="bridge.identities[member.name]?.initials" :alt="member.name" size="xs" class="channel-avatar" :class="bridge.identities[member.name]?.style" />
             <div class="pb-member-body">
               <div class="pb-member-name" :title="room.descriptions?.[member.name] || undefined">{{ bridge.display_name(member.name) }}<span v-if="bridge.display_name(member.name) !== member.name" class="member-id">{{ member.name }}</span><UIcon v-if="member.role === 'host'" name="i-lucide-crown" title="主持人" /><small :title="member_model(member) || undefined">{{ member_tag(member) }}</small></div>
+              <small v-if="in_workflow(member.name)" class="pb-workflow-member" :title="`来自工作流「${workflow.label}」`">工作流</small>
               <div v-if="member_setup(member)" class="pb-member-model" :title="bridge.participant_session_hint(member.name, room, view.launch.room_models)">{{ member_setup(member) }}</div>
               <div class="pb-member-status" :class="`is-${member_tone(member)}`"><span class="pb-dot"></span><span class="pb-member-status-text" :title="member.execution?.status === 'failed' ? member.execution.result : member.held_until ? member_status(member, item.state) : undefined">{{ member_status(member, item.state) }}</span></div>
             </div>
@@ -224,7 +242,7 @@ watch(() => room.value.id, () => { starting.value = false; });
           </template>
         </template>
       </SpeakingOrder>
-      <UButton v-if="!room.archived" icon="i-lucide-plus" label="邀请 AI 加入" size="sm" color="neutral" variant="outline" class="pb-action pb-action-block pb-action-add" @click="inviting = true" />
+      <UButton v-if="!room.archived" icon="i-lucide-plus" label="邀请 AI 加入" size="sm" color="neutral" variant="outline" class="pb-action pb-action-block pb-action-add" @click="invite_workflow_id = ''; inviting = true" />
     </section>
     <section v-if="!room.archived && !discussion" class="pb-actions" aria-label="操作">
       <UButton icon="i-lucide-messages-square" label="开启讨论" size="sm" color="neutral" variant="outline" class="pb-action pb-action-block pb-restart" title="由主持人推进成员轮流发言，到上限或结束后房间回到自由协作" :disabled="!can_start" @click="starting = true" />
@@ -243,7 +261,7 @@ watch(() => room.value.id, () => { starting.value = false; });
       </details>
     </section>
   <StartDiscussionDialog v-model:open="starting" />
-  <InviteDialog v-model:open="inviting" description="新成员加入后不打断其他成员；点卡片翻面可设置软件、模型、项目权限和要续接的已有会话。" />
+  <InviteDialog v-model:open="inviting" :workflow-id="invite_workflow_id" description="新成员加入后不打断其他成员；点卡片翻面可设置软件、模型、项目权限和要续接的已有会话。" />
   <MemberDescriptionDialog :open="Boolean(describing)" :name="describing || ' '" :platform="describing ? bridge.default_name(bridge.platform_of(describing)) : ''" :default_label="describing ? bridge.default_name(describing) : ''"
     :text="room.descriptions?.[describing] || ''" :label="room.labels?.[describing] || ''" :template="describing ? bridge.description_template(describing) : ''" :saving="describing_saving"
     @update:open="(open) => { if (!open) describing = ''; }" @save="save_description" />
@@ -252,6 +270,8 @@ watch(() => room.value.id, () => { starting.value = false; });
 
 <style scoped>
 .pb-member.is-away { opacity: .6; }
+.pb-workflow-name { margin: 0 0 8px; color: var(--ui-text-toned); font-size: 12px; overflow-wrap: anywhere; }
+.pb-workflow-member { color: var(--ui-text-muted); font-size: 10px; }
 .pb-member-model { margin: 2px 0; color: var(--ui-text-muted); font-size: 11px; line-height: 1.5; overflow-wrap: anywhere; }
 /* A member with a nickname also shows its ID, which AI messages, @ and records use. */
 .member-id { margin-left: 4px; color: var(--ui-text-muted); font-size: 11px; font-weight: 400; }

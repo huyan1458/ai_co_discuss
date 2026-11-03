@@ -4,7 +4,7 @@
  */
 import { spawn, spawnSync } from 'node:child_process';
 import { randomUUID } from 'node:crypto';
-import { existsSync, readFileSync, readdirSync } from 'node:fs';
+import { closeSync, existsSync, openSync, readFileSync, readSync, readdirSync, statSync } from 'node:fs';
 import { connect } from 'node:net';
 import { homedir } from 'node:os';
 import { dirname, join, resolve } from 'node:path';
@@ -14,6 +14,10 @@ import { bind_access, DENIAL_FIELD, EDIT_TOOLS, launch_directory, log_entries, m
 
 // A message posted to an open Claude window that has not started by then is reported, not failed.
 const INBOX_CHECK_MS = 90_000;
+// How often an open window's session log is read for the end of the turn that took a task.
+const WINDOW_POLL_MS = 3_000;
+// Error kinds Claude Code records that a retry a minute later meets again: a used-up plan limit, a lost login.
+const LASTING_ERRORS = ['rate_limit', 'authentication_failed'];
 const EDIT_TOOL_NAMES = /^(Edit|MultiEdit|Write|NotebookEdit)$/;
 // Claude Code logs side queries (titles, compaction, subagents) too; only these sources are the member's own turns.
 const CLAUDE_MAIN_SOURCES = ['sdk', 'repl_main_thread'];
@@ -27,6 +31,23 @@ export function claude_exit_error(code, output) {
   try { result = JSON.parse(output.trim().split(/\r?\n/).at(-1)); } catch { /* Non-JSON output keeps the exit code check. */ }
   if (result?.is_error) return `Claude 执行出错：${result.result || result.api_error || result.subtype || '未知错误'}`;
   return code === 0 ? '' : `Claude 退出码 ${code}`;
+}
+
+/**
+ * The API error Claude Code wrote in place of an answer, from a session log entry or a stream-json event, or null.
+ * Its `kind` is Claude's own category (`rate_limit`, `authentication_failed`, `server_error`, ...).
+ */
+export function claude_api_error(entry) {
+  if (entry?.type !== 'assistant' || !(entry.isApiErrorMessage || entry.is_api_error_message)) return null;
+  const text = prompt_text(entry.message?.content).trim();
+  const kind = String(entry.error || '');
+  return { kind, text: text || String(entry.api_error || kind || '未知错误'), lasting: LASTING_ERRORS.includes(kind) };
+}
+
+/** How a Claude API error reads on the failed execution; a lasting one says it is not retried. */
+export function claude_error_reason(error) {
+  const label = { rate_limit: 'Claude 用量已达上限', authentication_failed: 'Claude 未登录或登录已失效' }[error.kind] || 'Claude 接口出错';
+  return `${label}：${error.text}${error.lasting ? '（不自动重试；恢复后请重新发送）' : ''}`;
 }
 
 /** The first program a shell command runs, skipping `cd` and `Set-Location` steps, for a prefix rule that also allows a retry. */
@@ -97,14 +118,22 @@ export function claude_permissions(config, task) {
   // does, and 全放开 skips every check; the website commands and drafts stay pre-approved either way.
   if (['own', 'auto', 'full'].includes(config.project_access)) {
     const commands = TASK_SUBCOMMANDS.flatMap(command => [`Bash(codiscuss ${command} *)`, `PowerShell(codiscuss ${command} *)`]);
-    return ['--permission-mode', config.project_access === 'full' ? 'bypassPermissions' : 'auto', '--add-dir', task.directory, task.draft_directory, task.skills_directory, '--allowedTools',
-      ...commands, `Edit(${claude_rule_path(task.draft_directory)}/**)`, ...(config.allowed_tools || [])];
+    return ['--permission-mode', config.project_access === 'full' ? 'bypassPermissions' : 'auto', '--add-dir', task.directory, task.draft_directory, ...task.skill_directories, '--allowedTools',
+      ...commands, `Edit(${claude_rule_path(task.draft_directory)}/**)`, ...(config.allowed_tools || []), ...skill_edit_denial(task)];
   }
   const commands = runs_commands(config) ? ['Bash', 'PowerShell']
     : TASK_SUBCOMMANDS.flatMap(command => [`Bash(codiscuss ${command} *)`, `PowerShell(codiscuss ${command} *)`]);
   const writable = [task.draft_directory, ...(runs_commands(config) ? [project_directory(config)] : [])];
-  return ['--add-dir', task.directory, task.draft_directory, task.skills_directory, '--allowedTools',
-    ...commands, ...writable.map(directory => `Edit(${claude_rule_path(directory)}/**)`), ...(config.allowed_tools || [])];
+  return ['--add-dir', task.directory, task.draft_directory, ...task.skill_directories, '--allowedTools',
+    ...commands, ...writable.map(directory => `Edit(${claude_rule_path(directory)}/**)`), ...(config.allowed_tools || []), ...skill_edit_denial(task)];
+}
+
+/**
+ * Skill folders (the shared skills and an enabled workflow) are read, never edited. This stops Claude's own edit tools only;
+ * a command the member may run can still write there, and Windows has no native sandbox to prevent it.
+ */
+function skill_edit_denial(task) {
+  return ['--disallowedTools', ...task.skill_directories.map(directory => `Edit(${claude_rule_path(directory)}/**)`)];
 }
 
 /** What Claude's stream-json events say the agent is doing, which tool it starts, and text it wrote to the user. */
@@ -165,9 +194,13 @@ export function adopted_fork(config, binding, held, exists = id => session_exist
 }
 
 /** Post one task into an open Claude window; it starts a turn there, or between tool calls of the turn it is in. */
-async function inbox_delivery(config, inbox, task) {
+async function inbox_delivery(config, window, task) {
+  const { inbox } = window;
   try { bind_access(task.access_path, config.session_id); }
   catch (error) { throw not_sent(error); }
+  // Only what the window writes after this point can be the turn that takes this task.
+  const file = session_path(config.session_id);
+  const offset = file ? statSync(file).size : 0;
   const text = `CoDiscuss 本机服务代房间转达（你已注册为该房间成员，这是房间分派给你的任务）：\n${task.prompt}`;
   const lines = [{ type: 'auth', token: inbox.token }, { type: 'user', message: { role: 'user', content: text } }];
   await new Promise((resolve_sent, reject) => {
@@ -179,26 +212,62 @@ async function inbox_delivery(config, inbox, task) {
   });
   // The discussion runner enters the execution once the session is known, as it does when a process reports it.
   task.on_binding?.(config.session_id);
-  const marker = `${task.id}.task.json`;
-  setTimeout(() => {
-    if (!session_mentions(config.session_id, marker)) {
-      task.on_note?.('已投递到原窗口，但它还没开始处理：原窗口可能处于跳过审批模式（需在窗口中批准这条消息）或仍在忙。');
-    }
-  }, INBOX_CHECK_MS).unref();
+  watch_window_turn({ file, offset, pid: window.pid, marker: `${task.id}.task.json` }, task);
   return { session_id: config.session_id, status: 'accepted', capabilities: WINDOW };
 }
 
-/** Whether a Claude session's log contains some text, e.g. the task file a delivered prompt names. */
-function session_mentions(session_id, text, env = process.env) {
-  const file = session_path(session_id, env, homedir());
-  try { return Boolean(file) && readFileSync(file, 'utf8').includes(text); } catch { return false; }
+/**
+ * Follow a task posted into an open window through the session log, from `offset` on: note once when the window has not
+ * taken it by INBOX_CHECK_MS, and when the turn that took it ends (or the window closes first), report the API error that
+ * turn ended on as a failure, otherwise its end, so an answer it never submitted fails the execution instead of hanging.
+ */
+export function watch_window_turn({ file, offset, pid, marker }, task, { interval = WINDOW_POLL_MS, unstarted_after = INBOX_CHECK_MS } = {}) {
+  const since = Date.now();
+  let pending = Buffer.alloc(0), taken = false, noted = false, error = null;
+  const finish = () => {
+    clearInterval(timer);
+    if (error) task.on_failure?.(claude_error_reason(error), { retryable: !error.lasting });
+    else task.on_exit?.();
+  };
+  const timer = setInterval(() => {
+    for (const entry of read_appended()) {
+      if (!taken) { taken = entry.type === 'user' && prompt_text(entry.message?.content).includes(marker); continue; }
+      error = claude_api_error(entry) || error;
+      if (entry.type === 'system' && entry.subtype === 'turn_duration') return finish();
+    }
+    if (!process_alive(pid)) return finish();
+    if (!taken && !noted && Date.now() - since >= unstarted_after) {
+      noted = true;
+      task.on_note?.('已投递到原窗口，但它还没开始处理：原窗口可能处于跳过审批模式（需在窗口中批准这条消息）或仍在忙。');
+    }
+  }, interval);
+  timer.unref();
+  /** Whole lines the log gained since the last read; a line still being written waits for the next. */
+  function read_appended() {
+    let size;
+    try { size = file ? statSync(file).size : 0; } catch { return []; }
+    if (size <= offset) return [];
+    const chunk = Buffer.alloc(size - offset), handle = openSync(file, 'r');
+    try { readSync(handle, chunk, 0, chunk.length, offset); } finally { closeSync(handle); }
+    offset = size;
+    pending = Buffer.concat([pending, chunk]);
+    const end = pending.lastIndexOf(0x0a);
+    if (end < 0) return [];
+    const lines = pending.subarray(0, end).toString('utf8').split('\n');
+    pending = pending.subarray(end + 1);
+    return lines.map(json_line).filter(Boolean);
+  }
+}
+
+function process_alive(pid) {
+  try { process.kill(pid, 0); return true; } catch { return false; }
 }
 
 /** Use one official Claude process per turn and resume the persisted session, or post into the member's open window. */
 async function deliver(config, binding, task, spawn_process = spawn) {
   const window = config.project_access === 'own' && binding.session_id && binding.session_id === config.session_id ? claude_window(config.session_id) : null;
   // Only a task written for the window names its credential file; a background process gets it through its environment.
-  if (window?.inbox && task.inbox) return inbox_delivery(config, window.inbox, task);
+  if (window?.inbox && task.inbox) return inbox_delivery(config, window, task);
   binding = adopted_fork(config, binding, Boolean(window));
   const session_id = binding.session_id || randomUUID();
   try { bind_access(task.access_path, session_id); }
@@ -228,7 +297,9 @@ async function deliver(config, binding, task, spawn_process = spawn) {
     const denials = claude_denials(output);
     if (denials.length) task.on_denials?.(denials);
     const error = claude_exit_error(code, output);
-    if (error) task.on_failure(error);
+    const api_error = error ? output.split(/\r?\n/).map(json_line).map(claude_api_error).filter(Boolean).at(-1) : null;
+    if (api_error) task.on_failure(claude_error_reason(api_error), { retryable: !api_error.lasting });
+    else if (error) task.on_failure(error);
     else task.on_exit?.();
   });
   task.on_process(child);

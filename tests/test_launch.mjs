@@ -10,7 +10,8 @@ import { PassThrough } from 'node:stream';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import { test } from 'node:test';
 
-import { adopt_member_profile, borrowed_session, launch_discussion, launch_settings, room_configuration, room_files, room_models, room_member, room_member_model, save_launch_projects, save_launch_settings } from '../runner/discussion_launch.mjs';
+import { adopt_member_profile, borrowed_session, launch_discussion, launch_settings, room_configuration, room_files, room_models, room_member, room_member_model, room_workflow, save_launch_projects, save_launch_settings, validate_preset } from '../runner/discussion_launch.mjs';
+import { save_workflow } from '../runner/workflows.mjs';
 import { read_project_files } from '../runner/project_files.mjs';
 import { api, DiscussionStore, load_config } from '../runner/discussion_runner.mjs';
 import { FreeRoomRunner } from '../runner/free_runner.mjs';
@@ -172,14 +173,15 @@ test('local room-config route edits only the authorized paused room and reports 
 });
 
 /** Run the real website in a temporary database; no actual AI software is invoked. */
-async function fixture(t, local_launch = true) {
+async function fixture(t, local_launch = true, remote_entry = false) {
   const directory = mkdtempSync(join(tmpdir(), 'codiscuss-launch-'));
   const home = join(directory, 'service');
   const script = 'import sys; from backend.server import DiscussionServer,init_database; '
     + 'init_database(sys.argv[1],seed=False); '
     + `server=DiscussionServer(('127.0.0.1',0),sys.argv[1],local_launch=${local_launch ? 'True' : 'False'});\n`
     + `while server.server_port <= 10080:\n server.server_close(); server=DiscussionServer(('127.0.0.1',0),sys.argv[1],local_launch=${local_launch ? 'True' : 'False'})\n`
-    + 'print(server.server_port,flush=True); server.serve_forever()';
+    + (remote_entry ? "from threading import Thread; remote=DiscussionServer(('127.0.0.1',0),sys.argv[1],hub=server); Thread(target=remote.serve_forever,daemon=True).start(); print(str(server.server_port)+' '+str(remote.server_port),flush=True); " : 'print(server.server_port,flush=True); ')
+    + 'server.serve_forever()';
   const child = spawn(process.platform === 'win32' ? 'python' : 'python3', ['-u', '-c', script, join(directory, 'site.sqlite3')],
     { cwd: ROOT, windowsHide: true, env: { ...process.env, DISCUSS_SERVICE_HOME: home }, stdio: ['ignore', 'pipe', 'pipe'] });
   const closed = new Promise(resolve => child.once('close', resolve));
@@ -187,18 +189,18 @@ async function fixture(t, local_launch = true) {
   child.stderr.on('data', chunk => { errors += chunk; });
   t.after(async () => { child.kill(); await closed; rmSync(directory, { recursive: true, force: true }); });
   const port = await new Promise((resolve, reject) => {
-    child.stdout.once('data', data => resolve(Number(String(data).trim())));
+    child.stdout.once('data', data => resolve(String(data).trim().split(' ').map(Number)));
     child.once('error', reject);
     child.once('exit', () => reject(new Error(errors)));
   });
-  const site = `http://127.0.0.1:${port}`;
+  const site = `http://127.0.0.1:${port[0]}`;
   const participants = { Codex: { adapter: 'codex_cli', executable: process.execPath }, Claude: { adapter: 'claude', executable: process.execPath } };
   const input = { site, entry: 'web', participants,
     room: { title: '隔离启动验证', host: 'Codex', experts: { Codex: 'cli', Claude: 'cli' },
       limits: { max_rounds: 3, max_minutes: 15 }, submission_id: randomUUID() } };
   const starts = [];
   const options = { start_service: async value => { starts.push(value); return { running: true }; } };
-  return { directory, home, site, input, options, starts };
+  return { directory, home, site, remote_site: remote_entry ? `http://127.0.0.1:${port[1]}` : '', input, options, starts };
 }
 
 /** Read/write the real API, retaining structured failures for assertions. */
@@ -761,9 +763,7 @@ test('a free room launches without a run, and a user message reaches its member 
   assert.equal(config.mode, 'free');
   assert.ok(!JSON.stringify(first).includes(config.members.Claude.token));
   const path = `/api/rooms/${config.room}`;
-  assert.equal((await request(f.site, `${path}/messages`, { author: '用户', text: '改标题', submission_id: randomUUID() })).status, 403);
-  assert.equal((await request(f.site, `${path}/messages`, { author: '用户', text: '改标题', submission_id: randomUUID() },
-    { 'X-Discussion-Token': input.token })).status, 201);
+  assert.equal((await request(f.site, `${path}/messages`, { author: '用户', text: '改标题', submission_id: randomUUID() })).status, 201);
   const delivered = [];
   const service = new DiscussionService(f.home, (current, store) => new FreeRoomRunner(current, store,
     async (_, binding, task) => { delivered.push(task); return { status: 'accepted', session_id: 'claude-free' }; }));
@@ -781,6 +781,89 @@ test('a free room launches without a run, and a user message reaches its member 
   } finally { await service.close(); }
   assert.deepEqual(room.free.requests.map(item => item.status), ['completed']);
   assert.equal(delivered.length, 1);
+});
+
+test('a remote entry refuses anonymous room writes and accepts the owner credential', async t => {
+  const f = await fixture(t, true, true), token = randomUUID() + randomUUID();
+  const launched = await launch_discussion(f.home, { site: f.site, entry: 'web', participants: f.input.participants, token,
+    room: { title: '远程权限边界', mode: 'free', members: ['Claude'], submission_id: randomUUID() } }, f.options);
+  const path = `/api/rooms/${launched.room.id}/messages`;
+  const body = { author: '用户', text: '远程写入', submission_id: randomUUID() };
+  assert.equal((await request(f.remote_site, path, body)).status, 403);
+  assert.equal((await request(f.remote_site, path, body, { 'X-Discussion-Token': token })).status, 201);
+});
+
+test('workflow library commands keep the local and relayed boundaries, including preview before saving', async t => {
+  const f = await fixture(t);
+  const { relayed_command } = await import('../runner/remote_launch.mjs');
+  const headers = { 'X-CoDiscuss-Local': '1' }, workflow = { id: 'shared', label: '共享做法', skill: '先明确目标', agents: [] };
+  const local = await request(f.site, '/api/local/workflows', { action: 'save', workflow }, headers);
+  assert.equal(local.status, 200, JSON.stringify(local.body));
+  assert.equal((await request(f.site, '/api/local/workflows', { action: 'list' }, headers)).body.workflows[0].id, 'shared');
+  const command = relayed_command(f.site, 'workflows', { action: 'get', id: 'shared', site: 'https://wrong.test', access_file: 'ignored' });
+  assert.equal(command.input.site, f.site);
+  assert.equal(command.input.access_file, undefined);
+  assert.equal(relayed_command(f.site, 'room-workflow', { action: 'disable', room_id: 'one' }).input.site, f.site);
+  assert.throws(() => relayed_command(f.site, 'workflows', { action: 'preview', folder: 'private-folder' }), /粘贴导入/);
+  const parts = ['<!-- workflow-part: 1/1 id: imported -->\n<!-- workflow-file: SKILL.md -->\n---\nname: imported\n---\n导入做法'];
+  const preview = relayed_command(f.site, 'workflows', { action: 'preview', parts });
+  assert.equal((await request(f.site, '/api/local/workflows', preview.input, headers)).body.id, 'imported');
+  assert.deepEqual((await request(f.site, '/api/local/workflows', { action: 'list' }, headers)).body.workflows.map(item => item.id), ['shared']);
+});
+
+test('room cards preserve member text and portable settings without removed members, credentials or paths', async t => {
+  const f = await fixture(t), token = randomUUID() + randomUUID();
+  const prompt = '保留原文。\n第二行含 "引号"。';
+  const participants = {
+    'Codex-role': { ...f.input.participants.Codex, system_prompt: prompt, project_access: 'read', model: 'saved-model', effort: 'high' },
+    'Claude-ROLE': { ...f.input.participants.Claude, system_prompt: '复核事实。' },
+    Claude: f.input.participants.Claude,
+  };
+  const launched = await launch_discussion(f.home, { site: f.site, entry: 'web', token, participants,
+    room: { title: '卡片导出', mode: 'free', host: 'Codex-role', members: Object.keys(participants), submission_id: randomUUID() } }, f.options);
+  const config = load_config(launched.config_path);
+  await api(config, '/labels', { labels: { 'Codex-role': '执笔', 'Claude-ROLE': '审稿' } });
+  await api(config, '/descriptions', { descriptions: { 'Codex-role': '按骨架写正文', 'Claude-ROLE': '核对事实' } });
+  const member = (await api(config, '')).free.members.find(item => item.name === 'Claude');
+  await api(config, `/members/${member.id}`, { action: 'remove' });
+  const result = await request(f.site, '/api/local/workflows', { action: 'room-cards', room_id: config.room }, { 'X-CoDiscuss-Local': '1' });
+  assert.equal(result.status, 200, JSON.stringify(result.body));
+  assert.equal(result.body.cards.length, 2);
+  const writer = result.body.cards.find(card => card.name === 'Codex-role');
+  assert.deepEqual(writer, { card: 'role', name: 'Codex-role', label: '执笔', description: '按骨架写正文',
+    system_prompt: prompt, project_access: 'read', model: 'saved-model', effort: 'high' });
+  assert.equal(new Set(result.body.cards.map(card => card.card.toLowerCase())).size, 2);
+  const saved = save_workflow(f.home, { id: 'room-export', label: '房间导出', skill: '先写再审。', agents: result.body.cards }, validate_preset);
+  assert.equal(saved.agents.find(card => card.name === writer.name).system_prompt, prompt);
+  for (const card of result.body.cards) assert.ok(Object.keys(card).every(key =>
+    ['card', 'name', 'label', 'description', 'system_prompt', 'project_access', 'model', 'effort'].includes(key)));
+  assert.doesNotMatch(JSON.stringify(result.body), new RegExp(token));
+});
+
+test('a room without a project keeps its workflow at creation, disables work and recalls the original members', async t => {
+  const f = await fixture(t), token = randomUUID() + randomUUID();
+  save_workflow(f.home, { id: 'writing', label: '写作', skill: '先拟提纲，再写正文。', agents: [
+    { card: 'host', name: 'Codex', project_access: 'read' }, { card: 'writer', name: 'Claude', project_access: 'read' }] }, validate_preset);
+  const workflow = { id: 'writing', members: { host: 'Codex', writer: 'Claude' } };
+  const launched = await launch_discussion(f.home, { site: f.site, entry: 'web', participants: f.input.participants, token, workflow,
+    room: { title: '无项目工作流', mode: 'free', host: 'Codex', members: ['Codex', 'Claude'], submission_id: randomUUID() } }, f.options);
+  const input = { site: f.site, room_id: launched.room.id, token }, config = load_config(launched.config_path);
+  assert.equal(config.cwd || '', '');
+  assert.deepEqual(config.workflow, { ...workflow, enabled: true });
+  await assert.rejects(room_workflow(f.home, { ...input, token: 'wrong-owner', action: 'disable' }), /403/);
+  await api(config, '/messages', { author: '用户', text: '@Claude 写正文', to: ['Claude'], submission_id: randomUUID() });
+  await room_workflow(f.home, { ...input, action: 'disable' });
+  let room = await api(config, '');
+  assert.equal(room.free.members.find(member => member.name === 'Codex').status, 'active');
+  assert.equal(room.free.members.find(member => member.name === 'Claude').status, 'away');
+  assert.ok(room.free.requests.filter(request => request.member_id === room.free.members.find(member => member.name === 'Claude').id).every(request => request.status === 'cancelled'));
+  assert.equal(load_config(launched.config_path).workflow.enabled, false);
+  await room_member(f.home, { ...input, name: 'Claude', action: 'rejoin' });
+  await room_workflow(f.home, { ...input, action: 'enable', workflow });
+  room = await api(config, '');
+  assert.deepEqual(room.free.members.map(member => [member.name, member.status]), [['Codex', 'active'], ['Claude', 'active']]);
+  assert.equal(load_config(launched.config_path).workflow.enabled, true);
+  assert.deepEqual(load_config(launched.config_path).participants, config.participants);
 });
 
 test('members join, leave and return while a free room keeps running', async t => {

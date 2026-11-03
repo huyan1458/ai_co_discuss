@@ -20,6 +20,8 @@ const props = defineProps({
   fixed: { type: Object, default: null },
   changed: Boolean,
   saving: Boolean,
+  /** Shown but not editable, such as a prompt that comes from a workflow card. */
+  readonly: Boolean,
 });
 const open = defineModel("open", { type: Boolean, default: false });
 const draft = defineModel("draft", { type: String, default: "" });
@@ -29,7 +31,7 @@ const near_limit = computed(() => draft.value.length >= props.max * 0.9);
 
 /** Saving an unchanged text would only close the dialog, so the button and the shortcut both wait for a change. */
 function save() {
-  if (props.changed && !props.saving) emit("save");
+  if (props.changed && !props.saving && !props.readonly) emit("save");
 }
 </script>
 
@@ -45,12 +47,12 @@ function save() {
             <p>{{ section.text }}</p>
           </section>
         </details>
-        <div v-if="source" class="member-text-source">
+        <div v-if="source && !readonly" class="member-text-source">
           <UIcon name="i-lucide-bookmark" />
           <p><b>{{ source.tag }}</b>{{ source.text }}</p>
           <button type="button" @click="draft = source.text">{{ source.action }}</button>
         </div>
-        <UTextarea v-model="draft" :rows="rows" :maxlength="max" autoresize :maxrows="rows * 2" autofocus class="w-full" :aria-label="label" :placeholder="placeholder"
+        <UTextarea v-model="draft" :rows="rows" :maxlength="max" autoresize :maxrows="rows * 2" autofocus class="w-full" :aria-label="label" :placeholder="placeholder" :readonly="readonly"
           @keydown.enter.ctrl.prevent="save" @keydown.enter.meta.prevent="save" />
         <div class="member-text-meta">
           <span>{{ note }}</span>
@@ -59,7 +61,7 @@ function save() {
         <div class="member-text-footer">
           <div><slot name="extra" /></div>
           <UButton label="取消" color="neutral" variant="ghost" @click="open = false" />
-          <UButton type="submit" label="保存" class="channel-primary-button" :loading="saving" :disabled="!changed" />
+          <UButton v-if="!readonly" type="submit" label="保存" class="channel-primary-button" :loading="saving" :disabled="!changed" />
         </div>
       </form>
     </template>

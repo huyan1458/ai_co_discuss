@@ -50,6 +50,14 @@ async function save_rounds(value) {
   finally { saving_rounds.value = false; }
 }
 const members = computed(() => room.value.members || []);
+// The room's workflow as this computer registered it; its members carry a mark while it is enabled.
+const workflow = computed(() => saved.value?.workflow || null);
+const in_workflow = (name) => Boolean(workflow.value?.enabled && Object.values(workflow.value.members || {}).includes(name));
+
+/** Release the workflow after the user confirms: its members leave (the host stays) and their live work stops. */
+function disable_workflow() {
+  if (window.confirm(`停用工作流「${workflow.value.label}」？它带来的成员会离开（主持人保留），正在进行的工作随之停止。`)) act("disable_room_workflow");
+}
 
 /**
  * Being woken here is the usual case, so a woken member only names its kind (CLI / API / App), read from this
@@ -171,6 +179,7 @@ function actions(member) {
 }
 
 const inviting = ref(false);
+const invite_workflow_id = ref("");
 const describing = ref(""), describing_saving = ref(false);
 watch(() => room.value.id, () => { inviting.value = false; describing.value = ""; });
 
@@ -201,6 +210,7 @@ const created = computed(() => room.value.created_at ? new Date(room.value.creat
             <UAvatar :src="bridge.identities[member.name]?.icon" :text="bridge.identities[member.name]?.initials" :alt="member.name" size="md" class="channel-avatar" :class="bridge.identities[member.name]?.style" />
             <div class="member-card-name"><strong>{{ bridge.display_name(member.name) }}<span v-if="bridge.display_name(member.name) !== member.name" class="member-id">{{ member.name }}</span><UIcon v-if="member.role === 'host'" name="i-lucide-crown" title="主持人" /></strong><small v-if="room.descriptions?.[member.name]" :title="room.descriptions[member.name]">{{ room.descriptions[member.name] }}</small></div>
             <UButton v-if="actions(member).host" :icon="actions(member).host.icon" :label="actions(member).host.label" size="xs" variant="ghost" color="neutral" :disabled="actions(member).host.disabled" @click="actions(member).host.onSelect()" />
+            <UBadge v-if="in_workflow(member.name)" color="neutral" variant="outline" size="sm" :title="`来自工作流「${workflow.label}」，提示词按工作流卡片发送`">工作流</UBadge>
             <UBadge :color="unregistered(member) ? 'warning' : member.status === 'active' ? 'success' : 'neutral'" variant="subtle" size="sm">{{ unregistered(member) ? '待注册' : STATUS_LABELS[member.status] || member.status }}</UBadge>
           </header>
           <dl class="member-card-facts">
@@ -234,6 +244,14 @@ const created = computed(() => room.value.created_at ? new Date(room.value.creat
       <dl class="overview-settings">
         <div><dt>主持人</dt><dd>{{ room.host ? bridge.display_name(room.host) : '未指定' }}</dd></div>
         <div><dt>智能调度</dt><dd>{{ scheduler }}</dd></div>
+        <div><dt>工作流</dt><dd class="overview-workflow">
+          <template v-if="workflow">
+            <span :title="workflow.available ? '主持人按工作流的做法说明组织工作；它不保证工序' : '工作流已删除或无法读取，成员改用房间里的设置'">{{ workflow.label }} · {{ !workflow.available ? '不可用' : workflow.enabled ? '已启用' : '已停用' }}</span>
+            <UButton v-if="view.access?.can_manage && workflow.enabled" label="停用" size="xs" variant="ghost" color="neutral" @click="disable_workflow" />
+            <UButton v-else-if="view.access?.can_manage && workflow.available" label="重新启用" size="xs" variant="ghost" color="neutral" @click="invite_workflow_id = workflow.id; inviting = true" />
+          </template>
+          <span v-else class="overview-muted">未启用；邀请成员时可选择工作流</span>
+        </dd></div>
         <div v-if="room.free?.max_rounds"><dt>连续派活上限</dt><dd>
           <template v-if="view.access?.can_manage"><ChainRoundsField :model-value="rounds_shown" :disabled="saving_rounds" @update:model-value="save_rounds" />
 </template>
@@ -243,7 +261,7 @@ const created = computed(() => room.value.created_at ? new Date(room.value.creat
         <div v-if="created"><dt>创建时间</dt><dd>{{ created }}</dd></div>
       </dl>
     </section>
-    <InviteDialog v-model:open="inviting" :description="free ? '新成员加入后不打断其他成员；点卡片翻面可设置软件、模型、项目权限和要续接的已有会话。' : '新专家由程序按本机软件配置启动，或由你手动启动，加入本轮发言队列。'" />
+    <InviteDialog v-model:open="inviting" :workflow-id="invite_workflow_id" @update:open="(value) => { if (!value) invite_workflow_id = ''; }" :description="free ? '新成员加入后不打断其他成员；点卡片翻面可设置软件、模型、项目权限和要续接的已有会话。' : '新专家由程序按本机软件配置启动，或由你手动启动，加入本轮发言队列。'" />
     <UModal :content="{ onInteractOutside: (event) => event.preventDefault() }" :open="Boolean(model_edit)" :title="model_edit ? `${bridge.display_name(model_edit.name)} 的模型与强度` : ''" description="下次处理请求起生效，保留原会话。" :ui="{ content: 'glass-panel studio-modal', body: 'dialog-body' }" @update:open="(open) => { if (!open) model_edit = null; }">
       <template #body>
         <form v-if="model_edit" class="overview-model-form" @submit.prevent="save_model">
@@ -279,6 +297,7 @@ const created = computed(() => room.value.created_at ? new Date(room.value.creat
 .member-card-facts dt { margin-bottom: 4px; color: var(--ui-text-muted); font-size: 12px; }
 .member-card-facts dd { display: flex; align-items: center; min-height: 28px; margin: 0; color: var(--ui-text); }
 .overview-model { gap: 2px; min-width: 0; }
+.overview-workflow { display: flex; align-items: center; gap: 6px; }
 .overview-model > span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .overview-model-form { display: flex; flex-direction: column; gap: 12px; }
 .overview-model-form label { display: grid; gap: 6px; color: var(--ui-text-muted); font-size: 12px; }

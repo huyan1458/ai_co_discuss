@@ -11,7 +11,8 @@ import { fileURLToPath } from 'node:url';
 import { listen_local } from './local_port.mjs';
 import { API_PROVIDERS, api_base_url, api_check, api_generate, api_history, api_models, api_request, api_response, api_tool_results, read_api_key, save_api_key } from '../runner/discussion_api.mjs';
 import { participant_tools, system_prompt } from '../runner/adapters/api.mjs';
-import { launch_discussion } from '../runner/discussion_launch.mjs';
+import { launch_discussion, validate_preset } from '../runner/discussion_launch.mjs';
+import { save_workflow } from '../runner/workflows.mjs';
 import { api, DiscussionStore, load_config } from '../runner/discussion_runner.mjs';
 import { FreeRoomRunner } from '../runner/free_runner.mjs';
 import { ROUTE_GUIDED_PROMPT_VERSION } from '../runner/scheduler.mjs';
@@ -174,6 +175,37 @@ test('API host schedules a real session round and providers answer through execu
   assert.ok(!readFileSync(r.started.config_path, 'utf8').includes(SECRET));
   assert.ok(mock.calls.some(call => call.path.includes('/models/Antigravity%2Fmodel.1:generateContent')));
   assert.equal(room.session.status, 'concluded');
+});
+
+test('API workflow tasks identify the host playbook and give each member only its own current card prompt', async t => {
+  const f = await site_fixture(t);
+  const mock = await model_fixture(t, call => {
+    const { task } = room_prompt(call);
+    const system = call.body.instructions || call.body.system || call.body.messages?.find(item => item.role === 'system')?.content;
+    if (task.role === 'host') {
+      assert.equal(task.workflow.id, 'writing');
+      assert.equal(task.workflow.members.length, 1);
+      assert.equal(task.workflow.skill, undefined, 'the body is delivered only in the system prompt');
+      assert.match(system, /本房间启用了工作流「写作」/);
+      assert.match(system, /先拟提纲，再写正文/);
+    } else {
+      assert.equal(task.workflow, undefined);
+      assert.match(system, /当前卡片专属提示词/);
+      assert.doesNotMatch(system, /先拟提纲，再写正文/);
+    }
+    return tool_reply(call, 'submit_chat', { text: '完成' });
+  });
+  const configured = profiles(f.home, mock.base_url), participants = { Codex: configured.Codex, Claude: configured.Claude };
+  save_workflow(f.home, { id: 'writing', label: '写作', skill: '先拟提纲，再写正文。', agents: [
+    { card: 'writer', name: 'Claude', system_prompt: '当前卡片专属提示词' }] }, validate_preset);
+  const started = await launch_discussion(f.home, { site: f.site, entry: 'web', participants,
+    workflow: { id: 'writing', members: { writer: 'Claude' } },
+    room: { title: '工作流任务', mode: 'free', host: 'Codex', members: ['Codex', 'Claude'], submission_id: randomUUID() } }, { start_service: async () => ({ running: true }) });
+  const config = load_config(started.config_path), store = new DiscussionStore(config.directory), runner = new FreeRoomRunner(config, store);
+  f.cleanup.push(() => { runner.stop_children(); store.close(); });
+  await api(config, '/messages', { author: '用户', text: '请两位回应', to: ['Codex', 'Claude'], submission_id: randomUUID() });
+  await until(async () => (await api(config, '')).free.requests.every(item => item.status === 'completed'), () => runner.tick());
+  assert.equal(mock.calls.length, 2);
 });
 
 test('API host tools read the latest roster and expose discussion actions only for a session host request', async t => {

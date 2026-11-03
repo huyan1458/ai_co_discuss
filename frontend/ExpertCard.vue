@@ -6,6 +6,8 @@ import EffortSlider from "./EffortSlider.vue";
 import ApiSettings from "./ApiSettings.vue";
 import MemberDescriptionDialog from "./MemberDescriptionDialog.vue";
 import MemberTextDialog from "./MemberTextDialog.vue";
+import WorkflowLibrary from "./WorkflowLibrary.vue";
+import { adapter_profile } from "../runner/adapters/profiles.mjs";
 import { EXPERT_PROMPT_HEADING, EXPERT_PROMPT_PRESETS, MAX_EXPERT_PROMPT, READ_RULE, access_label, access_options, free_task_text } from "../runner/expert_prompts.mjs";
 
 const props = defineProps({
@@ -19,9 +21,16 @@ const props = defineProps({
   // True where the form picks a host, so the card states whether this one may host.
   hosting: Boolean,
   // An existing conversation to resume; null where the form offers no such choice (the invite dialog does).
+  // The workflow this card came from: its prompt is read from the workflow at each execution, so here it is read-only.
+  workflow: { type: String, default: "" },
+  // Imported presets start read-only until the user grants the requested level on that card.
+  access_locked: Boolean,
 });
+// Library edits stay in this draft; no room profile, software default or saved expert preset is changed.
+const preset = defineModel("preset", { type: Object, default: null });
 const emit = defineEmits(["remove", "mode", "host"]);
 const { view, bridge } = inject("discussion");
+const workflow_library_open = ref(false);
 // Feel.words("smooth, crisp"): 2.615 Hz reads as a deliberate turn; ζ .96 avoids bounce.
 // Unit mass: this is a button-controlled angular spring, with no drag-weight effect.
 const FLIP_SPRING = { mass: 1, stiffness: 270.0323764138049, damping: 31.550710806760762 };
@@ -29,14 +38,18 @@ const BACK_ANGLE = 180;
 const angle = useSpring(0, FLIP_SPRING);
 const card = ref(null), front_button = ref(null), back_button = ref(null);
 const back = ref(false), visible_back = ref(false);
-const profile = computed(() => view.value.launch.profiles[props.name] || {});
+const profile = computed(() => preset.value ? {
+  ...view.value.launch.profiles[bridge.platform_of(props.name)],
+  model: "", effort: "", system_prompt: "", project_access: "read", ...preset.value,
+} : view.value.launch.profiles[props.name] || {});
+const member_label = computed(() => preset.value ? preset.value.label || bridge.default_name(props.name) : bridge.member_label(props.name));
 const entry_items = computed(() => bridge.launch_clients[props.name] || []);
 // Manual start needs a local AI session; a platform reachable only through its API cannot offer it.
 const offered = computed(() => props.choices.filter((option) => option !== "manual" || entry_items.value.some((item) => item.value !== "api")));
 const automatic = computed(() => props.mode === "cli");
 // Short labels for the front control; the 启动 row spells out what each one means.
 const ACCESS_LABELS = { cli: "程序启动", manual: "手动启动" };
-const api_mode = computed(() => automatic.value && profile.value.adapter === "api");
+const api_mode = computed(() => !preset.value && automatic.value && profile.value.adapter === "api");
 const api_check = ref({ state: "" });
 // A previous check result no longer applies once any checked field changes.
 watch(() => [profile.value.base_url, profile.value.api_protocol, profile.value.model, profile.value.api_key_ref], () => { api_check.value = { state: "" }; });
@@ -61,15 +74,16 @@ const MANUAL_NOTES = {
 const manual_note = computed(() => MANUAL_NOTES[bridge.platform_of(props.name)] || "");
 const resuming = computed(() => Boolean(profile.value.session_id));
 // Software paths and models typed here belong to this browser's computer, so a relayed member keeps the paired computer's settings.
-const can_flip = computed(() => automatic.value && entry_items.value.length > 0 && !(view.value.launch.relay && !view.value.launch.available));
-const card_label = computed(() => `配置 ${props.name} 的启动方式`);
-const models = computed(() => bridge.launch_model_state(props.name, view.value.launch));
-const configurable = computed(() => Boolean(automatic.value && models.value.supported));
+const can_flip = computed(() => Boolean(preset.value) || automatic.value && entry_items.value.length > 0 && !(view.value.launch.relay && !view.value.launch.available));
+const card_label = computed(() => preset.value ? `编辑 ${props.name} 的卡片` : `配置 ${props.name} 的启动方式`);
+const models = computed(() => bridge.launch_model_state(props.name, view.value.launch, profile.value));
+const preset_model_input = computed(() => preset.value && !adapter_profile(profile.value.adapter)?.models);
+const configurable = computed(() => Boolean(preset.value || automatic.value && models.value.supported));
 const configuration_note = computed(() => configurable.value && connection.value.length ? "补齐上方连接后，可在这里选择模型与思考强度。"
   : profile.value.adapter ? "模型与思考强度在 App 原聊天中选择，本页不覆盖 App 设置。" : "先选择软件入口。支持启动参数的 CLI 可在这里设置模型与强度。");
 const EFFORT_LABELS = { low: "Low", medium: "Medium", high: "High", xhigh: "Extra High", max: "Max", ultra: "Ultra" };
 const effort_items = computed(() => {
-  const levels = models.value.efforts;
+  const levels = models.value.efforts || (preset.value ? adapter_profile(profile.value.adapter)?.efforts : null);
   return levels?.length ? [{ label: "默认强度", value: "" }, ...levels.map((level) => ({ label: EFFORT_LABELS[level] || level, value: level }))] : null;
 });
 // An empty choice shows what the software's own settings select; only when they say nothing does the software decide.
@@ -81,21 +95,27 @@ const effort_label = computed(() => profile.value.effort ? EFFORT_LABELS[profile
 // The front lists the read-only configuration; strength appears only where this page sets it.
 // Room speech and project files are separate: only woken CLIs and API members get a project choice from this page,
 // Apps and manual sessions keep their own settings.
-const sets_access = computed(() => automatic.value && bridge.launch_can_set_access(props.name, view.value.launch));
-const local_connection = computed(() => automatic.value && profile.value.adapter !== "api");
+const sets_access = computed(() => Boolean(preset.value) || automatic.value && bridge.launch_can_set_access(props.name, view.value.launch));
+const local_connection = computed(() => !preset.value && automatic.value && profile.value.adapter !== "api");
 const access = computed(() => profile.value.project_access || view.value.launch.workspace?.project_access || "read");
 // Who starts the member and whether it can host: the two things the delivery choice changes and a user must see before inviting.
 const launch_fact = computed(() => props.mode === "manual" ? "你来启动 · 自主发言"
   : `程序启动 · ${resuming.value ? "续接会话" : profile.value.adapter === "api" ? "调用 API" : "新会话"}`);
 const host_fact = computed(() => "不可（须本机唤醒）");
 // The front states only what is decided or an exception; placeholders such as "set in the original software" stay off it.
-const facts = computed(() => [
+const facts = computed(() => preset.value ? [
+  ...preset.value.needs_platform ? [{ label: "平台", value: "本机未配置，请换平台", tone: "warn" }] : [],
+  { label: "模型", value: profile.value.model || "软件默认模型" },
+  ...profile.value.effort ? [{ label: "强度", value: effort_label.value }] : [],
+  { label: "项目", value: access_label(access.value), ...(access.value !== "read" ? { tone: "warn" } : {}) },
+] : [
   ...automatic.value ? [{ label: "状态", value: props.status.text, tone: props.status.tone }] : [],
   { label: "启动", value: launch_fact.value },
   ...automatic.value ? [{ label: "软件", value: entry_label.value }] : [],
   ...configurable.value ? [{ label: "模型", value: profile.value.model || models.value.defaults?.model || "软件默认模型" }] : [],
   ...configurable.value && profile.value.adapter !== "api" ? [{ label: "强度", value: effort_label.value }] : [],
-  ...sets_access.value ? [{ label: "项目", value: access_label(access.value) }] : [],
+  // A workflow card that may change files is pointed out before it joins.
+  ...sets_access.value ? [{ label: "项目", value: access_label(access.value), ...(props.workflow && access.value !== "read" ? { tone: "warn" } : {}) }] : [],
   // The crown already offers hosting and the badge names the host, so only the refusal needs a row.
   ...props.hosting && !props.host && !props.hostable ? [{ label: "主持", value: host_fact.value }] : [],
 ]);
@@ -138,14 +158,15 @@ function flip(next) {
   if (next && !can_flip.value) return;
   card.value?.focus({ preventScroll: true });
   asked.value = next ? required_connection() : [];
-  if (next && !back.value) { opened_with = { profile: JSON.parse(JSON.stringify(profile.value)), mode: props.mode }; }
+  if (next && !back.value) { opened_with = { profile: JSON.parse(JSON.stringify(preset.value || profile.value)), mode: props.mode }; }
   back.value = next;
 }
 
 /** Discard edits made since the back opened, then return to the front. */
 function cancel() {
   if (opened_with) {
-    bridge.restore_launch_profile(props.name, opened_with.profile);
+    if (preset.value) preset.value = opened_with.profile;
+    else bridge.restore_launch_profile(props.name, opened_with.profile);
     if (opened_with.mode !== props.mode) emit("mode", opened_with.mode);
     opened_with = null;
   }
@@ -154,15 +175,20 @@ function cancel() {
 
 // The description says what this member is good at, for the scheduler and the host; any delivery mode may have one.
 // Drafts live in the bridge, so reading the published view ties this to each update.
-const description = computed(() => view.value && bridge.description_draft(props.name).trim());
+const description = computed(() => preset.value ? (preset.value.description || "").trim() : view.value && bridge.description_draft(props.name).trim());
 const describing = ref(false);
 const describe_title = computed(() => description.value ? `描述：${description.value}` : "添加描述：擅长什么、适合分到什么工作");
 
 /** Keep the card's description for the room or invitation, and optionally as this platform's default. */
 function save_description({ text, label, as_template }) {
-  bridge.write_description_draft(props.name, text);
-  if (label !== undefined) bridge.write_label_draft(props.name, label);
-  if (as_template) bridge.save_description_template(props.name, text);
+  if (preset.value) {
+    preset.value.description = text;
+    if (label !== undefined) preset.value.label = label;
+  } else {
+    bridge.write_description_draft(props.name, text);
+    if (label !== undefined) bridge.write_label_draft(props.name, label);
+    if (as_template) bridge.save_description_template(props.name, text);
+  }
   describing.value = false;
 }
 
@@ -202,7 +228,7 @@ async function save_named_preset() {
 
 // The expert prompt adds guidance for this member alone; its own text, even empty, replaces the software's preset.
 const prompt_preset = computed(() => EXPERT_PROMPT_PRESETS[profile.value.adapter] || "");
-const prompt_own = computed(() => Object.hasOwn(profile.value, "system_prompt"));
+const prompt_own = computed(() => preset.value ? Boolean(preset.value.system_prompt?.trim()) : Object.hasOwn(profile.value, "system_prompt"));
 const prompt_text = computed(() => (prompt_own.value ? profile.value.system_prompt : prompt_preset.value).trim());
 // The back has no room for a row, so the heading carries an icon whose tooltip states the prompt's source and first line.
 const prompt_title = computed(() => !prompt_text.value ? "专属提示词：未设置，点击添加"
@@ -212,6 +238,7 @@ const prompt_changed = computed(() => prompt_draft.value.trim() !== prompt_text.
 // The dialog says live whether the text being typed still follows the preset, replaces it, or leaves this expert without one.
 const prompt_note = computed(() => {
   const text = prompt_draft.value.trim();
+  if (preset.value) return text ? "保存到这张工作流卡片，Ctrl + Enter 保存" : "留空使用软件预设";
   if (!text) return prompt_preset.value ? "留空：这位专家不使用预设，也没有专属提示词" : "留空表示不使用";
   if (text === prompt_preset.value.trim()) return "与软件预设一致，预设更新时自动跟随";
   return prompt_preset.value ? "已改写，不再跟随软件预设" : "只发给这位专家，Ctrl + Enter 保存";
@@ -221,6 +248,7 @@ const prompt_source = computed(() => prompt_preset.value && prompt_draft.value.t
 // What the runner adds for this member, built by the runner's own function so the dialog never drifts from what is sent;
 // values known only at delivery are placeholders. An API expert gets the skills as its system prompt instead.
 const prompt_fixed = computed(() => {
+  if (preset.value) return null;
   const adapter = profile.value.adapter;
   if (!adapter || adapter === "api") return null;
   // The local service runs on this computer, so its command name and the Windows read rule follow this browser's system.
@@ -249,14 +277,32 @@ function open_prompt() {
 /** Text equal to the preset is stored as following it, so later preset updates still reach this member. */
 function save_prompt() {
   const text = prompt_draft.value.trim();
-  bridge.write_launch(props.name, "system_prompt", text === prompt_preset.value.trim() ? null : text);
+  write_setting("system_prompt", preset.value ? text : text === prompt_preset.value.trim() ? null : text);
   prompt_open.value = false;
+}
+
+/** Write either a library draft or this room's launch profile, never both. */
+function write_setting(field, value) {
+  if (preset.value) preset.value[field] = value;
+  else bridge.write_launch(props.name, field, value);
+}
+
+/** A model change clears the old model's effort override in a portable card. */
+function write_model(value) {
+  if (!preset.value) return bridge.write_launch_model(props.name, value);
+  write_setting("model", value === "__default__" ? "" : value);
+  write_setting("effort", "");
+}
+
+/** Read a catalog with this card's effective profile without saving it to room settings. */
+function load_models(force = false) {
+  return bridge.load_launch_models(props.name, force, profile.value);
 }
 
 /** Restore the CLI defaults for this participant only. */
 function reset_model() {
-  bridge.write_launch(props.name, "model", "");
-  bridge.write_launch(props.name, "effort", "");
+  write_setting("model", "");
+  write_setting("effort", "");
 }
 
 /** Switch this card's delivery; every dialog showing the card shares this one rule. */
@@ -303,7 +349,7 @@ watch(back, (open) => {
 watch(back, (next) => angle.set(next ? BACK_ANGLE : 0));
 // Prefetch as soon as the card can use a catalog, so flipping does not wait on a slow CLI query.
 watch(() => [configurable.value, view.value.launch.available, profile.value.adapter],
-  ([enabled, available]) => { if (enabled && available) bridge.load_launch_models(props.name); }, { immediate: true });
+  ([enabled, available]) => { if (enabled && available) load_models(); }, { immediate: true });
 onBeforeUnmount(() => { document.removeEventListener("pointerdown", close_on_outside, true); stop_observing(); stop_settling(); angle.stop(); });
 </script>
 
@@ -318,7 +364,7 @@ onBeforeUnmount(() => { document.removeEventListener("pointerdown", close_on_out
             <UAvatar :src="bridge.identities[name]?.icon" :text="bridge.identities[name]?.initials" :alt="name" size="sm" class="channel-avatar expert-card-avatar" :class="bridge.identities[name]?.style" />
             <span class="expert-card-names">
               <span v-if="manual"><strong>{{ bridge.display_name(name) }}（手动）<span v-if="bridge.display_name(name) !== name" class="member-id">{{ name }}</span></strong><span v-if="host && !hostable" class="expert-card-badge">主持</span></span>
-              <span v-else><strong>{{ bridge.member_label(name) }}<span v-if="bridge.member_label(name) !== name" class="member-id">{{ name }}</span></strong><span v-if="host && !hostable" class="expert-card-badge">主持</span></span>
+              <span v-else><strong>{{ member_label }}<span v-if="member_label !== name" class="member-id">{{ name }}</span></strong><span v-if="host && !hostable" class="expert-card-badge">主持</span></span>
               <small v-if="description" :title="description">{{ description }}</small>
             </span>
           </span>
@@ -344,12 +390,12 @@ onBeforeUnmount(() => { document.removeEventListener("pointerdown", close_on_out
       </div>
       <div v-if="can_flip" class="expert-card-face expert-card-back" :inert="!visible_back" :aria-hidden="!visible_back">
         <div class="expert-card-back-body">
-        <div class="expert-card-heading"><strong>{{ bridge.member_label(name) }}<span v-if="bridge.member_label(name) !== name">{{ name }}</span><span>设置</span></strong>
+        <div class="expert-card-heading"><strong>{{ member_label }}<span v-if="member_label !== name">{{ name }}</span><span>设置</span></strong>
           <span class="expert-card-heading-tools">
           <button type="button" class="expert-card-back-tool" :class="{ 'is-set': description }" :aria-label="`编辑 ${name} 的描述`" :title="describe_title" @click="describing = true"><UIcon name="i-lucide-user-pen" /></button>
-          <button v-if="profile.adapter" type="button" class="expert-card-back-tool" :class="{ 'is-set': prompt_text, 'is-own': prompt_own && prompt_text }" :title="prompt_title" :aria-label="`编辑 ${name} 的专属提示词`" @click="open_prompt"><UIcon name="i-lucide-scroll-text" /></button>
+          <button v-if="preset || profile.adapter" type="button" class="expert-card-back-tool" :class="{ 'is-set': prompt_text, 'is-own': prompt_own && prompt_text }" :title="prompt_title" :aria-label="`编辑 ${name} 的专属提示词`" @click="open_prompt"><UIcon name="i-lucide-scroll-text" /></button>
           <UButton v-if="api_mode" icon="i-lucide-zap" :aria-label="`检查 ${name} 的 API 配置`" title="检查配置：发送一次极短请求，核对地址、密钥、协议与模型" size="xs" :color="api_check.state === 'ok' ? 'success' : api_check.state === 'error' ? 'error' : 'neutral'" variant="ghost" :loading="api_check.state === 'loading'" :disabled="!profile.api_key_ref || !profile.model || !view.launch.available" @click="check_api" /></span></div>
-        <div v-if="automatic && entry_items.length > 1" class="expert-card-field">
+        <div v-if="!preset && automatic && entry_items.length > 1" class="expert-card-field">
           <span>接入</span><USelect :model-value="profile.adapter || ''" :items="entry_items" placeholder="选择 API / App / CLI" :aria-label="`${name} 软件入口`" size="xs" class="w-full" @update:model-value="bridge.write_launch(name, 'adapter', $event)" />
         </div>
         <div v-for="item in connection" :key="item.field" class="expert-card-field">
@@ -359,17 +405,19 @@ onBeforeUnmount(() => { document.removeEventListener("pointerdown", close_on_out
           <span>项目</span>
           <div class="expert-card-modes" role="radiogroup" :aria-label="`${name} 的项目文件权限`">
             <button v-for="option in access_options(profile.adapter)" :key="option.value" type="button" role="radio" :title="option.hint"
-              :disabled="option.disabled" :aria-checked="access === option.value" @click="bridge.write_launch(name, 'project_access', option.value)">{{ option.label }}</button>
+              :disabled="access_locked || option.disabled" :aria-checked="access === option.value" @click="write_setting('project_access', option.value)">{{ option.label }}</button>
           </div>
         </div>
         <ApiSettings v-if="api_mode" :name="name" />
         <template v-else-if="configurable && !connection.length">
           <div class="expert-card-field">
-            <span>模型</span><USelect :model-value="profile.model || '__default__'" :items="models.items" :title="models.source" :aria-label="`${name} 使用的模型`" size="xs" class="w-full" @update:model-value="bridge.write_launch_model(name, $event)" />
+            <span>模型</span>
+            <UInput v-if="preset_model_input" :model-value="profile.model || ''" placeholder="留空使用默认模型" :aria-label="`${name} 使用的模型`" size="xs" class="w-full" @update:model-value="write_model" />
+            <USelect v-else :model-value="profile.model || '__default__'" :items="models.items" :title="models.source" :aria-label="`${name} 使用的模型`" size="xs" class="w-full" @update:model-value="write_model" />
           </div>
-          <div v-if="models.loading || models.error" class="expert-card-catalog"><span>{{ models.loading ? '正在读取软件模型列表…' : models.error }}</span><button v-if="!models.loading && models.error && view.launch.available" type="button" @click="bridge.load_launch_models(name, true)">重试</button></div>
+          <div v-if="models.loading || models.error" class="expert-card-catalog"><span>{{ models.loading ? '正在读取软件模型列表…' : models.error }}</span><button v-if="!models.loading && models.error && view.launch.available" type="button" @click="load_models(true)">重试</button></div>
           <div v-if="effort_items" class="expert-card-effort">
-            <EffortSlider caption="强度" :items="effort_items" :model-value="profile.effort || ''" :label="`${name} 的思考强度`" @update:model-value="bridge.write_launch(name, 'effort', $event)" />
+            <EffortSlider caption="强度" :items="effort_items" :model-value="profile.effort || ''" :label="`${name} 的思考强度`" @update:model-value="write_setting('effort', $event)" />
           </div>
           <p v-else class="expert-card-note">{{ models.effort_note }}</p>
           <button type="button" class="expert-card-defaults" title="留空使用 CLI 默认值" :aria-label="`恢复 ${name} 的默认模型与强度`" :disabled="!profile.model && !profile.effort" @click="reset_model">恢复默认</button>
@@ -377,7 +425,7 @@ onBeforeUnmount(() => { document.removeEventListener("pointerdown", close_on_out
         <p v-else class="expert-card-note"><UIcon name="i-lucide-monitor" />{{ configuration_note }}</p>
         </div>
         <span class="expert-card-flip-actions">
-          <template v-if="view.launch.available">
+          <template v-if="view.launch.available && !workflow && !preset">
             <button v-if="own_preset" type="button" class="expert-card-flip is-cancel" :aria-label="`删除预设「${name}」`" title="删除预设" @click="bridge.delete_expert_preset(name)"><UIcon name="i-lucide-trash-2" /></button>
             <button type="button" class="expert-card-flip is-cancel" :aria-label="`${own_preset ? '更新' : '存为'}预设「${name}」`" title="存下描述、提示词、项目权限、模型与强度，之后在“预设”行一键加入" @click="save_preset">{{ own_preset ? '更新预设' : '存为预设' }}</button>
           </template>
@@ -386,11 +434,14 @@ onBeforeUnmount(() => { document.removeEventListener("pointerdown", close_on_out
         </span>
       </div>
     </motion.div>
-    <MemberDescriptionDialog v-model:open="describing" :name="name" :platform="bridge.default_name(bridge.platform_of(name))" :default_label="bridge.default_name(name)" :text="description" :label="bridge.label_draft(name)" :template="bridge.description_template(name)" @save="save_description" />
+    <MemberDescriptionDialog v-model:open="describing" :name="name" :platform="preset ? '' : bridge.default_name(bridge.platform_of(name))" :default_label="bridge.default_name(name)" :text="description" :label="preset ? preset.label || '' : bridge.label_draft(name)" :template="preset ? '' : bridge.description_template(name)" @save="save_description" />
     <MemberTextDialog v-model:open="prompt_open" v-model:draft="prompt_draft" :title="`${name} 的专属提示词`"
-      description="只发给这位专家，补充它的做法与偏好；不改变权限和技能规则。" :label="`${name} 的专属提示词`"
-      placeholder="例如：回答先给结论，控制在三段以内。" :max="MAX_EXPERT_PROMPT" :rows="8"
-      :note="prompt_note" :source="prompt_source" :fixed="prompt_fixed" :changed="prompt_changed" @save="save_prompt" />
+      :description="workflow ? `来自工作流「${workflow}」，每次执行时按工作流里的这张卡片发送；请在工作流库中修改，修改会作用于所有启用它的房间。` : '只发给这位专家，补充它的做法与偏好；不改变权限和技能规则。'" :label="`${name} 的专属提示词`"
+      placeholder="例如：回答先给结论，控制在三段以内。" :max="MAX_EXPERT_PROMPT" :rows="8" :readonly="Boolean(workflow)"
+      :note="workflow ? '只读' : prompt_note" :source="prompt_source" :fixed="prompt_fixed" :changed="prompt_changed" @save="save_prompt">
+      <template v-if="workflow" #extra><UButton label="去工作流库编辑" icon="i-lucide-library" size="sm" variant="ghost" @click="workflow_library_open = true" /></template>
+    </MemberTextDialog>
+    <WorkflowLibrary v-if="workflow" v-model:open="workflow_library_open" />
     <UModal :content="{ onInteractOutside: (event) => event.preventDefault() }" v-model:open="naming" title="存为专家预设" description="存下描述、提示词、项目权限、模型与强度，之后在“预设”行一键加入。" :ui="{ content: 'glass-panel studio-modal', body: 'dialog-body' }">
       <template #body>
         <form class="expert-card-naming" @submit.prevent="save_named_preset">

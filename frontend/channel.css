@@ -500,8 +500,9 @@ html[data-theme^="channel"] .channel-message.channel-topic-card { color: var(--u
 /* Read-aloud following is on: the pill takes the accent border so the state shows at a glance. */
 :root[data-theme^="channel"] .channel-listen-pill.is-on { border-color: var(--ui-primary); color: var(--ui-primary); }
 /* On a pointer screen it is only a quiet mark beside the selection's end, faded in once the selection settles. */
-.channel-listen-mark { position: fixed; z-index: 40; display: inline-flex; align-items: center; gap: 5px; height: 28px; padding: 0 11px 0 9px; border: 0; border-radius: 999px; background: var(--ui-primary); color: #fff; font-size: 12px; font-weight: 600; white-space: nowrap; box-shadow: 0 4px 14px color-mix(in srgb, var(--ui-primary) 35%, transparent); animation: channel-listen-in .15s ease-out; }
-.channel-listen-mark:hover { background: color-mix(in srgb, var(--ui-primary) 88%, #000); }
+.channel-listen-mark { position: fixed; z-index: 40; display: inline-flex; align-items: center; gap: 5px; height: 28px; padding: 0 11px 0 9px; border: 0; border-radius: 999px; background: #5865f2; color: #fff; font-size: 12px; font-weight: 600; white-space: nowrap; box-shadow: 0 4px 14px #0006; animation: channel-listen-in .15s ease-out; }
+/* Same fill as the primary buttons: the lighter accent under white text read washed out on the dark theme. */
+.channel-listen-mark:hover { background: #4752c4; }
 .channel-listen-mark > [class*="icon"] { width: 14px; height: 14px; }
 @keyframes channel-listen-in { from { opacity: 0; } }
 .channel-latest-button { display: grid; place-items: center; width: 32px; height: 32px; padding: 0; line-height: 1; border: 1px solid #ffffff24; border-radius: 50%; background: #292b30; box-shadow: 0 2px 8px #0004; pointer-events: auto; }
@@ -525,23 +526,32 @@ html[data-theme^="channel"] .channel-composer:is(:focus, :focus-within, :has(:fo
 .channel-composer-footer { display: flex; flex-wrap: wrap; align-items: center; justify-content: flex-start !important; padding: 4px 10px 10px !important; gap: 4px !important; }
 .channel-composer-footer > .channel-round-button { flex-shrink: 0; }
 .channel-composer-footer > .channel-round-button { margin-left: auto; }
-/* Voice input sits just before send; while recording, live level bars and the elapsed time sit before it. */
-.channel-composer-footer > :is(.channel-voice-levels, .channel-voice-button) { margin-left: auto; }
-.channel-voice-levels + .channel-voice-button, .channel-voice-button + .channel-round-button { margin-left: 0; }
+/* Voice input sits just before send. While it is on, the footer is discard (left), live levels and time (middle), finish (right). */
+.channel-composer-footer > .channel-voice-button { margin-left: auto; }
+.channel-voice-button + .channel-voice-button, .channel-voice-button + .channel-round-button, .channel-composer-footer > .channel-voice-button:first-child { margin-left: 0; }
 .channel-composer-footer > .channel-voice-button { width: 30px; height: 30px; justify-content: center; border-radius: 8px; color: var(--ui-text-muted); }
 .channel-composer-footer > .channel-voice-button:hover:not(:disabled) { background: var(--channel-ghost-hover); color: var(--ui-text-highlighted); }
-.channel-composer-footer > .channel-voice-button.is-recording { color: var(--ui-error); }
-.channel-voice-button + .channel-voice-button { margin-left: 0; }
 .channel-composer-footer > .channel-broadcast-button.is-on { color: var(--ui-primary); background: color-mix(in srgb, var(--ui-primary) 14%, transparent); }
-.channel-voice-levels { display: flex; align-items: center; gap: 2px; height: 22px; padding: 0 4px; }
-.channel-voice-levels i { width: 3px; height: 100%; border-radius: 2px; background: var(--ui-text-muted); transform-origin: center; transition: transform .08s linear; }
-.channel-voice-levels small { margin-left: 6px; color: var(--ui-text-muted); font-size: 12px; font-variant-numeric: tabular-nums; }
+.channel-composer-footer > .channel-voice-levels { display: flex; flex: 1 1 0; align-items: center; justify-content: center; gap: 10px; min-width: 0; height: 30px; margin: 0; }
+.channel-voice-bars { display: flex; flex: 0 1 auto; align-items: center; justify-content: flex-end; gap: 3px; min-width: 0; height: 22px; overflow: hidden; }
+.channel-voice-bars i { flex-shrink: 0; width: 3px; height: 100%; border-radius: 2px; background: var(--ui-error); transform-origin: center; transition: transform .08s linear; }
+.channel-voice-levels small { color: var(--ui-text-muted); font-size: 13px; font-variant-numeric: tabular-nums; }
+.channel-voice-levels .channel-voice-hint { flex-shrink: 0; white-space: nowrap; }
+.channel-voice-levels.is-discarding .channel-voice-bars i { background: var(--ui-text-dimmed); }
+.channel-voice-levels.is-discarding .channel-voice-hint { color: var(--ui-error); }
+/* Press-and-hold on touch: no scrolling, text selection or long-press menu may take the gesture. */
+.channel-voice-mic { touch-action: none; user-select: none; -webkit-user-select: none; -webkit-touch-callout: none; }
 /* Footer controls are quiet ghost chips; only hover and the open menu give them a surface. */
 .channel-composer-footer > button[aria-label="添加附件"] { width: 30px; height: 30px; justify-content: center; border-radius: 8px; color: var(--ui-text-muted); }
 .channel-composer-footer > button[aria-label="添加附件"]:hover:not(:disabled) { background: var(--channel-ghost-hover); color: var(--ui-text-highlighted); }
 html[data-theme^="channel"] .channel-round-button { width: 32px; height: 32px; min-width: 32px; min-height: 32px; padding: 0; justify-content: center; border-radius: 50%; transition: background .12s, transform .1s; }
 html[data-theme^="channel"] .channel-round-button:active:not(:disabled) { transform: scale(.95); }
 .channel-round-button > [class*="icon"] { width: 16px; height: 16px; }
+/* Touch screens: footer keys get finger-sized targets. */
+@media (pointer: coarse) {
+  .channel-composer-footer > :is(.channel-voice-button, button[aria-label="添加附件"]) { width: 38px; height: 38px; }
+  html[data-theme^="channel"] .channel-composer-footer > .channel-round-button { width: 38px; height: 38px; min-width: 38px; min-height: 38px; }
+}
 .channel-reply-draft { display: flex; gap: 7px; align-items: center; padding: 7px 12px; border-bottom: 1px solid #ffffff0b; color: #c6d1ef; font-size: 12px; background: #2d3038; }
 .channel-reply-draft > button { margin-left: auto; }
 .channel-queue-hint > .channel-launch-copy { flex-shrink: 0; gap: 5px; min-height: 28px; padding: 4px 6px; border: 0; border-radius: 4px; background: transparent; box-shadow: none; color: inherit; font-size: 12px; font-weight: 500; white-space: nowrap; }
@@ -883,6 +893,8 @@ html[data-motion="off"] *, html[data-motion="off"] *::before, html[data-motion="
   .channel-surface-button:hover { background: #f6f6f6; border-color: var(--ui-border-accented); }
   .channel-surface-button:active { background: #ededed; }
   .channel-primary-button { color: #fff; background: #0969da; border-color: #0969da; box-shadow: 0 1px 2px #00000012; }
+  .channel-listen-mark { background: #0969da; box-shadow: 0 4px 14px #0969da40; }
+  .channel-listen-mark:hover { background: #075bbd; }
   .channel-primary-button:hover:not(:disabled) { background: #075bbd; }
   .channel-primary-button:active:not(:disabled) { background: #064c9e; }
   .channel-primary-button:disabled { color: #8c8c8c; background: #ededed; border-color: transparent; }
@@ -1170,15 +1182,15 @@ html[data-motion="off"] *, html[data-motion="off"] *::before, html[data-motion="
 @media (max-width: 767px) { .channel-schedule-card { margin: -4px 8px 14px; } }
 /* A member at work: who and how long on top, the stage as the main line with the stop key at its end, */
 /* the notes below as a subordinate thread (left rule, smaller and dimmer), folded to the latest note. */
-.channel-working-strip { margin: 0 16px 16px; padding: 8px 8px 10px 12px; border: 1px solid color-mix(in srgb, var(--ui-border) 80%, transparent); border-radius: 10px; background: color-mix(in srgb, var(--ui-bg-elevated) 45%, transparent); color: var(--ui-text-muted); font-size: 12px; }
+.channel-working-strip { margin: 0 16px 16px; padding: 10px 10px 10px 12px; border: 1px solid color-mix(in srgb, var(--ui-border) 80%, transparent); border-radius: 10px; background: color-mix(in srgb, var(--ui-bg-elevated) 45%, transparent); color: var(--ui-text-muted); font-size: 12px; }
 .channel-working-head { display: flex; align-items: center; gap: 8px; min-width: 0; }
 .channel-working-strip .channel-avatar { flex-shrink: 0; width: 20px; height: 20px; font-size: 8px; }
 .channel-working-name { flex-shrink: 0; color: var(--speaker-accent); font-size: 13px; font-weight: 650; }
 .channel-working-elapsed { flex-shrink: 0; color: var(--ui-text-dimmed); font-variant-numeric: tabular-nums; white-space: nowrap; }
-.channel-working-main { display: flex; align-items: center; gap: 8px; min-height: 32px; padding-left: 28px; }
+.channel-working-main { display: flex; align-items: center; gap: 8px; min-height: 24px; margin-top: 4px; padding-left: 28px; }
 .channel-working-status { flex: 1 1 auto; min-width: 0; overflow: hidden; color: var(--ui-text-highlighted); font-size: 15px; text-overflow: ellipsis; white-space: nowrap; }
 .channel-working-strip .channel-working-actions { display: inline-flex; flex-shrink: 0; align-items: center; gap: 4px; }
-.channel-working-notes { margin: 4px 4px 0 28px; padding: 1px 0 1px 10px; border-left: 2px solid var(--ui-border); color: var(--ui-text-dimmed); font-size: 12px; line-height: 1.6; }
+.channel-working-notes { margin-top: 8px; padding: 8px 34px 0 28px; border-top: 1px solid color-mix(in srgb, var(--ui-border) 80%, transparent); color: var(--ui-text-dimmed); font-size: 12px; line-height: 1.6; }
 .channel-working-notes p { margin: 0; white-space: pre-wrap; overflow-wrap: anywhere; }
 .channel-working-notes.is-open { display: grid; gap: 4px; }
 .channel-working-notes.is-open p:not(.channel-working-latest) { opacity: .75; }
@@ -1186,6 +1198,8 @@ html[data-motion="off"] *, html[data-motion="off"] *::before, html[data-motion="
 .channel-working-latest-text { flex: 0 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .channel-working-notes.is-open .channel-working-latest { display: block; cursor: auto; }
 .channel-working-notes.is-open .channel-working-latest-text { white-space: pre-wrap; }
+.channel-working-notes.is-single .channel-working-latest { cursor: auto; }
+.channel-working-notes.is-single .channel-working-latest-text { white-space: pre-wrap; }
 .channel-working-count { display: inline-flex; flex-shrink: 0; align-items: center; gap: 2px; padding: 0; border: 0; background: none; color: var(--ui-text-dimmed); font: inherit; white-space: nowrap; cursor: pointer; vertical-align: baseline; }
 .channel-working-notes.is-open .channel-working-count { margin-left: 6px; }
 .channel-working-count [class*="icon"] { width: 13px; height: 13px; transition: transform .12s; }
