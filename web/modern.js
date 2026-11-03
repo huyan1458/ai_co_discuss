@@ -41948,12 +41948,12 @@ var $U = {
 		}), ta(() => {
 			document.removeEventListener("selectionchange", ee), document.removeEventListener("pointerdown", ne), document.removeEventListener("pointerup", re), window.clearTimeout(D), w.removeEventListener("change", E), v.stop(), x.cancel();
 		});
-		let A = /* @__PURE__ */ new WeakMap(), oe = Z(() => new Map(i.value.messages.map((e) => (A.has(e) || A.set(e, cn(e)), [e.id, A.get(e)])))), se = /* @__PURE__ */ F(null), ce = /* @__PURE__ */ F(!1), le = /* @__PURE__ */ F(null), ue = /* @__PURE__ */ F(null), de = /* @__PURE__ */ F(null), fe = /* @__PURE__ */ F(null), me = /* @__PURE__ */ F(!1), he = /* @__PURE__ */ F(!1), ge = /* @__PURE__ */ F(null), _e = /* @__PURE__ */ F(0), M = /* @__PURE__ */ F(0), ve = /* @__PURE__ */ F(0), ye = {
+		let A = /* @__PURE__ */ new WeakMap(), oe = Z(() => new Map(i.value.messages.map((e) => (A.has(e) || A.set(e, un(e)), [e.id, A.get(e)])))), se = /* @__PURE__ */ F(null), ce = /* @__PURE__ */ F(!1), le = /* @__PURE__ */ F(null), ue = /* @__PURE__ */ F(null), de = /* @__PURE__ */ F(null), fe = /* @__PURE__ */ F(null), me = /* @__PURE__ */ F(!1), he = /* @__PURE__ */ F(!1), ge = /* @__PURE__ */ F(null), _e = /* @__PURE__ */ F(0), M = /* @__PURE__ */ F(0), ve = /* @__PURE__ */ F(0), ye = {
 			type: "spring",
 			mass: 1,
 			stiffness: 604.0197893466687,
 			damping: 44.729801589453814
-		}, be = null, xe = !1, Se = lV(0, ye), Ce = lV(0, ye), we = lV(0, ye), Te = sV(we, [0, 1], [.96, 1]), Ee = sV(we, [0, 1], [-8, 0]), De = sV(we, [0, 1], [0, 1]), Oe = Z(() => i.value.messages.find((e) => e.id === de.value)), ke = Z(() => yn.value.find((e) => e.messages.some((e) => e.id === de.value))), Ae = Z(() => ke.value?.label), je = Z(() => he.value ? Cn.value.findIndex((e) => e.key === fe.value) : -1), Me = /* @__PURE__ */ F(null), Ne = typeof window > "u" || !window.matchMedia("(pointer: coarse)").matches, Pe = /* @__PURE__ */ F(!0), P = Z(() => i.value.room), Fe = Z(() => ["pending", "notified"].includes(P.value?.current_turn?.status) && !["paused", "concluded"].includes(P.value.phase) ? P.value.current_turn : null), Ie = (e) => e?.access === "manual" && e.status === "active", Le = Z(() => (P.value.members || []).find((e) => e.name === Fe.value?.expert)), Re = Z(() => P.value?.archived ? null : (P.value?.members || []).find((e) => Ie(e) && !e.registered_at) || null), ze = Z(() => {
+		}, be = null, xe = !1, Se = lV(0, ye), Ce = lV(0, ye), we = lV(0, ye), Te = sV(we, [0, 1], [.96, 1]), Ee = sV(we, [0, 1], [-8, 0]), De = sV(we, [0, 1], [0, 1]), Oe = Z(() => i.value.messages.find((e) => e.id === de.value)), ke = Z(() => bn.value.find((e) => e.messages.some((e) => e.id === de.value))), Ae = Z(() => ke.value?.label), je = Z(() => he.value ? wn.value.findIndex((e) => e.key === fe.value) : -1), Me = /* @__PURE__ */ F(null), Ne = typeof window > "u" || !window.matchMedia("(pointer: coarse)").matches, Pe = /* @__PURE__ */ F(!0), P = Z(() => i.value.room), Fe = Z(() => ["pending", "notified"].includes(P.value?.current_turn?.status) && !["paused", "concluded"].includes(P.value.phase) ? P.value.current_turn : null), Ie = (e) => e?.access === "manual" && e.status === "active", Le = Z(() => (P.value.members || []).find((e) => e.name === Fe.value?.expert)), Re = Z(() => P.value?.archived ? null : (P.value?.members || []).find((e) => Ie(e) && !e.registered_at) || null), ze = Z(() => {
 			let e = Le.value;
 			if (!Fe.value || !e) return "";
 			let t = a.display_name(e.name);
@@ -42321,11 +42321,16 @@ var $U = {
 		})[e]), Bt = Z(() => {
 			let e = l.value;
 			if (!tt.value.length || !e.includes("@")) return "";
-			let t = e.replace(/```[\s\S]*?```/g, Rt).replace(/`[^`\n]*`/g, Rt).replace(/^>.*$/gm, Rt), n = tt.value.flatMap(({ name: e }) => [...t.matchAll(new RegExp(nt(e.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")).source, "gu"))].map((e) => [e.index + e[1].length, e.index + e[0].length])).sort((e, t) => e[0] - t[0]);
-			if (!n.length) return "";
-			let r = "", i = 0;
-			for (let [t, a] of n) r += `${zt(e.slice(i, t))}<span class="channel-mention">${zt(e.slice(t, a))}</span>`, i = a;
-			return `${r}${zt(e.slice(i))} `;
+			let t = e.replace(/```[\s\S]*?```/g, Rt).replace(/`[^`\n]*`/g, Rt).replace(/^>.*$/gm, Rt), n = $e.value.map((e) => e.name), r = tt.value.flatMap(({ name: e }) => n.includes(e) ? a.mention_handles(e, n) : [e]).sort((e, t) => t.length - e.length), i = [];
+			for (let e of r) for (let n of t.matchAll(new RegExp(nt(e.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")).source, "gu"))) {
+				let e = [n.index + n[1].length, n.index + n[0].length];
+				i.some(([t, n]) => e[0] < n && t < e[1]) || i.push(e);
+			}
+			let o = i.sort((e, t) => e[0] - t[0]);
+			if (!o.length) return "";
+			let s = "", c = 0;
+			for (let [t, n] of o) s += `${zt(e.slice(c, t))}<span class="channel-mention">${zt(e.slice(t, n))}</span>`, c = n;
+			return `${s}${zt(e.slice(c))} `;
 		}), Vt = /* @__PURE__ */ F(null);
 		function Ht() {
 			Vt.value && Me.value?.textareaRef && (Vt.value.scrollTop = Me.value.textareaRef.scrollTop);
@@ -42376,31 +42381,32 @@ var $U = {
 			let n = en(t.value, t.selectionStart, t.selectionEnd);
 			(n?.query !== Ut.value?.query || n?.start !== Ut.value?.start) && (Yt.value = 0), Ut.value = n;
 		}
-		async function nn(e) {
+		let nn = (e) => Kt[e] ? e : a.mention_handles(e, $e.value.map((e) => e.name))[0];
+		async function rn(e) {
 			if (!Ut.value || !Qt.value.includes(e)) return;
-			let { start: t, end: n } = Ut.value, r = `@${e} `;
+			let { start: t, end: n } = Ut.value, r = `@${nn(e)} `;
 			l.value = l.value.slice(0, t) + r + l.value.slice(n).replace(/^ /, ""), Ut.value = null, await Qn();
 			let i = Me.value?.textareaRef;
 			i?.focus(), i?.setSelectionRange(t + r.length, t + r.length);
 		}
-		function rn(e) {
+		function an(e) {
 			if (e.target === Me.value?.textareaRef && Ut.value && !e.isComposing && e.keyCode !== 229 && !(e.ctrlKey || e.metaKey || e.altKey || e.shiftKey)) {
 				if (e.key === "Escape") Ut.value = null;
 				else if (["ArrowDown", "ArrowUp"].includes(e.key) && Qt.value.length) {
 					let t = e.key === "ArrowDown" ? 1 : -1;
 					Yt.value = (Qt.value.indexOf($t.value) + t + Qt.value.length) % Qt.value.length, Qn(() => Xt.value?.querySelector("[aria-selected=\"true\"]")?.scrollIntoView({ block: "nearest" }));
-				} else if (["Enter", "Tab"].includes(e.key) && $t.value) nn($t.value);
+				} else if (["Enter", "Tab"].includes(e.key) && $t.value) rn($t.value);
 				else return;
 				e.preventDefault(), e.stopPropagation();
 			}
 		}
-		function an(e) {
+		function on(e) {
 			Zt = e.type === "compositionstart", Ut.value = null, Zt || tn(e);
 		}
-		function on(e) {
+		function sn(e) {
 			e.preventDefault();
 		}
-		function sn(e) {
+		function cn(e) {
 			for (let t of e.querySelectorAll("pre code, tbody")) {
 				let n = e.ownerDocument.createRange();
 				if (t.tagName === "TBODY") {
@@ -42415,7 +42421,7 @@ var $U = {
 			}
 			return !1;
 		}
-		function cn(e) {
+		function un(e) {
 			let t = {
 				truncated: !1,
 				html: e.rendered_text
@@ -42423,7 +42429,7 @@ var $U = {
 			if (e.kind === "receipt") return t;
 			let n = document.createElement("template");
 			n.innerHTML = e.rendered_text;
-			let r = sn(n.content), i = document.createTreeWalker(n.content, NodeFilter.SHOW_TEXT, { acceptNode: (e) => e.parentElement?.closest(".katex-mathml") ? NodeFilter.FILTER_REJECT : NodeFilter.FILTER_ACCEPT }), a = [];
+			let r = cn(n.content), i = document.createTreeWalker(n.content, NodeFilter.SHOW_TEXT, { acceptNode: (e) => e.parentElement?.closest(".katex-mathml") ? NodeFilter.FILTER_REJECT : NodeFilter.FILTER_ACCEPT }), a = [];
 			for (; i.nextNode();) a.push(i.currentNode);
 			let o = [...a.map((e) => e.textContent).join("").trimEnd()];
 			if (o.length <= xK) return {
@@ -42445,19 +42451,19 @@ var $U = {
 				html: n.innerHTML
 			};
 		}
-		let un = Z(() => _n.value), dn = Z(() => {
+		let dn = Z(() => vn.value), fn = Z(() => {
 			let e = Date.parse(P.value?.session?.created_at || "");
 			if (!e) return null;
-			let t = un.value;
+			let t = dn.value;
 			if (!t.some((e) => !e.slot_card && Number(e.id) <= P.value.session.started_message_id)) return null;
 			let n = t.findIndex((t) => !t.slot_card && Date.parse(t.created_at) >= e);
 			return n < 0 && (n = t.findLastIndex((e) => !e.slot_card) + 1), n === 0 ? null : n < t.length ? t[n].id : "end";
-		}), fn = Z(() => {
+		}), pn = Z(() => {
 			let e = P.value?.session;
 			if (e?.status !== "concluded") return null;
-			let t = un.value, n = t.findIndex((t) => !t.slot_card && Number(t.id) > e.ended_message_id);
+			let t = dn.value, n = t.findIndex((t) => !t.slot_card && Number(t.id) > e.ended_message_id);
 			return n < 0 ? "end" : t[n].id;
-		}), pn = Z(() => {
+		}), mn = Z(() => {
 			if (i.value.query || i.value.mention_only || i.value.host_only) return [];
 			let e = new Map((P.value.free?.members || []).map((e) => [e.id, e.name]));
 			return (P.value.free?.executions || []).filter((e) => e.status === "failed").map((t) => ({
@@ -42473,25 +42479,25 @@ var $U = {
 					elapsed_seconds: t.finished_at ? Math.max(0, t.finished_at - t.created_at) : null
 				}
 			}));
-		}), mn = /* @__PURE__ */ F(/* @__PURE__ */ new Set()), hn = Z(() => {
+		}), hn = /* @__PURE__ */ F(/* @__PURE__ */ new Set()), gn = Z(() => {
 			let e = /* @__PURE__ */ new Map(), t = /* @__PURE__ */ new Set(), n = null;
-			for (let r of i.value.messages) r.withdrawn === "rewound" ? (n === null && (n = r.id, e.set(n, 0)), e.set(n, e.get(n) + 1), n !== r.id && !mn.value.has(n) && t.add(r.id)) : n = null;
+			for (let r of i.value.messages) r.withdrawn === "rewound" ? (n === null && (n = r.id, e.set(n, 0)), e.set(n, e.get(n) + 1), n !== r.id && !hn.value.has(n) && t.add(r.id)) : n = null;
 			return {
 				runs: e,
 				hidden: t
 			};
 		});
-		function gn(e) {
-			let t = new Set(mn.value);
-			t.delete(e) || t.add(e), mn.value = t;
+		function _n(e) {
+			let t = new Set(hn.value);
+			t.delete(e) || t.add(e), hn.value = t;
 		}
-		let _n = Z(() => {
-			let e = i.value.messages.filter((e) => !hn.value.hidden.has(e.id)), t = new Set(e.filter((e) => !e.withdrawn).map((e) => e.id)), n = /* @__PURE__ */ new Map(), r = new Map((P.value.free?.executions || []).map((e) => [e.id, e])), a = (e) => {
+		let vn = Z(() => {
+			let e = i.value.messages.filter((e) => !gn.value.hidden.has(e.id)), t = new Set(e.filter((e) => !e.withdrawn).map((e) => e.id)), n = /* @__PURE__ */ new Map(), r = new Map((P.value.free?.executions || []).map((e) => [e.id, e])), a = (e) => {
 				if (!e.execution_id && !e.cancelled_turn && !e.arrangement || e.withdrawn) return !1;
 				let i = e.discussion_request || r.get(e.execution_id)?.requests?.find((e) => e.discussion_session_id), a = e.arrangement?.after_message_id ?? e.cancelled_turn?.after_message_id ?? (i ? i.after_message_id : e.request_message_id);
 				return !((i || e.cancelled_turn || e.arrangement) && a === 0) && !t.has(a) ? !1 : (n.set(a, [...n.get(a) || [], e]), !0);
 			}, o = e.filter((e) => !a(e));
-			if (pn.value.forEach(a), !i.value.query && !i.value.mention_only && !i.value.host_only) {
+			if (mn.value.forEach(a), !i.value.query && !i.value.mention_only && !i.value.host_only) {
 				for (let e of P.value.host_arrangements || []) a({
 					id: e.key || `plan-${e.id}`,
 					slot_card: !0,
@@ -42530,9 +42536,9 @@ var $U = {
 				for (let t of (n.get(e.id) || []).sort(l)) d(t);
 			};
 			return (n.get(0) || []).sort(l).forEach(d), o.forEach(d), [...u, ...s];
-		}), vn = Z(() => {
+		}), yn = Z(() => {
 			let e = [];
-			for (let t of un.value) {
+			for (let t of dn.value) {
 				if (t.slot_card && e.length) {
 					e.at(-1).messages.push(t);
 					continue;
@@ -42545,9 +42551,9 @@ var $U = {
 				}), e.at(-1).messages.push(t);
 			}
 			return e;
-		}), yn = Z(() => {
+		}), bn = Z(() => {
 			let e = [];
-			for (let t of un.value.filter((e) => !e.slot_card)) {
+			for (let t of dn.value.filter((e) => !e.slot_card)) {
 				let n = a.round_groups(P.value)?.findLast((e) => e.start_id <= t.id), r = n && (n.end_id == null || t.id <= n.end_id) ? n : null, i = r?.number || 0, o = r?.key || "ungrouped";
 				if (e.at(-1)?.key !== o) {
 					let t = i ? `第 ${i} 轮` : "未分组", n = r ? `${r.opinions ?? r.speakers.length}/${r.participants ?? Object.keys(P.value.experts).length} 人已发言` : "尚无参与专家的观点";
@@ -42562,9 +42568,9 @@ var $U = {
 				e.at(-1).messages.push(t);
 			}
 			return e;
-		}), bn = Z(() => yn.value.find((e) => e.messages.some((e) => e.id === le.value))?.number), xn = Z(() => new Map(yn.value.filter((e) => e.number).flatMap((e) => e.messages.map((t) => [t.id, e.label])))), Sn = Z(() => {
+		}), xn = Z(() => bn.value.find((e) => e.messages.some((e) => e.id === le.value))?.number), Sn = Z(() => new Map(bn.value.filter((e) => e.number).flatMap((e) => e.messages.map((t) => [t.id, e.label])))), Cn = Z(() => {
 			let e = 0;
-			return yn.value.map((t) => ({
+			return bn.value.map((t) => ({
 				number: t.number,
 				count: t.messages.length,
 				entries: [{
@@ -42582,15 +42588,15 @@ var $U = {
 					index: e++
 				}))]
 			}));
-		}), Cn = Z(() => Sn.value.flatMap((e) => e.entries));
-		function wn(e) {
+		}), wn = Z(() => Cn.value.flatMap((e) => e.entries));
+		function Tn(e) {
 			return e.getBoundingClientRect().top + (parseFloat(getComputedStyle(e).getPropertyValue("--channel-topbar-height")) || 0);
 		}
-		function Tn() {
+		function En() {
 			let e = p.value;
 			if (!e || !e.clientHeight) return;
 			Pe.value = e.scrollHeight - e.scrollTop - e.clientHeight < WK;
-			let t = e.getBoundingClientRect(), n = wn(e), r = [...e.querySelectorAll("[data-message-id]")], i = r.find((e) => Number(e.dataset.messageId) === ue.value);
+			let t = e.getBoundingClientRect(), n = Tn(e), r = [...e.querySelectorAll("[data-message-id]")], i = r.find((e) => Number(e.dataset.messageId) === ue.value);
 			if (i && i.getBoundingClientRect().bottom > n && i.getBoundingClientRect().top < t.bottom) {
 				le.value = ue.value;
 				return;
@@ -42599,32 +42605,32 @@ var $U = {
 			let a = r.find((e) => e.getBoundingClientRect().bottom > n + GK);
 			le.value = a ? Number(a.dataset.messageId) : null;
 		}
-		async function En() {
-			await Qn(), Pe.value && p.value && (p.value.scrollTop = p.value.scrollHeight), Tn();
+		async function Dn() {
+			await Qn(), Pe.value && p.value && (p.value.scrollTop = p.value.scrollHeight), En();
 		}
 		R([
 			() => i.value.messages,
 			We,
-			pn
-		], En, { immediate: !0 }), R([
+			mn
+		], Dn, { immediate: !0 }), R([
 			() => i.value.room?.id,
 			() => i.value.query,
 			() => i.value.mention_only,
 			() => i.value.host_only
 		], () => {
-			ue.value = null, le.value = null, Wn(), Pe.value = !0;
+			ue.value = null, le.value = null, Gn(), Pe.value = !0;
 		}), R(() => i.value.tab, (e) => {
-			Wn(), e === "discussion" && En();
+			Gn(), e === "discussion" && Dn();
 		}), R(() => i.value.room?.id, () => m.value.clear());
-		async function Dn(e, t) {
+		async function On(e, t) {
 			let n = t.currentTarget.closest("[data-message-id]"), r = m.value.has(e.id), i = p.value.scrollTop;
-			Pe.value = !1, r ? m.value.delete(e.id) : m.value.add(e.id), Wn(), await Qn(), r || (p.value.scrollTop = i), r && n.getBoundingClientRect().top < wn(p.value) && (p.value.scrollTop += n.getBoundingClientRect().top - wn(p.value) - GK), Tn();
-		}
-		function On(e) {
-			let t = p.value, n = t?.querySelector(`[data-message-id="${e}"]`);
-			n && (Un(), ue.value = e, le.value = e, t.scrollTop += n.getBoundingClientRect().top - wn(t) - GK, n.focus({ preventScroll: !0 }), Tn());
+			Pe.value = !1, r ? m.value.delete(e.id) : m.value.add(e.id), Gn(), await Qn(), r || (p.value.scrollTop = i), r && n.getBoundingClientRect().top < Tn(p.value) && (p.value.scrollTop += n.getBoundingClientRect().top - Tn(p.value) - GK), En();
 		}
 		function kn(e) {
+			let t = p.value, n = t?.querySelector(`[data-message-id="${e}"]`);
+			n && (Wn(), ue.value = e, le.value = e, t.scrollTop += n.getBoundingClientRect().top - Tn(t) - GK, n.focus({ preventScroll: !0 }), En());
+		}
+		function An(e) {
 			(e.type !== "keydown" || [
 				"ArrowUp",
 				"ArrowDown",
@@ -42635,34 +42641,34 @@ var $U = {
 				" "
 			].includes(e.key)) && (ue.value = null);
 		}
-		function An(e, t) {
+		function jn(e, t) {
 			let n = {
 				ArrowUp: t - 1,
 				ArrowDown: t + 1,
 				Home: 0,
-				End: Cn.value.length - 1
+				End: wn.value.length - 1
 			};
 			if (!Object.hasOwn(n, e.key)) return;
 			e.preventDefault();
-			let r = Math.max(0, Math.min(n[e.key], Cn.value.length - 1));
+			let r = Math.max(0, Math.min(n[e.key], wn.value.length - 1));
 			se.value.querySelectorAll("button")[r].focus({ preventScroll: !0 });
 		}
-		function jn(e) {
+		function Mn(e) {
 			let t = se.value;
 			if (!t?.clientHeight || !e) return;
 			let n = t.getBoundingClientRect(), r = e.getBoundingClientRect();
 			r.top < n.top + VK ? t.scrollTop += r.top - n.top - VK : r.bottom > n.bottom - VK && (t.scrollTop += r.bottom - n.bottom + VK);
 		}
-		async function Mn() {
-			await Qn(), jn(se.value?.querySelector(`[data-jump-id="${le.value}"]`));
+		async function Nn() {
+			await Qn(), Mn(se.value?.querySelector(`[data-jump-id="${le.value}"]`));
 		}
-		R(le, Mn);
-		function Nn(e, t) {
-			!be && t.currentTarget.matches(":focus-visible") && (ce.value = !0, jn(e.round ? t.currentTarget.parentElement.querySelector("[data-jump-id]") : t.currentTarget), Hn(e, t));
-		}
+		R(le, Nn);
 		function Pn(e, t) {
+			!be && t.currentTarget.matches(":focus-visible") && (ce.value = !0, Mn(e.round ? t.currentTarget.parentElement.querySelector("[data-jump-id]") : t.currentTarget), Un(e, t));
+		}
+		function Fn(e, t) {
 			if (xe = !1, !["touch", "pen"].includes(t.pointerType)) return;
-			Un(), ce.value = !1;
+			Wn(), ce.value = !1;
 			let n = {
 				pointer: t.pointerId,
 				x: t.clientX,
@@ -42670,31 +42676,31 @@ var $U = {
 				target: t.currentTarget
 			};
 			be = n, n.timer = setTimeout(() => {
-				be === n && (xe = !0, Hn(e, { currentTarget: n.target }));
+				be === n && (xe = !0, Un(e, { currentTarget: n.target }));
 			}, HK);
 		}
-		function Fn() {
+		function In() {
 			be && clearTimeout(be.timer), be = null;
 		}
-		function In(e) {
-			be?.pointer === e.pointerId && (e.type === "pointercancel" && (xe = !0), Un());
-		}
-		function Ln(e, t) {
-			["touch", "pen"].includes(t.pointerType) ? be?.pointer === t.pointerId && Math.hypot(t.clientX - be.x, t.clientY - be.y) > UK && (xe = !0, Un()) : t.type === "pointerenter" && ce.value || (ce.value = !1, (fe.value !== e.key || !he.value) && Hn(e, t));
+		function Ln(e) {
+			be?.pointer === e.pointerId && (e.type === "pointercancel" && (xe = !0), Wn());
 		}
 		function Rn(e, t) {
-			xe && t.detail !== 0 ? (xe = !1, t.preventDefault()) : On(e.message.id);
+			["touch", "pen"].includes(t.pointerType) ? be?.pointer === t.pointerId && Math.hypot(t.clientX - be.x, t.clientY - be.y) > UK && (xe = !0, Wn()) : t.type === "pointerenter" && ce.value || (ce.value = !1, (fe.value !== e.key || !he.value) && Un(e, t));
 		}
-		function zn(e) {
-			be && e.preventDefault();
+		function zn(e, t) {
+			xe && t.detail !== 0 ? (xe = !1, t.preventDefault()) : kn(e.message.id);
 		}
 		function Bn(e) {
-			(e.deltaX || e.deltaY) && (ce.value = !1, Un());
+			be && e.preventDefault();
 		}
-		function Vn() {
-			Un(), ue.value = null, Pe.value = !0, En();
+		function Vn(e) {
+			(e.deltaX || e.deltaY) && (ce.value = !1, Wn());
 		}
-		async function Hn(e, t) {
+		function Hn() {
+			Wn(), ue.value = null, Pe.value = !0, Dn();
+		}
+		async function Un(e, t) {
 			let n = e.message, r = t.currentTarget.getBoundingClientRect(), i = se.value.getBoundingClientRect(), a = Math.min(TK, innerWidth - 24), o = i.right + OK;
 			if (_e.value = Math.max(DK, Math.min(o, innerWidth - a - DK)), de.value = n.id, fe.value = e.key, me.value = e.round, he.value = !0, await Qn(), !he.value || fe.value !== e.key) return;
 			ve.value = ge.value.scrollHeight + EK;
@@ -42703,20 +42709,20 @@ var $U = {
 			let c = we.get() === 0;
 			Se[c ? "jump" : "set"](M.value), Ce[c ? "jump" : "set"](ve.value);
 		}
-		function Un(e) {
-			e?.relatedTarget?.closest?.(".channel-message-map, .channel-nav-preview") || (Fn(), he.value = !1);
+		function Wn(e) {
+			e?.relatedTarget?.closest?.(".channel-message-map, .channel-nav-preview") || (In(), he.value = !1);
 		}
-		function Wn() {
-			Fn(), he.value = !1, we.jump(0), de.value = null;
+		function Gn() {
+			In(), he.value = !1, we.jump(0), de.value = null;
 		}
-		async function Gn() {
-			Wn(), r?.measure(), await En(), await Mn();
+		async function Kn() {
+			Gn(), r?.measure(), await Dn(), await Nn();
 		}
-		function Kn(e) {
+		function qn(e) {
 			let t = e.entries.length - 1;
 			return Math.max(-3, Math.min(t + FK, je.value - e.entries[0].index));
 		}
-		function qn(e, t) {
+		function Jn(e, t) {
 			let n = je.value < 0 ? Infinity : Math.abs(t - je.value), r = Math.max(0, 1 - n / FK), i = le.value === e.message.id, a = n === 0 || i && je.value < 0, o = AK;
 			return {
 				scaleX: a ? jK / o : i ? MK / o : 1 + r * IK / o,
@@ -42724,76 +42730,76 @@ var $U = {
 				opacity: a ? zK : i ? RK : LK + r * BK
 			};
 		}
-		R(he, (e) => we.set(+!!e)), Qi(() => window.addEventListener("resize", Gn)), ta(() => window.removeEventListener("resize", Gn));
-		function Jn() {
+		R(he, (e) => we.set(+!!e)), Qi(() => window.addEventListener("resize", Kn)), ta(() => window.removeEventListener("resize", Kn));
+		function Yn() {
 			let e = Me.value?.textareaRef;
 			if (!e) return;
 			e.rows = 1;
 			let t = getComputedStyle(e), n = (e.scrollHeight - parseFloat(t.paddingTop) - parseFloat(t.paddingBottom)) / parseFloat(t.lineHeight);
 			e.rows = Math.min(Math.max(Math.floor(n), 1), hK);
 		}
-		let Yn = 0, Xn = new ResizeObserver(([e]) => {
-			Math.round(e.contentRect.width) !== Yn && (Yn = Math.round(e.contentRect.width), Jn());
+		let Xn = 0, Zn = new ResizeObserver(([e]) => {
+			Math.round(e.contentRect.width) !== Xn && (Xn = Math.round(e.contentRect.width), Yn());
 		});
-		Qi(() => Me.value?.textareaRef && Xn.observe(Me.value.textareaRef)), ta(() => Xn.disconnect()), ta(Fn);
-		let Zn = /* @__PURE__ */ F(""), $n;
-		function er() {
-			clearTimeout($n), Zn.value = "";
+		Qi(() => Me.value?.textareaRef && Zn.observe(Me.value.textareaRef)), ta(() => Zn.disconnect()), ta(In);
+		let $n = /* @__PURE__ */ F(""), er;
+		function tr() {
+			clearTimeout(er), $n.value = "";
 		}
-		async function tr(e) {
+		async function nr(e) {
 			let t = P.value.id;
-			er(), await s("copy_member_launch", e) && P.value?.id === t && (Zn.value = e, $n = setTimeout(er, QK));
+			tr(), await s("copy_member_launch", e) && P.value?.id === t && ($n.value = e, er = setTimeout(tr, QK));
 		}
-		R([() => P.value?.id, () => Fe.value?.id], er), ta(er);
-		function nr(e) {
+		R([() => P.value?.id, () => Fe.value?.id], tr), ta(tr);
+		function rr(e) {
 			if (!i.value.access?.can_manage) return null;
 			let t = e.requests?.find((e) => e.discussion_session_id), n = t ? t.source_message_id : e.request_message_id;
 			return i.value.messages.find((e) => e.id === n && !e.withdrawn && (!t || e.author === "用户"));
 		}
-		function rr(e) {
-			return e.status === "failed" ? nr(e) : null;
-		}
 		function ir(e) {
-			let t = nr(e);
+			return e.status === "failed" ? rr(e) : null;
+		}
+		function ar(e) {
+			let t = rr(e);
 			if (!t) return;
 			let n = (P.value.free?.requests || []).find((t) => e.request_ids?.includes(t.id));
 			l.value = n?.purpose === "ask" && n.member ? `@${n.member} ${t.text}` : t.text, Me.value?.textareaRef?.focus();
 		}
-		function ar(e) {
+		function or(e) {
 			let t = (P.value.free?.members || []).find((t) => t.id === e.member_id)?.name, n = [...new Set((e.denials || []).map((e) => e.rule).filter(Boolean))];
-			return t && n.length && i.value.launch?.available && nr(e) ? {
+			return t && n.length && i.value.launch?.available && rr(e) ? {
 				name: t,
 				rules: n
 			} : null;
 		}
-		let or = /* @__PURE__ */ F(0), sr = /* @__PURE__ */ F({});
-		async function cr(e) {
-			let t = ar(e);
-			if (t && !or.value) {
-				or.value = e.id, sr.value = {
-					...sr.value,
+		let sr = /* @__PURE__ */ F(0), cr = /* @__PURE__ */ F({});
+		async function lr(e) {
+			let t = or(e);
+			if (t && !sr.value) {
+				sr.value = e.id, cr.value = {
+					...cr.value,
 					[e.id]: ""
 				};
 				try {
-					await a.allow_denials(t), ir(e);
+					await a.allow_denials(t), ar(e);
 				} catch (t) {
-					sr.value = {
-						...sr.value,
+					cr.value = {
+						...cr.value,
 						[e.id]: t.message
 					};
 				} finally {
-					or.value = 0;
+					sr.value = 0;
 				}
 			}
 		}
-		function lr(e) {
+		function ur(e) {
 			return [[
-				...dr(e) ? [{
+				...fr(e) ? [{
 					label: "回复",
 					icon: "i-lucide-corner-up-left",
-					onSelect: () => br(e)
+					onSelect: () => Sr(e)
 				}] : [],
-				...T.value && e.kind !== "receipt" && mr.value.id !== e.id ? [v.state.message_id === e.id ? {
+				...T.value && e.kind !== "receipt" && hr.value.id !== e.id ? [v.state.message_id === e.id ? {
 					label: "停止朗读",
 					icon: "i-lucide-square",
 					onSelect: () => v.stop()
@@ -42805,61 +42811,61 @@ var $U = {
 				{
 					label: "复制原文链接",
 					icon: "i-lucide-link",
-					onSelect: () => Er(e)
+					onSelect: () => Dr(e)
 				},
 				{
 					label: "查看原文",
 					icon: "i-lucide-expand",
 					onSelect: () => n("detail", e.id)
 				},
-				...ur(e) && e.author !== "用户" ? [{
+				...dr(e) && e.author !== "用户" ? [{
 					label: "从这里分支",
 					icon: "i-lucide-git-branch",
 					onSelect: () => s("fork_room", e.id)
 				}] : []
 			]];
 		}
-		let ur = (e) => Be.value && i.value.access?.can_manage && !e.withdrawn && !(P.value.session?.started_message_id >= e.id) && !(P.value.discussions || []).some((t) => ["active", "paused"].includes(t.status) || t.started_message_id >= e.id), dr = (e) => ur(e) && e.author === "用户" && !P.value.archived, fr = (e) => dr(e) && (i.value.messages.at(-1)?.id === e.id || !(P.value.free?.requests || []).some((t) => t.message_id === e.id && [
+		let dr = (e) => Be.value && i.value.access?.can_manage && !e.withdrawn && !(P.value.session?.started_message_id >= e.id) && !(P.value.discussions || []).some((t) => ["active", "paused"].includes(t.status) || t.started_message_id >= e.id), fr = (e) => dr(e) && e.author === "用户" && !P.value.archived, pr = (e) => fr(e) && (i.value.messages.at(-1)?.id === e.id || !(P.value.free?.requests || []).some((t) => t.message_id === e.id && [
 			"delivering",
 			"completed",
 			"failed"
-		].includes(t.status))), pr = {
+		].includes(t.status))), mr = {
 			id: 0,
 			text: "",
 			plan: null,
 			error: ""
-		}, mr = /* @__PURE__ */ F(pr);
-		async function hr(e) {
-			mr.value = {
-				...pr,
+		}, hr = /* @__PURE__ */ F(mr);
+		async function gr(e) {
+			hr.value = {
+				...mr,
 				id: e.id,
 				text: e.text
 			};
 			try {
 				let t = await a.rewind_plan(e.id);
-				mr.value.id === e.id && (mr.value = {
-					...mr.value,
+				hr.value.id === e.id && (hr.value = {
+					...hr.value,
 					plan: t
 				});
 			} catch (t) {
-				mr.value.id === e.id && (mr.value = {
-					...mr.value,
+				hr.value.id === e.id && (hr.value = {
+					...hr.value,
 					error: t.message
 				});
 			}
 		}
-		function gr() {
-			mr.value = pr;
+		function _r() {
+			hr.value = mr;
 		}
-		async function _r() {
-			let { id: e, text: t, plan: n } = mr.value;
+		async function yr() {
+			let { id: e, text: t, plan: n } = hr.value;
 			n && t.trim() && !c.value && (Pe.value = !0, await s("rewind_and_send", {
 				message_id: e,
 				revision: n.revision,
 				text: t.trim()
-			}) && gr());
+			}) && _r());
 		}
-		function yr(e) {
+		function br(e) {
 			let t = (t) => e.members.filter((e) => e.session === t).map((e) => a.display_name(e.name)).join("、");
 			return [
 				`将回退 ${e.messages} 条记录（含这条），进行中的工作会停止`,
@@ -42868,21 +42874,21 @@ var $U = {
 				"成员已改动的文件不会撤销"
 			].filter(Boolean).join("；") + "。";
 		}
-		async function br(e) {
+		async function Sr(e) {
 			await s("reply", e), Me.value?.textareaRef?.focus();
 		}
-		async function Sr() {
-			!Qe.value || c.value || i.value.sending_message || (Ut.value = null, Pe.value = !0, await s("send"), await En());
+		async function Cr() {
+			!Qe.value || c.value || i.value.sending_message || (Ut.value = null, Pe.value = !0, await s("send"), await Dn());
 		}
-		let Cr = 0;
-		function wr(e) {
-			e.key !== "Escape" || e.isComposing || e.defaultPrevented || (e.target !== Me.value?.textareaRef && e.target !== document.body || Qe.value && !i.value.sending_message || i.value.sending_preview?.failed ? Cr = 0 : e.timeStamp - Cr > _K ? Cr = e.timeStamp : (Cr = 0, e.preventDefault(), a.execute("retract_latest")));
-		}
-		Qi(() => window.addEventListener("keydown", wr)), ta(() => window.removeEventListener("keydown", wr));
+		let wr = 0;
 		function Tr(e) {
-			!Ne || e.key !== "Enter" || e.ctrlKey || e.metaKey || e.shiftKey || e.altKey || e.isComposing || l.value.trim() || i.value.attachment_drafts.length && (e.preventDefault(), e.stopPropagation(), Sr());
+			e.key !== "Escape" || e.isComposing || e.defaultPrevented || (e.target !== Me.value?.textareaRef && e.target !== document.body || Qe.value && !i.value.sending_message || i.value.sending_preview?.failed ? wr = 0 : e.timeStamp - wr > _K ? wr = e.timeStamp : (wr = 0, e.preventDefault(), a.execute("retract_latest")));
 		}
+		Qi(() => window.addEventListener("keydown", Tr)), ta(() => window.removeEventListener("keydown", Tr));
 		function Er(e) {
+			!Ne || e.key !== "Enter" || e.ctrlKey || e.metaKey || e.shiftKey || e.altKey || e.isComposing || l.value.trim() || i.value.attachment_drafts.length && (e.preventDefault(), e.stopPropagation(), Cr());
+		}
+		function Dr(e) {
 			s("copy", `${i.value.room_site}/r/${P.value.id}/messages/${e.id}`);
 		}
 		return (e, t) => {
@@ -42912,17 +42918,17 @@ var $U = {
 					class: "channel-message-map",
 					style: pe({ "--nav-entry-height": `${kK}px` }),
 					"aria-label": "发言快速导航",
-					onWheelPassive: uu(Bn, ["stop"]),
-					onPointerleave: Un,
-					onFocusout: Un,
-					onKeydown: fu(uu(Un, ["stop"]), ["esc"]),
-					onContextmenu: zn
-				}, [K("div", nW, [(U(!0), W(H, null, B(Sn.value, (e, t, n, r) => {
+					onWheelPassive: uu(Vn, ["stop"]),
+					onPointerleave: Wn,
+					onFocusout: Wn,
+					onKeydown: fu(uu(Wn, ["stop"]), ["esc"]),
+					onContextmenu: Bn
+				}, [K("div", nW, [(U(!0), W(H, null, B(Cn.value, (e, t, n, r) => {
 					let o = [
 						e,
 						he.value,
-						bn.value === e.number ? le.value : null,
-						Kn(e)
+						xn.value === e.number ? le.value : null,
+						qn(e)
 					];
 					if (r && r.el && r.key === e.entries[0].key && rc(r, o)) return r;
 					let s = (U(), W("div", {
@@ -42940,20 +42946,20 @@ var $U = {
 						tabindex: !e.round && e.message.id === (le.value || I(i).messages[0]?.id) ? 0 : -1,
 						"aria-current": !e.round && le.value === e.message.id ? "location" : void 0,
 						"aria-describedby": he.value && fe.value === e.key ? "channel-navigation-preview" : void 0,
-						onPointerenter: (t) => Ln(e, t),
-						onPointermove: (t) => Ln(e, t),
-						onPointerdown: (t) => Pn(e, t),
-						onPointerup: In,
-						onPointercancel: In,
-						onFocus: (t) => Nn(e, t),
-						onKeydown: (t) => An(t, e.index),
-						onClick: (t) => Rn(e, t)
+						onPointerenter: (t) => Rn(e, t),
+						onPointermove: (t) => Rn(e, t),
+						onPointerdown: (t) => Fn(e, t),
+						onPointerup: Ln,
+						onPointercancel: Ln,
+						onFocus: (t) => Pn(e, t),
+						onKeydown: (t) => jn(t, e.index),
+						onClick: (t) => zn(e, t)
 					}, [e.round ? (U(), W("span", iW, N(e.number || "–"), 1)) : (U(), G(I(iV).span, {
 						key: 1,
 						class: "channel-jump-tick",
 						"aria-hidden": "true",
 						initial: !1,
-						animate: qn(e, e.index),
+						animate: Jn(e, e.index),
 						transition: ye
 					}, null, 8, ["animate"]))], 42, rW))), 128))], 4));
 					return s.memo = o, s;
@@ -42975,9 +42981,9 @@ var $U = {
 						height: I(Ce),
 						"--preview-gap": `${OK}px`
 					}),
-					onPointerleave: Un,
-					onFocusout: Un,
-					onKeydown: fu(uu(Un, ["stop"]), ["esc"])
+					onPointerleave: Wn,
+					onFocusout: Wn,
+					onKeydown: fu(uu(Wn, ["stop"]), ["esc"])
 				}, {
 					default: L(() => [K("div", {
 						ref_key: "preview_content",
@@ -43034,8 +43040,8 @@ var $U = {
 					_: 1
 				})) : Y("", !0),
 				nc([
-					vn.value,
-					xn.value,
+					yn.value,
+					Sn.value,
 					Be.value,
 					P.value.session,
 					I(i).access,
@@ -43046,8 +43052,8 @@ var $U = {
 					I(i).query,
 					I(i).mention_only,
 					I(i).host_only,
-					dn.value,
 					fn.value,
+					pn.value,
 					lt.value,
 					ut.value,
 					ht.value,
@@ -43057,31 +43063,31 @@ var $U = {
 					Ot.value,
 					I(c),
 					Ge.value,
-					mr.value,
-					hn.value
+					hr.value,
+					gn.value
 				], () => (U(), W("div", {
 					ref_key: "transcript",
 					ref: p,
 					class: "channel-transcript",
 					"aria-label": "聊天记录",
-					onScroll: Tn,
-					onWheelPassive: kn,
-					onTouchstartPassive: kn,
-					onKeydown: kn
+					onScroll: En,
+					onWheelPassive: An,
+					onTouchstartPassive: An,
+					onKeydown: An
 				}, [
-					!I(i).query && !I(i).mention_only && !I(i).host_only && !dn.value ? (U(), W("div", dW, [q(SH, {
+					!I(i).query && !I(i).mention_only && !I(i).host_only && !fn.value ? (U(), W("div", dW, [q(SH, {
 						ref: (e) => /* @__PURE__ */ ln(r) ? r.value = e : r = e,
 						onEdit: t[4] ||= (e) => n("edit")
 					}, null, 512)])) : Y("", !0),
-					(U(!0), W(H, null, B(vn.value, (e) => (U(), W("div", {
+					(U(!0), W(H, null, B(yn.value, (e) => (U(), W("div", {
 						key: e.key,
 						class: "channel-message-group"
 					}, [q(w, {
 						label: e.label,
 						class: "channel-date-divider"
 					}, null, 8, ["label"]), (U(!0), W(H, null, B(e.messages, (e) => (U(), W(H, { key: e.id }, [
-						e.id === fn.value && !I(i).query && !I(i).mention_only && !I(i).host_only ? (U(), G(YH, { key: 0 })) : Y("", !0),
-						e.id === dn.value && !I(i).query && !I(i).mention_only && !I(i).host_only ? (U(), G(SH, {
+						e.id === pn.value && !I(i).query && !I(i).mention_only && !I(i).host_only ? (U(), G(YH, { key: 0 })) : Y("", !0),
+						e.id === fn.value && !I(i).query && !I(i).mention_only && !I(i).host_only ? (U(), G(SH, {
 							key: 1,
 							ref_for: !0,
 							ref: (e) => /* @__PURE__ */ ln(r) ? r.value = e : r = e,
@@ -43336,10 +43342,10 @@ var $U = {
 							e.failure.denials?.length ? (U(), G($H, {
 								key: 1,
 								denials: e.failure.denials,
-								allowable: !!ar(e.failure),
-								busy: or.value === e.failure.id,
-								error: sr.value[e.failure.id],
-								onAllow: (t) => cr(e.failure)
+								allowable: !!or(e.failure),
+								busy: sr.value === e.failure.id,
+								error: cr.value[e.failure.id],
+								onAllow: (t) => lr(e.failure)
 							}, null, 8, [
 								"denials",
 								"allowable",
@@ -43347,14 +43353,14 @@ var $U = {
 								"error",
 								"onAllow"
 							])) : Y("", !0),
-							rr(e.failure) ? (U(), W("div", WW, [q(o, {
+							ir(e.failure) ? (U(), W("div", WW, [q(o, {
 								label: "重发",
 								icon: "i-lucide-rotate-ccw",
 								size: "sm",
 								variant: "soft",
 								color: "neutral",
 								"aria-label": `把执行 #${e.failure.id} 的原消息填回输入框重发`,
-								onClick: (t) => ir(e.failure)
+								onClick: (t) => ar(e.failure)
 							}, null, 8, ["aria-label", "onClick"])])) : Y("", !0)
 						], 8, IW)) : e.withdrawn ? (U(), W("div", {
 							key: 6,
@@ -43365,13 +43371,13 @@ var $U = {
 						}, [q(g, {
 							name: e.withdrawn === "retracted" ? "i-lucide-undo-2" : "i-lucide-history",
 							class: "channel-withdrawn-icon"
-						}, null, 8, ["name"]), e.withdrawn === "retracted" ? (U(), W("span", KW, N(I(a).display_name(e.author)) + " 撤回了一条消息", 1)) : hn.value.runs.has(e.id) && !mn.value.has(e.id) ? (U(), W(H, { key: 1 }, [K("span", null, "已回退 " + N(hn.value.runs.get(e.id)) + " 条记录", 1), q(o, {
+						}, null, 8, ["name"]), e.withdrawn === "retracted" ? (U(), W("span", KW, N(I(a).display_name(e.author)) + " 撤回了一条消息", 1)) : gn.value.runs.has(e.id) && !hn.value.has(e.id) ? (U(), W(H, { key: 1 }, [K("span", null, "已回退 " + N(gn.value.runs.get(e.id)) + " 条记录", 1), q(o, {
 							label: "展开",
 							size: "xs",
 							variant: "link",
 							color: "neutral",
 							"aria-label": `展开从 #${e.id} 起已回退的记录`,
-							onClick: (t) => gn(e.id)
+							onClick: (t) => _n(e.id)
 						}, null, 8, ["aria-label", "onClick"])], 64)) : (U(), W(H, { key: 2 }, [
 							K("strong", null, N(I(a).display_name(e.author)), 1),
 							K("span", qW, N(e.text), 1),
@@ -43387,29 +43393,29 @@ var $U = {
 								"aria-label",
 								"onClick"
 							]),
-							hn.value.runs.has(e.id) ? (U(), G(o, {
+							gn.value.runs.has(e.id) ? (U(), G(o, {
 								key: 0,
 								label: "收起",
 								size: "xs",
 								variant: "link",
 								color: "neutral",
 								"aria-label": `收起从 #${e.id} 起已回退的记录`,
-								onClick: (t) => gn(e.id)
+								onClick: (t) => _n(e.id)
 							}, null, 8, ["aria-label", "onClick"])) : Y("", !0)
 						], 64))], 8, GW)) : (U(), W(H, { key: 7 }, [
 							nc([
 								e,
 								I(v).state.message_id === e.id,
 								T.value,
-								dr(e),
-								ur(e),
 								fr(e),
+								dr(e),
+								pr(e),
 								I(i).admin?.identity_version,
-								mr.value.id === e.id && mr.value.plan,
-								mr.value.id === e.id && mr.value.error,
-								mr.value.id === e.id,
+								hr.value.id === e.id && hr.value.plan,
+								hr.value.id === e.id && hr.value.error,
+								hr.value.id === e.id,
 								I(c) === "rewind_and_send",
-								xn.value.get(e.id),
+								Sn.value.get(e.id),
 								m.value.has(e.id),
 								le.value === e.id,
 								dt(e),
@@ -43453,7 +43459,7 @@ var $U = {
 										]),
 										K("div", YW, [K("div", XW, [
 											K("strong", null, N(I(a).display_name(e.author)), 1),
-											K("span", ZW, N(xn.value.get(e.id)), 1),
+											K("span", ZW, N(Sn.value.get(e.id)), 1),
 											q(D, {
 												size: "xs",
 												color: "neutral",
@@ -43542,39 +43548,39 @@ var $U = {
 									e.kind === "receipt" ? (U(), W("details", nG, [K("summary", { "aria-label": `查看运行回执 #${e.id}` }, "运行回执详情", 8, rG), K("div", {
 										class: "channel-message-text markdown-body",
 										innerHTML: e.rendered_text
-									}, null, 8, iG)])) : mr.value.id === e.id ? (U(), W("form", {
+									}, null, 8, iG)])) : hr.value.id === e.id ? (U(), W("form", {
 										key: 2,
 										class: "channel-edit",
 										"aria-label": `编辑消息 #${e.id}`,
-										onSubmit: uu(_r, ["prevent"])
+										onSubmit: uu(yr, ["prevent"])
 									}, [
 										vr(K("textarea", {
-											"onUpdate:modelValue": t[8] ||= (e) => mr.value.text = e,
+											"onUpdate:modelValue": t[8] ||= (e) => hr.value.text = e,
 											rows: "3",
 											maxlength: I(a).max_message_length,
 											"aria-label": "编辑后的消息",
 											onKeydown: [
-												fu(uu(gr, ["prevent"]), ["esc"]),
-												fu(uu(_r, ["ctrl", "prevent"]), ["enter"]),
-												fu(uu(_r, ["meta", "prevent"]), ["enter"])
+												fu(uu(_r, ["prevent"]), ["esc"]),
+												fu(uu(yr, ["ctrl", "prevent"]), ["enter"]),
+												fu(uu(yr, ["meta", "prevent"]), ["enter"])
 											]
-										}, null, 40, oG), [[Yl, mr.value.text]]),
+										}, null, 40, oG), [[Yl, hr.value.text]]),
 										K("p", {
-											class: j(["channel-edit-note", { "is-error": mr.value.error }]),
+											class: j(["channel-edit-note", { "is-error": hr.value.error }]),
 											role: "status"
-										}, N(mr.value.error || (mr.value.plan ? yr(mr.value.plan) : "正在读取回退范围…")), 3),
+										}, N(hr.value.error || (hr.value.plan ? br(hr.value.plan) : "正在读取回退范围…")), 3),
 										K("div", sG, [q(o, {
 											label: "取消",
 											size: "xs",
 											variant: "ghost",
 											color: "neutral",
-											onClick: gr
+											onClick: _r
 										}), q(o, {
 											type: "submit",
 											label: "回退并发送",
 											size: "xs",
 											color: "primary",
-											disabled: !mr.value.plan || !!I(c) && I(c) !== "rewind_and_send",
+											disabled: !hr.value.plan || !!I(c) && I(c) !== "rewind_and_send",
 											loading: I(c) === "rewind_and_send"
 										}, null, 8, ["disabled", "loading"])])
 									], 40, aG)) : (U(), W("div", cG, [K("div", {
@@ -43592,7 +43598,7 @@ var $U = {
 										"aria-label": `${m.value.has(e.id) ? "收起回答" : "展开完整回答"} #${e.id}`,
 										"aria-expanded": m.value.has(e.id),
 										"aria-controls": `channel-answer-${e.id}`,
-										onClick: (t) => Dn(e, t)
+										onClick: (t) => On(e, t)
 									}, null, 8, [
 										"label",
 										"trailing-icon",
@@ -43680,10 +43686,10 @@ var $U = {
 										e.denials?.length ? (U(), G($H, {
 											key: 2,
 											denials: e.denials,
-											allowable: !!ar(e),
-											busy: or.value === e.id,
-											error: sr.value[e.id],
-											onAllow: (t) => cr(e)
+											allowable: !!or(e),
+											busy: sr.value === e.id,
+											error: cr.value[e.id],
+											onAllow: (t) => lr(e)
 										}, null, 8, [
 											"denials",
 											"allowable",
@@ -43691,7 +43697,7 @@ var $U = {
 											"error",
 											"onAllow"
 										])) : Y("", !0),
-										rr(e) ? (U(), G(o, {
+										ir(e) ? (U(), G(o, {
 											key: 3,
 											label: "重发",
 											icon: "i-lucide-rotate-ccw",
@@ -43699,12 +43705,12 @@ var $U = {
 											variant: "soft",
 											color: "neutral",
 											"aria-label": `把执行 #${e.id} 的原消息填回输入框重发`,
-											onClick: (t) => ir(e)
+											onClick: (t) => ar(e)
 										}, null, 8, ["aria-label", "onClick"])) : Y("", !0)
 									], 8, vG))), 128))
 								]),
 								header: L(() => [K("div", xG, [K("div", SG, [
-									dr(e) ? Y("", !0) : (U(), G(_, {
+									fr(e) ? Y("", !0) : (U(), G(_, {
 										key: 0,
 										text: "回复"
 									}, {
@@ -43714,11 +43720,11 @@ var $U = {
 											color: "neutral",
 											variant: "ghost",
 											"aria-label": `回复 #${e.id}`,
-											onClick: (t) => br(e)
+											onClick: (t) => Sr(e)
 										}, null, 8, ["aria-label", "onClick"])]),
 										_: 2
 									}, 1024)),
-									fr(e) && mr.value.id !== e.id ? (U(), G(_, {
+									pr(e) && hr.value.id !== e.id ? (U(), G(_, {
 										key: 1,
 										text: "撤回"
 									}, {
@@ -43732,7 +43738,7 @@ var $U = {
 										}, null, 8, ["aria-label", "onClick"])]),
 										_: 2
 									}, 1024)) : Y("", !0),
-									dr(e) && mr.value.id !== e.id ? (U(), G(_, {
+									fr(e) && hr.value.id !== e.id ? (U(), G(_, {
 										key: 2,
 										text: "编辑"
 									}, {
@@ -43742,11 +43748,11 @@ var $U = {
 											color: "neutral",
 											variant: "ghost",
 											"aria-label": `编辑 #${e.id}，回退到它之前重新发送`,
-											onClick: (t) => hr(e)
+											onClick: (t) => gr(e)
 										}, null, 8, ["aria-label", "onClick"])]),
 										_: 2
 									}, 1024)) : Y("", !0),
-									!T.value && e.kind !== "receipt" && mr.value.id !== e.id ? (U(), G(_, {
+									!T.value && e.kind !== "receipt" && hr.value.id !== e.id ? (U(), G(_, {
 										key: 3,
 										text: I(v).state.message_id === e.id ? "停止朗读" : "朗读"
 									}, {
@@ -43765,7 +43771,7 @@ var $U = {
 										_: 2
 									}, 1032, ["text"])) : Y("", !0),
 									q(O, {
-										items: lr(e),
+										items: ur(e),
 										content: {
 											align: "end",
 											sideOffset: 5
@@ -43972,7 +43978,7 @@ var $U = {
 								color: "primary",
 								"aria-label": "重新发送这条消息",
 								disabled: !Qe.value || I(i).sending_message,
-								onClick: Sr
+								onClick: Cr
 							}, null, 8, ["disabled"]), q(o, {
 								label: "放弃",
 								icon: "i-lucide-x",
@@ -43986,32 +43992,32 @@ var $U = {
 						]),
 						_: 1
 					}, 8, ["data-author", "class"])])) : Y("", !0),
-					(dn.value === "end" || fn.value === "end") && !I(i).query && !I(i).mention_only && !I(i).host_only ? (U(), W("div", JG, [dn.value === "end" ? (U(), G(SH, {
+					(fn.value === "end" || pn.value === "end") && !I(i).query && !I(i).mention_only && !I(i).host_only ? (U(), W("div", JG, [fn.value === "end" ? (U(), G(SH, {
 						key: 0,
 						ref: (e) => /* @__PURE__ */ ln(r) ? r.value = e : r = e,
 						onEdit: t[15] ||= (e) => n("edit")
-					}, null, 512)) : Y("", !0), fn.value === "end" ? (U(), G(YH, { key: 1 })) : Y("", !0)])) : Y("", !0),
-					!un.value.length && !We.value.length ? (U(), W("div", YG, [
+					}, null, 512)) : Y("", !0), pn.value === "end" ? (U(), G(YH, { key: 1 })) : Y("", !0)])) : Y("", !0),
+					!dn.value.length && !We.value.length ? (U(), W("div", YG, [
 						q(g, { name: I(i).query || I(i).mention_only || I(i).host_only ? "i-lucide-search" : "i-lucide-hash" }, null, 8, ["name"]),
 						K("h2", null, N(I(i).query || I(i).mention_only || I(i).host_only ? "没有找到消息" : P.value.title), 1),
 						K("p", null, N(I(i).query || I(i).mention_only || I(i).host_only ? "试试其他关键词，或清除筛选。" : I(a).empty_discussion_message(P.value)), 1)
 					])) : Y("", !0)
 				], 544)), t, 16),
-				un.value.length && !Pe.value || C.value?.touch ? (U(), W("div", XG, [C.value?.touch ? (U(), W("button", {
+				dn.value.length && !Pe.value || C.value?.touch ? (U(), W("div", XG, [C.value?.touch ? (U(), W("button", {
 					key: 0,
 					type: "button",
 					class: "channel-listen-pill",
 					"aria-label": "从选中处开始朗读",
 					onMousedown: t[17] ||= uu(() => {}, ["prevent"]),
 					onClick: ae
-				}, [q(g, { name: "i-lucide-headphones" }), t[45] ||= J("听当前", -1)], 32)) : Y("", !0), un.value.length && !Pe.value ? (U(), G(o, {
+				}, [q(g, { name: "i-lucide-headphones" }), t[45] ||= J("听当前", -1)], 32)) : Y("", !0), dn.value.length && !Pe.value ? (U(), G(o, {
 					key: 1,
 					icon: "i-lucide-arrow-down",
 					color: "neutral",
 					variant: "outline",
 					"aria-label": "回到最新消息",
 					class: "channel-latest-button",
-					onClick: Vn
+					onClick: Hn
 				})) : Y("", !0)])) : Y("", !0),
 				K("div", ZG, [K("div", {
 					class: "channel-composer-column",
@@ -44019,14 +44025,14 @@ var $U = {
 					onDrop: t[29] ||= (...e) => I(a).drop_attachments && I(a).drop_attachments(...e),
 					onPaste: t[30] ||= (...e) => I(a).paste_attachments && I(a).paste_attachments(...e),
 					onKeydownCapture: t[31] ||= (e) => {
-						rn(e), Tr(e);
+						an(e), Er(e);
 					},
 					onInput: tn,
 					onClick: tn,
 					onKeyup: tn,
 					onSelect: tn,
-					onCompositionstart: an,
-					onCompositionend: an,
+					onCompositionstart: on,
+					onCompositionend: on,
 					onScrollCapture: Ht
 				}, [
 					q(te, {
@@ -44036,8 +44042,8 @@ var $U = {
 							side: "top",
 							align: "start",
 							sideOffset: 8,
-							onOpenAutoFocus: on,
-							onCloseAutoFocus: on
+							onOpenAutoFocus: sn,
+							onCloseAutoFocus: sn
 						},
 						ui: { content: "channel-select-menu channel-mention-menu" },
 						"onUpdate:open": t[19] ||= (e) => !e && (Ut.value = null)
@@ -44058,7 +44064,7 @@ var $U = {
 							tabindex: "-1",
 							class: "channel-mention-option",
 							onPointerdown: t[18] ||= uu(() => {}, ["prevent"]),
-							onClick: (t) => nn(e),
+							onClick: (t) => rn(e),
 							onPointermove: (e) => Yt.value = n
 						}, [
 							Kt[e] ? (U(), G(h, {
@@ -44081,7 +44087,7 @@ var $U = {
 								"class"
 							])),
 							K("span", null, N(Kt[e] ? `${Kt[e].label}（${$e.value.length} 位）` : I(a).display_name(e)), 1),
-							K("small", null, "@" + N(e), 1)
+							K("small", null, "@" + N(nn(e)), 1)
 						], 40, QG))), 128)), Qt.value.length ? Y("", !0) : (U(), W("p", $G, "没有匹配的成员"))], 512)]),
 						_: 1
 					}, 8, [
@@ -44121,7 +44127,7 @@ var $U = {
 							base: "channel-editor",
 							footer: "channel-composer-footer"
 						},
-						onSubmit: Sr
+						onSubmit: Cr
 					}, {
 						header: L(() => [
 							I(i).attachment_drafts.length ? (U(), W("div", eK, [(U(!0), W(H, null, B(I(i).attachment_drafts, (e) => (U(), W("div", {
@@ -44145,14 +44151,14 @@ var $U = {
 								K("span", null, N(I(a).display_name(Re.value.name)) + " 待注册：在其会话中粘贴启动指令", 1),
 								I(i).access?.can_manage ? (U(), G(o, {
 									key: 0,
-									icon: Zn.value === Re.value.name ? "i-lucide-check" : "i-lucide-copy",
-									label: Zn.value === Re.value.name ? "已复制" : "复制启动指令",
+									icon: $n.value === Re.value.name ? "i-lucide-check" : "i-lucide-copy",
+									label: $n.value === Re.value.name ? "已复制" : "复制启动指令",
 									"aria-live": "polite",
 									size: "xs",
 									color: "neutral",
 									variant: "ghost",
 									class: "channel-launch-copy",
-									onClick: t[20] ||= (e) => tr(Re.value.name)
+									onClick: t[20] ||= (e) => nr(Re.value.name)
 								}, null, 8, ["icon", "label"])) : Y("", !0)
 							])) : Y("", !0),
 							ze.value ? (U(), W("div", cK, [
@@ -44160,14 +44166,14 @@ var $U = {
 								K("span", null, N(ze.value), 1),
 								Ie(Le.value) && I(i).access?.can_manage ? (U(), G(o, {
 									key: 0,
-									icon: Zn.value === Le.value.name ? "i-lucide-check" : "i-lucide-copy",
-									label: Zn.value === Le.value.name ? "已复制" : "复制启动指令",
+									icon: $n.value === Le.value.name ? "i-lucide-check" : "i-lucide-copy",
+									label: $n.value === Le.value.name ? "已复制" : "复制启动指令",
 									"aria-live": "polite",
 									size: "xs",
 									color: "neutral",
 									variant: "ghost",
 									class: "channel-launch-copy",
-									onClick: t[21] ||= (e) => tr(Le.value.name)
+									onClick: t[21] ||= (e) => nr(Le.value.name)
 								}, null, 8, ["icon", "label"])) : Y("", !0)
 							])) : Y("", !0),
 							I(i).editing_queued ? (U(), W("div", lK, [
@@ -44268,7 +44274,7 @@ var $U = {
 								title: "发送 · Enter",
 								disabled: !Qe.value,
 								loading: I(c) === "send" || I(i).sending_message,
-								onClick: Sr
+								onClick: Cr
 							}, null, 8, ["disabled", "loading"])
 						]),
 						default: L(() => [Bt.value ? (U(), W("div", {
@@ -44307,7 +44313,7 @@ var $U = {
 			]);
 		};
 	}
-}, [["__scopeId", "data-v-99b4622d"]]), eq = { class: "page-heading" }, tq = { class: "topic-brief" }, nq = {
+}, [["__scopeId", "data-v-202f6e48"]]), eq = { class: "page-heading" }, tq = { class: "topic-brief" }, nq = {
 	key: 0,
 	class: "host-progress"
 }, rq = {

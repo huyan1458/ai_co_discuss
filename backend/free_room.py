@@ -521,7 +521,7 @@ def describe_members(connection, room_id, token, payload):
 
 
 def member_labels(connection, room_id):
-    """The owner's display labels of members by name; only screens use them, never addressing or credentials."""
+    """The owner's display labels of members by name; screens show them and the page turns a user's @label into the member name, never credentials."""
     return {row["name"]: row["label"] for row in connection.execute(
         "SELECT name,label FROM member_labels WHERE room_id=? ORDER BY name", (room_id,))}
 

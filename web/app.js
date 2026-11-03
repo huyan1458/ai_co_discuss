@@ -1036,10 +1036,13 @@ function message_payload() {
   const members = state.room.free?.members || [];
   const payload = { author: "用户", text, reply_to: state.reply_to, kind: "chat", submitted_by: "用户" };
   const active = members.filter(member => member.status === "active" && (member.access !== "manual" || member.registered_at)).map(member => member.name);
+  // Members are named by the nickname shown on screen (or their name); the request carries the member name.
+  const named_here = mentioned_members(text, active);
+  const mentioned_member = name => named_here.has(name);
   const session = state.room.session;
   const session_live = session && ["active", "paused"].includes(session.status);
   if (session_live) {
-    const direct = active.filter(name => mentioned(text, name));
+    const direct = active.filter(mentioned_member);
     if (direct.length) payload.to = direct;
     return payload;
   }
@@ -1047,13 +1050,39 @@ function message_payload() {
   // @全体依次 or @all-seq has them answer one after another, the host first); without any, the server gives the message to the only member or the host.
   const sequential = mentioned(text, "全体依次") || mentioned(text, "all-seq");
   const everyone = !sequential && (mentioned(text, "全体成员") || mentioned(text, "all"));
-  const named = sequential || everyone ? active : active.filter(name => mentioned(text, name));
+  const named = sequential || everyone ? active : active.filter(mentioned_member);
   if (named.length) payload.to = named;
   if (sequential && named.length) payload.sequential = true;
   if (everyone && named.length) payload.order = "auto";
   // The site queues the message while members still work (or earlier ones wait) and posts it once the room is idle.
   if (state.room.free?.queued_messages?.queueing !== false) payload.queue = true;
   return payload;
+}
+
+/**
+ * How a member may be @named: by the nickname shown on screen, and always by its member name. A nickname shared with
+ * another member (or equal to another member's name) is ambiguous and is not used, so the member name stays the only way.
+ */
+function mention_handles(name, names) {
+  const nickname = display_name(name);
+  const taken = names.filter(other => other !== name).flatMap(other => [other, display_name(other)]);
+  return nickname && nickname !== name && !taken.includes(nickname) ? [nickname, name] : [name];
+}
+
+/**
+ * The members a text @names, longest handle first: once "@Claude评审" names one member, the shorter "@Claude" inside it
+ * does not also name another (Chinese nicknames have no space after them).
+ */
+function mentioned_members(text, names) {
+  let prose = text.replace(/```[\s\S]*?```/g, "").replace(/`[^`\n]*`/g, "").replace(/^>.*$/gm, "");
+  const handles = names.flatMap(name => mention_handles(name, names).map(handle => ({ name, handle })))
+    .sort((left, right) => right.handle.length - left.handle.length);
+  const found = new Set();
+  for (const { name, handle } of handles) {
+    const pattern = new RegExp(`(^|[\\s(（，,。；;：:])@${handle.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}(?![\\w-])`, "gu");
+    prose = prose.replace(pattern, (match, lead) => { found.add(name); return lead + " ".repeat(match.length - lead.length); });
+  }
+  return found;
 }
 
 /** Whether plain text (not code or quotes) names a member with @, so a typed mention selects it. */
@@ -4111,7 +4140,7 @@ window.discuss_view = { snapshot: view_snapshot, write_field: write_view_field, 
   write_expert: write_view_expert, add_instance: add_view_instance, add_preset: add_preset_instance, platform_of, execute: execute_view_action, theme: change_view_theme,
   admin: { register: register_admin, login: login_admin, logout: logout_admin,
     update_profile: update_admin_profile, avatar_from_file: admin_avatar_from_file, validate: validate_admin_form },
-  request: request_json, rewind_plan, identities: IDENTITIES, display_name, sources: SOURCE_LABELS,
+  request: request_json, rewind_plan, identities: IDENTITIES, display_name, mention_handles, mentioned_members, sources: SOURCE_LABELS,
   set_member_access, set_member_model, allow_denials, set_member_adapter, reload_room_models, limits_label, stop_reason_label, participant_model, participant_files, participant_session_hint, participant_access,
   turn_label, turn_guidance, round_groups, limit_rounds, progress_speaker, brief_meta, max_message_length: MAX_MESSAGE_LENGTH, provenance: message_provenance, format_time };
 

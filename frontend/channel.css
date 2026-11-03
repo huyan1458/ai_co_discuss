@@ -450,7 +450,7 @@ html[data-theme^="channel"] .channel-message.channel-topic-card { color: var(--u
 .channel-message-id { font-size: 11px !important; font-weight: 400; color: #929aa7; padding: 0 !important; }
 .channel-message-text { margin-top: 2px; color: #d7dbe3; font-size: 16px; line-height: 1.6; overflow-wrap: anywhere; }
 /* Error/warning text gets its own box so a failure never reads like an answer; same left-bar tint as .access-failure. */
-.channel-message-text.channel-failure-reason { --failure-tone: var(--ui-error); margin: 0; padding: 10px 14px; border-left: 2px solid var(--failure-tone); border-radius: 0 6px 6px 0; background: color-mix(in srgb, var(--failure-tone) 7%, transparent); color: color-mix(in srgb, var(--failure-tone) 45%, var(--ui-text-highlighted)); font-size: 14px; line-height: 1.65; white-space: pre-wrap; }
+.channel-message-text.channel-failure-reason { --failure-tone: var(--ui-error); margin: 0; padding: 1px 0 1px 12px; border-left: 2px solid color-mix(in srgb, var(--failure-tone) 60%, transparent); color: #b3bdcc; font-size: 14px; line-height: 1.65; white-space: pre-wrap; }
 .channel-message-text.channel-failure-reason.is-warning { --failure-tone: var(--ui-warning); }
 .channel-stop-note { font-size: 14px; color: #b3bdcc; }
 .channel-late-answer { white-space: pre-wrap; font-size: 14px; color: #b3bdcc; }

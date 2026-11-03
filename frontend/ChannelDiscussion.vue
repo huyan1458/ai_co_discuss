@@ -512,8 +512,16 @@ const mention_mirror = computed(() => {
   if (!mention_pool.value.length || !value.includes("@")) return "";
   // Masking keeps every offset, so matches in the masked copy point at the same characters of the draft.
   const masked = value.replace(/```[\s\S]*?```/g, blank).replace(/`[^`\n]*`/g, blank).replace(/^>.*$/gm, blank);
-  const ranges = mention_pool.value.flatMap(({ name }) => [...masked.matchAll(new RegExp(MENTION_PATTERN(name.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")).source, "gu"))]
-    .map((match) => [match.index + match[1].length, match.index + match[0].length])).sort((a, b) => a[0] - b[0]);
+  const names = free_members.value.map((member) => member.name);
+  // Longest handle first, and a span already highlighted is not highlighted again by a shorter handle inside it.
+  const handles = mention_pool.value.flatMap(({ name }) => names.includes(name) ? bridge.mention_handles(name, names) : [name])
+    .sort((left, right) => right.length - left.length);
+  const taken = [];
+  for (const name of handles) for (const match of masked.matchAll(new RegExp(MENTION_PATTERN(name.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")).source, "gu"))) {
+    const span = [match.index + match[1].length, match.index + match[0].length];
+    if (!taken.some(([start, end]) => span[0] < end && start < span[1])) taken.push(span);
+  }
+  const ranges = taken.sort((a, b) => a[0] - b[0]);
   if (!ranges.length) return "";
   let html = "", cursor = 0;
   for (const [start, end] of ranges) {
@@ -583,11 +591,13 @@ function update_mention(event) {
   mention_context.value = context;
 }
 
+/** What @ inserts for a member: its on-screen nickname when that names it alone, otherwise its member name. */
+const mention_handle = (name) => GROUP_MENTIONS[name] ? name : bridge.mention_handles(name, free_members.value.map((member) => member.name))[0];
 /** Replace just the active token and leave the caret ready for the next word. */
 async function select_mention(name) {
   if (!mention_context.value || !mention_members.value.includes(name)) return;
   const { start, end } = mention_context.value;
-  const insertion = `@${name} `;
+  const insertion = `@${mention_handle(name)} `;
   text.value = text.value.slice(0, start) + insertion + text.value.slice(end).replace(/^ /, "");
   mention_context.value = null;
   await nextTick();
@@ -1537,7 +1547,7 @@ function copy_message(message) { act("copy", `${view.value.room_site}/r/${room.v
             <button v-for="(name, index) in mention_members" :id="`channel-mention-${index}`" :key="name" type="button" role="option" :aria-selected="name === mention_active" tabindex="-1" class="channel-mention-option" @pointerdown.prevent @click="select_mention(name)" @pointermove="mention_index = index">
               <UAvatar v-if="GROUP_MENTIONS[name]" :icon="GROUP_MENTIONS[name].icon" :alt="name" size="xs" class="channel-avatar" />
               <UAvatar v-else :src="bridge.identities[name]?.icon" :text="bridge.identities[name]?.initials" :alt="bridge.display_name(name)" size="xs" :class="['channel-avatar', bridge.identities[name]?.style]" />
-              <span>{{ GROUP_MENTIONS[name] ? `${GROUP_MENTIONS[name].label}（${free_members.length} 位）` : bridge.display_name(name) }}</span><small>@{{ name }}</small>
+              <span>{{ GROUP_MENTIONS[name] ? `${GROUP_MENTIONS[name].label}（${free_members.length} 位）` : bridge.display_name(name) }}</span><small>@{{ mention_handle(name) }}</small>
             </button>
             <p v-if="!mention_members.length" class="channel-mention-empty">没有匹配的成员</p>
           </div>

@@ -1518,3 +1518,18 @@ test("relayed reads are asked again after a lost answer, writes never; a dropped
   g.context.set_connection(false);
   assert.equal(timers.at(-1).delay, 2000, "a success resets the back-off");
 });
+
+test("@ names a member by its on-screen nickname or its member name, longest first, never by an ambiguous nickname", () => {
+  const f = theme_fixture(), state = f.context.test_state;
+  const names = ["Claude", "Claude-1", "Antigravity", "Codex"];
+  const named = (text) => [...f.context.mentioned_members(text, names)].sort().join();
+  state.room = { labels: { "Claude-1": "Claude评审" } };
+  assert.equal(named("@Gemini 看看这一版"), "Antigravity", "Gemini is the nickname shown for Antigravity");
+  assert.equal(named("@Antigravity 看看"), "Antigravity");
+  assert.equal(named("@Claude评审 你来"), "Claude-1", "the longer nickname does not also name Claude");
+  assert.equal(named("@Claude 和 @Claude评审"), "Claude,Claude-1");
+  assert.equal(named("`@Codex` 只是引用"), "");
+  state.room = { labels: { Codex: "Gemini" } };
+  assert.equal(named("@Gemini 你在吗"), "", "a nickname two members share names neither");
+  assert.equal(named("@Codex @Antigravity"), "Antigravity,Codex");
+});
