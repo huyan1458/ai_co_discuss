@@ -32,6 +32,10 @@ const reader = use_read_aloud({ bridge, container: () => transcript.value,
   } });
 // Where "listen from here" shows for text selected in a message, with the selection kept for the click.
 const listen_here = ref(null);
+// The phone toolbar has room for three buttons, so read-aloud joins the "more" menu there.
+const narrow_query = window.matchMedia("(max-width: 700px)");
+const narrow = ref(narrow_query.matches);
+const track_narrow = (event) => { narrow.value = event.matches; };
 /** Offer reading from a selection made inside a message's text. */
 function track_selection() {
   const selection = document.getSelection();
@@ -41,7 +45,9 @@ function track_selection() {
   const card = body && transcript.value?.contains(body) ? body.closest(".channel-message[data-message-id]") : null;
   if (!card) { listen_here.value = null; return; }
   const rect = range.getBoundingClientRect();
-  listen_here.value = { id: Number(card.dataset.messageId), range: range.cloneRange(), left: rect.left + rect.width / 2, top: rect.bottom + 8 };
+  // On touch screens the system's own selection menu sits next to the selection, so the button waits above the composer instead.
+  const touch = window.matchMedia("(pointer: coarse)").matches;
+  listen_here.value = { id: Number(card.dataset.messageId), range: range.cloneRange(), touch, left: rect.left + rect.width / 2, top: rect.bottom + 8 };
 }
 /** Start reading where the selection begins and continue to the latest message. */
 function listen_from_selection() {
@@ -52,10 +58,11 @@ function listen_from_selection() {
 }
 onMounted(() => {
   document.addEventListener("selectionchange", track_selection);
+  narrow_query.addEventListener("change", track_narrow);
   transcript.value?.addEventListener("scroll", track_selection, { passive: true });
   watch(() => room.value?.id, () => reader.stop());
 });
-onBeforeUnmount(() => { document.removeEventListener("selectionchange", track_selection); reader.stop(); });
+onBeforeUnmount(() => { document.removeEventListener("selectionchange", track_selection); narrow_query.removeEventListener("change", track_narrow); reader.stop(); });
 const MESSAGE_PREVIEW_LENGTH = 160;
 const MESSAGE_PREVIEW_MIN_LENGTH = 100;
 const MESSAGE_PREVIEW_CODE_LINES = 4;
@@ -1109,6 +1116,9 @@ async function allow_and_resend(report) {
 function message_actions(message) {
   return [[
     ...(can_take_back(message) ? [{ label: "回复", icon: "i-lucide-corner-up-left", onSelect: () => reply_to(message) }] : []),
+    ...(narrow.value && message.kind !== "receipt" && editing.value.id !== message.id ? [reader.state.message_id === message.id
+      ? { label: "停止朗读", icon: "i-lucide-square", onSelect: () => reader.stop() }
+      : { label: "朗读", icon: "i-lucide-volume-2", onSelect: () => reader.start(message.id) }] : []),
     { label: "复制原文链接", icon: "i-lucide-link", onSelect: () => copy_message(message) },
     { label: "查看原文", icon: "i-lucide-expand", onSelect: () => emit("detail", message.id) },
     ...(can_branch(message) && message.author !== "用户" ? [{ label: "从这里分支", icon: "i-lucide-git-branch", onSelect: () => act("fork_room", message.id) }] : []),
@@ -1226,7 +1236,7 @@ function copy_message(message) { act("copy", `${view.value.room_site}/r/${room.v
         </div>
       </motion.div>
     </Teleport>
-    <UButton v-if="listen_here" label="听当前" icon="i-lucide-headphones" size="sm" color="neutral" variant="solid" class="channel-listen-here" :style="{ left: `${listen_here.left}px`, top: `${listen_here.top}px` }" aria-label="从选中处开始朗读" @mousedown.prevent @click="listen_from_selection" />
+    <UButton v-if="listen_here" label="听当前" icon="i-lucide-headphones" size="sm" color="neutral" variant="outline" class="channel-surface-button channel-listen-here" :class="{ 'is-docked': listen_here.touch }" :style="listen_here.touch ? undefined : { left: `${listen_here.left}px`, top: `${listen_here.top}px` }" aria-label="从选中处开始朗读" @mousedown.prevent @click="listen_from_selection" />
     <div ref="transcript" v-memo="[message_groups, message_round_labels, free, room.session, view.access, active_message, expanded_answers.size, reader.state.message_id, room.title, view.query, view.mention_only, topic_anchor, end_anchor, request_badges, execution_reports, recommendations, adopting, scheduler_decisions, host_arrangements, correcting, pending, execution_notes, editing, rewound_runs]" class="channel-transcript" aria-label="聊天记录" @scroll="track_scroll" @wheel.passive="resume_tracking" @touchstart.passive="resume_tracking" @keydown="resume_tracking">
       <div v-if="!view.query && !view.mention_only && !topic_anchor" class="channel-message-group channel-topic-group"><TopicCard :ref="(card) => topic_card = card" @edit="emit('edit')" /></div>
       <div v-for="group in message_groups" :key="group.key" class="channel-message-group">
@@ -1328,7 +1338,7 @@ function copy_message(message) { act("copy", `${view.value.room_site}/r/${room.v
           </template>
         </div>
         <template v-else>
-        <UChatMessage :id="String(message.id)" v-memo="[message, reader.state.message_id === message.id, can_take_back(message), can_branch(message), can_retract(message), view.admin?.identity_version, editing.id === message.id && editing.plan, editing.id === message.id && editing.error, editing.id === message.id, pending === 'rewind_and_send', message_round_labels.get(message.id), expanded_answers.has(message.id), active_message === message.id, waits_for_host(message), request_badges.get(message.id), execution_reports.get(message.id), message_elapsed(message), recommendations.get(message.id), adopting === message.id, answer_execution(message)?.notes, execution_notes.get(answer_execution(message)?.id)]" :data-message-id="message.id" :data-author="bridge.identities[message.author]?.style" tabindex="-1" :role="message.author === '用户' ? 'user' : 'assistant'" :parts="[]" side="left" variant="naked" color="neutral" class="channel-message" :class="{ 'channel-current-message': active_message === message.id }" :ui="{ header: 'channel-message-header', container: 'channel-message-container', body: 'channel-message-body' }">
+        <UChatMessage :id="String(message.id)" v-memo="[message, reader.state.message_id === message.id, narrow, can_take_back(message), can_branch(message), can_retract(message), view.admin?.identity_version, editing.id === message.id && editing.plan, editing.id === message.id && editing.error, editing.id === message.id, pending === 'rewind_and_send', message_round_labels.get(message.id), expanded_answers.has(message.id), active_message === message.id, waits_for_host(message), request_badges.get(message.id), execution_reports.get(message.id), message_elapsed(message), recommendations.get(message.id), adopting === message.id, answer_execution(message)?.notes, execution_notes.get(answer_execution(message)?.id)]" :data-message-id="message.id" :data-author="bridge.identities[message.author]?.style" tabindex="-1" :role="message.author === '用户' ? 'user' : 'assistant'" :parts="[]" side="left" variant="naked" color="neutral" class="channel-message" :class="{ 'channel-current-message': active_message === message.id }" :ui="{ header: 'channel-message-header', container: 'channel-message-container', body: 'channel-message-body' }">
           <template #body>
             <div class="channel-message-byline">
               <UAvatar :src="bridge.identities[message.author]?.icon" :text="bridge.identities[message.author]?.initials || '?'" :alt="bridge.display_name(message.author)" size="md" class="channel-avatar" :class="bridge.identities[message.author]?.style" />
@@ -1387,7 +1397,7 @@ function copy_message(message) { act("copy", `${view.value.room_site}/r/${room.v
             <UTooltip v-if="!can_take_back(message)" text="回复"><UButton icon="i-lucide-corner-up-left" size="xs" color="neutral" variant="ghost" :aria-label="`回复 #${message.id}`" @click="reply_to(message)" /></UTooltip>
             <UTooltip v-if="can_retract(message) && editing.id !== message.id" text="撤回"><UButton icon="i-lucide-undo-2" size="xs" color="neutral" variant="ghost" :aria-label="`撤回 #${message.id}`" @click="act('retract_message', message.id)" /></UTooltip>
             <UTooltip v-if="can_take_back(message) && editing.id !== message.id" text="编辑"><UButton icon="i-lucide-pencil" size="xs" color="neutral" variant="ghost" :aria-label="`编辑 #${message.id}，回退到它之前重新发送`" @click="start_edit(message)" /></UTooltip>
-            <UTooltip v-if="message.kind !== 'receipt' && editing.id !== message.id" :text="reader.state.message_id === message.id ? '停止朗读' : '朗读'"><UButton :icon="reader.state.message_id === message.id ? 'i-lucide-square' : 'i-lucide-volume-2'" size="xs" color="neutral" variant="ghost" :aria-label="reader.state.message_id === message.id ? '停止朗读' : `从 #${message.id} 开始朗读`" @click="reader.state.message_id === message.id ? reader.stop() : reader.start(message.id)" /></UTooltip>
+            <UTooltip v-if="!narrow && message.kind !== 'receipt' && editing.id !== message.id" :text="reader.state.message_id === message.id ? '停止朗读' : '朗读'"><UButton :icon="reader.state.message_id === message.id ? 'i-lucide-square' : 'i-lucide-volume-2'" size="xs" color="neutral" variant="ghost" :aria-label="reader.state.message_id === message.id ? '停止朗读' : `从 #${message.id} 开始朗读`" @click="reader.state.message_id === message.id ? reader.stop() : reader.start(message.id)" /></UTooltip>
             <UDropdownMenu :items="message_actions(message)" :content="{ align: 'end', sideOffset: 5 }" :ui="{ content: 'channel-menu' }"><UButton icon="i-lucide-ellipsis" size="xs" color="neutral" variant="ghost" :aria-label="`消息 #${message.id} 的更多操作`" /></UDropdownMenu>
           </div></div></template>
         </UChatMessage>
@@ -1519,6 +1529,7 @@ function copy_message(message) { act("copy", `${view.value.room_site}/r/${room.v
 .channel-working-row { display: flex; align-items: center; gap: 12px; }
 .channel-working-row > .channel-message-text { flex: 1; min-width: 0; }
 .channel-listen-here { position: fixed; z-index: 40; transform: translateX(-50%); box-shadow: 0 6px 18px rgb(0 0 0 / 0.18); }
+.channel-listen-here.is-docked { left: 50%; bottom: calc(120px + env(safe-area-inset-bottom)); }
 .channel-working-actions { display: flex; align-items: center; gap: 6px; flex-shrink: 0; }
 .channel-stop-button { width: 32px; height: 32px; padding: 0; justify-content: center; border-radius: 999px; background: #b4524c; color: #fff; }
 .channel-stop-button:hover:not(:disabled) { background: #9c4540; }

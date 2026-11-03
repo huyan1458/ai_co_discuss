@@ -149,6 +149,8 @@ export function use_read_aloud({ bridge, container, prepare, author }) {
   async function start(message_id, selection = null) {
     stop();
     const token = run;
+    // iPhone mutes Web Audio under the silent switch unless the page declares itself a player.
+    if (navigator.audioSession) navigator.audioSession.type = "playback";
     context ||= new AudioContext();
     context.resume();
     // Expanding a shortened answer replaces its text nodes, so a selection is turned into a character position first.

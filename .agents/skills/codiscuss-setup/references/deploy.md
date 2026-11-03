@@ -29,7 +29,7 @@
 
 - 打开实际网址，页面正常显示；`/api/health` 返回 `ok: true`。
 - `codiscuss health --site <实际网址>` 成功。
-- 在电脑上运行 `codiscuss local connect <实际网址>` 并登录管理员后，目录显示“电脑上的房间”。
+- 在电脑上运行 `codiscuss local connect <实际网址>` 并登录管理员后，目录“协作房间”列出电脑上的房间。
 
 ## 域名
 

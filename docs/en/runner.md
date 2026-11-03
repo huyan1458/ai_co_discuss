@@ -53,7 +53,7 @@ Then sign in as the site administrator in this computer's browser to pair it; th
 
 ### From Other Devices
 
-Once paired, sign in with the same account on a phone or tablet. The directory lists the rooms on the computer: send messages and attachments, manage members, export backups, with live updates. Conversations stay on the computer; the website only passes encrypted content. Project paths and keys never leave the computer.
+Once paired, sign in with the same account on a phone or tablet. The "协作房间" directory lists the rooms on the computer, the same as on the computer itself: send messages and attachments, manage members, export backups, with live updates. Conversations stay on the computer; the website only passes encrypted content. Project paths and keys never leave the computer.
 
 - Nothing is listed while the computer is off or codiscuss is not running; the directory heading says the computer is not connected or offline, and the page connects on its own once the computer is back.
 - When the computer does not answer in time, the page reports the result as unconfirmed and never resends on its own; check the room before retrying.
