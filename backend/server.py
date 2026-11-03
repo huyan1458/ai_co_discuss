@@ -31,8 +31,9 @@ from .free_room import (add_member, after_free_message, authorize_free_write, ch
                         save_room_access, view_execution)
 from .free_room import convert_suggestion, message_suggestions, save_suggestions, sync_participants
 from .free_room import adopt_recommendation, recommend_member, register_member, require_member
-from .free_room import describe_members, execution_notes, label_members, member_descriptions, member_labels, reorder_speakers, set_chain_rounds, speaking_order, stop_room, stop_room_work
-from .free_room import ADAPTER_VALUE, continue_chain, execution_timeline, group_route_plan, retract_message, rewind_plan, rewind_room, withdrawals
+from .free_room import describe_members, execution_notes, label_members, member_descriptions, member_display_names, member_labels, reorder_speakers, resolve_member_fields, set_chain_rounds, speaking_order, stop_room, stop_room_work
+from .free_room import (ADAPTER_VALUE, ANCHOR_SQL, continue_chain, execution_timeline, group_route_plan, retract_message, rewind_plan, rewind_room,
+                        room_event_log, withdrawals)
 from .free_room import review_capability, review_roster, checked_review_plan, save_review_plan, check_review_retry
 from .free_room import review_ready, advance_review, late_answer
 from .identity import MAX_ROOM_AGENTS, PARTICIPANTS, is_ai, is_participant
@@ -95,6 +96,13 @@ ASSETS.update({"/katex/" + file.relative_to(WEB_ROOT / "katex").as_posix():
                for file in (WEB_ROOT / "katex").rglob("*") if file.is_file()})
 SCHEMA = (Path(__file__).resolve().parent / "schema.sql").read_text(encoding="utf-8")
 LEGACY_DISCUSSION_SQL = (Path(__file__).resolve().parent / "migrations" / "drop_legacy_discussion.sql").read_text(encoding="utf-8")
+# Room event log of write requests: each string field keeps this many characters and the whole payload this many,
+# and fields whose names look like credentials are replaced, so the log never holds a secret.
+API_LOG_TEXT = 2000
+API_LOG_PAYLOAD = 8000
+API_LOG_SECRET = re.compile(r"token|password|secret|api_?key|credential|authorization", re.IGNORECASE)
+# Lease renewals and phase reports arrive every few seconds per execution; the timeline already keeps their content.
+API_LOG_QUIET_ACTIONS = ("renew", "segments")
 # A room's discussion phase: its open discussion's phase, its last discussion's end, or `discussing` before any discussion.
 PHASES = {"initial": "独立观点", "discussing": "深入讨论", "paused": "已暂停", "concluded": "已收束"}
 LIMIT_KEYS = ("max_rounds", "max_minutes", "execution_minutes")
@@ -158,13 +166,14 @@ MESSAGE_QUERY = """SELECT messages.*, COALESCE(details.kind,'opinion') AS kind,
 COALESCE(details.submitted_by, CASE WHEN messages.source IN ('cli','api','url','user')
 THEN messages.author ELSE '用户' END) AS submitted_by,
 COALESCE(summaries.text,'') AS summary, COALESCE(summaries.author,'') AS summary_by, timing.elapsed_seconds,
-answered.execution_id, answered.request_message_id, COALESCE(withdrawn.kind,'') AS withdrawn
+answered.execution_id, answered.request_message_id, answered.anchor_message_id, COALESCE(withdrawn.kind,'') AS withdrawn
 FROM messages LEFT JOIN message_details AS details ON details.message_id=messages.id
 LEFT JOIN message_withdrawals AS withdrawn ON withdrawn.message_id=messages.id
 LEFT JOIN message_summaries AS summaries ON summaries.message_id=messages.id
 LEFT JOIN message_timings AS timing ON timing.message_id=messages.id
-LEFT JOIN (SELECT answer_id, MIN(execution_id) AS execution_id, MIN(message_id) AS request_message_id
-  FROM member_requests WHERE answer_id IS NOT NULL AND execution_id IS NOT NULL GROUP BY answer_id) AS answered
+LEFT JOIN (SELECT r.answer_id, MIN(r.execution_id) AS execution_id, MIN(r.message_id) AS request_message_id,
+  MIN(""" + ANCHOR_SQL + """) AS anchor_message_id
+  FROM member_requests r WHERE r.answer_id IS NOT NULL AND r.execution_id IS NOT NULL GROUP BY r.answer_id) AS answered
   ON answered.answer_id=messages.id"""
 # Messages the owner took back leave AI reads; the page asks for them with withdrawn=include to keep them in place.
 INCLUDE_WITHDRAWN = "include"
@@ -250,6 +259,8 @@ def _hide_execution_after_boundary(execution, boundary):
     if hidden_request:
         execution["request_message_id"] = None
         execution["result"] = ""
+    if isinstance(execution.get("anchor_message_id"), int) and execution["anchor_message_id"] > boundary:
+        execution["anchor_message_id"] = None
     for request in execution.get("requests", []):
         _hide_after_boundary(request, boundary, ("message_id", "answer_id", "source_message_id", "after_message_id"))
         if request.get("discussion_session_id") and request.get("source_question"):
@@ -366,6 +377,9 @@ def require_room(connection, room_id):
         FROM room_members AS m LEFT JOIN member_sessions AS s ON s.member_id=m.id
         LEFT JOIN member_registrations AS r ON r.member_id=m.id AND r.token_hash=m.token_hash
         WHERE m.room_id=? AND m.status<>'removed' ORDER BY m.id""", (room_id,))]
+    # Members are called by label in text and in @; the ID (name) is part of the full record, like the description.
+    shown = member_display_names(connection, room_id)
+    room["members"] = [{"label": shown.get(member["name"], member["name"]), **member} for member in room["members"]]
     option = connection.execute("SELECT named_followup FROM session_options WHERE session_id=?", (session["id"],)).fetchone() if session else None
     # Before any discussion the host keeps its named follow-ups.
     room["named_followup"] = bool(option[0]) if option else True
@@ -844,7 +858,53 @@ def delete_room_records(connection, room_id):
     connection.execute("DELETE FROM messages WHERE room_id=?", (room_id,))
     for table in ("discussion_limits", "topic_settings", "room_creations", "room_directory", "room_folder_assignments", "room_briefs", "room_user_requests"):
         connection.execute(f"DELETE FROM {table} WHERE room_id=?", (room_id,))
+    # Last, since deleting the rows above fires the event triggers.
+    connection.execute("DELETE FROM room_events WHERE room_id=?", (room_id,))
     connection.execute("DELETE FROM rooms WHERE id=?", (room_id,))
+
+
+def redact_payload(value):
+    """Copy a request payload for the event log: credentials replaced, long strings cut with their full length noted."""
+    if isinstance(value, dict):
+        return {key: "[已隐去]" if API_LOG_SECRET.search(str(key)) else redact_payload(item) for key, item in value.items()}
+    if isinstance(value, list):
+        return [redact_payload(item) for item in value]
+    if isinstance(value, str) and len(value) > API_LOG_TEXT:
+        return f"{value[:API_LOG_TEXT]}…（共 {len(value)} 字）"
+    return value
+
+
+def api_actor(connection, room_id, token):
+    """Name who sent a write: `owner`, `member:NAME`, or `none` / `unknown` when the credential matches nobody."""
+    hashed = token_hash(token)
+    if not hashed:
+        return "none"
+    if connection.execute("SELECT 1 FROM room_modes WHERE room_id=? AND control_hash=?", (room_id, hashed)).fetchone():
+        return "owner"
+    member = connection.execute("SELECT name FROM room_members WHERE room_id=? AND token_hash=?", (room_id, hashed)).fetchone()
+    return f"member:{member[0]}" if member else "unknown"
+
+
+def record_api_event(database, record):
+    """Append one write request, accepted or rejected, to its room's event log in a connection of its own.
+
+    Runs after the request's own connection is closed, so a rejected write that rolled back is still recorded and the
+    log never holds the request's transaction open. Failures are logged and swallowed: the record must not break a write.
+    """
+    try:
+        with closing(connect_db(database)) as connection, connection:
+            data = {key: record[key] for key in ("method", "path", "status", "client", "bridged")}
+            data["elapsed_ms"] = max(0, int(time.time() * 1000) - record["at"])
+            data["actor"] = api_actor(connection, record["room_id"], record["token"])
+            if record.get("error"):
+                data["error"] = record["error"]
+            payload = json.dumps(redact_payload(record["payload"]), ensure_ascii=False)
+            data["payload"] = payload if len(payload) <= API_LOG_PAYLOAD else f"{payload[:API_LOG_PAYLOAD]}…（共 {len(payload)} 字）"
+            connection.execute("""INSERT INTO room_events (room_id,at,kind,data) SELECT ?,?,?,? WHERE EXISTS (SELECT 1 FROM rooms WHERE id=?)""",
+                               (record["room_id"], record["at"], "api.write" if record["status"] < 400 else "api.rejected",
+                                json.dumps(data, ensure_ascii=False), record["room_id"]))
+    except Exception:
+        logging.exception("Recording a room write in the event log failed")
 
 
 def creation_request(settings, limits):
@@ -1062,6 +1122,7 @@ def append_free_message(connection, room, payload, actor):
         return append_free_moderation(connection, room, payload, actor)
     if payload.get("kind") not in (None, "chat"):
         raise ValueError("自由协作与新讨论使用 kind=chat，并以 execution_id 或 request_ids 关联请求")
+    resolve_member_fields(connection, room["id"], payload)
     if payload.get("turn_id") is not None and current_session(connection, room["id"], active_only=True):
         raise ValueError("新讨论使用 kind=chat，并以 execution_id 或 request_ids 关联请求")
     author, text, submission_id, reply_to = message_values(payload)
@@ -1585,9 +1646,26 @@ class DiscussionHandler(BaseHTTPRequestHandler):
         if (self.command == "POST" and 200 <= status < 300 and parts[:2] in (["api", "rooms"], ["api", "folders"])
                 and not quiet_renewal and parts != ["api", "rooms", "last"]):
             self.server.hub.notify_update(parts[2] if parts[:2] == ["api", "rooms"] and len(parts) > 3 else None)
+        # Every room write, accepted or rejected, goes to the room's event log once the request's connection is closed.
+        created = parts == ["api", "rooms"] and status == 201 and isinstance(body, dict) and body.get("id")
+        if self.command == "POST" and parts[:2] == ["api", "rooms"] and (len(parts) > 3 or created) and not quiet_renewal:
+            self.api_record = {"room_id": parts[2] if len(parts) > 3 else body["id"], "at": getattr(self, "started_ms", int(time.time() * 1000)),
+                               "method": self.command, "path": "/" + "/".join(parts[3:]), "status": status,
+                               "client": self.headers.get("User-Agent", "").split(" ")[0][:60], "bridged": bool(getattr(self, "bridged", False)),
+                               "token": self.headers.get("X-Discussion-Token", ""),
+                               "payload": getattr(self, "payload_cache", None) or getattr(self, "request_params", {}),
+                               "error": body.get("error", "") if status >= 400 and isinstance(body, dict) else ""}
         if content_type == "application/json":
             body = json.dumps(body, ensure_ascii=False)
         data = body.encode("utf-8") if isinstance(body, str) else body
+        if getattr(self, "api_record", None):
+            # A logged write answers only after its record is stored, so a client that reads the log next sees it.
+            self.deferred_response = (status, content_type, data)
+            return
+        self.send_payload(status, content_type, data)
+
+    def send_payload(self, status, content_type, data):
+        """Write the status line, headers and encoded body."""
         self.send_response(status)
         self.send_header("Content-Type", f"{content_type}; charset=utf-8")
         self.send_header("Content-Length", str(len(data)))
@@ -1621,11 +1699,26 @@ class DiscussionHandler(BaseHTTPRequestHandler):
         """Route a request and consistently report validation or lookup errors."""
         self.payload_cache = None
         self.bridge_origin = None
+        self.api_record = None
+        self.deferred_response = None
+        self.started_ms = int(time.time() * 1000)
         parsed = urlsplit(self.path)
         params = {key: values[-1] for key, values in parse_qs(parsed.query).items()}
+        self.request_params = params
         parts = parsed.path.strip("/").split("/")
         text_mode = parts[0] == "r"
         self.bridged = False
+        try:
+            return self.dispatch_routes(method, parsed, params, parts, text_mode)
+        finally:
+            if self.api_record:
+                record_api_event(self.server.database, self.api_record)
+                self.api_record = None
+            if self.deferred_response:
+                self.send_payload(*self.deferred_response)
+
+    def dispatch_routes(self, method, parsed, params, parts, text_mode):
+        """Route one request and map validation, permission and lookup errors to their status codes."""
         try:
             self.bridged = self.relay_bridge(parts)
             if parts[:2] == ["api", "local"]:
@@ -2054,6 +2147,8 @@ class DiscussionHandler(BaseHTTPRequestHandler):
                         execution["answer_id"] = None
                         execution["result"] = ""
             return self.respond(timeline)
+        if parts[3:] == ["events"] and method == "GET":
+            return self.respond(room_event_log(connection, room_id, token, params.get("after", 0), params.get("before", 0)))
         if parts[3:] == ["register"] and method == "POST":
             result = register_member(connection, room_id, token, utc_now())
             connection.commit()
@@ -2340,7 +2435,7 @@ class DiscussionHandler(BaseHTTPRequestHandler):
             host = require_member(connection, room_id, self.headers.get("X-Discussion-Token", ""), payload.get("actor"))
             if host["role"] != "host":
                 raise PermissionError("只有当前 AI 主持人可以安排讨论发言")
-            result = create_plan(connection, room_id, payload, require_room(connection, room_id))
+            result = create_plan(connection, room_id, resolve_member_fields(connection, room_id, payload), require_room(connection, room_id))
             connection.commit()
             return self.respond(result, 200 if result["duplicate"] else 201)
         if parts[3:] == ["turns", "roster"] and method == "GET":
@@ -2351,7 +2446,7 @@ class DiscussionHandler(BaseHTTPRequestHandler):
             host = require_member(connection, room_id, self.headers.get("X-Discussion-Token", ""), payload.get("actor"))
             if host["role"] != "host":
                 raise PermissionError("只有当前 AI 主持人可以转交讨论追问")
-            result = ask_interjection(connection, room_id, payload, require_room(connection, room_id))
+            result = ask_interjection(connection, room_id, resolve_member_fields(connection, room_id, payload), require_room(connection, room_id))
             connection.commit()
             return self.respond(result, 200 if result["duplicate"] else 201)
         if parts[3:] == ["turns", "continue"] and method == "POST":

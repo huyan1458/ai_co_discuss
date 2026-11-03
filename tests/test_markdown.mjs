@@ -28,10 +28,18 @@ test("untrusted HTML and unsafe links never become executable markup", () => {
 });
 
 test("safe links open separately and mentions do not rewrite destinations", () => {
-  const html = render_markdown("@Codex [资料](https://example.com/@Antigravity) https://example.com\n\n@Codextra");
+  const html = render_markdown("@Codex [资料](https://example.com/@Antigravity) https://example.com\n\n@Codextra", ["Codex"]);
   assert.match(html, /<span class="mention">@Codex<\/span>/);
   assert.match(html, /href="https:\/\/example.com\/@Antigravity" target="_blank" rel="noopener noreferrer"/);
   assert.doesNotMatch(html, /<span class="mention">@Codex<\/span>tra/);
+});
+
+test("only display-name mentions are marked; a member ID with a nickname stays plain text", () => {
+  const html = render_markdown("@Gemini 请执笔，@Antigravity 也行；@Claude-review 评审，@Claude 汇总", ["Gemini", "Claude-review", "Claude"]);
+  assert.match(html, /<span class="mention">@Gemini<\/span>/);
+  assert.match(html, /<span class="mention">@Claude-review<\/span>/);
+  assert.match(html, /<span class="mention">@Claude<\/span> 汇总/);
+  assert.doesNotMatch(html, /class="mention">@Antigravity/);
 });
 
 test("renders both math delimiter styles while preserving currency", () => {

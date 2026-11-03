@@ -327,6 +327,39 @@ class SingleMemberTests(FreeRoomTests):
         self.assertEqual(room["members"][0]["execution"]["status"], "completed")
         self.assertEqual(room["members"][0]["read_until"], saved["message"]["id"])
 
+    def test_event_log_records_request_lifecycle_for_the_owner_only(self):
+        """Triggers log a message, its request and execution in order; members cannot read the log."""
+        message = self.say("请改首页标题")[1]["message"]
+        execution = self.reserve()[1]
+        self.answer(execution["id"])
+        self.assertEqual(self.request(f"{self.path}/events", token=self.member)[0], 403)
+        log = self.request(f"{self.path}/events", token=self.owner)[1]
+        kinds = [event["kind"] for event in log["events"]]
+        created = next(event for event in log["events"] if event["kind"] == "request.created")
+        self.assertEqual(created["data"]["message_id"], message["id"])
+        self.assertEqual(log["members"][str(created["data"]["member_id"])], "Claude")
+        self.assertLess(kinds.index("message.posted"), kinds.index("request.created"))
+        self.assertLess(kinds.index("request.created"), kinds.index("execution.created"))
+        statuses = [event["data"]["status"] for event in log["events"] if event["kind"] == "request.changed"]
+        self.assertEqual(statuses[-1], "completed")
+        later = self.request(f"{self.path}/events?after={log['last_id']}", token=self.owner)[1]
+        self.assertEqual(later["events"], [])
+
+    def test_event_log_records_each_write_with_its_sender_even_when_rejected(self):
+        """Writes are logged before their effects with who sent them; a rolled-back rejection stays; credentials never do."""
+        self.say("请改首页标题")
+        self.assertGreaterEqual(self.answer(999)[0], 400)  # an answer bound to no execution is rejected
+        log = self.request(f"{self.path}/events", token=self.owner)[1]["events"]
+        writes = [event for event in log if event["kind"].startswith("api.")]
+        said = next(event for event in writes if event["data"]["path"] == "/messages" and event["data"]["actor"] == "owner")
+        self.assertLess(log.index(said), next(index for index, event in enumerate(log) if event["kind"] == "message.posted"))
+        self.assertIn("请改首页标题", said["data"]["payload"])
+        rejected = [event for event in writes if event["kind"] == "api.rejected"]
+        self.assertTrue(rejected and rejected[-1]["data"]["actor"] == "member:Claude" and rejected[-1]["data"]["error"])
+        created = next(event for event in writes if event["data"]["path"] == "/")
+        self.assertNotIn(self.member, created["data"]["payload"])
+        self.assertNotIn(self.owner, json.dumps(log, ensure_ascii=False))
+
     def test_retried_reservation_returns_the_same_execution(self):
         """A lost reserve response is recovered with the same local client id."""
         self.say("任务")
@@ -926,6 +959,23 @@ class MultiMemberTests(FreeRoomTests):
         self.assertEqual(self.reserve_for("Codex")[0], 200)
         self.assertEqual(self.request(self.path)[1]["experts"], {"Claude": "cli", "Codex": "cli"})
 
+    def test_members_are_named_by_display_name_and_the_id_still_works(self):
+        """The host dispatches @Gemini to the Antigravity member; a member's prose @Gemini is a suggestion for it."""
+        self.request(f"{self.path}/members", {"name": "Antigravity", "adapter": "antigravity_cli", "token": uuid.uuid4().hex}, self.owner)
+        labels = {member["name"]: member["label"] for member in self.request(self.path)[1]["members"]}
+        self.assertEqual(labels, {"Claude": "Claude", "Codex": "Codex", "Antigravity": "Gemini"})
+        self.say("请安排续写", to=["Codex"])
+        host_work = self.reserve_for("Codex")[1]
+        status, saved = self.answer(host_work["id"], "@Gemini 请续写第二章", token=self.codex, author="Codex", to=["Gemini"])
+        self.assertEqual(status, 201, saved)
+        dispatched = [item["member"] for item in self.request(self.path)[1]["free"]["requests"] if item["message_id"] == saved["message"]["id"]]
+        self.assertEqual(dispatched, ["Antigravity"])
+        self.say("请 Claude 看看")
+        work = self.reserve_for("Claude")[1]
+        status, saved = self.answer(work["id"], "建议 @Gemini 核对连续性。")
+        self.assertEqual(status, 201, saved)
+        self.assertEqual([item["member"] for item in saved["message"]["suggestions"]], ["Antigravity"])
+
     def test_member_suggestion_requires_owner_and_converts_once_with_fresh_chain(self):
         """A suggestion stays inert, then one owner confirmation creates a deliverable request."""
         original = self.say("先请 Claude 看看")[1]["message"]
@@ -1228,6 +1278,24 @@ class HostTests(FreeRoomTests):
         self.work("Claude", to=["Codex"], handoff=True)
         self.work("Codex")
         self.assertEqual(self.requests().count(("Claude", "handoff", "pending")), 1)
+
+    def test_handoff_sits_under_the_answer_that_completed_its_batch(self):
+        """A user question asked during a dispatch stays above the host's handoff card and its answer (screenshot bug)."""
+        FreeRoomTests.say(self, "写骨架")
+        self.work("Claude", to=["Codex"], handoff=True)
+        dispatch = max(item[0] for item in FreeRoomTests.messages(self))
+        FreeRoomTests.say(self, "插问一句", to=["Claude"])
+        self.work("Claude")
+        self.work("Codex")
+        returned = max(item[0] for item in FreeRoomTests.messages(self))
+        handoff = self.reserve_for("Claude")[1]
+        report = next(item for item in self.request(self.path)[1]["free"]["executions"] if item["id"] == handoff["id"])
+        self.assertEqual((report["request_message_id"], report["anchor_message_id"]), (dispatch, returned))
+        status, saved = self.request(f"{self.path}/messages", {"author": "Claude", "text": "汇总", "source": "cli",
+                                                               "submission_id": uuid.uuid4().hex, "execution_id": handoff["id"]}, self.tokens["Claude"])
+        self.assertEqual(status, 201, saved)
+        answer = next(item for item in self.request(f"{self.path}/messages?after=0&withdrawn=include")[1]["messages"] if item["id"] == saved["message"]["id"])
+        self.assertEqual(answer["anchor_message_id"], returned)
 
     def test_handoff_needs_a_host_dispatch(self):
         """handoff is true only beside the host's to; a member or a host naming no one is refused."""

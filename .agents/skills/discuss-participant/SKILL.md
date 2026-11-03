@@ -37,6 +37,8 @@ description: "AI CoDiscuss 的通用参与技能，所有参与者（包括主�
 
 每次 shell 调用都是一次模型往返，手动会话里还可能要用户逐条确认，所以互不依赖的只读命令放进同一条 shell 命令依次执行。正文想好后，先用当前软件的文件写入工具把正文（和需要的摘要）写成草稿文件，再用一条只含 `codiscuss` 的命令以 `--body-file`（`--summary-file`）提交；失败重试仍用这份草稿。不要用 heredoc、`echo` 重定向或命令行字面量传长文本，也不要在命令里调用函数生成编号（如 `[guid]::NewGuid()`、`$(uuidgen)`）：自动运行时这类组合命令会被权限检查拒绝，文本中的引号（含中文弯引号）还会截断参数。其他写入命令需要编号时直接写一个新的 UUID 字面值。不同的网站写入各自单独执行并核对结果。
 
+称呼和点名成员一律用显示名：`room view` 中 `members[].label`（如 `Gemini`）就是它在房间里的名字，正文 `@`、`--to`、`--next-review`、`--expert` 都写它。`name` 是成员 ID，与 `descriptions` 同属成员的完整信息，需要核对时再看，不写进正文；旧消息、`author` 等字段里出现的 ID 指的是同一位成员。
+
 ## 阅读
 
 背景不足读 `room brief`，需要接续判断读 `state view`，核对具体论据读 `message view ROOM ID`，查找材料才用 `message list`。按争点阅读相关原文，不用摘要代替需要复核的论证，也不无目的拉取全部历史。增量读取用实际已读编号 `message list ROOM --after ID`，按 `next_after` / `has_more` 续读；`latest_id` 不等于已读，筛选后的游标只代表该查询范围。阶段和安排以最新服务端状态为准。

@@ -8,6 +8,7 @@ import FreeBoard from "./FreeBoard.vue";
 import DiscussionHistory from "./DiscussionHistory.vue";
 import RoomOverview from "./RoomOverview.vue";
 import ExecutionTimeline from "./ExecutionTimeline.vue";
+import EventLog from "./EventLog.vue";
 import ProjectFiles from "./ProjectFiles.vue";
 
 const { view, bridge, field, act, pending } = inject("discussion");
@@ -18,6 +19,9 @@ const created_label = computed(() => {
   const year = date.getFullYear() === new Date().getFullYear() ? "" : `${date.getFullYear()}年`;
   return `创建于 ${year}${date.getMonth() + 1}月${date.getDate()}日`;
 });
+// The 执行 channel shows the execution waterfall or the room event log.
+const TIMELINE_VIEWS = [{ value: "waterfall", label: "瀑布" }, { value: "events", label: "事件" }];
+const timeline_view = ref("waterfall");
 const modal = ref("");
 const managed_room = ref(null);
 const target_folder = ref(null);
@@ -113,7 +117,7 @@ watch(() => MERGED_TABS[view.value.tab], (merged) => { if (merged) act("tab", me
 const show_brief = computed(() => !!room.value && (!free_room.value || !!room.value.host_brief?.text || !!room.value.state_text || !!room.value.discussions?.length));
 const consensus_open = ref(false);
 const editing_context = ref(false);
-const rendered_state = computed(() => room.value?.state_text ? window.discuss_markdown.render_markdown(room.value.state_text) : "");
+const rendered_state = computed(() => room.value?.state_text ? bridge.render_room_markdown(room.value.state_text) : "");
 watch(() => room.value?.id, () => { consensus_open.value = false; editing_context.value = false; });
 
 /** Open consensus and discussion history from the brief, optionally straight into editing. */
@@ -332,7 +336,12 @@ function resize_nav_by_key(event) {
           <TopicPanel v-if="!free_room" section="access" @open="modal = $event" @detail="open_detail" />
         </div>
         <div v-if="view.tab === 'timeline'" class="content-page merged-page" role="tabpanel" aria-label="执行">
-          <ExecutionTimeline @detail="open_detail" />
+          <div class="timeline-switch" role="group" aria-label="执行视图">
+            <UButton v-for="option in TIMELINE_VIEWS" :key="option.value" :label="option.label" size="xs" color="neutral"
+              :variant="timeline_view === option.value ? 'soft' : 'ghost'" :aria-pressed="timeline_view === option.value" @click="timeline_view = option.value" />
+          </div>
+          <ExecutionTimeline v-if="timeline_view === 'waterfall'" @detail="open_detail" />
+          <EventLog v-else @detail="open_detail" />
         </div>
         <div v-if="view.tab === 'files'" class="content-page" role="tabpanel" aria-label="文件">
           <ProjectFiles :key="room.id" :directory="project_directory" />

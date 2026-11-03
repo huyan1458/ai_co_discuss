@@ -1328,3 +1328,169 @@ UPDATE free_chain_holds SET names=replace(replace(names,'"Gemini"','"Antigravity
 UPDATE room_creations SET request_text=replace(replace(request_text,'"Gemini"','"Antigravity"'),'"Gemini-','"Antigravity-') WHERE request_text LIKE '%"Gemini%';
 UPDATE session_start_submissions SET request_json=replace(replace(request_json,'"Gemini"','"Antigravity"'),'"Gemini-','"Antigravity-') WHERE request_json LIKE '%"Gemini%';
 UPDATE scheduler_decision_inputs SET input=replace(replace(input,'"Gemini"','"Antigravity"'),'"Gemini-','"Antigravity-') WHERE input LIKE '%"Gemini%';
+-- Room event log: an append-only record of each room state change, written by the triggers below so every code path
+-- is covered and later edits cannot forget it. State tables are overwritten in place; this log keeps the order of
+-- what happened (which request was created under which message, why it was cancelled, which batch handed back) so the
+-- timeline page can list and replay it. `at` is epoch milliseconds; `data` holds ids, names resolve at read time.
+CREATE TABLE IF NOT EXISTS room_events (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    room_id TEXT NOT NULL REFERENCES rooms(id) ON DELETE CASCADE,
+    at INTEGER NOT NULL,
+    kind TEXT NOT NULL,
+    data TEXT NOT NULL DEFAULT '{}'
+);
+CREATE INDEX IF NOT EXISTS room_events_room ON room_events(room_id,id);
+DROP TRIGGER IF EXISTS event_message_posted;
+CREATE TRIGGER event_message_posted AFTER INSERT ON messages
+BEGIN
+    INSERT INTO room_events (room_id,at,kind,data) VALUES (NEW.room_id,CAST((julianday('now')-2440587.5)*86400000 AS INTEGER),'message.posted',
+        json_object('message_id',NEW.id,'author',NEW.author,'source',NEW.source,'reply_to',NEW.reply_to,'text',substr(NEW.text,1,80)));
+END;
+DROP TRIGGER IF EXISTS event_message_withdrawn;
+CREATE TRIGGER event_message_withdrawn AFTER INSERT ON message_withdrawals
+BEGIN
+    INSERT INTO room_events (room_id,at,kind,data) SELECT room_id,CAST((julianday('now')-2440587.5)*86400000 AS INTEGER),'message.withdrawn',
+        json_object('message_id',NEW.message_id,'kind',NEW.kind) FROM messages WHERE id=NEW.message_id;
+END;
+DROP TRIGGER IF EXISTS event_room_rewound;
+CREATE TRIGGER event_room_rewound AFTER INSERT ON room_rewinds
+BEGIN
+    INSERT INTO room_events (room_id,at,kind,data) VALUES (NEW.room_id,CAST((julianday('now')-2440587.5)*86400000 AS INTEGER),'room.rewound',
+        json_object('rewind_id',NEW.id,'message_id',NEW.message_id));
+END;
+DROP TRIGGER IF EXISTS event_member_joined;
+CREATE TRIGGER event_member_joined AFTER INSERT ON room_members
+BEGIN
+    INSERT INTO room_events (room_id,at,kind,data) VALUES (NEW.room_id,CAST((julianday('now')-2440587.5)*86400000 AS INTEGER),'member.joined',
+        json_object('member_id',NEW.id,'role',NEW.role,'status',NEW.status,'adapter',NEW.adapter));
+END;
+DROP TRIGGER IF EXISTS event_member_changed;
+CREATE TRIGGER event_member_changed AFTER UPDATE OF role,status ON room_members
+    WHEN OLD.role IS NOT NEW.role OR OLD.status IS NOT NEW.status
+BEGIN
+    INSERT INTO room_events (room_id,at,kind,data) VALUES (NEW.room_id,CAST((julianday('now')-2440587.5)*86400000 AS INTEGER),'member.changed',
+        json_object('member_id',NEW.id,'role',NEW.role,'status',NEW.status,'from_role',OLD.role,'from_status',OLD.status));
+END;
+DROP TRIGGER IF EXISTS event_request_created;
+CREATE TRIGGER event_request_created AFTER INSERT ON member_requests
+BEGIN
+    INSERT INTO room_events (room_id,at,kind,data) VALUES (NEW.room_id,CAST((julianday('now')-2440587.5)*86400000 AS INTEGER),'request.created',
+        json_object('request_id',NEW.id,'member_id',NEW.member_id,'message_id',NEW.message_id,'purpose',NEW.purpose,
+            'created_by',NEW.created_by,'chain_id',NEW.chain_id,'batch_id',NEW.batch_id,'status',NEW.status));
+END;
+DROP TRIGGER IF EXISTS event_request_changed;
+CREATE TRIGGER event_request_changed AFTER UPDATE OF status,execution_id,answer_id ON member_requests
+    WHEN OLD.status IS NOT NEW.status OR OLD.execution_id IS NOT NEW.execution_id OR OLD.answer_id IS NOT NEW.answer_id
+BEGIN
+    INSERT INTO room_events (room_id,at,kind,data) VALUES (NEW.room_id,CAST((julianday('now')-2440587.5)*86400000 AS INTEGER),'request.changed',
+        json_object('request_id',NEW.id,'member_id',NEW.member_id,'message_id',NEW.message_id,'status',NEW.status,
+            'from_status',OLD.status,'execution_id',NEW.execution_id,'answer_id',NEW.answer_id));
+END;
+DROP TRIGGER IF EXISTS event_request_cancel_reason;
+CREATE TRIGGER event_request_cancel_reason AFTER INSERT ON request_cancel_reasons
+BEGIN
+    INSERT INTO room_events (room_id,at,kind,data) SELECT room_id,CAST((julianday('now')-2440587.5)*86400000 AS INTEGER),'request.cancel_reason',
+        json_object('request_id',NEW.request_id,'member_id',member_id,'reason',NEW.reason) FROM member_requests WHERE id=NEW.request_id;
+END;
+DROP TRIGGER IF EXISTS event_execution_created;
+CREATE TRIGGER event_execution_created AFTER INSERT ON member_executions
+BEGIN
+    INSERT INTO room_events (room_id,at,kind,data) VALUES (NEW.room_id,CAST((julianday('now')-2440587.5)*86400000 AS INTEGER),'execution.created',
+        json_object('execution_id',NEW.id,'member_id',NEW.member_id,'status',NEW.status));
+END;
+DROP TRIGGER IF EXISTS event_execution_changed;
+CREATE TRIGGER event_execution_changed AFTER UPDATE OF status ON member_executions
+    WHEN OLD.status IS NOT NEW.status
+BEGIN
+    INSERT INTO room_events (room_id,at,kind,data) VALUES (NEW.room_id,CAST((julianday('now')-2440587.5)*86400000 AS INTEGER),'execution.changed',
+        json_object('execution_id',NEW.id,'member_id',NEW.member_id,'status',NEW.status,'from_status',OLD.status,'result',substr(NEW.result,1,200)));
+END;
+DROP TRIGGER IF EXISTS event_execution_retry;
+CREATE TRIGGER event_execution_retry AFTER INSERT ON execution_retries
+BEGIN
+    INSERT INTO room_events (room_id,at,kind,data) VALUES (NEW.room_id,CAST((julianday('now')-2440587.5)*86400000 AS INTEGER),'execution.retry',
+        json_object('execution_id',NEW.execution_id,'attempt',NEW.attempt,'retry_at',NEW.retry_at,'reason',substr(NEW.reason,1,200),'stopped',NEW.stopped));
+END;
+DROP TRIGGER IF EXISTS event_execution_retry_changed;
+CREATE TRIGGER event_execution_retry_changed AFTER UPDATE ON execution_retries
+    WHEN OLD.attempt IS NOT NEW.attempt OR OLD.stopped IS NOT NEW.stopped
+BEGIN
+    INSERT INTO room_events (room_id,at,kind,data) VALUES (NEW.room_id,CAST((julianday('now')-2440587.5)*86400000 AS INTEGER),'execution.retry',
+        json_object('execution_id',NEW.execution_id,'attempt',NEW.attempt,'retry_at',NEW.retry_at,'reason',substr(NEW.reason,1,200),'stopped',NEW.stopped));
+END;
+DROP TRIGGER IF EXISTS event_execution_late_answer;
+CREATE TRIGGER event_execution_late_answer AFTER INSERT ON late_answers
+BEGIN
+    INSERT INTO room_events (room_id,at,kind,data) VALUES (NEW.room_id,CAST((julianday('now')-2440587.5)*86400000 AS INTEGER),'execution.late_answer',
+        json_object('execution_id',NEW.execution_id,'text',substr(NEW.text,1,80)));
+END;
+DROP TRIGGER IF EXISTS event_batch_opened;
+CREATE TRIGGER event_batch_opened AFTER INSERT ON free_batches
+BEGIN
+    INSERT INTO room_events (room_id,at,kind,data) VALUES (NEW.room_id,CAST((julianday('now')-2440587.5)*86400000 AS INTEGER),'batch.opened',
+        json_object('batch_id',NEW.batch_id,'chain_id',NEW.chain_id,'host_id',NEW.host_id));
+END;
+DROP TRIGGER IF EXISTS event_batch_settled;
+CREATE TRIGGER event_batch_settled AFTER UPDATE OF settled ON free_batches
+    WHEN OLD.settled IS NOT NEW.settled
+BEGIN
+    INSERT INTO room_events (room_id,at,kind,data) VALUES (NEW.room_id,CAST((julianday('now')-2440587.5)*86400000 AS INTEGER),'batch.settled',
+        json_object('batch_id',NEW.batch_id,'chain_id',NEW.chain_id,'settled',NEW.settled));
+END;
+DROP TRIGGER IF EXISTS event_batch_handoff;
+CREATE TRIGGER event_batch_handoff AFTER INSERT ON free_handoffs
+BEGIN
+    INSERT INTO room_events (room_id,at,kind,data) VALUES (NEW.room_id,CAST((julianday('now')-2440587.5)*86400000 AS INTEGER),'batch.handoff',
+        json_object('batch_id',NEW.batch_id));
+END;
+DROP TRIGGER IF EXISTS event_queue_added;
+CREATE TRIGGER event_queue_added AFTER INSERT ON free_queue
+BEGIN
+    INSERT INTO room_events (room_id,at,kind,data) VALUES (NEW.room_id,CAST((julianday('now')-2440587.5)*86400000 AS INTEGER),'queue.added',
+        json_object('queue_id',NEW.id,'message_id',NEW.message_id,'member_id',NEW.member_id));
+END;
+DROP TRIGGER IF EXISTS event_queue_removed;
+CREATE TRIGGER event_queue_removed AFTER DELETE ON free_queue
+BEGIN
+    INSERT INTO room_events (room_id,at,kind,data) SELECT OLD.room_id,CAST((julianday('now')-2440587.5)*86400000 AS INTEGER),'queue.removed',
+        json_object('queue_id',OLD.id,'message_id',OLD.message_id,'member_id',OLD.member_id) WHERE EXISTS (SELECT 1 FROM rooms WHERE id=OLD.room_id);
+END;
+DROP TRIGGER IF EXISTS event_chain_held;
+CREATE TRIGGER event_chain_held AFTER INSERT ON free_chain_holds
+BEGIN
+    INSERT INTO room_events (room_id,at,kind,data) VALUES (NEW.room_id,CAST((julianday('now')-2440587.5)*86400000 AS INTEGER),'chain.held',
+        json_object('chain_id',NEW.chain_id,'message_id',NEW.message_id,'names',NEW.names,'handoff',NEW.handoff,'extra_rounds',NEW.extra_rounds));
+END;
+DROP TRIGGER IF EXISTS event_chain_released;
+CREATE TRIGGER event_chain_released AFTER DELETE ON free_chain_holds
+BEGIN
+    INSERT INTO room_events (room_id,at,kind,data) SELECT OLD.room_id,CAST((julianday('now')-2440587.5)*86400000 AS INTEGER),'chain.released',
+        json_object('chain_id',OLD.chain_id,'message_id',OLD.message_id) WHERE EXISTS (SELECT 1 FROM rooms WHERE id=OLD.room_id);
+END;
+DROP TRIGGER IF EXISTS event_scheduler_decided;
+CREATE TRIGGER event_scheduler_decided AFTER INSERT ON scheduler_decisions
+BEGIN
+    INSERT INTO room_events (room_id,at,kind,data) VALUES (NEW.room_id,CAST((julianday('now')-2440587.5)*86400000 AS INTEGER),'scheduler.decided',
+        json_object('decision_id',NEW.id,'after_message_id',NEW.after_message_id,'kind',NEW.kind,'label',NEW.label,
+            'confidence',NEW.confidence,'applied',NEW.applied,'provider',NEW.provider));
+END;
+DROP TRIGGER IF EXISTS event_scheduler_applied;
+CREATE TRIGGER event_scheduler_applied AFTER UPDATE OF applied ON scheduler_decisions
+    WHEN OLD.applied IS NOT NEW.applied
+BEGIN
+    INSERT INTO room_events (room_id,at,kind,data) VALUES (NEW.room_id,CAST((julianday('now')-2440587.5)*86400000 AS INTEGER),'scheduler.applied',
+        json_object('decision_id',NEW.id,'label',NEW.label,'applied',NEW.applied));
+END;
+DROP TRIGGER IF EXISTS event_discussion_created;
+CREATE TRIGGER event_discussion_created AFTER INSERT ON discussion_sessions
+BEGIN
+    INSERT INTO room_events (room_id,at,kind,data) VALUES (NEW.room_id,CAST((julianday('now')-2440587.5)*86400000 AS INTEGER),'discussion.created',
+        json_object('session_id',NEW.id,'status',NEW.status,'goal',substr(NEW.goal,1,80)));
+END;
+DROP TRIGGER IF EXISTS event_discussion_changed;
+CREATE TRIGGER event_discussion_changed AFTER UPDATE OF status ON discussion_sessions
+    WHEN OLD.status IS NOT NEW.status
+BEGIN
+    INSERT INTO room_events (room_id,at,kind,data) VALUES (NEW.room_id,CAST((julianday('now')-2440587.5)*86400000 AS INTEGER),'discussion.changed',
+        json_object('session_id',NEW.id,'status',NEW.status,'from_status',OLD.status));
+END;

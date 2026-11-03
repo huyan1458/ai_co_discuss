@@ -15,7 +15,7 @@ import re
 import time
 import uuid
 
-from .identity import MAX_ROOM_AGENTS, is_ai
+from .identity import MAX_ROOM_AGENTS, default_label, is_ai
 from .message_queue import pause as pause_queue, queue_view
 from .runtime import (LEASE_SECONDS, MAX_EXECUTION_SEGMENTS, begin_write, enforce_session_limits,
                       require_owner, save_segments, token_hash)
@@ -43,6 +43,13 @@ RECENT_EXECUTIONS = 100
 # The timeline page reads this many recent executions of each kind; with `after` (?3) only those running or ended since.
 # Parameters: ?1 room, ?2 limit, ?3 after (0 reads all). Shared verbatim with the Worker.
 TIMELINE_EXECUTIONS = 100
+# The event log page reads at most this many room events per call, newest first when paging back.
+ROOM_EVENT_PAGE = 500
+# The message a request's card sits under, for member_requests aliased `r`. A handoff request belongs to the dispatch
+# message (`message_id`, which batch logic relies on) but happens because the batch's last answer arrived, so its card
+# and answer sit under that answer; later messages (the user asking something meanwhile) then stay above it.
+ANCHOR_SQL = """CASE WHEN r.purpose='handoff' THEN COALESCE((SELECT MAX(a.answer_id) FROM member_requests a
+    WHERE a.room_id=r.room_id AND a.batch_id=r.message_id AND a.purpose<>'handoff'), r.message_id) ELSE r.message_id END"""
 # Rounds used and allowed in the room's recent chains, for "第 2/3 轮"; parameters: the room's limit, the room.
 CHAIN_PROGRESS_SQL = """SELECT b.chain_id,COUNT(*) AS used,? + COALESCE((SELECT h.extra_rounds FROM free_chain_holds h
     WHERE h.room_id=b.room_id AND h.chain_id=b.chain_id),0) AS allowed FROM free_batches b WHERE b.room_id=?
@@ -526,6 +533,38 @@ def member_labels(connection, room_id):
         "SELECT name,label FROM member_labels WHERE room_id=? ORDER BY name", (room_id,))}
 
 
+def member_display_names(connection, room_id):
+    """What each present member is called in text: the owner's label, else its platform nickname, else its ID."""
+    labels = member_labels(connection, room_id)
+    return {row["name"]: labels.get(row["name"]) or default_label(row["name"]) for row in connection.execute(
+        "SELECT name FROM room_members WHERE room_id=? AND status<>'removed' ORDER BY id", (room_id,))}
+
+
+def member_handles(connection, room_id):
+    """Every way to name a present member, mapped to its ID: the ID, and its display name unless another member shares it."""
+    shown = member_display_names(connection, room_id)
+    handles = {name: name for name in shown}
+    taken = list(shown.values())
+    for name, label in shown.items():
+        if label not in handles and taken.count(label) == 1:
+            handles[label] = name
+    return handles
+
+
+def resolve_member_fields(connection, room_id, payload):
+    """Turn display names in a write's member fields into IDs, so members are named as they are seen; IDs still work."""
+    handles = member_handles(connection, room_id)
+    resolve = lambda value: handles.get(value.strip(), value) if isinstance(value, str) else value
+    if isinstance(payload.get("to"), list):
+        payload["to"] = [resolve(item) for item in payload["to"]]
+    for key in ("next_review", "expert"):
+        if key in payload:
+            payload[key] = resolve(payload[key])
+    if isinstance(payload.get("turns"), list):
+        payload["turns"] = [{**item, "expert": resolve(item.get("expert"))} if isinstance(item, dict) else item for item in payload["turns"]]
+    return payload
+
+
 def label_members(connection, room_id, token, payload):
     """Owner sets members' display labels by name; an empty text removes that member's label."""
     require_owner(connection, room_id, token)
@@ -593,12 +632,43 @@ def execution_timeline(connection, room_id, after=0):
             "segment_limit": MAX_EXECUTION_SEGMENTS}
 
 
+def room_event_log(connection, room_id, token, after=0, before=0):
+    """Read the owner's append-only room event log written by the schema triggers.
+
+    Args:
+        after: return events with a larger id (live follow), oldest first.
+        before: with no `after`, return the page of events just below this id (0 = the newest page), oldest first.
+
+    Returns:
+        `events` (id, at in epoch ms, kind, data) ordered by `at` then id, `members` id → name for resolving
+        `member_id`/`host_id`, `first_id`/`last_id` as paging cursors, and `more` when older events remain.
+        A write request (`api.*`) is stored after it finishes, so its id follows the changes it caused; its `at` is
+        when it arrived, and ordering by `at` puts the input before its effects.
+    """
+    require_owner(connection, room_id, token)
+    after, before = max(0, int(after)), max(0, int(before))
+    if after:
+        rows = connection.execute("SELECT id,at,kind,data FROM room_events WHERE room_id=? AND id>? ORDER BY id LIMIT ?",
+                                  (room_id, after, ROOM_EVENT_PAGE)).fetchall()
+    else:
+        rows = connection.execute("""SELECT id,at,kind,data FROM room_events WHERE room_id=? AND (?=0 OR id<?)
+            ORDER BY id DESC LIMIT ?""", (room_id, before, before, ROOM_EVENT_PAGE)).fetchall()
+    first_id = min((row["id"] for row in rows), default=0)
+    more = bool(rows) and not after and connection.execute(
+        "SELECT 1 FROM room_events WHERE room_id=? AND id<? LIMIT 1", (room_id, first_id)).fetchone() is not None
+    members = {str(row["id"]): row["name"] for row in connection.execute("SELECT id,name FROM room_members WHERE room_id=?", (room_id,))}
+    events = sorted(({**dict(row), "data": json.loads(row["data"])} for row in rows), key=lambda event: (event["at"], event["id"]))
+    return {"events": events, "members": members, "more": more, "first_id": first_id,
+            "last_id": max((row["id"] for row in rows), default=after)}
+
+
 def recent_executions(connection, room_id):
     """Return bounded public reports, including requests no longer in the recent request list."""
     rows = connection.execute(f"""SELECT e.*,m.name AS member,
         (SELECT json_group_array(id) FROM member_requests WHERE execution_id=e.id) AS request_ids,
         (SELECT MAX(answer_id) FROM member_requests WHERE execution_id=e.id) AS answer_id,
         (SELECT MIN(message_id) FROM member_requests WHERE execution_id=e.id) AS request_message_id,
+        (SELECT MIN({ANCHOR_SQL}) FROM member_requests r WHERE r.execution_id=e.id) AS anchor_message_id,
         (SELECT COUNT(*) FROM execution_notes WHERE execution_id=e.id) AS note_count,
         (SELECT denials FROM execution_denials WHERE execution_id=e.id) AS denials,{CAPABILITY_COLUMNS},
         (SELECT json_object('created_at',created_at) FROM late_answers WHERE execution_id=e.id) AS late_answer
@@ -610,7 +680,8 @@ def recent_executions(connection, room_id):
             requests.append({**dict(request), **session_request_source(connection, request["id"], request["message_id"])})
         executions.append({**public_execution(row), "member": row["member"], "cwd": row["cwd"], "changes": json.loads(row["changes"] or "[]"),
             "changes_recorded": bool(row["changes"]), "request_ids": json.loads(row["request_ids"]),
-            "answer_id": row["answer_id"], "request_message_id": row["request_message_id"], "requests": requests,
+            "answer_id": row["answer_id"], "request_message_id": row["request_message_id"],
+            "anchor_message_id": row["anchor_message_id"], "requests": requests,
             "notes": row["note_count"], "denials": json.loads(row["denials"] or "[]"),
             "capabilities": reported_capabilities(row), "stop_result": row["stop_result"] or "",
             "late_answer": json.loads(row["late_answer"]) if row["late_answer"] else None,
@@ -898,9 +969,10 @@ def save_suggestions(connection, room_id, message_id, member, payload):
     active = active_members(connection, room_id)
     targets = set(named_members(active, payload["to"] if payload.get("to") is not None else [], exclude=member["name"]))
     prose = mention_prose(str(payload.get("text", "")))
-    for name, target in active.items():
-        if name != member["name"] and re.search(r"(^|[\s(（，,。；;：:])@" + re.escape(name) + r"(?![A-Za-z0-9_\-\u4e00-\u9fff])", prose):
-            targets.add(target["id"])
+    for handle, name in member_handles(connection, room_id).items():
+        if name in active and name != member["name"] and re.search(
+                r"(^|[\s(（，,。；;：:])@" + re.escape(handle) + r"(?![A-Za-z0-9_\-\u4e00-\u9fff])", prose):
+            targets.add(active[name]["id"])
     for target_id in targets:
         connection.execute("INSERT INTO member_suggestions (message_id,member_id) VALUES (?,?)", (message_id, target_id))
 
@@ -1286,6 +1358,7 @@ def inbox(connection, room_id, token):
     release_recommendations(connection, room_id)
     archived = connection.execute("SELECT archived FROM room_directory WHERE room_id=?", (room_id,)).fetchone()[0]
     members, observers = [], []
+    shown = member_display_names(connection, room_id)
     # Manual members are never delivered to; the runner only reads them so smart scheduling can route to them too.
     for row in connection.execute(f"SELECT * FROM room_members WHERE room_id=? AND status='active' AND {REGISTERED_MEMBER} ORDER BY id", (room_id,)):
         pending = [dict(item) for item in connection.execute("""SELECT r.id,r.message_id,r.purpose,
@@ -1296,6 +1369,7 @@ def inbox(connection, room_id, token):
             LEFT JOIN task_message_sources t ON t.session_request_id=sr.id
             WHERE r.member_id=? AND r.status='pending' ORDER BY r.id""", (row["id"],))]
         member_view = {key: row[key] for key in MEMBER_FIELDS}
+        member_view["label"] = shown.get(row["name"], row["name"])
         member_view["review_capability"] = review_capability(connection, room_id, row["id"], token)
         member_view["held_until"] = held_until(connection, row["id"])
         # The runner compares this with its adapter's effect and reports a change.

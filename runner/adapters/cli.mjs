@@ -77,7 +77,8 @@ function monitor_cli(adapter, child, binding, task) {
     if (!state.spawned) return;
     if (state.denials.length) task.on_denials?.(state.denials);
     const error = cli_exit_error(adapter, state, code, signal);
-    if (error) task.on_failure(error);
+    // `not_started`: the adapter saw the CLI fail before any turn ran, so the runner may deliver the same task again.
+    if (error) task.on_failure(error, { not_started: Boolean(state.not_started) });
     else task.on_exit?.(state.denial);
   });
   return state;

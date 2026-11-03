@@ -27,6 +27,7 @@ SESSION_VARIABLES = (("CLAUDE_CODE_SESSION_ID", "claude"), ("CODEX_THREAD_ID", "
 MAX_TEXT_LENGTH = 32000
 MAX_SUMMARY_LENGTH = 1000
 MAX_BRIEF_LENGTH = 1600
+MAX_MEMBER_HANDLE = 80
 PARTICIPANTS = ("用户", "Codex", "Claude", "Antigravity", "DeepSeek", "Qwen", "Grok")
 # A platform is a type; `Claude-review` is a second Claude instance with its own session. Mirrors backend/identity.py.
 INSTANCE_PATTERN = re.compile(r"(Codex|Claude|Antigravity|DeepSeek|Qwen|Grok)(?:-[0-9A-Za-z_]{1,16})?")
@@ -106,6 +107,14 @@ def ai_name(value):
     """Accept an AI platform or a named instance of one, such as Claude-review."""
     if not INSTANCE_PATTERN.fullmatch(value):
         raise argparse.ArgumentTypeError("须为 Codex/Claude/Antigravity/DeepSeek/Qwen/Grok，或平台名-后缀（后缀 1–16 个英文字母、数字或下划线）")
+    return value
+
+
+def member_handle(value):
+    """Accept a member as the room calls it: its display name (such as Gemini) or its ID; the site resolves and checks it."""
+    value = value.strip()
+    if not 0 < len(value) <= MAX_MEMBER_HANDLE:
+        raise argparse.ArgumentTypeError(f"须为成员的显示名或 ID，1–{MAX_MEMBER_HANDLE} 字")
     return value
 
 
@@ -218,6 +227,11 @@ def room_commands(subcommands, registry):
             parser.add_argument("--submission-id", type=submission_id, help="按建房提交编号精确查询")
         elif action in ("view", "brief"):
             parser.add_argument("--request", type=positive_int, help="手动成员：按自己的有效请求限制可读原文")
+    events = add_leaf(subcommands, registry, "room events",
+                      "房主读取房间事件记录：用户与程序的每次写入（含被拒的）及其引起的状态变化，按发生顺序，用于排查问题；默认最新 500 条", True)
+    paging = events.add_mutually_exclusive_group()
+    paging.add_argument("--after", type=non_negative_int, help="只读此事件编号之后的记录")
+    paging.add_argument("--before", type=non_negative_int, help="读此事件编号之前的一页；按返回的 more 继续向前")
     limits = add_leaf(subcommands, registry, "room limits", "查看上限；--check 检查并执行到限处理；--done 通知程序目标已完成", True)
     limits.add_argument("--check", action="store_true")
     limits.add_argument("--done", action="store_true", help="主持人宣告目标已完成：结束讨论，房间回到自由协作；须带 --conclusion")
@@ -255,11 +269,11 @@ def message_commands(subcommands, registry):
     add_text(post, "summary")
     post.add_argument("--kind", choices=("chat", "moderation"), default="chat")
     post.add_argument("--execution", type=positive_int, help="自由房间：本次执行编号；省略时用凭据绑定的执行。执行失效后不能改作普通发言")
-    post.add_argument("--to", type=ai_name, action="append", default=[],
+    post.add_argument("--to", type=member_handle, action="append", default=[],
                       help="自由房间：主持人点名派活，普通成员提出回应建议（须房主确认）；可重复")
     post.add_argument("--handoff", action="store_true",
                       help="自由房间主持人：与 --to 同用，只点名一位成员时，它做完也回到你这里（如再交评审）；点名多位时总会回到你")
-    post.add_argument("--next-review", type=ai_name, help="主持派实现时声明下一位只读评审；先读 review roster，不可指定本批实现者")
+    post.add_argument("--next-review", type=member_handle, help="主持派实现时声明下一位只读评审；先读 review roster，不可指定本批实现者")
     post.add_argument("--review-scope", help="本批预授权评审范围，1–2000 字")
     post.add_argument("--review-roster", help="先读取 review roster 取得的 revision；状态变化须重读")
     post.add_argument("--request", type=positive_int, action="append", default=[],
@@ -304,7 +318,7 @@ def turn_commands(subcommands, registry):
         elif action not in ("create", "continue", "ask", "roster", "order", "reorder"):
             parser.add_argument("id", type=positive_int, help="安排编号")
         if action == "create":
-            parser.add_argument("--expert", type=ai_name, help="单个安排的专家；与 --plan-file 二选一")
+            parser.add_argument("--expert", type=member_handle, help="单个安排的专家；与 --plan-file 二选一")
             add_text(parser, "question")
             parser.add_argument("--plan-file", help='整轮安排 JSON 数组 [{"expert":"Claude","question":"…"}]，按顺序接力；- 从标准输入读取')
             parser.add_argument("--roster", required=True, help="turn roster 返回的 revision；任何新安排前必读，专家状态变化后需重新获取")
@@ -316,7 +330,7 @@ def turn_commands(subcommands, registry):
                                 help="按新顺序重复指定，须恰好包含 turn order 中 movable 的全部成员")
         if action == "ask":
             parser.add_argument("--request", type=positive_int, required=True, help="turn roster 中 host_requests 的请求编号")
-            parser.add_argument("--expert", type=ai_name, required=True, help="在场且已注册的目标成员，含已发言者和主持人")
+            parser.add_argument("--expert", type=member_handle, required=True, help="在场且已注册的目标成员，含已发言者和主持人")
             parser.add_argument("--submission-id", type=submission_id, help="转交唯一编号；重试沿用原编号与内容。省略时按命令与内容自动生成，同样内容重试得到同一编号")
         if action in ("continue", "ask"):
             parser.add_argument("--roster", required=True, help="turn roster 返回的 revision；状态变化后须重新读取")
@@ -541,6 +555,9 @@ def plan_room(args):
         return RequestPlan(base + "/conclusion")
     if args.action == "protocol":
         return RequestPlan(f"/r/{args.room}/protocol")
+    if args.action == "events":
+        params = {"after": args.after, "before": args.before}
+        return RequestPlan(base + "/events", params={key: value for key, value in params.items() if value})
     return RequestPlan(base, view="brief" if args.action == "brief" else "overview", params=read_context_params(args))
 
 

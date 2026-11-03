@@ -123,10 +123,12 @@ function selection_index({ points }, selection) {
  * @param {(id: number) => object} options.message_of The message with this id from the room view.
  * @param {(name: string) => Promise<string>} options.voice_for Voice for a member, or "" for the default voice.
  * @param {() => string} options.title Room title shown on the lock screen.
- * @returns {{ state: object, start: Function, stop: Function, toggle_pause: Function, body_of: Function, unlock: Function, set_broadcast: Function, announce: Function }}
+ * @returns {{ state: object, start: Function, stop: Function, follow: Function, toggle_pause: Function, body_of: Function, unlock: Function, set_broadcast: Function, announce: Function }}
  */
 export function use_read_aloud({ bridge, container, prepare, message_of, voice_for, title }) {
-  const state = reactive({ message_id: 0, loading: false, paused: false, broadcasting: false });
+  // `reading`: a reading on request is running (not a broadcast). `following`: the transcript scrolls with the sentence
+  // being read; off until the user turns it on, and the page turns it off on any manual scroll.
+  const state = reactive({ message_id: 0, loading: false, paused: false, broadcasting: false, reading: false, following: false });
   let run = 0, element = null, ending = null, switching = false, layer = null, current = null, silent_url = "";
   let queue = [], draining = false, broadcast_section = "";
   // Synthesized paragraphs already heard in this page, so replaying is instant even over the relay.
@@ -207,10 +209,16 @@ export function use_read_aloud({ bridge, container, prepare, message_of, voice_f
   /** Keep the sentence being read in view: once it leaves the comfortable band, bring it to about a third from the top. */
   function follow_scroll() {
     const scroller = container(), box = layer?.firstElementChild;
-    if (!scroller || !box) return;
+    if (!state.following || !scroller || !box) return;
     const view = scroller.getBoundingClientRect(), line = box.getBoundingClientRect();
     if (line.top >= view.top + view.height * FOLLOW_TOP && line.bottom <= view.top + view.height * FOLLOW_BOTTOM) return;
     scroller.scrollBy({ top: line.top - (view.top + view.height * FOLLOW_ANCHOR), behavior: "smooth" });
+  }
+
+  /** Turn following on and bring the sentence being read into view now. */
+  function follow() {
+    state.following = true;
+    follow_scroll();
   }
 
   /** Pause or resume where it is, as when tapping the sentence being read or using the lock-screen controls. */
@@ -407,7 +415,7 @@ export function use_read_aloud({ bridge, container, prepare, message_of, voice_f
     run += 1;
     ending?.();
     if (element) { element.pause(); element.removeAttribute("src"); }
-    Object.assign(state, { message_id: 0, loading: false, paused: false });
+    Object.assign(state, { message_id: 0, loading: false, paused: false, reading: false });
     highlight(null);
     if ("mediaSession" in navigator) { navigator.mediaSession.metadata = null; navigator.mediaSession.playbackState = "none"; }
     queueMicrotask(drain);
@@ -474,7 +482,7 @@ export function use_read_aloud({ bridge, container, prepare, message_of, voice_f
     // One context for the whole pass, so the service carries tone across paragraphs and messages.
     const section_id = crypto.randomUUID();
     const prefix_of = (id) => `${bridge.display_name(author(id))}：`;
-    state.message_id = message_id;
+    Object.assign(state, { message_id, reading: true, following: false });
     try {
       let plan = await plan_message(message_id, from, selection ? "" : prefix_of(message_id), true);
       while (plan && token === run) {
@@ -508,5 +516,5 @@ export function use_read_aloud({ bridge, container, prepare, message_of, voice_f
   // Re-draw on resize: the boxes are fixed to where the text was laid out.
   window.addEventListener("resize", () => { if (current) highlight(current); });
 
-  return { state, start, stop, toggle_pause, body_of, unlock, set_broadcast, announce };
+  return { state, start, stop, follow, toggle_pause, body_of, unlock, set_broadcast, announce };
 }

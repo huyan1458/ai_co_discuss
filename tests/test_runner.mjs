@@ -407,7 +407,8 @@ async function fixture(t) {
           member.pending.push(...execution.requests.map(item => ({ ...item, status: 'pending' })));
         }
         if (body.action === 'retry_wait') execution.retry = { attempt: body.attempt, retry_at: body.retry_at, reason: body.reason };
-        if (body.action === 'retry_start') { execution.retry = null; execution.status = 'dispatched'; }
+        // Like the site, a started retry keeps its attempt number with no pending time.
+        if (body.action === 'retry_start') { execution.retry = { ...execution.retry, retry_at: 0 }; execution.status = 'dispatched'; }
         result = execution;
       }
     } else if (route === '/discussion') result = { session: room.session, revision: 'session-revision' };
@@ -652,6 +653,59 @@ test(`${adapter} spawn failure can retry without binding an uncreated session`, 
   assert.equal(f.executions.size, 2);
 });
 }
+
+// Real agy 1.4.12 output from executions that failed before any turn ran (room 27395c25b03d, #317 and #318).
+const AGY_NOT_STARTED = {
+  network: ['Error: Eligibility check failed: Post "https://daily-cloudcode-pa.googleapis.com/v1internal:loadCodeAssist": EOF',
+    'Eligibility check failed: Post "https://daily-cloudcode-pa.googleapis.com/v1internal:loadCodeAssist": EOF'],
+  sign_in: ['Authentication required. Please visit the URL to log in:\nWaiting for authentication (timeout 60s)...\nError: authentication timed out.',
+    'authentication failed or timed out'],
+};
+const agy_not_started = error => ({ event: 'result', result: { conversation_id: '', status: 'ERROR', response: '', error,
+  duration_seconds: 0, num_turns: 0, finished_reason: 'error' } });
+
+/** Deliver one agy run that ends with the given real output, then let the runner react to the failure. */
+async function agy_not_started_attempt(f, runner, process_fixture) {
+  const calls = process_fixture.calls.length;
+  await runner.tick();
+  assert.equal(process_fixture.calls.length, calls + 1, 'agy was invoked');
+  await process_fixture.calls.at(-1).closed; await delay(10);
+  await runner.tick();
+}
+
+for (const [cause, [stderr, error]] of Object.entries(AGY_NOT_STARTED)) {
+test(`agy that fails before any turn (${cause}) retries the same execution, then fails with agy's own reason`, async t => {
+  const f = await fixture(t);
+  f.config.participants.Codex = { adapter: 'antigravity_cli', executable: process.execPath };
+  const process_fixture = fake_cli([agy_not_started(error)], { stderr, exit_code: 1 });
+  const deliver = (config, binding, task) => deliver_task(config, binding, task, process_fixture.spawn_process, join(f.config.directory, 'user'));
+  const runner = new FreeRoomRunner(f.config, f.store, deliver);
+  await agy_not_started_attempt(f, runner, process_fixture);
+  for (let attempt = 1; attempt <= 3; attempt++) {
+    const execution = f.current_execution();
+    assert.equal(execution.status, 'dispatched');
+    assert.equal(execution.retry.attempt, attempt);
+    assert.ok(execution.retry.reason.includes(error), execution.retry.reason);
+    execution.retry.retry_at = 1;
+    await agy_not_started_attempt(f, runner, process_fixture);
+  }
+  assert.equal(f.executions.size, 1, 'retries keep the one execution card');
+  assert.equal(f.current_execution().status, 'failed');
+  assert.ok(f.current_execution().result.includes(error), f.current_execution().result);
+  assert.match(f.current_execution().result, /已自动重试 3 次/);
+});
+}
+
+test('agy that fails after its conversation started is not delivered again', async t => {
+  const f = await fixture(t);
+  f.config.participants.Codex = { adapter: 'antigravity_cli', executable: process.execPath };
+  const process_fixture = fake_cli([{ event: 'init', conversation_id: 'started' },
+    { event: 'result', result: { conversation_id: 'started', status: 'ERROR', response: '', error: 'quota exhausted', num_turns: 1 } }], { exit_code: 1 });
+  const deliver = (config, binding, task) => deliver_task(config, binding, task, process_fixture.spawn_process, join(f.config.directory, 'user'));
+  await agy_not_started_attempt(f, new FreeRoomRunner(f.config, f.store, deliver), process_fixture);
+  assert.equal(f.current_execution().status, 'failed');
+  assert.equal(f.current_execution().retry, null);
+});
 
 /** Emit real subprocess output in split UTF-8 chunks without invoking an AI account. */
 function fake_cli(events, options = {}) {

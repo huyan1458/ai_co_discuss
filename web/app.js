@@ -839,7 +839,7 @@ function render_host_brief() {
   const room = state.room;
   element("host-brief-panel").hidden = !room;
   if (!room) return;
-  room.rendered_brief = window.discuss_markdown.render_markdown(room.host_brief?.text || "主持人尚未更新结论、共识、歧义与下一步意图。");
+  room.rendered_brief = render_room_markdown(room.host_brief?.text || "主持人尚未更新结论、共识、歧义与下一步意图。");
   element("progress-speaker").textContent = progress_speaker(room);
   element("host-brief-text").innerHTML = room.rendered_brief;
   element("host-brief-meta").textContent = brief_meta(room);
@@ -871,8 +871,8 @@ function render_messages(result) {
     const kind = withdrawn.get(message.id) || message.withdrawn || "";
     // A message shown straight from its send response is replaced by the copy the transcript reads.
     if (saved && !saved.just_sent) return (saved.withdrawn || "") === kind ? saved : { ...saved, withdrawn: kind };
-    return { ...message, withdrawn: kind, rendered_text: window.discuss_markdown.render_markdown(message.text),
-      rendered_summary: window.discuss_markdown.render_markdown(message.summary || "") };
+    return { ...message, withdrawn: kind, rendered_text: render_room_markdown(message.text),
+      rendered_summary: render_room_markdown(message.summary || "") };
   });
   state.message_total = result.total;
   state.messages_loading = false;
@@ -1094,6 +1094,17 @@ function mention_handles(name, names) {
   const nickname = display_name(name);
   const taken = names.filter(other => other !== name).flatMap(other => [other, display_name(other)]);
   return nickname && nickname !== name && !taken.includes(nickname) ? [nickname, name] : [name];
+}
+
+/** What renders as a mention: the user and each member by the handle @ offers for it; a member ID with a nickname stays plain text. */
+function mention_highlights() {
+  const names = (state.room?.members || []).map(member => member.name);
+  return ["用户", display_name("用户"), ...names.map(name => mention_handles(name, names)[0])];
+}
+
+/** Render room text with the open room's mentions marked. */
+function render_room_markdown(text) {
+  return window.discuss_markdown.render_markdown(text, mention_highlights());
 }
 
 /**
@@ -4174,7 +4185,7 @@ window.discuss_view = { snapshot: view_snapshot, write_field: write_view_field, 
   write_expert: write_view_expert, add_instance: add_view_instance, add_preset: add_preset_instance, platform_of, execute: execute_view_action, theme: change_view_theme,
   admin: { register: register_admin, login: login_admin, logout: logout_admin,
     update_profile: update_admin_profile, avatar_from_file: admin_avatar_from_file, validate: validate_admin_form },
-  request: request_json, rewind_plan, identities: IDENTITIES, display_name, mention_handles, mentioned_members, sources: SOURCE_LABELS,
+  request: request_json, rewind_plan, identities: IDENTITIES, display_name, mention_handles, mentioned_members, render_room_markdown, sources: SOURCE_LABELS,
   set_member_access, set_member_model, allow_denials, set_member_adapter, reload_room_models, read_room_files, limits_label, stop_reason_label, participant_model, participant_files, participant_session_hint, participant_access,
   turn_label, turn_guidance, round_groups, limit_rounds, progress_speaker, brief_meta, max_message_length: MAX_MESSAGE_LENGTH, provenance: message_provenance, format_time };
 

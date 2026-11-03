@@ -177,7 +177,11 @@ function lifecycle(state, event, task, bind) {
     if (!state.denial && Array.isArray(result.denied_actions) && result.denied_actions.length) {
       state.denial = `的${result.denied_actions.map(item => item.display_name || item.action).join('、')}操作未获授权，无人值守模式下被自动拒绝，随后会话结束`;
     }
-    if (!state.completed) state.error = `Antigravity CLI ${result.status || '缺少结果状态'}：${result.error?.message || result.response || '执行未成功'}`;
+    // agy reports `error` as a plain string (1.4.x), older builds as { message }.
+    const reason = typeof result.error === 'string' ? result.error : result.error?.message;
+    if (!state.completed) state.error = `Antigravity CLI ${result.status || '缺少结果状态'}：${reason || result.response || '执行未成功'}`;
+    // Failed before opening a conversation (sign-in, eligibility check): no turn ran, so delivering again repeats nothing.
+    if (!state.completed && !state.initialized && !result.conversation_id && !result.num_turns) state.not_started = true;
   }
 }
 

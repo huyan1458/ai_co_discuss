@@ -497,6 +497,8 @@ html[data-theme^="channel"] .channel-message.channel-topic-card { color: var(--u
 .channel-listen-pill { display: inline-flex; align-items: center; gap: 6px; height: 32px; padding: 0 14px 0 11px; border: 1px solid #ffffff24; border-radius: 999px; background: #292b30; color: #e8eaee; font-size: 13px; font-weight: 500; white-space: nowrap; box-shadow: 0 2px 8px #0004; pointer-events: auto; }
 .channel-listen-pill:hover { color: #fff; }
 .channel-listen-pill > [class*="icon"] { width: 16px; height: 16px; color: var(--ui-primary); }
+/* Read-aloud following is on: the pill takes the accent border so the state shows at a glance. */
+:root[data-theme^="channel"] .channel-listen-pill.is-on { border-color: var(--ui-primary); color: var(--ui-primary); }
 /* On a pointer screen it is only a quiet mark beside the selection's end, faded in once the selection settles. */
 .channel-listen-mark { position: fixed; z-index: 40; display: inline-flex; align-items: center; gap: 5px; height: 28px; padding: 0 11px 0 9px; border: 0; border-radius: 999px; background: var(--ui-primary); color: #fff; font-size: 12px; font-weight: 600; white-space: nowrap; box-shadow: 0 4px 14px color-mix(in srgb, var(--ui-primary) 35%, transparent); animation: channel-listen-in .15s ease-out; }
 .channel-listen-mark:hover { background: color-mix(in srgb, var(--ui-primary) 88%, #000); }
@@ -1166,34 +1168,31 @@ html[data-motion="off"] *, html[data-motion="off"] *::before, html[data-motion="
 /* Same right inset as the message cards, which leave room for their action column. */
 @media (min-width: 701px) { .channel-schedule-card { margin-right: var(--message-inset-end); } }
 @media (max-width: 767px) { .channel-schedule-card { margin: -4px 8px 14px; } }
-/* A member at work is a folded strip in the flow: who, the stage, elapsed, the latest note; the notes open below. */
-.channel-working-strip { display: flex; align-items: flex-start; margin: 0 16px 16px; border: 1px solid color-mix(in srgb, var(--ui-border) 80%, transparent); border-radius: 10px; background: color-mix(in srgb, var(--ui-bg-elevated) 45%, transparent); color: var(--ui-text-muted); font-size: 12px; }
-.channel-working-fold { flex: 1; min-width: 0; }
-.channel-working-fold > summary { display: flex; align-items: center; gap: 8px; min-height: 40px; padding: 6px 4px 6px 12px; list-style: none; cursor: pointer; }
-.channel-working-fold > summary::-webkit-details-marker { display: none; }
-.channel-working-fold:not(:has(.channel-working-count)) > summary { cursor: default; }
+/* A member at work: who and how long on top, the stage as the main line with the stop key at its end, */
+/* the notes below as a subordinate thread (left rule, smaller and dimmer), folded to the latest note. */
+.channel-working-strip { margin: 0 16px 16px; padding: 8px 8px 10px 12px; border: 1px solid color-mix(in srgb, var(--ui-border) 80%, transparent); border-radius: 10px; background: color-mix(in srgb, var(--ui-bg-elevated) 45%, transparent); color: var(--ui-text-muted); font-size: 12px; }
+.channel-working-head { display: flex; align-items: center; gap: 8px; min-width: 0; }
 .channel-working-strip .channel-avatar { flex-shrink: 0; width: 20px; height: 20px; font-size: 8px; }
 .channel-working-name { flex-shrink: 0; color: var(--speaker-accent); font-size: 13px; font-weight: 650; }
-.channel-working-status { flex: 0 1 auto; min-width: 0; overflow: hidden; color: var(--ui-text-toned); text-overflow: ellipsis; white-space: nowrap; }
 .channel-working-elapsed { flex-shrink: 0; color: var(--ui-text-dimmed); font-variant-numeric: tabular-nums; white-space: nowrap; }
-.channel-working-latest { flex: 1 1 0; min-width: 0; overflow: hidden; color: var(--ui-text-dimmed); text-overflow: ellipsis; white-space: nowrap; }
-.channel-working-fold[open] .channel-working-latest { visibility: hidden; }
-.channel-working-count { display: inline-flex; flex-shrink: 0; align-items: center; gap: 2px; color: var(--ui-text-dimmed); white-space: nowrap; }
+.channel-working-main { display: flex; align-items: center; gap: 8px; min-height: 32px; padding-left: 28px; }
+.channel-working-status { flex: 1 1 auto; min-width: 0; overflow: hidden; color: var(--ui-text-highlighted); font-size: 15px; text-overflow: ellipsis; white-space: nowrap; }
+.channel-working-strip .channel-working-actions { display: inline-flex; flex-shrink: 0; align-items: center; gap: 4px; }
+.channel-working-notes { margin: 4px 4px 0 28px; padding: 1px 0 1px 10px; border-left: 2px solid var(--ui-border); color: var(--ui-text-dimmed); font-size: 12px; line-height: 1.6; }
+.channel-working-notes p { margin: 0; white-space: pre-wrap; overflow-wrap: anywhere; }
+.channel-working-notes.is-open { display: grid; gap: 4px; }
+.channel-working-notes.is-open p:not(.channel-working-latest) { opacity: .75; }
+.channel-working-latest { display: flex; align-items: baseline; gap: 6px; min-width: 0; cursor: pointer; }
+.channel-working-latest-text { flex: 0 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.channel-working-notes.is-open .channel-working-latest { display: block; cursor: auto; }
+.channel-working-notes.is-open .channel-working-latest-text { white-space: pre-wrap; }
+.channel-working-count { display: inline-flex; flex-shrink: 0; align-items: center; gap: 2px; padding: 0; border: 0; background: none; color: var(--ui-text-dimmed); font: inherit; white-space: nowrap; cursor: pointer; vertical-align: baseline; }
+.channel-working-notes.is-open .channel-working-count { margin-left: 6px; }
 .channel-working-count [class*="icon"] { width: 13px; height: 13px; transition: transform .12s; }
-.channel-working-fold[open] .channel-working-count [class*="icon"] { transform: rotate(180deg); }
-.channel-working-fold > summary:hover .channel-working-count { color: var(--ui-text-toned); }
-.channel-working-strip .channel-working-actions { display: inline-flex; flex-shrink: 0; align-items: center; gap: 4px; height: 40px; padding-right: 8px; }
-.channel-working-notes { display: grid; gap: 6px; margin: 0; padding: 2px 14px 12px 40px; list-style: none; color: var(--ui-text-muted); font-size: 13px; line-height: 1.6; white-space: pre-wrap; overflow-wrap: anywhere; }
-.channel-working-notes li { opacity: .65; }
-.channel-working-notes li:last-child { opacity: 1; }
+.channel-working-notes.is-open .channel-working-count [class*="icon"] { transform: rotate(180deg); }
+.channel-working-count:hover { color: var(--ui-text-toned); }
 @media (min-width: 701px) { .channel-working-strip { margin-right: var(--message-inset-end); } }
-@media (max-width: 767px) {
-  .channel-working-strip { margin: 0 8px 12px; }
-  .channel-working-fold > summary { flex-wrap: wrap; }
-  .channel-working-latest { order: 10; flex-basis: 100%; padding-left: 28px; }
-  .channel-working-latest:empty { display: none; }
-  .channel-working-notes { padding-left: 36px; }
-}
+@media (max-width: 767px) { .channel-working-strip { margin: 0 8px 12px; } }
 /* Dark composer matches the message cards (#313338, lit top rim) as one surface with its footer; the mention panel keeps the frosted float style. */
 :root[data-theme="channel"] .channel-composer { background: #313338 !important; }
 :root[data-theme="channel"] .channel-mention-heading { border-bottom: 1px solid #ffffff0d; }
@@ -1255,3 +1254,6 @@ html[data-motion="off"] *, html[data-motion="off"] *::before, html[data-motion="
 .channel-reading-layer { position: absolute; inset: 0; z-index: -1; pointer-events: none; }
 .channel-reading-layer i { position: absolute; border-radius: 3px; background: color-mix(in srgb, var(--ui-primary) 30%, transparent); }
 .channel-reading-layer.is-paused i { background: color-mix(in srgb, var(--ui-text-muted) 22%, transparent); }
+/* 执行 channel: switch between the execution waterfall and the room event log. */
+.timeline-switch { display: flex; gap: 4px; margin-bottom: 8px; }
+html[data-theme^="channel"] .content-page > .timeline-switch { max-width: 1280px; }

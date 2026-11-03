@@ -198,13 +198,15 @@ const free_busy = computed(() => {
   return (room.value.free?.members || []).flatMap((member) => {
     const execution = member.execution;
     if (execution && ["dispatched", "started"].includes(execution.status)) {
-      // A manual member's session refused the delivery and the runner waits to deliver again.
+      // The delivery did not take (a manual session refused it, or the software failed before starting) and the runner
+      // waits to deliver again; once it does, `attempt` keeps which retry is running.
       const retry = execution.retry?.retry_at && !execution.retry.stopped ? execution.retry : null;
-      return [{ id: `free-${execution.id}`, author: member.name, member_id: member.id, retry,
-        text: execution.stale ? "执行失联：网站已不再接受本次回答，软件停止未确认" : retry ? "会话异常，等待自动重试" : ACTIVITY_LABELS[execution.activity] || "正在处理",
+      const attempt = !retry && !execution.retry?.stopped ? execution.retry?.attempt || 0 : 0;
+      return [{ id: `free-${execution.id}`, author: member.name, member_id: member.id, retry, attempt,
+        text: execution.stale ? "执行失联：网站已不再接受本次回答，软件停止未确认" : retry ? "投递未成功，等待自动重试" : ACTIVITY_LABELS[execution.activity] || "正在处理",
         working: !execution.stale && !retry, created_at: execution.created_at, adapter: member.adapter, capabilities: execution.capabilities,
         activity: execution.activity, activity_at: execution.activity_at, notes: execution.notes || 0,
-        execution_id: execution.id, request_message_id: reports.get(execution.id)?.request_message_id,
+        execution_id: execution.id, request_message_id: reports.get(execution.id)?.request_message_id, anchor_message_id: reports.get(execution.id)?.anchor_message_id,
         discussion_request: reports.get(execution.id)?.requests?.find((request) => request.discussion_session_id) }];
     }
     return [];
@@ -247,6 +249,13 @@ async function load_notes(execution_id) {
     const { notes } = await bridge.request(`/api/rooms/${room.value.id}/executions/${execution_id}/notes`);
     execution_notes.value = new Map(execution_notes.value).set(execution_id, notes);
   } catch { /* Notes only accompany the work; a failed read leaves the card as it was. */ }
+}
+/** Execution ids whose working notes are unfolded; folded by default to the latest note. */
+const open_working_notes = ref(new Set());
+function toggle_working_notes(execution_id) {
+  const open = new Set(open_working_notes.value);
+  if (!open.delete(execution_id)) open.add(execution_id);
+  open_working_notes.value = open;
 }
 watch(() => free_busy.value.map((item) => `${item.execution_id}:${item.notes}`).join(), () => {
   for (const item of free_busy.value) {
@@ -305,7 +314,7 @@ function stop_state(execution) {
   if (execution.stop_result === "unstoppable" || capabilities(execution)?.stoppable === false) return { label, note: `${name} 在自己的窗口或 App 里，本机无法停止，可能仍在生成；网站不再接受本次回答。` };
   return { label, note: label === "正在停止" ? "等待本机服务结束进程。" : "" };
 }
-// The runner retries a manual member's refused delivery this many times (runner/free_runner.mjs MAX_DELIVERY_RETRIES).
+// The runner retries a delivery that did not take this many times (runner/free_runner.mjs MAX_DELIVERY_RETRIES).
 const MAX_DELIVERY_RETRIES = 3;
 /** Long reasoning or a long reply can be silent for minutes; beyond this the card only warns, never stops. */
 const STALL_SECONDS = 180;
@@ -718,7 +727,7 @@ const free_failures = computed(() => {
   const names = new Map((room.value.free?.members || []).map((member) => [member.id, member.name]));
   return (room.value.free?.executions || []).filter((execution) => execution.status === "failed")
     .map((execution) => ({ id: `failed-${execution.id}`, author: execution.member || names.get(execution.member_id) || "成员", slot_card: true, created_at: execution.created_at,
-      execution_id: execution.id, request_message_id: execution.request_message_id,
+      execution_id: execution.id, request_message_id: execution.request_message_id, anchor_message_id: execution.anchor_message_id,
       discussion_request: execution.requests?.find((request) => request.discussion_session_id),
       failure: { ...execution, elapsed_seconds: execution.finished_at ? Math.max(0, execution.finished_at - execution.created_at) : null } }));
 });
@@ -744,6 +753,10 @@ function toggle_rewound(id) {
 /**
  * A free-room card keeps the place it first appeared in: each execution takes a slot under the message that asked for it,
  * in execution order, and its answer replaces the working card in that slot. Work whose request is not shown stays at the end.
+ * A handoff to the host is the exception: the site names the answer that completed its batch as `anchor_message_id`
+ * (it differs from `request_message_id`, the dispatch message), and the handoff follows the whole batch, so it goes under
+ * the last top-level message up to that answer, never into the batch's nested slots: what the user asked meanwhile, and
+ * its answer, then stay above it instead of below a card that looks stuck in the middle.
  */
 const free_layout = computed(() => {
   const messages = view.value.messages.filter((message) => !rewound_runs.value.hidden.has(message.id));
@@ -751,15 +764,24 @@ const free_layout = computed(() => {
   const shown = new Set(messages.filter((message) => !message.withdrawn).map((message) => message.id));
   const slots = new Map();
   const executions = new Map((room.value.free?.executions || []).map((execution) => [execution.id, execution]));
+  // Shown top-level messages in id order, filled while the messages are placed; a handoff resolves to the last one up to its answer.
+  const root_ids = [];
+  const root_at = (id) => root_ids.findLast((root) => root <= id) ?? id;
   const place = (item) => {
     if ((!item.execution_id && !item.cancelled_turn && !item.arrangement) || item.withdrawn) return false;
     const request = item.discussion_request || executions.get(item.execution_id)?.requests?.find((value) => value.discussion_session_id);
-    const anchor = item.arrangement?.after_message_id ?? item.cancelled_turn?.after_message_id ?? (request ? request.after_message_id : item.request_message_id);
+    const own = item.anchor_message_id ?? item.request_message_id;
+    const free_anchor = own !== item.request_message_id ? root_at(own) : own;
+    const anchor = item.arrangement?.after_message_id ?? item.cancelled_turn?.after_message_id ?? (request ? request.after_message_id : free_anchor);
     if (!((request || item.cancelled_turn || item.arrangement) && anchor === 0) && !shown.has(anchor)) return false;
     slots.set(anchor, [...(slots.get(anchor) || []), item]);
     return true;
   };
-  const roots = messages.filter((message) => !place(message));
+  const roots = messages.filter((message) => {
+    if (place(message)) return false;
+    if (shown.has(message.id)) root_ids.push(message.id);
+    return true;
+  });
   // A failure whose request is no longer shown is dropped rather than piled at the end.
   free_failures.value.forEach(place);
   if (!view.value.query && !view.value.mention_only && !view.value.host_only) {
@@ -774,7 +796,7 @@ const free_layout = computed(() => {
       const request = execution.requests?.find((item) => item.discussion_session_id);
       if (request || execution.capabilities) place({ id: `stopped-${execution.id}`, author: execution.member,
         slot_card: true, cancelled_execution: execution, execution_id: execution.id, created_at: execution.created_at,
-        request_message_id: execution.request_message_id, discussion_request: request });
+        request_message_id: execution.request_message_id, anchor_message_id: execution.anchor_message_id, discussion_request: request });
     }
   }
   const tail = free_working.value.map((item) => ({ ...item, slot_card: true })).filter((item) => !place(item));
@@ -904,11 +926,20 @@ function jump_to(id) {
   const message = element?.querySelector(`[data-message-id="${id}"]`);
   if (!message) return;
   close_preview();
+  reader.state.following = false;
   jump_target.value = id;
   active_message.value = id;
   element.scrollTop += message.getBoundingClientRect().top - reading_top(element) - READING_OFFSET;
   message.focus({ preventScroll: true });
   track_scroll();
+}
+
+/** Any manual scroll (wheel, touch drag, scroll keys, scrollbar) turns read-aloud following off; only its button turns it back on. */
+function stop_following(event) {
+  if (!reader.state.following) return;
+  if (event.type === "keydown" && !["ArrowUp", "ArrowDown", "PageUp", "PageDown", "Home", "End", " "].includes(event.key)) return;
+  if (event.type === "pointerdown" && event.target !== event.currentTarget) return;
+  reader.state.following = false;
 }
 
 /** Manual scrolling resumes tracking the message at the viewport's upper edge. */
@@ -1018,6 +1049,7 @@ function browse_navigation(event) {
 /** Return to the newest record and resume following newly arriving messages. */
 function return_to_latest() {
   close_preview();
+  reader.state.following = false;
   jump_target.value = null;
   follow_tail.value = true;
   follow_messages();
@@ -1304,7 +1336,7 @@ function copy_message(message) { act("copy", `${view.value.room_site}/r/${room.v
       </motion.div>
     </Teleport>
     <button v-if="listen_here && !listen_here.touch" type="button" class="channel-listen-mark" :style="{ left: `${listen_here.left}px`, top: `${listen_here.top}px` }" title="从选中处开始朗读" aria-label="从选中处开始朗读" @mousedown.prevent @click="listen_from_selection"><UIcon name="i-lucide-headphones" />朗读</button>
-    <div ref="transcript" v-memo="[message_groups, message_round_labels, free, room.session, view.access, active_message, expanded_answers.size, reader.state.message_id, room.title, view.query, view.mention_only, view.host_only, topic_anchor, end_anchor, request_badges, execution_reports, recommendations, adopting, scheduler_decisions, host_arrangements, correcting, pending, execution_notes, editing, rewound_runs]" class="channel-transcript" aria-label="聊天记录" @scroll="track_scroll" @wheel.passive="resume_tracking" @touchstart.passive="resume_tracking" @keydown="resume_tracking">
+    <div ref="transcript" v-memo="[message_groups, message_round_labels, free, room.session, view.access, active_message, expanded_answers.size, reader.state.message_id, room.title, view.query, view.mention_only, view.host_only, topic_anchor, end_anchor, request_badges, execution_reports, recommendations, adopting, scheduler_decisions, host_arrangements, correcting, pending, execution_notes, editing, rewound_runs]" class="channel-transcript" aria-label="聊天记录" @scroll="track_scroll" @wheel.passive="resume_tracking($event); stop_following($event)" @touchstart.passive="resume_tracking" @touchmove.passive="stop_following" @pointerdown="stop_following" @keydown="resume_tracking($event); stop_following($event)">
       <div v-if="!view.query && !view.mention_only && !view.host_only && !topic_anchor" class="channel-message-group channel-topic-group"><TopicCard :ref="(card) => topic_card = card" @edit="emit('edit')" /></div>
       <div v-for="group in message_groups" :key="group.key" class="channel-message-group">
         <USeparator :label="group.label" class="channel-date-divider" />
@@ -1334,24 +1366,20 @@ function copy_message(message) { act("copy", `${view.value.room_site}/r/${room.v
             </template>
           </template>
         </UChatMessage>
-        <!-- Work in progress is a folded strip, not a card: one line with the latest note, the notes open below it. -->
-        <!-- The controls sit beside the fold, not inside its summary, so they are not buttons nested in a button. -->
+        <!-- Work in progress is a compact card: who and how long, the stage as the main line with the stop key at its end, -->
+        <!-- and the notes below as a subordinate thread, folded to the latest note with the count after it. -->
         <div v-else-if="message.slot_card && !message.failure && !message.retry" :id="`execution-${message.id}`" class="channel-working-strip" :data-author="bridge.identities[message.author]?.style">
-          <details class="channel-working-fold">
-          <summary @click="(event) => { if (!working_notes(message).length) event.preventDefault(); }">
+          <div class="channel-working-head">
             <UAvatar :src="bridge.identities[message.author]?.icon" :text="bridge.identities[message.author]?.initials || '?'" :alt="bridge.display_name(message.author)" size="2xs" class="channel-avatar" :class="bridge.identities[message.author]?.style" />
             <strong class="channel-working-name">{{ bridge.display_name(message.author) }}</strong>
+            <small class="channel-working-elapsed">{{ message.waiting ? `手动启动${message.created_at ? ` · 已等 ${format_elapsed(Math.max(0, free_now - message.created_at))}` : ''}` : `已用 ${format_elapsed(Math.max(0, free_now - message.created_at))}` }}{{ message.attempt ? ` · 第 ${message.attempt}/${MAX_DELIVERY_RETRIES} 次重试` : '' }}</small>
+          </div>
+          <div class="channel-working-main">
             <span v-for="status in [working_status(message)]" :key="message.id" class="channel-working-status" :class="{ 'channel-working-warning': status.warning }" role="status" :title="shows_progress(message) ? (message.waiting ? message.text : status.text) : '此接入方式看不到进度，可在原窗口查看'">
               <span v-if="message.waiting">{{ message.text }}</span>
               <WorkingText v-else-if="status.live" :text="status.text" :seed="message.author" :beat="message.activity_at" :silent="free_now - (message.activity_at || message.created_at)" dots :muted="!shows_progress(message)" />
               <span v-else>{{ status.text }}</span>
             </span>
-            <small class="channel-working-elapsed">{{ message.waiting ? `手动启动${message.created_at ? ` · 已等 ${format_elapsed(Math.max(0, free_now - message.created_at))}` : ''}` : `已用 ${format_elapsed(Math.max(0, free_now - message.created_at))}` }}</small>
-            <span class="channel-working-latest">{{ working_notes(message).at(-1)?.text }}</span>
-            <span v-if="working_notes(message).length" class="channel-working-count">{{ working_notes(message).length }} 段<UIcon name="i-lucide-chevron-down" /></span>
-          </summary>
-          <ol class="channel-working-notes"><li v-for="note in working_notes(message)" :key="note.seq">{{ note.text }}</li></ol>
-          </details>
           <span v-if="view.access?.can_manage" class="channel-working-actions">
               <!-- In a discussion, stopping the current speaker skips the turn so the next one speaks. -->
               <template v-if="speaking_turn?.expert === message.author && message.discussion_request">
@@ -1362,6 +1390,14 @@ function copy_message(message) { act("copy", `${view.value.room_site}/r/${room.v
               <UTooltip v-else text="停止"><UButton variant="solid" color="neutral" class="channel-stop-button" :aria-label="`停止 ${bridge.display_name(message.author)} 本次执行`" :disabled="!!pending"
                 @click="act('change_member', { member_id: message.member_id, name: message.author, action: 'interrupt' })"><span class="channel-stop-square" /></UButton></UTooltip>
           </span>
+          </div>
+          <div v-for="notes in [working_notes(message)].filter((list) => list.length)" :key="message.execution_id" class="channel-working-notes" :class="{ 'is-open': open_working_notes.has(message.execution_id) }">
+            <template v-if="open_working_notes.has(message.execution_id)"><p v-for="note in notes.slice(0, -1)" :key="note.seq">{{ note.text }}</p></template>
+            <p class="channel-working-latest" @click="open_working_notes.has(message.execution_id) || toggle_working_notes(message.execution_id)">
+              <span class="channel-working-latest-text">{{ notes.at(-1).text }}</span>
+              <button type="button" class="channel-working-count" :aria-expanded="open_working_notes.has(message.execution_id)" :aria-label="open_working_notes.has(message.execution_id) ? '收起过程说明' : `展开全部 ${notes.length} 段过程说明`" @click.stop="toggle_working_notes(message.execution_id)">{{ notes.length }} 段<UIcon name="i-lucide-chevron-down" /></button>
+            </p>
+          </div>
         </div>
         <!-- Waiting to redeliver keeps the full card: the reason and its buttons do not fit one line. -->
         <UChatMessage v-else-if="message.slot_card && !message.failure" :id="`execution-${message.id}`" :data-author="bridge.identities[message.author]?.style" role="assistant" :parts="[]" side="left" variant="naked" color="neutral" class="channel-message" :ui="{ header: 'channel-message-header', container: 'channel-message-container', body: 'channel-message-body' }">
@@ -1567,8 +1603,10 @@ function copy_message(message) { act("copy", `${view.value.room_site}/r/${room.v
       </div>
       <div v-if="!transcript_messages.length && !free_working.length" class="channel-empty"><UIcon :name="view.query || view.mention_only || view.host_only ? 'i-lucide-search' : 'i-lucide-hash'" /><h2>{{ view.query || view.mention_only || view.host_only ? '没有找到消息' : room.title }}</h2><p>{{ view.query || view.mention_only || view.host_only ? '试试其他关键词，或清除筛选。' : bridge.empty_discussion_message(room) }}</p></div>
     </div>
-    <div v-if="(transcript_messages.length && !follow_tail) || listen_here?.touch" class="channel-latest-dock">
+    <div v-if="(transcript_messages.length && !follow_tail) || listen_here?.touch || reader.state.message_id" class="channel-latest-dock">
       <button v-if="listen_here?.touch" type="button" class="channel-listen-pill" aria-label="从选中处开始朗读" @mousedown.prevent @click="listen_from_selection"><UIcon name="i-lucide-headphones" />听当前</button>
+      <button v-if="reader.state.message_id" type="button" class="channel-listen-pill" :class="{ 'is-on': reader.state.following }" :aria-pressed="reader.state.following" :title="reader.state.following ? '手动滚动即取消跟随' : '页面跟随朗读位置滚动'" @click="reader.state.following ? (reader.state.following = false) : reader.follow()"><UIcon name="i-lucide-locate-fixed" />{{ reader.state.following ? '跟随中' : '跟随' }}</button>
+      <button v-if="reader.state.reading" type="button" class="channel-listen-pill" aria-label="退出朗读" @click="reader.stop()"><UIcon name="i-lucide-square" />退出</button>
       <UButton v-if="transcript_messages.length && !follow_tail" icon="i-lucide-arrow-down" color="neutral" variant="outline" aria-label="回到最新消息" class="channel-latest-button" @click="return_to_latest" />
     </div>
     <div class="channel-composer-dock"><div class="channel-composer-column" @dragover="bridge.drop_attachments" @drop="bridge.drop_attachments" @paste="bridge.paste_attachments" @keydown.capture="mention_keydown($event); attachment_shortcut($event)" @input="update_mention" @click="update_mention" @keyup="update_mention" @select="update_mention" @compositionstart="mention_composition" @compositionend="mention_composition" @scroll.capture="sync_mirror">

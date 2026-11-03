@@ -7,7 +7,7 @@ const { view, bridge } = inject("discussion");
 const STATUS = { active: { label: "进行中", color: "primary" }, paused: { label: "已暂停", color: "neutral" }, concluded: { label: "已结束", color: "neutral" } };
 const room = computed(() => view.value.room);
 const opened = ref(new Set());
-const render = (text) => window.discuss_markdown.render_markdown(text);
+const render = (text) => bridge.render_room_markdown(text);
 const when = (value) => value ? new Date(value).toLocaleString("zh-CN", { month: "numeric", day: "numeric", hour: "2-digit", minute: "2-digit", hour12: false }) : "";
 
 /** Discussions with the free stretches around them, newest first; counts come from the room's own messages. */

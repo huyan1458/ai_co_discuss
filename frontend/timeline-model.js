@@ -367,3 +367,106 @@ export function timeline_summary(rows, now_ms = Date.now()) {
     slowest,
   };
 }
+
+// ---- Room event log: the website's append-only record of room state changes (GET /api/rooms/:id/events). ----
+
+export const REQUEST_STATUS = { pending: "待投递", delivering: "投递中", completed: "已完成", cancelled: "已取消", failed: "失败" };
+export const EXECUTION_STATUS = { dispatched: "已派出", started: "已开始", completed: "已完成", cancelled: "已作废", failed: "失败" };
+export const PURPOSES = { route: "接收", ask: "派活", handoff: "交还主持人" };
+const CREATORS = { user: "用户", host: "主持人" };
+const CANCEL_REASONS = { user_stop: "用户停止", member_away: "成员暂离", member_removed: "成员移除", rerouted: "改派", no_reply: "未回复", archived: "房间归档" };
+const MEMBER_STATUS = { active: "在场", away: "暂离", removed: "移除" };
+const ROLES = { host: "主持人", member: "成员" };
+/** The event's group, which colors its tag: message, request, execution, flow (batch, queue, chain), scheduler, room. */
+export const EVENT_GROUPS = { api: "输入", message: "消息", request: "请求", execution: "执行", batch: "流转", queue: "流转", chain: "流转",
+  scheduler: "调度", member: "房间", discussion: "房间", room: "房间" };
+const OPEN_EXECUTIONS = new Set(["dispatched", "started"]);
+const OPEN_REQUESTS = new Set(["pending", "delivering"]);
+// Who sent a write, from the first product of its User-Agent.
+const API_CLIENTS = [["Mozilla", "网页"], ["node", "本机服务"], ["AI-CoDiscuss-CLI", "CLI"], ["Python", "脚本"]];
+const PATH_ENTITIES = { executions: "execution", requests: "request", messages: "message" };
+
+/** A write's logged payload: the server stores it as JSON text, cut when long. */
+function api_payload(data) {
+  try { return JSON.parse(data.payload || "{}"); } catch { return {}; }
+}
+
+/** The entities an event touches, as `request:345`, `execution:321`, `message:647`, for filtering and linking. */
+export function event_entities(event) {
+  const data = event.kind.startsWith("api.") ? { ...api_payload(event.data), ...event.data } : event.data, keys = [];
+  if (data.request_id) keys.push(`request:${data.request_id}`);
+  if (data.execution_id) keys.push(`execution:${data.execution_id}`);
+  for (const field of ["message_id", "answer_id", "batch_id", "reply_to", "after_message_id"]) if (data[field]) keys.push(`message:${data[field]}`);
+  for (const [, collection, id] of String(data.path || "").matchAll(/\/(executions|requests|messages)\/(\d+)/g)) keys.push(`${PATH_ENTITIES[collection]}:${id}`);
+  return [...new Set(keys)];
+}
+
+/** One line for a write request: who, through what, which endpoint and action, its text, and the rejection if any. */
+function api_text(event) {
+  const data = event.data, payload = api_payload(data);
+  const actor = data.actor === "owner" ? "房主" : data.actor?.startsWith("member:") ? data.actor.slice(7) : data.actor === "none" ? "无凭据" : "未知凭据";
+  const client = API_CLIENTS.find(([prefix]) => (data.client || "").startsWith(prefix))?.[1] || data.client || "未知客户端";
+  const action = payload.action ? ` ${payload.action}` : "";
+  const text = typeof payload.text === "string" ? `：${payload.text}` : "";
+  const outcome = event.kind === "api.rejected" ? ` → 被拒 ${data.status}：${data.error}` : "";
+  return `${actor}（${client}${data.bridged ? "·中转" : ""}）POST ${data.path}${action}${outcome}${text}`;
+}
+
+/** One line in plain words for an event; `name` turns a member id into a display name. */
+export function event_text(event, name) {
+  const data = event.data, who = name(data.member_id);
+  const status = (labels, value) => labels[value] || value;
+  switch (event.kind) {
+    case "api.write":
+    case "api.rejected": return api_text(event);
+    case "message.posted": return `${data.author} 发言 #${data.message_id}${data.reply_to ? `（回复 #${data.reply_to}）` : ""}：${data.text}`;
+    case "message.withdrawn": return `#${data.message_id} ${data.kind === "rewound" ? "被回退" : "被撤回"}`;
+    case "room.rewound": return `回退到 #${data.message_id}`;
+    case "member.joined": return `${who} 加入（${status(ROLES, data.role)} · ${data.adapter || "未知软件"}）`;
+    case "member.changed": return `${who}：${data.from_role !== data.role ? `${status(ROLES, data.from_role)} → ${status(ROLES, data.role)}` : `${status(MEMBER_STATUS, data.from_status)} → ${status(MEMBER_STATUS, data.status)}`}`;
+    case "request.created": return `请求 R${data.request_id} → ${who} · ${status(PURPOSES, data.purpose)} · 挂在 #${data.message_id} · 由${status(CREATORS, data.created_by)}创建${data.batch_id ? ` · 批次 #${data.batch_id}` : ""}`;
+    case "request.changed": return `请求 R${data.request_id}（${who}）${data.from_status !== data.status ? `${status(REQUEST_STATUS, data.from_status)} → ${status(REQUEST_STATUS, data.status)}` : "更新"}${data.execution_id ? ` · 执行 E${data.execution_id}` : ""}${data.answer_id ? ` · 回答 #${data.answer_id}` : ""}`;
+    case "request.cancel_reason": return `请求 R${data.request_id}（${who}）取消原因：${status(CANCEL_REASONS, data.reason)}`;
+    case "execution.created": return `执行 E${data.execution_id}（${who}）${status(EXECUTION_STATUS, data.status)}`;
+    case "execution.changed": return `执行 E${data.execution_id}（${who}）${status(EXECUTION_STATUS, data.from_status)} → ${status(EXECUTION_STATUS, data.status)}${data.result ? `：${data.result}` : ""}`;
+    case "execution.retry": return data.stopped ? `执行 E${data.execution_id} 停止自动重试` : `执行 E${data.execution_id} 第 ${data.attempt} 次重试${data.reason ? `：${data.reason}` : ""}`;
+    case "execution.late_answer": return `执行 E${data.execution_id} 作废后迟到的回答：${data.text}`;
+    case "batch.opened": return `批次 #${data.batch_id} 开启（${name(data.host_id)} 派出，链 #${data.chain_id}）`;
+    case "batch.settled": return `批次 #${data.batch_id} 已收齐`;
+    case "batch.handoff": return `批次 #${data.batch_id} 交还主持人`;
+    case "queue.added": return `${who} 排队等候 #${data.message_id}`;
+    case "queue.removed": return `${who} 出队 #${data.message_id}`;
+    case "chain.held": return `任务链 #${data.chain_id} 到限暂停，等用户决定`;
+    case "chain.released": return `任务链 #${data.chain_id} 解除暂停`;
+    case "scheduler.decided": return `智能调度（${data.kind === "round" ? "轮次" : "插话"}）在 #${data.after_message_id} 后选择「${data.label}」${data.confidence != null ? ` · 置信 ${Number(data.confidence).toFixed(2)}` : ""}${data.applied ? " · 已采用" : ""}`;
+    case "scheduler.applied": return `智能调度选择「${data.label}」${data.applied ? "已采用" : "撤销采用"}`;
+    case "discussion.created": return `讨论 #${data.session_id} 创建：${data.goal}`;
+    case "discussion.changed": return `讨论 #${data.session_id}：${data.from_status} → ${data.status}`;
+    default: return JSON.stringify(data);
+  }
+}
+
+/**
+ * Fold the events up to and including `index` into what was open at that moment: requests not yet finished (with the
+ * message they hang under), executions still running, queue entries and paused chains. Events before the log began are
+ * unknown, so anything that only finishes inside the window is ignored.
+ */
+export function state_at(events, index) {
+  const requests = new Map(), executions = new Map(), queue = new Map(), chains = new Map();
+  for (const event of events.slice(0, index + 1)) {
+    const data = event.data;
+    if (event.kind === "request.created") requests.set(data.request_id, { ...data, at: event.at });
+    else if (event.kind === "request.changed" && requests.has(data.request_id)) {
+      if (OPEN_REQUESTS.has(data.status)) requests.set(data.request_id, { ...requests.get(data.request_id), ...data });
+      else requests.delete(data.request_id);
+    } else if (event.kind === "execution.created") executions.set(data.execution_id, { ...data, at: event.at });
+    else if (event.kind === "execution.changed" && executions.has(data.execution_id)) {
+      if (OPEN_EXECUTIONS.has(data.status)) executions.set(data.execution_id, { ...executions.get(data.execution_id), ...data });
+      else executions.delete(data.execution_id);
+    } else if (event.kind === "queue.added") queue.set(data.queue_id, data);
+    else if (event.kind === "queue.removed") queue.delete(data.queue_id);
+    else if (event.kind === "chain.held") chains.set(data.chain_id, data);
+    else if (event.kind === "chain.released") chains.delete(data.chain_id);
+  }
+  return { requests: [...requests.values()], executions: [...executions.values()], queue: [...queue.values()], chains: [...chains.values()] };
+}

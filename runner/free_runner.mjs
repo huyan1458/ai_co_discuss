@@ -95,7 +95,7 @@ export function free_task_files(config, member, execution, binding, { session = 
   const requests = execution.requests || [];
   const discussion_request = requests.find(item => item.session_request_id && ['discuss', 'discuss_host'].includes(item.purpose)) || null;
   const direct_question = Boolean(session?.status === 'active' && requests.some(item => item.purpose === 'ask'));
-  const { instructions, prompt } = free_task_text({ name: member.name, role: member.role, discussion: direct_question,
+  const { instructions, prompt } = free_task_text({ name: member.label || member.name, role: member.role, discussion: direct_question,
     discussion_request, profile, cli,
     room: config.room, messages, read_after: execution.read_until, execution_id: execution.id, task_path,
     access_file: bound_access ? '' : access_path, read_rule: read_rule(profile.adapter), inbox });
@@ -172,6 +172,8 @@ export class FreeRoomRunner {
     this.execution_processes = new Map();
     // Execution id -> why its session ended on its own, such as a command refused in unattended mode ('' when unknown).
     this.exited = new Map();
+    // Executions whose software failed before any turn ran, as its adapter reported; safe to deliver again.
+    this.not_started = new Set();
     this.snapshots = new Map();
     // Execution id -> { phase, at, sent_phase, sent_at }: what the member's software last showed it doing.
     this.activity = new Map();
@@ -620,7 +622,10 @@ export class FreeRoomRunner {
         on_activity: (phase, tool) => { this.touch(execution.id, phase); this.segments.mark(execution.id, phase, tool); },
         on_note: text => this.note(execution.id, text),
         // A stopped process may report after the next execution started; only its own execution takes the result.
-        on_failure: error => { try { if (this.row(member.name)?.execution_id === execution.id) this.save(member.name, { error }); } catch { /* Store may already be closed at shutdown. */ } },
+        on_failure: (error, { not_started = false } = {}) => {
+          if (not_started) this.not_started.add(execution.id);
+          try { if (this.row(member.name)?.execution_id === execution.id) this.save(member.name, { error }); } catch { /* Store may already be closed at shutdown. */ }
+        },
         on_exit: denial => this.exited.set(execution.id, denial || ''),
         // Shown beside the answer or failure so the owner can allow them; a lost report only hides the list.
         on_denials: denials => api(this.config, `/executions/${execution.id}`, { action: 'denials', denials }).catch(() => {}),
@@ -841,12 +846,14 @@ export class FreeRoomRunner {
     }
   }
   /**
-   * A manual member's session refused the delivery: keep the execution and deliver again after a wait shown on the
-   * website, up to MAX_DELIVERY_RETRIES times; any other member, or the last attempt, fails as before.
+   * A manual member's session refused the delivery, or the software failed before any turn ran: keep the execution and
+   * deliver again after a wait shown on the website, up to MAX_DELIVERY_RETRIES times; anything else, or the last
+   * attempt, fails as before.
    */
   async retry_or_fail(name, execution, reason) {
     const attempt = (execution.retry?.attempt || 0) + 1;
-    if (this.config.participants[name]?.project_access !== 'own') return this.fail(name, execution.id, reason);
+    const not_started = this.not_started.delete(execution.id);
+    if (this.config.participants[name]?.project_access !== 'own' && !not_started) return this.fail(name, execution.id, reason);
     if (attempt > MAX_DELIVERY_RETRIES) return this.fail(name, execution.id, `${reason}（已自动重试 ${MAX_DELIVERY_RETRIES} 次）`);
     this.stop_member(name);
     this.exited.delete(execution.id);
@@ -857,6 +864,7 @@ export class FreeRoomRunner {
   /** Record the cause on the website, then stop this member's own processes. */
   async fail(name, execution_id, reason) {
     this.activity.delete(execution_id);
+    this.not_started.delete(execution_id);
     await this.report_segments(execution_id, true);
     try { await api(this.config, `/executions/${execution_id}`, { action: 'fail', reason }); }
     catch (error) { if (!/HTTP 409/.test(error.message)) throw error; }
