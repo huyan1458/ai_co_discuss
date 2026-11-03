@@ -159,6 +159,10 @@ class AdminTests(unittest.TestCase):
         self.assertEqual(self.request("/api/admin/profile", {"username": "船长"})[1]["profile"]["username"], "船长")
         self.assertEqual(self.request("/api/admin")[1]["profile"]["username"], "船长")
         room = self.new_room(uuid.uuid4().hex)
+        # A visitor of the local site speaks as the owner without the room credential, as an administrator does.
+        message = {"author": "用户", "text": "本机网页的发言", "submission_id": uuid.uuid4().hex}
+        self.assertEqual(self.request(f"/api/rooms/{room}/messages", message)[0], 201)
+        self.assertEqual(self.request(f"/api/rooms/{room}/messages", {**message, "submission_id": uuid.uuid4().hex}, token=uuid.uuid4().hex)[0], 403)
         self.assertEqual(self.request(f"/api/rooms/{room}/archive", {"actor": "用户"})[0], 200)
         self.assertEqual(self.request(f"/api/rooms/{room}/delete", {"actor": "用户", "confirm_title": "管理员验证"})[0], 200)
 
@@ -342,7 +346,8 @@ class RelayBridgeTests(unittest.TestCase):
         self.assertEqual(status, 201, room)
         message = {"author": "用户", "text": "手机上发的", "submission_id": "bridge-message"}
         path = f"/api/rooms/{room['id']}/messages"
-        self.assertEqual(self.request(path, message)[0], 403, "a local visitor still needs the room credential")
+        local = {**message, "submission_id": "local-message"}
+        self.assertEqual(self.request(path, local)[0], 201, "a visitor of the local site writes as the owner")
         self.assertEqual(self.request(path, message, bridge="ef" * 32)[0], 403)
         self.assertEqual(self.request(path, message, bridge=self.BRIDGE, site="https://other.test")[0], 403)
         self.assertEqual(self.request(path, message, bridge="not-hex")[0], 403)

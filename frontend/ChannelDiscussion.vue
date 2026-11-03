@@ -1332,9 +1332,11 @@ function copy_message(message) { act("copy", `${view.value.room_site}/r/${room.v
                 <span v-else>{{ status.text }}</span>
               </div>
               <div v-if="!message.retry && view.access?.can_manage" class="channel-working-actions">
+                <!-- In a discussion, stopping the current speaker skips the turn so the next one speaks. -->
                 <template v-if="speaking_turn?.expert === message.author && message.discussion_request">
                   <UTooltip text="暂停讨论"><UButton icon="i-lucide-pause" size="sm" variant="ghost" color="neutral" :aria-label="`暂停讨论，停止 ${bridge.display_name(message.author)} 本次发言`" :disabled="!!pending" :loading="pending === 'pause_discussion'" @click="act('pause_discussion')" /></UTooltip>
-                  <UTooltip text="跳过本次发言"><UButton icon="i-lucide-skip-forward" size="sm" variant="ghost" color="neutral" :aria-label="`跳过 ${bridge.display_name(message.author)} 本次发言`" :disabled="!!pending" :loading="pending === 'skip_turn'" @click="act('skip_turn')" /></UTooltip>
+                  <UTooltip text="停止本次发言，轮到下一位"><UButton variant="solid" color="neutral" class="channel-stop-button" :aria-label="`停止 ${bridge.display_name(message.author)} 本次发言，轮到下一位`" :disabled="!!pending" :loading="pending === 'skip_turn'"
+                    @click="act('skip_turn')"><span class="channel-stop-square" /></UButton></UTooltip>
                 </template>
                 <UTooltip v-else text="停止"><UButton variant="solid" color="neutral" class="channel-stop-button" :aria-label="`停止 ${bridge.display_name(message.author)} 本次执行`" :disabled="!!pending"
                   @click="act('change_member', { member_id: message.member_id, name: message.author, action: 'interrupt' })"><span class="channel-stop-square" /></UButton></UTooltip>
@@ -1584,7 +1586,7 @@ function copy_message(message) { act("copy", `${view.value.room_site}/r/${room.v
 .channel-working-row { display: flex; align-items: center; gap: 12px; }
 .channel-working-row > .channel-message-text { flex: 1; min-width: 0; }
 .channel-working-actions { display: flex; align-items: center; gap: 6px; flex-shrink: 0; }
-.channel-stop-button { width: 32px; height: 32px; padding: 0; justify-content: center; border-radius: 999px; background: #b4524c; color: #fff; }
-.channel-stop-button:hover:not(:disabled) { background: #9c4540; }
-.channel-stop-square { width: 10px; height: 10px; border-radius: 2px; background: currentColor; }
+.channel-stop-button { width: 28px; height: 28px; padding: 0; justify-content: center; border-radius: 999px; background: color-mix(in srgb, var(--ui-error) 55%, #000); color: #f4e7e6; }
+.channel-stop-button:hover:not(:disabled) { background: color-mix(in srgb, var(--ui-error) 68%, #000); }
+.channel-stop-square { width: 9px; height: 9px; border-radius: 2px; background: currentColor; }
 </style>

@@ -22,6 +22,10 @@ const PING_MS = 25000;
 // The site gives up on a request after 9 seconds, so the local website must answer before then.
 const LOCAL_TIMEOUT_MS = 8000;
 const EVENT_RETRY_MS = 3000;
+// Diagnostics: a request answered slower than this, or not delivered, is written to the service log (action and route only).
+const SLOW_REQUEST_MS = 3000;
+// A connection whose keep-alive has gone unanswered this long is reported once; the website would have dropped it.
+const HEARTBEAT_LATE_MS = 2 * PING_MS + 5000;
 // A WebSocket frame on the website is at most 1 MiB; leave room for the envelope around the ciphertext.
 const RESPONSE_MAX_BYTES = 700 * 1024;
 const ROOM_API_PATH = /^\/api\/(rooms|folders|revisions)(\/[A-Za-z0-9_.~-]+)*(\?[A-Za-z0-9_.~%=&,:+-]*)?$/;
@@ -152,7 +156,7 @@ export function computer_command(home, site, action, payload) {
 }
 
 /** Answer one relayed request: room routes and uploads go to the local website, everything else to the local entrypoint as before. */
-export async function answer_request(home, site, link, frame, { run = run_launch_command, fetcher } = {}) {
+export async function answer_request(home, site, link, frame, { run = run_launch_command, fetcher, report } = {}) {
   const { id, envelope } = frame;
   const key = await relay_cipher(link.private_key, envelope.key);
   const request = await unseal(key, envelope, id);
@@ -164,6 +168,8 @@ export async function answer_request(home, site, link, frame, { run = run_launch
       : action === 'room-upload' ? await room_upload(home, site, payload, { fetcher })
         : await run(target === 'computer' ? computer_command(home, site, action, payload) : relayed_command(site, action, payload));
   } catch (error) { response = { status: 400, body: { error: error.message } }; }
+  // Only what kind of request it was and how it ended: never its content or query.
+  report?.({ action: request.action, route: typeof request.payload?.path === 'string' ? request.payload.path.split('?')[0] : '', status: response.status });
   return { type: 'response', id, envelope: await seal_compressed(key, response, `${id}:response`) };
 }
 
@@ -205,25 +211,44 @@ async function hold_channel(home, site, { connected, log, signal }) {
       const events = new AbortController();
       let ping;
       const finish = opened => { clearInterval(ping); events.abort(); connected.delete(site); resolve(opened); };
-      let opened = false;
+      let opened = false, heard = Date.now(), late = false;
       socket.addEventListener('open', () => {
         opened = true;
+        heard = Date.now();
         connected.add(site);
         log(`${site}: 中转已连接`);
-        ping = setInterval(() => socket.readyState === WebSocket.OPEN && socket.send('ping'), PING_MS);
+        ping = setInterval(() => {
+          if (socket.readyState !== WebSocket.OPEN) return;
+          const silent = Date.now() - heard;
+          if (silent > HEARTBEAT_LATE_MS && !late) { late = true; log(`${site}: 中转心跳超时，${Math.round(silent / 1000)} 秒未收到网站回应`); }
+          socket.send('ping');
+        }, PING_MS);
         forward_changes(home, socket, events.signal);
       });
       socket.addEventListener('message', async event => {
+        if (late) log(`${site}: 中转心跳恢复`);
+        heard = Date.now();
+        late = false;
         if (typeof event.data !== 'string' || event.data === 'pong') return;
         let frame;
         try { frame = JSON.parse(event.data); } catch { return; }
         if (frame.type !== 'request' || typeof frame.id !== 'string' || !frame.envelope) return;
+        const received = Date.now();
+        let kind = { action: '?', route: '', status: 0 };
         try {
-          const answer = await answer_request(home, site, link, frame);
-          if (socket.readyState === WebSocket.OPEN) socket.send(JSON.stringify(answer));
-        } catch (error) { log(`${site}: 中转请求 ${frame.id} 无法处理：${error.message}`); }
+          const answer = await answer_request(home, site, link, frame, { report: value => { kind = value; } });
+          const answered = Date.now();
+          const open = socket.readyState === WebSocket.OPEN;
+          if (open) socket.send(JSON.stringify(answer));
+          const label = `${kind.action}${kind.route ? ` ${kind.route}` : ''} → ${kind.status}`;
+          if (!open) log(`${site}: 中转回应未送出（连接已断开）：${label}，处理 ${answered - received} ms`);
+          else if (answered - received > SLOW_REQUEST_MS) log(`${site}: 中转请求较慢：${label}，处理 ${answered - received} ms`);
+        } catch (error) { log(`${site}: 中转请求 ${frame.id} 无法处理（${Date.now() - received} ms）：${error.message}`); }
       });
-      socket.addEventListener('close', () => finish(opened));
+      socket.addEventListener('close', event => {
+        if (opened && !signal.aborted) log(`${site}: 中转连接断开（${event.code || '无代码'}${event.reason ? ` ${event.reason}` : ''}），稍后重连`);
+        finish(opened);
+      });
       socket.addEventListener('error', () => { try { socket.close(); } catch { /* Already closing. */ } });
       signal.addEventListener('abort', () => { try { socket.close(1000, 'stopping'); } catch { /* Already closed. */ } }, { once: true });
     });

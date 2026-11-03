@@ -36,7 +36,7 @@ Click **Start discussion** (开启讨论) in the member panel, or check **Start 
 2. The host breaks down the question and schedules speakers. Experts first give independent views, then respond to each other.
 3. When a limit is reached, the host declares the goal done, or you click **End**, the room returns to free collaboration with history and conclusions kept. You can start another discussion later.
 
-You can `@` any member during a discussion without using a round. If that member is already handling a discussion request, the new request waits for the same session. Unaddressed messages go to the host; to stop the current speaker, click **Skip** (跳过) on the progress board. Group mentions, retracting, editing and branching are unavailable during a discussion.
+You can `@` any member during a discussion without using a round. If that member is already handling a discussion request, the new request waits for the same session. Unaddressed messages go to the host; to stop the current speaker, click the stop button on their working card or **Skip** (跳过) on the progress board; the discussion moves on to the next speaker. Group mentions, retracting, editing and branching are unavailable during a discussion.
 
 Discussions and free collaboration share the same execution and failure cards. A failed delivery retries up to three times; you can retry immediately or stop it. When retries run out, only that request fails and the host decides whether to skip, reschedule or pause the discussion. The room is not paused automatically. Scheduled online members can reply through the host's relay; the discussion host itself must be woken locally.
 

@@ -764,7 +764,12 @@ def authorize_free_write(connection, room_id, token, operation, payload):
         if operation not in ("messages", "attachments"):
             raise
     author = payload.get("author")
-    member = require_member(connection, room_id, token)
+    try:
+        member = require_member(connection, room_id, token)
+    except PermissionError:
+        if author in (None, "用户"):
+            raise PermissionError("此浏览器没有本房间的房主凭据：请用创建房间的浏览器，或登录管理员后再发言") from None
+        raise
     if author == member["name"] and payload.get("submitted_by", author) == author:
         return member
     raise PermissionError("成员只能以本人身份发言")

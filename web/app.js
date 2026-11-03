@@ -35,6 +35,10 @@ const LOCAL_CONNECTION_KEY = "discuss-local-connection";
 const LOCAL_CONNECTION_TIMEOUT_MS = 15000;
 // A relayed launch waits this long for the paired computer before the request is kept as a pending item.
 const RELAY_WAIT_MS = 45000;
+// A relayed read that goes unanswered or finds the computer briefly away is asked again after these pauses; reads change nothing.
+const RELAY_READ_RETRY_MS = [1000, 3000];
+// After the connection drops, the page reconnects by itself after these pauses, the last one repeating until it is back.
+const RECONNECT_DELAYS_MS = [2000, 4000, 8000, 15000, 30000];
 const RELAY_POLL_MS = 1500;
 const MODEL_CATALOG_TIMEOUT_MS = 35000;
 // Without the local service, local operations go through the paired computer, encrypted so the website only sees ciphertext.
@@ -368,10 +372,24 @@ function management_error_message(room_id, error) {
   return error.message;
 }
 
-/** Show connection state without claiming that any AI is online. */
+let reconnect_timer = null, reconnect_attempt = 0;
+/** Reconnect without waiting for the user, backing off while the site or the computer stays away. */
+function schedule_reconnect() {
+  if (reconnect_timer !== null || document.hidden) return;
+  const delay = RECONNECT_DELAYS_MS[Math.min(reconnect_attempt, RECONNECT_DELAYS_MS.length - 1)];
+  reconnect_attempt += 1;
+  reconnect_timer = setTimeout(() => {
+    reconnect_timer = null;
+    if (!state.connected && !document.hidden) reconnect_live_updates({ automatic: true });
+  }, delay);
+}
+
+/** Show connection state without claiming that any AI is online; a lost connection is retried automatically. */
 function set_connection(connected) {
   state.connected = connected;
   state.reconnecting = false;
+  if (connected) { clearTimeout(reconnect_timer); reconnect_timer = null; reconnect_attempt = 0; }
+  else schedule_reconnect();
   element("connection-dot").className = `status-dot ${connected ? "connected" : "failed"}`;
   element("connection-status").textContent = connected ? "讨论网站已连接" : "网站连接中断，可手动刷新";
   publish_view();
@@ -2021,7 +2039,16 @@ async function relay_command(action, payload) {
 
 /** Read or write one room route on the paired computer's local website, as its owner, and answer as request_json would. */
 async function relay_room_request(path, payload) {
-  const answer = await relay_exchange("room-api", { method: payload === undefined ? "GET" : "POST", path, body: payload });
+  let answer;
+  for (let attempt = 0; ; attempt += 1) {
+    try { answer = await relay_exchange("room-api", { method: payload === undefined ? "GET" : "POST", path, body: payload }); break; }
+    catch (error) {
+      // Only reads are asked again: a write whose outcome is unconfirmed must not be sent twice.
+      const transient = error.unconfirmed || error.offline || error instanceof TypeError;
+      if (payload !== undefined || !transient || attempt >= RELAY_READ_RETRY_MS.length) throw error;
+      await new Promise((resolve) => setTimeout(resolve, RELAY_READ_RETRY_MS[attempt]));
+    }
+  }
   if (answer.status >= 400) throw Object.assign(new Error(answer.body?.error || "请求失败，请重试"), { preflight: answer.status < 500, status: answer.status });
   return answer;
 }
@@ -2168,7 +2195,13 @@ function relay_event_source() {
     let frame;
     try { frame = JSON.parse(event.data); } catch { return; }
     if (frame.type === "change") emit("change", JSON.stringify({ rooms: frame.rooms }));
-    if (frame.type === "presence") { state.remote_online = Boolean(frame.online); publish_view(); }
+    if (frame.type === "presence") {
+      // The computer coming back (after a restart, say) is read at once rather than at the next poll.
+      const back = frame.online && state.remote_online === false;
+      state.remote_online = Boolean(frame.online);
+      publish_view();
+      if (back) emit("ready");
+    }
   });
   socket.addEventListener("close", () => {
     clearInterval(ping);
@@ -3738,10 +3771,10 @@ function start_live_updates({ refresh = true } = {}) {
   if (refresh) queue_live_refresh();
 }
 
-/** Reopen the update stream and read the site now; used by the footer retry and when the stream was closed. */
-async function reconnect_live_updates() {
+/** Reopen the update stream and read the site now; used by the footer retry and, quietly, by automatic reconnects. */
+async function reconnect_live_updates({ automatic = false } = {}) {
   if (document.hidden) return;
-  state.reconnecting = true;
+  state.reconnecting = !automatic;
   publish_view();
   live_updates.source?.close();
   live_updates.source = null;
@@ -3810,6 +3843,8 @@ async function initialize() {
     else { start_live_updates(); load_admin_state(); }
   });
   window.addEventListener("pagehide", stop_live_updates);
+  // The network coming back (a phone leaving a lift, a laptop waking) reconnects at once.
+  window.addEventListener("online", () => { if (!state.connected) reconnect_live_updates({ automatic: true }); });
   window.addEventListener("pageshow", start_live_updates);
 }
 

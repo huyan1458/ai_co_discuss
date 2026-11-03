@@ -1847,8 +1847,9 @@ class DiscussionHandler(BaseHTTPRequestHandler):
         return True
 
     def admin_as_owner(self, connection, room_id):
-        """Let a logged-in administrator, or a relayed device, write as owner without the room credential; local visitors still need it."""
-        if self.headers.get("X-Discussion-Token") or not (self.bridged or session_valid(connection, self.admin_token())):
+        """Let a logged-in administrator, a relayed device, or a visitor of the loopback-only local site write as owner without
+        the room credential: the local site already treats its visitors as the administrator. The remote entry is never local."""
+        if self.headers.get("X-Discussion-Token") or not (self.bridged or self.server.local_site or session_valid(connection, self.admin_token())):
             return
         row = connection.execute("SELECT control_hash FROM room_modes WHERE room_id=?", (room_id,)).fetchone()
         if row and row[0]:

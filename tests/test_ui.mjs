@@ -1484,3 +1484,37 @@ test('backup import applies the adapter restore policy without interpreting the 
   assert.equal(result.local_members, undefined);
 });
 
+
+test("relayed reads are asked again after a lost answer, writes never; a dropped connection reconnects by itself", async () => {
+  const f = update_fixture();
+  const sent = [];
+  f.context.setTimeout = (callback) => { callback(); return 0; };
+  f.context.relay_exchange = async (action, payload) => {
+    sent.push(payload.method);
+    if (sent.length < 3) throw Object.assign(new Error("结果待确认"), { unconfirmed: true });
+    return { status: 200, body: { ok: true } };
+  };
+  assert.equal(JSON.stringify((await f.context.relay_room_request("/api/rooms/r1")).body), JSON.stringify({ ok: true }));
+  assert.equal(sent.join(), "GET,GET,GET");
+  sent.length = 0;
+  await assert.rejects(f.context.relay_room_request("/api/rooms/r1/messages", { text: "x" }), /结果待确认/);
+  assert.equal(sent.join(), "POST", "an unconfirmed write is not sent twice");
+
+  // A lost connection schedules a quiet reconnect, backing off, and stops once connected.
+  const g = theme_fixture(), timers = [];
+  g.context.document.hidden = false;
+  g.context.setTimeout = (callback, delay) => { timers.push({ callback, delay }); return timers.length; };
+  g.context.clearTimeout = () => {};
+  g.context.element = () => ({ className: "", textContent: "" });
+  const reconnects = [];
+  g.context.reconnect_live_updates = (options) => { reconnects.push(options); };
+  g.context.set_connection(false);
+  assert.equal(timers.at(-1).delay, 2000);
+  timers.at(-1).callback();
+  assert.equal(JSON.stringify(reconnects), JSON.stringify([{ automatic: true }]));
+  g.context.set_connection(false);
+  assert.equal(timers.at(-1).delay, 4000);
+  g.context.set_connection(true);
+  g.context.set_connection(false);
+  assert.equal(timers.at(-1).delay, 2000, "a success resets the back-off");
+});

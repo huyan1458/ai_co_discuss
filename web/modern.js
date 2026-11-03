@@ -43204,17 +43204,19 @@ var $U = {
 										"loading"
 									])]),
 									_: 2
-								}, 1024), q(_, { text: "跳过本次发言" }, {
+								}, 1024), q(_, { text: "停止本次发言，轮到下一位" }, {
 									default: L(() => [q(o, {
-										icon: "i-lucide-skip-forward",
-										size: "sm",
-										variant: "ghost",
+										variant: "solid",
 										color: "neutral",
-										"aria-label": `跳过 ${I(a).display_name(e.author)} 本次发言`,
+										class: "channel-stop-button",
+										"aria-label": `停止 ${I(a).display_name(e.author)} 本次发言，轮到下一位`,
 										disabled: !!I(c),
 										loading: I(c) === "skip_turn",
 										onClick: t[7] ||= (e) => I(s)("skip_turn")
-									}, null, 8, [
+									}, {
+										default: L(() => [...t[33] ||= [K("span", { class: "channel-stop-square" }, null, -1)]]),
+										_: 1
+									}, 8, [
 										"aria-label",
 										"disabled",
 										"loading"
@@ -43236,7 +43238,7 @@ var $U = {
 											action: "interrupt"
 										})
 									}, {
-										default: L(() => [...t[33] ||= [K("span", { class: "channel-stop-square" }, null, -1)]]),
+										default: L(() => [...t[34] ||= [K("span", { class: "channel-stop-square" }, null, -1)]]),
 										_: 1
 									}, 8, [
 										"aria-label",
@@ -43468,7 +43470,7 @@ var $U = {
 												variant: "soft",
 												class: "channel-source"
 											}, {
-												default: L(() => [...t[34] ||= [J("主持人", -1)]]),
+												default: L(() => [...t[35] ||= [J("主持人", -1)]]),
 												_: 1
 											})) : Y("", !0),
 											e.kind === "receipt" ? (U(), G(D, {
@@ -43478,7 +43480,7 @@ var $U = {
 												variant: "soft",
 												class: "channel-source"
 											}, {
-												default: L(() => [...t[35] ||= [J("运行回执", -1)]]),
+												default: L(() => [...t[36] ||= [J("运行回执", -1)]]),
 												_: 1
 											})) : Y("", !0),
 											dt(e) ? (U(), G(D, {
@@ -43489,7 +43491,7 @@ var $U = {
 												class: "channel-source",
 												title: Fe.value ? `${I(a).display_name(Fe.value.expert)} 说完后交给主持人处理` : "等待主持人处理"
 											}, {
-												default: L(() => [...t[36] ||= [J("待主持人处理", -1)]]),
+												default: L(() => [...t[37] ||= [J("待主持人处理", -1)]]),
 												_: 1
 											}, 8, ["title"])) : Y("", !0),
 											(U(!0), W(H, null, B(lt.value.get(e.id) || [], (e) => (U(), G(D, {
@@ -43599,7 +43601,7 @@ var $U = {
 										"aria-controls",
 										"onClick"
 									])) : Y("", !0)])),
-									e.summary ? (U(), W("div", uG, [K("small", null, [t[37] ||= J("回答摘要", -1), e.summary_by && e.summary_by !== e.author ? (U(), W("span", dG, " · " + N(I(a).display_name(e.summary_by)) + " 整理", 1)) : Y("", !0)]), K("div", {
+									e.summary ? (U(), W("div", uG, [K("small", null, [t[38] ||= J("回答摘要", -1), e.summary_by && e.summary_by !== e.author ? (U(), W("span", dG, " · " + N(I(a).display_name(e.summary_by)) + " 整理", 1)) : Y("", !0)]), K("div", {
 										class: "channel-message-text markdown-body",
 										innerHTML: e.rendered_summary
 									}, null, 8, fG)])) : Y("", !0),
@@ -43628,9 +43630,9 @@ var $U = {
 											class: "channel-recommendation-icon"
 										}),
 										e.status === "open" ? (U(), W("span", mG, [
-											t[38] ||= J("智能调度建议让 ", -1),
+											t[39] ||= J("智能调度建议让 ", -1),
 											K("strong", null, N(I(a).display_name(e.member)), 1),
-											t[39] ||= J(" 回答", -1),
+											t[40] ||= J(" 回答", -1),
 											K("small", { title: `${e.label}，置信度 ${Number(e.confidence).toFixed(2)}` }, "置信度 " + N(Number(e.confidence).toFixed(2)) + " · " + N(e.remaining) + " 秒", 9, hG)
 										])) : e.status === "waiting" ? (U(), W("span", gG, "智能调度：主持人答完后请 " + N(I(a).display_name(e.member)) + " 回答", 1)) : (U(), W("span", _G, "智能调度：" + N(e.mode === "interrupt" ? `已打断主持人，改由 ${I(a).display_name(e.member)} 回答` : `已请 ${I(a).display_name(e.member)} 回答`), 1)),
 										e.can_adopt ? (U(), W(H, { key: 3 }, [mt.value === e.message_id ? (U(), W(H, { key: 1 }, [
@@ -43865,9 +43867,9 @@ var $U = {
 									key: e.id,
 									class: "channel-schedule-input"
 								}, [
-									n.background ? (U(), W("p", NG, [t[40] ||= K("b", null, "固定背景", -1), K("span", { title: n.background }, N(n.background), 9, PG)])) : Y("", !0),
-									K("p", null, [t[41] ||= K("b", null, "房间与成员", -1), K("span", { title: n.facts }, N(n.facts), 9, FG)]),
-									K("p", null, [t[42] ||= K("b", null, "对话上下文", -1), K("span", null, [J("近期消息 " + N(n.messages), 1), n.pending ? (U(), W(H, { key: 0 }, [J("；待处理 " + N(n.pending), 1)], 64)) : Y("", !0)])]),
+									n.background ? (U(), W("p", NG, [t[41] ||= K("b", null, "固定背景", -1), K("span", { title: n.background }, N(n.background), 9, PG)])) : Y("", !0),
+									K("p", null, [t[42] ||= K("b", null, "房间与成员", -1), K("span", { title: n.facts }, N(n.facts), 9, FG)]),
+									K("p", null, [t[43] ||= K("b", null, "对话上下文", -1), K("span", null, [J("近期消息 " + N(n.messages), 1), n.pending ? (U(), W(H, { key: 0 }, [J("；待处理 " + N(n.pending), 1)], 64)) : Y("", !0)])]),
 									(U(!0), W(H, null, B(n.questions, (e, t) => (U(), W(H, { key: t }, [K("p", null, [K("b", null, "问题" + N(n.questions.length > 1 ? ` ${t + 1}` : ""), 1), K("span", { title: e.instructions }, N(e.instructions), 9, IG)]), (U(!0), W(H, null, B(e.choices, (e) => (U(), W("p", {
 										key: e.name,
 										class: "is-choice"
@@ -43884,7 +43886,7 @@ var $U = {
 								class: "channel-schedule-correction",
 								onSubmit: uu((t) => At(e), ["prevent"])
 							}, [
-								K("label", null, [t[43] ||= J("应该由谁回答", -1), q(k, {
+								K("label", null, [t[44] ||= J("应该由谁回答", -1), q(k, {
 									"model-value": Ot.value.should_be || YK,
 									items: jt.value,
 									"aria-label": "应该由谁回答",
@@ -44002,7 +44004,7 @@ var $U = {
 					"aria-label": "从选中处开始朗读",
 					onMousedown: t[17] ||= uu(() => {}, ["prevent"]),
 					onClick: ae
-				}, [q(g, { name: "i-lucide-headphones" }), t[44] ||= J("听当前", -1)], 32)) : Y("", !0), un.value.length && !Pe.value ? (U(), G(o, {
+				}, [q(g, { name: "i-lucide-headphones" }), t[45] ||= J("听当前", -1)], 32)) : Y("", !0), un.value.length && !Pe.value ? (U(), G(o, {
 					key: 1,
 					icon: "i-lucide-arrow-down",
 					color: "neutral",
@@ -44040,7 +44042,7 @@ var $U = {
 						ui: { content: "channel-select-menu channel-mention-menu" },
 						"onUpdate:open": t[19] ||= (e) => !e && (Ut.value = null)
 					}, {
-						content: L(() => [t[45] ||= K("div", { class: "channel-mention-heading" }, [K("span", null, "选择成员"), K("small", null, "↑↓ 选择 · Enter 确认")], -1), K("div", {
+						content: L(() => [t[46] ||= K("div", { class: "channel-mention-heading" }, [K("span", null, "选择成员"), K("small", null, "↑↓ 选择 · Enter 确认")], -1), K("div", {
 							id: "channel-mention-list",
 							ref_key: "mention_list",
 							ref: Xt,
@@ -44170,7 +44172,7 @@ var $U = {
 							])) : Y("", !0),
 							I(i).editing_queued ? (U(), W("div", lK, [
 								q(g, { name: "i-lucide-pencil" }),
-								t[46] ||= K("span", null, "编辑排队消息：发送即保存修改，仍按原位置排队", -1),
+								t[47] ||= K("span", null, "编辑排队消息：发送即保存修改，仍按原位置排队", -1),
 								q(o, {
 									icon: "i-lucide-x",
 									color: "neutral",
@@ -44292,7 +44294,7 @@ var $U = {
 					K("div", pK, [K("span", null, N(Ze.value), 1), K("span", mK, [u.value ? (U(), W("span", {
 						key: 0,
 						class: j({ "is-near-limit": d.value })
-					}, [J(N(u.value) + " / " + N(I(a).max_message_length), 1), t[47] ||= K("span", { class: "channel-note-divider" }, "·", -1)], 2)) : Y("", !0), t[48] ||= K("span", { class: "channel-key-hint" }, [
+					}, [J(N(u.value) + " / " + N(I(a).max_message_length), 1), t[48] ||= K("span", { class: "channel-note-divider" }, "·", -1)], 2)) : Y("", !0), t[49] ||= K("span", { class: "channel-key-hint" }, [
 						K("kbd", null, "Enter"),
 						J(" 发送"),
 						K("span", { class: "channel-note-divider" }, "·"),
@@ -44305,7 +44307,7 @@ var $U = {
 			]);
 		};
 	}
-}, [["__scopeId", "data-v-8e5b02f7"]]), eq = { class: "page-heading" }, tq = { class: "topic-brief" }, nq = {
+}, [["__scopeId", "data-v-eb3b1165"]]), eq = { class: "page-heading" }, tq = { class: "topic-brief" }, nq = {
 	key: 0,
 	class: "host-progress"
 }, rq = {
