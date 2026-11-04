@@ -53,7 +53,7 @@ const RELAY_PING_MS = 25000;
 const ROOM_RELAY_PATH = /^\/api\/(rooms|folders|revisions)(\/|\?|$)/;
 // One part of a file sent to the computer stays well inside the relay's 1 MiB frame once encoded and encrypted.
 const RELAY_UPLOAD_PART_BYTES = 384 * 1024;
-const COMPUTER_UNREACHABLE = "电脑未连接：请登录管理员，并确认电脑开机且运行 codiscuss";
+const COMPUTER_UNREACHABLE = "电脑未连接：请先与电脑配对，并确认电脑开机且运行 codiscuss";
 let local_connection = null;
 let computer_connecting = false;
 let relay_machine = null;
@@ -2115,6 +2115,8 @@ function restore_local_connection() {
 async function local_launch_request(action, payload) {
   // A website without rooms of its own reaches the computer only through the relay; pairing itself still needs the local bridge.
   if (relay_machine && (!local_connection || computer_rooms_only() && action !== "machine-link")) return relay_command(action, payload);
+  // Only the computer's own page has a local service at this address; elsewhere the computer is reached through the relay alone.
+  if (!local_connection && !["127.0.0.1", "localhost"].includes(location.hostname)) throw Object.assign(new Error(COMPUTER_UNREACHABLE), { preflight: true });
   const headers = { "Content-Type": "application/json", "X-CoDiscuss-Local": "1" };
   if (local_connection) headers["X-CoDiscuss-Connection"] = local_connection.token;
   let response;
@@ -2781,7 +2783,6 @@ async function load_launch_settings() {
   state.launch.connect_command = local ? "codiscuss local open" : `codiscuss local connect "${location.origin}"`;
   try {
     local_connection = null;
-    relay_machine = null;
     take_pairing_code();
     local_connection = restore_local_connection();
     state.launch.remote = Boolean(local_connection);
@@ -2790,8 +2791,9 @@ async function load_launch_settings() {
       // Pair first, so the computer this page runs on can then be reached through the relay like any other device.
       state.launch.relay = await load_relay_machine();
       // An online computer that publishes a command key does everything the local service would; an older one only creates rooms.
-      if (!state.launch.relay?.online || !state.launch.relay.public_key) return;
-      relay_machine = state.launch.relay;
+      // The previous one stays in use until this answer arrives, so requests made meanwhile still reach the computer.
+      relay_machine = state.launch.relay?.online && state.launch.relay.public_key ? state.launch.relay : null;
+      if (!relay_machine) return;
       state.launch.remote = true;
     }
     const settings = await local_launch_request("settings");

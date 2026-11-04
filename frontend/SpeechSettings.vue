@@ -167,9 +167,11 @@ async function preview(platform) {
 
 <style scoped>
 .speech-header { display: flex; width: 100%; align-items: baseline; gap: 8px; padding: 0; border: 0; background: none; color: inherit; cursor: pointer; text-align: left; }
-.speech-header h3 { margin: 0; }
-.speech-header small { color: var(--ui-text-dimmed); font-size: 12px; }
-.speech-header span { margin-left: auto; color: var(--ui-text-dimmed); font-size: 12px; }
+.speech-header h3 { flex-shrink: 0; margin: 0; white-space: nowrap; }
+.speech-header small { flex-shrink: 0; color: var(--ui-text-dimmed); font-size: 12px; white-space: nowrap; }
+.speech-header span { min-width: 0; margin-left: auto; overflow: hidden; color: var(--ui-text-dimmed); font-size: 12px; text-overflow: ellipsis; white-space: nowrap; }
+/* A phone keeps one line: the subtitle gives way, and the status shortens with an ellipsis. */
+@media (max-width: 480px) { .speech-header small { display: none; } }
 .speech-header span.is-ready { color: var(--ui-success); }
 .speech-header > :last-child { align-self: center; color: var(--ui-text-dimmed); }
 .speech-settings { display: grid; gap: 10px; padding-top: 10px; }

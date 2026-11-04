@@ -150,6 +150,8 @@ function audit_text(entry) {
   const subject = entry.event === "device.paired" ? `${entry.label || "新设备"}${entry.temporary ? "（临时）" : ""}` : device_name(entry.device);
   return `${AUDIT_EVENTS[entry.event] || entry.event}：${subject}${entry.room ? ` · ${room_title(entry.room)}` : ""}`;
 }
+// Generating a code changes nothing by itself; the list shows only what changed trust or reached the computer.
+const shown_audit = computed(() => audit.value.filter((entry) => entry.event !== "pairing.started"));
 const room_title = (room_id) => view.value.rooms?.find((room) => room.id === room_id)?.title || room_id;
 const date = (time) => new Date(time).toLocaleString("zh-CN", { month: "numeric", day: "numeric", hour: "2-digit", minute: "2-digit" });
 </script>
@@ -191,13 +193,6 @@ const date = (time) => new Date(time).toLocaleString("zh-CN", { month: "numeric"
         </li>
         <li v-if="!devices.length" class="device-empty">还没有配对的设备</li>
       </ul>
-      <div v-if="audit.length" class="device-audit">
-        <button type="button" class="device-link" @click="audit_open = !audit_open">{{ audit_open ? "收起" : "查看" }}最近记录（{{ audit.length }}）</button>
-        <ul v-if="audit_open" aria-label="最近记录">
-          <li v-for="(entry, index) in audit" :key="index"><small>{{ date(entry.at) }}</small> {{ audit_text(entry) }}</li>
-        </ul>
-        <p v-if="audit_open" class="fine-print">记录由电脑保存。看到不是你做的操作，立即撤销对应设备。</p>
-      </div>
       <div class="device-actions">
         <UButton v-if="remote && renew_due" label="续期这台设备" color="neutral" variant="soft" size="sm" :loading="busy === 'renew'" :disabled="Boolean(busy)" @click="run('renew', async () => { await bridge.device.renew(); await load(); })" />
         <UButton v-if="local" label="添加设备" icon="i-lucide-qr-code" color="neutral" variant="outline" size="sm" :loading="busy === 'invite'" :disabled="Boolean(busy)" @click="add_device" />
@@ -213,6 +208,13 @@ const date = (time) => new Date(time).toLocaleString("zh-CN", { month: "numeric"
           <p v-else class="fine-print">{{ date(invite.expires_at) }} 前有效（2 分钟），只能用一次{{ invite.temporary ? "；临时设备只授权 1 天" : "" }}。</p>
           <UButton label="重新生成" icon="i-lucide-refresh-cw" color="neutral" variant="outline" size="xs" :loading="busy === 'invite'" :disabled="Boolean(busy)" @click="add_device" />
         </div>
+      </div>
+      <div v-if="shown_audit.length" class="device-audit">
+        <button type="button" class="device-link" @click="audit_open = !audit_open">{{ audit_open ? "收起" : "查看" }}最近记录（{{ shown_audit.length }}）</button>
+        <ul v-if="audit_open" aria-label="最近记录">
+          <li v-for="(entry, index) in shown_audit" :key="index"><small>{{ date(entry.at) }}</small> {{ audit_text(entry) }}</li>
+        </ul>
+        <p v-if="audit_open" class="fine-print">记录由电脑保存。看到不是你做的操作，立即撤销对应设备。</p>
       </div>
     </template>
   </section>
