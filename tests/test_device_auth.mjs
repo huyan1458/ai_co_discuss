@@ -19,7 +19,7 @@ function home_dir(t) {
 
 /** Pair a fresh software device through a code, as a phone would after scanning. */
 async function paired_device(home) {
-  const device = await software_device();
+  const device = await software_device(MACHINE);
   const { code } = start_pairing(home, { site: SITE });
   const answer = await device_command(home, { site: SITE, machine_id: MACHINE, device_id: null }, 'device-pair',
     { public_key: device.public_key, label: 'iPhone · Safari', proof: pairing_proof(code, MACHINE, device.public_key) });
@@ -64,18 +64,21 @@ test('a browser pairs only with a live code shown on a trusted screen, and wrong
 test('only a paired device\'s signed request is opened; an unpaired browser may only pair', async t => {
   const home = home_dir(t);
   const device = await paired_device(home), stranger = await software_device();
-  const opened = await open_signed_request(home, 'id-1', await device.seal('id-1', { action: 'settings' }));
+  const open = (id, sealed) => open_signed_request(home, id, sealed, MACHINE);
+  const opened = await open('id-1', await device.seal('id-1', { action: 'settings' }));
   assert.equal(opened.device_id, device.id);
-  await assert.rejects(open_signed_request(home, 'id-2', await device.seal('id-other', { action: 'settings' })), /签名无效/, 'a signature for another id');
+  await assert.rejects(open('id-2', await device.seal('id-other', { action: 'settings' })), /签名无效/, 'a signature for another id');
   const tampered = await device.seal('id-3', { action: 'settings' });
-  await assert.rejects(open_signed_request(home, 'id-3', { ...tampered, body: tampered.body.replace('settings', 'launch') }), /签名无效/);
-  await assert.rejects(open_signed_request(home, 'id-4', await stranger.seal('id-4', { action: 'settings' })), /未配对/);
-  await assert.rejects(open_signed_request(home, 'id-5', { body: JSON.stringify({ action: 'settings' }) }), /还没有与电脑配对/);
-  assert.equal((await open_signed_request(home, 'id-6', { body: JSON.stringify({ action: 'device-pair' }) })).device_id, null);
-  await assert.rejects(open_signed_request(home, 'id-7', { action: 'settings', payload: {} }), /请更新网页/, 'an old unsigned page is refused');
+  await assert.rejects(open('id-3', { ...tampered, body: tampered.body.replace('settings', 'launch') }), /签名无效/);
+  await assert.rejects(open('id-4', await stranger.seal('id-4', { action: 'settings' })), /未配对/);
+  await assert.rejects(open('id-5', { body: JSON.stringify({ action: 'settings' }) }), /还没有与电脑配对/);
+  assert.equal((await open('id-6', { body: JSON.stringify({ action: 'device-pair' }) })).device_id, null);
+  await assert.rejects(open('id-7', { action: 'settings', payload: {} }), /请更新网页/, 'an old unsigned page is refused');
+  // A request signed for one paired computer is refused by another.
+  await assert.rejects(open_signed_request(home, 'id-9', await device.seal('id-9', { action: 'settings' }), 'other-machine'), /另一台电脑/);
   // A revoked device is refused at once.
   await device_command(home, { site: SITE, device_id: device.id }, 'device-revoke', { device_id: device.id });
-  await assert.rejects(open_signed_request(home, 'id-8', await device.seal('id-8', { action: 'settings' })), /未配对或已被撤销/);
+  await assert.rejects(open('id-8', await device.seal('id-8', { action: 'settings' })), /未配对或已被撤销/);
 });
 
 test('remote writing in a room needs this device\'s passkey confirmation, for that room only', async t => {
@@ -101,4 +104,96 @@ test('remote writing in a room needs this device\'s passkey confirmation, for th
   assert.throws(() => guard_remote_request('start', { participants: { Claude: { project_access: 'write' } } }, { projects: [], participants: {}, home }), /新建房间时成员须为只读/);
   await device_command(home, context, 'write-revoke', { room_id: 'room-a' });
   assert.throws(guard('room-a'), error => error.need === 'write-grant');
+});
+
+test('bringing back, approving tools for, forking or enabling writers needs the grant, judged from this computer\'s config', async t => {
+  const { writeFileSync } = await import('node:fs');
+  const { remote_write_room } = await import('../runner/discussion_launch.mjs');
+  const home = home_dir(t);
+  const config = (room, participants, extra = {}) => {
+    const path = join(home, `${room}.json`);
+    writeFileSync(path, JSON.stringify({ site: 'http://127.0.0.1:8765', room, token: 't', participants, ...extra }));
+    return path;
+  };
+  writeFileSync(join(home, 'rooms.json'), JSON.stringify({ configs: [
+    config('writes', { Claude: { project_access: 'write' }, Codex: { project_access: 'read' } }),
+    config('room-wide', { Claude: {} }, { project_access: 'auto' }),
+    config('reads', { Codex: { project_access: 'read' } }),
+  ] }));
+  assert.equal(remote_write_room(home, 'room-member', { room_id: 'writes', action: 'rejoin', name: 'Claude' }), 'writes');
+  assert.equal(remote_write_room(home, 'room-member', { room_id: 'writes', action: 'rejoin', name: 'Codex' }), null);
+  assert.equal(remote_write_room(home, 'room-member-allow', { room_id: 'room-wide', name: 'Claude', rules: ['Bash(git:*)'] }), 'room-wide', 'a room-wide level counts');
+  assert.equal(remote_write_room(home, 'room-fork', { room_id: 'new', source_room_id: 'writes' }), 'writes');
+  assert.equal(remote_write_room(home, 'room-fork', { room_id: 'new', source_room_id: 'reads' }), null);
+  assert.equal(remote_write_room(home, 'room-workflow', { room_id: 'reads', action: 'back' }), null);
+  assert.throws(() => remote_write_room(home, 'room-workflow', { room_id: 'reads', action: 'host' }), /只能在电脑上开启/);
+});
+
+test('a remote request cannot claim a session\'s own access, and any tool approval needs the write grant', async t => {
+  const { remote_write_room } = await import('../runner/discussion_launch.mjs');
+  const home = home_dir(t);
+  const options = { projects: [], participants: {}, home, write_allowed: () => false, write_needed: room => Object.assign(new Error('need'), { need: 'write-grant', room_id: room }) };
+  assert.throws(() => guard_remote_request('start', { participants: { Codex: { project_access: 'own' } } }, options), /own/);
+  assert.throws(() => guard_remote_request('room-member', { room_id: 'r', name: 'Claude', action: 'add', allowed_tools: ['Bash'] }, options), error => error.need === 'write-grant');
+  // Approving a tool for a read-only member widens it too.
+  assert.equal(remote_write_room(home, 'room-member-allow', { room_id: 'r', name: 'Claude', rules: ['Bash'] }), 'r');
+});
+
+test('a passkey is added once, in the minutes after pairing; later ones cannot be slipped in by a script', async t => {
+  const home = home_dir(t);
+  const device = await paired_device(home);
+  const context = { site: SITE, machine_id: MACHINE, device_id: device.id };
+  const register = async passkey => {
+    const options = await device_command(home, context, 'passkey-options', {});
+    if (options.status !== 200) return options;
+    return device_command(home, context, 'passkey-register', { challenge_id: options.body.challenge_id, credential: passkey.create(options.body.challenge, SITE) });
+  };
+  assert.equal((await register(software_passkey('codiscuss.pages.dev'))).status, 200);
+  const second = await register(software_passkey('codiscuss.pages.dev'));
+  assert.equal(second.status, 400);
+  assert.match(second.body.error, /只能在配对后 10 分钟内创建一次/);
+});
+
+test('a paired device shows a pairing code only after its passkey confirms, and remote rooms take no saved tool approvals', async t => {
+  const { writeFileSync } = await import('node:fs');
+  const { participant_profile } = await import('../runner/discussion_launch.mjs');
+  const home = home_dir(t);
+  const device = await paired_device(home);
+  const context = { site: SITE, machine_id: MACHINE, device_id: device.id };
+  assert.equal((await device_command(home, context, 'device-pairing', { temporary: false })).status, 400, 'a signature alone cannot add a device');
+  const passkey = software_passkey('codiscuss.pages.dev');
+  const options = (await device_command(home, context, 'passkey-options', {})).body;
+  await device_command(home, context, 'passkey-register', { challenge_id: options.challenge_id, credential: passkey.create(options.challenge, SITE) });
+  const challenge = (await device_command(home, context, 'passkey-challenge', { purpose: 'pair' })).body;
+  const invite = await device_command(home, context, 'device-pairing', { challenge_id: challenge.challenge_id, assertion: passkey.get(challenge.challenge, SITE) });
+  assert.equal(invite.status, 200, invite.body.error);
+  assert.match(invite.body.code, /^[0-9A-Z]{4}-[0-9A-Z]{4}-[0-9A-Z]{4}$/);
+
+  // Every member's profile is built in one place, so the rule holds however the members were named.
+  const executable = join(home, 'codex.exe');
+  writeFileSync(executable, '');
+  const defaults = { Codex: { adapter: 'codex_cli', executable, allowed_tools: ['Bash'] } };
+  for (const name of ['Codex', 'Codex-2']) {
+    assert.equal(participant_profile(name, defaults, { without_saved_tools: true }, false).allowed_tools, undefined, `${name} takes no saved approvals`);
+    assert.deepEqual(participant_profile(name, defaults, {}, false).allowed_tools, ['Bash'], 'a launch from this computer keeps them');
+  }
+});
+
+test('work started through the remote entry runs members read-only, without approved tools', async () => {
+  const { remote_entry_profile } = await import('../runner/free_runner.mjs');
+  const writer = { adapter: 'codex_cli', project_access: 'write', allowed_tools: ['Bash'] };
+  const local = { requests: [{ id: 1, remote_entry: 0 }] }, remote = { requests: [{ id: 1, remote_entry: 1 }] };
+  assert.equal(remote_entry_profile(writer, local), writer, 'work started on this computer keeps its settings');
+  assert.deepEqual(remote_entry_profile(writer, remote), { adapter: 'codex_cli', project_access: 'read', allowed_tools: [] });
+  assert.throws(() => remote_entry_profile({ project_access: 'own' }, remote), /沿用原会话权限/);
+});
+
+test('the computer records trust changes and remote writes for the device list, never content', async t => {
+  const { recent_audit } = await import('../runner/device_auth.mjs');
+  const home = home_dir(t);
+  const device = await paired_device(home);
+  await device_command(home, { site: SITE, device_id: device.id }, 'device-revoke', { device_id: device.id });
+  const events = recent_audit(home).map(entry => [entry.event, entry.device ?? null]);
+  assert.deepEqual(events.slice(0, 3), [['device.revoked', device.id], ['device.paired', device.id], ['pairing.started', null]]);
+  assert.ok(!JSON.stringify(recent_audit(home)).includes('proof'), 'no secrets or content are kept');
 });

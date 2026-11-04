@@ -94,7 +94,7 @@ models 按 adapter、executable 或 API profile 读取模型目录，不启动�
 api-key 将 base_url、api_key 保存于本机私有目录，只返回 api_key_ref。
 api-check 用 API profile 向模型发送一次极短请求，核对地址、密钥、协议与模型是否可用。
 scheduler-check 用智能调度配置（provider、model、api_key_ref）向决策模型发送一道是非题，核对供应商、模型与密钥是否可用。
-tts-settings 读取朗读设置；内容非空时保存（音色 speaker、语速 speech_rate、语气提示 context、api_key_ref）。
+tts-settings 读取朗读设置；内容非空时保存（语音服务 provider：volcengine / aliyun / azure，语速 speech_rate、语气提示 context，以及 providers.<服务> 的 api_key_ref、speaker、member_voices、file_voice，Azure 另有 region）。
 tts 用朗读设置把 text（不超过 300 字）合成为 MP3，返回 base64。
 stt 按序接收录音片段（upload_id、index、base64 PCM 16 kHz 单声道、final）；最后一段时识别整段录音并返回 text。
 pick-directory 在本机弹出系统目录选择窗口，返回所选路径；取消时不返回路径。
@@ -556,6 +556,13 @@ function free_launch_config(home, input, room, directory, options) {
     host_workflows: input.host_workflows === true || undefined, data_directory: join(directory, 'runtime'), draft_directory: service_drafts(home, join(directory, 'runtime')) }, directory);
 }
 
+/** Members in the order of the creation form's cards, so the room's joining order (and default speaking order) follows it. */
+function card_order(cards, members) {
+  const names = (cards || []).map(member => typeof member === 'string' ? member : member?.name);
+  const place = (name) => names.includes(name) ? names.indexOf(name) : names.length;
+  return [...members].sort((left, right) => place(left.name) - place(right.name));
+}
+
 /** Preserve caller-generated member credentials; journal newly generated ones before creation. */
 function launch_members(input, names, options) {
   return Object.fromEntries(names.map(name => {
@@ -564,12 +571,17 @@ function launch_members(input, names, options) {
   }));
 }
 
-/** Merge one participant's machine defaults with this launch's overrides and check its software. */
-function participant_profile(name, defaults, input, current_host) {
+/**
+ * Merge one participant's machine defaults with this launch's overrides and check its software. A launch from another
+ * device (`input.without_saved_tools`) takes no tool approvals saved here, whichever way its members are named.
+ */
+export function participant_profile(name, defaults, input, current_host) {
   const platform = platform_of(name);
   // An extra instance starts from its platform's settings but never from another instance's bound session.
   const { session_id: ignored_session, ...inherited } = name === platform ? {} : input.participants?.[platform] || {};
-  const profile = { ...defaults[platform], ...(name === platform ? {} : defaults[name]), ...inherited, ...input.participants?.[name] };
+  const saved = { ...defaults[platform], ...(name === platform ? {} : defaults[name]) };
+  if (input.without_saved_tools) delete saved.allowed_tools;
+  const profile = { ...saved, ...inherited, ...input.participants?.[name] };
   for (const field of ['cwd', 'model', 'effort', 'project_name', 'project_id', 'project_access']) if (profile[field] === '') delete profile[field];
   validate_profile(name, profile, true);
   if (!clients_of(name)?.includes(profile.adapter)) throw new Error(`请配置 ${name} 的 CLI / App 客户端`);
@@ -1299,11 +1311,11 @@ async function perform_launch(home, context, options) {
     let room = context.room;
     if (!input.room_id) room = await site_request(input.site, '/api/rooms', config.token, {
       ...input.room,
-      members: [...Object.keys(config.participants).map(name => ({ name, adapter: config.participants[name].adapter,
+      members: card_order(input.room.members, [...Object.keys(config.participants).map(name => ({ name, adapter: config.participants[name].adapter,
         token: config.members[name].token, access: 'runner', session_mode: config.participants[name].session_id ? 'borrowed' : 'new' })),
       // Manual members keep the credentials the browser generated; nothing local is configured for them.
       ...(input.room.members || []).filter(member => record.discussion ? member?.access === 'manual' : !woken_member(member))
-        .map(({ name, token, access }) => ({ name, token, access, adapter: '', session_mode: 'new' }))],
+        .map(({ name, token, access }) => ({ name, token, access, adapter: '', session_mode: 'new' }))]),
     });
     config.room = room.id;
     await verify_control(config, room);
@@ -1425,7 +1437,7 @@ export async function adopt_workflow(home, { access_file, draft_file }) {
   const path = registered_room_path(home, String(access.site || '').replace(/\/$/, ''), access.room);
   if (!path) throw new Error('本机没有登记这个房间');
   const config = configuration_snapshot(path).config;
-  if (!config.host_workflows) throw new Error('房主没有允许本房间的主持人自建工作流；请把草稿发给用户，由用户在“工作流库 → 粘贴导入”保存');
+  if (!config.host_workflows) throw new Error('房主没有允许本房间的主持人自建工作流；请让用户在“成员与设置 → 协作设置”打开后再保存');
   const host = Object.keys(config.members || {}).find(name => config.members[name].token === access.token);
   const room = await api(config, '');
   const roster = room.free?.members || [];
@@ -1472,6 +1484,60 @@ export function check_or_save_workflow(home, { dir, draft }, save = false) {
   return save_workflow(home, { ...preview, agents }, validate_preset);
 }
 
+const WRITING_ACCESS = new Set(['write', 'auto', 'full', 'own']);
+
+/** The configuration this computer keeps for a room, found by its id; null when it runs no such room. */
+function room_config_by_id(home, room_id) {
+  if (typeof room_id !== 'string' || !room_id) return null;
+  const paths = read_registry(home).filter(path => registered_identity(path)?.room === room_id);
+  return paths.length === 1 ? configuration_snapshot(paths[0]).config : null;
+}
+
+/** Whether a member may change files here: its own level, else the room's, or any tool approved for it. */
+const member_writes = (config, profile) => WRITING_ACCESS.has(profile?.project_access || config?.project_access) || profile?.allowed_tools?.length > 0;
+
+/**
+ * The room in which a relayed command would put a member with write access to work, judged from what this computer
+ * keeps rather than from the request text; null when it would not. Such a command needs the device's write grant.
+ */
+export function remote_write_room(home, command, input) {
+  if (!input || typeof input !== 'object') return null;
+  // Approving a tool widens what a member can do, whatever its level: it always needs the grant.
+  if (command === 'room-member-allow') return input.room_id || null;
+  if (command === 'room-member') {
+    const config = room_config_by_id(home, input.room_id);
+    return config && member_writes(config, config.participants?.[input.name]) ? input.room_id : null;
+  }
+  if (command === 'room-fork') {
+    const config = room_config_by_id(home, input.source_room_id);
+    return config && Object.values(config.participants || {}).some(profile => member_writes(config, profile)) ? input.source_room_id : null;
+  }
+  if (command === 'room-workflow') {
+    if (input.action === 'host') throw new Error('“允许主持人自建工作流”只能在电脑上开启');
+    if (input.action === 'enable') {
+      const cards = JSON.stringify(get_workflow(home, input.workflow?.id));
+      return /"(project_access|requested_access)":"(write|auto|full)"/.test(cards) ? input.room_id : null;
+    }
+    if (input.action === 'back') {
+      const config = room_config_by_id(home, input.room_id);
+      return config && Object.values(config.participants || {}).some(profile => member_writes(config, profile)) ? input.room_id : null;
+    }
+  }
+  if (command === 'start' && input.workflow?.id && /"(project_access|requested_access)":"(write|auto|full)"/.test(JSON.stringify(get_workflow(home, input.workflow.id)))) {
+    throw new Error('其他设备新建房间时成员须为只读；建好后在房间里开启可写（需通行密钥确认）');
+  }
+  return null;
+}
+
+/** Fill program locations another device left out with the ones saved here, so saving defaults cannot drop them. */
+function keep_saved_locations(home, participants) {
+  const saved = launch_settings(home).participants;
+  return Object.fromEntries(Object.entries(participants).map(([name, profile]) => {
+    const kept = Object.fromEntries(['executable', 'ipc_directory'].filter(field => !profile?.[field] && saved[name]?.[field]).map(field => [field, saved[name][field]]));
+    return [name, { ...profile, ...kept }];
+  }));
+}
+
 /** CLI and local HTTP bridge use the same commands and configuration validation. */
 export async function launch_main(args = process.argv.slice(2), input_text) {
   const { values, positionals } = parseArgs({ args, allowPositionals: true, options: {
@@ -1493,8 +1559,17 @@ export async function launch_main(args = process.argv.slice(2), input_text) {
   const home = service_home();
   assert_shared_home(home);
   // Another device's request may only use what this computer granted; the flag is set by the relay, never by the request.
-  if (values.remote) guard_remote_request(positionals[0], input, { projects: launch_projects(home).projects, participants: launch_settings(home).participants, home,
-    write_allowed: room => Boolean(values.device) && write_allowed(home, values.device, room), write_needed });
+  if (values.remote) {
+    const allowed = room => Boolean(values.device) && write_allowed(home, values.device, room);
+    guard_remote_request(positionals[0], input, { projects: launch_projects(home).projects, participants: launch_settings(home).participants, home,
+      write_allowed: allowed, write_needed });
+    const room = remote_write_room(home, positionals[0], input);
+    if (room && !allowed(room)) throw write_needed(room);
+    // Another device repeats the saved program locations it cannot see; keep them rather than dropping them.
+    if (positionals[0] === 'settings' && input?.participants) input.participants = keep_saved_locations(home, input.participants);
+    // A room created from another device starts read-only, so its members do not take the tool approvals saved here.
+    if (positionals[0] === 'start' && input) input.without_saved_tools = true;
+  }
   let result;
   if (positionals[0] === 'settings') result = { ...(input ? save_launch_settings(home, input) : launch_settings(home)), api_providers: API_PROVIDERS,
     scheduler_providers: SCHEDULER_PROVIDERS, scheduler_modes: SCHEDULER_MODES, scheduler_default_mode: DEFAULT_SCHEDULER_MODE, api_keys: saved_api_keys(home), projects: launch_projects(home).projects, ...expert_presets(home), workflows: list_workflows(home) };

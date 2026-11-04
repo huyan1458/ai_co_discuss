@@ -451,10 +451,28 @@ def save_room_access(connection, room_id, control_token, members, settings):
     connection.execute("UPDATE room_members SET role='host' WHERE room_id=? AND name=?", (room_id, settings["host"]))
 
 
+def pin_host(connection, room_id, previous_id):
+    """Put a newly appointed host first and the previous host second in the saved speaking order; the rest keep their order.
+
+    Without a saved order the rest follow the joining order, as the host-first default showed them.
+    """
+    host = connection.execute("SELECT id FROM room_members WHERE room_id=? AND role='host' AND status='active'", (room_id,)).fetchone()
+    if not host:
+        return
+    row = connection.execute("SELECT member_ids FROM speaking_orders WHERE room_id=?", (room_id,)).fetchone()
+    ids = json.loads(row[0]) if row else [item[0] for item in connection.execute(
+        "SELECT id FROM room_members WHERE room_id=? AND status<>'removed' ORDER BY id", (room_id,))]
+    front = [host["id"], *([previous_id] if previous_id and previous_id != host["id"] else [])]
+    connection.execute("INSERT OR REPLACE INTO speaking_orders (room_id,member_ids) VALUES (?,?)",
+                       (room_id, json.dumps(front + [member_id for member_id in ids if member_id not in front])))
+
+
 def sync_participants(connection, room_id):
     """Keep one active AI host, then mirror member capabilities and the host into shared room metadata."""
+    leaving = connection.execute("SELECT id FROM room_members WHERE room_id=? AND role='host' AND status<>'active'", (room_id,)).fetchone()
     connection.execute(RELEASE_HOST, (room_id,))
-    connection.execute(ASSIGN_HOST, (room_id, room_id))
+    if connection.execute(ASSIGN_HOST, (room_id, room_id)).rowcount:
+        pin_host(connection, room_id, leaving["id"] if leaving else None)
     members = connection.execute("""SELECT name,role,status FROM room_members
         WHERE room_id=? AND status<>'removed' ORDER BY id""", (room_id,)).fetchall()
     experts = {row["name"]: "cli" for row in members}
@@ -1103,6 +1121,8 @@ def dispatch(connection, room_id, host, message_id, names, chain_id, handoff=Fal
         insert_request(connection, room_id, member_id, message_id, chain_id, "ask", "host", batch_id=message_id)
     connection.execute("INSERT INTO free_batches (room_id,batch_id,chain_id,host_id) VALUES (?,?,?,?)",
                        (room_id, message_id, chain_id, host["id"]))
+    # Work handed out under a goal: when it ends and the room is idle, the host is woken to carry on.
+    connection.execute("UPDATE room_goals SET armed=1 WHERE room_id=? AND status='active'", (room_id,))
     if handoff:
         connection.execute("INSERT INTO free_handoffs (room_id,batch_id) VALUES (?,?)", (room_id, message_id))
 
@@ -1247,6 +1267,8 @@ def after_free_message(connection, room_id, message_id, actor, payload):
     """Create requests for the owner's message, or close what the member's answer covers."""
     now = int(time.time())
     if actor == "用户":
+        # New owner input lets an active goal wake the host again once the room falls idle.
+        connection.execute("UPDATE room_goals SET armed=1 WHERE room_id=? AND status='active'", (room_id,))
         if discussion.hold_user_message(connection, room_id, message_id, payload):
             return
         pairs = recipients(connection, room_id, payload)
@@ -1356,6 +1378,8 @@ def stop_room_work(connection, room_id, reason, cancel_reason):
         finish_execution(connection, row["id"], "cancelled", reason, "cancelled", cancel_reason)
     record_cancel_reasons(connection, "room_id=? AND status='pending'", (room_id,), cancel_reason)
     connection.execute("UPDATE member_requests SET status='cancelled' WHERE room_id=? AND status='pending'", (room_id,))
+    # Stopping everything also stops a goal from waking the host again; the owner resumes it explicitly.
+    connection.execute("UPDATE room_goals SET status='paused',paused_at=? WHERE room_id=? AND status='active'", (int(time.time()), room_id))
     settle_batches(connection, room_id)
 
 
@@ -1640,9 +1664,11 @@ def reserve_execution(connection, room_id, token, payload):
 def execution_detail(connection, row):
     """Describe one execution with the requests it carries and the member's read cursor."""
     member = connection.execute("SELECT * FROM room_members WHERE id=?", (row["member_id"],)).fetchone()
+    # remote_entry: the request, or the owner message its chain started from, came through the remote entry.
     requests = [dict(item) for item in connection.execute("""SELECT r.id,r.message_id,r.status,r.purpose,
         sr.id AS session_request_id,sr.session_id,sr.round,sr.position,sr.read_until,sr.question AS source_question,
-        t.cause_kind,t.cause_message_id AS source_message_id,t.cause_request_id
+        t.cause_kind,t.cause_message_id AS source_message_id,t.cause_request_id,
+        EXISTS(SELECT 1 FROM remote_entry_messages e WHERE e.message_id IN (r.message_id, r.chain_id)) AS remote_entry
         FROM member_requests r LEFT JOIN session_requests sr ON sr.member_request_id=r.id
         LEFT JOIN task_message_sources t ON t.session_request_id=sr.id
         WHERE r.execution_id=? ORDER BY r.id""", (row["id"],))]
@@ -2130,6 +2156,8 @@ def member_action(connection, room_id, member_id, token, payload):
                 connection.execute("UPDATE member_requests SET status='cancelled' WHERE member_id=? AND purpose IN ('route','group') AND status='pending'", (old_host["id"],))
             connection.execute("UPDATE room_members SET role='member' WHERE room_id=? AND role='host'", (room_id,))
         connection.execute("UPDATE room_members SET role=? WHERE id=?", (role, member_id))
+        if role == "host":
+            pin_host(connection, room_id, old_host["id"] if old_host else None)
     else:
         raise ValueError("action 须为 away、active、remove、role、adopt 或 adopt_failed")
     settle_batches(connection, room_id)

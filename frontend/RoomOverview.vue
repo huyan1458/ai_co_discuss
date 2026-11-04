@@ -52,7 +52,43 @@ async function save_rounds(value) {
   } catch { rounds_shown.value = room.value.free?.max_rounds || 0; }
   finally { saving_rounds.value = false; }
 }
-const members = computed(() => room.value.members || []);
+// Cards follow the room's default speaking order (the host first until the owner reorders); away members come last.
+const order = computed(() => room.value.speaking_order || { kind: "default", movable: [], default: [] });
+const members = computed(() => {
+  const rank = order.value.default || [];
+  const place = (name) => rank.includes(name) ? rank.indexOf(name) : rank.length;
+  return [...(room.value.members || [])].sort((left, right) => place(left.name) - place(right.name));
+});
+// Dragging a card sets the same default order as the rail; while members answer in turn or a discussion runs, the rail arranges them.
+const reorderable = computed(() => Boolean(view.value.access?.can_manage) && !room.value.archived
+  && order.value.kind === "default" && order.value.movable.length > 1);
+const dragged = ref(""), drop_target = ref(""), grabbed = ref("");
+
+function drag_start(member, event) {
+  dragged.value = member.name;
+  event.dataTransfer.effectAllowed = "move";
+  event.dataTransfer.setData("text/plain", member.name);
+}
+
+function drag_over(member, event) {
+  if (!dragged.value || dragged.value === member.name || !order.value.movable.includes(member.name)) return;
+  event.preventDefault();
+  drop_target.value = member.name;
+}
+
+/** Move the dragged member to the dropped card's place and send the whole order with the revision shown; a stale one is refused. */
+function drop(member) {
+  const names = [...order.value.movable];
+  const from = names.indexOf(dragged.value), to = names.indexOf(member.name);
+  drag_end();
+  if (from < 0 || to < 0 || from === to) return;
+  names.splice(to, 0, names.splice(from, 1)[0]);
+  act("reorder_speakers", { revision: order.value.revision, order: names });
+}
+
+function drag_end() {
+  dragged.value = drop_target.value = grabbed.value = "";
+}
 // The room's workflow as this computer registered it; its members carry a mark while it is enabled.
 const workflow = computed(() => active_workflow(saved.value?.workflow, room.value.free?.members));
 const in_workflow = (name) => Boolean(workflow.value?.enabled && Object.values(workflow.value.members || {}).includes(name));
@@ -204,8 +240,10 @@ const created = computed(() => room.value.created_at ? new Date(room.value.creat
       <h3>成员</h3>
       <p v-if="local_state" class="overview-local" role="status">{{ local_state.text }}<button v-if="local_state.retry" type="button" class="subtle-link" @click="bridge.reload_room_models()">重试</button></p>
       <ul class="member-cards" aria-label="成员">
-        <li v-for="member in members" :key="member.name" class="member-card">
+        <li v-for="member in members" :key="member.name" class="member-card" :class="{ 'is-dimmed': dragged === member.name, 'is-drop-target': drop_target === member.name }"
+          :draggable="grabbed === member.name" @dragstart="drag_start(member, $event)" @dragover="drag_over(member, $event)" @dragleave="drop_target === member.name && (drop_target = '')" @drop.prevent="drop(member)" @dragend="drag_end">
           <header class="member-card-head">
+            <UIcon v-if="reorderable && order.movable.includes(member.name)" name="i-lucide-grip-vertical" class="member-card-grip" title="拖动调整成员顺序，右栏发言顺序与 @全体依次 同步" @pointerdown="grabbed = member.name" @pointerup="grabbed = ''" />
             <UAvatar :src="bridge.identities[member.name]?.icon" :text="bridge.identities[member.name]?.initials" :alt="member.name" size="md" class="channel-avatar" :class="bridge.identities[member.name]?.style" />
             <div class="member-card-name"><strong>{{ bridge.display_name(member.name) }}<span v-if="bridge.display_name(member.name) !== member.name" class="member-id">{{ member.name }}</span><UIcon v-if="member.role === 'host'" name="i-lucide-crown" title="主持人" /></strong><small v-if="room.descriptions?.[member.name]" :title="room.descriptions[member.name]">{{ room.descriptions[member.name] }}</small></div>
             <UButton v-if="actions(member).host" :icon="actions(member).host.icon" :label="actions(member).host.label" size="xs" variant="ghost" color="neutral" :disabled="actions(member).host.disabled" @click="actions(member).host.onSelect()" />
@@ -286,7 +324,12 @@ const created = computed(() => room.value.created_at ? new Date(room.value.creat
 /* One card per member: who it is, three aligned facts, then its actions in a footer. */
 .member-cards { display: grid; gap: 10px; margin: 0; padding: 0; list-style: none; }
 .member-card { border: 1px solid var(--ui-border); border-radius: 10px; background: var(--ui-bg-elevated); }
-.member-card-head { display: flex; align-items: center; gap: 12px; padding: 14px 16px 0; }
+.member-card-head { position: relative; display: flex; align-items: center; gap: 12px; padding: 14px 16px 0; }
+.member-card { transition: opacity .18s; }
+.member-card.is-dimmed { opacity: .5; }
+.member-card.is-drop-target { box-shadow: inset 0 2px 0 var(--channel-accent, var(--ui-primary)); }
+.member-card-grip { position: absolute; left: 2px; top: 22px; width: 14px; color: var(--ui-text-dimmed); cursor: grab; opacity: 0; transition: opacity .12s; }
+.member-card:hover .member-card-grip { opacity: 1; }
 .member-card-name { display: grid; flex: 1; min-width: 0; }
 .member-card-name strong { display: flex; align-items: center; gap: 5px; color: var(--ui-text-highlighted); font-size: 14px; font-weight: 600; }
 .member-card-name strong .iconify { color: var(--ui-warning, #e5b54a); }

@@ -44,16 +44,16 @@ export function software_passkey(rp_id) {
   };
 }
 
-/** A browser's device key: the JWK the page sends and a signer for relayed requests. */
-export async function software_device() {
+/** A browser's device key: the JWK the page sends and a signer for relayed requests to computer `machine`. */
+export async function software_device(machine = 'machine-1') {
   const pair = await crypto.subtle.generateKey({ name: 'ECDSA', namedCurve: 'P-256' }, true, ['sign', 'verify']);
   const { kty, crv, x, y } = await crypto.subtle.exportKey('jwk', pair.publicKey);
   const raw = Buffer.from(await crypto.subtle.exportKey('raw', pair.publicKey));
   return {
-    public_key: { kty, crv, x, y }, raw: raw.toString('base64url'), id: sha256(raw).toString('hex').slice(0, 32),
+    public_key: { kty, crv, x, y }, raw: raw.toString('base64url'), id: sha256(raw).toString('hex').slice(0, 32), machine,
     /** The sealed plaintext of a signed request, as the page builds it. */
     async seal(id, request) {
-      const body = JSON.stringify({ sent_at: Date.now(), ...request });
+      const body = JSON.stringify({ sent_at: Date.now(), machine: this.machine, ...request });
       const signature = await crypto.subtle.sign({ name: 'ECDSA', hash: 'SHA-256' }, pair.privateKey, new TextEncoder().encode(`${id}\n${body}`));
       return { body, device_id: this.id, signature: Buffer.from(signature).toString('base64url') };
     },

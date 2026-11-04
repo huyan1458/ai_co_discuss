@@ -1058,7 +1058,7 @@ test('claude allows only codiscuss website subcommands and draft writes, then us
   assert.deepEqual(args.slice(directories + 1, directories + 4), [f.directory, f.task.draft_directory, f.task.skill_directories[0]]);
   assert.deepEqual(args.slice(args.indexOf('--disallowedTools') + 1, args.indexOf('--')), [`Edit(${claude_rule_path(f.task.skill_directories[0])}/**)`]);
   assert.deepEqual(args.slice(args.indexOf('--allowedTools') + 1, args.indexOf('--disallowedTools')),
-    [...['room', 'message', 'turn', 'state', 'review', 'execution', 'health', 'schema', 'launch workflow-adopt']
+    [...['room', 'message', 'turn', 'state', 'goal', 'mode', 'review', 'execution', 'health', 'schema', 'launch workflow-adopt']
       .flatMap(command => [`Bash(codiscuss ${command} *)`, `PowerShell(codiscuss ${command} *)`]),
     `Edit(${claude_rule_path(f.task.draft_directory)}/**)`, 'Read(//d/materials/**)']);
   assert.ok(!args.includes(`Edit(${claude_rule_path(f.directory)}/**)`));
@@ -1845,6 +1845,9 @@ async function free_fixture(t) {
       state.pending = state.pending.filter(item => item.review?.phase !== 'handoff');
       result = { review_batch_id: 40 };
       if (state.drop_review_reply) { request.socket.destroy(); return; }
+    } else if (url === '/goal' && request.method === 'POST') {
+      (state.goal_posts ||= []).push(body);
+      result = { goal: { status: 'active', continues: 1, idle: false }, revision: 'goal-r2' };
     } else if (url === '/scheduler-decisions') { (state.decisions ||= []).push(body); result = { id: state.decisions.length }; }
     else if (url === '/scheduler-routing') { (state.routing ||= []).push(body); result = {}; }
     else result = { ...state.room, session: state.session };
@@ -1857,6 +1860,45 @@ async function free_fixture(t) {
   const config = { site: `http://127.0.0.1:${server.address().port}`, room: 'room', token: 'owner-credential'.repeat(3), mode: 'free',
     directory, project: directory, participants: { Claude: { adapter: 'claude' } }, members: { Claude: { token: 'member-credential'.repeat(3) } } };
   return { state, store, config };
+}
+
+test('an idle goal wakes the host only after the room stays unchanged for the grace period', async t => {
+  const f = await free_fixture(t);
+  f.state.pending = [];
+  f.state.room.goal_state = { goal: { id: 1, status: 'active', idle: true }, revision: 'goal-r1' };
+  const runner = new FreeRoomRunner({ ...f.config, goal_idle_ms: 80 }, f.store, async () => ({ status: 'accepted' }));
+  await runner.tick();
+  assert.equal(runner.idle(), false, 'the service keeps ticking while the grace period runs');
+  f.state.room.goal_state = { ...f.state.room.goal_state, revision: 'goal-r1b' };
+  await delay(100);
+  await runner.tick();
+  assert.equal(f.state.goal_posts, undefined, 'a changed room restarts the grace period');
+  await delay(100);
+  await runner.tick();
+  assert.deepEqual(f.state.goal_posts, [{ action: 'continue', revision: 'goal-r1b' }]);
+  f.state.room.goal_state = { goal: { id: 1, status: 'active', idle: false }, revision: 'goal-r2' };
+  await runner.tick();
+  assert.equal(runner.idle(), true);
+});
+
+for (const [answer, posted] of [[{ choice: 'wait', probabilities: { wait: 0.9, continue: 0.1 } }, 'wait'],
+  [{ choice: 'wait', probabilities: { wait: 0.6, continue: 0.4 } }, 'continue']]) {
+  test(`an idle goal asks the decision model and ${posted === 'wait' ? 'stands down when sure the user is awaited' : 'wakes the host when unsure'}`, async t => {
+    const f = await free_fixture(t);
+    f.config = { ...with_scheduler(f.config), goal_idle_ms: 0 };
+    f.state.pending = [];
+    f.state.messages = [{ id: 11, author: 'Codex', text: '前四项已修复。要不要继续修后四项，请你决定。' }];
+    f.state.room.latest_id = 11;
+    f.state.room.goal_state = { goal: { id: 1, status: 'active', idle: true, armed: 1, objective: '修完 8 项问题' }, revision: 'goal-r1' };
+    const runner = new FreeRoomRunner(f.config, f.store, async () => ({ status: 'accepted' }), () => {},
+      scheduler_fetch({ wake: { type: 'choice', confidence: 0.5, ...answer } }));
+    await runner.tick();
+    await runner.tick();
+    assert.deepEqual(f.state.goal_posts, [{ action: posted, revision: 'goal-r1' }]);
+    assert.equal(f.state.decisions.length, 1);
+    assert.equal(f.state.decisions[0].after_message_id, 11);
+    assert.equal(f.state.decisions[0].context.scene, 'goal');
+  });
 }
 
 function scheduler_fetch(answers) {

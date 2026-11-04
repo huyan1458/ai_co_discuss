@@ -337,6 +337,36 @@ export async function decide_interjection(home, scheduler, { title, goal, user_r
   return { action: 'host', confidence, ...judged, label: choice === HOST_CHOICE && sure ? '这条留言需要主持人处理' : unsure_label(lean) };
 }
 
+/** Scene 7 wording version; it is the same in both modes, like the @everyone and review questions. */
+export const GOAL_PROMPT_VERSION = 1;
+const GOAL_WAIT = 'wait';
+const GOAL_CONTINUE = 'continue';
+// What a member of the room would know about a goal: who drives it and what an unneeded wake-up costs.
+const GOAL_GUIDE = ['这是 AI CoDiscuss 的协作房间，用户开启了 Goal：主持人要持续推进下面的目标，直到达成或卡住。其余成员都是 AI，用户常称它们为专家。',
+  '主持人把工作派给专家，专家做完后房间会空下来。房间空闲时，程序可以再唤醒主持人一次，让他看结果并决定下一步；唤醒一次要花一次执行，通常几十秒。',
+  '如果最近的回答已经在等用户（向用户提了问题、需要用户授权或拍板，或已经向用户汇报完成），唤醒主持人也只能再等，不如安静等用户回复。'].join('\n');
+
+/**
+ * Scene 7: the goal's room went idle. Decide whether waking the host would move the goal forward, or whether the room is
+ * waiting for the user. Only a confident "waiting" saves the wake-up; anything else wakes the host, as without a model.
+ */
+export async function decide_goal_wake(home, scheduler, { title, objective, context, host, members = [] }, fetch_impl) {
+  const questions = [{ type: 'choice', name: 'wake', choices: [
+    { value: GOAL_CONTINUE, description: `唤醒主持人 ${host} 接着推进：最近的结果还需要主持人处理，比如交付要核对、阻止或失败要修、下一步要派活，或者目标还没完成` },
+    { value: GOAL_WAIT, description: '不唤醒，等用户回复：最近的回答已经向用户提问、请用户授权或拍板，或已经向用户汇报目标完成；用户这句话回来之前，主持人做不了更多' }],
+    instructions: '目标进行中，房间刚空闲下来。读最近的消息，判断现在唤醒主持人能不能让目标往前走，还是房间在等用户。' }];
+  const people = members.length ? `成员：\n${members.map(member => `- ${member.role === 'host' ? '主持人' : '专家'} ${member.description}`).join('\n')}` : '';
+  const recent = context.slice(-ROUTE_CONTEXT_MESSAGES).map(excerpt);
+  const state = [topic_lines(title, objective, '', { guide: GOAL_GUIDE, people }),
+    recent.length ? `近期消息（旧→新）：\n${recent.join('\n')}` : '近期没有其他消息。'].join('\n\n');
+  const answers = await decide(home, scheduler, state, questions, fetch_impl);
+  const choice = answers.wake?.choice ?? null;
+  const confidence = certainty(answers.wake);
+  const wait = choice === GOAL_WAIT && confidence !== null && confidence >= ROUTE_CONFIDENCE;
+  return { action: wait ? 'wait' : 'continue', choice, confidence, ...judged_of(state, questions, answers),
+    label: wait ? 'Goal：房间在等用户回复，不唤醒主持人' : choice === GOAL_CONTINUE ? 'Goal：唤醒主持人接着推进' : unsure_label('等用户回复').replace('交给主持人', '唤醒主持人') };
+}
+
 /** Judge only whether full delivery evidence satisfies the already-authorized review handoff. */
 export async function decide_review_completion(home, scheduler, ready, fetch_impl) {
   const fallback = reason => ({ action: 'host', confidence: null, label: reason });

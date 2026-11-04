@@ -3,6 +3,7 @@ import { computed, inject, nextTick, onBeforeUnmount, onMounted, reactive, ref, 
 import ScheduleCard from "./ScheduleCard.vue";
 import TopicCard from "./TopicCard.vue";
 import DiscussionEndCard from "./DiscussionEndCard.vue";
+import GoalNoticeCard from "./GoalNoticeCard.vue";
 import ExecutionDenials from "./ExecutionDenials.vue";
 import ExecutionNotes from "./ExecutionNotes.vue";
 import WorkingText from "./WorkingText.vue";
@@ -738,18 +739,46 @@ const PLATFORM_SKILL_COMMANDS = [
     description: "请主持人按 workflow-creator 技能写工作流", prompt: "用 workflow-creator 技能新建一个工作流：" },
 ];
 const can_call_skill = computed(() => free.value && !room.value?.archived && free_members.value.some((member) => member.role === "host"));
+/**
+ * Built-in modes come first in "/": they change how the room moves forward, unlike workflows and skills. Picking one
+ * only writes its command into the draft; sending it is the owner's decision, and the website checks it again.
+ */
+const can_use_modes = computed(() => free.value && !room.value?.archived && view.value.access?.can_manage);
+const mode_options = computed(() => {
+  if (!can_use_modes.value) return [];
+  const goal = ["active", "paused"].includes(room.value?.goal_state?.goal?.status) ? room.value.goal_state.goal : null;
+  const session = ["active", "paused"].includes(room.value?.session?.status) ? room.value.session : null;
+  const host_ready = free_members.value.some((member) => member.role === "host" && member.access === "runner");
+  const blocked = !host_ready ? "需要一位由本机唤醒的 AI 主持人" : "";
+  const items = goal ? [
+    goal.status === "active" ? { command: "/goal pause", label: "暂停 Goal", description: "房间空闲时不再唤醒主持人" }
+      : { command: "/goal resume", label: "继续 Goal", description: "继续推进，房间空闲时唤醒主持人" },
+    { command: "/goal edit ", label: "修改 Goal 目标", description: "在后面写新的目标" },
+    { command: "/goal clear", label: "结束 Goal", description: "房间回到自由协作" },
+  ] : session ? [
+    session.status === "active" ? { command: "/discuss pause", label: "暂停讨论", description: "停止讨论中的执行，继续后由主持人重新安排" }
+      : { command: "/discuss resume", label: "继续讨论", description: "由主持人检查队列并继续" },
+    { command: "/discuss stop", label: "结束讨论", description: "房间回到自由协作，记录与结论保留" },
+  ] : [
+    { command: "/goal ", label: "Goal", description: blocked || "设定目标，主持人持续推进；房间空闲时自动接着做", disabled: blocked },
+    { command: "/discuss ", label: "讨论", description: blocked || "主持人安排成员轮流发言，到上限或结束后回到自由协作", disabled: blocked },
+  ];
+  const query = mention_context.value?.query.toLocaleLowerCase() || "";
+  return items.filter((item) => `${item.command} ${item.label} goal discuss 目标 讨论`.toLocaleLowerCase().includes(query))
+    .map((item) => ({ key: `mode:${item.command}`, mode: item, group: "模式" }));
+});
 const skill_options = computed(() => {
   if (!can_call_skill.value) return [];
   const query = mention_context.value?.query.toLocaleLowerCase() || "";
   return PLATFORM_SKILL_COMMANDS.filter((item) => `${item.id} ${item.label} ${item.search}`.toLocaleLowerCase().includes(query))
     .map((item) => ({ key: `skill:${item.id}`, skill: item, group: "平台技能" }));
 });
-const mention_options = computed(() => mention_context.value?.command ? [...(can_pick_workflow.value ? workflow_options.value : []), ...skill_options.value] : [
+const mention_options = computed(() => mention_context.value?.command ? [...mode_options.value, ...(can_pick_workflow.value ? workflow_options.value : []), ...skill_options.value] : [
   ...mention_members.value.map((name) => ({ key: `member:${name}`, name, group: "成员" })),
   ...mention_folder_self.value.map((option) => ({ ...option, group: mention_files_group.value })),
   ...mention_files.value.map((entry) => ({ key: `file:${entry.path}`, entry, group: mention_files_group.value })),
 ]);
-const mention_heading = computed(() => mention_context.value?.command ? "选择工作流或技能" : project_directory.value ? "选择成员或文件" : "选择成员");
+const mention_heading = computed(() => mention_context.value?.command ? "选择模式、工作流或技能" : project_directory.value ? "选择成员或文件" : "选择成员");
 const mention_active = computed(() => mention_options.value[Math.min(mention_index.value, mention_options.value.length - 1)]);
 watch([() => room.value?.id, () => view.value.tab], () => { mention_context.value = null; });
 
@@ -775,7 +804,7 @@ function find_mention(value, start, end = start) {
 
 /** Locate a "/" command at the very start of the draft, so paths later in the text never trigger it. */
 function find_command(value, start, end = start) {
-  if (start !== end || !(can_pick_workflow.value || can_call_skill.value)) return null;
+  if (start !== end || !(can_use_modes.value || can_pick_workflow.value || can_call_skill.value)) return null;
   const match = value.slice(0, start).match(/^\/([^\s/]*)$/u);
   if (!match) return null;
   const remainder = value.slice(start).match(/^[^\s/]*/u)[0];
@@ -799,6 +828,7 @@ const mention_handle = (name) => GROUP_MENTIONS[name] ? name : bridge.mention_ha
 async function select_mention(option) {
   if (!mention_context.value || mention_context.value.composing || !mention_options.value.some((item) => item.key === option.key)) return;
   const { start, end } = mention_context.value;
+  if (option.mode) return pick_mode(option, end);
   if (option.workflow) return pick_workflow(option, end);
   if (option.skill) return pick_skill(option, end);
   const { entry } = option;
@@ -832,6 +862,18 @@ function pick_workflow(option, end) {
   text.value = text.value.slice(end).replace(/^ /, "");
   workflow_invite_id.value = option.workflow.id;
   workflow_inviting.value = true;
+}
+
+/** Write the mode's command in place of the typed "/…"; one that needs text after it keeps the caret there. */
+async function pick_mode(option, end) {
+  mention_context.value = null;
+  if (option.mode.disabled) return bridge.notify("warning", option.mode.disabled);
+  const { command } = option.mode;
+  text.value = command + text.value.slice(end).replace(/^ /, "");
+  await nextTick();
+  const editor = prompt.value?.textareaRef;
+  editor?.focus();
+  editor?.setSelectionRange(command.length, command.length);
 }
 
 /** Replace the "/command" with the skill's request to the host, leaving the caret after it for the user's details. */
@@ -1608,6 +1650,7 @@ function copy_message(message) { act("copy", `${view.value.room_site}/r/${room.v
           <template #text>主持人安排：{{ host_arrangements.get(message.arrangement.after_message_id)?.find((plan) => plan.id === message.arrangement.id)?.label }}<small v-if="message.arrangement.after_message_id">耗时 {{ format_elapsed(arrangement_seconds(message.arrangement, view.messages.find((item) => item.id === message.arrangement.after_message_id))) }}</small></template>
           <p v-for="turn in message.arrangement.turns" :key="`${message.id}-${turn.expert}-${turn.question}`"><span>{{ bridge.display_name(turn.expert) }}：{{ turn.question }}</span></p>
         </ScheduleCard>
+        <GoalNoticeCard v-else-if="message.source === 'goal'" :message="message" />
         <UChatMessage v-else-if="message.cancelled_turn || message.cancelled_execution" :id="message.id" :data-author="bridge.identities[message.author]?.style" role="assistant" :parts="[]" side="left" variant="naked" color="neutral" class="channel-message" :ui="{ header: 'channel-message-header', container: 'channel-message-container', body: 'channel-message-body' }">
           <template #body>
             <div class="channel-message-byline">
@@ -1877,7 +1920,12 @@ function copy_message(message) { act("copy", `${view.value.room_site}/r/${room.v
             <template v-for="(option, index) in mention_options" :key="option.key">
             <p v-if="index === 0 || option.group !== mention_options[index - 1].group" role="presentation" class="channel-mention-group">{{ option.group }}</p>
             <button :id="`channel-mention-${index}`" type="button" role="option" :aria-selected="option === mention_active" tabindex="-1" class="channel-mention-option" @pointerdown.prevent @click="select_mention(option)" @pointermove="mention_index = index">
-              <template v-if="option.workflow">
+              <template v-if="option.mode">
+                <UIcon :name="option.mode.command.startsWith('/goal') ? 'i-lucide-target' : 'i-lucide-messages-square'" class="channel-mention-file-icon" />
+                <span :class="{ 'channel-mention-disabled': option.mode.disabled }">{{ option.mode.label }}</span>
+                <small :title="option.mode.description">{{ option.mode.description }}</small>
+              </template>
+              <template v-else-if="option.workflow">
                 <UIcon name="i-lucide-workflow" class="channel-mention-file-icon" />
                 <span>{{ option.workflow.label }}</span>
                 <small :title="option.workflow.description">{{ option.enabled ? '已启用' : option.workflow.description }}</small>

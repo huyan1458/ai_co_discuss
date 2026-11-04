@@ -95,7 +95,7 @@
 
 1. 保存有原文依据的最终判断、state 与简报（`until` 须覆盖实际读过的最新材料）；需要留主持说明时按参与技能写入。主持说明本身不结束讨论。
 2. `room conclusion ROOM` 申请收束状态，得到阻碍项 `blockers` 与 `revision`。
-3. 目标已完成且无阻碍时，用 `room limits ROOM --done --conclusion <revision> --as 本人` 收束。到限则用 `room limits ROOM --check --as 本人`。有未处理留言、state 落后或仍有排队安排会被拒绝；状态变化后 revision 失效需重取。成功后房间回到自由协作，本次执行结束，不再补 chat 回执；已结束的讨论只有用户能重新开启。
+3. 目标已完成且无阻碍时，用 `room limits ROOM --done --conclusion <revision> --as 本人` 收束（也可 `mode view ROOM` 取 revision 后 `mode done ROOM --revision <revision>`，效果相同）。到限则用 `room limits ROOM --check --as 本人`。有未处理留言、state 落后或仍有排队安排会被拒绝；状态变化后 revision 失效需重取。成功后房间回到自由协作，本次执行结束，不再补 chat 回执；已结束的讨论只有用户能重新开启。
 
 最终总结按议题组织结论、不同意见、重要条件与未验证影响，不强制固定栏目。用户要求独立报告时再调用仓库的 discuss-report，报告不表示建议已获采纳。
 

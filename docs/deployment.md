@@ -120,7 +120,9 @@ npx wrangler d1 execute DB --remote --config .wrangler/deploy/wrangler.jsonc --f
 
 本机 Python 站点启动时检测旧表，自动在单个事务内迁移，再应用 schema；迁移失败会整体回滚并终止启动。升级前仍应备份 SQLite 和附件，不必手工执行删表脚本。
 
-登录记录改存在 `admin_logins` 表中，带有效期。执行新 schema 后，旧表 `admin_sessions` 里的永久登录不再被读取，所有设备需要重新登录一次。网站和电脑上的 codiscuss 需要同时升级：新版电脑只执行已配对设备签名的转交命令。升级后，每台外出用的设备都要按 [远程控制](runner.md#在其他设备上远程控制) 重新配对一次，并创建通行密钥；新增的 `admin_passkeys`、`admin_challenges` 表由同一份 schema 创建。
+登录记录改存在 `admin_logins` 表中，带有效期。执行新 schema 后，旧表 `admin_sessions` 里的永久登录不再被读取，所有设备需要重新登录一次。网站和电脑上的 codiscuss 需要同时升级：新版电脑只执行已配对设备签名的转交命令。升级后，每台外出用的设备都要按 [远程控制](runner.md#在其他设备上远程控制) 重新配对一次，并创建通行密钥；新增的 `admin_passkeys`、`admin_challenges`、`remote_entry_messages` 表由同一份 schema 创建。登录改为 HttpOnly Cookie，升级后每台设备需要重新登录一次。
+
+自托管 Python 站点上的房间不经过设备签名：本机按那个站点的请求干活，等于把那个站点的管理员视同本人。只在你能保证该站点账号安全时使用；需要防护时请改用默认的线上网站加中转。`--remote-port` 远程入口发起的工作，本机一律按只读执行。
 
 发布后检查网页、`/api/health`，以及：
 

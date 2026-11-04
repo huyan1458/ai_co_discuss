@@ -19,6 +19,15 @@ SETUP_KEY = "install-token-for-tests"
 PASSWORD = "correct horse battery"
 
 
+def login_cookie(response):
+    """The login token a response set in its HttpOnly, SameSite=Strict cookie, or ''."""
+    header = response.headers.get("Set-Cookie", "")
+    if header and not all(flag in header for flag in ("HttpOnly", "Secure", "SameSite=Strict")):
+        raise AssertionError(f"login cookie lacks a protection flag: {header}")
+    match = header.split(";")[0].partition("codiscuss_admin=")[2] if header.startswith("codiscuss_admin=") else ""
+    return match
+
+
 class AdminTests(unittest.TestCase):
     """Run against an isolated Python instance with a fixed install token."""
 
@@ -56,12 +65,20 @@ class AdminTests(unittest.TestCase):
         except HTTPError as error:
             response = error
         with response:
+            # A login arrives only as an HttpOnly cookie, as a browser would receive it.
+            self.cookie = login_cookie(response)
             return response.status, json.load(response)
 
     def register(self):
         status, result = self.request("/api/admin/register", {"username": "老板", "password": PASSWORD, "setup_key": SETUP_KEY})
         self.assertEqual(status, 201, result)
-        return result["token"]
+        self.assertNotIn("token", result, "the page never sees the login token")
+        return self.cookie
+
+    def login(self, password=PASSWORD):
+        status, result = self.request("/api/admin/login", {"username": "老板", "password": password})
+        self.assertEqual(status, 200, result)
+        return self.cookie
 
     def sql(self, statement, values=()):
         with closing(sqlite3.connect(self.database)) as connection, connection:
@@ -112,14 +129,14 @@ class AdminTests(unittest.TestCase):
 
     def test_logins_expire_list_their_browser_and_can_be_ended(self):
         first = self.register()
-        second = self.request("/api/admin/login", {"username": "老板", "password": PASSWORD})[1]["token"]
+        second = self.login()
         sessions = self.request("/api/admin/sessions", admin=first)[1]["sessions"]
         self.assertEqual([item["current"] for item in sessions].count(True), 1)
         self.assertEqual(self.request("/api/admin/sessions")[0], 401)
         # A login unused for a week, or older than a month, no longer counts.
         self.sql("UPDATE admin_logins SET last_seen=last_seen-8*86400 WHERE token_hash=?", (hashlib.sha256(second.encode()).hexdigest(),))
         self.assertFalse(self.request("/api/admin", admin=second)[1]["logged_in"])
-        third = self.request("/api/admin/login", {"username": "老板", "password": PASSWORD})[1]["token"]
+        third = self.login()
         self.assertEqual(self.request("/api/admin/revoke", {"others": True}, admin=first)[0], 200)
         self.assertFalse(self.request("/api/admin", admin=third)[1]["logged_in"])
         self.assertTrue(self.request("/api/admin", admin=first)[1]["logged_in"])
@@ -128,7 +145,7 @@ class AdminTests(unittest.TestCase):
 
     def test_changing_the_password_needs_the_current_one_and_ends_other_logins(self):
         first = self.register()
-        other = self.request("/api/admin/login", {"username": "老板", "password": PASSWORD})[1]["token"]
+        other = self.login()
         self.assertEqual(self.request("/api/admin/password", {"current_password": "wrong-password", "password": "new password 1"}, admin=first)[0], 401)
         self.assertEqual(self.request("/api/admin/password", {"current_password": PASSWORD, "password": "new password 1"})[0], 401)
         self.assertEqual(self.request("/api/admin/password", {"current_password": PASSWORD, "password": "new password 1"}, admin=first)[0], 200)
@@ -305,6 +322,7 @@ class RemoteEntryTests(unittest.TestCase):
         except HTTPError as error:
             response = error
         with response:
+            self.cookie = login_cookie(response)
             return response.status, json.load(response)
 
     def test_remote_entry_needs_login_and_never_offers_local_launch(self):
@@ -316,7 +334,7 @@ class RemoteEntryTests(unittest.TestCase):
         status, result = self.request(self.remote, "/api/admin/register",
                                       {"username": "老板", "password": PASSWORD, "setup_key": SETUP_KEY})
         self.assertEqual(status, 201, result)
-        self.assertEqual(self.request(self.remote, "/api/machines", admin=result["token"])[0], 200)
+        self.assertEqual(self.request(self.remote, "/api/machines", admin=self.cookie)[0], 200)
 
     def test_remote_entry_streams_changes_written_on_the_local_entry(self):
         with urlopen(f"http://127.0.0.1:{self.remote.server_port}/api/updates", timeout=3) as stream:

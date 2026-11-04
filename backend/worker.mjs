@@ -24,6 +24,29 @@ function respond(body, status = 200, text_mode = false) {
   });
 }
 
+// The login lives in an HttpOnly cookie: page scripts can neither read it nor carry it elsewhere. SameSite=Strict keeps
+// other sites (other *.pages.dev included, a public suffix) from sending it.
+const ADMIN_COOKIE = "codiscuss_admin";
+const ADMIN_COOKIE_SECONDS = 30 * 86400;
+
+/** The cookie that holds a new login, or ends it when `token` is empty. */
+function admin_cookie(token) {
+  return `${ADMIN_COOKIE}=${token}; Path=/; HttpOnly; Secure; SameSite=Strict; Max-Age=${token ? ADMIN_COOKIE_SECONDS : 0}`;
+}
+
+/** A JSON response that also sets or clears the login cookie. */
+function respond_with_login(body, token, status = 200) {
+  const response = respond(body, status);
+  response.headers.append("Set-Cookie", admin_cookie(token));
+  return response;
+}
+
+/** The login token from the cookie, or from the header that scripts and tests still use. */
+function admin_credential(request) {
+  const cookie = (request.headers.get("Cookie") ?? "").split(";").map(item => item.trim()).find(item => item.startsWith(`${ADMIN_COOKIE}=`));
+  return cookie ? cookie.slice(ADMIN_COOKIE.length + 1) : request.headers.get("X-Discussion-Admin") ?? "";
+}
+
 /** Count Unicode code points, matching the local Python service. */
 function text_length(value) {
   return [...value].length;
@@ -82,7 +105,7 @@ const LOGIN_FAILURES_PER_LOCK = 5;
 const LOGIN_LOCK_SECONDS = 300;
 const LOGIN_LOCK_MAX_SECONDS = 86400;
 // Wrong passwords from all addresses together within an hour; past this, password login pauses for an hour.
-const LOGIN_GLOBAL_FAILURES = 100;
+const LOGIN_GLOBAL_FAILURES = 500;
 const LOGIN_GLOBAL_WINDOW = 3600;
 
 /** Lowercase hex of raw bytes. */
@@ -133,7 +156,7 @@ function now_seconds() {
 
 /** Return the live login for the request header, or null; an expired one is removed, a used one marks its last use. */
 async function admin_session(database, request) {
-  const token = request.headers.get("X-Discussion-Admin") ?? "";
+  const token = admin_credential(request);
   if (!/^[0-9a-f]{64}$/.test(token)) return null;
   const session = await database.prepare("SELECT * FROM admin_logins WHERE token_hash=?").bind(await digest_hex(token)).first();
   if (!session) return null;
@@ -364,9 +387,11 @@ async function check_passkey_client(client_data, type, challenge, origin, auth_b
 
 /** Take a website challenge once; login challenges need no session, registration ones do. */
 async function take_passkey_challenge(database, id, purpose) {
-  const row = await database.prepare("SELECT * FROM admin_challenges WHERE id=?").bind(String(id || "")).first();
-  await database.prepare("DELETE FROM admin_challenges WHERE id=? OR created_at<?").bind(String(id || ""), now_seconds() - PASSKEY_CHALLENGE_SECONDS).run();
-  if (!row || row.purpose !== purpose || now_seconds() - row.created_at > PASSKEY_CHALLENGE_SECONDS) throw new HttpError(401, "通行密钥确认已过期，请重试");
+  // Deleting and reading in one statement: of two requests carrying the same challenge, only one gets it back.
+  const row = await database.prepare("DELETE FROM admin_challenges WHERE id=? AND purpose=? AND created_at>=? RETURNING challenge")
+    .bind(String(id || ""), purpose, now_seconds() - PASSKEY_CHALLENGE_SECONDS).first();
+  await database.prepare("DELETE FROM admin_challenges WHERE created_at<?").bind(now_seconds() - PASSKEY_CHALLENGE_SECONDS).run();
+  if (!row) throw new HttpError(401, "通行密钥确认已过期，请重试");
   return row.challenge;
 }
 
@@ -442,8 +467,25 @@ async function passkey_login(database, request, payload) {
     throw new HttpError(401, "通行密钥签名无效");
   }
   if ((count || passkey.sign_count) && count <= passkey.sign_count) throw new HttpError(401, "通行密钥计数异常，可能被复制");
-  await database.prepare("UPDATE admin_passkeys SET sign_count=? WHERE id=?").bind(count, passkey.id).run();
+  // Only a larger counter is written, so assertions finishing out of order never move it back.
+  const updated = await database.prepare("UPDATE admin_passkeys SET sign_count=? WHERE id=? AND (sign_count<? OR (?=0 AND sign_count=0))")
+    .bind(count, passkey.id, count, count).run();
+  if (!updated.meta?.changes) throw new HttpError(401, "通行密钥计数异常，可能被复制");
   return { token: await create_admin_session(database, request), profile: admin_profile(admin) };
+}
+
+/** List the passkeys that can sign in here, so a lost device's can be removed. */
+async function list_passkeys(database, request) {
+  await require_admin_session(database, request);
+  const { results } = await database.prepare("SELECT id,label,created_at FROM admin_passkeys ORDER BY created_at DESC").all();
+  return { passkeys: results };
+}
+
+/** Remove one website passkey; removing a paired device on the computer does not reach this list. */
+async function delete_passkey(database, request, payload) {
+  await require_admin_session(database, request);
+  await database.prepare("DELETE FROM admin_passkeys WHERE id=?").bind(String(payload.id || "")).run();
+  return { ok: true };
 }
 
 /** Route /api/admin*; GET is public, every POST is JSON. */
@@ -451,16 +493,20 @@ async function handle_admin_api(database, request, parts, setup_key) {
   const action = parts[2] ?? "";
   if (parts.length === 2 && request.method === "GET") return respond(await admin_state(database, request, setup_key));
   if (parts.length === 3 && action === "sessions" && request.method === "GET") return respond(await list_admin_sessions(database, request));
+  if (parts.length === 3 && action === "passkeys" && request.method === "GET") return respond(await list_passkeys(database, request));
   if (parts.length !== 3 || request.method !== "POST") throw new HttpError(404, "地址不存在");
   const payload = await read_payload(request);
-  if (action === "register") return respond(await register_admin(database, request, payload, setup_key), 201);
-  if (action === "login") return respond(await login_admin(database, request, payload));
-  if (action === "logout") return respond(await logout_admin(database, request));
+  // A new login goes into the cookie only; the page never sees the token.
+  const signed_in = async (result, status = 200) => { const { token, ...body } = await result; return respond_with_login(body, token, status); };
+  if (action === "register") return signed_in(register_admin(database, request, payload, setup_key), 201);
+  if (action === "login") return signed_in(login_admin(database, request, payload));
+  if (action === "logout") return respond_with_login(await logout_admin(database, request), "");
   if (action === "profile") return respond(await update_admin_profile(database, request, payload));
   if (action === "revoke") return respond(await revoke_admin_sessions(database, request, payload));
   if (action === "passkey-challenge") return respond(await passkey_challenge(database, request, payload));
   if (action === "passkey-register") return respond(await register_passkey(database, request, payload));
-  if (action === "passkey-login") return respond(await passkey_login(database, request, payload));
+  if (action === "passkey-login") return signed_in(passkey_login(database, request, payload));
+  if (action === "passkey-delete") return respond(await delete_passkey(database, request, payload));
   if (action === "password") return respond(await change_admin_password(database, request, payload));
   throw new HttpError(404, "地址不存在");
 }
@@ -645,7 +691,8 @@ async function handle_relay(env, request, machine_id) {
     let role = "machine";
     if (credential.startsWith("m.")) await require_machine(database, machine_id, credential.slice(2));
     else {
-      await require_admin_session(database, new Request(request.url, { headers: { "X-Discussion-Admin": credential.slice(2) } }));
+      // A device's socket carries the login cookie; an older page may still offer the token as a subprotocol.
+      await require_admin_session(database, credential ? new Request(request.url, { headers: { "X-Discussion-Admin": credential.slice(2) } }) : request);
       await require_paired_machine(database, machine_id);
       role = "device";
     }

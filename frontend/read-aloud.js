@@ -14,14 +14,15 @@ const CLOSING = /[”’」』）)"'\]】]/;
 const SOFT_BREAK = /[，、,：:\s]/;
 const MAX_SENTENCE = 120;
 // One request reads up to this many characters, joining short paragraphs; the service allows 300 and the relay answer
-// must stay small. The very first request is shorter so reading starts sooner.
+// must stay small. The first request of every message is shorter so reading starts sooner; it is cut the same way however
+// the message is reached, so the same text always makes the same requests and a replay is served from the cache.
 const MAX_CHUNK = 200;
 const FIRST_CHUNK = 80;
-// Requests are started ahead of playback until the text after the one playing holds this many readable characters (about
-// 20 s of speech at the measured ~4.7 characters per second), so a relayed request's few seconds stay covered even when
-// the next requests are short paragraphs; at most MAX_AHEAD requests ahead, to bound what a stop leaves unheard.
-const AHEAD_CHARS = 100;
-const MAX_AHEAD = 4;
+// What follows is requested only once the audio already requested would run out within this many seconds (a relayed
+// request takes 2–8 s), so a stop leaves little synthesized and billed but never heard. Durations not yet known are
+// estimated at the measured ~4.7 readable characters per second.
+const LEAD_SECONDS = 15;
+const CHARS_PER_SECOND = 4.7;
 // Silence added between paragraphs and between messages, on top of the service's own pauses.
 const PARAGRAPH_GAP_MS = 350;
 const MESSAGE_GAP_MS = 700;
@@ -87,8 +88,8 @@ function text_ranges(points, start, end) {
   return ranges;
 }
 
-/** Cut flattened text into sentences that each carry the ranges to highlight. */
-function split_sentences({ text, points }, from = 0) {
+/** Cut flattened text between `from` and `to` into sentences that each carry the ranges to highlight and their positions. */
+function split_sentences({ text, points }, from = 0, to = text.length) {
   const sentences = [];
   const push = (start, end) => {
     while (start < end && /\s/.test(text[start])) start += 1;
@@ -97,13 +98,13 @@ function split_sentences({ text, points }, from = 0) {
     let after = end;
     while (after < text.length && text[after] !== "\n" && /\s/.test(text[after])) after += 1;
     sentences.push({ text: text.slice(start, end).replace(/\s+/g, " "), ranges: text_ranges(points, start, end),
-      paragraph_end: after >= text.length || text[after] === "\n" });
+      paragraph_end: after >= text.length || text[after] === "\n", start, end });
   };
   let start = from;
-  for (let index = from; index < text.length; index += 1) {
+  for (let index = from; index < to; index += 1) {
     if (SENTENCE_END.test(text[index])) {
       let end = index + 1;
-      while (end < text.length && CLOSING.test(text[end])) end += 1;
+      while (end < to && CLOSING.test(text[end])) end += 1;
       push(start, end); start = end; index = end - 1;
     } else if (index - start + 1 >= MAX_SENTENCE) {
       let cut = index;
@@ -112,7 +113,7 @@ function split_sentences({ text, points }, from = 0) {
       push(start, cut + 1); start = cut + 1;
     }
   }
-  push(start, text.length);
+  push(start, to);
   return sentences;
 }
 
@@ -275,25 +276,47 @@ export function use_read_aloud({ bridge, container, prepare = async () => {}, me
     navigator.mediaSession.playbackState = "playing";
   }
 
-  /** Group sentences into requests of up to MAX_CHUNK characters, joining short paragraphs; split only between sentences. */
-  function chunks_of(sentences, prefix, first_pass) {
+  /**
+   * Group sentences into requests of up to MAX_CHUNK characters (the first up to `first_limit`), joining short paragraphs;
+   * split only between sentences.
+   */
+  function chunks_of(sentences, prefix, first_limit = FIRST_CHUNK) {
     const chunks = [];
     let chunk = null;
     for (const sentence of sentences) {
-      const limit = first_pass && chunks.length === 1 ? FIRST_CHUNK : MAX_CHUNK;
+      const limit = chunks.length === 1 ? first_limit : MAX_CHUNK;
       if (!chunk || chunk.text.length + sentence.text.length > limit) {
         const first = !chunks.length;
-        chunks.push(chunk = { sentences: [], text: first ? prefix : "", prefix: first ? readable_length(prefix) : 0, silence: 0 });
+        chunks.push(chunk = { sentences: [], text: first ? prefix : "", prefix: first ? readable_length(prefix) : 0, silence: 0, end: 0 });
       }
       // A line break between paragraphs lets the service pause as it would between them.
       if (chunk.sentences.at(-1)?.paragraph_end) chunk.text += "\n";
       chunk.sentences.push(sentence);
       chunk.text += sentence.text;
       chunk.silence = sentence.paragraph_end ? PARAGRAPH_GAP_MS : 0;
+      chunk.end = sentence.end;
     }
     // The pause before what comes next is part of this item's last audio, so it holds in the background too.
     if (chunks.length) chunks.at(-1).silence = MESSAGE_GAP_MS;
     return chunks;
+  }
+
+  /**
+   * Requests for reading flattened text from position `from`. They are always cut from `base` (the start of the message,
+   * or of a file after its front matter), so the same text makes the same requests and a replay hits the cache. Starting
+   * inside a request reads the rest of that one as a single new request, then goes on with the regular ones.
+   */
+  function chunks_from(flat, base, from, prefix) {
+    const chunks = chunks_of(split_sentences(flat, base), prefix);
+    if (from <= base) return chunks;
+    const index = chunks.findIndex((chunk) => chunk.end > from);
+    if (index < 0) return [];
+    const { sentences, silence } = chunks[index];
+    const cut = sentences.find((sentence) => sentence.start < from && sentence.end > from);
+    const rest = [...(cut ? split_sentences(flat, from, cut.end) : []), ...sentences.filter((sentence) => sentence.start >= from)];
+    const [head] = chunks_of(rest, "", MAX_CHUNK);
+    if (head) head.silence = silence;
+    return [...(head ? [head] : []), ...chunks.slice(index + 1)];
   }
 
   /** When each sentence starts: readable characters matched to the word timings, or spread evenly if they do not line up. */
@@ -326,12 +349,18 @@ export function use_read_aloud({ bridge, container, prepare = async () => {}, me
     return memory.get(key);
   }
 
-  /** Play one request, moving the highlight as the audio clock (which stops while paused) passes each sentence. */
-  function play(chunk, { url, marks }) {
+  /**
+   * Play one request, moving the highlight as the audio clock (which stops while paused) passes each sentence.
+   * `on_progress` gets the seconds left of it; `timeupdate` also fires with the screen locked, unlike animation frames.
+   */
+  function play(chunk, { url, marks }, on_progress) {
     return new Promise((resolve, reject) => {
       const audio = player();
       let frame = 0, shown = -1, starts = null;
-      const done = (error) => { cancelAnimationFrame(frame); ending = null; audio.onended = audio.onerror = null; error ? reject(error) : resolve(); };
+      const done = (error) => {
+        cancelAnimationFrame(frame); ending = null; audio.onended = audio.onerror = audio.ontimeupdate = null; error ? reject(error) : resolve();
+      };
+      audio.ontimeupdate = () => { if (Number.isFinite(audio.duration)) on_progress(audio.duration - audio.currentTime); };
       ending = () => done();
       const follow = () => {
         starts ||= Number.isFinite(audio.duration) ? sentence_starts(chunk, marks, audio.duration * 1000 - chunk.silence) : null;
@@ -353,11 +382,10 @@ export function use_read_aloud({ bridge, container, prepare = async () => {}, me
   const spoken = (text) => ({ text, ranges: [], paragraph_end: true });
 
   /** Prepare one message for reading in full: shown in full, split into requests, its voice chosen, nothing synthesized yet. */
-  async function plan_message(id, from, prefix, first_pass) {
+  async function plan_message(id, from, prefix) {
     await prepare(id);
     const body = body_of(id);
-    return { id, chunks: chunks_of(body ? split_sentences(collect_text(body), from) : [], prefix, first_pass),
-      speaker: await voice_for(author(id)), pending: [] };
+    return { id, chunks: body ? chunks_from(collect_text(body), 0, from, prefix) : [], speaker: await voice_for(author(id)), pending: [] };
   }
 
   /**
@@ -383,11 +411,11 @@ export function use_read_aloud({ bridge, container, prepare = async () => {}, me
       sentences = [...first, spoken(`全文约 ${Math.round(length / 100) * 100 || length} 字，点开查看。`)];
     }
     if (!sentences.length) return null;
-    return { id, chunks: chunks_of(sentences, prefix, false), speaker, pending: [] };
+    return { id, chunks: chunks_of(sentences, prefix), speaker, pending: [] };
   }
 
   /** Plan one narration line in the default voice. */
-  const plan_line = (text) => ({ id: -1, chunks: chunks_of([spoken(text)], "", false), speaker: "", pending: [] });
+  const plan_line = (text) => ({ id: -1, chunks: chunks_of([spoken(text)], ""), speaker: "", pending: [] });
 
   /** Start synthesizing one request of a plan unless already started; failures surface when it is awaited. */
   function fetch_chunk(plan, index, section_id) {
@@ -396,30 +424,36 @@ export function use_read_aloud({ bridge, container, prepare = async () => {}, me
     plan.pending[index].catch(() => {});
   }
 
-  /**
-   * Start request `index` and those after it until AHEAD_CHARS readable characters follow it (or MAX_AHEAD requests).
-   * @returns {boolean} True when the plan ran out before the budget was met, so what follows should start preparing.
-   */
-  function fetch_ahead(plan, index, section_id) {
-    fetch_chunk(plan, index, section_id);
-    let left = AHEAD_CHARS, next = index + 1;
-    for (; left > 0 && next < plan.chunks.length && next - index <= MAX_AHEAD; next += 1) {
+  /** Estimated seconds of speech in one request. */
+  const seconds_of = (chunk) => readable_length(chunk.text) / CHARS_PER_SECOND;
+
+  /** Start requests from `index` on until they hold about `seconds` of speech. */
+  function fetch_lead(plan, index, section_id, seconds = LEAD_SECONDS) {
+    for (let next = index; next < plan.chunks.length && seconds > 0; next += 1) {
       fetch_chunk(plan, next, section_id);
-      left -= readable_length(plan.chunks[next].text);
+      seconds -= seconds_of(plan.chunks[next]);
     }
-    return left > 0 && next >= plan.chunks.length;
   }
 
-  /** Play one plan's requests, keeping AHEAD_CHARS of text requested ahead; near its end, `on_tail` lets what follows start preparing. */
+  /**
+   * Play one plan's requests. While one plays, what follows is requested once the audio already requested would run out
+   * within LEAD_SECONDS; past the plan's last request, `on_tail` lets the next item start preparing.
+   */
   async function read_plan(plan, token, section_id, on_tail) {
     const { chunks } = plan;
     for (let index = 0; index < chunks.length; index += 1) {
-      if (fetch_ahead(plan, index, section_id)) on_tail();
+      fetch_chunk(plan, index, section_id);
       state.loading = true;
       const audio = await plan.pending[index];
       state.loading = false;
       if (token !== run) return false;
-      await play(chunks[index], audio);
+      await play(chunks[index], audio, (left) => {
+        let next = index + 1;
+        while (next < chunks.length && plan.pending[next]) left += seconds_of(chunks[next++]);
+        if (left >= LEAD_SECONDS) return;
+        if (next < chunks.length) fetch_lead(plan, next, section_id, LEAD_SECONDS - left);
+        else on_tail();
+      });
       if (token !== run) return false;
     }
     return true;
@@ -506,7 +540,8 @@ export function use_read_aloud({ bridge, container, prepare = async () => {}, me
     const prefix_of = (id) => `${bridge.display_name(author(id))}：`;
     Object.assign(state, { message_id, reading: true, following: false });
     try {
-      let plan = await plan_message(message_id, from, selection ? "" : prefix_of(message_id), true);
+      // The author is named even from a selection at the very start, so those requests match a plain reading's.
+      let plan = await plan_message(message_id, from, prefix_of(message_id));
       while (plan && token === run) {
         state.message_id = plan.id;
         show_on_lock_screen(plan);
@@ -516,8 +551,8 @@ export function use_read_aloud({ bridge, container, prepare = async () => {}, me
           upcoming ||= (async () => {
             const next = next_message(plan.id);
             if (!next) return null;
-            const ready = await plan_message(next, 0, prefix_of(next), false);
-            if (ready.chunks.length) fetch_ahead(ready, 0, section_id);
+            const ready = await plan_message(next, 0, prefix_of(next));
+            fetch_lead(ready, 0, section_id);
             return ready;
           })();
         };
@@ -527,7 +562,7 @@ export function use_read_aloud({ bridge, container, prepare = async () => {}, me
         const ready = await upcoming;
         const next = ready?.id || next_message(plan.id);
         if (token !== run) return;
-        plan = next ? (ready?.id === next ? ready : await plan_message(next, 0, prefix_of(next), false)) : null;
+        plan = next ? (ready?.id === next ? ready : await plan_message(next, 0, prefix_of(next))) : null;
       }
     } catch (error) {
       if (token === run) bridge.notify("error", `朗读失败：${error.message}`);
@@ -549,8 +584,9 @@ export function use_read_aloud({ bridge, container, prepare = async () => {}, me
     Object.assign(state, { message_id: DOCUMENT_ID, reading: true, following: false });
     try {
       const flat = collect_text(root);
-      const from = selection ? selection_index(flat, selection) : skip_readable(flat.text, skip);
-      const plan = { id: DOCUMENT_ID, heading, chunks: chunks_of(split_sentences(flat, from), "", true), speaker: await voice_for(""), pending: [] };
+      const base = skip_readable(flat.text, skip);
+      const from = selection ? selection_index(flat, selection) : base;
+      const plan = { id: DOCUMENT_ID, heading, chunks: chunks_from(flat, base, from, ""), speaker: await voice_for(""), pending: [] };
       if (token === run) { show_on_lock_screen(plan); await read_plan(plan, token, crypto.randomUUID(), () => {}); }
     } catch (error) {
       if (token === run) bridge.notify("error", `朗读失败：${error.message}`);

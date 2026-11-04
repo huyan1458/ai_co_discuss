@@ -67,7 +67,14 @@ const sessions = ref(null);
 
 /** Read the live logins; shown on demand, since each read touches the website's database. */
 function load_sessions() {
-  return run("sessions", async () => { sessions.value = await bridge.admin.sessions(); });
+  return run("sessions", async () => { sessions.value = await bridge.admin.sessions(); await load_passkeys(); });
+}
+
+const passkeys = ref(null);
+/** Website passkeys are listed with the sessions: a lost device's passkey must be removed here as well. */
+async function load_passkeys() { passkeys.value = await bridge.admin.passkeys(); }
+async function delete_passkey(item) {
+  if (await run("revoke", () => bridge.admin.delete_passkey(item.id), "该通行密钥已不能登录网站")) await load_passkeys();
 }
 
 /** End one other login, or all others, then show the list again. */
@@ -148,6 +155,12 @@ async function save_password() {
               <li v-for="item in sessions" :key="item.id">
                 <span><strong>{{ device_label(item.label) }}</strong><small>{{ item.current ? "当前设备" : `最近使用 ${seen(item.last_seen)}` }}</small></span>
                 <UButton v-if="!item.current" label="退出" color="neutral" variant="ghost" size="xs" :disabled="Boolean(busy)" @click="end_sessions({ id: item.id }, '该设备已退出登录。')" />
+              </li>
+            </ul>
+            <ul v-if="passkeys?.length" class="account-device-list" aria-label="可登录网站的通行密钥">
+              <li v-for="item in passkeys" :key="item.id">
+                <span><strong>通行密钥 · {{ item.label || "未命名" }}</strong><small>创建于 {{ seen(item.created_at) }}；设备丢失时删除它</small></span>
+                <UButton label="删除" color="neutral" variant="ghost" size="xs" :disabled="Boolean(busy)" @click="delete_passkey(item)" />
               </li>
             </ul>
             <UButton v-if="sessions.length > 1" label="退出其他所有设备" color="neutral" variant="outline" size="sm" :loading="busy === 'revoke'" :disabled="Boolean(busy)" @click="end_sessions({ others: true }, '其他设备已全部退出登录。')" />

@@ -23,7 +23,7 @@ import { software_device } from './passkey_authenticator.mjs';
 
 /** Pair a software browser with this computer the way a phone does after scanning the code. */
 async function pair_test_device(home, machine_id) {
-  const device = await software_device();
+  const device = await software_device(machine_id);
   const { code } = start_pairing(home, { site: 'https://site.test' });
   const answer = await device_command(home, { site: 'https://site.test', machine_id, device_id: null }, 'device-pair',
     { public_key: device.public_key, label: 'test', proof: pairing_proof(code, machine_id, device.public_key) });
@@ -821,7 +821,7 @@ test('workflow library commands keep the local and relayed boundaries, including
   assert.equal(command.input.site, f.site);
   assert.equal(command.input.access_file, undefined);
   assert.equal(relayed_command(f.site, 'room-workflow', { action: 'disable', room_id: 'one' }).input.site, f.site);
-  assert.throws(() => relayed_command(f.site, 'workflows', { action: 'preview', folder: 'private-folder' }), /粘贴导入/);
+  assert.throws(() => relayed_command(f.site, 'workflows', { action: 'preview', folder: 'private-folder' }), /zip 或文件夹/);
   const parts = ['<!-- workflow-part: 1/1 id: imported -->\n<!-- workflow-file: SKILL.md -->\n---\nname: imported\n---\n导入做法'];
   const preview = relayed_command(f.site, 'workflows', { action: 'preview', parts });
   assert.equal((await request(f.site, '/api/local/workflows', preview.input, headers)).body.id, 'imported');
@@ -1120,8 +1120,8 @@ test('a manual agy expert\'s reported conversation is hosted under its own proje
   }
 });
 
-test('relayed launches resolve projects locally and report back to the paired site', async t => {
-  const { local_request, machine_link, sync_remote_launches, unlink_machine } = await import('../runner/remote_launch.mjs');
+test('syncing publishes this computer\'s state, and launch tasks a site returns are never run', async t => {
+  const { machine_link, sync_remote_launches, unlink_machine } = await import('../runner/remote_launch.mjs');
   const home = mkdtempSync(join(tmpdir(), 'codiscuss-relay-'));
   t.after(() => rmSync(home, { recursive: true, force: true }));
   const link = machine_link(home, 'https://site.test/');
@@ -1132,31 +1132,21 @@ test('relayed launches resolve projects locally and report back to the paired si
   assert.match(project.id, /^[0-9a-f]{16}$/);
   assert.equal(save_launch_projects(home, { projects: [{ ...project, name: '改名' }] }).projects[0].id, project.id);
 
-  const room = { title: '远程', mode: 'free', members: [], submission_id: 'relay-1' };
-  assert.equal(local_request(home, 'https://site.test', { token: 't', room, local_project: project.id }).cwd, home);
-  assert.throws(() => local_request(home, 'https://site.test', { token: 't', room, cwd: home }), /已配置的项目/);
-  assert.throws(() => local_request(home, 'https://site.test', { token: 't', room, local_project: 'deadbeef' }), /已从这台电脑移除/);
-
-  const calls = [], original = globalThis.fetch;
+  const calls = [], logged = [], original = globalThis.fetch;
   t.after(() => { globalThis.fetch = original; });
-  const launches = [{ id: 'relay-1', request: { token: 't', room, local_project: project.id } },
-    { id: 'relay-2', request: { token: 't', room: { ...room, submission_id: 'relay-2' }, local_project: 'deadbeef' } }];
+  // A site answering with old-style launch tasks (as a controlled site could) gets no launch and no claim.
+  const launches = [{ id: 'relay-1', request: { token: 't', room: { title: '远程', members: [] }, participants: { Codex: { project_access: 'full' } } } }];
   globalThis.fetch = async (url, options) => {
     calls.push({ url, token: options.headers['X-Machine-Token'], body: JSON.parse(options.body) });
     return new Response(JSON.stringify(url.endsWith('/sync') ? { launches } : { status: 'ok' }), { status: 200 });
   };
-  const started = [];
-  await sync_remote_launches(home, { launch: async (_, input, options) => { started.push({ input, options }); return { room: { id: 'room-9' }, status: 'free' }; } });
+  await sync_remote_launches(home, { log: line => logged.push(line) });
   const { public_key, ...published } = calls[0].body;
   assert.deepEqual(published, { projects: [{ id: project.id, name: '改名' }], clients: {} });
   assert.deepEqual(Object.keys(public_key).sort(), ['crv', 'kty', 'x', 'y']);
   assert.equal(link.private_key, undefined, 'the browser forwards the pairing, so it never carries the private key');
-  assert.ok(calls.every(call => call.token === link.token && call.url.startsWith(`https://site.test/api/machines/${link.id}/`)));
-  assert.deepEqual(started.map(item => [item.input.cwd, item.input.site, item.input.entry, item.options.browser_request]), [[home, 'https://site.test', 'web', true]]);
-  assert.deepEqual(calls.slice(1).map(call => call.body.action), ['claim', 'finish', 'claim', 'fail']);
-  assert.equal(calls[2].body.room_id, 'room-9');
-  assert.match(calls[4].body.error, /已从这台电脑移除/);
-  assert.equal(calls[4].body.stage, 'not_started');
+  assert.equal(calls.length, 1, 'only the sync itself: nothing is claimed or launched');
+  assert.match(logged[0], /已忽略/);
 
   unlink_machine(home, 'https://site.test');
   calls.length = 0;

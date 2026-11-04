@@ -91,7 +91,11 @@ export function guard_remote_request(command, input, { projects, participants, h
     if (key === 'cwd' && value) remote_directory(value, { roots, home });
     else if (SOFTWARE_FIELDS.includes(key) && value && !known[key].has(value)) throw new Error(`其他设备不能更改软件位置（${key}），请在电脑上设置`);
     else if (key === 'project_access' && value === 'full') throw new Error('“全放开”只能在电脑上设置');
+    // `own` comes only from taking over a session on this computer; it may write, so another device cannot claim it.
+    else if (key === 'project_access' && value === 'own') throw new Error('沿用原会话权限（own）只能在电脑上接管会话时产生');
     else if (key === 'project_access' && ['write', 'auto'].includes(value)) writes = true;
+    // An approved tool such as a shell can change files whatever the member's level says.
+    else if (key === 'allowed_tools' && Array.isArray(value) && value.length) writes = true;
   });
   // Saved presets and workflow cards only describe access; it takes effect in a room, which is checked here.
   if (writes && WRITE_COMMANDS.has(command)) {

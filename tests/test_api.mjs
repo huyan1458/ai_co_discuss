@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import { spawn } from 'node:child_process';
 import { randomUUID } from 'node:crypto';
-import { mkdtempSync, readFileSync, rmSync } from 'node:fs';
+import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { createServer } from 'node:http';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -359,12 +359,21 @@ test('read-aloud sends the saved key only to Volcengine and joins chunked audio'
   try {
     await assert.rejects(tts_speak(home, { text: '你好' }), /尚未配置语音/);
     const { api_key_ref } = save_api_key(home, { base_url: TTS_BASE_URL, api_key: SECRET });
-    save_tts_settings(home, { speaker: 'zh_female_vv_uranus_bigtts', speech_rate: 20, context: '自然一点', api_key_ref });
+    // Settings saved before services could be chosen are read as Volcengine's, so the key and voices carry over.
+    writeFileSync(join(home, 'tts-settings.json'), JSON.stringify({ speaker: 'zh_female_vv_uranus_bigtts', speech_rate: 20, context: '自然一点',
+      member_voices: { Codex: 'zh_male_m191_uranus_bigtts' }, file_voice: '', api_key_ref }));
+    const legacy = tts_settings(home);
+    assert.equal(legacy.provider, 'volcengine');
+    assert.equal(legacy.api_key_ref, api_key_ref);
+    assert.equal(legacy.stt_key_ref, api_key_ref);
+    assert.deepEqual(legacy.member_voices, { Codex: 'zh_male_m191_uranus_bigtts' });
+    save_tts_settings(home, legacy);
+    assert.equal(tts_settings(home).providers.volcengine.api_key_ref, api_key_ref);
     assert.equal(JSON.stringify(tts_settings(home)).includes(SECRET), false);
     let sent;
     const body = `{"code":0,"data":"${Buffer.from('ab').toString('base64')}"}\n{"code":0,"data":null,"sentence":{"text":"}"}}{"code":0,"data":"${Buffer.from('c').toString('base64')}"}{"code":20000000,"message":"ok","data":null}`;
     const section_id = randomUUID();
-    const result = await tts_speak(home, { text: '你好', section_id }, async (url, init) => { sent = { url, init }; return new Response(body); });
+    const result = await tts_speak(home, { text: '你好', section_id }, { request: async (url, init) => { sent = { url, init }; return new Response(body); } });
     assert.equal(Buffer.from(result.audio, 'base64').toString(), 'abc');
     assert.equal(sent.url, `${TTS_BASE_URL}/api/v3/tts/unidirectional`);
     assert.equal(sent.init.headers['X-Api-Key'], SECRET);
@@ -373,13 +382,74 @@ test('read-aloud sends the saved key only to Volcengine and joins chunked audio'
     assert.deepEqual(JSON.parse(request.req_params.additions), { context_texts: ['自然一点'], section_id });
     assert.equal(request.req_params.audio_params.enable_subtitle, true);
     // The same paragraph again comes from the local cache without calling the service.
-    assert.equal((await tts_speak(home, { text: '你好' }, async () => { throw new Error('not cached'); })).cached, true);
-    await tts_speak(home, { text: '再见', speaker: 'zh_male_m191_uranus_bigtts', silence_ms: 700 }, async (url, init) => { sent = { url, init }; return new Response(body); });
+    assert.equal((await tts_speak(home, { text: '你好' }, { request: async () => { throw new Error('not cached'); } })).cached, true);
+    // The same paragraph asked twice at once (two devices) is synthesized and billed once.
+    let calls = 0;
+    const once = { request: async () => { calls += 1; await new Promise(resolve => setTimeout(resolve, 20)); return new Response(body); } };
+    const [first, second] = await Promise.all([tts_speak(home, { text: '同时' }, once), tts_speak(home, { text: '同时' }, once)]);
+    assert.equal(calls, 1);
+    assert.equal(first.audio, second.audio);
+    await tts_speak(home, { text: '再见', speaker: 'zh_male_m191_uranus_bigtts', silence_ms: 700 }, { request: async (url, init) => { sent = { url, init }; return new Response(body); } });
     const other = JSON.parse(sent.init.body);
     assert.equal(other.req_params.speaker, 'zh_male_m191_uranus_bigtts');
     assert.equal(JSON.parse(other.req_params.additions).silence_duration, 700);
-    await assert.rejects(tts_speak(home, { text: '换一句' }, async () => new Response('{"code":45000000,"message":"denied"}')), /音色不可用/);
+    await assert.rejects(tts_speak(home, { text: '换一句' }, { request: async () => new Response('{"code":45000000,"message":"denied"}') }), /音色不可用/);
     await assert.rejects(tts_speak(home, { text: '字'.repeat(301) }), /不超过 300 字/);
+  } finally { rmSync(home, { recursive: true, force: true }); }
+});
+
+test('read-aloud switches to Aliyun or Azure with their own keys, keeping Volcengine for voice input', async () => {
+  const { save_tts_settings, tts_settings, tts_speak, TTS_BASE_URL } = await import('../runner/tts.mjs');
+  const home = mkdtempSync(join(tmpdir(), 'codiscuss-tts-'));
+  try {
+    const volc = save_api_key(home, { base_url: TTS_BASE_URL, api_key: 'volc-key' }).api_key_ref;
+    const aliyun = save_api_key(home, { base_url: 'https://dashscope.aliyuncs.com', api_key: 'aliyun-key' }).api_key_ref;
+    const azure = save_api_key(home, { base_url: 'https://tts.speech.microsoft.com', api_key: 'azure-key' }).api_key_ref;
+    save_tts_settings(home, { provider: 'aliyun', speech_rate: 20, providers: { volcengine: { api_key_ref: volc }, aliyun: { api_key_ref: aliyun, speaker: 'longanwen_v3' } } });
+    const chosen = tts_settings(home);
+    assert.equal(chosen.api_key_ref, aliyun);
+    assert.equal(chosen.stt_key_ref, volc, 'voice input keeps the Volcengine key');
+    // Aliyun answers over a duplex socket: run-task, then the text and finish-task once started; audio comes as binary frames.
+    const sent = [];
+    let headers;
+    const open = (url, init) => {
+      headers = init.headers;
+      const reply = (data) => queueMicrotask(() => socket.onmessage({ data }));
+      const sentence = (index, words) => JSON.stringify({ header: { event: 'result-generated' }, payload: { output: { type: 'sentence-end', sentence: { index, words } } } });
+      const socket = { close: () => {}, send: (data) => {
+        const message = JSON.parse(data);
+        sent.push(message);
+        if (message.header.action === 'run-task') reply(JSON.stringify({ header: { event: 'task-started' } }));
+        if (message.header.action !== 'finish-task') return;
+        reply(new Uint8Array([1, 2]).buffer);
+        reply(sentence(0, [{ text: '你', begin_time: 0, end_time: 200 }, { text: '好', begin_time: 200, end_time: 400 }]));
+        reply(sentence(1, [{ text: '啊', begin_time: 0, end_time: 300 }]));
+        reply(JSON.stringify({ header: { event: 'task-finished' } }));
+      } };
+      queueMicrotask(() => socket.onopen());
+      return socket;
+    };
+    const spoken = await tts_speak(home, { text: '你好。啊', silence_ms: 48 }, { open });
+    assert.equal(headers.Authorization, 'Bearer aliyun-key');
+    assert.deepEqual(sent.map(message => message.header.action), ['run-task', 'continue-task', 'finish-task']);
+    assert.equal(sent[0].payload.parameters.voice, 'longanwen_v3');
+    assert.equal(sent[0].payload.parameters.rate, 1.2);
+    assert.equal(sent[1].payload.input.text, '你好。啊');
+    assert.deepEqual(spoken.marks, [{ w: '你', t: 0 }, { w: '好', t: 200 }, { w: '啊', t: 400 }], 'sentence timings are laid end to end');
+    assert.equal(Buffer.from(spoken.audio, 'base64').length, 2 + 2 * 96, 'trailing silence is two silent 24 ms frames');
+    // Azure needs its region before it is ready, then speaks SSML over REST with the key in its own header.
+    const providers = (azure_part) => ({ ...tts_settings(home).providers, azure: azure_part });
+    save_tts_settings(home, { ...tts_settings(home), provider: 'azure', providers: providers({ api_key_ref: azure }) });
+    assert.equal(tts_settings(home).api_key_ref, '', 'Azure without a region is not ready');
+    await assert.rejects(tts_speak(home, { text: '你好' }), /Azure 区域/);
+    save_tts_settings(home, { ...tts_settings(home), providers: providers({ api_key_ref: azure, region: 'EastAsia' }) });
+    let call;
+    const azure_audio = await tts_speak(home, { text: 'a<b' }, { request: async (url, init) => { call = { url, init }; return new Response(new Uint8Array([7])); } });
+    assert.equal(call.url, 'https://eastasia.tts.speech.microsoft.com/cognitiveservices/v1');
+    assert.equal(call.init.headers['Ocp-Apim-Subscription-Key'], 'azure-key');
+    assert.match(call.init.body, /<voice name="zh-CN-XiaoxiaoNeural"><prosody rate="\+20%">a&#60;b<\/prosody>/);
+    assert.deepEqual(Buffer.from(azure_audio.audio, 'base64'), Buffer.from([7]));
+    await assert.rejects(tts_speak(home, { text: '再试' }, { request: async () => new Response('', { status: 401 }) }), /Azure 拒绝/);
   } finally { rmSync(home, { recursive: true, force: true }); }
 });
 
@@ -389,7 +459,7 @@ test('voice input joins ordered parts into one WAV and returns the recognized te
   const home = mkdtempSync(join(tmpdir(), 'codiscuss-stt-'));
   try {
     const { api_key_ref } = save_api_key(home, { base_url: TTS_BASE_URL, api_key: SECRET });
-    save_tts_settings(home, { api_key_ref });
+    save_tts_settings(home, { providers: { volcengine: { api_key_ref } } });
     const upload_id = randomUUID();
     let sent;
     const recognize = async (url, init) => { sent = { url, init };

@@ -10,6 +10,8 @@ const local = computed(() => view.value.admin.local);
 const remote = computed(() => !local.value && view.value.launch.available && view.value.launch.remote);
 const device = computed(() => view.value.device);
 const devices = ref(null);
+const audit = ref([]);
+const audit_open = ref(false);
 const busy = ref("");
 const code = ref("");
 const temporary = ref(false);
@@ -34,7 +36,11 @@ async function run(name, task, success = "") {
 /** Read the device list; an unpaired browser learns here that it must pair first. */
 function load() {
   if (!local.value && !remote.value) return;
-  return run("list", async () => { devices.value = (await bridge.device.request("device-list")).devices; });
+  return run("list", async () => {
+    const result = await bridge.device.request("device-list");
+    devices.value = result.devices;
+    audit.value = result.audit || [];
+  });
 }
 onMounted(load);
 watch(remote, (value) => { if (value) load(); });
@@ -55,19 +61,37 @@ async function pair() {
 /** Show a two-minute code and the QR code a phone camera can open, for pairing another device. */
 function add_device() {
   return run("invite", async () => {
-    const result = await bridge.device.request("device-pairing", { temporary: temporary.value });
+    const result = await bridge.device.invite(temporary.value);
     invite.value = { ...result, svg: result.url ? renderSVG(result.url, { border: 1 }) : "" };
   });
 }
 
+/** Revoke a device on the computer, then remove its passkeys from the website's login list too (needs a website login). */
 async function revoke(item) {
-  if (await run("revoke", () => bridge.device.request("device-revoke", { device_id: item.id }), item.current ? "这台设备已取消配对" : "该设备已撤销")) await load();
+  let left = 0;
+  const done = await run("revoke", async () => {
+    const { passkeys = [] } = await bridge.device.request("device-revoke", { device_id: item.id });
+    if (local.value) { left = passkeys.length; return; }
+    for (const id of passkeys) await bridge.admin.delete_passkey(id).catch(() => { left += 1; });
+  }, item.current ? "这台设备已取消配对" : "该设备已撤销");
+  // The computer's own page has no website login; the website's passkey list must then be cleared from a signed-in device.
+  if (done && left) bridge.notify("warning", "这台设备在网站上的通行密钥未能一并删除：请在已登录网站的设备上打开 设置 → 账号 → 网站登录，删除它");
+  if (done) await load();
 }
 
 async function revoke_write(item, grant) {
   if (await run("revoke", () => bridge.device.request("write-revoke", { device_id: item.id, room_id: grant.room_id }), "已撤销远程可写")) await load();
 }
 
+// What the computer recorded about other devices: trust changes and remote writes, never their content.
+const AUDIT_EVENTS = { "device.paired": "配对了新设备", "device.revoked": "撤销了设备", "device.renewed": "设备续期", "pairing.started": "生成了配对码",
+  "passkey.registered": "创建了通行密钥", "write.granted": "开启远程可写", "write.revoked": "撤销远程可写" };
+const device_name = (id) => !id ? "电脑本机" : devices.value?.find((item) => item.id === id)?.label || `已撤销的设备（${id.slice(0, 6)}）`;
+function audit_text(entry) {
+  if (entry.event === "command") return `${device_name(entry.device)} 远程执行 ${entry.action}${entry.route ? ` ${entry.route}` : ""}${entry.status >= 400 ? "（被拒绝）" : ""}`;
+  const subject = entry.event === "device.paired" ? `${entry.label || "新设备"}${entry.temporary ? "（临时）" : ""}` : device_name(entry.device);
+  return `${AUDIT_EVENTS[entry.event] || entry.event}：${subject}${entry.room ? ` · ${room_title(entry.room)}` : ""}`;
+}
 const room_title = (room_id) => view.value.rooms?.find((room) => room.id === room_id)?.title || room_id;
 const date = (time) => new Date(time).toLocaleString("zh-CN", { month: "numeric", day: "numeric", hour: "2-digit", minute: "2-digit" });
 </script>
@@ -89,6 +113,7 @@ const date = (time) => new Date(time).toLocaleString("zh-CN", { month: "numeric"
       这台设备的授权已到期。<UButton label="用通行密钥续期" color="neutral" variant="soft" size="xs" :loading="busy === 'renew'" :disabled="Boolean(busy)" @click="run('renew', async () => { await bridge.device.renew(); await load(); })" />
     </p>
     <template v-else>
+      <p v-if="devices && devices.length < 2" class="fine-print">建议至少配对两台设备（例如手机和平板）：丢失其中一台时，还能在外面用另一台撤销它、配对新设备。</p>
       <ul v-if="devices" class="account-device-list">
         <li v-for="item in devices" :key="item.id">
           <span>
@@ -103,6 +128,13 @@ const date = (time) => new Date(time).toLocaleString("zh-CN", { month: "numeric"
         </li>
         <li v-if="!devices.length" class="device-empty">还没有配对的设备</li>
       </ul>
+      <div v-if="audit.length" class="device-audit">
+        <button type="button" class="device-link" @click="audit_open = !audit_open">{{ audit_open ? "收起" : "查看" }}最近记录（{{ audit.length }}）</button>
+        <ul v-if="audit_open" aria-label="最近记录">
+          <li v-for="(entry, index) in audit" :key="index"><small>{{ date(entry.at) }}</small> {{ audit_text(entry) }}</li>
+        </ul>
+        <p v-if="audit_open" class="fine-print">记录由电脑保存。看到不是你做的操作，立即撤销对应设备并更改密码。</p>
+      </div>
       <div class="device-actions">
         <UButton v-if="remote && current && !current.passkeys" label="创建通行密钥" color="neutral" variant="soft" size="sm" :loading="busy === 'passkey'" :disabled="Boolean(busy)" @click="run('passkey', () => bridge.device.create_passkey())" />
         <UButton v-if="remote && renew_due" label="续期这台设备" color="neutral" variant="soft" size="sm" :loading="busy === 'renew'" :disabled="Boolean(busy)" @click="run('renew', async () => { await bridge.device.renew(); await load(); })" />
@@ -133,6 +165,9 @@ const date = (time) => new Date(time).toLocaleString("zh-CN", { month: "numeric"
 .account-device-list small { color: var(--ui-text-muted); font-size: 11px; }
 .device-grant { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; }
 .device-link { color: var(--channel-accent); font-size: 11px; text-decoration: underline; }
+.device-audit { width: 100%; }
+.device-audit ul { display: flex; flex-direction: column; gap: 2px; max-height: 220px; margin: 6px 0 0; padding: 0; overflow-y: auto; list-style: none; font-size: 12px; }
+.device-audit small { color: var(--ui-text-muted); }
 .device-empty { color: var(--ui-text-dimmed); font-size: 12px; }
 .device-actions { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; }
 .device-invite { display: flex; flex-wrap: wrap; align-items: center; gap: 12px; padding: 10px; border: 1px solid var(--ui-border); border-radius: 10px; }

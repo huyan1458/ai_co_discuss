@@ -42,6 +42,8 @@ from .message_queue import drain as drain_queue, enqueue, queue_action, queue_vi
 from .room_import import import_room, imported_attachment
 from .runtime import (begin_write, limit_values, owner_proxy_token, require_owner, token_hash,
                      enforce_session_limits, room_limits_view, session_limits_view)
+from .goal_room import goal_action, goal_view
+from .mode_room import apply_mode_command, check_mode_command, finish_mode, mode_view
 from .session_room import (cancel_plan, complete_session_requests, current_session, discussion_action,
                            get_session_request, query_session_requests, roster_view as session_roster_view,
                            session_message_access, session_room, create_plan, continue_plan, ask_interjection, update_session_limits,
@@ -395,6 +397,7 @@ def require_room(connection, room_id):
     room["host_arrangements"] = host_arrangements(connection, room_id, room["scheduler_decisions"])
     room["cancelled_turns"] = cancelled_turns(connection, room_id)
     room["free"] = free_view(connection, room_id)
+    room["goal_state"] = goal_view(connection, room_id)
     room["descriptions"] = member_descriptions(connection, room_id)
     room["labels"] = member_labels(connection, room_id)
     room["withdrawals"] = withdrawals(connection, room_id)
@@ -842,6 +845,8 @@ def manage_room(connection, room_id, action, payload):
 def delete_room_records(connection, room_id):
     """Remove a room's dependent records in the caller's transaction."""
     connection.execute("DELETE FROM task_message_sources WHERE session_id IN (SELECT id FROM discussion_sessions WHERE room_id=?)", (room_id,))
+    connection.execute("DELETE FROM goal_continuations WHERE room_id=?", (room_id,))
+    connection.execute("DELETE FROM room_goals WHERE room_id=?", (room_id,))
     connection.execute("DELETE FROM discussion_sessions WHERE room_id=?", (room_id,))
     for table in ("member_recommendations", "free_queue", "queued_messages", "queued_message_pauses", "speaking_orders", "member_requests", "member_descriptions", "member_labels", "execution_notes", "execution_segments", "execution_capabilities", "late_answers", "member_executions", "member_capabilities", "member_sessions", "member_adopt_failures", "member_registrations", "room_members", "room_modes", "free_batches", "free_chains", "free_handoffs", "free_round_limits", "free_chain_holds",
                   "scheduler_decisions", "scheduler_routing", "discussion_conclusions", "discussion_sessions"):
@@ -1147,7 +1152,9 @@ def append_free_message(connection, room, payload, actor):
         raise ValueError("房间已存档；恢复后才能继续协作")
     check_message_references(connection, room_id, expected)
     check_message_attachments(connection, room_id, submitted_by, identifiers)
-    if actor == "用户" and should_queue(connection, room_id, payload):
+    # `/goal` and `/discuss` are commands: checked before saving, never queued, and not routed to members.
+    mode_command = check_mode_command(connection, room_id, payload) if actor == "用户" else None
+    if actor == "用户" and not mode_command and should_queue(connection, room_id, payload):
         return {**enqueue(connection, room_id, payload), "queue": queue_view(connection, room_id)}
     if actor != "用户":
         check_answer(connection, room_id, actor, payload)
@@ -1158,11 +1165,16 @@ def append_free_message(connection, room, payload, actor):
                        (cursor.lastrowid, "chat", submitted_by))
     connection.execute("INSERT INTO message_summaries (message_id,text,author) VALUES (?,?,?)",
                        (cursor.lastrowid, expected["summary"], expected["summary_by"]))
+    if actor == "用户" and payload.get("remote_entry") is True:
+        connection.execute("INSERT INTO remote_entry_messages (message_id,room_id) VALUES (?,?)", (cursor.lastrowid, room_id))
     for position, identifier in enumerate(identifiers):
         connection.execute("UPDATE attachments SET message_id=?,position=? WHERE id=?", (cursor.lastrowid, position, identifier))
     save_suggestions(connection, room_id, cursor.lastrowid, actor, payload)
     save_review_plan(connection, room_id, cursor.lastrowid, review_plan)
-    after_free_message(connection, room_id, cursor.lastrowid, actor, payload)
+    if mode_command:
+        apply_mode_command(connection, room_id, cursor.lastrowid, mode_command)
+    else:
+        after_free_message(connection, room_id, cursor.lastrowid, actor, payload)
     complete_session_requests(connection, room_id, payload, actor, cursor.lastrowid)
     saved_message = connection.execute(f"{MESSAGE_QUERY} WHERE messages.id=?", (cursor.lastrowid,)).fetchone()
     return {"message": message_with_attachments(connection, saved_message), "duplicate": False}
@@ -1630,6 +1642,11 @@ class DiscussionServer(ThreadingHTTPServer):
         super().server_close()
 
 
+# The administrator login lives in an HttpOnly cookie (same name and lifetime as backend/worker.mjs).
+ADMIN_COOKIE = "codiscuss_admin"
+ADMIN_COOKIE_SECONDS = 30 * 86400
+
+
 class DiscussionHandler(BaseHTTPRequestHandler):
     """Serve the browser UI and explicit plain-text discussion endpoints."""
 
@@ -1672,6 +1689,10 @@ class DiscussionHandler(BaseHTTPRequestHandler):
         self.send_header("Content-Length", str(len(data)))
         self.send_header("Cache-Control", "no-store")
         self.send_header("Referrer-Policy", "no-referrer")
+        if getattr(self, "login_cookie", None) is not None:
+            self.send_header("Set-Cookie", f"{ADMIN_COOKIE}={self.login_cookie}; Path=/; HttpOnly; Secure; SameSite=Strict; "
+                                           f"Max-Age={ADMIN_COOKIE_SECONDS if self.login_cookie else 0}")
+            self.login_cookie = None
         if getattr(self, "bridge_origin", None):
             self.send_header("Access-Control-Allow-Origin", self.bridge_origin)
             self.send_header("Vary", "Origin")
@@ -1943,7 +1964,11 @@ class DiscussionHandler(BaseHTTPRequestHandler):
         return self.respond(json.loads(result.stdout))
 
     def admin_token(self):
-        """The administrator session token supplied by the browser."""
+        """The administrator login from its HttpOnly cookie, or from the header scripts and tests use."""
+        for item in self.headers.get("Cookie", "").split(";"):
+            name, _, value = item.strip().partition("=")
+            if name == ADMIN_COOKIE:
+                return value
         return self.headers.get("X-Discussion-Admin", "")
 
     def local_visitor(self):
@@ -2023,6 +2048,11 @@ class DiscussionHandler(BaseHTTPRequestHandler):
             raise LookupError("地址不存在")
         result = actions[parts[2]]()
         connection.commit()
+        # A new login goes into an HttpOnly cookie only, so page scripts never see the token; logging out clears it.
+        if parts[2] in ("register", "login") and "token" in result:
+            self.login_cookie = result.pop("token")
+        elif parts[2] == "logout":
+            self.login_cookie = ""
         return self.respond(result, 201 if parts[2] == "register" else 200)
 
     def handle_remote_launch_api(self, connection, parts, method):
@@ -2143,6 +2173,22 @@ class DiscussionHandler(BaseHTTPRequestHandler):
             if method == "POST":
                 result = discussion_action(connection, room_id, token, self.read_payload(), require_room(connection, room_id))
                 drain_room_queue(connection, room_id)
+                connection.commit()
+                return self.respond(result)
+            raise LookupError("地址不存在")
+        if parts[3:] == ["mode"]:
+            if method == "GET":
+                return self.respond(mode_view(connection, room_id))
+            if method == "POST":
+                result = finish_mode(connection, room_id, token, self.read_payload())
+                connection.commit()
+                return self.respond(result)
+            raise LookupError("地址不存在")
+        if parts[3:] == ["goal"]:
+            if method == "GET":
+                return self.respond(goal_view(connection, room_id))
+            if method == "POST":
+                result = goal_action(connection, room_id, token, self.read_payload())
                 connection.commit()
                 return self.respond(result)
             raise LookupError("地址不存在")
@@ -2299,6 +2345,10 @@ class DiscussionHandler(BaseHTTPRequestHandler):
             if method == "GET":
                 return self.respond(query_messages(connection, room_id, params, token))
             payload = self.read_payload()
+            # Only this server decides whether a message came through the remote entry; a client cannot set or clear it.
+            payload.pop("remote_entry", None)
+            if self.server.hub is not self.server:
+                payload["remote_entry"] = True
             result = append_message(connection, room_id, payload, free_actor)
             drain_room_queue(connection, room_id)
             connection.commit()

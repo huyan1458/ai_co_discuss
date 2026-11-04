@@ -4,6 +4,7 @@ import { computed, inject, nextTick, onBeforeUnmount, onMounted, ref, watch } fr
 import { format_duration } from "./LimitPicker.vue";
 import ChainRoundsField from "./ChainRoundsField.vue";
 import DiscussionLimits from "./DiscussionLimits.vue";
+import GoalConfig from "./GoalConfig.vue";
 import ExpertCard from "./ExpertCard.vue";
 import ProjectDirectoryField from "./ProjectDirectoryField.vue";
 import RosterAdd from "./RosterAdd.vue";
@@ -22,6 +23,10 @@ const write = (key, next) => bridge.write_field(field_id(key), next);
 
 // Every new room is a collaboration room; a discussion is only an optional way to push it forward, opened right away or later.
 const discussing = computed(() => Boolean(view.value.create_discussion));
+// A goal is the other way to push the room forward; it also needs a host the local service wakes.
+const goal = computed(() => view.value.create_goal);
+const driven = computed(() => discussing.value || Boolean(goal.value));
+const goal_config = ref(null);
 const selected = computed(() => view.value.experts[EXPERT_CONTAINER] || {});
 // Cards in the library are types; each selected name is one instance, e.g. Claude and Claude-2.
 // The view lists members in platform order; remember the order they were added in so a new card lands at the end.
@@ -37,7 +42,7 @@ const library = ref(null);
 const host = computed(() => value("host"));
 // Members that submit their own answers can host; web members only read. The user is the client, never the host.
 // A discussion's host is continued by the local service, so it cannot be a manual member.
-const host_options = computed(() => selected_names.value.filter((name) => !discussing.value || selected.value[name] !== "manual"));
+const host_options = computed(() => selected_names.value.filter((name) => !driven.value || selected.value[name] !== "manual"));
 const limit_picker = ref(null);
 // A room needs the local service only for the members it wakes, smart scheduling or a discussion.
 const woken_names = computed(() => selected_names.value.filter((name) => selected.value[name] === "cli"));
@@ -71,8 +76,10 @@ let connection_timer = 0;
 /** Why the create button is disabled, in the order the user can fix it. */
 const blocker = computed(() => {
   if (discussing.value && selected.value[host.value] !== "cli") return "开启讨论需要先添加一位由本机唤醒的主持人";
+  if (goal.value && selected.value[host.value] !== "cli") return "开启 Goal 需要先添加一位由本机唤醒的主持人";
+  if (goal.value && !goal.value.objective.trim()) return "填写 Goal 目标";
   if (needs_connection.value) return "先连接本机服务，或把成员改为手动启动";
-  if (discussing.value && !launchable.value) return "先连接本机服务";
+  if (driven.value && !launchable.value) return "先连接本机服务";
   const unready = woken_names.value.filter((name) => !launch_ready(name));
   if (unready.length && relay.value) return `在电脑「${relay.value.name}」上配置 ${unready.join("、")}`;
   return unready.length ? `补齐 ${unready.join("、")} 的接入配置` : scheduler_unready.value ? "补齐决策模型配置，或移出决策模型" : "";
@@ -90,9 +97,20 @@ onMounted(() => {
 });
 onBeforeUnmount(() => window.clearInterval(connection_timer));
 
-/** Opening a discussion needs a host the local service wakes, so the host moves off a manual member. */
-function toggle_discussion(enabled) {
-  bridge.write_create_discussion(enabled);
+// After creation the room may stay free, open a discussion or open a goal: one choice, since they exclude each other.
+const DRIVE_OPTIONS = [{ value: "free", label: "自由协作" }, { value: "discussion", label: "开启讨论" }, { value: "goal", label: "开启 Goal" }];
+const DRIVE_HINTS = {
+  free: "成员被点名时工作，做完就停下等你。讨论和 Goal 都可以建房后再开启。",
+  discussion: "主持人安排成员轮流发言，到上限或结束后回到自由协作。",
+  goal: "主持人持续推进一个目标，房间空闲时自动接着做，直到完成、卡住或你结束。",
+};
+const drive = computed(() => discussing.value ? "discussion" : goal.value ? "goal" : "free");
+
+/** Pick how the new room moves forward; both a discussion and a goal need a host the local service wakes. */
+function choose_drive(value) {
+  if (value === "goal") bridge.write_create_goal({});
+  else if (value === "discussion") bridge.write_create_discussion(true);
+  else { bridge.write_create_discussion(false); bridge.write_create_goal(null); }
   nextTick(ensure_host);
 }
 
@@ -101,7 +119,7 @@ const has_local = (name) => bridge.launch_clients[name]?.some((item) => item.val
 /** Each member chooses its delivery: woken by the local service, or started by hand. A web AI joins as a manual member. */
 // Manual needs no local software, so any platform can be pasted into whichever AI the user runs by hand.
 // A workflow's agents are temporary members the program starts; they are never joined by hand.
-const access_choices = (name) => discussing.value && name === host.value ? [] : workflow_of(name) ? ["cli"] : ["cli", "manual"];
+const access_choices = (name) => driven.value && name === host.value ? [] : workflow_of(name) ? ["cli"] : ["cli", "manual"];
 
 /** Store one selected expert's delivery, already prepared by its card, and keep the host valid. */
 function set_expert_mode(name, mode) {
@@ -153,6 +171,10 @@ async function choose_workflow(id) {
   ensure_host();
 }
 
+// The members the chosen workflow brought that are still in the form; once the user removes them all, the choice goes too.
+const workflow_members = computed(() => Object.values(view.value.create_workflow?.members || {}).filter((name) => selected.value[name]));
+watch(() => view.value.create_workflow && !workflow_members.value.length, (orphaned) => { if (orphaned) act("choose_create_workflow", ""); });
+
 /** Remove a role, repair the host and return keyboard focus to the library entry. */
 function remove_expert(name) {
   set_expert_mode(name, "");
@@ -163,6 +185,7 @@ function remove_expert(name) {
 function submit() {
   if (submit_disabled.value) return;
   limit_picker.value?.settle();
+  goal_config.value?.settle();
   emit("submit");
 }
 
@@ -173,6 +196,7 @@ const summary = computed(() => {
     const rounds = value("limit-max_rounds"), minutes = value("limit-max_minutes");
     parts.push("开启讨论", [rounds && Number(rounds) ? `${rounds} 轮` : "不限轮次", minutes && Number(minutes) ? format_duration(Number(minutes)) : "不限时长"].join(" / "));
   }
+  if (goal.value) parts.push("开启 Goal");
   return parts.join(" · ");
 });
 </script>
@@ -196,7 +220,6 @@ const summary = computed(() => {
       <section class="create-section">
         <h3><span>2</span>谁来参与</h3>
         <RosterAdd ref="library" label="添加 AI" :items="library_items" @add="add_expert" @remove="(value) => bridge.delete_expert_preset(value.slice(PRESET_PREFIX.length))" />
-        <WorkflowPicker :selected="view.create_workflow?.id || ''" @choose="choose_workflow" />
         <div v-if="selected_names.length" class="create-experts" role="group" aria-label="参与的 AI">
           <ExpertCard v-for="name in selected_names" :key="name" :name="name" :mode="selected[name]" :choices="access_choices(name)"
             :status="expert_status(name)" :host="host === name" :hostable="host_options.includes(name)" hosting :workflow="workflow_of(name)"
@@ -212,13 +235,22 @@ const summary = computed(() => {
 
       <section class="create-section">
         <h3><span>3</span>协作方式（可选）</h3>
+        <WorkflowPicker :selected="view.create_workflow?.id || ''" :members="workflow_members.map((name) => bridge.member_label(name))" @choose="choose_workflow" />
         <HostWorkflowSwitch v-if="view.launch.available || view.launch.remote" :model-value="Boolean(view.create_host_workflows)" @update:model-value="bridge.write_create_host_workflows($event)" />
-        <UCheckbox :model-value="discussing" label="创建后开启讨论" description="主持人安排成员轮流发言，到上限或结束后回到自由协作。也可以建房后再开启。" @update:model-value="toggle_discussion($event)" />
+        <div class="create-drive">
+          <span>创建后</span>
+          <div class="expert-card-modes" role="radiogroup" aria-label="创建后的推进方式">
+            <button v-for="option in DRIVE_OPTIONS" :key="option.value" type="button" role="radio" :aria-checked="drive === option.value" @click="choose_drive(option.value)">{{ option.label }}</button>
+          </div>
+        </div>
+        <p class="fine-print create-drive-hint">{{ DRIVE_HINTS[drive] }}</p>
         <template v-if="discussing">
           <UFormField label="讨论目标" description="写下问题、背景和顾虑，主持人据此推进。"><UTextarea :model-value="value('goal')" :maxlength="1000" :rows="4" autoresize :maxrows="10" placeholder="例如：我们在 A、B 两个方案之间犹豫，主要顾虑是成本和上线时间……" class="w-full" @update:model-value="write('goal', $event)" /></UFormField>
           <DiscussionLimits ref="limit_picker" :rounds="Number(value('limit-max_rounds'))" :minutes="Number(value('limit-max_minutes'))" :named_followup="Boolean(view.named_followup)"
             @update:rounds="write('limit-max_rounds', String($event))" @update:minutes="write('limit-max_minutes', String($event))" @update:named_followup="bridge.write_named_followup($event)" />
         </template>
+        <GoalConfig v-if="goal" ref="goal_config" :objective="goal.objective" :continues="goal.max_continues" :minutes="goal.max_minutes"
+          @update:objective="bridge.write_create_goal({ objective: $event })" @update:continues="bridge.write_create_goal({ max_continues: $event })" @update:minutes="bridge.write_create_goal({ max_minutes: $event })" />
       </section>
 
       <details class="create-advanced">
@@ -228,9 +260,9 @@ const summary = computed(() => {
     </form>
     <footer class="create-footer">
       <div class="create-footer-row">
-        <span class="create-summary" :class="{ 'is-blocked': blocker }" :title="blocker || summary" role="status"><UIcon v-if="blocker" name="i-lucide-circle-alert" />{{ blocker ? `还差：${blocker}` : selected_names.length || discussing ? summary : "" }}</span>
+        <span class="create-summary" :class="{ 'is-blocked': blocker }" :title="blocker || summary" role="status"><UIcon v-if="blocker" name="i-lucide-circle-alert" />{{ blocker ? `还差：${blocker}` : selected_names.length || driven ? summary : "" }}</span>
         <UButton label="取消" color="neutral" variant="ghost" @click="emit('cancel')" />
-        <UButton type="submit" form="create-discussion-form" class="channel-primary-button" :icon="launching ? 'i-lucide-play' : 'i-lucide-plus'" :label="discussing ? '创建并开启讨论' : automatic ? '创建并连接' : '创建协作房间'" :disabled="submit_disabled" :loading="pending === 'create'" />
+        <UButton type="submit" form="create-discussion-form" class="channel-primary-button" :icon="launching ? 'i-lucide-play' : 'i-lucide-plus'" :label="discussing ? '创建并开启讨论' : goal ? '创建并开启 Goal' : automatic ? '创建并连接' : '创建协作房间'" :disabled="submit_disabled" :loading="pending === 'create'" />
       </div>
     </footer>
   </div>
@@ -240,6 +272,9 @@ const summary = computed(() => {
 /* A fixed height keeps the dialog still when switching room use or delivery adds or removes sections. */
 .create-discussion { display: flex; flex-direction: column; height: min(78dvh, 820px); }
 .create-scroll { flex: 1; min-height: 0; }
+.create-drive { display: flex; align-items: center; gap: 10px; color: var(--ui-text-dimmed); font-size: 12px; }
+.create-drive > .expert-card-modes { width: 300px; max-width: 100%; }
+.create-drive-hint { margin: -4px 0 0; }
 .create-scroll { overflow-y: auto; scrollbar-gutter: stable; padding: 20px 26px 24px; gap: 26px !important; }
 /* The folder label is a caption for the form, so it hugs the header and the first section. */
 .create-scroll > .channel-create-location { margin: -8px 0 -14px; }

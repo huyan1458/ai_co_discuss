@@ -187,10 +187,30 @@ def _start_submission(connection, room_id, payload):
     return {"submission_id": submission_id, "request_json": request_json, "session": session}
 
 
+def start_request(connection, room_id, token, payload):
+    """Check the host's `discuss_start` request from an owner's `/discuss`; it stands in for the owner's revision."""
+    member = require_member(connection, room_id, token)
+    if member["role"] != "host":
+        raise PermissionError("只有主持人能补全并开启讨论")
+    request = connection.execute("SELECT * FROM member_requests WHERE room_id=? AND id=?", (room_id, payload["request_id"])).fetchone()
+    if (not request or request["purpose"] != "discuss_start" or request["member_id"] != member["id"]
+            or request["status"] not in ("pending", "delivering")):
+        raise FileExistsError("讨论启动请求不存在、不属于你或已处理；只有用户的 /discuss 命令能由主持人开启讨论")
+    # The request is the one launch: a retry returns the same session, other content is refused.
+    payload["submission_id"] = f"discuss-start-{request['id']}"
+
+
 def start_session(connection, room_id, token, payload, room):
-    """Start an in-room discussion session without changing the room's free-collaboration mode."""
-    require_owner(connection, room_id, token)
+    """Start an in-room discussion session without changing the room's free-collaboration mode.
+
+    The owner starts with the revision just read; the host may instead start one bound to its `discuss_start` request.
+    """
     begin_write(connection)
+    by_host = payload.get("request_id") is not None
+    if by_host:
+        start_request(connection, room_id, token, payload)
+    else:
+        require_owner(connection, room_id, token)
     current = session_room(connection, room_id)
     submission = _start_submission(connection, room_id, payload)
     if submission and submission["session"]:
@@ -200,9 +220,12 @@ def start_session(connection, room_id, token, payload, room):
                 "revision": current["revision"], "duplicate": True}
     if room["archived"]:
         raise ValueError("房间已存档；恢复后才能开启讨论")
-    require_revision(current, payload, "开启讨论")
+    if not by_host:
+        require_revision(current, payload, "开启讨论")
     if current["session"]:
         raise FileExistsError("房间已有进行中的讨论会话")
+    if connection.execute("SELECT 1 FROM room_goals WHERE room_id=? AND status IN ('active','paused')", (room_id,)).fetchone():
+        raise FileExistsError("Goal 进行中；结束 Goal 后才能开启讨论")
     members = active_members(connection, room_id, registered_only=False)
     host = next((member for member in members.values() if member["role"] == "host" and member["access"] == "runner"), None)
     if not host:
@@ -210,7 +233,8 @@ def start_session(connection, room_id, token, payload, room):
     goal = str(payload.get("goal", room["goal"])).strip()
     if not goal or len(goal) > 1000:
         raise ValueError("讨论目标须为 1–1000 字")
-    limits = limit_values(payload.get("limits", {}), room_limits_view(connection, room_id))
+    # The host fills in only the goal: limits are the owner's, so a host start takes the room's defaults.
+    limits = limit_values({} if by_host else payload.get("limits", {}), room_limits_view(connection, room_id))
     named_followup = payload.get("named_followup", False)
     if type(named_followup) is not bool:
         raise ValueError("named_followup 须为布尔值")
@@ -337,6 +361,18 @@ def discussion_action(connection, room_id, token, payload, room):
     session = current["session"]
     if not session:
         raise FileExistsError("房间没有进行中的讨论")
+    if action == "end":
+        return end_session(connection, room_id, token, payload)
+    if action not in ("pause", "resume"):
+        raise ValueError("action 须为 start、pause、resume 或 end")
+    control_session(connection, session, action)
+    return session_room(connection, room_id)
+
+
+def control_session(connection, session, action):
+    """Pause, resume or stop an open session; the owner's revision or `/discuss` command was checked by the caller."""
+    if action == "stop":
+        return _conclude_session(connection, session, "user_stop")
     if action == "pause":
         if session["status"] != "active":
             raise FileExistsError("讨论已经暂停")
@@ -354,11 +390,7 @@ def discussion_action(connection, room_id, token, payload, room):
         if pause:
             create_host_request(connection, session["id"], "讨论已恢复，请检查队列并继续。",
                                 {"kind": "member_change", "key": f"resume-{session['id']}-{session['revision']}"})
-    elif action == "end":
-        return end_session(connection, room_id, token, payload)
-    else:
-        raise ValueError("action 须为 start、pause、resume 或 end")
-    return session_room(connection, room_id)
+    return None
 
 
 def update_session_limits(connection, room_id, token, payload):

@@ -45,6 +45,8 @@ test('a workflow saves as plain files, reads back the same, and refuses unsafe o
     [{ id: '../x' }, /工作流 ID/],
     [{ id: 'novel_serial' }, /工作流 ID/],
     [{ id: '-novel' }, /工作流 ID/],
+    [{ id: 'goal' }, /内置模式/],
+    [{ id: 'discuss' }, /内置模式/],
     [{ agents: [{ ...NOVEL.agents[0], card: 'a/b' }] }, /卡片 ID/],
     [{ agents: [{ ...NOVEL.agents[0], card: 'Writer', name: 'Antigravity-Writer' }] }, /卡片 ID/],
     [{ agents: [{ ...NOVEL.agents[0], card: 'a', name: 'Antigravity-a' }, { ...NOVEL.agents[1], card: 'a', name: 'DeepSeek-a' }] }, /卡片 ID 重复/],
@@ -119,6 +121,12 @@ test('an import starts write cards read-only and marks platforms this computer l
   const preview = preview_workflow({ parts: [draft] }, validate_preset, name => !name.startsWith('Antigravity'));
   assert.deepEqual(preview.agents, [{ card: 'writer', name: 'Antigravity-writer', project_access: 'read', requested_access: 'write',
     system_prompt: '写', needs_platform: true }]);
+  // A zip or folder the page opened arrives as files; the same downgrade applies and other paths are named back.
+  const files = { 'SKILL.md': '---\nname: novel-serial\n---\n做法', 'agents/writer.md': '---\nname: writer\nplatform: Codex\nproject_access: write\n---\n写', 'README.md': '' };
+  const opened = preview_workflow({ files }, validate_preset, () => true);
+  assert.deepEqual(opened.agents, [{ card: 'writer', name: 'Codex-writer', project_access: 'read', requested_access: 'write', system_prompt: '写' }]);
+  assert.deepEqual(opened.ignored, ['README.md']);
+  assert.throws(() => preview_workflow({ files: { 'agents/writer.md': '' } }, validate_preset, () => true), /没有 SKILL\.md/);
 });
 
 /** A room bound to the saved novel workflow, its writer played by an Antigravity member. */

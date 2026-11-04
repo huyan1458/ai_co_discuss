@@ -116,9 +116,34 @@ class FreeRoomTests(unittest.TestCase):
         return [(item["id"], item["text"], item["withdrawn"]) for item in self.request(f"{self.path}/messages{query}")[1]["messages"]]
 
 
-
 class SingleMemberTests(FreeRoomTests):
     """Single-member rooms; subclasses of FreeRoomTests reuse its fixture without re-running these."""
+
+    def test_work_started_through_the_remote_entry_is_marked_for_read_only_runs(self):
+        """The remote entry has no device signature, so the runner must know which work came through it."""
+        remote = DiscussionServer(("127.0.0.1", 0), self.database, hub=self.server)
+        thread = threading.Thread(target=remote.serve_forever, daemon=True)
+        thread.start()
+        try:
+            # A client cannot clear the mark on the remote entry, nor set it on this computer's own site.
+            local = self.say("本机发起", remote_entry=True)
+            self.assertEqual(local[0], 201, local)
+            self.assertEqual([bool(item["remote_entry"]) for item in self.reserve()[1]["requests"]], [False])
+            request = Request(f"http://127.0.0.1:{remote.server_port}{self.path}/messages", method="POST",
+                              headers={"Content-Type": "application/json", "X-Discussion-Token": self.owner},
+                              data=json.dumps({"author": "用户", "text": "外出发起", "submission_id": uuid.uuid4().hex, "remote_entry": False}).encode())
+            with urlopen(request, timeout=10) as response:
+                self.assertEqual(response.status, 201)
+            with closing(sqlite3.connect(self.database)) as connection:
+                connection.execute("UPDATE member_executions SET status='completed'")
+                connection.execute("UPDATE member_requests SET status='completed' WHERE status='delivering'")
+                connection.commit()
+            self.assertEqual([bool(item["remote_entry"]) for item in self.reserve()[1]["requests"]], [True])
+        finally:
+            remote.shutdown()
+            remote.server_close()
+            thread.join()
+
 
     def test_stop_before_delivery_holds_until_confirmed_or_original_deadline(self):
         """Late capability reports and uncertain stops retain the original bounded wait."""
@@ -1130,8 +1155,8 @@ class MultiMemberTests(FreeRoomTests):
         self.assertEqual(conflicts, [{"members": ["Claude", "Codex"], "executions": [claude["id"], codex["id"]], "files": ["index.html"]}])
 
 
-class HostTests(FreeRoomTests):
-    """An AI host routes unnamed messages, dispatches members, and is woken once per finished batch."""
+class HostRoomTests(FreeRoomTests):
+    """A room hosted by Claude with Codex and Antigravity as runner members; shared by host and goal tests."""
 
     expected_host = "Claude"
     member_id = MultiMemberTests.member_id
@@ -1161,6 +1186,10 @@ class HostTests(FreeRoomTests):
                                                                "submission_id": uuid.uuid4().hex, "execution_id": execution["id"], **extra}, self.tokens[name])
         self.assertEqual(status, 201, saved)
         return execution
+
+
+class HostTests(HostRoomTests):
+    """An AI host routes unnamed messages, dispatches members, and is woken once per finished batch."""
 
     def test_host_dispatch_hands_back_once_after_every_member_finished(self):
         """Two dispatched members produce exactly one hand-off, after the last of them finishes."""
@@ -1378,6 +1407,178 @@ class HostTests(FreeRoomTests):
         self.request(f"{self.path}/members/{self.member_id('Codex')}", {"action": "active", "token": uuid.uuid4().hex}, self.owner)
         roles = {member["name"]: member["role"] for member in self.request(self.path)[1]["free"]["members"]}
         self.assertEqual(roles, {"Claude": "host", "Codex": "member", "Antigravity": "member"})
+
+class GoalTests(HostRoomTests):
+    """Goal mode: only the owner opens it, the host fills it in, and an idle room wakes the host once per new work."""
+
+    def goal(self):
+        """The room's latest goal and the revision its writes must carry."""
+        return self.request(f"{self.path}/goal")[1]
+
+    def goal_write(self, action, token=None, **extra):
+        """Post one goal action with the current revision unless one is given."""
+        payload = {"action": action, "revision": self.goal()["revision"], **extra}
+        return self.request(f"{self.path}/goal", payload, token or self.owner)
+
+    def open_from_page(self, **budget):
+        """The owner opens a goal from the page; the host gets its first wake-up right away."""
+        status, view = self.goal_write("start", objective="修完登录页并通过复核", **budget)
+        self.assertEqual(status, 200, view)
+        self.assertEqual(self.requests()[-1], ("Claude", "goal_continue", "pending"))
+        return view
+
+    def test_only_the_owner_command_opens_a_goal_and_the_host_fills_it_in(self):
+        """`/goal` asks the host to fill in the objective; nobody else can open one, and declining leaves no goal."""
+        command = FreeRoomTests.say(self, "/goal")[1]["message"]["id"]
+        self.assertEqual(self.requests(), [("Claude", "goal_start", "pending")])
+        request_id = self.request(self.path)[1]["free"]["requests"][-1]["id"]
+        self.assertEqual(self.request(f"{self.path}/goal", {"action": "start", "request_id": request_id, "objective": "x"}, self.codex)[0], 403)
+        self.assertEqual(self.request(f"{self.path}/goal", {"action": "start", "objective": "x"}, self.tokens["Claude"])[0], 403)
+        self.reserve_for("Claude")
+        status, view = self.request(f"{self.path}/goal", {"action": "start", "request_id": request_id, "objective": "修完登录页"}, self.tokens["Claude"])
+        self.assertEqual((status, view["goal"]["status"], view["goal"]["objective"]), (200, "active", "修完登录页"), view)
+        again = self.request(f"{self.path}/goal", {"action": "start", "request_id": request_id, "objective": "修完登录页"}, self.tokens["Claude"])[1]
+        self.assertTrue(again["duplicate"])
+        self.assertEqual(FreeRoomTests.say(self, "/goal 另一个目标")[0], 409)
+        self.assertEqual(view["goal"]["started_message_id"], command)
+
+    def test_idle_room_wakes_the_host_once_until_new_work(self):
+        """A wake-up needs the revision; after one the room stays quiet until the host dispatches or the owner speaks."""
+        self.open_from_page()
+        self.work("Claude")
+        self.assertFalse(self.goal()["goal"]["idle"])  # the host did not hand out work: wait for the owner
+        FreeRoomTests.say(self, "继续，把测试也补上")
+        self.work("Claude", to=["Codex"])
+        self.assertFalse(self.goal()["goal"]["idle"])
+        self.work("Codex")
+        self.assertTrue(self.goal()["goal"]["idle"])
+        self.assertEqual(self.request(f"{self.path}/goal", {"action": "continue"}, self.owner)[0], 400)
+        self.assertEqual(self.request(f"{self.path}/goal", {"action": "continue", "revision": "stale"}, self.owner)[0], 409)
+        self.assertEqual(self.goal_write("continue", token=self.tokens["Claude"])[0], 403)
+        status, view = self.goal_write("continue")
+        self.assertEqual((status, view["goal"]["continues"], view["goal"]["idle"]), (200, 1, False), view)
+        self.assertEqual(self.requests()[-1], ("Claude", "goal_continue", "pending"))
+        self.assertEqual(self.goal_write("continue")[0], 409)
+        self.work("Claude")
+        self.assertFalse(self.goal()["goal"]["idle"])
+
+    def test_waiting_for_the_user_stands_down_until_new_work(self):
+        """The runner's model may judge an idle room as waiting for the user: it needs the revision and an armed goal."""
+        self.open_from_page()
+        self.work("Claude", to=["Codex"])
+        self.work("Codex")
+        self.assertEqual(self.request(f"{self.path}/goal", {"action": "wait"}, self.owner)[0], 400)
+        self.assertEqual(self.goal_write("wait", token=self.tokens["Claude"])[0], 403)
+        status, view = self.goal_write("wait")
+        self.assertEqual((status, view["goal"]["idle"], view["goal"]["continues"]), (200, False, 0), view)
+        self.assertEqual(self.goal_write("wait")[0], 409)
+        FreeRoomTests.say(self, "你们的意见我看了，继续")
+        self.work("Claude")
+        self.assertTrue(self.goal()["goal"]["idle"])
+
+    def test_host_declares_done_only_after_other_work_ends(self):
+        """Completion carries the revision and waits for members still working; it leaves an end notice."""
+        self.open_from_page()
+        self.work("Claude", to=["Codex"])
+        status, refused = self.goal_write("done", token=self.tokens["Claude"], note="完成")
+        self.assertEqual(status, 400, refused)
+        self.assertIn("Codex", refused["error"])
+        self.assertEqual(self.goal_write("block", token=self.tokens["Claude"])[0], 400)  # a block names its obstacle
+        self.work("Codex")
+        status, view = self.goal_write("done", token=self.tokens["Claude"], note="测试全部通过")
+        self.assertEqual((status, view["goal"]["status"]), (200, "complete"), view)
+        self.assertEqual(self.messages()[-1][1], "Goal 已完成：测试全部通过")
+
+    def test_repeated_failures_and_budget_end_the_goal(self):
+        """Three failed wake-ups in a row block the goal; a spent budget gets one wrap-up request and ends it."""
+        self.open_from_page()
+        for _ in range(3):
+            execution = self.reserve_for("Claude")[1]
+            self.assertEqual(self.request(f"{self.path}/executions/{execution['id']}", {"action": "fail", "reason": "模型不可用"}, self.owner)[0], 200)
+            if self.goal()["goal"]["status"] == "active" and len([r for r in self.requests() if r[1] == "goal_continue"]) < 3:
+                self.assertEqual(self.goal_write("continue")[0], 200)
+        status, view = self.goal_write("continue")
+        self.assertEqual((status, view["goal"]["status"]), (200, "blocked"), view)
+        self.assertEqual(FreeRoomTests.say(self, "/goal 再来一次")[0], 201)  # a blocked goal is over; a new one may start
+        request_id = self.request(self.path)[1]["free"]["requests"][-1]["id"]
+        execution = self.reserve_for("Claude")[1]
+        self.request(f"{self.path}/goal", {"action": "start", "request_id": request_id, "objective": "再来一次"}, self.tokens["Claude"])
+        self.assertEqual(self.goal_write("update", max_continues=1)[0], 200)
+        self.assertEqual(self.answer(execution["id"], token=self.tokens["Claude"], to=["Codex"])[0], 201)
+        self.work("Codex")
+        self.assertEqual(self.goal_write("continue")[1]["goal"]["continues"], 1)
+        self.work("Claude", to=["Codex"])
+        self.work("Codex")
+        status, view = self.goal_write("continue")
+        self.assertEqual((status, view["goal"]["status"]), (200, "budget_limited"), view)
+        self.assertEqual(self.requests()[-1], ("Claude", "goal_continue", "pending"))  # the host still wraps up once
+
+    def test_owner_controls_and_exclusion_with_discussion(self):
+        """Pause, resume and clear are the owner's; stopping everything pauses; a goal and a discussion never overlap."""
+        self.open_from_page()
+        discussion = self.request(f"{self.path}/discussion")[1]
+        status, refused = self.request(f"{self.path}/discussion", {"action": "start", "goal": "讨论", "revision": discussion["revision"]}, self.owner)
+        self.assertEqual(status, 409, refused)
+        self.assertEqual(self.request(f"{self.path}/goal", {"action": "pause"}, self.tokens["Claude"])[0], 403)
+        FreeRoomTests.say(self, "/goal pause")
+        self.assertEqual(self.goal()["goal"]["status"], "paused")
+        self.assertEqual(FreeRoomTests.say(self, "/goal pause")[0], 409)
+        self.assertEqual(self.request(f"{self.path}/goal", {"action": "resume"}, self.owner)[1]["goal"]["status"], "active")
+        self.assertEqual(self.request(f"{self.path}/stop", {}, self.owner)[0], 200)
+        self.assertEqual(self.goal()["goal"]["status"], "paused")
+        FreeRoomTests.say(self, "/goal edit 改成只修登录按钮")
+        self.assertEqual(self.goal()["goal"]["objective"], "改成只修登录按钮")
+        FreeRoomTests.say(self, "/goal clear")
+        self.assertEqual(self.goal()["goal"]["status"], "cleared")
+
+
+class ModeCommandTests(HostRoomTests):
+    """`/discuss` follows `/goal`: the owner's command authorizes, the host fills in the goal; `mode` reads and completes either."""
+
+    def host_request(self, purpose):
+        """The newest request of the given purpose."""
+        return [item for item in self.request(self.path)[1]["free"]["requests"] if item["purpose"] == purpose][-1]
+
+    def test_discuss_command_lets_the_host_open_a_discussion_with_room_limits(self):
+        """Only the owner's `/discuss` opens one; the host's start carries the goal, never limits, and retries return it."""
+        FreeRoomTests.say(self, "/discuss 比较方案 A 和 B 的上线成本")
+        request = self.host_request("discuss_start")
+        self.assertEqual((request["member"], request["status"]), ("Claude", "pending"))
+        start = {"action": "start", "request_id": request["id"], "goal": "比较方案 A 和 B 的上线成本", "limits": {"max_rounds": 99}}
+        self.assertEqual(self.request(f"{self.path}/discussion", start, self.codex)[0], 403)
+        self.reserve_for("Claude")
+        status, view = self.request(f"{self.path}/discussion", start, self.tokens["Claude"])
+        self.assertEqual((status, view["session"]["status"], view["session"]["goal"]), (200, "active", "比较方案 A 和 B 的上线成本"), view)
+        self.assertNotEqual(view["session"]["limits"]["max_rounds"], 99)
+        self.assertTrue(self.request(f"{self.path}/discussion", start, self.tokens["Claude"])[1]["duplicate"])
+        self.assertEqual(FreeRoomTests.say(self, "/goal 另起一个目标")[0], 409)
+        self.assertEqual(FreeRoomTests.say(self, "/discuss 再开一场")[0], 409)
+        FreeRoomTests.say(self, "/discuss pause")
+        self.assertEqual(self.request(f"{self.path}/discussion")[1]["session"]["status"], "paused")
+        FreeRoomTests.say(self, "/discuss resume")
+        self.assertEqual(self.request(f"{self.path}/discussion")[1]["session"]["status"], "active")
+        FreeRoomTests.say(self, "/discuss stop")
+        self.assertIsNone(self.request(f"{self.path}/discussion")[1]["session"])
+        self.assertEqual(FreeRoomTests.say(self, "/discuss stop")[0], 409)
+
+    def test_mode_view_and_done_follow_the_open_mode(self):
+        """`mode` reports the open mode with its completion revision; done is the host's and needs that revision."""
+        self.assertEqual(self.request(f"{self.path}/mode")[1]["mode"], None)
+        self.assertEqual(self.request(f"{self.path}/mode", {"action": "done", "revision": "x"}, self.tokens["Claude"])[0], 409)
+        revision = self.request(f"{self.path}/goal")[1]["revision"]
+        self.request(f"{self.path}/goal", {"action": "start", "revision": revision, "objective": "补上 CSV 导出"}, self.owner)
+        self.work("Claude")
+        view = self.request(f"{self.path}/mode")[1]
+        self.assertEqual((view["mode"], view["goal"]["objective"]), ("goal", "补上 CSV 导出"))
+        self.assertEqual(self.request(f"{self.path}/mode", {"action": "done", "revision": view["revision"]}, self.codex)[0], 403)
+        status, done = self.request(f"{self.path}/mode", {"action": "done", "revision": view["revision"], "note": "已实现"}, self.tokens["Claude"])
+        self.assertEqual((status, done["goal"]["status"]), (200, "complete"), done)
+        current = self.request(f"{self.path}/discussion")[1]
+        self.request(f"{self.path}/discussion", {"action": "start", "goal": "讨论", "revision": current["revision"]}, self.owner)
+        view = self.request(f"{self.path}/mode")[1]
+        self.assertEqual(view["mode"], "discussion")
+        self.assertEqual(self.request(f"{self.path}/mode", {"action": "done", "revision": "stale"}, self.tokens["Claude"])[0], 409)
+
 
 class RetiredWebMemberTests(FreeRoomTests):
     """Web chatbots no longer join; nobody answers on a member's behalf."""

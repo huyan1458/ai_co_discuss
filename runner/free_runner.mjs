@@ -10,7 +10,7 @@ import { free_task_text, TASK_SUBCOMMANDS, with_expert_prompt } from './expert_p
 import { atomic_json } from './files.mjs';
 import { SessionDriver } from './session_driver.mjs';
 import { effective_profile, load_room_workflow, workflow_in_use, workflow_task_field } from './workflows.mjs';
-import { DEFAULT_SCHEDULER_MODE, REVIEW_CONFIDENCE, REVIEW_PROMPT_VERSION, ROUTE_CONFIDENCE, ROUTE_CONTEXT_MESSAGES, ROUTE_PROMPT_VERSION, ROUTE_WIDE_CONFIDENCE, decide_group_order, decide_review_completion, route_free_message, route_prompt_version, scheduler_thresholds, some_members } from './scheduler.mjs';
+import { DEFAULT_SCHEDULER_MODE, GOAL_PROMPT_VERSION, decide_goal_wake, REVIEW_CONFIDENCE, REVIEW_PROMPT_VERSION, ROUTE_CONFIDENCE, ROUTE_CONTEXT_MESSAGES, ROUTE_PROMPT_VERSION, ROUTE_WIDE_CONFIDENCE, decide_group_order, decide_review_completion, route_free_message, route_prompt_version, scheduler_thresholds, some_members } from './scheduler.mjs';
 
 const PACKAGE_VERSION = JSON.parse(readFileSync(new URL('../package.json', import.meta.url), 'utf8')).version;
 const RENEW_MS = 30_000;
@@ -19,6 +19,8 @@ const ACTIVITY_REPORT_MS = 10_000;
 /** Segments and progress notes are reported quietly, waking no page, so they may go every tick. */
 const PROGRESS_REPORT_MS = 2_000;
 const MAX_DELIVERY_ATTEMPTS = 3;
+// An idle room under an active goal waits this long before the host is woken, leaving the owner time to speak first.
+export const GOAL_IDLE_MS = 30_000;
 // A manual member's session that refuses a delivery is retried in the same execution, after a wait the owner can cut short.
 const MAX_DELIVERY_RETRIES = 3;
 const RETRY_DELAY_SECONDS = 60;
@@ -80,7 +82,7 @@ export function changed_between(before, after) {
 
 /** Write a non-secret task and a member-only credential file for one execution. */
 export function free_task_files(config, member, execution, binding, { session = null, suggestions = [], reviews = [], stopped = [], process_access = true,
-  workflow = null, room_members = [] } = {}) {
+  workflow = null, room_members = [], goal = null } = {}) {
   const id = `free-${execution.id}`;
   const draft_directory = config.draft_directory || `${config.directory}-drafts`;
   mkdirSync(draft_directory, { recursive: true });
@@ -110,6 +112,12 @@ export function free_task_files(config, member, execution, binding, { session = 
       ...direct_question ? ['discuss-participant/references/free.md'] : []]
     : ['discuss-participant/SKILL.md', 'discuss-participant/references/free.md',
       ...member.role === 'host' ? ['discuss-host/SKILL.md', 'discuss-host/references/free.md'] : []];
+  // The host works a goal while it is open, and also handles the request that opens it or the wrap-up after it ends.
+  const goal_task = member.role === 'host' && (['active', 'paused'].includes(goal?.status)
+    || requests.some(item => ['goal_start', 'goal_continue'].includes(item.purpose)));
+  if (goal_task) skills.push('discuss-host/references/goal.md');
+  const goal_field = goal_task && goal ? { id: goal.id, objective: goal.objective, status: goal.status, continues: goal.continues,
+    max_continues: goal.max_continues, elapsed_seconds: goal.elapsed_seconds, max_minutes: goal.max_minutes } : null;
   const skills_directory = join(config.project, '.agents', 'skills');
   const workflow_field = host_workflow ? workflow_task_field(host_workflow, room_members, config.participants) : null;
   atomic_json(task_path, { site: config.site, room: config.room, mode: 'free', member: member.name,
@@ -120,6 +128,7 @@ export function free_task_files(config, member, execution, binding, { session = 
       goal: session.goal, named_followup: session.named_followup } } : {}),
     ...(suggestions.length ? { scheduler_suggestions: suggestions } : {}),
     ...(reviews.length ? { review_handoffs: reviews } : {}),
+    ...(goal_field ? { goal: goal_field } : {}),
     ...(stopped.length ? { stopped_executions: stopped } : {}),
     role: member.role || 'member',
     read_after: execution.read_until, cwd: profile.cwd || null, project_access: profile.project_access, draft_directory,
@@ -129,7 +138,7 @@ export function free_task_files(config, member, execution, binding, { session = 
     ...(member.role === 'host' && config.host_workflows ? { host_workflows: true } : {}),
     cli, subcommands: TASK_SUBCOMMANDS,
     ...(bound_access ? { access_env: 'DISCUSS_ACCESS_FILE' } : { access_file: access_path }), instructions });
-  return { id, participant: member.name, directory: config.directory, draft_directory,
+  return { id, participant: member.name, directory: config.directory, draft_directory, ...(goal_field ? { goal: goal_field } : {}),
     skill_directories: [skills_directory, ...(host_workflow ? [host_workflow.directory] : [])], access_path, prompt: with_expert_prompt(prompt, profile), inbox,
     profile, ...(workflow_field ? { workflow: { ...workflow_field, skill: host_workflow.skill } } : {}) };
 }
@@ -158,6 +167,18 @@ function route_host_label(decision, host, members) {
   const lean = decision.choice === '__all__' ? '全体各自回应' : decision.choice === '__all_seq__' ? '全体依次回应' : decision.choice === '__none__' ? '无需回应' : group ? `请 ${group.join('、')} 各自回应`
     : members.some(member => member.name === decision.choice) ? `请 ${decision.choice} 回答` : '';
   return lean ? `倾向${lean}，把握不足，交给主持人 ${host}` : `交给主持人 ${host}`;
+}
+
+/**
+ * The settings a member works with for one execution: work started through the optional remote entry carries no
+ * device signature, so it runs read-only, without approved tools. A member on its own session's settings cannot be
+ * narrowed and is refused.
+ */
+export function remote_entry_profile(profile, execution) {
+  if (!execution.requests?.some(request => request.remote_entry)) return profile;
+  if (profile.project_access === 'read' && !profile.allowed_tools?.length) return profile;
+  if (profile.project_access === 'own') throw new Error('经远程入口发起的工作只能以只读运行，而这位成员沿用原会话权限；请在电脑上或经已配对设备发起');
+  return { ...profile, project_access: 'read', allowed_tools: [] };
 }
 
 /** Delivers free-room requests through the same software adapters as discussions. */
@@ -262,6 +283,7 @@ export class FreeRoomRunner {
     if (!inbox.archived) this.arrange_groups(inbox, room);
     this.room_title = room.title;
     this.room = room;
+    if (!inbox.archived) await this.continue_goal(room);
     this.inbox = inbox;
     const active = new Map(inbox.executions.map(item => [item.id, item]));
     const present = new Set(inbox.members.map(member => member.name));
@@ -378,8 +400,51 @@ export class FreeRoomRunner {
   idle() {
     const inbox = this.inbox;
     if (!inbox || this.routing.size || [...this.members.values()].some(children => children.size)) return false;
+    // A goal waiting out its idle grace still needs ticks to wake the host when it ends.
+    if (this.room?.goal_state?.goal?.idle) return false;
     if (this.room?.session?.status === 'active' || inbox.executions.length || inbox.members.some(member => member.pending.length)) return false;
     return !this.store.db.prepare('SELECT status FROM free_deliveries').all().some(row => LIVE.includes(row.status));
+  }
+  /**
+   * Goal mode: once the room has stayed idle with the same revision for the grace period, wake the host through the
+   * website, which re-checks idleness and the revision and decides between a wake-up, a wrap-up or stopping. With a
+   * decision model, a room judged to be waiting for the user stands down instead (`wait`); any doubt wakes the host.
+   */
+  async continue_goal(room) {
+    const view = room.goal_state;
+    if (!view?.goal?.idle) { this.goal_idle = null; return; }
+    if (this.goal_idle?.revision !== view.revision) { this.goal_idle = { revision: view.revision, since: Date.now() }; return; }
+    if (this.goal_idle.busy || Date.now() - this.goal_idle.since < (this.config.goal_idle_ms ?? GOAL_IDLE_MS)) return;
+    this.goal_idle.busy = true;
+    let decision = null;
+    if (this.config.scheduler && view.goal.armed) {
+      try { decision = await this.judge_goal(room, view.goal); }
+      catch (error) { this.log(`Goal 空闲判断失败，照常唤醒主持人：${error.message}`); }
+    }
+    const action = decision?.action === 'wait' ? 'wait' : 'continue';
+    let applied = false;
+    try {
+      const result = await api(this.config, '/goal', { action, revision: view.revision });
+      this.room = { ...room, goal_state: result };
+      applied = true;
+      this.log(action === 'wait' ? 'Goal：房间在等用户，不唤醒主持人'
+        : `Goal 续跑：${result.goal?.status === 'active' ? `第 ${result.goal.continues} 次` : result.goal?.status}`);
+      this.on_decided();
+    } catch (error) { this.log(`Goal ${action === 'wait' ? '等待' : '续跑'}未生效：${error.message}`); }
+    finally { this.goal_idle = null; }
+    if (decision?.detail) await this.record_decision(decision.after_message_id, decision, decision.label, applied,
+      { prompt: GOAL_PROMPT_VERSION, threshold: ROUTE_CONFIDENCE, wide_threshold: ROUTE_CONFIDENCE, scene: 'goal' });
+  }
+  /** Ask the decision model whether the idle goal room needs its host, from the latest messages and who is in it. */
+  async judge_goal(room, goal) {
+    const page = await api(this.config, `/messages?after=${Math.max(0, (room.latest_id || 0) - ROUTE_CONTEXT_MESSAGES)}`);
+    const context = page.messages || [];
+    const everyone = [...(this.inbox?.members || []), ...(this.inbox?.observers || [])];
+    const described = this.route_members(everyone, room, (context.at(-1)?.id || 0) + 1);
+    const host = described.find(member => member.role === 'host');
+    const decision = await decide_goal_wake(this.config.api_home, this.config.scheduler,
+      { title: room.title, objective: goal.objective, context, host: host?.name || '主持人', members: described }, this.fetch);
+    return { ...decision, after_message_id: context.at(-1)?.id || 0 };
   }
   /**
    * Smart scheduling: for each new unnamed message routed to the host, ask the provider whether another woken
@@ -589,13 +654,18 @@ export class FreeRoomRunner {
   }
   /** Hand the execution to the member's software; only proven non-delivery is released for retry. */
   async invoke(member, execution) {
-    const adapter = this.config.participants[member.name];
+    let adapter = this.config.participants[member.name];
     const review_request = execution.requests?.find(request => request.review?.phase === 'review');
     if (review_request) {
       try { await this.check_review_delivery(member, review_request); }
       catch (error) { return this.reject_review(member, execution, error.message); }
     }
     if (!adapter) return this.fail(member.name, execution.id, `未配置 ${member.name} 的本机接入`);
+    try { adapter = remote_entry_profile(adapter, execution); }
+    catch (error) { return this.fail(member.name, execution.id, error.message); }
+    // The task and the software both take the member's settings from here, read-only included.
+    const task_config = adapter === this.config.participants[member.name] ? this.config
+      : { ...this.config, participants: { ...this.config.participants, [member.name]: adapter } };
     if (this.context_errors.has(member.name)) return this.fail(member.name, execution.id, this.context_errors.get(member.name));
     const directory = capabilities_of(adapter.adapter).project ? adapter.cwd || this.config.cwd : undefined;
     // A read-only member's software cannot write the project, so files changing meanwhile were written by someone else.
@@ -620,8 +690,9 @@ export class FreeRoomRunner {
       // An unreadable workflow leaves members on their room settings; it is logged once per error, not every execution.
       if (workflow?.error && this.workflow_error !== workflow.error) this.log(`工作流 ${workflow.id} 不可用：${workflow.error}`);
       this.workflow_error = workflow?.error || '';
-      const task = free_task_files(this.config, member, execution, binding, {
+      const task = free_task_files(task_config, member, execution, binding, {
         session, suggestions: scheduler_suggestions, reviews: review_handoffs, stopped, workflow, room_members: this.room?.members,
+        goal: this.room?.goal_state?.goal || null,
       });
       invoked = true;
       this.segments.start(execution.id);
@@ -632,7 +703,8 @@ export class FreeRoomRunner {
           home: this.config.api_home, mode: 'free', role: member.role || 'member', execution_id: execution.id,
           cwd: directory, project_access: adapter.project_access,
           requests: execution.requests, read_after: execution.read_until, session, discussion_request: session_request,
-          scheduler_suggestions, review_handoffs, ...(task.workflow ? { workflow: task.workflow } : {}) },
+          scheduler_suggestions, review_handoffs, ...(task.workflow ? { workflow: task.workflow } : {}),
+          ...(task.goal ? { goal: task.goal } : {}) },
         on_binding: session => this.store.bind(member.name, session),
         on_process: child => this.track(member.name, child, execution.id),
         on_output: (path, chunk) => { appendFileSync(path, chunk, { mode: 0o600 }); this.touch(execution.id); this.segments.mark(execution.id); },

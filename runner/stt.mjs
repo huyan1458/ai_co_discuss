@@ -78,7 +78,7 @@ export async function stt_part(home, input, request = fetch) {
   const { upload_id, index, data, final } = input || {};
   if (!/^[a-f0-9-]{36}$/i.test(upload_id || '') || !Number.isInteger(index) || index < 0 || typeof data !== 'string') throw new Error('录音片段无效');
   const settings = tts_settings(home);
-  if (!settings.api_key_ref) throw new Error('尚未配置语音：请在设置的“语音”中填写火山引擎 API Key');
+  if (!settings.stt_key_ref) throw new Error('语音输入使用火山引擎：请在设置的“语音”中填写火山引擎 API Key');
   const part = Buffer.from(data, 'base64');
   if (part.length > PART_MAX_BYTES || part.length % 2) throw new Error('录音片段无效');
   const root = join(home, 'stt');
@@ -98,7 +98,7 @@ export async function stt_part(home, input, request = fetch) {
     const pcm = Buffer.concat(parts);
     if (pcm.length > STT_MAX_BYTES) throw new Error('录音超过 5 分钟，请分段录制');
     if (!pcm.length) return { text: '' };
-    const key = read_saved_api_key(home, TTS_BASE_URL, settings.api_key_ref);
+    const key = read_saved_api_key(home, TTS_BASE_URL, settings.stt_key_ref);
     return { text: await recognize(key, pcm_to_wav(pcm), request) };
   } finally { rmSync(directory, { recursive: true, force: true }); }
 }

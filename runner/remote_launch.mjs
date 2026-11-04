@@ -12,9 +12,9 @@ import { fileURLToPath } from 'node:url';
 import { adapter_profile } from './adapters/profiles.mjs';
 import { atomic_json } from './files.mjs';
 import { saved_api_keys } from './discussion_api.mjs';
-import { launch_discussion, launch_projects, launch_settings, platform_of } from './discussion_launch.mjs';
+import { launch_projects, launch_settings } from './discussion_launch.mjs';
 import { claim_relayed_command } from './remote_policy.mjs';
-import { DEVICE_ACTIONS, device_command, open_signed_request } from './device_auth.mjs';
+import { audit, DEVICE_ACTIONS, device_command, open_signed_request } from './device_auth.mjs';
 
 const MACHINE_TOKEN_BYTES = 32;
 const MACHINE_NAME_MAX = 60;
@@ -94,22 +94,6 @@ export function ready_clients(home) {
   }).map(([name, profile]) => [name, profile.adapter]));
 }
 
-/** Turn a relayed request into the request the connected browser would send, using this computer's directory and keys. */
-export function local_request(home, site, request) {
-  const { local_project, ...input } = request;
-  if (input.cwd || input.access_file) throw new Error('远程启动只能选择电脑上已配置的项目');
-  const project = local_project ? launch_projects(home).projects.find(item => item.id === local_project) : null;
-  if (local_project && !project) throw new Error('所选项目已从这台电脑移除，请重新选择');
-  const keys = saved_api_keys(home), defaults = launch_settings(home).participants;
-  const participants = { ...(input.participants || {}) };
-  for (const member of input.room?.members || []) {
-    const profile = defaults[platform_of(member.name)];
-    const ref = adapter_profile(profile?.adapter)?.kind === 'api' && !participants[member.name]?.api_key_ref ? api_key_ref(profile, keys) : undefined;
-    if (ref) participants[member.name] = { ...participants[member.name], api_key_ref: ref };
-  }
-  return { ...input, participants, site, entry: 'web', ...(project ? { cwd: project.path } : {}) };
-}
-
 async function machine_request(site, link, path, body, { timeout = SYNC_TIMEOUT_MS, signal } = {}) {
   const response = await fetch(`${site}/api/machines/${link.id}${path}`, { method: 'POST', redirect: 'error',
     signal: AbortSignal.any([AbortSignal.timeout(timeout), ...(signal ? [signal] : [])]),
@@ -119,27 +103,18 @@ async function machine_request(site, link, path, body, { timeout = SYNC_TIMEOUT_
   return result;
 }
 
-/** Publish projects and clients to each paired site, then run every launch it relays, one at a time. */
-export async function sync_remote_launches(home, { launch = launch_discussion, log = () => {} } = {}) {
+/**
+ * Publish projects, clients and this computer's key to each paired site. Launch tasks a site returns are never run:
+ * every remote operation must arrive as a device-signed command, and a site's own answer proves nothing.
+ */
+export async function sync_remote_launches(home, { log = () => {} } = {}) {
   const projects = launch_projects(home).projects.filter(project => project.id).map(({ id, name }) => ({ id, name }));
   const clients = ready_clients(home);
   for (const [site, link] of Object.entries(keyed_links(home).sites)) {
     let launches;
     try { ({ launches } = await machine_request(site, link, '/sync', { projects, clients, public_key: link.public_key })); }
     catch (error) { log(`${site}: 同步电脑状态失败：${error.message}`); continue; }
-    for (const { id, request } of launches) {
-      const action = body => machine_request(site, link, `/launches/${encodeURIComponent(id)}`, body);
-      try {
-        await action({ action: 'claim' });
-        const result = await launch(home, local_request(home, site, request), { browser_request: true });
-        await action({ action: 'finish', room_id: result.room.id, status: result.status });
-        log(`${site}: 远程启动 ${id} 已创建房间 ${result.room.id}`);
-      } catch (error) {
-        log(`${site}: 远程启动 ${id} 失败：${error.message}`);
-        await action({ action: 'fail', error: error.message, stage: error.launch?.stage || 'not_started',
-          ...(error.launch?.room_id ? { room_id: error.launch.room_id } : {}) }).catch(() => {});
-      }
-    }
+    if (launches?.length) log(`${site}: 网站返回了 ${launches.length} 个旧格式启动任务，已忽略；远程启动须由已配对设备签名`);
   }
 }
 
@@ -176,8 +151,8 @@ export function relayed_command(site, action, payload) {
     const { access_file, ...rest } = payload;
     input = { ...rest, site, entry: 'web' };
   }
-  // Choosing a folder belongs to the computer's own screen; another device imports by pasting.
-  if (action === 'workflows' && payload.folder) throw new Error('其他设备请用粘贴导入工作流');
+  // A path names a folder on the computer itself; another device sends the files it opened.
+  if (action === 'workflows' && payload.folder) throw new Error('其他设备请选择 zip 或文件夹导入工作流');
   return { command: action === 'launch' ? 'start' : action, input, browser: action === 'launch' };
 }
 
@@ -211,10 +186,11 @@ async function answer_command(home, site, link, { id, envelope }, run, log) {
   } catch { return log(`${site}: 远程命令 ${id} 无法解密，已忽略`); }
   let response;
   try {
-    const { request, device_id } = await open_signed_request(home, id, sealed);
+    const { request, device_id } = await open_signed_request(home, id, sealed, link.id);
     claim_relayed_command(home, id, request.sent_at);
     response = DEVICE_ACTIONS.has(request.action) ? await device_command(home, { site, machine_id: link.id, device_id }, request.action, request.payload)
       : await run({ ...relayed_command(site, request.action, request.payload), device: device_id });
+    if (!DEVICE_ACTIONS.has(request.action)) audit(home, { event: 'command', action: request.action, route: '', device: device_id, status: response.status });
   }
   catch (error) { response = { status: 400, body: { error: error.message, ...(error.need ? { need: error.need } : {}) } }; }
   try { await machine_request(site, link, `/commands/${encodeURIComponent(id)}`, { envelope: await seal(key, response, `${id}:response`) }); }
@@ -234,6 +210,9 @@ export async function relay_commands(home, { run = run_launch_command, log = () 
     try { ({ commands } = await machine_request(site, link, '/commands/claim', { wait }, { timeout: wait * 1000 + COMMAND_REQUEST_MARGIN_MS, signal })); }
     catch (error) { if (!signal?.aborted) { log(`${site}: 领取远程命令失败：${error.message}`); on_failure(); } return; }
     for (const command of commands) {
+      // A pairing removed or replaced while the claim waited ends here, as on the live channel.
+      const current = machine_links(home).sites[site];
+      if (current?.token !== link.token || current?.private_key?.d !== link.private_key?.d) { log(`${site}: 配对已撤销或更换，忽略远程命令 ${command.id}`); continue; }
       const task = answer_command(home, site, link, command, run, log).finally(() => running.delete(task));
       running.add(task);
     }

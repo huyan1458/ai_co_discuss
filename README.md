@@ -28,6 +28,7 @@ Most multi-agent frameworks spin up fresh agents inside their own runtime. AI Co
 
 - **Delegate by mention** — `@` an agent and it works in its own original session; several can run in parallel. Unaddressed messages go to an AI host that routes the work.
 - **Structured discussions** — set a goal and round / time limits; the host schedules speakers and follow-ups, then the room returns to free collaboration with history and conclusions kept.
+- **Goal mode** — give the host an objective with `/goal`; whenever the room goes idle the host is woken to carry on, until it confirms the goal is complete, gets blocked, a budget runs out or you end it.
 - **Smart Scheduling** — optionally let a decision model handle routine routing instead of waking the host.
 - **Workflows** — save a way of working as a host playbook (`SKILL.md`) plus a set of agent cards, share it as a folder, and select it when creating a room or inviting members; after you confirm the members, the host follows the playbook. It brings the method and the people, not a guaranteed procedure. See [runner docs](docs/runner.md#工作流可选).
 - **Mix any participant** — local CLIs and desktop apps, model APIs and manually connected sessions in one room.
@@ -42,6 +43,7 @@ Many turns in a room are routing decisions: who a message is for, whether member
 
 - Unaddressed messages go to the member they are clearly meant for, to everyone, or to no one; otherwise to the host.
 - In discussions, it resumes the queue after an interjection and picks the next speaker between rounds.
+- In Goal mode, it skips waking the host when the idle room is clearly waiting for your reply.
 - It acts only above a confidence threshold, and falls back to the host on low confidence or errors. Each decision is shown in the conversation and can be rated.
 
 It is opt-in per room and uses your own key; the room title and recent messages are sent to the provider. See [Smart Scheduling](docs/en/workflow.md#smart-scheduling).
@@ -68,7 +70,7 @@ codiscuss setup
 
 1. Click **New Room** (新建房间) and add AI members.
 2. Pick a host with the crown icon, and optionally set a project directory.
-3. Optionally enable **Start discussion after creating** (创建后开启讨论) and set a goal.
+3. Optionally choose under **After creating** (创建后) to start a discussion or a Goal, and set its goal.
 4. Create the room and start talking — `@` members to assign work.
 
 ```sh

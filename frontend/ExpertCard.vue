@@ -6,7 +6,6 @@ import EffortSlider from "./EffortSlider.vue";
 import ApiSettings from "./ApiSettings.vue";
 import MemberDescriptionDialog from "./MemberDescriptionDialog.vue";
 import MemberTextDialog from "./MemberTextDialog.vue";
-import WorkflowLibrary from "./WorkflowLibrary.vue";
 import { adapter_profile } from "../runner/adapters/profiles.mjs";
 import { EXPERT_PROMPT_HEADING, EXPERT_PROMPT_PRESETS, MAX_EXPERT_PROMPT, READ_RULE, access_label, access_options, free_task_text } from "../runner/expert_prompts.mjs";
 
@@ -30,7 +29,6 @@ const props = defineProps({
 const preset = defineModel("preset", { type: Object, default: null });
 const emit = defineEmits(["remove", "mode", "host"]);
 const { view, bridge } = inject("discussion");
-const workflow_library_open = ref(false);
 // Feel.words("smooth, crisp"): 2.615 Hz reads as a deliberate turn; ζ .96 avoids bounce.
 // Unit mass: this is a button-controlled angular spring, with no drag-weight effect.
 const FLIP_SPRING = { mass: 1, stiffness: 270.0323764138049, damping: 31.550710806760762 };
@@ -104,7 +102,7 @@ const launch_fact = computed(() => props.mode === "manual" ? "你来启动 · �
 const host_fact = computed(() => "不可（须本机唤醒）");
 // The front states only what is decided or an exception; placeholders such as "set in the original software" stay off it.
 const facts = computed(() => preset.value ? [
-  ...preset.value.needs_platform ? [{ label: "平台", value: "本机未配置，请换平台", tone: "warn" }] : [],
+  ...preset.value.needs_platform ? [{ label: "平台", value: "本机未配置此软件", tone: "warn" }] : [],
   { label: "模型", value: profile.value.model || "软件默认模型" },
   ...profile.value.effort ? [{ label: "强度", value: effort_label.value }] : [],
   { label: "项目", value: access_label(access.value), ...(access.value !== "read" ? { tone: "warn" } : {}) },
@@ -435,12 +433,10 @@ onBeforeUnmount(() => { document.removeEventListener("pointerdown", close_on_out
     </motion.div>
     <MemberDescriptionDialog v-model:open="describing" :name="name" :platform="preset ? '' : bridge.default_name(bridge.platform_of(name))" :default_label="bridge.default_name(name)" :text="description" :label="preset ? preset.label || '' : bridge.label_draft(name)" :template="preset ? '' : bridge.description_template(name)" @save="save_description" />
     <MemberTextDialog v-model:open="prompt_open" v-model:draft="prompt_draft" :title="`${name} 的专属提示词`"
-      :description="workflow ? `来自工作流「${workflow}」，每次执行时按工作流里的这张卡片发送；请在工作流库中修改，修改会作用于所有启用它的房间。` : '只发给这位专家，补充它的做法与偏好；不改变权限和技能规则。'" :label="`${name} 的专属提示词`"
+      :description="workflow ? `来自工作流「${workflow}」，每次执行时按工作流里的这张卡片发送；请在“工作流”一行点“编辑”修改，修改会作用于所有启用它的房间。` : '只发给这位专家，补充它的做法与偏好；不改变权限和技能规则。'" :label="`${name} 的专属提示词`"
       placeholder="例如：回答先给结论，控制在三段以内。" :max="MAX_EXPERT_PROMPT" :rows="8" :readonly="Boolean(workflow)"
       :note="workflow ? '只读' : prompt_note" :source="prompt_source" :fixed="prompt_fixed" :changed="prompt_changed" @save="save_prompt">
-      <template v-if="workflow" #extra><UButton label="去工作流库编辑" icon="i-lucide-library" size="sm" variant="ghost" @click="workflow_library_open = true" /></template>
     </MemberTextDialog>
-    <WorkflowLibrary v-if="workflow" v-model:open="workflow_library_open" />
     <UModal :content="{ onInteractOutside: (event) => event.preventDefault() }" v-model:open="naming" title="存为专家预设" description="存下描述、提示词、项目权限、模型与强度，之后在“预设”行一键加入。" :ui="{ content: 'glass-panel studio-modal', body: 'dialog-body' }">
       <template #body>
         <form class="expert-card-naming" @submit.prevent="save_named_preset">

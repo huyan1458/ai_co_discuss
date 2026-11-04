@@ -31,6 +31,9 @@ const CARD_PATH = /^agents\/([A-Za-z0-9_]{1,16})\.md$/;
 export function workflows_home(home) { return join(home, 'workflows'); }
 
 /** A workflow's folder, built from a checked ID and never from a caller's path. */
+// Built-in room modes own these "/" commands, so no workflow may take their names.
+export const RESERVED_WORKFLOW_IDS = ['goal', 'discuss'];
+
 export function workflow_directory(home, id) {
   if (!WORKFLOW_ID_PATTERN.test(id || '')) throw new Error('工作流 ID 只能用小写英文和数字，可用单个连字符连接（不在首尾），1—40 位');
   return join(workflows_home(home), id);
@@ -90,6 +93,8 @@ export function validate_workflow(input, validate_card) {
   if (!input || typeof input !== 'object') throw new Error('工作流须为对象');
   const { id } = input;
   workflow_directory('.', id);
+  // Checked only when saving: a workflow saved earlier under one of these names can still be read and deleted.
+  if (RESERVED_WORKFLOW_IDS.includes(id)) throw new Error(`工作流 ID 不能用 ${id}：它是内置模式 /${id} 的命令`);
   const label = String(input.label || '').trim(), description = String(input.description || '').trim(), skill = String(input.skill || '').trim();
   if (label.length > MAX_WORKFLOW_LABEL) throw new Error(`工作流显示名最多 ${MAX_WORKFLOW_LABEL} 字`);
   if (description.length > MAX_WORKFLOW_DESCRIPTION || /\n/.test(description)) throw new Error(`工作流描述最多 ${MAX_WORKFLOW_DESCRIPTION} 字，且不能换行`);
@@ -166,6 +171,23 @@ export function read_workflow_folder(directory) {
     }
   }
   return { workflow: workflow_from_files(readFileSync(join(directory, 'SKILL.md'), 'utf8'), cards), ignored };
+}
+
+/**
+ * Read a workflow sent as files (a zip or folder the page opened): `{ "SKILL.md": text, "agents/<card>.md": text, other: "" }`,
+ * paths relative to the folder holding SKILL.md. Other paths are only named back as ignored.
+ */
+export function read_workflow_files(files) {
+  if (!files || typeof files !== 'object' || Array.isArray(files)) throw new Error('工作流文件须为 { 路径: 文本 }');
+  if (typeof files['SKILL.md'] !== 'string') throw new Error('没有 SKILL.md');
+  const cards = {}, ignored = [];
+  for (const path of Object.keys(files).sort()) {
+    if (path === 'SKILL.md') continue;
+    const match = CARD_PATH.exec(path);
+    if (match && typeof files[path] === 'string') cards[match[1]] = files[path];
+    else ignored.push(path);
+  }
+  return { workflow: workflow_from_files(files['SKILL.md'], cards), ignored };
 }
 
 /** Summaries for the library list; a broken folder is listed with its error instead of hiding it. */
@@ -270,12 +292,13 @@ export function parse_workflow_draft(parts) {
 const READ_ONLY = 'read';
 
 /**
- * Parse an import (a folder on this computer or pasted drafts) without saving it.
+ * Parse an import (files sent by the page, a folder on this computer or a draft) without saving it.
  * Imported cards asking for project writes start read-only and carry `requested_access` for the page to offer.
  */
 export function preview_workflow(input, validate_card, known_platform) {
   let source;
-  if (typeof input.folder === 'string' && input.folder) source = read_workflow_folder(resolve(input.folder));
+  if (input.files) source = read_workflow_files(input.files);
+  else if (typeof input.folder === 'string' && input.folder) source = read_workflow_folder(resolve(input.folder));
   else source = { workflow: parse_workflow_draft(input.parts), ignored: [] };
   const workflow = validate_workflow(source.workflow, validate_card);
   const agents = workflow.agents.map(agent => {

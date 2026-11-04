@@ -11,8 +11,8 @@ import { readFileSync, writeFileSync } from 'node:fs';
 import { parseArgs } from 'node:util';
 import { saved_api_keys } from '../runner/discussion_api.mjs';
 import { service_home } from '../runner/discussion_service.mjs';
-import { DEFAULT_SCHEDULER_MODE, REVIEW_PROMPT_VERSION, discussion_prompt_version, SCHEDULER_MODES, SCHEDULER_PROVIDERS, route_prompt_version, decide_group_order, decide_interjection, decide_review_completion,
-  decide_next_speaker, decide_round, route_free_message } from '../runner/scheduler.mjs';
+import { DEFAULT_SCHEDULER_MODE, GOAL_PROMPT_VERSION, REVIEW_PROMPT_VERSION, discussion_prompt_version, SCHEDULER_MODES, SCHEDULER_PROVIDERS, route_prompt_version, decide_group_order, decide_interjection, decide_review_completion,
+  decide_goal_wake, decide_next_speaker, decide_round, route_free_message } from '../runner/scheduler.mjs';
 
 const { values: options } = parseArgs({ options: { provider: { type: 'string', default: 'jev' }, model: { type: 'string' }, mode: { type: 'string', default: DEFAULT_SCHEDULER_MODE },
   repeat: { type: 'string', default: '1' }, only: { type: 'string' }, out: { type: 'string' }, baseline: { type: 'string' } } });
@@ -39,6 +39,11 @@ async function run_case(item) {
       deliveries: item.answers.map((answer, index) => ({ member: String.fromCharCode(65 + index), status: 'completed', answer,
         execution_status: item.reports[index], result: item.reports[index] })) });
     return { result, acted: result.action === 'review' ? 'review' : '__host__' };
+  }
+  if (item.scene === 'goal') {
+    const members = [{ ...free.host, role: 'host' }, ...free.members.map(member => ({ ...member, role: 'member' }))];
+    const result = await decide_goal_wake(home, scheduler, { title: free.title, objective: item.objective, context, host: free.host.name, members });
+    return { result, acted: result.action };
   }
   const talk = { ...fixtures.discussion, brief: item.brief ?? fixtures.discussion.brief, arrangement: item.arrangement, context };
   if (item.scene === 'route') {
@@ -127,8 +132,8 @@ for (const item of selected) {
   }
 }
 const count = status => results.filter(item => item.status === status).length;
-console.log(`\n${scheduler.provider}/${scheduler.model} · 模式 ${options.mode} · 每条 ${REPEAT} 次 · 路由提示版本 ${ROUTE_PROMPT_VERSION} · 讨论提示版本 ${DISCUSSION_PROMPT_VERSION} · 评审提示版本 ${REVIEW_PROMPT_VERSION} · `
+console.log(`\n${scheduler.provider}/${scheduler.model} · 模式 ${options.mode} · 每条 ${REPEAT} 次 · 路由提示版本 ${ROUTE_PROMPT_VERSION} · 讨论提示版本 ${DISCUSSION_PROMPT_VERSION} · 评审提示版本 ${REVIEW_PROMPT_VERSION} · Goal 提示版本 ${GOAL_PROMPT_VERSION} · `
   + `PASS ${count('PASS')} / WEAK ${count('WEAK')} / FAIL ${count('FAIL')} / ERROR ${count('ERROR')}，共 ${results.length} 条`);
 if (options.out) writeFileSync(options.out, JSON.stringify({ provider: scheduler.provider, model: scheduler.model, mode: options.mode, repeat: REPEAT, route_prompt: ROUTE_PROMPT_VERSION,
-  discussion_prompt: DISCUSSION_PROMPT_VERSION, review_prompt: REVIEW_PROMPT_VERSION, ran_at: new Date().toISOString(), results }, null, 2));
+  discussion_prompt: DISCUSSION_PROMPT_VERSION, review_prompt: REVIEW_PROMPT_VERSION, goal_prompt: GOAL_PROMPT_VERSION, ran_at: new Date().toISOString(), results }, null, 2));
 if (count('FAIL') || count('ERROR')) process.exitCode = 1;

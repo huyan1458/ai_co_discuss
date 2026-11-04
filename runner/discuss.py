@@ -352,9 +352,12 @@ def run_commands(subcommands, registry):
     """Expose discussion-session lifecycle controls independently of the resident service."""
     for action in ("view", "start", "pause", "resume", "stop"):
         parser = add_leaf(subcommands, registry, f"run {action}", "查看或显式控制讨论会话", True)
-        if action != "view":
+        if action not in ("view", "start"):
             parser.add_argument("--revision", required=True, help="run view 返回的 revision；状态变化后须重新读取")
         if action == "start":
+            parser.add_argument("--revision", help="run view 返回的 revision（房主开启时用）")
+            parser.add_argument("--request", type=positive_int,
+                                help="主持人用：用户 /discuss 命令生成的 discuss_start 请求编号；只补全 --goal，上限用房间默认值")
             add_text(parser, "goal")
             for name in ("max-rounds", "max-minutes"):
                 parser.add_argument(f"--{name}", type=non_negative_int, default=argparse.SUPPRESS)
@@ -362,6 +365,37 @@ def run_commands(subcommands, registry):
             parser.add_argument("--execution-minutes", type=non_negative_int, default=argparse.SUPPRESS, help=argparse.SUPPRESS)
             parser.add_argument("--submission-id", type=submission_id,
                                 help="可选启动提交编号；重试须沿用编号和原请求")
+
+
+def goal_commands(subcommands, registry):
+    """Goal mode: read it, let the host fill in or end it, and let the owner control it."""
+    add_leaf(subcommands, registry, "goal view", "读取 Goal 的目标、状态、续跑次数、用时、是否空闲与 revision；完成、卡住与续跑须先读", True)
+    start = add_leaf(subcommands, registry, "goal start",
+                     "主持人凭用户 /goal 命令生成的 goal_start 请求补全目标并开启（--request）；房主可带 --revision 直接开启", True)
+    start.add_argument("--request", type=positive_int, help="任务 requests 中 purpose 为 goal_start 的请求编号（主持人用）")
+    start.add_argument("--revision", help="goal view 返回的 revision（房主直接开启时用）")
+    add_text(start, "objective")
+    for action, help_text in (("done", "主持人对照实际状态核验后宣告 Goal 完成；先 goal view 取 revision"),
+                              ("block", "同一阻碍连续 3 次续跑仍未解决时，主持人宣告 Goal 卡住并写明阻碍；先 goal view 取 revision")):
+        parser = add_leaf(subcommands, registry, f"goal {action}", help_text, True)
+        parser.add_argument("--revision", required=True, help="goal view 返回的 revision；状态变化后须重新读取")
+        add_text(parser, "note")
+    for action in ("pause", "resume", "clear"):
+        add_leaf(subcommands, registry, f"goal {action}", "房主暂停、恢复或结束 Goal", True)
+    update = add_leaf(subcommands, registry, "goal update", "房主修改 Goal 的目标或预算（0 表示不限）", True)
+    add_text(update, "objective")
+    for parser in (start, update):
+        for name in ("max-continues", "max-minutes"):
+            parser.add_argument(f"--{name}", type=non_negative_int, default=argparse.SUPPRESS, help="房主可选预算，0 表示不限")
+
+
+def mode_commands(subcommands, registry):
+    """Whichever mode (goal or discussion) is open: read it, and let the host declare it complete."""
+    add_leaf(subcommands, registry, "mode view", "读取房间当前的模式（goal / discussion / 无）、状态和宣告完成所需的 revision", True)
+    done = add_leaf(subcommands, registry, "mode done",
+                    "主持人对照实际结果核验后宣告当前模式完成：Goal 结束为完成，讨论收束；先 mode view 取 revision", True)
+    done.add_argument("--revision", required=True, help="mode view 返回的 revision；状态变化后须重新读取")
+    add_text(done, "note")
 
 
 def execution_commands(subcommands, registry):
@@ -402,7 +436,7 @@ def build_parser(prog="discuss"):
     for name, register in (("room", room_commands), ("message", message_commands),
                            ("attachment", attachment_commands),
                            ("turn", turn_commands), ("state", state_commands),
-                           ("run", run_commands), ("execution", execution_commands), ("member", member_commands), ("review", review_commands)):
+                           ("run", run_commands), ("goal", goal_commands), ("mode", mode_commands), ("execution", execution_commands), ("member", member_commands), ("review", review_commands)):
         group = subcommands.add_parser(name, help=f"{name} 操作", allow_abbrev=False)
         add_common(group)
         register(group.add_subparsers(dest="action", required=True), registry)
@@ -725,7 +759,13 @@ def plan_run(args):
     path = f"/api/rooms/{args.room}/discussion"
     if args.action == "view":
         return RequestPlan(path)
-    body = {"action": "end" if args.action == "stop" else args.action, "revision": args.revision}
+    body = {"action": "end" if args.action == "stop" else args.action}
+    if args.action == "start" and bool(args.request) == bool(args.revision):
+        raise CliError("run start 须二选一：房主用 --revision，主持人用 --request（discuss_start 请求编号）")
+    if args.revision:
+        body["revision"] = args.revision
+    if args.action == "start" and args.request:
+        body["request_id"] = args.request
     if args.action == "start":
         goal = text_field(args, "goal")
         if goal is not None:
@@ -736,6 +776,43 @@ def plan_run(args):
             body["limits"] = limits
         if args.submission_id:
             body["submission_id"] = args.submission_id
+    return RequestPlan(path, "POST", body)
+
+
+def plan_goal(args):
+    """Build one goal request; budgets and the objective are sent only when given."""
+    path = f"/api/rooms/{args.room}/goal"
+    if args.action == "view":
+        return RequestPlan(path)
+    body = {"action": args.action}
+    objective = text_field(args, "objective") if args.action in ("start", "update") else None
+    if objective is not None:
+        body["objective"] = objective
+    note = text_field(args, "note") if args.action in ("done", "block") else None
+    if note is not None:
+        body["note"] = note
+    for key in ("max_continues", "max_minutes"):
+        if hasattr(args, key):
+            body[key] = getattr(args, key)
+    if args.action == "start":
+        if bool(args.request) == bool(args.revision):
+            raise CliError("goal start 须二选一：主持人用 --request（goal_start 请求编号），房主用 --revision")
+        if args.request:
+            body["request_id"] = args.request
+    if getattr(args, "revision", None):
+        body["revision"] = args.revision
+    return RequestPlan(path, "POST", body)
+
+
+def plan_mode(args):
+    """Read the open mode, or complete it with the revision read from mode view."""
+    path = f"/api/rooms/{args.room}/mode"
+    if args.action == "view":
+        return RequestPlan(path)
+    body = {"action": "done", "revision": args.revision}
+    note = text_field(args, "note")
+    if note is not None:
+        body["note"] = note
     return RequestPlan(path, "POST", body)
 
 
@@ -778,7 +855,7 @@ def build_plan(args):
     handlers = {"room": plan_room, "message": plan_message, "turn": plan_turn,
                 "attachment": plan_attachment,
                 "state": plan_state, "api": plan_api,
-                "run": plan_run, "execution": plan_execution, "member": plan_member, "review": plan_review}
+                "run": plan_run, "goal": plan_goal, "mode": plan_mode, "execution": plan_execution, "member": plan_member, "review": plan_review}
     bind_room(args)
     plan = RequestPlan("/api/health") if args.resource == "health" else handlers[args.resource](args)
     fill_submission_id(args, plan)
@@ -1093,6 +1170,12 @@ def run(args, registry):
     except (KeyError, TypeError) as error:
         raise CliError("响应结构与 CLI 不兼容，请用 api 命令检查服务版本", 3,
                        **meta, outcome="unknown" if plan.method == "POST" else "unavailable") from error
+    body = plan.body or {}
+    if getattr(args, "operation", "") == "message post" and len(body.get("to") or []) == 1 \
+            and not body.get("handoff") and not body.get("next_review"):
+        # A single dispatch without handoff ends the chain at the member's answer; hosts often expect it back.
+        meta["hint"] = (f"若你是主持人：只点名 {body['to'][0]} 一位且未加 --handoff，它的回答直接给用户，你不会再被唤醒。"
+                        "以后需要据结果安排下一步（如评审、验证）时派活加 --handoff。")
     return {"ok": True, "data": result, "meta": meta}
 
 

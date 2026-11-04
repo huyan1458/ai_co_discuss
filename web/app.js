@@ -66,7 +66,7 @@ const MANUAL_TRIGGER_INSTRUCTION = "首次复制后，可由人工或软件原�
 const MANAGEMENT_LOGIN_HINT = "需要登录管理员账号或使用创建该房间的浏览器";
 const THEMES = ["channel", "channel-light"];
 // proxy and host_proxy label answers relayed for the retired web chatbot members.
-const SOURCE_LABELS = { demo: "示例", user: "本人发言", proxy: "用户代发", cli: "CLI 发言", api: "API 发言", url: "历史 URL 发言", host_proxy: "主持人代发" };
+const SOURCE_LABELS = { demo: "示例", user: "本人发言", proxy: "用户代发", cli: "CLI 发言", api: "API 发言", url: "历史 URL 发言", host_proxy: "主持人代发", goal: "Goal" };
 const TURN_LABELS = { pending: "待处理", notified: "已通知，待回答", answered: "已回答", cancelled: "已取消" };
 const PLATFORM_IDENTITIES = {
   "用户": { label: "User", initials: "U", style: "user", icon: "/icons/user.svg", description: "发起与协助" },
@@ -81,7 +81,7 @@ const PLATFORM_IDENTITIES = {
 // An instance shows its platform's nickname with its own suffix: Antigravity-2 → Gemini-2.
 const IDENTITIES = by_platform(PLATFORM_IDENTITIES, (identity, name) => ({ ...identity, label: identity.label ? identity.label + name.slice(platform_of(name).length) : name, description: "AI 实例" }));
 const state = { rooms: [], folders: [], room: null, page: 1, pages: 1, query: "", mention_only: false, host_only: false,
-  named_followup: false, create_discussion: false,
+  named_followup: false, create_discussion: false, create_goal: null,
   archive_view: false, directory_sort: "manual", management: null, dragged_room: null, folder_moves: new Map(), folder_version: 0,
   reply_to: null, tab: "discussion", refresh_version: 0, context_dirty: false, topic_dirty: false,
   snapshot_id: 0, pending_submission: null, pending_room: null, toast_timer: null, editing_queued: null };
@@ -206,22 +206,9 @@ function notify_failure(error, message) {
   error.notified = true;
 }
 
-/** The administrator session token kept by this browser, or an empty string. */
-function admin_token() {
-  if (state.admin.local) return "";
-  try { return localStorage.getItem(ADMIN_SESSION_KEY) || ""; } catch { return ""; }
-}
-
-/** Store or clear the administrator session token; storage failures only lose persistence. */
-function store_admin_token(token) {
-  try { token ? localStorage.setItem(ADMIN_SESSION_KEY, token) : localStorage.removeItem(ADMIN_SESSION_KEY); } catch { /* Keep the session in memory only. */ }
-}
-
-/** The administrator header for writes that bypass request_json, or no header without a session. */
-function admin_headers() {
-  const session = admin_token();
-  return session ? { "X-Discussion-Admin": session } : {};
-}
+// The administrator login is an HttpOnly cookie the website sets; this page never sees or stores the token. An older
+// version kept it in localStorage, where any script could read it, so that copy is deleted.
+try { localStorage.removeItem(ADMIN_SESSION_KEY); } catch { /* Nothing stored. */ }
 
 /** Request JSON from the local or remotely hosted discussion service. */
 async function request_json(path, payload, access_token) {
@@ -232,9 +219,7 @@ async function request_json(path, payload, access_token) {
   const options = { cache: "no-store" };
   const target_room = path.match(/^\/api\/rooms\/([^/?]+)/)?.[1];
   const token = access_token || (target_room ? localStorage.getItem(`discuss-access:${target_room}`) : null);
-  const session = admin_token();
   options.headers = token ? { "X-Discussion-Token": token } : {};
-  if (session) options.headers["X-Discussion-Admin"] = session;
   if (payload !== undefined) {
     options.method = "POST";
     options.headers["Content-Type"] = "application/json";
@@ -261,7 +246,6 @@ function apply_admin_identity(profile) {
 /** Record the server's administrator state and refresh every identity-dependent view without a reload. */
 function apply_admin_state(info) {
   const local = info.local === true;
-  if (local || !info.logged_in) store_admin_token("");
   Object.assign(state.admin, { loaded: true, local, computer_rooms: info.computer_rooms === true, registered: Boolean(info.registered), setup_available: Boolean(info.setup_available),
     logged_in: Boolean(info.logged_in), profile: info.profile ? { username: info.profile.username, avatar: info.profile.avatar || "" } : null });
   apply_admin_identity(state.admin.profile);
@@ -291,9 +275,8 @@ function admin_error(error) {
   return error;
 }
 
-/** Store the new session and show the owner's identity. */
-function accept_admin_session({ token, profile }) {
-  store_admin_token(token);
+/** Show the owner's identity once signed in; the website keeps the login in its cookie. */
+function accept_admin_session({ profile }) {
   apply_admin_state({ registered: true, setup_available: false, logged_in: true, profile, computer_rooms: state.admin.computer_rooms });
   // Pairing and the paired computer both need the session, so read them again now.
   computer_rooms_only() ? connect_computer_rooms() : load_launch_settings();
@@ -314,11 +297,10 @@ async function login_admin({ username, password }) {
   catch (error) { throw admin_error(error); }
 }
 
-/** Leave this browser; the local session is dropped even if the server cannot be reached. */
+/** Leave this browser: the website ends the login and clears its cookie. */
 async function logout_admin() {
   try { await request_json("/api/admin/logout", {}); }
-  catch { /* The token is removed below either way. */ }
-  store_admin_token("");
+  catch { /* Shown as signed out either way; the login also expires on its own. */ }
   state.admin.logged_in = false;
   state.launch.relay = null;
   if (state.remote_rooms) await show_computer_rooms(false).catch(() => {});
@@ -330,6 +312,14 @@ async function logout_admin() {
 /** List this account's live logins, each with the browser that signed in and whether it is this one. */
 async function admin_sessions() {
   return (await request_json("/api/admin/sessions")).sessions;
+}
+
+/** The passkeys that can sign in to this website, and removing one (a lost device's). */
+async function admin_passkeys() {
+  return (await request_json("/api/admin/passkeys")).passkeys;
+}
+async function delete_admin_passkey(id) {
+  await request_json("/api/admin/passkey-delete", { id });
 }
 
 /** End one other login by id, or every login but this one with { others: true }. */
@@ -384,7 +374,7 @@ async function admin_avatar_from_file(file) {
 /** Whether this browser may write as the room owner: its own control credential, a logged-in administrator session, or the
  *  loopback-only local site, whose server writes as the owner for every visitor (`admin_as_owner`). */
 function has_room_control(room_id) {
-  return Boolean(localStorage.getItem(`discuss-access:${room_id}`) || state.admin.local || (state.admin.logged_in && admin_token()));
+  return Boolean(localStorage.getItem(`discuss-access:${room_id}`) || state.admin.local || state.admin.logged_in);
 }
 
 /** Explain why a management write failed when this browser has neither credential. */
@@ -1156,6 +1146,7 @@ function reset_create_form() {
   state.launch.scheduler = default_scheduler();
   state.named_followup = false;
   state.create_discussion = false;
+  state.create_goal = null;
   state.create_chain_rounds = DEFAULT_CHAIN_ROUNDS;
   state.create_workflow = null;
   state.create_host_workflows = false;
@@ -1963,8 +1954,12 @@ async function submit_room(event, folder_id = null) {
   const discussion = state.create_discussion ? { goal: payload.goal.trim(), named_followup: state.named_followup,
     limits: read_limits("new-room") } : null;
   if (discussion && !(launching && payload.host && payload.experts[payload.host] === "cli")) throw new Error("开启讨论需要一位由本机唤醒的 AI 主持人；请先添加并设为主持人");
-  // The key joins the signature only when a discussion is requested, so recovered requests keep matching their stored signature.
-  const signed = (current_payload, current_draft) => JSON.stringify(discussion ? { payload: current_payload, launch_draft: current_draft, discussion } : { payload: current_payload, launch_draft: current_draft });
+  const goal = state.create_goal ? { ...state.create_goal, objective: state.create_goal.objective.trim() } : null;
+  if (goal && !goal.objective) throw new Error("请填写 Goal 目标");
+  if (goal && !(launching && payload.host && payload.experts[payload.host] === "cli")) throw new Error("开启 Goal 需要一位由本机唤醒的 AI 主持人；请先添加并设为主持人");
+  // The key joins the signature only when a discussion or goal is requested, so recovered requests keep matching their stored signature.
+  const signed = (current_payload, current_draft) => JSON.stringify(discussion ? { payload: current_payload, launch_draft: current_draft, discussion }
+    : goal ? { payload: current_payload, launch_draft: current_draft, goal } : { payload: current_payload, launch_draft: current_draft });
   const signature = signed(payload, launch_draft);
   const navigation = state.navigation_version;
   if (!launching) element("room-dialog").close();
@@ -1984,6 +1979,7 @@ async function submit_room(event, folder_id = null) {
     } });
   state.pending_room = null;
   if (discussion) await open_discussion_after_creation(room.id, discussion);
+  if (goal) await open_goal_after_creation(room.id, goal);
   if (signed(room_creation_payload(folder_id), launching ? creation_launch_options() : null) === signature) {
     element("room-form").reset();
     render_expert_inputs("new-expert-modes", default_experts());
@@ -2002,6 +1998,18 @@ async function open_discussion_after_creation(room_id, { goal, named_followup, l
       ...(goal ? { goal } : {}), limits, named_followup });
   } catch (error) {
     notify("warning", `房间已创建，但开启讨论失败：${error.message}；可在右侧成员栏重试`);
+  }
+}
+
+/** Open the goal of a room just created; a failure leaves the room as an ordinary free room. */
+async function open_goal_after_creation(room_id, { objective, max_continues, max_minutes }) {
+  const path = `/api/rooms/${room_id}/goal`;
+  try {
+    const current = await request_json(path);
+    await request_json(path, { action: "start", revision: current.revision, objective, max_continues, max_minutes });
+    state.create_goal = null;
+  } catch (error) {
+    notify("warning", `房间已创建，但开启 Goal 失败：${error.message}；可在右侧成员栏重试`);
   }
 }
 
@@ -2190,7 +2198,7 @@ async function create_device_passkey() {
   return passkey_prompt({ title: "为这台设备创建通行密钥", description: "之后用指纹、面容或设备密码登录、续期和开启远程可写，不用再输密码。", confirm_label: "创建通行密钥",
     run: async () => {
       const created = await navigator.credentials.create({ publicKey: { challenge, rp: computer.rp,
-        user: { id: b64url_to_bytes(computer.user_id), name: "codiscuss", displayName: "AI CoDiscuss" },
+        user: { id: b64url_to_bytes(computer.user_id), name: computer.user_name || "codiscuss", displayName: computer.user_name || "AI CoDiscuss" },
         pubKeyCredParams: [{ type: "public-key", alg: -7 }, { type: "public-key", alg: -257 }],
         authenticatorSelection: { userVerification: "required", residentKey: "preferred" }, attestation: "none", timeout: PASSKEY_TIMEOUT_MS,
         excludeCredentials: (computer.exclude || []).map(id => ({ type: "public-key", id: b64url_to_bytes(id) })) } });
@@ -2200,6 +2208,14 @@ async function create_device_passkey() {
       await request_json("/api/admin/passkey-register", { challenge_id: website.challenge_id, computer_challenge: computer.challenge, credential, label: device_label() });
       notify("info", "已创建通行密钥");
     } });
+}
+
+/** Show a pairing code for another device: from the computer's own page directly, from a paired device after its passkey. */
+async function invite_device(temporary) {
+  if (!relay_machine) return local_launch_request("device-pairing", { temporary });
+  const options = await relay_command("passkey-challenge", { purpose: "pair" });
+  return passkey_prompt({ title: "添加新设备", description: "新设备将获得与这台设备相同的远程权限，请用通行密钥确认是你本人在操作。", confirm_label: "用通行密钥确认",
+    run: async () => relay_command("device-pairing", { temporary, challenge_id: options.challenge_id, assertion: await passkey_assertion(options) }) });
 }
 
 /** Confirm remote writing in one room with this device's passkey; the computer grants twelve hours. */
@@ -2258,7 +2274,8 @@ async function meet_device_need(error) {
  */
 async function seal_relay_request(machine, id, request) {
   const encoder = new TextEncoder();
-  const body = JSON.stringify({ ...request, sent_at: Date.now() });
+  // The computer it is meant for is signed too, so the request cannot be passed on to another paired computer.
+  const body = JSON.stringify({ ...request, machine: machine.id, sent_at: Date.now() });
   let plain = { body };
   if (request.action !== "device-pair") {
     const device = await device_identity();
@@ -2396,7 +2413,7 @@ async function relay_upload(path, data) {
 async function post_room_file(path, body, token) {
   if (state.remote_rooms) return relay_upload(path, body);
   const response = await fetch(path, { method: "POST",
-    headers: { "Content-Type": "application/octet-stream", ...(token ? { "X-Discussion-Token": token } : {}), ...admin_headers() }, body });
+    headers: { "Content-Type": "application/octet-stream", ...(token ? { "X-Discussion-Token": token } : {}) }, body });
   const result = await response.json();
   if (!response.ok) throw new Error(result.error || "附件上传失败");
   return result;
@@ -2491,7 +2508,8 @@ function relay_event_source() {
   const target = new EventTarget();
   const emit = (type, data) => target.dispatchEvent(Object.assign(new Event(type), { data }));
   const url = `${location.origin.replace(/^http/, "ws")}/api/machines/${encodeURIComponent(relay_machine.id)}/relay`;
-  const socket = new WebSocket(url, [RELAY_PROTOCOL, `a.${admin_token()}`]);
+  // The login cookie goes with the upgrade, so no credential travels in the subprotocol.
+  const socket = new WebSocket(url, [RELAY_PROTOCOL]);
   let ping;
   target.readyState = 0;
   socket.addEventListener("open", () => {
@@ -2672,13 +2690,14 @@ async function load_launch_settings() {
 
 /** The computer paired with this site, most recently seen first; only the administrator can read or use it. */
 async function load_relay_machine() {
-  if (!admin_token()) return null;
+  // The admin state is read before launch settings at start-up, so this knows whether a login cookie exists.
+  if (state.admin.local || !state.admin.logged_in) return null;
   try { return (await request_json("/api/machines")).machines[0] || null; } catch { return null; }
 }
 
 /** Pair the connected computer so devices without the local service can launch on it; needs the administrator session. */
 async function pair_local_machine() {
-  if (!admin_token()) return;
+  if (state.admin.local || !state.admin.logged_in) return;
   try { await request_json("/api/machines", await local_launch_request("machine-link", {})); }
   catch (error) { console.warn("Pairing this computer failed:", error.message); }
 }
@@ -2999,11 +3018,14 @@ function workflow_preset({ card, requested_access, needs_platform, ...preset }) 
   return preset;
 }
 
-/** Fill the new-room form with a workflow's cards, each a preset-made instance, and remember which card each plays. */
+/**
+ * Fill the new-room form with a workflow's cards, each a preset-made instance, and remember which card each plays.
+ * Choosing another (or the same one again after editing) replaces the previous cards; clearing the choice keeps them as ordinary members.
+ */
 async function choose_create_workflow(id) {
   const workflow = id ? await local_launch_request("workflows", { action: "get", id }) : null;
-  for (const name of Object.values(state.create_workflow?.members || {})) write_view_expert("new-expert-modes", name, "");
   if (!workflow) { state.create_workflow = null; return publish_view(); }
+  for (const name of Object.values(state.create_workflow?.members || {})) write_view_expert("new-expert-modes", name, "");
   const members = {};
   for (const agent of workflow.agents) members[agent.card] = add_preset_instance("new-expert-modes", workflow_preset(agent), "cli");
   state.create_workflow = { id, label: workflow.label || id, members };
@@ -3056,6 +3078,14 @@ function write_create_chain_rounds(value) {
 /** Choose whether a new room opens a discussion right away; the room itself is always the same collaboration room. */
 function write_create_discussion(value) {
   state.create_discussion = Boolean(value);
+  if (state.create_discussion) state.create_goal = null;
+  publish_view();
+}
+
+/** Turn the new room's goal on (with a patch of its fields) or off; a goal and a discussion exclude each other. */
+function write_create_goal(patch) {
+  state.create_goal = patch === null ? null : { objective: "", max_continues: 0, max_minutes: 0, ...(state.create_goal || {}), ...patch };
+  if (state.create_goal) state.create_discussion = false;
   publish_view();
 }
 
@@ -3385,6 +3415,38 @@ async function start_room_discussion({ goal, max_rounds, max_minutes, named_foll
   if (state.room?.id !== room_id) return;
   await refresh_room();
   show_toast("讨论已开启，由主持人推进；需本机接入程序保持运行");
+}
+
+/** Open a goal from the page with the revision just read; the host is woken right away to start on it. */
+async function start_room_goal({ objective, max_continues = 0, max_minutes = 0 }) {
+  const room_id = state.room.id, path = `/api/rooms/${room_id}/goal`;
+  if (!has_room_control(room_id)) throw new Error(MANAGEMENT_LOGIN_HINT);
+  const current = await request_json(path);
+  if (state.room?.id !== room_id) return;
+  await request_json(path, { action: "start", revision: current.revision, objective, max_continues, max_minutes });
+  if (state.room?.id !== room_id) return;
+  await refresh_room();
+  show_toast("Goal 已开启，主持人会持续推进；需本机接入程序保持运行");
+}
+
+/** Change the open goal's objective or budgets. */
+async function update_room_goal({ objective, max_continues = 0, max_minutes = 0 }) {
+  const room_id = state.room.id;
+  if (!has_room_control(room_id)) throw new Error(MANAGEMENT_LOGIN_HINT);
+  await request_json(`/api/rooms/${room_id}/goal`, { action: "update", objective, max_continues, max_minutes });
+  if (state.room?.id !== room_id) return;
+  await refresh_room();
+  show_toast("Goal 已更新");
+}
+
+/** Pause, resume or end the open goal; only the owner controls it. */
+async function goal_control(action) {
+  const room_id = state.room.id;
+  if (!has_room_control(room_id)) throw new Error(MANAGEMENT_LOGIN_HINT);
+  await request_json(`/api/rooms/${room_id}/goal`, { action });
+  if (state.room?.id !== room_id) return;
+  await refresh_room();
+  show_toast({ pause: "Goal 已暂停，房间空闲时不再唤醒主持人", resume: "Goal 已继续", clear: "Goal 已结束，房间回到自由协作" }[action]);
 }
 
 /** Conclude the discussion and go on as a free room; every message and the conclusion stay. */
@@ -4271,7 +4333,7 @@ function view_snapshot() {
     device: { id: state.device.id, needs: state.device.needs, pairing_code: state.device.pairing_code,
       prompt: state.device.prompt ? { title: state.device.prompt.title, description: state.device.prompt.description, confirm_label: state.device.prompt.confirm_label } : null },
     tab: state.tab, snapshot_id: state.snapshot_id, context_dirty: state.context_dirty,
-    theme: document.documentElement.dataset.theme, fields, experts, launch: structuredClone(state.launch), named_followup: state.named_followup, create_discussion: state.create_discussion, create_chain_rounds: state.create_chain_rounds, create_workflow: state.create_workflow, create_host_workflows: state.create_host_workflows };
+    theme: document.documentElement.dataset.theme, fields, experts, launch: structuredClone(state.launch), named_followup: state.named_followup, create_discussion: state.create_discussion, create_goal: state.create_goal, create_chain_rounds: state.create_chain_rounds, create_workflow: state.create_workflow, create_host_workflows: state.create_host_workflows };
 }
 
 /** Update a shared draft using the same input events as the original controls. */
@@ -4481,7 +4543,7 @@ async function execute_view_action(name, value) {
     save_context: () => save_context(event), save_topic: () => save_topic(event),
     filter: filter_view, reply: set_view_reply, cancel_reply, skip_turn,
     copy_cli: () => copy_context(), copy_background,
-    download_member_access, copy_member_access_text, copy_member_join, copy_member_launch: name => copy_member_join(name, true), pause_discussion, restart_discussion, start_room_discussion, end_room_discussion,
+    download_member_access, copy_member_access_text, copy_member_join, copy_member_launch: name => copy_member_join(name, true), pause_discussion, restart_discussion, start_room_discussion, end_room_discussion, start_room_goal, update_room_goal, goal_control,
     save_launch_defaults, resume_launch, discard_launch, retry_launch_connection, check_launch_connection: load_launch_settings,
     load_room_configuration, save_room_configuration, interrupt_member, retry_delivery, retract_message, retract_latest, stop_room, rewind_and_send, fork_room, change_member, reorder_speakers, invite_member,
     choose_create_workflow, enable_room_workflow, move_workflow_members, set_room_host_workflows,
@@ -4508,15 +4570,16 @@ function change_view_theme(theme) {
 
 window.discuss_view = { snapshot: view_snapshot, write_field: write_view_field, notify, load_decision_input,
   write_launch: write_launch_field, default_launch_entry, description_template, save_description_template, description_draft, write_description_draft, describe_member, set_chain_rounds, continue_chain, expert_presets, apply_expert_preset, unique_instance, member_label, default_name, label_draft, write_label_draft, preset_identity, save_expert_preset, delete_expert_preset, write_room_connection, write_room_adapter, launch_clients: LAUNCH_CLIENTS,
-  launch_model_state, load_launch_models, write_launch_model, save_launch_api_key, write_scheduler, save_scheduler_api_key, check_scheduler, write_named_followup, write_create_discussion, write_create_chain_rounds, check_launch_api, launch_summary, launch_can_set_access, pick_launch_directory, browse_local_directory, list_remote_directories, save_launch_projects, restore_launch_profile, reset_create_form, empty_discussion_message,
+  launch_model_state, load_launch_models, write_launch_model, save_launch_api_key, write_scheduler, save_scheduler_api_key, check_scheduler, write_named_followup, write_create_discussion, write_create_goal, write_create_chain_rounds, check_launch_api, launch_summary, launch_can_set_access, pick_launch_directory, browse_local_directory, list_remote_directories, save_launch_projects, restore_launch_profile, reset_create_form, empty_discussion_message,
   start_drag: start_directory_drag, reconnect: reconnect_live_updates, stop_label, local_request: local_launch_request,
   attachment_markup, attachment_size, attachment_file_icon, drop_attachments, paste_attachments,
   write_expert: write_view_expert, add_instance: add_view_instance, add_preset: add_preset_instance, platform_of, execute: execute_view_action, theme: change_view_theme,
   reload_workflows, workflow_preset, create_workflow_label, write_create_host_workflows,
   admin: { register: register_admin, login: login_admin, logout: logout_admin,
     update_profile: update_admin_profile, avatar_from_file: admin_avatar_from_file, validate: validate_admin_form,
-    sessions: admin_sessions, revoke: revoke_admin_sessions, change_password: change_admin_password, login_with_passkey },
-  device: { request: device_request, pair: pair_this_device, create_passkey: create_device_passkey, renew: renew_this_device, confirm_write: confirm_write_grant,
+    sessions: admin_sessions, revoke: revoke_admin_sessions, change_password: change_admin_password, login_with_passkey,
+    passkeys: admin_passkeys, delete_passkey: delete_admin_passkey },
+  device: { request: device_request, pair: pair_this_device, invite: invite_device, create_passkey: create_device_passkey, renew: renew_this_device, confirm_write: confirm_write_grant,
     label: device_label, prompt_confirm: () => state.device.prompt?.run(), prompt_cancel: () => state.device.prompt?.cancel() },
   request: request_json, rewind_plan, identities: IDENTITIES, display_name, mention_handles, mentioned_members, render_room_markdown, sources: SOURCE_LABELS,
   set_member_access, set_member_model, allow_denials, set_member_adapter, reload_room_models, read_room_files, limits_label, stop_reason_label, participant_model, participant_files, participant_session_hint, participant_access,

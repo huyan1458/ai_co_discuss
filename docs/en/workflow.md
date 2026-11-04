@@ -30,15 +30,28 @@ Mentions between ordinary members are references only and do not wake anyone. Me
 
 ## Discussions
 
-Click **Start discussion** (开启讨论) in the member panel, or check **Start discussion after creating** (创建后开启讨论) when creating a room:
+Click **Start discussion** (开启讨论) in the member panel, choose **Start discussion** under **After creating** (创建后) when creating a room, or send `/discuss <goal>` in the input box (a bare `/discuss` lets the host draw the goal from the recent conversation, and it declines when it cannot; a command start uses the room's saved default limits):
 
 1. Write a goal and set round and time limits. The dialog starts with the room's saved defaults, set when creating the room and editable in **Edit topic** when no discussion is active or paused. Changes in the start dialog apply only to that discussion.
 2. The host breaks down the question and schedules speakers. Experts first give independent views, then respond to each other.
 3. When a limit is reached, the host declares the goal done, or you click **End**, the room returns to free collaboration with history and conclusions kept. You can start another discussion later.
 
+During a discussion, `/discuss pause`, `/discuss resume` and `/discuss stop` pause, resume or end it. A discussion and a Goal never run at the same time.
+
 You can `@` any member during a discussion without using a round. If that member is already handling a discussion request, the new request waits for the same session. Unaddressed messages go to the host; to stop the current speaker, click the stop button on their working card or **Skip** (跳过) on the progress board; the discussion moves on to the next speaker. Group mentions, retracting, editing and branching are unavailable during a discussion.
 
 Discussions and free collaboration share the same execution and failure cards. A failed delivery retries up to three times; you can retry immediately or stop it. When retries run out, only that request fails and the host decides whether to skip, reschedule or pause the discussion. The room is not paused automatically. Scheduled online members can reply through the host's relay; the discussion host itself must be woken locally.
+
+## Goal
+
+A Goal keeps the host pursuing one objective: when the room goes idle, the local service wakes the host again, until the host confirms the goal is complete or blocked, a budget runs out, or you end it. Rooms without a Goal behave as before: members stop when their work is done and wait for you.
+
+- **Start**: send `/goal <objective>` and the host starts it as written; with a bare `/goal` the host draws the objective from the recent conversation and declines when it cannot. You can also click **Start Goal** (开启 Goal) in the member panel, or choose **Start Goal** under **After creating** (创建后) when creating a room. Typing `/` at the start of the input box lists Goal and Discussion in a **Modes** (模式) group; while one is running, it lists its pause, resume and end commands.
+- **Progress**: after the host's dispatched work ends and the room stays idle for 30 seconds (not counting when you just spoke, a member is still working or messages are queued), the host is woken once, shown as "Goal 续跑 #N". If the host then hands out no work (it only answers or asks you), it is not woken again until you reply.
+- **Budget**: unlimited by default. You can set a wake-up count or time limit when starting or via **Edit**; at the limit the host wraps up once and the Goal ends. Three failed wake-ups in a row stop it.
+- **End**: the host declares it complete after checking the actual results, or blocked when the same obstacle persists for three wake-ups. You can `/goal pause`, `/goal resume`, `/goal clear` or `/goal edit <new objective>` at any time, or use the panel buttons. **Stop all** also pauses the Goal. An end card in the conversation offers **Continue Goal** with the same objective.
+
+A Goal grants no extra permissions: the host stays within members' project access and the chain-round limit, and does not invite members, commit, push or deploy on its own.
 
 ### Named Follow-ups
 
@@ -60,6 +73,7 @@ When creating a room, you can add a decision model under **Smart Scheduling** (�
 - Unaddressed messages go to the member they are clearly meant for, to everyone at once, to everyone one after another in speaking order (a relay or a count-off), or to no one; otherwise to the host.
 - Without Smart Scheduling, `@全体成员` runs everyone together. With it, uncertain or failed decisions go to the host. `@全体依次` always uses the established speaking order.
 - In discussions, a local follow-up becomes an ordinary question without consuming a turn or changing the queue, including questions for members who already spoke or the host. It also picks the next speaker between rounds. Without Smart Scheduling, the host can make the same handoff.
+- While a Goal runs and the room is idle, it judges whether the latest replies are waiting for you (a question, an authorization or decision, or a completion report). When confident, the host is not woken and the room waits for your reply; when unsure or on errors, the host is woken as usual.
 - When the host has preauthorized a specific read-only reviewer, a completed implementation batch can move to that reviewer. The model checks delivery completeness, not code correctness, and cannot choose another reviewer. Review results still return to the host.
 
 It acts only when confident, and otherwise hands over to the host. Every decision is shown in the conversation and can be rated. The room title and recent messages are sent to the chosen provider. Preauthorized review judgments also send the full assignment, delivery text and execution reports; inputs above the supported limit go to the host.

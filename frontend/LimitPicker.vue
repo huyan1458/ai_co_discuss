@@ -1,4 +1,7 @@
 <script>
+// What the first wheel counts by default: a discussion's rounds.
+const ROUND_COUNT = { label: "轮次上限", unit: "轮", noun: "轮次", group: "讨论轮次和时长" };
+
 /** Format a minute count as hours and remaining minutes for the form and its summary. */
 export function format_duration(minutes) {
   const hours = Math.floor(minutes / 60), remainder = minutes % 60;
@@ -10,7 +13,10 @@ export function format_duration(minutes) {
 import { computed, onBeforeUnmount, reactive, watch } from "vue";
 
 // append: only the round count, to add rounds to a running discussion (never unlimited).
-const props = defineProps({ rounds: { type: Number, default: 3 }, minutes: { type: Number, default: 0 }, append: Boolean });
+// count: what the first wheel counts; discussions count rounds, a goal counts its automatic wake-ups.
+const props = defineProps({ rounds: { type: Number, default: 3 }, minutes: { type: Number, default: 0 }, append: Boolean,
+  count: { type: Object, default: () => ROUND_COUNT } });
+const count_text = props.count || ROUND_COUNT;
 const emit = defineEmits(["update:rounds", "update:minutes"]);
 const ROW_HEIGHT = 32;
 const ROW_ANGLE = Math.PI / 7;
@@ -29,11 +35,11 @@ const HAND_FREQUENCY = 6;
 const WALL_FREQUENCY = 8;
 const TAP_DISTANCE = 4;
 const fields = reactive([
-  { key: "rounds", label: "轮次上限", selected: 3, unlimited: false, open: false },
+  { key: "rounds", label: count_text.label, selected: 3, unlimited: false, open: false },
   { key: "minutes", label: "时长上限", selected: 60, unlimited: false, open: false },
 ]);
 const wheels = reactive([
-  { key: "rounds", field: "rounds", label: "轮次上限", unit: "轮", min: 1, max: 100, initial: 3 },
+  { key: "rounds", field: "rounds", label: count_text.label, unit: count_text.unit, min: 1, max: 100, initial: 3 },
   { key: "hours", field: "minutes", label: "小时", unit: "小时", min: 0, max: 24, initial: 1 },
   { key: "minutes", field: "minutes", label: "分钟", unit: "分钟", min: 0, max: 59, initial: 0 },
 ].map((wheel) => ({ ...wheel, x: wheel.initial, v: 0, selected: wheel.initial,
@@ -45,7 +51,7 @@ const shown = computed(() => props.append ? fields.slice(0, 1) : fields);
 const field_label = (field) => props.append ? "追加轮数" : field.label;
 const field_wheels = (field) => wheels.filter((wheel) => wheel.field === field.key);
 const wheel_field = (wheel) => fields.find((field) => field.key === wheel.field);
-const field_text = (field) => field.key === "rounds" ? `${field.selected} 轮` : format_duration(field.selected);
+const field_text = (field) => field.key === "rounds" ? `${field.selected} ${count_text.unit}` : format_duration(field.selected);
 const spring = (distance, velocity, frequency) => -((2 * Math.PI * frequency) ** 2) * distance - 4 * Math.PI * frequency * velocity;
 
 /** Load a finite value into one column without leaving residual motion. */
@@ -297,12 +303,12 @@ defineExpose({ settle });
 </script>
 
 <template>
-  <div class="limit-picker" :class="{ 'is-append': append }" role="group" :aria-label="append ? '追加轮数' : '讨论轮次和时长'">
+  <div class="limit-picker" :class="{ 'is-append': append }" role="group" :aria-label="append ? '追加轮数' : count.group">
     <div v-for="field in shown" :key="field.key" class="limit-field">
       <div class="limit-field-heading">
         <label :for="`limit-trigger-${field.key}`">{{ field_label(field) }}</label>
         <button v-if="!append" type="button" class="limit-unlimited" :aria-pressed="field.unlimited"
-          :aria-label="`不限${field.key === 'rounds' ? '轮次' : '时长'}`" @click="set_unlimited(field, !field.unlimited)">
+          :aria-label="`不限${field.key === 'rounds' ? count.noun : '时长'}`" @click="set_unlimited(field, !field.unlimited)">
           <UIcon name="i-lucide-infinity" aria-hidden="true" /><span>不限</span>
         </button>
       </div>
@@ -310,7 +316,7 @@ defineExpose({ settle });
         :ui="{ content: `limit-popover-content ${field.key === 'minutes' ? 'limit-duration-content' : ''}` }" @update:open="set_open(field, $event)">
         <button :id="`limit-trigger-${field.key}`" type="button" class="limit-trigger" :disabled="field.unlimited"
           :aria-label="`${field.label}：${field.unlimited ? '不限' : field_text(field)}`">
-          <span v-if="field.unlimited">不限{{ field.key === "rounds" ? "轮次" : "时长" }}</span>
+          <span v-if="field.unlimited">不限{{ field.key === "rounds" ? count.noun : "时长" }}</span>
           <span v-else class="limit-trigger-value"><span v-for="part in field_text(field).match(/\d+ \S+/g)" :key="part">{{ part }}</span></span>
           <UIcon name="i-lucide-chevrons-up-down" />
         </button>

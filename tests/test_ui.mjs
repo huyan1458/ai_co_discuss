@@ -463,7 +463,8 @@ function create_form_fixture() {
     write_launch: (name, field, value) => { (view.value.launch.profiles[name] ||= {})[field] = value; },
     default_launch_entry: name => { if (!bridge.launch_clients[name]?.some(item => item.value !== "api") && !view.value.launch.profiles[name]?.adapter) bridge.write_launch(name, "adapter", "api"); },
     write_field: (id, value) => { events.push([id, value]); view.value.fields[id] = value; },
-    write_create_discussion: value => { view.value.create_discussion = Boolean(value); },
+    write_create_discussion: value => { view.value.create_discussion = Boolean(value); if (value) view.value.create_goal = null; },
+    write_create_goal: patch => { view.value.create_goal = patch === null ? null : { objective: '', max_continues: 0, max_minutes: 0, ...(view.value.create_goal || {}), ...patch }; if (patch) view.value.create_discussion = false; },
     write_expert: (id, name, mode) => { if (mode) view.value.experts[id][name] = mode; else delete view.value.experts[id][name]; },
     add_instance: (id, name, mode) => {
       let number = 2;
@@ -505,9 +506,15 @@ test("create form blocks empty rosters and applies button readiness to form subm
   view.value.launch.available = false;
   context.set_expert_mode("Codex", "manual");
   submit(false); // A manual member still needs no local service.
-  context.toggle_discussion(true);
+  context.choose_drive("discussion");
   await nextTick();
   submit(true); // Enter cannot bypass the discussion host requirement either.
+  context.choose_drive("goal");
+  await nextTick();
+  submit(true); // A goal needs a woken host as well, and an objective.
+  context.choose_drive("free");
+  await nextTick();
+  submit(false);
   f.cleanup();
 });
 
@@ -1477,24 +1484,22 @@ function admin_fixture(routes) {
   return { ...fixture, requests, admin: fixture.context.test_state.admin };
 }
 
-test("admin login stores the session, sends it on later writes, and logout clears it", async () => {
+test("admin login stays in the website's cookie: the page never stores or sends the token, and logout ends it", async () => {
   const profile = { username: "Ada", avatar: "" };
   const { context, storage, requests, admin } = admin_fixture({
-    "/api/admin/login": ({ body }) => body.password === "right-password" ? { token: "t".repeat(64), profile } : { error: "用户名或密码错误", status: 401 },
+    "/api/admin/login": ({ body }) => body.password === "right-password" ? { profile } : { error: "用户名或密码错误", status: 401 },
     "/api/rooms/one/archive": {}, "/api/admin/logout": { ok: true },
   });
   await assert.rejects(context.login_admin({ username: "Ada", password: "wrong-password" }), /用户名或密码错误/);
-  assert.equal(storage.has("discuss-admin-session"), false);
   await context.login_admin({ username: " Ada ", password: "right-password" });
   assert.equal(requests.at(-1).body.username, "Ada");
-  assert.equal(storage.get("discuss-admin-session"), "t".repeat(64));
+  assert.equal(storage.has("discuss-admin-session"), false, "no login token is kept where scripts can read it");
   assert.equal(admin.logged_in, true);
   assert.equal(context.display_name("用户"), "Ada");
   await context.request_json("/api/rooms/one/archive", { actor: "用户" });
-  assert.equal(requests.at(-1).options.headers["X-Discussion-Admin"], "t".repeat(64));
+  assert.equal(requests.at(-1).options.headers["X-Discussion-Admin"], undefined, "the browser sends the cookie itself");
   await context.logout_admin();
   assert.deepEqual(requests.at(-1).body, {});
-  assert.equal(storage.has("discuss-admin-session"), false);
   assert.equal(admin.logged_in, false);
   assert.equal(context.display_name("用户"), "Ada", "the public name stays after signing out");
 });

@@ -121,6 +121,12 @@ CREATE TABLE IF NOT EXISTS admin_passkeys (
     label TEXT NOT NULL DEFAULT '',
     created_at INTEGER NOT NULL
 );
+-- Owner messages accepted through the optional remote entry (--remote-port), which has no device signature: work
+-- started from them runs members read-only on the computer.
+CREATE TABLE IF NOT EXISTS remote_entry_messages (
+    message_id INTEGER PRIMARY KEY REFERENCES messages(id) ON DELETE CASCADE,
+    room_id TEXT NOT NULL
+);
 -- One-time passkey challenges, valid two minutes.
 CREATE TABLE IF NOT EXISTS admin_challenges (
     id TEXT PRIMARY KEY,
@@ -1535,4 +1541,53 @@ CREATE TRIGGER event_discussion_changed AFTER UPDATE OF status ON discussion_ses
 BEGIN
     INSERT INTO room_events (room_id,at,kind,data) VALUES (NEW.room_id,CAST((julianday('now')-2440587.5)*86400000 AS INTEGER),'discussion.changed',
         json_object('session_id',NEW.id,'status',NEW.status,'from_status',OLD.status));
+END;
+-- Goal mode: one user-set objective per room at a time that the host keeps pursuing. `armed` lets an idle room wake the host
+-- once; the host dispatching work or the owner posting re-arms it. Times are epoch seconds; 0 budgets mean no limit.
+CREATE TABLE IF NOT EXISTS room_goals (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    room_id TEXT NOT NULL REFERENCES rooms(id) ON DELETE CASCADE,
+    objective TEXT NOT NULL,
+    status TEXT NOT NULL DEFAULT 'active' CHECK(status IN ('active','paused','complete','blocked','budget_limited','cleared')),
+    max_continues INTEGER NOT NULL DEFAULT 0,
+    max_minutes INTEGER NOT NULL DEFAULT 0,
+    continues INTEGER NOT NULL DEFAULT 0,
+    armed INTEGER NOT NULL DEFAULT 1,
+    start_request_id INTEGER,
+    started_message_id INTEGER NOT NULL DEFAULT 0,
+    ended_message_id INTEGER NOT NULL DEFAULT 0,
+    started_at INTEGER NOT NULL,
+    paused_at INTEGER NOT NULL DEFAULT 0,
+    paused_seconds INTEGER NOT NULL DEFAULT 0,
+    ended_at INTEGER NOT NULL DEFAULT 0,
+    end_note TEXT NOT NULL DEFAULT ''
+);
+CREATE UNIQUE INDEX IF NOT EXISTS one_open_goal ON room_goals(room_id) WHERE status IN ('active','paused');
+CREATE UNIQUE INDEX IF NOT EXISTS room_goals_start_request ON room_goals(start_request_id) WHERE start_request_id IS NOT NULL;
+-- Each automatic wake-up: the visible system message it hangs on and the host request it created.
+CREATE TABLE IF NOT EXISTS goal_continuations (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    goal_id INTEGER NOT NULL REFERENCES room_goals(id) ON DELETE CASCADE,
+    room_id TEXT NOT NULL REFERENCES rooms(id) ON DELETE CASCADE,
+    message_id INTEGER NOT NULL REFERENCES messages(id) ON DELETE CASCADE,
+    request_id INTEGER NOT NULL,
+    wrapup INTEGER NOT NULL DEFAULT 0
+);
+CREATE INDEX IF NOT EXISTS goal_continuations_goal ON goal_continuations(goal_id,id);
+DROP TRIGGER IF EXISTS event_goal_created;
+CREATE TRIGGER event_goal_created AFTER INSERT ON room_goals
+BEGIN
+    INSERT INTO room_events (room_id,at,kind,data) VALUES (NEW.room_id,CAST((julianday('now')-2440587.5)*86400000 AS INTEGER),'goal.created',
+        json_object('goal_id',NEW.id,'status',NEW.status,'objective',substr(NEW.objective,1,80),'start_request_id',NEW.start_request_id,
+            'max_continues',NEW.max_continues,'max_minutes',NEW.max_minutes));
+END;
+DROP TRIGGER IF EXISTS event_goal_changed;
+CREATE TRIGGER event_goal_changed AFTER UPDATE ON room_goals
+    WHEN OLD.status IS NOT NEW.status OR OLD.continues IS NOT NEW.continues OR OLD.objective IS NOT NEW.objective
+        OR OLD.max_continues IS NOT NEW.max_continues OR OLD.max_minutes IS NOT NEW.max_minutes
+BEGIN
+    INSERT INTO room_events (room_id,at,kind,data) VALUES (NEW.room_id,CAST((julianday('now')-2440587.5)*86400000 AS INTEGER),'goal.changed',
+        json_object('goal_id',NEW.id,'status',NEW.status,'from_status',OLD.status,'continues',NEW.continues,
+            'objective',CASE WHEN OLD.objective IS NOT NEW.objective THEN substr(NEW.objective,1,80) END,
+            'max_continues',NEW.max_continues,'max_minutes',NEW.max_minutes,'note',substr(NEW.end_note,1,200)));
 END;

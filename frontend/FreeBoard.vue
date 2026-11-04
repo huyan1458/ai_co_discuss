@@ -5,6 +5,8 @@ import InviteDialog from "./InviteDialog.vue";
 import WorkflowControl from "./WorkflowControl.vue";
 import { active_workflow } from "./workflow-state.js";
 import StartDiscussionDialog from "./StartDiscussionDialog.vue";
+import StartGoalDialog from "./StartGoalDialog.vue";
+import { format_duration } from "./LimitPicker.vue";
 import ProgressBoard from "./ProgressBoard.vue";
 import SpeakingOrder from "./SpeakingOrder.vue";
 import MemberDescriptionDialog from "./MemberDescriptionDialog.vue";
@@ -17,6 +19,19 @@ const TASK_PREVIEW_LENGTH = 90;
 const room = computed(() => view.value.room);
 const free = computed(() => room.value.free || {});
 const discussion = computed(() => ["active", "paused"].includes(room.value.session?.status));
+// The open goal, if any; an ended one only leaves its end notice in the transcript.
+const goal = computed(() => ["active", "paused"].includes(room.value.goal_state?.goal?.status) ? room.value.goal_state.goal : null);
+// The rail is narrow: about four lines of objective show before it folds.
+const GOAL_PREVIEW_LENGTH = 60;
+const goal_usage = computed(() => {
+  const value = goal.value;
+  if (!value) return "";
+  const continues = `已续跑 ${value.continues}${value.max_continues ? ` / ${value.max_continues}` : ""} 次`;
+  const minutes = Math.floor((value.elapsed_seconds || 0) / 60);
+  return `${continues} · 用时 ${format_duration(minutes)}${value.max_minutes ? ` / ${format_duration(value.max_minutes)}` : ""}`;
+});
+const goal_expanded = ref(false);
+const goal_dialog = ref(false);
 const current_round = computed(() => discussion.value ? room.value.current_turn?.round || (room.value.completed_rounds || 0) + 1 : 0);
 const host = computed(() => (free.value.members || []).find((member) => member.role === "host" && member.status === "active"));
 // Shown only while in use: sending its members away ends it, and "/" starts it again.
@@ -161,6 +176,8 @@ const task = computed(() => {
   const request = live_requests.value.filter((item) => item.created_by === "user" && ["pending", "delivering"].includes(item.status)).at(-1);
   if (!request) return "";
   const message = (view.value.messages || []).find((item) => item.id === request.message_id);
+  // A goal wake-up is not a task of its own; the goal section already says what the host is pursuing.
+  if (message?.source === "goal") return "";
   return message ? message.text : `#${request.message_id}`;
 });
 const task_expanded = ref(false);
@@ -215,6 +232,21 @@ watch(() => room.value.id, () => { starting.value = false; });
         </div>
       </div>
     </section>
+    <section v-if="goal" class="pb-section" aria-label="Goal">
+      <h4>Goal</h4>
+      <div class="pb-goal-status" :class="goal.status === 'active' ? 'is-success' : 'is-paused'"><span class="pb-dot"></span><span role="status">{{ goal.status === 'active' ? (goal.idle ? '进行中 · 空闲，稍后唤醒主持人' : '进行中') : '已暂停' }}</span></div>
+      <p class="pb-focus" :class="{ 'is-expanded': goal_expanded }">{{ goal.objective }}</p>
+      <button v-if="goal.objective.length > GOAL_PREVIEW_LENGTH" type="button" class="pb-link" @click="goal_expanded = !goal_expanded">{{ goal_expanded ? '收起' : '展开' }}</button>
+      <p class="pb-goal-usage">{{ goal_usage }}</p>
+      <div v-if="view.access?.can_manage && !room.archived" class="pb-goal-actions">
+        <UButton :label="goal.status === 'active' ? '暂停' : '继续'" :icon="goal.status === 'active' ? 'i-lucide-pause' : 'i-lucide-play'" size="xs" color="neutral" variant="outline"
+          :title="goal.status === 'active' ? '房间空闲时不再唤醒主持人，正在进行的工作不受影响' : '继续推进，房间空闲时唤醒主持人'"
+          :loading="pending === 'goal_control'" :disabled="Boolean(pending)" @click="act('goal_control', goal.status === 'active' ? 'pause' : 'resume')" />
+        <UButton label="编辑" icon="i-lucide-pencil" size="xs" color="neutral" variant="outline" :disabled="Boolean(pending)" @click="goal_dialog = true" />
+        <UButton label="结束" icon="i-lucide-square" size="xs" color="neutral" variant="outline" title="结束 Goal，房间回到自由协作；正在进行的工作不受影响"
+          :loading="pending === 'goal_control'" :disabled="Boolean(pending)" @click="act('goal_control', 'clear')" />
+      </div>
+    </section>
     <section v-if="task && !discussion" class="pb-section" aria-label="当前任务">
       <h4>当前任务</h4>
       <p class="pb-focus" :class="{ 'is-expanded': task_expanded }">{{ task }}</p>
@@ -242,11 +274,15 @@ watch(() => room.value.id, () => { starting.value = false; });
       </SpeakingOrder>
       <UButton v-if="!room.archived" icon="i-lucide-plus" label="邀请 AI 加入" size="sm" color="neutral" variant="outline" class="pb-action pb-action-block pb-action-add" @click="invite_workflow_id = ''; inviting = true" />
     </section>
-    <section v-if="!room.archived && !discussion" class="pb-actions" aria-label="操作">
-      <UButton icon="i-lucide-messages-square" label="开启讨论" size="sm" color="neutral" variant="outline" class="pb-action pb-action-block pb-restart" title="由主持人推进成员轮流发言，到上限或结束后房间回到自由协作" :disabled="!can_start" @click="starting = true" />
-      <p v-if="!can_start" class="pb-free-note">开启讨论需要一位由本机唤醒的 AI 主持人。</p>
+    <section v-if="!room.archived && !discussion && !goal" class="pb-actions pb-start-actions" aria-label="操作">
+      <div class="pb-start-pair">
+        <UButton icon="i-lucide-messages-square" label="开启讨论" size="sm" color="neutral" variant="outline" class="pb-action pb-restart" title="由主持人推进成员轮流发言，到上限或结束后房间回到自由协作" :disabled="!can_start" @click="starting = true" />
+        <UButton icon="i-lucide-target" label="开启 Goal" size="sm" color="neutral" variant="outline" class="pb-action pb-restart" title="主持人持续推进一个目标：房间空闲时自动接着做，直到完成、卡住或你结束" :disabled="!can_start" @click="goal_dialog = true" />
+      </div>
+      <p v-if="!can_start" class="pb-free-note">开启讨论或 Goal 需要一位由本机唤醒的 AI 主持人。</p>
     </section>
   <StartDiscussionDialog v-model:open="starting" />
+  <StartGoalDialog v-model:open="goal_dialog" :edit="Boolean(goal)" :initial="goal" />
   <InviteDialog v-model:open="inviting" :workflow-id="invite_workflow_id" description="新成员加入后不打断其他成员；点卡片翻面可设置软件、模型、项目权限和要续接的已有会话。" />
   <MemberDescriptionDialog :open="Boolean(describing)" :name="describing || ' '" :platform="describing ? bridge.default_name(bridge.platform_of(describing)) : ''" :default_label="describing ? bridge.default_name(describing) : ''"
     :text="room.descriptions?.[describing] || ''" :label="room.labels?.[describing] || ''" :template="describing ? bridge.description_template(describing) : ''" :saving="describing_saving"
@@ -256,6 +292,14 @@ watch(() => room.value.id, () => { starting.value = false; });
 
 <style scoped>
 .pb-member.is-away { opacity: .6; }
+.pb-goal-status { display: flex; align-items: center; gap: 6px; font-size: 12px; }
+.pb-goal-status.is-paused { color: var(--ui-text-muted); }
+/* The two start buttons share one row; the note on why they are disabled sits below them. */
+.progress-board > .pb-start-actions { flex-direction: column; align-items: stretch; }
+.pb-start-pair { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; }
+.pb-start-pair .pb-action { justify-content: center; }
+.pb-goal-usage { margin: 4px 0 0; color: var(--ui-text-muted); font-size: 11px; }
+.pb-goal-actions { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 8px; }
 .pb-workflow-member { color: var(--ui-text-muted); font-size: 10px; }
 .pb-member-model { margin: 2px 0; color: var(--ui-text-muted); font-size: 11px; line-height: 1.5; overflow-wrap: anywhere; }
 /* A member with a nickname also shows its ID, which AI messages, @ and records use. */
