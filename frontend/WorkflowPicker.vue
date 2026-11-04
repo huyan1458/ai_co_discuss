@@ -82,9 +82,10 @@ async function on_deleted(id) {
   <div v-if="view.launch.available || view.launch.remote" class="workflow-picker">
     <span class="workflow-picker-label">工作流</span>
     <div class="workflow-picker-chips" role="group" aria-label="工作流">
-      <button v-for="item in workflows" :key="item.id" type="button" :disabled="disabled || Boolean(item.error)" :class="{ 'is-selected': selected === item.id, 'is-broken': item.error }"
-        :aria-pressed="selected === item.id" :title="item.error || `${item.label}（${item.cards} 张卡片）`" @click="selected = selected === item.id ? '' : item.id">
-        <UIcon :name="item.error ? 'i-lucide-triangle-alert' : selected === item.id ? 'i-lucide-check' : 'i-lucide-workflow'" />{{ item.label }}
+      <button v-for="item in workflows" :key="item.id" type="button" :disabled="disabled || Boolean(item.error)" :class="{ 'is-broken': item.error }"
+        :aria-expanded="selected === item.id" :title="item.error || `${item.label}（${item.cards} 张卡片）`" @click="selected = selected === item.id ? '' : item.id">
+        <UIcon :name="item.error ? 'i-lucide-triangle-alert' : 'i-lucide-workflow'" />{{ item.label }}
+        <UIcon :name="selected === item.id ? 'i-lucide-chevron-up' : 'i-lucide-chevron-down'" />
       </button>
       <UDropdownMenu :items="add_items" :disabled="disabled" :ui="{ content: 'channel-menu' }">
         <button type="button" class="workflow-picker-add" :disabled="disabled"><UIcon name="i-lucide-plus" />添加</button>
@@ -126,11 +127,10 @@ async function on_deleted(id) {
 .workflow-picker-chips { display: flex; flex-wrap: wrap; gap: 6px; min-width: 0; }
 .workflow-picker-chips > button, .workflow-picker-add { display: inline-flex; align-items: center; gap: 6px; height: 30px; max-width: 100%; padding: 0 10px; border: 1px solid var(--ui-border-muted); border-radius: 999px; color: var(--ui-text-toned); font-size: 12px; }
 .workflow-picker-chips > button:hover:not(:disabled), .workflow-picker-add:hover:not(:disabled) { border-color: var(--ui-border-accented); background: var(--ui-bg-elevated); color: var(--ui-text-highlighted); }
-.workflow-picker-chips > button.is-selected { border-color: var(--channel-accent); color: var(--ui-text-highlighted); }
 .workflow-picker-chips > button.is-broken { color: var(--ui-warning, #e0a33a); opacity: .7; }
 .workflow-picker-add { border-style: dashed; }
 .workflow-picker-chips span[class*="i-lucide"], .workflow-picker-add span { width: 12px; height: 12px; flex-shrink: 0; }
-.workflow-picker-detail { grid-column: 2; display: grid; gap: 2px; padding: 8px 10px; border-left: 2px solid var(--channel-accent); border-radius: 0 8px 8px 0; background: var(--ui-bg-elevated); font-size: 12px; }
+.workflow-picker-detail { grid-column: 2; display: grid; gap: 2px; padding: 4px 0; font-size: 12px; }
 .workflow-picker-detail p { margin: 0; color: var(--ui-text-toned); overflow-wrap: anywhere; }
 .workflow-picker-actions { display: flex; flex-wrap: wrap; gap: 12px; margin-top: 4px; }
 .workflow-picker-actions button { display: inline-flex; align-items: center; gap: 4px; color: var(--ui-text-muted); font-size: 12px; }

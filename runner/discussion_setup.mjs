@@ -33,7 +33,7 @@ const CLIENTS = {
 };
 const OPTIONS = { yes: { type: 'boolean' }, clients: { type: 'string' }, python: { type: 'string' },
   codex: { type: 'string' }, claude: { type: 'string' }, antigravity: { type: 'string' }, cursor: { type: 'string' },
-  port: { type: 'string' }, 'remote-port': { type: 'string' }, prefix: { type: 'string' }, 'skills-home': { type: 'string' },
+  port: { type: 'string' }, prefix: { type: 'string' }, 'skills-home': { type: 'string' },
   'no-start': { type: 'boolean' }, 'no-open': { type: 'boolean' }, json: { type: 'boolean' }, help: { type: 'boolean', short: 'h' } };
 const HELP = `用法：codiscuss install [选项] / codiscuss setup [选项]
 install 将当前 npm 包安装为持久命令，再运行 setup；setup 配置已有安装。
@@ -42,7 +42,6 @@ install 将当前 npm 包安装为持久命令，再运行 setup；setup 配置�
   --python PATH             指定 Python 3.10+ 原生可执行文件
   --codex/--claude/--antigravity/--cursor PATH  指定 CLI（Windows 为 .exe，Cursor 也支持 .cmd）
   --port PORT               本机网站端口，默认 8765
-  --remote-port PORT|off    另开需登录的远程入口（仅 127.0.0.1），供 Cloudflare Tunnel 转发；off 关闭
   --no-start / --no-open     只配置 / 启动但不打开浏览器
   --prefix DIR              npm 安装前缀（install）
   --skills-home DIR         技能用户根目录（默认当前用户目录）
@@ -67,12 +66,7 @@ function setup_environment(options) {
   const python = detect_python(options.python || previous.python);
   const port = Number(options.port || previous.port || DEFAULT_PORT);
   if (!Number.isInteger(port) || port < 1 || port > 65535) throw new Error('端口必须为 1–65535 的整数');
-  const remote = options['remote-port'] ?? previous.remote_port;
-  const remote_port = remote === undefined || remote === 'off' ? undefined : Number(remote);
-  if (remote_port !== undefined && (!Number.isInteger(remote_port) || remote_port < 1 || remote_port > 65535 || remote_port === port)) {
-    throw new Error('远程入口端口必须为 1–65535 的整数，且不同于本机网站端口');
-  }
-  return { home, previous, python, port, remote_port };
+  return { home, previous, python, port };
 }
 
 /** Summarise the checked runtime in one short line for the styled installer. */
@@ -344,7 +338,7 @@ async function confirm_restart(reason, options) {
 /** Configure Python, selected clients and skills, returning partial results on startup failure. */
 async function setup(options) {
   intro('配置 AI CoDiscuss', PACKAGE.version, PACKAGE.description);
-  const { home, previous, python, port, remote_port } = setup_environment(options);
+  const { home, previous, python, port } = setup_environment(options);
   if (styled && !process.env.CODISCUSS_TUI_NESTED) step('运行环境就绪', [environment_line(python, port)]);
   const scan = spinner('检测已安装的 AI 软件');
   const detected = detect_clients(options);
@@ -354,8 +348,9 @@ async function setup(options) {
   scan.done(`检测到 ${detected.filter(item => item.executable).length} 个可接入的 CLI`, listed);
   const selected = await selected_clients(options, detected);
   const configured = await configure_clients(home, selected, options, launch_settings(home).participants);
-  // An undefined remote_port drops the saved one, which is how `--remote-port off` closes the entry.
-  atomic_json(join(home, 'local-settings.json'), { ...previous, python, port, remote_port });
+  // The remote entry is retired: a saved remote_port from an older version is dropped here.
+  const { remote_port: retired, ...kept } = previous;
+  atomic_json(join(home, 'local-settings.json'), { ...kept, python, port });
   step('已写入软件配置与技能', configured.skills.map(group => `${pad(group.client, width)}  ${tone.dim(short_path(dirname(group.results[0].path)))}`));
   const result = { home, python, clients: selected.map(item => item.name), ...configured,
     command: check_command(), ai_verified: false };

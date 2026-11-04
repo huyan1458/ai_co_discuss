@@ -47,15 +47,11 @@ watch(remote, (value) => { if (value) load(); });
 
 const current = computed(() => devices.value?.find((item) => item.current));
 // The computer said this browser is not paired (or no longer is): show the code form even before settings load.
-const needs_pairing = computed(() => !local.value && (device.value.needs === "pairing" || (remote.value && devices.value && !current.value)));
+const needs_pairing = computed(() => !local.value && view.value.admin.devices && !view.value.admin.logged_in);
 const renew_due = computed(() => current.value && !current.value.temporary && current.value.expires_at - Date.now() < RENEW_SOON_MS);
 
 async function pair() {
-  if (await run("pair", () => bridge.device.pair(code.value), "这台设备已与电脑配对")) {
-    await load();
-    // A passkey lets this device sign in, renew and confirm remote writing without the password.
-    run("passkey", () => bridge.device.create_passkey());
-  }
+  if (await run("pair", () => bridge.device.pair(code.value))) await load();
 }
 
 /** Show a two-minute code and the QR code a phone camera can open, for pairing another device. */
@@ -66,17 +62,11 @@ function add_device() {
   });
 }
 
-/** Revoke a device on the computer, then remove its passkeys from the website's login list too (needs a website login). */
+/** Revoke a device on the computer; the website drops it with the next signed device list, which is sent at once. */
 async function revoke(item) {
-  let left = 0;
-  const done = await run("revoke", async () => {
-    const { passkeys = [] } = await bridge.device.request("device-revoke", { device_id: item.id });
-    if (local.value) { left = passkeys.length; return; }
-    for (const id of passkeys) await bridge.admin.delete_passkey(id).catch(() => { left += 1; });
-  }, item.current ? "这台设备已取消配对" : "该设备已撤销");
-  // The computer's own page has no website login; the website's passkey list must then be cleared from a signed-in device.
-  if (done && left) bridge.notify("warning", "这台设备在网站上的通行密钥未能一并删除：请在已登录网站的设备上打开 设置 → 账号 → 网站登录，删除它");
-  if (done) await load();
+  const done = await run("revoke", () => bridge.device.request("device-revoke", { device_id: item.id }), item.current ? "这台设备已取消配对" : "该设备已撤销");
+  if (done && item.current) bridge.device.forget();
+  else if (done) await load();
 }
 
 async function revoke_write(item, grant) {
@@ -97,13 +87,13 @@ const date = (time) => new Date(time).toLocaleString("zh-CN", { month: "numeric"
 </script>
 
 <template>
-  <section v-if="local || remote || device.needs" class="device-settings" aria-labelledby="device-heading">
+  <section v-if="local || remote || needs_pairing || device.needs" class="device-settings" aria-labelledby="device-heading">
     <h4 id="device-heading">已配对的设备</h4>
-    <p class="fine-print">新设备须扫码配对后才能操作这台电脑。</p>
+    <p class="fine-print">新设备须在电脑前扫码配对，无需账号和密码。</p>
 
     <form v-if="needs_pairing" class="dialog-form device-pair" aria-label="配对这台设备" @submit.prevent="pair">
-      <p class="account-message is-error" role="status">这台设备还没有与电脑配对，暂时不能操作电脑上的房间。</p>
-      <UFormField label="配对码" description="在电脑的本机网页或已配对设备的 设置 → 账号 中点“添加设备”获取；扫描二维码会自动填入">
+      <p class="account-message is-error" role="status">这台设备还没有与电脑配对。不需要账号：在电脑前扫码，再用这台设备的面容、指纹或设备密码确认即可。</p>
+      <UFormField label="配对码" description="在电脑前打开本机网页的 设置 → 账号 → 添加设备，用这台设备的相机扫描二维码（会自动填入），或输入下方显示的 12 位码">
         <UInput v-model="code" placeholder="XXXX-XXXX-XXXX" autocomplete="off" :maxlength="16" class="w-full" aria-label="配对码" />
       </UFormField>
       <div class="account-actions"><UButton type="submit" label="配对" class="channel-primary-button" :loading="busy === 'pair'" :disabled="Boolean(busy) || !code.trim()" /></div>
@@ -113,7 +103,7 @@ const date = (time) => new Date(time).toLocaleString("zh-CN", { month: "numeric"
       这台设备的授权已到期。<UButton label="用通行密钥续期" color="neutral" variant="soft" size="xs" :loading="busy === 'renew'" :disabled="Boolean(busy)" @click="run('renew', async () => { await bridge.device.renew(); await load(); })" />
     </p>
     <template v-else>
-      <p v-if="devices && devices.length < 2" class="fine-print">建议配对两台，丢了一台还能用另一台处理。</p>
+      <p v-if="devices && devices.length < 2" class="fine-print">建议配对两台：丢了一台，可在外面用另一台撤销它。</p>
       <ul v-if="devices" class="account-device-list">
         <li v-for="item in devices" :key="item.id">
           <span>
@@ -133,19 +123,18 @@ const date = (time) => new Date(time).toLocaleString("zh-CN", { month: "numeric"
         <ul v-if="audit_open" aria-label="最近记录">
           <li v-for="(entry, index) in audit" :key="index"><small>{{ date(entry.at) }}</small> {{ audit_text(entry) }}</li>
         </ul>
-        <p v-if="audit_open" class="fine-print">记录由电脑保存。看到不是你做的操作，立即撤销对应设备并更改密码。</p>
+        <p v-if="audit_open" class="fine-print">记录由电脑保存。看到不是你做的操作，立即撤销对应设备。</p>
       </div>
       <div class="device-actions">
-        <UButton v-if="remote && current && !current.passkeys" label="创建通行密钥" color="neutral" variant="soft" size="sm" :loading="busy === 'passkey'" :disabled="Boolean(busy)" @click="run('passkey', () => bridge.device.create_passkey())" />
         <UButton v-if="remote && renew_due" label="续期这台设备" color="neutral" variant="soft" size="sm" :loading="busy === 'renew'" :disabled="Boolean(busy)" @click="run('renew', async () => { await bridge.device.renew(); await load(); })" />
-        <UButton label="添加设备" icon="i-lucide-qr-code" color="neutral" variant="outline" size="sm" :loading="busy === 'invite'" :disabled="Boolean(busy)" @click="add_device" />
-        <UCheckbox v-model="temporary" label="临时设备（只授权 1 天）" />
+        <UButton v-if="local" label="添加设备" icon="i-lucide-qr-code" color="neutral" variant="outline" size="sm" :loading="busy === 'invite'" :disabled="Boolean(busy)" @click="add_device" />
+        <UCheckbox v-if="local" v-model="temporary" label="临时设备（只授权 1 天）" />
       </div>
       <div v-if="invite" class="device-invite" role="status">
         <!-- eslint-disable-next-line vue/no-v-html -- an SVG this page rendered from the computer's own link -->
         <div v-if="invite.svg" class="device-qr" aria-label="配对二维码" v-html="invite.svg" />
         <div>
-          <p>用新设备的相机扫描二维码，或在新设备上登录后输入配对码：</p>
+          <p>用新设备的相机扫描二维码；没有摄像头就在新设备打开网站，输入配对码：</p>
           <p class="device-code">{{ invite.code }}</p>
           <p class="fine-print">{{ date(invite.expires_at) }} 前有效（2 分钟），只能用一次{{ invite.temporary ? "；临时设备只授权 1 天" : "" }}。</p>
         </div>

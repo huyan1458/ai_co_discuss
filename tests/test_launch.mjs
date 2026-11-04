@@ -18,15 +18,16 @@ import { FreeRoomRunner } from '../runner/free_runner.mjs';
 import { DiscussionService, read_registry } from '../runner/discussion_service.mjs';
 import { save_site_connection } from '../runner/discussion_local.mjs';
 import { software_models } from '../runner/adapters/index.mjs';
-import { device_command, pairing_proof, start_pairing } from '../runner/device_auth.mjs';
-import { software_device } from './passkey_authenticator.mjs';
+import { device_command, pairing_passkey_challenge, pairing_proof, start_pairing } from '../runner/device_auth.mjs';
+import { software_device, software_passkey } from './passkey_authenticator.mjs';
 
 /** Pair a software browser with this computer the way a phone does after scanning the code. */
 async function pair_test_device(home, machine_id) {
   const device = await software_device(machine_id);
   const { code } = start_pairing(home, { site: 'https://site.test' });
+  const passkey = software_passkey('site.test').create(pairing_passkey_challenge(code, device.public_key), 'https://site.test');
   const answer = await device_command(home, { site: 'https://site.test', machine_id, device_id: null }, 'device-pair',
-    { public_key: device.public_key, label: 'test', proof: pairing_proof(code, machine_id, device.public_key) });
+    { public_key: device.public_key, label: 'test', proof: pairing_proof(code, machine_id, device.public_key), passkey });
   assert.equal(answer.status, 200, answer.body.error);
   return device;
 }
@@ -185,14 +186,14 @@ test('local room-config route edits only the authorized paused room and reports 
 });
 
 /** Run the real website in a temporary database; no actual AI software is invoked. */
-async function fixture(t, local_launch = true, remote_entry = false) {
+async function fixture(t, local_launch = true) {
   const directory = mkdtempSync(join(tmpdir(), 'codiscuss-launch-'));
   const home = join(directory, 'service');
   const script = 'import sys; from backend.server import DiscussionServer,init_database; '
     + 'init_database(sys.argv[1],seed=False); '
     + `server=DiscussionServer(('127.0.0.1',0),sys.argv[1],local_launch=${local_launch ? 'True' : 'False'});\n`
     + `while server.server_port <= 10080:\n server.server_close(); server=DiscussionServer(('127.0.0.1',0),sys.argv[1],local_launch=${local_launch ? 'True' : 'False'})\n`
-    + (remote_entry ? "from threading import Thread; remote=DiscussionServer(('127.0.0.1',0),sys.argv[1],hub=server); Thread(target=remote.serve_forever,daemon=True).start(); print(str(server.server_port)+' '+str(remote.server_port),flush=True); " : 'print(server.server_port,flush=True); ')
+    + 'print(server.server_port,flush=True); '
     + 'server.serve_forever()';
   const child = spawn(process.platform === 'win32' ? 'python' : 'python3', ['-u', '-c', script, join(directory, 'site.sqlite3')],
     { cwd: ROOT, windowsHide: true, env: { ...process.env, DISCUSS_SERVICE_HOME: home }, stdio: ['ignore', 'pipe', 'pipe'] });
@@ -212,7 +213,7 @@ async function fixture(t, local_launch = true, remote_entry = false) {
       limits: { max_rounds: 3, max_minutes: 15 }, submission_id: randomUUID() } };
   const starts = [];
   const options = { start_service: async value => { starts.push(value); return { running: true }; } };
-  return { directory, home, site, remote_site: remote_entry ? `http://127.0.0.1:${port[1]}` : '', input, options, starts };
+  return { directory, home, site, input, options, starts };
 }
 
 /** Read/write the real API, retaining structured failures for assertions. */
@@ -827,16 +828,6 @@ test('a free room launches without a run, and a user message reaches its member 
   assert.equal(delivered.length, 1);
 });
 
-test('a remote entry refuses anonymous room writes and accepts the owner credential', async t => {
-  const f = await fixture(t, true, true), token = randomUUID() + randomUUID();
-  const launched = await launch_discussion(f.home, { site: f.site, entry: 'web', participants: f.input.participants, token,
-    room: { title: '远程权限边界', mode: 'free', members: ['Claude'], submission_id: randomUUID() } }, f.options);
-  const path = `/api/rooms/${launched.room.id}/messages`;
-  const body = { author: '用户', text: '远程写入', submission_id: randomUUID() };
-  assert.equal((await request(f.remote_site, path, body)).status, 403);
-  assert.equal((await request(f.remote_site, path, body, { 'X-Discussion-Token': token })).status, 201);
-});
-
 test('workflow library commands keep the local and relayed boundaries, including preview before saving', async t => {
   const f = await fixture(t);
   const { relayed_command } = await import('../runner/remote_launch.mjs');
@@ -1168,8 +1159,10 @@ test('syncing publishes this computer\'s state, and launch tasks a site returns 
     return new Response(JSON.stringify(url.endsWith('/sync') ? { launches } : { status: 'ok' }), { status: 200 });
   };
   await sync_remote_launches(home, { log: line => logged.push(line) });
-  const { public_key, ...published } = calls[0].body;
+  const { public_key, sign_key, devices, ...published } = calls[0].body;
   assert.deepEqual(published, { projects: [{ id: project.id, name: '改名' }], clients: {} });
+  assert.deepEqual(Object.keys(sign_key).sort(), ['crv', 'kty', 'x', 'y'], 'the device-list signing key is published');
+  assert.deepEqual(JSON.parse(devices.body).devices, [], 'with a signed, still empty device list');
   assert.deepEqual(Object.keys(public_key).sort(), ['crv', 'kty', 'x', 'y']);
   assert.equal(link.private_key, undefined, 'the browser forwards the pairing, so it never carries the private key');
   assert.equal(calls.length, 1, 'only the sync itself: nothing is claimed or launched');
@@ -1206,7 +1199,7 @@ test('relayed commands are decrypted, pinned to the site and answered encrypted'
   const ephemeral = await crypto.subtle.generateKey({ name: 'ECDH', namedCurve: 'P-256' }, true, ['deriveBits']);
   const key = await relay_cipher(await crypto.subtle.exportKey('jwk', ephemeral.privateKey), machine_key);
   const { kty, crv, x, y } = await crypto.subtle.exportKey('jwk', ephemeral.publicKey);
-  const device = await pair_test_device(home, JSON.parse(readFileSync(join(home, 'machine-links.json'), 'utf8')).sites['https://site.test'].id);
+  const device = await pair_test_device(home, (await import('../runner/remote_launch.mjs')).machine_links(home).sites['https://site.test'].id);
   const sealed = await seal(key, await device.seal('command-0000000001', { action: 'room-member', payload: { room_id: 'r', action: 'add', name: 'Antigravity' } }), 'command-0000000001');
   const unsigned = await seal(key, { body: JSON.stringify({ action: 'room-member', payload: { room_id: 'r' }, sent_at: Date.now() }) }, 'command-0000000003');
   commands = [{ id: 'command-0000000001', envelope: { ...sealed, key: { kty, crv, x, y } } },
@@ -1223,6 +1216,22 @@ test('relayed commands are decrypted, pinned to the site and answered encrypted'
   assert.ok(!calls.some(call => call.url.endsWith('/commands/command-0000000002')));
   const refused = calls.find(call => call.url.endsWith('/commands/command-0000000003'));
   assert.match((await unseal(key, refused.body.envelope, 'command-0000000003:response')).body.error, /还没有与电脑配对/);
+});
+
+test('the computer keeps its pairing secrets sealed on Windows, and seals a file an older version left in the clear', async t => {
+  const { machine_link, machine_links } = await import('../runner/remote_launch.mjs');
+  const home = mkdtempSync(join(tmpdir(), 'codiscuss-links-'));
+  t.after(() => rmSync(home, { recursive: true, force: true }));
+  const path = join(home, 'machine-links.json');
+  const { token } = machine_link(home, 'https://site.test');
+  assert.equal(machine_links(home).sites['https://site.test'].token, token);
+  if (process.platform !== 'win32') return;
+  assert.ok(!readFileSync(path, 'utf8').includes(token), 'the token is not readable from the file alone');
+  const old = { sites: { 'https://old.test': { id: 'old-machine', token: 'cd'.repeat(32), name: 'old' } } };
+  writeFileSync(path, JSON.stringify(old));
+  assert.deepEqual(machine_links(home), old);
+  assert.ok(!readFileSync(path, 'utf8').includes('cd'.repeat(32)), 'sealed on first read');
+  assert.deepEqual(machine_links(home), old);
 });
 
 test('the relay channel reaches only local room routes, as the bridge, and answers compressed and encrypted', async t => {

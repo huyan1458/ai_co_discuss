@@ -112,27 +112,18 @@ CREATE TABLE IF NOT EXISTS admin_logins (
 );
 -- Wrong-password backoff per client address; the row with source '*' counts all addresses within an hour.
 -- site_admin.failed_attempts and locked_until are no longer used.
--- Passkeys for website login (Worker only); the paired computer keeps its own copy for device checks.
-CREATE TABLE IF NOT EXISTS admin_passkeys (
-    id TEXT PRIMARY KEY,
-    public_key TEXT NOT NULL,
-    alg INTEGER NOT NULL,
-    sign_count INTEGER NOT NULL DEFAULT 0,
-    label TEXT NOT NULL DEFAULT '',
-    created_at INTEGER NOT NULL
+-- The online website has no accounts: it accepts a device only if the paired computer signed it into its device list.
+-- machine_sign_keys holds each computer's signing key; machine_devices its latest signed list (devices' public keys and
+-- expiry). Website passkey tables of an earlier version (admin_passkeys, admin_challenges) are no longer read.
+CREATE TABLE IF NOT EXISTS machine_sign_keys (
+    machine_id TEXT PRIMARY KEY REFERENCES local_machines(id) ON DELETE CASCADE,
+    sign_key TEXT NOT NULL
 );
--- Owner messages accepted through the optional remote entry (--remote-port), which has no device signature: work
--- started from them runs members read-only on the computer.
-CREATE TABLE IF NOT EXISTS remote_entry_messages (
-    message_id INTEGER PRIMARY KEY REFERENCES messages(id) ON DELETE CASCADE,
-    room_id TEXT NOT NULL
-);
--- One-time passkey challenges, valid two minutes.
-CREATE TABLE IF NOT EXISTS admin_challenges (
-    id TEXT PRIMARY KEY,
-    purpose TEXT NOT NULL,
-    challenge TEXT NOT NULL,
-    created_at INTEGER NOT NULL
+CREATE TABLE IF NOT EXISTS machine_devices (
+    machine_id TEXT PRIMARY KEY REFERENCES local_machines(id) ON DELETE CASCADE,
+    body TEXT NOT NULL,
+    signature TEXT NOT NULL,
+    issued_at INTEGER NOT NULL
 );
 CREATE TABLE IF NOT EXISTS admin_attempts (
     source TEXT PRIMARY KEY,

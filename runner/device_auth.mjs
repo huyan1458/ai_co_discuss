@@ -8,7 +8,7 @@ import { appendFileSync, existsSync, readFileSync, renameSync, rmSync, statSync,
 import { join } from 'node:path';
 
 import { atomic_json } from './files.mjs';
-import { b64url, from_b64url, joint_challenge, verify_assertion, verify_registration } from './webauthn.mjs';
+import { b64url, from_b64url, verify_assertion, verify_registration } from './webauthn.mjs';
 
 const DEVICES_FILE = 'devices.json';
 // What other devices did here: trust changes and every remote write, never content. Shown in the device list, so an
@@ -28,9 +28,7 @@ export const WRITE_GRANT_MS = 12 * 3600000;
 const PAIRING_MS = 120000;
 const PAIRING_ATTEMPTS = 5;
 const CHALLENGE_MS = 120000;
-// A passkey is added only in the minutes after pairing, while the user is at it; later, a script running in the page
-// could otherwise add its own and use it to grant itself writing.
-const PASSKEY_SETUP_MS = 10 * 60000;
+
 const LABEL_LIMIT = 60;
 // Crockford base32 without I, L, O, U: 12 characters carry 60 random bits.
 const CODE_ALPHABET = '0123456789ABCDEFGHJKMNPQRSTVWXYZ';
@@ -41,8 +39,10 @@ const EXPIRED_ACTIONS = new Set(['passkey-challenge', 'device-renew']);
 // The one action an unpaired browser may send, unsigned: proving it holds a pairing code.
 export const UNSIGNED_ACTIONS = new Set(['device-pair']);
 // Device actions answered by this module rather than the launch entrypoint.
-export const DEVICE_ACTIONS = new Set(['device-pair', 'device-pairing', 'device-list', 'device-revoke', 'passkey-options', 'passkey-register',
-  'passkey-challenge', 'device-renew', 'write-grant', 'write-revoke']);
+// New devices are added only at this computer's own screen, so no relayed action starts a pairing.
+export const DEVICE_ACTIONS = new Set(['device-pair', 'device-list', 'device-revoke', 'passkey-challenge', 'device-renew', 'write-grant', 'write-revoke']);
+// Actions after which the website must receive the new signed device list.
+const LIST_CHANGES = new Set(['device-pair', 'device-revoke', 'device-renew']);
 
 /** Wait briefly for the registry lock: the service and short-lived launch processes both update it. */
 function with_lock(home, task) {
@@ -121,8 +121,22 @@ export function pairing_proof(code, machine_id, jwk) {
   return createHmac('sha256', normal_code(code)).update(`${PAIR_CONTEXT}\n${machine_id}\n${b64url(raw_point(jwk))}`).digest('base64url');
 }
 
-/** Start a pairing from a trusted screen: a 12-character code, valid two minutes, and the link a camera can open. */
-export function start_pairing(home, { site, temporary = false, by = 'computer' }) {
+/**
+ * The challenge a new device's passkey signs while pairing: bound to the code shown here and to the device's own key,
+ * so the passkey is created in the same step, while the user is at this computer.
+ */
+export function pairing_passkey_challenge(code, jwk) {
+  return b64url(createHash('sha256').update(`codiscuss-pair-passkey\n${normal_code(code)}\n${b64url(raw_point(jwk))}`).digest());
+}
+
+/** A short fingerprint of this computer's keys, shown in the QR link so the new device can check what the website hands it. */
+export function machine_fingerprint(link) {
+  const ecdh = link.public_key, sign = link.sign_public_key;
+  return createHash('sha256').update(`${ecdh.x}.${ecdh.y}.${sign.x}.${sign.y}`).digest('hex').slice(0, 32);
+}
+
+/** Start a pairing at this computer's own screen: a 12-character code, valid two minutes, and the link a camera can open. */
+export function start_pairing(home, { site, fingerprint = '', temporary = false, by = 'computer' }) {
   const bytes = randomBytes(CODE_LENGTH);
   const code = Array.from(bytes, byte => CODE_ALPHABET[byte & 31]).join('');
   audit(home, { event: 'pairing.started', by, temporary: Boolean(temporary) });
@@ -130,29 +144,35 @@ export function start_pairing(home, { site, temporary = false, by = 'computer' }
     const id = randomBytes(8).toString('hex');
     registry.pairings[id] = { code, temporary: Boolean(temporary), by, expires_at: now + PAIRING_MS, failures: 0 };
     return { code: `${code.slice(0, 4)}-${code.slice(4, 8)}-${code.slice(8)}`, expires_at: now + PAIRING_MS, temporary: Boolean(temporary),
-      ...(site ? { url: `${site}/#pair=${code}` } : {}) };
+      ...(site ? { url: `${site}/#pair=${code}${fingerprint ? `&fp=${fingerprint}` : ''}` } : {}) };
   });
 }
 
-/** Record a paired device: thirty days, or one day for a temporary one. */
-function add_device(registry, now, { public_key, label, temporary, by }) {
+/** Record a paired device with its passkey: thirty days, or one day for a temporary one. */
+function add_device(registry, now, { public_key, label, temporary, by, passkey }) {
   const id = device_id_of(public_key);
   registry.devices[id] = { public_key: { kty: 'EC', crv: 'P-256', x: public_key.x, y: public_key.y }, label: clean_label(label), by,
-    temporary: Boolean(temporary), created_at: now, expires_at: now + (temporary ? TEMPORARY_DAYS : DEVICE_DAYS) * DAY_MS, passkeys: [] };
+    temporary: Boolean(temporary), created_at: now, expires_at: now + (temporary ? TEMPORARY_DAYS : DEVICE_DAYS) * DAY_MS, passkeys: [passkey] };
   return { device_id: id, expires_at: registry.devices[id].expires_at, temporary: Boolean(temporary) };
 }
 
-/** A new browser proves it holds a live code; a wrong proof counts against every waiting code. */
-export function pair_device(home, machine_id, { public_key, label, proof }) {
+/**
+ * A new browser proves it holds a live code shown at this computer and brings the passkey it just created for it; a
+ * wrong proof counts against every waiting code.
+ */
+export function pair_device(home, machine_id, site, { public_key, label, proof, passkey: credential }) {
   if (typeof proof !== 'string' || !proof) throw new Error('缺少配对证明');
+  if (!credential) throw new Error('配对须同时创建这台设备的通行密钥');
   device_id_of(public_key);
+  const { origin, rp_id } = relying_party(site);
   const paired = with_lock(home, (registry, now) => {
     const supplied = Buffer.from(proof);
     for (const [id, pairing] of Object.entries(registry.pairings)) {
       const expected = Buffer.from(pairing_proof(pairing.code, machine_id, public_key));
       if (expected.length === supplied.length && timingSafeEqual(expected, supplied)) {
         delete registry.pairings[id];
-        const added = add_device(registry, now, { public_key, label, temporary: pairing.temporary, by: pairing.by });
+        const passkey = verify_registration(credential, { challenge: pairing_passkey_challenge(pairing.code, public_key), origin, rp_id });
+        const added = add_device(registry, now, { public_key, label, temporary: pairing.temporary, by: pairing.by, passkey });
         audit(home, { event: 'device.paired', device: added.device_id, label: clean_label(label), by: pairing.by, temporary: pairing.temporary });
         return added;
       }
@@ -161,7 +181,7 @@ export function pair_device(home, machine_id, { public_key, label, proof }) {
     for (const [id, pairing] of Object.entries(registry.pairings)) if (++pairing.failures >= PAIRING_ATTEMPTS) delete registry.pairings[id];
     return null;
   });
-  if (!paired) throw new Error('配对码不对或已过期，请在已配对的设备上重新生成');
+  if (!paired) throw new Error('配对码不对或已过期，请在电脑上重新生成');
   return paired;
 }
 
@@ -198,6 +218,19 @@ export function write_allowed(home, device_id, room_id, now = Date.now()) {
 /** The error that asks the page to confirm remote writing with a passkey, then retry. */
 export function write_needed(room_id) {
   return Object.assign(new Error('这个房间的成员可以改动电脑上的文件；远程操作前需要用通行密钥确认（12 小时有效）'), { need: 'write-grant', room_id });
+}
+
+/**
+ * The device list this computer signs for the website: each device's public key and expiry, nothing else. The website
+ * checks requests against it and cannot add a device of its own.
+ */
+export async function signed_device_list(home, link, now = Date.now()) {
+  const { devices } = read_registry(home);
+  const body = JSON.stringify({ machine: link.id, issued_at: now, devices: Object.entries(devices)
+    .map(([id, device]) => ({ id, x: device.public_key.x, y: device.public_key.y, expires_at: device.expires_at })) });
+  const key = await crypto.subtle.importKey('jwk', link.sign_private_key, { name: 'ECDSA', namedCurve: 'P-256' }, false, ['sign']);
+  const signature = await crypto.subtle.sign({ name: 'ECDSA', hash: 'SHA-256' }, key, new TextEncoder().encode(body));
+  return { body, signature: b64url(new Uint8Array(signature)) };
 }
 
 /** List paired devices with their passkeys and write grants, newest first, and the recent audit entries. */
@@ -243,24 +276,16 @@ function relying_party(site) {
  * other purposes return request options listing only this device's passkeys.
  */
 export function passkey_options(home, device_id, site, { purpose, room_id }) {
-  if (!['register', 'write', 'renew', 'pair'].includes(purpose)) throw new Error('通行密钥用途无效');
+  if (!['write', 'renew'].includes(purpose)) throw new Error('通行密钥用途无效');
   if (purpose === 'write' && (typeof room_id !== 'string' || !room_id)) throw new Error('须指定要开启可写的房间');
   const { rp_id } = relying_party(site);
   return with_lock(home, (registry, now) => {
     const device = registry.devices[device_id];
     if (!device) throw new Error('这台设备未配对');
-    if (purpose !== 'register' && !device.passkeys.length) throw new Error('这台设备还没有通行密钥，请撤销这台设备后重新配对，并在配对后创建');
-    if (purpose === 'register' && (device.passkeys.length || now - device.created_at > PASSKEY_SETUP_MS)) {
-      throw new Error('通行密钥只能在配对后 10 分钟内创建一次；如需重建，请撤销这台设备后重新配对');
-    }
+    if (!device.passkeys.length) throw new Error('这台设备没有通行密钥，请撤销后在电脑前重新配对');
     if (purpose === 'renew' && device.temporary) throw new Error('临时设备不能续期，请重新配对');
     const id = randomBytes(8).toString('hex'), challenge = b64url(randomBytes(32));
     registry.challenges[id] = { device_id, purpose, room_id: room_id || null, challenge, site, expires_at: now + CHALLENGE_MS };
-    if (purpose === 'register') {
-      // One account entry per device: a synced password manager then keeps each device's passkey instead of replacing it.
-      return { challenge_id: id, challenge, rp: { id: rp_id, name: 'AI CoDiscuss' }, user_id: b64url(createHash('sha256').update(`codiscuss:${rp_id}:${device_id}`).digest().subarray(0, 16)),
-        user_name: `codiscuss · ${device.label}`, exclude: device.passkeys.map(passkey => passkey.id) };
-    }
     return { challenge_id: id, challenge, rp_id, allow: device.passkeys.map(passkey => passkey.id) };
   });
 }
@@ -273,25 +298,6 @@ function take_challenge(registry, { challenge_id, device_id, purpose, room_id = 
     throw new Error('通行密钥确认已过期，请重试');
   }
   return item;
-}
-
-/**
- * Keep a passkey created for this device. The browser signed SHA-256 of this computer's challenge and the website's,
- * so one creation registers with both; this computer checks its own part.
- */
-export function register_passkey(home, device_id, site, { challenge_id, website_challenge, credential }) {
-  const { origin, rp_id } = relying_party(site);
-  return with_lock(home, registry => {
-    const item = take_challenge(registry, { challenge_id, device_id, purpose: 'register', site });
-    const challenge = website_challenge ? joint_challenge(item.challenge, website_challenge) : item.challenge;
-    const passkey = verify_registration(credential, { challenge, origin, rp_id });
-    const device = registry.devices[device_id];
-    if (!device) throw new Error('这台设备未配对');
-    if (device.passkeys.length || Date.now() - device.created_at > PASSKEY_SETUP_MS) throw new Error('通行密钥只能在配对后 10 分钟内创建一次');
-    device.passkeys = [...device.passkeys.filter(kept => kept.id !== passkey.id), passkey];
-    audit(home, { event: 'passkey.registered', device: device_id });
-    return { ok: true, passkeys: device.passkeys.length };
-  });
 }
 
 /**
@@ -336,32 +342,22 @@ export async function renew_device(home, device_id, site, { challenge_id, assert
 }
 
 /**
- * Let a paired device show a pairing code only after its passkey confirms it: a new device gains the same trust, so a
- * script using this browser's signing key alone must not be able to add one.
- */
-async function invite_device(home, device_id, site, { challenge_id, assertion, temporary }) {
-  await check_assertion(home, device_id, site, { challenge_id, assertion }, 'pair', null, () => true);
-  return start_pairing(home, { site, temporary: temporary === true, by: device_id });
-}
-
-/**
  * Answer one device action relayed from `site` for `machine_id`, in the website's HTTP shape. `device_id` is the
  * verified sender, or null for an unsigned pairing request.
  */
-export async function device_command(home, { site, machine_id, device_id }, action, payload = {}) {
+export async function device_command(home, { site, machine_id, device_id, on_change }, action, payload = {}) {
   try {
-    const body = action === 'device-pair' ? pair_device(home, machine_id, payload)
-      : action === 'device-pairing' ? await invite_device(home, device_id, site, payload)
+    const body = action === 'device-pair' ? pair_device(home, machine_id, site, payload)
       : action === 'device-list' ? list_devices(home, device_id)
       : action === 'device-revoke' ? revoke_device(home, String(payload.device_id || ''))
       : action === 'write-revoke' ? revoke_write(home, String(payload.device_id || device_id), String(payload.room_id || ''))
-      : action === 'passkey-options' ? passkey_options(home, device_id, site, { purpose: 'register' })
-      : action === 'passkey-register' ? register_passkey(home, device_id, site, payload)
       : action === 'passkey-challenge' ? passkey_options(home, device_id, site, payload)
       : action === 'device-renew' ? await renew_device(home, device_id, site, payload)
       : action === 'write-grant' ? await grant_write(home, device_id, site, payload)
       : null;
     if (!body) return { status: 404, body: { error: '未知的设备操作' } };
+    // The website accepts a device only from this computer's signed list, so a change is sent at once.
+    if (LIST_CHANGES.has(action)) await on_change?.();
     return { status: 200, body };
   } catch (error) {
     return { status: 400, body: { error: error.message, ...(error.need ? { need: error.need } : {}) } };

@@ -148,8 +148,3 @@ export async function verify_assertion({ client_data_json, authenticator_data, s
   if ((auth.sign_count || passkey.sign_count) && auth.sign_count <= passkey.sign_count) throw new Error('通行密钥计数异常，可能被复制，请撤销后重新配对');
   return auth.sign_count;
 }
-
-/** The challenge a browser signs when one ceremony must satisfy two parties: SHA-256 of both random challenges. */
-export function joint_challenge(first, second) {
-  return b64url(sha256(Uint8Array.from([...from_b64url(first), ...from_b64url(second)])));
-}

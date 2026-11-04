@@ -28,7 +28,7 @@ flowchart LR
 
 | Directory | Responsibility |
 | --- | --- |
-| `backend/` | `server.py` (Python + SQLite) is the only room backend; `worker.mjs` (Cloudflare Pages + D1) handles only the administrator account, computer pairing and the relay entry, and `updates.mjs` is the relay Durable Object; they share `schema.sql` |
+| `backend/` | `server.py` (Python + SQLite) is the only room backend; `worker.mjs` (Cloudflare Pages + D1) handles only computer binding, the computer-signed device list and the relay entry, and `updates.mjs` is the relay Durable Object; they share `schema.sql` |
 | `runner/` | The `codiscuss` command, the local service, tool and API adapters, and Smart Scheduling; Node.js built-ins only |
 | `frontend/` | Vue UI, Markdown rendering and backup sources |
 | `web/` | Static site and build output that runs as-is |

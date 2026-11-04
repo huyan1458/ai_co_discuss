@@ -1664,11 +1664,9 @@ def reserve_execution(connection, room_id, token, payload):
 def execution_detail(connection, row):
     """Describe one execution with the requests it carries and the member's read cursor."""
     member = connection.execute("SELECT * FROM room_members WHERE id=?", (row["member_id"],)).fetchone()
-    # remote_entry: the request, or the owner message its chain started from, came through the remote entry.
     requests = [dict(item) for item in connection.execute("""SELECT r.id,r.message_id,r.status,r.purpose,
         sr.id AS session_request_id,sr.session_id,sr.round,sr.position,sr.read_until,sr.question AS source_question,
-        t.cause_kind,t.cause_message_id AS source_message_id,t.cause_request_id,
-        EXISTS(SELECT 1 FROM remote_entry_messages e WHERE e.message_id IN (r.message_id, r.chain_id)) AS remote_entry
+        t.cause_kind,t.cause_message_id AS source_message_id,t.cause_request_id
         FROM member_requests r LEFT JOIN session_requests sr ON sr.member_request_id=r.id
         LEFT JOIN task_message_sources t ON t.session_request_id=sr.id
         WHERE r.execution_id=? ORDER BY r.id""", (row["id"],))]

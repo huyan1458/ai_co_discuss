@@ -1,4 +1,4 @@
-/** Site administrator setup from the deploying computer: a one-time registration token. */
+/** Website setup from the deploying computer: a one-time token that binds a computer to the online website. */
 import { spawnSync } from 'node:child_process';
 import { createHash, randomBytes } from 'node:crypto';
 import { existsSync, rmSync } from 'node:fs';
@@ -11,10 +11,10 @@ const LEGACY_ACCOUNTS_FILE = 'admin-accounts.json';
 const TOKEN_BYTES = 32;
 const HELP = `用法：codiscuss token [--config WRANGLER_CONFIG]
 
-生成一次性管理员注册令牌，经 wrangler 把它的哈希写入线上 D1，立即生效。
-在线上网页左下角注册管理员时填入；注册成功即作废，重新运行会替换旧令牌。
-需要这台电脑已 wrangler login；--config 默认为当前目录的 ${DEFAULT_CONFIG}。
-管理员密码只由你自己保管，本机不保存。
+生成一次性绑定令牌，经 wrangler 把它的哈希写入线上 D1，立即生效。
+在要绑定的电脑上执行 codiscuss local connect 网站地址 --setup-key 令牌；绑定成功即作废，重新运行会替换旧令牌。
+在部署网站的电脑上直接运行 codiscuss local connect 时会自动生成，无须本命令。
+需要这台电脑已 wrangler login；--config 默认为当前目录的 ${DEFAULT_CONFIG}。网站不设账号和密码。
 `;
 
 /** Write a fresh token's hash to the deployed D1 and return the token; the raw value is never stored. */
@@ -51,5 +51,5 @@ export function admin_main(args) {
   } });
   if (values.help || positionals.length) return process.stdout.write(HELP);
   const { token } = create_admin_token(values.config);
-  process.stdout.write(`管理员注册令牌（一次性）：\n${token}\n\n在线上网页左下角注册管理员时填入。注册成功后作废；管理员密码只由你自己保管，本机不保存。\n`);
+  process.stdout.write(`绑定令牌（一次性）：\n${token}\n\n在要绑定的电脑上执行 codiscuss local connect 网站地址 --setup-key 令牌。绑定成功后作废。\n`);
 }

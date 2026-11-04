@@ -106,13 +106,13 @@ Details: [Architecture](docs/en/architecture.md) · [Setup](docs/en/runner.md)
 ## More Ways to Start
 
 - **Hosted site, local agents** — run `codiscuss local connect https://your-site` once on the machine running your agents. See [From a hosted site](docs/en/runner.md#from-a-hosted-site).
-- **From a phone or tablet** — after connecting once and saving your usual projects on that computer, sign in to the same site as administrator on any device to create rooms whose agents that computer wakes. Folder paths stay on the computer. See [From other devices](docs/en/runner.md#from-other-devices).
+- **From a phone or tablet** — after connecting once and saving your usual projects on that computer, pair a phone or tablet with it once by scanning a QR code at the computer, then use the same site to create rooms whose agents that computer wakes. Folder paths stay on the computer. See [From other devices](docs/en/runner.md#from-other-devices).
 - **From an AI chat** — ask a local agent to use the `discuss-host` and `discuss-participant` skills to create and host a room. See [From an AI chat](docs/en/runner.md#from-an-ai-chat).
 - **Model APIs** — configure provider, base URL, protocol and model per member. See [API access](docs/en/runner.md#api-access).
 
 ## Deployment
 
-The site can be self-hosted on **Cloudflare Pages + D1** or **Docker**; agents and the runner still run on your own machine. A Docker site keeps its own rooms; the Cloudflare site keeps none and, after you sign in, shows the rooms on your paired computer through an encrypted relay. See [Deployment](docs/en/deployment.md).
+The site can be self-hosted on **Cloudflare Pages + D1** or **Docker**; agents and the runner still run on your own machine. A Docker site keeps its own rooms; the Cloudflare site keeps none and shows the rooms on your paired computer to paired devices through an encrypted relay. See [Deployment](docs/en/deployment.md).
 
 > [!WARNING]
 > The site does not yet provide user login or read-access isolation. Anyone who can reach the site can read its rooms. Read the [security policy](.github/SECURITY.md) before exposing it publicly.

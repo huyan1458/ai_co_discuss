@@ -2,7 +2,7 @@
 
 [English](en/deployment.md) | 简体中文
 
-网站可以运行在本机（Python + SQLite），也可以自托管到 Docker 或 Cloudflare Pages + D1。Python 与 Docker 部署各自保存房间，互不同步；Cloudflare 线上站点不保存房间，只保存管理员账号与电脑配对，登录后经中转读写已配对电脑上的房间。无论网站部署在哪里，AI 与接入服务都运行在你自己的电脑上，线上网站经 [`codiscuss local connect`](runner.md#线上网页连接本机) 连接本机。
+网站可以运行在本机（Python + SQLite），也可以自托管到 Docker 或 Cloudflare Pages + D1。Python 与 Docker 部署各自保存房间，互不同步；Cloudflare 线上站点不保存房间，也没有账号和密码，只保存绑定的电脑与电脑签名的设备名单；已配对的设备经中转读写电脑上的房间。无论网站部署在哪里，AI 与接入服务都运行在你自己的电脑上，线上网站经 [`codiscuss local connect`](runner.md#线上网页连接本机) 连接本机。
 
 > [!WARNING]
 > 网站暂无用户登录与读取权限隔离，能访问站点的人即可阅读其中的房间。公开部署前请阅读 [安全说明](../.github/SECURITY.md)，并在服务外配置访问控制。
@@ -22,7 +22,6 @@ python server.py --host 127.0.0.1 --port 8765 --no-demo
 | `--database` | `DATABASE_PATH` | `data/discuss.sqlite3` |
 | `--no-demo` | — | 不传时在新数据库写入示例记录 |
 | `--local-launch` | — | 开启网页启动本机 AI，仅允许绑定 `127.0.0.1` |
-| `--remote-port` | — | 另在 `127.0.0.1` 的该端口开需登录的远程入口，供 Tunnel 转发，见[外出时经 Cloudflare Tunnel 打开本机网站](runner.md#外出时经-cloudflare-tunnel-打开本机网站) |
 
 Python 3.10+，无第三方依赖。长期部署请自行配置进程管理与 HTTPS 反向代理；代理需对 `/api/updates` 关闭响应缓冲，以支持实时推送。
 
@@ -42,7 +41,7 @@ docker run --name ai-co-discuss -p 127.0.0.1:8765:8765 -v ai-co-discuss-data:/da
 
 ## Cloudflare Pages + Functions + D1
 
-需要 Node.js 24+、npm 和 Cloudflare 账号。`backend/worker.mjs` 打包为 Pages 的 `_worker.js`，绑定 D1 数据库 `DB`（只存管理员账号与电脑配对）和中转 `RELAY`。房间、消息与附件都保存在电脑的本机网站上，线上站点不存。
+需要 Node.js 24+、npm 和 Cloudflare 账号。`backend/worker.mjs` 打包为 Pages 的 `_worker.js`，绑定 D1 数据库 `DB`（只存绑定的电脑、设备名单与显示名称）和中转 `RELAY`。房间、消息与附件都保存在电脑的本机网站上，线上站点不存。
 
 > [!IMPORTANT]
 > 旧版线上站点自己保存房间。升级前先在旧版线上网页用目录“…”菜单的“导出全部房间”导出，再在本机网站导入；升级后线上不再提供这些房间（D1 里的旧表保留，不删除）。
@@ -96,10 +95,10 @@ Windows PowerShell 使用 `New-Item -ItemType Directory -Force -Path .wrangler/d
 ```sh
 npx wrangler d1 execute DB --remote --config .wrangler/deploy/wrangler.jsonc --file backend/schema.sql
 npm run deploy -- --cwd .wrangler/deploy
-codiscuss token
+codiscuss local connect https://YOUR_PROJECT_NAME.pages.dev
 ```
 
-`codiscuss token` 生成注册管理员用的一次性令牌（需已 `wrangler login`），在网站左下角注册时填入。注册后其他设备直接用账号密码登录；密码只由你自己保管，本机不保存（旧版本保存的 `~/.codiscuss/admin-accounts.json` 会在服务启动时删除）。以上 schema 命令用于空库初始化；已有站点按下面的升级流程操作。
+`codiscuss local connect` 在部署网站的电脑上自动生成一次性绑定令牌（需已 `wrangler login`），把这台电脑绑定到网站并打开本机网页的设备设置，在那里给手机等设备配对。AI 运行在另一台电脑时，先在部署的电脑上运行 `codiscuss token`，再在 AI 所在电脑上加 `--setup-key 令牌`。令牌用过即作废；旧版本保存的 `~/.codiscuss/admin-accounts.json` 会在服务启动时删除。以上 schema 命令用于空库初始化；已有站点按下面的升级流程操作。
 
 ### 升级已有数据库
 
@@ -120,9 +119,9 @@ npx wrangler d1 execute DB --remote --config .wrangler/deploy/wrangler.jsonc --f
 
 本机 Python 站点启动时检测旧表，自动在单个事务内迁移，再应用 schema；迁移失败会整体回滚并终止启动。升级前仍应备份 SQLite 和附件，不必手工执行删表脚本。
 
-登录记录改存在 `admin_logins` 表中，带有效期。执行新 schema 后，旧表 `admin_sessions` 里的永久登录不再被读取，所有设备需要重新登录一次。网站和电脑上的 codiscuss 需要同时升级：新版电脑只执行已配对设备签名的转交命令。升级后，每台外出用的设备都要按 [远程控制](runner.md#在其他设备上远程控制) 重新配对一次，并创建通行密钥；新增的 `admin_passkeys`、`admin_challenges`、`remote_entry_messages` 表由同一份 schema 创建。登录改为 HttpOnly Cookie，升级后每台设备需要重新登录一次。
+线上网站不再有管理员账号：网站和电脑上的 codiscuss 需要同时升级，升级后在电脑上运行一次 `codiscuss local connect https://你的站点`，用新的绑定令牌重新绑定，再把每台外出用的设备按 [远程控制](runner.md#在其他设备上远程控制) 在电脑前重新配对。新增的 `machine_sign_keys`、`machine_devices` 表由同一份 schema 创建；线上网站不再读取管理员密码与登录记录。本机网站的 `--remote-port` 远程入口已停用。
 
-自托管 Python 站点上的房间不经过设备签名：本机按那个站点的请求干活，等于把那个站点的管理员视同本人。只在你能保证该站点账号安全时使用；需要防护时请改用默认的线上网站加中转。`--remote-port` 远程入口发起的工作，本机一律按只读执行。
+自托管 Python 站点仍用管理员账号登录，房间不经过设备签名：本机按那个站点的请求干活，等于把那个站点的管理员视同本人。只在你能保证该站点账号安全时使用；需要防护时请改用默认的线上网站加中转。
 
 发布后检查网页、`/api/health`，以及：
 

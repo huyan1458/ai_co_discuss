@@ -290,60 +290,6 @@ class AdminTests(unittest.TestCase):
         self.assertEqual(self.request(claim, {"wait": 0}, machine=machine_token)[1], {"commands": []}, "an expired command is never run")
 
 
-class RemoteEntryTests(unittest.TestCase):
-    """A tunnel reaches the remote entry from this computer, so loopback must not make its visitors the administrator."""
-
-    def setUp(self):
-        self.directory = tempfile.TemporaryDirectory()
-        self.database = Path(self.directory.name) / "remote.db"
-        init_database(self.database, seed=False)
-        self.local = DiscussionServer(("127.0.0.1", 0), self.database, local_launch=True)
-        self.remote = DiscussionServer(("127.0.0.1", 0), self.database, hub=self.local)
-        self.remote.admin_setup_key = SETUP_KEY
-        self.threads = [threading.Thread(target=server.serve_forever, daemon=True) for server in (self.local, self.remote)]
-        for thread in self.threads:
-            thread.start()
-
-    def tearDown(self):
-        for server in (self.remote, self.local):
-            server.shutdown()
-            server.server_close()
-        for thread in self.threads:
-            thread.join()
-        self.directory.cleanup()
-
-    def request(self, server, path, payload=None, admin=""):
-        """Return status and JSON from one entry."""
-        headers = {"Content-Type": "application/json", **({"X-Discussion-Admin": admin} if admin else {})}
-        request = Request(f"http://127.0.0.1:{server.server_port}{path}", headers=headers,
-                          data=json.dumps(payload).encode() if payload is not None else None)
-        try:
-            response = urlopen(request, timeout=10)
-        except HTTPError as error:
-            response = error
-        with response:
-            self.cookie = login_cookie(response)
-            return response.status, json.load(response)
-
-    def test_remote_entry_needs_login_and_never_offers_local_launch(self):
-        self.assertTrue(self.request(self.local, "/api/admin")[1]["local"])
-        self.assertNotIn("local", self.request(self.remote, "/api/admin")[1])
-        self.assertEqual(self.request(self.local, "/api/machines")[0], 200)
-        self.assertEqual(self.request(self.remote, "/api/machines")[0], 401)
-        self.assertEqual(self.request(self.remote, "/api/local/settings")[0], 404)
-        status, result = self.request(self.remote, "/api/admin/register",
-                                      {"username": "老板", "password": PASSWORD, "setup_key": SETUP_KEY})
-        self.assertEqual(status, 201, result)
-        self.assertEqual(self.request(self.remote, "/api/machines", admin=self.cookie)[0], 200)
-
-    def test_remote_entry_streams_changes_written_on_the_local_entry(self):
-        with urlopen(f"http://127.0.0.1:{self.remote.server_port}/api/updates", timeout=3) as stream:
-            for line in (b"retry: 3000\n", b"event: ready\n", b"data: {}\n", b"\n"):
-                self.assertEqual(stream.readline(), line)
-            self.assertEqual(self.request(self.local, "/api/folders", {"name": "外出"})[0], 201)
-            self.assertEqual(stream.readline(), b"event: change\n")
-
-
 class RelayBridgeTests(unittest.TestCase):
     """The runner relays a paired device as the administrator only with this site's bridge credential, on room routes."""
 

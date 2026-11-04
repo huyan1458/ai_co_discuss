@@ -4,7 +4,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import test from 'node:test';
 
-import { device_command, open_signed_request, pairing_proof, start_pairing, write_allowed } from '../runner/device_auth.mjs';
+import { device_command, open_signed_request, pairing_passkey_challenge, pairing_proof, signed_device_list, start_pairing, write_allowed } from '../runner/device_auth.mjs';
 import { guard_remote_request } from '../runner/remote_policy.mjs';
 import { verify_assertion, verify_registration } from '../runner/webauthn.mjs';
 import { software_device, software_passkey } from './passkey_authenticator.mjs';
@@ -17,14 +17,19 @@ function home_dir(t) {
   return home;
 }
 
-/** Pair a fresh software device through a code, as a phone would after scanning. */
+/** What a phone sends after scanning: proof of the code for its key, and the passkey it created for the same pairing. */
+function pairing_request(code, device, passkey, machine = MACHINE) {
+  return { public_key: device.public_key, label: 'iPhone · Safari', proof: pairing_proof(code, machine, device.public_key),
+    passkey: passkey.create(pairing_passkey_challenge(code, device.public_key), SITE) };
+}
+
+/** Pair a fresh software device at the computer, with its passkey, as a phone does after scanning the code. */
 async function paired_device(home) {
-  const device = await software_device(MACHINE);
+  const device = await software_device(MACHINE), passkey = software_passkey('codiscuss.pages.dev');
   const { code } = start_pairing(home, { site: SITE });
-  const answer = await device_command(home, { site: SITE, machine_id: MACHINE, device_id: null }, 'device-pair',
-    { public_key: device.public_key, label: 'iPhone · Safari', proof: pairing_proof(code, MACHINE, device.public_key) });
+  const answer = await device_command(home, { site: SITE, machine_id: MACHINE, device_id: null }, 'device-pair', pairing_request(code, device, passkey));
   assert.equal(answer.status, 200, answer.body.error);
-  return device;
+  return Object.assign(device, { passkey });
 }
 
 test('passkey checks accept a verified user and refuse wrong sites, challenges, missing verification and copied counters', async () => {
@@ -44,21 +49,52 @@ test('passkey checks accept a verified user and refuse wrong sites, challenges, 
   await assert.rejects(verify_assertion(forged, kept, { challenge: 'challenge-4', ...rp }), /签名无效/);
 });
 
-test('a browser pairs only with a live code shown on a trusted screen, and wrong guesses use the code up', async t => {
+test('a browser pairs only with a live code shown at the computer, with a passkey made for that pairing', async t => {
   const home = home_dir(t);
-  const device = await software_device(), stranger = await software_device();
-  const { code } = start_pairing(home, { site: SITE });
+  const device = await software_device(), stranger = await software_device(), passkey = software_passkey('codiscuss.pages.dev');
+  const { code, url } = start_pairing(home, { site: SITE, fingerprint: 'f'.repeat(32) });
+  assert.match(url, /#pair=[0-9A-Z]{12}&fp=f{32}$/, 'the QR link carries the computer key fingerprint');
   const context = { site: SITE, machine_id: MACHINE, device_id: null };
   for (let attempt = 0; attempt < 5; attempt++) {
-    const wrong = await device_command(home, context, 'device-pair', { public_key: stranger.public_key, label: 'x', proof: pairing_proof('AAAAAAAAAAAA', MACHINE, stranger.public_key) });
+    const wrong = await device_command(home, context, 'device-pair', pairing_request('AAAAAAAAAAAA', stranger, passkey));
     assert.equal(wrong.status, 400);
   }
-  const late = await device_command(home, context, 'device-pair', { public_key: device.public_key, label: 'x', proof: pairing_proof(code, MACHINE, device.public_key) });
+  const late = await device_command(home, context, 'device-pair', pairing_request(code, device, passkey));
   assert.match(late.body.error, /配对码不对或已过期/, 'five wrong proofs use the code up');
-  // A proof made for another computer, or for another key, does not match.
+  // A proof made for another computer, a passkey made for another pairing, or none at all, does not pair.
   const fresh = start_pairing(home, { site: SITE }).code;
-  assert.equal((await device_command(home, context, 'device-pair', { public_key: device.public_key, label: 'x', proof: pairing_proof(fresh, 'other-machine', device.public_key) })).status, 400);
-  assert.equal((await device_command(home, context, 'device-pair', { public_key: device.public_key, label: 'x', proof: pairing_proof(fresh, MACHINE, stranger.public_key) })).status, 400);
+  assert.equal((await device_command(home, context, 'device-pair', pairing_request(fresh, device, passkey, 'other-machine'))).status, 400);
+  const elsewhere = { ...pairing_request(fresh, device, passkey), passkey: passkey.create(pairing_passkey_challenge('BBBBBBBBBBBB', device.public_key), SITE) };
+  assert.match((await device_command(home, context, 'device-pair', elsewhere)).body.error, /挑战/);
+  const another = start_pairing(home, { site: SITE }).code;
+  const { passkey: missing, ...without } = pairing_request(another, device, passkey);
+  assert.match((await device_command(home, context, 'device-pair', without)).body.error, /通行密钥/);
+});
+
+test('no relayed action can start a pairing: new devices are added only at the computer', async t => {
+  const home = home_dir(t);
+  const device = await paired_device(home);
+  for (const action of ['device-pairing', 'passkey-options', 'passkey-register']) {
+    assert.equal((await device_command(home, { site: SITE, machine_id: MACHINE, device_id: device.id }, action, {})).status, 404, action);
+  }
+});
+
+test('the website gets a device list signed by the computer, and a change is sent at once', async t => {
+  const { generateKeyPairSync } = await import('node:crypto');
+  const home = home_dir(t);
+  const { privateKey, publicKey } = generateKeyPairSync('ec', { namedCurve: 'prime256v1' });
+  const link = { id: MACHINE, sign_private_key: privateKey.export({ format: 'jwk' }) };
+  let synced = 0;
+  const device = await software_device(MACHINE), passkey = software_passkey('codiscuss.pages.dev');
+  const { code } = start_pairing(home, { site: SITE });
+  await device_command(home, { site: SITE, machine_id: MACHINE, device_id: null, on_change: () => { synced += 1; } }, 'device-pair', pairing_request(code, device, passkey));
+  assert.equal(synced, 1);
+  const { body, signature } = await signed_device_list(home, link);
+  const key = await crypto.subtle.importKey('jwk', publicKey.export({ format: 'jwk' }), { name: 'ECDSA', namedCurve: 'P-256' }, false, ['verify']);
+  assert.ok(await crypto.subtle.verify({ name: 'ECDSA', hash: 'SHA-256' }, key, Buffer.from(signature, 'base64url'), new TextEncoder().encode(body)));
+  const list = JSON.parse(body);
+  assert.deepEqual(list.devices.map(item => [item.id, item.x]), [[device.id, device.public_key.x]]);
+  assert.ok(!body.includes('passkey') && !body.includes('label'), 'only keys and expiry leave the computer');
 });
 
 test('only a paired device\'s signed request is opened; an unpaired browser may only pair', async t => {
@@ -85,9 +121,7 @@ test('remote writing in a room needs this device\'s passkey confirmation, for th
   const home = home_dir(t);
   const device = await paired_device(home);
   const context = { site: SITE, machine_id: MACHINE, device_id: device.id };
-  const passkey = software_passkey('codiscuss.pages.dev');
-  const options = (await device_command(home, context, 'passkey-options', {})).body;
-  assert.equal((await device_command(home, context, 'passkey-register', { challenge_id: options.challenge_id, credential: passkey.create(options.challenge, SITE) })).status, 200);
+  const passkey = device.passkey;
   const guard = room_id => () => guard_remote_request('room-member-access', { room_id, name: 'Claude', project_access: 'write' },
     { projects: [], participants: {}, home, write_allowed: room => write_allowed(home, device.id, room), write_needed: room => Object.assign(new Error('need'), { need: 'write-grant', room_id: room }) });
   assert.throws(guard('room-a'), error => error.need === 'write-grant' && error.room_id === 'room-a');
@@ -139,36 +173,10 @@ test('a remote request cannot claim a session\'s own access, and any tool approv
   assert.equal(remote_write_room(home, 'room-member-allow', { room_id: 'r', name: 'Claude', rules: ['Bash'] }), 'r');
 });
 
-test('a passkey is added once, in the minutes after pairing; later ones cannot be slipped in by a script', async t => {
-  const home = home_dir(t);
-  const device = await paired_device(home);
-  const context = { site: SITE, machine_id: MACHINE, device_id: device.id };
-  const register = async passkey => {
-    const options = await device_command(home, context, 'passkey-options', {});
-    if (options.status !== 200) return options;
-    return device_command(home, context, 'passkey-register', { challenge_id: options.body.challenge_id, credential: passkey.create(options.body.challenge, SITE) });
-  };
-  assert.equal((await register(software_passkey('codiscuss.pages.dev'))).status, 200);
-  const second = await register(software_passkey('codiscuss.pages.dev'));
-  assert.equal(second.status, 400);
-  assert.match(second.body.error, /只能在配对后 10 分钟内创建一次/);
-});
-
-test('a paired device shows a pairing code only after its passkey confirms, and remote rooms take no saved tool approvals', async t => {
+test('remote rooms take no tool approvals saved on this computer', async t => {
   const { writeFileSync } = await import('node:fs');
   const { participant_profile } = await import('../runner/discussion_launch.mjs');
   const home = home_dir(t);
-  const device = await paired_device(home);
-  const context = { site: SITE, machine_id: MACHINE, device_id: device.id };
-  assert.equal((await device_command(home, context, 'device-pairing', { temporary: false })).status, 400, 'a signature alone cannot add a device');
-  const passkey = software_passkey('codiscuss.pages.dev');
-  const options = (await device_command(home, context, 'passkey-options', {})).body;
-  await device_command(home, context, 'passkey-register', { challenge_id: options.challenge_id, credential: passkey.create(options.challenge, SITE) });
-  const challenge = (await device_command(home, context, 'passkey-challenge', { purpose: 'pair' })).body;
-  const invite = await device_command(home, context, 'device-pairing', { challenge_id: challenge.challenge_id, assertion: passkey.get(challenge.challenge, SITE) });
-  assert.equal(invite.status, 200, invite.body.error);
-  assert.match(invite.body.code, /^[0-9A-Z]{4}-[0-9A-Z]{4}-[0-9A-Z]{4}$/);
-
   // Every member's profile is built in one place, so the rule holds however the members were named.
   const executable = join(home, 'codex.exe');
   writeFileSync(executable, '');
@@ -179,14 +187,7 @@ test('a paired device shows a pairing code only after its passkey confirms, and 
   }
 });
 
-test('work started through the remote entry runs members read-only, without approved tools', async () => {
-  const { remote_entry_profile } = await import('../runner/free_runner.mjs');
-  const writer = { adapter: 'codex_cli', project_access: 'write', allowed_tools: ['Bash'] };
-  const local = { requests: [{ id: 1, remote_entry: 0 }] }, remote = { requests: [{ id: 1, remote_entry: 1 }] };
-  assert.equal(remote_entry_profile(writer, local), writer, 'work started on this computer keeps its settings');
-  assert.deepEqual(remote_entry_profile(writer, remote), { adapter: 'codex_cli', project_access: 'read', allowed_tools: [] });
-  assert.throws(() => remote_entry_profile({ project_access: 'own' }, remote), /沿用原会话权限/);
-});
+
 
 test('the computer records trust changes and remote writes for the device list, never content', async t => {
   const { recent_audit } = await import('../runner/device_auth.mjs');

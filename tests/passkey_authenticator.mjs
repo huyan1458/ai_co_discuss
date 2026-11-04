@@ -57,5 +57,10 @@ export async function software_device(machine = 'machine-1') {
       const signature = await crypto.subtle.sign({ name: 'ECDSA', hash: 'SHA-256' }, pair.privateKey, new TextEncoder().encode(`${id}\n${body}`));
       return { body, device_id: this.id, signature: Buffer.from(signature).toString('base64url') };
     },
+    /** The website credential the page sends: computer, device, time, and a signature over method, path and time. */
+    async credential(method, path, time = Math.floor(Date.now() / 1000)) {
+      const signature = await crypto.subtle.sign({ name: 'ECDSA', hash: 'SHA-256' }, pair.privateKey, new TextEncoder().encode(`${method}\n${path}\n${time}`));
+      return `${this.machine}.${this.id}.${time}.${Buffer.from(signature).toString('base64url')}`;
+    },
   };
 }

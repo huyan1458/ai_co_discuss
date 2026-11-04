@@ -12,7 +12,7 @@ import { parseArgs } from 'node:util';
 import { atomic_json } from './files.mjs';
 import { read_project_files } from './project_files.mjs';
 import { guard_remote_request, list_remote_directories } from './remote_policy.mjs';
-import { list_devices, revoke_device, revoke_write, start_pairing, write_allowed, write_needed } from './device_auth.mjs';
+import { list_devices, machine_fingerprint, revoke_device, revoke_write, start_pairing, write_allowed, write_needed } from './device_auth.mjs';
 import { setup_sidecar } from './adapters/antigravity_app.mjs';
 import { adapter_of, adoption_adapter, BRANCHABLE_ADAPTERS, branch_session, session_settings, software_defaults, software_effort, software_models } from './adapters/index.mjs';
 import { ADAPTER_IDS, ADAPTER_PROFILES, adapter_profile, platform_adapters, same_session_family } from './adapters/profiles.mjs';
@@ -99,7 +99,7 @@ tts 用朗读设置把 text（不超过 300 字）合成为 MP3，返回 base64�
 stt 按序接收录音片段（upload_id、index、base64 PCM 16 kHz 单声道、final）；最后一段时识别整段录音并返回 text。
 pick-directory 在本机弹出系统目录选择窗口，返回所选路径；取消时不返回路径。
 browse-directory 列出常用项目及其中的子文件夹（只含文件夹名，分页），供其他设备选择目录；path 为空时列出常用项目。
-device-pairing 在本机生成 12 位设备配对码（2 分钟有效，可选 temporary 临时设备、site 生成扫码链接）；只能在这台电脑上执行。
+device-pairing 在本机生成 12 位设备配对码（2 分钟有效，可选 temporary 临时设备、site 指定已绑定的网站），扫码链接带本机密钥指纹；只能在这台电脑上执行，新设备只能在电脑前添加。
 devices 列出已配对设备；提供 revoke（设备 id）撤销设备，或 revoke_write（device_id、room_id）撤销远程可写授权。
 projects 读取本机已配置的项目（名称与绝对路径）；提供 JSON（projects 列表）时整体替换保存。
 presets 读取本机的专家预设（含未删除的内置预设）与各平台默认描述；提供 JSON（presets 列表、description_templates 和/或 hidden_builtins 已删除的内置预设名）时替换对应部分。
@@ -1651,12 +1651,18 @@ export async function launch_main(args = process.argv.slice(2), input_text) {
   else if (positionals[0] === 'browse-directory') result = list_remote_directories(input || {}, { projects: launch_projects(home).projects, home });
   // Device trust from this computer's own screen; other devices reach the same actions through the relay instead.
   else if (positionals[0] === 'device-pairing' && !values.remote) {
-    // The QR code opens the paired website, where the new device signs in and pairs.
-    const site = input?.site || Object.keys((await import('./remote_launch.mjs')).machine_links(home).sites)[0];
-    result = start_pairing(home, { site, temporary: input?.temporary === true });
+    // The QR code opens the paired website and carries this computer's key fingerprint for the new device to check.
+    const { keyed_links } = await import('./remote_launch.mjs');
+    const [site, link] = Object.entries(keyed_links(home).sites).find(([origin]) => !input?.site || origin === input.site) || [];
+    if (!link) throw new Error('这台电脑还没有绑定线上网站，请先运行 codiscuss local connect 网站地址');
+    result = start_pairing(home, { site, fingerprint: machine_fingerprint(link), temporary: input?.temporary === true });
   }
-  else if (positionals[0] === 'devices' && !values.remote) result = input?.revoke ? revoke_device(home, String(input.revoke))
-    : input?.revoke_write ? revoke_write(home, String(input.revoke_write.device_id), String(input.revoke_write.room_id)) : list_devices(home);
+  else if (positionals[0] === 'devices' && !values.remote) {
+    result = input?.revoke ? revoke_device(home, String(input.revoke))
+      : input?.revoke_write ? revoke_write(home, String(input.revoke_write.device_id), String(input.revoke_write.room_id)) : list_devices(home);
+    // The website takes devices only from the list this computer signs, so a revocation is sent at once.
+    if (input?.revoke) await (await import('./remote_launch.mjs')).sync_remote_launches(home).catch(() => {});
+  }
   else if (positionals[0] === 'machine-link' && input) result = (await import('./remote_launch.mjs')).machine_link(home, input.site);
   else if (positionals[0] === 'start' && input) result = await launch_discussion(home, input, { dry_run: values['dry-run'], browser_request: values.browser });
   else if (positionals[0] === 'room-config' && input) result = await room_configuration(home, input, { local_guard: values['configuration-locked'] });

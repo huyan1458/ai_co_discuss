@@ -169,18 +169,6 @@ function route_host_label(decision, host, members) {
   return lean ? `倾向${lean}，把握不足，交给主持人 ${host}` : `交给主持人 ${host}`;
 }
 
-/**
- * The settings a member works with for one execution: work started through the optional remote entry carries no
- * device signature, so it runs read-only, without approved tools. A member on its own session's settings cannot be
- * narrowed and is refused.
- */
-export function remote_entry_profile(profile, execution) {
-  if (!execution.requests?.some(request => request.remote_entry)) return profile;
-  if (profile.project_access === 'read' && !profile.allowed_tools?.length) return profile;
-  if (profile.project_access === 'own') throw new Error('经远程入口发起的工作只能以只读运行，而这位成员沿用原会话权限；请在电脑上或经已配对设备发起');
-  return { ...profile, project_access: 'read', allowed_tools: [] };
-}
-
 /** Delivers free-room requests through the same software adapters as discussions. */
 export class FreeRoomRunner {
   constructor(config, store, deliver = deliver_task, log = () => {}, fetch_impl = fetch, session_driver = null) {
@@ -654,18 +642,13 @@ export class FreeRoomRunner {
   }
   /** Hand the execution to the member's software; only proven non-delivery is released for retry. */
   async invoke(member, execution) {
-    let adapter = this.config.participants[member.name];
+    const adapter = this.config.participants[member.name];
     const review_request = execution.requests?.find(request => request.review?.phase === 'review');
     if (review_request) {
       try { await this.check_review_delivery(member, review_request); }
       catch (error) { return this.reject_review(member, execution, error.message); }
     }
     if (!adapter) return this.fail(member.name, execution.id, `未配置 ${member.name} 的本机接入`);
-    try { adapter = remote_entry_profile(adapter, execution); }
-    catch (error) { return this.fail(member.name, execution.id, error.message); }
-    // The task and the software both take the member's settings from here, read-only included.
-    const task_config = adapter === this.config.participants[member.name] ? this.config
-      : { ...this.config, participants: { ...this.config.participants, [member.name]: adapter } };
     if (this.context_errors.has(member.name)) return this.fail(member.name, execution.id, this.context_errors.get(member.name));
     const directory = capabilities_of(adapter.adapter).project ? adapter.cwd || this.config.cwd : undefined;
     // A read-only member's software cannot write the project, so files changing meanwhile were written by someone else.
@@ -690,7 +673,7 @@ export class FreeRoomRunner {
       // An unreadable workflow leaves members on their room settings; it is logged once per error, not every execution.
       if (workflow?.error && this.workflow_error !== workflow.error) this.log(`工作流 ${workflow.id} 不可用：${workflow.error}`);
       this.workflow_error = workflow?.error || '';
-      const task = free_task_files(task_config, member, execution, binding, {
+      const task = free_task_files(this.config, member, execution, binding, {
         session, suggestions: scheduler_suggestions, reviews: review_handoffs, stopped, workflow, room_members: this.room?.members,
         goal: this.room?.goal_state?.goal || null,
       });

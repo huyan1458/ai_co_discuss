@@ -5,7 +5,9 @@ import DeviceSettings from "./DeviceSettings.vue";
 const { view, bridge } = inject("discussion");
 const account = computed(() => view.value.admin);
 const profile = computed(() => account.value.profile);
-const state_key = computed(() => !account.value.loaded ? "loading" : !account.value.registered ? "register" : !account.value.logged_in ? "login" : "profile");
+// The online website has no accounts: a device is either paired with the computer or not. Self-hosted sites keep a login.
+const state_key = computed(() => !account.value.loaded ? "loading" : account.value.devices ? (account.value.logged_in ? "profile" : "unpaired")
+  : !account.value.registered ? "register" : !account.value.logged_in ? "login" : "profile");
 const busy = ref("");
 const auth_form = reactive({ username: "", password: "", confirm: "", setup_key: "" });
 const display_name = ref("");
@@ -67,14 +69,7 @@ const sessions = ref(null);
 
 /** Read the live logins; shown on demand, since each read touches the website's database. */
 function load_sessions() {
-  return run("sessions", async () => { sessions.value = await bridge.admin.sessions(); await load_passkeys(); });
-}
-
-const passkeys = ref(null);
-/** Website passkeys are listed with the sessions: a lost device's passkey must be removed here as well. */
-async function load_passkeys() { passkeys.value = await bridge.admin.passkeys(); }
-async function delete_passkey(item) {
-  if (await run("revoke", () => bridge.admin.delete_passkey(item.id), "该通行密钥已不能登录网站")) await load_passkeys();
+  return run("sessions", async () => { sessions.value = await bridge.admin.sessions(); });
 }
 
 /** End one other login, or all others, then show the list again. */
@@ -101,6 +96,7 @@ async function save_password() {
   <section class="account-settings" aria-labelledby="account-heading">
     <h3 id="account-heading">账号</h3>
     <p v-if="state_key === 'loading'" class="fine-print" role="status">正在读取账号状态…</p>
+    <DeviceSettings v-else-if="state_key === 'unpaired'" />
 
     <form v-else-if="state_key === 'register' || state_key === 'login'" class="dialog-form account-form" :aria-label="state_key === 'register' ? '设置管理员账号' : '登录管理员账号'" @submit.prevent="submit_auth">
       <p class="fine-print account-intro">
@@ -125,8 +121,6 @@ async function save_password() {
       </template>
       <p v-else class="fine-print">忘记密码：本地版运行 <code>python server.py --reset-admin</code> 后重新注册；Cloudflare 版需清空管理员表（见部署文档）。</p>
       <div class="account-actions">
-        <UButton v-if="state_key === 'login' && !account.local" label="用通行密钥登录" icon="i-lucide-fingerprint" color="neutral" variant="soft" :loading="busy === 'passkey'" :disabled="Boolean(busy)"
-          @click="run('passkey', () => bridge.admin.login_with_passkey())" />
         <UButton type="submit" class="channel-primary-button" :label="state_key === 'register' ? '创建并登录' : '登录'" :loading="busy === 'register' || busy === 'login'" :disabled="Boolean(busy) || register_blocked" />
       </div>
     </form>
@@ -145,7 +139,7 @@ async function save_password() {
       </form>
 
       <DeviceSettings />
-      <template v-if="!account.local">
+      <template v-if="!account.local && !account.devices">
         <section class="account-devices" aria-labelledby="account-devices-heading">
           <h4 id="account-devices-heading">网站登录</h4>
           <p class="fine-print">登录一周不用或满一个月会自动失效。看到不认识的登录时，退出它并更改密码。没有配对的设备即使登录了网站，也操作不了电脑。</p>
@@ -155,12 +149,6 @@ async function save_password() {
               <li v-for="item in sessions" :key="item.id">
                 <span><strong>{{ device_label(item.label) }}</strong><small>{{ item.current ? "当前设备" : `最近使用 ${seen(item.last_seen)}` }}</small></span>
                 <UButton v-if="!item.current" label="退出" color="neutral" variant="ghost" size="xs" :disabled="Boolean(busy)" @click="end_sessions({ id: item.id }, '该设备已退出登录。')" />
-              </li>
-            </ul>
-            <ul v-if="passkeys?.length" class="account-device-list" aria-label="可登录网站的通行密钥">
-              <li v-for="item in passkeys" :key="item.id">
-                <span><strong>通行密钥 · {{ item.label || "未命名" }}</strong><small>创建于 {{ seen(item.created_at) }}；设备丢失时删除它</small></span>
-                <UButton label="删除" color="neutral" variant="ghost" size="xs" :disabled="Boolean(busy)" @click="delete_passkey(item)" />
               </li>
             </ul>
             <UButton v-if="sessions.length > 1" label="退出其他所有设备" color="neutral" variant="outline" size="sm" :loading="busy === 'revoke'" :disabled="Boolean(busy)" @click="end_sessions({ others: true }, '其他设备已全部退出登录。')" />

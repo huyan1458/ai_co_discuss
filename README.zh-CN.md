@@ -100,13 +100,13 @@ flowchart LR
 ## 更多入口
 
 - **线上网站 + 本机 AI**：在运行 AI 的电脑上执行一次 `codiscuss local connect https://你的站点`。见 [线上网页连接本机](docs/runner.md#线上网页连接本机)。
-- **手机或平板建房**：在电脑上连接一次并保存常用项目后，任何设备登录同一网站的管理员账号即可新建房间，由那台电脑唤醒 AI，项目路径只留在电脑上。见 [其他设备经已配对电脑建房](docs/runner.md#其他设备经已配对电脑建房)。
+- **手机或平板建房**：在电脑上连接一次并保存常用项目后，在电脑前扫码配对一次手机或平板，之后用同一网站即可新建房间，由那台电脑唤醒 AI，项目路径只留在电脑上。见 [其他设备经已配对电脑建房](docs/runner.md#其他设备经已配对电脑建房)。
 - **从 AI 对话发起**：让本地 AI 使用 `discuss-host` 和 `discuss-participant` 技能建房并主持。见 [从 AI 对话发起](docs/runner.md#从-ai-对话发起)。
 - **模型 API**：按成员配置供应商、Base URL、请求协议与模型。见 [API 接入](docs/runner.md#api-接入)。
 
 ## 部署
 
-网站支持自托管于 **Cloudflare Pages + D1** 或 **Docker**；AI 与接入服务仍在你的电脑运行。Docker 站点自己保存房间；Cloudflare 站点不保存房间，登录管理员后经加密中转显示已配对电脑上的房间。见 [部署指南](docs/deployment.md)。
+网站支持自托管于 **Cloudflare Pages + D1** 或 **Docker**；AI 与接入服务仍在你的电脑运行。Docker 站点自己保存房间；Cloudflare 站点不保存房间，已配对的设备经加密中转看到电脑上的房间。见 [部署指南](docs/deployment.md)。
 
 > [!WARNING]
 > 网站暂无用户登录与读取权限隔离，能访问站点的人即可阅读其中的房间。公开部署前请阅读 [安全说明](.github/SECURITY.md)。

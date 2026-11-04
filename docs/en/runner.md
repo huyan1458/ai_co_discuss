@@ -55,24 +55,16 @@ If you deploy the site yourself, run this once on the machine running your agent
 codiscuss local connect https://your-site
 ```
 
-Then sign in as the site administrator in this computer's browser to pair it; the hosted site then shows the rooms on this computer. The hosted site keeps no rooms of its own: every device, this computer included, reads and writes the computer's rooms through the relay, which must be deployed first (see "Relay" in the [deployment guide](deployment.md)). The connection link grants local launch permission — do not share it. Revoke with `codiscuss local disconnect https://your-site`.
+It binds this computer to the site with a one-time token: generated automatically on the machine that deployed the site (after `wrangler login`); otherwise run `codiscuss token` there first and add `--setup-key TOKEN`. Each token works once. The hosted site has no accounts or passwords and keeps no rooms: every device pairs with this computer first, then reads and writes its rooms through the relay, which must be deployed first (see "Relay" in the [deployment guide](deployment.md)). Revoke with `codiscuss local disconnect https://your-site`.
 
 ### From Other Devices
 
-Once paired, sign in with the same account on a phone or tablet. The "协作房间" directory lists the rooms on the computer, the same as on the computer itself: send messages and attachments, manage members, export backups, with live updates. Conversations stay on the computer; the website only passes encrypted content. Project paths and keys never leave the computer.
+**Pairing** — each phone, tablet or other computer pairs once, in front of this computer; no account or password. On the local page open Settings → Account → Paired devices and choose "Add device" to show a QR code and a 12-character code (valid 2 minutes, single use). Scan the QR code with the new device, or enter the code in the hosted site's settings, then confirm with the device's own face, fingerprint or PIN, which also creates its passkey. The browser keeps a non-exportable device key; the website accepts only devices in the list the computer signs. Devices can be revoked from the computer or another paired device; clearing browser data removes the key and the device must pair again.
+
+Once paired, the "协作房间" directory lists the rooms on the computer, the same as on the computer itself: send messages and attachments, manage members, export backups, with live updates. Conversations stay on the computer; the website only passes encrypted content. Project paths and keys never leave the computer.
 
 - Nothing is listed while the computer is off or codiscuss is not running; the directory heading says the computer is not connected or offline, and the page connects on its own once the computer is back.
 - When the computer does not answer in time, the page reports the result as unconfirmed and never resends on its own; check the room before retrying.
-
-### Through Cloudflare Tunnel While Away
-
-Optional: requires your own domain on Cloudflare and the free Zero Trust plan. Conversations stay on this computer; away from it, open the local site through [Cloudflare Tunnel](https://developers.cloudflare.com/cloudflare-one/connections/connect-networks/). Nothing is reachable while the computer is off or codiscuss is not running.
-
-1. Enable the remote entry. It listens on `127.0.0.1` only and shares the local site's data and live updates, but visitors must sign in as the administrator and it offers no local launch: `codiscuss setup --remote-port 8766`. Restart the local site when prompted; `--remote-port off` disables it.
-2. Install `cloudflared` and route a subdomain to `http://127.0.0.1:8766`. **Never route the local site port (8765 by default)**: its visitors are the administrator without signing in.
-3. Put Cloudflare Access (for example an email code) in front of the subdomain. Like any hosted deployment, the remote entry has no read isolation; without Access every conversation is public.
-4. Open the subdomain and register the administrator; the setup token is in `~/.codiscuss/local/website.log`, after the `Remote entry` line.
-5. To create rooms or invite members from the phone, pair the subdomain with `codiscuss local connect` as described above, and add an Access Bypass for `/api/machines/` so the computer can claim relayed commands; that path is checked against the administrator session or the computer's credential.
 
 ## API Access
 

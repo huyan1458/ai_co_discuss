@@ -22,10 +22,12 @@ const STOP_WAIT_MS = 25000;
 const POLL_MS = 200;
 const CONNECTION_TOKEN_BYTES = 32;
 const LOCAL_HELP = `用法：codiscuss local open|start|status|stop [--json]
-      codiscuss local connect SITE [--no-open]
+      codiscuss local connect SITE [--setup-key KEY] [--no-open]
       codiscuss local disconnect SITE
 
-connect 允许指定 HTTPS 站点通过此浏览器使用本机软件配置并启动 AI，打开连接链接完成接入。
+connect 把这台电脑绑定到线上网站（只用于外出时中转，网站不存房间、不设账号）：用部署者的一次性绑定令牌登记本机，
+  令牌取自 --setup-key，未给出时在本机经 wrangler 直接生成（须是部署网站的电脑且已 wrangler login）；
+  之后在电脑本机网页“设置 → 账号 → 添加设备”扫码配对外出设备。自托管 Python 站点则打开连接链接完成接入。
 disconnect 撤销该站点的新启动权限（含其他设备经网站转来的启动）；已运行的讨论须另行暂停。
 数据保留在服务目录中；重新 connect 会替换该站点的旧连接。
 结果摘要写入终端；输出被重定向或加 --json 时 JSON 写入 stdout。
@@ -55,15 +57,41 @@ export function save_site_connection(home, site, token = null) {
 }
 
 /** Start the local service and open a site-bound connection whose credential stays in the URL fragment. */
-async function connect_site(home, site, no_open) {
+async function connect_site(home, site, no_open, setup_key) {
   const origin = connection_site(site);
   const local = await start_local(home);
+  // The online website keeps no rooms or accounts: this computer binds itself with the deployer's one-time token.
+  const state = await fetch(`${origin}/api/admin`, { redirect: 'error', signal: AbortSignal.timeout(10000) }).then(response => response.json()).catch(() => ({}));
+  if (state.devices) {
+    await bind_machine(home, origin, setup_key);
+    if (!no_open) open_site(`${local.url}/#settings=devices`);
+    return { connected: origin, local_url: local.url, url: `${local.url}/#settings=devices`, bound: true };
+  }
   const token = randomBytes(CONNECTION_TOKEN_BYTES).toString('hex');
   save_site_connection(home, origin, token);
   const connection = { site: origin, endpoint: local.url, token };
   const url = `${origin}/#codiscuss-connect=${encodeURIComponent(JSON.stringify(connection))}`;
   if (!no_open) open_site(url);
   return { connected: origin, local_url: local.url, url };
+}
+
+/**
+ * Register this computer with an online website using a one-time setup token, then publish its keys and signed device
+ * list. Without a token given, the deploying computer creates one through wrangler, as `codiscuss token` does.
+ */
+async function bind_machine(home, origin, setup_key) {
+  const { machine_link, sync_remote_launches } = await import('./remote_launch.mjs');
+  let key = setup_key;
+  if (!key) {
+    try { key = (await import('./admin_account.mjs')).create_admin_token().token; }
+    catch (error) { throw new Error(`需要绑定令牌：请在部署网站的电脑上运行 codiscuss token，再执行 codiscuss local connect ${origin} --setup-key 令牌（${error.message}）`); }
+  }
+  const link = machine_link(home, origin);
+  const response = await fetch(`${origin}/api/machines`, { method: 'POST', redirect: 'error', signal: AbortSignal.timeout(15000),
+    headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ ...link, setup_key: key }) });
+  const result = await response.json().catch(() => ({}));
+  if (!response.ok) throw new Error(result.error || `绑定失败：HTTP ${response.status}`);
+  await sync_remote_launches(home);
 }
 
 /** Read the website supervisor's lock and last startup receipt. */
@@ -97,9 +125,8 @@ async function wait_website(child, progress, url) {
 function website_process(home, settings, url) {
   const python = detect_python(settings.python);
   const database = join(home, 'local', 'discuss.sqlite3');
-  const remote = settings.remote_port ? ['--remote-port', String(settings.remote_port)] : [];
   const child = spawn(python, ['-u', SERVER, '--host', '127.0.0.1', '--port', String(settings.port || 8765),
-    '--database', database, '--no-demo', '--local-launch', ...remote], { windowsHide: true, stdio: ['ignore', 'pipe', 'pipe'],
+    '--database', database, '--no-demo', '--local-launch'], { windowsHide: true, stdio: ['ignore', 'pipe', 'pipe'],
     env: { ...process.env, PYTHONDONTWRITEBYTECODE: '1', PATH: `${dirname(process.execPath)}${delimiter}${dirname(python)}${delimiter}${process.env.PATH || ''}` } });
   const progress = { ready: false, error: null };
   let recent = '';
@@ -152,7 +179,7 @@ async function supervise(home) {
   const stop_path = join(directory, 'stop.request');
   const settings = local_settings(home);
   const url = `http://127.0.0.1:${settings.port || 8765}`;
-  const status = { pid: process.pid, ready: false, url, remote_port: settings.remote_port || null, version: VERSION };
+  const status = { pid: process.pid, ready: false, url, version: VERSION };
   if (existsSync(stop_path)) unlinkSync(stop_path);
   atomic_json(status_path, status);
   let website, owned_service, stopped = false;
@@ -185,8 +212,7 @@ async function supervise(home) {
 async function start_local(home) {
   const current = local_status(home);
   const settings = local_settings(home);
-  if (current.website_running && (current.url !== `http://127.0.0.1:${settings.port || 8765}`
-      || (current.remote_port ?? null) !== (settings.remote_port || null))) {
+  if (current.website_running && current.url !== `http://127.0.0.1:${settings.port || 8765}`) {
     throw new Error('网站端口配置已改变；请先 codiscuss local stop，再 codiscuss local open。');
   }
   if (current.running) return current;
@@ -220,8 +246,8 @@ export function restart_reason(home = service_home()) {
   const settings = local_settings(home);
   const url = `http://127.0.0.1:${settings.port || 8765}`;
   if (current.url !== url) return `本机网站正在 ${current.url} 运行，端口配置已改为 ${url}`;
-  const remote = settings.remote_port || null;
-  if ((current.remote_port ?? null) !== remote) return `远程入口端口配置已改为${remote ? ` ${remote}` : '关闭'}`;
+  // A website started with the retired remote entry is restarted without it.
+  if (current.remote_port) return '本机网站仍开着已停用的远程入口';
   if (current.version !== VERSION) return `本机网站正在运行${current.version ? `版本 ${current.version}` : '未记录版本的旧程序'}，当前安装为 ${VERSION}`;
   return null;
 }
@@ -271,7 +297,7 @@ function local_summary(command, result, opened) {
  */
 export async function local_main(args, output) {
   const { positionals, values } = parseArgs({ args, allowPositionals: true, options: {
-    'no-open': { type: 'boolean' }, json: { type: 'boolean' }, help: { type: 'boolean', short: 'h' },
+    'no-open': { type: 'boolean' }, json: { type: 'boolean' }, help: { type: 'boolean', short: 'h' }, 'setup-key': { type: 'string' },
   } });
   const [command = 'open', site] = positionals;
   const home = service_home();
@@ -285,7 +311,7 @@ export async function local_main(args, output) {
   if (['connect', 'disconnect'].includes(command)) {
     if (positionals.length !== 2 || (values['no-open'] && command !== 'connect')) throw new Error(LOCAL_HELP);
     const origin = connection_site(site);
-    const result = command === 'connect' ? await connect_site(home, origin, values['no-open'])
+    const result = command === 'connect' ? await connect_site(home, origin, values['no-open'], values['setup-key'])
       : (save_site_connection(home, origin), { disconnected: origin });
     report(result, command === 'connect' && !values['no-open']);
     return result;

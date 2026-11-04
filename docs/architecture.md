@@ -29,7 +29,7 @@ flowchart LR
 
 | 目录 | 职责 |
 | --- | --- |
-| `backend/` | `server.py`（Python + SQLite）是唯一的房间后端；`worker.mjs`（Cloudflare Pages + D1）只管管理员账号、电脑配对与中转入口，`updates.mjs` 是中转 Durable Object；共用 `schema.sql` |
+| `backend/` | `server.py`（Python + SQLite）是唯一的房间后端；`worker.mjs`（Cloudflare Pages + D1）只管电脑绑定、电脑签名的设备名单与中转入口，`updates.mjs` 是中转 Durable Object；共用 `schema.sql` |
 | `runner/` | 统一命令 `codiscuss`、常驻讨论服务、房间编排、智能调度；只使用 Node.js 内置模块 |
 | `runner/adapters/` | 适配层：各软件（Claude Code、Codex CLI / App、Antigravity CLI / App、模型 API）的静态事实与投递、停止、会话、模型读取，对上提供统一接口；新接一家软件只改这里 |
 | `frontend/` | Vue 界面、Markdown 渲染与备份源码 |

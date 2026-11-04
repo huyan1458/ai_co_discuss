@@ -2,7 +2,7 @@
 
 English | [简体中文](../deployment.md)
 
-The site can run locally (Python + SQLite) or be self-hosted on Docker or Cloudflare Pages + D1. Python and Docker deployments each keep their own rooms, not synced between them; the Cloudflare site keeps no rooms, only the administrator account and computer pairings, and after sign-in reads and writes the paired computer's rooms through the relay. Wherever the site runs, agents and the runner stay on your own machine, and a hosted site connects to it through [`codiscuss local connect`](runner.md#from-a-hosted-site).
+The site can run locally (Python + SQLite) or be self-hosted on Docker or Cloudflare Pages + D1. Python and Docker deployments each keep their own rooms, not synced between them; the Cloudflare site keeps no rooms and no accounts, only the bound computer and the device list it signs, and paired devices read and write the computer's rooms through the relay. Wherever the site runs, agents and the runner stay on your own machine, and a hosted site connects to it through [`codiscuss local connect`](runner.md#from-a-hosted-site).
 
 > [!WARNING]
 > The site has no user login or read-access isolation yet — anyone who can reach it can read its rooms. Read the [security policy](../../.github/SECURITY.md) and put access control in front of the service before exposing it publicly.
@@ -22,7 +22,6 @@ python server.py --host 127.0.0.1 --port 8765 --no-demo
 | `--database` | `DATABASE_PATH` | `data/discuss.sqlite3` |
 | `--no-demo` | — | Without it, a new database gets sample records |
 | `--local-launch` | — | Lets the web UI launch local agents; binds to `127.0.0.1` only |
-| `--remote-port` | — | Also serves a login-required remote entry on `127.0.0.1` at this port for a tunnel; see [Through Cloudflare Tunnel While Away](runner.md#through-cloudflare-tunnel-while-away) |
 
 Python 3.10+ with no third-party dependencies. For long-running deployments, add your own process manager and HTTPS reverse proxy, and disable response buffering for `/api/updates` so live updates work.
 
@@ -42,7 +41,7 @@ The image runs as a non-root user and keeps data in the `/data` volume. The exam
 
 ## Cloudflare Pages + D1
 
-Requires Node.js 24+, npm and a Cloudflare account. `backend/worker.mjs` is bundled as the Pages `_worker.js`, bound to the D1 database `DB` (administrator account and computer pairings only) and the relay `RELAY`. Rooms, messages and attachments live in the computer's local website, not on the hosted site.
+Requires Node.js 24+, npm and a Cloudflare account. `backend/worker.mjs` is bundled as the Pages `_worker.js`, bound to the D1 database `DB` (only the bound computer, its device list and display name) and the relay `RELAY`. Rooms, messages and attachments live in the computer's local website, not on the hosted site.
 
 > [!IMPORTANT]
 > Older hosted sites kept rooms of their own. Before upgrading, export them on the old hosted page with "Export all rooms" in the directory "…" menu and import them into the local website; after the upgrade the hosted site no longer serves them (the old D1 tables are kept, not dropped).
@@ -96,10 +95,10 @@ Keep the binding name `DB`, then add the `RELAY` binding as described under "Rel
 ```sh
 npx wrangler d1 execute DB --remote --config .wrangler/deploy/wrangler.jsonc --file backend/schema.sql
 npm run deploy -- --cwd .wrangler/deploy
-codiscuss token
+codiscuss local connect https://YOUR_PROJECT_NAME.pages.dev
 ```
 
-`codiscuss token` prints a one-time token for registering the administrator (requires `wrangler login`); enter it when registering from the bottom-left corner. Registering from a page connected with `codiscuss local connect` also saves the account to `~/.codiscuss/admin-accounts.json`. Other devices then simply log in with the username and password. The schema command above initializes an empty database; use the upgrade process below for existing sites.
+On the machine that deployed the site (after `wrangler login`), `codiscuss local connect` creates a one-time binding token, binds this computer to the site and opens the local device settings, where phones and other devices pair. If agents run on another computer, run `codiscuss token` on the deploying machine and add `--setup-key TOKEN` there. Each token works once. The schema command above initializes an empty database; use the upgrade process below for existing sites.
 
 ### Upgrading an Existing Database
 
@@ -119,6 +118,8 @@ npx wrangler d1 execute DB --remote --config .wrangler/deploy/wrangler.jsonc --f
 The script removes retired scheduling and runtime records while retaining messages and current collaboration sessions. Old rooms without an owner credential remain readable but cannot be managed by the owner; existing member credentials retain their permissions. Stop on any failure. Atomicity of the complete migration on D1 has not been verified; keep the backup. Both scripts are safe to repeat after success.
 
 Local Python sites detect the retired tables on startup, migrate in one transaction, then apply schema. Migration failure rolls back and aborts startup. Back up SQLite and attachments before upgrading; no manual migration is needed.
+
+The hosted site no longer has an administrator account. Upgrade the site and codiscuss together, run `codiscuss local connect https://your-site` once to bind again with a new token, then pair each device again in front of the computer. The `--remote-port` entry of the local site is retired. A self-hosted Python site still signs in with an administrator account and its requests are not device-signed, so the computer trusts that site's administrator as you.
 
 After publishing, check the page, `/api/health`, and:
 

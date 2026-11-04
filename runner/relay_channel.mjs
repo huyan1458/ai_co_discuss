@@ -12,7 +12,7 @@ import { gzipSync } from 'node:zlib';
 import { atomic_json } from './files.mjs';
 import { acquire_lock } from './discussion_runner.mjs';
 import { local_settings } from './discussion_setup.mjs';
-import { machine_links, relay_cipher, relayed_command, ROOM_ACTIONS, run_launch_command, unseal } from './remote_launch.mjs';
+import { machine_links, relay_cipher, save_machine_links, relayed_command, ROOM_ACTIONS, run_launch_command, sync_remote_launches, unseal } from './remote_launch.mjs';
 import { claim_relayed_command } from './remote_policy.mjs';
 import { audit, DEVICE_ACTIONS, device_command, open_signed_request, write_allowed, write_needed } from './device_auth.mjs';
 
@@ -47,7 +47,7 @@ export function bridge_token(home, site) {
   if (!link) return '';
   if (!link.bridge_token) {
     link.bridge_token = randomBytes(BRIDGE_TOKEN_BYTES).toString('hex');
-    atomic_json(join(home, 'machine-links.json'), links);
+    save_machine_links(home, links);
   }
   const path = join(home, 'site-connections.json');
   const hashed = createHash('sha256').update(link.bridge_token).digest('hex');
@@ -195,7 +195,7 @@ export async function answer_request(home, site, link, frame, { run = run_launch
     const { action, payload, target } = request;
     claim_relayed_command(home, id, request.sent_at);
     const device = opened.device_id;
-    response = DEVICE_ACTIONS.has(action) ? await device_command(home, { site, machine_id: link.id, device_id: device }, action, payload)
+    response = DEVICE_ACTIONS.has(action) ? await device_command(home, { site, machine_id: link.id, device_id: device, on_change: () => sync_remote_launches(home) }, action, payload)
       : action === 'computer-site' ? { status: 200, body: { site: local_origin(home) } }
       : action === 'room-api' ? await room_api(home, site, payload, { fetcher, device })
       : action === 'room-upload' ? await room_upload(home, site, payload, { fetcher })

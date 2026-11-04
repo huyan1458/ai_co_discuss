@@ -125,7 +125,7 @@ state.directory_version = 0;
 state.navigation_version = 0;
 state.admin = { loaded: false, local: false, registered: false, setup_available: false, logged_in: false, profile: null, identity_version: 0 };
 // needs: "" | "pairing" | "renew"; pairing_code arrives from a scanned link (#pair=CODE); prompt waits for the user's tap.
-state.device = { id: "", needs: "", pairing_code: "", prompt: null };
+state.device = { id: "", needs: "", pairing_code: "", pairing_fp: "", prompt: null };
 state.launch = { available: false, remote: false, relay: null, connect_command: "", profiles: {}, projects: [], presets: [], builtin_presets: [], hidden_builtins: [], workflows: [], description_templates: {}, workspace: {}, scheduler: {}, create_preferences: {}, error: "", recoveries: [] };
 state.create_host_workflows = false;
 let create_preferences_pending = {}, create_preferences_saving = null, create_preferences_version = 0;
@@ -219,6 +219,11 @@ async function request_json(path, payload, access_token) {
   const target_room = path.match(/^\/api\/rooms\/([^/?]+)/)?.[1];
   const token = access_token || (target_room ? localStorage.getItem(`discuss-access:${target_room}`) : null);
   options.headers = token ? { "X-Discussion-Token": token } : {};
+  // The online website has no accounts: a paired device signs its requests with its own non-exportable key.
+  if (state.admin.devices && /^\/api\/(machines|admin\/profile)/.test(path)) {
+    const credential = await device_credential(payload === undefined ? "GET" : "POST", path.split("?")[0]);
+    if (credential) options.headers["X-CoDiscuss-Device"] = credential;
+  }
   if (payload !== undefined) {
     options.method = "POST";
     options.headers["Content-Type"] = "application/json";
@@ -245,8 +250,9 @@ function apply_admin_identity(profile) {
 /** Record the server's administrator state and refresh every identity-dependent view without a reload. */
 function apply_admin_state(info) {
   const local = info.local === true;
-  Object.assign(state.admin, { loaded: true, local, computer_rooms: info.computer_rooms === true, registered: Boolean(info.registered), setup_available: Boolean(info.setup_available),
-    logged_in: Boolean(info.logged_in), profile: info.profile ? { username: info.profile.username, avatar: info.profile.avatar || "" } : null });
+  const devices = info.devices === true;
+  Object.assign(state.admin, { loaded: true, local, devices, computer_rooms: info.computer_rooms === true, registered: Boolean(info.registered), setup_available: Boolean(info.setup_available),
+    logged_in: devices ? Boolean(paired_record()) : Boolean(info.logged_in), profile: info.profile ? { username: info.profile.username, avatar: info.profile.avatar || "" } : null });
   apply_admin_identity(state.admin.profile);
   publish_view();
 }
@@ -311,14 +317,6 @@ async function logout_admin() {
 /** List this account's live logins, each with the browser that signed in and whether it is this one. */
 async function admin_sessions() {
   return (await request_json("/api/admin/sessions")).sessions;
-}
-
-/** The passkeys that can sign in to this website, and removing one (a lost device's). */
-async function admin_passkeys() {
-  return (await request_json("/api/admin/passkeys")).passkeys;
-}
-async function delete_admin_passkey(id) {
-  await request_json("/api/admin/passkey-delete", { id });
 }
 
 /** End one other login by id, or every login but this one with { others: true }. */
@@ -2077,8 +2075,9 @@ function take_pairing_code() {
   const match = (location.hash || "").match(/(?:^#|&)pair=([0-9A-Za-z-]{12,16})/);
   if (!match) return;
   state.device.pairing_code = match[1].toUpperCase();
+  state.device.pairing_fp = (location.hash.match(/(?:^#|&)fp=([0-9a-f]{32})/) || [])[1] || "";
   history.replaceState(null, "", `${location.pathname}${location.search}`);
-  notify("info", "已读取配对码：登录后在 设置 → 账号 中完成配对");
+  notify("info", "已读取配对码：打开 设置 → 账号，点“配对”");
 }
 
 /** Read a site-bound connection without exposing its credential to the shared view snapshot. */
@@ -2201,32 +2200,105 @@ function device_label(agent = navigator.userAgent) {
   return [system, browser].filter(Boolean).join(" · ") || "未知设备";
 }
 
+// Which computer this browser paired with and that computer's key fingerprint: nothing secret, the key itself stays in IndexedDB.
+const PAIRED_KEY = "codiscuss-paired";
+
+function paired_record() {
+  try { return JSON.parse(localStorage.getItem(PAIRED_KEY) || "null"); } catch { return null; }
+}
+
+/** The fingerprint of a computer's two keys, as the computer prints it in its pairing QR code. */
+async function machine_fingerprint(machine) {
+  const ecdh = machine.public_key, sign = machine.sign_key;
+  if (!ecdh || !sign) return "";
+  const digest = new Uint8Array(await crypto.subtle.digest("SHA-256", new TextEncoder().encode(`${ecdh.x}.${ecdh.y}.${sign.x}.${sign.y}`)));
+  return Array.from(digest, byte => byte.toString(16).padStart(2, "0")).join("").slice(0, 32);
+}
+
+/** This device's signed credential for one request to the website: computer, device, time, and a signature over method, path and time. */
+async function device_credential(method, path) {
+  const record = paired_record();
+  if (!record) return "";
+  const device = await device_identity();
+  const time = Math.floor(Date.now() / 1000);
+  const signature = await crypto.subtle.sign({ name: "ECDSA", hash: "SHA-256" }, device.private_key, new TextEncoder().encode(`${method}\n${path}\n${time}`));
+  return `${record.machine_id}.${device.id}.${time}.${bytes_to_b64url(signature)}`;
+}
+
+/** This browser no longer counts as paired: the computer revoked it, or it is being unpaired here. */
+function forget_pairing() {
+  try { localStorage.removeItem(PAIRED_KEY); } catch { /* Nothing stored. */ }
+  state.admin.logged_in = false;
+  state.device.needs = state.admin.devices ? "pairing" : state.device.needs;
+  publish_view();
+}
+
 /** Run a device action on the paired computer, or on this computer's own service from its local page. */
 async function device_request(action, payload = {}) {
-  if (relay_machine) return relay_command(action, payload);
-  if (action === "device-pairing") return local_launch_request("device-pairing", payload);
+  if (relay_machine && !state.admin.local) return relay_command(action, payload);
   if (action === "device-list") return local_launch_request("devices", {});
   if (action === "device-revoke") return local_launch_request("devices", { revoke: payload.device_id });
   if (action === "write-revoke") return local_launch_request("devices", { revoke_write: payload });
   throw new Error("请在已配对的设备上操作");
 }
 
-/** Pair this browser with the code shown on a trusted screen: the code authenticates this browser's public key. */
+/**
+ * Pair this browser at the computer: the code shown on the computer's screen authenticates this browser's key, and the
+ * passkey is created in the same step (its challenge is bound to the code and the key). A scanned QR code also carries
+ * the computer's key fingerprint, so a website handing over other keys is caught here.
+ */
 async function pair_this_device(code) {
-  const machine = relay_machine;
-  if (!machine) throw new Error("请先登录并确认电脑在线，再输入配对码");
+  const machine = relay_machine || await load_relay_machine();
+  if (!machine?.sign_key) throw new Error("网站上还没有绑定电脑，或电脑的 codiscuss 版本过旧");
   const normal = String(code || "").toUpperCase().replace(/[^0-9A-Z]/g, "");
   if (normal.length !== 12) throw new Error("配对码是 12 位字母和数字");
+  const fingerprint = await machine_fingerprint(machine);
+  if (state.device.pairing_fp && state.device.pairing_fp !== fingerprint) throw new Error("网站给出的电脑身份与二维码不符，已停止配对；请在电脑前重新扫码");
   const device = await device_identity();
-  const key = await crypto.subtle.importKey("raw", new TextEncoder().encode(normal), { name: "HMAC", hash: "SHA-256" }, false, ["sign"]);
-  const proof = bytes_to_b64url(await crypto.subtle.sign("HMAC", key, new TextEncoder().encode(`codiscuss-pair-v1\n${machine.id}\n${device.raw}`)));
-  const result = await relay_command("device-pair", { public_key: device.public_jwk, label: device_label(), proof });
-  Object.assign(state.device, { needs: "", pairing_code: "" });
-  publish_view();
-  // Settings and the computer's rooms load now that the computer accepts this device.
-  load_launch_settings();
-  if (computer_rooms_only()) connect_computer_rooms();
-  return result;
+  const encoder = new TextEncoder();
+  const key = await crypto.subtle.importKey("raw", encoder.encode(normal), { name: "HMAC", hash: "SHA-256" }, false, ["sign"]);
+  const proof = bytes_to_b64url(await crypto.subtle.sign("HMAC", key, encoder.encode(`codiscuss-pair-v1\n${machine.id}\n${device.raw}`)));
+  const challenge = new Uint8Array(await crypto.subtle.digest("SHA-256", encoder.encode(`codiscuss-pair-passkey\n${normal}\n${device.raw}`)));
+  // WebAuthn must run on the user's tap, so everything above is ready before the dialog asks for it.
+  return passkey_prompt({ title: "配对这台设备", description: "用这台设备的面容、指纹或设备密码确认，完成与电脑的配对。之后打开网页即可使用，无需账号和密码。", confirm_label: "继续",
+    run: async () => {
+      const created = await navigator.credentials.create({ publicKey: { challenge, rp: { id: location.hostname, name: "AI CoDiscuss" },
+        user: { id: crypto.getRandomValues(new Uint8Array(16)), name: `codiscuss · ${device_label()}`, displayName: `AI CoDiscuss · ${device_label()}` },
+        pubKeyCredParams: [{ type: "public-key", alg: -7 }, { type: "public-key", alg: -257 }],
+        authenticatorSelection: { userVerification: "required", residentKey: "preferred" }, attestation: "none", timeout: PASSKEY_TIMEOUT_MS } })
+        .catch(error => { throw passkey_error(error); });
+      const passkey = { id: bytes_to_b64url(created.rawId), client_data_json: bytes_to_b64url(created.response.clientDataJSON),
+        attestation_object: bytes_to_b64url(created.response.attestationObject) };
+      const answer = await pair_exchange(machine, { public_key: device.public_jwk, label: device_label(), proof, passkey });
+      if (answer.status >= 400) throw new Error(answer.body?.error || "配对失败");
+      localStorage.setItem(PAIRED_KEY, JSON.stringify({ machine_id: machine.id, fingerprint }));
+      Object.assign(state.device, { needs: "", pairing_code: "", pairing_fp: "" });
+      state.admin.logged_in = true;
+      publish_view();
+      notify("info", "这台设备已与电脑配对");
+      // Settings and the computer's rooms load now that the computer accepts this device.
+      await load_launch_settings();
+      if (computer_rooms_only()) connect_computer_rooms();
+    } });
+}
+
+/** Send the unsigned pairing request through the website's pairing entry and wait for the computer's answer. */
+async function pair_exchange(machine, payload) {
+  const id = crypto.randomUUID();
+  const { key, envelope } = await seal_relay_request(machine, id, { action: "device-pair", payload });
+  const path = `/api/machines/${encodeURIComponent(machine.id)}/pair`;
+  const response = await fetch(path, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ id, envelope, wait: 15 }) });
+  const result = await response.json();
+  if (!response.ok) throw new Error(result.error || "配对请求被网站拒绝");
+  if (result.status === "done") return open_relay_response(key, id, result.response);
+  if (result.status === "offline") throw new Error(`电脑「${machine.name}」不在线，请确认它开机并运行 codiscuss`);
+  // Without the live relay, the request waits in the queue; its answer is sealed for this browser alone.
+  for (const started = Date.now(); Date.now() - started < RELAY_COMMAND_WAIT_MS;) {
+    await new Promise(resolve => setTimeout(resolve, RELAY_COMMAND_POLL_MS));
+    const command = await (await fetch(`/api/machines/${encodeURIComponent(machine.id)}/commands/${id}`)).json();
+    if (command.status === "done") return open_relay_response(key, id, command.response);
+  }
+  throw new Error("电脑没有及时答复配对请求，请确认它开机并运行 codiscuss 后重试");
 }
 
 /** The page's own passkey confirmation: WebAuthn needs the user's tap, so options are fetched first and the call runs on the tap. */
@@ -2241,40 +2313,27 @@ function passkey_prompt({ title, description, confirm_label, run }) {
   });
 }
 
+/** Say in plain words why the browser refused a passkey step; its own message is English and names no cause. */
+function passkey_error(error) {
+  if (error?.name === "NotAllowedError") return new Error("没有完成通行密钥确认：已取消，或这台设备上没有这个网站可用的通行密钥");
+  if (error?.name === "InvalidStateError") return new Error("这台设备已经为这个网站创建过通行密钥");
+  if (error?.name === "SecurityError") return new Error("当前网址不能使用通行密钥，请用正式网站地址打开");
+  return error;
+}
+
 /** Ask this device's passkey to sign a challenge; returns the assertion fields the computer or website checks. */
 async function passkey_assertion(options) {
   const credential = await navigator.credentials.get({ publicKey: { challenge: b64url_to_bytes(options.challenge), rpId: options.rp_id,
-    allowCredentials: (options.allow || []).map(id => ({ type: "public-key", id: b64url_to_bytes(id) })), userVerification: "required", timeout: PASSKEY_TIMEOUT_MS } });
+    allowCredentials: (options.allow || []).map(id => ({ type: "public-key", id: b64url_to_bytes(id) })), userVerification: "required", timeout: PASSKEY_TIMEOUT_MS } })
+    .catch(error => { throw passkey_error(error); });
   return { id: bytes_to_b64url(credential.rawId), client_data_json: bytes_to_b64url(credential.response.clientDataJSON),
     authenticator_data: bytes_to_b64url(credential.response.authenticatorData), signature: bytes_to_b64url(credential.response.signature) };
 }
 
-/** Create one passkey for this paired device, registered with both the computer and the website in a single step. */
-async function create_device_passkey() {
-  const computer = await relay_command("passkey-options", {});
-  const website = await request_json("/api/admin/passkey-challenge", { purpose: "register" });
-  const challenge = new Uint8Array(await crypto.subtle.digest("SHA-256", new Uint8Array([...b64url_to_bytes(computer.challenge), ...b64url_to_bytes(website.challenge)])));
-  return passkey_prompt({ title: "为这台设备创建通行密钥", description: "之后用指纹、面容或设备密码登录、续期和开启远程可写，不用再输密码。", confirm_label: "创建通行密钥",
-    run: async () => {
-      const created = await navigator.credentials.create({ publicKey: { challenge, rp: computer.rp,
-        user: { id: b64url_to_bytes(computer.user_id), name: computer.user_name || "codiscuss", displayName: computer.user_name || "AI CoDiscuss" },
-        pubKeyCredParams: [{ type: "public-key", alg: -7 }, { type: "public-key", alg: -257 }],
-        authenticatorSelection: { userVerification: "required", residentKey: "preferred" }, attestation: "none", timeout: PASSKEY_TIMEOUT_MS,
-        excludeCredentials: (computer.exclude || []).map(id => ({ type: "public-key", id: b64url_to_bytes(id) })) } });
-      const credential = { id: bytes_to_b64url(created.rawId), client_data_json: bytes_to_b64url(created.response.clientDataJSON),
-        attestation_object: bytes_to_b64url(created.response.attestationObject) };
-      await relay_command("passkey-register", { challenge_id: computer.challenge_id, website_challenge: website.challenge, credential });
-      await request_json("/api/admin/passkey-register", { challenge_id: website.challenge_id, computer_challenge: computer.challenge, credential, label: device_label() });
-      notify("info", "已创建通行密钥");
-    } });
-}
-
-/** Show a pairing code for another device: from the computer's own page directly, from a paired device after its passkey. */
+/** Show a pairing code for a new device; only this computer's own page can, so new devices are added in front of it. */
 async function invite_device(temporary) {
-  if (!relay_machine) return local_launch_request("device-pairing", { temporary });
-  const options = await relay_command("passkey-challenge", { purpose: "pair" });
-  return passkey_prompt({ title: "添加新设备", description: "新设备将获得与这台设备相同的远程权限，请用通行密钥确认是你本人在操作。", confirm_label: "用通行密钥确认",
-    run: async () => relay_command("device-pairing", { temporary, challenge_id: options.challenge_id, assertion: await passkey_assertion(options) }) });
+  if (!state.admin.local) throw new Error("新设备只能在电脑前添加：请在电脑本机网页打开 设置 → 账号 → 添加设备");
+  return local_launch_request("device-pairing", { temporary });
 }
 
 /** Confirm remote writing in one room with this device's passkey; the computer grants twelve hours. */
@@ -2300,16 +2359,6 @@ async function renew_this_device() {
     } });
 }
 
-/** Sign in to the website with a passkey instead of the password. */
-async function login_with_passkey() {
-  const options = await request_json("/api/admin/passkey-challenge", { purpose: "login" });
-  return passkey_prompt({ title: "用通行密钥登录", description: "用这台设备的指纹、面容或设备密码登录。", confirm_label: "继续",
-    run: async () => {
-      try { accept_admin_session(await request_json("/api/admin/passkey-login", { challenge_id: options.challenge_id, assertion: await passkey_assertion(options) })); }
-      catch (error) { throw admin_error(error); }
-    } });
-}
-
 /**
  * React to what the computer asked for: pair or renew this device (shown in settings), or confirm writing in a room
  * and run the request once more. Returns true when the request should be retried.
@@ -2319,6 +2368,7 @@ async function meet_device_need(error) {
     await confirm_write_grant(error.room_id);
     return true;
   }
+  if (error.need === "pairing" && state.admin.devices) forget_pairing();
   if (error.need === "pairing" || error.need === "renew") {
     if (state.device.needs !== error.need) notify("warning", error.need === "pairing" ? "这台设备还没有与电脑配对：打开 设置 → 账号，扫描或输入配对码" : "这台设备的授权已到期：打开 设置 → 账号 用通行密钥续期");
     state.device.needs = error.need;
@@ -2367,7 +2417,8 @@ async function relay_exchange(action, payload, wait) {
   const id = crypto.randomUUID();
   const target = computer_rooms_only() ? { target: "computer" } : {};
   const { key, envelope } = await seal_relay_request(machine, id, { action, payload, ...target });
-  const result = await request_json(`/api/machines/${encodeURIComponent(machine.id)}/relay`, { id, envelope, ...(wait ? { wait } : {}) });
+  const result = await request_json(`/api/machines/${encodeURIComponent(machine.id)}/relay`, { id, envelope, ...(wait ? { wait } : {}) })
+    .catch(error => { throw error.status === 401 ? Object.assign(error, { need: "pairing" }) : error; });
   if (result.status === "done") return open_relay_response(key, id, result.response);
   if (result.status === "offline") throw Object.assign(new Error(`电脑「${machine.name}」不在线，请确认它开机并运行 codiscuss`), { offline: true });
   throw Object.assign(new Error(`结果待确认：电脑「${machine.name}」未在限时内答复，请稍后查看房间，确认是否已生效后再重试`),
@@ -2379,7 +2430,7 @@ async function queued_relay_command(action, payload, limit) {
   const machine = relay_machine, id = crypto.randomUUID();
   const { key, envelope } = await seal_relay_request(machine, id, { action, payload });
   const path = `/api/machines/${encodeURIComponent(machine.id)}/commands`;
-  await request_json(path, { id, envelope });
+  await request_json(path, { id, envelope }).catch(error => { throw error.status === 401 ? Object.assign(error, { need: "pairing" }) : error; });
   for (const started = Date.now(); Date.now() - started < limit;) {
     await new Promise(resolve => setTimeout(resolve, RELAY_COMMAND_POLL_MS));
     const command = await request_json(`${path}/${id}`);
@@ -2566,14 +2617,27 @@ async function connect_computer_rooms() {
 function relay_event_source() {
   const target = new EventTarget();
   const emit = (type, data) => target.dispatchEvent(Object.assign(new Event(type), { data }));
-  const url = `${location.origin.replace(/^http/, "ws")}/api/machines/${encodeURIComponent(relay_machine.id)}/relay`;
-  // The login cookie goes with the upgrade, so no credential travels in the subprotocol.
-  const socket = new WebSocket(url, [RELAY_PROTOCOL]);
-  let ping;
+  const path = `/api/machines/${encodeURIComponent(relay_machine.id)}/relay`;
+  const url = `${location.origin.replace(/^http/, "ws")}${path}`;
+  let ping, socket = null;
   target.readyState = 0;
+  target.close = () => { clearInterval(ping); target.readyState = 2; socket?.close(); };
+  // The device signs the socket as it signs requests; the credential travels as a subprotocol, never in the URL.
+  device_credential("GET", path).then(credential => {
+    if (target.readyState === 2) return;
+    socket = new WebSocket(url, [RELAY_PROTOCOL, ...(credential ? [`d.${credential}`] : [])]);
+    listen_relay_socket(socket, target, emit, value => { ping = value; });
+  }).catch(() => { target.readyState = 2; emit("error"); });
+  return target;
+}
+
+/** Turn the relay socket's frames into the update stream's events. */
+function listen_relay_socket(socket, target, emit, set_ping) {
+  let ping;
   socket.addEventListener("open", () => {
     target.readyState = 1;
     ping = setInterval(() => socket.readyState === WebSocket.OPEN && socket.send("ping"), RELAY_PING_MS);
+    set_ping(ping);
     emit("open");
     emit("ready");
   });
@@ -2594,8 +2658,6 @@ function relay_event_source() {
     target.readyState = 2;
     emit("error");
   });
-  target.close = () => { clearInterval(ping); target.readyState = 2; socket.close(); };
-  return target;
 }
 
 /** Read this browser's submitted requests; credentials never enter the presentation snapshot. */
@@ -2715,7 +2777,6 @@ async function load_launch_settings() {
     if (local_connection) state.launch.connect_command = `codiscuss local connect "${location.origin}"`;
     if (!local && (!local_connection || computer_rooms_only())) {
       // Pair first, so the computer this page runs on can then be reached through the relay like any other device.
-      if (local_connection) await pair_local_machine();
       state.launch.relay = await load_relay_machine();
       // An online computer that publishes a command key does everything the local service would; an older one only creates rooms.
       if (!state.launch.relay?.online || !state.launch.relay.public_key) return;
@@ -2731,7 +2792,6 @@ async function load_launch_settings() {
       scheduler_providers: settings.scheduler_providers || {}, scheduler_modes: settings.scheduler_modes || {}, scheduler_default_mode: settings.scheduler_default_mode || "", error: "",
       notice: relay_machine ? `经电脑「${relay_machine.name}」执行本机操作` : local_connection ? "已连接本机服务，讨论保存在当前网站" : "" });
     Object.values(state.launch.profiles).forEach(fill_api_key);
-    if (local_connection && !relay_machine) pair_local_machine();
     move_browser_description_templates();
     apply_create_preferences();
     flush_create_preferences();
@@ -2748,18 +2808,23 @@ async function load_launch_settings() {
   finally { refresh_launch_recoveries(); render_launch_settings(); publish_view(); }
 }
 
-/** The computer paired with this site, most recently seen first; only the administrator can read or use it. */
+/**
+ * The computer bound to this site: the one this browser paired with, else the most recently seen. Its keys are public;
+ * a paired browser checks them against the fingerprint it pinned when it paired.
+ */
 async function load_relay_machine() {
-  // The admin state is read before launch settings at start-up, so this knows whether a login cookie exists.
-  if (state.admin.local || !state.admin.logged_in) return null;
-  try { return (await request_json("/api/machines")).machines[0] || null; } catch { return null; }
-}
-
-/** Pair the connected computer so devices without the local service can launch on it; needs the administrator session. */
-async function pair_local_machine() {
-  if (state.admin.local || !state.admin.logged_in) return;
-  try { await request_json("/api/machines", await local_launch_request("machine-link", {})); }
-  catch (error) { console.warn("Pairing this computer failed:", error.message); }
+  if (state.admin.local) return null;
+  if (!state.admin.devices && !state.admin.logged_in) return null;
+  try {
+    const machines = (await request_json("/api/machines")).machines;
+    const record = paired_record();
+    const machine = machines.find(item => item.id === record?.machine_id) || machines[0] || null;
+    if (machine && record?.machine_id === machine.id && record.fingerprint && record.fingerprint !== await machine_fingerprint(machine)) {
+      notify("error", "网站给出的电脑身份与配对时不符，已停止连接；请在电脑前重新扫码配对");
+      return null;
+    }
+    return machine;
+  } catch { return null; }
 }
 
 /** Hand a room creation to the paired computer through the website and wait for it to finish. */
@@ -4623,9 +4688,8 @@ window.discuss_view = { snapshot: view_snapshot, write_field: write_view_field, 
   reload_workflows, workflow_preset, write_create_host_workflows,
   admin: { register: register_admin, login: login_admin, logout: logout_admin,
     update_profile: update_admin_profile, avatar_from_file: admin_avatar_from_file, validate: validate_admin_form,
-    sessions: admin_sessions, revoke: revoke_admin_sessions, change_password: change_admin_password, login_with_passkey,
-    passkeys: admin_passkeys, delete_passkey: delete_admin_passkey },
-  device: { request: device_request, pair: pair_this_device, invite: invite_device, create_passkey: create_device_passkey, renew: renew_this_device, confirm_write: confirm_write_grant,
+    sessions: admin_sessions, revoke: revoke_admin_sessions, change_password: change_admin_password },
+  device: { request: device_request, pair: pair_this_device, invite: invite_device, renew: renew_this_device, confirm_write: confirm_write_grant, forget: forget_pairing,
     label: device_label, prompt_confirm: () => state.device.prompt?.run(), prompt_cancel: () => state.device.prompt?.cancel() },
   request: request_json, rewind_plan, identities: IDENTITIES, display_name, mention_handles, mentioned_members, render_room_markdown, sources: SOURCE_LABELS,
   set_member_access, set_member_model, allow_denials, set_member_adapter, reload_room_models, read_room_files, limits_label, stop_reason_label, participant_model, participant_files, participant_session_hint, participant_access,

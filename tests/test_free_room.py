@@ -119,32 +119,6 @@ class FreeRoomTests(unittest.TestCase):
 class SingleMemberTests(FreeRoomTests):
     """Single-member rooms; subclasses of FreeRoomTests reuse its fixture without re-running these."""
 
-    def test_work_started_through_the_remote_entry_is_marked_for_read_only_runs(self):
-        """The remote entry has no device signature, so the runner must know which work came through it."""
-        remote = DiscussionServer(("127.0.0.1", 0), self.database, hub=self.server)
-        thread = threading.Thread(target=remote.serve_forever, daemon=True)
-        thread.start()
-        try:
-            # A client cannot clear the mark on the remote entry, nor set it on this computer's own site.
-            local = self.say("本机发起", remote_entry=True)
-            self.assertEqual(local[0], 201, local)
-            self.assertEqual([bool(item["remote_entry"]) for item in self.reserve()[1]["requests"]], [False])
-            request = Request(f"http://127.0.0.1:{remote.server_port}{self.path}/messages", method="POST",
-                              headers={"Content-Type": "application/json", "X-Discussion-Token": self.owner},
-                              data=json.dumps({"author": "用户", "text": "外出发起", "submission_id": uuid.uuid4().hex, "remote_entry": False}).encode())
-            with urlopen(request, timeout=10) as response:
-                self.assertEqual(response.status, 201)
-            with closing(sqlite3.connect(self.database)) as connection:
-                connection.execute("UPDATE member_executions SET status='completed'")
-                connection.execute("UPDATE member_requests SET status='completed' WHERE status='delivering'")
-                connection.commit()
-            self.assertEqual([bool(item["remote_entry"]) for item in self.reserve()[1]["requests"]], [True])
-        finally:
-            remote.shutdown()
-            remote.server_close()
-            thread.join()
-
-
     def test_stop_before_delivery_holds_until_confirmed_or_original_deadline(self):
         """Late capability reports and uncertain stops retain the original bounded wait."""
         member_id = self.request(self.path)[1]["free"]["members"][0]["id"]

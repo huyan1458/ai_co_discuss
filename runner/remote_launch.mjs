@@ -2,7 +2,7 @@
  * Run what other devices relay through a paired website: room launches, and every other local-service operation as an
  * end-to-end encrypted command that only this computer can read; directories and credentials stay here.
  */
-import { spawn } from 'node:child_process';
+import { execFileSync, spawn } from 'node:child_process';
 import { generateKeyPairSync, randomBytes, randomUUID } from 'node:crypto';
 import { existsSync, mkdirSync, readFileSync } from 'node:fs';
 import { hostname } from 'node:os';
@@ -14,7 +14,7 @@ import { atomic_json } from './files.mjs';
 import { saved_api_keys } from './discussion_api.mjs';
 import { launch_projects, launch_settings } from './discussion_launch.mjs';
 import { claim_relayed_command } from './remote_policy.mjs';
-import { audit, DEVICE_ACTIONS, device_command, open_signed_request } from './device_auth.mjs';
+import { audit, DEVICE_ACTIONS, device_command, open_signed_request, signed_device_list } from './device_auth.mjs';
 
 const MACHINE_TOKEN_BYTES = 32;
 const MACHINE_NAME_MAX = 60;
@@ -33,25 +33,70 @@ const RELAYED_ACTIONS = new Set(['settings', 'launch', 'room-models', 'room-memb
 export const ROOM_ACTIONS = new Set(['launch', 'room-models', 'room-member', 'room-member-access', 'room-member-allow', 'room-member-adapter',
   'room-member-model', 'room-profiles', 'room-files', 'room-restore', 'room-fork', 'room-workflow', 'workflows']);
 
-/** Read every site this computer is paired with. */
+// On Windows the file holding this computer's private keys and tokens is sealed with DPAPI for the signed-in user, so a
+// copy of the file alone is useless elsewhere; other systems rely on the file's 0600 mode.
+const DPAPI = process.platform === 'win32';
+const DPAPI_SCRIPT = mode => 'Add-Type -AssemblyName System.Security;'
+  + '$bytes=[Convert]::FromBase64String([Console]::In.ReadToEnd().Trim());'
+  + `[Convert]::ToBase64String([Security.Cryptography.ProtectedData]::${mode}($bytes,$null,'CurrentUser'))`;
+// What the file held when last read or written here, so reading it again does not start PowerShell.
+const links_cache = new Map();
+
+/** Seal or open bytes with DPAPI for the current Windows user. */
+function dpapi(mode, base64) {
+  return execFileSync('powershell.exe', ['-NoProfile', '-NonInteractive', '-Command', DPAPI_SCRIPT(mode)],
+    { input: base64, encoding: 'utf8', windowsHide: true }).trim();
+}
+
+/** Save every site this computer is paired with, sealed on Windows. */
+export function save_machine_links(home, links) {
+  const path = join(home, LINKS_FILE);
+  const text = JSON.stringify(links);
+  const stored = DPAPI ? { dpapi: dpapi('Protect', Buffer.from(text).toString('base64')) } : links;
+  atomic_json(path, stored);
+  links_cache.set(path, { raw: readFileSync(path, 'utf8'), text });
+}
+
+/** Read every site this computer is paired with; a file saved in the clear by an older version is sealed on first read. */
 export function machine_links(home) {
   const path = join(home, LINKS_FILE);
-  return existsSync(path) ? JSON.parse(readFileSync(path, 'utf8')) : { sites: {} };
+  if (!existsSync(path)) return { sites: {} };
+  const raw = readFileSync(path, 'utf8');
+  const cached = links_cache.get(path);
+  if (cached?.raw === raw) return JSON.parse(cached.text);
+  const stored = JSON.parse(raw);
+  if (stored.dpapi) {
+    const text = Buffer.from(dpapi('Unprotect', stored.dpapi), 'base64').toString('utf8');
+    links_cache.set(path, { raw, text });
+    return JSON.parse(text);
+  }
+  if (DPAPI) save_machine_links(home, stored);
+  else links_cache.set(path, { raw, text: JSON.stringify(stored) });
+  return stored;
 }
 
-/** A P-256 key pair for relayed commands; the private half never leaves this computer. */
-function command_keys() {
+/** A fresh P-256 key pair as JWKs; the private half never leaves this computer. */
+function p256_pair() {
   const { publicKey, privateKey } = generateKeyPairSync('ec', { namedCurve: 'prime256v1' });
   const { kty, crv, x, y } = publicKey.export({ format: 'jwk' });
-  return { public_key: { kty, crv, x, y }, private_key: privateKey.export({ format: 'jwk' }) };
+  return { public: { kty, crv, x, y }, private: privateKey.export({ format: 'jwk' }) };
 }
 
-/** Give every paired site a command key pair, kept beside its token; older pairings gain one on first use. */
-function keyed_links(home) {
+/** One key pair to decrypt relayed commands and one to sign the device list the website checks devices against. */
+function command_keys() {
+  const command = p256_pair(), signing = p256_pair();
+  return { public_key: command.public, private_key: command.private, sign_public_key: signing.public, sign_private_key: signing.private };
+}
+
+/** Give every paired site both key pairs, kept beside its token; older pairings gain the missing ones on first use. */
+export function keyed_links(home) {
   const links = machine_links(home);
-  const missing = Object.values(links.sites).filter(link => !link.private_key);
-  for (const link of missing) Object.assign(link, command_keys());
-  if (missing.length) atomic_json(join(home, LINKS_FILE), links);
+  const missing = Object.values(links.sites).filter(link => !link.private_key || !link.sign_private_key);
+  for (const link of missing) {
+    const keys = command_keys();
+    Object.assign(link, link.private_key ? { sign_public_key: keys.sign_public_key, sign_private_key: keys.sign_private_key } : keys);
+  }
+  if (missing.length) save_machine_links(home, links);
   return links;
 }
 
@@ -62,7 +107,7 @@ export function machine_link(home, site) {
   links.sites[origin] ||= { id: randomUUID().replaceAll('-', ''), token: randomBytes(MACHINE_TOKEN_BYTES).toString('hex'),
     name: (hostname() || '本机').slice(0, MACHINE_NAME_MAX), ...command_keys() };
   mkdirSync(home, { recursive: true, mode: 0o700 });
-  atomic_json(join(home, LINKS_FILE), links);
+  save_machine_links(home, links);
   // The browser forwards this to the website, so the private key stays out of it.
   const { id, token, name } = links.sites[origin];
   return { id, token, name };
@@ -73,7 +118,7 @@ export function unlink_machine(home, site) {
   const links = machine_links(home);
   if (!links.sites[site]) return;
   delete links.sites[site];
-  atomic_json(join(home, LINKS_FILE), links);
+  save_machine_links(home, links);
 }
 
 /** Resolve the API key saved for a profile's base URL, as the connected browser does. */
@@ -112,7 +157,9 @@ export async function sync_remote_launches(home, { log = () => {} } = {}) {
   const clients = ready_clients(home);
   for (const [site, link] of Object.entries(keyed_links(home).sites)) {
     let launches;
-    try { ({ launches } = await machine_request(site, link, '/sync', { projects, clients, public_key: link.public_key })); }
+    // The device list is signed here, so the website can check devices against it but never add one itself.
+    try { ({ launches } = await machine_request(site, link, '/sync', { projects, clients, public_key: link.public_key, sign_key: link.sign_public_key,
+      devices: await signed_device_list(home, link) })); }
     catch (error) { log(`${site}: 同步电脑状态失败：${error.message}`); continue; }
     if (launches?.length) log(`${site}: 网站返回了 ${launches.length} 个旧格式启动任务，已忽略；远程启动须由已配对设备签名`);
   }
@@ -188,7 +235,7 @@ async function answer_command(home, site, link, { id, envelope }, run, log) {
   try {
     const { request, device_id } = await open_signed_request(home, id, sealed, link.id);
     claim_relayed_command(home, id, request.sent_at);
-    response = DEVICE_ACTIONS.has(request.action) ? await device_command(home, { site, machine_id: link.id, device_id }, request.action, request.payload)
+    response = DEVICE_ACTIONS.has(request.action) ? await device_command(home, { site, machine_id: link.id, device_id, on_change: () => sync_remote_launches(home) }, request.action, request.payload)
       : await run({ ...relayed_command(site, request.action, request.payload), device: device_id });
     if (!DEVICE_ACTIONS.has(request.action)) audit(home, { event: 'command', action: request.action, route: '', device: device_id, status: response.status });
   }

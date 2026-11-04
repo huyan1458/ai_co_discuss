@@ -1165,8 +1165,6 @@ def append_free_message(connection, room, payload, actor):
                        (cursor.lastrowid, "chat", submitted_by))
     connection.execute("INSERT INTO message_summaries (message_id,text,author) VALUES (?,?,?)",
                        (cursor.lastrowid, expected["summary"], expected["summary_by"]))
-    if actor == "用户" and payload.get("remote_entry") is True:
-        connection.execute("INSERT INTO remote_entry_messages (message_id,room_id) VALUES (?,?)", (cursor.lastrowid, room_id))
     for position, identifier in enumerate(identifiers):
         connection.execute("UPDATE attachments SET message_id=?,position=? WHERE id=?", (cursor.lastrowid, position, identifier))
     save_suggestions(connection, room_id, cursor.lastrowid, actor, payload)
@@ -2345,10 +2343,6 @@ class DiscussionHandler(BaseHTTPRequestHandler):
             if method == "GET":
                 return self.respond(query_messages(connection, room_id, params, token))
             payload = self.read_payload()
-            # Only this server decides whether a message came through the remote entry; a client cannot set or clear it.
-            payload.pop("remote_entry", None)
-            if self.server.hub is not self.server:
-                payload["remote_entry"] = True
             result = append_message(connection, room_id, payload, free_actor)
             drain_room_queue(connection, room_id)
             connection.commit()
@@ -2599,7 +2593,6 @@ def main():
     parser.add_argument("--no-demo", action="store_true", help="Do not seed sample data in a new database")
     parser.add_argument("--local-launch", action="store_true", help="Enable local AI launch and configuration (127.0.0.1 only)")
     parser.add_argument("--reset-admin", action="store_true", help="Delete the administrator account and sessions, then exit")
-    parser.add_argument("--remote-port", type=int, help="Also listen on 127.0.0.1:PORT as a login-required entry for a tunnel")
     args = parser.parse_args()
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(message)s")
     init_database(args.database, seed=not args.no_demo)
@@ -2611,13 +2604,9 @@ def main():
         logging.info("管理员账号已清除；再次打开网站时可用安装令牌重新注册")
         return
     server = DiscussionServer((args.host, args.port), args.database, local_launch=args.local_launch)
-    remote = DiscussionServer(("127.0.0.1", args.remote_port), args.database, hub=server) if args.remote_port else None
-    if remote:
-        threading.Thread(target=remote.serve_forever, daemon=True).start()
-        logging.info("Remote entry (login required) at http://127.0.0.1:%s", args.remote_port)
     logging.info("AI CoDiscuss ready at http://%s:%s", args.host, args.port)
     with closing(connect_db(args.database)) as connection:
-        login_site = remote or (server if not server.local_site else None)
+        login_site = server if not server.local_site else None
         if login_site and connection.execute("SELECT 1 FROM site_admin").fetchone() is None:
             logging.info("尚未注册管理员账号；注册所需安装令牌：%s",
                          "见环境变量 DISCUSS_ADMIN_SETUP_KEY" if os.getenv("DISCUSS_ADMIN_SETUP_KEY") else login_site.admin_setup_key)
