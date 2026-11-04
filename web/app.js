@@ -220,7 +220,7 @@ async function request_json(path, payload, access_token) {
   const token = access_token || (target_room ? localStorage.getItem(`discuss-access:${target_room}`) : null);
   options.headers = token ? { "X-Discussion-Token": token } : {};
   // The online website has no accounts: a paired device signs its requests with its own non-exportable key.
-  if (state.admin.devices && /^\/api\/(machines|admin\/profile)/.test(path)) {
+  if ((state.admin.devices || paired_record()) && /^\/api\/(machines|admin\/profile|admin$)/.test(path)) {
     const credential = await device_credential(payload === undefined ? "GET" : "POST", path.split("?")[0]);
     if (credential) options.headers["X-CoDiscuss-Device"] = credential;
   }
@@ -2080,6 +2080,16 @@ function take_pairing_code() {
   notify("info", "已读取配对码：打开 设置 → 账号，点“配对”");
 }
 
+/** Take the code and computer fingerprint from a scanned pairing link; answers the code, or "" when it is not one. */
+function take_scanned_pairing(text) {
+  const hash = String(text || "").split("#")[1] || "";
+  const code = (hash.match(/(?:^|&)pair=([0-9A-Za-z-]{12,16})/) || [])[1];
+  if (!code) return "";
+  state.device.pairing_code = code.toUpperCase();
+  state.device.pairing_fp = (hash.match(/(?:^|&)fp=([0-9a-f]{32})/) || [])[1] || "";
+  return state.device.pairing_code;
+}
+
 /** Read a site-bound connection without exposing its credential to the shared view snapshot. */
 function restore_local_connection() {
   const fragment = new URLSearchParams(location.hash?.slice(1) || "");
@@ -2276,7 +2286,8 @@ async function pair_this_device(code) {
       state.admin.logged_in = true;
       publish_view();
       notify("info", "这台设备已与电脑配对");
-      // Settings and the computer's rooms load now that the computer accepts this device.
+      // The owner's profile, settings and the computer's rooms load now that the computer accepts this device.
+      await load_admin_state();
       await load_launch_settings();
       if (computer_rooms_only()) connect_computer_rooms();
     } });
@@ -4689,7 +4700,7 @@ window.discuss_view = { snapshot: view_snapshot, write_field: write_view_field, 
   admin: { register: register_admin, login: login_admin, logout: logout_admin,
     update_profile: update_admin_profile, avatar_from_file: admin_avatar_from_file, validate: validate_admin_form,
     sessions: admin_sessions, revoke: revoke_admin_sessions, change_password: change_admin_password },
-  device: { request: device_request, pair: pair_this_device, invite: invite_device, renew: renew_this_device, confirm_write: confirm_write_grant, forget: forget_pairing,
+  device: { request: device_request, pair: pair_this_device, take_scanned: take_scanned_pairing, invite: invite_device, renew: renew_this_device, confirm_write: confirm_write_grant, forget: forget_pairing,
     label: device_label, prompt_confirm: () => state.device.prompt?.run(), prompt_cancel: () => state.device.prompt?.cancel() },
   request: request_json, rewind_plan, identities: IDENTITIES, display_name, mention_handles, mentioned_members, render_room_markdown, sources: SOURCE_LABELS,
   set_member_access, set_member_model, allow_denials, set_member_adapter, reload_room_models, read_room_files, limits_label, stop_reason_label, participant_model, participant_files, participant_session_hint, participant_access,

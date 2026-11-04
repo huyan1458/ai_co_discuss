@@ -167,7 +167,9 @@ async function admin_state(database, request, setup_key) {
   const bound = await database.prepare("SELECT 1 AS found FROM local_machines LIMIT 1").first();
   const setup = !setup_key && await database.prepare("SELECT 1 FROM admin_setup WHERE id=1").first();
   // This website keeps no rooms and no accounts; pages list the paired computer's rooms through the relay instead.
-  return { computer_rooms: true, devices: true, registered: Boolean(bound), setup_available: Boolean(setup_key || setup), profile: admin_profile(admin) };
+  // The owner's name and avatar are shown only to devices paired with the computer.
+  const paired = await device_identity(database, request.headers.get("X-CoDiscuss-Device"), request.method, new URL(request.url).pathname);
+  return { computer_rooms: true, devices: true, registered: Boolean(bound), setup_available: Boolean(setup_key || setup), profile: paired ? admin_profile(admin) : null };
 }
 
 /** Change the display name or avatar from a paired device. */

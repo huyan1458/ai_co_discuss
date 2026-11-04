@@ -13,7 +13,7 @@ const source = computed(() => view.value.room_source || {});
 // A website that keeps no rooms of its own lists the paired computer's, and says why while it cannot.
 const directory_title = computed(() => {
   if (!source.value.computer) return "协作房间";
-  if (!source.value.signed_in) return "协作房间（未登录）";
+  if (!source.value.signed_in) return "协作房间（未配对）";
   if (!source.value.remote) return "协作房间（电脑未连接）";
   return source.value.online === false ? "协作房间（电脑离线）" : "协作房间";
 });

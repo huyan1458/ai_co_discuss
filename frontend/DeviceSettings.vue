@@ -3,6 +3,7 @@
  * device's passkey, and revoke devices or their remote write grants. The paired computer decides; this only asks it. */
 import { computed, inject, onMounted, onUnmounted, ref, watch } from "vue";
 import { renderSVG } from "uqr";
+import jsQR from "jsqr";
 
 const { view, bridge } = inject("discussion");
 const local = computed(() => view.value.admin.local);
@@ -56,6 +57,47 @@ async function pair() {
   if (await run("pair", () => bridge.device.pair(code.value))) await load();
 }
 
+// Scanning in the page: the camera frames are read here until a pairing link shows up, then pairing starts at once.
+const scanning = ref(false);
+const video = ref(null);
+let stream = null;
+function stop_scan() {
+  stream?.getTracks().forEach((track) => track.stop());
+  stream = null;
+  scanning.value = false;
+}
+async function scan() {
+  try {
+    stream = await navigator.mediaDevices.getUserMedia({ video: { facingMode: "environment" }, audio: false });
+  } catch {
+    bridge.notify("error", "无法打开相机：请允许本网站使用相机，或用系统相机扫码");
+    return;
+  }
+  scanning.value = true;
+  await new Promise(requestAnimationFrame);
+  video.value.srcObject = stream;
+  await video.value.play().catch(() => {});
+  const canvas = document.createElement("canvas");
+  const context = canvas.getContext("2d", { willReadFrequently: true });
+  const frame = () => {
+    if (!scanning.value) return;
+    const { videoWidth: width, videoHeight: height } = video.value;
+    if (width && height) {
+      Object.assign(canvas, { width, height });
+      context.drawImage(video.value, 0, 0, width, height);
+      const found = jsQR(context.getImageData(0, 0, width, height).data, width, height, { inversionAttempts: "dontInvert" });
+      const scanned = found && bridge.device.take_scanned(found.data);
+      if (scanned) {
+        stop_scan();
+        code.value = scanned;
+        return pair();
+      }
+    }
+    requestAnimationFrame(frame);
+  };
+  requestAnimationFrame(frame);
+}
+
 /** Show a two-minute code and the QR code a phone camera can open, for pairing another device. */
 function add_device() {
   return run("invite", async () => {
@@ -71,7 +113,7 @@ function watch_invite(known) {
   invite_timer = setInterval(async () => {
     if (!invite.value) return clearInterval(invite_timer);
     if (Date.now() >= invite.value.expires_at) {
-      invite.value = { ...invite.value, expired: true, svg: "" };
+      invite.value = { ...invite.value, expired: true };
       return clearInterval(invite_timer);
     }
     try {
@@ -86,7 +128,7 @@ function watch_invite(known) {
     } catch { /* The next tick tries again; the code expires on its own. */ }
   }, INVITE_POLL_MS);
 }
-onUnmounted(() => clearInterval(invite_timer));
+onUnmounted(() => { clearInterval(invite_timer); stop_scan(); });
 
 /** Revoke a device on the computer; the website drops it with the next signed device list, which is sent at once. */
 async function revoke(item) {
@@ -115,13 +157,18 @@ const date = (time) => new Date(time).toLocaleString("zh-CN", { month: "numeric"
 <template>
   <section v-if="local || remote || needs_pairing || device.needs" class="device-settings" aria-labelledby="device-heading">
     <h4 id="device-heading">已配对的设备</h4>
-    <p class="fine-print">新设备须在电脑前扫码配对，无需账号和密码。</p>
+    <p v-if="!needs_pairing" class="fine-print">新设备须在电脑前扫码配对。</p>
 
     <form v-if="needs_pairing" class="dialog-form device-pair" aria-label="配对这台设备" @submit.prevent="pair">
-      <p class="account-message is-error" role="status">这台设备还没有与电脑配对。不需要账号：在电脑前扫码，再用这台设备的面容、指纹或设备密码确认即可。</p>
-      <UFormField label="配对码" description="在电脑前打开本机网页的 设置 → 账号 → 添加设备，用这台设备的相机扫描二维码（会自动填入），或输入下方显示的 12 位码">
+      <p class="fine-print">扫描电脑本机网页 设置 → 添加设备 的二维码，或输入配对码。</p>
+      <div class="device-pair-row">
         <UInput v-model="code" placeholder="XXXX-XXXX-XXXX" autocomplete="off" :maxlength="16" class="w-full" aria-label="配对码" />
-      </UFormField>
+        <UButton icon="i-lucide-scan-line" color="neutral" variant="outline" aria-label="扫码" title="扫码" :disabled="Boolean(busy)" @click="scan" />
+      </div>
+      <div v-if="scanning" class="device-scan">
+        <video ref="video" muted playsinline aria-label="相机画面" />
+        <UButton label="取消" color="neutral" variant="soft" size="xs" @click="stop_scan" />
+      </div>
       <div class="account-actions"><UButton type="submit" label="配对" class="channel-primary-button" :loading="busy === 'pair'" :disabled="Boolean(busy) || !code.trim()" /></div>
     </form>
 
@@ -158,12 +205,13 @@ const date = (time) => new Date(time).toLocaleString("zh-CN", { month: "numeric"
       </div>
       <div v-if="invite" class="device-invite" role="status">
         <!-- eslint-disable-next-line vue/no-v-html -- an SVG this page rendered from the computer's own link -->
-        <div v-if="invite.svg" class="device-qr" aria-label="配对二维码" v-html="invite.svg" />
-        <p v-if="invite.expired" class="fine-print">配对码已过期，点“添加设备”重新生成。</p>
-        <div v-else>
+        <div v-if="invite.svg" class="device-qr" :class="{ 'device-expired': invite.expired }" aria-label="配对二维码" v-html="invite.svg" />
+        <div>
           <p>用新设备的相机扫描二维码；没有摄像头就在新设备打开网站，输入配对码：</p>
-          <p class="device-code">{{ invite.code }}</p>
-          <p class="fine-print">{{ date(invite.expires_at) }} 前有效（2 分钟），只能用一次{{ invite.temporary ? "；临时设备只授权 1 天" : "" }}。</p>
+          <p class="device-code" :class="{ 'device-expired': invite.expired }">{{ invite.code }}</p>
+          <p v-if="invite.expired" class="fine-print device-expired-note">已过期，不能再用。</p>
+          <p v-else class="fine-print">{{ date(invite.expires_at) }} 前有效（2 分钟），只能用一次{{ invite.temporary ? "；临时设备只授权 1 天" : "" }}。</p>
+          <UButton label="重新生成" icon="i-lucide-refresh-cw" color="neutral" variant="outline" size="xs" :loading="busy === 'invite'" :disabled="Boolean(busy)" @click="add_device" />
         </div>
       </div>
     </template>
@@ -188,6 +236,12 @@ const date = (time) => new Date(time).toLocaleString("zh-CN", { month: "numeric"
 .device-actions { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; }
 .device-invite { display: flex; flex-wrap: wrap; align-items: center; gap: 12px; padding: 10px; border: 1px solid var(--ui-border); border-radius: 10px; }
 .device-invite p { margin: 0 0 4px; font-size: 12px; }
+.device-expired { opacity: 0.35; filter: grayscale(1); }
+.device-pair-row { display: flex; gap: 8px; align-items: center; }
+.device-scan { display: flex; flex-direction: column; align-items: center; gap: 8px; }
+.device-scan video { width: 100%; max-width: 320px; aspect-ratio: 1; object-fit: cover; border-radius: 10px; background: #000; }
+.device-code.device-expired { text-decoration: line-through; }
+.device-expired-note { color: var(--ui-error); }
 .device-qr { width: 148px; height: 148px; padding: 6px; border-radius: 8px; background: #fff; }
 .device-qr :deep(svg) { display: block; width: 100%; height: 100%; }
 .device-code { color: var(--ui-text-highlighted); font-family: ui-monospace, SFMono-Regular, Consolas, monospace; font-size: 18px !important; font-weight: 600; letter-spacing: 1px; }

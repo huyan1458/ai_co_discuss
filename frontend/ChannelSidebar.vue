@@ -15,6 +15,7 @@ const view_links = computed(() => props.tabs.map((item) => ({
 const account_status = computed(() => {
   const admin = view.value.admin;
   if (!admin?.loaded) return "";
+  if (admin.devices) return admin.logged_in ? "" : "未配对 · 点击配对";
   if (!admin.registered) return "设置管理员账号";
   return admin.logged_in ? "" : "未登录 · 点击登录";
 });

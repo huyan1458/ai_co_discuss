@@ -182,6 +182,8 @@ test('the website accepts only devices the computer signed into its list', async
   // The display name is changed only by a paired device.
   assert.equal((await call(f, '/api/admin/profile', { username: '房主' })).status, 401);
   assert.deepEqual((await f.signed('/api/admin/profile', { username: '房主' })).body.profile, { username: '房主', avatar: '' });
+  assert.equal((await call(f, '/api/admin')).body.profile, null, 'an unpaired visitor does not see the owner');
+  assert.deepEqual((await f.signed('/api/admin')).body.profile, { username: '房主', avatar: '' });
   // A list not signed by the computer's key is refused, so the website cannot add a device of its own.
   const machine_token = (await import('../runner/remote_launch.mjs')).machine_links(f.home).sites['https://discussion.test'].token;
   const forged = await worker.fetch(new Request(`https://discussion.test/api/machines/${f.machine_id}/sync`, { method: 'POST',
@@ -237,7 +239,7 @@ test('a page pairs at the computer with a passkey, then runs operations on it en
         return { rawId: Buffer.from(made.id, 'base64url'), response: { clientDataJSON: Buffer.from(made.client_data_json, 'base64url'),
           attestationObject: Buffer.from(made.attestation_object, 'base64url') } };
       } } },
-      publish_view: () => {}, notify: () => {}, load_launch_settings: async () => {}, computer_rooms_only: () => false, connect_computer_rooms: () => {}, state });
+      publish_view: () => {}, notify: () => {}, load_admin_state: async () => {}, load_launch_settings: async () => {}, computer_rooms_only: () => false, connect_computer_rooms: () => {}, state });
   const { relay_command } = page_code;
 
   // Before pairing, the website refuses the page; pairing runs on the user's tap and creates the passkey in the same step.
