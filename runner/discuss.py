@@ -273,6 +273,10 @@ def message_commands(subcommands, registry):
                       help="自由房间：主持人点名派活，普通成员提出回应建议（须房主确认）；可重复")
     post.add_argument("--handoff", action="store_true",
                       help="自由房间主持人：与 --to 同用，只点名一位成员时，它做完也回到你这里（如再交评审）；点名多位时总会回到你")
+    post.add_argument("--sequential", action="store_true",
+                      help="自由房间主持人：--to 点名的多位成员按点名顺序依次接力，每棒一轮，最后一位做完交回你")
+    post.add_argument("--loop", action="store_true",
+                      help="与 --sequential 同用：交回成为检查点，用 sequence continue 开始下一圈，不继续即直接验收")
     post.add_argument("--next-review", type=member_handle, help="主持派实现时声明下一位只读评审；先读 review roster，不可指定本批实现者")
     post.add_argument("--review-scope", help="本批预授权评审范围，1–2000 字")
     post.add_argument("--review-roster", help="先读取 review roster 取得的 revision；状态变化须重读")
@@ -425,6 +429,14 @@ def review_commands(subcommands, registry):
     advance.add_argument("--submission-id", type=submission_id, help="推进唯一编号；省略时按命令与内容自动生成，同样内容重试得到同一编号")
 
 
+def sequence_commands(subcommands, registry):
+    """Read a host's one-after-another relay and run a loop's next pass from its checkpoint."""
+    view = add_leaf(subcommands, registry, "sequence view", "房主或主持人读取依次接力的顺序、当前圈与本圈各棒原文；此读取不派发任务", True)
+    view.add_argument("id", type=positive_int, help="依次接力编号（任务文件 requests[].sequence.id）")
+    advance = add_leaf(subcommands, registry, "sequence continue", "主持人在循环检查点开始下一圈，只结束这条检查点交接；不继续则直接验收回答", True)
+    advance.add_argument("--request", type=positive_int, required=True, help="检查点交接请求编号（purpose=handoff 且 sequence.phase=checkpoint）")
+
+
 def build_parser(prog="discuss"):
     """Build help and schema from the same command definitions."""
     parser = Parser(prog=prog, description="AI CoDiscuss CLI：通过 HTTP 操作现有讨论网站。",
@@ -436,7 +448,8 @@ def build_parser(prog="discuss"):
     for name, register in (("room", room_commands), ("message", message_commands),
                            ("attachment", attachment_commands),
                            ("turn", turn_commands), ("state", state_commands),
-                           ("run", run_commands), ("goal", goal_commands), ("mode", mode_commands), ("execution", execution_commands), ("member", member_commands), ("review", review_commands)):
+                           ("run", run_commands), ("goal", goal_commands), ("mode", mode_commands), ("execution", execution_commands), ("member", member_commands), ("review", review_commands),
+                           ("sequence", sequence_commands)):
         group = subcommands.add_parser(name, help=f"{name} 操作", allow_abbrev=False)
         add_common(group)
         register(group.add_subparsers(dest="action", required=True), registry)
@@ -637,6 +650,14 @@ def plan_message(args):
         payload["to"] = list(dict.fromkeys(args.to))
     if args.handoff:
         payload["handoff"] = True
+    if args.loop and not args.sequential:
+        raise CliError("--loop 须与 --sequential 一起使用")
+    if args.sequential:
+        if len(args.to) < 2:
+            raise CliError("--sequential 须用 --to 按顺序点名至少两位成员")
+        payload["sequential"] = True
+    if args.loop:
+        payload["loop"] = True
     for field in ("next_review", "review_scope", "review_roster"):
         if getattr(args, field, None) is not None:
             payload[field] = getattr(args, field)
@@ -846,6 +867,13 @@ def plan_review(args):
         "actor": require_actor(args), "batch_id": args.batch, "revision": args.revision, "submission_id": args.submission_id})
 
 
+def plan_sequence(args):
+    """Read a relay, or continue a loop bound to its one checkpoint request."""
+    if args.action == "view":
+        return RequestPlan(f"/api/rooms/{args.room}/sequences/{args.id}")
+    return RequestPlan(f"/api/rooms/{args.room}/sequences/continue", "POST", {"actor": require_actor(args), "request_id": args.request})
+
+
 def build_plan(args):
     """Validate local input before constructing any network request."""
     stdin_count = sum(value == "-" for key, value in vars(args).items()
@@ -855,7 +883,7 @@ def build_plan(args):
     handlers = {"room": plan_room, "message": plan_message, "turn": plan_turn,
                 "attachment": plan_attachment,
                 "state": plan_state, "api": plan_api,
-                "run": plan_run, "goal": plan_goal, "mode": plan_mode, "execution": plan_execution, "member": plan_member, "review": plan_review}
+                "run": plan_run, "goal": plan_goal, "mode": plan_mode, "execution": plan_execution, "member": plan_member, "review": plan_review, "sequence": plan_sequence}
     bind_room(args)
     plan = RequestPlan("/api/health") if args.resource == "health" else handlers[args.resource](args)
     fill_submission_id(args, plan)
@@ -1006,7 +1034,8 @@ def command_schema(args, registry):
         item = {"name": action.dest, "flags": action.option_strings,
                 "required": action.required, "help": action.help}
         if action.dest == "actor" and name in ("room create", "room update", "message post",
-                                               "turn create", "turn cancel", "state set", "attachment upload", "review advance"):
+                                               "turn create", "turn cancel", "state set", "attachment upload", "review advance",
+                                               "sequence continue"):
             item["required"] = True
         if action.choices is not None:
             item["choices"] = list(action.choices)

@@ -364,7 +364,7 @@ const recipient_hint = computed(() => {
   if (free_members.value.length === 1) return `发给 ${bridge.display_name(free_members.value[0].name)}`;
   return free_host.value ? `发给主持人 ${bridge.display_name(free_host.value.name)}；@ 其他成员让它们发言` : "未 @ 任何成员：只作留言，不会唤醒 AI";
 });
-/** Project files picked after @, shown as cards and sent as a trailing line of paths (code-quoted, so they never wake a member). */
+/** Project files picked after @: their @path stays in the draft, and they also show as cards and go out as a trailing line of paths (code-quoted, so they never wake a member). */
 const file_refs = ref([]);
 watch(() => room.value?.id, () => { file_refs.value = []; });
 const file_refs_line = () => file_refs.value.length
@@ -833,12 +833,13 @@ async function select_mention(option) {
   if (option.skill) return pick_skill(option, end);
   const { entry } = option;
   // A folder opens its contents in the popup (paths with spaces cannot be typed after @, so those are picked whole);
-  // a picked file or folder leaves the text and becomes a card above the editor.
+  // a picked file or folder keeps its @path in the text and also becomes a card above the editor.
   const browse = entry?.kind === "directory" && !option.self && !/\s/.test(entry.path);
-  const insertion = !entry ? `@${mention_handle(option.name)} ` : browse ? `@${file_handle(entry.path)}/` : "";
+  const insertion = !entry ? `@${mention_handle(option.name)} `
+    : `@${file_handle(entry.path)}${entry.kind === "directory" ? "/" : ""}${browse ? "" : " "}`;
   if (entry && !browse && !file_refs.value.some((ref) => ref.path === entry.path)) file_refs.value = [...file_refs.value, { path: entry.path, name: entry.name, kind: entry.kind }];
   const rest = text.value.slice(end);
-  text.value = text.value.slice(0, start) + insertion + (browse || !insertion ? rest : rest.replace(/^ /, ""));
+  text.value = text.value.slice(0, start) + insertion + (browse ? rest : rest.replace(/^ /, ""));
   mention_context.value = null;
   await nextTick();
   const editor = prompt.value?.textareaRef;

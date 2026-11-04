@@ -37,6 +37,7 @@ from .free_room import (ADAPTER_VALUE, ANCHOR_SQL, continue_chain, execution_tim
                         room_event_log, withdrawals)
 from .free_room import review_capability, review_roster, checked_review_plan, save_review_plan, check_review_retry
 from .free_room import review_ready, advance_review, late_answer
+from .free_room import checked_sequence, continue_sequence, sequence_view
 from .identity import MAX_ROOM_AGENTS, PARTICIPANTS, is_ai, is_participant
 from .message_queue import drain as drain_queue, enqueue, queue_action, queue_view, should_queue
 from .room_import import import_room, imported_attachment
@@ -1123,8 +1124,8 @@ def check_message_references(connection, room_id, message):
 def append_free_message(connection, room, payload, actor):
     """Append a free-room message: the owner's creates requests, a member's completes its execution."""
     if payload.get("kind") == "moderation":
-        if any(payload.get(field) for field in ("next_review", "review_scope", "review_roster")):
-            raise ValueError("主持说明不能声明评审授权；请在派实现任务时提交")
+        if any(payload.get(field) for field in ("next_review", "review_scope", "review_roster", "sequential", "loop")):
+            raise ValueError("主持说明不能声明评审授权或依次接力；请在派活时提交")
         return append_free_moderation(connection, room, payload, actor)
     if payload.get("kind") not in (None, "chat"):
         raise ValueError("自由协作与新讨论使用 kind=chat，并以 execution_id 或 request_ids 关联请求")
@@ -1159,6 +1160,7 @@ def append_free_message(connection, room, payload, actor):
     if actor != "用户":
         check_answer(connection, room_id, actor, payload)
     review_plan = checked_review_plan(connection, room_id, actor, payload)
+    checked_sequence(actor, payload)
     cursor = connection.execute("INSERT INTO messages (room_id,author,text,reply_to,source,submission_id,created_at) VALUES (?,?,?,?,?,?,?)",
                                 (room_id, author, text, reply_to, expected["source"], submission_id, utc_now()))
     connection.execute("INSERT INTO message_details (message_id,kind,submitted_by) VALUES (?,?,?)",
@@ -1559,7 +1561,7 @@ def protocol_text(room):
         "用户管理和讨论开关使用房主凭据；本地成员使用本人的 --access-file，不借用其他身份。凭据私下交付，不公开 token。API 参与者遵循相同请求与执行约束，source=api；本地 CLI 使用 source=cli。",
         "runner 成员等待本机接入程序交付任务，用 execution view 核对本次执行和请求，再以 message post --as 本人 --kind chat --execution 本次编号 --access-file FILE 回答。执行失效后保留草稿，不能去掉编号改作普通发言；认领、续租与后续投递由接入程序处理。",
         "manual 本地成员首次用 member register 注册，会话 ID 由 CLI 自动取得；回答用 --request 请求编号，不编造执行编号。讨论不使用原生定时；原会话不能托管时由用户触发。",
-        "自由协作中的 host 可用 --to 点名成员，route 表示未点名的用户请求，handoff 表示派出任务已结束；链上 AI 派活受房间预算限制。普通成员的 --to 或正文 @ 只保存回应建议，不直接唤醒；不点名自己、不扩大授权。",
+        "自由协作中的 host 可用 --to 点名成员，route 表示未点名的用户请求，handoff 表示派出任务已结束；链上 AI 派活受房间预算限制。--to 多位并加 --sequential 时按点名顺序依次接力，每棒一轮，最后交回主持人；再加 --loop 则交回为检查点，用 sequence continue --request 交接请求编号 开始下一圈，不继续即直接验收。普通成员的 --to 或正文 @ 只保存回应建议，不直接唤醒；不点名自己、不扩大授权。",
         "讨论中的用户 @ 直接提问独立排队，不计讨论轮次、不与讨论发言合并。initial 阶段先独立判断；服务端按讨论请求的 read_until 限制读取。直接提问和主持任务不继承该阅读限制。",
         "主持安排前先 turn roster 读取在场专家、waiting、unregistered 和 revision，再 turn create --roster revision；单项和多项都要带凭据，多项计划须覆盖本轮 waiting。继续排队同样先读 roster，再 turn continue --roster revision。状态或新消息变化后旧凭据被拒绝，重新读取再判断；每个回答保存后由程序推进下一项。",
         "局部追问先 turn roster 读取 host_requests 的请求与原消息编号，再 turn ask --request ID --expert NAME --roster revision --submission-id UUID；普通提问不计轮次、不改讨论队列，可问已发言者和主持人，只结束指定请求。",
@@ -2264,6 +2266,12 @@ class DiscussionHandler(BaseHTTPRequestHandler):
             return self.respond(review_ready(connection, room_id, int(parts[4]), token))
         if parts[3:] == ["reviews", "advance"] and method == "POST":
             result = advance_review(connection, room_id, token, self.read_payload())
+            connection.commit()
+            return self.respond(result)
+        if len(parts) == 5 and parts[3] == "sequences" and parts[4].isdigit() and method == "GET":
+            return self.respond(sequence_view(connection, room_id, int(parts[4]), token))
+        if parts[3:] == ["sequences", "continue"] and method == "POST":
+            result = continue_sequence(connection, room_id, token, self.read_payload())
             connection.commit()
             return self.respond(result)
         if parts[3:] == ["queue"] and method == "POST":

@@ -135,6 +135,8 @@ function step(event, index, direction) {
 <template>
   <div class="speaking-order">
     <ul ref="list" class="pb-members" :class="{ 'is-dragging': drag }">
+      <!-- A host's one-after-another relay shows as a queue; a loop also says which pass it is on. -->
+      <li v-if="order.sequence" class="speaking-order-divider speaking-order-relay"><span>{{ order.sequence.loop ? `循环接力 · 第 ${order.sequence.pass} 圈` : "主持人安排的依次接力" }}</span></li>
       <template v-for="(item, index) in rows" :key="item.key">
         <li v-if="item.outside" class="speaking-order-divider" aria-hidden="true"><span>{{ OUTSIDE_LABELS[order.kind] }}</span></li>
         <li class="pb-member speaking-order-row" :class="[`is-${item.state}`, drop_class(index), { 'is-movable': item.state === movable_state && can_reorder }]"
@@ -199,6 +201,7 @@ function step(event, index, direction) {
 .speaking-order-row.drop-after::after { bottom: -3px; }
 .speaking-order-divider { display: flex; align-items: center; gap: 8px; margin: 6px 8px 0; color: var(--ui-text-dimmed); font-size: 11px; }
 .speaking-order-divider::after { content: ""; flex: 1; height: 1px; background: var(--ui-border); }
+.speaking-order-relay { margin-top: 0; }
 .speaking-order-later { margin: 6px 8px 0; color: var(--ui-text-muted); font-size: 12px; }
 .speaking-order-later summary { color: var(--ui-text-dimmed); font-size: 11px; cursor: pointer; }
 .speaking-order-later ol { display: grid; gap: 4px; margin: 6px 0 0; padding: 0; list-style: none; }

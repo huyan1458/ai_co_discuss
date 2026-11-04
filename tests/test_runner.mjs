@@ -1058,7 +1058,7 @@ test('claude allows only codiscuss website subcommands and draft writes, then us
   assert.deepEqual(args.slice(directories + 1, directories + 4), [f.directory, f.task.draft_directory, f.task.skill_directories[0]]);
   assert.deepEqual(args.slice(args.indexOf('--disallowedTools') + 1, args.indexOf('--')), [`Edit(${claude_rule_path(f.task.skill_directories[0])}/**)`]);
   assert.deepEqual(args.slice(args.indexOf('--allowedTools') + 1, args.indexOf('--disallowedTools')),
-    [...['room', 'message', 'turn', 'state', 'goal', 'mode', 'review', 'execution', 'health', 'schema', 'launch workflow-adopt']
+    [...['room', 'message', 'turn', 'state', 'goal', 'mode', 'review', 'sequence', 'execution', 'health', 'schema', 'launch workflow-adopt']
       .flatMap(command => [`Bash(codiscuss ${command} *)`, `PowerShell(codiscuss ${command} *)`]),
     `Edit(${claude_rule_path(f.task.draft_directory)}/**)`, 'Read(//d/materials/**)']);
   assert.ok(!args.includes(`Edit(${claude_rule_path(f.directory)}/**)`));
@@ -1845,6 +1845,11 @@ async function free_fixture(t) {
       state.pending = state.pending.filter(item => item.review?.phase !== 'handoff');
       result = { review_batch_id: 40 };
       if (state.drop_review_reply) { request.socket.destroy(); return; }
+    } else if (url.startsWith('/sequences/') && request.method === 'GET') result = state.sequence;
+    else if (url === '/sequences/continue') {
+      (state.sequence_posts ||= []).push(body);
+      state.pending = state.pending.filter(item => item.sequence?.phase !== 'checkpoint');
+      result = { pass: 2, duplicate: false, execution_completed: false };
     } else if (url === '/goal' && request.method === 'POST') {
       (state.goal_posts ||= []).push(body);
       result = { goal: { status: 'active', continues: 1, idle: false }, revision: 'goal-r2' };
@@ -1970,6 +1975,38 @@ for (const cause of ['too_long', 'missing', 'hard_block', 'read_failure', 'model
       await runner.tick(); await Promise.all(runner.decisions);
       assert.equal(state.executions.length, 1, 'the original host request is delivered');
     }
+  });
+}
+
+/** A loop waiting at its checkpoint: the reviewer's answer is the last of the pass. */
+async function loop_runner_fixture(t, last = '硬伤两条，必须改后再审。') {
+  const f = await free_fixture(t);
+  f.config = with_scheduler(f.config);
+  f.state.claude_role = 'host';
+  f.state.pending = [{ id: 1, message_id: 12, purpose: 'handoff', sequence: { id: 3, phase: 'checkpoint', pass: 1, answer_id: 13 } }];
+  f.state.sequence = { id: 3, status: 'checkpoint', handoff_status: 'pending', remaining_rounds: 3, order: ['Antigravity', 'Codex'], pass: 1,
+    origin: { id: 11, author: 'Claude', text: '写手写完交批评家审，按意见循环修改' },
+    answers: [{ member: 'Antigravity', text: '已写完并保存。' }, { member: 'Codex', text: last }] };
+  return f;
+}
+
+for (const [probability, scheduled] of [[0.85, true], [0.849, true], [0.99, false]]) {
+  test(`a loop checkpoint ${scheduled ? `goes on only at 0.85 (${probability})` : 'wakes the host without smart scheduling'}`, async t => {
+    const { state, config, store } = await loop_runner_fixture(t);
+    if (!scheduled) delete config.scheduler;
+    let seen;
+    const runner = new FreeRoomRunner(config, store, async () => ({ status: 'accepted' }), () => {}, async (url, init) => {
+      seen = JSON.parse(init.body);
+      return scheduler_fetch({ checkpoint: { type: 'choice', choice: 'continue', probabilities: { continue: probability } } })();
+    });
+    await runner.tick(); await Promise.all(runner.decisions);
+    const goes_on = scheduled && probability >= 0.85;
+    assert.deepEqual(state.sequence_posts || [], goes_on ? [{ actor: 'Claude', request_id: 1 }] : []);
+    if (!scheduled) { assert.equal(seen, undefined); assert.equal(state.executions.length, 1, 'the host decides at the checkpoint'); return; }
+    assert.equal(JSON.parse(seen.state).answers[1].text, state.sequence.answers[1].text);
+    assert.deepEqual([state.decisions[0].context.scene, state.decisions[0].after_message_id, state.decisions[0].applied], ['sequence', 13, goes_on]);
+    await runner.tick(); await Promise.all(runner.decisions);
+    assert.equal(state.executions.length, goes_on ? 0 : 1, goes_on ? 'the next pass needs no host' : 'an unsure checkpoint goes to the host');
   });
 }
 

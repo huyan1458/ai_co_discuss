@@ -542,6 +542,27 @@ CREATE TABLE IF NOT EXISTS free_batches (
     settled INTEGER NOT NULL DEFAULT 0,
     PRIMARY KEY (room_id,batch_id)
 );
+-- A host's one-after-another dispatch: each step is a one-member batch hung on the previous answer and costs one chain round.
+-- After the last member it hands back to the host; a loop's hand-back is a checkpoint from which the host (or smart
+-- scheduling for it) may run the next pass. `steps` lists [pass, member_id, batch_id] for every step started.
+CREATE TABLE IF NOT EXISTS free_sequences (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    room_id TEXT NOT NULL REFERENCES rooms(id) ON DELETE CASCADE,
+    message_id INTEGER NOT NULL REFERENCES messages(id) ON DELETE CASCADE,
+    chain_id INTEGER NOT NULL,
+    host_id INTEGER NOT NULL,
+    member_ids TEXT NOT NULL,
+    loop INTEGER NOT NULL DEFAULT 0,
+    pass INTEGER NOT NULL DEFAULT 1,
+    position INTEGER NOT NULL DEFAULT 0,
+    batch_id INTEGER NOT NULL,
+    answer_id INTEGER NOT NULL DEFAULT 0,
+    handoff_request INTEGER NOT NULL DEFAULT 0,
+    steps TEXT NOT NULL DEFAULT '[]',
+    status TEXT NOT NULL DEFAULT 'running' CHECK(status IN ('running','checkpoint','done','stopped'))
+);
+CREATE INDEX IF NOT EXISTS free_sequences_batch ON free_sequences(room_id,batch_id);
+CREATE INDEX IF NOT EXISTS free_sequences_handoff ON free_sequences(handoff_request);
 -- Members the user named to answer one after another, in the room's speaking order: each gets its request once the one before
 -- it ends. Asked rows stay so the speaking order can show who already answered; the owner may reorder rows not yet asked.
 CREATE TABLE IF NOT EXISTS free_queue (

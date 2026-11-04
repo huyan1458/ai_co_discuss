@@ -1277,6 +1277,82 @@ class HostTests(HostRoomTests):
         finally:
             free_room.CHAIN_ROUNDS = original
 
+    def test_host_sequential_dispatch_relays_one_member_at_a_time_and_hands_back_once(self):
+        """Each step waits for the one before, hangs on its answer and costs a round; the last answer goes back to the host."""
+        FreeRoomTests.say(self, "写一稿再审")
+        execution = self.reserve_for("Claude")[1]["id"]
+        post = lambda **extra: self.request(f"{self.path}/messages", {"author": "Claude", "text": "接力", "source": "cli",
+            "submission_id": uuid.uuid4().hex, "execution_id": execution, **extra}, self.member)
+        self.assertEqual(post(to=["Codex"], sequential=True)[0], 400, "one member cannot relay")
+        self.assertEqual(post(to=["Antigravity", "Codex"], loop=True)[0], 400, "a loop is a one-after-another dispatch")
+        self.assertEqual(post(to=["Antigravity", "Codex"], sequential=True)[0], 201)
+        self.assertEqual(self.requests()[-1], ("Antigravity", "ask", "pending"))
+        order = self.request(self.path)[1]["speaking_order"]
+        self.assertEqual((order["kind"], [(item["name"], item["state"]) for item in order["items"]][:2], order["sequence"]["loop"]),
+                         ("queue", [("Antigravity", "speaking"), ("Codex", "queued")], False))
+        self.work("Antigravity")
+        self.assertEqual(self.requests()[-1], ("Codex", "ask", "pending"))
+        self.assertNotIn(("Claude", "handoff", "pending"), self.requests())
+        pending = next(item for item in self.request(f"{self.path}/inbox", token=self.owner)[1]["members"] if item["name"] == "Codex")["pending"]
+        self.assertEqual((pending[0]["sequence"]["phase"], pending[0]["sequence"]["next"]), ("step", None))
+        codex_execution = self.reserve_for("Codex")[1]["id"]
+        answer = lambda **extra: self.request(f"{self.path}/messages", {"author": "Codex", "text": "Codex 完成", "source": "cli",
+            "submission_id": uuid.uuid4().hex, "execution_id": codex_execution, **extra}, self.codex)
+        self.assertEqual(answer(to=["Claude", "Antigravity"], sequential=True)[0], 403, "only the host dispatches one after another")
+        self.assertEqual(answer()[0], 201)
+        self.assertEqual(self.requests().count(("Claude", "handoff", "pending")), 1)
+        chain = self.request(self.path)[1]["free"]["chain_rounds"][0]
+        self.assertEqual(chain["used"], 2, "each step is one round")
+        self.assertEqual(self.request(self.path)[1]["speaking_order"]["kind"], "default")
+
+    def test_loop_checkpoint_runs_the_next_pass_only_when_continued(self):
+        """A loop hands back at a checkpoint; continuing starts the next pass on the last answer, otherwise the host just accepts."""
+        self.request(f"{self.path}/budget", {"max_rounds": 5}, self.owner)
+        FreeRoomTests.say(self, "循环")
+        self.work("Claude", to=["Antigravity", "Codex"], sequential=True, loop=True)
+        self.work("Antigravity")
+        self.work("Codex")
+        host = next(item for item in self.request(f"{self.path}/inbox", token=self.owner)[1]["members"] if item["name"] == "Claude")
+        checkpoint = host["pending"][0]
+        self.assertEqual((checkpoint["purpose"], checkpoint["sequence"]["phase"], checkpoint["sequence"]["pass"]), ("handoff", "checkpoint", 1))
+        sequence = self.request(f"{self.path}/sequences/{checkpoint['sequence']['id']}", token=self.member)[1]
+        self.assertEqual(([item["member"] for item in sequence["answers"]], sequence["answers"][1]["text"]), (["Antigravity", "Codex"], "Codex 完成"))
+        url = f"{self.path}/sequences/continue"
+        self.assertEqual(self.request(url, {"actor": "Codex", "request_id": checkpoint["id"]}, self.codex)[0], 403)
+        status, result = self.request(url, {"actor": "Claude", "request_id": checkpoint["id"]}, self.member)
+        self.assertEqual((status, result["pass"], result["duplicate"]), (200, 2, False), result)
+        self.assertEqual(self.request(url, {"actor": "Claude", "request_id": checkpoint["id"]}, self.member)[1]["duplicate"], True)
+        self.assertEqual(self.requests()[-2:], [("Claude", "handoff", "completed"), ("Antigravity", "ask", "pending")])
+        self.work("Antigravity")
+        self.work("Codex")
+        second = next(item for item in self.request(f"{self.path}/inbox", token=self.owner)[1]["members"] if item["name"] == "Claude")["pending"][0]
+        self.assertEqual(second["sequence"]["pass"], 2)
+        self.work("Claude")
+        self.assertEqual(self.request(url, {"actor": "Claude", "request_id": second["id"]}, self.member)[0], 409, "an accepted checkpoint is closed")
+        self.assertEqual(self.request(self.path)[1]["speaking_order"]["kind"], "default")
+
+    def test_loop_stops_at_the_round_limit_and_continuing_the_chain_resumes_it(self):
+        """The room's round limit bounds a loop: the step past it is held, and the owner's continue sends it on in the loop."""
+        from backend import free_room
+        original = free_room.CHAIN_ROUNDS
+        free_room.CHAIN_ROUNDS = 2
+        try:
+            FreeRoomTests.say(self, "上限")
+            self.work("Claude", to=["Antigravity", "Codex"], sequential=True, loop=True)
+            self.work("Antigravity")
+            self.work("Codex")
+            checkpoint = next(item for item in self.request(f"{self.path}/inbox", token=self.owner)[1]["members"] if item["name"] == "Claude")["pending"][0]
+            self.request(f"{self.path}/sequences/continue", {"actor": "Claude", "request_id": checkpoint["id"]}, self.member)
+            free = self.request(self.path)[1]["free"]
+            self.assertEqual([item["reason"] for item in free["halted_chains"]], ["budget"])
+            self.assertNotIn(("Antigravity", "ask", "pending"), self.requests())
+            self.request(f"{self.path}/chains/{free['halted_chains'][0]['chain_id']}", {"action": "continue", "rounds": 2}, self.owner)
+            self.assertEqual(self.requests()[-1], ("Antigravity", "ask", "pending"))
+            self.work("Antigravity")
+            self.assertEqual(self.requests()[-1], ("Codex", "ask", "pending"), "the resumed pass keeps relaying")
+        finally:
+            free_room.CHAIN_ROUNDS = original
+
     def test_single_member_dispatch_hands_back_only_when_the_host_asks(self):
         """One member's answer goes straight to the user unless the host dispatched it with handoff, e.g. to pass it to a reviewer."""
         FreeRoomTests.say(self, "单人派活")

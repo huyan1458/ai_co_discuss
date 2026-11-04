@@ -10,7 +10,7 @@ import { free_task_text, TASK_SUBCOMMANDS, with_expert_prompt } from './expert_p
 import { atomic_json } from './files.mjs';
 import { SessionDriver } from './session_driver.mjs';
 import { effective_profile, load_room_workflow, workflow_in_use, workflow_task_field } from './workflows.mjs';
-import { DEFAULT_SCHEDULER_MODE, GOAL_PROMPT_VERSION, decide_goal_wake, REVIEW_CONFIDENCE, REVIEW_PROMPT_VERSION, ROUTE_CONFIDENCE, ROUTE_CONTEXT_MESSAGES, ROUTE_PROMPT_VERSION, ROUTE_WIDE_CONFIDENCE, decide_group_order, decide_review_completion, route_free_message, route_prompt_version, scheduler_thresholds, some_members } from './scheduler.mjs';
+import { DEFAULT_SCHEDULER_MODE, GOAL_PROMPT_VERSION, decide_goal_wake, decide_sequence_checkpoint, REVIEW_CONFIDENCE, REVIEW_PROMPT_VERSION, SEQUENCE_CONFIDENCE, SEQUENCE_PROMPT_VERSION, ROUTE_CONFIDENCE, ROUTE_CONTEXT_MESSAGES, ROUTE_PROMPT_VERSION, ROUTE_WIDE_CONFIDENCE, decide_group_order, decide_review_completion, route_free_message, route_prompt_version, scheduler_thresholds, some_members } from './scheduler.mjs';
 
 const PACKAGE_VERSION = JSON.parse(readFileSync(new URL('../package.json', import.meta.url), 'utf8')).version;
 const RENEW_MS = 30_000;
@@ -267,7 +267,7 @@ export class FreeRoomRunner {
     }
     // Smart scheduling runs beside delivery: the host waits for its answer (or failure) before starting, see `routing`.
     if (this.config.scheduler && !inbox.archived) this.recommend_unnamed(inbox, room);
-    if (this.config.scheduler && !inbox.archived) this.schedule_reviews(inbox);
+    if (this.config.scheduler && !inbox.archived) this.schedule_handoffs(inbox);
     if (!inbox.archived) this.arrange_groups(inbox, room);
     this.room_title = room.title;
     this.room = room;
@@ -320,22 +320,26 @@ export class FreeRoomRunner {
       catch (error) { this.log(`成员会话能力未同步：${member.name}：${error.message}`); }
     }
   }
-  /** Hold only pending review handoffs while their preauthorized next step is judged. */
-  schedule_reviews(inbox) {
+  /** Hold only pending hand-backs with a declared next step while it is judged: a preauthorized review, or a loop's next pass. */
+  schedule_handoffs(inbox) {
     const host = inbox.members.find(member => member.role === 'host');
     if (!host || !this.config.members[host.name]?.token || inbox.executions.some(item => item.member_id === host.id)
       || LIVE.includes(this.row(host.name)?.status)) return;
-    for (const request of host.pending.filter(item => item.review?.phase === 'handoff')) {
-      const saved = this.store.db.prepare('SELECT value FROM metadata WHERE key=?').get(`review-decision:${request.id}`)?.value;
+    for (const request of host.pending) {
+      const scene = request.review?.phase === 'handoff' ? 'review' : request.sequence?.phase === 'checkpoint' ? 'sequence' : '';
+      if (!scene) continue;
+      const key = `${scene}-decision:${request.id}`;
+      const saved = this.store.db.prepare('SELECT value FROM metadata WHERE key=?').get(key)?.value;
       if (this.routed.has(request.id) || (saved && JSON.parse(saved).done)) continue;
       this.routed.add(request.id);
       this.routing.add(request.id);
-      const pending = this.mark_routing(request.message_id, true).then(() => this.judge_review(host, request))
+      const judge = scene === 'review' ? () => this.judge_review(host, request) : () => this.judge_sequence(host, request);
+      const pending = this.mark_routing(request.message_id, true).then(judge)
         .catch(error => {
           this.save_suggestion(request, { action: 'host', actual_action: 'host', applied: false,
             model_judgment: false, reason: `没有模型判断：${error.message}` });
-          this.store.db.prepare('INSERT OR REPLACE INTO metadata VALUES (?,?)').run(`review-decision:${request.id}`, JSON.stringify({ done: true }));
-          this.log(`评审交接 #${request.message_id} 交给主持人：${error.message}`);
+          this.store.db.prepare('INSERT OR REPLACE INTO metadata VALUES (?,?)').run(key, JSON.stringify({ done: true }));
+          this.log(`${scene === 'review' ? '评审交接' : '循环检查点'} #${request.message_id} 交给主持人：${error.message}`);
         }).finally(() => { this.routing.delete(request.id); return this.mark_routing(request.message_id, false); });
       this.decisions.add(pending);
       pending.finally(() => { this.decisions.delete(pending); this.on_decided(); });
@@ -360,6 +364,35 @@ export class FreeRoomRunner {
     const label = outcome.applied ? decision.label : outcome.reason;
     const record = decision.detail ? await this.record_decision(request.message_id, decision, label, outcome.applied,
       { scene: 'review', prompt: REVIEW_PROMPT_VERSION, threshold: REVIEW_CONFIDENCE }) : null;
+    this.save_suggestion(request, { action: decision.action, actual_action: outcome.actual_action, applied: outcome.applied,
+      model_judgment: Boolean(decision.detail), ...(record?.id ? { decision_id: record.id } : {}), reason: label });
+    this.store.db.prepare('INSERT OR REPLACE INTO metadata VALUES (?,?)').run(key, JSON.stringify({ ...job, done: true }));
+  }
+  /**
+   * At a loop's checkpoint, persist the judgment before writing; continuing is bound to the one checkpoint request, so a
+   * restart that repeats it gets the same pass back instead of a second one.
+   */
+  async judge_sequence(host, request) {
+    const key = `sequence-decision:${request.id}`;
+    const cached = this.store.db.prepare('SELECT value FROM metadata WHERE key=?').get(key)?.value;
+    let job = cached ? JSON.parse(cached) : null;
+    if (!job) {
+      const sequence = await api(this.config, `/sequences/${request.sequence.id}`);
+      job = { decision: await decide_sequence_checkpoint(this.config.api_home, this.config.scheduler, sequence, this.fetch) };
+      this.store.db.prepare('INSERT OR REPLACE INTO metadata VALUES (?,?)').run(key, JSON.stringify(job));
+    }
+    const { decision } = job;
+    let outcome = { applied: false, actual_action: 'host', reason: decision.label };
+    if (decision.action === 'continue') {
+      try {
+        await api({ ...this.config, token: this.config.members[host.name].token }, '/sequences/continue', { actor: host.name, request_id: request.id });
+        outcome = { applied: true, actual_action: 'continue' };
+      } catch (error) { outcome = { applied: false, actual_action: 'host', reason: `未自动开始下一圈：${error.message}` }; }
+    }
+    const label = outcome.applied ? decision.label : outcome.reason;
+    // The decision sits under the answer it read: the last one of the pass.
+    const record = decision.detail ? await this.record_decision(request.sequence.answer_id || request.message_id, decision, label, outcome.applied,
+      { scene: 'sequence', prompt: SEQUENCE_PROMPT_VERSION, threshold: SEQUENCE_CONFIDENCE }) : null;
     this.save_suggestion(request, { action: decision.action, actual_action: outcome.actual_action, applied: outcome.applied,
       model_judgment: Boolean(decision.detail), ...(record?.id ? { decision_id: record.id } : {}), reason: label });
     this.store.db.prepare('INSERT OR REPLACE INTO metadata VALUES (?,?)').run(key, JSON.stringify({ ...job, done: true }));
