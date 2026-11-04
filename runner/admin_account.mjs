@@ -1,23 +1,20 @@
-/** Site administrator setup from the deploying computer: a one-time registration token and the saved account. */
+/** Site administrator setup from the deploying computer: a one-time registration token. */
 import { spawnSync } from 'node:child_process';
 import { createHash, randomBytes } from 'node:crypto';
-import { existsSync, mkdirSync, readFileSync } from 'node:fs';
+import { existsSync, rmSync } from 'node:fs';
 import { join, resolve } from 'node:path';
 import { parseArgs } from 'node:util';
 
-import { atomic_json } from './files.mjs';
-import { service_home } from './discussion_service.mjs';
-
 const DEFAULT_CONFIG = join('.wrangler', 'deploy', 'wrangler.jsonc');
-const ACCOUNTS_FILE = 'admin-accounts.json';
+// Older versions kept the administrator password here in plain text; it is deleted and never written again.
+const LEGACY_ACCOUNTS_FILE = 'admin-accounts.json';
 const TOKEN_BYTES = 32;
 const HELP = `用法：codiscuss token [--config WRANGLER_CONFIG]
 
 生成一次性管理员注册令牌，经 wrangler 把它的哈希写入线上 D1，立即生效。
 在线上网页左下角注册管理员时填入；注册成功即作废，重新运行会替换旧令牌。
 需要这台电脑已 wrangler login；--config 默认为当前目录的 ${DEFAULT_CONFIG}。
-
-在已用 codiscuss local connect 连上本机服务的网页注册后，账号与密码保存在 ~/.codiscuss/${ACCOUNTS_FILE}。
+管理员密码只由你自己保管，本机不保存。
 `;
 
 /** Write a fresh token's hash to the deployed D1 and return the token; the raw value is never stored. */
@@ -39,16 +36,12 @@ function run_wrangler(args) {
   if (result.status !== 0) throw new Error(`wrangler 写入线上数据库失败：${(result.stderr || result.error?.message || '').trim().slice(-800)}`);
 }
 
-/** Keep the account registered from this computer's browser, one entry per site, in the private service directory. */
-export function save_admin_account(home, { site, username, password }) {
-  if (typeof username !== 'string' || !username.trim() || typeof password !== 'string' || !password) throw new Error('缺少管理员用户名或密码');
-  const origin = new URL(site).origin;
-  const path = join(home, ACCOUNTS_FILE);
-  const accounts = existsSync(path) ? JSON.parse(readFileSync(path, 'utf8')) : { sites: {} };
-  accounts.sites[origin] = { username: username.trim(), password, saved_at: new Date().toISOString() };
-  mkdirSync(home, { recursive: true, mode: 0o700 });
-  atomic_json(path, accounts);
-  return { saved: path };
+/** Delete the plain-text administrator password an older version saved; returns whether a file was removed. */
+export function remove_legacy_admin_accounts(home) {
+  const path = join(home, LEGACY_ACCOUNTS_FILE);
+  if (!existsSync(path)) return false;
+  rmSync(path, { force: true });
+  return true;
 }
 
 /** `codiscuss token [--config FILE]` */
@@ -58,5 +51,5 @@ export function admin_main(args) {
   } });
   if (values.help || positionals.length) return process.stdout.write(HELP);
   const { token } = create_admin_token(values.config);
-  process.stdout.write(`管理员注册令牌（一次性）：\n${token}\n\n在线上网页左下角注册管理员时填入。注册成功后作废；账号密码在已连接本机服务的网页注册时保存到 ${join(service_home(), ACCOUNTS_FILE)}。\n`);
+  process.stdout.write(`管理员注册令牌（一次性）：\n${token}\n\n在线上网页左下角注册管理员时填入。注册成功后作废；管理员密码只由你自己保管，本机不保存。\n`);
 }

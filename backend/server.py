@@ -22,7 +22,8 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from urllib.parse import parse_qs, quote, urlsplit
 
-from .admin import AdminError, admin_status, login_admin, logout_admin, register_admin, session_valid, update_profile
+from .admin import (AdminError, admin_status, change_password, list_sessions, login_admin, logout_admin, register_admin,
+                    revoke_sessions, session_valid, update_profile)
 from .remote_launch import (COMMAND_WAIT_MAX, claim_machine_commands, finish_machine_command, list_machines, machine_command_status,
                             machine_launch_action, machine_sync, pair_machine, remote_launch_status, submit_machine_command,
                             submit_remote_launch)
@@ -1837,7 +1838,7 @@ class DiscussionHandler(BaseHTTPRequestHandler):
         site = self.local_request_site(method)
         route = parts[2:]
         if method == "OPTIONS" and route in (["settings"], ["launch"], ["room-models"], ["room-files"], ["room-member"], ["room-member-access"], ["room-member-allow"], ["room-member-adapter"], ["room-member-model"], ["room-profiles"], ["room-restore"], ["room-fork"], ["models"], ["api-key"], ["api-check"],
-                                             ["scheduler-check"], ["tts-settings"], ["tts"], ["stt"], ["pick-directory"], ["projects"], ["presets"], ["workflows"], ["room-workflow"], ["machine-link"], ["admin-account"]):
+                                             ["scheduler-check"], ["tts-settings"], ["tts"], ["stt"], ["pick-directory"], ["browse-directory"], ["projects"], ["presets"], ["workflows"], ["room-workflow"], ["machine-link"], ["device-pairing"], ["devices"]):
             return self.respond({"ok": True})
         if route == ["settings"] and method in ("GET", "POST"):
             command = "settings"
@@ -1863,6 +1864,13 @@ class DiscussionHandler(BaseHTTPRequestHandler):
             command = route[0]
         elif route == ["pick-directory"] and method == "POST":
             command = "pick-directory"
+        elif route == ["browse-directory"] and method == "POST":
+            command = "browse-directory"
+        elif route in (["device-pairing"], ["devices"]) and method == "POST":
+            # Which devices this computer trusts is decided at its own screen; a connected website's page cannot.
+            if self.bridge_origin:
+                raise PermissionError("设备配对与撤销只能在这台电脑的本机网页上操作，或在已配对的设备上操作")
+            command = route[0]
         elif route == ["projects"] and method == "POST":
             command = "projects"
         elif route == ["presets"] and method == "POST":
@@ -1871,8 +1879,6 @@ class DiscussionHandler(BaseHTTPRequestHandler):
             command = route[0]
         elif route == ["machine-link"] and method == "POST":
             command = "machine-link"
-        elif route == ["admin-account"] and method == "POST":
-            command = "admin-account"
         else:
             raise LookupError("本机入口不存在")
         payload = None
@@ -1889,11 +1895,10 @@ class DiscussionHandler(BaseHTTPRequestHandler):
                     payload["token"] = self.headers.get("X-Discussion-Token", "")
             if command == "machine-link":
                 payload = {"site": site}
-            if command == "admin-account":
-                payload = {"site": site, "username": payload.get("username"), "password": payload.get("password")}
         if command == "room-config" and "participants" in payload:
             return self.save_local_room_configuration(command, payload)
-        return self.run_local_command(command, payload)
+        # A connected website's page is another device's entry: it gets the same limits as the relay.
+        return self.run_local_command(command, payload, remote=bool(self.bridge_origin) and command != "machine-link")
 
     def save_local_room_configuration(self, command, payload):
         """Keep session pause/revision validation and local file replacement in one boundary."""
@@ -1908,9 +1913,11 @@ class DiscussionHandler(BaseHTTPRequestHandler):
                 raise FileExistsError("房间状态已变化，请暂停后重新读取本场配置")
             return self.run_local_command(command, payload, configuration_locked=True)
 
-    def run_local_command(self, command, payload, configuration_locked=False):
+    def run_local_command(self, command, payload, configuration_locked=False, remote=False):
         """Run the fixed local Node entrypoint after the same-origin request checks."""
         arguments = ["node", str(ROOT / "runner" / "discussion_launch.mjs"), command]
+        if remote:
+            arguments.append("--remote")
         if command in ("start", "room-config"):
             arguments.append("--browser")
         if configuration_locked:
@@ -1939,9 +1946,25 @@ class DiscussionHandler(BaseHTTPRequestHandler):
         """The administrator session token supplied by the browser."""
         return self.headers.get("X-Discussion-Admin", "")
 
+    def local_visitor(self):
+        """Whether this request may act as the loopback-only site's implicit administrator.
+
+        The Host must name this loopback port, which defeats DNS rebinding, and a browser request must come from the site
+        itself rather than another page. Programs on this computer can still send these headers; this guards browsers only.
+        """
+        if not self.server.local_site:
+            return False
+        host = self.headers.get("Host", "")
+        if host not in (f"127.0.0.1:{self.server.server_port}", f"localhost:{self.server.server_port}"):
+            return False
+        origin = self.headers.get("Origin")
+        if origin and origin != f"http://{host}":
+            return False
+        return self.headers.get("Sec-Fetch-Site", "same-origin") in ("same-origin", "none")
+
     def admin_session(self, connection):
-        """Whether the request is from the administrator: any visitor of a loopback-only site, else a valid session."""
-        return self.server.local_site or session_valid(connection, self.admin_token())
+        """Whether the request is from the administrator: a visitor of the loopback-only site itself, else a valid session."""
+        return self.local_visitor() or session_valid(connection, self.admin_token())
 
     def relay_bridge(self, parts):
         """Whether this request comes from the runner relaying a paired device; a bad or misplaced bridge credential fails.
@@ -1966,7 +1989,7 @@ class DiscussionHandler(BaseHTTPRequestHandler):
     def admin_as_owner(self, connection, room_id):
         """Let a logged-in administrator, a relayed device, or a visitor of the loopback-only local site write as owner without
         the room credential: the local site already treats its visitors as the administrator. The remote entry is never local."""
-        if self.headers.get("X-Discussion-Token") or not (self.bridged or self.server.local_site or session_valid(connection, self.admin_token())):
+        if self.headers.get("X-Discussion-Token") or not (self.bridged or self.local_visitor() or session_valid(connection, self.admin_token())):
             return
         row = connection.execute("SELECT control_hash FROM room_modes WHERE room_id=?", (room_id,)).fetchone()
         if row and row[0]:
@@ -1979,15 +2002,22 @@ class DiscussionHandler(BaseHTTPRequestHandler):
             result = admin_status(connection, token, True, self.server.local_site)
             connection.commit()
             return self.respond(result)
+        now = int(time.time())
+        if parts == ["api", "admin", "sessions"] and method == "GET" and not self.server.local_site:
+            return self.respond(list_sessions(connection, token, now))
         if len(parts) != 3 or method != "POST":
             raise LookupError("地址不存在")
         payload = self.read_payload()
-        now = int(time.time())
         if self.server.local_site and parts[2] != "profile":
             raise ValueError("本地站点无需管理员账号")
-        actions = {"register": lambda: register_admin(connection, payload, self.server.admin_setup_key, now),
-                   "login": lambda: login_admin(connection, payload, now),
+        # The remote entry sits behind Cloudflare Tunnel, which names the client; without it every attempt shares one address.
+        source = self.headers.get("CF-Connecting-IP") or self.client_address[0]
+        label = self.headers.get("User-Agent", "")
+        actions = {"register": lambda: register_admin(connection, payload, self.server.admin_setup_key, now, label),
+                   "login": lambda: login_admin(connection, payload, now, source, label),
                    "logout": lambda: logout_admin(connection, token),
+                   "revoke": lambda: revoke_sessions(connection, token, payload, now),
+                   "password": lambda: change_password(connection, token, payload, now, source),
                    "profile": lambda: update_profile(connection, token, payload, self.server.local_site)}
         if parts[2] not in actions:
             raise LookupError("地址不存在")
@@ -2525,7 +2555,8 @@ def main():
     init_database(args.database, seed=not args.no_demo)
     if args.reset_admin:
         with closing(connect_db(args.database)) as connection, connection:
-            connection.execute("DELETE FROM admin_sessions")
+            connection.execute("DELETE FROM admin_logins")
+            connection.execute("DELETE FROM admin_attempts")
             connection.execute("DELETE FROM site_admin")
         logging.info("管理员账号已清除；再次打开网站时可用安装令牌重新注册")
         return

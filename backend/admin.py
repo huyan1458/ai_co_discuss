@@ -1,7 +1,7 @@
 """Single site administrator account: registration, login sessions and profile.
 
 Passwords and session tokens are stored only as hashes. The Worker backend implements
-the same contract in ``worker.mjs``; both operate on ``site_admin`` and ``admin_sessions``.
+the same contract in ``worker.mjs``; both operate on ``site_admin``, ``admin_logins`` and ``admin_attempts``.
 """
 
 import hashlib
@@ -12,8 +12,18 @@ import time
 from .runtime import begin_write
 
 PBKDF2_ITERATIONS = 100000
-LOCK_AFTER_FAILURES = 5
+# A login ends after a week unused or a month in all; same rules as worker.mjs.
+SESSION_IDLE_SECONDS = 7 * 86400
+SESSION_MAX_SECONDS = 30 * 86400
+SESSION_SEEN_SECONDS = 3600
+SESSION_LABEL_LIMIT = 160
+# Each run of five wrong passwords from one address locks it, twice as long each time, up to a day; all addresses
+# together are capped per hour.
+FAILURES_PER_LOCK = 5
 LOCK_SECONDS = 300
+LOCK_MAX_SECONDS = 86400
+GLOBAL_FAILURES = 100
+GLOBAL_WINDOW = 3600
 USERNAME_MAX = 30
 PASSWORD_MIN = 8
 PASSWORD_MAX = 128
@@ -87,10 +97,19 @@ def profile_of(row):
     return {"username": row["username"], "avatar": row["avatar"]} if row else None
 
 
-def session_valid(connection, token):
-    """Whether the token belongs to a stored session; sessions last until logout."""
+def live_session(connection, token, now=None):
+    """Return the login row for a token that is neither idle too long nor too old, or None."""
     hashed = session_hash(token)
-    return bool(hashed and connection.execute("SELECT 1 FROM admin_sessions WHERE token_hash=?", (hashed,)).fetchone())
+    if not hashed:
+        return None
+    now = int(time.time()) if now is None else now
+    return connection.execute("SELECT * FROM admin_logins WHERE token_hash=? AND last_seen>=? AND created_at>=?",
+                              (hashed, now - SESSION_IDLE_SECONDS, now - SESSION_MAX_SECONDS)).fetchone()
+
+
+def session_valid(connection, token):
+    """Whether the token belongs to a live login; reading never writes, the status check marks last use."""
+    return live_session(connection, token) is not None
 
 
 def require_session(connection, token):
@@ -107,18 +126,25 @@ def admin_status(connection, token, setup_available, local=False):
     row = admin_row(connection)
     if local:
         return {"local": True, "registered": True, "setup_available": False, "logged_in": True, "profile": profile_of(row)}
+    now = int(time.time())
+    session = live_session(connection, token, now) if row else None
+    # Pages ask for this status when they open, which is when a login counts as used.
+    if session and now - session["last_seen"] > SESSION_SEEN_SECONDS:
+        connection.execute("UPDATE admin_logins SET last_seen=? WHERE token_hash=?", (now, session["token_hash"]))
     return {"registered": bool(row), "setup_available": bool(setup_available and not row),
-            "logged_in": session_valid(connection, token) if row else False, "profile": profile_of(row)}
+            "logged_in": session is not None, "profile": profile_of(row)}
 
 
-def open_session(connection, now):
-    """Create a session and return its raw token, which is shown only once."""
+def open_session(connection, now, label=""):
+    """Create a login labelled with the browser that asked for it and return its raw token, shown only once."""
     token = secrets.token_hex(32)
-    connection.execute("INSERT INTO admin_sessions (token_hash,created_at) VALUES (?,?)", (session_hash(token), now))
+    connection.execute("DELETE FROM admin_logins WHERE last_seen<? OR created_at<?", (now - SESSION_IDLE_SECONDS, now - SESSION_MAX_SECONDS))
+    connection.execute("INSERT INTO admin_logins (token_hash,label,created_at,last_seen) VALUES (?,?,?,?)",
+                       (session_hash(token), str(label or "")[:SESSION_LABEL_LIMIT], now, now))
     return token
 
 
-def register_admin(connection, payload, setup_key, now):
+def register_admin(connection, payload, setup_key, now, label=""):
     """Create the administrator when the install token matches; only the first call succeeds."""
     begin_write(connection)
     if admin_row(connection):
@@ -135,42 +161,85 @@ def register_admin(connection, payload, setup_key, now):
     connection.execute("INSERT INTO site_admin (id,username,password_hash,created_at) VALUES (1,?,?,?)",
                        (username, hash_password(password), now))
     connection.execute("DELETE FROM admin_setup")
-    return {"token": open_session(connection, now), "profile": {"username": username, "avatar": ""}}
+    return {"token": open_session(connection, now, label), "profile": {"username": username, "avatar": ""}}
 
 
-def record_failure(connection, row):
-    """Count a failed attempt durably; the fifth in a row locks login for a fixed time."""
-    failures = row["failed_attempts"] + 1
-    locked = failures >= LOCK_AFTER_FAILURES
-    connection.execute("UPDATE site_admin SET failed_attempts=?, locked_until=? WHERE id=1",
-                       (0 if locked else failures, int(time.time()) + LOCK_SECONDS if locked else 0))
+def check_password(connection, row, password, source, now):
+    """Verify a password with backoff per address and a cap across all addresses; failures are committed at once."""
+    attempts = connection.execute("SELECT * FROM admin_attempts WHERE source=?", (source,)).fetchone()
+    every = connection.execute("SELECT * FROM admin_attempts WHERE source='*'").fetchone()
+    for limit in (attempts, every):
+        if limit and limit["locked_until"] > now:
+            raise AdminError(f"尝试次数过多，请 {limit['locked_until'] - now} 秒后再试", 429)
+    if isinstance(password, str) and verify_password(password, row["password_hash"]):
+        connection.execute("DELETE FROM admin_attempts WHERE source=?", (source,))
+        return
+    failed = (attempts["failed"] if attempts else 0) + 1
+    lock = 0 if failed % FAILURES_PER_LOCK else min(LOCK_SECONDS * 2 ** (failed // FAILURES_PER_LOCK - 1), LOCK_MAX_SECONDS)
+    total = every["failed"] + 1 if every and now - every["updated_at"] <= GLOBAL_WINDOW else 1
+    connection.execute("INSERT OR REPLACE INTO admin_attempts (source,failed,locked_until,updated_at) VALUES (?,?,?,?)",
+                       (source, failed, now + lock if lock else 0, now))
+    connection.execute("INSERT OR REPLACE INTO admin_attempts (source,failed,locked_until,updated_at) VALUES ('*',?,?,?)",
+                       (0 if total >= GLOBAL_FAILURES else total, now + GLOBAL_WINDOW if total >= GLOBAL_FAILURES else 0,
+                        now if total == 1 else every["updated_at"]))
     connection.commit()
+    raise AdminError("用户名或密码错误", 401)
 
 
-def check_not_locked(row, now):
-    """Reject attempts while the account is locked, even with a correct password."""
-    if row["locked_until"] > now:
-        raise AdminError(f"尝试次数过多，请 {row['locked_until'] - now} 秒后再试", 429)
-
-
-def login_admin(connection, payload, now):
-    """Verify the account and open a session; failures are generic and rate limited."""
+def login_admin(connection, payload, now, source="unknown", label=""):
+    """Verify the account and open a login; failures are generic and rate limited per address."""
     begin_write(connection)
     row = admin_row(connection)
     username, password = payload.get("username"), payload.get("password")
     if not row or not isinstance(username, str) or not isinstance(password, str):
         raise AdminError("用户名或密码错误", 401)
-    check_not_locked(row, now)
-    if username.strip().lower() != row["username"].lower() or not verify_password(password, row["password_hash"]):
-        record_failure(connection, row)
-        raise AdminError("用户名或密码错误", 401)
-    connection.execute("UPDATE site_admin SET failed_attempts=0, locked_until=0 WHERE id=1")
-    return {"token": open_session(connection, now), "profile": profile_of(row)}
+    # The username is checked after the lock so a wrong name and a wrong password are indistinguishable.
+    check_password(connection, row, password if username.strip().lower() == row["username"].lower() else None, source, now)
+    return {"token": open_session(connection, now, label), "profile": profile_of(row)}
+
+
+def list_sessions(connection, token, now):
+    """List live logins with their browser label; the id is a hash prefix, useless for signing in."""
+    current = live_session(connection, token, now)
+    if not current:
+        raise AdminError("需要登录管理员账号", 401)
+    rows = connection.execute("SELECT * FROM admin_logins WHERE last_seen>=? AND created_at>=? ORDER BY last_seen DESC",
+                              (now - SESSION_IDLE_SECONDS, now - SESSION_MAX_SECONDS)).fetchall()
+    return {"sessions": [{"id": row["token_hash"][:16], "label": row["label"], "created_at": row["created_at"], "last_seen": row["last_seen"],
+                          "current": row["token_hash"] == current["token_hash"]} for row in rows]}
+
+
+def revoke_sessions(connection, token, payload, now):
+    """End one other login by id, or every login but this one."""
+    current = live_session(connection, token, now)
+    if not current:
+        raise AdminError("需要登录管理员账号", 401)
+    if payload.get("others") is True:
+        connection.execute("DELETE FROM admin_logins WHERE token_hash<>?", (current["token_hash"],))
+        return {"ok": True}
+    target = payload.get("id")
+    if not isinstance(target, str) or len(target) != 16 or any(char not in "0123456789abcdef" for char in target):
+        raise ValueError("须提供要退出的登录 id，或 others: true")
+    connection.execute("DELETE FROM admin_logins WHERE substr(token_hash,1,16)=? AND token_hash<>?", (target, current["token_hash"]))
+    return {"ok": True}
+
+
+def change_password(connection, token, payload, now, source="unknown"):
+    """Change the password after proving the current one; every other login ends."""
+    begin_write(connection)
+    current = live_session(connection, token, now)
+    if not current:
+        raise AdminError("需要登录管理员账号", 401)
+    password = valid_password(payload.get("password"))
+    check_password(connection, admin_row(connection), payload.get("current_password"), source, now)
+    connection.execute("UPDATE site_admin SET password_hash=? WHERE id=1", (hash_password(password),))
+    connection.execute("DELETE FROM admin_logins WHERE token_hash<>?", (current["token_hash"],))
+    return {"ok": True}
 
 
 def logout_admin(connection, token):
-    """Remove the current session; succeeds even without one."""
-    connection.execute("DELETE FROM admin_sessions WHERE token_hash=?", (session_hash(token),))
+    """Remove the current login; succeeds even without one."""
+    connection.execute("DELETE FROM admin_logins WHERE token_hash=?", (session_hash(token),))
     return {"ok": True}
 
 

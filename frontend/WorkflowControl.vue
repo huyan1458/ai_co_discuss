@@ -6,7 +6,9 @@
 import { computed, inject, ref } from "vue";
 import ConfirmDialog from "./ConfirmDialog.vue";
 
-const props = defineProps({ workflow: { type: Object, required: true } });
+// `dismissible` adds a close button that only hides the row where it is shown; the workflow keeps running.
+const props = defineProps({ workflow: { type: Object, required: true }, dismissible: { type: Boolean, default: false } });
+defineEmits(["dismiss"]);
 const { view, bridge, act, pending } = inject("discussion");
 const room = computed(() => view.value.room || {});
 // The members it brought who are here, without the host (who stays).
@@ -31,6 +33,7 @@ const items = computed(() => [
       <span class="workflow-control-name" :title="workflow.label">{{ workflow.label }}</span>
       <span class="workflow-control-state"><span class="workflow-control-dot"></span>{{ workflow.available ? '进行中' : '不可用' }}</span>
       <button v-if="can_manage" type="button" class="workflow-control-action" :disabled="Boolean(pending)" title="请离工作流带来的成员并结束工作流，会话保留" @click="confirming = true">{{ present.length ? '请离成员' : '结束' }}</button>
+      <button v-if="dismissible" type="button" class="workflow-control-close" title="收起此区，工作流照常进行；“成员与设置”里仍可请离成员" aria-label="收起工作流区" @click="$emit('dismiss')"><UIcon name="i-lucide-x" class="workflow-control-close-icon" /></button>
     </div>
     <p v-if="!workflow.available" class="workflow-control-note is-warning">无法读取工作流，成员沿用房间里的提示词。</p>
     <p v-else-if="names" class="workflow-control-note">{{ present.map((member) => bridge.display_name(member.name)).join(' · ') }}</p>
@@ -49,6 +52,9 @@ const items = computed(() => [
 .workflow-control-action { flex-shrink: 0; margin-left: 2px; padding: 2px 6px; border-radius: 6px; color: var(--ui-text-muted); font-size: 12px; white-space: nowrap; }
 .workflow-control-action:hover:not(:disabled) { background: var(--ui-bg-elevated); color: var(--channel-accent); }
 .workflow-control-action:disabled { opacity: .5; }
+.workflow-control-close { display: inline-flex; flex-shrink: 0; align-items: center; padding: 3px; border-radius: 6px; color: var(--ui-text-dimmed); }
+.workflow-control-close:hover { background: var(--ui-bg-elevated); color: var(--ui-text); }
+.workflow-control-close-icon { width: 12px; height: 12px; }
 .workflow-control-note { margin: 2px 0 0 20px; color: var(--ui-text-dimmed); font-size: 11px; line-height: 1.5; overflow-wrap: anywhere; }
 .workflow-control-note.is-warning { color: #e5a50a; }
 </style>

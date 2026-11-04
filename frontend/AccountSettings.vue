@@ -1,5 +1,6 @@
 <script setup>
 import { computed, inject, reactive, ref, watch } from "vue";
+import DeviceSettings from "./DeviceSettings.vue";
 
 const { view, bridge } = inject("discussion");
 const account = computed(() => view.value.admin);
@@ -60,6 +61,33 @@ function reset_avatar() {
 async function sign_out() {
   await run("logout", () => bridge.admin.logout(), "已退出登录。");
 }
+
+// ---- Logins on other devices, and the password: an online site only; the local site has no account. ----
+const sessions = ref(null);
+
+/** Read the live logins; shown on demand, since each read touches the website's database. */
+function load_sessions() {
+  return run("sessions", async () => { sessions.value = await bridge.admin.sessions(); });
+}
+
+/** End one other login, or all others, then show the list again. */
+async function end_sessions(target, message) {
+  if (await run("revoke", () => bridge.admin.revoke(target), message)) await load_sessions();
+}
+
+const device_label = (agent) => bridge.device.label(agent);
+
+function seen(seconds) {
+  return new Date(seconds * 1000).toLocaleString("zh-CN", { month: "numeric", day: "numeric", hour: "2-digit", minute: "2-digit" });
+}
+
+const password_form = reactive({ current_password: "", password: "", confirm: "" });
+async function save_password() {
+  if (await run("password", () => bridge.admin.change_password({ ...password_form }), "密码已更改，其他设备已退出登录。")) {
+    Object.assign(password_form, { current_password: "", password: "", confirm: "" });
+    if (sessions.value) await load_sessions();
+  }
+}
 </script>
 
 <template>
@@ -86,10 +114,14 @@ async function sign_out() {
           <UInput v-model="auth_form.setup_key" type="password" autocomplete="off" required :disabled="register_blocked" class="w-full" aria-label="注册令牌" />
         </UFormField>
         <p v-if="register_blocked" class="account-message is-error" role="status">尚无可用的注册令牌。请在部署网站的电脑上运行 <code>codiscuss token</code>，再刷新本页；本地版也可设置环境变量 DISCUSS_ADMIN_SETUP_KEY 后重启。</p>
-        <p v-else class="fine-print">首个注册者需要令牌，防止他人抢注：在部署网站的电脑上运行 <code>codiscuss token</code> 获取（一次性）；本地版也可用服务端启动日志里的安装令牌。在已连接本机服务的电脑上注册时，账号与密码会保存到 ~/.codiscuss。忘记密码：本地版运行 <code>python server.py --reset-admin</code> 后重新注册；Cloudflare 版需清空管理员表（见部署文档）。</p>
+        <p v-else class="fine-print">首个注册者需要令牌，防止他人抢注：在部署网站的电脑上运行 <code>codiscuss token</code> 获取（一次性）；本地版也可用服务端启动日志里的安装令牌。密码只由你自己保管，本机不保存。忘记密码：本地版运行 <code>python server.py --reset-admin</code> 后重新注册；Cloudflare 版需清空管理员表（见部署文档）。</p>
       </template>
       <p v-else class="fine-print">忘记密码：本地版运行 <code>python server.py --reset-admin</code> 后重新注册；Cloudflare 版需清空管理员表（见部署文档）。</p>
-      <div class="account-actions"><UButton type="submit" class="channel-primary-button" :label="state_key === 'register' ? '创建并登录' : '登录'" :loading="busy === 'register' || busy === 'login'" :disabled="Boolean(busy) || register_blocked" /></div>
+      <div class="account-actions">
+        <UButton v-if="state_key === 'login' && !account.local" label="用通行密钥登录" icon="i-lucide-fingerprint" color="neutral" variant="soft" :loading="busy === 'passkey'" :disabled="Boolean(busy)"
+          @click="run('passkey', () => bridge.admin.login_with_passkey())" />
+        <UButton type="submit" class="channel-primary-button" :label="state_key === 'register' ? '创建并登录' : '登录'" :loading="busy === 'register' || busy === 'login'" :disabled="Boolean(busy) || register_blocked" />
+      </div>
     </form>
 
     <div v-else class="account-profile">
@@ -105,7 +137,41 @@ async function sign_out() {
         <UFormField label="显示名称" description="即用户名，对所有访客可见"><div class="account-name-row"><UInput v-model="display_name" autocomplete="username" :maxlength="30" required class="w-full" aria-label="显示名称" /><UButton type="submit" label="保存名称" color="neutral" variant="soft" :loading="busy === 'name'" :disabled="Boolean(busy) || !name_changed || !display_name.trim()" /></div></UFormField>
       </form>
 
-      <div v-if="!account.local" class="account-signout account-actions"><UButton label="退出登录" icon="i-lucide-log-out" color="neutral" variant="outline" size="sm" :loading="busy === 'logout'" :disabled="Boolean(busy)" @click="sign_out" /></div>
+      <DeviceSettings />
+      <template v-if="!account.local">
+        <section class="account-devices" aria-labelledby="account-devices-heading">
+          <h4 id="account-devices-heading">网站登录</h4>
+          <p class="fine-print">登录一周不用或满一个月会自动失效。看到不认识的登录时，退出它并更改密码。没有配对的设备即使登录了网站，也操作不了电脑。</p>
+          <UButton v-if="!sessions" label="查看网站登录" color="neutral" variant="soft" size="sm" :loading="busy === 'sessions'" :disabled="Boolean(busy)" @click="load_sessions" />
+          <template v-else>
+            <ul class="account-device-list">
+              <li v-for="item in sessions" :key="item.id">
+                <span><strong>{{ device_label(item.label) }}</strong><small>{{ item.current ? "当前设备" : `最近使用 ${seen(item.last_seen)}` }}</small></span>
+                <UButton v-if="!item.current" label="退出" color="neutral" variant="ghost" size="xs" :disabled="Boolean(busy)" @click="end_sessions({ id: item.id }, '该设备已退出登录。')" />
+              </li>
+            </ul>
+            <UButton v-if="sessions.length > 1" label="退出其他所有设备" color="neutral" variant="outline" size="sm" :loading="busy === 'revoke'" :disabled="Boolean(busy)" @click="end_sessions({ others: true }, '其他设备已全部退出登录。')" />
+          </template>
+        </section>
+        <form class="dialog-form account-form" aria-label="更改密码" @submit.prevent="save_password">
+          <h4>更改密码</h4>
+          <UFormField label="当前密码" required><UInput v-model="password_form.current_password" type="password" autocomplete="current-password" :maxlength="128" required class="w-full" aria-label="当前密码" /></UFormField>
+          <UFormField label="新密码" description="8–128 个字符；更改后其他设备都会退出登录" required><UInput v-model="password_form.password" type="password" autocomplete="new-password" :maxlength="128" required class="w-full" aria-label="新密码" /></UFormField>
+          <UFormField label="确认新密码" required><UInput v-model="password_form.confirm" type="password" autocomplete="new-password" :maxlength="128" required class="w-full" aria-label="确认新密码" /></UFormField>
+          <div class="account-actions"><UButton type="submit" label="更改密码" color="neutral" variant="soft" :loading="busy === 'password'" :disabled="Boolean(busy) || !password_form.current_password || !password_form.password" /></div>
+        </form>
+        <div class="account-signout account-actions"><UButton label="退出登录" icon="i-lucide-log-out" color="neutral" variant="outline" size="sm" :loading="busy === 'logout'" :disabled="Boolean(busy)" @click="sign_out" /></div>
+      </template>
     </div>
   </section>
 </template>
+
+<style scoped>
+.account-devices { display: flex; flex-direction: column; align-items: flex-start; gap: 8px; }
+.account-devices h4, .account-form h4 { margin: 0; color: var(--ui-text-highlighted); font-size: 13px; font-weight: 600; }
+.account-device-list { display: flex; flex-direction: column; gap: 4px; width: 100%; margin: 0; padding: 0; list-style: none; }
+.account-device-list li { display: flex; align-items: center; justify-content: space-between; gap: 8px; min-height: 40px; padding: 6px 8px; border: 1px solid var(--ui-border-muted); border-radius: 8px; }
+.account-device-list span { display: flex; flex-direction: column; gap: 2px; min-width: 0; }
+.account-device-list strong { color: var(--ui-text-highlighted); font-size: 13px; font-weight: 500; }
+.account-device-list small { color: var(--ui-text-muted); font-size: 11px; }
+</style>

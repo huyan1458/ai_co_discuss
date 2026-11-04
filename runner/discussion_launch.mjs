@@ -11,6 +11,8 @@ import { parseArgs } from 'node:util';
 
 import { atomic_json } from './files.mjs';
 import { read_project_files } from './project_files.mjs';
+import { guard_remote_request, list_remote_directories } from './remote_policy.mjs';
+import { list_devices, revoke_device, revoke_write, start_pairing, write_allowed, write_needed } from './device_auth.mjs';
 import { setup_sidecar } from './adapters/antigravity_app.mjs';
 import { adapter_of, adoption_adapter, BRANCHABLE_ADAPTERS, branch_session, session_settings, software_defaults, software_effort, software_models } from './adapters/index.mjs';
 import { ADAPTER_IDS, ADAPTER_PROFILES, adapter_profile, platform_adapters, same_session_family } from './adapters/profiles.mjs';
@@ -73,10 +75,12 @@ const HELP = `用法：codiscuss launch settings [--file FILE]
       codiscuss launch room-restore --file FILE
       codiscuss launch room-fork --file FILE
       codiscuss launch pick-directory
+      codiscuss launch browse-directory [--file FILE]
+      codiscuss launch device-pairing [--file FILE]
+      codiscuss launch devices [--file FILE]
       codiscuss launch projects [--file FILE]
       codiscuss launch presets [--file FILE]
       codiscuss launch machine-link --file FILE
-      codiscuss launch admin-account --file FILE
       codiscuss launch workflow-adopt --draft FILE [--access-file FILE]
       codiscuss launch workflow-check (--dir DIR | --draft FILE)
       codiscuss launch workflow-save (--dir DIR | --draft FILE)
@@ -94,10 +98,12 @@ tts-settings 读取朗读设置；内容非空时保存（音色 speaker、语�
 tts 用朗读设置把 text（不超过 300 字）合成为 MP3，返回 base64。
 stt 按序接收录音片段（upload_id、index、base64 PCM 16 kHz 单声道、final）；最后一段时识别整段录音并返回 text。
 pick-directory 在本机弹出系统目录选择窗口，返回所选路径；取消时不返回路径。
+browse-directory 列出常用项目及其中的子文件夹（只含文件夹名，分页），供其他设备选择目录；path 为空时列出常用项目。
+device-pairing 在本机生成 12 位设备配对码（2 分钟有效，可选 temporary 临时设备、site 生成扫码链接）；只能在这台电脑上执行。
+devices 列出已配对设备；提供 revoke（设备 id）撤销设备，或 revoke_write（device_id、room_id）撤销远程可写授权。
 projects 读取本机已配置的项目（名称与绝对路径）；提供 JSON（projects 列表）时整体替换保存。
 presets 读取本机的专家预设（含未删除的内置预设）与各平台默认描述；提供 JSON（presets 列表、description_templates 和/或 hidden_builtins 已删除的内置预设名）时替换对应部分。
 machine-link 返回本机连接指定 site 的电脑编号、名称与凭据，供已登录管理员的网页完成配对；不存在时创建。
-admin-account 把在指定 site 注册的管理员用户名与密码保存到服务目录的 admin-accounts.json；须提供 site、username、password。
 room-member 为房间邀请、请回一位成员；须提供 site、room_id、token、action（add/rejoin）、name。
 room-member-access 修改一位本机唤醒成员的项目权限（project_access 为 read/write/auto/full），下次投递起生效、保留原会话；须提供 site、room_id、token、name、project_access。
 room-member-allow 把被拒绝的操作加入一位本机唤醒的 Claude Code 或 agy 成员的 allowed_tools，下次投递起生效；须提供 site、room_id、token、name、rules。
@@ -1469,7 +1475,7 @@ export function check_or_save_workflow(home, { dir, draft }, save = false) {
 /** CLI and local HTTP bridge use the same commands and configuration validation. */
 export async function launch_main(args = process.argv.slice(2), input_text) {
   const { values, positionals } = parseArgs({ args, allowPositionals: true, options: {
-    file: { type: 'string' }, 'dry-run': { type: 'boolean' }, browser: { type: 'boolean' },
+    file: { type: 'string' }, 'dry-run': { type: 'boolean' }, browser: { type: 'boolean' }, remote: { type: 'boolean' }, device: { type: 'string' },
     'configuration-locked': { type: 'boolean' }, help: { type: 'boolean', short: 'h' },
     draft: { type: 'string' }, 'access-file': { type: 'string' }, dir: { type: 'string' },
   } });
@@ -1486,6 +1492,9 @@ export async function launch_main(args = process.argv.slice(2), input_text) {
   const input = input_text === undefined ? (values.file ? JSON.parse(readFileSync(values.file, 'utf8').replace(/^\uFEFF/, '')) : null) : JSON.parse(input_text);
   const home = service_home();
   assert_shared_home(home);
+  // Another device's request may only use what this computer granted; the flag is set by the relay, never by the request.
+  if (values.remote) guard_remote_request(positionals[0], input, { projects: launch_projects(home).projects, participants: launch_settings(home).participants, home,
+    write_allowed: room => Boolean(values.device) && write_allowed(home, values.device, room), write_needed });
   let result;
   if (positionals[0] === 'settings') result = { ...(input ? save_launch_settings(home, input) : launch_settings(home)), api_providers: API_PROVIDERS,
     scheduler_providers: SCHEDULER_PROVIDERS, scheduler_modes: SCHEDULER_MODES, scheduler_default_mode: DEFAULT_SCHEDULER_MODE, api_keys: saved_api_keys(home), projects: launch_projects(home).projects, ...expert_presets(home), workflows: list_workflows(home) };
@@ -1516,8 +1525,16 @@ export async function launch_main(args = process.argv.slice(2), input_text) {
   else if (positionals[0] === 'room-restore' && input) result = await restore_room(home, input);
   else if (positionals[0] === 'room-fork' && input) result = await fork_room(home, input);
   else if (positionals[0] === 'pick-directory') result = await pick_directory();
+  else if (positionals[0] === 'browse-directory') result = list_remote_directories(input || {}, { projects: launch_projects(home).projects, home });
+  // Device trust from this computer's own screen; other devices reach the same actions through the relay instead.
+  else if (positionals[0] === 'device-pairing' && !values.remote) {
+    // The QR code opens the paired website, where the new device signs in and pairs.
+    const site = input?.site || Object.keys((await import('./remote_launch.mjs')).machine_links(home).sites)[0];
+    result = start_pairing(home, { site, temporary: input?.temporary === true });
+  }
+  else if (positionals[0] === 'devices' && !values.remote) result = input?.revoke ? revoke_device(home, String(input.revoke))
+    : input?.revoke_write ? revoke_write(home, String(input.revoke_write.device_id), String(input.revoke_write.room_id)) : list_devices(home);
   else if (positionals[0] === 'machine-link' && input) result = (await import('./remote_launch.mjs')).machine_link(home, input.site);
-  else if (positionals[0] === 'admin-account' && input) result = (await import('./admin_account.mjs')).save_admin_account(home, input);
   else if (positionals[0] === 'start' && input) result = await launch_discussion(home, input, { dry_run: values['dry-run'], browser_request: values.browser });
   else if (positionals[0] === 'room-config' && input) result = await room_configuration(home, input, { local_guard: values['configuration-locked'] });
   else throw new Error(HELP);
@@ -1528,7 +1545,10 @@ if (process.argv[1] && pathToFileURL(resolve(process.argv[1])).href === import.m
   const args = process.argv.slice(2);
   const stdin = args.includes('--stdin') ? readFileSync(0, 'utf8') : undefined;
   launch_main(args.filter(arg => arg !== '--stdin'), stdin).catch(error => {
-    const failure = args.includes('--browser') ? JSON.stringify({ error: error.message, launch: error.launch || { stage: 'not_started' } }) : error.message;
+    // A request that needs the page to do something first (pair, renew, confirm writing) says so in a field it can read.
+    const need = error.need ? { need: error.need, ...(error.room_id ? { room_id: error.room_id } : {}) } : {};
+    const failure = args.includes('--browser') ? JSON.stringify({ error: error.message, ...need, launch: error.launch || { stage: 'not_started' } })
+      : error.need ? JSON.stringify({ error: error.message, ...need }) : error.message;
     process.stderr.write(`${failure}\n`); process.exitCode = 1;
   });
 }

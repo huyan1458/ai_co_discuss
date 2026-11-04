@@ -18,6 +18,18 @@ import { FreeRoomRunner } from '../runner/free_runner.mjs';
 import { DiscussionService, read_registry } from '../runner/discussion_service.mjs';
 import { save_site_connection } from '../runner/discussion_local.mjs';
 import { software_models } from '../runner/adapters/index.mjs';
+import { device_command, pairing_proof, start_pairing } from '../runner/device_auth.mjs';
+import { software_device } from './passkey_authenticator.mjs';
+
+/** Pair a software browser with this computer the way a phone does after scanning the code. */
+async function pair_test_device(home, machine_id) {
+  const device = await software_device();
+  const { code } = start_pairing(home, { site: 'https://site.test' });
+  const answer = await device_command(home, { site: 'https://site.test', machine_id, device_id: null }, 'device-pair',
+    { public_key: device.public_key, label: 'test', proof: pairing_proof(code, machine_id, device.public_key) });
+  assert.equal(answer.status, 200, answer.body.error);
+  return device;
+}
 const ROOT = fileURLToPath(new URL('..', import.meta.url));
 
 /** Simulate the software control stream, recording every request and process cleanup. */
@@ -234,6 +246,7 @@ test('room files use the saved project and require the authenticated bridge and 
   writeFileSync(join(project, '章节', '第01集报告.md'), '');
   writeFileSync(join(project, '章节', 'node_modules', '报告.md'), '');
   assert.deepEqual((await room_files(f.home, { ...input, query: '报告' })).entries.map(item => item.path), ['报告.md', '章节/第01集报告.md']);
+  assert.deepEqual((await room_files(f.home, { ...input, query: 'baog' })).entries.map(item => item.path), ['报告.md', '章节/第01集报告.md']);
   await assert.rejects(room_files(f.home, { ...input, token: '' }), /控制凭据/);
   await assert.rejects(room_files(f.home, { ...input, token: 'invalid-owner' }), /403/);
   const body = { room_id: config.room, path: '报告.md' };
@@ -1176,18 +1189,23 @@ test('relayed commands are decrypted, pinned to the site and answered encrypted'
   const ephemeral = await crypto.subtle.generateKey({ name: 'ECDH', namedCurve: 'P-256' }, true, ['deriveBits']);
   const key = await relay_cipher(await crypto.subtle.exportKey('jwk', ephemeral.privateKey), machine_key);
   const { kty, crv, x, y } = await crypto.subtle.exportKey('jwk', ephemeral.publicKey);
-  const sealed = await seal(key, { action: 'room-member', payload: { room_id: 'r', action: 'add', name: 'Antigravity' } }, 'command-0000000001');
+  const device = await pair_test_device(home, JSON.parse(readFileSync(join(home, 'machine-links.json'), 'utf8')).sites['https://site.test'].id);
+  const sealed = await seal(key, await device.seal('command-0000000001', { action: 'room-member', payload: { room_id: 'r', action: 'add', name: 'Antigravity' } }), 'command-0000000001');
+  const unsigned = await seal(key, { body: JSON.stringify({ action: 'room-member', payload: { room_id: 'r' }, sent_at: Date.now() }) }, 'command-0000000003');
   commands = [{ id: 'command-0000000001', envelope: { ...sealed, key: { kty, crv, x, y } } },
-    { id: 'command-0000000002', envelope: { ...sealed, key: { kty, crv, x, y } } }];
+    { id: 'command-0000000002', envelope: { ...sealed, key: { kty, crv, x, y } } },
+    { id: 'command-0000000003', envelope: { ...unsigned, key: { kty, crv, x, y } } }];
   const ran = [];
   const running = await relay_commands(home, { wait: 0, run: async request => { ran.push(request); return { status: 200, body: { member: 'Antigravity' } }; } });
   await Promise.all(running);
   assert.equal(calls[1].body.wait, 0);
-  assert.deepEqual(ran, [{ command: 'room-member', input: { room_id: 'r', action: 'add', name: 'Antigravity', site: 'https://site.test', entry: 'web' }, browser: false }],
-    'a command sealed under another id is not run');
+  assert.deepEqual(ran, [{ command: 'room-member', input: { room_id: 'r', action: 'add', name: 'Antigravity', site: 'https://site.test', entry: 'web' }, browser: false, device: device.id }],
+    'a command sealed under another id, or not signed by a paired device, is not run');
   const answer = calls.find(call => call.url.endsWith('/commands/command-0000000001'));
   assert.deepEqual(await unseal(key, answer.body.envelope, 'command-0000000001:response'), { status: 200, body: { member: 'Antigravity' } });
   assert.ok(!calls.some(call => call.url.endsWith('/commands/command-0000000002')));
+  const refused = calls.find(call => call.url.endsWith('/commands/command-0000000003'));
+  assert.match((await unseal(key, refused.body.envelope, 'command-0000000003:response')).body.error, /还没有与电脑配对/);
 });
 
 test('the relay channel reaches only local room routes, as the bridge, and answers compressed and encrypted', async t => {
@@ -1222,7 +1240,8 @@ test('the relay channel reaches only local room routes, as the bridge, and answe
   const key = await relay_cipher(await crypto.subtle.exportKey('jwk', ephemeral.privateKey), link.public_key);
   const { kty, crv, x, y } = await crypto.subtle.exportKey('jwk', ephemeral.publicKey);
   const id = 'relay-request-0000000001';
-  const sealed = await seal(key, { action: 'room-api', payload: { method: 'POST', path: '/api/rooms/abc123/messages', body: { text: '外出' } } }, id);
+  const device = await pair_test_device(home, link.id);
+  const sealed = await seal(key, await device.seal(id, { action: 'room-api', payload: { method: 'POST', path: '/api/rooms/abc123/messages', body: { text: '外出' } } }), id);
   const answer = await answer_request(home, 'https://site.test', link, { id, envelope: { ...sealed, key: { kty, crv, x, y } } }, { fetcher });
   assert.equal(answer.type, 'response');
   assert.equal(answer.envelope.encoding, 'gzip');
@@ -1233,6 +1252,16 @@ test('the relay channel reaches only local room routes, as the bridge, and answe
   await assert.rejects(answer_request(home, 'https://site.test', link, { id: 'relay-request-0000000002', envelope: { ...sealed, key: { kty, crv, x, y } } }, { fetcher }),
     'a request sealed under another id is not run');
   assert.equal(calls.length, 2);
+
+  // Writing to a room whose members may change files here needs a passkey-confirmed grant; stopping it does not.
+  const writing = join(home, 'writing.json');
+  writeFileSync(writing, JSON.stringify({ site: 'http://127.0.0.1:9876', room: 'abc123', token: 't', participants: { Claude: { project_access: 'write' } } }));
+  writeFileSync(join(home, 'rooms.json'), JSON.stringify({ configs: [writing] }));
+  const post = await room_api(home, 'https://site.test', { method: 'POST', path: '/api/rooms/abc123/messages', body: { text: '改代码' } }, { fetcher, device: device.id });
+  assert.equal(post.status, 403);
+  assert.equal(post.body.need, 'write-grant');
+  assert.equal((await room_api(home, 'https://site.test', { method: 'POST', path: '/api/rooms/abc123/stop', body: {} }, { fetcher, device: device.id })).status, 200);
+  assert.equal((await room_api(home, 'https://site.test', { path: '/api/rooms/abc123/messages' }, { fetcher, device: device.id })).status, 200, 'reading needs no grant');
 });
 
 test('the relay channel reads and sends files in parts, and runs computer-room operations with the credentials kept here', async t => {

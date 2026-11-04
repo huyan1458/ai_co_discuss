@@ -688,6 +688,7 @@ export async function run_service(home, output = () => {}) {
     // Loaded lazily: the relay runs launches, and the launch module itself depends on this one.
     const { relay_commands, sync_remote_launches } = await import('./remote_launch.mjs');
     const { start_relay_channels } = await import('./relay_channel.mjs');
+    if ((await import('./admin_account.mjs')).remove_legacy_admin_accounts(home)) log_line('已删除旧版本明文保存的管理员密码文件 admin-accounts.json');
     channels = start_relay_channels(home, { log: log_line, signal: relay_stop.signal });
     let synced_at = 0, swept_at = 0, relay_failed_at = 0;
     // A long-poll of its own: the site answers as soon as another device relays a command, and the next claim starts
@@ -749,7 +750,7 @@ export async function start_service(home) {
     if (existsSync(stop_path)) unlinkSync(stop_path);
     const log = openSync(join(home, 'service.log'), 'a');
     child = spawn(process.execPath, [SCRIPT, 'run'], { detached: true, windowsHide: true,
-      stdio: ['ignore', log, log], env: { ...process.env, DISCUSS_SERVICE_HOME: home } });
+      stdio: ['ignore', log, log], env: { ...persisted_env(), DISCUSS_SERVICE_HOME: home } });
     closeSync(log);
     child.once('error', error => { spawn_error = error; });
     child.unref();
@@ -764,6 +765,29 @@ export async function start_service(home) {
     await sleep(200);
   }
   throw new Error(`讨论服务尚未确认就绪，请查看 ${join(home, 'service.log')}`);
+}
+
+/**
+ * This process's environment with the variables saved in the Windows registry (Machine, then User) laid over it, so a
+ * service started or restarted from a terminal opened before `setx` still sees the new values. PATH is kept as
+ * inherited; a variable only deleted from the registry is not removed. Other systems, or a failed read, keep it as is.
+ */
+export function persisted_env(env = process.env, read = read_persisted_env) {
+  const merged = { ...env };
+  for (const [key, value] of Object.entries(read())) {
+    if (/^path$/i.test(key) || typeof value !== 'string') continue;
+    for (const existing of Object.keys(merged)) if (existing.toLowerCase() === key.toLowerCase()) delete merged[existing];
+    merged[key] = value;
+  }
+  return merged;
+}
+
+function read_persisted_env() {
+  if (process.platform !== 'win32') return {};
+  try {
+    return JSON.parse(powershell("$r=@{}; foreach($s in 'Machine','User'){ $v=[Environment]::GetEnvironmentVariables($s);"
+      + " foreach($k in $v.Keys){ $r[$k]=$v[$k] } }; $r | ConvertTo-Json -Compress") || '{}');
+  } catch { return {}; }
 }
 
 /** Ask the service to pause its runs and exit, then wait for its lock to be released. */

@@ -792,6 +792,12 @@ def require_member(connection, room_id, token, name=None):
     row = connection.execute("SELECT * FROM room_members WHERE room_id=? AND token_hash=? AND status='active'",
                              (room_id, hashed)).fetchone() if hashed else None
     if not row or (name is not None and row["name"] != name):
+        # A borrowed session handed to the local service keeps writing only through the tasks it is given; say so,
+        # since its old manual credential was replaced on purpose, not lost.
+        claimed = connection.execute("SELECT session_mode,access FROM room_members WHERE room_id=? AND name=? AND status='active'",
+                                     (room_id, name)).fetchone() if name and not row else None
+        if claimed and claimed["access"] == "runner" and claimed["session_mode"] == "borrowed":
+            raise PermissionError(f"{name} 已转为本机托管，原手动凭证已停用：请在收到的房间任务里，用任务给出的凭证回答")
         raise PermissionError("成员凭证无效、已停用或与发言身份不符")
     return dict(row)
 

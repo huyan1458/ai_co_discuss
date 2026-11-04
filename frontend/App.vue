@@ -1,10 +1,11 @@
 <script setup>
-import { onBeforeUnmount, provide } from "vue";
+import { computed, onBeforeUnmount, provide } from "vue";
 import { MotionConfig } from "motion-v";
 import { useToast } from "@nuxt/ui/composables";
 import { zh_cn } from "@nuxt/ui/locale";
 import { use_discussion } from "./use-discussion.js";
 import ChannelWorkspace from "./ChannelWorkspace.vue";
+import ConfirmDialog from "./ConfirmDialog.vue";
 
 // Longer notices are cut here; the toaster is for a glance, not for whole server replies.
 const NOTICE_MAX_LENGTH = 120;
@@ -41,12 +42,21 @@ function show_notice({ detail: { level, message } }) {
 }
 document.addEventListener("discuss:notice", show_notice);
 onBeforeUnmount(() => document.removeEventListener("discuss:notice", show_notice));
+
+// A passkey step waits for the user's tap: browsers only allow WebAuthn from a user action, so it runs on "confirm".
+const passkey_prompt = computed(() => discussion.view.value.device?.prompt);
+const passkey_open = computed({ get: () => Boolean(passkey_prompt.value), set: (open) => { if (!open) discussion.bridge.device.prompt_cancel(); } });
+function confirm_passkey() {
+  discussion.bridge.device.prompt_confirm()?.catch((error) => { if (!error?.cancelled) show_notice({ detail: { level: "error", message: error.message } }); });
+}
 </script>
 
 <template>
   <UApp :locale="zh_cn" :tooltip="{ delayDuration: 300 }" :toaster="{ position: 'bottom-right', max: 5 }">
     <MotionConfig :reduced-motion="MOTION_ENABLED ? 'never' : 'always'">
       <ChannelWorkspace />
+      <ConfirmDialog v-if="passkey_prompt" v-model:open="passkey_open" :title="passkey_prompt.title" :description="passkey_prompt.description"
+        :confirm-label="passkey_prompt.confirm_label" @confirm="confirm_passkey" />
     </MotionConfig>
   </UApp>
 </template>

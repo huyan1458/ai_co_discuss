@@ -13,6 +13,8 @@ import { atomic_json } from './files.mjs';
 import { acquire_lock } from './discussion_runner.mjs';
 import { local_settings } from './discussion_setup.mjs';
 import { machine_links, relay_cipher, relayed_command, ROOM_ACTIONS, run_launch_command, unseal } from './remote_launch.mjs';
+import { claim_relayed_command } from './remote_policy.mjs';
+import { DEVICE_ACTIONS, device_command, open_signed_request, write_allowed, write_needed } from './device_auth.mjs';
 
 const RELAY_PROTOCOL = 'codiscuss-relay';
 const BRIDGE_TOKEN_BYTES = 32;
@@ -29,6 +31,9 @@ const HEARTBEAT_LATE_MS = 2 * PING_MS + 5000;
 // A WebSocket frame on the website is at most 1 MiB; leave room for the envelope around the ciphertext.
 const RESPONSE_MAX_BYTES = 700 * 1024;
 const ROOM_API_PATH = /^\/api\/(rooms|folders|revisions)(\/[A-Za-z0-9_.~-]+)*(\?[A-Za-z0-9_.~%=&,:+-]*)?$/;
+const WRITE_ROOM_PATH = /^\/api\/rooms\/([A-Za-z0-9_.~-]+)\//;
+// Members with these levels can change files or run commands on this computer.
+const WRITING_ACCESS = new Set(['write', 'auto', 'full']);
 // Attachment uploads arrive in parts and are sent to the local website whole, as one browser upload would be.
 const UPLOAD_PATH = /^\/api\/rooms\/[A-Za-z0-9_-]+\/attachments(\/[A-Za-z0-9_-]+\/import)?(\?[A-Za-z0-9_.~%=&,:+-]*)?$/;
 const UPLOAD_MAX_BYTES = 20 * 1024 * 1024;
@@ -70,11 +75,17 @@ async function seal_compressed(key, value, label) {
  * Read or write one room route on the local website as this computer's bridge. Only room, folder and revision routes
  * of the local website itself are reachable; the device cannot name another address. Binary content comes back as base64.
  */
-export async function room_api(home, site, payload, { fetcher = fetch } = {}) {
+export async function room_api(home, site, payload, { fetcher = fetch, device } = {}) {
   const { method = 'GET', path, body, token, offset = 0 } = payload || {};
   if (!['GET', 'POST'].includes(method) || typeof path !== 'string' || !ROOM_API_PATH.test(path) || path.includes('..')
       || !Number.isSafeInteger(offset) || offset < 0) {
     return { status: 400, body: { error: '中转请求地址无效' } };
+  }
+  // Writing to a room whose members may change files here needs this device's passkey-confirmed grant; stopping does not.
+  const room = method === 'POST' ? path.match(WRITE_ROOM_PATH)?.[1] : null;
+  if (device !== undefined && room && !/\/(interrupt|stop)(\?|$)/.test(path) && room_writes(home, room) && !write_allowed(home, device, room)) {
+    const needed = write_needed(room);
+    return { status: 403, body: { error: needed.message, need: needed.need, room_id: room } };
   }
   const headers = bridge_headers(home, site);
   if (typeof token === 'string' && token) headers['X-Discussion-Token'] = token;
@@ -87,6 +98,19 @@ export async function room_api(home, site, payload, { fetcher = fetch } = {}) {
   const bytes = Buffer.from(await response.arrayBuffer());
   return { status: response.status, content_type: type, offset, total: bytes.length,
     body_base64: bytes.subarray(offset, offset + RESPONSE_MAX_BYTES).toString('base64') };
+}
+
+/** Whether a room this computer runs has a member allowed to change files or run commands. */
+function room_writes(home, room_id) {
+  const path = join(home, 'rooms.json');
+  const configs = existsSync(path) ? JSON.parse(readFileSync(path, 'utf8')).configs ?? [] : [];
+  for (const config_path of configs) {
+    try {
+      const config = JSON.parse(readFileSync(config_path, 'utf8'));
+      if (config.room === room_id) return Object.values(config.participants || {}).some(profile => WRITING_ACCESS.has(profile?.project_access));
+    } catch { /* A broken configuration starts nothing. */ }
+  }
+  return false;
 }
 
 /** The local website this computer runs. */
@@ -159,15 +183,21 @@ export function computer_command(home, site, action, payload) {
 export async function answer_request(home, site, link, frame, { run = run_launch_command, fetcher, report } = {}) {
   const { id, envelope } = frame;
   const key = await relay_cipher(link.private_key, envelope.key);
-  const request = await unseal(key, envelope, id);
-  let response;
+  const sealed = await unseal(key, envelope, id);
+  let response, request = {};
   try {
+    // Only a paired device's signed request runs; an unpaired browser may only prove a pairing code.
+    const opened = await open_signed_request(home, id, sealed);
+    request = opened.request;
     const { action, payload, target } = request;
-    response = action === 'computer-site' ? { status: 200, body: { site: local_origin(home) } }
-      : action === 'room-api' ? await room_api(home, site, payload, { fetcher })
+    claim_relayed_command(home, id, request.sent_at);
+    const device = opened.device_id;
+    response = DEVICE_ACTIONS.has(action) ? await device_command(home, { site, machine_id: link.id, device_id: device }, action, payload)
+      : action === 'computer-site' ? { status: 200, body: { site: local_origin(home) } }
+      : action === 'room-api' ? await room_api(home, site, payload, { fetcher, device })
       : action === 'room-upload' ? await room_upload(home, site, payload, { fetcher })
-        : await run(target === 'computer' ? computer_command(home, site, action, payload) : relayed_command(site, action, payload));
-  } catch (error) { response = { status: 400, body: { error: error.message } }; }
+        : await run({ ...(target === 'computer' ? computer_command(home, site, action, payload) : relayed_command(site, action, payload)), device });
+  } catch (error) { response = { status: 400, body: { error: error.message, ...(error.need ? { need: error.need } : {}) } }; }
   // Only what kind of request it was and how it ended: never its content or query.
   report?.({ action: request.action, route: typeof request.payload?.path === 'string' ? request.payload.path.split('?')[0] : '', status: response.status });
   return { type: 'response', id, envelope: await seal_compressed(key, response, `${id}:response`) };
@@ -233,6 +263,12 @@ async function hold_channel(home, site, { connected, log, signal }) {
         let frame;
         try { frame = JSON.parse(event.data); } catch { return; }
         if (frame.type !== 'request' || typeof frame.id !== 'string' || !frame.envelope) return;
+        // Disconnecting or re-pairing the website ends this connection at once, not at its next reconnect.
+        const current = machine_links(home).sites[site];
+        if (current?.token !== link.token || current?.private_key?.d !== link.private_key?.d) {
+          log(`${site}: 配对已撤销或更换，关闭中转连接`);
+          return socket.close(1000, 'unpaired');
+        }
         const received = Date.now();
         let kind = { action: '?', route: '', status: 0 };
         try {

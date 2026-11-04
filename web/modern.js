@@ -5938,7 +5938,7 @@ var mf = {
 }), gf = !1;
 function _f(e) {
 	if (gf) return;
-	let t = JSON.parse("[{\"prefix\":\"lucide\",\"icons\":{\"archive\":{\"width\":24,\"height\":24,\"body\":\"<g fill=\\\"none\\\" stroke=\\\"currentColor\\\" stroke-linecap=\\\"round\\\" stroke-linejoin=\\\"round\\\" stroke-width=\\\"2\\\"><rect width=\\\"20\\\" height=\\\"5\\\" x=\\\"2\\\" y=\\\"3\\\" rx=\\\"1\\\"/><path d=\\\"M4 8v11a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8m-10 4h4\\\"/></g>\"},\"archive-restore\":{\"width\":24,\"height\":24,\"body\":\"<g fill=\\\"none\\\" stroke=\\\"currentColor\\\" stroke-linecap=\\\"round\\\" stroke-linejoin=\\\"round\\\" stroke-width=\\\"2\\\"><rect width=\\\"20\\\" height=\\\"5\\\" x=\\\"2\\\" y=\\\"3\\\" rx=\\\"1\\\"/><path d=\\\"M4 8v11a2 2 0 0 0 2 2h2M20 8v11a2 2 0 0 1-2 2h-2m-7-6l3-3l3 3m-3-3v9\\\"/></g>\"},\"arrow-down\":{\"width\":24,\"height\":24,\"body\":\"<path fill=\\\"none\\\" stroke=\\\"currentColor\\\" stroke-linecap=\\\"round\\\" stroke-linejoin=\\\"round\\\" stroke-width=\\\"2\\\" d=\\\"M12 5v14m7-7l-7 7l-7-7\\\"/>\"},\"arrow-left\":{\"width\":24,\"height\":24,\"body\":\"<path fill=\\\"none\\\" stroke=\\\"currentColor\\\" stroke-linecap=\\\"round\\\" stroke-linejoin=\\\"round\\\" stroke-width=\\\"2\\\" d=\\\"m12 19l-7-7l7-7m7 7H5\\\"/>\"},\"arrow-right\":{\"width\":24,\"height\":24,\"body\":\"<path fill=\\\"none\\\" stroke=\\\"currentColor\\\" stroke-linecap=\\\"round\\\" stroke-linejoin=\\\"round\\\" stroke-width=\\\"2\\\" d=\\\"M5 12h14m-7-7l7 7l-7 7\\\"/>\"},\"arrow-up\":{\"width\":24,\"height\":24,\"body\":\"<path fill=\\\"none\\\" stroke=\\\"currentColor\\\" stroke-linecap=\\\"round\\\" stroke-linejoin=\\\"round\\\" stroke-width=\\\"2\\\" d=\\\"m5 12l7-7l7 7m-7 7V5\\\"/>\"},\"arrow-up-right\":{\"width\":24,\"height\":24,\"body\":\"<path fill=\\\"none\\\" stroke=\\\"currentColor\\\" stroke-linecap=\\\"round\\\" stroke-linejoin=\\\"round\\\" stroke-width=\\\"2\\\" d=\\\"M7 7h10v10M7 17L17 7\\\"/>\"},\"bookmark\":{\"width\":24,\"height\":24,\"body\":\"<path fill=\\\"none\\\" stroke=\\\"currentColor\\\" stroke-linecap=\\\"round\\\" stroke-linejoin=\\\"round\\\" stroke-width=\\\"2\\\" d=\\\"M17 3a2 2 0 0 1 2 2v15a1 1 0 0 1-1.496.868l-4.512-2.578a2 2 0 0 0-1.984 0l-4.512 2.578A1 1 0 0 1 5 20V5a2 2 0 0 1 2-2z\\\"/>\"},\"chart-gantt\":{\"width\":24,\"height\":24,\"body\":\"<path fill=\\\"none\\\" stroke=\\\"currentColor\\\" stroke-linecap=\\\"round\\\" stroke-linejoin=\\\"round\\\" stroke-width=\\\"2\\\" d=\\\"M10 6h8m-6 10h6M3 3v16a2 2 0 0 0 2 2h16M8 11h7\\\"/>\"},\"check\":{\"width\":24,\"height\":24,\"body\":\"<path fill=\\\"none\\\" stroke=\\\"currentColor\\\" stroke-linecap=\\\"round\\\" stroke-linejoin=\\\"round\\\" stroke-width=\\\"2\\\" d=\\\"M20 6L9 17l-5-5\\\"/>\"},\"chevron-down\":{\"width\":24,\"height\":24,\"body\":\"<path fill=\\\"none\\\" stroke=\\\"currentColor\\\" stroke-linecap=\\\"round\\\" stroke-linejoin=\\\"round\\\" stroke-width=\\\"2\\\" d=\\\"m6 9l6 6l6-6\\\"/>\"},\"chevron-left\":{\"width\":24,\"height\":24,\"body\":\"<path fill=\\\"none\\\" stroke=\\\"currentColor\\\" stroke-linecap=\\\"round\\\" stroke-linejoin=\\\"round\\\" stroke-width=\\\"2\\\" d=\\\"m15 18l-6-6l6-6\\\"/>\"},\"chevron-right\":{\"width\":24,\"height\":24,\"body\":\"<path fill=\\\"none\\\" stroke=\\\"currentColor\\\" stroke-linecap=\\\"round\\\" stroke-linejoin=\\\"round\\\" stroke-width=\\\"2\\\" d=\\\"m9 18l6-6l-6-6\\\"/>\"},\"chevron-up\":{\"width\":24,\"height\":24,\"body\":\"<path fill=\\\"none\\\" stroke=\\\"currentColor\\\" stroke-linecap=\\\"round\\\" stroke-linejoin=\\\"round\\\" stroke-width=\\\"2\\\" d=\\\"m18 15l-6-6l-6 6\\\"/>\"},\"chevrons-left\":{\"width\":24,\"height\":24,\"body\":\"<path fill=\\\"none\\\" stroke=\\\"currentColor\\\" stroke-linecap=\\\"round\\\" stroke-linejoin=\\\"round\\\" stroke-width=\\\"2\\\" d=\\\"m11 17l-5-5l5-5m7 10l-5-5l5-5\\\"/>\"},\"chevrons-right\":{\"width\":24,\"height\":24,\"body\":\"<path fill=\\\"none\\\" stroke=\\\"currentColor\\\" stroke-linecap=\\\"round\\\" stroke-linejoin=\\\"round\\\" stroke-width=\\\"2\\\" d=\\\"m6 17l5-5l-5-5m7 10l5-5l-5-5\\\"/>\"},\"chevrons-up-down\":{\"width\":24,\"height\":24,\"body\":\"<path fill=\\\"none\\\" stroke=\\\"currentColor\\\" stroke-linecap=\\\"round\\\" stroke-linejoin=\\\"round\\\" stroke-width=\\\"2\\\" d=\\\"m7 15l5 5l5-5M7 9l5-5l5 5\\\"/>\"},\"circle-alert\":{\"width\":24,\"height\":24,\"body\":\"<g fill=\\\"none\\\" stroke=\\\"currentColor\\\" stroke-linecap=\\\"round\\\" stroke-linejoin=\\\"round\\\" stroke-width=\\\"2\\\"><circle cx=\\\"12\\\" cy=\\\"12\\\" r=\\\"10\\\"/><path d=\\\"M12 8v4m0 4h.01\\\"/></g>\"},\"circle-check\":{\"width\":24,\"height\":24,\"body\":\"<g fill=\\\"none\\\" stroke=\\\"currentColor\\\" stroke-linecap=\\\"round\\\" stroke-linejoin=\\\"round\\\" stroke-width=\\\"2\\\"><circle cx=\\\"12\\\" cy=\\\"12\\\" r=\\\"10\\\"/><path d=\\\"m16 9l-5.5 5.5L8 12\\\"/></g>\"},\"circle-slash\":{\"width\":24,\"height\":24,\"body\":\"<g fill=\\\"none\\\" stroke=\\\"currentColor\\\" stroke-linecap=\\\"round\\\" stroke-linejoin=\\\"round\\\" stroke-width=\\\"2\\\"><circle cx=\\\"12\\\" cy=\\\"12\\\" r=\\\"10\\\"/><path d=\\\"m9 15l6-6\\\"/></g>\"},\"circle-stop\":{\"width\":24,\"height\":24,\"body\":\"<g fill=\\\"none\\\" stroke=\\\"currentColor\\\" stroke-linecap=\\\"round\\\" stroke-linejoin=\\\"round\\\" stroke-width=\\\"2\\\"><circle cx=\\\"12\\\" cy=\\\"12\\\" r=\\\"10\\\"/><rect width=\\\"6\\\" height=\\\"6\\\" x=\\\"9\\\" y=\\\"9\\\" rx=\\\"1\\\"/></g>\"},\"circle-x\":{\"width\":24,\"height\":24,\"body\":\"<g fill=\\\"none\\\" stroke=\\\"currentColor\\\" stroke-linecap=\\\"round\\\" stroke-linejoin=\\\"round\\\" stroke-width=\\\"2\\\"><circle cx=\\\"12\\\" cy=\\\"12\\\" r=\\\"10\\\"/><path d=\\\"m15 9l-6 6m0-6l6 6\\\"/></g>\"},\"clipboard-paste\":{\"width\":24,\"height\":24,\"body\":\"<g fill=\\\"none\\\" stroke=\\\"currentColor\\\" stroke-linecap=\\\"round\\\" stroke-linejoin=\\\"round\\\" stroke-width=\\\"2\\\"><path d=\\\"M11 14h10M16 4h2a2 2 0 0 1 2 2v1.344M17 18l4-4l-4-4\\\"/><path d=\\\"M8 4H6a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h12a2 2 0 0 0 1.793-1.113\\\"/><rect width=\\\"8\\\" height=\\\"4\\\" x=\\\"8\\\" y=\\\"2\\\" rx=\\\"1\\\"/></g>\"},\"clock\":{\"width\":24,\"height\":24,\"body\":\"<g fill=\\\"none\\\" stroke=\\\"currentColor\\\" stroke-linecap=\\\"round\\\" stroke-linejoin=\\\"round\\\" stroke-width=\\\"2\\\"><circle cx=\\\"12\\\" cy=\\\"12\\\" r=\\\"10\\\"/><path d=\\\"M12 6v6l4 2\\\"/></g>\"},\"code-xml\":{\"width\":24,\"height\":24,\"body\":\"<path fill=\\\"none\\\" stroke=\\\"currentColor\\\" stroke-linecap=\\\"round\\\" stroke-linejoin=\\\"round\\\" stroke-width=\\\"2\\\" d=\\\"m18 16l4-4l-4-4M6 8l-4 4l4 4m8.5-12l-5 16\\\"/>\"},\"copy\":{\"width\":24,\"height\":24,\"body\":\"<g fill=\\\"none\\\" stroke=\\\"currentColor\\\" stroke-linecap=\\\"round\\\" stroke-linejoin=\\\"round\\\" stroke-width=\\\"2\\\"><rect width=\\\"14\\\" height=\\\"14\\\" x=\\\"8\\\" y=\\\"8\\\" rx=\\\"2\\\" ry=\\\"2\\\"/><path d=\\\"M4 16c-1.1 0-2-.9-2-2V4c0-1.1.9-2 2-2h10c1.1 0 2 .9 2 2\\\"/></g>\"},\"copy-check\":{\"width\":24,\"height\":24,\"body\":\"<g fill=\\\"none\\\" stroke=\\\"currentColor\\\" stroke-linecap=\\\"round\\\" stroke-linejoin=\\\"round\\\" stroke-width=\\\"2\\\"><path d=\\\"m12 15l2 2l4-4\\\"/><rect width=\\\"14\\\" height=\\\"14\\\" x=\\\"8\\\" y=\\\"8\\\" rx=\\\"2\\\" ry=\\\"2\\\"/><path d=\\\"M4 16c-1.1 0-2-.9-2-2V4c0-1.1.9-2 2-2h10c1.1 0 2 .9 2 2\\\"/></g>\"},\"corner-down-left\":{\"width\":24,\"height\":24,\"body\":\"<g fill=\\\"none\\\" stroke=\\\"currentColor\\\" stroke-linecap=\\\"round\\\" stroke-linejoin=\\\"round\\\" stroke-width=\\\"2\\\"><path d=\\\"M20 4v7a4 4 0 0 1-4 4H4\\\"/><path d=\\\"m9 10l-5 5l5 5\\\"/></g>\"},\"corner-down-right\":{\"width\":24,\"height\":24,\"body\":\"<g fill=\\\"none\\\" stroke=\\\"currentColor\\\" stroke-linecap=\\\"round\\\" stroke-linejoin=\\\"round\\\" stroke-width=\\\"2\\\"><path d=\\\"m15 10l5 5l-5 5\\\"/><path d=\\\"M4 4v7a4 4 0 0 0 4 4h12\\\"/></g>\"},\"corner-up-left\":{\"width\":24,\"height\":24,\"body\":\"<g fill=\\\"none\\\" stroke=\\\"currentColor\\\" stroke-linecap=\\\"round\\\" stroke-linejoin=\\\"round\\\" stroke-width=\\\"2\\\"><path d=\\\"M20 20v-7a4 4 0 0 0-4-4H4\\\"/><path d=\\\"M9 14L4 9l5-5\\\"/></g>\"},\"crown\":{\"width\":24,\"height\":24,\"body\":\"<path fill=\\\"none\\\" stroke=\\\"currentColor\\\" stroke-linecap=\\\"round\\\" stroke-linejoin=\\\"round\\\" stroke-width=\\\"2\\\" d=\\\"M11.562 3.266a.5.5 0 0 1 .876 0L15.39 8.87a1 1 0 0 0 1.516.294L21.183 5.5a.5.5 0 0 1 .798.519l-2.834 10.246a1 1 0 0 1-.956.734H5.81a1 1 0 0 1-.957-.734L2.02 6.02a.5.5 0 0 1 .798-.519l4.276 3.664a1 1 0 0 0 1.516-.294zM5 21h14\\\"/>\"},\"database\":{\"width\":24,\"height\":24,\"body\":\"<g fill=\\\"none\\\" stroke=\\\"currentColor\\\" stroke-linecap=\\\"round\\\" stroke-linejoin=\\\"round\\\" stroke-width=\\\"2\\\"><ellipse cx=\\\"12\\\" cy=\\\"5\\\" rx=\\\"9\\\" ry=\\\"3\\\"/><path d=\\\"M3 5v14a9 3 0 0 0 18 0V5\\\"/><path d=\\\"M3 12a9 3 0 0 0 18 0\\\"/></g>\"},\"download\":{\"width\":24,\"height\":24,\"body\":\"<g fill=\\\"none\\\" stroke=\\\"currentColor\\\" stroke-linecap=\\\"round\\\" stroke-linejoin=\\\"round\\\" stroke-width=\\\"2\\\"><path d=\\\"M12 15V3m9 12v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4\\\"/><path d=\\\"m7 10l5 5l5-5\\\"/></g>\"},\"ellipsis\":{\"width\":24,\"height\":24,\"body\":\"<g fill=\\\"none\\\" stroke=\\\"currentColor\\\" stroke-linecap=\\\"round\\\" stroke-linejoin=\\\"round\\\" stroke-width=\\\"2\\\"><circle cx=\\\"12\\\" cy=\\\"12\\\" r=\\\"1\\\"/><circle cx=\\\"19\\\" cy=\\\"12\\\" r=\\\"1\\\"/><circle cx=\\\"5\\\" cy=\\\"12\\\" r=\\\"1\\\"/></g>\"},\"expand\":{\"width\":24,\"height\":24,\"body\":\"<path fill=\\\"none\\\" stroke=\\\"currentColor\\\" stroke-linecap=\\\"round\\\" stroke-linejoin=\\\"round\\\" stroke-width=\\\"2\\\" d=\\\"m15 15l6 6M15 9l6-6m0 13v5h-5m5-13V3h-5M3 16v5h5m-5 0l6-6M3 8V3h5m1 6L3 3\\\"/>\"},\"eye\":{\"width\":24,\"height\":24,\"body\":\"<g fill=\\\"none\\\" stroke=\\\"currentColor\\\" stroke-linecap=\\\"round\\\" stroke-linejoin=\\\"round\\\" stroke-width=\\\"2\\\"><path d=\\\"M2.062 12.348a1 1 0 0 1 0-.696a10.75 10.75 0 0 1 19.876 0a1 1 0 0 1 0 .696a10.75 10.75 0 0 1-19.876 0\\\"/><circle cx=\\\"12\\\" cy=\\\"12\\\" r=\\\"3\\\"/></g>\"},\"eye-off\":{\"width\":24,\"height\":24,\"body\":\"<g fill=\\\"none\\\" stroke=\\\"currentColor\\\" stroke-linecap=\\\"round\\\" stroke-linejoin=\\\"round\\\" stroke-width=\\\"2\\\"><path d=\\\"M10.733 5.076a10.744 10.744 0 0 1 11.205 6.575a1 1 0 0 1 0 .696a10.8 10.8 0 0 1-1.444 2.49m-6.41-.679a3 3 0 0 1-4.242-4.242\\\"/><path d=\\\"M17.479 17.499a10.75 10.75 0 0 1-15.417-5.151a1 1 0 0 1 0-.696a10.75 10.75 0 0 1 4.446-5.143M2 2l20 20\\\"/></g>\"},\"file\":{\"width\":24,\"height\":24,\"body\":\"<g fill=\\\"none\\\" stroke=\\\"currentColor\\\" stroke-linecap=\\\"round\\\" stroke-linejoin=\\\"round\\\" stroke-width=\\\"2\\\"><path d=\\\"M6 22a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h8a2.4 2.4 0 0 1 1.704.706l3.588 3.588A2.4 2.4 0 0 1 20 8v12a2 2 0 0 1-2 2z\\\"/><path d=\\\"M14 2v5a1 1 0 0 0 1 1h5\\\"/></g>\"},\"file-archive\":{\"width\":24,\"height\":24,\"body\":\"<g fill=\\\"none\\\" stroke=\\\"currentColor\\\" stroke-linecap=\\\"round\\\" stroke-linejoin=\\\"round\\\" stroke-width=\\\"2\\\"><path d=\\\"M13.659 22H18a2 2 0 0 0 2-2V8a2.4 2.4 0 0 0-.706-1.706l-3.588-3.588A2.4 2.4 0 0 0 14 2H6a2 2 0 0 0-2 2v11.5\\\"/><path d=\\\"M14 2v5a1 1 0 0 0 1 1h5M8 12v-1m0 7v-2m0-9V6\\\"/><circle cx=\\\"8\\\" cy=\\\"20\\\" r=\\\"2\\\"/></g>\"},\"file-code\":{\"width\":24,\"height\":24,\"body\":\"<g fill=\\\"none\\\" stroke=\\\"currentColor\\\" stroke-linecap=\\\"round\\\" stroke-linejoin=\\\"round\\\" stroke-width=\\\"2\\\"><path d=\\\"M6 22a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h8a2.4 2.4 0 0 1 1.704.706l3.588 3.588A2.4 2.4 0 0 1 20 8v12a2 2 0 0 1-2 2z\\\"/><path d=\\\"M14 2v5a1 1 0 0 0 1 1h5m-10 4.5L8 15l2 2.5m4-5l2 2.5l-2 2.5\\\"/></g>\"},\"file-cog\":{\"width\":24,\"height\":24,\"body\":\"<g fill=\\\"none\\\" stroke=\\\"currentColor\\\" stroke-linecap=\\\"round\\\" stroke-linejoin=\\\"round\\\" stroke-width=\\\"2\\\"><path d=\\\"M15 8a1 1 0 0 1-1-1V2a2.4 2.4 0 0 1 1.704.706l3.588 3.588A2.4 2.4 0 0 1 20 8zm5 0v12a2 2 0 0 1-2 2h-4.182M3.305 19.53l.923-.382M4 10.592V4a2 2 0 0 1 2-2h8M4.228 16.852l-.924-.383m2.548-1.241l-.383-.923m.383 6.467l-.383.924m2.679-6.468l.383-.923m-.001 7.391l-.382-.924m1.625-3.92l.922-.383m-.922 2.679l.922.383\\\"/><circle cx=\\\"7\\\" cy=\\\"18\\\" r=\\\"3\\\"/></g>\"},\"file-image\":{\"width\":24,\"height\":24,\"body\":\"<g fill=\\\"none\\\" stroke=\\\"currentColor\\\" stroke-linecap=\\\"round\\\" stroke-linejoin=\\\"round\\\" stroke-width=\\\"2\\\"><path d=\\\"M6 22a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h8a2.4 2.4 0 0 1 1.704.706l3.588 3.588A2.4 2.4 0 0 1 20 8v12a2 2 0 0 1-2 2z\\\"/><path d=\\\"M14 2v5a1 1 0 0 0 1 1h5\\\"/><circle cx=\\\"10\\\" cy=\\\"12\\\" r=\\\"2\\\"/><path d=\\\"m20 17l-1.296-1.296a2.41 2.41 0 0 0-3.408 0L9 22\\\"/></g>\"},\"file-json\":{\"width\":24,\"height\":24,\"body\":\"<g fill=\\\"none\\\" stroke=\\\"currentColor\\\" stroke-linecap=\\\"round\\\" stroke-linejoin=\\\"round\\\" stroke-width=\\\"2\\\"><path d=\\\"M15 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V7Z\\\"/><path d=\\\"M14 2v4a2 2 0 0 0 2 2h4m-10 4a1 1 0 0 0-1 1v1a1 1 0 0 1-1 1a1 1 0 0 1 1 1v1a1 1 0 0 0 1 1m4 0a1 1 0 0 0 1-1v-1a1 1 0 0 1 1-1a1 1 0 0 1-1-1v-1a1 1 0 0 0-1-1\\\"/></g>\",\"hidden\":true},\"file-lock-2\":{\"width\":24,\"height\":24,\"body\":\"<g fill=\\\"none\\\" stroke=\\\"currentColor\\\" stroke-linecap=\\\"round\\\" stroke-linejoin=\\\"round\\\" stroke-width=\\\"2\\\"><path d=\\\"M4 22h14a2 2 0 0 0 2-2V7l-5-5H6a2 2 0 0 0-2 2v1\\\"/><path d=\\\"M14 2v4a2 2 0 0 0 2 2h4\\\"/><rect width=\\\"8\\\" height=\\\"5\\\" x=\\\"2\\\" y=\\\"13\\\" rx=\\\"1\\\"/><path d=\\\"M8 13v-2a2 2 0 1 0-4 0v2\\\"/></g>\",\"hidden\":true},\"file-terminal\":{\"width\":24,\"height\":24,\"body\":\"<g fill=\\\"none\\\" stroke=\\\"currentColor\\\" stroke-linecap=\\\"round\\\" stroke-linejoin=\\\"round\\\" stroke-width=\\\"2\\\"><path d=\\\"M6 22a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h8a2.4 2.4 0 0 1 1.704.706l3.588 3.588A2.4 2.4 0 0 1 20 8v12a2 2 0 0 1-2 2z\\\"/><path d=\\\"M14 2v5a1 1 0 0 0 1 1h5M8 16l2-2l-2-2m4 6h4\\\"/></g>\"},\"file-text\":{\"width\":24,\"height\":24,\"body\":\"<g fill=\\\"none\\\" stroke=\\\"currentColor\\\" stroke-linecap=\\\"round\\\" stroke-linejoin=\\\"round\\\" stroke-width=\\\"2\\\"><path d=\\\"M6 22a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h8a2.4 2.4 0 0 1 1.704.706l3.588 3.588A2.4 2.4 0 0 1 20 8v12a2 2 0 0 1-2 2z\\\"/><path d=\\\"M14 2v5a1 1 0 0 0 1 1h5M10 9H8m8 4H8m8 4H8\\\"/></g>\"},\"files\":{\"width\":24,\"height\":24,\"body\":\"<g fill=\\\"none\\\" stroke=\\\"currentColor\\\" stroke-linecap=\\\"round\\\" stroke-linejoin=\\\"round\\\" stroke-width=\\\"2\\\"><path d=\\\"M15 2h-4a2 2 0 0 0-2 2v11a2 2 0 0 0 2 2h8a2 2 0 0 0 2-2V8\\\"/><path d=\\\"M16.706 2.706A2.4 2.4 0 0 0 15 2v5a1 1 0 0 0 1 1h5a2.4 2.4 0 0 0-.706-1.706zM5 7a2 2 0 0 0-2 2v11a2 2 0 0 0 2 2h8a2 2 0 0 0 1.732-1\\\"/></g>\"},\"flag\":{\"width\":24,\"height\":24,\"body\":\"<path fill=\\\"none\\\" stroke=\\\"currentColor\\\" stroke-linecap=\\\"round\\\" stroke-linejoin=\\\"round\\\" stroke-width=\\\"2\\\" d=\\\"M4 22V4a1 1 0 0 1 .4-.8A6 6 0 0 1 8 2c3 0 5 2 7.333 2q2 0 3.067-.8A1 1 0 0 1 20 4v10a1 1 0 0 1-.4.8A6 6 0 0 1 16 16c-3 0-5-2-8-2a6 6 0 0 0-4 1.528\\\"/>\"},\"folder\":{\"width\":24,\"height\":24,\"body\":\"<path fill=\\\"none\\\" stroke=\\\"currentColor\\\" stroke-linecap=\\\"round\\\" stroke-linejoin=\\\"round\\\" stroke-width=\\\"2\\\" d=\\\"M20 20a2 2 0 0 0 2-2V8a2 2 0 0 0-2-2h-7.9a2 2 0 0 1-1.69-.9L9.6 3.9A2 2 0 0 0 7.93 3H4a2 2 0 0 0-2 2v13a2 2 0 0 0 2 2Z\\\"/>\"},\"folder-check\":{\"width\":24,\"height\":24,\"body\":\"<g fill=\\\"none\\\" stroke=\\\"currentColor\\\" stroke-linecap=\\\"round\\\" stroke-linejoin=\\\"round\\\" stroke-width=\\\"2\\\"><path d=\\\"M20 20a2 2 0 0 0 2-2V8a2 2 0 0 0-2-2h-7.9a2 2 0 0 1-1.69-.9L9.6 3.9A2 2 0 0 0 7.93 3H4a2 2 0 0 0-2 2v13a2 2 0 0 0 2 2Z\\\"/><path d=\\\"m9 13l2 2l4-4\\\"/></g>\"},\"folder-input\":{\"width\":24,\"height\":24,\"body\":\"<g fill=\\\"none\\\" stroke=\\\"currentColor\\\" stroke-linecap=\\\"round\\\" stroke-linejoin=\\\"round\\\" stroke-width=\\\"2\\\"><path d=\\\"M2 9V5a2 2 0 0 1 2-2h3.9a2 2 0 0 1 1.69.9l.81 1.2a2 2 0 0 0 1.67.9H20a2 2 0 0 1 2 2v10a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2v-1m0-4h10\\\"/><path d=\\\"m9 16l3-3l-3-3\\\"/></g>\"},\"folder-minus\":{\"width\":24,\"height\":24,\"body\":\"<path fill=\\\"none\\\" stroke=\\\"currentColor\\\" stroke-linecap=\\\"round\\\" stroke-linejoin=\\\"round\\\" stroke-width=\\\"2\\\" d=\\\"M9 13h6m5 7a2 2 0 0 0 2-2V8a2 2 0 0 0-2-2h-7.9a2 2 0 0 1-1.69-.9L9.6 3.9A2 2 0 0 0 7.93 3H4a2 2 0 0 0-2 2v13a2 2 0 0 0 2 2Z\\\"/>\"},\"folder-open\":{\"width\":24,\"height\":24,\"body\":\"<path fill=\\\"none\\\" stroke=\\\"currentColor\\\" stroke-linecap=\\\"round\\\" stroke-linejoin=\\\"round\\\" stroke-width=\\\"2\\\" d=\\\"m6 14l1.5-2.9A2 2 0 0 1 9.24 10H20a2 2 0 0 1 1.94 2.5l-1.54 6a2 2 0 0 1-1.95 1.5H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h3.9a2 2 0 0 1 1.69.9l.81 1.2a2 2 0 0 0 1.67.9H18a2 2 0 0 1 2 2v2\\\"/>\"},\"folder-root\":{\"width\":24,\"height\":24,\"body\":\"<g fill=\\\"none\\\" stroke=\\\"currentColor\\\" stroke-linecap=\\\"round\\\" stroke-linejoin=\\\"round\\\" stroke-width=\\\"2\\\"><path d=\\\"M4 20h16a2 2 0 0 0 2-2V8a2 2 0 0 0-2-2h-7.93a2 2 0 0 1-1.66-.9l-.82-1.2A2 2 0 0 0 7.93 3H4a2 2 0 0 0-2 2v13c0 1.1.9 2 2 2\\\"/><circle cx=\\\"12\\\" cy=\\\"13\\\" r=\\\"2\\\"/><path d=\\\"M12 15v5\\\"/></g>\"},\"folder-search\":{\"width\":24,\"height\":24,\"body\":\"<g fill=\\\"none\\\" stroke=\\\"currentColor\\\" stroke-linecap=\\\"round\\\" stroke-linejoin=\\\"round\\\" stroke-width=\\\"2\\\"><path d=\\\"M10.7 20H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h3.9a2 2 0 0 1 1.69.9l.81 1.2a2 2 0 0 0 1.67.9H20a2 2 0 0 1 2 2v4.1M21 21l-1.9-1.9\\\"/><circle cx=\\\"17\\\" cy=\\\"17\\\" r=\\\"3\\\"/></g>\"},\"folders\":{\"width\":24,\"height\":24,\"body\":\"<g fill=\\\"none\\\" stroke=\\\"currentColor\\\" stroke-linecap=\\\"round\\\" stroke-linejoin=\\\"round\\\" stroke-width=\\\"2\\\"><path d=\\\"M20 5a2 2 0 0 1 2 2v7a2 2 0 0 1-2 2H9a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h2.5a1.5 1.5 0 0 1 1.2.6l.6.8a1.5 1.5 0 0 0 1.2.6z\\\"/><path d=\\\"M3 8.268a2 2 0 0 0-1 1.738V19a2 2 0 0 0 2 2h11a2 2 0 0 0 1.732-1\\\"/></g>\"},\"git-branch\":{\"width\":24,\"height\":24,\"body\":\"<g fill=\\\"none\\\" stroke=\\\"currentColor\\\" stroke-linecap=\\\"round\\\" stroke-linejoin=\\\"round\\\" stroke-width=\\\"2\\\"><path d=\\\"M15 6a9 9 0 0 0-9 9V3\\\"/><circle cx=\\\"18\\\" cy=\\\"6\\\" r=\\\"3\\\"/><circle cx=\\\"6\\\" cy=\\\"18\\\" r=\\\"3\\\"/></g>\"},\"grip-vertical\":{\"width\":24,\"height\":24,\"body\":\"<g fill=\\\"none\\\" stroke=\\\"currentColor\\\" stroke-linecap=\\\"round\\\" stroke-linejoin=\\\"round\\\" stroke-width=\\\"2\\\"><circle cx=\\\"9\\\" cy=\\\"12\\\" r=\\\"1\\\"/><circle cx=\\\"9\\\" cy=\\\"5\\\" r=\\\"1\\\"/><circle cx=\\\"9\\\" cy=\\\"19\\\" r=\\\"1\\\"/><circle cx=\\\"15\\\" cy=\\\"12\\\" r=\\\"1\\\"/><circle cx=\\\"15\\\" cy=\\\"5\\\" r=\\\"1\\\"/><circle cx=\\\"15\\\" cy=\\\"19\\\" r=\\\"1\\\"/></g>\"},\"hash\":{\"width\":24,\"height\":24,\"body\":\"<path fill=\\\"none\\\" stroke=\\\"currentColor\\\" stroke-linecap=\\\"round\\\" stroke-linejoin=\\\"round\\\" stroke-width=\\\"2\\\" d=\\\"M4 9h16M4 15h16M10 3L8 21m8-18l-2 18\\\"/>\"},\"headphones\":{\"width\":24,\"height\":24,\"body\":\"<path fill=\\\"none\\\" stroke=\\\"currentColor\\\" stroke-linecap=\\\"round\\\" stroke-linejoin=\\\"round\\\" stroke-width=\\\"2\\\" d=\\\"M3 14h3a2 2 0 0 1 2 2v3a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-7a9 9 0 0 1 18 0v7a2 2 0 0 1-2 2h-1a2 2 0 0 1-2-2v-3a2 2 0 0 1 2-2h3\\\"/>\"},\"history\":{\"width\":24,\"height\":24,\"body\":\"<g fill=\\\"none\\\" stroke=\\\"currentColor\\\" stroke-linecap=\\\"round\\\" stroke-linejoin=\\\"round\\\" stroke-width=\\\"2\\\"><path d=\\\"M3 12a9 9 0 1 0 9-9a9.75 9.75 0 0 0-6.74 2.74L3 8\\\"/><path d=\\\"M3 3v5h5m4-1v5l4 2\\\"/></g>\"},\"image-up\":{\"width\":24,\"height\":24,\"body\":\"<g fill=\\\"none\\\" stroke=\\\"currentColor\\\" stroke-linecap=\\\"round\\\" stroke-linejoin=\\\"round\\\" stroke-width=\\\"2\\\"><path d=\\\"M10.3 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2v10l-3.1-3.1a2 2 0 0 0-2.814.014L6 21\\\"/><path d=\\\"m14 19.5l3-3l3 3M17 22v-5.5\\\"/><circle cx=\\\"9\\\" cy=\\\"9\\\" r=\\\"2\\\"/></g>\"},\"infinity\":{\"width\":24,\"height\":24,\"body\":\"<path fill=\\\"none\\\" stroke=\\\"currentColor\\\" stroke-linecap=\\\"round\\\" stroke-linejoin=\\\"round\\\" stroke-width=\\\"2\\\" d=\\\"M6 16c5 0 7-8 12-8a4 4 0 0 1 0 8c-5 0-7-8-12-8a4 4 0 1 0 0 8\\\"/>\"},\"info\":{\"width\":24,\"height\":24,\"body\":\"<g fill=\\\"none\\\" stroke=\\\"currentColor\\\" stroke-linecap=\\\"round\\\" stroke-linejoin=\\\"round\\\" stroke-width=\\\"2\\\"><circle cx=\\\"12\\\" cy=\\\"12\\\" r=\\\"10\\\"/><path d=\\\"M12 16v-4m0-4h.01\\\"/></g>\"},\"library\":{\"width\":24,\"height\":24,\"body\":\"<path fill=\\\"none\\\" stroke=\\\"currentColor\\\" stroke-linecap=\\\"round\\\" stroke-linejoin=\\\"round\\\" stroke-width=\\\"2\\\" d=\\\"m16 6l4 14M12 6v14M8 8v12M4 4v16\\\"/>\"},\"lightbulb\":{\"width\":24,\"height\":24,\"body\":\"<path fill=\\\"none\\\" stroke=\\\"currentColor\\\" stroke-linecap=\\\"round\\\" stroke-linejoin=\\\"round\\\" stroke-width=\\\"2\\\" d=\\\"M15 14c.2-1 .7-1.7 1.5-2.5c1-.9 1.5-2.2 1.5-3.5A6 6 0 0 0 6 8c0 1 .2 2.2 1.5 3.5c.7.7 1.3 1.5 1.5 2.5m0 4h6m-5 4h4\\\"/>\"},\"link\":{\"width\":24,\"height\":24,\"body\":\"<g fill=\\\"none\\\" stroke=\\\"currentColor\\\" stroke-linecap=\\\"round\\\" stroke-linejoin=\\\"round\\\" stroke-width=\\\"2\\\"><path d=\\\"M10 13a5 5 0 0 0 7.54.54l3-3a5 5 0 0 0-7.07-7.07l-1.72 1.71\\\"/><path d=\\\"M14 11a5 5 0 0 0-7.54-.54l-3 3a5 5 0 0 0 7.07 7.07l1.71-1.71\\\"/></g>\"},\"list-end\":{\"width\":24,\"height\":24,\"body\":\"<g fill=\\\"none\\\" stroke=\\\"currentColor\\\" stroke-linecap=\\\"round\\\" stroke-linejoin=\\\"round\\\" stroke-width=\\\"2\\\"><path d=\\\"M16 5H3m13 7H3m6 7H3m13-3l-3 3l3 3\\\"/><path d=\\\"M21 5v12a2 2 0 0 1-2 2h-6\\\"/></g>\"},\"list-filter\":{\"width\":24,\"height\":24,\"body\":\"<path fill=\\\"none\\\" stroke=\\\"currentColor\\\" stroke-linecap=\\\"round\\\" stroke-linejoin=\\\"round\\\" stroke-width=\\\"2\\\" d=\\\"M2 5h20M6 12h12m-9 7h6\\\"/>\"},\"list-ordered\":{\"width\":24,\"height\":24,\"body\":\"<path fill=\\\"none\\\" stroke=\\\"currentColor\\\" stroke-linecap=\\\"round\\\" stroke-linejoin=\\\"round\\\" stroke-width=\\\"2\\\" d=\\\"M11 5h10m-10 7h10m-10 7h10M4 4h1v5M4 9h2m.5 11H3.4c0-1 2.6-1.925 2.6-3.5a1.5 1.5 0 0 0-2.6-1.02\\\"/>\"},\"loader-circle\":{\"width\":24,\"height\":24,\"body\":\"<path fill=\\\"none\\\" stroke=\\\"currentColor\\\" stroke-linecap=\\\"round\\\" stroke-linejoin=\\\"round\\\" stroke-width=\\\"2\\\" d=\\\"M21 12a9 9 0 1 1-6.219-8.56\\\"/>\"},\"locate-fixed\":{\"width\":24,\"height\":24,\"body\":\"<g fill=\\\"none\\\" stroke=\\\"currentColor\\\" stroke-linecap=\\\"round\\\" stroke-linejoin=\\\"round\\\" stroke-width=\\\"2\\\"><path d=\\\"M2 12h3m14 0h3M12 2v3m0 14v3\\\"/><circle cx=\\\"12\\\" cy=\\\"12\\\" r=\\\"7\\\"/><circle cx=\\\"12\\\" cy=\\\"12\\\" r=\\\"3\\\"/></g>\"},\"lock\":{\"width\":24,\"height\":24,\"body\":\"<g fill=\\\"none\\\" stroke=\\\"currentColor\\\" stroke-linecap=\\\"round\\\" stroke-linejoin=\\\"round\\\" stroke-width=\\\"2\\\"><rect width=\\\"18\\\" height=\\\"11\\\" x=\\\"3\\\" y=\\\"11\\\" rx=\\\"2\\\" ry=\\\"2\\\"/><path d=\\\"M7 11V7a5 5 0 0 1 10 0v4\\\"/></g>\"},\"log-out\":{\"width\":24,\"height\":24,\"body\":\"<path fill=\\\"none\\\" stroke=\\\"currentColor\\\" stroke-linecap=\\\"round\\\" stroke-linejoin=\\\"round\\\" stroke-width=\\\"2\\\" d=\\\"m16 17l5-5l-5-5m5 5H9m0 9H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4\\\"/>\"},\"menu\":{\"width\":24,\"height\":24,\"body\":\"<path fill=\\\"none\\\" stroke=\\\"currentColor\\\" stroke-linecap=\\\"round\\\" stroke-linejoin=\\\"round\\\" stroke-width=\\\"2\\\" d=\\\"M4 5h16M4 12h16M4 19h16\\\"/>\"},\"message-square\":{\"width\":24,\"height\":24,\"body\":\"<path fill=\\\"none\\\" stroke=\\\"currentColor\\\" stroke-linecap=\\\"round\\\" stroke-linejoin=\\\"round\\\" stroke-width=\\\"2\\\" d=\\\"M22 17a2 2 0 0 1-2 2H6.828a2 2 0 0 0-1.414.586l-2.202 2.202A.71.71 0 0 1 2 21.286V5a2 2 0 0 1 2-2h16a2 2 0 0 1 2 2z\\\"/>\"},\"messages-square\":{\"width\":24,\"height\":24,\"body\":\"<path fill=\\\"none\\\" stroke=\\\"currentColor\\\" stroke-linecap=\\\"round\\\" stroke-linejoin=\\\"round\\\" stroke-width=\\\"2\\\" d=\\\"M16 10a2 2 0 0 1-2 2H6.828a2 2 0 0 0-1.414.586l-2.202 2.202A.71.71 0 0 1 2 14.286V4a2 2 0 0 1 2-2h10a2 2 0 0 1 2 2zm4-1a2 2 0 0 1 2 2v10.286a.71.71 0 0 1-1.212.502l-2.202-2.202A2 2 0 0 0 17.172 19H10a2 2 0 0 1-2-2v-1\\\"/>\"},\"mic\":{\"width\":24,\"height\":24,\"body\":\"<g fill=\\\"none\\\" stroke=\\\"currentColor\\\" stroke-linecap=\\\"round\\\" stroke-linejoin=\\\"round\\\" stroke-width=\\\"2\\\"><path d=\\\"M12 19v3m7-12v2a7 7 0 0 1-14 0v-2\\\"/><rect width=\\\"6\\\" height=\\\"13\\\" x=\\\"9\\\" y=\\\"2\\\" rx=\\\"3\\\"/></g>\"},\"minus\":{\"width\":24,\"height\":24,\"body\":\"<path fill=\\\"none\\\" stroke=\\\"currentColor\\\" stroke-linecap=\\\"round\\\" stroke-linejoin=\\\"round\\\" stroke-width=\\\"2\\\" d=\\\"M5 12h14\\\"/>\"},\"monitor\":{\"width\":24,\"height\":24,\"body\":\"<g fill=\\\"none\\\" stroke=\\\"currentColor\\\" stroke-linecap=\\\"round\\\" stroke-linejoin=\\\"round\\\" stroke-width=\\\"2\\\"><rect width=\\\"20\\\" height=\\\"14\\\" x=\\\"2\\\" y=\\\"3\\\" rx=\\\"2\\\"/><path d=\\\"M8 21h8m-4-4v4\\\"/></g>\"},\"moon\":{\"width\":24,\"height\":24,\"body\":\"<path fill=\\\"none\\\" stroke=\\\"currentColor\\\" stroke-linecap=\\\"round\\\" stroke-linejoin=\\\"round\\\" stroke-width=\\\"2\\\" d=\\\"M20.985 12.486a9 9 0 1 1-9.473-9.472c.405-.022.617.46.402.803a6 6 0 0 0 8.268 8.268c.344-.215.825-.004.803.401\\\"/>\"},\"panel-left\":{\"width\":24,\"height\":24,\"body\":\"<g fill=\\\"none\\\" stroke=\\\"currentColor\\\" stroke-linecap=\\\"round\\\" stroke-linejoin=\\\"round\\\" stroke-width=\\\"2\\\"><rect width=\\\"18\\\" height=\\\"18\\\" x=\\\"3\\\" y=\\\"3\\\" rx=\\\"2\\\"/><path d=\\\"M9 3v18\\\"/></g>\"},\"panel-left-close\":{\"width\":24,\"height\":24,\"body\":\"<g fill=\\\"none\\\" stroke=\\\"currentColor\\\" stroke-linecap=\\\"round\\\" stroke-linejoin=\\\"round\\\" stroke-width=\\\"2\\\"><rect width=\\\"18\\\" height=\\\"18\\\" x=\\\"3\\\" y=\\\"3\\\" rx=\\\"2\\\"/><path d=\\\"M9 3v18m7-6l-3-3l3-3\\\"/></g>\"},\"panel-left-open\":{\"width\":24,\"height\":24,\"body\":\"<g fill=\\\"none\\\" stroke=\\\"currentColor\\\" stroke-linecap=\\\"round\\\" stroke-linejoin=\\\"round\\\" stroke-width=\\\"2\\\"><rect width=\\\"18\\\" height=\\\"18\\\" x=\\\"3\\\" y=\\\"3\\\" rx=\\\"2\\\"/><path d=\\\"M9 3v18m5-12l3 3l-3 3\\\"/></g>\"},\"panel-right\":{\"width\":24,\"height\":24,\"body\":\"<g fill=\\\"none\\\" stroke=\\\"currentColor\\\" stroke-linecap=\\\"round\\\" stroke-linejoin=\\\"round\\\" stroke-width=\\\"2\\\"><rect width=\\\"18\\\" height=\\\"18\\\" x=\\\"3\\\" y=\\\"3\\\" rx=\\\"2\\\"/><path d=\\\"M15 3v18\\\"/></g>\"},\"paperclip\":{\"width\":24,\"height\":24,\"body\":\"<path fill=\\\"none\\\" stroke=\\\"currentColor\\\" stroke-linecap=\\\"round\\\" stroke-linejoin=\\\"round\\\" stroke-width=\\\"2\\\" d=\\\"m16 6l-8.414 8.586a2 2 0 0 0 2.829 2.829l8.414-8.586a4 4 0 1 0-5.657-5.657l-8.379 8.551a6 6 0 1 0 8.485 8.485l8.379-8.551\\\"/>\"},\"pause\":{\"width\":24,\"height\":24,\"body\":\"<g fill=\\\"none\\\" stroke=\\\"currentColor\\\" stroke-linecap=\\\"round\\\" stroke-linejoin=\\\"round\\\" stroke-width=\\\"2\\\"><rect width=\\\"5\\\" height=\\\"18\\\" x=\\\"14\\\" y=\\\"3\\\" rx=\\\"1\\\"/><rect width=\\\"5\\\" height=\\\"18\\\" x=\\\"5\\\" y=\\\"3\\\" rx=\\\"1\\\"/></g>\"},\"pencil\":{\"width\":24,\"height\":24,\"body\":\"<path fill=\\\"none\\\" stroke=\\\"currentColor\\\" stroke-linecap=\\\"round\\\" stroke-linejoin=\\\"round\\\" stroke-width=\\\"2\\\" d=\\\"M21.174 6.812a1 1 0 0 0-3.986-3.987L3.842 16.174a2 2 0 0 0-.5.83l-1.321 4.352a.5.5 0 0 0 .623.622l4.353-1.32a2 2 0 0 0 .83-.497zM15 5l4 4\\\"/>\"},\"play\":{\"width\":24,\"height\":24,\"body\":\"<path fill=\\\"none\\\" stroke=\\\"currentColor\\\" stroke-linecap=\\\"round\\\" stroke-linejoin=\\\"round\\\" stroke-width=\\\"2\\\" d=\\\"M5 5a2 2 0 0 1 3.008-1.728l11.997 6.998a2 2 0 0 1 .003 3.458l-12 7A2 2 0 0 1 5 19z\\\"/>\"},\"plug-zap\":{\"width\":24,\"height\":24,\"body\":\"<path fill=\\\"none\\\" stroke=\\\"currentColor\\\" stroke-linecap=\\\"round\\\" stroke-linejoin=\\\"round\\\" stroke-width=\\\"2\\\" d=\\\"M6.3 20.3a2.4 2.4 0 0 0 3.4 0L12 18l-6-6l-2.3 2.3a2.4 2.4 0 0 0 0 3.4ZM2 22l3-3m2.5-5.5L10 11m.5 5.5L13 14m5-11l-4 4h6l-4 4\\\"/>\"},\"plus\":{\"width\":24,\"height\":24,\"body\":\"<path fill=\\\"none\\\" stroke=\\\"currentColor\\\" stroke-linecap=\\\"round\\\" stroke-linejoin=\\\"round\\\" stroke-width=\\\"2\\\" d=\\\"M5 12h14m-7-7v14\\\"/>\"},\"radio\":{\"width\":24,\"height\":24,\"body\":\"<g fill=\\\"none\\\" stroke=\\\"currentColor\\\" stroke-linecap=\\\"round\\\" stroke-linejoin=\\\"round\\\" stroke-width=\\\"2\\\"><path d=\\\"M16.247 7.761a6 6 0 0 1 0 8.478m2.828-11.306a10 10 0 0 1 0 14.134m-14.15 0a10 10 0 0 1 0-14.134m2.828 11.306a6 6 0 0 1 0-8.478\\\"/><circle cx=\\\"12\\\" cy=\\\"12\\\" r=\\\"2\\\"/></g>\"},\"refresh-cw\":{\"width\":24,\"height\":24,\"body\":\"<g fill=\\\"none\\\" stroke=\\\"currentColor\\\" stroke-linecap=\\\"round\\\" stroke-linejoin=\\\"round\\\" stroke-width=\\\"2\\\"><path d=\\\"M3 12a9 9 0 0 1 9-9a9.75 9.75 0 0 1 6.74 2.74L21 8\\\"/><path d=\\\"M21 3v5h-5m5 4a9 9 0 0 1-9 9a9.75 9.75 0 0 1-6.74-2.74L3 16\\\"/><path d=\\\"M8 16H3v5\\\"/></g>\"},\"rocket\":{\"width\":24,\"height\":24,\"body\":\"<g fill=\\\"none\\\" stroke=\\\"currentColor\\\" stroke-linecap=\\\"round\\\" stroke-linejoin=\\\"round\\\" stroke-width=\\\"2\\\"><path d=\\\"M12 15v5s3.03-.55 4-2c1.08-1.62 0-5 0-5M4.5 16.5c-1.5 1.26-2 5-2 5s3.74-.5 5-2c.71-.84.7-2.13-.09-2.91a2.18 2.18 0 0 0-2.91-.09\\\"/><path d=\\\"M9 12a22 22 0 0 1 2-3.95A12.88 12.88 0 0 1 22 2c0 2.72-.78 7.5-6 11a22.4 22.4 0 0 1-4 2z\\\"/><path d=\\\"M9 12H4s.55-3.03 2-4c1.62-1.08 5 .05 5 .05\\\"/></g>\"},\"rotate-ccw\":{\"width\":24,\"height\":24,\"body\":\"<g fill=\\\"none\\\" stroke=\\\"currentColor\\\" stroke-linecap=\\\"round\\\" stroke-linejoin=\\\"round\\\" stroke-width=\\\"2\\\"><path d=\\\"M3 12a9 9 0 1 0 9-9a9.75 9.75 0 0 0-6.74 2.74L3 8\\\"/><path d=\\\"M3 3v5h5\\\"/></g>\"},\"rotate-cw\":{\"width\":24,\"height\":24,\"body\":\"<g fill=\\\"none\\\" stroke=\\\"currentColor\\\" stroke-linecap=\\\"round\\\" stroke-linejoin=\\\"round\\\" stroke-width=\\\"2\\\"><path d=\\\"M21 12a9 9 0 1 1-9-9c2.52 0 4.93 1 6.74 2.74L21 8\\\"/><path d=\\\"M21 3v5h-5\\\"/></g>\"},\"scroll-text\":{\"width\":24,\"height\":24,\"body\":\"<g fill=\\\"none\\\" stroke=\\\"currentColor\\\" stroke-linecap=\\\"round\\\" stroke-linejoin=\\\"round\\\" stroke-width=\\\"2\\\"><path d=\\\"M15 12h-5m5-4h-5m9 9V5a2 2 0 0 0-2-2H4\\\"/><path d=\\\"M8 21h12a2 2 0 0 0 2-2v-1a1 1 0 0 0-1-1H11a1 1 0 0 0-1 1v1a2 2 0 1 1-4 0V5a2 2 0 1 0-4 0v2a1 1 0 0 0 1 1h3\\\"/></g>\"},\"search\":{\"width\":24,\"height\":24,\"body\":\"<g fill=\\\"none\\\" stroke=\\\"currentColor\\\" stroke-linecap=\\\"round\\\" stroke-linejoin=\\\"round\\\" stroke-width=\\\"2\\\"><path d=\\\"m21 21l-4.34-4.34\\\"/><circle cx=\\\"11\\\" cy=\\\"11\\\" r=\\\"8\\\"/></g>\"},\"settings-2\":{\"width\":24,\"height\":24,\"body\":\"<g fill=\\\"none\\\" stroke=\\\"currentColor\\\" stroke-linecap=\\\"round\\\" stroke-linejoin=\\\"round\\\" stroke-width=\\\"2\\\"><path d=\\\"M14 17H5M19 7h-9\\\"/><circle cx=\\\"17\\\" cy=\\\"17\\\" r=\\\"3\\\"/><circle cx=\\\"7\\\" cy=\\\"7\\\" r=\\\"3\\\"/></g>\"},\"shield\":{\"width\":24,\"height\":24,\"body\":\"<path fill=\\\"none\\\" stroke=\\\"currentColor\\\" stroke-linecap=\\\"round\\\" stroke-linejoin=\\\"round\\\" stroke-width=\\\"2\\\" d=\\\"M20 13c0 5-3.5 7.5-7.66 8.95a1 1 0 0 1-.67-.01C7.5 20.5 4 18 4 13V6a1 1 0 0 1 1-1c2 0 4.5-1.2 6.24-2.72a1.17 1.17 0 0 1 1.52 0C14.51 3.81 17 5 19 5a1 1 0 0 1 1 1z\\\"/>\"},\"shield-check\":{\"width\":24,\"height\":24,\"body\":\"<g fill=\\\"none\\\" stroke=\\\"currentColor\\\" stroke-linecap=\\\"round\\\" stroke-linejoin=\\\"round\\\" stroke-width=\\\"2\\\"><path d=\\\"M20 13c0 5-3.5 7.5-7.66 8.95a1 1 0 0 1-.67-.01C7.5 20.5 4 18 4 13V6a1 1 0 0 1 1-1c2 0 4.5-1.2 6.24-2.72a1.17 1.17 0 0 1 1.52 0C14.51 3.81 17 5 19 5a1 1 0 0 1 1 1z\\\"/><path d=\\\"m9 12l2 2l4-4\\\"/></g>\"},\"skip-forward\":{\"width\":24,\"height\":24,\"body\":\"<path fill=\\\"none\\\" stroke=\\\"currentColor\\\" stroke-linecap=\\\"round\\\" stroke-linejoin=\\\"round\\\" stroke-width=\\\"2\\\" d=\\\"M21 4v16M6.029 4.285A2 2 0 0 0 3 6v12a2 2 0 0 0 3.029 1.715l9.997-5.998a2 2 0 0 0 .003-3.432z\\\"/>\"},\"sliders-horizontal\":{\"width\":24,\"height\":24,\"body\":\"<path fill=\\\"none\\\" stroke=\\\"currentColor\\\" stroke-linecap=\\\"round\\\" stroke-linejoin=\\\"round\\\" stroke-width=\\\"2\\\" d=\\\"M10 5H3m9 14H3M14 3v4m2 10v4m5-9h-9m9 7h-5m5-14h-7m-6 5v4m0-2H3\\\"/>\"},\"sparkles\":{\"width\":24,\"height\":24,\"body\":\"<g fill=\\\"none\\\" stroke=\\\"currentColor\\\" stroke-linecap=\\\"round\\\" stroke-linejoin=\\\"round\\\" stroke-width=\\\"2\\\"><path d=\\\"M11.017 2.814a1 1 0 0 1 1.966 0l1.051 5.558a2 2 0 0 0 1.594 1.594l5.558 1.051a1 1 0 0 1 0 1.966l-5.558 1.051a2 2 0 0 0-1.594 1.594l-1.051 5.558a1 1 0 0 1-1.966 0l-1.051-5.558a2 2 0 0 0-1.594-1.594l-5.558-1.051a1 1 0 0 1 0-1.966l5.558-1.051a2 2 0 0 0 1.594-1.594zM20 2v4m2-2h-4\\\"/><circle cx=\\\"4\\\" cy=\\\"20\\\" r=\\\"2\\\"/></g>\"},\"square\":{\"width\":24,\"height\":24,\"body\":\"<rect width=\\\"18\\\" height=\\\"18\\\" x=\\\"3\\\" y=\\\"3\\\" fill=\\\"none\\\" stroke=\\\"currentColor\\\" stroke-linecap=\\\"round\\\" stroke-linejoin=\\\"round\\\" stroke-width=\\\"2\\\" rx=\\\"2\\\"/>\"},\"square-pen\":{\"width\":24,\"height\":24,\"body\":\"<g fill=\\\"none\\\" stroke=\\\"currentColor\\\" stroke-linecap=\\\"round\\\" stroke-linejoin=\\\"round\\\" stroke-width=\\\"2\\\"><path d=\\\"M12 3H5a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7\\\"/><path d=\\\"M18.375 2.625a1 1 0 0 1 3 3l-9.013 9.014a2 2 0 0 1-.853.505l-2.873.84a.5.5 0 0 1-.62-.62l.84-2.873a2 2 0 0 1 .506-.852z\\\"/></g>\"},\"star\":{\"width\":24,\"height\":24,\"body\":\"<path fill=\\\"none\\\" stroke=\\\"currentColor\\\" stroke-linecap=\\\"round\\\" stroke-linejoin=\\\"round\\\" stroke-width=\\\"2\\\" d=\\\"M11.525 2.295a.53.53 0 0 1 .95 0l2.31 4.679a2.12 2.12 0 0 0 1.595 1.16l5.166.756a.53.53 0 0 1 .294.904l-3.736 3.638a2.12 2.12 0 0 0-.611 1.878l.882 5.14a.53.53 0 0 1-.771.56l-4.618-2.428a2.12 2.12 0 0 0-1.973 0L6.396 21.01a.53.53 0 0 1-.77-.56l.881-5.139a2.12 2.12 0 0 0-.611-1.879L2.16 9.795a.53.53 0 0 1 .294-.906l5.165-.755a2.12 2.12 0 0 0 1.597-1.16z\\\"/>\"},\"sun\":{\"width\":24,\"height\":24,\"body\":\"<g fill=\\\"none\\\" stroke=\\\"currentColor\\\" stroke-linecap=\\\"round\\\" stroke-linejoin=\\\"round\\\" stroke-width=\\\"2\\\"><circle cx=\\\"12\\\" cy=\\\"12\\\" r=\\\"4\\\"/><path d=\\\"M12 2v2m0 16v2M4.93 4.93l1.41 1.41m11.32 11.32l1.41 1.41M2 12h2m16 0h2M6.34 17.66l-1.41 1.41M19.07 4.93l-1.41 1.41\\\"/></g>\"},\"target\":{\"width\":24,\"height\":24,\"body\":\"<g fill=\\\"none\\\" stroke=\\\"currentColor\\\" stroke-linecap=\\\"round\\\" stroke-linejoin=\\\"round\\\" stroke-width=\\\"2\\\"><circle cx=\\\"12\\\" cy=\\\"12\\\" r=\\\"10\\\"/><circle cx=\\\"12\\\" cy=\\\"12\\\" r=\\\"6\\\"/><circle cx=\\\"12\\\" cy=\\\"12\\\" r=\\\"2\\\"/></g>\"},\"thumbs-down\":{\"width\":24,\"height\":24,\"body\":\"<path fill=\\\"none\\\" stroke=\\\"currentColor\\\" stroke-linecap=\\\"round\\\" stroke-linejoin=\\\"round\\\" stroke-width=\\\"2\\\" d=\\\"M9 18.12L10 14H4.17a2 2 0 0 1-1.92-2.56l2.33-8A2 2 0 0 1 6.5 2H20a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2h-2.76a2 2 0 0 0-1.79 1.11L12 22a3.13 3.13 0 0 1-3-3.88M17 14V2\\\"/>\"},\"thumbs-up\":{\"width\":24,\"height\":24,\"body\":\"<path fill=\\\"none\\\" stroke=\\\"currentColor\\\" stroke-linecap=\\\"round\\\" stroke-linejoin=\\\"round\\\" stroke-width=\\\"2\\\" d=\\\"M15 5.88L14 10h5.83a2 2 0 0 1 1.92 2.56l-2.33 8A2 2 0 0 1 17.5 22H4a2 2 0 0 1-2-2v-8a2 2 0 0 1 2-2h2.76a2 2 0 0 0 1.79-1.11L12 2a3.13 3.13 0 0 1 3 3.88M7 10v12\\\"/>\"},\"trash-2\":{\"width\":24,\"height\":24,\"body\":\"<path fill=\\\"none\\\" stroke=\\\"currentColor\\\" stroke-linecap=\\\"round\\\" stroke-linejoin=\\\"round\\\" stroke-width=\\\"2\\\" d=\\\"M10 11v6m4-6v6m5-11v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6M3 6h18M8 6V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2\\\"/>\"},\"triangle-alert\":{\"width\":24,\"height\":24,\"body\":\"<path fill=\\\"none\\\" stroke=\\\"currentColor\\\" stroke-linecap=\\\"round\\\" stroke-linejoin=\\\"round\\\" stroke-width=\\\"2\\\" d=\\\"m21.73 18l-8-14a2 2 0 0 0-3.48 0l-8 14A2 2 0 0 0 4 21h16a2 2 0 0 0 1.73-3M12 9v4m0 4h.01\\\"/>\"},\"undo-2\":{\"width\":24,\"height\":24,\"body\":\"<g fill=\\\"none\\\" stroke=\\\"currentColor\\\" stroke-linecap=\\\"round\\\" stroke-linejoin=\\\"round\\\" stroke-width=\\\"2\\\"><path d=\\\"M9 14L4 9l5-5\\\"/><path d=\\\"M4 9h10.5a5.5 5.5 0 0 1 5.5 5.5a5.5 5.5 0 0 1-5.5 5.5H11\\\"/></g>\"},\"upload\":{\"width\":24,\"height\":24,\"body\":\"<path fill=\\\"none\\\" stroke=\\\"currentColor\\\" stroke-linecap=\\\"round\\\" stroke-linejoin=\\\"round\\\" stroke-width=\\\"2\\\" d=\\\"M12 3v12m5-7l-5-5l-5 5m14 7v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4\\\"/>\"},\"user-pen\":{\"width\":24,\"height\":24,\"body\":\"<g fill=\\\"none\\\" stroke=\\\"currentColor\\\" stroke-linecap=\\\"round\\\" stroke-linejoin=\\\"round\\\" stroke-width=\\\"2\\\"><path d=\\\"M11.5 15H7a4 4 0 0 0-4 4v2m18.378-4.374a1 1 0 0 0-3.004-3.004l-4.01 4.012a2 2 0 0 0-.506.854l-.837 2.87a.5.5 0 0 0 .62.62l2.87-.837a2 2 0 0 0 .854-.506z\\\"/><circle cx=\\\"10\\\" cy=\\\"7\\\" r=\\\"4\\\"/></g>\"},\"user-plus\":{\"width\":24,\"height\":24,\"body\":\"<g fill=\\\"none\\\" stroke=\\\"currentColor\\\" stroke-linecap=\\\"round\\\" stroke-linejoin=\\\"round\\\" stroke-width=\\\"2\\\"><path d=\\\"M16 21v-2a4 4 0 0 0-4-4H6a4 4 0 0 0-4 4v2\\\"/><circle cx=\\\"9\\\" cy=\\\"7\\\" r=\\\"4\\\"/><path d=\\\"M19 8v6m3-3h-6\\\"/></g>\"},\"user-round-x\":{\"width\":24,\"height\":24,\"body\":\"<g fill=\\\"none\\\" stroke=\\\"currentColor\\\" stroke-linecap=\\\"round\\\" stroke-linejoin=\\\"round\\\" stroke-width=\\\"2\\\"><path d=\\\"m16.5 16.5l5 5M2 21a8 8 0 0 1 11.531-7.18M21.5 16.5l-5 5\\\"/><circle cx=\\\"10\\\" cy=\\\"8\\\" r=\\\"5\\\"/></g>\"},\"users\":{\"width\":24,\"height\":24,\"body\":\"<g fill=\\\"none\\\" stroke=\\\"currentColor\\\" stroke-linecap=\\\"round\\\" stroke-linejoin=\\\"round\\\" stroke-width=\\\"2\\\"><path d=\\\"M16 21v-2a4 4 0 0 0-4-4H6a4 4 0 0 0-4 4v2M16 3.128a4 4 0 0 1 0 7.744M22 21v-2a4 4 0 0 0-3-3.87\\\"/><circle cx=\\\"9\\\" cy=\\\"7\\\" r=\\\"4\\\"/></g>\"},\"volume-2\":{\"width\":24,\"height\":24,\"body\":\"<path fill=\\\"none\\\" stroke=\\\"currentColor\\\" stroke-linecap=\\\"round\\\" stroke-linejoin=\\\"round\\\" stroke-width=\\\"2\\\" d=\\\"M11 4.702a.705.705 0 0 0-1.203-.498L6.413 7.587A1.4 1.4 0 0 1 5.416 8H3a1 1 0 0 0-1 1v6a1 1 0 0 0 1 1h2.416a1.4 1.4 0 0 1 .997.413l3.383 3.384A.705.705 0 0 0 11 19.298zM16 9a5 5 0 0 1 0 6m3.364 3.364a9 9 0 0 0 0-12.728\\\"/>\"},\"workflow\":{\"width\":24,\"height\":24,\"body\":\"<g fill=\\\"none\\\" stroke=\\\"currentColor\\\" stroke-linecap=\\\"round\\\" stroke-linejoin=\\\"round\\\" stroke-width=\\\"2\\\"><rect width=\\\"8\\\" height=\\\"8\\\" x=\\\"3\\\" y=\\\"3\\\" rx=\\\"2\\\"/><path d=\\\"M7 11v4a2 2 0 0 0 2 2h4\\\"/><rect width=\\\"8\\\" height=\\\"8\\\" x=\\\"13\\\" y=\\\"13\\\" rx=\\\"2\\\"/></g>\"},\"wrap-text\":{\"width\":24,\"height\":24,\"body\":\"<g fill=\\\"none\\\" stroke=\\\"currentColor\\\" stroke-linecap=\\\"round\\\" stroke-linejoin=\\\"round\\\" stroke-width=\\\"2\\\"><path d=\\\"m16 16l-2 2l2 2\\\"/><path d=\\\"M3 12h15a3 3 0 1 1 0 6h-4M3 18h7M3 6h18\\\"/></g>\",\"hidden\":true},\"x\":{\"width\":24,\"height\":24,\"body\":\"<path fill=\\\"none\\\" stroke=\\\"currentColor\\\" stroke-linecap=\\\"round\\\" stroke-linejoin=\\\"round\\\" stroke-width=\\\"2\\\" d=\\\"M18 6L6 18M6 6l12 12\\\"/>\"},\"zap\":{\"width\":24,\"height\":24,\"body\":\"<path fill=\\\"none\\\" stroke=\\\"currentColor\\\" stroke-linecap=\\\"round\\\" stroke-linejoin=\\\"round\\\" stroke-width=\\\"2\\\" d=\\\"M15.914 4a1.5 1.5 0 0 0-2.474-1.561l-9 9A1.5 1.5 0 0 0 5.5 14h4.002a.5.5 0 0 1 .471.666L8.086 20a1.5 1.5 0 0 0 2.475 1.56l9-9A1.5 1.5 0 0 0 18.5 10h-3.997a.5.5 0 0 1-.472-.667z\\\"/>\"}}}]");
+	let t = JSON.parse("[{\"prefix\":\"lucide\",\"icons\":{\"archive\":{\"width\":24,\"height\":24,\"body\":\"<g fill=\\\"none\\\" stroke=\\\"currentColor\\\" stroke-linecap=\\\"round\\\" stroke-linejoin=\\\"round\\\" stroke-width=\\\"2\\\"><rect width=\\\"20\\\" height=\\\"5\\\" x=\\\"2\\\" y=\\\"3\\\" rx=\\\"1\\\"/><path d=\\\"M4 8v11a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8m-10 4h4\\\"/></g>\"},\"archive-restore\":{\"width\":24,\"height\":24,\"body\":\"<g fill=\\\"none\\\" stroke=\\\"currentColor\\\" stroke-linecap=\\\"round\\\" stroke-linejoin=\\\"round\\\" stroke-width=\\\"2\\\"><rect width=\\\"20\\\" height=\\\"5\\\" x=\\\"2\\\" y=\\\"3\\\" rx=\\\"1\\\"/><path d=\\\"M4 8v11a2 2 0 0 0 2 2h2M20 8v11a2 2 0 0 1-2 2h-2m-7-6l3-3l3 3m-3-3v9\\\"/></g>\"},\"arrow-down\":{\"width\":24,\"height\":24,\"body\":\"<path fill=\\\"none\\\" stroke=\\\"currentColor\\\" stroke-linecap=\\\"round\\\" stroke-linejoin=\\\"round\\\" stroke-width=\\\"2\\\" d=\\\"M12 5v14m7-7l-7 7l-7-7\\\"/>\"},\"arrow-left\":{\"width\":24,\"height\":24,\"body\":\"<path fill=\\\"none\\\" stroke=\\\"currentColor\\\" stroke-linecap=\\\"round\\\" stroke-linejoin=\\\"round\\\" stroke-width=\\\"2\\\" d=\\\"m12 19l-7-7l7-7m7 7H5\\\"/>\"},\"arrow-right\":{\"width\":24,\"height\":24,\"body\":\"<path fill=\\\"none\\\" stroke=\\\"currentColor\\\" stroke-linecap=\\\"round\\\" stroke-linejoin=\\\"round\\\" stroke-width=\\\"2\\\" d=\\\"M5 12h14m-7-7l7 7l-7 7\\\"/>\"},\"arrow-up\":{\"width\":24,\"height\":24,\"body\":\"<path fill=\\\"none\\\" stroke=\\\"currentColor\\\" stroke-linecap=\\\"round\\\" stroke-linejoin=\\\"round\\\" stroke-width=\\\"2\\\" d=\\\"m5 12l7-7l7 7m-7 7V5\\\"/>\"},\"arrow-up-right\":{\"width\":24,\"height\":24,\"body\":\"<path fill=\\\"none\\\" stroke=\\\"currentColor\\\" stroke-linecap=\\\"round\\\" stroke-linejoin=\\\"round\\\" stroke-width=\\\"2\\\" d=\\\"M7 7h10v10M7 17L17 7\\\"/>\"},\"bookmark\":{\"width\":24,\"height\":24,\"body\":\"<path fill=\\\"none\\\" stroke=\\\"currentColor\\\" stroke-linecap=\\\"round\\\" stroke-linejoin=\\\"round\\\" stroke-width=\\\"2\\\" d=\\\"M17 3a2 2 0 0 1 2 2v15a1 1 0 0 1-1.496.868l-4.512-2.578a2 2 0 0 0-1.984 0l-4.512 2.578A1 1 0 0 1 5 20V5a2 2 0 0 1 2-2z\\\"/>\"},\"chart-gantt\":{\"width\":24,\"height\":24,\"body\":\"<path fill=\\\"none\\\" stroke=\\\"currentColor\\\" stroke-linecap=\\\"round\\\" stroke-linejoin=\\\"round\\\" stroke-width=\\\"2\\\" d=\\\"M10 6h8m-6 10h6M3 3v16a2 2 0 0 0 2 2h16M8 11h7\\\"/>\"},\"check\":{\"width\":24,\"height\":24,\"body\":\"<path fill=\\\"none\\\" stroke=\\\"currentColor\\\" stroke-linecap=\\\"round\\\" stroke-linejoin=\\\"round\\\" stroke-width=\\\"2\\\" d=\\\"M20 6L9 17l-5-5\\\"/>\"},\"chevron-down\":{\"width\":24,\"height\":24,\"body\":\"<path fill=\\\"none\\\" stroke=\\\"currentColor\\\" stroke-linecap=\\\"round\\\" stroke-linejoin=\\\"round\\\" stroke-width=\\\"2\\\" d=\\\"m6 9l6 6l6-6\\\"/>\"},\"chevron-left\":{\"width\":24,\"height\":24,\"body\":\"<path fill=\\\"none\\\" stroke=\\\"currentColor\\\" stroke-linecap=\\\"round\\\" stroke-linejoin=\\\"round\\\" stroke-width=\\\"2\\\" d=\\\"m15 18l-6-6l6-6\\\"/>\"},\"chevron-right\":{\"width\":24,\"height\":24,\"body\":\"<path fill=\\\"none\\\" stroke=\\\"currentColor\\\" stroke-linecap=\\\"round\\\" stroke-linejoin=\\\"round\\\" stroke-width=\\\"2\\\" d=\\\"m9 18l6-6l-6-6\\\"/>\"},\"chevron-up\":{\"width\":24,\"height\":24,\"body\":\"<path fill=\\\"none\\\" stroke=\\\"currentColor\\\" stroke-linecap=\\\"round\\\" stroke-linejoin=\\\"round\\\" stroke-width=\\\"2\\\" d=\\\"m18 15l-6-6l-6 6\\\"/>\"},\"chevrons-left\":{\"width\":24,\"height\":24,\"body\":\"<path fill=\\\"none\\\" stroke=\\\"currentColor\\\" stroke-linecap=\\\"round\\\" stroke-linejoin=\\\"round\\\" stroke-width=\\\"2\\\" d=\\\"m11 17l-5-5l5-5m7 10l-5-5l5-5\\\"/>\"},\"chevrons-right\":{\"width\":24,\"height\":24,\"body\":\"<path fill=\\\"none\\\" stroke=\\\"currentColor\\\" stroke-linecap=\\\"round\\\" stroke-linejoin=\\\"round\\\" stroke-width=\\\"2\\\" d=\\\"m6 17l5-5l-5-5m7 10l5-5l-5-5\\\"/>\"},\"chevrons-up-down\":{\"width\":24,\"height\":24,\"body\":\"<path fill=\\\"none\\\" stroke=\\\"currentColor\\\" stroke-linecap=\\\"round\\\" stroke-linejoin=\\\"round\\\" stroke-width=\\\"2\\\" d=\\\"m7 15l5 5l5-5M7 9l5-5l5 5\\\"/>\"},\"circle-alert\":{\"width\":24,\"height\":24,\"body\":\"<g fill=\\\"none\\\" stroke=\\\"currentColor\\\" stroke-linecap=\\\"round\\\" stroke-linejoin=\\\"round\\\" stroke-width=\\\"2\\\"><circle cx=\\\"12\\\" cy=\\\"12\\\" r=\\\"10\\\"/><path d=\\\"M12 8v4m0 4h.01\\\"/></g>\"},\"circle-check\":{\"width\":24,\"height\":24,\"body\":\"<g fill=\\\"none\\\" stroke=\\\"currentColor\\\" stroke-linecap=\\\"round\\\" stroke-linejoin=\\\"round\\\" stroke-width=\\\"2\\\"><circle cx=\\\"12\\\" cy=\\\"12\\\" r=\\\"10\\\"/><path d=\\\"m16 9l-5.5 5.5L8 12\\\"/></g>\"},\"circle-slash\":{\"width\":24,\"height\":24,\"body\":\"<g fill=\\\"none\\\" stroke=\\\"currentColor\\\" stroke-linecap=\\\"round\\\" stroke-linejoin=\\\"round\\\" stroke-width=\\\"2\\\"><circle cx=\\\"12\\\" cy=\\\"12\\\" r=\\\"10\\\"/><path d=\\\"m9 15l6-6\\\"/></g>\"},\"circle-stop\":{\"width\":24,\"height\":24,\"body\":\"<g fill=\\\"none\\\" stroke=\\\"currentColor\\\" stroke-linecap=\\\"round\\\" stroke-linejoin=\\\"round\\\" stroke-width=\\\"2\\\"><circle cx=\\\"12\\\" cy=\\\"12\\\" r=\\\"10\\\"/><rect width=\\\"6\\\" height=\\\"6\\\" x=\\\"9\\\" y=\\\"9\\\" rx=\\\"1\\\"/></g>\"},\"circle-x\":{\"width\":24,\"height\":24,\"body\":\"<g fill=\\\"none\\\" stroke=\\\"currentColor\\\" stroke-linecap=\\\"round\\\" stroke-linejoin=\\\"round\\\" stroke-width=\\\"2\\\"><circle cx=\\\"12\\\" cy=\\\"12\\\" r=\\\"10\\\"/><path d=\\\"m15 9l-6 6m0-6l6 6\\\"/></g>\"},\"clipboard-paste\":{\"width\":24,\"height\":24,\"body\":\"<g fill=\\\"none\\\" stroke=\\\"currentColor\\\" stroke-linecap=\\\"round\\\" stroke-linejoin=\\\"round\\\" stroke-width=\\\"2\\\"><path d=\\\"M11 14h10M16 4h2a2 2 0 0 1 2 2v1.344M17 18l4-4l-4-4\\\"/><path d=\\\"M8 4H6a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h12a2 2 0 0 0 1.793-1.113\\\"/><rect width=\\\"8\\\" height=\\\"4\\\" x=\\\"8\\\" y=\\\"2\\\" rx=\\\"1\\\"/></g>\"},\"clock\":{\"width\":24,\"height\":24,\"body\":\"<g fill=\\\"none\\\" stroke=\\\"currentColor\\\" stroke-linecap=\\\"round\\\" stroke-linejoin=\\\"round\\\" stroke-width=\\\"2\\\"><circle cx=\\\"12\\\" cy=\\\"12\\\" r=\\\"10\\\"/><path d=\\\"M12 6v6l4 2\\\"/></g>\"},\"code-xml\":{\"width\":24,\"height\":24,\"body\":\"<path fill=\\\"none\\\" stroke=\\\"currentColor\\\" stroke-linecap=\\\"round\\\" stroke-linejoin=\\\"round\\\" stroke-width=\\\"2\\\" d=\\\"m18 16l4-4l-4-4M6 8l-4 4l4 4m8.5-12l-5 16\\\"/>\"},\"copy\":{\"width\":24,\"height\":24,\"body\":\"<g fill=\\\"none\\\" stroke=\\\"currentColor\\\" stroke-linecap=\\\"round\\\" stroke-linejoin=\\\"round\\\" stroke-width=\\\"2\\\"><rect width=\\\"14\\\" height=\\\"14\\\" x=\\\"8\\\" y=\\\"8\\\" rx=\\\"2\\\" ry=\\\"2\\\"/><path d=\\\"M4 16c-1.1 0-2-.9-2-2V4c0-1.1.9-2 2-2h10c1.1 0 2 .9 2 2\\\"/></g>\"},\"copy-check\":{\"width\":24,\"height\":24,\"body\":\"<g fill=\\\"none\\\" stroke=\\\"currentColor\\\" stroke-linecap=\\\"round\\\" stroke-linejoin=\\\"round\\\" stroke-width=\\\"2\\\"><path d=\\\"m12 15l2 2l4-4\\\"/><rect width=\\\"14\\\" height=\\\"14\\\" x=\\\"8\\\" y=\\\"8\\\" rx=\\\"2\\\" ry=\\\"2\\\"/><path d=\\\"M4 16c-1.1 0-2-.9-2-2V4c0-1.1.9-2 2-2h10c1.1 0 2 .9 2 2\\\"/></g>\"},\"corner-down-left\":{\"width\":24,\"height\":24,\"body\":\"<g fill=\\\"none\\\" stroke=\\\"currentColor\\\" stroke-linecap=\\\"round\\\" stroke-linejoin=\\\"round\\\" stroke-width=\\\"2\\\"><path d=\\\"M20 4v7a4 4 0 0 1-4 4H4\\\"/><path d=\\\"m9 10l-5 5l5 5\\\"/></g>\"},\"corner-down-right\":{\"width\":24,\"height\":24,\"body\":\"<g fill=\\\"none\\\" stroke=\\\"currentColor\\\" stroke-linecap=\\\"round\\\" stroke-linejoin=\\\"round\\\" stroke-width=\\\"2\\\"><path d=\\\"m15 10l5 5l-5 5\\\"/><path d=\\\"M4 4v7a4 4 0 0 0 4 4h12\\\"/></g>\"},\"corner-up-left\":{\"width\":24,\"height\":24,\"body\":\"<g fill=\\\"none\\\" stroke=\\\"currentColor\\\" stroke-linecap=\\\"round\\\" stroke-linejoin=\\\"round\\\" stroke-width=\\\"2\\\"><path d=\\\"M20 20v-7a4 4 0 0 0-4-4H4\\\"/><path d=\\\"M9 14L4 9l5-5\\\"/></g>\"},\"crown\":{\"width\":24,\"height\":24,\"body\":\"<path fill=\\\"none\\\" stroke=\\\"currentColor\\\" stroke-linecap=\\\"round\\\" stroke-linejoin=\\\"round\\\" stroke-width=\\\"2\\\" d=\\\"M11.562 3.266a.5.5 0 0 1 .876 0L15.39 8.87a1 1 0 0 0 1.516.294L21.183 5.5a.5.5 0 0 1 .798.519l-2.834 10.246a1 1 0 0 1-.956.734H5.81a1 1 0 0 1-.957-.734L2.02 6.02a.5.5 0 0 1 .798-.519l4.276 3.664a1 1 0 0 0 1.516-.294zM5 21h14\\\"/>\"},\"database\":{\"width\":24,\"height\":24,\"body\":\"<g fill=\\\"none\\\" stroke=\\\"currentColor\\\" stroke-linecap=\\\"round\\\" stroke-linejoin=\\\"round\\\" stroke-width=\\\"2\\\"><ellipse cx=\\\"12\\\" cy=\\\"5\\\" rx=\\\"9\\\" ry=\\\"3\\\"/><path d=\\\"M3 5v14a9 3 0 0 0 18 0V5\\\"/><path d=\\\"M3 12a9 3 0 0 0 18 0\\\"/></g>\"},\"download\":{\"width\":24,\"height\":24,\"body\":\"<g fill=\\\"none\\\" stroke=\\\"currentColor\\\" stroke-linecap=\\\"round\\\" stroke-linejoin=\\\"round\\\" stroke-width=\\\"2\\\"><path d=\\\"M12 15V3m9 12v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4\\\"/><path d=\\\"m7 10l5 5l5-5\\\"/></g>\"},\"ellipsis\":{\"width\":24,\"height\":24,\"body\":\"<g fill=\\\"none\\\" stroke=\\\"currentColor\\\" stroke-linecap=\\\"round\\\" stroke-linejoin=\\\"round\\\" stroke-width=\\\"2\\\"><circle cx=\\\"12\\\" cy=\\\"12\\\" r=\\\"1\\\"/><circle cx=\\\"19\\\" cy=\\\"12\\\" r=\\\"1\\\"/><circle cx=\\\"5\\\" cy=\\\"12\\\" r=\\\"1\\\"/></g>\"},\"expand\":{\"width\":24,\"height\":24,\"body\":\"<path fill=\\\"none\\\" stroke=\\\"currentColor\\\" stroke-linecap=\\\"round\\\" stroke-linejoin=\\\"round\\\" stroke-width=\\\"2\\\" d=\\\"m15 15l6 6M15 9l6-6m0 13v5h-5m5-13V3h-5M3 16v5h5m-5 0l6-6M3 8V3h5m1 6L3 3\\\"/>\"},\"eye\":{\"width\":24,\"height\":24,\"body\":\"<g fill=\\\"none\\\" stroke=\\\"currentColor\\\" stroke-linecap=\\\"round\\\" stroke-linejoin=\\\"round\\\" stroke-width=\\\"2\\\"><path d=\\\"M2.062 12.348a1 1 0 0 1 0-.696a10.75 10.75 0 0 1 19.876 0a1 1 0 0 1 0 .696a10.75 10.75 0 0 1-19.876 0\\\"/><circle cx=\\\"12\\\" cy=\\\"12\\\" r=\\\"3\\\"/></g>\"},\"eye-off\":{\"width\":24,\"height\":24,\"body\":\"<g fill=\\\"none\\\" stroke=\\\"currentColor\\\" stroke-linecap=\\\"round\\\" stroke-linejoin=\\\"round\\\" stroke-width=\\\"2\\\"><path d=\\\"M10.733 5.076a10.744 10.744 0 0 1 11.205 6.575a1 1 0 0 1 0 .696a10.8 10.8 0 0 1-1.444 2.49m-6.41-.679a3 3 0 0 1-4.242-4.242\\\"/><path d=\\\"M17.479 17.499a10.75 10.75 0 0 1-15.417-5.151a1 1 0 0 1 0-.696a10.75 10.75 0 0 1 4.446-5.143M2 2l20 20\\\"/></g>\"},\"file\":{\"width\":24,\"height\":24,\"body\":\"<g fill=\\\"none\\\" stroke=\\\"currentColor\\\" stroke-linecap=\\\"round\\\" stroke-linejoin=\\\"round\\\" stroke-width=\\\"2\\\"><path d=\\\"M6 22a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h8a2.4 2.4 0 0 1 1.704.706l3.588 3.588A2.4 2.4 0 0 1 20 8v12a2 2 0 0 1-2 2z\\\"/><path d=\\\"M14 2v5a1 1 0 0 0 1 1h5\\\"/></g>\"},\"file-archive\":{\"width\":24,\"height\":24,\"body\":\"<g fill=\\\"none\\\" stroke=\\\"currentColor\\\" stroke-linecap=\\\"round\\\" stroke-linejoin=\\\"round\\\" stroke-width=\\\"2\\\"><path d=\\\"M13.659 22H18a2 2 0 0 0 2-2V8a2.4 2.4 0 0 0-.706-1.706l-3.588-3.588A2.4 2.4 0 0 0 14 2H6a2 2 0 0 0-2 2v11.5\\\"/><path d=\\\"M14 2v5a1 1 0 0 0 1 1h5M8 12v-1m0 7v-2m0-9V6\\\"/><circle cx=\\\"8\\\" cy=\\\"20\\\" r=\\\"2\\\"/></g>\"},\"file-code\":{\"width\":24,\"height\":24,\"body\":\"<g fill=\\\"none\\\" stroke=\\\"currentColor\\\" stroke-linecap=\\\"round\\\" stroke-linejoin=\\\"round\\\" stroke-width=\\\"2\\\"><path d=\\\"M6 22a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h8a2.4 2.4 0 0 1 1.704.706l3.588 3.588A2.4 2.4 0 0 1 20 8v12a2 2 0 0 1-2 2z\\\"/><path d=\\\"M14 2v5a1 1 0 0 0 1 1h5m-10 4.5L8 15l2 2.5m4-5l2 2.5l-2 2.5\\\"/></g>\"},\"file-cog\":{\"width\":24,\"height\":24,\"body\":\"<g fill=\\\"none\\\" stroke=\\\"currentColor\\\" stroke-linecap=\\\"round\\\" stroke-linejoin=\\\"round\\\" stroke-width=\\\"2\\\"><path d=\\\"M15 8a1 1 0 0 1-1-1V2a2.4 2.4 0 0 1 1.704.706l3.588 3.588A2.4 2.4 0 0 1 20 8zm5 0v12a2 2 0 0 1-2 2h-4.182M3.305 19.53l.923-.382M4 10.592V4a2 2 0 0 1 2-2h8M4.228 16.852l-.924-.383m2.548-1.241l-.383-.923m.383 6.467l-.383.924m2.679-6.468l.383-.923m-.001 7.391l-.382-.924m1.625-3.92l.922-.383m-.922 2.679l.922.383\\\"/><circle cx=\\\"7\\\" cy=\\\"18\\\" r=\\\"3\\\"/></g>\"},\"file-image\":{\"width\":24,\"height\":24,\"body\":\"<g fill=\\\"none\\\" stroke=\\\"currentColor\\\" stroke-linecap=\\\"round\\\" stroke-linejoin=\\\"round\\\" stroke-width=\\\"2\\\"><path d=\\\"M6 22a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h8a2.4 2.4 0 0 1 1.704.706l3.588 3.588A2.4 2.4 0 0 1 20 8v12a2 2 0 0 1-2 2z\\\"/><path d=\\\"M14 2v5a1 1 0 0 0 1 1h5\\\"/><circle cx=\\\"10\\\" cy=\\\"12\\\" r=\\\"2\\\"/><path d=\\\"m20 17l-1.296-1.296a2.41 2.41 0 0 0-3.408 0L9 22\\\"/></g>\"},\"file-json\":{\"width\":24,\"height\":24,\"body\":\"<g fill=\\\"none\\\" stroke=\\\"currentColor\\\" stroke-linecap=\\\"round\\\" stroke-linejoin=\\\"round\\\" stroke-width=\\\"2\\\"><path d=\\\"M15 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V7Z\\\"/><path d=\\\"M14 2v4a2 2 0 0 0 2 2h4m-10 4a1 1 0 0 0-1 1v1a1 1 0 0 1-1 1a1 1 0 0 1 1 1v1a1 1 0 0 0 1 1m4 0a1 1 0 0 0 1-1v-1a1 1 0 0 1 1-1a1 1 0 0 1-1-1v-1a1 1 0 0 0-1-1\\\"/></g>\",\"hidden\":true},\"file-lock-2\":{\"width\":24,\"height\":24,\"body\":\"<g fill=\\\"none\\\" stroke=\\\"currentColor\\\" stroke-linecap=\\\"round\\\" stroke-linejoin=\\\"round\\\" stroke-width=\\\"2\\\"><path d=\\\"M4 22h14a2 2 0 0 0 2-2V7l-5-5H6a2 2 0 0 0-2 2v1\\\"/><path d=\\\"M14 2v4a2 2 0 0 0 2 2h4\\\"/><rect width=\\\"8\\\" height=\\\"5\\\" x=\\\"2\\\" y=\\\"13\\\" rx=\\\"1\\\"/><path d=\\\"M8 13v-2a2 2 0 1 0-4 0v2\\\"/></g>\",\"hidden\":true},\"file-terminal\":{\"width\":24,\"height\":24,\"body\":\"<g fill=\\\"none\\\" stroke=\\\"currentColor\\\" stroke-linecap=\\\"round\\\" stroke-linejoin=\\\"round\\\" stroke-width=\\\"2\\\"><path d=\\\"M6 22a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h8a2.4 2.4 0 0 1 1.704.706l3.588 3.588A2.4 2.4 0 0 1 20 8v12a2 2 0 0 1-2 2z\\\"/><path d=\\\"M14 2v5a1 1 0 0 0 1 1h5M8 16l2-2l-2-2m4 6h4\\\"/></g>\"},\"file-text\":{\"width\":24,\"height\":24,\"body\":\"<g fill=\\\"none\\\" stroke=\\\"currentColor\\\" stroke-linecap=\\\"round\\\" stroke-linejoin=\\\"round\\\" stroke-width=\\\"2\\\"><path d=\\\"M6 22a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h8a2.4 2.4 0 0 1 1.704.706l3.588 3.588A2.4 2.4 0 0 1 20 8v12a2 2 0 0 1-2 2z\\\"/><path d=\\\"M14 2v5a1 1 0 0 0 1 1h5M10 9H8m8 4H8m8 4H8\\\"/></g>\"},\"files\":{\"width\":24,\"height\":24,\"body\":\"<g fill=\\\"none\\\" stroke=\\\"currentColor\\\" stroke-linecap=\\\"round\\\" stroke-linejoin=\\\"round\\\" stroke-width=\\\"2\\\"><path d=\\\"M15 2h-4a2 2 0 0 0-2 2v11a2 2 0 0 0 2 2h8a2 2 0 0 0 2-2V8\\\"/><path d=\\\"M16.706 2.706A2.4 2.4 0 0 0 15 2v5a1 1 0 0 0 1 1h5a2.4 2.4 0 0 0-.706-1.706zM5 7a2 2 0 0 0-2 2v11a2 2 0 0 0 2 2h8a2 2 0 0 0 1.732-1\\\"/></g>\"},\"fingerprint\":{\"width\":24,\"height\":24,\"body\":\"<g fill=\\\"none\\\" stroke=\\\"currentColor\\\" stroke-linecap=\\\"round\\\" stroke-linejoin=\\\"round\\\" stroke-width=\\\"2\\\"><path d=\\\"M12 10a2 2 0 0 0-2 2c0 1.02-.1 2.51-.26 4M14 13.12c0 2.38 0 6.38-1 8.88m4.29-.98c.12-.6.43-2.3.5-3.02M2 12a10 10 0 0 1 18-6M2 16h.01m19.79 0c.2-2 .131-5.354 0-6\\\"/><path d=\\\"M5 19.5C5.5 18 6 15 6 12a6 6 0 0 1 .34-2m2.31 12c.21-.66.45-1.32.57-2M9 6.8a6 6 0 0 1 9 5.2v2\\\"/></g>\"},\"flag\":{\"width\":24,\"height\":24,\"body\":\"<path fill=\\\"none\\\" stroke=\\\"currentColor\\\" stroke-linecap=\\\"round\\\" stroke-linejoin=\\\"round\\\" stroke-width=\\\"2\\\" d=\\\"M4 22V4a1 1 0 0 1 .4-.8A6 6 0 0 1 8 2c3 0 5 2 7.333 2q2 0 3.067-.8A1 1 0 0 1 20 4v10a1 1 0 0 1-.4.8A6 6 0 0 1 16 16c-3 0-5-2-8-2a6 6 0 0 0-4 1.528\\\"/>\"},\"folder\":{\"width\":24,\"height\":24,\"body\":\"<path fill=\\\"none\\\" stroke=\\\"currentColor\\\" stroke-linecap=\\\"round\\\" stroke-linejoin=\\\"round\\\" stroke-width=\\\"2\\\" d=\\\"M20 20a2 2 0 0 0 2-2V8a2 2 0 0 0-2-2h-7.9a2 2 0 0 1-1.69-.9L9.6 3.9A2 2 0 0 0 7.93 3H4a2 2 0 0 0-2 2v13a2 2 0 0 0 2 2Z\\\"/>\"},\"folder-check\":{\"width\":24,\"height\":24,\"body\":\"<g fill=\\\"none\\\" stroke=\\\"currentColor\\\" stroke-linecap=\\\"round\\\" stroke-linejoin=\\\"round\\\" stroke-width=\\\"2\\\"><path d=\\\"M20 20a2 2 0 0 0 2-2V8a2 2 0 0 0-2-2h-7.9a2 2 0 0 1-1.69-.9L9.6 3.9A2 2 0 0 0 7.93 3H4a2 2 0 0 0-2 2v13a2 2 0 0 0 2 2Z\\\"/><path d=\\\"m9 13l2 2l4-4\\\"/></g>\"},\"folder-input\":{\"width\":24,\"height\":24,\"body\":\"<g fill=\\\"none\\\" stroke=\\\"currentColor\\\" stroke-linecap=\\\"round\\\" stroke-linejoin=\\\"round\\\" stroke-width=\\\"2\\\"><path d=\\\"M2 9V5a2 2 0 0 1 2-2h3.9a2 2 0 0 1 1.69.9l.81 1.2a2 2 0 0 0 1.67.9H20a2 2 0 0 1 2 2v10a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2v-1m0-4h10\\\"/><path d=\\\"m9 16l3-3l-3-3\\\"/></g>\"},\"folder-minus\":{\"width\":24,\"height\":24,\"body\":\"<path fill=\\\"none\\\" stroke=\\\"currentColor\\\" stroke-linecap=\\\"round\\\" stroke-linejoin=\\\"round\\\" stroke-width=\\\"2\\\" d=\\\"M9 13h6m5 7a2 2 0 0 0 2-2V8a2 2 0 0 0-2-2h-7.9a2 2 0 0 1-1.69-.9L9.6 3.9A2 2 0 0 0 7.93 3H4a2 2 0 0 0-2 2v13a2 2 0 0 0 2 2Z\\\"/>\"},\"folder-open\":{\"width\":24,\"height\":24,\"body\":\"<path fill=\\\"none\\\" stroke=\\\"currentColor\\\" stroke-linecap=\\\"round\\\" stroke-linejoin=\\\"round\\\" stroke-width=\\\"2\\\" d=\\\"m6 14l1.5-2.9A2 2 0 0 1 9.24 10H20a2 2 0 0 1 1.94 2.5l-1.54 6a2 2 0 0 1-1.95 1.5H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h3.9a2 2 0 0 1 1.69.9l.81 1.2a2 2 0 0 0 1.67.9H18a2 2 0 0 1 2 2v2\\\"/>\"},\"folder-root\":{\"width\":24,\"height\":24,\"body\":\"<g fill=\\\"none\\\" stroke=\\\"currentColor\\\" stroke-linecap=\\\"round\\\" stroke-linejoin=\\\"round\\\" stroke-width=\\\"2\\\"><path d=\\\"M4 20h16a2 2 0 0 0 2-2V8a2 2 0 0 0-2-2h-7.93a2 2 0 0 1-1.66-.9l-.82-1.2A2 2 0 0 0 7.93 3H4a2 2 0 0 0-2 2v13c0 1.1.9 2 2 2\\\"/><circle cx=\\\"12\\\" cy=\\\"13\\\" r=\\\"2\\\"/><path d=\\\"M12 15v5\\\"/></g>\"},\"folder-search\":{\"width\":24,\"height\":24,\"body\":\"<g fill=\\\"none\\\" stroke=\\\"currentColor\\\" stroke-linecap=\\\"round\\\" stroke-linejoin=\\\"round\\\" stroke-width=\\\"2\\\"><path d=\\\"M10.7 20H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h3.9a2 2 0 0 1 1.69.9l.81 1.2a2 2 0 0 0 1.67.9H20a2 2 0 0 1 2 2v4.1M21 21l-1.9-1.9\\\"/><circle cx=\\\"17\\\" cy=\\\"17\\\" r=\\\"3\\\"/></g>\"},\"folders\":{\"width\":24,\"height\":24,\"body\":\"<g fill=\\\"none\\\" stroke=\\\"currentColor\\\" stroke-linecap=\\\"round\\\" stroke-linejoin=\\\"round\\\" stroke-width=\\\"2\\\"><path d=\\\"M20 5a2 2 0 0 1 2 2v7a2 2 0 0 1-2 2H9a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h2.5a1.5 1.5 0 0 1 1.2.6l.6.8a1.5 1.5 0 0 0 1.2.6z\\\"/><path d=\\\"M3 8.268a2 2 0 0 0-1 1.738V19a2 2 0 0 0 2 2h11a2 2 0 0 0 1.732-1\\\"/></g>\"},\"git-branch\":{\"width\":24,\"height\":24,\"body\":\"<g fill=\\\"none\\\" stroke=\\\"currentColor\\\" stroke-linecap=\\\"round\\\" stroke-linejoin=\\\"round\\\" stroke-width=\\\"2\\\"><path d=\\\"M15 6a9 9 0 0 0-9 9V3\\\"/><circle cx=\\\"18\\\" cy=\\\"6\\\" r=\\\"3\\\"/><circle cx=\\\"6\\\" cy=\\\"18\\\" r=\\\"3\\\"/></g>\"},\"grip-vertical\":{\"width\":24,\"height\":24,\"body\":\"<g fill=\\\"none\\\" stroke=\\\"currentColor\\\" stroke-linecap=\\\"round\\\" stroke-linejoin=\\\"round\\\" stroke-width=\\\"2\\\"><circle cx=\\\"9\\\" cy=\\\"12\\\" r=\\\"1\\\"/><circle cx=\\\"9\\\" cy=\\\"5\\\" r=\\\"1\\\"/><circle cx=\\\"9\\\" cy=\\\"19\\\" r=\\\"1\\\"/><circle cx=\\\"15\\\" cy=\\\"12\\\" r=\\\"1\\\"/><circle cx=\\\"15\\\" cy=\\\"5\\\" r=\\\"1\\\"/><circle cx=\\\"15\\\" cy=\\\"19\\\" r=\\\"1\\\"/></g>\"},\"hash\":{\"width\":24,\"height\":24,\"body\":\"<path fill=\\\"none\\\" stroke=\\\"currentColor\\\" stroke-linecap=\\\"round\\\" stroke-linejoin=\\\"round\\\" stroke-width=\\\"2\\\" d=\\\"M4 9h16M4 15h16M10 3L8 21m8-18l-2 18\\\"/>\"},\"headphones\":{\"width\":24,\"height\":24,\"body\":\"<path fill=\\\"none\\\" stroke=\\\"currentColor\\\" stroke-linecap=\\\"round\\\" stroke-linejoin=\\\"round\\\" stroke-width=\\\"2\\\" d=\\\"M3 14h3a2 2 0 0 1 2 2v3a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-7a9 9 0 0 1 18 0v7a2 2 0 0 1-2 2h-1a2 2 0 0 1-2-2v-3a2 2 0 0 1 2-2h3\\\"/>\"},\"history\":{\"width\":24,\"height\":24,\"body\":\"<g fill=\\\"none\\\" stroke=\\\"currentColor\\\" stroke-linecap=\\\"round\\\" stroke-linejoin=\\\"round\\\" stroke-width=\\\"2\\\"><path d=\\\"M3 12a9 9 0 1 0 9-9a9.75 9.75 0 0 0-6.74 2.74L3 8\\\"/><path d=\\\"M3 3v5h5m4-1v5l4 2\\\"/></g>\"},\"image-up\":{\"width\":24,\"height\":24,\"body\":\"<g fill=\\\"none\\\" stroke=\\\"currentColor\\\" stroke-linecap=\\\"round\\\" stroke-linejoin=\\\"round\\\" stroke-width=\\\"2\\\"><path d=\\\"M10.3 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2v10l-3.1-3.1a2 2 0 0 0-2.814.014L6 21\\\"/><path d=\\\"m14 19.5l3-3l3 3M17 22v-5.5\\\"/><circle cx=\\\"9\\\" cy=\\\"9\\\" r=\\\"2\\\"/></g>\"},\"infinity\":{\"width\":24,\"height\":24,\"body\":\"<path fill=\\\"none\\\" stroke=\\\"currentColor\\\" stroke-linecap=\\\"round\\\" stroke-linejoin=\\\"round\\\" stroke-width=\\\"2\\\" d=\\\"M6 16c5 0 7-8 12-8a4 4 0 0 1 0 8c-5 0-7-8-12-8a4 4 0 1 0 0 8\\\"/>\"},\"info\":{\"width\":24,\"height\":24,\"body\":\"<g fill=\\\"none\\\" stroke=\\\"currentColor\\\" stroke-linecap=\\\"round\\\" stroke-linejoin=\\\"round\\\" stroke-width=\\\"2\\\"><circle cx=\\\"12\\\" cy=\\\"12\\\" r=\\\"10\\\"/><path d=\\\"M12 16v-4m0-4h.01\\\"/></g>\"},\"library\":{\"width\":24,\"height\":24,\"body\":\"<path fill=\\\"none\\\" stroke=\\\"currentColor\\\" stroke-linecap=\\\"round\\\" stroke-linejoin=\\\"round\\\" stroke-width=\\\"2\\\" d=\\\"m16 6l4 14M12 6v14M8 8v12M4 4v16\\\"/>\"},\"lightbulb\":{\"width\":24,\"height\":24,\"body\":\"<path fill=\\\"none\\\" stroke=\\\"currentColor\\\" stroke-linecap=\\\"round\\\" stroke-linejoin=\\\"round\\\" stroke-width=\\\"2\\\" d=\\\"M15 14c.2-1 .7-1.7 1.5-2.5c1-.9 1.5-2.2 1.5-3.5A6 6 0 0 0 6 8c0 1 .2 2.2 1.5 3.5c.7.7 1.3 1.5 1.5 2.5m0 4h6m-5 4h4\\\"/>\"},\"link\":{\"width\":24,\"height\":24,\"body\":\"<g fill=\\\"none\\\" stroke=\\\"currentColor\\\" stroke-linecap=\\\"round\\\" stroke-linejoin=\\\"round\\\" stroke-width=\\\"2\\\"><path d=\\\"M10 13a5 5 0 0 0 7.54.54l3-3a5 5 0 0 0-7.07-7.07l-1.72 1.71\\\"/><path d=\\\"M14 11a5 5 0 0 0-7.54-.54l-3 3a5 5 0 0 0 7.07 7.07l1.71-1.71\\\"/></g>\"},\"list-end\":{\"width\":24,\"height\":24,\"body\":\"<g fill=\\\"none\\\" stroke=\\\"currentColor\\\" stroke-linecap=\\\"round\\\" stroke-linejoin=\\\"round\\\" stroke-width=\\\"2\\\"><path d=\\\"M16 5H3m13 7H3m6 7H3m13-3l-3 3l3 3\\\"/><path d=\\\"M21 5v12a2 2 0 0 1-2 2h-6\\\"/></g>\"},\"list-filter\":{\"width\":24,\"height\":24,\"body\":\"<path fill=\\\"none\\\" stroke=\\\"currentColor\\\" stroke-linecap=\\\"round\\\" stroke-linejoin=\\\"round\\\" stroke-width=\\\"2\\\" d=\\\"M2 5h20M6 12h12m-9 7h6\\\"/>\"},\"list-ordered\":{\"width\":24,\"height\":24,\"body\":\"<path fill=\\\"none\\\" stroke=\\\"currentColor\\\" stroke-linecap=\\\"round\\\" stroke-linejoin=\\\"round\\\" stroke-width=\\\"2\\\" d=\\\"M11 5h10m-10 7h10m-10 7h10M4 4h1v5M4 9h2m.5 11H3.4c0-1 2.6-1.925 2.6-3.5a1.5 1.5 0 0 0-2.6-1.02\\\"/>\"},\"loader-circle\":{\"width\":24,\"height\":24,\"body\":\"<path fill=\\\"none\\\" stroke=\\\"currentColor\\\" stroke-linecap=\\\"round\\\" stroke-linejoin=\\\"round\\\" stroke-width=\\\"2\\\" d=\\\"M21 12a9 9 0 1 1-6.219-8.56\\\"/>\"},\"locate-fixed\":{\"width\":24,\"height\":24,\"body\":\"<g fill=\\\"none\\\" stroke=\\\"currentColor\\\" stroke-linecap=\\\"round\\\" stroke-linejoin=\\\"round\\\" stroke-width=\\\"2\\\"><path d=\\\"M2 12h3m14 0h3M12 2v3m0 14v3\\\"/><circle cx=\\\"12\\\" cy=\\\"12\\\" r=\\\"7\\\"/><circle cx=\\\"12\\\" cy=\\\"12\\\" r=\\\"3\\\"/></g>\"},\"lock\":{\"width\":24,\"height\":24,\"body\":\"<g fill=\\\"none\\\" stroke=\\\"currentColor\\\" stroke-linecap=\\\"round\\\" stroke-linejoin=\\\"round\\\" stroke-width=\\\"2\\\"><rect width=\\\"18\\\" height=\\\"11\\\" x=\\\"3\\\" y=\\\"11\\\" rx=\\\"2\\\" ry=\\\"2\\\"/><path d=\\\"M7 11V7a5 5 0 0 1 10 0v4\\\"/></g>\"},\"log-out\":{\"width\":24,\"height\":24,\"body\":\"<path fill=\\\"none\\\" stroke=\\\"currentColor\\\" stroke-linecap=\\\"round\\\" stroke-linejoin=\\\"round\\\" stroke-width=\\\"2\\\" d=\\\"m16 17l5-5l-5-5m5 5H9m0 9H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4\\\"/>\"},\"menu\":{\"width\":24,\"height\":24,\"body\":\"<path fill=\\\"none\\\" stroke=\\\"currentColor\\\" stroke-linecap=\\\"round\\\" stroke-linejoin=\\\"round\\\" stroke-width=\\\"2\\\" d=\\\"M4 5h16M4 12h16M4 19h16\\\"/>\"},\"message-square\":{\"width\":24,\"height\":24,\"body\":\"<path fill=\\\"none\\\" stroke=\\\"currentColor\\\" stroke-linecap=\\\"round\\\" stroke-linejoin=\\\"round\\\" stroke-width=\\\"2\\\" d=\\\"M22 17a2 2 0 0 1-2 2H6.828a2 2 0 0 0-1.414.586l-2.202 2.202A.71.71 0 0 1 2 21.286V5a2 2 0 0 1 2-2h16a2 2 0 0 1 2 2z\\\"/>\"},\"messages-square\":{\"width\":24,\"height\":24,\"body\":\"<path fill=\\\"none\\\" stroke=\\\"currentColor\\\" stroke-linecap=\\\"round\\\" stroke-linejoin=\\\"round\\\" stroke-width=\\\"2\\\" d=\\\"M16 10a2 2 0 0 1-2 2H6.828a2 2 0 0 0-1.414.586l-2.202 2.202A.71.71 0 0 1 2 14.286V4a2 2 0 0 1 2-2h10a2 2 0 0 1 2 2zm4-1a2 2 0 0 1 2 2v10.286a.71.71 0 0 1-1.212.502l-2.202-2.202A2 2 0 0 0 17.172 19H10a2 2 0 0 1-2-2v-1\\\"/>\"},\"mic\":{\"width\":24,\"height\":24,\"body\":\"<g fill=\\\"none\\\" stroke=\\\"currentColor\\\" stroke-linecap=\\\"round\\\" stroke-linejoin=\\\"round\\\" stroke-width=\\\"2\\\"><path d=\\\"M12 19v3m7-12v2a7 7 0 0 1-14 0v-2\\\"/><rect width=\\\"6\\\" height=\\\"13\\\" x=\\\"9\\\" y=\\\"2\\\" rx=\\\"3\\\"/></g>\"},\"minus\":{\"width\":24,\"height\":24,\"body\":\"<path fill=\\\"none\\\" stroke=\\\"currentColor\\\" stroke-linecap=\\\"round\\\" stroke-linejoin=\\\"round\\\" stroke-width=\\\"2\\\" d=\\\"M5 12h14\\\"/>\"},\"monitor\":{\"width\":24,\"height\":24,\"body\":\"<g fill=\\\"none\\\" stroke=\\\"currentColor\\\" stroke-linecap=\\\"round\\\" stroke-linejoin=\\\"round\\\" stroke-width=\\\"2\\\"><rect width=\\\"20\\\" height=\\\"14\\\" x=\\\"2\\\" y=\\\"3\\\" rx=\\\"2\\\"/><path d=\\\"M8 21h8m-4-4v4\\\"/></g>\"},\"moon\":{\"width\":24,\"height\":24,\"body\":\"<path fill=\\\"none\\\" stroke=\\\"currentColor\\\" stroke-linecap=\\\"round\\\" stroke-linejoin=\\\"round\\\" stroke-width=\\\"2\\\" d=\\\"M20.985 12.486a9 9 0 1 1-9.473-9.472c.405-.022.617.46.402.803a6 6 0 0 0 8.268 8.268c.344-.215.825-.004.803.401\\\"/>\"},\"panel-left\":{\"width\":24,\"height\":24,\"body\":\"<g fill=\\\"none\\\" stroke=\\\"currentColor\\\" stroke-linecap=\\\"round\\\" stroke-linejoin=\\\"round\\\" stroke-width=\\\"2\\\"><rect width=\\\"18\\\" height=\\\"18\\\" x=\\\"3\\\" y=\\\"3\\\" rx=\\\"2\\\"/><path d=\\\"M9 3v18\\\"/></g>\"},\"panel-left-close\":{\"width\":24,\"height\":24,\"body\":\"<g fill=\\\"none\\\" stroke=\\\"currentColor\\\" stroke-linecap=\\\"round\\\" stroke-linejoin=\\\"round\\\" stroke-width=\\\"2\\\"><rect width=\\\"18\\\" height=\\\"18\\\" x=\\\"3\\\" y=\\\"3\\\" rx=\\\"2\\\"/><path d=\\\"M9 3v18m7-6l-3-3l3-3\\\"/></g>\"},\"panel-left-open\":{\"width\":24,\"height\":24,\"body\":\"<g fill=\\\"none\\\" stroke=\\\"currentColor\\\" stroke-linecap=\\\"round\\\" stroke-linejoin=\\\"round\\\" stroke-width=\\\"2\\\"><rect width=\\\"18\\\" height=\\\"18\\\" x=\\\"3\\\" y=\\\"3\\\" rx=\\\"2\\\"/><path d=\\\"M9 3v18m5-12l3 3l-3 3\\\"/></g>\"},\"panel-right\":{\"width\":24,\"height\":24,\"body\":\"<g fill=\\\"none\\\" stroke=\\\"currentColor\\\" stroke-linecap=\\\"round\\\" stroke-linejoin=\\\"round\\\" stroke-width=\\\"2\\\"><rect width=\\\"18\\\" height=\\\"18\\\" x=\\\"3\\\" y=\\\"3\\\" rx=\\\"2\\\"/><path d=\\\"M15 3v18\\\"/></g>\"},\"paperclip\":{\"width\":24,\"height\":24,\"body\":\"<path fill=\\\"none\\\" stroke=\\\"currentColor\\\" stroke-linecap=\\\"round\\\" stroke-linejoin=\\\"round\\\" stroke-width=\\\"2\\\" d=\\\"m16 6l-8.414 8.586a2 2 0 0 0 2.829 2.829l8.414-8.586a4 4 0 1 0-5.657-5.657l-8.379 8.551a6 6 0 1 0 8.485 8.485l8.379-8.551\\\"/>\"},\"pause\":{\"width\":24,\"height\":24,\"body\":\"<g fill=\\\"none\\\" stroke=\\\"currentColor\\\" stroke-linecap=\\\"round\\\" stroke-linejoin=\\\"round\\\" stroke-width=\\\"2\\\"><rect width=\\\"5\\\" height=\\\"18\\\" x=\\\"14\\\" y=\\\"3\\\" rx=\\\"1\\\"/><rect width=\\\"5\\\" height=\\\"18\\\" x=\\\"5\\\" y=\\\"3\\\" rx=\\\"1\\\"/></g>\"},\"pencil\":{\"width\":24,\"height\":24,\"body\":\"<path fill=\\\"none\\\" stroke=\\\"currentColor\\\" stroke-linecap=\\\"round\\\" stroke-linejoin=\\\"round\\\" stroke-width=\\\"2\\\" d=\\\"M21.174 6.812a1 1 0 0 0-3.986-3.987L3.842 16.174a2 2 0 0 0-.5.83l-1.321 4.352a.5.5 0 0 0 .623.622l4.353-1.32a2 2 0 0 0 .83-.497zM15 5l4 4\\\"/>\"},\"play\":{\"width\":24,\"height\":24,\"body\":\"<path fill=\\\"none\\\" stroke=\\\"currentColor\\\" stroke-linecap=\\\"round\\\" stroke-linejoin=\\\"round\\\" stroke-width=\\\"2\\\" d=\\\"M5 5a2 2 0 0 1 3.008-1.728l11.997 6.998a2 2 0 0 1 .003 3.458l-12 7A2 2 0 0 1 5 19z\\\"/>\"},\"plug-zap\":{\"width\":24,\"height\":24,\"body\":\"<path fill=\\\"none\\\" stroke=\\\"currentColor\\\" stroke-linecap=\\\"round\\\" stroke-linejoin=\\\"round\\\" stroke-width=\\\"2\\\" d=\\\"M6.3 20.3a2.4 2.4 0 0 0 3.4 0L12 18l-6-6l-2.3 2.3a2.4 2.4 0 0 0 0 3.4ZM2 22l3-3m2.5-5.5L10 11m.5 5.5L13 14m5-11l-4 4h6l-4 4\\\"/>\"},\"plus\":{\"width\":24,\"height\":24,\"body\":\"<path fill=\\\"none\\\" stroke=\\\"currentColor\\\" stroke-linecap=\\\"round\\\" stroke-linejoin=\\\"round\\\" stroke-width=\\\"2\\\" d=\\\"M5 12h14m-7-7v14\\\"/>\"},\"qr-code\":{\"width\":24,\"height\":24,\"body\":\"<g fill=\\\"none\\\" stroke=\\\"currentColor\\\" stroke-linecap=\\\"round\\\" stroke-linejoin=\\\"round\\\" stroke-width=\\\"2\\\"><rect width=\\\"5\\\" height=\\\"5\\\" x=\\\"3\\\" y=\\\"3\\\" rx=\\\"1\\\"/><rect width=\\\"5\\\" height=\\\"5\\\" x=\\\"16\\\" y=\\\"3\\\" rx=\\\"1\\\"/><rect width=\\\"5\\\" height=\\\"5\\\" x=\\\"3\\\" y=\\\"16\\\" rx=\\\"1\\\"/><path d=\\\"M21 16h-3a2 2 0 0 0-2 2v3m5 0v.01M12 7v3a2 2 0 0 1-2 2H7m-4 0h.01M12 3h.01M12 16v.01M16 12h1m4 0v.01M12 21v-1\\\"/></g>\"},\"radio\":{\"width\":24,\"height\":24,\"body\":\"<g fill=\\\"none\\\" stroke=\\\"currentColor\\\" stroke-linecap=\\\"round\\\" stroke-linejoin=\\\"round\\\" stroke-width=\\\"2\\\"><path d=\\\"M16.247 7.761a6 6 0 0 1 0 8.478m2.828-11.306a10 10 0 0 1 0 14.134m-14.15 0a10 10 0 0 1 0-14.134m2.828 11.306a6 6 0 0 1 0-8.478\\\"/><circle cx=\\\"12\\\" cy=\\\"12\\\" r=\\\"2\\\"/></g>\"},\"refresh-cw\":{\"width\":24,\"height\":24,\"body\":\"<g fill=\\\"none\\\" stroke=\\\"currentColor\\\" stroke-linecap=\\\"round\\\" stroke-linejoin=\\\"round\\\" stroke-width=\\\"2\\\"><path d=\\\"M3 12a9 9 0 0 1 9-9a9.75 9.75 0 0 1 6.74 2.74L21 8\\\"/><path d=\\\"M21 3v5h-5m5 4a9 9 0 0 1-9 9a9.75 9.75 0 0 1-6.74-2.74L3 16\\\"/><path d=\\\"M8 16H3v5\\\"/></g>\"},\"rocket\":{\"width\":24,\"height\":24,\"body\":\"<g fill=\\\"none\\\" stroke=\\\"currentColor\\\" stroke-linecap=\\\"round\\\" stroke-linejoin=\\\"round\\\" stroke-width=\\\"2\\\"><path d=\\\"M12 15v5s3.03-.55 4-2c1.08-1.62 0-5 0-5M4.5 16.5c-1.5 1.26-2 5-2 5s3.74-.5 5-2c.71-.84.7-2.13-.09-2.91a2.18 2.18 0 0 0-2.91-.09\\\"/><path d=\\\"M9 12a22 22 0 0 1 2-3.95A12.88 12.88 0 0 1 22 2c0 2.72-.78 7.5-6 11a22.4 22.4 0 0 1-4 2z\\\"/><path d=\\\"M9 12H4s.55-3.03 2-4c1.62-1.08 5 .05 5 .05\\\"/></g>\"},\"rotate-ccw\":{\"width\":24,\"height\":24,\"body\":\"<g fill=\\\"none\\\" stroke=\\\"currentColor\\\" stroke-linecap=\\\"round\\\" stroke-linejoin=\\\"round\\\" stroke-width=\\\"2\\\"><path d=\\\"M3 12a9 9 0 1 0 9-9a9.75 9.75 0 0 0-6.74 2.74L3 8\\\"/><path d=\\\"M3 3v5h5\\\"/></g>\"},\"rotate-cw\":{\"width\":24,\"height\":24,\"body\":\"<g fill=\\\"none\\\" stroke=\\\"currentColor\\\" stroke-linecap=\\\"round\\\" stroke-linejoin=\\\"round\\\" stroke-width=\\\"2\\\"><path d=\\\"M21 12a9 9 0 1 1-9-9c2.52 0 4.93 1 6.74 2.74L21 8\\\"/><path d=\\\"M21 3v5h-5\\\"/></g>\"},\"scroll-text\":{\"width\":24,\"height\":24,\"body\":\"<g fill=\\\"none\\\" stroke=\\\"currentColor\\\" stroke-linecap=\\\"round\\\" stroke-linejoin=\\\"round\\\" stroke-width=\\\"2\\\"><path d=\\\"M15 12h-5m5-4h-5m9 9V5a2 2 0 0 0-2-2H4\\\"/><path d=\\\"M8 21h12a2 2 0 0 0 2-2v-1a1 1 0 0 0-1-1H11a1 1 0 0 0-1 1v1a2 2 0 1 1-4 0V5a2 2 0 1 0-4 0v2a1 1 0 0 0 1 1h3\\\"/></g>\"},\"search\":{\"width\":24,\"height\":24,\"body\":\"<g fill=\\\"none\\\" stroke=\\\"currentColor\\\" stroke-linecap=\\\"round\\\" stroke-linejoin=\\\"round\\\" stroke-width=\\\"2\\\"><path d=\\\"m21 21l-4.34-4.34\\\"/><circle cx=\\\"11\\\" cy=\\\"11\\\" r=\\\"8\\\"/></g>\"},\"settings-2\":{\"width\":24,\"height\":24,\"body\":\"<g fill=\\\"none\\\" stroke=\\\"currentColor\\\" stroke-linecap=\\\"round\\\" stroke-linejoin=\\\"round\\\" stroke-width=\\\"2\\\"><path d=\\\"M14 17H5M19 7h-9\\\"/><circle cx=\\\"17\\\" cy=\\\"17\\\" r=\\\"3\\\"/><circle cx=\\\"7\\\" cy=\\\"7\\\" r=\\\"3\\\"/></g>\"},\"shield\":{\"width\":24,\"height\":24,\"body\":\"<path fill=\\\"none\\\" stroke=\\\"currentColor\\\" stroke-linecap=\\\"round\\\" stroke-linejoin=\\\"round\\\" stroke-width=\\\"2\\\" d=\\\"M20 13c0 5-3.5 7.5-7.66 8.95a1 1 0 0 1-.67-.01C7.5 20.5 4 18 4 13V6a1 1 0 0 1 1-1c2 0 4.5-1.2 6.24-2.72a1.17 1.17 0 0 1 1.52 0C14.51 3.81 17 5 19 5a1 1 0 0 1 1 1z\\\"/>\"},\"shield-check\":{\"width\":24,\"height\":24,\"body\":\"<g fill=\\\"none\\\" stroke=\\\"currentColor\\\" stroke-linecap=\\\"round\\\" stroke-linejoin=\\\"round\\\" stroke-width=\\\"2\\\"><path d=\\\"M20 13c0 5-3.5 7.5-7.66 8.95a1 1 0 0 1-.67-.01C7.5 20.5 4 18 4 13V6a1 1 0 0 1 1-1c2 0 4.5-1.2 6.24-2.72a1.17 1.17 0 0 1 1.52 0C14.51 3.81 17 5 19 5a1 1 0 0 1 1 1z\\\"/><path d=\\\"m9 12l2 2l4-4\\\"/></g>\"},\"skip-forward\":{\"width\":24,\"height\":24,\"body\":\"<path fill=\\\"none\\\" stroke=\\\"currentColor\\\" stroke-linecap=\\\"round\\\" stroke-linejoin=\\\"round\\\" stroke-width=\\\"2\\\" d=\\\"M21 4v16M6.029 4.285A2 2 0 0 0 3 6v12a2 2 0 0 0 3.029 1.715l9.997-5.998a2 2 0 0 0 .003-3.432z\\\"/>\"},\"sliders-horizontal\":{\"width\":24,\"height\":24,\"body\":\"<path fill=\\\"none\\\" stroke=\\\"currentColor\\\" stroke-linecap=\\\"round\\\" stroke-linejoin=\\\"round\\\" stroke-width=\\\"2\\\" d=\\\"M10 5H3m9 14H3M14 3v4m2 10v4m5-9h-9m9 7h-5m5-14h-7m-6 5v4m0-2H3\\\"/>\"},\"sparkles\":{\"width\":24,\"height\":24,\"body\":\"<g fill=\\\"none\\\" stroke=\\\"currentColor\\\" stroke-linecap=\\\"round\\\" stroke-linejoin=\\\"round\\\" stroke-width=\\\"2\\\"><path d=\\\"M11.017 2.814a1 1 0 0 1 1.966 0l1.051 5.558a2 2 0 0 0 1.594 1.594l5.558 1.051a1 1 0 0 1 0 1.966l-5.558 1.051a2 2 0 0 0-1.594 1.594l-1.051 5.558a1 1 0 0 1-1.966 0l-1.051-5.558a2 2 0 0 0-1.594-1.594l-5.558-1.051a1 1 0 0 1 0-1.966l5.558-1.051a2 2 0 0 0 1.594-1.594zM20 2v4m2-2h-4\\\"/><circle cx=\\\"4\\\" cy=\\\"20\\\" r=\\\"2\\\"/></g>\"},\"square\":{\"width\":24,\"height\":24,\"body\":\"<rect width=\\\"18\\\" height=\\\"18\\\" x=\\\"3\\\" y=\\\"3\\\" fill=\\\"none\\\" stroke=\\\"currentColor\\\" stroke-linecap=\\\"round\\\" stroke-linejoin=\\\"round\\\" stroke-width=\\\"2\\\" rx=\\\"2\\\"/>\"},\"square-pen\":{\"width\":24,\"height\":24,\"body\":\"<g fill=\\\"none\\\" stroke=\\\"currentColor\\\" stroke-linecap=\\\"round\\\" stroke-linejoin=\\\"round\\\" stroke-width=\\\"2\\\"><path d=\\\"M12 3H5a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7\\\"/><path d=\\\"M18.375 2.625a1 1 0 0 1 3 3l-9.013 9.014a2 2 0 0 1-.853.505l-2.873.84a.5.5 0 0 1-.62-.62l.84-2.873a2 2 0 0 1 .506-.852z\\\"/></g>\"},\"star\":{\"width\":24,\"height\":24,\"body\":\"<path fill=\\\"none\\\" stroke=\\\"currentColor\\\" stroke-linecap=\\\"round\\\" stroke-linejoin=\\\"round\\\" stroke-width=\\\"2\\\" d=\\\"M11.525 2.295a.53.53 0 0 1 .95 0l2.31 4.679a2.12 2.12 0 0 0 1.595 1.16l5.166.756a.53.53 0 0 1 .294.904l-3.736 3.638a2.12 2.12 0 0 0-.611 1.878l.882 5.14a.53.53 0 0 1-.771.56l-4.618-2.428a2.12 2.12 0 0 0-1.973 0L6.396 21.01a.53.53 0 0 1-.77-.56l.881-5.139a2.12 2.12 0 0 0-.611-1.879L2.16 9.795a.53.53 0 0 1 .294-.906l5.165-.755a2.12 2.12 0 0 0 1.597-1.16z\\\"/>\"},\"sun\":{\"width\":24,\"height\":24,\"body\":\"<g fill=\\\"none\\\" stroke=\\\"currentColor\\\" stroke-linecap=\\\"round\\\" stroke-linejoin=\\\"round\\\" stroke-width=\\\"2\\\"><circle cx=\\\"12\\\" cy=\\\"12\\\" r=\\\"4\\\"/><path d=\\\"M12 2v2m0 16v2M4.93 4.93l1.41 1.41m11.32 11.32l1.41 1.41M2 12h2m16 0h2M6.34 17.66l-1.41 1.41M19.07 4.93l-1.41 1.41\\\"/></g>\"},\"target\":{\"width\":24,\"height\":24,\"body\":\"<g fill=\\\"none\\\" stroke=\\\"currentColor\\\" stroke-linecap=\\\"round\\\" stroke-linejoin=\\\"round\\\" stroke-width=\\\"2\\\"><circle cx=\\\"12\\\" cy=\\\"12\\\" r=\\\"10\\\"/><circle cx=\\\"12\\\" cy=\\\"12\\\" r=\\\"6\\\"/><circle cx=\\\"12\\\" cy=\\\"12\\\" r=\\\"2\\\"/></g>\"},\"thumbs-down\":{\"width\":24,\"height\":24,\"body\":\"<path fill=\\\"none\\\" stroke=\\\"currentColor\\\" stroke-linecap=\\\"round\\\" stroke-linejoin=\\\"round\\\" stroke-width=\\\"2\\\" d=\\\"M9 18.12L10 14H4.17a2 2 0 0 1-1.92-2.56l2.33-8A2 2 0 0 1 6.5 2H20a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2h-2.76a2 2 0 0 0-1.79 1.11L12 22a3.13 3.13 0 0 1-3-3.88M17 14V2\\\"/>\"},\"thumbs-up\":{\"width\":24,\"height\":24,\"body\":\"<path fill=\\\"none\\\" stroke=\\\"currentColor\\\" stroke-linecap=\\\"round\\\" stroke-linejoin=\\\"round\\\" stroke-width=\\\"2\\\" d=\\\"M15 5.88L14 10h5.83a2 2 0 0 1 1.92 2.56l-2.33 8A2 2 0 0 1 17.5 22H4a2 2 0 0 1-2-2v-8a2 2 0 0 1 2-2h2.76a2 2 0 0 0 1.79-1.11L12 2a3.13 3.13 0 0 1 3 3.88M7 10v12\\\"/>\"},\"trash-2\":{\"width\":24,\"height\":24,\"body\":\"<path fill=\\\"none\\\" stroke=\\\"currentColor\\\" stroke-linecap=\\\"round\\\" stroke-linejoin=\\\"round\\\" stroke-width=\\\"2\\\" d=\\\"M10 11v6m4-6v6m5-11v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6M3 6h18M8 6V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2\\\"/>\"},\"triangle-alert\":{\"width\":24,\"height\":24,\"body\":\"<path fill=\\\"none\\\" stroke=\\\"currentColor\\\" stroke-linecap=\\\"round\\\" stroke-linejoin=\\\"round\\\" stroke-width=\\\"2\\\" d=\\\"m21.73 18l-8-14a2 2 0 0 0-3.48 0l-8 14A2 2 0 0 0 4 21h16a2 2 0 0 0 1.73-3M12 9v4m0 4h.01\\\"/>\"},\"undo-2\":{\"width\":24,\"height\":24,\"body\":\"<g fill=\\\"none\\\" stroke=\\\"currentColor\\\" stroke-linecap=\\\"round\\\" stroke-linejoin=\\\"round\\\" stroke-width=\\\"2\\\"><path d=\\\"M9 14L4 9l5-5\\\"/><path d=\\\"M4 9h10.5a5.5 5.5 0 0 1 5.5 5.5a5.5 5.5 0 0 1-5.5 5.5H11\\\"/></g>\"},\"upload\":{\"width\":24,\"height\":24,\"body\":\"<path fill=\\\"none\\\" stroke=\\\"currentColor\\\" stroke-linecap=\\\"round\\\" stroke-linejoin=\\\"round\\\" stroke-width=\\\"2\\\" d=\\\"M12 3v12m5-7l-5-5l-5 5m14 7v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4\\\"/>\"},\"user-pen\":{\"width\":24,\"height\":24,\"body\":\"<g fill=\\\"none\\\" stroke=\\\"currentColor\\\" stroke-linecap=\\\"round\\\" stroke-linejoin=\\\"round\\\" stroke-width=\\\"2\\\"><path d=\\\"M11.5 15H7a4 4 0 0 0-4 4v2m18.378-4.374a1 1 0 0 0-3.004-3.004l-4.01 4.012a2 2 0 0 0-.506.854l-.837 2.87a.5.5 0 0 0 .62.62l2.87-.837a2 2 0 0 0 .854-.506z\\\"/><circle cx=\\\"10\\\" cy=\\\"7\\\" r=\\\"4\\\"/></g>\"},\"user-plus\":{\"width\":24,\"height\":24,\"body\":\"<g fill=\\\"none\\\" stroke=\\\"currentColor\\\" stroke-linecap=\\\"round\\\" stroke-linejoin=\\\"round\\\" stroke-width=\\\"2\\\"><path d=\\\"M16 21v-2a4 4 0 0 0-4-4H6a4 4 0 0 0-4 4v2\\\"/><circle cx=\\\"9\\\" cy=\\\"7\\\" r=\\\"4\\\"/><path d=\\\"M19 8v6m3-3h-6\\\"/></g>\"},\"user-round-x\":{\"width\":24,\"height\":24,\"body\":\"<g fill=\\\"none\\\" stroke=\\\"currentColor\\\" stroke-linecap=\\\"round\\\" stroke-linejoin=\\\"round\\\" stroke-width=\\\"2\\\"><path d=\\\"m16.5 16.5l5 5M2 21a8 8 0 0 1 11.531-7.18M21.5 16.5l-5 5\\\"/><circle cx=\\\"10\\\" cy=\\\"8\\\" r=\\\"5\\\"/></g>\"},\"users\":{\"width\":24,\"height\":24,\"body\":\"<g fill=\\\"none\\\" stroke=\\\"currentColor\\\" stroke-linecap=\\\"round\\\" stroke-linejoin=\\\"round\\\" stroke-width=\\\"2\\\"><path d=\\\"M16 21v-2a4 4 0 0 0-4-4H6a4 4 0 0 0-4 4v2M16 3.128a4 4 0 0 1 0 7.744M22 21v-2a4 4 0 0 0-3-3.87\\\"/><circle cx=\\\"9\\\" cy=\\\"7\\\" r=\\\"4\\\"/></g>\"},\"volume-2\":{\"width\":24,\"height\":24,\"body\":\"<path fill=\\\"none\\\" stroke=\\\"currentColor\\\" stroke-linecap=\\\"round\\\" stroke-linejoin=\\\"round\\\" stroke-width=\\\"2\\\" d=\\\"M11 4.702a.705.705 0 0 0-1.203-.498L6.413 7.587A1.4 1.4 0 0 1 5.416 8H3a1 1 0 0 0-1 1v6a1 1 0 0 0 1 1h2.416a1.4 1.4 0 0 1 .997.413l3.383 3.384A.705.705 0 0 0 11 19.298zM16 9a5 5 0 0 1 0 6m3.364 3.364a9 9 0 0 0 0-12.728\\\"/>\"},\"workflow\":{\"width\":24,\"height\":24,\"body\":\"<g fill=\\\"none\\\" stroke=\\\"currentColor\\\" stroke-linecap=\\\"round\\\" stroke-linejoin=\\\"round\\\" stroke-width=\\\"2\\\"><rect width=\\\"8\\\" height=\\\"8\\\" x=\\\"3\\\" y=\\\"3\\\" rx=\\\"2\\\"/><path d=\\\"M7 11v4a2 2 0 0 0 2 2h4\\\"/><rect width=\\\"8\\\" height=\\\"8\\\" x=\\\"13\\\" y=\\\"13\\\" rx=\\\"2\\\"/></g>\"},\"wrap-text\":{\"width\":24,\"height\":24,\"body\":\"<g fill=\\\"none\\\" stroke=\\\"currentColor\\\" stroke-linecap=\\\"round\\\" stroke-linejoin=\\\"round\\\" stroke-width=\\\"2\\\"><path d=\\\"m16 16l-2 2l2 2\\\"/><path d=\\\"M3 12h15a3 3 0 1 1 0 6h-4M3 18h7M3 6h18\\\"/></g>\",\"hidden\":true},\"x\":{\"width\":24,\"height\":24,\"body\":\"<path fill=\\\"none\\\" stroke=\\\"currentColor\\\" stroke-linecap=\\\"round\\\" stroke-linejoin=\\\"round\\\" stroke-width=\\\"2\\\" d=\\\"M18 6L6 18M6 6l12 12\\\"/>\"},\"zap\":{\"width\":24,\"height\":24,\"body\":\"<path fill=\\\"none\\\" stroke=\\\"currentColor\\\" stroke-linecap=\\\"round\\\" stroke-linejoin=\\\"round\\\" stroke-width=\\\"2\\\" d=\\\"M15.914 4a1.5 1.5 0 0 0-2.474-1.561l-9 9A1.5 1.5 0 0 0 5.5 14h4.002a.5.5 0 0 1 .471.666L8.086 20a1.5 1.5 0 0 0 2.475 1.56l9-9A1.5 1.5 0 0 0 18.5 10h-3.997a.5.5 0 0 1-.472-.667z\\\"/>\"}}}]");
 	for (let n of t) for (let [t, r] of Object.entries(n.icons)) e(n.prefix ? n.prefix + ":" + t : t, r);
 	gf = !0;
 }
@@ -45821,12 +45821,12 @@ var qK = {
 		}), ta(() => {
 			document.removeEventListener("selectionchange", le), document.removeEventListener("pointerdown", de), document.removeEventListener("pointerup", j), window.clearTimeout(oe), ie.removeEventListener("change", A), v.stop(), x.cancel();
 		});
-		let he = /* @__PURE__ */ new WeakMap(), ge = Z(() => new Map(i.value.messages.map((e) => (he.has(e) || he.set(e, Jn(e)), [e.id, he.get(e)])))), N = /* @__PURE__ */ F(null), _e = /* @__PURE__ */ F(!1), ve = /* @__PURE__ */ F(null), ye = /* @__PURE__ */ F(null), be = /* @__PURE__ */ F(null), xe = /* @__PURE__ */ F(null), Se = /* @__PURE__ */ F(!1), Ce = /* @__PURE__ */ F(!1), we = /* @__PURE__ */ F(null), Te = /* @__PURE__ */ F(0), Ee = /* @__PURE__ */ F(0), De = /* @__PURE__ */ F(0), Oe = {
+		let he = /* @__PURE__ */ new WeakMap(), ge = Z(() => new Map(i.value.messages.map((e) => (he.has(e) || he.set(e, Yn(e)), [e.id, he.get(e)])))), N = /* @__PURE__ */ F(null), _e = /* @__PURE__ */ F(!1), ve = /* @__PURE__ */ F(null), ye = /* @__PURE__ */ F(null), be = /* @__PURE__ */ F(null), xe = /* @__PURE__ */ F(null), Se = /* @__PURE__ */ F(!1), Ce = /* @__PURE__ */ F(!1), we = /* @__PURE__ */ F(null), Te = /* @__PURE__ */ F(0), Ee = /* @__PURE__ */ F(0), De = /* @__PURE__ */ F(0), Oe = {
 			type: "spring",
 			mass: 1,
 			stiffness: 604.0197893466687,
 			damping: 44.729801589453814
-		}, ke = null, Ae = !1, je = lV(0, Oe), Me = lV(0, Oe), Ne = lV(0, Oe), Pe = sV(Ne, [0, 1], [.96, 1]), Fe = sV(Ne, [0, 1], [-8, 0]), Ie = sV(Ne, [0, 1], [0, 1]), Le = Z(() => i.value.messages.find((e) => e.id === be.value)), Re = Z(() => or.value.find((e) => e.messages.some((e) => e.id === be.value))), ze = Z(() => Re.value?.label), Be = Z(() => Ce.value ? ur.value.findIndex((e) => e.key === xe.value) : -1), Ve = /* @__PURE__ */ F(null), He = typeof window > "u" || !window.matchMedia("(pointer: coarse)").matches, Ue = /* @__PURE__ */ F(!0), We = Z(() => i.value.room), Ge = Z(() => ["pending", "notified"].includes(We.value?.current_turn?.status) && !["paused", "concluded"].includes(We.value.phase) ? We.value.current_turn : null), Ke = (e) => e?.access === "manual" && e.status === "active", qe = Z(() => (We.value.members || []).find((e) => e.name === Ge.value?.expert)), Je = Z(() => We.value?.archived ? null : (We.value?.members || []).find((e) => Ke(e) && !e.registered_at) || null), Ye = Z(() => {
+		}, ke = null, Ae = !1, je = lV(0, Oe), Me = lV(0, Oe), Ne = lV(0, Oe), Pe = sV(Ne, [0, 1], [.96, 1]), Fe = sV(Ne, [0, 1], [-8, 0]), Ie = sV(Ne, [0, 1], [0, 1]), Le = Z(() => i.value.messages.find((e) => e.id === be.value)), Re = Z(() => sr.value.find((e) => e.messages.some((e) => e.id === be.value))), ze = Z(() => Re.value?.label), Be = Z(() => Ce.value ? dr.value.findIndex((e) => e.key === xe.value) : -1), Ve = /* @__PURE__ */ F(null), He = typeof window > "u" || !window.matchMedia("(pointer: coarse)").matches, Ue = /* @__PURE__ */ F(!0), We = Z(() => i.value.room), Ge = Z(() => ["pending", "notified"].includes(We.value?.current_turn?.status) && !["paused", "concluded"].includes(We.value.phase) ? We.value.current_turn : null), Ke = (e) => e?.access === "manual" && e.status === "active", qe = Z(() => (We.value.members || []).find((e) => e.name === Ge.value?.expert)), Je = Z(() => We.value?.archived ? null : (We.value?.members || []).find((e) => Ke(e) && !e.registered_at) || null), Ye = Z(() => {
 			let e = qe.value;
 			if (!Ge.value || !e) return "";
 			let t = a.display_name(e.name);
@@ -46303,7 +46303,7 @@ var qK = {
 				key: `workflow:${e.id}`,
 				workflow: e,
 				group: "工作流",
-				enabled: Tn.value?.enabled && Tn.value.id === e.id
+				enabled: Tn.value?.id === e.id
 			}));
 		}), On = [{
 			id: "workflow-creator",
@@ -46378,7 +46378,7 @@ var qK = {
 		}
 		let Rn = (e) => un[e] ? e : a.mention_handles(e, mt.value.map((e) => e.name))[0];
 		async function zn(e) {
-			if (!on.value || !jn.value.some((t) => t.key === e.key)) return;
+			if (!on.value || on.value.composing || !jn.value.some((t) => t.key === e.key)) return;
 			let { start: t, end: n } = on.value;
 			if (e.workflow) return Hn(e, n);
 			if (e.skill) return Un(e, n);
@@ -46416,13 +46416,24 @@ var qK = {
 				e.preventDefault(), e.stopPropagation();
 			}
 		}
-		function Gn(e) {
-			hn = e.type === "compositionstart", on.value = null, hn || Ln(e);
-		}
+		let Gn = 0;
 		function Kn(e) {
-			e.preventDefault();
+			let t = Ve.value?.textareaRef;
+			if (e.target === t) {
+				if (e.type === "compositionstart") hn = !0, Gn = t.selectionStart;
+				else if (e.type === "compositionupdate") {
+					let n = t.value.slice(0, Gn) + (e.data || "").replace(/['\s]/g, ""), r = In(n, n.length) || Fn(n, n.length);
+					r?.query !== on.value?.query && (pn.value = 0), on.value = r && {
+						...r,
+						composing: !0
+					};
+				} else hn = !1, Ln(e);
+			}
 		}
 		function qn(e) {
+			e.preventDefault();
+		}
+		function Jn(e) {
 			for (let t of e.querySelectorAll("pre code, tbody")) {
 				let n = e.ownerDocument.createRange();
 				if (t.tagName === "TBODY") {
@@ -46437,7 +46448,7 @@ var qK = {
 			}
 			return !1;
 		}
-		function Jn(e) {
+		function Yn(e) {
 			let t = {
 				truncated: !1,
 				html: e.rendered_text
@@ -46445,7 +46456,7 @@ var qK = {
 			if (e.kind === "receipt") return t;
 			let n = document.createElement("template");
 			n.innerHTML = e.rendered_text;
-			let r = qn(n.content), i = document.createTreeWalker(n.content, NodeFilter.SHOW_TEXT, { acceptNode: (e) => e.parentElement?.closest(".katex-mathml") ? NodeFilter.FILTER_REJECT : NodeFilter.FILTER_ACCEPT }), a = [];
+			let r = Jn(n.content), i = document.createTreeWalker(n.content, NodeFilter.SHOW_TEXT, { acceptNode: (e) => e.parentElement?.closest(".katex-mathml") ? NodeFilter.FILTER_REJECT : NodeFilter.FILTER_ACCEPT }), a = [];
 			for (; i.nextNode();) a.push(i.currentNode);
 			let o = [...a.map((e) => e.textContent).join("").trimEnd()];
 			if (o.length <= KY) return {
@@ -46467,19 +46478,19 @@ var qK = {
 				html: n.innerHTML
 			};
 		}
-		let Yn = Z(() => ir.value), Xn = Z(() => {
+		let Xn = Z(() => ar.value), Zn = Z(() => {
 			let e = Date.parse(We.value?.session?.created_at || "");
 			if (!e) return null;
-			let t = Yn.value;
+			let t = Xn.value;
 			if (!t.some((e) => !e.slot_card && Number(e.id) <= We.value.session.started_message_id)) return null;
 			let n = t.findIndex((t) => !t.slot_card && Date.parse(t.created_at) >= e);
 			return n < 0 && (n = t.findLastIndex((e) => !e.slot_card) + 1), n === 0 ? null : n < t.length ? t[n].id : "end";
-		}), Zn = Z(() => {
+		}), $n = Z(() => {
 			let e = We.value?.session;
 			if (e?.status !== "concluded") return null;
-			let t = Yn.value, n = t.findIndex((t) => !t.slot_card && Number(t.id) > e.ended_message_id);
+			let t = Xn.value, n = t.findIndex((t) => !t.slot_card && Number(t.id) > e.ended_message_id);
 			return n < 0 ? "end" : t[n].id;
-		}), $n = Z(() => {
+		}), er = Z(() => {
 			if (i.value.query || i.value.mention_only || i.value.host_only) return [];
 			let e = new Map((We.value.free?.members || []).map((e) => [e.id, e.name]));
 			return (We.value.free?.executions || []).filter((e) => e.status === "failed").map((t) => ({
@@ -46495,9 +46506,9 @@ var qK = {
 					...t,
 					elapsed_seconds: t.finished_at ? Math.max(0, t.finished_at - t.created_at) : null
 				}
-			})).concat(er());
+			})).concat(tr());
 		});
-		function er() {
+		function tr() {
 			let e = new Map((We.value.free?.members || []).filter((e) => e.adopt_error).map((e) => [e.id, e]));
 			return (We.value.free?.requests || []).filter((t) => t.status === "pending" && e.has(t.member_id)).map((t) => ({
 				id: `undeliverable-${t.id}`,
@@ -46512,25 +46523,25 @@ var qK = {
 				}
 			}));
 		}
-		let tr = /* @__PURE__ */ F(/* @__PURE__ */ new Set()), nr = Z(() => {
+		let nr = /* @__PURE__ */ F(/* @__PURE__ */ new Set()), rr = Z(() => {
 			let e = /* @__PURE__ */ new Map(), t = /* @__PURE__ */ new Set(), n = null;
-			for (let r of i.value.messages) r.withdrawn === "rewound" ? (n === null && (n = r.id, e.set(n, 0)), e.set(n, e.get(n) + 1), n !== r.id && !tr.value.has(n) && t.add(r.id)) : n = null;
+			for (let r of i.value.messages) r.withdrawn === "rewound" ? (n === null && (n = r.id, e.set(n, 0)), e.set(n, e.get(n) + 1), n !== r.id && !nr.value.has(n) && t.add(r.id)) : n = null;
 			return {
 				runs: e,
 				hidden: t
 			};
 		});
-		function rr(e) {
-			let t = new Set(tr.value);
-			t.delete(e) || t.add(e), tr.value = t;
+		function ir(e) {
+			let t = new Set(nr.value);
+			t.delete(e) || t.add(e), nr.value = t;
 		}
-		let ir = Z(() => {
-			let e = i.value.messages.filter((e) => !nr.value.hidden.has(e.id)), t = new Set(e.filter((e) => !e.withdrawn).map((e) => e.id)), n = /* @__PURE__ */ new Map(), r = new Map((We.value.free?.executions || []).map((e) => [e.id, e])), a = [], o = (e) => a.findLast((t) => t <= e) ?? e, s = (e) => {
+		let ar = Z(() => {
+			let e = i.value.messages.filter((e) => !rr.value.hidden.has(e.id)), t = new Set(e.filter((e) => !e.withdrawn).map((e) => e.id)), n = /* @__PURE__ */ new Map(), r = new Map((We.value.free?.executions || []).map((e) => [e.id, e])), a = [], o = (e) => a.findLast((t) => t <= e) ?? e, s = (e) => {
 				if (!e.execution_id && !e.cancelled_turn && !e.arrangement && !e.undeliverable || e.withdrawn) return !1;
 				let i = e.discussion_request || r.get(e.execution_id)?.requests?.find((e) => e.discussion_session_id), a = e.anchor_message_id ?? e.request_message_id, s = a === e.request_message_id ? a : o(a), c = e.arrangement?.after_message_id ?? e.cancelled_turn?.after_message_id ?? (i ? i.after_message_id : s);
 				return !((i || e.cancelled_turn || e.arrangement) && c === 0) && !t.has(c) ? !1 : (n.set(c, [...n.get(c) || [], e]), !0);
 			}, c = e.filter((e) => !s(e) && (t.has(e.id) && a.push(e.id), !0));
-			if ($n.value.forEach(s), !i.value.query && !i.value.mention_only && !i.value.host_only) {
+			if (er.value.forEach(s), !i.value.query && !i.value.mention_only && !i.value.host_only) {
 				for (let e of We.value.host_arrangements || []) s({
 					id: e.key || `plan-${e.id}`,
 					slot_card: !0,
@@ -46570,9 +46581,9 @@ var qK = {
 				for (let t of (n.get(e.id) || []).sort(d)) p(t);
 			};
 			return (n.get(0) || []).sort(d).forEach(p), c.forEach(p), [...f, ...l];
-		}), ar = Z(() => {
+		}), or = Z(() => {
 			let e = [];
-			for (let t of Yn.value) {
+			for (let t of Xn.value) {
 				if (t.slot_card && e.length) {
 					e.at(-1).messages.push(t);
 					continue;
@@ -46585,9 +46596,9 @@ var qK = {
 				}), e.at(-1).messages.push(t);
 			}
 			return e;
-		}), or = Z(() => {
+		}), sr = Z(() => {
 			let e = [];
-			for (let t of Yn.value.filter((e) => !e.slot_card)) {
+			for (let t of Xn.value.filter((e) => !e.slot_card)) {
 				let n = a.round_groups(We.value)?.findLast((e) => e.start_id <= t.id), r = n && (n.end_id == null || t.id <= n.end_id) ? n : null, i = r?.number || 0, o = r?.key || "ungrouped";
 				if (e.at(-1)?.key !== o) {
 					let t = i ? `第 ${i} 轮` : "未分组", n = r ? `${r.opinions ?? r.speakers.length}/${r.participants ?? Object.keys(We.value.experts).length} 人已发言` : "尚无参与专家的观点";
@@ -46602,9 +46613,9 @@ var qK = {
 				e.at(-1).messages.push(t);
 			}
 			return e;
-		}), sr = Z(() => or.value.find((e) => e.messages.some((e) => e.id === ve.value))?.number), cr = Z(() => new Map(or.value.filter((e) => e.number).flatMap((e) => e.messages.map((t) => [t.id, e.label])))), lr = Z(() => {
+		}), cr = Z(() => sr.value.find((e) => e.messages.some((e) => e.id === ve.value))?.number), lr = Z(() => new Map(sr.value.filter((e) => e.number).flatMap((e) => e.messages.map((t) => [t.id, e.label])))), ur = Z(() => {
 			let e = 0;
-			return or.value.map((t) => ({
+			return sr.value.map((t) => ({
 				number: t.number,
 				count: t.messages.length,
 				entries: [{
@@ -46622,15 +46633,15 @@ var qK = {
 					index: e++
 				}))]
 			}));
-		}), ur = Z(() => lr.value.flatMap((e) => e.entries));
-		function dr(e) {
+		}), dr = Z(() => ur.value.flatMap((e) => e.entries));
+		function fr(e) {
 			return e.getBoundingClientRect().top + (parseFloat(getComputedStyle(e).getPropertyValue("--channel-topbar-height")) || 0);
 		}
-		function fr() {
+		function pr() {
 			let e = p.value;
 			if (!e || !e.clientHeight) return;
 			Ue.value = e.scrollHeight - e.scrollTop - e.clientHeight < hX;
-			let t = e.getBoundingClientRect(), n = dr(e), r = [...e.querySelectorAll("[data-message-id]")], i = r.find((e) => Number(e.dataset.messageId) === ye.value);
+			let t = e.getBoundingClientRect(), n = fr(e), r = [...e.querySelectorAll("[data-message-id]")], i = r.find((e) => Number(e.dataset.messageId) === ye.value);
 			if (i && i.getBoundingClientRect().bottom > n && i.getBoundingClientRect().top < t.bottom) {
 				ve.value = ye.value;
 				return;
@@ -46639,32 +46650,32 @@ var qK = {
 			let a = r.find((e) => e.getBoundingClientRect().bottom > n + gX);
 			ve.value = a ? Number(a.dataset.messageId) : null;
 		}
-		async function pr() {
-			await Qn(), Ue.value && p.value && (p.value.scrollTop = p.value.scrollHeight), fr();
+		async function mr() {
+			await Qn(), Ue.value && p.value && (p.value.scrollTop = p.value.scrollHeight), pr();
 		}
 		R([
 			() => i.value.messages,
 			et,
-			$n
-		], pr, { immediate: !0 }), R([
+			er
+		], mr, { immediate: !0 }), R([
 			() => i.value.room?.id,
 			() => i.value.query,
 			() => i.value.mention_only,
 			() => i.value.host_only
 		], () => {
-			ye.value = null, ve.value = null, Pr(), Ue.value = !0;
+			ye.value = null, ve.value = null, Fr(), Ue.value = !0;
 		}), R(() => i.value.tab, (e) => {
-			Pr(), e === "discussion" && pr();
+			Fr(), e === "discussion" && mr();
 		}), R(() => i.value.room?.id, () => m.value.clear());
-		async function mr(e, t) {
+		async function hr(e, t) {
 			let n = t.currentTarget.closest("[data-message-id]"), r = m.value.has(e.id), i = p.value.scrollTop;
-			Ue.value = !1, r ? m.value.delete(e.id) : m.value.add(e.id), Pr(), await Qn(), r || (p.value.scrollTop = i), r && n.getBoundingClientRect().top < dr(p.value) && (p.value.scrollTop += n.getBoundingClientRect().top - dr(p.value) - gX), fr();
-		}
-		function hr(e) {
-			let t = p.value, n = t?.querySelector(`[data-message-id="${e}"]`);
-			n && (Nr(), v.state.following = !1, ye.value = e, ve.value = e, t.scrollTop += n.getBoundingClientRect().top - dr(t) - gX, n.focus({ preventScroll: !0 }), fr());
+			Ue.value = !1, r ? m.value.delete(e.id) : m.value.add(e.id), Fr(), await Qn(), r || (p.value.scrollTop = i), r && n.getBoundingClientRect().top < fr(p.value) && (p.value.scrollTop += n.getBoundingClientRect().top - fr(p.value) - gX), pr();
 		}
 		function gr(e) {
+			let t = p.value, n = t?.querySelector(`[data-message-id="${e}"]`);
+			n && (Pr(), v.state.following = !1, ye.value = e, ve.value = e, t.scrollTop += n.getBoundingClientRect().top - fr(t) - gX, n.focus({ preventScroll: !0 }), pr());
+		}
+		function _r(e) {
 			v.state.following && (e.type !== "keydown" || [
 				"ArrowUp",
 				"ArrowDown",
@@ -46675,7 +46686,7 @@ var qK = {
 				" "
 			].includes(e.key)) && (e.type !== "pointerdown" || e.target === e.currentTarget) && (v.state.following = !1);
 		}
-		function _r(e) {
+		function yr(e) {
 			(e.type !== "keydown" || [
 				"ArrowUp",
 				"ArrowDown",
@@ -46686,34 +46697,34 @@ var qK = {
 				" "
 			].includes(e.key)) && (ye.value = null);
 		}
-		function yr(e, t) {
+		function br(e, t) {
 			let n = {
 				ArrowUp: t - 1,
 				ArrowDown: t + 1,
 				Home: 0,
-				End: ur.value.length - 1
+				End: dr.value.length - 1
 			};
 			if (!Object.hasOwn(n, e.key)) return;
 			e.preventDefault();
-			let r = Math.max(0, Math.min(n[e.key], ur.value.length - 1));
+			let r = Math.max(0, Math.min(n[e.key], dr.value.length - 1));
 			N.value.querySelectorAll("button")[r].focus({ preventScroll: !0 });
 		}
-		function br(e) {
+		function Sr(e) {
 			let t = N.value;
 			if (!t?.clientHeight || !e) return;
 			let n = t.getBoundingClientRect(), r = e.getBoundingClientRect();
 			r.top < n.top + fX ? t.scrollTop += r.top - n.top - fX : r.bottom > n.bottom - fX && (t.scrollTop += r.bottom - n.bottom + fX);
 		}
-		async function Sr() {
-			await Qn(), br(N.value?.querySelector(`[data-jump-id="${ve.value}"]`));
+		async function Cr() {
+			await Qn(), Sr(N.value?.querySelector(`[data-jump-id="${ve.value}"]`));
 		}
-		R(ve, Sr);
-		function Cr(e, t) {
-			!ke && t.currentTarget.matches(":focus-visible") && (_e.value = !0, br(e.round ? t.currentTarget.parentElement.querySelector("[data-jump-id]") : t.currentTarget), Mr(e, t));
-		}
+		R(ve, Cr);
 		function wr(e, t) {
+			!ke && t.currentTarget.matches(":focus-visible") && (_e.value = !0, Sr(e.round ? t.currentTarget.parentElement.querySelector("[data-jump-id]") : t.currentTarget), Nr(e, t));
+		}
+		function Tr(e, t) {
 			if (Ae = !1, !["touch", "pen"].includes(t.pointerType)) return;
-			Nr(), _e.value = !1;
+			Pr(), _e.value = !1;
 			let n = {
 				pointer: t.pointerId,
 				x: t.clientX,
@@ -46721,31 +46732,31 @@ var qK = {
 				target: t.currentTarget
 			};
 			ke = n, n.timer = setTimeout(() => {
-				ke === n && (Ae = !0, Mr(e, { currentTarget: n.target }));
+				ke === n && (Ae = !0, Nr(e, { currentTarget: n.target }));
 			}, pX);
 		}
-		function Tr() {
+		function Er() {
 			ke && clearTimeout(ke.timer), ke = null;
 		}
-		function Er(e) {
-			ke?.pointer === e.pointerId && (e.type === "pointercancel" && (Ae = !0), Nr());
-		}
-		function Dr(e, t) {
-			["touch", "pen"].includes(t.pointerType) ? ke?.pointer === t.pointerId && Math.hypot(t.clientX - ke.x, t.clientY - ke.y) > mX && (Ae = !0, Nr()) : t.type === "pointerenter" && _e.value || (_e.value = !1, (xe.value !== e.key || !Ce.value) && Mr(e, t));
+		function Dr(e) {
+			ke?.pointer === e.pointerId && (e.type === "pointercancel" && (Ae = !0), Pr());
 		}
 		function Or(e, t) {
-			Ae && t.detail !== 0 ? (Ae = !1, t.preventDefault()) : hr(e.message.id);
+			["touch", "pen"].includes(t.pointerType) ? ke?.pointer === t.pointerId && Math.hypot(t.clientX - ke.x, t.clientY - ke.y) > mX && (Ae = !0, Pr()) : t.type === "pointerenter" && _e.value || (_e.value = !1, (xe.value !== e.key || !Ce.value) && Nr(e, t));
 		}
-		function kr(e) {
-			ke && e.preventDefault();
+		function kr(e, t) {
+			Ae && t.detail !== 0 ? (Ae = !1, t.preventDefault()) : gr(e.message.id);
 		}
 		function Ar(e) {
-			(e.deltaX || e.deltaY) && (_e.value = !1, Nr());
+			ke && e.preventDefault();
 		}
-		function jr() {
-			Nr(), v.state.following = !1, ye.value = null, Ue.value = !0, pr();
+		function jr(e) {
+			(e.deltaX || e.deltaY) && (_e.value = !1, Pr());
 		}
-		async function Mr(e, t) {
+		function Mr() {
+			Pr(), v.state.following = !1, ye.value = null, Ue.value = !0, mr();
+		}
+		async function Nr(e, t) {
 			let n = e.message, r = t.currentTarget.getBoundingClientRect(), i = N.value.getBoundingClientRect(), a = Math.min(XY, innerWidth - 24), o = i.right + $Y;
 			if (Te.value = Math.max(QY, Math.min(o, innerWidth - a - QY)), be.value = n.id, xe.value = e.key, Se.value = e.round, Ce.value = !0, await Qn(), !Ce.value || xe.value !== e.key) return;
 			De.value = we.value.scrollHeight + ZY;
@@ -46754,20 +46765,20 @@ var qK = {
 			let c = Ne.get() === 0;
 			je[c ? "jump" : "set"](Ee.value), Me[c ? "jump" : "set"](De.value);
 		}
-		function Nr(e) {
-			e?.relatedTarget?.closest?.(".channel-message-map, .channel-nav-preview") || (Tr(), Ce.value = !1);
+		function Pr(e) {
+			e?.relatedTarget?.closest?.(".channel-message-map, .channel-nav-preview") || (Er(), Ce.value = !1);
 		}
-		function Pr() {
-			Tr(), Ce.value = !1, Ne.jump(0), be.value = null;
+		function Fr() {
+			Er(), Ce.value = !1, Ne.jump(0), be.value = null;
 		}
-		async function Fr() {
-			Pr(), r?.measure(), await pr(), await Sr();
+		async function Ir() {
+			Fr(), r?.measure(), await mr(), await Cr();
 		}
-		function Ir(e) {
+		function Lr(e) {
 			let t = e.entries.length - 1;
 			return Math.max(-3, Math.min(t + oX, Be.value - e.entries[0].index));
 		}
-		function Lr(e, t) {
+		function Rr(e, t) {
 			let n = Be.value < 0 ? Infinity : Math.abs(t - Be.value), r = Math.max(0, 1 - n / oX), i = ve.value === e.message.id, a = n === 0 || i && Be.value < 0, o = tX;
 			return {
 				scaleX: a ? nX / o : i ? rX / o : 1 + r * sX / o,
@@ -46775,79 +46786,79 @@ var qK = {
 				opacity: a ? uX : i ? lX : cX + r * dX
 			};
 		}
-		R(Ce, (e) => Ne.set(+!!e)), Qi(() => window.addEventListener("resize", Fr)), ta(() => window.removeEventListener("resize", Fr));
-		function Rr() {
+		R(Ce, (e) => Ne.set(+!!e)), Qi(() => window.addEventListener("resize", Ir)), ta(() => window.removeEventListener("resize", Ir));
+		function zr() {
 			let e = Ve.value?.textareaRef;
 			if (!e) return;
 			e.rows = 1;
 			let t = getComputedStyle(e), n = (e.scrollHeight - parseFloat(t.paddingTop) - parseFloat(t.paddingBottom)) / parseFloat(t.lineHeight);
 			e.rows = Math.min(Math.max(Math.floor(n), 1), RY);
 		}
-		let zr = 0, Br = new ResizeObserver(([e]) => {
-			Math.round(e.contentRect.width) !== zr && (zr = Math.round(e.contentRect.width), Rr());
+		let Br = 0, Vr = new ResizeObserver(([e]) => {
+			Math.round(e.contentRect.width) !== Br && (Br = Math.round(e.contentRect.width), zr());
 		});
-		Qi(() => Ve.value?.textareaRef && Br.observe(Ve.value.textareaRef)), ta(() => Br.disconnect()), ta(Tr);
-		let Vr = /* @__PURE__ */ F(""), Ur;
-		function Wr() {
-			clearTimeout(Ur), Vr.value = "";
+		Qi(() => Ve.value?.textareaRef && Vr.observe(Ve.value.textareaRef)), ta(() => Vr.disconnect()), ta(Er);
+		let Ur = /* @__PURE__ */ F(""), Wr;
+		function Gr() {
+			clearTimeout(Wr), Ur.value = "";
 		}
-		async function Gr(e) {
+		async function Kr(e) {
 			let t = We.value.id;
-			Wr(), await s("copy_member_launch", e) && We.value?.id === t && (Vr.value = e, Ur = setTimeout(Wr, TX));
+			Gr(), await s("copy_member_launch", e) && We.value?.id === t && (Ur.value = e, Wr = setTimeout(Gr, TX));
 		}
-		R([() => We.value?.id, () => Ge.value?.id], Wr), ta(Wr);
-		function Kr(e) {
+		R([() => We.value?.id, () => Ge.value?.id], Gr), ta(Gr);
+		function qr(e) {
 			if (!i.value.access?.can_manage) return null;
 			let t = e.requests?.find((e) => e.discussion_session_id), n = t ? t.source_message_id : e.request_message_id;
 			return i.value.messages.find((e) => e.id === n && !e.withdrawn && (!t || e.author === "用户"));
 		}
-		function qr(e) {
-			return e.status === "failed" ? Kr(e) : null;
-		}
 		function Jr(e) {
-			return !!(i.value.access?.can_manage && e.requests?.length && !e.requests.some((e) => e.discussion_session_id));
+			return e.status === "failed" ? qr(e) : null;
 		}
 		function Yr(e) {
-			let t = Kr(e);
+			return !!(i.value.access?.can_manage && e.requests?.length && !e.requests.some((e) => e.discussion_session_id));
+		}
+		function Xr(e) {
+			let t = qr(e);
 			if (!t) return;
 			let n = (We.value.free?.requests || []).find((t) => e.request_ids?.includes(t.id));
 			l.value = n?.purpose === "ask" && n.member ? `@${n.member} ${t.text}` : t.text, Ve.value?.textareaRef?.focus();
 		}
-		function Xr(e) {
+		function Zr(e) {
 			let t = (We.value.free?.members || []).find((t) => t.id === e.member_id)?.name, n = [...new Set((e.denials || []).map((e) => e.rule).filter(Boolean))];
-			return t && n.length && i.value.launch?.available && Kr(e) ? {
+			return t && n.length && i.value.launch?.available && qr(e) ? {
 				name: t,
 				rules: n
 			} : null;
 		}
-		let Zr = /* @__PURE__ */ F(0), Qr = /* @__PURE__ */ F({});
-		async function $r(e) {
-			let t = Xr(e);
-			if (t && !Zr.value) {
-				Zr.value = e.id, Qr.value = {
-					...Qr.value,
+		let Qr = /* @__PURE__ */ F(0), $r = /* @__PURE__ */ F({});
+		async function ei(e) {
+			let t = Zr(e);
+			if (t && !Qr.value) {
+				Qr.value = e.id, $r.value = {
+					...$r.value,
 					[e.id]: ""
 				};
 				try {
-					await a.allow_denials(t), Yr(e);
+					await a.allow_denials(t), Xr(e);
 				} catch (t) {
-					Qr.value = {
-						...Qr.value,
+					$r.value = {
+						...$r.value,
 						[e.id]: t.message
 					};
 				} finally {
-					Zr.value = 0;
+					Qr.value = 0;
 				}
 			}
 		}
-		function ei(e) {
+		function ti(e) {
 			return [[
-				...ni(e) ? [{
+				...ri(e) ? [{
 					label: "回复",
 					icon: "i-lucide-corner-up-left",
-					onSelect: () => li(e)
+					onSelect: () => ui(e)
 				}] : [],
-				...ae.value && e.kind !== "receipt" && ai.value.id !== e.id ? [v.state.message_id === e.id ? {
+				...ae.value && e.kind !== "receipt" && z.value.id !== e.id ? [v.state.message_id === e.id ? {
 					label: "停止朗读",
 					icon: "i-lucide-square",
 					onSelect: () => v.stop()
@@ -46859,61 +46870,61 @@ var qK = {
 				{
 					label: "复制原文链接",
 					icon: "i-lucide-link",
-					onSelect: () => mi(e)
+					onSelect: () => hi(e)
 				},
 				{
 					label: "查看原文",
 					icon: "i-lucide-expand",
 					onSelect: () => n("detail", e.id)
 				},
-				...ti(e) && e.author !== "用户" ? [{
+				...ni(e) && e.author !== "用户" ? [{
 					label: "从这里分支",
 					icon: "i-lucide-git-branch",
 					onSelect: () => s("fork_room", e.id)
 				}] : []
 			]];
 		}
-		let ti = (e) => Xe.value && i.value.access?.can_manage && !e.withdrawn && !(We.value.session?.started_message_id >= e.id) && !(We.value.discussions || []).some((t) => ["active", "paused"].includes(t.status) || t.started_message_id >= e.id), ni = (e) => ti(e) && e.author === "用户" && !We.value.archived, ri = (e) => ni(e) && (i.value.messages.at(-1)?.id === e.id || !(We.value.free?.requests || []).some((t) => t.message_id === e.id && [
+		let ni = (e) => Xe.value && i.value.access?.can_manage && !e.withdrawn && !(We.value.session?.started_message_id >= e.id) && !(We.value.discussions || []).some((t) => ["active", "paused"].includes(t.status) || t.started_message_id >= e.id), ri = (e) => ni(e) && e.author === "用户" && !We.value.archived, ii = (e) => ri(e) && (i.value.messages.at(-1)?.id === e.id || !(We.value.free?.requests || []).some((t) => t.message_id === e.id && [
 			"delivering",
 			"completed",
 			"failed"
-		].includes(t.status))), ii = {
+		].includes(t.status))), ai = {
 			id: 0,
 			text: "",
 			plan: null,
 			error: ""
-		}, ai = /* @__PURE__ */ F(ii);
-		async function z(e) {
-			ai.value = {
-				...ii,
+		}, z = /* @__PURE__ */ F(ai);
+		async function oi(e) {
+			z.value = {
+				...ai,
 				id: e.id,
 				text: e.text
 			};
 			try {
 				let t = await a.rewind_plan(e.id);
-				ai.value.id === e.id && (ai.value = {
-					...ai.value,
+				z.value.id === e.id && (z.value = {
+					...z.value,
 					plan: t
 				});
 			} catch (t) {
-				ai.value.id === e.id && (ai.value = {
-					...ai.value,
+				z.value.id === e.id && (z.value = {
+					...z.value,
 					error: t.message
 				});
 			}
 		}
-		function oi() {
-			ai.value = ii;
+		function si() {
+			z.value = ai;
 		}
-		async function si() {
-			let { id: e, text: t, plan: n } = ai.value;
+		async function ci() {
+			let { id: e, text: t, plan: n } = z.value;
 			n && t.trim() && !c.value && (Ue.value = !0, await s("rewind_and_send", {
 				message_id: e,
 				revision: n.revision,
 				text: t.trim()
-			}) && oi());
+			}) && si());
 		}
-		function ci(e) {
+		function li(e) {
 			let t = (t) => e.members.filter((e) => e.session === t).map((e) => a.display_name(e.name)).join("、");
 			return [
 				`将回退 ${e.messages} 条记录（含这条），进行中的工作会停止`,
@@ -46922,26 +46933,26 @@ var qK = {
 				"成员已改动的文件不会撤销"
 			].filter(Boolean).join("；") + "。";
 		}
-		async function li(e) {
+		async function ui(e) {
 			await s("reply", e), Ve.value?.textareaRef?.focus();
 		}
-		async function ui() {
+		async function di() {
 			if (!pt.value || c.value || i.value.sending_message) return;
 			on.value = null, Ue.value = !0;
 			let e = l.value, t = ft();
 			t && (l.value = e.trim() ? `${e.trimEnd()}\n\n${t}` : t);
 			let n = l.value;
-			await s("send"), t && l.value === n ? l.value = e : t && (dt.value = []), await pr();
+			await s("send"), t && l.value === n ? l.value = e : t && (dt.value = []), await mr();
 		}
-		let di = 0;
-		function fi(e) {
-			e.key !== "Escape" || e.isComposing || e.defaultPrevented || (e.target !== Ve.value?.textareaRef && e.target !== document.body || pt.value && !i.value.sending_message || i.value.sending_preview?.failed ? di = 0 : e.timeStamp - di > BY ? di = e.timeStamp : (di = 0, e.preventDefault(), a.execute("retract_latest")));
-		}
-		Qi(() => window.addEventListener("keydown", fi)), ta(() => window.removeEventListener("keydown", fi));
+		let fi = 0;
 		function pi(e) {
-			e.defaultPrevented || !He || e.key !== "Enter" || e.ctrlKey || e.metaKey || e.shiftKey || e.altKey || e.isComposing || l.value.trim() || (i.value.attachment_drafts.length || dt.value.length) && (e.preventDefault(), e.stopPropagation(), ui());
+			e.key !== "Escape" || e.isComposing || e.defaultPrevented || (e.target !== Ve.value?.textareaRef && e.target !== document.body || pt.value && !i.value.sending_message || i.value.sending_preview?.failed ? fi = 0 : e.timeStamp - fi > BY ? fi = e.timeStamp : (fi = 0, e.preventDefault(), a.execute("retract_latest")));
 		}
+		Qi(() => window.addEventListener("keydown", pi)), ta(() => window.removeEventListener("keydown", pi));
 		function mi(e) {
+			e.defaultPrevented || !He || e.key !== "Enter" || e.ctrlKey || e.metaKey || e.shiftKey || e.altKey || e.isComposing || l.value.trim() || (i.value.attachment_drafts.length || dt.value.length) && (e.preventDefault(), e.stopPropagation(), di());
+		}
+		function hi(e) {
 			s("copy", `${i.value.room_site}/r/${We.value.id}/messages/${e.id}`);
 		}
 		return (e, t) => {
@@ -46971,17 +46982,17 @@ var qK = {
 					class: "channel-message-map",
 					style: fe({ "--nav-entry-height": `${eX}px` }),
 					"aria-label": "发言快速导航",
-					onWheelPassive: uu(Ar, ["stop"]),
-					onPointerleave: Nr,
-					onFocusout: Nr,
-					onKeydown: fu(uu(Nr, ["stop"]), ["esc"]),
-					onContextmenu: kr
-				}, [K("div", XK, [(U(!0), W(H, null, B(lr.value, (e, t, n, r) => {
+					onWheelPassive: uu(jr, ["stop"]),
+					onPointerleave: Pr,
+					onFocusout: Pr,
+					onKeydown: fu(uu(Pr, ["stop"]), ["esc"]),
+					onContextmenu: Ar
+				}, [K("div", XK, [(U(!0), W(H, null, B(ur.value, (e, t, n, r) => {
 					let o = [
 						e,
 						Ce.value,
-						sr.value === e.number ? ve.value : null,
-						Ir(e)
+						cr.value === e.number ? ve.value : null,
+						Lr(e)
 					];
 					if (r && r.el && r.key === e.entries[0].key && rc(r, o)) return r;
 					let s = (U(), W("div", {
@@ -46999,20 +47010,20 @@ var qK = {
 						tabindex: !e.round && e.message.id === (ve.value || I(i).messages[0]?.id) ? 0 : -1,
 						"aria-current": !e.round && ve.value === e.message.id ? "location" : void 0,
 						"aria-describedby": Ce.value && xe.value === e.key ? "channel-navigation-preview" : void 0,
-						onPointerenter: (t) => Dr(e, t),
-						onPointermove: (t) => Dr(e, t),
-						onPointerdown: (t) => wr(e, t),
-						onPointerup: Er,
-						onPointercancel: Er,
-						onFocus: (t) => Cr(e, t),
-						onKeydown: (t) => yr(t, e.index),
-						onClick: (t) => Or(e, t)
-					}, [e.round ? (U(), W("span", QK, P(e.number || "–"), 1)) : (U(), G(I(iV).span, {
+						onPointerenter: (t) => Or(e, t),
+						onPointermove: (t) => Or(e, t),
+						onPointerdown: (t) => Tr(e, t),
+						onPointerup: Dr,
+						onPointercancel: Dr,
+						onFocus: (t) => wr(e, t),
+						onKeydown: (t) => br(t, e.index),
+						onClick: (t) => kr(e, t)
+					}, [e.round ? (U(), W("span", QK, P(e.number || ""), 1)) : (U(), G(I(iV).span, {
 						key: 1,
 						class: "channel-jump-tick",
 						"aria-hidden": "true",
 						initial: !1,
-						animate: Lr(e, e.index),
+						animate: Rr(e, e.index),
 						transition: Oe
 					}, null, 8, ["animate"]))], 42, ZK))), 128))], 4));
 					return s.memo = o, s;
@@ -47034,9 +47045,9 @@ var qK = {
 						height: I(Me),
 						"--preview-gap": `${$Y}px`
 					}),
-					onPointerleave: Nr,
-					onFocusout: Nr,
-					onKeydown: fu(uu(Nr, ["stop"]), ["esc"])
+					onPointerleave: Pr,
+					onFocusout: Pr,
+					onKeydown: fu(uu(Pr, ["stop"]), ["esc"])
 				}, {
 					default: L(() => [K("div", {
 						ref_key: "preview_content",
@@ -47088,8 +47099,8 @@ var qK = {
 					onClick: me
 				}, [q(g, { name: "i-lucide-headphones" }), t[39] ||= J("朗读", -1)], 36)) : Y("", !0),
 				nc([
-					ar.value,
-					cr.value,
+					or.value,
+					lr.value,
 					Xe.value,
 					We.value.session,
 					I(i).access,
@@ -47100,8 +47111,8 @@ var qK = {
 					I(i).query,
 					I(i).mention_only,
 					I(i).host_only,
-					Xn.value,
 					Zn.value,
+					$n.value,
 					wt.value,
 					Tt.value,
 					At.value,
@@ -47112,37 +47123,37 @@ var qK = {
 					I(c),
 					tt.value,
 					ot.value,
-					ai.value,
-					nr.value
+					z.value,
+					rr.value
 				], () => (U(), W("div", {
 					ref_key: "transcript",
 					ref: p,
 					class: "channel-transcript",
 					"aria-label": "聊天记录",
-					onScroll: fr,
+					onScroll: pr,
 					onWheelPassive: t[16] ||= (e) => {
-						_r(e), gr(e);
+						yr(e), _r(e);
 					},
-					onTouchstartPassive: _r,
-					onTouchmovePassive: gr,
-					onPointerdown: gr,
+					onTouchstartPassive: yr,
+					onTouchmovePassive: _r,
+					onPointerdown: _r,
 					onKeydown: t[17] ||= (e) => {
-						_r(e), gr(e);
+						yr(e), _r(e);
 					}
 				}, [
-					!I(i).query && !I(i).mention_only && !I(i).host_only && !Xn.value ? (U(), W("div", aq, [q(SH, {
+					!I(i).query && !I(i).mention_only && !I(i).host_only && !Zn.value ? (U(), W("div", aq, [q(SH, {
 						ref: (e) => /* @__PURE__ */ ln(r) ? r.value = e : r = e,
 						onEdit: t[4] ||= (e) => n("edit")
 					}, null, 512)])) : Y("", !0),
-					(U(!0), W(H, null, B(ar.value, (e) => (U(), W("div", {
+					(U(!0), W(H, null, B(or.value, (e) => (U(), W("div", {
 						key: e.key,
 						class: "channel-message-group"
 					}, [q(_, {
 						label: e.label,
 						class: "channel-date-divider"
 					}, null, 8, ["label"]), (U(!0), W(H, null, B(e.messages, (e) => (U(), W(H, { key: e.id }, [
-						e.id === Zn.value && !I(i).query && !I(i).mention_only && !I(i).host_only ? (U(), G(YH, { key: 0 })) : Y("", !0),
-						e.id === Xn.value && !I(i).query && !I(i).mention_only && !I(i).host_only ? (U(), G(SH, {
+						e.id === $n.value && !I(i).query && !I(i).mention_only && !I(i).host_only ? (U(), G(YH, { key: 0 })) : Y("", !0),
+						e.id === Zn.value && !I(i).query && !I(i).mention_only && !I(i).host_only ? (U(), G(SH, {
 							key: 1,
 							ref_for: !0,
 							ref: (e) => /* @__PURE__ */ ln(r) ? r.value = e : r = e,
@@ -47442,7 +47453,7 @@ var qK = {
 								}, [K("time", { title: new Date(t).toLocaleString("zh-CN") }, P(I(a).format_time(t)), 9, Kq), e.failure.id ? (U(), W("span", qq, "执行 #" + P(e.failure.id), 1)) : Y("", !0)]))), 128))]),
 								e.failure.elapsed_seconds == null ? Y("", !0) : (U(), W("span", Jq, "耗时 " + P(Jt(e.failure.elapsed_seconds)), 1))
 							]),
-							K("div", Yq, [K("p", Xq, P(e.failure.result || "执行失败，未提供原因"), 1), Jr(e.failure) ? (U(), W("div", Zq, [q(T, { text: "重试" }, {
+							K("div", Yq, [K("p", Xq, P(e.failure.result || "执行失败，未提供原因"), 1), Yr(e.failure) ? (U(), W("div", Zq, [q(T, { text: "重试" }, {
 								default: L(() => [q(o, {
 									icon: "i-lucide-rotate-cw",
 									variant: "solid",
@@ -47476,10 +47487,10 @@ var qK = {
 							e.failure.denials?.length ? (U(), G($H, {
 								key: 1,
 								denials: e.failure.denials,
-								allowable: !!Xr(e.failure),
-								busy: Zr.value === e.failure.id,
-								error: Qr.value[e.failure.id],
-								onAllow: (t) => $r(e.failure)
+								allowable: !!Zr(e.failure),
+								busy: Qr.value === e.failure.id,
+								error: $r.value[e.failure.id],
+								onAllow: (t) => ei(e.failure)
 							}, null, 8, [
 								"denials",
 								"allowable",
@@ -47496,13 +47507,13 @@ var qK = {
 						}, [q(g, {
 							name: e.withdrawn === "retracted" ? "i-lucide-undo-2" : "i-lucide-history",
 							class: "channel-withdrawn-icon"
-						}, null, 8, ["name"]), e.withdrawn === "retracted" ? (U(), W("span", $q, P(I(a).display_name(e.author)) + " 撤回了一条消息", 1)) : nr.value.runs.has(e.id) && !tr.value.has(e.id) ? (U(), W(H, { key: 1 }, [K("span", null, "已回退 " + P(nr.value.runs.get(e.id)) + " 条记录", 1), q(o, {
+						}, null, 8, ["name"]), e.withdrawn === "retracted" ? (U(), W("span", $q, P(I(a).display_name(e.author)) + " 撤回了一条消息", 1)) : rr.value.runs.has(e.id) && !nr.value.has(e.id) ? (U(), W(H, { key: 1 }, [K("span", null, "已回退 " + P(rr.value.runs.get(e.id)) + " 条记录", 1), q(o, {
 							label: "展开",
 							size: "xs",
 							variant: "link",
 							color: "neutral",
 							"aria-label": `展开从 #${e.id} 起已回退的记录`,
-							onClick: (t) => rr(e.id)
+							onClick: (t) => ir(e.id)
 						}, null, 8, ["aria-label", "onClick"])], 64)) : (U(), W(H, { key: 2 }, [
 							K("strong", null, P(I(a).display_name(e.author)), 1),
 							K("span", eJ, P(e.text), 1),
@@ -47518,29 +47529,29 @@ var qK = {
 								"aria-label",
 								"onClick"
 							]),
-							nr.value.runs.has(e.id) ? (U(), G(o, {
+							rr.value.runs.has(e.id) ? (U(), G(o, {
 								key: 0,
 								label: "收起",
 								size: "xs",
 								variant: "link",
 								color: "neutral",
 								"aria-label": `收起从 #${e.id} 起已回退的记录`,
-								onClick: (t) => rr(e.id)
+								onClick: (t) => ir(e.id)
 							}, null, 8, ["aria-label", "onClick"])) : Y("", !0)
 						], 64))], 8, Qq)) : (U(), W(H, { key: 8 }, [
 							nc([
 								e,
 								I(v).state.message_id === e.id,
 								ae.value,
-								ni(e),
-								ti(e),
 								ri(e),
+								ni(e),
+								ii(e),
 								I(i).admin?.identity_version,
-								ai.value.id === e.id && ai.value.plan,
-								ai.value.id === e.id && ai.value.error,
-								ai.value.id === e.id,
+								z.value.id === e.id && z.value.plan,
+								z.value.id === e.id && z.value.error,
+								z.value.id === e.id,
 								I(c) === "rewind_and_send",
-								cr.value.get(e.id),
+								lr.value.get(e.id),
 								m.value.has(e.id),
 								ve.value === e.id,
 								Et(e),
@@ -47584,7 +47595,7 @@ var qK = {
 										]),
 										K("div", nJ, [K("div", rJ, [
 											K("strong", null, P(I(a).display_name(e.author)), 1),
-											K("span", iJ, P(cr.value.get(e.id)), 1),
+											K("span", iJ, P(lr.value.get(e.id)), 1),
 											q(E, {
 												size: "xs",
 												color: "neutral",
@@ -47673,39 +47684,39 @@ var qK = {
 									e.kind === "receipt" ? (U(), W("details", lJ, [K("summary", { "aria-label": `查看运行回执 #${e.id}` }, "运行回执详情", 8, uJ), K("div", {
 										class: "channel-message-text markdown-body",
 										innerHTML: e.rendered_text
-									}, null, 8, dJ)])) : ai.value.id === e.id ? (U(), W("form", {
+									}, null, 8, dJ)])) : z.value.id === e.id ? (U(), W("form", {
 										key: 2,
 										class: "channel-edit",
 										"aria-label": `编辑消息 #${e.id}`,
-										onSubmit: uu(si, ["prevent"])
+										onSubmit: uu(ci, ["prevent"])
 									}, [
 										vr(K("textarea", {
-											"onUpdate:modelValue": t[8] ||= (e) => ai.value.text = e,
+											"onUpdate:modelValue": t[8] ||= (e) => z.value.text = e,
 											rows: "3",
 											maxlength: I(a).max_message_length,
 											"aria-label": "编辑后的消息",
 											onKeydown: [
-												fu(uu(oi, ["prevent"]), ["esc"]),
-												fu(uu(si, ["ctrl", "prevent"]), ["enter"]),
-												fu(uu(si, ["meta", "prevent"]), ["enter"])
+												fu(uu(si, ["prevent"]), ["esc"]),
+												fu(uu(ci, ["ctrl", "prevent"]), ["enter"]),
+												fu(uu(ci, ["meta", "prevent"]), ["enter"])
 											]
-										}, null, 40, pJ), [[Yl, ai.value.text]]),
+										}, null, 40, pJ), [[Yl, z.value.text]]),
 										K("p", {
-											class: M(["channel-edit-note", { "is-error": ai.value.error }]),
+											class: M(["channel-edit-note", { "is-error": z.value.error }]),
 											role: "status"
-										}, P(ai.value.error || (ai.value.plan ? ci(ai.value.plan) : "正在读取回退范围…")), 3),
+										}, P(z.value.error || (z.value.plan ? li(z.value.plan) : "正在读取回退范围…")), 3),
 										K("div", mJ, [q(o, {
 											label: "取消",
 											size: "xs",
 											variant: "ghost",
 											color: "neutral",
-											onClick: oi
+											onClick: si
 										}), q(o, {
 											type: "submit",
 											label: "回退并发送",
 											size: "xs",
 											color: "primary",
-											disabled: !ai.value.plan || !!I(c) && I(c) !== "rewind_and_send",
+											disabled: !z.value.plan || !!I(c) && I(c) !== "rewind_and_send",
 											loading: I(c) === "rewind_and_send"
 										}, null, 8, ["disabled", "loading"])])
 									], 40, fJ)) : (U(), W("div", hJ, [K("div", {
@@ -47723,7 +47734,7 @@ var qK = {
 										"aria-label": `${m.value.has(e.id) ? "收起回答" : "展开完整回答"} #${e.id}`,
 										"aria-expanded": m.value.has(e.id),
 										"aria-controls": `channel-answer-${e.id}`,
-										onClick: (t) => mr(e, t)
+										onClick: (t) => hr(e, t)
 									}, null, 8, [
 										"label",
 										"trailing-icon",
@@ -47811,10 +47822,10 @@ var qK = {
 										e.denials?.length ? (U(), G($H, {
 											key: 2,
 											denials: e.denials,
-											allowable: !!Xr(e),
-											busy: Zr.value === e.id,
-											error: Qr.value[e.id],
-											onAllow: (t) => $r(e)
+											allowable: !!Zr(e),
+											busy: Qr.value === e.id,
+											error: $r.value[e.id],
+											onAllow: (t) => ei(e)
 										}, null, 8, [
 											"denials",
 											"allowable",
@@ -47822,7 +47833,7 @@ var qK = {
 											"error",
 											"onAllow"
 										])) : Y("", !0),
-										qr(e) ? (U(), G(o, {
+										Jr(e) ? (U(), G(o, {
 											key: 3,
 											label: "重发",
 											icon: "i-lucide-rotate-ccw",
@@ -47830,12 +47841,12 @@ var qK = {
 											variant: "soft",
 											color: "neutral",
 											"aria-label": `把执行 #${e.id} 的原消息填回输入框重发`,
-											onClick: (t) => Yr(e)
+											onClick: (t) => Xr(e)
 										}, null, 8, ["aria-label", "onClick"])) : Y("", !0)
 									], 8, TJ))), 128))
 								]),
 								header: L(() => [K("div", OJ, [K("div", kJ, [
-									ni(e) ? Y("", !0) : (U(), G(T, {
+									ri(e) ? Y("", !0) : (U(), G(T, {
 										key: 0,
 										text: "回复"
 									}, {
@@ -47845,11 +47856,11 @@ var qK = {
 											color: "neutral",
 											variant: "ghost",
 											"aria-label": `回复 #${e.id}`,
-											onClick: (t) => li(e)
+											onClick: (t) => ui(e)
 										}, null, 8, ["aria-label", "onClick"])]),
 										_: 2
 									}, 1024)),
-									ri(e) && ai.value.id !== e.id ? (U(), G(T, {
+									ii(e) && z.value.id !== e.id ? (U(), G(T, {
 										key: 1,
 										text: "撤回"
 									}, {
@@ -47863,7 +47874,7 @@ var qK = {
 										}, null, 8, ["aria-label", "onClick"])]),
 										_: 2
 									}, 1024)) : Y("", !0),
-									ni(e) && ai.value.id !== e.id ? (U(), G(T, {
+									ri(e) && z.value.id !== e.id ? (U(), G(T, {
 										key: 2,
 										text: "编辑"
 									}, {
@@ -47873,11 +47884,11 @@ var qK = {
 											color: "neutral",
 											variant: "ghost",
 											"aria-label": `编辑 #${e.id}，回退到它之前重新发送`,
-											onClick: (t) => z(e)
+											onClick: (t) => oi(e)
 										}, null, 8, ["aria-label", "onClick"])]),
 										_: 2
 									}, 1024)) : Y("", !0),
-									!ae.value && e.kind !== "receipt" && ai.value.id !== e.id ? (U(), G(T, {
+									!ae.value && e.kind !== "receipt" && z.value.id !== e.id ? (U(), G(T, {
 										key: 3,
 										text: I(v).state.message_id === e.id ? "停止朗读" : "朗读"
 									}, {
@@ -47896,7 +47907,7 @@ var qK = {
 										_: 2
 									}, 1032, ["text"])) : Y("", !0),
 									q(D, {
-										items: ei(e),
+										items: ti(e),
 										content: {
 											align: "end",
 											sideOffset: 5
@@ -48103,7 +48114,7 @@ var qK = {
 								color: "primary",
 								"aria-label": "重新发送这条消息",
 								disabled: !pt.value || I(i).sending_message,
-								onClick: ui
+								onClick: di
 							}, null, 8, ["disabled"]), q(o, {
 								label: "放弃",
 								icon: "i-lucide-x",
@@ -48117,18 +48128,18 @@ var qK = {
 						]),
 						_: 1
 					}, 8, ["data-author", "class"])])) : Y("", !0),
-					(Xn.value === "end" || Zn.value === "end") && !I(i).query && !I(i).mention_only && !I(i).host_only ? (U(), W("div", tY, [Xn.value === "end" ? (U(), G(SH, {
+					(Zn.value === "end" || $n.value === "end") && !I(i).query && !I(i).mention_only && !I(i).host_only ? (U(), W("div", tY, [Zn.value === "end" ? (U(), G(SH, {
 						key: 0,
 						ref: (e) => /* @__PURE__ */ ln(r) ? r.value = e : r = e,
 						onEdit: t[15] ||= (e) => n("edit")
-					}, null, 512)) : Y("", !0), Zn.value === "end" ? (U(), G(YH, { key: 1 })) : Y("", !0)])) : Y("", !0),
-					!Yn.value.length && !et.value.length ? (U(), W("div", nY, [
+					}, null, 512)) : Y("", !0), $n.value === "end" ? (U(), G(YH, { key: 1 })) : Y("", !0)])) : Y("", !0),
+					!Xn.value.length && !et.value.length ? (U(), W("div", nY, [
 						q(g, { name: I(i).query || I(i).mention_only || I(i).host_only ? "i-lucide-search" : "i-lucide-hash" }, null, 8, ["name"]),
 						K("h2", null, P(I(i).query || I(i).mention_only || I(i).host_only ? "没有找到消息" : We.value.title), 1),
 						K("p", null, P(I(i).query || I(i).mention_only || I(i).host_only ? "试试其他关键词，或清除筛选。" : I(a).empty_discussion_message(We.value)), 1)
 					])) : Y("", !0)
 				], 544)), t, 18),
-				Yn.value.length && !Ue.value || re.value?.touch || I(v).state.message_id ? (U(), W("div", rY, [
+				Xn.value.length && !Ue.value || re.value?.touch || I(v).state.message_id ? (U(), W("div", rY, [
 					re.value?.touch ? (U(), W("button", {
 						key: 0,
 						type: "button",
@@ -48152,14 +48163,14 @@ var qK = {
 						"aria-label": "退出朗读",
 						onClick: t[21] ||= (e) => I(v).stop()
 					}, [q(g, { name: "i-lucide-square" }), t[54] ||= J("退出", -1)])) : Y("", !0),
-					Yn.value.length && !Ue.value ? (U(), G(o, {
+					Xn.value.length && !Ue.value ? (U(), G(o, {
 						key: 3,
 						icon: "i-lucide-arrow-down",
 						color: "neutral",
 						variant: "outline",
 						"aria-label": "回到最新消息",
 						class: "channel-latest-button",
-						onClick: jr
+						onClick: Mr
 					})) : Y("", !0)
 				])) : Y("", !0),
 				K("div", aY, [K("div", {
@@ -48168,14 +48179,15 @@ var qK = {
 					onDrop: t[36] ||= (...e) => I(a).drop_attachments && I(a).drop_attachments(...e),
 					onPaste: t[37] ||= (...e) => I(a).paste_attachments && I(a).paste_attachments(...e),
 					onKeydownCapture: t[38] ||= (e) => {
-						Wn(e), pi(e);
+						Wn(e), mi(e);
 					},
 					onInput: Ln,
 					onClick: Ln,
 					onKeyup: Ln,
 					onSelect: Ln,
-					onCompositionstart: Gn,
-					onCompositionend: Gn,
+					onCompositionstart: Kn,
+					onCompositionupdate: Kn,
+					onCompositionend: Kn,
 					onScrollCapture: an
 				}, [
 					q(ne, {
@@ -48185,8 +48197,8 @@ var qK = {
 							side: "top",
 							align: "start",
 							sideOffset: 8,
-							onOpenAutoFocus: Kn,
-							onCloseAutoFocus: Kn
+							onOpenAutoFocus: qn,
+							onCloseAutoFocus: qn
 						},
 						ui: { content: "channel-select-menu channel-mention-menu" },
 						"onUpdate:open": t[23] ||= (e) => !e && (on.value = null)
@@ -48304,7 +48316,7 @@ var qK = {
 							base: "channel-editor",
 							footer: "channel-composer-footer"
 						},
-						onSubmit: ui
+						onSubmit: di
 					}, {
 						header: L(() => [
 							I(i).attachment_drafts.length || dt.value.length ? (U(), W("div", gY, [(U(!0), W(H, null, B(dt.value, (e) => (U(), W("div", {
@@ -48349,14 +48361,14 @@ var qK = {
 								K("span", null, P(I(a).display_name(Je.value.name)) + " 待注册：在其会话中粘贴启动指令", 1),
 								I(i).access?.can_manage ? (U(), G(o, {
 									key: 0,
-									icon: Vr.value === Je.value.name ? "i-lucide-check" : "i-lucide-copy",
-									label: Vr.value === Je.value.name ? "已复制" : "复制启动指令",
+									icon: Ur.value === Je.value.name ? "i-lucide-check" : "i-lucide-copy",
+									label: Ur.value === Je.value.name ? "已复制" : "复制启动指令",
 									"aria-live": "polite",
 									size: "xs",
 									color: "neutral",
 									variant: "ghost",
 									class: "channel-launch-copy",
-									onClick: t[25] ||= (e) => Gr(Je.value.name)
+									onClick: t[25] ||= (e) => Kr(Je.value.name)
 								}, null, 8, ["icon", "label"])) : Y("", !0)
 							])) : Y("", !0),
 							Ye.value ? (U(), W("div", OY, [
@@ -48364,14 +48376,14 @@ var qK = {
 								K("span", null, P(Ye.value), 1),
 								Ke(qe.value) && I(i).access?.can_manage ? (U(), G(o, {
 									key: 0,
-									icon: Vr.value === qe.value.name ? "i-lucide-check" : "i-lucide-copy",
-									label: Vr.value === qe.value.name ? "已复制" : "复制启动指令",
+									icon: Ur.value === qe.value.name ? "i-lucide-check" : "i-lucide-copy",
+									label: Ur.value === qe.value.name ? "已复制" : "复制启动指令",
 									"aria-live": "polite",
 									size: "xs",
 									color: "neutral",
 									variant: "ghost",
 									class: "channel-launch-copy",
-									onClick: t[26] ||= (e) => Gr(qe.value.name)
+									onClick: t[26] ||= (e) => Kr(qe.value.name)
 								}, null, 8, ["icon", "label"])) : Y("", !0)
 							])) : Y("", !0),
 							I(i).editing_queued ? (U(), W("div", kY, [
@@ -48497,7 +48509,7 @@ var qK = {
 								title: "发送 · Enter",
 								disabled: !pt.value,
 								loading: I(c) === "send" || I(i).sending_message,
-								onClick: ui
+								onClick: di
 							}, null, 8, ["disabled", "loading"])
 						], 64))]),
 						default: L(() => [nn.value ? (U(), W("div", {
@@ -48536,7 +48548,7 @@ var qK = {
 			]);
 		};
 	}
-}, [["__scopeId", "data-v-11668ea7"]]), DX = { class: "page-heading" }, OX = { class: "topic-brief" }, kX = {
+}, [["__scopeId", "data-v-b6ce4b04"]]), DX = { class: "page-heading" }, OX = { class: "topic-brief" }, kX = {
 	key: 0,
 	class: "host-progress"
 }, AX = {
@@ -48836,7 +48848,20 @@ var qK = {
 	key: 3,
 	role: "alert",
 	class: "project-error"
-}, _Z = { class: "project-footer" }, vZ = /*#__PURE__*/ TH({
+}, _Z = { class: "project-footer" }, vZ = { class: "folder-picker" }, yZ = { class: "folder-head" }, bZ = ["title"], xZ = {
+	class: "folder-list",
+	"aria-label": "文件夹"
+}, SZ = ["disabled", "onClick"], CZ = {
+	key: 0,
+	class: "folder-empty"
+}, wZ = ["disabled"], TZ = {
+	key: 1,
+	class: "project-note"
+}, EZ = {
+	key: 2,
+	role: "alert",
+	class: "project-error"
+}, DZ = { class: "project-footer" }, OZ = /*#__PURE__*/ TH({
 	__name: "ProjectDirectoryField",
 	props: {
 		placeholder: {
@@ -48849,349 +48874,452 @@ var qK = {
 		}
 	},
 	setup(e) {
-		let t = e, { view: n, bridge: r } = xr("discussion"), i = Z(() => n.value.launch), a = Z(() => i.value.available ? null : i.value.relay), o = Z(() => a.value ? a.value.projects : i.value.projects || []), s = Z(() => i.value.available && !i.value.remote), c = Z(() => i.value.workspace.cwd || ""), l = Z(() => a.value ? o.value.find((e) => e.id === i.value.workspace.local_project) : o.value.find((e) => u(e.path, c.value)));
-		function u(e, t) {
+		let t = e, { view: n, bridge: r } = xr("discussion"), i = Z(() => n.value.launch), a = Z(() => i.value.available ? null : i.value.relay), o = Z(() => a.value ? a.value.projects : i.value.projects || []), s = Z(() => i.value.available && !i.value.remote), c = Z(() => i.value.available), l = Z(() => i.value.workspace.cwd || ""), u = Z(() => a.value ? o.value.find((e) => e.id === i.value.workspace.local_project) : o.value.find((e) => d(e.path, l.value)));
+		function d(e, t) {
 			let n = (e) => String(e || "").replace(/[\\/]+$/, "").toLowerCase();
 			return !!e && n(e) === n(t);
 		}
-		let d = (e) => r.write_launch("workspace", "cwd", e), f = (e) => a.value ? r.write_launch("workspace", "local_project", e?.id || "") : d(e.path), p = /* @__PURE__ */ F(!1);
-		async function m() {
-			p.value = !0;
-			try {
-				await r.pick_launch_directory();
-			} finally {
-				p.value = !1;
+		let f = (e) => r.write_launch("workspace", "cwd", e), p = (e) => a.value ? r.write_launch("workspace", "local_project", e?.id || "") : f(e.path), m = /* @__PURE__ */ F(!1);
+		async function h() {
+			if (s.value) {
+				m.value = !0;
+				try {
+					await r.pick_launch_directory();
+				} finally {
+					m.value = !1;
+				}
+			} else {
+				let e = await y(l.value);
+				e && f(e);
 			}
 		}
-		let h = Z(() => [[{
+		let g = /* @__PURE__ */ F({
+			open: !1,
+			path: "",
+			parent: null,
+			entries: [],
+			next_offset: null,
+			truncated: !1,
+			loading: !1,
+			error: ""
+		}), _ = null;
+		async function v(e, t = !1) {
+			g.value.loading = !0, g.value.error = "";
+			try {
+				let n = await r.list_remote_directories(e, t ? g.value.next_offset : 0);
+				g.value = {
+					...g.value,
+					...n,
+					entries: t ? [...g.value.entries, ...n.entries] : n.entries
+				};
+			} catch (n) {
+				if (g.value.error = n.message, e && !t && !g.value.entries.length) return v("");
+			} finally {
+				g.value.loading = !1;
+			}
+		}
+		function y(e) {
+			return g.value = {
+				open: !0,
+				path: "",
+				parent: null,
+				entries: [],
+				next_offset: null,
+				truncated: !1,
+				loading: !1,
+				error: ""
+			}, v(e || ""), new Promise((e) => {
+				_ = e;
+			});
+		}
+		function b(e) {
+			g.value.open = !1, _?.(e), _ = null;
+		}
+		let x = Z(() => [[{
 			type: "label",
 			label: a.value ? `电脑「${a.value.name}」上的项目` : "常用项目"
 		}, ...o.value.map((e) => ({
 			label: e.name,
 			description: a.value ? void 0 : e.path,
 			icon: "i-lucide-folder",
-			...l.value === e ? { trailingIcon: "i-lucide-check" } : {},
-			onSelect: () => f(e)
-		}))], a.value ? l.value ? [{
+			...u.value === e ? { trailingIcon: "i-lucide-check" } : {},
+			onSelect: () => p(e)
+		}))], a.value ? u.value ? [{
 			label: "不指定项目",
 			icon: "i-lucide-circle-slash",
-			onSelect: () => f(null)
+			onSelect: () => p(null)
 		}] : [] : [{
 			label: "管理项目…",
 			icon: "i-lucide-settings-2",
-			onSelect: w
-		}]].filter((e) => e.length)), g = /* @__PURE__ */ F(!1), _ = /* @__PURE__ */ F([]), v = /* @__PURE__ */ F(-1), y = /* @__PURE__ */ F(null), b = /* @__PURE__ */ F(!1), x = /* @__PURE__ */ F(""), S = /* @__PURE__ */ F(""), C = /* @__PURE__ */ F(null);
-		function w() {
-			_.value = o.value.map((e) => ({ ...e })), v.value = -1, y.value = _.value.length ? null : {
+			onSelect: k
+		}]].filter((e) => e.length)), S = /* @__PURE__ */ F(!1), C = /* @__PURE__ */ F([]), w = /* @__PURE__ */ F(-1), T = /* @__PURE__ */ F(null), ee = /* @__PURE__ */ F(!1), E = /* @__PURE__ */ F(""), D = /* @__PURE__ */ F(""), O = /* @__PURE__ */ F(null);
+		function k() {
+			C.value = o.value.map((e) => ({ ...e })), w.value = -1, T.value = C.value.length ? null : {
 				name: "",
 				path: ""
-			}, S.value = "", g.value = !0;
+			}, D.value = "", S.value = !0;
 		}
-		function T() {
-			v.value = -1, y.value = {
+		function te() {
+			w.value = -1, T.value = {
 				name: "",
 				path: ""
-			}, Qn(() => C.value?.inputRef?.focus());
+			}, Qn(() => O.value?.inputRef?.focus());
 		}
-		function ee(e) {
+		function ne(e) {
 			return String(e).split(/[\\/]+/).filter(Boolean).at(-1) || "";
 		}
-		async function E(e, t) {
-			x.value = t, S.value = "";
+		async function re(e, t) {
+			E.value = t, D.value = "";
 			try {
-				let t = await r.browse_local_directory();
-				t && (e.path = t, e.name.trim() || (e.name = ee(t)));
+				let t = s.value ? await r.browse_local_directory() : await y(e.path);
+				t && (e.path = t, e.name.trim() || (e.name = ne(t)));
 			} catch (e) {
-				S.value = e.message;
+				D.value = e.message;
 			} finally {
-				x.value = "";
+				E.value = "";
 			}
 		}
-		let D = (e) => !!(e?.name.trim() && e?.path.trim());
-		function O() {
-			D(y.value) && (_.value.push({
-				name: y.value.name.trim(),
-				path: y.value.path.trim()
-			}), y.value = null);
+		let ie = (e) => !!(e?.name.trim() && e?.path.trim());
+		function ae() {
+			ie(T.value) && (C.value.push({
+				name: T.value.name.trim(),
+				path: T.value.path.trim()
+			}), T.value = null);
 		}
-		function k(e) {
-			_.value.splice(e, 1), v.value === e && (v.value = -1);
+		function A(e) {
+			C.value.splice(e, 1), w.value === e && (w.value = -1);
 		}
-		async function te() {
-			D(y.value) && O(), b.value = !0, S.value = "";
+		async function oe() {
+			ie(T.value) && ae(), ee.value = !0, D.value = "";
 			try {
-				await r.save_launch_projects(_.value), g.value = !1;
+				await r.save_launch_projects(C.value), S.value = !1;
 			} catch (e) {
-				S.value = e.message;
+				D.value = e.message;
 			} finally {
-				b.value = !1;
+				ee.value = !1;
 			}
 		}
 		return (e, n) => {
-			let r = sA, i = $V, u = PV, f = MA, ne = wV, re = vV;
-			return U(), W(H, null, [a.value ? (U(), W("div", rZ, [q(i, {
-				items: h.value,
-				content: {
-					align: "start",
-					sideOffset: 4
-				},
-				ui: { content: "channel-menu project-menu" },
-				disabled: t.disabled || !o.value.length
-			}, {
-				default: L(() => [K("button", {
-					type: "button",
-					class: M(["project-select", { "is-empty": !l.value }]),
-					disabled: t.disabled || !o.value.length
-				}, [
-					q(r, {
-						name: l.value ? "i-lucide-folder" : "i-lucide-folder-search",
-						class: "project-select-icon"
-					}, null, 8, ["name"]),
-					K("span", null, P(l.value ? l.value.name : o.value.length ? "选择项目" : `电脑「${a.value.name}」上还没有项目`), 1),
-					q(r, {
-						name: "i-lucide-chevron-down",
-						class: "project-select-chevron"
-					})
-				], 10, iZ)]),
-				_: 1
-			}, 8, ["items", "disabled"]), a.value.online ? Y("", !0) : (U(), W("p", aZ, [q(r, { name: "i-lucide-moon" }), J("电脑「" + P(a.value.name) + "」当前离线，创建请求会等它上线后执行。", 1)]))])) : (U(), W("div", {
-				key: 1,
-				class: M(["project-box", {
-					"is-disabled": t.disabled,
-					"is-chosen": l.value
-				}])
-			}, [
-				o.value.length ? (U(), G(i, {
-					key: 0,
-					items: h.value,
+			let r = sA, i = $V, d = PV, p = MA, _ = wV, y = vV;
+			return U(), W(H, null, [
+				a.value ? (U(), W("div", rZ, [q(i, {
+					items: x.value,
 					content: {
 						align: "start",
-						sideOffset: 6
+						sideOffset: 4
 					},
 					ui: { content: "channel-menu project-menu" },
-					disabled: t.disabled
+					disabled: t.disabled || !o.value.length
 				}, {
 					default: L(() => [K("button", {
 						type: "button",
-						class: M(["project-prefix", { "is-chosen": l.value }]),
-						title: l.value ? l.value.path : "从常用项目中选择",
-						"aria-label": "选择常用项目",
-						disabled: t.disabled
+						class: M(["project-select", { "is-empty": !u.value }]),
+						disabled: t.disabled || !o.value.length
 					}, [
-						q(r, { name: l.value ? "i-lucide-folder" : "i-lucide-folders" }, null, 8, ["name"]),
-						K("span", null, P(l.value ? l.value.name : "常用项目"), 1),
+						q(r, {
+							name: u.value ? "i-lucide-folder" : "i-lucide-folder-search",
+							class: "project-select-icon"
+						}, null, 8, ["name"]),
+						K("span", null, P(u.value ? u.value.name : o.value.length ? "选择项目" : `电脑「${a.value.name}」上还没有项目`), 1),
 						q(r, {
 							name: "i-lucide-chevron-down",
-							class: "project-prefix-chevron"
+							class: "project-select-chevron"
 						})
-					], 10, oZ)]),
+					], 10, iZ)]),
 					_: 1
-				}, 8, ["items", "disabled"])) : (U(), W("button", {
+				}, 8, ["items", "disabled"]), a.value.online ? Y("", !0) : (U(), W("p", aZ, [q(r, { name: "i-lucide-moon" }), J("电脑「" + P(a.value.name) + "」当前离线，创建请求会等它上线后执行。", 1)]))])) : (U(), W("div", {
 					key: 1,
-					type: "button",
-					class: "project-prefix",
-					"aria-label": "添加常用项目",
-					title: "保存常用项目，之后一键选择；其他设备也能用",
-					disabled: t.disabled,
-					onClick: w
-				}, [q(r, { name: "i-lucide-plus" }), n[8] ||= K("span", null, "常用项目", -1)], 8, sZ)),
-				q(u, {
-					"model-value": c.value,
-					placeholder: t.placeholder,
-					variant: "none",
-					class: "project-path",
-					"aria-label": "项目目录完整路径",
-					disabled: t.disabled,
-					"onUpdate:modelValue": d
-				}, null, 8, [
-					"model-value",
-					"placeholder",
-					"disabled"
-				]),
-				s.value ? (U(), G(f, {
-					key: 2,
-					icon: "i-lucide-folder-open",
-					color: "neutral",
-					variant: "ghost",
-					size: "xs",
-					class: "project-browse",
-					"aria-label": "在本机选择项目目录",
-					title: p.value ? "目录选择窗口已打开，请在本机窗口中选择" : "在本机选择文件夹",
-					loading: p.value,
-					disabled: t.disabled,
-					onClick: m
-				}, null, 8, [
-					"title",
-					"loading",
-					"disabled"
-				])) : Y("", !0)
-			], 2)), q(re, {
-				content: { onInteractOutside: (e) => e.preventDefault() },
-				open: g.value,
-				"onUpdate:open": n[7] ||= (e) => g.value = e,
-				title: "常用项目",
-				description: "保存在运行 codiscuss 的这台电脑上。登录同一网站的手机、平板可直接选择，路径不会离开这台电脑。",
-				ui: {
-					content: "glass-panel studio-modal project-modal",
-					body: "dialog-body"
-				}
-			}, {
-				body: L(() => [K("form", {
-					class: "project-manager dialog-form",
-					onSubmit: uu(te, ["prevent"])
+					class: M(["project-box", {
+						"is-disabled": t.disabled,
+						"is-chosen": u.value
+					}])
 				}, [
-					_.value.length ? (U(), W("ul", cZ, [(U(!0), W(H, null, B(_.value, (e, t) => (U(), W("li", {
-						key: t,
-						class: M(["project-row", { "is-editing": v.value === t }])
-					}, [K("span", lZ, [q(r, { name: "i-lucide-folder" })]), v.value === t ? (U(), W(H, { key: 0 }, [K("div", uZ, [q(u, {
-						modelValue: e.name,
-						"onUpdate:modelValue": (t) => e.name = t,
-						placeholder: "项目名称",
-						"aria-label": "项目名称",
-						size: "sm",
-						class: "w-full"
-					}, null, 8, ["modelValue", "onUpdate:modelValue"]), q(u, {
-						modelValue: e.path,
-						"onUpdate:modelValue": (t) => e.path = t,
-						placeholder: "文件夹完整路径",
-						"aria-label": "文件夹完整路径",
-						size: "sm",
-						class: "w-full",
-						ui: { trailing: "pe-1" }
-					}, ha({ _: 2 }, [s.value ? {
-						name: "trailing",
-						fn: L(() => [q(f, {
-							icon: "i-lucide-folder-open",
+					o.value.length ? (U(), G(i, {
+						key: 0,
+						items: x.value,
+						content: {
+							align: "start",
+							sideOffset: 6
+						},
+						ui: { content: "channel-menu project-menu" },
+						disabled: t.disabled
+					}, {
+						default: L(() => [K("button", {
+							type: "button",
+							class: M(["project-prefix", { "is-chosen": u.value }]),
+							title: u.value ? u.value.path : "从常用项目中选择",
+							"aria-label": "选择常用项目",
+							disabled: t.disabled
+						}, [
+							q(r, { name: u.value ? "i-lucide-folder" : "i-lucide-folders" }, null, 8, ["name"]),
+							K("span", null, P(u.value ? u.value.name : "常用项目"), 1),
+							q(r, {
+								name: "i-lucide-chevron-down",
+								class: "project-prefix-chevron"
+							})
+						], 10, oZ)]),
+						_: 1
+					}, 8, ["items", "disabled"])) : (U(), W("button", {
+						key: 1,
+						type: "button",
+						class: "project-prefix",
+						"aria-label": "添加常用项目",
+						title: "保存常用项目，之后一键选择；其他设备也能用",
+						disabled: t.disabled,
+						onClick: k
+					}, [q(r, { name: "i-lucide-plus" }), n[13] ||= K("span", null, "常用项目", -1)], 8, sZ)),
+					q(d, {
+						"model-value": l.value,
+						placeholder: t.placeholder,
+						variant: "none",
+						class: "project-path",
+						"aria-label": "项目目录完整路径",
+						disabled: t.disabled,
+						"onUpdate:modelValue": f
+					}, null, 8, [
+						"model-value",
+						"placeholder",
+						"disabled"
+					]),
+					c.value ? (U(), G(p, {
+						key: 2,
+						icon: "i-lucide-folder-open",
+						color: "neutral",
+						variant: "ghost",
+						size: "xs",
+						class: "project-browse",
+						"aria-label": s.value ? "在本机选择项目目录" : "浏览电脑上的文件夹",
+						title: s.value ? m.value ? "目录选择窗口已打开，请在本机窗口中选择" : "在本机选择文件夹" : "浏览电脑上常用项目中的文件夹",
+						loading: m.value,
+						disabled: t.disabled,
+						onClick: h
+					}, null, 8, [
+						"aria-label",
+						"title",
+						"loading",
+						"disabled"
+					])) : Y("", !0)
+				], 2)),
+				q(y, {
+					content: { onInteractOutside: (e) => e.preventDefault() },
+					open: S.value,
+					"onUpdate:open": n[7] ||= (e) => S.value = e,
+					title: "常用项目",
+					description: "保存在运行 codiscuss 的这台电脑上。登录同一网站的手机、平板可直接选择，路径不会离开这台电脑。",
+					ui: {
+						content: "glass-panel studio-modal project-modal",
+						body: "dialog-body"
+					}
+				}, {
+					body: L(() => [K("form", {
+						class: "project-manager dialog-form",
+						onSubmit: uu(oe, ["prevent"])
+					}, [
+						C.value.length ? (U(), W("ul", cZ, [(U(!0), W(H, null, B(C.value, (e, t) => (U(), W("li", {
+							key: t,
+							class: M(["project-row", { "is-editing": w.value === t }])
+						}, [K("span", lZ, [q(r, { name: "i-lucide-folder" })]), w.value === t ? (U(), W(H, { key: 0 }, [K("div", uZ, [q(d, {
+							modelValue: e.name,
+							"onUpdate:modelValue": (t) => e.name = t,
+							placeholder: "项目名称",
+							"aria-label": "项目名称",
+							size: "sm",
+							class: "w-full"
+						}, null, 8, ["modelValue", "onUpdate:modelValue"]), q(d, {
+							modelValue: e.path,
+							"onUpdate:modelValue": (t) => e.path = t,
+							placeholder: "文件夹完整路径",
+							"aria-label": "文件夹完整路径",
+							size: "sm",
+							class: "w-full",
+							ui: { trailing: "pe-1" }
+						}, ha({ _: 2 }, [c.value ? {
+							name: "trailing",
+							fn: L(() => [q(p, {
+								icon: "i-lucide-folder-open",
+								color: "neutral",
+								variant: "ghost",
+								size: "xs",
+								"aria-label": "选择文件夹",
+								loading: E.value === `row-${t}`,
+								onClick: (n) => re(e, `row-${t}`)
+							}, null, 8, ["loading", "onClick"])]),
+							key: "0"
+						} : void 0]), 1032, ["modelValue", "onUpdate:modelValue"])]), q(p, {
+							icon: "i-lucide-check",
 							color: "neutral",
 							variant: "ghost",
 							size: "xs",
-							"aria-label": "在本机选择文件夹",
-							loading: x.value === `row-${t}`,
-							onClick: (n) => E(e, `row-${t}`)
-						}, null, 8, ["loading", "onClick"])]),
-						key: "0"
-					} : void 0]), 1032, ["modelValue", "onUpdate:modelValue"])]), q(f, {
-						icon: "i-lucide-check",
-						color: "neutral",
-						variant: "ghost",
-						size: "xs",
-						"aria-label": "完成编辑",
-						disabled: !D(e),
-						onClick: n[0] ||= (e) => v.value = -1
-					}, null, 8, ["disabled"])], 64)) : (U(), W(H, { key: 1 }, [K("div", dZ, [K("strong", null, P(e.name), 1), K("small", { title: e.path }, P(e.path), 9, fZ)]), K("div", pZ, [q(f, {
-						icon: "i-lucide-pencil",
-						color: "neutral",
-						variant: "ghost",
-						size: "xs",
-						"aria-label": `编辑 ${e.name}`,
-						onClick: (e) => {
-							y.value = null, v.value = t;
-						}
-					}, null, 8, ["aria-label", "onClick"]), q(f, {
-						icon: "i-lucide-trash-2",
-						color: "neutral",
-						variant: "ghost",
-						size: "xs",
-						"aria-label": `移除 ${e.name}`,
-						onClick: (e) => k(t)
-					}, null, 8, ["aria-label", "onClick"])])], 64))], 2))), 128))])) : Y("", !0),
-					y.value ? (U(), W("div", mZ, [
-						q(ne, {
-							label: "文件夹",
-							description: s.value ? "" : "运行 codiscuss 的电脑上的完整路径"
-						}, {
-							default: L(() => [q(u, {
-								modelValue: y.value.path,
-								"onUpdate:modelValue": n[2] ||= (e) => y.value.path = e,
-								placeholder: "例如 D:\\Projects\\demo",
-								class: "w-full",
-								ui: { trailing: "pe-1" },
-								onBlur: n[3] ||= (e) => !y.value.name.trim() && (y.value.name = ee(y.value.path))
-							}, ha({ _: 2 }, [s.value ? {
-								name: "trailing",
-								fn: L(() => [q(f, {
-									icon: "i-lucide-folder-open",
-									color: "neutral",
-									variant: "ghost",
-									size: "xs",
-									"aria-label": "在本机选择文件夹",
-									loading: x.value === "add",
-									onClick: n[1] ||= (e) => E(y.value, "add")
-								}, null, 8, ["loading"])]),
-								key: "0"
-							} : void 0]), 1032, ["modelValue"])]),
-							_: 1
-						}, 8, ["description"]),
-						q(ne, { label: "名称" }, {
-							default: L(() => [q(u, {
-								ref_key: "add_name",
-								ref: C,
-								modelValue: y.value.name,
-								"onUpdate:modelValue": n[4] ||= (e) => y.value.name = e,
-								placeholder: "在列表中显示的名称",
-								maxlength: 80,
-								class: "w-full",
-								onKeydown: fu(uu(O, ["prevent"]), ["enter"])
-							}, null, 8, ["modelValue", "onKeydown"])]),
-							_: 1
-						}),
-						K("div", hZ, [_.value.length ? (U(), G(f, {
-							key: 0,
+							"aria-label": "完成编辑",
+							disabled: !ie(e),
+							onClick: n[0] ||= (e) => w.value = -1
+						}, null, 8, ["disabled"])], 64)) : (U(), W(H, { key: 1 }, [K("div", dZ, [K("strong", null, P(e.name), 1), K("small", { title: e.path }, P(e.path), 9, fZ)]), K("div", pZ, [q(p, {
+							icon: "i-lucide-pencil",
+							color: "neutral",
+							variant: "ghost",
+							size: "xs",
+							"aria-label": `编辑 ${e.name}`,
+							onClick: (e) => {
+								T.value = null, w.value = t;
+							}
+						}, null, 8, ["aria-label", "onClick"]), q(p, {
+							icon: "i-lucide-trash-2",
+							color: "neutral",
+							variant: "ghost",
+							size: "xs",
+							"aria-label": `移除 ${e.name}`,
+							onClick: (e) => A(t)
+						}, null, 8, ["aria-label", "onClick"])])], 64))], 2))), 128))])) : Y("", !0),
+						T.value ? (U(), W("div", mZ, [
+							q(_, {
+								label: "文件夹",
+								description: s.value ? "" : c.value ? "其他设备只能选择已有常用项目中的文件夹；更大的范围请在电脑上添加" : "运行 codiscuss 的电脑上的完整路径"
+							}, {
+								default: L(() => [q(d, {
+									modelValue: T.value.path,
+									"onUpdate:modelValue": n[2] ||= (e) => T.value.path = e,
+									placeholder: "例如 D:\\Projects\\demo",
+									class: "w-full",
+									ui: { trailing: "pe-1" },
+									onBlur: n[3] ||= (e) => !T.value.name.trim() && (T.value.name = ne(T.value.path))
+								}, ha({ _: 2 }, [c.value ? {
+									name: "trailing",
+									fn: L(() => [q(p, {
+										icon: "i-lucide-folder-open",
+										color: "neutral",
+										variant: "ghost",
+										size: "xs",
+										"aria-label": "选择文件夹",
+										loading: E.value === "add",
+										onClick: n[1] ||= (e) => re(T.value, "add")
+									}, null, 8, ["loading"])]),
+									key: "0"
+								} : void 0]), 1032, ["modelValue"])]),
+								_: 1
+							}, 8, ["description"]),
+							q(_, { label: "名称" }, {
+								default: L(() => [q(d, {
+									ref_key: "add_name",
+									ref: O,
+									modelValue: T.value.name,
+									"onUpdate:modelValue": n[4] ||= (e) => T.value.name = e,
+									placeholder: "在列表中显示的名称",
+									maxlength: 80,
+									class: "w-full",
+									onKeydown: fu(uu(ae, ["prevent"]), ["enter"])
+								}, null, 8, ["modelValue", "onKeydown"])]),
+								_: 1
+							}),
+							K("div", hZ, [C.value.length ? (U(), G(p, {
+								key: 0,
+								label: "取消",
+								color: "neutral",
+								variant: "ghost",
+								size: "sm",
+								onClick: n[5] ||= (e) => T.value = null
+							})) : Y("", !0), q(p, {
+								label: "加入列表",
+								icon: "i-lucide-plus",
+								color: "neutral",
+								variant: "soft",
+								size: "sm",
+								disabled: !ie(T.value),
+								onClick: ae
+							}, null, 8, ["disabled"])])
+						])) : (U(), W("button", {
+							key: 2,
+							type: "button",
+							class: "project-add-trigger",
+							onClick: te
+						}, [q(r, { name: "i-lucide-plus" }), n[14] ||= J("添加项目", -1)])),
+						D.value ? (U(), W("p", gZ, [q(r, { name: "i-lucide-circle-alert" }), J(P(D.value), 1)])) : Y("", !0),
+						K("div", _Z, [q(p, {
 							label: "取消",
 							color: "neutral",
 							variant: "ghost",
-							size: "sm",
-							onClick: n[5] ||= (e) => y.value = null
-						})) : Y("", !0), q(f, {
-							label: "加入列表",
-							icon: "i-lucide-plus",
+							onClick: n[6] ||= (e) => S.value = !1
+						}), q(p, {
+							type: "submit",
+							label: "保存",
+							class: "channel-primary-button",
+							loading: ee.value
+						}, null, 8, ["loading"])])
+					], 32)]),
+					_: 1
+				}, 8, ["content", "open"]),
+				q(y, {
+					open: g.value.open,
+					title: "选择电脑上的文件夹",
+					description: "只列出常用项目中的文件夹；范围由电脑决定。",
+					ui: {
+						content: "glass-panel studio-modal project-modal",
+						body: "dialog-body"
+					},
+					"onUpdate:open": n[12] ||= (e) => !e && b("")
+				}, {
+					body: L(() => [K("div", vZ, [
+						K("div", yZ, [q(p, {
+							icon: "i-lucide-arrow-left",
 							color: "neutral",
-							variant: "soft",
-							size: "sm",
-							disabled: !D(y.value),
-							onClick: O
+							variant: "ghost",
+							size: "xs",
+							"aria-label": "上一级",
+							disabled: !g.value.path || g.value.loading,
+							onClick: n[8] ||= (e) => v(g.value.parent || "")
+						}, null, 8, ["disabled"]), K("span", {
+							class: "folder-path",
+							title: g.value.path
+						}, P(g.value.path || "常用项目"), 9, bZ)]),
+						K("ul", xZ, [(U(!0), W(H, null, B(g.value.entries, (e) => (U(), W("li", { key: e.path }, [K("button", {
+							type: "button",
+							class: "folder-entry",
+							disabled: g.value.loading,
+							onClick: (t) => v(e.path)
+						}, [q(r, { name: "i-lucide-folder" }), J(P(e.name), 1)], 8, SZ)]))), 128)), !g.value.entries.length && !g.value.loading ? (U(), W("li", CZ, P(g.value.path ? "没有子文件夹" : "电脑上还没有常用项目，请先在电脑上添加"), 1)) : Y("", !0)]),
+						g.value.next_offset === null ? Y("", !0) : (U(), W("button", {
+							key: 0,
+							type: "button",
+							class: "project-add-trigger",
+							disabled: g.value.loading,
+							onClick: n[9] ||= (e) => v(g.value.path, !0)
+						}, "加载更多", 8, wZ)),
+						g.value.truncated ? (U(), W("p", TZ, "文件夹过多，只列出了一部分")) : Y("", !0),
+						g.value.error ? (U(), W("p", EZ, [q(r, { name: "i-lucide-circle-alert" }), J(P(g.value.error), 1)])) : Y("", !0),
+						K("div", DZ, [q(p, {
+							label: "取消",
+							color: "neutral",
+							variant: "ghost",
+							onClick: n[10] ||= (e) => b("")
+						}), q(p, {
+							label: "选择此文件夹",
+							class: "channel-primary-button",
+							disabled: !g.value.path || g.value.loading,
+							onClick: n[11] ||= (e) => b(g.value.path)
 						}, null, 8, ["disabled"])])
-					])) : (U(), W("button", {
-						key: 2,
-						type: "button",
-						class: "project-add-trigger",
-						onClick: T
-					}, [q(r, { name: "i-lucide-plus" }), n[9] ||= J("添加项目", -1)])),
-					S.value ? (U(), W("p", gZ, [q(r, { name: "i-lucide-circle-alert" }), J(P(S.value), 1)])) : Y("", !0),
-					K("div", _Z, [q(f, {
-						label: "取消",
-						color: "neutral",
-						variant: "ghost",
-						onClick: n[6] ||= (e) => g.value = !1
-					}), q(f, {
-						type: "submit",
-						label: "保存",
-						class: "channel-primary-button",
-						loading: b.value
-					}, null, 8, ["loading"])])
-				], 32)]),
-				_: 1
-			}, 8, ["content", "open"])], 64);
+					])]),
+					_: 1
+				}, 8, ["open"])
+			], 64);
 		};
 	}
-}, [["__scopeId", "data-v-2403ad40"]]), yZ = { class: "scheduler-settings" }, bZ = { class: "scheduler-title" }, xZ = { class: "scheduler-description" }, SZ = {
+}, [["__scopeId", "data-v-d2cb9e37"]]), kZ = { class: "scheduler-settings" }, AZ = { class: "scheduler-title" }, jZ = { class: "scheduler-description" }, MZ = {
 	key: 0,
 	class: "scheduler-empty"
-}, CZ = {
+}, NZ = {
 	key: 1,
 	class: "scheduler-cards"
-}, wZ = { class: "scheduler-slot" }, TZ = { class: "scheduler-identity" }, EZ = { class: "scheduler-facts" }, DZ = ["title"], OZ = { class: "scheduler-flip" }, kZ = { class: "scheduler-tools" }, AZ = ["aria-label"], jZ = { class: "scheduler-back" }, MZ = { class: "scheduler-heading" }, NZ = { class: "scheduler-field" }, PZ = { class: "scheduler-field" }, FZ = { class: "scheduler-flip-actions" }, IZ = {
+}, PZ = { class: "scheduler-slot" }, FZ = { class: "scheduler-identity" }, IZ = { class: "scheduler-facts" }, LZ = ["title"], RZ = { class: "scheduler-flip" }, zZ = { class: "scheduler-tools" }, BZ = ["aria-label"], VZ = { class: "scheduler-back" }, HZ = { class: "scheduler-heading" }, UZ = { class: "scheduler-field" }, WZ = { class: "scheduler-field" }, GZ = { class: "scheduler-flip-actions" }, KZ = {
 	key: 2,
 	class: "scheduler-mode"
-}, LZ = {
+}, qZ = {
 	class: "expert-card-modes",
 	role: "radiogroup",
 	"aria-label": "智能调度判断方式"
-}, RZ = [
+}, JZ = [
 	"title",
 	"aria-checked",
 	"onClick"
-], zZ = "••••••••••••", BZ = /*#__PURE__*/ TH({
+], YZ = "••••••••••••", XZ = /*#__PURE__*/ TH({
 	__name: "SchedulerSettings",
 	props: {
 		free: {
@@ -49298,8 +49426,8 @@ var qK = {
 		}
 		return (t, a) => {
 			let h = kV, O = pA, k = sA, te = MA, ne = LU, re = PV;
-			return U(), W("div", yZ, [
-				K("div", null, [K("p", bZ, [
+			return U(), W("div", kZ, [
+				K("div", null, [K("p", AZ, [
 					a[5] ||= J("智能调度", -1),
 					q(h, {
 						size: "xs",
@@ -49310,7 +49438,7 @@ var qK = {
 						_: 1
 					}),
 					a[6] ||= K("small", null, "可选", -1)
-				]), K("p", xZ, P(e.blocker ? `${E.value}（${e.blocker}）` : E.value), 1)]),
+				]), K("p", jZ, P(e.blocker ? `${E.value}（${e.blocker}）` : E.value), 1)]),
 				q(UG, {
 					ref_key: "add_row",
 					ref: l,
@@ -49318,8 +49446,8 @@ var qK = {
 					items: u.value,
 					onAdd: v
 				}, null, 8, ["items"]),
-				c.value ? (U(), W("div", CZ, [K("div", wZ, [K("div", { class: M(["scheduler-card", { "is-editing": m.value }]) }, [m.value ? (U(), W(H, { key: 1 }, [K("div", jZ, [
-					K("div", MZ, [K("strong", null, [J(P(b.value), 1), a[11] ||= K("span", null, "设置", -1)]), q(te, {
+				c.value ? (U(), W("div", NZ, [K("div", PZ, [K("div", { class: M(["scheduler-card", { "is-editing": m.value }]) }, [m.value ? (U(), W(H, { key: 1 }, [K("div", VZ, [
+					K("div", HZ, [K("strong", null, [J(P(b.value), 1), a[11] ||= K("span", null, "设置", -1)]), q(te, {
 						icon: "i-lucide-zap",
 						"aria-label": "检查智能调度配置",
 						title: "检查配置：向决策模型发送一道极短的是非题，核对供应商、模型与密钥",
@@ -49334,7 +49462,7 @@ var qK = {
 						"loading",
 						"disabled"
 					])]),
-					K("div", NZ, [a[12] ||= K("span", null, "模型", -1), q(ne, {
+					K("div", UZ, [a[12] ||= K("span", null, "模型", -1), q(ne, {
 						mode: "autocomplete",
 						"ignore-filter": "",
 						"model-value": i.value.model || "",
@@ -49346,7 +49474,7 @@ var qK = {
 						class: "w-full",
 						"onUpdate:modelValue": a[0] ||= (e) => I(r).write_scheduler("model", e)
 					}, null, 8, ["model-value", "items"])]),
-					K("div", PZ, [a[13] ||= K("span", null, "密钥", -1), q(re, {
+					K("div", WZ, [a[13] ||= K("span", null, "密钥", -1), q(re, {
 						modelValue: d.value,
 						"onUpdate:modelValue": a[2] ||= (e) => d.value = e,
 						type: "text",
@@ -49354,7 +49482,7 @@ var qK = {
 						spellcheck: "false",
 						"data-1p-ignore": "",
 						"data-lpignore": "true",
-						placeholder: i.value.api_key_ref ? zZ : "填写所选供应商的 API Key",
+						placeholder: i.value.api_key_ref ? YZ : "填写所选供应商的 API Key",
 						title: i.value.api_key_ref && !d.value ? "已保存；本机不回传密钥，输入新 Key 可更换" : void 0,
 						"aria-label": "智能调度 API Key",
 						size: "xs",
@@ -49390,7 +49518,7 @@ var qK = {
 						"ui"
 					])]),
 					a[14] ||= K("p", { class: "scheduler-note" }, "决策模型只做选择、不生成文本，只按输入计费。判断时会把房间标题和最近 10～20 条消息发给所选供应商；密钥只存本机。", -1)
-				]), K("span", FZ, [K("button", {
+				]), K("span", GZ, [K("button", {
 					type: "button",
 					class: "scheduler-flip is-cancel",
 					"aria-label": "放弃决策模型的修改",
@@ -49407,7 +49535,7 @@ var qK = {
 					title: "点击设置",
 					onClick: g
 				}, [
-					K("span", TZ, [q(O, {
+					K("span", FZ, [q(O, {
 						src: s[i.value.provider]?.icon,
 						text: b.value.slice(0, 2),
 						alt: b.value,
@@ -49419,26 +49547,26 @@ var qK = {
 						"alt",
 						"class"
 					]), K("strong", null, P(b.value), 1)]),
-					K("dl", EZ, [K("div", null, [a[8] ||= K("dt", null, "状态", -1), K("dd", { class: M(`is-${x.value.tone}`) }, [a[7] ||= K("i", { "aria-hidden": "true" }, null, -1), J(P(x.value.text), 1)], 2)]), K("div", null, [a[9] ||= K("dt", null, "模型", -1), K("dd", { title: i.value.model }, P(i.value.model || "未选择"), 9, DZ)])]),
-					K("span", OZ, [q(k, { name: "i-lucide-settings-2" }), a[10] ||= J("设置", -1)])
-				]), K("span", kZ, [K("button", {
+					K("dl", IZ, [K("div", null, [a[8] ||= K("dt", null, "状态", -1), K("dd", { class: M(`is-${x.value.tone}`) }, [a[7] ||= K("i", { "aria-hidden": "true" }, null, -1), J(P(x.value.text), 1)], 2)]), K("div", null, [a[9] ||= K("dt", null, "模型", -1), K("dd", { title: i.value.model }, P(i.value.model || "未选择"), 9, LZ)])]),
+					K("span", RZ, [q(k, { name: "i-lucide-settings-2" }), a[10] ||= J("设置", -1)])
+				]), K("span", zZ, [K("button", {
 					type: "button",
 					"aria-label": `移出决策模型 ${b.value}`,
 					title: "移出",
 					onClick: y
-				}, [q(k, { name: "i-lucide-x" })], 8, AZ)])], 64))], 2)])])) : (U(), W("p", SZ, "未添加决策模型。只能放一个，点其他供应商会替换。")),
-				c.value && e.free && w.value.length > 1 ? (U(), W("div", IZ, [a[16] ||= K("span", null, "判断方式", -1), K("div", LZ, [(U(!0), W(H, null, B(w.value, (e) => (U(), W("button", {
+				}, [q(k, { name: "i-lucide-x" })], 8, BZ)])], 64))], 2)])])) : (U(), W("p", MZ, "未添加决策模型。只能放一个，点其他供应商会替换。")),
+				c.value && e.free && w.value.length > 1 ? (U(), W("div", KZ, [a[16] ||= K("span", null, "判断方式", -1), K("div", qZ, [(U(!0), W(H, null, B(w.value, (e) => (U(), W("button", {
 					key: e.value,
 					type: "button",
 					role: "radio",
 					title: ee[e.value],
 					"aria-checked": T.value === e.value,
 					onClick: (t) => I(r).write_scheduler("mode", e.value)
-				}, P(e.label), 9, RZ))), 128))])])) : Y("", !0)
+				}, P(e.label), 9, JZ))), 128))])])) : Y("", !0)
 			]);
 		};
 	}
-}, [["__scopeId", "data-v-40540616"]]), VZ = {
+}, [["__scopeId", "data-v-40540616"]]), ZZ = {
 	__name: "HostWorkflowSwitch",
 	props: {
 		modelValue: Boolean,
@@ -49458,25 +49586,25 @@ var qK = {
 			}, null, 8, ["model-value", "disabled"]);
 		};
 	}
-}, HZ = { class: "create-discussion" }, UZ = {
+}, QZ = { class: "create-discussion" }, $Z = {
 	key: 0,
 	class: "create-connect",
 	role: "status"
-}, WZ = { class: "create-connect-command" }, GZ = {
+}, eQ = { class: "create-connect-command" }, tQ = {
 	key: 1,
 	class: "channel-create-location"
-}, KZ = { class: "create-section" }, qZ = { class: "create-section" }, JZ = {
+}, nQ = { class: "create-section" }, rQ = { class: "create-section" }, iQ = {
 	key: 0,
 	class: "create-experts",
 	role: "group",
 	"aria-label": "参与的 AI"
-}, YZ = {
+}, aQ = {
 	key: 1,
 	class: "create-experts-empty"
-}, XZ = {
+}, oQ = {
 	key: 2,
 	class: "fine-print create-hint create-host-hint"
-}, ZZ = { class: "create-section" }, QZ = { class: "create-advanced" }, $Z = { class: "create-footer" }, eQ = { class: "create-footer-row" }, tQ = ["title"], nQ = "new-expert-modes", rQ = 3e3, iQ = "preset:", aQ = /*#__PURE__*/ TH({
+}, sQ = { class: "create-section" }, cQ = { class: "create-advanced" }, lQ = { class: "create-footer" }, uQ = { class: "create-footer-row" }, dQ = ["title"], fQ = "new-expert-modes", pQ = 3e3, mQ = "preset:", hQ = /*#__PURE__*/ TH({
 	__name: "CreateDiscussion",
 	props: { targetFolder: {
 		type: Object,
@@ -49484,7 +49612,7 @@ var qK = {
 	} },
 	emits: ["submit", "cancel"],
 	setup(e, { emit: t }) {
-		let n = t, { view: r, bridge: i, pending: a, act: o } = xr("discussion"), s = Object.keys(i.identities).filter((e) => e !== "用户"), c = (e) => `new-room-${e}`, l = (e) => r.value.fields[c(e)] ?? "", u = (e, t) => i.write_field(c(e), t), d = Z(() => !!r.value.create_discussion), f = Z(() => r.value.experts[nQ] || {}), p = /* @__PURE__ */ F([]), m = Z(() => Object.keys(f.value).filter((e) => f.value[e]));
+		let n = t, { view: r, bridge: i, pending: a, act: o } = xr("discussion"), s = Object.keys(i.identities).filter((e) => e !== "用户"), c = (e) => `new-room-${e}`, l = (e) => r.value.fields[c(e)] ?? "", u = (e, t) => i.write_field(c(e), t), d = Z(() => !!r.value.create_discussion), f = Z(() => r.value.experts[fQ] || {}), p = /* @__PURE__ */ F([]), m = Z(() => Object.keys(f.value).filter((e) => f.value[e]));
 		R(m, (e) => {
 			p.value = [...p.value.filter((t) => e.includes(t)), ...e.filter((e) => !p.value.includes(e))];
 		}, { immediate: !0 });
@@ -49508,14 +49636,14 @@ var qK = {
 		Qi(() => {
 			oe(), ie = window.setInterval(() => {
 				re.value && !document.hidden && o("check_launch_connection");
-			}, rQ);
+			}, pQ);
 		}), ta(() => window.clearInterval(ie));
 		function se(e) {
 			i.write_create_discussion(e), Qn(oe);
 		}
 		let ce = (e) => i.launch_clients[e]?.some((e) => e.value !== "api"), le = (e) => d.value && e === v.value ? [] : me(e) ? ["cli"] : ["cli", "manual"];
 		function ue(e, t) {
-			i.write_expert(nQ, e, t), oe();
+			i.write_expert(fQ, e, t), oe();
 		}
 		function de(e) {
 			if (C.value) return ee(e) ? {
@@ -49545,7 +49673,7 @@ var qK = {
 			title: j(e),
 			aria_label: `添加 ${e} 实例`
 		})), ...r.value && i.expert_presets().map((e, t) => ({
-			value: iQ + e.name,
+			value: mQ + e.name,
 			name: e.label || e.name,
 			...i.identities[i.platform_of(e.name)],
 			separated: t === 0,
@@ -49554,11 +49682,11 @@ var qK = {
 			removable: !0
 		}))]);
 		function pe(e) {
-			if (e.startsWith(iQ)) {
+			if (e.startsWith(mQ)) {
 				let t = i.expert_presets().find((t) => t.name === e.slice(7));
-				return t && i.add_preset(nQ, t, "cli"), oe();
+				return t && i.add_preset(fQ, t, "cli"), oe();
 			}
-			i.launch_clients[e] && (i.default_launch_entry(e), g(e) ? i.add_instance(nQ, e, "cli") : ue(e, "cli"), oe());
+			i.launch_clients[e] && (i.default_launch_entry(e), g(e) ? i.add_instance(fQ, e, "cli") : ue(e, "cli"), oe());
 		}
 		let me = (e) => r.value.create_workflow && Object.values(r.value.create_workflow.members).includes(e) ? r.value.create_workflow.label : "";
 		async function he(e) {
@@ -49584,20 +49712,20 @@ var qK = {
 		});
 		return (t, s) => {
 			let c = sA, p = MA, m = PV, g = wV, x = wH, T = DV;
-			return U(), W("div", HZ, [K("form", {
+			return U(), W("div", QZ, [K("form", {
 				id: "create-discussion-form",
 				class: "create-scroll dialog-form",
 				onSubmit: uu(N, ["prevent"])
 			}, [
-				re.value ? (U(), W("div", UZ, [K("p", null, [q(c, { name: "i-lucide-plug-zap" }), s[11] ||= J("本机服务未连接，连接后才能唤醒本机 AI。在运行 AI 的电脑上执行下面的命令并完成网页授权，连上后自动检测。", -1)]), K("div", WZ, [K("code", null, P(I(r).launch.connect_command), 1), q(p, {
+				re.value ? (U(), W("div", $Z, [K("p", null, [q(c, { name: "i-lucide-plug-zap" }), s[11] ||= J("本机服务未连接，连接后才能唤醒本机 AI。在运行 AI 的电脑上执行下面的命令并完成网页授权，连上后自动检测。", -1)]), K("div", eQ, [K("code", null, P(I(r).launch.connect_command), 1), q(p, {
 					icon: "i-lucide-copy",
 					"aria-label": "复制本机连接命令",
 					variant: "ghost",
 					color: "neutral",
 					onClick: s[0] ||= (e) => I(o)("copy", I(r).launch.connect_command)
 				})])])) : Y("", !0),
-				e.targetFolder?.id ? (U(), W("p", GZ, [q(c, { name: "i-lucide-folder" }), J(P(e.targetFolder.name), 1)])) : Y("", !0),
-				K("section", KZ, [
+				e.targetFolder?.id ? (U(), W("p", tQ, [q(c, { name: "i-lucide-folder" }), J(P(e.targetFolder.name), 1)])) : Y("", !0),
+				K("section", nQ, [
 					s[12] ||= K("h3", null, [K("span", null, "1"), J("这次做什么")], -1),
 					q(g, {
 						label: "话题名称",
@@ -49619,11 +49747,11 @@ var qK = {
 						label: "项目目录（可选）",
 						description: I(r).launch.available ? "本机唤醒的成员在此目录读写文件；不填则各用软件默认目录。" : C.value ? `由电脑「${C.value.name}」唤醒的成员在所选项目中读写文件；不选则各用软件默认目录。` : "连接本机服务后可指定：本机唤醒的成员将在此目录读写文件。"
 					}, {
-						default: L(() => [q(vZ, { disabled: !w.value }, null, 8, ["disabled"])]),
+						default: L(() => [q(OZ, { disabled: !w.value }, null, 8, ["disabled"])]),
 						_: 1
 					}, 8, ["description"])
 				]),
-				K("section", qZ, [
+				K("section", rQ, [
 					s[13] ||= K("h3", null, [K("span", null, "2"), J("谁来参与")], -1),
 					q(UG, {
 						ref_key: "library",
@@ -49637,7 +49765,7 @@ var qK = {
 						selected: I(r).create_workflow?.id || "",
 						onChoose: he
 					}, null, 8, ["selected"]),
-					h.value.length ? (U(), W("div", JZ, [(U(!0), W(H, null, B(h.value, (e) => (U(), G(FG, {
+					h.value.length ? (U(), W("div", iQ, [(U(!0), W(H, null, B(h.value, (e) => (U(), G(FG, {
 						key: e,
 						name: e,
 						mode: f.value[e],
@@ -49661,16 +49789,16 @@ var qK = {
 						"onHost",
 						"onRemove",
 						"onMode"
-					]))), 128))])) : (U(), W("p", YZ, "请至少添加一位成员。同一平台可添加多位，各自独立会话。")),
-					h.value.length ? (U(), W("div", XZ, [q(c, { name: "i-lucide-crown" }), K("span", null, P(y.value.length ? "点卡片上的皇冠指定主持人：没 @ 任何人的消息由它分配；其他成员只在被你或主持人点名时发言。" : "需要一位本地 AI 做主持人，没 @ 的消息才有人接。"), 1)])) : Y("", !0),
-					q(BZ, {
+					]))), 128))])) : (U(), W("p", aQ, "请至少添加一位成员。同一平台可添加多位，各自独立会话。")),
+					h.value.length ? (U(), W("div", oQ, [q(c, { name: "i-lucide-crown" }), K("span", null, P(y.value.length ? "点卡片上的皇冠指定主持人：没 @ 任何人的消息由它分配；其他成员只在被你或主持人点名时发言。" : "需要一位本地 AI 做主持人，没 @ 的消息才有人接。"), 1)])) : Y("", !0),
+					q(XZ, {
 						free: !0,
 						blocker: te.value
 					}, null, 8, ["blocker"])
 				]),
-				K("section", ZZ, [
+				K("section", sQ, [
 					s[14] ||= K("h3", null, [K("span", null, "3"), J("协作方式（可选）")], -1),
-					I(r).launch.available || I(r).launch.remote ? (U(), G(VZ, {
+					I(r).launch.available || I(r).launch.remote ? (U(), G(ZZ, {
 						key: 0,
 						"model-value": !!I(r).create_host_workflows,
 						"onUpdate:modelValue": s[3] ||= (e) => I(i).write_create_host_workflows(e)
@@ -49711,7 +49839,7 @@ var qK = {
 						"named_followup"
 					])], 64)) : Y("", !0)
 				]),
-				K("details", QZ, [K("summary", null, [
+				K("details", cQ, [K("summary", null, [
 					q(c, {
 						name: "i-lucide-chevron-right",
 						class: "create-advanced-icon"
@@ -49725,7 +49853,7 @@ var qK = {
 					default: L(() => [...s[16] ||= [J("建房后可在房间页修改。", -1)]]),
 					_: 1
 				}, 8, ["model-value"])])
-			], 32), K("footer", $Z, [K("div", eQ, [
+			], 32), K("footer", lQ, [K("div", uQ, [
 				K("span", {
 					class: M(["create-summary", { "is-blocked": ae.value }]),
 					title: ae.value || _e.value,
@@ -49733,7 +49861,7 @@ var qK = {
 				}, [ae.value ? (U(), G(c, {
 					key: 0,
 					name: "i-lucide-circle-alert"
-				})) : Y("", !0), J(P(ae.value ? `还差：${ae.value}` : h.value.length || d.value ? _e.value : ""), 1)], 10, tQ),
+				})) : Y("", !0), J(P(ae.value ? `还差：${ae.value}` : h.value.length || d.value ? _e.value : ""), 1)], 10, dQ),
 				q(p, {
 					label: "取消",
 					color: "neutral",
@@ -49757,30 +49885,952 @@ var qK = {
 			])])]);
 		};
 	}
-}, [["__scopeId", "data-v-268a9074"]]), oQ = {
+}, [["__scopeId", "data-v-268a9074"]]), gQ = /* @__PURE__ */ ((e) => (e[e.Border = -1] = "Border", e[e.Data = 0] = "Data", e[e.Function = 1] = "Function", e[e.Position = 2] = "Position", e[e.Timing = 3] = "Timing", e[e.Alignment = 4] = "Alignment", e))(gQ || {}), _Q = Object.defineProperty, vQ = (e, t, n) => t in e ? _Q(e, t, {
+	enumerable: !0,
+	configurable: !0,
+	writable: !0,
+	value: n
+}) : e[t] = n, yQ = (e, t, n) => (vQ(e, typeof t == "symbol" ? t : t + "", n), n), bQ = [0, 1], xQ = [1, 0], SQ = [2, 3], CQ = [3, 2], wQ = {
+	L: bQ,
+	M: xQ,
+	Q: SQ,
+	H: CQ
+}, TQ = /^[0-9]*$/, EQ = /^[A-Z0-9 $%*+.\/:-]*$/, DQ = "0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZ $%*+-./:", OQ = 1, kQ = 40, AQ = 3, jQ = 3, MQ = 40, NQ = 10, PQ = [
+	[
+		-1,
+		7,
+		10,
+		15,
+		20,
+		26,
+		18,
+		20,
+		24,
+		30,
+		18,
+		20,
+		24,
+		26,
+		30,
+		22,
+		24,
+		28,
+		30,
+		28,
+		28,
+		28,
+		28,
+		30,
+		30,
+		26,
+		28,
+		30,
+		30,
+		30,
+		30,
+		30,
+		30,
+		30,
+		30,
+		30,
+		30,
+		30,
+		30,
+		30,
+		30
+	],
+	[
+		-1,
+		10,
+		16,
+		26,
+		18,
+		24,
+		16,
+		18,
+		22,
+		22,
+		26,
+		30,
+		22,
+		22,
+		24,
+		24,
+		28,
+		28,
+		26,
+		26,
+		26,
+		26,
+		28,
+		28,
+		28,
+		28,
+		28,
+		28,
+		28,
+		28,
+		28,
+		28,
+		28,
+		28,
+		28,
+		28,
+		28,
+		28,
+		28,
+		28,
+		28
+	],
+	[
+		-1,
+		13,
+		22,
+		18,
+		26,
+		18,
+		24,
+		18,
+		22,
+		20,
+		24,
+		28,
+		26,
+		24,
+		20,
+		30,
+		24,
+		28,
+		28,
+		26,
+		30,
+		28,
+		30,
+		30,
+		30,
+		30,
+		28,
+		30,
+		30,
+		30,
+		30,
+		30,
+		30,
+		30,
+		30,
+		30,
+		30,
+		30,
+		30,
+		30,
+		30
+	],
+	[
+		-1,
+		17,
+		28,
+		22,
+		16,
+		22,
+		28,
+		26,
+		26,
+		24,
+		28,
+		24,
+		28,
+		22,
+		24,
+		24,
+		30,
+		28,
+		28,
+		26,
+		28,
+		30,
+		24,
+		30,
+		30,
+		30,
+		30,
+		30,
+		30,
+		30,
+		30,
+		30,
+		30,
+		30,
+		30,
+		30,
+		30,
+		30,
+		30,
+		30,
+		30
+	]
+], FQ = [
+	[
+		-1,
+		1,
+		1,
+		1,
+		1,
+		1,
+		2,
+		2,
+		2,
+		2,
+		4,
+		4,
+		4,
+		4,
+		4,
+		6,
+		6,
+		6,
+		6,
+		7,
+		8,
+		8,
+		9,
+		9,
+		10,
+		12,
+		12,
+		12,
+		13,
+		14,
+		15,
+		16,
+		17,
+		18,
+		19,
+		19,
+		20,
+		21,
+		22,
+		24,
+		25
+	],
+	[
+		-1,
+		1,
+		1,
+		1,
+		2,
+		2,
+		4,
+		4,
+		4,
+		5,
+		5,
+		5,
+		8,
+		9,
+		9,
+		10,
+		10,
+		11,
+		13,
+		14,
+		16,
+		17,
+		17,
+		18,
+		20,
+		21,
+		23,
+		25,
+		26,
+		28,
+		29,
+		31,
+		33,
+		35,
+		37,
+		38,
+		40,
+		43,
+		45,
+		47,
+		49
+	],
+	[
+		-1,
+		1,
+		1,
+		2,
+		2,
+		4,
+		4,
+		6,
+		6,
+		8,
+		8,
+		8,
+		10,
+		12,
+		16,
+		12,
+		17,
+		16,
+		18,
+		21,
+		20,
+		23,
+		23,
+		25,
+		27,
+		29,
+		34,
+		34,
+		35,
+		38,
+		40,
+		43,
+		45,
+		48,
+		51,
+		53,
+		56,
+		59,
+		62,
+		65,
+		68
+	],
+	[
+		-1,
+		1,
+		1,
+		2,
+		4,
+		4,
+		4,
+		5,
+		6,
+		8,
+		8,
+		11,
+		11,
+		16,
+		16,
+		18,
+		16,
+		19,
+		21,
+		25,
+		25,
+		25,
+		34,
+		30,
+		32,
+		35,
+		37,
+		40,
+		42,
+		45,
+		48,
+		51,
+		54,
+		57,
+		60,
+		63,
+		66,
+		70,
+		74,
+		77,
+		81
+	]
+], IQ = class {
+	constructor(e, t, n, r) {
+		if (this.version = e, this.ecc = t, yQ(this, "size"), yQ(this, "mask"), yQ(this, "modules", []), yQ(this, "types", []), e < OQ || e > kQ) throw RangeError("Version value out of range");
+		if (r < -1 || r > 7) throw RangeError("Mask value out of range");
+		this.size = e * 4 + 17;
+		let i = Array.from({ length: this.size }, () => !1);
+		for (let e = 0; e < this.size; e++) this.modules.push(i.slice()), this.types.push(i.map(() => 0));
+		this.drawFunctionPatterns();
+		let a = this.addEccAndInterleave(n);
+		if (this.drawCodewords(a), r === -1) {
+			let e = 1e9;
+			for (let t = 0; t < 8; t++) {
+				this.applyMask(t), this.drawFormatBits(t);
+				let n = this.getPenaltyScore();
+				n < e && (r = t, e = n), this.applyMask(t);
+			}
+		}
+		this.mask = r, this.applyMask(r), this.drawFormatBits(r);
+	}
+	getModule(e, t) {
+		return e >= 0 && e < this.size && t >= 0 && t < this.size && this.modules[t][e];
+	}
+	drawFunctionPatterns() {
+		for (let e = 0; e < this.size; e++) this.setFunctionModule(6, e, e % 2 == 0, gQ.Timing), this.setFunctionModule(e, 6, e % 2 == 0, gQ.Timing);
+		this.drawFinderPattern(3, 3), this.drawFinderPattern(this.size - 4, 3), this.drawFinderPattern(3, this.size - 4);
+		let e = this.getAlignmentPatternPositions(), t = e.length;
+		for (let n = 0; n < t; n++) for (let r = 0; r < t; r++) n === 0 && r === 0 || n === 0 && r === t - 1 || n === t - 1 && r === 0 || this.drawAlignmentPattern(e[n], e[r]);
+		this.drawFormatBits(0), this.drawVersion();
+	}
+	drawFormatBits(e) {
+		let t = this.ecc[1] << 3 | e, n = t;
+		for (let e = 0; e < 10; e++) n = n << 1 ^ (n >>> 9) * 1335;
+		let r = (t << 10 | n) ^ 21522;
+		for (let e = 0; e <= 5; e++) this.setFunctionModule(8, e, RQ(r, e));
+		this.setFunctionModule(8, 7, RQ(r, 6)), this.setFunctionModule(8, 8, RQ(r, 7)), this.setFunctionModule(7, 8, RQ(r, 8));
+		for (let e = 9; e < 15; e++) this.setFunctionModule(14 - e, 8, RQ(r, e));
+		for (let e = 0; e < 8; e++) this.setFunctionModule(this.size - 1 - e, 8, RQ(r, e));
+		for (let e = 8; e < 15; e++) this.setFunctionModule(8, this.size - 15 + e, RQ(r, e));
+		this.setFunctionModule(8, this.size - 8, !0);
+	}
+	drawVersion() {
+		if (this.version < 7) return;
+		let e = this.version;
+		for (let t = 0; t < 12; t++) e = e << 1 ^ (e >>> 11) * 7973;
+		let t = this.version << 12 | e;
+		for (let e = 0; e < 18; e++) {
+			let n = RQ(t, e), r = this.size - 11 + e % 3, i = Math.floor(e / 3);
+			this.setFunctionModule(r, i, n), this.setFunctionModule(i, r, n);
+		}
+	}
+	drawFinderPattern(e, t) {
+		for (let n = -4; n <= 4; n++) for (let r = -4; r <= 4; r++) {
+			let i = Math.max(Math.abs(r), Math.abs(n)), a = e + r, o = t + n;
+			a >= 0 && a < this.size && o >= 0 && o < this.size && this.setFunctionModule(a, o, i !== 2 && i !== 4, gQ.Position);
+		}
+	}
+	drawAlignmentPattern(e, t) {
+		for (let n = -2; n <= 2; n++) for (let r = -2; r <= 2; r++) this.setFunctionModule(e + r, t + n, Math.max(Math.abs(r), Math.abs(n)) !== 1, gQ.Alignment);
+	}
+	setFunctionModule(e, t, n, r = gQ.Function) {
+		this.modules[t][e] = n, this.types[t][e] = r;
+	}
+	addEccAndInterleave(e) {
+		let t = this.version, n = this.ecc;
+		if (e.length !== $Q(t, n)) throw RangeError("Invalid argument");
+		let r = FQ[n[0]][t], i = PQ[n[0]][t], a = Math.floor(QQ(t) / 8), o = r - a % r, s = Math.floor(a / r), c = [], l = e$(i);
+		for (let t = 0, n = 0; t < r; t++) {
+			let r = e.slice(n, n + s - i + (t < o ? 0 : 1));
+			n += r.length;
+			let a = t$(r, l);
+			t < o && r.push(0), c.push(r.concat(a));
+		}
+		let u = [];
+		for (let e = 0; e < c[0].length; e++) c.forEach((t, n) => {
+			(e !== s - i || n >= o) && u.push(t[e]);
+		});
+		return u;
+	}
+	drawCodewords(e) {
+		if (e.length !== Math.floor(QQ(this.version) / 8)) throw RangeError("Invalid argument");
+		let t = 0;
+		for (let n = this.size - 1; n >= 1; n -= 2) {
+			n === 6 && (n = 5);
+			for (let r = 0; r < this.size; r++) for (let i = 0; i < 2; i++) {
+				let a = n - i, o = n + 1 & 2 ? r : this.size - 1 - r;
+				!this.types[o][a] && t < e.length * 8 && (this.modules[o][a] = RQ(e[t >>> 3], 7 - (t & 7)), t++);
+			}
+		}
+	}
+	applyMask(e) {
+		if (e < 0 || e > 7) throw RangeError("Mask value out of range");
+		for (let t = 0; t < this.size; t++) for (let n = 0; n < this.size; n++) {
+			let r;
+			switch (e) {
+				case 0:
+					r = (n + t) % 2 == 0;
+					break;
+				case 1:
+					r = t % 2 == 0;
+					break;
+				case 2:
+					r = n % 3 == 0;
+					break;
+				case 3:
+					r = (n + t) % 3 == 0;
+					break;
+				case 4:
+					r = (Math.floor(n / 3) + Math.floor(t / 2)) % 2 == 0;
+					break;
+				case 5:
+					r = n * t % 2 + n * t % 3 == 0;
+					break;
+				case 6:
+					r = (n * t % 2 + n * t % 3) % 2 == 0;
+					break;
+				case 7:
+					r = ((n + t) % 2 + n * t % 3) % 2 == 0;
+					break;
+				default: throw Error("Unreachable");
+			}
+			!this.types[t][n] && r && (this.modules[t][n] = !this.modules[t][n]);
+		}
+	}
+	getPenaltyScore() {
+		let e = 0;
+		for (let t = 0; t < this.size; t++) {
+			let n = !1, r = 0, i = [
+				0,
+				0,
+				0,
+				0,
+				0,
+				0,
+				0
+			];
+			for (let a = 0; a < this.size; a++) this.modules[t][a] === n ? (r++, r === 5 ? e += AQ : r > 5 && e++) : (this.finderPenaltyAddHistory(r, i), n || (e += this.finderPenaltyCountPatterns(i) * MQ), n = this.modules[t][a], r = 1);
+			e += this.finderPenaltyTerminateAndCount(n, r, i) * MQ;
+		}
+		for (let t = 0; t < this.size; t++) {
+			let n = !1, r = 0, i = [
+				0,
+				0,
+				0,
+				0,
+				0,
+				0,
+				0
+			];
+			for (let a = 0; a < this.size; a++) this.modules[a][t] === n ? (r++, r === 5 ? e += AQ : r > 5 && e++) : (this.finderPenaltyAddHistory(r, i), n || (e += this.finderPenaltyCountPatterns(i) * MQ), n = this.modules[a][t], r = 1);
+			e += this.finderPenaltyTerminateAndCount(n, r, i) * MQ;
+		}
+		for (let t = 0; t < this.size - 1; t++) for (let n = 0; n < this.size - 1; n++) {
+			let r = this.modules[t][n];
+			r === this.modules[t][n + 1] && r === this.modules[t + 1][n] && r === this.modules[t + 1][n + 1] && (e += jQ);
+		}
+		let t = 0;
+		for (let e of this.modules) t = e.reduce((e, t) => e + +!!t, t);
+		let n = this.size * this.size, r = Math.ceil(Math.abs(t * 20 - n * 10) / n) - 1;
+		return e += r * NQ, e;
+	}
+	getAlignmentPatternPositions() {
+		if (this.version === 1) return [];
+		{
+			let e = Math.floor(this.version / 7) + 2, t = this.version === 32 ? 26 : Math.ceil((this.version * 4 + 4) / (e * 2 - 2)) * 2, n = [6];
+			for (let r = this.size - 7; n.length < e; r -= t) n.splice(1, 0, r);
+			return n;
+		}
+	}
+	finderPenaltyCountPatterns(e) {
+		let t = e[1], n = t > 0 && e[2] === t && e[3] === t * 3 && e[4] === t && e[5] === t;
+		return (n && e[0] >= t * 4 && e[6] >= t ? 1 : 0) + (n && e[6] >= t * 4 && e[0] >= t ? 1 : 0);
+	}
+	finderPenaltyTerminateAndCount(e, t, n) {
+		return e && (this.finderPenaltyAddHistory(t, n), t = 0), t += this.size, this.finderPenaltyAddHistory(t, n), this.finderPenaltyCountPatterns(n);
+	}
+	finderPenaltyAddHistory(e, t) {
+		t[0] === 0 && (e += this.size), t.pop(), t.unshift(e);
+	}
+};
+function LQ(e, t, n) {
+	if (t < 0 || t > 31 || e >>> t) throw RangeError("Value out of range");
+	for (let r = t - 1; r >= 0; r--) n.push(e >>> r & 1);
+}
+function RQ(e, t) {
+	return !!(e >>> t & 1);
+}
+var zQ = class {
+	constructor(e, t, n) {
+		if (this.mode = e, this.numChars = t, this.bitData = n, t < 0) throw RangeError("Invalid argument");
+		this.bitData = n.slice();
+	}
+	getData() {
+		return this.bitData.slice();
+	}
+}, BQ = [
+	1,
+	10,
+	12,
+	14
+], VQ = [
+	2,
+	9,
+	11,
+	13
+], HQ = [
+	4,
+	8,
+	16,
+	16
+];
+function UQ(e, t) {
+	return e[Math.floor((t + 7) / 17) + 1];
+}
+function WQ(e) {
+	let t = [];
+	for (let n of e) LQ(n, 8, t);
+	return new zQ(HQ, e.length, t);
+}
+function GQ(e) {
+	if (!JQ(e)) throw RangeError("String contains non-numeric characters");
+	let t = [];
+	for (let n = 0; n < e.length;) {
+		let r = Math.min(e.length - n, 3);
+		LQ(Number.parseInt(e.substring(n, n + r), 10), r * 3 + 1, t), n += r;
+	}
+	return new zQ(BQ, e.length, t);
+}
+function KQ(e) {
+	if (!YQ(e)) throw RangeError("String contains unencodable characters in alphanumeric mode");
+	let t = [], n = 0;
+	for (; n + 2 <= e.length; n += 2) {
+		let r = DQ.indexOf(e.charAt(n)) * 45;
+		r += DQ.indexOf(e.charAt(n + 1)), LQ(r, 11, t);
+	}
+	return n < e.length && LQ(DQ.indexOf(e.charAt(n)), 6, t), new zQ(VQ, e.length, t);
+}
+function qQ(e) {
+	return e === "" ? [] : JQ(e) ? [GQ(e)] : YQ(e) ? [KQ(e)] : [WQ(ZQ(e))];
+}
+function JQ(e) {
+	return TQ.test(e);
+}
+function YQ(e) {
+	return EQ.test(e);
+}
+function XQ(e, t) {
+	let n = 0;
+	for (let r of e) {
+		let e = UQ(r.mode, t);
+		if (r.numChars >= 1 << e) return Infinity;
+		n += 4 + e + r.bitData.length;
+	}
+	return n;
+}
+function ZQ(e) {
+	e = encodeURI(e);
+	let t = [];
+	for (let n = 0; n < e.length; n++) e.charAt(n) === "%" ? (t.push(Number.parseInt(e.substring(n + 1, n + 3), 16)), n += 2) : t.push(e.charCodeAt(n));
+	return t;
+}
+function QQ(e) {
+	if (e < OQ || e > kQ) throw RangeError("Version number out of range");
+	let t = (16 * e + 128) * e + 64;
+	if (e >= 2) {
+		let n = Math.floor(e / 7) + 2;
+		t -= (25 * n - 10) * n - 55, e >= 7 && (t -= 36);
+	}
+	return t;
+}
+function $Q(e, t) {
+	return Math.floor(QQ(e) / 8) - PQ[t[0]][e] * FQ[t[0]][e];
+}
+function e$(e) {
+	if (e < 1 || e > 255) throw RangeError("Degree out of range");
+	let t = [];
+	for (let n = 0; n < e - 1; n++) t.push(0);
+	t.push(1);
+	let n = 1;
+	for (let r = 0; r < e; r++) {
+		for (let e = 0; e < t.length; e++) t[e] = n$(t[e], n), e + 1 < t.length && (t[e] ^= t[e + 1]);
+		n = n$(n, 2);
+	}
+	return t;
+}
+function t$(e, t) {
+	let n = t.map((e) => 0);
+	for (let r of e) {
+		let e = r ^ n.shift();
+		n.push(0), t.forEach((t, r) => n[r] ^= n$(t, e));
+	}
+	return n;
+}
+function n$(e, t) {
+	if (e >>> 8 || t >>> 8) throw RangeError("Byte out of range");
+	let n = 0;
+	for (let r = 7; r >= 0; r--) n = n << 1 ^ (n >>> 7) * 285, n ^= (t >>> r & 1) * e;
+	return n;
+}
+function r$(e, t, n = 1, r = 40, i = -1, a = !0) {
+	if (!(OQ <= n && n <= r && r <= kQ) || i < -1 || i > 7) throw RangeError("Invalid value");
+	let o, s;
+	for (o = n;; o++) {
+		let n = $Q(o, t) * 8, i = XQ(e, o);
+		if (i <= n) {
+			s = i;
+			break;
+		}
+		if (o >= r) throw RangeError("Data too long");
+	}
+	for (let e of [
+		xQ,
+		SQ,
+		CQ
+	]) a && s <= $Q(o, e) * 8 && (t = e);
+	let c = [];
+	for (let t of e) {
+		LQ(t.mode[0], 4, c), LQ(t.numChars, UQ(t.mode, o), c);
+		for (let e of t.getData()) c.push(e);
+	}
+	let l = $Q(o, t) * 8;
+	LQ(0, Math.min(4, l - c.length), c), LQ(0, (8 - c.length % 8) % 8, c);
+	for (let e = 236; c.length < l; e ^= 253) LQ(e, 8, c);
+	let u = Array.from({ length: Math.ceil(c.length / 8) }, () => 0);
+	return c.forEach((e, t) => u[t >>> 3] |= e << 7 - (t & 7)), new IQ(o, t, u, i);
+}
+function i$(e, t) {
+	let { ecc: n = "L", boostEcc: r = !1, minVersion: i = 1, maxVersion: a = 40, maskPattern: o = -1, border: s = 1 } = t || {}, c = typeof e == "string" ? qQ(e) : Array.isArray(e) ? [WQ(e)] : void 0;
+	if (!c) throw Error(`uqr only supports encoding string and binary data, but got: ${typeof e}`);
+	let l = r$(c, wQ[n], i, a, o, r), u = a$({
+		version: l.version,
+		maskPattern: l.mask,
+		size: l.size,
+		data: l.modules,
+		types: l.types
+	}, s);
+	return t?.invert && (u.data = u.data.map((e) => e.map((e) => !e))), t?.onEncoded?.(u), u;
+}
+function a$(e, t = 1) {
+	if (!t) return e;
+	let { size: n } = e, r = n + t * 2;
+	e.size = r, e.data.forEach((e) => {
+		for (let n = 0; n < t; n++) e.unshift(!1), e.push(!1);
+	});
+	for (let n = 0; n < t; n++) e.data.unshift(Array.from({ length: r }, (e) => !1)), e.data.push(Array.from({ length: r }, (e) => !1));
+	let i = gQ.Border;
+	e.types.forEach((e) => {
+		for (let n = 0; n < t; n++) e.unshift(i), e.push(i);
+	});
+	for (let n = 0; n < t; n++) e.types.unshift(Array.from({ length: r }, (e) => i)), e.types.push(Array.from({ length: r }, (e) => i));
+	return e;
+}
+function o$(e, t = {}) {
+	let n = i$(e, t), { pixelSize: r = 10, whiteColor: i = "white", blackColor: a = "black" } = t, o = n.size * r, s = n.size * r, c = `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 ${s} ${o}">`, l = [];
+	for (let e = 0; e < n.size; e++) for (let t = 0; t < n.size; t++) {
+		let i = t * r, a = e * r;
+		n.data[e][t] && l.push(`M${i},${a}h${r}v${r}h-${r}z`);
+	}
+	return c += `<rect fill="${i}" width="${s}" height="${o}"/>`, c += `<path fill="${a}" d="${l.join("")}"/>`, c += "</svg>", c;
+}
+//#endregion
+//#region frontend/DeviceSettings.vue
+var s$ = {
+	key: 0,
+	class: "device-settings",
+	"aria-labelledby": "device-heading"
+}, c$ = { class: "account-actions" }, l$ = {
+	key: 1,
+	class: "account-message is-error",
+	role: "status"
+}, u$ = {
+	key: 0,
+	class: "account-device-list"
+}, d$ = ["disabled", "onClick"], f$ = {
+	key: 0,
+	class: "device-empty"
+}, p$ = { class: "device-actions" }, m$ = {
+	key: 1,
+	class: "device-invite",
+	role: "status"
+}, h$ = ["innerHTML"], g$ = { class: "device-code" }, _$ = { class: "fine-print" }, v$ = 6048e5, y$ = /*#__PURE__*/ TH({
+	__name: "DeviceSettings",
+	setup(e) {
+		let { view: t, bridge: n } = xr("discussion"), r = Z(() => t.value.admin.local), i = Z(() => !r.value && t.value.launch.available && t.value.launch.remote), a = Z(() => t.value.device), o = /* @__PURE__ */ F(null), s = /* @__PURE__ */ F(""), c = /* @__PURE__ */ F(""), l = /* @__PURE__ */ F(!1), u = /* @__PURE__ */ F(null);
+		R(() => a.value.pairing_code, (e) => {
+			e && (c.value = e);
+		}, { immediate: !0 });
+		async function d(e, t, r = "") {
+			if (s.value) return !1;
+			s.value = e;
+			try {
+				return await t(), r && n.notify("info", r), !0;
+			} catch (e) {
+				return !e.cancelled && !e.need && n.notify("error", e.message), !1;
+			} finally {
+				s.value = "";
+			}
+		}
+		function f() {
+			if (r.value || i.value) return d("list", async () => {
+				o.value = (await n.device.request("device-list")).devices;
+			});
+		}
+		Qi(f), R(i, (e) => {
+			e && f();
+		});
+		let p = Z(() => o.value?.find((e) => e.current)), m = Z(() => !r.value && (a.value.needs === "pairing" || i.value && o.value && !p.value)), h = Z(() => p.value && !p.value.temporary && p.value.expires_at - Date.now() < v$);
+		async function g() {
+			await d("pair", () => n.device.pair(c.value), "这台设备已与电脑配对") && (await f(), d("passkey", () => n.device.create_passkey()));
+		}
+		function _() {
+			return d("invite", async () => {
+				let e = await n.device.request("device-pairing", { temporary: l.value });
+				u.value = {
+					...e,
+					svg: e.url ? o$(e.url, { border: 1 }) : ""
+				};
+			});
+		}
+		async function v(e) {
+			await d("revoke", () => n.device.request("device-revoke", { device_id: e.id }), e.current ? "这台设备已取消配对" : "该设备已撤销") && await f();
+		}
+		async function y(e, t) {
+			await d("revoke", () => n.device.request("write-revoke", {
+				device_id: e.id,
+				room_id: t.room_id
+			}), "已撤销远程可写") && await f();
+		}
+		let b = (e) => t.value.rooms?.find((t) => t.id === e)?.title || e, x = (e) => new Date(e).toLocaleString("zh-CN", {
+			month: "numeric",
+			day: "numeric",
+			hour: "2-digit",
+			minute: "2-digit"
+		});
+		return (e, t) => {
+			let S = PV, C = wV, w = MA, T = wH;
+			return r.value || i.value || a.value.needs ? (U(), W("section", s$, [
+				t[8] ||= K("h4", { id: "device-heading" }, "已配对的设备", -1),
+				t[9] ||= K("p", { class: "fine-print" }, "其他设备第一次连接这台电脑时，须输入在电脑或已配对设备上显示的配对码；之后用它自己的通行密钥确认。偷到密码的人无法配对新设备。", -1),
+				m.value ? (U(), W("form", {
+					key: 0,
+					class: "dialog-form device-pair",
+					"aria-label": "配对这台设备",
+					onSubmit: uu(g, ["prevent"])
+				}, [
+					t[5] ||= K("p", {
+						class: "account-message is-error",
+						role: "status"
+					}, "这台设备还没有与电脑配对，暂时不能操作电脑上的房间。", -1),
+					q(C, {
+						label: "配对码",
+						description: "在电脑的本机网页或已配对设备的 设置 → 账号 中点“添加设备”获取；扫描二维码会自动填入"
+					}, {
+						default: L(() => [q(S, {
+							modelValue: c.value,
+							"onUpdate:modelValue": t[0] ||= (e) => c.value = e,
+							placeholder: "XXXX-XXXX-XXXX",
+							autocomplete: "off",
+							maxlength: 16,
+							class: "w-full",
+							"aria-label": "配对码"
+						}, null, 8, ["modelValue"])]),
+						_: 1
+					}),
+					K("div", c$, [q(w, {
+						type: "submit",
+						label: "配对",
+						class: "channel-primary-button",
+						loading: s.value === "pair",
+						disabled: !!s.value || !c.value.trim()
+					}, null, 8, ["loading", "disabled"])])
+				], 32)) : a.value.needs === "renew" ? (U(), W("p", l$, [t[6] ||= J(" 这台设备的授权已到期。", -1), q(w, {
+					label: "用通行密钥续期",
+					color: "neutral",
+					variant: "soft",
+					size: "xs",
+					loading: s.value === "renew",
+					disabled: !!s.value,
+					onClick: t[1] ||= (e) => {
+						d("renew", async () => {
+							await I(n).device.renew(), await f();
+						});
+					}
+				}, null, 8, ["loading", "disabled"])])) : (U(), W(H, { key: 2 }, [
+					o.value ? (U(), W("ul", u$, [(U(!0), W(H, null, B(o.value, (e) => (U(), W("li", { key: e.id }, [K("span", null, [
+						K("strong", null, [
+							J(P(e.label), 1),
+							e.current ? (U(), W(H, { key: 0 }, [J(" · 当前设备")], 64)) : Y("", !0),
+							e.temporary ? (U(), W(H, { key: 1 }, [J(" · 临时")], 64)) : Y("", !0)
+						]),
+						K("small", null, P(e.expires_at > Date.now() ? `授权至 ${x(e.expires_at)}` : "授权已到期") + P(e.passkeys ? "" : " · 未创建通行密钥"), 1),
+						(U(!0), W(H, null, B(e.write_rooms, (t) => (U(), W("small", {
+							key: t.room_id,
+							class: "device-grant"
+						}, [J(" 远程可写：" + P(b(t.room_id)) + "，至 " + P(x(t.until)) + " ", 1), K("button", {
+							type: "button",
+							class: "device-link",
+							disabled: !!s.value,
+							onClick: (n) => y(e, t)
+						}, "撤销", 8, d$)]))), 128))
+					]), q(w, {
+						label: e.current ? "取消配对" : "撤销",
+						color: "neutral",
+						variant: "ghost",
+						size: "xs",
+						disabled: !!s.value,
+						onClick: (t) => v(e)
+					}, null, 8, [
+						"label",
+						"disabled",
+						"onClick"
+					])]))), 128)), o.value.length ? Y("", !0) : (U(), W("li", f$, "还没有配对的设备"))])) : Y("", !0),
+					K("div", p$, [
+						i.value && p.value && !p.value.passkeys ? (U(), G(w, {
+							key: 0,
+							label: "创建通行密钥",
+							color: "neutral",
+							variant: "soft",
+							size: "sm",
+							loading: s.value === "passkey",
+							disabled: !!s.value,
+							onClick: t[2] ||= (e) => d("passkey", () => I(n).device.create_passkey())
+						}, null, 8, ["loading", "disabled"])) : Y("", !0),
+						i.value && h.value ? (U(), G(w, {
+							key: 1,
+							label: "续期这台设备",
+							color: "neutral",
+							variant: "soft",
+							size: "sm",
+							loading: s.value === "renew",
+							disabled: !!s.value,
+							onClick: t[3] ||= (e) => {
+								d("renew", async () => {
+									await I(n).device.renew(), await f();
+								});
+							}
+						}, null, 8, ["loading", "disabled"])) : Y("", !0),
+						q(w, {
+							label: "添加设备",
+							icon: "i-lucide-qr-code",
+							color: "neutral",
+							variant: "outline",
+							size: "sm",
+							loading: s.value === "invite",
+							disabled: !!s.value,
+							onClick: _
+						}, null, 8, ["loading", "disabled"]),
+						q(T, {
+							modelValue: l.value,
+							"onUpdate:modelValue": t[4] ||= (e) => l.value = e,
+							label: "临时设备（只授权 1 天）"
+						}, null, 8, ["modelValue"])
+					]),
+					u.value ? (U(), W("div", m$, [u.value.svg ? (U(), W("div", {
+						key: 0,
+						class: "device-qr",
+						"aria-label": "配对二维码",
+						innerHTML: u.value.svg
+					}, null, 8, h$)) : Y("", !0), K("div", null, [
+						t[7] ||= K("p", null, "用新设备的相机扫描二维码，或在新设备上登录后输入配对码：", -1),
+						K("p", g$, P(u.value.code), 1),
+						K("p", _$, P(x(u.value.expires_at)) + " 前有效（2 分钟），只能用一次" + P(u.value.temporary ? "；临时设备只授权 1 天" : "") + "。", 1)
+					])])) : Y("", !0)
+				], 64))
+			])) : Y("", !0);
+		};
+	}
+}, [["__scopeId", "data-v-2fe6e40a"]]), b$ = {
 	class: "account-settings",
 	"aria-labelledby": "account-heading"
-}, sQ = {
+}, x$ = {
 	key: 0,
 	class: "fine-print",
 	role: "status"
-}, cQ = ["aria-label"], lQ = { class: "fine-print account-intro" }, uQ = {
+}, S$ = ["aria-label"], C$ = { class: "fine-print account-intro" }, w$ = {
 	key: 0,
 	class: "account-message is-error",
 	role: "status"
-}, dQ = {
+}, T$ = {
 	key: 1,
 	class: "fine-print"
-}, fQ = {
+}, E$ = {
 	key: 1,
 	class: "fine-print"
-}, pQ = { class: "account-actions" }, mQ = {
+}, D$ = { class: "account-actions" }, O$ = {
 	key: 2,
 	class: "account-profile"
-}, hQ = { class: "account-identity" }, gQ = { class: "account-avatar-actions" }, _Q = { class: "account-name-row" }, vQ = {
-	key: 0,
-	class: "account-signout account-actions"
-}, yQ = {
+}, k$ = { class: "account-identity" }, A$ = { class: "account-avatar-actions" }, j$ = { class: "account-name-row" }, M$ = {
+	class: "account-devices",
+	"aria-labelledby": "account-devices-heading"
+}, N$ = { class: "account-device-list" }, P$ = { class: "account-actions" }, F$ = { class: "account-signout account-actions" }, I$ = /*#__PURE__*/ TH({
 	__name: "AccountSettings",
 	setup(e) {
 		let { view: t, bridge: n } = xr("discussion"), r = Z(() => t.value.admin), i = Z(() => r.value.profile), a = Z(() => r.value.loaded ? r.value.registered ? r.value.logged_in ? "profile" : "login" : "register" : "loading"), o = /* @__PURE__ */ F(""), s = /* @__PURE__ */ Yt({
@@ -49826,21 +50876,51 @@ var qK = {
 		async function _() {
 			await f("logout", () => n.admin.logout(), "已退出登录。");
 		}
+		let v = /* @__PURE__ */ F(null);
+		function y() {
+			return f("sessions", async () => {
+				v.value = await n.admin.sessions();
+			});
+		}
+		async function b(e, t) {
+			await f("revoke", () => n.admin.revoke(e), t) && await y();
+		}
+		let x = (e) => n.device.label(e);
+		function S(e) {
+			return (/* @__PURE__ */ new Date(e * 1e3)).toLocaleString("zh-CN", {
+				month: "numeric",
+				day: "numeric",
+				hour: "2-digit",
+				minute: "2-digit"
+			});
+		}
+		let C = /* @__PURE__ */ Yt({
+			current_password: "",
+			password: "",
+			confirm: ""
+		});
+		async function w() {
+			await f("password", () => n.admin.change_password({ ...C }), "密码已更改，其他设备已退出登录。") && (Object.assign(C, {
+				current_password: "",
+				password: "",
+				confirm: ""
+			}), v.value && await y());
+		}
 		return (e, t) => {
-			let f = PV, v = wV, y = MA, b = pA;
-			return U(), W("section", oQ, [t[9] ||= K("h3", { id: "account-heading" }, "账号", -1), a.value === "loading" ? (U(), W("p", sQ, "正在读取账号状态…")) : a.value === "register" || a.value === "login" ? (U(), W("form", {
+			let T = PV, ee = wV, E = MA, D = pA;
+			return U(), W("section", b$, [t[17] ||= K("h3", { id: "account-heading" }, "账号", -1), a.value === "loading" ? (U(), W("p", x$, "正在读取账号状态…")) : a.value === "register" || a.value === "login" ? (U(), W("form", {
 				key: 1,
 				class: "dialog-form account-form",
 				"aria-label": a.value === "register" ? "设置管理员账号" : "登录管理员账号",
 				onSubmit: uu(p, ["prevent"])
 			}, [
-				K("p", lQ, [a.value === "register" ? (U(), W(H, { key: 0 }, [J("设置站点管理员账号：名称和头像对所有访客可见，登录后可在没有房间凭据的浏览器中存档、恢复、删除房间。")], 64)) : (U(), W(H, { key: 1 }, [J("登录后可管理房间；未登录时仍可阅读并使用本浏览器创建的房间。")], 64))]),
-				q(v, {
+				K("p", C$, [a.value === "register" ? (U(), W(H, { key: 0 }, [J("设置站点管理员账号：名称和头像对所有访客可见，登录后可在没有房间凭据的浏览器中存档、恢复、删除房间。")], 64)) : (U(), W(H, { key: 1 }, [J("登录后可管理房间；未登录时仍可阅读并使用本浏览器创建的房间。")], 64))]),
+				q(ee, {
 					label: "用户名",
 					description: a.value === "register" ? "1–30 个字符，也是公开显示的名称" : void 0,
 					required: ""
 				}, {
-					default: L(() => [q(f, {
+					default: L(() => [q(T, {
 						modelValue: s.username,
 						"onUpdate:modelValue": t[0] ||= (e) => s.username = e,
 						autocomplete: "username",
@@ -49851,12 +50931,12 @@ var qK = {
 					}, null, 8, ["modelValue"])]),
 					_: 1
 				}, 8, ["description"]),
-				q(v, {
+				q(ee, {
 					label: "密码",
 					description: a.value === "register" ? "8–128 个字符" : void 0,
 					required: ""
 				}, {
-					default: L(() => [q(f, {
+					default: L(() => [q(T, {
 						modelValue: s.password,
 						"onUpdate:modelValue": t[1] ||= (e) => s.password = e,
 						type: "password",
@@ -49869,11 +50949,11 @@ var qK = {
 					_: 1
 				}, 8, ["description"]),
 				a.value === "register" ? (U(), W(H, { key: 0 }, [
-					q(v, {
+					q(ee, {
 						label: "确认密码",
 						required: ""
 					}, {
-						default: L(() => [q(f, {
+						default: L(() => [q(T, {
 							modelValue: s.confirm,
 							"onUpdate:modelValue": t[2] ||= (e) => s.confirm = e,
 							type: "password",
@@ -49885,11 +50965,11 @@ var qK = {
 						}, null, 8, ["modelValue"])]),
 						_: 1
 					}),
-					q(v, {
+					q(ee, {
 						label: "注册令牌",
 						required: ""
 					}, {
-						default: L(() => [q(f, {
+						default: L(() => [q(T, {
 							modelValue: s.setup_key,
 							"onUpdate:modelValue": t[3] ||= (e) => s.setup_key = e,
 							type: "password",
@@ -49901,23 +50981,32 @@ var qK = {
 						}, null, 8, ["modelValue", "disabled"])]),
 						_: 1
 					}),
-					d.value ? (U(), W("p", uQ, [...t[6] ||= [
+					d.value ? (U(), W("p", w$, [...t[11] ||= [
 						J("尚无可用的注册令牌。请在部署网站的电脑上运行 ", -1),
 						K("code", null, "codiscuss token", -1),
 						J("，再刷新本页；本地版也可设置环境变量 DISCUSS_ADMIN_SETUP_KEY 后重启。", -1)
-					]])) : (U(), W("p", dQ, [...t[7] ||= [
+					]])) : (U(), W("p", T$, [...t[12] ||= [
 						J("首个注册者需要令牌，防止他人抢注：在部署网站的电脑上运行 ", -1),
 						K("code", null, "codiscuss token", -1),
-						J(" 获取（一次性）；本地版也可用服务端启动日志里的安装令牌。在已连接本机服务的电脑上注册时，账号与密码会保存到 ~/.codiscuss。忘记密码：本地版运行 ", -1),
+						J(" 获取（一次性）；本地版也可用服务端启动日志里的安装令牌。密码只由你自己保管，本机不保存。忘记密码：本地版运行 ", -1),
 						K("code", null, "python server.py --reset-admin", -1),
 						J(" 后重新注册；Cloudflare 版需清空管理员表（见部署文档）。", -1)
 					]]))
-				], 64)) : (U(), W("p", fQ, [...t[8] ||= [
+				], 64)) : (U(), W("p", E$, [...t[13] ||= [
 					J("忘记密码：本地版运行 ", -1),
 					K("code", null, "python server.py --reset-admin", -1),
 					J(" 后重新注册；Cloudflare 版需清空管理员表（见部署文档）。", -1)
 				]])),
-				K("div", pQ, [q(y, {
+				K("div", D$, [a.value === "login" && !r.value.local ? (U(), G(E, {
+					key: 0,
+					label: "用通行密钥登录",
+					icon: "i-lucide-fingerprint",
+					color: "neutral",
+					variant: "soft",
+					loading: o.value === "passkey",
+					disabled: !!o.value,
+					onClick: t[4] ||= (e) => f("passkey", () => I(n).admin.login_with_passkey())
+				}, null, 8, ["loading", "disabled"])) : Y("", !0), q(E, {
 					type: "submit",
 					class: "channel-primary-button",
 					label: a.value === "register" ? "创建并登录" : "登录",
@@ -49928,13 +51017,13 @@ var qK = {
 					"loading",
 					"disabled"
 				])])
-			], 40, cQ)) : (U(), W("div", mQ, [
-				K("div", hQ, [q(b, {
+			], 40, S$)) : (U(), W("div", O$, [
+				K("div", k$, [q(D, {
 					src: I(n).identities.用户.icon,
 					alt: `${I(n).display_name("用户")} 的头像`,
 					size: "lg",
 					class: "channel-avatar user account-avatar"
-				}, null, 8, ["src", "alt"]), K("div", gQ, [
+				}, null, 8, ["src", "alt"]), K("div", A$, [
 					K("input", {
 						ref_key: "avatar_input",
 						ref: l,
@@ -49945,7 +51034,7 @@ var qK = {
 						"aria-hidden": "true",
 						onChange: h
 					}, null, 544),
-					q(y, {
+					q(E, {
 						label: "更换头像",
 						icon: "i-lucide-image-up",
 						color: "neutral",
@@ -49953,9 +51042,9 @@ var qK = {
 						size: "sm",
 						loading: o.value === "avatar",
 						disabled: !!o.value,
-						onClick: t[4] ||= (e) => l.value.click()
+						onClick: t[5] ||= (e) => l.value.click()
 					}, null, 8, ["loading", "disabled"]),
-					q(y, {
+					q(E, {
 						label: "恢复默认头像",
 						color: "neutral",
 						variant: "ghost",
@@ -49968,19 +51057,19 @@ var qK = {
 					class: "dialog-form account-form",
 					"aria-label": "显示名称",
 					onSubmit: uu(m, ["prevent"])
-				}, [q(v, {
+				}, [q(ee, {
 					label: "显示名称",
 					description: "即用户名，对所有访客可见"
 				}, {
-					default: L(() => [K("div", _Q, [q(f, {
+					default: L(() => [K("div", j$, [q(T, {
 						modelValue: c.value,
-						"onUpdate:modelValue": t[5] ||= (e) => c.value = e,
+						"onUpdate:modelValue": t[6] ||= (e) => c.value = e,
 						autocomplete: "username",
 						maxlength: 30,
 						required: "",
 						class: "w-full",
 						"aria-label": "显示名称"
-					}, null, 8, ["modelValue"]), q(y, {
+					}, null, 8, ["modelValue"]), q(E, {
 						type: "submit",
 						label: "保存名称",
 						color: "neutral",
@@ -49990,20 +51079,118 @@ var qK = {
 					}, null, 8, ["loading", "disabled"])])]),
 					_: 1
 				})], 32),
-				r.value.local ? Y("", !0) : (U(), W("div", vQ, [q(y, {
-					label: "退出登录",
-					icon: "i-lucide-log-out",
-					color: "neutral",
-					variant: "outline",
-					size: "sm",
-					loading: o.value === "logout",
-					disabled: !!o.value,
-					onClick: _
-				}, null, 8, ["loading", "disabled"])]))
+				q(y$),
+				r.value.local ? Y("", !0) : (U(), W(H, { key: 0 }, [
+					K("section", M$, [
+						t[14] ||= K("h4", { id: "account-devices-heading" }, "网站登录", -1),
+						t[15] ||= K("p", { class: "fine-print" }, "登录一周不用或满一个月会自动失效。看到不认识的登录时，退出它并更改密码。没有配对的设备即使登录了网站，也操作不了电脑。", -1),
+						v.value ? (U(), W(H, { key: 1 }, [K("ul", N$, [(U(!0), W(H, null, B(v.value, (e) => (U(), W("li", { key: e.id }, [K("span", null, [K("strong", null, P(x(e.label)), 1), K("small", null, P(e.current ? "当前设备" : `最近使用 ${S(e.last_seen)}`), 1)]), e.current ? Y("", !0) : (U(), G(E, {
+							key: 0,
+							label: "退出",
+							color: "neutral",
+							variant: "ghost",
+							size: "xs",
+							disabled: !!o.value,
+							onClick: (t) => b({ id: e.id }, "该设备已退出登录。")
+						}, null, 8, ["disabled", "onClick"]))]))), 128))]), v.value.length > 1 ? (U(), G(E, {
+							key: 0,
+							label: "退出其他所有设备",
+							color: "neutral",
+							variant: "outline",
+							size: "sm",
+							loading: o.value === "revoke",
+							disabled: !!o.value,
+							onClick: t[7] ||= (e) => b({ others: !0 }, "其他设备已全部退出登录。")
+						}, null, 8, ["loading", "disabled"])) : Y("", !0)], 64)) : (U(), G(E, {
+							key: 0,
+							label: "查看网站登录",
+							color: "neutral",
+							variant: "soft",
+							size: "sm",
+							loading: o.value === "sessions",
+							disabled: !!o.value,
+							onClick: y
+						}, null, 8, ["loading", "disabled"]))
+					]),
+					K("form", {
+						class: "dialog-form account-form",
+						"aria-label": "更改密码",
+						onSubmit: uu(w, ["prevent"])
+					}, [
+						t[16] ||= K("h4", null, "更改密码", -1),
+						q(ee, {
+							label: "当前密码",
+							required: ""
+						}, {
+							default: L(() => [q(T, {
+								modelValue: C.current_password,
+								"onUpdate:modelValue": t[8] ||= (e) => C.current_password = e,
+								type: "password",
+								autocomplete: "current-password",
+								maxlength: 128,
+								required: "",
+								class: "w-full",
+								"aria-label": "当前密码"
+							}, null, 8, ["modelValue"])]),
+							_: 1
+						}),
+						q(ee, {
+							label: "新密码",
+							description: "8–128 个字符；更改后其他设备都会退出登录",
+							required: ""
+						}, {
+							default: L(() => [q(T, {
+								modelValue: C.password,
+								"onUpdate:modelValue": t[9] ||= (e) => C.password = e,
+								type: "password",
+								autocomplete: "new-password",
+								maxlength: 128,
+								required: "",
+								class: "w-full",
+								"aria-label": "新密码"
+							}, null, 8, ["modelValue"])]),
+							_: 1
+						}),
+						q(ee, {
+							label: "确认新密码",
+							required: ""
+						}, {
+							default: L(() => [q(T, {
+								modelValue: C.confirm,
+								"onUpdate:modelValue": t[10] ||= (e) => C.confirm = e,
+								type: "password",
+								autocomplete: "new-password",
+								maxlength: 128,
+								required: "",
+								class: "w-full",
+								"aria-label": "确认新密码"
+							}, null, 8, ["modelValue"])]),
+							_: 1
+						}),
+						K("div", P$, [q(E, {
+							type: "submit",
+							label: "更改密码",
+							color: "neutral",
+							variant: "soft",
+							loading: o.value === "password",
+							disabled: !!o.value || !C.current_password || !C.password
+						}, null, 8, ["loading", "disabled"])])
+					], 32),
+					K("div", F$, [q(E, {
+						label: "退出登录",
+						icon: "i-lucide-log-out",
+						color: "neutral",
+						variant: "outline",
+						size: "sm",
+						loading: o.value === "logout",
+						disabled: !!o.value,
+						onClick: _
+					}, null, 8, ["loading", "disabled"])])
+				], 64))
 			]))]);
 		};
 	}
-}, bQ = {
+}, [["__scopeId", "data-v-1845b5b5"]]), L$ = {
 	slots: {
 		base: ["relative group rounded-md inline-flex items-center disabled:cursor-not-allowed disabled:opacity-75", "transition-colors"],
 		leading: "absolute inset-y-0 start-0 flex items-center",
@@ -50349,7 +51536,7 @@ var qK = {
 		variant: "outline",
 		position: "popper"
 	}
-}, xQ = /*@__PURE__*/ Object.assign({ inheritAttrs: !1 }, {
+}, R$ = /*@__PURE__*/ Object.assign({ inheritAttrs: !1 }, {
 	__name: "SelectMenu",
 	props: /*@__PURE__*/ Fa({
 		id: {
@@ -50611,7 +51798,7 @@ var qK = {
 				required: !1
 			}
 		} }), j = Z(() => oA({
-			extend: bQ,
+			extend: L$,
 			...l.ui?.selectMenu || {}
 		})({
 			color: ae.value,
@@ -51041,17 +52228,17 @@ var qK = {
 			}, 16, ["name", "disabled"])
 		], 64));
 	}
-}), SQ = { class: "channel-reading-setting" }, CQ = ["aria-expanded"], wQ = { class: "speech-settings" }, TQ = {
+}), z$ = { class: "channel-reading-setting" }, B$ = ["aria-expanded"], V$ = { class: "speech-settings" }, H$ = {
 	key: 0,
 	class: "fine-print"
-}, EQ = { class: "speech-row" }, DQ = { class: "speech-row" }, OQ = { class: "speech-inline" }, kQ = ["title"], AQ = { class: "speech-inline" }, jQ = { class: "speech-row" }, MQ = { class: "speech-inline" }, NQ = { class: "speech-row" }, PQ = {
+}, U$ = { class: "speech-row" }, W$ = { class: "speech-row" }, G$ = { class: "speech-inline" }, K$ = ["title"], q$ = { class: "speech-inline" }, J$ = { class: "speech-row" }, Y$ = { class: "speech-inline" }, X$ = { class: "speech-row" }, Z$ = {
 	class: "speech-rates",
 	role: "group",
 	"aria-label": "朗读语速"
-}, FQ = { class: "speech-row" }, IQ = {
+}, Q$ = { class: "speech-row" }, $$ = {
 	key: 2,
 	class: "fine-print"
-}, LQ = "••••••••••••", RQ = "你好，我会用这个声音为你朗读房间里的消息。", zQ = "https://console.volcengine.com/speech/new", BQ = ":file", VQ = /*#__PURE__*/ TH({
+}, e1 = "••••••••••••", t1 = "你好，我会用这个声音为你朗读房间里的消息。", n1 = "https://console.volcengine.com/speech/new", r1 = ":file", i1 = /*#__PURE__*/ TH({
 	__name: "SpeechSettings",
 	setup(e) {
 		let { bridge: t } = xr("discussion"), n = [
@@ -51126,10 +52313,10 @@ var qK = {
 		}), p = Z(() => [{
 			label: "跟随通用",
 			value: ""
-		}, ...f.value]), m = (e) => (e === BQ ? r.file_voice : e ? r.member_voices[e] : "") || r.speaker;
+		}, ...f.value]), m = (e) => (e === r1 ? r.file_voice : e ? r.member_voices[e] : "") || r.speaker;
 		function h(e, t) {
 			let n = String(t || "").trim();
-			e === BQ ? r.file_voice = n : e ? r.member_voices = {
+			e === r1 ? r.file_voice = n : e ? r.member_voices = {
 				...r.member_voices,
 				[e]: n
 			} : n && (r.speaker = n), d();
@@ -51155,7 +52342,7 @@ var qK = {
 			n.play().catch(() => {}), c.value = `preview:${e}`;
 			try {
 				let r = m(e), { audio: i } = await t.local_request("tts", {
-					text: RQ,
+					text: t1,
 					speaker: r
 				});
 				n.src = URL.createObjectURL(new Blob([Uint8Array.from(atob(i), (e) => e.charCodeAt(0))], { type: "audio/mpeg" })), n.onended = () => URL.revokeObjectURL(n.src), await n.play();
@@ -51166,22 +52353,22 @@ var qK = {
 			}
 		}
 		return (e, t) => {
-			let m = sA, v = PV, y = xQ, b = MA, x = qX;
-			return U(), W("section", SQ, [q(x, {
+			let m = sA, v = PV, y = R$, b = MA, x = qX;
+			return U(), W("section", z$, [q(x, {
 				open: l.value,
 				"onUpdate:open": t[8] ||= (e) => l.value = e
 			}, {
-				content: L(() => [K("div", wQ, [o.value ? (U(), W("p", TQ, "语音由这台电脑的本机服务调用火山引擎，需要连接本机服务或已配对电脑：" + P(o.value), 1)) : a.value ? (U(), W(H, { key: 1 }, [
+				content: L(() => [K("div", V$, [o.value ? (U(), W("p", H$, "语音由这台电脑的本机服务调用火山引擎，需要连接本机服务或已配对电脑：" + P(o.value), 1)) : a.value ? (U(), W(H, { key: 1 }, [
 					K("p", { class: "fine-print" }, [
 						t[11] ||= J("在", -1),
 						K("a", {
-							href: zQ,
+							href: n1,
 							target: "_blank",
 							rel: "noopener"
 						}, "火山引擎控制台"),
 						t[12] ||= J("开通「语音合成2.0」（朗读）和「录音文件识别2.0」（语音输入），复制 API Key 填在下面。密钥只存这台电脑，费用按你的账号计费。", -1)
 					]),
-					K("label", EQ, [t[13] ||= K("span", null, "密钥", -1), q(v, {
+					K("label", U$, [t[13] ||= K("span", null, "密钥", -1), q(v, {
 						modelValue: s.value,
 						"onUpdate:modelValue": t[0] ||= (e) => s.value = e,
 						type: "text",
@@ -51189,7 +52376,7 @@ var qK = {
 						spellcheck: "false",
 						"data-1p-ignore": "",
 						"data-lpignore": "true",
-						placeholder: r.api_key_ref ? `${LQ}（输入新 Key 可更换）` : "粘贴 API Key",
+						placeholder: r.api_key_ref ? `${e1}（输入新 Key 可更换）` : "粘贴 API Key",
 						"aria-label": "火山引擎 API Key",
 						size: "sm",
 						class: "w-full speech-key",
@@ -51201,7 +52388,7 @@ var qK = {
 						"loading"
 					])]),
 					t[18] ||= K("h4", null, "朗读", -1),
-					K("div", DQ, [t[14] ||= K("span", null, "通用", -1), K("div", OQ, [q(y, {
+					K("div", W$, [t[14] ||= K("span", null, "通用", -1), K("div", G$, [q(y, {
 						"model-value": r.speaker,
 						items: f.value,
 						"value-key": "value",
@@ -51225,7 +52412,7 @@ var qK = {
 					(U(!0), W(H, null, B(I(i), (e) => (U(), W("div", {
 						key: e.name,
 						class: "speech-row"
-					}, [K("span", { title: e.label }, P(e.label), 9, kQ), K("div", AQ, [q(y, {
+					}, [K("span", { title: e.label }, P(e.label), 9, K$), K("div", q$, [q(y, {
 						"model-value": r.member_voices[e.name] || "",
 						items: p.value,
 						"value-key": "value",
@@ -51257,7 +52444,7 @@ var qK = {
 						"disabled",
 						"onClick"
 					])])]))), 128)),
-					K("div", jQ, [t[15] ||= K("span", null, "文件", -1), K("div", MQ, [q(y, {
+					K("div", J$, [t[15] ||= K("span", null, "文件", -1), K("div", Y$, [q(y, {
 						"model-value": r.file_voice || "",
 						items: p.value,
 						"value-key": "value",
@@ -51266,20 +52453,20 @@ var qK = {
 						"aria-label": "朗读文件的音色",
 						size: "sm",
 						class: "min-w-0 flex-1",
-						"onUpdate:modelValue": t[4] ||= (e) => h(BQ, e),
-						onCreate: t[5] ||= (e) => h(BQ, e)
+						"onUpdate:modelValue": t[4] ||= (e) => h(r1, e),
+						onCreate: t[5] ||= (e) => h(r1, e)
 					}, null, 8, ["model-value", "items"]), q(b, {
 						icon: "i-lucide-volume-2",
 						"aria-label": "试听朗读文件的音色",
 						color: "neutral",
 						variant: "ghost",
 						size: "sm",
-						loading: c.value === `preview:${BQ}`,
+						loading: c.value === `preview:${r1}`,
 						disabled: !r.api_key_ref || !!c.value,
-						onClick: t[6] ||= (e) => _(BQ)
+						onClick: t[6] ||= (e) => _(r1)
 					}, null, 8, ["loading", "disabled"])])]),
 					t[19] ||= K("p", { class: "fine-print speech-note" }, "没单独设置的 AI、你自己的消息、程序消息和文件都用通用音色。", -1),
-					K("div", NQ, [t[16] ||= K("span", null, "语速", -1), K("div", PQ, [(U(), W(H, null, B(n, (e) => q(b, {
+					K("div", X$, [t[16] ||= K("span", null, "语速", -1), K("div", Z$, [(U(), W(H, null, B(n, (e) => q(b, {
 						key: e.value,
 						label: e.label,
 						color: "neutral",
@@ -51296,7 +52483,7 @@ var qK = {
 						"aria-pressed",
 						"onClick"
 					])), 64))])]),
-					K("label", FQ, [t[17] ||= K("span", null, "语气", -1), q(v, {
+					K("label", Q$, [t[17] ||= K("span", null, "语气", -1), q(v, {
 						modelValue: r.context,
 						"onUpdate:modelValue": t[7] ||= (e) => r.context = e,
 						maxlength: 200,
@@ -51309,7 +52496,7 @@ var qK = {
 					t[20] ||= K("p", { class: "fine-print speech-note" }, "输入框右下角的播报按钮可开启语音播报：新回复自动朗读回答摘要，并提示轮次、失败与讨论结束。", -1),
 					t[21] ||= K("h4", null, "语音输入", -1),
 					t[22] ||= K("p", { class: "fine-print" }, "点输入框右下角的麦克风开始说话，再点一次转成文字，单次最长 5 分钟。", -1)
-				], 64)) : (U(), W("p", IQ, "正在读取语音设置…"))])]),
+				], 64)) : (U(), W("p", $$, "正在读取语音设置…"))])]),
 				default: L(() => [K("button", {
 					type: "button",
 					class: "speech-header",
@@ -51319,69 +52506,69 @@ var qK = {
 					t[10] ||= K("small", null, "朗读与语音输入", -1),
 					K("span", { class: M({ "is-ready": r.api_key_ref }) }, P(u.value), 3),
 					q(m, { name: l.value ? "i-lucide-chevron-up" : "i-lucide-chevron-down" }, null, 8, ["name"])
-				], 8, CQ)]),
+				], 8, B$)]),
 				_: 1
 			}, 8, ["open"])]);
 		};
 	}
-}, [["__scopeId", "data-v-1f5da256"]]), HQ = {
+}, [["__scopeId", "data-v-1f5da256"]]), a1 = {
 	key: 0,
 	class: "channel-archive-manager"
-}, UQ = { class: "channel-archive-toolbar" }, WQ = {
+}, o1 = { class: "channel-archive-toolbar" }, s1 = {
 	key: 0,
 	class: "channel-archive-confirm channel-archive-bulk",
 	role: "alert"
-}, GQ = { class: "channel-archive-results" }, KQ = {
+}, c1 = { class: "channel-archive-results" }, l1 = {
 	key: 0,
 	class: "channel-archive-list",
 	"aria-label": "已存档房间列表"
-}, qQ = { class: "channel-archive-row" }, JQ = { class: "channel-archive-info" }, YQ = [
+}, u1 = { class: "channel-archive-row" }, d1 = { class: "channel-archive-info" }, f1 = [
 	"title",
 	"disabled",
 	"onClick"
-], XQ = { key: 0 }, ZQ = ["datetime"], QQ = { class: "channel-archive-actions" }, $Q = {
+], p1 = { key: 0 }, m1 = ["datetime"], h1 = { class: "channel-archive-actions" }, g1 = {
 	key: 0,
 	class: "channel-archive-confirm channel-archive-bulk",
 	role: "alert"
-}, e$ = {
+}, _1 = {
 	key: 1,
 	class: "channel-archive-empty"
-}, t$ = { class: "fine-print" }, n$ = {
+}, v1 = { class: "fine-print" }, y1 = {
 	key: 0,
 	class: "fine-print"
-}, r$ = { class: "dialog-actions" }, i$ = { class: "fine-print" }, a$ = { class: "dialog-actions" }, o$ = { class: "dialog-actions" }, s$ = { class: "channel-management-target" }, c$ = {
+}, b1 = { class: "dialog-actions" }, x1 = { class: "fine-print" }, S1 = { class: "dialog-actions" }, C1 = { class: "dialog-actions" }, w1 = { class: "channel-management-target" }, T1 = {
 	key: 0,
 	class: "fine-print"
-}, l$ = {
+}, E1 = {
 	key: 1,
 	class: "fine-print"
-}, u$ = {
+}, D1 = {
 	key: 2,
 	class: "fine-print"
-}, d$ = { class: "dialog-actions" }, f$ = { key: 5 }, p$ = { class: "theme-choices" }, m$ = ["aria-pressed", "onClick"], h$ = { class: "theme-check" }, g$ = { class: "channel-reading-setting" }, _$ = {
+}, O1 = { class: "dialog-actions" }, k1 = { key: 5 }, A1 = { class: "theme-choices" }, j1 = ["aria-pressed", "onClick"], M1 = { class: "theme-check" }, N1 = { class: "channel-reading-setting" }, P1 = {
 	class: "channel-reading-options",
 	role: "group",
 	"aria-labelledby": "channel-reading-label"
-}, v$ = { class: "channel-reading-setting" }, y$ = {
+}, F1 = { class: "channel-reading-setting" }, I1 = {
 	class: "channel-reading-options channel-effect-options",
 	role: "group",
 	"aria-labelledby": "channel-effects-label"
-}, b$ = { class: "advanced-content" }, x$ = {
+}, L1 = { class: "advanced-content" }, R1 = {
 	key: 0,
 	class: "fine-print"
-}, S$ = { class: "advanced-content" }, C$ = { class: "dialog-actions" }, w$ = {
+}, z1 = { class: "advanced-content" }, B1 = { class: "dialog-actions" }, V1 = {
 	key: 8,
 	class: "original-message"
-}, T$ = {
+}, H1 = {
 	key: 0,
 	role: "alert"
-}, E$ = { class: "original-meta" }, D$ = { class: "fine-print" }, O$ = {
+}, U1 = { class: "original-meta" }, W1 = { class: "fine-print" }, G1 = {
 	key: 0,
 	class: "channel-answer-summary"
-}, k$ = { class: "message-prose" }, A$ = { class: "message-prose" }, j$ = ["innerHTML"], M$ = {
+}, K1 = { class: "message-prose" }, q1 = { class: "message-prose" }, J1 = ["innerHTML"], Y1 = {
 	key: 2,
 	class: "fine-print"
-}, N$ = {
+}, X1 = {
 	__name: "WorkspaceDialogs",
 	props: /*@__PURE__*/ Fa({
 		detailId: {
@@ -51652,8 +52839,8 @@ var qK = {
 				content: { onInteractOutside: _e },
 				"onAfter:leave": ge
 			}, {
-				body: L(() => [a.value === "archives" ? (U(), W("section", HQ, [
-					K("div", UQ, [
+				body: L(() => [a.value === "archives" ? (U(), W("section", a1, [
+					K("div", o1, [
 						q(x, {
 							modelValue: m.value,
 							"onUpdate:modelValue": b[0] ||= (e) => m.value = e,
@@ -51682,7 +52869,7 @@ var qK = {
 							}
 						}, null, 8, ["label", "disabled"])
 					]),
-					y.value && _.value.length ? (U(), W("div", WQ, [
+					y.value && _.value.length ? (U(), W("div", s1, [
 						K("span", null, "将永久删除当前列表中的 " + P(_.value.length) + " 个房间及其全部记录，无法撤销。", 1),
 						q(ce, {
 							label: "取消",
@@ -51698,19 +52885,19 @@ var qK = {
 							onClick: ee
 						})
 					])) : Y("", !0),
-					K("div", GQ, [_.value.length ? (U(), W("ul", KQ, [(U(!0), W(H, null, B(_.value, (e) => (U(), W("li", {
+					K("div", c1, [_.value.length ? (U(), W("ul", l1, [(U(!0), W(H, null, B(_.value, (e) => (U(), W("li", {
 						key: e.id,
 						class: "channel-archive-item"
-					}, [K("div", qQ, [K("div", JQ, [K("button", {
+					}, [K("div", u1, [K("div", d1, [K("button", {
 						class: "channel-archive-title",
 						title: e.title,
 						disabled: !!I(l),
 						onClick: (t) => w(e)
-					}, P(e.title), 9, YQ), K("small", null, [e.created_at ? (U(), W("span", XQ, [
+					}, P(e.title), 9, f1), K("small", null, [e.created_at ? (U(), W("span", p1, [
 						b[23] ||= J("创建于 ", -1),
-						K("time", { datetime: e.created_at }, P(S(e.created_at)), 9, ZQ),
+						K("time", { datetime: e.created_at }, P(S(e.created_at)), 9, m1),
 						b[24] ||= J(" · ", -1)
-					])) : Y("", !0), J(P(e.message_count) + " 条消息", 1)])]), K("div", QQ, [q(ce, {
+					])) : Y("", !0), J(P(e.message_count) + " 条消息", 1)])]), K("div", h1, [q(ce, {
 						"aria-label": `彻底删除 ${e.title}`,
 						title: "彻底删除",
 						icon: "i-lucide-trash-2",
@@ -51742,7 +52929,7 @@ var qK = {
 						"aria-label",
 						"disabled",
 						"onClick"
-					])])]), v.value === e.id ? (U(), W("div", $Q, [
+					])])]), v.value === e.id ? (U(), W("div", g1, [
 						K("span", null, "永久删除「" + P(e.title) + "」及其全部记录，无法撤销。", 1),
 						q(ce, {
 							label: "取消",
@@ -51758,15 +52945,15 @@ var qK = {
 							disabled: C(e),
 							onClick: T
 						}, null, 8, ["disabled"])
-					])) : Y("", !0)]))), 128))])) : (U(), W("p", e$, P(p.value.length ? "没有匹配的存档房间" : "暂无已存档房间"), 1))])
+					])) : Y("", !0)]))), 128))])) : (U(), W("p", _1, P(p.value.length ? "没有匹配的存档房间" : "暂无已存档房间"), 1))])
 				])) : a.value === "delete-folder" ? (U(), W("form", {
 					key: 1,
 					class: "dialog-form",
 					onSubmit: b[7] ||= uu((e) => re(!1), ["prevent"])
 				}, [
-					K("p", t$, "仅移除「" + P(e.targetFolder?.name) + "」时，房间变为未分组，所有消息和存档状态都会保留。", 1),
-					ne.value.length ? (U(), W("p", n$, "也可以连同其中的 " + P(ne.value.length) + " 个房间一起永久删除，无法撤销。", 1)) : Y("", !0),
-					K("div", r$, [
+					K("p", v1, "仅移除「" + P(e.targetFolder?.name) + "」时，房间变为未分组，所有消息和存档状态都会保留。", 1),
+					ne.value.length ? (U(), W("p", y1, "也可以连同其中的 " + P(ne.value.length) + " 个房间一起永久删除，无法撤销。", 1)) : Y("", !0),
+					K("div", b1, [
 						q(ce, {
 							label: "取消",
 							color: "neutral",
@@ -51791,7 +52978,7 @@ var qK = {
 					key: 2,
 					class: "dialog-form",
 					onSubmit: uu(ie, ["prevent"])
-				}, [K("p", i$, "存档「" + P(e.targetFolder?.name) + "」中的 " + P(ne.value.length) + " 个房间，文件夹保留。存档后可在侧栏「已存档」中查阅与恢复；尚未收束的讨论会暂停。", 1), K("div", a$, [q(ce, {
+				}, [K("p", x1, "存档「" + P(e.targetFolder?.name) + "」中的 " + P(ne.value.length) + " 个房间，文件夹保留。存档后可在侧栏「已存档」中查阅与恢复；尚未收束的讨论会暂停。", 1), K("div", S1, [q(ce, {
 					label: "取消",
 					color: "neutral",
 					variant: "ghost",
@@ -51821,7 +53008,7 @@ var qK = {
 					"modelValue",
 					"aria-label",
 					"readonly"
-				]), K("div", o$, [q(ce, {
+				]), K("div", C1, [q(ce, {
 					label: "取消",
 					color: "neutral",
 					variant: "ghost",
@@ -51846,10 +53033,10 @@ var qK = {
 					class: "dialog-form",
 					onSubmit: uu(k, ["prevent"])
 				}, [
-					K("p", s$, [J(P(e.targetRoom?.title) + " ", 1), K("span", null, "· " + P(e.targetRoom?.message_count) + " 条消息", 1)]),
-					a.value === "archive" ? (U(), W("p", c$, "存档后可在侧栏「已存档」中查阅与恢复。已有发言安排会保留；专家需在下次检查时停止自己的定时任务。")) : Y("", !0),
-					a.value === "restore" ? (U(), W("p", l$, "恢复不会自动继续讨论；需要继续时，在主持设置中调整阶段。")) : Y("", !0),
-					a.value === "delete" ? (U(), W("p", u$, "消息、共识和发言安排将一起删除，无法撤销。")) : Y("", !0),
+					K("p", w1, [J(P(e.targetRoom?.title) + " ", 1), K("span", null, "· " + P(e.targetRoom?.message_count) + " 条消息", 1)]),
+					a.value === "archive" ? (U(), W("p", T1, "存档后可在侧栏「已存档」中查阅与恢复。已有发言安排会保留；专家需在下次检查时停止自己的定时任务。")) : Y("", !0),
+					a.value === "restore" ? (U(), W("p", E1, "恢复不会自动继续讨论；需要继续时，在主持设置中调整阶段。")) : Y("", !0),
+					a.value === "delete" ? (U(), W("p", D1, "消息、共识和发言安排将一起删除，无法撤销。")) : Y("", !0),
 					a.value === "rename" ? (U(), G(me, {
 						key: 3,
 						label: "房间名称",
@@ -51866,7 +53053,7 @@ var qK = {
 						}, null, 8, ["modelValue"])]),
 						_: 1
 					})) : Y("", !0),
-					K("div", d$, [q(ce, {
+					K("div", O1, [q(ce, {
 						label: "取消",
 						color: "neutral",
 						variant: "ghost",
@@ -51883,10 +53070,10 @@ var qK = {
 						"loading",
 						"disabled"
 					])])
-				], 32)) : a.value === "settings" ? (U(), W("div", f$, [
-					q(yQ),
+				], 32)) : a.value === "settings" ? (U(), W("div", k1, [
+					q(I$),
 					b[29] ||= K("h3", { class: "account-appearance-heading" }, "外观", -1),
-					K("div", p$, [(U(), W(H, null, B(de, (e) => K("button", {
+					K("div", A1, [(U(), W(H, null, B(de, (e) => K("button", {
 						key: e.value,
 						class: M({ chosen: I(o).theme === e.value }),
 						"aria-pressed": I(o).theme === e.value,
@@ -51901,12 +53088,12 @@ var qK = {
 							K("b")
 						], -1)]], 2),
 						K("span", null, [K("strong", null, P(e.title), 1), K("small", null, P(e.description), 1)]),
-						K("span", h$, [I(o).theme === e.value ? (U(), G(ve, {
+						K("span", M1, [I(o).theme === e.value ? (U(), G(ve, {
 							key: 0,
 							name: "i-lucide-check"
 						})) : Y("", !0)])
-					], 10, m$)), 64))]),
-					K("section", g$, [b[26] ||= K("h3", { id: "channel-reading-label" }, "对话宽度", -1), K("div", _$, [(U(!0), W(H, null, B(e.readingOptions, (e) => (U(), G(ce, {
+					], 10, j1)), 64))]),
+					K("section", N1, [b[26] ||= K("h3", { id: "channel-reading-label" }, "对话宽度", -1), K("div", P1, [(U(!0), W(H, null, B(e.readingOptions, (e) => (U(), G(ce, {
 						key: e.value,
 						label: e.label,
 						color: "neutral",
@@ -51920,9 +53107,9 @@ var qK = {
 						"aria-pressed",
 						"onClick"
 					]))), 128))])]),
-					K("section", v$, [
+					K("section", F1, [
 						b[27] ||= K("h3", { id: "channel-effects-label" }, "视觉效果", -1),
-						K("div", y$, [(U(!0), W(H, null, B(e.effectOptions, (e) => (U(), G(ce, {
+						K("div", I1, [(U(!0), W(H, null, B(e.effectOptions, (e) => (U(), G(ce, {
 							key: e.value,
 							label: e.label,
 							color: "neutral",
@@ -51938,8 +53125,8 @@ var qK = {
 						]))), 128))]),
 						b[28] ||= K("p", { class: "fine-print" }, "精简模式关闭毛玻璃模糊与多层阴影，适合配置较低或需要更流畅滚动的设备。", -1)
 					]),
-					q(VQ)
-				])) : a.value === "create" ? (U(), G(aQ, {
+					q(i1)
+				])) : a.value === "create" ? (U(), G(hQ, {
 					key: 6,
 					"target-folder": e.targetFolder,
 					onSubmit: fe,
@@ -51987,7 +53174,7 @@ var qK = {
 						}, null, 8, ["model-value"])]),
 						_: 1
 					})) : Y("", !0),
-					K("section", b$, [
+					K("section", L1, [
 						b[30] ||= K("h3", null, "讨论上限", -1),
 						q(qH, {
 							ref_key: "topic_limits",
@@ -52002,14 +53189,14 @@ var qK = {
 							"minutes",
 							"disabled"
 						]),
-						oe.value ? (U(), W("p", x$, "讨论未结束时，上限不可在此修改。")) : Y("", !0)
+						oe.value ? (U(), W("p", R1, "讨论未结束时，上限不可在此修改。")) : Y("", !0)
 					]),
 					q(be, {
 						open: ae.value,
 						"onUpdate:open": b[20] ||= (e) => ae.value = e,
 						class: "advanced-fields"
 					}, {
-						content: L(() => [K("div", S$, [(U(), W(H, null, B([
+						content: L(() => [K("div", z1, [(U(), W(H, null, B([
 							{
 								key: "user_request",
 								label: "用户原文"
@@ -52045,7 +53232,7 @@ var qK = {
 						}, null, 8, ["trailing-icon"])]),
 						_: 1
 					}, 8, ["open"]),
-					K("div", C$, [q(ce, {
+					K("div", B1, [q(ce, {
 						label: "取消",
 						color: "neutral",
 						variant: "ghost",
@@ -52056,8 +53243,8 @@ var qK = {
 						label: "保存议题",
 						loading: I(l) === "create" || I(l) === "save_topic"
 					}, null, 8, ["loading"])])
-				], 32)) : a.value === "message" ? (U(), W("div", w$, [ue.value ? (U(), W("p", T$, P(ue.value), 1)) : le.value ? (U(), W(H, { key: 1 }, [
-					K("div", E$, [
+				], 32)) : a.value === "message" ? (U(), W("div", V1, [ue.value ? (U(), W("p", H1, P(ue.value), 1)) : le.value ? (U(), W(H, { key: 1 }, [
+					K("div", U1, [
 						K("strong", null, P(I(s).display_name(le.value.author)), 1),
 						K("span", null, "#" + P(le.value.id), 1),
 						q(xe, {
@@ -52068,14 +53255,14 @@ var qK = {
 							_: 1
 						})
 					]),
-					K("p", D$, P(I(s).provenance(le.value)) + " · " + P(new Date(le.value.created_at).toLocaleString("zh-CN")), 1),
-					le.value.summary ? (U(), W("section", O$, [K("small", null, "回答摘要 · " + P(I(s).display_name(le.value.summary_by)), 1), K("p", k$, P(le.value.summary), 1)])) : Y("", !0),
-					K("p", A$, P(le.value.text), 1),
+					K("p", W1, P(I(s).provenance(le.value)) + " · " + P(new Date(le.value.created_at).toLocaleString("zh-CN")), 1),
+					le.value.summary ? (U(), W("section", G1, [K("small", null, "回答摘要 · " + P(I(s).display_name(le.value.summary_by)), 1), K("p", K1, P(le.value.summary), 1)])) : Y("", !0),
+					K("p", q1, P(le.value.text), 1),
 					le.value.attachments?.length ? (U(), W("div", {
 						key: 1,
 						onClick: he,
 						innerHTML: I(s).attachment_markup(le.value.attachments)
-					}, null, 8, j$)) : Y("", !0),
+					}, null, 8, J1)) : Y("", !0),
 					le.value.reply_to ? (U(), G(ce, {
 						key: 2,
 						label: `查看被回复的原文 #${le.value.reply_to}`,
@@ -52085,7 +53272,7 @@ var qK = {
 						class: "channel-surface-button",
 						onClick: N
 					}, null, 8, ["label"])) : Y("", !0)
-				], 64)) : (U(), W("p", M$, "正在读取原文…"))])) : Y("", !0)]),
+				], 64)) : (U(), W("p", Y1, "正在读取原文…"))])) : Y("", !0)]),
 				_: 1
 			}, 8, [
 				"open",
@@ -52096,7 +53283,7 @@ var qK = {
 			]);
 		};
 	}
-}, P$ = {
+}, Z1 = {
 	slots: {
 		root: "relative flex gap-1.5 [&>div]:min-w-0",
 		list: "isolate min-w-0",
@@ -52506,7 +53693,7 @@ var qK = {
 		highlightColor: "primary",
 		variant: "pill"
 	}
-}, F$ = /*@__PURE__*/ Object.assign({ inheritAttrs: !1 }, {
+}, Q1 = /*@__PURE__*/ Object.assign({ inheritAttrs: !1 }, {
 	__name: "NavigationMenu",
 	props: {
 		as: {
@@ -52667,7 +53854,7 @@ var qK = {
 			level: Number,
 			listIndex: Number
 		} }), g = Z(() => oA({
-			extend: P$,
+			extend: Z1,
 			...o.ui?.navigationMenu || {}
 		})({
 			orientation: a.orientation,
@@ -53155,7 +54342,7 @@ var qK = {
 			}, 16, ["data-collapsed", "class"])
 		], 64));
 	}
-}), I$ = {
+}), $1 = {
 	__name: "ContextMenuContent",
 	props: {
 		items: {
@@ -53450,7 +54637,7 @@ var qK = {
 									"disabled",
 									"text-value",
 									"class"
-								]), q(I$, X({
+								]), q($1, X({
 									sub: "",
 									class: r.ui?.content,
 									ui: e.ui,
@@ -53561,7 +54748,7 @@ var qK = {
 			_: 3
 		}, 16)], 64));
 	}
-}, L$ = {
+}, e0 = {
 	slots: {
 		content: "min-w-32 max-h-(--reka-context-menu-content-available-height) bg-default shadow-lg rounded-md ring ring-default overflow-hidden data-[state=open]:animate-[scale-in_100ms_var(--ease-out)] data-[state=closed]:animate-[scale-out_100ms_var(--ease-out)] origin-(--reka-context-menu-content-transform-origin) flex flex-col",
 		viewport: "relative divide-y divide-default scroll-py-1 overflow-y-auto flex-1",
@@ -53749,7 +54936,7 @@ var qK = {
 		}
 	],
 	defaultVariants: { size: "md" }
-}, R$ = {
+}, t0 = {
 	__name: "ContextMenu",
 	props: {
 		size: {
@@ -53819,7 +55006,7 @@ var qK = {
 	emits: ["update:open"],
 	setup(e, { emit: t }) {
 		let n = e, r = t, i = Aa(), a = AE("contextMenu", n), o = Cm(), s = jE(om(a, "modal"), r), c = /* @__PURE__ */ Sn(() => a.content), l = () => Vm(i, ["default"]), u = Z(() => oA({
-			extend: L$,
+			extend: e0,
 			...o.ui?.contextMenu || {}
 		})({ size: a.size }));
 		return (e, t) => (U(), G(I(iC), N(Ss(I(s))), {
@@ -53831,7 +55018,7 @@ var qK = {
 			}, {
 				default: L(() => [V(e.$slots, "default")]),
 				_: 3
-			}, 8, ["disabled", "class"])) : Y("", !0), q(I$, X({
+			}, 8, ["disabled", "class"])) : Y("", !0), q($1, X({
 				class: u.value.content({ class: [!i.default && I(a).class, I(a).ui?.content] }),
 				ui: u.value,
 				"ui-override": I(a).ui
@@ -53861,20 +55048,20 @@ var qK = {
 			_: 3
 		}, 16));
 	}
-}, z$ = {
+}, n0 = {
 	key: 0,
 	class: "channel-import-reading"
-}, B$ = {
+}, r0 = {
 	class: "channel-import-list",
 	"aria-live": "polite"
-}, V$ = { class: "channel-import-head" }, H$ = ["title"], U$ = {
+}, i0 = { class: "channel-import-head" }, a0 = ["title"], o0 = {
 	key: 0,
 	role: "alert",
 	class: "channel-import-error"
-}, W$ = {
+}, s0 = {
 	key: 1,
 	class: "channel-import-members"
-}, G$ = ["title"], K$ = { class: "dialog-actions" }, q$ = /*#__PURE__*/ TH({
+}, c0 = ["title"], l0 = { class: "dialog-actions" }, u0 = /*#__PURE__*/ TH({
 	__name: "ImportDialog",
 	props: {
 		open: {
@@ -53931,21 +55118,21 @@ var qK = {
 				}
 			}, {
 				body: L(() => [
-					!r.value.done && !r.value.rooms.length ? (U(), W("p", z$, "正在读取备份文件…")) : Y("", !0),
-					K("ul", B$, [(U(!0), W(H, null, B(r.value.rooms, (e, t) => (U(), W("li", {
+					!r.value.done && !r.value.rooms.length ? (U(), W("p", n0, "正在读取备份文件…")) : Y("", !0),
+					K("ul", r0, [(U(!0), W(H, null, B(r.value.rooms, (e, t) => (U(), W("li", {
 						key: t,
 						class: M(["channel-import-room", `is-${e.status}`])
 					}, [
-						K("div", V$, [
+						K("div", i0, [
 							q(o, {
 								name: i[e.status].icon,
 								class: M({ "animate-spin": e.status === "importing" })
 							}, null, 8, ["name", "class"]),
-							K("strong", { title: e.title }, P(e.title), 9, H$),
+							K("strong", { title: e.title }, P(e.title), 9, a0),
 							K("span", null, P(i[e.status].label), 1)
 						]),
-						e.error ? (U(), W("p", U$, P(e.error), 1)) : Y("", !0),
-						e.members.length ? (U(), W("ul", W$, [(U(!0), W(H, null, B(e.members, (e) => (U(), W("li", {
+						e.error ? (U(), W("p", o0, P(e.error), 1)) : Y("", !0),
+						e.members.length ? (U(), W("ul", s0, [(U(!0), W(H, null, B(e.members, (e) => (U(), W("li", {
 							key: e.name,
 							class: M({ "is-failed": e.failed })
 						}, [
@@ -53954,7 +55141,7 @@ var qK = {
 							e.resume ? (U(), W("code", {
 								key: 0,
 								title: `没有开着的原窗口时，在 ${e.resume.cwd} 运行`
-							}, P(e.resume.command), 9, G$)) : Y("", !0)
+							}, P(e.resume.command), 9, c0)) : Y("", !0)
 						], 2))), 128))])) : Y("", !0),
 						(U(!0), W(H, null, B(e.problems, (e) => (U(), W("p", {
 							key: e,
@@ -53966,7 +55153,7 @@ var qK = {
 						role: "alert",
 						class: "channel-import-error is-file"
 					}, P(e), 1))), 128)),
-					K("div", K$, [q(s, {
+					K("div", l0, [q(s, {
 						label: "完成",
 						class: "channel-primary-button",
 						disabled: !r.value.done,
@@ -53983,42 +55170,42 @@ var qK = {
 			]);
 		};
 	}
-}, [["__scopeId", "data-v-c7d0eeb8"]]), J$ = { class: "channel-directory-manager" }, Y$ = { class: "channel-directory-heading" }, X$ = ["aria-expanded"], Z$ = { class: "channel-directory-actions" }, Q$ = {
+}, [["__scopeId", "data-v-c7d0eeb8"]]), d0 = { class: "channel-directory-manager" }, f0 = { class: "channel-directory-heading" }, p0 = ["aria-expanded"], m0 = { class: "channel-directory-actions" }, h0 = {
 	"aria-label": "协作房间列表",
 	class: "channel-room-list",
 	"data-room-directory": ""
-}, $$ = ["data-room-folder", "data-drag-folder"], e1 = [
+}, g0 = ["data-room-folder", "data-drag-folder"], _0 = [
 	"disabled",
 	"aria-label",
 	"aria-expanded",
 	"onKeydown",
 	"onClick"
-], t1 = { class: "channel-folder-name" }, n1 = {
+], v0 = { class: "channel-folder-name" }, y0 = {
 	class: "channel-directory-count",
 	"aria-hidden": "true"
-}, r1 = { class: "channel-folder-actions" }, i1 = ["data-drop-folder"], a1 = {
+}, b0 = { class: "channel-folder-actions" }, x0 = ["data-drop-folder"], S0 = {
 	key: 0,
 	class: "channel-directory-empty",
 	role: "status"
-}, o1 = ["data-drag-room"], s1 = [
+}, C0 = ["data-drag-room"], w0 = [
 	"aria-label",
 	"disabled",
 	"onKeydown"
-], c1 = [
+], T0 = [
 	"title",
 	"aria-label",
 	"aria-current",
 	"onClick"
-], l1 = {
+], E0 = {
 	class: "channel-room-time",
 	"aria-hidden": "true"
-}, u1 = { class: "channel-room-actions" }, d1 = {
+}, D0 = { class: "channel-room-actions" }, O0 = {
 	key: 0,
 	class: "channel-directory-empty"
-}, f1 = {
+}, k0 = {
 	key: 0,
 	class: "channel-archive-count"
-}, p1 = {
+}, A0 = {
 	__name: "ChannelDirectory",
 	emits: [
 		"select",
@@ -54268,8 +55455,8 @@ var qK = {
 			];
 		}
 		return (e, t) => {
-			let u = MA, d = sA, g = RV, _ = $V, w = R$;
-			return U(), W("div", J$, [
+			let u = MA, d = sA, g = RV, _ = $V, w = t0;
+			return U(), W("div", d0, [
 				q(u, {
 					label: "新建对话",
 					icon: "i-lucide-plus",
@@ -54278,12 +55465,12 @@ var qK = {
 					disabled: I(r).directory_pending.includes("create-room"),
 					onClick: t[0] ||= (e) => n("create", null)
 				}, null, 8, ["disabled"]),
-				K("div", Y$, [K("button", {
+				K("div", f0, [K("button", {
 					type: "button",
 					class: "channel-section-toggle",
 					"aria-expanded": x.value,
 					onClick: t[1] ||= (e) => x.value = !x.value
-				}, [q(d, { name: x.value ? "i-lucide-chevron-down" : "i-lucide-chevron-right" }, null, 8, ["name"]), J(P(f.value), 1)], 8, X$), K("div", Z$, [
+				}, [q(d, { name: x.value ? "i-lucide-chevron-down" : "i-lucide-chevron-right" }, null, 8, ["name"]), J(P(f.value), 1)], 8, p0), K("div", m0, [
 					q(g, { text: "新建文件夹" }, {
 						default: L(() => [q(u, {
 							icon: "i-lucide-plus",
@@ -54325,7 +55512,7 @@ var qK = {
 						onChange: v
 					}, null, 544)
 				])]),
-				vr(K("nav", Q$, [(U(!0), W(H, null, B(l.value, (e, s) => (U(), W("section", {
+				vr(K("nav", h0, [(U(!0), W(H, null, B(l.value, (e, s) => (U(), W("section", {
 					key: e.order_id,
 					class: "channel-folder-section",
 					"data-room-folder": e.id,
@@ -54354,9 +55541,9 @@ var qK = {
 				}, [
 					q(d, { name: S.value.has(e.id) ? "i-lucide-chevron-right" : "i-lucide-chevron-down" }, null, 8, ["name"]),
 					q(d, { name: "i-lucide-folder" }),
-					K("span", t1, P(e.name), 1),
-					K("small", n1, P(e.pending ? "保存中" : e.rooms.length || ""), 1)
-				], 40, e1), K("div", r1, [q(g, { text: `在${e.name}中新建对话` }, {
+					K("span", v0, P(e.name), 1),
+					K("small", y0, P(e.pending ? "保存中" : e.rooms.length || ""), 1)
+				], 40, _0), K("div", b0, [q(g, { text: `在${e.name}中新建对话` }, {
 					default: L(() => [q(u, {
 						icon: "i-lucide-square-pen",
 						"aria-label": `在${e.name}中新建对话`,
@@ -54393,7 +55580,7 @@ var qK = {
 					key: 1,
 					class: M(e.id ? "channel-folder-rooms" : "channel-root-rooms"),
 					"data-drop-folder": e.id ? void 0 : ""
-				}, [I(r).creating_room && (I(r).creating_room.folder_id || "") === e.id ? (U(), W("p", a1, "正在创建：" + P(I(r).creating_room.title), 1)) : Y("", !0), (U(!0), W(H, null, B(e.rooms, (s, c) => (U(), G(w, {
+				}, [I(r).creating_room && (I(r).creating_room.folder_id || "") === e.id ? (U(), W("p", S0, "正在创建：" + P(I(r).creating_room.title), 1)) : Y("", !0), (U(!0), W(H, null, B(e.rooms, (s, c) => (U(), G(w, {
 					key: s.id,
 					items: E(s, c, s.folder_id || null, e.rooms.length),
 					ui: { content: "channel-menu channel-topic-menu" }
@@ -54418,7 +55605,7 @@ var qK = {
 								direction: 1,
 								folder_id: s.folder_id || null
 							}), ["prevent"]), ["down"])]
-						}, [q(d, { name: "i-lucide-grip-vertical" })], 40, s1),
+						}, [q(d, { name: "i-lucide-grip-vertical" })], 40, w0),
 						K("button", {
 							class: "channel-room-select",
 							"data-drag-title": "",
@@ -54427,8 +55614,8 @@ var qK = {
 							"aria-current": s.id === I(r).room?.id ? "page" : void 0,
 							onPointerdown: t[5] ||= (e) => !I(o) && I(i).start_drag(e),
 							onClick: (e) => n("select", s.id)
-						}, [K("span", null, P(s.title), 1), K("small", l1, P(y(s)), 1)], 40, c1),
-						K("div", u1, [q(g, {
+						}, [K("span", null, P(s.title), 1), K("small", E0, P(y(s)), 1)], 40, T0),
+						K("div", D0, [q(g, {
 							text: s.archived ? "恢复房间" : "存档房间",
 							ui: { content: "channel-topic-tooltip" }
 						}, {
@@ -54469,9 +55656,9 @@ var qK = {
 							}, null, 8, ["aria-label"])]),
 							_: 2
 						}, 1032, ["items"])])
-					], 10, o1)]),
+					], 10, C0)]),
 					_: 2
-				}, 1032, ["items"]))), 128))], 10, i1)) : Y("", !0)], 8, $$))), 128)), s.value.length ? Y("", !0) : (U(), W("p", d1, "暂无协作房间"))], 512), [[Vc, x.value]]),
+				}, 1032, ["items"]))), 128))], 10, x0)) : Y("", !0)], 8, g0))), 128)), s.value.length ? Y("", !0) : (U(), W("p", O0, "暂无协作房间"))], 512), [[Vc, x.value]]),
 				vr(q(u, {
 					icon: "i-lucide-archive",
 					color: "neutral",
@@ -54480,21 +55667,21 @@ var qK = {
 					"aria-haspopup": "dialog",
 					onClick: t[6] ||= (e) => n("archives")
 				}, {
-					default: L(() => [t[8] ||= K("span", { class: "channel-archive-label" }, "已存档", -1), c.value ? (U(), W("small", f1, P(c.value), 1)) : Y("", !0)]),
+					default: L(() => [t[8] ||= K("span", { class: "channel-archive-label" }, "已存档", -1), c.value ? (U(), W("small", k0, P(c.value), 1)) : Y("", !0)]),
 					_: 1
 				}, 512), [[Vc, x.value]]),
-				q(q$, {
+				q(u0, {
 					open: h.value,
 					"onUpdate:open": t[7] ||= (e) => h.value = e
 				}, null, 8, ["open"])
 			]);
 		};
 	}
-}, m1 = {
+}, j0 = {
 	id: "channel-sidebar",
 	class: "channel-sidebar",
 	"aria-label": "房间导航"
-}, h1 = { class: "channel-sidebar-content" }, g1 = { class: "channel-directory-heading channel-tools-heading" }, _1 = ["aria-expanded"], v1 = { class: "channel-sidebar-footer" }, y1 = ["aria-label"], b1 = { class: "channel-self" }, x1 = ["title"], S1 = {
+}, M0 = { class: "channel-sidebar-content" }, N0 = { class: "channel-directory-heading channel-tools-heading" }, P0 = ["aria-expanded"], F0 = { class: "channel-sidebar-footer" }, I0 = ["aria-label"], L0 = { class: "channel-self" }, R0 = ["title"], z0 = {
 	__name: "ChannelSidebar",
 	props: { tabs: {
 		type: Array,
@@ -54523,11 +55710,11 @@ var qK = {
 			return e?.loaded ? e.registered ? e.logged_in ? "" : "未登录 · 点击登录" : "设置管理员账号" : "";
 		});
 		return (e, t) => {
-			let n = sA, o = F$, d = pA, f = MA, p = RV;
-			return U(), W("aside", m1, [
+			let n = sA, o = Q1, d = pA, f = MA, p = RV;
+			return U(), W("aside", j0, [
 				t[13] ||= ws("<header class=\"channel-workspace-heading\"><span class=\"channel-brand-icon\" aria-hidden=\"true\"><svg class=\"channel-brand-dark\" viewBox=\"0 0 100 100\"><defs><linearGradient id=\"brand-d0\" gradientUnits=\"userSpaceOnUse\" x1=\"4.5\" y1=\"64\" x2=\"95.5\" y2=\"64\"><stop offset=\"0.0%\" stop-color=\"#e9ebed\"></stop><stop offset=\"6.3%\" stop-color=\"#e2e5e7\"></stop><stop offset=\"12.5%\" stop-color=\"#dcdee1\"></stop><stop offset=\"18.8%\" stop-color=\"#d5d8db\"></stop><stop offset=\"25.0%\" stop-color=\"#ced2d5\"></stop><stop offset=\"31.3%\" stop-color=\"#c8cbcf\"></stop><stop offset=\"37.5%\" stop-color=\"#c1c5ca\"></stop><stop offset=\"43.8%\" stop-color=\"#babfc4\"></stop><stop offset=\"50.0%\" stop-color=\"#b4b9be\"></stop><stop offset=\"56.3%\" stop-color=\"#a9aeb3\"></stop><stop offset=\"62.5%\" stop-color=\"#9ea3a9\"></stop><stop offset=\"68.8%\" stop-color=\"#93999f\"></stop><stop offset=\"75.0%\" stop-color=\"#888e95\"></stop><stop offset=\"81.3%\" stop-color=\"#7e848a\"></stop><stop offset=\"87.5%\" stop-color=\"#737a80\"></stop><stop offset=\"93.8%\" stop-color=\"#697077\"></stop><stop offset=\"100.0%\" stop-color=\"#5f666d\"></stop></linearGradient><linearGradient id=\"brand-d1\" gradientUnits=\"userSpaceOnUse\" x1=\"8.5\" y1=\"36\" x2=\"91.5\" y2=\"36\"><stop offset=\"0.0%\" stop-color=\"#3f86ff\"></stop><stop offset=\"6.3%\" stop-color=\"#5588ff\"></stop><stop offset=\"12.5%\" stop-color=\"#6889ff\"></stop><stop offset=\"18.8%\" stop-color=\"#788aff\"></stop><stop offset=\"25.0%\" stop-color=\"#878bff\"></stop><stop offset=\"31.3%\" stop-color=\"#958cff\"></stop><stop offset=\"37.5%\" stop-color=\"#a78aef\"></stop><stop offset=\"43.8%\" stop-color=\"#b986d7\"></stop><stop offset=\"50.0%\" stop-color=\"#ca80bf\"></stop><stop offset=\"56.3%\" stop-color=\"#da78a6\"></stop><stop offset=\"62.5%\" stop-color=\"#ea6e8c\"></stop><stop offset=\"68.8%\" stop-color=\"#f56d78\"></stop><stop offset=\"75.0%\" stop-color=\"#f77f72\"></stop><stop offset=\"81.3%\" stop-color=\"#f8906b\"></stop><stop offset=\"87.5%\" stop-color=\"#f9a163\"></stop><stop offset=\"93.8%\" stop-color=\"#fab058\"></stop><stop offset=\"100.0%\" stop-color=\"#fac04a\"></stop></linearGradient><linearGradient id=\"brand-d2\" gradientUnits=\"userSpaceOnUse\" x1=\"28.021\" y1=\"95.435\" x2=\"39.978\" y2=\"4.564\"><stop offset=\"0.0%\" stop-color=\"#d06a49\"></stop><stop offset=\"6.3%\" stop-color=\"#d36f4f\"></stop><stop offset=\"12.5%\" stop-color=\"#d67456\"></stop><stop offset=\"18.8%\" stop-color=\"#d97a5c\"></stop><stop offset=\"25.0%\" stop-color=\"#dc7f62\"></stop><stop offset=\"31.3%\" stop-color=\"#df8468\"></stop><stop offset=\"37.5%\" stop-color=\"#e2896e\"></stop><stop offset=\"43.8%\" stop-color=\"#e58e74\"></stop><stop offset=\"50.0%\" stop-color=\"#e8937a\"></stop><stop offset=\"56.3%\" stop-color=\"#eb9d85\"></stop><stop offset=\"62.5%\" stop-color=\"#eea68f\"></stop><stop offset=\"68.8%\" stop-color=\"#f1b09a\"></stop><stop offset=\"75.0%\" stop-color=\"#f4baa4\"></stop><stop offset=\"81.3%\" stop-color=\"#f6c3af\"></stop><stop offset=\"87.5%\" stop-color=\"#f9cdb9\"></stop><stop offset=\"93.8%\" stop-color=\"#fbd6c4\"></stop><stop offset=\"100.0%\" stop-color=\"#fde0cf\"></stop></linearGradient><linearGradient id=\"brand-d3\" gradientUnits=\"userSpaceOnUse\" x1=\"71.978\" y1=\"95.435\" x2=\"60.021\" y2=\"4.564\"><stop offset=\"0.0%\" stop-color=\"#4a5cff\"></stop><stop offset=\"6.3%\" stop-color=\"#5062ff\"></stop><stop offset=\"12.5%\" stop-color=\"#5768ff\"></stop><stop offset=\"18.8%\" stop-color=\"#5d6dff\"></stop><stop offset=\"25.0%\" stop-color=\"#6472ff\"></stop><stop offset=\"31.3%\" stop-color=\"#6b77ff\"></stop><stop offset=\"37.5%\" stop-color=\"#717cff\"></stop><stop offset=\"43.8%\" stop-color=\"#7881ff\"></stop><stop offset=\"50.0%\" stop-color=\"#7f86ff\"></stop><stop offset=\"56.3%\" stop-color=\"#8990ff\"></stop><stop offset=\"62.5%\" stop-color=\"#9399ff\"></stop><stop offset=\"68.8%\" stop-color=\"#9da2ff\"></stop><stop offset=\"75.0%\" stop-color=\"#a8abff\"></stop><stop offset=\"81.3%\" stop-color=\"#b3b4ff\"></stop><stop offset=\"87.5%\" stop-color=\"#bebdff\"></stop><stop offset=\"93.8%\" stop-color=\"#c9c5ff\"></stop><stop offset=\"100.0%\" stop-color=\"#d4ceff\"></stop></linearGradient><clipPath id=\"brand-d4\"><polygon points=\"16,46.5 84,46.5 84,25.5 16,25.5\"></polygon></clipPath><clipPath id=\"brand-d5\"><polygon points=\"16,48.5 84,48.5 84,23.5 16,23.5\"></polygon></clipPath><clipPath id=\"brand-d6\"><polygon points=\"81.410,86.630 71.410,10.630 50.589,13.369 60.589,89.369\"></polygon></clipPath><clipPath id=\"brand-d7\"><polygon points=\"83.393,86.369 73.393,10.369 48.606,13.630 58.606,89.630\"></polygon></clipPath><clipPath id=\"brand-d8\"><polygon points=\"12,74.5 88,74.5 88,53.5 12,53.5\"></polygon></clipPath><clipPath id=\"brand-d9\"><polygon points=\"12,76.5 88,76.5 88,51.5 12,51.5\"></polygon></clipPath><clipPath id=\"brand-d10\"><polygon points=\"39.410,89.369 49.410,13.369 28.589,10.630 18.589,86.630\"></polygon></clipPath><clipPath id=\"brand-d11\"><polygon points=\"41.393,89.630 51.393,13.630 26.606,10.369 16.606,86.369\"></polygon></clipPath></defs><line x1=\"12\" y1=\"64\" x2=\"88\" y2=\"64\" stroke=\"url(#brand-d0)\" stroke-width=\"15\" stroke-linecap=\"round\"></line><line x1=\"16\" y1=\"36\" x2=\"84\" y2=\"36\" stroke=\"url(#brand-d1)\" stroke-width=\"15\" stroke-linecap=\"round\"></line><line x1=\"29\" y1=\"88\" x2=\"39\" y2=\"12\" stroke=\"url(#brand-d2)\" stroke-width=\"15\" stroke-linecap=\"round\"></line><line x1=\"71\" y1=\"88\" x2=\"61\" y2=\"12\" stroke=\"url(#brand-d3)\" stroke-width=\"15\" stroke-linecap=\"round\"></line><g clip-path=\"url(#brand-d4)\"><line x1=\"29\" y1=\"88\" x2=\"39\" y2=\"12\" stroke=\"#202127\" stroke-width=\"21\" stroke-linecap=\"round\"></line></g><g clip-path=\"url(#brand-d5)\"><line x1=\"29\" y1=\"88\" x2=\"39\" y2=\"12\" stroke=\"url(#brand-d2)\" stroke-width=\"15\" stroke-linecap=\"round\"></line></g><g clip-path=\"url(#brand-d6)\"><line x1=\"16\" y1=\"36\" x2=\"84\" y2=\"36\" stroke=\"#202127\" stroke-width=\"21\" stroke-linecap=\"round\"></line></g><g clip-path=\"url(#brand-d7)\"><line x1=\"16\" y1=\"36\" x2=\"84\" y2=\"36\" stroke=\"url(#brand-d1)\" stroke-width=\"15\" stroke-linecap=\"round\"></line></g><g clip-path=\"url(#brand-d8)\"><line x1=\"71\" y1=\"88\" x2=\"61\" y2=\"12\" stroke=\"#202127\" stroke-width=\"21\" stroke-linecap=\"round\"></line></g><g clip-path=\"url(#brand-d9)\"><line x1=\"71\" y1=\"88\" x2=\"61\" y2=\"12\" stroke=\"url(#brand-d3)\" stroke-width=\"15\" stroke-linecap=\"round\"></line></g><g clip-path=\"url(#brand-d10)\"><line x1=\"12\" y1=\"64\" x2=\"88\" y2=\"64\" stroke=\"#202127\" stroke-width=\"21\" stroke-linecap=\"round\"></line></g><g clip-path=\"url(#brand-d11)\"><line x1=\"12\" y1=\"64\" x2=\"88\" y2=\"64\" stroke=\"url(#brand-d0)\" stroke-width=\"15\" stroke-linecap=\"round\"></line></g></svg><svg class=\"channel-brand-light\" viewBox=\"0 0 100 100\"><defs><linearGradient id=\"brand-l0\" gradientUnits=\"userSpaceOnUse\" x1=\"4.5\" y1=\"64\" x2=\"95.5\" y2=\"64\"><stop offset=\"0.0%\" stop-color=\"#0b0d0f\"></stop><stop offset=\"6.3%\" stop-color=\"#101315\"></stop><stop offset=\"12.5%\" stop-color=\"#16191b\"></stop><stop offset=\"18.8%\" stop-color=\"#1c1f22\"></stop><stop offset=\"25.0%\" stop-color=\"#222529\"></stop><stop offset=\"31.3%\" stop-color=\"#282c2f\"></stop><stop offset=\"37.5%\" stop-color=\"#2e3237\"></stop><stop offset=\"43.8%\" stop-color=\"#34393e\"></stop><stop offset=\"50.0%\" stop-color=\"#3b4045\"></stop><stop offset=\"56.3%\" stop-color=\"#484d52\"></stop><stop offset=\"62.5%\" stop-color=\"#555a5f\"></stop><stop offset=\"68.8%\" stop-color=\"#62676d\"></stop><stop offset=\"75.0%\" stop-color=\"#70757b\"></stop><stop offset=\"81.3%\" stop-color=\"#7e8389\"></stop><stop offset=\"87.5%\" stop-color=\"#8c9297\"></stop><stop offset=\"93.8%\" stop-color=\"#9aa0a6\"></stop><stop offset=\"100.0%\" stop-color=\"#a9afb5\"></stop></linearGradient><linearGradient id=\"brand-l1\" gradientUnits=\"userSpaceOnUse\" x1=\"8.5\" y1=\"36\" x2=\"91.5\" y2=\"36\"><stop offset=\"0.0%\" stop-color=\"#2f7bff\"></stop><stop offset=\"6.3%\" stop-color=\"#487cff\"></stop><stop offset=\"12.5%\" stop-color=\"#5a7cff\"></stop><stop offset=\"18.8%\" stop-color=\"#6a7dff\"></stop><stop offset=\"25.0%\" stop-color=\"#797dff\"></stop><stop offset=\"31.3%\" stop-color=\"#877dff\"></stop><stop offset=\"37.5%\" stop-color=\"#997cee\"></stop><stop offset=\"43.8%\" stop-color=\"#ae79d3\"></stop><stop offset=\"50.0%\" stop-color=\"#c174b8\"></stop><stop offset=\"56.3%\" stop-color=\"#d36b9d\"></stop><stop offset=\"62.5%\" stop-color=\"#e56080\"></stop><stop offset=\"68.8%\" stop-color=\"#f15d69\"></stop><stop offset=\"75.0%\" stop-color=\"#f37162\"></stop><stop offset=\"81.3%\" stop-color=\"#f5835a\"></stop><stop offset=\"87.5%\" stop-color=\"#f79550\"></stop><stop offset=\"93.8%\" stop-color=\"#f8a542\"></stop><stop offset=\"100.0%\" stop-color=\"#f8b52c\"></stop></linearGradient><linearGradient id=\"brand-l2\" gradientUnits=\"userSpaceOnUse\" x1=\"28.021\" y1=\"95.435\" x2=\"39.978\" y2=\"4.564\"><stop offset=\"0.0%\" stop-color=\"#b9502f\"></stop><stop offset=\"6.3%\" stop-color=\"#bd5534\"></stop><stop offset=\"12.5%\" stop-color=\"#c15a39\"></stop><stop offset=\"18.8%\" stop-color=\"#c55f3e\"></stop><stop offset=\"25.0%\" stop-color=\"#c96443\"></stop><stop offset=\"31.3%\" stop-color=\"#cd6848\"></stop><stop offset=\"37.5%\" stop-color=\"#d16d4d\"></stop><stop offset=\"43.8%\" stop-color=\"#d57252\"></stop><stop offset=\"50.0%\" stop-color=\"#d97757\"></stop><stop offset=\"56.3%\" stop-color=\"#dd8060\"></stop><stop offset=\"62.5%\" stop-color=\"#e08a69\"></stop><stop offset=\"68.8%\" stop-color=\"#e49372\"></stop><stop offset=\"75.0%\" stop-color=\"#e79c7b\"></stop><stop offset=\"81.3%\" stop-color=\"#eaa584\"></stop><stop offset=\"87.5%\" stop-color=\"#edae8d\"></stop><stop offset=\"93.8%\" stop-color=\"#f0b796\"></stop><stop offset=\"100.0%\" stop-color=\"#f3c09f\"></stop></linearGradient><linearGradient id=\"brand-l3\" gradientUnits=\"userSpaceOnUse\" x1=\"71.978\" y1=\"95.435\" x2=\"60.021\" y2=\"4.564\"><stop offset=\"0.0%\" stop-color=\"#2b33e6\"></stop><stop offset=\"6.3%\" stop-color=\"#3139e9\"></stop><stop offset=\"12.5%\" stop-color=\"#363fec\"></stop><stop offset=\"18.8%\" stop-color=\"#3c44ef\"></stop><stop offset=\"25.0%\" stop-color=\"#4249f3\"></stop><stop offset=\"31.3%\" stop-color=\"#484ef6\"></stop><stop offset=\"37.5%\" stop-color=\"#4e53f9\"></stop><stop offset=\"43.8%\" stop-color=\"#5457fc\"></stop><stop offset=\"50.0%\" stop-color=\"#5a5cff\"></stop><stop offset=\"56.3%\" stop-color=\"#6569ff\"></stop><stop offset=\"62.5%\" stop-color=\"#7075ff\"></stop><stop offset=\"68.8%\" stop-color=\"#7c80ff\"></stop><stop offset=\"75.0%\" stop-color=\"#888bff\"></stop><stop offset=\"81.3%\" stop-color=\"#9595ff\"></stop><stop offset=\"87.5%\" stop-color=\"#a29fff\"></stop><stop offset=\"93.8%\" stop-color=\"#afa9ff\"></stop><stop offset=\"100.0%\" stop-color=\"#bdb3ff\"></stop></linearGradient><clipPath id=\"brand-l4\"><polygon points=\"16,46.5 84,46.5 84,25.5 16,25.5\"></polygon></clipPath><clipPath id=\"brand-l5\"><polygon points=\"16,48.5 84,48.5 84,23.5 16,23.5\"></polygon></clipPath><clipPath id=\"brand-l6\"><polygon points=\"81.410,86.630 71.410,10.630 50.589,13.369 60.589,89.369\"></polygon></clipPath><clipPath id=\"brand-l7\"><polygon points=\"83.393,86.369 73.393,10.369 48.606,13.630 58.606,89.630\"></polygon></clipPath><clipPath id=\"brand-l8\"><polygon points=\"12,74.5 88,74.5 88,53.5 12,53.5\"></polygon></clipPath><clipPath id=\"brand-l9\"><polygon points=\"12,76.5 88,76.5 88,51.5 12,51.5\"></polygon></clipPath><clipPath id=\"brand-l10\"><polygon points=\"39.410,89.369 49.410,13.369 28.589,10.630 18.589,86.630\"></polygon></clipPath><clipPath id=\"brand-l11\"><polygon points=\"41.393,89.630 51.393,13.630 26.606,10.369 16.606,86.369\"></polygon></clipPath></defs><line x1=\"12\" y1=\"64\" x2=\"88\" y2=\"64\" stroke=\"url(#brand-l0)\" stroke-width=\"15\" stroke-linecap=\"round\"></line><line x1=\"16\" y1=\"36\" x2=\"84\" y2=\"36\" stroke=\"url(#brand-l1)\" stroke-width=\"15\" stroke-linecap=\"round\"></line><line x1=\"29\" y1=\"88\" x2=\"39\" y2=\"12\" stroke=\"url(#brand-l2)\" stroke-width=\"15\" stroke-linecap=\"round\"></line><line x1=\"71\" y1=\"88\" x2=\"61\" y2=\"12\" stroke=\"url(#brand-l3)\" stroke-width=\"15\" stroke-linecap=\"round\"></line><g clip-path=\"url(#brand-l4)\"><line x1=\"29\" y1=\"88\" x2=\"39\" y2=\"12\" stroke=\"#f6f6f6\" stroke-width=\"21\" stroke-linecap=\"round\"></line></g><g clip-path=\"url(#brand-l5)\"><line x1=\"29\" y1=\"88\" x2=\"39\" y2=\"12\" stroke=\"url(#brand-l2)\" stroke-width=\"15\" stroke-linecap=\"round\"></line></g><g clip-path=\"url(#brand-l6)\"><line x1=\"16\" y1=\"36\" x2=\"84\" y2=\"36\" stroke=\"#f6f6f6\" stroke-width=\"21\" stroke-linecap=\"round\"></line></g><g clip-path=\"url(#brand-l7)\"><line x1=\"16\" y1=\"36\" x2=\"84\" y2=\"36\" stroke=\"url(#brand-l1)\" stroke-width=\"15\" stroke-linecap=\"round\"></line></g><g clip-path=\"url(#brand-l8)\"><line x1=\"71\" y1=\"88\" x2=\"61\" y2=\"12\" stroke=\"#f6f6f6\" stroke-width=\"21\" stroke-linecap=\"round\"></line></g><g clip-path=\"url(#brand-l9)\"><line x1=\"71\" y1=\"88\" x2=\"61\" y2=\"12\" stroke=\"url(#brand-l3)\" stroke-width=\"15\" stroke-linecap=\"round\"></line></g><g clip-path=\"url(#brand-l10)\"><line x1=\"12\" y1=\"64\" x2=\"88\" y2=\"64\" stroke=\"#f6f6f6\" stroke-width=\"21\" stroke-linecap=\"round\"></line></g><g clip-path=\"url(#brand-l11)\"><line x1=\"12\" y1=\"64\" x2=\"88\" y2=\"64\" stroke=\"url(#brand-l0)\" stroke-width=\"15\" stroke-linecap=\"round\"></line></g></svg></span><span class=\"channel-brand-text\"><strong>共议</strong><span>AI CoDiscuss</span></span></header>", 1),
-				K("div", h1, [
-					q(p1, {
+				K("div", M0, [
+					q(A0, {
 						onSelect: t[0] ||= (e) => r("select", e),
 						onManage: t[1] ||= (e) => r("manage", e),
 						onCreate: t[2] ||= (e) => r("create", e),
@@ -54537,12 +55724,12 @@ var qK = {
 						onArchiveFolder: t[6] ||= (e) => r("archive-folder", e),
 						onArchives: t[7] ||= (e) => r("archives")
 					}),
-					K("div", g1, [K("button", {
+					K("div", N0, [K("button", {
 						type: "button",
 						class: "channel-section-toggle",
 						"aria-expanded": c.value,
 						onClick: t[8] ||= (e) => c.value = !c.value
-					}, [q(n, { name: c.value ? "i-lucide-chevron-down" : "i-lucide-chevron-right" }, null, 8, ["name"]), t[12] ||= J("频道工具", -1)], 8, _1)]),
+					}, [q(n, { name: c.value ? "i-lucide-chevron-down" : "i-lucide-chevron-right" }, null, 8, ["name"]), t[12] ||= J("频道工具", -1)], 8, P0)]),
 					c.value ? (U(), G(o, {
 						key: 0,
 						items: l.value,
@@ -54558,7 +55745,7 @@ var qK = {
 						}
 					}, null, 8, ["items"])) : Y("", !0)
 				]),
-				K("footer", v1, [
+				K("footer", F0, [
 					K("button", {
 						type: "button",
 						class: "channel-self-button",
@@ -54575,10 +55762,10 @@ var qK = {
 						"text",
 						"alt",
 						"class"
-					]), K("span", b1, [K("strong", null, P(I(a).display_name(I(s))), 1), K("span", { class: M(["channel-connection", { "is-action": u.value }]) }, [K("span", {
+					]), K("span", L0, [K("strong", null, P(I(a).display_name(I(s))), 1), K("span", { class: M(["channel-connection", { "is-action": u.value }]) }, [K("span", {
 						class: M({ connected: I(i).connected }),
 						title: I(i).connected ? "网站已连接" : "网站未连接"
-					}, null, 10, x1), J(P(u.value || (I(i).connected ? "网站已连接" : I(i).reconnecting ? "正在重新连接…" : "网站未连接")), 1)], 2)])], 8, y1),
+					}, null, 10, R0), J(P(u.value || (I(i).connected ? "网站已连接" : I(i).reconnecting ? "正在重新连接…" : "网站未连接")), 1)], 2)])], 8, I0),
 					I(i).connected ? Y("", !0) : (U(), G(p, {
 						key: 0,
 						text: "重新连接"
@@ -54611,18 +55798,25 @@ var qK = {
 			]);
 		};
 	}
-}, C1 = { class: "workflow-control-row" }, w1 = ["title"], T1 = { class: "workflow-control-state" }, E1 = ["disabled"], D1 = {
+}, B0 = { class: "workflow-control-row" }, V0 = ["title"], H0 = { class: "workflow-control-state" }, U0 = ["disabled"], W0 = {
 	key: 0,
 	class: "workflow-control-note is-warning"
-}, O1 = {
+}, G0 = {
 	key: 1,
 	class: "workflow-control-note"
-}, k1 = /*#__PURE__*/ TH({
+}, K0 = /*#__PURE__*/ TH({
 	__name: "WorkflowControl",
-	props: { workflow: {
-		type: Object,
-		required: !0
-	} },
+	props: {
+		workflow: {
+			type: Object,
+			required: !0
+		},
+		dismissible: {
+			type: Boolean,
+			default: !1
+		}
+	},
+	emits: ["dismiss"],
 	setup(e) {
 		let t = e, { view: n, bridge: r, act: i, pending: a } = xr("discussion"), o = Z(() => n.value.room || {}), s = Z(() => {
 			let e = new Set(Object.values(t.workflow.members || {}));
@@ -54635,7 +55829,7 @@ var qK = {
 		return (t, n) => {
 			let o = sA;
 			return U(), W("div", { class: M(["workflow-control", e.workflow.available ? "is-success" : "is-warning"]) }, [
-				K("div", C1, [
+				K("div", B0, [
 					q(o, {
 						name: "i-lucide-workflow",
 						class: "workflow-control-icon"
@@ -54643,8 +55837,8 @@ var qK = {
 					K("span", {
 						class: "workflow-control-name",
 						title: e.workflow.label
-					}, P(e.workflow.label), 9, w1),
-					K("span", T1, [n[3] ||= K("span", { class: "workflow-control-dot" }, null, -1), J(P(e.workflow.available ? "进行中" : "不可用"), 1)]),
+					}, P(e.workflow.label), 9, V0),
+					K("span", H0, [n[4] ||= K("span", { class: "workflow-control-dot" }, null, -1), J(P(e.workflow.available ? "进行中" : "不可用"), 1)]),
 					c.value ? (U(), W("button", {
 						key: 0,
 						type: "button",
@@ -54652,17 +55846,28 @@ var qK = {
 						disabled: !!I(a),
 						title: "请离工作流带来的成员并结束工作流，会话保留",
 						onClick: n[0] ||= (e) => u.value = !0
-					}, P(s.value.length ? "请离成员" : "结束"), 9, E1)) : Y("", !0)
+					}, P(s.value.length ? "请离成员" : "结束"), 9, U0)) : Y("", !0),
+					e.dismissible ? (U(), W("button", {
+						key: 1,
+						type: "button",
+						class: "workflow-control-close",
+						title: "收起此区，工作流照常进行；“成员与设置”里仍可请离成员",
+						"aria-label": "收起工作流区",
+						onClick: n[1] ||= (e) => t.$emit("dismiss")
+					}, [q(o, {
+						name: "i-lucide-x",
+						class: "workflow-control-close-icon"
+					})])) : Y("", !0)
 				]),
-				e.workflow.available ? l.value ? (U(), W("p", O1, P(s.value.map((e) => I(r).display_name(e.name)).join(" · ")), 1)) : Y("", !0) : (U(), W("p", D1, "无法读取工作流，成员沿用房间里的提示词。")),
+				e.workflow.available ? l.value ? (U(), W("p", G0, P(s.value.map((e) => I(r).display_name(e.name)).join(" · ")), 1)) : Y("", !0) : (U(), W("p", W0, "无法读取工作流，成员沿用房间里的提示词。")),
 				q(iW, {
 					open: u.value,
-					"onUpdate:open": n[1] ||= (e) => u.value = e,
+					"onUpdate:open": n[2] ||= (e) => u.value = e,
 					title: `结束工作流「${e.workflow.label}」`,
 					description: s.value.length ? "请离它带来的成员，暂停这套做法。" : "本房间暂停这套做法。",
 					items: d.value,
 					"confirm-label": s.value.length ? "请离并结束" : "结束",
-					onConfirm: n[2] ||= (e) => I(i)("move_workflow_members", "away")
+					onConfirm: n[3] ||= (e) => I(i)("move_workflow_members", "away")
 				}, null, 8, [
 					"open",
 					"title",
@@ -54673,7 +55878,7 @@ var qK = {
 			], 2);
 		};
 	}
-}, [["__scopeId", "data-v-1292b1f3"]]), A1 = { class: "start-discussion-footer" }, j1 = 3, M1 = /*#__PURE__*/ TH({
+}, [["__scopeId", "data-v-cb5ca872"]]), q0 = { class: "start-discussion-footer" }, J0 = 3, Y0 = /*#__PURE__*/ TH({
 	__name: "StartDiscussionDialog",
 	props: {
 		open: {
@@ -54684,9 +55889,9 @@ var qK = {
 	},
 	emits: ["update:open"],
 	setup(e) {
-		let t = ro(e, "open"), { view: n, act: r, pending: i } = xr("discussion"), a = /* @__PURE__ */ F(""), o = /* @__PURE__ */ F(j1), s = /* @__PURE__ */ F(0), c = /* @__PURE__ */ F(!1), l = /* @__PURE__ */ F(null);
+		let t = ro(e, "open"), { view: n, act: r, pending: i } = xr("discussion"), a = /* @__PURE__ */ F(""), o = /* @__PURE__ */ F(J0), s = /* @__PURE__ */ F(0), c = /* @__PURE__ */ F(!1), l = /* @__PURE__ */ F(null);
 		R(t, (e) => {
-			e && (a.value = "", o.value = n.value.room?.limits?.max_rounds || j1, s.value = n.value.room?.limits?.max_minutes ?? 0, c.value = !1);
+			e && (a.value = "", o.value = n.value.room?.limits?.max_rounds || J0, s.value = n.value.room?.limits?.max_minutes ?? 0, c.value = !1);
 		});
 		async function u() {
 			l.value?.settle();
@@ -54746,7 +55951,7 @@ var qK = {
 						"minutes",
 						"named_followup"
 					]),
-					K("div", A1, [q(p, {
+					K("div", q0, [q(p, {
 						label: "取消",
 						color: "neutral",
 						variant: "ghost",
@@ -54764,21 +55969,21 @@ var qK = {
 			}, 8, ["content", "open"]);
 		};
 	}
-}, [["__scopeId", "data-v-8c194097"]]), N1 = { class: "pb-status-line" }, P1 = { role: "status" }, F1 = {
+}, [["__scopeId", "data-v-8c194097"]]), X0 = { class: "pb-status-line" }, Z0 = { role: "status" }, Q0 = {
 	key: 0,
 	class: "pb-status-detail"
-}, I1 = { class: "pb-meters" }, L1 = { class: "pb-meter-label" }, R1 = {
+}, $0 = { class: "pb-meters" }, e2 = { class: "pb-meter-label" }, t2 = {
 	key: 0,
 	class: "pb-bar"
-}, z1 = {
+}, n2 = {
 	key: 0,
 	class: "pb-section",
 	"aria-label": "当前焦点"
-}, B1 = {
+}, r2 = {
 	key: 1,
 	class: "pb-actions",
 	"aria-label": "讨论操作"
-}, V1 = { class: "progress-ending" }, H1 = ["disabled"], U1 = 90, W1 = {
+}, i2 = { class: "progress-ending" }, a2 = ["disabled"], o2 = 90, s2 = {
 	__name: "ProgressBoard",
 	setup(e) {
 		let { view: t, bridge: n, act: r, pending: i } = xr("discussion"), a = Z(() => t.value.room), o = Z(() => a.value.session), s = Z(() => a.value.limits || {}), c = /* @__PURE__ */ F(0);
@@ -54844,24 +56049,24 @@ var qK = {
 					class: M(["pb-status", `is-${h.value.tone}`]),
 					"aria-label": "讨论状态"
 				}, [
-					K("div", N1, [t[6] ||= K("span", { class: "pb-dot" }, null, -1), K("strong", P1, P(h.value.title), 1)]),
-					h.value.detail ? (U(), W("p", F1, P(h.value.detail), 1)) : Y("", !0),
-					K("div", I1, [(U(!0), W(H, null, B(_.value, (e) => (U(), W("div", {
+					K("div", X0, [t[6] ||= K("span", { class: "pb-dot" }, null, -1), K("strong", Z0, P(h.value.title), 1)]),
+					h.value.detail ? (U(), W("p", Q0, P(h.value.detail), 1)) : Y("", !0),
+					K("div", $0, [(U(!0), W(H, null, B(_.value, (e) => (U(), W("div", {
 						key: e.label,
 						class: "pb-meter"
-					}, [K("div", L1, [K("span", null, P(e.label), 1), K("b", null, P(e.text), 1)]), e.ratio === null ? Y("", !0) : (U(), W("div", R1, [K("i", { style: fe({ width: `${Math.min(100, Math.round(e.ratio * 100))}%` }) }, null, 4)]))]))), 128))])
+					}, [K("div", e2, [K("span", null, P(e.label), 1), K("b", null, P(e.text), 1)]), e.ratio === null ? Y("", !0) : (U(), W("div", t2, [K("i", { style: fe({ width: `${Math.min(100, Math.round(e.ratio * 100))}%` }) }, null, 4)]))]))), 128))])
 				], 2),
-				m.value ? (U(), W("section", z1, [
+				m.value ? (U(), W("section", n2, [
 					t[7] ||= K("h4", null, "当前焦点", -1),
 					K("p", { class: M(["pb-focus", { "is-expanded": p.value }]) }, P(m.value), 3),
-					m.value.length > U1 ? (U(), W("button", {
+					m.value.length > o2 ? (U(), W("button", {
 						key: 0,
 						type: "button",
 						class: "pb-link",
 						onClick: t[0] ||= (e) => p.value = !p.value
 					}, P(p.value ? "收起" : "展开"), 1)) : Y("", !0)
 				])) : Y("", !0),
-				a.value.archived ? Y("", !0) : (U(), W("section", B1, [
+				a.value.archived ? Y("", !0) : (U(), W("section", r2, [
 					l.value ? (U(), G(o, {
 						key: 0,
 						icon: "i-lucide-play",
@@ -54925,43 +56130,43 @@ var qK = {
 						body: "dialog-body"
 					}
 				}, {
-					body: L(() => [K("div", V1, [K("button", {
+					body: L(() => [K("div", i2, [K("button", {
 						type: "button",
 						class: "progress-ending-option",
 						disabled: !!I(i),
 						onClick: v
-					}, [...t[8] ||= [K("strong", null, "结束讨论", -1), K("span", null, "保留全部记录，房间回到自由协作；需要总结时可直接请主持人写一份。", -1)]], 8, H1)])]),
+					}, [...t[8] ||= [K("strong", null, "结束讨论", -1), K("span", null, "保留全部记录，房间回到自由协作；需要总结时可直接请主持人写一份。", -1)]], 8, a2)])]),
 					_: 1
 				}, 8, ["content", "open"])
 			], 64);
 		};
 	}
-}, G1 = { class: "speaking-order" }, K1 = {
+}, c2 = { class: "speaking-order" }, l2 = {
 	key: 0,
 	class: "speaking-order-divider",
 	"aria-hidden": "true"
-}, q1 = ["data-key", "data-movable"], J1 = [
+}, u2 = ["data-key", "data-movable"], d2 = [
 	"aria-disabled",
 	"aria-label",
 	"title",
 	"onPointerdown",
 	"onKeydown"
-], Y1 = { class: "speaking-order-number" }, X1 = {
+], f2 = { class: "speaking-order-number" }, p2 = {
 	key: 1,
 	class: "speaking-order-place",
 	title: "已发言",
 	"aria-label": "已发言"
-}, Z1 = ["title"], Q1 = {
+}, m2 = ["title"], h2 = {
 	key: 0,
 	class: "speaking-order-later"
-}, $1 = {
+}, g2 = {
 	key: 1,
 	class: "speaking-order-divider",
 	"aria-hidden": "true"
-}, e0 = {
+}, _2 = {
 	class: "speaking-order-live",
 	"aria-live": "polite"
-}, t0 = "发言顺序刚有变化，已更新为最新顺序，请重新调整", n0 = /*#__PURE__*/ TH({
+}, v2 = "发言顺序刚有变化，已更新为最新顺序，请重新调整", y2 = /*#__PURE__*/ TH({
 	__name: "SpeakingOrder",
 	props: {
 		away: {
@@ -55045,7 +56250,7 @@ var qK = {
 			let { from: n, gap: i, order: a } = p.value;
 			p.value = null, document.removeEventListener("keydown", C, !0);
 			let o = i > n ? i - 1 : i;
-			t || n === o || (a.revision === s.value.revision ? y(g(s.value.movable, n, o), s.value.movable[n], !1) : r.notify("warning", t0));
+			t || n === o || (a.revision === s.value.revision ? y(g(s.value.movable, n, o), s.value.movable[n], !1) : r.notify("warning", v2));
 		}
 		function C(e) {
 			if (!p.value || e.key !== "Escape") return;
@@ -55068,12 +56273,12 @@ var qK = {
 		}
 		return (e, n) => {
 			let i = sA;
-			return U(), W("div", G1, [K("ul", {
+			return U(), W("div", c2, [K("ul", {
 				ref_key: "list",
 				ref: f,
 				class: M(["pb-members", { "is-dragging": p.value }])
 			}, [
-				(U(!0), W(H, null, B(_.value, (t, r) => (U(), W(H, { key: t.key }, [t.outside ? (U(), W("li", K1, [K("span", null, P(u[s.value.kind]), 1)])) : Y("", !0), K("li", {
+				(U(!0), W(H, null, B(_.value, (t, r) => (U(), W(H, { key: t.key }, [t.outside ? (U(), W("li", l2, [K("span", null, P(u[s.value.kind]), 1)])) : Y("", !0), K("li", {
 					class: M(["pb-member speaking-order-row", [
 						`is-${t.state}`,
 						w(r),
@@ -55094,19 +56299,19 @@ var qK = {
 					onPointercancel: n[0] ||= (e) => S(e, !0),
 					onLostpointercapture: n[1] ||= (e) => S(e, !0),
 					onKeydown: [fu((e) => T(e, v(r), -1), ["up"]), fu((e) => T(e, v(r), 1), ["down"])]
-				}, [K("span", Y1, P(t.place), 1), q(i, {
+				}, [K("span", f2, P(t.place), 1), q(i, {
 					name: "i-lucide-grip-vertical",
 					class: "speaking-order-handle"
-				})], 40, J1)) : t.state === "done" ? (U(), W("span", X1, [q(i, { name: "i-lucide-check" })])) : (U(), W("span", {
+				})], 40, d2)) : t.state === "done" ? (U(), W("span", p2, [q(i, { name: "i-lucide-check" })])) : (U(), W("span", {
 					key: 2,
 					class: "speaking-order-place",
 					title: t.state === "speaking" ? "正在发言" : void 0
-				}, P(t.place || ""), 9, Z1)), V(e.$slots, "default", {
+				}, P(t.place || ""), 9, m2)), V(e.$slots, "default", {
 					item: t,
 					place: t.place
-				}, void 0, !0)], 10, q1)], 64))), 128)),
-				s.value.later?.length ? (U(), W("li", Q1, [K("details", null, [K("summary", null, "后续已排 " + P(s.value.later.length) + " 轮", 1), K("ol", null, [(U(!0), W(H, null, B(s.value.later, (e, n) => (U(), W("li", { key: n }, [K("span", null, P(t.round ? `第 ${t.round + n + 1} 轮` : `后续第 ${n + 1} 轮`), 1), J(P(e.map((e) => I(r).display_name(e)).join(" → ")), 1)]))), 128))])])])) : Y("", !0),
-				t.away.length ? (U(), W("li", $1, [...n[2] ||= [K("span", null, "已离开", -1)]])) : Y("", !0),
+				}, void 0, !0)], 10, u2)], 64))), 128)),
+				s.value.later?.length ? (U(), W("li", h2, [K("details", null, [K("summary", null, "后续已排 " + P(s.value.later.length) + " 轮", 1), K("ol", null, [(U(!0), W(H, null, B(s.value.later, (e, n) => (U(), W("li", { key: n }, [K("span", null, P(t.round ? `第 ${t.round + n + 1} 轮` : `后续第 ${n + 1} 轮`), 1), J(P(e.map((e) => I(r).display_name(e)).join(" → ")), 1)]))), 128))])])])) : Y("", !0),
+				t.away.length ? (U(), W("li", g2, [...n[2] ||= [K("span", null, "已离开", -1)]])) : Y("", !0),
 				(U(!0), W(H, null, B(t.away, (t) => (U(), W("li", {
 					key: `away-${t}`,
 					class: "pb-member speaking-order-row is-away"
@@ -55117,11 +56322,11 @@ var qK = {
 					},
 					place: 0
 				}, void 0, !0)]))), 128))
-			], 2), K("p", e0, P(h.value), 1)]);
+			], 2), K("p", _2, P(h.value), 1)]);
 		};
 	}
-}, [["__scopeId", "data-v-b9b6129c"]]), r0 = ["dispatched", "started"], i0 = (e) => e.pending > 0 || r0.includes(e.execution?.status);
-function a0(e, { view: t, act: n, describe: r }) {
+}, [["__scopeId", "data-v-b9b6129c"]]), b2 = ["dispatched", "started"], x2 = (e) => e.pending > 0 || b2.includes(e.execution?.status);
+function S2(e, { view: t, act: n, describe: r }) {
 	let i = t.access, a = i?.members?.find((t) => t.name === e.name)?.available, o = !i?.can_manage, s = ["active", "paused"].includes(t.room?.session?.status) && e.role === "host", c = (t, r, i, a = {}) => ({
 		label: t,
 		icon: r,
@@ -55167,7 +56372,7 @@ function a0(e, { view: t, act: n, describe: r }) {
 			}] : []
 		],
 		[
-			...i0(e) ? [{
+			...x2(e) ? [{
 				...c("停止", "i-lucide-circle-stop", "interrupt"),
 				color: "error"
 			}] : [],
@@ -55185,89 +56390,105 @@ function a0(e, { view: t, act: n, describe: r }) {
 }
 //#endregion
 //#region frontend/FreeBoard.vue
-var o0 = { class: "progress-board is-docked" }, s0 = { class: "pb-header" }, c0 = { class: "pb-mode" }, l0 = { class: "pb-status-line" }, u0 = { role: "status" }, d0 = {
+var C2 = { class: "progress-board is-docked" }, w2 = { class: "pb-header" }, T2 = { class: "pb-mode" }, E2 = { class: "pb-status-line" }, D2 = { role: "status" }, O2 = {
 	key: 0,
 	class: "pb-status-detail"
-}, f0 = {
+}, k2 = {
 	key: 1,
 	class: "pb-chain-actions"
-}, p0 = {
+}, A2 = {
 	key: 2,
 	class: "pb-chain-actions"
-}, m0 = { class: "pb-meters" }, h0 = { class: "pb-meter-label" }, g0 = {
+}, j2 = { class: "pb-meters" }, M2 = { class: "pb-meter-label" }, N2 = {
 	key: 0,
 	class: "pb-bar"
-}, _0 = {
+}, P2 = {
 	key: 2,
 	class: "pb-section",
 	"aria-label": "当前任务"
-}, v0 = {
+}, F2 = {
 	key: 3,
 	class: "pb-section",
 	"aria-label": "房间工作流"
-}, y0 = {
+}, I2 = {
 	class: "pb-section",
 	"aria-label": "发言顺序"
-}, b0 = { class: "pb-member-body" }, x0 = ["title"], S0 = {
+}, L2 = { class: "pb-member-body" }, R2 = ["title"], z2 = {
 	key: 0,
 	class: "member-id"
-}, C0 = ["title"], w0 = ["title"], T0 = ["title"], E0 = ["title"], D0 = {
+}, B2 = ["title"], V2 = ["title"], H2 = ["title"], U2 = ["title"], W2 = {
 	key: 4,
 	class: "pb-actions",
 	"aria-label": "操作"
-}, O0 = {
+}, G2 = {
 	key: 0,
 	class: "pb-free-note"
-}, k0 = {
-	key: 5,
-	class: "pb-section",
-	"aria-label": "执行耗时"
-}, A0 = { class: "pb-timing-heading" }, j0 = { class: "pb-timings" }, M0 = { class: "pb-timing-who" }, N0 = { class: "pb-timing-stages" }, P0 = 90, F0 = "discuss-conflicts-notified:", I0 = 2, L0 = /*#__PURE__*/ TH({
+}, K2 = 90, q2 = "discuss-workflow-hidden:", J2 = "discuss-conflicts-notified:", Y2 = 2, X2 = /*#__PURE__*/ TH({
 	__name: "FreeBoard",
 	setup(e) {
 		let { view: t, bridge: n, act: r, pending: i } = xr("discussion"), a = ["dispatched", "started"], o = {
-			dispatched: "唤醒中",
-			started: "执行中",
-			completed: "完成",
-			failed: "失败"
-		}, s = {
 			runner: "本机唤醒",
 			manual: "手动接入"
-		}, c = Z(() => t.value.room), l = Z(() => c.value.free || {}), u = Z(() => ["active", "paused"].includes(c.value.session?.status)), d = Z(() => u.value ? c.value.current_turn?.round || (c.value.completed_rounds || 0) + 1 : 0), f = Z(() => (l.value.members || []).find((e) => e.role === "host" && e.status === "active")), p = Z(() => cK(t.value.launch.room_models?.workflow, l.value.members)), m = (e) => !!(p.value?.enabled && Object.values(p.value.members || {}).includes(e)), h = /* @__PURE__ */ F(""), g = (e) => (l.value.members || []).find((t) => t.name === e), _ = Z(() => (l.value.members || []).filter((e) => e.status === "away").map((e) => e.name)), v = (e) => n.display_name((l.value.members || []).find((t) => t.id === e)?.name || "成员"), y = (e) => e.executions.join("-");
+		}, s = Z(() => t.value.room), c = Z(() => s.value.free || {}), l = Z(() => ["active", "paused"].includes(s.value.session?.status)), u = Z(() => l.value ? s.value.current_turn?.round || (s.value.completed_rounds || 0) + 1 : 0), d = Z(() => (c.value.members || []).find((e) => e.role === "host" && e.status === "active")), f = Z(() => cK(t.value.launch.room_models?.workflow, c.value.members)), p = (e) => !!(f.value?.enabled && Object.values(f.value.members || {}).includes(e)), m = /* @__PURE__ */ F(""), h = /* @__PURE__ */ F(!1);
+		R(() => [
+			s.value.id,
+			t.value.launch.room_models,
+			f.value?.id
+		], ([e, t, n]) => {
+			let r = q2 + e, i = "";
+			try {
+				i = localStorage.getItem(r) || "";
+			} catch {}
+			let a = t?.room_id === e && !t.loading && !t.error;
+			if (i && a && i !== n) {
+				try {
+					localStorage.removeItem(r);
+				} catch {}
+				i = "";
+			}
+			h.value = !!n && i === n;
+		}, { immediate: !0 });
+		function g() {
+			try {
+				localStorage.setItem(q2 + s.value.id, f.value.id);
+			} catch {}
+			h.value = !0;
+		}
+		let _ = (e) => (c.value.members || []).find((t) => t.name === e), v = Z(() => (c.value.members || []).filter((e) => e.status === "away").map((e) => e.name)), y = (e) => e.executions.join("-");
 		function b(e, t = []) {
 			let r = [];
 			try {
-				r = JSON.parse(localStorage.getItem(F0 + e) || "[]");
+				r = JSON.parse(localStorage.getItem(J2 + e) || "[]");
 			} catch {}
 			for (let e of t.filter((e) => !r.includes(y(e)))) {
-				let t = e.files.slice(0, I0).join("、") + (e.files.length > I0 ? " 等" : "");
+				let t = e.files.slice(0, Y2).join("、") + (e.files.length > Y2 ? " 等" : "");
 				n.notify("warning", `可能冲突：${e.members.map((e) => n.display_name(e)).join(" 与 ")} 的重叠执行都改了 ${e.files.length} 个文件（${t}），修改者未确认`);
 			}
 			try {
-				localStorage.setItem(F0 + e, JSON.stringify(t.map(y)));
+				localStorage.setItem(J2 + e, JSON.stringify(t.map(y)));
 			} catch {}
 		}
-		R(() => [c.value.id, l.value.conflicts], ([e, t]) => b(e, t), { immediate: !0 });
+		R(() => [s.value.id, c.value.conflicts], ([e, t]) => b(e, t), { immediate: !0 });
 		let x = (e) => e.access === "manual" && e.status === "active" && !e.registered_at;
 		function S(e) {
-			return e.status === "away" ? "neutral" : x(e) ? "warning" : e.execution?.stale || e.pending && e.adopt_error ? "error" : e.held_until ? "warning" : i0(e) ? e.pending && !a.includes(e.execution?.status) ? "warning" : "primary" : e.execution?.status === "failed" ? "error" : "success";
+			return e.status === "away" ? "neutral" : x(e) ? "warning" : e.execution?.stale || e.pending && e.adopt_error ? "error" : e.held_until ? "warning" : x2(e) ? e.pending && !a.includes(e.execution?.status) ? "warning" : "primary" : e.execution?.status === "failed" ? "error" : "success";
 		}
 		function C(e, t) {
 			if (e.status === "away") return "已离开：不会被唤醒，可请回";
 			if (x(e)) return "待注册";
 			let r = e.execution;
-			return r && a.includes(r.status) ? r.stale ? "执行失联，停止未确认" : "正在处理" : e.held_until ? `${r?.stop_result === "unconfirmed" ? "上一轮停止未确认" : "上一轮已作废，可能仍在生成"}，等待结束确认或迟到回答；${e.pending ? `${e.pending} 条新消息` : "新消息"}最晚 ${n.format_time(e.held_until * 1e3)} 送达` : e.pending && e.adopt_error ? `无法投递 ${e.pending} 条` : e.pending ? `待投递 ${e.pending} 条` : t === "queued" ? u.value ? "本轮排队" : "等待依次发言" : r?.status === "failed" ? "执行失败" : !r && e.access === "manual" ? "已注册" : "空闲";
+			return r && a.includes(r.status) ? r.stale ? "执行失联，停止未确认" : "正在处理" : e.held_until ? `${r?.stop_result === "unconfirmed" ? "上一轮停止未确认" : "上一轮已作废，可能仍在生成"}，等待结束确认或迟到回答；${e.pending ? `${e.pending} 条新消息` : "新消息"}最晚 ${n.format_time(e.held_until * 1e3)} 送达` : e.pending && e.adopt_error ? `无法投递 ${e.pending} 条` : e.pending ? `待投递 ${e.pending} 条` : t === "queued" ? l.value ? "本轮排队" : "等待依次发言" : r?.status === "failed" ? "执行失败" : !r && e.access === "manual" ? "已注册" : "空闲";
 		}
 		function w(e) {
-			return e.access === "runner" ? [e.adapter === "api" ? "API" : "", T(e)].filter(Boolean).join(" · ") : s[e.access];
+			return e.access === "runner" ? [e.adapter === "api" ? "API" : "", T(e)].filter(Boolean).join(" · ") : o[e.access];
 		}
 		function T(e) {
-			return e.access === "runner" ? n.participant_model(e.name, c.value, t.value.launch.room_models) : "";
+			return e.access === "runner" ? n.participant_model(e.name, s.value, t.value.launch.room_models) : "";
 		}
 		function ee(e) {
-			return [e.access === "runner" ? e.session_mode === "borrowed" ? "借用会话" : "独立会话" : "", n.participant_files(e.name, c.value, t.value.launch.room_models)].filter(Boolean).join(" · ");
+			return [e.access === "runner" ? e.session_mode === "borrowed" ? "借用会话" : "独立会话" : "", n.participant_files(e.name, s.value, t.value.launch.room_models)].filter(Boolean).join(" · ");
 		}
-		let E = Z(() => [.../* @__PURE__ */ new Set([1, l.value.max_rounds || 1])]), D = /* @__PURE__ */ F(0);
+		let E = Z(() => [.../* @__PURE__ */ new Set([1, c.value.max_rounds || 1])]), D = /* @__PURE__ */ F(0);
 		async function O(e, t) {
 			D.value = t;
 			try {
@@ -55277,12 +56498,12 @@ var o0 = { class: "progress-board is-docked" }, s0 = { class: "pb-header" }, c0 
 			}
 		}
 		let k = Z(() => {
-			if (c.value.archived) return {
+			if (s.value.archived) return {
 				tone: "neutral",
 				title: "已存档",
 				detail: ""
 			};
-			let e = (l.value.members || []).filter(i0);
+			let e = (c.value.members || []).filter(x2);
 			if (e.some((e) => e.execution?.stale)) return {
 				tone: "error",
 				title: "执行失联",
@@ -55294,36 +56515,36 @@ var o0 = { class: "progress-board is-docked" }, s0 = { class: "pb-header" }, c0 
 				title: "无法投递",
 				detail: `${n.display_name(t.name)} 的消息未送达，原因见对话区`
 			};
-			let r = Math.max(0, ...(l.value.requests || []).map((e) => e.chain_id)), i = (l.value.chain_rounds || []).find((e) => e.chain_id === r), o = i ? `第 ${Math.min(i.used, i.allowed)}/${i.allowed} 轮` : "";
+			let r = Math.max(0, ...(c.value.requests || []).map((e) => e.chain_id)), i = (c.value.chain_rounds || []).find((e) => e.chain_id === r), o = i ? `第 ${Math.min(i.used, i.allowed)}/${i.allowed} 轮` : "";
 			if (e.length) return {
 				tone: "primary",
 				title: "处理中",
 				detail: [o, ...e.map((e) => `${n.display_name(e.name)} ${a.includes(e.execution?.status) ? "正在处理" : e.held_until ? "等上一轮结束" : `待投递 ${e.pending} 条`}`)].filter(Boolean).join(" · ")
 			};
-			let s = (l.value.halted_chains || []).find((e) => e.chain_id === r);
-			return s?.reason === "budget" ? {
+			let l = (c.value.halted_chains || []).find((e) => e.chain_id === r);
+			return l?.reason === "budget" ? {
 				tone: "warning",
 				title: "任务链已停",
 				continue_chain: r,
-				detail: `已推进 ${i?.used ?? l.value.max_rounds} 轮，达到上限；主持人的下一次派活已暂存，继续即发出。发新消息则重新开始`
-			} : s ? {
+				detail: `已推进 ${i?.used ?? c.value.max_rounds} 轮，达到上限；主持人的下一次派活已暂存，继续即发出。发新消息则重新开始`
+			} : l ? {
 				tone: "warning",
 				title: "任务链已停",
 				detail: "派出的成员都失败了；发新消息即重新开始"
-			} : (l.value.members || []).length ? {
+			} : (c.value.members || []).length ? {
 				tone: "success",
 				title: "空闲",
-				detail: f.value ? `消息默认交给 ${n.display_name(f.value.name)}；@ 其他成员让它们发言` : "没有主持人：消息只作留言"
+				detail: d.value ? `消息默认交给 ${n.display_name(d.value.name)}；@ 其他成员让它们发言` : "没有主持人：消息只作留言"
 			} : {
 				tone: "neutral",
 				title: "暂无成员",
 				detail: "在下方邀请 AI 加入"
 			};
 		}), te = Z(() => {
-			let e = new Set((c.value.withdrawals || []).map((e) => e.message_id));
-			return (l.value.requests || []).filter((t) => !e.has(t.message_id));
+			let e = new Set((s.value.withdrawals || []).map((e) => e.message_id));
+			return (c.value.requests || []).filter((t) => !e.has(t.message_id));
 		}), ne = Z(() => {
-			let e = te.value, t = e.filter((e) => e.status === "completed").length, n = l.value.executions || [];
+			let e = te.value, t = e.filter((e) => e.status === "completed").length, n = c.value.executions || [];
 			return [{
 				label: "请求",
 				text: `${t} / ${e.length} 已回复`,
@@ -55339,58 +56560,45 @@ var o0 = { class: "progress-board is-docked" }, s0 = { class: "pb-header" }, c0 
 			let n = (t.value.messages || []).find((t) => t.id === e.message_id);
 			return n ? n.text : `#${e.message_id}`;
 		}), ie = /* @__PURE__ */ F(!1);
-		R(() => c.value.id, () => {
+		R(() => s.value.id, () => {
 			ie.value = !1;
 		});
-		let ae = Z(() => {
-			let e = Math.floor(Date.now() / 1e3), t = (l.value.executions || []).map((t) => ({
-				...t,
-				seconds: t.created_at ? (t.finished_at || (a.includes(t.status) ? e : t.created_at)) - t.created_at : null
-			}));
-			return {
-				items: t,
-				total: t.reduce((e, t) => e + (t.seconds || 0), 0)
-			};
-		});
-		function A(e) {
-			return e == null ? "—" : e < 60 ? `${e}秒` : e < 3600 ? `${Math.floor(e / 60)}分${String(e % 60).padStart(2, "0")}秒` : `${Math.floor(e / 3600)}小时${Math.floor(e % 3600 / 60)}分`;
-		}
-		function oe(e) {
-			return a0(e, {
+		function ae(e) {
+			return S2(e, {
 				view: t.value,
 				act: r,
 				describe: (e) => {
-					ce.value = e;
+					oe.value = e;
 				}
 			});
 		}
-		let se = /* @__PURE__ */ F(!1), ce = /* @__PURE__ */ F(""), le = /* @__PURE__ */ F(!1);
-		R(() => c.value.id, () => {
-			se.value = !1, ce.value = "";
+		let A = /* @__PURE__ */ F(!1), oe = /* @__PURE__ */ F(""), se = /* @__PURE__ */ F(!1);
+		R(() => s.value.id, () => {
+			A.value = !1, oe.value = "";
 		});
-		async function ue({ text: e, label: t, as_template: r }) {
-			le.value = !0;
+		async function ce({ text: e, label: t, as_template: r }) {
+			se.value = !0;
 			try {
-				await n.describe_member(ce.value, e, t), r && n.save_description_template(ce.value, e), ce.value = "";
+				await n.describe_member(oe.value, e, t), r && n.save_description_template(oe.value, e), oe.value = "";
 			} catch {} finally {
-				le.value = !1;
+				se.value = !1;
 			}
 		}
-		let de = /* @__PURE__ */ F(!1), j = Z(() => !!(f.value && f.value.access === "runner") && t.value.launch.available);
-		return R(() => c.value.id, () => {
-			de.value = !1;
+		let le = /* @__PURE__ */ F(!1), ue = Z(() => !!(d.value && d.value.access === "runner") && t.value.launch.available);
+		return R(() => s.value.id, () => {
+			le.value = !1;
 		}), (e, a) => {
-			let s = MA, l = pA, y = sA, b = $V;
-			return U(), W("div", o0, [
-				K("header", s0, [K("strong", null, P(u.value ? "讨论进度" : "自由协作"), 1), K("span", c0, P(f.value ? `${I(n).display_name(f.value.name)} 主持` : "无主持人"), 1)]),
-				u.value ? (U(), G(W1, { key: 0 })) : (U(), W("section", {
+			let o = MA, c = pA, y = sA, b = $V;
+			return U(), W("div", C2, [
+				K("header", w2, [K("strong", null, P(l.value ? "讨论进度" : "自由协作"), 1), K("span", T2, P(d.value ? `${I(n).display_name(d.value.name)} 主持` : "无主持人"), 1)]),
+				l.value ? (U(), G(s2, { key: 0 })) : (U(), W("section", {
 					key: 1,
 					class: M(["pb-status", `is-${k.value.tone}`]),
 					"aria-label": "房间状态"
 				}, [
-					K("div", l0, [a[7] ||= K("span", { class: "pb-dot" }, null, -1), K("strong", u0, P(k.value.title), 1)]),
-					k.value.detail ? (U(), W("p", d0, P(k.value.detail), 1)) : Y("", !0),
-					k.value.title === "处理中" && I(t).access?.can_manage ? (U(), W("div", f0, [q(s, {
+					K("div", E2, [a[7] ||= K("span", { class: "pb-dot" }, null, -1), K("strong", D2, P(k.value.title), 1)]),
+					k.value.detail ? (U(), W("p", O2, P(k.value.detail), 1)) : Y("", !0),
+					k.value.title === "处理中" && I(t).access?.can_manage ? (U(), W("div", k2, [q(o, {
 						label: "全部停止",
 						icon: "i-lucide-circle-stop",
 						size: "sm",
@@ -55402,7 +56610,7 @@ var o0 = { class: "progress-board is-docked" }, s0 = { class: "pb-header" }, c0 
 						disabled: !!I(i),
 						onClick: a[0] ||= (e) => I(r)("stop_room")
 					}, null, 8, ["loading", "disabled"])])) : Y("", !0),
-					k.value.continue_chain && I(t).access?.can_manage ? (U(), W("div", p0, [(U(!0), W(H, null, B(E.value, (e) => (U(), G(s, {
+					k.value.continue_chain && I(t).access?.can_manage ? (U(), W("div", A2, [(U(!0), W(H, null, B(E.value, (e) => (U(), G(o, {
 						key: e,
 						label: `继续 ${e} 轮`,
 						icon: "i-lucide-play",
@@ -55419,30 +56627,34 @@ var o0 = { class: "progress-board is-docked" }, s0 = { class: "pb-header" }, c0 
 						"disabled",
 						"onClick"
 					]))), 128))])) : Y("", !0),
-					K("div", m0, [(U(!0), W(H, null, B(ne.value, (e) => (U(), W("div", {
+					K("div", j2, [(U(!0), W(H, null, B(ne.value, (e) => (U(), W("div", {
 						key: e.label,
 						class: "pb-meter"
-					}, [K("div", h0, [K("span", null, P(e.label), 1), K("b", null, P(e.text), 1)]), e.ratio === null ? Y("", !0) : (U(), W("div", g0, [K("i", { style: fe({ width: `${Math.min(100, Math.round(e.ratio * 100))}%` }) }, null, 4)]))]))), 128))])
+					}, [K("div", M2, [K("span", null, P(e.label), 1), K("b", null, P(e.text), 1)]), e.ratio === null ? Y("", !0) : (U(), W("div", N2, [K("i", { style: fe({ width: `${Math.min(100, Math.round(e.ratio * 100))}%` }) }, null, 4)]))]))), 128))])
 				], 2)),
-				re.value && !u.value ? (U(), W("section", _0, [
+				re.value && !l.value ? (U(), W("section", P2, [
 					a[8] ||= K("h4", null, "当前任务", -1),
 					K("p", { class: M(["pb-focus", { "is-expanded": ie.value }]) }, P(re.value), 3),
-					re.value.length > P0 ? (U(), W("button", {
+					re.value.length > K2 ? (U(), W("button", {
 						key: 0,
 						type: "button",
 						class: "pb-link",
 						onClick: a[1] ||= (e) => ie.value = !ie.value
 					}, P(ie.value ? "收起" : "展开"), 1)) : Y("", !0)
 				])) : Y("", !0),
-				p.value ? (U(), W("section", v0, [a[9] ||= K("h4", null, "工作流", -1), q(k1, { workflow: p.value }, null, 8, ["workflow"])])) : Y("", !0),
-				K("section", y0, [
+				f.value && !h.value ? (U(), W("section", F2, [a[9] ||= K("h4", null, "工作流", -1), q(K0, {
+					workflow: f.value,
+					dismissible: "",
+					onDismiss: g
+				}, null, 8, ["workflow"])])) : Y("", !0),
+				K("section", I2, [
 					a[11] ||= K("h4", null, "发言顺序", -1),
-					q(n0, {
-						away: _.value,
-						round: d.value
+					q(y2, {
+						away: v.value,
+						round: u.value
 					}, {
-						default: L(({ item: e }) => [(U(!0), W(H, null, B([g(e.name)].filter(Boolean), (r) => (U(), W(H, { key: r.id }, [
-							q(l, {
+						default: L(({ item: e }) => [(U(!0), W(H, null, B([_(e.name)].filter(Boolean), (r) => (U(), W(H, { key: r.id }, [
+							q(c, {
 								src: I(n).identities[r.name]?.icon,
 								text: I(n).identities[r.name]?.initials,
 								alt: r.name,
@@ -55454,41 +56666,41 @@ var o0 = { class: "progress-board is-docked" }, s0 = { class: "pb-header" }, c0 
 								"alt",
 								"class"
 							]),
-							K("div", b0, [
+							K("div", L2, [
 								K("div", {
 									class: "pb-member-name",
-									title: c.value.descriptions?.[r.name] || void 0
+									title: s.value.descriptions?.[r.name] || void 0
 								}, [
 									J(P(I(n).display_name(r.name)), 1),
-									I(n).display_name(r.name) === r.name ? Y("", !0) : (U(), W("span", S0, P(r.name), 1)),
+									I(n).display_name(r.name) === r.name ? Y("", !0) : (U(), W("span", z2, P(r.name), 1)),
 									r.role === "host" ? (U(), G(y, {
 										key: 1,
 										name: "i-lucide-crown",
 										title: "主持人"
 									})) : Y("", !0),
-									K("small", { title: T(r) || void 0 }, P(w(r)), 9, C0)
-								], 8, x0),
-								m(r.name) ? (U(), W("small", {
+									K("small", { title: T(r) || void 0 }, P(w(r)), 9, B2)
+								], 8, R2),
+								p(r.name) ? (U(), W("small", {
 									key: 0,
 									class: "pb-workflow-member",
-									title: `来自工作流「${p.value.label}」`
-								}, "工作流", 8, w0)) : Y("", !0),
+									title: `来自工作流「${f.value.label}」`
+								}, "工作流", 8, V2)) : Y("", !0),
 								ee(r) ? (U(), W("div", {
 									key: 1,
 									class: "pb-member-model",
-									title: I(n).participant_session_hint(r.name, c.value, I(t).launch.room_models)
-								}, P(ee(r)), 9, T0)) : Y("", !0),
+									title: I(n).participant_session_hint(r.name, s.value, I(t).launch.room_models)
+								}, P(ee(r)), 9, H2)) : Y("", !0),
 								K("div", { class: M(["pb-member-status", `is-${S(r)}`]) }, [a[10] ||= K("span", { class: "pb-dot" }, null, -1), K("span", {
 									class: "pb-member-status-text",
 									title: r.execution?.status === "failed" ? r.execution.result : r.held_until ? C(r, e.state) : void 0
-								}, P(C(r, e.state)), 9, E0)], 2)
+								}, P(C(r, e.state)), 9, U2)], 2)
 							]),
 							q(b, {
-								items: oe(r),
+								items: ae(r),
 								content: { align: "end" },
 								ui: { content: "channel-menu" }
 							}, {
-								default: L(() => [q(s, {
+								default: L(() => [q(o, {
 									icon: "i-lucide-ellipsis",
 									color: "neutral",
 									variant: "ghost",
@@ -55501,7 +56713,7 @@ var o0 = { class: "progress-board is-docked" }, s0 = { class: "pb-header" }, c0 
 						], 64))), 128))]),
 						_: 1
 					}, 8, ["away", "round"]),
-					c.value.archived ? Y("", !0) : (U(), G(s, {
+					s.value.archived ? Y("", !0) : (U(), G(o, {
 						key: 0,
 						icon: "i-lucide-plus",
 						label: "邀请 AI 加入",
@@ -55510,11 +56722,11 @@ var o0 = { class: "progress-board is-docked" }, s0 = { class: "pb-header" }, c0 
 						variant: "outline",
 						class: "pb-action pb-action-block pb-action-add",
 						onClick: a[2] ||= (e) => {
-							h.value = "", se.value = !0;
+							m.value = "", A.value = !0;
 						}
 					}))
 				]),
-				!c.value.archived && !u.value ? (U(), W("section", D0, [q(s, {
+				!s.value.archived && !l.value ? (U(), W("section", W2, [q(o, {
 					icon: "i-lucide-messages-square",
 					label: "开启讨论",
 					size: "sm",
@@ -55522,33 +56734,32 @@ var o0 = { class: "progress-board is-docked" }, s0 = { class: "pb-header" }, c0 
 					variant: "outline",
 					class: "pb-action pb-action-block pb-restart",
 					title: "由主持人推进成员轮流发言，到上限或结束后房间回到自由协作",
-					disabled: !j.value,
-					onClick: a[3] ||= (e) => de.value = !0
-				}, null, 8, ["disabled"]), j.value ? Y("", !0) : (U(), W("p", O0, "开启讨论需要一位由本机唤醒的 AI 主持人。"))])) : Y("", !0),
-				ae.value.items.length ? (U(), W("section", k0, [K("div", A0, [a[12] ||= K("h4", null, "耗时", -1), K("small", null, "共 " + P(ae.value.items.length) + " 次执行 · " + P(A(ae.value.total)), 1)]), K("details", j0, [a[13] ||= K("summary", null, "查看每次执行", -1), K("ol", null, [(U(!0), W(H, null, B(ae.value.items, (e) => (U(), W("li", { key: e.id }, [K("span", M0, [J("#" + P(e.id) + " " + P(v(e.member_id)), 1), K("small", null, P(e.status === "cancelled" ? I(n).stop_label(e) : o[e.status] || e.status), 1)]), K("span", N0, [K("span", null, "用时 " + P(A(e.seconds)), 1)])]))), 128))])])])) : Y("", !0),
-				q(M1, {
-					open: de.value,
-					"onUpdate:open": a[4] ||= (e) => de.value = e
+					disabled: !ue.value,
+					onClick: a[3] ||= (e) => le.value = !0
+				}, null, 8, ["disabled"]), ue.value ? Y("", !0) : (U(), W("p", G2, "开启讨论需要一位由本机唤醒的 AI 主持人。"))])) : Y("", !0),
+				q(Y0, {
+					open: le.value,
+					"onUpdate:open": a[4] ||= (e) => le.value = e
 				}, null, 8, ["open"]),
 				q(sK, {
-					open: se.value,
-					"onUpdate:open": a[5] ||= (e) => se.value = e,
-					"workflow-id": h.value,
+					open: A.value,
+					"onUpdate:open": a[5] ||= (e) => A.value = e,
+					"workflow-id": m.value,
 					description: "新成员加入后不打断其他成员；点卡片翻面可设置软件、模型、项目权限和要续接的已有会话。"
 				}, null, 8, ["open", "workflow-id"]),
 				q(tW, {
-					open: !!ce.value,
-					name: ce.value || " ",
-					platform: ce.value ? I(n).default_name(I(n).platform_of(ce.value)) : "",
-					default_label: ce.value ? I(n).default_name(ce.value) : "",
-					text: c.value.descriptions?.[ce.value] || "",
-					label: c.value.labels?.[ce.value] || "",
-					template: ce.value ? I(n).description_template(ce.value) : "",
-					saving: le.value,
+					open: !!oe.value,
+					name: oe.value || " ",
+					platform: oe.value ? I(n).default_name(I(n).platform_of(oe.value)) : "",
+					default_label: oe.value ? I(n).default_name(oe.value) : "",
+					text: s.value.descriptions?.[oe.value] || "",
+					label: s.value.labels?.[oe.value] || "",
+					template: oe.value ? I(n).description_template(oe.value) : "",
+					saving: se.value,
 					"onUpdate:open": a[6] ||= (e) => {
-						e || (ce.value = "");
+						e || (oe.value = "");
 					},
-					onSave: ue
+					onSave: ce
 				}, null, 8, [
 					"open",
 					"name",
@@ -55562,31 +56773,31 @@ var o0 = { class: "progress-board is-docked" }, s0 = { class: "pb-header" }, c0 
 			]);
 		};
 	}
-}, [["__scopeId", "data-v-f60aa2ce"]]), R0 = {
+}, [["__scopeId", "data-v-aa628948"]]), Z2 = {
 	class: "merged-section discussion-history",
 	"aria-label": "讨论记录"
-}, z0 = {
+}, Q2 = {
 	key: 0,
 	class: "fine-print"
-}, B0 = { class: "history-timeline" }, V0 = {
+}, $2 = { class: "history-timeline" }, e4 = {
 	key: 0,
 	class: "history-free"
-}, H0 = {
+}, t4 = {
 	key: 1,
 	class: "history-discussion"
-}, U0 = { class: "history-meta" }, W0 = {
+}, n4 = { class: "history-meta" }, r4 = {
 	key: 0,
 	class: "fine-print"
-}, G0 = {
+}, i4 = {
 	key: 1,
 	class: "fine-print"
-}, K0 = {
+}, a4 = {
 	key: 2,
 	class: "history-conclusion"
-}, q0 = ["onClick"], J0 = ["innerHTML"], Y0 = {
+}, o4 = ["onClick"], s4 = ["innerHTML"], c4 = {
 	key: 1,
 	class: "fine-print"
-}, X0 = ["aria-expanded", "onClick"], Z0 = ["innerHTML"], Q0 = /*#__PURE__*/ TH({
+}, l4 = ["aria-expanded", "onClick"], u4 = ["innerHTML"], d4 = /*#__PURE__*/ TH({
 	__name: "DiscussionHistory",
 	emits: ["detail"],
 	setup(e) {
@@ -55644,16 +56855,16 @@ var o0 = { class: "progress-board is-docked" }, s0 = { class: "pb-header" }, c0 
 		}
 		return (e, t) => {
 			let l = kV, d = sA;
-			return U(), W("section", R0, [
+			return U(), W("section", Z2, [
 				t[2] ||= K("div", { class: "page-heading" }, [K("div", null, [K("h2", null, "讨论记录"), K("p", null, "每场讨论及其结束时的结论，最新的在上；自由协作的消息按段汇总。")])], -1),
-				i.value.discussions?.length ? Y("", !0) : (U(), W("p", z0, "还没有开启过讨论。")),
-				K("ol", B0, [(U(!0), W(H, null, B(c.value, (i) => (U(), W("li", {
+				i.value.discussions?.length ? Y("", !0) : (U(), W("p", Q2, "还没有开启过讨论。")),
+				K("ol", $2, [(U(!0), W(H, null, B(c.value, (i) => (U(), W("li", {
 					key: i.key,
 					class: M(`is-${i.kind}`)
 				}, [t[1] ||= K("span", {
 					class: "history-dot",
 					"aria-hidden": "true"
-				}, null, -1), i.kind === "free" ? (U(), W("p", V0, "自由协作 · " + P(i.count) + " 条消息", 1)) : (U(), W("article", H0, [
+				}, null, -1), i.kind === "free" ? (U(), W("p", e4, "自由协作 · " + P(i.count) + " 条消息", 1)) : (U(), W("article", t4, [
 					K("header", null, [K("h3", null, [K("small", null, "讨论 " + P(i.number), 1), J(P(i.goal || "未填写目标"), 1)]), q(l, {
 						color: r[i.status]?.color || "neutral",
 						variant: "subtle",
@@ -55662,74 +56873,74 @@ var o0 = { class: "progress-board is-docked" }, s0 = { class: "pb-header" }, c0 
 						default: L(() => [J(P(r[i.status]?.label || i.status), 1)]),
 						_: 2
 					}, 1032, ["color"])]),
-					K("p", U0, [
+					K("p", n4, [
 						J(P(s(i.created_at)) + " 开始 · " + P(i.count) + " 条消息", 1),
 						i.status === "concluded" && i.state !== null ? (U(), W(H, { key: 0 }, [J(" · " + P(I(n).stop_reason_label(i)), 1)], 64)) : Y("", !0),
 						i.concluded_at ? (U(), W(H, { key: 1 }, [J(" · " + P(s(i.concluded_at)) + " 结束", 1)], 64)) : Y("", !0)
 					]),
-					i.result?.current ? (U(), W("p", W0, "结论即上方的当前共识。")) : i.result?.missing ? (U(), W("p", G0, "这场讨论结束于结论快照功能之前，没有保存当时的结论。")) : i.result ? (U(), W("div", K0, [
+					i.result?.current ? (U(), W("p", r4, "结论即上方的当前共识。")) : i.result?.missing ? (U(), W("p", i4, "这场讨论结束于结论快照功能之前，没有保存当时的结论。")) : i.result ? (U(), W("div", a4, [
 						K("small", null, [J(P(i.result.label), 1), i.result.until ? (U(), W("button", {
 							key: 0,
 							type: "button",
 							class: "subtle-link",
 							onClick: (t) => e.$emit("detail", i.result.until)
-						}, "整理至 #" + P(i.result.until), 9, q0)) : Y("", !0)]),
+						}, "整理至 #" + P(i.result.until), 9, o4)) : Y("", !0)]),
 						i.result.brief ? (U(), W("div", {
 							key: 0,
 							class: "markdown-body",
 							innerHTML: o(i.result.brief)
-						}, null, 8, J0)) : i.result.state ? Y("", !0) : (U(), W("p", Y0, "主持人没有留下简报或共识。")),
+						}, null, 8, s4)) : i.result.state ? Y("", !0) : (U(), W("p", c4, "主持人没有留下简报或共识。")),
 						i.result.state ? (U(), W(H, { key: 2 }, [K("button", {
 							type: "button",
 							class: "history-toggle",
 							"aria-expanded": a.value.has(i.id),
 							onClick: (e) => u(i.id)
-						}, [t[0] ||= J("详细共识与进度", -1), q(d, { name: a.value.has(i.id) ? "i-lucide-chevron-up" : "i-lucide-chevron-down" }, null, 8, ["name"])], 8, X0), a.value.has(i.id) ? (U(), W("div", {
+						}, [t[0] ||= J("详细共识与进度", -1), q(d, { name: a.value.has(i.id) ? "i-lucide-chevron-up" : "i-lucide-chevron-down" }, null, 8, ["name"])], 8, l4), a.value.has(i.id) ? (U(), W("div", {
 							key: 0,
 							class: "markdown-body history-state",
 							innerHTML: o(i.result.state)
-						}, null, 8, Z0)) : Y("", !0)], 64)) : Y("", !0)
+						}, null, 8, u4)) : Y("", !0)], 64)) : Y("", !0)
 					])) : Y("", !0)
 				]))], 2))), 128))])
 			]);
 		};
 	}
-}, [["__scopeId", "data-v-ecc64789"]]), $0 = {
+}, [["__scopeId", "data-v-ecc64789"]]), f4 = {
 	class: "merged-section room-overview",
 	"aria-label": "成员与设置"
-}, e2 = { class: "page-heading" }, t2 = { class: "overview-section" }, n2 = {
+}, p4 = { class: "page-heading" }, m4 = { class: "overview-section" }, h4 = {
 	key: 0,
 	class: "overview-local",
 	role: "status"
-}, r2 = {
+}, g4 = {
 	class: "member-cards",
 	"aria-label": "成员"
-}, i2 = { class: "member-card-head" }, a2 = { class: "member-card-name" }, o2 = {
+}, _4 = { class: "member-card-head" }, v4 = { class: "member-card-name" }, y4 = {
 	key: 0,
 	class: "member-id"
-}, s2 = ["title"], c2 = { class: "member-card-facts" }, l2 = ["aria-label", "title"], u2 = [
+}, b4 = ["title"], x4 = { class: "member-card-facts" }, S4 = ["aria-label", "title"], C4 = [
 	"aria-checked",
 	"disabled",
 	"onClick"
-], d2 = { key: 1 }, f2 = ["title"], p2 = [
+], w4 = { key: 1 }, T4 = ["title"], E4 = [
 	"aria-label",
 	"aria-busy",
 	"title"
-], m2 = [
+], D4 = [
 	"aria-checked",
 	"title",
 	"disabled",
 	"onClick"
-], h2 = ["title"], g2 = ["aria-label"], _2 = { key: 0 }, v2 = { class: "overview-section" }, y2 = { class: "overview-settings" }, b2 = { class: "overview-workflow" }, x2 = {
+], O4 = ["title"], k4 = ["aria-label"], A4 = { key: 0 }, j4 = { class: "overview-section" }, M4 = { class: "overview-settings" }, N4 = { class: "overview-workflow" }, P4 = {
 	key: 1,
 	class: "overview-muted"
-}, S2 = { key: 0 }, C2 = { key: 1 }, w2 = { key: 1 }, T2 = { key: 2 }, E2 = { class: "overview-address" }, D2 = { key: 3 }, O2 = {
+}, F4 = { key: 0 }, I4 = { key: 1 }, L4 = { key: 1 }, R4 = { key: 2 }, z4 = { class: "overview-address" }, B4 = { key: 3 }, V4 = {
 	key: 0,
 	class: "overview-muted"
-}, k2 = {
+}, H4 = {
 	key: 2,
 	class: "overview-muted"
-}, A2 = { class: "overview-model-actions" }, j2 = "设为主持人", M2 = /*#__PURE__*/ TH({
+}, U4 = { class: "overview-model-actions" }, W4 = "设为主持人", G4 = /*#__PURE__*/ TH({
 	__name: "RoomOverview",
 	setup(e) {
 		let { view: t, bridge: n, act: r } = xr("discussion"), i = { manual: "手动接入" }, a = {
@@ -55902,7 +57113,7 @@ var o0 = { class: "progress-board is-docked" }, s0 = { class: "pb-header" }, c0 
 			].filter(Boolean).join(" · ");
 		});
 		function se(e) {
-			let [n, i, a] = a0(C(e), {
+			let [n, i, a] = S2(C(e), {
 				view: t.value,
 				act: r,
 				describe: (e) => {
@@ -55911,8 +57122,8 @@ var o0 = { class: "progress-board is-docked" }, s0 = { class: "pb-header" }, c0 
 			});
 			return d.value ? {
 				taking_part: n,
-				host: i.find((e) => e.label === j2) || null,
-				place: [...i.filter((e) => e.label !== j2), ...a]
+				host: i.find((e) => e.label === W4) || null,
+				place: [...i.filter((e) => e.label !== W4), ...a]
 			} : {
 				taking_part: n,
 				host: null,
@@ -55934,8 +57145,8 @@ var o0 = { class: "progress-board is-docked" }, s0 = { class: "pb-header" }, c0 
 		let fe = Z(() => `${t.value.room_site}/r/${u.value.id}`), pe = Z(() => u.value.created_at ? new Date(u.value.created_at).toLocaleString("zh-CN", { hour12: !1 }) : "");
 		return (e, i) => {
 			let s = MA, l = pA, E = sA, D = kV, me = XV, he = vV;
-			return U(), W("section", $0, [
-				K("div", e2, [i[10] ||= K("div", null, [K("h2", null, "成员与设置"), K("p", null, "成员的接入、权限与全部操作，以及房间的协作设置；右栏成员菜单是同样操作的快捷入口。")], -1), u.value.archived ? Y("", !0) : (U(), G(s, {
+			return U(), W("section", f4, [
+				K("div", p4, [i[10] ||= K("div", null, [K("h2", null, "成员与设置"), K("p", null, "成员的接入、权限与全部操作，以及房间的协作设置；右栏成员菜单是同样操作的快捷入口。")], -1), u.value.archived ? Y("", !0) : (U(), G(s, {
 					key: 0,
 					icon: "i-lucide-plus",
 					label: "邀请 AI 加入",
@@ -55945,19 +57156,19 @@ var o0 = { class: "progress-board is-docked" }, s0 = { class: "pb-header" }, c0 
 					disabled: !I(t).access?.can_manage,
 					onClick: i[0] ||= (e) => ce.value = !0
 				}, null, 8, ["disabled"]))]),
-				K("section", t2, [
+				K("section", m4, [
 					i[15] ||= K("h3", null, "成员", -1),
-					p.value ? (U(), W("p", n2, [J(P(p.value.text), 1), p.value.retry ? (U(), W("button", {
+					p.value ? (U(), W("p", h4, [J(P(p.value.text), 1), p.value.retry ? (U(), W("button", {
 						key: 0,
 						type: "button",
 						class: "subtle-link",
 						onClick: i[1] ||= (e) => I(n).reload_room_models()
 					}, "重试")) : Y("", !0)])) : Y("", !0),
-					K("ul", r2, [(U(!0), W(H, null, B(y.value, (e) => (U(), W("li", {
+					K("ul", g4, [(U(!0), W(H, null, B(y.value, (e) => (U(), W("li", {
 						key: e.name,
 						class: "member-card"
 					}, [
-						K("header", i2, [
+						K("header", _4, [
 							q(l, {
 								src: I(n).identities[e.name]?.icon,
 								text: I(n).identities[e.name]?.initials,
@@ -55970,9 +57181,9 @@ var o0 = { class: "progress-board is-docked" }, s0 = { class: "pb-header" }, c0 
 								"alt",
 								"class"
 							]),
-							K("div", a2, [K("strong", null, [
+							K("div", v4, [K("strong", null, [
 								J(P(I(n).display_name(e.name)), 1),
-								I(n).display_name(e.name) === e.name ? Y("", !0) : (U(), W("span", o2, P(e.name), 1)),
+								I(n).display_name(e.name) === e.name ? Y("", !0) : (U(), W("span", y4, P(e.name), 1)),
 								e.role === "host" ? (U(), G(E, {
 									key: 1,
 									name: "i-lucide-crown",
@@ -55981,7 +57192,7 @@ var o0 = { class: "progress-board is-docked" }, s0 = { class: "pb-header" }, c0 
 							]), u.value.descriptions?.[e.name] ? (U(), W("small", {
 								key: 0,
 								title: u.value.descriptions[e.name]
-							}, P(u.value.descriptions[e.name]), 9, s2)) : Y("", !0)]),
+							}, P(u.value.descriptions[e.name]), 9, b4)) : Y("", !0)]),
 							se(e).host ? (U(), G(s, {
 								key: 0,
 								icon: se(e).host.icon,
@@ -56016,7 +57227,7 @@ var o0 = { class: "progress-board is-docked" }, s0 = { class: "pb-header" }, c0 
 								_: 2
 							}, 1032, ["color"])
 						]),
-						K("dl", c2, [
+						K("dl", x4, [
 							K("div", null, [i[12] ||= K("dt", null, "接入", -1), K("dd", null, [S(C(e)).value ? (U(), W("div", {
 								key: 0,
 								class: M(["expert-card-modes overview-switch", { "is-locked": !S(C(e)).editable }]),
@@ -56030,7 +57241,7 @@ var o0 = { class: "progress-board is-docked" }, s0 = { class: "pb-header" }, c0 
 								"aria-checked": S(C(e)).value === t.value,
 								disabled: !S(C(e)).editable || !!h.value,
 								onClick: (n) => w(e, t.value)
-							}, P(t.label), 9, u2)), 64))], 10, l2)) : (U(), W("span", d2, P(S(e).text), 1))])]),
+							}, P(t.label), 9, C4)), 64))], 10, S4)) : (U(), W("span", w4, P(S(e).text), 1))])]),
 							K("div", null, [i[13] ||= K("dt", null, "模型", -1), K("dd", {
 								class: M(["overview-model", { "overview-muted": m(e.name) }]),
 								title: I(n).participant_model(e.name, u.value, f.value) || void 0
@@ -56043,7 +57254,7 @@ var o0 = { class: "progress-board is-docked" }, s0 = { class: "pb-header" }, c0 
 								"aria-label": `更改 ${e.name} 的模型与强度`,
 								title: "更改模型与思考强度",
 								onClick: (t) => ie(e)
-							}, null, 8, ["aria-label", "onClick"])) : Y("", !0)], 10, f2)]),
+							}, null, 8, ["aria-label", "onClick"])) : Y("", !0)], 10, T4)]),
 							K("div", null, [i[14] ||= K("dt", null, "项目文件", -1), K("dd", null, [T(e).value ? (U(), W("div", {
 								key: 0,
 								class: M(["expert-card-modes overview-switch", { "is-locked": !T(e).editable }]),
@@ -56059,11 +57270,11 @@ var o0 = { class: "progress-board is-docked" }, s0 = { class: "pb-header" }, c0 
 								title: t.hint,
 								disabled: t.disabled || !T(e).editable || !!h.value,
 								onClick: (n) => ee(e, t.value)
-							}, P(t.label), 9, m2))), 128))], 10, p2)) : (U(), W("span", {
+							}, P(t.label), 9, D4))), 128))], 10, E4)) : (U(), W("span", {
 								key: 1,
 								class: "overview-muted",
 								title: T(e).hint
-							}, P(T(e).text), 9, h2))])])
+							}, P(T(e).text), 9, O4))])])
 						]),
 						K("footer", {
 							class: "member-card-actions",
@@ -56082,7 +57293,7 @@ var o0 = { class: "progress-board is-docked" }, s0 = { class: "pb-header" }, c0 
 							"label",
 							"disabled",
 							"onClick"
-						]))), 128))]), se(e).place.length ? (U(), W("div", _2, [(U(!0), W(H, null, B(se(e).place, (e) => (U(), G(s, {
+						]))), 128))]), se(e).place.length ? (U(), W("div", A4, [(U(!0), W(H, null, B(se(e).place, (e) => (U(), G(s, {
 							key: e.label,
 							icon: e.icon,
 							label: e.label,
@@ -56097,30 +57308,30 @@ var o0 = { class: "progress-board is-docked" }, s0 = { class: "pb-header" }, c0 
 							"color",
 							"disabled",
 							"onClick"
-						]))), 128))])) : Y("", !0)], 8, g2)
+						]))), 128))])) : Y("", !0)], 8, k4)
 					]))), 128))]),
 					i[16] ||= K("p", { class: "overview-result" }, "复制说明或下载配置不代表 AI 已接入，以实际回答和运行记录为准。", -1)
 				]),
-				K("section", v2, [i[25] ||= K("h3", null, "协作设置", -1), K("dl", y2, [
+				K("section", j4, [i[25] ||= K("h3", null, "协作设置", -1), K("dl", M4, [
 					K("div", null, [i[17] ||= K("dt", null, "主持人", -1), K("dd", null, P(u.value.host ? I(n).display_name(u.value.host) : "未指定"), 1)]),
 					K("div", null, [i[18] ||= K("dt", null, "智能调度", -1), K("dd", null, P(oe.value), 1)]),
-					K("div", null, [i[19] ||= K("dt", null, "工作流", -1), K("dd", b2, [b.value ? (U(), G(k1, {
+					K("div", null, [i[19] ||= K("dt", null, "工作流", -1), K("dd", N4, [b.value ? (U(), G(K0, {
 						key: 0,
 						workflow: b.value
-					}, null, 8, ["workflow"])) : (U(), W("span", x2, "没有进行中的工作流；在输入框打 / 或邀请成员时选择"))])]),
-					f.value?.registered ? (U(), W("div", S2, [i[20] ||= K("dt", null, "主持人自建工作流", -1), K("dd", null, [q(VZ, {
+					}, null, 8, ["workflow"])) : (U(), W("span", P4, "没有进行中的工作流；在输入框打 / 或邀请成员时选择"))])]),
+					f.value?.registered ? (U(), W("div", F4, [i[20] ||= K("dt", null, "主持人自建工作流", -1), K("dd", null, [q(ZZ, {
 						"model-value": !!f.value.host_workflows,
 						disabled: !I(t).access?.can_manage || u.value.archived,
 						"onUpdate:modelValue": i[2] ||= (e) => I(r)("set_room_host_workflows", e)
 					}, null, 8, ["model-value", "disabled"])])])) : Y("", !0),
-					u.value.free?.max_rounds ? (U(), W("div", C2, [i[21] ||= K("dt", null, "连续派活上限", -1), K("dd", null, [I(t).access?.can_manage ? (U(), G(nZ, {
+					u.value.free?.max_rounds ? (U(), W("div", I4, [i[21] ||= K("dt", null, "连续派活上限", -1), K("dd", null, [I(t).access?.can_manage ? (U(), G(nZ, {
 						key: 0,
 						"model-value": _.value,
 						disabled: g.value,
 						"onUpdate:modelValue": v
-					}, null, 8, ["model-value", "disabled"])) : (U(), W("span", w2, "主持人收到你的一条消息后，最多连续派活 " + P(u.value.free.max_rounds) + " 轮（派活 → 成员回答 → 交回汇总为一轮），然后停下等你", 1))])])) : Y("", !0),
-					d.value ? Y("", !0) : (U(), W("div", T2, [i[22] ||= K("dt", null, "逐人追问", -1), K("dd", null, P(u.value.named_followup ? "开启：主持人每轮给每位专家写针对性追问" : "关闭：首轮后请专家回应上一轮观点"), 1)])),
-					K("div", null, [i[23] ||= K("dt", null, "阅读地址", -1), K("dd", E2, [K("code", null, P(fe.value), 1), q(s, {
+					}, null, 8, ["model-value", "disabled"])) : (U(), W("span", L4, "主持人收到你的一条消息后，最多连续派活 " + P(u.value.free.max_rounds) + " 轮（派活 → 成员回答 → 交回汇总为一轮），然后停下等你", 1))])])) : Y("", !0),
+					d.value ? Y("", !0) : (U(), W("div", R4, [i[22] ||= K("dt", null, "逐人追问", -1), K("dd", null, P(u.value.named_followup ? "开启：主持人每轮给每位专家写针对性追问" : "关闭：首轮后请专家回应上一轮观点"), 1)])),
+					K("div", null, [i[23] ||= K("dt", null, "阅读地址", -1), K("dd", z4, [K("code", null, P(fe.value), 1), q(s, {
 						icon: "i-lucide-copy",
 						color: "neutral",
 						variant: "ghost",
@@ -56128,7 +57339,7 @@ var o0 = { class: "progress-board is-docked" }, s0 = { class: "pb-header" }, c0 
 						"aria-label": "复制阅读地址",
 						onClick: i[3] ||= (e) => I(r)("copy", fe.value)
 					})])]),
-					pe.value ? (U(), W("div", D2, [i[24] ||= K("dt", null, "创建时间", -1), K("dd", null, P(pe.value), 1)])) : Y("", !0)
+					pe.value ? (U(), W("div", B4, [i[24] ||= K("dt", null, "创建时间", -1), K("dd", null, P(pe.value), 1)])) : Y("", !0)
 				])]),
 				q(sK, {
 					open: ce.value,
@@ -56173,7 +57384,7 @@ var o0 = { class: "progress-board is-docked" }, s0 = { class: "pb-header" }, c0 
 							"title",
 							"aria-label"
 						])]),
-						ne.value.loading || ne.value.error ? (U(), W("p", O2, P(ne.value.loading ? "正在读取软件模型列表…" : ne.value.error), 1)) : Y("", !0),
+						ne.value.loading || ne.value.error ? (U(), W("p", V4, P(ne.value.loading ? "正在读取软件模型列表…" : ne.value.error), 1)) : Y("", !0),
 						re.value ? (U(), G(MU, {
 							key: 1,
 							caption: "强度",
@@ -56185,8 +57396,8 @@ var o0 = { class: "progress-board is-docked" }, s0 = { class: "pb-header" }, c0 
 							"items",
 							"model-value",
 							"label"
-						])) : (U(), W("p", k2, P(ne.value.effort_note), 1)),
-						K("div", A2, [q(s, {
+						])) : (U(), W("p", H4, P(ne.value.effort_note), 1)),
+						K("div", U4, [q(s, {
 							label: "取消",
 							color: "neutral",
 							variant: "ghost",
@@ -56230,31 +57441,31 @@ var o0 = { class: "progress-board is-docked" }, s0 = { class: "pb-header" }, c0 
 			]);
 		};
 	}
-}, [["__scopeId", "data-v-97d1b852"]]), N2 = {
+}, [["__scopeId", "data-v-97d1b852"]]), K4 = {
 	thinking: "思考",
 	command: "命令",
 	tool: "工具",
 	editing: "编辑",
 	writing: "撰写"
-}, P2 = {
+}, q4 = {
 	thinking: "model",
 	writing: "model",
 	command: "tool",
 	tool: "tool",
 	editing: "tool"
-}, F2 = {
+}, J4 = {
 	running: "进行中",
 	done: "完成",
 	failed: "失败",
 	cancelled: "已撤销"
-}, I2 = 3e5, L2 = .03;
-function R2(e) {
+}, Y4 = 3e5, X4 = .03;
+function Z4(e) {
 	if (e < 1e3) return `${Math.max(0, Math.round(e))}ms`;
 	if (e < 1e4) return `${(e / 1e3).toFixed(1)}s`;
 	let t = Math.round(e / 1e3);
 	return t < 60 ? `${t}s` : t < 3600 ? `${Math.floor(t / 60)}m ${String(t % 60).padStart(2, "0")}s` : `${Math.floor(t / 3600)}h ${String(Math.floor(t % 3600 / 60)).padStart(2, "0")}m`;
 }
-function z2(e, t) {
+function Q4(e, t) {
 	let n = e.state === "running", r = e.finished_at ? e.finished_at * 1e3 : t, i = e.dispatched_at ? e.dispatched_at * 1e3 : 0, a = Math.min(e.queued_at ? e.queued_at * 1e3 : i || r, i || r), o = i ? e.segments.map((t, a) => {
 		let o = n && a === e.segments.length - 1, s = Math.min(i + t.end_ms, r);
 		return {
@@ -56280,8 +57491,8 @@ function z2(e, t) {
 		notes: l
 	};
 }
-var B2 = 18e4;
-function V2(e, t) {
+var $4 = 18e4;
+function e3(e, t) {
 	let { item: n } = e;
 	if (n.state === "failed") return {
 		tone: "failed",
@@ -56305,22 +57516,22 @@ function V2(e, t) {
 	let r = n.dispatched_at * 1e3, i = n.segments.at(-1), a = Math.max(n.activity_at ? n.activity_at * 1e3 : 0, i ? r + i.end_ms : 0, ...(n.notes || []).map((e) => e * 1e3)), o = a ? t - a : 0;
 	return o >= 18e4 ? i?.phase === "command" ? {
 		tone: "warn",
-		text: `命令已运行 ${R2(o)}`
+		text: `命令已运行 ${Z4(o)}`
 	} : {
 		tone: "warn",
-		text: `已 ${R2(o)} 无输出，可能卡住`
+		text: `已 ${Z4(o)} 无输出，可能卡住`
 	} : n.last_note ? {
 		tone: "live",
 		text: n.last_note
 	} : i ? {
 		tone: "live",
-		text: `${N2[i.phase]}${i.tool ? ` · ${i.tool}` : ""}中`
+		text: `${K4[i.phase]}${i.tool ? ` · ${i.tool}` : ""}中`
 	} : {
 		tone: "live",
 		text: "处理中"
 	};
 }
-function H2(e, t) {
+function t3(e, t) {
 	return [...e.segments.map((e) => ({
 		at: e.start,
 		kind: "phase",
@@ -56334,7 +57545,7 @@ function H2(e, t) {
 		text: t?.[e.index] ?? (t ? "（未能读取）" : "读取中…")
 	}))].sort((e, t) => e.at - t.at || (e.kind === "note") - (t.kind === "note"));
 }
-function U2(e, t, n = /* @__PURE__ */ new Map()) {
+function n3(e, t, n = /* @__PURE__ */ new Map()) {
 	let r = t / 1e3, i = [];
 	for (let t of e.executions) {
 		if ((t.queued_at || t.dispatched_at || Infinity) > r) continue;
@@ -56368,7 +57579,7 @@ function U2(e, t, n = /* @__PURE__ */ new Map()) {
 		executions: i
 	};
 }
-function W2(e, t, n) {
+function r3(e, t, n) {
 	let r = e.filter((e) => e.at >= t && e.at <= n);
 	if (r.length) return {
 		notes: r,
@@ -56380,13 +57591,13 @@ function W2(e, t, n) {
 		earlier: !!i
 	};
 }
-function G2(e, t) {
+function i3(e, t) {
 	let n = e.executions.map((n) => ({
 		key: `${n.source}:${n.id}`,
 		parent: n.parent_id ? `free:${n.parent_id}` : "",
 		item: n,
 		truncated: n.segments.length >= e.segment_limit,
-		...z2(n, t)
+		...Q4(n, t)
 	})), r = new Map(n.map((e) => [e.key, e])), i = (e) => {
 		let t = r.get(e.parent);
 		for (let n = /* @__PURE__ */ new Set([e.key]); t?.item.member === e.item.member && !n.has(t.key); t = r.get(t.parent)) n.add(t.key);
@@ -56415,18 +57626,18 @@ function G2(e, t) {
 	});
 	return o;
 }
-function K2(e, t) {
+function a3(e, t) {
 	if (e.source === "discussion") return `run:${e.run_id || e.id}`;
 	let n = e;
 	for (let r = /* @__PURE__ */ new Set([e.id]); n.parent_id && t.has(n.parent_id) && !r.has(n.parent_id); n = t.get(n.parent_id)) r.add(n.parent_id);
 	return n.task_id ? `task:${n.task_id}` : `exec:${n.id}`;
 }
-function q2(e, t) {
+function o3(e, t) {
 	let n = new Map(e.executions.filter((e) => e.source === "free").map((e) => [e.id, e])), r = /* @__PURE__ */ new Map(), i = /* @__PURE__ */ new Map();
 	for (let a of e.executions) {
-		let e = K2(a, n);
+		let e = a3(a, n);
 		i.set(`${a.source}:${a.id}`, e);
-		let o = z2(a, t), s = r.get(e) || {
+		let o = Q4(a, t), s = r.get(e) || {
 			key: e,
 			source: a.source,
 			start: o.start,
@@ -56444,7 +57655,7 @@ function q2(e, t) {
 		of: i
 	};
 }
-function J2(e, t) {
+function s3(e, t) {
 	let n = new Map(e.map((e, t) => [e.key, t])), r = /* @__PURE__ */ new Map(), i = (e, t) => {
 		r.has(e) || r.set(e, []), r.get(e).push(t);
 	};
@@ -56470,7 +57681,7 @@ function J2(e, t) {
 		});
 	}), r;
 }
-var Y2 = [
+var c3 = [
 	5,
 	6,
 	7,
@@ -56527,8 +57738,8 @@ var Y2 = [
 	64800,
 	72e3,
 	86400
-].map((e) => e * 1e3), X2 = .75;
-function Z2(e, t = !1) {
+].map((e) => e * 1e3), l3 = .75;
+function u3(e, t = !1) {
 	let n = e.map((e) => [e.start, e.end]).sort((e, t) => e[0] - t[0]);
 	if (!n.length) return {
 		start: 0,
@@ -56544,8 +57755,8 @@ function Z2(e, t = !1) {
 		n && e <= n[1] + 3e5 ? n[1] = Math.max(n[1], t) : r.push([e, t]);
 	}
 	let i = r.reduce((e, [t, n]) => e + (n - t), 0), a = i;
-	t && i && (a = Y2.find((e) => e >= i / X2) ?? Math.ceil(i / X2), r.at(-1)[1] += a - i);
-	let o = Math.min(L2, .5 / Math.max(1, r.length - 1)), s = a ? (1 - o * (r.length - 1)) / a : 0, c = [], l = 0;
+	t && i && (a = c3.find((e) => e >= i / l3) ?? Math.ceil(i / l3), r.at(-1)[1] += a - i);
+	let o = Math.min(X4, .5 / Math.max(1, r.length - 1)), s = a ? (1 - o * (r.length - 1)) / a : 0, c = [], l = 0;
 	return r.forEach(([e, t], n) => {
 		if (n) {
 			let t = r[n - 1][1];
@@ -56588,7 +57799,7 @@ function Z2(e, t = !1) {
 		}))
 	};
 }
-var Q2 = [
+var d3 = [
 	1,
 	2,
 	5,
@@ -56607,14 +57818,14 @@ var Q2 = [
 	21600,
 	43200,
 	86400
-].map((e) => e * 1e3), $2 = .12;
-function e4(e, t = 6, n = {
+].map((e) => e * 1e3), f3 = .12;
+function p3(e, t = 6, n = {
 	from: 0,
 	span: 1
 }) {
 	let r = (e.total_ms ?? e.busy_ms) * n.span;
 	if (!r) return [];
-	let i = Q2.find((e) => r / e <= t) ?? Q2.at(-1), a = $2 * n.span, o = [];
+	let i = d3.find((e) => r / e <= t) ?? d3.at(-1), a = f3 * n.span, o = [];
 	for (let t of e.spans) if (!(t.from + t.width < n.from || t.from > n.from + n.span)) for (let r = Math.ceil(t.start / i) * i; r <= t.end; r += i) {
 		let t = e.x(r);
 		t < n.from || t > n.from + n.span || (!o.length || t - o.at(-1).x >= a) && o.push({
@@ -56627,8 +57838,8 @@ function e4(e, t = 6, n = {
 		seconds: i < 6e4
 	}));
 }
-var t4 = .01, n4 = 2e3;
-function r4(e, t) {
+var m3 = .01, h3 = 2e3;
+function g3(e, t) {
 	let n = (e) => (e - t.from) / t.span;
 	return {
 		...e,
@@ -56645,20 +57856,20 @@ function r4(e, t) {
 		}))
 	};
 }
-function i4(e, t, n, r = 0) {
-	let i = Math.max(t4, r ? n4 / r : 0), a = Math.min(1, Math.max(i, e.span * n)), o = e.from + t * e.span;
+function _3(e, t, n, r = 0) {
+	let i = Math.max(m3, r ? h3 / r : 0), a = Math.min(1, Math.max(i, e.span * n)), o = e.from + t * e.span;
 	return {
 		from: Math.min(1 - a, Math.max(0, o - t * a)),
 		span: a
 	};
 }
-function a4(e, t) {
+function v3(e, t) {
 	return {
 		from: Math.min(1 - e.span, Math.max(0, e.from + t * e.span)),
 		span: e.span
 	};
 }
-function o4(e, t = Date.now()) {
+function y3(e, t = Date.now()) {
 	let n = null;
 	for (let t of e) for (let e of t.segments) (!n || e.seen - e.start > n.end - n.start) && (n = {
 		...e,
@@ -56670,7 +57881,7 @@ function o4(e, t = Date.now()) {
 		executions: e.length,
 		running: e.filter((e) => e.item.state === "running").length,
 		failed: e.filter((e) => e.item.state === "failed").length,
-		stalled: e.filter((e) => e.item.state === "running" && V2(e, t).tone === "warn").length,
+		stalled: e.filter((e) => e.item.state === "running" && e3(e, t).tone === "warn").length,
 		tool_segments: e.reduce((e, t) => e + t.segments.filter((e) => [
 			"command",
 			"tool",
@@ -56679,40 +57890,40 @@ function o4(e, t = Date.now()) {
 		slowest: n
 	};
 }
-var s4 = {
+var b3 = {
 	pending: "待投递",
 	delivering: "投递中",
 	completed: "已完成",
 	cancelled: "已取消",
 	failed: "失败"
-}, c4 = {
+}, x3 = {
 	dispatched: "已派出",
 	started: "已开始",
 	completed: "已完成",
 	cancelled: "已作废",
 	failed: "失败"
-}, l4 = {
+}, S3 = {
 	route: "接收",
 	ask: "派活",
 	handoff: "交还主持人"
-}, u4 = {
+}, C3 = {
 	user: "用户",
 	host: "主持人"
-}, d4 = {
+}, w3 = {
 	user_stop: "用户停止",
 	member_away: "成员暂离",
 	member_removed: "成员移除",
 	rerouted: "改派",
 	no_reply: "未回复",
 	archived: "房间归档"
-}, f4 = {
+}, T3 = {
 	active: "在场",
 	away: "暂离",
 	removed: "移除"
-}, p4 = {
+}, E3 = {
 	host: "主持人",
 	member: "成员"
-}, m4 = {
+}, D3 = {
 	api: "输入",
 	message: "消息",
 	request: "请求",
@@ -56724,26 +57935,26 @@ var s4 = {
 	member: "房间",
 	discussion: "房间",
 	room: "房间"
-}, h4 = /* @__PURE__ */ new Set(["dispatched", "started"]), g4 = /* @__PURE__ */ new Set(["pending", "delivering"]), _4 = [
+}, O3 = /* @__PURE__ */ new Set(["dispatched", "started"]), k3 = /* @__PURE__ */ new Set(["pending", "delivering"]), A3 = [
 	["Mozilla", "网页"],
 	["node", "本机服务"],
 	["AI-CoDiscuss-CLI", "CLI"],
 	["Python", "脚本"]
-], v4 = {
+], j3 = {
 	executions: "execution",
 	requests: "request",
 	messages: "message"
 };
-function y4(e) {
+function M3(e) {
 	try {
 		return JSON.parse(e.payload || "{}");
 	} catch {
 		return {};
 	}
 }
-function b4(e) {
+function N3(e) {
 	let t = e.kind.startsWith("api.") ? {
-		...y4(e.data),
+		...M3(e.data),
 		...e.data
 	} : e.data, n = [];
 	t.request_id && n.push(`request:${t.request_id}`), t.execution_id && n.push(`execution:${t.execution_id}`);
@@ -56754,28 +57965,28 @@ function b4(e) {
 		"reply_to",
 		"after_message_id"
 	]) t[e] && n.push(`message:${t[e]}`);
-	for (let [, e, r] of String(t.path || "").matchAll(/\/(executions|requests|messages)\/(\d+)/g)) n.push(`${v4[e]}:${r}`);
+	for (let [, e, r] of String(t.path || "").matchAll(/\/(executions|requests|messages)\/(\d+)/g)) n.push(`${j3[e]}:${r}`);
 	return [...new Set(n)];
 }
-function x4(e) {
-	let t = e.data, n = y4(t), r = t.actor === "owner" ? "房主" : t.actor?.startsWith("member:") ? t.actor.slice(7) : t.actor === "none" ? "无凭据" : "未知凭据", i = _4.find(([e]) => (t.client || "").startsWith(e))?.[1] || t.client || "未知客户端", a = n.action ? ` ${n.action}` : "", o = typeof n.text == "string" ? `：${n.text}` : "", s = e.kind === "api.rejected" ? ` → 被拒 ${t.status}：${t.error}` : "";
+function P3(e) {
+	let t = e.data, n = M3(t), r = t.actor === "owner" ? "房主" : t.actor?.startsWith("member:") ? t.actor.slice(7) : t.actor === "none" ? "无凭据" : "未知凭据", i = A3.find(([e]) => (t.client || "").startsWith(e))?.[1] || t.client || "未知客户端", a = n.action ? ` ${n.action}` : "", o = typeof n.text == "string" ? `：${n.text}` : "", s = e.kind === "api.rejected" ? ` → 被拒 ${t.status}：${t.error}` : "";
 	return `${r}（${i}${t.bridged ? "·中转" : ""}）POST ${t.path}${a}${s}${o}`;
 }
-function S4(e, t) {
+function F3(e, t) {
 	let n = e.data, r = t(n.member_id), i = (e, t) => e[t] || t;
 	switch (e.kind) {
 		case "api.write":
-		case "api.rejected": return x4(e);
+		case "api.rejected": return P3(e);
 		case "message.posted": return `${n.author} 发言 #${n.message_id}${n.reply_to ? `（回复 #${n.reply_to}）` : ""}：${n.text}`;
 		case "message.withdrawn": return `#${n.message_id} ${n.kind === "rewound" ? "被回退" : "被撤回"}`;
 		case "room.rewound": return `回退到 #${n.message_id}`;
-		case "member.joined": return `${r} 加入（${i(p4, n.role)} · ${n.adapter || "未知软件"}）`;
-		case "member.changed": return `${r}：${n.from_role === n.role ? `${i(f4, n.from_status)} → ${i(f4, n.status)}` : `${i(p4, n.from_role)} → ${i(p4, n.role)}`}`;
-		case "request.created": return `请求 R${n.request_id} → ${r} · ${i(l4, n.purpose)} · 挂在 #${n.message_id} · 由${i(u4, n.created_by)}创建${n.batch_id ? ` · 批次 #${n.batch_id}` : ""}`;
-		case "request.changed": return `请求 R${n.request_id}（${r}）${n.from_status === n.status ? "更新" : `${i(s4, n.from_status)} → ${i(s4, n.status)}`}${n.execution_id ? ` · 执行 E${n.execution_id}` : ""}${n.answer_id ? ` · 回答 #${n.answer_id}` : ""}`;
-		case "request.cancel_reason": return `请求 R${n.request_id}（${r}）取消原因：${i(d4, n.reason)}`;
-		case "execution.created": return `执行 E${n.execution_id}（${r}）${i(c4, n.status)}`;
-		case "execution.changed": return `执行 E${n.execution_id}（${r}）${i(c4, n.from_status)} → ${i(c4, n.status)}${n.result ? `：${n.result}` : ""}`;
+		case "member.joined": return `${r} 加入（${i(E3, n.role)} · ${n.adapter || "未知软件"}）`;
+		case "member.changed": return `${r}：${n.from_role === n.role ? `${i(T3, n.from_status)} → ${i(T3, n.status)}` : `${i(E3, n.from_role)} → ${i(E3, n.role)}`}`;
+		case "request.created": return `请求 R${n.request_id} → ${r} · ${i(S3, n.purpose)} · 挂在 #${n.message_id} · 由${i(C3, n.created_by)}创建${n.batch_id ? ` · 批次 #${n.batch_id}` : ""}`;
+		case "request.changed": return `请求 R${n.request_id}（${r}）${n.from_status === n.status ? "更新" : `${i(b3, n.from_status)} → ${i(b3, n.status)}`}${n.execution_id ? ` · 执行 E${n.execution_id}` : ""}${n.answer_id ? ` · 回答 #${n.answer_id}` : ""}`;
+		case "request.cancel_reason": return `请求 R${n.request_id}（${r}）取消原因：${i(w3, n.reason)}`;
+		case "execution.created": return `执行 E${n.execution_id}（${r}）${i(x3, n.status)}`;
+		case "execution.changed": return `执行 E${n.execution_id}（${r}）${i(x3, n.from_status)} → ${i(x3, n.status)}${n.result ? `：${n.result}` : ""}`;
 		case "execution.retry": return n.stopped ? `执行 E${n.execution_id} 停止自动重试` : `执行 E${n.execution_id} 第 ${n.attempt} 次重试${n.reason ? `：${n.reason}` : ""}`;
 		case "execution.late_answer": return `执行 E${n.execution_id} 作废后迟到的回答：${n.text}`;
 		case "batch.opened": return `批次 #${n.batch_id} 开启（${t(n.host_id)} 派出，链 #${n.chain_id}）`;
@@ -56792,20 +58003,20 @@ function S4(e, t) {
 		default: return JSON.stringify(n);
 	}
 }
-function C4(e, t) {
+function I3(e, t) {
 	let n = /* @__PURE__ */ new Map(), r = /* @__PURE__ */ new Map(), i = /* @__PURE__ */ new Map(), a = /* @__PURE__ */ new Map();
 	for (let o of e.slice(0, t + 1)) {
 		let e = o.data;
 		o.kind === "request.created" ? n.set(e.request_id, {
 			...e,
 			at: o.at
-		}) : o.kind === "request.changed" && n.has(e.request_id) ? g4.has(e.status) ? n.set(e.request_id, {
+		}) : o.kind === "request.changed" && n.has(e.request_id) ? k3.has(e.status) ? n.set(e.request_id, {
 			...n.get(e.request_id),
 			...e
 		}) : n.delete(e.request_id) : o.kind === "execution.created" ? r.set(e.execution_id, {
 			...e,
 			at: o.at
-		}) : o.kind === "execution.changed" && r.has(e.execution_id) ? h4.has(e.status) ? r.set(e.execution_id, {
+		}) : o.kind === "execution.changed" && r.has(e.execution_id) ? O3.has(e.status) ? r.set(e.execution_id, {
 			...r.get(e.execution_id),
 			...e
 		}) : r.delete(e.execution_id) : o.kind === "queue.added" ? i.set(e.queue_id, e) : o.kind === "queue.removed" ? i.delete(e.queue_id) : o.kind === "chain.held" ? a.set(e.chain_id, e) : o.kind === "chain.released" && a.delete(e.chain_id);
@@ -56819,116 +58030,116 @@ function C4(e, t) {
 }
 //#endregion
 //#region frontend/ExecutionTimeline.vue
-var w4 = {
+var L3 = {
 	class: "merged-section execution-timeline",
 	"aria-label": "执行时间线"
-}, T4 = {
+}, R3 = {
 	key: 0,
 	role: "alert",
 	class: "fine-print wf-error"
-}, E4 = {
+}, z3 = {
 	key: 1,
 	class: "fine-print"
-}, D4 = { class: "wf-head" }, O4 = {
+}, B3 = { class: "wf-head" }, V3 = {
 	key: 0,
 	class: "wf-state is-replay"
-}, k4 = {
+}, H3 = {
 	key: 2,
 	class: "wf-headline"
-}, A4 = { class: "wf-summary" }, j4 = ["title"], M4 = ["title"], N4 = { title: "连续调用同一工具合并为一段" }, P4 = {
+}, U3 = { class: "wf-summary" }, W3 = ["title"], G3 = ["title"], K3 = { title: "连续调用同一工具合并为一段" }, q3 = {
 	class: "wf-legend",
 	"aria-label": "图例"
-}, F4 = {
+}, J3 = {
 	key: 0,
 	class: "wf-legend-note"
-}, I4 = {
+}, Y3 = {
 	key: 1,
 	class: "wf-legend-note"
-}, L4 = { class: "wf-axis-label" }, R4 = {
+}, X3 = { class: "wf-axis-label" }, Z3 = {
 	key: 0,
 	class: "wf-zoom"
-}, z4 = {
+}, Q3 = {
 	key: 1,
 	class: "wf-zoom-hint",
 	title: "Ctrl + 滚轮缩放；放大后按住中键或拖动时间轴平移，双击时间线还原"
-}, B4 = {
+}, $3 = {
 	key: 2,
 	class: "wf-branch"
-}, V4 = ["title"], H4 = {
+}, e6 = ["title"], t6 = {
 	key: 0,
 	class: "wf-guides",
 	"aria-hidden": "true"
-}, U4 = [
+}, n6 = [
 	"aria-expanded",
 	"aria-label",
 	"onClick"
-], W4 = {
+], r6 = {
 	key: 2,
 	class: "wf-toggle-space"
-}, G4 = [
+}, i6 = [
 	"aria-expanded",
 	"onClick",
 	"onMouseenter",
 	"onMouseleave"
-], K4 = { class: "wf-name-line" }, q4 = {
+], a6 = { class: "wf-name-line" }, o6 = {
 	key: 0,
 	class: "wf-spinner",
 	"aria-hidden": "true"
-}, J4 = {
+}, s6 = {
 	key: 1,
 	class: "wf-pill is-slowest"
-}, Y4 = {
+}, c6 = {
 	key: 0,
 	class: "wf-live-dot",
 	"aria-hidden": "true"
-}, X4 = ["aria-label", "onMouseleave"], Z4 = { class: "wf-track" }, Q4 = ["data-tone"], $4 = ["onMouseenter", "onClick"], e3 = ["onMouseenter", "onClick"], t3 = [
+}, l6 = ["aria-label", "onMouseleave"], u6 = { class: "wf-track" }, d6 = ["data-tone"], f6 = ["onMouseenter", "onClick"], p6 = ["onMouseenter", "onClick"], m6 = [
 	"data-tone",
 	"onMouseenter",
 	"onClick"
-], n3 = [
+], h6 = [
 	"data-tone",
 	"onMouseenter",
 	"onClick"
-], r3 = [
+], g6 = [
 	"data-tone",
 	"onMouseenter",
 	"onClick"
-], i3 = [
+], _6 = [
 	"aria-label",
 	"onMouseenter",
 	"onClick",
 	"onFocus",
 	"onBlur"
-], a3 = { class: "wf-end" }, o3 = { key: 1 }, s3 = ["aria-label"], c3 = { class: "wf-detail-head" }, l3 = { key: 0 }, u3 = { key: 1 }, d3 = { class: "is-failed" }, f3 = { key: 2 }, p3 = { key: 3 }, m3 = {
+], v6 = { class: "wf-end" }, y6 = { key: 1 }, b6 = ["aria-label"], x6 = { class: "wf-detail-head" }, S6 = { key: 0 }, C6 = { key: 1 }, w6 = { class: "is-failed" }, T6 = { key: 2 }, E6 = { key: 3 }, D6 = {
 	key: 0,
 	class: "wf-log",
 	"aria-label": "过程"
-}, h3 = ["data-tone"], g3 = {
+}, O6 = ["data-tone"], k6 = {
 	key: 1,
 	class: "wf-log-note"
-}, _3 = {
+}, A6 = {
 	key: 1,
 	class: "fine-print"
-}, v3 = {
+}, j6 = {
 	key: 1,
 	class: "wf-player"
-}, y3 = {
+}, M6 = {
 	key: 2,
 	class: "wf-player"
-}, b3 = ["aria-label"], x3 = ["disabled"], S3 = ["max", "value"], C3 = { class: "wf-player-time" }, w3 = {
+}, N6 = ["aria-label"], P6 = ["disabled"], F6 = ["max", "value"], I6 = { class: "wf-player-time" }, L6 = {
 	key: 3,
 	class: "wf-foot"
-}, T3 = { key: 0 }, E3 = { key: 1 }, D3 = ["role"], O3 = {
+}, R6 = { key: 0 }, z6 = { key: 1 }, B6 = ["role"], V6 = {
 	key: 1,
 	class: "wf-card-text"
-}, k3 = {
+}, H6 = {
 	key: 2,
 	class: "wf-card-reason"
-}, A3 = { class: "wf-card-label" }, j3 = 2e3, M3 = 6e4, N3 = 100, P3 = 60, F3 = 2e4, I3 = 600, L3 = 5, R3 = 16, z3 = 90, B3 = 2, V3 = 8, H3 = 560, U3 = .0015, W3 = "latest", G3 = "all", K3 = 22, q3 = 5, J3 = 52, Y3 = /*#__PURE__*/ TH({
+}, U6 = { class: "wf-card-label" }, W6 = 2e3, G6 = 6e4, K6 = 100, q6 = 60, J6 = 2e4, Y6 = 600, X6 = 5, Z6 = 16, Q6 = 90, $6 = 2, e8 = 8, t8 = 560, n8 = .0015, r8 = "latest", i8 = "all", a8 = 22, o8 = 5, s8 = 52, c8 = /*#__PURE__*/ TH({
 	__name: "ExecutionTimeline",
 	emits: ["detail"],
 	setup(e, { emit: t }) {
-		let n = t, { view: r, bridge: i } = xr("discussion"), a = B2 / 6e4, o = [
+		let n = t, { view: r, bridge: i } = xr("discussion"), a = $4 / 6e4, o = [
 			1,
 			2,
 			4,
@@ -56944,7 +58155,7 @@ var w4 = {
 			let t = d.value;
 			if (!t || w) return;
 			w = !0;
-			let n = e || !S || Date.now() - C >= M3 ? 0 : S - L3;
+			let n = e || !S || Date.now() - C >= G6 ? 0 : S - X6;
 			try {
 				let e = await i.request(`/api/rooms/${t}/timeline${n ? `?after=${n}` : ""}`);
 				if (t !== d.value) return;
@@ -56967,7 +58178,7 @@ var w4 = {
 		R(Z(() => ne.value?.executions.some((e) => e.state === "running")), (e) => {
 			clearInterval(T), e && (T = setInterval(() => {
 				document.hidden || te();
-			}, j3));
+			}, W6));
 		}, { immediate: !0 }), R(d, () => {
 			f.value = /* @__PURE__ */ new Map(), p.value = null, g.value = /* @__PURE__ */ new Set(), _.value = /* @__PURE__ */ new Map(), v.value = null, y.value = "", S = 0, te(!0);
 		}, { immediate: !0 }), R(() => r.value.room, (e, t) => {
@@ -56982,7 +58193,7 @@ var w4 = {
 			};
 		}
 		function ae(e) {
-			c.value && e.target.closest?.(".wf-track, .wf-axis") && (e.ctrlKey || e.metaKey ? (e.preventDefault(), Oe.value = i4(Oe.value, ie(e).share, Math.exp(e.deltaY * U3), Ee.value.total_ms)) : ke.value && (e.shiftKey || Math.abs(e.deltaX) > Math.abs(e.deltaY)) && (e.preventDefault(), Oe.value = a4(Oe.value, (e.shiftKey ? e.deltaY : e.deltaX) / ie(e).width)));
+			c.value && e.target.closest?.(".wf-track, .wf-axis") && (e.ctrlKey || e.metaKey ? (e.preventDefault(), Oe.value = _3(Oe.value, ie(e).share, Math.exp(e.deltaY * n8), Ee.value.total_ms)) : ke.value && (e.shiftKey || Math.abs(e.deltaX) > Math.abs(e.deltaY)) && (e.preventDefault(), Oe.value = v3(Oe.value, (e.shiftKey ? e.deltaY : e.deltaX) / ie(e).width)));
 		}
 		function A(e) {
 			let t = e.target.closest?.(".wf-axis");
@@ -56993,7 +58204,7 @@ var w4 = {
 			}, e.currentTarget.setPointerCapture(e.pointerId));
 		}
 		function oe(e) {
-			re && (Oe.value = a4({
+			re && (Oe.value = v3({
 				from: re.from,
 				span: Oe.value.span
 			}, -(e.clientX - re.x) / re.width));
@@ -57022,15 +58233,15 @@ var w4 = {
 		}), ta(() => {
 			clearInterval(T), cancelAnimationFrame(ee), document.removeEventListener("pointerdown", ue), document.removeEventListener("keydown", de), u?.disconnect();
 		});
-		let j = /* @__PURE__ */ F(W3), pe = Z(() => ne.value ? q2(ne.value, h.value) : {
+		let j = /* @__PURE__ */ F(r8), pe = Z(() => ne.value ? o3(ne.value, h.value) : {
 			list: [],
 			of: /* @__PURE__ */ new Map()
-		}), me = Z(() => j.value === W3 ? pe.value.list[0]?.key : j.value === G3 || pe.value.list.some((e) => e.key === j.value) ? j.value : pe.value.list[0]?.key), he = Z(() => !ne.value || me.value === G3 ? ne.value : {
+		}), me = Z(() => j.value === r8 ? pe.value.list[0]?.key : j.value === i8 || pe.value.list.some((e) => e.key === j.value) ? j.value : pe.value.list[0]?.key), he = Z(() => !ne.value || me.value === i8 ? ne.value : {
 			...ne.value,
 			executions: ne.value.executions.filter((e) => pe.value.of.get(`${e.source}:${e.id}`) === me.value)
 		});
 		R(d, () => {
-			j.value = W3;
+			j.value = r8;
 		});
 		let ge = (e) => new Date(e).toLocaleString("zh-CN", {
 			month: "numeric",
@@ -57040,13 +58251,13 @@ var w4 = {
 			hour12: !1
 		});
 		function N(e) {
-			let t = e.task ? `${e.task.replace(/\s+/g, " ").slice(0, K3)}${e.task.length > K3 ? "…" : ""}` : "执行";
+			let t = e.task ? `${e.task.replace(/\s+/g, " ").slice(0, a8)}${e.task.length > a8 ? "…" : ""}` : "执行";
 			return `${ge(e.start)} · ${t} · ${e.count} 次${e.running ? " · 进行中" : e.failed ? " · 有失败" : ""}`;
 		}
 		let _e = Z(() => [
 			{
 				label: "最近一轮（自动跟随）",
-				value: W3
+				value: r8
 			},
 			...pe.value.list.map((e) => ({
 				label: N(e),
@@ -57054,9 +58265,9 @@ var w4 = {
 			})),
 			{
 				label: "全部执行",
-				value: G3
+				value: i8
 			}
-		]), ve = Z(() => he.value ? G2(he.value, h.value) : []), ye = Z(() => ve.value.some((e) => e.item.state === "running")), be = Z(() => {
+		]), ve = Z(() => he.value ? i3(he.value, h.value) : []), ye = Z(() => ve.value.some((e) => e.item.state === "running")), be = Z(() => {
 			let e = Math.min(...ve.value.map((e) => e.start)), t = Math.max(...ve.value.map((e) => e.end));
 			return Number.isFinite(e) ? {
 				start: e,
@@ -57067,17 +58278,17 @@ var w4 = {
 				end: 0,
 				duration: 0
 			};
-		}), xe = Z(() => O.position !== null && !ye.value), Se = Z(() => xe.value ? be.value.start + O.position : h.value), Ce = Z(() => xe.value ? G2(U2(he.value, Se.value, _.value), Se.value) : ve.value), we = Z(() => Ce.value.filter((e) => !e.ancestors.some((e) => g.value.has(e)))), Te = Z(() => Ce.value.some((e) => e.item.state === "running")), Ee = Z(() => Z2(Ce.value, Te.value)), De = {
+		}), xe = Z(() => O.position !== null && !ye.value), Se = Z(() => xe.value ? be.value.start + O.position : h.value), Ce = Z(() => xe.value ? i3(n3(he.value, Se.value, _.value), Se.value) : ve.value), we = Z(() => Ce.value.filter((e) => !e.ancestors.some((e) => g.value.has(e)))), Te = Z(() => Ce.value.some((e) => e.item.state === "running")), Ee = Z(() => u3(Ce.value, Te.value)), De = {
 			from: 0,
 			span: 1
 		}, Oe = /* @__PURE__ */ F(De), ke = Z(() => Oe.value.span < 1);
 		R([me, d], () => {
 			Oe.value = De;
 		});
-		let Ae = Z(() => r4(Ee.value, Oe.value)), je = Z(() => {
+		let Ae = Z(() => g3(Ee.value, Oe.value)), je = Z(() => {
 			let e = Te.value ? Ae.value.x(Se.value) : null;
 			return e === null || e < 0 || e > 1 ? null : e;
-		}), Me = Z(() => Math.max(1, be.value.duration / F3)), Ne = Z(() => [{
+		}), Me = Z(() => Math.max(1, be.value.duration / J6)), Ne = Z(() => [{
 			label: `自动 · ${Math.round(Me.value)}×`,
 			value: 0
 		}, ...o.map((e) => ({
@@ -57087,7 +58298,7 @@ var w4 = {
 		function Fe(e) {
 			let t = E ? Math.min(e - E, 250) : 0;
 			E = e;
-			let n = Ce.value.length <= P3 || e - D >= N3;
+			let n = Ce.value.length <= q6 || e - D >= K6;
 			O.playing && (k += t * Pe.value, k >= be.value.duration ? Object.assign(O, {
 				position: null,
 				playing: !1
@@ -57140,15 +58351,15 @@ var w4 = {
 			let t = e.filter((e) => !He.has(e));
 			t.forEach((e) => He.add(e)), t.length && (Ve.value = /* @__PURE__ */ new Set([...Ve.value, ...t]), setTimeout(() => {
 				Ve.value = new Set([...Ve.value].filter((e) => !t.includes(e)));
-			}, I3));
+			}, Y6));
 		}), R([me, d], () => {
 			He = null;
 		});
-		let We = Z(() => J2(we.value, Ae.value)), Ge = Z(() => e4(Ee.value, Math.min(V3, Math.max(B3, Math.round((l.value || 540) / z3))), Oe.value).map((e) => ({
+		let We = Z(() => s3(we.value, Ae.value)), Ge = Z(() => p3(Ee.value, Math.min(e8, Math.max($6, Math.round((l.value || 540) / Q6))), Oe.value).map((e) => ({
 			...e,
 			x: (e.x - Oe.value.from) / Oe.value.span
-		}))), Ke = Z(() => o4(Ce.value, Se.value)), qe = Z(() => Ce.value.filter((e) => e.has_children).map((e) => e.key)), Je = Z(() => Ce.value.find((e) => e.key === y.value)), Ye = Z(() => Je.value ? H2(Je.value, _.value.get(Je.value.item.id)) : []), Xe = Z(() => {
-			let e = Ce.value, t = new Set(e.flatMap((e) => e.segments.map((e) => P2[e.phase])));
+		}))), Ke = Z(() => y3(Ce.value, Se.value)), qe = Z(() => Ce.value.filter((e) => e.has_children).map((e) => e.key)), Je = Z(() => Ce.value.find((e) => e.key === y.value)), Ye = Z(() => Je.value ? t3(Je.value, _.value.get(Je.value.item.id)) : []), Xe = Z(() => {
+			let e = Ce.value, t = new Set(e.flatMap((e) => e.segments.map((e) => q4[e.phase])));
 			return [
 				...e.some((e) => e.queue[1] > e.queue[0]) ? [["queue", "排队"]] : [],
 				...e.some((e) => e.wake) ? [["wake", "唤醒"]] : [],
@@ -57161,10 +58372,10 @@ var w4 = {
 			];
 		}), Ze = Z(() => Ce.value.length > 0 && Ce.value.every((e) => !e.segments.length)), Qe = Z(() => {
 			let e = /* @__PURE__ */ new Map();
-			for (let t of [...Ce.value].sort((e, t) => e.start - t.start)) e.has(t.item.member) || e.set(t.item.member, e.size % q3 + 1);
+			for (let t of [...Ce.value].sort((e, t) => e.start - t.start)) e.has(t.item.member) || e.set(t.item.member, e.size % o8 + 1);
 			return e;
 		}), $e = Z(() => {
-			let e = J3 / (l.value || 800), t = [];
+			let e = s8 / (l.value || 800), t = [];
 			for (let n of Ae.value.folds) {
 				let r = n.from + n.width / 2;
 				r < 0 || r > 1 || (!t.length || r - t.at(-1).middle >= e) && t.push({
@@ -57174,12 +58385,12 @@ var w4 = {
 			}
 			return t;
 		}), et = Z(() => {
-			let e = J3 / (l.value || 800);
+			let e = s8 / (l.value || 800);
 			return Ge.value.filter((t) => !$e.value.some((n) => Math.abs(t.x - n.middle) < e));
 		});
 		function tt(e, t) {
 			if (y.value = y.value === e.key ? "" : e.key, !y.value) return;
-			let n = t.currentTarget.getBoundingClientRect(), r = x.value.getBoundingClientRect(), i = Math.min(H3, r.width - 16);
+			let n = t.currentTarget.getBoundingClientRect(), r = x.value.getBoundingClientRect(), i = Math.min(t8, r.width - 16);
 			b.value = {
 				top: n.bottom - r.top + 4,
 				left: Math.max(8, Math.min(n.left - r.left, r.width - i - 8))
@@ -57205,15 +58416,15 @@ var w4 = {
 		function at(e) {
 			return e.item.role === "host" ? ["主持"] : [];
 		}
-		let ot = (e) => V2(e, Se.value);
+		let ot = (e) => e3(e, Se.value);
 		function st(e) {
 			let t = [
 				i.display_name(e.item.member),
 				it(e),
-				F2[e.item.state],
-				`用时 ${R2(e.end - e.start)}`
+				J4[e.item.state],
+				`用时 ${Z4(e.end - e.start)}`
 			];
-			return e.wake && t.push(`唤醒 ${R2(e.wake[1] - e.wake[0])}${e.wake_approx ? "（约）" : ""}`), !e.segments.length && e.work && t.push("无阶段明细"), e.notes.length && t.push(`${e.notes.length} 段过程说明`), t.join("，");
+			return e.wake && t.push(`唤醒 ${Z4(e.wake[1] - e.wake[0])}${e.wake_approx ? "（约）" : ""}`), !e.segments.length && e.work && t.push("无阶段明细"), e.notes.length && t.push(`${e.notes.length} 段过程说明`), t.join("，");
 		}
 		async function ct(e) {
 			let t = e.item.id;
@@ -57237,7 +58448,7 @@ var w4 = {
 			let i = e.currentTarget.getBoundingClientRect(), a = n.note ? {
 				notes: [n.note],
 				earlier: !1
-			} : W2(t.notes, n.start, n.end), o = Math.min(360, window.innerWidth - 16), s = i.bottom + 6, c = s + 160 > window.innerHeight && i.top > 200 ? Math.max(8, i.top - 6 - 200) : s;
+			} : r3(t.notes, n.start, n.end), o = Math.min(360, window.innerWidth - 16), s = i.bottom + 6, c = s + 160 > window.innerHeight && i.top > 200 ? Math.max(8, i.top - 6 - 200) : s;
 			v.value = {
 				key: t.key,
 				id: ft(t, n),
@@ -57261,7 +58472,7 @@ var w4 = {
 		}
 		let gt = Z(() => {
 			let e = v.value?.piece;
-			return e ? e.note ? `过程说明 · ${lt(e.note.at)}` : `${e.kind === "segment" ? `${N2[e.phase]}${e.tool ? ` · ${e.tool}` : ""}` : e.label} · ${R2(e.end - e.start)}${e.live ? " · 进行中" : ""}` : "";
+			return e ? e.note ? `过程说明 · ${lt(e.note.at)}` : `${e.kind === "segment" ? `${K4[e.phase]}${e.tool ? ` · ${e.tool}` : ""}` : e.label} · ${Z4(e.end - e.start)}${e.live ? " · 进行中" : ""}` : "";
 		}), _t = Z(() => {
 			if (!v.value) return [];
 			let e = _.value.get(v.value.row.item.id);
@@ -57272,17 +58483,17 @@ var w4 = {
 		});
 		return (e, t) => {
 			let r = XV, o = sA, s = pA;
-			return U(), W("section", w4, [
+			return U(), W("section", L3, [
 				t[29] ||= K("div", { class: "page-heading" }, [K("div", null, [K("h2", null, "执行时间线"), K("p", null, "本机接入程序唤醒的每次执行；点名字看详情，悬停条形看当时的过程说明。")])], -1),
-				m.value ? (U(), W("p", T4, P(m.value), 1)) : Y("", !0),
-				ne.value && !Ce.value.length ? (U(), W("p", E4, "还没有执行记录。")) : Y("", !0),
+				m.value ? (U(), W("p", R3, P(m.value), 1)) : Y("", !0),
+				ne.value && !Ce.value.length ? (U(), W("p", z3, "还没有执行记录。")) : Y("", !0),
 				Ce.value.length ? (U(), W("div", {
 					key: 2,
 					ref_key: "wf_element",
 					ref: x,
 					class: "wf"
 				}, [
-					K("header", D4, [
+					K("header", B3, [
 						t[11] ||= K("span", { class: "wf-title" }, "执行瀑布", -1),
 						q(r, {
 							modelValue: j.value,
@@ -57302,17 +58513,17 @@ var w4 = {
 								trailingIcon: "wf-select-icon"
 							}
 						}, null, 8, ["modelValue", "items"]),
-						xe.value ? (U(), W("span", O4, "回放中 · " + P(lt(Se.value)), 1)) : (U(), W("span", {
+						xe.value ? (U(), W("span", V3, "回放中 · " + P(lt(Se.value)), 1)) : (U(), W("span", {
 							key: 1,
 							class: M(["wf-state", { "is-live": Ke.value.running }])
 						}, P(Ke.value.running ? `${Ke.value.running} 个进行中` : "均已结束"), 3)),
-						Ke.value.slowest ? (U(), W("span", k4, [
+						Ke.value.slowest ? (U(), W("span", H3, [
 							t[10] ||= J("最慢一步 ", -1),
-							K("b", null, [J(P(I(i).display_name(Ke.value.slowest.member)) + " · " + P(I(N2)[Ke.value.slowest.phase]), 1), Ke.value.slowest.tool ? (U(), W(H, { key: 0 }, [J(P(Ke.value.slowest.tool), 1)], 64)) : Y("", !0)]),
-							J(" · " + P(I(R2)(Ke.value.slowest.end - Ke.value.slowest.start)), 1)
+							K("b", null, [J(P(I(i).display_name(Ke.value.slowest.member)) + " · " + P(I(K4)[Ke.value.slowest.phase]), 1), Ke.value.slowest.tool ? (U(), W(H, { key: 0 }, [J(P(Ke.value.slowest.tool), 1)], 64)) : Y("", !0)]),
+							J(" · " + P(I(Z4)(Ke.value.slowest.end - Ke.value.slowest.start)), 1)
 						])) : Y("", !0)
 					]),
-					K("dl", A4, [
+					K("dl", U3, [
 						K("div", null, [t[12] ||= K("dt", null, "执行", -1), K("dd", null, [(U(), W("span", {
 							key: Ke.value.executions,
 							class: "wf-roll"
@@ -57328,17 +58539,17 @@ var w4 = {
 						K("div", { title: `超过 ${a} 分钟没有输出` }, [t[15] ||= K("dt", null, "可能卡住", -1), K("dd", { class: M(Ke.value.stalled ? "is-warn" : "is-zero") }, [(U(), W("span", {
 							key: Ke.value.stalled,
 							class: "wf-roll"
-						}, P(Ke.value.stalled), 1))], 2)], 8, j4),
-						K("div", { title: Ee.value.folds.length ? `已折叠 ${Ee.value.folds.length} 段超过 ${I(I2) / 6e4} 分钟的空闲` : void 0 }, [t[16] ||= K("dt", null, "有效时长", -1), K("dd", null, P(I(R2)(Ee.value.busy_ms)), 1)], 8, M4),
-						K("div", N4, [t[18] ||= K("dt", null, "工具与命令", -1), K("dd", { class: M({ "is-zero": !Ke.value.tool_segments }) }, [(U(), W("span", {
+						}, P(Ke.value.stalled), 1))], 2)], 8, W3),
+						K("div", { title: Ee.value.folds.length ? `已折叠 ${Ee.value.folds.length} 段超过 ${I(Y4) / 6e4} 分钟的空闲` : void 0 }, [t[16] ||= K("dt", null, "有效时长", -1), K("dd", null, P(I(Z4)(Ee.value.busy_ms)), 1)], 8, G3),
+						K("div", K3, [t[18] ||= K("dt", null, "工具与命令", -1), K("dd", { class: M({ "is-zero": !Ke.value.tool_segments }) }, [(U(), W("span", {
 							key: Ke.value.tool_segments,
 							class: "wf-roll"
 						}, P(Ke.value.tool_segments), 1)), t[17] ||= J(" 段", -1)], 2)])
 					]),
-					K("ul", P4, [
+					K("ul", q3, [
 						(U(!0), W(H, null, B(Xe.value, ([e, t]) => (U(), W("li", { key: e }, [K("i", { class: M(["wf-swatch", `is-${e}`]) }, null, 2), J(P(t), 1)]))), 128)),
-						Qe.value.size > 1 ? (U(), W("li", F4, "颜色区分成员，深浅区分模型与工具")) : Y("", !0),
-						Ze.value ? (U(), W("li", I4, "这些执行都没有阶段明细：发生在接入程序上报阶段之前，或来自手动接入、Codex App")) : Y("", !0)
+						Qe.value.size > 1 ? (U(), W("li", J3, "颜色区分成员，深浅区分模型与工具")) : Y("", !0),
+						Ze.value ? (U(), W("li", Y3, "这些执行都没有阶段明细：发生在接入程序上报阶段之前，或来自手动接入、Codex App")) : Y("", !0)
 					]),
 					K("div", {
 						class: M(["wf-grid", {
@@ -57346,7 +58557,7 @@ var w4 = {
 							"is-panning": I(re)
 						}]),
 						role: "list",
-						style: fe({ "--wf-depth-px": `${R3}px` }),
+						style: fe({ "--wf-depth-px": `${Z6}px` }),
 						onWheel: ae,
 						onMousedown: le,
 						onPointerdown: A,
@@ -57355,15 +58566,15 @@ var w4 = {
 						onPointercancel: se,
 						onDblclick: ce
 					}, [
-						K("div", L4, [
+						K("div", X3, [
 							K("span", null, "执行 · " + P(we.value.length) + "/" + P(Ce.value.length), 1),
-							ke.value ? (U(), W("span", R4, [J("放大 " + P((1 / Oe.value.span).toFixed(1)) + "×", 1), K("button", {
+							ke.value ? (U(), W("span", Z3, [J("放大 " + P((1 / Oe.value.span).toFixed(1)) + "×", 1), K("button", {
 								type: "button",
 								class: "wf-zoom-reset",
 								title: "双击时间线也可还原",
 								onClick: t[1] ||= (e) => Oe.value = De
-							}, [q(o, { name: "i-lucide-locate-fixed" }), J(P(ye.value ? "重置跟随" : "重置"), 1)])])) : (U(), W("span", z4, "Ctrl + 滚轮缩放")),
-							qe.value.length ? (U(), W("span", B4, [K("button", {
+							}, [q(o, { name: "i-lucide-locate-fixed" }), J(P(ye.value ? "重置跟随" : "重置"), 1)])])) : (U(), W("span", Q3, "Ctrl + 滚轮缩放")),
+							qe.value.length ? (U(), W("span", $3, [K("button", {
 								type: "button",
 								class: "wf-text-button",
 								onClick: t[2] ||= (e) => g.value = /* @__PURE__ */ new Set()
@@ -57389,7 +58600,7 @@ var w4 = {
 								class: "wf-fold-label",
 								style: fe({ left: `${e.middle * 100}%` }),
 								title: `${lt(e.start)} – ${lt(e.end)} 没有执行，已折叠`
-							}, "⋯ " + P(I(R2)(e.end - e.start)), 13, V4))), 128)),
+							}, "⋯ " + P(I(Z4)(e.end - e.start)), 13, e6))), 128)),
 							je.value === null ? Y("", !0) : (U(), W("span", {
 								key: 0,
 								class: "wf-cursor-head",
@@ -57409,7 +58620,7 @@ var w4 = {
 								class: "wf-label",
 								style: fe({ "--depth": e.depth })
 							}, [
-								e.depth ? (U(), W("span", H4)) : Y("", !0),
+								e.depth ? (U(), W("span", t6)) : Y("", !0),
 								e.has_children ? (U(), W("button", {
 									key: 1,
 									type: "button",
@@ -57417,7 +58628,7 @@ var w4 = {
 									"aria-expanded": !g.value.has(e.key),
 									"aria-label": `${g.value.has(e.key) ? "展开" : "收起"} ${I(i).display_name(e.item.member)} 派出的执行`,
 									onClick: (t) => nt(e.key)
-								}, [q(o, { name: "i-lucide-chevron-right" })], 10, U4)) : (U(), W("span", W4)),
+								}, [q(o, { name: "i-lucide-chevron-right" })], 10, n6)) : (U(), W("span", r6)),
 								q(s, {
 									src: I(i).identities[e.item.member]?.icon,
 									text: I(i).identities[e.item.member]?.initials,
@@ -57436,29 +58647,29 @@ var w4 = {
 									"aria-expanded": y.value === e.key,
 									onClick: (t) => tt(e, t),
 									onMouseenter: (t) => pt(t, e, {
-										label: I(F2)[e.item.state],
+										label: I(J4)[e.item.state],
 										start: e.start,
 										end: e.end,
 										text: ot(e).text,
 										live: e.item.state === "running"
 									}),
 									onMouseleave: (t) => ht(e)
-								}, [K("span", K4, [
-									e.item.state === "running" ? (U(), W("i", q4)) : Y("", !0),
+								}, [K("span", a6, [
+									e.item.state === "running" ? (U(), W("i", o6)) : Y("", !0),
 									K("strong", null, P(I(i).display_name(e.item.member)), 1),
 									(U(!0), W(H, null, B(at(e), (e) => (U(), W("em", {
 										key: e,
 										class: "wf-pill is-role"
 									}, P(e), 1))), 128)),
-									Ke.value.slowest?.row === e.key ? (U(), W("em", J4, "最慢")) : Y("", !0)
-								]), K("span", { class: M(["wf-status", `is-${ot(e).tone}`]) }, [ot(e).tone === "live" ? (U(), W("i", Y4)) : Y("", !0), J(P(ot(e).text), 1)], 2)], 40, G4)
+									Ke.value.slowest?.row === e.key ? (U(), W("em", s6, "最慢")) : Y("", !0)
+								]), K("span", { class: M(["wf-status", `is-${ot(e).tone}`]) }, [ot(e).tone === "live" ? (U(), W("i", c6)) : Y("", !0), J(P(ot(e).text), 1)], 2)], 40, i6)
 							], 4),
 							K("div", {
 								class: "wf-lane",
 								role: "img",
 								"aria-label": st(e),
 								onMouseleave: (t) => ht(e)
-							}, [K("div", Z4, [
+							}, [K("div", u6, [
 								(U(!0), W(H, null, B(et.value, (e) => (U(), W("i", {
 									key: e.at,
 									class: "wf-gridline",
@@ -57478,7 +58689,7 @@ var w4 = {
 									class: M(["wf-link", `is-${e.part}`]),
 									"data-tone": Qe.value.get(e.member),
 									style: fe({ left: `${e.x * 100}%` })
-								}, null, 14, Q4))), 128)),
+								}, null, 14, d6))), 128)),
 								je.value === null ? Y("", !0) : (U(), W("i", {
 									key: 0,
 									class: "wf-cursor",
@@ -57497,7 +58708,7 @@ var w4 = {
 										start: e.queue[0],
 										end: e.queue[1]
 									})
-								}, null, 44, $4),
+								}, null, 44, f6),
 								e.wake ? (U(), W("i", {
 									key: 1,
 									class: "wf-bar is-wake",
@@ -57512,7 +58723,7 @@ var w4 = {
 										start: e.wake[0],
 										end: e.wake[1]
 									})
-								}, null, 44, e3)) : Y("", !0),
+								}, null, 44, p6)) : Y("", !0),
 								e.work ? (U(), W("i", {
 									key: 2,
 									class: M(["wf-bar is-work", { "has-detail": e.segments.length }]),
@@ -57530,9 +58741,9 @@ var w4 = {
 										end: e.work[1],
 										live: e.item.state === "running"
 									})
-								}, null, 46, t3)) : Y("", !0),
+								}, null, 46, m6)) : Y("", !0),
 								(U(!0), W(H, null, B(e.segments, (t) => (U(), W(H, { key: t.start + t.phase }, [K("i", {
-									class: M(["wf-bar wf-seg", [`is-${I(P2)[t.phase]}`, { "is-live": t.live }]]),
+									class: M(["wf-bar wf-seg", [`is-${I(q4)[t.phase]}`, { "is-live": t.live }]]),
 									"data-tone": Qe.value.get(e.item.member),
 									style: fe(rt(t.start, t.seen, !0)),
 									onMouseenter: (n) => pt(n, e, {
@@ -57543,9 +58754,9 @@ var w4 = {
 										kind: "segment",
 										...t
 									})
-								}, null, 46, n3), t.end > t.seen ? (U(), W("i", {
+								}, null, 46, h6), t.end > t.seen ? (U(), W("i", {
 									key: 0,
-									class: M(["wf-bar wf-seg is-tail", `is-${I(P2)[t.phase]}`]),
+									class: M(["wf-bar wf-seg is-tail", `is-${I(q4)[t.phase]}`]),
 									"data-tone": Qe.value.get(e.item.member),
 									style: fe(rt(t.seen, t.end)),
 									onMouseenter: (n) => pt(n, e, {
@@ -57556,7 +58767,7 @@ var w4 = {
 										kind: "segment",
 										...t
 									})
-								}, null, 46, r3)) : Y("", !0)], 64))), 128)),
+								}, null, 46, g6)) : Y("", !0)], 64))), 128)),
 								(U(!0), W(H, null, B(e.notes, (t) => (U(), W("button", {
 									key: `note-${t.index}`,
 									type: "button",
@@ -57579,15 +58790,15 @@ var w4 = {
 										end: t.at
 									}),
 									onBlur: (t) => ht(e)
-								}, null, 44, i3))), 128))
-							])], 40, X4),
-							K("span", a3, [
-								J(P(I(R2)(e.end - e.start)) + P(e.wake_approx && e.wake ? "~" : ""), 1),
+								}, null, 44, _6))), 128))
+							])], 40, l6),
+							K("span", v6, [
+								J(P(I(Z4)(e.end - e.start)) + P(e.wake_approx && e.wake ? "~" : ""), 1),
 								e.item.state === "done" ? Y("", !0) : (U(), W("small", {
 									key: 0,
 									class: M(`is-${e.item.state}`)
-								}, P(I(F2)[e.item.state]), 3)),
-								e.truncated ? (U(), W("small", o3, "明细已截断")) : Y("", !0)
+								}, P(I(J4)[e.item.state]), 3)),
+								e.truncated ? (U(), W("small", y6, "明细已截断")) : Y("", !0)
 							])
 						], 2))), 128))
 					], 38),
@@ -57601,9 +58812,9 @@ var w4 = {
 							left: `${b.value.left}px`
 						})
 					}, [
-						K("header", c3, [
+						K("header", x6, [
 							K("strong", null, P(I(i).display_name(Je.value.item.member)), 1),
-							K("small", null, P(it(Je.value)) + " · " + P(I(F2)[Je.value.item.state]) + " · " + P(I(R2)(Je.value.end - Je.value.start)), 1),
+							K("small", null, P(it(Je.value)) + " · " + P(I(J4)[Je.value.item.state]) + " · " + P(I(Z4)(Je.value.end - Je.value.start)), 1),
 							K("button", {
 								type: "button",
 								class: "wf-card-close",
@@ -57612,47 +58823,47 @@ var w4 = {
 							}, [q(o, { name: "i-lucide-x" })])
 						]),
 						K("dl", null, [
-							Je.value.item.task ? (U(), W("div", l3, [t[21] ||= K("dt", null, "任务", -1), K("dd", null, [J(P(Je.value.item.task), 1), Je.value.item.task_id ? (U(), W("button", {
+							Je.value.item.task ? (U(), W("div", S6, [t[21] ||= K("dt", null, "任务", -1), K("dd", null, [J(P(Je.value.item.task), 1), Je.value.item.task_id ? (U(), W("button", {
 								key: 0,
 								type: "button",
 								class: "subtle-link",
 								onClick: t[5] ||= (e) => n("detail", Je.value.item.task_id)
 							}, "#" + P(Je.value.item.task_id), 1)) : Y("", !0)])])) : Y("", !0),
-							Je.value.item.state === "failed" ? (U(), W("div", u3, [t[22] ||= K("dt", null, "失败原因", -1), K("dd", d3, P(Je.value.item.reason || "执行失败"), 1)])) : Je.value.item.result || Je.value.item.answer_id ? (U(), W("div", f3, [t[23] ||= K("dt", null, "结果", -1), K("dd", null, [J(P(Je.value.item.result), 1), Je.value.item.answer_id ? (U(), W("button", {
+							Je.value.item.state === "failed" ? (U(), W("div", C6, [t[22] ||= K("dt", null, "失败原因", -1), K("dd", w6, P(Je.value.item.reason || "执行失败"), 1)])) : Je.value.item.result || Je.value.item.answer_id ? (U(), W("div", T6, [t[23] ||= K("dt", null, "结果", -1), K("dd", null, [J(P(Je.value.item.result), 1), Je.value.item.answer_id ? (U(), W("button", {
 								key: 0,
 								type: "button",
 								class: "subtle-link",
 								onClick: t[6] ||= (e) => n("detail", Je.value.item.answer_id)
 							}, "在消息中查看 #" + P(Je.value.item.answer_id), 1)) : Y("", !0)])])) : Y("", !0),
-							Je.value.item.changes ? (U(), W("div", p3, [t[24] ||= K("dt", null, "改动", -1), K("dd", null, P(Je.value.item.changes) + " 个文件", 1)])) : Y("", !0)
+							Je.value.item.changes ? (U(), W("div", E6, [t[24] ||= K("dt", null, "改动", -1), K("dd", null, P(Je.value.item.changes) + " 个文件", 1)])) : Y("", !0)
 						]),
-						Ye.value.length ? (U(), W("ol", m3, [(U(!0), W(H, null, B(Ye.value, (e) => (U(), W("li", {
+						Ye.value.length ? (U(), W("ol", D6, [(U(!0), W(H, null, B(Ye.value, (e) => (U(), W("li", {
 							key: `${e.kind}-${e.at}-${e.phase || ""}`,
 							class: M(`log-${e.kind}`)
 						}, [K("time", null, P(lt(e.at)), 1), e.kind === "phase" ? (U(), W(H, { key: 0 }, [K("i", {
-							class: M(["wf-swatch", `is-${I(P2)[e.phase]}`]),
+							class: M(["wf-swatch", `is-${I(q4)[e.phase]}`]),
 							"data-tone": Qe.value.get(Je.value.item.member),
 							"aria-hidden": "true"
-						}, null, 10, h3), K("span", null, [
-							J(P(I(N2)[e.phase]), 1),
+						}, null, 10, O6), K("span", null, [
+							J(P(I(K4)[e.phase]), 1),
 							e.tool ? (U(), W(H, { key: 0 }, [J(" · " + P(e.tool), 1)], 64)) : Y("", !0),
-							J(" · " + P(e.live ? "进行中" : I(R2)(e.duration)), 1)
-						])], 64)) : (U(), W("span", g3, P(e.text), 1))], 2))), 128))])) : (U(), W("p", _3, "这次执行没有阶段明细或过程说明。"))
-					], 12, s3)) : Y("", !0),
-					me.value === G3 ? (U(), W("div", v3, [...t[25] ||= [K("span", { class: "wf-player-note" }, "回放按轮进行：在上方选一轮即可回放", -1)]])) : (U(), W("div", y3, [ye.value ? (U(), W(H, { key: 0 }, [t[26] ||= K("span", { class: "wf-state is-live" }, "实时", -1), t[27] ||= K("span", { class: "wf-player-note" }, "这一轮结束后可以回放", -1)], 64)) : (U(), W(H, { key: 1 }, [
+							J(" · " + P(e.live ? "进行中" : I(Z4)(e.duration)), 1)
+						])], 64)) : (U(), W("span", k6, P(e.text), 1))], 2))), 128))])) : (U(), W("p", A6, "这次执行没有阶段明细或过程说明。"))
+					], 12, b6)) : Y("", !0),
+					me.value === i8 ? (U(), W("div", j6, [...t[25] ||= [K("span", { class: "wf-player-note" }, "回放按轮进行：在上方选一轮即可回放", -1)]])) : (U(), W("div", M6, [ye.value ? (U(), W(H, { key: 0 }, [t[26] ||= K("span", { class: "wf-state is-live" }, "实时", -1), t[27] ||= K("span", { class: "wf-player-note" }, "这一轮结束后可以回放", -1)], 64)) : (U(), W(H, { key: 1 }, [
 						K("button", {
 							type: "button",
 							class: "wf-player-button",
 							"aria-label": O.playing ? "暂停回放" : "回放这一轮",
 							onClick: t[7] ||= (e) => O.playing ? Re() : Ie()
-						}, [q(o, { name: O.playing ? "i-lucide-pause" : "i-lucide-play" }, null, 8, ["name"])], 8, b3),
+						}, [q(o, { name: O.playing ? "i-lucide-pause" : "i-lucide-play" }, null, 8, ["name"])], 8, N6),
 						K("button", {
 							type: "button",
 							class: "wf-player-button",
 							"aria-label": "从头回放",
 							disabled: !xe.value,
 							onClick: ze
-						}, [q(o, { name: "i-lucide-rotate-ccw" })], 8, x3),
+						}, [q(o, { name: "i-lucide-rotate-ccw" })], 8, P6),
 						q(r, {
 							modelValue: O.speed,
 							"onUpdate:modelValue": t[8] ||= (e) => O.speed = e,
@@ -57680,13 +58891,13 @@ var w4 = {
 							value: xe.value ? O.position : be.value.duration,
 							"aria-label": "回放位置",
 							onInput: Be
-						}, null, 40, S3),
-						K("span", C3, P(I(R2)(xe.value ? O.position : be.value.duration)) + " / " + P(I(R2)(be.value.duration)), 1)
+						}, null, 40, F6),
+						K("span", I6, P(I(Z4)(xe.value ? O.position : be.value.duration)) + " / " + P(I(Z4)(be.value.duration)), 1)
 					], 64))])),
-					Ee.value.folds.length || ne.value.executions.length >= ne.value.execution_limit ? (U(), W("footer", w3, [Ee.value.folds.length ? (U(), W("span", T3, [t[28] ||= K("i", {
+					Ee.value.folds.length || ne.value.executions.length >= ne.value.execution_limit ? (U(), W("footer", L6, [Ee.value.folds.length ? (U(), W("span", R6, [t[28] ||= K("i", {
 						class: "wf-swatch is-fold",
 						"aria-hidden": "true"
-					}, null, -1), J("已折叠 " + P(Ee.value.folds.length) + " 段超过 " + P(I(I2) / 6e4) + " 分钟的空闲", 1)])) : Y("", !0), ne.value.executions.length >= ne.value.execution_limit ? (U(), W("span", E3, "只列出最近 " + P(ne.value.execution_limit) + " 次讨论执行与 " + P(ne.value.execution_limit) + " 次协作执行", 1)) : Y("", !0)])) : Y("", !0)
+					}, null, -1), J("已折叠 " + P(Ee.value.folds.length) + " 段超过 " + P(I(Y4) / 6e4) + " 分钟的空闲", 1)])) : Y("", !0), ne.value.executions.length >= ne.value.execution_limit ? (U(), W("span", z6, "只列出最近 " + P(ne.value.execution_limit) + " 次讨论执行与 " + P(ne.value.execution_limit) + " 次协作执行", 1)) : Y("", !0)])) : Y("", !0)
 				], 512)) : Y("", !0),
 				v.value ? (U(), W("div", {
 					key: 3,
@@ -57706,39 +58917,39 @@ var w4 = {
 						onClick: t[9] ||= (e) => v.value = null
 					}, [q(o, { name: "i-lucide-x" })])) : Y("", !0),
 					K("small", null, [J(P(lt(v.value.piece.start)), 1), v.value.piece.end > v.value.piece.start ? (U(), W(H, { key: 0 }, [J(" – " + P(v.value.piece.live ? "现在" : lt(v.value.piece.end)), 1)], 64)) : Y("", !0)]),
-					v.value.piece.text ? (U(), W("p", O3, P(v.value.piece.text), 1)) : v.value.row.item.reason ? (U(), W("p", k3, P(v.value.row.item.reason), 1)) : Y("", !0),
-					_t.value.length ? (U(), W(H, { key: 3 }, [K("small", A3, P(v.value.related.earlier ? "此前的过程说明" : "过程说明"), 1), K("ol", null, [(U(!0), W(H, null, B(_t.value, (e) => (U(), W("li", { key: e.at + e.text }, [K("time", null, P(lt(e.at)), 1), J(P(e.text), 1)]))), 128))])], 64)) : Y("", !0)
-				], 14, D3)) : Y("", !0)
+					v.value.piece.text ? (U(), W("p", V6, P(v.value.piece.text), 1)) : v.value.row.item.reason ? (U(), W("p", H6, P(v.value.row.item.reason), 1)) : Y("", !0),
+					_t.value.length ? (U(), W(H, { key: 3 }, [K("small", U6, P(v.value.related.earlier ? "此前的过程说明" : "过程说明"), 1), K("ol", null, [(U(!0), W(H, null, B(_t.value, (e) => (U(), W("li", { key: e.at + e.text }, [K("time", null, P(lt(e.at)), 1), J(P(e.text), 1)]))), 128))])], 64)) : Y("", !0)
+				], 14, B6)) : Y("", !0)
 			]);
 		};
 	}
-}, [["__scopeId", "data-v-2bb833fb"]]), X3 = {
+}, [["__scopeId", "data-v-2bb833fb"]]), l8 = {
 	key: 0,
 	role: "alert",
 	class: "fine-print ev-error"
-}, Z3 = {
+}, u8 = {
 	key: 1,
 	class: "fine-print"
-}, Q3 = { class: "ev-ledger" }, $3 = { class: "ev-head" }, e6 = { class: "ev-title" }, t6 = {
+}, d8 = { class: "ev-ledger" }, f8 = { class: "ev-head" }, p8 = { class: "ev-title" }, m8 = {
 	class: "ev-rows",
 	role: "listbox",
 	"aria-label": "事件"
-}, n6 = {
+}, h8 = {
 	key: 0,
 	class: "ev-turn",
 	"aria-hidden": "true"
-}, r6 = [
+}, g8 = [
 	"aria-selected",
 	"onClick",
 	"onKeydown"
-], i6 = { class: "ev-time" }, a6 = { class: "ev-tag" }, o6 = { class: "ev-text" }, s6 = {
+], _8 = { class: "ev-time" }, v8 = { class: "ev-tag" }, y8 = { class: "ev-text" }, b8 = {
 	key: 0,
 	class: "ev-inspector",
 	"aria-label": "记录详情"
-}, c6 = { class: "ev-head" }, l6 = { class: "ev-title" }, u6 = { class: "ev-actions" }, d6 = { class: "ev-body" }, f6 = { class: "ev-line" }, p6 = { class: "ev-chips" }, m6 = ["onClick"], h6 = ["onClick"], g6 = { class: "ev-state" }, _6 = {
+}, x8 = { class: "ev-head" }, S8 = { class: "ev-title" }, C8 = { class: "ev-actions" }, w8 = { class: "ev-body" }, T8 = { class: "ev-line" }, E8 = { class: "ev-chips" }, D8 = ["onClick"], O8 = ["onClick"], k8 = { class: "ev-state" }, A8 = {
 	key: 0,
 	class: "fine-print"
-}, v6 = { class: "ev-related" }, y6 = ["onClick"], b6 = { class: "ev-time" }, x6 = { class: "ev-raw" }, S6 = /*#__PURE__*/ TH({
+}, j8 = { class: "ev-related" }, M8 = ["onClick"], N8 = { class: "ev-time" }, P8 = { class: "ev-raw" }, F8 = /*#__PURE__*/ TH({
 	__name: "EventLog",
 	emits: ["detail"],
 	setup(e, { emit: t }) {
@@ -57776,7 +58987,7 @@ var w4 = {
 			let e = 0, t = o.value;
 			return t.flatMap((n, r) => {
 				let i = b(n) && y(t[r + 1]) || y(n) && !b(t[r - 1]);
-				if (i && (e += 1), d.value && !b4(n).includes(d.value)) return [];
+				if (i && (e += 1), d.value && !N3(n).includes(d.value)) return [];
 				let a = n.kind.split(".")[0];
 				return [{
 					event: n,
@@ -57784,14 +58995,14 @@ var w4 = {
 					boundary: i && !d.value,
 					turn: e,
 					group: a,
-					label: m4[a] || a,
-					text: S4(n, g)
+					label: D3[a] || a,
+					text: F3(n, g)
 				}];
 			});
-		}), S = Z(() => o.value.findIndex((e) => e.id === u.value)), C = Z(() => o.value[S.value]), w = Z(() => C.value ? C4(o.value, S.value) : null), T = Z(() => {
+		}), S = Z(() => o.value.findIndex((e) => e.id === u.value)), C = Z(() => o.value[S.value]), w = Z(() => C.value ? I3(o.value, S.value) : null), T = Z(() => {
 			if (!C.value) return [];
-			let e = new Set(b4(C.value));
-			return e.size ? x.value.filter((t) => t.event.id !== u.value && b4(t.event).some((t) => e.has(t))) : [];
+			let e = new Set(N3(C.value));
+			return e.size ? x.value.filter((t) => t.event.id !== u.value && N3(t.event).some((t) => e.has(t))) : [];
 		});
 		function ee(e) {
 			u.value = u.value === e.event.id ? null : e.event.id;
@@ -57813,12 +59024,12 @@ var w4 = {
 				K("code", null, "codiscuss room events"),
 				J(" 读取同一份记录。")
 			])])], -1),
-			l.value ? (U(), W("p", X3, P(l.value), 1)) : o.value.length ? Y("", !0) : (U(), W("p", Z3, "还没有事件记录。此功能上线前的历史没有记录。")),
+			l.value ? (U(), W("p", l8, P(l.value), 1)) : o.value.length ? Y("", !0) : (U(), W("p", u8, "还没有事件记录。此功能上线前的历史没有记录。")),
 			o.value.length ? (U(), W("div", {
 				key: 2,
 				class: M(["ev", { "has-inspector": C.value }])
-			}, [K("div", Q3, [K("header", $3, [
-				K("span", e6, P(x.value.length) + " 条记录", 1),
+			}, [K("div", d8, [K("header", f8, [
+				K("span", p8, P(x.value.length) + " 条记录", 1),
 				d.value ? (U(), W("button", {
 					key: 0,
 					type: "button",
@@ -57831,7 +59042,7 @@ var w4 = {
 					class: "subtle-link",
 					onClick: t[1] ||= (e) => h("older")
 				}, "加载更早")) : Y("", !0)
-			]), K("ol", t6, [(U(!0), W(H, null, B(x.value, (e) => (U(), W(H, { key: e.event.id }, [e.boundary ? (U(), W("li", n6, "第 " + P(e.turn) + " 轮", 1)) : Y("", !0), K("li", {
+			]), K("ol", m8, [(U(!0), W(H, null, B(x.value, (e) => (U(), W(H, { key: e.event.id }, [e.boundary ? (U(), W("li", h8, "第 " + P(e.turn) + " 轮", 1)) : Y("", !0), K("li", {
 				role: "option",
 				tabindex: "0",
 				class: M(["ev-row", [`is-${e.group}`, {
@@ -57843,10 +59054,10 @@ var w4 = {
 				onClick: (t) => ee(e),
 				onKeydown: fu((t) => ee(e), ["enter"])
 			}, [
-				K("time", i6, P(_(e.event.at)), 1),
-				K("span", a6, P(e.label), 1),
-				K("span", o6, P(e.text), 1)
-			], 42, r6)], 64))), 128))])]), C.value ? (U(), W("aside", s6, [K("header", c6, [K("span", l6, P(_(C.value.at)) + " · " + P(C.value.kind), 1), K("span", u6, [
+				K("time", _8, P(_(e.event.at)), 1),
+				K("span", v8, P(e.label), 1),
+				K("span", y8, P(e.text), 1)
+			], 42, g8)], 64))), 128))])]), C.value ? (U(), W("aside", b8, [K("header", x8, [K("span", S8, P(_(C.value.at)) + " · " + P(C.value.kind), 1), K("span", C8, [
 				K("button", {
 					type: "button",
 					class: "ev-icon",
@@ -57865,33 +59076,33 @@ var w4 = {
 					"aria-label": "关闭",
 					onClick: t[4] ||= (e) => u.value = null
 				}, "✕")
-			])]), K("div", d6, [
-				K("p", f6, P(I(S4)(C.value, g)), 1),
-				K("div", p6, [(U(!0), W(H, null, B(I(b4)(C.value), (e) => (U(), W(H, { key: e }, [K("button", {
+			])]), K("div", w8, [
+				K("p", T8, P(I(F3)(C.value, g)), 1),
+				K("div", E8, [(U(!0), W(H, null, B(I(N3)(C.value), (e) => (U(), W(H, { key: e }, [K("button", {
 					type: "button",
 					class: M(["ev-chip", { "is-active": d.value === e }]),
 					onClick: (t) => d.value = d.value === e ? "" : e
-				}, "只看 " + P(v(e)), 11, m6), e.startsWith("message:") ? (U(), W("button", {
+				}, "只看 " + P(v(e)), 11, D8), e.startsWith("message:") ? (U(), W("button", {
 					key: 0,
 					type: "button",
 					class: "subtle-link",
 					onClick: (t) => n("detail", Number(e.split(":")[1]))
-				}, "查看 " + P(v(e)), 9, h6)) : Y("", !0)], 64))), 128))]),
+				}, "查看 " + P(v(e)), 9, O8)) : Y("", !0)], 64))), 128))]),
 				t[6] ||= K("h3", null, "此刻未结束的", -1),
-				K("ul", g6, [
-					(U(!0), W(H, null, B(w.value.requests, (e) => (U(), W("li", { key: `r${e.request_id}` }, [J("请求 R" + P(e.request_id) + " → " + P(g(e.member_id)) + " · " + P(I(l4)[e.purpose] || e.purpose) + " · 挂在 #" + P(e.message_id) + " · " + P(I(s4)[e.status] || e.status), 1), e.execution_id ? (U(), W(H, { key: 0 }, [J(" · 执行 E" + P(e.execution_id), 1)], 64)) : Y("", !0)]))), 128)),
-					(U(!0), W(H, null, B(w.value.executions, (e) => (U(), W("li", { key: `e${e.execution_id}` }, "执行 E" + P(e.execution_id) + " · " + P(g(e.member_id)) + " · " + P(I(c4)[e.status] || e.status) + " · 已过 " + P(Math.round((C.value.at - e.at) / 1e3)) + " 秒", 1))), 128)),
+				K("ul", k8, [
+					(U(!0), W(H, null, B(w.value.requests, (e) => (U(), W("li", { key: `r${e.request_id}` }, [J("请求 R" + P(e.request_id) + " → " + P(g(e.member_id)) + " · " + P(I(S3)[e.purpose] || e.purpose) + " · 挂在 #" + P(e.message_id) + " · " + P(I(b3)[e.status] || e.status), 1), e.execution_id ? (U(), W(H, { key: 0 }, [J(" · 执行 E" + P(e.execution_id), 1)], 64)) : Y("", !0)]))), 128)),
+					(U(!0), W(H, null, B(w.value.executions, (e) => (U(), W("li", { key: `e${e.execution_id}` }, "执行 E" + P(e.execution_id) + " · " + P(g(e.member_id)) + " · " + P(I(x3)[e.status] || e.status) + " · 已过 " + P(Math.round((C.value.at - e.at) / 1e3)) + " 秒", 1))), 128)),
 					(U(!0), W(H, null, B(w.value.queue, (e) => (U(), W("li", { key: `q${e.queue_id}` }, P(g(e.member_id)) + " 排队等候 #" + P(e.message_id), 1))), 128)),
 					(U(!0), W(H, null, B(w.value.chains, (e) => (U(), W("li", { key: `c${e.chain_id}` }, "任务链 #" + P(e.chain_id) + " 到限暂停", 1))), 128)),
-					!w.value.requests.length && !w.value.executions.length && !w.value.queue.length && !w.value.chains.length ? (U(), W("li", _6, "无（只计已加载的记录）")) : Y("", !0)
+					!w.value.requests.length && !w.value.executions.length && !w.value.queue.length && !w.value.chains.length ? (U(), W("li", A8, "无（只计已加载的记录）")) : Y("", !0)
 				]),
-				T.value.length ? (U(), W(H, { key: 0 }, [t[5] ||= K("h3", null, "同一对象的其他记录", -1), K("ul", v6, [(U(!0), W(H, null, B(T.value, (e) => (U(), W("li", { key: e.event.id }, [K("button", {
+				T.value.length ? (U(), W(H, { key: 0 }, [t[5] ||= K("h3", null, "同一对象的其他记录", -1), K("ul", j8, [(U(!0), W(H, null, B(T.value, (e) => (U(), W("li", { key: e.event.id }, [K("button", {
 					type: "button",
 					class: "ev-link",
 					onClick: (t) => u.value = e.event.id
-				}, [K("time", b6, P(_(e.event.at)), 1), J(" " + P(e.text), 1)], 8, y6)]))), 128))])], 64)) : Y("", !0),
+				}, [K("time", N8, P(_(e.event.at)), 1), J(" " + P(e.text), 1)], 8, M8)]))), 128))])], 64)) : Y("", !0),
 				t[7] ||= K("h3", null, "原始记录", -1),
-				K("pre", x6, P(JSON.stringify({
+				K("pre", P8, P(JSON.stringify({
 					id: C.value.id,
 					kind: C.value.kind,
 					at: C.value.at,
@@ -57900,66 +59111,66 @@ var w4 = {
 			])])) : Y("", !0)], 2)) : Y("", !0)
 		], 32));
 	}
-}, [["__scopeId", "data-v-08613aba"]]), C6 = { class: "project-files" }, w6 = { class: "project-files-heading" }, T6 = ["title"], E6 = ["aria-busy"], D6 = {
+}, [["__scopeId", "data-v-08613aba"]]), I8 = { class: "project-files" }, L8 = { class: "project-files-heading" }, R8 = ["title"], z8 = ["aria-busy"], B8 = {
 	class: "project-explorer-path",
 	"aria-label": "文件路径"
-}, O6 = [
+}, V8 = [
 	"disabled",
 	"aria-current",
 	"onClick"
-], k6 = { class: "project-files-rows" }, A6 = [
+], H8 = { class: "project-files-rows" }, U8 = [
 	"disabled",
 	"title",
 	"onClick"
-], j6 = { class: "project-file-name" }, M6 = { class: "project-file-size" }, N6 = ["datetime"], P6 = {
+], W8 = { class: "project-file-name" }, G8 = { class: "project-file-size" }, K8 = ["datetime"], q8 = {
 	key: 0,
 	class: "project-files-empty",
 	role: "status"
-}, F6 = {
+}, J8 = {
 	key: 1,
 	class: "project-files-empty"
-}, I6 = {
+}, Y8 = {
 	key: 0,
 	class: "project-files-footer"
-}, L6 = { class: "project-editor-tabs" }, R6 = { class: "project-editor-tab" }, z6 = { class: "project-editor-actions" }, B6 = {
+}, X8 = { class: "project-editor-tabs" }, Z8 = { class: "project-editor-tab" }, Q8 = { class: "project-editor-actions" }, $8 = {
 	key: 2,
 	class: "project-editor-modes",
 	role: "group",
 	"aria-label": "显示方式"
-}, V6 = ["aria-pressed"], H6 = ["aria-pressed"], U6 = {
+}, e5 = ["aria-pressed"], t5 = ["aria-pressed"], n5 = {
 	class: "project-editor-breadcrumbs",
 	"aria-label": "文件位置"
-}, W6 = ["onClick"], G6 = { key: 2 }, K6 = {
+}, r5 = ["onClick"], i5 = { key: 2 }, a5 = {
 	key: 0,
 	class: "project-editor-banner"
-}, q6 = {
+}, o5 = {
 	key: 1,
 	class: "project-editor-banner"
-}, J6 = {
+}, s5 = {
 	key: 0,
 	class: "project-editor-state",
 	role: "status"
-}, Y6 = {
+}, c5 = {
 	key: 1,
 	class: "project-editor-state"
-}, X6 = {
+}, l5 = {
 	key: 2,
 	class: "project-editor-state"
-}, Z6 = {
+}, u5 = {
 	class: "project-code-number",
 	"aria-hidden": "true"
-}, Q6 = { class: "project-code-line" }, $6 = {
+}, d5 = { class: "project-code-line" }, f5 = {
 	key: 4,
 	class: "project-code",
 	tabindex: "0",
 	"aria-label": "文件内容"
-}, e8 = {
+}, p5 = {
 	class: "project-code-gutter",
 	"aria-hidden": "true"
-}, t8 = { class: "project-code-text" }, n8 = ["srcdoc"], r8 = ["innerHTML"], i8 = {
+}, m5 = { class: "project-code-text" }, h5 = ["srcdoc"], g5 = ["innerHTML"], _5 = {
 	key: 8,
 	class: "file-listen-dock"
-}, a8 = ["aria-pressed", "title"], o8 = { class: "project-editor-status" }, s8 = ["title"], c8 = { class: "project-editor-encoding" }, l8 = { key: 2 }, u8 = 350, d8 = /*#__PURE__*/ TH({
+}, v5 = ["aria-pressed", "title"], y5 = { class: "project-editor-status" }, b5 = ["title"], x5 = { class: "project-editor-encoding" }, S5 = { key: 2 }, C5 = 350, w5 = /*#__PURE__*/ TH({
 	__name: "ProjectFiles",
 	props: { directory: {
 		type: String,
@@ -58180,7 +59391,7 @@ var w4 = {
 			});
 		}
 		function ge() {
-			ce.value = null, window.clearTimeout(le), ue || (le = window.setTimeout(ye, u8));
+			ce.value = null, window.clearTimeout(le), ue || (le = window.setTimeout(ye, C5));
 		}
 		let N = (e) => !!e.target.closest?.(".file-listen-offer"), _e = (e) => {
 			N(e) || (ue = !0);
@@ -58265,7 +59476,7 @@ var w4 = {
 		}
 		return (t, n) => {
 			let r = MA, i = sA, m = vV;
-			return U(), W(H, null, [K("section", C6, [K("header", w6, [K("div", null, [n[13] ||= K("h2", null, "项目文件", -1), K("p", { title: e.directory }, P(e.directory), 9, T6)]), q(r, {
+			return U(), W(H, null, [K("section", I8, [K("header", L8, [K("div", null, [n[13] ||= K("h2", null, "项目文件", -1), K("p", { title: e.directory }, P(e.directory), 9, R8)]), q(r, {
 				icon: "i-lucide-refresh-cw",
 				color: "neutral",
 				variant: "ghost",
@@ -58278,7 +59489,7 @@ var w4 = {
 				class: "project-explorer",
 				"aria-busy": o.value
 			}, [
-				K("nav", D6, [(U(!0), W(H, null, B(b.value, (e, t) => (U(), W(H, { key: e.path }, [t ? (U(), G(i, {
+				K("nav", B8, [(U(!0), W(H, null, B(b.value, (e, t) => (U(), W(H, { key: e.path }, [t ? (U(), G(i, {
 					key: 0,
 					name: "i-lucide-chevron-right",
 					class: "project-crumb-separator"
@@ -58290,7 +59501,7 @@ var w4 = {
 				}, [t ? Y("", !0) : (U(), G(i, {
 					key: 0,
 					name: "i-lucide-folder-root"
-				})), J(P(e.name), 1)], 8, O6)], 64))), 128))]),
+				})), J(P(e.name), 1)], 8, V8)], 64))), 128))]),
 				n[15] ||= K("div", {
 					class: "project-files-columns",
 					"aria-hidden": "true"
@@ -58299,7 +59510,7 @@ var w4 = {
 					K("span", null, "大小"),
 					K("span", null, "修改时间")
 				], -1),
-				K("div", k6, [(U(!0), W(H, null, B(a.value?.entries || [], (e) => (U(), W("button", {
+				K("div", H8, [(U(!0), W(H, null, B(a.value?.entries || [], (e) => (U(), W("button", {
 					key: e.path,
 					type: "button",
 					class: M(["project-file-row", { "is-hidden": e.name.startsWith(".") }]),
@@ -58307,14 +59518,14 @@ var w4 = {
 					title: e.kind === "unavailable" ? `${e.name}（无法读取或指向项目外）` : e.name,
 					onClick: (t) => e.kind === "directory" ? Se(e.path) : Ce(e.path)
 				}, [
-					K("span", j6, [q(i, {
+					K("span", W8, [q(i, {
 						name: v(e)[0],
 						class: M(["project-file-icon", v(e)[1]])
 					}, null, 8, ["name", "class"]), K("span", null, P(e.name), 1)]),
-					K("span", M6, P(Te(e.size)), 1),
-					K("time", { datetime: e.modified_at }, P(Ee(e.modified_at)), 9, N6)
-				], 10, A6))), 128)), a.value ? a.value.entries.length ? Y("", !0) : (U(), W("p", F6, [q(i, { name: "i-lucide-folder-open" }), n[14] ||= J("此文件夹为空", -1)])) : (U(), W("p", P6, P(o.value ? "正在读取项目目录…" : "点击刷新重新读取目录"), 1))]),
-				a.value ? (U(), W("footer", I6, [K("span", null, [J(P(a.value.total) + " 项", 1), a.value.next_offset === null ? Y("", !0) : (U(), W(H, { key: 0 }, [J("，已显示 " + P(a.value.entries.length) + " 项", 1)], 64))]), a.value.next_offset === null ? Y("", !0) : (U(), G(r, {
+					K("span", G8, P(Te(e.size)), 1),
+					K("time", { datetime: e.modified_at }, P(Ee(e.modified_at)), 9, K8)
+				], 10, U8))), 128)), a.value ? a.value.entries.length ? Y("", !0) : (U(), W("p", J8, [q(i, { name: "i-lucide-folder-open" }), n[14] ||= J("此文件夹为空", -1)])) : (U(), W("p", q8, P(o.value ? "正在读取项目目录…" : "点击刷新重新读取目录"), 1))]),
+				a.value ? (U(), W("footer", Y8, [K("span", null, [J(P(a.value.total) + " 项", 1), a.value.next_offset === null ? Y("", !0) : (U(), W(H, { key: 0 }, [J("，已显示 " + P(a.value.entries.length) + " 项", 1)], 64))]), a.value.next_offset === null ? Y("", !0) : (U(), G(r, {
 					key: 0,
 					label: "加载更多",
 					color: "neutral",
@@ -58323,7 +59534,7 @@ var w4 = {
 					loading: o.value,
 					onClick: n[1] ||= (e) => Se(a.value.path, !0)
 				}, null, 8, ["loading"]))])) : Y("", !0)
-			], 8, E6)]), q(m, {
+			], 8, z8)]), q(m, {
 				open: s.value,
 				"onUpdate:open": n[12] ||= (e) => s.value = e,
 				title: S.value,
@@ -58332,10 +59543,10 @@ var w4 = {
 				ui: { content: "project-editor" }
 			}, {
 				content: L(() => [
-					K("div", L6, [K("div", R6, [q(i, {
+					K("div", X8, [K("div", Z8, [q(i, {
 						name: C.value[1],
 						class: M(["project-file-icon", C.value[2]])
-					}, null, 8, ["name", "class"]), K("span", null, P(S.value), 1)]), K("div", z6, [
+					}, null, 8, ["name", "class"]), K("span", null, P(S.value), 1)]), K("div", Q8, [
 						D.value ? (U(), G(r, {
 							key: 0,
 							icon: "i-lucide-wrap-text",
@@ -58365,7 +59576,7 @@ var w4 = {
 							"title",
 							"aria-label"
 						])) : Y("", !0),
-						E.value ? (U(), W("div", B6, [K("button", {
+						E.value ? (U(), W("div", $8, [K("button", {
 							type: "button",
 							"aria-pressed": !f.value,
 							title: "预览",
@@ -58373,7 +59584,7 @@ var w4 = {
 						}, [q(i, {
 							name: "i-lucide-eye",
 							class: "project-mode-icon"
-						}), n[16] ||= K("span", null, "预览", -1)], 8, V6), K("button", {
+						}), n[16] ||= K("span", null, "预览", -1)], 8, e5), K("button", {
 							type: "button",
 							"aria-pressed": f.value,
 							title: "源码",
@@ -58381,7 +59592,7 @@ var w4 = {
 						}, [q(i, {
 							name: "i-lucide-code-xml",
 							class: "project-mode-icon"
-						}), n[17] ||= K("span", null, "源码", -1)], 8, H6)])) : Y("", !0),
+						}), n[17] ||= K("span", null, "源码", -1)], 8, t5)])) : Y("", !0),
 						q(r, {
 							icon: "i-lucide-x",
 							color: "neutral",
@@ -58391,7 +59602,7 @@ var w4 = {
 							onClick: n[6] ||= (e) => s.value = !1
 						})
 					])]),
-					K("nav", U6, [(U(!0), W(H, null, B(x.value, (e, t) => (U(), W(H, { key: e.path }, [t ? (U(), G(i, {
+					K("nav", n5, [(U(!0), W(H, null, B(x.value, (e, t) => (U(), W(H, { key: e.path }, [t ? (U(), G(i, {
 						key: 0,
 						name: "i-lucide-chevron-right",
 						class: "project-crumb-separator"
@@ -58400,24 +59611,24 @@ var w4 = {
 						type: "button",
 						title: "在列表中打开此文件夹",
 						onClick: (t) => we(e.path)
-					}, P(e.name), 9, W6)) : (U(), W("span", G6, [q(i, {
+					}, P(e.name), 9, r5)) : (U(), W("span", i5, [q(i, {
 						name: C.value[1],
 						class: M(["project-file-icon", C.value[2]])
 					}, null, 8, ["name", "class"]), J(P(e.name), 1)]))], 64))), 128))]),
-					l.value?.truncated ? (U(), W("p", K6, [
+					l.value?.truncated ? (U(), W("p", a5, [
 						q(i, { name: "i-lucide-info" }),
 						J("文件较大，仅显示前 " + P(Te(l.value.limit)) + "（共 " + P(Te(l.value.size)) + "）", 1),
 						w.value === "html" ? (U(), W(H, { key: 0 }, [J("，HTML 不渲染不完整的内容")], 64)) : Y("", !0)
-					])) : E.value && !f.value && w.value === "html" ? (U(), W("p", q6, [q(i, { name: "i-lucide-shield" }), n[18] ||= J("静态预览：脚本、外部样式与外部图片不加载", -1)])) : Y("", !0),
+					])) : E.value && !f.value && w.value === "html" ? (U(), W("p", o5, [q(i, { name: "i-lucide-shield" }), n[18] ||= J("静态预览：脚本、外部样式与外部图片不加载", -1)])) : Y("", !0),
 					K("div", {
 						ref_key: "editor_body",
 						ref: ae,
 						class: "project-editor-body"
 					}, [
-						u.value ? (U(), W("div", J6, [q(i, {
+						u.value ? (U(), W("div", s5, [q(i, {
 							name: "i-lucide-loader-circle",
 							class: "animate-spin"
-						}), n[19] ||= J("正在读取文件…", -1)])) : d.value ? (U(), W("div", Y6, [
+						}), n[19] ||= J("正在读取文件…", -1)])) : d.value ? (U(), W("div", c5, [
 							q(i, { name: "i-lucide-circle-alert" }),
 							K("p", null, P(d.value), 1),
 							q(r, {
@@ -58427,7 +59638,7 @@ var w4 = {
 								size: "sm",
 								onClick: n[7] ||= (e) => Ce(c.value)
 							})
-						])) : l.value?.text === null ? (U(), W("div", X6, [q(i, { name: C.value[1] }, null, 8, ["name"]), K("p", null, P(l.value.reason), 1)])) : D.value && p.value ? (U(), W("div", {
+						])) : l.value?.text === null ? (U(), W("div", l5, [q(i, { name: C.value[1] }, null, 8, ["name"]), K("p", null, P(l.value.reason), 1)])) : D.value && p.value ? (U(), W("div", {
 							key: 3,
 							class: "project-code is-wrapped",
 							tabindex: "0",
@@ -58436,14 +59647,14 @@ var w4 = {
 						}, [(U(!0), W(H, null, B(O.value, (e, t) => (U(), W("div", {
 							key: t,
 							class: "project-code-row"
-						}, [K("span", Z6, P(t + 1), 1), K("span", Q6, P(e), 1)]))), 128))], 4)) : D.value ? (U(), W("div", $6, [K("pre", e8, P(te.value), 1), K("pre", t8, [K("code", null, P(l.value.text), 1)])])) : l.value && w.value === "html" ? (U(), W("iframe", {
+						}, [K("span", u5, P(t + 1), 1), K("span", d5, P(e), 1)]))), 128))], 4)) : D.value ? (U(), W("div", f5, [K("pre", p5, P(te.value), 1), K("pre", m5, [K("code", null, P(l.value.text), 1)])])) : l.value && w.value === "html" ? (U(), W("iframe", {
 							key: 5,
 							class: "project-html-preview",
 							sandbox: "",
 							referrerpolicy: "no-referrer",
 							srcdoc: ee.value,
 							title: "HTML 文件预览"
-						}, null, 8, n8)) : l.value ? (U(), W("div", {
+						}, null, 8, h5)) : l.value ? (U(), W("div", {
 							key: 6,
 							ref_key: "markdown_scroll",
 							ref: A,
@@ -58459,7 +59670,7 @@ var w4 = {
 							ref: oe,
 							class: "markdown-body project-markdown-preview",
 							innerHTML: T.value
-						}, null, 8, r8)], 544)) : Y("", !0),
+						}, null, 8, g5)], 544)) : Y("", !0),
 						ce.value && !ce.value.touch ? (U(), W("button", {
 							key: 7,
 							type: "button",
@@ -58473,7 +59684,7 @@ var w4 = {
 							onMousedown: n[8] ||= uu(() => {}, ["prevent"]),
 							onClick: be
 						}, [q(i, { name: "i-lucide-headphones" }), n[20] ||= J("朗读", -1)], 36)) : Y("", !0),
-						ce.value?.touch || I(j).state.message_id ? (U(), W("div", i8, [
+						ce.value?.touch || I(j).state.message_id ? (U(), W("div", _5, [
 							ce.value?.touch ? (U(), W("button", {
 								key: 0,
 								type: "button",
@@ -58489,7 +59700,7 @@ var w4 = {
 								"aria-pressed": I(j).state.following,
 								title: I(j).state.following ? "手动滚动即取消跟随" : "页面跟随朗读位置滚动",
 								onClick: n[10] ||= (e) => I(j).state.following ? I(j).state.following = !1 : I(j).follow()
-							}, [q(i, { name: "i-lucide-locate-fixed" }), J(P(I(j).state.following ? "跟随中" : "跟随"), 1)], 10, a8)) : Y("", !0),
+							}, [q(i, { name: "i-lucide-locate-fixed" }), J(P(I(j).state.following ? "跟随中" : "跟随"), 1)], 10, v5)) : Y("", !0),
 							I(j).state.reading ? (U(), W("button", {
 								key: 2,
 								type: "button",
@@ -58499,15 +59710,15 @@ var w4 = {
 							}, [q(i, { name: "i-lucide-square" }), n[22] ||= J("退出", -1)])) : Y("", !0)
 						])) : Y("", !0)
 					], 512),
-					K("footer", o8, [
+					K("footer", y5, [
 						l.value ? (U(), W("span", {
 							key: 0,
 							class: "project-editor-modified",
 							title: l.value.modified_at
-						}, "修改于 " + P(Ee(l.value.modified_at)), 9, s8)) : Y("", !0),
+						}, "修改于 " + P(Ee(l.value.modified_at)), 9, b5)) : Y("", !0),
 						n[23] ||= K("span", { class: "project-editor-status-spacer" }, null, -1),
-						l.value?.text == null ? Y("", !0) : (U(), W(H, { key: 1 }, [K("span", null, P(k.value) + " 行", 1), K("span", c8, P(ne.value), 1)], 64)),
-						l.value ? (U(), W("span", l8, P(Te(l.value.size)), 1)) : Y("", !0),
+						l.value?.text == null ? Y("", !0) : (U(), W(H, { key: 1 }, [K("span", null, P(k.value) + " 行", 1), K("span", x5, P(ne.value), 1)], 64)),
+						l.value ? (U(), W("span", S5, P(Te(l.value.size)), 1)) : Y("", !0),
 						K("span", null, P(C.value[0]), 1)
 					])
 				]),
@@ -58520,75 +59731,75 @@ var w4 = {
 			])], 64);
 		};
 	}
-}, [["__scopeId", "data-v-55a53d8e"]]), f8 = [
+}, [["__scopeId", "data-v-55a53d8e"]]), T5 = [
 	"aria-valuemax",
 	"aria-valuenow",
 	"aria-valuetext"
-], p8 = { class: "channel-main" }, m8 = { class: "channel-header" }, h8 = { class: "channel-title-icon" }, g8 = { class: "channel-title" }, _8 = { class: "channel-title-copy" }, v8 = ["title"], y8 = {
+], E5 = { class: "channel-main" }, D5 = { class: "channel-header" }, O5 = { class: "channel-title-icon" }, k5 = { class: "channel-title" }, A5 = { class: "channel-title-copy" }, j5 = ["title"], M5 = {
 	key: 2,
 	class: "channel-header-context"
-}, b8 = ["datetime", "title"], x8 = { class: "channel-header-actions" }, S8 = ["title", "aria-label"], C8 = {
+}, N5 = ["datetime", "title"], P5 = { class: "channel-header-actions" }, F5 = ["title", "aria-label"], I5 = {
 	key: 0,
 	class: "channel-work-avatars"
-}, w8 = {
+}, L5 = {
 	class: "channel-work-text",
 	role: "status"
-}, T8 = {
+}, R5 = {
 	key: 0,
 	class: "channel-launch-recovery",
 	"aria-label": "未完成的创建或启动请求"
-}, E8 = { role: "status" }, D8 = { class: "button-row" }, O8 = {
+}, z5 = { role: "status" }, B5 = { class: "button-row" }, V5 = {
 	key: 1,
 	class: "channel-tabbar"
-}, k8 = { class: "channel-brief-inner" }, A8 = { class: "channel-brief-heading" }, j8 = ["aria-label", "aria-expanded"], M8 = {
+}, H5 = { class: "channel-brief-inner" }, U5 = { class: "channel-brief-heading" }, W5 = ["aria-label", "aria-expanded"], G5 = {
 	key: 0,
 	class: "channel-brief-preview"
-}, N8 = {
+}, K5 = {
 	id: "channel-brief-content",
 	class: "channel-brief-content"
-}, P8 = ["innerHTML"], F8 = { class: "channel-brief-footer" }, I8 = {
+}, q5 = ["innerHTML"], J5 = { class: "channel-brief-footer" }, Y5 = {
 	key: 0,
 	class: "channel-brief-status"
-}, L8 = { class: "channel-content" }, R8 = {
+}, X5 = { class: "channel-content" }, Z5 = {
 	key: 0,
 	class: "content-page merged-page",
 	role: "tabpanel",
 	"aria-label": "房间"
-}, z8 = {
+}, Q5 = {
 	key: 1,
 	class: "content-page merged-page",
 	role: "tabpanel",
 	"aria-label": "执行"
-}, B8 = {
+}, $5 = {
 	class: "timeline-switch",
 	role: "group",
 	"aria-label": "执行视图"
-}, V8 = {
+}, e7 = {
 	key: 2,
 	class: "content-page",
 	role: "tabpanel",
 	"aria-label": "文件"
-}, H8 = {
+}, t7 = {
 	key: 1,
 	class: "channel-empty"
-}, U8 = { class: "merged-page channel-consensus-body" }, W8 = {
+}, n7 = { class: "merged-page channel-consensus-body" }, r7 = {
 	class: "merged-section channel-summary",
 	"aria-label": "当前共识"
-}, G8 = { class: "page-heading" }, K8 = { class: "form-footer" }, q8 = { class: "button-row" }, J8 = { class: "consensus-card is-brief" }, Y8 = ["innerHTML"], X8 = {
+}, i7 = { class: "page-heading" }, a7 = { class: "form-footer" }, o7 = { class: "button-row" }, s7 = { class: "consensus-card is-brief" }, c7 = ["innerHTML"], l7 = {
 	key: 0,
 	class: "consensus-card"
-}, Z8 = ["innerHTML"], Q8 = {
+}, u7 = ["innerHTML"], d7 = {
 	key: 2,
 	class: "fine-print"
-}, $8 = ["aria-valuenow", "aria-valuetext"], e5 = {
+}, f7 = ["aria-valuenow", "aria-valuetext"], p7 = {
 	key: 4,
 	id: "channel-member-rail",
 	class: "channel-member-rail",
 	"aria-label": "当前焦点与讨论进度"
-}, t5 = { class: "channel-rail-board" }, n5 = {
+}, m7 = { class: "channel-rail-board" }, h7 = {
 	key: 1,
 	class: "progress-board is-docked"
-}, r5 = "ai-codiscuss-channel-layout", i5 = 220, a5 = 440, o5 = 280, s5 = 16, c5 = 180, l5 = 400, u5 = 248, d5 = 16, f5 = 480, p5 = 1200, m5 = 0, h5 = 4, g5 = {
+}, g7 = "ai-codiscuss-channel-layout", _7 = 220, v7 = 440, y7 = 280, b7 = 16, x7 = 180, S7 = 400, C7 = 248, w7 = 16, T7 = 480, E7 = 1200, D7 = 0, O7 = 4, k7 = {
 	__name: "ChannelWorkspace",
 	setup(e) {
 		let { view: t, bridge: n, field: r, act: i, pending: a } = xr("discussion"), o = Z(() => t.value.room), s = Z(() => {
@@ -58619,12 +59830,12 @@ var w4 = {
 				label: "宽",
 				width: 1240
 			}
-		}, x = Re(), S = /* @__PURE__ */ F(x.reading), C = /* @__PURE__ */ F(x.effects), w = /* @__PURE__ */ F(x.rail), T = /* @__PURE__ */ F(x.nav), ee = /* @__PURE__ */ F(typeof window > "u" ? 728 : window.innerWidth), E = /* @__PURE__ */ F(x.collapsed), D = /* @__PURE__ */ F(!0), O = /* @__PURE__ */ F(x.rail_collapsed), k = Z(() => ee.value >= p5), te = Z(() => k.value && !E.value), ne = Z(() => t.value.tab === "discussion" && !O.value), re = Z(() => k.value && t.value.tab === "discussion" ? O.value ? "展开房间概览" : "收起房间概览" : "讨论进度"), ie = ["dispatched", "started"], ae = Z(() => {
-			let e = (o.value?.free?.members || []).filter(i0), t = (e) => e.execution?.stale ? "执行失联" : ie.includes(e.execution?.status) ? "执行中" : "待投递";
+		}, x = Re(), S = /* @__PURE__ */ F(x.reading), C = /* @__PURE__ */ F(x.effects), w = /* @__PURE__ */ F(x.rail), T = /* @__PURE__ */ F(x.nav), ee = /* @__PURE__ */ F(typeof window > "u" ? 728 : window.innerWidth), E = /* @__PURE__ */ F(x.collapsed), D = /* @__PURE__ */ F(!0), O = /* @__PURE__ */ F(x.rail_collapsed), k = Z(() => ee.value >= E7), te = Z(() => k.value && !E.value), ne = Z(() => t.value.tab === "discussion" && !O.value), re = Z(() => k.value && t.value.tab === "discussion" ? O.value ? "展开房间概览" : "收起房间概览" : "讨论进度"), ie = ["dispatched", "started"], ae = Z(() => {
+			let e = (o.value?.free?.members || []).filter(x2), t = (e) => e.execution?.stale ? "执行失联" : ie.includes(e.execution?.status) ? "执行中" : "待投递";
 			return e.length ? {
 				tone: e.some((e) => e.execution?.stale) ? "error" : "primary",
 				text: e.length === 1 ? `${n.display_name(e[0].name)} ${t(e[0])}` : `${e.length} 位执行中`,
-				members: e.slice(0, h5),
+				members: e.slice(0, O7),
 				title: e.map((e) => `${n.display_name(e.name)} ${t(e)}`).join("\n")
 			} : {
 				tone: "success",
@@ -58635,11 +59846,11 @@ var w4 = {
 		}), A = Z(() => !!o.value && !o.value.archived && !(k.value && ne.value)), oe = Z(() => {
 			let e = document.createElement("template");
 			return e.innerHTML = o.value?.rendered_brief || "", e.content.textContent.replace(/\s+/g, " ").trim();
-		}), se = /* @__PURE__ */ F(null), ce = /* @__PURE__ */ F(0), le = null, ue = /* @__PURE__ */ F(null), de = /* @__PURE__ */ F(null), j = Z(() => Math.min(l5, Math.max(c5, ee.value - f5 - m5))), pe = Z(() => Math.min(T.value, j.value)), me = Z(() => ({
+		}), se = /* @__PURE__ */ F(null), ce = /* @__PURE__ */ F(0), le = null, ue = /* @__PURE__ */ F(null), de = /* @__PURE__ */ F(null), j = Z(() => Math.min(S7, Math.max(x7, ee.value - T7 - D7))), pe = Z(() => Math.min(T.value, j.value)), me = Z(() => ({
 			"--channel-reading-width": `${b[S.value].width}px`,
 			"--channel-rail-width": `${w.value}px`,
 			"--channel-topbar-height": `${ce.value}px`,
-			"--channel-main-columns": te.value ? `${pe.value}px ${m5}px minmax(0, 1fr)` : "minmax(0, 1fr)"
+			"--channel-main-columns": te.value ? `${pe.value}px ${D7}px minmax(0, 1fr)` : "minmax(0, 1fr)"
 		})), he = Object.entries(b).map(([e, t]) => ({
 			value: e,
 			label: t.label
@@ -58737,12 +59948,12 @@ var w4 = {
 		}
 		function Re() {
 			try {
-				let e = JSON.parse(localStorage.getItem(r5)) || {};
+				let e = JSON.parse(localStorage.getItem(g7)) || {};
 				return {
 					reading: Object.hasOwn(b, e.reading) ? e.reading : "default",
 					effects: e.effects === "reduced" ? "reduced" : "full",
-					rail: Number.isFinite(e.rail) ? Math.min(a5, Math.max(i5, e.rail)) : o5,
-					nav: Number.isFinite(e.nav) ? Math.min(l5, Math.max(c5, e.nav)) : ze(),
+					rail: Number.isFinite(e.rail) ? Math.min(v7, Math.max(_7, e.rail)) : y7,
+					nav: Number.isFinite(e.nav) ? Math.min(S7, Math.max(x7, e.nav)) : ze(),
 					collapsed: e.collapsed === !0,
 					brief_collapsed: e.brief_collapsed === !0,
 					rail_collapsed: e.rail_collapsed === !0
@@ -58751,7 +59962,7 @@ var w4 = {
 				return {
 					reading: "default",
 					effects: "full",
-					rail: o5,
+					rail: y7,
 					nav: ze(),
 					collapsed: !1,
 					brief_collapsed: !1,
@@ -58760,11 +59971,11 @@ var w4 = {
 			}
 		}
 		function ze() {
-			return typeof window > "u" ? u5 : window.innerWidth >= 1900 ? 280 : window.innerWidth <= 980 ? 220 : u5;
+			return typeof window > "u" ? C7 : window.innerWidth >= 1900 ? 280 : window.innerWidth <= 980 ? 220 : C7;
 		}
 		function Be() {
 			try {
-				localStorage.setItem(r5, JSON.stringify({
+				localStorage.setItem(g7, JSON.stringify({
 					reading: S.value,
 					effects: C.value,
 					rail: w.value,
@@ -58798,19 +60009,19 @@ var w4 = {
 			}, e.currentTarget.setPointerCapture(e.pointerId));
 		}
 		function qe(e) {
-			ue.value?.pointer === e.pointerId && (w.value = Math.round(Math.min(a5, Math.max(i5, ue.value.width + ue.value.x - e.clientX))));
+			ue.value?.pointer === e.pointerId && (w.value = Math.round(Math.min(v7, Math.max(_7, ue.value.width + ue.value.x - e.clientX))));
 		}
 		function Je(e) {
 			ue.value?.pointer === e.pointerId && (ue.value = null, e.currentTarget.hasPointerCapture(e.pointerId) && e.currentTarget.releasePointerCapture(e.pointerId), Be());
 		}
 		function Ye(e) {
 			let t = {
-				ArrowLeft: w.value + s5,
-				ArrowRight: w.value - s5,
-				Home: i5,
-				End: a5
+				ArrowLeft: w.value + b7,
+				ArrowRight: w.value - b7,
+				Home: _7,
+				End: v7
 			};
-			Object.hasOwn(t, e.key) && (e.preventDefault(), w.value = Math.min(a5, Math.max(i5, t[e.key])), Be());
+			Object.hasOwn(t, e.key) && (e.preventDefault(), w.value = Math.min(v7, Math.max(_7, t[e.key])), Be());
 		}
 		function Xe(e) {
 			e.button === 0 && (e.preventDefault(), e.currentTarget.focus(), de.value = {
@@ -58820,19 +60031,19 @@ var w4 = {
 			}, e.currentTarget.setPointerCapture(e.pointerId));
 		}
 		function Ze(e) {
-			de.value?.pointer === e.pointerId && (T.value = Math.round(Math.min(j.value, Math.max(c5, de.value.width + e.clientX - de.value.x))));
+			de.value?.pointer === e.pointerId && (T.value = Math.round(Math.min(j.value, Math.max(x7, de.value.width + e.clientX - de.value.x))));
 		}
 		function Qe(e) {
 			de.value?.pointer === e.pointerId && (de.value = null, e.currentTarget.hasPointerCapture(e.pointerId) && e.currentTarget.releasePointerCapture(e.pointerId), Be());
 		}
 		function $e(e) {
 			let t = {
-				ArrowLeft: pe.value - d5,
-				ArrowRight: pe.value + d5,
-				Home: c5,
+				ArrowLeft: pe.value - w7,
+				ArrowRight: pe.value + w7,
+				Home: x7,
 				End: j.value
 			};
-			Object.hasOwn(t, e.key) && (e.preventDefault(), T.value = Math.min(j.value, Math.max(c5, t[e.key])), Be());
+			Object.hasOwn(t, e.key) && (e.preventDefault(), T.value = Math.min(j.value, Math.max(x7, t[e.key])), Be());
 		}
 		return (e, r) => {
 			let b = MA, x = RV, T = sA, ee = kV, O = pA, ie = PV, ce = jV, le = DV, ve = wV, Re = vV, ze = gV;
@@ -58844,7 +60055,7 @@ var w4 = {
 				}]),
 				style: fe(me.value)
 			}, [
-				te.value ? (U(), G(S1, {
+				te.value ? (U(), G(z0, {
 					key: 0,
 					tabs: _e.value,
 					onSelect: je,
@@ -58866,7 +60077,7 @@ var w4 = {
 					"aria-label": "调整房间栏宽度",
 					"aria-orientation": "vertical",
 					"aria-controls": "channel-sidebar",
-					"aria-valuemin": c5,
+					"aria-valuemin": x7,
 					"aria-valuemax": j.value,
 					"aria-valuenow": pe.value,
 					"aria-valuetext": `${pe.value} 像素`,
@@ -58877,13 +60088,13 @@ var w4 = {
 					onPointercancel: Qe,
 					onLostpointercapture: Qe,
 					onKeydown: $e
-				}, null, 40, f8)) : Y("", !0),
-				K("main", p8, [K("div", {
+				}, null, 40, T5)) : Y("", !0),
+				K("main", E5, [K("div", {
 					ref_key: "topbar",
 					ref: se,
 					class: M(["channel-topbar", { "is-overlay": o.value && I(t).tab === "discussion" }])
 				}, [
-					K("header", m8, [
+					K("header", D5, [
 						k.value ? (U(), G(x, {
 							key: 0,
 							text: E.value ? "展开房间栏" : "收起房间栏"
@@ -58911,8 +60122,8 @@ var w4 = {
 							"aria-expanded": m.value,
 							onClick: r[2] ||= (e) => m.value = !0
 						}, null, 8, ["aria-expanded"])),
-						K("span", h8, [q(T, { name: "i-lucide-hash" })]),
-						K("div", g8, [K("div", _8, [K("h1", { title: o.value?.title }, P(o.value?.title || "共议"), 9, v8)]), o.value?.archived ? (U(), G(ee, {
+						K("span", O5, [q(T, { name: "i-lucide-hash" })]),
+						K("div", k5, [K("div", A5, [K("h1", { title: o.value?.title }, P(o.value?.title || "共议"), 9, j5)]), o.value?.archived ? (U(), G(ee, {
 							key: 0,
 							color: "neutral",
 							variant: "subtle",
@@ -58921,16 +60132,16 @@ var w4 = {
 							default: L(() => [...r[25] ||= [J("已存档", -1)]]),
 							_: 1
 						})) : Y("", !0)]),
-						o.value ? (U(), W("span", y8, [
+						o.value ? (U(), W("span", M5, [
 							J(P(_e.value.find((e) => e.value === I(t).tab)?.label), 1),
 							r[27] ||= K("span", null, "·", -1),
 							J(P(o.value.message_count) + " 条记录", 1),
 							s.value ? (U(), W(H, { key: 0 }, [r[26] ||= K("span", null, "·", -1), K("time", {
 								datetime: o.value.created_at,
 								title: new Date(o.value.created_at).toLocaleString("zh-CN", { hour12: !1 })
-							}, P(s.value), 9, b8)], 64)) : Y("", !0)
+							}, P(s.value), 9, N5)], 64)) : Y("", !0)
 						])) : Y("", !0),
-						K("div", x8, [
+						K("div", P5, [
 							A.value ? (U(), W("button", {
 								key: 0,
 								type: "button",
@@ -58939,7 +60150,7 @@ var w4 = {
 								"aria-label": `执行状态：${ae.value.title.replaceAll("\n", "，")}；打开房间概览`,
 								onClick: Ve
 							}, [
-								ae.value.members.length ? (U(), W("span", C8, [(U(!0), W(H, null, B(ae.value.members, (e) => (U(), G(O, {
+								ae.value.members.length ? (U(), W("span", I5, [(U(!0), W(H, null, B(ae.value.members, (e) => (U(), G(O, {
 									key: e.id,
 									src: I(n).identities[e.name]?.icon,
 									text: I(n).identities[e.name]?.initials,
@@ -58953,8 +60164,8 @@ var w4 = {
 									"class"
 								]))), 128))])) : Y("", !0),
 								r[28] ||= K("span", { class: "pb-dot" }, null, -1),
-								K("span", w8, P(ae.value.text), 1)
-							], 10, S8)) : Y("", !0),
+								K("span", L5, P(ae.value.text), 1)
+							], 10, F5)) : Y("", !0),
 							I(t).tab === "discussion" ? (U(), W("form", {
 								key: 1,
 								class: "channel-search",
@@ -59032,12 +60243,12 @@ var w4 = {
 							_: 1
 						}, 8, ["text"])
 					]),
-					I(t).launch.recoveries.length ? (U(), W("section", T8, [
+					I(t).launch.recoveries.length ? (U(), W("section", R5, [
 						r[29] ||= K("h2", null, "继续未完成的请求", -1),
 						(U(!0), W(H, null, B(I(t).launch.recoveries, (e) => (U(), W("article", { key: e.id }, [
 							K("strong", null, P(e.title), 1),
-							K("p", E8, P(e.error || "启动结果尚未确认；原请求已保存在此浏览器中。"), 1),
-							K("div", D8, [
+							K("p", z5, P(e.error || "启动结果尚未确认；原请求已保存在此浏览器中。"), 1),
+							K("div", B5, [
 								q(b, {
 									label: e.direct ? "继续创建房间" : "继续本次启动",
 									size: "sm",
@@ -59070,7 +60281,7 @@ var w4 = {
 						]))), 128)),
 						r[30] ||= K("small", null, "移除待办不会删除房间或停止讨论。", -1)
 					])) : Y("", !0),
-					o.value ? (U(), W("div", O8, [q(ce, {
+					o.value ? (U(), W("div", V5, [q(ce, {
 						modelValue: ge.value,
 						"onUpdate:modelValue": r[7] ||= (e) => ge.value = e,
 						items: _e.value,
@@ -59085,7 +60296,7 @@ var w4 = {
 						key: 2,
 						class: M(["channel-host-brief", { "is-collapsed": D.value }]),
 						"aria-label": "主持简报"
-					}, [K("div", k8, [K("div", A8, [K("button", {
+					}, [K("div", H5, [K("div", U5, [K("button", {
 						type: "button",
 						class: "channel-brief-toggle",
 						"aria-label": D.value ? "展开主持简报" : "收起主持简报",
@@ -59095,8 +60306,8 @@ var w4 = {
 					}, [
 						q(T, { name: D.value ? "i-lucide-chevron-right" : "i-lucide-chevron-down" }, null, 8, ["name"]),
 						K("strong", null, "主持简报" + P(D.value ? "：" : ""), 1),
-						D.value ? (U(), W("span", M8, P(oe.value), 1)) : Y("", !0)
-					], 8, j8), D.value ? Y("", !0) : (U(), W(H, { key: 0 }, [q(b, {
+						D.value ? (U(), W("span", G5, P(oe.value), 1)) : Y("", !0)
+					], 8, W5), D.value ? Y("", !0) : (U(), W(H, { key: 0 }, [q(b, {
 						label: "详细共识与讨论记录",
 						color: "neutral",
 						variant: "link",
@@ -59110,25 +60321,25 @@ var w4 = {
 						size: "xs",
 						class: "channel-brief-update",
 						onClick: r[9] ||= (e) => we(!0)
-					})], 64))]), vr(K("div", N8, [K("div", {
+					})], 64))]), vr(K("div", K5, [K("div", {
 						class: "channel-brief-text markdown-body",
 						innerHTML: o.value.rendered_brief
-					}, null, 8, P8), K("div", F8, [ye.value ? Y("", !0) : (U(), W("span", I8, P(I(n).progress_speaker(o.value)), 1)), K("small", null, P(I(n).brief_meta(o.value)), 1)])], 512), [[Vc, !D.value]])])], 2)) : Y("", !0)
+					}, null, 8, q5), K("div", J5, [ye.value ? Y("", !0) : (U(), W("span", Y5, P(I(n).progress_speaker(o.value)), 1)), K("small", null, P(I(n).brief_meta(o.value)), 1)])], 512), [[Vc, !D.value]])])], 2)) : Y("", !0)
 				], 2), o.value ? (U(), W("div", {
 					key: 0,
 					class: M(["channel-body", { "channel-body-discussion": I(t).tab === "discussion" }])
-				}, [K("div", L8, [
+				}, [K("div", X5, [
 					vr(q(EX, {
 						onDetail: Me,
 						onEdit: r[10] ||= (e) => u.value = "edit"
 					}, null, 512), [[Vc, I(t).tab === "discussion"]]),
-					I(t).tab === "overview" ? (U(), W("div", R8, [q(M2), ye.value ? Y("", !0) : (U(), G(GX, {
+					I(t).tab === "overview" ? (U(), W("div", Z5, [q(G4), ye.value ? Y("", !0) : (U(), G(GX, {
 						key: 0,
 						section: "access",
 						onOpen: r[11] ||= (e) => u.value = e,
 						onDetail: Me
 					}))])) : Y("", !0),
-					I(t).tab === "timeline" ? (U(), W("div", z8, [K("div", B8, [(U(), W(H, null, B(c, (e) => q(b, {
+					I(t).tab === "timeline" ? (U(), W("div", Q5, [K("div", $5, [(U(), W(H, null, B(c, (e) => q(b, {
 						key: e.value,
 						label: e.label,
 						size: "xs",
@@ -59141,18 +60352,18 @@ var w4 = {
 						"variant",
 						"aria-pressed",
 						"onClick"
-					])), 64))]), l.value === "waterfall" ? (U(), G(Y3, {
+					])), 64))]), l.value === "waterfall" ? (U(), G(c8, {
 						key: 0,
 						onDetail: Me
-					})) : (U(), G(S6, {
+					})) : (U(), G(F8, {
 						key: 1,
 						onDetail: Me
 					}))])) : Y("", !0),
-					I(t).tab === "files" ? (U(), W("div", V8, [(U(), G(d8, {
+					I(t).tab === "files" ? (U(), W("div", e7, [(U(), G(w5, {
 						key: o.value.id,
 						directory: N.value
 					}, null, 8, ["directory"]))])) : Y("", !0)
-				])], 2)) : (U(), W("div", H8, [
+				])], 2)) : (U(), W("div", t7, [
 					q(T, { name: "i-lucide-hash" }),
 					r[31] ||= K("h2", null, "新建一个协作房间", -1),
 					r[32] ||= K("p", null, "邀请 AI 一起协作，随时 @ 提问；需要时开启讨论，保留所有人的观点。", -1),
@@ -59175,14 +60386,14 @@ var w4 = {
 						body: "dialog-body"
 					}
 				}, {
-					body: L(() => [K("div", U8, [
+					body: L(() => [K("div", n7, [
 						ye.value ? Y("", !0) : (U(), G(GX, {
 							key: 0,
 							section: "host",
 							onOpen: Te,
 							onDetail: Ee
 						})),
-						K("section", W8, [K("div", G8, [r[33] ||= K("div", null, [K("h2", null, "当前共识"), K("p", null, "主持人整理的结论、共识与分歧，用 #消息编号 保留依据；讨论结束时保存进下方记录。")], -1), Se.value ? Y("", !0) : (U(), G(b, {
+						K("section", r7, [K("div", i7, [r[33] ||= K("div", null, [K("h2", null, "当前共识"), K("p", null, "主持人整理的结论、共识与分歧，用 #消息编号 保留依据；讨论结束时保存进下方记录。")], -1), Se.value ? Y("", !0) : (U(), G(b, {
 							key: 0,
 							icon: "i-lucide-pencil",
 							label: "编辑",
@@ -59226,7 +60437,7 @@ var w4 = {
 								}, null, 8, ["modelValue"])]),
 								_: 1
 							}),
-							K("div", K8, [K("span", null, "依据消息截止 #" + P(I(t).snapshot_id), 1), K("div", q8, [q(b, {
+							K("div", a7, [K("span", null, "依据消息截止 #" + P(I(t).snapshot_id), 1), K("div", o7, [q(b, {
 								label: "取消",
 								color: "neutral",
 								variant: "ghost",
@@ -59239,7 +60450,7 @@ var w4 = {
 								class: "channel-primary-button",
 								loading: I(a) === "save_context"
 							}, null, 8, ["loading"])])])
-						], 32)) : o.value.host_brief?.text || o.value.state_text ? (U(), W(H, { key: 1 }, [K("div", J8, [K("h3", null, [r[34] ||= J("主持简报", -1), o.value.state_until ? (U(), W("button", {
+						], 32)) : o.value.host_brief?.text || o.value.state_text ? (U(), W(H, { key: 1 }, [K("div", s7, [K("h3", null, [r[34] ||= J("主持简报", -1), o.value.state_until ? (U(), W("button", {
 							key: 0,
 							type: "button",
 							class: "subtle-link",
@@ -59247,7 +60458,7 @@ var w4 = {
 						}, "整理至 #" + P(o.value.state_until), 1)) : Y("", !0)]), K("div", {
 							class: "markdown-body",
 							innerHTML: o.value.rendered_brief
-						}, null, 8, Y8)]), Ce.value ? (U(), W("details", X8, [K("summary", null, [
+						}, null, 8, c7)]), Ce.value ? (U(), W("details", l7, [K("summary", null, [
 							r[35] ||= K("h3", null, "详细共识与进度", -1),
 							r[36] ||= K("span", null, "依据、已处理内容、未决问题与下一步", -1),
 							q(T, {
@@ -59257,8 +60468,8 @@ var w4 = {
 						]), K("div", {
 							class: "markdown-body consensus-state",
 							innerHTML: Ce.value
-						}, null, 8, Z8)])) : Y("", !0)], 64)) : (U(), W("p", Q8, "还没有共识。主持人会在讨论中整理，也可以点“编辑”自己写。"))]),
-						q(Q0, { onDetail: Ee })
+						}, null, 8, u7)])) : Y("", !0)], 64)) : (U(), W("p", d7, "还没有共识。主持人会在讨论中整理，也可以点“编辑”自己写。"))]),
+						q(d4, { onDetail: Ee })
 					])]),
 					_: 1
 				}, 8, ["content", "open"])) : Y("", !0),
@@ -59270,8 +60481,8 @@ var w4 = {
 					"aria-label": "调整右侧栏宽度",
 					"aria-orientation": "vertical",
 					"aria-controls": "channel-member-rail",
-					"aria-valuemin": i5,
-					"aria-valuemax": a5,
+					"aria-valuemin": _7,
+					"aria-valuemax": v7,
 					"aria-valuenow": w.value,
 					"aria-valuetext": `${w.value} 像素`,
 					title: "拖动调整右侧栏宽度，也可使用左右方向键",
@@ -59281,8 +60492,8 @@ var w4 = {
 					onPointercancel: Je,
 					onLostpointercapture: Je,
 					onKeydown: Ye
-				}, null, 40, $8)) : Y("", !0),
-				ne.value ? (U(), W("aside", e5, [K("section", t5, [o.value ? (U(), G(L0, { key: 0 })) : (U(), W("div", n5, [...r[37] ||= [K("header", { class: "pb-header" }, [K("strong", null, "讨论进度")], -1), K("p", { class: "channel-rail-empty" }, "暂无房间，新建讨论后在这里查看进度与参与者。", -1)]]))])])) : Y("", !0),
+				}, null, 40, f7)) : Y("", !0),
+				ne.value ? (U(), W("aside", p7, [K("section", m7, [o.value ? (U(), G(X2, { key: 0 })) : (U(), W("div", h7, [...r[37] ||= [K("header", { class: "pb-header" }, [K("strong", null, "讨论进度")], -1), K("p", { class: "channel-rail-empty" }, "暂无房间，新建讨论后在这里查看进度与参与者。", -1)]]))])])) : Y("", !0),
 				q(ze, {
 					open: m.value,
 					"onUpdate:open": r[20] ||= (e) => m.value = e,
@@ -59293,7 +60504,7 @@ var w4 = {
 						content: "channel-navigation-drawer"
 					}
 				}, {
-					content: L(() => [q(S1, {
+					content: L(() => [q(z0, {
 						tabs: _e.value,
 						onSelect: je,
 						onManage: Oe,
@@ -59323,10 +60534,10 @@ var w4 = {
 						body: "progress-drawer-body"
 					}
 				}, {
-					body: L(() => [q(L0)]),
+					body: L(() => [q(X2)]),
 					_: 1
 				}, 8, ["open", "description"])) : Y("", !0),
-				q(N$, {
+				q(X1, {
 					modelValue: u.value,
 					"onUpdate:modelValue": r[22] ||= (e) => u.value = e,
 					"reading-width": S.value,
@@ -59350,7 +60561,7 @@ var w4 = {
 			], 6);
 		};
 	}
-}, _5 = 120, v5 = {
+}, A7 = 120, j7 = {
 	__name: "App",
 	setup(e) {
 		let t = {
@@ -59370,24 +60581,41 @@ var w4 = {
 				duration: 4e3
 			}
 		};
-		document.documentElement.dataset.motion = "on", br("discussion", pV());
-		let n = {
+		document.documentElement.dataset.motion = "on";
+		let n = pV();
+		br("discussion", n);
+		let r = {
 			onMousedown: (e) => e.preventDefault(),
 			onPointermove: (e) => {
 				e.pointerType !== "mouse" && e.stopPropagation();
 			}
-		}, r = { close: "pointer-coarse:p-2.5 pointer-coarse:-m-2.5" }, i = NE();
-		function a({ detail: { level: e, message: a } }) {
-			let o = String(a);
-			i.add({
+		}, i = { close: "pointer-coarse:p-2.5 pointer-coarse:-m-2.5" }, a = NE();
+		function o({ detail: { level: e, message: n } }) {
+			let o = String(n);
+			a.add({
 				...t[e] || t.info,
-				...n,
-				ui: r,
+				...r,
+				ui: i,
 				id: `${e}:${o}`,
-				title: o.length > _5 ? `${o.slice(0, 119)}…` : o
+				title: o.length > A7 ? `${o.slice(0, 119)}…` : o
 			});
 		}
-		return document.addEventListener("discuss:notice", a), ta(() => document.removeEventListener("discuss:notice", a)), (e, t) => {
+		document.addEventListener("discuss:notice", o), ta(() => document.removeEventListener("discuss:notice", o));
+		let s = Z(() => n.view.value.device?.prompt), c = Z({
+			get: () => !!s.value,
+			set: (e) => {
+				e || n.bridge.device.prompt_cancel();
+			}
+		});
+		function l() {
+			n.bridge.device.prompt_confirm()?.catch((e) => {
+				e?.cancelled || o({ detail: {
+					level: "error",
+					message: e.message
+				} });
+			});
+		}
+		return (e, t) => {
 			let n = HA;
 			return U(), G(n, {
 				locale: I(fV),
@@ -59398,7 +60626,20 @@ var w4 = {
 				}
 			}, {
 				default: L(() => [q(I(Iz), { "reduced-motion": "never" }, {
-					default: L(() => [q(g5)]),
+					default: L(() => [q(k7), s.value ? (U(), G(iW, {
+						key: 0,
+						open: c.value,
+						"onUpdate:open": t[0] ||= (e) => c.value = e,
+						title: s.value.title,
+						description: s.value.description,
+						"confirm-label": s.value.confirm_label,
+						onConfirm: l
+					}, null, 8, [
+						"open",
+						"title",
+						"description",
+						"confirm-label"
+					])) : Y("", !0)]),
 					_: 1
 				}, 8, ["reduced-motion"])]),
 				_: 1
@@ -59408,14 +60649,14 @@ var w4 = {
 };
 //#endregion
 //#region frontend/main.js
-function y5() {
-	bu(v5).use(ph).mount("#modern-root");
+function M7() {
+	bu(j7).use(ph).mount("#modern-root");
 }
-var b5 = 120;
-function x5() {
+var N7 = 120;
+function P7() {
 	setTimeout(() => {
 		document.activeElement?.matches?.("input, textarea, select, [contenteditable='true']") || (window.scrollX || window.scrollY) && window.scrollTo(0, 0);
-	}, b5);
+	}, N7);
 }
-document.addEventListener("focusout", x5), window.visualViewport?.addEventListener("resize", x5), document.readyState === "loading" ? document.addEventListener("DOMContentLoaded", y5) : y5();
+document.addEventListener("focusout", P7), window.visualViewport?.addEventListener("resize", P7), document.readyState === "loading" ? document.addEventListener("DOMContentLoaded", M7) : M7();
 //#endregion

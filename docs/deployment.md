@@ -99,7 +99,7 @@ npm run deploy -- --cwd .wrangler/deploy
 codiscuss token
 ```
 
-`codiscuss token` 生成注册管理员用的一次性令牌（需已 `wrangler login`），在网站左下角注册时填入；在已用 `codiscuss local connect` 连上本机的网页注册时，账号密码会保存到 `~/.codiscuss/admin-accounts.json`。注册后其他设备直接用账号密码登录。以上 schema 命令用于空库初始化；已有站点按下面的升级流程操作。
+`codiscuss token` 生成注册管理员用的一次性令牌（需已 `wrangler login`），在网站左下角注册时填入。注册后其他设备直接用账号密码登录；密码只由你自己保管，本机不保存（旧版本保存的 `~/.codiscuss/admin-accounts.json` 会在服务启动时删除）。以上 schema 命令用于空库初始化；已有站点按下面的升级流程操作。
 
 ### 升级已有数据库
 
@@ -119,6 +119,8 @@ npx wrangler d1 execute DB --remote --config .wrangler/deploy/wrangler.jsonc --f
 脚本删除旧排程和运行记录，保留消息及当前协作会话；没有房主凭据的旧房间仍可阅读，但房主无法管理，已有成员凭据保留原权限。任一步失败立即停止，不继续部署；D1 上的整份迁移原子性尚未实测，必须保留事前备份。成功后的脚本和 schema 均可重复执行。
 
 本机 Python 站点启动时检测旧表，自动在单个事务内迁移，再应用 schema；迁移失败会整体回滚并终止启动。升级前仍应备份 SQLite 和附件，不必手工执行删表脚本。
+
+登录记录改存在 `admin_logins` 表中，带有效期。执行新 schema 后，旧表 `admin_sessions` 里的永久登录不再被读取，所有设备需要重新登录一次。网站和电脑上的 codiscuss 需要同时升级：新版电脑只执行已配对设备签名的转交命令。升级后，每台外出用的设备都要按 [远程控制](runner.md#在其他设备上远程控制) 重新配对一次，并创建通行密钥；新增的 `admin_passkeys`、`admin_challenges` 表由同一份 schema 创建。
 
 发布后检查网页、`/api/health`，以及：
 

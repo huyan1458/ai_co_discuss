@@ -102,9 +102,37 @@ CREATE TABLE IF NOT EXISTS site_admin (
     locked_until INTEGER NOT NULL DEFAULT 0,
     created_at INTEGER NOT NULL
 );
-CREATE TABLE IF NOT EXISTS admin_sessions (
+-- Logins end after a week unused or a month in all; label is the browser that signed in. The older table
+-- admin_sessions held logins that never expired and is no longer read, so upgrading signs everyone out once.
+CREATE TABLE IF NOT EXISTS admin_logins (
     token_hash TEXT PRIMARY KEY,
+    label TEXT NOT NULL DEFAULT '',
+    created_at INTEGER NOT NULL,
+    last_seen INTEGER NOT NULL
+);
+-- Wrong-password backoff per client address; the row with source '*' counts all addresses within an hour.
+-- site_admin.failed_attempts and locked_until are no longer used.
+-- Passkeys for website login (Worker only); the paired computer keeps its own copy for device checks.
+CREATE TABLE IF NOT EXISTS admin_passkeys (
+    id TEXT PRIMARY KEY,
+    public_key TEXT NOT NULL,
+    alg INTEGER NOT NULL,
+    sign_count INTEGER NOT NULL DEFAULT 0,
+    label TEXT NOT NULL DEFAULT '',
     created_at INTEGER NOT NULL
+);
+-- One-time passkey challenges, valid two minutes.
+CREATE TABLE IF NOT EXISTS admin_challenges (
+    id TEXT PRIMARY KEY,
+    purpose TEXT NOT NULL,
+    challenge TEXT NOT NULL,
+    created_at INTEGER NOT NULL
+);
+CREATE TABLE IF NOT EXISTS admin_attempts (
+    source TEXT PRIMARY KEY,
+    failed INTEGER NOT NULL DEFAULT 0,
+    locked_until INTEGER NOT NULL DEFAULT 0,
+    updated_at INTEGER NOT NULL
 );
 -- One-time registration token from `codiscuss token` on the deploying computer; cleared once the administrator registers.
 CREATE TABLE IF NOT EXISTS admin_setup (

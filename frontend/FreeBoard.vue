@@ -12,7 +12,6 @@ import { busy, member_actions } from "./member-actions.js";
 
 const { view, bridge, act, pending } = inject("discussion");
 const LIVE = ["dispatched", "started"];
-const EXECUTION_STATUS_TEXT = { dispatched: "唤醒中", started: "执行中", completed: "完成", failed: "失败" };
 const ACCESS_LABELS = { runner: "本机唤醒", manual: "手动接入" };
 const TASK_PREVIEW_LENGTH = 90;
 const room = computed(() => view.value.room);
@@ -24,11 +23,29 @@ const host = computed(() => (free.value.members || []).find((member) => member.r
 const workflow = computed(() => active_workflow(view.value.launch.room_models?.workflow, free.value.members));
 const in_workflow = (name) => Boolean(workflow.value?.enabled && Object.values(workflow.value.members || {}).includes(name));
 const invite_workflow_id = ref("");
+// Closing the section only hides it in this browser; the workflow keeps running. The mark is per room and cleared once
+// the room's settings are read and that workflow is no longer in use, so another or a restarted workflow shows again.
+const WORKFLOW_HIDDEN_PREFIX = "discuss-workflow-hidden:";
+const workflow_hidden = ref(false);
+watch(() => [room.value.id, view.value.launch.room_models, workflow.value?.id], ([room_id, models, workflow_id]) => {
+  const key = WORKFLOW_HIDDEN_PREFIX + room_id;
+  let saved = "";
+  try { saved = localStorage.getItem(key) || ""; } catch { /* Treat as not hidden. */ }
+  const settled = models?.room_id === room_id && !models.loading && !models.error;
+  if (saved && settled && saved !== workflow_id) {
+    try { localStorage.removeItem(key); } catch { /* Cleared on a later read. */ }
+    saved = "";
+  }
+  workflow_hidden.value = Boolean(workflow_id) && saved === workflow_id;
+}, { immediate: true });
+function hide_workflow() {
+  try { localStorage.setItem(WORKFLOW_HIDDEN_PREFIX + room.value.id, workflow.value.id); } catch { /* Shown again on the next refresh. */ }
+  workflow_hidden.value = true;
+}
 
 // Rows follow the room's speaking order; members who left are listed after it.
 const member_named = (name) => (free.value.members || []).find((member) => member.name === name);
 const away_names = computed(() => (free.value.members || []).filter((member) => member.status === "away").map((member) => member.name));
-const name_of = (member_id) => bridge.display_name((free.value.members || []).find((member) => member.id === member_id)?.name || "成员");
 
 // Each overlapping pair of executions is announced once per browser; the room resends its conflicts on every refresh.
 const CONFLICT_SEEN_PREFIX = "discuss-conflicts-notified:";
@@ -149,22 +166,6 @@ const task = computed(() => {
 const task_expanded = ref(false);
 watch(() => room.value.id, () => { task_expanded.value = false; });
 
-/** Each execution runs from delivery to its end; one still running counts up to now. */
-const timings = computed(() => {
-  const now = Math.floor(Date.now() / 1000);
-  const items = (free.value.executions || []).map((execution) => ({ ...execution,
-    seconds: execution.created_at ? (execution.finished_at || (LIVE.includes(execution.status) ? now : execution.created_at)) - execution.created_at : null }));
-  return { items, total: items.reduce((sum, item) => sum + (item.seconds || 0), 0) };
-});
-
-/** Render whole seconds compactly, as the discussion board does. */
-function duration(seconds) {
-  if (seconds === null || seconds === undefined) return "—";
-  if (seconds < 60) return `${seconds}秒`;
-  if (seconds < 3600) return `${Math.floor(seconds / 60)}分${String(seconds % 60).padStart(2, "0")}秒`;
-  return `${Math.floor(seconds / 3600)}小时${Math.floor((seconds % 3600) / 60)}分`;
-}
-
 /** The rail's quick entry to a member's actions; the room overview lays the same list out in full. */
 function member_menu(member) {
   return member_actions(member, { view: view.value, act, describe: (name) => { describing.value = name; } });
@@ -219,9 +220,9 @@ watch(() => room.value.id, () => { starting.value = false; });
       <p class="pb-focus" :class="{ 'is-expanded': task_expanded }">{{ task }}</p>
       <button v-if="task.length > TASK_PREVIEW_LENGTH" type="button" class="pb-link" @click="task_expanded = !task_expanded">{{ task_expanded ? '收起' : '展开' }}</button>
     </section>
-    <section v-if="workflow" class="pb-section" aria-label="房间工作流">
+    <section v-if="workflow && !workflow_hidden" class="pb-section" aria-label="房间工作流">
       <h4>工作流</h4>
-      <WorkflowControl :workflow="workflow" />
+      <WorkflowControl :workflow="workflow" dismissible @dismiss="hide_workflow" />
     </section>
     <section class="pb-section" aria-label="发言顺序">
       <h4>发言顺序</h4>
@@ -244,18 +245,6 @@ watch(() => room.value.id, () => { starting.value = false; });
     <section v-if="!room.archived && !discussion" class="pb-actions" aria-label="操作">
       <UButton icon="i-lucide-messages-square" label="开启讨论" size="sm" color="neutral" variant="outline" class="pb-action pb-action-block pb-restart" title="由主持人推进成员轮流发言，到上限或结束后房间回到自由协作" :disabled="!can_start" @click="starting = true" />
       <p v-if="!can_start" class="pb-free-note">开启讨论需要一位由本机唤醒的 AI 主持人。</p>
-    </section>
-    <section v-if="timings.items.length" class="pb-section" aria-label="执行耗时">
-      <div class="pb-timing-heading"><h4>耗时</h4><small>共 {{ timings.items.length }} 次执行 · {{ duration(timings.total) }}</small></div>
-      <details class="pb-timings">
-        <summary>查看每次执行</summary>
-        <ol>
-          <li v-for="item in timings.items" :key="item.id">
-            <span class="pb-timing-who">#{{ item.id }} {{ name_of(item.member_id) }}<small>{{ item.status === 'cancelled' ? bridge.stop_label(item) : EXECUTION_STATUS_TEXT[item.status] || item.status }}</small></span>
-            <span class="pb-timing-stages"><span>用时 {{ duration(item.seconds) }}</span></span>
-          </li>
-        </ol>
-      </details>
     </section>
   <StartDiscussionDialog v-model:open="starting" />
   <InviteDialog v-model:open="inviting" :workflow-id="invite_workflow_id" description="新成员加入后不打断其他成员；点卡片翻面可设置软件、模型、项目权限和要续接的已有会话。" />

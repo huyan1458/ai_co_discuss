@@ -39,9 +39,11 @@ class AdminTests(unittest.TestCase):
         self.thread.join()
         self.directory.cleanup()
 
-    def request(self, path, payload=None, admin="", token="", machine=""):
+    def request(self, path, payload=None, admin="", token="", machine="", source=""):
         """Return status and JSON for successes and rejections alike."""
         headers = {"Content-Type": "application/json"}
+        if source:
+            headers["CF-Connecting-IP"] = source
         if machine:
             headers["X-Machine-Token"] = machine
         if admin:
@@ -92,28 +94,48 @@ class AdminTests(unittest.TestCase):
         self.assertEqual(status, 201, result)
         self.assertEqual(self.sql("SELECT COUNT(*) FROM admin_setup")[0][0], 0)
 
-    def test_login_failures_lock_the_account_and_success_resets_them(self):
+    def test_wrong_passwords_lock_only_the_address_they_came_from_and_back_off(self):
         self.register()
+        login = lambda password, source: self.request("/api/admin/login", {"username": "老板", "password": password}, source=source)
         for _ in range(4):
-            self.assertEqual(self.request("/api/admin/login", {"username": "老板", "password": "wrong-password"})[0], 401)
-        self.assertEqual(self.request("/api/admin/login", {"username": "没有此人", "password": PASSWORD})[0], 401)
-        status, locked = self.request("/api/admin/login", {"username": "老板", "password": PASSWORD})
-        self.assertEqual(status, 429, locked)
-        self.assertEqual(self.sql("SELECT failed_attempts FROM site_admin")[0][0], 0)
-        self.sql("UPDATE site_admin SET locked_until=0")
-        status, result = self.request("/api/admin/login", {"username": "老板", "password": PASSWORD})
-        self.assertEqual(status, 200, result)
-        self.assertEqual(self.sql("SELECT failed_attempts FROM site_admin")[0][0], 0)
+            self.assertEqual(login("wrong-password", "203.0.113.9")[0], 401)
+        self.assertEqual(self.request("/api/admin/login", {"username": "没有此人", "password": PASSWORD}, source="203.0.113.9")[0], 401)
+        self.assertEqual(login(PASSWORD, "203.0.113.9")[0], 429, "the attacking address is locked even with the right password")
+        status, result = login(PASSWORD, "198.51.100.7")
+        self.assertEqual(status, 200, "the owner elsewhere is not locked out")
+        # The next run of failures from the same address locks it twice as long.
+        self.sql("UPDATE admin_attempts SET locked_until=0 WHERE source='203.0.113.9'")
+        for _ in range(5):
+            login("wrong-password", "203.0.113.9")
+        locked_until, updated_at = self.sql("SELECT locked_until, updated_at FROM admin_attempts WHERE source='203.0.113.9'")[0]
+        self.assertEqual(locked_until - updated_at, 600)
 
-    def test_sessions_last_until_logout(self):
+    def test_logins_expire_list_their_browser_and_can_be_ended(self):
         first = self.register()
         second = self.request("/api/admin/login", {"username": "老板", "password": PASSWORD})[1]["token"]
-        self.sql("UPDATE admin_sessions SET created_at=1")
+        sessions = self.request("/api/admin/sessions", admin=first)[1]["sessions"]
+        self.assertEqual([item["current"] for item in sessions].count(True), 1)
+        self.assertEqual(self.request("/api/admin/sessions")[0], 401)
+        # A login unused for a week, or older than a month, no longer counts.
+        self.sql("UPDATE admin_logins SET last_seen=last_seen-8*86400 WHERE token_hash=?", (hashlib.sha256(second.encode()).hexdigest(),))
+        self.assertFalse(self.request("/api/admin", admin=second)[1]["logged_in"])
+        third = self.request("/api/admin/login", {"username": "老板", "password": PASSWORD})[1]["token"]
+        self.assertEqual(self.request("/api/admin/revoke", {"others": True}, admin=first)[0], 200)
+        self.assertFalse(self.request("/api/admin", admin=third)[1]["logged_in"])
         self.assertTrue(self.request("/api/admin", admin=first)[1]["logged_in"])
         self.assertEqual(self.request("/api/admin/logout", {}, admin=first)[0], 200)
         self.assertFalse(self.request("/api/admin", admin=first)[1]["logged_in"])
-        self.assertTrue(self.request("/api/admin", admin=second)[1]["logged_in"])
-        self.assertEqual(self.request("/api/admin/logout", {})[0], 200)
+
+    def test_changing_the_password_needs_the_current_one_and_ends_other_logins(self):
+        first = self.register()
+        other = self.request("/api/admin/login", {"username": "老板", "password": PASSWORD})[1]["token"]
+        self.assertEqual(self.request("/api/admin/password", {"current_password": "wrong-password", "password": "new password 1"}, admin=first)[0], 401)
+        self.assertEqual(self.request("/api/admin/password", {"current_password": PASSWORD, "password": "new password 1"})[0], 401)
+        self.assertEqual(self.request("/api/admin/password", {"current_password": PASSWORD, "password": "new password 1"}, admin=first)[0], 200)
+        self.assertFalse(self.request("/api/admin", admin=other)[1]["logged_in"])
+        self.assertTrue(self.request("/api/admin", admin=first)[1]["logged_in"])
+        self.assertEqual(self.request("/api/admin/login", {"username": "老板", "password": PASSWORD})[0], 401)
+        self.assertEqual(self.request("/api/admin/login", {"username": "老板", "password": "new password 1"})[0], 200)
 
     def test_profile_is_public_and_needs_a_session(self):
         admin = self.register()

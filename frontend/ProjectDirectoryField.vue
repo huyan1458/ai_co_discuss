@@ -1,6 +1,7 @@
 <script setup>
-/** Launch cwd field: type a path, pick a saved project, or browse on the service computer from its own browser.
- * A device without the local service picks only among the projects its paired computer published. */
+/** Launch cwd field: type a path, pick a saved project, or browse for a folder: with the computer's own dialog in its
+ * browser, or from another device through a folder list limited to the saved projects. A device without the local
+ * service picks only among the projects its paired computer published. */
 import { computed, inject, nextTick, ref } from "vue";
 
 const props = defineProps({ placeholder: { type: String, default: "输入完整路径，或选择项目" }, disabled: { type: Boolean, default: false } });
@@ -9,8 +10,10 @@ const launch = computed(() => view.value.launch);
 // Without the local service here, the paired computer resolves the chosen project to its own folder.
 const relay = computed(() => launch.value.available ? null : launch.value.relay);
 const projects = computed(() => relay.value ? relay.value.projects : launch.value.projects || []);
-// The folder dialog opens on the computer running the service, so only its own browser (not a connected website) offers it.
-const browsable = computed(() => launch.value.available && !launch.value.remote);
+// The folder dialog opens on the computer running the service, so only its own browser (not a connected website) offers it;
+// other devices browse a folder list the computer limits to its saved projects.
+const native = computed(() => launch.value.available && !launch.value.remote);
+const browsable = computed(() => launch.value.available);
 const cwd = computed(() => launch.value.workspace.cwd || "");
 const chosen = computed(() => relay.value ? projects.value.find((project) => project.id === launch.value.workspace.local_project)
   : projects.value.find((project) => same_path(project.path, cwd.value)));
@@ -24,10 +27,46 @@ const write_cwd = (path) => bridge.write_launch("workspace", "cwd", path);
 const choose = (project) => relay.value ? bridge.write_launch("workspace", "local_project", project?.id || "") : write_cwd(project.path);
 
 const picking = ref(false);
-/** Open the computer's folder dialog through the local service; typing a path remains available. */
+/** Open the computer's folder dialog, or the folder list on another device; typing a path remains available. */
 async function pick_directory() {
+  if (!native.value) {
+    const path = await choose_folder(cwd.value);
+    if (path) write_cwd(path);
+    return;
+  }
   picking.value = true;
   try { await bridge.pick_launch_directory(); } finally { picking.value = false; }
+}
+
+// ---- Folder list for other devices: only folder names, inside the saved projects, checked on the computer. ----
+const folder = ref({ open: false, path: "", parent: null, entries: [], next_offset: null, truncated: false, loading: false, error: "" });
+let folder_done = null;
+
+/** Show one folder's sub-folders, or the saved projects when `path` is empty; `more` appends the next page. */
+async function open_folder(path, more = false) {
+  folder.value.loading = true;
+  folder.value.error = "";
+  try {
+    const page = await bridge.list_remote_directories(path, more ? folder.value.next_offset : 0);
+    folder.value = { ...folder.value, ...page, entries: more ? [...folder.value.entries, ...page.entries] : page.entries };
+  } catch (failure) {
+    folder.value.error = failure.message;
+    // A typed path outside the projects starts the list from the projects instead.
+    if (path && !more && !folder.value.entries.length) return open_folder("");
+  } finally { folder.value.loading = false; }
+}
+
+/** Let another device browse for a folder; resolves to the chosen path, or "" when closed. */
+function choose_folder(start) {
+  folder.value = { open: true, path: "", parent: null, entries: [], next_offset: null, truncated: false, loading: false, error: "" };
+  open_folder(start || "");
+  return new Promise((resolve) => { folder_done = resolve; });
+}
+
+function finish_folder(path) {
+  folder.value.open = false;
+  folder_done?.(path);
+  folder_done = null;
 }
 
 const menu_items = computed(() => [
@@ -72,7 +111,7 @@ async function browse(target, key) {
   browsing.value = key;
   error.value = "";
   try {
-    const path = await bridge.browse_local_directory();
+    const path = native.value ? await bridge.browse_local_directory() : await choose_folder(target.path);
     if (path) { target.path = path; if (!target.name.trim()) target.name = folder_name(path); }
   } catch (failure) { error.value = failure.message; } finally { browsing.value = ""; }
 }
@@ -125,7 +164,8 @@ async function save_projects() {
       <UIcon name="i-lucide-plus" /><span>常用项目</span>
     </button>
     <UInput :model-value="cwd" :placeholder="props.placeholder" variant="none" class="project-path" aria-label="项目目录完整路径" :disabled="props.disabled" @update:model-value="write_cwd" />
-    <UButton v-if="browsable" icon="i-lucide-folder-open" color="neutral" variant="ghost" size="xs" class="project-browse" aria-label="在本机选择项目目录" :title="picking ? '目录选择窗口已打开，请在本机窗口中选择' : '在本机选择文件夹'" :loading="picking" :disabled="props.disabled" @click="pick_directory" />
+    <UButton v-if="browsable" icon="i-lucide-folder-open" color="neutral" variant="ghost" size="xs" class="project-browse" :aria-label="native ? '在本机选择项目目录' : '浏览电脑上的文件夹'"
+      :title="!native ? '浏览电脑上常用项目中的文件夹' : picking ? '目录选择窗口已打开，请在本机窗口中选择' : '在本机选择文件夹'" :loading="picking" :disabled="props.disabled" @click="pick_directory" />
   </div>
 
   <UModal :content="{ onInteractOutside: (event) => event.preventDefault() }" v-model:open="managing" title="常用项目" description="保存在运行 codiscuss 的这台电脑上。登录同一网站的手机、平板可直接选择，路径不会离开这台电脑。"
@@ -139,7 +179,7 @@ async function save_projects() {
               <div class="project-edit">
                 <UInput v-model="project.name" placeholder="项目名称" aria-label="项目名称" size="sm" class="w-full" />
                 <UInput v-model="project.path" placeholder="文件夹完整路径" aria-label="文件夹完整路径" size="sm" class="w-full" :ui="{ trailing: 'pe-1' }">
-                  <template v-if="browsable" #trailing><UButton icon="i-lucide-folder-open" color="neutral" variant="ghost" size="xs" aria-label="在本机选择文件夹" :loading="browsing === `row-${index}`" @click="browse(project, `row-${index}`)" /></template>
+                  <template v-if="browsable" #trailing><UButton icon="i-lucide-folder-open" color="neutral" variant="ghost" size="xs" aria-label="选择文件夹" :loading="browsing === `row-${index}`" @click="browse(project, `row-${index}`)" /></template>
                 </UInput>
               </div>
               <UButton icon="i-lucide-check" color="neutral" variant="ghost" size="xs" aria-label="完成编辑" :disabled="!complete(project)" @click="editing = -1" />
@@ -155,9 +195,9 @@ async function save_projects() {
         </ul>
 
         <div v-if="adding" class="project-add" role="group" aria-label="添加项目">
-          <UFormField label="文件夹" :description="browsable ? '' : '运行 codiscuss 的电脑上的完整路径'">
+          <UFormField label="文件夹" :description="native ? '' : browsable ? '其他设备只能选择已有常用项目中的文件夹；更大的范围请在电脑上添加' : '运行 codiscuss 的电脑上的完整路径'">
             <UInput v-model="adding.path" placeholder="例如 D:\Projects\demo" class="w-full" :ui="{ trailing: 'pe-1' }" @blur="!adding.name.trim() && (adding.name = folder_name(adding.path))">
-              <template v-if="browsable" #trailing><UButton icon="i-lucide-folder-open" color="neutral" variant="ghost" size="xs" aria-label="在本机选择文件夹" :loading="browsing === 'add'" @click="browse(adding, 'add')" /></template>
+              <template v-if="browsable" #trailing><UButton icon="i-lucide-folder-open" color="neutral" variant="ghost" size="xs" aria-label="选择文件夹" :loading="browsing === 'add'" @click="browse(adding, 'add')" /></template>
             </UInput>
           </UFormField>
           <UFormField label="名称"><UInput ref="add_name" v-model="adding.name" placeholder="在列表中显示的名称" :maxlength="80" class="w-full" @keydown.enter.prevent="confirm_add" /></UFormField>
@@ -174,6 +214,31 @@ async function save_projects() {
           <UButton type="submit" label="保存" class="channel-primary-button" :loading="saving" />
         </div>
       </form>
+    </template>
+  </UModal>
+
+  <UModal :open="folder.open" title="选择电脑上的文件夹" description="只列出常用项目中的文件夹；范围由电脑决定。" :ui="{ content: 'glass-panel studio-modal project-modal', body: 'dialog-body' }"
+    @update:open="(open) => !open && finish_folder('')">
+    <template #body>
+      <div class="folder-picker">
+        <div class="folder-head">
+          <UButton icon="i-lucide-arrow-left" color="neutral" variant="ghost" size="xs" aria-label="上一级" :disabled="!folder.path || folder.loading" @click="open_folder(folder.parent || '')" />
+          <span class="folder-path" :title="folder.path">{{ folder.path || "常用项目" }}</span>
+        </div>
+        <ul class="folder-list" aria-label="文件夹">
+          <li v-for="entry in folder.entries" :key="entry.path">
+            <button type="button" class="folder-entry" :disabled="folder.loading" @click="open_folder(entry.path)"><UIcon name="i-lucide-folder" />{{ entry.name }}</button>
+          </li>
+          <li v-if="!folder.entries.length && !folder.loading" class="folder-empty">{{ folder.path ? "没有子文件夹" : "电脑上还没有常用项目，请先在电脑上添加" }}</li>
+        </ul>
+        <button v-if="folder.next_offset !== null" type="button" class="project-add-trigger" :disabled="folder.loading" @click="open_folder(folder.path, true)">加载更多</button>
+        <p v-if="folder.truncated" class="project-note">文件夹过多，只列出了一部分</p>
+        <p v-if="folder.error" role="alert" class="project-error"><UIcon name="i-lucide-circle-alert" />{{ folder.error }}</p>
+        <div class="project-footer">
+          <UButton label="取消" color="neutral" variant="ghost" @click="finish_folder('')" />
+          <UButton label="选择此文件夹" class="channel-primary-button" :disabled="!folder.path || folder.loading" @click="finish_folder(folder.path)" />
+        </div>
+      </div>
     </template>
   </UModal>
 </template>
@@ -235,6 +300,15 @@ async function save_projects() {
 .project-error { display: flex; align-items: flex-start; gap: 6px; margin: 0; color: #f0716b; font-size: 12px; line-height: 1.5; }
 .project-error > [class*="icon"] { flex-shrink: 0; width: 14px; height: 14px; margin-top: 2px; }
 .project-footer { display: flex; justify-content: flex-end; gap: 8px; margin-top: 4px; }
+/* Folder list for other devices */
+.folder-picker { display: flex; flex-direction: column; gap: 10px; }
+.folder-head { display: flex; align-items: center; gap: 6px; min-width: 0; }
+.folder-path { overflow: hidden; color: var(--ui-text-muted); font-family: ui-monospace, SFMono-Regular, Consolas, monospace; font-size: 12px; white-space: nowrap; text-overflow: ellipsis; direction: rtl; text-align: left; }
+.folder-list { display: flex; flex-direction: column; max-height: min(50vh, 360px); margin: 0; padding: 0; overflow-y: auto; list-style: none; }
+.folder-entry { display: flex; align-items: center; gap: 8px; width: 100%; min-height: 36px; padding: 6px 8px; border-radius: 6px; color: var(--ui-text-highlighted); font-size: 13px; text-align: left; }
+.folder-entry:hover:not(:disabled) { background: var(--channel-ghost-hover, var(--ui-bg-elevated)); }
+.folder-entry > [class*="icon"] { flex-shrink: 0; width: 14px; height: 14px; color: var(--channel-accent); }
+.folder-empty { padding: 12px 8px; color: var(--ui-text-dimmed); font-size: 12px; }
 @media (hover: none), (max-width: 600px) { .project-actions { opacity: 1; } }
 @media (max-width: 600px) { .project-prefix { max-width: 120px; } }
 </style>

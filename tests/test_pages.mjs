@@ -99,10 +99,10 @@ test("Pages binds D1 directly and has no external Worker service dependency", as
 });
 
 /** Call /api/admin* or any path with an optional admin session header. */
-async function admin_call(f, path, payload, session) {
+async function admin_call(f, path, payload, session, headers = {}) {
   const response = await worker.fetch(new Request(`https://discussion.test${path}`, {
     method: payload === undefined ? 'GET' : 'POST',
-    headers: { 'Content-Type': 'application/json', ...(session ? { 'X-Discussion-Admin': session } : {}) },
+    headers: { 'Content-Type': 'application/json', ...(session ? { 'X-Discussion-Admin': session } : {}), ...headers },
     body: payload === undefined ? undefined : JSON.stringify(payload),
   }), f.env);
   return { status: response.status, body: await response.json() };
@@ -113,7 +113,7 @@ async function admin_fixture(t) {
   f.env.ADMIN_SETUP_KEY = 'setup-key-for-tests';
   const account = { username: '房主', password: 'correct-horse', setup_key: 'setup-key-for-tests' };
   f.register = () => admin_call(f, '/api/admin/register', account);
-  f.login = password => admin_call(f, '/api/admin/login', { username: '房主', password });
+  f.login = (password, source = '192.0.2.1') => admin_call(f, '/api/admin/login', { username: '房主', password }, undefined, { 'CF-Connecting-IP': source });
   return f;
 }
 
@@ -150,22 +150,66 @@ test('Worker registers the administrator with the one-time CLI token', async t =
   assert.equal((await admin_call(f, '/api/admin/login', account)).status, 200);
 });
 
-test('Worker admin login locks for a fixed time after five failures and clears on success', async t => {
+test('Worker admin login backs off per address, so an attacker cannot lock the owner out', async t => {
   const f = await admin_fixture(t);
   await f.register();
-  assert.equal((await f.login('wrong-password')).status, 401);
-  assert.equal((await admin_call(f, '/api/admin/login', { username: '陌生人', password: 'correct-horse' })).status, 401);
-  for (let attempt = 0; attempt < 3; attempt++) await f.login('wrong-password');
-  const row = f.sql.prepare('SELECT failed_attempts, locked_until FROM site_admin').get();
-  assert.equal(row.failed_attempts, 0);
-  assert.ok(Math.abs(row.locked_until - (Math.floor(Date.now() / 1000) + 300)) <= 5);
-  assert.equal((await f.login('correct-horse')).status, 429);
-  f.sql.prepare('UPDATE site_admin SET locked_until=0').run();
-  await f.login('wrong-password');
-  const ok = await f.login('correct-horse');
-  assert.equal(ok.status, 200);
-  assert.equal(f.sql.prepare('SELECT failed_attempts FROM site_admin').get().failed_attempts, 0);
+  assert.equal((await f.login('wrong-password', '203.0.113.9')).status, 401);
+  assert.equal((await admin_call(f, '/api/admin/login', { username: '陌生人', password: 'correct-horse' }, undefined, { 'CF-Connecting-IP': '203.0.113.9' })).status, 401);
+  for (let attempt = 0; attempt < 3; attempt++) await f.login('wrong-password', '203.0.113.9');
+  const row = f.sql.prepare("SELECT locked_until, updated_at FROM admin_attempts WHERE source='203.0.113.9'").get();
+  assert.equal(row.locked_until - row.updated_at, 300);
+  assert.equal((await f.login('correct-horse', '203.0.113.9')).status, 429);
+  const ok = await f.login('correct-horse', '198.51.100.7');
+  assert.equal(ok.status, 200, 'the owner elsewhere still signs in');
   assert.equal((await admin_call(f, '/api/admin', undefined, ok.body.token)).body.logged_in, true);
+});
+
+test('Worker logins expire, list their browser, and end on revoke or password change', async t => {
+  const f = await admin_fixture(t);
+  const first = (await f.register()).body.token;
+  const second = (await f.login('correct-horse')).body.token;
+  const listed = (await admin_call(f, '/api/admin/sessions', undefined, first)).body.sessions;
+  assert.equal(listed.length, 2);
+  assert.equal(listed.filter(item => item.current).length, 1);
+  assert.equal((await admin_call(f, '/api/admin/sessions')).status, 401);
+  // A login older than a month no longer counts, even if used recently.
+  f.sql.prepare('UPDATE admin_logins SET created_at=created_at-31*86400 WHERE token_hash=?').run(createHash('sha256').update(second).digest('hex'));
+  assert.equal((await admin_call(f, '/api/admin', undefined, second)).body.logged_in, false);
+  const third = (await f.login('correct-horse')).body.token;
+  assert.equal((await admin_call(f, '/api/admin/revoke', { others: true }, first)).status, 200);
+  assert.equal((await admin_call(f, '/api/admin', undefined, third)).body.logged_in, false);
+  const fourth = (await f.login('correct-horse')).body.token;
+  assert.equal((await admin_call(f, '/api/admin/password', { current_password: 'wrong-password', password: 'new-horse-1' }, first)).status, 401);
+  assert.equal((await admin_call(f, '/api/admin/password', { current_password: 'correct-horse', password: 'new-horse-1' }, first)).status, 200);
+  assert.equal((await admin_call(f, '/api/admin', undefined, fourth)).body.logged_in, false, 'other logins end with the old password');
+  assert.equal((await admin_call(f, '/api/admin', undefined, first)).body.logged_in, true);
+  assert.equal((await f.login('new-horse-1')).status, 200);
+});
+
+test('Worker passkeys sign in without the password, registered in the same step as the computer', async t => {
+  const { software_passkey } = await import('./passkey_authenticator.mjs');
+  const { joint_challenge } = await import('../runner/webauthn.mjs');
+  const f = await admin_fixture(t);
+  const session = (await f.register()).body.token;
+  const passkey = software_passkey('discussion.test');
+  assert.equal((await admin_call(f, '/api/admin/passkey-challenge', { purpose: 'register' })).status, 401, 'registration needs a session');
+  const website = (await admin_call(f, '/api/admin/passkey-challenge', { purpose: 'register' }, session)).body;
+  const computer_challenge = Buffer.alloc(32, 9).toString('base64url');
+  const credential = passkey.create(joint_challenge(computer_challenge, website.challenge), 'https://discussion.test');
+  const registered = await admin_call(f, '/api/admin/passkey-register', { challenge_id: website.challenge_id, computer_challenge, credential, label: 'iPhone' }, session);
+  assert.equal(registered.status, 200, registered.body.error);
+  const login = (await admin_call(f, '/api/admin/passkey-challenge', { purpose: 'login' })).body;
+  assert.deepEqual(login.allow, [passkey.id]);
+  const signed = await admin_call(f, '/api/admin/passkey-login', { challenge_id: login.challenge_id, assertion: passkey.get(login.challenge, 'https://discussion.test') });
+  assert.equal(signed.status, 200, signed.body.error);
+  assert.equal((await admin_call(f, '/api/admin', undefined, signed.body.token)).body.logged_in, true);
+  // A used challenge, another site's assertion, or an unknown passkey does not sign in.
+  assert.equal((await admin_call(f, '/api/admin/passkey-login', { challenge_id: login.challenge_id, assertion: passkey.get(login.challenge, 'https://discussion.test') })).status, 401);
+  const next = (await admin_call(f, '/api/admin/passkey-challenge', { purpose: 'login' })).body;
+  assert.equal((await admin_call(f, '/api/admin/passkey-login', { challenge_id: next.challenge_id, assertion: passkey.get(next.challenge, 'https://evil.test') })).status, 401);
+  const stranger = software_passkey('discussion.test');
+  const third = (await admin_call(f, '/api/admin/passkey-challenge', { purpose: 'login' })).body;
+  assert.equal((await admin_call(f, '/api/admin/passkey-login', { challenge_id: third.challenge_id, assertion: stranger.get(third.challenge, 'https://discussion.test') })).status, 401);
 });
 
 test('a page without the local service runs operations on the paired computer end to end', async t => {
@@ -193,9 +237,21 @@ test('a page without the local service runs operations on the paired computer en
     if (status >= 400) throw Object.assign(new Error(body.error), { status });
     return body;
   };
-  const relay_command = vm.runInNewContext([`const MODEL_CATALOG_TIMEOUT_MS = 35000;`, constants, source.slice(start, end), 'relay_command'].join('\n'),
+  const page_code = vm.runInNewContext([`const MODEL_CATALOG_TIMEOUT_MS = 35000;`, constants, source.slice(start, end), '({ relay_command, pair_this_device })'].join('\n'),
     { crypto, TextEncoder, TextDecoder, btoa, atob, setTimeout, Uint8Array, JSON, Date, Object, Error, Promise, request_json, relay_machine: machine,
-      state: { remote_rooms: false, admin: {} } });
+      navigator: { userAgent: 'Mozilla/5.0 (iPhone) Safari/605.1' }, publish_view: () => {}, notify: () => {},
+      load_launch_settings: () => {}, computer_rooms_only: () => false, connect_computer_rooms: () => {},
+      state: { remote_rooms: false, admin: {}, device: { id: '', needs: '', pairing_code: '', prompt: null } } });
+  const { relay_command } = page_code;
+
+  // The page pairs first, with the code a trusted screen shows; only then does the computer run its signed commands.
+  const { start_pairing } = await import('../runner/device_auth.mjs');
+  const refused = relay_command('settings');
+  await Promise.all(await relay_commands(home, { wait: 5, run: async () => ({ status: 200, body: {} }) }));
+  await assert.rejects(refused, /未配对/);
+  const pairing = page_code.pair_this_device(start_pairing(home, { site: 'https://discussion.test' }).code);
+  await Promise.all(await relay_commands(home, { wait: 5, run: async () => ({ status: 200, body: {} }) }));
+  assert.equal((await pairing).temporary, false);
 
   const ran = [];
   const run = async request => {

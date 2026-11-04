@@ -70,9 +70,20 @@ async function read_payload(request, limit = MAX_BODY_BYTES) {
 }
 
 const ADMIN_ITERATIONS = 100000;
-const ADMIN_LOCK_THRESHOLD = 5;
-const ADMIN_LOCK_SECONDS = 300;
 const ADMIN_AVATAR_LIMIT = 60000;
+// A login ends after a week unused or a month in all; same rules as backend/admin.py.
+const SESSION_IDLE_SECONDS = 7 * 86400;
+const SESSION_MAX_SECONDS = 30 * 86400;
+// Last use is written at most this often, so reading pages does not write the database each time.
+const SESSION_SEEN_SECONDS = 3600;
+const SESSION_LABEL_LIMIT = 160;
+// Each run of five wrong passwords from one address locks that address, twice as long each time, up to a day.
+const LOGIN_FAILURES_PER_LOCK = 5;
+const LOGIN_LOCK_SECONDS = 300;
+const LOGIN_LOCK_MAX_SECONDS = 86400;
+// Wrong passwords from all addresses together within an hour; past this, password login pauses for an hour.
+const LOGIN_GLOBAL_FAILURES = 100;
+const LOGIN_GLOBAL_WINDOW = 3600;
 
 /** Lowercase hex of raw bytes. */
 function to_hex(bytes) {
@@ -120,11 +131,21 @@ function now_seconds() {
   return Math.floor(Date.now() / 1000);
 }
 
-/** Return the session row for the request header, or null; sessions never expire. */
+/** Return the live login for the request header, or null; an expired one is removed, a used one marks its last use. */
 async function admin_session(database, request) {
   const token = request.headers.get("X-Discussion-Admin") ?? "";
   if (!/^[0-9a-f]{64}$/.test(token)) return null;
-  return database.prepare("SELECT * FROM admin_sessions WHERE token_hash=?").bind(await digest_hex(token)).first();
+  const session = await database.prepare("SELECT * FROM admin_logins WHERE token_hash=?").bind(await digest_hex(token)).first();
+  if (!session) return null;
+  const now = now_seconds();
+  if (now - session.last_seen > SESSION_IDLE_SECONDS || now - session.created_at > SESSION_MAX_SECONDS) {
+    await database.prepare("DELETE FROM admin_logins WHERE token_hash=?").bind(session.token_hash).run();
+    return null;
+  }
+  if (now - session.last_seen > SESSION_SEEN_SECONDS) {
+    await database.prepare("UPDATE admin_logins SET last_seen=? WHERE token_hash=?").bind(now, session.token_hash).run();
+  }
+  return session;
 }
 
 async function require_admin_session(database, request) {
@@ -133,10 +154,13 @@ async function require_admin_session(database, request) {
   return session;
 }
 
-/** Create a session and return the raw token, which is never stored. */
-async function create_admin_session(database) {
+/** Create a login labelled with the browser that asked for it, and return the raw token, which is never stored. */
+async function create_admin_session(database, request) {
   const token = to_hex(crypto.getRandomValues(new Uint8Array(32)));
-  await database.prepare("INSERT INTO admin_sessions (token_hash,created_at) VALUES (?,?)").bind(await digest_hex(token), now_seconds()).run();
+  const now = now_seconds(), label = (request.headers.get("User-Agent") ?? "").slice(0, SESSION_LABEL_LIMIT);
+  // Expired logins are cleared here rather than by a scheduled job.
+  await database.prepare("DELETE FROM admin_logins WHERE last_seen<? OR created_at<?").bind(now - SESSION_IDLE_SECONDS, now - SESSION_MAX_SECONDS).run();
+  await database.prepare("INSERT INTO admin_logins (token_hash,label,created_at,last_seen) VALUES (?,?,?,?)").bind(await digest_hex(token), label, now, now).run();
   return token;
 }
 
@@ -158,17 +182,34 @@ function admin_avatar(value) {
   return value;
 }
 
-/** Reject while locked; otherwise verify the password and lock for a fixed time after repeated failures. */
-async function check_admin_password(database, admin, password) {
-  const now = now_seconds();
-  if (admin.locked_until > now) throw new HttpError(429, `尝试次数过多，请 ${admin.locked_until - now} 秒后再试`);
+/** The address a login attempt came from, as Cloudflare reports it. */
+function login_source(request) {
+  return request.headers.get("CF-Connecting-IP") || "unknown";
+}
+
+/**
+ * Verify a password with backoff per address: five failures lock that address, doubling each time, so one attacker
+ * cannot lock the owner out from elsewhere. Failures from all addresses together are capped per hour.
+ */
+async function check_admin_password(database, request, admin, password) {
+  const now = now_seconds(), source = login_source(request);
+  const row = await database.prepare("SELECT * FROM admin_attempts WHERE source=?").bind(source).first();
+  const all = await database.prepare("SELECT * FROM admin_attempts WHERE source='*'").first();
+  for (const limit of [row, all]) {
+    if (limit && limit.locked_until > now) throw new HttpError(429, `尝试次数过多，请 ${limit.locked_until - now} 秒后再试`);
+  }
   if (typeof password === "string" && await verify_password(password, admin.password_hash)) {
-    await database.prepare("UPDATE site_admin SET failed_attempts=0, locked_until=0 WHERE id=1").run();
+    await database.prepare("DELETE FROM admin_attempts WHERE source=?").bind(source).run();
     return;
   }
-  const locked = admin.failed_attempts + 1 >= ADMIN_LOCK_THRESHOLD;
-  await database.prepare("UPDATE site_admin SET failed_attempts=?, locked_until=? WHERE id=1")
-    .bind(locked ? 0 : admin.failed_attempts + 1, locked ? now + ADMIN_LOCK_SECONDS : 0).run();
+  const failed = (row?.failed ?? 0) + 1;
+  const lock = failed % LOGIN_FAILURES_PER_LOCK ? 0 : Math.min(LOGIN_LOCK_SECONDS * 2 ** (failed / LOGIN_FAILURES_PER_LOCK - 1), LOGIN_LOCK_MAX_SECONDS);
+  const total = all && now - all.updated_at <= LOGIN_GLOBAL_WINDOW ? all.failed + 1 : 1;
+  await database.batch([
+    database.prepare("INSERT OR REPLACE INTO admin_attempts (source,failed,locked_until,updated_at) VALUES (?,?,?,?)").bind(source, failed, lock ? now + lock : 0, now),
+    database.prepare("INSERT OR REPLACE INTO admin_attempts (source,failed,locked_until,updated_at) VALUES ('*',?,?,?)")
+      .bind(total >= LOGIN_GLOBAL_FAILURES ? 0 : total, total >= LOGIN_GLOBAL_FAILURES ? now + LOGIN_GLOBAL_WINDOW : 0, total === 1 ? now : all.updated_at),
+  ]);
   throw new HttpError(401, "用户名或密码错误");
 }
 
@@ -197,7 +238,7 @@ async function register_admin(database, request, payload, setup_key) {
     throw error;
   }
   await database.prepare("DELETE FROM admin_setup").run();
-  return { token: await create_admin_session(database), profile: { username, avatar: "" } };
+  return { token: await create_admin_session(database, request), profile: { username, avatar: "" } };
 }
 
 async function login_admin(database, request, payload) {
@@ -205,8 +246,43 @@ async function login_admin(database, request, payload) {
   const username = typeof payload.username === "string" ? payload.username.trim().toLowerCase() : "";
   if (!admin) throw new HttpError(401, "用户名或密码错误");
   // The username is checked after the lock so a wrong name and a wrong password are indistinguishable.
-  await check_admin_password(database, admin, username === admin.username.toLowerCase() ? payload.password : null);
-  return { token: await create_admin_session(database), profile: admin_profile(admin) };
+  await check_admin_password(database, request, admin, username === admin.username.toLowerCase() ? payload.password : null);
+  return { token: await create_admin_session(database, request), profile: admin_profile(admin) };
+}
+
+/** List the live logins with their browser label, so the owner can spot and end one they do not recognise. */
+async function list_admin_sessions(database, request) {
+  const current = await require_admin_session(database, request), now = now_seconds();
+  const { results } = await database.prepare("SELECT token_hash,label,created_at,last_seen FROM admin_logins WHERE last_seen>=? AND created_at>=? ORDER BY last_seen DESC")
+    .bind(now - SESSION_IDLE_SECONDS, now - SESSION_MAX_SECONDS).all();
+  // The id is a prefix of the token's hash: enough to name a login, useless for signing in.
+  return { sessions: results.map(row => ({ id: row.token_hash.slice(0, 16), label: row.label, created_at: row.created_at, last_seen: row.last_seen,
+    current: row.token_hash === current.token_hash })) };
+}
+
+/** End one other login by id, or every login but this one. */
+async function revoke_admin_sessions(database, request, payload) {
+  const current = await require_admin_session(database, request);
+  if (payload.others === true) {
+    await database.prepare("DELETE FROM admin_logins WHERE token_hash<>?").bind(current.token_hash).run();
+    return { ok: true };
+  }
+  if (typeof payload.id !== "string" || !/^[0-9a-f]{16}$/.test(payload.id)) throw new HttpError(400, "须提供要退出的登录 id，或 others: true");
+  await database.prepare("DELETE FROM admin_logins WHERE substr(token_hash,1,16)=? AND token_hash<>?").bind(payload.id, current.token_hash).run();
+  return { ok: true };
+}
+
+/** Change the password after proving the current one; every other login ends. */
+async function change_admin_password(database, request, payload) {
+  const current = await require_admin_session(database, request);
+  const admin = await database.prepare("SELECT * FROM site_admin WHERE id=1").first();
+  const password = admin_password(payload.password, "新密码");
+  await check_admin_password(database, request, admin, payload.current_password);
+  await database.batch([
+    database.prepare("UPDATE site_admin SET password_hash=? WHERE id=1").bind(await hash_password(password)),
+    database.prepare("DELETE FROM admin_logins WHERE token_hash<>?").bind(current.token_hash),
+  ]);
+  return { ok: true };
 }
 
 async function update_admin_profile(database, request, payload) {
@@ -220,20 +296,172 @@ async function update_admin_profile(database, request, payload) {
 
 async function logout_admin(database, request) {
   const session = await admin_session(database, request);
-  if (session) await database.prepare("DELETE FROM admin_sessions WHERE token_hash=?").bind(session.token_hash).run();
+  if (session) await database.prepare("DELETE FROM admin_logins WHERE token_hash=?").bind(session.token_hash).run();
   return { ok: true };
+}
+
+// ---- Passkey login. Same checks as runner/webauthn.mjs; this file is deployed alone, so they are repeated here. ----
+const PASSKEY_CHALLENGE_SECONDS = 120;
+const PASSKEY_LABEL_LIMIT = 60;
+
+function b64url_bytes(text) {
+  const base = String(text || "").replaceAll("-", "+").replaceAll("_", "/");
+  return Uint8Array.from(atob(base + "=".repeat((4 - base.length % 4) % 4)), character => character.charCodeAt(0));
+}
+
+function bytes_b64url(bytes) {
+  let text = "";
+  for (const byte of bytes) text += String.fromCharCode(byte);
+  return btoa(text).replaceAll("+", "-").replaceAll("/", "_").replace(/=+$/, "");
+}
+
+async function sha256_bytes(bytes) {
+  return new Uint8Array(await crypto.subtle.digest("SHA-256", bytes));
+}
+
+/** Decode the CBOR subset WebAuthn uses; returns [value, next offset]. */
+function cbor_item(bytes, offset) {
+  const head = bytes[offset];
+  if (head === undefined) throw new HttpError(400, "CBOR 数据不完整");
+  const major = head >> 5, info = head & 31;
+  let length, next = offset + 1;
+  if (info < 24) length = info;
+  else if (info === 24) { length = bytes[next]; next += 1; }
+  else if (info === 25) { length = (bytes[next] << 8) | bytes[next + 1]; next += 2; }
+  else if (info === 26) { length = ((bytes[next] << 24) >>> 0) + (bytes[next + 1] << 16) + (bytes[next + 2] << 8) + bytes[next + 3]; next += 4; }
+  else throw new HttpError(400, "不支持的 CBOR 长度");
+  if (major === 0) return [length, next];
+  if (major === 1) return [-1 - length, next];
+  if (major === 2 || major === 3) {
+    const chunk = bytes.subarray(next, next + length);
+    return [major === 2 ? chunk : new TextDecoder().decode(chunk), next + length];
+  }
+  if (major === 4 || major === 5) {
+    const items = major === 4 ? [] : new Map();
+    for (let index = 0; index < length; index++) {
+      const [first, after] = cbor_item(bytes, next);
+      if (major === 4) { items.push(first); next = after; continue; }
+      const [value, after_value] = cbor_item(bytes, after);
+      items.set(first, value);
+      next = after_value;
+    }
+    return [items, next];
+  }
+  if (major === 7 && [20, 21, 22].includes(info)) return [info === 21 ? true : info === 20 ? false : null, next];
+  throw new HttpError(400, "不支持的 CBOR 类型");
+}
+
+async function check_passkey_client(client_data, type, challenge, origin, auth_bytes, rp_id) {
+  let data;
+  try { data = JSON.parse(new TextDecoder().decode(client_data)); } catch { throw new HttpError(400, "通行密钥数据无效"); }
+  if (data.type !== type || data.challenge !== challenge) throw new HttpError(401, "通行密钥确认已过期，请重试");
+  if (data.origin !== origin) throw new HttpError(401, "通行密钥来自其他网站");
+  const expected = await sha256_bytes(new TextEncoder().encode(rp_id));
+  if (auth_bytes.length < 37 || expected.some((byte, index) => byte !== auth_bytes[index])) throw new HttpError(401, "通行密钥不属于这个网站");
+  if (!(auth_bytes[32] & 0x01) || !(auth_bytes[32] & 0x04)) throw new HttpError(401, "需要在设备上验证身份（指纹、面容或设备密码）");
+  return new DataView(auth_bytes.buffer, auth_bytes.byteOffset + 33, 4).getUint32(0);
+}
+
+/** Take a website challenge once; login challenges need no session, registration ones do. */
+async function take_passkey_challenge(database, id, purpose) {
+  const row = await database.prepare("SELECT * FROM admin_challenges WHERE id=?").bind(String(id || "")).first();
+  await database.prepare("DELETE FROM admin_challenges WHERE id=? OR created_at<?").bind(String(id || ""), now_seconds() - PASSKEY_CHALLENGE_SECONDS).run();
+  if (!row || row.purpose !== purpose || now_seconds() - row.created_at > PASSKEY_CHALLENGE_SECONDS) throw new HttpError(401, "通行密钥确认已过期，请重试");
+  return row.challenge;
+}
+
+async function passkey_challenge(database, request, payload) {
+  const purpose = payload.purpose === "register" ? "register" : "login";
+  if (purpose === "register") await require_admin_session(database, request);
+  const id = to_hex(crypto.getRandomValues(new Uint8Array(8))), challenge = bytes_b64url(crypto.getRandomValues(new Uint8Array(32)));
+  await database.prepare("INSERT INTO admin_challenges (id,purpose,challenge,created_at) VALUES (?,?,?,?)").bind(id, purpose, challenge, now_seconds()).run();
+  const rp_id = new URL(request.url).hostname;
+  if (purpose === "register") return { challenge_id: id, challenge, rp_id };
+  const { results } = await database.prepare("SELECT id FROM admin_passkeys").all();
+  return { challenge_id: id, challenge, rp_id, allow: results.map(row => row.id) };
+}
+
+/**
+ * Keep a passkey for website login. The browser signed SHA-256 of the computer's challenge and this one, so a single
+ * creation also registers with the computer; this website checks its own part.
+ */
+async function register_passkey(database, request, payload) {
+  await require_admin_session(database, request);
+  const own = await take_passkey_challenge(database, payload.challenge_id, "register");
+  const challenge = payload.computer_challenge
+    ? bytes_b64url(await sha256_bytes(Uint8Array.from([...b64url_bytes(payload.computer_challenge), ...b64url_bytes(own)]))) : own;
+  const url = new URL(request.url), credential = payload.credential || {};
+  const [attestation] = cbor_item(b64url_bytes(credential.attestation_object), 0);
+  const auth = attestation instanceof Map ? attestation.get("authData") : null;
+  if (!(auth instanceof Uint8Array) || !(auth[32] & 0x40)) throw new HttpError(400, "通行密钥数据缺少公钥");
+  const sign_count = await check_passkey_client(b64url_bytes(credential.client_data_json), "webauthn.create", challenge, url.origin, auth, url.hostname);
+  const id_length = (auth[53] << 8) | auth[54];
+  const [cose] = cbor_item(auth.subarray(55 + id_length), 0);
+  const alg = cose.get(3);
+  const jwk = alg === -7 && cose.get(1) === 2 && cose.get(-1) === 1 ? { kty: "EC", crv: "P-256", x: bytes_b64url(cose.get(-2)), y: bytes_b64url(cose.get(-3)) }
+    : alg === -257 && cose.get(1) === 3 ? { kty: "RSA", n: bytes_b64url(cose.get(-1)), e: bytes_b64url(cose.get(-2)), alg: "RS256" } : null;
+  if (!jwk) throw new HttpError(400, "通行密钥的算法不受支持，只接受 ES256 或 RS256");
+  const label = String(payload.label || "").slice(0, PASSKEY_LABEL_LIMIT);
+  await database.prepare("INSERT OR REPLACE INTO admin_passkeys (id,public_key,alg,sign_count,label,created_at) VALUES (?,?,?,?,?,?)")
+    .bind(bytes_b64url(auth.subarray(55, 55 + id_length)), JSON.stringify(jwk), alg, sign_count, label, now_seconds()).run();
+  return { ok: true };
+}
+
+/** Convert a DER ECDSA signature to raw r‖s for WebCrypto. */
+function der_signature(der) {
+  let offset = 2;
+  const part = () => {
+    const length = der[offset + 1];
+    let value = der.subarray(offset + 2, offset + 2 + length);
+    offset += 2 + length;
+    while (value.length > 32 && value[0] === 0) value = value.subarray(1);
+    const padded = new Uint8Array(32);
+    padded.set(value, 32 - value.length);
+    return padded;
+  };
+  const r = part(), s = part();
+  return Uint8Array.from([...r, ...s]);
+}
+
+/** Sign in with a passkey registered here: no password, and it does not count toward password backoff. */
+async function passkey_login(database, request, payload) {
+  const admin = await database.prepare("SELECT * FROM site_admin WHERE id=1").first();
+  if (!admin) throw new HttpError(401, "尚未注册管理员");
+  const challenge = await take_passkey_challenge(database, payload.challenge_id, "login");
+  const assertion = payload.assertion || {};
+  const passkey = await database.prepare("SELECT * FROM admin_passkeys WHERE id=?").bind(String(assertion.id || "")).first();
+  if (!passkey) throw new HttpError(401, "这个通行密钥未登记，请先用密码登录并在设备设置中创建");
+  const url = new URL(request.url), client = b64url_bytes(assertion.client_data_json), auth = b64url_bytes(assertion.authenticator_data);
+  const count = await check_passkey_client(client, "webauthn.get", challenge, url.origin, auth, url.hostname);
+  const es256 = passkey.alg === -7;
+  const algorithm = es256 ? { name: "ECDSA", namedCurve: "P-256" } : { name: "RSASSA-PKCS1-v1_5", hash: "SHA-256" };
+  const key = await crypto.subtle.importKey("jwk", JSON.parse(passkey.public_key), algorithm, false, ["verify"]);
+  const signed = Uint8Array.from([...auth, ...await sha256_bytes(client)]);
+  const raw = b64url_bytes(assertion.signature);
+  if (!await crypto.subtle.verify(es256 ? { name: "ECDSA", hash: "SHA-256" } : algorithm, key, es256 ? der_signature(raw) : raw, signed)) {
+    throw new HttpError(401, "通行密钥签名无效");
+  }
+  if ((count || passkey.sign_count) && count <= passkey.sign_count) throw new HttpError(401, "通行密钥计数异常，可能被复制");
+  await database.prepare("UPDATE admin_passkeys SET sign_count=? WHERE id=?").bind(count, passkey.id).run();
+  return { token: await create_admin_session(database, request), profile: admin_profile(admin) };
 }
 
 /** Route /api/admin*; GET is public, every POST is JSON. */
 async function handle_admin_api(database, request, parts, setup_key) {
   const action = parts[2] ?? "";
   if (parts.length === 2 && request.method === "GET") return respond(await admin_state(database, request, setup_key));
+  if (parts.length === 3 && action === "sessions" && request.method === "GET") return respond(await list_admin_sessions(database, request));
   if (parts.length !== 3 || request.method !== "POST") throw new HttpError(404, "地址不存在");
   const payload = await read_payload(request);
   if (action === "register") return respond(await register_admin(database, request, payload, setup_key), 201);
   if (action === "login") return respond(await login_admin(database, request, payload));
   if (action === "logout") return respond(await logout_admin(database, request));
   if (action === "profile") return respond(await update_admin_profile(database, request, payload));
+  if (action === "revoke") return respond(await revoke_admin_sessions(database, request, payload));
+  if (action === "passkey-challenge") return respond(await passkey_challenge(database, request, payload));
+  if (action === "passkey-register") return respond(await register_passkey(database, request, payload));
+  if (action === "passkey-login") return respond(await passkey_login(database, request, payload));
+  if (action === "password") return respond(await change_admin_password(database, request, payload));
   throw new HttpError(404, "地址不存在");
 }
 

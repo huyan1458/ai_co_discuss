@@ -13,6 +13,8 @@ import { adapter_profile } from './adapters/profiles.mjs';
 import { atomic_json } from './files.mjs';
 import { saved_api_keys } from './discussion_api.mjs';
 import { launch_discussion, launch_projects, launch_settings, platform_of } from './discussion_launch.mjs';
+import { claim_relayed_command } from './remote_policy.mjs';
+import { DEVICE_ACTIONS, device_command, open_signed_request } from './device_auth.mjs';
 
 const MACHINE_TOKEN_BYTES = 32;
 const MACHINE_NAME_MAX = 60;
@@ -27,7 +29,7 @@ const RELAY_CIPHER_INFO = 'codiscuss-relay-v1';
 const LAUNCH_SCRIPT = fileURLToPath(new URL('./discussion_launch.mjs', import.meta.url));
 // What a connected browser may ask the local bridge for, minus the folder dialog nobody would see and pairing itself.
 const RELAYED_ACTIONS = new Set(['settings', 'launch', 'room-models', 'room-member', 'room-member-access', 'room-member-allow', 'room-member-adapter',
-  'room-member-model', 'room-profiles', 'room-files', 'room-restore', 'room-fork', 'models', 'api-key', 'api-check', 'scheduler-check', 'tts-settings', 'tts', 'stt', 'projects', 'presets', 'workflows', 'room-workflow', 'admin-account']);
+  'room-member-model', 'room-profiles', 'room-files', 'room-restore', 'room-fork', 'models', 'api-key', 'api-check', 'scheduler-check', 'tts-settings', 'tts', 'stt', 'projects', 'presets', 'workflows', 'room-workflow', 'browse-directory']);
 export const ROOM_ACTIONS = new Set(['launch', 'room-models', 'room-member', 'room-member-access', 'room-member-allow', 'room-member-adapter',
   'room-member-model', 'room-profiles', 'room-files', 'room-restore', 'room-fork', 'room-workflow', 'workflows']);
 
@@ -176,14 +178,14 @@ export function relayed_command(site, action, payload) {
   }
   // Choosing a folder belongs to the computer's own screen; another device imports by pasting.
   if (action === 'workflows' && payload.folder) throw new Error('其他设备请用粘贴导入工作流');
-  if (action === 'admin-account') input = { site, username: payload.username, password: payload.password };
   return { command: action === 'launch' ? 'start' : action, input, browser: action === 'launch' };
 }
 
-/** Run the local entrypoint as the local website does and answer in its HTTP shape. */
-export function run_launch_command({ command, input, browser }) {
+/** Run the local entrypoint as the local website does, under the limits for other devices, and answer in its HTTP shape. */
+export function run_launch_command({ command, input, browser, device }) {
   return new Promise(resolve => {
-    const args = [LAUNCH_SCRIPT, command, ...(browser ? ['--browser'] : []), ...(input === undefined ? [] : ['--stdin'])];
+    const args = [LAUNCH_SCRIPT, command, '--remote', ...(device ? ['--device', device] : []), ...(browser ? ['--browser'] : []),
+      ...(input === undefined ? [] : ['--stdin'])];
     const child = spawn(process.execPath, args, { windowsHide: true });
     let stdout = '', stderr = '', timed_out = false;
     child.stdout.setEncoding('utf8').on('data', chunk => { stdout += chunk; });
@@ -201,15 +203,20 @@ export function run_launch_command({ command, input, browser }) {
 }
 
 /** Decrypt one claimed command, run it, and return the encrypted answer to the device waiting on it. */
-async function answer_command(site, link, { id, envelope }, run, log) {
-  let key, request;
+async function answer_command(home, site, link, { id, envelope }, run, log) {
+  let key, sealed;
   try {
     key = await relay_cipher(link.private_key, envelope.key);
-    request = await unseal(key, envelope, id);
+    sealed = await unseal(key, envelope, id);
   } catch { return log(`${site}: 远程命令 ${id} 无法解密，已忽略`); }
   let response;
-  try { response = await run(relayed_command(site, request.action, request.payload)); }
-  catch (error) { response = { status: 400, body: { error: error.message } }; }
+  try {
+    const { request, device_id } = await open_signed_request(home, id, sealed);
+    claim_relayed_command(home, id, request.sent_at);
+    response = DEVICE_ACTIONS.has(request.action) ? await device_command(home, { site, machine_id: link.id, device_id }, request.action, request.payload)
+      : await run({ ...relayed_command(site, request.action, request.payload), device: device_id });
+  }
+  catch (error) { response = { status: 400, body: { error: error.message, ...(error.need ? { need: error.need } : {}) } }; }
   try { await machine_request(site, link, `/commands/${encodeURIComponent(id)}`, { envelope: await seal(key, response, `${id}:response`) }); }
   catch (error) { log(`${site}: 远程命令 ${id} 回传失败：${error.message}`); }
 }
@@ -227,7 +234,7 @@ export async function relay_commands(home, { run = run_launch_command, log = () 
     try { ({ commands } = await machine_request(site, link, '/commands/claim', { wait }, { timeout: wait * 1000 + COMMAND_REQUEST_MARGIN_MS, signal })); }
     catch (error) { if (!signal?.aborted) { log(`${site}: 领取远程命令失败：${error.message}`); on_failure(); } return; }
     for (const command of commands) {
-      const task = answer_command(site, link, command, run, log).finally(() => running.delete(task));
+      const task = answer_command(home, site, link, command, run, log).finally(() => running.delete(task));
       running.add(task);
     }
   }));

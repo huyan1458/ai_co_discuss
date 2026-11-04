@@ -288,30 +288,6 @@ html[data-theme^="channel"] .pb-end:hover { border-color: color-mix(in srgb, #f0
 .pb-member-status small { color: var(--ui-text-dimmed); font-size: 11px; }
 .pb-member-more { opacity: 0; }
 .pb-member:hover .pb-member-more, .pb-member-more:focus-visible, .pb-member-more[data-state="open"] { opacity: 1; }
-.pb-timing-heading { display: flex; align-items: baseline; justify-content: space-between; gap: 8px; }
-.pb-timing-heading h4 { margin: 0; }
-.pb-timing-heading small { color: var(--ui-text-dimmed); font-size: 11px; }
-.pb-timing-bar { display: flex; gap: 2px; height: 6px; margin-top: 10px; overflow: hidden; border-radius: 999px; background: var(--ui-bg-accented); }
-.pb-timing-bar > i { display: block; height: 100%; }
-.pb-timing-bar > i:first-child { border-radius: 999px 0 0 999px; }
-.pb-timing-bar > i:last-child { border-radius: 0 999px 999px 0; }
-.pb-timing-bar .is-queue_seconds, .pb-timing-dot.is-queue_seconds { background: #8b93a7; }
-.pb-timing-bar .is-wake_seconds, .pb-timing-dot.is-wake_seconds { background: #e5a50a; }
-.pb-timing-bar .is-work_seconds, .pb-timing-dot.is-work_seconds { background: var(--channel-accent); }
-.pb-timing-totals { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 8px; margin: 10px 0 0; }
-.pb-timing-totals dt { display: flex; align-items: center; gap: 5px; color: var(--ui-text-dimmed); font-size: 11px; }
-.pb-timing-totals dd { margin: 2px 0 0; color: var(--ui-text); font-size: 12px; font-variant-numeric: tabular-nums; }
-.pb-timing-totals dd small { margin-left: 4px; color: var(--ui-text-dimmed); font-size: 11px; }
-.pb-timing-dot { width: 6px; height: 6px; border-radius: 50%; }
-.pb-timings { margin-top: 10px; }
-.pb-timings summary { cursor: pointer; list-style: none; color: var(--channel-accent); font-size: 12px; }
-.pb-timings summary::-webkit-details-marker { display: none; }
-.pb-timings[open] summary { margin-bottom: 2px; }
-.pb-timings ol { display: grid; gap: 8px; margin: 8px 0 0; padding: 0; list-style: none; font-size: 12px; }
-.pb-timings li { display: grid; gap: 2px; }
-.pb-timing-who { color: var(--ui-text); }
-.pb-timings li small { margin-left: 6px; color: var(--ui-text-dimmed); }
-.pb-timing-stages { display: flex; flex-wrap: wrap; gap: 2px 10px; color: var(--ui-text-muted); font-size: 11px; font-variant-numeric: tabular-nums; }
 .pb-note { margin: 8px 0 0; color: var(--ui-text-dimmed); font-size: 11px; }
 .channel-rail-empty { margin: 20px 16px 0; color: var(--ui-text-dimmed); font-size: 12px; line-height: 1.7; }
 .pb-free-note { margin: 0 0 6px; color: var(--ui-text-dimmed); font-size: 12px; line-height: 1.6; overflow-wrap: anywhere; }

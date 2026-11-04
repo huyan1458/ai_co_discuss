@@ -1,6 +1,7 @@
 /** Read-only directory and text previews, confined to a room's saved project directory. */
 import { closeSync, fstatSync, openSync, readdirSync, readSync, realpathSync, statSync } from 'node:fs';
 import { isAbsolute, relative, resolve } from 'node:path';
+import { PINYIN_TABLE } from './pinyin_table.mjs';
 
 const DIRECTORY_PAGE_SIZE = 200;
 // Leave room for JSON escaping and base64 within the queued relay's 512 KiB encrypted envelope.
@@ -58,10 +59,57 @@ const SEARCH_RESULT_LIMIT = 50;
 const SEARCH_VISIT_LIMIT = 20000;
 const SEARCH_TIME_LIMIT_MS = 1500;
 
-/** Rank a name match: exact name, then prefix, then substring; shallower and shorter paths first. */
+// Pinyin letters typed in place of hanzi, as while an input method is still composing ("hanc" for 寒潮).
+const PINYIN_QUERY = /^[a-z0-9]+$/;
+let pinyin_readings = null;
+
+/** The toneless readings of one hanzi, or null for any other character. */
+function readings_of(char) {
+  if (!pinyin_readings) {
+    pinyin_readings = new Map();
+    for (const line of PINYIN_TABLE.split('\n')) {
+      const syllable = line.match(/^[a-z]+/)[0];
+      for (const hanzi of line.slice(syllable.length)) {
+        if (!pinyin_readings.has(hanzi)) pinyin_readings.set(hanzi, []);
+        pinyin_readings.get(hanzi).push(syllable);
+      }
+    }
+  }
+  return pinyin_readings.get(char) || null;
+}
+
+/**
+ * Whether a run of the name's characters spells the letters: each hanzi by a leading part of one of its readings
+ * (so "hanc", "hc" and "hanchao" all find 寒潮), any other character by itself.
+ */
+function pinyin_match(name, letters) {
+  const chars = [...name.toLocaleLowerCase()];
+  if (!chars.some(char => readings_of(char))) return false;
+  const known = new Map();
+  const spell = (at, used) => {
+    if (used === letters.length) return true;
+    if (at === chars.length) return false;
+    const key = at * (letters.length + 1) + used;
+    if (known.has(key)) return known.get(key);
+    let found = false;
+    const readings = readings_of(chars[at]);
+    if (!readings) found = chars[at] === letters[used] && spell(at + 1, used + 1);
+    for (const reading of readings || []) {
+      for (let length = 1; !found && length <= reading.length && reading[length - 1] === letters[used + length - 1]; length += 1) {
+        found = spell(at + 1, used + length);
+      }
+      if (found) break;
+    }
+    known.set(key, found);
+    return found;
+  };
+  return chars.some((_, start) => spell(start, 0));
+}
+
+/** Rank a name match: exact name, then prefix, then substring, then pinyin; shallower and shorter paths first. */
 function search_rank(name, path, needle) {
   const lower = name.toLocaleLowerCase();
-  const tier = lower === needle ? 0 : lower.startsWith(needle) ? 1 : 2;
+  const tier = lower === needle ? 0 : lower.startsWith(needle) ? 1 : lower.includes(needle) ? 2 : 3;
   return [tier, path.split('/').length, path.length];
 }
 
@@ -70,6 +118,7 @@ function search_project_files(root, query) {
   const needle = query.trim().toLocaleLowerCase().replaceAll('\\', '/');
   if (!needle) throw new Error('搜索关键词不能为空');
   const by_path = needle.includes('/');
+  const by_pinyin = !by_path && PINYIN_QUERY.test(needle);
   const deadline = Date.now() + SEARCH_TIME_LIMIT_MS;
   const matches = [];
   const queue = [''];
@@ -85,7 +134,7 @@ function search_project_files(root, query) {
       if (entry.isSymbolicLink() || (!entry.isFile() && !entry.isDirectory())) continue;
       const path = folder ? `${folder}/${entry.name}` : entry.name;
       if (entry.isDirectory() && !SEARCH_SKIPPED.has(entry.name)) queue.push(path);
-      if ((by_path ? path : entry.name).toLocaleLowerCase().includes(needle)) {
+      if ((by_path ? path : entry.name).toLocaleLowerCase().includes(needle) || (by_pinyin && pinyin_match(entry.name, needle))) {
         matches.push({ name: entry.name, path, kind: entry.isDirectory() ? 'directory' : 'file' });
       }
     }

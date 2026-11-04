@@ -727,7 +727,7 @@ const can_pick_workflow = computed(() => free.value && !room.value?.archived && 
 const workflow_options = computed(() => {
   const query = mention_context.value?.query.toLocaleLowerCase() || "";
   return (view.value.launch.workflows || []).filter((item) => !item.error && `${item.id} ${item.label} ${item.description || ""}`.toLocaleLowerCase().includes(query))
-    .map((item) => ({ key: `workflow:${item.id}`, workflow: item, group: "工作流", enabled: room_workflow.value?.enabled && room_workflow.value.id === item.id }));
+    .map((item) => ({ key: `workflow:${item.id}`, workflow: item, group: "工作流", enabled: room_workflow.value?.id === item.id }));
 });
 /**
  * Platform skills a user may call with "/". A fixed list, never every installed skill: most are the AIs' own operating
@@ -797,7 +797,7 @@ function update_mention(event) {
 const mention_handle = (name) => GROUP_MENTIONS[name] ? name : bridge.mention_handles(name, free_members.value.map((member) => member.name))[0];
 /** Replace just the active token and leave the caret ready for the next word. */
 async function select_mention(option) {
-  if (!mention_context.value || !mention_options.value.some((item) => item.key === option.key)) return;
+  if (!mention_context.value || mention_context.value.composing || !mention_options.value.some((item) => item.key === option.key)) return;
   const { start, end } = mention_context.value;
   if (option.workflow) return pick_workflow(option, end);
   if (option.skill) return pick_skill(option, end);
@@ -860,11 +860,28 @@ function mention_keydown(event) {
   event.stopPropagation();
 }
 
-/** Let the input method own candidate selection before reopening member suggestions. */
+let composition_start = 0;
+/**
+ * Search while an input method is still composing: the pinyin typed so far ("han'c") is the query, so 寒潮 is found
+ * before it is committed. Keys still belong to the input method, and picking waits for the committed text.
+ */
 function mention_composition(event) {
-  mention_composing = event.type === "compositionstart";
-  mention_context.value = null;
-  if (!mention_composing) update_mention(event);
+  const editor = prompt.value?.textareaRef;
+  if (event.target !== editor) return;
+  if (event.type === "compositionstart") {
+    mention_composing = true;
+    composition_start = editor.selectionStart;
+    return;
+  }
+  if (event.type === "compositionupdate") {
+    const draft = editor.value.slice(0, composition_start) + (event.data || "").replace(/['\s]/g, "");
+    const context = find_command(draft, draft.length) || find_mention(draft, draft.length);
+    if (context?.query !== mention_context.value?.query) mention_index.value = 0;
+    mention_context.value = context && { ...context, composing: true };
+    return;
+  }
+  mention_composing = false;
+  update_mention(event);
 }
 
 /** The autocomplete never moves focus away from the draft. */
@@ -1559,7 +1576,7 @@ function copy_message(message) { act("copy", `${view.value.room_site}/r/${room.v
       <div class="channel-map-track">
         <div v-for="section in navigation_sections" :key="section.entries[0].key"v-memo="[section, preview_open, active_round === section.number ? active_message : null, section_preview_position(section)]" class="channel-map-round" :style="{ '--round-message-count': section.count }">
           <button v-for="item in section.entries" :key="item.key" type="button" class="channel-navigation-entry" :class="item.round ? 'channel-round-range' : 'channel-message-jump'" :data-author="item.round ? undefined : bridge.identities[item.message.author]?.style" :data-jump-id="item.round ? undefined : item.message.id" :data-round-jump="item.round ? item.label : undefined" :aria-label="item.label" :tabindex="!item.round && item.message.id === (active_message || view.messages[0]?.id) ? 0 : -1" :aria-current="!item.round && active_message === item.message.id ? 'location' : undefined" :aria-describedby="preview_open && preview_entry === item.key ? 'channel-navigation-preview' : undefined" @pointerenter="hover_preview(item, $event)" @pointermove="hover_preview(item, $event)" @pointerdown="start_navigation_press(item, $event)" @pointerup="finish_navigation_press" @pointercancel="finish_navigation_press" @focus="focus_preview(item, $event)" @keydown="navigate_by_key($event, item.index)" @click="activate_navigation(item, $event)">
-            <span v-if="item.round" class="channel-round-number" aria-hidden="true">{{ item.number || '–' }}</span>
+            <span v-if="item.round" class="channel-round-number" aria-hidden="true">{{ item.number || '' }}</span>
             <motion.span v-else class="channel-jump-tick" aria-hidden="true" :initial="false" :animate="tick_state(item, item.index)" :transition="NAV_SPRING" />
           </button>
         </div>
@@ -1852,7 +1869,7 @@ function copy_message(message) { act("copy", `${view.value.room_site}/r/${room.v
       <button v-if="reader.state.reading" type="button" class="channel-listen-pill" aria-label="退出朗读" @click="reader.stop()"><UIcon name="i-lucide-square" />退出</button>
       <UButton v-if="transcript_messages.length && !follow_tail" icon="i-lucide-arrow-down" color="neutral" variant="outline" aria-label="回到最新消息" class="channel-latest-button" @click="return_to_latest" />
     </div>
-    <div class="channel-composer-dock"><div class="channel-composer-column" @dragover="bridge.drop_attachments" @drop="bridge.drop_attachments" @paste="bridge.paste_attachments" @keydown.capture="mention_keydown($event); attachment_shortcut($event)" @input="update_mention" @click="update_mention" @keyup="update_mention" @select="update_mention" @compositionstart="mention_composition" @compositionend="mention_composition" @scroll.capture="sync_mirror">
+    <div class="channel-composer-dock"><div class="channel-composer-column" @dragover="bridge.drop_attachments" @drop="bridge.drop_attachments" @paste="bridge.paste_attachments" @keydown.capture="mention_keydown($event); attachment_shortcut($event)" @input="update_mention" @click="update_mention" @keyup="update_mention" @select="update_mention" @compositionstart="mention_composition" @compositionupdate="mention_composition" @compositionend="mention_composition" @scroll.capture="sync_mirror">
       <UPopover :open="!!mention_context" :reference="prompt?.$el" :content="{ side: 'top', align: 'start', sideOffset: 8, onOpenAutoFocus: keep_mention_focus, onCloseAutoFocus: keep_mention_focus }" :ui="{ content: 'channel-select-menu channel-mention-menu' }" @update:open="!$event && (mention_context = null)">
         <template #content>
           <div class="channel-mention-heading"><span>{{ mention_heading }}</span><small>↑↓ 选择 · Enter 确认</small></div>

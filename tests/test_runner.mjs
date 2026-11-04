@@ -19,7 +19,7 @@ import { SessionDriver } from '../runner/session_driver.mjs';
 import { EXPERT_PROMPT_PRESETS, expert_prompt, free_task_text, software_rules } from '../runner/expert_prompts.mjs';
 import { participant_tools, system_prompt } from '../runner/adapters/api.mjs';
 import { glob_regex, open_project, run_file_tool } from '../runner/adapters/api_files.mjs';
-import { DiscussionService, migrate_platform_ids, migrate_service_home, read_registry, register_room, service_pid, service_ready, start_service, sweep_service_home, unregister_room } from '../runner/discussion_service.mjs';
+import { DiscussionService, migrate_platform_ids, migrate_service_home, persisted_env, read_registry, register_room, service_pid, service_ready, start_service, sweep_service_home, unregister_room } from '../runner/discussion_service.mjs';
 import { restore_room, room_profiles } from '../runner/discussion_launch.mjs';
 import { adapter_of, deliver_task } from '../runner/adapters/index.mjs';
 import { adopted_fork, claude_api_error, claude_exit_error, claude_inbox_ready, claude_rule_path, standalone_claude_env, watch_window_turn } from '../runner/adapters/claude.mjs';
@@ -1731,12 +1731,21 @@ test('the foreground service releases its lock when interrupted', async t => {
   assert.equal(existsSync(join(home, 'runner.lock')), false);
 });
 
+test('a restarted service takes variables saved after its terminal opened, keeping the inherited PATH', () => {
+  const terminal = { Path: 'bin', CLAUDE_CODE_OAUTH_TOKEN: 'stale', HOME: 'h' };
+  const env = persisted_env(terminal, () => ({ claude_code_oauth_token: 'switched', PATH: 'other', OPENAI_API_KEY: 'k' }));
+  assert.deepEqual(env, { Path: 'bin', HOME: 'h', claude_code_oauth_token: 'switched', OPENAI_API_KEY: 'k' });
+  assert.deepEqual(persisted_env(terminal, () => ({})), terminal);
+});
+
 test('a Claude CLI launched from a hosting Claude session drops host variables and keeps its own login', () => {
   const host = { CLAUDECODE: '1', CLAUDE_CODE_ENTRYPOINT: 'claude-desktop', CLAUDE_CODE_SDK_HAS_HOST_AUTH_REFRESH: '1', PATH: 'bin' };
   const env = standalone_claude_env(host, () => ({ CLAUDE_CODE_OAUTH_TOKEN: 'persisted' }));
   assert.deepEqual(env, { PATH: 'bin', CLAUDE_CODE_OAUTH_TOKEN: 'persisted' });
-  const plain = { PATH: 'bin', CLAUDE_CODE_OAUTH_TOKEN: 'own' };
-  assert.equal(standalone_claude_env(plain, () => { throw new Error('not read'); }), plain);
+  // A token switched after the runner started wins over the stale one it inherited.
+  const plain = { PATH: 'bin', CLAUDE_CODE_OAUTH_TOKEN: 'stale' };
+  assert.deepEqual(standalone_claude_env(plain, () => ({ CLAUDE_CODE_OAUTH_TOKEN: 'switched' })), { PATH: 'bin', CLAUDE_CODE_OAUTH_TOKEN: 'switched' });
+  assert.deepEqual(standalone_claude_env(plain, () => ({})), plain);
 });
 
 /** A minimal free-room website: one member, durable executions keyed by client id. */
@@ -2488,8 +2497,8 @@ test('two instances of one platform keep separate sessions and credentials', asy
   assert.equal(JSON.parse(readFileSync(join(config.directory, 'free-2.access.json'), 'utf8')).token, config.members['Claude-review'].token);
 });
 
-test('codiscuss token writes only its hash through wrangler and the account is saved per site', async () => {
-  const { create_admin_token, save_admin_account } = await import('../runner/admin_account.mjs');
+test('codiscuss token writes only its hash through wrangler and no password is kept on this computer', async () => {
+  const { create_admin_token, remove_legacy_admin_accounts } = await import('../runner/admin_account.mjs');
   const root = mkdtempSync(join(tmpdir(), 'codiscuss-admin-test-'));
   try {
     assert.throws(() => create_admin_token(join(root, 'missing.jsonc'), () => {}), /找不到部署配置/);
@@ -2501,12 +2510,11 @@ test('codiscuss token writes only its hash through wrangler and the account is s
     assert.deepEqual(args.slice(0, 7), ['d1', 'execute', 'DB', '--remote', '--config', config, '--command']);
     assert.ok(!sql.includes(token) && sql.includes(createHash('sha256').update(token).digest('hex')));
     const home = join(root, 'home');
-    const { saved } = save_admin_account(home, { site: 'https://example.pages.dev/', username: ' Admin ', password: 'Admin123456.' });
-    save_admin_account(home, { site: 'https://other.example', username: 'B', password: 'secret-pass' });
-    const accounts = JSON.parse(readFileSync(saved, 'utf8')).sites;
-    assert.equal(accounts['https://example.pages.dev'].username, 'Admin');
-    assert.equal(accounts['https://example.pages.dev'].password, 'Admin123456.');
-    assert.equal(Object.keys(accounts).length, 2);
-    assert.throws(() => save_admin_account(home, { site: 'https://example.pages.dev', username: 'Admin', password: '' }), /缺少/);
+    mkdirSync(home);
+    // An older version's plain-text password file is deleted at service start.
+    writeFileSync(join(home, 'admin-accounts.json'), JSON.stringify({ sites: { 'https://example.pages.dev': { username: 'Admin', password: 'Admin123456.' } } }));
+    assert.equal(remove_legacy_admin_accounts(home), true);
+    assert.equal(existsSync(join(home, 'admin-accounts.json')), false);
+    assert.equal(remove_legacy_admin_accounts(home), false);
   } finally { rmSync(root, { recursive: true, force: true }); }
 });
