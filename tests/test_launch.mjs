@@ -10,7 +10,7 @@ import { PassThrough } from 'node:stream';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import { test } from 'node:test';
 
-import { adopt_member_profile, adopt_workflow, borrowed_session, launch_discussion, launch_settings, room_configuration, room_files, room_models, room_member, room_member_model, room_workflow, save_launch_projects, save_launch_settings, validate_preset } from '../runner/discussion_launch.mjs';
+import { adopt_member_profile, adopt_workflow, borrowed_session, check_or_save_workflow, launch_discussion, launch_settings, room_configuration, room_files, room_models, room_member, room_member_model, room_workflow, save_launch_projects, save_launch_settings, validate_preset } from '../runner/discussion_launch.mjs';
 import { get_workflow, list_workflows, save_workflow } from '../runner/workflows.mjs';
 import { read_project_files } from '../runner/project_files.mjs';
 import { api, DiscussionStore, load_config } from '../runner/discussion_runner.mjs';
@@ -230,6 +230,10 @@ test('room files use the saved project and require the authenticated bridge and 
   assert.equal(models.project_directory, project);
   assert.deepEqual((await room_files(f.home, input)).entries.map(item => item.name), ['报告.md']);
   assert.equal((await room_files(f.home, { ...input, path: '报告.md', cwd: f.directory })).text, '# 项目报告\n正文');
+  mkdirSync(join(project, '章节', 'node_modules'), { recursive: true });
+  writeFileSync(join(project, '章节', '第01集报告.md'), '');
+  writeFileSync(join(project, '章节', 'node_modules', '报告.md'), '');
+  assert.deepEqual((await room_files(f.home, { ...input, query: '报告' })).entries.map(item => item.path), ['报告.md', '章节/第01集报告.md']);
   await assert.rejects(room_files(f.home, { ...input, token: '' }), /控制凭据/);
   await assert.rejects(room_files(f.home, { ...input, token: 'invalid-owner' }), /403/);
   const body = { room_id: config.room, path: '报告.md' };
@@ -840,6 +844,23 @@ test('room cards preserve member text and portable settings without removed memb
   assert.doesNotMatch(JSON.stringify(result.body), new RegExp(token));
 });
 
+test('outside a room a workflow folder is checked without saving, then saved with the access its cards declare', t => {
+  const home = mkdtempSync(join(tmpdir(), 'workflow-check-'));
+  t.after(() => rmSync(home, { recursive: true, force: true }));
+  const folder = join(home, 'draft', 'serial');
+  mkdirSync(join(folder, 'agents'), { recursive: true });
+  writeFileSync(join(folder, 'SKILL.md'), '---\nname: serial\nlabel: 连载\n---\n先写再审。\n');
+  writeFileSync(join(folder, 'agents', 'writer.md'), '---\nname: writer\nplatform: Claude\nproject_access: write\n---\n写。\n');
+  const checked = check_or_save_workflow(home, { dir: folder });
+  assert.equal(checked.agents[0].requested_access, 'write');
+  assert.equal(list_workflows(home).length, 0);
+  check_or_save_workflow(home, { dir: folder }, true);
+  assert.equal(get_workflow(home, 'serial').agents[0].project_access, 'write');
+  writeFileSync(join(folder, 'agents', 'writer.md'), '---\nname: writer\nplatform: Gemini\n---\n写。\n');
+  assert.throws(() => check_or_save_workflow(home, { dir: folder }, true), /writer/);
+  assert.equal(get_workflow(home, 'serial').agents[0].name, 'Claude-writer');
+});
+
 test('only the host of a room whose owner allowed it adopts a workflow, inviting its cards with at most write access', async t => {
   const f = await fixture(t), token = randomUUID() + randomUUID();
   save_launch_settings(f.home, { participants: f.input.participants });
@@ -861,6 +882,9 @@ test('only the host of a room whose owner allowed it adopts a workflow, inviting
   const granted = await request(f.site, '/api/local/room-workflow', { room_id: config.room, action: 'host', allowed: true }, { 'X-CoDiscuss-Local': '1' });
   assert.equal(granted.status, 200, JSON.stringify(granted.body));
   assert.equal(load_config(launched.config_path).host_workflows, true);
+  const changed = await request(f.site, '/api/local/room-member-model', { room_id: config.room, name: 'Codex', model: 'local-model', effort: '' }, { 'X-CoDiscuss-Local': '1' });
+  assert.equal(changed.status, 200, JSON.stringify(changed.body));
+  assert.equal(load_config(launched.config_path).participants.Codex.model, 'local-model');
   await assert.rejects(adopt_workflow(f.home, { access_file: access('Other', randomUUID() + randomUUID()), draft_file: draft }), /只有本房间的主持人/);
   const adopted = await adopt_workflow(f.home, { access_file: host_access, draft_file: draft });
   assert.deepEqual(adopted.members, { writer: 'Claude-writer' });
@@ -878,30 +902,35 @@ test('only the host of a room whose owner allowed it adopts a workflow, inviting
   assert.equal((await api(config, '')).free.members.length, 2);
 });
 
-test('a room without a project keeps its workflow at creation, disables work and recalls the original members', async t => {
+test('a workflow bound at creation ends when its members are sent away, resumes with their sessions, and is replaced by another', async t => {
   const f = await fixture(t), token = randomUUID() + randomUUID();
   save_workflow(f.home, { id: 'writing', label: '写作', skill: '先拟提纲，再写正文。', agents: [
-    { card: 'host', name: 'Codex', project_access: 'read' }, { card: 'writer', name: 'Claude', project_access: 'read' }] }, validate_preset);
+    { card: 'host', name: 'Codex-host', project_access: 'read' }, { card: 'writer', name: 'Claude-writer', project_access: 'read' }] }, validate_preset);
   const workflow = { id: 'writing', members: { host: 'Codex', writer: 'Claude' } };
   const launched = await launch_discussion(f.home, { site: f.site, entry: 'web', participants: f.input.participants, token, workflow,
     room: { title: '无项目工作流', mode: 'free', host: 'Codex', members: ['Codex', 'Claude'], submission_id: randomUUID() } }, f.options);
   const input = { site: f.site, room_id: launched.room.id, token }, config = load_config(launched.config_path);
   assert.equal(config.cwd || '', '');
   assert.deepEqual(config.workflow, { ...workflow, enabled: true });
-  await assert.rejects(room_workflow(f.home, { ...input, token: 'wrong-owner', action: 'disable' }), /403/);
+  await assert.rejects(room_workflow(f.home, { ...input, token: 'wrong-owner', action: 'away' }), /403/);
   await api(config, '/messages', { author: '用户', text: '@Claude 写正文', to: ['Claude'], submission_id: randomUUID() });
-  await room_workflow(f.home, { ...input, action: 'disable' });
+  await room_workflow(f.home, { ...input, action: 'away' });
   let room = await api(config, '');
-  assert.equal(room.free.members.find(member => member.name === 'Codex').status, 'active');
-  assert.equal(room.free.members.find(member => member.name === 'Claude').status, 'away');
-  assert.ok(room.free.requests.filter(request => request.member_id === room.free.members.find(member => member.name === 'Claude').id).every(request => request.status === 'cancelled'));
-  assert.equal(load_config(launched.config_path).workflow.enabled, false);
-  await room_member(f.home, { ...input, name: 'Claude', action: 'rejoin' });
-  await room_workflow(f.home, { ...input, action: 'enable', workflow });
+  const claude = room.free.members.find(member => member.name === 'Claude');
+  assert.equal(room.free.members.find(member => member.name === 'Codex').status, 'active', 'the host stays');
+  assert.equal(claude.status, 'away');
+  assert.ok(room.free.requests.filter(request => request.member_id === claude.id).every(request => request.status === 'cancelled'));
+  assert.deepEqual(load_config(launched.config_path).workflow, { ...workflow, enabled: false }, 'it ends but remembers who played which card');
+  await room_workflow(f.home, { ...input, action: 'back' });
   room = await api(config, '');
   assert.deepEqual(room.free.members.map(member => [member.name, member.status]), [['Codex', 'active'], ['Claude', 'active']]);
+  assert.deepEqual(load_config(launched.config_path).participants, config.participants, 'each member returns to its own session');
   assert.equal(load_config(launched.config_path).workflow.enabled, true);
-  assert.deepEqual(load_config(launched.config_path).participants, config.participants);
+  // Another workflow replaces this one instead of asking to stop it first; the old members stay as ordinary members.
+  save_workflow(f.home, { id: 'review', label: '评审', skill: '先审再改。', agents: [] }, validate_preset);
+  await room_workflow(f.home, { ...input, action: 'enable', workflow: { id: 'review', members: {} } });
+  assert.deepEqual(load_config(launched.config_path).workflow, { id: 'review', enabled: true, members: {} });
+  assert.equal((await api(config, '')).free.members.length, 2);
 });
 
 test('members join, leave and return while a free room keeps running', async t => {

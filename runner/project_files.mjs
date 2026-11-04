@@ -52,12 +52,63 @@ function text_preview(target) {
   } finally { closeSync(descriptor); }
 }
 
-/** List one directory page or preview one file under the configured project root. */
-export function read_project_files(cwd, path = '', offset = 0) {
+/** Folders whose contents are generated or vendored and would drown real matches. */
+const SEARCH_SKIPPED = new Set(['.git', 'node_modules', '__pycache__', '.venv', 'venv', '.next', '.cache', '.wrangler']);
+const SEARCH_RESULT_LIMIT = 50;
+const SEARCH_VISIT_LIMIT = 20000;
+const SEARCH_TIME_LIMIT_MS = 1500;
+
+/** Rank a name match: exact name, then prefix, then substring; shallower and shorter paths first. */
+function search_rank(name, path, needle) {
+  const lower = name.toLocaleLowerCase();
+  const tier = lower === needle ? 0 : lower.startsWith(needle) ? 1 : 2;
+  return [tier, path.split('/').length, path.length];
+}
+
+/** Find files and folders whose name (or path, when the query has a "/") contains the query, case-insensitively. */
+function search_project_files(root, query) {
+  const needle = query.trim().toLocaleLowerCase().replaceAll('\\', '/');
+  if (!needle) throw new Error('搜索关键词不能为空');
+  const by_path = needle.includes('/');
+  const deadline = Date.now() + SEARCH_TIME_LIMIT_MS;
+  const matches = [];
+  const queue = [''];
+  let visited = 0, complete = true;
+  while (queue.length) {
+    if (visited >= SEARCH_VISIT_LIMIT || Date.now() > deadline) { complete = false; break; }
+    const folder = queue.shift();
+    let items;
+    try { items = readdirSync(folder ? resolve(root, folder) : root, { withFileTypes: true }); } catch { continue; }
+    for (const entry of items) {
+      visited += 1;
+      // Links are skipped so a search never leaves the project.
+      if (entry.isSymbolicLink() || (!entry.isFile() && !entry.isDirectory())) continue;
+      const path = folder ? `${folder}/${entry.name}` : entry.name;
+      if (entry.isDirectory() && !SEARCH_SKIPPED.has(entry.name)) queue.push(path);
+      if ((by_path ? path : entry.name).toLocaleLowerCase().includes(needle)) {
+        matches.push({ name: entry.name, path, kind: entry.isDirectory() ? 'directory' : 'file' });
+      }
+    }
+  }
+  const ranked = matches.map(item => ({ item, rank: search_rank(item.name, item.path, needle) }))
+    .sort((left, right) => left.rank[0] - right.rank[0] || left.rank[1] - right.rank[1] || left.rank[2] - right.rank[2]);
+  return { query, kind: 'search', entries: ranked.slice(0, SEARCH_RESULT_LIMIT).map(({ item }) => item),
+    total: matches.length, complete };
+}
+
+/** The room's project root, resolved through links and required to be a folder. */
+function project_root(cwd) {
   if (!cwd?.trim()) throw new Error('本房间未设置项目目录');
-  if (!Number.isSafeInteger(offset) || offset < 0) throw new Error('目录分页位置无效');
   const root = realpathSync(cwd);
   if (!statSync(root).isDirectory()) throw new Error('项目目录不是文件夹');
+  return root;
+}
+
+/** List one directory page, preview one file, or search names under the configured project root. */
+export function read_project_files(cwd, path = '', offset = 0, query = '') {
+  if (query) return search_project_files(project_root(cwd), String(query));
+  if (!Number.isSafeInteger(offset) || offset < 0) throw new Error('目录分页位置无效');
+  const root = project_root(cwd);
   const target = project_path(root, path);
   const info = statSync(target);
   const normalized = path.replaceAll('\\', '/').split('/').filter(part => part && part !== '.').join('/');

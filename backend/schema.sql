@@ -231,6 +231,13 @@ CREATE TABLE IF NOT EXISTS member_sessions (
     session_id TEXT NOT NULL,
     client TEXT NOT NULL
 );
+-- Why the local service could not take over a manual member's reported session; shown only while that session is still the reported one.
+CREATE TABLE IF NOT EXISTS member_adopt_failures (
+    member_id INTEGER PRIMARY KEY REFERENCES room_members(id) ON DELETE CASCADE,
+    room_id TEXT NOT NULL,
+    session_id TEXT NOT NULL,
+    reason TEXT NOT NULL
+);
 -- A manual member's own registration; it is bound to the credential it used, so a re-issued credential must register again.
 CREATE TABLE IF NOT EXISTS member_registrations (
     member_id INTEGER PRIMARY KEY REFERENCES room_members(id) ON DELETE CASCADE,
@@ -963,6 +970,13 @@ BEGIN
 END;
 DROP TRIGGER IF EXISTS revision_session_report_insert;
 CREATE TRIGGER revision_session_report_insert AFTER INSERT ON member_sessions
+BEGIN
+    UPDATE room_revisions SET revision=(SELECT MAX(revision)+1 FROM room_revisions) WHERE room_id=NEW.room_id;
+    INSERT INTO room_revisions (room_id,revision) SELECT NEW.room_id,(SELECT COALESCE(MAX(revision),0)+1 FROM room_revisions)
+        WHERE NOT EXISTS (SELECT 1 FROM room_revisions WHERE room_id=NEW.room_id);
+END;
+DROP TRIGGER IF EXISTS revision_adopt_failure_insert;
+CREATE TRIGGER revision_adopt_failure_insert AFTER INSERT ON member_adopt_failures
 BEGIN
     UPDATE room_revisions SET revision=(SELECT MAX(revision)+1 FROM room_revisions) WHERE room_id=NEW.room_id;
     INSERT INTO room_revisions (room_id,revision) SELECT NEW.room_id,(SELECT COALESCE(MAX(revision),0)+1 FROM room_revisions)

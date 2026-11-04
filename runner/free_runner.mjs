@@ -9,7 +9,7 @@ import { SegmentLog } from './execution_progress.mjs';
 import { free_task_text, TASK_SUBCOMMANDS, with_expert_prompt } from './expert_prompts.mjs';
 import { atomic_json } from './files.mjs';
 import { SessionDriver } from './session_driver.mjs';
-import { effective_profile, load_room_workflow, workflow_task_field } from './workflows.mjs';
+import { effective_profile, load_room_workflow, workflow_in_use, workflow_task_field } from './workflows.mjs';
 import { DEFAULT_SCHEDULER_MODE, REVIEW_CONFIDENCE, REVIEW_PROMPT_VERSION, ROUTE_CONFIDENCE, ROUTE_CONTEXT_MESSAGES, ROUTE_PROMPT_VERSION, ROUTE_WIDE_CONFIDENCE, decide_group_order, decide_review_completion, route_free_message, route_prompt_version, scheduler_thresholds, some_members } from './scheduler.mjs';
 
 const PACKAGE_VERSION = JSON.parse(readFileSync(new URL('../package.json', import.meta.url), 'utf8')).version;
@@ -88,7 +88,8 @@ export function free_task_files(config, member, execution, binding, { session = 
   const task_path = join(config.directory, `${id}.task.json`);
   // A workflow member's prompt is read from its card for this execution; everything else stays the room's setting.
   const profile = effective_profile(config.participants[member.name], member.name, workflow);
-  const host_workflow = member.role === 'host' && workflow && !workflow.error ? workflow : null;
+  // The host sees the workflow only while its members are here: sending them away ends it.
+  const host_workflow = member.role === 'host' && workflow && !workflow.error && workflow_in_use(workflow, room_members) ? workflow : null;
   atomic_json(access_path, { site: config.site, room: config.room, member: member.name, token: config.members[member.name].token,
     session_id: binding.session_id || '', execution_id: execution.id });
   const adapter = adapter_of(profile.adapter);
@@ -122,8 +123,9 @@ export function free_task_files(config, member, execution, binding, { session = 
     ...(stopped.length ? { stopped_executions: stopped } : {}),
     role: member.role || 'member',
     read_after: execution.read_until, cwd: profile.cwd || null, project_access: profile.project_access, draft_directory,
-    skills: [...skills.map(file => join(config.project, '.agents/skills', file)), ...(host_workflow ? [host_workflow.skill_path] : [])],
-    ...(workflow_field ? { workflow: workflow_field } : {}),
+    skills: skills.map(file => join(config.project, '.agents/skills', file)),
+    // The workflow's SKILL.md is not a skill read on every task: the host opens it when a request fits its description.
+    ...(workflow_field ? { workflow: { ...workflow_field, skill_path: host_workflow.skill_path } } : {}),
     ...(member.role === 'host' && config.host_workflows ? { host_workflows: true } : {}),
     cli, subcommands: TASK_SUBCOMMANDS,
     ...(bound_access ? { access_env: 'DISCUSS_ACCESS_FILE' } : { access_file: access_path }), instructions });

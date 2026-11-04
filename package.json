@@ -78,6 +78,7 @@
     ".agents/skills/discuss-host/**",
     ".agents/skills/discuss-participant/**",
     ".agents/skills/discuss-report/**",
+    ".agents/skills/workflow-creator/**",
     ".github/SECURITY.md",
     "docs/**",
     "!**/*.log",

@@ -1357,8 +1357,8 @@ async function send_chain_rounds(room_id, token, max_rounds) {
 async function describe_member(name, text, label) {
   const room_id = state.room.id;
   try {
-    const token = localStorage.getItem(`discuss-access:${room_id}`);
-    if (!token) throw new Error("此浏览器缺少房间控制凭据，请使用创建房间的浏览器");
+    // Without the room credential the website acts with this browser's administrator authority (the local site's visitors).
+    const token = localStorage.getItem(`discuss-access:${room_id}`) || "";
     await request_json(`/api/rooms/${room_id}/descriptions`, { descriptions: { [name]: text } }, token);
     if (label !== undefined) await request_json(`/api/rooms/${room_id}/labels`, { labels: { [name]: label } }, token);
     if (state.room?.id === room_id) await refresh_room();
@@ -1369,8 +1369,8 @@ async function describe_member(name, text, label) {
 async function set_chain_rounds(max_rounds) {
   const room_id = state.room.id;
   try {
-    const token = localStorage.getItem(`discuss-access:${room_id}`);
-    if (!token) throw new Error("此浏览器缺少房间控制凭据，请使用创建房间的浏览器");
+    // Without the room credential the website acts with this browser's administrator authority (the local site's visitors).
+    const token = localStorage.getItem(`discuss-access:${room_id}`) || "";
     await request_json(`/api/rooms/${room_id}/budget`, { max_rounds }, token);
     if (state.room?.id === room_id) await refresh_room();
   } catch (error) { notify("error", error.message); throw error; }
@@ -1380,8 +1380,8 @@ async function set_chain_rounds(max_rounds) {
 async function continue_chain(chain_id, rounds) {
   const room_id = state.room.id;
   try {
-    const token = localStorage.getItem(`discuss-access:${room_id}`);
-    if (!token) throw new Error("此浏览器缺少房间控制凭据，请使用创建房间的浏览器");
+    // Without the room credential the website acts with this browser's administrator authority (the local site's visitors).
+    const token = localStorage.getItem(`discuss-access:${room_id}`) || "";
     await request_json(`/api/rooms/${room_id}/chains/${chain_id}`, { action: "continue", rounds }, token);
     if (state.room?.id === room_id) await refresh_room();
   } catch (error) { notify("error", error.message); throw error; }
@@ -1455,8 +1455,7 @@ async function reorder_speakers({ revision, order }) {
 /** Invite an independent member, retaining its credential before either delivery path runs. */
 async function invite_member({ name, access, project_access = "read", session_id = "", card = "", workflow_members = null }) {
   const room_id = state.room.id;
-  const token = localStorage.getItem(`discuss-access:${room_id}`);
-  if (!token) throw new Error("此浏览器缺少房间控制凭据，请使用创建房间的浏览器");
+  const token = localStorage.getItem(`discuss-access:${room_id}`) || "";
   const taken = new Set((state.room.free?.members || state.room.members || []).map(member => member.name));
   const instance = unique_instance(name, taken);
   const record = prepare_member_request(room_id, `add:${name}:${access}`, { name: instance, access, adapter: "", session_mode: "new" },
@@ -1881,7 +1880,7 @@ function member_credentials(room_id) {
 
 /** Persist accepted owner/member credentials before discarding the original retry record. */
 function save_room_credentials(room, token, members = []) {
-  localStorage.setItem(`discuss-access:${room.id}`, token);
+  if (token) localStorage.setItem(`discuss-access:${room.id}`, token);
   const saved = member_credentials(room.id);
   for (const member of members) {
     const public_member = (room.members || room.free?.members || []).find(item => item.name === member.name);
@@ -2523,8 +2522,8 @@ function reload_room_models() {
 }
 
 /** Read a directory or file from the room's saved project through the authenticated local connection. */
-function read_room_files(room_id, path = "", offset = 0) {
-  return local_launch_request("room-files", { room_id, path, offset, token: localStorage.getItem(`discuss-access:${room_id}`) });
+function read_room_files(room_id, path = "", offset = 0, query = "") {
+  return local_launch_request("room-files", { room_id, path, offset, ...(query ? { query } : {}), token: localStorage.getItem(`discuss-access:${room_id}`) });
 }
 
 /**
@@ -2794,12 +2793,15 @@ async function enable_room_workflow({ id, members }) {
   await reload_room_models();
 }
 
-/** Release the room's workflow: its members leave (the host stays), and the host stops following it. */
-async function disable_room_workflow() {
+/**
+ * Send away (`away`) or bring back (`back`) the members the room's workflow brought; the host and the workflow stay,
+ * and each member keeps its session for when it comes back.
+ */
+async function move_workflow_members(action) {
   const room_id = state.room.id;
   const token = localStorage.getItem(`discuss-access:${room_id}`) || "";
-  await local_launch_request("room-workflow", { room_id, token, action: "disable" });
-  notify("info", "工作流已停用，它带来的成员已离开");
+  await local_launch_request("room-workflow", { room_id, token, action });
+  notify("info", action === "away" ? "工作流已结束，它带来的成员已离开；打 / 选它可请回原成员" : "工作流成员已请回，接着原来的会话工作");
   await refresh_room();
   await reload_room_models();
 }
@@ -4244,7 +4246,7 @@ async function execute_view_action(name, value) {
     download_member_access, copy_member_access_text, copy_member_join, copy_member_launch: name => copy_member_join(name, true), pause_discussion, restart_discussion, start_room_discussion, end_room_discussion,
     save_launch_defaults, resume_launch, discard_launch, retry_launch_connection, check_launch_connection: load_launch_settings,
     load_room_configuration, save_room_configuration, interrupt_member, retry_delivery, retract_message, retract_latest, stop_room, rewind_and_send, fork_room, change_member, reorder_speakers, invite_member,
-    choose_create_workflow, enable_room_workflow, disable_room_workflow, set_room_host_workflows,
+    choose_create_workflow, enable_room_workflow, move_workflow_members, set_room_host_workflows,
     adopt_recommendation, rate_decision,
     queue_send: id => queue_request({ action: "send", id }), queue_delete: id => queue_request({ action: "delete", id }),
     queue_reorder: ids => queue_request({ action: "reorder", ids }), queue_resume: () => queue_request({ action: "resume" }),

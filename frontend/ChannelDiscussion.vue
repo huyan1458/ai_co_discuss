@@ -7,6 +7,8 @@ import ExecutionDenials from "./ExecutionDenials.vue";
 import ExecutionNotes from "./ExecutionNotes.vue";
 import WorkingText from "./WorkingText.vue";
 import QueuedMessages from "./QueuedMessages.vue";
+import InviteDialog from "./InviteDialog.vue";
+import { active_workflow } from "./workflow-state.js";
 import { use_read_aloud } from "./read-aloud.js";
 import { use_broadcast } from "./broadcast.js";
 import { use_voice_input } from "./voice-input.js";
@@ -361,7 +363,12 @@ const recipient_hint = computed(() => {
   if (free_members.value.length === 1) return `发给 ${bridge.display_name(free_members.value[0].name)}`;
   return free_host.value ? `发给主持人 ${bridge.display_name(free_host.value.name)}；@ 其他成员让它们发言` : "未 @ 任何成员：只作留言，不会唤醒 AI";
 });
-const has_draft = computed(() => Boolean(text.value.trim() || view.value.attachment_drafts.length));
+/** Project files picked after @, shown as cards and sent as a trailing line of paths (code-quoted, so they never wake a member). */
+const file_refs = ref([]);
+watch(() => room.value?.id, () => { file_refs.value = []; });
+const file_refs_line = () => file_refs.value.length
+  ? `引用文件：${file_refs.value.map((ref) => `\`${ref.path}${ref.kind === "directory" ? "/" : ""}\``).join("、")}` : "";
+const has_draft = computed(() => Boolean(text.value.trim() || view.value.attachment_drafts.length || file_refs.value.length));
 /** Active members a free-room message can name; chips appear only when there is a choice. */
 const free_members = computed(() => (room.value.free?.members || []).filter((member) => member.status === "active" && (member.access !== "manual" || member.registered_at)));
 const free_host = computed(() => free_members.value.find((member) => member.role === "host"));
@@ -634,8 +641,8 @@ const ALL_ALIASES = [ALL_MENTION, "all"];
 const SEQUENTIAL_MENTION = "全体依次";
 const SEQUENTIAL_ALIASES = [SEQUENTIAL_MENTION, "all-seq"];
 const GROUP_MENTIONS = {
-  [ALL_MENTION]: { search: "all 同时", icon: "i-lucide-users", label: "全体成员 · 默认同时" },
-  [SEQUENTIAL_MENTION]: { search: "all-seq 顺序 依次", icon: "i-lucide-list-ordered", label: "全体成员 · 按顺序回答" },
+  [ALL_MENTION]: { search: "all 同时", icon: "i-lucide-users" },
+  [SEQUENTIAL_MENTION]: { search: "all-seq 顺序 依次", icon: "i-lucide-list-ordered" },
 };
 /** The order the server asks members in: the room's default speaking order. */
 const in_turn = (members) => {
@@ -648,12 +655,110 @@ const mention_index = ref(0);
 const mention_list = ref(null);
 let mention_composing = false;
 const mention_members = computed(() => {
+  if (mention_context.value?.command) return [];
   const names = [...(mention_all.value ? Object.keys(GROUP_MENTIONS) : []), ...free_members.value.map(member => member.name)];
   const query = mention_context.value?.query.toLocaleLowerCase() || "";
   return names.filter(name => (GROUP_MENTIONS[name] ? `${name} ${GROUP_MENTIONS[name].search}` : `${name} ${bridge.display_name(name)}`).toLocaleLowerCase().includes(query));
 });
-const mention_active = computed(() => mention_members.value[Math.min(mention_index.value, mention_members.value.length - 1)]);
+/**
+ * Files under the room's project directory follow the members. A bare @ lists the project root, a keyword searches
+ * names across the whole project on the paired computer, and a "/" browses that folder one level at a time.
+ */
+const MENTION_FILE_LIMIT = 50;
+const MENTION_SEARCH_DELAY_MS = 150;
+const project_directory = computed(() => view.value.launch?.room_models?.room_id === room.value?.id ? view.value.launch.room_models?.project_directory || "" : "");
+const mention_results = ref({});
+const mention_folder = computed(() => {
+  const query = mention_context.value?.query;
+  if (query == null || mention_context.value.command || !project_directory.value) return null;
+  const slash = query.lastIndexOf("/");
+  if (slash < 0 && query) return { key: `find:${query.toLocaleLowerCase()}`, search: query, filter: "" };
+  const path = slash < 0 ? "" : query.slice(0, slash).split("/").filter((part) => part && part !== ".").join("/");
+  return { key: `dir:${path}`, path, filter: query.slice(slash + 1).toLocaleLowerCase() };
+});
+let mention_search_timer = 0;
+watch(() => mention_folder.value?.key, (key, previous) => {
+  clearTimeout(mention_search_timer);
+  // A lookup cancelled before it started is forgotten, so returning to it reads again instead of loading forever.
+  if (previous && mention_results.value[previous] === null) {
+    const { [previous]: _cancelled, ...kept } = mention_results.value;
+    mention_results.value = kept;
+  }
+  const folder = mention_folder.value;
+  if (!key || key in mention_results.value) return;
+  const room_id = room.value.id;
+  mention_results.value = { ...mention_results.value, [key]: null };
+  // Searching walks the whole project, so it waits for a pause in typing; a folder is read at once.
+  mention_search_timer = setTimeout(async () => {
+    let entries = [];
+    try {
+      const result = await bridge.read_room_files(room_id, folder.path || "", 0, folder.search || "");
+      if (["directory", "search"].includes(result.kind)) entries = result.entries.filter((entry) => entry.kind !== "unavailable");
+    } catch { /* An unreadable folder or failed search simply offers no files. */ }
+    if (room.value?.id === room_id && key in mention_results.value) mention_results.value = { ...mention_results.value, [key]: entries };
+  }, folder.search ? MENTION_SEARCH_DELAY_MS : 0);
+});
+// Read again each time the popup opens so new files appear.
+watch(() => !!mention_context.value, (open) => { if (!open) mention_results.value = {}; });
+const mention_files = computed(() => {
+  const folder = mention_folder.value;
+  return (folder && mention_results.value[folder.key] || [])
+    .filter((entry) => entry.name !== ".git" && entry.name.toLocaleLowerCase().includes(folder.filter)).slice(0, MENTION_FILE_LIMIT);
+});
+/** The file group's heading names where its entries come from: the project root, a search, or the folder being browsed. */
+const mention_files_group = computed(() => {
+  const folder = mention_folder.value;
+  return !folder ? "" : folder.search ? "项目文件 · 搜索结果" : folder.path ? `项目文件 · ${folder.path}/` : "项目文件";
+});
+const mention_files_loading = computed(() => !!mention_folder.value && mention_results.value[mention_folder.value.key] === null);
+/** Inside a folder, its first option references the folder itself; the others browse or pick its entries. */
+const mention_folder_self = computed(() => {
+  const folder = mention_folder.value;
+  if (!folder?.path || folder.filter || !mention_results.value[folder.key]) return [];
+  return [{ key: `self:${folder.path}`, self: true, entry: { kind: "directory", name: folder.path.split("/").at(-1), path: folder.path } }];
+});
+/**
+ * A "/" opening the draft offers the platform's saved workflows. Picking one opens the invite dialog with its cards;
+ * the owner confirms members and permissions there, which enables it for this room.
+ */
+const room_workflow = computed(() => view.value.launch?.room_models?.room_id === room.value?.id
+  ? active_workflow(view.value.launch.room_models?.workflow, room.value?.free?.members) : null);
+const can_pick_workflow = computed(() => free.value && !room.value?.archived && view.value.access?.can_manage && (view.value.launch.available || view.value.launch.remote));
+const workflow_options = computed(() => {
+  const query = mention_context.value?.query.toLocaleLowerCase() || "";
+  return (view.value.launch.workflows || []).filter((item) => !item.error && `${item.id} ${item.label} ${item.description || ""}`.toLocaleLowerCase().includes(query))
+    .map((item) => ({ key: `workflow:${item.id}`, workflow: item, group: "工作流", enabled: room_workflow.value?.enabled && room_workflow.value.id === item.id }));
+});
+/**
+ * Platform skills a user may call with "/". A fixed list, never every installed skill: most are the AIs' own operating
+ * notes that load by themselves. Picking one only prefills a request to the host; it brings no member.
+ */
+const PLATFORM_SKILL_COMMANDS = [
+  { id: "workflow-creator", label: "新建 / 修改工作流", search: "workflow creator 新建 创建 修改 工作流",
+    description: "请主持人按 workflow-creator 技能写工作流", prompt: "用 workflow-creator 技能新建一个工作流：" },
+];
+const can_call_skill = computed(() => free.value && !room.value?.archived && free_members.value.some((member) => member.role === "host"));
+const skill_options = computed(() => {
+  if (!can_call_skill.value) return [];
+  const query = mention_context.value?.query.toLocaleLowerCase() || "";
+  return PLATFORM_SKILL_COMMANDS.filter((item) => `${item.id} ${item.label} ${item.search}`.toLocaleLowerCase().includes(query))
+    .map((item) => ({ key: `skill:${item.id}`, skill: item, group: "平台技能" }));
+});
+const mention_options = computed(() => mention_context.value?.command ? [...(can_pick_workflow.value ? workflow_options.value : []), ...skill_options.value] : [
+  ...mention_members.value.map((name) => ({ key: `member:${name}`, name, group: "成员" })),
+  ...mention_folder_self.value.map((option) => ({ ...option, group: mention_files_group.value })),
+  ...mention_files.value.map((entry) => ({ key: `file:${entry.path}`, entry, group: mention_files_group.value })),
+]);
+const mention_heading = computed(() => mention_context.value?.command ? "选择工作流或技能" : project_directory.value ? "选择成员或文件" : "选择成员");
+const mention_active = computed(() => mention_options.value[Math.min(mention_index.value, mention_options.value.length - 1)]);
 watch([() => room.value?.id, () => view.value.tab], () => { mention_context.value = null; });
+
+/** A path starting with a member's handle would wake that member, so it is written as ./path instead. */
+function file_handle(path) {
+  const names = free_members.value.map((member) => member.name);
+  const handles = mention_pool.value.flatMap(({ name }) => names.includes(name) ? bridge.mention_handles(name, names) : [name]);
+  return handles.some((handle) => MENTION_PATTERN(handle.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")).test(`@${path}`)) ? `./${path}` : path;
+}
 
 /** Locate an @ token at a collapsed caret, excluding email addresses, code and quotes. */
 function find_mention(value, start, end = start) {
@@ -668,12 +773,22 @@ function find_mention(value, start, end = start) {
   return { start: start - match[1].length - 1, end: start + remainder.length, query: match[1] };
 }
 
+/** Locate a "/" command at the very start of the draft, so paths later in the text never trigger it. */
+function find_command(value, start, end = start) {
+  if (start !== end || !(can_pick_workflow.value || can_call_skill.value)) return null;
+  const match = value.slice(0, start).match(/^\/([^\s/]*)$/u);
+  if (!match) return null;
+  const remainder = value.slice(start).match(/^[^\s/]*/u)[0];
+  return { start: 0, end: start + remainder.length, query: match[1], command: true };
+}
+
 /** Read the native caret after typing or moving through the existing draft. */
 function update_mention(event) {
   const editor = prompt.value?.textareaRef;
   if (event.target !== editor || mention_composing) return;
   if (event.type === "keyup" && !["ArrowLeft", "ArrowRight", "Home", "End"].includes(event.key)) return;
-  const context = find_mention(editor.value, editor.selectionStart, editor.selectionEnd);
+  const context = find_command(editor.value, editor.selectionStart, editor.selectionEnd)
+    || find_mention(editor.value, editor.selectionStart, editor.selectionEnd);
   if (context?.query !== mention_context.value?.query || context?.start !== mention_context.value?.start) mention_index.value = 0;
   mention_context.value = context;
 }
@@ -681,16 +796,53 @@ function update_mention(event) {
 /** What @ inserts for a member: its on-screen nickname when that names it alone, otherwise its member name. */
 const mention_handle = (name) => GROUP_MENTIONS[name] ? name : bridge.mention_handles(name, free_members.value.map((member) => member.name))[0];
 /** Replace just the active token and leave the caret ready for the next word. */
-async function select_mention(name) {
-  if (!mention_context.value || !mention_members.value.includes(name)) return;
+async function select_mention(option) {
+  if (!mention_context.value || !mention_options.value.some((item) => item.key === option.key)) return;
   const { start, end } = mention_context.value;
-  const insertion = `@${mention_handle(name)} `;
-  text.value = text.value.slice(0, start) + insertion + text.value.slice(end).replace(/^ /, "");
+  if (option.workflow) return pick_workflow(option, end);
+  if (option.skill) return pick_skill(option, end);
+  const { entry } = option;
+  // A folder opens its contents in the popup (paths with spaces cannot be typed after @, so those are picked whole);
+  // a picked file or folder leaves the text and becomes a card above the editor.
+  const browse = entry?.kind === "directory" && !option.self && !/\s/.test(entry.path);
+  const insertion = !entry ? `@${mention_handle(option.name)} ` : browse ? `@${file_handle(entry.path)}/` : "";
+  if (entry && !browse && !file_refs.value.some((ref) => ref.path === entry.path)) file_refs.value = [...file_refs.value, { path: entry.path, name: entry.name, kind: entry.kind }];
+  const rest = text.value.slice(end);
+  text.value = text.value.slice(0, start) + insertion + (browse || !insertion ? rest : rest.replace(/^ /, ""));
   mention_context.value = null;
   await nextTick();
   const editor = prompt.value?.textareaRef;
   editor?.focus();
   editor?.setSelectionRange(start + insertion.length, start + insertion.length);
+  if (browse && editor) {
+    mention_index.value = 0;
+    mention_context.value = find_mention(editor.value, editor.selectionStart);
+  }
+}
+
+const workflow_inviting = ref(false);
+const workflow_invite_id = ref("");
+/**
+ * Take the "/command" out of the draft and open the invite dialog for the workflow. Enabling another workflow replaces
+ * the current one; the members the old one brought stay as ordinary members.
+ */
+function pick_workflow(option, end) {
+  mention_context.value = null;
+  if (option.enabled) return bridge.notify("info", `本房间已启用工作流「${option.workflow.label}」`);
+  text.value = text.value.slice(end).replace(/^ /, "");
+  workflow_invite_id.value = option.workflow.id;
+  workflow_inviting.value = true;
+}
+
+/** Replace the "/command" with the skill's request to the host, leaving the caret after it for the user's details. */
+async function pick_skill(option, end) {
+  mention_context.value = null;
+  const { prompt: request } = option.skill;
+  text.value = request + text.value.slice(end).replace(/^ /, "");
+  await nextTick();
+  const editor = prompt.value?.textareaRef;
+  editor?.focus();
+  editor?.setSelectionRange(request.length, request.length);
 }
 
 /** Keep suggestion keys local to the editor; modified Enter is left to the editor. */
@@ -698,9 +850,9 @@ function mention_keydown(event) {
   if (event.target !== prompt.value?.textareaRef || !mention_context.value || event.isComposing || event.keyCode === 229) return;
   if (event.ctrlKey || event.metaKey || event.altKey || event.shiftKey) return;
   if (event.key === "Escape") mention_context.value = null;
-  else if (["ArrowDown", "ArrowUp"].includes(event.key) && mention_members.value.length) {
+  else if (["ArrowDown", "ArrowUp"].includes(event.key) && mention_options.value.length) {
     const direction = event.key === "ArrowDown" ? 1 : -1;
-    mention_index.value = (mention_members.value.indexOf(mention_active.value) + direction + mention_members.value.length) % mention_members.value.length;
+    mention_index.value = (mention_options.value.indexOf(mention_active.value) + direction + mention_options.value.length) % mention_options.value.length;
     nextTick(() => mention_list.value?.querySelector('[aria-selected="true"]')?.scrollIntoView({ block: "nearest" }));
   } else if (["Enter", "Tab"].includes(event.key) && mention_active.value) select_mention(mention_active.value);
   else return;
@@ -1346,7 +1498,14 @@ async function send() {
   if (!has_draft.value || pending.value || view.value.sending_message) return;
   mention_context.value = null;
   follow_tail.value = true;
+  const draft = text.value;
+  const refs_line = file_refs_line();
+  if (refs_line) text.value = draft.trim() ? `${draft.trimEnd()}\n\n${refs_line}` : refs_line;
+  const sent_text = text.value;
   await act("send");
+  // The controller clears the editor once the message is saved; otherwise the cards stay and the typed text comes back.
+  if (refs_line && text.value === sent_text) text.value = draft;
+  else if (refs_line) file_refs.value = [];
   await follow_messages();
 }
 
@@ -1371,8 +1530,9 @@ onBeforeUnmount(() => window.removeEventListener("keydown", retract_shortcut));
 
 /** The chat prompt ignores empty text, so attachment-only drafts send on Enter here. */
 function attachment_shortcut(event) {
-  if (!ENTER_SENDS || event.key !== "Enter" || event.ctrlKey || event.metaKey || event.shiftKey || event.altKey || event.isComposing || text.value.trim()) return;
-  if (!view.value.attachment_drafts.length) return;
+  // An Enter already used to pick a suggestion (which may have just added a file card) must not also send.
+  if (event.defaultPrevented || !ENTER_SENDS || event.key !== "Enter" || event.ctrlKey || event.metaKey || event.shiftKey || event.altKey || event.isComposing || text.value.trim()) return;
+  if (!view.value.attachment_drafts.length && !file_refs.value.length) return;
   event.preventDefault();
   event.stopPropagation();
   send();
@@ -1686,21 +1846,50 @@ function copy_message(message) { act("copy", `${view.value.room_site}/r/${room.v
     <div class="channel-composer-dock"><div class="channel-composer-column" @dragover="bridge.drop_attachments" @drop="bridge.drop_attachments" @paste="bridge.paste_attachments" @keydown.capture="mention_keydown($event); attachment_shortcut($event)" @input="update_mention" @click="update_mention" @keyup="update_mention" @select="update_mention" @compositionstart="mention_composition" @compositionend="mention_composition" @scroll.capture="sync_mirror">
       <UPopover :open="!!mention_context" :reference="prompt?.$el" :content="{ side: 'top', align: 'start', sideOffset: 8, onOpenAutoFocus: keep_mention_focus, onCloseAutoFocus: keep_mention_focus }" :ui="{ content: 'channel-select-menu channel-mention-menu' }" @update:open="!$event && (mention_context = null)">
         <template #content>
-          <div class="channel-mention-heading"><span>选择成员</span><small>↑↓ 选择 · Enter 确认</small></div>
-          <div id="channel-mention-list" ref="mention_list" role="listbox" aria-label="选择成员" class="channel-mention-list">
-            <button v-for="(name, index) in mention_members" :id="`channel-mention-${index}`" :key="name" type="button" role="option" :aria-selected="name === mention_active" tabindex="-1" class="channel-mention-option" @pointerdown.prevent @click="select_mention(name)" @pointermove="mention_index = index">
-              <UAvatar v-if="GROUP_MENTIONS[name]" :icon="GROUP_MENTIONS[name].icon" :alt="name" size="xs" class="channel-avatar" />
-              <UAvatar v-else :src="bridge.identities[name]?.icon" :text="bridge.identities[name]?.initials" :alt="bridge.display_name(name)" size="xs" :class="['channel-avatar', bridge.identities[name]?.style]" />
-              <span>{{ GROUP_MENTIONS[name] ? `${GROUP_MENTIONS[name].label}（${free_members.length} 位）` : bridge.display_name(name) }}</span><small>@{{ mention_handle(name) }}</small>
+          <div class="channel-mention-heading"><span>{{ mention_heading }}</span><small>↑↓ 选择 · Enter 确认</small></div>
+          <div id="channel-mention-list" ref="mention_list" role="listbox" :aria-label="mention_heading" class="channel-mention-list">
+            <template v-for="(option, index) in mention_options" :key="option.key">
+            <p v-if="index === 0 || option.group !== mention_options[index - 1].group" role="presentation" class="channel-mention-group">{{ option.group }}</p>
+            <button :id="`channel-mention-${index}`" type="button" role="option" :aria-selected="option === mention_active" tabindex="-1" class="channel-mention-option" @pointerdown.prevent @click="select_mention(option)" @pointermove="mention_index = index">
+              <template v-if="option.workflow">
+                <UIcon name="i-lucide-workflow" class="channel-mention-file-icon" />
+                <span>{{ option.workflow.label }}</span>
+                <small :title="option.workflow.description">{{ option.enabled ? '已启用' : option.workflow.description }}</small>
+              </template>
+              <template v-else-if="option.skill">
+                <UIcon name="i-lucide-sparkles" class="channel-mention-file-icon" />
+                <span>{{ option.skill.label }}</span>
+                <small :title="option.skill.description">{{ option.skill.description }}</small>
+              </template>
+              <template v-else-if="option.entry">
+                <UIcon :name="option.self ? 'i-lucide-folder-check' : option.entry.kind === 'directory' ? 'i-lucide-folder' : 'i-lucide-file-text'" class="channel-mention-file-icon" />
+                <span :title="option.entry.path">{{ option.self ? '引用此文件夹' : `${option.entry.name}${option.entry.kind === 'directory' ? '/' : ''}` }}</span>
+                <small v-if="mention_folder?.search" :title="option.entry.path">{{ option.entry.path.split('/').slice(0, -1).join('/') }}</small>
+                <UIcon v-if="option.entry.kind === 'directory' && !option.self" name="i-lucide-chevron-right" class="channel-mention-file-icon channel-mention-drill" />
+              </template>
+              <template v-else>
+                <UAvatar v-if="GROUP_MENTIONS[option.name]" :icon="GROUP_MENTIONS[option.name].icon" :alt="option.name" size="xs" class="channel-avatar" />
+                <UAvatar v-else :src="bridge.identities[option.name]?.icon" :text="bridge.identities[option.name]?.initials" :alt="bridge.display_name(option.name)" size="xs" :class="['channel-avatar', bridge.identities[option.name]?.style]" />
+                <span>{{ GROUP_MENTIONS[option.name] ? option.name : bridge.display_name(option.name) }}</span><small>@{{ mention_handle(option.name) }}</small>
+              </template>
             </button>
-            <p v-if="!mention_members.length" class="channel-mention-empty">没有匹配的成员</p>
+            </template>
+            <p v-if="mention_files_loading" class="channel-mention-empty">正在读取项目目录…</p>
+            <p v-else-if="!mention_options.length" class="channel-mention-empty">{{ mention_context?.command ? '没有匹配的工作流或技能' : project_directory ? '没有匹配的成员或文件' : '没有匹配的成员' }}</p>
           </div>
         </template>
       </UPopover>
+      <InviteDialog v-model:open="workflow_inviting" :workflow-id="workflow_invite_id" description="确认工作流带来的成员与项目权限，全部加入后为本房间启用。" />
       <QueuedMessages v-if="room.free?.queued_messages" :queue="room.free.queued_messages" :room-id="room.id" />
-      <UChatPrompt ref="prompt" v-model="text" :disabled="view.sending_message" :submit-on-enter="ENTER_SENDS" :enterkeyhint="ENTER_SENDS ? 'send' : 'enter'" :autofocus="false" :rows="1" :maxrows="EDITOR_MAX_ROWS" :placeholder="`发消息到 # ${room.title}`" aria-label="留言正文" role="combobox" aria-autocomplete="list" aria-haspopup="listbox" :aria-expanded="!!mention_context" :aria-controls="mention_context ? 'channel-mention-list' : undefined" :aria-activedescendant="mention_context && mention_active ? `channel-mention-${mention_members.indexOf(mention_active)}` : undefined" variant="outline" color="neutral" class="channel-composer" :class="{ 'has-mentions': mention_mirror }" :ui="{ header: 'channel-composer-header', base: 'channel-editor', footer: 'channel-composer-footer' }" @submit="send">
+      <UChatPrompt ref="prompt" v-model="text" :disabled="view.sending_message" :submit-on-enter="ENTER_SENDS" :enterkeyhint="ENTER_SENDS ? 'send' : 'enter'" :autofocus="false" :rows="1" :maxrows="EDITOR_MAX_ROWS" :placeholder="`发消息到 # ${room.title}`" aria-label="留言正文" role="combobox" aria-autocomplete="list" aria-haspopup="listbox" :aria-expanded="!!mention_context" :aria-controls="mention_context ? 'channel-mention-list' : undefined" :aria-activedescendant="mention_context && mention_active ? `channel-mention-${mention_options.indexOf(mention_active)}` : undefined" variant="outline" color="neutral" class="channel-composer" :class="{ 'has-mentions': mention_mirror }" :ui="{ header: 'channel-composer-header', base: 'channel-editor', footer: 'channel-composer-footer' }" @submit="send">
         <template #header>
-          <div v-if="view.attachment_drafts.length" class="attachment-drafts">
+          <div v-if="view.attachment_drafts.length || file_refs.length" class="attachment-drafts">
+            <div v-for="ref_item in file_refs" :key="`ref:${ref_item.path}`" class="attachment-draft-file attachment-draft-ref" :title="ref_item.path">
+              <span v-if="ref_item.kind === 'file'" v-html="bridge.attachment_file_icon(ref_item.name)"></span>
+              <UIcon v-else name="i-lucide-folder" class="attachment-ref-folder" />
+              <span class="attachment-name"><span>{{ ref_item.name }}</span><small>{{ ref_item.kind === 'directory' ? '项目文件夹' : '项目文件' }} · {{ ref_item.path }}</small></span>
+              <button type="button" class="attachment-remove" :aria-label="`移除 ${ref_item.path}`" :disabled="view.sending_message" @click="file_refs = file_refs.filter((item) => item !== ref_item)"><UIcon name="i-lucide-x" /></button>
+            </div>
             <div v-for="file in view.attachment_drafts" :key="file.id" :class="file.preview_url ? 'attachment-draft-image' : 'attachment-draft-file'">
               <img v-if="file.preview_url" :src="file.preview_url" :alt="file.file_name" :title="file.file_name">
               <template v-else>

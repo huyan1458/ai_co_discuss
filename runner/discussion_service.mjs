@@ -327,6 +327,9 @@ class RoomWorker {
       } catch (error) {
         this.adopt_failed.add(key);
         this.log(`${this.config.room}: ${member.name} 未能转为托管，保持手动：${error.message}`);
+        // Requests to this member stay undelivered, so the page must say why; the log alone is invisible there.
+        await api(this.config, `/members/${member.id}`, { action: 'adopt_failed', session_id: member.reported_session, reason: error.message })
+          .catch(report_error => this.log(`${this.config.room}: ${member.name} 接管失败原因未能上报：${report_error.message}`));
       }
     }
   }

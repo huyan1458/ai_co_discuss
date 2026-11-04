@@ -2,6 +2,8 @@
 /** Right-rail board of a free room, laid out like the discussion progress board. */
 import { computed, inject, ref, watch } from "vue";
 import InviteDialog from "./InviteDialog.vue";
+import WorkflowControl from "./WorkflowControl.vue";
+import { active_workflow } from "./workflow-state.js";
 import StartDiscussionDialog from "./StartDiscussionDialog.vue";
 import ProgressBoard from "./ProgressBoard.vue";
 import SpeakingOrder from "./SpeakingOrder.vue";
@@ -18,14 +20,11 @@ const free = computed(() => room.value.free || {});
 const discussion = computed(() => ["active", "paused"].includes(room.value.session?.status));
 const current_round = computed(() => discussion.value ? room.value.current_turn?.round || (room.value.completed_rounds || 0) + 1 : 0);
 const host = computed(() => (free.value.members || []).find((member) => member.role === "host" && member.status === "active"));
-const workflow = computed(() => view.value.launch.room_models?.workflow || null);
+// Shown only while in use: sending its members away ends it, and "/" starts it again.
+const workflow = computed(() => active_workflow(view.value.launch.room_models?.workflow, free.value.members));
 const in_workflow = (name) => Boolean(workflow.value?.enabled && Object.values(workflow.value.members || {}).includes(name));
 const invite_workflow_id = ref("");
 
-/** Stop the workflow's members only after the user confirms the effect on current work. */
-function disable_workflow() {
-  if (window.confirm(`停用工作流「${workflow.value.label}」？它带来的成员会离开（主持人保留），正在进行的工作随之停止。`)) act("disable_room_workflow");
-}
 // Rows follow the room's speaking order; members who left are listed after it.
 const member_named = (name) => (free.value.members || []).find((member) => member.name === name);
 const away_names = computed(() => (free.value.members || []).filter((member) => member.status === "away").map((member) => member.name));
@@ -52,7 +51,7 @@ const unregistered = (member) => member.access === "manual" && member.status ===
 function member_tone(member) {
   if (member.status === "away") return "neutral";
   if (unregistered(member)) return "warning";
-  if (member.execution?.stale) return "error";
+  if (member.execution?.stale || (member.pending && member.adopt_error)) return "error";
   if (member.held_until) return "warning";
   if (busy(member)) return member.pending && !LIVE.includes(member.execution?.status) ? "warning" : "primary";
   return member.execution?.status === "failed" ? "error" : "success";
@@ -66,6 +65,7 @@ function member_status(member, state) {
   if (execution && LIVE.includes(execution.status)) return execution.stale ? "执行失联，停止未确认" : "正在处理";
   // Voided in a window or App the runner cannot stop: that turn may still run, so new messages wait for it.
   if (member.held_until) return `${execution?.stop_result === "unconfirmed" ? "上一轮停止未确认" : "上一轮已作废，可能仍在生成"}，等待结束确认或迟到回答；${member.pending ? `${member.pending} 条新消息` : "新消息"}最晚 ${bridge.format_time(member.held_until * 1000)} 送达`;
+  if (member.pending && member.adopt_error) return `无法投递 ${member.pending} 条：${member.adopt_error}`;
   if (member.pending) return `待投递 ${member.pending} 条`;
   if (state === "queued") return discussion.value ? "本轮排队" : "等待依次发言";
   if (execution?.status === "failed") return "执行失败";
@@ -105,6 +105,8 @@ const status = computed(() => {
   if (room.value.archived) return { tone: "neutral", title: "已存档", detail: "" };
   const working = (free.value.members || []).filter(busy);
   if (working.some((member) => member.execution?.stale)) return { tone: "error", title: "执行失联", detail: "停止未确认，可在成员菜单中停止后重发" };
+  const undeliverable = working.find((member) => member.pending && member.adopt_error && !LIVE.includes(member.execution?.status));
+  if (undeliverable) return { tone: "error", title: "无法投递", detail: `${bridge.display_name(undeliverable.name)}：${undeliverable.adopt_error}` };
   const latest_chain = Math.max(0, ...(free.value.requests || []).map((request) => request.chain_id));
   const rounds = (free.value.chain_rounds || []).find((chain) => chain.chain_id === latest_chain);
   // How far the latest chain got against its limit; shown while it runs, so the stop never comes as a surprise.
@@ -219,12 +221,7 @@ watch(() => room.value.id, () => { starting.value = false; });
     </section>
     <section v-if="workflow" class="pb-section" aria-label="房间工作流">
       <h4>工作流</h4>
-      <p class="pb-workflow-name">{{ workflow.label }} · {{ !workflow.available ? '不可用' : workflow.enabled ? '已启用' : '已停用' }}</p>
-      <p v-if="!workflow.available" class="pb-free-note">无法读取工作流，成员沿用房间里的提示词。</p>
-      <template v-if="view.access?.can_manage && !room.archived">
-        <UButton v-if="workflow.enabled" label="停用" size="sm" color="neutral" variant="outline" :disabled="Boolean(pending)" @click="disable_workflow" />
-        <UButton v-else-if="workflow.available" label="重新启用" size="sm" color="neutral" variant="outline" :disabled="Boolean(pending)" @click="invite_workflow_id = workflow.id; inviting = true" />
-      </template>
+      <WorkflowControl :workflow="workflow" />
     </section>
     <section class="pb-section" aria-label="发言顺序">
       <h4>发言顺序</h4>
@@ -270,7 +267,6 @@ watch(() => room.value.id, () => { starting.value = false; });
 
 <style scoped>
 .pb-member.is-away { opacity: .6; }
-.pb-workflow-name { margin: 0 0 8px; color: var(--ui-text-toned); font-size: 12px; overflow-wrap: anywhere; }
 .pb-workflow-member { color: var(--ui-text-muted); font-size: 10px; }
 .pb-member-model { margin: 2px 0; color: var(--ui-text-muted); font-size: 11px; line-height: 1.5; overflow-wrap: anywhere; }
 /* A member with a nickname also shows its ID, which AI messages, @ and records use. */

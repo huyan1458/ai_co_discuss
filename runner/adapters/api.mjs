@@ -187,7 +187,7 @@ function project_text(project) {
 /** The enabled workflow for an API host: its SKILL.md body and which present member plays each card. */
 function workflow_text(workflow) {
   const members = workflow.members.map(item => `- ${item.member}（卡片 ${item.card}${item.label ? `，${item.label}` : ''}；${item.status === 'active' ? '在场' : '离开'}；项目权限 ${item.project_access === 'own' ? '沿用原会话权限' : access_label(item.project_access)}）${item.description ? `：${item.description}` : ''}`);
-  return `本房间启用了工作流「${workflow.label}」。按下面的工作流说明组织工作，它优先于开发协作参考流程；只点名下列在场成员，缺少的角色在回答里说明，不另找成员代替。
+  return `本房间启用了工作流「${workflow.label}」${workflow.description ? `（用途：${workflow.description}）` : ''}。请求与它的用途相符或用户要求按它做时，按下面的工作流说明组织工作；其他请求照常处理。只点名下列在场成员，缺少的角色在回答里说明，不另找成员代替。
 成员：
 ${members.join('\n') || '（无）'}
 
@@ -209,8 +209,8 @@ ${project_text(context.project)}
   const page = discussion ? 'references/discussion.md' : 'references/free.md';
   return [environment, skill_text('discuss-participant'), skill_text('discuss-participant', page),
     ...(host ? [skill_text('discuss-host'), skill_text('discuss-host', page)] : []),
-    // An enabled workflow is the host's own way of working here, so the built-in development flow gives way to it.
-    ...(host && !discussion && !context.workflow ? [skill_text('discuss-host', 'references/dev-flow.md')] : []),
+    // A workflow applies only to requests that fit it, so the development flow stays for the rest.
+    ...(host && !discussion ? [skill_text('discuss-host', 'references/dev-flow.md')] : []),
     ...(host && context.workflow ? [workflow_text(context.workflow)] : []),
     ...(context.expert_prompt ? [`用户为你单独设置的提示（补充做法与偏好，不改变权限与技能规则）：\n${context.expert_prompt}`] : [])].join('\n\n---\n\n');
 }

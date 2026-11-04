@@ -2,13 +2,17 @@
  * Room workflows: a host's SKILL.md plus a set of agent cards, kept as a shareable folder in the service home.
  * The program only stores, previews and loads them; the host follows SKILL.md on its own judgment.
  */
-import { randomUUID } from 'node:crypto';
+import { createHash, randomUUID } from 'node:crypto';
 import { existsSync, lstatSync, mkdirSync, readdirSync, readFileSync, renameSync, rmSync, writeFileSync } from 'node:fs';
 import { join, resolve } from 'node:path';
 import { DatabaseSync } from 'node:sqlite';
 
-export const WORKFLOW_ID_PATTERN = /^[a-z0-9_-]{1,40}$/;
-export const CARD_ID_PATTERN = /^[A-Za-z0-9_]{1,16}$/;
+// A workflow ID follows the Agent Skills naming rule: lowercase letters and digits joined by single hyphens.
+export const WORKFLOW_ID_PATTERN = /^(?=.{1,40}$)[a-z0-9]+(?:-[a-z0-9]+)*$/;
+// Characters of a SKILL.md hash the host compares to know whether its earlier reading is still current.
+const REVISION_LENGTH = 12;
+// A card ID becomes the member name's suffix (`platform-card`), which has no hyphen of its own.
+export const CARD_ID_PATTERN = /^[a-z0-9_]{1,16}$/;
 export const MAX_WORKFLOW_SKILL = 20000;
 export const MAX_WORKFLOW_CARDS = 30;
 const MAX_WORKFLOW_LABEL = 32;
@@ -16,7 +20,9 @@ const MAX_WORKFLOW_DESCRIPTION = 500;
 const MAX_DRAFT_PARTS = 20;
 const WORKFLOW_LOCK_WAIT_MS = 5000;
 const BACKUP_DIRECTORY = /^\.old-([a-z0-9_-]{1,40})-[0-9a-f-]{36}$/;
+// A card file is shaped like an agent definition: `name` is the card ID (its file name) and `platform` the software.
 const CARD_FIELDS = ['name', 'label', 'description', 'project_access', 'model', 'effort'];
+const CARD_FILE_FIELDS = ['name', 'platform', 'label', 'description', 'project_access', 'model', 'effort'];
 const PART_LINE = /^<!-- workflow-part: (\d+)\/(\d+) id: ([a-z0-9_-]{1,40}) -->$/;
 const FILE_LINE = /^<!-- workflow-file: (\S+) -->$/;
 const CARD_PATH = /^agents\/([A-Za-z0-9_]{1,16})\.md$/;
@@ -26,7 +32,7 @@ export function workflows_home(home) { return join(home, 'workflows'); }
 
 /** A workflow's folder, built from a checked ID and never from a caller's path. */
 export function workflow_directory(home, id) {
-  if (!WORKFLOW_ID_PATTERN.test(id || '')) throw new Error('工作流 ID 只能用小写英文、数字、下划线和连字符，1—40 位');
+  if (!WORKFLOW_ID_PATTERN.test(id || '')) throw new Error('工作流 ID 只能用小写英文和数字，可用单个连字符连接（不在首尾），1—40 位');
   return join(workflows_home(home), id);
 }
 
@@ -41,24 +47,30 @@ export function parse_markdown(text, label) {
     if (!line.trim()) continue;
     const colon = line.indexOf(':');
     if (colon < 1) throw new Error(`${label} 的头信息只支持单行 key: value：${line}`);
-    fields[line.slice(0, colon).trim()] = line.slice(colon + 1).trim();
+    // Quotes around a value are YAML's, not part of it.
+    fields[line.slice(0, colon).trim()] = line.slice(colon + 1).trim().replace(/^(["'])(.*)\1$/, '$2');
   }
   return { fields, body: lines.slice(end + 1).join('\n').trim() };
 }
 
-/** Write fields back as single-line frontmatter; empty values stay so the file shows every field. */
+/** Write fields back as single-line frontmatter; empty fields are left out. */
 export function serialize_markdown(fields, body) {
-  const header = Object.entries(fields).map(([key, value]) => `${key}: ${String(value ?? '').replace(/\s*\n\s*/g, ' ')}`.trimEnd());
+  const header = Object.entries(fields).filter(([, value]) => value !== undefined && value !== '').map(([key, value]) => `${key}: ${String(value ?? '').replace(/\s*\n\s*/g, ' ')}`.trimEnd());
   return `---\n${header.join('\n')}\n---\n${body ? `${body.trim()}\n` : ''}`;
 }
 
 /** Turn one parsed card file into the card shape the page edits. */
 function card_from_markdown(card, text) {
   const { fields, body } = parse_markdown(text, `agents/${card}.md`);
-  const unknown = Object.keys(fields).filter(key => !CARD_FIELDS.includes(key));
+  const unknown = Object.keys(fields).filter(key => !CARD_FILE_FIELDS.includes(key));
   if (unknown.length) throw new Error(`agents/${card}.md 含不支持的字段：${unknown.join('、')}`);
   const value = { card };
   for (const key of CARD_FIELDS) if (fields[key]) value[key] = fields[key];
+  // Older cards wrote the member name `platform-card` as `name` and had no `platform`.
+  if (fields.platform) {
+    if (fields.name && fields.name !== card) throw new Error(`agents/${card}.md 的 name 须与文件名相同：${fields.name}`);
+    value.name = `${fields.platform}-${card}`;
+  }
   if (body) value.system_prompt = body;
   return value;
 }
@@ -89,12 +101,13 @@ export function validate_workflow(input, validate_card) {
   const normalized = agents.map(agent => {
     // requested_access and needs_platform are an import preview's notes for the page, not card fields.
     const { card, requested_access: ignored_request, needs_platform: ignored_platform, ...preset } = agent || {};
-    if (!CARD_ID_PATTERN.test(card || '')) throw new Error(`卡片 ID 只能用英文、数字和下划线，1—16 位：${card || '（空）'}`);
+    if (!CARD_ID_PATTERN.test(card || '')) throw new Error(`卡片 ID 只能用小写英文、数字和下划线，1—16 位：${card || '（空）'}`);
     if (cards.has(card.toLowerCase())) throw new Error(`卡片 ID 重复（不区分大小写）：${card}`);
     cards.add(card.toLowerCase());
     // Empty fields are dropped; unknown ones stay so the preset check refuses them.
     const kept = Object.fromEntries(Object.entries(preset).filter(([, value]) => value !== undefined && value !== ''));
-    validate_card(kept);
+    try { validate_card(kept); } catch (error) { throw new Error(`卡片 ${card}：${error.message}`); }
+    if (!kept.name?.endsWith(`-${card}`)) throw new Error(`卡片 ${card} 的成员名须为“平台-${card}”：${kept.name || '（空）'}`);
     if (names.has(kept.name)) throw new Error(`同一工作流内卡片名称重复：${kept.name}`);
     names.add(kept.name);
     if ((kept.description || '').includes('\n')) throw new Error(`${kept.name} 的描述不能换行`);
@@ -187,8 +200,10 @@ export function save_workflow(home, input, validate_card) {
     const staging = join(workflows_home(home), `.tmp-${workflow.id}-${randomUUID()}`);
     mkdirSync(join(staging, 'agents'), { recursive: true });
     writeFileSync(join(staging, 'SKILL.md'), serialize_markdown({ name: workflow.id, label: workflow.label, description: workflow.description }, workflow.skill));
-    for (const { card, system_prompt, ...fields } of workflow.agents) {
-      writeFileSync(join(staging, 'agents', `${card}.md`), serialize_markdown(Object.fromEntries(CARD_FIELDS.map(key => [key, fields[key] || ''])), system_prompt));
+    for (const { card, system_prompt, name, ...fields } of workflow.agents) {
+      const platform = name.slice(0, name.length - card.length - 1);
+      writeFileSync(join(staging, 'agents', `${card}.md`), serialize_markdown({ name: card, platform,
+        ...Object.fromEntries(CARD_FIELDS.slice(1).map(key => [key, fields[key]])) }, system_prompt));
     }
     const old = existsSync(directory) ? join(workflows_home(home), `.old-${workflow.id}-${randomUUID()}`) : '';
     if (old) renameSync(directory, old);
@@ -282,7 +297,8 @@ export function load_room_workflow(config) {
     const workflow = get_workflow(config.api_home, binding.id);
     const { directory } = workflow;
     const cards = Object.fromEntries(workflow.agents.map(agent => [agent.card, agent]));
-    return { id: binding.id, label: workflow.label || binding.id, directory, skill_path: join(directory, 'SKILL.md'), skill: workflow.skill,
+    return { id: binding.id, label: workflow.label || binding.id, description: workflow.description || '', directory, skill_path: join(directory, 'SKILL.md'), skill: workflow.skill,
+      revision: createHash('sha256').update(workflow.skill).digest('hex').slice(0, REVISION_LENGTH),
       members: binding.members || {}, cards };
   } catch (error) { return { id: binding.id, error: error.message }; }
 }
@@ -307,7 +323,18 @@ export function workflow_task_field(workflow, room_members, participants) {
     return { card, member: member.label || name, label: source.label || '', description: source.description || '',
       status: member.status, project_access: participants?.[name]?.project_access || 'read' };
   }).filter(Boolean);
-  return { id: workflow.id, label: workflow.label, members };
+  // The host reads SKILL.md only when a request fits the description and its revision is one it has not read.
+  return { id: workflow.id, label: workflow.label, description: workflow.description || '', revision: workflow.revision || '', members };
+}
+
+/**
+ * Whether a bound workflow is in use: while at least one member it brought (other than the host) is here. Sending them
+ * away or removing them ends it; a workflow that brought no one but the host lasts while it is bound.
+ */
+export function workflow_in_use(workflow, room_members) {
+  const host = (room_members || []).find(member => member.role === 'host')?.name;
+  const brought = Object.values(workflow.members || {}).filter(name => name !== host);
+  return !brought.length || (room_members || []).some(member => brought.includes(member.name) && member.status === 'active');
 }
 
 /** Write a room's workflow binding into its configuration object (the caller saves it). */

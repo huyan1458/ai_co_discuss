@@ -39,6 +39,7 @@ REVIEW_STATE_SQL = """SELECT json_object(
  'withdrawn',(SELECT json_group_array(message_id) FROM message_withdrawals WHERE message_id IN (SELECT id FROM messages WHERE room_id=rooms.id))
 ) AS state FROM rooms WHERE id=?"""
 RECENT_REQUESTS = 100
+ADOPT_REASON_LIMIT = 500
 RECENT_EXECUTIONS = 100
 # The timeline page reads this many recent executions of each kind; with `after` (?3) only those running or ended since.
 # Parameters: ?1 room, ?2 limit, ?3 after (0 reads all). Shared verbatim with the Worker.
@@ -753,6 +754,9 @@ def free_view(connection, room_id):
         member["registered_at"] = registered_at(connection, row)
         reported = connection.execute("SELECT session_id,client FROM member_sessions WHERE member_id=?", (row["id"],)).fetchone()
         member["reported_session"], member["reported_client"] = (reported["session_id"], reported["client"]) if reported else ("", "")
+        failure = connection.execute("SELECT reason FROM member_adopt_failures WHERE member_id=? AND session_id=?",
+                                     (row["id"], member["reported_session"])).fetchone() if reported else None
+        member["adopt_error"] = failure["reason"] if failure else ""
         latest = connection.execute(f"SELECT e.*,{CAPABILITY_COLUMNS} FROM member_executions e WHERE member_id=? ORDER BY id DESC LIMIT 1",
                                     (row["id"],)).fetchone()
         member["execution"] = public_execution(latest)
@@ -2046,6 +2050,18 @@ def adopt_manual_member(connection, room_id, member, payload):
         connection.execute("UPDATE room_members SET token_hash=? WHERE id=?", (token_hash(payload["token"]), member["id"]))
 
 
+def record_adopt_failure(connection, room_id, member, payload):
+    """Keep why the local service could not take over the reported session, so the page says why requests stay undelivered."""
+    reason = payload.get("reason")
+    if not isinstance(reason, str) or not reason.strip():
+        raise ValueError("须提供 reason")
+    reported = connection.execute("SELECT session_id FROM member_sessions WHERE member_id=?", (member["id"],)).fetchone()
+    if not reported or reported["session_id"] != payload.get("session_id"):
+        raise ValueError("成员尚未上报与之相符的会话")
+    connection.execute("INSERT OR REPLACE INTO member_adopt_failures (member_id,room_id,session_id,reason) VALUES (?,?,?,?)",
+                       (member["id"], room_id, reported["session_id"], reason.strip()[:ADOPT_REASON_LIMIT]))
+
+
 def require_fresh_member_token(connection, room_id, token):
     """Prevent owner or another member's credential from being reused for a new identity."""
     hashed = token_hash(token)
@@ -2088,6 +2104,10 @@ def member_action(connection, room_id, member_id, token, payload):
             queue_invited_expert(connection, room_id, member["name"], int(time.time()))
     elif action == "adopt":
         adopt_manual_member(connection, room_id, member, payload)
+        connection.execute("DELETE FROM member_adopt_failures WHERE member_id=?", (member_id,))
+    elif action == "adopt_failed":
+        record_adopt_failure(connection, room_id, member, payload)
+        return free_view(connection, room_id)
     elif action == "role":
         role = payload.get("role")
         if role not in ("host", "member"):
@@ -2105,7 +2125,7 @@ def member_action(connection, room_id, member_id, token, payload):
             connection.execute("UPDATE room_members SET role='member' WHERE room_id=? AND role='host'", (room_id,))
         connection.execute("UPDATE room_members SET role=? WHERE id=?", (role, member_id))
     else:
-        raise ValueError("action 须为 away、active、remove、role 或 adopt")
+        raise ValueError("action 须为 away、active、remove、role、adopt 或 adopt_failed")
     settle_batches(connection, room_id)
     sync_participants(connection, room_id)
     hand_over_routes(connection, room_id, routed, member_id if action in ("away", "remove") else None)

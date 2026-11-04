@@ -8,7 +8,7 @@ import { test } from 'node:test';
 import { system_prompt } from '../runner/adapters/api.mjs';
 import { validate_preset } from '../runner/discussion_launch.mjs';
 import { free_task_files } from '../runner/free_runner.mjs';
-import { delete_workflow, get_workflow, list_workflows, load_room_workflow, parse_workflow_draft, preview_workflow, save_workflow } from '../runner/workflows.mjs';
+import { delete_workflow, get_workflow, list_workflows, load_room_workflow, parse_workflow_draft, preview_workflow, save_workflow, workflow_in_use } from '../runner/workflows.mjs';
 
 const NOVEL = {
   id: 'novel-serial', label: '连载小说', description: '主编出骨架，执笔写正文',
@@ -32,17 +32,23 @@ test('a workflow saves as plain files, reads back the same, and refuses unsafe o
   const by_card = list => [...list].sort((a, b) => a.card.localeCompare(b.card));
   assert.deepEqual({ ...saved, directory: undefined, agents: by_card(saved.agents) }, { ...NOVEL, directory: undefined, agents: by_card(NOVEL.agents) });
   const card = readFileSync(join(home, 'workflows', 'novel-serial', 'agents', 'writer.md'), 'utf8');
-  assert.match(card, /^---\nname: Antigravity-writer\nlabel: 执笔\n/);
-  assert.match(card, /---\n克制、具体。\n$/);
+  // A card file reads like an agent definition: its name is the card ID, the software is its own field, empty fields are left out.
+  assert.equal(card, '---\nname: writer\nplatform: Antigravity\nlabel: 执笔\ndescription: 按骨架写正文\nproject_access: write\n---\n克制、具体。\n');
+  // Cards written before `platform` existed, and quoted values, still read the same.
+  writeFileSync(join(home, 'workflows', 'novel-serial', 'agents', 'science.md'), '---\nname: DeepSeek-science\nlabel: "科学顾问"\n---\n只核对技术合理性。\n');
+  assert.deepEqual(get_workflow(home, 'novel-serial').agents.find(agent => agent.card === 'science'), NOVEL.agents[1]);
   // Editing the file by hand is what the page then shows.
   writeFileSync(join(home, 'workflows', 'novel-serial', 'agents', 'writer.md'), card.replace('克制、具体。', '更克制。'));
   assert.equal(get_workflow(home, 'novel-serial').agents.find(agent => agent.card === 'writer').system_prompt, '更克制。');
   assert.deepEqual(list_workflows(home).map(item => [item.id, item.cards]), [['novel-serial', 2]]);
   for (const [change, pattern] of [
     [{ id: '../x' }, /工作流 ID/],
+    [{ id: 'novel_serial' }, /工作流 ID/],
+    [{ id: '-novel' }, /工作流 ID/],
     [{ agents: [{ ...NOVEL.agents[0], card: 'a/b' }] }, /卡片 ID/],
-    [{ agents: [{ ...NOVEL.agents[0], card: 'A' }, { ...NOVEL.agents[1], card: 'a' }] }, /卡片 ID 重复/],
-    [{ agents: [NOVEL.agents[0], { ...NOVEL.agents[0], card: 'other' }] }, /名称重复/],
+    [{ agents: [{ ...NOVEL.agents[0], card: 'Writer', name: 'Antigravity-Writer' }] }, /卡片 ID/],
+    [{ agents: [{ ...NOVEL.agents[0], card: 'a', name: 'Antigravity-a' }, { ...NOVEL.agents[1], card: 'a', name: 'DeepSeek-a' }] }, /卡片 ID 重复/],
+    [{ agents: [{ ...NOVEL.agents[0], name: 'Antigravity-other' }] }, /成员名须为/],
     [{ agents: [{ ...NOVEL.agents[0], secret: 'x' }] }, /预设只能包含/],
     [{ agents: [{ ...NOVEL.agents[0], system_prompt: 'x'.repeat(4001) }] }, /提示词最多/],
     [{ skill: '' }, /不能为空/],
@@ -133,14 +139,19 @@ function room_fixture(t) {
   return { home, config, task };
 }
 
-test('the host receives the workflow skill and its present members; a member gets its card prompt as it is now', t => {
+test('the host is told of the workflow to read on demand and its present members; a member gets its card prompt as it is now', t => {
   const { home, config, task } = room_fixture(t);
   const host = task('Claude', 'host');
   const host_file = JSON.parse(readFileSync(join(config.directory, 'free-1.task.json'), 'utf8'));
-  assert.ok(host_file.skills.at(-1).endsWith(join('workflows', 'novel-serial', 'SKILL.md')));
+  // Like a skill, SKILL.md is not read on every task: the host opens it when a request fits, and again only when it changed.
+  assert.ok(!host_file.skills.some(path => path.includes('workflows')));
+  assert.ok(host_file.workflow.skill_path.endsWith(join('workflows', 'novel-serial', 'SKILL.md')));
+  assert.equal(host_file.workflow.description, NOVEL.description);
+  assert.match(host_file.workflow.revision, /^[0-9a-f]{12}$/);
   // The science card has no member in the room, so the host is not told to call it.
   assert.deepEqual(host_file.workflow.members, [{ card: 'writer', member: '执笔', label: '执笔', description: '按骨架写正文',
     status: 'active', project_access: 'write' }]);
+  const revision = host_file.workflow.revision;
   assert.deepEqual(host.skill_directories.slice(1), [join(home, 'workflows', 'novel-serial')]);
   const writer = task('Antigravity-writer', 'member');
   const writer_file = JSON.parse(readFileSync(join(config.directory, 'free-2.task.json'), 'utf8'));
@@ -151,6 +162,12 @@ test('the host receives the workflow skill and its present members; a member get
   assert.equal(writer.profile.project_access, 'write');
   save_workflow(home, { ...NOVEL, agents: [{ ...NOVEL.agents[0], system_prompt: '改后的提示词', project_access: 'full' }] }, validate_preset);
   const updated = task('Antigravity-writer', 'member');
+  task('Claude', 'host');
+  assert.equal(JSON.parse(readFileSync(join(config.directory, 'free-1.task.json'), 'utf8')).workflow.revision, revision, 'a card edit leaves the host reading as it was');
+  save_workflow(home, { ...NOVEL, skill: '新的做法' }, validate_preset);
+  task('Claude', 'host');
+  assert.notEqual(JSON.parse(readFileSync(join(config.directory, 'free-1.task.json'), 'utf8')).workflow.revision, revision);
+  save_workflow(home, { ...NOVEL, agents: [{ ...NOVEL.agents[0], system_prompt: '改后的提示词', project_access: 'full' }] }, validate_preset);
   assert.match(updated.prompt, /改后的提示词/);
   assert.equal(updated.profile.project_access, 'write', 'editing a card never widens the room member permission');
   // Changing the host role moves the playbook to the new host, without binding it to the original name.
@@ -162,14 +179,23 @@ test('the host receives the workflow skill and its present members; a member get
   assert.equal(task('Claude', 'host').skill_directories.length, 1);
 });
 
-test('an API host reads the workflow and its members instead of the built-in development flow', () => {
-  const workflow = { id: 'novel-serial', label: '连载小说', skill: '先出骨架。',
+test('a workflow lasts while a member it brought is here, so sending them away or removing them ends it', () => {
+  const workflow = { members: { lead: 'Claude', writer: 'Antigravity-writer' } };
+  const room = status => [{ name: 'Claude', role: 'host', status: 'active' }, { name: 'Antigravity-writer', role: 'member', status }];
+  assert.equal(workflow_in_use(workflow, room('active')), true);
+  assert.equal(workflow_in_use(workflow, room('away')), false);
+  assert.equal(workflow_in_use(workflow, room('removed')), false);
+  assert.equal(workflow_in_use({ members: { lead: 'Claude' } }, room('away')), true, 'a host-only workflow lasts while bound');
+});
+
+test('an API host reads the workflow for fitting requests beside the built-in development flow', () => {
+  const workflow = { id: 'novel-serial', label: '连载小说', description: '按集连载小说', skill: '先出骨架。',
     members: [{ card: 'writer', member: '执笔', label: '执笔', description: '写正文', status: 'active', project_access: 'write' }] };
   const host = system_prompt({ participant: 'DeepSeek', role: 'host', mode: 'free', workflow });
-  assert.match(host, /本房间启用了工作流「连载小说」/);
+  assert.match(host, /本房间启用了工作流「连载小说」（用途：按集连载小说）/);
   assert.match(host, /- 执笔（卡片 writer，执笔；在场；项目权限 可写）：写正文/);
   assert.match(host, /先出骨架。/);
-  assert.doesNotMatch(host, /# 开发协作（自由协作房间的主持人）/);
+  assert.match(host, /# 开发协作（自由协作房间的主持人）/, 'requests the workflow does not fit still follow the development flow');
   assert.match(system_prompt({ participant: 'DeepSeek', role: 'host', mode: 'free' }), /# 开发协作（自由协作房间的主持人）/);
   assert.doesNotMatch(system_prompt({ participant: 'DeepSeek', role: 'member', mode: 'free', workflow }), /先出骨架/);
   workflow.members[0].project_access = 'own';

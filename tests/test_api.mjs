@@ -197,7 +197,7 @@ test('API workflow tasks identify the host playbook and give each member only it
   });
   const configured = profiles(f.home, mock.base_url), participants = { Codex: configured.Codex, Claude: configured.Claude };
   save_workflow(f.home, { id: 'writing', label: '写作', skill: '先拟提纲，再写正文。', agents: [
-    { card: 'writer', name: 'Claude', system_prompt: '当前卡片专属提示词' }] }, validate_preset);
+    { card: 'writer', name: 'Claude-writer', system_prompt: '当前卡片专属提示词' }] }, validate_preset);
   const started = await launch_discussion(f.home, { site: f.site, entry: 'web', participants,
     workflow: { id: 'writing', members: { writer: 'Claude' } },
     room: { title: '工作流任务', mode: 'free', host: 'Codex', members: ['Codex', 'Claude'], submission_id: randomUUID() } }, { start_service: async () => ({ running: true }) });

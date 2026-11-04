@@ -1076,10 +1076,16 @@ class MultiMemberTests(FreeRoomTests):
         urlopen(Request(self.base + self.path, headers={"X-Discussion-Token": gemini, "X-Discussion-Session": adopt["session_id"],
                                                          "X-Discussion-Session-Client": "antigravity"}), timeout=10).close()
         self.assertEqual(self.request(f"{self.path}/members/{gemini_id}", {**adopt, "token": self.member}, self.owner)[0], 400, "a credential already in use")
+        # A refused takeover is kept for the reported session, so the page can say why requests stay undelivered.
+        failed = {"action": "adopt_failed", "session_id": "session-1", "reason": "会话属于其他目录"}
+        self.assertEqual(self.request(f"{self.path}/members/{gemini_id}", {**failed, "session_id": "other"}, self.owner)[0], 400)
+        status, view = self.request(f"{self.path}/members/{gemini_id}", failed, self.owner)
+        self.assertEqual(status, 200, view)
+        self.assertEqual(next(item for item in view["members"] if item["name"] == "Antigravity")["adopt_error"], "会话属于其他目录")
         status, adopted = self.request(f"{self.path}/members/{gemini_id}", adopt, self.owner)
         self.assertEqual(status, 200, adopted)
         member = next(item for item in adopted["members"] if item["name"] == "Antigravity")
-        self.assertEqual((member["access"], member["session_mode"]), ("runner", "borrowed"))
+        self.assertEqual((member["access"], member["session_mode"], member["adopt_error"]), ("runner", "borrowed", ""))
         # The service now answers with the credential it generated; the browser-made one no longer works.
         self.assertEqual(self.request(f"{self.path}/register", {}, gemini)[0], 403)
         inbox = self.request(f"{self.path}/inbox", token=self.owner)[1]

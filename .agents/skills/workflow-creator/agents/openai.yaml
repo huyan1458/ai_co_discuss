@@ -1,0 +1,4 @@
+interface:
+  display_name: "创建工作流"
+  short_description: "把多人协作的做法写成符合 AI CoDiscuss 规范的工作流（SKILL.md + Agent 卡片），校验后保存"
+  default_prompt: "使用 $workflow-creator，按我描述的分工创建一个 AI CoDiscuss 工作流。"

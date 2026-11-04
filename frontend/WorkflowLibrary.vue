@@ -5,6 +5,7 @@
  */
 import { computed, inject, ref, watch } from "vue";
 import ExpertCard from "./ExpertCard.vue";
+import ConfirmDialog from "./ConfirmDialog.vue";
 
 const open = defineModel("open", { type: Boolean, default: false });
 const { view, bridge, act } = inject("discussion");
@@ -49,9 +50,11 @@ async function edit(id) {
   page.value = "edit";
 }
 
-/** Delete one workflow after the user confirms. */
+// The workflow waiting for the user to confirm its deletion.
+const deleting = ref(null);
+
+/** Delete the workflow the user confirmed. */
 async function remove(item) {
-  if (!window.confirm(`删除工作流「${item.label}」？已启用它的房间会提示“工作流不可用”。`)) return;
   if (await run(() => bridge.local_request("workflows", { action: "delete", id: item.id }))) await bridge.reload_workflows();
 }
 
@@ -79,9 +82,9 @@ async function cards_from_room() {
   const names = new Set(draft.value.agents.map((agent) => agent.name));
   for (const card of result.cards) {
     const platform = bridge.platform_of(card.name);
-    let id = card.card, name = card.name;
+    let id = card.card.toLowerCase(), name = `${platform}-${id}`;
     for (let number = 2; taken.has(id.toLowerCase()) || names.has(name); number++) {
-      id = `${card.card.slice(0, 16 - String(number).length)}${number}`;
+      id = `${card.card.toLowerCase().slice(0, 16 - String(number).length)}${number}`;
       name = `${platform}-${id}`;
     }
     taken.add(id.toLowerCase()); names.add(name);
@@ -105,6 +108,7 @@ function rename(agent, platform = bridge.platform_of(agent.name) || platforms[0]
     agent.effort = "";
     agent.needs_platform = !view.value.launch.profiles[platform]?.adapter;
   }
+  agent.card = agent.card.toLowerCase();
   agent.name = `${platform}-${agent.card}`;
 }
 
@@ -134,7 +138,7 @@ async function save() {
             <div><strong>{{ item.label }}</strong><small>{{ item.id }} · {{ item.cards }} 张卡片</small>
               <p v-if="item.error" class="is-error">{{ item.error }}</p><p v-else-if="item.description">{{ item.description }}</p></div>
             <UButton label="编辑" size="sm" variant="soft" :disabled="busy || Boolean(item.error)" @click="edit(item.id)" />
-            <UButton icon="i-lucide-trash-2" size="sm" color="neutral" variant="ghost" :aria-label="`删除工作流 ${item.label}`" :disabled="busy" @click="remove(item)" />
+            <UButton icon="i-lucide-trash-2" size="sm" color="neutral" variant="ghost" :aria-label="`删除工作流 ${item.label}`" :disabled="busy" @click="deleting = item" />
           </li>
         </ul>
         <p v-else class="workflow-library-empty">还没有工作流。可以新建，也可以让房间的主持人把做法起草成工作流，再粘贴导入。</p>
@@ -200,6 +204,9 @@ async function save() {
       </form>
     </template>
   </UModal>
+  <ConfirmDialog :open="Boolean(deleting)" :title="`删除工作流「${deleting?.label || ''}」`" description="工作流文件夹会从本机删除，无法撤销。"
+    :items="['已启用它的房间会显示“工作流不可用”，成员改用房间里的设置。', '房间成员、消息记录和项目文件不受影响。']" confirm-label="删除" danger
+    @update:open="(value) => { if (!value) deleting = null; }" @confirm="remove(deleting)" />
 </template>
 
 <style scoped>

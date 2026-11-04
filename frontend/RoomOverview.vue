@@ -8,6 +8,8 @@ import ChainRoundsField from "./ChainRoundsField.vue";
 import EffortSlider from "./EffortSlider.vue";
 import HostWorkflowSwitch from "./HostWorkflowSwitch.vue";
 import InviteDialog from "./InviteDialog.vue";
+import WorkflowControl from "./WorkflowControl.vue";
+import { active_workflow } from "./workflow-state.js";
 import MemberDescriptionDialog from "./MemberDescriptionDialog.vue";
 import { member_actions } from "./member-actions.js";
 import { access_label, access_options } from "../runner/expert_prompts.mjs";
@@ -52,13 +54,9 @@ async function save_rounds(value) {
 }
 const members = computed(() => room.value.members || []);
 // The room's workflow as this computer registered it; its members carry a mark while it is enabled.
-const workflow = computed(() => saved.value?.workflow || null);
+const workflow = computed(() => active_workflow(saved.value?.workflow, room.value.free?.members));
 const in_workflow = (name) => Boolean(workflow.value?.enabled && Object.values(workflow.value.members || {}).includes(name));
 
-/** Release the workflow after the user confirms: its members leave (the host stays) and their live work stops. */
-function disable_workflow() {
-  if (window.confirm(`停用工作流「${workflow.value.label}」？它带来的成员会离开（主持人保留），正在进行的工作随之停止。`)) act("disable_room_workflow");
-}
 
 /**
  * Being woken here is the usual case, so a woken member only names its kind (CLI / API / App), read from this
@@ -246,12 +244,8 @@ const created = computed(() => room.value.created_at ? new Date(room.value.creat
         <div><dt>主持人</dt><dd>{{ room.host ? bridge.display_name(room.host) : '未指定' }}</dd></div>
         <div><dt>智能调度</dt><dd>{{ scheduler }}</dd></div>
         <div><dt>工作流</dt><dd class="overview-workflow">
-          <template v-if="workflow">
-            <span :title="workflow.available ? '主持人按工作流的做法说明组织工作；它不保证工序' : '工作流已删除或无法读取，成员改用房间里的设置'">{{ workflow.label }} · {{ !workflow.available ? '不可用' : workflow.enabled ? '已启用' : '已停用' }}</span>
-            <UButton v-if="view.access?.can_manage && workflow.enabled" label="停用" size="xs" variant="ghost" color="neutral" @click="disable_workflow" />
-            <UButton v-else-if="view.access?.can_manage && workflow.available" label="重新启用" size="xs" variant="ghost" color="neutral" @click="invite_workflow_id = workflow.id; inviting = true" />
-          </template>
-          <span v-else class="overview-muted">未启用；邀请成员时可选择工作流</span>
+          <WorkflowControl v-if="workflow" :workflow="workflow" />
+          <span v-else class="overview-muted">没有进行中的工作流；在输入框打 / 或邀请成员时选择</span>
         </dd></div>
         <div v-if="saved?.registered"><dt>主持人自建工作流</dt><dd>
           <HostWorkflowSwitch :model-value="Boolean(saved.host_workflows)" :disabled="!view.access?.can_manage || room.archived" @update:model-value="act('set_room_host_workflows', $event)" />

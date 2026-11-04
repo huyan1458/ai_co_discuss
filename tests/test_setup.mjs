@@ -199,7 +199,7 @@ test('skill conflicts report pending configuration and preserve the edited copy'
     assert.equal(result.ai_verified, false);
     assert.equal(result.status, 'needs_attention');
     assert(result.issues.some(issue => issue.includes(join(directory, '.claude/skills/discuss-host')) && issue.includes('技能冲突')));
-    assert.equal(result.skills[0].results.filter(skill => skill.status === 'unchanged').length, 2);
+    assert.equal(result.skills[0].results.filter(skill => skill.status === 'unchanged').length, 3);
     assert.equal(readFileSync(path, 'utf8'), 'my local skill');
     assert.match(second.stderr, /配置待处理/);
   } finally { rmSync(directory, { recursive: true, force: true }); }

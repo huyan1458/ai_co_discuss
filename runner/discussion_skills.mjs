@@ -7,7 +7,7 @@ import { fileURLToPath } from 'node:url';
 import { atomic_json } from './files.mjs';
 
 const SOURCE = fileURLToPath(new URL('../.agents/skills/', import.meta.url));
-export const SKILLS = ['discuss-host', 'discuss-participant', 'discuss-report'];
+export const SKILLS = ['discuss-host', 'discuss-participant', 'discuss-report', 'workflow-creator'];
 const LEGACY_MANIFEST = '.codiscuss-skills.json';
 
 /** Hash names and contents, rejecting links instead of following them outside a skill. */
@@ -55,7 +55,7 @@ function save_record(record, root, data) {
   rmSync(join(root, LEGACY_MANIFEST), { force: true });
 }
 
-/** Install all three skills together and remember only copies this installer manages. */
+/** Install all distributed skills together and remember only copies this installer manages. */
 export function install_skills(directory, record) {
   const root = resolve(directory);
   mkdirSync(root, { recursive: true });

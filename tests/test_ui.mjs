@@ -111,6 +111,20 @@ test("mention autocomplete excludes email, selected text, code and quotes, and f
   assert.deepEqual([...fixture.state.members.value], ["Codex"], "discussion suggestions still come from the current room roster");
 });
 
+test("a slash offers only whitelisted platform skills, and picking one prefills a request to the host", async () => {
+  const fixture = mention_fixture();
+  fixture.type("/");
+  assert.equal(fixture.state.context.value, null, "without a host there is no one to ask");
+  fixture.free_members.value = [{ name: "Codex", role: "host" }];
+  fixture.type("/工作流");
+  assert.equal(fixture.state.active.value.skill.id, "workflow-creator");
+  fixture.key("Enter");
+  await nextTick();
+  assert.equal(fixture.text.value, "用 workflow-creator 技能新建一个工作流：");
+  fixture.type("/discuss-host");
+  assert.equal(fixture.state.active.value, undefined, "operating notes the AIs load by themselves are not offered");
+});
+
 test("a session fork keeps system provenance but truncates future plans, answers and state", () => {
   const context = vm.createContext({});
   vm.runInContext(source.match(/function fork_snapshot\([\s\S]*?\n\}/)[0], context);
