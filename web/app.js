@@ -2749,8 +2749,7 @@ function write_create_host_workflows(value) {
 /** Grant or withdraw this room's host the right to save and enable workflows by itself. */
 async function set_room_host_workflows(allowed) {
   const room_id = state.room.id;
-  const token = localStorage.getItem(`discuss-access:${room_id}`);
-  if (!token) throw new Error("此浏览器缺少房间控制凭据，请使用创建房间的浏览器");
+  const token = localStorage.getItem(`discuss-access:${room_id}`) || "";
   await local_launch_request("room-workflow", { room_id, token, action: "host", allowed: Boolean(allowed) });
   await reload_room_models();
 }
@@ -2789,8 +2788,7 @@ function create_workflow_label(name) {
 /** Bind a workflow to this room after its cards were invited (or brought back); the host reads it from the next task. */
 async function enable_room_workflow({ id, members }) {
   const room_id = state.room.id;
-  const token = localStorage.getItem(`discuss-access:${room_id}`);
-  if (!token) throw new Error("此浏览器缺少房间控制凭据，请使用创建房间的浏览器");
+  const token = localStorage.getItem(`discuss-access:${room_id}`) || "";
   await local_launch_request("room-workflow", { room_id, token, action: "enable", workflow: { id, members } });
   notify("info", "工作流已启用，主持人下一次任务起按它组织工作");
   await reload_room_models();
@@ -2799,8 +2797,7 @@ async function enable_room_workflow({ id, members }) {
 /** Release the room's workflow: its members leave (the host stays), and the host stops following it. */
 async function disable_room_workflow() {
   const room_id = state.room.id;
-  const token = localStorage.getItem(`discuss-access:${room_id}`);
-  if (!token) throw new Error("此浏览器缺少房间控制凭据，请使用创建房间的浏览器");
+  const token = localStorage.getItem(`discuss-access:${room_id}`) || "";
   await local_launch_request("room-workflow", { room_id, token, action: "disable" });
   notify("info", "工作流已停用，它带来的成员已离开");
   await refresh_room();

@@ -402,7 +402,8 @@ function report_setup(result, options = {}) {
   if (result.command.path) lines.push(`持久命令：${result.command.path}（${result.command.status}）`);
   if (result.local?.running) {
     lines.push(`本机网站：${result.local.url}${options['no-open'] ? '' : '（已在浏览器打开）'}`,
-      '网站与讨论服务在后台运行，关闭此终端不影响；查看状态 codiscuss local status，停止 codiscuss local stop；电脑重启后运行 codiscuss local open 重新启动。');
+      '网站与讨论服务在后台运行，关闭此终端不影响；查看状态 codiscuss local status，停止 codiscuss local stop；电脑重启后运行 codiscuss local open 重新启动并打开浏览器（codiscuss local start 不打开浏览器）；codiscuss service restart 重启讨论服务（使新环境变量生效）'
+      + (process.platform === 'win32' ? '；codiscuss service autostart on 登录时自动启动。' : '。'));
   }
   lines.push(...result.issues, '真实 AI 执行尚未验证；可从网页创建讨论，或在新会话调用 Skill。');
   if (result.skills.length) lines.push('若新会话未发现技能，请让 AI 读取上述目录内的 discuss-host/SKILL.md 和 discuss-participant/SKILL.md。');
@@ -424,9 +425,15 @@ function report_styled(result, options) {
   if (result.skills.length) rows.push(['技能', result.skills.map(group => `${group.client} ${group.results.filter(skill => skill.status !== 'conflict').length}/${group.results.length}`).join(' · '), 'discuss-host · discuss-participant · discuss-report']);
   if (result.command.path) rows.push(['命令', `codiscuss ${tone.dim(`(${result.command.status})`)}`, short_path(result.command.path)]);
   const notes = result.issues.map(issue => tone.yellow(`▲ ${issue}`));
-  if (result.local?.running) notes.push(tone.dim('网站与讨论服务在后台运行，关闭此终端不影响'),
-    `${tone.cyan('codiscuss local status')}  ${tone.dim('查看状态')}`, `${tone.cyan('codiscuss local stop')}    ${tone.dim('停止')}`,
-    `${tone.cyan('codiscuss local open')}    ${tone.dim('重启电脑后重新启动')}`);
+  if (result.local?.running) {
+    const commands = [['codiscuss local status', '查看状态'], ['codiscuss local stop', '停止'], ['codiscuss local open', '启动并打开浏览器（重启电脑后用）'],
+      ['codiscuss local start', '启动但不打开浏览器'],
+      ['codiscuss service restart', '重启讨论服务（使新环境变量生效）']];
+    if (process.platform === 'win32') commands.push(['codiscuss service autostart on', '登录时自动启动']);
+    const width = Math.max(...commands.map(([command]) => command.length)) + 2;
+    notes.push(tone.dim('网站与讨论服务在后台运行，关闭此终端不影响'),
+      ...commands.map(([command, label]) => `${tone.cyan(command.padEnd(width))}${tone.dim(label)}`));
+  }
   const closing = result.local?.running ? `在网页新建讨论，或在 AI 会话里调用 ${tone.cyan('discuss-host')} ${tone.dim('· 真实 AI 执行尚未验证')}`
     : `运行 ${tone.cyan('codiscuss local open')} 启动网站`;
   outro(title, rows, notes, closing, mark);

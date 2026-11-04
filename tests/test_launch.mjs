@@ -857,7 +857,10 @@ test('only the host of a room whose owner allowed it adopts a workflow, inviting
     + '<!-- workflow-file: agents/writer.md -->\n---\nname: Claude-writer\nlabel: 写手\nproject_access: full\n---\n按任务书写。\n');
   await assert.rejects(adopt_workflow(f.home, { access_file: host_access, draft_file: draft }), /没有允许/);
   assert.equal(list_workflows(f.home).length, 0);
-  await room_workflow(f.home, { ...input, action: 'host', allowed: true });
+  // A browser of the local site without the room credential grants it with the site's administrator authority.
+  const granted = await request(f.site, '/api/local/room-workflow', { room_id: config.room, action: 'host', allowed: true }, { 'X-CoDiscuss-Local': '1' });
+  assert.equal(granted.status, 200, JSON.stringify(granted.body));
+  assert.equal(load_config(launched.config_path).host_workflows, true);
   await assert.rejects(adopt_workflow(f.home, { access_file: access('Other', randomUUID() + randomUUID()), draft_file: draft }), /只有本房间的主持人/);
   const adopted = await adopt_workflow(f.home, { access_file: host_access, draft_file: draft });
   assert.deepEqual(adopted.members, { writer: 'Claude-writer' });

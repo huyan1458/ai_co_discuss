@@ -1883,7 +1883,7 @@ class DiscussionHandler(BaseHTTPRequestHandler):
             if command in ("start", "room-config", "room-models", "room-files", "room-member", "room-member-access", "room-member-allow", "room-member-adapter", "room-member-model", "room-profiles", "room-restore", "room-fork", "room-workflow", "workflows"):
                 payload.pop("access_file", None)
                 payload.update(site=site, entry="web")
-            if command == "room-files" and not payload.get("token") and not self.bridge_origin:
+            if command in ("room-files", "room-workflow") and not payload.get("token") and not self.bridge_origin:
                 with closing(connect_db(self.server.database)) as connection:
                     self.admin_as_owner(connection, payload.get("room_id", ""))
                     payload["token"] = self.headers.get("X-Discussion-Token", "")
