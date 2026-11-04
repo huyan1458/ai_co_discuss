@@ -1035,8 +1035,94 @@ test("a new room that asks for a discussion is created as a collaboration room, 
     limits: { max_rounds: 2, max_minutes: 30, execution_minutes: 0 } });
 });
 
+/** Two browser instances can share the same preference store without sharing their room drafts. */
+function create_preferences_fixture(store) {
+  const f = theme_fixture(), state = f.context.test_state, roster = {};
+  const defaults = { 'new-room-title': '', 'new-room-goal': '', 'new-room-host': '', 'new-room-limit-max_rounds': '3', 'new-room-limit-max_minutes': '0' };
+  for (const [id, value] of Object.entries(defaults)) f.nodes.set(id, { value, matches: () => true, dispatchEvent() {} });
+  f.nodes.set('room-form', { reset() { for (const [id, value] of Object.entries(defaults)) f.nodes.get(id).value = value; } });
+  Object.assign(state.launch, { available: true, scheduler_providers: { jev: { base_url: 'https://jev.test', models: ['jev-latest'] } },
+    api_keys: { 'https://jev.test': 'saved-key-ref' }, saved_profiles: { Codex: { adapter: 'codex_cli' } }, scheduler_default_mode: 'guided' });
+  Object.assign(f.context, { Event: class {}, render_launch_settings() {},
+    render_expert_inputs: (id, experts) => { roster[id] = experts; }, render_host_options: id => { f.nodes.get(id).value = ''; },
+    local_launch_request: async (route, input) => {
+      assert.equal(route, 'settings');
+      if (input) store.saved = { ...store.saved, ...JSON.parse(JSON.stringify(input.create_preferences)) };
+      return { create_preferences: JSON.parse(JSON.stringify(store.saved)) };
+    } });
+  return { ...f, state, roster };
+}
+
+test('new-room choices survive cancellation and reload while room text, project and roster are reset', async () => {
+  const store = { saved: {} }, f = create_preferences_fixture(store), { context, state, nodes } = f;
+  await context.reset_create_form();
+  assert.equal(state.launch.scheduler.enabled, true, 'first use still offers the configured scheduler');
+  context.write_scheduler('enabled', false);
+  context.write_scheduler('mode', 'stable');
+  context.write_create_host_workflows(true);
+  context.write_named_followup(true);
+  context.write_create_chain_rounds(7);
+  context.write_view_field('new-room-limit-max_rounds', '6');
+  context.write_view_field('new-room-limit-max_minutes', '40');
+  context.write_create_goal({ objective: 'Only this room', max_continues: 9, max_minutes: 120 });
+  context.write_create_preferences({ workflow_id: 'writing', advanced_open: true });
+  nodes.get('new-room-title').value = 'Only this room';
+  state.launch.workspace = { cwd: 'C:\\only-this-project' };
+  f.roster['new-expert-modes'] = { Codex: 'cli' };
+  await context.flush_create_preferences();
+  assert.doesNotMatch(JSON.stringify(store.saved), /Only this room|only-this-project|api_key|Codex|participants|objective/);
+  await context.reset_create_form(); // Cancelling and opening again never submits or starts a room.
+  assert.equal(nodes.get('new-room-title').value, '');
+  assert.equal(nodes.get('new-room-host').value, '');
+  assert.deepEqual(Object.keys(f.roster['new-expert-modes']), []);
+  assert.deepEqual(Object.keys(state.launch.workspace), []);
+  assert.equal(state.create_goal.objective, '');
+  const reloaded = create_preferences_fixture(store);
+  await reloaded.context.reset_create_form();
+  assert.equal(reloaded.state.launch.scheduler.enabled, false);
+  assert.equal(reloaded.state.launch.scheduler.api_key_ref, 'saved-key-ref');
+  assert.equal(reloaded.state.launch.scheduler.mode, 'stable');
+  assert.equal(reloaded.state.create_host_workflows, true);
+  assert.equal(reloaded.state.create_chain_rounds, 7);
+  assert.equal(reloaded.state.named_followup, true);
+  assert.equal(reloaded.nodes.get('new-room-limit-max_rounds').value, '6');
+  assert.equal(reloaded.nodes.get('new-room-limit-max_minutes').value, '40');
+  assert.equal(reloaded.state.create_goal.max_continues, 9);
+  assert.equal(reloaded.state.create_goal.max_minutes, 120);
+  assert.equal(reloaded.state.launch.create_preferences.workflow_id, 'writing');
+  reloaded.context.write_create_discussion(true);
+  reloaded.context.write_create_goal({});
+  assert.equal(reloaded.state.create_goal.max_continues, 9, 'switching modes keeps the last Goal budget');
+  await reloaded.context.flush_create_preferences();
+});
+
+test('browsing and saving a workflow never adds members or binds it to a new room', async () => {
+  const f = theme_fixture(), state = f.context.test_state, requests = [];
+  const workflow = { id: 'writing', label: '写作', description: '协作写作', agents: [{ card: 'writer', name: 'Codex-writer' }] };
+  Object.assign(state.launch, { available: true, workflows: [workflow], profiles: { Codex: { adapter: 'codex_cli' } } });
+  const view = ref({ launch: state.launch, experts: { 'new-expert-modes': { Codex: 'cli' } }, fields: { 'new-room-host': 'Codex' } });
+  const before = JSON.stringify({ experts: view.value.experts, fields: view.value.fields, options: f.context.creation_launch_options() });
+  const bridge = { local_request: async (route, input) => { requests.push([route, input.action]); return workflow; },
+    reload_workflows: async () => view.value.launch.workflows, notify: () => {} };
+  const picker = vm.createContext({ computed, ref, defineProps: () => ({}), inject: () => ({ view, bridge }) });
+  const component = readFileSync(new URL('../frontend/WorkflowPicker.vue', import.meta.url), 'utf8');
+  vm.runInContext(component.match(/<script setup>([\s\S]*?)<\/script>/)[1].replace(/^import .*;$/gm, ''), picker);
+  vm.runInContext("selected.value = 'writing'", picker);
+  await picker.show();
+  assert.equal(vm.runInContext('viewing.value.id', picker), 'writing');
+  picker.open_editor('writing');
+  assert.equal(vm.runInContext('editor_id.value', picker), 'writing');
+  await picker.on_saved(workflow);
+  assert.equal(vm.runInContext('current.value.id', picker), 'writing');
+  assert.deepEqual(requests, [['workflows', 'get']]);
+  assert.equal(JSON.stringify({ experts: view.value.experts, fields: view.value.fields, options: f.context.creation_launch_options() }), before);
+  assert.equal(f.context.creation_launch_options().workflow, undefined);
+  await picker.on_deleted('writing');
+  assert.equal(vm.runInContext('selected.value', picker), '');
+});
+
 /** Invite dialog fixture for the shared member board. */
-function participant_connection_fixture() {
+function participant_connection_fixture(props = {}) {
   const view = ref({ room: { id: "one", members: [] }, launch: { available: true, profiles: {}, workspace: {} } });
   const pending = ref(""), calls = [];
   const controls = { fail_invite_at: 0 };
@@ -1048,7 +1134,7 @@ function participant_connection_fixture() {
     if (controls.on_action) return controls.on_action(name, payload);
     return true;
   };
-  const dialog = vm.createContext({ computed, ref, watch, defineProps: () => ({}), defineModel: () => ref(false),
+  const dialog = vm.createContext({ computed, ref, watch, defineProps: () => props, defineModel: () => ref(false),
     inject: () => ({ view, bridge: { launch_clients: {}, platform_of: (name) => name.split("-")[0],
       unique_instance: (base, taken) => { let name = base; for (let number = 2; taken.has(name); number++) name = `${base}-${number}`; return name; } }, pending, act }) });
   const invite_dialog = readFileSync(new URL("../frontend/InviteDialog.vue", import.meta.url), "utf8");
@@ -1106,8 +1192,8 @@ test('workflow invitations isolate partial admissions, retain them on retry and 
   assert.equal(enabled.length, 2);
 });
 
-test('reenabling a workflow previews new cards, recalls existing members only on confirmation and keeps their original names', async () => {
-  const f = participant_connection_fixture(), enabled = [];
+test('a slash workflow request previews cards, recalls members only on confirmation and keeps their original names', async () => {
+  const f = participant_connection_fixture({ workflowId: 'writing' }), enabled = [];
   f.view.value.room.members = [{ id: 5, name: 'Claude-old', status: 'away' }];
   f.view.value.launch.room_models = { workflow: { id: 'writing', enabled: false, members: { writer: 'Claude-old' } } };
   const bridge = vm.runInContext('bridge', f.dialog);
@@ -1121,7 +1207,8 @@ test('reenabling a workflow previews new cards, recalls existing members only on
     if (action === 'enable_room_workflow') enabled.push(JSON.parse(JSON.stringify(payload)));
     return true;
   };
-  await f.dialog.choose_workflow('writing');
+  vm.runInContext('inviting.value = true', f.dialog);
+  await new Promise(setImmediate);
   assert.equal(f.calls.length, 0, 'selection does not recall or invite anyone');
   assert.equal(vm.runInContext('invite_picks.value.map(pick => pick.name).join()', f.dialog), 'Codex-editor');
   await f.dialog.invite();

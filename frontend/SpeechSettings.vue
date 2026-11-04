@@ -146,7 +146,7 @@ async function preview(platform) {
             </div>
             <label class="speech-row"><span>语气</span>
               <UInput v-if="service.context" v-model="settings.context" :maxlength="200" placeholder="可选，如：像朋友聊天一样自然地读" aria-label="朗读语气提示" size="sm" class="w-full" @change="save" />
-              <UInput v-else disabled placeholder="此服务不支持语气提示" aria-label="朗读语气提示" size="sm" class="w-full" />
+              <UInput v-else disabled placeholder="当前接入不支持自定义语气" aria-label="朗读语气提示" size="sm" class="w-full" />
             </label>
             <p class="fine-print speech-note">输入框右下角的播报按钮自动读新回复摘要</p>
             <h4>语音输入</h4>

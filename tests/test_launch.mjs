@@ -414,6 +414,33 @@ for (const entry of ['web', 'conversation']) {
   });
 }
 
+test('new-room preferences persist separately from software defaults through local and remote settings', async t => {
+  const f = await fixture(t);
+  save_launch_settings(f.home, { participants: f.input.participants });
+  const preferences = { drive: 'goal', max_rounds: 5, max_minutes: 45, named_followup: true,
+    goal_max_continues: 8, goal_max_minutes: 90, chain_rounds: 6, host_workflows: true, advanced_open: true,
+    workflow_id: 'writing', scheduler: { enabled: false, provider: 'jev', model: 'jev-latest', mode: 'stable' } };
+  const saved = await request(f.site, '/api/local/settings', { create_preferences: preferences }, { 'X-CoDiscuss-Local': '1' });
+  assert.equal(saved.status, 200, saved.body.error);
+  assert.deepEqual(launch_settings(f.home), { participants: f.input.participants, create_preferences: preferences });
+  const remote = spawnSync(process.execPath, [join(ROOT, 'runner/discussion_launch.mjs'), 'settings', '--remote', '--stdin'], {
+    input: JSON.stringify({ create_preferences: { chain_rounds: 9 } }), encoding: 'utf8',
+    env: { ...process.env, DISCUSS_SERVICE_HOME: f.home }, windowsHide: true,
+  });
+  assert.equal(remote.status, 0, remote.stderr);
+  assert.equal(JSON.parse(remote.stdout).create_preferences.chain_rounds, 9);
+  const updated = { ...preferences, chain_rounds: 9 };
+  save_launch_settings(f.home, { participants: { Codex: f.input.participants.Codex } });
+  assert.deepEqual(launch_settings(f.home), { participants: { Codex: f.input.participants.Codex }, create_preferences: updated });
+  const before = readFileSync(join(f.home, 'launch-settings.json'), 'utf8');
+  for (const invalid of [{ title: 'one room' }, { cwd: f.directory }, { participants: {} }, { host: 'Codex' },
+    { session_id: 'session' }, { goal: 'room objective' }, { chain_rounds: 0 }, { max_minutes: 1441 },
+    { scheduler: { api_key: 'must-not-persist' } }, { scheduler: { api_key_ref: 'key-ref' } }]) {
+    assert.throws(() => save_launch_settings(f.home, { create_preferences: invalid }), /建房偏好字段无效/);
+    assert.equal(readFileSync(join(f.home, 'launch-settings.json'), 'utf8'), before);
+  }
+});
+
 test('project write access is per launch, defaults to read and can differ per participant', async t => {
   const f = await fixture(t);
   assert.throws(() => save_launch_settings(f.home, { participants: { Codex: { ...f.input.participants.Codex, project_access: 'write' } } }), /不能保存房间或会话/);

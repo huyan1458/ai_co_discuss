@@ -126,10 +126,9 @@ state.navigation_version = 0;
 state.admin = { loaded: false, local: false, registered: false, setup_available: false, logged_in: false, profile: null, identity_version: 0 };
 // needs: "" | "pairing" | "renew"; pairing_code arrives from a scanned link (#pair=CODE); prompt waits for the user's tap.
 state.device = { id: "", needs: "", pairing_code: "", prompt: null };
-state.launch = { available: false, remote: false, relay: null, connect_command: "", profiles: {}, projects: [], presets: [], builtin_presets: [], hidden_builtins: [], workflows: [], description_templates: {}, workspace: {}, scheduler: {}, error: "", recoveries: [] };
-// The workflow chosen in the new-room form: { id, label, members: { card: instance } }; cards removed from the form drop out at submission.
-state.create_workflow = null;
+state.launch = { available: false, remote: false, relay: null, connect_command: "", profiles: {}, projects: [], presets: [], builtin_presets: [], hidden_builtins: [], workflows: [], description_templates: {}, workspace: {}, scheduler: {}, create_preferences: {}, error: "", recoveries: [] };
 state.create_host_workflows = false;
+let create_preferences_pending = {}, create_preferences_saving = null, create_preferences_version = 0;
 const PLATFORM_CLIENTS = { Codex: [{ value: "codex_cli", label: "Codex CLI" }, { value: "codex", label: "Codex App" }],
   Claude: [{ value: "claude", label: "Claude Code CLI" }],
   Antigravity: [{ value: "antigravity_cli", label: "Antigravity CLI" }, { value: "antigravity", label: "Antigravity App" }] };
@@ -1137,23 +1136,83 @@ function mentioned(text, name) {
   return new RegExp(`(^|[\\s(（，,。；;：:])@${name.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}(?![\\w-])`, "u").test(prose);
 }
 
-/** Start every new form from defaults: room use, delivery, text, roster, host, limits and software overrides. */
+/** Clear this room's text, project and roster, then restore the user's last reusable choices. */
 function reset_create_form() {
   element("room-form").reset();
   render_expert_inputs("new-expert-modes", default_experts());
   render_host_options("new-room-host", [], "");
   state.launch.workspace = {};
-  state.launch.scheduler = default_scheduler();
-  state.named_followup = false;
-  state.create_discussion = false;
   state.create_goal = null;
-  state.create_chain_rounds = DEFAULT_CHAIN_ROUNDS;
-  state.create_workflow = null;
-  state.create_host_workflows = false;
+  apply_create_preferences();
   state.launch.profiles = JSON.parse(JSON.stringify(state.launch.saved_profiles || {}));
   Object.values(state.launch.profiles).forEach(fill_api_key);
   render_launch_settings();
   publish_view();
+  return refresh_create_preferences();
+}
+
+/** Restore choices without touching the new room's title, project, members, host or goal text. */
+function apply_create_preferences() {
+  const preferences = state.launch.create_preferences || {};
+  const scheduler = preferences.scheduler;
+  const base_url = state.launch.scheduler_providers?.[scheduler?.provider]?.base_url;
+  state.launch.scheduler = scheduler ? { ...scheduler, api_key_ref: state.launch.api_keys?.[base_url] || "" } : default_scheduler();
+  state.named_followup = preferences.named_followup ?? false;
+  state.create_discussion = preferences.drive === "discussion";
+  state.create_goal = preferences.drive === "goal" ? { objective: state.create_goal?.objective || "",
+    max_continues: preferences.goal_max_continues ?? 0, max_minutes: preferences.goal_max_minutes ?? 0 } : null;
+  state.create_chain_rounds = preferences.chain_rounds ?? DEFAULT_CHAIN_ROUNDS;
+  state.create_host_workflows = preferences.host_workflows ?? false;
+  for (const field of ["max_rounds", "max_minutes"]) {
+    const control = element(`new-room-limit-${field}`);
+    if (control && preferences[field] !== undefined) control.value = String(preferences[field]);
+  }
+}
+
+/** Remember only changed preference fields; cancellation of the form does not undo these choices. */
+function write_create_preferences(patch) {
+  const current = state.launch.create_preferences || {};
+  const changed = Object.fromEntries(Object.entries(patch).filter(([field, value]) => JSON.stringify(current[field]) !== JSON.stringify(value)));
+  if (!Object.keys(changed).length) return;
+  state.launch.create_preferences = { ...current, ...changed };
+  create_preferences_pending = { ...create_preferences_pending, ...changed };
+  create_preferences_version++;
+  flush_create_preferences();
+  publish_view();
+}
+
+/** Serialize preference patches so a slower earlier save cannot overwrite the latest operation. */
+function flush_create_preferences() {
+  if (create_preferences_saving) return create_preferences_saving;
+  if (!state.launch.available || !Object.keys(create_preferences_pending).length) return Promise.resolve();
+  const patch = create_preferences_pending;
+  create_preferences_pending = {};
+  create_preferences_saving = local_launch_request("settings", { create_preferences: patch }).catch(error => {
+    create_preferences_pending = { ...patch, ...create_preferences_pending };
+    notify("error", `建房偏好未保存：${error.message}`);
+    return false;
+  }).then(result => {
+    create_preferences_saving = null;
+    if (result !== false) return flush_create_preferences();
+  });
+  return create_preferences_saving;
+}
+
+/** Reopen with the paired computer's latest choices, keeping edits made while the read was in flight. */
+async function refresh_create_preferences() {
+  if (!state.launch.available) return;
+  const version = create_preferences_version;
+  await flush_create_preferences();
+  try {
+    const settings = await local_launch_request("settings");
+    if (version !== create_preferences_version) return;
+    for (const field of ["api_keys", "scheduler_providers", "scheduler_default_mode", "workflows"]) {
+      if (settings[field] !== undefined) state.launch[field] = settings[field];
+    }
+    state.launch.create_preferences = { ...settings.create_preferences, ...create_preferences_pending };
+    apply_create_preferences();
+    publish_view();
+  } catch (error) { notify("error", `建房偏好未读取：${error.message}`); }
 }
 
 /** Persist a member mutation before transmission and reuse its credential after an uncertain response. */
@@ -2666,6 +2725,7 @@ async function load_launch_settings() {
     const settings = await local_launch_request("settings");
     // Keep the saved machine defaults so every new form can start from them again.
     state.launch.saved_profiles = JSON.parse(JSON.stringify(settings.participants || {}));
+    state.launch.create_preferences = { ...settings.create_preferences, ...create_preferences_pending };
     Object.assign(state.launch, { available: true, profiles: settings.participants, projects: settings.projects || [], api_providers: settings.api_providers || {}, api_keys: settings.api_keys || {},
       presets: settings.presets || [], builtin_presets: settings.builtin_presets || [], hidden_builtins: settings.hidden_builtins || [], workflows: settings.workflows || [], description_templates: settings.description_templates || {},
       scheduler_providers: settings.scheduler_providers || {}, scheduler_modes: settings.scheduler_modes || {}, scheduler_default_mode: settings.scheduler_default_mode || "", error: "",
@@ -2673,8 +2733,8 @@ async function load_launch_settings() {
     Object.values(state.launch.profiles).forEach(fill_api_key);
     if (local_connection && !relay_machine) pair_local_machine();
     move_browser_description_templates();
-    // Settings arrive after the form was reset; only an untouched draft gets the default.
-    if (!Object.keys(state.launch.scheduler).length) state.launch.scheduler = default_scheduler();
+    apply_create_preferences();
+    flush_create_preferences();
     load_room_models();
   } catch (error) {
     // An unpaired or expired device keeps its way to the computer: pairing and renewal go through it.
@@ -2978,20 +3038,13 @@ function launch_options() {
 function creation_launch_options() {
   const { enabled, provider, model, api_key_ref, mode } = state.launch.scheduler;
   return { ...launch_options(), ...(enabled && provider && model && api_key_ref ? { scheduler: { provider, model, api_key_ref, ...(mode ? { mode } : {}) } } : {}),
-    ...creation_workflow(), ...(state.create_host_workflows ? { host_workflows: true } : {}) };
-}
-
-/** The new room's workflow, naming only the cards still in the form as woken members. */
-function creation_workflow() {
-  if (!state.create_workflow) return {};
-  const chosen = read_expert_inputs("new-expert-modes");
-  const members = Object.fromEntries(Object.entries(state.create_workflow.members).filter(([, name]) => chosen[name] === "cli"));
-  return Object.keys(members).length ? { workflow: { id: state.create_workflow.id, members } } : {};
+    ...(state.create_host_workflows ? { host_workflows: true } : {}) };
 }
 
 /** Whether the new room's host may save and enable workflows by itself, inviting their cards. */
 function write_create_host_workflows(value) {
   state.create_host_workflows = Boolean(value);
+  write_create_preferences({ host_workflows: state.create_host_workflows });
   publish_view();
 }
 
@@ -3016,25 +3069,6 @@ async function reload_workflows() {
 /** A workflow card as an expert preset: the card ID is only the workflow's own handle. */
 function workflow_preset({ card, requested_access, needs_platform, ...preset }) {
   return preset;
-}
-
-/**
- * Fill the new-room form with a workflow's cards, each a preset-made instance, and remember which card each plays.
- * Choosing another (or the same one again after editing) replaces the previous cards; clearing the choice keeps them as ordinary members.
- */
-async function choose_create_workflow(id) {
-  const workflow = id ? await local_launch_request("workflows", { action: "get", id }) : null;
-  if (!workflow) { state.create_workflow = null; return publish_view(); }
-  for (const name of Object.values(state.create_workflow?.members || {})) write_view_expert("new-expert-modes", name, "");
-  const members = {};
-  for (const agent of workflow.agents) members[agent.card] = add_preset_instance("new-expert-modes", workflow_preset(agent), "cli");
-  state.create_workflow = { id, label: workflow.label || id, members };
-  publish_view();
-}
-
-/** The workflow a card in the new-room form or the invite dialog came from, for its read-only prompt. */
-function create_workflow_label(name) {
-  return state.create_workflow && Object.values(state.create_workflow.members).includes(name) ? state.create_workflow.label : "";
 }
 
 /** Bind a workflow to this room after its cards were invited (or brought back); the host reads it from the next task. */
@@ -3062,6 +3096,7 @@ async function move_workflow_members(action) {
 /** Choose whether the new discussion's host writes named follow-ups for each expert between rounds. */
 function write_named_followup(value) {
   state.named_followup = Boolean(value);
+  write_create_preferences({ named_followup: state.named_followup });
   publish_view();
 }
 
@@ -3072,6 +3107,7 @@ state.create_chain_rounds = DEFAULT_CHAIN_ROUNDS;
 /** Change the new room's round limit; it is saved right after the room is created. */
 function write_create_chain_rounds(value) {
   state.create_chain_rounds = value;
+  write_create_preferences({ chain_rounds: value });
   publish_view();
 }
 
@@ -3079,13 +3115,18 @@ function write_create_chain_rounds(value) {
 function write_create_discussion(value) {
   state.create_discussion = Boolean(value);
   if (state.create_discussion) state.create_goal = null;
+  write_create_preferences({ drive: state.create_discussion ? "discussion" : state.create_goal ? "goal" : "free" });
   publish_view();
 }
 
 /** Turn the new room's goal on (with a patch of its fields) or off; a goal and a discussion exclude each other. */
 function write_create_goal(patch) {
-  state.create_goal = patch === null ? null : { objective: "", max_continues: 0, max_minutes: 0, ...(state.create_goal || {}), ...patch };
+  const preferences = state.launch.create_preferences || {};
+  state.create_goal = patch === null ? null : { objective: "", max_continues: preferences.goal_max_continues ?? 0,
+    max_minutes: preferences.goal_max_minutes ?? 0, ...(state.create_goal || {}), ...patch };
   if (state.create_goal) state.create_discussion = false;
+  write_create_preferences({ drive: state.create_goal ? "goal" : state.create_discussion ? "discussion" : "free",
+    ...(state.create_goal ? { goal_max_continues: state.create_goal.max_continues, goal_max_minutes: state.create_goal.max_minutes } : {}) });
   publish_view();
 }
 
@@ -3108,6 +3149,8 @@ function write_scheduler(field, value) {
     scheduler.model = preset?.models[0] || "";
     scheduler.api_key_ref = preset ? state.launch.api_keys?.[preset.base_url] || "" : "";
   }
+  const { enabled = false, provider = "", model = "", mode = "" } = scheduler;
+  write_create_preferences({ scheduler: { enabled, provider, model, mode } });
   publish_view();
 }
 
@@ -4333,7 +4376,7 @@ function view_snapshot() {
     device: { id: state.device.id, needs: state.device.needs, pairing_code: state.device.pairing_code,
       prompt: state.device.prompt ? { title: state.device.prompt.title, description: state.device.prompt.description, confirm_label: state.device.prompt.confirm_label } : null },
     tab: state.tab, snapshot_id: state.snapshot_id, context_dirty: state.context_dirty,
-    theme: document.documentElement.dataset.theme, fields, experts, launch: structuredClone(state.launch), named_followup: state.named_followup, create_discussion: state.create_discussion, create_goal: state.create_goal, create_chain_rounds: state.create_chain_rounds, create_workflow: state.create_workflow, create_host_workflows: state.create_host_workflows };
+    theme: document.documentElement.dataset.theme, fields, experts, launch: structuredClone(state.launch), named_followup: state.named_followup, create_discussion: state.create_discussion, create_goal: state.create_goal, create_chain_rounds: state.create_chain_rounds, create_host_workflows: state.create_host_workflows };
 }
 
 /** Update a shared draft using the same input events as the original controls. */
@@ -4348,6 +4391,9 @@ function write_view_field(id, value) {
   control.value = value ?? "";
   control.dispatchEvent(new Event("input", { bubbles: true }));
   control.dispatchEvent(new Event("change", { bubbles: true }));
+  if (["new-room-limit-max_rounds", "new-room-limit-max_minutes"].includes(id)) {
+    write_create_preferences({ [id.slice("new-room-limit-".length)]: Number(control.value) });
+  }
   publish_view();
 }
 
@@ -4546,7 +4592,7 @@ async function execute_view_action(name, value) {
     download_member_access, copy_member_access_text, copy_member_join, copy_member_launch: name => copy_member_join(name, true), pause_discussion, restart_discussion, start_room_discussion, end_room_discussion, start_room_goal, update_room_goal, goal_control,
     save_launch_defaults, resume_launch, discard_launch, retry_launch_connection, check_launch_connection: load_launch_settings,
     load_room_configuration, save_room_configuration, interrupt_member, retry_delivery, retract_message, retract_latest, stop_room, rewind_and_send, fork_room, change_member, reorder_speakers, invite_member,
-    choose_create_workflow, enable_room_workflow, move_workflow_members, set_room_host_workflows,
+    enable_room_workflow, move_workflow_members, set_room_host_workflows,
     adopt_recommendation, rate_decision,
     queue_send: id => queue_request({ action: "send", id }), queue_delete: id => queue_request({ action: "delete", id }),
     queue_reorder: ids => queue_request({ action: "reorder", ids }), queue_resume: () => queue_request({ action: "resume" }),
@@ -4568,13 +4614,13 @@ function change_view_theme(theme) {
   try { localStorage.setItem(THEME_STORAGE_KEY, document.documentElement.dataset.theme); } catch { /* Keep the session preference. */ }
 }
 
-window.discuss_view = { snapshot: view_snapshot, write_field: write_view_field, notify, load_decision_input,
+window.discuss_view = { snapshot: view_snapshot, write_field: write_view_field, write_create_preferences, notify, load_decision_input,
   write_launch: write_launch_field, default_launch_entry, description_template, save_description_template, description_draft, write_description_draft, describe_member, set_chain_rounds, continue_chain, expert_presets, apply_expert_preset, unique_instance, member_label, default_name, label_draft, write_label_draft, preset_identity, save_expert_preset, delete_expert_preset, write_room_connection, write_room_adapter, launch_clients: LAUNCH_CLIENTS,
   launch_model_state, load_launch_models, write_launch_model, save_launch_api_key, write_scheduler, save_scheduler_api_key, check_scheduler, write_named_followup, write_create_discussion, write_create_goal, write_create_chain_rounds, check_launch_api, launch_summary, launch_can_set_access, pick_launch_directory, browse_local_directory, list_remote_directories, save_launch_projects, restore_launch_profile, reset_create_form, empty_discussion_message,
   start_drag: start_directory_drag, reconnect: reconnect_live_updates, stop_label, local_request: local_launch_request,
   attachment_markup, attachment_size, attachment_file_icon, drop_attachments, paste_attachments,
   write_expert: write_view_expert, add_instance: add_view_instance, add_preset: add_preset_instance, platform_of, execute: execute_view_action, theme: change_view_theme,
-  reload_workflows, workflow_preset, create_workflow_label, write_create_host_workflows,
+  reload_workflows, workflow_preset, write_create_host_workflows,
   admin: { register: register_admin, login: login_admin, logout: logout_admin,
     update_profile: update_admin_profile, avatar_from_file: admin_avatar_from_file, validate: validate_admin_form,
     sessions: admin_sessions, revoke: revoke_admin_sessions, change_password: change_admin_password, login_with_passkey,

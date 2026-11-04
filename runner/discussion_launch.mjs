@@ -23,7 +23,7 @@ import { stt_part } from './stt.mjs';
 import { access_levels, BUILTIN_EXPERT_PRESETS, MAX_EXPERT_PROMPT, PROJECT_ACCESS } from './expert_prompts.mjs';
 import { acquire_lock, api, DiscussionStore, service_drafts, validate_config } from './discussion_runner.mjs';
 import { FreeRoomRunner, free_task_files } from './free_runner.mjs';
-import { bind_room_workflow, delete_workflow, get_workflow, list_workflows, load_room_workflow, parse_workflow_draft, preview_workflow, save_workflow } from './workflows.mjs';
+import { bind_room_workflow, delete_workflow, get_workflow, list_workflows, load_room_workflow, parse_workflow_draft, preview_workflow, save_workflow, WORKFLOW_ID_PATTERN } from './workflows.mjs';
 import { assert_shared_home, CONNECTION_FIELDS, configuration_snapshot, read_registry, registered_identity, register_room, service_home, service_pid, start_service } from './discussion_service.mjs';
 
 // A platform is a type; `Claude-review` is another Claude instance with its own session, model and effort. An ID is
@@ -336,18 +336,66 @@ export async function room_files(home, raw) {
   return { room_id: input.room_id, ...read_project_files(config.cwd, input.path, input.offset, input.query) };
 }
 
-/** Save only reusable client settings; room credentials and session bindings are never defaults. */
-export function save_launch_settings(home, input) {
-  const participants = {};
-  for (const [name, profile] of Object.entries(input.participants || {})) {
-    if (platform_of(name) !== name) throw new Error(`本机默认配置按平台保存；${name} 的模型与强度只用于本场讨论`);
-    validate_profile(name, profile);
-    participants[name] = profile;
+const CREATE_PREFERENCE_RANGES = { max_rounds: [0, 100], max_minutes: [0, 1440], goal_max_continues: [0, 100], goal_max_minutes: [0, 1440], chain_rounds: [1, 20] };
+const CREATE_PREFERENCE_FLAGS = ['named_followup', 'host_workflows', 'advanced_open'];
+const MAX_PREFERENCE_MODEL_LENGTH = 200;
+const SETTINGS_LOCK_WAIT_MS = 5000;
+
+/** Validate only reusable form choices; room text, members, paths and credentials are never preferences. */
+function validate_create_preferences(input) {
+  if (!input || typeof input !== 'object' || Array.isArray(input)) throw new Error('建房偏好须为对象');
+  for (const [field, value] of Object.entries(input)) {
+    let valid = false;
+    if (CREATE_PREFERENCE_FLAGS.includes(field)) valid = typeof value === 'boolean';
+    else if (Object.hasOwn(CREATE_PREFERENCE_RANGES, field)) {
+      const [minimum, maximum] = CREATE_PREFERENCE_RANGES[field];
+      valid = Number.isInteger(value) && value >= minimum && value <= maximum;
+    } else if (field === 'drive') valid = ['free', 'discussion', 'goal'].includes(value);
+    else if (field === 'workflow_id') valid = typeof value === 'string' && (!value || WORKFLOW_ID_PATTERN.test(value));
+    else if (field === 'scheduler') valid = valid_scheduler_preference(value);
+    if (!valid) throw new Error(`建房偏好字段无效：${field}`);
   }
-  const settings = { participants };
+}
+
+/** A scheduler preference carries selections, never a key or even a key reference. */
+function valid_scheduler_preference(value) {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return false;
+  const fields = {
+    enabled: item => typeof item === 'boolean',
+    provider: item => typeof item === 'string' && (!item || Object.hasOwn(SCHEDULER_PROVIDERS, item)),
+    model: item => typeof item === 'string' && item.length <= MAX_PREFERENCE_MODEL_LENGTH,
+    mode: item => typeof item === 'string' && (!item || Object.hasOwn(SCHEDULER_MODES, item)),
+  };
+  return Object.entries(value).every(([field, item]) => Object.hasOwn(fields, field) && fields[field](item));
+}
+
+/** Update software defaults or form preferences independently, preserving the other section. */
+export function save_launch_settings(home, input) {
+  const patch = {};
+  if (Object.hasOwn(input, 'participants')) {
+    const participants = {};
+    for (const [name, profile] of Object.entries(input.participants || {})) {
+      if (platform_of(name) !== name) throw new Error(`本机默认配置按平台保存；${name} 的模型与强度只用于本场讨论`);
+      validate_profile(name, profile);
+      participants[name] = profile;
+    }
+    patch.participants = participants;
+  }
+  if (Object.hasOwn(input, 'create_preferences')) {
+    validate_create_preferences(input.create_preferences);
+    patch.create_preferences = input.create_preferences;
+  }
   mkdirSync(home, { recursive: true, mode: 0o700 });
-  atomic_json(join(home, 'launch-settings.json'), settings);
-  return settings;
+  const lock = new DatabaseSync(join(home, 'launch-settings-lock.sqlite3'));
+  try {
+    lock.exec(`PRAGMA busy_timeout=${SETTINGS_LOCK_WAIT_MS}; BEGIN IMMEDIATE`);
+    const previous = launch_settings(home);
+    const settings = { ...previous, ...patch };
+    if (patch.create_preferences) settings.create_preferences = { ...previous.create_preferences, ...patch.create_preferences };
+    atomic_json(join(home, 'launch-settings.json'), settings);
+    lock.exec('COMMIT');
+    return settings;
+  } finally { lock.close(); }
 }
 
 const PROJECT_NAME_LIMIT = 80;

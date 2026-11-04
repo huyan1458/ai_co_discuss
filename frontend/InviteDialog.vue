@@ -178,7 +178,8 @@ async function submit_invitation() {
       </div>
       <form v-else class="pb-invite" aria-label="邀请专家" @submit.prevent="invite">
         <RosterAdd label="选择 AI（可多选）" :items="library_items" @add="add_library_item" @remove="(value) => bridge.delete_expert_preset(value.slice(PRESET_PREFIX.length))" />
-        <WorkflowPicker :selected="invite_workflow?.id || ''" :disabled="submitting" :members="invite_picks.filter((pick) => pick.card).map((pick) => bridge.display_name(pick.name))" @choose="choose_workflow" />
+        <p v-if="invite_workflow" class="fine-print">工作流：{{ invite_workflow.label }}</p>
+        <WorkflowPicker v-else :disabled="submitting" />
         <p v-for="member in invite_workflow?.existing || []" :key="member.card" class="fine-print">{{ bridge.display_name(member.name) }}：{{ record(member.name)?.status === 'away' ? '确认后请回，保留原会话' : '已在场，沿用原成员' }}</p>
         <div v-if="invite_picks.length" class="pb-invite-cards">
           <div v-for="pick in invite_picks" :key="pick.id" class="pb-invite-pick">

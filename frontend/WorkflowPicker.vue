@@ -1,19 +1,22 @@
 <script setup>
 /**
- * The "工作流" row shared by the new-room form and the invite dialog. Choosing one brings its cards as members;
- * the chosen one shows its description with 查看说明 / 编辑; 添加 creates one or imports a zip or folder.
+ * Browse and edit the workflow library from the new-room form or invite dialog.
+ * Selection only opens its description and 查看说明 / 编辑; it never adds members or enables a workflow.
  */
 import { computed, inject, ref } from "vue";
 import WorkflowEditor from "./WorkflowEditor.vue";
 import { workflow_files_from_folder, workflow_files_from_zip } from "./workflow-files.js";
 import { access_label } from "../runner/expert_prompts.mjs";
 
-// `members`: display names of the members the chosen workflow brought into this form.
-const props = defineProps({ selected: { type: String, default: "" }, disabled: Boolean, members: { type: Array, default: () => [] } });
-const emit = defineEmits(["choose"]);
+const props = defineProps({ disabled: Boolean, remember: Boolean });
 const { view, bridge } = inject("discussion");
+const local_selection = ref("");
+const selected = computed({
+  get: () => props.remember ? view.value.launch.create_preferences?.workflow_id || "" : local_selection.value,
+  set: value => { if (props.remember) bridge.write_create_preferences({ workflow_id: value }); else local_selection.value = value; },
+});
 const workflows = computed(() => view.value.launch.workflows || []);
-const current = computed(() => workflows.value.find((item) => item.id === props.selected));
+const current = computed(() => workflows.value.find((item) => item.id === selected.value));
 const editing = ref(false);
 const editor_id = ref("");
 const editor_draft = ref(null);
@@ -58,20 +61,20 @@ function on_folder(event) {
 
 /** Show the chosen workflow's SKILL.md and cards, read-only. */
 async function show() {
-  try { viewing.value = await bridge.local_request("workflows", { action: "get", id: props.selected }); }
+  try { viewing.value = await bridge.local_request("workflows", { action: "get", id: selected.value }); }
   catch (error) { bridge.notify("error", error.message); }
 }
 
-/** A saved workflow is chosen (again), so this form's cards follow what was just saved. */
+/** Keep the saved workflow open for browsing without changing the room's member draft. */
 async function on_saved(workflow) {
   await bridge.reload_workflows();
-  emit("choose", workflow.id);
+  selected.value = workflow.id;
 }
 
-/** A deleted workflow leaves the choice; its members stay as ordinary members. */
+/** Clear the library selection when the selected workflow was deleted. */
 async function on_deleted(id) {
   await bridge.reload_workflows();
-  if (props.selected === id) emit("choose", "");
+  if (selected.value === id) selected.value = "";
 }
 </script>
 
@@ -80,7 +83,7 @@ async function on_deleted(id) {
     <span class="workflow-picker-label">工作流</span>
     <div class="workflow-picker-chips" role="group" aria-label="工作流">
       <button v-for="item in workflows" :key="item.id" type="button" :disabled="disabled || Boolean(item.error)" :class="{ 'is-selected': selected === item.id, 'is-broken': item.error }"
-        :aria-pressed="selected === item.id" :title="item.error || `${item.label}（${item.cards} 张卡片）`" @click="emit('choose', selected === item.id ? '' : item.id)">
+        :aria-pressed="selected === item.id" :title="item.error || `${item.label}（${item.cards} 张卡片）`" @click="selected = selected === item.id ? '' : item.id">
         <UIcon :name="item.error ? 'i-lucide-triangle-alert' : selected === item.id ? 'i-lucide-check' : 'i-lucide-workflow'" />{{ item.label }}
       </button>
       <UDropdownMenu :items="add_items" :disabled="disabled" :ui="{ content: 'channel-menu' }">
@@ -89,7 +92,6 @@ async function on_deleted(id) {
     </div>
     <div v-if="current" class="workflow-picker-detail">
       <p>{{ current.description || '没有描述。' }}</p>
-      <p v-if="members.length" class="workflow-picker-members">带来 {{ members.length }} 位成员：{{ members.join('、') }}</p>
       <span class="workflow-picker-actions">
         <button type="button" @click="show"><UIcon name="i-lucide-book-open" />查看说明</button>
         <button type="button" :disabled="disabled" @click="open_editor(current.id)"><UIcon name="i-lucide-pencil" />编辑</button>
@@ -130,7 +132,6 @@ async function on_deleted(id) {
 .workflow-picker-chips span[class*="i-lucide"], .workflow-picker-add span { width: 12px; height: 12px; flex-shrink: 0; }
 .workflow-picker-detail { grid-column: 2; display: grid; gap: 2px; padding: 8px 10px; border-left: 2px solid var(--channel-accent); border-radius: 0 8px 8px 0; background: var(--ui-bg-elevated); font-size: 12px; }
 .workflow-picker-detail p { margin: 0; color: var(--ui-text-toned); overflow-wrap: anywhere; }
-.workflow-picker-members { color: var(--ui-text-muted) !important; }
 .workflow-picker-actions { display: flex; flex-wrap: wrap; gap: 12px; margin-top: 4px; }
 .workflow-picker-actions button { display: inline-flex; align-items: center; gap: 4px; color: var(--ui-text-muted); font-size: 12px; }
 .workflow-picker-actions button:hover:not(:disabled) { color: var(--channel-accent); }

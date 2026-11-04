@@ -118,8 +118,7 @@ function choose_drive(value) {
 const has_local = (name) => bridge.launch_clients[name]?.some((item) => item.value !== "api");
 /** Each member chooses its delivery: woken by the local service, or started by hand. A web AI joins as a manual member. */
 // Manual needs no local software, so any platform can be pasted into whichever AI the user runs by hand.
-// A workflow's agents are temporary members the program starts; they are never joined by hand.
-const access_choices = (name) => driven.value && name === host.value ? [] : workflow_of(name) ? ["cli"] : ["cli", "manual"];
+const access_choices = (name) => driven.value && name === host.value ? [] : ["cli", "manual"];
 
 /** Store one selected expert's delivery, already prepared by its card, and keep the host valid. */
 function set_expert_mode(name, mode) {
@@ -161,19 +160,6 @@ function add_expert(name) {
   else set_expert_mode(name, "cli");
   ensure_host();
 }
-
-/** The workflow a card came from: its prompt then follows the workflow and is read-only here. */
-const workflow_of = (name) => view.value.create_workflow && Object.values(view.value.create_workflow.members).includes(name) ? view.value.create_workflow.label : "";
-
-/** Choosing a workflow adds its cards as preset-made members; choosing it again only forgets the choice, the cards stay. */
-async function choose_workflow(id) {
-  await act("choose_create_workflow", id);
-  ensure_host();
-}
-
-// The members the chosen workflow brought that are still in the form; once the user removes them all, the choice goes too.
-const workflow_members = computed(() => Object.values(view.value.create_workflow?.members || {}).filter((name) => selected.value[name]));
-watch(() => view.value.create_workflow && !workflow_members.value.length, (orphaned) => { if (orphaned) act("choose_create_workflow", ""); });
 
 /** Remove a role, repair the host and return keyboard focus to the library entry. */
 function remove_expert(name) {
@@ -222,7 +208,7 @@ const summary = computed(() => {
         <RosterAdd ref="library" label="添加 AI" :items="library_items" @add="add_expert" @remove="(value) => bridge.delete_expert_preset(value.slice(PRESET_PREFIX.length))" />
         <div v-if="selected_names.length" class="create-experts" role="group" aria-label="参与的 AI">
           <ExpertCard v-for="name in selected_names" :key="name" :name="name" :mode="selected[name]" :choices="access_choices(name)"
-            :status="expert_status(name)" :host="host === name" :hostable="host_options.includes(name)" hosting :workflow="workflow_of(name)"
+            :status="expert_status(name)" :host="host === name" :hostable="host_options.includes(name)" hosting
             @host="write('host', name)" @remove="remove_expert(name)" @mode="set_expert_mode(name, $event)" />
         </div>
         <p v-else class="create-experts-empty">请至少添加一位成员。同一平台可添加多位，各自独立会话。</p>
@@ -235,7 +221,7 @@ const summary = computed(() => {
 
       <section class="create-section">
         <h3><span>3</span>协作方式（可选）</h3>
-        <WorkflowPicker :selected="view.create_workflow?.id || ''" :members="workflow_members.map((name) => bridge.member_label(name))" @choose="choose_workflow" />
+        <WorkflowPicker remember />
         <HostWorkflowSwitch v-if="view.launch.available || view.launch.remote" :model-value="Boolean(view.create_host_workflows)" @update:model-value="bridge.write_create_host_workflows($event)" />
         <div class="create-drive">
           <span>创建后</span>
@@ -253,7 +239,7 @@ const summary = computed(() => {
           @update:objective="bridge.write_create_goal({ objective: $event })" @update:continues="bridge.write_create_goal({ max_continues: $event })" @update:minutes="bridge.write_create_goal({ max_minutes: $event })" />
       </section>
 
-      <details class="create-advanced">
+      <details class="create-advanced" :open="Boolean(view.launch.create_preferences?.advanced_open)" @toggle="bridge.write_create_preferences({ advanced_open: $event.target.open })">
         <summary><UIcon name="i-lucide-chevron-right" class="create-advanced-icon" />高级设置<small>连续派活 {{ view.create_chain_rounds }} 轮</small></summary>
         <ChainRoundsField :model-value="view.create_chain_rounds" @update:model-value="bridge.write_create_chain_rounds($event)">建房后可在房间页修改。</ChainRoundsField>
       </details>

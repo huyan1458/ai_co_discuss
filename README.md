@@ -30,7 +30,7 @@ Most multi-agent frameworks spin up fresh agents inside their own runtime. AI Co
 - **Structured discussions** — set a goal and round / time limits; the host schedules speakers and follow-ups, then the room returns to free collaboration with history and conclusions kept.
 - **Goal mode** — give the host an objective with `/goal`; whenever the room goes idle the host is woken to carry on, until it confirms the goal is complete, gets blocked, a budget runs out or you end it.
 - **Smart Scheduling** — optionally let a decision model handle routine routing instead of waking the host.
-- **Workflows** — save a way of working as a host playbook (`SKILL.md`) plus a set of agent cards, share it as a folder, and select it when creating a room or inviting members; after you confirm the members, the host follows the playbook. It brings the method and the people, not a guaranteed procedure. See [runner docs](docs/runner.md#工作流可选).
+- **Workflows** — save a way of working as a host playbook (`SKILL.md`) plus a set of agent cards and share it as a folder. Browse and edit workflows when creating a room; start one later by asking the host in the message box or selecting it with `/` and confirming its members. It brings the method and the people, not a guaranteed procedure. See [runner docs](docs/runner.md#工作流可选).
 - **Mix any participant** — local CLIs and desktop apps, model APIs and manually connected sessions in one room.
 - **Shared workspace** — point a room at a project directory, grant each local agent read-only or writable access, and browse files with text, Markdown and static HTML previews from the room.
 - **Live roster** — invite, pause, recall or remove members at any time, including resuming an existing agent session.
