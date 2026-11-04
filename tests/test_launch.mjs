@@ -10,8 +10,8 @@ import { PassThrough } from 'node:stream';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import { test } from 'node:test';
 
-import { adopt_member_profile, borrowed_session, launch_discussion, launch_settings, room_configuration, room_files, room_models, room_member, room_member_model, room_workflow, save_launch_projects, save_launch_settings, validate_preset } from '../runner/discussion_launch.mjs';
-import { save_workflow } from '../runner/workflows.mjs';
+import { adopt_member_profile, adopt_workflow, borrowed_session, launch_discussion, launch_settings, room_configuration, room_files, room_models, room_member, room_member_model, room_workflow, save_launch_projects, save_launch_settings, validate_preset } from '../runner/discussion_launch.mjs';
+import { get_workflow, list_workflows, save_workflow } from '../runner/workflows.mjs';
 import { read_project_files } from '../runner/project_files.mjs';
 import { api, DiscussionStore, load_config } from '../runner/discussion_runner.mjs';
 import { FreeRoomRunner } from '../runner/free_runner.mjs';
@@ -838,6 +838,41 @@ test('room cards preserve member text and portable settings without removed memb
   for (const card of result.body.cards) assert.ok(Object.keys(card).every(key =>
     ['card', 'name', 'label', 'description', 'system_prompt', 'project_access', 'model', 'effort'].includes(key)));
   assert.doesNotMatch(JSON.stringify(result.body), new RegExp(token));
+});
+
+test('only the host of a room whose owner allowed it adopts a workflow, inviting its cards with at most write access', async t => {
+  const f = await fixture(t), token = randomUUID() + randomUUID();
+  save_launch_settings(f.home, { participants: f.input.participants });
+  const launched = await launch_discussion(f.home, { site: f.site, entry: 'web', participants: f.input.participants, token,
+    room: { title: '主持人自建', mode: 'free', host: 'Codex', members: ['Codex'], submission_id: randomUUID() } }, f.options);
+  const config = load_config(launched.config_path), input = { site: f.site, room_id: launched.room.id, token };
+  const access = (name, member_token) => {
+    const path = join(f.directory, `${name}.access.json`);
+    writeFileSync(path, JSON.stringify({ site: f.site, room: config.room, member: name, token: member_token }));
+    return path;
+  };
+  const host_access = access('Codex', config.members.Codex.token);
+  const draft = join(f.directory, 'draft.md');
+  writeFileSync(draft, '<!-- workflow-part: 1/1 id: serial -->\n<!-- workflow-file: SKILL.md -->\n---\nname: serial\nlabel: 连载\n---\n先写再审。\n'
+    + '<!-- workflow-file: agents/writer.md -->\n---\nname: Claude-writer\nlabel: 写手\nproject_access: full\n---\n按任务书写。\n');
+  await assert.rejects(adopt_workflow(f.home, { access_file: host_access, draft_file: draft }), /没有允许/);
+  assert.equal(list_workflows(f.home).length, 0);
+  await room_workflow(f.home, { ...input, action: 'host', allowed: true });
+  await assert.rejects(adopt_workflow(f.home, { access_file: access('Other', randomUUID() + randomUUID()), draft_file: draft }), /只有本房间的主持人/);
+  const adopted = await adopt_workflow(f.home, { access_file: host_access, draft_file: draft });
+  assert.deepEqual(adopted.members, { writer: 'Claude-writer' });
+  assert.equal(get_workflow(f.home, 'serial').agents[0].project_access, 'write');
+  const saved = load_config(launched.config_path);
+  assert.deepEqual(saved.workflow, { id: 'serial', enabled: true, members: { writer: 'Claude-writer' } });
+  assert.equal(saved.participants['Claude-writer'].project_access, 'write');
+  const room = await api(config, '');
+  assert.equal(room.free.members.find(member => member.name === 'Claude-writer').status, 'active');
+  assert.equal(room.labels['Claude-writer'], '写手');
+  // The same ID again updates the workflow in place and keeps the present member.
+  writeFileSync(draft, readFileSync(draft, 'utf8').replace('先写再审。', '先写，再审，再改。'));
+  assert.deepEqual((await adopt_workflow(f.home, { access_file: host_access, draft_file: draft })).members, { writer: 'Claude-writer' });
+  assert.equal(get_workflow(f.home, 'serial').skill, '先写，再审，再改。');
+  assert.equal((await api(config, '')).free.members.length, 2);
 });
 
 test('a room without a project keeps its workflow at creation, disables work and recalls the original members', async t => {

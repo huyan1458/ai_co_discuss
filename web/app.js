@@ -127,6 +127,7 @@ state.admin = { loaded: false, local: false, registered: false, setup_available:
 state.launch = { available: false, remote: false, relay: null, connect_command: "", profiles: {}, projects: [], presets: [], builtin_presets: [], workflows: [], description_templates: {}, workspace: {}, scheduler: {}, error: "", recoveries: [] };
 // The workflow chosen in the new-room form: { id, label, members: { card: instance } }; cards removed from the form drop out at submission.
 state.create_workflow = null;
+state.create_host_workflows = false;
 const PLATFORM_CLIENTS = { Codex: [{ value: "codex_cli", label: "Codex CLI" }, { value: "codex", label: "Codex App" }],
   Claude: [{ value: "claude", label: "Claude Code CLI" }],
   Antigravity: [{ value: "antigravity_cli", label: "Antigravity CLI" }, { value: "antigravity", label: "Antigravity App" }] };
@@ -1142,6 +1143,7 @@ function reset_create_form() {
   state.create_discussion = false;
   state.create_chain_rounds = DEFAULT_CHAIN_ROUNDS;
   state.create_workflow = null;
+  state.create_host_workflows = false;
   state.launch.profiles = JSON.parse(JSON.stringify(state.launch.saved_profiles || {}));
   Object.values(state.launch.profiles).forEach(fill_api_key);
   render_launch_settings();
@@ -2486,7 +2488,8 @@ async function load_room_models() {
   try {
     const result = await local_launch_request("room-models", { room_id: room.id, quick: true });
     if (live() && result.room_id === room.id) Object.assign(current, { participants: result.participants, registered: result.registered,
-      scheduler: result.scheduler || null, project_directory: result.project_directory || "", workflow: result.workflow || null });
+      scheduler: result.scheduler || null, project_directory: result.project_directory || "", workflow: result.workflow || null,
+      host_workflows: Boolean(result.host_workflows) });
   } catch (error) {
     // Unavailable or older bridges leave the model unknown; the failure is kept so the page can say so, and the next refresh retries.
     Object.assign(current, { participants: null, error: error.message || "读取失败" });
@@ -2718,7 +2721,7 @@ function launch_options() {
 function creation_launch_options() {
   const { enabled, provider, model, api_key_ref, mode } = state.launch.scheduler;
   return { ...launch_options(), ...(enabled && provider && model && api_key_ref ? { scheduler: { provider, model, api_key_ref, ...(mode ? { mode } : {}) } } : {}),
-    ...creation_workflow() };
+    ...creation_workflow(), ...(state.create_host_workflows ? { host_workflows: true } : {}) };
 }
 
 /** The new room's workflow, naming only the cards still in the form as woken members. */
@@ -2727,6 +2730,21 @@ function creation_workflow() {
   const chosen = read_expert_inputs("new-expert-modes");
   const members = Object.fromEntries(Object.entries(state.create_workflow.members).filter(([, name]) => chosen[name] === "cli"));
   return Object.keys(members).length ? { workflow: { id: state.create_workflow.id, members } } : {};
+}
+
+/** Whether the new room's host may save and enable workflows by itself, inviting their cards. */
+function write_create_host_workflows(value) {
+  state.create_host_workflows = Boolean(value);
+  publish_view();
+}
+
+/** Grant or withdraw this room's host the right to save and enable workflows by itself. */
+async function set_room_host_workflows(allowed) {
+  const room_id = state.room.id;
+  const token = localStorage.getItem(`discuss-access:${room_id}`);
+  if (!token) throw new Error("此浏览器缺少房间控制凭据，请使用创建房间的浏览器");
+  await local_launch_request("room-workflow", { room_id, token, action: "host", allowed: Boolean(allowed) });
+  await reload_room_models();
 }
 
 // Workflows: a host's SKILL.md plus agent cards, kept on this computer and enabled per room.
@@ -4008,7 +4026,7 @@ function view_snapshot() {
     mention_only: state.mention_only, host_only: state.host_only, reply_to: state.reply_to, editing_queued: state.editing_queued?.id ?? null,
     access: access_snapshot(), admin: admin_snapshot(),
     tab: state.tab, snapshot_id: state.snapshot_id, context_dirty: state.context_dirty,
-    theme: document.documentElement.dataset.theme, fields, experts, launch: structuredClone(state.launch), named_followup: state.named_followup, create_discussion: state.create_discussion, create_chain_rounds: state.create_chain_rounds, create_workflow: state.create_workflow };
+    theme: document.documentElement.dataset.theme, fields, experts, launch: structuredClone(state.launch), named_followup: state.named_followup, create_discussion: state.create_discussion, create_chain_rounds: state.create_chain_rounds, create_workflow: state.create_workflow, create_host_workflows: state.create_host_workflows };
 }
 
 /** Update a shared draft using the same input events as the original controls. */
@@ -4221,7 +4239,7 @@ async function execute_view_action(name, value) {
     download_member_access, copy_member_access_text, copy_member_join, copy_member_launch: name => copy_member_join(name, true), pause_discussion, restart_discussion, start_room_discussion, end_room_discussion,
     save_launch_defaults, resume_launch, discard_launch, retry_launch_connection, check_launch_connection: load_launch_settings,
     load_room_configuration, save_room_configuration, interrupt_member, retry_delivery, retract_message, retract_latest, stop_room, rewind_and_send, fork_room, change_member, reorder_speakers, invite_member,
-    choose_create_workflow, enable_room_workflow, disable_room_workflow,
+    choose_create_workflow, enable_room_workflow, disable_room_workflow, set_room_host_workflows,
     adopt_recommendation, rate_decision,
     queue_send: id => queue_request({ action: "send", id }), queue_delete: id => queue_request({ action: "delete", id }),
     queue_reorder: ids => queue_request({ action: "reorder", ids }), queue_resume: () => queue_request({ action: "resume" }),
@@ -4249,7 +4267,7 @@ window.discuss_view = { snapshot: view_snapshot, write_field: write_view_field, 
   start_drag: start_directory_drag, reconnect: reconnect_live_updates, stop_label, local_request: local_launch_request,
   attachment_markup, attachment_size, attachment_file_icon, drop_attachments, paste_attachments,
   write_expert: write_view_expert, add_instance: add_view_instance, add_preset: add_preset_instance, platform_of, execute: execute_view_action, theme: change_view_theme,
-  reload_workflows, workflow_preset, create_workflow_label,
+  reload_workflows, workflow_preset, create_workflow_label, write_create_host_workflows,
   admin: { register: register_admin, login: login_admin, logout: logout_admin,
     update_profile: update_admin_profile, avatar_from_file: admin_avatar_from_file, validate: validate_admin_form },
   request: request_json, rewind_plan, identities: IDENTITIES, display_name, mention_handles, mentioned_members, render_room_markdown, sources: SOURCE_LABELS,

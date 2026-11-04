@@ -9,6 +9,7 @@ import ProjectDirectoryField from "./ProjectDirectoryField.vue";
 import RosterAdd from "./RosterAdd.vue";
 import SchedulerSettings from "./SchedulerSettings.vue";
 import WorkflowPicker from "./WorkflowPicker.vue";
+import HostWorkflowSwitch from "./HostWorkflowSwitch.vue";
 
 const props = defineProps({ targetFolder: { type: Object, default: null } });
 const emit = defineEmits(["submit", "cancel"]);
@@ -99,7 +100,8 @@ function toggle_discussion(enabled) {
 const has_local = (name) => bridge.launch_clients[name]?.some((item) => item.value !== "api");
 /** Each member chooses its delivery: woken by the local service, or started by hand. A web AI joins as a manual member. */
 // Manual needs no local software, so any platform can be pasted into whichever AI the user runs by hand.
-const access_choices = (name) => discussing.value && name === host.value ? [] : ["cli", "manual"];
+// A workflow's agents are temporary members the program starts; they are never joined by hand.
+const access_choices = (name) => discussing.value && name === host.value ? [] : workflow_of(name) ? ["cli"] : ["cli", "manual"];
 
 /** Store one selected expert's delivery, already prepared by its card, and keep the host valid. */
 function set_expert_mode(name, mode) {
@@ -196,6 +198,7 @@ const summary = computed(() => {
         <h3><span>2</span>谁来参与</h3>
         <RosterAdd ref="library" label="添加 AI" :items="library_items" @add="add_expert" @remove="(value) => bridge.delete_expert_preset(value.slice(PRESET_PREFIX.length))" />
         <WorkflowPicker :selected="view.create_workflow?.id || ''" @choose="choose_workflow" />
+        <HostWorkflowSwitch v-if="view.launch.available || view.launch.remote" :model-value="Boolean(view.create_host_workflows)" @update:model-value="bridge.write_create_host_workflows($event)" />
         <div v-if="selected_names.length" class="create-experts" role="group" aria-label="参与的 AI">
           <ExpertCard v-for="name in selected_names" :key="name" :name="name" :mode="selected[name]" :choices="access_choices(name)"
             :status="expert_status(name)" :host="host === name" :hostable="host_options.includes(name)" hosting :workflow="workflow_of(name)"

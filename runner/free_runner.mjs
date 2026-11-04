@@ -124,6 +124,7 @@ export function free_task_files(config, member, execution, binding, { session = 
     read_after: execution.read_until, cwd: profile.cwd || null, project_access: profile.project_access, draft_directory,
     skills: [...skills.map(file => join(config.project, '.agents/skills', file)), ...(host_workflow ? [host_workflow.skill_path] : [])],
     ...(workflow_field ? { workflow: workflow_field } : {}),
+    ...(member.role === 'host' && config.host_workflows ? { host_workflows: true } : {}),
     cli, subcommands: TASK_SUBCOMMANDS,
     ...(bound_access ? { access_env: 'DISCUSS_ACCESS_FILE' } : { access_file: access_path }), instructions });
   return { id, participant: member.name, directory: config.directory, draft_directory,

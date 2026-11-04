@@ -2,6 +2,7 @@
 /** Right-rail board of a free room, laid out like the discussion progress board. */
 import { computed, inject, ref, watch } from "vue";
 import InviteDialog from "./InviteDialog.vue";
+import HostWorkflowSwitch from "./HostWorkflowSwitch.vue";
 import StartDiscussionDialog from "./StartDiscussionDialog.vue";
 import ProgressBoard from "./ProgressBoard.vue";
 import SpeakingOrder from "./SpeakingOrder.vue";
@@ -18,7 +19,8 @@ const free = computed(() => room.value.free || {});
 const discussion = computed(() => ["active", "paused"].includes(room.value.session?.status));
 const current_round = computed(() => discussion.value ? room.value.current_turn?.round || (room.value.completed_rounds || 0) + 1 : 0);
 const host = computed(() => (free.value.members || []).find((member) => member.role === "host" && member.status === "active"));
-const workflow = computed(() => view.value.launch.room_models?.workflow || null);
+const room_models = computed(() => view.value.launch.room_models || null);
+const workflow = computed(() => room_models.value?.workflow || null);
 const in_workflow = (name) => Boolean(workflow.value?.enabled && Object.values(workflow.value.members || {}).includes(name));
 const invite_workflow_id = ref("");
 
@@ -217,14 +219,18 @@ watch(() => room.value.id, () => { starting.value = false; });
       <p class="pb-focus" :class="{ 'is-expanded': task_expanded }">{{ task }}</p>
       <button v-if="task.length > TASK_PREVIEW_LENGTH" type="button" class="pb-link" @click="task_expanded = !task_expanded">{{ task_expanded ? '收起' : '展开' }}</button>
     </section>
-    <section v-if="workflow" class="pb-section" aria-label="房间工作流">
+    <section v-if="workflow || room_models?.registered" class="pb-section" aria-label="房间工作流">
       <h4>工作流</h4>
-      <p class="pb-workflow-name">{{ workflow.label }} · {{ !workflow.available ? '不可用' : workflow.enabled ? '已启用' : '已停用' }}</p>
-      <p v-if="!workflow.available" class="pb-free-note">无法读取工作流，成员沿用房间里的提示词。</p>
-      <template v-if="view.access?.can_manage && !room.archived">
-        <UButton v-if="workflow.enabled" label="停用" size="sm" color="neutral" variant="outline" :disabled="Boolean(pending)" @click="disable_workflow" />
-        <UButton v-else-if="workflow.available" label="重新启用" size="sm" color="neutral" variant="outline" :disabled="Boolean(pending)" @click="invite_workflow_id = workflow.id; inviting = true" />
+      <template v-if="workflow">
+        <p class="pb-workflow-name">{{ workflow.label }} · {{ !workflow.available ? '不可用' : workflow.enabled ? '已启用' : '已停用' }}</p>
+        <p v-if="!workflow.available" class="pb-free-note">无法读取工作流，成员沿用房间里的提示词。</p>
+        <template v-if="view.access?.can_manage && !room.archived">
+          <UButton v-if="workflow.enabled" label="停用" size="sm" color="neutral" variant="outline" :disabled="Boolean(pending)" @click="disable_workflow" />
+          <UButton v-else-if="workflow.available" label="重新启用" size="sm" color="neutral" variant="outline" :disabled="Boolean(pending)" @click="invite_workflow_id = workflow.id; inviting = true" />
+        </template>
       </template>
+      <HostWorkflowSwitch v-if="room_models?.registered" class="pb-host-workflows" :model-value="Boolean(room_models.host_workflows)"
+        :disabled="Boolean(pending) || !view.access?.can_manage || room.archived" @update:model-value="act('set_room_host_workflows', $event)" />
     </section>
     <section class="pb-section" aria-label="发言顺序">
       <h4>发言顺序</h4>
@@ -271,6 +277,7 @@ watch(() => room.value.id, () => { starting.value = false; });
 <style scoped>
 .pb-member.is-away { opacity: .6; }
 .pb-workflow-name { margin: 0 0 8px; color: var(--ui-text-toned); font-size: 12px; overflow-wrap: anywhere; }
+.pb-host-workflows { margin-top: 8px; }
 .pb-workflow-member { color: var(--ui-text-muted); font-size: 10px; }
 .pb-member-model { margin: 2px 0; color: var(--ui-text-muted); font-size: 11px; line-height: 1.5; overflow-wrap: anywhere; }
 /* A member with a nickname also shows its ID, which AI messages, @ and records use. */
