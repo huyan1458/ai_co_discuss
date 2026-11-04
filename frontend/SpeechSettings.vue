@@ -18,6 +18,8 @@ const FILE_KEY = ":file";
 const loaded = ref(false), unavailable = ref(""), busy = ref("");
 // A newly typed key per service, cleared once stored.
 const typed_keys = reactive({});
+// Whether a typed key shows in clear, per service.
+const visible_keys = reactive({});
 // Collapsed by default; the header still says whether speech is ready.
 const open = ref(false);
 const service = computed(() => settings.catalog.find((item) => item.id === settings.provider) || {});
@@ -108,23 +110,22 @@ async function preview(platform) {
             <div class="speech-row"><span>服务</span>
               <div class="speech-rates" role="group" aria-label="朗读语音服务"><UButton v-for="item in settings.catalog" :key="item.id" :label="item.label" color="neutral" variant="ghost" size="xs" :class="{ chosen: settings.provider === item.id }" :aria-pressed="settings.provider === item.id" @click="choose(item.id)" /></div>
             </div>
-            <p class="fine-print speech-note">{{ service.note }}<a :href="service.console_url" target="_blank" rel="noopener">打开控制台</a>获取 API Key。密钥只存这台电脑，费用按你的账号计费。</p>
+            <p class="fine-print speech-note" :title="service.note">{{ service.note }} · <a :href="service.console_url" target="_blank" rel="noopener">控制台</a></p>
             <label class="speech-row"><span>密钥</span>
-              <UInput v-model="typed_keys[service.id]" type="text" autocomplete="off" spellcheck="false" data-1p-ignore data-lpignore="true" :placeholder="own.api_key_ref ? `${SAVED_MARK}（输入新 Key 可更换）` : '粘贴 API Key'" :aria-label="`${service.label} API Key`" size="sm" class="w-full speech-key" :loading="busy === `key:${service.id}`" @change="save_key(service)" />
+              <!-- A text field masked by CSS keeps browsers from offering to generate or save a password. -->
+              <UInput v-model="typed_keys[service.id]" type="text" autocomplete="off" spellcheck="false" data-1p-ignore data-lpignore="true" :placeholder="own.api_key_ref ? SAVED_MARK : '粘贴 API Key，只存这台电脑'" :title="own.api_key_ref && !typed_keys[service.id] ? '已保存；本机不回传密钥，输入新 Key 可更换' : undefined" :aria-label="`${service.label} API Key`" size="sm" class="w-full" :loading="busy === `key:${service.id}`" :ui="{ base: visible_keys[service.id] ? '' : 'speech-key-masked', trailing: 'pe-0.5' }" @change="save_key(service)">
+                <template #trailing><UButton :icon="visible_keys[service.id] ? 'i-lucide-eye' : 'i-lucide-eye-off'" :disabled="!typed_keys[service.id]" :aria-label="visible_keys[service.id] ? '隐藏密钥' : '显示密钥'" :aria-pressed="Boolean(visible_keys[service.id])" size="xs" color="neutral" variant="link" @click="visible_keys[service.id] = !visible_keys[service.id]" /></template>
+              </UInput>
             </label>
-            <label v-if="service.region" class="speech-row"><span>区域</span>
-              <UInput v-model="own.region" placeholder="语音资源所在区域，如 eastasia" aria-label="Azure 区域" size="sm" class="w-full" @change="save" />
+            <!-- Rows a service does not use stay in place, disabled, so switching services never moves the rows below. -->
+            <label class="speech-row"><span>区域</span>
+              <UInput v-if="service.region" v-model="own.region" placeholder="语音资源所在区域，如 eastasia" aria-label="Azure 区域" size="sm" class="w-full" @change="save" />
+              <UInput v-else disabled placeholder="此服务无需区域" aria-label="区域" size="sm" class="w-full" />
             </label>
             <div class="speech-row"><span>通用</span>
               <div class="speech-inline">
                 <USelectMenu :model-value="own.speaker" :items="voice_items" value-key="value" create-item :search-input="{ placeholder: '搜索或输入音色 ID' }" aria-label="通用音色" size="sm" class="min-w-0 flex-1" @update:model-value="set_voice('', $event)" @create="set_voice('', $event)" />
                 <UButton icon="i-lucide-volume-2" aria-label="试听通用音色" color="neutral" variant="ghost" size="sm" :loading="busy === 'preview:'" :disabled="!settings.api_key_ref || Boolean(busy)" @click="preview('')" />
-              </div>
-            </div>
-            <div v-for="platform in platforms" :key="platform.name" class="speech-row"><span :title="platform.label">{{ platform.label }}</span>
-              <div class="speech-inline">
-                <USelectMenu :model-value="own.member_voices[platform.name] || ''" :items="platform_items" value-key="value" create-item :search-input="{ placeholder: '搜索或输入音色 ID' }" :aria-label="`${platform.label} 的音色`" size="sm" class="min-w-0 flex-1" @update:model-value="set_voice(platform.name, $event)" @create="set_voice(platform.name, $event)" />
-                <UButton icon="i-lucide-volume-2" :aria-label="`试听 ${platform.label} 的音色`" color="neutral" variant="ghost" size="sm" :loading="busy === `preview:${platform.name}`" :disabled="!settings.api_key_ref || Boolean(busy)" @click="preview(platform.name)" />
               </div>
             </div>
             <div class="speech-row"><span>文件</span>
@@ -133,18 +134,28 @@ async function preview(platform) {
                 <UButton icon="i-lucide-volume-2" aria-label="试听朗读文件的音色" color="neutral" variant="ghost" size="sm" :loading="busy === `preview:${FILE_KEY}`" :disabled="!settings.api_key_ref || Boolean(busy)" @click="preview(FILE_KEY)" />
               </div>
             </div>
-            <p class="fine-print speech-note">没单独设置的 AI、你自己的消息、程序消息和文件都用通用音色；每个服务的密钥与音色分开保存，切回时仍在。</p>
+            <div v-for="platform in platforms" :key="platform.name" class="speech-row"><span :title="platform.label">{{ platform.label }}</span>
+              <div class="speech-inline">
+                <USelectMenu :model-value="own.member_voices[platform.name] || ''" :items="platform_items" value-key="value" create-item :search-input="{ placeholder: '搜索或输入音色 ID' }" :aria-label="`${platform.label} 的音色`" size="sm" class="min-w-0 flex-1" @update:model-value="set_voice(platform.name, $event)" @create="set_voice(platform.name, $event)" />
+                <UButton icon="i-lucide-volume-2" :aria-label="`试听 ${platform.label} 的音色`" color="neutral" variant="ghost" size="sm" :loading="busy === `preview:${platform.name}`" :disabled="!settings.api_key_ref || Boolean(busy)" @click="preview(platform.name)" />
+              </div>
+            </div>
+            <p class="fine-print speech-note">未单独设置的 AI 与其他消息用通用音色</p>
             <div class="speech-row"><span>语速</span>
               <div class="speech-rates" role="group" aria-label="朗读语速"><UButton v-for="rate in rates" :key="rate.value" :label="rate.label" color="neutral" variant="ghost" size="xs" :class="{ chosen: settings.speech_rate === rate.value }" :aria-pressed="settings.speech_rate === rate.value" @click="settings.speech_rate = rate.value; save()" /></div>
             </div>
-            <label v-if="service.context" class="speech-row"><span>语气</span>
-              <UInput v-model="settings.context" :maxlength="200" placeholder="可选，如：像朋友聊天一样自然地读" aria-label="朗读语气提示" size="sm" class="w-full" @change="save" />
+            <label class="speech-row"><span>语气</span>
+              <UInput v-if="service.context" v-model="settings.context" :maxlength="200" placeholder="可选，如：像朋友聊天一样自然地读" aria-label="朗读语气提示" size="sm" class="w-full" @change="save" />
+              <UInput v-else disabled placeholder="此服务不支持语气提示" aria-label="朗读语气提示" size="sm" class="w-full" />
             </label>
-            <p class="fine-print speech-note">输入框右下角的播报按钮可开启语音播报：新回复自动朗读回答摘要，并提示轮次、失败与讨论结束。</p>
+            <p class="fine-print speech-note">输入框右下角的播报按钮自动读新回复摘要</p>
             <h4>语音输入</h4>
-            <p class="fine-print">点输入框右下角的麦克风开始说话，再点一次转成文字，单次最长 5 分钟。语音输入使用火山引擎「录音文件识别2.0」<template v-if="settings.provider !== VOICE_INPUT">，需单独填写火山引擎 API Key</template>。</p>
-            <label v-if="input_service" class="speech-row"><span>密钥</span>
-              <UInput v-model="typed_keys[input_service.id]" type="text" autocomplete="off" spellcheck="false" data-1p-ignore data-lpignore="true" :placeholder="settings.providers[input_service.id]?.api_key_ref ? `${SAVED_MARK}（输入新 Key 可更换）` : '粘贴火山引擎 API Key'" aria-label="语音输入的火山引擎 API Key" size="sm" class="w-full speech-key" :loading="busy === `key:${input_service.id}`" @change="save_key(input_service)" />
+            <p class="fine-print speech-note">用火山引擎识别，单次最长 5 分钟</p>
+            <label class="speech-row"><span>密钥</span>
+              <UInput v-if="input_service" v-model="typed_keys[input_service.id]" type="text" autocomplete="off" spellcheck="false" data-1p-ignore data-lpignore="true" :placeholder="settings.providers[input_service.id]?.api_key_ref ? SAVED_MARK : '粘贴火山引擎 API Key'" :title="settings.providers[input_service.id]?.api_key_ref && !typed_keys[input_service.id] ? '已保存；本机不回传密钥，输入新 Key 可更换' : undefined" aria-label="语音输入的火山引擎 API Key" size="sm" class="w-full" :loading="busy === `key:${input_service.id}`" :ui="{ base: visible_keys[input_service.id] ? '' : 'speech-key-masked', trailing: 'pe-0.5' }" @change="save_key(input_service)">
+                <template #trailing><UButton :icon="visible_keys[input_service.id] ? 'i-lucide-eye' : 'i-lucide-eye-off'" :disabled="!typed_keys[input_service.id]" :aria-label="visible_keys[input_service.id] ? '隐藏密钥' : '显示密钥'" :aria-pressed="Boolean(visible_keys[input_service.id])" size="xs" color="neutral" variant="link" @click="visible_keys[input_service.id] = !visible_keys[input_service.id]" /></template>
+              </UInput>
+              <UInput v-else disabled placeholder="与朗读共用上方的火山引擎 Key" aria-label="语音输入的火山引擎 API Key" size="sm" class="w-full" />
             </label>
           </template>
           <p v-else class="fine-print">正在读取语音设置…</p>
@@ -168,10 +179,11 @@ async function preview(platform) {
 .speech-row { display: grid; grid-template-columns: 56px minmax(0, 1fr); align-items: center; gap: 10px; color: var(--ui-text-dimmed); font-size: 12px; }
 .speech-inline { display: flex; gap: 6px; min-width: 0; }
 .speech-row > span:first-child { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.speech-settings .speech-note { padding-left: 66px; }
+/* Notes keep to one line, so their length never shifts the rows below; the full text shows on hover. */
+.speech-settings .speech-note { padding-left: 66px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .speech-follow { display: flex; align-items: center; gap: 8px; color: var(--ui-text-muted); cursor: pointer; }
 .speech-rates { display: flex; flex-wrap: wrap; gap: 2px; padding: 2px; border-radius: 8px; background: var(--ui-bg-elevated); width: fit-content; }
 .speech-rates button { min-width: 44px; justify-content: center; color: var(--ui-text-muted); }
 .speech-rates button.chosen { background: var(--ui-bg-accented); color: var(--ui-text-highlighted); }
-.speech-settings :deep(.speech-key input) { -webkit-text-security: disc; }
+.speech-settings :deep(.speech-key-masked) { -webkit-text-security: disc; }
 </style>

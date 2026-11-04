@@ -99,7 +99,7 @@ const date = (time) => new Date(time).toLocaleString("zh-CN", { month: "numeric"
 <template>
   <section v-if="local || remote || device.needs" class="device-settings" aria-labelledby="device-heading">
     <h4 id="device-heading">已配对的设备</h4>
-    <p class="fine-print">其他设备第一次连接这台电脑时，须输入在电脑或已配对设备上显示的配对码；之后用它自己的通行密钥确认。偷到密码的人无法配对新设备。</p>
+    <p class="fine-print">新设备须扫码配对后才能操作这台电脑。</p>
 
     <form v-if="needs_pairing" class="dialog-form device-pair" aria-label="配对这台设备" @submit.prevent="pair">
       <p class="account-message is-error" role="status">这台设备还没有与电脑配对，暂时不能操作电脑上的房间。</p>
@@ -113,7 +113,7 @@ const date = (time) => new Date(time).toLocaleString("zh-CN", { month: "numeric"
       这台设备的授权已到期。<UButton label="用通行密钥续期" color="neutral" variant="soft" size="xs" :loading="busy === 'renew'" :disabled="Boolean(busy)" @click="run('renew', async () => { await bridge.device.renew(); await load(); })" />
     </p>
     <template v-else>
-      <p v-if="devices && devices.length < 2" class="fine-print">建议至少配对两台设备（例如手机和平板）：丢失其中一台时，还能在外面用另一台撤销它、配对新设备。</p>
+      <p v-if="devices && devices.length < 2" class="fine-print">建议配对两台，丢了一台还能用另一台处理。</p>
       <ul v-if="devices" class="account-device-list">
         <li v-for="item in devices" :key="item.id">
           <span>

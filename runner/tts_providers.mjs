@@ -17,6 +17,8 @@ const VOLC_MESSAGES = {
 };
 const ALIYUN_SOCKET = 'wss://dashscope.aliyuncs.com/api-ws/v1/inference';
 const ALIYUN_MODEL = 'cosyvoice-v3-flash';
+// Its default answered 160 kbps (measured 2026-11-04); 64 kbps (8 KB/s, as Volcengine) keeps a 300-character answer under the 1 MiB relay limit.
+const ALIYUN_BIT_RATE = 64;
 // Aliyun and Azure answer 24 kHz mono MP3, so trailing silence is appended as silent frames of that format.
 const SAMPLE_RATE = 24000;
 // One silent MPEG-2 Layer III frame (24 kHz, 32 kbps, mono): a header and zeroed side info, 576 samples = 24 ms.
@@ -64,13 +66,13 @@ const voices = (list) => list.map(([id, label]) => ({ id, label }));
  */
 export const TTS_PROVIDERS = [
   { id: 'volcengine', label: '火山引擎', key_base_url: 'https://openspeech.bytedance.com', console_url: 'https://console.volcengine.com/speech/new',
-    note: '豆包语音合成 2.0，约 3 元/万字（字数包更便宜）；语音输入也用这个 Key。', voices: voices(VOLC_VOICES),
+    note: '约 3 元/万字，语音输入共用此 Key', voices: voices(VOLC_VOICES),
     default_speaker: 'zh_female_vv_uranus_bigtts', context: true, region: false, voice_input: true },
   { id: 'aliyun', label: '阿里云百炼', key_base_url: 'https://dashscope.aliyuncs.com', console_url: 'https://bailian.console.aliyun.com/?tab=model#/api-key',
-    note: 'CosyVoice v3-flash，1 元/万字符（一个汉字计 2 字符，约 2 元/万字）。', voices: voices(ALIYUN_VOICES),
+    note: '约 2 元/万字（汉字计 2 字符）', voices: voices(ALIYUN_VOICES),
     default_speaker: 'longxiaochun_v3', context: false, region: false, voice_input: false },
   { id: 'azure', label: 'Azure', key_base_url: 'https://tts.speech.microsoft.com', console_url: 'https://portal.azure.com/#create/Microsoft.CognitiveServicesSpeechServices',
-    note: '神经语音，免费档 F0 每月 50 万字符（一个汉字计 2 字符，约 25 万字）；付费档约 2 元/万字；高亮按时长估算。', voices: voices(AZURE_VOICES),
+    note: '每月免费约 25 万字，超出约 2 元/万字', voices: voices(AZURE_VOICES),
     default_speaker: 'zh-CN-XiaoxiaoNeural', context: false, region: true, voice_input: false },
 ];
 
@@ -147,14 +149,16 @@ function aliyun_speak({ key, text, speaker, rate, silence }, open) {
     const finish = (error, value) => {
       if (settled) return;
       settled = true; clearTimeout(timer);
-      try { socket.close(); } catch { /* Already closed. */ }
+      // A close without a status code is never answered by the service, which then holds the connection open.
+      try { socket.close(1000); } catch { /* Already closed. */ }
       if (error) reject(error); else resolve(value);
     };
     const timer = setTimeout(() => finish(new Error('语音合成请求超时，请检查网络后重试')), TTS_TIMEOUT_MS);
     const send = (action, payload) => socket.send(JSON.stringify({ header: { action, task_id, streaming: 'duplex' }, payload }));
     socket.binaryType = 'arraybuffer';
     socket.onopen = () => send('run-task', { task_group: 'audio', task: 'tts', function: 'SpeechSynthesizer', model: ALIYUN_MODEL, input: {},
-      parameters: { text_type: 'PlainText', voice: speaker, format: 'mp3', sample_rate: SAMPLE_RATE, rate: 1 + rate / 100, word_timestamp_enabled: true } });
+      parameters: { text_type: 'PlainText', voice: speaker, format: 'mp3', sample_rate: SAMPLE_RATE, bit_rate: ALIYUN_BIT_RATE, rate: 1 + rate / 100,
+        word_timestamp_enabled: true } });
     socket.onmessage = ({ data }) => {
       if (typeof data !== 'string') { chunks.push(Buffer.from(data)); return; }
       const { header = {}, payload = {} } = JSON.parse(data);
