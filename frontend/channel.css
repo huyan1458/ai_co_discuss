@@ -228,6 +228,12 @@ html[data-theme^="channel"] .channel-menu.channel-directory-menu { min-width: 15
 .channel-search-input [class*="icon"] { width: 14px; height: 14px; color: #929ba9; }
 .channel-search-input [data-slot="trailing"] > button { width: 23px; height: 23px; padding: 4px; border-radius: 3px; }
 .channel-host-filter[aria-pressed="true"] { color: #c4caff !important; background: #5865f22b; }
+.channel-work-status { display: flex; align-items: center; gap: 6px; min-width: 0; height: 29px; padding: 0 9px; border: 0; border-radius: 5px; background: transparent; color: var(--ui-text-toned); font-size: 12px; white-space: nowrap; cursor: pointer; }
+.channel-work-status:hover { background: var(--ui-bg-elevated); }
+.channel-work-avatars { display: flex; }
+.channel-work-avatars > * + * { margin-left: -6px; }
+.channel-work-avatars > * { box-shadow: 0 0 0 2px var(--ui-bg); }
+.channel-work-text { overflow: hidden; text-overflow: ellipsis; }
 .progress-board { display: flex; flex: 1 0 auto; flex-direction: column; padding-bottom: 20px; color: var(--ui-text); font-size: 13px; }
 .progress-board > section { padding: 0 16px; margin-top: 22px; }
 .progress-board > .pb-status { margin-top: 18px; }
@@ -759,15 +765,14 @@ html[data-theme^="channel"] .advanced-fields { border-color: #414957; }
   .channel-shell { display: flex; }
   .channel-nav-resizer { display: none; }
   .channel-main { width: 100%; }
-  .channel-header { display: grid; grid-template-columns: 44px minmax(0, 1fr) 44px; height: auto; padding: 2px 10px; gap: 2px 8px; }
+  /* Phone: one title row; search is rarely used there, so it gives way to the work status. */
+  .channel-header { display: grid; grid-template-columns: 36px minmax(0, 1fr) auto 36px; height: auto; padding: 2px 10px; gap: 8px; }
   .channel-mobile-nav { grid-column: 1; grid-row: 1; }
   .channel-title { grid-column: 2; grid-row: 1; }
-  .channel-info-button { grid-column: 3; grid-row: 1; }
-  .channel-title-icon { display: none; }
-  .channel-header-actions { grid-column: 1 / -1; grid-row: 2; margin-left: 0; gap: 5px; }
-  .channel-search { flex: 1; min-width: 0; }
-  .channel-search-input { width: 100%; }
-  .channel-header-actions > button:first-of-type { margin-left: auto; }
+  .channel-header-actions { grid-column: 3; grid-row: 1; min-width: 0; max-width: 52vw; margin-left: 0; gap: 3px; }
+  .channel-info-button { grid-column: 4; grid-row: 1; }
+  .channel-title-icon, .channel-search { display: none; }
+  .channel-work-status { padding: 0 6px; }
   .channel-tabbar { display: flex; height: 36px; padding-inline: 8px; }
   .channel-tabs [data-slot="list"] { padding-block: 3px; }
   .channel-tabs [data-slot="trigger"] { height: 28px; }
@@ -807,12 +812,8 @@ html[data-theme^="channel"] .advanced-fields { border-color: #414957; }
   .channel-directory-actions, .channel-folder-actions, .channel-room-actions { opacity: 1; pointer-events: auto; }
   @media (max-width: 700px) {
     /* Phone: the title row and the brief bar give their height back to the transcript; controls keep their PC size. */
-    .channel-header { grid-template-columns: 36px minmax(0, 1fr) 36px; padding-block: 0 4px; }
+    .channel-header { padding-block: 0; }
     .channel-host-brief { padding-block: 0; }
-    /* Without a search box (every tab but messages) the status chip joins the title row instead of taking its own. */
-    .channel-header:not(:has(.channel-search)) { grid-template-columns: 36px minmax(0, 1fr) auto 36px; }
-    .channel-header:not(:has(.channel-search)) .channel-header-actions { grid-column: 3; grid-row: 1; }
-    .channel-header:not(:has(.channel-search)) .channel-info-button { grid-column: 4; }
     html[data-theme^="channel"] .content-page { padding: 14px 12px 24px; }
     html[data-theme^="channel"] .page-heading { margin-bottom: 14px; }
     html[data-theme^="channel"] .page-heading h2 { margin-bottom: 4px; font-size: 17px; }

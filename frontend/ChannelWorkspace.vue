@@ -10,6 +10,7 @@ import RoomOverview from "./RoomOverview.vue";
 import ExecutionTimeline from "./ExecutionTimeline.vue";
 import EventLog from "./EventLog.vue";
 import ProjectFiles from "./ProjectFiles.vue";
+import { busy } from "./member-actions.js";
 
 const { view, bridge, field, act, pending } = inject("discussion");
 const room = computed(() => view.value.room);
@@ -62,6 +63,18 @@ const nav_docked = computed(() => rail_inline.value && !nav_collapsed.value);
 // The rail and channel tools stay in place without a room so the layout never jumps; room-only controls are disabled.
 const show_rail = computed(() => view.value.tab === "discussion" && !rail_collapsed.value);
 const info_label = computed(() => rail_inline.value && view.value.tab === "discussion" ? (rail_collapsed.value ? "展开房间概览" : "收起房间概览") : "讨论进度");
+const LIVE_EXECUTION = ["dispatched", "started"];
+const STATUS_AVATARS = 4;
+/** Who is working right now, for the title bar whenever the rail is out of sight; same rule as the rail's 处理中. */
+const work_status = computed(() => {
+  const working = (room.value?.free?.members || []).filter(busy);
+  const state = (member) => member.execution?.stale ? "执行失联" : LIVE_EXECUTION.includes(member.execution?.status) ? "执行中" : "待投递";
+  if (!working.length) return { tone: "success", text: "空闲", members: [], title: "空闲" };
+  const tone = working.some((member) => member.execution?.stale) ? "error" : "primary";
+  const text = working.length === 1 ? `${bridge.display_name(working[0].name)} ${state(working[0])}` : `${working.length} 位执行中`;
+  return { tone, text, members: working.slice(0, STATUS_AVATARS), title: working.map((member) => `${bridge.display_name(member.name)} ${state(member)}`).join("\n") };
+});
+const show_work_status = computed(() => Boolean(room.value) && !room.value.archived && !(rail_inline.value && show_rail.value));
 const brief_preview = computed(() => {
   const template = document.createElement("template");
   template.innerHTML = room.value?.rendered_brief || "";
@@ -295,6 +308,10 @@ function resize_nav_by_key(event) {
           <div class="channel-title"><div class="channel-title-copy"><h1 :title="room?.title">{{ room?.title || '共议' }}</h1></div><UBadge v-if="room?.archived" color="neutral" variant="subtle" size="sm">已存档</UBadge></div>
           <span v-if="room" class="channel-header-context">{{ tabs.find((item) => item.value === view.tab)?.label }}<span>·</span>{{ room.message_count }} 条记录<template v-if="created_label"><span>·</span><time :datetime="room.created_at" :title="new Date(room.created_at).toLocaleString('zh-CN', { hour12: false })">{{ created_label }}</time></template></span>
           <div class="channel-header-actions">
+            <button v-if="show_work_status" type="button" class="channel-work-status" :class="`is-${work_status.tone}`" :title="work_status.title" :aria-label="`执行状态：${work_status.title.replaceAll('\n', '，')}；打开房间概览`" @click="toggle_info">
+              <span v-if="work_status.members.length" class="channel-work-avatars"><UAvatar v-for="member in work_status.members" :key="member.id" :src="bridge.identities[member.name]?.icon" :text="bridge.identities[member.name]?.initials" :alt="member.name" size="2xs" class="channel-avatar" :class="bridge.identities[member.name]?.style" /></span>
+              <span class="pb-dot"></span><span class="channel-work-text" role="status">{{ work_status.text }}</span>
+            </button>
             <form v-if="view.tab === 'discussion'" class="channel-search" @submit.prevent="act('filter', { query: search })">
               <UInput v-model="search" icon="i-lucide-search" variant="none" size="sm" placeholder="搜索消息" aria-label="搜索讨论记录" :disabled="!room" class="channel-search-input">
                 <template #trailing><UButton v-if="search || view.query" icon="i-lucide-x" color="neutral" variant="ghost" size="xs" aria-label="清除搜索" @click="search = ''; act('filter', { query: '' })" /><UButton type="submit" icon="i-lucide-corner-down-left" color="neutral" variant="ghost" size="xs" aria-label="搜索" :disabled="!room" /></template>
