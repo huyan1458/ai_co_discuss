@@ -77,31 +77,23 @@ function walk(value, visit) {
 
 /**
  * Refuse a relayed request that would reach past what this computer granted: a folder outside the saved projects,
- * a program location not already saved here, full access, or write access to a room without this device's
- * passkey-confirmed grant (`write_allowed(room_id)`).
+ * a program location not already saved here, or 全放开 saved as a default. A device reaches this point only unlocked
+ * by its passkey that day, so a room may be given any level.
  */
-export function guard_remote_request(command, input, { projects, participants, home, write_allowed = () => false, write_needed }) {
+export function guard_remote_request(command, input, { projects, participants, home }) {
   if (LOCAL_ONLY_ACTIONS.has(command)) throw new Error('此操作只能在这台电脑上执行');
   if (!input || typeof input !== 'object') return;
   const roots = remote_roots(projects);
   const saved = Object.values(participants || {});
   const known = Object.fromEntries(SOFTWARE_FIELDS.map(field => [field, new Set(saved.map(profile => profile[field]).filter(Boolean))]));
-  let writes = false;
   walk(input, (key, value) => {
     if (key === 'cwd' && value) remote_directory(value, { roots, home });
     else if (SOFTWARE_FIELDS.includes(key) && value && !known[key].has(value)) throw new Error(`其他设备不能更改软件位置（${key}），请在电脑上设置`);
-    else if (key === 'project_access' && value === 'full') throw new Error('“全放开”只能在电脑上设置');
+    // 全放开 may be given to a room's member; it never becomes a saved default from afar.
+    else if (key === 'project_access' && value === 'full' && !WRITE_COMMANDS.has(command)) throw new Error('“全放开”不能从其他设备存为默认设置');
     // `own` comes only from taking over a session on this computer; it may write, so another device cannot claim it.
     else if (key === 'project_access' && value === 'own') throw new Error('沿用原会话权限（own）只能在电脑上接管会话时产生');
-    else if (key === 'project_access' && ['write', 'auto'].includes(value)) writes = true;
-    // An approved tool such as a shell can change files whatever the member's level says.
-    else if (key === 'allowed_tools' && Array.isArray(value) && value.length) writes = true;
   });
-  // Saved presets and workflow cards only describe access; it takes effect in a room, which is checked here.
-  if (writes && WRITE_COMMANDS.has(command)) {
-    if (command === 'start' || typeof input.room_id !== 'string') throw new Error('其他设备新建房间时成员须为只读；建好后在房间里开启可写（需通行密钥确认）');
-    if (!write_allowed(input.room_id)) throw write_needed(input.room_id);
-  }
   // A saved project only widens what other devices reach, so a new or moved one must already lie inside the old ones.
   if (command === 'projects' && Array.isArray(input.projects)) {
     const existing = new Map((projects || []).map(project => [project.id, project.path]));

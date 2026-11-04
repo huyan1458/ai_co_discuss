@@ -14,7 +14,7 @@ import { acquire_lock } from './discussion_runner.mjs';
 import { local_settings } from './discussion_setup.mjs';
 import { machine_links, relay_cipher, save_machine_links, relayed_command, ROOM_ACTIONS, run_launch_command, sync_remote_launches, unseal } from './remote_launch.mjs';
 import { claim_relayed_command } from './remote_policy.mjs';
-import { audit, DEVICE_ACTIONS, device_command, open_signed_request, write_allowed, write_needed } from './device_auth.mjs';
+import { audit, DEVICE_ACTIONS, device_command, open_signed_request } from './device_auth.mjs';
 
 const RELAY_PROTOCOL = 'codiscuss-relay';
 const BRIDGE_TOKEN_BYTES = 32;
@@ -31,9 +31,6 @@ const HEARTBEAT_LATE_MS = 2 * PING_MS + 5000;
 // A WebSocket frame on the website is at most 1 MiB; leave room for the envelope around the ciphertext.
 const RESPONSE_MAX_BYTES = 700 * 1024;
 const ROOM_API_PATH = /^\/api\/(rooms|folders|revisions)(\/[A-Za-z0-9_.~-]+)*(\?[A-Za-z0-9_.~%=&,:+-]*)?$/;
-const WRITE_ROOM_PATH = /^\/api\/rooms\/([A-Za-z0-9_.~-]+)\//;
-// Members with these levels can change files or run commands on this computer.
-const WRITING_ACCESS = new Set(['write', 'auto', 'full', 'own']);
 // Attachment uploads arrive in parts and are sent to the local website whole, as one browser upload would be.
 const UPLOAD_PATH = /^\/api\/rooms\/[A-Za-z0-9_-]+\/attachments(\/[A-Za-z0-9_-]+\/import)?(\?[A-Za-z0-9_.~%=&,:+-]*)?$/;
 const UPLOAD_MAX_BYTES = 20 * 1024 * 1024;
@@ -81,12 +78,6 @@ export async function room_api(home, site, payload, { fetcher = fetch, device } 
       || !Number.isSafeInteger(offset) || offset < 0) {
     return { status: 400, body: { error: '中转请求地址无效' } };
   }
-  // Writing to a room whose members may change files here needs this device's passkey-confirmed grant; stopping does not.
-  const room = method === 'POST' ? path.match(WRITE_ROOM_PATH)?.[1] : null;
-  if (device !== undefined && room && !/\/(interrupt|stop)(\?|$)/.test(path) && room_writes(home, room) && !write_allowed(home, device, room)) {
-    const needed = write_needed(room);
-    return { status: 403, body: { error: needed.message, need: needed.need, room_id: room } };
-  }
   const headers = bridge_headers(home, site);
   if (typeof token === 'string' && token) headers['X-Discussion-Token'] = token;
   if (body !== undefined) headers['Content-Type'] = 'application/json';
@@ -98,22 +89,6 @@ export async function room_api(home, site, payload, { fetcher = fetch, device } 
   const bytes = Buffer.from(await response.arrayBuffer());
   return { status: response.status, content_type: type, offset, total: bytes.length,
     body_base64: bytes.subarray(offset, offset + RESPONSE_MAX_BYTES).toString('base64') };
-}
-
-/** Whether a room this computer runs has a member allowed to change files or run commands. */
-function room_writes(home, room_id) {
-  const path = join(home, 'rooms.json');
-  const configs = existsSync(path) ? JSON.parse(readFileSync(path, 'utf8')).configs ?? [] : [];
-  for (const config_path of configs) {
-    try {
-      const config = JSON.parse(readFileSync(config_path, 'utf8'));
-      // A member without its own level takes the room's, as the runner does when it starts the member.
-      // Approved tools count too: a shell approved for a read-only member still changes files.
-      if (config.room === room_id) return Object.values(config.participants || {}).some(profile =>
-        WRITING_ACCESS.has(profile?.project_access || config.project_access) || profile?.allowed_tools?.length > 0);
-    } catch { /* A broken configuration starts nothing. */ }
-  }
-  return false;
 }
 
 /** The local website this computer runs. */

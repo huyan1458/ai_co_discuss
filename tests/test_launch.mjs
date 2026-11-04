@@ -1279,15 +1279,6 @@ test('the relay channel reaches only local room routes, as the bridge, and answe
     'a request sealed under another id is not run');
   assert.equal(calls.length, 2);
 
-  // Writing to a room whose members may change files here needs a passkey-confirmed grant; stopping it does not.
-  const writing = join(home, 'writing.json');
-  writeFileSync(writing, JSON.stringify({ site: 'http://127.0.0.1:9876', room: 'abc123', token: 't', participants: { Claude: { project_access: 'write' } } }));
-  writeFileSync(join(home, 'rooms.json'), JSON.stringify({ configs: [writing] }));
-  const post = await room_api(home, 'https://site.test', { method: 'POST', path: '/api/rooms/abc123/messages', body: { text: '改代码' } }, { fetcher, device: device.id });
-  assert.equal(post.status, 403);
-  assert.equal(post.body.need, 'write-grant');
-  assert.equal((await room_api(home, 'https://site.test', { method: 'POST', path: '/api/rooms/abc123/stop', body: {} }, { fetcher, device: device.id })).status, 200);
-  assert.equal((await room_api(home, 'https://site.test', { path: '/api/rooms/abc123/messages' }, { fetcher, device: device.id })).status, 200, 'reading needs no grant');
 });
 
 test('the relay channel reads and sends files in parts, and runs computer-room operations with the credentials kept here', async t => {

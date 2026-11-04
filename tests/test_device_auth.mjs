@@ -1,10 +1,10 @@
 import assert from 'node:assert/strict';
-import { mkdtempSync, rmSync } from 'node:fs';
+import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import test from 'node:test';
 
-import { device_command, open_signed_request, pairing_passkey_challenge, pairing_proof, signed_device_list, start_pairing, write_allowed } from '../runner/device_auth.mjs';
+import { device_command, open_signed_request, pairing_passkey_challenge, pairing_proof, signed_device_list, start_pairing } from '../runner/device_auth.mjs';
 import { guard_remote_request } from '../runner/remote_policy.mjs';
 import { verify_assertion, verify_registration } from '../runner/webauthn.mjs';
 import { software_device, software_passkey } from './passkey_authenticator.mjs';
@@ -117,60 +117,34 @@ test('only a paired device\'s signed request is opened; an unpaired browser may 
   await assert.rejects(open('id-8', await device.seal('id-8', { action: 'settings' })), /未配对或已被撤销/);
 });
 
-test('remote writing in a room needs this device\'s passkey confirmation, for that room only', async t => {
+test('a paired device works for a day after its passkey confirms, then asks again before anything but unlocking', async t => {
   const home = home_dir(t);
   const device = await paired_device(home);
   const context = { site: SITE, machine_id: MACHINE, device_id: device.id };
-  const passkey = device.passkey;
-  const guard = room_id => () => guard_remote_request('room-member-access', { room_id, name: 'Claude', project_access: 'write' },
-    { projects: [], participants: {}, home, write_allowed: room => write_allowed(home, device.id, room), write_needed: room => Object.assign(new Error('need'), { need: 'write-grant', room_id: room }) });
-  assert.throws(guard('room-a'), error => error.need === 'write-grant' && error.room_id === 'room-a');
-  const challenge = (await device_command(home, context, 'passkey-challenge', { purpose: 'write', room_id: 'room-a' })).body;
-  // A confirmation for one room cannot be spent on another.
-  const elsewhere = await device_command(home, context, 'write-grant', { challenge_id: challenge.challenge_id, assertion: passkey.get(challenge.challenge, SITE), room_id: 'room-b' });
-  assert.equal(elsewhere.status, 400);
-  const again = (await device_command(home, context, 'passkey-challenge', { purpose: 'write', room_id: 'room-a' })).body;
-  const granted = await device_command(home, context, 'write-grant', { challenge_id: again.challenge_id, assertion: passkey.get(again.challenge, SITE), room_id: 'room-a' });
-  assert.equal(granted.status, 200, granted.body.error);
-  assert.ok(granted.body.until - Date.now() <= 12 * 3600000 + 1000);
-  guard('room-a')();
-  assert.throws(guard('room-b'), error => error.need === 'write-grant');
-  assert.throws(() => guard_remote_request('start', { participants: { Claude: { project_access: 'write' } } }, { projects: [], participants: {}, home }), /新建房间时成员须为只读/);
-  await device_command(home, context, 'write-revoke', { room_id: 'room-a' });
-  assert.throws(guard('room-a'), error => error.need === 'write-grant');
+  const signed = async (id, action) => open_signed_request(home, id, await device.seal(id, { action }), MACHINE);
+  // Pairing was confirmed with the passkey, so the device starts unlocked.
+  await signed('unlock-01', 'settings');
+  // A day later it is locked: only the passkey steps get through.
+  const file = join(home, 'devices.json'), registry = JSON.parse(readFileSync(file, 'utf8'));
+  registry.devices[device.id].unlocked_until = Date.now() - 1;
+  writeFileSync(file, JSON.stringify(registry));
+  await assert.rejects(signed('unlock-02', 'settings'), error => error.need === 'unlock');
+  await assert.rejects(signed('unlock-03', 'device-revoke'), error => error.need === 'unlock');
+  await signed('unlock-04', 'passkey-challenge');
+  const challenge = (await device_command(home, context, 'passkey-challenge', { purpose: 'unlock' })).body;
+  const unlocked = await device_command(home, context, 'device-unlock', { challenge_id: challenge.challenge_id, assertion: device.passkey.get(challenge.challenge, SITE) });
+  assert.equal(unlocked.status, 200, unlocked.body.error);
+  assert.ok(unlocked.body.unlocked_until - Date.now() <= 24 * 3600000 + 1000);
+  await signed('unlock-05', 'settings');
 });
 
-test('bringing back, approving tools for, forking or enabling writers needs the grant, judged from this computer\'s config', async t => {
-  const { writeFileSync } = await import('node:fs');
-  const { remote_write_room } = await import('../runner/discussion_launch.mjs');
+test('a remote request may give a room any level, but cannot claim a session\'s own access or save 全放开 as a default', async t => {
   const home = home_dir(t);
-  const config = (room, participants, extra = {}) => {
-    const path = join(home, `${room}.json`);
-    writeFileSync(path, JSON.stringify({ site: 'http://127.0.0.1:8765', room, token: 't', participants, ...extra }));
-    return path;
-  };
-  writeFileSync(join(home, 'rooms.json'), JSON.stringify({ configs: [
-    config('writes', { Claude: { project_access: 'write' }, Codex: { project_access: 'read' } }),
-    config('room-wide', { Claude: {} }, { project_access: 'auto' }),
-    config('reads', { Codex: { project_access: 'read' } }),
-  ] }));
-  assert.equal(remote_write_room(home, 'room-member', { room_id: 'writes', action: 'rejoin', name: 'Claude' }), 'writes');
-  assert.equal(remote_write_room(home, 'room-member', { room_id: 'writes', action: 'rejoin', name: 'Codex' }), null);
-  assert.equal(remote_write_room(home, 'room-member-allow', { room_id: 'room-wide', name: 'Claude', rules: ['Bash(git:*)'] }), 'room-wide', 'a room-wide level counts');
-  assert.equal(remote_write_room(home, 'room-fork', { room_id: 'new', source_room_id: 'writes' }), 'writes');
-  assert.equal(remote_write_room(home, 'room-fork', { room_id: 'new', source_room_id: 'reads' }), null);
-  assert.equal(remote_write_room(home, 'room-workflow', { room_id: 'reads', action: 'back' }), null);
-  assert.throws(() => remote_write_room(home, 'room-workflow', { room_id: 'reads', action: 'host' }), /只能在电脑上开启/);
-});
-
-test('a remote request cannot claim a session\'s own access, and any tool approval needs the write grant', async t => {
-  const { remote_write_room } = await import('../runner/discussion_launch.mjs');
-  const home = home_dir(t);
-  const options = { projects: [], participants: {}, home, write_allowed: () => false, write_needed: room => Object.assign(new Error('need'), { need: 'write-grant', room_id: room }) };
+  const options = { projects: [], participants: {}, home };
+  guard_remote_request('start', { room: { submission_id: 's' }, participants: { Claude: { project_access: 'full' }, Codex: { project_access: 'write' } } }, options);
+  guard_remote_request('room-member', { room_id: 'r', name: 'Claude', action: 'add', allowed_tools: ['Bash'] }, options);
   assert.throws(() => guard_remote_request('start', { participants: { Codex: { project_access: 'own' } } }, options), /own/);
-  assert.throws(() => guard_remote_request('room-member', { room_id: 'r', name: 'Claude', action: 'add', allowed_tools: ['Bash'] }, options), error => error.need === 'write-grant');
-  // Approving a tool for a read-only member widens it too.
-  assert.equal(remote_write_room(home, 'room-member-allow', { room_id: 'r', name: 'Claude', rules: ['Bash'] }), 'r');
+  assert.throws(() => guard_remote_request('settings', { participants: { Claude: { project_access: 'full' } } }, options), /全放开/);
 });
 
 test('remote rooms take no tool approvals saved on this computer', async t => {

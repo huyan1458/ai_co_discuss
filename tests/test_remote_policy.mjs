@@ -41,7 +41,9 @@ test('a relayed request cannot widen folders, change program locations or turn o
   assert.throws(() => guard('start', { cwd: f.outside }), /未允许/);
   assert.throws(() => guard('start', { participants: { Claude: { cwd: f.outside } } }), /未允许/, 'nested cwd is checked too');
   assert.throws(() => guard('settings', { participants: { Claude: { executable: 'C:/Windows/System32/cmd.exe' } } }), /软件位置/);
-  assert.throws(() => guard('room-member-access', { name: 'Claude', project_access: 'full' }), /全放开/);
+  // 全放开 may be given to a room's member, but not saved as a default from afar.
+  guard('room-member-access', { room_id: 'room-a', name: 'Claude', project_access: 'full' });
+  assert.throws(() => guard('settings', { participants: { Claude: { project_access: 'full' } } }), /全放开/);
   assert.throws(() => guard('room-config', {}), /只能在这台电脑上/);
   // Saved projects may be renamed or narrowed, but a new or moved one must lie inside the old ones.
   guard('projects', { projects: [{ id: 'p1', name: 'Renamed', path: f.project }, { name: 'Alpha', path: join(f.project, 'alpha') }] });

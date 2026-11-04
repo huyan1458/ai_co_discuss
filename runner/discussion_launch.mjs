@@ -12,7 +12,7 @@ import { parseArgs } from 'node:util';
 import { atomic_json } from './files.mjs';
 import { read_project_files } from './project_files.mjs';
 import { guard_remote_request, list_remote_directories } from './remote_policy.mjs';
-import { list_devices, machine_fingerprint, revoke_device, revoke_write, start_pairing, write_allowed, write_needed } from './device_auth.mjs';
+import { list_devices, machine_fingerprint, revoke_device, start_pairing } from './device_auth.mjs';
 import { setup_sidecar } from './adapters/antigravity_app.mjs';
 import { adapter_of, adoption_adapter, BRANCHABLE_ADAPTERS, branch_session, session_settings, software_defaults, software_effort, software_models } from './adapters/index.mjs';
 import { ADAPTER_IDS, ADAPTER_PROFILES, adapter_profile, platform_adapters, same_session_family } from './adapters/profiles.mjs';
@@ -100,7 +100,7 @@ stt 按序接收录音片段（upload_id、index、base64 PCM 16 kHz 单声道�
 pick-directory 在本机弹出系统目录选择窗口，返回所选路径；取消时不返回路径。
 browse-directory 列出常用项目及其中的子文件夹（只含文件夹名，分页），供其他设备选择目录；path 为空时列出常用项目。
 device-pairing 在本机生成 12 位设备配对码（2 分钟有效，可选 temporary 临时设备、site 指定已绑定的网站），扫码链接带本机密钥指纹；只能在这台电脑上执行，新设备只能在电脑前添加。
-devices 列出已配对设备；提供 revoke（设备 id）撤销设备，或 revoke_write（device_id、room_id）撤销远程可写授权。
+devices 列出已配对设备；提供 revoke（设备 id）撤销设备。
 projects 读取本机已配置的项目（名称与绝对路径）；提供 JSON（projects 列表）时整体替换保存。
 presets 读取本机的专家预设（含未删除的内置预设）与各平台默认描述；提供 JSON（presets 列表、description_templates 和/或 hidden_builtins 已删除的内置预设名）时替换对应部分。
 machine-link 返回本机连接指定 site 的电脑编号、名称与凭据，供已登录管理员的网页完成配对；不存在时创建。
@@ -1541,42 +1541,6 @@ function room_config_by_id(home, room_id) {
   return paths.length === 1 ? configuration_snapshot(paths[0]).config : null;
 }
 
-/** Whether a member may change files here: its own level, else the room's, or any tool approved for it. */
-const member_writes = (config, profile) => WRITING_ACCESS.has(profile?.project_access || config?.project_access) || profile?.allowed_tools?.length > 0;
-
-/**
- * The room in which a relayed command would put a member with write access to work, judged from what this computer
- * keeps rather than from the request text; null when it would not. Such a command needs the device's write grant.
- */
-export function remote_write_room(home, command, input) {
-  if (!input || typeof input !== 'object') return null;
-  // Approving a tool widens what a member can do, whatever its level: it always needs the grant.
-  if (command === 'room-member-allow') return input.room_id || null;
-  if (command === 'room-member') {
-    const config = room_config_by_id(home, input.room_id);
-    return config && member_writes(config, config.participants?.[input.name]) ? input.room_id : null;
-  }
-  if (command === 'room-fork') {
-    const config = room_config_by_id(home, input.source_room_id);
-    return config && Object.values(config.participants || {}).some(profile => member_writes(config, profile)) ? input.source_room_id : null;
-  }
-  if (command === 'room-workflow') {
-    if (input.action === 'host') throw new Error('“允许主持人自建工作流”只能在电脑上开启');
-    if (input.action === 'enable') {
-      const cards = JSON.stringify(get_workflow(home, input.workflow?.id));
-      return /"(project_access|requested_access)":"(write|auto|full)"/.test(cards) ? input.room_id : null;
-    }
-    if (input.action === 'back') {
-      const config = room_config_by_id(home, input.room_id);
-      return config && Object.values(config.participants || {}).some(profile => member_writes(config, profile)) ? input.room_id : null;
-    }
-  }
-  if (command === 'start' && input.workflow?.id && /"(project_access|requested_access)":"(write|auto|full)"/.test(JSON.stringify(get_workflow(home, input.workflow.id)))) {
-    throw new Error('其他设备新建房间时成员须为只读；建好后在房间里开启可写（需通行密钥确认）');
-  }
-  return null;
-}
-
 /** Fill program locations another device left out with the ones saved here, so saving defaults cannot drop them. */
 function keep_saved_locations(home, participants) {
   const saved = launch_settings(home).participants;
@@ -1608,14 +1572,11 @@ export async function launch_main(args = process.argv.slice(2), input_text) {
   assert_shared_home(home);
   // Another device's request may only use what this computer granted; the flag is set by the relay, never by the request.
   if (values.remote) {
-    const allowed = room => Boolean(values.device) && write_allowed(home, values.device, room);
-    guard_remote_request(positionals[0], input, { projects: launch_projects(home).projects, participants: launch_settings(home).participants, home,
-      write_allowed: allowed, write_needed });
-    const room = remote_write_room(home, positionals[0], input);
-    if (room && !allowed(room)) throw write_needed(room);
+    guard_remote_request(positionals[0], input, { projects: launch_projects(home).projects, participants: launch_settings(home).participants, home });
+    if (positionals[0] === 'room-workflow' && input?.action === 'host') throw new Error('“允许主持人自建工作流”只能在电脑上开启');
     // Another device repeats the saved program locations it cannot see; keep them rather than dropping them.
     if (positionals[0] === 'settings' && input?.participants) input.participants = keep_saved_locations(home, input.participants);
-    // A room created from another device starts read-only, so its members do not take the tool approvals saved here.
+    // Tool approvals saved here stay this computer's decision; a room created from another device does not take them.
     if (positionals[0] === 'start' && input) input.without_saved_tools = true;
   }
   let result;
@@ -1658,13 +1619,14 @@ export async function launch_main(args = process.argv.slice(2), input_text) {
     result = start_pairing(home, { site, fingerprint: machine_fingerprint(link), temporary: input?.temporary === true });
   }
   else if (positionals[0] === 'devices' && !values.remote) {
-    result = input?.revoke ? revoke_device(home, String(input.revoke))
-      : input?.revoke_write ? revoke_write(home, String(input.revoke_write.device_id), String(input.revoke_write.room_id)) : list_devices(home);
+    result = input?.revoke ? revoke_device(home, String(input.revoke)) : list_devices(home);
     // The website takes devices only from the list this computer signs, so a revocation is sent at once.
     if (input?.revoke) await (await import('./remote_launch.mjs')).sync_remote_launches(home).catch(() => {});
   }
   else if (positionals[0] === 'machine-link' && input) result = (await import('./remote_launch.mjs')).machine_link(home, input.site);
-  else if (positionals[0] === 'start' && input) result = await launch_discussion(home, input, { dry_run: values['dry-run'], browser_request: values.browser });
+  else if (positionals[0] === 'start' && input) {
+    result = await launch_discussion(home, input, { dry_run: values['dry-run'], browser_request: values.browser });
+  }
   else if (positionals[0] === 'room-config' && input) result = await room_configuration(home, input, { local_guard: values['configuration-locked'] });
   else throw new Error(HELP);
   process.stdout.write(`${JSON.stringify(result)}\n`);

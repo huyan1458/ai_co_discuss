@@ -1,7 +1,7 @@
 /**
  * Which browsers this computer trusts, decided here alone (see .dev/plans/远程访问安全加固/PROTOCOL.md): pairing by a
- * code shown on a trusted screen, a signature on every relayed command, passkeys kept per device, and per-room write
- * grants. The website only forwards; nothing it stores can add a device or a grant.
+ * code shown on a trusted screen, a signature on every relayed command, passkeys kept per device, and a daily unlock
+ * by passkey. The website only forwards; nothing it stores can add a device or unlock one.
  */
 import { createHash, createHmac, randomBytes, timingSafeEqual } from 'node:crypto';
 import { appendFileSync, existsSync, readFileSync, renameSync, rmSync, statSync, writeFileSync } from 'node:fs';
@@ -24,7 +24,8 @@ export const DEVICE_DAYS = 30;
 const TEMPORARY_DAYS = 1;
 // An expired device may still renew itself with its passkey for this long; after that it pairs again.
 const RENEW_GRACE_DAYS = 30;
-export const WRITE_GRANT_MS = 12 * 3600000;
+// A paired device works for this long after its passkey confirms it, then asks again: once a day, not per room.
+export const UNLOCK_MS = 24 * 3600000;
 const PAIRING_MS = 120000;
 const PAIRING_ATTEMPTS = 5;
 const CHALLENGE_MS = 120000;
@@ -36,11 +37,13 @@ const CODE_LENGTH = 12;
 const PAIR_CONTEXT = 'codiscuss-pair-v1';
 // What an expired (not yet removed) device may still ask for: only to renew itself.
 const EXPIRED_ACTIONS = new Set(['passkey-challenge', 'device-renew']);
+// What a locked device may still ask for: only to unlock (or renew) itself with its passkey.
+const LOCKED_ACTIONS = new Set(['passkey-challenge', 'device-unlock', 'device-renew']);
 // The one action an unpaired browser may send, unsigned: proving it holds a pairing code.
 export const UNSIGNED_ACTIONS = new Set(['device-pair']);
 // Device actions answered by this module rather than the launch entrypoint.
 // New devices are added only at this computer's own screen, so no relayed action starts a pairing.
-export const DEVICE_ACTIONS = new Set(['device-pair', 'device-list', 'device-revoke', 'passkey-challenge', 'device-renew', 'write-grant', 'write-revoke']);
+export const DEVICE_ACTIONS = new Set(['device-pair', 'device-list', 'device-revoke', 'passkey-challenge', 'device-renew', 'device-unlock']);
 // Actions after which the website must receive the new signed device list.
 const LIST_CHANGES = new Set(['device-pair', 'device-revoke', 'device-renew']);
 
@@ -58,16 +61,14 @@ function with_lock(home, task) {
   try {
     const file = join(home, DEVICES_FILE);
     const registry = existsSync(file) ? JSON.parse(readFileSync(file, 'utf8')) : {};
-    registry.devices ||= {}; registry.pairings ||= {}; registry.challenges ||= {}; registry.write_grants ||= {};
+    registry.devices ||= {}; registry.pairings ||= {}; registry.challenges ||= {};
+    // Per-room write grants were replaced by the daily unlock.
+    delete registry.write_grants;
     const now = Date.now();
     // Drop what has expired so the file stays small and nothing stale can be used.
     for (const [key, item] of Object.entries(registry.pairings)) if (item.expires_at <= now) delete registry.pairings[key];
     for (const [key, item] of Object.entries(registry.challenges)) if (item.expires_at <= now) delete registry.challenges[key];
     for (const [key, device] of Object.entries(registry.devices)) if (device.expires_at + RENEW_GRACE_DAYS * DAY_MS <= now) delete registry.devices[key];
-    for (const [device, rooms] of Object.entries(registry.write_grants)) {
-      for (const [room, until] of Object.entries(rooms)) if (until <= now || !registry.devices[device]) delete rooms[room];
-      if (!Object.keys(rooms).length) delete registry.write_grants[device];
-    }
     // Saved even when the task refuses: a used challenge or a counted failure must not come back.
     try { return task(registry, now); } finally { atomic_json(file, registry); }
   } finally { rmSync(path, { force: true }); }
@@ -94,7 +95,7 @@ export function recent_audit(home, limit = AUDIT_SHOWN) {
 function read_registry(home) {
   const file = join(home, DEVICES_FILE);
   const registry = existsSync(file) ? JSON.parse(readFileSync(file, 'utf8')) : {};
-  return { devices: registry.devices || {}, write_grants: registry.write_grants || {} };
+  return { devices: registry.devices || {} };
 }
 
 /** The uncompressed P-256 point of a JWK, which names the device. */
@@ -152,7 +153,9 @@ export function start_pairing(home, { site, fingerprint = '', temporary = false,
 function add_device(registry, now, { public_key, label, temporary, by, passkey }) {
   const id = device_id_of(public_key);
   registry.devices[id] = { public_key: { kty: 'EC', crv: 'P-256', x: public_key.x, y: public_key.y }, label: clean_label(label), by,
-    temporary: Boolean(temporary), created_at: now, expires_at: now + (temporary ? TEMPORARY_DAYS : DEVICE_DAYS) * DAY_MS, passkeys: [passkey] };
+    temporary: Boolean(temporary), created_at: now, expires_at: now + (temporary ? TEMPORARY_DAYS : DEVICE_DAYS) * DAY_MS, passkeys: [passkey],
+    // Pairing itself was confirmed with the passkey, so the device starts unlocked.
+    unlocked_until: Math.min(now + UNLOCK_MS, now + (temporary ? TEMPORARY_DAYS : DEVICE_DAYS) * DAY_MS) };
   return { device_id: id, expires_at: registry.devices[id].expires_at, temporary: Boolean(temporary) };
 }
 
@@ -206,18 +209,10 @@ export async function open_signed_request(home, id, sealed, machine_id) {
   if (device.expires_at <= Date.now() && !EXPIRED_ACTIONS.has(request.action)) {
     throw Object.assign(new Error(device.temporary ? '临时设备授权已到期，请重新配对' : '设备授权已到期，请用通行密钥续期'), { need: device.temporary ? 'pairing' : 'renew' });
   }
+  if (!(device.unlocked_until > Date.now()) && !LOCKED_ACTIONS.has(request.action)) {
+    throw Object.assign(new Error('请用通行密钥确认这台设备（每天一次）'), { need: 'unlock' });
+  }
   return { request, device_id: sealed.device_id };
-}
-
-/** Whether a device holds a live write grant for a room. */
-export function write_allowed(home, device_id, room_id, now = Date.now()) {
-  const until = read_registry(home).write_grants[device_id]?.[room_id];
-  return Boolean(until && until > now);
-}
-
-/** The error that asks the page to confirm remote writing with a passkey, then retry. */
-export function write_needed(room_id) {
-  return Object.assign(new Error('这个房间的成员可以改动电脑上的文件；远程操作前需要用通行密钥确认（12 小时有效）'), { need: 'write-grant', room_id });
 }
 
 /**
@@ -235,10 +230,10 @@ export async function signed_device_list(home, link, now = Date.now()) {
 
 /** List paired devices with their passkeys and write grants, newest first, and the recent audit entries. */
 export function list_devices(home, current = null) {
-  const { devices, write_grants } = read_registry(home);
+  const { devices } = read_registry(home);
   return { audit: recent_audit(home), devices: Object.entries(devices).map(([id, device]) => ({ id, label: device.label, temporary: device.temporary, created_at: device.created_at,
     expires_at: device.expires_at, passkeys: device.passkeys.length, current: id === current,
-    write_rooms: Object.entries(write_grants[id] || {}).map(([room, until]) => ({ room_id: room, until })) }))
+    unlocked_until: device.unlocked_until || 0 }))
     .sort((left, right) => right.created_at - left.created_at) };
 }
 
@@ -251,17 +246,7 @@ export function revoke_device(home, device_id) {
   return with_lock(home, registry => {
     const passkeys = (registry.devices[device_id]?.passkeys || []).map(passkey => passkey.id);
     delete registry.devices[device_id];
-    delete registry.write_grants[device_id];
     return { ok: true, passkeys };
-  });
-}
-
-/** End one device's write grant for one room before it runs out. */
-export function revoke_write(home, device_id, room_id) {
-  audit(home, { event: 'write.revoked', device: device_id, room: room_id });
-  return with_lock(home, registry => {
-    if (registry.write_grants[device_id]) delete registry.write_grants[device_id][room_id];
-    return { ok: true };
   });
 }
 
@@ -276,8 +261,7 @@ function relying_party(site) {
  * other purposes return request options listing only this device's passkeys.
  */
 export function passkey_options(home, device_id, site, { purpose, room_id }) {
-  if (!['write', 'renew'].includes(purpose)) throw new Error('通行密钥用途无效');
-  if (purpose === 'write' && (typeof room_id !== 'string' || !room_id)) throw new Error('须指定要开启可写的房间');
+  if (!['unlock', 'renew'].includes(purpose)) throw new Error('通行密钥用途无效');
   const { rp_id } = relying_party(site);
   return with_lock(home, (registry, now) => {
     const device = registry.devices[device_id];
@@ -321,13 +305,12 @@ async function check_assertion(home, device_id, site, { challenge_id, assertion 
   });
 }
 
-/** Grant this device remote writing in one room for twelve hours, never past the device's own expiry. */
-export async function grant_write(home, device_id, site, { challenge_id, assertion, room_id }) {
-  return check_assertion(home, device_id, site, { challenge_id, assertion }, 'write', room_id, (device, registry, now) => {
-    const until = Math.min(now + WRITE_GRANT_MS, device.expires_at);
-    (registry.write_grants[device_id] ||= {})[room_id] = until;
-    audit(home, { event: 'write.granted', device: device_id, room: room_id, until });
-    return { room_id, until };
+/** Unlock this device for a day after its passkey confirms, never past the device's own expiry. */
+export async function unlock_device(home, device_id, site, { challenge_id, assertion }) {
+  return check_assertion(home, device_id, site, { challenge_id, assertion }, 'unlock', null, (device, registry, now) => {
+    device.unlocked_until = Math.min(now + UNLOCK_MS, device.expires_at);
+    audit(home, { event: 'device.unlocked', device: device_id, until: device.unlocked_until });
+    return { unlocked_until: device.unlocked_until };
   });
 }
 
@@ -336,6 +319,7 @@ export async function renew_device(home, device_id, site, { challenge_id, assert
   return check_assertion(home, device_id, site, { challenge_id, assertion }, 'renew', null, device => {
     if (device.temporary) throw new Error('这台设备不能续期，请重新配对');
     device.expires_at = Date.now() + DEVICE_DAYS * DAY_MS;
+    device.unlocked_until = Date.now() + UNLOCK_MS;
     audit(home, { event: 'device.renewed', device: device_id });
     return { expires_at: device.expires_at };
   });
@@ -350,10 +334,9 @@ export async function device_command(home, { site, machine_id, device_id, on_cha
     const body = action === 'device-pair' ? pair_device(home, machine_id, site, payload)
       : action === 'device-list' ? list_devices(home, device_id)
       : action === 'device-revoke' ? revoke_device(home, String(payload.device_id || ''))
-      : action === 'write-revoke' ? revoke_write(home, String(payload.device_id || device_id), String(payload.room_id || ''))
       : action === 'passkey-challenge' ? passkey_options(home, device_id, site, payload)
       : action === 'device-renew' ? await renew_device(home, device_id, site, payload)
-      : action === 'write-grant' ? await grant_write(home, device_id, site, payload)
+      : action === 'device-unlock' ? await unlock_device(home, device_id, site, payload)
       : null;
     if (!body) return { status: 404, body: { error: '未知的设备操作' } };
     // The website accepts a device only from this computer's signed list, so a change is sent at once.

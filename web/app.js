@@ -2250,7 +2250,6 @@ async function device_request(action, payload = {}) {
   if (relay_machine && !state.admin.local) return relay_command(action, payload);
   if (action === "device-list") return local_launch_request("devices", {});
   if (action === "device-revoke") return local_launch_request("devices", { revoke: payload.device_id });
-  if (action === "write-revoke") return local_launch_request("devices", { revoke_write: payload });
   throw new Error("请在已配对的设备上操作");
 }
 
@@ -2349,16 +2348,17 @@ async function invite_device(temporary) {
   return local_launch_request("device-pairing", { temporary });
 }
 
-/** Confirm remote writing in one room with this device's passkey; the computer grants twelve hours. */
-async function confirm_write_grant(room_id) {
-  const options = await relay_command("passkey-challenge", { purpose: "write", room_id });
-  return passkey_prompt({ title: "确认远程可写", description: "这个房间的成员可以改动电脑上的文件或运行命令。确认后，这台设备 12 小时内可以在本房间远程操作；可随时在 设置 → 账号 中撤销。",
-    confirm_label: "用通行密钥确认",
-    run: async () => {
-      const result = await relay_command("write-grant", { challenge_id: options.challenge_id, assertion: await passkey_assertion(options), room_id });
-      notify("info", "已开启远程可写，12 小时内有效");
-      return result;
-    } });
+// Requests made together while the device is locked share one confirmation.
+let unlocking = null;
+
+/** Unlock this device for a day with its passkey; the computer asks once a day, on the first request. */
+function unlock_this_device() {
+  unlocking ||= (async () => {
+    const options = await relay_command("passkey-challenge", { purpose: "unlock" });
+    return passkey_prompt({ title: "确认是你", description: "用面容、指纹或设备密码确认后，这台设备 24 小时内可以操作电脑上的房间。", confirm_label: "确认",
+      run: async () => relay_command("device-unlock", { challenge_id: options.challenge_id, assertion: await passkey_assertion(options) }) });
+  })().finally(() => { unlocking = null; });
+  return unlocking;
 }
 
 /** Extend this device's trust by thirty days with its passkey. */
@@ -2373,12 +2373,12 @@ async function renew_this_device() {
 }
 
 /**
- * React to what the computer asked for: pair or renew this device (shown in settings), or confirm writing in a room
- * and run the request once more. Returns true when the request should be retried.
+ * React to what the computer asked for: pair or renew this device (shown in settings), or unlock it for the day and
+ * run the request once more. Returns true when the request should be retried.
  */
 async function meet_device_need(error) {
-  if (error.need === "write-grant" && error.room_id) {
-    await confirm_write_grant(error.room_id);
+  if (error.need === "unlock") {
+    await unlock_this_device();
     return true;
   }
   if (error.need === "pairing" && state.admin.devices) forget_pairing();
@@ -4702,7 +4702,7 @@ window.discuss_view = { snapshot: view_snapshot, write_field: write_view_field, 
   admin: { register: register_admin, login: login_admin, logout: logout_admin,
     update_profile: update_admin_profile, avatar_from_file: admin_avatar_from_file, validate: validate_admin_form,
     sessions: admin_sessions, revoke: revoke_admin_sessions, change_password: change_admin_password },
-  device: { request: device_request, pair: pair_this_device, take_scanned: take_scanned_pairing, invite: invite_device, renew: renew_this_device, confirm_write: confirm_write_grant, forget: forget_pairing,
+  device: { request: device_request, pair: pair_this_device, take_scanned: take_scanned_pairing, invite: invite_device, renew: renew_this_device, forget: forget_pairing,
     label: device_label, prompt_confirm: () => state.device.prompt?.run(), prompt_cancel: () => state.device.prompt?.cancel() },
   request: request_json, rewind_plan, identities: IDENTITIES, display_name, mention_handles, mentioned_members, render_room_markdown, sources: SOURCE_LABELS,
   set_member_access, set_member_model, allow_denials, set_member_adapter, reload_room_models, read_room_files, limits_label, stop_reason_label, participant_model, participant_files, participant_session_hint, participant_access,

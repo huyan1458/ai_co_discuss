@@ -137,12 +137,9 @@ async function revoke(item) {
   else if (done) await load();
 }
 
-async function revoke_write(item, grant) {
-  if (await run("revoke", () => bridge.device.request("write-revoke", { device_id: item.id, room_id: grant.room_id }), "已撤销远程可写")) await load();
-}
 
 // What the computer recorded about other devices: trust changes and remote writes, never their content.
-const AUDIT_EVENTS = { "device.paired": "配对了新设备", "device.revoked": "撤销了设备", "device.renewed": "设备续期", "pairing.started": "生成了配对码",
+const AUDIT_EVENTS = { "device.paired": "配对了新设备", "device.revoked": "撤销了设备", "device.renewed": "设备续期", "pairing.started": "生成了配对码", "device.unlocked": "确认解锁",
   "passkey.registered": "创建了通行密钥", "write.granted": "开启远程可写", "write.revoked": "撤销远程可写" };
 const device_name = (id) => !id ? "电脑本机" : devices.value?.find((item) => item.id === id)?.label || `已撤销的设备（${id.slice(0, 6)}）`;
 function audit_text(entry) {
@@ -184,10 +181,6 @@ const date = (time) => new Date(time).toLocaleString("zh-CN", { month: "numeric"
           <span>
             <strong>{{ item.label }}<template v-if="item.current"> · 当前设备</template><template v-if="item.temporary"> · 临时</template></strong>
             <small>{{ item.expires_at > Date.now() ? `授权至 ${date(item.expires_at)}` : "授权已到期" }}{{ item.passkeys ? "" : " · 未创建通行密钥" }}</small>
-            <small v-for="grant in item.write_rooms" :key="grant.room_id" class="device-grant">
-              远程可写：{{ room_title(grant.room_id) }}，至 {{ date(grant.until) }}
-              <button type="button" class="device-link" :disabled="Boolean(busy)" @click="revoke_write(item, grant)">撤销</button>
-            </small>
           </span>
           <UButton :label="item.current ? '取消配对' : '撤销'" color="neutral" variant="ghost" size="xs" :disabled="Boolean(busy)" @click="revoke(item)" />
         </li>
@@ -229,7 +222,6 @@ const date = (time) => new Date(time).toLocaleString("zh-CN", { month: "numeric"
 .account-device-list span { display: flex; flex-direction: column; gap: 2px; min-width: 0; }
 .account-device-list strong { color: var(--ui-text-highlighted); font-size: 13px; font-weight: 500; }
 .account-device-list small { color: var(--ui-text-muted); font-size: 11px; }
-.device-grant { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; }
 .device-link { color: var(--channel-accent); font-size: 11px; text-decoration: underline; }
 .device-audit { width: 100%; }
 .device-audit ul { display: flex; flex-direction: column; gap: 2px; max-height: 220px; margin: 6px 0 0; padding: 0; overflow-y: auto; list-style: none; font-size: 12px; }
