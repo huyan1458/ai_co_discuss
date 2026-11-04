@@ -340,7 +340,7 @@ async function update_admin_profile(patch) {
     patch = { ...patch, username: patch.username.trim() };
   }
   const result = await request_json("/api/admin/profile", patch);
-  apply_admin_state({ local: state.admin.local, registered: true, setup_available: false, logged_in: true, profile: result.profile });
+  apply_admin_state({ local: state.admin.local, devices: state.admin.devices, computer_rooms: state.admin.computer_rooms, registered: true, setup_available: false, logged_in: true, profile: result.profile });
 }
 
 /** Shrink the chosen image into a small square data URL that fits the server limit. */
@@ -1954,8 +1954,8 @@ function save_room_credentials(room, token, members = []) {
 
 /** Public administrator state for the account UI; the session token never leaves the controller. */
 function admin_snapshot() {
-  const { loaded, local, registered, setup_available, logged_in, profile, identity_version } = state.admin;
-  return { loaded, local, registered, setup_available, logged_in, identity_version, profile: profile && { ...profile } };
+  const { loaded, local, devices, registered, setup_available, logged_in, profile, identity_version } = state.admin;
+  return { loaded, local, devices, registered, setup_available, logged_in, identity_version, profile: profile && { ...profile } };
 }
 
 /** Build only non-secret status metadata for the currently selected room. */

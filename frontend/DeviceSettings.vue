@@ -1,7 +1,7 @@
 <script setup>
 /** Paired devices: pair this browser with a code from a trusted screen, add another device by QR code, create or renew this
  * device's passkey, and revoke devices or their remote write grants. The paired computer decides; this only asks it. */
-import { computed, inject, onMounted, ref, watch } from "vue";
+import { computed, inject, onMounted, onUnmounted, ref, watch } from "vue";
 import { renderSVG } from "uqr";
 
 const { view, bridge } = inject("discussion");
@@ -17,6 +17,8 @@ const code = ref("");
 const temporary = ref(false);
 const invite = ref(null);
 const RENEW_SOON_MS = 7 * 86400000;
+const INVITE_POLL_MS = 3000;
+let invite_timer = null;
 
 watch(() => device.value.pairing_code, (value) => { if (value) code.value = value; }, { immediate: true });
 
@@ -58,9 +60,33 @@ async function pair() {
 function add_device() {
   return run("invite", async () => {
     const result = await bridge.device.invite(temporary.value);
-    invite.value = { ...result, svg: result.url ? renderSVG(result.url, { border: 1 }) : "" };
+    invite.value = { ...result, svg: result.url ? renderSVG(result.url, { border: 1 }) : "", expired: false };
+    watch_invite(devices.value?.length || 0);
   });
 }
+
+/** While a code is shown, read the list again: close the code once a new device pairs, and mark it expired on time. */
+function watch_invite(known) {
+  clearInterval(invite_timer);
+  invite_timer = setInterval(async () => {
+    if (!invite.value) return clearInterval(invite_timer);
+    if (Date.now() >= invite.value.expires_at) {
+      invite.value = { ...invite.value, expired: true, svg: "" };
+      return clearInterval(invite_timer);
+    }
+    try {
+      const result = await bridge.device.request("device-list");
+      devices.value = result.devices;
+      audit.value = result.audit || [];
+      if (result.devices.length > known) {
+        invite.value = null;
+        clearInterval(invite_timer);
+        bridge.notify("info", "新设备已配对");
+      }
+    } catch { /* The next tick tries again; the code expires on its own. */ }
+  }, INVITE_POLL_MS);
+}
+onUnmounted(() => clearInterval(invite_timer));
 
 /** Revoke a device on the computer; the website drops it with the next signed device list, which is sent at once. */
 async function revoke(item) {
@@ -133,7 +159,8 @@ const date = (time) => new Date(time).toLocaleString("zh-CN", { month: "numeric"
       <div v-if="invite" class="device-invite" role="status">
         <!-- eslint-disable-next-line vue/no-v-html -- an SVG this page rendered from the computer's own link -->
         <div v-if="invite.svg" class="device-qr" aria-label="配对二维码" v-html="invite.svg" />
-        <div>
+        <p v-if="invite.expired" class="fine-print">配对码已过期，点“添加设备”重新生成。</p>
+        <div v-else>
           <p>用新设备的相机扫描二维码；没有摄像头就在新设备打开网站，输入配对码：</p>
           <p class="device-code">{{ invite.code }}</p>
           <p class="fine-print">{{ date(invite.expires_at) }} 前有效（2 分钟），只能用一次{{ invite.temporary ? "；临时设备只授权 1 天" : "" }}。</p>
