@@ -955,8 +955,17 @@ const free_failures = computed(() => {
     .map((execution) => ({ id: `failed-${execution.id}`, author: execution.member || names.get(execution.member_id) || "成员", slot_card: true, created_at: execution.created_at,
       execution_id: execution.id, request_message_id: execution.request_message_id, anchor_message_id: execution.anchor_message_id,
       discussion_request: execution.requests?.find((request) => request.discussion_session_id),
-      failure: { ...execution, elapsed_seconds: execution.finished_at ? Math.max(0, execution.finished_at - execution.created_at) : null } }));
+      failure: { ...execution, elapsed_seconds: execution.finished_at ? Math.max(0, execution.finished_at - execution.created_at) : null } }))
+    .concat(undeliverable_requests());
 });
+/** Pending requests the local service cannot deliver, because it could not take over the member's session; the reason sits under the message. */
+function undeliverable_requests() {
+  const blocked = new Map((room.value.free?.members || []).filter((member) => member.adopt_error).map((member) => [member.id, member]));
+  return (room.value.free?.requests || []).filter((request) => request.status === "pending" && blocked.has(request.member_id))
+    .map((request) => ({ id: `undeliverable-${request.id}`, author: blocked.get(request.member_id).name, slot_card: true, undeliverable: true,
+      created_at: request.created_at, request_message_id: request.message_id,
+      failure: { role: blocked.get(request.member_id).role, result: blocked.get(request.member_id).adopt_error } }));
+}
 const expanded_rewinds = ref(new Set());
 /** Consecutive rewound messages fold into one line at the first of them until expanded; a retracted one is a line of its own. */
 const rewound_runs = computed(() => {
@@ -994,7 +1003,7 @@ const free_layout = computed(() => {
   const root_ids = [];
   const root_at = (id) => root_ids.findLast((root) => root <= id) ?? id;
   const place = (item) => {
-    if ((!item.execution_id && !item.cancelled_turn && !item.arrangement) || item.withdrawn) return false;
+    if ((!item.execution_id && !item.cancelled_turn && !item.arrangement && !item.undeliverable) || item.withdrawn) return false;
     const request = item.discussion_request || executions.get(item.execution_id)?.requests?.find((value) => value.discussion_session_id);
     const own = item.anchor_message_id ?? item.request_message_id;
     const free_anchor = own !== item.request_message_id ? root_at(own) : own;
@@ -1666,12 +1675,12 @@ function copy_message(message) { act("copy", `${view.value.room_site}/r/${room.v
             <ExecutionNotes v-if="execution_notes.get(message.execution_id)?.length" live :notes="execution_notes.get(message.execution_id)" />
           </template>
         </UChatMessage>
-        <section v-else-if="message.failure" :id="message.id" class="channel-message channel-failed-execution" :data-author="bridge.identities[message.author]?.style" :aria-label="`${bridge.display_name(message.author)} 执行失败`">
+        <section v-else-if="message.failure" :id="message.id" class="channel-message channel-failed-execution" :data-author="bridge.identities[message.author]?.style" :aria-label="`${bridge.display_name(message.author)} ${message.undeliverable ? '无法投递' : '执行失败'}`">
           <div class="channel-message-byline">
             <UAvatar :src="bridge.identities[message.author]?.icon" :text="bridge.identities[message.author]?.initials || '?'" :alt="bridge.display_name(message.author)" size="md" class="channel-avatar" :class="bridge.identities[message.author]?.style" />
             <div class="channel-message-meta">
-              <div class="channel-message-author"><strong>{{ bridge.display_name(message.author) }}</strong><span v-if="message.failure.role === 'host'" class="channel-message-round">主持工作</span><UBadge label="执行失败" color="error" variant="soft" size="xs" /></div>
-              <div v-for="at in [message.slot_card ? message.created_at * 1000 : message.created_at]" :key="message.id" class="channel-message-provenance"><time :title="new Date(at).toLocaleString('zh-CN')">{{ bridge.format_time(at) }}</time><span>执行 #{{ message.failure.id }}</span></div>
+              <div class="channel-message-author"><strong>{{ bridge.display_name(message.author) }}</strong><span v-if="message.failure.role === 'host'" class="channel-message-round">主持工作</span><UBadge :label="message.undeliverable ? '无法投递' : '执行失败'" color="error" variant="soft" size="xs" /></div>
+              <div v-for="at in [message.slot_card ? message.created_at * 1000 : message.created_at]" :key="message.id" class="channel-message-provenance"><time :title="new Date(at).toLocaleString('zh-CN')">{{ bridge.format_time(at) }}</time><span v-if="message.failure.id">执行 #{{ message.failure.id }}</span></div>
             </div>
             <span v-if="message.failure.elapsed_seconds != null" class="channel-message-provenance channel-message-elapsed">耗时 {{ format_elapsed(message.failure.elapsed_seconds) }}</span>
           </div>

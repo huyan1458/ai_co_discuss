@@ -65,7 +65,7 @@ function member_status(member, state) {
   if (execution && LIVE.includes(execution.status)) return execution.stale ? "执行失联，停止未确认" : "正在处理";
   // Voided in a window or App the runner cannot stop: that turn may still run, so new messages wait for it.
   if (member.held_until) return `${execution?.stop_result === "unconfirmed" ? "上一轮停止未确认" : "上一轮已作废，可能仍在生成"}，等待结束确认或迟到回答；${member.pending ? `${member.pending} 条新消息` : "新消息"}最晚 ${bridge.format_time(member.held_until * 1000)} 送达`;
-  if (member.pending && member.adopt_error) return `无法投递 ${member.pending} 条：${member.adopt_error}`;
+  if (member.pending && member.adopt_error) return `无法投递 ${member.pending} 条`;
   if (member.pending) return `待投递 ${member.pending} 条`;
   if (state === "queued") return discussion.value ? "本轮排队" : "等待依次发言";
   if (execution?.status === "failed") return "执行失败";
@@ -106,7 +106,7 @@ const status = computed(() => {
   const working = (free.value.members || []).filter(busy);
   if (working.some((member) => member.execution?.stale)) return { tone: "error", title: "执行失联", detail: "停止未确认，可在成员菜单中停止后重发" };
   const undeliverable = working.find((member) => member.pending && member.adopt_error && !LIVE.includes(member.execution?.status));
-  if (undeliverable) return { tone: "error", title: "无法投递", detail: `${bridge.display_name(undeliverable.name)}：${undeliverable.adopt_error}` };
+  if (undeliverable) return { tone: "error", title: "无法投递", detail: `${bridge.display_name(undeliverable.name)} 的消息未送达，原因见对话区` };
   const latest_chain = Math.max(0, ...(free.value.requests || []).map((request) => request.chain_id));
   const rounds = (free.value.chain_rounds || []).find((chain) => chain.chain_id === latest_chain);
   // How far the latest chain got against its limit; shown while it runs, so the stop never comes as a surprise.
