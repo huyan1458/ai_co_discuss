@@ -124,7 +124,7 @@ state.directory_pending = new Map();
 state.directory_version = 0;
 state.navigation_version = 0;
 state.admin = { loaded: false, local: false, registered: false, setup_available: false, logged_in: false, profile: null, identity_version: 0 };
-state.launch = { available: false, remote: false, relay: null, connect_command: "", profiles: {}, projects: [], presets: [], builtin_presets: [], workflows: [], description_templates: {}, workspace: {}, scheduler: {}, error: "", recoveries: [] };
+state.launch = { available: false, remote: false, relay: null, connect_command: "", profiles: {}, projects: [], presets: [], builtin_presets: [], hidden_builtins: [], workflows: [], description_templates: {}, workspace: {}, scheduler: {}, error: "", recoveries: [] };
 // The workflow chosen in the new-room form: { id, label, members: { card: instance } }; cards removed from the form drop out at submission.
 state.create_workflow = null;
 state.create_host_workflows = false;
@@ -1215,10 +1215,11 @@ async function move_browser_description_templates() {
   } catch (error) { console.warn("Moving description templates failed:", error.message); }
 }
 
-/** Save the user's presets and/or default descriptions in the local service and keep its answer. */
+/** Save the user's presets, default descriptions and/or deleted built-ins in the local service and keep its answer. */
 async function save_presets(input) {
   const result = await local_launch_request("presets", input);
-  Object.assign(state.launch, { presets: result.presets, description_templates: result.description_templates });
+  Object.assign(state.launch, { presets: result.presets, description_templates: result.description_templates,
+    builtin_presets: result.builtin_presets || [], hidden_builtins: result.hidden_builtins || [] });
   publish_view();
 }
 
@@ -1304,11 +1305,14 @@ async function save_expert_preset(name, label) {
   } catch (error) { show_toast(`预设未保存：${error.message}`, true); }
 }
 
-/** Remove the user's preset of this name; a built-in one of the same name shows again. */
+/** Remove the preset of this name from the add row: the user's own one, and a built-in one of the same name with it. */
 async function delete_expert_preset(name) {
+  const builtin = state.launch.builtin_presets.some(item => item.name === name);
+  const shown = expert_presets().find(item => item.name === name)?.label || name;
   try {
-    await save_presets({ presets: state.launch.presets.filter(item => item.name !== name) });
-    show_toast(`已删除预设「${name}」`);
+    await save_presets({ presets: state.launch.presets.filter(item => item.name !== name),
+      ...builtin ? { hidden_builtins: [...state.launch.hidden_builtins, name] } : {} });
+    show_toast(`已删除预设「${shown}」`);
   } catch (error) { show_toast(`预设未删除：${error.message}`, true); }
 }
 
@@ -1570,7 +1574,11 @@ async function send_message(event) {
   element("send-message").disabled = true;
   state.sending_message = true;
   element("message-input").disabled = true;
-  state.sending_preview = { author: payload.author, text: payload.text, files: drafts.map(file => file.file.name) };
+  const preview = { author: payload.author, text: payload.text, files: drafts.map(file => file.file.name) };
+  // A message the site will likely queue skips the in-transcript card, which would flash before moving above the composer.
+  const queue = state.room.free?.queued_messages;
+  const likely_queued = payload.queue && (queue?.busy || queue?.items?.length);
+  state.sending_preview = likely_queued ? null : preview;
   let sent;
   state.sending_done = new Promise(resolve => { sent = resolve; });
   publish_view();
@@ -1585,7 +1593,7 @@ async function send_message(event) {
     // An unsaved message stays as a failed card in place, the one signal of this failure; the draft is kept for the retry.
     if (saved) notify_failure(error, `留言已保存，但页面刷新失败：${error.message}`);
     else {
-      state.sending_preview = { ...state.sending_preview, failed: error.message };
+      state.sending_preview = { ...preview, failed: error.message };
       error.notified = true;
     }
     throw error;
@@ -2412,7 +2420,7 @@ async function load_launch_settings() {
     // Keep the saved machine defaults so every new form can start from them again.
     state.launch.saved_profiles = JSON.parse(JSON.stringify(settings.participants || {}));
     Object.assign(state.launch, { available: true, profiles: settings.participants, projects: settings.projects || [], api_providers: settings.api_providers || {}, api_keys: settings.api_keys || {},
-      presets: settings.presets || [], builtin_presets: settings.builtin_presets || [], workflows: settings.workflows || [], description_templates: settings.description_templates || {},
+      presets: settings.presets || [], builtin_presets: settings.builtin_presets || [], hidden_builtins: settings.hidden_builtins || [], workflows: settings.workflows || [], description_templates: settings.description_templates || {},
       scheduler_providers: settings.scheduler_providers || {}, scheduler_modes: settings.scheduler_modes || {}, scheduler_default_mode: settings.scheduler_default_mode || "", error: "",
       notice: relay_machine ? `经电脑「${relay_machine.name}」执行本机操作` : local_connection ? "已连接本机服务，讨论保存在当前网站" : "" });
     Object.values(state.launch.profiles).forEach(fill_api_key);

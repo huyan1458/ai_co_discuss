@@ -39,6 +39,18 @@ const BRIEF_MIN_FIRST = 20;
 const BACKLOG_LIMIT = 3;
 const READABLE = /[\p{L}\p{N}]/gu;
 const readable_length = (text) => (text.match(READABLE) || []).length;
+// A document read on its own (a file preview) is not a message; any non-zero id marks that something is playing.
+const DOCUMENT_ID = -2;
+// Readers on this page (the transcript's and a file preview's) share the speakers: one plays at a time, and a broadcast
+// waits while another reader is reading on request.
+const readers = new Set();
+
+/** The position just past the first `count` readable characters, so text shown before the reading start is skipped. */
+function skip_readable(text, count) {
+  let index = 0;
+  for (; index < text.length && count > 0; index += 1) if (/[\p{L}\p{N}]/u.test(text[index])) count -= 1;
+  return index;
+}
 
 /** Flatten an element's readable text, remembering where each character lives so a sentence can be highlighted. */
 function collect_text(root) {
@@ -123,9 +135,10 @@ function selection_index({ points }, selection) {
  * @param {(id: number) => object} options.message_of The message with this id from the room view.
  * @param {(name: string) => Promise<string>} options.voice_for Voice for a member, or "" for the default voice.
  * @param {() => string} options.title Room title shown on the lock screen.
- * @returns {{ state: object, start: Function, stop: Function, follow: Function, toggle_pause: Function, body_of: Function, unlock: Function, set_broadcast: Function, announce: Function }}
+ * @param {string} [options.hosts] Selector of the elements the highlight is drawn in (positioned, isolated).
+ * @returns {{ state: object, start: Function, read_document: Function, stop: Function, dispose: Function, follow: Function, toggle_pause: Function, body_of: Function, unlock: Function, set_broadcast: Function, announce: Function }}
  */
-export function use_read_aloud({ bridge, container, prepare, message_of, voice_for, title }) {
+export function use_read_aloud({ bridge, container, prepare = async () => {}, message_of = () => null, voice_for, title, hosts = ".channel-answer, .channel-answer-summary" }) {
   // `reading`: a reading on request is running (not a broadcast). `following`: the transcript scrolls with the sentence
   // being read; off until the user turns it on, and the page turns it off on any manual scroll.
   const state = reactive({ message_id: 0, loading: false, paused: false, broadcasting: false, reading: false, following: false });
@@ -191,7 +204,7 @@ export function use_read_aloud({ bridge, container, prepare, message_of, voice_f
     layer?.remove();
     layer = null;
     current = sentence;
-    const host = sentence?.ranges[0]?.startContainer.parentElement?.closest(".channel-answer, .channel-answer-summary");
+    const host = sentence?.ranges[0]?.startContainer.parentElement?.closest(hosts);
     if (!host) return;
     const origin = host.getBoundingClientRect();
     layer = document.createElement("div");
@@ -255,7 +268,9 @@ export function use_read_aloud({ bridge, container, prepare, message_of, voice_f
 
   function show_on_lock_screen(plan) {
     if (!("mediaSession" in navigator) || typeof MediaMetadata !== "function") return;
-    const heading = plan.id > 0 ? `${bridge.display_name(author(plan.id))} · #${plan.id}` : "共议 · 播报";
+    // Another reader may have taken the lock-screen controls since; whatever plays now answers them.
+    bind_media_session();
+    const heading = plan.heading || (plan.id > 0 ? `${bridge.display_name(author(plan.id))} · #${plan.id}` : "共议 · 播报");
     navigator.mediaSession.metadata = new MediaMetadata({ title: heading, artist: "共议 · 朗读", album: title() });
     navigator.mediaSession.playbackState = "playing";
   }
@@ -418,8 +433,14 @@ export function use_read_aloud({ bridge, container, prepare, message_of, voice_f
     Object.assign(state, { message_id: 0, loading: false, paused: false, reading: false });
     highlight(null);
     if ("mediaSession" in navigator) { navigator.mediaSession.metadata = null; navigator.mediaSession.playbackState = "none"; }
-    queueMicrotask(drain);
+    queueMicrotask(() => readers.forEach((reader) => reader.drain()));
   }
+
+  /** Stop any other reader on the page that is playing, so a reading on request is heard alone. */
+  function claim() {
+    for (const reader of readers) if (reader !== api && reader.state.message_id) reader.stop();
+  }
+  const reading_elsewhere = () => [...readers].some((reader) => reader !== api && reader.state.reading);
 
   /** Turn broadcasting on or off; off drops whatever is still queued. Turning it on must happen in a click. */
   function set_broadcast(on) {
@@ -446,7 +467,7 @@ export function use_read_aloud({ bridge, container, prepare, message_of, voice_f
 
   /** Play queued broadcast items one at a time while nothing else is playing. */
   async function drain() {
-    if (draining || state.message_id || !state.broadcasting || !queue.length) return;
+    if (draining || state.message_id || !state.broadcasting || !queue.length || reading_elsewhere()) return;
     draining = true;
     const token = run;
     try {
@@ -476,6 +497,7 @@ export function use_read_aloud({ bridge, container, prepare, message_of, voice_f
     const token = run;
     // Unlock the element within this click; later paragraphs then play without a gesture, also with the screen locked.
     unlock();
+    claim();
     // Expanding a shortened answer replaces its text nodes, so a selection is turned into a character position first.
     const first_body = selection && body_of(message_id);
     const from = first_body ? selection_index(collect_text(first_body), selection) : 0;
@@ -513,8 +535,41 @@ export function use_read_aloud({ bridge, container, prepare, message_of, voice_f
     if (token === run) stop();
   }
 
-  // Re-draw on resize: the boxes are fixed to where the text was laid out.
-  window.addEventListener("resize", () => { if (current) highlight(current); });
+  /**
+   * Read one rendered document (a file preview) to its end: from where a selection inside it begins, or from its start
+   * after `skip` readable characters (front matter). Must be called from the click itself so phones allow sound.
+   * @param {HTMLElement} root The rendered document.
+   * @param {{ selection?: Range, skip?: number, heading?: string }} [options]
+   */
+  async function read_document(root, { selection = null, skip = 0, heading = "" } = {}) {
+    stop();
+    const token = run;
+    unlock();
+    claim();
+    Object.assign(state, { message_id: DOCUMENT_ID, reading: true, following: false });
+    try {
+      const flat = collect_text(root);
+      const from = selection ? selection_index(flat, selection) : skip_readable(flat.text, skip);
+      const plan = { id: DOCUMENT_ID, heading, chunks: chunks_of(split_sentences(flat, from), "", true), speaker: await voice_for(""), pending: [] };
+      if (token === run) { show_on_lock_screen(plan); await read_plan(plan, token, crypto.randomUUID(), () => {}); }
+    } catch (error) {
+      if (token === run) bridge.notify("error", `朗读失败：${error.message}`);
+    }
+    if (token === run) stop();
+  }
 
-  return { state, start, stop, follow, toggle_pause, body_of, unlock, set_broadcast, announce };
+  // Re-draw on resize: the boxes are fixed to where the text was laid out.
+  const redraw = () => { if (current) highlight(current); };
+  window.addEventListener("resize", redraw);
+
+  /** Stop and leave the page's readers, for a reader whose view goes away. */
+  function dispose() {
+    stop();
+    readers.delete(api);
+    window.removeEventListener("resize", redraw);
+  }
+
+  const api = { state, start, read_document, stop, dispose, drain, follow, toggle_pause, body_of, unlock, set_broadcast, announce };
+  readers.add(api);
+  return api;
 }

@@ -7,9 +7,11 @@ const SAVED_MARK = "••••••••••••";
 const PREVIEW_TEXT = "你好，我会用这个声音为你朗读房间里的消息。";
 const CONSOLE_URL = "https://console.volcengine.com/speech/new";
 const rates = [{ value: -20, label: "0.8×" }, { value: 0, label: "1×" }, { value: 20, label: "1.2×" }, { value: 50, label: "1.5×" }, { value: 100, label: "2×" }];
-const settings = reactive({ speaker: "", speech_rate: 0, context: "", api_key_ref: "", member_voices: {}, voices: [], key_base_url: "" });
+const settings = reactive({ speaker: "", speech_rate: 0, context: "", api_key_ref: "", member_voices: {}, file_voice: "", voices: [], key_base_url: "" });
 // One voice per AI platform; members of an unset platform, the user and program messages use the default voice.
 const platforms = Object.keys(bridge.launch_clients).map((name) => ({ name, label: bridge.identities[name]?.label || name }));
+// Key of the project-file voice row, apart from platform names.
+const FILE_KEY = ":file";
 const loaded = ref(false), unavailable = ref(""), api_key = ref(""), busy = ref("");
 // Collapsed by default; the header still says whether speech is ready.
 const open = ref(false);
@@ -23,22 +25,25 @@ onMounted(async () => {
 
 /** Save every field together; the service validates and answers with what it kept. */
 async function save() {
-  const { speaker, speech_rate, context, api_key_ref, member_voices } = settings;
-  try { Object.assign(settings, await bridge.local_request("tts-settings", { speaker, speech_rate, context, api_key_ref, member_voices })); }
+  const { speaker, speech_rate, context, api_key_ref, member_voices, file_voice } = settings;
+  try { Object.assign(settings, await bridge.local_request("tts-settings", { speaker, speech_rate, context, api_key_ref, member_voices, file_voice })); }
   catch (error) { bridge.notify("error", error.message); }
 }
 
 // Known voices show by name; IDs typed earlier (enabled in the console) are kept and shown as themselves.
 const voice_items = computed(() => {
   const items = settings.voices.map((voice) => ({ label: voice.label, value: voice.id }));
-  const typed = [settings.speaker, ...Object.values(settings.member_voices)].filter((id) => id && !items.some((item) => item.value === id));
+  const typed = [settings.speaker, settings.file_voice, ...Object.values(settings.member_voices)].filter((id) => id && !items.some((item) => item.value === id));
   return [...items, ...[...new Set(typed)].map((id) => ({ label: id, value: id }))];
 });
 const platform_items = computed(() => [{ label: "跟随通用", value: "" }, ...voice_items.value]);
-/** Set the default voice, or one platform's (empty follows the default), from a choice or a typed ID. */
+/** The voice a row plays: a platform's or the file voice when set, otherwise the default voice. */
+const voice_of = (key) => (key === FILE_KEY ? settings.file_voice : key ? settings.member_voices[key] : "") || settings.speaker;
+/** Set the default voice, one platform's or the file voice (empty follows the default), from a choice or a typed ID. */
 function set_voice(platform, id) {
   const voice = String(id || "").trim();
-  if (platform) settings.member_voices = { ...settings.member_voices, [platform]: voice };
+  if (platform === FILE_KEY) settings.file_voice = voice;
+  else if (platform) settings.member_voices = { ...settings.member_voices, [platform]: voice };
   else if (voice) settings.speaker = voice;
   save();
 }
@@ -62,7 +67,7 @@ async function preview(platform) {
   sample.play().catch(() => {});
   busy.value = `preview:${platform}`;
   try {
-    const speaker = platform ? settings.member_voices[platform] || settings.speaker : settings.speaker;
+    const speaker = voice_of(platform);
     const { audio } = await bridge.local_request("tts", { text: PREVIEW_TEXT, speaker });
     sample.src = URL.createObjectURL(new Blob([Uint8Array.from(atob(audio), (character) => character.charCodeAt(0))], { type: "audio/mpeg" }));
     sample.onended = () => URL.revokeObjectURL(sample.src);
@@ -99,7 +104,13 @@ async function preview(platform) {
                 <UButton icon="i-lucide-volume-2" :aria-label="`试听 ${platform.label} 的音色`" color="neutral" variant="ghost" size="sm" :loading="busy === `preview:${platform.name}`" :disabled="!settings.api_key_ref || Boolean(busy)" @click="preview(platform.name)" />
               </div>
             </div>
-            <p class="fine-print speech-note">没单独设置的 AI、你自己的消息和程序消息都用通用音色。</p>
+            <div class="speech-row"><span>文件</span>
+              <div class="speech-inline">
+                <USelectMenu :model-value="settings.file_voice || ''" :items="platform_items" value-key="value" create-item :search-input="{ placeholder: '搜索或输入音色 ID' }" aria-label="朗读文件的音色" size="sm" class="min-w-0 flex-1" @update:model-value="set_voice(FILE_KEY, $event)" @create="set_voice(FILE_KEY, $event)" />
+                <UButton icon="i-lucide-volume-2" aria-label="试听朗读文件的音色" color="neutral" variant="ghost" size="sm" :loading="busy === `preview:${FILE_KEY}`" :disabled="!settings.api_key_ref || Boolean(busy)" @click="preview(FILE_KEY)" />
+              </div>
+            </div>
+            <p class="fine-print speech-note">没单独设置的 AI、你自己的消息、程序消息和文件都用通用音色。</p>
             <div class="speech-row"><span>语速</span>
               <div class="speech-rates" role="group" aria-label="朗读语速"><UButton v-for="rate in rates" :key="rate.value" :label="rate.label" color="neutral" variant="ghost" size="xs" :class="{ chosen: settings.speech_rate === rate.value }" :aria-pressed="settings.speech_rate === rate.value" @click="settings.speech_rate = rate.value; save()" /></div>
             </div>

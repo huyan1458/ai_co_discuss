@@ -93,7 +93,7 @@ tts 用朗读设置把 text（不超过 300 字）合成为 MP3，返回 base64�
 stt 按序接收录音片段（upload_id、index、base64 PCM 16 kHz 单声道、final）；最后一段时识别整段录音并返回 text。
 pick-directory 在本机弹出系统目录选择窗口，返回所选路径；取消时不返回路径。
 projects 读取本机已配置的项目（名称与绝对路径）；提供 JSON（projects 列表）时整体替换保存。
-presets 读取本机的专家预设（含内置预设）与各平台默认描述；提供 JSON（presets 列表和/或 description_templates）时替换对应部分。
+presets 读取本机的专家预设（含未删除的内置预设）与各平台默认描述；提供 JSON（presets 列表、description_templates 和/或 hidden_builtins 已删除的内置预设名）时替换对应部分。
 machine-link 返回本机连接指定 site 的电脑编号、名称与凭据，供已登录管理员的网页完成配对；不存在时创建。
 admin-account 把在指定 site 注册的管理员用户名与密码保存到服务目录的 admin-accounts.json；须提供 site、username、password。
 room-member 为房间邀请、请回一位成员；须提供 site、room_id、token、action（add/rejoin）、name。
@@ -393,11 +393,13 @@ function english_preset_ids(presets) {
   });
 }
 
-/** The user's expert presets and per-platform default descriptions saved on this computer, plus the built-in presets. */
+/** The user's expert presets and per-platform default descriptions saved on this computer, plus the built-in presets the user has not deleted. */
 export function expert_presets(home) {
   const path = join(home, 'expert-presets.json');
   const saved = existsSync(path) ? JSON.parse(readFileSync(path, 'utf8')) : {};
-  return { presets: english_preset_ids(saved.presets || []), description_templates: saved.description_templates || {}, builtin_presets: BUILTIN_EXPERT_PRESETS };
+  const hidden_builtins = saved.hidden_builtins || [];
+  return { presets: english_preset_ids(saved.presets || []), description_templates: saved.description_templates || {}, hidden_builtins,
+    builtin_presets: BUILTIN_EXPERT_PRESETS.filter(preset => !hidden_builtins.includes(preset.name)) };
 }
 
 /** Check one expert preset; a workflow's agent card is a preset and obeys the same rule. */
@@ -412,11 +414,14 @@ export function validate_preset(preset) {
   if ([preset.model, preset.effort].some(value => (value || '').length > MAX_PRESET_FIELD)) throw new Error(`${preset.name} 的模型或强度过长`);
 }
 
-/** Replace the user's presets or default descriptions (whichever the input carries); every field is checked first. */
+/** Replace the user's presets, default descriptions or deleted built-ins (whichever the input carries); every field is checked first. */
 export function save_expert_presets(home, input) {
   const current = expert_presets(home);
   const presets = input.presets === undefined ? current.presets : input.presets;
   const templates = input.description_templates === undefined ? current.description_templates : input.description_templates;
+  const hidden_builtins = input.hidden_builtins === undefined ? current.hidden_builtins : input.hidden_builtins;
+  const builtin_names = BUILTIN_EXPERT_PRESETS.map(preset => preset.name);
+  if (!Array.isArray(hidden_builtins) || hidden_builtins.some(name => !builtin_names.includes(name))) throw new Error(`hidden_builtins 只能列出内置预设：${builtin_names.join('、')}`);
   if (!Array.isArray(presets) || presets.length > MAX_EXPERT_PRESETS) throw new Error(`presets 必须为列表，最多 ${MAX_EXPERT_PRESETS} 个`);
   const names = new Set();
   for (const preset of presets) {
@@ -429,7 +434,7 @@ export function save_expert_presets(home, input) {
     throw new Error(`description_templates 须为 {平台名: 描述}，每段 1–${MAX_PRESET_DESCRIPTION} 字`);
   }
   mkdirSync(home, { recursive: true, mode: 0o700 });
-  atomic_json(join(home, 'expert-presets.json'), { presets, description_templates: templates });
+  atomic_json(join(home, 'expert-presets.json'), { presets, description_templates: templates, hidden_builtins });
   return expert_presets(home);
 }
 

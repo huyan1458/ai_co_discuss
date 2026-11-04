@@ -20,8 +20,9 @@ const SPEAKER_PATTERN = /^[\w.-]{1,128}$/;
 const MAX_SILENCE_MS = 3000;
 // Synthesized paragraphs are kept on this computer, so hearing the same text again is instant and not billed again.
 const CACHE_DIR = 'tts-cache';
-const CACHE_LIMIT = 400;
-const CACHE_PRUNE = 100;
+// The cache is bounded by total size; past it, the least recently heard entries go until it is back under the target.
+const CACHE_LIMIT_BYTES = 50 * 1024 * 1024;
+const CACHE_KEEP_BYTES = 40 * 1024 * 1024;
 const MAX_MEMBER_VOICES = 50;
 // A default tone instruction (context_texts) so reading sounds told rather than recited; users may change or clear it.
 export const TTS_DEFAULT_CONTEXT = '请用自然放松的语气朗读，像给朋友讲故事一样，有轻重缓急，句子之间自然停顿。';
@@ -63,7 +64,7 @@ const STATUS_MESSAGES = {
 export function tts_settings(home) {
   const path = join(home, SETTINGS_FILE);
   const saved = existsSync(path) ? JSON.parse(readFileSync(path, 'utf8')) : {};
-  return { ...TTS_DEFAULTS, member_voices: {}, ...saved, voices: TTS_VOICES, key_base_url: TTS_BASE_URL };
+  return { ...TTS_DEFAULTS, member_voices: {}, file_voice: '', ...saved, voices: TTS_VOICES, key_base_url: TTS_BASE_URL };
 }
 
 /** Validate and save the read-aloud settings the page edits. */
@@ -83,7 +84,10 @@ export function save_tts_settings(home, input) {
     if (String(name).length > 40 || !SPEAKER_PATTERN.test(voice)) throw new Error('成员音色无效，请重新选择');
     member_voices[name] = voice;
   }
-  const settings = { speaker, speech_rate, context, member_voices, ...(api_key_ref ? { api_key_ref } : {}) };
+  // The voice for reading project files; empty uses the default voice.
+  const file_voice = String(input.file_voice ?? '').trim();
+  if (file_voice && !SPEAKER_PATTERN.test(file_voice)) throw new Error('文件音色无效，请重新选择');
+  const settings = { speaker, speech_rate, context, member_voices, file_voice, ...(api_key_ref ? { api_key_ref } : {}) };
   mkdirSync(home, { recursive: true, mode: 0o700 });
   atomic_json(join(home, SETTINGS_FILE), settings);
   return tts_settings(home);
@@ -125,10 +129,17 @@ function cache_read(path) {
 function cache_write(directory, path, value) {
   mkdirSync(directory, { recursive: true, mode: 0o700 });
   atomic_json(path, value);
-  const names = readdirSync(directory).filter(name => name.endsWith('.json'));
-  if (names.length <= CACHE_LIMIT) return;
-  const aged = names.map(name => ({ name, time: statSync(join(directory, name)).mtimeMs })).sort((a, b) => a.time - b.time);
-  for (const { name } of aged.slice(0, CACHE_PRUNE)) rmSync(join(directory, name), { force: true });
+  const entries = readdirSync(directory).filter(name => name.endsWith('.json')).map(name => {
+    const { size, mtimeMs } = statSync(join(directory, name));
+    return { name, size, mtimeMs };
+  });
+  let total = entries.reduce((sum, entry) => sum + entry.size, 0);
+  if (total <= CACHE_LIMIT_BYTES) return;
+  for (const entry of entries.sort((a, b) => a.mtimeMs - b.mtimeMs)) {
+    if (total <= CACHE_KEEP_BYTES) break;
+    rmSync(join(directory, entry.name), { force: true });
+    total -= entry.size;
+  }
 }
 
 /**

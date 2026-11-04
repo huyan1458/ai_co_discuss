@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict';
-import { mkdtempSync, mkdirSync, writeFileSync, appendFileSync, rmSync, existsSync, readFileSync } from 'node:fs';
+import { mkdtempSync, mkdirSync, writeFileSync, appendFileSync, rmSync, existsSync, readFileSync, utimesSync } from 'node:fs';
 import { spawn, spawnSync } from 'node:child_process';
 import { createHash, randomUUID } from 'node:crypto';
 import { EventEmitter, once } from 'node:events';
@@ -12,14 +12,14 @@ import vm from 'node:vm';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import { setTimeout as delay } from 'node:timers/promises';
 import { listen_local } from './local_port.mjs';
-import { DiscussionStore, service_drafts, validate_config } from '../runner/discussion_runner.mjs';
+import { DiscussionStore, load_config, service_drafts, validate_config } from '../runner/discussion_runner.mjs';
 import { cwd_key, free_task_files, FreeRoomRunner, review_capability_version, workspace_snapshot } from '../runner/free_runner.mjs';
 import { SessionDriver } from '../runner/session_driver.mjs';
 
 import { EXPERT_PROMPT_PRESETS, expert_prompt, free_task_text, software_rules } from '../runner/expert_prompts.mjs';
 import { participant_tools, system_prompt } from '../runner/adapters/api.mjs';
 import { glob_regex, open_project, run_file_tool } from '../runner/adapters/api_files.mjs';
-import { DiscussionService, migrate_platform_ids, migrate_service_home, read_registry, register_room, service_pid, service_ready, start_service, unregister_room } from '../runner/discussion_service.mjs';
+import { DiscussionService, migrate_platform_ids, migrate_service_home, read_registry, register_room, service_pid, service_ready, start_service, sweep_service_home, unregister_room } from '../runner/discussion_service.mjs';
 import { restore_room, room_profiles } from '../runner/discussion_launch.mjs';
 import { adapter_of, deliver_task } from '../runner/adapters/index.mjs';
 import { adopted_fork, claude_api_error, claude_exit_error, claude_inbox_ready, claude_rule_path, standalone_claude_env, watch_window_turn } from '../runner/adapters/claude.mjs';
@@ -1358,6 +1358,31 @@ function room_config(directory, site, room, name = room) {
     participants: { Antigravity: { adapter: 'antigravity', ipc_directory: directory } } })));
   return path;
 }
+
+test('the housekeeping sweep removes week-old files of ended executions and keeps current or recent ones', t => {
+  const home = mkdtempSync(join(tmpdir(), 'discussion-sweep-'));
+  t.after(() => rmSync(home, { recursive: true, force: true }));
+  const path = room_config(home, 'http://127.0.0.1:1', 'room1');
+  register_room(home, path);
+  const config = load_config(path);
+  const store = new DiscussionStore(config.directory);
+  new FreeRoomRunner(config, store).save('Antigravity', { client_id: 'c', execution_id: 7, status: 'running' });
+  store.close();
+  const old = new Date(Date.now() - 8 * 24 * 60 * 60 * 1000);
+  const write = (name, aged) => {
+    const file = join(config.directory, name);
+    writeFileSync(file, '{}');
+    if (aged) utimesSync(file, old, old);
+    return file;
+  };
+  const ended = ['free-5.task.json', 'free-5.access.json', 'claude-free-5.log', 'event-3.task.json'].map(name => write(name, true));
+  const kept = [write('free-7.access.json', true), write('free-9.task.json', false), write('manual-Claude.access.json', true)];
+  const removed = sweep_service_home(home);
+  assert.equal(removed.execution_files, ended.length);
+  for (const file of ended) assert.ok(!existsSync(file), `${file} is removed`);
+  for (const file of kept) assert.ok(existsSync(file), `${file} is kept`);
+  assert.ok(existsSync(join(config.directory, 'runtime.sqlite3')));
+});
 
 test('the service ticks every registered room and pauses a room once it is unregistered', async t => {
   const f = await fixture(t);

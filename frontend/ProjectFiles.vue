@@ -1,5 +1,6 @@
 <script setup>
-import { computed, inject, onBeforeUnmount, onMounted, ref } from "vue";
+import { computed, inject, onBeforeUnmount, onMounted, ref, watch } from "vue";
+import { use_read_aloud } from "./read-aloud.js";
 
 const props = defineProps({ directory: { type: String, required: true } });
 const { view, bridge } = inject("discussion");
@@ -68,8 +69,89 @@ const lines = computed(() => preview.value?.text == null ? [] : preview.value.te
 const line_count = computed(() => lines.value.length);
 const gutter = computed(() => Array.from({ length: line_count.value }, (_, index) => index + 1).join("\n"));
 const encoding_label = computed(() => (preview.value?.encoding || "utf-8").toUpperCase());
-onMounted(() => read_directory());
-onBeforeUnmount(() => { directory_request++; preview_request++; });
+
+// Read-aloud of a Markdown preview, as for a message card, in the file voice (the default voice when unset).
+// Front matter (a leading `---` block) is shown but not read.
+const FRONT_MATTER = /^---\r?\n[\s\S]*?\r?\n---[ \t]*(?:\r?\n|$)/;
+// "Listen from here" waits until a selection has settled; most selections are for copying.
+const LISTEN_SETTLE_MS = 350;
+const FOLLOW_KEYS = ["ArrowUp", "ArrowDown", "PageUp", "PageDown", "Home", "End", " "];
+const editor_body = ref(null), markdown_scroll = ref(null), markdown_body = ref(null);
+const speech_ready = ref(false);
+const listen_here = ref(null);
+let listen_timer = 0, pointer_down = false;
+const speech_settings = () => bridge.local_request("tts-settings", {});
+const reader = use_read_aloud({ bridge, container: () => markdown_scroll.value, hosts: ".project-markdown-preview",
+  voice_for: async () => { try { return (await speech_settings()).file_voice || ""; } catch { return ""; } },
+  title: () => view.value.room?.title || "" });
+const can_read = computed(() => speech_ready.value && format.value === "markdown" && !source.value && Boolean(preview.value?.text));
+
+/** Check whether this computer has a speech key, so the read-aloud entries show only when they can work. */
+function check_speech() {
+  speech_settings().then((settings) => { speech_ready.value = Boolean(settings.api_key_ref); }, () => { speech_ready.value = false; });
+}
+
+/** Read the whole file from its first line after the front matter. */
+function read_file() {
+  const front = FRONT_MATTER.exec(preview.value?.text || "")?.[0] || "";
+  reader.read_document(markdown_body.value, { skip: (front.match(/[\p{L}\p{N}]/gu) || []).length, heading: preview_name.value });
+}
+
+/** Hide the offer while a selection is changing and check again once it settles. */
+function schedule_listen() {
+  listen_here.value = null;
+  window.clearTimeout(listen_timer);
+  if (!pointer_down) listen_timer = window.setTimeout(track_selection, LISTEN_SETTLE_MS);
+}
+// Pressing the offer itself must not hide it before its click lands.
+const on_offer = (event) => Boolean(event.target.closest?.(".file-listen-offer"));
+const press = (event) => { if (!on_offer(event)) pointer_down = true; };
+const release = (event) => { if (on_offer(event)) return; pointer_down = false; schedule_listen(); };
+
+/** Offer reading from a selection made in the Markdown preview: under the selection's end, or in the bottom dock on touch screens. */
+function track_selection() {
+  const selection = document.getSelection();
+  const range = selection?.rangeCount && !selection.isCollapsed ? selection.getRangeAt(0) : null;
+  const box = editor_body.value?.getBoundingClientRect();
+  if (!range || !box || !can_read.value || !markdown_body.value?.contains(range.startContainer)) return;
+  const rects = range.getClientRects(), end = rects[rects.length - 1] || range.getBoundingClientRect();
+  listen_here.value = { range: range.cloneRange(), touch: window.matchMedia("(pointer: coarse)").matches,
+    left: Math.min(end.right - box.left - 8, box.width - 90), top: end.bottom - box.top + 6 };
+}
+
+/** Start reading where the selection begins and go on to the end of the file. */
+function listen_from_selection() {
+  const { range } = listen_here.value;
+  listen_here.value = null;
+  document.getSelection()?.removeAllRanges();
+  reader.read_document(markdown_body.value, { selection: range, heading: preview_name.value });
+}
+
+/** Any manual scroll (wheel, touch drag, scroll keys, scrollbar) turns following off; only its button turns it back on. */
+function stop_following(event) {
+  if (!reader.state.following) return;
+  if (event.type === "keydown" && !FOLLOW_KEYS.includes(event.key)) return;
+  if (event.type === "pointerdown" && event.target !== event.currentTarget) return;
+  reader.state.following = false;
+}
+
+// Closing the preview, switching to source or opening another file ends the reading.
+watch([preview_open, source, rendered], () => { listen_here.value = null; if (reader.state.message_id) reader.stop(); });
+onMounted(() => {
+  read_directory();
+  check_speech();
+  document.addEventListener("selectionchange", schedule_listen);
+  document.addEventListener("pointerdown", press);
+  document.addEventListener("pointerup", release);
+});
+onBeforeUnmount(() => {
+  directory_request++; preview_request++;
+  document.removeEventListener("selectionchange", schedule_listen);
+  document.removeEventListener("pointerdown", press);
+  document.removeEventListener("pointerup", release);
+  window.clearTimeout(listen_timer);
+  reader.dispose();
+});
 
 /** Read one folder, retaining the previous listing when a refresh fails. */
 async function read_directory(path = "", append = false) {
@@ -93,6 +175,7 @@ async function open_file(path) {
   preview_loading.value = true;
   source.value = false;
   preview_open.value = true;
+  check_speech();
   try {
     const result = await bridge.read_room_files(room_id, path);
     if (request === preview_request) preview.value = result;
@@ -163,6 +246,8 @@ function modified_time(value) {
         <div class="project-editor-actions">
           <UButton v-if="showing_source" icon="i-lucide-wrap-text" color="neutral" :variant="wrap ? 'soft' : 'ghost'" size="sm" :aria-pressed="wrap"
             :title="wrap ? '关闭自动换行' : '自动换行'" aria-label="自动换行" @click="wrap = !wrap" />
+          <UButton v-if="can_read" :icon="reader.state.reading ? 'i-lucide-square' : 'i-lucide-volume-2'" color="neutral" variant="ghost" size="sm"
+            :title="reader.state.reading ? '停止朗读' : '朗读'" :aria-label="reader.state.reading ? '停止朗读' : '从头朗读此文件'" @click="reader.state.reading ? reader.stop() : read_file()" />
           <div v-if="can_render" class="project-editor-modes" role="group" aria-label="显示方式">
             <button type="button" :aria-pressed="!source" title="预览" @click="source = false"><UIcon name="i-lucide-eye" class="project-mode-icon" /><span>预览</span></button>
             <button type="button" :aria-pressed="source" title="源码" @click="source = true"><UIcon name="i-lucide-code-xml" class="project-mode-icon" /><span>源码</span></button>
@@ -180,7 +265,7 @@ function modified_time(value) {
       <p v-if="preview?.truncated" class="project-editor-banner"><UIcon name="i-lucide-info" />文件较大，仅显示前 {{ file_size(preview.limit) }}（共 {{ file_size(preview.size) }}）<template v-if="format === 'html'">，HTML 不渲染不完整的内容</template></p>
       <p v-else-if="can_render && !source && format === 'html'" class="project-editor-banner"><UIcon name="i-lucide-shield" />静态预览：脚本、外部样式与外部图片不加载</p>
 
-      <div class="project-editor-body">
+      <div ref="editor_body" class="project-editor-body">
         <div v-if="preview_loading" class="project-editor-state" role="status"><UIcon name="i-lucide-loader-circle" class="animate-spin" />正在读取文件…</div>
         <div v-else-if="preview_error" class="project-editor-state"><UIcon name="i-lucide-circle-alert" /><p>{{ preview_error }}</p><UButton label="重试" color="neutral" variant="outline" size="sm" @click="open_file(preview_path)" /></div>
         <div v-else-if="preview?.text === null" class="project-editor-state"><UIcon :name="preview_type[1]" /><p>{{ preview.reason }}</p></div>
@@ -192,7 +277,16 @@ function modified_time(value) {
           <pre class="project-code-text"><code>{{ preview.text }}</code></pre>
         </div>
         <iframe v-else-if="preview && format === 'html'" class="project-html-preview" sandbox="" referrerpolicy="no-referrer" :srcdoc="html_preview" title="HTML 文件预览"></iframe>
-        <div v-else-if="preview" class="project-markdown-scroll" tabindex="0"><div class="markdown-body project-markdown-preview" v-html="rendered"></div></div>
+        <div v-else-if="preview" ref="markdown_scroll" class="project-markdown-scroll" tabindex="0" @scroll.passive="schedule_listen"
+          @wheel.passive="stop_following" @touchmove.passive="stop_following" @keydown="stop_following" @pointerdown="stop_following"><div ref="markdown_body" class="markdown-body project-markdown-preview" v-html="rendered"></div></div>
+        <button v-if="listen_here && !listen_here.touch" type="button" class="channel-listen-mark file-listen-offer file-listen-mark" :style="{ left: `${listen_here.left}px`, top: `${listen_here.top}px` }"
+          title="从选中处开始朗读" aria-label="从选中处开始朗读" @mousedown.prevent @click="listen_from_selection"><UIcon name="i-lucide-headphones" />朗读</button>
+        <div v-if="listen_here?.touch || reader.state.message_id" class="file-listen-dock">
+          <button v-if="listen_here?.touch" type="button" class="channel-listen-pill file-listen-offer" aria-label="从选中处开始朗读" @mousedown.prevent @click="listen_from_selection"><UIcon name="i-lucide-headphones" />听当前</button>
+          <button v-if="reader.state.message_id" type="button" class="channel-listen-pill" :class="{ 'is-on': reader.state.following }" :aria-pressed="reader.state.following"
+            :title="reader.state.following ? '手动滚动即取消跟随' : '页面跟随朗读位置滚动'" @click="reader.state.following ? (reader.state.following = false) : reader.follow()"><UIcon name="i-lucide-locate-fixed" />{{ reader.state.following ? '跟随中' : '跟随' }}</button>
+          <button v-if="reader.state.reading" type="button" class="channel-listen-pill" aria-label="退出朗读" @click="reader.stop()"><UIcon name="i-lucide-square" />退出</button>
+        </div>
       </div>
 
       <footer class="project-editor-status">
@@ -286,7 +380,11 @@ function modified_time(value) {
 .project-code-number { flex-shrink: 0; box-sizing: content-box; width: calc(var(--digits) * 1ch); min-width: 2ch; padding: 0 14px 0 16px; text-align: right; color: var(--ui-text-dimmed); user-select: none; }
 .project-code-line { flex: 1; min-width: 0; padding-right: 20px; color: var(--ui-text); white-space: pre-wrap; overflow-wrap: anywhere; }
 .project-markdown-scroll { flex: 1; min-width: 0; overflow: auto; }
-.project-markdown-preview { max-width: 860px; margin: 0 auto; padding: 28px 40px 48px; overflow-wrap: anywhere; }
+/* Positioned and isolated so the read-aloud highlight layer sits under the text, as in a message card. */
+.project-markdown-preview { position: relative; isolation: isolate; max-width: 860px; margin: 0 auto; padding: 28px 40px 48px; overflow-wrap: anywhere; }
+/* Read-aloud offer and controls stay inside the dialog: under the selection with a pointer, in a bottom dock otherwise. */
+.file-listen-mark { position: absolute; }
+.file-listen-dock { position: absolute; inset: auto 0 12px; z-index: 3; display: flex; justify-content: center; gap: 8px; pointer-events: none; }
 .project-html-preview { display: block; flex: 1; width: 100%; border: 0; background: white; }
 .project-editor-status { display: flex; align-items: center; gap: 16px; flex-shrink: 0; height: 26px; padding: 0 14px; font-size: 11.5px; color: var(--ui-text-muted);
   background: var(--ui-bg-elevated); border-top: 1px solid var(--ui-border); font-variant-numeric: tabular-nums; white-space: nowrap; overflow: hidden; }

@@ -80,8 +80,7 @@ const PRESET_PREFIX = "preset:";
 const library_items = computed(() => [...invite_choices.value.map((name) => ({ value: name, name: bridge.display_name(name), ...bridge.identities[name],
   title: invite_count(name) ? `已在场 ${invite_count(name)} 位 · 将添加新实例` : "", aria_label: `添加 ${name} 实例` })),
   ...invite_presets.value.map((preset, index) => ({ value: PRESET_PREFIX + preset.name, name: preset.label || preset.name, ...bridge.identities[bridge.platform_of(preset.name)],
-    separated: index === 0, title: preset.description || "专家预设", aria_label: `添加预设 ${preset.label || preset.name}`,
-    removable: view.value.launch.presets.some((own) => own.name === preset.name) }))]);
+    separated: index === 0, title: preset.description || "专家预设", aria_label: `添加预设 ${preset.label || preset.name}`, removable: true }))]);
 
 /** Add the platform or preset a chip names. */
 function add_library_item(value) {
@@ -202,7 +201,7 @@ async function submit_invitation() {
 
 <style scoped>
 .pb-invite { display: flex; flex-direction: column; gap: 14px; }
-.pb-invite-cards { display: grid; grid-template-columns: repeat(auto-fill, minmax(248px, 1fr)); align-items: start; gap: 8px; }
+.pb-invite-cards { display: grid; grid-template-columns: repeat(auto-fill, minmax(min(248px, 100%), 272px)); align-items: start; gap: 8px; }
 .pb-invite-pick { display: flex; flex-direction: column; gap: 8px; min-width: 0; }
 .pb-invite-pick .fine-print { margin: 0; }
 .pb-invite-lead { margin: 0; color: var(--ui-text-toned); font-size: 13px; }

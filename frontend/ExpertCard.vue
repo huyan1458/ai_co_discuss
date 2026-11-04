@@ -426,7 +426,6 @@ onBeforeUnmount(() => { document.removeEventListener("pointerdown", close_on_out
         </div>
         <span class="expert-card-flip-actions">
           <template v-if="view.launch.available && !workflow && !preset">
-            <button v-if="own_preset" type="button" class="expert-card-flip is-cancel" :aria-label="`删除预设「${name}」`" title="删除预设" @click="bridge.delete_expert_preset(name)"><UIcon name="i-lucide-trash-2" /></button>
             <button type="button" class="expert-card-flip is-cancel" :aria-label="`${own_preset ? '更新' : '存为'}预设「${name}」`" title="存下描述、提示词、项目权限、模型与强度，之后在“预设”行一键加入" @click="save_preset">{{ own_preset ? '更新预设' : '存为预设' }}</button>
           </template>
           <button type="button" class="expert-card-flip is-cancel" :aria-label="`放弃 ${name} 的修改`" @click="cancel">取消</button>

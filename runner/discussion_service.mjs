@@ -37,6 +37,8 @@ const SWEEP_MS = 6 * 60 * 60 * 1000;
 const LOG_LIMIT_BYTES = 5 * 1024 * 1024;
 const LOG_KEEP_BYTES = 1024 * 1024;
 const STALE_LAUNCH_MS = 7 * 24 * 60 * 60 * 1000;
+// One execution's task, credential and software log, e.g. `free-12.task.json`, `claude-free-12.log`; `event-` is the older mode.
+const EXECUTION_FILE = /^(?:[a-z_]+-)?(?:free|event)-(\d+)\.(?:task\.json|access\.json|log)$/;
 const SERVICE_LOGS = ['service.log', join('local', 'website.log'), join('local', 'supervisor.log')];
 const SCRIPT = fileURLToPath(import.meta.url);
 const REPO_ROOT = dirname(dirname(SCRIPT));
@@ -567,6 +569,35 @@ function trim_log(path) {
   return true;
 }
 
+/** The execution each member's delivery record still names; its files may be in use however old they are. */
+function current_executions(directory) {
+  const path = join(directory, 'runtime.sqlite3');
+  if (!existsSync(path)) return new Set();
+  const db = new DatabaseSync(path, { readOnly: true });
+  try {
+    if (!db.prepare("SELECT 1 FROM sqlite_master WHERE type='table' AND name='free_deliveries'").get()) return new Set();
+    return new Set(db.prepare('SELECT execution_id FROM free_deliveries').all().map(row => row.execution_id));
+  } catch { return null; } finally { db.close(); }
+}
+
+/** Remove a room's per-execution files once they are a week old and no member's delivery still names the execution. */
+function sweep_execution_files(directory, now) {
+  if (!existsSync(directory)) return 0;
+  const current = current_executions(directory);
+  // An unreadable delivery table gives no proof which executions ended, so nothing is removed.
+  if (!current) return 0;
+  let removed = 0;
+  for (const name of readdirSync(directory)) {
+    const id = EXECUTION_FILE.exec(name)?.[1];
+    if (!id || current.has(Number(id))) continue;
+    const path = join(directory, name);
+    if (now - statSync(path).mtimeMs < STALE_LAUNCH_MS) continue;
+    rmSync(path, { force: true });
+    removed += 1;
+  }
+  return removed;
+}
+
 /** The newest change time of a launch folder's own records, which a pending launch still updates. */
 function launch_touched(folder) {
   return Math.max(...[folder, join(folder, 'launch.json'), join(folder, 'config.json')].filter(existsSync).map(path => statSync(path).mtimeMs));
@@ -574,23 +605,30 @@ function launch_touched(folder) {
 
 /**
  * Remove what no registered room uses: launch folders left by rooms deleted while the service was off, or launches
- * never confirmed, once they are a week old and no process holds them; answer drafts whose folder is gone; and the
- * oversized part of the service's logs. Registered rooms, settings and the local website's database are never touched.
+ * never confirmed, once they are a week old and no process holds them; answer drafts whose folder is gone; registered
+ * rooms' task, credential and log files of executions that ended a week ago; and the oversized part of the service's logs. Registered rooms, settings and the local website's database are never touched.
  */
 export function sweep_service_home(home, now = Date.now()) {
   const registered = read_registry(home).map(path => dirname(resolve(path)));
-  const launches = join(home, 'launches'), removed = { launches: [], drafts: [], logs: [] };
+  const launches = join(home, 'launches'), removed = { launches: [], drafts: [], logs: [], execution_files: 0 };
   for (const name of existsSync(launches) ? readdirSync(launches) : []) {
     const folder = join(launches, name);
     if (registered.includes(folder) || service_pid(folder) || service_pid(join(folder, 'runtime')) || now - launch_touched(folder) < STALE_LAUNCH_MS) continue;
     try { remove_room_files(home, join(folder, 'config.json')); removed.launches.push(name); } catch { /* Still held; the next sweep retries. */ }
   }
   // A draft folder is keyed by its room's data directory; one matching no remaining folder or registered room is orphaned.
-  const live = new Set();
+  const live = new Set(), runtimes = new Set();
   for (const path of read_registry(home)) {
     const folder = dirname(resolve(path));
     for (const directory of [folder, join(folder, 'runtime')]) live.add(service_drafts(home, directory));
-    try { live.add(service_drafts(home, validate_config(JSON.parse(readFileSync(path, 'utf8')), folder).directory)); } catch { /* Covered by the folder keys. */ }
+    try {
+      const { directory } = validate_config(JSON.parse(readFileSync(path, 'utf8')), folder);
+      live.add(service_drafts(home, directory));
+      runtimes.add(resolve(directory));
+    } catch { /* Covered by the folder keys; an unreadable configuration keeps its execution files. */ }
+  }
+  for (const directory of runtimes) {
+    try { removed.execution_files += sweep_execution_files(directory, now); } catch { /* Still held; the next sweep retries. */ }
   }
   for (const name of existsSync(launches) ? readdirSync(launches) : []) {
     for (const directory of [join(launches, name), join(launches, name, 'runtime')]) live.add(service_drafts(home, directory));
@@ -669,8 +707,8 @@ export async function run_service(home, output = () => {}) {
         swept_at = Date.now();
         try {
           const removed = sweep_service_home(home);
-          if (removed.launches.length || removed.drafts.length || removed.logs.length) {
-            log_line(`清理本机文件：启动目录 ${removed.launches.length} 个，草稿 ${removed.drafts.length} 个，日志 ${removed.logs.join('、') || '无'}`);
+          if (removed.launches.length || removed.drafts.length || removed.logs.length || removed.execution_files) {
+            log_line(`清理本机文件：启动目录 ${removed.launches.length} 个，草稿 ${removed.drafts.length} 个，执行文件 ${removed.execution_files} 个，日志 ${removed.logs.join('、') || '无'}`);
           }
         } catch (error) { log_line(`清理本机文件失败：${error.message}`); }
       }

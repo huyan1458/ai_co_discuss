@@ -127,8 +127,7 @@ const PRESET_PREFIX = "preset:";
 const library_items = computed(() => [...experts.map((name) => ({ value: name, name: bridge.display_name(name), ...bridge.identities[name],
   disabled: !bridge.launch_clients[name], title: library_description(name), aria_label: `添加 ${name} 实例` })),
   ...view.value && bridge.expert_presets().map((preset, index) => ({ value: PRESET_PREFIX + preset.name, name: preset.label || preset.name, ...bridge.identities[bridge.platform_of(preset.name)],
-    separated: index === 0, title: preset.description || "专家预设", aria_label: `添加预设 ${preset.label || preset.name}`,
-    removable: view.value.launch.presets.some((own) => own.name === preset.name) }))]);
+    separated: index === 0, title: preset.description || "专家预设", aria_label: `添加预设 ${preset.label || preset.name}`, removable: true }))]);
 
 /** Admit one library role, woken by the local service until its card says otherwise; a preset adds its own named instance. */
 function add_expert(name) {
@@ -198,7 +197,6 @@ const summary = computed(() => {
         <h3><span>2</span>谁来参与</h3>
         <RosterAdd ref="library" label="添加 AI" :items="library_items" @add="add_expert" @remove="(value) => bridge.delete_expert_preset(value.slice(PRESET_PREFIX.length))" />
         <WorkflowPicker :selected="view.create_workflow?.id || ''" @choose="choose_workflow" />
-        <HostWorkflowSwitch v-if="view.launch.available || view.launch.remote" :model-value="Boolean(view.create_host_workflows)" @update:model-value="bridge.write_create_host_workflows($event)" />
         <div v-if="selected_names.length" class="create-experts" role="group" aria-label="参与的 AI">
           <ExpertCard v-for="name in selected_names" :key="name" :name="name" :mode="selected[name]" :choices="access_choices(name)"
             :status="expert_status(name)" :host="host === name" :hostable="host_options.includes(name)" hosting :workflow="workflow_of(name)"
@@ -213,7 +211,8 @@ const summary = computed(() => {
       </section>
 
       <section class="create-section">
-        <h3><span>3</span>讨论（可选）</h3>
+        <h3><span>3</span>协作方式（可选）</h3>
+        <HostWorkflowSwitch v-if="view.launch.available || view.launch.remote" :model-value="Boolean(view.create_host_workflows)" @update:model-value="bridge.write_create_host_workflows($event)" />
         <UCheckbox :model-value="discussing" label="创建后开启讨论" description="主持人安排成员轮流发言，到上限或结束后回到自由协作。也可以建房后再开启。" @update:model-value="toggle_discussion($event)" />
         <template v-if="discussing">
           <UFormField label="讨论目标" description="写下问题、背景和顾虑，主持人据此推进。"><UTextarea :model-value="value('goal')" :maxlength="1000" :rows="4" autoresize :maxrows="10" placeholder="例如：我们在 A、B 两个方案之间犹豫，主要顾虑是成本和上线时间……" class="w-full" @update:model-value="write('goal', $event)" /></UFormField>
@@ -268,7 +267,7 @@ const summary = computed(() => {
 .create-mode.is-selected { background: color-mix(in srgb, var(--channel-accent) 7%, var(--ui-bg)); }
 .create-mode.is-selected > [class*="icon"] { color: var(--channel-accent); }
 .create-mode.is-selected::after { border-color: var(--channel-accent); background: radial-gradient(circle, var(--channel-accent) 3px, transparent 3.5px); }
-.create-experts { display: grid; grid-template-columns: repeat(auto-fill, minmax(248px, 1fr)); align-items: start; gap: 8px; }
+.create-experts { display: grid; grid-template-columns: repeat(auto-fill, minmax(min(248px, 100%), 272px)); align-items: start; gap: 8px; }
 .create-experts-empty { margin: 0; padding: 18px 12px; border: 1px dashed var(--ui-border); border-radius: 8px; text-align: center; color: var(--ui-text-muted); font-size: 12px; }
 .create-host-hint { display: flex; align-items: center; gap: 5px; }
 .create-host-hint > [class*="icon"] { flex-shrink: 0; width: 12px; height: 12px; color: #e0b44a; }
@@ -295,7 +294,7 @@ const summary = computed(() => {
 @media (max-width: 600px) {
   .create-discussion { height: calc(100dvh - 130px); }
   .create-scroll { padding: 18px 18px 20px; }
-  .create-modes, .create-experts { grid-template-columns: 1fr; }
+  .create-modes { grid-template-columns: 1fr; }
   .create-footer { padding: 12px 18px 14px; }
   .create-summary:not(.is-blocked) { display: none; }
   .create-footer-row { justify-content: flex-end; }

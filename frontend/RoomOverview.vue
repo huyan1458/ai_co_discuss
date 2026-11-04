@@ -6,6 +6,7 @@
 import { computed, inject, ref, watch } from "vue";
 import ChainRoundsField from "./ChainRoundsField.vue";
 import EffortSlider from "./EffortSlider.vue";
+import HostWorkflowSwitch from "./HostWorkflowSwitch.vue";
 import InviteDialog from "./InviteDialog.vue";
 import MemberDescriptionDialog from "./MemberDescriptionDialog.vue";
 import { member_actions } from "./member-actions.js";
@@ -251,6 +252,9 @@ const created = computed(() => room.value.created_at ? new Date(room.value.creat
             <UButton v-else-if="view.access?.can_manage && workflow.available" label="重新启用" size="xs" variant="ghost" color="neutral" @click="invite_workflow_id = workflow.id; inviting = true" />
           </template>
           <span v-else class="overview-muted">未启用；邀请成员时可选择工作流</span>
+        </dd></div>
+        <div v-if="saved?.registered"><dt>主持人自建工作流</dt><dd>
+          <HostWorkflowSwitch :model-value="Boolean(saved.host_workflows)" :disabled="!view.access?.can_manage || room.archived" @update:model-value="act('set_room_host_workflows', $event)" />
         </dd></div>
         <div v-if="room.free?.max_rounds"><dt>连续派活上限</dt><dd>
           <template v-if="view.access?.can_manage"><ChainRoundsField :model-value="rounds_shown" :disabled="saving_rounds" @update:model-value="save_rounds" />
