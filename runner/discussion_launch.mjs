@@ -251,19 +251,44 @@ export function pick_directory({ platform = process.platform, spawn_process = sp
 /** Some CLIs take seconds to list models; reuse a good list for a day unless the executable changes or the user retries. */
 const MODEL_CACHE_MS = 24 * 60 * 60 * 1000;
 
+/** The executable's size and modification time, so a reinstalled or updated CLI is read again. */
+function executable_stamp(profile) {
+  try { const file = statSync(profile.executable); return `${file.size}:${file.mtimeMs}`; } catch { return ''; }
+}
+
+/**
+ * The model and effort a software runs with when the card leaves them empty. One read from its own settings is
+ * cheap and always fresh; one that must run the CLI (agy) is kept for a day, because each run may refresh the
+ * software's login and, when that refresh fails, it opens a browser sign-in. `refresh` reads it again.
+ */
+export async function cached_software_defaults(home, profile, { refresh = false, query = software_defaults } = {}) {
+  if (!adapter_profile(profile.adapter)?.defaults_by_query) return query(profile);
+  const path = join(home, 'model-catalogs.json');
+  const key = JSON.stringify([profile.adapter, profile.executable || '', executable_stamp(profile), 'defaults']);
+  let cache = {};
+  try { cache = JSON.parse(readFileSync(path, 'utf8')); } catch {}
+  const entry = cache[key];
+  if (!refresh && entry && Date.now() - entry.at < MODEL_CACHE_MS) return entry.result;
+  const result = await query(profile);
+  if (result?.model) {
+    try { cache = JSON.parse(readFileSync(path, 'utf8')); } catch {}
+    atomic_json(path, { ...cache, [key]: { at: Date.now(), result } });
+  }
+  return result;
+}
+
 /** Return the software catalog, served from the private service home when still valid. */
 export async function cached_software_models(home, profile, { refresh = false, query = software_models, query_effort = software_effort, query_defaults = software_defaults } = {}) {
   const path = join(home, 'model-catalogs.json');
-  let stamp = '';
-  try { const file = statSync(profile.executable); stamp = `${file.size}:${file.mtimeMs}`; } catch {}
+  const stamp = executable_stamp(profile);
   const key = JSON.stringify([profile.adapter, profile.executable || '', stamp]);
   const effort_key = JSON.stringify([profile.adapter, profile.executable || '', stamp, 'effort', profile.model || '']);
   let cache = {};
   try { cache = JSON.parse(readFileSync(path, 'utf8')); } catch {}
   const cached = entry => !refresh && entry && Date.now() - entry.at < MODEL_CACHE_MS ? entry.result : null;
-  // Defaults are read on every request, so a changed software setting shows without waiting out the cache.
   const [result, effort, defaults] = await Promise.all([cached(cache[key]) || query(profile),
-    adapter_profile(profile.adapter)?.efforts_per_model ? cached(cache[effort_key]) || query_effort(profile) : null, query_defaults(profile)]);
+    adapter_profile(profile.adapter)?.efforts_per_model ? cached(cache[effort_key]) || query_effort(profile) : null,
+    cached_software_defaults(home, profile, { refresh, query: query_defaults })]);
   const updates = {};
   if (!cached(cache[key]) && !result.error && result.models.length) {
     updates[key] = { at: Date.now(), result };
@@ -291,7 +316,7 @@ export function launch_settings(home) {
  * `actual_model` / `actual_effort` (present only when known) are what each member's session last ran with, read from the software's own session log.
  * With `quick`, agy's default model is not queried and its entry is marked `defaults_pending`.
  */
-export async function room_models(home, raw, { read_defaults = software_defaults, read_session = session_settings } = {}) {
+export async function room_models(home, raw, { read_defaults = profile => cached_software_defaults(home, profile), read_session = session_settings } = {}) {
   const input = launch_input({ ...raw, entry: 'web' });
   if (!input.room_id) throw new Error('读取本场模型须提供 room_id');
   const paths = read_registry(home).filter(path => {

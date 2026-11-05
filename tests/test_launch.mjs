@@ -10,7 +10,7 @@ import { PassThrough } from 'node:stream';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import { test } from 'node:test';
 
-import { adopt_member_profile, adopt_workflow, borrowed_session, check_or_save_workflow, join_workflow, launch_discussion, launch_settings, room_configuration, room_files, room_models, room_member, room_member_model, room_workflow, save_launch_projects, save_launch_settings, validate_preset } from '../runner/discussion_launch.mjs';
+import { adopt_member_profile, adopt_workflow, borrowed_session, cached_software_defaults, check_or_save_workflow, join_workflow, launch_discussion, launch_settings, room_configuration, room_files, room_models, room_member, room_member_model, room_workflow, save_launch_projects, save_launch_settings, validate_preset } from '../runner/discussion_launch.mjs';
 import { get_workflow, list_workflows, save_workflow } from '../runner/workflows.mjs';
 import { API_PROVIDERS, save_api_key } from '../runner/discussion_api.mjs';
 import { read_project_files } from '../runner/project_files.mjs';
@@ -67,6 +67,23 @@ test('model discovery initializes Codex and reads every catalog page without cre
   assert.deepEqual(f.requests.map(row => row.method), ['initialize', 'initialized', 'model/list', 'model/list']);
   assert.equal(f.child.killed, true);
   assert.equal(f.invocations[0][2].shell, false);
+});
+
+test('agy default model is run once a day, not on every room read, and read again on retry', async t => {
+  const home = mkdtempSync(join(tmpdir(), 'codiscuss-defaults-'));
+  t.after(() => rmSync(home, { recursive: true, force: true }));
+  let runs = 0;
+  const query = async () => { runs++; return { model: 'gemini-test-high', effort: '' }; };
+  const profile = { adapter: 'antigravity_cli', executable: join(home, 'agy.exe') };
+  assert.equal((await cached_software_defaults(home, profile, { query })).model, 'gemini-test-high');
+  assert.equal((await cached_software_defaults(home, profile, { query })).model, 'gemini-test-high');
+  assert.equal(runs, 1);
+  await cached_software_defaults(home, profile, { query, refresh: true });
+  assert.equal(runs, 2);
+  // Software that reads its own settings file is never cached, so a changed setting shows at once.
+  await cached_software_defaults(home, { adapter: 'claude', executable: profile.executable }, { query });
+  await cached_software_defaults(home, { adapter: 'claude', executable: profile.executable }, { query });
+  assert.equal(runs, 4);
 });
 
 test('paused room path correction is authenticated, versioned and adopted before an explicit restart', async t => {

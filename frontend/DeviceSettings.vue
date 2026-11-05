@@ -4,6 +4,7 @@
 import { computed, inject, onMounted, onUnmounted, ref, watch } from "vue";
 import { renderSVG } from "uqr";
 import jsQR from "jsqr";
+import ConfirmDialog from "./ConfirmDialog.vue";
 
 const { view, bridge } = inject("discussion");
 const local = computed(() => view.value.admin.local);
@@ -17,6 +18,9 @@ const busy = ref("");
 const code = ref("");
 const temporary = ref(false);
 const invite = ref(null);
+// The device waiting for the user to confirm unbinding it.
+const unbinding = ref(null);
+const unbinding_open = ref(false);
 const RENEW_SOON_MS = 7 * 86400000;
 const INVITE_POLL_MS = 3000;
 let invite_timer = null;
@@ -130,18 +134,26 @@ function watch_invite(known) {
 }
 onUnmounted(() => { clearInterval(invite_timer); stop_scan(); });
 
+function ask_unbind(item) {
+  unbinding.value = item;
+  unbinding_open.value = true;
+}
+const unbind_items = computed(() => unbinding.value?.current
+  ? ["这台设备会立即退出，要再用须回到电脑前重新扫码配对。", "已经在运行的工作和已改动的文件不会撤回。"]
+  : ["该设备会立即无法访问房间，要再用须在电脑前重新扫码配对。", "已经在运行的工作和已改动的文件不会撤回。"]);
+
 /** Revoke a device on the computer; the website drops it with the next signed device list, which is sent at once. */
 async function revoke(item) {
-  const done = await run("revoke", () => bridge.device.request("device-revoke", { device_id: item.id }), item.current ? "这台设备已取消配对" : "该设备已撤销");
+  const done = await run("revoke", () => bridge.device.request("device-revoke", { device_id: item.id }), item.current ? "这台设备已解绑" : "该设备已解绑");
   if (done && item.current) bridge.device.forget();
   else if (done) await load();
 }
 
 
 // What the computer recorded about other devices: trust changes and remote writes, never their content.
-const AUDIT_EVENTS = { "device.paired": "配对了新设备", "device.revoked": "撤销了设备", "device.renewed": "设备续期", "pairing.started": "生成了配对码", "device.unlocked": "确认解锁",
+const AUDIT_EVENTS = { "device.paired": "配对了新设备", "device.revoked": "解绑了设备", "device.renewed": "设备续期", "pairing.started": "生成了配对码", "device.unlocked": "确认解锁",
   "passkey.registered": "创建了通行密钥", "write.granted": "开启远程可写", "write.revoked": "撤销远程可写" };
-const device_name = (id) => !id ? "电脑本机" : devices.value?.find((item) => item.id === id)?.label || `已撤销的设备（${id.slice(0, 6)}）`;
+const device_name = (id) => !id ? "电脑本机" : devices.value?.find((item) => item.id === id)?.label || `已解绑的设备（${id.slice(0, 6)}）`;
 /** One record line; `with_device` names the device for lists that mix several (revoked devices). */
 function audit_text(entry, with_device) {
   const prefix = with_device ? `${device_name(entry.device)} ` : "";
@@ -204,29 +216,31 @@ const date = (time) => new Date(time).toLocaleString("zh-CN", { month: "numeric"
               <strong>{{ item.label }}<template v-if="item.current"> · 当前设备</template><template v-if="item.temporary"> · 临时</template></strong>
               <small>{{ item.expires_at > Date.now() ? `授权至 ${date(item.expires_at)}` : "授权已到期" }}{{ item.passkeys ? "" : " · 未创建通行密钥" }}</small>
             </span>
-            <UButton v-if="device_audit(item.id).length" :label="`记录 ${device_audit(item.id).length}`" :trailing-icon="audit_open === item.id ? 'i-lucide-chevron-up' : 'i-lucide-chevron-down'" color="neutral" variant="ghost" size="xs" :aria-expanded="audit_open === item.id" @click="toggle_audit(item.id)" />
-            <UButton :label="item.current ? '取消配对' : '撤销'" color="neutral" variant="ghost" size="xs" :disabled="Boolean(busy)" @click="revoke(item)" />
+            <UButton v-if="device_audit(item.id).length" icon="i-lucide-history" :color="audit_open === item.id ? 'primary' : 'neutral'" variant="ghost" size="xs" aria-label="使用记录" title="使用记录" :aria-expanded="audit_open === item.id" @click="toggle_audit(item.id)" />
+            <UButton icon="i-lucide-unlink" color="error" variant="ghost" size="xs" aria-label="解绑" :title="item.current ? '解绑这台设备' : '解绑'" :disabled="Boolean(busy)" @click="ask_unbind(item)" />
           </div>
           <div v-if="audit_open === item.id" class="device-audit">
             <ul :aria-label="`${item.label} 的记录`">
               <li v-for="(entry, index) in device_audit(item.id)" :key="index"><small>{{ date(entry.at) }}</small> {{ audit_text(entry, false) }}</li>
             </ul>
-            <p class="fine-print">记录由电脑保存。看到不是你做的操作，立即撤销这台设备。</p>
+            <p class="fine-print">记录由电脑保存。看到不是你做的操作，立即解绑这台设备。</p>
           </div>
         </li>
         <li v-if="!devices.length" class="device-empty">还没有配对的设备</li>
         <li v-if="revoked_audit.length" class="device-revoked">
           <div class="device-row">
-            <span><small>已撤销设备的记录</small></span>
-            <UButton :label="`记录 ${revoked_audit.length}`" :trailing-icon="audit_open === 'revoked' ? 'i-lucide-chevron-up' : 'i-lucide-chevron-down'" color="neutral" variant="ghost" size="xs" :aria-expanded="audit_open === 'revoked'" @click="toggle_audit('revoked')" />
+            <span><small>已解绑设备的记录</small></span>
+            <UButton icon="i-lucide-history" :color="audit_open === 'revoked' ? 'primary' : 'neutral'" variant="ghost" size="xs" aria-label="使用记录" title="使用记录" :aria-expanded="audit_open === 'revoked'" @click="toggle_audit('revoked')" />
           </div>
           <div v-if="audit_open === 'revoked'" class="device-audit">
-            <ul aria-label="已撤销设备的记录">
+            <ul aria-label="已解绑设备的记录">
               <li v-for="(entry, index) in revoked_audit" :key="index"><small>{{ date(entry.at) }}</small> {{ audit_text(entry, true) }}</li>
             </ul>
           </div>
         </li>
       </ul>
+      <ConfirmDialog v-model:open="unbinding_open" :title="unbinding?.current ? '解绑这台设备' : `解绑「${unbinding?.label || ''}」`" :items="unbind_items"
+        confirm-label="解绑" danger @confirm="revoke(unbinding)" />
     </template>
   </section>
 </template>
