@@ -128,10 +128,52 @@ const float_place = ref({ left: 0, top: FLOAT_FALLBACK_TOP });
 const reduced_motion = () => window.matchMedia("(prefers-reduced-motion: reduce)").matches;
 let pull = null, folding = false;
 
-/** Put the floating button at the top-left of the content column. */
+// The floating button can be dragged up or down its edge (mouse or finger); a press that moves less than this stays a tap.
+const FLOAT_HEIGHT = 40;
+const FLOAT_DRAG_MIN = 6;
+let float_top = null, float_drag = null, float_dragged = false;
+
+/** Keep a dragged floating button fully on screen. */
+function clamp_float_top(top) {
+  return Math.min(Math.max(top, 0), Math.max(0, window.innerHeight - FLOAT_HEIGHT));
+}
+
+/** Put the floating button at the top-left of the content column, or where it was dragged to. */
 function place_float() {
   const content = document.querySelector(".channel-content")?.getBoundingClientRect();
   float_place.value = content ? { left: content.left, top: content.top + FLOAT_GAP } : { left: 0, top: FLOAT_FALLBACK_TOP };
+  if (float_top !== null) float_place.value.top = clamp_float_top(float_top);
+}
+
+/** Start following a press on the floating button. */
+function float_press(event) {
+  if (event.button !== 0) return;
+  float_drag = { y: event.clientY, top: float_place.value.top, moved: false };
+  event.currentTarget.setPointerCapture?.(event.pointerId);
+}
+
+/** Move the floating button with the pointer once the press has moved far enough to be a drag. */
+function float_move(event) {
+  if (!float_drag) return;
+  const offset = event.clientY - float_drag.y;
+  if (!float_drag.moved && Math.abs(offset) < FLOAT_DRAG_MIN) return;
+  float_drag.moved = true;
+  float_top = clamp_float_top(float_drag.top + offset);
+  float_place.value = { ...float_place.value, top: float_top };
+}
+
+/** End a press; after a drag the click that follows must not open or close the files. */
+function float_release() {
+  float_dragged = Boolean(float_drag?.moved);
+  float_drag = null;
+}
+
+/** Swallow the click ending a drag. */
+function float_click(event) {
+  if (!float_dragged) return;
+  float_dragged = false;
+  event.stopPropagation();
+  event.preventDefault();
 }
 
 /** Style the window frame; `transition` false applies it at once (following a finger). */
@@ -445,7 +487,8 @@ onBeforeUnmount(() => {
 
   <!-- Folded: a floating button on the screen edge, over every channel of the room, until the files are closed. -->
   <Teleport to="body">
-    <div v-if="tabs.length && !open" class="file-float" :style="{ left: `${float_place.left}px`, top: `${float_place.top}px` }">
+    <div v-if="tabs.length && !open" class="file-float" :style="{ left: `${float_place.left}px`, top: `${float_place.top}px` }"
+      @pointerdown="float_press" @pointermove="float_move" @pointerup="float_release" @pointercancel="float_release" @click.capture="float_click">
       <button type="button" class="file-float-open" :title="tabs.length > 1 ? `回到文件预览（${tabs.length} 个文件）` : `回到文件预览：${preview_name}`" @click="unfold">
         <UIcon :name="preview_type[1]" class="project-file-icon" :class="preview_type[2]" /><span class="file-float-name">{{ preview_name }}</span>
         <span v-if="tabs.length > 1" class="file-float-count">{{ tabs.length }}</span>
@@ -527,7 +570,8 @@ onBeforeUnmount(() => {
 
 /* Folded window: stuck to the content column's left edge, below the room header, like a mini-program's floating window. */
 .file-float { position: fixed; z-index: 45; display: flex; align-items: center; height: 40px; padding: 0 4px 0 12px; border: 1px solid var(--ui-border-accented);
-  border-left: 0; border-radius: 0 999px 999px 0; background: var(--ui-bg-elevated); box-shadow: 0 6px 20px #0006; animation: file-float-in .2s ease-out; }
+  border-left: 0; border-radius: 0 999px 999px 0; background: var(--ui-bg-elevated); box-shadow: 0 6px 20px #0006; animation: file-float-in .2s ease-out;
+  touch-action: none; user-select: none; -webkit-user-select: none; -webkit-touch-callout: none; }
 @keyframes file-float-in { from { opacity: 0; transform: translateX(-12px); } }
 .file-float-open { display: flex; align-items: center; gap: 7px; height: 100%; max-width: 200px; font-size: 13px; color: var(--ui-text-highlighted); cursor: pointer; }
 .file-float-name { overflow: hidden; white-space: nowrap; text-overflow: ellipsis; }

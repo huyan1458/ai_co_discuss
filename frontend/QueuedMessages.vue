@@ -95,7 +95,7 @@ function drag_end() {
           <template #content><div class="queued-preview-body">{{ item.text || summary(item) }}</div></template>
         </UTooltip>
         <span class="queued-actions">
-          <UTooltip :text="item.failure ? '再次尝试发送这条排队消息' : '不打断正在运行的成员，立即发出'">
+          <UTooltip :text="item.failure ? '再次尝试发送这条排队消息' : '立即发出；接收者正忙时先打断它这一轮，再处理这条（无法打断的成员继续排队）'">
             <UButton :label="item.failure ? '重试' : '立即发送'" :icon="item.failure ? 'i-lucide-rotate-ccw' : 'i-lucide-corner-down-right'" size="xs" color="neutral" variant="ghost"
               :disabled="!!pending || sending !== null" @click.stop="send_now(item)" />
           </UTooltip>

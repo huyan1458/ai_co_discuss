@@ -316,8 +316,8 @@ const summary = computed(() => {
   .create-discussion { height: calc(100dvh - 130px); }
   .create-scroll { padding: 18px 18px 20px; }
   .create-modes { grid-template-columns: 1fr; }
-  /* Two members per row on a phone; the card switches to its narrow layout (ExpertCard container query). */
-  .create-experts { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  /* One member per row on a phone: at half width (about 160px) the settings side squeezes its options into vertical text. */
+  .create-experts { grid-template-columns: minmax(0, 1fr); }
   .create-footer { padding: 12px 18px 14px; }
   .create-summary:not(.is-blocked) { display: none; }
   .create-footer-row { justify-content: flex-end; }

@@ -72,18 +72,22 @@ def enqueue(connection, room_id, payload):
 
 
 def post_item(connection, room_id, row, post):
-    """Post one queued message through the normal path and drop its row; a refused post keeps the row with the reason."""
+    """Post one queued message through the normal path and drop its row; a refused post keeps the row with the reason.
+
+    Returns:
+        The post's result (with the saved `message`), or None when it was refused.
+    """
     connection.execute("SAVEPOINT queued_post")
     try:
-        post(connection, room_id, json.loads(row["payload"]), "用户")
+        result = post(connection, room_id, json.loads(row["payload"]), "用户")
     except QUEUE_ERRORS as error:
         connection.execute("ROLLBACK TO queued_post")
         connection.execute("RELEASE queued_post")
         connection.execute("UPDATE queued_messages SET failure=? WHERE id=?", (str(error)[:500] or "发送失败", row["id"]))
-        return False
+        return None
     connection.execute("RELEASE queued_post")
     connection.execute("DELETE FROM queued_messages WHERE id=?", (row["id"],))
-    return True
+    return result
 
 
 def drain(connection, room_id, post):
@@ -131,10 +135,12 @@ def reorder(connection, room_id, ids):
         connection.execute("UPDATE queued_messages SET position=? WHERE id=?", (position, item_id))
 
 
-def queue_action(connection, room_id, token, payload, post, check):
+def queue_action(connection, room_id, token, payload, post, check, interrupt):
     """The owner acts on the queue: send one now, edit, delete, reorder, resume, or switch queueing for the site.
 
-    `post(connection, room_id, payload, actor)` posts a message; `check(payload)` validates an edited one.
+    `post(connection, room_id, payload, actor)` posts a message; `check(payload)` validates an edited one;
+    `interrupt(connection, room_id, message_id)` stops the busy members a message sent now was given to, so it does not
+    wait behind their current turn, and raises when one cannot be stopped, which leaves the whole write undone.
     """
     require_owner(connection, room_id, token)
     begin_write(connection)
@@ -144,8 +150,11 @@ def queue_action(connection, room_id, token, payload, post, check):
     if action == "send":
         row = queued_row(connection, room_id, payload.get("id"))
         connection.execute("UPDATE queued_messages SET failure='' WHERE id=?", (row["id"],))
-        if not post_item(connection, room_id, row, post):
+        result = post_item(connection, room_id, row, post)
+        if not result:
             raise ValueError(connection.execute("SELECT failure FROM queued_messages WHERE id=?", (row["id"],)).fetchone()[0])
+        if result.get("message"):
+            interrupt(connection, room_id, result["message"]["id"])
     elif action == "edit":
         edit_item(connection, queued_row(connection, room_id, payload.get("id")), payload.get("text"), check)
     elif action == "delete":

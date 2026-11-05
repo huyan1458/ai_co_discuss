@@ -1786,7 +1786,7 @@ function copy_message(message) { act("copy", `${view.value.room_site}/r/${room.v
             <div class="channel-message-byline">
               <UAvatar :src="bridge.identities[view.sending_preview.author]?.icon" :text="bridge.identities[view.sending_preview.author]?.initials || '?'" :alt="bridge.display_name(view.sending_preview.author)" size="md" class="channel-avatar" :class="bridge.identities[view.sending_preview.author]?.style" />
               <div class="channel-message-meta"><div class="channel-message-author"><strong>{{ bridge.display_name(view.sending_preview.author) }}</strong><UBadge v-if="view.sending_preview.failed" label="发送失败" color="error" variant="soft" size="xs" /></div></div>
-              <span v-if="!view.sending_preview.failed" class="channel-message-provenance channel-message-elapsed" role="status">{{ view.upload_status || '发送中…' }}</span>
+              <span v-if="!view.sending_preview.failed" class="channel-message-provenance channel-message-elapsed" role="status">发送中…</span>
             </div>
             <div class="channel-message-text">{{ view.sending_preview.text }}</div>
             <div v-if="view.sending_preview.files.length" class="channel-message-provenance">附件：{{ view.sending_preview.files.join('、') }}</div>
@@ -1884,9 +1884,9 @@ function copy_message(message) { act("copy", `${view.value.room_site}/r/${room.v
                 <span class="attachment-name"><span :title="file.file_name">{{ file.file_name }}</span><small>{{ bridge.attachment_size(file.size) }}</small></span>
               </template>
               <button type="button" class="attachment-remove" :aria-label="`移除 ${file.file_name}`" :disabled="view.sending_message" @click="act('remove_attachment', file.id)"><UIcon name="i-lucide-x" /></button>
+              <span v-if="file.uploading" class="attachment-uploading" role="status" :aria-label="`正在上传 ${file.file_name}`"><UIcon name="i-lucide-loader-circle" /></span>
             </div>
           </div>
-          <p v-if="view.upload_status" class="attachment-status" role="status">{{ view.upload_status }}</p>
           <div v-if="unregistered_member" class="channel-reply-draft channel-queue-hint"><UIcon name="i-lucide-user-round-x" /><span>{{ bridge.display_name(unregistered_member.name) }} 待注册：在其会话中粘贴启动指令</span><UButton v-if="view.access?.can_manage" :icon="launch_copied === unregistered_member.name ? 'i-lucide-check' : 'i-lucide-copy'" :label="launch_copied === unregistered_member.name ? '已复制' : '复制启动指令'" aria-live="polite" size="xs" color="neutral" variant="ghost" class="channel-launch-copy" @click="copy_launch(unregistered_member.name)" /></div>
           <div v-if="queue_hint" class="channel-reply-draft channel-queue-hint"><UIcon name="i-lucide-clock" /><span>{{ queue_hint }}</span><UButton v-if="is_manual_member(speaking_member) && view.access?.can_manage" :icon="launch_copied === speaking_member.name ? 'i-lucide-check' : 'i-lucide-copy'" :label="launch_copied === speaking_member.name ? '已复制' : '复制启动指令'" aria-live="polite" size="xs" color="neutral" variant="ghost" class="channel-launch-copy" @click="copy_launch(speaking_member.name)" /></div>
           <div v-if="view.editing_queued" class="channel-reply-draft"><UIcon name="i-lucide-pencil" /><span>编辑排队消息：发送即保存修改，仍按原位置排队</span><UButton icon="i-lucide-x" color="neutral" variant="ghost" size="xs" aria-label="取消编辑排队消息" @click="act('queue_cancel_edit')" /></div>

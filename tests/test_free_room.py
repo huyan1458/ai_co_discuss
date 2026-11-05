@@ -472,6 +472,22 @@ class SingleMemberTests(FreeRoomTests):
         queue = self.request(f"{self.path}/queue", {"action": "send", "id": fourth_id}, self.owner)[1]
         self.assertEqual((queue["items"], texts()), ([], ["一", "答一", "二", "三", "四"]))
 
+    def test_send_now_interrupts_a_busy_recipient_unless_it_cannot_stop(self):
+        """Send-now stops the recipient's turn so the message goes next; an unstoppable recipient keeps it queued."""
+        self.say("一", queue=True)
+        running = self.reserve()[1]
+        self.request(f"{self.path}/executions/{running['id']}", {"action": "delivery", "stoppable": False, "progress": True}, self.owner)
+        queued_id = self.say("二", queue=True)[1]["queued"]
+        status, refused = self.request(f"{self.path}/queue", {"action": "send", "id": queued_id}, self.owner)
+        self.assertEqual(status, 409, refused)
+        self.assertEqual([item["id"] for item in self.request(f"{self.path}/queue", {"action": "resume"}, self.owner)[1]["items"]], [queued_id])
+        self.assertEqual([text for _, text, _ in self.messages()], ["一"])
+        self.request(f"{self.path}/executions/{running['id']}", {"action": "delivery", "stoppable": True, "progress": True}, self.owner)
+        self.assertEqual(self.request(f"{self.path}/queue", {"action": "send", "id": queued_id}, self.owner)[0], 200)
+        self.assertEqual(self.answer(running["id"], "迟到的回答")[0], 409)
+        delivered = self.reserve()[1]
+        self.assertEqual([request["message_id"] for request in delivered["requests"]], [self.messages()[-1][0]])
+
     def test_failure_affects_only_its_requests_and_release_requeues(self):
         """A failed execution keeps the room usable; a proven non-delivery returns requests to the queue."""
         self.say("一")

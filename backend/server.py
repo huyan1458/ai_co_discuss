@@ -28,7 +28,7 @@ from .remote_launch import (COMMAND_WAIT_MAX, claim_machine_commands, finish_mac
                             machine_launch_action, machine_sync, pair_machine, remote_launch_status, submit_machine_command,
                             submit_remote_launch)
 from .free_room import (add_member, after_free_message, after_proactive, authorize_free_write, check_answer, execution_action, free_view,
-                        inbox, interrupt_member, member_action, member_capability, member_values, migrate_free_tables, reserve_execution,
+                        inbox, interrupt_for_message, interrupt_member, member_action, member_capability, member_values, migrate_free_tables, reserve_execution,
                         save_room_access, view_execution)
 from .free_room import convert_suggestion, message_suggestions, save_suggestions, sync_participants
 from .free_room import adopt_recommendation, recommend_member, register_member, require_member
@@ -2280,7 +2280,7 @@ class DiscussionHandler(BaseHTTPRequestHandler):
             connection.commit()
             return self.respond(result)
         if parts[3:] == ["queue"] and method == "POST":
-            result = queue_action(connection, room_id, token, self.read_payload(), post_queued, check_queued)
+            result = queue_action(connection, room_id, token, self.read_payload(), post_queued, check_queued, interrupt_for_message)
             connection.commit()
             return self.respond(result)
         if parts[3:4] in (["inbox"], ["executions"], ["members"], ["suggestions"], ["recommendations"], ["stop"]):

@@ -2319,6 +2319,29 @@ def interrupt_member(connection, room_id, member_id, token):
     return free_view(connection, room_id)
 
 
+def interrupt_for_message(connection, room_id, message_id):
+    """The owner's "send now" of a queued message: interrupt the busy members it was just given to, so they take it next.
+
+    Members whose software reported it cannot stop are not interrupted: voiding their turn would only discard its answer
+    while the next delivery still waits for it to end. Unlike the owner's stop, the rest of the queue is not paused.
+
+    Raises:
+        FileExistsError: a recipient is busy and cannot be stopped; the caller keeps the message queued.
+    """
+    busy = connection.execute("""SELECT DISTINCT r.member_id, m.name, c.stoppable FROM member_requests r
+        JOIN room_members m ON m.id=r.member_id
+        JOIN member_executions e ON e.member_id=r.member_id AND e.status IN ('dispatched','started')
+        LEFT JOIN execution_capabilities c ON c.execution_id=e.id
+        WHERE r.room_id=? AND r.message_id=? AND r.status='pending'""", (room_id, message_id)).fetchall()
+    blocked = [row["name"] for row in busy if row["stoppable"] == 0]
+    if blocked:
+        raise FileExistsError(f"{'、'.join(blocked)} 正在执行且无法打断，这条消息继续排队，等它答完后发送")
+    for row in busy:
+        stop_member_work(connection, row["member_id"], "用户立即发送", "user_stop", keep_pending=True)
+    if busy:
+        settle_batches(connection, room_id)
+
+
 def withdrawals(connection, room_id):
     """The room's taken-back messages by id, so the page keeps them in place while AI readers skip them."""
     return [dict(row) for row in connection.execute("""SELECT w.message_id,w.kind FROM message_withdrawal_rooms r
