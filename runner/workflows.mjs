@@ -3,8 +3,8 @@
  * The program only stores, previews and loads them; the host follows SKILL.md on its own judgment.
  */
 import { createHash, randomUUID } from 'node:crypto';
-import { existsSync, lstatSync, mkdirSync, readdirSync, readFileSync, renameSync, rmSync, writeFileSync } from 'node:fs';
-import { join, resolve } from 'node:path';
+import { cpSync, existsSync, lstatSync, mkdirSync, readdirSync, readFileSync, renameSync, rmSync, writeFileSync } from 'node:fs';
+import { dirname, join, resolve } from 'node:path';
 import { DatabaseSync } from 'node:sqlite';
 
 // A workflow ID follows the Agent Skills naming rule: lowercase letters and digits joined by single hyphens.
@@ -26,6 +26,12 @@ const CARD_FILE_FIELDS = ['name', 'platform', 'label', 'description', 'project_a
 const PART_LINE = /^<!-- workflow-part: (\d+)\/(\d+) id: ([a-z0-9_-]{1,40}) -->$/;
 const FILE_LINE = /^<!-- workflow-file: (\S+) -->$/;
 const CARD_PATH = /^agents\/([A-Za-z0-9_]{1,16})\.md$/;
+// Like a skill folder, a workflow carries any other text files beside SKILL.md (templates, references, examples).
+const MAX_RESOURCE_FILES = 100;
+const MAX_RESOURCE_BYTES = 1000000;
+// Each path segment: no leading dot, no Windows-reserved characters.
+const RESOURCE_SEGMENT = /^[^./\\:*?"<>|\x00-\x1f][^/\\:*?"<>|\x00-\x1f]{0,99}$/;
+const utf8 = new TextDecoder('utf-8', { fatal: true });
 
 /** The folder holding every workflow of this computer. */
 export function workflows_home(home) { return join(home, 'workflows'); }
@@ -78,11 +84,63 @@ function card_from_markdown(card, text) {
   return value;
 }
 
-/** Turn SKILL.md and card files into one workflow object, unchecked. */
-function workflow_from_files(skill_text, cards) {
+/** Turn SKILL.md, card files and the folder's other files into one workflow object, unchecked. */
+function workflow_from_files(skill_text, cards, resources = {}) {
   const { fields, body } = parse_markdown(skill_text, 'SKILL.md');
   return { id: fields.name || '', label: fields.label || '', description: fields.description || '', skill: body,
-    agents: Object.entries(cards).map(([card, text]) => card_from_markdown(card, text)) };
+    agents: Object.entries(cards).map(([card, text]) => card_from_markdown(card, text)), resources };
+}
+
+/** A path, relative to the workflow folder, that a resource may take: inside it, not SKILL.md and not under agents/. */
+function resource_path_allowed(path) {
+  return path !== 'SKILL.md' && !path.startsWith('agents/') && path.split('/').every(segment => RESOURCE_SEGMENT.test(segment));
+}
+
+/** Check resource files `{ "relative/path": text }`. */
+function validate_resources(resources) {
+  if (!resources || typeof resources !== 'object' || Array.isArray(resources)) throw new Error('附带文件须为 { 路径: 文本 }');
+  const entries = Object.entries(resources);
+  if (entries.length > MAX_RESOURCE_FILES) throw new Error(`附带文件最多 ${MAX_RESOURCE_FILES} 个`);
+  const seen = new Set();
+  for (const [path, text] of entries) {
+    if (!resource_path_allowed(path)) throw new Error(`附带文件路径不合法：${path}`);
+    if (seen.has(path.toLowerCase())) throw new Error(`附带文件路径重复（不区分大小写）：${path}`);
+    seen.add(path.toLowerCase());
+    if (typeof text !== 'string') throw new Error(`附带文件 ${path} 须为文本`);
+    if (Buffer.byteLength(text, 'utf8') > MAX_RESOURCE_BYTES) throw new Error(`附带文件 ${path} 超过 ${MAX_RESOURCE_BYTES / 1000000} MB`);
+  }
+  return Object.fromEntries(entries.sort(([a], [b]) => a.localeCompare(b)));
+}
+
+/** A folder's files other than SKILL.md and agents/: UTF-8 text is kept, anything else is named back as ignored. */
+function read_resource_folder(directory, prefix, resources, ignored) {
+  for (const name of readdirSync(directory).sort()) {
+    const relative = `${prefix}${name}`;
+    if (relative === 'SKILL.md' || relative === 'agents') continue;
+    const path = join(directory, name);
+    if (lstatSync(path).isDirectory()) { read_resource_folder(path, `${relative}/`, resources, ignored); continue; }
+    let text = null;
+    try { text = utf8.decode(readFileSync(path)); } catch { /* not text */ }
+    if (text !== null && resource_path_allowed(relative)) resources[relative] = text;
+    else ignored.push(relative);
+  }
+}
+
+/** Write resource files below a workflow folder. */
+function write_resources(directory, resources) {
+  for (const [path, text] of Object.entries(resources)) {
+    const target = join(directory, ...path.split('/'));
+    mkdirSync(dirname(target), { recursive: true });
+    writeFileSync(target, text);
+  }
+}
+
+/** Copy a saved folder's files other than SKILL.md and agents/, for a save that carries none of its own. */
+function keep_resources(directory, staging) {
+  for (const name of readdirSync(directory)) {
+    if (name === 'SKILL.md' || name === 'agents') continue;
+    cpSync(join(directory, name), join(staging, name), { recursive: true });
+  }
 }
 
 /**
@@ -118,7 +176,9 @@ export function validate_workflow(input, validate_card) {
     if ((kept.description || '').includes('\n')) throw new Error(`${kept.name} 的描述不能换行`);
     return { card, ...kept };
   });
-  return { id, label, description, skill, agents: normalized };
+  // Absent resources mean "keep the saved folder's other files" (a host draft or the editor carries none); `{}` clears them.
+  return { id, label, description, skill, agents: normalized,
+    ...(input.resources === undefined ? {} : { resources: validate_resources(input.resources) }) };
 }
 
 /** Refuse links anywhere in a folder, so a shared workflow cannot point outside itself. */
@@ -162,7 +222,8 @@ export function read_workflow_folder(directory) {
   assert_no_links(directory);
   const agents = join(directory, 'agents');
   const cards = {};
-  const ignored = readdirSync(directory).filter(name => !['SKILL.md', 'agents'].includes(name));
+  const resources = {}, ignored = [];
+  read_resource_folder(directory, '', resources, ignored);
   if (existsSync(agents)) {
     for (const name of readdirSync(agents).sort()) {
       const match = CARD_PATH.exec(`agents/${name}`);
@@ -170,24 +231,26 @@ export function read_workflow_folder(directory) {
       else ignored.push(`agents/${name}`);
     }
   }
-  return { workflow: workflow_from_files(readFileSync(join(directory, 'SKILL.md'), 'utf8'), cards), ignored };
+  return { workflow: workflow_from_files(readFileSync(join(directory, 'SKILL.md'), 'utf8'), cards, resources), ignored };
 }
 
 /**
- * Read a workflow sent as files (a zip or folder the page opened): `{ "SKILL.md": text, "agents/<card>.md": text, other: "" }`,
- * paths relative to the folder holding SKILL.md. Other paths are only named back as ignored.
+ * Read a workflow sent as files (a zip or folder the page opened): `{ "SKILL.md": text, "agents/<card>.md": text,
+ * "<other path>": text }`, paths relative to the folder holding SKILL.md. Other text files come along as resources;
+ * a path sent as null (a file the page could not read as text) or one a resource may not take is named back as ignored.
  */
 export function read_workflow_files(files) {
   if (!files || typeof files !== 'object' || Array.isArray(files)) throw new Error('工作流文件须为 { 路径: 文本 }');
   if (typeof files['SKILL.md'] !== 'string') throw new Error('没有 SKILL.md');
-  const cards = {}, ignored = [];
+  const cards = {}, resources = {}, ignored = [];
   for (const path of Object.keys(files).sort()) {
     if (path === 'SKILL.md') continue;
     const match = CARD_PATH.exec(path);
     if (match && typeof files[path] === 'string') cards[match[1]] = files[path];
+    else if (typeof files[path] === 'string' && resource_path_allowed(path)) resources[path] = files[path];
     else ignored.push(path);
   }
-  return { workflow: workflow_from_files(files['SKILL.md'], cards), ignored };
+  return { workflow: workflow_from_files(files['SKILL.md'], cards, resources), ignored };
 }
 
 /** Summaries for the library list; a broken folder is listed with its error instead of hiding it. */
@@ -227,6 +290,8 @@ export function save_workflow(home, input, validate_card) {
       writeFileSync(join(staging, 'agents', `${card}.md`), serialize_markdown({ name: card, platform,
         ...Object.fromEntries(CARD_FIELDS.slice(1).map(key => [key, fields[key]])) }, system_prompt));
     }
+    if (workflow.resources) write_resources(staging, workflow.resources);
+    else if (existsSync(directory)) keep_resources(directory, staging);
     const old = existsSync(directory) ? join(workflows_home(home), `.old-${workflow.id}-${randomUUID()}`) : '';
     if (old) renameSync(directory, old);
     try { renameSync(staging, directory); }

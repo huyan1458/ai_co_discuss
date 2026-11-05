@@ -47,7 +47,10 @@ description: AI CoDiscuss 工作流的创建与修改技能。用户要把房间
   SKILL.md
   agents/
     <卡片ID>.md
+  templates/ 等（可选）  主持人要用的模板、参考资料，只认文本文件
 ```
+
+`SKILL.md` 和 `agents/` 之外的文件随工作流一起保存和分享；在 SKILL.md 里按相对路径指给主持人，如“照本工作流文件夹下 `templates/` 建项目”。粘贴草稿只能带 SKILL.md 和卡片；用草稿保存时，文件夹里已有的这些文件原样保留。
 
 `SKILL.md`：
 

@@ -95,9 +95,10 @@ function grant(agent, allowed) {
   agent.project_access = allowed ? agent.requested_access : "read";
 }
 
-/** Save the workflow as files; the server checks every field. */
+/** Save the workflow as files; the server checks every field. A saved workflow keeps its folder's other files as they are. */
 async function save() {
-  const result = await run(() => bridge.local_request("workflows", { action: "save", workflow: workflow.value }));
+  const { resources, ...edited } = workflow.value;
+  const result = await run(() => bridge.local_request("workflows", { action: "save", workflow: saved.value ? edited : workflow.value }));
   if (!result) return;
   bridge.notify("info", `已保存工作流「${result.label || result.id}」`);
   open.value = false;

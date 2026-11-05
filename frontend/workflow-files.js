@@ -1,13 +1,14 @@
 /**
  * Read a workflow the user opened in the browser, as a zip or a folder, into the `files` the local service previews:
- * `{ "SKILL.md": text, "agents/<card>.md": text, other: "" }`, paths relative to the folder holding SKILL.md.
+ * `{ "SKILL.md": text, "agents/<card>.md": text, "<other path>": text }`, paths relative to the folder holding SKILL.md;
+ * a file that is not UTF-8 text, or too large, is sent as null so the service names it back as ignored.
  * Reading happens in the page, so another device imports the same way as the computer itself.
  */
 const MAX_FILE_BYTES = 1_000_000;
 const ZIP_END = 0x06054b50, ZIP_ENTRY = 0x02014b50, ZIP_END_SIZE = 22, ZIP_COMMENT_MAX = 65535;
-const WANTED = /^(SKILL\.md|agents\/[^/]+\.md)$/;
 const SKILL = /(^|\/)SKILL\.md$/;
 const decoder = new TextDecoder();
+const strict = new TextDecoder("utf-8", { fatal: true });
 
 /** Entries of a zip, each read only when asked; stored and deflated files are supported. */
 function zip_entries(bytes) {
@@ -33,15 +34,15 @@ function zip_entries(bytes) {
       if (flags & 1) throw new Error(`${path} 已加密，无法读取`);
       const start = local + 30 + view.getUint16(local + 26, true) + view.getUint16(local + 28, true);
       const data = bytes.subarray(start, start + compressed);
-      if (method === 0) return decoder.decode(data);
+      if (method === 0) return data;
       if (method !== 8) throw new Error(`${path} 的压缩方式不支持`);
-      return new Response(new Blob([data]).stream().pipeThrough(new DecompressionStream("deflate-raw"))).text();
+      return new Uint8Array(await new Response(new Blob([data]).stream().pipeThrough(new DecompressionStream("deflate-raw"))).arrayBuffer());
     } });
   }
   return entries;
 }
 
-/** Keep the folder holding the shallowest SKILL.md; read its SKILL.md and card files, and only name the rest. */
+/** Keep the folder holding the shallowest SKILL.md and read every file in it as text. */
 async function collect(entries) {
   const skills = entries.filter((entry) => SKILL.test(entry.path) && !entry.path.startsWith("__MACOSX/"))
     .sort((left, right) => left.path.split("/").length - right.path.split("/").length);
@@ -51,9 +52,13 @@ async function collect(entries) {
   for (const entry of entries) {
     if (!entry.path.startsWith(prefix)) continue;
     const path = entry.path.slice(prefix.length);
-    if (!WANTED.test(path)) { files[path.startsWith("agents/") ? path : path.split("/")[0]] = ""; continue; }
-    if (entry.size > MAX_FILE_BYTES) throw new Error(`${path} 超过 1 MB`);
-    files[path] = await entry.read();
+    if (entry.size > MAX_FILE_BYTES) {
+      if (path === "SKILL.md") throw new Error(`${path} 超过 1 MB`);
+      files[path] = null;
+      continue;
+    }
+    try { files[path] = strict.decode(await entry.read()); }
+    catch (error) { if (path === "SKILL.md") throw error; files[path] = null; }
   }
   return files;
 }
@@ -65,5 +70,5 @@ export async function workflow_files_from_zip(file) {
 
 /** A workflow from the files of a folder chosen with a directory input. */
 export async function workflow_files_from_folder(files) {
-  return collect(files.map((file) => ({ path: file.webkitRelativePath || file.name, size: file.size, read: () => file.text() })));
+  return collect(files.map((file) => ({ path: file.webkitRelativePath || file.name, size: file.size, read: async () => new Uint8Array(await file.arrayBuffer()) })));
 }

@@ -30,7 +30,7 @@ test('a workflow saves as plain files, reads back the same, and refuses unsafe o
   const saved = save_workflow(home, NOVEL, validate_preset);
   // Cards come back in file-name order.
   const by_card = list => [...list].sort((a, b) => a.card.localeCompare(b.card));
-  assert.deepEqual({ ...saved, directory: undefined, agents: by_card(saved.agents) }, { ...NOVEL, directory: undefined, agents: by_card(NOVEL.agents) });
+  assert.deepEqual({ ...saved, directory: undefined, agents: by_card(saved.agents) }, { ...NOVEL, directory: undefined, agents: by_card(NOVEL.agents), resources: {} });
   const card = readFileSync(join(home, 'workflows', 'novel-serial', 'agents', 'writer.md'), 'utf8');
   // A card file reads like an agent definition: its name is the card ID, the software is its own field, empty fields are left out.
   assert.equal(card, '---\nname: writer\nplatform: Antigravity\nlabel: 执笔\ndescription: 按骨架写正文\nproject_access: write\n---\n克制、具体。\n');
@@ -86,6 +86,32 @@ test('workflow replacement recovers a complete version after process death and d
   }
 });
 
+test('a workflow folder carries its other text files like a skill folder, and a save that carries none keeps them', t => {
+  const home = home_fixture(t);
+  const resources = { 'templates/README.md': '# 〔书名〕', 'templates/正文/第01集_标题.md': '---\n集: 01\n---\n', 'references/示例.md': '例' };
+  save_workflow(home, { ...NOVEL, resources }, validate_preset);
+  const folder = join(home, 'workflows', NOVEL.id);
+  assert.equal(readFileSync(join(folder, 'templates', '正文', '第01集_标题.md'), 'utf8'), resources['templates/正文/第01集_标题.md']);
+  assert.deepEqual(get_workflow(home, NOVEL.id).resources, resources);
+  // A file that is not text is kept on disk and named back as ignored, never read as resource text.
+  writeFileSync(join(folder, 'templates', 'cover.png'), Buffer.from([0x89, 0x50, 0xff, 0xfe, 0x00]));
+  // A host draft or the editor carries no resources: saving keeps the whole folder.
+  save_workflow(home, { ...NOVEL, skill: '新版' }, validate_preset);
+  assert.deepEqual(get_workflow(home, NOVEL.id).resources, resources);
+  assert.deepEqual([...readFileSync(join(folder, 'templates', 'cover.png'))], [0x89, 0x50, 0xff, 0xfe, 0x00]);
+  // A folder or zip import brings text files along.
+  const opened = preview_workflow({ folder }, validate_preset, () => true);
+  assert.deepEqual([opened.resources, opened.ignored], [resources, ['templates/cover.png']]);
+  const files = { 'SKILL.md': '---\nname: novel-serial\n---\n做法', 'templates/状态.yaml': 'time: 0\n', 'logo.png': null };
+  const sent = preview_workflow({ files }, validate_preset, () => true);
+  assert.deepEqual([sent.resources, sent.ignored], [{ 'templates/状态.yaml': 'time: 0\n' }, ['logo.png']]);
+  for (const path of ['../x.md', 'a/../../x.md', '.hidden', 'a\\b.md', 'C:/x.md', '', 'SKILL.md', 'agents/x.md']) {
+    assert.throws(() => save_workflow(home, { ...NOVEL, resources: { [path]: 'x' } }, validate_preset), /路径不合法/);
+  }
+  save_workflow(home, { ...NOVEL, resources: {} }, validate_preset);
+  assert.deepEqual(get_workflow(home, NOVEL.id).resources, {});
+});
+
 test('folder import refuses directory links without reading outside the workflow', t => {
   const home = home_fixture(t);
   save_workflow(home, { ...NOVEL, agents: [] }, validate_preset);
@@ -121,11 +147,11 @@ test('an import starts write cards read-only and marks platforms this computer l
   const preview = preview_workflow({ parts: [draft] }, validate_preset, name => !name.startsWith('Antigravity'));
   assert.deepEqual(preview.agents, [{ card: 'writer', name: 'Antigravity-writer', project_access: 'read', requested_access: 'write',
     system_prompt: '写', needs_platform: true }]);
-  // A zip or folder the page opened arrives as files; the same downgrade applies and other paths are named back.
-  const files = { 'SKILL.md': '---\nname: novel-serial\n---\n做法', 'agents/writer.md': '---\nname: writer\nplatform: Codex\nproject_access: write\n---\n写', 'README.md': '' };
+  // A zip or folder the page opened arrives as files; the same downgrade applies, other text files come along and unreadable ones are named back.
+  const files = { 'SKILL.md': '---\nname: novel-serial\n---\n做法', 'agents/writer.md': '---\nname: writer\nplatform: Codex\nproject_access: write\n---\n写', 'README.md': '说明', 'cover.png': null };
   const opened = preview_workflow({ files }, validate_preset, () => true);
   assert.deepEqual(opened.agents, [{ card: 'writer', name: 'Codex-writer', project_access: 'read', requested_access: 'write', system_prompt: '写' }]);
-  assert.deepEqual(opened.ignored, ['README.md']);
+  assert.deepEqual([opened.resources, opened.ignored], [{ 'README.md': '说明' }, ['cover.png']]);
   assert.throws(() => preview_workflow({ files: { 'agents/writer.md': '' } }, validate_preset, () => true), /没有 SKILL\.md/);
 });
 
