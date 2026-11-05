@@ -260,20 +260,21 @@ function executable_stamp(profile) {
  * The model and effort a software runs with when the card leaves them empty. One read from its own settings is
  * cheap and always fresh; one that must run the CLI (agy) is kept for a day, because each run may refresh the
  * software's login and, when that refresh fails, it opens a browser sign-in. `refresh` reads it again.
+ * agy updates itself often, so the key leaves out the executable stamp; a failed run is recorded too and keeps the
+ * last good answer, so a run that cannot sign in is not repeated on every room read.
  */
 export async function cached_software_defaults(home, profile, { refresh = false, query = software_defaults } = {}) {
   if (!adapter_profile(profile.adapter)?.defaults_by_query) return query(profile);
   const path = join(home, 'model-catalogs.json');
-  const key = JSON.stringify([profile.adapter, profile.executable || '', executable_stamp(profile), 'defaults']);
+  const key = JSON.stringify(['defaults', profile.adapter, profile.executable || '']);
   let cache = {};
   try { cache = JSON.parse(readFileSync(path, 'utf8')); } catch {}
   const entry = cache[key];
   if (!refresh && entry && Date.now() - entry.at < MODEL_CACHE_MS) return entry.result;
-  const result = await query(profile);
-  if (result?.model) {
-    try { cache = JSON.parse(readFileSync(path, 'utf8')); } catch {}
-    atomic_json(path, { ...cache, [key]: { at: Date.now(), result } });
-  }
+  const answer = await query(profile);
+  const result = answer?.model ? answer : entry?.result || answer;
+  try { cache = JSON.parse(readFileSync(path, 'utf8')); } catch {}
+  atomic_json(path, { ...cache, [key]: { at: Date.now(), result } });
   return result;
 }
 
