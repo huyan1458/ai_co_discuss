@@ -3,23 +3,23 @@ import { computed, inject, nextTick, onBeforeUnmount, onMounted, ref, watch } fr
 import { use_read_aloud } from "./read-aloud.js";
 import { crumbs_of, excerpt_lines, file_preview, file_size, file_type, modified_time } from "./file-preview.js";
 
-// The room's file preview window: several files open as tabs; it folds into a floating button that keeps every tab,
-// its mode and scroll position, so the user can go to the messages and come back. Mounted for the whole room, keyed by it.
-const props = defineProps({ directory: { type: String, required: true } });
+// The file preview window: several files open as tabs; it folds into a floating button that keeps every tab, its mode
+// and scroll position, so the user can go to the messages or another room and come back. Mounted once for the workspace,
+// so only closing (or reloading the site) clears it; each tab reads from the room it was opened in.
 const { view, bridge, act } = inject("discussion");
-const room_id = view.value.room.id;
-// Each tab: { path, data (the room-files answer), loading, error, source, scroll, request }.
+// Each tab: { id, room_id, directory, path, data (the room-files answer), loading, error, source, scroll, request }.
 const tabs = ref([]);
-const active_path = ref("");
+const active_id = ref("");
 const open = ref(false);
 // Like VS Code's word wrap toggle; narrow screens start wrapped so code is readable without sideways scrolling.
 const wrap = ref(window.matchMedia("(max-width: 640px)").matches);
 
 const name_of = (path) => path.split("/").pop() || "文件预览";
-const tab = computed(() => tabs.value.find(item => item.path === active_path.value) || null);
+const tab = computed(() => tabs.value.find(item => item.id === active_id.value) || null);
+const active_path = computed(() => tab.value?.path || "");
 const preview = computed(() => tab.value?.data || null);
 const source = computed({ get: () => Boolean(tab.value?.source), set: (value) => { if (tab.value) tab.value.source = value; } });
-const preview_crumbs = computed(() => crumbs_of(props.directory, active_path.value));
+const preview_crumbs = computed(() => crumbs_of(tab.value?.directory || "", active_path.value));
 const preview_name = computed(() => name_of(active_path.value));
 const preview_type = computed(() => file_type(preview_name.value));
 const format = computed(() => /\.(md|markdown)$/i.test(active_path.value) ? "markdown" : /\.html?$/i.test(active_path.value) ? "html" : "text");
@@ -66,22 +66,25 @@ async function load(item) {
   const request = (item.request || 0) + 1;
   Object.assign(item, { request, loading: true, error: "" });
   try {
-    const result = await bridge.read_room_files(room_id, item.path);
+    const result = await bridge.read_room_files(item.room_id, item.path);
     if (item.request === request) item.data = result;
   } catch (error) {
     if (item.request === request) item.error = error.message;
   } finally { if (item.request === request) item.loading = false; }
 }
 
-/** Open a file in its own tab (or re-read the tab it already has) and show the window. */
-function open_file(path) {
+/** Open a file of the current room in its own tab (or re-read the tab it already has) and show the window. */
+function open_file(path, directory) {
   remember_scroll();
-  let item = tabs.value.find(entry => entry.path === path);
+  const room_id = view.value.room?.id;
+  if (!room_id) return;
+  const id = `${room_id}\n${path}`;
+  let item = tabs.value.find(entry => entry.id === id);
   if (!item) {
-    tabs.value.push({ path, data: null, loading: false, error: "", source: false, scroll: 0, request: 0 });
+    tabs.value.push({ id, room_id, directory, path, data: null, loading: false, error: "", source: false, scroll: 0, request: 0 });
     item = tabs.value[tabs.value.length - 1];
   }
-  active_path.value = path;
+  active_id.value = id;
   open.value = true;
   check_speech();
   load(item);
@@ -91,18 +94,19 @@ function open_file(path) {
 const scroller = () => markdown_scroll.value || code_scroll.value;
 function remember_scroll() { if (tab.value && open.value && scroller()) tab.value.scroll = scroller().scrollTop; }
 
-function activate(path) {
-  if (path === active_path.value) return;
+function activate(id) {
+  if (id === active_id.value) return;
   remember_scroll();
-  active_path.value = path;
+  active_id.value = id;
 }
 
-function close_tab(path) {
-  const index = tabs.value.findIndex(item => item.path === path);
+function close_tab(id) {
+  const index = tabs.value.findIndex(item => item.id === id);
   if (index < 0) return;
+  tabs.value[index].request++;
   tabs.value.splice(index, 1);
-  if (path !== active_path.value) return;
-  active_path.value = tabs.value[Math.min(index, tabs.value.length - 1)]?.path || "";
+  if (id !== active_id.value) return;
+  active_id.value = tabs.value[Math.min(index, tabs.value.length - 1)]?.id || "";
   if (!tabs.value.length) open.value = false;
 }
 
@@ -113,7 +117,8 @@ function minimize() {
 }
 
 // Folding and unfolding move the window between its place and the floating button, which sits at the top-left of the
-// room's content column (below the room header, clear of the navigation). Phones also fold it by pulling it down.
+// room's content column (below the room header, clear of the navigation) and can be dragged to either side.
+// Phones also fold it by pulling it down.
 const FOLD_MS = 240;
 const FLOAT_GAP = 12;
 const FLOAT_FALLBACK_TOP = 80;
@@ -128,9 +133,14 @@ const float_place = ref({ left: 0, top: FLOAT_FALLBACK_TOP });
 const reduced_motion = () => window.matchMedia("(prefers-reduced-motion: reduce)").matches;
 let pull = null, folding = false;
 
-// The floating button can be dragged up or down its edge (mouse or finger); a press that moves less than this stays a tap.
+// The floating button can be dragged anywhere (mouse or finger) and sticks to the nearer side when let go: the content
+// column's left edge or the screen's right edge. A press that moves less than this stays a tap.
 const FLOAT_HEIGHT = 40;
+const FLOAT_WIDTH = 44;
 const FLOAT_DRAG_MIN = 6;
+const float_side = ref("left");
+// While dragged, the button follows the pointer at `{ left, top }`.
+const float_drag_place = ref(null);
 let float_top = null, float_drag = null, float_dragged = false;
 
 /** Keep a dragged floating button fully on screen. */
@@ -138,34 +148,51 @@ function clamp_float_top(top) {
   return Math.min(Math.max(top, 0), Math.max(0, window.innerHeight - FLOAT_HEIGHT));
 }
 
-/** Put the floating button at the top-left of the content column, or where it was dragged to. */
+/** Put the floating button on its side (left: the content column's edge), at the top or where it was dragged to. */
 function place_float() {
   const content = document.querySelector(".channel-content")?.getBoundingClientRect();
   float_place.value = content ? { left: content.left, top: content.top + FLOAT_GAP } : { left: 0, top: FLOAT_FALLBACK_TOP };
+  if (float_side.value === "right") float_place.value.left = window.innerWidth - FLOAT_WIDTH;
   if (float_top !== null) float_place.value.top = clamp_float_top(float_top);
 }
 
-/** Start following a press on the floating button. */
+const float_style = computed(() => {
+  if (float_drag_place.value) return { left: `${float_drag_place.value.left}px`, top: `${float_drag_place.value.top}px` };
+  const top = `${float_place.value.top}px`;
+  return float_side.value === "right" ? { right: "0px", top } : { left: `${float_place.value.left}px`, top };
+});
+
+/** Start following a press on the floating button; the pointer is captured only once it becomes a drag, so a tap still clicks. */
 function float_press(event) {
   if (event.button !== 0) return;
-  float_drag = { y: event.clientY, top: float_place.value.top, moved: false };
-  event.currentTarget.setPointerCapture?.(event.pointerId);
+  const rect = event.currentTarget.getBoundingClientRect();
+  float_drag = { x: event.clientX, y: event.clientY, left: rect.left, top: rect.top, width: rect.width, moved: false };
 }
 
 /** Move the floating button with the pointer once the press has moved far enough to be a drag. */
 function float_move(event) {
   if (!float_drag) return;
-  const offset = event.clientY - float_drag.y;
-  if (!float_drag.moved && Math.abs(offset) < FLOAT_DRAG_MIN) return;
-  float_drag.moved = true;
-  float_top = clamp_float_top(float_drag.top + offset);
-  float_place.value = { ...float_place.value, top: float_top };
+  const dx = event.clientX - float_drag.x, dy = event.clientY - float_drag.y;
+  if (!float_drag.moved) {
+    if (Math.hypot(dx, dy) < FLOAT_DRAG_MIN) return;
+    float_drag.moved = true;
+    event.currentTarget.setPointerCapture?.(event.pointerId);
+  }
+  const left = Math.min(Math.max(float_drag.left + dx, 0), Math.max(0, window.innerWidth - float_drag.width));
+  float_drag_place.value = { left, top: clamp_float_top(float_drag.top + dy) };
 }
 
-/** End a press; after a drag the click that follows must not open or close the files. */
+/** End a press; a drag sticks to the nearer side, and the click that follows must not open or close the files. */
 function float_release() {
   float_dragged = Boolean(float_drag?.moved);
+  if (float_dragged && float_drag_place.value) {
+    const { left, top } = float_drag_place.value;
+    float_side.value = left + float_drag.width / 2 < window.innerWidth / 2 ? "left" : "right";
+    float_top = top;
+    place_float();
+  }
   float_drag = null;
+  float_drag_place.value = null;
 }
 
 /** Swallow the click ending a drag. */
@@ -270,20 +297,30 @@ function pull_end() {
 }
 
 function close_all() {
+  for (const item of tabs.value) item.request++;
   tabs.value = [];
-  active_path.value = "";
+  active_id.value = "";
   open.value = false;
 }
 
-/** Jump the file list to a folder named in the breadcrumb, folding the window away. */
-function reveal_folder(path) {
+/** Go back to the room the active file was opened in, when another room is shown now. */
+async function to_tab_room() {
+  const room_id = tab.value?.room_id;
+  if (!room_id || view.value.room?.id === room_id) return;
+  await act("room", room_id);
+  await nextTick();
+}
+
+/** Jump the file list (of the file's room) to a folder named in the breadcrumb, folding the window away. */
+async function reveal_folder(path) {
   fold();
+  await to_tab_room();
   file_preview.reveal_path = path;
   act("tab", "files");
 }
 
 // Back on a tab (or in the window again), it is where it was left; a new tab starts at the top.
-watch([open, active_path, () => Boolean(preview.value)], async () => {
+watch([open, active_id, () => Boolean(preview.value)], async () => {
   if (!open.value || !tab.value) return;
   await nextTick();
   if (scroller()) scroller().scrollTop = tab.value.scroll;
@@ -355,12 +392,14 @@ async function start_comment() {
 
 function cancel_comment() { commenting.value = null; }
 
-/** Put the selection (and comment) in the composer as an excerpt, fold the window and go to the messages. */
-function add_excerpt() {
+/** Put the selection (and comment) in the composer of the file's room as an excerpt, fold the window and go to the messages. */
+async function add_excerpt() {
   const { text, start, end } = commenting.value;
-  file_preview.excerpts.push({ id: ++excerpt_serial, path: active_path.value, name: preview_name.value, start, end, text, comment: comment.value.trim() });
+  const excerpt = { id: ++excerpt_serial, path: active_path.value, name: preview_name.value, start, end, text, comment: comment.value.trim() };
   commenting.value = null;
   document.getSelection()?.removeAllRanges();
+  await to_tab_room();
+  file_preview.excerpts.push(excerpt);
   act("tab", "discussion");
   fold(() => { file_preview.focus_composer++; });
 }
@@ -380,7 +419,7 @@ function stop_following(event) {
 }
 
 // Folding or closing the window, switching tabs or to source, or the text changing ends the reading and any quoting.
-watch([open, active_path, source, rendered], () => { offer.value = null; commenting.value = null; if (reader.state.message_id) reader.stop(); });
+watch([open, active_id, source, rendered], () => { offer.value = null; commenting.value = null; if (reader.state.message_id) reader.stop(); });
 onMounted(() => {
   file_preview.open = open_file;
   place_float();
@@ -408,11 +447,11 @@ onBeforeUnmount(() => {
      <div ref="frame" class="project-editor-frame" @touchstart.passive="pull_start" @touchmove="pull_move" @touchend="pull_end" @touchcancel="pull_end">
       <div class="project-editor-tabs">
         <div class="project-editor-tablist" role="tablist" aria-label="已打开的文件">
-          <div v-for="item in tabs" :key="item.path" class="project-editor-tab" :class="{ 'is-active': item.path === active_path }" :title="item.path">
-            <button type="button" role="tab" class="project-editor-tab-name" :aria-selected="item.path === active_path" @click="activate(item.path)">
+          <div v-for="item in tabs" :key="item.id" class="project-editor-tab" :class="{ 'is-active': item.id === active_id }" :title="item.path">
+            <button type="button" role="tab" class="project-editor-tab-name" :aria-selected="item.id === active_id" @click="activate(item.id)">
               <UIcon :name="file_type(name_of(item.path))[1]" class="project-file-icon" :class="file_type(name_of(item.path))[2]" /><span>{{ name_of(item.path) }}</span>
             </button>
-            <button type="button" class="project-editor-tab-close" :aria-label="`关闭 ${name_of(item.path)}`" title="关闭" @click="close_tab(item.path)"><UIcon name="i-lucide-x" /></button>
+            <button type="button" class="project-editor-tab-close" :aria-label="`关闭 ${name_of(item.path)}`" title="关闭" @click="close_tab(item.id)"><UIcon name="i-lucide-x" /></button>
           </div>
         </div>
         <div class="project-editor-actions">
@@ -485,9 +524,9 @@ onBeforeUnmount(() => {
     </template>
   </UModal>
 
-  <!-- Folded: a floating button on the screen edge, over every channel of the room, until the files are closed. -->
+  <!-- Folded: a floating button on a screen edge, over every channel and room, until the files are closed. -->
   <Teleport to="body">
-    <div v-if="tabs.length && !open" class="file-float" :style="{ left: `${float_place.left}px`, top: `${float_place.top}px` }"
+    <div v-if="tabs.length && !open" class="file-float" :class="{ 'is-right': float_side === 'right' && !float_drag_place, 'is-dragging': float_drag_place }" :style="float_style"
       @pointerdown="float_press" @pointermove="float_move" @pointerup="float_release" @pointercancel="float_release" @click.capture="float_click">
       <button type="button" class="file-float-open" :title="tabs.length > 1 ? `回到文件预览（${tabs.length} 个文件）` : `回到文件预览：${preview_name}`" @click="unfold">
         <UIcon :name="preview_type[1]" class="project-file-icon" :class="preview_type[2]" /><span class="file-float-name">{{ preview_name }}</span>
@@ -573,6 +612,9 @@ onBeforeUnmount(() => {
   border-left: 0; border-radius: 0 999px 999px 0; background: var(--ui-bg-elevated); box-shadow: 0 6px 20px #0006; animation: file-float-in .2s ease-out;
   touch-action: none; user-select: none; -webkit-user-select: none; -webkit-touch-callout: none; }
 @keyframes file-float-in { from { opacity: 0; transform: translateX(-12px); } }
+.file-float.is-right { border-left: 1px solid var(--ui-border-accented); border-right: 0; border-radius: 999px 0 0 999px; animation-name: file-float-in-right; }
+.file-float.is-dragging { border: 1px solid var(--ui-border-accented); border-radius: 999px; animation: none; cursor: grabbing; }
+@keyframes file-float-in-right { from { opacity: 0; transform: translateX(12px); } }
 .file-float-open { display: flex; align-items: center; gap: 7px; height: 100%; max-width: 200px; font-size: 13px; color: var(--ui-text-highlighted); cursor: pointer; }
 .file-float-name { overflow: hidden; white-space: nowrap; text-overflow: ellipsis; }
 .file-float-count { flex-shrink: 0; min-width: 18px; height: 18px; padding: 0 5px; border-radius: 9px; background: var(--ui-primary); color: var(--ui-bg); font-size: 11px; line-height: 18px; text-align: center; }

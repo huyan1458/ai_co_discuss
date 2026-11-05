@@ -475,6 +475,7 @@ html[data-theme^="channel"] .channel-message.channel-topic-card { color: var(--u
 .channel-empty > [class*="icon"] { font-size: 32px; color: #9aa4bc; margin-bottom: 14px; }
 .channel-empty h2 { color: #f1f3f7; font-size: 23px; font-weight: 650; }
 .channel-empty p { color: #a9b1c0; font-size: 14px; margin: 9px 0 22px; }
+.channel-files-unset { min-height: 100%; display: flex; align-items: center; justify-content: center; color: var(--ui-text-muted); font-size: 14px; }
 .channel-latest-dock { grid-column: 2; grid-row: 2; align-self: end; justify-self: center; z-index: 3; display: flex; align-items: center; gap: 8px; padding-bottom: 12px; pointer-events: none; }
 /* "Listen from here": a pill matching the back-to-latest button; beside it on touch, under the selection with a pointer. */
 .channel-listen-pill { display: inline-flex; align-items: center; gap: 6px; height: 32px; padding: 0 14px 0 11px; border: 1px solid #ffffff24; border-radius: 999px; background: #292b30; color: #e8eaee; font-size: 13px; font-weight: 500; white-space: nowrap; box-shadow: 0 2px 8px #0004; pointer-events: auto; }

@@ -64,7 +64,7 @@ async function read_directory(path = "", append = false) {
       <div class="project-files-rows">
         <button v-for="entry in listing?.entries || []" :key="entry.path" type="button" class="project-file-row" :class="{ 'is-hidden': entry.name.startsWith('.') }"
           :disabled="loading || entry.kind === 'unavailable'" :title="entry.kind === 'unavailable' ? `${entry.name}（无法读取或指向项目外）` : entry.name"
-          @click="entry.kind === 'directory' ? read_directory(entry.path) : file_preview.open?.(entry.path)">
+          @click="entry.kind === 'directory' ? read_directory(entry.path) : file_preview.open?.(entry.path, props.directory)">
           <span class="project-file-name"><UIcon :name="entry_icon(entry)[0]" class="project-file-icon" :class="entry_icon(entry)[1]" /><span>{{ entry.name }}</span></span>
           <span class="project-file-size">{{ file_size(entry.size) }}</span><time :datetime="entry.modified_at">{{ modified_time(entry.modified_at) }}</time>
         </button>

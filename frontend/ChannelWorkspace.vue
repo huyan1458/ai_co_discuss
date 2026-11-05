@@ -115,13 +115,12 @@ onBeforeUnmount(() => document.removeEventListener("pointerdown", collapse_brief
 const selected_tab = computed({ get: () => view.value.tab, set: (value) => act("tab", value) });
 const project_directory = computed(() => view.value.launch.room_models?.room_id === room.value?.id
   ? view.value.launch.room_models?.project_directory || "" : "");
-/** Room tools keep their positions; files require a saved project directory. */
+/** Room tools keep their positions; files shows a hint until a project directory is saved. */
 const tabs = computed(() => [
   { value: "discussion", label: "消息", icon: "i-lucide-message-square" },
   { value: "timeline", label: "执行", icon: "i-lucide-chart-gantt" },
   { value: "overview", label: "房间", icon: "i-lucide-sliders-horizontal" },
-  { value: "files", label: "文件", icon: "i-lucide-files", disabled: !project_directory.value,
-    title: project_directory.value || "设置项目目录后启用" },
+  { value: "files", label: "文件", icon: "i-lucide-files", title: project_directory.value || "" },
 ]);
 // Retired pages: consensus and discussion history open from the host brief, access moved into the room page.
 const MERGED_TABS = { context: "discussion", history: "discussion", access: "overview" };
@@ -362,9 +361,10 @@ function resize_nav_by_key(event) {
           <EventLog v-else @detail="open_detail" />
         </div>
         <div v-if="view.tab === 'files'" class="content-page" role="tabpanel" aria-label="文件">
-          <ProjectFiles :key="room.id" :directory="project_directory" />
+          <ProjectFiles v-if="project_directory" :key="room.id" :directory="project_directory" />
+          <p v-else class="channel-files-unset" role="status">当前未设置项目目录</p>
         </div>
-        <FilePreview v-if="project_directory" :key="room.id" :directory="project_directory" />
+        <FilePreview />
         </div>
       </div>
       <div v-else class="channel-empty"><UIcon name="i-lucide-hash" /><h2>新建一个协作房间</h2><p>邀请 AI 一起协作，随时 @ 提问；需要时开启讨论，保留所有人的观点。</p><UButton icon="i-lucide-plus" label="新建房间" color="neutral" @click="create_channel()" /></div>
