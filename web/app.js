@@ -59,8 +59,9 @@ const RELAY_CIPHER_INFO = "codiscuss-relay-v1";
 const RELAY_PROTOCOL = "codiscuss-relay";
 const RELAY_PING_MS = 25000;
 const ROOM_RELAY_PATH = /^\/api\/(rooms|folders|revisions)(\/|\?|$)/;
-// One part of a file sent to the computer stays well inside the relay's 1 MiB frame once encoded and encrypted.
-const RELAY_UPLOAD_PART_BYTES = 384 * 1024;
+// One part is base64-encoded, encrypted and base64-encoded again (about 16/9 of its size), and the sealed request
+// must stay inside the hosted site's 512 KiB request limit (backend/worker.mjs MAX_BODY_BYTES).
+const RELAY_UPLOAD_PART_BYTES = 256 * 1024;
 const COMPUTER_UNREACHABLE = "电脑未连接：请先与电脑配对，并确认电脑开机且运行 codiscuss";
 let local_connection = null;
 let computer_connecting = false;
