@@ -11,6 +11,11 @@ import { reactive } from "vue";
  */
 export const file_preview = reactive({ open: null, reveal_path: null, excerpts: [], focus_composer: 0 });
 
+// For this page's lifetime, so a folder opened before shows at once: listings already read (by room, project and
+// path), and the folder each room's list last showed (`{ directory, path }`).
+export const folder_listings = new Map();
+export const shown_folders = new Map();
+
 // Extension → [language label shown in the status bar, icon, icon tint]; unknown files fall back to plain text.
 const FILE_TYPES = {
   md: ["Markdown", "i-lucide-file-text", "is-blue"], markdown: ["Markdown", "i-lucide-file-text", "is-blue"],

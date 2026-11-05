@@ -359,9 +359,19 @@ function room_workflow_status(config, home) {
 }
 
 /** Read the owner's saved room project, never a directory supplied by the request. */
-export async function room_files(home, raw) {
-  const { input, config } = await member_room_context(home, raw);
+export async function room_files(home, raw, { trust = false } = {}) {
+  const { input, config } = await member_room_context(home, raw, { trust });
   return { room_id: input.room_id, ...read_project_files(config.cwd, input.path, input.offset, input.query) };
+}
+
+/**
+ * `room-files` asked for by another device, answered inside the relay's own process: the same checks as the local
+ * entrypoint with `--remote`, without starting Node for every folder opened.
+ */
+export async function remote_room_files(home, input) {
+  assert_shared_home(home);
+  guard_remote_request('room-files', input, { projects: launch_projects(home).projects, participants: launch_settings(home).participants, home });
+  return room_files(home, input, { trust: true });
 }
 
 const CREATE_PREFERENCE_RANGES = { max_rounds: [0, 100], max_minutes: [0, 1440], goal_max_continues: [0, 100], goal_max_minutes: [0, 1440], chain_rounds: [1, 20] };
@@ -710,8 +720,13 @@ export function borrowed_session(name, profile, room_cwd, env = process.env) {
   return { ...profile, cwd: wanted || cwd };
 }
 
-/** Find the one registered configuration of a room after proving the owner's credential. */
-async function member_room_context(home, raw) {
+// An owner credential the website accepted is trusted this long for read-only file browsing in a long-running process
+// (the relay), so each folder opened from another device does not ask the website again.
+const ROOM_FILES_TRUST_MS = 60000;
+const trusted_room_tokens = new Map();
+
+/** Find the one registered configuration of a room after proving the owner's credential; `trust` reuses a recent proof. */
+async function member_room_context(home, raw, { trust = false } = {}) {
   const input = launch_input({ ...raw, entry: 'web' });
   if (!input.room_id || typeof input.token !== 'string' || !input.token.trim()) throw new Error('管理成员须提供房间编号和房间控制凭据');
   const paths = read_registry(home).filter(path => {
@@ -720,8 +735,14 @@ async function member_room_context(home, raw) {
   });
   if (paths.length !== 1) throw new Error('未找到本房间唯一的已登记配置，请核对本机接入服务');
   const config = configuration_snapshot(paths[0]).config;
-  // Both reads need the owner credential; the inbox transfers no messages.
-  await site_request(input.site, `/api/rooms/${input.room_id}/inbox`, input.token);
+  const proof = `${input.site}
+${input.room_id}
+${createHash('sha256').update(input.token).digest('hex')}`;
+  if (!trust || !(Date.now() - (trusted_room_tokens.get(proof) ?? -Infinity) < ROOM_FILES_TRUST_MS)) {
+    // Both reads need the owner credential; the inbox transfers no messages.
+    await site_request(input.site, `/api/rooms/${input.room_id}/inbox`, input.token);
+    trusted_room_tokens.set(proof, Date.now());
+  }
   return { input, path: paths[0], config };
 }
 

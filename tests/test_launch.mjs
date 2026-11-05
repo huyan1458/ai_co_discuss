@@ -277,6 +277,9 @@ test('room files use the saved project and require the authenticated bridge and 
   assert.deepEqual((await room_files(f.home, { ...input, query: 'baog' })).entries.map(item => item.path), ['报告.md', '章节/第01集报告.md']);
   await assert.rejects(room_files(f.home, { ...input, token: '' }), /控制凭据/);
   await assert.rejects(room_files(f.home, { ...input, token: 'invalid-owner' }), /403/);
+  // The relay trusts a recently proven credential, never one the website has not accepted.
+  assert.ok((await room_files(f.home, input, { trust: true })).entries.some(item => item.name === '报告.md'));
+  await assert.rejects(room_files(f.home, { ...input, token: 'invalid-owner' }, { trust: true }), /403/);
   const body = { room_id: config.room, path: '报告.md' };
   assert.equal((await request(f.site, '/api/local/room-files', body)).status, 403);
   const local = await request(f.site, '/api/local/room-files', body, { 'X-CoDiscuss-Local': '1' });

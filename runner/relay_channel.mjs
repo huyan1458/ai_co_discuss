@@ -10,6 +10,7 @@ import { setTimeout as sleep } from 'node:timers/promises';
 import { gzipSync } from 'node:zlib';
 
 import { atomic_json } from './files.mjs';
+import { remote_room_files } from './discussion_launch.mjs';
 import { acquire_lock } from './discussion_runner.mjs';
 import { local_settings } from './discussion_setup.mjs';
 import { machine_links, relay_cipher, save_machine_links, relayed_command, ROOM_ACTIONS, run_launch_command, sync_remote_launches, unseal } from './remote_launch.mjs';
@@ -156,6 +157,12 @@ export function computer_command(home, site, action, payload) {
   return relayed_command(room?.site ?? local_origin(home), action, input);
 }
 
+/** Run one local operation; browsing project files is answered in this process, since it is asked for on every folder opened. */
+async function run_command(home, command, run) {
+  if (command.command !== 'room-files' || run !== run_launch_command) return run(command);
+  return { status: 200, body: await remote_room_files(home, command.input) };
+}
+
 /** Answer one relayed request: room routes and uploads go to the local website, everything else to the local entrypoint as before. */
 export async function answer_request(home, site, link, frame, { run = run_launch_command, fetcher, report } = {}) {
   const { id, envelope } = frame;
@@ -173,7 +180,7 @@ export async function answer_request(home, site, link, frame, { run = run_launch
       : action === 'computer-site' ? { status: 200, body: { site: local_origin(home) } }
       : action === 'room-api' ? await room_api(home, site, payload, { fetcher, device })
       : action === 'room-upload' ? await room_upload(home, site, payload, { fetcher })
-        : await run({ ...(target === 'computer' ? computer_command(home, site, action, payload) : relayed_command(site, action, payload)), device });
+        : await run_command(home, { ...(target === 'computer' ? computer_command(home, site, action, payload) : relayed_command(site, action, payload)), device }, run);
   } catch (error) { response = { status: 400, body: { error: error.message, ...(error.need ? { need: error.need } : {}) } }; }
   // Remote writes go to this computer's audit log: kind, route, device and outcome, never content. Reads are not logged.
   if (request.action && !(request.action === 'room-api' && (request.payload?.method || 'GET') === 'GET') && !DEVICE_ACTIONS.has(request.action) && request.action !== 'computer-site') {

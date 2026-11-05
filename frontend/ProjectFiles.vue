@@ -1,13 +1,19 @@
 <script setup>
 import { computed, inject, onBeforeUnmount, onMounted, ref, watch } from "vue";
-import { crumbs_of, file_preview, file_size, file_type, modified_time } from "./file-preview.js";
+import { crumbs_of, file_preview, file_size, file_type, folder_listings, modified_time, shown_folders } from "./file-preview.js";
 
 const props = defineProps({ directory: { type: String, required: true } });
 const { view, bridge } = inject("discussion");
 const room_id = view.value.room.id;
+// The folder being shown changes on the click itself; its listing comes from the cache when it was opened before (in
+// this page, for this room and project), and is read again behind it, since another device waits on the relay.
+const current_path = ref(shown_folders.get(room_id)?.directory === props.directory ? shown_folders.get(room_id).path : "");
 const listing = ref(null);
 const loading = ref(false);
 let directory_request = 0;
+const cache_key = (path) => `${room_id}
+${props.directory}
+${path}`;
 
 /** Pick the row icon and tint for one listing entry. */
 function entry_icon(entry) {
@@ -16,7 +22,7 @@ function entry_icon(entry) {
   return file_type(entry.name).slice(1);
 }
 
-const breadcrumbs = computed(() => crumbs_of(props.directory, listing.value?.path || ""));
+const breadcrumbs = computed(() => crumbs_of(props.directory, current_path.value));
 
 /** Show a folder the preview's breadcrumb asked for, now or once this list is shown. */
 function take_reveal() {
@@ -27,17 +33,23 @@ function take_reveal() {
   return true;
 }
 watch(() => file_preview.reveal_path, take_reveal);
-onMounted(() => { if (!take_reveal()) read_directory(); });
+onMounted(() => { if (!take_reveal()) read_directory(current_path.value); });
 onBeforeUnmount(() => { directory_request++; });
 
-/** Read one folder, retaining the previous listing when a refresh fails. */
+/** Show one folder at once (from the cache when it has been opened before) and read it again; a failed refresh keeps what is shown. */
 async function read_directory(path = "", append = false) {
   const request = ++directory_request;
+  if (!append) {
+    current_path.value = path;
+    shown_folders.set(room_id, { directory: props.directory, path });
+    listing.value = folder_listings.get(cache_key(path)) || null;
+  }
   loading.value = true;
   try {
     const result = await bridge.read_room_files(room_id, path, append ? listing.value.next_offset : 0);
     if (request !== directory_request) return;
     listing.value = { ...result, entries: append ? [...listing.value.entries, ...result.entries] : result.entries };
+    folder_listings.set(cache_key(path), listing.value);
   } catch (error) {
     if (request === directory_request) bridge.notify("error", `读取目录失败，${error.message}`);
   } finally { if (request === directory_request) loading.value = false; }
@@ -48,14 +60,14 @@ async function read_directory(path = "", append = false) {
   <section class="project-files">
     <header class="project-files-heading">
       <div><h2>项目文件</h2><p :title="directory">{{ directory }}</p></div>
-      <UButton icon="i-lucide-refresh-cw" color="neutral" variant="ghost" size="sm" aria-label="刷新" title="刷新" :loading="loading" @click="read_directory(listing?.path || '')" />
+      <UButton icon="i-lucide-refresh-cw" color="neutral" variant="ghost" size="sm" aria-label="刷新" title="刷新" :loading="loading" @click="read_directory(current_path)" />
     </header>
 
     <div class="project-explorer" :aria-busy="loading">
       <nav class="project-explorer-path" aria-label="文件路径">
         <template v-for="(part, index) in breadcrumbs" :key="part.path">
           <UIcon v-if="index" name="i-lucide-chevron-right" class="project-crumb-separator" />
-          <button type="button" :disabled="loading || index === breadcrumbs.length - 1" :aria-current="index === breadcrumbs.length - 1 ? 'location' : undefined" @click="read_directory(part.path)">
+          <button type="button" :disabled="index === breadcrumbs.length - 1" :aria-current="index === breadcrumbs.length - 1 ? 'location' : undefined" @click="read_directory(part.path)">
             <UIcon v-if="!index" name="i-lucide-folder-root" />{{ part.name }}
           </button>
         </template>
@@ -63,7 +75,7 @@ async function read_directory(path = "", append = false) {
       <div class="project-files-columns" aria-hidden="true"><span>名称</span><span>大小</span><span>修改时间</span></div>
       <div class="project-files-rows">
         <button v-for="entry in listing?.entries || []" :key="entry.path" type="button" class="project-file-row" :class="{ 'is-hidden': entry.name.startsWith('.') }"
-          :disabled="loading || entry.kind === 'unavailable'" :title="entry.kind === 'unavailable' ? `${entry.name}（无法读取或指向项目外）` : entry.name"
+          :disabled="entry.kind === 'unavailable'" :title="entry.kind === 'unavailable' ? `${entry.name}（无法读取或指向项目外）` : entry.name"
           @click="entry.kind === 'directory' ? read_directory(entry.path) : file_preview.open?.(entry.path, props.directory)">
           <span class="project-file-name"><UIcon :name="entry_icon(entry)[0]" class="project-file-icon" :class="entry_icon(entry)[1]" /><span>{{ entry.name }}</span></span>
           <span class="project-file-size">{{ file_size(entry.size) }}</span><time :datetime="entry.modified_at">{{ modified_time(entry.modified_at) }}</time>
@@ -73,7 +85,7 @@ async function read_directory(path = "", append = false) {
       </div>
       <footer v-if="listing" class="project-files-footer">
         <span>{{ listing.total }} 项<template v-if="listing.next_offset !== null">，已显示 {{ listing.entries.length }} 项</template></span>
-        <UButton v-if="listing.next_offset !== null" label="加载更多" color="neutral" variant="ghost" size="xs" :loading="loading" @click="read_directory(listing.path, true)" />
+        <UButton v-if="listing.next_offset !== null" label="加载更多" color="neutral" variant="ghost" size="xs" :loading="loading" :disabled="loading" @click="read_directory(listing.path, true)" />
       </footer>
     </div>
   </section>
