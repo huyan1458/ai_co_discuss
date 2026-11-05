@@ -138,6 +138,10 @@ const events = {
     return event.item?.type === 'mcp_tool_call' ? String(event.item.tool || '') : event.item?.type === 'web_search' ? 'web_search' : '';
   },
   note(event) { return event.type === 'item.completed' && event.item?.type === 'agent_message' ? String(event.item.text || '').trim() : ''; },
+  edits(event) {
+    if (event.type !== 'item.completed' || event.item?.type !== 'file_change') return [];
+    return (event.item.changes || []).map(change => String(change?.path || '')).filter(Boolean);
+  },
 };
 
 /** Where Codex keeps one thread's rollout, or '' when this machine has none by that ID; shared by the App adapter. */

@@ -27,7 +27,7 @@ from .admin import (AdminError, admin_status, change_password, list_sessions, lo
 from .remote_launch import (COMMAND_WAIT_MAX, claim_machine_commands, finish_machine_command, list_machines, machine_command_status,
                             machine_launch_action, machine_sync, pair_machine, remote_launch_status, submit_machine_command,
                             submit_remote_launch)
-from .free_room import (add_member, after_free_message, authorize_free_write, check_answer, execution_action, free_view,
+from .free_room import (add_member, after_free_message, after_proactive, authorize_free_write, check_answer, execution_action, free_view,
                         inbox, interrupt_member, member_action, member_capability, member_values, migrate_free_tables, reserve_execution,
                         save_room_access, view_execution)
 from .free_room import convert_suggestion, message_suggestions, save_suggestions, sync_participants
@@ -170,7 +170,8 @@ MESSAGE_QUERY = """SELECT messages.*, COALESCE(details.kind,'opinion') AS kind,
 COALESCE(details.submitted_by, CASE WHEN messages.source IN ('cli','api','url','user')
 THEN messages.author ELSE '用户' END) AS submitted_by,
 COALESCE(summaries.text,'') AS summary, COALESCE(summaries.author,'') AS summary_by, timing.elapsed_seconds,
-answered.execution_id, answered.request_message_id, answered.anchor_message_id, COALESCE(withdrawn.kind,'') AS withdrawn
+answered.execution_id, answered.request_message_id, answered.anchor_message_id, COALESCE(withdrawn.kind,'') AS withdrawn,
+EXISTS(SELECT 1 FROM proactive_messages p WHERE p.message_id=messages.id) AS proactive
 FROM messages LEFT JOIN message_details AS details ON details.message_id=messages.id
 LEFT JOIN message_withdrawals AS withdrawn ON withdrawn.message_id=messages.id
 LEFT JOIN message_summaries AS summaries ON summaries.message_id=messages.id
@@ -1171,11 +1172,15 @@ def append_free_message(connection, room, payload, actor):
         connection.execute("UPDATE attachments SET message_id=?,position=? WHERE id=?", (cursor.lastrowid, position, identifier))
     save_suggestions(connection, room_id, cursor.lastrowid, actor, payload)
     save_review_plan(connection, room_id, cursor.lastrowid, review_plan)
-    if mode_command:
+    if actor != "用户" and payload.get("proactive") is True:
+        # Spoken on its own: it completes no request; only the host's may dispatch.
+        after_proactive(connection, room_id, cursor.lastrowid, actor, payload)
+    elif mode_command:
         apply_mode_command(connection, room_id, cursor.lastrowid, mode_command)
     else:
         after_free_message(connection, room_id, cursor.lastrowid, actor, payload)
-    complete_session_requests(connection, room_id, payload, actor, cursor.lastrowid)
+    if payload.get("proactive") is not True:
+        complete_session_requests(connection, room_id, payload, actor, cursor.lastrowid)
     saved_message = connection.execute(f"{MESSAGE_QUERY} WHERE messages.id=?", (cursor.lastrowid,)).fetchone()
     return {"message": message_with_attachments(connection, saved_message), "duplicate": False}
 

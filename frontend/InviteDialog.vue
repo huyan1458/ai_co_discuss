@@ -134,13 +134,14 @@ async function submit_invitation() {
   }
   // Snapshot before the loop: removing invited picks would otherwise shift the names of the rest.
   const instances = new Map(pick_instances.value);
+  const invited_any = invite_picks.value.length > 0;
   for (const pick of [...ordered_picks.value]) {
     const profile = view.value.launch.profiles[pick.name] || {};
     const manual = pick.mode === "manual";
     const instance = instances.get(pick);
     const invited = await act("invite_member", { name: pick.name, access: manual ? "manual" : "runner",
       project_access: profile.project_access || view.value.launch.workspace?.project_access || "read",
-      ...(pick.card && !manual ? { card: pick.card, workflow_members: workflow.members } : {}) });
+      ...(pick.card && !manual ? { card: pick.card, workflow_members: workflow.members } : {}), refresh: false });
     // Admission may already be durable when a later label/description update fails. Do not invite it twice on retry.
     if (!invited) {
       if (pick.card && workflow.members[pick.card]) invite_picks.value = invite_picks.value.filter((item) => item !== pick);
@@ -153,10 +154,16 @@ async function submit_invitation() {
   invited_manual.value = [...invited_manual.value, ...manual_names];
   // The workflow is bound once all its cards joined; a failure leaves the rest picked for a retry.
   if (workflow && Object.keys(workflow.members).length && !invite_picks.value.some((pick) => pick.card)) {
-    if (!await act("enable_room_workflow", { id: workflow.id, members: workflow.members })) return;
+    if (!await act("enable_room_workflow", { id: workflow.id, members: workflow.members })) return await refresh_after(invited_any);
     invite_workflow.value = null;
   }
   if (!invite_picks.value.length && !invited_manual.value.length) inviting.value = false;
+  await refresh_after(invited_any);
+}
+
+/** Invitations skip the per-member reload; the room is read once after the batch, also when it stopped part way. */
+async function refresh_after(invited_any) {
+  if (invited_any) await act("refresh");
 }
 </script>
 
@@ -177,9 +184,11 @@ async function submit_invitation() {
         <div class="pb-invite-footer"><UButton label="完成" class="channel-primary-button" @click="inviting = false" /></div>
       </div>
       <form v-else class="pb-invite" aria-label="邀请专家" @submit.prevent="invite">
-        <RosterAdd label="选择 AI（可多选）" :items="library_items" @add="add_library_item" @remove="(value) => bridge.delete_expert_preset(value.slice(PRESET_PREFIX.length))" />
-        <p v-if="invite_workflow" class="fine-print">工作流：{{ invite_workflow.label }}</p>
-        <WorkflowPicker v-else :disabled="submitting" />
+        <!-- A workflow invitation only confirms the workflow's own cards; the platform and preset rows belong to ordinary invitations. -->
+        <template v-if="!invite_workflow">
+          <RosterAdd label="选择 AI（可多选）" :items="library_items" @add="add_library_item" @remove="(value) => bridge.delete_expert_preset(value.slice(PRESET_PREFIX.length))" />
+          <WorkflowPicker :disabled="submitting" />
+        </template>
         <p v-for="member in invite_workflow?.existing || []" :key="member.card" class="fine-print">{{ bridge.display_name(member.name) }}：{{ record(member.name)?.status === 'away' ? '确认后请回，保留原会话' : '已在场，沿用原成员' }}</p>
         <div v-if="invite_picks.length" class="pb-invite-cards">
           <div v-for="pick in invite_picks" :key="pick.id" class="pb-invite-pick">
@@ -189,7 +198,8 @@ async function submit_invitation() {
         </div>
         <!-- Always rendered once cards exist, so switching a card's mode never changes the dialog height. -->
         <p v-if="invite_picks.length" class="fine-print" :class="{ 'pb-invite-reserved': !(invite_picks.some((pick) => pick.mode === 'manual') && invite_picks.some((pick) => pick.mode !== 'manual')) }" :aria-hidden="!(invite_picks.some((pick) => pick.mode === 'manual') && invite_picks.some((pick) => pick.mode !== 'manual'))">手动启动的成员排在程序启动的成员之后加入队列。</p>
-        <p v-else class="pb-invite-empty">选择一位或多位 AI（同一 AI 可重复添加），点卡片翻面设置软件、模型与项目权限。</p>
+        <p v-else-if="submitting" class="pb-invite-empty">正在加入成员…</p>
+        <p v-else-if="!invite_workflow" class="pb-invite-empty">选择一位或多位 AI（同一 AI 可重复添加），点卡片翻面设置软件、模型与项目权限。</p>
         <p v-if="invite_picks.some((pick) => pick.mode === 'cli') && !view.launch.available" role="alert" class="fine-print">邀请需要本机服务，请在运行 AI 的电脑打开本机网站。</p>
         <div class="pb-invite-footer">
           <UButton label="取消" color="neutral" variant="ghost" :disabled="submitting" @click="inviting = false" />

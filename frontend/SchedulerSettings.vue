@@ -147,7 +147,8 @@ async function save_key() {
 <style scoped>
 .scheduler-settings { display: flex; flex-direction: column; gap: 10px; padding-top: 14px; border-top: 1px solid var(--ui-border-muted); }
 /* Same size front and back, so flipping never moves the dialog; long back content scrolls inside. */
-.scheduler-cards { display: grid; grid-template-columns: repeat(auto-fill, minmax(248px, 1fr)); gap: 8px; }
+/* Same track as the member cards (.create-experts); the slot frame (4px padding + 1px border per side) is added so the card itself matches their width. */
+.scheduler-cards { display: grid; grid-template-columns: repeat(auto-fill, minmax(min(258px, 100%), 282px)); align-items: start; gap: 8px; }
 .scheduler-card { position: relative; display: flex; flex-direction: column; min-width: 0; height: 240px; border: 1px solid var(--channel-edge-control, var(--ui-border)); border-radius: 8px; background: color-mix(in srgb, var(--ui-bg-elevated) 45%, var(--ui-bg)); box-shadow: var(--channel-shadow-control); }
 .scheduler-card:hover { border-color: var(--ui-border-accented); }
 /* The empty state matches the member list's placeholder (.create-experts-empty). */
@@ -189,5 +190,4 @@ async function save_key() {
 .scheduler-description { margin: 2px 0 0; color: var(--ui-text-muted); font-size: 13px; }
 .scheduler-title small { color: var(--ui-text-dimmed); font-size: 11px; font-weight: 400; }
 .scheduler-badge { color: var(--channel-accent); }
-@media (max-width: 600px) { .scheduler-cards { grid-template-columns: 1fr; } }
 </style>

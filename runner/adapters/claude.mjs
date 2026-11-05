@@ -148,6 +148,11 @@ const events = {
     if (event.type !== 'assistant') return '';
     return (event.message?.content || []).filter(block => block.type === 'text').map(block => block.text).join('\n').trim();
   },
+  edits(event) {
+    if (event.type !== 'assistant') return [];
+    return (event.message?.content || []).filter(block => block.type === 'tool_use' && EDIT_TOOL_NAMES.test(block.name))
+      .map(block => String(block.input?.file_path || block.input?.notebook_path || '')).filter(Boolean);
+  },
 };
 
 /**

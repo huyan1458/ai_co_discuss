@@ -337,7 +337,7 @@ test('API participants load the shared skills and map CLI commands onto their ro
   assert.doesNotMatch(expert, /arrange_turns/, 'experts are not told about host tools');
   for (const prompt of [host, expert, free]) assert.match(prompt, /内容你都读不到：以其他成员贴出的为准，不凭文件名猜测/);
   assert.match(free, /message post --kind chat → submit_chat/);
-  assert.match(free, /派活用 to；只点名一位且要它做完后回到你时加 handoff/);
+  assert.match(free, /派活用 to，派出的工作结束后都会交回你；房间空闲后要接着推进时填 continue/);
   assert.match(host, /turn roster → read_roster，读后 turn ask → ask_interjection/);
   assert.match(free, /# 开发协作/, 'an API free-room host cannot open references, so it gets the development reference inline');
   assert.doesNotMatch(expert, /# 开发协作/);
@@ -349,8 +349,8 @@ test('API participants load the shared skills and map CLI commands onto their ro
   assert.match(expert, /# 协作房间中的讨论参与/);
   assert.doesNotMatch(expert, /# 自由协作房间/, 'discussion experts do not load the free-room page');
   assert.match(free, /# 自由协作房间/);
-  assert.match(free, /handoff/, 'free-room API participants get the free-room rules, which live in a reference');
-  assert.doesNotMatch(expert, /handoff/, 'discussion rooms do not carry the free-room rules');
+  assert.match(free, /continue/, 'free-room API participants get the free-room rules, which live in a reference');
+  assert.doesNotMatch(expert, /填 continue/, 'discussion rooms do not carry the free-room rules');
 });
 
 test('read-aloud sends the saved key only to Volcengine and joins chunked audio', async () => {

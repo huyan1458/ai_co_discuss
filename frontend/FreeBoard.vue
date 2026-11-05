@@ -71,8 +71,13 @@ function announce_conflicts(room_id, conflicts = []) {
   let seen = [];
   try { seen = JSON.parse(localStorage.getItem(CONFLICT_SEEN_PREFIX + room_id) || "[]"); } catch { /* Treat as none shown. */ }
   for (const item of conflicts.filter((conflict) => !seen.includes(conflict_key(conflict)))) {
-    const files = item.files.slice(0, CONFLICT_FILE_PREVIEW).join("、") + (item.files.length > CONFLICT_FILE_PREVIEW ? " 等" : "");
-    bridge.notify("warning", `可能冲突：${item.members.map((name) => bridge.display_name(name)).join(" 与 ")} 的重叠执行都改了 ${item.files.length} 个文件（${files}），修改者未确认`);
+    // `confirmed`: both members' own edit tools wrote these; otherwise the files changed while both ran and the writer is unknown.
+    const listed = item.confirmed?.length ? item.confirmed : item.files;
+    const files = listed.slice(0, CONFLICT_FILE_PREVIEW).join("、") + (listed.length > CONFLICT_FILE_PREVIEW ? " 等" : "");
+    const members = item.members.map((name) => bridge.display_name(name)).join(" 与 ");
+    bridge.notify("warning", item.confirmed?.length
+      ? `冲突：${members} 同时编辑了 ${listed.length} 个相同文件（${files}），后保存的可能覆盖了先保存的，请核对`
+      : `可能冲突：${members} 同时运行期间有 ${listed.length} 个文件被改动（${files}），无法确认是谁改的`);
   }
   try { localStorage.setItem(CONFLICT_SEEN_PREFIX + room_id, JSON.stringify(conflicts.map(conflict_key))); } catch { /* Shown again next visit. */ }
 }

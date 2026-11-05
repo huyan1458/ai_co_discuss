@@ -372,8 +372,8 @@ export function timeline_summary(rows, now_ms = Date.now()) {
 
 export const REQUEST_STATUS = { pending: "待投递", delivering: "投递中", completed: "已完成", cancelled: "已取消", failed: "失败" };
 export const EXECUTION_STATUS = { dispatched: "已派出", started: "已开始", completed: "已完成", cancelled: "已作废", failed: "失败" };
-export const PURPOSES = { route: "接收", ask: "派活", handoff: "交还主持人" };
-const CREATORS = { user: "用户", host: "主持人" };
+export const PURPOSES = { route: "接收", ask: "派活", handoff: "交还主持人", notice: "程序通知主持人" };
+const CREATORS = { user: "用户", host: "主持人", system: "程序" };
 const CANCEL_REASONS = { user_stop: "用户停止", member_away: "成员暂离", member_removed: "成员移除", rerouted: "改派", no_reply: "未回复", archived: "房间归档" };
 const MEMBER_STATUS = { active: "在场", away: "暂离", removed: "移除" };
 const ROLES = { host: "主持人", member: "成员" };

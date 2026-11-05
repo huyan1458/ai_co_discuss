@@ -337,17 +337,23 @@ export function effective_profile(profile, member_name, workflow) {
   return source.system_prompt ? { ...rest, system_prompt: source.system_prompt } : rest;
 }
 
-/** The host's view of the workflow: which card is which member now, whether present, and what it may do. */
+/**
+ * The host's view of the workflow: which card is which member now, whether present, and what it may do. A card the
+ * workflow dropped is left out; `missing` lists cards added after it was enabled, which no member plays yet.
+ */
 export function workflow_task_field(workflow, room_members, participants) {
   const members = Object.entries(workflow.members).map(([card, name]) => {
     const member = (room_members || []).find(item => item.name === name);
-    if (!member || member.status === 'removed') return null;
-    const source = workflow.cards[card] || {};
+    const source = workflow.cards[card];
+    if (!member || member.status === 'removed' || !source) return null;
     return { card, member: member.label || name, label: source.label || '', description: source.description || '',
       status: member.status, project_access: participants?.[name]?.project_access || 'read' };
   }).filter(Boolean);
+  const missing = Object.values(workflow.cards).filter(card => !workflow.members[card.card])
+    .map(card => ({ card: card.card, label: card.label || '', description: card.description || '' }));
   // The host reads SKILL.md only when a request fits the description and its revision is one it has not read.
-  return { id: workflow.id, label: workflow.label, description: workflow.description || '', revision: workflow.revision || '', members };
+  return { id: workflow.id, label: workflow.label, description: workflow.description || '', revision: workflow.revision || '', members,
+    ...(missing.length ? { missing } : {}) };
 }
 
 /**

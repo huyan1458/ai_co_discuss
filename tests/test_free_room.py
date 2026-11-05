@@ -1126,8 +1126,21 @@ class MultiMemberTests(FreeRoomTests):
         self.assertEqual(report(codex, "x")[0], 400)
         self.assertEqual(report(codex, ["index.html"])[0], 200)
         conflicts = self.request(self.path)[1]["free"]["conflicts"]
-        self.assertEqual(conflicts, [{"members": ["Claude", "Codex"], "executions": [claude["id"], codex["id"]], "files": ["index.html"]}])
+        self.assertEqual(conflicts, [{"members": ["Claude", "Codex"], "executions": [claude["id"], codex["id"]], "files": ["index.html"],
+                                      "confirmed": []}])
 
+    def test_conflicts_follow_the_files_each_member_reported_editing(self):
+        """Concurrent snapshots see each other's files: a file only one side's edit tools wrote is not flagged, one both wrote is confirmed."""
+        self.say("分头改", to=["Claude", "Codex"])
+        claude, codex = self.reserve_for("Claude")[1], self.reserve_for("Codex")[1]
+
+        def report(execution, edited):
+            body = {"action": "report", "changes": ["a.css", "index.html", "shared.md"], "edited": edited}
+            return self.request(f"{self.path}/executions/{execution['id']}", body, self.owner)
+        self.assertEqual(report(claude, ["a.css", "shared.md", "outside.txt"])[0], 200)
+        self.assertEqual(report(codex, ["index.html", "shared.md"])[0], 200)
+        conflicts = self.request(self.path)[1]["free"]["conflicts"]
+        self.assertEqual([(item["files"], item["confirmed"]) for item in conflicts], [(["shared.md"], ["shared.md"])])
 
 class HostRoomTests(FreeRoomTests):
     """A room hosted by Claude with Codex and Antigravity as runner members; shared by host and goal tests."""
@@ -1183,12 +1196,13 @@ class HostTests(HostRoomTests):
         self.assertEqual(self.requests()[1:], [("Codex", "ask", "pending")])
         failing = self.reserve_for("Codex")[1]
         self.request(f"{self.path}/executions/{failing['id']}", {"action": "fail", "reason": "CLI 退出"}, self.owner)
-        self.assertEqual(self.requests()[1:], [("Codex", "ask", "failed"), ("Antigravity", "ask", "pending")])
+        self.assertEqual(self.requests()[1:], [("Codex", "ask", "failed"), ("Claude", "notice", "pending"), ("Antigravity", "ask", "pending")])
         self.work("Antigravity")
+        self.work("Claude")
         FreeRoomTests.say(self, "再来一次", to=["Antigravity", "Codex"], sequential=True)
-        self.assertEqual(self.requests()[3:], [("Codex", "ask", "pending")])
+        self.assertEqual(self.requests()[4:], [("Codex", "ask", "pending")])
         self.request(f"{self.path}/members/{self.member_id('Codex')}", {"action": "away"}, self.owner)
-        self.assertEqual(self.requests()[3:], [("Codex", "ask", "cancelled"), ("Antigravity", "ask", "pending")])
+        self.assertEqual(self.requests()[4:], [("Codex", "ask", "cancelled"), ("Antigravity", "ask", "pending")], "a member sent away is no failure")
         order = self.request(self.path)[1]["speaking_order"]
         self.assertEqual((order["kind"], [(item["name"], item["state"]) for item in order["items"]]),
                          ("queue", [("Antigravity", "speaking"), ("Claude", "idle")]))
@@ -1213,8 +1227,8 @@ class HostTests(HostRoomTests):
         self.work("Claude")
         self.assertEqual(self.requests()[1:], [("Antigravity", "ask", "pending")])
 
-    def test_partial_failure_still_hands_back_but_all_failed_halts(self):
-        """One completed member is enough to hand back; a batch where all fail halts the chain."""
+    def test_failed_batches_hand_back_to_the_host_too(self):
+        """A batch comes back to the host whether some or all of it failed, so the host can retry or reassign; the chain runs on."""
         FreeRoomTests.say(self, "第一链")
         self.work("Claude", to=["Codex", "Antigravity"])
         failing = self.reserve_for("Antigravity")[1]
@@ -1225,11 +1239,11 @@ class HostTests(HostRoomTests):
         failing = self.reserve_for("Codex")[1]
         self.request(f"{self.path}/executions/{failing['id']}", {"action": "fail", "reason": "再次失败"}, self.owner)
         free = self.request(self.path)[1]["free"]
-        self.assertEqual([item["reason"] for item in free["halted_chains"]], ["all_failed"])
-        self.assertEqual(self.requests().count(("Claude", "handoff", "pending")), 0)
+        self.assertEqual(free["halted_chains"], [])
+        self.assertEqual(self.requests().count(("Claude", "handoff", "pending")), 1)
 
     def test_owner_retries_a_failed_execution_once(self):
-        """Retry puts the failed request back for the same member; the halted chain resumes and the host still gets the answer."""
+        """Retry puts the failed request back for the same member; the host, told of the failure, is told again when it ends."""
         FreeRoomTests.say(self, "重试")
         self.work("Claude", to=["Codex", "Antigravity"])
         for name in ("Codex", "Antigravity"):
@@ -1242,8 +1256,10 @@ class HostTests(HostRoomTests):
         self.assertEqual(self.request(url, {"action": "retry"}, self.owner)[0], 409)
         self.assertEqual(self.request(self.path)[1]["free"]["halted_chains"], [])
         self.assertIn(("Antigravity", "ask", "pending"), self.requests())
+        self.assertEqual(self.requests().count(("Claude", "handoff", "pending")), 1, "the failure already came back")
         self.work("Antigravity")
-        self.assertEqual(self.requests().count(("Claude", "handoff", "pending")), 1)
+        self.assertIn("重试后已结束", self.messages()[-1][1])
+        self.assertEqual(self.requests().count(("Claude", "notice", "pending")), 0, "the waiting hand-back reads it")
 
     def test_round_limit_holds_the_next_dispatch_until_the_owner_continues(self):
         """A round is a host dispatch: its hand-back always comes, the next dispatch past the limit is held, and continuing sends it."""
@@ -1305,6 +1321,19 @@ class HostTests(HostRoomTests):
         self.assertEqual(chain["used"], 2, "each step is one round")
         self.assertEqual(self.request(self.path)[1]["speaking_order"]["kind"], "default")
 
+    def test_retrying_a_failed_relay_step_resumes_the_relay(self):
+        """A failed step stops the relay and tells the host; retrying it runs the relay again, so its answer goes on."""
+        FreeRoomTests.say(self, "接力失败重试")
+        self.work("Claude", to=["Antigravity", "Codex"], sequential=True, loop=True)
+        failing = self.reserve_for("Antigravity")[1]
+        url = f"{self.path}/executions/{failing['id']}"
+        self.request(url, {"action": "fail", "reason": "权限被拒"}, self.owner)
+        self.assertEqual(self.requests()[-1], ("Claude", "notice", "pending"))
+        self.assertEqual(self.request(self.path)[1]["free"]["halted_chains"], [])
+        self.assertEqual(self.request(url, {"action": "retry"}, self.owner)[0], 200)
+        self.work("Antigravity")
+        self.assertEqual(self.requests()[-1], ("Codex", "ask", "pending"))
+
     def test_loop_checkpoint_runs_the_next_pass_only_when_continued(self):
         """A loop hands back at a checkpoint; continuing starts the next pass on the last answer, otherwise the host just accepts."""
         self.request(f"{self.path}/budget", {"max_rounds": 5}, self.owner)
@@ -1353,12 +1382,123 @@ class HostTests(HostRoomTests):
         finally:
             free_room.CHAIN_ROUNDS = original
 
-    def test_single_member_dispatch_hands_back_only_when_the_host_asks(self):
-        """One member's answer goes straight to the user unless the host dispatched it with handoff, e.g. to pass it to a reviewer."""
+    def test_host_continues_once_the_room_is_idle_unless_superseded(self):
+        """`continue` wakes the host again once nothing else is open, as a round of its chain; only the host may ask for it."""
+        FreeRoomTests.say(self, "自己推进")
+        reserved = self.reserve_for("Claude")[1]
+        refused = self.request(f"{self.path}/messages", {"author": "Codex", "text": "x", "source": "cli", "continue": "再看看",
+                                                         "submission_id": uuid.uuid4().hex, "execution_id": reserved["id"]}, self.codex)
+        self.assertIn(refused[0], (400, 403))
+        self.assertEqual(self.request(f"{self.path}/messages", {"author": "Claude", "text": "先派活", "source": "cli", "to": ["Codex"],
+                                                                "continue": "汇总后检查第六集", "submission_id": uuid.uuid4().hex,
+                                                                "execution_id": reserved["id"]}, self.tokens["Claude"])[0], 201)
+        self.work("Codex")
+        self.assertEqual(self.requests()[-1], ("Claude", "handoff", "pending"), "the hand-back already wakes the host")
+        self.work("Claude", **{"continue": "检查第六集"})
+        self.assertEqual(self.requests()[-1], ("Claude", "notice", "pending"))
+        self.assertIn("检查第六集", self.messages()[-1][1])
+        self.assertEqual(self.request(self.path)[1]["free"]["chain_rounds"][0]["used"], 2, "the wake-up is a round")
+        self.work("Claude", **{"continue": "再查一遍"})
+        self.assertEqual(self.requests()[-1], ("Claude", "notice", "pending"))
+        reserved = self.reserve_for("Claude")[1]
+        FreeRoomTests.say(self, "先停一下，听我说")
+        self.assertEqual(self.request(f"{self.path}/messages", {"author": "Claude", "text": "好", "source": "cli", "continue": "接着查",
+                                                                "submission_id": uuid.uuid4().hex, "execution_id": reserved["id"]}, self.tokens["Claude"])[0], 201)
+        self.assertEqual(self.requests()[-1], ("Claude", "route", "pending"), "the owner's message is answered first")
+        self.work("Claude")
+        self.assertEqual(self.requests()[-1], ("Claude", "route", "completed"), "an answer without continue clears it")
+
+    def test_proactive_posts_need_no_request_and_only_the_hosts_dispatch(self):
+        """A member may speak on its own outside an execution; only the host's proactive post may dispatch, as a new chain."""
+        def post(name, **extra):
+            return self.request(f"{self.path}/messages", {"author": name, "text": f"{name} 主动说", "source": "cli", "proactive": True,
+                                                          "submission_id": uuid.uuid4().hex, **extra}, self.tokens[name])
+        status, saved = post("Codex")
+        self.assertEqual((status, saved["message"]["proactive"]), (201, 1), saved)
+        self.assertEqual(self.requests(), [], "it completes and starts nothing")
+        self.assertEqual(post("Codex", to=["Antigravity"])[0], 400, "a member's proactive post does not dispatch")
+        self.assertEqual(post("Codex", execution_id=1)[0], 400)
+        FreeRoomTests.say(self, "@Codex 帮我看看", to=["Codex"])
+        self.reserve_for("Codex")
+        self.assertEqual(post("Codex")[0], 409, "a live execution is answered through itself")
+        status, saved = post("Claude", to=["Antigravity"])
+        self.assertEqual(status, 201, saved)
+        self.assertEqual(self.requests()[-1], ("Antigravity", "ask", "pending"))
+        chain = [item for item in self.request(self.path)[1]["free"]["requests"] if item["member"] == "Antigravity"][-1]["chain_id"]
+        self.assertEqual(chain, saved["message"]["id"], "the host's proactive dispatch starts its own chain")
+        self.work("Antigravity")
+        self.assertEqual(self.requests()[-1], ("Claude", "handoff", "pending"))
+
+    def test_notices_skip_one_batch_join_a_waiting_request_and_cost_no_round(self):
+        """A conflict inside one host batch waits for its hand-back; a notice while the host has a request waiting only
+        joins the transcript; event notices leave the chain's rounds alone."""
+        FreeRoomTests.say(self, "并行改首页")
+        self.work("Claude", to=["Codex", "Antigravity"])
+        codex, antigravity = self.reserve_for("Codex")[1], self.reserve_for("Antigravity")[1]
+        for execution in (codex, antigravity):
+            self.request(f"{self.path}/executions/{execution['id']}", {"action": "report", "changes": ["index.html"]}, self.owner)
+        self.assertNotIn(("Claude", "notice", "pending"), self.requests(), "the batch's hand-back carries it")
+        for execution in (codex, antigravity):
+            self.request(f"{self.path}/executions/{execution['id']}", {"action": "fail", "reason": "CLI 退出"}, self.owner)
+        self.assertEqual(self.requests()[-1], ("Claude", "handoff", "pending"), "the failed batch comes back")
+        FreeRoomTests.say(self, "@Antigravity 单独问你", to=["Antigravity"])
+        failing = self.reserve_for("Antigravity")[1]
+        self.request(f"{self.path}/executions/{failing['id']}", {"action": "fail", "reason": "模型不可用"}, self.owner)
+        self.assertIn("模型不可用", self.messages()[-1][1], "the failure is written down")
+        self.assertEqual(self.requests().count(("Claude", "notice", "pending")), 0, "the waiting hand-back reads it")
+        rounds = {item["chain_id"]: item["used"] for item in self.request(self.path)[1]["free"]["chain_rounds"]}
+        self.assertEqual(list(rounds.values()), [1], "notices are no rounds")
+
+    def test_proactive_waits_for_pending_requests_and_manual_posts_are_proactive(self):
+        """Pending requests are answered first; a manual member's unbound post is a proactive one."""
+        FreeRoomTests.say(self, "@Codex 帮我看看", to=["Codex"])
+        status, refused = self.request(f"{self.path}/messages", {"author": "Codex", "text": "主动说", "source": "cli", "proactive": True,
+                                                                 "submission_id": uuid.uuid4().hex}, self.tokens["Codex"])
+        self.assertEqual(status, 409, refused)
+        self.assertIn("待处理", refused["error"])
+        token = uuid.uuid4().hex
+        self.request(f"{self.path}/members", {"name": "Qwen", "token": token, "access": "manual"}, self.owner)
+        self.request(f"{self.path}/register", {}, token)
+        status, saved = self.request(f"{self.path}/messages", {"author": "Qwen", "text": "我补充一句", "source": "cli",
+                                                               "submission_id": uuid.uuid4().hex}, token)
+        self.assertEqual((status, saved["message"]["proactive"]), (201, 1), saved)
+
+    def test_possible_conflict_wakes_the_host_once(self):
+        """Overlapping members changing one file are reported to the host once per pair."""
+        FreeRoomTests.say(self, "改首页", to=["Codex", "Antigravity"])
+        codex, antigravity = self.reserve_for("Codex")[1], self.reserve_for("Antigravity")[1]
+        for execution in (codex, antigravity):
+            self.request(f"{self.path}/executions/{execution['id']}", {"action": "report", "changes": ["index.html"]}, self.owner)
+        self.assertEqual(self.requests()[-1], ("Claude", "notice", "pending"))
+        self.assertIn("index.html", self.messages()[-1][1])
+        self.assertEqual(self.requests().count(("Claude", "notice", "pending")), 1)
+
+    def test_no_handoff_sends_one_completed_answer_straight_to_the_user(self):
+        """`no_handoff` skips the hand-back for one member who completed; a failure still comes back."""
+        FreeRoomTests.say(self, "简单问问")
+        reserved = self.reserve_for("Claude")[1]
+        status, refused = self.request(f"{self.path}/messages", {"author": "Claude", "text": "派两位", "source": "cli", "to": ["Codex", "Antigravity"],
+                                                                 "no_handoff": True, "submission_id": uuid.uuid4().hex,
+                                                                 "execution_id": reserved["id"]}, self.tokens["Claude"])
+        self.assertEqual(status, 400, refused)
+        self.assertEqual(self.request(f"{self.path}/messages", {"author": "Claude", "text": "请 Codex 答", "source": "cli", "to": ["Codex"],
+                                                                "no_handoff": True, "submission_id": uuid.uuid4().hex,
+                                                                "execution_id": reserved["id"]}, self.tokens["Claude"])[0], 201)
+        self.work("Codex")
+        self.assertNotIn(("Claude", "handoff", "pending"), self.requests())
+        FreeRoomTests.say(self, "再问一个")
+        self.work("Claude", to=["Antigravity"], no_handoff=True)
+        failing = self.reserve_for("Antigravity")[1]
+        self.request(f"{self.path}/executions/{failing['id']}", {"action": "fail", "reason": "CLI 退出"}, self.owner)
+        self.assertEqual(self.requests()[-1], ("Claude", "handoff", "pending"), "a failure still comes back")
+
+    def test_single_member_dispatch_hands_back_to_the_host(self):
+        """One member's answer comes back to the host as several do; the older handoff flag is still accepted."""
         FreeRoomTests.say(self, "单人派活")
         self.work("Claude", to=["Codex"])
         self.work("Codex")
-        self.assertEqual(self.requests().count(("Claude", "handoff", "pending")), 0)
+        self.assertEqual(self.requests().count(("Claude", "handoff", "pending")), 1)
+        self.work("Claude")
         FreeRoomTests.say(self, "做完交回我", to=["Claude"])
         self.work("Claude", to=["Codex"], handoff=True)
         self.work("Codex")
@@ -1501,6 +1641,8 @@ class GoalTests(HostRoomTests):
         self.work("Claude", to=["Codex"])
         self.assertFalse(self.goal()["goal"]["idle"])
         self.work("Codex")
+        self.assertFalse(self.goal()["goal"]["idle"], "the answer comes back to the host first")
+        self.work("Claude")
         self.assertTrue(self.goal()["goal"]["idle"])
         self.assertEqual(self.request(f"{self.path}/goal", {"action": "continue"}, self.owner)[0], 400)
         self.assertEqual(self.request(f"{self.path}/goal", {"action": "continue", "revision": "stale"}, self.owner)[0], 409)
@@ -1517,6 +1659,7 @@ class GoalTests(HostRoomTests):
         self.open_from_page()
         self.work("Claude", to=["Codex"])
         self.work("Codex")
+        self.work("Claude")
         self.assertEqual(self.request(f"{self.path}/goal", {"action": "wait"}, self.owner)[0], 400)
         self.assertEqual(self.goal_write("wait", token=self.tokens["Claude"])[0], 403)
         status, view = self.goal_write("wait")
@@ -1556,9 +1699,11 @@ class GoalTests(HostRoomTests):
         self.assertEqual(self.goal_write("update", max_continues=1)[0], 200)
         self.assertEqual(self.answer(execution["id"], token=self.tokens["Claude"], to=["Codex"])[0], 201)
         self.work("Codex")
+        self.work("Claude")
         self.assertEqual(self.goal_write("continue")[1]["goal"]["continues"], 1)
         self.work("Claude", to=["Codex"])
         self.work("Codex")
+        self.work("Claude")
         status, view = self.goal_write("continue")
         self.assertEqual((status, view["goal"]["status"]), (200, "budget_limited"), view)
         self.assertEqual(self.requests()[-1], ("Claude", "goal_continue", "pending"))  # the host still wraps up once

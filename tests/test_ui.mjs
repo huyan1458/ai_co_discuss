@@ -1149,7 +1149,7 @@ test("batch invitation stops at the first failure and keeps the remaining picks 
   await Promise.resolve();
   vm.runInContext('invite_picks.value = ["Codex", "Claude", "Antigravity"].map((name) => ({ name, mode: "manual" }));', context);
   await context.invite();
-  assert.deepEqual(calls, ["invite_member", "invite_member"]);
+  assert.deepEqual(calls, ["invite_member", "invite_member", "refresh"]);
   assert.equal(vm.runInContext("invite_picks.value.map((pick) => pick.name).join()", context), "Claude,Antigravity");
   assert.equal(vm.runInContext("invited_manual.value.join()", context), "Codex");
 });
@@ -1212,7 +1212,7 @@ test('a slash workflow request previews cards, recalls members only on confirmat
   assert.equal(f.calls.length, 0, 'selection does not recall or invite anyone');
   assert.equal(vm.runInContext('invite_picks.value.map(pick => pick.name).join()', f.dialog), 'Codex-editor');
   await f.dialog.invite();
-  assert.deepEqual(f.calls, ['change_member', 'invite_member', 'enable_room_workflow']);
+  assert.deepEqual(f.calls, ['change_member', 'invite_member', 'enable_room_workflow', 'refresh']);
   assert.deepEqual(enabled, [{ id: 'writing', members: { writer: 'Claude-old', editor: 'Codex-editor' } }]);
 });
 

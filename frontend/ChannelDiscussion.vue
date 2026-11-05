@@ -1,6 +1,7 @@
 <script setup>
 import { computed, inject, nextTick, onBeforeUnmount, onMounted, reactive, ref, watch } from "vue";
 import ScheduleCard from "./ScheduleCard.vue";
+import SchedulerDecision from "./SchedulerDecision.vue";
 import TopicCard from "./TopicCard.vue";
 import DiscussionEndCard from "./DiscussionEndCard.vue";
 import GoalNoticeCard from "./GoalNoticeCard.vue";
@@ -8,11 +9,11 @@ import ExecutionDenials from "./ExecutionDenials.vue";
 import ExecutionNotes from "./ExecutionNotes.vue";
 import WorkingText from "./WorkingText.vue";
 import QueuedMessages from "./QueuedMessages.vue";
-import InviteDialog from "./InviteDialog.vue";
 import { active_workflow } from "./workflow-state.js";
 import { use_read_aloud } from "./read-aloud.js";
 import { use_broadcast } from "./broadcast.js";
 import { use_voice_input } from "./voice-input.js";
+import { excerpt_lines, excerpts_markdown, file_preview } from "./file-preview.js";
 import { motion, useSpring, useTransform } from "motion-v";
 
 const emit = defineEmits(["detail", "edit"]);
@@ -366,10 +367,15 @@ const recipient_hint = computed(() => {
 });
 /** Project files picked after @: their @path stays in the draft, and they also show as cards and go out as a trailing line of paths (code-quoted, so they never wake a member). */
 const file_refs = ref([]);
-watch(() => room.value?.id, () => { file_refs.value = []; });
+watch(() => room.value?.id, () => { file_refs.value = []; file_preview.excerpts = []; });
 const file_refs_line = () => file_refs.value.length
   ? `引用文件：${file_refs.value.map((ref) => `\`${ref.path}${ref.kind === "directory" ? "/" : ""}\``).join("、")}` : "";
-const has_draft = computed(() => Boolean(text.value.trim() || view.value.attachment_drafts.length || file_refs.value.length));
+// Passages quoted from the file preview ("添加到对话") wait as cards and go out after the text, each as a quote with its comment.
+const excerpts = computed(() => file_preview.excerpts);
+const has_draft = computed(() => Boolean(text.value.trim() || view.value.attachment_drafts.length || file_refs.value.length || excerpts.value.length));
+watch(() => file_preview.focus_composer, () => nextTick(() => prompt.value?.textareaRef?.focus()));
+/** Drop one excerpt card from the draft. */
+function remove_excerpt(excerpt) { file_preview.excerpts = file_preview.excerpts.filter((item) => item.id !== excerpt.id); }
 /** Active members a free-room message can name; chips appear only when there is a choice. */
 const free_members = computed(() => (room.value.free?.members || []).filter((member) => member.status === "active" && (member.access !== "manual" || member.registered_at)));
 const free_host = computed(() => free_members.value.find((member) => member.role === "host"));
@@ -464,6 +470,11 @@ const recommendation_timer = window.setInterval(() => {
 }, 1000);
 onBeforeUnmount(() => window.clearInterval(recommendation_timer));
 /** Adopt with the chosen timing; a finished host leaves only "ask now", sent as mode after. */
+/** A scheduler call's milliseconds: sub-second calls stay in milliseconds, longer ones use the shared format; missing timing stays empty. */
+function format_ms(ms) {
+  if (ms == null) return "";
+  return ms < 1000 ? `${ms}毫秒` : ms < 10_000 ? `${(ms / 1000).toFixed(1)}秒` : format_elapsed(Math.round(ms / 1000));
+}
 /** In a discussion, each smart-scheduling decision shows under the message it followed. */
 const scheduler_decisions = computed(() => {
   const rows = new Map();
@@ -471,76 +482,13 @@ const scheduler_decisions = computed(() => {
     // A skip asked the model nothing (no confidence, nothing applied, no question), so there is no decision to show.
     if (item.confidence === null && !item.applied && !item.detail?.length) continue;
     rows.set(item.after_message_id, [...(rows.get(item.after_message_id) || []),
-      { ...item, title: `${SCHEDULER_LABELS[item.provider] || item.provider}${item.confidence === null ? "" : `，置信度 ${Number(item.confidence).toFixed(2)}`}` }]);
+      { ...item, provider_label: SCHEDULER_LABELS[item.provider] || item.provider, duration: format_ms(item.detail?.[0]?.duration_ms),
+        title: `${SCHEDULER_LABELS[item.provider] || item.provider}${item.confidence === null ? "" : `，置信度 ${Number(item.confidence).toFixed(2)}`}` }]);
   }
   return rows;
 });
 /** Messages the local service is still analysing; the card gives way once the decision is recorded. */
 const routing_messages = computed(() => new Set(room.value.scheduler_routing || []));
-const DECISION_OPTIONS = { __host__: "交给主持人", __note__: "仅补充信息", continue: "继续下一轮", __all__: "全体各自回应", __all_seq__: "全体依次回应", __none__: "无需回应" };
-// "Only these few" choices carry the names after a prefix, as the scheduler writes them.
-const SOME_PREFIX = "__some__:";
-const option_name = (name) => DECISION_OPTIONS[name]
-  || (String(name).startsWith(SOME_PREFIX) ? `${String(name).slice(SOME_PREFIX.length).split("、").map(bridge.display_name).join("、")} 各自回应` : bridge.display_name(name));
-// The model's input is fetched only when asked for; it is several KB per decision and not part of the room view.
-const decision_inputs = ref({});
-/** Open or close one decision's input; the first opening loads it, a failure is reported and leaves it closed. */
-async function toggle_decision_input(decision) {
-  const current = decision_inputs.value[decision.id] || {};
-  if (current.loading) return;
-  if (current.open) { decision_inputs.value = { ...decision_inputs.value, [decision.id]: { ...current, open: false } }; return; }
-  if ("data" in current) { decision_inputs.value = { ...decision_inputs.value, [decision.id]: { ...current, open: true } }; return; }
-  decision_inputs.value = { ...decision_inputs.value, [decision.id]: { loading: true } };
-  try { decision_inputs.value = { ...decision_inputs.value, [decision.id]: { open: true, data: summarize_input(await bridge.load_decision_input(decision.id)) } }; }
-  catch (failure) {
-    decision_inputs.value = { ...decision_inputs.value, [decision.id]: {} };
-    bridge.notify("error", `读取完整输入失败：${failure.message}`);
-  }
-}
-/** Message numbers as a short list: consecutive numbers collapse into a range. */
-function message_span(ids) {
-  if (!ids.length) return "";
-  const runs = [];
-  for (const id of ids) {
-    const last = runs.at(-1);
-    if (last && id === last[1] + 1) last[1] = id; else runs.push([id, id]);
-  }
-  return runs.map(([from, to]) => from === to ? `#${from}` : `#${from}–#${to}`).join("、");
-}
-/**
- * Split the saved state into the fixed background, the room facts and which messages were passed (numbers only);
- * options keep only their descriptions, since the card already shows their probabilities.
- */
-function summarize_input(view) {
-  const input = view?.input;
-  if (!input?.state) return null;
-  const blocks = String(input.state).split("\n\n");
-  const lines = blocks[0].split("\n");
-  const start = lines.findIndex((line) => line.startsWith("房间："));
-  const message_block = blocks.find((block) => /^(近期消息|本轮及最近发言)/.test(block)) || "";
-  const pending_block = blocks.find((block) => block.startsWith("待处理的用户消息")) || "";
-  const ids = (block) => [...block.matchAll(/^#(\d+)/gm)].map((match) => Number(match[1]));
-  const recent = ids(message_block);
-  return {
-    background: (start > 0 ? lines.slice(0, start) : []).join("\n"),
-    facts: (start >= 0 ? lines.slice(start) : lines).join("\n"),
-    messages: recent.length ? `${recent.length} 条：${message_span(recent)}` : "无",
-    pending: message_span(ids(pending_block)),
-    questions: (input.questions || []).map((question) => ({ instructions: question.instructions,
-      choices: (question.choices || []).map((choice) => ({ name: option_name(choice.value), description: choice.description })) })),
-  };
-}
-/** Provider and model of one decision, read from the record itself. */
-function decision_meta(decision) {
-  let context = {};
-  try { context = JSON.parse(decision.context || "{}") || {}; } catch { context = {}; }
-  return [SCHEDULER_LABELS[decision.provider] || decision.provider, context.model].filter(Boolean).join(" · ");
-}
-/** Every option of one question with its probability, most likely first, so a close call is visible at a glance. */
-function decision_odds(item) {
-  return (item.choices || []).map((value) => ({ value, name: option_name(value), probability: item.probabilities?.[value] }))
-    .sort((left, right) => (right.probability ?? -1) - (left.probability ?? -1));
-}
 /** The host's own plans stand beside the decisions, under the message they followed. */
 const host_arrangements = computed(() => {
   const rows = new Map();
@@ -551,25 +499,6 @@ const host_arrangements = computed(() => {
   }
   return rows;
 });
-/** Clicking the current verdict again withdraws it; a bad one saves at once and opens an optional correction form. */
-const correcting = ref({ id: 0, should_be: "", note: "" });
-function rate_decision(decision, rating) {
-  const withdraw = decision.feedback === rating;
-  correcting.value = { id: !withdraw && rating === "bad" ? decision.id : 0, should_be: decision.should_be || "", note: decision.note || "" };
-  act("rate_decision", { decision_id: decision.id, rating: withdraw ? null : rating,
-    ...(rating === "bad" && !withdraw ? { should_be: decision.should_be, note: decision.note } : {}) });
-}
-function save_correction(decision) {
-  const { should_be, note } = correcting.value;
-  correcting.value = { id: 0, should_be: "", note: "" };
-  act("rate_decision", { decision_id: decision.id, rating: "bad", should_be, note });
-}
-/** Who could have answered: every member present, plus the host; a free room's routing can also pick everyone or no one. */
-// The select needs a non-empty value for "not specified"; it is saved as an empty answer.
-const UNSET_CORRECTION = "__unset__";
-const correction_options = computed(() => [{ label: "未指定", value: UNSET_CORRECTION }, ...(room.value.members || []).filter((member) => member.status === "active")
-  .map((member) => ({ label: bridge.display_name(member.name), value: member.name })),
-  ...(free.value ? ["__all__", "__all_seq__", "__none__"].map((value) => ({ label: DECISION_OPTIONS[value], value })) : [])]);
 function adopt(message_id, mode) {
   adopting.value = 0;
   act("adopt_recommendation", { message_id, mode });
@@ -580,10 +509,6 @@ function format_elapsed(seconds) {
   if (seconds < 60) return `${seconds}秒`;
   if (seconds < 3600) return `${Math.floor(seconds / 60)}分${String(seconds % 60).padStart(2, "0")}秒`;
   return `${Math.floor(seconds / 3600)}小时${Math.floor((seconds % 3600) / 60)}分${String(seconds % 60).padStart(2, "0")}秒`;
-}
-/** A scheduler call's milliseconds: sub-second calls stay in milliseconds, longer ones use the shared format. */
-function format_ms(ms) {
-  return ms < 1000 ? `${ms}毫秒` : ms < 10_000 ? `${(ms / 1000).toFixed(1)}秒` : format_elapsed(Math.round(ms / 1000));
 }
 /** The host's arrangement time: from the answer it followed to the moment the plan was saved. */
 function arrangement_seconds(plan, anchor) {
@@ -719,16 +644,19 @@ const mention_folder_self = computed(() => {
   return [{ key: `self:${folder.path}`, self: true, entry: { kind: "directory", name: folder.path.split("/").at(-1), path: folder.path } }];
 });
 /**
- * A "/" opening the draft offers the platform's saved workflows. Picking one opens the invite dialog with its cards;
- * the owner confirms members and permissions there, which enables it for this room.
+ * A "/" opening the draft offers the platform's saved workflows. Picking one only prefills a request to the host, who
+ * enables it and brings its members; that needs the owner's per-room "允许主持人自建工作流".
  */
-const room_workflow = computed(() => view.value.launch?.room_models?.room_id === room.value?.id
-  ? active_workflow(view.value.launch.room_models?.workflow, room.value?.free?.members) : null);
+const room_models = computed(() => view.value.launch?.room_models?.room_id === room.value?.id ? view.value.launch.room_models : null);
+const room_workflow = computed(() => room_models.value ? active_workflow(room_models.value.workflow, room.value?.free?.members) : null);
 const can_pick_workflow = computed(() => free.value && !room.value?.archived && view.value.access?.can_manage && (view.value.launch.available || view.value.launch.remote));
+const workflow_blocked = computed(() => !free_members.value.some((member) => member.role === "host" && member.access === "runner")
+  ? "需要一位由本机唤醒的 AI 主持人"
+  : !room_models.value?.host_workflows ? "需先在电脑上的“成员与设置 → 协作设置”打开“允许主持人自建工作流”" : "");
 const workflow_options = computed(() => {
   const query = mention_context.value?.query.toLocaleLowerCase() || "";
   return (view.value.launch.workflows || []).filter((item) => !item.error && `${item.id} ${item.label} ${item.description || ""}`.toLocaleLowerCase().includes(query))
-    .map((item) => ({ key: `workflow:${item.id}`, workflow: item, group: "工作流", enabled: room_workflow.value?.id === item.id }));
+    .map((item) => ({ key: `workflow:${item.id}`, workflow: item, group: "工作流", enabled: room_workflow.value?.id === item.id, disabled: workflow_blocked.value }));
 });
 /**
  * Platform skills a user may call with "/". A fixed list, never every installed skill: most are the AIs' own operating
@@ -798,8 +726,8 @@ function find_mention(value, start, end = start) {
   const prose = prefix.replace(/```[\s\S]*?```/g, "");
   const line = prose.split("\n").at(-1);
   if (prose.includes("```") || /^\s*>/.test(line) || line.replace(/`[^`]*`/g, "").includes("`")) return null;
-  const remainder = value.slice(start).match(/^[^\s@`，,。；;：:()（）]*/u)[0];
-  return { start: start - match[1].length - 1, end: start + remainder.length, query: match[1] };
+  // Only the text before the caret is the query: text already written after it is never replaced.
+  return { start: start - match[1].length - 1, end: start, query: match[1] };
 }
 
 /** Locate a "/" command at the very start of the draft, so paths later in the text never trigger it. */
@@ -807,9 +735,26 @@ function find_command(value, start, end = start) {
   if (start !== end || !(can_use_modes.value || can_pick_workflow.value || can_call_skill.value)) return null;
   const match = value.slice(0, start).match(/^\/([^\s/]*)$/u);
   if (!match) return null;
-  const remainder = value.slice(start).match(/^[^\s/]*/u)[0];
-  return { start: 0, end: start + remainder.length, query: match[1], command: true };
+  return { start: 0, end: start, query: match[1], command: true };
 }
+
+/**
+ * Replace part of the draft through the browser's own editing, so Ctrl+Z / Ctrl+Y can undo and redo it;
+ * falls back to a plain assignment where insertText is unavailable. Leaves the caret after the inserted text.
+ */
+async function replace_draft(start, end, insertion) {
+  const editor = prompt.value?.textareaRef;
+  editor?.focus();
+  editor?.setSelectionRange(start, end);
+  const native = !!editor && (insertion ? document.execCommand("insertText", false, insertion) : document.execCommand("delete"));
+  if (!native) text.value = text.value.slice(0, start) + insertion + text.value.slice(end);
+  await nextTick();
+  editor?.focus();
+  editor?.setSelectionRange(start + insertion.length, start + insertion.length);
+}
+
+/** Where the replacement ends: also swallow one space after the token when the insertion already ends with one. */
+const replace_end = (end, insertion) => insertion.endsWith(" ") && text.value[end] === " " ? end + 1 : end;
 
 /** Read the native caret after typing or moving through the existing draft. */
 function update_mention(event) {
@@ -838,31 +783,26 @@ async function select_mention(option) {
   const insertion = !entry ? `@${mention_handle(option.name)} `
     : `@${file_handle(entry.path)}${entry.kind === "directory" ? "/" : ""}${browse ? "" : " "}`;
   if (entry && !browse && !file_refs.value.some((ref) => ref.path === entry.path)) file_refs.value = [...file_refs.value, { path: entry.path, name: entry.name, kind: entry.kind }];
-  const rest = text.value.slice(end);
-  text.value = text.value.slice(0, start) + insertion + (browse ? rest : rest.replace(/^ /, ""));
   mention_context.value = null;
-  await nextTick();
+  await replace_draft(start, replace_end(end, insertion), insertion);
+  mention_context.value = null;
   const editor = prompt.value?.textareaRef;
-  editor?.focus();
-  editor?.setSelectionRange(start + insertion.length, start + insertion.length);
   if (browse && editor) {
     mention_index.value = 0;
     mention_context.value = find_mention(editor.value, editor.selectionStart);
   }
 }
 
-const workflow_inviting = ref(false);
-const workflow_invite_id = ref("");
 /**
- * Take the "/command" out of the draft and open the invite dialog for the workflow. Enabling another workflow replaces
- * the current one; the members the old one brought stay as ordinary members.
+ * Replace the "/command" with a request asking the host to enable the workflow, leaving the caret after it for the
+ * task. Enabling another workflow replaces the current one; the members the old one brought stay as ordinary members.
  */
-function pick_workflow(option, end) {
+async function pick_workflow(option, end) {
   mention_context.value = null;
   if (option.enabled) return bridge.notify("info", `本房间已启用工作流「${option.workflow.label}」`);
-  text.value = text.value.slice(end).replace(/^ /, "");
-  workflow_invite_id.value = option.workflow.id;
-  workflow_inviting.value = true;
+  if (option.disabled) return bridge.notify("warning", option.disabled);
+  await replace_draft(0, replace_end(end, " "), `启用工作流「${option.workflow.label}」（${option.workflow.id}），`);
+  mention_context.value = null;
 }
 
 /** Write the mode's command in place of the typed "/…"; one that needs text after it keeps the caret there. */
@@ -870,22 +810,16 @@ async function pick_mode(option, end) {
   mention_context.value = null;
   if (option.mode.disabled) return bridge.notify("warning", option.mode.disabled);
   const { command } = option.mode;
-  text.value = command + text.value.slice(end).replace(/^ /, "");
-  await nextTick();
-  const editor = prompt.value?.textareaRef;
-  editor?.focus();
-  editor?.setSelectionRange(command.length, command.length);
+  await replace_draft(0, replace_end(end, " "), command);
+  mention_context.value = null;
 }
 
 /** Replace the "/command" with the skill's request to the host, leaving the caret after it for the user's details. */
 async function pick_skill(option, end) {
   mention_context.value = null;
   const { prompt: request } = option.skill;
-  text.value = request + text.value.slice(end).replace(/^ /, "");
-  await nextTick();
-  const editor = prompt.value?.textareaRef;
-  editor?.focus();
-  editor?.setSelectionRange(request.length, request.length);
+  await replace_draft(0, replace_end(end, " "), request);
+  mention_context.value = null;
 }
 
 /** Keep suggestion keys local to the editor; modified Enter is left to the editor. */
@@ -1568,13 +1502,13 @@ async function send() {
   mention_context.value = null;
   follow_tail.value = true;
   const draft = text.value;
-  const refs_line = file_refs_line();
-  if (refs_line) text.value = draft.trim() ? `${draft.trimEnd()}\n\n${refs_line}` : refs_line;
+  const extra = [file_refs_line(), excerpts_markdown(excerpts.value)].filter(Boolean).join("\n\n");
+  if (extra) text.value = draft.trim() ? `${draft.trimEnd()}\n\n${extra}` : extra;
   const sent_text = text.value;
   await act("send");
   // The controller clears the editor once the message is saved; otherwise the cards stay and the typed text comes back.
-  if (refs_line && text.value === sent_text) text.value = draft;
-  else if (refs_line) file_refs.value = [];
+  if (extra && text.value === sent_text) text.value = draft;
+  else if (extra) { file_refs.value = []; file_preview.excerpts = []; }
   await follow_messages();
 }
 
@@ -1601,7 +1535,7 @@ onBeforeUnmount(() => window.removeEventListener("keydown", retract_shortcut));
 function attachment_shortcut(event) {
   // An Enter already used to pick a suggestion (which may have just added a file card) must not also send.
   if (event.defaultPrevented || !ENTER_SENDS || event.key !== "Enter" || event.ctrlKey || event.metaKey || event.shiftKey || event.altKey || event.isComposing || text.value.trim()) return;
-  if (!view.value.attachment_drafts.length && !file_refs.value.length) return;
+  if (!view.value.attachment_drafts.length && !file_refs.value.length && !excerpts.value.length) return;
   event.preventDefault();
   event.stopPropagation();
   send();
@@ -1639,7 +1573,7 @@ function copy_message(message) { act("copy", `${view.value.room_site}/r/${room.v
       </motion.div>
     </Teleport>
     <button v-if="listen_here && !listen_here.touch" type="button" class="channel-listen-mark" :style="{ left: `${listen_here.left}px`, top: `${listen_here.top}px` }" title="从选中处开始朗读" aria-label="从选中处开始朗读" @mousedown.prevent @click="listen_from_selection"><UIcon name="i-lucide-headphones" />朗读</button>
-    <div ref="transcript" v-memo="[message_groups, message_round_labels, free, room.session, view.access, active_message, expanded_answers.size, reader.state.message_id, room.title, view.query, view.mention_only, view.host_only, topic_anchor, end_anchor, request_badges, execution_reports, recommendations, adopting, scheduler_decisions, host_arrangements, correcting, pending, execution_notes, open_working_notes, editing, rewound_runs]" class="channel-transcript" aria-label="聊天记录" @scroll="track_scroll" @wheel.passive="resume_tracking($event); stop_following($event)" @touchstart.passive="resume_tracking" @touchmove.passive="stop_following" @pointerdown="stop_following" @keydown="resume_tracking($event); stop_following($event)">
+    <div ref="transcript" v-memo="[message_groups, message_round_labels, free, room.session, view.access, active_message, expanded_answers.size, reader.state.message_id, room.title, view.query, view.mention_only, view.host_only, topic_anchor, end_anchor, request_badges, execution_reports, recommendations, adopting, scheduler_decisions, host_arrangements, pending, execution_notes, open_working_notes, editing, rewound_runs]" class="channel-transcript" aria-label="聊天记录" @scroll="track_scroll" @wheel.passive="resume_tracking($event); stop_following($event)" @touchstart.passive="resume_tracking" @touchmove.passive="stop_following" @pointerdown="stop_following" @keydown="resume_tracking($event); stop_following($event)">
       <div v-if="!view.query && !view.mention_only && !view.host_only && !topic_anchor" class="channel-message-group channel-topic-group"><TopicCard :ref="(card) => topic_card = card" @edit="emit('edit')" /></div>
       <div v-for="group in message_groups" :key="group.key" class="channel-message-group">
         <USeparator :label="group.label" class="channel-date-divider" />
@@ -1652,6 +1586,9 @@ function copy_message(message) { act("copy", `${view.value.room_site}/r/${room.v
           <p v-for="turn in message.arrangement.turns" :key="`${message.id}-${turn.expert}-${turn.question}`"><span>{{ bridge.display_name(turn.expert) }}：{{ turn.question }}</span></p>
         </ScheduleCard>
         <GoalNoticeCard v-else-if="message.source === 'goal'" :message="message" />
+        <ScheduleCard v-else-if="message.source === 'notice'" icon="i-lucide-bell" plain :expandable="false" label="程序通知主持人">
+          <template #text>{{ message.text }}</template>
+        </ScheduleCard>
         <UChatMessage v-else-if="message.cancelled_turn || message.cancelled_execution" :id="message.id" :data-author="bridge.identities[message.author]?.style" role="assistant" :parts="[]" side="left" variant="naked" color="neutral" class="channel-message" :ui="{ header: 'channel-message-header', container: 'channel-message-container', body: 'channel-message-body' }">
           <template #body>
             <div class="channel-message-byline">
@@ -1776,7 +1713,7 @@ function copy_message(message) { act("copy", `${view.value.room_site}/r/${room.v
             <div class="channel-message-byline">
               <UAvatar :src="bridge.identities[message.author]?.icon" :text="bridge.identities[message.author]?.initials || '?'" :alt="bridge.display_name(message.author)" size="md" class="channel-avatar" :class="bridge.identities[message.author]?.style" />
               <div class="channel-message-meta">
-                <div class="channel-message-author"><strong>{{ bridge.display_name(message.author) }}</strong><span class="channel-message-round">{{ message_round_labels.get(message.id) }}</span><UBadge size="xs" color="neutral" variant="soft" class="channel-source">{{ bridge.sources[message.source] }}</UBadge><UBadge v-if="message.kind === 'moderation'" size="xs" color="neutral" variant="soft" class="channel-source">主持人</UBadge><UBadge v-if="message.kind === 'receipt'" size="xs" color="neutral" variant="soft" class="channel-source">运行回执</UBadge><UBadge v-if="waits_for_host(message)" size="xs" color="warning" variant="soft" class="channel-source" :title="speaking_turn ? `${bridge.display_name(speaking_turn.expert)} 说完后交给主持人处理` : '等待主持人处理'">待主持人处理</UBadge><UBadge v-for="badge in request_badges.get(message.id) || []" :key="badge.key" size="xs" :color="badge.color" variant="soft" class="channel-source" :title="badge.title">{{ badge.label }}</UBadge></div>
+                <div class="channel-message-author"><strong>{{ bridge.display_name(message.author) }}</strong><span class="channel-message-round">{{ message_round_labels.get(message.id) }}</span><UBadge size="xs" color="neutral" variant="soft" class="channel-source">{{ bridge.sources[message.source] }}</UBadge><UBadge v-if="message.kind === 'moderation'" size="xs" color="neutral" variant="soft" class="channel-source">主持人</UBadge><UBadge v-if="message.kind === 'receipt'" size="xs" color="neutral" variant="soft" class="channel-source">运行回执</UBadge><UBadge v-if="message.proactive" size="xs" color="neutral" variant="soft" class="channel-source" title="成员在自己的窗口里应用户要求主动发言，不是在回答房间的请求">主动发言</UBadge><UBadge v-if="waits_for_host(message)" size="xs" color="warning" variant="soft" class="channel-source" :title="speaking_turn ? `${bridge.display_name(speaking_turn.expert)} 说完后交给主持人处理` : '等待主持人处理'">待主持人处理</UBadge><UBadge v-for="badge in request_badges.get(message.id) || []" :key="badge.key" size="xs" :color="badge.color" variant="soft" class="channel-source" :title="badge.title">{{ badge.label }}</UBadge></div>
                 <div class="channel-message-provenance"><time :title="new Date(message.created_at).toLocaleString('zh-CN')">{{ bridge.format_time(message.created_at) }}</time><UButton :label="`#${message.id}`" color="neutral" variant="link" size="xs" :aria-label="`查看原文 #${message.id}`" class="channel-message-id" @click="emit('detail', message.id)" /><span v-if="message.submitted_by && message.submitted_by !== message.author && !(message.source === 'proxy' && message.submitted_by === '用户')">{{ bridge.display_name(message.submitted_by) }} 代发</span></div>
               </div>
               <span v-if="message_elapsed(message) !== null" class="channel-message-provenance channel-message-elapsed">耗时 {{ format_elapsed(message_elapsed(message)) }}</span>
@@ -1838,45 +1775,7 @@ function copy_message(message) { act("copy", `${view.value.room_site}/r/${room.v
         <ScheduleCard v-if="routing_messages.has(message.id) && !scheduler_decisions.get(message.id)?.length" icon="i-lucide-zap" skipped label="智能调度分析中" :expandable="false">
           <template #text><WorkingText text="智能调度：正在分析" seed="智能调度" dots /></template>
         </ScheduleCard>
-        <ScheduleCard v-for="decision in scheduler_decisions.get(message.id) || []" :key="`decision-${decision.id}`" icon="i-lucide-zap" :skipped="free ? true : !decision.applied" :title="decision.title" label="智能调度决策" toggle-label="展开或收起判断详情" :expandable="Boolean(decision.detail?.length)">
-          <template #text>智能调度：{{ decision.label }}<small v-if="decision.confidence !== null">置信度 {{ Number(decision.confidence).toFixed(2) }}</small><small v-if="decision.detail?.[0]?.duration_ms != null">耗时 {{ format_ms(decision.detail[0].duration_ms) }}</small></template>
-          <template #actions>
-            <button v-if="view.access?.can_manage" type="button" class="channel-schedule-rate" :class="{ 'is-on': decision.feedback === 'good' }" :aria-pressed="decision.feedback === 'good'" aria-label="这次调度判断得好" title="判断得好" @click="rate_decision(decision, 'good')"><UIcon name="i-lucide-thumbs-up" /></button>
-            <button v-if="view.access?.can_manage" type="button" class="channel-schedule-rate" :class="{ 'is-on': decision.feedback === 'bad' }" :aria-pressed="decision.feedback === 'bad'" aria-label="这次调度判断得不好" title="判断得不好" @click="rate_decision(decision, 'bad')"><UIcon name="i-lucide-thumbs-down" /></button>
-          </template>
-          <div class="channel-schedule-meta">
-            <div class="channel-schedule-odds-list">
-              <p v-for="(item, index) in decision.detail" :key="index" class="channel-schedule-odds">
-                <b v-if="decision.detail.length > 1">第 {{ index + 1 }} 题</b>
-                <span v-for="option in decision_odds(item)" :key="option.value" :class="{ 'is-chosen': option.value === item.choice }">{{ option.name }}<small v-if="option.probability !== undefined">{{ Number(option.probability).toFixed(2) }}</small></span>
-              </p>
-            </div>
-            <span class="channel-schedule-model">{{ decision_meta(decision) }}</span>
-            <UButton :label="decision_inputs[decision.id]?.open ? '收起输入' : '模型输入'" :trailing-icon="decision_inputs[decision.id]?.open ? 'i-lucide-chevron-up' : 'i-lucide-chevron-down'"
-              :loading="Boolean(decision_inputs[decision.id]?.loading)" variant="link" color="neutral" size="xs" class="channel-schedule-input-toggle"
-              :aria-expanded="Boolean(decision_inputs[decision.id]?.open)" :aria-label="decision_inputs[decision.id]?.open ? '收起模型看到的完整输入' : '查看模型看到的完整输入'"
-              @click="toggle_decision_input(decision)" />
-          </div>
-          <p v-if="decision_inputs[decision.id]?.open && decision_inputs[decision.id].data === null" class="channel-schedule-input is-empty">这条判断没有保存输入。</p>
-          <div v-else-if="decision_inputs[decision.id]?.open" v-for="input in [decision_inputs[decision.id].data]" :key="decision.id" class="channel-schedule-input">
-            <p v-if="input.background"><b>固定背景</b><span :title="input.background">{{ input.background }}</span></p>
-            <p><b>房间与成员</b><span :title="input.facts">{{ input.facts }}</span></p>
-            <p><b>对话上下文</b><span>近期消息 {{ input.messages }}<template v-if="input.pending">；待处理 {{ input.pending }}</template></span></p>
-            <template v-for="(question, index) in input.questions" :key="index">
-              <p><b>问题{{ input.questions.length > 1 ? ` ${index + 1}` : "" }}</b><span :title="question.instructions">{{ question.instructions }}</span></p>
-              <p v-for="choice in question.choices" :key="choice.name" class="is-choice"><b>{{ choice.name }}</b><span :title="choice.description">{{ choice.description }}</span></p>
-            </template>
-          </div>
-        </ScheduleCard>
-        <template v-for="decision in scheduler_decisions.get(message.id) || []" :key="`correction-${decision.id}`">
-          <form v-if="correcting.id === decision.id && decision.feedback === 'bad'" class="channel-schedule-correction" @submit.prevent="save_correction(decision)">
-            <label>应该由谁回答<USelect :model-value="correcting.should_be || UNSET_CORRECTION" :items="correction_options" aria-label="应该由谁回答" size="xs" class="channel-schedule-correction-select"
-              @update:model-value="correcting.should_be = $event === UNSET_CORRECTION ? '' : $event" /></label>
-            <UInput v-model="correcting.note" maxlength="200" placeholder="想说的话（可选）" aria-label="对这次调度判断想说的话" size="xs" class="channel-schedule-correction-note" />
-            <UButton type="submit" label="保存" size="xs" variant="soft" color="primary" />
-            <UButton label="关闭" size="xs" variant="ghost" color="neutral" @click="correcting = { id: 0, should_be: '', note: '' }" />
-          </form>
-        </template>
+        <SchedulerDecision v-for="decision in scheduler_decisions.get(message.id) || []" :key="`decision-${decision.id}`" :decision="decision" :free="free" />
         </template>
         </template>
       </div>
@@ -1928,8 +1827,8 @@ function copy_message(message) { act("copy", `${view.value.room_site}/r/${room.v
               </template>
               <template v-else-if="option.workflow">
                 <UIcon name="i-lucide-workflow" class="channel-mention-file-icon" />
-                <span>{{ option.workflow.label }}</span>
-                <small :title="option.workflow.description">{{ option.enabled ? '已启用' : option.workflow.description }}</small>
+                <span :class="{ 'channel-mention-disabled': option.disabled && !option.enabled }">{{ option.workflow.label }}</span>
+                <small :title="option.workflow.description">{{ option.enabled ? '已启用' : option.disabled || option.workflow.description }}</small>
               </template>
               <template v-else-if="option.skill">
                 <UIcon name="i-lucide-sparkles" class="channel-mention-file-icon" />
@@ -1954,11 +1853,24 @@ function copy_message(message) { act("copy", `${view.value.room_site}/r/${room.v
           </div>
         </template>
       </UPopover>
-      <InviteDialog v-model:open="workflow_inviting" :workflow-id="workflow_invite_id" description="确认工作流带来的成员与项目权限，全部加入后为本房间启用。" />
       <QueuedMessages v-if="room.free?.queued_messages" :queue="room.free.queued_messages" :room-id="room.id" />
       <UChatPrompt ref="prompt" v-model="text" :disabled="view.sending_message" :submit-on-enter="ENTER_SENDS" :enterkeyhint="ENTER_SENDS ? 'send' : 'enter'" :autofocus="false" :rows="1" :maxrows="EDITOR_MAX_ROWS" :placeholder="`发消息到 # ${room.title}`" aria-label="留言正文" role="combobox" aria-autocomplete="list" aria-haspopup="listbox" :aria-expanded="!!mention_context" :aria-controls="mention_context ? 'channel-mention-list' : undefined" :aria-activedescendant="mention_context && mention_active ? `channel-mention-${mention_options.indexOf(mention_active)}` : undefined" variant="outline" color="neutral" class="channel-composer" :class="{ 'has-mentions': mention_mirror }" :ui="{ header: 'channel-composer-header', base: 'channel-editor', footer: 'channel-composer-footer' }" @submit="send">
         <template #header>
-          <div v-if="view.attachment_drafts.length || file_refs.length" class="attachment-drafts">
+          <div v-if="view.attachment_drafts.length || file_refs.length || excerpts.length" class="attachment-drafts">
+            <UPopover v-for="excerpt in excerpts" :key="`excerpt:${excerpt.id}`" :content="{ side: 'top', align: 'start' }">
+              <div class="attachment-draft-file attachment-draft-ref attachment-draft-excerpt" role="button" tabindex="0" :title="`点击查看原文、修改批注：${excerpt.path} ${excerpt_lines(excerpt)}`">
+                <UIcon name="i-lucide-message-square-quote" class="attachment-ref-folder" />
+                <span class="attachment-name"><span>{{ excerpt.name }}<template v-if="excerpt.start"> · {{ excerpt_lines(excerpt) }}</template></span><small>{{ excerpt.comment ? `批注：${excerpt.comment}` : excerpt.text }}</small></span>
+                <button type="button" class="attachment-remove" :aria-label="`移除摘录 ${excerpt.name}`" :disabled="view.sending_message" @click.stop="remove_excerpt(excerpt)"><UIcon name="i-lucide-x" /></button>
+              </div>
+              <template #content>
+                <div class="excerpt-editor">
+                  <p class="excerpt-editor-source">{{ excerpt.path }}<template v-if="excerpt.start"> · {{ excerpt_lines(excerpt) }}</template></p>
+                  <blockquote class="excerpt-editor-quote">{{ excerpt.text }}</blockquote>
+                  <UTextarea v-model="excerpt.comment" :rows="2" autoresize placeholder="添加批注（可选）" aria-label="摘录的批注" class="w-full" />
+                </div>
+              </template>
+            </UPopover>
             <div v-for="ref_item in file_refs" :key="`ref:${ref_item.path}`" class="attachment-draft-file attachment-draft-ref" :title="ref_item.path">
               <span v-if="ref_item.kind === 'file'" v-html="bridge.attachment_file_icon(ref_item.name)"></span>
               <UIcon v-else name="i-lucide-folder" class="attachment-ref-folder" />

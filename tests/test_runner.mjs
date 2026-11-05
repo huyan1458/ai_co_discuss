@@ -13,7 +13,7 @@ import { fileURLToPath, pathToFileURL } from 'node:url';
 import { setTimeout as delay } from 'node:timers/promises';
 import { listen_local } from './local_port.mjs';
 import { DiscussionStore, load_config, service_drafts, validate_config } from '../runner/discussion_runner.mjs';
-import { cwd_key, free_task_files, FreeRoomRunner, review_capability_version, workspace_snapshot } from '../runner/free_runner.mjs';
+import { cwd_key, edited_changes, free_task_files, FreeRoomRunner, review_capability_version, workspace_snapshot } from '../runner/free_runner.mjs';
 import { SessionDriver } from '../runner/session_driver.mjs';
 
 import { EXPERT_PROMPT_PRESETS, expert_prompt, free_task_text, software_rules } from '../runner/expert_prompts.mjs';
@@ -664,12 +664,19 @@ const AGY_NOT_STARTED = {
 const agy_not_started = error => ({ event: 'result', result: { conversation_id: '', status: 'ERROR', response: '', error,
   duration_seconds: 0, num_turns: 0, finished_reason: 'error' } });
 
-/** Deliver one agy run that ends with the given real output, then let the runner react to the failure. */
-async function agy_not_started_attempt(f, runner, process_fixture) {
+/**
+ * Deliver once and let the runner react to the outcome; `runs` is how many agy processes that delivery starts, as an
+ * agy that fails before any turn is restarted at once (twice) before the runner sees the failure.
+ */
+async function agy_not_started_attempt(f, runner, process_fixture, runs = 3) {
   const calls = process_fixture.calls.length;
   await runner.tick();
-  assert.equal(process_fixture.calls.length, calls + 1, 'agy was invoked');
-  await process_fixture.calls.at(-1).closed; await delay(10);
+  for (let started = calls + 1; started <= calls + runs; started++) {
+    while (process_fixture.calls.length < started) await delay(10);
+    await process_fixture.calls[started - 1].closed;
+  }
+  await delay(10);
+  assert.equal(process_fixture.calls.length, calls + runs, 'agy was invoked');
   await runner.tick();
 }
 
@@ -702,16 +709,31 @@ test('agy that fails after its conversation started is not delivered again', asy
   const process_fixture = fake_cli([{ event: 'init', conversation_id: 'started' },
     { event: 'result', result: { conversation_id: 'started', status: 'ERROR', response: '', error: 'quota exhausted', num_turns: 1 } }], { exit_code: 1 });
   const deliver = (config, binding, task) => deliver_task(config, binding, task, process_fixture.spawn_process, join(f.config.directory, 'user'));
-  await agy_not_started_attempt(f, new FreeRoomRunner(f.config, f.store, deliver), process_fixture);
+  await agy_not_started_attempt(f, new FreeRoomRunner(f.config, f.store, deliver), process_fixture, 1);
   assert.equal(f.current_execution().status, 'failed');
   assert.equal(f.current_execution().retry, null);
+});
+
+// agy's headless eligibility check fails the whole run on one dropped connection while its interactive window carries on.
+test('agy whose eligibility check drops a connection is restarted at once and runs the turn without a runner retry', async t => {
+  const f = await fixture(t);
+  f.config.participants.Codex = { adapter: 'antigravity_cli', executable: process.execPath };
+  const process_fixture = fake_cli(cli_events('antigravity_cli'),
+    { earlier: [{ events: [agy_not_started(AGY_NOT_STARTED.network[1])], exit_code: 1 }] });
+  const deliver = (config, binding, task) => deliver_task(config, binding, task, process_fixture.spawn_process, join(f.config.directory, 'user'));
+  await agy_not_started_attempt(f, new FreeRoomRunner(f.config, f.store, deliver), process_fixture, 2);
+  assert.equal(f.current_execution().retry, null, 'no runner retry was needed');
+  // The fake turn ends without saving an answer, so the runner reports that, not the eligibility failure.
+  assert.match(f.current_execution().result, /未提交本次回答/);
+  assert.equal(f.store.binding('Codex').session_id, 'actual-cli-session');
 });
 
 /** Emit real subprocess output in split UTF-8 chunks without invoking an AI account. */
 function fake_cli(events, options = {}) {
   const calls = [];
   const config_calls = [];
-  const source = `
+  // `options.earlier`: runs the first calls emit instead, as { events, exit_code }, before `events` takes over.
+  const source_for = ({ events, exit_code }) => `
     const fs = require('node:fs');
     (async () => {
       let input = ''; for await (const chunk of process.stdin) input += chunk;
@@ -723,8 +745,10 @@ function fake_cli(events, options = {}) {
       await new Promise(resolve => setTimeout(resolve, 5));
       process.stdout.write(output.subarray(split));
       if (${Boolean(options.linger)}) setInterval(() => {}, 1000);
-      process.exitCode = ${options.exit_code || 0};
+      process.exitCode = ${exit_code || 0};
     })();`;
+  const runs = (options.earlier || []).map(source_for);
+  const source = source_for({ events, exit_code: options.exit_code });
   const spawn_process = (executable, args, settings) => {
     if (args[0] === 'app-server') {
       const name = JSON.parse(args.find(arg => arg.startsWith('default_permissions=')).split('=')[1]);
@@ -738,7 +762,7 @@ function fake_cli(events, options = {}) {
       config_calls.push({ args, child, closed: once(child, 'close') });
       return child;
     }
-    const child = spawn(process.execPath, ['-e', source], settings);
+    const child = spawn(process.execPath, ['-e', runs[calls.length] || source], settings);
     calls.push({ executable, args, settings, child, closed: once(child, 'close') });
     return child;
   };
@@ -1058,11 +1082,11 @@ test('claude allows only codiscuss website subcommands and draft writes, then us
   assert.deepEqual(args.slice(directories + 1, directories + 4), [f.directory, f.task.draft_directory, f.task.skill_directories[0]]);
   assert.deepEqual(args.slice(args.indexOf('--disallowedTools') + 1, args.indexOf('--')), [`Edit(${claude_rule_path(f.task.skill_directories[0])}/**)`]);
   assert.deepEqual(args.slice(args.indexOf('--allowedTools') + 1, args.indexOf('--disallowedTools')),
-    [...['room', 'message', 'turn', 'state', 'goal', 'mode', 'review', 'sequence', 'execution', 'health', 'schema', 'launch workflow-adopt']
+    [...['room', 'message', 'turn', 'state', 'goal', 'mode', 'review', 'sequence', 'execution', 'health', 'schema', 'launch workflow-adopt', 'launch workflow-join']
       .flatMap(command => [`Bash(codiscuss ${command} *)`, `PowerShell(codiscuss ${command} *)`]),
     `Edit(${claude_rule_path(f.task.draft_directory)}/**)`, 'Read(//d/materials/**)']);
   assert.ok(!args.includes(`Edit(${claude_rule_path(f.directory)}/**)`));
-  assert.ok(!args.some(arg => /(Bash|PowerShell)\(codiscuss (service|launch (?!workflow-adopt )|run|api|setup|install|local)/.test(arg)));
+  assert.ok(!args.some(arg => /(Bash|PowerShell)\(codiscuss (service|launch (?!workflow-(adopt|join) )|run|api|setup|install|local)/.test(arg)));
   assert.equal(args.at(-1), f.task.prompt);
   if (process.platform === 'win32') assert.equal(claude_rule_path('C:\\Data\\room'), '//c/Data/room');
 });
@@ -2308,6 +2332,17 @@ test('streamed CLI events map to the phase the card shows', () => {
     ['antigravity_cli', { event: 'step_update', step_update: { step_type: 'tool', state: 'DONE', tool_name: 'run_command' } }, 'thinking'],
   ];
   for (const [adapter, event, phase] of cases) assert.equal(activity_phase(adapter, event), phase, JSON.stringify(event));
+});
+
+test('edit tool events name the files an agent wrote, so concurrent snapshots are not blamed on it', () => {
+  const claude_event = { type: 'assistant', message: { content: [{ type: 'tool_use', name: 'Edit', input: { file_path: String.raw`D:\proj\剧本\库存.yaml` } },
+    { type: 'tool_use', name: 'Read', input: { file_path: String.raw`D:\proj\other.md` } }] } };
+  const codex_event = { type: 'item.completed', item: { type: 'file_change', changes: [{ path: '/proj/剧本/成长.yaml', kind: 'update' }] } };
+  assert.deepEqual(adapter_of('claude').events.edits(claude_event), [String.raw`D:\proj\剧本\库存.yaml`]);
+  assert.deepEqual(adapter_of('codex_cli').events.edits(codex_event), ['/proj/剧本/成长.yaml']);
+  const changes = ['剧本/库存.yaml', '剧本/成长.yaml', '剧本/第06集.md'];
+  assert.deepEqual(edited_changes(changes, adapter_of('claude').events.edits(claude_event), 'win32'), ['剧本/库存.yaml']);
+  assert.deepEqual(edited_changes(changes, adapter_of('codex_cli').events.edits(codex_event), 'linux'), ['剧本/成长.yaml']);
 });
 
 test('a free member that exits without answering fails only its own execution', async t => {

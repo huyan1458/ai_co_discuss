@@ -1,7 +1,8 @@
 <script setup>
 /**
- * The workflow in use, as one row shared by the right column and the room settings page: its name, its members, and one
- * action that sends them away and so ends it. Picking it again with "/" brings them back to their sessions.
+ * The workflow in use, as one row shared by the right column and the room settings page: its name, its members, an
+ * action that reloads it after a library edit (new cards join), and one that sends its members away and so ends it.
+ * Picking it again with "/" brings them back to their sessions.
  */
 import { computed, inject, ref } from "vue";
 import ConfirmDialog from "./ConfirmDialog.vue";
@@ -32,6 +33,7 @@ const items = computed(() => [
       <UIcon name="i-lucide-workflow" class="workflow-control-icon" />
       <span class="workflow-control-name" :title="workflow.label">{{ workflow.label }}</span>
       <span class="workflow-control-state"><span class="workflow-control-dot"></span>{{ workflow.available ? '进行中' : '不可用' }}</span>
+      <button v-if="can_manage && workflow.available" type="button" class="workflow-control-action" :disabled="Boolean(pending)" title="按工作流库里的最新版本补齐成员：新增的卡片加入、离开的请回，已删卡片的成员转为普通成员" @click="act('sync_room_workflow')">刷新</button>
       <button v-if="can_manage" type="button" class="workflow-control-action" :disabled="Boolean(pending)" title="请离工作流带来的成员并结束工作流，会话保留" @click="confirming = true">{{ present.length ? '请离成员' : '结束' }}</button>
       <button v-if="dismissible" type="button" class="workflow-control-close" title="收起此区，工作流照常进行；“成员与设置”里仍可请离成员" aria-label="收起工作流区" @click="$emit('dismiss')"><UIcon name="i-lucide-x" class="workflow-control-close-icon" /></button>
     </div>

@@ -18,6 +18,8 @@ const MAX_ATTACHMENT_BYTES = 20 * 1024 * 1024;
 const MAX_MESSAGE_ATTACHMENTS = 10;
 const PDF_CANVAS_LIMIT = 4096;
 const DIRECTORY_DRAG_THRESHOLD = 4;
+const DIRECTORY_TOUCH_HOLD_MS = 350;
+const DIRECTORY_TOUCH_SLOP = 8;
 const DIRECTORY_DRAG_OFFSET = 12;
 const THEME_STORAGE_KEY = "ai-codiscuss-theme";
 const DIRECTORY_SORT_KEY = "ai-codiscuss-directory-sort";
@@ -1516,7 +1518,7 @@ async function reorder_speakers({ revision, order }) {
 }
 
 /** Invite an independent member, retaining its credential before either delivery path runs. */
-async function invite_member({ name, access, project_access = "read", session_id = "", card = "", workflow_members = null }) {
+async function invite_member({ name, access, project_access = "read", session_id = "", card = "", workflow_members = null, refresh = true }) {
   const room_id = state.room.id;
   const token = localStorage.getItem(`discuss-access:${room_id}`) || "";
   const taken = new Set((state.room.free?.members || state.room.members || []).map(member => member.name));
@@ -1537,8 +1539,10 @@ async function invite_member({ name, access, project_access = "read", session_id
   if (typeof result.member === "string" && result.member !== record.member.name) record.member = { ...record.member, name: result.member };
   finish_member_request(room_id, token, record, result);
   if (card && workflow_members) workflow_members[card] = record.member.name;
-  await send_descriptions(room_id, token, { [record.member.name]: description_draft(name) });
-  await send_labels(room_id, token, { [record.member.name]: label_drafts[name] });
+  // The admission answer carries the new roster, so the next invitation in a batch names its instance without a full reload.
+  if (state.room?.id === room_id && result.free?.members && state.room.free) state.room.free = result.free;
+  await Promise.all([send_descriptions(room_id, token, { [record.member.name]: description_draft(name) }),
+    send_labels(room_id, token, { [record.member.name]: label_drafts[name] })]);
   delete description_drafts[name];
   delete label_drafts[name];
   if (state.room?.id === room_id) {
@@ -1547,7 +1551,7 @@ async function invite_member({ name, access, project_access = "read", session_id
         : record.options?.session_id ? `${record.member.name} 已接入原会话；它工作时请不要在原窗口继续操作。`
         : `${record.member.name} 已加入，之后点名它即会由本机服务唤醒。`;
     if (notice) notify("info", notice);
-    await refresh_room();
+    if (refresh) await refresh_room();
   }
 }
 
@@ -3171,6 +3175,19 @@ async function move_workflow_members(action) {
   await reload_room_models();
 }
 
+/**
+ * Reload the room's workflow after it was edited in the library: cards added since it was enabled join as members,
+ * ones that left come back, and members of dropped cards stay as ordinary members.
+ */
+async function sync_room_workflow() {
+  const room_id = state.room.id;
+  const token = localStorage.getItem(`discuss-access:${room_id}`) || "";
+  await local_launch_request("room-workflow", { room_id, token, action: "sync" });
+  notify("info", "工作流已刷新，成员按最新卡片补齐");
+  await refresh_room();
+  await reload_room_models();
+}
+
 /** Choose whether the new discussion's host writes named follow-ups for each expert between rounds. */
 function write_named_followup(value) {
   state.named_followup = Boolean(value);
@@ -4073,8 +4090,43 @@ function start_directory_drag(event) {
   delete handle.dataset.suppressDragClick;
   handle.removeEventListener("click", suppress_directory_drag_click, true);
   if (event.pointerType === "touch" && handle.hasAttribute("data-drag-title")) return;
-  event.preventDefault();
   event.stopPropagation();
+  if (event.pointerType === "touch") return hold_directory_drag(event, handle, row);
+  event.preventDefault();
+  begin_directory_drag(event, handle, row);
+}
+
+/** Start a touch drag only after a still hold, so swiping over a grip or folder heading scrolls. */
+function hold_directory_drag(event, handle, row) {
+  const same = (other) => other.pointerId === event.pointerId;
+  const release = () => {
+    window.clearTimeout(timer);
+    document.removeEventListener("pointermove", watch);
+    document.removeEventListener("pointerup", stop);
+    document.removeEventListener("pointercancel", stop);
+  };
+  const watch = (move) => { if (same(move) && Math.hypot(move.clientX - event.clientX, move.clientY - event.clientY) > DIRECTORY_TOUCH_SLOP) release(); };
+  const stop = (end) => { if (same(end)) release(); };
+  const timer = window.setTimeout(() => {
+    release();
+    if (state.dragged_room || handle.disabled || !handle.isConnected) return;
+    begin_directory_drag(event, handle, row);
+    handle.dataset.suppressDragClick = "true";
+    render_directory_drag_preview(state.dragged_room, event);
+  }, DIRECTORY_TOUCH_HOLD_MS);
+  document.addEventListener("pointermove", watch);
+  document.addEventListener("pointerup", stop);
+  document.addEventListener("pointercancel", stop);
+}
+
+/** Keep an active touch drag from scrolling the page or opening the long-press menu. */
+function block_directory_gesture(event) {
+  event.preventDefault();
+  if (event.type === "contextmenu") event.stopPropagation();
+}
+
+/** Capture the pointer and track the drag until it is dropped or cancelled. */
+function begin_directory_drag(event, handle, row) {
   handle.addEventListener("click", suppress_directory_drag_click, true);
   state.dragged_room = { id: row.dataset.dragRoom || row.dataset.dragFolder, kind: row.hasAttribute("data-drag-folder") ? "folder" : "room", folder_id: row.closest("[data-room-folder]")?.dataset.roomFolder || null,
     origin_x: event.clientX, origin_y: event.clientY, pointer: event.pointerId, handle, row,
@@ -4085,6 +4137,8 @@ function start_directory_drag(event) {
   document.addEventListener("pointerup", finish_directory_drag);
   document.addEventListener("pointercancel", finish_directory_drag);
   document.addEventListener("keydown", cancel_directory_drag, true);
+  document.addEventListener("touchmove", block_directory_gesture, { capture: true, passive: false });
+  document.addEventListener("contextmenu", block_directory_gesture, true);
 }
 
 /** Consume only the pointer click generated by a completed drag, not a later click. */
@@ -4184,6 +4238,8 @@ function finish_directory_drag(event) {
   document.removeEventListener("pointerup", finish_directory_drag);
   document.removeEventListener("pointercancel", finish_directory_drag);
   document.removeEventListener("keydown", cancel_directory_drag, true);
+  document.removeEventListener("touchmove", block_directory_gesture, true);
+  document.removeEventListener("contextmenu", block_directory_gesture, true);
   drag.handle.removeEventListener("lostpointercapture", finish_directory_drag);
   clear_directory_drop(drag);
   drag.preview?.remove();
@@ -4670,7 +4726,7 @@ async function execute_view_action(name, value) {
     download_member_access, copy_member_access_text, copy_member_join, copy_member_launch: name => copy_member_join(name, true), pause_discussion, restart_discussion, start_room_discussion, end_room_discussion, start_room_goal, update_room_goal, goal_control,
     save_launch_defaults, resume_launch, discard_launch, retry_launch_connection, check_launch_connection: load_launch_settings,
     load_room_configuration, save_room_configuration, interrupt_member, retry_delivery, retract_message, retract_latest, stop_room, rewind_and_send, fork_room, change_member, reorder_speakers, invite_member,
-    enable_room_workflow, move_workflow_members, set_room_host_workflows,
+    enable_room_workflow, move_workflow_members, sync_room_workflow, set_room_host_workflows,
     adopt_recommendation, rate_decision,
     queue_send: id => queue_request({ action: "send", id }), queue_delete: id => queue_request({ action: "delete", id }),
     queue_reorder: ids => queue_request({ action: "reorder", ids }), queue_resume: () => queue_request({ action: "resume" }),

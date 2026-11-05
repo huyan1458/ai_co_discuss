@@ -1,16 +1,18 @@
 /**
  * One headless CLI turn, shared by the CLI adapters (Codex CLI, agy CLI). The adapter supplies what differs:
  * `invocation(config, binding, task, user_home)` → `{args, input?, check?, on_session?}`, `lifecycle(state, event, task, bind)`
- * for its documented events, `events` for progress, and optionally `on_stderr(state, text)` and `exit_error(state)`.
+ * for its documented events, `events` for progress (and optionally `events.edits(event)` for files edited with the agent's own tools), and optionally `on_stderr(state, text)` and `exit_error(state)`.
  */
 import { resolve } from 'node:path';
 import { createInterface } from 'node:readline';
-import { bind_access, launch_directory, not_sent, tree_killable } from './common.mjs';
+import { bind_access, launch_directory, not_sent, report_edits, track_edits, tree_killable } from './common.mjs';
 import { adapter_capabilities } from './profiles.mjs';
 
 const CLI_DIAGNOSTIC_CHARS = 1000;
 // A hung CLI keeps its lease renewed forever when the room sets no execution limit, so cap every process.
 const CLI_MAX_RUN_MS = 2 * 60 * 60_000;
+// Immediate restarts of a CLI that failed before any turn ran, before the runner's slower retry takes over.
+const CLI_START_RETRIES = 2;
 
 /** Persist an emitted identity before the agent reads its execution credential file. */
 function bind_cli_session(state, session_id, task) {
@@ -44,11 +46,12 @@ function cli_exit_error(adapter, state, code, signal) {
 }
 
 /** Parse complete UTF-8 JSON lines while keeping raw output in the private task log. */
-function monitor_cli(adapter, child, binding, task) {
+function monitor_cli(adapter, child, binding, task, restart) {
   const state = { child, session_id: binding.session_id || '', initialized: false, completed: false, error: '', diagnostic: '', responses: new Map(), denials: [] };
   const log_path = resolve(task.directory, `${adapter.id}-${task.id}.log`);
   const lines = createInterface({ input: child.stdout, crlfDelay: Infinity });
   const max_run_ms = Number(process.env.CODISCUSS_CLI_MAX_MS) || CLI_MAX_RUN_MS;
+  track_edits(adapter, task);
   state.limit_timer = setTimeout(() => { state.error = `CLI 运行超过 ${Math.round(max_run_ms / 1000)} 秒仍未结束，已终止`; child.kill(); }, max_run_ms);
   child.stdout.on('data', chunk => task.on_output(log_path, chunk));
   child.stderr.setEncoding('utf8');
@@ -67,6 +70,7 @@ function monitor_cli(adapter, child, binding, task) {
     if (phase) task.on_activity?.(phase, adapter.events.tool(event));
     const note = adapter.events.note(event, state.responses);
     if (note) task.on_note?.(note);
+    report_edits(adapter, event, task);
     try { adapter.lifecycle(state, event, task, session_id => bind_cli_session(state, session_id, task)); }
     catch (error) { state.error = error.message; child.kill(); }
   });
@@ -77,6 +81,7 @@ function monitor_cli(adapter, child, binding, task) {
     if (!state.spawned) return;
     if (state.denials.length) task.on_denials?.(state.denials);
     const error = cli_exit_error(adapter, state, code, signal);
+    if (error && state.not_started && !state.stopped && restart?.()) return;
     // `not_started`: the adapter saw the CLI fail before any turn ran, so the runner may deliver the same task again.
     if (error) task.on_failure(error, { not_started: Boolean(state.not_started) });
     else task.on_exit?.(state.denial);
@@ -106,22 +111,45 @@ export async function cli_delivery(adapter, config, binding, task, spawn_process
     const on_binding = task.on_binding;
     task = { ...task, on_binding: session_id => { invocation.on_session(session_id); on_binding(session_id); } };
   }
-  let child;
-  try {
-    child = spawn_process(config.executable, invocation.args, {
+  let restarts = 0;
+  // A CLI that failed before any turn ran (agy's startup eligibility check on a dropped connection) starts again at
+  // once, since nothing was done; a process the runner stopped is never restarted.
+  const restart = () => {
+    if (restarts >= CLI_START_RETRIES) return false;
+    restarts += 1;
+    task.on_trace?.('cli_restart', { attempt: restarts });
+    let launched;
+    try { launched = launch(); }
+    catch (error) { task.on_failure(error.message, { not_started: true }); return true; }
+    launched.child.once('spawn', () => { launched.state.spawned = true; launched.send(); });
+    launched.child.once('error', error => task.on_failure(error.message, { not_started: !launched.state.spawned }));
+    return true;
+  };
+  const launch = () => {
+    const child = spawn_process(config.executable, invocation.args, {
       cwd: launch_directory(config, task), windowsHide: true, shell: false, stdio: ['pipe', 'pipe', 'pipe'],
       env: { ...process.env, DISCUSS_ACCESS_FILE: task.access_path },
     });
-  } catch (error) { throw not_sent(error); }
-  tree_killable(child);
-  const state = monitor_cli(adapter, child, binding, task);
-  task.on_process(child);
+    tree_killable(child);
+    const state = monitor_cli(adapter, child, binding, task, restart);
+    const kill = child.kill;
+    child.kill = (...args) => { state.stopped = true; return kill(...args); };
+    task.on_process(child);
+    const send = () => {
+      child.stdin.on('error', error => { if (error.code !== 'EPIPE') task.on_failure(error.message); });
+      child.stdin.end(invocation.input);
+      task.on_trace?.('prompt_sent');
+    };
+    return { child, state, send };
+  };
+  let first;
+  try { first = launch(); }
+  catch (error) { throw not_sent(error); }
+  const { child, state } = first;
   await new Promise((resolve_spawn, reject) => {
     child.once('spawn', () => { state.spawned = true; task.on_trace?.('cli_spawned'); resolve_spawn(); });
     child.once('error', error => state.spawned ? task.on_failure(error.message) : reject(not_sent(error)));
   });
-  child.stdin.on('error', error => { if (error.code !== 'EPIPE') task.on_failure(error.message); });
-  child.stdin.end(invocation.input);
-  task.on_trace?.('prompt_sent');
+  first.send();
   return { session_id: state.session_id, status: 'accepted', capabilities: adapter_capabilities(adapter.id).delivery };
 }

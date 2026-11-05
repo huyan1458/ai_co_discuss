@@ -92,6 +92,10 @@ CREATE TABLE IF NOT EXISTS message_details (
     message_id INTEGER PRIMARY KEY REFERENCES messages(id),
     kind TEXT NOT NULL DEFAULT 'opinion', submitted_by TEXT NOT NULL
 );
+-- A member's message spoken on its own (its user asked in its own window), bound to no request or execution.
+CREATE TABLE IF NOT EXISTS proactive_messages (
+    message_id INTEGER PRIMARY KEY REFERENCES messages(id) ON DELETE CASCADE
+);
 -- Site administrator account (single user) and its login sessions. Raw tokens and passwords are never stored.
 CREATE TABLE IF NOT EXISTS site_admin (
     id INTEGER PRIMARY KEY CHECK(id=1),
@@ -288,6 +292,8 @@ CREATE TABLE IF NOT EXISTS member_executions (
     finished_at INTEGER NOT NULL DEFAULT 0,
     result TEXT NOT NULL DEFAULT '',
     changes TEXT NOT NULL DEFAULT '',
+    -- The changed files the member's own edit tools wrote; '' when its software could not tell (see possible_conflicts).
+    edited TEXT NOT NULL DEFAULT '',
     cwd TEXT NOT NULL DEFAULT '',
     activity TEXT NOT NULL DEFAULT '',
     activity_at INTEGER NOT NULL DEFAULT 0,
@@ -656,11 +662,36 @@ CREATE TABLE IF NOT EXISTS free_chains (
     reason TEXT NOT NULL,
     PRIMARY KEY (room_id,chain_id)
 );
--- A host's one-member dispatch that should come back to the host when it ends (several members always do).
+-- A host's dispatch that asked to come back (`handoff`); every batch now comes back, so this only marks the request.
 CREATE TABLE IF NOT EXISTS free_handoffs (
     room_id TEXT NOT NULL REFERENCES rooms(id) ON DELETE CASCADE,
     batch_id INTEGER NOT NULL,
     PRIMARY KEY (room_id,batch_id)
+);
+-- A host's one-member dispatch with `no_handoff`: a completed answer goes straight to the user (a failure still comes back).
+CREATE TABLE IF NOT EXISTS free_direct_batches (
+    room_id TEXT NOT NULL REFERENCES rooms(id) ON DELETE CASCADE,
+    batch_id INTEGER NOT NULL,
+    PRIMARY KEY (room_id,batch_id)
+);
+-- What the program handed to the host once (a failure, a possible conflict, its own continue): `key` keeps it to one
+-- wake-up per event, `chain_id` counts it as a round of that chain, `message_id` is the notice its request hangs on.
+CREATE TABLE IF NOT EXISTS free_host_wakes (
+    room_id TEXT NOT NULL REFERENCES rooms(id) ON DELETE CASCADE,
+    key TEXT NOT NULL,
+    chain_id INTEGER NOT NULL,
+    message_id INTEGER NOT NULL,
+    PRIMARY KEY (room_id,key)
+);
+-- The host's latest answer asked to continue once the room is idle; a later request for the host or a new owner
+-- message supersedes it (`after_request` is the newest request when it was asked).
+CREATE TABLE IF NOT EXISTS free_host_continues (
+    room_id TEXT PRIMARY KEY REFERENCES rooms(id) ON DELETE CASCADE,
+    host_id INTEGER NOT NULL,
+    message_id INTEGER NOT NULL,
+    chain_id INTEGER NOT NULL,
+    reason TEXT NOT NULL,
+    after_request INTEGER NOT NULL
 );
 -- The owner's per-room limit on rounds a host may run from one owner message (a round is one host dispatch, its members'
 -- answers and the hand-back); rooms without a row use the default.

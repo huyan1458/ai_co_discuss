@@ -10,6 +10,7 @@ import RoomOverview from "./RoomOverview.vue";
 import ExecutionTimeline from "./ExecutionTimeline.vue";
 import EventLog from "./EventLog.vue";
 import ProjectFiles from "./ProjectFiles.vue";
+import FilePreview from "./FilePreview.vue";
 import { busy } from "./member-actions.js";
 
 const { view, bridge, field, act, pending } = inject("discussion");
@@ -363,6 +364,7 @@ function resize_nav_by_key(event) {
         <div v-if="view.tab === 'files'" class="content-page" role="tabpanel" aria-label="文件">
           <ProjectFiles :key="room.id" :directory="project_directory" />
         </div>
+        <FilePreview v-if="project_directory" :key="room.id" :directory="project_directory" />
         </div>
       </div>
       <div v-else class="channel-empty"><UIcon name="i-lucide-hash" /><h2>新建一个协作房间</h2><p>邀请 AI 一起协作，随时 @ 提问；需要时开启讨论，保留所有人的观点。</p><UButton icon="i-lucide-plus" label="新建房间" color="neutral" @click="create_channel()" /></div>

@@ -20,14 +20,13 @@ const RELAY_PROTOCOL = 'codiscuss-relay';
 const BRIDGE_TOKEN_BYTES = 32;
 const RETRY_MIN_MS = 2000;
 const RETRY_MAX_MS = 60000;
-const PING_MS = 25000;
+// A ping still unanswered at the next one means the connection is stalled, so it is replaced within two of these.
+const PING_MS = 15000;
 // The site gives up on a request after 9 seconds, so the local website must answer before then.
 const LOCAL_TIMEOUT_MS = 8000;
 const EVENT_RETRY_MS = 3000;
 // Diagnostics: a request answered slower than this, or not delivered, is written to the service log (action and route only).
 const SLOW_REQUEST_MS = 3000;
-// A connection whose keep-alive has gone unanswered this long is reported once; the website would have dropped it.
-const HEARTBEAT_LATE_MS = 2 * PING_MS + 5000;
 // A WebSocket frame on the website is at most 1 MiB; leave room for the envelope around the ciphertext.
 const RESPONSE_MAX_BYTES = 700 * 1024;
 const ROOM_API_PATH = /^\/api\/(rooms|folders|revisions)(\/[A-Za-z0-9_.~-]+)*(\?[A-Za-z0-9_.~%=&,:+-]*)?$/;
@@ -222,27 +221,38 @@ async function hold_channel(home, site, { connected, log, signal }) {
       let socket;
       try { socket = new WebSocket(url, [RELAY_PROTOCOL, `m.${link.token}`]); } catch { return resolve(false); }
       const events = new AbortController();
-      let ping;
-      const finish = opened => { clearInterval(ping); events.abort(); connected.delete(site); resolve(opened); };
-      let opened = false, heard = Date.now(), late = false;
+      let ping, finished = false;
+      // Only the first finish counts: a stalled socket may report its close long after its replacement connected.
+      const finish = opened => {
+        if (finished) return;
+        finished = true;
+        clearInterval(ping);
+        events.abort();
+        connected.delete(site);
+        resolve(opened);
+      };
+      // Only a pong proves both directions work: requests can keep arriving while this computer's answers are stuck.
+      // A website that never answers pings is not judged by them.
+      let opened = false, awaiting_pong = false, pong_seen = false;
       socket.addEventListener('open', () => {
         opened = true;
-        heard = Date.now();
         connected.add(site);
         log(`${site}: 中转已连接`);
         ping = setInterval(() => {
           if (socket.readyState !== WebSocket.OPEN) return;
-          const silent = Date.now() - heard;
-          if (silent > HEARTBEAT_LATE_MS && !late) { late = true; log(`${site}: 中转心跳超时，${Math.round(silent / 1000)} 秒未收到网站回应`); }
+          if (awaiting_pong && pong_seen) {
+            log(`${site}: 中转心跳 ${PING_MS / 1000} 秒未回应，重新连接`);
+            try { socket.close(4000, 'stalled'); } catch { /* Already closing. */ }
+            return finish(opened);
+          }
+          awaiting_pong = true;
           socket.send('ping');
         }, PING_MS);
         forward_changes(home, socket, events.signal);
       });
       socket.addEventListener('message', async event => {
-        if (late) log(`${site}: 中转心跳恢复`);
-        heard = Date.now();
-        late = false;
-        if (typeof event.data !== 'string' || event.data === 'pong') return;
+        if (event.data === 'pong') { awaiting_pong = false; pong_seen = true; return; }
+        if (typeof event.data !== 'string') return;
         let frame;
         try { frame = JSON.parse(event.data); } catch { return; }
         if (frame.type !== 'request' || typeof frame.id !== 'string' || !frame.envelope) return;
@@ -265,7 +275,7 @@ async function hold_channel(home, site, { connected, log, signal }) {
         } catch (error) { log(`${site}: 中转请求 ${frame.id} 无法处理（${Date.now() - received} ms）：${error.message}`); }
       });
       socket.addEventListener('close', event => {
-        if (opened && !signal.aborted) log(`${site}: 中转连接断开（${event.code || '无代码'}${event.reason ? ` ${event.reason}` : ''}），稍后重连`);
+        if (opened && !finished && !signal.aborted) log(`${site}: 中转连接断开（${event.code || '无代码'}${event.reason ? ` ${event.reason}` : ''}），稍后重连`);
         finish(opened);
       });
       socket.addEventListener('error', () => { try { socket.close(); } catch { /* Already closing. */ } });

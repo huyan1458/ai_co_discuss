@@ -80,6 +80,20 @@ export function changed_between(before, after) {
   return [...paths].filter(path => before.get(path) !== after.get(path)).sort();
 }
 
+/**
+ * The changed paths (relative, as git lists them) that the agent edited with its own tools, given the paths those tools
+ * named (absolute or relative to the working directory). Matched by path suffix, so a working directory below the
+ * repository root still matches; Windows paths compare case-insensitively.
+ */
+export function edited_changes(changes, claimed, platform = process.platform) {
+  const normal = path => {
+    const text = `/${String(path).replaceAll('\\', '/').replace(/^\.\//, '')}`;
+    return platform === 'win32' ? text.toLowerCase() : text;
+  };
+  const named = [...claimed].map(normal);
+  return changes.filter(path => named.some(item => item.endsWith(normal(path))));
+}
+
 /** Write a non-secret task and a member-only credential file for one execution. */
 export function free_task_files(config, member, execution, binding, { session = null, suggestions = [], reviews = [], stopped = [], process_access = true,
   workflow = null, room_members = [], goal = null } = {}) {
@@ -726,6 +740,12 @@ export class FreeRoomRunner {
         on_output: (path, chunk) => { appendFileSync(path, chunk, { mode: 0o600 }); this.touch(execution.id); this.segments.mark(execution.id); },
         on_activity: (phase, tool) => { this.touch(execution.id, phase); this.segments.mark(execution.id, phase, tool); },
         on_note: text => this.note(execution.id, text),
+        // Files the agent edited with its own tools, read from its events; an empty call says the list is tracked.
+        on_edits: paths => {
+          const snapshot = this.snapshots.get(execution.id);
+          if (snapshot) paths.forEach(path => (snapshot.edited ||= new Set()).add(path));
+          if (snapshot && !paths.length) snapshot.edited ||= new Set();
+        },
         // A stopped process may report after the next execution started; only its own execution takes the result.
         on_failure: (error, { not_started = false, retryable = true } = {}) => {
           if (not_started) this.not_started.add(execution.id);
@@ -946,8 +966,10 @@ export class FreeRoomRunner {
       this.snapshots.delete(execution_id);
       const after = workspace_snapshot(snapshot.directory);
       if (!after) continue;
-      const changes = changed_between(snapshot.before, after);
-      try { await api(this.config, `/executions/${execution_id}`, { action: 'report', changes: changes.slice(0, 200) }); }
+      const changes = changed_between(snapshot.before, after).slice(0, 200);
+      // `edited` is sent only when the adapter tracked edits; without it the site cannot tell who wrote a shared file.
+      const edited = snapshot.edited ? { edited: edited_changes(changes, snapshot.edited) } : {};
+      try { await api(this.config, `/executions/${execution_id}`, { action: 'report', changes, ...edited }); }
       catch (error) { if (!/HTTP (404|409)/.test(error.message)) throw error; }
     }
   }

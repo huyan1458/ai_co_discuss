@@ -90,6 +90,7 @@ export function tree_killable(child) {
  */
 export function watch_events(adapter, stream, task) {
   if (!task.on_activity && !task.on_note) return;
+  track_edits(adapter, task);
   createInterface({ input: stream, crlfDelay: Infinity }).on('line', line => {
     let event;
     try { event = JSON.parse(line); } catch { return; }
@@ -97,7 +98,22 @@ export function watch_events(adapter, stream, task) {
     if (phase) task.on_activity?.(phase, adapter.events.tool(event));
     const note = adapter.events.note(event);
     if (note) task.on_note?.(note);
+    report_edits(adapter, event, task);
   });
+}
+
+/**
+ * Declare that this run's file edits are tracked, when the adapter reads them from its events: `on_edits([])` tells the
+ * runner the edit list is known even if it stays empty. Writes the agent makes through commands are not seen.
+ */
+export function track_edits(adapter, task) {
+  if (adapter.events.edits) task.on_edits?.([]);
+}
+
+/** Pass on the files one event says the agent edited with its own edit tools. */
+export function report_edits(adapter, event, task) {
+  const paths = adapter.events.edits?.(event) || [];
+  if (paths.length) task.on_edits?.(paths);
 }
 
 /** The task file name an execution's prompt carries; it marks where that execution entered a session. */

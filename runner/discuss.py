@@ -272,7 +272,13 @@ def message_commands(subcommands, registry):
     post.add_argument("--to", type=member_handle, action="append", default=[],
                       help="自由房间：主持人点名派活，普通成员提出回应建议（须房主确认）；可重复")
     post.add_argument("--handoff", action="store_true",
-                      help="自由房间主持人：与 --to 同用，只点名一位成员时，它做完也回到你这里（如再交评审）；点名多位时总会回到你")
+                      help="旧参数，保留兼容：主持人派出的工作现在总会交回你")
+    post.add_argument("--no-handoff", action="store_true",
+                      help="自由房间主持人：只点名一位成员、它的回答已足以直接给用户时用；做完不交回你，失败仍交回")
+    post.add_argument("--proactive", action="store_true",
+                      help="自由房间成员：不是房间派来的任务、而是你的用户在你自己的窗口里要你发言时用；不关联执行或请求，有进行中的执行或讨论进行中不可用；主持人还可同时 --to 派活或 --continue，从这条消息起算新任务链")
+    post.add_argument("--continue", dest="continue_reason", metavar="REASON",
+                      help="自由房间主持人：房间没有其他进行中的工作时再唤醒你一次，写明继续做什么（≤300 字）；算本链一轮，用户发新消息或你下次回答不带它即取消")
     post.add_argument("--sequential", action="store_true",
                       help="自由房间主持人：--to 点名的多位成员按点名顺序依次接力，每棒一轮，最后一位做完交回你")
     post.add_argument("--loop", action="store_true",
@@ -621,7 +627,9 @@ def plan_message(args):
                   **read_context_params(args)}
         return RequestPlan(base, params={key: value for key, value in params.items() if value is not None})
     actor = require_actor(args)
-    if not args.execution and not args.request:
+    if args.proactive and (args.execution or args.request or args.kind != "chat"):
+        raise CliError("--proactive 只用于 chat 消息，不能与 --execution / --request 同用")
+    if not args.execution and not args.request and not args.proactive:
         args.execution = bound_execution(args)
     if (args.to or args.handoff) and args.kind != "chat":
         raise CliError("--to / --handoff 仅用于 chat 消息")
@@ -650,6 +658,12 @@ def plan_message(args):
         payload["to"] = list(dict.fromkeys(args.to))
     if args.handoff:
         payload["handoff"] = True
+    if args.continue_reason is not None:
+        payload["continue"] = args.continue_reason
+    if args.proactive:
+        payload["proactive"] = True
+    if args.no_handoff:
+        payload["no_handoff"] = True
     if args.loop and not args.sequential:
         raise CliError("--loop 须与 --sequential 一起使用")
     if args.sequential:
@@ -1199,12 +1213,6 @@ def run(args, registry):
     except (KeyError, TypeError) as error:
         raise CliError("响应结构与 CLI 不兼容，请用 api 命令检查服务版本", 3,
                        **meta, outcome="unknown" if plan.method == "POST" else "unavailable") from error
-    body = plan.body or {}
-    if getattr(args, "operation", "") == "message post" and len(body.get("to") or []) == 1 \
-            and not body.get("handoff") and not body.get("next_review"):
-        # A single dispatch without handoff ends the chain at the member's answer; hosts often expect it back.
-        meta["hint"] = (f"若你是主持人：只点名 {body['to'][0]} 一位且未加 --handoff，它的回答直接给用户，你不会再被唤醒。"
-                        "以后需要据结果安排下一步（如评审、验证）时派活加 --handoff。")
     return {"ok": True, "data": result, "meta": meta}
 
 

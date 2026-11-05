@@ -10,7 +10,7 @@ import { PassThrough } from 'node:stream';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import { test } from 'node:test';
 
-import { adopt_member_profile, adopt_workflow, borrowed_session, check_or_save_workflow, launch_discussion, launch_settings, room_configuration, room_files, room_models, room_member, room_member_model, room_workflow, save_launch_projects, save_launch_settings, validate_preset } from '../runner/discussion_launch.mjs';
+import { adopt_member_profile, adopt_workflow, borrowed_session, check_or_save_workflow, join_workflow, launch_discussion, launch_settings, room_configuration, room_files, room_models, room_member, room_member_model, room_workflow, save_launch_projects, save_launch_settings, validate_preset } from '../runner/discussion_launch.mjs';
 import { get_workflow, list_workflows, save_workflow } from '../runner/workflows.mjs';
 import { read_project_files } from '../runner/project_files.mjs';
 import { api, DiscussionStore, load_config } from '../runner/discussion_runner.mjs';
@@ -931,6 +931,16 @@ test('only the host of a room whose owner allowed it adopts a workflow, inviting
   assert.deepEqual((await adopt_workflow(f.home, { access_file: host_access, draft_file: draft })).members, { writer: 'Claude-writer' });
   assert.equal(get_workflow(f.home, 'serial').skill, '先写，再审，再改。');
   assert.equal((await api(config, '')).free.members.length, 2);
+  // A workflow already in the library is enabled by its ID, left unchanged there, and its cards still join at most writing.
+  save_workflow(f.home, { id: 'review', label: '评审', skill: '逐段审。', agents: [{ card: 'checker', name: 'Claude-checker', project_access: 'full' }] }, validate_preset);
+  await assert.rejects(adopt_workflow(f.home, { access_file: host_access, draft_file: draft, workflow_id: 'review' }), /之一/);
+  const enabled = await adopt_workflow(f.home, { access_file: host_access, workflow_id: 'review' });
+  assert.deepEqual(enabled.members, { checker: 'Claude-checker' });
+  assert.match(enabled.skill_path, /review[\\/]SKILL\.md$/);
+  assert.equal(get_workflow(f.home, 'review').agents[0].project_access, 'full');
+  const switched = load_config(launched.config_path);
+  assert.equal(switched.workflow.id, 'review');
+  assert.equal(switched.participants['Claude-checker'].project_access, 'write');
 });
 
 test('a workflow bound at creation ends when its members are sent away, resumes with their sessions, and is replaced by another', async t => {
@@ -962,6 +972,40 @@ test('a workflow bound at creation ends when its members are sent away, resumes 
   await room_workflow(f.home, { ...input, action: 'enable', workflow: { id: 'review', members: {} } });
   assert.deepEqual(load_config(launched.config_path).workflow, { id: 'review', enabled: true, members: {} });
   assert.equal((await api(config, '')).free.members.length, 2);
+});
+
+test('a card added to a workflow in use joins when the host names it, and a refresh drops deleted cards', async t => {
+  const f = await fixture(t), token = randomUUID() + randomUUID();
+  save_launch_settings(f.home, { participants: f.input.participants });
+  const writer = { card: 'writer', name: 'Claude-writer', project_access: 'read' };
+  save_workflow(f.home, { id: 'writing', label: '写作', skill: '先写再审。', agents: [writer] }, validate_preset);
+  const launched = await launch_discussion(f.home, { site: f.site, entry: 'web', participants: f.input.participants, token,
+    workflow: { id: 'writing', members: { writer: 'Claude' } },
+    room: { title: '工作流补卡', mode: 'free', host: 'Codex', members: ['Codex', 'Claude'], submission_id: randomUUID() } }, f.options);
+  const config = load_config(launched.config_path), input = { site: f.site, room_id: launched.room.id, token };
+  const host_access = join(f.directory, 'host.access.json');
+  writeFileSync(host_access, JSON.stringify({ site: f.site, room: config.room, member: 'Codex', token: config.members.Codex.token }));
+  const other_access = join(f.directory, 'other.access.json');
+  writeFileSync(other_access, JSON.stringify({ site: f.site, room: config.room, member: 'Claude', token: config.members.Claude.token }));
+  // The library edit adds a card; enabling the workflow authorized its cards, so the host needs no other grant.
+  save_workflow(f.home, { id: 'writing', label: '写作', skill: '先写再审。', agents: [writer,
+    { card: 'reviewer', name: 'Claude-reviewer', label: '审稿', project_access: 'read' }] }, validate_preset);
+  assert.equal(config.host_workflows, undefined);
+  await assert.rejects(join_workflow(f.home, { access_file: other_access, cards: ['reviewer'] }), /主持人/);
+  await assert.rejects(join_workflow(f.home, { access_file: host_access, cards: ['writer'] }), /已有成员/);
+  await assert.rejects(join_workflow(f.home, { access_file: host_access, cards: ['nobody'] }), /没有这些卡片/);
+  const joined = await join_workflow(f.home, { access_file: host_access, cards: ['reviewer'] });
+  assert.deepEqual(joined.members, { writer: 'Claude', reviewer: 'Claude-reviewer' });
+  const room = await api(config, '');
+  assert.equal(room.free.members.find(member => member.name === 'Claude-reviewer').status, 'active');
+  assert.equal(room.labels['Claude-reviewer'], '审稿');
+  // The owner's refresh after the card is deleted takes it out of the binding; its member stays as an ordinary member.
+  save_workflow(f.home, { id: 'writing', label: '写作', skill: '先写再审。', agents: [writer] }, validate_preset);
+  await assert.rejects(room_workflow(f.home, { ...input, token: 'wrong-owner', action: 'sync' }), /403/);
+  const synced = await room_workflow(f.home, { ...input, action: 'sync' });
+  assert.deepEqual(synced.members, { writer: 'Claude' });
+  assert.deepEqual(load_config(launched.config_path).workflow, { id: 'writing', enabled: true, members: { writer: 'Claude' } });
+  assert.equal((await api(config, '')).free.members.find(member => member.name === 'Claude-reviewer').status, 'active');
 });
 
 test('members join, leave and return while a free room keeps running', async t => {

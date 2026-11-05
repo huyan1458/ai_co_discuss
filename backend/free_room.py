@@ -52,8 +52,11 @@ ROOM_EVENT_PAGE = 500
 ANCHOR_SQL = """CASE WHEN r.purpose='handoff' THEN COALESCE((SELECT MAX(a.answer_id) FROM member_requests a
     WHERE a.room_id=r.room_id AND a.batch_id=r.message_id AND a.purpose<>'handoff'), r.message_id) ELSE r.message_id END"""
 # Rounds used and allowed in the room's recent chains, for "第 2/3 轮"; parameters: the room's limit, the room.
+# A round is a host dispatch (a batch) or a continue the host asked for (`free_host_wakes` with a `continue:` key).
 CHAIN_PROGRESS_SQL = """SELECT b.chain_id,COUNT(*) AS used,? + COALESCE((SELECT h.extra_rounds FROM free_chain_holds h
-    WHERE h.room_id=b.room_id AND h.chain_id=b.chain_id),0) AS allowed FROM free_batches b WHERE b.room_id=?
+    WHERE h.room_id=b.room_id AND h.chain_id=b.chain_id),0) AS allowed
+    FROM (SELECT room_id,chain_id FROM free_batches UNION ALL SELECT room_id,chain_id FROM free_host_wakes WHERE key LIKE 'continue:%') b
+    WHERE b.room_id=?
     GROUP BY b.chain_id ORDER BY b.chain_id DESC LIMIT 10"""
 TIMELINE_STATES = {"completed": "done", "failed": "failed", "cancelled": "cancelled"}
 TIMELINE_FREE_IDS = "SELECT id FROM member_executions WHERE room_id=?1 AND (?3=0 OR finished_at=0 OR finished_at>=?3) ORDER BY id DESC LIMIT ?2"
@@ -109,6 +112,10 @@ RECOMMEND_GRACE_SECONDS = 5
 CHAIN_ROUNDS = 3
 # The most rounds an owner may allow per chain, or add at once when continuing a stopped chain.
 MAX_CHAIN_ROUNDS = 20
+# What the program notices for the host (a failure, a possible conflict, its own "continue when idle") hangs on a visible
+# message from this author. Only the host's own continue costs a round of its chain; an event is free, once per event.
+NOTICE_AUTHOR = "系统"
+MAX_CONTINUE_REASON = 300
 # A host that left gives up the role; the first active runner member (else manual) then takes it.
 RELEASE_HOST = "UPDATE room_members SET role='member' WHERE room_id=? AND role='host' AND status<>'active'"
 ASSIGN_HOST = """UPDATE room_members SET role='host' WHERE id=(SELECT id FROM room_members WHERE room_id=? AND status='active'
@@ -139,7 +146,7 @@ def reported_capabilities(row):
     return None if row["stoppable"] is None else {"stoppable": bool(row["stoppable"]), "progress": bool(row["progress"])}
 # Columns added after the first free-room tables; Python databases created by that build gain them here.
 LATER_COLUMNS = {"room_members": {"access": "TEXT NOT NULL DEFAULT 'runner'", "session_mode": "TEXT NOT NULL DEFAULT 'new'"},
-                 "member_executions": {"changes": "TEXT NOT NULL DEFAULT ''", "cwd": "TEXT NOT NULL DEFAULT ''",
+                 "member_executions": {"changes": "TEXT NOT NULL DEFAULT ''", "edited": "TEXT NOT NULL DEFAULT ''", "cwd": "TEXT NOT NULL DEFAULT ''",
                                        "activity": "TEXT NOT NULL DEFAULT ''", "activity_at": "INTEGER NOT NULL DEFAULT 0"},
                  "member_requests": {"chain_id": "INTEGER NOT NULL DEFAULT 0", "batch_id": "INTEGER NOT NULL DEFAULT 0",
                                      "purpose": "TEXT NOT NULL DEFAULT 'ask'", "created_by": "TEXT NOT NULL DEFAULT 'user'"}}
@@ -720,17 +727,21 @@ def session_request_source(connection, member_request_id, message_id):
 
 
 def possible_conflicts(connection, room_id, names):
-    """Report files changed by executions of different members whose time windows overlapped.
+    """Report files that executions of different members with overlapping time windows may both have written.
 
-    This is an observation, not attribution: it cannot tell who wrote which part or catch
-    writes outside the scanned working directory.
+    A working-tree snapshot sees every change made while an execution ran, including another member's. Where the
+    runner also reported `edited` (the files the agent's own edit tools wrote), a shared file counts only if every side
+    that reported it named it, so concurrent work on separate files is not flagged. `confirmed` lists the files both
+    sides' edit tools wrote. Writes made through commands are not in `edited`, and writes outside the scanned working
+    directory are not seen at all.
     """
     now = int(time.time())
     rows = [dict(row) for row in connection.execute(
-        """SELECT id,member_id,created_at,finished_at,changes,cwd FROM member_executions
+        """SELECT id,member_id,created_at,finished_at,changes,edited,cwd FROM member_executions
         WHERE room_id=? AND changes<>'' ORDER BY id DESC LIMIT ?""", (room_id, RECENT_CHANGES))]
     for row in rows:
         row["files"] = set(json.loads(row["changes"]))
+        row["edited"] = set(json.loads(row["edited"])) if row["edited"] else None
         row["end"] = row["finished_at"] or now
     conflicts = []
     for index, first in enumerate(rows):
@@ -739,10 +750,13 @@ def possible_conflicts(connection, room_id, names):
                 continue
             if first["created_at"] > second["end"] or second["created_at"] > first["end"]:
                 continue
-            files = sorted(first["files"] & second["files"])
+            pair = (second, first)
+            files = sorted(path for path in first["files"] & second["files"]
+                           if all(row["edited"] is None or path in row["edited"] for row in pair))
             if files:
+                confirmed = [path for path in files if all(row["edited"] is not None for row in pair)]
                 conflicts.append({"members": [names.get(second["member_id"], ""), names.get(first["member_id"], "")],
-                                  "executions": [second["id"], first["id"]], "files": files})
+                                  "executions": [second["id"], first["id"]], "files": files, "confirmed": confirmed})
     return conflicts
 
 
@@ -910,15 +924,86 @@ def recipients(connection, room_id, payload):
     return [(host["id"], "route")] if host else []
 
 
+# What a proactive post may not carry: it answers no request. Only the host's may also dispatch, as an answer does.
+PROACTIVE_EXCLUDED = ("execution_id", "request_ids", "next_review", "turn_id")
+HOST_ONLY_PROACTIVE = ("to", "handoff", "no_handoff", "continue", "sequential", "loop")
+
+
+def check_no_handoff(member, payload):
+    """`no_handoff`: the host sends one member's answer straight to the user; only a plain one-member dispatch takes it."""
+    if payload.get("no_handoff") in (None, False):
+        return
+    if (payload["no_handoff"] is not True or member["role"] != "host" or len(payload.get("to") or []) != 1
+            or any(payload.get(field) for field in ("handoff", "sequential", "next_review"))):
+        raise ValueError("no_handoff 只能由主持人在只点名一位成员时使用，值为 true，不能与 handoff、sequential 或 next_review 同用")
+
+
+def check_proactive(connection, room_id, member, payload):
+    """A member speaking on its own, e.g. its user asked in its own window, bound to no request or execution.
+
+    The host's may dispatch and ask to continue, starting a chain of its own; other members' only speak. Refused while
+    the member has a live execution (it answers through that, so the round limit holds) or a discussion runs.
+    """
+    if payload["proactive"] is not True:
+        raise ValueError("proactive 的值须为 true")
+    excluded = PROACTIVE_EXCLUDED + (() if member["role"] == "host" else HOST_ONLY_PROACTIVE)
+    carried = [field for field in excluded if payload.get(field) not in (None, False, [])]
+    if carried:
+        raise ValueError(f"主动发言不关联请求{'' if member['role'] == 'host' else '，普通成员也不能派活'}，不能带：{'、'.join(carried)}")
+    if connection.execute("SELECT 1 FROM member_executions WHERE member_id=? AND status IN ('dispatched','started')", (member["id"],)).fetchone():
+        raise FileExistsError("你有进行中的执行，请用本次执行回答，不能主动发言")
+    pending = [row[0] for row in connection.execute("SELECT message_id FROM member_requests WHERE member_id=? AND status='pending' ORDER BY id",
+                                                    (member["id"],))]
+    if pending:
+        # Otherwise the same question is answered here and again when the request is delivered.
+        hint = "用 --request 关闭它们后回答" if member["access"] == "manual" else "本机服务会把它们交给你，届时一并回答"
+        raise FileExistsError(f"你还有待处理的请求（{'、'.join(f'#{item}' for item in pending)}），不能主动发言；{hint}")
+    if discussion.current_session(connection, room_id, active_only=True):
+        raise FileExistsError("讨论进行中，不能主动发言；按主持人的安排发言")
+    if payload.get("to"):
+        named_members(active_members(connection, room_id), payload["to"], exclude=member["name"])
+    check_no_handoff(member, payload)
+    reason = payload.get("continue")
+    if reason is not None and (not isinstance(reason, str) or not reason.strip() or len(reason) > MAX_CONTINUE_REASON):
+        raise ValueError(f"continue 写明房间空闲后继续做什么，最多 {MAX_CONTINUE_REASON} 字")
+
+
+def after_proactive(connection, room_id, message_id, member, payload):
+    """Record a proactive post; the host's dispatch or continue starts a new chain at it, under the usual round limit."""
+    connection.execute("INSERT INTO proactive_messages (message_id) VALUES (?)", (message_id,))
+    if member["role"] != "host":
+        return
+    if payload.get("to") and payload.get("sequential") is True:
+        start_sequence(connection, room_id, member, message_id, payload["to"], message_id, payload.get("loop") is True)
+    elif payload.get("to"):
+        dispatch(connection, room_id, member, message_id, payload["to"], message_id, payload.get("handoff") is True,
+                 payload.get("no_handoff") is True)
+    remember_continue(connection, room_id, member, message_id, message_id, payload)
+    settle_batches(connection, room_id)
+
+
 def check_answer(connection, room_id, member, payload):
     """A runner member completes a live execution; a manual member may close its own open requests.
 
-    Only the AI host dispatches work; other members' targets remain suggestions.
+    Only the AI host dispatches work; other members' targets remain suggestions. A proactive post is checked apart.
     """
+    if payload.get("proactive") is not None:
+        check_proactive(connection, room_id, member, payload)
+        return None
     if payload.get("to") is not None:
         named_members(active_members(connection, room_id), payload["to"], exclude=member["name"])
     if payload.get("handoff") not in (None, False) and (payload["handoff"] is not True or member["role"] != "host" or not payload.get("to")):
         raise ValueError("handoff 只能由主持人与 to 一起使用，值为 true")
+    check_no_handoff(member, payload)
+    reason = payload.get("continue")
+    if reason is not None and (member["role"] != "host" or not isinstance(reason, str) or not reason.strip()
+                               or len(reason) > MAX_CONTINUE_REASON):
+        raise ValueError(f"continue 只能由主持人使用，写明房间空闲后继续做什么，最多 {MAX_CONTINUE_REASON} 字")
+    if member["access"] == "manual" and not payload.get("request_ids") and payload.get("execution_id") is None:
+        # Bound to nothing, it is a proactive post, so the same rules apply (a host's dispatch starts its own chain).
+        payload["proactive"] = True
+        check_proactive(connection, room_id, member, payload)
+        return None
     if member["access"] == "manual":
         request_ids = payload.get("request_ids", [])
         if payload.get("execution_id") is not None or not isinstance(request_ids, list) or any(type(item) is not int for item in request_ids):
@@ -1053,6 +1138,8 @@ def rounds_left(connection, room_id, chain_id):
     if connection.execute("SELECT 1 FROM free_chains WHERE room_id=? AND chain_id=?", (room_id, chain_id)).fetchone():
         return 0
     used = connection.execute("SELECT COUNT(*) FROM free_batches WHERE room_id=? AND chain_id=?", (room_id, chain_id)).fetchone()[0]
+    used += connection.execute("SELECT COUNT(*) FROM free_host_wakes WHERE room_id=? AND chain_id=? AND key LIKE 'continue:%'",
+                               (room_id, chain_id)).fetchone()[0]
     extra = connection.execute("SELECT extra_rounds FROM free_chain_holds WHERE room_id=? AND chain_id=?", (room_id, chain_id)).fetchone()
     return chain_rounds(connection, room_id) + (extra[0] if extra else 0) - used
 
@@ -1109,8 +1196,108 @@ def hold_dispatch(connection, room_id, host, message_id, names, chain_id, handof
         handoff=excluded.handoff""", (room_id, chain_id, message_id, host["id"], json.dumps(list(names), ensure_ascii=False), int(handoff)))
 
 
-def dispatch(connection, room_id, host, message_id, names, chain_id, handoff=False):
-    """Queue the host's named members as one batch, one round; several members, or one the host asked back, hand back when it ends."""
+def wake_host(connection, room_id, chain_id, text, key):
+    """Hand something the program noticed to the host once: a visible notice with a host request (`notice`) on it.
+
+    Nothing happens without a present host or for a key already handed over; a continue (key `continue:`) also needs a
+    round left in its chain and costs one. When the host already has a request waiting to be delivered, the notice only
+    joins the transcript: that delivery reads it as a new message, so the host is not woken twice. Returns whether a
+    notice was written.
+    """
+    host = connection.execute("SELECT id FROM room_members WHERE room_id=? AND role='host' AND status='active'", (room_id,)).fetchone()
+    if not host or not chain_id or key.startswith("continue:") and rounds_left(connection, room_id, chain_id) < 1:
+        return False
+    if connection.execute("SELECT 1 FROM free_host_wakes WHERE room_id=? AND key=?", (room_id, key)).fetchone():
+        return False
+    created_at = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
+    message_id = connection.execute("INSERT INTO messages(room_id,author,text,source,submission_id,created_at) VALUES(?,?,?,?,?,?)",
+                                    (room_id, NOTICE_AUTHOR, text, "notice", f"notice-{key}", created_at)).lastrowid
+    connection.execute("INSERT INTO message_details (message_id,kind,submitted_by) VALUES (?,?,?)", (message_id, "notice", NOTICE_AUTHOR))
+    connection.execute("INSERT INTO free_host_wakes (room_id,key,chain_id,message_id) VALUES (?,?,?,?)", (room_id, key, chain_id, message_id))
+    if not connection.execute("SELECT 1 FROM member_requests WHERE member_id=? AND status='pending'", (host["id"],)).fetchone():
+        insert_request(connection, room_id, host["id"], message_id, chain_id, "notice", "system")
+    return True
+
+
+def wake_after_failure(connection, execution_id, requests, reason):
+    """A member's execution failed on requests outside a host batch (a user's direct question): tell the host.
+
+    The host's own failures and discussion turns are left out: the first would wake a host that just failed, the second
+    has its own hand-back. A batch's failure reaches the host through settle_batches.
+    """
+    requests = [item for item in requests if not item["batch_id"]
+                and not connection.execute("SELECT 1 FROM session_requests WHERE member_request_id=?", (item["id"],)).fetchone()]
+    if not requests:
+        return
+    member = connection.execute("SELECT * FROM room_members WHERE id=?", (requests[0]["member_id"],)).fetchone()
+    if member["role"] == "host":
+        return
+    name = member_display_names(connection, member["room_id"]).get(member["name"], member["name"])
+    messages = "、".join(f"#{item['message_id']}" for item in requests)
+    wake_host(connection, member["room_id"], max(item["chain_id"] for item in requests),
+              f"{name} 处理 {messages} 的执行失败（执行 #{execution_id}）：{reason[:200]}。请主持人决定重试、改派还是告知用户。",
+              f"failed:{execution_id}")
+
+
+def wake_on_conflicts(connection, room_id, execution_id):
+    """Files an execution just reported overlap another member's overlapping execution: tell the host once per pair.
+
+    Two executions of one host batch are left out: the batch comes back to the host anyway, and `room view` lists the
+    conflict there.
+    """
+    names = member_display_names(connection, room_id)
+    by_id = {row["id"]: names.get(row["name"], row["name"])
+             for row in connection.execute("SELECT id,name FROM room_members WHERE room_id=?", (room_id,))}
+    chain = connection.execute("SELECT MAX(chain_id) FROM member_requests WHERE execution_id=?", (execution_id,)).fetchone()[0]
+    for conflict in possible_conflicts(connection, room_id, by_id):
+        if execution_id not in conflict["executions"]:
+            continue
+        pair = sorted(conflict["executions"])
+        batches = [connection.execute("SELECT MAX(batch_id) FROM member_requests WHERE execution_id=?", (item,)).fetchone()[0] for item in pair]
+        if batches[0] and batches[0] == batches[1]:
+            continue
+        listed = conflict["confirmed"] or conflict["files"]
+        files = "、".join(listed[:5]) + (" 等" if len(listed) > 5 else "")
+        members = " 与 ".join(conflict["members"])
+        text = (f"冲突：{members} 的重叠执行（#{pair[0]}、#{pair[1]}）都编辑了 {len(listed)} 个相同文件（{files}），后保存的可能覆盖了先保存的。"
+                if conflict["confirmed"] else
+                f"可能冲突：{members} 的重叠执行（#{pair[0]}、#{pair[1]}）期间有 {len(listed)} 个文件被改动（{files}），无法确认是谁改的。")
+        wake_host(connection, room_id, chain, text + "请主持人核实并处理。", f"conflict:{pair[0]}-{pair[1]}")
+
+
+def remember_continue(connection, room_id, host, message_id, chain_id, payload):
+    """The host's latest answer decides whether it continues once the room is idle: `continue` keeps its reason, none clears it."""
+    if not payload.get("continue"):
+        connection.execute("DELETE FROM free_host_continues WHERE room_id=?", (room_id,))
+        return
+    newest = connection.execute("SELECT COALESCE(MAX(id),0) FROM member_requests WHERE room_id=?", (room_id,)).fetchone()[0]
+    connection.execute("""INSERT INTO free_host_continues (room_id,host_id,message_id,chain_id,reason,after_request) VALUES (?,?,?,?,?,?)
+        ON CONFLICT(room_id) DO UPDATE SET host_id=excluded.host_id,message_id=excluded.message_id,chain_id=excluded.chain_id,
+        reason=excluded.reason,after_request=excluded.after_request""",
+                       (room_id, host["id"], message_id, chain_id, payload["continue"].strip(), newest))
+
+
+def resume_host(connection, room_id):
+    """Wake the host that asked to continue once nothing else is open; a later request for it already woke it."""
+    row = connection.execute("SELECT * FROM free_host_continues WHERE room_id=?", (room_id,)).fetchone()
+    if not row:
+        return
+    if connection.execute("SELECT 1 FROM member_requests WHERE room_id=? AND member_id=? AND id>?",
+                          (room_id, row["host_id"], row["after_request"])).fetchone():
+        connection.execute("DELETE FROM free_host_continues WHERE room_id=?", (room_id,))
+        return
+    if connection.execute("SELECT 1 FROM member_requests WHERE room_id=? AND status IN ('pending','delivering')", (room_id,)).fetchone():
+        return
+    connection.execute("DELETE FROM free_host_continues WHERE room_id=?", (room_id,))
+    wake_host(connection, room_id, row["chain_id"], f"主持人续跑（接 #{row['message_id']}）：{row['reason']}", f"continue:{row['message_id']}")
+
+
+def dispatch(connection, room_id, host, message_id, names, chain_id, handoff=False, direct=False):
+    """Queue the host's named members as one batch, one round; it hands back to the host when it ends.
+
+    `direct` (the host's `no_handoff`) lets a one-member batch that completed reach the user without coming back; a
+    failure still comes back.
+    """
     member_ids = named_members(active_members(connection, room_id), names, exclude=host["name"])
     if not member_ids or not chain_id:
         return
@@ -1125,10 +1312,15 @@ def dispatch(connection, room_id, host, message_id, names, chain_id, handoff=Fal
     connection.execute("UPDATE room_goals SET armed=1 WHERE room_id=? AND status='active'", (room_id,))
     if handoff:
         connection.execute("INSERT INTO free_handoffs (room_id,batch_id) VALUES (?,?)", (room_id, message_id))
+    if direct:
+        connection.execute("INSERT INTO free_direct_batches (room_id,batch_id) VALUES (?,?)", (room_id, message_id))
 
 
 def settle_batches(connection, room_id):
-    """Hand each finished batch back to its host once; an all-failed batch halts its chain instead."""
+    """Hand each finished batch back to its host once, a failed one included; a batch that was only stopped halts its chain.
+
+    Ends by waking a host that asked to continue once the room is idle.
+    """
     for batch in connection.execute("SELECT * FROM free_batches WHERE room_id=? AND settled=0", (room_id,)).fetchall():
         statuses = [row[0] for row in connection.execute("SELECT status FROM member_requests WHERE room_id=? AND batch_id=?",
                                                           (room_id, batch["batch_id"]))]
@@ -1139,21 +1331,31 @@ def settle_batches(connection, room_id):
         sequence = connection.execute("SELECT * FROM free_sequences WHERE room_id=? AND batch_id=? AND status='running'",
                                       (room_id, batch["batch_id"])).fetchone()
         if sequence:
-            advance_sequence(connection, room_id, sequence, host, "completed" in statuses)
+            advance_sequence(connection, room_id, sequence, host, "completed" in statuses, "failed" in statuses)
             continue
         review =connection.execute("SELECT 1 FROM review_plans WHERE room_id=? AND (batch_id=? OR review_batch_id=?)", (room_id, batch["batch_id"], batch["batch_id"])).fetchone()
-        if "completed" not in statuses:
-            halt_chain(connection, room_id, batch["chain_id"], "all_failed")
-            if review and host:
-                insert_request(connection, room_id, host["id"], batch["batch_id"], batch["chain_id"], "handoff", "host")
-        elif not host or len(statuses) < 2 and not connection.execute(
-                "SELECT 1 FROM free_handoffs WHERE room_id=? AND batch_id=?", (room_id, batch["batch_id"])).fetchone():
-            # One member's answer reaches the user directly unless the host asked for it back, e.g. to send it to a reviewer.
+        if not host or "completed" not in statuses and "failed" not in statuses:
+            # Without a host nobody carries on; a batch that was only stopped (or whose members left) respects that stop.
+            if "completed" not in statuses:
+                halt_chain(connection, room_id, batch["chain_id"], "all_failed")
+                if review and host:
+                    insert_request(connection, room_id, host["id"], batch["batch_id"], batch["chain_id"], "handoff", "host")
             continue
-        else:
-            # The hand-back closes the round it belongs to, so it is never held back: the last round still gets its summary.
+        if "failed" not in statuses and connection.execute(
+                "SELECT 1 FROM free_direct_batches WHERE room_id=? AND batch_id=?", (room_id, batch["batch_id"])).fetchone():
+            # The host said this answer goes straight to the user.
+            continue
+        # Every other answer and every failure comes back to the host, so it can carry on, retry, reassign or tell the user.
+        # The hand-back closes the round it belongs to, so it is never held back: the last round still gets its summary.
+        if not connection.execute("SELECT 1 FROM member_requests WHERE message_id=? AND member_id=?", (batch["batch_id"], host["id"])).fetchone():
             insert_request(connection, room_id, host["id"], batch["batch_id"], batch["chain_id"], "handoff", "host")
+        else:
+            # The batch already came back once (it had failed) and the owner retried it: its new answers reach the host as a notice.
+            retried = connection.execute("SELECT MAX(id) FROM member_requests WHERE room_id=? AND batch_id=?", (room_id, batch["batch_id"])).fetchone()[0]
+            wake_host(connection, room_id, batch["chain_id"], f"#{batch['batch_id']} 派出的工作重试后已结束，请主持人接着处理。",
+                      f"retried:{batch['batch_id']}:{retried}")
     advance_queues(connection, room_id)
+    resume_host(connection, room_id)
 
 
 def queue_in_turn(connection, room_id, message_id, member_ids):
@@ -1222,13 +1424,17 @@ def next_present(connection, room_id, sequence, start):
     return next((index for index, member_id in enumerate(json.loads(sequence["member_ids"])) if index >= start and member_id in present), None)
 
 
-def advance_sequence(connection, room_id, sequence, host, completed):
+def advance_sequence(connection, room_id, sequence, host, completed, failed=False):
     """Pass a finished step on to the next member; after the last one hand back to the host, as a checkpoint for a loop.
 
-    A step nobody completed (failed, stopped, the member left) ends the sequence and halts the chain like any failed batch.
+    A step nobody completed ends the sequence. A failed step is told to the present host, which decides what follows; a
+    stopped one (or one whose member left) halts the chain like any stopped batch.
     """
     if not completed or not host or host["id"] != sequence["host_id"]:
-        if not completed:
+        if not completed and failed and host:
+            wake_host(connection, room_id, sequence["chain_id"], f"依次派活 #{sequence['message_id']} 在第 {sequence['position'] + 1} 棒失败，"
+                      "接力已停下。请主持人决定重试、改派还是告知用户。", f"sequence:{sequence['id']}:{sequence['batch_id']}")
+        elif not completed:
             halt_chain(connection, room_id, sequence["chain_id"], "all_failed")
         connection.execute("UPDATE free_sequences SET status='stopped' WHERE id=?", (sequence["id"],))
         return
@@ -1450,6 +1656,8 @@ def after_free_message(connection, room_id, message_id, actor, payload):
     if actor == "用户":
         # New owner input lets an active goal wake the host again once the room falls idle.
         connection.execute("UPDATE room_goals SET armed=1 WHERE room_id=? AND status='active'", (room_id,))
+        # It also replaces whatever the host meant to continue with.
+        connection.execute("DELETE FROM free_host_continues WHERE room_id=?", (room_id,))
         if discussion.hold_user_message(connection, room_id, message_id, payload):
             return
         pairs = recipients(connection, room_id, payload)
@@ -1473,7 +1681,10 @@ def after_free_message(connection, room_id, message_id, actor, payload):
     if actor["role"] == "host" and payload.get("to") and payload.get("sequential") is True:
         start_sequence(connection, room_id, actor, message_id, payload["to"], chain_id, payload.get("loop") is True)
     elif actor["role"] == "host" and payload.get("to"):
-        dispatch(connection, room_id, actor, message_id, payload["to"], chain_id, payload.get("handoff") is True or bool(payload.get("next_review")))
+        dispatch(connection, room_id, actor, message_id, payload["to"], chain_id, payload.get("handoff") is True or bool(payload.get("next_review")),
+                 payload.get("no_handoff") is True)
+    if actor["role"] == "host":
+        remember_continue(connection, room_id, actor, message_id, chain_id, payload)
     settle_batches(connection, room_id)
 
 
@@ -1498,6 +1709,8 @@ def finish_execution(connection, execution_id, status, result, request_status, c
     if request_status == "cancelled" and cancel_reason:
         record_cancel_reasons(connection, "execution_id=? AND status='delivering'", (execution_id,), cancel_reason)
     discussion_requests = discussion.open_discussion_requests(connection, execution_id)
+    delivered = connection.execute("""SELECT id,member_id,message_id,chain_id,batch_id FROM member_requests
+        WHERE execution_id=? AND status='delivering'""", (execution_id,)).fetchall() if request_status == "failed" else []
     connection.execute("UPDATE member_executions SET status=?,finished_at=?,result=? WHERE id=? AND status IN ('dispatched','started')",
                        (status, int(time.time()), result[:500], execution_id))
     connection.execute("UPDATE member_requests SET status=?,execution_id=CASE WHEN ?='pending' THEN NULL ELSE execution_id END WHERE execution_id=? AND status='delivering'",
@@ -1505,6 +1718,8 @@ def finish_execution(connection, execution_id, status, result, request_status, c
     if status == "failed" and request_status == "failed":
         for row in discussion_requests:
             discussion.fail_session_request(connection, row["id"], result)
+    if delivered:
+        wake_after_failure(connection, execution_id, delivered, result)
 
 
 def open_route_messages(connection, member_id, pending_only=False):
@@ -1561,7 +1776,8 @@ def stop_room_work(connection, room_id, reason, cancel_reason):
         finish_execution(connection, row["id"], "cancelled", reason, "cancelled", cancel_reason)
     record_cancel_reasons(connection, "room_id=? AND status='pending'", (room_id,), cancel_reason)
     connection.execute("UPDATE member_requests SET status='cancelled' WHERE room_id=? AND status='pending'", (room_id,))
-    # Stopping everything also stops a goal from waking the host again; the owner resumes it explicitly.
+    # Stopping everything also stops a goal, or the host's own "continue", from waking the host again.
+    connection.execute("DELETE FROM free_host_continues WHERE room_id=?", (room_id,))
     connection.execute("UPDATE room_goals SET status='paused',paused_at=? WHERE room_id=? AND status='active'", (int(time.time()), room_id))
     settle_batches(connection, room_id)
 
@@ -1881,6 +2097,17 @@ def changed_files(payload):
     return sorted(set(files))
 
 
+def edited_files(payload, changes):
+    """The reported files the member's own edit tools wrote, kept within `changes`; '' when the runner could not tell."""
+    if "edited" not in payload:
+        return ""
+    files = payload["edited"]
+    if (not isinstance(files, list) or len(files) > MAX_CHANGED_FILES
+            or any(not isinstance(item, str) or not item or len(item) > MAX_PATH_LENGTH for item in files)):
+        raise ValueError(f"edited 须为最多 {MAX_CHANGED_FILES} 个相对路径")
+    return json.dumps(sorted(set(files) & set(changes)), ensure_ascii=False)
+
+
 def denied_actions(payload):
     """Validate the operations a member's software refused: the tool, what it tried, and the rule that would allow it."""
     denials = payload.get("denials")
@@ -1962,7 +2189,10 @@ def execution_action(connection, room_id, execution_id, token, payload):
         # Observed after the process ends, so the execution may already be complete; recorded once.
         if row["changes"]:
             raise FileExistsError("本次执行的改动已记录")
-        connection.execute("UPDATE member_executions SET changes=? WHERE id=?", (json.dumps(changed_files(payload), ensure_ascii=False), execution_id))
+        changes = changed_files(payload)
+        connection.execute("UPDATE member_executions SET changes=?,edited=? WHERE id=?",
+                           (json.dumps(changes, ensure_ascii=False), edited_files(payload, changes), execution_id))
+        wake_on_conflicts(connection, room_id, execution_id)
     elif action == "denials":
         # Like file changes, read from the software's output once its process ends; recorded once.
         saved = connection.execute("INSERT OR IGNORE INTO execution_denials (execution_id,room_id,denials) VALUES (?,?,?)",
@@ -2047,7 +2277,8 @@ def retry_failed(connection, room_id, execution):
     """Owner retry of a failed execution: its requests go back to the same member's queue and the runner delivers them anew.
 
     The failed execution stays as history but no longer carries the requests, so a second retry is refused. A host batch
-    that failed as a whole reopens and its chain resumes, so the host still gets the answer back.
+    that failed as a whole reopens and its chain resumes, so the host still gets the answer back; a relay stopped at that
+    step runs again and passes the answer on.
     """
     if execution["status"] != "failed":
         raise FileExistsError("只有失败的执行可以重试")
@@ -2065,6 +2296,8 @@ def retry_failed(connection, room_id, execution):
                 "SELECT 1 FROM member_requests WHERE room_id=? AND batch_id=? AND status='completed'", (room_id, batch_id)).fetchone():
             connection.execute("UPDATE free_batches SET settled=0 WHERE room_id=? AND batch_id=?", (room_id, batch_id))
             connection.execute("DELETE FROM free_chains WHERE room_id=? AND chain_id=? AND reason='all_failed'", (room_id, chain_id))
+            connection.execute("UPDATE free_sequences SET status='running' WHERE room_id=? AND batch_id=? AND status='stopped'",
+                               (room_id, batch_id))
 
 
 def owned_member(connection, room_id, member_id, token):

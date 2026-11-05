@@ -23,7 +23,7 @@ import { stt_part } from './stt.mjs';
 import { access_levels, BUILTIN_EXPERT_PRESETS, MAX_EXPERT_PROMPT, PROJECT_ACCESS } from './expert_prompts.mjs';
 import { acquire_lock, api, DiscussionStore, service_drafts, validate_config } from './discussion_runner.mjs';
 import { FreeRoomRunner, free_task_files } from './free_runner.mjs';
-import { bind_room_workflow, delete_workflow, get_workflow, list_workflows, load_room_workflow, parse_workflow_draft, preview_workflow, save_workflow, WORKFLOW_ID_PATTERN } from './workflows.mjs';
+import { bind_room_workflow, delete_workflow, get_workflow, list_workflows, load_room_workflow, parse_workflow_draft, preview_workflow, save_workflow, workflow_directory, WORKFLOW_ID_PATTERN } from './workflows.mjs';
 import { assert_shared_home, CONNECTION_FIELDS, configuration_snapshot, read_registry, registered_identity, register_room, service_home, service_pid, start_service } from './discussion_service.mjs';
 
 // A platform is a type; `Claude-review` is another Claude instance with its own session, model and effort. An ID is
@@ -81,7 +81,8 @@ const HELP = `用法：codiscuss launch settings [--file FILE]
       codiscuss launch projects [--file FILE]
       codiscuss launch presets [--file FILE]
       codiscuss launch machine-link --file FILE
-      codiscuss launch workflow-adopt --draft FILE [--access-file FILE]
+      codiscuss launch workflow-adopt (--draft FILE | --id WORKFLOW) [--access-file FILE]
+      codiscuss launch workflow-join [--card ID[,ID]] [--access-file FILE]
       codiscuss launch workflow-check (--dir DIR | --draft FILE)
       codiscuss launch workflow-save (--dir DIR | --draft FILE)
 
@@ -112,7 +113,8 @@ room-member-adapter 把自由房间里空闲的 Codex 成员在 App（codex）�
 room-profiles 导出房间的本机成员软件配置与实际会话 ID（不含凭据），供备份附带；须提供 site、room_id、token。
 room-restore 把导入房间的本机成员配置登记到本机并核对原会话存在，Claude Code 成员保持手动；须提供 site、room_id、token、local_members。
 room-fork 把从原房间分支出的新房间登记到本机，各本机成员从原会话分叉、不含分支点之后的执行，原会话不变；须提供 site、room_id、token、source_room_id、source_token、executions（{成员名: [排除的执行编号]}）。
-workflow-adopt 主持人把工作流草稿（一段，分段头 1/1）保存进工作流库并在本房间启用，缺的卡片成员由本机服务邀请；须房主已为本房间打开“允许主持人自建工作流”。凭据为本次任务的 access_file（或 DISCUSS_ACCESS_FILE）。
+workflow-adopt 主持人在本房间启用工作流：--draft 把自己的草稿（一段，分段头 1/1）保存进工作流库后启用，--id 启用工作流库里已有的工作流（不改动它）；缺的卡片成员由本机服务邀请，项目权限最高可写；须房主已为本房间打开“允许主持人自建工作流”。凭据为本次任务的 access_file（或 DISCUSS_ACCESS_FILE）。
+workflow-join 主持人为本房间在用工作流里还没有成员的卡片（启用后才新增的）邀请成员，不填 --card 即全部；无需额外授权，离开或移除的成员由用户请回。凭据同上。
 workflow-check 按导入规则校验工作流文件夹或单段草稿，返回预览，不保存；workflow-save 校验后保存进工作流库（同 ID 覆盖），卡片按声明的项目权限保存。写法见 workflow-creator 技能。
 JSON 指定 site、entry（conversation/web）、room（建房内容，含 submission_id）
 或 room_id（已有房间）、participants（本次软件覆盖配置）。
@@ -1430,9 +1432,11 @@ async function room_cards(home, raw) {
  * Bind a room's workflow, or end and resume it with the members it brought. Members are invited or brought back by the
  * usual member commands first; enabling only records which card each member plays, and a different workflow replaces
  * the binding (its members stay as ordinary members). `away` (and the older `disable`) sends its members away and ends
- * it, keeping who played which card; `back` brings them back to their sessions and resumes it.
+ * it, keeping who played which card; `back` brings them back to their sessions and resumes it. `sync` refreshes it
+ * after a library edit (see refresh_room_workflow).
  */
 export async function room_workflow(home, raw) {
+  if (raw?.action === 'sync') return refresh_room_workflow(home, raw);
   const { input, path } = await member_room_context(home, raw);
   const release = acquire_lock(join(dirname(path), 'configuration-edit'));
   try {
@@ -1450,7 +1454,7 @@ export async function room_workflow(home, raw) {
       atomic_json(path, next);
       return { room_id: input.room_id, workflow: room_workflow_status(next, home) };
     }
-    if (!['away', 'back', 'disable'].includes(input.action)) throw new Error('action 须为 enable、away、back、disable 或 host');
+    if (!['away', 'back', 'disable'].includes(input.action)) throw new Error('action 须为 enable、sync、away、back、disable 或 host');
     if (!config.workflow?.id) throw new Error('本房间没有工作流');
     const room = await site_request(input.site, `/api/rooms/${input.room_id}`, input.token);
     const names = new Set(Object.values(config.workflow.members || {}));
@@ -1474,49 +1478,128 @@ export async function room_workflow(home, raw) {
 const HOST_CARD_ACCESS = ['read', 'write'];
 
 /**
- * The host saves its drafted workflow and enables it in its own room, when the owner allowed that for this room
- * (`host_workflows`). Each card the room lacks is invited as a program-started member, one that left is brought back.
- * Saving the same ID again updates the workflow; members read it from their next execution.
- * Returns which member plays which card, so the host can name them in the same execution.
+ * The registered room whose present host holds this task's access file.
+ * Returns its configuration path, configuration and the site's member list; throws for anyone else.
  */
-export async function adopt_workflow(home, { access_file, draft_file }) {
-  if (!access_file || !draft_file) throw new Error('须提供 --draft 草稿文件；凭据用 --access-file 或 DISCUSS_ACCESS_FILE');
+async function host_room(home, access_file) {
+  if (!access_file) throw new Error('凭据用 --access-file 或 DISCUSS_ACCESS_FILE');
   const access = JSON.parse(readFileSync(resolve(access_file), 'utf8').replace(/^﻿/, ''));
   const path = registered_room_path(home, String(access.site || '').replace(/\/$/, ''), access.room);
   if (!path) throw new Error('本机没有登记这个房间');
   const config = configuration_snapshot(path).config;
-  if (!config.host_workflows) throw new Error('房主没有允许本房间的主持人自建工作流；请让用户在“成员与设置 → 协作设置”打开后再保存');
   const host = Object.keys(config.members || {}).find(name => config.members[name].token === access.token);
   const room = await api(config, '');
   const roster = room.free?.members || [];
-  if (!host || !roster.some(member => member.name === host && member.role === 'host' && member.status === 'active')) throw new Error('只有本房间的主持人能自建工作流');
-  const draft = parse_workflow_draft([readFileSync(resolve(draft_file), 'utf8')]);
-  const bound = config.workflow?.id;
-  if (bound !== draft.id && list_workflows(home).some(item => item.id === draft.id)) throw new Error(`工作流库已有 ${draft.id}，主持人不能覆盖其他工作流，请换一个 ID`);
-  const configured = launch_settings(home).participants;
-  const missing = draft.agents.filter(agent => !configured[platform_of(agent.name || '')]).map(agent => agent.name || agent.card);
-  if (missing.length) throw new Error(`本机没有配置这些卡片的软件：${missing.join('、')}；卡片的 platform 只能用本机已配置的平台 ID：${Object.keys(configured).join('、')}`);
-  const workflow = save_workflow(home, { ...draft, agents: draft.agents.map(agent => agent.project_access && !HOST_CARD_ACCESS.includes(agent.project_access)
-    ? { ...agent, project_access: 'write' } : agent) }, validate_preset);
+  if (!host || !roster.some(member => member.name === host && member.role === 'host' && member.status === 'active')) throw new Error('只有本房间的主持人能运行此命令');
+  return { path, config, roster };
+}
+
+/**
+ * Give cards of the room's workflow a member: a present one stays, one that left is brought back, and a card with
+ * none (or whose member was removed) is invited as a program-started member with the card's settings, label and
+ * description. `cards` limits it to those card IDs. Returns the updated {card ID: member name} map.
+ */
+async function join_workflow_cards(home, config, roster, workflow, members, cards) {
   const owner = { site: config.site, room_id: config.room, token: config.token };
-  const members = bound === workflow.id ? { ...config.workflow.members } : {};
-  const labels = {}, descriptions = {};
-  for (const agent of workflow.agents) {
-    const current = roster.find(member => member.name === members[agent.card] && member.status !== 'removed');
+  const next = { ...members }, labels = {}, descriptions = {};
+  for (const agent of workflow.agents.filter(item => !cards || cards.includes(item.card))) {
+    const current = roster.find(member => member.name === next[agent.card] && member.status !== 'removed');
     if (current?.status === 'active') continue;
     if (current?.status === 'away') { await room_member(home, { ...owner, action: 'rejoin', name: current.name }); continue; }
-    const taken = new Set([...roster.map(member => member.name), ...Object.values(members)]);
+    const taken = new Set([...roster.map(member => member.name), ...Object.values(next)]);
     const name = taken.has(agent.name) ? free_instance(agent.name, taken) : agent.name;
     const profile = Object.fromEntries(['project_access', 'model', 'effort'].filter(field => agent[field]).map(field => [field, agent[field]]));
     const joined = await room_member(home, { ...owner, action: 'add', name, participants: { [name]: profile } });
-    members[agent.card] = joined.member;
+    next[agent.card] = joined.member;
     if (agent.label) labels[joined.member] = agent.label;
     if (agent.description) descriptions[joined.member] = agent.description;
   }
   if (Object.keys(labels).length) await site_request(config.site, `/api/rooms/${config.room}/labels`, config.token, { labels });
   if (Object.keys(descriptions).length) await site_request(config.site, `/api/rooms/${config.room}/descriptions`, config.token, { descriptions });
+  return next;
+}
+
+/**
+ * Bring the room's binding in line with its workflow as saved now, after the workflow was edited while in use: the
+ * given cards (all when omitted) join as in join_workflow_cards, and cards the workflow no longer has leave the
+ * binding, their members staying as ordinary members. Returns the room's workflow status and the card map.
+ */
+async function sync_workflow_cards(home, path, config, roster, cards) {
+  if (!config.workflow?.id || !config.workflow.enabled) throw new Error('本房间没有在用的工作流');
+  const workflow = get_workflow(home, config.workflow.id);
+  const known = workflow.agents.map(agent => agent.card);
+  const unknown = (cards || []).filter(card => !known.includes(card));
+  if (unknown.length) throw new Error(`工作流 ${workflow.id} 没有这些卡片：${unknown.join('、')}；现有卡片：${known.join('、') || '无'}`);
+  const kept = Object.fromEntries(Object.entries(config.workflow.members || {}).filter(([card]) => known.includes(card)));
+  const members = await join_workflow_cards(home, config, roster, workflow, kept, cards);
+  const release = acquire_lock(join(dirname(path), 'configuration-edit'));
+  try {
+    const current = configuration_snapshot(path).config;
+    if (current.workflow?.id !== workflow.id) throw new Error('本房间的工作流已更换，请重新读取后再试');
+    // The map is replaced, not merged, so dropped cards leave it.
+    const next = { ...current, workflow: { ...current.workflow, members } };
+    atomic_json(path, next);
+    return { room_id: config.room, workflow: room_workflow_status(next, home), members };
+  } finally { release(); }
+}
+
+/**
+ * The owner refreshes the room's workflow after editing it in the library (`room-workflow` `sync`): every card gets
+ * a member and dropped cards leave the binding. Returns the room's workflow status and the card map.
+ */
+async function refresh_room_workflow(home, raw) {
+  const { path } = await member_room_context(home, raw);
+  const config = configuration_snapshot(path).config;
+  const roster = (await api(config, '')).free?.members || [];
+  return sync_workflow_cards(home, path, config, roster);
+}
+
+/**
+ * The host brings in members for cards added to the room's workflow after it was enabled; the owner's enabling
+ * authorized the workflow's cards, so this needs no further grant. Only cards with no member yet may be named, so a
+ * member the user sent away or removed stays so. Returns the room's workflow status and the card map.
+ */
+export async function join_workflow(home, { access_file, cards }) {
+  const { path, config, roster } = await host_room(home, access_file);
+  const mapped = Object.keys(config.workflow?.members || {});
+  const taken = (cards || []).filter(card => mapped.includes(card));
+  if (taken.length) throw new Error(`这些卡片已有成员：${taken.join('、')}；离开或移除的成员由用户请回`);
+  const known = config.workflow?.id && config.workflow.enabled ? get_workflow(home, config.workflow.id).agents.map(agent => agent.card) : [];
+  return sync_workflow_cards(home, path, config, roster, cards?.length ? cards : known.filter(card => !mapped.includes(card)));
+}
+
+/** Cards as the host may bring them: any access above writing is lowered to it. */
+const host_cards = agents => agents.map(agent => agent.project_access && !HOST_CARD_ACCESS.includes(agent.project_access)
+  ? { ...agent, project_access: 'write' } : agent);
+
+/**
+ * The host enables a workflow in its own room, when the owner allowed that for this room (`host_workflows`): either
+ * its own draft, saved into the library first (the same ID again updates it), or one already in the library, named by
+ * `workflow_id` and left unchanged there. Each card the room lacks is invited as a program-started member with at most
+ * write access, one that left is brought back. Returns which member plays which card and where its SKILL.md is, so the
+ * host can follow it and name them in the same execution.
+ */
+export async function adopt_workflow(home, { access_file, draft_file, workflow_id }) {
+  if (!draft_file === !workflow_id) throw new Error('须提供 --draft 草稿文件或 --id 工作流库中的工作流 ID 之一；凭据用 --access-file 或 DISCUSS_ACCESS_FILE');
+  const { config, roster } = await host_room(home, access_file);
+  if (!config.host_workflows) throw new Error('房主没有允许本房间的主持人自建工作流；请让用户在电脑上“成员与设置 → 协作设置”打开后再试');
+  const bound = config.workflow?.id;
+  let workflow;
+  if (workflow_id) workflow = get_workflow(home, workflow_id);
+  else {
+    const draft = parse_workflow_draft([readFileSync(resolve(draft_file), 'utf8')]);
+    if (bound !== draft.id && list_workflows(home).some(item => item.id === draft.id)) throw new Error(`工作流库已有 ${draft.id}，主持人不能覆盖其他工作流；要启用它请用 --id ${draft.id}，新建请换一个 ID`);
+    workflow = draft;
+  }
+  const configured = launch_settings(home).participants;
+  const missing = workflow.agents.filter(agent => !configured[platform_of(agent.name || '')]).map(agent => agent.name || agent.card);
+  if (missing.length) throw new Error(`本机没有配置这些卡片的软件：${missing.join('、')}；卡片的 platform 只能用本机已配置的平台 ID：${Object.keys(configured).join('、')}`);
+  workflow = workflow_id ? { ...workflow, agents: host_cards(workflow.agents) }
+    : save_workflow(home, { ...workflow, agents: host_cards(workflow.agents) }, validate_preset);
+  const owner = { site: config.site, room_id: config.room, token: config.token };
+  const members = await join_workflow_cards(home, config, roster, workflow, bound === workflow.id ? config.workflow.members || {} : {});
   const enabled = await room_workflow(home, { ...owner, action: 'enable', workflow: { id: workflow.id, members } });
-  return { ...enabled, members };
+  return { ...enabled, members, skill_path: join(workflow_directory(home, workflow.id), 'SKILL.md') };
 }
 
 /**
@@ -1555,13 +1638,19 @@ export async function launch_main(args = process.argv.slice(2), input_text) {
   const { values, positionals } = parseArgs({ args, allowPositionals: true, options: {
     file: { type: 'string' }, 'dry-run': { type: 'boolean' }, browser: { type: 'boolean' }, remote: { type: 'boolean' }, device: { type: 'string' },
     'configuration-locked': { type: 'boolean' }, help: { type: 'boolean', short: 'h' },
-    draft: { type: 'string' }, 'access-file': { type: 'string' }, dir: { type: 'string' },
+    draft: { type: 'string' }, 'access-file': { type: 'string' }, dir: { type: 'string' }, card: { type: 'string' }, id: { type: 'string' },
   } });
   if (values.help || !positionals.length) return process.stdout.write(HELP);
   if (positionals[0] === 'workflow-adopt') {
     const home = service_home();
-    const result = await adopt_workflow(home, { draft_file: values.draft, access_file: values['access-file'] || process.env.DISCUSS_ACCESS_FILE });
+    const result = await adopt_workflow(home, { draft_file: values.draft, workflow_id: values.id, access_file: values['access-file'] || process.env.DISCUSS_ACCESS_FILE });
     return process.stdout.write(`${JSON.stringify(result)}\n`);
+  }
+  if (positionals[0] === 'workflow-join') {
+    const cards = (values.card || '').split(',').map(card => card.trim()).filter(Boolean);
+    const result = await join_workflow(service_home(), { cards, access_file: values['access-file'] || process.env.DISCUSS_ACCESS_FILE });
+    return process.stdout.write(`${JSON.stringify(result)}
+`);
   }
   if (['workflow-check', 'workflow-save'].includes(positionals[0])) {
     const result = check_or_save_workflow(service_home(), { dir: values.dir, draft: values.draft }, positionals[0] === 'workflow-save');
