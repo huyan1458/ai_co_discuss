@@ -75,7 +75,7 @@ project_access: write
 
 - **工作流 ID**（文件夹名 = SKILL.md 的 `name`）：小写英文和数字，可用单个连字符连接（不在首尾），1—40 位。`label` 最多 32 字。
 - **`description`** 最多 500 字：写清做什么、什么时候用。主持人只凭它判断一条请求该不该按这个工作流做，写含糊了，该用时会不用、不该用时会套用。
-- **卡片**：最多 30 张。`name` 是卡片 ID，等于文件名，只用小写英文、数字和下划线，最多 16 位。`platform` 是平台 ID：`Claude`、`Codex`、`Antigravity`、`DeepSeek`、`Qwen`、`Grok`（网页显示的 Gemini 写 `Antigravity`），须是本机已配置的平台。成员名由程序拼成 `平台-卡片ID`。
+- **卡片**：最多 30 张。`name` 是卡片 ID，等于文件名，只用小写英文、数字和下划线，最多 16 位。`platform` 是平台 ID：`Claude`、`Codex`、`Antigravity`、`DeepSeek`、`Qwen`、`Grok`（网页显示的 Gemini 写 `Antigravity`），须是本机已配置的软件，或已在本机保存 API Key 的模型 API（没有本地软件的平台按官方 API 加入）。成员名由程序拼成 `平台-卡片ID`。
 - **卡片可选字段**：`label`、`description`、`project_access`（read / write / auto / full）、`model`、`effort`。不用的字段直接省略；模型和强度省略即用本机默认值。接入方式、可执行文件、密钥不写进卡片，由各自电脑的配置决定。
 - 头信息只支持单行 `key: value`；不支持多行值、列表和嵌套。
 - 卡片正文留空时使用该软件的默认提示。

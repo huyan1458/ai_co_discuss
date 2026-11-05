@@ -1400,8 +1400,7 @@ export function workflows_command(home, input = {}) {
   if (action === 'save') return save_workflow(home, input.workflow, validate_preset);
   if (action === 'delete') return delete_workflow(home, input.id);
   if (action === 'preview') {
-    const configured = launch_settings(home).participants;
-    return preview_workflow(input, validate_preset, name => Boolean(configured[platform_of(name)]));
+    return preview_workflow(input, validate_preset, name => card_platform_ready(home, name));
   }
   if (action === 'room-cards') return room_cards(home, input);
   throw new Error('action 须为 list、get、save、delete、preview 或 room-cards');
@@ -1495,6 +1494,24 @@ async function host_room(home, access_file) {
 }
 
 /**
+ * The API settings a program-started card on a platform without local software starts from, as the invite form fills
+ * them: the platform's official API with the key last saved here for that root. Null when the platform has saved
+ * software settings or local software, or no key is saved.
+ */
+function card_api_profile(home, platform) {
+  if (launch_settings(home).participants[platform] || platform_adapters(platform).some(id => adapter_profile(id).kind !== 'api')) return null;
+  const provider = API_PROVIDERS[platform];
+  const api_key_ref = provider && saved_api_keys(home)[provider.base_url];
+  return api_key_ref ? { adapter: 'api', base_url: provider.base_url, api_protocol: provider.api_protocol, model: provider.models[0], api_key_ref } : null;
+}
+
+/** Whether a card's platform can start here: saved software settings, or an API with a saved key. */
+function card_platform_ready(home, name) {
+  const platform = platform_of(name || '');
+  return Boolean(platform && (launch_settings(home).participants[platform] || card_api_profile(home, platform)));
+}
+
+/**
  * Give cards of the room's workflow a member: a present one stays, one that left is brought back, and a card with
  * none (or whose member was removed) is invited as a program-started member with the card's settings, label and
  * description. `cards` limits it to those card IDs. Returns the updated {card ID: member name} map.
@@ -1508,7 +1525,11 @@ async function join_workflow_cards(home, config, roster, workflow, members, card
     if (current?.status === 'away') { await room_member(home, { ...owner, action: 'rejoin', name: current.name }); continue; }
     const taken = new Set([...roster.map(member => member.name), ...Object.values(next)]);
     const name = taken.has(agent.name) ? free_instance(agent.name, taken) : agent.name;
-    const profile = Object.fromEntries(['project_access', 'model', 'effort'].filter(field => agent[field]).map(field => [field, agent[field]]));
+    const api = card_api_profile(home, platform_of(agent.name));
+    const card = Object.fromEntries(['project_access', 'model', 'effort'].filter(field => agent[field] && !(api && field === 'effort')).map(field => [field, agent[field]]));
+    // An API member has no command line, so a card asking for more than writing gets the most it allows.
+    if (api && card.project_access && !access_levels('api').includes(card.project_access)) card.project_access = 'write';
+    const profile = { ...api, ...card };
     const joined = await room_member(home, { ...owner, action: 'add', name, participants: { [name]: profile } });
     next[agent.card] = joined.member;
     if (agent.label) labels[joined.member] = agent.label;
@@ -1591,9 +1612,11 @@ export async function adopt_workflow(home, { access_file, draft_file, workflow_i
     if (bound !== draft.id && list_workflows(home).some(item => item.id === draft.id)) throw new Error(`工作流库已有 ${draft.id}，主持人不能覆盖其他工作流；要启用它请用 --id ${draft.id}，新建请换一个 ID`);
     workflow = draft;
   }
-  const configured = launch_settings(home).participants;
-  const missing = workflow.agents.filter(agent => !configured[platform_of(agent.name || '')]).map(agent => agent.name || agent.card);
-  if (missing.length) throw new Error(`本机没有配置这些卡片的软件：${missing.join('、')}；卡片的 platform 只能用本机已配置的平台 ID：${Object.keys(configured).join('、')}`);
+  const missing = workflow.agents.filter(agent => !card_platform_ready(home, agent.name)).map(agent => agent.name || agent.card);
+  if (missing.length) {
+    const ready = [...new Set([...Object.keys(launch_settings(home).participants), ...Object.keys(API_PROVIDERS).filter(platform => card_api_profile(home, platform))])];
+    throw new Error(`本机没有配置这些卡片的软件或 API Key：${missing.join('、')}；卡片的 platform 只能用本机已配置的平台 ID：${ready.join('、')}`);
+  }
   workflow = workflow_id ? { ...workflow, agents: host_cards(workflow.agents) }
     : save_workflow(home, { ...workflow, agents: host_cards(workflow.agents) }, validate_preset);
   const owner = { site: config.site, room_id: config.room, token: config.token };

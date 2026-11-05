@@ -52,6 +52,8 @@ const RELAY_COMMAND_WAIT_MS = 75000;
 // this much later is stuck in the network and is given up, so a hung connection cannot hold back reconnecting.
 const RELAY_DEFAULT_WAIT_MS = 9000;
 const MACHINE_REQUEST_MARGIN_MS = 15000;
+// How long a pairing request waits for the computer over the relay, in milliseconds as the relay counts.
+const PAIR_WAIT_MS = 15000;
 const RELAY_CIPHER_INFO = "codiscuss-relay-v1";
 // The rooms kept on the paired computer are read and written through its relay connection; only room routes go there.
 const RELAY_PROTOCOL = "codiscuss-relay";
@@ -235,7 +237,7 @@ async function request_json(path, payload, access_token) {
     options.headers["Content-Type"] = "application/json";
     options.body = JSON.stringify(payload);
   }
-  if (path.startsWith("/api/machines")) options.signal = AbortSignal.timeout((Number.isInteger(payload?.wait) ? payload.wait : RELAY_DEFAULT_WAIT_MS) + MACHINE_REQUEST_MARGIN_MS);
+  if (/^\/api\/(machines|admin)/.test(path)) options.signal = AbortSignal.timeout((Number.isInteger(payload?.wait) ? payload.wait : RELAY_DEFAULT_WAIT_MS) + MACHINE_REQUEST_MARGIN_MS);
   const response = await fetch(path, options);
   const result = await response.json();
   if (!response.ok) throw Object.assign(new Error(result.error || "请求失败，请重试"), { preflight: response.status >= 400 && response.status < 500, status: response.status });
@@ -2308,7 +2310,7 @@ async function pair_exchange(machine, payload) {
   const id = crypto.randomUUID();
   const { key, envelope } = await seal_relay_request(machine, id, { action: "device-pair", payload });
   const path = `/api/machines/${encodeURIComponent(machine.id)}/pair`;
-  const response = await fetch(path, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ id, envelope, wait: 15 }) });
+  const response = await fetch(path, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ id, envelope, wait: PAIR_WAIT_MS }) });
   const result = await response.json();
   if (!response.ok) throw new Error(result.error || "配对请求被网站拒绝");
   if (result.status === "done") return open_relay_response(key, id, result.response);
@@ -2629,15 +2631,29 @@ async function show_computer_rooms(remote) {
   await select_room(undefined);
 }
 
-/** Once signed in, find the paired computer and show its rooms; the poll calls this again until the computer answers. */
-async function connect_computer_rooms() {
+let computer_retry = null, computer_attempt = 0;
+/**
+ * Once signed in, find the paired computer and show its rooms. This is the only way the computer's rooms appear; until
+ * they do, it tries again by itself, backing off while the computer stays away. `reload: false` reuses settings just read.
+ */
+async function connect_computer_rooms({ reload = true } = {}) {
   if (!state.admin.logged_in || computer_connecting) return;
   computer_connecting = true;
+  clearTimeout(computer_retry);
+  computer_retry = null;
   try {
-    await load_launch_settings();
+    if (reload) await load_launch_settings();
     if (relay_machine && !state.remote_rooms) await show_computer_rooms(true);
   } catch (error) { console.warn("Connecting to the computer failed:", error.message); }
-  finally { computer_connecting = false; }
+  finally {
+    computer_connecting = false;
+    if (state.remote_rooms) computer_attempt = 0;
+    else if (state.admin.logged_in && !document.hidden) {
+      const delay = RECONNECT_DELAYS_MS[Math.min(computer_attempt, RECONNECT_DELAYS_MS.length - 1)];
+      computer_attempt += 1;
+      computer_retry = setTimeout(() => { computer_retry = null; connect_computer_rooms(); }, delay);
+    }
+  }
 }
 
 /** The relay's change notices for the computer's rooms, shaped like the website's update stream. */
@@ -2806,7 +2822,9 @@ async function load_launch_settings() {
       state.launch.relay = await load_relay_machine();
       // An online computer that publishes a command key does everything the local service would; an older one only creates rooms.
       // The previous one stays in use until this answer arrives, so requests made meanwhile still reach the computer.
-      relay_machine = state.launch.relay?.online && state.launch.relay.public_key ? state.launch.relay : null;
+      // A website without rooms of its own asks the relay itself, which knows at once whether the computer is connected;
+      // the website's own record of the computer's last heartbeat can lag behind when that heartbeat is slow to arrive.
+      relay_machine = state.launch.relay?.public_key && (state.launch.relay.online || computer_rooms_only()) ? state.launch.relay : null;
       if (!relay_machine) return;
       state.launch.remote = true;
     }
@@ -2827,6 +2845,8 @@ async function load_launch_settings() {
     // An unpaired or expired device keeps its way to the computer: pairing and renewal go through it.
     // A website without rooms of its own reaches the computer only through the relay, so one failed request keeps it.
     relay_machine = computer_rooms_only() || error.need === "pairing" || error.need === "renew" ? relay_machine : null;
+    // The relay answering that the computer is not connected is shown as the computer being offline.
+    if (computer_rooms_only() && !state.remote_rooms) state.remote_online = error.offline ? false : null;
     state.launch.remote = Boolean(local_connection);
     Object.assign(state.launch, { available: false, room_models: null, error: error.message });
     // Without a reachable local service, launches can still go through the paired computer.
@@ -4463,8 +4483,10 @@ async function initialize() {
     if (name && field === "model") write_launch_model(name, event.target.value);
     else if (name) write_launch_field(name, field, event.target.type === "checkbox" ? event.target.checked : event.target.value);
   });
-  // Whether this website keeps rooms of its own decides how settings and rooms are read.
-  await load_admin_state();
+  // Whether this website keeps rooms of its own decides how settings and rooms are read, so it is asked until it answers.
+  for (let attempt = 0; await load_admin_state(), !state.admin.loaded; attempt++) {
+    await new Promise(resolve => setTimeout(resolve, RECONNECT_DELAYS_MS[Math.min(attempt, RECONNECT_DELAYS_MS.length - 1)]));
+  }
   const launch_settings = load_launch_settings();
   document.addEventListener("click", download_relay_file, true);
   new MutationObserver(() => { if (state.remote_rooms) show_relay_images(); }).observe(document.body, { childList: true, subtree: true });
@@ -4480,16 +4502,18 @@ async function initialize() {
   });
   if (computer_rooms_only()) {
     await launch_settings;
-    // A reconnect that ran meanwhile may already show the computer's rooms; a slower failure here must not hide them.
-    const reachable = Boolean(relay_machine) && await load_remote_site().then(() => true, () => false);
-    state.remote_rooms ||= reachable;
+    // The computer's rooms appear only through connecting, which keeps trying by itself, so nothing here can hide them.
+    await connect_computer_rooms({ reload: false });
   }
   try {
-    const result = computer_rooms_only() && !state.remote_rooms ? { rooms: [] } : await request_json("/api/rooms");
-    state.rooms = result.rooms;
-    state.last_room = result.last_room || "";
-    set_folder_directory(result);
-    await select_room(opening_room());
+    // Connecting has already opened the computer's rooms when it reached them.
+    if (!computer_rooms_only() || !state.remote_rooms) {
+      const result = computer_rooms_only() ? { rooms: [] } : await request_json("/api/rooms");
+      state.rooms = result.rooms;
+      state.last_room = result.last_room || "";
+      set_folder_directory(result);
+      await select_room(opening_room());
+    }
     set_connection(true);
   } catch (error) { set_connection(false); show_toast(error.message, true); }
   start_live_updates();

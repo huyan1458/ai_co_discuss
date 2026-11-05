@@ -14,7 +14,7 @@ const source = computed(() => view.value.room_source || {});
 const directory_title = computed(() => {
   if (!source.value.computer) return "协作房间";
   if (!source.value.signed_in) return "协作房间（未配对）";
-  if (!source.value.remote) return "协作房间（电脑未连接）";
+  if (!source.value.remote) return source.value.online === false ? "协作房间（电脑离线）" : "协作房间（电脑未连接）";
   return source.value.online === false ? "协作房间（电脑离线）" : "协作房间";
 });
 const directory_actions = computed(() => [

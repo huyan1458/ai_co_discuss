@@ -12,6 +12,7 @@ import { test } from 'node:test';
 
 import { adopt_member_profile, adopt_workflow, borrowed_session, check_or_save_workflow, join_workflow, launch_discussion, launch_settings, room_configuration, room_files, room_models, room_member, room_member_model, room_workflow, save_launch_projects, save_launch_settings, validate_preset } from '../runner/discussion_launch.mjs';
 import { get_workflow, list_workflows, save_workflow } from '../runner/workflows.mjs';
+import { API_PROVIDERS, save_api_key } from '../runner/discussion_api.mjs';
 import { read_project_files } from '../runner/project_files.mjs';
 import { api, DiscussionStore, load_config } from '../runner/discussion_runner.mjs';
 import { FreeRoomRunner } from '../runner/free_runner.mjs';
@@ -941,6 +942,14 @@ test('only the host of a room whose owner allowed it adopts a workflow, inviting
   const switched = load_config(launched.config_path);
   assert.equal(switched.workflow.id, 'review');
   assert.equal(switched.participants['Claude-checker'].project_access, 'write');
+  // A card on a platform without local software joins on its official API once a key for that root is saved here.
+  save_workflow(f.home, { id: 'ledger', label: '记账', skill: '定稿后记账。', agents: [{ card: 'inventory', name: 'DeepSeek-inventory', project_access: 'full', effort: 'high' }] }, validate_preset);
+  await assert.rejects(adopt_workflow(f.home, { access_file: host_access, workflow_id: 'ledger' }), /DeepSeek-inventory/);
+  const { api_key_ref } = save_api_key(f.home, { base_url: API_PROVIDERS.DeepSeek.base_url, api_key: 'test-key' });
+  assert.deepEqual((await adopt_workflow(f.home, { access_file: host_access, workflow_id: 'ledger' })).members, { inventory: 'DeepSeek-inventory' });
+  const ledger = load_config(launched.config_path).participants['DeepSeek-inventory'];
+  const pick = ({ adapter, base_url, api_protocol, model, api_key_ref: ref, project_access, effort }) => JSON.parse(JSON.stringify({ adapter, base_url, api_protocol, model, api_key_ref: ref, project_access, effort }));
+  assert.deepEqual(pick(ledger), { adapter: 'api', base_url: API_PROVIDERS.DeepSeek.base_url, api_protocol: 'chat', model: API_PROVIDERS.DeepSeek.models[0], api_key_ref, project_access: 'write' });
 });
 
 test('a workflow bound at creation ends when its members are sent away, resumes with their sessions, and is replaced by another', async t => {

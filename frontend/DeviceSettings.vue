@@ -175,17 +175,6 @@ const date = (time) => new Date(time).toLocaleString("zh-CN", { month: "numeric"
       这台设备的授权已到期。<UButton label="用通行密钥续期" color="neutral" variant="soft" size="xs" :loading="busy === 'renew'" :disabled="Boolean(busy)" @click="run('renew', async () => { await bridge.device.renew(); await load(); })" />
     </p>
     <template v-else>
-      <p v-if="devices && devices.length < 2" class="fine-print">建议配对两台：丢了一台，可在外面用另一台撤销它。</p>
-      <ul v-if="devices" class="account-device-list">
-        <li v-for="item in devices" :key="item.id">
-          <span>
-            <strong>{{ item.label }}<template v-if="item.current"> · 当前设备</template><template v-if="item.temporary"> · 临时</template></strong>
-            <small>{{ item.expires_at > Date.now() ? `授权至 ${date(item.expires_at)}` : "授权已到期" }}{{ item.passkeys ? "" : " · 未创建通行密钥" }}</small>
-          </span>
-          <UButton :label="item.current ? '取消配对' : '撤销'" color="neutral" variant="ghost" size="xs" :disabled="Boolean(busy)" @click="revoke(item)" />
-        </li>
-        <li v-if="!devices.length" class="device-empty">还没有配对的设备</li>
-      </ul>
       <div class="device-actions">
         <UButton v-if="remote && renew_due" label="续期这台设备" color="neutral" variant="soft" size="sm" :loading="busy === 'renew'" :disabled="Boolean(busy)" @click="run('renew', async () => { await bridge.device.renew(); await load(); })" />
         <UButton v-if="local" label="添加设备" icon="i-lucide-qr-code" color="neutral" variant="outline" size="sm" :loading="busy === 'invite'" :disabled="Boolean(busy)" @click="add_device" />
@@ -202,12 +191,25 @@ const date = (time) => new Date(time).toLocaleString("zh-CN", { month: "numeric"
           <UButton label="重新生成" icon="i-lucide-refresh-cw" color="neutral" variant="outline" size="xs" :loading="busy === 'invite'" :disabled="Boolean(busy)" @click="add_device" />
         </div>
       </div>
-      <div v-if="shown_audit.length" class="device-audit">
-        <button type="button" class="device-link" @click="audit_open = !audit_open">{{ audit_open ? "收起" : "查看" }}最近记录（{{ shown_audit.length }}）</button>
-        <ul v-if="audit_open" aria-label="最近记录">
+      <div v-if="devices" class="device-list-head">
+        <span>已配对 {{ devices.length }} 台</span>
+        <UButton v-if="shown_audit.length" :label="`最近记录 ${shown_audit.length}`" icon="i-lucide-history" :trailing-icon="audit_open ? 'i-lucide-chevron-up' : 'i-lucide-chevron-down'" color="neutral" variant="ghost" size="xs" :aria-expanded="audit_open" @click="audit_open = !audit_open" />
+      </div>
+      <ul v-if="devices" class="account-device-list">
+        <li v-for="item in devices" :key="item.id">
+          <span>
+            <strong>{{ item.label }}<template v-if="item.current"> · 当前设备</template><template v-if="item.temporary"> · 临时</template></strong>
+            <small>{{ item.expires_at > Date.now() ? `授权至 ${date(item.expires_at)}` : "授权已到期" }}{{ item.passkeys ? "" : " · 未创建通行密钥" }}</small>
+          </span>
+          <UButton :label="item.current ? '取消配对' : '撤销'" color="neutral" variant="ghost" size="xs" :disabled="Boolean(busy)" @click="revoke(item)" />
+        </li>
+        <li v-if="!devices.length" class="device-empty">还没有配对的设备</li>
+      </ul>
+      <div v-if="audit_open && shown_audit.length" class="device-audit">
+        <ul aria-label="最近记录">
           <li v-for="(entry, index) in shown_audit" :key="index"><small>{{ date(entry.at) }}</small> {{ audit_text(entry) }}</li>
         </ul>
-        <p v-if="audit_open" class="fine-print">记录由电脑保存。看到不是你做的操作，立即撤销对应设备。</p>
+        <p class="fine-print">记录由电脑保存。看到不是你做的操作，立即撤销对应设备。</p>
       </div>
     </template>
   </section>
@@ -222,9 +224,9 @@ const date = (time) => new Date(time).toLocaleString("zh-CN", { month: "numeric"
 .account-device-list span { display: flex; flex-direction: column; gap: 2px; min-width: 0; }
 .account-device-list strong { color: var(--ui-text-highlighted); font-size: 13px; font-weight: 500; }
 .account-device-list small { color: var(--ui-text-muted); font-size: 11px; }
-.device-link { color: var(--channel-accent); font-size: 11px; text-decoration: underline; }
-.device-audit { width: 100%; }
-.device-audit ul { display: flex; flex-direction: column; gap: 2px; max-height: 220px; margin: 6px 0 0; padding: 0; overflow-y: auto; list-style: none; font-size: 12px; }
+.device-list-head { display: flex; align-items: center; justify-content: space-between; gap: 8px; width: 100%; margin-top: 4px; color: var(--ui-text-muted); font-size: 12px; }
+.device-audit { width: 100%; padding: 8px 10px; border: 1px solid var(--ui-border-muted); border-radius: 8px; }
+.device-audit ul { display: flex; flex-direction: column; gap: 2px; max-height: 220px; margin: 0 0 6px; padding: 0; overflow-y: auto; list-style: none; font-size: 12px; }
 .device-audit small { color: var(--ui-text-muted); }
 .device-empty { color: var(--ui-text-dimmed); font-size: 12px; }
 .device-actions { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; }
@@ -238,5 +240,16 @@ const date = (time) => new Date(time).toLocaleString("zh-CN", { month: "numeric"
 .device-expired-note { color: var(--ui-error); }
 .device-qr { width: 148px; height: 148px; padding: 6px; border-radius: 8px; background: #fff; }
 .device-qr :deep(svg) { display: block; width: 100%; height: 100%; }
+.account-device-list li > button { flex-shrink: 0; }
+/* Touch screens: buttons and the temporary checkbox take a fingertip. */
+@media (pointer: coarse) {
+  .device-actions > *, .device-list-head > button, .account-device-list li > button, .device-invite button { min-height: 36px; }
+  .device-actions > :not(button) { display: flex; align-items: center; }
+}
+/* Phones: the QR code sits above its instructions instead of squeezing beside them. */
+@media (max-width: 480px) {
+  .device-invite { flex-direction: column; align-items: stretch; }
+  .device-qr { align-self: center; width: 180px; height: 180px; }
+}
 .device-code { color: var(--ui-text-highlighted); font-family: ui-monospace, SFMono-Regular, Consolas, monospace; font-size: 18px !important; font-weight: 600; letter-spacing: 1px; }
 </style>
