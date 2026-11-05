@@ -232,4 +232,6 @@ async function refresh_after(invited_any) {
 .pb-invite-reserved { visibility: hidden; }
 .pb-invite-empty { margin: 0; padding: 18px 12px; border: 1px dashed var(--ui-border); border-radius: 8px; text-align: center; color: var(--ui-text-muted); font-size: 12px; }
 .pb-invite-footer { display: flex; justify-content: flex-end; gap: 8px; }
+/* Same as the create panel: two members per row on a phone. */
+@media (max-width: 600px) { .pb-invite-cards { grid-template-columns: repeat(2, minmax(0, 1fr)); } }
 </style>

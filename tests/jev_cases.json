@@ -129,6 +129,13 @@
       "message": "依次出来报个数", "expect": "__all_seq__", "accept": ["__host__"] },
     { "id": "Q32", "scene": "route", "note": "接龙：每人接着上一位说，没有分工", "message": "大家接龙，每人接着上一位的最后一个字说一个成语", "expect": "__all_seq__", "accept": ["__host__"] },
     { "id": "Q33", "scene": "route", "note": "要运行命令的活不交给没有命令行的 API 成员", "members": [{"name": "Claude", "description": "Claude（Claude Code，可修改项目 ledger 的文件并运行命令）"},{"name": "DeepSeek", "description": "DeepSeek（模型 API，可修改项目 ledger 的文件（不能运行命令））"}], "message": "跑一下测试，看看现在能不能过", "expect": "Claude", "accept": ["__host__"] },
+    { "id": "Q34", "scene": "route", "note": "主持人刚代表房间回了问候，用户要大家一起打招呼，来自真实 👎",
+      "context": [{ "id": 10, "author": "用户", "text": "你们好" }, { "id": 11, "author": "Codex", "text": "你好，我是 Codex，本房间的主持人。有需要讨论或分派的任务直接说，我来安排。" }],
+      "message": "一起打个招呼", "expect": "__all__" },
+    { "id": "Q35", "scene": "route", "note": "用户正和主持人迭代工作流，谈到对某位专家的角色定义不满、要求重写，是对主持人说而非对该专家说，来自真实 👎",
+      "members": [{"name": "Critic", "description": "Critic（Codex CLI，项目 novel 只读；用户描述：只读审查剧集中的常识错误、设定违背与前后矛盾，提出修改意见）"},{"name": "Writer", "description": "Writer（Claude Code，可修改项目 novel 的文件并运行命令；用户描述：按主持人任务书写整集正文，并按批评意见修订）"}],
+      "context": [{ "id": 20, "author": "用户", "text": "工作流有个地方不合理：写手只有初稿要把全文贴在卡片上并存进文件，后面按批评意见修改时直接改文件，卡片上汇报改了什么就行。" }, { "id": 21, "author": "Codex", "text": "同意，已经改好连载工作流并在本房间重新启用：初稿先存文件再贴全文；修订只改文件，卡片上逐条汇报已改 / 未改及理由。" }, { "id": 22, "author": "用户", "text": "这个工作流还得改，加一个资深编剧，放在主持人和写手中间，只调一次，给写手编剧上的专业建议。" }, { "id": 23, "author": "Codex", "text": "已加上资深编剧，工作流已在本房间启用。新流程：主持人下任务书 → 编剧给建议 → 写手与批评家循环接力 → 主持人验收。" }],
+      "message": "此外，我对现在的批评家有意见，他挑的毛病都是不痛不痒的常识错误，对剧情改进作用有限。我之前给批评家的定性写得太狭隘，限制了他的发挥，建议你重写", "expect": "__host__" },
 
     { "id": "G1", "scene": "group", "note": "打招呼", "message": "@全体成员 大家打个招呼", "expect": "parallel" },
     { "id": "G2", "scene": "group", "note": "接龙", "message": "@全体成员 我们来接龙写一首诗，每人一句，接着上一位写", "expect": "sequential" },

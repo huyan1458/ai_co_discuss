@@ -48456,7 +48456,7 @@ var PY = ["data-identity", "data-face"], FY = ["inert", "aria-hidden"], IY = { c
 			], 42, PY);
 		};
 	}
-}, [["__scopeId", "data-v-334efbd0"]]), OX = {
+}, [["__scopeId", "data-v-6e5e9b44"]]), OX = {
 	key: 0,
 	class: "project-field"
 }, kX = ["disabled"], AX = {
@@ -50270,7 +50270,7 @@ var iQ = {
 			])])]);
 		};
 	}
-}, [["__scopeId", "data-v-5e94992e"]]), BQ = /* @__PURE__ */ ((e) => (e[e.Border = -1] = "Border", e[e.Data = 0] = "Data", e[e.Function = 1] = "Function", e[e.Position = 2] = "Position", e[e.Timing = 3] = "Timing", e[e.Alignment = 4] = "Alignment", e))(BQ || {}), VQ = Object.defineProperty, HQ = (e, t, n) => t in e ? VQ(e, t, {
+}, [["__scopeId", "data-v-a2b7126b"]]), BQ = /* @__PURE__ */ ((e) => (e[e.Border = -1] = "Border", e[e.Data = 0] = "Data", e[e.Function = 1] = "Function", e[e.Position = 2] = "Position", e[e.Timing = 3] = "Timing", e[e.Alignment = 4] = "Alignment", e))(BQ || {}), VQ = Object.defineProperty, HQ = (e, t, n) => t in e ? VQ(e, t, {
 	enumerable: !0,
 	configurable: !0,
 	writable: !0,
@@ -66984,7 +66984,7 @@ var j$ = /* @__PURE__ */ l((/* @__PURE__ */ o(((e, t, n) => {
 			]);
 		};
 	}
-}, [["__scopeId", "data-v-24e6a37c"]]), V2 = { class: "workflow-control-row" }, H2 = ["title"], U2 = { class: "workflow-control-state" }, W2 = ["disabled"], G2 = ["disabled"], K2 = {
+}, [["__scopeId", "data-v-eef82567"]]), V2 = { class: "workflow-control-row" }, H2 = ["title"], U2 = { class: "workflow-control-state" }, W2 = ["disabled"], G2 = ["disabled"], K2 = {
 	key: 0,
 	class: "workflow-control-note is-warning"
 }, q2 = {

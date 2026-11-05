@@ -453,7 +453,7 @@ onBeforeUnmount(() => { document.removeEventListener("pointerdown", close_on_out
 </template>
 
 <style scoped>
-.expert-card { min-width: 0; perspective: 900px; outline: none; }
+.expert-card { min-width: 0; perspective: 900px; outline: none; container-type: inline-size; }
 /* Both faces keep one size; long settings scroll inside the back while its actions stay in place.
    Perspective makes the turn read as a flip rather than a squeeze; the faces stay flat, and
    the hidden one is switched by data-face at 90°, where the card is edge-on. */
@@ -526,4 +526,12 @@ onBeforeUnmount(() => { document.removeEventListener("pointerdown", close_on_out
 .expert-card-note > span { flex-shrink: 0; width: 13px; height: 13px; margin-top: 3px; }
 /* A member with a nickname also shows its ID, which AI messages, @ and records use. */
 .member-id { margin-left: 4px; color: var(--ui-text-muted); font-size: 11px; font-weight: 400; }
+/* Narrow card (two per row on a phone): the name moves under the avatar so the corner tools leave it the full
+   width, the card grows by that line, and 恢复默认 joins the settings flow instead of sitting under the actions. */
+@container (max-width: 220px) {
+  .expert-card-turn { height: 268px; }
+  .expert-card-identity { flex-wrap: wrap; row-gap: 6px; padding-right: 0; }
+  .expert-card-names { flex-basis: 100%; }
+  .expert-card-defaults { position: static; align-self: flex-start; margin-left: -4px; }
+}
 </style>

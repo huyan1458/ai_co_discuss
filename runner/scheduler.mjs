@@ -30,7 +30,7 @@ export const ROUTE_PROMPT_VERSION = 14;
 export const SCHEDULER_MODES = { guided: '引导（试验）', stable: '稳定' };
 export const DEFAULT_SCHEDULER_MODE = 'guided';
 /** The guided wording has its own version, so its ratings are never mixed with the stable checklist's. */
-export const ROUTE_GUIDED_PROMPT_VERSION = 9;
+export const ROUTE_GUIDED_PROMPT_VERSION = 10;
 /** The routing prompt version that a decision in this mode was made with. */
 export function route_prompt_version(mode) {
   return mode === 'stable' ? ROUTE_PROMPT_VERSION : ROUTE_GUIDED_PROMPT_VERSION;
@@ -225,7 +225,7 @@ const ROUTE_GUIDED_GUIDE = ['这是 AI CoDiscuss 的协作房间。用户是房�
 const ROUTE_GUIDED_STEM = '用户发来上面这条消息，没有 @ 任何人。请你像熟悉这个房间的成员一样读懂它：用户想让谁来回应？'
   + '用户心里已经有明确的对象时，直接交给对方，省掉主持人转一手的时间；需要有人先理解、拆分或协调时交给主持人。'
   + '用户想听每个人各自说一句时，交给全体能让大家同时开始，比主持人逐个点名快得多；但大家看不到彼此的回答。每人只需按顺序接着前一位说一次时，交给全体依次回应；需要互相接话、讨论的事仍要主持人安排。用户只是表示收到或感谢时，不必唤醒任何人。'
-  + '两种容易看错的情况：向在场的各位问好，是在等每个人回一声，和只对房间说一句“hi”不同；用户问“谁是……”“谁能……”时是在找符合条件的人，只需要符合的人出来回应（哪怕说“自己说一下”），成员信息里（含主持人）只有一位符合就交给他。';
+  + '两种容易看错的情况：用“你们”“大家”“各位”这类指所有人的称呼问好，是在等每个人回一声，和不带称呼地对房间说一句“hi”“你好”不同；用户问“谁是……”“谁能……”时是在找符合条件的人，只需要符合的人出来回应（哪怕说“自己说一下”），成员信息里（含主持人）只有一位符合就交给他。';
 
 /** The routing question in one mode: option texts, the stem, and what the state adds about the members. */
 /** Every group of two or more among the members the text names, so "these few each answer" is one choice. */
