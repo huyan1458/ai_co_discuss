@@ -48,6 +48,10 @@ const RELAY_COMMAND_POLL_MS = 250;
 const RELAY_SETTINGS_WAIT_MS = 20000;
 // The computer allows each operation 60 seconds, as the local website does.
 const RELAY_COMMAND_WAIT_MS = 75000;
+// The website answers a relayed request within its wait (9 seconds unless asked for more); a request still unanswered
+// this much later is stuck in the network and is given up, so a hung connection cannot hold back reconnecting.
+const RELAY_DEFAULT_WAIT_MS = 9000;
+const MACHINE_REQUEST_MARGIN_MS = 15000;
 const RELAY_CIPHER_INFO = "codiscuss-relay-v1";
 // The rooms kept on the paired computer are read and written through its relay connection; only room routes go there.
 const RELAY_PROTOCOL = "codiscuss-relay";
@@ -231,6 +235,7 @@ async function request_json(path, payload, access_token) {
     options.headers["Content-Type"] = "application/json";
     options.body = JSON.stringify(payload);
   }
+  if (path.startsWith("/api/machines")) options.signal = AbortSignal.timeout((Number.isInteger(payload?.wait) ? payload.wait : RELAY_DEFAULT_WAIT_MS) + MACHINE_REQUEST_MARGIN_MS);
   const response = await fetch(path, options);
   const result = await response.json();
   if (!response.ok) throw Object.assign(new Error(result.error || "请求失败，请重试"), { preflight: response.status >= 400 && response.status < 500, status: response.status });
@@ -2435,7 +2440,12 @@ async function relay_exchange(action, payload, wait) {
   const target = computer_rooms_only() ? { target: "computer" } : {};
   const { key, envelope } = await seal_relay_request(machine, id, { action, payload, ...target });
   const result = await request_json(`/api/machines/${encodeURIComponent(machine.id)}/relay`, { id, envelope, ...(wait ? { wait } : {}) })
-    .catch(error => { throw error.status === 401 ? Object.assign(error, { need: "pairing" }) : error; });
+    .catch(error => {
+      // A request given up in the network may still have reached the computer, so its outcome is unconfirmed.
+      if (error.name === "TimeoutError") throw Object.assign(new Error(`结果待确认：电脑「${machine.name}」未在限时内答复，请稍后查看房间，确认是否已生效后再重试`),
+        { unconfirmed: true, launch: { stage: "unconfirmed" } });
+      throw error.status === 401 ? Object.assign(error, { need: "pairing" }) : error;
+    });
   if (result.status === "done") return open_relay_response(key, id, result.response);
   if (result.status === "offline") throw Object.assign(new Error(`电脑「${machine.name}」不在线，请确认它开机并运行 codiscuss`), { offline: true });
   throw Object.assign(new Error(`结果待确认：电脑「${machine.name}」未在限时内答复，请稍后查看房间，确认是否已生效后再重试`),
@@ -2815,7 +2825,8 @@ async function load_launch_settings() {
     load_room_models();
   } catch (error) {
     // An unpaired or expired device keeps its way to the computer: pairing and renewal go through it.
-    relay_machine = error.need === "pairing" || error.need === "renew" ? relay_machine : null;
+    // A website without rooms of its own reaches the computer only through the relay, so one failed request keeps it.
+    relay_machine = computer_rooms_only() || error.need === "pairing" || error.need === "renew" ? relay_machine : null;
     state.launch.remote = Boolean(local_connection);
     Object.assign(state.launch, { available: false, room_models: null, error: error.message });
     // Without a reachable local service, launches can still go through the paired computer.
@@ -2841,7 +2852,10 @@ async function load_relay_machine() {
       return null;
     }
     return machine;
-  } catch { return null; }
+  } catch {
+    // A failed read says nothing about the pairing, so the computer known so far stays in use.
+    return state.launch.relay ?? null;
+  }
 }
 
 /** Hand a room creation to the paired computer through the website and wait for it to finish. */
@@ -4466,7 +4480,9 @@ async function initialize() {
   });
   if (computer_rooms_only()) {
     await launch_settings;
-    state.remote_rooms = Boolean(relay_machine) && await load_remote_site().then(() => true, () => false);
+    // A reconnect that ran meanwhile may already show the computer's rooms; a slower failure here must not hide them.
+    const reachable = Boolean(relay_machine) && await load_remote_site().then(() => true, () => false);
+    state.remote_rooms ||= reachable;
   }
   try {
     const result = computer_rooms_only() && !state.remote_rooms ? { rooms: [] } : await request_json("/api/rooms");

@@ -67623,7 +67623,8 @@ var w4 = { class: "progress-board is-docked" }, T4 = { class: "pb-header" }, E4 
 			y.value = !0;
 		}
 		let x = (e) => (c.value.members || []).find((t) => t.name === e), S = Z(() => (c.value.members || []).filter((e) => e.status === "away").map((e) => e.name)), C = (e) => e.executions.join("-");
-		function w(e, t = []) {
+		function w(e, t) {
+			if (!e || !Array.isArray(t)) return;
 			let r = [];
 			try {
 				r = JSON.parse(localStorage.getItem(t3 + e) || "[]");
@@ -68012,7 +68013,7 @@ var w4 = { class: "progress-board is-docked" }, T4 = { class: "pb-header" }, E4 
 			]);
 		};
 	}
-}, [["__scopeId", "data-v-107bbed5"]]), i3 = {
+}, [["__scopeId", "data-v-d4790507"]]), i3 = {
 	class: "merged-section discussion-history",
 	"aria-label": "讨论记录"
 }, a3 = {
@@ -72029,27 +72030,31 @@ var G6 = {
 			onPointermove: (e) => {
 				e.pointerType !== "mouse" && e.stopPropagation();
 			}
-		}, i = { close: "pointer-coarse:p-2.5 pointer-coarse:-m-2.5" }, a = LE();
-		function o({ detail: { level: e, message: n } }) {
-			let o = String(n);
-			a.add({
+		}, i = { close: "pointer-coarse:p-2.5 pointer-coarse:-m-2.5" }, a = (e) => {
+			e.target === window && e.stopImmediatePropagation();
+		};
+		window.addEventListener("blur", a, !0), la(() => window.removeEventListener("blur", a, !0));
+		let o = LE();
+		function s({ detail: { level: e, message: n } }) {
+			let a = String(n);
+			o.add({
 				...t[e] || t.info,
 				...r,
 				ui: i,
-				id: `${e}:${o}`,
-				title: o.length > _ee ? `${o.slice(0, 119)}…` : o
+				id: `${e}:${a}`,
+				title: a.length > _ee ? `${a.slice(0, 119)}…` : a
 			});
 		}
-		document.addEventListener("discuss:notice", o), la(() => document.removeEventListener("discuss:notice", o));
-		let s = Z(() => n.view.value.device?.prompt), c = Z({
-			get: () => !!s.value,
+		document.addEventListener("discuss:notice", s), la(() => document.removeEventListener("discuss:notice", s));
+		let c = Z(() => n.view.value.device?.prompt), l = Z({
+			get: () => !!c.value,
 			set: (e) => {
 				e || n.bridge.device.prompt_cancel();
 			}
 		});
-		function l() {
+		function u() {
 			n.bridge.device.prompt_confirm()?.catch((e) => {
-				e?.cancelled || o({ detail: {
+				e?.cancelled || s({ detail: {
 					level: "error",
 					message: e.message
 				} });
@@ -72066,14 +72071,14 @@ var G6 = {
 				}
 			}, {
 				default: L(() => [q(I(Nz), { "reduced-motion": "never" }, {
-					default: L(() => [q(gee), s.value ? (U(), G(NZ, {
+					default: L(() => [q(gee), c.value ? (U(), G(NZ, {
 						key: 0,
-						open: c.value,
-						"onUpdate:open": t[0] ||= (e) => c.value = e,
-						title: s.value.title,
-						description: s.value.description,
-						"confirm-label": s.value.confirm_label,
-						onConfirm: l
+						open: l.value,
+						"onUpdate:open": t[0] ||= (e) => l.value = e,
+						title: c.value.title,
+						description: c.value.description,
+						"confirm-label": c.value.confirm_label,
+						onConfirm: u
 					}, null, 8, [
 						"open",
 						"title",

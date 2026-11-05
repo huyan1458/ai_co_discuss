@@ -67,7 +67,9 @@ const CONFLICT_SEEN_PREFIX = "discuss-conflicts-notified:";
 const CONFLICT_FILE_PREVIEW = 2;
 const conflict_key = (item) => item.executions.join("-");
 /** Warn about conflicts this browser has not shown yet, keeping only keys the room still reports. */
-function announce_conflicts(room_id, conflicts = []) {
+function announce_conflicts(room_id, conflicts) {
+  // Before the room view loads there is no list; treating it as empty would forget what was shown and repeat it.
+  if (!room_id || !Array.isArray(conflicts)) return;
   let seen = [];
   try { seen = JSON.parse(localStorage.getItem(CONFLICT_SEEN_PREFIX + room_id) || "[]"); } catch { /* Treat as none shown. */ }
   for (const item of conflicts.filter((conflict) => !seen.includes(conflict_key(conflict)))) {

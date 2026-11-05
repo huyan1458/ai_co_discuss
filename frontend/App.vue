@@ -33,6 +33,13 @@ const NOTICE_EVENTS = {
 // The close button is a bare icon; on touch screens its tap area is widened without moving it.
 const NOTICE_UI = { close: "pointer-coarse:p-2.5 pointer-coarse:-m-2.5" };
 
+// The toaster also pauses every notice while the browser window is unfocused (another app in front, or focus inside a
+// frame) and resumes only on window focus, so notices sat frozen until hovered. Only the window's own blur is stopped,
+// before the toaster's listener; element blurs passing through capture are untouched.
+const keep_notices_running = (event) => { if (event.target === window) event.stopImmediatePropagation(); };
+window.addEventListener("blur", keep_notices_running, true);
+onBeforeUnmount(() => window.removeEventListener("blur", keep_notices_running, true));
+
 const toast = useToast();
 /** Show the controller's notices; a repeat of one still open restarts it instead of stacking a copy. */
 function show_notice({ detail: { level, message } }) {
