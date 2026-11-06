@@ -845,18 +845,16 @@ html[data-theme^="channel"] .advanced-fields { border-color: #414957; }
   .channel-transcript { padding-top: 2px; }
   .channel-date-divider { padding: 12px 16px; }
   .channel-message { margin: 0 8px 14px !important; padding: 14px 15px 16px !important; }
-  .channel-message-byline { gap: 8px; margin-bottom: 12px; }
-  .channel-message-byline > .channel-avatar { width: 24px; height: 24px; font-size: 8px; }
-  /* Phone byline: name and badges on the first row, time, # and elapsed on one line below, the avatar at the top.
-     A card without a time line keeps its status beside the name. */
-  .channel-message-byline { display: grid; grid-template-columns: auto auto minmax(0, 1fr); align-items: center; row-gap: 2px; }
-  .channel-message-byline > .channel-avatar { grid-row: 1 / span 2; align-self: start; }
+  /* Phone byline: a two-line block beside a centered avatar — name and badges on the first line, then time, #
+     and elapsed packed on one line. Flex wrap rather than a grid: a name row spanning grid columns widened the
+     time column in iOS Safari and pushed the elapsed time to the middle of the card. */
+  .channel-message-byline { position: relative; display: flex; flex-wrap: wrap; align-items: center; align-content: center; gap: 1px 8px; min-height: 32px; padding-left: 40px; margin-bottom: 10px; }
+  .channel-message-byline > .channel-avatar { position: absolute; left: 0; top: 50%; width: 32px; height: 32px; font-size: 10px; transform: translateY(-50%); }
   .channel-message-meta { display: contents; }
-  .channel-message-author { grid-column: 2 / -1; grid-row: 1; }
-  .channel-message-meta > .channel-message-provenance { grid-column: 2; grid-row: 2; }
-  .channel-message-elapsed { grid-column: 3; grid-row: 2; justify-self: start; margin-left: 0; min-width: 0; overflow: hidden; text-overflow: ellipsis; }
-  .channel-message-byline:not(:has(.channel-message-meta > .channel-message-provenance)) :is(.channel-message-author, .channel-message-elapsed) { grid-row: 1; }
-  .channel-message-byline:not(:has(.channel-message-meta > .channel-message-provenance)) .channel-message-author { grid-column: 2; }
+  .channel-message-author { flex: 1 0 100%; min-width: 0; min-height: 20px; column-gap: 6px; }
+  .channel-message-byline strong { font-size: 15px; line-height: 20px; }
+  .channel-message-byline .channel-message-provenance { line-height: 16px; }
+  .channel-message-elapsed { margin-left: 0; min-width: 0; overflow: hidden; text-overflow: ellipsis; }
   .channel-answer-summary { grid-template-columns: minmax(0, 1fr); gap: 4px; margin-top: 14px; }
   .channel-answer-summary > small > span { display: inline; }
   .channel-answer-summary > .channel-message-text { font-size: 14px; }
@@ -1105,7 +1103,8 @@ html[data-motion="off"] *, html[data-motion="off"] *::before, html[data-motion="
   }
   @media (max-width: 700px) {
     .channel-message-text { line-height: 1.8; letter-spacing: 0; }
-    .channel-message-byline { gap: 2px 8px; margin-bottom: 12px; }
+    .channel-message-byline { gap: 1px 8px; margin-bottom: 10px; }
+    .channel-message-byline strong { font-size: 15px; }
     .channel-message { margin-bottom: 12px !important; }
     .channel-composer { border-radius: 10px !important; }
     .channel-composer-footer { padding-top: 4px !important; }
