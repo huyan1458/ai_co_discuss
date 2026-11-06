@@ -74,19 +74,28 @@ export function antigravity_project(config, root = join(homedir(), '.gemini', 'c
   return matching[0];
 }
 
-/** Resolve only the user's selected folders; do not inherit another project's grants or settings. */
+/**
+ * Resolve only the user's selected folders, plus the room's other project directories (`task.extra_directories`); do
+ * not inherit another project's grants or settings.
+ */
 function agy_resources(config, task, root) {
-  if (config.project_id || config.project_name) return antigravity_project(config, root).projectResources?.resources || [];
-  return [{ folder: { folderUri: pathToFileURL(launch_directory(config, task)).href } }];
+  const extras = (task.extra_directories || []).map(item => ({ folder: { folderUri: pathToFileURL(item.path).href } }));
+  if (config.project_id || config.project_name) return [...antigravity_project(config, root).projectResources?.resources || [], ...extras];
+  return [{ folder: { folderUri: pathToFileURL(launch_directory(config, task)).href } }, ...extras];
 }
 
-/** Build native deny rules for protected directories, with separate writable answer storage. */
+/**
+ * Build native deny rules for protected directories, with separate writable answer storage. The room's project
+ * directories this member may only read are protected whatever its own access.
+ */
 function agy_project_grants(config, task, resources, user_home) {
   const folders = resources.map(resource => resource.gitFolder?.folderUri || resource.folder?.folderUri)
     .filter(uri => uri?.startsWith('file:')).map(uri => fileURLToPath(uri));
-  const projects = [...new Set([project_directory(config), ...folders].filter(directory => directory && !same_path(directory, task.draft_directory)))];
+  const read_only = (task.extra_directories || []).filter(item => item.access === 'read').map(item => item.path);
+  const projects = [...new Set([project_directory(config), ...folders].filter(directory => directory && !same_path(directory, task.draft_directory)
+    && !read_only.some(path => same_path(path, directory))))];
   const protected_paths = [task.directory, ...task.skill_directories, join(user_home, '.gemini'),
-    ...(config.project_access === 'read' ? projects : [])];
+    ...(config.project_access === 'read' ? projects : []), ...read_only];
   if (protected_paths.some(directory => within_directory(directory, task.draft_directory))) {
     throw new Error('agy 草稿目录不能位于只读项目、运行目录、技能或 .gemini 配置目录中，未交付讨论任务');
   }
@@ -147,7 +156,7 @@ export function remove_agy_projects(directory, user_home = homedir()) {
 function invocation(config, binding, task, user_home) {
   const project = config.session_id ? null : prepare_agy_project(config, binding, task, user_home);
   const args = ['--output-format', 'stream-json', '--print-timeout', '0', '--add-dir', task.directory,
-    '--add-dir', task.draft_directory, ...task.skill_directories.flatMap(directory => ['--add-dir', directory])];
+    '--add-dir', task.draft_directory, ...[...task.skill_directories, ...(task.extra_directories || []).map(item => item.path)].flatMap(directory => ['--add-dir', directory])];
   // Headless agy refuses `--mode auto` ("not available for this account", 1.4.10–1.4.11) though its interactive window
   // offers it; 全放开 uses the flag its own denial message suggests on top of the open project grants.
   args.push('--mode', 'accept-edits', ...(config.project_access === 'full' ? ['--dangerously-skip-permissions'] : []),
@@ -211,7 +220,28 @@ const events = {
     responses.delete(step.step_index);
     return text;
   },
+  detail: agy_detail,
 };
+
+/**
+ * One agy stream event as execution-detail entries keyed by step: a response grows by its text deltas, a tool step
+ * shows its main parameter and, once finished, its output or error.
+ */
+function agy_detail(event) {
+  if (event.event === 'result' && event.result?.status === 'ERROR') return [{ kind: 'error', body: String(event.result.error || '本轮失败') }];
+  const step = event.step_update;
+  if (!step) return [];
+  const id = `step-${step.step_index}`;
+  if (step.step_type === 'agent_response') return step.text_delta ? [{ id, kind: 'message', append: step.text_delta }] : [];
+  if (step.step_type !== 'tool') return [];
+  const parameters = step.tool_info?.parameters || {};
+  const subject = parameters.CommandLine ?? parameters.Path ?? parameters.AbsolutePath ?? parameters.TargetFile ?? Object.values(parameters).find(value => typeof value === 'string');
+  const finished = ['DONE', 'ERROR'].includes(step.state);
+  return [{ id, kind: step.tool_name === 'run_command' ? 'command' : EDIT_TOOLS.test(step.tool_name || '') ? 'edit' : 'tool',
+    title: step.tool_name === 'run_command' ? String(subject ?? '') : `${step.tool_name} ${subject ?? ''}`.trim(),
+    state: step.state === 'ERROR' ? 'failed' : finished ? 'done' : 'running',
+    body: finished ? String(step.tool_info?.error?.message ?? step.tool_info?.output ?? '') : undefined }];
+}
 
 /** Where agy keeps one conversation database, or '' when this machine has none by that ID. */
 export function session_path(session_id, env = process.env, home = homedir()) {

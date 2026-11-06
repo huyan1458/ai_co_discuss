@@ -1,7 +1,7 @@
 /** Shared launch configuration for an existing AI conversation and the local website. */
 import { spawn } from 'node:child_process';
 import { createHash, randomUUID } from 'node:crypto';
-import { existsSync, mkdirSync, readdirSync, readFileSync, realpathSync, statSync } from 'node:fs';
+import { closeSync, existsSync, mkdirSync, openSync, readdirSync, readFileSync, readSync, realpathSync, statSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { dirname, isAbsolute, join, posix, resolve, win32 } from 'node:path';
 import { DatabaseSync } from 'node:sqlite';
@@ -10,18 +10,18 @@ import { pathToFileURL } from 'node:url';
 import { parseArgs } from 'node:util';
 
 import { atomic_json } from './files.mjs';
-import { read_project_files } from './project_files.mjs';
+import { outside_directory, read_only_enforced, read_project_files, room_directories, search_project_roots } from './project_files.mjs';
 import { guard_remote_request, list_remote_directories } from './remote_policy.mjs';
 import { list_devices, machine_fingerprint, revoke_device, start_pairing } from './device_auth.mjs';
 import { setup_sidecar } from './adapters/antigravity_app.mjs';
-import { adapter_of, adoption_adapter, BRANCHABLE_ADAPTERS, branch_session, session_settings, software_defaults, software_effort, software_models } from './adapters/index.mjs';
+import { adapter_of, adoption_adapter, BRANCHABLE_ADAPTERS, branch_session, execution_details, session_settings, software_defaults, software_effort, software_models } from './adapters/index.mjs';
 import { ADAPTER_IDS, ADAPTER_PROFILES, adapter_profile, DEFAULT_API_MAX_REQUESTS, MAX_API_MAX_REQUESTS, platform_adapters, same_session_family } from './adapters/profiles.mjs';
 import { API_PROVIDERS, api_check, api_models, save_api_key, saved_api_keys, validate_api_profile } from './discussion_api.mjs';
 import { DEFAULT_SCHEDULER_MODE, SCHEDULER_MODES, SCHEDULER_PROVIDERS, scheduler_check } from './scheduler.mjs';
 import { save_tts_settings, tts_settings, tts_speak } from './tts.mjs';
 import { stt_part } from './stt.mjs';
 import { access_levels, BUILTIN_EXPERT_PRESETS, MAX_EXPERT_PROMPT, PROJECT_ACCESS } from './expert_prompts.mjs';
-import { acquire_lock, api, DiscussionStore, service_drafts, validate_config } from './discussion_runner.mjs';
+import { acquire_lock, api, check_extra_directories, DiscussionStore, service_drafts, validate_config } from './discussion_runner.mjs';
 import { FreeRoomRunner, free_task_files } from './free_runner.mjs';
 import { bind_room_workflow, delete_workflow, get_workflow, list_workflows, load_room_workflow, parse_workflow_draft, preview_workflow, save_workflow, workflow_directory, WORKFLOW_ID_PATTERN } from './workflows.mjs';
 import { assert_shared_home, CONNECTION_FIELDS, configuration_snapshot, read_registry, registered_identity, register_room, service_home, service_pid, start_service } from './discussion_service.mjs';
@@ -59,6 +59,7 @@ const HELP = `用法：codiscuss launch settings [--file FILE]
       codiscuss launch room-config --file FILE
       codiscuss launch room-models --file FILE
       codiscuss launch room-files --file FILE
+      codiscuss launch execution-details --file FILE
       codiscuss launch models --file FILE
       codiscuss launch api-key --file FILE
       codiscuss launch api-check --file FILE
@@ -91,6 +92,7 @@ start 使用启动 JSON 创建或接入房间并启动；--dry-run 只校验和�
 room-config 修正已暂停房间的软件路径或切换 Codex App / CLI，不启动讨论；须提供 site、room_id、token。
 room-models 只读指定 site、room_id 的本机登记模型与思考强度，不启动讨论；quick 为 true 时不查询 agy 的默认模型（较慢），该成员标 defaults_pending。
 room-files 只读房间已保存的项目目录，须提供 site、room_id、token，可选相对 path 和目录分页 offset；文件返回最多前 128 KiB 文本；给 query 时改为按名称搜索整个项目（含 / 时按路径），最多返回 50 项。
+execution-details 只读房间某次执行的过程细节（中间说明、命令与输出、搜索、改动、工具调用），由本机日志还原，须提供 site、room_id、token、execution_id；细节只留在本机，不写入网站。
 models 按 adapter、executable 或 API profile 读取模型目录，不启动讨论或生成回答。
 api-key 将 base_url、api_key 保存于本机私有目录，只返回 api_key_ref。
 api-check 用 API profile 向模型发送一次极短请求，核对地址、密钥、协议与模型是否可用。
@@ -100,7 +102,7 @@ tts 用朗读设置把 text（不超过 300 字）合成为 MP3，返回 base64�
 stt 按序接收录音片段（upload_id、index、base64 PCM 16 kHz 单声道、final）；最后一段时识别整段录音并返回 text。
 pick-directory 在本机弹出系统目录选择窗口，返回所选路径；取消时不返回路径。
 browse-directory 列出常用项目及其中的子文件夹（只含文件夹名，分页），供其他设备选择目录；path 为空时列出常用项目。
-device-pairing 在本机生成 12 位设备配对码（2 分钟有效，可选 temporary 临时设备、site 指定已绑定的网站），扫码链接带本机密钥指纹；只能在这台电脑上执行，新设备只能在电脑前添加。
+device-pairing 在本机生成 12 位设备配对码（2 分钟有效，可选 temporary 临时设备、without_passkey 允许这次配对不用通行密钥、site 指定已绑定的网站），扫码链接带本机密钥指纹；只能在这台电脑上执行，新设备只能在电脑前添加。
 devices 列出已配对设备；提供 revoke（设备 id）撤销设备。
 projects 读取本机已配置的项目（名称与绝对路径）；提供 JSON（projects 列表）时整体替换保存。
 presets 读取本机的专家预设（含未删除的内置预设）与各平台默认描述；提供 JSON（presets 列表、description_templates 和/或 hidden_builtins 已删除的内置预设名）时替换对应部分。
@@ -342,11 +344,15 @@ export async function room_models(home, raw, { read_defaults = profile => cached
       ...(actual.model ? { actual_model: actual.model } : {}), ...(actual.effort ? { actual_effort: actual.effort } : {}),
       project_access: !facts?.capabilities.project ? 'read' : profile.project_access || config.project_access || 'read',
       // A member bound to its own conversation may keep that conversation's project, so this tool cannot set its access.
-      own_project: Boolean(facts?.own_project_when_bound && profile.session_id) }];
+      own_project: Boolean(facts?.own_project_when_bound && profile.session_id),
+      // A member working outside every project directory of the room only reads them; the page warns and names its directory.
+      ...(facts?.capabilities.project && outside_directory(config, profile) ? { outside_directory: outside_directory(config, profile),
+        outside_enforced: read_only_enforced({ ...profile, project_access: profile.project_access || config.project_access || 'read' }) } : {}) }];
   })));
   // Smart scheduling is a local choice; only which model decides is shown, never its key.
   const scheduler = config.scheduler ? { provider: config.scheduler.provider, model: config.scheduler.model, mode: config.scheduler.mode || DEFAULT_SCHEDULER_MODE } : null;
   return { room_id: input.room_id, registered: paths.length > 0, participants, scheduler, project_directory: config.cwd || '',
+    extra_directories: config.extra_directories || [],
     workflow: room_workflow_status(config, home), host_workflows: Boolean(config.host_workflows),
     api_max_requests: config.api_max_requests ?? DEFAULT_API_MAX_REQUESTS };
 }
@@ -359,10 +365,17 @@ function room_workflow_status(config, home) {
     available: !loaded.error, members: config.workflow.members || {} };
 }
 
-/** Read the owner's saved room project, never a directory supplied by the request. */
+/**
+ * Read the owner's saved room projects, never a directory supplied by the request: `root` picks one of the room's
+ * directories by index (0, the main one, by default), and a search covers all of them.
+ */
 export async function room_files(home, raw, { trust = false } = {}) {
   const { input, config } = await member_room_context(home, raw, { trust });
-  return { room_id: input.room_id, ...read_project_files(config.cwd, input.path, input.offset, input.query) };
+  const directories = room_directories(config);
+  if (input.query) return { room_id: input.room_id, ...search_project_roots(directories, input.query) };
+  const root = input.root ?? 0;
+  if (!Number.isSafeInteger(root) || root < 0 || (directories.length && root >= directories.length)) throw new Error('项目目录编号无效，请刷新后重试');
+  return { room_id: input.room_id, root, ...read_project_files(directories[root], input.path, input.offset) };
 }
 
 /**
@@ -373,6 +386,33 @@ export async function remote_room_files(home, input) {
   assert_shared_home(home);
   guard_remote_request('room-files', input, { projects: launch_projects(home).projects, participants: launch_settings(home).participants, home });
   return room_files(home, input, { trust: true });
+}
+
+// The newest part of a long-running execution's log is what its detail view needs; older lines are dropped.
+const DETAIL_LOG_TAIL_BYTES = 4 * 1024 * 1024;
+
+/**
+ * What a member did in one execution, rebuilt from the raw event log its process wrote in the room's runtime directory
+ * (`<adapter>-free-<execution>.log`). The log stays on this computer: the page reads it here or through the relay.
+ * `available: false` when the execution kept no such log (an App or manual member, or an API member).
+ */
+export async function execution_details_command(home, raw, { trust = false } = {}) {
+  const { input, config } = await member_room_context(home, raw, { trust });
+  const execution_id = Number(input.execution_id);
+  if (!Number.isSafeInteger(execution_id) || execution_id <= 0) throw new Error('执行编号无效');
+  const suffix = `-free-${execution_id}.log`;
+  const name = existsSync(config.directory) ? readdirSync(config.directory).find(file => file.endsWith(suffix)) : undefined;
+  const parsed = name ? execution_details(name.slice(0, -suffix.length), read_log_tail(join(config.directory, name))) : null;
+  return { room_id: input.room_id, execution_id, available: Boolean(parsed), ...parsed };
+}
+
+/** The last bytes of a log as text, starting at a whole line. */
+function read_log_tail(path) {
+  const size = statSync(path).size, length = Math.min(size, DETAIL_LOG_TAIL_BYTES);
+  const buffer = Buffer.alloc(length), descriptor = openSync(path, 'r');
+  try { readSync(descriptor, buffer, 0, length, size - length); } finally { closeSync(descriptor); }
+  const text = buffer.toString('utf8');
+  return length < size ? text.slice(text.indexOf('\n') + 1) : text;
 }
 
 const CREATE_PREFERENCE_RANGES = { max_rounds: [0, 100], max_minutes: [0, 1440], goal_max_continues: [0, 100], goal_max_minutes: [0, 1440], chain_rounds: [0, 100],
@@ -578,6 +618,9 @@ function launch_input(input) {
   if (!['conversation', 'web'].includes(value.entry)) throw new Error('entry 必须为 conversation 或 web');
   if (value.entry === 'conversation' && (typeof value.current_session_id !== 'string' || !value.current_session_id.trim())) throw new Error('对话入口须提供当前实际会话的 current_session_id');
   if (value.cwd && (typeof value.cwd !== 'string' || !isAbsolute(value.cwd))) throw new Error('cwd 必须为完整绝对路径');
+  // A new room's extra project directories; an existing room changes them through room-settings.
+  if (!value.room_id && value.extra_directories?.length) check_extra_directories(value.cwd, value.extra_directories);
+  else if (!value.room_id) delete value.extra_directories;
   if (value.project_access && !PROJECT_ACCESS.includes(value.project_access)) throw new Error('project_access 只能为 read、write、auto 或 full');
   if (value.room_id && !/^[A-Za-z0-9_-]+$/.test(value.room_id)) throw new Error('房间编号无效');
   if (!value.room_id && !value.room?.submission_id) throw new Error('新房间须提供 room.submission_id；重试沿用原编号');
@@ -622,7 +665,7 @@ function launch_config(home, input, room, directory, options) {
   const members = launch_members(input, Object.keys(participants), options);
   return validate_config({ site: input.site, room: room.id || 'preview', token: options.token, mode: 'free', participants, members, api_home: home,
     scheduler: input.scheduler || undefined,
-    cwd: input.cwd, discussion_project: input.discussion_project, project_access: input.project_access || undefined,
+    cwd: input.cwd, extra_directories: input.extra_directories, discussion_project: input.discussion_project, project_access: input.project_access || undefined,
     data_directory: join(directory, 'runtime'), draft_directory: service_drafts(home, join(directory, 'runtime')) }, directory);
 }
 
@@ -640,7 +683,7 @@ function free_launch_config(home, input, room, directory, options) {
   if (workflow) get_workflow(home, workflow.id);
   if (workflow && Object.values(workflow.members).some(name => !names.includes(name))) throw new Error('工作流成员须在本次邀请的成员中');
   return validate_config({ site: input.site, room: room.id || 'preview', token: options.token, mode: 'free', participants, members, api_home: home,
-    scheduler: input.scheduler || undefined, cwd: input.cwd, project_access: input.project_access || undefined, workflow,
+    scheduler: input.scheduler || undefined, cwd: input.cwd, extra_directories: input.extra_directories, project_access: input.project_access || undefined, workflow,
     host_workflows: input.host_workflows === true || undefined, api_max_requests: input.api_max_requests,
     data_directory: join(directory, 'runtime'), draft_directory: service_drafts(home, join(directory, 'runtime')) }, directory);
 }
@@ -704,7 +747,9 @@ function same_directory(left, right) {
 /**
  * Prove an invited existing conversation is on this machine before it can hold a turn, so a mistyped ID
  * fails here instead of pausing the discussion later. Claude stores sessions per directory and resumes only
- * from the original one, so its cwd follows the session; a different room project is refused.
+ * from the original one, so its cwd follows the session: a session kept elsewhere than the room's project joins as a
+ * member working in its own directory (it only reads the room's directories); only a directory the member's own
+ * settings name explicitly must match.
  */
 export function borrowed_session(name, profile, room_cwd, env = process.env) {
   const id = profile.session_id;
@@ -718,9 +763,8 @@ export function borrowed_session(name, profile, room_cwd, env = process.env) {
   if (adapter.adopt !== 'own_cwd') return profile;
   const cwd = adapter.session.cwd(id, { env });
   if (!cwd) throw new Error(`${name}：${adapter.label} 会话 ${id} 没有记录原工作目录，无法续接`);
-  const wanted = profile.cwd || room_cwd;
-  if (wanted && !same_directory(wanted, cwd)) throw new Error(`${name}：这个 Claude 会话属于 ${cwd}，只能在原目录续接；请让项目目录与它一致，或留空会话 ID 新建会话`);
-  return { ...profile, cwd: wanted || cwd };
+  if (profile.cwd && !same_directory(profile.cwd, cwd)) throw new Error(`${name}：这个 ${adapter.label} 会话属于 ${cwd}，只能在原目录续接；请让此 AI 的工作目录与它一致，或留空会话 ID 新建会话`);
+  return { ...profile, cwd: profile.cwd || (room_cwd && same_directory(room_cwd, cwd) ? room_cwd : cwd) };
 }
 
 // An owner credential the website accepted is trusted this long for read-only file browsing in a long-running process
@@ -824,19 +868,36 @@ export async function room_member(home, raw, locked = false) {
 
 
 /**
- * Change this room's runner settings: `api_max_requests`, how many model requests one execution of an API member may
- * make (0 = no limit). Read at each delivery, so it applies from the next execution.
+ * Change this room's runner settings, any of: `api_max_requests`, how many model requests one execution of an API member
+ * may make (0 = no limit); `cwd`, the main project directory, accepted only while the room has none (once set it never
+ * changes: sessions and file-change tracking are bound to it); `extra_directories`, the project directories shared
+ * besides the main one, replaced as a whole. Members already in a room that gets its main directory keep working where
+ * their sessions are (their `cwd` is pinned to '') and reach the room's directories as extra ones; members invited later
+ * work in it. Everything is read at each delivery, so it applies from the next execution and keeps every session.
  */
 export async function room_settings(home, raw) {
   const { input, path } = await member_room_context(home, raw);
-  const value = input.api_max_requests;
-  if (!Number.isInteger(value)) throw new Error('api_max_requests 须为整数');
+  const { api_max_requests: requests, extra_directories: directories, cwd } = input;
+  if (requests === undefined && directories === undefined && cwd === undefined) throw new Error('须提供 api_max_requests、cwd 或 extra_directories');
+  if (requests !== undefined && !Number.isInteger(requests)) throw new Error('api_max_requests 须为整数');
   const release = acquire_lock(join(dirname(path), 'configuration-edit'));
   try {
-    const next = { ...configuration_snapshot(path).config, api_max_requests: value };
+    const config = configuration_snapshot(path).config;
+    const next = { ...config, ...(requests !== undefined ? { api_max_requests: requests } : {}) };
+    if (cwd !== undefined) {
+      if (config.cwd) throw new Error('本房间已有项目目录，建房后不能更改；可添加其他项目目录');
+      if (typeof cwd !== 'string' || !isAbsolute(cwd) || !existsSync(cwd) || !statSync(cwd).isDirectory()) throw new Error('项目目录须为本机已有文件夹的完整路径');
+      next.cwd = cwd;
+      next.participants = Object.fromEntries(Object.entries(config.participants || {}).map(([name, profile]) => [name, { ...profile, cwd: profile.cwd ?? '' }]));
+    }
+    if (directories !== undefined) {
+      check_extra_directories(next.cwd, directories);
+      next.extra_directories = directories.length ? directories : undefined;
+    }
     validate_config(next, dirname(path));
     atomic_json(path, next);
-    return { room_id: input.room_id, api_max_requests: value };
+    return { room_id: input.room_id, ...(requests !== undefined ? { api_max_requests: requests } : {}),
+      ...(cwd !== undefined ? { project_directory: cwd } : {}), ...(directories !== undefined ? { extra_directories: directories } : {}) };
   } finally { release(); }
 }
 
@@ -1774,6 +1835,7 @@ export async function launch_main(args = process.argv.slice(2), input_text) {
   else if (positionals[0] === 'stt' && input) result = await stt_part(home, input);
   else if (positionals[0] === 'room-models' && input) result = await room_models(home, input);
   else if (positionals[0] === 'room-files' && input) result = await room_files(home, input);
+  else if (positionals[0] === 'execution-details' && input) result = await execution_details_command(home, input);
   else if (positionals[0] === 'models' && adapter_profile(input?.adapter)?.kind === 'api') result = await api_models(home, input);
   else if (positionals[0] === 'models' && input) {
     const saved = Object.values(launch_settings(home).participants).find(profile => profile.adapter === input.adapter);
@@ -1796,7 +1858,7 @@ export async function launch_main(args = process.argv.slice(2), input_text) {
     const { keyed_links } = await import('./remote_launch.mjs');
     const [site, link] = Object.entries(keyed_links(home).sites).find(([origin]) => !input?.site || origin === input.site) || [];
     if (!link) throw new Error('这台电脑还没有绑定线上网站，请先运行 codiscuss local connect 网站地址');
-    result = start_pairing(home, { site, fingerprint: machine_fingerprint(link), temporary: input?.temporary === true });
+    result = start_pairing(home, { site, fingerprint: machine_fingerprint(link), temporary: input?.temporary === true, without_passkey: input?.without_passkey === true });
   }
   else if (positionals[0] === 'devices' && !values.remote) {
     result = input?.revoke ? revoke_device(home, String(input.revoke)) : list_devices(home);

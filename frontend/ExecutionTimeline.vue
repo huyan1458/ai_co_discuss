@@ -9,12 +9,13 @@
  * a KPI row, a ticked axis with room ahead of live work, a now cursor, hand-off lines and bars on wells.
  */
 import { computed, inject, onBeforeUnmount, onMounted, reactive, ref, watch } from "vue";
-import { FOLD_GAP_MS, PHASE_KINDS, PHASE_LABELS, STALL_MS, STATE_LABELS, axis_ticks, execution_log, format_duration, handoff_lines, notes_between, row_status,
+import { FOLD_GAP_MS, PHASE_KINDS, PHASE_LABELS, STALL_MS, STATE_LABELS, THINKING_STALL_MS, axis_ticks, execution_log, format_duration, handoff_lines, notes_between, row_status,
   pan_window, snapshot_at, timeline_axis, timeline_rows, timeline_runs, timeline_summary, view_axis, zoom_window } from "./timeline-model.js";
 
 const emit = defineEmits(["detail"]);
 const { view, bridge } = inject("discussion");
 const STALL_MINUTES = STALL_MS / 60_000;
+const THINKING_STALL_MINUTES = THINKING_STALL_MS / 60_000;
 const LIVE_REFRESH_MS = 2000;
 const FULL_REFRESH_MS = 60_000;
 // With few rows the page redraws every frame; with many it redraws this often, so a long list stays responsive.
@@ -432,7 +433,7 @@ const hover_notes = computed(() => {
         <div><dt>执行</dt><dd><span :key="summary.executions" class="wf-roll">{{ summary.executions }}</span></dd></div>
         <div><dt>进行中</dt><dd :class="summary.running ? 'is-live' : 'is-zero'"><span :key="summary.running" class="wf-roll">{{ summary.running }}</span></dd></div>
         <div><dt>失败</dt><dd :class="summary.failed ? 'is-failed' : 'is-zero'"><span :key="summary.failed" class="wf-roll">{{ summary.failed }}</span></dd></div>
-        <div :title="`超过 ${STALL_MINUTES} 分钟没有输出`"><dt>可能卡住</dt><dd :class="summary.stalled ? 'is-warn' : 'is-zero'"><span :key="summary.stalled" class="wf-roll">{{ summary.stalled }}</span></dd></div>
+        <div :title="`超过 ${STALL_MINUTES} 分钟没有输出（思考中超过 ${THINKING_STALL_MINUTES} 分钟）`"><dt>可能卡住</dt><dd :class="summary.stalled ? 'is-warn' : 'is-zero'"><span :key="summary.stalled" class="wf-roll">{{ summary.stalled }}</span></dd></div>
         <div :title="axis.folds.length ? `已折叠 ${axis.folds.length} 段超过 ${FOLD_GAP_MS / 60000} 分钟的空闲` : undefined"><dt>有效时长</dt><dd>{{ format_duration(axis.busy_ms) }}</dd></div>
         <div title="连续调用同一工具合并为一段"><dt>工具与命令</dt><dd :class="{ 'is-zero': !summary.tool_segments }"><span :key="summary.tool_segments" class="wf-roll">{{ summary.tool_segments }}</span> 段</dd></div>
       </dl>

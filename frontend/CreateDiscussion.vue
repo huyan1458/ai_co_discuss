@@ -7,6 +7,7 @@ import ChainRoundsField from "./ChainRoundsField.vue";
 import DiscussionLimits from "./DiscussionLimits.vue";
 import GoalConfig from "./GoalConfig.vue";
 import ExpertCard from "./ExpertCard.vue";
+import ExtraDirectoriesField from "./ExtraDirectoriesField.vue";
 import ProjectDirectoryField from "./ProjectDirectoryField.vue";
 import RosterAdd from "./RosterAdd.vue";
 import SchedulerSettings from "./SchedulerSettings.vue";
@@ -201,6 +202,9 @@ const summary = computed(() => {
         <UFormField label="话题名称" required><UInput :model-value="value('title')" :maxlength="80" required autofocus size="lg" placeholder="这次要一起做什么？" class="w-full" @update:model-value="write('title', $event)" /></UFormField>
         <UFormField label="项目目录（可选）" :description="view.launch.available ? '本机唤醒的成员在此目录读写文件；不填则各用软件默认目录。' : relay ? `由电脑「${relay.name}」唤醒的成员在所选项目中读写文件；不选则各用软件默认目录。` : '连接本机服务后可指定：本机唤醒的成员将在此目录读写文件。'">
           <ProjectDirectoryField :disabled="!launchable" />
+          <!-- Rarely needed, so only a link under the main directory until the first extra one is added. -->
+          <ExtraDirectoriesField v-if="view.launch.available && view.launch.workspace.cwd" class="create-extra-directories" :model-value="view.launch.workspace.extra_directories || []"
+            @update:model-value="bridge.write_launch('workspace', 'extra_directories', $event.length ? $event : undefined)" />
         </UFormField>
       </section>
 
@@ -267,6 +271,7 @@ const summary = computed(() => {
 /* The folder label is a caption for the form, so it hugs the header and the first section. */
 .create-scroll > .channel-create-location { margin: -8px 0 -14px; }
 .create-section { display: flex; flex-direction: column; gap: 14px; }
+.create-extra-directories { margin-top: 6px; }
 .create-section + .create-section { padding-top: 22px; border-top: 1px solid var(--ui-border-muted); }
 .create-section h3 { display: flex; align-items: center; gap: 9px; color: var(--ui-text-highlighted); font-size: 13px; font-weight: 600; }
 .create-section h3 > span { display: grid; place-items: center; width: 20px; height: 20px; border-radius: 50%; background: color-mix(in srgb, var(--channel-accent) 18%, transparent); color: var(--channel-accent); font-size: 11px; }

@@ -7,6 +7,8 @@ import { computed, inject, ref, watch } from "vue";
 import ApiRequestsField from "./ApiRequestsField.vue";
 import ChainRoundsField from "./ChainRoundsField.vue";
 import EffortSlider from "./EffortSlider.vue";
+import ExtraDirectoriesField from "./ExtraDirectoriesField.vue";
+import ProjectDirectoryField from "./ProjectDirectoryField.vue";
 import HostWorkflowSwitch from "./HostWorkflowSwitch.vue";
 import InviteDialog from "./InviteDialog.vue";
 import WorkflowControl from "./WorkflowControl.vue";
@@ -56,6 +58,31 @@ async function save_rounds(value) {
 // The API request limit the field shows: the saved one, or the value being saved until the room models are read again.
 const saving_requests = ref(false), requests_shown = ref(0);
 watch(() => saved.value?.api_max_requests, (value) => { requests_shown.value = value ?? 0; }, { immediate: true });
+
+// The project directories being edited: the main one only while the room has none (it is set once), and the extra
+// ones, saved as a whole; blank rows are dropped when saving.
+const saving_directories = ref(false), directories_draft = ref([]), main_draft = ref("");
+watch(() => saved.value?.extra_directories, (value) => { directories_draft.value = [...(value || [])]; }, { immediate: true });
+watch(() => saved.value?.project_directory, () => { main_draft.value = ""; });
+const directories_changed = computed(() => Boolean(main_draft.value.trim())
+  || JSON.stringify(directories_draft.value) !== JSON.stringify(saved.value?.extra_directories || []));
+const directories_editable = computed(() => view.value.access?.can_manage && !room.value.archived && view.value.launch.available);
+
+/** Save the room's main project directory (once) or its extra ones; members work with them from their next execution. */
+async function save_directories() {
+  saving_directories.value = true;
+  try {
+    if (main_draft.value.trim()) await bridge.set_room_project_directory(main_draft.value.trim());
+    else await bridge.set_room_extra_directories(directories_draft.value.map((path) => path.trim()).filter(Boolean));
+    bridge.notify("info", "项目目录已保存，从各成员下一次执行起生效");
+  } catch { /* The error is shown; the draft stays for another try. */ } finally { saving_directories.value = false; }
+}
+
+/** Put the directories back as saved. */
+function reset_directories() {
+  main_draft.value = "";
+  directories_draft.value = [...(saved.value?.extra_directories || [])];
+}
 
 /** Save a new API request limit for this room; it applies from each API member's next execution. */
 async function save_requests(value) {
@@ -281,6 +308,8 @@ const created = computed(() => room.value.created_at ? new Date(room.value.creat
                   :disabled="option.disabled || !files(member).editable || Boolean(switching)" @click="switch_access(member, option.value)">{{ option.label }}</button>
               </div>
               <span v-else class="overview-muted" :title="files(member).hint">{{ files(member).text }}</span>
+              <p v-if="saved?.participants?.[member.name]?.outside_directory" class="overview-outside" :title="saved.participants[member.name].outside_directory">
+                <UIcon name="i-lucide-triangle-alert" />在 {{ saved.participants[member.name].outside_directory }} 工作，房间目录{{ saved.participants[member.name].outside_enforced ? '只读' : '只读（仅任务要求，程序拦不住）' }}</p>
             </dd></div>
           </dl>
           <footer class="member-card-actions" :aria-label="`${member.name} 的操作`">
@@ -311,6 +340,22 @@ const created = computed(() => room.value.created_at ? new Date(room.value.creat
         <div v-if="saved?.registered"><dt>API 请求上限</dt><dd>
           <ApiRequestsField :model-value="requests_shown" :disabled="!view.access?.can_manage || room.archived || saving_requests" @update:model-value="save_requests" /></dd></div>
         <div v-if="!free"><dt>逐人追问</dt><dd>{{ room.named_followup ? '开启：主持人每轮给每位专家写针对性追问' : '关闭：首轮后请专家回应上一轮观点' }}</dd></div>
+        <!-- One row for every project directory: the main one locked once set, the extra ones edited below it. -->
+        <div v-if="saved?.registered"><dt>项目目录</dt><dd class="overview-directories">
+          <template v-if="saved.project_directory">
+            <div class="overview-address" title="主目录，设置后不能更改"><UIcon name="i-lucide-lock" class="overview-lock" /><code>{{ saved.project_directory }}</code>
+              <UButton icon="i-lucide-copy" color="neutral" variant="ghost" size="xs" aria-label="复制项目目录" @click="act('copy', saved.project_directory)" /></div>
+            <ExtraDirectoriesField v-model="directories_draft" :disabled="!directories_editable || saving_directories" />
+          </template>
+          <ProjectDirectoryField v-else-if="directories_editable" v-model="main_draft" compact placeholder="为本房间设置项目目录的完整路径" :disabled="saving_directories" />
+          <span v-else class="overview-muted">未指定</span>
+          <div v-if="directories_changed" class="overview-directories-actions">
+            <UButton label="取消" color="neutral" variant="ghost" size="xs" :disabled="saving_directories" @click="reset_directories" />
+            <UButton label="保存" size="xs" class="channel-primary-button" :loading="saving_directories" @click="save_directories" />
+          </div>
+          <span class="overview-muted">{{ saved.project_directory
+            ? '成员按自己的项目权限读写其他目录，在别处工作的成员只读。改动从各成员下一次执行起生效，会话保留。'
+            : '主目录只能设置一次，之后不能更改。已在房间的成员保留原会话，按自己的项目权限读写它；之后邀请的成员在其中工作。' }}</span></dd></div>
         <div><dt>阅读地址</dt><dd class="overview-address"><code>{{ reading }}</code><UButton icon="i-lucide-copy" color="neutral" variant="ghost" size="xs" aria-label="复制阅读地址" @click="act('copy', reading)" /></dd></div>
         <div v-if="created"><dt>创建时间</dt><dd>{{ created }}</dd></div>
       </dl>
@@ -373,6 +418,12 @@ const created = computed(() => room.value.created_at ? new Date(room.value.creat
 .member-card-actions { display: flex; flex-wrap: wrap; justify-content: space-between; gap: 4px 16px; padding: 6px 10px; border-top: 1px solid var(--ui-border-muted); }
 .member-card-actions > div { display: flex; flex-wrap: wrap; gap: 2px; }
 .overview-address { display: flex; align-items: center; gap: 4px; min-width: 0; }
+.overview-outside { display: flex; align-items: center; gap: 4px; margin: 4px 0 0; overflow: hidden; color: var(--ui-warning, #d9a441); font-size: 12px; white-space: nowrap; text-overflow: ellipsis; }
+.overview-outside > [class*="icon"] { flex-shrink: 0; width: 12px; height: 12px; }
+.overview-lock { flex-shrink: 0; width: 12px; height: 12px; color: var(--ui-text-dimmed); }
+.overview-directories { display: flex; flex-direction: column; gap: 6px; max-width: 560px; }
+.overview-directories-actions { display: flex; justify-content: flex-end; gap: 6px; }
+.overview-directories > .overview-muted { font-size: 12px; }
 .overview-address code { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 12px; }
 .overview-local { display: flex; gap: 10px; margin: 0 0 8px; color: var(--ui-text-muted); font-size: 12px; }
 .overview-result { margin: 8px 0 0; color: var(--ui-text-muted); font-size: 12px; }

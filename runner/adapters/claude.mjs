@@ -106,30 +106,36 @@ export function claude_rule_path(directory) {
 
 /**
  * Allow the listed codiscuss website subcommands and draft writes for this run; a writable member also edits its project
- * and runs any command. User rules are added after. Claude Code on Windows may run commands through its PowerShell tool
- * instead of Bash, so both are listed.
+ * and runs any command. The room's other project directories (`task.extra_directories`) are added as working
+ * directories, edited only where their access is write. User rules are added after. Claude Code on Windows may run
+ * commands through its PowerShell tool instead of Bash, so both are listed.
  */
 export function claude_permissions(config, task) {
+  const extras = task.extra_directories || [];
+  const added = [task.directory, task.draft_directory, ...task.skill_directories, ...extras.map(item => item.path)];
   // A headless run cannot ask for approval: 自动 and a taken-over manual member use auto mode, as the original window
   // does, and 全放开 skips every check; the website commands and drafts stay pre-approved either way.
   if (['own', 'auto', 'full'].includes(config.project_access)) {
     const commands = TASK_SUBCOMMANDS.flatMap(command => [`Bash(codiscuss ${command} *)`, `PowerShell(codiscuss ${command} *)`]);
-    return ['--permission-mode', config.project_access === 'full' ? 'bypassPermissions' : 'auto', '--add-dir', task.directory, task.draft_directory, ...task.skill_directories, '--allowedTools',
-      ...commands, `Edit(${claude_rule_path(task.draft_directory)}/**)`, ...(config.allowed_tools || []), ...skill_edit_denial(task)];
+    return ['--permission-mode', config.project_access === 'full' ? 'bypassPermissions' : 'auto', '--add-dir', ...added, '--allowedTools',
+      ...commands, `Edit(${claude_rule_path(task.draft_directory)}/**)`, ...(config.allowed_tools || []), ...edit_denial(task)];
   }
-  const commands = runs_commands(config) ? ['Bash', 'PowerShell']
+  const commands = runs_commands(config, extras) ? ['Bash', 'PowerShell']
     : TASK_SUBCOMMANDS.flatMap(command => [`Bash(codiscuss ${command} *)`, `PowerShell(codiscuss ${command} *)`]);
-  const writable = [task.draft_directory, ...(runs_commands(config) ? [project_directory(config)] : [])];
-  return ['--add-dir', task.directory, task.draft_directory, ...task.skill_directories, '--allowedTools',
-    ...commands, ...writable.map(directory => `Edit(${claude_rule_path(directory)}/**)`), ...(config.allowed_tools || []), ...skill_edit_denial(task)];
+  const writable = [task.draft_directory, ...(runs_commands(config, extras)
+    ? [project_directory(config), ...extras.filter(item => item.access === 'write').map(item => item.path)].filter(Boolean) : [])];
+  return ['--add-dir', ...added, '--allowedTools',
+    ...commands, ...writable.map(directory => `Edit(${claude_rule_path(directory)}/**)`), ...(config.allowed_tools || []), ...edit_denial(task)];
 }
 
 /**
- * Skill folders (the shared skills and an enabled workflow) are read, never edited. This stops Claude's own edit tools only;
- * a command the member may run can still write there, and Windows has no native sandbox to prevent it.
+ * Skill folders (the shared skills and an enabled workflow) are read, never edited, and so are the room's project
+ * directories this member may only read. This stops Claude's own edit tools only; a command the member may run can
+ * still write there, and Windows has no native sandbox to prevent it.
  */
-function skill_edit_denial(task) {
-  return ['--disallowedTools', ...task.skill_directories.map(directory => `Edit(${claude_rule_path(directory)}/**)`)];
+function edit_denial(task) {
+  const read_only = (task.extra_directories || []).filter(item => item.access === 'read').map(item => item.path);
+  return ['--disallowedTools', ...[...task.skill_directories, ...read_only].map(directory => `Edit(${claude_rule_path(directory)}/**)`)];
 }
 
 /** What Claude's stream-json events say the agent is doing, which tool it starts, and text it wrote to the user. */
@@ -153,7 +159,41 @@ const events = {
     return (event.message?.content || []).filter(block => block.type === 'tool_use' && EDIT_TOOL_NAMES.test(block.name))
       .map(block => String(block.input?.file_path || block.input?.notebook_path || '')).filter(Boolean);
   },
+  detail: claude_detail,
 };
+
+/** The one argument that names what a tool call does: its command, file, pattern, query or address. */
+function tool_subject(block) {
+  const input = block.input || {};
+  const subject = input.command ?? input.file_path ?? input.notebook_path ?? input.pattern ?? input.query ?? input.url ?? input.description;
+  return typeof subject === 'string' ? subject : JSON.stringify(input);
+}
+
+/** Text of a tool result, which Claude gives as a string or a list of blocks. */
+function result_text(content) {
+  if (typeof content === 'string') return content;
+  return (Array.isArray(content) ? content : []).map(part => part?.text ?? '').join('\n');
+}
+
+/**
+ * One stream-json event as execution-detail entries: a tool call and its result share the call's id. Claude Code
+ * streams thinking as signed blocks with empty text, so thinking shows only when it carries text.
+ */
+function claude_detail(event) {
+  const blocks = Array.isArray(event.message?.content) ? event.message.content : [];
+  if (event.type === 'assistant') return blocks.flatMap(block => {
+    if (block.type === 'text' && block.text?.trim()) return [{ kind: 'message', body: block.text }];
+    if (block.type === 'thinking' && block.thinking?.trim()) return [{ kind: 'thinking', body: block.thinking }];
+    if (block.type !== 'tool_use') return [];
+    const kind = /^(Bash|PowerShell)$/.test(block.name) ? 'command' : EDIT_TOOL_NAMES.test(block.name) ? 'edit'
+      : /^Web(Search|Fetch)$/.test(block.name) ? 'search' : 'tool';
+    return [{ id: `tool-${block.id}`, kind, title: kind === 'command' ? tool_subject(block) : `${block.name} ${tool_subject(block)}`, state: 'running' }];
+  });
+  if (event.type === 'user') return blocks.filter(block => block.type === 'tool_result')
+    .map(block => ({ id: `tool-${block.tool_use_id}`, body: result_text(block.content), state: block.is_error ? 'failed' : 'done' }));
+  if (event.type === 'result' && event.is_error) return [{ kind: 'error', body: String(event.result || event.subtype || '本轮失败') }];
+  return [];
+}
 
 /**
  * The open Claude Code window holding one session, with its cross-session inbox, or null when no live session holds it.
@@ -260,6 +300,11 @@ export function watch_window_turn({ file, offset, pid, marker }, task, { interva
   }
 }
 
+/** One user message as a stream-json input line. */
+function claude_input(text) {
+  return `${JSON.stringify({ type: 'user', message: { role: 'user', content: [{ type: 'text', text }] } })}\n`;
+}
+
 function process_alive(pid) {
   try { process.kill(pid, 0); return true; } catch { return false; }
 }
@@ -277,12 +322,13 @@ async function deliver(config, binding, task, spawn_process = spawn) {
   // A rewound or forked member first forks its earlier session into the ID it is now bound to, cut at `at` when given.
   const fork = binding.fork ? ['--resume', binding.fork.from, '--fork-session', ...(binding.fork.at ? ['--resume-session-at', binding.fork.at] : []), '--session-id', session_id]
     : [binding.session_id ? '--resume' : '--session-id', session_id];
-  const args = ['-p', '--output-format', 'stream-json', '--verbose', ...fork,
+  // The prompt goes in as the first stdin message and stdin stays open, so an interjection can follow while the turn runs.
+  const args = ['-p', '--input-format', 'stream-json', '--output-format', 'stream-json', '--verbose', ...fork,
     ...(config.model ? ['--model', config.model] : []), ...(config.effort ? ['--effort', config.effort] : []), ...claude_permissions(config, task)];
   let child;
   try {
-    child = spawn_process(config.executable, [...args, '--', task.prompt], {
-      cwd: launch_directory(config, task), windowsHide: true, shell: false, stdio: ['ignore', 'pipe', 'pipe'],
+    child = spawn_process(config.executable, args, {
+      cwd: launch_directory(config, task), windowsHide: true, shell: false, stdio: ['pipe', 'pipe', 'pipe'],
       env: { ...standalone_claude_env(), DISCUSS_ACCESS_FILE: task.access_path },
     });
   } catch (error) { throw not_sent(error); }
@@ -290,7 +336,16 @@ async function deliver(config, binding, task, spawn_process = spawn) {
   let spawned = false;
   const log_path = resolve(task.directory, `claude-${task.id}.log`);
   let output = '';
-  child.stdout.on('data', chunk => { output += chunk; task.on_output(log_path, chunk); });
+  let partial_line = '';
+  child.stdout.on('data', chunk => {
+    output += chunk;
+    task.on_output(log_path, chunk);
+    // With streamed input Claude waits for more after its result; closing stdin lets it exit.
+    const lines = (partial_line + chunk).split('\n');
+    partial_line = lines.pop();
+    if (!child.stdin.writableEnded && lines.some(line => json_line(line)?.type === 'result')) child.stdin.end();
+  });
+  child.stdin.on('error', () => { /* A process that already exited takes no more input. */ });
   child.stderr.on('data', chunk => task.on_output(log_path, chunk));
   watch_events(claude, child.stdout, task);
   child.once('close', code => {
@@ -308,9 +363,17 @@ async function deliver(config, binding, task, spawn_process = spawn) {
     child.once('spawn', () => { spawned = true; resolve_spawn(); });
     child.once('error', error => spawned ? task.on_failure(error.message) : reject(not_sent(error)));
   });
+  child.stdin.write(claude_input(task.prompt));
   // A failed spawn creates no session; only a successfully started process can be resumed.
   task.on_binding(session_id);
-  return { session_id, status: 'accepted', capabilities: PROCESS };
+  // An interjection reaches the turn at its next tool call; text written in one go without tools waits for the next turn.
+  const steer = text => {
+    if (child.stdin.writableEnded || child.exitCode !== null) return false;
+    child.stdin.write(claude_input(text));
+    task.on_output(log_path, `${JSON.stringify({ type: 'codiscuss.interjection', text })}\n`);
+    return true;
+  };
+  return { session_id, status: 'accepted', capabilities: PROCESS, steer };
 }
 
 /** Where Claude keeps one session's log, or '' when this machine has none by that ID. */

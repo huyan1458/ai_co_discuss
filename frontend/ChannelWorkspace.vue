@@ -10,6 +10,7 @@ import RoomOverview from "./RoomOverview.vue";
 import ExecutionTimeline from "./ExecutionTimeline.vue";
 import EventLog from "./EventLog.vue";
 import ProjectFiles from "./ProjectFiles.vue";
+import PrivateChat from "./PrivateChat.vue";
 import FilePreview from "./FilePreview.vue";
 import { busy } from "./member-actions.js";
 
@@ -115,12 +116,15 @@ onBeforeUnmount(() => document.removeEventListener("pointerdown", collapse_brief
 const selected_tab = computed({ get: () => view.value.tab, set: (value) => act("tab", value) });
 const project_directory = computed(() => view.value.launch.room_models?.room_id === room.value?.id
   ? view.value.launch.room_models?.project_directory || "" : "");
+// The main project directory first, then the room's other ones.
+const project_directories = computed(() => project_directory.value ? [project_directory.value, ...(view.value.launch.room_models?.extra_directories || [])] : []);
 /** Room tools keep their positions; files shows a hint until a project directory is saved. */
 const tabs = computed(() => [
   { value: "discussion", label: "消息", icon: "i-lucide-message-square" },
   { value: "timeline", label: "执行", icon: "i-lucide-chart-gantt" },
   { value: "overview", label: "房间", icon: "i-lucide-sliders-horizontal" },
   { value: "files", label: "文件", icon: "i-lucide-files", title: project_directory.value || "" },
+  { value: "private", label: "私聊", icon: "i-lucide-messages-square" },
 ]);
 // Retired pages: consensus and discussion history open from the host brief, access moved into the room page.
 const MERGED_TABS = { context: "discussion", history: "discussion", access: "overview" };
@@ -361,8 +365,11 @@ function resize_nav_by_key(event) {
           <EventLog v-else @detail="open_detail" />
         </div>
         <div v-if="view.tab === 'files'" class="content-page" role="tabpanel" aria-label="文件">
-          <ProjectFiles v-if="project_directory" :key="room.id" :directory="project_directory" />
+          <ProjectFiles v-if="project_directory" :key="room.id" :directories="project_directories" />
           <p v-else class="channel-files-unset" role="status">当前未设置项目目录</p>
+        </div>
+        <div v-if="view.tab === 'private'" class="content-page">
+          <PrivateChat :key="room.id" />
         </div>
         <FilePreview />
         </div>

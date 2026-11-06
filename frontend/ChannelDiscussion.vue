@@ -10,6 +10,7 @@ import ExecutionNotes from "./ExecutionNotes.vue";
 import WorkingText from "./WorkingText.vue";
 import QueuedMessages from "./QueuedMessages.vue";
 import { active_workflow } from "./workflow-state.js";
+import { open_private_chat } from "./private-chat.js";
 import { use_read_aloud } from "./read-aloud.js";
 import { use_broadcast } from "./broadcast.js";
 import { use_voice_input } from "./voice-input.js";
@@ -330,6 +331,11 @@ const NAV_LONG_PRESS_MS = 450;
 const NAV_TOUCH_SLOP = 8;
 let navigation_press = null;
 let suppress_navigation_click = false;
+// Feel.words("smooth, crisp"): m 1, 2.62 Hz, ζ 0.96, no overshoot, settles in 327 ms. A sent message and the transcript
+// under it move on this one spring: unhurried enough to read as gliding, damped so it lands without a bounce.
+const SEND_SPRING = { type: "spring", mass: 1, stiffness: 270.0323764138049, damping: 31.550710806760762 };
+// The sending card rises this far from the composer as it fades in.
+const SEND_RISE = 12;
 const preview_y = useSpring(0, NAV_SPRING);
 const preview_height = useSpring(0, NAV_SPRING);
 const preview_visibility = useSpring(0, NAV_SPRING);
@@ -351,9 +357,9 @@ const speaking_turn = computed(() => ["pending", "notified"].includes(room.value
   && !["paused", "concluded"].includes(room.value.phase) ? room.value.current_turn : null);
 const is_manual_member = (member) => member?.access === "manual" && member.status === "active";
 const speaking_member = computed(() => (room.value.members || []).find((member) => member.name === speaking_turn.value?.expert));
-// The first invited manual expert that has not registered yet; the notice stays until it does.
-const unregistered_member = computed(() => room.value?.archived ? null
-  : (room.value?.members || []).find((member) => is_manual_member(member) && !member.registered_at) || null);
+// Invited manual experts that have not registered yet; each keeps its own notice until it does.
+const unregistered_members = computed(() => room.value?.archived ? []
+  : (room.value?.members || []).filter((member) => is_manual_member(member) && !member.registered_at));
 const queue_hint = computed(() => {
   const member = speaking_member.value;
   if (!speaking_turn.value || !member) return "";
@@ -449,6 +455,8 @@ function working_status(message) {
   const silent = Math.max(0, observed - (message.activity_at || message.created_at));
   if (!message.working || !shows_progress(message) || silent < STALL_SECONDS) return { text: message.text, live: message.working };
   if (message.activity === "command") return { text: `命令已运行 ${format_elapsed(silent)}`, live: true };
+  // Deep reasoning reports nothing until it ends; only a much longer silence there suggests a hang.
+  if (message.activity === "thinking" && silent < THINKING_STALL_SECONDS) return { text: `思考中，已 ${format_elapsed(silent)}无中间输出`, live: true };
   return { text: `已 ${format_elapsed(silent)}无输出，可能卡住`, live: false, warning: true };
 }
 /** Says in the note line who the draft will reach: the @mentioned members, else the host. */
@@ -511,6 +519,8 @@ function stop_state(execution) {
 const MAX_DELIVERY_RETRIES = 3;
 /** Long reasoning or a long reply can be silent for minutes; beyond this the card only warns, never stops. */
 const STALL_SECONDS = 180;
+/** Thinking emits no events until it ends (gpt xhigh was seen silent for 4 min), so it warns only after this long. */
+const THINKING_STALL_SECONDS = 600;
 const FREE_REQUEST_LABELS = { pending: ["待投递", "neutral"], delivering: ["处理中", "info"], completed: ["已回复", "success"],
   cancelled: ["已取消", "neutral"], failed: ["失败", "error"] };
 /** Each user message in a free room shows what happened to its request for every named member. */
@@ -707,6 +717,16 @@ const mention_folder = computed(() => {
   const path = slash < 0 ? "" : query.slice(0, slash).split("/").filter((part) => part && part !== ".").join("/");
   return { key: `dir:${path}`, path, filter: query.slice(slash + 1).toLocaleLowerCase() };
 });
+/**
+ * A search also finds names in the room's other project directories (`root` > 0). Such an entry is referenced by its
+ * full path, which cannot be typed after @, so it is picked whole as a card and never browsed.
+ */
+function in_extra_directory(entry) {
+  const directory = entry.root ? view.value.launch.room_models?.extra_directories?.[entry.root - 1] : "";
+  if (!directory) return entry;
+  const separator = directory.includes("\\") ? "\\" : "/";
+  return { ...entry, path: `${directory.replace(/[\\/]+$/, "")}${separator}${entry.path.split("/").join(separator)}`, absolute: true };
+}
 let mention_search_timer = 0;
 watch(() => mention_folder.value?.key, (key, previous) => {
   clearTimeout(mention_search_timer);
@@ -724,7 +744,7 @@ watch(() => mention_folder.value?.key, (key, previous) => {
     let entries = [];
     try {
       const result = await bridge.read_room_files(room_id, folder.path || "", 0, folder.search || "");
-      if (["directory", "search"].includes(result.kind)) entries = result.entries.filter((entry) => entry.kind !== "unavailable");
+      if (["directory", "search"].includes(result.kind)) entries = result.entries.filter((entry) => entry.kind !== "unavailable").map(in_extra_directory);
     } catch { /* An unreadable folder or failed search simply offers no files. */ }
     if (room.value?.id === room_id && key in mention_results.value) mention_results.value = { ...mention_results.value, [key]: entries };
   }, folder.search ? MENTION_SEARCH_DELAY_MS : 0);
@@ -884,8 +904,9 @@ async function select_mention(option) {
   const { entry } = option;
   // A folder opens its contents in the popup (paths with spaces cannot be typed after @, so those are picked whole);
   // a picked file or folder keeps its @path in the text and also becomes a card above the editor.
-  const browse = entry?.kind === "directory" && !option.self && !/\s/.test(entry.path);
-  const insertion = !entry ? `@${mention_handle(option.name)} `
+  const browse = entry?.kind === "directory" && !option.self && !entry.absolute && !/\s/.test(entry.path);
+  // A file in another project directory leaves no @ text: its card carries the full path.
+  const insertion = !entry ? `@${mention_handle(option.name)} ` : entry.absolute ? ""
     : `@${file_handle(entry.path)}${entry.kind === "directory" ? "/" : ""}${browse ? "" : " "}`;
   if (entry && !browse && !file_refs.value.some((ref) => ref.path === entry.path)) file_refs.value = [...file_refs.value, { path: entry.path, name: entry.name, kind: entry.kind }];
   mention_context.value = null;
@@ -1203,7 +1224,8 @@ function reading_top(element) {
 /** Polling follows new messages only while the reader is near the end. */
 function track_scroll() {
   const element = transcript.value;
-  if (!element || !element.clientHeight) return;
+  // Mid-glide the distance to the end is the glide's, not the reader's; following stays on.
+  if (!element || !element.clientHeight || glide.isAnimating()) return;
   follow_tail.value = element.scrollHeight - element.scrollTop - element.clientHeight < FOLLOW_TAIL_THRESHOLD;
   const bounds = element.getBoundingClientRect();
   const top = reading_top(element);
@@ -1218,13 +1240,57 @@ function track_scroll() {
   active_message.value = current ? Number(current.dataset.messageId) : null;
 }
 
-/** Reveal saved messages without interrupting a reader of earlier records. */
-async function follow_messages() {
+// The transcript's scroll position while it glides to a newly sent message; a later retarget keeps its velocity.
+const glide = useSpring(0, SEND_SPRING);
+glide.on("change", (value) => { if (transcript.value) transcript.value.scrollTop = value; });
+glide.on("animationComplete", () => track_scroll());
+
+/** Reveal saved messages without interrupting a reader of earlier records; `smooth` glides there on the send spring. */
+async function follow_messages(smooth = false) {
   await nextTick();
-  if (follow_tail.value && transcript.value) transcript.value.scrollTop = transcript.value.scrollHeight;
+  const element = transcript.value;
+  if (follow_tail.value && element) {
+    const bottom = element.scrollHeight - element.clientHeight;
+    // While a send is in flight every follow glides, whichever watcher sees the new card first.
+    if ((smooth === true || glide.isAnimating() || view.value.sending_message) && document.documentElement.dataset.motion !== "off") {
+      if (!glide.isAnimating()) glide.jump(element.scrollTop);
+      glide.set(bottom);
+    } else element.scrollTop = bottom;
+  }
   track_scroll();
 }
-watch([() => view.value.messages, free_working, free_failures], follow_messages, { immediate: true });
+watch([() => view.value.messages, free_working, free_failures], () => follow_messages(), { immediate: true });
+// The sending card's entrance, 0 → 1. The saved card that replaces it mid-entrance takes over the same value, so a fast
+// answer never cuts the rise short; `rising_id` is that saved card while it finishes.
+const send_entry = useSpring(1, SEND_SPRING);
+const send_y = useTransform(send_entry, [0, 1], [SEND_RISE, 0]);
+let rising_id = null;
+// Rendered like a saved message, so the card keeps its height when the saved copy replaces it.
+const sending_html = computed(() => view.value.sending_preview ? bridge.render_room_markdown(view.value.sending_preview.text) : "");
+/** Write the entrance onto the saved card that took over from the sending card. */
+function paint_rising(value) {
+  const card = rising_id && transcript.value?.querySelector(`[data-message-id="${rising_id}"]`);
+  if (card) Object.assign(card.style, { opacity: value, transform: `translateY(${SEND_RISE * (1 - value)}px)` });
+}
+send_entry.on("change", paint_rising);
+send_entry.on("animationComplete", () => {
+  const card = rising_id && transcript.value?.querySelector(`[data-message-id="${rising_id}"]`);
+  if (card) Object.assign(card.style, { opacity: "", transform: "" });
+  rising_id = null;
+});
+// The sending card shows before the site answers; it rises in while the transcript glides to it.
+watch(() => Boolean(view.value.sending_preview), (shown) => {
+  if (!shown) return;
+  if (!view.value.sending_preview.failed) { send_entry.jump(0); send_entry.set(1); }
+  follow_messages(true);
+});
+// Applied after the DOM update and before paint, so the saved card never shows a frame at full opacity.
+watch(() => view.value.messages, (messages) => {
+  const sent = send_entry.isAnimating() && messages.findLast((message) => message.just_sent);
+  if (!sent) return;
+  rising_id = sent.id;
+  paint_rising(send_entry.get());
+}, { flush: "post" });
 watch([() => view.value.room?.id, () => view.value.query, () => view.value.mention_only, () => view.value.host_only], () => {
   jump_target.value = null;
   active_message.value = null;
@@ -1276,8 +1342,9 @@ function stop_following(event) {
   reader.state.following = false;
 }
 
-/** Manual scrolling resumes tracking the message at the viewport's upper edge. */
+/** Manual scrolling resumes tracking the message at the viewport's upper edge; it also takes over from a glide. */
 function resume_tracking(event) {
+  glide.stop();
   if (event.type !== "keydown" || ["ArrowUp", "ArrowDown", "PageUp", "PageDown", "Home", "End", " "].includes(event.key)) jump_target.value = null;
 }
 
@@ -1687,7 +1754,7 @@ function copy_message(message) { act("copy", `${view.value.room_site}/r/${room.v
       <button type="submit" class="selection-comment-send" aria-label="添加到对话" title="添加到对话（Enter）"><UIcon name="i-lucide-arrow-up" /></button>
     </form>
     <ExcerptEditCard v-if="mark_editing" :key="mark_editing.excerpt.id" :comment="mark_editing.excerpt.comment" :style="{ left: `${mark_editing.left}px`, top: `${mark_editing.top}px` }" @save="save_mark" @cancel="close_mark" @remove="remove_mark" />
-    <div ref="transcript" v-memo="[message_groups, message_round_labels, free, room.session, view.access, active_message, expanded_answers.size, reader.state.message_id, room.title, view.query, view.mention_only, view.host_only, topic_anchor, end_anchor, request_badges, execution_reports, recommendations, adopting, scheduler_decisions, host_arrangements, pending, execution_notes, open_working_notes, editing, rewound_runs]" class="channel-transcript" aria-label="聊天记录" @scroll="track_scroll" @wheel.passive="resume_tracking($event); stop_following($event)" @touchstart.passive="resume_tracking" @touchmove.passive="stop_following" @pointerdown="stop_following" @keydown="resume_tracking($event); stop_following($event)">
+    <div ref="transcript" v-memo="[message_groups, view.sending_preview, message_round_labels, free, room.session, view.access, active_message, expanded_answers.size, reader.state.message_id, room.title, view.query, view.mention_only, view.host_only, topic_anchor, end_anchor, request_badges, execution_reports, recommendations, adopting, scheduler_decisions, host_arrangements, pending, execution_notes, open_working_notes, editing, rewound_runs]" class="channel-transcript" aria-label="聊天记录" @scroll="track_scroll" @wheel.passive="resume_tracking($event); stop_following($event)" @touchstart.passive="resume_tracking" @touchmove.passive="stop_following" @pointerdown="stop_following" @keydown="resume_tracking($event); stop_following($event)">
       <div v-if="!view.query && !view.mention_only && !view.host_only && !topic_anchor" class="channel-message-group channel-topic-group"><TopicCard :ref="(card) => topic_card = card" @edit="emit('edit')" /></div>
       <div v-for="group in message_groups" :key="group.key" class="channel-message-group">
         <USeparator :label="group.label" class="channel-date-divider" />
@@ -1736,6 +1803,7 @@ function copy_message(message) { act("copy", `${view.value.room_site}/r/${room.v
               <span v-else>{{ status.text }}</span>
             </span>
           <span v-if="view.access?.can_manage" class="channel-working-actions">
+              <UTooltip v-if="shows_progress(message) && message.execution_id" text="私聊：查看它正在做什么"><UButton icon="i-lucide-messages-square" size="xs" variant="ghost" color="neutral" :aria-label="`私聊 ${bridge.display_name(message.author)}：查看本次执行过程`" @click="open_private_chat(act, message.author, message.execution_id)" /></UTooltip>
               <!-- In a discussion, stopping the current speaker skips the turn so the next one speaks. -->
               <template v-if="speaking_turn?.expert === message.author && message.discussion_request">
                 <UTooltip text="暂停讨论"><UButton icon="i-lucide-pause" size="xs" variant="ghost" color="neutral" :aria-label="`暂停讨论，停止 ${bridge.display_name(message.author)} 本次发言`" :disabled="!!pending" :loading="pending === 'pause_discussion'" @click="act('pause_discussion')" /></UTooltip>
@@ -1882,6 +1950,7 @@ function copy_message(message) { act("copy", `${view.value.room_site}/r/${room.v
             <UTooltip v-if="!can_take_back(message)" text="回复"><UButton icon="i-lucide-corner-up-left" size="xs" color="neutral" variant="ghost" :aria-label="`回复 #${message.id}`" @click="reply_to(message)" /></UTooltip>
             <UTooltip v-if="can_retract(message) && editing.id !== message.id" text="撤回"><UButton icon="i-lucide-undo-2" size="xs" color="neutral" variant="ghost" :aria-label="`撤回 #${message.id}`" @click="act('retract_message', message.id)" /></UTooltip>
             <UTooltip v-if="can_take_back(message) && editing.id !== message.id" text="编辑"><UButton icon="i-lucide-pencil" size="xs" color="neutral" variant="ghost" :aria-label="`编辑 #${message.id}，回退到它之前重新发送`" @click="start_edit(message)" /></UTooltip>
+            <UTooltip v-if="view.access?.can_manage && answer_execution(message) && editing.id !== message.id" text="私聊：查看这次执行的过程"><UButton icon="i-lucide-messages-square" size="xs" color="neutral" variant="ghost" :aria-label="`查看 #${message.id} 的执行过程`" @click="open_private_chat(act, message.author, answer_execution(message).id)" /></UTooltip>
             <UTooltip v-if="!narrow && message.kind !== 'receipt' && editing.id !== message.id" :text="reader.state.message_id === message.id ? '停止朗读' : '朗读'"><UButton :icon="reader.state.message_id === message.id ? 'i-lucide-square' : 'i-lucide-volume-2'" size="xs" color="neutral" variant="ghost" :aria-label="reader.state.message_id === message.id ? '停止朗读' : `从 #${message.id} 开始朗读`" @click="reader.state.message_id === message.id ? reader.stop() : reader.start(message.id)" /></UTooltip>
             <UDropdownMenu :items="message_actions(message)" :content="{ align: 'end', sideOffset: 5 }" :ui="{ content: 'channel-menu' }"><UButton icon="i-lucide-ellipsis" size="xs" color="neutral" variant="ghost" :aria-label="`消息 #${message.id} 的更多操作`" /></UDropdownMenu>
           </div></div></template>
@@ -1895,15 +1964,18 @@ function copy_message(message) { act("copy", `${view.value.room_site}/r/${room.v
         </template>
       </div>
       <!-- The message being sent shows at once; the saved copy replaces it when the site answers, and a failed send stays here as a failed card. -->
-      <div v-if="view.sending_preview" class="channel-message-group">
+      <!-- It mirrors a saved card line for line, so the swap changes only "发送中…" into the message number. -->
+      <motion.div v-if="view.sending_preview" class="channel-message-group" :style="{ opacity: send_entry, y: send_y }">
         <UChatMessage id="channel-sending-message" :data-author="bridge.identities[view.sending_preview.author]?.style" role="user" :parts="[]" side="left" variant="naked" color="neutral" class="channel-message channel-sending-message" :class="{ 'is-failed': view.sending_preview.failed }" :ui="{ header: 'channel-message-header', container: 'channel-message-container', body: 'channel-message-body' }">
           <template #body>
             <div class="channel-message-byline">
               <UAvatar :src="bridge.identities[view.sending_preview.author]?.icon" :text="bridge.identities[view.sending_preview.author]?.initials || '?'" :alt="bridge.display_name(view.sending_preview.author)" size="md" class="channel-avatar" :class="bridge.identities[view.sending_preview.author]?.style" />
-              <div class="channel-message-meta"><div class="channel-message-author"><strong>{{ bridge.display_name(view.sending_preview.author) }}</strong><UBadge v-if="view.sending_preview.failed" label="发送失败" color="error" variant="soft" size="xs" /></div></div>
-              <span v-if="!view.sending_preview.failed" class="channel-message-provenance channel-message-elapsed" role="status">发送中…</span>
+              <div class="channel-message-meta">
+                <div class="channel-message-author"><strong>{{ bridge.display_name(view.sending_preview.author) }}</strong><UBadge v-if="view.sending_preview.failed" label="发送失败" color="error" variant="soft" size="xs" /></div>
+                <div class="channel-message-provenance"><time>{{ bridge.format_time(view.sending_preview.created_at) }}</time><span v-if="!view.sending_preview.failed" class="channel-sending-status" role="status">发送中…</span></div>
+              </div>
             </div>
-            <div class="channel-message-text">{{ view.sending_preview.text }}</div>
+            <div class="channel-answer"><div class="channel-message-text markdown-body" v-html="sending_html"></div></div>
             <div v-if="view.sending_preview.files.length" class="channel-message-provenance">附件：{{ view.sending_preview.files.join('、') }}</div>
             <template v-if="view.sending_preview.failed">
               <p class="channel-message-text channel-failure-reason" role="alert">{{ view.sending_preview.failed }}；草稿已保留在输入框</p>
@@ -1914,7 +1986,7 @@ function copy_message(message) { act("copy", `${view.value.room_site}/r/${room.v
             </template>
           </template>
         </UChatMessage>
-      </div>
+      </motion.div>
       <div v-if="(topic_anchor === 'end' || end_anchor === 'end') && !view.query && !view.mention_only && !view.host_only" class="channel-message-group">
         <TopicCard v-if="topic_anchor === 'end'" :ref="(card) => topic_card = card" @edit="emit('edit')" />
         <DiscussionEndCard v-if="end_anchor === 'end'" />
@@ -1970,7 +2042,7 @@ function copy_message(message) { act("copy", `${view.value.room_site}/r/${room.v
         </template>
       </UPopover>
       <QueuedMessages v-if="room.free?.queued_messages" :queue="room.free.queued_messages" :room-id="room.id" />
-      <UChatPrompt ref="prompt" v-model="text" :disabled="view.sending_message" :submit-on-enter="ENTER_SENDS" :enterkeyhint="ENTER_SENDS ? 'send' : 'enter'" :autofocus="false" :rows="1" :maxrows="EDITOR_MAX_ROWS" :placeholder="`发消息到 # ${room.title}`" aria-label="留言正文" role="combobox" aria-autocomplete="list" aria-haspopup="listbox" :aria-expanded="!!mention_context" :aria-controls="mention_context ? 'channel-mention-list' : undefined" :aria-activedescendant="mention_context && mention_active ? `channel-mention-${mention_options.indexOf(mention_active)}` : undefined" variant="outline" color="neutral" class="channel-composer" :class="{ 'has-mentions': mention_mirror }" :ui="{ header: 'channel-composer-header', base: 'channel-editor', footer: 'channel-composer-footer' }" @submit="send">
+      <UChatPrompt ref="prompt" v-model="text" :submit-on-enter="ENTER_SENDS" :enterkeyhint="ENTER_SENDS ? 'send' : 'enter'" :autofocus="false" :rows="1" :maxrows="EDITOR_MAX_ROWS" :placeholder="`发消息到 # ${room.title}`" aria-label="留言正文" role="combobox" aria-autocomplete="list" aria-haspopup="listbox" :aria-expanded="!!mention_context" :aria-controls="mention_context ? 'channel-mention-list' : undefined" :aria-activedescendant="mention_context && mention_active ? `channel-mention-${mention_options.indexOf(mention_active)}` : undefined" variant="outline" color="neutral" class="channel-composer" :class="{ 'has-mentions': mention_mirror }" :ui="{ header: 'channel-composer-header', base: 'channel-editor', footer: 'channel-composer-footer' }" @submit="send">
         <template #header>
           <div v-if="view.attachment_drafts.length || file_refs.length || excerpts.length" class="attachment-drafts">
             <UPopover v-if="excerpts.length" :content="{ side: 'top', align: 'start' }" @update:open="editing_excerpt = 0">
@@ -2015,7 +2087,7 @@ function copy_message(message) { act("copy", `${view.value.room_site}/r/${room.v
               <span v-if="file.uploading" class="attachment-uploading" role="status" :aria-label="`正在上传 ${file.file_name}`"><UIcon name="i-lucide-loader-circle" /></span>
             </div>
           </div>
-          <div v-if="unregistered_member" class="channel-reply-draft channel-queue-hint"><UIcon name="i-lucide-user-round-x" /><span>{{ bridge.display_name(unregistered_member.name) }} 待注册：在其会话中粘贴启动指令</span><UButton v-if="view.access?.can_manage" :icon="launch_copied === unregistered_member.name ? 'i-lucide-check' : 'i-lucide-copy'" :label="launch_copied === unregistered_member.name ? '已复制' : '复制启动指令'" aria-live="polite" size="xs" color="neutral" variant="ghost" class="channel-launch-copy" @click="copy_launch(unregistered_member.name)" /></div>
+          <div v-for="unregistered_member in unregistered_members" :key="unregistered_member.name" class="channel-reply-draft channel-queue-hint"><UIcon name="i-lucide-user-round-x" /><span>{{ bridge.display_name(unregistered_member.name) }} 待注册：在其会话中粘贴启动指令</span><UButton v-if="view.access?.can_manage" :icon="launch_copied === unregistered_member.name ? 'i-lucide-check' : 'i-lucide-copy'" :label="launch_copied === unregistered_member.name ? '已复制' : '复制启动指令'" aria-live="polite" size="xs" color="neutral" variant="ghost" class="channel-launch-copy" @click="copy_launch(unregistered_member.name)" /></div>
           <div v-if="queue_hint" class="channel-reply-draft channel-queue-hint"><UIcon name="i-lucide-clock" /><span>{{ queue_hint }}</span><UButton v-if="is_manual_member(speaking_member) && view.access?.can_manage" :icon="launch_copied === speaking_member.name ? 'i-lucide-check' : 'i-lucide-copy'" :label="launch_copied === speaking_member.name ? '已复制' : '复制启动指令'" aria-live="polite" size="xs" color="neutral" variant="ghost" class="channel-launch-copy" @click="copy_launch(speaking_member.name)" /></div>
           <div v-if="view.editing_queued" class="channel-reply-draft"><UIcon name="i-lucide-pencil" /><span>编辑排队消息：发送即保存修改，仍按原位置排队</span><UButton icon="i-lucide-x" color="neutral" variant="ghost" size="xs" aria-label="取消编辑排队消息" @click="act('queue_cancel_edit')" /></div>
           <div v-if="view.reply_to" class="channel-reply-draft"><UIcon name="i-lucide-corner-up-left" /><span>{{ `回复 #${view.reply_to}` }}</span><UButton icon="i-lucide-x" color="neutral" variant="ghost" size="xs" aria-label="取消回复" @click="act('cancel_reply')" /></div>
@@ -2035,7 +2107,7 @@ function copy_message(message) { act("copy", `${view.value.room_site}/r/${room.v
             <UButton type="button" icon="i-lucide-paperclip" aria-label="添加附件" title="图片、PDF 或其他文件 · 每个最多 20 MiB" color="neutral" variant="ghost" size="sm" :disabled="view.sending_message" @click="act('choose_attachments')" />
             <UTooltip v-if="speech_ready" :text="broadcast.on.value ? '关闭语音播报' : '语音播报：新回复自动朗读摘要'"><UButton type="button" icon="i-lucide-radio" color="neutral" variant="ghost" size="sm" class="channel-voice-button channel-broadcast-button" :class="{ 'is-on': broadcast.on.value }" :aria-pressed="broadcast.on.value" :aria-label="broadcast.on.value ? '关闭语音播报' : '开启语音播报'" @click="broadcast.toggle()" /></UTooltip>
             <UTooltip :text="ENTER_SENDS ? '语音输入 · 也可按住空格说话' : '按住说话，或轻点开始'"><UButton type="button" icon="i-lucide-mic" color="neutral" variant="ghost" size="sm" class="channel-voice-button channel-voice-mic" aria-label="语音输入" :disabled="view.sending_message" @pointerdown="voice_pointerdown" @click="voice_click" @contextmenu.prevent /></UTooltip>
-            <UButton type="button" icon="i-lucide-arrow-up" color="neutral" size="sm" class="channel-primary-button channel-round-button channel-send" aria-label="发送" title="发送 · Enter" :disabled="!has_draft" :loading="pending === 'send' || view.sending_message" @click="send" />
+            <UButton type="button" icon="i-lucide-arrow-up" color="neutral" size="sm" class="channel-primary-button channel-round-button channel-send" aria-label="发送" title="发送 · Enter" :disabled="!has_draft" @click="send" />
           </template>
         </template>
       </UChatPrompt>

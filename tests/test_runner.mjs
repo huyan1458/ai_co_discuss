@@ -13,7 +13,7 @@ import { fileURLToPath, pathToFileURL } from 'node:url';
 import { setTimeout as delay } from 'node:timers/promises';
 import { listen_local } from './local_port.mjs';
 import { DiscussionStore, load_config, service_drafts, validate_config } from '../runner/discussion_runner.mjs';
-import { cwd_key, edited_changes, free_task_files, FreeRoomRunner, review_capability_version, workspace_snapshot } from '../runner/free_runner.mjs';
+import { cwd_key, edited_changes, free_task_files, FreeRoomRunner, member_extra_directories, review_capability_version, workspace_snapshot } from '../runner/free_runner.mjs';
 import { SessionDriver } from '../runner/session_driver.mjs';
 
 import { EXPERT_PROMPT_PRESETS, expert_prompt, free_task_text, software_rules } from '../runner/expert_prompts.mjs';
@@ -21,8 +21,8 @@ import { participant_tools, system_prompt } from '../runner/adapters/api.mjs';
 import { glob_regex, open_project, run_file_tool } from '../runner/adapters/api_files.mjs';
 import { DiscussionService, migrate_platform_ids, migrate_service_home, persisted_env, read_registry, register_room, service_pid, service_ready, start_service, sweep_service_home, unregister_room } from '../runner/discussion_service.mjs';
 import { restore_room, room_profiles } from '../runner/discussion_launch.mjs';
-import { adapter_of, deliver_task } from '../runner/adapters/index.mjs';
-import { adopted_fork, claude_api_error, claude_exit_error, claude_inbox_ready, claude_rule_path, standalone_claude_env, watch_window_turn } from '../runner/adapters/claude.mjs';
+import { adapter_of, deliver_task, execution_details } from '../runner/adapters/index.mjs';
+import { adopted_fork, claude_api_error, claude_permissions, claude_exit_error, claude_inbox_ready, claude_rule_path, standalone_claude_env, watch_window_turn } from '../runner/adapters/claude.mjs';
 import { codex_permissions } from '../runner/adapters/codex_cli.mjs';
 import { agy_rule, prepare_agy_project, remove_agy_projects } from '../runner/adapters/antigravity_cli.mjs';
 import { kill_process_tree, run_program, TASK_SUBCOMMANDS } from '../runner/adapters/common.mjs';
@@ -736,7 +736,13 @@ function fake_cli(events, options = {}) {
   const source_for = ({ events, exit_code }) => `
     const fs = require('node:fs');
     (async () => {
-      let input = ''; for await (const chunk of process.stdin) input += chunk;
+      // The Codex bridge and Claude keep stdin open for interjections after their first line (the task, the first
+      // stream-json message); other CLIs close it.
+      let input = '';
+      for await (const chunk of process.stdin) {
+        input += chunk;
+        if (/^\\{"(prompt|type)"/.test(input) && input.includes('\\n')) break;
+      }
       fs.writeFileSync('stdin.txt', input);
       process.stderr.write(${JSON.stringify(options.stderr || 'diagnostic 中文')});
       const output = Buffer.from(${JSON.stringify(events.map(event => JSON.stringify(event)).join('\r\n') + '\r\n')});
@@ -763,7 +769,13 @@ function fake_cli(events, options = {}) {
       return child;
     }
     const child = spawn(process.execPath, ['-e', runs[calls.length] || source], settings);
-    calls.push({ executable, args, settings, child, closed: once(child, 'close') });
+    const call = { executable, args, settings, child, closed: once(child, 'close'), input: '' };
+    // What the runner wrote first: a CLI's prompt, or the Codex bridge's task line.
+    for (const method of ['write', 'end']) {
+      const original = child.stdin[method].bind(child.stdin);
+      child.stdin[method] = (chunk, ...rest) => { if (!call.input && typeof chunk === 'string') call.input = chunk; return original(chunk, ...rest); };
+    }
+    calls.push(call);
     return child;
   };
   return { calls, config_calls, spawn_process };
@@ -828,12 +840,14 @@ test(`${adapter} starts headlessly, binds emitted identity and preserves UTF-8 p
   assert.equal(JSON.parse(readFileSync(f.access_path, 'utf8')).session_id, 'actual-cli-session');
   const call = f.calls[0];
   assert.equal(call.settings.cwd, f.task.draft_directory); assert.equal(call.settings.shell, false);
-  assert.equal(call.settings.windowsHide, true); assert.ok(call.args.includes(f.task.draft_directory));
+  assert.equal(call.settings.windowsHide, true);
   assert.ok(!call.args.some(arg => arg.startsWith('--dangerously')));
   if (adapter === 'codex_cli') {
-    assert.equal(call.args[0], 'exec'); assert.ok(call.args.includes('--json'));
-    assert.ok(call.args.includes('--skip-git-repo-check')); assert.equal(call.args.at(-1), '-');
-    assert.equal(readFileSync(join(f.task.draft_directory, 'stdin.txt'), 'utf8'), f.task.prompt);
+    // The bridge runs the configured Codex as app-server; the task travels as its first stdin line.
+    assert.equal(call.executable, process.execPath); assert.match(call.args[0], /codex_bridge\.mjs$/); assert.equal(call.args[1], f.config.executable);
+    const input = JSON.parse(readFileSync(join(f.task.draft_directory, 'stdin.txt'), 'utf8'));
+    assert.deepEqual(input, { prompt: f.task.prompt, thread_id: '', cwd: f.task.draft_directory, model: '', effort: '', full: false });
+    assert.equal(typeof f.result.steer, 'function', 'a running Codex turn takes interjections');
     const overrides = call.args.filter((arg, index) => call.args[index - 1] === '-c');
     assert.equal(overrides[2], 'approval_policy="never"');
     // On Windows the sandbox's TEMP moves into the writable drafts, so PowerShell keeps FullLanguage and UTF-8 output.
@@ -843,9 +857,10 @@ test(`${adapter} starts headlessly, binds emitted identity and preserves UTF-8 p
     assert.match(overrides[1], /extends=":read-only"/); assert.match(overrides[1], /network=\{enabled=true\}/);
     assert.ok(overrides[1].includes(`${JSON.stringify(f.directory.replaceAll('\\', '/'))}="read"`));
     assert.ok(overrides[1].includes(`${JSON.stringify(f.task.draft_directory.replaceAll('\\', '/'))}="write"`));
-    assert.deepEqual(f.config_calls[0].args.slice(1), call.args.slice(call.args.indexOf('-c'), call.args.indexOf('--json')));
+    assert.deepEqual(f.config_calls[0].args.slice(1), call.args.slice(2));
     assert.ok(!call.args.includes('--add-dir'));
   } else {
+    assert.ok(call.args.includes(f.task.draft_directory));
     assert.ok(call.args.includes(f.task.skill_directories[0]));
     assert.equal(call.args[call.args.indexOf('-p') + 1], f.task.prompt);
     assert.equal(call.args[call.args.indexOf('--output-format') + 1], 'stream-json');
@@ -872,15 +887,15 @@ test(`${adapter} resumes only the bound conversation and honors its configured c
   const f = await cli_delivery_fixture(t, adapter, { binding: { session_id: 'actual-cli-session' },
     config: { cwd: project, project_access: 'write' } });
   const call = f.calls[0];
-  const flag = adapter === 'codex_cli' ? 'resume' : '--conversation';
-  assert.equal(call.args[call.args.indexOf(flag) + 1], 'actual-cli-session');
+  if (adapter === 'codex_cli') assert.equal(JSON.parse(call.input).thread_id, 'actual-cli-session');
+  else assert.equal(call.args[call.args.indexOf('--conversation') + 1], 'actual-cli-session');
   assert.equal(call.args.includes('--last'), false); assert.equal(call.args.includes('--continue'), false);
   assert.equal(call.args.includes('--project'), false); assert.deepEqual(f.errors, []);
   assert.equal(call.settings.cwd, project);
   if (adapter === 'codex_cli') {
-    assert.ok(call.args.findIndex(arg => arg.startsWith('default_permissions=')) > call.args.indexOf('resume'));
+    assert.ok(call.args.some(arg => arg.startsWith('default_permissions=')));
     assert.match(call.args.find(arg => arg.startsWith('permissions.')), /extends=":workspace"/);
-    assert.equal(call.args[call.args.indexOf('--cd') + 1], project);
+    assert.equal(JSON.parse(call.input).cwd, project);
     // A taken-over manual Codex CLI writes like 可写, so its own read-only config cannot block the answer draft.
     const own = codex_permissions({ cwd: project, project_access: 'own' }, { directory: project, draft_directory: project });
     assert.match(own.args.find(arg => arg.startsWith('permissions.')), /extends=":workspace"/);
@@ -894,7 +909,7 @@ test(`${adapter} keeps the project cwd when project access is read-only`, async 
   assert.equal(call.settings.cwd, project); assert.deepEqual(f.errors, []);
   if (adapter === 'codex_cli') {
     assert.equal(call.args.includes('--mode'), false);
-    assert.equal(call.args[call.args.indexOf('--cd') + 1], project);
+    assert.equal(JSON.parse(call.input).cwd, project);
     assert.match(call.args.find(arg => arg.startsWith('permissions.')), /extends=":read-only"/);
   } else {
     assert.equal(call.args[call.args.indexOf('--mode') + 1], 'accept-edits');
@@ -938,7 +953,8 @@ test(`${adapter} persists a streamed binding and resumes it after a dispatcher r
     await new FreeRoomRunner(f.config, restored_store, deliver).tick(); await process_fixture.calls[1].closed;
   } finally { restored_store.close(); }
   const args = process_fixture.calls[1].args;
-  assert.equal(args[args.indexOf(adapter === 'codex_cli' ? 'resume' : '--conversation') + 1], 'actual-cli-session');
+  if (adapter === 'codex_cli') assert.equal(JSON.parse(process_fixture.calls[1].input).thread_id, 'actual-cli-session');
+  else assert.equal(args[args.indexOf('--conversation') + 1], 'actual-cli-session');
   assert.equal(JSON.parse(readFileSync(join(f.config.directory, 'free-2.access.json'), 'utf8')).session_id, 'actual-cli-session');
   assert.equal(f.current_execution().requests[0].id, next_request.id);
   if (adapter === 'antigravity_cli') {
@@ -1000,6 +1016,53 @@ test(`codex refuses conflicting or unavailable permission profiles: ${JSON.strin
   assert.equal(runner.children.size, 0);
 });
 }
+
+test('extra project directories follow the member access, and stay read-only for a member working outside the room project', t => {
+  const f = task_fixture(t);
+  const [main, docs, elsewhere] = ['main', 'docs', 'elsewhere'].map(name => join(f.config.directory, name));
+  for (const path of [main, docs, elsewhere]) mkdirSync(path);
+  const room = { cwd: main, extra_directories: [docs] };
+  assert.deepEqual(member_extra_directories(room, { adapter: 'claude', cwd: main, project_access: 'write' }), [{ path: docs, access: 'write' }]);
+  assert.deepEqual(member_extra_directories(room, { adapter: 'claude', cwd: main, project_access: 'read' }), [{ path: docs, access: 'read' }]);
+  assert.deepEqual(member_extra_directories(room, { adapter: 'claude', cwd: elsewhere, project_access: 'write' }),
+    [{ path: main, access: 'read' }, { path: docs, access: 'read' }], 'a member working elsewhere only reads the room');
+  assert.deepEqual(member_extra_directories(room, { adapter: 'codex', cwd: main, project_access: 'write' }).length, 1);
+  assert.deepEqual(member_extra_directories(room, { adapter: 'claude', cwd: '', project_access: 'write' }),
+    [{ path: main, access: 'write' }, { path: docs, access: 'write' }], 'a member from before the room had a project reaches it at its own access');
+  const pinned = claude_permissions({ cwd: '', project_access: 'write' }, { ...session_task(f.config), extra_directories: [{ path: main, access: 'write' }] });
+  assert.ok(pinned.includes('Bash') && pinned.includes(`Edit(${claude_rule_path(main)}/**)`), 'writing a room directory lets it run commands');
+
+  const extra_directories = [{ path: docs, access: 'write' }, { path: main, access: 'read' }];
+  const task = { ...session_task(f.config), extra_directories };
+  const claude = claude_permissions({ cwd: elsewhere, project_access: 'write' }, task);
+  const denied = claude.slice(claude.indexOf('--disallowedTools'));
+  assert.ok(claude.includes(docs) && claude.includes(main), 'both are working directories');
+  assert.ok(denied.includes(`Edit(${claude_rule_path(main)}/**)`), 'the read-only one is never edited');
+  assert.ok(claude.includes(`Edit(${claude_rule_path(docs)}/**)`) && !denied.includes(`Edit(${claude_rule_path(docs)}/**)`));
+  assert.ok(claude_permissions({ cwd: elsewhere, project_access: 'auto' }, task).slice(-2).includes(`Edit(${claude_rule_path(main)}/**)`));
+
+  const codex = codex_permissions({ cwd: elsewhere, project_access: 'write' }, task, 'linux').args.find(arg => arg.startsWith('permissions.'));
+  const entry = (path, access) => `${JSON.stringify(resolve(path).replaceAll('\\', '/'))}=${JSON.stringify(access)}`;
+  assert.ok(codex.includes(entry(main, 'read')) && codex.includes(entry(docs, 'write')));
+
+  const user_home = join(f.config.directory, 'user');
+  mkdirSync(join(user_home, '.gemini', 'config', 'projects'), { recursive: true });
+  const agy = prepare_agy_project({ cwd: elsewhere, project_access: 'write' }, {}, task, user_home);
+  const project = JSON.parse(readFileSync(join(user_home, '.gemini', 'config', 'projects', `${agy.project_id}.json`), 'utf8'));
+  const rule = path => `write_file(${resolve(path).replaceAll('\\', '/')})`;
+  assert.ok(project.permissionGrants.permissionGrants.deny.includes(rule(main)) && !project.permissionGrants.permissionGrants.allow.includes(rule(main)));
+  assert.ok(project.permissionGrants.permissionGrants.allow.includes(rule(docs)));
+  assert.equal(project.projectResources.resources.length, 3);
+
+  writeFileSync(join(main, 'a.md'), 'main');
+  writeFileSync(join(docs, 'b.md'), 'docs');
+  const api = open_project({ cwd: main, project_access: 'write', extra_directories: [{ path: docs, access: 'read' }] });
+  assert.match(run_file_tool(api, 'read', { file_path: join(docs, 'b.md') }), /1: docs/);
+  assert.match(run_file_tool(api, 'write', { file_path: join(docs, 'b.md'), content: 'x' }).error, /read-only/);
+  assert.equal(readFileSync(join(docs, 'b.md'), 'utf8'), 'docs');
+  assert.ok(run_file_tool(api, 'read', { file_path: join(elsewhere, 'a.md') }).error, 'a directory outside the room stays closed');
+  assert.match(system_prompt({ participant: 'DeepSeek', role: 'member', project: api }), /另有项目目录.*只读/);
+});
 
 test('agy separates native project permissions from the selected project and preserves read/write boundaries', async t => {
   const f = task_fixture(t);
@@ -1080,14 +1143,17 @@ test('claude allows only codiscuss website subcommands and draft writes, then us
   assert.ok(!args.some(arg => arg.startsWith('--dangerously') || arg === '--permission-mode'));
   const directories = args.indexOf('--add-dir');
   assert.deepEqual(args.slice(directories + 1, directories + 4), [f.directory, f.task.draft_directory, f.task.skill_directories[0]]);
-  assert.deepEqual(args.slice(args.indexOf('--disallowedTools') + 1, args.indexOf('--')), [`Edit(${claude_rule_path(f.task.skill_directories[0])}/**)`]);
+  assert.deepEqual(args.slice(args.indexOf('--disallowedTools') + 1), [`Edit(${claude_rule_path(f.task.skill_directories[0])}/**)`]);
   assert.deepEqual(args.slice(args.indexOf('--allowedTools') + 1, args.indexOf('--disallowedTools')),
     [...['room', 'message', 'turn', 'state', 'goal', 'mode', 'review', 'sequence', 'execution', 'health', 'schema', 'launch workflow-adopt', 'launch workflow-join']
       .flatMap(command => [`Bash(codiscuss ${command} *)`, `PowerShell(codiscuss ${command} *)`]),
     `Edit(${claude_rule_path(f.task.draft_directory)}/**)`, 'Read(//d/materials/**)']);
   assert.ok(!args.includes(`Edit(${claude_rule_path(f.directory)}/**)`));
   assert.ok(!args.some(arg => /(Bash|PowerShell)\(codiscuss (service|launch (?!workflow-(adopt|join) )|run|api|setup|install|local)/.test(arg)));
-  assert.equal(args.at(-1), f.task.prompt);
+  // The prompt is the first stream-json message on stdin, which stays open for interjections.
+  assert.ok(args.includes('--input-format') && !args.includes(f.task.prompt));
+  assert.equal(JSON.parse(f.calls[0].input).message.content[0].text, f.task.prompt);
+  assert.equal(typeof f.result.steer, 'function');
   if (process.platform === 'win32') assert.equal(claude_rule_path('C:\\Data\\room'), '//c/Data/room');
 });
 
@@ -2631,4 +2697,28 @@ test('codiscuss token writes only its hash through wrangler and no password is k
     assert.equal(existsSync(join(home, 'admin-accounts.json')), false);
     assert.equal(remove_legacy_admin_accounts(home), false);
   } finally { rmSync(root, { recursive: true, force: true }); }
+});
+
+test('execution details rebuild each CLI log in order, a result filling in its call, and none for an adapter without a log', () => {
+  const lines = (...events) => events.map(event => JSON.stringify(event)).join('\n');
+  const codex = execution_details('codex_cli', lines(
+    { type: 'item.completed', item: { id: 'e', type: 'error', message: 'config warning' } },
+    { type: 'item.completed', item: { id: '1', type: 'agent_message', text: '先读任务文件' } },
+    { type: 'item.started', item: { id: '2', type: 'command_execution', command: '"C:\pwsh.exe" -Command "rg x"', status: 'in_progress' } },
+    { type: 'item.completed', item: { id: '2', type: 'command_execution', command: '"C:\pwsh.exe" -Command "rg x"', aggregated_output: 'hit', exit_code: 1, status: 'failed' } },
+    { type: 'item.completed', item: { id: '3', type: 'web_search', query: '南半球 七月' } }));
+  assert.deepEqual(codex.entries.map(entry => [entry.kind, entry.title, entry.body, entry.state]), [
+    ['message', undefined, '先读任务文件', undefined], ['command', 'rg x', 'hit', 'failed'], ['search', '南半球 七月', undefined, 'done']]);
+  const claude = execution_details('claude', lines(
+    { type: 'assistant', message: { content: [{ type: 'thinking', thinking: '', signature: 's' }, { type: 'tool_use', id: 't', name: 'Bash', input: { command: 'ls' } }] } },
+    { type: 'user', message: { content: [{ type: 'tool_result', tool_use_id: 't', content: [{ type: 'text', text: 'a.md' }] }] } },
+    { type: 'assistant', message: { content: [{ type: 'text', text: '完成' }] } }));
+  assert.deepEqual(claude.entries.map(entry => [entry.kind, entry.title, entry.body, entry.state]), [['command', 'ls', 'a.md', 'done'], ['message', undefined, '完成', undefined]]);
+  const agy = execution_details('antigravity_cli', lines(
+    { event: 'step_update', step_update: { step_index: 1, step_type: 'agent_response', state: 'ACTIVE', text_delta: '正在' } },
+    { event: 'step_update', step_update: { step_index: 1, step_type: 'agent_response', state: 'ACTIVE', text_delta: '读取' } },
+    { event: 'step_update', step_update: { step_index: 2, step_type: 'tool', state: 'ACTIVE', tool_name: 'run_command', tool_info: { parameters: { CommandLine: 'dir' } } } },
+    { event: 'step_update', step_update: { step_index: 2, step_type: 'tool', state: 'DONE', tool_name: 'run_command', tool_info: { parameters: { CommandLine: 'dir' }, output: 'ok' } } }));
+  assert.deepEqual(agy.entries.map(entry => [entry.kind, entry.title, entry.body, entry.state]), [['message', undefined, '正在读取', undefined], ['command', 'dir', 'ok', 'done']]);
+  assert.equal(execution_details('api', '{}'), null);
 });

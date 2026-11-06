@@ -2,17 +2,21 @@
 import { computed, inject, onBeforeUnmount, onMounted, ref, watch } from "vue";
 import { crumbs_of, file_preview, file_size, file_type, folder_listings, modified_time, shown_folders } from "./file-preview.js";
 
-const props = defineProps({ directory: { type: String, required: true } });
+// The room's project directories, the main one first; with more than one, a switch above the list picks which is shown.
+const props = defineProps({ directories: { type: Array, required: true } });
 const { view, bridge } = inject("discussion");
 const room_id = view.value.room.id;
+const shown = shown_folders.get(room_id);
+const root = ref(Math.max(0, props.directories.indexOf(shown?.directory)));
+const directory = computed(() => props.directories[root.value] || props.directories[0]);
 // The folder being shown changes on the click itself; its listing comes from the cache when it was opened before (in
 // this page, for this room and project), and is read again behind it, since another device waits on the relay.
-const current_path = ref(shown_folders.get(room_id)?.directory === props.directory ? shown_folders.get(room_id).path : "");
+const current_path = ref(shown?.directory === directory.value ? shown.path : "");
 const listing = ref(null);
 const loading = ref(false);
 let directory_request = 0;
 const cache_key = (path) => `${room_id}
-${props.directory}
+${directory.value}
 ${path}`;
 
 /** Pick the row icon and tint for one listing entry. */
@@ -22,13 +26,23 @@ function entry_icon(entry) {
   return file_type(entry.name).slice(1);
 }
 
-const breadcrumbs = computed(() => crumbs_of(props.directory, current_path.value));
+const breadcrumbs = computed(() => crumbs_of(directory.value, current_path.value));
+/** The last folder name of a directory, as its switch shows it. */
+const folder_name = (path) => String(path).split(/[\\/]+/).filter(Boolean).at(-1) || path;
+
+/** Show another of the room's project directories from its top. */
+function switch_root(index) {
+  if (index === root.value) return;
+  root.value = index;
+  read_directory("");
+}
 
 /** Show a folder the preview's breadcrumb asked for, now or once this list is shown. */
 function take_reveal() {
   const path = file_preview.reveal_path;
   if (path == null) return false;
   file_preview.reveal_path = null;
+  if (props.directories[file_preview.reveal_root]) root.value = file_preview.reveal_root;
   read_directory(path);
   return true;
 }
@@ -41,12 +55,12 @@ async function read_directory(path = "", append = false) {
   const request = ++directory_request;
   if (!append) {
     current_path.value = path;
-    shown_folders.set(room_id, { directory: props.directory, path });
+    shown_folders.set(room_id, { directory: directory.value, path });
     listing.value = folder_listings.get(cache_key(path)) || null;
   }
   loading.value = true;
   try {
-    const result = await bridge.read_room_files(room_id, path, append ? listing.value.next_offset : 0);
+    const result = await bridge.read_room_files(room_id, path, append ? listing.value.next_offset : 0, "", root.value);
     if (request !== directory_request) return;
     listing.value = { ...result, entries: append ? [...listing.value.entries, ...result.entries] : result.entries };
     folder_listings.set(cache_key(path), listing.value);
@@ -63,6 +77,11 @@ async function read_directory(path = "", append = false) {
       <UButton icon="i-lucide-refresh-cw" color="neutral" variant="ghost" size="sm" aria-label="刷新" title="刷新" :loading="loading" @click="read_directory(current_path)" />
     </header>
 
+    <div v-if="directories.length > 1" class="project-roots" role="tablist" aria-label="项目目录">
+      <button v-for="(path, index) in directories" :key="path" type="button" role="tab" :aria-selected="index === root" :title="path" @click="switch_root(index)">
+        <UIcon :name="index ? 'i-lucide-folder' : 'i-lucide-folder-root'" />{{ folder_name(path) }}
+      </button>
+    </div>
     <div class="project-explorer" :aria-busy="loading">
       <nav class="project-explorer-path" aria-label="文件路径">
         <template v-for="(part, index) in breadcrumbs" :key="part.path">
@@ -76,7 +95,7 @@ async function read_directory(path = "", append = false) {
       <div class="project-files-rows">
         <button v-for="entry in listing?.entries || []" :key="entry.path" type="button" class="project-file-row" :class="{ 'is-hidden': entry.name.startsWith('.') }"
           :disabled="entry.kind === 'unavailable'" :title="entry.kind === 'unavailable' ? `${entry.name}（无法读取或指向项目外）` : entry.name"
-          @click="entry.kind === 'directory' ? read_directory(entry.path) : file_preview.open?.(entry.path, props.directory)">
+          @click="entry.kind === 'directory' ? read_directory(entry.path) : file_preview.open?.(entry.path, directory, root)">
           <span class="project-file-name"><UIcon :name="entry_icon(entry)[0]" class="project-file-icon" :class="entry_icon(entry)[1]" /><span>{{ entry.name }}</span></span>
           <span class="project-file-size">{{ file_size(entry.size) }}</span><time :datetime="entry.modified_at">{{ modified_time(entry.modified_at) }}</time>
         </button>
@@ -99,6 +118,12 @@ async function read_directory(path = "", append = false) {
 .project-files-heading h2 { margin: 0 0 4px; font-size: 18px; font-weight: 600; }
 .project-files-heading p { margin: 0; color: var(--ui-text-muted); font: 12px ui-monospace, Consolas, monospace; overflow: hidden; white-space: nowrap; text-overflow: ellipsis; }
 
+.project-roots { display: flex; flex-wrap: wrap; gap: 4px; margin-bottom: 10px; }
+.project-roots button { display: inline-flex; align-items: center; gap: 6px; max-width: 240px; padding: 4px 10px; border: 1px solid var(--ui-border); border-radius: 6px;
+  color: var(--ui-text-muted); font-size: 12px; overflow: hidden; white-space: nowrap; text-overflow: ellipsis; }
+.project-roots button:hover { color: var(--ui-text-highlighted); }
+.project-roots button[aria-selected="true"] { border-color: var(--ui-primary); color: var(--ui-text-highlighted); font-weight: 500; }
+.project-roots button > span { flex-shrink: 0; width: 13px; height: 13px; }
 .project-explorer { overflow: hidden; border: 1px solid var(--ui-border); border-radius: 10px; background: color-mix(in srgb, var(--ui-bg-elevated) 45%, transparent); }
 .project-explorer-path { display: flex; flex-wrap: wrap; align-items: center; gap: 2px; min-height: 42px; padding: 6px 10px; border-bottom: 1px solid var(--ui-border); font-size: 13px; }
 .project-explorer-path button { display: inline-flex; align-items: center; gap: 6px; padding: 3px 6px; border-radius: 5px; color: var(--ui-text-muted); cursor: pointer; overflow-wrap: anywhere; }

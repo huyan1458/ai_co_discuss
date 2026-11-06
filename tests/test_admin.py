@@ -358,6 +358,29 @@ class RelayBridgeTests(unittest.TestCase):
         with urlopen(upload, timeout=10) as response:
             self.assertEqual(json.load(response)["attachment"]["size"], 10)
 
+    def test_a_relayed_site_no_longer_reaches_local_launch_with_a_browser_connection(self):
+        """A site the runner relays for is reached only through signed, unlocked devices, not an old connection token."""
+        self.server.local_launch = True
+        token = "c0" * 32
+        path = self.server.connections_file
+        settings = json.loads(path.read_text(encoding="utf-8"))
+        headers = {"Origin": self.SITE, "X-CoDiscuss-Local": "1", "X-CoDiscuss-Connection": token}
+
+        def settings_status():
+            try:
+                with urlopen(Request(self.base + "/api/local/settings", headers=headers), timeout=10) as response:
+                    return response.status
+            except HTTPError as error:
+                return error.code
+
+        settings["sites"][self.SITE]["token_hash"] = hashlib.sha256(token.encode()).hexdigest()
+        path.write_text(json.dumps(settings), encoding="utf-8")
+        self.assertEqual(settings_status(), 403)
+        # A self-hosted site the runner does not relay for keeps its browser connection.
+        del settings["sites"][self.SITE]["bridge_hash"]
+        path.write_text(json.dumps(settings), encoding="utf-8")
+        self.assertNotEqual(settings_status(), 403)
+
 
 if __name__ == "__main__":
     unittest.main()

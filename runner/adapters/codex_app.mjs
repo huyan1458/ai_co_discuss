@@ -29,6 +29,22 @@ async function unloaded(config, thread_id) {
   finally { app.close(); }
 }
 
+/**
+ * Pass an interjection into the chat's running turn through the App itself, which takes it at the turn's next step.
+ * Sent only while the chat is active: in an idle chat the same message would start a turn the room never asked for.
+ */
+function app_steer(config, thread_id) {
+  return async text => {
+    const app = new CodexAppClient(config.pipe_path);
+    try {
+      await app.open();
+      if (await app.thread_status(thread_id) !== 'active') return false;
+      await app.send_message(thread_id, text);
+      return true;
+    } finally { app.close(); }
+  };
+}
+
 /** Deliver one task to Codex's real App, with the original chat reused afterward. */
 async function deliver(config, binding, task) {
   if (binding.session_id) {
@@ -40,10 +56,10 @@ async function deliver(config, binding, task) {
       const app = new CodexAppClient(config.pipe_path);
       try { await app.open(); await app.send_message(binding.session_id, task.prompt); }
       finally { app.close(); }
-      return { session_id: binding.session_id, status: 'accepted', capabilities: IN_APP };
+      return { session_id: binding.session_id, status: 'accepted', capabilities: IN_APP, steer: app_steer(config, binding.session_id) };
     }
     const receipt = await run_program(config.executable, ['queue', '--thread', binding.session_id, '--message', task.prompt], { timeout: CALL_TIMEOUT_MS });
-    return { session_id: binding.session_id, status: 'accepted', receipt, capabilities: IN_APP };
+    return { session_id: binding.session_id, status: 'accepted', receipt, capabilities: IN_APP, steer: app_steer(config, binding.session_id) };
   }
   const app = new CodexAppClient(config.pipe_path);
   try {
@@ -53,7 +69,7 @@ async function deliver(config, binding, task) {
     const result = await app.create_thread(config.source_thread_id, task.prompt, `CoDiscuss · ${task.participant}`, target);
     task.on_binding(result.thread_id);
     bind_access(task.access_path, result.thread_id);
-    return { session_id: result.thread_id, status: 'accepted', capabilities: IN_APP };
+    return { session_id: result.thread_id, status: 'accepted', capabilities: IN_APP, steer: app_steer(config, result.thread_id) };
   } finally { app.close(); }
 }
 

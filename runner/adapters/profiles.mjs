@@ -26,7 +26,9 @@
  *   (the runner cuts the session), `fresh` (context rebuilt each time) or `kept` (cannot be cut here); `project` (works in
  *   a project directory); `access_env` (its process takes the credential file by environment); `enforces_read_only`
  *   (its sandbox enforces a read-only project); `ripgrep` (bundles rg for reading on Windows); `file_tools` (works on
- *   the project only through the runner's file tools, running no commands).
+ *   the project only through the runner's file tools, running no commands); `limits_directories` (a directory it may
+ *   only read stays read-only even while it may write elsewhere and run commands: a sandbox or file tools, not rules
+ *   that a command could bypass).
  * - `session_family`: profiles sharing one session store; switching among them keeps the conversation.
  * - `windows_command`: how its shell names the codiscuss CLI on Windows.
  * - `task_rules(cli, {runs_commands})`: fixed task text this software needs, added by the runner so no member prompt drops it.
@@ -45,7 +47,7 @@ export const ADAPTER_PROFILES = {
     access_hints: { read: '只读沙箱', write: '项目可写的沙箱，命令在沙箱内运行、可联网',
       auto: '沙箱外的操作由模型申请提权，Codex 自动审核代替人工批准', full: '无沙箱、无审批（--dangerously-bypass-approvals-and-sandbox）' },
     client: 'codex', adopt: 'session', host_existing: true, session_family: 'codex',
-    capabilities: { delivery: PROCESS, rewind: 'cut', project: true, access_env: true, enforces_read_only: true, ripgrep: true },
+    capabilities: { delivery: PROCESS, rewind: 'cut', project: true, access_env: true, enforces_read_only: true, limits_directories: true, ripgrep: true },
   },
   codex: {
     platform: 'Codex', label: 'Codex App', kind: 'app', location: 'executable', fields: ['source_thread_id', 'project_id', 'project_name'],
@@ -92,7 +94,7 @@ export const ADAPTER_PROFILES = {
     efforts: null, models: false, access_levels: ['read', 'write'], per_tool_allow: false, adopt: '', host_existing: false,
     access_hints: { read: '用接入程序的文件工具读取、搜索项目文件', write: '还可新建、覆盖、局部编辑项目文件；没有命令行' },
     unsupported_hints: { auto: 'API 成员没有命令行，没有需要软件审批的操作', full: 'API 成员没有命令行，没有需要软件审批的操作' },
-    capabilities: { delivery: PROCESS, rewind: 'fresh', project: true, file_tools: true },
+    capabilities: { delivery: PROCESS, rewind: 'fresh', project: true, file_tools: true, limits_directories: true },
   },
 };
 

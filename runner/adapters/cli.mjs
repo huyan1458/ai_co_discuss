@@ -1,7 +1,9 @@
 /**
  * One headless CLI turn, shared by the CLI adapters (Codex CLI, agy CLI). The adapter supplies what differs:
- * `invocation(config, binding, task, user_home)` → `{args, input?, check?, on_session?}`, `lifecycle(state, event, task, bind)`
+ * `invocation(config, binding, task, user_home)` → `{args, input?, check?, on_session?, executable?, steer?}`, `lifecycle(state, event, task, bind)`
  * for its documented events, `events` for progress (and optionally `events.edits(event)` for files edited with the agent's own tools), and optionally `on_stderr(state, text)` and `exit_error(state)`.
+ * `executable` runs another program in place of the software (a bridge to it); `steer(text)` → the stdin line that passes
+ * an interjection into the running turn, and with it stdin stays open after `input` and the delivery can be steered.
  */
 import { resolve } from 'node:path';
 import { createInterface } from 'node:readline';
@@ -49,6 +51,7 @@ function cli_exit_error(adapter, state, code, signal) {
 function monitor_cli(adapter, child, binding, task, restart) {
   const state = { child, session_id: binding.session_id || '', initialized: false, completed: false, error: '', diagnostic: '', responses: new Map(), denials: [] };
   const log_path = resolve(task.directory, `${adapter.id}-${task.id}.log`);
+  state.log_path = log_path;
   const lines = createInterface({ input: child.stdout, crlfDelay: Infinity });
   const max_run_ms = Number(process.env.CODISCUSS_CLI_MAX_MS) || CLI_MAX_RUN_MS;
   track_edits(adapter, task);
@@ -112,6 +115,8 @@ export async function cli_delivery(adapter, config, binding, task, spawn_process
     task = { ...task, on_binding: session_id => { invocation.on_session(session_id); on_binding(session_id); } };
   }
   let restarts = 0;
+  // The process an interjection goes to: the first one, or the one a restart started in its place.
+  let current;
   // A CLI that failed before any turn ran (agy's startup eligibility check on a dropped connection) starts again at
   // once, since nothing was done; a process the runner stopped is never restarted.
   const restart = () => {
@@ -121,12 +126,13 @@ export async function cli_delivery(adapter, config, binding, task, spawn_process
     let launched;
     try { launched = launch(); }
     catch (error) { task.on_failure(error.message, { not_started: true }); return true; }
+    current = launched;
     launched.child.once('spawn', () => { launched.state.spawned = true; launched.send(); });
     launched.child.once('error', error => task.on_failure(error.message, { not_started: !launched.state.spawned }));
     return true;
   };
   const launch = () => {
-    const child = spawn_process(config.executable, invocation.args, {
+    const child = spawn_process(invocation.executable || config.executable, invocation.args, {
       cwd: launch_directory(config, task), windowsHide: true, shell: false, stdio: ['pipe', 'pipe', 'pipe'],
       env: { ...process.env, DISCUSS_ACCESS_FILE: task.access_path },
     });
@@ -137,7 +143,8 @@ export async function cli_delivery(adapter, config, binding, task, spawn_process
     task.on_process(child);
     const send = () => {
       child.stdin.on('error', error => { if (error.code !== 'EPIPE') task.on_failure(error.message); });
-      child.stdin.end(invocation.input);
+      if (invocation.steer) child.stdin.write(invocation.input);
+      else child.stdin.end(invocation.input);
       task.on_trace?.('prompt_sent');
     };
     return { child, state, send };
@@ -145,11 +152,24 @@ export async function cli_delivery(adapter, config, binding, task, spawn_process
   let first;
   try { first = launch(); }
   catch (error) { throw not_sent(error); }
+  current = first;
   const { child, state } = first;
   await new Promise((resolve_spawn, reject) => {
     child.once('spawn', () => { state.spawned = true; task.on_trace?.('cli_spawned'); resolve_spawn(); });
     child.once('error', error => state.spawned ? task.on_failure(error.message) : reject(not_sent(error)));
   });
   first.send();
-  return { session_id: state.session_id, status: 'accepted', capabilities: adapter_capabilities(adapter.id).delivery };
+  const steer = invocation.steer && (text => steer_cli(current, invocation, task, text));
+  return { session_id: state.session_id, status: 'accepted', capabilities: adapter_capabilities(adapter.id).delivery, ...(steer ? { steer } : {}) };
+}
+
+/**
+ * Pass one interjection into a running CLI turn as the adapter's stdin line, and mark it in the log so the execution's
+ * details show it where it happened. False when the turn already ended or the process is gone.
+ */
+function steer_cli({ child, state }, invocation, task, text) {
+  if (state.completed || state.stopped || state.error || child.exitCode !== null || child.stdin.destroyed || child.stdin.writableEnded) return false;
+  child.stdin.write(invocation.steer(text));
+  task.on_output(state.log_path, `${JSON.stringify({ type: 'codiscuss.interjection', text })}\n`);
+  return true;
 }

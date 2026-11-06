@@ -1842,7 +1842,12 @@ class DiscussionHandler(BaseHTTPRequestHandler):
         """Require both an explicitly registered origin and its private connection credential."""
         path = self.server.connections_file
         settings = json.loads(path.read_text(encoding="utf-8")) if path and path.exists() else {}
-        expected = settings.get("sites", {}).get(origin, {}).get("token_hash")
+        connection = settings.get("sites", {}).get(origin, {})
+        # A website the runner relays for reaches this computer only through paired, signed and unlocked devices; a
+        # browser credential kept from before would skip all of that.
+        if connection.get("bridge_hash"):
+            raise PermissionError("此网站经已配对设备的中转访问这台电脑，不再接受本机连接；请在设置 → 账号中配对这台设备")
+        expected = connection.get("token_hash")
         if not isinstance(expected, str) or not expected:
             raise PermissionError("此网站尚未连接本机；请运行 codiscuss local connect 站点地址")
         self.bridge_origin = origin
@@ -1863,7 +1868,7 @@ class DiscussionHandler(BaseHTTPRequestHandler):
         """Forward authenticated browser requests to the shared Node entrypoint and pin their website."""
         site = self.local_request_site(method)
         route = parts[2:]
-        if method == "OPTIONS" and route in (["settings"], ["launch"], ["room-models"], ["room-files"], ["room-member"], ["room-member-access"], ["room-member-allow"], ["room-member-adapter"], ["room-member-model"], ["room-profiles"], ["room-restore"], ["room-fork"], ["models"], ["api-key"], ["api-check"],
+        if method == "OPTIONS" and route in (["settings"], ["launch"], ["room-models"], ["room-files"], ["execution-details"], ["room-member"], ["room-member-access"], ["room-member-allow"], ["room-member-adapter"], ["room-member-model"], ["room-profiles"], ["room-restore"], ["room-fork"], ["models"], ["api-key"], ["api-check"],
                                              ["scheduler-check"], ["tts-settings"], ["tts"], ["stt"], ["pick-directory"], ["browse-directory"], ["projects"], ["presets"], ["workflows"], ["room-workflow"], ["room-settings"], ["machine-link"], ["device-pairing"], ["devices"]):
             return self.respond({"ok": True})
         if route == ["settings"] and method in ("GET", "POST"):
@@ -1886,7 +1891,7 @@ class DiscussionHandler(BaseHTTPRequestHandler):
             command = route[0]
         elif route in (["room-member"], ["room-member-access"], ["room-member-allow"], ["room-member-adapter"], ["room-member-model"]) and method == "POST":
             command = route[0]
-        elif route in (["room-profiles"], ["room-files"], ["room-restore"], ["room-fork"]) and method == "POST":
+        elif route in (["room-profiles"], ["room-files"], ["execution-details"], ["room-restore"], ["room-fork"]) and method == "POST":
             command = route[0]
         elif route == ["pick-directory"] and method == "POST":
             command = "pick-directory"
@@ -1912,10 +1917,10 @@ class DiscussionHandler(BaseHTTPRequestHandler):
             if self.headers.get_content_type() != "application/json":
                 raise ValueError("本机操作须使用 application/json")
             payload = self.read_payload()
-            if command in ("start", "room-config", "room-models", "room-files", "room-member", "room-member-access", "room-member-allow", "room-member-adapter", "room-member-model", "room-profiles", "room-restore", "room-fork", "room-workflow", "room-settings", "workflows"):
+            if command in ("start", "room-config", "room-models", "room-files", "execution-details", "room-member", "room-member-access", "room-member-allow", "room-member-adapter", "room-member-model", "room-profiles", "room-restore", "room-fork", "room-workflow", "room-settings", "workflows"):
                 payload.pop("access_file", None)
                 payload.update(site=site, entry="web")
-            if command in ("room-files", "room-workflow", "room-settings", "room-member", "room-member-access", "room-member-allow", "room-member-model", "room-member-adapter") and not payload.get("token") and not self.bridge_origin:
+            if command in ("room-files", "execution-details", "room-workflow", "room-settings", "room-member", "room-member-access", "room-member-allow", "room-member-model", "room-member-adapter") and not payload.get("token") and not self.bridge_origin:
                 with closing(connect_db(self.server.database)) as connection:
                     self.admin_as_owner(connection, payload.get("room_id", ""))
                     payload["token"] = self.headers.get("X-Discussion-Token", "")

@@ -442,8 +442,25 @@ CREATE TABLE IF NOT EXISTS execution_capabilities (
     room_id TEXT NOT NULL,
     stoppable INTEGER CHECK(stoppable IN (0,1)),
     progress INTEGER CHECK(progress IN (0,1)),
-    stop_result TEXT NOT NULL DEFAULT '' CHECK(stop_result IN ('','stopped','unstoppable','unconfirmed'))
+    stop_result TEXT NOT NULL DEFAULT '' CHECK(stop_result IN ('','stopped','unstoppable','unconfirmed')),
+    steer INTEGER CHECK(steer IN (0,1))
 );
+-- What the owner said into one running execution without ending it (an interjection from the private-chat page), and
+-- whether the runner got it into the member's software: pending until the runner reports delivered or failed. A retry
+-- with the same submission_id is the same interjection. Not backed up, like the executions it belongs to.
+CREATE TABLE IF NOT EXISTS execution_interjections (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    execution_id INTEGER NOT NULL REFERENCES member_executions(id) ON DELETE CASCADE,
+    room_id TEXT NOT NULL REFERENCES rooms(id) ON DELETE CASCADE,
+    submission_id TEXT NOT NULL,
+    text TEXT NOT NULL,
+    status TEXT NOT NULL DEFAULT 'pending' CHECK(status IN ('pending','delivered','failed')),
+    reason TEXT NOT NULL DEFAULT '',
+    created_at INTEGER NOT NULL,
+    updated_at INTEGER NOT NULL,
+    UNIQUE(room_id,submission_id)
+);
+CREATE INDEX IF NOT EXISTS execution_interjections_execution ON execution_interjections(execution_id);
 -- What a rewind does to each runner member's session, as its adapter reported: cut by the runner, rebuilt each time
 -- (fresh), or kept as it is. A member without a report is kept; manual and online members are always kept.
 CREATE TABLE IF NOT EXISTS member_capabilities (
@@ -1114,6 +1131,19 @@ BEGIN
     INSERT INTO room_revisions (room_id,revision) SELECT NEW.room_id,(SELECT COALESCE(MAX(revision),0)+1 FROM room_revisions)
         WHERE NOT EXISTS (SELECT 1 FROM room_revisions WHERE room_id=NEW.room_id);
 END;
+CREATE TRIGGER IF NOT EXISTS revision_interjection_insert AFTER INSERT ON execution_interjections
+BEGIN
+    UPDATE room_revisions SET revision=(SELECT MAX(revision)+1 FROM room_revisions) WHERE room_id=NEW.room_id;
+    INSERT INTO room_revisions (room_id,revision) SELECT NEW.room_id,(SELECT COALESCE(MAX(revision),0)+1 FROM room_revisions)
+        WHERE NOT EXISTS (SELECT 1 FROM room_revisions WHERE room_id=NEW.room_id);
+END;
+CREATE TRIGGER IF NOT EXISTS revision_interjection_update AFTER UPDATE OF status ON execution_interjections
+WHEN OLD.status IS NOT NEW.status
+BEGIN
+    UPDATE room_revisions SET revision=(SELECT MAX(revision)+1 FROM room_revisions) WHERE room_id=NEW.room_id;
+    INSERT INTO room_revisions (room_id,revision) SELECT NEW.room_id,(SELECT COALESCE(MAX(revision),0)+1 FROM room_revisions)
+        WHERE NOT EXISTS (SELECT 1 FROM room_revisions WHERE room_id=NEW.room_id);
+END;
 CREATE TRIGGER IF NOT EXISTS revision_capability_insert AFTER INSERT ON execution_capabilities
 BEGIN
     UPDATE room_revisions SET revision=(SELECT MAX(revision)+1 FROM room_revisions) WHERE room_id=NEW.room_id;
@@ -1121,7 +1151,7 @@ BEGIN
         WHERE NOT EXISTS (SELECT 1 FROM room_revisions WHERE room_id=NEW.room_id);
 END;
 CREATE TRIGGER IF NOT EXISTS revision_capability_update AFTER UPDATE ON execution_capabilities
-WHEN OLD.stoppable IS NOT NEW.stoppable OR OLD.progress IS NOT NEW.progress OR OLD.stop_result IS NOT NEW.stop_result
+WHEN OLD.stoppable IS NOT NEW.stoppable OR OLD.progress IS NOT NEW.progress OR OLD.stop_result IS NOT NEW.stop_result OR OLD.steer IS NOT NEW.steer
 BEGIN
     UPDATE room_revisions SET revision=(SELECT MAX(revision)+1 FROM room_revisions) WHERE room_id=NEW.room_id;
     INSERT INTO room_revisions (room_id,revision) SELECT NEW.room_id,(SELECT COALESCE(MAX(revision),0)+1 FROM room_revisions)

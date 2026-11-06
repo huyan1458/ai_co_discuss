@@ -23,19 +23,25 @@ export class MachineRelay {
     const role = request.headers.get("X-Relay-Role");
     if (request.headers.get("Upgrade") === "websocket" && RELAY_ROLES.includes(role)) {
       const pair = new WebSocketPair();
-      this.accept(pair[1], role);
+      let device = null;
+      try { device = JSON.parse(request.headers.get("X-Relay-Device") || "null"); } catch { /* An untagged socket is closed at the next list. */ }
+      this.accept(pair[1], role, device);
       return new Response(null, { status: 101, webSocket: pair[0], headers: { "Sec-WebSocket-Protocol": RELAY_PROTOCOL } });
     }
     if (request.method === "POST" && role === "request") return Response.json(await this.relay(await request.json()));
+    if (request.method === "POST" && role === "devices") return Response.json(this.devices((await request.json()).devices));
     return new Response(null, { status: 404 });
   }
 
-  /** Register a socket; a new computer connection replaces the old one, and devices learn whether it is online. */
-  accept(socket, role) {
+  /**
+   * Register a socket; a new computer connection replaces the old one, and devices learn whether it is online. A device
+   * socket keeps which device opened it and until when that device is paired.
+   */
+  accept(socket, role, device = null) {
     if (role === "machine") for (const old of this.ctx.getWebSockets("machine")) old.close(1000, "replaced");
     this.ctx.acceptWebSocket(socket, [role]);
     // The role survives hibernation with the socket, so a woken object still knows who sent a frame.
-    socket.serializeAttachment({ role });
+    socket.serializeAttachment(role === "device" ? { role, device: device?.id ?? "", expires_at: Number(device?.expires_at) || 0 } : { role });
     if (role === "machine") this.broadcast({ type: "presence", online: true });
     else socket.send(JSON.stringify({ type: "presence", online: this.machine() !== null }));
   }
@@ -88,10 +94,31 @@ export class MachineRelay {
     this.webSocketClose(socket);
   }
 
-  /** Send a frame to every device. */
-  broadcast(frame) {
-    const text = JSON.stringify(frame);
+  /**
+   * Apply the computer's new device list: sockets of devices no longer on it are closed, the others take its expiry.
+   * A revoked device thereby stops hearing which rooms change and whether the computer is online.
+   */
+  devices(list) {
+    const kept = new Map((Array.isArray(list) ? list : []).map(item => [item?.id, Number(item?.expires_at) || 0]));
+    let closed = 0;
     for (const socket of this.ctx.getWebSockets("device")) {
+      const attachment = socket.deserializeAttachment() || {};
+      if (!kept.has(attachment.device)) { closed += 1; this.drop(socket, "revoked"); }
+      else socket.serializeAttachment({ ...attachment, expires_at: kept.get(attachment.device) });
+    }
+    return { closed };
+  }
+
+  /** Close a device socket that may no longer listen. */
+  drop(socket, reason) {
+    try { socket.close(4001, reason); } catch { /* Already closed. */ }
+  }
+
+  /** Send a frame to every device still paired; a socket whose device expired since it connected is closed instead. */
+  broadcast(frame) {
+    const text = JSON.stringify(frame), now = Date.now();
+    for (const socket of this.ctx.getWebSockets("device")) {
+      if (!(socket.deserializeAttachment()?.expires_at > now)) { this.drop(socket, "expired"); continue; }
       try { socket.send(text); } catch { /* A closed device reconnects and reads the current state. */ }
     }
   }

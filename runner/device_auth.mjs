@@ -35,8 +35,6 @@ const LABEL_LIMIT = 60;
 const CODE_ALPHABET = '0123456789ABCDEFGHJKMNPQRSTVWXYZ';
 const CODE_LENGTH = 12;
 const PAIR_CONTEXT = 'codiscuss-pair-v1';
-// What an expired (not yet removed) device may still ask for: only to renew itself.
-const EXPIRED_ACTIONS = new Set(['passkey-challenge', 'device-renew']);
 // What a locked device may still ask for: only to unlock (or renew) itself with its passkey.
 const LOCKED_ACTIONS = new Set(['passkey-challenge', 'device-unlock', 'device-renew']);
 // The one action an unpaired browser may send, unsigned: proving it holds a pairing code.
@@ -136,25 +134,35 @@ export function machine_fingerprint(link) {
   return createHash('sha256').update(`${ecdh.x}.${ecdh.y}.${sign.x}.${sign.y}`).digest('hex').slice(0, 32);
 }
 
-/** Start a pairing at this computer's own screen: a 12-character code, valid two minutes, and the link a camera can open. */
-export function start_pairing(home, { site, fingerprint = '', temporary = false, by = 'computer' }) {
+/**
+ * Start a pairing at this computer's own screen: a 12-character code, valid two minutes, and the link a camera can open.
+ * `without_passkey` lets this one pairing go without a passkey (a browser that cannot create one); only the person at
+ * this computer can allow it, never the new device's page.
+ */
+export function start_pairing(home, { site, fingerprint = '', temporary = false, without_passkey = false, by = 'computer' }) {
   const bytes = randomBytes(CODE_LENGTH);
   const code = Array.from(bytes, byte => CODE_ALPHABET[byte & 31]).join('');
-  audit(home, { event: 'pairing.started', by, temporary: Boolean(temporary) });
+  audit(home, { event: 'pairing.started', by, temporary: Boolean(temporary), without_passkey: Boolean(without_passkey) });
   return with_lock(home, (registry, now) => {
     const id = randomBytes(8).toString('hex');
-    registry.pairings[id] = { code, temporary: Boolean(temporary), by, expires_at: now + PAIRING_MS, failures: 0 };
+    registry.pairings[id] = { code, temporary: Boolean(temporary), without_passkey: Boolean(without_passkey), by, expires_at: now + PAIRING_MS, failures: 0 };
     return { code: `${code.slice(0, 4)}-${code.slice(4, 8)}-${code.slice(8)}`, expires_at: now + PAIRING_MS, temporary: Boolean(temporary),
-      ...(site ? { url: `${site}/#pair=${code}${fingerprint ? `&fp=${fingerprint}` : ''}` } : {}) };
+      without_passkey: Boolean(without_passkey), ...(site ? { url: `${site}/#pair=${code}${fingerprint ? `&fp=${fingerprint}` : ''}` } : {}) };
   });
 }
 
-/** Record a paired device with its passkey: thirty days, or one day for a temporary one. */
+/** Whether a device may renew itself with its passkey after expiring: kept devices with a passkey only. */
+const renewable = device => device.passkeys.length > 0 && !device.temporary;
+
+/**
+ * Record a paired device with its passkey, if it has one: thirty days, or one day for a temporary one. A device paired
+ * without a passkey (allowed at this computer for that pairing) is trusted by its device key alone and never locks.
+ */
 function add_device(registry, now, { public_key, label, temporary, by, passkey }) {
   const id = device_id_of(public_key);
   registry.devices[id] = { public_key: { kty: 'EC', crv: 'P-256', x: public_key.x, y: public_key.y }, label: clean_label(label), by,
-    temporary: Boolean(temporary), created_at: now, expires_at: now + (temporary ? TEMPORARY_DAYS : DEVICE_DAYS) * DAY_MS, passkeys: [passkey],
-    // Pairing itself was confirmed with the passkey, so the device starts unlocked.
+    temporary: Boolean(temporary), created_at: now, expires_at: now + (temporary ? TEMPORARY_DAYS : DEVICE_DAYS) * DAY_MS, passkeys: passkey ? [passkey] : [],
+    // Pairing itself was confirmed at this computer, so the device starts unlocked.
     unlocked_until: Math.min(now + UNLOCK_MS, now + (temporary ? TEMPORARY_DAYS : DEVICE_DAYS) * DAY_MS) };
   return { device_id: id, expires_at: registry.devices[id].expires_at, temporary: Boolean(temporary) };
 }
@@ -165,7 +173,6 @@ function add_device(registry, now, { public_key, label, temporary, by, passkey }
  */
 export function pair_device(home, machine_id, site, { public_key, label, proof, passkey: credential }) {
   if (typeof proof !== 'string' || !proof) throw new Error('缺少配对证明');
-  if (!credential) throw new Error('配对须同时创建这台设备的通行密钥');
   device_id_of(public_key);
   const { origin, rp_id } = relying_party(site);
   const paired = with_lock(home, (registry, now) => {
@@ -173,10 +180,14 @@ export function pair_device(home, machine_id, site, { public_key, label, proof, 
     for (const [id, pairing] of Object.entries(registry.pairings)) {
       const expected = Buffer.from(pairing_proof(pairing.code, machine_id, public_key));
       if (expected.length === supplied.length && timingSafeEqual(expected, supplied)) {
+        // Going without a passkey drops the daily confirmation, so only the person at this computer may allow it.
+        if (!credential && !pairing.without_passkey) {
+          throw Object.assign(new Error('这台设备没有创建通行密钥。如果它的浏览器确实不支持，请在电脑上添加设备时勾选“允许不用通行密钥”，再重新扫码'), { need: 'passkey' });
+        }
         delete registry.pairings[id];
-        const passkey = verify_registration(credential, { challenge: pairing_passkey_challenge(pairing.code, public_key), origin, rp_id });
+        const passkey = credential && verify_registration(credential, { challenge: pairing_passkey_challenge(pairing.code, public_key), origin, rp_id });
         const added = add_device(registry, now, { public_key, label, temporary: pairing.temporary, by: pairing.by, passkey });
-        audit(home, { event: 'device.paired', device: added.device_id, label: clean_label(label), by: pairing.by, temporary: pairing.temporary });
+        audit(home, { event: 'device.paired', device: added.device_id, label: clean_label(label), by: pairing.by, temporary: pairing.temporary, passkey: Boolean(passkey) });
         return added;
       }
     }
@@ -206,29 +217,36 @@ export async function open_signed_request(home, id, sealed, machine_id) {
   if (!valid) throw new Error('设备签名无效');
   // The signature names the computer it was meant for, so a request cannot be passed on to another paired computer.
   if (request.machine !== machine_id) throw new Error('这条请求是发给另一台电脑的');
-  if (device.expires_at <= Date.now() && !EXPIRED_ACTIONS.has(request.action)) {
-    throw Object.assign(new Error(device.temporary ? '临时设备授权已到期，请重新配对' : '设备授权已到期，请用通行密钥续期'), { need: device.temporary ? 'pairing' : 'renew' });
+  // An expired device may only renew itself, and only if it can: the website lets it through for that alone, so the
+  // limit is checked again here rather than trusted.
+  if (device.expires_at <= Date.now()) {
+    if (!renewable(device)) throw Object.assign(new Error('设备授权已到期，请在电脑前重新配对'), { need: 'pairing' });
+    const renewing = request.action === 'device-renew' || (request.action === 'passkey-challenge' && request.payload?.purpose === 'renew');
+    if (!renewing) throw Object.assign(new Error('设备授权已到期，请用通行密钥续期'), { need: 'renew' });
   }
-  if (!(device.unlocked_until > Date.now()) && !LOCKED_ACTIONS.has(request.action)) {
+  // A device without a passkey has nothing to unlock with, so it skips the daily confirmation.
+  if (device.passkeys.length > 0 && !(device.unlocked_until > Date.now()) && !LOCKED_ACTIONS.has(request.action)) {
     throw Object.assign(new Error('请用通行密钥确认这台设备（每天一次）'), { need: 'unlock' });
   }
   return { request, device_id: sealed.device_id };
 }
 
 /**
- * The device list this computer signs for the website: each device's public key and expiry, nothing else. The website
- * checks requests against it and cannot add a device of its own.
+ * The device list this computer signs for the website: each device's public key, expiry and, for a device that may renew
+ * itself, how long after expiry it may still reach this computer to do so. The website checks requests against it and
+ * cannot add a device of its own.
  */
 export async function signed_device_list(home, link, now = Date.now()) {
   const { devices } = read_registry(home);
   const body = JSON.stringify({ machine: link.id, issued_at: now, devices: Object.entries(devices)
-    .map(([id, device]) => ({ id, x: device.public_key.x, y: device.public_key.y, expires_at: device.expires_at })) });
+    .map(([id, device]) => ({ id, x: device.public_key.x, y: device.public_key.y, expires_at: device.expires_at,
+      ...(renewable(device) ? { renew_until: device.expires_at + RENEW_GRACE_DAYS * DAY_MS } : {}) })) });
   const key = await crypto.subtle.importKey('jwk', link.sign_private_key, { name: 'ECDSA', namedCurve: 'P-256' }, false, ['sign']);
   const signature = await crypto.subtle.sign({ name: 'ECDSA', hash: 'SHA-256' }, key, new TextEncoder().encode(body));
   return { body, signature: b64url(new Uint8Array(signature)) };
 }
 
-/** List paired devices with their passkeys and write grants, newest first, and the recent audit entries. */
+/** List paired devices with their passkey counts and unlock times, newest first, and the recent audit entries. */
 export function list_devices(home, current = null) {
   const { devices } = read_registry(home);
   return { audit: recent_audit(home), devices: Object.entries(devices).map(([id, device]) => ({ id, label: device.label, temporary: device.temporary, created_at: device.created_at,
@@ -238,7 +256,7 @@ export function list_devices(home, current = null) {
 }
 
 /**
- * Remove a device with its passkeys and grants; a device may also remove itself. Returns the removed passkey ids so the
+ * Remove a device with its passkeys; a device may also remove itself. Returns the removed passkey ids so the
  * page can remove the same passkeys from the website's login list.
  */
 export function revoke_device(home, device_id) {

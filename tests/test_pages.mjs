@@ -302,7 +302,7 @@ test('the machine relay hands requests to the computer, answers once, and never 
   const { ctx, socket } = relay_context();
   const relay = new MachineRelay(ctx);
   const device = socket();
-  relay.accept(device, 'device');
+  relay.accept(device, 'device', { id: 'device-1', expires_at: Date.now() + 3600000 });
   assert.deepEqual(device.sent.pop(), { type: 'presence', online: false });
   assert.deepEqual(await relay.relay({ id: 'request-1', envelope: { data: 'x' } }), { id: 'request-1', status: 'offline' });
 
@@ -344,6 +344,24 @@ test('the machine relay hands requests to the computer, answers once, and never 
   assert.deepEqual(await bounded, { id: 'request-6', status: 'unknown' }, 'no device holds the relay longer than the bound');
 });
 
+test('the machine relay stops telling revoked or expired devices what changes', () => {
+  const { ctx, socket } = relay_context();
+  const relay = new MachineRelay(ctx);
+  const kept = socket(), revoked = socket(), expiring = socket();
+  relay.accept(kept, 'device', { id: 'kept', expires_at: Date.now() + 3600000 });
+  relay.accept(revoked, 'device', { id: 'revoked', expires_at: Date.now() + 3600000 });
+  relay.accept(expiring, 'device', { id: 'expiring', expires_at: Date.now() + 3600000 });
+  // The computer's new list drops one device and shortens another's expiry.
+  assert.deepEqual(relay.devices([{ id: 'kept', expires_at: Date.now() + 3600000 }, { id: 'expiring', expires_at: Date.now() - 1 }]), { closed: 1 });
+  assert.equal(revoked.readyState, 3, 'a revoked device socket is closed at once');
+  const machine = socket();
+  relay.accept(machine, 'machine');
+  relay.webSocketMessage(machine, JSON.stringify({ type: 'event', rooms: ['room-a'] }));
+  assert.deepEqual(kept.sent.pop(), { type: 'change', rooms: ['room-a'] });
+  assert.equal(expiring.readyState, 3, 'an expired device is closed instead of told');
+  assert.ok(!expiring.sent.some(frame => frame.type === 'change'));
+});
+
 test('Worker hands relay sockets and requests to the computer relay only after checking who sends them', async t => {
   const f = await bound_fixture(t);
   const machine_token = (await import('../runner/remote_launch.mjs')).machine_links(f.home).sites['https://discussion.test'].token;
@@ -373,4 +391,20 @@ test('Worker hands relay sockets and requests to the computer relay only after c
   assert.deepEqual((await f.signed(path, request)).body, { id: 'relay-request-000001', status: 'unknown' });
   assert.deepEqual(seen.map(item => [item.id, item.role]), [[f.machine_id, 'machine'], [f.machine_id, 'device'], [f.machine_id, 'request']]);
   assert.deepEqual(seen[2].body, request);
+
+  // Once expired, a device that may renew still reaches the computer one request at a time, and nothing else.
+  const file = join(f.home, 'devices.json'), registry = JSON.parse(await readFile(file, 'utf8'));
+  registry.devices[f.device.id].expires_at = Date.now() - 1000;
+  await writeFile(file, JSON.stringify(registry));
+  await f.sync();
+  assert.deepEqual(seen.at(-1).role, 'devices', 'a changed list is passed to the relay');
+  assert.ok(seen.at(-1).body.devices.some(item => item.id === f.device.id && item.expires_at < Date.now()));
+  assert.equal((await f.signed(path, { ...request, id: 'relay-request-000002' })).status, 200);
+  assert.equal((await upgrade(`d.${await f.device.credential('GET', path)}`)).status, 401, 'no socket for an expired device');
+  assert.equal((await f.signed(`/api/machines/${f.machine_id}/commands`, { ...request, id: 'command-0000000003' })).status, 401, 'nor the command queue');
+  // Past the renewal limit the computer signed, the website refuses it too.
+  registry.devices[f.device.id].expires_at = Date.now() - 31 * 86400000;
+  await writeFile(file, JSON.stringify(registry));
+  await f.sync();
+  assert.equal((await f.signed(path, { ...request, id: 'relay-request-000003' })).status, 401);
 });

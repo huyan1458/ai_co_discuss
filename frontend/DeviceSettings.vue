@@ -17,6 +17,8 @@ const audit_open = ref("");
 const busy = ref("");
 const code = ref("");
 const temporary = ref(false);
+// Lets the next code pair a browser that cannot create passkeys; such a device skips the daily confirmation.
+const without_passkey = ref(false);
 const invite = ref(null);
 // The device waiting for the user to confirm unbinding it.
 const unbinding = ref(null);
@@ -105,7 +107,7 @@ async function scan() {
 /** Show a two-minute code and the QR code a phone camera can open, for pairing another device. */
 function add_device() {
   return run("invite", async () => {
-    const result = await bridge.device.invite(temporary.value);
+    const result = await bridge.device.invite(temporary.value, without_passkey.value);
     invite.value = { ...result, svg: result.url ? renderSVG(result.url, { border: 1 }) : "", expired: false };
     watch_invite(devices.value?.length || 0);
   });
@@ -197,6 +199,7 @@ const date = (time) => new Date(time).toLocaleString("zh-CN", { month: "numeric"
         <UButton v-if="remote && renew_due" label="续期这台设备" color="neutral" variant="soft" size="sm" :loading="busy === 'renew'" :disabled="Boolean(busy)" @click="run('renew', async () => { await bridge.device.renew(); await load(); })" />
         <UButton v-if="local" label="添加设备" icon="i-lucide-qr-code" color="neutral" variant="outline" size="sm" :loading="busy === 'invite'" :disabled="Boolean(busy)" @click="add_device" />
         <UCheckbox v-if="local" v-model="temporary" label="临时设备（只授权 1 天）" />
+        <UCheckbox v-if="local" v-model="without_passkey" label="允许不用通行密钥" description="只在新设备的浏览器不支持通行密钥时勾选：它不需要每天确认，到期须回电脑前重新配对" />
       </div>
       <div v-if="invite" class="device-invite" role="status">
         <!-- eslint-disable-next-line vue/no-v-html -- an SVG this page rendered from the computer's own link -->
@@ -205,7 +208,7 @@ const date = (time) => new Date(time).toLocaleString("zh-CN", { month: "numeric"
           <p>用新设备的相机扫描二维码；没有摄像头就在新设备打开网站，输入配对码：</p>
           <p class="device-code" :class="{ 'device-expired': invite.expired }">{{ invite.code }}</p>
           <p v-if="invite.expired" class="fine-print device-expired-note">已过期，不能再用。</p>
-          <p v-else class="fine-print">{{ date(invite.expires_at) }} 前有效（2 分钟），只能用一次{{ invite.temporary ? "；临时设备只授权 1 天" : "" }}。</p>
+          <p v-else class="fine-print">{{ date(invite.expires_at) }} 前有效（2 分钟），只能用一次{{ invite.temporary ? "；临时设备只授权 1 天" : "" }}{{ invite.without_passkey ? "；允许不用通行密钥" : "" }}。</p>
           <UButton label="重新生成" icon="i-lucide-refresh-cw" color="neutral" variant="outline" size="xs" :loading="busy === 'invite'" :disabled="Boolean(busy)" @click="add_device" />
         </div>
       </div>

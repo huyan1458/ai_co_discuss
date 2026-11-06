@@ -213,8 +213,10 @@ function project_text(project) {
   const attachments = '消息附件只显示名称、大小与 ID，内容读不到';
   if (!project) return `- 本地文件和消息附件（只显示名称、大小与 ID）的内容你都读不到：以其他成员贴出的为准，不凭文件名猜测；回答涉及时说明你没有读取，缺信息就写明缺什么。`;
   const tools = project.writable ? 'read、glob、grep、write、edit' : 'read、glob、grep';
+  const extras = project.roots.slice(1).map(item => `${item.root}（${item.writable ? '可读写' : '只读'}）`).join('、');
   return `- 可用 ${tools} 工具${project.writable ? '读写' : '只读'}本房间的项目目录，路径相对项目目录，不能越出；密钥文件、版本库元数据和接入程序的私有文件会被拒绝。${project.writable
-    ? '修改已有文件前先 read，局部修改优先用 edit；没有命令行，不能运行测试或构建，需要验证时在回答里说明，交给能运行命令的成员。技能里的草稿文件与 --body-file 不适用：回答正文直接放进 submit_chat，不要用 write 写草稿。' : '项目只读，不能修改文件。'}
+    ? '修改已有文件前先 read，局部修改优先用 edit；没有命令行，不能运行测试或构建，需要验证时在回答里说明，交给能运行命令的成员。技能里的草稿文件与 --body-file 不适用：回答正文直接放进 submit_chat，不要用 write 写草稿。' : '项目只读，不能修改文件。'}${extras ? `
+- 本房间另有项目目录，用绝对路径访问：${extras}。` : ''}
 - ${attachments}：以其他成员贴出的为准，不凭文件名猜测；回答涉及时说明你没有读取，缺信息就写明缺什么。`;
 }
 
@@ -264,6 +266,19 @@ function append_note(profile, history, text) {
   else history.push({ role: 'user', content: text });
 }
 
+/**
+ * Add user text before the next request. The last message is the user's at that point (the prompt, tool results or a
+ * reminder); protocols that keep one user message per turn take it into that message, a string prompt becoming a block.
+ */
+function add_user_text(profile, history, text) {
+  const last = history.at(-1);
+  if (profile.api_protocol === 'anthropic' && last?.role === 'user') {
+    if (typeof last.content === 'string') last.content = [{ type: 'text', text: last.content }];
+    last.content.push({ type: 'text', text });
+  } else if (profile.api_protocol === 'gemini' && last?.role === 'user') last.parts.push({ text });
+  else history.push(profile.api_protocol === 'gemini' ? { role: 'user', parts: [{ text }] } : { role: 'user', content: text });
+}
+
 /** Plain text of the model's latest reply, so a stop without a write can show its stated reason. */
 function last_reply_text(history, limit = REPLY_EXCERPT_CHARS) {
   const item = history.at(-1) || {};
@@ -297,6 +312,8 @@ async function run_participant(profile, key, context) {
   let used_tools = false;
   const turns = max_requests(context);
   for (let index = 0; !turns || index < turns; index++) {
+    // The owner's interjections join the conversation before the next model request, inside the same turn.
+    for (const text of (context.interjections || []).splice(0)) add_user_text(profile, state.history, `用户插话：${text}`);
     context.on_activity?.('thinking');
     const calls = await generate_with_retry(profile, key, state, context.signal);
     if (!calls.length) {
@@ -337,7 +354,9 @@ export async function api_delivery(profile, binding, task) {
   const controller = new AbortController();
   const child = new EventEmitter();
   child.kill = () => { controller.abort(); return true; };
-  const context = { ...task.api_context, participant: task.participant, directory: task.directory,
+  const interjections = [];
+  let running = true;
+  const context = { ...task.api_context, participant: task.participant, directory: task.directory, interjections,
     task_id: task.id, signal: controller.signal, on_activity: task.on_activity, on_note: task.on_note, on_edits: task.on_edits,
     expert_prompt: expert_prompt(profile),
     // The service home holds API keys and the task directory holds room credentials; neither is a project file.
@@ -351,9 +370,11 @@ export async function api_delivery(profile, binding, task) {
       await run_participant(profile, key, context);
     } catch (error) {
       if (!controller.signal.aborted) task.on_failure?.(error.message.replaceAll(key, '[已隐藏]'));
-    } finally { child.emit('close', 0); task.on_exit?.(); }
+    } finally { running = false; child.emit('close', 0); task.on_exit?.(); }
   });
-  return { status: 'accepted', session_id, capabilities: API_CALL };
+  // Taken at the next model request; the request already under way is not cut short.
+  const steer = text => { if (!running) return false; interjections.push(text); return true; };
+  return { status: 'accepted', session_id, capabilities: API_CALL, steer };
 }
 
 // The call is the runner's own, so it can be aborted and its tool steps are seen.

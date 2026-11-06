@@ -192,9 +192,12 @@ function escape_html(value) {
   return String(value ?? "").replace(/[&<>"']/g, (character) => entities[character]);
 }
 
+// Building a formatter costs far more than using one, and every rendered message asks for its time.
+const TIME_FORMAT = new Intl.DateTimeFormat("zh-CN", { hour: "2-digit", minute: "2-digit", hour12: false });
+
 /** Format a server timestamp in the viewer's local timezone. */
 function format_time(value) {
-  return new Intl.DateTimeFormat("zh-CN", { hour: "2-digit", minute: "2-digit", hour12: false }).format(new Date(value));
+  return TIME_FORMAT.format(new Date(value));
 }
 
 /** Display operation feedback only in the classic renderer. */
@@ -1574,7 +1577,7 @@ async function invite_member({ name, access, project_access = "read", session_id
 async function finish_message(result, room_id, drafts) {
   show_toast(`留言已保存 · #${result.message.id}`);
   if (state.room?.id !== room_id || state.attachment_drafts !== drafts) return;
-  element("message-input").value = "";
+  // The composer was emptied on send; what is in it now was typed since and stays.
   state.pending_submission = null;
   clear_attachment_drafts();
   cancel_reply();
@@ -1597,7 +1600,6 @@ async function finish_message(result, room_id, drafts) {
 /** A message the site queued: clear the composer; it waits above the composer until the room is idle. */
 async function finish_queued(result, room_id, drafts) {
   if (state.room?.id !== room_id || state.attachment_drafts !== drafts) return;
-  element("message-input").value = "";
   state.pending_submission = null;
   clear_attachment_drafts();
   cancel_reply();
@@ -1677,8 +1679,10 @@ async function send_message(event) {
   payload.submission_id = state.pending_submission.id;
   element("send-message").disabled = true;
   state.sending_message = true;
-  element("message-input").disabled = true;
-  const preview = { author: payload.author, text: payload.text, files: drafts.map(file => file.file.name) };
+  // The text leaves the composer at once and lives on as the sending card; a failed send puts it back.
+  const draft = element("message-input").value;
+  element("message-input").value = "";
+  const preview = { author: payload.author, text: payload.text, created_at: new Date().toISOString(), files: drafts.map(file => file.file.name) };
   // A message the site will likely queue skips the in-transcript card, which would flash before moving above the composer.
   const queue = state.room.free?.queued_messages;
   const likely_queued = payload.queue && (queue?.busy || queue?.items?.length);
@@ -1698,6 +1702,9 @@ async function send_message(event) {
     if (saved) notify_failure(error, `留言已保存，但页面刷新失败：${error.message}`);
     else {
       state.sending_preview = { ...preview, failed: error.message };
+      // Anything typed meanwhile follows the restored draft, so neither is lost.
+      const typed = element("message-input").value;
+      element("message-input").value = typed.trim() ? `${draft}\n\n${typed}` : draft;
       error.notified = true;
     }
     throw error;
@@ -1707,7 +1714,6 @@ async function send_message(event) {
     if (!state.sending_preview?.failed) state.sending_preview = null;
     state.upload_status = "";
     element("send-message").disabled = false;
-    element("message-input").disabled = false;
     render_attachment_drafts();
     publish_view();
   }
@@ -2315,12 +2321,17 @@ async function pair_this_device(code) {
   // WebAuthn must run on the user's tap, so everything above is ready before the dialog asks for it.
   return passkey_prompt({ title: "配对这台设备", description: "用这台设备的面容、指纹或设备密码确认，完成与电脑的配对。之后打开网页即可使用，无需账号和密码。", confirm_label: "继续",
     run: async () => {
-      const created = await navigator.credentials.create({ publicKey: { challenge, rp: { id: location.hostname, name: "AI CoDiscuss" },
+      const created = await (typeof navigator.credentials?.create === "function" ? navigator.credentials.create({ publicKey: { challenge, rp: { id: location.hostname, name: "AI CoDiscuss" },
         user: { id: crypto.getRandomValues(new Uint8Array(16)), name: `codiscuss · ${device_label()}`, displayName: `AI CoDiscuss · ${device_label()}` },
         pubKeyCredParams: [{ type: "public-key", alg: -7 }, { type: "public-key", alg: -257 }],
         authenticatorSelection: { userVerification: "required", residentKey: "preferred" }, attestation: "none", timeout: PASSKEY_TIMEOUT_MS } })
-        .catch(error => { throw passkey_error(error); });
-      const passkey = { id: bytes_to_b64url(created.rawId), client_data_json: bytes_to_b64url(created.response.clientDataJSON),
+        : Promise.reject(Object.assign(new Error("passkeys unavailable"), { name: "NotSupportedError" })))
+        .catch(error => {
+          // A browser without a working credential manager (e.g. Android without Google Play services) pairs by its device key alone.
+          if (PASSKEY_UNAVAILABLE.has(error?.name)) return null;
+          throw passkey_error(error);
+        });
+      const passkey = created && { id: bytes_to_b64url(created.rawId), client_data_json: bytes_to_b64url(created.response.clientDataJSON),
         attestation_object: bytes_to_b64url(created.response.attestationObject) };
       const answer = await pair_exchange(machine, { public_key: device.public_jwk, label: device_label(), proof, passkey });
       if (answer.status >= 400) throw new Error(answer.body?.error || "配对失败");
@@ -2328,7 +2339,7 @@ async function pair_this_device(code) {
       Object.assign(state.device, { needs: "", pairing_code: "", pairing_fp: "" });
       state.admin.logged_in = true;
       publish_view();
-      notify("info", "这台设备已与电脑配对");
+      notify(passkey ? "info" : "warning", passkey ? "这台设备已与电脑配对" : "这台设备已与电脑配对（经电脑允许不用通行密钥）：不需要每天确认，也不能续期，到期须回电脑前重新配对");
       // The owner's profile, settings and the computer's rooms load now that the computer accepts this device.
       await load_admin_state();
       await load_launch_settings();
@@ -2367,6 +2378,9 @@ function passkey_prompt({ title, description, confirm_label, run }) {
   });
 }
 
+// Errors meaning this browser cannot create passkeys at all, as opposed to the user cancelling.
+const PASSKEY_UNAVAILABLE = new Set(["NotReadableError", "NotSupportedError", "UnknownError"]);
+
 /** Say in plain words why the browser refused a passkey step; its own message is English and names no cause. */
 function passkey_error(error) {
   if (error?.name === "NotAllowedError") return new Error("没有完成通行密钥确认：已取消，或这台设备上没有这个网站可用的通行密钥");
@@ -2385,9 +2399,9 @@ async function passkey_assertion(options) {
 }
 
 /** Show a pairing code for a new device; only this computer's own page can, so new devices are added in front of it. */
-async function invite_device(temporary) {
+async function invite_device(temporary, without_passkey = false) {
   if (!state.admin.local) throw new Error("新设备只能在电脑前添加：请在电脑本机网页打开 设置 → 账号 → 添加设备");
-  return local_launch_request("device-pairing", { temporary });
+  return local_launch_request("device-pairing", { temporary, without_passkey });
 }
 
 // Requests made together while the device is locked share one confirmation.
@@ -2403,15 +2417,22 @@ function unlock_this_device() {
   return unlocking;
 }
 
+// Requests made together while the device is expired share one renewal.
+let renewing = null;
+
 /** Extend this device's trust by thirty days with its passkey. */
-async function renew_this_device() {
-  const options = await relay_command("passkey-challenge", { purpose: "renew" });
-  return passkey_prompt({ title: "续期这台设备", description: "用通行密钥确认后，这台设备再获得 30 天授权。", confirm_label: "用通行密钥确认",
-    run: async () => {
-      await relay_command("device-renew", { challenge_id: options.challenge_id, assertion: await passkey_assertion(options) });
-      state.device.needs = "";
-      notify("info", "已续期 30 天");
-    } });
+function renew_this_device() {
+  renewing ||= (async () => {
+    const options = await relay_command("passkey-challenge", { purpose: "renew" });
+    return passkey_prompt({ title: "续期这台设备", description: "这台设备的授权已到期或快到期。用面容、指纹或设备密码确认后，再获得 30 天授权。", confirm_label: "用通行密钥确认",
+      run: async () => {
+        await relay_command("device-renew", { challenge_id: options.challenge_id, assertion: await passkey_assertion(options) });
+        state.device.needs = "";
+        publish_view();
+        notify("info", "已续期 30 天");
+      } });
+  })().finally(() => { renewing = null; });
+  return renewing;
 }
 
 /**
@@ -2422,6 +2443,13 @@ async function meet_device_need(error) {
   if (error.need === "unlock") {
     await unlock_this_device();
     return true;
+  }
+  // An expired device that may still renew asks for its passkey at once, then carries on; cancelling leaves the button in settings.
+  if (error.need === "renew") {
+    try {
+      await renew_this_device();
+      return true;
+    } catch (failure) { if (!failure.cancelled) notify("error", failure.message); }
   }
   if (error.need === "pairing" && state.admin.devices) forget_pairing();
   if (error.need === "pairing" || error.need === "renew") {
@@ -2897,6 +2925,11 @@ async function load_relay_machine() {
   try {
     const machines = (await request_json("/api/machines")).machines;
     const record = paired_record();
+    // A paired browser talks only to the computer it paired with: a website that no longer lists it must not swap in another.
+    if (record?.machine_id && !machines.some(item => item.id === record.machine_id)) {
+      notify("error", "网站上找不到与这台设备配对的电脑，已停止连接；如果电脑确实换过绑定，请在电脑前重新扫码配对");
+      return null;
+    }
     const machine = machines.find(item => item.id === record?.machine_id) || machines[0] || null;
     if (machine && record?.machine_id === machine.id && record.fingerprint && record.fingerprint !== await machine_fingerprint(machine)) {
       notify("error", "网站给出的电脑身份与配对时不符，已停止连接；请在电脑前重新扫码配对");
@@ -2931,6 +2964,9 @@ async function retry_launch_connection() {
   publish_view();
 }
 
+// The members the last room-models answer named, kept for the outside-directory warning.
+let members_seen = null;
+
 /** Read saved choices for the active room without using drafts or delaying discussion refreshes. */
 async function load_room_models() {
   const room = state.room;
@@ -2944,16 +2980,22 @@ async function load_room_models() {
   if (previous?.room_id === room.id && previous.revision === revision
     && (previous.loading || previous.participants)) return;
   // The last answer stays on screen while the new one is read.
-  const current = { room_id: room.id, revision, loading: true, participants: previous?.room_id === room.id ? previous.participants : null,
-    project_directory: previous?.room_id === room.id ? previous.project_directory : "" };
+  const same_room = previous?.room_id === room.id;
+  const current = { room_id: room.id, revision, loading: true, participants: same_room ? previous.participants : null,
+    project_directory: same_room ? previous.project_directory : "", extra_directories: same_room ? previous.extra_directories : [] };
   state.launch.room_models = current;
   const live = () => state.launch.room_models === current && state.room?.id === room.id;
   // agy is run to name its default model, which takes seconds; everything else is shown first and agy follows.
   try {
     const result = await local_launch_request("room-models", { room_id: room.id, quick: true });
     if (live() && result.room_id === room.id) Object.assign(current, { participants: result.participants, registered: result.registered,
-      scheduler: result.scheduler || null, project_directory: result.project_directory || "", workflow: result.workflow || null,
-      host_workflows: Boolean(result.host_workflows), api_max_requests: result.api_max_requests });
+      scheduler: result.scheduler || null, project_directory: result.project_directory || "", extra_directories: result.extra_directories || [],
+      workflow: result.workflow || null, host_workflows: Boolean(result.host_workflows), api_max_requests: result.api_max_requests });
+    if (live() && result.room_id === room.id) {
+      // Compared with the last answer for this room, which a reload clears from the state but not from here.
+      if (members_seen?.room_id === room.id) warn_outside_members(members_seen.participants, result.participants);
+      members_seen = { room_id: room.id, participants: result.participants };
+    }
   } catch (error) {
     // Unavailable or older bridges leave the model unknown; the failure is kept so the page can say so, and the next refresh retries.
     Object.assign(current, { participants: null, error: error.message || "读取失败" });
@@ -2979,8 +3021,13 @@ function reload_room_models() {
 }
 
 /** Read a directory or file from the room's saved project through the authenticated local connection. */
-function read_room_files(room_id, path = "", offset = 0, query = "") {
-  return local_launch_request("room-files", { room_id, path, offset, ...(query ? { query } : {}), token: localStorage.getItem(`discuss-access:${room_id}`) });
+function read_room_files(room_id, path = "", offset = 0, query = "", root = 0) {
+  return local_launch_request("room-files", { room_id, path, offset, ...(query ? { query } : { root }), token: localStorage.getItem(`discuss-access:${room_id}`) });
+}
+
+/** Read what a member did in one execution from the computer's own log; the details never pass through the website. */
+function read_execution_details(room_id, execution_id) {
+  return local_launch_request("execution-details", { room_id, execution_id, token: localStorage.getItem(`discuss-access:${room_id}`) });
 }
 
 /**
@@ -3176,9 +3223,12 @@ function restore_launch_profile(name, profile) {
 
 /** Capture local overrides before asynchronous work or navigation can change the draft. */
 function launch_options() {
-  const { local_project, ...workspace } = state.launch.workspace;
+  const { local_project, extra_directories, ...workspace } = state.launch.workspace;
+  // Extra project directories go with a main one only, and rows left blank are dropped.
+  const extras = workspace.cwd ? (extra_directories || []).map(path => path.trim()).filter(Boolean) : [];
   // The paired computer resolves a project id to its own folder; a browser with the local service sends the folder itself.
-  return JSON.parse(JSON.stringify({ participants: state.launch.profiles, ...workspace, ...(!state.launch.available && local_project ? { local_project } : {}), entry: "web" }));
+  return JSON.parse(JSON.stringify({ participants: state.launch.profiles, ...workspace, ...(extras.length ? { extra_directories: extras } : {}),
+    ...(!state.launch.available && local_project ? { local_project } : {}), entry: "web" }));
 }
 
 /** A new room also carries the optional smart scheduling choice; only a complete, enabled choice is sent. */
@@ -3194,6 +3244,37 @@ function write_create_api_max_requests(value) {
   state.create_api_max_requests = value;
   write_create_preferences({ api_max_requests: value });
   publish_view();
+}
+
+/**
+ * Warn once when a member starts working outside every project directory of the room (it joined from another folder):
+ * it only reads the room's directories, and its own changes are not compared with the others'. Only a change seen while
+ * the room is open warns; the member card names the folder all along.
+ */
+function warn_outside_members(before, after) {
+  for (const [name, profile] of Object.entries(after || {})) {
+    if (!profile.outside_directory || before?.[name]?.outside_directory === profile.outside_directory) continue;
+    const limit = profile.outside_enforced ? "它对房间目录只读" : "已要求它对房间目录只读，但它的软件或权限档位不受程序限制，仍可能修改";
+    notify("warning", `${display_name(name)} 在 ${profile.outside_directory} 工作，不在本房间的项目目录内：${limit}；它自己目录里的改动不参与冲突提示。`);
+  }
+}
+
+/** Give a room created without a project its main directory; it can be set only once. */
+async function set_room_project_directory(cwd) {
+  const room_id = state.room.id;
+  const token = localStorage.getItem(`discuss-access:${room_id}`) || "";
+  try { await local_launch_request("room-settings", { room_id, token, cwd }); }
+  catch (error) { notify("error", error.message); throw error; }
+  await reload_room_models();
+}
+
+/** Replace this room's extra project directories (the main one never changes); applies from each member's next execution. */
+async function set_room_extra_directories(directories) {
+  const room_id = state.room.id;
+  const token = localStorage.getItem(`discuss-access:${room_id}`) || "";
+  try { await local_launch_request("room-settings", { room_id, token, extra_directories: directories }); }
+  catch (error) { notify("error", error.message); throw error; }
+  await reload_room_models();
 }
 
 /** Change how many model requests one execution of this room's API members may make; applies from the next one. */
@@ -3420,6 +3501,7 @@ function clear_launch_overrides(draft) {
   for (const field of ["cwd", "local_project", "discussion_project", "project_access"]) {
     if (state.launch.workspace[field] === draft[field]) delete state.launch.workspace[field];
   }
+  if (JSON.stringify(state.launch.workspace.extra_directories) === JSON.stringify(draft.extra_directories)) delete state.launch.workspace.extra_directories;
   render_launch_settings();
   publish_view();
 }
@@ -3777,6 +3859,17 @@ async function stop_room() {
   // Quiet when everything is stopping; a window or App that keeps generating is said at once.
   if (live.some(item => !item.capabilities?.stoppable)) notify("warning", stop_summary(live));
   if (state.room?.id === room_id) await refresh_room();
+}
+
+/**
+ * Add the owner's interjection to one running execution; the runner passes it to the member's software at its next
+ * check. A retry with the same submission_id is the same interjection.
+ */
+async function interject_execution(execution_id, text, submission_id) {
+  const room_id = state.room.id;
+  const result = await request_json(`/api/rooms/${room_id}/executions/${execution_id}`, { action: "interject", text, submission_id });
+  if (state.room?.id === room_id) await refresh_room();
+  return result.interjection;
 }
 
 /** Answer a manual member's waiting retry: deliver now, or stop so the runner fails the execution. */
@@ -4847,14 +4940,14 @@ window.discuss_view = { snapshot: view_snapshot, write_field: write_view_field, 
   start_drag: start_directory_drag, reconnect: reconnect_live_updates, stop_label, local_request: local_launch_request,
   attachment_markup, attachment_size, attachment_file_icon, drop_attachments, paste_attachments,
   write_expert: write_view_expert, add_instance: add_view_instance, add_preset: add_preset_instance, platform_of, execute: execute_view_action, theme: change_view_theme,
-  reload_workflows, workflow_preset, write_create_host_workflows, write_create_api_max_requests, set_room_api_max_requests,
+  reload_workflows, workflow_preset, write_create_host_workflows, write_create_api_max_requests, set_room_api_max_requests, set_room_extra_directories, set_room_project_directory,
   admin: { register: register_admin, login: login_admin, logout: logout_admin,
     update_profile: update_admin_profile, avatar_from_file: admin_avatar_from_file, validate: validate_admin_form,
     sessions: admin_sessions, revoke: revoke_admin_sessions, change_password: change_admin_password },
   device: { request: device_request, pair: pair_this_device, take_scanned: take_scanned_pairing, invite: invite_device, renew: renew_this_device, forget: forget_pairing,
     label: device_label, prompt_confirm: () => state.device.prompt?.run(), prompt_cancel: () => state.device.prompt?.cancel() },
   request: request_json, rewind_plan, identities: IDENTITIES, display_name, mention_handles, mentioned_members, render_room_markdown, sources: SOURCE_LABELS,
-  set_member_access, set_member_model, allow_denials, set_member_adapter, reload_room_models, read_room_files, limits_label, stop_reason_label, participant_model, participant_files, participant_session_hint, participant_access,
+  set_member_access, set_member_model, allow_denials, set_member_adapter, reload_room_models, read_room_files, read_execution_details, interject_execution, limits_label, stop_reason_label, participant_model, participant_files, participant_session_hint, participant_access,
   turn_label, turn_guidance, round_groups, limit_rounds, progress_speaker, brief_meta, max_message_length: MAX_MESSAGE_LENGTH, provenance: message_provenance, format_time };
 
 restore_theme();

@@ -265,8 +265,15 @@ html[data-theme^="channel"] .pb-action.pb-action-add { margin-top: 8px; border-s
 .progress-board > .pb-actions:has(.pb-action-block) { flex-wrap: wrap; }
 html[data-theme^="channel"] .pb-action:hover { border-color: var(--ui-border-accented); background: var(--ui-bg-elevated); color: var(--ui-text-highlighted); }
 html[data-theme^="channel"] .pb-action [class*="icon"] { width: 14px; height: 14px; }
-html[data-theme^="channel"] .pb-action.pb-action-danger { border-color: color-mix(in srgb, var(--ui-error) 32%, transparent); background: color-mix(in srgb, var(--ui-error) 8%, transparent); color: color-mix(in srgb, var(--ui-error) 70%, var(--ui-text)); }
-html[data-theme^="channel"] .pb-action.pb-action-danger:hover { border-color: color-mix(in srgb, var(--ui-error) 55%, transparent); background: color-mix(in srgb, var(--ui-error) 14%, transparent); color: color-mix(in srgb, var(--ui-error) 80%, var(--ui-text)); }
+/* Stop-all sits at the end of the status title it controls, so showing or hiding it never shifts the meters below. */
+html[data-theme^="channel"] .pb-stop-all { margin-left: auto; height: 26px; gap: 6px; padding: 0 10px; border-radius: 7px; border: 0; box-shadow: none; background: color-mix(in srgb, var(--ui-error) 12%, transparent); color: color-mix(in srgb, var(--ui-error) 78%, var(--ui-text)); font-size: 12px; font-weight: 500; }
+html[data-theme^="channel"] .pb-stop-all:hover:not(:disabled) { background: color-mix(in srgb, var(--ui-error) 22%, transparent); color: color-mix(in srgb, var(--ui-error) 88%, var(--ui-text-highlighted)); }
+.pb-stop-glyph { width: 8px; height: 8px; flex-shrink: 0; border-radius: 2px; background: currentColor; }
+/* The chain-limit bar lines up with the status text; full and amber once the chain stopped at its limit. */
+.pb-status > .pb-rounds { margin: 12px 0 0 16px; }
+.pb-status.is-warning .pb-bar > i { background: #e5a50a; }
+/* Touch screens: the status-line stop gets a finger-sized target without changing the row on desktop. */
+@media (pointer: coarse) { html[data-theme^="channel"] .pb-stop-all { height: 36px; padding: 0 14px; } }
 html[data-theme^="channel"] .pb-restart { border-color: color-mix(in srgb, var(--channel-accent) 45%, transparent); background: color-mix(in srgb, var(--channel-accent) 14%, transparent); color: var(--channel-accent); }
 html[data-theme^="channel"] .pb-restart:hover { background: color-mix(in srgb, var(--channel-accent) 24%, transparent); color: var(--channel-accent); }
 html[data-theme^="channel"] .pb-end:hover { border-color: color-mix(in srgb, #f05252 45%, transparent); background: color-mix(in srgb, #f05252 12%, transparent); color: #f05252; }
@@ -469,8 +476,8 @@ html[data-theme^="channel"] .channel-message.channel-topic-card { color: var(--u
 .channel-receipt[open] > summary { list-style-type: disclosure-open; margin-bottom: 7px; }
 .channel-receipt > summary:hover { color: #d7dbe3; }
 .channel-receipt .channel-message-text { font-size: 14px; color: #b3bdcc; }
-.channel-sending-message .channel-message-text { white-space: pre-wrap; opacity: .7; }
-.channel-sending-message.is-failed .channel-message-text { opacity: 1; }
+/* The sending card reads like the saved one it becomes; only its status word is quieter. */
+.channel-sending-status { color: #929aa7; }
 .channel-empty { flex: 1; min-height: 230px; width: 100%; max-width: var(--channel-reading-width); margin-inline: auto; display: flex; flex-direction: column; align-items: flex-start; justify-content: center; padding: 32px; }
 .channel-empty > [class*="icon"] { font-size: 32px; color: #9aa4bc; margin-bottom: 14px; }
 .channel-empty h2 { color: #f1f3f7; font-size: 23px; font-weight: 650; }
@@ -1161,7 +1168,7 @@ html[data-motion="off"] *, html[data-motion="off"] *::before, html[data-motion="
   --channel-shadow-bar: 0 1px 2px #0014320f;
 }
 :root[data-effects="reduced"] * { -webkit-backdrop-filter: none !important; backdrop-filter: none !important; }
-:root[data-theme^="channel"] :is(.channel-search-input input, .channel-surface-button:not(:hover), .pb-action:not(:hover, .pb-action-danger)) { border-color: var(--channel-edge-control); }
+:root[data-theme^="channel"] :is(.channel-search-input input, .channel-surface-button:not(:hover), .pb-action:not(:hover)) { border-color: var(--channel-edge-control); }
 :root[data-theme^="channel"] :is(.channel-search-input input, .channel-surface-button, .pb-action:not(:disabled)) { box-shadow: var(--channel-shadow-control); }
 :root[data-theme^="channel"] :is(.channel-message:not(:hover), .channel-composer, .turn-panel, .summary-form) { border-color: var(--channel-edge-panel); }
 :root[data-theme^="channel"] :is(.channel-message, .turn-panel, .summary-form) { box-shadow: var(--channel-shadow-panel); }

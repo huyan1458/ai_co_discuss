@@ -91,6 +91,8 @@ async function bind_machine(home, origin, setup_key) {
     headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ ...link, setup_key: key }) });
   const result = await response.json().catch(() => ({}));
   if (!response.ok) throw new Error(result.error || `绑定失败：HTTP ${response.status}`);
+  // From now on this website reaches the local one only as the relay's bridge, never with a browser connection credential.
+  (await import('./relay_channel.mjs')).bridge_token(home, origin);
   await sync_remote_launches(home);
 }
 

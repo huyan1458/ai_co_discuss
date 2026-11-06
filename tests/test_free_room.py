@@ -146,6 +146,34 @@ class SingleMemberTests(FreeRoomTests):
             next_execution = self.reserve()[1]
             self.assertEqual(self.answer(next_execution["id"])[0], 201)
 
+    def test_interjection_reaches_only_a_steerable_running_execution_once(self):
+        """The owner's interjection waits for the runner, is idempotent by submission_id and never outlives its execution."""
+        self.say("开始", to=["Claude"])
+        execution = self.reserve()[1]
+        url = f"{self.path}/executions/{execution['id']}"
+        interject = lambda text="直接给结论", submission="i-1", token=None: self.request(
+            url, {"action": "interject", "text": text, "submission_id": submission}, token or self.owner)
+        self.request(url, {"action": "delivery", "stoppable": True, "progress": True}, self.owner)
+        self.assertEqual(interject()[0], 409, "a delivery that cannot steer takes no interjection")
+        self.request(url, {"action": "delivery", "stoppable": True, "progress": True, "steer": True}, self.owner)
+        self.assertEqual(interject(token=self.member)[0], 403, "only the owner interjects")
+        status, body = interject()
+        self.assertEqual(status, 200)
+        self.assertEqual(interject()[1]["interjection"]["id"], body["interjection"]["id"], "a retry is the same interjection")
+        self.assertEqual(interject("另一句")[0], 409)
+        pending = self.request(self.path + "/inbox", token=self.owner)[1]["executions"][0]["interjections"]
+        self.assertEqual(pending, [{"id": body["interjection"]["id"], "text": "直接给结论"}])
+        report = {"action": "interjection", "interjection_id": body["interjection"]["id"], "status": "delivered"}
+        self.assertEqual(self.request(url, report, self.owner)[0], 200)
+        self.assertEqual(self.request(self.path + "/inbox", token=self.owner)[1]["executions"][0]["interjections"], [])
+        second = interject("再补一句", "i-2")[1]["interjection"]
+        self.assertEqual(self.answer(execution["id"])[0], 201)
+        shown = next(item for item in self.request(self.path)[1]["free"]["executions"] if item["id"] == execution["id"])["interjections"]
+        self.assertEqual([(item["text"], item["status"]) for item in shown], [("直接给结论", "delivered"), ("再补一句", "failed")])
+        self.assertEqual(shown[1]["reason"], "送达前本次执行已结束")
+        self.assertEqual(interject("太晚了", "i-3")[0], 409, "an ended execution takes no interjection")
+        self.assertEqual(second["status"], "pending")
+
     def test_review_capability_owner_revision_and_invalidation(self):
         """Only owner attestations expose candidates; leaving and returning cannot resurrect old authority."""
         member_id = self.review_member_id()

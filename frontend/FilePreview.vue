@@ -8,7 +8,7 @@ import { add_excerpt as put_excerpt, crumbs_of, excerpt_mark_place, excerpt_rang
 // and scroll position, so the user can go to the messages or another room and come back. Mounted once for the workspace,
 // so only closing (or reloading the site) clears it; each tab reads from the room it was opened in.
 const { view, bridge, act } = inject("discussion");
-// Each tab: { id, room_id, directory, path, data (the room-files answer), loading, error, source, scroll, request }.
+// Each tab: { id, room_id, directory, root (its index among the room's project directories), path, data (the room-files answer), loading, error, source, scroll, request }.
 const tabs = ref([]);
 const active_id = ref("");
 const open = ref(false);
@@ -18,6 +18,9 @@ const wrap = ref(window.matchMedia("(max-width: 640px)").matches);
 const name_of = (path) => path.split("/").pop() || "文件预览";
 const tab = computed(() => tabs.value.find(item => item.id === active_id.value) || null);
 const active_path = computed(() => tab.value?.path || "");
+// How a message names the open file: relative in the main project directory, in full in another one.
+const reference_path = computed(() => !tab.value?.root ? active_path.value
+  : `${tab.value.directory.replace(/[\\/]+$/, "")}/${active_path.value}`);
 const preview = computed(() => tab.value?.data || null);
 const source = computed({ get: () => Boolean(tab.value?.source), set: (value) => { if (tab.value) tab.value.source = value; } });
 const preview_crumbs = computed(() => crumbs_of(tab.value?.directory || "", active_path.value));
@@ -77,7 +80,7 @@ async function load(item) {
   const request = (item.request || 0) + 1;
   Object.assign(item, { request, loading: true, error: "" });
   try {
-    const result = await bridge.read_room_files(item.room_id, item.path);
+    const result = await bridge.read_room_files(item.room_id, item.path, 0, "", item.root || 0);
     if (item.request === request) item.data = result;
   } catch (error) {
     if (item.request === request) item.error = error.message;
@@ -85,14 +88,14 @@ async function load(item) {
 }
 
 /** Open a file of the current room in its own tab (or re-read the tab it already has) and show the window. */
-function open_file(path, directory) {
+function open_file(path, directory, root = 0) {
   remember_scroll();
   const room_id = view.value.room?.id;
   if (!room_id) return;
-  const id = `${room_id}\n${path}`;
+  const id = `${room_id}\n${root}\n${path}`;
   let item = tabs.value.find(entry => entry.id === id);
   if (!item) {
-    tabs.value.push({ id, room_id, directory, path, data: null, loading: false, error: "", source: false, scroll: 0, request: 0 });
+    tabs.value.push({ id, room_id, directory, root, path, data: null, loading: false, error: "", source: false, scroll: 0, request: 0 });
     item = tabs.value[tabs.value.length - 1];
   }
   active_id.value = id;
@@ -326,6 +329,7 @@ async function to_tab_room() {
 async function reveal_folder(path) {
   fold();
   await to_tab_room();
+  file_preview.reveal_root = tab.value?.root || 0;
   file_preview.reveal_path = path;
   act("tab", "files");
 }
@@ -398,7 +402,7 @@ function track_selection() {
 function place_file_marks() {
   const body = markdown_body.value, host = markdown_scroll.value;
   file_marks.value = !open.value || !body || !host ? [] : file_preview.excerpts.flatMap((excerpt, index) => {
-    const place = !excerpt.message_id && excerpt.path === active_path.value ? excerpt_mark_place(body, host, excerpt.to) : null;
+    const place = !excerpt.message_id && excerpt.path === reference_path.value ? excerpt_mark_place(body, host, excerpt.to) : null;
     return place ? [{ id: excerpt.id, number: index + 1, ...place }] : [];
   });
 }
@@ -450,7 +454,7 @@ function cancel_comment() { commenting.value = null; hold_selection(null); }
 /** Put the selection (and comment) in the composer of the file's room as an excerpt, fold the window and go to the messages. */
 async function add_excerpt() {
   const { text, start, end, from, to } = commenting.value;
-  const excerpt = { path: active_path.value, name: preview_name.value, start, end, text, from, to, comment: comment.value.trim() };
+  const excerpt = { path: reference_path.value, name: preview_name.value, start, end, text, from, to, comment: comment.value.trim() };
   cancel_comment();
   document.getSelection()?.removeAllRanges();
   await to_tab_room();

@@ -49,12 +49,13 @@ export function bridge_token(home, site) {
   const path = join(home, 'site-connections.json');
   const hashed = createHash('sha256').update(link.bridge_token).digest('hex');
   const settings = existsSync(path) ? JSON.parse(readFileSync(path, 'utf8')) : { sites: {} };
-  // A website that was disconnected has no entry, and reconnecting replaces it; either way no bridge is granted here.
-  if (settings.sites[site] && settings.sites[site].bridge_hash !== hashed) {
+  // The entry also tells the local website that this site reaches it only through the relay, so a browser connection
+  // credential kept from before no longer works. A website disconnected meanwhile has lost its pairing: no bridge then.
+  if (settings.sites[site]?.bridge_hash !== hashed) {
     const release = acquire_lock(join(home, 'connection-lock'));
     try {
       const latest = existsSync(path) ? JSON.parse(readFileSync(path, 'utf8')) : { sites: {} };
-      if (latest.sites[site]) atomic_json(path, { ...latest, sites: { ...latest.sites, [site]: { ...latest.sites[site], bridge_hash: hashed } } });
+      if (machine_links(home).sites[site]) atomic_json(path, { ...latest, sites: { ...latest.sites, [site]: { ...latest.sites[site], bridge_hash: hashed } } });
     } finally { release(); }
   }
   return link.bridge_token;

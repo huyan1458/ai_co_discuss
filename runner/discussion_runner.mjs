@@ -2,7 +2,7 @@
 import { createHash } from 'node:crypto';
 import { spawnSync } from 'node:child_process';
 import { existsSync, mkdirSync, readFileSync, statSync, unlinkSync, writeFileSync } from 'node:fs';
-import { dirname, join, resolve } from 'node:path';
+import { dirname, isAbsolute, join, relative, resolve } from 'node:path';
 import { DatabaseSync } from 'node:sqlite';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import { parseArgs } from 'node:util';
@@ -15,6 +15,8 @@ import { validate_scheduler } from './scheduler.mjs';
 import { bind_room_workflow } from './workflows.mjs';
 
 const POLL_MS = 2000;
+// A room's members work in its main project directory and at most this many extra ones.
+export const MAX_EXTRA_DIRECTORIES = 8;
 let rg_available;
 /**
  * Windows PowerShell mis-decodes UTF-8 files, so point the AI at rg when its commands can run it; free rooms and
@@ -76,6 +78,7 @@ export function validate_config(input, base_directory) {
   if (Object.keys(config.participants).some(name => typeof config.members?.[name]?.token !== 'string' || config.members[name].token.length < 32)) {
     throw new Error('房间配置须为每位成员保存成员凭证；旧版配置请重新接入房间');
   }
+  if (config.extra_directories !== undefined) check_extra_directories(config.cwd, config.extra_directories, { exists: false });
   // A bound workflow only names a folder and which member plays which card; its content is read at each execution.
   if (config.workflow) config.workflow = bind_room_workflow({}, config.workflow).workflow;
   // How many model requests an API member's execution may make; absent means the adapter's default.
@@ -84,6 +87,36 @@ export function validate_config(input, base_directory) {
   // Smart scheduling is optional; without it every decision stays with the host.
   if (config.scheduler) config.scheduler = validate_scheduler(config.api_home, config.scheduler);
   return { ...config, mode: 'free', site: url.origin, project: resolve(config.project), directory: resolve(config.data_directory || join(base_directory, `discussion-${config.room}`)) };
+}
+
+/** Whether one directory is the other or lies inside it; Windows paths compare without case. */
+export function overlapping_directories(left, right) {
+  const [a, b] = [left, right].map(path => process.platform === 'win32' ? resolve(path).toLowerCase() : resolve(path));
+  const inside = (outer, inner) => { const rest = relative(outer, inner); return !rest.startsWith('..') && !isAbsolute(rest); };
+  return inside(a, b) || inside(b, a);
+}
+
+/**
+ * Check a room's extra project directories: existing folders given as absolute paths, added to a main directory, and
+ * none inside another (a folder inside one already shared adds nothing and would be watched twice).
+ * @param {string} cwd - the room's main project directory.
+ * @param {unknown} directories - the extra directories as given.
+ * @param {{exists?: boolean}} options - `exists: false` skips the existence check, so a saved room whose folder was
+ *   later moved still loads (its members then work without it).
+ * @returns {string[]} the directories, unchanged.
+ */
+export function check_extra_directories(cwd, directories, { exists = true } = {}) {
+  if (!Array.isArray(directories) || directories.length > MAX_EXTRA_DIRECTORIES) throw new Error(`extra_directories 须为最多 ${MAX_EXTRA_DIRECTORIES} 个目录的列表`);
+  if (directories.length && !cwd) throw new Error('添加其他项目目录前须先指定房间的项目目录');
+  const seen = cwd ? [cwd] : [];
+  for (const directory of directories) {
+    if (typeof directory !== 'string' || !isAbsolute(directory)) throw new Error('项目目录须为完整绝对路径');
+    if (exists && (!existsSync(directory) || !statSync(directory).isDirectory())) throw new Error(`项目目录 ${directory} 在本机不存在或不是文件夹`);
+    const overlap = seen.find(other => overlapping_directories(other, directory));
+    if (overlap) throw new Error(`项目目录 ${directory} 与 ${overlap} 重复或互相包含`);
+    seen.push(directory);
+  }
+  return directories;
 }
 
 /** Send exactly one bounded website request; never follow redirects with a capability. */

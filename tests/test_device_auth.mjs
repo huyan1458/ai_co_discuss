@@ -61,14 +61,31 @@ test('a browser pairs only with a live code shown at the computer, with a passke
   }
   const late = await device_command(home, context, 'device-pair', pairing_request(code, device, passkey));
   assert.match(late.body.error, /配对码不对或已过期/, 'five wrong proofs use the code up');
-  // A proof made for another computer, a passkey made for another pairing, or none at all, does not pair.
+  // A proof made for another computer, or a passkey made for another pairing, does not pair.
   const fresh = start_pairing(home, { site: SITE }).code;
   assert.equal((await device_command(home, context, 'device-pair', pairing_request(fresh, device, passkey, 'other-machine'))).status, 400);
   const elsewhere = { ...pairing_request(fresh, device, passkey), passkey: passkey.create(pairing_passkey_challenge('BBBBBBBBBBBB', device.public_key), SITE) };
   assert.match((await device_command(home, context, 'device-pair', elsewhere)).body.error, /挑战/);
-  const another = start_pairing(home, { site: SITE }).code;
-  const { passkey: missing, ...without } = pairing_request(another, device, passkey);
-  assert.match((await device_command(home, context, 'device-pair', without)).body.error, /通行密钥/);
+});
+
+test('pairing without a passkey needs the computer to allow it for that code; such a device is never asked to unlock', async t => {
+  const home = home_dir(t);
+  const device = await software_device(MACHINE), passkey = software_passkey('codiscuss.pages.dev');
+  const context = { site: SITE, machine_id: MACHINE, device_id: null };
+  // The page alone cannot decide to go without a passkey: an ordinary code refuses it and stays usable.
+  const { passkey: skipped, ...plain } = pairing_request(start_pairing(home, { site: SITE }).code, device, passkey);
+  assert.equal((await device_command(home, context, 'device-pair', plain)).body.need, 'passkey');
+  const { passkey: missing, ...without } = pairing_request(start_pairing(home, { site: SITE, without_passkey: true }).code, device, passkey);
+  assert.equal((await device_command(home, context, 'device-pair', { ...without, proof: pairing_proof('AAAAAAAAAAAA', MACHINE, device.public_key) })).status, 400, 'the code is still required');
+  const answer = await device_command(home, context, 'device-pair', without);
+  assert.equal(answer.status, 200, answer.body.error);
+  const file = join(home, 'devices.json'), registry = JSON.parse(readFileSync(file, 'utf8'));
+  registry.devices[device.id].unlocked_until = Date.now() - 1;
+  writeFileSync(file, JSON.stringify(registry));
+  assert.equal((await open_signed_request(home, 'nopk-1', await device.seal('nopk-1', { action: 'settings' }), MACHINE)).device_id, device.id);
+  registry.devices[device.id].expires_at = Date.now() - 1;
+  writeFileSync(file, JSON.stringify(registry));
+  await assert.rejects(open_signed_request(home, 'nopk-2', await device.seal('nopk-2', { action: 'settings' }), MACHINE), error => error.need === 'pairing');
 });
 
 test('no relayed action can start a pairing: new devices are added only at the computer', async t => {
@@ -136,6 +153,35 @@ test('a paired device works for a day after its passkey confirms, then asks agai
   assert.equal(unlocked.status, 200, unlocked.body.error);
   assert.ok(unlocked.body.unlocked_until - Date.now() <= 24 * 3600000 + 1000);
   await signed('unlock-05', 'settings');
+});
+
+test('an expired device with a passkey may only renew itself, and the website is told until when', async t => {
+  const { generateKeyPairSync } = await import('node:crypto');
+  const home = home_dir(t);
+  const device = await paired_device(home);
+  const context = { site: SITE, machine_id: MACHINE, device_id: device.id };
+  const signed = async (id, action, payload) => open_signed_request(home, id, await device.seal(id, { action, payload }), MACHINE);
+  const file = join(home, 'devices.json'), registry = JSON.parse(readFileSync(file, 'utf8'));
+  registry.devices[device.id].expires_at = Date.now() - 1000;
+  writeFileSync(file, JSON.stringify(registry));
+  // The signed list lets the website pass renewal requests for thirty more days.
+  const { privateKey } = generateKeyPairSync('ec', { namedCurve: 'prime256v1' });
+  const listed = JSON.parse((await signed_device_list(home, { id: MACHINE, sign_private_key: privateKey.export({ format: 'jwk' }) })).body).devices[0];
+  assert.ok(listed.renew_until - listed.expires_at === 30 * 86400000);
+  await assert.rejects(signed('renew-01', 'settings'), error => error.need === 'renew');
+  await assert.rejects(signed('renew-02', 'passkey-challenge', { purpose: 'unlock' }), error => error.need === 'renew', 'only a renewal challenge');
+  await signed('renew-03', 'passkey-challenge', { purpose: 'renew' });
+  const challenge = (await device_command(home, context, 'passkey-challenge', { purpose: 'renew' })).body;
+  const renewed = await device_command(home, context, 'device-renew', { challenge_id: challenge.challenge_id, assertion: device.passkey.get(challenge.challenge, SITE) });
+  assert.equal(renewed.status, 200, renewed.body.error);
+  await signed('renew-04', 'settings');
+  // A temporary device cannot renew: it is not offered the grace and pairs again.
+  const temporary = JSON.parse(readFileSync(file, 'utf8'));
+  Object.assign(temporary.devices[device.id], { temporary: true, expires_at: Date.now() - 1000 });
+  writeFileSync(file, JSON.stringify(temporary));
+  await assert.rejects(signed('renew-05', 'passkey-challenge', { purpose: 'renew' }), error => error.need === 'pairing');
+  const list = JSON.parse((await signed_device_list(home, { id: MACHINE, sign_private_key: privateKey.export({ format: 'jwk' }) })).body);
+  assert.equal(list.devices[0].renew_until, undefined);
 });
 
 test('a remote request may give a room any level, but cannot claim a session\'s own access or save 全放开 as a default', async t => {

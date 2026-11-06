@@ -10,7 +10,7 @@ import { PassThrough } from 'node:stream';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import { test } from 'node:test';
 
-import { adopt_member_profile, adopt_workflow, borrowed_session, cached_software_defaults, check_or_save_workflow, join_workflow, launch_discussion, launch_settings, room_configuration, room_files, room_models, room_member, room_member_model, room_workflow, save_launch_projects, save_launch_settings, validate_preset } from '../runner/discussion_launch.mjs';
+import { adopt_member_profile, adopt_workflow, borrowed_session, cached_software_defaults, check_or_save_workflow, join_workflow, launch_discussion, launch_settings, room_configuration, room_files, room_models, room_member, room_member_model, room_settings, room_workflow, save_launch_projects, save_launch_settings, validate_preset } from '../runner/discussion_launch.mjs';
 import { get_workflow, list_workflows, save_workflow } from '../runner/workflows.mjs';
 import { API_PROVIDERS, save_api_key } from '../runner/discussion_api.mjs';
 import { read_project_files } from '../runner/project_files.mjs';
@@ -303,6 +303,57 @@ test('room files use the saved project and require the authenticated bridge and 
   const no_project = await room_models(f.home, input, { read_defaults: async () => ({}), read_session: () => ({}) });
   assert.equal(no_project.project_directory, '', 'a member directory does not enable the room project page');
   await assert.rejects(room_files(f.home, input), /未设置项目目录/);
+});
+
+test('a room shares extra project directories set at creation or later, and names a member working outside them', async t => {
+  const f = await fixture(t);
+  const [project, docs, assets, elsewhere] = ['project', 'docs', 'assets', 'elsewhere'].map(name => join(f.directory, name));
+  for (const path of [project, docs, assets, elsewhere]) mkdirSync(path);
+  writeFileSync(join(project, '报告.md'), '主目录');
+  writeFileSync(join(docs, '报告附录.md'), '附加目录');
+  await assert.rejects(launch_discussion(f.home, { ...f.input, cwd: project, extra_directories: [join(project, 'sub')] }, f.options), /不存在/);
+  await assert.rejects(launch_discussion(f.home, { ...f.input, cwd: project, extra_directories: [project] }, f.options), /互相包含/);
+  const launched = await launch_discussion(f.home, { ...f.input, cwd: project, extra_directories: [docs] }, f.options);
+  const config = load_config(launched.config_path);
+  const input = { site: f.site, room_id: config.room, token: config.token };
+  const models = () => room_models(f.home, input, { read_defaults: async () => ({}), read_session: () => ({}) });
+  assert.deepEqual((await models()).extra_directories, [docs]);
+  assert.deepEqual((await room_files(f.home, { ...input, root: 1 })).entries.map(item => item.name), ['报告附录.md']);
+  assert.deepEqual((await room_files(f.home, { ...input, query: '报告' })).entries.map(item => [item.root, item.path]), [[0, '报告.md'], [1, '报告附录.md']]);
+  await assert.rejects(room_files(f.home, { ...input, root: 2 }), /编号无效/);
+
+  assert.deepEqual((await room_settings(f.home, { ...input, extra_directories: [docs, assets] })).extra_directories, [docs, assets]);
+  assert.deepEqual((await models()).extra_directories, [docs, assets]);
+  mkdirSync(join(project, 'sub'));
+  await assert.rejects(room_settings(f.home, { ...input, extra_directories: [join(project, 'sub')] }), /互相包含/, 'a folder inside the main one adds nothing');
+  await assert.rejects(room_settings(f.home, { ...input, extra_directories: [assets], token: 'invalid-owner' }), /403/);
+  await room_settings(f.home, { ...input, extra_directories: [] });
+  assert.deepEqual((await models()).extra_directories, []);
+  assert.equal(JSON.parse(readFileSync(launched.config_path, 'utf8')).extra_directories, undefined);
+
+  const saved = JSON.parse(readFileSync(launched.config_path, 'utf8'));
+  saved.participants.Codex.cwd = elsewhere;
+  writeFileSync(launched.config_path, JSON.stringify(saved));
+  const outside = (await models()).participants.Codex;
+  assert.equal(outside.outside_directory, elsewhere, 'the page warns about a member working outside the room project');
+  assert.equal(outside.outside_enforced, true, 'Codex CLI keeps the room read-only by its sandbox');
+});
+
+test('a room created without a project sets its main directory once, and its members keep their sessions', async t => {
+  const f = await fixture(t);
+  const project = join(f.directory, 'later');
+  mkdirSync(project);
+  const launched = await launch_discussion(f.home, f.input, f.options);
+  const config = load_config(launched.config_path);
+  const input = { site: f.site, room_id: config.room, token: config.token };
+  assert.equal((await room_settings(f.home, { ...input, cwd: project })).project_directory, project);
+  const saved = JSON.parse(readFileSync(launched.config_path, 'utf8'));
+  assert.equal(saved.cwd, project);
+  assert.ok(Object.values(saved.participants).every(profile => profile.cwd === ''), 'members already here stay where their sessions are');
+  await assert.rejects(room_settings(f.home, { ...input, cwd: f.directory }), /不能更改/);
+  const models = await room_models(f.home, input, { read_defaults: async () => ({}), read_session: () => ({}) });
+  assert.equal(models.project_directory, project);
+  assert.ok(Object.values(models.participants).every(profile => !profile.outside_directory), 'they are not outside the room');
 });
 
 test('project file browsing blocks traversal, absolute paths and links outside the saved root', t => {
@@ -1118,7 +1169,7 @@ test('a running discussion admits a woken or manual expert without pausing', asy
   } finally { store.close(); }
 });
 
-test('an invited existing session must exist locally, and Claude resumes only from its original directory', async t => {
+test('an invited existing session must exist locally, and Claude resumes only from its original directory, even outside the room project', async t => {
   const f = await fixture(t);
   const env = { CODEX_HOME: join(f.directory, 'codex-home'), CLAUDE_CONFIG_DIR: join(f.directory, 'claude-home') };
   const codex_id = '019ffa5b-9022-7450-b9e0-3c058026dd94', claude_id = randomUUID();
@@ -1133,7 +1184,8 @@ test('an invited existing session must exist locally, and Claude resumes only fr
   assert.throws(() => borrowed_session('Codex', { adapter: 'codex_cli', session_id: '../../x' }, '', env), /格式不正确/);
   assert.equal(borrowed_session('Claude', { adapter: 'claude', session_id: claude_id }, '', env).cwd, original, 'without a project the session keeps its directory');
   assert.equal(borrowed_session('Claude', { adapter: 'claude', session_id: claude_id }, original, env).cwd, original);
-  assert.throws(() => borrowed_session('Claude', { adapter: 'claude', session_id: claude_id }, other, env), /只能在原目录续接/);
+  assert.equal(borrowed_session('Claude', { adapter: 'claude', session_id: claude_id }, other, env).cwd, original, 'a session elsewhere joins working in its own directory');
+  assert.throws(() => borrowed_session('Claude', { adapter: 'claude', session_id: claude_id, cwd: other }, other, env), /只能在原目录续接/);
   assert.throws(() => borrowed_session('Antigravity', { adapter: 'antigravity_cli', session_id: claude_id }, '', env), /找不到 Antigravity CLI 会话/);
   assert.throws(() => borrowed_session('Grok', { adapter: 'api', session_id: claude_id }, '', env), /只有 Codex CLI、Codex App、Claude Code、Antigravity CLI、Antigravity App 可以接入已有会话/);
   const owner = randomUUID() + randomUUID();

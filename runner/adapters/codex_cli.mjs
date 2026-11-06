@@ -1,6 +1,7 @@
 /**
- * Codex CLI adapter: one headless `codex exec` turn per execution resuming the bound thread, under a per-run permission
- * profile. Its rollout files and app server also serve the Codex App adapter for sessions and models.
+ * Codex CLI adapter: one headless turn per execution resuming the bound thread, under a per-run permission profile, run
+ * through `codex app-server` by `codex_bridge.mjs` so the owner can interject mid-turn; the bridge prints the events
+ * `codex exec --json` would. Its rollout files and app server also serve the Codex App adapter for sessions and models.
  */
 import { spawn } from 'node:child_process';
 import { randomUUID } from 'node:crypto';
@@ -8,6 +9,7 @@ import { existsSync, readFileSync, readdirSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { join, resolve } from 'node:path';
 import { createInterface } from 'node:readline';
+import { fileURLToPath } from 'node:url';
 import { cli_delivery } from './cli.mjs';
 import { CALL_TIMEOUT_MS, launch_directory, log_entries, marked, model_entry, json_line, newest_record, not_sent,
   project_directory, prompt_text, query_catalog } from './common.mjs';
@@ -16,8 +18,12 @@ import { CALL_TIMEOUT_MS, launch_directory, log_entries, marked, model_entry, js
 const CLI_EXIT_GRACE_MS = 1500;
 const CODEX_PERMISSIONS_MIN_MINOR = 163;
 const FORK_TIMEOUT_MS = 60_000;
+const CODEX_BRIDGE = fileURLToPath(new URL('./codex_bridge.mjs', import.meta.url));
 
-/** Build a per-invocation profile without inheriting a user's custom profile of the same name. */
+/**
+ * Build a per-invocation profile without inheriting a user's custom profile of the same name. The room's other project
+ * directories (`task.extra_directories`) get their own read or write entry.
+ */
 export function codex_permissions(config, task, platform = process.platform) {
   // 全放开 runs without approval or sandbox, so there is no profile to build or check.
   if (config.project_access === 'full') return { name: '', args: ['--dangerously-bypass-approvals-and-sandbox'] };
@@ -26,7 +32,8 @@ export function codex_permissions(config, task, platform = process.platform) {
   const base = ['auto', 'own'].includes(config.project_access) || (project_directory(config) && config.project_access === 'write')
     ? ':workspace' : ':read-only';
   const drafts = resolve(task.draft_directory).replaceAll('\\', '/');
-  const filesystem = { ':root': 'read', [resolve(task.directory).replaceAll('\\', '/')]: 'read', [drafts]: 'write' };
+  const extras = Object.fromEntries((task.extra_directories || []).map(item => [resolve(item.path).replaceAll('\\', '/'), item.access]));
+  const filesystem = { ':root': 'read', ...extras, [resolve(task.directory).replaceAll('\\', '/')]: 'read', [drafts]: 'write' };
   const rules = Object.entries(filesystem).map(([path, access]) => `${JSON.stringify(path)}=${JSON.stringify(access)}`).join(',');
   const profile = `{extends=${JSON.stringify(base)},filesystem={${rules}},network={enabled=true}}`;
   // The Windows sandbox account cannot write the user's TEMP, so PowerShell starts in ConstrainedLanguage and Codex's
@@ -92,14 +99,18 @@ async function check_codex_permissions(config, task, permissions, spawn_process)
   }
 }
 
-/** Native `codex exec` arguments; every continuation names the exact bound thread. */
+/**
+ * One turn through `codex_bridge.mjs`, which runs `codex app-server` under the per-run permission profile and prints
+ * `codex exec --json` events, so an interjection can enter the running turn. Every continuation names the exact bound
+ * thread; 全放开 has no profile and opens the thread without sandbox or approval instead.
+ */
 function invocation(config, binding, task) {
   const permissions = codex_permissions(config, task);
-  const args = ['exec', '--cd', launch_directory(config, task)];
-  if (binding.session_id) args.push('resume', binding.session_id);
-  args.push(...permissions.args, '--json', '--skip-git-repo-check', ...(config.model ? ['-m', config.model] : []),
-    ...(config.effort ? ['-c', `model_reasoning_effort="${config.effort}"`] : []), '-');
-  return { args, input: task.prompt,
+  const full = config.project_access === 'full';
+  const input = `${JSON.stringify({ prompt: task.prompt, thread_id: binding.session_id || '', cwd: launch_directory(config, task),
+    model: config.model || '', effort: config.effort || '', full })}\n`;
+  return { executable: process.execPath, args: [CODEX_BRIDGE, config.executable, ...(full ? [] : permissions.args)], input,
+    steer: text => `${JSON.stringify({ steer: text })}\n`,
     ...(permissions.name ? { check: spawn_process => check_codex_permissions(config, task, permissions, spawn_process) } : {}) };
 }
 
@@ -142,7 +153,33 @@ const events = {
     if (event.type !== 'item.completed' || event.item?.type !== 'file_change') return [];
     return (event.item.changes || []).map(change => String(change?.path || '')).filter(Boolean);
   },
+  detail: codex_detail,
 };
+
+// Codex runs each command through a shell wrapper; the page shows the command the agent wrote.
+const SHELL_WRAPPER = /^"?[^"]*?(?:powershell|pwsh|cmd|bash|sh)(?:\.exe)?"?\s+(?:-Command|\/c|-lc|-c)\s+(["'])([\s\S]*)\1\s*$/i;
+
+/** One `codex exec --json` event as execution-detail entries; an item keeps its id so its completion updates the start. */
+function codex_detail(event) {
+  if (event.type === 'turn.failed') return [{ kind: 'error', body: String(event.error?.message || '本轮失败') }];
+  const item = event.item;
+  if (!item || !['item.started', 'item.updated', 'item.completed'].includes(event.type)) return [];
+  const done = event.type === 'item.completed';
+  const state = !done ? 'running' : item.status === 'failed' || (item.exit_code != null && item.exit_code !== 0) ? 'failed' : 'done';
+  const id = `item-${item.id}`;
+  if (item.type === 'agent_message' && done) return [{ id, kind: 'message', body: String(item.text || '') }];
+  if (item.type === 'reasoning' && item.text) return [{ id, kind: 'thinking', body: String(item.text) }];
+  if (item.type === 'command_execution') {
+    const command = String(item.command || '');
+    return [{ id, kind: 'command', title: command.match(SHELL_WRAPPER)?.[2] ?? command, state, body: done ? String(item.aggregated_output || '') : undefined }];
+  }
+  if (item.type === 'web_search') return [{ id, kind: 'search', title: String(item.query || ''), state }];
+  if (item.type === 'file_change') return [{ id, kind: 'edit', title: (item.changes || []).map(change => change?.path).filter(Boolean).join('\n'), state }];
+  if (item.type === 'mcp_tool_call') return [{ id, kind: 'tool', title: [item.server, item.tool].filter(Boolean).join('.'), state,
+    body: done ? JSON.stringify(item.result ?? item.error ?? '', null, 1) : JSON.stringify(item.arguments ?? '', null, 1) }];
+  if (item.type === 'todo_list') return [{ id, kind: 'plan', body: (item.items || []).map(step => `${step.completed ? '☑' : '☐'} ${step.text}`).join('\n') }];
+  return [];
+}
 
 /** Where Codex keeps one thread's rollout, or '' when this machine has none by that ID; shared by the App adapter. */
 export function session_path(session_id, env = process.env, home = homedir()) {

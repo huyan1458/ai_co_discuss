@@ -1,10 +1,14 @@
 <script setup>
 /** Launch cwd field: type a path, pick a saved project, or browse for a folder: with the computer's own dialog in its
  * browser, or from another device through a folder list limited to the saved projects. A device without the local
- * service picks only among the projects its paired computer published. */
+ * service picks only among the projects its paired computer published. With `v-model` it edits that path instead of
+ * the launch's cwd (one row of the extra project directories); the paired-computer project picker has no such mode. */
 import { computed, inject, nextTick, ref } from "vue";
 
-const props = defineProps({ placeholder: { type: String, default: "输入完整路径，或选择项目" }, disabled: { type: Boolean, default: false } });
+const props = defineProps({ placeholder: { type: String, default: "输入完整路径，或选择项目" }, disabled: { type: Boolean, default: false },
+  modelValue: { type: String, default: undefined }, compact: { type: Boolean, default: false } });
+const emit = defineEmits(["update:modelValue"]);
+const bound = computed(() => props.modelValue !== undefined);
 const { view, bridge } = inject("discussion");
 const launch = computed(() => view.value.launch);
 // Without the local service here, the paired computer resolves the chosen project to its own folder.
@@ -14,7 +18,7 @@ const projects = computed(() => relay.value ? relay.value.projects : launch.valu
 // other devices browse a folder list the computer limits to its saved projects.
 const native = computed(() => launch.value.available && !launch.value.remote);
 const browsable = computed(() => launch.value.available);
-const cwd = computed(() => launch.value.workspace.cwd || "");
+const cwd = computed(() => (bound.value ? props.modelValue : launch.value.workspace.cwd) || "");
 const chosen = computed(() => relay.value ? projects.value.find((project) => project.id === launch.value.workspace.local_project)
   : projects.value.find((project) => same_path(project.path, cwd.value)));
 
@@ -23,7 +27,7 @@ function same_path(left, right) {
   const normalize = (value) => String(value || "").replace(/[\\/]+$/, "").toLowerCase();
   return Boolean(left) && normalize(left) === normalize(right);
 }
-const write_cwd = (path) => bridge.write_launch("workspace", "cwd", path);
+const write_cwd = (path) => bound.value ? emit("update:modelValue", path) : bridge.write_launch("workspace", "cwd", path);
 const choose = (project) => relay.value ? bridge.write_launch("workspace", "local_project", project?.id || "") : write_cwd(project.path);
 
 const picking = ref(false);
@@ -35,7 +39,11 @@ async function pick_directory() {
     return;
   }
   picking.value = true;
-  try { await bridge.pick_launch_directory(); } finally { picking.value = false; }
+  try {
+    if (!bound.value) return await bridge.pick_launch_directory();
+    const path = await bridge.browse_local_directory();
+    if (path) write_cwd(path);
+  } catch (failure) { bridge.notify("error", failure.message); } finally { picking.value = false; }
 }
 
 // ---- Folder list for other devices: only folder names, inside the saved projects, checked on the computer. ----
@@ -157,11 +165,11 @@ async function save_projects() {
   <div v-else class="project-box" :class="{ 'is-disabled': props.disabled, 'is-chosen': chosen }">
     <UDropdownMenu v-if="projects.length" :items="menu_items" :content="{ align: 'start', sideOffset: 6 }" :ui="{ content: 'channel-menu project-menu' }" :disabled="props.disabled">
       <button type="button" class="project-prefix" :class="{ 'is-chosen': chosen }" :title="chosen ? chosen.path : '从常用项目中选择'" aria-label="选择常用项目" :disabled="props.disabled">
-        <UIcon :name="chosen ? 'i-lucide-folder' : 'i-lucide-folders'" /><span>{{ chosen ? chosen.name : "常用项目" }}</span><UIcon name="i-lucide-chevron-down" class="project-prefix-chevron" />
+        <UIcon :name="chosen ? 'i-lucide-folder' : 'i-lucide-folders'" /><span v-if="!props.compact">{{ chosen ? chosen.name : "常用项目" }}</span><UIcon name="i-lucide-chevron-down" class="project-prefix-chevron" />
       </button>
     </UDropdownMenu>
     <button v-else type="button" class="project-prefix" aria-label="添加常用项目" title="保存常用项目，之后一键选择；其他设备也能用" :disabled="props.disabled" @click="open_manager">
-      <UIcon name="i-lucide-plus" /><span>常用项目</span>
+      <UIcon name="i-lucide-plus" /><span v-if="!props.compact">常用项目</span>
     </button>
     <UInput :model-value="cwd" :placeholder="props.placeholder" variant="none" class="project-path" aria-label="项目目录完整路径" :disabled="props.disabled" @update:model-value="write_cwd" />
     <UButton v-if="browsable" icon="i-lucide-folder-open" color="neutral" variant="ghost" size="xs" class="project-browse" :aria-label="native ? '在本机选择项目目录' : '浏览电脑上的文件夹'"

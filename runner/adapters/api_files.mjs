@@ -4,7 +4,8 @@
  * Ported from the read / write / edit (packages/fs/tool-fs) and glob / grep (packages/fs/tool-fs-search) tools of
  * DeepSeek Harness, https://github.com/deepseek-ai/deepseek-harness at ce7073d, MIT License, Copyright (c) 2026 DeepSeek:
  * the same tool names, parameters, descriptions, result formats, limits and read-before-modify rule, rebuilt on Node
- * built-ins. Differences: every path stays inside the room's project directory; grep takes JavaScript regular
+ * built-ins. Differences: every path stays inside the room's project directories (the main one, where relative paths
+ * resolve, and the extra ones by absolute path, each read-only or writable); grep takes JavaScript regular
  * expressions and reads the files Git does not ignore, where DSH runs ripgrep; secrets, version-control metadata and the
  * runner's private files are refused; a result over the cap is cut instead of saved to a spill file.
  */
@@ -40,7 +41,7 @@ function tool(name, description, properties, required) {
 
 const DEFINITIONS = {
   read: tool('read', 'Read a UTF-8 text file and return line-numbered content.', {
-    file_path: { ...TEXT, description: 'Path to read, relative to the project directory.' },
+    file_path: { ...TEXT, description: 'Path to read, relative to the project directory, or absolute inside another listed project directory.' },
     offset: { ...NUMBER, description: '1-based first line to return. Defaults to 1.' },
     limit: { ...NUMBER, maximum: READ_LIMIT, description: `Maximum number of lines to return. Defaults to ${READ_LIMIT}.` },
   }, ['file_path']),
@@ -48,20 +49,20 @@ const DEFINITIONS = {
     + `Returns up to ${GLOB_MAX_RESULTS} paths in modification-time order; a larger result keeps the first paths.`, {
     pattern: { ...TEXT, description: 'Glob pattern to match file paths against (e.g. "**/*.ts", "src/**/*.test.js"). '
       + 'A pattern with no "/" matches the basename at any depth, so "*" and "*.ts" both search the whole tree; include a separator to anchor the depth.' },
-    path: { ...TEXT, description: 'Directory to search in. Defaults to the project directory; a relative path resolves against it.' },
+    path: { ...TEXT, description: 'Directory to search in. Defaults to the project directory; a relative path resolves against it, an absolute one may name another listed project directory.' },
   }, ['pattern']),
   grep: tool('grep', 'Search file contents with a JavaScript regular expression. Returns matching lines with line numbers, grouped by file. '
     + `Returns up to ${GREP_MAX_MATCHES} matches.`, {
     pattern: { ...TEXT, description: 'Regular expression to search for (JavaScript syntax).' },
-    path: { ...TEXT, description: 'File or directory to search. Defaults to the project directory; a relative path resolves against it.' },
+    path: { ...TEXT, description: 'File or directory to search. Defaults to the project directory; a relative path resolves against it, an absolute one may name another listed project directory.' },
     include: { ...TEXT, description: 'One glob filter for which files to search (e.g. "*.ts", "*.{js,jsx}"). Not a list; negation is not supported.' },
   }, ['pattern']),
   write: tool('write', 'Create or fully replace a UTF-8 text file.', {
-    file_path: { ...TEXT, description: 'Path to write, relative to the project directory. Provide `file_path` before `content` in the arguments.' },
+    file_path: { ...TEXT, description: 'Path to write, relative to the project directory, or absolute inside another listed project directory. Provide `file_path` before `content` in the arguments.' },
     content: { ...TEXT, description: 'Full UTF-8 text content to write.' },
   }, ['file_path', 'content']),
   edit: tool('edit', 'Edit an existing UTF-8 text file by replacing literal text.', {
-    file_path: { ...TEXT, description: 'Path to edit, relative to the project directory. Provide `file_path` before `old_string` and `new_string` in the arguments.' },
+    file_path: { ...TEXT, description: 'Path to edit, relative to the project directory, or absolute inside another listed project directory. Provide `file_path` before `old_string` and `new_string` in the arguments.' },
     old_string: { ...TEXT, description: 'Literal text to replace.' },
     new_string: { ...TEXT, description: 'Literal replacement text. Use an empty string to delete the match.' },
     replace_all: { type: 'boolean', description: 'Replace all matches. Defaults to false; when false, old_string must appear exactly once.' },
@@ -84,15 +85,28 @@ function real_path(path) {
 }
 
 /**
- * The project an API member may work in, or null when the room names none.
- * @param {{cwd?: string, project_access?: string}} options - the room's project directory and this member's access.
+ * The project an API member may work in, or null when the room names none. Without its own directory (it joined before
+ * the room had a project), the first of the room's directories is where relative paths resolve.
+ * @param {{cwd?: string, project_access?: string, extra_directories?: {path: string, access: string}[]}} options - the
+ *   member's project directory, its access, and the room's other directories with its access to each.
  * @param {string[]} private_paths - runner directories holding credentials, never readable through these tools.
- * @returns {{root: string, writable: boolean, private_paths: string[], observed: Map<string, string>} | null}
+ * @returns {{root: string, roots: {root: string, writable: boolean}[], writable: boolean, private_paths: string[],
+ *   observed: Map<string, string>} | null} `root` is the main directory; `writable` is whether any directory is.
  */
-export function open_project({ cwd, project_access }, private_paths = []) {
-  if (!cwd) return null;
-  return { root: realpathSync(cwd), writable: project_access === 'write', observed: new Map(),
+export function open_project({ cwd, project_access, extra_directories = [] }, private_paths = []) {
+  const roots = cwd ? [{ root: realpathSync(cwd), writable: project_access === 'write' }] : [];
+  for (const item of extra_directories) {
+    // A folder moved away since it was added is left out rather than failing the whole execution.
+    try { roots.push({ root: realpathSync(item.path), writable: project_access === 'write' && item.access === 'write' }); } catch { /* Gone. */ }
+  }
+  if (!roots.length) return null;
+  return { root: roots[0].root, roots, writable: roots.some(item => item.writable), observed: new Map(),
     private_paths: private_paths.filter(Boolean).map(path => real_path(resolve(path))) };
+}
+
+/** The project directory holding a real path, or undefined outside all of them. */
+function owner(project, path) {
+  return project.roots.find(item => inside(item.root, path));
 }
 
 /** The tools this member gets for its project; none without a project. */
@@ -101,22 +115,23 @@ export function file_tools(project) {
   return [...READ_TOOLS, ...(project.writable ? WRITE_TOOLS : [])].map(name => DEFINITIONS[name]);
 }
 
-/** The project-relative path shown to the model, with forward slashes. */
+/** The path shown to the model, with forward slashes: relative in the main directory, absolute in the others. */
 function display(project, path) {
+  if (!inside(project.root, path)) return path.split(sep).join('/');
   return relative(project.root, path).split(sep).join('/') || '.';
 }
 
 /** Why a path inside the project is still refused, or '' when it may be used. */
 function refusal(project, path) {
-  if (relative(project.root, path).split(sep).some(part => VCS_DIRECTORIES.includes(part.toLowerCase()))) return 'version control metadata';
+  if (relative(owner(project, path)?.root ?? project.root, path).split(sep).some(part => VCS_DIRECTORIES.includes(part.toLowerCase()))) return 'version control metadata';
   const name = basename(path);
   if (!SECRET_EXAMPLES.test(name) && SECRET_NAMES.some(rule => rule.test(name))) return 'a secret file';
   if (project.private_paths.some(root => inside(root, path))) return "the runner's private files";
   return '';
 }
 
-/** Resolve a requested path to a real path inside the project, refusing protected files. */
-function target(project, requested, exists = true) {
+/** Resolve a requested path to a real path inside the project, refusing protected files and, to modify, read-only directories. */
+function target(project, requested, exists = true, modify = false) {
   if (typeof requested !== 'string' || !requested.trim()) throw new Error('file_path must be a non-empty string');
   const absolute = resolve(project.root, requested);
   let path;
@@ -125,7 +140,9 @@ function target(project, requested, exists = true) {
     if (error.code === 'ENOENT') throw new Error(`cannot resolve "${requested}": not found`);
     throw error;
   }
-  if (!inside(project.root, path)) throw new Error(`cannot access "${requested}": outside the project directory`);
+  const root = owner(project, path);
+  if (!root) throw new Error(`cannot access "${requested}": outside the project directories`);
+  if (modify && !root.writable) throw new Error(`cannot modify "${requested}": its directory is read-only for you`);
   const reason = refusal(project, path);
   if (reason) throw new Error(`cannot access "${requested}": ${reason} is not available to API members`);
   return { path, shown: display(project, path) };
@@ -216,7 +233,7 @@ function atomic_write(file, content, info) {
 
 function write(project, args) {
   if (typeof args.content !== 'string') throw new Error('content must be a string');
-  const file = target(project, args.file_path, false);
+  const file = target(project, args.file_path, false, true);
   let info = null;
   try { info = statSync(file.path); } catch (error) { if (error.code !== 'ENOENT') throw error; }
   if (info && !info.isFile()) throw new Error(`cannot write "${file.shown}": not a regular file`);
@@ -229,7 +246,7 @@ function edit(project, args) {
   for (const field of ['old_string', 'new_string']) if (typeof args[field] !== 'string') throw new Error(`${field} must be a string`);
   if (!args.old_string) throw new Error('old_string must be a non-empty string');
   if (args.old_string === args.new_string) throw new Error('old_string and new_string must differ');
-  const file = target(project, args.file_path);
+  const file = target(project, args.file_path, true, true);
   const info = regular_file(file, 'edit');
   check_observed(project, file, info);
   const raw = decode(file, readFileSync(file.path), 'edit');

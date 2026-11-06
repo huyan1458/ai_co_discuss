@@ -124,8 +124,10 @@ function admin_avatar(value) {
  * Who sent a request: a device the paired computer signed into its device list. The credential is
  * `<computer>.<device>.<seconds>.<signature>`, the signature covering method, path and time with the device's own
  * non-exportable key. There are no accounts or passwords here; the computer alone decides which devices count.
+ * `renewing` also accepts an expired device until the `renew_until` the computer signed for it: used only for a single
+ * relayed request, which the computer itself limits to renewal.
  */
-async function device_identity(database, credential, method, path) {
+async function device_identity(database, credential, method, path, { renewing = false } = {}) {
   const [machine_id, device_id, time, signature] = String(credential || "").split(".");
   if (!/^[0-9a-f]{32}$/.test(machine_id || "") || !/^[0-9a-f]{32}$/.test(device_id || "") || !/^\d{10}$/.test(time || "") || !signature) return null;
   if (Math.abs(now_seconds() - Number(time)) > DEVICE_CLOCK_SECONDS) return null;
@@ -133,20 +135,22 @@ async function device_identity(database, credential, method, path) {
     .bind(machine_id).first();
   if (!row) return null;
   const algorithm = { name: "ECDSA", namedCurve: "P-256" }, hash = { name: "ECDSA", hash: "SHA-256" };
+  let expires_at;
   try {
     const signer = await crypto.subtle.importKey("jwk", JSON.parse(row.sign_key), algorithm, false, ["verify"]);
     if (!await crypto.subtle.verify(hash, signer, b64url_bytes(row.signature), new TextEncoder().encode(row.body))) return null;
     const device = JSON.parse(row.body).devices.find(item => item.id === device_id);
-    if (!device || device.expires_at <= Date.now()) return null;
+    if (!device || (device.expires_at <= Date.now() && !(renewing && device.renew_until > Date.now()))) return null;
     const key = await crypto.subtle.importKey("jwk", { kty: "EC", crv: "P-256", x: device.x, y: device.y }, algorithm, false, ["verify"]);
     if (!await crypto.subtle.verify(hash, key, b64url_bytes(signature), new TextEncoder().encode(`${method}\n${path}\n${time}`))) return null;
+    expires_at = device.expires_at;
   } catch { return null; }
-  return { machine_id, device_id };
+  return { machine_id, device_id, expires_at };
 }
 
 /** Require a paired device's signed request (`X-CoDiscuss-Device`). */
-async function require_device(database, request) {
-  const device = await device_identity(database, request.headers.get("X-CoDiscuss-Device"), request.method, new URL(request.url).pathname);
+async function require_device(database, request, options) {
+  const device = await device_identity(database, request.headers.get("X-CoDiscuss-Device"), request.method, new URL(request.url).pathname, options);
   if (!device) throw new HttpError(401, "这台设备没有与电脑配对，或配对已失效：请在电脑前扫码配对");
   return device;
 }
@@ -290,7 +294,7 @@ function valid_envelope(value, with_key) {
  * Record the computer's projects, clients, keys and its signed device list. The list is stored only if the computer's
  * own signing key verifies it, so neither this website nor anything else can add a device.
  */
-async function machine_sync(database, machine_id, token, payload, now) {
+async function machine_sync(database, machine_id, token, payload, now, relay = null) {
   await require_machine(database, machine_id, token);
   const projects = valid_projects(payload.projects), clients = valid_clients(payload.clients);
   const public_key = "public_key" in payload ? valid_public_key(payload.public_key) : null;
@@ -304,9 +308,14 @@ async function machine_sync(database, machine_id, token, payload, now) {
     const valid = await crypto.subtle.verify({ name: "ECDSA", hash: "SHA-256" }, key, b64url_bytes(payload.devices.signature), new TextEncoder().encode(payload.devices.body));
     const list = valid ? JSON.parse(payload.devices.body) : null;
     if (!list || list.machine !== machine_id || !Array.isArray(list.devices)) throw new HttpError(400, "设备名单签名无效");
-    await database.prepare(`INSERT INTO machine_devices (machine_id,body,signature,issued_at) VALUES (?,?,?,?) ON CONFLICT(machine_id) DO UPDATE SET
+    const stored = await database.prepare(`INSERT INTO machine_devices (machine_id,body,signature,issued_at) VALUES (?,?,?,?) ON CONFLICT(machine_id) DO UPDATE SET
       body=excluded.body, signature=excluded.signature, issued_at=excluded.issued_at WHERE excluded.issued_at>machine_devices.issued_at`)
       .bind(machine_id, payload.devices.body, payload.devices.signature, list.issued_at).run();
+    // A new list closes the live sockets of devices it no longer holds; unchanged heartbeats do not wake the relay.
+    if (relay && stored.meta?.changes) {
+      await relay.get(relay.idFromName(machine_id)).fetch("https://relay.internal/", { method: "POST", headers: { "Content-Type": "application/json", "X-Relay-Role": "devices" },
+        body: JSON.stringify({ devices: list.devices.map(item => ({ id: item.id, expires_at: item.expires_at })) }) }).catch(() => {});
+    }
   }
   // Unchanged heartbeats write nothing until seen_at is due for a refresh.
   await database.prepare(`UPDATE local_machines SET projects=?1, clients=?2, seen_at=?3 WHERE id=?4
@@ -400,21 +409,24 @@ async function handle_relay(env, request, machine_id) {
     if (!offered.includes(RELAY_PROTOCOL)) throw new HttpError(400, "中转协议不受支持");
     const machine = offered.find(item => /^m\.[0-9a-f]{64}$/.test(item));
     const device = offered.find(item => item.startsWith("d."));
-    let role = "machine";
+    let role = "machine", identity = null;
     if (machine) await require_machine(database, machine_id, machine.slice(2));
     else {
       // A device signs the socket with its own key, as it signs requests; subprotocols carry it, never the URL.
-      const identity = await device_identity(database, device?.slice(2), "GET", new URL(request.url).pathname);
+      identity = await device_identity(database, device?.slice(2), "GET", new URL(request.url).pathname);
       if (!identity || identity.machine_id !== machine_id) throw new HttpError(401, "这台设备没有与电脑配对，或配对已失效：请在电脑前扫码配对");
       await require_paired_machine(database, machine_id);
       role = "device";
     }
     const forwarded = new Request(request);
     forwarded.headers.set("X-Relay-Role", role);
+    // The relay keeps which device holds each socket and until when, so it can close it on expiry or revocation.
+    if (identity) forwarded.headers.set("X-Relay-Device", JSON.stringify({ id: identity.device_id, expires_at: identity.expires_at }));
     return relay.fetch(forwarded);
   }
   if (request.method !== "POST") throw new HttpError(404, "地址不存在");
-  const identity = await require_device(database, request);
+  // An expired device that may still renew reaches the computer one request at a time; the computer lets only renewal through.
+  const identity = await require_device(database, request, { renewing: true });
   if (identity.machine_id !== machine_id) throw new HttpError(403, "这台设备配对的是另一台电脑");
   await require_paired_machine(database, machine_id);
   return forward_relay(relay, await read_payload(request));
@@ -449,10 +461,10 @@ async function require_paired_machine(database, machine_id) {
 }
 
 /** Pair computers and queue their commands; a computer authenticates with its own token, everything else as the administrator. */
-async function handle_remote_launch_api(database, request, parts, setup_key) {
+async function handle_remote_launch_api(database, request, parts, setup_key, relay) {
   const now = now_seconds(), method = request.method;
   if (parts.length === 4 && parts[1] === "machines" && parts[3] === "sync" && method === "POST") {
-    return respond(await machine_sync(database, parts[2], request.headers.get("X-Machine-Token") ?? "", await read_payload(request), now));
+    return respond(await machine_sync(database, parts[2], request.headers.get("X-Machine-Token") ?? "", await read_payload(request), now, relay));
   }
   if (parts.length === 5 && parts[1] === "machines" && parts[3] === "commands" && method === "POST") {
     const token = request.headers.get("X-Machine-Token") ?? "", payload = await read_payload(request);
@@ -475,11 +487,11 @@ async function handle_remote_launch_api(database, request, parts, setup_key) {
   throw new HttpError(404, "地址不存在");
 }
 
-async function handle_api(database, request, parts, setup_key = "") {
+async function handle_api(database, request, parts, setup_key = "", relay = null) {
   const route = parts.join("/");
   if (route === "api/health" && request.method === "GET") return respond({ ok: true });
   if (parts[1] === "admin") return handle_admin_api(database, request, parts, setup_key);
-  if (parts[1] === "machines") return handle_remote_launch_api(database, request, parts, setup_key);
+  if (parts[1] === "machines") return handle_remote_launch_api(database, request, parts, setup_key, relay);
   throw new HttpError(404, "地址不存在");
 }
 
@@ -493,7 +505,7 @@ async function fetch_request(request, env) {
     if (!["GET", "POST"].includes(request.method)) return new Response(null, { status: 501 });
     if (parts.length === 4 && parts[1] === "machines" && parts[3] === "relay") return await handle_relay(env, request, parts[2]);
     if (parts.length === 4 && parts[1] === "machines" && parts[3] === "pair") return await handle_pairing(env, request, parts[2]);
-    return await handle_api(env.DB, request, parts, env.ADMIN_SETUP_KEY);
+    return await handle_api(env.DB, request, parts, env.ADMIN_SETUP_KEY, env.RELAY ?? null);
   } catch (error) {
     const status = error instanceof HttpError ? error.status : 500;
     return respond({ error: status === 500 ? "服务器内部错误" : error.message }, status);

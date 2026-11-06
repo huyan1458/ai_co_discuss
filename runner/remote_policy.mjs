@@ -78,7 +78,7 @@ function walk(value, visit) {
 /**
  * Refuse a relayed request that would reach past what this computer granted: a folder outside the saved projects,
  * a program location not already saved here, or 全放开 saved as a default. A device reaches this point only unlocked
- * by its passkey that day, so a room may be given any level.
+ * by its passkey that day (or, lacking passkey support, paired at this computer), so a room may be given any level.
  */
 export function guard_remote_request(command, input, { projects, participants, home }) {
   if (LOCAL_ONLY_ACTIONS.has(command)) throw new Error('此操作只能在这台电脑上执行');
@@ -88,6 +88,7 @@ export function guard_remote_request(command, input, { projects, participants, h
   const known = Object.fromEntries(SOFTWARE_FIELDS.map(field => [field, new Set(saved.map(profile => profile[field]).filter(Boolean))]));
   walk(input, (key, value) => {
     if (key === 'cwd' && value) remote_directory(value, { roots, home });
+    else if (key === 'extra_directories' && Array.isArray(value)) value.forEach(directory => remote_directory(directory, { roots, home }));
     else if (SOFTWARE_FIELDS.includes(key) && value && !known[key].has(value)) throw new Error(`其他设备不能更改软件位置（${key}），请在电脑上设置`);
     // 全放开 may be given to a room's member; it never becomes a saved default from afar.
     else if (key === 'project_access' && value === 'full' && !WRITE_COMMANDS.has(command)) throw new Error('“全放开”不能从其他设备存为默认设置');

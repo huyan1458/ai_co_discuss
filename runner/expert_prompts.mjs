@@ -79,26 +79,33 @@ export function access_label(level) { return level === 'own' ? '自行决定' : 
 export const TASK_SUBCOMMANDS = ['room', 'message', 'turn', 'state', 'goal', 'mode', 'review', 'sequence', 'execution', 'health', 'schema', 'launch workflow-adopt', 'launch workflow-join'];
 
 /**
- * Whether a member may run commands beyond the codiscuss subcommands: every level but 只读, and 可写 only with a project.
- * A taken-over manual member (`own`) keeps its own session's permissions, so the room's limits do not apply.
+ * Whether a member may run commands beyond the codiscuss subcommands: every level but 只读, and 可写 only with a project
+ * (its own, or one of the room's directories it may write, `extra_directories`). A taken-over manual member (`own`)
+ * keeps its own session's permissions, so the room's limits do not apply.
  */
-export function runs_commands(config) {
+export function runs_commands(config, extra_directories = []) {
   const access = config.project_access;
-  return ['own', 'auto', 'full'].includes(access) || (access === 'write' && Boolean(config.cwd || config.workdir));
+  return ['own', 'auto', 'full'].includes(access) || (access === 'write'
+    && Boolean(config.cwd || config.workdir || extra_directories.some(item => item.access === 'write')));
 }
 
-/** The task text's rule for project files and commands; `purpose` says what the member works for (按请求 / 按议题需要). */
-export function project_rule(profile, purpose) {
+/**
+ * The task text's rule for project files and commands; `purpose` says what the member works for (按请求 / 按议题需要).
+ * A member without its own project may still have the room's directories in `extra_directories`.
+ */
+export function project_rule(profile, purpose, extra_directories = []) {
   if (profile.project_access === 'own') return '项目文件与命令权限沿用你自己会话的软件设置。';
   if (profile.project_access === 'auto') return `由软件自动审批：可${purpose}修改项目文件并运行所需命令；被沙箱或审批拦下时按软件方式申请放行（Codex 申请提权），仍被拒绝就在回答中说明。`;
   if (profile.project_access === 'full') return `已跳过软件审批与沙箱，可${purpose}修改文件并运行所需命令。`;
+  if (!profile.cwd && extra_directories.length) return runs_commands(profile, extra_directories)
+    ? `用户允许${purpose}修改项目文件并运行所需命令。` : '项目文件只读，不修改。';
   if (!profile.cwd) return '未指定项目目录。';
   return profile.project_access === 'write' ? `用户允许${purpose}修改 cwd 中的项目文件并运行所需命令。` : 'cwd 中的项目文件只读，不修改。';
 }
 
 /** The fixed rules one software needs in every task, from its adapter profile; no member prompt can drop them. */
-export function software_rules(config, cli) {
-  return adapter_profile(config.adapter)?.task_rules?.(cli, { runs_commands: runs_commands(config) }) || '';
+export function software_rules(config, cli, extra_directories = []) {
+  return adapter_profile(config.adapter)?.task_rules?.(cli, { runs_commands: runs_commands(config, extra_directories) }) || '';
 }
 
 /** Windows PowerShell mis-decodes UTF-8 files; the runner adds this where the member's commands can run rg. */
@@ -112,11 +119,14 @@ export const READ_RULE = '读含中文的文件用 rg --encoding utf-8 . 文件�
  * otherwise where the task file is, plus how to read files at all; the task file's fields carry this execution's values
  * (messages, read point, execution, role, credentials), the skills it lists say how to use them, and `instructions`
  * holds only the limits no skill can know. `access_file` is set where the credential is not bound to the process.
+ * `extra_directories` are the room's other project directories this member works with, each read-only or writable.
  */
-export function free_task_text({ name, discussion, discussion_request, profile, cli, messages, read_after, task_path, access_file = '', read_rule = '' }) {
+export function free_task_text({ name, discussion, discussion_request, profile, cli, messages, read_after, task_path, access_file = '', read_rule = '',
+  extra_directories = [] }) {
   const scope = discussion ? `讨论进行中，用户直接向你提问（${messages}）：只回答这个提问，不改变讨论安排和进度。` : '';
-  const commands = runs_commands(profile) ? '' : `命令只用 subcommands 列出的 ${cli} 子命令。`;
-  const instructions = `${software_rules(profile, cli)}${scope}${project_rule(profile, '按请求')}${commands}草稿写在 draft_directory。`;
+  const commands = runs_commands(profile, extra_directories) ? '' : `命令只用 subcommands 列出的 ${cli} 子命令。`;
+  const extras = extra_directories.length ? 'extra_directories 是本房间的其他项目目录，access 为 read 的只读、不修改。' : '';
+  const instructions = `${software_rules(profile, cli, extra_directories)}${scope}${project_rule(profile, '按请求', extra_directories)}${extras}${commands}草稿写在 draft_directory。`;
   if (discussion_request) {
     const role = discussion_request.purpose === 'discuss_host' ? '主持任务' : '发言请求';
     const prompt = `你（${name}）收到了讨论中的${role}。先读任务文件 ${task_path}，按其中列出的技能处理本次请求并保存结果。${read_rule}`;

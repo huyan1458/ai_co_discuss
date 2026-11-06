@@ -4,8 +4,9 @@
  * - its static facts in `profiles.mjs` (label, platform, config fields, efforts, access levels, capabilities), plain data
  *   the web page reads as well;
  * - its behaviour in its own module, a descriptor with the same shape for every software:
- *   - `deliver(config, binding, task, spawn_process, user_home)` → `{session_id, status, capabilities}`, where
- *     `capabilities` `{stoppable, progress}` says what this one delivery can do;
+ *   - `deliver(config, binding, task, spawn_process, user_home)` → `{session_id, status, capabilities, steer?}`, where
+ *     `capabilities` `{stoppable, progress}` says what this one delivery can do, and `steer(text)` (when the running
+ *     software can take an interjection without ending its turn) passes one in, resolving false once the turn is over;
  *   - `session`: `{path, exists, branch, settings}` for the software's own session store, or null;
  *   - `models`: `{list, effort?, defaults}` read from the installed software, or null when it is chosen inside the App;
  *   - optional `receipt(config, id)` for deliveries confirmed later (`status: 'sidecar_pending'`),
@@ -78,6 +79,37 @@ export function stored_delivery(value) {
   const legacy = { process: { stoppable: true, progress: true }, api: { stoppable: true, progress: true },
     window: { stoppable: false, progress: false }, app: { stoppable: false, progress: false }, sidecar: { stoppable: false, progress: false } };
   return Object.hasOwn(legacy, value) ? legacy[value] : JSON.parse(value);
+}
+
+// What one execution-detail answer carries: the latest entries, each body cut to a readable length.
+const DETAIL_ENTRY_LIMIT = 300;
+const DETAIL_BODY_LIMIT = 4000;
+
+/**
+ * What an agent did in one execution, rebuilt from the raw event log its adapter's process wrote: messages, commands
+ * with their output, searches, edits and tool calls in order. Each adapter's `events.detail(event)` turns one event into
+ * entries `{id?, kind, title?, body?, append?, state?}`; an entry with a known id updates the earlier one in place
+ * (a command's result fills in its start), `append` extends its body. Returns null when the adapter keeps no such log.
+ */
+export function execution_details(adapter_id, text) {
+  const detail = adapter_of(adapter_id)?.events?.detail;
+  if (!detail) return null;
+  const entries = new Map();
+  for (const line of text.split('\n')) {
+    let event;
+    try { event = JSON.parse(line); } catch { continue; }
+    // The runner marks where an interjection went into the turn; it reads the same for every software.
+    const parts = event.type === 'codiscuss.interjection' ? [{ kind: 'interjection', body: String(event.text || '') }] : detail(event);
+    for (const { append, ...fields } of parts || []) {
+      const id = fields.id ?? `entry-${entries.size}`;
+      const entry = { ...entries.get(id), ...Object.fromEntries(Object.entries(fields).filter(([, value]) => value !== undefined)), id };
+      if (append) entry.body = (entry.body || '') + append;
+      entries.set(id, entry);
+    }
+  }
+  const all = [...entries.values()].filter(entry => entry.kind);
+  return { total: all.length, entries: all.slice(-DETAIL_ENTRY_LIMIT).map(entry => entry.body?.length > DETAIL_BODY_LIMIT
+    ? { ...entry, body: entry.body.slice(0, DETAIL_BODY_LIMIT), truncated: true } : entry) };
 }
 
 /** Adapters whose sessions this machine can cut or branch; the website lists taken-back executions only for these. */

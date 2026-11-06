@@ -147,17 +147,14 @@ const status = computed(() => {
   if (working.some((member) => member.execution?.stale)) return { tone: "error", title: "执行失联", detail: "停止未确认，可在成员菜单中停止后重发" };
   const undeliverable = working.find((member) => member.pending && member.adopt_error && !LIVE.includes(member.execution?.status));
   if (undeliverable) return { tone: "error", title: "无法投递", detail: `${bridge.display_name(undeliverable.name)} 的消息未送达，原因见对话区` };
-  const latest_chain = Math.max(0, ...(free.value.requests || []).map((request) => request.chain_id));
-  const rounds = (free.value.chain_rounds || []).find((chain) => chain.chain_id === latest_chain);
-  // How far the latest chain got against its limit; shown while it runs, so the stop never comes as a surprise.
-  const progress = !rounds ? "" : rounds.allowed == null ? `第 ${rounds.used} 轮` : `第 ${Math.min(rounds.used, rounds.allowed)}/${rounds.allowed} 轮`;
-  if (working.length) return { tone: "primary", title: "处理中", detail: [progress,
-    ...working.map((member) => `${bridge.display_name(member.name)} ${LIVE.includes(member.execution?.status) ? "正在处理" : member.held_until ? "等上一轮结束" : `待投递 ${member.pending} 条`}`)].filter(Boolean).join(" · ") };
+  const latest_chain = latest_chain_id.value;
+  if (working.length) return { tone: "primary", title: "处理中", detail:
+    working.map((member) => `${bridge.display_name(member.name)} ${LIVE.includes(member.execution?.status) ? "正在处理" : member.held_until ? "等上一轮结束" : `待投递 ${member.pending} 条`}`).join(" · ") };
   const halted = (free.value.halted_chains || []).find((chain) => chain.chain_id === latest_chain);
   if (halted?.reason === "budget" && halted.asked_rounds) return { tone: "warning", title: "主持人申请轮数", continue_chain: latest_chain,
     asked_rounds: halted.asked_rounds, detail: `申请再给 ${halted.asked_rounds} 轮：${halted.asked_reason}。批准即发出暂存的派活；发新消息则重新开始` };
   if (halted?.reason === "budget") return { tone: "warning", title: "任务链已停", continue_chain: latest_chain,
-    detail: `已推进 ${rounds?.used ?? free.value.max_rounds} 轮，达到上限；主持人的下一次派活已暂存，继续即发出。发新消息则重新开始` };
+    detail: "达到连续派活上限；主持人的下一次派活已暂存，继续即发出。发新消息则重新开始" };
   if (halted) return { tone: "warning", title: "任务链已停", detail: "派出的成员都失败了；发新消息即重新开始" };
   if (!(free.value.members || []).length) return { tone: "neutral", title: "暂无成员", detail: "在下方邀请 AI 加入" };
   return { tone: "success", title: "空闲", detail: host.value
@@ -170,15 +167,15 @@ const live_requests = computed(() => {
   return (free.value.requests || []).filter((request) => !withdrawn.has(request.message_id));
 });
 
-/** Recent requests and executions; the server keeps the latest hundred of each. */
-const meters = computed(() => {
-  const requests = live_requests.value;
-  const answered = requests.filter((request) => request.status === "completed").length;
-  const executions = free.value.executions || [];
-  return [
-    { label: "请求", text: `${answered} / ${requests.length} 已回复`, ratio: requests.length ? answered / requests.length : null },
-    { label: "执行", text: `${executions.length} 次`, ratio: null },
-  ];
+const latest_chain_id = computed(() => Math.max(0, ...(free.value.requests || []).map((request) => request.chain_id)));
+const latest_rounds = computed(() => (free.value.chain_rounds || []).find((chain) => chain.chain_id === latest_chain_id.value) || null);
+
+/** How far the latest chain got against the room's chain limit, while it runs or after it stopped there; it says when the room stops by itself. */
+const rounds_meter = computed(() => {
+  if (!rounds || !(status.value.title === "处理中" || status.value.continue_chain)) return null;
+  if (rounds.allowed == null) return { text: `第 ${rounds.used} 轮 · 不限`, ratio: null };
+  const used = Math.min(rounds.used, rounds.allowed);
+  return { text: `${used} / ${rounds.allowed} 轮`, ratio: used / rounds.allowed };
 });
 
 /** The user message behind the newest unfinished request, so the rail says what the room is working on; none once all are answered. */
@@ -225,21 +222,20 @@ watch(() => room.value.id, () => { starting.value = false; });
     <header class="pb-header"><strong>{{ discussion ? '讨论进度' : '自由协作' }}</strong><span class="pb-mode">{{ host ? `${bridge.display_name(host.name)} 主持` : '无主持人' }}</span></header>
     <ProgressBoard v-if="discussion" />
     <section v-else class="pb-status" :class="`is-${status.tone}`" aria-label="房间状态">
-      <div class="pb-status-line"><span class="pb-dot"></span><strong role="status">{{ status.title }}</strong></div>
+      <div class="pb-status-line"><span class="pb-dot"></span><strong role="status">{{ status.title }}</strong>
+        <UButton v-if="status.title === '处理中' && view.access?.can_manage" label="全部停止" size="xs" color="error" variant="soft" class="pb-stop-all" title="停止所有成员正在做的工作，并取消还没投递的请求；发新消息即重新开始"
+          :loading="pending === 'stop_room'" :disabled="!!pending" @click="act('stop_room')">
+          <template #leading><span v-if="pending !== 'stop_room'" class="pb-stop-glyph" aria-hidden="true"></span></template>
+        </UButton>
+      </div>
       <p v-if="status.detail" class="pb-status-detail">{{ status.detail }}</p>
-      <div v-if="status.title === '处理中' && view.access?.can_manage" class="pb-chain-actions">
-        <UButton label="全部停止" icon="i-lucide-circle-stop" size="sm" color="error" variant="outline" class="pb-action pb-action-danger" title="停止所有成员正在做的工作，并取消还没投递的请求；发新消息即重新开始"
-          :loading="pending === 'stop_room'" :disabled="!!pending" @click="act('stop_room')" />
+      <div v-if="rounds_meter" class="pb-meter pb-rounds" title="主持人连续派活的轮数；到上限自动停下，可继续">
+        <div class="pb-meter-label"><span>连续派活</span><b>{{ rounds_meter.text }}</b></div>
+        <div v-if="rounds_meter.ratio !== null" class="pb-bar"><i :style="{ width: `${Math.round(rounds_meter.ratio * 100)}%` }"></i></div>
       </div>
       <div v-if="status.continue_chain && view.access?.can_manage" class="pb-chain-actions">
         <UButton v-for="rounds in continue_choices" :key="rounds" :label="rounds === status.asked_rounds ? `批准 ${rounds} 轮` : `继续 ${rounds} 轮`" icon="i-lucide-play" size="sm" color="neutral" variant="outline" class="pb-action"
           :loading="continuing === rounds" :disabled="Boolean(continuing)" @click="continue_chain(status.continue_chain, rounds)" />
-      </div>
-      <div class="pb-meters">
-        <div v-for="meter in meters" :key="meter.label" class="pb-meter">
-          <div class="pb-meter-label"><span>{{ meter.label }}</span><b>{{ meter.text }}</b></div>
-          <div v-if="meter.ratio !== null" class="pb-bar"><i :style="{ width: `${Math.min(100, Math.round(meter.ratio * 100))}%` }"></i></div>
-        </div>
       </div>
     </section>
     <section v-if="goal" class="pb-section" aria-label="Goal">

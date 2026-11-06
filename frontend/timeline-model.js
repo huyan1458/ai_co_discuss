@@ -53,6 +53,8 @@ export function execution_stages(item, now_ms) {
 
 /** No output for this long marks a running execution as possibly stuck, as the message page's working card does. */
 export const STALL_MS = 3 * 60_000;
+/** Thinking reports nothing until it ends, so a silent thinking phase is called stuck only after this long. */
+export const THINKING_STALL_MS = 10 * 60_000;
 
 /**
  * The line under a row's name, so the timeline reads without hovering: what a running execution last said (else its
@@ -76,8 +78,11 @@ export function row_status(row, now_ms) {
   const silent = last_output ? now_ms - last_output : 0;
   if (silent >= STALL_MS) {
     // A long command prints nothing while it runs; that is not a stall.
-    return last_segment?.phase === "command" ? { tone: "warn", text: `命令已运行 ${format_duration(silent)}` }
-      : { tone: "warn", text: `已 ${format_duration(silent)} 无输出，可能卡住` };
+    if (last_segment?.phase === "command") return { tone: "warn", text: `命令已运行 ${format_duration(silent)}` };
+    if (last_segment?.phase === "thinking" && silent < THINKING_STALL_MS) {
+      return { tone: "live", text: `思考中，已 ${format_duration(silent)} 无中间输出` };
+    }
+    return { tone: "warn", text: `已 ${format_duration(silent)} 无输出，可能卡住` };
   }
   if (item.last_note) return { tone: "live", text: item.last_note };
   if (last_segment) return { tone: "live", text: `${PHASE_LABELS[last_segment.phase]}${last_segment.tool ? ` · ${last_segment.tool}` : ""}中` };

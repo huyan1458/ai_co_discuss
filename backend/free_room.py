@@ -107,6 +107,10 @@ MAX_DENIAL_FIELD = 300
 # A manual member's delivery is retried at most this often before the execution fails.
 MAX_RETRIES = 3
 MAX_RETRY_REASON = 500
+# One interjection the owner adds to a running execution, and how many one execution keeps.
+MAX_INTERJECTION_LENGTH = 2000
+MAX_INTERJECTIONS = 20
+INTERJECTION_ENDED = "送达前本次执行已结束"
 ACTIVE = ("dispatched", "started")
 ACCESS_MODES = ("runner", "manual")
 SCHEDULER_PROVIDERS = ("jev", "decisions")
@@ -145,19 +149,24 @@ REWIND_EFFECTS = ("cut", "fresh", "kept")
 # The reported capabilities and stop result read alongside an execution aliased `e`.
 CAPABILITY_COLUMNS = """(SELECT stoppable FROM execution_capabilities c WHERE c.execution_id=e.id) AS stoppable,
     (SELECT progress FROM execution_capabilities c WHERE c.execution_id=e.id) AS progress,
-    (SELECT stop_result FROM execution_capabilities c WHERE c.execution_id=e.id) AS stop_result"""
+    (SELECT stop_result FROM execution_capabilities c WHERE c.execution_id=e.id) AS stop_result,
+    (SELECT steer FROM execution_capabilities c WHERE c.execution_id=e.id) AS steer"""
 
 
 def reported_capabilities(row):
-    """`{stoppable, progress}` as the runner reported them for one execution, or None before it did (or an older runner)."""
-    return None if row["stoppable"] is None else {"stoppable": bool(row["stoppable"]), "progress": bool(row["progress"])}
+    """`{stoppable, progress, steer}` as the runner reported them for one execution, or None before it did (or an older runner).
+    `steer`: the owner can add an interjection the running software takes without ending its turn."""
+    if row["stoppable"] is None:
+        return None
+    return {"stoppable": bool(row["stoppable"]), "progress": bool(row["progress"]), "steer": bool(row["steer"])}
 # Columns added after the first free-room tables; Python databases created by that build gain them here.
 LATER_COLUMNS = {"room_members": {"access": "TEXT NOT NULL DEFAULT 'runner'", "session_mode": "TEXT NOT NULL DEFAULT 'new'"},
                  "member_executions": {"changes": "TEXT NOT NULL DEFAULT ''", "edited": "TEXT NOT NULL DEFAULT ''", "cwd": "TEXT NOT NULL DEFAULT ''",
                                        "activity": "TEXT NOT NULL DEFAULT ''", "activity_at": "INTEGER NOT NULL DEFAULT 0"},
                  "member_requests": {"chain_id": "INTEGER NOT NULL DEFAULT 0", "batch_id": "INTEGER NOT NULL DEFAULT 0",
                                      "purpose": "TEXT NOT NULL DEFAULT 'ask'", "created_by": "TEXT NOT NULL DEFAULT 'user'"},
-                 "free_chain_holds": {"asked_rounds": "INTEGER NOT NULL DEFAULT 0", "asked_reason": "TEXT NOT NULL DEFAULT ''"}}
+                 "free_chain_holds": {"asked_rounds": "INTEGER NOT NULL DEFAULT 0", "asked_reason": "TEXT NOT NULL DEFAULT ''"},
+                 "execution_capabilities": {"steer": "INTEGER"}}
 
 
 def migrate_free_tables(connection):
@@ -719,6 +728,7 @@ def recent_executions(connection, room_id):
             "notes": row["note_count"], "denials": json.loads(row["denials"] or "[]"),
             "capabilities": reported_capabilities(row), "stop_result": row["stop_result"] or "",
             "late_answer": json.loads(row["late_answer"]) if row["late_answer"] else None,
+            "interjections": execution_interjections(connection, row["id"], row["status"]),
             "retry": execution_retry(connection, row["id"])})
     return executions
 
@@ -1877,7 +1887,11 @@ def inbox(connection, room_id, token):
         member_view["rewind"] = reported[0] if reported else ""
         pending = [{**request, **review_request_context(connection, request), **sequence_request_context(connection, request)} for request in pending]
         (members if row["access"] == "runner" else observers).append({**member_view, "pending": pending})
-    executions = [{**public_execution(row), "member": row["name"], "retry": execution_retry(connection, row["id"])} for row in connection.execute(
+    # Pending interjections ride along so the runner hands them to the running software at its next check.
+    executions = [{**public_execution(row), "member": row["name"], "retry": execution_retry(connection, row["id"]),
+                   "interjections": [dict(item) for item in connection.execute(
+                       "SELECT id,text FROM execution_interjections WHERE execution_id=? AND status='pending' ORDER BY id", (row["id"],))]}
+                  for row in connection.execute(
         """SELECT member_executions.*,room_members.name FROM member_executions JOIN room_members ON room_members.id=member_id
         WHERE member_executions.room_id=? AND member_executions.status IN ('dispatched','started') ORDER BY member_executions.id""", (room_id,))]
     return {"room_id": room_id, "archived": bool(archived), "members": members, "observers": observers, "executions": executions}
@@ -2231,6 +2245,54 @@ def record_stop_result(connection, room_id, execution_id, result):
     return True
 
 
+def add_interjection(connection, room_id, row, payload, now):
+    """The owner's interjection into one running execution, kept for the runner to deliver; the same submission_id returns the earlier one."""
+    text, submission_id = payload.get("text"), payload.get("submission_id")
+    if not isinstance(text, str) or not 0 < len(text.strip()) <= MAX_INTERJECTION_LENGTH:
+        raise ValueError(f"插话须为 1–{MAX_INTERJECTION_LENGTH} 字")
+    if not isinstance(submission_id, str) or not 0 < len(submission_id) <= 100:
+        raise ValueError("插话须带 submission_id；重试沿用原编号")
+    earlier = connection.execute("SELECT * FROM execution_interjections WHERE room_id=? AND submission_id=?", (room_id, submission_id)).fetchone()
+    if earlier:
+        if earlier["execution_id"] != row["id"] or earlier["text"] != text:
+            raise FileExistsError("submission_id 已用于另一条插话")
+        return public_interjection(earlier, row["status"])
+    capability = connection.execute("SELECT steer FROM execution_capabilities WHERE execution_id=?", (row["id"],)).fetchone()
+    if not capability or not capability["steer"]:
+        raise FileExistsError("这位成员的软件不支持执行中插话，可停止后带上这句话重问")
+    if connection.execute("SELECT COUNT(*) FROM execution_interjections WHERE execution_id=?", (row["id"],)).fetchone()[0] >= MAX_INTERJECTIONS:
+        raise FileExistsError(f"一次执行最多插话 {MAX_INTERJECTIONS} 条")
+    cursor = connection.execute("""INSERT INTO execution_interjections (execution_id,room_id,submission_id,text,created_at,updated_at)
+        VALUES (?,?,?,?,?,?)""", (row["id"], room_id, submission_id, text, now, now))
+    return public_interjection(connection.execute("SELECT * FROM execution_interjections WHERE id=?", (cursor.lastrowid,)).fetchone(), row["status"])
+
+
+def record_interjection_result(connection, room_id, execution_id, payload, now):
+    """Mark one pending interjection delivered or failed, as the runner reports it."""
+    status, reason = payload.get("status"), payload.get("reason", "")
+    if status not in ("delivered", "failed") or not isinstance(reason, str) or len(reason) > MAX_RETRY_REASON:
+        raise ValueError(f"interjection 须带 status（delivered 或 failed）与最多 {MAX_RETRY_REASON} 字的 reason")
+    updated = connection.execute("""UPDATE execution_interjections SET status=?,reason=?,updated_at=?
+        WHERE id=? AND room_id=? AND execution_id=? AND status='pending'""",
+                                 (status, reason, now, payload.get("interjection_id"), room_id, execution_id))
+    if not updated.rowcount and not connection.execute("SELECT 1 FROM execution_interjections WHERE id=? AND room_id=? AND execution_id=?",
+                                                       (payload.get("interjection_id"), room_id, execution_id)).fetchone():
+        raise LookupError("插话不存在")
+
+
+def public_interjection(row, execution_status):
+    """One interjection as the page shows it; one still pending when its execution ended never reached the software."""
+    ended = row["status"] == "pending" and execution_status not in ACTIVE
+    return {"id": row["id"], "text": row["text"], "status": "failed" if ended else row["status"],
+            "reason": INTERJECTION_ENDED if ended else row["reason"], "created_at": row["created_at"]}
+
+
+def execution_interjections(connection, execution_id, execution_status):
+    """Every interjection of one execution in the order the owner sent them."""
+    return [public_interjection(row, execution_status) for row in connection.execute(
+        "SELECT * FROM execution_interjections WHERE execution_id=? ORDER BY id", (execution_id,))]
+
+
 def execution_action(connection, room_id, execution_id, token, payload):
     """Runner-side lifecycle: renew, fail, release undelivered work, report how the software was reached, whether a voided one stopped, or observed file changes."""
     begin_write(connection)
@@ -2284,9 +2346,15 @@ def execution_action(connection, room_id, execution_id, token, payload):
         # What this delivery can do, as the runner's adapter reported; a retried delivery may differ, so the latest counts.
         if type(payload.get("stoppable")) is not bool or type(payload.get("progress")) is not bool:
             raise ValueError("delivery 须带布尔值 stoppable 与 progress")
-        connection.execute("""INSERT INTO execution_capabilities (execution_id,room_id,stoppable,progress) VALUES (?,?,?,?)
-            ON CONFLICT(execution_id) DO UPDATE SET stoppable=excluded.stoppable,progress=excluded.progress""",
-                           (execution_id, room_id, int(payload["stoppable"]), int(payload["progress"])))
+        # Older runners report no `steer`; their deliveries take no interjection.
+        if type(payload.get("steer", False)) is not bool:
+            raise ValueError("delivery 的 steer 须为布尔值")
+        connection.execute("""INSERT INTO execution_capabilities (execution_id,room_id,stoppable,progress,steer) VALUES (?,?,?,?,?)
+            ON CONFLICT(execution_id) DO UPDATE SET stoppable=excluded.stoppable,progress=excluded.progress,steer=excluded.steer""",
+                           (execution_id, room_id, int(payload["stoppable"]), int(payload["progress"]), int(payload.get("steer", False))))
+    elif action == "interjection":
+        # The runner's report on one interjection: it reached the software, or why it could not; a repeated report changes nothing.
+        record_interjection_result(connection, room_id, execution_id, payload, now)
     elif action == "retry":
         retry_failed(connection, room_id, row)
     elif row["status"] not in ACTIVE:
@@ -2302,6 +2370,10 @@ def execution_action(connection, room_id, execution_id, token, payload):
                            (now + LEASE_SECONDS, activity, activity_at, execution_id))
         connection.executemany("INSERT OR IGNORE INTO execution_notes (execution_id,seq,room_id,text,created_at) VALUES (?,?,?,?,?)",
                                [(execution_id, note["seq"], room_id, note["text"], now) for note in notes])
+    elif action == "interject":
+        interjection = add_interjection(connection, room_id, row, payload, now)
+        detail = execution_detail(connection, connection.execute("SELECT * FROM member_executions WHERE id=?", (execution_id,)).fetchone())
+        return {**detail, "interjection": interjection}
     elif action == "retry_wait":
         # A manual member's session refused the delivery: the runner keeps the execution and delivers again at retry_at.
         attempt, retry_at, reason = payload.get("attempt"), payload.get("retry_at"), payload.get("reason")
@@ -2335,7 +2407,7 @@ def execution_action(connection, room_id, execution_id, token, payload):
         # Only for proven non-delivery: the requests return to the queue unchanged.
         finish_execution(connection, execution_id, "cancelled", str(payload.get("reason") or "未送达"), "pending")
     else:
-        raise ValueError("action 须为 renew、fail、release、report、segments、retry_wait、retry_start、retry_now、retry_stop 或 retry")
+        raise ValueError("action 须为 renew、fail、release、report、segments、interject、interjection、retry_wait、retry_start、retry_now、retry_stop 或 retry")
     detail = execution_detail(connection, connection.execute("SELECT * FROM member_executions WHERE id=?", (execution_id,)).fetchone())
     return {**detail, "duplicate": duplicate} if action == "stopped" else detail
 

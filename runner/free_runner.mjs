@@ -1,13 +1,14 @@
 /** Free-room delivery: one live execution per member, carrying all of that member's open requests. */
 import { spawnSync } from 'node:child_process';
 import { createHash, randomUUID } from 'node:crypto';
-import { appendFileSync, mkdirSync, readFileSync, statSync } from 'node:fs';
+import { appendFileSync, existsSync, mkdirSync, readFileSync, statSync } from 'node:fs';
 import { basename, join, resolve } from 'node:path';
 import { adapter_of, BRANCHABLE_ADAPTERS, branch_session, capabilities_of, cleanup_room, deliver_task, delivery_receipt, session_exists, stored_delivery } from './adapters/index.mjs';
-import { api, read_rule } from './discussion_runner.mjs';
+import { api, overlapping_directories, read_rule } from './discussion_runner.mjs';
 import { SegmentLog } from './execution_progress.mjs';
 import { free_task_text, TASK_SUBCOMMANDS, with_expert_prompt } from './expert_prompts.mjs';
 import { atomic_json } from './files.mjs';
+import { outside_directory, room_directories } from './project_files.mjs';
 import { SessionDriver } from './session_driver.mjs';
 import { effective_profile, load_room_workflow, workflow_in_use, workflow_task_field } from './workflows.mjs';
 import { DEFAULT_SCHEDULER_MODE, GOAL_PROMPT_VERSION, decide_goal_wake, decide_sequence_checkpoint, REVIEW_CONFIDENCE, REVIEW_PROMPT_VERSION, SEQUENCE_CONFIDENCE, SEQUENCE_PROMPT_VERSION, ROUTE_CONFIDENCE, ROUTE_CONTEXT_MESSAGES, ROUTE_PROMPT_VERSION, ROUTE_WIDE_CONFIDENCE, decide_group_order, decide_review_completion, route_free_message, route_prompt_version, scheduler_thresholds, some_members } from './scheduler.mjs';
@@ -94,6 +95,25 @@ export function edited_changes(changes, claimed, platform = process.platform) {
   return changes.filter(path => named.some(item => item.endsWith(normal(path))));
 }
 
+/**
+ * The room's project directories a member works with besides its own cwd, each `{path, access}`: a member working in
+ * the room's project gets the others at its own project access (read or write); a member working outside them gets
+ * them all read-only. Software without project files gets none, and a folder gone from this computer is left out.
+ */
+export function member_extra_directories(config, profile) {
+  if (!profile || !capabilities_of(profile.adapter).project) return [];
+  // '' marks a member that joined before the room had a project: it reaches every room directory at its own access.
+  const cwd = profile.cwd ?? config.cwd;
+  const access = outside_directory(config, profile) || profile.project_access === 'read' ? 'read' : 'write';
+  return room_directories(config).filter(path => !(cwd && overlapping_directories(path, cwd)) && existsSync(path))
+    .map(path => ({ path, access }));
+}
+
+/** A changed path in an extra directory, reported in full so it cannot be mistaken for one in the main directory. */
+function extra_change(directory, path) {
+  return `${cwd_key(directory)}/${path}`;
+}
+
 /** Write a non-secret task and a member-only credential file for one execution. */
 export function free_task_files(config, member, execution, binding, { session = null, suggestions = [], reviews = [], stopped = [], process_access = true,
   workflow = null, room_members = [], goal = null } = {}) {
@@ -109,6 +129,7 @@ export function free_task_files(config, member, execution, binding, { session = 
   atomic_json(access_path, { site: config.site, room: config.room, member: member.name, token: config.members[member.name].token,
     session_id: binding.session_id || '', execution_id: execution.id });
   const adapter = adapter_of(profile.adapter);
+  const extra_directories = member_extra_directories(config, profile);
   const cli = process.platform === 'win32' ? adapter?.windows_command || 'codiscuss.cmd' : 'codiscuss';
   const inbox = Boolean(adapter?.into_window?.(profile, binding));
   const bound_access = process_access && !inbox && Boolean(adapter?.capabilities.access_env);
@@ -119,7 +140,7 @@ export function free_task_files(config, member, execution, binding, { session = 
   const { instructions, prompt } = free_task_text({ name: member.label || member.name, role: member.role, discussion: direct_question,
     discussion_request, profile, cli,
     room: config.room, messages, read_after: execution.read_until, execution_id: execution.id, task_path,
-    access_file: bound_access ? '' : access_path, read_rule: read_rule(profile.adapter), inbox });
+    access_file: bound_access ? '' : access_path, read_rule: read_rule(profile.adapter), inbox, extra_directories });
   const skills = discussion_request || direct_question
     ? ['discuss-participant/SKILL.md', 'discuss-participant/references/discussion.md',
       ...member.role === 'host' ? ['discuss-host/SKILL.md', 'discuss-host/references/discussion.md'] : [],
@@ -146,13 +167,14 @@ export function free_task_files(config, member, execution, binding, { session = 
     ...(stopped.length ? { stopped_executions: stopped } : {}),
     role: member.role || 'member',
     read_after: execution.read_until, cwd: profile.cwd || null, project_access: profile.project_access, draft_directory,
+    ...(extra_directories.length ? { extra_directories } : {}),
     skills: skills.map(file => join(config.project, '.agents/skills', file)),
     // The workflow's SKILL.md is not a skill read on every task: the host opens it when a request fits its description.
     ...(workflow_field ? { workflow: { ...workflow_field, skill_path: host_workflow.skill_path } } : {}),
     ...(member.role === 'host' && config.host_workflows ? { host_workflows: true } : {}),
     cli, subcommands: TASK_SUBCOMMANDS,
     ...(bound_access ? { access_env: 'DISCUSS_ACCESS_FILE' } : { access_file: access_path }), instructions });
-  return { id, participant: member.name, directory: config.directory, draft_directory, ...(goal_field ? { goal: goal_field } : {}),
+  return { id, participant: member.name, directory: config.directory, draft_directory, extra_directories, ...(goal_field ? { goal: goal_field } : {}),
     skill_directories: [skills_directory, ...(host_workflow ? [host_workflow.directory] : [])], access_path, prompt: with_expert_prompt(prompt, profile), inbox,
     profile, ...(workflow_field ? { workflow: { ...workflow_field, skill: host_workflow.skill } } : {}) };
 }
@@ -201,6 +223,9 @@ export class FreeRoomRunner {
     // Routed requests whose decision is still pending: their host waits, so one pick replaces the host's start.
     this.routing = new Set();
     this.children = new Set();
+    // Per live execution, how to pass an interjection to its running software; and interjections already handed over.
+    this.steers = new Map();
+    this.interjecting = new Map();
     this.members = new Map();
     // An empty set proves every tracked handle for this execution closed; a missing set proves nothing after restart.
     this.execution_processes = new Map();
@@ -294,6 +319,7 @@ export class FreeRoomRunner {
       if (LIVE.includes(row.status) && !present.has(row.member)) { this.stop_member(row.member); this.save(row.member, { status: 'idle' }); }
     }
     await this.report_finished(active);
+    await this.deliver_interjections(inbox.executions);
     const pending_stops = await this.report_stops(active);
     // Start in the room's speaking order: execution ids follow it, and the website lays out working cards by them.
     const rank = (room.speaking_order?.items || []).map(item => item.name);
@@ -677,7 +703,7 @@ export class FreeRoomRunner {
   async reserve(member, record) {
     let execution;
     const profile = this.config.participants[member.name];
-    const cwd = profile && !capabilities_of(profile.adapter).project ? '' : cwd_key(profile?.cwd || this.config.cwd);
+    const cwd = profile && !capabilities_of(profile.adapter).project ? '' : cwd_key(profile?.cwd ?? this.config.cwd);
     try { execution = await api(this.config, '/executions', { member_id: member.id, client_id: record.client_id, cwd }); }
     catch (error) {
       if (/HTTP (404|409)/.test(error.message)) return this.save(member.name, { status: 'idle', error: '' });
@@ -697,10 +723,13 @@ export class FreeRoomRunner {
     }
     if (!adapter) return this.fail(member.name, execution.id, `未配置 ${member.name} 的本机接入`);
     if (this.context_errors.has(member.name)) return this.fail(member.name, execution.id, this.context_errors.get(member.name));
-    const directory = capabilities_of(adapter.adapter).project ? adapter.cwd || this.config.cwd : undefined;
+    const directory = capabilities_of(adapter.adapter).project ? adapter.cwd ?? this.config.cwd : undefined;
     // A read-only member's software cannot write the project, so files changing meanwhile were written by someone else.
     const before = adapter.project_access === 'read' ? null : workspace_snapshot(directory);
-    if (before) this.snapshots.set(execution.id, { member: member.name, directory, before });
+    // The room's other directories this member may write are watched as well; their changes are reported with full paths.
+    const extras = member_extra_directories(this.config, adapter).filter(item => item.access === 'write')
+      .map(item => ({ directory: item.path, before: workspace_snapshot(item.path) })).filter(item => item.before);
+    if (before || extras.length) this.snapshots.set(execution.id, { member: member.name, directory, before, extras });
     const binding = this.store.binding(member.name);
     // A member whose session a rewind restarted is bound to '' and must not fall back to the session it was invited with.
     if (binding.session_id === undefined && adapter.session_id) binding.session_id = adapter.session_id;
@@ -731,7 +760,7 @@ export class FreeRoomRunner {
         ...(review_request ? { before_model_start: () => this.check_review_delivery(member, review_request) } : {}),
         api_context: { site: this.config.site, room: this.config.room, token: this.config.members[member.name].token,
           home: this.config.api_home, mode: 'free', role: member.role || 'member', execution_id: execution.id,
-          cwd: directory, project_access: adapter.project_access,
+          cwd: directory, project_access: adapter.project_access, extra_directories: task.extra_directories,
           requests: execution.requests, read_after: execution.read_until, session, discussion_request: session_request,
           scheduler_suggestions, review_handoffs, ...(task.workflow ? { workflow: task.workflow } : {}),
           ...(Number.isInteger(this.config.api_max_requests) ? { max_requests: this.config.api_max_requests } : {}),
@@ -760,7 +789,8 @@ export class FreeRoomRunner {
       if (result.session_id) this.store.bind(member.name, result.session_id);
       this.clear_stopped(member.name);
       this.save(member.name, { status: result.status === 'sidecar_pending' ? 'sidecar_pending' : 'running', attempts: 0 });
-      await this.report_delivery(execution.id, result.capabilities || capabilities_of(adapter.adapter).delivery, member.name);
+      if (result.steer) this.steers.set(execution.id, result.steer);
+      await this.report_delivery(execution.id, { ...(result.capabilities || capabilities_of(adapter.adapter).delivery), steer: Boolean(result.steer) }, member.name);
     } catch (error) {
       if (review_request && error.delivery_status === 'not_sent') return this.reject_review(member, execution, error.message);
       if (adapter.project_access === 'own') return this.retry_or_fail(member.name, execution, `投递失败：${error.message}`);
@@ -874,9 +904,9 @@ export class FreeRoomRunner {
    * progress. Kept locally until the execution ends so a restarted runner still knows whether it could stop it.
    * A lost report is retained for the final stop result; sites and runners must use the same capability protocol.
    */
-  async report_delivery(execution_id, { stoppable, progress }, member) {
+  async report_delivery(execution_id, { stoppable, progress, steer = false }, member) {
     this.store.db.prepare('INSERT OR REPLACE INTO metadata VALUES (?,?)').run(`delivery:${execution_id}`, JSON.stringify({ stoppable, progress, member }));
-    await api(this.config, `/executions/${execution_id}`, { action: 'delivery', stoppable, progress })
+    await api(this.config, `/executions/${execution_id}`, { action: 'delivery', stoppable, progress, steer })
       .catch(error => this.log(`执行 #${execution_id} 的投递能力未能上报：${error.message}`));
   }
   /** Retry durable stop reports even after the member went idle, left, or started a later execution. */
@@ -971,9 +1001,13 @@ export class FreeRoomRunner {
     for (const [execution_id, snapshot] of this.snapshots) {
       if (active.has(execution_id) || this.execution_processes.get(execution_id)?.size) continue;
       this.snapshots.delete(execution_id);
-      const after = workspace_snapshot(snapshot.directory);
-      if (!after) continue;
-      const changes = changed_between(snapshot.before, after).slice(0, 200);
+      const after = snapshot.before ? workspace_snapshot(snapshot.directory) : null;
+      if (!after && !snapshot.extras?.length) continue;
+      const extra = (snapshot.extras || []).flatMap(item => {
+        const current = workspace_snapshot(item.directory);
+        return current ? changed_between(item.before, current).map(path => extra_change(item.directory, path)) : [];
+      });
+      const changes = [...(after ? changed_between(snapshot.before, after) : []), ...extra].slice(0, 200);
       // `edited` is sent only when the adapter tracked edits; without it the site cannot tell who wrote a shared file.
       const edited = snapshot.edited ? { edited: edited_changes(changes, snapshot.edited) } : {};
       try { await api(this.config, `/executions/${execution_id}`, { action: 'report', changes, ...edited }); }
@@ -1007,6 +1041,31 @@ export class FreeRoomRunner {
     catch (error) { if (!/HTTP 409/.test(error.message)) throw error; }
     this.save(name, { status: 'idle', error: reason });
     this.stop_member(name);
+  }
+  /**
+   * Hand the owner's pending interjections to the software running each execution, in order, through the steer handle
+   * its delivery returned; report each as delivered or failed. A handle is dropped once its execution is no longer live.
+   */
+  async deliver_interjections(executions) {
+    const live = new Set(executions.map(item => item.id));
+    for (const id of this.steers.keys()) if (!live.has(id)) this.steers.delete(id);
+    for (const execution of executions) {
+      for (const interjection of execution.interjections || []) {
+        // An interjection is handed over once; a lost report is sent again with the same outcome.
+        let report = this.interjecting.get(interjection.id);
+        if (!report) {
+          const steer = this.steers.get(execution.id);
+          report = { status: 'failed', reason: '本次投递不支持执行中插话' };
+          if (steer) {
+            try { report = await steer(interjection.text) ? { status: 'delivered' } : { status: 'failed', reason: '它已结束本轮，插话未送达' }; }
+            catch (error) { report = { status: 'failed', reason: String(error.message).slice(0, 400) }; }
+          }
+          this.interjecting.set(interjection.id, report);
+        }
+        try { await api(this.config, `/executions/${execution.id}`, { action: 'interjection', interjection_id: interjection.id, ...report }); }
+        catch (error) { this.log(`插话 #${interjection.id} 的结果未能上报：${error.message}`); }
+      }
+    }
   }
   /** Count live processes per member so one session never has two writers. */
   track(name, child, execution_id = this.row(name)?.execution_id) {

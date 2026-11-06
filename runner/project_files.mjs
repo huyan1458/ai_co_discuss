@@ -1,6 +1,7 @@
-/** Read-only directory and text previews, confined to a room's saved project directory. */
+/** Read-only directory and text previews, confined to a room's saved project directories. */
 import { closeSync, fstatSync, openSync, readdirSync, readSync, realpathSync, statSync } from 'node:fs';
 import { isAbsolute, relative, resolve } from 'node:path';
+import { adapter_profile } from './adapters/profiles.mjs';
 import { PINYIN_TABLE } from './pinyin_table.mjs';
 
 const DIRECTORY_PAGE_SIZE = 200;
@@ -113,7 +114,7 @@ function search_rank(name, path, needle) {
   return [tier, path.split('/').length, path.length];
 }
 
-/** Find files and folders whose name (or path, when the query has a "/") contains the query, case-insensitively. */
+/** Find files and folders whose name (or path, when the query has a "/") contains the query, case-insensitively, under one root. */
 function search_project_files(root, query) {
   const needle = query.trim().toLocaleLowerCase().replaceAll('\\', '/');
   if (!needle) throw new Error('搜索关键词不能为空');
@@ -139,10 +140,52 @@ function search_project_files(root, query) {
       }
     }
   }
+  return { matches, complete };
+}
+
+/** Rank and cut the matches of every searched directory together; each entry keeps the `root` it was found in. */
+function search_result(query, searches) {
+  const needle = query.trim().toLocaleLowerCase().replaceAll('\\', '/');
+  const matches = searches.flatMap(({ matches: found }, root) => found.map(item => ({ ...item, root })));
   const ranked = matches.map(item => ({ item, rank: search_rank(item.name, item.path, needle) }))
     .sort((left, right) => left.rank[0] - right.rank[0] || left.rank[1] - right.rank[1] || left.rank[2] - right.rank[2]);
   return { query, kind: 'search', entries: ranked.slice(0, SEARCH_RESULT_LIMIT).map(({ item }) => item),
-    total: matches.length, complete };
+    total: matches.length, complete: searches.every(search => search.complete) };
+}
+
+/** The room's project directories: the main one (`cwd`) first, then the extra ones in the order they were added. */
+export function room_directories(config) {
+  return [config.cwd, ...(config.extra_directories || [])].filter(Boolean);
+}
+
+/** Whether `directory` is one of the room's project directories or lies inside one; Windows paths compare without case. */
+export function inside_room(config, directory) {
+  const key = path => process.platform === 'win32' ? resolve(path).toLowerCase() : resolve(path);
+  return room_directories(config).some(root => {
+    const rest = relative(key(root), key(directory));
+    return !rest.startsWith('..') && !isAbsolute(rest);
+  });
+}
+
+/**
+ * The directory a member works in when it lies outside every project directory of the room, or '' when it works in
+ * one of them (or the room has none). Such a member only reads the room's directories. A member whose `cwd` is ''
+ * joined before the room had a project: it keeps its own session's folder and is not outside.
+ */
+export function outside_directory(config, profile) {
+  const cwd = profile?.cwd ?? config.cwd;
+  return cwd && room_directories(config).length && !inside_room(config, cwd) ? cwd : '';
+}
+
+/**
+ * Whether the room's directories stay read-only for this member by the software's own limits, not only by its task
+ * text: at 只读 for any software whose levels the runner sets, at 可写 only where a sandbox or the file tools hold
+ * (`limits_directories`); never for an App, a manual member's own permissions, 自动 or 全放开.
+ */
+export function read_only_enforced(profile) {
+  const facts = adapter_profile(profile?.adapter);
+  if (!facts?.access_levels) return false;
+  return profile.project_access === 'read' || (profile.project_access === 'write' && Boolean(facts.capabilities.limits_directories));
 }
 
 /** The room's project root, resolved through links and required to be a folder. */
@@ -153,9 +196,12 @@ function project_root(cwd) {
   return root;
 }
 
-/** List one directory page, preview one file, or search names under the configured project root. */
+/**
+ * List one directory page or preview one file under one project directory, or search names under it; a search over
+ * several directories is `search_project_roots`.
+ */
 export function read_project_files(cwd, path = '', offset = 0, query = '') {
-  if (query) return search_project_files(project_root(cwd), String(query));
+  if (query) return search_project_roots([cwd], query);
   if (!Number.isSafeInteger(offset) || offset < 0) throw new Error('目录分页位置无效');
   const root = project_root(cwd);
   const target = project_path(root, path);
@@ -175,4 +221,10 @@ export function read_project_files(cwd, path = '', offset = 0, query = '') {
   }
   return { path: normalized, kind: 'directory', entries, total: items.length,
     next_offset: offset + entries.length < items.length ? offset + entries.length : null };
+}
+
+/** Search names under every directory of a room at once; each entry's `root` is the index of its directory. */
+export function search_project_roots(directories, query) {
+  if (!directories.length) project_root('');
+  return search_result(String(query), directories.map(directory => search_project_files(project_root(directory), String(query))));
 }

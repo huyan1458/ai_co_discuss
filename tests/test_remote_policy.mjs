@@ -40,6 +40,8 @@ test('a relayed request cannot widen folders, change program locations or turn o
   guard('start', { cwd: join(f.project, 'alpha'), participants: { Claude: { executable: 'C:/Tools/claude.exe', project_access: 'read' } } });
   assert.throws(() => guard('start', { cwd: f.outside }), /未允许/);
   assert.throws(() => guard('start', { participants: { Claude: { cwd: f.outside } } }), /未允许/, 'nested cwd is checked too');
+  guard('room-settings', { room_id: 'room-a', extra_directories: [join(f.project, 'alpha')] });
+  assert.throws(() => guard('room-settings', { room_id: 'room-a', extra_directories: [join(f.project, 'alpha'), f.outside] }), /未允许/, 'every extra project directory is checked');
   assert.throws(() => guard('settings', { participants: { Claude: { executable: 'C:/Windows/System32/cmd.exe' } } }), /软件位置/);
   // 全放开 may be given to a room's member, but not saved as a default from afar.
   guard('room-member-access', { room_id: 'room-a', name: 'Claude', project_access: 'full' });
