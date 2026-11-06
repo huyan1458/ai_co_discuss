@@ -1614,7 +1614,7 @@ async function allow_and_resend(report) {
 /** Reuse the existing original-record actions in the message overflow menu; where retract and edit take the toolbar, reply moves here. */
 function message_actions(message) {
   return [[
-    ...(can_take_back(message) ? [{ label: "回复", icon: "i-lucide-corner-up-left", onSelect: () => reply_to(message) }] : []),
+    ...(can_take_back(message) || has_private_chat(message) ? [{ label: "回复", icon: "i-lucide-corner-up-left", onSelect: () => reply_to(message) }] : []),
     ...(narrow.value && message.kind !== "receipt" && editing.value.id !== message.id ? [reader.state.message_id === message.id
       ? { label: "停止朗读", icon: "i-lucide-square", onSelect: () => reader.stop() }
       : { label: "朗读", icon: "i-lucide-volume-2", onSelect: () => reader.start(message.id) }] : []),
@@ -1623,6 +1623,9 @@ function message_actions(message) {
     ...(can_branch(message) && message.author !== "用户" ? [{ label: "从这里分支", icon: "i-lucide-git-branch", onSelect: () => act("fork_room", message.id) }] : []),
   ]];
 }
+
+/** An answer from an execution opens that execution in the private chat; the key takes the reply slot, and reply moves into the menu. */
+const has_private_chat = (message) => Boolean(view.value.access?.can_manage && answer_execution(message) && editing.value.id !== message.id);
 
 /** Retract, edit and branch work only on visible free-room history no discussion reaches: a discussion's host reads messages itself. */
 const can_branch = (message) => free.value && view.value.access?.can_manage && !message.withdrawn
@@ -1795,6 +1798,10 @@ function copy_message(message) { act("copy", `${view.value.room_site}/r/${room.v
             <strong class="channel-working-name">{{ bridge.display_name(message.author) }}</strong>
             <small class="channel-working-elapsed">{{ message.waiting ? `手动启动${message.created_at ? ` · 已等 ${format_elapsed(Math.max(0, free_now - message.created_at))}` : ''}` : `已用 ${format_elapsed(Math.max(0, free_now - message.created_at))}` }}{{ message.attempt ? ` · 第 ${message.attempt}/${MAX_DELIVERY_RETRIES} 次重试` : '' }}</small>
           </div>
+          <!-- Private chat sits in the answered card's first toolbar slot, so the key stays put when the work turns into an answer. -->
+          <div v-if="view.access?.can_manage && shows_progress(message) && message.execution_id" class="channel-message-actions"><div class="channel-message-toolbar">
+            <UTooltip text="私聊：查看它正在做什么"><UButton icon="i-lucide-messages-square" size="xs" variant="ghost" color="neutral" :aria-label="`私聊 ${bridge.display_name(message.author)}：查看本次执行过程`" @click="open_private_chat(act, message.author, message.execution_id)" /></UTooltip>
+          </div></div>
           <div class="channel-working-main">
             <span v-for="status in [working_status(message)]" :key="message.id" class="channel-working-status" :class="{ 'channel-working-warning': status.warning }" role="status" :title="shows_progress(message) ? (message.waiting ? message.text : status.text) : '此接入方式看不到进度，可在原窗口查看'">
               <span v-if="message.waiting">{{ message.text }}</span>
@@ -1802,7 +1809,6 @@ function copy_message(message) { act("copy", `${view.value.room_site}/r/${room.v
               <span v-else>{{ status.text }}</span>
             </span>
           <span v-if="view.access?.can_manage" class="channel-working-actions">
-              <UTooltip v-if="shows_progress(message) && message.execution_id" text="私聊：查看它正在做什么"><UButton icon="i-lucide-messages-square" size="xs" variant="ghost" color="neutral" :aria-label="`私聊 ${bridge.display_name(message.author)}：查看本次执行过程`" @click="open_private_chat(act, message.author, message.execution_id)" /></UTooltip>
               <!-- In a discussion, stopping the current speaker skips the turn so the next one speaks. -->
               <template v-if="speaking_turn?.expert === message.author && message.discussion_request">
                 <UTooltip text="暂停讨论"><UButton icon="i-lucide-pause" size="xs" variant="ghost" color="neutral" :aria-label="`暂停讨论，停止 ${bridge.display_name(message.author)} 本次发言`" :disabled="!!pending" :loading="pending === 'pause_discussion'" @click="act('pause_discussion')" /></UTooltip>
@@ -1946,10 +1952,10 @@ function copy_message(message) { act("copy", `${view.value.room_site}/r/${room.v
             </section>
           </template>
           <template #header><div class="channel-message-actions"><div class="channel-message-toolbar">
-            <UTooltip v-if="!can_take_back(message)" text="回复"><UButton icon="i-lucide-corner-up-left" size="xs" color="neutral" variant="ghost" :aria-label="`回复 #${message.id}`" @click="reply_to(message)" /></UTooltip>
+            <UTooltip v-if="has_private_chat(message)" text="私聊：查看这次执行的过程"><UButton icon="i-lucide-messages-square" size="xs" color="neutral" variant="ghost" :aria-label="`查看 #${message.id} 的执行过程`" @click="open_private_chat(act, message.author, answer_execution(message).id)" /></UTooltip>
+            <UTooltip v-else-if="!can_take_back(message)" text="回复"><UButton icon="i-lucide-corner-up-left" size="xs" color="neutral" variant="ghost" :aria-label="`回复 #${message.id}`" @click="reply_to(message)" /></UTooltip>
             <UTooltip v-if="can_retract(message) && editing.id !== message.id" text="撤回"><UButton icon="i-lucide-undo-2" size="xs" color="neutral" variant="ghost" :aria-label="`撤回 #${message.id}`" @click="act('retract_message', message.id)" /></UTooltip>
             <UTooltip v-if="can_take_back(message) && editing.id !== message.id" text="编辑"><UButton icon="i-lucide-pencil" size="xs" color="neutral" variant="ghost" :aria-label="`编辑 #${message.id}，回退到它之前重新发送`" @click="start_edit(message)" /></UTooltip>
-            <UTooltip v-if="view.access?.can_manage && answer_execution(message) && editing.id !== message.id" text="私聊：查看这次执行的过程"><UButton icon="i-lucide-messages-square" size="xs" color="neutral" variant="ghost" :aria-label="`查看 #${message.id} 的执行过程`" @click="open_private_chat(act, message.author, answer_execution(message).id)" /></UTooltip>
             <UTooltip v-if="!narrow && message.kind !== 'receipt' && editing.id !== message.id" :text="reader.state.message_id === message.id ? '停止朗读' : '朗读'"><UButton :icon="reader.state.message_id === message.id ? 'i-lucide-square' : 'i-lucide-volume-2'" size="xs" color="neutral" variant="ghost" :aria-label="reader.state.message_id === message.id ? '停止朗读' : `从 #${message.id} 开始朗读`" @click="reader.state.message_id === message.id ? reader.stop() : reader.start(message.id)" /></UTooltip>
             <UDropdownMenu :items="message_actions(message)" :content="{ align: 'end', sideOffset: 5 }" :ui="{ content: 'channel-menu' }"><UButton icon="i-lucide-ellipsis" size="xs" color="neutral" variant="ghost" :aria-label="`消息 #${message.id} 的更多操作`" /></UDropdownMenu>
           </div></div></template>

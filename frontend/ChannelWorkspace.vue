@@ -122,9 +122,9 @@ const project_directories = computed(() => project_directory.value ? [project_di
 const tabs = computed(() => [
   { value: "discussion", label: "消息", icon: "i-lucide-message-square" },
   { value: "timeline", label: "执行", icon: "i-lucide-chart-gantt" },
+  { value: "private", label: "私聊", icon: "i-lucide-messages-square" },
   { value: "overview", label: "房间", icon: "i-lucide-sliders-horizontal" },
   { value: "files", label: "文件", icon: "i-lucide-files", title: project_directory.value || "" },
-  { value: "private", label: "私聊", icon: "i-lucide-messages-square" },
 ]);
 // Retired pages: consensus and discussion history open from the host brief, access moved into the room page.
 const MERGED_TABS = { context: "discussion", history: "discussion", access: "overview" };

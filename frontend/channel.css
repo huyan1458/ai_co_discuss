@@ -456,12 +456,13 @@ html[data-theme^="channel"] .channel-message.channel-topic-card { color: var(--u
 @media (hover: hover) and (pointer: fine) {
   .channel-message-toolbar { opacity: 0; pointer-events: none; transition: opacity .12s; }
   .channel-message:hover .channel-message-toolbar, .channel-message:focus-within .channel-message-toolbar, .channel-message-toolbar:has([data-state="open"]) { opacity: 1; pointer-events: auto; }
+  .channel-working-strip:is(:hover, :focus-within) .channel-message-toolbar { opacity: 1; pointer-events: auto; }
 }
 @media (min-width: 701px) {
   .channel-conversation { --message-action-width: 40px; --message-action-gap: 8px; --message-inset-end: calc(16px + var(--message-action-width) + var(--message-action-gap)); }
   .channel-message { margin-right: var(--message-inset-end) !important; }
   .channel-composer-dock > .channel-composer-column { padding-right: var(--message-inset-end); }
-  .channel-message::after { content: ""; position: absolute; inset: 0 auto 0 100%; width: var(--message-action-gap); }
+  :is(.channel-message, .channel-working-strip)::after { content: ""; position: absolute; inset: 0 auto 0 100%; width: var(--message-action-gap); }
   .channel-message-byline { padding-right: 0; }
   .channel-message-actions { inset: 12px auto 12px calc(100% + var(--message-action-gap)); width: var(--message-action-width); }
   .channel-message-toolbar { flex-direction: column; width: 100%; }
@@ -1273,7 +1274,7 @@ html[data-motion="off"] *, html[data-motion="off"] *::before, html[data-motion="
 }
 /* A member at work: who and how long on top, the stage as the main line with the stop key at its end, */
 /* the notes below as a subordinate thread (left rule, smaller and dimmer), folded to the latest note. */
-.channel-working-strip { margin: 0 16px 16px; padding: 10px 10px 10px 12px; border: 1px solid color-mix(in srgb, var(--ui-border) 80%, transparent); border-radius: 10px; background: color-mix(in srgb, var(--ui-bg-elevated) 45%, transparent); color: var(--ui-text-muted); font-size: 12px; }
+.channel-working-strip { position: relative; margin: 0 16px 16px; padding: 10px 10px 10px 12px; border: 1px solid color-mix(in srgb, var(--ui-border) 80%, transparent); border-radius: 10px; background: color-mix(in srgb, var(--ui-bg-elevated) 45%, transparent); color: var(--ui-text-muted); font-size: 12px; }
 .channel-working-head { display: flex; align-items: center; gap: 8px; min-width: 0; }
 .channel-working-strip .channel-avatar { flex-shrink: 0; width: 20px; height: 20px; font-size: 8px; }
 .channel-working-name { flex-shrink: 0; color: var(--speaker-accent); font-size: 13px; font-weight: 650; }
@@ -1298,6 +1299,8 @@ html[data-motion="off"] *, html[data-motion="off"] *::before, html[data-motion="
 .channel-working-count:hover { color: var(--ui-text-toned); }
 @media (min-width: 701px) { .channel-working-strip { margin-right: var(--message-inset-end); } }
 @media (max-width: 767px) { .channel-working-strip { margin: 0 8px 12px; } }
+/* On a phone the toolbar sits inside the strip's top-right corner: keep the head clear of it and the stop key below it. */
+@media (max-width: 700px) { .channel-working-strip:has(> .channel-message-actions) .channel-working-head { min-height: 30px; padding-right: 58px; } }
 /* Dark composer matches the message cards (#313338, lit top rim) as one surface with its footer; the mention panel keeps the frosted float style. */
 :root[data-theme="channel"] .channel-composer { background: #313338 !important; }
 :root[data-theme="channel"] .channel-mention-heading { border-bottom: 1px solid #ffffff0d; }
