@@ -11,14 +11,73 @@ import { reactive } from "vue";
  */
 export const file_preview = reactive({ open: null, reveal_path: null, excerpts: [], focus_composer: 0 });
 let excerpt_serial = 0;
+// Name of the CSS highlight that keeps a selection visible while its comment is typed.
+const PENDING_HIGHLIGHT = "excerpt-pending";
 
 /**
- * Put one excerpt in the composer and focus it. A quote from a message carries `message_id` (its `path` is `#id`).
- * @param {object} excerpt `{ path, name, start, end, text, comment, message_id? }` without an id.
+ * Put one excerpt in the composer and focus it. A quote from a message carries `message_id` (its `path` is `#id`);
+ * `from`/`to` are where it lies in its rendered text, for its number mark and highlighting it again.
+ * @param {object} excerpt `{ path, name, start, end, text, comment, from, to, message_id? }` without an id.
  */
 export function add_excerpt(excerpt) {
   file_preview.excerpts.push({ ...excerpt, id: ++excerpt_serial });
   file_preview.focus_composer++;
+}
+
+/** Where an excerpt came from, as the composer's list shows it. */
+export function excerpt_source(excerpt) {
+  if (excerpt.message_id) return `${excerpt.name} #${excerpt.message_id}`;
+  const lines = excerpt_lines(excerpt);
+  return lines ? `${excerpt.path} · ${lines}` : excerpt.path;
+}
+
+/** Characters of `root`'s text before a point inside it. */
+export function text_offset(root, node, offset) {
+  const range = document.createRange();
+  range.setStart(root, 0);
+  range.setEnd(node, offset);
+  return range.toString().length;
+}
+
+/**
+ * Where the character ending at `end` of `root`'s text sits, relative to `host`'s content (scrolled hosts included),
+ * for an excerpt's number mark; null when that text is not shown.
+ */
+export function excerpt_mark_place(root, host, end) {
+  if (!root || !host || !(end > 0)) return null;
+  const walker = document.createTreeWalker(root, NodeFilter.SHOW_TEXT);
+  for (let node = walker.nextNode(), left = end; node; node = walker.nextNode()) {
+    if (left > node.length) { left -= node.length; continue; }
+    const range = document.createRange();
+    range.setStart(node, left - 1);
+    range.setEnd(node, left);
+    const rects = range.getClientRects(), rect = rects[rects.length - 1];
+    if (!rect) return null;
+    const origin = host.getBoundingClientRect();
+    return { left: rect.right - origin.left + host.scrollLeft, top: rect.top - origin.top + host.scrollTop };
+  }
+  return null;
+}
+
+/** The range covering characters `from`–`to` of `root`'s text, to show a quoted passage again; null when not shown. */
+export function excerpt_range(root, from, to) {
+  if (!root || !(to > from)) return null;
+  const walker = document.createTreeWalker(root, NodeFilter.SHOW_TEXT);
+  const range = document.createRange();
+  let seen = 0, started = false;
+  for (let node = walker.nextNode(); node; node = walker.nextNode()) {
+    if (!started && from <= seen + node.length) { range.setStart(node, from - seen); started = true; }
+    if (started && to <= seen + node.length) { range.setEnd(node, to - seen); return range; }
+    seen += node.length;
+  }
+  return null;
+}
+
+/** Keep `range` visibly selected while focus is in the comment box; null clears it. */
+export function hold_selection(range) {
+  if (!globalThis.CSS?.highlights || typeof Highlight !== "function") return;
+  if (range) CSS.highlights.set(PENDING_HIGHLIGHT, new Highlight(range));
+  else CSS.highlights.delete(PENDING_HIGHLIGHT);
 }
 
 // For this page's lifetime, so a folder opened before shows at once: listings already read (by room, project and

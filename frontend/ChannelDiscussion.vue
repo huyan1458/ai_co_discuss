@@ -13,7 +13,8 @@ import { active_workflow } from "./workflow-state.js";
 import { use_read_aloud } from "./read-aloud.js";
 import { use_broadcast } from "./broadcast.js";
 import { use_voice_input } from "./voice-input.js";
-import { add_excerpt, excerpt_lines, excerpts_markdown, file_preview } from "./file-preview.js";
+import ExcerptEditCard from "./ExcerptEditCard.vue";
+import { add_excerpt, excerpt_mark_place, excerpt_range, excerpt_source, excerpts_markdown, file_preview, hold_selection, text_offset } from "./file-preview.js";
 import { motion, useSpring, useTransform } from "motion-v";
 
 const emit = defineEmits(["detail", "edit"]);
@@ -145,22 +146,45 @@ const track_narrow = (event) => { narrow.value = event.matches; };
 // "Listen from here" waits until a selection has settled (pointer released, no change for a moment), and shows only when
 // speech is configured on this computer; most selections are for copying.
 const LISTEN_SETTLE_MS = 350;
-// Room kept at the right edge for the quote and read-aloud pills.
+// The offer pills and the comment box sit just above the selection (below it when there is no room), kept on screen.
 const QUOTE_OFFER_WIDTH = 190;
+const QUOTE_OFFER_HEIGHT = 28;
+const QUOTE_COMMENT_WIDTH = 340;
+const QUOTE_COMMENT_HEIGHT = 40;
+const QUOTE_GAP = 6;
 let listen_timer = 0, pointer_down = false;
 const speech_configured = async () => Boolean((await speech_settings()).api_key_ref);
+// A selection being added to the chat: `{ id, range, text, to, touch, left, top }`, waiting for an optional comment.
+const quoting = ref(null);
+const quote_comment = ref("");
+const quote_input = ref(null);
+// A quoted passage reopened from its number mark: `{ excerpt, range, left, top }`.
+const mark_editing = ref(null);
+const MARK_CARD_WIDTH = 300;
+const MARK_CARD_HEIGHT = 110;
+// Number marks at the end of each quoted passage still in the composer: message id → [{ number, left, top }].
+const excerpt_marks = ref(new Map());
 /** Hide the offer while a selection is changing and check again once it settles. */
 function schedule_listen() {
   listen_here.value = null;
   window.clearTimeout(listen_timer);
   if (!pointer_down) listen_timer = window.setTimeout(track_selection, LISTEN_SETTLE_MS);
 }
-// Pressing the offer itself must not hide it before its click lands.
-const on_offer = (event) => Boolean(event.target.closest?.(".channel-listen-mark, .channel-listen-pill"));
-const press = (event) => { if (!on_offer(event)) pointer_down = true; };
+// Pressing the offer or the comment box must not hide it before its click lands; pressing elsewhere drops the comment box.
+const on_offer = (event) => Boolean(event.target.closest?.(".channel-listen-mark, .channel-listen-pill, .selection-comment, .excerpt-mark, .excerpt-edit-card"));
+const press = (event) => { if (on_offer(event)) return; pointer_down = true; if (quoting.value) cancel_quote(); if (mark_editing.value) close_mark(); };
 const release = (event) => { if (on_offer(event)) return; pointer_down = false; schedule_listen(); };
+/** Fixed place `{ left, top }` for a box of this size above the range's start, or below its end when there is no room. */
+function place_by(range, width, height) {
+  const rects = range.getClientRects(), first = rects[0] || range.getBoundingClientRect(), last = rects[rects.length - 1] || first;
+  const floor = transcript.value?.getBoundingClientRect().top ?? 0;
+  const above = first.top - height - QUOTE_GAP;
+  const left = Math.max(8, Math.min(above >= floor ? first.left : last.right - width / 2, window.innerWidth - width - 8));
+  return { left, top: above >= floor ? above : last.bottom + QUOTE_GAP };
+}
 /** Offer quoting (and, with speech configured, reading from) a selection made inside a message's text. */
 async function track_selection() {
+  if (quoting.value) return;
   const selection = document.getSelection();
   const range = selection?.rangeCount && !selection.isCollapsed ? selection.getRangeAt(0) : null;
   const start = range && (range.startContainer.nodeType === Node.ELEMENT_NODE ? range.startContainer : range.startContainer.parentElement);
@@ -170,21 +194,78 @@ async function track_selection() {
   if (!text) { listen_here.value = null; return; }
   const kept = range.cloneRange();
   const speech = await speech_configured().catch(() => false);
-  if (pointer_down) return;
-  // Small pills just under where the selection ends, clear of the selected text.
-  const rects = kept.getClientRects(), end = rects[rects.length - 1] || kept.getBoundingClientRect();
+  if (pointer_down || quoting.value) return;
   // On touch screens the system's own selection menu sits next to the selection, so the buttons wait above the composer instead.
   const touch = window.matchMedia("(pointer: coarse)").matches;
-  listen_here.value = { id: Number(card.dataset.messageId), range: kept, text, speech, touch, left: Math.min(end.right - 8, window.innerWidth - QUOTE_OFFER_WIDTH), top: end.bottom + 6 };
+  const to = body.contains(kept.endContainer) ? text_offset(body, kept.endContainer, kept.endOffset) : body.textContent.length;
+  const from = text_offset(body, kept.startContainer, kept.startOffset);
+  listen_here.value = { id: Number(card.dataset.messageId), range: kept, text, from, to, speech, touch, ...place_by(kept, QUOTE_OFFER_WIDTH, QUOTE_OFFER_HEIGHT) };
 }
-/** Put the selection in the composer as an excerpt of its message; a comment can be added on the excerpt card. */
-function quote_selection() {
-  const { id, text } = listen_here.value;
+/** Open the comment box for the offered selection, keeping the selected text highlighted meanwhile. */
+async function start_quote() {
+  const offer = listen_here.value;
   listen_here.value = null;
+  quoting.value = { ...offer, ...place_by(offer.range, QUOTE_COMMENT_WIDTH, QUOTE_COMMENT_HEIGHT) };
+  quote_comment.value = "";
+  hold_selection(offer.range);
   document.getSelection()?.removeAllRanges();
-  const author = view.value.messages.find((message) => message.id === id)?.author || "";
-  add_excerpt({ path: `#${id}`, name: bridge.display_name(author), message_id: id, start: 0, end: 0, text, comment: "" });
+  await nextTick();
+  quote_input.value?.focus();
 }
+/** Keep the comment box (or a mark's edit card) beside its passage while the transcript scrolls. */
+function place_quote() {
+  if (quoting.value && !quoting.value.touch) Object.assign(quoting.value, place_by(quoting.value.range, QUOTE_COMMENT_WIDTH, QUOTE_COMMENT_HEIGHT));
+  if (mark_editing.value) Object.assign(mark_editing.value, place_by(mark_editing.value.range, MARK_CARD_WIDTH, MARK_CARD_HEIGHT));
+}
+/** Open a quoted passage's edit card from its number mark, highlighting the passage again. */
+function open_mark(excerpt_id) {
+  cancel_quote();
+  const excerpt = file_preview.excerpts.find((item) => item.id === excerpt_id);
+  const range = excerpt && excerpt_range(document.getElementById(`channel-answer-${excerpt.message_id}`), excerpt.from, excerpt.to);
+  if (!range) return;
+  hold_selection(range);
+  mark_editing.value = { excerpt, range, ...place_by(range, MARK_CARD_WIDTH, MARK_CARD_HEIGHT) };
+}
+function close_mark() {
+  mark_editing.value = null;
+  hold_selection(null);
+}
+function save_mark(comment) {
+  mark_editing.value.excerpt.comment = comment;
+  close_mark();
+}
+function remove_mark() {
+  remove_excerpt(mark_editing.value.excerpt);
+  close_mark();
+}
+function cancel_quote() {
+  quoting.value = null;
+  hold_selection(null);
+}
+/** Put the selection and its comment in the composer as an excerpt of its message, numbered in place. */
+function submit_quote() {
+  const { id, text, from, to } = quoting.value;
+  const author = view.value.messages.find((message) => message.id === id)?.author || "";
+  add_excerpt({ path: `#${id}`, name: bridge.display_name(author), message_id: id, start: 0, end: 0, text, from, to, comment: quote_comment.value.trim() });
+  cancel_quote();
+}
+function quote_keydown(event) {
+  if (event.isComposing) return;
+  if (event.key === "Escape") { event.preventDefault(); event.stopPropagation(); cancel_quote(); }
+  else if (event.key === "Enter" && !event.shiftKey) { event.preventDefault(); submit_quote(); }
+}
+/** Re-measure where each quoted passage ends, for its number mark. */
+function place_marks() {
+  const marks = new Map();
+  file_preview.excerpts.forEach((excerpt, index) => {
+    const body = excerpt.message_id && document.getElementById(`channel-answer-${excerpt.message_id}`);
+    const place = body && excerpt_mark_place(body, body.parentElement, excerpt.to);
+    if (!place) return;
+    marks.set(excerpt.message_id, [...(marks.get(excerpt.message_id) || []), { id: excerpt.id, number: index + 1, ...place }]);
+  });
+  excerpt_marks.value = marks;
+}
+watch([() => file_preview.excerpts.map((excerpt) => excerpt.id).join(), () => view.value.messages, () => [...expanded_answers.value].join(), narrow], () => nextTick(place_marks), { flush: "post" });
 /** Start reading where the selection begins and continue to the latest message. */
 function listen_from_selection() {
   const { id, range } = listen_here.value;
@@ -198,10 +279,12 @@ onMounted(() => {
   document.addEventListener("pointerup", release);
   narrow_query.addEventListener("change", track_narrow);
   transcript.value?.addEventListener("scroll", schedule_listen, { passive: true });
-  watch(() => room.value?.id, () => { reader.stop(); voice.cancel(); });
+  transcript.value?.addEventListener("scroll", place_quote, { passive: true });
+  window.addEventListener("resize", place_marks);
+  watch(() => room.value?.id, () => { reader.stop(); voice.cancel(); cancel_quote(); });
   speech_configured().then((ready) => { speech_ready.value = ready; });
 });
-onBeforeUnmount(() => { document.removeEventListener("selectionchange", schedule_listen); document.removeEventListener("pointerdown", press); document.removeEventListener("pointerup", release); window.clearTimeout(listen_timer); narrow_query.removeEventListener("change", track_narrow); reader.stop(); voice.cancel(); });
+onBeforeUnmount(() => { document.removeEventListener("selectionchange", schedule_listen); document.removeEventListener("pointerdown", press); document.removeEventListener("pointerup", release); window.removeEventListener("resize", place_marks); window.clearTimeout(listen_timer); narrow_query.removeEventListener("change", track_narrow); reader.stop(); voice.cancel(); hold_selection(null); });
 const MESSAGE_PREVIEW_LENGTH = 160;
 const MESSAGE_PREVIEW_MIN_LENGTH = 100;
 const MESSAGE_PREVIEW_CODE_LINES = 4;
@@ -394,8 +477,10 @@ watch(() => view.value.editing_queued, (id) => id && nextTick(() => {
   area?.focus();
   area?.setSelectionRange(area.value.length, area.value.length);
 }));
-/** Drop one excerpt card from the draft. */
+/** Drop one excerpt from the draft. */
 function remove_excerpt(excerpt) { file_preview.excerpts = file_preview.excerpts.filter((item) => item.id !== excerpt.id); }
+// The excerpt whose comment is being edited in the composer's excerpt list.
+const editing_excerpt = ref(0);
 /** Active members a free-room message can name; chips appear only when there is a choice. */
 const free_members = computed(() => (room.value.free?.members || []).filter((member) => member.status === "active" && (member.access !== "manual" || member.registered_at)));
 const free_host = computed(() => free_members.value.find((member) => member.role === "host"));
@@ -1593,9 +1678,15 @@ function copy_message(message) { act("copy", `${view.value.room_site}/r/${room.v
       </motion.div>
     </Teleport>
     <div v-if="listen_here && !listen_here.touch" class="channel-offer-marks" :style="{ left: `${listen_here.left}px`, top: `${listen_here.top}px` }">
-      <button type="button" class="channel-listen-mark" title="把选中的文字作为摘录添加到对话" @mousedown.prevent @click="quote_selection"><UIcon name="i-lucide-message-square-quote" />添加到对话</button>
+      <button type="button" class="channel-listen-mark" title="把选中的文字作为摘录添加到对话" @mousedown.prevent @click="start_quote"><UIcon name="i-lucide-message-square-quote" />添加到对话</button>
       <button v-if="listen_here.speech" type="button" class="channel-listen-mark" title="从选中处开始朗读" aria-label="从选中处开始朗读" @mousedown.prevent @click="listen_from_selection"><UIcon name="i-lucide-headphones" />朗读</button>
     </div>
+    <form v-if="quoting" class="selection-comment" :class="{ 'is-docked': quoting.touch }" :style="quoting.touch ? {} : { left: `${quoting.left}px`, top: `${quoting.top}px` }" @submit.prevent="submit_quote">
+      <input ref="quote_input" v-model="quote_comment" type="text" placeholder="添加批注（可选）" aria-label="摘录的批注（可选）" enterkeyhint="send" @keydown="quote_keydown">
+      <button type="button" class="selection-comment-cancel" aria-label="取消添加" title="取消" @click="cancel_quote"><UIcon name="i-lucide-x" /></button>
+      <button type="submit" class="selection-comment-send" aria-label="添加到对话" title="添加到对话（Enter）"><UIcon name="i-lucide-arrow-up" /></button>
+    </form>
+    <ExcerptEditCard v-if="mark_editing" :key="mark_editing.excerpt.id" :comment="mark_editing.excerpt.comment" :style="{ left: `${mark_editing.left}px`, top: `${mark_editing.top}px` }" @save="save_mark" @cancel="close_mark" @remove="remove_mark" />
     <div ref="transcript" v-memo="[message_groups, message_round_labels, free, room.session, view.access, active_message, expanded_answers.size, reader.state.message_id, room.title, view.query, view.mention_only, view.host_only, topic_anchor, end_anchor, request_badges, execution_reports, recommendations, adopting, scheduler_decisions, host_arrangements, pending, execution_notes, open_working_notes, editing, rewound_runs]" class="channel-transcript" aria-label="聊天记录" @scroll="track_scroll" @wheel.passive="resume_tracking($event); stop_following($event)" @touchstart.passive="resume_tracking" @touchmove.passive="stop_following" @pointerdown="stop_following" @keydown="resume_tracking($event); stop_following($event)">
       <div v-if="!view.query && !view.mention_only && !view.host_only && !topic_anchor" class="channel-message-group channel-topic-group"><TopicCard :ref="(card) => topic_card = card" @edit="emit('edit')" /></div>
       <div v-for="group in message_groups" :key="group.key" class="channel-message-group">
@@ -1756,6 +1847,7 @@ function copy_message(message) { act("copy", `${view.value.room_site}/r/${room.v
             </form>
             <div v-else class="channel-answer">
               <div :id="`channel-answer-${message.id}`" class="channel-message-text markdown-body" v-html="expanded_answers.has(message.id) ? message.rendered_text : answer_previews.get(message.id).html"></div>
+              <button v-for="mark in excerpt_marks.get(message.id) || []" :key="mark.id" type="button" class="excerpt-mark" :style="{ left: `${mark.left}px`, top: `${mark.top}px` }" :title="`摘录 ${mark.number}：点击修改批注`" :aria-label="`修改摘录 ${mark.number} 的批注`" @click="open_mark(mark.id)">{{ mark.number }}</button>
               <UButton v-if="answer_previews.get(message.id).truncated" :label="expanded_answers.has(message.id) ? '收起' : '展开全文'" :trailing-icon="expanded_answers.has(message.id) ? 'i-lucide-chevron-up' : 'i-lucide-chevron-down'" variant="link" color="neutral" size="xs" class="channel-answer-toggle" :aria-label="`${expanded_answers.has(message.id) ? '收起回答' : '展开完整回答'} #${message.id}`" :aria-expanded="expanded_answers.has(message.id)" :aria-controls="`channel-answer-${message.id}`" @click="toggle_answer(message, $event)" />
             </div>
             <div v-if="message.summary" class="channel-answer-summary"><small>回答摘要<span v-if="message.summary_by && message.summary_by !== message.author"> · {{ bridge.display_name(message.summary_by) }} 整理</span></small><div class="channel-message-text markdown-body" v-html="message.rendered_summary"></div></div>
@@ -1830,7 +1922,7 @@ function copy_message(message) { act("copy", `${view.value.room_site}/r/${room.v
       <div v-if="!transcript_messages.length && !free_working.length" class="channel-empty"><UIcon :name="view.query || view.mention_only || view.host_only ? 'i-lucide-search' : 'i-lucide-hash'" /><h2>{{ view.query || view.mention_only || view.host_only ? '没有找到消息' : room.title }}</h2><p>{{ view.query || view.mention_only || view.host_only ? '试试其他关键词，或清除筛选。' : bridge.empty_discussion_message(room) }}</p></div>
     </div>
     <div v-if="(transcript_messages.length && !follow_tail) || listen_here?.touch || reader.state.message_id" class="channel-latest-dock">
-      <button v-if="listen_here?.touch" type="button" class="channel-listen-pill" @mousedown.prevent @click="quote_selection"><UIcon name="i-lucide-message-square-quote" />添加到对话</button>
+      <button v-if="listen_here?.touch" type="button" class="channel-listen-pill" @mousedown.prevent @click="start_quote"><UIcon name="i-lucide-message-square-quote" />添加到对话</button>
       <button v-if="listen_here?.touch && listen_here.speech" type="button" class="channel-listen-pill" aria-label="从选中处开始朗读" @mousedown.prevent @click="listen_from_selection"><UIcon name="i-lucide-headphones" />听当前</button>
       <button v-if="reader.state.message_id" type="button" class="channel-listen-pill" :class="{ 'is-on': reader.state.following }" :aria-pressed="reader.state.following" :title="reader.state.following ? '手动滚动即取消跟随' : '页面跟随朗读位置滚动'" @click="reader.state.following ? (reader.state.following = false) : reader.follow()"><UIcon name="i-lucide-locate-fixed" />{{ reader.state.following ? '跟随中' : '跟随' }}</button>
       <button v-if="reader.state.reading" type="button" class="channel-listen-pill" aria-label="退出朗读" @click="reader.stop()"><UIcon name="i-lucide-square" />退出</button>
@@ -1881,18 +1973,30 @@ function copy_message(message) { act("copy", `${view.value.room_site}/r/${room.v
       <UChatPrompt ref="prompt" v-model="text" :disabled="view.sending_message" :submit-on-enter="ENTER_SENDS" :enterkeyhint="ENTER_SENDS ? 'send' : 'enter'" :autofocus="false" :rows="1" :maxrows="EDITOR_MAX_ROWS" :placeholder="`发消息到 # ${room.title}`" aria-label="留言正文" role="combobox" aria-autocomplete="list" aria-haspopup="listbox" :aria-expanded="!!mention_context" :aria-controls="mention_context ? 'channel-mention-list' : undefined" :aria-activedescendant="mention_context && mention_active ? `channel-mention-${mention_options.indexOf(mention_active)}` : undefined" variant="outline" color="neutral" class="channel-composer" :class="{ 'has-mentions': mention_mirror }" :ui="{ header: 'channel-composer-header', base: 'channel-editor', footer: 'channel-composer-footer' }" @submit="send">
         <template #header>
           <div v-if="view.attachment_drafts.length || file_refs.length || excerpts.length" class="attachment-drafts">
-            <UPopover v-for="excerpt in excerpts" :key="`excerpt:${excerpt.id}`" :content="{ side: 'top', align: 'start' }">
-              <div class="attachment-draft-file attachment-draft-ref attachment-draft-excerpt" role="button" tabindex="0" :title="`点击查看原文、修改批注：${excerpt.path} ${excerpt_lines(excerpt)}`">
-                <UIcon name="i-lucide-message-square-quote" class="attachment-ref-folder" />
-                <span class="attachment-name"><span>{{ excerpt.name }}<template v-if="excerpt.start"> · {{ excerpt_lines(excerpt) }}</template></span><small>{{ excerpt.comment ? `批注：${excerpt.comment}` : excerpt.text }}</small></span>
-                <button type="button" class="attachment-remove" :aria-label="`移除摘录 ${excerpt.name}`" :disabled="view.sending_message" @click.stop="remove_excerpt(excerpt)"><UIcon name="i-lucide-x" /></button>
+            <UPopover v-if="excerpts.length" :content="{ side: 'top', align: 'start' }" @update:open="editing_excerpt = 0">
+              <div class="excerpt-chip" role="button" tabindex="0" title="查看摘录、修改批注">
+                <UIcon name="i-lucide-message-square-quote" /><span>{{ excerpts.length }} 条摘录</span>
+                <button type="button" class="excerpt-chip-clear" aria-label="移除全部摘录" title="移除全部摘录" :disabled="view.sending_message" @click.stop="file_preview.excerpts = []"><UIcon name="i-lucide-x" /></button>
               </div>
               <template #content>
-                <div class="excerpt-editor">
-                  <p class="excerpt-editor-source">{{ excerpt.path }}<template v-if="excerpt.start"> · {{ excerpt_lines(excerpt) }}</template></p>
-                  <blockquote class="excerpt-editor-quote">{{ excerpt.text }}</blockquote>
-                  <UTextarea v-model="excerpt.comment" :rows="2" autoresize placeholder="添加批注（可选）" aria-label="摘录的批注" class="w-full" />
-                </div>
+                <ol class="excerpt-list" aria-label="摘录">
+                  <li v-for="(excerpt, index) in excerpts" :key="excerpt.id">
+                    <span class="excerpt-number">{{ index + 1 }}.</span>
+                    <div class="excerpt-item">
+                      <small>选中文字 · {{ excerpt_source(excerpt) }}</small>
+                      <p class="excerpt-text">{{ excerpt.text }}</p>
+                      <template v-if="editing_excerpt === excerpt.id">
+                        <small>批注</small>
+                        <UTextarea v-model="excerpt.comment" :rows="2" autoresize autofocus placeholder="添加批注（可选）" aria-label="摘录的批注" class="w-full" />
+                      </template>
+                      <template v-else-if="excerpt.comment"><small>批注</small><p class="excerpt-comment">{{ excerpt.comment }}</p></template>
+                    </div>
+                    <div class="excerpt-actions">
+                      <button type="button" :aria-label="`修改摘录 ${index + 1} 的批注`" title="修改批注" @click="editing_excerpt = editing_excerpt === excerpt.id ? 0 : excerpt.id"><UIcon name="i-lucide-pencil" /></button>
+                      <button type="button" :aria-label="`移除摘录 ${index + 1}`" title="移除" :disabled="view.sending_message" @click="remove_excerpt(excerpt)"><UIcon name="i-lucide-trash-2" /></button>
+                    </div>
+                  </li>
+                </ol>
               </template>
             </UPopover>
             <div v-for="ref_item in file_refs" :key="`ref:${ref_item.path}`" class="attachment-draft-file attachment-draft-ref" :title="ref_item.path">

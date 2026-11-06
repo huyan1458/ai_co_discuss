@@ -1,7 +1,8 @@
 <script setup>
 import { computed, inject, nextTick, onBeforeUnmount, onMounted, ref, watch } from "vue";
 import { use_read_aloud } from "./read-aloud.js";
-import { add_excerpt as put_excerpt, crumbs_of, excerpt_lines, file_preview, file_size, file_type, modified_time } from "./file-preview.js";
+import ExcerptEditCard from "./ExcerptEditCard.vue";
+import { add_excerpt as put_excerpt, crumbs_of, excerpt_mark_place, excerpt_range, file_preview, file_size, file_type, hold_selection, modified_time, text_offset } from "./file-preview.js";
 
 // The file preview window: several files open as tabs; it folds into a floating button that keeps every tab, its mode
 // and scroll position, so the user can go to the messages or another room and come back. Mounted once for the workspace,
@@ -39,8 +40,12 @@ const encoding_label = computed(() => (preview.value?.encoding || "utf-8").toUpp
 const FRONT_MATTER = /^---\r?\n[\s\S]*?\r?\n---[ \t]*(?:\r?\n|$)/;
 // The selection offer waits until a selection has settled; most selections are for copying.
 const OFFER_SETTLE_MS = 350;
+// The offer pills and the comment box sit just above the selection (below it when there is no room).
 const OFFER_WIDTH = 190;
+const OFFER_HEIGHT = 28;
 const COMMENT_WIDTH = 340;
+const COMMENT_HEIGHT = 40;
+const OFFER_GAP = 6;
 const FOLLOW_KEYS = ["ArrowUp", "ArrowDown", "PageUp", "PageDown", "Home", "End", " "];
 const editor_body = ref(null), markdown_scroll = ref(null), markdown_body = ref(null), code_scroll = ref(null), comment_input = ref(null);
 const speech_ready = ref(false);
@@ -49,6 +54,12 @@ const speech_ready = ref(false);
 const offer = ref(null);
 const commenting = ref(null);
 const comment = ref("");
+// Number marks at the end of the shown file's passages still in the composer: [{ id, number, left, top }]; one of them
+// reopened for editing: `{ excerpt, left, top }`.
+const file_marks = ref([]);
+const mark_editing = ref(null);
+const MARK_CARD_WIDTH = 300;
+const MARK_CARD_HEIGHT = 110;
 let offer_timer = 0, pointer_down = false;
 const speech_settings = () => bridge.local_request("tts-settings", {});
 const reader = use_read_aloud({ bridge, container: () => markdown_scroll.value, hosts: ".project-markdown-preview",
@@ -340,7 +351,7 @@ function schedule_offer() {
 }
 // Pressing the offer or the comment box must not hide it before its click lands.
 const on_offer = (event) => Boolean(event.target.closest?.(".file-selection-offer"));
-const press = (event) => { if (!on_offer(event)) pointer_down = true; };
+const press = (event) => { if (on_offer(event) || event.target.closest?.(".excerpt-mark")) return; pointer_down = true; if (mark_editing.value) close_mark(); };
 const release = (event) => { if (on_offer(event)) return; pointer_down = false; schedule_offer(); };
 
 /** The source lines a selection covers, from the first and last text it really includes; zero when unknown. */
@@ -359,18 +370,60 @@ function selected_lines(range) {
   return first && last ? { start: first[0], end: Math.max(first[0], last[1]) } : { start: 0, end: 0 };
 }
 
-/** Offer quoting (and reading from) a selection made in the Markdown preview: under its end, or in the bottom dock on touch screens. */
+/** Place `{ left, top }` in the text area for a box of this size above the range's start, or below its end when there is no room. */
+function place_by(range, width, height) {
+  const box = editor_body.value.getBoundingClientRect();
+  const rects = range.getClientRects(), first = rects[0] || range.getBoundingClientRect(), last = rects[rects.length - 1] || first;
+  const above = first.top - box.top - height - OFFER_GAP;
+  const left = above >= 0 ? first.left - box.left : last.right - box.left - width / 2;
+  return { left: Math.max(8, Math.min(left, box.width - width - 8)), top: above >= 0 ? above : last.bottom - box.top + OFFER_GAP };
+}
+
+/** Offer quoting (and reading from) a selection made in the Markdown preview: above it, or in the bottom dock on touch screens. */
 function track_selection() {
   if (commenting.value) return;
   const selection = document.getSelection();
   const range = selection?.rangeCount && !selection.isCollapsed ? selection.getRangeAt(0) : null;
-  const box = editor_body.value?.getBoundingClientRect();
-  if (!range || !box || source.value || !markdown_body.value?.contains(range.startContainer)) return;
+  const body = markdown_body.value;
+  if (!range || !editor_body.value || source.value || !body?.contains(range.startContainer)) return;
   const text = range.toString().replace(/\r/g, "").replace(/\n{3,}/g, "\n\n").trim();
   if (!text) return;
-  const rects = range.getClientRects(), end = rects[rects.length - 1] || range.getBoundingClientRect();
-  offer.value = { range: range.cloneRange(), text, ...selected_lines(range), touch: window.matchMedia("(pointer: coarse)").matches,
-    left: Math.max(8, Math.min(end.right - box.left - 8, box.width - OFFER_WIDTH)), top: end.bottom - box.top + 6, width: box.width };
+  const to = body.contains(range.endContainer) ? text_offset(body, range.endContainer, range.endOffset) : body.textContent.length;
+  const from = text_offset(body, range.startContainer, range.startOffset);
+  offer.value = { range: range.cloneRange(), text, from, to, ...selected_lines(range), touch: window.matchMedia("(pointer: coarse)").matches,
+    ...place_by(range, OFFER_WIDTH, OFFER_HEIGHT) };
+}
+
+/** Re-measure where each excerpt of the shown file ends, for its number mark. */
+function place_file_marks() {
+  const body = markdown_body.value, host = markdown_scroll.value;
+  file_marks.value = !open.value || !body || !host ? [] : file_preview.excerpts.flatMap((excerpt, index) => {
+    const place = !excerpt.message_id && excerpt.path === active_path.value ? excerpt_mark_place(body, host, excerpt.to) : null;
+    return place ? [{ id: excerpt.id, number: index + 1, ...place }] : [];
+  });
+}
+
+/** Open a quoted passage's edit card from its number mark, highlighting the passage again. */
+function open_mark(excerpt_id) {
+  cancel_comment();
+  const excerpt = file_preview.excerpts.find((item) => item.id === excerpt_id);
+  const range = excerpt && excerpt_range(markdown_body.value, excerpt.from, excerpt.to);
+  if (!range) return;
+  hold_selection(range);
+  mark_editing.value = { excerpt, ...place_by(range, MARK_CARD_WIDTH, MARK_CARD_HEIGHT) };
+}
+function close_mark() {
+  mark_editing.value = null;
+  hold_selection(null);
+}
+function save_mark(comment) {
+  mark_editing.value.excerpt.comment = comment;
+  close_mark();
+}
+function remove_mark() {
+  const { id } = mark_editing.value.excerpt;
+  file_preview.excerpts = file_preview.excerpts.filter((item) => item.id !== id);
+  close_mark();
 }
 
 /** Start reading where the selection begins and go on to the end of the file. */
@@ -383,20 +436,22 @@ function listen_from_selection() {
 
 /** Ask for an optional comment on the selection before it goes to the chat. */
 async function start_comment() {
-  commenting.value = { ...offer.value, left: Math.max(8, Math.min(offer.value.left, offer.value.width - COMMENT_WIDTH - 8)) };
+  commenting.value = { ...offer.value, ...place_by(offer.value.range, COMMENT_WIDTH, COMMENT_HEIGHT) };
+  hold_selection(offer.value.range);
   offer.value = null;
   comment.value = "";
+  document.getSelection()?.removeAllRanges();
   await nextTick();
   comment_input.value?.focus();
 }
 
-function cancel_comment() { commenting.value = null; }
+function cancel_comment() { commenting.value = null; hold_selection(null); }
 
 /** Put the selection (and comment) in the composer of the file's room as an excerpt, fold the window and go to the messages. */
 async function add_excerpt() {
-  const { text, start, end } = commenting.value;
-  const excerpt = { path: active_path.value, name: preview_name.value, start, end, text, comment: comment.value.trim() };
-  commenting.value = null;
+  const { text, start, end, from, to } = commenting.value;
+  const excerpt = { path: active_path.value, name: preview_name.value, start, end, text, from, to, comment: comment.value.trim() };
+  cancel_comment();
   document.getSelection()?.removeAllRanges();
   await to_tab_room();
   act("tab", "discussion");
@@ -419,14 +474,16 @@ function stop_following(event) {
 
 // Folding or closing the window, switching tabs or to source, or the text changing ends any quoting; all but folding
 // also end the reading (closing every file clears the active tab), which goes on while folded.
-watch([open, active_id, source, rendered], () => { offer.value = null; commenting.value = null; });
+watch([open, active_id, source, rendered], () => { offer.value = null; cancel_comment(); close_mark(); });
+watch([open, active_id, source, rendered, () => file_preview.excerpts.map((excerpt) => excerpt.id).join()], () => nextTick(place_file_marks), { flush: "post" });
 watch([active_id, source, rendered], () => { if (reader.state.message_id) reader.stop(); });
 // Unfolded, the text is laid out anew; the reading's highlight moves onto it.
-watch(markdown_body, (root) => { if (root) reader.rebind_document(root); });
+watch(markdown_body, (root) => { if (root) { reader.rebind_document(root); nextTick(place_file_marks); } });
 onMounted(() => {
   file_preview.open = open_file;
   place_float();
   window.addEventListener("resize", place_float);
+  window.addEventListener("resize", place_file_marks);
   document.addEventListener("selectionchange", schedule_offer);
   document.addEventListener("pointerdown", press);
   document.addEventListener("pointerup", release);
@@ -434,6 +491,8 @@ onMounted(() => {
 onBeforeUnmount(() => {
   if (file_preview.open === open_file) file_preview.open = null;
   window.removeEventListener("resize", place_float);
+  window.removeEventListener("resize", place_file_marks);
+  hold_selection(null);
   for (const item of tabs.value) item.request++;
   document.removeEventListener("selectionchange", schedule_offer);
   document.removeEventListener("pointerdown", press);
@@ -493,17 +552,20 @@ onBeforeUnmount(() => {
         </div>
         <iframe v-else-if="preview && format === 'html'" class="project-html-preview" sandbox="" referrerpolicy="no-referrer" :srcdoc="html_preview" title="HTML 文件预览"></iframe>
         <div v-else-if="preview" ref="markdown_scroll" class="project-markdown-scroll" tabindex="0" @scroll.passive="schedule_offer"
-          @wheel.passive="stop_following" @touchmove.passive="stop_following" @keydown="stop_following" @pointerdown="stop_following"><div ref="markdown_body" class="markdown-body project-markdown-preview" v-html="rendered"></div></div>
+          @wheel.passive="stop_following" @touchmove.passive="stop_following" @keydown="stop_following" @pointerdown="stop_following"><div ref="markdown_body" class="markdown-body project-markdown-preview" v-html="rendered"></div>
+          <button v-for="mark in file_marks" :key="mark.id" type="button" class="excerpt-mark" :style="{ left: `${mark.left}px`, top: `${mark.top}px` }" :title="`摘录 ${mark.number}：点击修改批注`" :aria-label="`修改摘录 ${mark.number} 的批注`" @click="open_mark(mark.id)">{{ mark.number }}</button></div>
+        <ExcerptEditCard v-if="mark_editing" :key="mark_editing.excerpt.id" class="file-selection-offer file-comment" :comment="mark_editing.excerpt.comment" :style="{ left: `${mark_editing.left}px`, top: `${mark_editing.top}px` }"
+          @save="save_mark" @cancel="close_mark" @remove="remove_mark" />
 
         <div v-if="offer && !offer.touch" class="file-selection-offer file-offer-marks" :style="{ left: `${offer.left}px`, top: `${offer.top}px` }">
           <button type="button" class="channel-listen-mark" title="把选中的文字作为摘录添加到对话" @mousedown.prevent @click="start_comment"><UIcon name="i-lucide-message-square-quote" />添加到对话</button>
           <button v-if="can_read" type="button" class="channel-listen-mark" title="从选中处开始朗读" aria-label="从选中处开始朗读" @mousedown.prevent @click="listen_from_selection"><UIcon name="i-lucide-headphones" />朗读</button>
         </div>
-        <form v-if="commenting" class="file-selection-offer file-comment" :class="{ 'is-docked': commenting.touch }"
+        <form v-if="commenting" class="file-selection-offer selection-comment file-comment" :class="{ 'is-docked': commenting.touch }"
           :style="commenting.touch ? {} : { left: `${commenting.left}px`, top: `${commenting.top}px` }" @submit.prevent="add_excerpt">
           <input ref="comment_input" v-model="comment" type="text" placeholder="添加批注（可选）" aria-label="摘录的批注（可选）" enterkeyhint="send" @keydown="comment_keydown">
-          <button type="button" class="file-comment-cancel" aria-label="取消添加" title="取消" @click="cancel_comment"><UIcon name="i-lucide-x" /></button>
-          <button type="submit" class="file-comment-send" aria-label="添加到对话" title="添加到对话（Enter）"><UIcon name="i-lucide-arrow-up" /></button>
+          <button type="button" class="selection-comment-cancel" aria-label="取消添加" title="取消" @click="cancel_comment"><UIcon name="i-lucide-x" /></button>
+          <button type="submit" class="selection-comment-send" aria-label="添加到对话" title="添加到对话（Enter）"><UIcon name="i-lucide-arrow-up" /></button>
         </form>
         <div v-if="(offer?.touch && !commenting) || reader.state.message_id" class="file-listen-dock">
           <button v-if="offer?.touch" type="button" class="channel-listen-pill file-selection-offer" @mousedown.prevent @click="start_comment"><UIcon name="i-lucide-message-square-quote" />添加到对话</button>
@@ -588,22 +650,15 @@ onBeforeUnmount(() => {
 .project-code-row { display: flex; }
 .project-code-number { flex-shrink: 0; box-sizing: content-box; width: calc(var(--digits) * 1ch); min-width: 2ch; padding: 0 14px 0 16px; text-align: right; color: var(--ui-text-dimmed); user-select: none; }
 .project-code-line { flex: 1; min-width: 0; padding-right: 20px; color: var(--ui-text); white-space: pre-wrap; overflow-wrap: anywhere; }
-.project-markdown-scroll { flex: 1; min-width: 0; overflow: auto; }
+.project-markdown-scroll { position: relative; flex: 1; min-width: 0; overflow: auto; }
 /* Positioned and isolated so the read-aloud highlight layer sits under the text, as in a message card. */
 .project-markdown-preview { position: relative; isolation: isolate; max-width: 860px; margin: 0 auto; padding: 28px 40px 48px; overflow-wrap: anywhere; }
 /* Selection offers and read-aloud controls stay inside the dialog: under the selection with a pointer, in a bottom dock otherwise. */
 .file-offer-marks { position: absolute; z-index: 4; display: flex; gap: 6px; }
 .file-offer-marks .channel-listen-mark { position: static; }
-.file-comment { position: absolute; z-index: 4; display: flex; align-items: center; gap: 4px; width: 340px; height: 40px; padding: 0 5px 0 14px; border: 1px solid var(--ui-border-accented);
-  border-radius: 999px; background: var(--ui-bg-elevated); box-shadow: 0 8px 24px #0006; }
-.file-comment.is-docked { inset: auto 12px 12px; width: auto; }
-.file-comment input { flex: 1; min-width: 0; border: 0; outline: none; background: transparent; color: var(--ui-text); font-size: 13px; }
-.file-comment input::placeholder { color: var(--ui-text-dimmed); }
-.file-comment button { display: grid; place-items: center; flex-shrink: 0; width: 28px; height: 28px; border-radius: 50%; cursor: pointer; }
-.file-comment button > span { width: 16px; height: 16px; }
-.file-comment-cancel { color: var(--ui-text-muted); }
-.file-comment-cancel:hover { background: var(--ui-bg-accented); color: var(--ui-text); }
-.file-comment-send { background: var(--ui-text-highlighted); color: var(--ui-bg); }
+/* The shared comment box (channel.css), placed inside the dialog instead of on the page. */
+.file-comment { position: absolute; z-index: 4; }
+.file-comment.is-docked { inset: auto 12px 12px; }
 .file-listen-dock { position: absolute; inset: auto 0 12px; z-index: 3; display: flex; justify-content: center; gap: 8px; pointer-events: none; }
 .project-html-preview { display: block; flex: 1; width: 100%; border: 0; background: white; }
 .project-editor-status { display: flex; align-items: center; gap: 16px; flex-shrink: 0; height: 26px; padding: 0 14px; font-size: 11.5px; color: var(--ui-text-muted);
