@@ -20,6 +20,7 @@ const LOOP_MS = 500;
 const REMOTE_POLL_MS = 10_000;
 // A hosted site is asked this often which rooms changed; an idle room is read in full only then, or at the safety interval.
 const REVISION_POLL_MS = 3000;
+// Safety interval for an idle room whose changes arrive by revision or update stream (local sites included).
 const IDLE_REMOTE_POLL_MS = 5 * 60_000;
 const REVISION_TIMEOUT_MS = 10_000;
 const UPDATE_RETRY_MS = 5000;
@@ -425,9 +426,11 @@ export class DiscussionService {
       .finally(() => {
         // Counted from the end of the tick, once the room's site is known; a slow site does not poll back to back.
         const local = !worker.state.site || LOOPBACK.has(new URL(worker.state.site).hostname);
-        // An idle hosted room waits for its revision to change; a site without revisions keeps the regular interval.
-        const watched = worker.idle && this.revisions.get(worker.state.site)?.supported !== false;
-        worker.next_at = Date.now() + (local ? this.intervals.local : watched ? this.intervals.idle : this.intervals.remote);
+        // An idle room waits for its site's update stream or, on a hosted site, its revision to change; a site with
+        // neither keeps the regular interval. Polling every idle local room each interval kept the website busy.
+        const streamed = Date.now() - (this.streams.get(worker.state.site)?.heard_at ?? 0) < STREAM_STALE_MS;
+        const watched = worker.idle && (streamed || (!local && this.revisions.get(worker.state.site)?.supported !== false));
+        worker.next_at = Date.now() + (watched ? this.intervals.idle : local ? this.intervals.local : this.intervals.remote);
         worker.busy = null;
         if (worker.woken && this.workers.get(path) === worker) { worker.woken = false; this.start(path, worker); }
       });

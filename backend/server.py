@@ -63,6 +63,7 @@ MAX_MESSAGE_ATTACHMENTS = 10
 MAX_FILENAME_LENGTH = 255
 # A revision check names at most this many rooms; a runner or page asks only for the rooms it follows.
 MAX_REVISION_ROOMS = 100
+CONNECT_LOCK = threading.Lock()  # see connect_db
 LOCAL_LAUNCH_TIMEOUT = 60
 MACHINE_COMMAND_POLL_SECONDS = 0.5
 # Ordering and filing a channel only rearrange the shared directory, like folder edits, so they need no room credential.
@@ -279,9 +280,14 @@ def utc_now():
 
 def connect_db(database):
     """Open a database connection with named rows and foreign keys enabled."""
-    connection = sqlite3.connect(database, timeout=10)
-    connection.row_factory = sqlite3.Row
-    connection.execute("PRAGMA foreign_keys = ON")
+    # Each request opens its own connection, whose first statement parses the whole schema. Parsed in parallel,
+    # those allocations contend on SQLite's global memory mutex: a runner polling ~20 rooms at once burned several
+    # CPU cores on Windows. Parsing them one at a time costs a few milliseconds each.
+    with CONNECT_LOCK:
+        connection = sqlite3.connect(database, timeout=10)
+        connection.row_factory = sqlite3.Row
+        connection.execute("PRAGMA foreign_keys = ON")
+        connection.execute("SELECT 1 FROM sqlite_master LIMIT 1").fetchone()
     return connection
 
 
