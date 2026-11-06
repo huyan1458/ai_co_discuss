@@ -4,14 +4,14 @@
  * official interface; tested on agy 1.4.9). Antigravity's project registry is shared with the App adapter.
  */
 import { createHash, randomUUID } from 'node:crypto';
-import { existsSync, mkdirSync, readFileSync, readdirSync, rmSync } from 'node:fs';
+import { closeSync, existsSync, mkdirSync, openSync, readFileSync, readdirSync, readSync, rmSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { dirname, isAbsolute, join, relative, resolve } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import { DatabaseSync } from 'node:sqlite';
 import { atomic_json } from '../files.mjs';
 import { cli_delivery } from './cli.mjs';
-import { DENIAL_FIELD, EDIT_TOOLS, json_line, launch_directory, MAX_DENIALS, model_entry, MODEL_PATTERN, project_directory,
+import { DENIAL_FIELD, EDIT_TOOLS, json_line, launch_directory, MAX_DENIALS, model_entry, MODEL_PATTERN, not_sent, project_directory,
   query_catalog, read_json, same_path, TASK_SUBCOMMANDS } from './common.mjs';
 
 // agy stores its generation settings as protobuf; field 28 (tag bytes 0xe2 0x01) holds the model actually used.
@@ -342,12 +342,37 @@ async function defaults(profile, options = {}) {
   catch { return { model: '', effort: '' }; }
 }
 
+/**
+ * Whether another agy process has this conversation open: while it does, agy holds an exclusive lock on
+ * presence/<id>.lock, and reading the locked byte fails. Only Windows enforces that lock, so elsewhere this says false.
+ */
+export function conversation_open_elsewhere(session_id, user_home = homedir()) {
+  let descriptor;
+  try { descriptor = openSync(join(user_home, '.gemini', 'antigravity-cli', 'presence', `${session_id}.lock`), 'r'); }
+  catch { return false; }
+  try { readSync(descriptor, Buffer.alloc(1), 0, 1, 0); return false; }
+  catch (error) { return error.code === 'EBUSY'; }
+  finally { closeSync(descriptor); }
+}
+
+/**
+ * Deliver one turn, except into a conversation the user has open in an agy terminal: that window keeps its own copy
+ * and its next write drops a turn run from outside, so a room task or a private chat line is refused before anything
+ * runs and the runner reports why (tested on agy 1.5.2).
+ */
+function deliver(config, binding, task, spawn_process, user_home = homedir()) {
+  if (binding.session_id && conversation_open_elsewhere(binding.session_id, user_home)) {
+    throw not_sent(new Error('这个会话正在你的 agy 终端里打开，外部写入会被终端覆盖；请先关闭终端，或直接在终端里继续'));
+  }
+  return cli_delivery(antigravity_cli, config, binding, task, spawn_process, user_home);
+}
+
 /** agy's behaviour; its static facts are in profiles.mjs. */
 export const antigravity_cli = {
   id: 'antigravity_cli', catalog_source: 'antigravity-cli',
   // A deleted room's private agy projects are removed with it.
   cleanup: remove_agy_projects,
-  deliver: (config, binding, task, spawn_process, user_home) => cli_delivery(antigravity_cli, config, binding, task, spawn_process, user_home),
+  deliver,
   invocation, lifecycle, events,
   session: { path: session_path, exists: session_exists, owns: session_exists, branch, settings: session_settings },
   models: { list: models, effort, defaults },

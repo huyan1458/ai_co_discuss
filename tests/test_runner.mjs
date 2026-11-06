@@ -411,6 +411,12 @@ async function fixture(t) {
         if (body.action === 'retry_start') { execution.retry = { ...execution.retry, retry_at: 0 }; execution.status = 'dispatched'; }
         result = execution;
       }
+    } else if (route.startsWith('/chats/')) {
+      const chat = (member.chats || []).find(item => item.id === Number(route.split('/')[2]));
+      calls.push(`chat:${body.action}`);
+      const target = { start: 'running', reply: 'answered', fail: 'failed', steered: 'interjected' }[body.action];
+      Object.assign(chat, { status: target, reply: body.text || '', reason: body.reason || '' });
+      result = chat;
     } else if (route === '/discussion') result = { session: room.session, revision: 'session-revision' };
     else if (route === '/scheduler-routing' || route === '/scheduler-decisions') result = {};
     else { status = 404; result = { error: '未找到' }; }
@@ -2720,5 +2726,56 @@ test('execution details rebuild each CLI log in order, a result filling in its c
     { event: 'step_update', step_update: { step_index: 2, step_type: 'tool', state: 'ACTIVE', tool_name: 'run_command', tool_info: { parameters: { CommandLine: 'dir' } } } },
     { event: 'step_update', step_update: { step_index: 2, step_type: 'tool', state: 'DONE', tool_name: 'run_command', tool_info: { parameters: { CommandLine: 'dir' }, output: 'ok' } } }));
   assert.deepEqual(agy.entries.map(entry => [entry.kind, entry.title, entry.body, entry.state]), [['message', undefined, '正在读取', undefined], ['command', 'dir', 'ok', 'done']]);
-  assert.equal(execution_details('api', '{}'), null);
+  assert.equal(execution_details('no_such_adapter', '{}'), null);
+});
+
+test('a private chat line runs as a turn of the idle member session and reports its last remark as the reply', async t => {
+  const f = await fixture(t);
+  f.member.pending = [];
+  f.member.chats = [{ id: 5, text: '先说结论', status: 'pending' }];
+  f.config.participants.Codex = { adapter: 'codex_cli', executable: process.execPath };
+  f.store.bind('Codex', 'room-session');
+  const process_fixture = fake_cli([{ type: 'thread.started', thread_id: 'room-session' },
+    { type: 'item.completed', item: { id: '1', type: 'agent_message', text: '先读一下' } },
+    { type: 'item.completed', item: { id: '2', type: 'agent_message', text: '结论：可以发。' } }, { type: 'turn.completed' }]);
+  const deliver = (config, binding, task) => deliver_task(config, binding, task, process_fixture.spawn_process, join(f.config.directory, 'user'));
+  await new FreeRoomRunner(f.config, f.store, deliver).tick();
+  await process_fixture.calls[0].closed;
+  for (let wait = 0; !f.calls.includes('chat:reply') && wait < 100; wait++) await delay(20);
+  assert.deepEqual(f.calls.filter(call => call.startsWith('chat:')), ['chat:start', 'chat:reply']);
+  assert.equal(f.member.chats[0].reply, '结论：可以发。');
+  const task = JSON.parse(process_fixture.calls[0].input);
+  assert.equal(task.thread_id, 'room-session', 'the line runs in the member session of the room');
+  assert.match(task.prompt, /私聊[\s\S]*先说结论$/);
+  assert.equal(f.executions.size, 0, 'a private chat is not a room execution');
+});
+
+test('an Antigravity Sidecar quits once a newer one takes its directory or the App server that started it exits', async t => {
+  const sidecar = fileURLToPath(new URL('../runner/adapters/antigravity_sidecar.mjs', import.meta.url));
+  const alive = pid => { try { process.kill(pid, 0); return true; } catch { return false; } };
+  const ready_pid = async directory => {
+    for (let wait = 0; wait < 200; wait++) {
+      try { return JSON.parse(readFileSync(join(directory, 'ready.json'), 'utf8')).pid; } catch { await delay(25); }
+    }
+    throw new Error('the Sidecar never wrote ready.json');
+  };
+  const gone = async pid => { for (let wait = 0; wait < 200 && alive(pid); wait++) await delay(25); return !alive(pid); };
+  const env = directory => ({ ...process.env, ANTIGRAVITY_AGENTAPI_EXE: process.execPath, CODISCUSS_IPC_DIRECTORY: directory });
+  // A newer Sidecar rewrites ready.json with its own pid.
+  const replaced = mkdtempSync(join(tmpdir(), 'sidecar-replaced-'));
+  t.after(() => rmSync(replaced, { recursive: true, force: true }));
+  const first = spawn(process.execPath, [sidecar], { env: env(replaced), stdio: 'ignore', windowsHide: true });
+  t.after(() => first.kill());
+  const pid = await ready_pid(replaced);
+  assert.equal(alive(pid), true);
+  writeFileSync(join(replaced, 'ready.json'), JSON.stringify({ pid: pid + 1 }));
+  assert.equal(await gone(pid), true, 'the replaced Sidecar stops');
+  // The App server that started it exits, leaving the Sidecar behind.
+  const orphaned = mkdtempSync(join(tmpdir(), 'sidecar-orphaned-'));
+  t.after(() => rmSync(orphaned, { recursive: true, force: true }));
+  const parent = spawn(process.execPath, ['-e', `require('node:child_process').spawn(process.execPath, [${JSON.stringify(sidecar)}],
+    { stdio: 'ignore', windowsHide: true, detached: true }).unref(); setTimeout(() => process.exit(0), 300);`], { env: env(orphaned), stdio: 'ignore', windowsHide: true });
+  const orphan = await ready_pid(orphaned);
+  await once(parent, 'exit');
+  assert.equal(await gone(orphan), true, 'the orphaned Sidecar stops');
 });

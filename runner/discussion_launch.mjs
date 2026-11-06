@@ -398,12 +398,14 @@ const DETAIL_LOG_TAIL_BYTES = 4 * 1024 * 1024;
  */
 export async function execution_details_command(home, raw, { trust = false } = {}) {
   const { input, config } = await member_room_context(home, raw, { trust });
-  const execution_id = Number(input.execution_id);
-  if (!Number.isSafeInteger(execution_id) || execution_id <= 0) throw new Error('执行编号无效');
-  const suffix = `-free-${execution_id}.log`;
+  // A private chat turn (`chat_id`) keeps its log the same way as an execution.
+  const chat = input.chat_id !== undefined;
+  const execution_id = Number(chat ? input.chat_id : input.execution_id);
+  if (!Number.isSafeInteger(execution_id) || execution_id <= 0) throw new Error(chat ? '私聊编号无效' : '执行编号无效');
+  const suffix = `-${chat ? 'chat' : 'free'}-${execution_id}.log`;
   const name = existsSync(config.directory) ? readdirSync(config.directory).find(file => file.endsWith(suffix)) : undefined;
   const parsed = name ? execution_details(name.slice(0, -suffix.length), read_log_tail(join(config.directory, name))) : null;
-  return { room_id: input.room_id, execution_id, available: Boolean(parsed), ...parsed };
+  return { room_id: input.room_id, [chat ? 'chat_id' : 'execution_id']: execution_id, available: Boolean(parsed), ...parsed };
 }
 
 /** The last bytes of a log as text, starting at a whole line. */

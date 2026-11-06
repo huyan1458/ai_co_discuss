@@ -11,6 +11,7 @@ import WorkingText from "./WorkingText.vue";
 import QueuedMessages from "./QueuedMessages.vue";
 import { active_workflow } from "./workflow-state.js";
 import { open_private_chat } from "./private-chat.js";
+import { ENTER_SENDS } from "./enter-sends.js";
 import { use_read_aloud } from "./read-aloud.js";
 import { use_broadcast } from "./broadcast.js";
 import { use_voice_input } from "./voice-input.js";
@@ -347,8 +348,6 @@ const preview_group = computed(() => navigation_groups.value.find((group) => gro
 const preview_round = computed(() => preview_group.value?.label);
 const preview_index = computed(() => preview_open.value ? navigation_entries.value.findIndex((entry) => entry.key === preview_entry.value) : -1);
 const prompt = ref(null);
-// Phones and tablets have no Shift+Enter, so the keyboard's return key adds a line there and only the send button sends.
-const ENTER_SENDS = typeof window === "undefined" || !window.matchMedia("(pointer: coarse)").matches;
 const follow_tail = ref(true);
 const FOLLOW_TAIL_THRESHOLD = 70;
 const READING_OFFSET = 20;

@@ -1885,6 +1885,9 @@ def inbox(connection, room_id, token):
         # The runner compares this with its adapter's effect and reports a change.
         reported = connection.execute("SELECT rewind FROM member_capabilities WHERE member_id=?", (row["id"],)).fetchone()
         member_view["rewind"] = reported[0] if reported else ""
+        # Private chat lines the runner still has to run in this member's session (backend/private_chat.py).
+        member_view["chats"] = [dict(item) for item in connection.execute(
+            "SELECT id,text,status FROM private_chats WHERE member_id=? AND status IN ('pending','running') ORDER BY id", (row["id"],))]
         pending = [{**request, **review_request_context(connection, request), **sequence_request_context(connection, request)} for request in pending]
         (members if row["access"] == "runner" else observers).append({**member_view, "pending": pending})
     # Pending interjections ride along so the runner hands them to the running software at its next check.

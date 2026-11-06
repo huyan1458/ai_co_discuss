@@ -11,7 +11,8 @@
  * - `efforts`: thinking levels it accepts, or null when chosen inside the App; `efforts_per_model`: the levels are read
  *   from the software for the chosen model. `models`: whether its CLI lists models.
  * - `access_levels`: project access levels it can enforce per run, or null when the App or API decides; `access_hints`
- *   says what each level does in it (measured headless: Claude Code 2.1.312, Codex CLI 0.163, agy 1.4.10) and
+ *   says what each level does in it (measured headless on Claude Code 2.1.312, Codex CLI 0.163, agy 1.4.10; not yet
+ *   rechecked on Claude Code 2.1.319 or agy 1.5.2) and
  *   `unsupported_hints` why a level it lacks is disabled.
  * - `per_tool_allow`: a refused operation can be allowed one rule at a time.
  * - `client`: the software a manual member says it runs in when it registers (`codex`, `claude`, `antigravity`).
@@ -28,7 +29,8 @@
  *   (its sandbox enforces a read-only project); `ripgrep` (bundles rg for reading on Windows); `file_tools` (works on
  *   the project only through the runner's file tools, running no commands); `limits_directories` (a directory it may
  *   only read stays read-only even while it may write elsewhere and run commands: a sandbox or file tools, not rules
- *   that a command could bypass).
+ *   that a command could bypass); `chat` (the owner's private chat runs as a turn of its own session and its reply is
+ *   read from the software's output).
  * - `session_family`: profiles sharing one session store; switching among them keeps the conversation.
  * - `windows_command`: how its shell names the codiscuss CLI on Windows.
  * - `task_rules(cli, {runs_commands})`: fixed task text this software needs, added by the runner so no member prompt drops it.
@@ -47,13 +49,13 @@ export const ADAPTER_PROFILES = {
     access_hints: { read: '只读沙箱', write: '项目可写的沙箱，命令在沙箱内运行、可联网',
       auto: '沙箱外的操作由模型申请提权，Codex 自动审核代替人工批准', full: '无沙箱、无审批（--dangerously-bypass-approvals-and-sandbox）' },
     client: 'codex', adopt: 'session', host_existing: true, session_family: 'codex',
-    capabilities: { delivery: PROCESS, rewind: 'cut', project: true, access_env: true, enforces_read_only: true, limits_directories: true, ripgrep: true },
+    capabilities: { delivery: PROCESS, rewind: 'cut', project: true, access_env: true, enforces_read_only: true, limits_directories: true, ripgrep: true, chat: true },
   },
   codex: {
     platform: 'Codex', label: 'Codex App', kind: 'app', location: 'executable', fields: ['source_thread_id', 'project_id', 'project_name'],
     efforts: null, models: false, access_levels: null, per_tool_allow: false,
     client: 'codex', adopt: 'session', host_existing: true, session_family: 'codex',
-    capabilities: { delivery: IN_APP, rewind: 'cut', project: true },
+    capabilities: { delivery: IN_APP, rewind: 'cut', project: true, chat: true },
   },
   claude: {
     platform: 'Claude', label: 'Claude Code', kind: 'cli', location: 'executable', fields: ['allowed_tools'],
@@ -64,7 +66,7 @@ export const ADAPTER_PROFILES = {
     resume_command: session_id => `claude --resume ${session_id}`,
     // Claude Code runs commands through bash on Windows too, where the npm shim works without .cmd.
     windows_command: 'codiscuss',
-    capabilities: { delivery: PROCESS, rewind: 'cut', project: true, access_env: true },
+    capabilities: { delivery: PROCESS, rewind: 'cut', project: true, access_env: true, chat: true },
   },
   antigravity_cli: {
     platform: 'Antigravity', label: 'Antigravity CLI', kind: 'cli', location: 'executable', fields: ['project_id', 'project_name'],
@@ -76,7 +78,7 @@ export const ADAPTER_PROFILES = {
     unsupported_hints: { auto: 'agy 只在交互窗口提供自动模式，后台运行（-p）不支持' },
     // Only a conversation this tool created gets its discussion project; an existing one keeps its own project and permissions.
     client: 'antigravity', adopt: 'session', host_existing: false, own_project_when_bound: true,
-    capabilities: { delivery: PROCESS, rewind: 'cut', project: true, access_env: true },
+    capabilities: { delivery: PROCESS, rewind: 'cut', project: true, access_env: true, chat: true },
     // A read-only agy project allows only codiscuss commands and headless agy ends the turn on a denied one; agy streams no
     // thinking text, so without a word at each turning point the page cannot show how far it got.
     task_rules: (cli, { runs_commands }) => (runs_commands ? ''
@@ -87,14 +89,14 @@ export const ADAPTER_PROFILES = {
     platform: 'Antigravity', label: 'Antigravity App', kind: 'app', location: 'ipc_directory', fields: ['project_id', 'project_name'],
     efforts: null, models: false, access_levels: null, per_tool_allow: false,
     client: 'antigravity', adopt: 'session', host_existing: true,
-    capabilities: { delivery: IN_APP, rewind: 'kept', project: true },
+    capabilities: { delivery: IN_APP, rewind: 'kept', project: true, chat: true },
   },
   api: {
     platform: '', label: '模型 API', kind: 'api', location: '', fields: ['base_url', 'api_protocol', 'api_key_ref'],
     efforts: null, models: false, access_levels: ['read', 'write'], per_tool_allow: false, adopt: '', host_existing: false,
     access_hints: { read: '用接入程序的文件工具读取、搜索项目文件', write: '还可新建、覆盖、局部编辑项目文件；没有命令行' },
     unsupported_hints: { auto: 'API 成员没有命令行，没有需要软件审批的操作', full: 'API 成员没有命令行，没有需要软件审批的操作' },
-    capabilities: { delivery: PROCESS, rewind: 'fresh', project: true, file_tools: true, limits_directories: true },
+    capabilities: { delivery: PROCESS, rewind: 'fresh', project: true, file_tools: true, limits_directories: true, chat: true },
   },
 };
 

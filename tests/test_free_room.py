@@ -174,6 +174,39 @@ class SingleMemberTests(FreeRoomTests):
         self.assertEqual(interject("太晚了", "i-3")[0], 409, "an ended execution takes no interjection")
         self.assertEqual(second["status"], "pending")
 
+    def test_private_chat_waits_for_an_idle_member_or_joins_its_running_execution(self):
+        """Only the owner chats; an idle member's line waits for the runner, a steerable running execution takes it as an interjection."""
+        member_id = self.request(self.path)[1]["free"]["members"][0]["id"]
+        chat_url = f"{self.path}/members/{member_id}/chat"
+        say = lambda text, submission, token=None: self.request(chat_url, {"text": text, "submission_id": submission}, token or self.owner)
+        self.assertEqual(say("你好", "c-1", self.member)[0], 403)
+        first = say("你好", "c-1")[1]
+        self.assertEqual(first["status"], "pending")
+        self.assertEqual(say("你好", "c-1")[1]["id"], first["id"], "a retry is the same line")
+        inbox = lambda: self.request(self.path + "/inbox", token=self.owner)[1]["members"][0]["chats"]
+        self.assertEqual(inbox(), [{"id": first["id"], "text": "你好", "status": "pending"}])
+        chat = lambda action, **extra: self.request(f"{self.path}/chats/{first['id']}", {"action": action, **extra}, self.owner)
+        self.assertEqual(chat("reply", text="早")[0], 409, "a reply needs a started turn")
+        self.assertEqual(chat("start")[1]["status"], "running")
+        self.assertEqual(chat("reply", text="你好，我在。")[1]["status"], "answered")
+        self.assertEqual(inbox(), [])
+        # While a room execution that takes interjections runs, the next line goes into it.
+        self.say("开始", to=["Claude"])
+        execution = self.reserve()[1]
+        self.request(f"{self.path}/executions/{execution['id']}", {"action": "delivery", "stoppable": True, "progress": True, "steer": True}, self.owner)
+        joined = say("先别写了，直接给结论", "c-2")[1]
+        self.assertEqual((joined["status"], joined["execution_id"], joined["interjection"]), ("interjected", execution["id"], "pending"))
+        pending = self.request(self.path + "/inbox", token=self.owner)[1]["executions"][0]["interjections"]
+        self.assertEqual([item["text"] for item in pending], ["先别写了，直接给结论"])
+        self.assertEqual(self.answer(execution["id"])[0], 201)
+        shown = self.request(chat_url, token=self.owner)[1]["chats"]
+        self.assertEqual([(item["text"], item["status"]) for item in shown], [("你好", "answered"), ("先别写了，直接给结论", "interjected")])
+        self.assertEqual(shown[1]["interjection"], "failed", "the execution ended before the runner passed it on")
+        self.assertEqual(shown[0]["reply"], "你好，我在。")
+        self.assertEqual(self.request(chat_url, token=self.member)[0], 403)
+        stopped = say("算了", "c-3")[1]
+        self.assertEqual(self.request(f"{self.path}/chats/{stopped['id']}", {"action": "stop"}, self.owner)[1]["status"], "stopped")
+
     def test_review_capability_owner_revision_and_invalidation(self):
         """Only owner attestations expose candidates; leaving and returning cannot resurrect old authority."""
         member_id = self.review_member_id()

@@ -109,7 +109,7 @@ flowchart LR
 网站支持自托管于 **Cloudflare Pages + D1** 或 **Docker**；AI 与接入服务仍在你的电脑运行。Docker 站点自己保存房间；Cloudflare 站点不保存房间，已配对的设备经加密中转看到电脑上的房间。见 [部署指南](docs/deployment.md)。
 
 > [!WARNING]
-> 网站暂无用户登录与读取权限隔离，能访问站点的人即可阅读其中的房间。公开部署前请阅读 [安全说明](.github/SECURITY.md)。
+> 保存房间的站点（本机或 Docker）暂无用户登录与读取权限隔离，能访问该站点的人即可阅读其中的房间。Cloudflare 站点不保存房间，只向在电脑前配对过的设备显示。公开部署前请阅读 [安全说明](.github/SECURITY.md)。
 
 ## 文档
 

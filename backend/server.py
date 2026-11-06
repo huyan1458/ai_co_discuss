@@ -32,6 +32,7 @@ from .free_room import (add_member, after_free_message, after_proactive, authori
                         save_room_access, view_execution)
 from .free_room import convert_suggestion, message_suggestions, save_suggestions, sync_participants
 from .free_room import adopt_recommendation, recommend_member, register_member, require_member
+from .private_chat import chat_action, member_chat
 from .free_room import describe_members, execution_notes, label_members, member_descriptions, member_display_names, member_labels, reorder_speakers, resolve_member_fields, set_chain_rounds, speaking_order, stop_room, stop_room_work
 from .free_room import (ADAPTER_VALUE, ANCHOR_SQL, continue_chain, execution_timeline, group_route_plan, retract_message, rewind_plan, rewind_room,
                         room_event_log, withdrawals)
@@ -2294,7 +2295,7 @@ class DiscussionHandler(BaseHTTPRequestHandler):
             result = queue_action(connection, room_id, token, self.read_payload(), post_queued, check_queued, interrupt_for_message)
             connection.commit()
             return self.respond(result)
-        if parts[3:4] in (["inbox"], ["executions"], ["members"], ["suggestions"], ["recommendations"], ["stop"]):
+        if parts[3:4] in (["inbox"], ["executions"], ["members"], ["chats"], ["suggestions"], ["recommendations"], ["stop"]):
             return self.handle_free_api(connection, parts, method)
         if parts[3:4] == ["attachments"]:
             return self.handle_attachments(connection, parts, params, method)
@@ -2495,6 +2496,10 @@ class DiscussionHandler(BaseHTTPRequestHandler):
             result = member_action(connection, room_id, int(parts[4]), token, self.read_payload())
         elif len(parts) == 6 and parts[3] == "members" and parts[5] == "interrupt" and method == "POST":
             result = interrupt_member(connection, room_id, int(parts[4]), token)
+        elif len(parts) == 6 and parts[3] == "members" and parts[5] == "chat" and method in ("GET", "POST"):
+            result = member_chat(connection, room_id, int(parts[4]), token, self.read_payload() if method == "POST" else None)
+        elif len(parts) == 5 and parts[3] == "chats" and method == "POST":
+            result = chat_action(connection, room_id, int(parts[4]), token, self.read_payload())
         elif len(parts) == 6 and parts[3] == "members" and parts[5] == "capabilities" and method == "POST":
             result = member_capability(connection, room_id, int(parts[4]), token, self.read_payload())
         elif parts[3:] == ["stop"] and method == "POST":

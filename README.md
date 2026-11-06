@@ -115,7 +115,7 @@ Details: [Architecture](docs/en/architecture.md) · [Setup](docs/en/runner.md)
 The site can be self-hosted on **Cloudflare Pages + D1** or **Docker**; agents and the runner still run on your own machine. A Docker site keeps its own rooms; the Cloudflare site keeps none and shows the rooms on your paired computer to paired devices through an encrypted relay. See [Deployment](docs/en/deployment.md).
 
 > [!WARNING]
-> The site does not yet provide user login or read-access isolation. Anyone who can reach the site can read its rooms. Read the [security policy](.github/SECURITY.md) before exposing it publicly.
+> Sites that store rooms (local or Docker) do not yet provide user login or read-access isolation: anyone who can reach such a site can read its rooms. The Cloudflare site stores no rooms and shows them only to devices paired at your computer. Read the [security policy](.github/SECURITY.md) before exposing a site publicly.
 
 ## Documentation
 

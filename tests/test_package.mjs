@@ -54,41 +54,53 @@ function installed_command(execute, cli, args) {
   return JSON.parse(result.stdout);
 }
 
-/** A Node executable running an exec file replaces Codex; only test acknowledgements are sent. */
+/**
+ * A Node script named app-server replaces Codex, run by the Codex bridge as `codex app-server`: it answers the
+ * permission check and one bridged turn, in which it runs the package's codiscuss entry as an approved task command
+ * would. Only test acknowledgements are sent.
+ */
 function write_cli_stub(home) {
-  writeFileSync(join(home, 'app-server'), `const readline = require('node:readline');
-    const configured = process.argv.find(value => value.startsWith('default_permissions='));
-    const name = JSON.parse(configured.slice(configured.indexOf('=') + 1));
-    readline.createInterface({ input: process.stdin }).on('line', line => {
-      const request = JSON.parse(line);
-      if (!request.id) return;
-      const result = request.method === 'initialize' ? { userAgent: 'Codex Desktop/0.163.0 (test)' }
-        : { config: { default_permissions: name, permissions: { [name]: {} } } };
-      process.stdout.write(JSON.stringify({ id: request.id, result }) + '\\n');
-    });`);
-  writeFileSync(join(home, 'exec'), `const fs = require('node:fs');
+  writeFileSync(join(home, 'app-server'), `const fs = require('node:fs');
+    const readline = require('node:readline');
     const { spawnSync } = require('node:child_process');
     const { setTimeout: delay } = require('node:timers/promises');
     const { join } = require('node:path');
-    (async () => {
-      const prompt = fs.readFileSync(0, 'utf8');
+    const configured = process.argv.find(value => value.startsWith('default_permissions='));
+    const name = JSON.parse(configured.slice(configured.indexOf('=') + 1));
+    const send = message => process.stdout.write(JSON.stringify(message) + '\\n');
+    const access_path = () => process.env.DISCUSS_ACCESS_FILE;
+    let session = '';
+    /** Read the task the prompt names, wait for the binding, then view and fail the execution through codiscuss. */
+    async function turn(prompt) {
       const task_path = prompt.match(/先读任务文件 (.*?)，按其中/)[1];
       const task = JSON.parse(fs.readFileSync(task_path, 'utf8'));
-      const session = 'package-test-' + task.room;
-      process.stdout.write(JSON.stringify({ type: 'thread.started', thread_id: session }) + '\\n');
       for (let attempt = 0; attempt < 250; attempt++) {
-        if (JSON.parse(fs.readFileSync((task.access_file || process.env.DISCUSS_ACCESS_FILE), 'utf8')).session_id === session) break;
+        if (JSON.parse(fs.readFileSync((task.access_file || access_path()), 'utf8')).session_id === session) break;
         await delay(20);
       }
-      // Run the package's codiscuss entry the way an approved task command would.
       const codiscuss = join(task.skills[0], '..', '..', '..', '..', 'runner', 'codiscuss.mjs');
       for (const [action, ...args] of [['view'], ['fail', '--reason', 'package-integration-complete']]) {
         const result = spawnSync(process.execPath, [codiscuss, '--site', task.site, 'execution', action,
-          task.room, String(task.execution_id), '--access-file', (task.access_file || process.env.DISCUSS_ACCESS_FILE), ...args], { encoding: 'utf8', windowsHide: true });
+          task.room, String(task.execution_id), '--access-file', (task.access_file || access_path()), ...args], { encoding: 'utf8', windowsHide: true });
         if (result.status !== 0) throw new Error(result.stderr);
       }
-      process.stdout.write(JSON.stringify({ type: 'turn.completed' }) + '\\n');
-    })().catch(error => { process.stderr.write(error.message); process.exitCode = 1; });`);
+      send({ method: 'turn/completed', params: { threadId: session, turn: { id: 'turn-1', status: 'completed' } } });
+    }
+    readline.createInterface({ input: process.stdin }).on('line', line => {
+      const request = JSON.parse(line);
+      if (!request.id) return;
+      if (request.method === 'initialize') return send({ id: request.id, result: { userAgent: 'Codex Desktop/0.163.0 (test)' } });
+      if (request.method === 'config/read') return send({ id: request.id, result: { config: { default_permissions: name, permissions: { [name]: {} } } } });
+      if (request.method === 'thread/start' || request.method === 'thread/resume') {
+        session = 'package-test-' + JSON.parse(fs.readFileSync(access_path(), 'utf8')).room;
+        return send({ id: request.id, result: { thread: { id: session } } });
+      }
+      if (request.method === 'turn/start') {
+        send({ id: request.id, result: { turn: { id: 'turn-1' } } });
+        send({ method: 'turn/started', params: { threadId: session, turn: { id: 'turn-1' } } });
+        turn(request.params.input[0].text).catch(error => { process.stderr.write(error.message); process.exit(1); });
+      }
+    });`);
 }
 
 /** Verify both entries against the installed website, package skills and package-external state. */
@@ -114,7 +126,7 @@ async function verify_installed_launches(package_path, execute, env, site) {
   assert.equal(claimed.data.requests[0].purpose, 'discuss_host');
   installed_command(execute, cli, ['--site', site, 'execution', 'fail', task.room, String(task.execution_id), '--access-file', task.access_file, '--reason', 'conversation-integration-complete']);
   const web_token = randomUUID();
-  // The stand-in runs ./app-server and ./exec from the preserved project directory.
+  // The stand-in runs ./app-server, which the Codex bridge starts, from the preserved project directory.
   const response = await fetch(`${site}/api/local/launch`, { method: 'POST',
     headers: { 'Content-Type': 'application/json', 'X-CoDiscuss-Local': '1', Origin: site },
     body: JSON.stringify({ cwd: home, project_access: 'write', token: web_token, room: { ...input.room, submission_id: randomUUID() } }) });

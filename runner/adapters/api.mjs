@@ -379,11 +379,81 @@ export async function api_delivery(profile, binding, task) {
 
 // The call is the runner's own, so it can be aborted and its tool steps are seen.
 const API_CALL = { stoppable: true, progress: true };
+// Tools a private chat may use: reading the room and the project; it answers in text, not through room writes.
+const CHAT_ROOM_TOOLS = ['read_room', 'read_messages', 'read_message'];
+
+/** One earlier private chat line and its reply as protocol messages, so the model keeps the conversation. */
+function chat_messages(profile, history) {
+  return history.flatMap(({ text, reply }) => profile.api_protocol === 'gemini'
+    ? [{ role: 'user', parts: [{ text }] }, { role: 'model', parts: [{ text: reply }] }]
+    : [{ role: 'user', content: text }, { role: 'assistant', content: reply }]);
+}
+
+/**
+ * A private chat turn for a model API member, which keeps no session of its own: the earlier lines are its context.
+ * It may read the room and the project with tools and answers in plain text; each tool step is logged as an entry
+ * the chat page shows, and interjections join before the next model request.
+ */
+async function api_chat(profile, binding, task) {
+  const key = read_api_key(task.api_context.home, profile);
+  const controller = new AbortController();
+  const child = new EventEmitter();
+  child.kill = () => { controller.abort(); return true; };
+  const context = { ...task.api_context, participant: task.participant, directory: task.directory, task_id: task.id,
+    signal: controller.signal, on_edits: task.on_edits, project: open_project(task.api_context, [task.api_context.home, task.directory]) };
+  const log_path = resolve(task.directory, `api-${task.id}.log`);
+  const log = entry => task.on_output?.(log_path, `${JSON.stringify({ type: 'codiscuss.entry', entry })}\n`);
+  const interjections = [];
+  let running = true;
+  task.on_process?.(child);
+  setImmediate(async () => {
+    try {
+      const tools = participant_tools(context).filter(item => CHAT_ROOM_TOOLS.includes(item.name) || is_file_tool(item.name));
+      const system = [`你是协作房间的成员 ${task.participant}。房主正在私聊窗口直接和你对话，其他成员看不到。直接用文字回答；需要时可以用工具读取房间消息${context.project ? '或项目文件' : ''}。`,
+        expert_prompt(profile)].filter(Boolean).join('\n\n');
+      const state = { system, tools, history: [...chat_messages(profile, task.chat_history || []), ...api_history(profile, task.prompt)] };
+      const turns = max_requests(context);
+      for (let index = 0; !turns || index < turns; index++) {
+        for (const text of interjections.splice(0)) add_user_text(profile, state.history, `用户插话：${text}`);
+        task.on_activity?.('thinking');
+        const calls = await generate_with_retry(profile, key, state, controller.signal);
+        const remark = last_reply_text(state.history, Infinity);
+        if (!calls.length) {
+          if (!remark) throw new Error('模型没有给出文字回复');
+          task.on_note?.(remark);
+          return task.on_exit?.();
+        }
+        if (remark) log({ kind: 'message', body: remark });
+        const results = [];
+        for (const call of calls) {
+          controller.signal.throwIfAborted();
+          // A chat only reads, so a tool that fails (the site unreachable for a moment) goes back to the model as its
+          // result instead of ending the turn; a stop still ends it.
+          const outcome = await execute_tool(context, call, tools).catch(error => {
+            if (controller.signal.aborted) throw error;
+            return { result: { error: String(error.message || error).replaceAll(key, '[已隐藏]') } };
+          });
+          const body = typeof outcome.result === 'string' ? outcome.result : JSON.stringify(outcome.result);
+          log({ id: `call-${call.id}`, kind: WRITE_TOOLS.includes(call.name) ? 'edit' : 'tool', title: `${call.name} ${typeof call.arguments === 'string' ? call.arguments : JSON.stringify(call.arguments || {})}`,
+            state: outcome.result?.error ? 'failed' : 'done', body });
+          results.push({ ...call, result: outcome.result });
+        }
+        api_tool_results(profile, state.history, results);
+      }
+      throw new Error(`私聊超过 ${turns} 次模型请求，已停止`);
+    } catch (error) {
+      task.on_failure?.(controller.signal.aborted ? '已停止' : error.message.replaceAll(key, '[已隐藏]'));
+    } finally { running = false; child.emit('close', 0); }
+  });
+  const steer = text => { if (!running) return false; interjections.push(text); return true; };
+  return { status: 'accepted', session_id: binding.session_id || '', capabilities: API_CALL, steer };
+}
 
 /** The model API's behaviour; its static facts are in profiles.mjs. */
 export const api = {
   id: 'api',
   deliver: api_delivery,
+  chat: api_chat,
   session: null,
   models: null,
 };

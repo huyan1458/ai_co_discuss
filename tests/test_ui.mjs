@@ -72,7 +72,7 @@ function mention_fixture() {
   const free = ref(true);
   const free_members = ref([{ name: "Codex" }, { name: "Claude-review" }]);
   const editor = { value: "", selectionStart: 0, selectionEnd: 0, focus() {}, setSelectionRange(start, end) { this.selectionStart = start; this.selectionEnd = end; } };
-  const context = vm.createContext({ computed, ref, watch, nextTick, text, room, free, free_members,
+  const context = vm.createContext({ computed, ref, watch, nextTick, text, room, free, free_members, ENTER_SENDS: true,
     view: ref({ tab: "messages" }), prompt: ref({ textareaRef: editor }), bridge: { display_name: name => name } });
   const start = discussion_source.indexOf("const mention_context =");
   const end = discussion_source.indexOf("/** End a structured excerpt", start);

@@ -48,7 +48,7 @@
 | `frontend/` | Vue、Markdown、备份页源码 | 运行 `npm run build`，生成 `web/` 资源与 `dist/pages/` |
 | `web/` | 直接运行的静态网页与构建产物 | 不手改产物（如 `web/modern.js`） |
 | `runner/` | `codiscuss` CLI 与本机接入程序（房间编排 `free_runner.mjs`、常驻服务、启动配置、智能调度 `scheduler.mjs`） | `Ref_技术细节.md`“接入程序”、`tests/test_runner.mjs`；影响使用时同步 `docs/runner.md` |
-| `runner/adapters/` | **适配层**：`profiles.mjs` 各软件的静态事实（显示名、配置字段、档位、能力；不依赖 Node，网页也引用），每家软件一个行为模块（投递、停止能力、会话截断与分叉、模型读取），`index.mjs` 是对外唯一入口 | 新接一家软件只在这里新增 profile 与行为模块；`Ref_技术细节.md`“适配能力”；`tests/test_runner.mjs`、`tests/test_session_cut.mjs` |
+| `runner/adapters/` | **适配层**：`profiles.mjs` 各软件的静态事实（显示名、配置字段、档位、能力；不依赖 Node，网页也引用），每家软件一个行为模块（投递、停止能力、会话截断与分叉、模型读取），`index.mjs` 是对外唯一入口 | 新接一家软件只在这里新增 profile 与行为模块；`.dev/docs/Ref_外部软件通信.md` 对应小节（见 §3）；`Ref_技术细节.md`“适配能力”；`tests/test_runner.mjs`、`tests/test_session_cut.mjs` |
 | `.agents/skills/` | 分发技能 discuss-host / discuss-participant / discuss-report / workflow-creator；`codiscuss-setup` 仅在源码仓库使用，不进 npm 包、不由安装器复制 | 只有 `.gitignore` 白名单内的技能入库，新增分发技能同步白名单 |
 | `tests/`、`scripts/`、`deploy/` | 测试、构建脚本、部署配置 | — |
 | `docs/` | 对外精简文档 | 见 §6 |
@@ -63,8 +63,9 @@
 | 房间行为（新场景、固定做法、主持人或成员如何响应） | `.dev/docs/Insight_标准工作流设计思路.md` |
 | UI | `.dev/docs/Design_UI设计说明.md` |
 | 智能调度的题干、选项、上下文、阈值 | `.dev/docs/Insight_决策模型使用经验.md`、`.dev/docs/Ref_智能调度场景清单.md`；改后递增提示版本并跑回归评测 |
-| runner 唤醒、投递、会话接管、权限档位 | `Ref_技术细节.md`“接入程序”“独立 CLI 接入”；取舍依据见 `Res_会话接入.md`、`Res_权限档位.md` |
-| 接入一家新软件，或改动某家软件的投递、停止、会话、模型读取 | §4 红线 9；`.dev/docs/Design_适配能力.md`；`Ref_技术细节.md`“适配能力”；只改 `runner/adapters/` |
+| runner 唤醒、投递、会话接管、权限档位 | `.dev/docs/Ref_外部软件通信.md`；`Ref_技术细节.md`“接入程序”；取舍依据见 `Res_会话接入.md`、`Res_权限档位.md`（快照） |
+| 接入一家新软件，或改动某家软件的投递、停止、会话、模型读取 | §4 红线 9；`.dev/docs/Ref_外部软件通信.md`；`.dev/docs/Design_适配能力.md`；`Ref_技术细节.md`“适配能力”；只改 `runner/adapters/` |
+| **与外部 AI 软件或模型 API 的通信问题**（投递不到、读不到进度或回复、停不下、插话或私聊失效、会话被占用或分叉、软件升级后行为变化） | **先查** `.dev/docs/Ref_外部软件通信.md`：各软件按接入方式记录 runner 怎样启动或连接、投递、读进度与回复、插话、停止、私聊、续接与分叉，每条标实测版本、日期、证据，并区分公开接口与未公开接口。我们的做法变了，或对某家软件有新认知（新版本行为、新坑、新证据），同回合更新该文档与其版本总表 |
 | 技能、runner 任务文字、软件预设、专属提示词 | §5“提示词分层”；对应 `SKILL.md` |
 | 附件 | `.dev/plans/跨平台附件适配/`，先与用户确认其中的待决事项 |
 | 构建、测试、贡献 | `.github/CONTRIBUTING.md` |

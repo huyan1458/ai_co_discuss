@@ -27,6 +27,8 @@ const MAX_DELIVERY_RETRIES = 3;
 const RETRY_DELAY_SECONDS = 60;
 const MAX_RETRY_REASON = 500;
 const LIVE = ['reserving', 'delivering', 'sidecar_pending', 'running', 'retry_wait'];
+// The longest private chat reply the site keeps.
+const CHAT_REPLY_LIMIT = 20000;
 const MAX_HASHED_BYTES = 5 * 1024 * 1024;
 const GIT_TIMEOUT_MS = 15_000;
 
@@ -179,6 +181,24 @@ export function free_task_files(config, member, execution, binding, { session = 
     profile, ...(workflow_field ? { workflow: { ...workflow_field, skill: host_workflow.skill } } : {}) };
 }
 
+// The fixed opening of a private chat turn: where the words come from and how to answer them; the owner's text follows.
+const CHAT_PREAMBLE = '房主在私聊窗口直接对你说（不在房间消息流里，其他成员看不到）。像在终端里对话一样直接用文字回答，不要用 codiscuss 提交到房间，除非房主明确要求；可以照常按你的权限读写项目文件。';
+
+/**
+ * Write the member-only credential file for one private chat turn and describe it as a task: the member's own session,
+ * profile and directories, with the owner's words as the prompt. No task file: the prompt is all the turn needs.
+ */
+export function chat_task_files(config, member, chat, binding) {
+  const id = `chat-${chat.id}`;
+  const draft_directory = config.draft_directory || `${config.directory}-drafts`;
+  mkdirSync(draft_directory, { recursive: true });
+  const access_path = join(config.directory, `${id}.access.json`);
+  const profile = effective_profile(config.participants[member.name], member.name, null);
+  atomic_json(access_path, { site: config.site, room: config.room, member: member.name, token: config.members[member.name].token,
+    session_id: binding.session_id || '' });
+  return { id, participant: member.name, directory: config.directory, draft_directory, extra_directories: member_extra_directories(config, profile),
+    skill_directories: [join(config.project, '.agents', 'skills')], access_path, prompt: `${CHAT_PREAMBLE}\n\n${chat.text}`, inbox: false, profile };
+}
 
 /** What a scheduler can know about a member without a role field: its software, project access and the messages it is on. */
 function member_description(name, profile, work) {
@@ -226,6 +246,8 @@ export class FreeRoomRunner {
     // Per live execution, how to pass an interjection to its running software; and interjections already handed over.
     this.steers = new Map();
     this.interjecting = new Map();
+    // Per member, the private chat turn running in its session.
+    this.chat_turns = new Map();
     this.members = new Map();
     // An empty set proves every tracked handle for this execution closed; a missing set proves nothing after restart.
     this.execution_processes = new Map();
@@ -332,6 +354,8 @@ export class FreeRoomRunner {
         && !pending_stops.has(member.name)
         && !member.pending.some(request => this.routing.has(request.id)) && !(member.held_until * 1000 > Date.now())) await this.start(member, row);
     }
+    // Room work starts first; a private chat line waits until its member is idle.
+    if (!inbox.archived) await this.run_chats(inbox.members);
   }
   /** Publish only changed local facts, using member revisions supplied by the owner's inbox. */
   async sync_review_capabilities(inbox) {
@@ -1067,6 +1091,74 @@ export class FreeRoomRunner {
       }
     }
   }
+  /**
+   * The owner's private chat lines (backend/private_chat.py), each run as a turn of its member's own session once the
+   * member is idle, the reply taken from the software's last remark. A line sent while a chat turn runs goes into it
+   * as an interjection; a running line the owner stopped ends its process; one the runner lost at a restart fails.
+   */
+  async run_chats(members) {
+    for (const member of members) {
+      const chats = member.chats || [];
+      const live = this.chat_turns.get(member.name);
+      if (live && !chats.some(chat => chat.id === live.id && chat.status === 'running')) {
+        if (live.child) this.request_stop(live.child);
+        continue;
+      }
+      for (const chat of chats) {
+        if (chat.status === 'running' && chat.id !== live?.id) await this.chat_report(chat.id, { action: 'fail', reason: '本机服务重启，这轮私聊已中断' });
+        else if (chat.status === 'pending' && live?.steer && !live.steered.has(chat.id)) {
+          live.steered.add(chat.id);
+          if (await live.steer(chat.text)) await this.chat_report(chat.id, { action: 'steered' });
+        }
+      }
+      const next = chats.find(chat => chat.status === 'pending' && !live?.steered.has(chat.id));
+      const row = this.row(member.name);
+      if (next && !live && !this.members.get(member.name)?.size && !(row && LIVE.includes(row.status))) await this.start_chat(member, next);
+    }
+  }
+  /** Start one chat line as its own turn; the turn reports its reply or failure when it ends, without holding the tick. */
+  async start_chat(member, chat) {
+    const profile = this.config.participants[member.name];
+    const binding = this.store.binding(member.name) || {};
+    const adapter = profile && adapter_of(profile.adapter);
+    if (!adapter || !capabilities_of(profile.adapter).chat || (!adapter.chat && adapter.into_window?.(profile, binding))) {
+      return this.chat_report(chat.id, { action: 'fail', reason: '这位成员的接入方式看不到它的输出，暂不支持私聊窗；可在它自己的窗口里对话' });
+    }
+    if (!await this.chat_report(chat.id, { action: 'start' })) return;
+    const turn = { id: chat.id, child: null, steer: null, steered: new Set() };
+    this.chat_turns.set(member.name, turn);
+    const notes = [];
+    let settle;
+    const ended = new Promise(resolve => { settle = resolve; });
+    try {
+      const task = chat_task_files(this.config, member, chat, binding);
+      // Software without its own session (the model API) takes the earlier lines as its context.
+      const history = (await api(this.config, `/members/${member.id}/chat`).catch(() => ({ chats: [] }))).chats
+        .filter(item => item.id !== chat.id && item.status === 'answered').map(item => ({ text: item.text, reply: item.reply }));
+      const result = await this.deliver(task.profile, binding, { ...task, room_title: this.room_title, chat: true, chat_history: history,
+        api_context: { site: this.config.site, room: this.config.room, token: this.config.members[member.name].token,
+          home: this.config.api_home, mode: 'free', role: member.role || 'member', cwd: task.profile.cwd || this.config.cwd,
+          project_access: task.profile.project_access, ...(Number.isInteger(this.config.api_max_requests) ? { max_requests: this.config.api_max_requests } : {}) },
+        on_binding: session => this.store.bind(member.name, session),
+        on_process: child => { turn.child = child; this.track(member.name, child, `chat-${chat.id}`); },
+        on_output: (path, chunk) => appendFileSync(path, chunk, { mode: 0o600 }),
+        on_activity: () => {}, on_note: text => notes.push(text), on_edits: () => {},
+        on_failure: error => settle({ error }), on_exit: () => settle({}), on_denials: () => {} });
+      if (result.session_id) this.store.bind(member.name, result.session_id);
+      turn.steer = result.steer || null;
+    } catch (error) { settle({ error: error.message }); }
+    ended.then(async ({ error }) => {
+      this.chat_turns.delete(member.name);
+      const reply = notes.at(-1);
+      await this.chat_report(chat.id, !error && reply ? { action: 'reply', text: reply.slice(0, CHAT_REPLY_LIMIT) }
+        : { action: 'fail', reason: String(error || '它没有给出文字回复').slice(0, 400) });
+    });
+  }
+  /** Tell the site how one chat line went; false when the site refused it (the owner already stopped it). */
+  async chat_report(chat_id, payload) {
+    try { await api(this.config, `/chats/${chat_id}`, payload); return true; }
+    catch (error) { this.log(`私聊 #${chat_id} ${payload.action} 未能上报：${error.message}`); return false; }
+  }
   /** Count live processes per member so one session never has two writers. */
   track(name, child, execution_id = this.row(name)?.execution_id) {
     this.children.add(child);
@@ -1081,6 +1173,9 @@ export class FreeRoomRunner {
   request_stop(child) { try { child.kill(); } catch { /* The stop report remains unconfirmed. */ } }
   /** Stop one member's processes without touching other members or desktop apps. */
   stop_member(name) { for (const child of this.members.get(name) || []) this.request_stop(child); }
-  /** Stop every process this runner created. */
-  stop_children() { for (const child of this.children) this.request_stop(child); }
+  /**
+   * Stop every process this runner created, except a handle whose stop only the owner asks for (`stop_on_shutdown:
+   * false`, e.g. a stop that changes the user's App): that turn runs on in the software and is not reported.
+   */
+  stop_children() { for (const child of this.children) if (child.stop_on_shutdown !== false) this.request_stop(child); }
 }

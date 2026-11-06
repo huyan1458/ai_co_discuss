@@ -9,6 +9,11 @@
  *     software can take an interjection without ending its turn) passes one in, resolving false once the turn is over;
  *   - `session`: `{path, exists, branch, settings}` for the software's own session store, or null;
  *   - `models`: `{list, effort?, defaults}` read from the installed software, or null when it is chosen inside the App;
+ *   - optional `chat(config, binding, task, spawn_process, user_home)` for a private chat turn whose software a usual
+ *     delivery cannot follow (an App, an open window, the model API): same result as `deliver`, and it reports through
+ *     the task's callbacks — `on_note(text)` for each remark (the last is the reply), `on_exit()` or `on_failure(reason)`
+ *     at the end, `on_process(handle)` with `kill()` when it can stop (`handle.stop_on_shutdown = false` when only the owner's stop may
+ *     run it, not the runner's shutdown), `on_output(path, line)` for its process log;
  *   - optional `receipt(config, id)` for deliveries confirmed later (`status: 'sidecar_pending'`),
  *     `into_window(profile, binding)` (this delivery goes into the member's own open window) and `cleanup(directory)`
  *     (remove what a deleted room left in the software).
@@ -66,6 +71,8 @@ export function cleanup_room(directory) {
 export async function deliver_task(config, binding, task, spawn_process = spawn, user_home = homedir()) {
   const adapter = adapter_of(config.adapter);
   if (!adapter) throw new Error('不支持的软件适配器');
+  // A private chat turn (`task.chat`) goes through the adapter's own `chat` when it has one, else as a usual delivery.
+  if (task.chat && adapter.chat) return adapter.chat(config, binding, task, spawn_process, user_home);
   return adapter.deliver(config, binding, task, spawn_process, user_home);
 }
 
@@ -92,14 +99,17 @@ const DETAIL_BODY_LIMIT = 4000;
  * (a command's result fills in its start), `append` extends its body. Returns null when the adapter keeps no such log.
  */
 export function execution_details(adapter_id, text) {
-  const detail = adapter_of(adapter_id)?.events?.detail;
-  if (!detail) return null;
+  const adapter = adapter_of(adapter_id);
+  if (!adapter) return null;
+  const detail = adapter.events?.detail || (() => []);
   const entries = new Map();
   for (const line of text.split('\n')) {
     let event;
     try { event = JSON.parse(line); } catch { continue; }
     // The runner marks where an interjection went into the turn; it reads the same for every software.
-    const parts = event.type === 'codiscuss.interjection' ? [{ kind: 'interjection', body: String(event.text || '') }] : detail(event);
+    // An adapter without a CLI stream logs ready entries (`codiscuss.entry`); the same reader shows them.
+    const parts = event.type === 'codiscuss.interjection' ? [{ kind: 'interjection', body: String(event.text || '') }]
+      : event.type === 'codiscuss.entry' ? [event.entry || {}] : detail(event);
     for (const { append, ...fields } of parts || []) {
       const id = fields.id ?? `entry-${entries.size}`;
       const entry = { ...entries.get(id), ...Object.fromEntries(Object.entries(fields).filter(([, value]) => value !== undefined)), id };

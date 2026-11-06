@@ -461,6 +461,26 @@ CREATE TABLE IF NOT EXISTS execution_interjections (
     UNIQUE(room_id,submission_id)
 );
 CREATE INDEX IF NOT EXISTS execution_interjections_execution ON execution_interjections(execution_id);
+-- The owner's private chat with one room member: each row is one thing the owner said and the member's reply, outside
+-- the room's messages, so other members never read it. It runs in the member's own session: while the member works on
+-- a room execution that takes interjections it goes in as one (`interjected`, execution_id); otherwise it waits
+-- (`pending`) until the member is idle and the runner runs it as its own turn (`running`), taking the reply from the
+-- software's own output (`answered`). The owner may stop it (`stopped`); the runner reports `failed` with a reason.
+CREATE TABLE IF NOT EXISTS private_chats (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    room_id TEXT NOT NULL REFERENCES rooms(id) ON DELETE CASCADE,
+    member_id INTEGER NOT NULL REFERENCES room_members(id) ON DELETE CASCADE,
+    submission_id TEXT NOT NULL,
+    text TEXT NOT NULL,
+    status TEXT NOT NULL DEFAULT 'pending' CHECK(status IN ('pending','running','answered','failed','stopped','interjected')),
+    reply TEXT NOT NULL DEFAULT '',
+    reason TEXT NOT NULL DEFAULT '',
+    execution_id INTEGER,
+    created_at INTEGER NOT NULL,
+    updated_at INTEGER NOT NULL,
+    UNIQUE(room_id,submission_id)
+);
+CREATE INDEX IF NOT EXISTS private_chats_member ON private_chats(member_id,id);
 -- What a rewind does to each runner member's session, as its adapter reported: cut by the runner, rebuilt each time
 -- (fresh), or kept as it is. A member without a report is kept; manual and online members are always kept.
 CREATE TABLE IF NOT EXISTS member_capabilities (
@@ -1126,6 +1146,19 @@ END;
 -- Non-progress execution reports must invalidate full views even without SSE. Renewals/notes stay lightweight.
 CREATE TRIGGER IF NOT EXISTS revision_execution_report AFTER UPDATE OF changes,result,session_id ON member_executions
 WHEN OLD.changes IS NOT NEW.changes OR OLD.result IS NOT NEW.result OR OLD.session_id IS NOT NEW.session_id
+BEGIN
+    UPDATE room_revisions SET revision=(SELECT MAX(revision)+1 FROM room_revisions) WHERE room_id=NEW.room_id;
+    INSERT INTO room_revisions (room_id,revision) SELECT NEW.room_id,(SELECT COALESCE(MAX(revision),0)+1 FROM room_revisions)
+        WHERE NOT EXISTS (SELECT 1 FROM room_revisions WHERE room_id=NEW.room_id);
+END;
+CREATE TRIGGER IF NOT EXISTS revision_chat_insert AFTER INSERT ON private_chats
+BEGIN
+    UPDATE room_revisions SET revision=(SELECT MAX(revision)+1 FROM room_revisions) WHERE room_id=NEW.room_id;
+    INSERT INTO room_revisions (room_id,revision) SELECT NEW.room_id,(SELECT COALESCE(MAX(revision),0)+1 FROM room_revisions)
+        WHERE NOT EXISTS (SELECT 1 FROM room_revisions WHERE room_id=NEW.room_id);
+END;
+CREATE TRIGGER IF NOT EXISTS revision_chat_update AFTER UPDATE OF status ON private_chats
+WHEN OLD.status IS NOT NEW.status
 BEGIN
     UPDATE room_revisions SET revision=(SELECT MAX(revision)+1 FROM room_revisions) WHERE room_id=NEW.room_id;
     INSERT INTO room_revisions (room_id,revision) SELECT NEW.room_id,(SELECT COALESCE(MAX(revision),0)+1 FROM room_revisions)

@@ -74,6 +74,19 @@ export class CodexAppClient {
     return data.thread.status.type;
   }
 
+  /** Read a chat's status and its latest turns (newest first), with the turns' items. */
+  async read_thread(thread_id, options = {}) {
+    const data = await this.call_tool('read_thread', thread_id, { threadId: thread_id, ...options });
+    if (!data?.thread?.status?.type || !Array.isArray(data.turns)) throw new Error('桌面尚未返回会话内容');
+    return data;
+  }
+
+  /** Archive or restore a chat; archiving also interrupts its running turn. */
+  async set_archived(thread_id, archived) {
+    const data = await this.call_tool('set_thread_archived', thread_id, { threadId: thread_id, archived });
+    if (data?.threadId !== thread_id || data.archived !== archived) throw new Error('桌面尚未确认会话归档状态');
+  }
+
   /** Send a message through the App itself, which loads a chat it has not opened yet. */
   async send_message(thread_id, prompt) {
     const data = await this.call_tool('send_message_to_thread', thread_id, { threadId: thread_id, prompt });

@@ -8,6 +8,17 @@ const directory = resolve(process.env.CODISCUSS_IPC_DIRECTORY || process.cwd());
 const agentapi = process.env.ANTIGRAVITY_AGENTAPI_EXE;
 if (!agentapi) throw new Error('此程序必须由 Antigravity App Sidecar 启动');
 
+/** Send only while the room still has this execution dispatched with a live lease. */
+async function check_execution(access, event_id) {
+  const response = await fetch(`${access.site}/api/rooms/${access.room}/executions/${event_id}`, {
+    method: 'GET', redirect: 'error', signal: AbortSignal.timeout(10000),
+    headers: { 'Content-Type': 'application/json', 'X-Discussion-Token': access.token },
+  });
+  const event = await response.json();
+  if (!response.ok || event.status !== 'dispatched') throw new Error('请求已撤销或状态不明，未调用软件');
+  if (event.lease_until <= Math.floor(Date.now() / 1000)) throw new Error('执行租约已到期，未调用软件');
+}
+
 /** Consume each request once; a crash after claim leaves an explicit uncertain result. */
 async function process_request(name) {
   const request = JSON.parse(readFileSync(join(directory, name), 'utf8'));
@@ -18,13 +29,8 @@ async function process_request(name) {
   writeFileSync(claim, String(process.pid), { flag: 'wx', mode: 0o600 });
   try {
     const access = JSON.parse(readFileSync(request.access_path, 'utf8'));
-    const response = await fetch(`${access.site}/api/rooms/${access.room}/executions/${request.event_id}`, {
-      method: 'GET', redirect: 'error', signal: AbortSignal.timeout(10000),
-      headers: { 'Content-Type': 'application/json', 'X-Discussion-Token': access.token },
-    });
-    const event = await response.json();
-    if (!response.ok || event.status !== 'dispatched') throw new Error('请求已撤销或状态不明，未调用软件');
-    if (event.lease_until <= Math.floor(Date.now() / 1000)) throw new Error('执行租约已到期，未调用软件');
+    // A private chat line is not a room execution; the runner checked it just before writing the request.
+    if (!request.chat) await check_execution(access, request.event_id);
     const args = request.session_id ? ['send-message', request.session_id, request.prompt] : ['new-conversation', request.prompt];
     const raw = execFileSync(agentapi, ['agentapi', ...args], { encoding: 'utf8', windowsHide: true, timeout: 30000 });
     const result = JSON.parse(raw);
@@ -44,6 +50,29 @@ async function scan_requests() {
   }
 }
 
-atomic_json(join(directory, 'ready.json'), { pid: process.pid, ready_at: Date.now(), project_id: process.env.ANTIGRAVITY_PROJECT_ID || '' });
-scan_requests();
-setInterval(scan_requests, 1000);
+// The App's local language server and its per-launch token, the two variables agentapi itself connects with; the runner
+// follows a private chat turn through them (antigravity_app.mjs). Left out when the App does not pass them.
+const language_server = process.env.ANTIGRAVITY_LS_ADDRESS && process.env.ANTIGRAVITY_CSRF_TOKEN
+  ? { address: process.env.ANTIGRAVITY_LS_ADDRESS, csrf_token: process.env.ANTIGRAVITY_CSRF_TOKEN } : null;
+atomic_json(join(directory, 'ready.json'), { pid: process.pid, ready_at: Date.now(), project_id: process.env.ANTIGRAVITY_PROJECT_ID || '',
+  ...(language_server ? { language_server } : {}) });
+
+/**
+ * Whether this Sidecar has been replaced and must stop: a newer one of this directory rewrote ready.json with its own
+ * pid (the App restarted), or the App's server that started this one has exited. Restarting the App does not end the
+ * old Sidecar, which would otherwise keep claiming requests with its old code.
+ */
+function superseded() {
+  try { if (JSON.parse(readFileSync(join(directory, 'ready.json'), 'utf8')).pid !== process.pid) return true; }
+  catch { /* Being rewritten or removed: the parent check still decides. */ }
+  try { process.kill(process.ppid, 0); return false; }
+  catch (error) { return error.code === 'ESRCH'; }
+}
+
+/** Check before every scan, so a replaced Sidecar claims nothing more. */
+function tick() {
+  if (superseded()) process.exit(0);
+  scan_requests();
+}
+tick();
+setInterval(tick, 1000);

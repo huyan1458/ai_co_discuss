@@ -11,6 +11,7 @@ import { fileURLToPath } from 'node:url';
 import { listen_local } from './local_port.mjs';
 import { API_PROVIDERS, api_base_url, api_check, api_generate, api_history, api_models, api_request, api_response, api_tool_results, read_api_key, save_api_key } from '../runner/discussion_api.mjs';
 import { participant_tools, system_prompt } from '../runner/adapters/api.mjs';
+import { deliver_task, execution_details } from '../runner/adapters/index.mjs';
 import { launch_discussion, validate_preset } from '../runner/discussion_launch.mjs';
 import { save_workflow } from '../runner/workflows.mjs';
 import { api, DiscussionStore, load_config } from '../runner/discussion_runner.mjs';
@@ -492,4 +493,33 @@ test('voice input joins ordered parts into one WAV and returns the recognized te
     const silent = async () => new Response('{}', { headers: { 'X-Api-Status-Code': '20000003' } });
     assert.deepEqual(await stt_part(home, { upload_id: randomUUID(), index: 0, data: Buffer.from([0, 0]).toString('base64'), final: true }, silent), { text: '' });
   } finally { rmSync(home, { recursive: true, force: true }); }
+});
+
+/** A plain text answer in any of the four provider protocols. */
+function text_reply(call, text) {
+  if (call.path.endsWith('/responses')) return { status: 'completed', output: [{ type: 'message', role: 'assistant', content: [{ type: 'output_text', text }] }] };
+  if (call.path.endsWith('/messages')) return { stop_reason: 'end_turn', content: [{ type: 'text', text }] };
+  if (call.path.includes(':generateContent')) return { candidates: [{ finishReason: 'STOP', content: { role: 'model', parts: [{ text }] } }] };
+  return { choices: [{ finish_reason: 'stop', message: { role: 'assistant', content: text } }] };
+}
+
+test('an API member answers a private chat in text with the earlier lines as its context, in every protocol', async t => {
+  const home = mkdtempSync(join(tmpdir(), 'codiscuss-api-chat-'));
+  t.after(() => rmSync(home, { recursive: true, force: true }));
+  const mock = await model_fixture(t, call => text_reply(call, '结论：可以。'));
+  for (const [name, profile] of Object.entries(profiles(home, mock.base_url))) {
+    const notes = []; const lines = [];
+    let ended;
+    const done = new Promise(resolve => { ended = resolve; });
+    const result = await deliver_task(profile, {}, { id: `chat-${name}`, participant: name, directory: home, prompt: '现在呢？', chat: true,
+      chat_history: [{ text: '上次说到哪了', reply: '说到第三集' }], api_context: { home },
+      on_note: text => notes.push(text), on_output: (path, line) => lines.push(line), on_exit: () => ended('exit'), on_failure: error => ended(error) });
+    assert.equal(await done, 'exit', name);
+    assert.deepEqual(notes, ['结论：可以。'], name);
+    assert.equal(typeof result.steer, 'function');
+    const sent = JSON.stringify(mock.calls.at(-1).body);
+    assert.ok(sent.includes('说到第三集') && sent.includes('现在呢？') && sent.includes('私聊'), `${name} carries the earlier lines`);
+    assert.ok(!sent.includes('submit_chat'), `${name} answers in text, without room writes`);
+  }
+  assert.equal(execution_details('api', JSON.stringify({ type: 'codiscuss.entry', entry: { id: 'x', kind: 'tool', title: 'read_room', state: 'done' } })).entries[0].title, 'read_room');
 });

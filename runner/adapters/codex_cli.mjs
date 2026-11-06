@@ -11,6 +11,7 @@ import { join, resolve } from 'node:path';
 import { createInterface } from 'node:readline';
 import { fileURLToPath } from 'node:url';
 import { cli_delivery } from './cli.mjs';
+import { daemon_chat, daemon_link } from './codex_daemon.mjs';
 import { CALL_TIMEOUT_MS, launch_directory, log_entries, marked, model_entry, json_line, newest_record, not_sent,
   project_directory, prompt_text, query_catalog } from './common.mjs';
 
@@ -315,10 +316,22 @@ function models(profile, options) {
   }, options);
 }
 
+/**
+ * A private chat turn. When the owner keeps the bound session open with `codex --remote unix://`, the shared app-server
+ * daemon holds it, so the turn runs there and shows in that window; otherwise it is a usual delivery, which reports an
+ * active writer when the session is open in an ordinary terminal. The daemon is never started or stopped here.
+ */
+async function chat(config, binding, task, spawn_process, user_home) {
+  const link = await daemon_link(config.executable, binding.session_id, spawn_process);
+  if (!link) return codex_cli.deliver(config, binding, task, spawn_process, user_home);
+  return daemon_chat(link, binding.session_id, task);
+}
+
 /** Codex CLI's behaviour; its static facts are in profiles.mjs. */
 export const codex_cli = {
   id: 'codex_cli', catalog_source: 'codex-app-server',
   deliver: (config, binding, task, spawn_process, user_home) => cli_delivery(codex_cli, config, binding, task, spawn_process, user_home),
+  chat,
   invocation, lifecycle, exit_error, events,
   on_stderr: remember_writer_conflict,
   session: { path: session_path, exists: session_exists, owns: (id, options) => session_exists(id, options) && !desktop_thread(id, options),
