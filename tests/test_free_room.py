@@ -1296,7 +1296,7 @@ class HostTests(HostRoomTests):
             self.assertEqual(free["chain_rounds"][0], {"chain_id": chain, "used": 1, "allowed": 1})
             url = f"{self.path}/chains/{chain}"
             self.assertEqual(self.request(url, {"action": "continue", "rounds": 1}, self.tokens["Codex"])[0], 403)
-            for bad in (0, 21, "1"):
+            for bad in (0, 101, "1"):
                 self.assertEqual(self.request(url, {"action": "continue", "rounds": bad}, self.owner)[0], 400, bad)
             status, view = self.request(url, {"action": "continue", "rounds": 1}, self.owner)
             self.assertEqual(status, 200, view)
@@ -1310,7 +1310,7 @@ class HostTests(HostRoomTests):
             free_room.CHAIN_ROUNDS = original
 
     def test_host_sequential_dispatch_relays_one_member_at_a_time_and_hands_back_once(self):
-        """Each step waits for the one before, hangs on its answer and costs a round; the last answer goes back to the host."""
+        """Each step waits for the one before and hangs on its answer; the whole pass costs one round and goes back to the host."""
         FreeRoomTests.say(self, "写一稿再审")
         execution = self.reserve_for("Claude")[1]["id"]
         post = lambda **extra: self.request(f"{self.path}/messages", {"author": "Claude", "text": "接力", "source": "cli",
@@ -1334,7 +1334,7 @@ class HostTests(HostRoomTests):
         self.assertEqual(answer()[0], 201)
         self.assertEqual(self.requests().count(("Claude", "handoff", "pending")), 1)
         chain = self.request(self.path)[1]["free"]["chain_rounds"][0]
-        self.assertEqual(chain["used"], 2, "each step is one round")
+        self.assertEqual(chain["used"], 1, "a whole pass is one round")
         self.assertEqual(self.request(self.path)[1]["speaking_order"]["kind"], "default")
 
     def test_retrying_a_failed_relay_step_resumes_the_relay(self):
@@ -1377,10 +1377,10 @@ class HostTests(HostRoomTests):
         self.assertEqual(self.request(self.path)[1]["speaking_order"]["kind"], "default")
 
     def test_loop_stops_at_the_round_limit_and_continuing_the_chain_resumes_it(self):
-        """The room's round limit bounds a loop: the step past it is held, and the owner's continue sends it on in the loop."""
+        """The room's round limit bounds a loop by passes: the next pass past it is held, and the owner's continue sends it on."""
         from backend import free_room
         original = free_room.CHAIN_ROUNDS
-        free_room.CHAIN_ROUNDS = 2
+        free_room.CHAIN_ROUNDS = 1
         try:
             FreeRoomTests.say(self, "上限")
             self.work("Claude", to=["Antigravity", "Codex"], sequential=True, loop=True)
@@ -1397,6 +1397,44 @@ class HostTests(HostRoomTests):
             self.assertEqual(self.requests()[-1], ("Codex", "ask", "pending"), "the resumed pass keeps relaying")
         finally:
             free_room.CHAIN_ROUNDS = original
+
+    def test_unlimited_rounds_never_hold_a_dispatch(self):
+        """A limit of 0 is unlimited: dispatches never wait, progress shows no cap; other values stay within 1–100."""
+        for bad in (-1, 101, "0"):
+            self.assertEqual(self.request(f"{self.path}/budget", {"max_rounds": bad}, self.owner)[0], 400, bad)
+        self.assertEqual(self.request(f"{self.path}/budget", {"max_rounds": 0}, self.owner)[0], 200)
+        FreeRoomTests.say(self, "不限")
+        for _ in range(4):
+            self.work("Claude", to=["Codex"])
+            self.work("Codex")
+        free = self.request(self.path)[1]["free"]
+        self.assertEqual((free["max_rounds"], free["halted_chains"], free["chain_rounds"][0]["allowed"]), (0, [], None))
+        self.assertEqual(free["chain_rounds"][0]["used"], 4)
+
+    def test_host_asks_for_rounds_and_the_owner_approves_them(self):
+        """`need_rounds` above what is left stops the chain before dispatching and asks; approving sends it; enough left dispatches."""
+        from backend.free_room import CHAIN_ROUNDS
+        shortfall = 20 - CHAIN_ROUNDS
+        FreeRoomTests.say(self, "连写五集")
+        execution = self.reserve_for("Claude")[1]["id"]
+        post = lambda **extra: self.request(f"{self.path}/messages", {"author": "Claude", "text": "开始", "source": "cli",
+            "submission_id": uuid.uuid4().hex, "execution_id": execution, **extra}, self.member)
+        self.assertEqual(post(to=["Codex"], need_rounds=20)[0], 400, "a reason is required")
+        self.assertEqual(post(need_rounds=20, rounds_reason="五集")[0], 400, "only with a dispatch")
+        self.assertEqual(post(to=["Codex"], need_rounds=101, rounds_reason="五集")[0], 400)
+        self.assertEqual(post(to=["Antigravity", "Codex"], sequential=True, need_rounds=20, rounds_reason="五集每集四轮")[0], 201)
+        free = self.request(self.path)[1]["free"]
+        halted = free["halted_chains"][0]
+        self.assertEqual((halted["reason"], halted["asked_rounds"], halted["asked_reason"]), ("budget", shortfall, "五集每集四轮"))
+        self.assertNotIn(("Antigravity", "ask", "pending"), self.requests())
+        status, view = self.request(f"{self.path}/chains/{halted['chain_id']}", {"action": "continue", "rounds": shortfall}, self.owner)
+        self.assertEqual((status, view["halted_chains"]), (200, []), view)
+        self.assertEqual(self.requests()[-1], ("Antigravity", "ask", "pending"), "approving sends the held relay")
+        self.work("Antigravity")
+        self.assertEqual(self.requests()[-1], ("Codex", "ask", "pending"))
+        self.work("Codex")
+        self.work("Claude", to=["Codex"], need_rounds=3, rounds_reason="还剩够用")
+        self.assertEqual(self.requests()[-1], ("Codex", "ask", "pending"), "enough rounds left dispatches at once")
 
     def test_host_continues_once_the_room_is_idle_unless_superseded(self):
         """`continue` wakes the host again once nothing else is open, as a round of its chain; only the host may ask for it."""

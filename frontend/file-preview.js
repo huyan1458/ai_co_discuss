@@ -10,6 +10,16 @@ import { reactive } from "vue";
  * `focus_composer` counts requests to focus it.
  */
 export const file_preview = reactive({ open: null, reveal_path: null, excerpts: [], focus_composer: 0 });
+let excerpt_serial = 0;
+
+/**
+ * Put one excerpt in the composer and focus it. A quote from a message carries `message_id` (its `path` is `#id`).
+ * @param {object} excerpt `{ path, name, start, end, text, comment, message_id? }` without an id.
+ */
+export function add_excerpt(excerpt) {
+  file_preview.excerpts.push({ ...excerpt, id: ++excerpt_serial });
+  file_preview.focus_composer++;
+}
 
 // For this page's lifetime, so a folder opened before shows at once: listings already read (by room, project and
 // path), and the folder each room's list last showed (`{ directory, path }`).
@@ -72,7 +82,8 @@ export function excerpts_markdown(excerpts) {
   return excerpts.map((excerpt, index) => {
     const quote = excerpt.text.split("\n").map(line => line.trim() ? `> ${line}` : ">").join("\n");
     const lines = excerpt_lines(excerpt);
-    return [`摘录 ${index + 1}：\`${excerpt.path}\`${lines ? ` ${lines}` : ""}`, quote, excerpt.comment ? `批注：${excerpt.comment}` : ""]
+    const source = excerpt.message_id ? `${excerpt.name} 的消息 #${excerpt.message_id}` : `\`${excerpt.path}\``;
+    return [`摘录 ${index + 1}：${source}${lines ? ` ${lines}` : ""}`, quote, excerpt.comment ? `批注：${excerpt.comment}` : ""]
       .filter(Boolean).join("\n\n");
   }).join("\n\n");
 }

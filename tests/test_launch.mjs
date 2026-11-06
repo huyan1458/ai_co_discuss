@@ -465,7 +465,7 @@ test('new-room preferences persist separately from software defaults through loc
   assert.deepEqual(launch_settings(f.home), { participants: { Codex: f.input.participants.Codex }, create_preferences: updated });
   const before = readFileSync(join(f.home, 'launch-settings.json'), 'utf8');
   for (const invalid of [{ title: 'one room' }, { cwd: f.directory }, { participants: {} }, { host: 'Codex' },
-    { session_id: 'session' }, { goal: 'room objective' }, { chain_rounds: 0 }, { max_minutes: 1441 },
+    { session_id: 'session' }, { goal: 'room objective' }, { chain_rounds: 101 }, { max_minutes: 1441 },
     { scheduler: { api_key: 'must-not-persist' } }, { scheduler: { api_key_ref: 'key-ref' } }]) {
     assert.throws(() => save_launch_settings(f.home, { create_preferences: invalid }), /建房偏好字段无效/);
     assert.equal(readFileSync(join(f.home, 'launch-settings.json'), 'utf8'), before);

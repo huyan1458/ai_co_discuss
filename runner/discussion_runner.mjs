@@ -8,7 +8,7 @@ import { fileURLToPath, pathToFileURL } from 'node:url';
 import { parseArgs } from 'node:util';
 import { setTimeout as sleep } from 'node:timers/promises';
 import { adapter_of, capabilities_of, validate_participant } from './adapters/index.mjs';
-import { adapter_profile, same_session_family } from './adapters/profiles.mjs';
+import { adapter_profile, MAX_API_MAX_REQUESTS, same_session_family } from './adapters/profiles.mjs';
 import { read_api_key } from './discussion_api.mjs';
 import { access_levels, PROJECT_ACCESS, READ_RULE } from './expert_prompts.mjs';
 import { validate_scheduler } from './scheduler.mjs';
@@ -78,6 +78,9 @@ export function validate_config(input, base_directory) {
   }
   // A bound workflow only names a folder and which member plays which card; its content is read at each execution.
   if (config.workflow) config.workflow = bind_room_workflow({}, config.workflow).workflow;
+  // How many model requests an API member's execution may make; absent means the adapter's default.
+  if (config.api_max_requests !== undefined && !(Number.isInteger(config.api_max_requests)
+    && config.api_max_requests >= 0 && config.api_max_requests <= MAX_API_MAX_REQUESTS)) throw new Error(`api_max_requests 须为 0–${MAX_API_MAX_REQUESTS} 的整数，0 表示不限`);
   // Smart scheduling is optional; without it every decision stays with the host.
   if (config.scheduler) config.scheduler = validate_scheduler(config.api_home, config.scheduler);
   return { ...config, mode: 'free', site: url.origin, project: resolve(config.project), directory: resolve(config.data_directory || join(base_directory, `discussion-${config.room}`)) };

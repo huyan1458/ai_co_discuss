@@ -144,7 +144,7 @@ export function use_read_aloud({ bridge, container, prepare = async () => {}, me
   // being read; off until the user turns it on, and the page turns it off on any manual scroll.
   const state = reactive({ message_id: 0, loading: false, paused: false, broadcasting: false, reading: false, following: false });
   let run = 0, element = null, ending = null, switching = false, layer = null, current = null, silent_url = "";
-  let queue = [], draining = false, broadcast_section = "";
+  let queue = [], draining = false, broadcast_section = "", document_plan = null;
   // Synthesized paragraphs already heard in this page, so replaying is instant even over the relay.
   const memory = new Map();
   const author = (id) => message_of(id)?.author || "";
@@ -587,11 +587,25 @@ export function use_read_aloud({ bridge, container, prepare = async () => {}, me
       const base = skip_readable(flat.text, skip);
       const from = selection ? selection_index(flat, selection) : base;
       const plan = { id: DOCUMENT_ID, heading, chunks: chunks_from(flat, base, from, ""), speaker: await voice_for(""), pending: [] };
+      document_plan = plan;
       if (token === run) { show_on_lock_screen(plan); await read_plan(plan, token, crypto.randomUUID(), () => {}); }
     } catch (error) {
       if (token === run) bridge.notify("error", `朗读失败：${error.message}`);
     }
     if (token === run) stop();
+  }
+
+  /**
+   * Point the document being read at the same text rendered again (a file preview folded and shown again), so the
+   * highlight and tap-to-pause follow it; the playback itself never depended on the page.
+   * @param {HTMLElement} root The document rendered anew.
+   */
+  function rebind_document(root) {
+    if (state.message_id !== DOCUMENT_ID || !document_plan) return;
+    const { points } = collect_text(root);
+    for (const chunk of document_plan.chunks) for (const sentence of chunk.sentences) sentence.ranges = text_ranges(points, sentence.start, sentence.end);
+    container()?.addEventListener("click", tap);
+    redraw();
   }
 
   // Re-draw on resize: the boxes are fixed to where the text was laid out.
@@ -605,7 +619,7 @@ export function use_read_aloud({ bridge, container, prepare = async () => {}, me
     window.removeEventListener("resize", redraw);
   }
 
-  const api = { state, start, read_document, stop, dispose, drain, follow, toggle_pause, body_of, unlock, set_broadcast, announce };
+  const api = { state, start, read_document, rebind_document, stop, dispose, drain, follow, toggle_pause, body_of, unlock, set_broadcast, announce };
   readers.add(api);
   return api;
 }

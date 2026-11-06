@@ -1,7 +1,7 @@
 <script setup>
 import { computed, inject, nextTick, onBeforeUnmount, onMounted, ref, watch } from "vue";
 import { use_read_aloud } from "./read-aloud.js";
-import { crumbs_of, excerpt_lines, file_preview, file_size, file_type, modified_time } from "./file-preview.js";
+import { add_excerpt as put_excerpt, crumbs_of, excerpt_lines, file_preview, file_size, file_type, modified_time } from "./file-preview.js";
 
 // The file preview window: several files open as tabs; it folds into a floating button that keeps every tab, its mode
 // and scroll position, so the user can go to the messages or another room and come back. Mounted once for the workspace,
@@ -49,7 +49,7 @@ const speech_ready = ref(false);
 const offer = ref(null);
 const commenting = ref(null);
 const comment = ref("");
-let offer_timer = 0, pointer_down = false, excerpt_serial = 0;
+let offer_timer = 0, pointer_down = false;
 const speech_settings = () => bridge.local_request("tts-settings", {});
 const reader = use_read_aloud({ bridge, container: () => markdown_scroll.value, hosts: ".project-markdown-preview",
   voice_for: async () => { try { return (await speech_settings()).file_voice || ""; } catch { return ""; } },
@@ -395,13 +395,12 @@ function cancel_comment() { commenting.value = null; }
 /** Put the selection (and comment) in the composer of the file's room as an excerpt, fold the window and go to the messages. */
 async function add_excerpt() {
   const { text, start, end } = commenting.value;
-  const excerpt = { id: ++excerpt_serial, path: active_path.value, name: preview_name.value, start, end, text, comment: comment.value.trim() };
+  const excerpt = { path: active_path.value, name: preview_name.value, start, end, text, comment: comment.value.trim() };
   commenting.value = null;
   document.getSelection()?.removeAllRanges();
   await to_tab_room();
-  file_preview.excerpts.push(excerpt);
   act("tab", "discussion");
-  fold(() => { file_preview.focus_composer++; });
+  fold(() => put_excerpt(excerpt));
 }
 
 function comment_keydown(event) {
@@ -418,8 +417,12 @@ function stop_following(event) {
   reader.state.following = false;
 }
 
-// Folding or closing the window, switching tabs or to source, or the text changing ends the reading and any quoting.
-watch([open, active_id, source, rendered], () => { offer.value = null; commenting.value = null; if (reader.state.message_id) reader.stop(); });
+// Folding or closing the window, switching tabs or to source, or the text changing ends any quoting; all but folding
+// also end the reading (closing every file clears the active tab), which goes on while folded.
+watch([open, active_id, source, rendered], () => { offer.value = null; commenting.value = null; });
+watch([active_id, source, rendered], () => { if (reader.state.message_id) reader.stop(); });
+// Unfolded, the text is laid out anew; the reading's highlight moves onto it.
+watch(markdown_body, (root) => { if (root) reader.rebind_document(root); });
 onMounted(() => {
   file_preview.open = open_file;
   place_float();

@@ -93,7 +93,9 @@ const state = { rooms: [], folders: [], room: null, page: 1, pages: 1, query: ""
   named_followup: false, create_discussion: false, create_goal: null,
   archive_view: false, directory_sort: "manual", management: null, dragged_room: null, folder_moves: new Map(), folder_version: 0,
   reply_to: null, tab: "discussion", refresh_version: 0, context_dirty: false, topic_dirty: false,
-  snapshot_id: 0, pending_submission: null, pending_room: null, toast_timer: null, editing_queued: null };
+  snapshot_id: 0, pending_submission: null, pending_room: null, toast_timer: null, editing_queued: null,
+  // When live room data stopped (page hidden, connection lost); null while it is current. Silence is judged only up to here.
+  observed_until: null };
 const live_updates = { source: null, connected: false, enabled: false, timer: null, poll_timer: null,
   running: false, dirty: false, full: false, revisions: "", refreshed_at: 0 };
 state.messages = [];
@@ -137,6 +139,9 @@ state.admin = { loaded: false, local: false, registered: false, setup_available:
 state.device = { id: "", needs: "", pairing_code: "", pairing_fp: "", prompt: null };
 state.launch = { available: false, remote: false, relay: null, connect_command: "", profiles: {}, projects: [], presets: [], builtin_presets: [], hidden_builtins: [], workflows: [], description_templates: {}, workspace: {}, scheduler: {}, create_preferences: {}, error: "", recoveries: [] };
 state.create_host_workflows = false;
+// Mirrors DEFAULT_API_MAX_REQUESTS in runner/adapters/profiles.mjs; this classic script cannot import it.
+const DEFAULT_API_MAX_REQUESTS = 300;
+state.create_api_max_requests = DEFAULT_API_MAX_REQUESTS;
 let create_preferences_pending = {}, create_preferences_saving = null, create_preferences_version = 0;
 const PLATFORM_CLIENTS = { Codex: [{ value: "codex_cli", label: "Codex CLI" }, { value: "codex", label: "Codex App" }],
   Claude: [{ value: "claude", label: "Claude Code CLI" }],
@@ -407,7 +412,7 @@ function set_connection(connected) {
   state.connected = connected;
   state.reconnecting = false;
   if (connected) { clearTimeout(reconnect_timer); reconnect_timer = null; reconnect_attempt = 0; }
-  else schedule_reconnect();
+  else { state.observed_until ??= Date.now(); schedule_reconnect(); }
   element("connection-dot").className = `status-dot ${connected ? "connected" : "failed"}`;
   element("connection-status").textContent = connected ? "讨论网站已连接" : "网站连接中断，可手动刷新";
   publish_view();
@@ -819,6 +824,7 @@ function render_room() {
   }
   render_topic();
   render_host_brief();
+  drop_gone_queued_edit();
 }
 
 /** Rounds as labelled in the UI: counted by the round budget when the room has one, otherwise by the roster. */
@@ -1171,6 +1177,7 @@ function apply_create_preferences() {
     max_continues: preferences.goal_max_continues ?? 0, max_minutes: preferences.goal_max_minutes ?? 0 } : null;
   state.create_chain_rounds = preferences.chain_rounds ?? DEFAULT_CHAIN_ROUNDS;
   state.create_host_workflows = preferences.host_workflows ?? false;
+  state.create_api_max_requests = preferences.api_max_requests ?? DEFAULT_API_MAX_REQUESTS;
   for (const field of ["max_rounds", "max_minutes"]) {
     const control = element(`new-room-limit-${field}`);
     if (control && preferences[field] !== undefined) control.value = String(preferences[field]);
@@ -1602,8 +1609,15 @@ async function finish_queued(result, room_id, drafts) {
 /** Act on the room's queued owner messages; the site posts what may go and returns the queue. */
 async function queue_request(payload) {
   const room_id = state.room.id;
-  const queue = await request_json(`/api/rooms/${room_id}/queue`, payload);
+  let queue;
+  try { queue = await request_json(`/api/rooms/${room_id}/queue`, payload); }
+  catch (error) {
+    // A refused action usually means the queue moved on (a message went out meanwhile); show what is queued now.
+    if (state.room?.id === room_id) await refresh_room().catch(() => {});
+    throw error;
+  }
   if (state.room?.id === room_id && state.room.free) state.room = { ...state.room, free: { ...state.room.free, queued_messages: queue } };
+  drop_gone_queued_edit();
   publish_view();
   if (state.room?.id === room_id) await refresh_room();
 }
@@ -1613,7 +1627,6 @@ function edit_queued(item) {
   state.editing_queued = { id: item.id, draft: element("message-input").value };
   element("message-input").value = item.text;
   element("message-input").dispatchEvent(new Event("input", { bubbles: true }));
-  element("message-input").focus();
 }
 
 /** Leave queued-message editing and give back the draft that was in the composer. */
@@ -1622,6 +1635,23 @@ function cancel_queued_edit() {
   element("message-input").value = state.editing_queued.draft;
   element("message-input").dispatchEvent(new Event("input", { bubbles: true }));
   state.editing_queued = null;
+}
+
+/** Deleting the message being edited also leaves editing, giving back the earlier draft. */
+async function delete_queued(id) {
+  if (state.editing_queued?.id === id) cancel_queued_edit();
+  await queue_request({ action: "delete", id });
+}
+
+/**
+ * The message being edited left the queue (sent or deleted elsewhere): stop editing so sending works again,
+ * keeping the edited text in the composer as an ordinary draft.
+ */
+function drop_gone_queued_edit() {
+  const queue = state.room?.free?.queued_messages;
+  if (!state.editing_queued || !queue || queue.items.some(item => item.id === state.editing_queued.id)) return;
+  state.editing_queued = null;
+  notify("info", "正在编辑的排队消息已发出或已删除，修改内容留在输入框");
 }
 
 /** Save the composer text into the queued message being edited. */
@@ -2923,7 +2953,7 @@ async function load_room_models() {
     const result = await local_launch_request("room-models", { room_id: room.id, quick: true });
     if (live() && result.room_id === room.id) Object.assign(current, { participants: result.participants, registered: result.registered,
       scheduler: result.scheduler || null, project_directory: result.project_directory || "", workflow: result.workflow || null,
-      host_workflows: Boolean(result.host_workflows) });
+      host_workflows: Boolean(result.host_workflows), api_max_requests: result.api_max_requests });
   } catch (error) {
     // Unavailable or older bridges leave the model unknown; the failure is kept so the page can say so, and the next refresh retries.
     Object.assign(current, { participants: null, error: error.message || "读取失败" });
@@ -3155,7 +3185,24 @@ function launch_options() {
 function creation_launch_options() {
   const { enabled, provider, model, api_key_ref, mode } = state.launch.scheduler;
   return { ...launch_options(), ...(enabled && provider && model && api_key_ref ? { scheduler: { provider, model, api_key_ref, ...(mode ? { mode } : {}) } } : {}),
-    ...(state.create_host_workflows ? { host_workflows: true } : {}) };
+    ...(state.create_host_workflows ? { host_workflows: true } : {}),
+    ...(state.create_api_max_requests !== DEFAULT_API_MAX_REQUESTS ? { api_max_requests: state.create_api_max_requests } : {}) };
+}
+
+/** How many model requests one execution of the new room's API members may make (0 = no limit). */
+function write_create_api_max_requests(value) {
+  state.create_api_max_requests = value;
+  write_create_preferences({ api_max_requests: value });
+  publish_view();
+}
+
+/** Change how many model requests one execution of this room's API members may make; applies from the next one. */
+async function set_room_api_max_requests(value) {
+  const room_id = state.room.id;
+  const token = localStorage.getItem(`discuss-access:${room_id}`) || "";
+  try { await local_launch_request("room-settings", { room_id, token, api_max_requests: value }); }
+  catch (error) { notify("error", error.message); throw error; }
+  await reload_room_models();
 }
 
 /** Whether the new room's host may save and enable workflows by itself, inviting their cards. */
@@ -3231,7 +3278,7 @@ function write_named_followup(value) {
 }
 
 // The server's default round limit; a new room sends its own only when the form changed it.
-const DEFAULT_CHAIN_ROUNDS = 3;
+const DEFAULT_CHAIN_ROUNDS = 10;
 state.create_chain_rounds = DEFAULT_CHAIN_ROUNDS;
 
 /** Change the new room's round limit; it is saved right after the room is created. */
@@ -4345,7 +4392,10 @@ async function flush_live_refresh() {
   const full = live_updates.full;
   live_updates.full = false;
   live_updates.running = true;
-  try { await refresh_room({ room: full }); } catch (error) {
+  try {
+    await refresh_room({ room: full });
+    if (full && state.observed_until !== null) { state.observed_until = null; publish_view(); }
+  } catch (error) {
     console.warn("refresh failed", error);
     if (state.reconnecting) show_toast(`仍未连接：${error.message}`, true);
     set_connection(false);
@@ -4458,6 +4508,7 @@ async function reconnect_live_updates({ automatic = false } = {}) {
 
 /** Release streams and scheduled reads while hidden or leaving the page. */
 function stop_live_updates() {
+  state.observed_until ??= Date.now();
   live_updates.enabled = false;
   live_updates.source?.close();
   live_updates.source = null;
@@ -4543,7 +4594,7 @@ function view_snapshot() {
     room_site: room_site(), rooms: ordered_rooms(), folders: state.folders, folder_groups: ordered_folders(), room: state.room, archive_view: state.archive_view, directory_sort: state.directory_sort, messages: state.messages, total: state.message_total,
     archive_pending: [...state.archive_changes.keys()], import_progress: structuredClone(state.import_progress),
     directory_pending: [...state.directory_pending.keys()], folder_pending: [...state.folder_moves.keys()], creating_room: state.creating_room,
-    connected: state.connected, reconnecting: state.reconnecting, backup_pending: Boolean(state.backup_pending), page: state.page, pages: state.pages, query: state.query,
+    connected: state.connected, reconnecting: state.reconnecting, observed_until: state.observed_until, backup_pending: Boolean(state.backup_pending), page: state.page, pages: state.pages, query: state.query,
     attachment_drafts: state.attachment_drafts.map(item => ({ id: item.id, file_name: item.file.name, size: item.file.size, preview_url: item.preview_url,
       uploading: state.sending_message && !item.uploaded })),
     upload_status: state.upload_status, sending_message: state.sending_message, sending_preview: state.sending_preview,
@@ -4552,7 +4603,7 @@ function view_snapshot() {
     device: { id: state.device.id, needs: state.device.needs, pairing_code: state.device.pairing_code,
       prompt: state.device.prompt ? { title: state.device.prompt.title, description: state.device.prompt.description, confirm_label: state.device.prompt.confirm_label } : null },
     tab: state.tab, snapshot_id: state.snapshot_id, context_dirty: state.context_dirty,
-    theme: document.documentElement.dataset.theme, fields, experts, launch: structuredClone(state.launch), named_followup: state.named_followup, create_discussion: state.create_discussion, create_goal: state.create_goal, create_chain_rounds: state.create_chain_rounds, create_host_workflows: state.create_host_workflows };
+    theme: document.documentElement.dataset.theme, fields, experts, launch: structuredClone(state.launch), named_followup: state.named_followup, create_discussion: state.create_discussion, create_goal: state.create_goal, create_chain_rounds: state.create_chain_rounds, create_host_workflows: state.create_host_workflows, create_api_max_requests: state.create_api_max_requests };
 }
 
 /** Update a shared draft using the same input events as the original controls. */
@@ -4770,7 +4821,7 @@ async function execute_view_action(name, value) {
     load_room_configuration, save_room_configuration, interrupt_member, retry_delivery, retract_message, retract_latest, stop_room, rewind_and_send, fork_room, change_member, reorder_speakers, invite_member,
     enable_room_workflow, move_workflow_members, sync_room_workflow, set_room_host_workflows,
     adopt_recommendation, rate_decision,
-    queue_send: id => queue_request({ action: "send", id }), queue_delete: id => queue_request({ action: "delete", id }),
+    queue_send: id => queue_request({ action: "send", id }), queue_delete: delete_queued,
     queue_reorder: ids => queue_request({ action: "reorder", ids }), queue_resume: () => queue_request({ action: "resume" }),
     queue_toggle: enabled => queue_request({ action: "queueing", enabled }), queue_edit: edit_queued, queue_cancel_edit: cancel_queued_edit,
     busy: () => { throw new Error("上一个操作仍在处理中，请稍候；长时间无响应请刷新页面"); },
@@ -4796,7 +4847,7 @@ window.discuss_view = { snapshot: view_snapshot, write_field: write_view_field, 
   start_drag: start_directory_drag, reconnect: reconnect_live_updates, stop_label, local_request: local_launch_request,
   attachment_markup, attachment_size, attachment_file_icon, drop_attachments, paste_attachments,
   write_expert: write_view_expert, add_instance: add_view_instance, add_preset: add_preset_instance, platform_of, execute: execute_view_action, theme: change_view_theme,
-  reload_workflows, workflow_preset, write_create_host_workflows,
+  reload_workflows, workflow_preset, write_create_host_workflows, write_create_api_max_requests, set_room_api_max_requests,
   admin: { register: register_admin, login: login_admin, logout: logout_admin,
     update_profile: update_admin_profile, avatar_from_file: admin_avatar_from_file, validate: validate_admin_form,
     sessions: admin_sessions, revoke: revoke_admin_sessions, change_password: change_admin_password },

@@ -2,6 +2,7 @@
 /** New-discussion form: the user states the topic in their own words; the AI host drafts goal, background and boundaries. */
 import { computed, inject, nextTick, onBeforeUnmount, onMounted, ref, watch } from "vue";
 import { format_duration } from "./LimitPicker.vue";
+import ApiRequestsField from "./ApiRequestsField.vue";
 import ChainRoundsField from "./ChainRoundsField.vue";
 import DiscussionLimits from "./DiscussionLimits.vue";
 import GoalConfig from "./GoalConfig.vue";
@@ -240,8 +241,9 @@ const summary = computed(() => {
       </section>
 
       <details class="create-advanced" :open="Boolean(view.launch.create_preferences?.advanced_open)" @toggle="bridge.write_create_preferences({ advanced_open: $event.target.open })">
-        <summary><UIcon name="i-lucide-chevron-right" class="create-advanced-icon" />高级设置<small>连续派活 {{ view.create_chain_rounds }} 轮</small></summary>
+        <summary><UIcon name="i-lucide-chevron-right" class="create-advanced-icon" />高级设置<small>{{ view.create_chain_rounds ? `连续派活 ${view.create_chain_rounds} 轮` : "连续派活不限轮数" }}{{ view.launch.available || view.launch.remote ? ` · API 每次${view.create_api_max_requests ? ` ${view.create_api_max_requests} 次请求` : "不限请求"}` : "" }}</small></summary>
         <ChainRoundsField :model-value="view.create_chain_rounds" @update:model-value="bridge.write_create_chain_rounds($event)">建房后可在房间页修改。</ChainRoundsField>
+        <ApiRequestsField v-if="view.launch.available || view.launch.remote" class="create-advanced-field" :model-value="view.create_api_max_requests" @update:model-value="bridge.write_create_api_max_requests($event)">建房后可在房间页修改。</ApiRequestsField>
       </details>
     </form>
     <footer class="create-footer">
@@ -277,6 +279,7 @@ const summary = computed(() => {
 .create-advanced-icon { width: 14px; height: 14px; transition: transform .15s; }
 .create-advanced[open] > summary { margin-bottom: 10px; }
 .create-advanced[open] .create-advanced-icon { transform: rotate(90deg); }
+.create-advanced-field { margin-top: 14px; }
 .create-modes { display: grid; grid-template-columns: repeat(2, 1fr); gap: 10px; }
 .create-mode { display: flex; align-items: flex-start; gap: 10px; padding: 12px; border: 1px solid var(--channel-edge-control, var(--ui-border)); border-radius: 8px; text-align: left; background: color-mix(in srgb, var(--ui-bg-elevated) 35%, transparent); color: var(--ui-text-muted); }
 .create-mode:hover { border-color: var(--ui-border-accented); }
@@ -316,8 +319,6 @@ const summary = computed(() => {
   .create-discussion { height: calc(100dvh - 130px); }
   .create-scroll { padding: 18px 18px 20px; }
   .create-modes { grid-template-columns: 1fr; }
-  /* One member per row on a phone: at half width (about 160px) the settings side squeezes its options into vertical text. */
-  .create-experts { grid-template-columns: minmax(0, 1fr); }
   .create-footer { padding: 12px 18px 14px; }
   .create-summary:not(.is-blocked) { display: none; }
   .create-footer-row { justify-content: flex-end; }

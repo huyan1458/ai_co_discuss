@@ -15,7 +15,7 @@ import { guard_remote_request, list_remote_directories } from './remote_policy.m
 import { list_devices, machine_fingerprint, revoke_device, start_pairing } from './device_auth.mjs';
 import { setup_sidecar } from './adapters/antigravity_app.mjs';
 import { adapter_of, adoption_adapter, BRANCHABLE_ADAPTERS, branch_session, session_settings, software_defaults, software_effort, software_models } from './adapters/index.mjs';
-import { ADAPTER_IDS, ADAPTER_PROFILES, adapter_profile, platform_adapters, same_session_family } from './adapters/profiles.mjs';
+import { ADAPTER_IDS, ADAPTER_PROFILES, adapter_profile, DEFAULT_API_MAX_REQUESTS, MAX_API_MAX_REQUESTS, platform_adapters, same_session_family } from './adapters/profiles.mjs';
 import { API_PROVIDERS, api_check, api_models, save_api_key, saved_api_keys, validate_api_profile } from './discussion_api.mjs';
 import { DEFAULT_SCHEDULER_MODE, SCHEDULER_MODES, SCHEDULER_PROVIDERS, scheduler_check } from './scheduler.mjs';
 import { save_tts_settings, tts_settings, tts_speak } from './tts.mjs';
@@ -347,7 +347,8 @@ export async function room_models(home, raw, { read_defaults = profile => cached
   // Smart scheduling is a local choice; only which model decides is shown, never its key.
   const scheduler = config.scheduler ? { provider: config.scheduler.provider, model: config.scheduler.model, mode: config.scheduler.mode || DEFAULT_SCHEDULER_MODE } : null;
   return { room_id: input.room_id, registered: paths.length > 0, participants, scheduler, project_directory: config.cwd || '',
-    workflow: room_workflow_status(config, home), host_workflows: Boolean(config.host_workflows) };
+    workflow: room_workflow_status(config, home), host_workflows: Boolean(config.host_workflows),
+    api_max_requests: config.api_max_requests ?? DEFAULT_API_MAX_REQUESTS };
 }
 
 /** The room's workflow as the right column shows it; `available` is false when its folder is gone or broken. */
@@ -374,7 +375,8 @@ export async function remote_room_files(home, input) {
   return room_files(home, input, { trust: true });
 }
 
-const CREATE_PREFERENCE_RANGES = { max_rounds: [0, 100], max_minutes: [0, 1440], goal_max_continues: [0, 100], goal_max_minutes: [0, 1440], chain_rounds: [1, 20] };
+const CREATE_PREFERENCE_RANGES = { max_rounds: [0, 100], max_minutes: [0, 1440], goal_max_continues: [0, 100], goal_max_minutes: [0, 1440], chain_rounds: [0, 100],
+  api_max_requests: [0, MAX_API_MAX_REQUESTS] };
 const CREATE_PREFERENCE_FLAGS = ['named_followup', 'host_workflows', 'advanced_open'];
 const MAX_PREFERENCE_MODEL_LENGTH = 200;
 const SETTINGS_LOCK_WAIT_MS = 5000;
@@ -639,7 +641,8 @@ function free_launch_config(home, input, room, directory, options) {
   if (workflow && Object.values(workflow.members).some(name => !names.includes(name))) throw new Error('工作流成员须在本次邀请的成员中');
   return validate_config({ site: input.site, room: room.id || 'preview', token: options.token, mode: 'free', participants, members, api_home: home,
     scheduler: input.scheduler || undefined, cwd: input.cwd, project_access: input.project_access || undefined, workflow,
-    host_workflows: input.host_workflows === true || undefined, data_directory: join(directory, 'runtime'), draft_directory: service_drafts(home, join(directory, 'runtime')) }, directory);
+    host_workflows: input.host_workflows === true || undefined, api_max_requests: input.api_max_requests,
+    data_directory: join(directory, 'runtime'), draft_directory: service_drafts(home, join(directory, 'runtime')) }, directory);
 }
 
 /** Members in the order of the creation form's cards, so the room's joining order (and default speaking order) follows it. */
@@ -819,6 +822,23 @@ export async function room_member(home, raw, locked = false) {
   } finally { release(); }
 }
 
+
+/**
+ * Change this room's runner settings: `api_max_requests`, how many model requests one execution of an API member may
+ * make (0 = no limit). Read at each delivery, so it applies from the next execution.
+ */
+export async function room_settings(home, raw) {
+  const { input, path } = await member_room_context(home, raw);
+  const value = input.api_max_requests;
+  if (!Number.isInteger(value)) throw new Error('api_max_requests 须为整数');
+  const release = acquire_lock(join(dirname(path), 'configuration-edit'));
+  try {
+    const next = { ...configuration_snapshot(path).config, api_max_requests: value };
+    validate_config(next, dirname(path));
+    atomic_json(path, next);
+    return { room_id: input.room_id, api_max_requests: value };
+  } finally { release(); }
+}
 
 /**
  * Switch one woken member's project files between read-only and writable after the room is created. Every run builds its
@@ -1745,6 +1765,7 @@ export async function launch_main(args = process.argv.slice(2), input_text) {
   else if (positionals[0] === 'presets') result = input ? save_expert_presets(home, input) : expert_presets(home);
   else if (positionals[0] === 'workflows') result = await workflows_command(home, input || {});
   else if (positionals[0] === 'room-workflow' && input) result = await room_workflow(home, input);
+  else if (positionals[0] === 'room-settings' && input) result = await room_settings(home, input);
   else if (positionals[0] === 'api-key' && input) result = save_api_key(home, input);
   else if (positionals[0] === 'api-check' && input) result = await api_check(home, input);
   else if (positionals[0] === 'scheduler-check' && input) result = await scheduler_check(home, input);

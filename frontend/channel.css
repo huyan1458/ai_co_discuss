@@ -488,6 +488,9 @@ html[data-theme^="channel"] .channel-message.channel-topic-card { color: var(--u
 /* Same fill as the primary buttons: the lighter accent under white text read washed out on the dark theme. */
 .channel-listen-mark:hover { background: #4752c4; }
 .channel-listen-mark > [class*="icon"] { width: 14px; height: 14px; }
+/* A message selection offers quoting and reading side by side. */
+.channel-offer-marks { position: fixed; z-index: 40; display: flex; gap: 6px; }
+.channel-offer-marks .channel-listen-mark { position: static; }
 @keyframes channel-listen-in { from { opacity: 0; } }
 .channel-latest-button { display: grid; place-items: center; width: 32px; height: 32px; padding: 0; line-height: 1; border: 1px solid #ffffff24; border-radius: 50%; background: #292b30; box-shadow: 0 2px 8px #0004; pointer-events: auto; }
 .channel-latest-button > [data-slot="leadingIcon"] { display: block; width: 18px; height: 18px; }
@@ -497,6 +500,8 @@ html[data-theme^="channel"] .channel-message.channel-topic-card { color: var(--u
 .channel-composer-dock { grid-column: 2; grid-row: 3; min-width: 0; overflow: hidden; scrollbar-gutter: stable both-edges; padding: 8px 0 12px; }
 .channel-composer-column { max-width: var(--channel-reading-width); margin: 0 auto; padding: 0 16px; }
 .channel-composer { background: #383a40 !important; border-radius: 12px !important; border: 1px solid #ffffff0b; box-shadow: 0 1px 3px #0002 !important; padding: 0 !important; gap: 0 !important; overflow: hidden; transition: border-color .15s, box-shadow .15s; }
+/* The queued-message tray tucks under the composer's top edge. */
+.queued-messages + .channel-composer { position: relative; z-index: 1; }
 html[data-theme^="channel"] .channel-composer, html[data-theme^="channel"] .channel-composer :focus { --tw-ring-shadow: 0 0 #0000 !important; --tw-inset-ring-color: transparent !important; }
 html[data-theme^="channel"] .channel-composer :is(textarea, input):focus { box-shadow: none !important; }
 html[data-theme^="channel"] .channel-composer:is(:focus, :focus-within, :has(:focus-visible)) { outline: none !important; border-color: var(--channel-edge-panel) !important; box-shadow: var(--channel-shadow-panel) !important; }

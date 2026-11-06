@@ -4,6 +4,7 @@
  * entry to the same actions, so nothing here hides behind a menu.
  */
 import { computed, inject, ref, watch } from "vue";
+import ApiRequestsField from "./ApiRequestsField.vue";
 import ChainRoundsField from "./ChainRoundsField.vue";
 import EffortSlider from "./EffortSlider.vue";
 import HostWorkflowSwitch from "./HostWorkflowSwitch.vue";
@@ -51,6 +52,20 @@ async function save_rounds(value) {
     bridge.notify("info", "推进轮数已保存，进行中的任务链也按新值");
   } catch { rounds_shown.value = room.value.free?.max_rounds || 0; }
   finally { saving_rounds.value = false; }
+}
+// The API request limit the field shows: the saved one, or the value being saved until the room models are read again.
+const saving_requests = ref(false), requests_shown = ref(0);
+watch(() => saved.value?.api_max_requests, (value) => { requests_shown.value = value ?? 0; }, { immediate: true });
+
+/** Save a new API request limit for this room; it applies from each API member's next execution. */
+async function save_requests(value) {
+  requests_shown.value = value;
+  saving_requests.value = true;
+  try {
+    await bridge.set_room_api_max_requests(value);
+    bridge.notify("info", "API 请求上限已保存，从下一次执行起生效");
+  } catch { requests_shown.value = saved.value?.api_max_requests ?? 0; }
+  finally { saving_requests.value = false; }
 }
 // Cards follow the room's default speaking order (the host first until the owner reorders); away members come last.
 const order = computed(() => room.value.speaking_order || { kind: "default", movable: [], default: [] });
@@ -288,10 +303,13 @@ const created = computed(() => room.value.created_at ? new Date(room.value.creat
         <div v-if="saved?.registered"><dt>主持人自建工作流</dt><dd>
           <HostWorkflowSwitch :model-value="Boolean(saved.host_workflows)" :disabled="!view.access?.can_manage || room.archived" @update:model-value="act('set_room_host_workflows', $event)" />
         </dd></div>
-        <div v-if="room.free?.max_rounds"><dt>连续派活上限</dt><dd>
+        <div v-if="room.free?.max_rounds != null"><dt>连续派活上限</dt><dd>
           <template v-if="view.access?.can_manage"><ChainRoundsField :model-value="rounds_shown" :disabled="saving_rounds" @update:model-value="save_rounds" />
 </template>
-          <span v-else>主持人收到你的一条消息后，最多连续派活 {{ room.free.max_rounds }} 轮（派活 → 成员回答 → 交回汇总为一轮），然后停下等你</span></dd></div>
+          <span v-else-if="room.free.max_rounds">主持人收到你的一条消息后，最多连续派活 {{ room.free.max_rounds }} 轮（派活 → 成员回答 → 交回汇总为一轮），然后停下等你</span>
+          <span v-else>主持人收到你的一条消息后，可一直连续派活，不限轮数</span></dd></div>
+        <div v-if="saved?.registered"><dt>API 请求上限</dt><dd>
+          <ApiRequestsField :model-value="requests_shown" :disabled="!view.access?.can_manage || room.archived || saving_requests" @update:model-value="save_requests" /></dd></div>
         <div v-if="!free"><dt>逐人追问</dt><dd>{{ room.named_followup ? '开启：主持人每轮给每位专家写针对性追问' : '关闭：首轮后请专家回应上一轮观点' }}</dd></div>
         <div><dt>阅读地址</dt><dd class="overview-address"><code>{{ reading }}</code><UButton icon="i-lucide-copy" color="neutral" variant="ghost" size="xs" aria-label="复制阅读地址" @click="act('copy', reading)" /></dd></div>
         <div v-if="created"><dt>创建时间</dt><dd>{{ created }}</dd></div>

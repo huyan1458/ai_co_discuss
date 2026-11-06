@@ -43,6 +43,8 @@ const executions = ref(new Map());
 const limits = ref(null);
 const error = ref("");
 const now = ref(Date.now());
+// When the timeline was last read; while hidden or offline it stops, and silence is judged only up to here.
+const read_at = ref(Date.now());
 const collapsed = ref(new Set());
 const note_texts = ref(new Map());
 const hover = ref(null);
@@ -54,6 +56,8 @@ const DETAIL_WIDTH_PX = 560;
 let last_read = 0;
 let last_full = 0;
 let reading = false;
+// A read asked for during another: "" none, "next" incremental, "full" whole.
+let reload = "";
 let refresh_timer = 0;
 let frame = 0;
 let last_frame = 0;
@@ -65,7 +69,9 @@ let play_position = 0;
 /** Read the timeline: in full when asked or due, else only executions still running or ended since the last read. */
 async function load(full = false) {
   const id = room_id.value;
-  if (!id || reading) return;
+  if (!id) return;
+  // A read asked for while another is in flight runs once that one ends, so a room switch is never dropped.
+  if (reading) { reload = reload === "full" || full ? "full" : "next"; return; }
   reading = true;
   const after = full || !last_read || Date.now() - last_full >= FULL_REFRESH_MS ? 0 : last_read - OVERLAP_SECONDS;
   try {
@@ -76,12 +82,16 @@ async function load(full = false) {
     executions.value = next;
     limits.value = { execution_limit: result.execution_limit, segment_limit: result.segment_limit };
     last_read = result.now;
+    read_at.value = Date.now();
     if (!after) last_full = Date.now();
     error.value = "";
   } catch (failure) {
     error.value = `读取执行记录失败：${failure.message}`;
   } finally {
     reading = false;
+    const pending = reload;
+    reload = "";
+    if (pending) load(pending === "full");
   }
 }
 
@@ -258,7 +268,9 @@ const lines = computed(() => handoff_lines(rows.value, shown_axis.value));
 const ticks = computed(() => axis_ticks(axis.value,
   Math.min(MAX_TICKS, Math.max(MIN_TICKS, Math.round((axis_width.value || TICK_SPACING_PX * 6) / TICK_SPACING_PX))), zoom.value)
   .map((tick) => ({ ...tick, x: (tick.x - zoom.value.from) / zoom.value.span })));
-const summary = computed(() => timeline_summary(all_rows.value, view_time.value));
+// Data read before the page was hidden or went offline may be old, so possible stalls are judged only up to that read.
+const status_time = computed(() => replaying.value ? view_time.value : Math.min(view_time.value, read_at.value));
+const summary = computed(() => timeline_summary(all_rows.value, status_time.value));
 const parents = computed(() => all_rows.value.filter((row) => row.has_children).map((row) => row.key));
 const opened_row = computed(() => all_rows.value.find((row) => row.key === opened.value));
 const opened_log = computed(() => opened_row.value ? execution_log(opened_row.value, note_texts.value.get(opened_row.value.item.id)) : []);
@@ -341,7 +353,7 @@ function role_label(row) {
 function role_marks(row) {
   return row.item.role === "host" ? ["主持"] : [];
 }
-const status = (row) => row_status(row, view_time.value);
+const status = (row) => row_status(row, status_time.value);
 
 function row_label(row) {
   const parts = [bridge.display_name(row.item.member), role_label(row), STATE_LABELS[row.item.state], `用时 ${format_duration(row.end - row.start)}`];

@@ -280,9 +280,12 @@ def message_commands(subcommands, registry):
     post.add_argument("--continue", dest="continue_reason", metavar="REASON",
                       help="自由房间主持人：房间没有其他进行中的工作时再唤醒你一次，写明继续做什么（≤300 字）；算本链一轮，用户发新消息或你下次回答不带它即取消")
     post.add_argument("--sequential", action="store_true",
-                      help="自由房间主持人：--to 点名的多位成员按点名顺序依次接力，每棒一轮，最后一位做完交回你")
+                      help="自由房间主持人：--to 点名的多位成员按点名顺序依次接力，走完一圈算一轮，最后一位做完交回你")
     post.add_argument("--loop", action="store_true",
                       help="与 --sequential 同用：交回成为检查点，用 sequence continue 开始下一圈，不继续即直接验收")
+    post.add_argument("--need-rounds", type=positive_int, metavar="N",
+                      help="自由房间主持人：与 --to 同用，声明本任务从这次派活起还需要的轮数（须带 --rounds-reason）；超过本链剩余轮数时任务链立即停下，请用户一键批准差额")
+    post.add_argument("--rounds-reason", metavar="REASON", help="与 --need-rounds 同用：为什么需要这些轮（≤300 字），展示给用户")
     post.add_argument("--next-review", type=member_handle, help="主持派实现时声明下一位只读评审；先读 review roster，不可指定本批实现者")
     post.add_argument("--review-scope", help="本批预授权评审范围，1–2000 字")
     post.add_argument("--review-roster", help="先读取 review roster 取得的 revision；状态变化须重读")
@@ -664,6 +667,9 @@ def plan_message(args):
         payload["proactive"] = True
     if args.no_handoff:
         payload["no_handoff"] = True
+    if args.need_rounds is not None or args.rounds_reason is not None:
+        payload["need_rounds"] = args.need_rounds
+        payload["rounds_reason"] = args.rounds_reason
     if args.loop and not args.sequential:
         raise CliError("--loop 须与 --sequential 一起使用")
     if args.sequential:

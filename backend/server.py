@@ -850,7 +850,7 @@ def delete_room_records(connection, room_id):
     connection.execute("DELETE FROM goal_continuations WHERE room_id=?", (room_id,))
     connection.execute("DELETE FROM room_goals WHERE room_id=?", (room_id,))
     connection.execute("DELETE FROM discussion_sessions WHERE room_id=?", (room_id,))
-    for table in ("member_recommendations", "free_queue", "queued_messages", "queued_message_pauses", "speaking_orders", "member_requests", "member_descriptions", "member_labels", "execution_notes", "execution_segments", "execution_capabilities", "late_answers", "member_executions", "member_capabilities", "member_sessions", "member_adopt_failures", "member_registrations", "room_members", "room_modes", "free_batches", "free_chains", "free_handoffs", "free_round_limits", "free_chain_holds",
+    for table in ("member_recommendations", "free_queue", "queued_messages", "queued_message_pauses", "speaking_orders", "member_requests", "member_descriptions", "member_labels", "execution_notes", "execution_segments", "execution_capabilities", "late_answers", "member_executions", "member_capabilities", "member_sessions", "member_adopt_failures", "member_registrations", "room_members", "room_modes", "free_batches", "free_chains", "free_handoffs", "free_round_limits", "free_chain_holds", "free_relay_steps",
                   "scheduler_decisions", "scheduler_routing", "discussion_conclusions", "discussion_sessions"):
         if table == "scheduler_decisions":
             for child in ("scheduler_feedback", "scheduler_decision_context", "scheduler_decision_inputs"):
@@ -1125,8 +1125,8 @@ def check_message_references(connection, room_id, message):
 def append_free_message(connection, room, payload, actor):
     """Append a free-room message: the owner's creates requests, a member's completes its execution."""
     if payload.get("kind") == "moderation":
-        if any(payload.get(field) for field in ("next_review", "review_scope", "review_roster", "sequential", "loop")):
-            raise ValueError("主持说明不能声明评审授权或依次接力；请在派活时提交")
+        if any(payload.get(field) for field in ("next_review", "review_scope", "review_roster", "sequential", "loop", "need_rounds")):
+            raise ValueError("主持说明不能声明评审授权、依次接力或申请轮数；请在派活时提交")
         return append_free_moderation(connection, room, payload, actor)
     if payload.get("kind") not in (None, "chat"):
         raise ValueError("自由协作与新讨论使用 kind=chat，并以 execution_id 或 request_ids 关联请求")
@@ -1864,7 +1864,7 @@ class DiscussionHandler(BaseHTTPRequestHandler):
         site = self.local_request_site(method)
         route = parts[2:]
         if method == "OPTIONS" and route in (["settings"], ["launch"], ["room-models"], ["room-files"], ["room-member"], ["room-member-access"], ["room-member-allow"], ["room-member-adapter"], ["room-member-model"], ["room-profiles"], ["room-restore"], ["room-fork"], ["models"], ["api-key"], ["api-check"],
-                                             ["scheduler-check"], ["tts-settings"], ["tts"], ["stt"], ["pick-directory"], ["browse-directory"], ["projects"], ["presets"], ["workflows"], ["room-workflow"], ["machine-link"], ["device-pairing"], ["devices"]):
+                                             ["scheduler-check"], ["tts-settings"], ["tts"], ["stt"], ["pick-directory"], ["browse-directory"], ["projects"], ["presets"], ["workflows"], ["room-workflow"], ["room-settings"], ["machine-link"], ["device-pairing"], ["devices"]):
             return self.respond({"ok": True})
         if route == ["settings"] and method in ("GET", "POST"):
             command = "settings"
@@ -1901,7 +1901,7 @@ class DiscussionHandler(BaseHTTPRequestHandler):
             command = "projects"
         elif route == ["presets"] and method == "POST":
             command = "presets"
-        elif route in (["workflows"], ["room-workflow"]) and method == "POST":
+        elif route in (["workflows"], ["room-workflow"], ["room-settings"]) and method == "POST":
             command = route[0]
         elif route == ["machine-link"] and method == "POST":
             command = "machine-link"
@@ -1912,10 +1912,10 @@ class DiscussionHandler(BaseHTTPRequestHandler):
             if self.headers.get_content_type() != "application/json":
                 raise ValueError("本机操作须使用 application/json")
             payload = self.read_payload()
-            if command in ("start", "room-config", "room-models", "room-files", "room-member", "room-member-access", "room-member-allow", "room-member-adapter", "room-member-model", "room-profiles", "room-restore", "room-fork", "room-workflow", "workflows"):
+            if command in ("start", "room-config", "room-models", "room-files", "room-member", "room-member-access", "room-member-allow", "room-member-adapter", "room-member-model", "room-profiles", "room-restore", "room-fork", "room-workflow", "room-settings", "workflows"):
                 payload.pop("access_file", None)
                 payload.update(site=site, entry="web")
-            if command in ("room-files", "room-workflow", "room-member", "room-member-access", "room-member-allow", "room-member-model", "room-member-adapter") and not payload.get("token") and not self.bridge_origin:
+            if command in ("room-files", "room-workflow", "room-settings", "room-member", "room-member-access", "room-member-allow", "room-member-model", "room-member-adapter") and not payload.get("token") and not self.bridge_origin:
                 with closing(connect_db(self.server.database)) as connection:
                     self.admin_as_owner(connection, payload.get("room_id", ""))
                     payload["token"] = self.headers.get("X-Discussion-Token", "")

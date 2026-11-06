@@ -400,7 +400,7 @@ export async function decide_sequence_checkpoint(home, scheduler, sequence, fetc
   const last = answers_of_pass.at(-1);
   if (sequence.status !== 'checkpoint' || !['pending', 'delivering'].includes(sequence.handoff_status)) return fallback('检查点已处理或循环已结束，交给主持人');
   if (!sequence.origin?.text?.trim() || !last?.text?.trim()) return fallback('缺少主持人安排或本圈回答原文，交给主持人');
-  if (sequence.remaining_rounds < 1) return fallback('任务链剩余轮数不足，交给主持人');
+  if (typeof sequence.remaining_rounds === 'number' && sequence.remaining_rounds < 1) return fallback('任务链剩余轮数不足，交给主持人');
   const first = sequence.order.find(Boolean);
   const questions = [{ type: 'choice', name: 'checkpoint',
     instructions: `主持人安排成员按固定顺序（${sequence.order.join(' → ')}）循环接力，第 ${sequence.pass} 圈已走完。根据本圈最后一位（${last.member}）回答里表达的结论，判断是否按主持人的安排再走一圈。只识别回答表达的结论，不自行评价工作质量，不选择成员，不改变顺序。`, choices: [

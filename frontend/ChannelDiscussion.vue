@@ -13,7 +13,7 @@ import { active_workflow } from "./workflow-state.js";
 import { use_read_aloud } from "./read-aloud.js";
 import { use_broadcast } from "./broadcast.js";
 import { use_voice_input } from "./voice-input.js";
-import { excerpt_lines, excerpts_markdown, file_preview } from "./file-preview.js";
+import { add_excerpt, excerpt_lines, excerpts_markdown, file_preview } from "./file-preview.js";
 import { motion, useSpring, useTransform } from "motion-v";
 
 const emit = defineEmits(["detail", "edit"]);
@@ -145,6 +145,8 @@ const track_narrow = (event) => { narrow.value = event.matches; };
 // "Listen from here" waits until a selection has settled (pointer released, no change for a moment), and shows only when
 // speech is configured on this computer; most selections are for copying.
 const LISTEN_SETTLE_MS = 350;
+// Room kept at the right edge for the quote and read-aloud pills.
+const QUOTE_OFFER_WIDTH = 190;
 let listen_timer = 0, pointer_down = false;
 const speech_configured = async () => Boolean((await speech_settings()).api_key_ref);
 /** Hide the offer while a selection is changing and check again once it settles. */
@@ -157,21 +159,31 @@ function schedule_listen() {
 const on_offer = (event) => Boolean(event.target.closest?.(".channel-listen-mark, .channel-listen-pill"));
 const press = (event) => { if (!on_offer(event)) pointer_down = true; };
 const release = (event) => { if (on_offer(event)) return; pointer_down = false; schedule_listen(); };
-/** Offer reading from a selection made inside a message's text. */
+/** Offer quoting (and, with speech configured, reading from) a selection made inside a message's text. */
 async function track_selection() {
   const selection = document.getSelection();
   const range = selection?.rangeCount && !selection.isCollapsed ? selection.getRangeAt(0) : null;
   const start = range && (range.startContainer.nodeType === Node.ELEMENT_NODE ? range.startContainer : range.startContainer.parentElement);
   const body = start?.closest(".channel-answer > .channel-message-text");
   const card = body && transcript.value?.contains(body) ? body.closest(".channel-message[data-message-id]") : null;
-  if (!card) { listen_here.value = null; return; }
+  const text = card ? range.toString().replace(/\r/g, "").replace(/\n{3,}/g, "\n\n").trim() : "";
+  if (!text) { listen_here.value = null; return; }
   const kept = range.cloneRange();
-  if (!await speech_configured() || pointer_down) return;
-  // A small pill just under where the selection ends, clear of the selected text.
+  const speech = await speech_configured().catch(() => false);
+  if (pointer_down) return;
+  // Small pills just under where the selection ends, clear of the selected text.
   const rects = kept.getClientRects(), end = rects[rects.length - 1] || kept.getBoundingClientRect();
-  // On touch screens the system's own selection menu sits next to the selection, so the button waits above the composer instead.
+  // On touch screens the system's own selection menu sits next to the selection, so the buttons wait above the composer instead.
   const touch = window.matchMedia("(pointer: coarse)").matches;
-  listen_here.value = { id: Number(card.dataset.messageId), range: kept, touch, left: Math.min(end.right - 8, window.innerWidth - 90), top: end.bottom + 6 };
+  listen_here.value = { id: Number(card.dataset.messageId), range: kept, text, speech, touch, left: Math.min(end.right - 8, window.innerWidth - QUOTE_OFFER_WIDTH), top: end.bottom + 6 };
+}
+/** Put the selection in the composer as an excerpt of its message; a comment can be added on the excerpt card. */
+function quote_selection() {
+  const { id, text } = listen_here.value;
+  listen_here.value = null;
+  document.getSelection()?.removeAllRanges();
+  const author = view.value.messages.find((message) => message.id === id)?.author || "";
+  add_excerpt({ path: `#${id}`, name: bridge.display_name(author), message_id: id, start: 0, end: 0, text, comment: "" });
 }
 /** Start reading where the selection begins and continue to the latest message. */
 function listen_from_selection() {
@@ -349,7 +361,9 @@ function answer_execution(message) {
  * Silence while a command runs is expected, so it is named as such instead of a possible hang.
  */
 function working_status(message) {
-  const silent = Math.max(0, free_now.value - (message.activity_at || message.created_at));
+  // Data shown after the page was hidden or offline may be old; silence counts only up to when it was last current.
+  const observed = view.value.observed_until ? Math.min(free_now.value, Math.floor(view.value.observed_until / 1000)) : free_now.value;
+  const silent = Math.max(0, observed - (message.activity_at || message.created_at));
   if (!message.working || !shows_progress(message) || silent < STALL_SECONDS) return { text: message.text, live: message.working };
   if (message.activity === "command") return { text: `命令已运行 ${format_elapsed(silent)}`, live: true };
   return { text: `已 ${format_elapsed(silent)}无输出，可能卡住`, live: false, warning: true };
@@ -374,6 +388,12 @@ const file_refs_line = () => file_refs.value.length
 const excerpts = computed(() => file_preview.excerpts);
 const has_draft = computed(() => Boolean(text.value.trim() || view.value.attachment_drafts.length || file_refs.value.length || excerpts.value.length));
 watch(() => file_preview.focus_composer, () => nextTick(() => prompt.value?.textareaRef?.focus()));
+// Editing a queued message puts its text in the composer; the caret goes to its end so typing continues it.
+watch(() => view.value.editing_queued, (id) => id && nextTick(() => {
+  const area = prompt.value?.textareaRef;
+  area?.focus();
+  area?.setSelectionRange(area.value.length, area.value.length);
+}));
 /** Drop one excerpt card from the draft. */
 function remove_excerpt(excerpt) { file_preview.excerpts = file_preview.excerpts.filter((item) => item.id !== excerpt.id); }
 /** Active members a free-room message can name; chips appear only when there is a choice. */
@@ -1572,7 +1592,10 @@ function copy_message(message) { act("copy", `${view.value.room_site}/r/${room.v
         </div>
       </motion.div>
     </Teleport>
-    <button v-if="listen_here && !listen_here.touch" type="button" class="channel-listen-mark" :style="{ left: `${listen_here.left}px`, top: `${listen_here.top}px` }" title="从选中处开始朗读" aria-label="从选中处开始朗读" @mousedown.prevent @click="listen_from_selection"><UIcon name="i-lucide-headphones" />朗读</button>
+    <div v-if="listen_here && !listen_here.touch" class="channel-offer-marks" :style="{ left: `${listen_here.left}px`, top: `${listen_here.top}px` }">
+      <button type="button" class="channel-listen-mark" title="把选中的文字作为摘录添加到对话" @mousedown.prevent @click="quote_selection"><UIcon name="i-lucide-message-square-quote" />添加到对话</button>
+      <button v-if="listen_here.speech" type="button" class="channel-listen-mark" title="从选中处开始朗读" aria-label="从选中处开始朗读" @mousedown.prevent @click="listen_from_selection"><UIcon name="i-lucide-headphones" />朗读</button>
+    </div>
     <div ref="transcript" v-memo="[message_groups, message_round_labels, free, room.session, view.access, active_message, expanded_answers.size, reader.state.message_id, room.title, view.query, view.mention_only, view.host_only, topic_anchor, end_anchor, request_badges, execution_reports, recommendations, adopting, scheduler_decisions, host_arrangements, pending, execution_notes, open_working_notes, editing, rewound_runs]" class="channel-transcript" aria-label="聊天记录" @scroll="track_scroll" @wheel.passive="resume_tracking($event); stop_following($event)" @touchstart.passive="resume_tracking" @touchmove.passive="stop_following" @pointerdown="stop_following" @keydown="resume_tracking($event); stop_following($event)">
       <div v-if="!view.query && !view.mention_only && !view.host_only && !topic_anchor" class="channel-message-group channel-topic-group"><TopicCard :ref="(card) => topic_card = card" @edit="emit('edit')" /></div>
       <div v-for="group in message_groups" :key="group.key" class="channel-message-group">
@@ -1807,7 +1830,8 @@ function copy_message(message) { act("copy", `${view.value.room_site}/r/${room.v
       <div v-if="!transcript_messages.length && !free_working.length" class="channel-empty"><UIcon :name="view.query || view.mention_only || view.host_only ? 'i-lucide-search' : 'i-lucide-hash'" /><h2>{{ view.query || view.mention_only || view.host_only ? '没有找到消息' : room.title }}</h2><p>{{ view.query || view.mention_only || view.host_only ? '试试其他关键词，或清除筛选。' : bridge.empty_discussion_message(room) }}</p></div>
     </div>
     <div v-if="(transcript_messages.length && !follow_tail) || listen_here?.touch || reader.state.message_id" class="channel-latest-dock">
-      <button v-if="listen_here?.touch" type="button" class="channel-listen-pill" aria-label="从选中处开始朗读" @mousedown.prevent @click="listen_from_selection"><UIcon name="i-lucide-headphones" />听当前</button>
+      <button v-if="listen_here?.touch" type="button" class="channel-listen-pill" @mousedown.prevent @click="quote_selection"><UIcon name="i-lucide-message-square-quote" />添加到对话</button>
+      <button v-if="listen_here?.touch && listen_here.speech" type="button" class="channel-listen-pill" aria-label="从选中处开始朗读" @mousedown.prevent @click="listen_from_selection"><UIcon name="i-lucide-headphones" />听当前</button>
       <button v-if="reader.state.message_id" type="button" class="channel-listen-pill" :class="{ 'is-on': reader.state.following }" :aria-pressed="reader.state.following" :title="reader.state.following ? '手动滚动即取消跟随' : '页面跟随朗读位置滚动'" @click="reader.state.following ? (reader.state.following = false) : reader.follow()"><UIcon name="i-lucide-locate-fixed" />{{ reader.state.following ? '跟随中' : '跟随' }}</button>
       <button v-if="reader.state.reading" type="button" class="channel-listen-pill" aria-label="退出朗读" @click="reader.stop()"><UIcon name="i-lucide-square" />退出</button>
       <UButton v-if="transcript_messages.length && !follow_tail" icon="i-lucide-arrow-down" color="neutral" variant="outline" aria-label="回到最新消息" class="channel-latest-button" @click="return_to_latest" />

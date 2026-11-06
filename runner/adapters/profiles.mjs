@@ -32,6 +32,9 @@
  * - `task_rules(cli, {runs_commands})`: fixed task text this software needs, added by the runner so no member prompt drops it.
  */
 const ALL_ACCESS = ['read', 'write', 'auto', 'full'];
+/** Model requests one model-API execution may make unless the room sets its own; 0 means no limit, up to the maximum. */
+export const DEFAULT_API_MAX_REQUESTS = 300;
+export const MAX_API_MAX_REQUESTS = 1000;
 const PROCESS = { stoppable: true, progress: true };
 const IN_APP = { stoppable: false, progress: false };
 

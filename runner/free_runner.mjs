@@ -734,6 +734,7 @@ export class FreeRoomRunner {
           cwd: directory, project_access: adapter.project_access,
           requests: execution.requests, read_after: execution.read_until, session, discussion_request: session_request,
           scheduler_suggestions, review_handoffs, ...(task.workflow ? { workflow: task.workflow } : {}),
+          ...(Number.isInteger(this.config.api_max_requests) ? { max_requests: this.config.api_max_requests } : {}),
           ...(task.goal ? { goal: task.goal } : {}) },
         on_binding: session => this.store.bind(member.name, session),
         on_process: child => this.track(member.name, child, execution.id),
@@ -903,6 +904,12 @@ export class FreeRoomRunner {
     const result = delivery.pending_result && delivery.pending_result !== 'unconfirmed' ? delivery.pending_result
       : !delivery.stoppable ? 'unstoppable' : ended ? 'stopped' : 'unconfirmed';
     if (delivery.stop_result === result) return;
+    // An execution that left the inbox by finishing normally has no stop to report; only a voided one does.
+    if (['completed', 'failed'].includes((await api(this.config, `/executions/${execution_id}`)).status)) {
+      this.store.db.prepare('DELETE FROM metadata WHERE key=?').run(key);
+      this.execution_processes.delete(execution_id);
+      return;
+    }
     // Keep the observed outcome before sending: a restart after a lost response must retry the same fact.
     this.store.db.prepare('UPDATE metadata SET value=? WHERE key=?')
       .run(JSON.stringify({ ...delivery, member: name, pending_result: result }), key);

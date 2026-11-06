@@ -33,7 +33,7 @@ REVIEW_STATE_SQL = """SELECT json_object(
  'executions',(SELECT json_group_array(json_array(id,status,result,changes)) FROM (SELECT * FROM member_executions WHERE room_id=rooms.id ORDER BY id)),
  'batches',(SELECT json_group_array(json_array(batch_id,settled,host_id,chain_id)) FROM free_batches WHERE room_id=rooms.id),
  'plans',(SELECT json_group_array(json_array(batch_id,status,reviewer_id,config_version,member_revision,scope,review_batch_id)) FROM review_plans WHERE room_id=rooms.id),
- 'limit',COALESCE((SELECT max_rounds FROM free_round_limits WHERE room_id=rooms.id),3),
+ 'limit',COALESCE((SELECT max_rounds FROM free_round_limits WHERE room_id=rooms.id),10),
  'holds',(SELECT json_group_array(json_array(chain_id,extra_rounds,message_id)) FROM free_chain_holds WHERE room_id=rooms.id),
  'stopped',(SELECT json_group_array(json_array(chain_id,reason)) FROM free_chains WHERE room_id=rooms.id),
  'withdrawn',(SELECT json_group_array(message_id) FROM message_withdrawals WHERE message_id IN (SELECT id FROM messages WHERE room_id=rooms.id))
@@ -51,13 +51,19 @@ ROOM_EVENT_PAGE = 500
 # and answer sit under that answer; later messages (the user asking something meanwhile) then stay above it.
 ANCHOR_SQL = """CASE WHEN r.purpose='handoff' THEN COALESCE((SELECT MAX(a.answer_id) FROM member_requests a
     WHERE a.room_id=r.room_id AND a.batch_id=r.message_id AND a.purpose<>'handoff'), r.message_id) ELSE r.message_id END"""
-# Rounds used and allowed in the room's recent chains, for "第 2/3 轮"; parameters: the room's limit, the room.
-# A round is a host dispatch (a batch) or a continue the host asked for (`free_host_wakes` with a `continue:` key).
-CHAIN_PROGRESS_SQL = """SELECT b.chain_id,COUNT(*) AS used,? + COALESCE((SELECT h.extra_rounds FROM free_chain_holds h
-    WHERE h.room_id=b.room_id AND h.chain_id=b.chain_id),0) AS allowed
-    FROM (SELECT room_id,chain_id FROM free_batches UNION ALL SELECT room_id,chain_id FROM free_host_wakes WHERE key LIKE 'continue:%') b
+# Rounds used and the owner's additions in the room's recent chains, for "第 2/3 轮"; parameter: the room.
+# A round is a host dispatch (a batch) or a continue the host asked for (`free_host_wakes` with a `continue:` key); a
+# relay's later steps in the same pass (`free_relay_steps`) ride on its first, so a whole pass is one round.
+CHAIN_PROGRESS_SQL = """SELECT b.chain_id,COUNT(*) AS used,COALESCE((SELECT h.extra_rounds FROM free_chain_holds h
+    WHERE h.room_id=b.room_id AND h.chain_id=b.chain_id),0) AS extra
+    FROM (SELECT room_id,chain_id FROM free_batches f WHERE NOT EXISTS(SELECT 1 FROM free_relay_steps s
+        WHERE s.room_id=f.room_id AND s.batch_id=f.batch_id)
+        UNION ALL SELECT room_id,chain_id FROM free_host_wakes WHERE key LIKE 'continue:%') b
     WHERE b.room_id=?
     GROUP BY b.chain_id ORDER BY b.chain_id DESC LIMIT 10"""
+CHAIN_USED_SQL = """SELECT (SELECT COUNT(*) FROM free_batches f WHERE f.room_id=?1 AND f.chain_id=?2 AND NOT EXISTS(
+        SELECT 1 FROM free_relay_steps s WHERE s.room_id=f.room_id AND s.batch_id=f.batch_id))
+    + (SELECT COUNT(*) FROM free_host_wakes WHERE room_id=?1 AND chain_id=?2 AND key LIKE 'continue:%')"""
 TIMELINE_STATES = {"completed": "done", "failed": "failed", "cancelled": "cancelled"}
 TIMELINE_FREE_IDS = "SELECT id FROM member_executions WHERE room_id=?1 AND (?3=0 OR finished_at=0 OR finished_at>=?3) ORDER BY id DESC LIMIT ?2"
 # Besides times: the task an execution took on (its request message), its result (the answer's summary, else the
@@ -109,9 +115,10 @@ RECOMMEND_SECONDS = 60
 RECOMMEND_GRACE_SECONDS = 5
 # Rounds a host may run from one owner message by default (a round: one host dispatch, its members' answers and the
 # hand-back); each owner message starts a chain. Counted in rounds, so a room with more members gets no fewer of them.
-CHAIN_ROUNDS = 3
-# The most rounds an owner may allow per chain, or add at once when continuing a stopped chain.
-MAX_CHAIN_ROUNDS = 20
+CHAIN_ROUNDS = 10
+# The most rounds an owner may allow per chain, or add at once when continuing a stopped chain; a limit of 0 is unlimited.
+MAX_CHAIN_ROUNDS = 100
+UNLIMITED_ROUNDS = 0
 # What the program notices for the host (a failure, a possible conflict, its own "continue when idle") hangs on a visible
 # message from this author. Only the host's own continue costs a round of its chain; an event is free, once per event.
 NOTICE_AUTHOR = "系统"
@@ -149,7 +156,8 @@ LATER_COLUMNS = {"room_members": {"access": "TEXT NOT NULL DEFAULT 'runner'", "s
                  "member_executions": {"changes": "TEXT NOT NULL DEFAULT ''", "edited": "TEXT NOT NULL DEFAULT ''", "cwd": "TEXT NOT NULL DEFAULT ''",
                                        "activity": "TEXT NOT NULL DEFAULT ''", "activity_at": "INTEGER NOT NULL DEFAULT 0"},
                  "member_requests": {"chain_id": "INTEGER NOT NULL DEFAULT 0", "batch_id": "INTEGER NOT NULL DEFAULT 0",
-                                     "purpose": "TEXT NOT NULL DEFAULT 'ask'", "created_by": "TEXT NOT NULL DEFAULT 'user'"}}
+                                     "purpose": "TEXT NOT NULL DEFAULT 'ask'", "created_by": "TEXT NOT NULL DEFAULT 'user'"},
+                 "free_chain_holds": {"asked_rounds": "INTEGER NOT NULL DEFAULT 0", "asked_reason": "TEXT NOT NULL DEFAULT ''"}}
 
 
 def migrate_free_tables(connection):
@@ -259,7 +267,7 @@ def checked_review_plan(connection, room_id, actor, payload):
     if not reviewer or reviewer["status"] != "active" or reviewer["member_revision"] != review_member_revision(reviewer, reviewer["generation"]) or not reviewer["config_version"]:
         raise FileExistsError("没有可核验只读的评审成员：指定成员未上报有效能力或已失效")
     chain_id = answered_chain(connection, payload, actor)
-    if not chain_id or rounds_left(connection, room_id, chain_id) < 1:
+    if not chain_id or out_of_rounds(connection, room_id, chain_id):
         raise FileExistsError("任务链剩余额度不足，不能保存实现批次及评审授权")
     return {"chain_id": chain_id, "host_id": actor["id"], "reviewer_id": reviewer["id"], "reviewer_name": reviewer["name"],
             "config_version": reviewer["config_version"], "member_revision": reviewer["member_revision"], "scope": scope.strip(),
@@ -330,7 +338,7 @@ def review_block_reason(plan, requests, facts):
         return "该批次交回主持人的请求已处理或取消"
     if not facts["capability"]:
         return "没有可核验只读的评审成员：既定评审者离开或能力配置已变化"
-    if facts["remaining"] < 1:
+    if facts["remaining"] is not None and facts["remaining"] < 1:
         return "任务链剩余额度不足，需用户续额或主持人另行处理"
     return ""
 
@@ -811,7 +819,12 @@ def free_view(connection, room_id):
     chains = [dict(row) for row in connection.execute(
         "SELECT chain_id,reason FROM free_chains WHERE room_id=? ORDER BY chain_id DESC LIMIT 10", (room_id,))]
     max_rounds = chain_rounds(connection, room_id)
-    progress = [dict(row) for row in connection.execute(CHAIN_PROGRESS_SQL, (max_rounds, room_id))]
+    progress = [{"chain_id": row["chain_id"], "used": row["used"],
+                 "allowed": None if max_rounds == UNLIMITED_ROUNDS else max_rounds + row["extra"]}
+                for row in connection.execute(CHAIN_PROGRESS_SQL, (room_id,))]
+    asks = {row["chain_id"]: {"asked_rounds": row["asked_rounds"], "asked_reason": row["asked_reason"]} for row in connection.execute(
+        "SELECT chain_id,asked_rounds,asked_reason FROM free_chain_holds WHERE room_id=? AND asked_rounds>0", (room_id,))}
+    chains = [{**chain, **asks.get(chain["chain_id"], {})} for chain in chains]
     return {"members": members, "requests": requests[::-1], "executions": recent_executions(connection, room_id),
             "conflicts": possible_conflicts(connection, room_id, names), "halted_chains": chains, "max_rounds": max_rounds,
             "chain_rounds": progress, "recommendations": recent_recommendations(connection, room_id, now)[::-1],
@@ -926,7 +939,30 @@ def recipients(connection, room_id, payload):
 
 # What a proactive post may not carry: it answers no request. Only the host's may also dispatch, as an answer does.
 PROACTIVE_EXCLUDED = ("execution_id", "request_ids", "next_review", "turn_id")
-HOST_ONLY_PROACTIVE = ("to", "handoff", "no_handoff", "continue", "sequential", "loop")
+HOST_ONLY_PROACTIVE = ("to", "handoff", "no_handoff", "continue", "sequential", "loop", "need_rounds", "rounds_reason")
+
+
+def check_need_rounds(member, payload):
+    """`need_rounds` + `rounds_reason`: the host says how many rounds the work it dispatches still needs, this one included.
+
+    More than the chain has left stops the chain before this dispatch and asks the owner to approve the difference.
+    """
+    rounds, reason = payload.get("need_rounds"), payload.get("rounds_reason")
+    if rounds is None and reason is None:
+        return
+    if member["role"] != "host" or not payload.get("to"):
+        raise ValueError("need_rounds 只能由主持人与 to 一起使用")
+    if type(rounds) is not int or not 1 <= rounds <= MAX_CHAIN_ROUNDS:
+        raise ValueError(f"need_rounds 须为 1–{MAX_CHAIN_ROUNDS} 的整数（本任务从这次派活起还需要的轮数）")
+    if not isinstance(reason, str) or not reason.strip() or len(reason) > MAX_CONTINUE_REASON:
+        raise ValueError(f"need_rounds 须同时用 rounds_reason 写明为什么需要这些轮，最多 {MAX_CONTINUE_REASON} 字")
+
+
+def need_plan(payload):
+    """The host's round request as dispatch takes it, or None."""
+    if payload.get("need_rounds") is None:
+        return None
+    return {"rounds": payload["need_rounds"], "reason": payload["rounds_reason"].strip()}
 
 
 def check_no_handoff(member, payload):
@@ -963,6 +999,7 @@ def check_proactive(connection, room_id, member, payload):
     if payload.get("to"):
         named_members(active_members(connection, room_id), payload["to"], exclude=member["name"])
     check_no_handoff(member, payload)
+    check_need_rounds(member, payload)
     reason = payload.get("continue")
     if reason is not None and (not isinstance(reason, str) or not reason.strip() or len(reason) > MAX_CONTINUE_REASON):
         raise ValueError(f"continue 写明房间空闲后继续做什么，最多 {MAX_CONTINUE_REASON} 字")
@@ -974,10 +1011,11 @@ def after_proactive(connection, room_id, message_id, member, payload):
     if member["role"] != "host":
         return
     if payload.get("to") and payload.get("sequential") is True:
-        start_sequence(connection, room_id, member, message_id, payload["to"], message_id, payload.get("loop") is True)
+        start_sequence(connection, room_id, member, message_id, payload["to"], message_id, payload.get("loop") is True,
+                       need_plan(payload))
     elif payload.get("to"):
         dispatch(connection, room_id, member, message_id, payload["to"], message_id, payload.get("handoff") is True,
-                 payload.get("no_handoff") is True)
+                 payload.get("no_handoff") is True, {"need": need_plan(payload)})
     remember_continue(connection, room_id, member, message_id, message_id, payload)
     settle_batches(connection, room_id)
 
@@ -995,6 +1033,7 @@ def check_answer(connection, room_id, member, payload):
     if payload.get("handoff") not in (None, False) and (payload["handoff"] is not True or member["role"] != "host" or not payload.get("to")):
         raise ValueError("handoff 只能由主持人与 to 一起使用，值为 true")
     check_no_handoff(member, payload)
+    check_need_rounds(member, payload)
     reason = payload.get("continue")
     if reason is not None and (member["role"] != "host" or not isinstance(reason, str) or not reason.strip()
                                or len(reason) > MAX_CONTINUE_REASON):
@@ -1134,28 +1173,38 @@ def halt_chain(connection, room_id, chain_id, reason):
 
 
 def rounds_left(connection, room_id, chain_id):
-    """Rounds a chain may still start: the room's limit plus what the owner added, less the dispatches made; none once halted."""
+    """Rounds a chain may still start: the room's limit plus what the owner added, less the rounds used; none once halted.
+
+    None when the room's limit is unlimited (and the chain was not halted).
+    """
     if connection.execute("SELECT 1 FROM free_chains WHERE room_id=? AND chain_id=?", (room_id, chain_id)).fetchone():
         return 0
-    used = connection.execute("SELECT COUNT(*) FROM free_batches WHERE room_id=? AND chain_id=?", (room_id, chain_id)).fetchone()[0]
-    used += connection.execute("SELECT COUNT(*) FROM free_host_wakes WHERE room_id=? AND chain_id=? AND key LIKE 'continue:%'",
-                               (room_id, chain_id)).fetchone()[0]
+    limit = chain_rounds(connection, room_id)
+    if limit == UNLIMITED_ROUNDS:
+        return None
+    used = connection.execute(CHAIN_USED_SQL, (room_id, chain_id)).fetchone()[0]
     extra = connection.execute("SELECT extra_rounds FROM free_chain_holds WHERE room_id=? AND chain_id=?", (room_id, chain_id)).fetchone()
-    return chain_rounds(connection, room_id) + (extra[0] if extra else 0) - used
+    return limit + (extra[0] if extra else 0) - used
+
+
+def out_of_rounds(connection, room_id, chain_id, needed=1):
+    """Whether a chain has fewer than `needed` rounds left; an unlimited room never runs out."""
+    remaining = rounds_left(connection, room_id, chain_id)
+    return remaining is not None and remaining < needed
 
 
 def chain_rounds(connection, room_id):
-    """Rounds a host may run from one owner message in this room."""
+    """Rounds a host may run from one owner message in this room; UNLIMITED_ROUNDS (0) for no limit."""
     row = connection.execute("SELECT max_rounds FROM free_round_limits WHERE room_id=?", (room_id,)).fetchone()
     return row[0] if row else CHAIN_ROUNDS
 
 
 def set_chain_rounds(connection, room_id, token, payload):
-    """Owner sets the room's round limit; it applies to chains still running and to later ones."""
+    """Owner sets the room's round limit (0 for unlimited); it applies to chains still running and to later ones."""
     require_owner(connection, room_id, token)
     value = payload.get("max_rounds")
-    if type(value) is not int or not 1 <= value <= MAX_CHAIN_ROUNDS:
-        raise ValueError(f"max_rounds 须为 1–{MAX_CHAIN_ROUNDS} 的整数")
+    if type(value) is not int or not (value == UNLIMITED_ROUNDS or 1 <= value <= MAX_CHAIN_ROUNDS):
+        raise ValueError(f"max_rounds 须为 1–{MAX_CHAIN_ROUNDS} 的整数，或 0 表示不限")
     begin_write(connection)
     connection.execute("""INSERT INTO free_round_limits (room_id,max_rounds) VALUES (?,?)
         ON CONFLICT(room_id) DO UPDATE SET max_rounds=excluded.max_rounds""", (room_id, value))
@@ -1182,18 +1231,25 @@ def continue_chain(connection, room_id, token, chain_id, payload):
         ON CONFLICT(room_id,chain_id) DO UPDATE SET extra_rounds=extra_rounds+excluded.extra_rounds""", (room_id, chain_id, rounds))
     connection.execute("DELETE FROM free_chains WHERE room_id=? AND chain_id=?", (room_id, chain_id))
     held = connection.execute("SELECT message_id,names,handoff FROM free_chain_holds WHERE room_id=? AND chain_id=?", (room_id, chain_id)).fetchone()
-    connection.execute("UPDATE free_chain_holds SET message_id=0,host_id=0,names='[]',handoff=0 WHERE room_id=? AND chain_id=?", (room_id, chain_id))
+    connection.execute("""UPDATE free_chain_holds SET message_id=0,host_id=0,names='[]',handoff=0,asked_rounds=0,asked_reason=''
+        WHERE room_id=? AND chain_id=?""", (room_id, chain_id))
     if held["message_id"]:
         dispatch(connection, room_id, host, held["message_id"], json.loads(held["names"]), chain_id, bool(held["handoff"]))
     return free_view(connection, room_id)
 
 
-def hold_dispatch(connection, room_id, host, message_id, names, chain_id, handoff):
-    """Stop a chain at its round limit, keeping the dispatch it held back so the owner can send it by continuing."""
+def hold_dispatch(connection, room_id, host, message_id, names, chain_id, handoff, ask=None):
+    """Stop a chain at its round limit, keeping the dispatch it held back so the owner can send it by continuing.
+
+    `ask` is the host's request for more rounds ({"rounds": the rounds to add, "reason"}), shown to the owner to approve.
+    """
     halt_chain(connection, room_id, chain_id, "budget")
-    connection.execute("""INSERT INTO free_chain_holds (room_id,chain_id,message_id,host_id,names,handoff) VALUES (?,?,?,?,?,?)
+    asked, reason = (ask["rounds"], ask["reason"]) if ask else (0, "")
+    connection.execute("""INSERT INTO free_chain_holds (room_id,chain_id,message_id,host_id,names,handoff,asked_rounds,asked_reason)
+        VALUES (?,?,?,?,?,?,?,?)
         ON CONFLICT(room_id,chain_id) DO UPDATE SET message_id=excluded.message_id,host_id=excluded.host_id,names=excluded.names,
-        handoff=excluded.handoff""", (room_id, chain_id, message_id, host["id"], json.dumps(list(names), ensure_ascii=False), int(handoff)))
+        handoff=excluded.handoff,asked_rounds=excluded.asked_rounds,asked_reason=excluded.asked_reason""",
+                       (room_id, chain_id, message_id, host["id"], json.dumps(list(names), ensure_ascii=False), int(handoff), asked, reason))
 
 
 def wake_host(connection, room_id, chain_id, text, key):
@@ -1205,7 +1261,7 @@ def wake_host(connection, room_id, chain_id, text, key):
     notice was written.
     """
     host = connection.execute("SELECT id FROM room_members WHERE room_id=? AND role='host' AND status='active'", (room_id,)).fetchone()
-    if not host or not chain_id or key.startswith("continue:") and rounds_left(connection, room_id, chain_id) < 1:
+    if not host or not chain_id or key.startswith("continue:") and out_of_rounds(connection, room_id, chain_id):
         return False
     if connection.execute("SELECT 1 FROM free_host_wakes WHERE room_id=? AND key=?", (room_id, key)).fetchone():
         return False
@@ -1292,22 +1348,30 @@ def resume_host(connection, room_id):
     wake_host(connection, room_id, row["chain_id"], f"主持人续跑（接 #{row['message_id']}）：{row['reason']}", f"continue:{row['message_id']}")
 
 
-def dispatch(connection, room_id, host, message_id, names, chain_id, handoff=False, direct=False):
+def dispatch(connection, room_id, host, message_id, names, chain_id, handoff=False, direct=False, plan=None):
     """Queue the host's named members as one batch, one round; it hands back to the host when it ends.
 
     `direct` (the host's `no_handoff`) lets a one-member batch that completed reach the user without coming back; a
-    failure still comes back.
+    failure still comes back. `plan` carries either `relay` (a relay's later step in the same pass: free, never held)
+    or `need` (the host's `need_rounds`: {"rounds", "reason"}); a need above the rounds left stops the chain right away
+    and asks the owner for the difference.
     """
+    plan = plan or {}
     member_ids = named_members(active_members(connection, room_id), names, exclude=host["name"])
     if not member_ids or not chain_id:
         return
-    if rounds_left(connection, room_id, chain_id) < 1:
-        hold_dispatch(connection, room_id, host, message_id, names, chain_id, handoff)
+    need = plan.get("need")
+    remaining = None if plan.get("relay") else rounds_left(connection, room_id, chain_id)
+    if remaining is not None and (remaining < 1 or need and remaining < need["rounds"]):
+        ask = {"rounds": need["rounds"] - max(remaining, 0), "reason": need["reason"]} if need else None
+        hold_dispatch(connection, room_id, host, message_id, names, chain_id, handoff, ask)
         return
     for member_id in member_ids:
         insert_request(connection, room_id, member_id, message_id, chain_id, "ask", "host", batch_id=message_id)
     connection.execute("INSERT INTO free_batches (room_id,batch_id,chain_id,host_id) VALUES (?,?,?,?)",
                        (room_id, message_id, chain_id, host["id"]))
+    if plan.get("relay"):
+        connection.execute("INSERT OR IGNORE INTO free_relay_steps (room_id,batch_id) VALUES (?,?)", (room_id, message_id))
     # Work handed out under a goal: when it ends and the room is idle, the host is woken to carry on.
     connection.execute("UPDATE room_goals SET armed=1 WHERE room_id=? AND status='active'", (room_id,))
     if handoff:
@@ -1397,7 +1461,7 @@ def checked_sequence(actor, payload):
         raise ValueError("依次接力不能同时声明预授权评审；评审者直接排进顺序即可")
 
 
-def start_sequence(connection, room_id, host, message_id, names, chain_id, loop):
+def start_sequence(connection, room_id, host, message_id, names, chain_id, loop, need=None):
     """Start a host's one-after-another dispatch with its first member; the rest follow as each answer arrives."""
     member_ids = named_members(active_members(connection, room_id), names, exclude=host["name"])
     if not chain_id:
@@ -1405,17 +1469,20 @@ def start_sequence(connection, room_id, host, message_id, names, chain_id, loop)
     connection.execute("""INSERT INTO free_sequences (room_id,message_id,chain_id,host_id,member_ids,loop,batch_id,steps)
         VALUES (?,?,?,?,?,?,?,?)""", (room_id, message_id, chain_id, host["id"], json.dumps(member_ids), int(loop), message_id,
                                       json.dumps([[1, member_ids[0], message_id]])))
-    dispatch(connection, room_id, host, message_id, names[:1], chain_id)
+    dispatch(connection, room_id, host, message_id, names[:1], chain_id, plan={"need": need})
 
 
 def sequence_step(connection, room_id, sequence, host, position, pass_number, message_id):
-    """Ask the member at `position`, hung on `message_id`; one step is one batch, so it costs one round or waits at the limit."""
+    """Ask the member at `position`, hung on `message_id`; one step is one batch.
+
+    A pass's first step costs one round (or waits at the limit); later steps of the same pass ride on it.
+    """
     member_id = json.loads(sequence["member_ids"])[position]
     name = connection.execute("SELECT name FROM room_members WHERE id=?", (member_id,)).fetchone()[0]
     steps = json.loads(sequence["steps"]) + [[pass_number, member_id, message_id]]
     connection.execute("UPDATE free_sequences SET status='running',pass=?,position=?,batch_id=?,steps=? WHERE id=?",
                        (pass_number, position, message_id, json.dumps(steps), sequence["id"]))
-    dispatch(connection, room_id, host, message_id, [name], sequence["chain_id"])
+    dispatch(connection, room_id, host, message_id, [name], sequence["chain_id"], plan={"relay": pass_number == sequence["pass"]})
 
 
 def next_present(connection, room_id, sequence, start):
@@ -1679,10 +1746,10 @@ def after_free_message(connection, room_id, message_id, actor, payload):
                            (message_id, execution_id))
     connection.execute("UPDATE room_members SET read_until=MAX(read_until,?) WHERE id=?", (message_id, actor["id"]))
     if actor["role"] == "host" and payload.get("to") and payload.get("sequential") is True:
-        start_sequence(connection, room_id, actor, message_id, payload["to"], chain_id, payload.get("loop") is True)
+        start_sequence(connection, room_id, actor, message_id, payload["to"], chain_id, payload.get("loop") is True, need_plan(payload))
     elif actor["role"] == "host" and payload.get("to"):
         dispatch(connection, room_id, actor, message_id, payload["to"], chain_id, payload.get("handoff") is True or bool(payload.get("next_review")),
-                 payload.get("no_handoff") is True)
+                 payload.get("no_handoff") is True, {"need": need_plan(payload)})
     if actor["role"] == "host":
         remember_continue(connection, room_id, actor, message_id, chain_id, payload)
     settle_batches(connection, room_id)
@@ -2447,7 +2514,8 @@ def rewind_room(connection, room_id, token, payload):
     connection.execute("UPDATE free_batches SET settled=1 WHERE room_id=? AND batch_id>=?", (room_id, message_id))
     connection.execute("""UPDATE free_sequences SET status='stopped' WHERE room_id=? AND status IN ('running','checkpoint')
         AND (batch_id>=? OR message_id>=?)""", (room_id, message_id, message_id))
-    connection.execute("UPDATE free_chain_holds SET message_id=0,host_id=0,names='[]',handoff=0 WHERE room_id=? AND message_id>=?", (room_id, message_id))
+    connection.execute("""UPDATE free_chain_holds SET message_id=0,host_id=0,names='[]',handoff=0,asked_rounds=0,asked_reason=''
+        WHERE room_id=? AND message_id>=?""", (room_id, message_id))
     connection.execute("""INSERT INTO message_withdrawals (message_id,kind,created_at) SELECT id,'rewound',? FROM messages m
         WHERE m.room_id=? AND m.id>=? AND NOT EXISTS(SELECT 1 FROM message_withdrawals w WHERE w.message_id=m.id)""", (now, room_id, message_id))
     connection.execute("UPDATE room_members SET read_until=MIN(read_until,?) WHERE room_id=?", (message_id - 1, room_id))

@@ -294,6 +294,22 @@ test('smart scheduling holds the host until its decision, and a confident pick r
   assert.ok(!readFileSync(started.config_path, 'utf8').includes(SECRET));
 });
 
+test('the room API request limit tells the model to submit before it runs out', async t => {
+  const f = await site_fixture(t);
+  // Keeps reading until the runner says requests are running out, then submits what it has.
+  const mock = await model_fixture(t, call => JSON.stringify(call.body).includes('次模型请求。停止继续读取')
+    ? tool_reply(call, 'submit_chat', { text: '已完成部分，余下未做。' }) : tool_reply(call, 'read_room'));
+  const participants = { Grok: profiles(f.home, mock.base_url).Grok };
+  const started = await launch_discussion(f.home, { site: f.site, entry: 'web', participants, api_max_requests: 4,
+    room: { title: 'API 上限', mode: 'free', host: '用户', members: ['Grok'], submission_id: randomUUID() } }, { start_service: async () => ({ running: true }) });
+  const config = load_config(started.config_path), store = new DiscussionStore(config.directory), runner = new FreeRoomRunner(config, store);
+  f.cleanup.push(() => { runner.stop_children(); store.close(); });
+  await api(config, '/messages', { author: '用户', text: '请处理。', source: 'user', kind: 'chat', to: ['Grok'], submission_id: randomUUID() });
+  await until(async () => (await api(config, '/messages')).messages.some(message => message.author === 'Grok'), () => runner.tick());
+  assert.equal(mock.calls.length, 2, 'with 4 requests the reminder follows the first tool results');
+  assert.match(JSON.stringify(mock.calls[0].body), /最多 4 次模型请求/);
+});
+
 test('pause aborts an in-flight API request and prevents a late tool response from writing', async t => {
   let release;
   const mock = await model_fixture(t, async call => {

@@ -694,13 +694,14 @@ CREATE TABLE IF NOT EXISTS free_host_continues (
     after_request INTEGER NOT NULL
 );
 -- The owner's per-room limit on rounds a host may run from one owner message (a round is one host dispatch, its members'
--- answers and the hand-back); rooms without a row use the default.
+-- answers and the hand-back; a whole relay pass is one); rooms without a row use the default, 0 means unlimited.
 CREATE TABLE IF NOT EXISTS free_round_limits (
     room_id TEXT PRIMARY KEY REFERENCES rooms(id) ON DELETE CASCADE,
     max_rounds INTEGER NOT NULL
 );
 -- A chain the owner let run on past its limit: the rounds added, and the dispatch the limit held back, which is sent
--- when the owner continues (message_id 0 when nothing is held).
+-- when the owner continues (message_id 0 when nothing is held). asked_rounds/asked_reason: the host's `need_rounds`
+-- request that stopped it, the rounds to add for the owner to approve (0 when the plain limit stopped it).
 CREATE TABLE IF NOT EXISTS free_chain_holds (
     room_id TEXT NOT NULL REFERENCES rooms(id) ON DELETE CASCADE,
     chain_id INTEGER NOT NULL,
@@ -709,7 +710,15 @@ CREATE TABLE IF NOT EXISTS free_chain_holds (
     host_id INTEGER NOT NULL DEFAULT 0,
     names TEXT NOT NULL DEFAULT '[]',
     handoff INTEGER NOT NULL DEFAULT 0,
+    asked_rounds INTEGER NOT NULL DEFAULT 0,
+    asked_reason TEXT NOT NULL DEFAULT '',
     PRIMARY KEY (room_id,chain_id)
+);
+-- A relay's later steps within one pass: their batches ride on the pass's first step and cost no round.
+CREATE TABLE IF NOT EXISTS free_relay_steps (
+    room_id TEXT NOT NULL REFERENCES rooms(id) ON DELETE CASCADE,
+    batch_id INTEGER NOT NULL,
+    PRIMARY KEY (room_id,batch_id)
 );
 -- A discussion is a switch on a room, not a room type: one thin record per started discussion.
 -- Session status is written by the application.
