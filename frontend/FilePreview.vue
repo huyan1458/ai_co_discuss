@@ -491,6 +491,8 @@ onMounted(() => {
   document.addEventListener("selectionchange", schedule_offer);
   document.addEventListener("pointerdown", press);
   document.addEventListener("pointerup", release);
+  // A touch long-press that starts a selection ends in pointercancel, not pointerup.
+  document.addEventListener("pointercancel", release);
 });
 onBeforeUnmount(() => {
   if (file_preview.open === open_file) file_preview.open = null;
@@ -501,6 +503,7 @@ onBeforeUnmount(() => {
   document.removeEventListener("selectionchange", schedule_offer);
   document.removeEventListener("pointerdown", press);
   document.removeEventListener("pointerup", release);
+  document.removeEventListener("pointercancel", release);
   window.clearTimeout(offer_timer);
   reader.dispose();
 });

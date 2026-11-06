@@ -198,8 +198,8 @@ const date = (time) => new Date(time).toLocaleString("zh-CN", { month: "numeric"
       <div class="device-actions">
         <UButton v-if="remote && renew_due" label="续期这台设备" color="neutral" variant="soft" size="sm" :loading="busy === 'renew'" :disabled="Boolean(busy)" @click="run('renew', async () => { await bridge.device.renew(); await load(); })" />
         <UButton v-if="local" label="添加设备" icon="i-lucide-qr-code" color="neutral" variant="outline" size="sm" :loading="busy === 'invite'" :disabled="Boolean(busy)" @click="add_device" />
+        <UCheckbox v-if="local" v-model="without_passkey" label="允许不用通行密钥" />
         <UCheckbox v-if="local" v-model="temporary" label="临时设备（只授权 1 天）" />
-        <UCheckbox v-if="local" v-model="without_passkey" label="允许不用通行密钥" description="只在新设备的浏览器不支持通行密钥时勾选：它不需要每天确认，到期须回电脑前重新配对" />
       </div>
       <div v-if="invite" class="device-invite" role="status">
         <!-- eslint-disable-next-line vue/no-v-html -- an SVG this page rendered from the computer's own link -->

@@ -279,6 +279,8 @@ onMounted(() => {
   document.addEventListener("selectionchange", schedule_listen);
   document.addEventListener("pointerdown", press);
   document.addEventListener("pointerup", release);
+  // A touch long-press that starts a selection ends in pointercancel, not pointerup.
+  document.addEventListener("pointercancel", release);
   narrow_query.addEventListener("change", track_narrow);
   transcript.value?.addEventListener("scroll", schedule_listen, { passive: true });
   transcript.value?.addEventListener("scroll", place_quote, { passive: true });
@@ -286,7 +288,7 @@ onMounted(() => {
   watch(() => room.value?.id, () => { reader.stop(); voice.cancel(); cancel_quote(); });
   speech_configured().then((ready) => { speech_ready.value = ready; });
 });
-onBeforeUnmount(() => { document.removeEventListener("selectionchange", schedule_listen); document.removeEventListener("pointerdown", press); document.removeEventListener("pointerup", release); window.removeEventListener("resize", place_marks); window.clearTimeout(listen_timer); narrow_query.removeEventListener("change", track_narrow); reader.stop(); voice.cancel(); hold_selection(null); });
+onBeforeUnmount(() => { document.removeEventListener("selectionchange", schedule_listen); document.removeEventListener("pointerdown", press); document.removeEventListener("pointerup", release); document.removeEventListener("pointercancel", release); window.removeEventListener("resize", place_marks); window.clearTimeout(listen_timer); narrow_query.removeEventListener("change", track_narrow); reader.stop(); voice.cancel(); hold_selection(null); });
 const MESSAGE_PREVIEW_LENGTH = 160;
 const MESSAGE_PREVIEW_MIN_LENGTH = 100;
 const MESSAGE_PREVIEW_CODE_LINES = 4;
