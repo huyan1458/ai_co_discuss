@@ -74,7 +74,7 @@ async function seal_compressed(key, value, label) {
  * of the local website itself are reachable; the device cannot name another address. Binary content comes back as base64.
  */
 export async function room_api(home, site, payload, { fetcher = fetch, device } = {}) {
-  const { method = 'GET', path, body, token, offset = 0 } = payload || {};
+  const { method = 'GET', path, body, token, offset = 0, etag } = payload || {};
   if (!['GET', 'POST'].includes(method) || typeof path !== 'string' || !ROOM_API_PATH.test(path) || path.includes('..')
       || !Number.isSafeInteger(offset) || offset < 0) {
     return { status: 400, body: { error: '中转请求地址无效' } };
@@ -82,10 +82,14 @@ export async function room_api(home, site, payload, { fetcher = fetch, device } 
   const headers = bridge_headers(home, site);
   if (typeof token === 'string' && token) headers['X-Discussion-Token'] = token;
   if (body !== undefined) headers['Content-Type'] = 'application/json';
+  // A read the device already holds is asked conditionally; unchanged, the answer is a bare 304 with no body.
+  if (method === 'GET' && typeof etag === 'string' && /^"[0-9a-f]{1,64}"$/.test(etag)) headers['If-None-Match'] = etag;
   const response = await fetcher(`${local_origin(home)}${path}`, { method, headers, redirect: 'error',
     body: body === undefined ? undefined : JSON.stringify(body), signal: AbortSignal.timeout(LOCAL_TIMEOUT_MS) });
+  const tag = response.headers.get('ETag');
+  if (response.status === 304) return { status: 304, etag: tag || etag };
   const type = response.headers.get('Content-Type') || '';
-  if (type.startsWith('application/json')) return { status: response.status, body: await response.json() };
+  if (type.startsWith('application/json')) return { status: response.status, body: await response.json(), ...(tag ? { etag: tag } : {}) };
   // A file larger than one frame comes back in parts; the device asks again from where the previous part ended.
   const bytes = Buffer.from(await response.arrayBuffer());
   return { status: response.status, content_type: type, offset, total: bytes.length,

@@ -5,7 +5,7 @@ const emit = defineEmits(["update:modelValue"]);
 </script>
 
 <template>
-  <UCheckbox :model-value="modelValue" :disabled="disabled" label="允许主持人自建工作流"
+  <UCheckbox :model-value="modelValue" :disabled="disabled" label="允许主持人自建工作流" aria-label="允许主持人自建工作流"
     description="主持人可自行保存、启用工作流并邀请其中的成员，项目权限最高可写。"
     @update:model-value="emit('update:modelValue', $event)" />
 </template>

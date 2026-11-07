@@ -28,7 +28,7 @@ watch(() => props.modelValue, (value) => { if (value !== UNLIMITED) finite.value
         <NumberStepper :model-value="modelValue" :max="MAX_CHAIN_ROUNDS" label="主持人连续派活轮数" :disabled="disabled" @update:model-value="emit('update:modelValue', $event)" />
         <span>轮，然后停下等你</span>
       </template>
-      <UCheckbox :model-value="modelValue === UNLIMITED" :disabled="disabled" label="不限" :ui="{ root: 'items-center' }" @update:model-value="emit('update:modelValue', $event ? UNLIMITED : finite)" />
+      <UCheckbox :model-value="modelValue === UNLIMITED" :disabled="disabled" label="不限" aria-label="主持人连续派活轮数不限" :ui="{ root: 'items-center' }" @update:model-value="emit('update:modelValue', $event ? UNLIMITED : finite)" />
     </span>
     <small class="chain-rounds-help">一轮 = 派活 → 成员回答 → 交回主持人汇总；依次接力走完一圈算一轮。到上限后可一键继续，主持人也可提前申请轮数等你批准；不限时只能靠“全部停止”打断。<slot /></small>
   </span>

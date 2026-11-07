@@ -380,6 +380,29 @@ class CliTests(unittest.TestCase):
         self.rejected(["turn", "create", self.room, "--plan-file", "-", "--expert", "Codex", "--as", "Codex",
                        "--roster", "stale", "--submission-id", str(uuid.uuid4())])
 
+    def test_long_messages_page_within_output_budget_without_gaps(self):
+        """A page stops at the output budget and next_after resumes exactly after the last shown message."""
+        if self.external:
+            self.skipTest("Free rooms exist only on the Python backend in P1")
+        owner = uuid.uuid4().hex
+        def call(path, payload):
+            request = Request(self.base + path, data=json.dumps(payload).encode(),
+                              headers={"Content-Type": "application/json", "X-Discussion-Token": owner})
+            with urlopen(request, timeout=10) as response:
+                return json.loads(response.read())
+        room = call("/api/rooms", {"title": "长文", "goal": "x", "mode": "free", "members": []})["id"]
+        posted = [call(f"/api/rooms/{room}/messages", {"author": "用户", "text": f"{index}" + "长" * 4000,
+                                                       "submission_id": uuid.uuid4().hex})["message"]["id"] for index in range(8)]
+        seen, after = [], 0
+        while True:
+            page = self.cli("message", "list", room, "--after", after)
+            self.assertLessEqual(len(json.dumps(page["messages"], ensure_ascii=False, indent=2)), 2 * discuss.LIST_OUTPUT_CHARS)
+            seen += [message["id"] for message in page["messages"]]
+            after = page["next_after"]
+            if not page["has_more"]:
+                break
+        self.assertEqual(seen, posted)
+
     def test_progressive_reads_do_not_expand_materials(self):
         """Overview/list omit briefing, state, and message bodies."""
         self.cli("state", "set", self.room, "--body", "未主动读取的摘要", "--until", "0", "--as", "Codex")

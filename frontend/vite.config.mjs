@@ -55,6 +55,8 @@ export default defineConfig(({ mode }) => mode === "markdown" ? {
     outDir: "web",
     emptyOutDir: false,
     lib: { entry: "frontend/main.js", formats: ["es"], fileName: () => "modern.js", cssFileName: "modern" },
-    rolldownOptions: { output: { codeSplitting: false } },
+    // Library mode keeps whitespace and pure annotations in ES output for downstream tree shaking; this bundle is the
+    // page itself, so minify it fully (a quarter of the bytes the browser must download and parse).
+    rolldownOptions: { output: { codeSplitting: false, minify: true, comments: false } },
   },
 });

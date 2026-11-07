@@ -777,6 +777,35 @@ class DiscussionTests(unittest.TestCase):
                 self.assertIn(response.headers["Content-Type"].split(";")[0].strip(), accepted_types)
                 self.assertTrue(response.read())
 
+    def test_room_reads_answer_304_until_their_content_changes(self):
+        """The room list and a room's view carry an ETag; a matching If-None-Match gets 304, a change gets the new body."""
+        if self.external:
+            self.skipTest("ETags are served by the Python site")
+        def read(path, etag=None):
+            request = Request(self.base + path, headers={"X-Discussion-Token": self.owner, **({"If-None-Match": etag} if etag else {})})
+            try:
+                response = urlopen(request, timeout=5)
+            except HTTPError as error:
+                response = error
+            with response:
+                return response.status, response.headers.get("ETag"), response.read()
+        for path in ("/api/rooms", f"/api/rooms/{self.room['id']}"):
+            with self.subTest(path=path):
+                status, etag, body = read(path)
+                self.assertEqual(status, 200)
+                self.assertTrue(etag)
+                self.assertEqual(read(path, etag)[:2], (304, etag))
+                self.assertEqual(read(path, etag)[2], b"")
+                self.assertEqual(read(path, '"stale"')[0], 200)
+        before = {path: read(path)[1] for path in ("/api/rooms", f"/api/rooms/{self.room['id']}")}
+        self.assertEqual(self.request(f"/api/rooms/{self.room['id']}/rename", {"actor": "用户", "title": "再次改名"})[0], 200)
+        for path, etag in before.items():
+            with self.subTest(after_change=path):
+                status, changed, body = read(path, etag)
+                self.assertEqual(status, 200)
+                self.assertNotEqual(changed, etag)
+                self.assertIn("再次改名", body.decode())
+
     def test_cli_publish_is_idempotent_and_rejects_changed_payload(self):
         """An execution's exact retries retain one original CLI record, even after completion."""
         self.configure_host(experts={"Codex": "cli", "Antigravity": "cli"})

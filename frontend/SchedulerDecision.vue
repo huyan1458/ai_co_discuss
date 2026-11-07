@@ -79,12 +79,18 @@ function summarize_input(saved) {
 
 /** Clicking the current verdict again withdraws it; a bad one saves at once and opens an optional correction form. */
 const correcting = ref(null);
-function rate(rating) {
+// The verdict shows at once while it is saved; the room's copy takes over when the save settles, a failure reverting it.
+const pending_feedback = ref(undefined);
+const feedback = computed(() => pending_feedback.value !== undefined ? pending_feedback.value : props.decision.feedback);
+async function rate(rating) {
   const { decision } = props;
-  const withdraw = decision.feedback === rating;
+  const withdraw = feedback.value === rating;
   correcting.value = !withdraw && rating === "bad" ? { should_be: decision.should_be || "", note: decision.note || "" } : null;
-  act("rate_decision", { decision_id: decision.id, rating: withdraw ? null : rating,
-    ...(rating === "bad" && !withdraw ? { should_be: decision.should_be, note: decision.note } : {}) });
+  pending_feedback.value = withdraw ? null : rating;
+  try {
+    await act("rate_decision", { decision_id: decision.id, rating: withdraw ? null : rating,
+      ...(rating === "bad" && !withdraw ? { should_be: decision.should_be, note: decision.note } : {}) });
+  } finally { pending_feedback.value = undefined; }
 }
 function save_correction() {
   const { should_be, note } = correcting.value;
@@ -101,8 +107,8 @@ const correction_options = computed(() => [{ label: "未指定", value: UNSET_CO
   <ScheduleCard icon="i-lucide-zap" :skipped="free ? true : !decision.applied" :title="decision.title" label="智能调度决策" toggle-label="展开或收起判断详情" :expandable="Boolean(decision.detail?.length)">
     <template #text>智能调度：{{ decision.label }}<small v-if="decision.confidence !== null">置信度 {{ Number(decision.confidence).toFixed(2) }}</small><small v-if="decision.duration">耗时 {{ decision.duration }}</small></template>
     <template #actions>
-      <button v-if="view.access?.can_manage" type="button" class="channel-schedule-rate" :class="{ 'is-on': decision.feedback === 'good' }" :aria-pressed="decision.feedback === 'good'" aria-label="这次调度判断得好" title="判断得好" @click="rate('good')"><UIcon name="i-lucide-thumbs-up" /></button>
-      <button v-if="view.access?.can_manage" type="button" class="channel-schedule-rate" :class="{ 'is-on': decision.feedback === 'bad' }" :aria-pressed="decision.feedback === 'bad'" aria-label="这次调度判断得不好" title="判断得不好" @click="rate('bad')"><UIcon name="i-lucide-thumbs-down" /></button>
+      <button v-if="view.access?.can_manage" type="button" class="channel-schedule-rate" :class="{ 'is-on': feedback === 'good' }" :aria-pressed="feedback === 'good'" aria-label="这次调度判断得好" title="判断得好" @click="rate('good')"><UIcon name="i-lucide-thumbs-up" /></button>
+      <button v-if="view.access?.can_manage" type="button" class="channel-schedule-rate" :class="{ 'is-on': feedback === 'bad' }" :aria-pressed="feedback === 'bad'" aria-label="这次调度判断得不好" title="判断得不好" @click="rate('bad')"><UIcon name="i-lucide-thumbs-down" /></button>
     </template>
     <div class="channel-schedule-meta">
       <div class="channel-schedule-odds-list">
@@ -127,7 +133,7 @@ const correction_options = computed(() => [{ label: "未指定", value: UNSET_CO
       </template>
     </div>
   </ScheduleCard>
-  <form v-if="correcting && decision.feedback === 'bad'" class="channel-schedule-correction" @submit.prevent="save_correction">
+  <form v-if="correcting && feedback === 'bad'" class="channel-schedule-correction" @submit.prevent="save_correction">
     <label>应该由谁回答<USelect :model-value="correcting.should_be || UNSET_CORRECTION" :items="correction_options" aria-label="应该由谁回答" size="xs" class="channel-schedule-correction-select"
       @update:model-value="correcting.should_be = $event === UNSET_CORRECTION ? '' : $event" /></label>
     <UInput v-model="correcting.note" maxlength="200" placeholder="想说的话（可选）" aria-label="对这次调度判断想说的话" size="xs" class="channel-schedule-correction-note" />

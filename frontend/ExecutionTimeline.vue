@@ -185,8 +185,11 @@ function run_label(run) {
   const task = run.task ? `${run.task.replace(/\s+/g, " ").slice(0, RUN_TASK_CHARS)}${run.task.length > RUN_TASK_CHARS ? "…" : ""}` : "执行";
   return `${when(run.start)} · ${task} · ${run.count} 次${run.running ? " · 进行中" : run.failed ? " · 有失败" : ""}`;
 }
+// As a string first: runs are rebuilt on every read and every clock tick of live work, and the picker renders each
+// option even while closed, so its items change only when a label does.
+const run_labels = computed(() => JSON.stringify(runs.value.list.map((run) => [run.key, run_label(run)])));
 const run_items = computed(() => [{ label: "最近一轮（自动跟随）", value: LATEST },
-  ...runs.value.list.map((run) => ({ label: run_label(run), value: run.key })), { label: "全部执行", value: ALL }]);
+  ...JSON.parse(run_labels.value).map(([value, label]) => ({ label, value })), { label: "全部执行", value: ALL }]);
 
 // The run as it really is; its bounds are what a replay plays through.
 const base_rows = computed(() => shown.value ? timeline_rows(shown.value, now.value) : []);

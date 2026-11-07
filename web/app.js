@@ -10,7 +10,6 @@ const WORKING_STATUSES = ["dispatched", "started"];
 const UPDATE_BATCH_MS = 100;
 const UPDATE_DRAG_RETRY_MS = 500;
 const TOAST_DURATION_MS = 3500;
-const SCROLL_BOTTOM_THRESHOLD = 70;
 const SUBMISSION_ID_BYTES = 16;
 const MAX_MESSAGE_LENGTH = 32000;
 const MAX_SUMMARY_LENGTH = 1000;
@@ -68,6 +67,9 @@ let computer_connecting = false;
 let relay_machine = null;
 // Object URLs of files read from the computer's rooms, by their room route.
 const relay_files = new Map();
+// The room list and room views last read, with their ETags, by route; an unchanged read is answered 304 and reuses them.
+const ROOM_READ_PATH = /^\/api\/rooms(\/[^/?]+)?$/;
+const room_reads = new Map();
 const DEFAULT_USER_LABEL = "User";
 const DEFAULT_USER_ICON = "/icons/user.svg";
 // How a manual member learns it is its turn: it is pulled by the member.
@@ -228,14 +230,24 @@ try { localStorage.removeItem(ADMIN_SESSION_KEY); } catch { /* Nothing stored. *
 
 /** Request JSON from the local or remotely hosted discussion service. */
 async function request_json(path, payload, access_token) {
+  // The room list and a room are read conditionally: unchanged, the copy already held is reused, the same object.
+  const conditional = payload === undefined && ROOM_READ_PATH.test(path);
+  const cached = conditional ? room_reads.get(path) : undefined;
+  const remember = (status, body, etag) => {
+    if (status === 304 && cached) return cached.body;
+    if (conditional) etag ? cache_room_entry(room_reads, path, { etag, body }) : room_reads.delete(path);
+    return body;
+  };
   if (computer_rooms_only() && ROOM_RELAY_PATH.test(path)) {
     if (!state.remote_rooms) throw Object.assign(new Error(COMPUTER_UNREACHABLE), { preflight: true });
-    return (await relay_room_request(path, payload)).body;
+    const answer = await relay_room_request(path, payload, cached?.etag);
+    return remember(answer.status, answer.body, answer.etag);
   }
   const options = { cache: "no-store" };
   const target_room = path.match(/^\/api\/rooms\/([^/?]+)/)?.[1];
   const token = access_token || (target_room ? localStorage.getItem(`discuss-access:${target_room}`) : null);
   options.headers = token ? { "X-Discussion-Token": token } : {};
+  if (cached) options.headers["If-None-Match"] = cached.etag;
   // The online website has no accounts: a paired device signs its requests with its own non-exportable key.
   if ((state.admin.devices || paired_record()) && /^\/api\/(machines|admin\/profile|admin$)/.test(path)) {
     const credential = await device_credential(payload === undefined ? "GET" : "POST", path.split("?")[0]);
@@ -248,9 +260,10 @@ async function request_json(path, payload, access_token) {
   }
   if (/^\/api\/(machines|admin)/.test(path)) options.signal = AbortSignal.timeout((Number.isInteger(payload?.wait) ? payload.wait : RELAY_DEFAULT_WAIT_MS) + MACHINE_REQUEST_MARGIN_MS);
   const response = await fetch(path, options);
+  if (response.status === 304 && cached) return cached.body;
   const result = await response.json();
   if (!response.ok) throw Object.assign(new Error(result.error || "请求失败，请重试"), { preflight: response.status >= 400 && response.status < 500, status: response.status });
-  return result;
+  return conditional ? remember(response.status, result, response.headers.get("ETag")) : result;
 }
 
 /** The owner's public name and avatar replace the default "User" identity for every visitor. */
@@ -876,42 +889,31 @@ function message_provenance(message) {
   return `${role}${forwarding}`;
 }
 
-/** Build compact chat lines with colored names, reply references, and provenance. */
-function message_markup(message) {
-  const identity = IDENTITIES[message.author] || IDENTITIES["用户"];
-  const body = message.kind === "receipt" ? `<details class="message-receipt" data-receipt-id="${message.id}"><summary aria-label="查看运行回执 #${message.id}">运行回执详情</summary>${message.rendered_text}</details>` : message.summary ? `<div class="answer-summary"><small>回答摘要 · ${escape_html(display_name(message.summary_by))}</small>${message.rendered_summary}</div><details class="message-answer" data-answer-id="${message.id}"><summary aria-label="展开完整回答 #${message.id}">完整回答</summary>${message.rendered_text}</details>` : message.rendered_text;
-  const text = body + attachment_markup(message.attachments);
-  const reply = message.reply_to ? `<button class="quote-link" data-detail="${message.reply_to}">↳ 回复 #${message.reply_to} · 查看原文</button>` : "";
-  return `<article class="message ${identity.style}" id="message-${message.id}"><span class="avatar message-avatar" aria-hidden="true">${identity_avatar(identity)}</span><div class="message-line"><time title="${escape_html(message.created_at)}">[${format_time(message.created_at)}]</time><strong class="message-author">${escape_html(display_name(message.author))}</strong><span class="message-verb"> 说：</span><div class="message-text markdown-body">${text}</div></div><div class="message-details"><span class="source-badge ${message.source === "demo" ? "" : "real"}">${SOURCE_LABELS[message.source] || "发言"}</span><span>${escape_html(message_provenance(message))}</span><button class="message-id" data-detail="${message.id}">#${message.id}</button>${reply}<span class="message-actions"><button data-reply="${message.id}" data-author="${escape_html(message.author)}">回复</button><button data-copy-message="${message.id}">复制原文链接</button></span></div></article>`;
-}
-
 /** Render continuous history while retaining expanded answers and reading position. */
+// Rendered copies by the cached record they came from, so leaving a filter reuses them instead of rendering every
+// message's Markdown again.
+const rendered_messages = new WeakMap();
 function render_messages(result) {
   const previous = new Map(state.messages.map((message) => [message.id, message]));
   // Cached history is read once; a later retract or rewind reaches it through the room's withdrawal list.
   const withdrawn = new Map((state.room?.withdrawals || []).map((item) => [item.message_id, item.kind]));
-  state.messages = result.messages.map((message) => {
-    const saved = previous.get(message.id);
+  const messages = result.messages.map((message) => {
+    const saved = previous.get(message.id) || rendered_messages.get(message);
     const kind = withdrawn.get(message.id) || message.withdrawn || "";
+    let shown;
     // A message shown straight from its send response is replaced by the copy the transcript reads.
-    if (saved && !saved.just_sent) return (saved.withdrawn || "") === kind ? saved : { ...saved, withdrawn: kind };
-    return { ...message, withdrawn: kind, rendered_text: render_room_markdown(message.text),
+    if (saved && !saved.just_sent) shown = (saved.withdrawn || "") === kind ? saved : { ...saved, withdrawn: kind };
+    else shown = { ...message, withdrawn: kind, rendered_text: render_room_markdown(message.text),
       rendered_summary: render_room_markdown(message.summary || "") };
+    rendered_messages.set(message, shown);
+    return shown;
   });
+  // An unchanged transcript keeps its array, so views that depend on it are not recomputed.
+  if (messages.length !== state.messages.length || messages.some((message, index) => message !== state.messages[index])) state.messages = messages;
   state.message_total = result.total;
   state.messages_loading = false;
-  const container = element("messages");
-  const open_receipts = [...container.querySelectorAll(".message-receipt[open]")].map((receipt) => receipt.dataset.receiptId);
-  const open_answers = [...container.querySelectorAll(".message-answer[open]")].map((answer) => answer.dataset.answerId);
-  const scroll_position = container.scrollTop;
-  const is_near_bottom = container.scrollHeight - container.clientHeight - scroll_position < SCROLL_BOTTOM_THRESHOLD;
+  // The Vue transcript renders from state.messages; the hidden controller markup is not rebuilt on every refresh.
   state.pages = result.pages;
-  container.innerHTML = state.messages.length ? state.messages.map(message_markup).join("") :
-    `<div class="empty-messages"><strong>${state.query || state.mention_only || state.host_only ? "没有找到匹配的发言" : "暂无讨论记录"}</strong><p>${state.query || state.mention_only || state.host_only ? "换个关键词，或清除筛选后查看完整记录。" : empty_discussion_message(state.room)}</p></div>`;
-  for (const receipt of container.querySelectorAll(".message-receipt")) receipt.open = open_receipts.includes(receipt.dataset.receiptId);
-  for (const answer of container.querySelectorAll(".message-answer")) answer.open = open_answers.includes(answer.dataset.answerId);
-  container.scrollTop = is_near_bottom ? container.scrollHeight : scroll_position;
-  element("record-caption").textContent = state.query || state.mention_only || state.host_only ? `筛选结果 · ${result.total} 条` : "完整记录 · 按时间排列";
 }
 
 /** Join bounded cursor batches for the interactive transcript; refresh only new records. */
@@ -2183,14 +2185,21 @@ async function local_launch_request(action, payload) {
   return result;
 }
 
+// Relayed answers and files are converted in plain loops: a per-character callback takes tens of milliseconds a megabyte.
 function bytes_to_base64(bytes) {
+  // Characters converted per String.fromCharCode call, below engines' argument limits.
+  const chunk = 0x8000;
+  const view = new Uint8Array(bytes);
   let text = "";
-  for (const byte of new Uint8Array(bytes)) text += String.fromCharCode(byte);
+  for (let index = 0; index < view.length; index += chunk) text += String.fromCharCode.apply(null, view.subarray(index, index + chunk));
   return btoa(text);
 }
 
 function base64_to_bytes(text) {
-  return Uint8Array.from(atob(text), character => character.charCodeAt(0));
+  const binary = atob(text);
+  const bytes = new Uint8Array(binary.length);
+  for (let index = 0; index < binary.length; index++) bytes[index] = binary.charCodeAt(index);
+  return bytes;
 }
 
 /** The AES-GCM key shared with the paired computer for one command; mirrors relay_cipher in runner/remote_launch.mjs. */
@@ -2552,19 +2561,19 @@ async function relay_command_once(action, payload) {
 }
 
 /** Read or write one room route on the paired computer's local website, as its owner, and answer as request_json would. */
-async function relay_room_request(path, payload) {
-  try { return await relay_room_request_once(path, payload); }
+async function relay_room_request(path, payload, etag) {
+  try { return await relay_room_request_once(path, payload, etag); }
   catch (error) {
-    if (await meet_device_need(error)) return relay_room_request_once(path, payload);
+    if (await meet_device_need(error)) return relay_room_request_once(path, payload, etag);
     throw error;
   }
 }
 
-/** Read or write one room route on the paired computer once. */
-async function relay_room_request_once(path, payload) {
+/** Read or write one room route on the paired computer once; a read with `etag` may answer 304 without a body. */
+async function relay_room_request_once(path, payload, etag) {
   let answer;
   for (let attempt = 0; ; attempt += 1) {
-    try { answer = await relay_exchange("room-api", { method: payload === undefined ? "GET" : "POST", path, body: payload }); break; }
+    try { answer = await relay_exchange("room-api", { method: payload === undefined ? "GET" : "POST", path, body: payload, ...(etag ? { etag } : {}) }); break; }
     catch (error) {
       // Only reads are asked again: a write whose outcome is unconfirmed must not be sent twice.
       const transient = error.unconfirmed || error.offline || error instanceof TypeError;
@@ -2635,9 +2644,16 @@ function relay_file_url(path) {
 }
 
 /** Show images of the computer's rooms as they appear; one that cannot be read keeps its name. */
-function show_relay_images() {
-  for (const image of document.querySelectorAll("img[data-relay-src]:not([src]):not([data-relay-failed])")) {
-    relay_file_url(image.dataset.relaySrc).then(url => { image.src = url; }).catch(() => { image.dataset.relayFailed = "1"; });
+// Only the added nodes are searched: a whole-document query on every change walks the entire transcript.
+function show_relay_images(records) {
+  const selector = "img[data-relay-src]:not([src]):not([data-relay-failed])";
+  for (const record of records) {
+    for (const node of record.addedNodes) {
+      if (node.nodeType !== Node.ELEMENT_NODE || !node.isConnected) continue;
+      for (const image of node.matches(selector) ? [node] : node.querySelectorAll(selector)) {
+        relay_file_url(image.dataset.relaySrc).then(url => { image.src = url; }).catch(() => { image.dataset.relayFailed = "1"; });
+      }
+    }
   }
 }
 
@@ -4652,7 +4668,7 @@ async function initialize() {
   }
   const launch_settings = load_launch_settings();
   document.addEventListener("click", download_relay_file, true);
-  new MutationObserver(() => { if (state.remote_rooms) show_relay_images(); }).observe(document.body, { childList: true, subtree: true });
+  new MutationObserver((records) => { if (state.remote_rooms) show_relay_images(records); }).observe(document.body, { childList: true, subtree: true });
   window.addEventListener("hashchange", () => {
     if (new URLSearchParams(location.hash.slice(1)).has("codiscuss-connect")) load_launch_settings();
   });
@@ -4697,7 +4713,9 @@ function publish_view() {
 
 /** Read current form drafts without transferring ownership to either renderer. */
 function view_snapshot() {
-  const fields = Object.fromEntries(Array.from(document.querySelectorAll("#controller-fields input[id], #controller-fields textarea[id], #controller-fields select[id], body > dialog input[id], body > dialog textarea[id], body > dialog select[id]"))
+  // Searched inside their containers: a whole-document selector walks every transcript node on each publish.
+  const containers = [element("controller-fields"), ...Array.from(document.body.children).filter((node) => node.localName === "dialog")];
+  const fields = Object.fromEntries(containers.flatMap((container) => container ? Array.from(container.querySelectorAll("input[id], textarea[id], select[id]")) : [])
     .map((control) => [control.id, control.value]));
   const experts = Object.fromEntries(["new-expert-modes"].map((id) =>
     [id, element(id) ? read_expert_inputs(id) : {}]));
@@ -4717,8 +4735,8 @@ function view_snapshot() {
     theme: document.documentElement.dataset.theme, fields, experts, launch: structuredClone(state.launch), named_followup: state.named_followup, create_discussion: state.create_discussion, create_goal: state.create_goal, create_chain_rounds: state.create_chain_rounds, create_host_workflows: state.create_host_workflows, create_api_max_requests: state.create_api_max_requests };
 }
 
-/** Update a shared draft using the same input events as the original controls. */
-function write_view_field(id, value) {
+/** Update a shared draft using the same input events as the original controls; `publish: false` leaves the views to keep their own copy. */
+function write_view_field(id, value, { publish = true } = {}) {
   const control = element(id);
   if (!control || !control.matches("input, textarea, select")) return;
   state.navigation_version++;
@@ -4732,7 +4750,7 @@ function write_view_field(id, value) {
   if (["new-room-limit-max_rounds", "new-room-limit-max_minutes"].includes(id)) {
     write_create_preferences({ [id.slice("new-room-limit-".length)]: Number(control.value) });
   }
-  publish_view();
+  if (publish) publish_view();
 }
 
 /** A participation select for one AI name; instances beyond the platforms get their own control. */
@@ -4781,6 +4799,8 @@ async function filter_view({ query = state.query, mention = state.mention_only, 
   state.page = page;
   element("search-input").value = state.query;
   element("mention-filter").setAttribute("aria-pressed", String(mention));
+  // The filter control changes at once; the filtered transcript follows when the site answers.
+  publish_view();
   await refresh_room();
 }
 

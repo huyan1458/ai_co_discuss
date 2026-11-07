@@ -72,6 +72,10 @@ async function stamp_asset_versions(output) {
       versions.set("app.js", createHash("sha256").update(await readFile(path)).digest("hex").slice(0, 12));
     }
   }
+  // Every URL of these assets now carries its content hash, so a browser may keep them without asking again; Pages
+  // otherwise revalidates each one on every visit, a round trip apiece on a slow network.
+  const rules = [...versions.keys()].map((name) => `/${name}\n  Cache-Control: public, max-age=31536000, immutable\n`);
+  await writeFile(join(output, "_headers"), rules.join(""));
 }
 
 if (process.argv[1] && import.meta.url === pathToFileURL(resolve(process.argv[1])).href) {

@@ -92,7 +92,8 @@ async function read_directory(path = "", append = false) {
         </template>
       </nav>
       <div class="project-files-columns" aria-hidden="true"><span>名称</span><span>大小</span><span>修改时间</span></div>
-      <div class="project-files-rows">
+      <!-- Rows change only with the listing; the room's directories arrive as a new array on every view publish. -->
+      <div v-memo="[listing, loading, directory, root]" class="project-files-rows">
         <button v-for="entry in listing?.entries || []" :key="entry.path" type="button" class="project-file-row" :class="{ 'is-hidden': entry.name.startsWith('.') }"
           :disabled="entry.kind === 'unavailable'" :title="entry.kind === 'unavailable' ? `${entry.name}（无法读取或指向项目外）` : entry.name"
           @click="entry.kind === 'directory' ? read_directory(entry.path) : file_preview.open?.(entry.path, directory, root)">

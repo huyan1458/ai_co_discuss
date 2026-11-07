@@ -1413,6 +1413,14 @@ test('the relay channel reaches only local room routes, as the bridge, and answe
     'a request sealed under another id is not run');
   assert.equal(calls.length, 2);
 
+  // A read the device already holds goes out conditionally; the ETag comes back, and an unchanged read is a bare 304.
+  const etag = `"${'b'.repeat(32)}"`;
+  const tagged = async (url, options) => { calls.push({ url, options }); return options.headers['If-None-Match'] === etag
+    ? new Response(null, { status: 304, headers: { ETag: etag } }) : Response.json({ id: 'abc123' }, { headers: { ETag: etag } }); };
+  assert.deepEqual(await room_api(home, 'https://site.test', { path: '/api/rooms/abc123' }, { fetcher: tagged }), { status: 200, body: { id: 'abc123' }, etag });
+  assert.deepEqual(await room_api(home, 'https://site.test', { path: '/api/rooms/abc123', etag }, { fetcher: tagged }), { status: 304, etag });
+  await room_api(home, 'https://site.test', { path: '/api/rooms/abc123', etag: 'x\r\nX-Evil: 1' }, { fetcher: tagged });
+  assert.equal(calls.at(-1).options.headers['If-None-Match'], undefined, 'only a well-formed ETag is forwarded');
 });
 
 test('the relay channel reads and sends files in parts, and runs computer-room operations with the credentials kept here', async t => {

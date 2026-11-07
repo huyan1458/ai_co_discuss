@@ -34,6 +34,8 @@ async function load(mode = "reset") {
   try {
     const result = await bridge.request(`/api/rooms/${id}/events${query}`);
     if (id !== room_id.value) return;
+    // Every room change asks for newer records; when there are none, keep the lists so the rows are not rebuilt.
+    if (mode === "newer" && !result.events.length) { error.value = ""; return; }
     members.value = result.members;
     if (mode === "reset" || !list.length) Object.assign(cursor, { first: result.first_id, last: result.last_id });
     else if (mode === "older") cursor.first = result.first_id || cursor.first;
@@ -131,7 +133,7 @@ function on_key(event) {
             <button type="button" class="ev-icon" aria-label="关闭" @click="selected = null">✕</button>
           </span>
         </header>
-        <div class="ev-body">
+        <div v-keep-reading class="ev-body">
           <p class="ev-line">{{ event_text(selected_event, name) }}</p>
           <div class="ev-chips">
             <template v-for="key in event_entities(selected_event)" :key="key">

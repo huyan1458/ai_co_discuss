@@ -41,7 +41,10 @@ html[data-theme^="channel"] :focus {
 }
 html[data-theme^="channel"] ::selection { background: #5865f280; color: #fff; }
 html[data-theme^="channel"] [hidden] { display: none !important; }
-.channel-shell { height: 100dvh; min-height: 420px; display: grid; grid-template-columns: var(--channel-main-columns); grid-template-rows: minmax(0, 1fr); overflow: hidden; isolation: isolate; }
+/* Dragging a divider rewrites these on the shell every frame; an inherited custom property would restyle the whole transcript each time. Only the shell's own grid reads them. */
+@property --channel-main-columns { syntax: "*"; inherits: false; }
+@property --channel-rail-width { syntax: "*"; inherits: false; }
+.channel-shell { height: var(--keyboard-viewport-height, 100dvh); min-height: min(420px, var(--keyboard-viewport-height, 420px)); display: grid; grid-template-columns: var(--channel-main-columns); grid-template-rows: minmax(0, 1fr); overflow: hidden; isolation: isolate; }
 .channel-shell * { scrollbar-width: thin; scrollbar-color: #1c1d21 transparent; }
 
 /* Flat controls keep emphasis on the conversation. */
@@ -179,7 +182,10 @@ html[data-theme^="channel"] .channel-menu.channel-directory-menu { min-width: 15
 .channel-main { position: relative; }
 .channel-topbar { position: relative; z-index: 20; flex-shrink: 0; border-bottom: 1px solid var(--channel-edge-panel); background: var(--channel-topbar-bg); box-shadow: var(--channel-shadow-bar); -webkit-backdrop-filter: var(--channel-glass-filter); backdrop-filter: var(--channel-glass-filter); }
 .channel-topbar.is-overlay { position: absolute; top: 0; left: 0; right: 0; }
-.channel-body-discussion .channel-transcript { padding-top: calc(var(--channel-topbar-height, 0px) + 16px); mask-image: linear-gradient(#000 calc(100% - 18px), transparent); }
+.channel-body-discussion .channel-transcript { padding-top: calc(var(--channel-topbar-height, 0px) + 16px); }
+/* The transcript's lower edge fades into the composer. A mask on the scroller itself repaints all of its content every
+   scroll frame (measured ~14x more frame time on long rooms), so a fixed gradient over the same grid cell draws the fade. */
+.channel-conversation::after { content: ""; grid-column: 2; grid-row: 2; align-self: end; height: 18px; pointer-events: none; background: linear-gradient(transparent, var(--channel-fade-bg, var(--ui-bg))); }
 .channel-body-discussion :is(.channel-filter-summary, .channel-message-map) { margin-top: var(--channel-topbar-height, 0px); }
 /* A filter summary already sits below the bar, so the transcript under it needs no extra offset. */
 .channel-body-discussion .channel-conversation:has(.channel-filter-summary) .channel-transcript { --channel-topbar-height: 0px; }
@@ -326,7 +332,7 @@ html[data-theme^="channel"] .pb-end:hover { border-color: color-mix(in srgb, #f0
 .channel-content { flex: 1; min-width: 0; min-height: 0; display: flex; flex-direction: column; }
 
 /* The right rail exposes actual topic context and configured participants. */
-.channel-member-rail { display: flex; flex-direction: column; width: var(--channel-rail-width, 280px); flex-shrink: 0; overflow-y: auto; scrollbar-gutter: stable; background: #232428; }
+.channel-member-rail { display: flex; flex-direction: column; width: auto; flex-shrink: 0; overflow-y: auto; scrollbar-gutter: stable; background: #232428; }
 /* The handle overlaps the seam instead of taking layout width, so neighbouring panels meet without a gap strip. */
 .channel-nav-resizer, .channel-rail-resizer { position: relative; z-index: 2; width: 6px; margin-inline: -3px; min-height: 0; flex-shrink: 0; cursor: col-resize; touch-action: none; background: transparent; }
 /* Each side shows one 1px divider at rest; the handle widens to an accent bar only while it can be dragged. */
@@ -335,7 +341,9 @@ html[data-theme^="channel"] .pb-end:hover { border-color: color-mix(in srgb, #f0
 /* The transcript thumb appears only while the pointer or focus is in it, so it does not read as another divider. */
 .channel-shell .channel-transcript:not(:hover, :focus-within) { scrollbar-color: transparent transparent; }
 :is(.channel-nav-resizer, .channel-rail-resizer):focus-visible { outline: none; }
-.channel-resizing, .channel-resizing * { cursor: col-resize !important; user-select: none !important; }
+/* A transparent cover keeps the resize cursor and blocks selection while dragging (the cancelled pointerdown starts none);
+   a `.channel-resizing *` rule or an inherited property such as user-select would restyle every node when the drag starts and ends. */
+.channel-resizing::after { content: ""; position: fixed; inset: 0; z-index: 2147483647; cursor: col-resize; }
 .channel-overview { margin: 0 16px; padding: 23px 0 20px; border-bottom: 1px solid #ffffff0b; }
 .channel-overview-heading { display: flex; align-items: center; justify-content: space-between; color: #959daa; font-size: 11px; font-weight: 600; margin-bottom: 15px; }
 .channel-phase { font-size: 10px; color: #a8b5c6; background: #ffffff05; border: 0; border-radius: 4px; box-shadow: none; padding: 2px 6px; gap: 5px; }
@@ -366,14 +374,18 @@ html[data-theme^="channel"] .pb-end:hover { border-color: color-mix(in srgb, #f0
 /* The map spans the composer row too, so a growing draft never shifts its center. */
 .channel-message-map { grid-column: 1; grid-row: 2 / 4; align-self: center; height: 320px; max-height: calc(100% - 32px); min-height: 0; overflow-x: hidden; overflow-y: auto; overscroll-behavior: contain; scrollbar-width: none; display: flex; flex-direction: column; align-items: center; justify-content: safe center; padding: 12px 0; mask-image: linear-gradient(transparent, #000 12px, #000 calc(100% - 12px), transparent); }
 .channel-message-map::-webkit-scrollbar { display: none; }
-.channel-message-map { touch-action: pan-y; user-select: none; -webkit-user-select: none; -webkit-touch-callout: none; }
+/* Touch scrubbing owns every gesture here; the map scrolls by holding near either end. */
+.channel-message-map { touch-action: none; user-select: none; -webkit-user-select: none; -webkit-touch-callout: none; }
 .channel-map-track { display: flex; flex-direction: column; align-items: center; gap: 6px; width: 100%; flex: none; }
 .channel-map-round { position: relative; display: grid; grid-template-columns: 38px minmax(0, 1fr); grid-template-rows: repeat(var(--round-message-count), var(--nav-entry-height)); width: 100%; flex: none; }
 .channel-map-round + .channel-map-round::before { content: ''; position: absolute; top: -3px; left: 20px; width: 28px; border-top: 1px dashed #b5bbc52e; pointer-events: none; }
 .channel-round-range { position: relative; grid-column: 1; grid-row: 1 / -1; padding: 0; border-radius: 2px; }
 .channel-round-number { position: absolute; top: 50%; right: 12px; transform: translateY(-50%); color: #9299a5; font-size: 11px; line-height: 12px; font-variant-numeric: tabular-nums; }
 .channel-message-jump { grid-column: 2; display: flex; align-items: center; justify-content: flex-start; width: 100%; height: var(--nav-entry-height); min-height: var(--nav-entry-height); padding: 0 0 0 4px; border-radius: 2px; }
-.channel-jump-tick { display: block; flex-shrink: 0; width: 8px; height: 1px; border-radius: 1px; background: var(--navigation-tick-fill, #a0a6af); transform-origin: left center; }
+.channel-jump-tick { display: block; flex-shrink: 0; width: 8px; height: 1px; border-radius: 1px; background: var(--navigation-tick-fill, #a0a6af); transform-origin: left center;
+  /* NAV_SPRING (ChannelDiscussion.vue) sampled as a curve; it runs on the compositor. Height (1px ↔ 1.5px snaps to whole
+     pixels anyway) switches at once, so moving the reading tick does not relayout the map every frame. */
+  transition: transform .25s linear(0, .057, .183, .33, .472, .598, .702, .785, .849, .896, .931, .955, .972, .983, .991, .995, 1), opacity .25s linear(0, .057, .183, .33, .472, .598, .702, .785, .849, .896, .931, .955, .972, .983, .991, .995, 1); }
 .channel-message-jump[data-author="user"] { --navigation-tick-fill: linear-gradient(to right, #0f8f83 0 50%, #fff5df 50% 100%); }
 .channel-message-jump[data-author="codex"] { --navigation-tick-fill: linear-gradient(to right, #111 0 50%, #fff 50% 100%); }
 .channel-message-jump[data-author="claude"] { --navigation-tick-fill: linear-gradient(to right, #e5b84b 0 50%, #fff 50% 100%); }
@@ -393,8 +405,14 @@ html[data-theme^="channel"] .channel-nav-preview { position: fixed; top: 0; z-in
 .channel-nav-preview-text { display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 5; overflow: hidden; max-height: 106px; font-size: 13px; line-height: 1.6; }
 html[data-theme^="channel"] .channel-nav-preview-text :is(h1, h2, h3, h4, h5, h6) { font-size: 13px; margin-block: 0 5px; }
 html[data-theme^="channel"] .channel-nav-preview-text p { margin-bottom: 6px; }
-.channel-transcript { grid-column: 2; grid-row: 2; min-width: 0; min-height: 0; overflow-y: auto; overscroll-behavior: contain; scrollbar-gutter: stable both-edges; padding: 16px 0 28px; mask-image: linear-gradient(transparent, #000 12px, #000 calc(100% - 18px), transparent); }
+.channel-transcript { grid-column: 2; grid-row: 2; min-width: 0; min-height: 0; overflow-y: auto; overscroll-behavior: contain; scrollbar-gutter: stable both-edges; padding: 16px 0 28px; }
 .channel-message-group { width: 100%; max-width: var(--channel-reading-width); margin: 0 auto; }
+/* Cards off screen skip layout and paint: on slow devices laying out a long room stalled the earlier-card preload.
+   Their height is a guess until they near the screen, so this is only where the browser keeps the reading position as
+   guesses turn real (scroll anchoring). The clip margin keeps the action column hanging beside the card painted. */
+@supports (overflow-anchor: auto) {
+  .channel-transcript [data-message-id] { content-visibility: auto; contain-intrinsic-block-size: auto 240px; overflow-clip-margin: 64px; }
+}
 /* The topic card reuses .channel-message box rules so its edges and text column match the message cards at every size. */
 .channel-topic-group { padding-top: 4px; }
 html[data-theme^="channel"] .channel-message.channel-topic-card { color: var(--ui-text); box-shadow: inset 3px 0 0 var(--channel-accent); }
@@ -453,6 +471,8 @@ html[data-theme^="channel"] .channel-message.channel-topic-card { color: var(--u
 .channel-message-toolbar { position: sticky; top: 8px; display: flex; gap: 2px; padding: 3px; width: fit-content; border: 1px solid #ffffff18; border-radius: 7px; background: #24262c; box-shadow: 0 2px 6px #0004; pointer-events: auto; }
 .channel-message-actions button { color: #a7b0c0; width: 28px; height: 28px; padding: 5px; justify-content: center; border-radius: 4px; }
 .channel-message-actions button:hover { color: #f2f3f5; background: var(--channel-ghost-hover); }
+/* A key's tooltip can lie over the next key; it lets the pointer through so the card keeps its hover. */
+[data-reka-popper-content-wrapper]:has(> .channel-key-tip), .channel-key-tip { pointer-events: none; }
 @media (hover: hover) and (pointer: fine) {
   .channel-message-toolbar { opacity: 0; pointer-events: none; transition: opacity .12s; }
   .channel-message:hover .channel-message-toolbar, .channel-message:focus-within .channel-message-toolbar, .channel-message-toolbar:has([data-state="open"]) { opacity: 1; pointer-events: auto; }
@@ -462,15 +482,34 @@ html[data-theme^="channel"] .channel-message.channel-topic-card { color: var(--u
   .channel-conversation { --message-action-width: 40px; --message-action-gap: 8px; --message-inset-end: calc(16px + var(--message-action-width) + var(--message-action-gap)); }
   .channel-message { margin-right: var(--message-inset-end) !important; }
   .channel-composer-dock > .channel-composer-column { padding-right: var(--message-inset-end); }
+  .channel-latest-dock { padding-right: calc(var(--message-inset-end) - 16px); }
+  .channel-date-divider { padding-right: calc(var(--message-inset-end) + 8px); }
   :is(.channel-message, .channel-working-strip)::after { content: ""; position: absolute; inset: 0 auto 0 100%; width: var(--message-action-gap); }
   .channel-message-byline { padding-right: 0; }
   .channel-message-actions { inset: 12px auto 12px calc(100% + var(--message-action-gap)); width: var(--message-action-width); }
   .channel-message-toolbar { flex-direction: column; width: 100%; }
-  .channel-message-actions button { width: 32px; height: 32px; }
+  .channel-conversation { --message-action-button: 32px; }
+  .channel-message-actions button { width: var(--message-action-button); height: var(--message-action-button); }
+  /* The column hangs beside the card, so a short card grows to hold it: 12px insets, 3px toolbar padding and 1px border on each side, 2px between keys. */
+  .channel-message:has(.channel-message-toolbar > :nth-child(3)) { min-height: calc(3 * var(--message-action-button) + 36px); }
+  .channel-message:has(.channel-message-toolbar > :nth-child(4)) { min-height: calc(4 * var(--message-action-button) + 38px); }
+  .channel-message:has(.channel-message-toolbar > :nth-child(5)) { min-height: calc(5 * var(--message-action-button) + 40px); }
 }
 @media (min-width: 701px) and (max-width: 1199px) {
-  .channel-conversation { --message-action-width: 52px; }
-  .channel-message-actions button { width: 44px; height: 44px; }
+  .channel-conversation { --message-action-width: 52px; --message-action-button: 44px; }
+}
+/* Touch screens wider than a phone have no hover, so a column beside every card would always show detached from it:
+   the toolbar sits in the card's top-right corner as on a phone, and the cards take back the column's width. */
+@media (min-width: 701px) and (hover: none), (min-width: 701px) and (pointer: coarse) {
+  .channel-conversation { --message-inset-end: 16px; --message-action-button: 32px; }
+  :is(.channel-message, .channel-working-strip)::after { content: none; }
+  .channel-message-actions { inset: 12px 8px 12px auto; width: auto; }
+  .channel-message-toolbar { position: static; flex-direction: row; width: fit-content; }
+  .channel-message:has(.channel-message-toolbar > :nth-child(n)) { min-height: 0; }
+  /* Byline keeps clear of the toolbar: keys of 32px, 2px apart, 4px padding and border on each side, less the 14px the card padding already gives. */
+  .channel-message-byline { padding-right: 110px; }
+  .channel-message:has(.channel-message-toolbar > :nth-child(4)) .channel-message-byline { padding-right: 144px; }
+  .channel-message:has(.channel-message-toolbar > :nth-child(5)) .channel-message-byline { padding-right: 178px; }
 }
 .channel-receipt { margin-top: 3px; padding: 5px 10px; border-left: 2px solid #707b8e55; background: #ffffff03; }
 .channel-receipt > summary { display: list-item; width: fit-content; list-style: disclosure-closed inside; cursor: pointer; color: #9ca8bb; font-size: 12px; line-height: 22px; }
@@ -866,7 +905,7 @@ html[data-theme^="channel"] .advanced-fields { border-color: #414957; }
   .channel-answer-summary { grid-template-columns: minmax(0, 1fr); gap: 4px; margin-top: 14px; }
   .channel-answer-summary > small > span { display: inline; }
   .channel-answer-summary > .channel-message-text { font-size: 14px; }
-  .channel-message-actions { top: 10px; right: 8px; width: 58px; }
+  .channel-message-actions { top: 10px; right: 8px; width: auto; }
   .channel-message-toolbar { position: static; opacity: 1; pointer-events: auto; padding: 3px; }
   .channel-message-actions button { width: 25px; height: 24px; padding: 4px; color: #929eb2; }
   .channel-message-actions button [class*="icon"] { width: 13px; height: 13px; }
@@ -1012,7 +1051,7 @@ html[data-motion="off"] *, html[data-motion="off"] *::before, html[data-motion="
   :is(.channel-message, .channel-message-jump, .channel-working-strip)[data-author="gemini"] { --speaker-accent: #5a58b5; }
   :is(.channel-message, .channel-message-jump, .channel-working-strip)[data-author="deepseek"] { --speaker-accent: #2969c0; }
   :is(.channel-message, .channel-message-jump, .channel-working-strip)[data-author="qwen"] { --speaker-accent: #8250b7; }
-  .channel-conversation { background: #f3f3f3; }
+  .channel-conversation { background: #f3f3f3; --channel-fade-bg: #f3f3f3; }
   .channel-message { background: #fff; border: 1px solid #d6d6d6; border-radius: 8px; box-shadow: none; }
   .channel-message:hover { background: #fff; border-color: #b7b7b7; }
   .channel-nav-preview, .channel-drag-preview, .channel-message-toolbar, .channel-latest-button { color: var(--ui-text); background: #fff; border-color: var(--ui-border); box-shadow: 0 4px 16px #00000014; }
@@ -1207,7 +1246,7 @@ html[data-motion="off"] *, html[data-motion="off"] *::before, html[data-motion="
 .channel-withdrawn-text { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .channel-withdrawn button { flex: none; font-size: 12px !important; font-weight: 400; padding: 0 !important; }
 @media (min-width: 701px) { .channel-withdrawn { margin-right: var(--message-inset-end); } }
-@media (max-width: 767px) { .channel-withdrawn { margin: 0 8px 12px; } }
+@media (max-width: 700px) { .channel-withdrawn { margin: 0 8px 12px; } }
 /* Editing replaces the message text in place; the note says what sending it takes back. */
 .channel-edit { display: flex; flex-direction: column; gap: 8px; margin-top: 6px; }
 .channel-edit textarea { width: 100%; min-height: 72px; padding: 8px 10px; border: 1px solid var(--ui-border-accented); border-radius: 6px; background: transparent; color: inherit; font: inherit; font-size: 15px; line-height: 1.6; resize: vertical; }
@@ -1215,7 +1254,6 @@ html[data-motion="off"] *, html[data-motion="off"] *::before, html[data-motion="
 .channel-edit-note { margin: 0; color: var(--ui-text-muted); font-size: 12px; line-height: 1.7; }
 .channel-edit-note.is-error { color: var(--ui-error); }
 .channel-edit-actions { display: flex; justify-content: flex-end; gap: 8px; }
-.channel-message-actions:has(> .channel-message-toolbar > :nth-child(3)) { width: 96px; }
 .channel-schedule-actions { display: inline-flex; gap: 2px; }
 .channel-schedule-rate { display: grid; place-items: center; width: 22px; height: 22px; padding: 0; border: 0; border-radius: 4px; background: transparent; color: var(--ui-text-dimmed); cursor: pointer; }
 .channel-schedule-rate [class*="icon"] { width: 13px; height: 13px; }
@@ -1254,8 +1292,12 @@ html[data-motion="off"] *, html[data-motion="off"] *::before, html[data-motion="
 .channel-schedule-card.is-skipped .channel-schedule-icon { color: var(--ui-text-dimmed); }
 /* Same right inset as the message cards, which leave room for their action column. */
 @media (min-width: 701px) { .channel-schedule-card { margin-right: var(--message-inset-end); } }
-@media (max-width: 767px) {
+/* Side margins switch with the message cards' own breakpoint, so the edges stay lined up. */
+@media (max-width: 700px) {
   .channel-schedule-card { margin: -4px 8px 14px; }
+  .channel-schedule-correction { margin: -10px 8px 14px; }
+}
+@media (max-width: 767px) {
   /* Narrow screens: the odds take the full row and wrap per option; the model and the input toggle drop to a line below. */
   .channel-schedule-detail { padding-left: 0; }
   .channel-schedule-detail .channel-schedule-meta { flex-wrap: wrap; gap: 6px 12px; }
@@ -1266,7 +1308,7 @@ html[data-motion="off"] *, html[data-motion="off"] *::before, html[data-motion="
   .channel-schedule-input p.is-choice { margin-left: 0; grid-template-columns: 5.5em minmax(0, 1fr); gap: 8px; }
   /* The correction sits flush under its card with the same side margins, one control per row so the edges line up:
      who, then the note at full width, then the buttons at the right. */
-  .channel-schedule-correction { margin: -10px 8px 14px; padding: 8px 10px; }
+  .channel-schedule-correction { padding: 8px 10px; }
   .channel-schedule-correction label { flex-basis: 100%; }
   .channel-schedule-correction-select { flex: 1; min-width: 0; }
   .channel-schedule-correction-note { flex-basis: 100%; min-width: 0; }
@@ -1298,9 +1340,18 @@ html[data-motion="off"] *, html[data-motion="off"] *::before, html[data-motion="
 .channel-working-notes.is-open .channel-working-count [class*="icon"] { transform: rotate(180deg); }
 .channel-working-count:hover { color: var(--ui-text-toned); }
 @media (min-width: 701px) { .channel-working-strip { margin-right: var(--message-inset-end); } }
-@media (max-width: 767px) { .channel-working-strip { margin: 0 8px 12px; } }
-/* On a phone the toolbar sits inside the strip's top-right corner: keep the head clear of it and the stop key below it. */
-@media (max-width: 700px) { .channel-working-strip:has(> .channel-message-actions) .channel-working-head { min-height: 30px; padding-right: 58px; } }
+@media (max-width: 700px) { .channel-working-strip { margin: 0 8px 12px; } }
+/* On a phone or touch screen the private-chat key sits in the strip's top-right corner, on the head row and in the same
+   column as the stop key below it: same 24px size, same 10px inset from the strip's padding edge. */
+@media (max-width: 700px), (hover: none), (pointer: coarse) {
+  /* The corner is the toolbar's first slot here: private chat goes to the right end on answered cards too, so the key
+     stays in the corner when the work turns into an answer (the column beside a card keeps it on top). */
+  .channel-message-toolbar > .channel-private-chat-key { order: 1; }
+  .channel-working-strip > .channel-message-actions { inset: 10px 10px auto auto; width: auto; }
+  .channel-working-strip .channel-message-toolbar { padding: 0; border: 0; }
+  .channel-working-strip .channel-message-actions button { width: 24px; height: 24px; padding: 4px; }
+  .channel-working-strip:has(> .channel-message-actions) .channel-working-head { min-height: 24px; padding-right: 34px; }
+}
 /* Dark composer matches the message cards (#313338, lit top rim) as one surface with its footer; the mention panel keeps the frosted float style. */
 :root[data-theme="channel"] .channel-composer { background: #313338 !important; }
 :root[data-theme="channel"] .channel-mention-heading { border-bottom: 1px solid #ffffff0d; }

@@ -1,6 +1,7 @@
 <script setup>
 import { computed, inject, ref, watch } from "vue";
 import ImportDialog from "./ImportDialog.vue";
+import MemoBlock from "./memo-block.js";
 
 const emit = defineEmits(["select", "manage", "create", "create-folder", "manage-folder", "delete-folder", "archive-folder", "archives"]);
 const { view, bridge, act, pending } = inject("discussion");
@@ -66,6 +67,26 @@ function room_time_title(room) {
   const format = (value) => new Date(value).toLocaleString("zh-CN", { hour12: false });
   return [room.title, room.latest_at && `最近发言 ${format(room.latest_at)}`, room.created_at && `创建于 ${format(room.created_at)}`]
     .filter(Boolean).join("\n");
+}
+// Everything a room row and its menus read besides the room itself, so a row re-renders only when this, the room or its
+// time label changes rather than on every view publish.
+const row_state = computed(() => JSON.stringify([view.value.directory_pending, view.value.archive_pending, view.value.backup_pending,
+  view.value.folders, view.value.room_site, manual_order.value, view.value.room?.id, pending.value]));
+/**
+ * Plain values for one room row. They are read here, in the row's own render, because the menu and tooltip slots are run
+ * by those components, which would otherwise track the view and re-render every row on each publish.
+ */
+function room_row(room, index, count) {
+  return { items: actions(room, index, room.folder_id || null, count), active: room.id === view.value.room?.id, busy: Boolean(pending.value),
+    archiving: view.value.archive_pending.includes(room.id), time: room_time(room), title: room_time_title(room) };
+}
+/** Plain values for one folder's heading row, and the key it re-renders on; read here for the same reason as room_row. */
+function folder_head(folder, index) {
+  const items = folder.id ? folder_actions(folder, index) : [];
+  const head = { items, collapsed: collapsed.value.has(folder.id), active: view.value.room?.folder_id === folder.id,
+    creating: view.value.directory_pending.includes("create-room") };
+  head.key = JSON.stringify([folder, head.collapsed, head.active, head.creating, items.map((group) => group.map((item) => [item.label, item.disabled]))]);
+  return head;
 }
 const rooms_open = ref(true);
 const collapsed = ref(read_collapsed());
@@ -149,27 +170,35 @@ function actions(room, index, folder_id, folder_room_count) {
     </div>
     <nav v-show="rooms_open" aria-label="协作房间列表" class="channel-room-list" data-room-directory>
       <section v-for="(folder, folder_index) in folders" :key="folder.order_id" class="channel-folder-section" :data-room-folder="folder.id" :data-drag-folder="folder.order_id">
-       <div v-if="folder.id" class="channel-folder-row" :class="{ active: collapsed.has(folder.id) && view.room?.folder_id === folder.id }">
-       <button class="channel-folder-heading" data-drop-folder data-drag-handle type="button" :disabled="folder.pending" :aria-label="`${folder.name} ${folder.rooms.length}`" :aria-expanded="!collapsed.has(folder.id)" title="拖动文件夹排序；上下方向键移动" @pointerdown="!pending && bridge.start_drag($event)" @keydown.up.prevent="act('move_folder', { id: folder.order_id, direction: -1 })" @keydown.down.prevent="act('move_folder', { id: folder.order_id, direction: 1 })" @click="toggle_folder(folder.id)"><UIcon :name="collapsed.has(folder.id) ? 'i-lucide-chevron-right' : 'i-lucide-chevron-down'" /><UIcon name="i-lucide-folder" /><span class="channel-folder-name">{{ folder.name }}</span><small class="channel-directory-count" aria-hidden="true">{{ folder.pending ? '保存中' : folder.rooms.length || '' }}</small></button>
+       <template v-for="head in [folder_head(folder, folder_index)]" :key="folder.order_id">
+       <MemoBlock v-if="folder.id" :deps="[head.key]">
+       <div class="channel-folder-row" :class="{ active: head.collapsed && head.active }">
+       <button class="channel-folder-heading" data-drop-folder data-drag-handle type="button" :disabled="folder.pending" :aria-label="`${folder.name} ${folder.rooms.length}`" :aria-expanded="!head.collapsed" title="拖动文件夹排序；上下方向键移动" @pointerdown="!pending && bridge.start_drag($event)" @keydown.up.prevent="act('move_folder', { id: folder.order_id, direction: -1 })" @keydown.down.prevent="act('move_folder', { id: folder.order_id, direction: 1 })" @click="toggle_folder(folder.id)"><UIcon :name="head.collapsed ? 'i-lucide-chevron-right' : 'i-lucide-chevron-down'" /><UIcon name="i-lucide-folder" /><span class="channel-folder-name">{{ folder.name }}</span><small class="channel-directory-count" aria-hidden="true">{{ folder.pending ? '保存中' : folder.rooms.length || '' }}</small></button>
         <div class="channel-folder-actions">
-          <UTooltip :text="`在${folder.name}中新建对话`"><UButton icon="i-lucide-square-pen" :aria-label="`在${folder.name}中新建对话`" :disabled="folder.pending || view.directory_pending.includes('create-room')" size="xs" color="neutral" variant="ghost" @click="emit('create', folder.id ? folder : null)" /></UTooltip>
-          <UDropdownMenu :items="folder_actions(folder, folder_index)" :content="{ align: 'start', side: 'bottom', sideOffset: 6 }" :ui="{ content: 'channel-menu channel-topic-menu' }"><UButton icon="i-lucide-ellipsis" :aria-label="`管理文件夹 ${folder.name}`" title="文件夹选项" size="xs" color="neutral" variant="ghost" /></UDropdownMenu>
+          <UTooltip :text="`在${folder.name}中新建对话`"><UButton icon="i-lucide-square-pen" :aria-label="`在${folder.name}中新建对话`" :disabled="folder.pending || head.creating" size="xs" color="neutral" variant="ghost" @click="emit('create', folder.id ? folder : null)" /></UTooltip>
+          <UDropdownMenu :items="head.items" :content="{ align: 'start', side: 'bottom', sideOffset: 6 }" :ui="{ content: 'channel-menu channel-topic-menu' }"><UButton icon="i-lucide-ellipsis" :aria-label="`管理文件夹 ${folder.name}`" title="文件夹选项" size="xs" color="neutral" variant="ghost" /></UDropdownMenu>
         </div>
        </div>
+       </MemoBlock>
+       </template>
        <div v-if="!folder.id || !collapsed.has(folder.id)" :class="folder.id ? 'channel-folder-rooms' : 'channel-root-rooms'" :data-drop-folder="folder.id ? undefined : ''">
       <p v-if="view.creating_room && (view.creating_room.folder_id || '') === folder.id" class="channel-directory-empty" role="status">正在创建：{{ view.creating_room.title }}</p>
-      <UContextMenu v-for="(room, index) in folder.rooms" :key="room.id" :items="actions(room, index, room.folder_id || null, folder.rooms.length)" :ui="{ content: 'channel-menu channel-topic-menu' }">
-        <div class="channel-room-row" :class="{ active: room.id === view.room?.id }" :data-drag-room="room.id">
-          <button class="channel-room-grip" data-drag-handle :aria-label="`拖动 ${room.title}`" title="拖动排序；上下方向键移动" :disabled="Boolean(pending)" @pointerdown="bridge.start_drag($event)" @keydown.up.prevent="act('move_channel', { id: room.id, direction: -1, folder_id: room.folder_id || null })" @keydown.down.prevent="act('move_channel', { id: room.id, direction: 1, folder_id: room.folder_id || null })"><UIcon name="i-lucide-grip-vertical" /></button>
-          <button class="channel-room-select" data-drag-title :title="room_time_title(room)" :aria-label="room.title" :aria-current="room.id === view.room?.id ? 'page' : undefined" @pointerdown="!pending && bridge.start_drag($event)" @click="emit('select', room.id)"><span>{{ room.title }}</span><small class="channel-room-time" aria-hidden="true">{{ room_time(room) }}</small></button>
+      <MemoBlock v-for="(room, index) in folder.rooms" :key="room.id" :deps="[JSON.stringify(room), index, folder.rooms.length, row_state, room_time(room)]">
+      <template v-for="row in [room_row(room, index, folder.rooms.length)]" :key="room.id">
+      <UContextMenu :items="row.items" :ui="{ content: 'channel-menu channel-topic-menu' }">
+        <div class="channel-room-row" :class="{ active: row.active }" :data-drag-room="room.id">
+          <button class="channel-room-grip" data-drag-handle :aria-label="`拖动 ${room.title}`" title="拖动排序；上下方向键移动" :disabled="row.busy" @pointerdown="bridge.start_drag($event)" @keydown.up.prevent="act('move_channel', { id: room.id, direction: -1, folder_id: room.folder_id || null })" @keydown.down.prevent="act('move_channel', { id: room.id, direction: 1, folder_id: room.folder_id || null })"><UIcon name="i-lucide-grip-vertical" /></button>
+          <button class="channel-room-select" data-drag-title :title="row.title" :aria-label="room.title" :aria-current="row.active ? 'page' : undefined" @pointerdown="!pending && bridge.start_drag($event)" @click="emit('select', room.id)"><span>{{ room.title }}</span><small class="channel-room-time" aria-hidden="true">{{ row.time }}</small></button>
           <div class="channel-room-actions">
             <UTooltip :text="room.archived ? '恢复房间' : '存档房间'" :ui="{ content: 'channel-topic-tooltip' }">
-              <UButton :icon="room.archived ? 'i-lucide-archive-restore' : 'i-lucide-archive'" :aria-label="`${room.archived ? '恢复' : '存档'} ${room.title}`" size="xs" color="neutral" variant="ghost" :disabled="Boolean(pending) || view.archive_pending.includes(room.id)" @click="emit('manage', { room, action: room.archived ? 'restore' : 'archive' })" />
+              <UButton :icon="room.archived ? 'i-lucide-archive-restore' : 'i-lucide-archive'" :aria-label="`${room.archived ? '恢复' : '存档'} ${room.title}`" size="xs" color="neutral" variant="ghost" :disabled="row.busy || row.archiving" @click="emit('manage', { room, action: room.archived ? 'restore' : 'archive' })" />
             </UTooltip>
-            <UDropdownMenu :items="actions(room, index, room.folder_id || null, folder.rooms.length)" :content="{ align: 'start', side: 'bottom', sideOffset: 6 }" :ui="{ content: 'channel-menu channel-topic-menu' }"><UButton icon="i-lucide-ellipsis" :aria-label="`管理 ${room.title}`" title="更多操作" size="xs" color="neutral" variant="ghost" /></UDropdownMenu>
+            <UDropdownMenu :items="row.items" :content="{ align: 'start', side: 'bottom', sideOffset: 6 }" :ui="{ content: 'channel-menu channel-topic-menu' }"><UButton icon="i-lucide-ellipsis" :aria-label="`管理 ${room.title}`" title="更多操作" size="xs" color="neutral" variant="ghost" /></UDropdownMenu>
           </div>
         </div>
       </UContextMenu>
+      </template>
+      </MemoBlock>
        </div>
       </section>
       <p v-if="!rooms.length" class="channel-directory-empty">暂无协作房间</p>

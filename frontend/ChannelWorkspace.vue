@@ -117,7 +117,11 @@ const selected_tab = computed({ get: () => view.value.tab, set: (value) => act("
 const project_directory = computed(() => view.value.launch.room_models?.room_id === room.value?.id
   ? view.value.launch.room_models?.project_directory || "" : "");
 // The main project directory first, then the room's other ones.
-const project_directories = computed(() => project_directory.value ? [project_directory.value, ...(view.value.launch.room_models?.extra_directories || [])] : []);
+// Every publish rebuilds the list; keeping the previous array while its entries match spares ProjectFiles an update.
+const project_directories = computed((previous) => {
+  const next = project_directory.value ? [project_directory.value, ...(view.value.launch.room_models?.extra_directories || [])] : [];
+  return previous?.length === next.length && next.every((directory, index) => Object.is(directory, previous[index])) ? previous : next;
+});
 /** Room tools keep their positions; files shows a hint until a project directory is saved. */
 const tabs = computed(() => [
   { value: "discussion", label: "消息", icon: "i-lucide-message-square" },
@@ -352,11 +356,11 @@ function resize_nav_by_key(event) {
       <div v-if="room" class="channel-body" :class="{ 'channel-body-discussion': view.tab === 'discussion' }">
         <div class="channel-content">
         <ChannelDiscussion v-show="view.tab === 'discussion'" @detail="open_detail" @edit="modal = 'edit'" />
-        <div v-if="view.tab === 'overview'" class="content-page merged-page" role="tabpanel" aria-label="房间">
+        <div v-if="view.tab === 'overview'" v-keep-reading class="content-page merged-page" role="tabpanel" aria-label="房间">
           <RoomOverview />
           <TopicPanel v-if="!free_room" section="access" @open="modal = $event" @detail="open_detail" />
         </div>
-        <div v-if="view.tab === 'timeline'" class="content-page merged-page" role="tabpanel" aria-label="执行">
+        <div v-if="view.tab === 'timeline'" v-keep-reading class="content-page merged-page" role="tabpanel" aria-label="执行">
           <div class="timeline-switch" role="group" aria-label="执行视图">
             <UButton v-for="option in TIMELINE_VIEWS" :key="option.value" :label="option.label" size="xs" color="neutral"
               :variant="timeline_view === option.value ? 'soft' : 'ghost'" :aria-pressed="timeline_view === option.value" @click="timeline_view = option.value" />
@@ -364,11 +368,11 @@ function resize_nav_by_key(event) {
           <ExecutionTimeline v-if="timeline_view === 'waterfall'" @detail="open_detail" />
           <EventLog v-else @detail="open_detail" />
         </div>
-        <div v-if="view.tab === 'files'" class="content-page" role="tabpanel" aria-label="文件">
+        <div v-if="view.tab === 'files'" v-keep-reading class="content-page" role="tabpanel" aria-label="文件">
           <ProjectFiles v-if="project_directory" :key="room.id" :directories="project_directories" />
           <p v-else class="channel-files-unset" role="status">当前未设置项目目录</p>
         </div>
-        <div v-if="view.tab === 'private'" class="content-page">
+        <div v-if="view.tab === 'private'" v-keep-reading class="content-page private-page">
           <PrivateChat :key="room.id" />
         </div>
         <FilePreview />
@@ -398,7 +402,7 @@ function resize_nav_by_key(event) {
       </template>
     </UModal>
     <div v-if="show_rail" class="channel-rail-resizer" role="separator" tabindex="0" aria-label="调整右侧栏宽度" aria-orientation="vertical" aria-controls="channel-member-rail" :aria-valuemin="RAIL_MIN" :aria-valuemax="RAIL_MAX" :aria-valuenow="rail_width" :aria-valuetext="`${rail_width} 像素`" title="拖动调整右侧栏宽度，也可使用左右方向键" @pointerdown="start_rail_resize" @pointermove="resize_rail" @pointerup="finish_rail_resize" @pointercancel="finish_rail_resize" @lostpointercapture="finish_rail_resize" @keydown="resize_rail_by_key"></div>
-    <aside v-if="show_rail" id="channel-member-rail" class="channel-member-rail" aria-label="当前焦点与讨论进度">
+    <aside v-if="show_rail" id="channel-member-rail" v-keep-reading class="channel-member-rail" aria-label="当前焦点与讨论进度">
       <section class="channel-rail-board"><FreeBoard v-if="room" />
         <div v-else class="progress-board is-docked"><header class="pb-header"><strong>讨论进度</strong></header><p class="channel-rail-empty">暂无房间，新建讨论后在这里查看进度与参与者。</p></div></section>
     </aside>

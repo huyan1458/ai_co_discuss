@@ -29,7 +29,7 @@ watch(() => props.modelValue, (value) => { if (value !== UNLIMITED) finite.value
           @update:model-value="emit('update:modelValue', $event)" />
         <span>次，然后停止</span>
       </template>
-      <UCheckbox :model-value="modelValue === UNLIMITED" :disabled="disabled" label="不限" :ui="{ root: 'items-center' }" @update:model-value="emit('update:modelValue', $event ? UNLIMITED : finite)" />
+      <UCheckbox :model-value="modelValue === UNLIMITED" :disabled="disabled" label="不限" aria-label="API 请求次数不限" :ui="{ root: 'items-center' }" @update:model-value="emit('update:modelValue', $event ? UNLIMITED : finite)" />
     </span>
     <small class="api-requests-help">每读、改一次文件或读一次房间都算一次。快到上限时会提醒它先提交已完成的部分；不限时只能靠“停止”打断，期间持续产生 API 费用。<slot /></small>
   </span>

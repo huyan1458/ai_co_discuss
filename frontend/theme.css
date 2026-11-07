@@ -1,6 +1,9 @@
 @import "tailwindcss" source(none);
 @import "@nuxt/ui";
 @source "./";
+/* Unused Nuxt UI components (ChangelogVersion, User) generate `:is(:where(.group):has(:focus-visible) *)`, which any
+   element may match: every DOM change then restyles the whole page (measured ~1s per room refresh on long rooms). */
+@source not inline("group-has-focus-visible/changelog-version-image:scale-105 group-has-focus-visible/user:scale-115");
 
 .message-mark { width: 32px; height: 32px; border-radius: 9px; display: flex; align-items: center; justify-content: center; flex-shrink: 0; background: #272c2e; color: #c3cdcc; border: 1px solid #ffffff06; font-size: 10px; font-weight: 500; }
 .codex { background: #22332d; color: #a9cbb8; }
@@ -12,6 +15,8 @@
 .message-prose { color: #bdc5ca; font-size: 14px; line-height: 1.9; white-space: pre-wrap; overflow-wrap: anywhere; }
 .content-page { flex: 1; min-height: 0; overflow-y: auto; padding: 38px clamp(24px, 5vw, 76px) 36px; }
 .content-page > * { max-width: 900px; margin-left: auto; margin-right: auto; }
+/* The private chat fills the page and scrolls inside itself, so the page has no scrollbar of its own around it. */
+.content-page.private-page { display: flex; flex-direction: column; }
 .page-heading { display: flex; justify-content: space-between; align-items: center; gap: 20px; margin-bottom: 34px; }
 .eyebrow { color: #7f8d93; font-size: 10px; letter-spacing: .07em; }
 .page-heading h2 { font-size: 23px; color: #e0e6e8; font-weight: 500; margin: 7px 0 10px; letter-spacing: -.03em; }

@@ -34,7 +34,13 @@ INSTANCE_PATTERN = re.compile(r"(Codex|Claude|Antigravity|DeepSeek|Qwen|Grok)(?:
 KINDS = ("opinion", "moderation", "chat")
 OVERVIEW_FIELDS = ("id", "title", "goal", "host", "phase", "focus", "message_count",
                    "latest_id", "state_until", "current_turn", "queued_turns", "held_since", "limits", "completed_rounds", "answered_turns", "duplicate", "submission_id",
-                   "mode", "members", "free")
+                   "mode", "members", "free", "descriptions", "experts")
+# Agent tools cut long command output (Claude Code past 30000 characters, Codex CLI past 10000 tokens), so a page stays inside both.
+LIST_OUTPUT_CHARS = 8000
+# The room view keeps live work and a short recent trail; `execution view` reads any one execution in full.
+RECENT_EXECUTIONS = 10
+EXECUTION_FIELDS = ("id", "member", "status", "result", "answer_id", "request_message_id", "changes", "late_answer")
+TERMINAL_STATUSES = ("completed", "cancelled", "failed")
 GUIDANCE = {
     "initial": "先基于目标、背景和边界独立形成观点；提交前不读他人观点或主持总结。",
     "paused": "停止处理安排并停止本讨论自己的后台任务，核对实际状态。",
@@ -218,7 +224,7 @@ def add_leaf(subcommands, registry, name, description, needs_room=False):
 
 def room_commands(subcommands, registry):
     """Register room discovery, progressive reading, creation, and updates."""
-    for action, description in (("list", "列出房间概要"), ("view", "只读目标、阶段、焦点及当前安排"),
+    for action, description in (("list", "列出房间概要"), ("view", "只读目标、阶段、成员与分工、当前安排；执行只列进行中与最近 10 次的要点，完整内容用 execution view"),
                                 ("brief", "按需读取背景、边界和专家配置"),
                                 ("conclusion", "收束前申请最新收束状态（阻碍项与 revision）；主持人收束前必做"),
                                 ("protocol", "按需读取当前服务的参与协议")):
@@ -247,7 +253,7 @@ def room_commands(subcommands, registry):
 
 def message_commands(subcommands, registry):
     """Register bounded search, exact reads, and attributed message writes."""
-    listing = add_leaf(subcommands, registry, "message list", "按页检索原文，每页 20 条", True)
+    listing = add_leaf(subcommands, registry, "message list", "检索原文：每次最多 20 条且不超过约 8000 字符，未列完时按 next_after 用 --after 续读", True)
     paging = listing.add_mutually_exclusive_group()
     paging.add_argument("--page", type=positive_int, default=1)
     paging.add_argument("--after", type=non_negative_int, help="只读此消息编号之后的内容；按 next_after 续读")
@@ -628,7 +634,7 @@ def plan_message(args):
         params = {"page": args.page, "q": args.query, "author": args.author, "mention": args.mention,
                   "after": args.after, "kind": args.kind, "submission_id": args.submission_id,
                   **read_context_params(args)}
-        return RequestPlan(base, params={key: value for key, value in params.items() if value is not None})
+        return RequestPlan(base, params={key: value for key, value in params.items() if value is not None}, view="message_list")
     actor = require_actor(args)
     if args.proactive and (args.execution or args.request or args.kind != "chat"):
         raise CliError("--proactive 只用于 chat 消息，不能与 --execution / --request 同用")
@@ -1031,10 +1037,42 @@ def project_result(value, plan, site):
                   "state": ("id", "state_text", "state_until", "host_brief", "answered_turns")}[plan.view]
         result = select_fields(value, fields)
         if plan.view == "overview":
+            if isinstance(result.get("free"), dict):
+                result["free"] = overview_free(result["free"])
             result["guidance"] = GUIDANCE.get(value["phase"], "按本次主持或专家职责，结合最新阶段、安排和必要原文决定下一步。")
             result["url"] = f"{site}/r/{value['id']}"
         return result
+    if plan.view == "message_list":
+        return fit_message_page(value)
     return value
+
+
+def overview_free(free):
+    """Keep open requests and live or recent executions in brief; finished history stays behind execution view."""
+    result = dict(free)
+    if isinstance(free.get("requests"), list):
+        result["requests"] = [item for item in free["requests"] if item.get("status") not in TERMINAL_STATUSES]
+    executions = free.get("executions")
+    if isinstance(executions, list):
+        recent = len(executions) - RECENT_EXECUTIONS
+        result["executions"] = [select_fields(item, EXECUTION_FIELDS) for index, item in enumerate(executions)
+                                if index >= recent or item.get("status") not in TERMINAL_STATUSES]
+    return result
+
+
+def fit_message_page(page):
+    """Stop a page at the output budget so no agent tool cuts it silently; the cursor resumes after the last shown."""
+    messages, used = [], 0
+    for message in page.get("messages", []):
+        used += len(json.dumps(message, ensure_ascii=False, indent=2))
+        if messages and used > LIST_OUTPUT_CHARS:
+            break
+        messages.append(message)
+    if len(messages) == len(page.get("messages", [])):
+        return page
+    last = messages[-1]["id"]
+    return {**page, "messages": messages, "next_after": last, "has_more": True,
+            "notice": f"本次输出到上限，只列了 {len(messages)} 条；用 --after {last} 加同样的筛选续读"}
 
 
 def command_schema(args, registry):

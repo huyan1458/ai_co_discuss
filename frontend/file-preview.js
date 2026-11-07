@@ -81,9 +81,28 @@ export function hold_selection(range) {
   else CSS.highlights.delete(PENDING_HIGHLIGHT);
 }
 
-// For this page's lifetime, so a folder opened before shows at once: listings already read (by room, project and
-// path), and the folder each room's list last showed (`{ directory, path }`).
-export const folder_listings = new Map();
+// Listings already read (by room, project and path), kept in this browser so a folder opened before shows at once even
+// after a reload; the list reads it again behind it. The oldest beyond the cap are dropped.
+const FOLDER_LISTINGS_KEY = "codiscuss-folder-listings";
+const FOLDER_LISTINGS_LIMIT = 300;
+
+/** The saved listings, oldest first; empty when storage is unavailable or unreadable. */
+function stored_listings() {
+  try { return new Map(JSON.parse(localStorage.getItem(FOLDER_LISTINGS_KEY)) || []); } catch { return new Map(); }
+}
+
+const listings = stored_listings();
+export const folder_listings = {
+  get: (key) => listings.get(key),
+  /** Remember one listing as the newest and save them all; a full or blocked storage keeps it for this page only. */
+  set(key, listing) {
+    listings.delete(key);
+    listings.set(key, listing);
+    while (listings.size > FOLDER_LISTINGS_LIMIT) listings.delete(listings.keys().next().value);
+    try { localStorage.setItem(FOLDER_LISTINGS_KEY, JSON.stringify([...listings])); } catch { /* Kept in memory only. */ }
+  },
+};
+// For this page's lifetime: the folder each room's list last showed (`{ directory, path }`).
 export const shown_folders = new Map();
 
 // Extension → [language label shown in the status bar, icon, icon tint]; unknown files fall back to plain text.

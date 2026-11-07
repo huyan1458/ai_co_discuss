@@ -14,6 +14,7 @@ import InviteDialog from "./InviteDialog.vue";
 import WorkflowControl from "./WorkflowControl.vue";
 import { active_workflow } from "./workflow-state.js";
 import MemberDescriptionDialog from "./MemberDescriptionDialog.vue";
+import MemoBlock from "./memo-block.js";
 import { member_actions } from "./member-actions.js";
 import { access_label, access_options } from "../runner/expert_prompts.mjs";
 
@@ -255,6 +256,19 @@ function actions(member) {
   return { taking_part, host: place.find((item) => item.label === HOST_LABEL) || null, place: [...place.filter((item) => item.label !== HOST_LABEL), ...removal] };
 }
 
+/**
+ * Everything one member card shows or offers, as one string, so a card re-renders only when it changes rather than on
+ * every view publish (each of which rebuilds its action buttons and their handlers).
+ */
+function card_key(member) {
+  const identity = bridge.identities[member.name];
+  return JSON.stringify([member, live(member), saved.value?.participants?.[member.name], view.value.access, view.value.launch.available, free.value,
+    reorderable.value && order.value.movable.includes(member.name), dragged.value === member.name, drop_target.value === member.name,
+    grabbed.value === member.name, switching.value, in_workflow(member.name) && workflow.value.label, room.value.descriptions?.[member.name],
+    identity?.icon, identity?.initials, identity?.style, bridge.display_name(member.name), bridge.participant_model(member.name, room.value, saved.value),
+    bridge.participant_access(member.name, room.value), room.value.session?.status]);
+}
+
 const inviting = ref(false);
 const invite_workflow_id = ref("");
 const describing = ref(""), describing_saving = ref(false);
@@ -282,7 +296,8 @@ const created = computed(() => room.value.created_at ? new Date(room.value.creat
       <h3>成员</h3>
       <p v-if="local_state" class="overview-local" role="status">{{ local_state.text }}<button v-if="local_state.retry" type="button" class="subtle-link" @click="bridge.reload_room_models()">重试</button></p>
       <ul class="member-cards" aria-label="成员">
-        <li v-for="member in members" :key="member.name" class="member-card" :class="{ 'is-dimmed': dragged === member.name, 'is-drop-target': drop_target === member.name }"
+        <MemoBlock v-for="member in members" :key="member.name" :deps="[card_key(member)]">
+        <li class="member-card" :class="{ 'is-dimmed': dragged === member.name, 'is-drop-target': drop_target === member.name }"
           :draggable="grabbed === member.name" @dragstart="drag_start(member, $event)" @dragover="drag_over(member, $event)" @dragleave="drop_target === member.name && (drop_target = '')" @drop.prevent="drop(member)" @dragend="drag_end">
           <header class="member-card-head">
             <UIcon v-if="reorderable && order.movable.includes(member.name)" name="i-lucide-grip-vertical" class="member-card-grip" title="拖动调整成员顺序，右栏发言顺序与 @全体依次 同步" @pointerdown="grabbed = member.name" @pointerup="grabbed = ''" />
@@ -317,6 +332,7 @@ const created = computed(() => room.value.created_at ? new Date(room.value.creat
             <div v-if="actions(member).place.length"><UButton v-for="item in actions(member).place" :key="item.label" :icon="item.icon" :label="item.label" size="xs" variant="ghost" :color="item.color || 'neutral'" :disabled="item.disabled" @click="item.onSelect()" /></div>
           </footer>
         </li>
+        </MemoBlock>
       </ul>
       <p class="overview-result">复制说明或下载配置不代表 AI 已接入，以实际回答和运行记录为准。</p>
     </section>

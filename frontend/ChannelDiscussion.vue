@@ -17,12 +17,16 @@ import { use_broadcast } from "./broadcast.js";
 import { use_voice_input } from "./voice-input.js";
 import ExcerptEditCard from "./ExcerptEditCard.vue";
 import { add_excerpt, excerpt_mark_place, excerpt_range, excerpt_source, excerpts_markdown, file_preview, hold_selection, text_offset } from "./file-preview.js";
+import { keep_reading_position } from "./scroll-anchor.js";
+import MemoBlock from "./memo-block.js";
+import UTooltip from "@nuxt/ui/components/Tooltip.vue";
 import { motion, useSpring, useTransform } from "motion-v";
 
 const emit = defineEmits(["detail", "edit"]);
 let topic_card = null;
 const { view, bridge, field, act, pending } = inject("discussion");
-const text = field("message-input");
+// Typing publishes no snapshot: a publish re-renders the whole transcript, hundreds of milliseconds per key in a long room.
+const text = field("message-input", { quiet: true });
 const text_length = computed(() => [...text.value].length);
 const EDITOR_MAX_ROWS = 6;
 const LENGTH_WARNING_RATIO = 0.9;
@@ -330,9 +334,12 @@ const NAV_READING_OPACITY = 0.72;
 const NAV_ACTIVE_OPACITY = 0.88;
 const NAV_HOVER_OPACITY = 0.16;
 const NAV_EDGE_INSET = 12;
-const NAV_LONG_PRESS_MS = 450;
 const NAV_TOUCH_SLOP = 8;
-let navigation_press = null;
+const NAV_SCRUB_EDGE = 40; // Scrubbing within this distance of either end auto-scrolls the map.
+const NAV_SCRUB_SPEED = 12; // Auto-scroll pixels per frame at the very end.
+const NAV_SCRUB_CANCEL = 24; // Releasing this far sideways outside the map cancels the jump.
+const NAV_HAPTIC_MS = 8;
+let navigation_scrub = null;
 let suppress_navigation_click = false;
 // Feel.words("smooth, crisp"): m 1, 2.62 Hz, ζ 0.96, no overshoot, settles in 327 ms. A sent message and the transcript
 // under it move on this one spring: unhurried enough to read as gliding, damped so it lands without a bounce.
@@ -352,8 +359,43 @@ const preview_index = computed(() => preview_open.value ? navigation_entries.val
 const prompt = ref(null);
 const follow_tail = ref(true);
 const FOLLOW_TAIL_THRESHOLD = 70;
+// Cards mounted when a room opens, a few screens' worth; earlier ones follow in slices (see render_floor).
+const RENDER_BATCH = 15;
+// Within this distance (px) of the top, earlier cards are rendered on every frame instead of when idle.
+const LOAD_EARLIER_MARGIN = 2000;
+// Render time (ms) one slice may take: idle slices stay inside a frame, slices a scrolling reader waits on nearly fill
+// one, and a clicked jump, where nothing moves until it lands, takes larger ones to land sooner.
+const PRELOAD_BUDGET_MS = 8;
+const PRELOAD_URGENT_BUDGET_MS = 14;
+const PRELOAD_JUMP_BUDGET_MS = 40;
+const PRELOAD_FIRST_SLICE = 2;
+const PRELOAD_MAX_SLICE = 20;
+// Idle slices wait this long at most (ms) for an idle moment, and hold off this long after the reader last scrolled.
+const PRELOAD_IDLE_TIMEOUT_MS = 300;
+const SCROLL_SETTLE_MS = 150;
 const READING_OFFSET = 20;
 const room = computed(() => view.value.room);
+/** Whether two derived values hold the same data: identical leaves, or Maps, arrays and plain objects with equal entries. */
+function same_value(left, right) {
+  if (Object.is(left, right)) return true;
+  if (!left || !right || typeof left !== "object" || typeof right !== "object" || Object.getPrototypeOf(left) !== Object.getPrototypeOf(right)) return false;
+  if (left instanceof Map) return left.size === right.size && [...left].every(([key, value]) => right.has(key) && same_value(value, right.get(key)));
+  if (left instanceof Set) return left.size === right.size && [...left].every((value) => right.has(value));
+  if (Array.isArray(left)) return left.length === right.length && left.every((value, index) => same_value(value, right[index]));
+  if (Object.getPrototypeOf(left) !== Object.prototype) return false;
+  const keys = Object.keys(left);
+  return keys.length === Object.keys(right).length && keys.every((key) => Object.hasOwn(right, key) && same_value(left[key], right[key]));
+}
+/**
+ * A computed that keeps its previous value while a recompute yields the same data. Every publish hands over a new view
+ * snapshot, so derived Maps and arrays are rebuilt even when the room has not changed; keeping the old reference lets the
+ * transcript's v-memo hit instead of re-rendering every card.
+ */
+const stable_computed = (getter) => computed((previous) => {
+  const next = getter();
+  return previous !== undefined && same_value(previous, next) ? previous : next;
+});
+const can_manage = computed(() => Boolean(view.value.access?.can_manage));
 const speaking_turn = computed(() => ["pending", "notified"].includes(room.value?.current_turn?.status)
   && !["paused", "concluded"].includes(room.value.phase) ? room.value.current_turn : null);
 const is_manual_member = (member) => member?.access === "manual" && member.status === "active";
@@ -525,7 +567,7 @@ const THINKING_STALL_SECONDS = 600;
 const FREE_REQUEST_LABELS = { pending: ["待投递", "neutral"], delivering: ["处理中", "info"], completed: ["已回复", "success"],
   cancelled: ["已取消", "neutral"], failed: ["失败", "error"] };
 /** Each user message in a free room shows what happened to its request for every named member. */
-const request_badges = computed(() => {
+const request_badges = stable_computed(() => {
   const badges = new Map();
   const source = room.value.free;
   if (!source) return badges;
@@ -542,7 +584,7 @@ const request_badges = computed(() => {
   return badges;
 });
 /** Attach each terminal execution to its answer, or to the original request when it has no answer. */
-const execution_reports = computed(() => {
+const execution_reports = stable_computed(() => {
   const reports = new Map();
   const source = room.value.free;
   if (!source) return reports;
@@ -565,7 +607,7 @@ const recommendation_clock = ref(Date.now());
 const recommendation_received = ref(Date.now());
 watch(() => room.value.free?.recommendations, () => { recommendation_received.value = recommendation_clock.value = Date.now(); });
 const adopting = ref(0);
-const recommendations = computed(() => {
+const recommendations = stable_computed(() => {
   const rows = new Map();
   if (!free.value) return rows;
   const elapsed = Math.floor((recommendation_clock.value - recommendation_received.value) / 1000);
@@ -592,7 +634,7 @@ function format_ms(ms) {
   return ms < 1000 ? `${ms}毫秒` : ms < 10_000 ? `${(ms / 1000).toFixed(1)}秒` : format_elapsed(Math.round(ms / 1000));
 }
 /** In a discussion, each smart-scheduling decision shows under the message it followed. */
-const scheduler_decisions = computed(() => {
+const scheduler_decisions = stable_computed(() => {
   const rows = new Map();
   for (const item of room.value.scheduler_decisions || []) {
     // A skip asked the model nothing (no confidence, nothing applied, no question), so there is no decision to show.
@@ -604,9 +646,9 @@ const scheduler_decisions = computed(() => {
   return rows;
 });
 /** Messages the local service is still analysing; the card gives way once the decision is recorded. */
-const routing_messages = computed(() => new Set(room.value.scheduler_routing || []));
+const routing_messages = stable_computed(() => new Set(room.value.scheduler_routing || []));
 /** The host's own plans stand beside the decisions, under the message they followed. */
-const host_arrangements = computed(() => {
+const host_arrangements = stable_computed(() => {
   const rows = new Map();
   if (view.value.query || view.value.mention_only || view.value.host_only) return rows;
   for (const item of room.value.host_arrangements || []) {
@@ -991,6 +1033,45 @@ function mention_composition(event) {
 /** The autocomplete never moves focus away from the draft. */
 function keep_mention_focus(event) { event.preventDefault(); }
 
+const MIRROR_STYLES = ["boxSizing", "width", "paddingTop", "paddingRight", "paddingBottom", "paddingLeft", "borderTopWidth", "borderRightWidth", "borderBottomWidth", "borderLeftWidth",
+  "fontFamily", "fontSize", "fontWeight", "fontStyle", "letterSpacing", "lineHeight", "textIndent", "textTransform", "wordSpacing", "tabSize"];
+/** Top of the line holding `index`, measured from the textarea's border edge, by laying the text out in a hidden copy. */
+function caret_line_top(editor, index) {
+  const mirror = document.createElement("div");
+  const style = getComputedStyle(editor);
+  for (const key of MIRROR_STYLES) mirror.style[key] = style[key];
+  Object.assign(mirror.style, { position: "absolute", visibility: "hidden", top: "0", left: "-9999px", whiteSpace: "pre-wrap", overflowWrap: "break-word", wordBreak: style.wordBreak });
+  mirror.textContent = editor.value.slice(0, index);
+  const marker = mirror.appendChild(document.createElement("span"));
+  marker.textContent = "​";
+  document.body.appendChild(mirror);
+  const top = marker.offsetTop;
+  mirror.remove();
+  return top - editor.scrollTop;
+}
+
+/**
+ * The popup sits above the line being typed, not above the whole composer: with a long draft and the phone keyboard
+ * up, the space above the composer is only a row or two. On the first line it stays above the composer as before.
+ */
+const mention_anchor = computed(() => {
+  const start = mention_context.value?.start;
+  const box = prompt.value?.$el;
+  const editor = prompt.value?.textareaRef;
+  if (start == null || !box || !editor) return box;
+  return {
+    contextElement: box,
+    getBoundingClientRect() {
+      const outer = box.getBoundingClientRect();
+      const field = editor.getBoundingClientRect();
+      const first_line = parseFloat(getComputedStyle(editor).paddingTop) || 0;
+      const line = caret_line_top(editor, start);
+      const top = line <= first_line ? outer.top : Math.min(Math.max(field.top + line, field.top), field.bottom);
+      return new DOMRect(outer.left, top, outer.width, outer.bottom - top);
+    },
+  };
+});
+
 /** End a structured excerpt after complete code lines or table rows. */
 function trim_preview_blocks(fragment) {
   for (const block of fragment.querySelectorAll('pre code, tbody')) {
@@ -1049,7 +1130,7 @@ function build_answer_preview(message) {
 /** Merge execution cards without adding them to message counts, references or round navigation. */
 const transcript_messages = computed(() => free_layout.value);
 /** A discussion opened mid-room shows the topic where it began (or at the end before anyone answers); otherwise it stays on top. */
-const topic_anchor = computed(() => {
+const topic_anchor = stable_computed(() => {
   const started = Date.parse(room.value?.session?.created_at || "");
   if (!started) return null;
   const messages = transcript_messages.value;
@@ -1061,7 +1142,7 @@ const topic_anchor = computed(() => {
   return index < messages.length ? messages[index].id : "end";
 });
 /** A concluded latest discussion leaves its end card right after its last message, once the room is back to free collaboration. */
-const end_anchor = computed(() => {
+const end_anchor = stable_computed(() => {
   const session = room.value?.session;
   if (session?.status !== "concluded") return null;
   const messages = transcript_messages.value;
@@ -1089,7 +1170,7 @@ function undeliverable_requests() {
 }
 const expanded_rewinds = ref(new Set());
 /** Consecutive rewound messages fold into one line at the first of them until expanded; a retracted one is a line of its own. */
-const rewound_runs = computed(() => {
+const rewound_runs = stable_computed(() => {
   const runs = new Map(), hidden = new Set();
   let start = null;
   for (const message of view.value.messages) {
@@ -1168,10 +1249,97 @@ const free_layout = computed(() => {
   roots.forEach(visit);
   return [...ordered, ...tail];
 });
+/** Id of the top-level message at or before `index`, where a shown range can start without splitting a slot; 0 shows all. */
+function floor_before(messages, index) {
+  for (let position = Math.min(index, messages.length - 1); position >= 0; position--) {
+    if (!messages[position].slot_card) return Number(messages[position].id);
+  }
+  return 0;
+}
+// A long room first mounts only its newest cards (mounting hundreds at once held the page for seconds), then renders the
+// earlier ones a few at a time, each slice sized to fit within a frame: while the page is idle, or on every frame while
+// the reader nears the top or waits on a jump. Null follows the newest batch; otherwise it is the id of the first shown
+// message, so new arrivals never push cards out above the reader.
+const render_floor = ref(null);
+const render_start = computed(() => {
+  const messages = transcript_messages.value;
+  const floor = render_floor.value ?? floor_before(messages, messages.length - RENDER_BATCH);
+  const index = messages.findIndex((message) => !message.slot_card && Number(message.id) >= floor);
+  return index > messages.findIndex((message) => !message.slot_card) ? index : 0;
+});
+watch(follow_tail, (following) => {
+  if (!following && render_floor.value === null) render_floor.value = floor_before(transcript_messages.value, transcript_messages.value.length - RENDER_BATCH);
+});
+/** Whether message `id` is in the history but not rendered yet. */
+function not_rendered(id) {
+  const index = id == null ? -1 : transcript_messages.value.findIndex((message) => message.id === id);
+  return index >= 0 && index < render_start.value;
+}
+let preload_timer = null;
+let preload_size = PRELOAD_FIRST_SLICE;
+let preload_busy = false;
+// The map entry under the pointer is rendered ahead of a click; a click on one still being reached jumps once it is.
+let preload_wanted = null;
+let pending_jump = null;
+// Real scrolling (not the offsets written here) holds idle slices back: writing scrollTop ends an iOS momentum scroll.
+let last_scroll_at = 0;
+let written_top = null;
+/** Whether the reader is waiting on earlier cards: near the top, or heading for one not rendered. */
+function preload_urgent(element) {
+  return element.scrollTop < LOAD_EARLIER_MARGIN || not_rendered(pending_jump) || not_rendered(preload_wanted);
+}
+/** Queue the next slice: on the next frame when urgent, otherwise when the page is idle. */
+function schedule_preload(urgent = false) {
+  if (!render_start.value || (preload_timer && (preload_timer.urgent || !urgent))) return;
+  preload_timer?.cancel();
+  const run = () => { preload_timer = null; preload_slice(); };
+  if (urgent) {
+    const frame = requestAnimationFrame(run);
+    preload_timer = { urgent, cancel: () => cancelAnimationFrame(frame) };
+  } else if (window.requestIdleCallback) {
+    const idle = requestIdleCallback(run, { timeout: PRELOAD_IDLE_TIMEOUT_MS });
+    preload_timer = { urgent, cancel: () => cancelIdleCallback(idle) };
+  } else {
+    const timer = setTimeout(run, PRELOAD_IDLE_TIMEOUT_MS);
+    preload_timer = { urgent, cancel: () => clearTimeout(timer) };
+  }
+}
+onBeforeUnmount(() => preload_timer?.cancel());
+/** Render one slice of earlier cards above the shown ones, keeping what the reader sees in place. */
+async function preload_slice() {
+  const element = transcript.value;
+  // A hidden transcript has no layout to keep; showing it again tracks the scroll, which resumes the preload.
+  if (preload_busy || !element?.clientHeight || !render_start.value) return;
+  const urgent = preload_urgent(element);
+  if (!urgent && (glide.isAnimating() || performance.now() - last_scroll_at < SCROLL_SETTLE_MS)) return schedule_preload();
+  preload_busy = true;
+  const started = performance.now();
+  const from_bottom = element.scrollHeight - element.scrollTop;
+  render_floor.value = floor_before(transcript_messages.value, render_start.value - preload_size);
+  await nextTick();
+  // Browsers with scroll anchoring have already kept the place; the others are corrected before the frame paints.
+  written_top = element.scrollHeight - from_bottom;
+  if (element.scrollTop !== written_top) element.scrollTop = written_top;
+  const spent = performance.now() - started;
+  const budget = not_rendered(pending_jump) ? PRELOAD_JUMP_BUDGET_MS : urgent ? PRELOAD_URGENT_BUDGET_MS : PRELOAD_BUDGET_MS;
+  preload_size = Math.max(1, Math.min(PRELOAD_MAX_SLICE, Math.round(preload_size * budget / Math.max(spent, 1))));
+  preload_busy = false;
+  if (pending_jump !== null && !not_rendered(pending_jump)) {
+    const id = pending_jump;
+    pending_jump = null;
+    jump_to(id);
+  }
+  schedule_preload(preload_urgent(element));
+}
+/** Scroll events from the reader, told apart from the offsets the preload writes. */
+function note_scroll() {
+  if (transcript.value?.scrollTop !== written_top) last_scroll_at = performance.now();
+  written_top = null;
+}
 /** Split continuous history at local calendar boundaries; a working card stays in the day of the card above it. */
-const message_groups = computed(() => {
+const message_groups = stable_computed(() => {
   const groups = [];
-  for (const message of transcript_messages.value) {
+  for (const message of transcript_messages.value.slice(render_start.value)) {
     if (message.slot_card && groups.length) { groups.at(-1).messages.push(message); continue; }
     const date = new Date(message.slot_card ? (message.created_at ?? 0) * 1000 : message.created_at);
     const key = date.toLocaleDateString();
@@ -1201,7 +1369,7 @@ const navigation_groups = computed(() => {
 
 const active_round = computed(() => navigation_groups.value.find((group) => group.messages.some((message) => message.id === active_message.value))?.number);
 // Concluded sessions keep their historical labels; later collaboration is outside their end boundary.
-const message_round_labels = computed(() => new Map(navigation_groups.value.filter((group) => group.number).flatMap((group) => group.messages.map((message) => [message.id, group.label]))));
+const message_round_labels = stable_computed(() => new Map(navigation_groups.value.filter((group) => group.number).flatMap((group) => group.messages.map((message) => [message.id, group.label]))));
 
 /** Keep each round number beside its messages and preserve keyboard order. */
 const navigation_sections = computed(() => {
@@ -1222,24 +1390,70 @@ function reading_top(element) {
   return element.getBoundingClientRect().top + (parseFloat(getComputedStyle(element).getPropertyValue("--channel-topbar-height")) || 0);
 }
 
+// Collecting the cards walks the whole transcript (tens of thousands of nodes); keep the list until a node is added or removed.
+let card_list = null;
+let card_observer = null;
+/** The transcript's message cards in document order. */
+function message_nodes(element) {
+  if (card_observer?.element !== element) {
+    card_observer?.disconnect();
+    card_list = null;
+    card_observer = Object.assign(new MutationObserver(() => { card_list = null; }), { element });
+    card_observer.observe(element, { childList: true, subtree: true });
+  }
+  // Pending records are changes the observer callback has not seen yet in this task.
+  if (card_observer.takeRecords().length || !card_list) card_list = [...element.querySelectorAll('[data-message-id]')];
+  return card_list;
+}
+onBeforeUnmount(() => card_observer?.disconnect());
+
 /** Polling follows new messages only while the reader is near the end. */
 function track_scroll() {
   const element = transcript.value;
   // Mid-glide the distance to the end is the glide's, not the reader's; following stays on.
   if (!element || !element.clientHeight || glide.isAnimating()) return;
+  // After a resize the cards have rewrapped; until the reading position is restored this scrollTop is not the reader's.
+  if (reading_position?.stale()) return;
+  schedule_preload(preload_urgent(element));
   follow_tail.value = element.scrollHeight - element.scrollTop - element.clientHeight < FOLLOW_TAIL_THRESHOLD;
   const bounds = element.getBoundingClientRect();
   const top = reading_top(element);
-  const messages = [...element.querySelectorAll('[data-message-id]')];
-  const target = messages.find((item) => Number(item.dataset.messageId) === jump_target.value);
+  const messages = message_nodes(element);
+  const target = jump_target.value != null && messages.find((item) => Number(item.dataset.messageId) === jump_target.value);
   if (target && target.getBoundingClientRect().bottom > top && target.getBoundingClientRect().top < bounds.bottom) {
     active_message.value = jump_target.value;
     return;
   }
   jump_target.value = null;
-  const current = messages.find((item) => item.getBoundingClientRect().bottom > top + READING_OFFSET);
-  active_message.value = current ? Number(current.dataset.messageId) : null;
+  // Cards run top to bottom, so a binary search finds the first one reaching the reading line in a few measurements.
+  let low = 0, high = messages.length;
+  while (low < high) {
+    const middle = (low + high) >> 1;
+    if (messages[middle].getBoundingClientRect().bottom > top + READING_OFFSET) high = middle;
+    else low = middle + 1;
+  }
+  active_message.value = messages[low] ? Number(messages[low].dataset.messageId) : null;
 }
+
+// Scroll events can outnumber frames; measuring once per frame keeps the reading position current without stalling the scroll.
+let scroll_frame = 0;
+function schedule_track_scroll() {
+  note_scroll();
+  if (!scroll_frame) scroll_frame = requestAnimationFrame(() => { scroll_frame = 0; track_scroll(); });
+}
+onBeforeUnmount(() => cancelAnimationFrame(scroll_frame));
+
+// Rotation and window resizes rewrap every card; reopen the message being read, or the end while following it.
+let reading_position = null;
+onMounted(() => {
+  const element = transcript.value;
+  if (!element) return;
+  reading_position = keep_reading_position(element, {
+    // A send glide in flight keeps running toward the end; restoring only lands it where it is heading.
+    reading_top: () => reading_top(element), stick_bottom: () => follow_tail.value, after_restore: track_scroll,
+  });
+});
+onBeforeUnmount(() => reading_position?.disconnect());
 
 // The transcript's scroll position while it glides to a newly sent message; a later retarget keeps its velocity.
 const glide = useSpring(0, SEND_SPRING);
@@ -1297,6 +1511,8 @@ watch([() => view.value.room?.id, () => view.value.query, () => view.value.menti
   active_message.value = null;
   reset_preview();
   follow_tail.value = true;
+  render_floor.value = null;
+  pending_jump = preload_wanted = null;
 });
 watch(() => view.value.tab, (tab) => {
   reset_preview();
@@ -1321,8 +1537,15 @@ async function toggle_answer(message, event) {
   track_scroll();
 }
 
-/** Jump anywhere in the history while preserving the shared composer draft. */
+/** Jump anywhere in the history while preserving the shared composer draft; a message still being rendered is jumped to once it is. */
 function jump_to(id) {
+  if (not_rendered(id)) {
+    close_preview();
+    pending_jump = id;
+    schedule_preload(true);
+    return;
+  }
+  pending_jump = null;
   const element = transcript.value;
   const message = element?.querySelector(`[data-message-id="${id}"]`);
   if (!message) return;
@@ -1346,6 +1569,8 @@ function stop_following(event) {
 /** Manual scrolling resumes tracking the message at the viewport's upper edge; it also takes over from a glide. */
 function resume_tracking(event) {
   glide.stop();
+  // Scrolling by hand drops a jump still waiting for its card.
+  pending_jump = null;
   if (event.type !== "keydown" || ["ArrowUp", "ArrowDown", "PageUp", "PageDown", "Home", "End", " "].includes(event.key)) jump_target.value = null;
 }
 
@@ -1377,50 +1602,106 @@ watch(active_message, reveal_reading_position);
 
 /** Keyboard previews use the entry's visible position after revealing it. */
 function focus_preview(item, event) {
-  if (navigation_press || !event.currentTarget.matches(":focus-visible")) return;
+  if (navigation_scrub || !event.currentTarget.matches(":focus-visible")) return;
   navigation_keyboard.value = true;
   const anchor = item.round ? event.currentTarget.parentElement.querySelector('[data-jump-id]') : event.currentTarget;
   reveal_navigation_entry(anchor);
   show_preview(item, event);
 }
 
-/** Begin a touch preview only after a stationary hold, leaving native scrolling available. */
-function start_navigation_press(item, event) {
+/** Touch scrubbing: the finger previews the tick beneath it at once; the scrub, not the button click, decides the jump. */
+function start_scrub(event) {
   suppress_navigation_click = false;
-  if (!["touch", "pen"].includes(event.pointerType)) return;
-  close_preview();
+  if (!["touch", "pen"].includes(event.pointerType) || navigation_scrub) return;
+  event.preventDefault();
+  suppress_navigation_click = true;
   navigation_keyboard.value = false;
-  const press = { pointer: event.pointerId, x: event.clientX, y: event.clientY, target: event.currentTarget };
-  navigation_press = press;
-  press.timer = setTimeout(() => {
-    if (navigation_press !== press) return;
-    suppress_navigation_click = true;
-    show_preview(item, { currentTarget: press.target });
-  }, NAV_LONG_PRESS_MS);
+  navigation_scrub = { pointer: event.pointerId, start_x: event.clientX, start_y: event.clientY, x: event.clientX, y: event.clientY, moved: false, key: null };
+  navigation_scrub.frame = requestAnimationFrame(scrub_frame);
+  scrub_to();
 }
 
-/** Clear a hold when scrolling, changing views, or leaving the navigation. */
-function cancel_navigation_press() {
-  if (navigation_press) clearTimeout(navigation_press.timer);
-  navigation_press = null;
+/** Follow the finger; edge auto-scroll waits for real movement so a tap near an end stays a tap. */
+function move_scrub(event) {
+  const scrub = navigation_scrub;
+  if (scrub?.pointer !== event.pointerId) return;
+  scrub.x = event.clientX;
+  scrub.y = event.clientY;
+  scrub.moved ||= Math.hypot(scrub.x - scrub.start_x, scrub.y - scrub.start_y) > NAV_TOUCH_SLOP;
+  scrub_to();
 }
 
-/** Release the preview without turning a long press into a jump. */
-function finish_navigation_press(event) {
-  if (navigation_press?.pointer !== event.pointerId) return;
-  if (event.type === "pointercancel") suppress_navigation_click = true;
-  close_preview();
+/** Sliding sideways out of the map hides the preview, and releasing there cancels the jump. */
+function scrub_outside() {
+  const bounds = message_map.value.getBoundingClientRect();
+  return navigation_scrub.x < bounds.left - NAV_SCRUB_CANCEL || navigation_scrub.x > bounds.right + NAV_SCRUB_CANCEL;
 }
 
-/** A stationary pointer must not replace a keyboard preview or bypass the touch hold. */
-function hover_preview(item, event) {
-  if (["touch", "pen"].includes(event.pointerType)) {
-    if (navigation_press?.pointer === event.pointerId && Math.hypot(event.clientX - navigation_press.x, event.clientY - navigation_press.y) > NAV_TOUCH_SLOP) {
-      suppress_navigation_click = true;
-      close_preview();
-    }
+/** Preview the message tick nearest the finger's height within the visible map. */
+function scrub_to() {
+  const nav = message_map.value;
+  const scrub = navigation_scrub;
+  if (!nav || !scrub) return;
+  if (scrub_outside()) {
+    scrub.key = null;
+    preview_open.value = false;
     return;
   }
+  const bounds = nav.getBoundingClientRect();
+  const y = Math.max(bounds.top + NAV_EDGE_INSET, Math.min(scrub.y, bounds.bottom - NAV_EDGE_INSET));
+  let nearest = null;
+  let distance = Infinity;
+  for (const entry of nav.querySelectorAll('[data-jump-id]')) {
+    const position = entry.getBoundingClientRect();
+    const gap = Math.abs((position.top + position.bottom) / 2 - y);
+    if (gap < distance) [nearest, distance] = [entry, gap];
+  }
+  const key = nearest && `message-${nearest.dataset.jumpId}`;
+  if (!key || (key === scrub.key && preview_open.value)) return;
+  const item = navigation_entries.value.find((entry) => entry.key === key);
+  if (!item) return;
+  if (scrub.key && scrub.key !== key) {
+    try { navigator.vibrate?.(NAV_HAPTIC_MS); } catch { /* Haptics are optional; iOS Safari has none. */ }
+  }
+  scrub.key = key;
+  show_preview(item, { currentTarget: nearest });
+}
+
+/** Holding near either end scrolls the map, faster the closer the finger gets. */
+function scrub_frame() {
+  const scrub = navigation_scrub;
+  if (!scrub) return;
+  const nav = message_map.value;
+  if (nav && scrub.moved && !scrub_outside()) {
+    const bounds = nav.getBoundingClientRect();
+    const up = Math.min(1, Math.max(0, 1 - (scrub.y - bounds.top) / NAV_SCRUB_EDGE));
+    const down = Math.min(1, Math.max(0, 1 - (bounds.bottom - scrub.y) / NAV_SCRUB_EDGE));
+    const before = nav.scrollTop;
+    nav.scrollTop += (down - up) * NAV_SCRUB_SPEED;
+    if (nav.scrollTop !== before) scrub_to();
+  }
+  scrub.frame = requestAnimationFrame(scrub_frame);
+}
+
+/** Release jumps to the previewed message; a cancelled pointer or a sideways exit only closes the preview. */
+function end_scrub(event) {
+  const scrub = navigation_scrub;
+  if (scrub?.pointer !== event.pointerId) return;
+  const target = event.type === "pointerup" && scrub.key && preview_open.value ? navigation_entries.value.find((entry) => entry.key === scrub.key) : null;
+  stop_scrub();
+  close_preview();
+  if (target) jump_to(target.message.id);
+}
+
+/** Stop scrubbing when it ends, the layout changes, or the view unmounts. */
+function stop_scrub() {
+  if (navigation_scrub) cancelAnimationFrame(navigation_scrub.frame);
+  navigation_scrub = null;
+}
+
+/** A stationary pointer must not replace a keyboard preview; touch previews come from scrubbing. */
+function hover_preview(item, event) {
+  if (["touch", "pen"].includes(event.pointerType)) return;
   if (event.type === "pointerenter" && navigation_keyboard.value) return;
   navigation_keyboard.value = false;
   if (preview_entry.value !== item.key || !preview_open.value) show_preview(item, event);
@@ -1438,7 +1719,7 @@ function activate_navigation(item, event) {
 
 /** Keep the native touch menu from interrupting an active navigation preview. */
 function navigation_context_menu(event) {
-  if (navigation_press) event.preventDefault();
+  if (navigation_scrub) event.preventDefault();
 }
 
 /** Native wheel scrolling changes only the navigation, with no queued animation. */
@@ -1454,6 +1735,7 @@ function return_to_latest() {
   reader.state.following = false;
   jump_target.value = null;
   follow_tail.value = true;
+  pending_jump = null;
   follow_messages();
 }
 
@@ -1466,6 +1748,9 @@ async function show_preview(item, event) {
   const left = nav.right + PREVIEW_GAP;
   preview_left.value = Math.max(PREVIEW_INSET, Math.min(left, innerWidth - width - PREVIEW_INSET));
   preview_message.value = message.id;
+  // The card under the pointer is rendered now, so clicking it jumps at once.
+  preload_wanted = message.id;
+  if (not_rendered(message.id)) schedule_preload(true);
   preview_entry.value = item.key;
   preview_is_round.value = item.round;
   preview_open.value = true;
@@ -1483,13 +1768,12 @@ async function show_preview(item, event) {
 /** Leaving the navigation and its adjoining preview releases the same spring. */
 function close_preview(event) {
   if (event?.relatedTarget?.closest?.('.channel-message-map, .channel-nav-preview')) return;
-  cancel_navigation_press();
   preview_open.value = false;
 }
 
 /** A new layout or message set invalidates the previous floating coordinates. */
 function reset_preview() {
-  cancel_navigation_press();
+  stop_scrub();
   preview_open.value = false;
   preview_visibility.jump(0);
   preview_message.value = null;
@@ -1509,7 +1793,11 @@ function section_preview_position(section) {
   return Math.max(-NAV_HOVER_REACH, Math.min(last + NAV_HOVER_REACH, preview_index.value - section.entries[0].index));
 }
 
-/** Nearby ticks respond by distance; the actual reading position stays distinct. */
+/**
+ * Nearby ticks respond by distance; the actual reading position stays distinct. A plain inline style animated by the CSS
+ * transition (channel.css, NAV_SPRING as a linear() curve): a motion component per message cost a layout read on mount
+ * and a JS-driven paint every frame while the reading tick moved during scrolling.
+ */
 function tick_state(item, index) {
   const distance = preview_index.value < 0 ? Infinity : Math.abs(index - preview_index.value);
   const influence = Math.max(0, 1 - distance / NAV_HOVER_REACH);
@@ -1517,8 +1805,8 @@ function tick_state(item, index) {
   const selected = distance === 0 || (current && preview_index.value < 0);
   const base = NAV_TICK_WIDTH;
   return {
-    scaleX: selected ? NAV_ACTIVE_WIDTH / base : current ? NAV_READING_WIDTH / base : 1 + influence * NAV_HOVER_EXTENSION / base,
-    height: selected ? NAV_ACTIVE_HEIGHT : NAV_TICK_HEIGHT,
+    transform: `scaleX(${selected ? NAV_ACTIVE_WIDTH / base : current ? NAV_READING_WIDTH / base : 1 + influence * NAV_HOVER_EXTENSION / base})`,
+    height: `${selected ? NAV_ACTIVE_HEIGHT : NAV_TICK_HEIGHT}px`,
     opacity: selected ? NAV_ACTIVE_OPACITY : current ? NAV_READING_OPACITY : NAV_TICK_OPACITY + influence * NAV_HOVER_OPACITY,
   };
 }
@@ -1544,7 +1832,7 @@ const editor_observer = new ResizeObserver(([entry]) => {
 });
 onMounted(() => prompt.value?.textareaRef && editor_observer.observe(prompt.value.textareaRef));
 onBeforeUnmount(() => editor_observer.disconnect());
-onBeforeUnmount(cancel_navigation_press);
+onBeforeUnmount(stop_scrub);
 
 const COPY_FEEDBACK_MS = 2000;
 const launch_copied = ref("");
@@ -1644,6 +1932,67 @@ const can_retract = (message) => can_take_back(message) && (view.value.messages.
 
 const NO_EDIT = { id: 0, text: "", plan: null, error: "" };
 const editing = ref(NO_EDIT);
+
+// The member whose stop key was pressed, so only that working card shows the stop in progress.
+const stopping_member = ref(null);
+async function stop_member(message) {
+  stopping_member.value = message.member_id;
+  try { await act("change_member", { member_id: message.member_id, name: message.author, action: "interrupt" }); }
+  finally { stopping_member.value = null; }
+}
+
+const NO_ITEMS = Object.freeze([]);
+// The message whose retract is on its way, so its button shows progress at once instead of after the site answers.
+const retracting_id = ref(0);
+async function retract(id) {
+  retracting_id.value = id;
+  try { await act("retract_message", id); } finally { retracting_id.value = 0; }
+}
+/**
+ * Everything a saved message card shows, read here in the transcript's render. The card's slots are run by the chat,
+ * tooltip and menu components, which would otherwise track every reactive value the slots read and re-render all cards
+ * on each room refresh; reading only this plain object, a card re-renders only when one of its `deps` changes.
+ */
+// Tooltips and the "more" menu cost most of a card's mount, and a long room mounts hundreds of cards. A card gets them
+// once a mouse enters it (only a mouse shows tooltips) or its menu is first opened; until then its keys are bare buttons.
+// The tooltips close as the pointer leaves their key and let the pointer through: one over the next key in the column
+// took the hover off the card, which hid the keys, so clicking that key did nothing.
+const KEY_TIP_UI = { content: "channel-key-tip" };
+const armed_cards = reactive(new Set());
+const menu_open_id = ref(0);
+/** Renders its slot as is: the stand-in for a tooltip on a card no mouse has entered. */
+const BareSlot = (_props, { slots }) => slots.default?.();
+function arm_card(id, event) {
+  if (event.pointerType === "mouse") armed_cards.add(id);
+}
+/** Mount the card's menu and open it: the first tap on its key, by touch or keyboard. */
+function open_card_menu(id) {
+  armed_cards.add(id);
+  menu_open_id.value = id;
+}
+function message_card(message) {
+  const execution = answer_execution(message);
+  const reports = execution_reports.value.get(message.id);
+  const edited = editing.value.id === message.id;
+  const waits = waits_for_host(message);
+  const card = {
+    message, identity_version: view.value.admin?.identity_version, narrow: narrow.value, reading: reader.state.message_id === message.id,
+    can_branch: can_branch(message), can_take_back: can_take_back(message), can_retract: can_retract(message), retracting: retracting_id.value === message.id, private_chat: has_private_chat(message),
+    editing: edited, editing_plan: edited && editing.value.plan, editing_error: edited && editing.value.error, editing_pending: edited && pending.value,
+    round_label: message_round_labels.value.get(message.id), expanded: expanded_answers.value.has(message.id), preview: answer_previews.value.get(message.id),
+    marks: excerpt_marks.value.get(message.id) || NO_ITEMS, waits, speaking_expert: waits ? speaking_turn.value?.expert : null,
+    badges: request_badges.value.get(message.id) || NO_ITEMS, elapsed: message_elapsed(message),
+    recommendation: recommendations.value.get(message.id), adopting: adopting.value === message.id,
+    execution_id: execution?.id, notes_count: execution?.notes, notes: execution ? execution_notes.value.get(execution.id) : undefined,
+    reports: reports || NO_ITEMS, allowing: reports ? allowing.value : 0, allow_errors: reports ? allow_errors.value : null,
+    launch_available: reports ? view.value.launch?.available : null, report_messages: reports ? view.value.messages : null,
+    armed: armed_cards.has(message.id), menu_open: menu_open_id.value === message.id,
+  };
+  card.deps = Object.values(card);
+  card.actions = message_actions(message);
+  card.report_rows = card.reports.map((report) => ({ report, allowable: Boolean(denial_allowance(report)), failed: Boolean(failed_request_message(report)) }));
+  return card;
+}
 /** Open the message for editing and read what sending the edit would take back. */
 async function start_edit(message) {
   editing.value = { ...NO_EDIT, id: message.id, text: message.text };
@@ -1725,12 +2074,13 @@ function copy_message(message) { act("copy", `${view.value.room_site}/r/${room.v
 <template>
   <section class="channel-conversation" role="tabpanel" aria-label="消息">
     <div v-if="view.query || view.mention_only || view.host_only" class="channel-filter-summary"><span>{{ [view.query && `“${view.query}”`, view.host_only && '只看主持', view.mention_only && `@${bridge.display_name(author)}`].filter(Boolean).join(' · ') }} · {{ view.total }} 条结果</span><UButton label="清除筛选" size="xs" variant="link" color="neutral" @click="search = ''; act('filter', { query: '', mention: false, host: false })" /></div>
-    <nav v-if="view.messages.length" ref="message_map" class="channel-message-map" :style="{ '--nav-entry-height': `${NAV_ENTRY_HEIGHT}px` }" aria-label="发言快速导航" @wheel.stop.passive="browse_navigation" @pointerleave="close_preview" @focusout="close_preview" @keydown.esc.stop="close_preview" @contextmenu="navigation_context_menu">
+    <nav v-if="view.messages.length" ref="message_map" class="channel-message-map" :style="{ '--nav-entry-height': `${NAV_ENTRY_HEIGHT}px` }" aria-label="发言快速导航" @wheel.stop.passive="browse_navigation" @pointerleave="close_preview" @focusout="close_preview" @keydown.esc.stop="close_preview" @contextmenu="navigation_context_menu" @pointerdown="start_scrub" @pointermove="move_scrub" @pointerup="end_scrub" @pointercancel="end_scrub">
       <div class="channel-map-track">
         <div v-for="section in navigation_sections" :key="section.entries[0].key"v-memo="[section, preview_open, active_round === section.number ? active_message : null, section_preview_position(section)]" class="channel-map-round" :style="{ '--round-message-count': section.count }">
-          <button v-for="item in section.entries" :key="item.key" type="button" class="channel-navigation-entry" :class="item.round ? 'channel-round-range' : 'channel-message-jump'" :data-author="item.round ? undefined : bridge.identities[item.message.author]?.style" :data-jump-id="item.round ? undefined : item.message.id" :data-round-jump="item.round ? item.label : undefined" :aria-label="item.label" :tabindex="!item.round && item.message.id === (active_message || view.messages[0]?.id) ? 0 : -1" :aria-current="!item.round && active_message === item.message.id ? 'location' : undefined" :aria-describedby="preview_open && preview_entry === item.key ? 'channel-navigation-preview' : undefined" @pointerenter="hover_preview(item, $event)" @pointermove="hover_preview(item, $event)" @pointerdown="start_navigation_press(item, $event)" @pointerup="finish_navigation_press" @pointercancel="finish_navigation_press" @focus="focus_preview(item, $event)" @keydown="navigate_by_key($event, item.index)" @click="activate_navigation(item, $event)">
+          <!-- A free room is one long section, so each tick keeps its own memo: moving the reading position or the hover redraws only the ticks it reaches. -->
+          <button v-for="item in section.entries" :key="item.key" v-memo="[item.message, item.label, item.index, active_message === item.message.id, item.message.id === (active_message || view.messages[0]?.id), preview_index < 0 ? -1 : Math.min(Math.abs(item.index - preview_index), NAV_HOVER_REACH), preview_open && preview_entry === item.key]" type="button" class="channel-navigation-entry" :class="item.round ? 'channel-round-range' : 'channel-message-jump'" :data-author="item.round ? undefined : bridge.identities[item.message.author]?.style" :data-jump-id="item.round ? undefined : item.message.id" :data-round-jump="item.round ? item.label : undefined" :aria-label="item.label" :tabindex="!item.round && item.message.id === (active_message || view.messages[0]?.id) ? 0 : -1" :aria-current="!item.round && active_message === item.message.id ? 'location' : undefined" :aria-describedby="preview_open && preview_entry === item.key ? 'channel-navigation-preview' : undefined" @pointerenter="hover_preview(item, $event)" @pointermove="hover_preview(item, $event)" @focus="focus_preview(item, $event)" @keydown="navigate_by_key($event, item.index)" @click="activate_navigation(item, $event)">
             <span v-if="item.round" class="channel-round-number" aria-hidden="true">{{ item.number || '' }}</span>
-            <motion.span v-else class="channel-jump-tick" aria-hidden="true" :initial="false" :animate="tick_state(item, item.index)" :transition="NAV_SPRING" />
+            <span v-else class="channel-jump-tick" aria-hidden="true" :style="tick_state(item, item.index)"></span>
           </button>
         </div>
       </div>
@@ -1758,8 +2108,8 @@ function copy_message(message) { act("copy", `${view.value.room_site}/r/${room.v
       <button type="submit" class="selection-comment-send" aria-label="添加到对话" title="添加到对话（Enter）"><UIcon name="i-lucide-arrow-up" /></button>
     </form>
     <ExcerptEditCard v-if="mark_editing" :key="mark_editing.excerpt.id" :comment="mark_editing.excerpt.comment" :style="{ left: `${mark_editing.left}px`, top: `${mark_editing.top}px` }" @save="save_mark" @cancel="close_mark" @remove="remove_mark" />
-    <div ref="transcript" v-memo="[message_groups, view.sending_preview, message_round_labels, free, room.session, view.access, active_message, expanded_answers.size, reader.state.message_id, room.title, view.query, view.mention_only, view.host_only, topic_anchor, end_anchor, request_badges, execution_reports, recommendations, adopting, scheduler_decisions, host_arrangements, pending, execution_notes, open_working_notes, editing, rewound_runs]" class="channel-transcript" aria-label="聊天记录" @scroll="track_scroll" @wheel.passive="resume_tracking($event); stop_following($event)" @touchstart.passive="resume_tracking" @touchmove.passive="stop_following" @pointerdown="stop_following" @keydown="resume_tracking($event); stop_following($event)">
-      <div v-if="!view.query && !view.mention_only && !view.host_only && !topic_anchor" class="channel-message-group channel-topic-group"><TopicCard :ref="(card) => topic_card = card" @edit="emit('edit')" /></div>
+    <div ref="transcript" v-memo="[message_groups, view.sending_preview, message_round_labels, free, room.session, can_manage, expanded_answers.size, reader.state.message_id, room.title, view.query, view.mention_only, view.host_only, topic_anchor, end_anchor, request_badges, execution_reports, recommendations, adopting, scheduler_decisions, host_arrangements, pending, execution_notes, open_working_notes, editing, rewound_runs, retracting_id, armed_cards.size, menu_open_id, stopping_member, free_now, allowing, allow_errors, late_answers, has_draft, view.sending_message, routing_messages, speaking_turn, room.free]" class="channel-transcript" aria-label="聊天记录" @scroll="schedule_track_scroll" @wheel.passive="resume_tracking($event); stop_following($event)" @touchstart.passive="resume_tracking" @touchmove.passive="stop_following" @pointerdown="stop_following" @keydown="resume_tracking($event); stop_following($event)">
+      <div v-if="!view.query && !view.mention_only && !view.host_only && !topic_anchor && render_start === 0" class="channel-message-group channel-topic-group"><TopicCard :ref="(card) => topic_card = card" @edit="emit('edit')" /></div>
       <div v-for="group in message_groups" :key="group.key" class="channel-message-group">
         <USeparator :label="group.label" class="channel-date-divider" />
         <template v-for="message in group.messages" :key="message.id">
@@ -1800,9 +2150,9 @@ function copy_message(message) { act("copy", `${view.value.room_site}/r/${room.v
             <strong class="channel-working-name">{{ bridge.display_name(message.author) }}</strong>
             <small class="channel-working-elapsed">{{ message.waiting ? `手动启动${message.created_at ? ` · 已等 ${format_elapsed(Math.max(0, free_now - message.created_at))}` : ''}` : `已用 ${format_elapsed(Math.max(0, free_now - message.created_at))}` }}{{ message.attempt ? ` · 第 ${message.attempt}/${MAX_DELIVERY_RETRIES} 次重试` : '' }}</small>
           </div>
-          <!-- Private chat sits in the answered card's first toolbar slot, so the key stays put when the work turns into an answer. -->
+          <!-- Private chat sits in the answered card's first toolbar slot (the corner on touch screens), so the key stays put when the work turns into an answer. -->
           <div v-if="view.access?.can_manage && shows_progress(message) && message.execution_id" class="channel-message-actions"><div class="channel-message-toolbar">
-            <UTooltip text="私聊：查看它正在做什么"><UButton icon="i-lucide-messages-square" size="xs" variant="ghost" color="neutral" :aria-label="`私聊 ${bridge.display_name(message.author)}：查看本次执行过程`" @click="open_private_chat(act, message.author, message.execution_id)" /></UTooltip>
+            <UTooltip text="私聊：查看它正在做什么"><UButton icon="i-lucide-messages-square" class="channel-private-chat-key" size="xs" variant="ghost" color="neutral" :aria-label="`私聊 ${bridge.display_name(message.author)}：查看本次执行过程`" @click="open_private_chat(act, message.author, message.execution_id)" /></UTooltip>
           </div></div>
           <div class="channel-working-main">
             <span v-for="status in [working_status(message)]" :key="message.id" class="channel-working-status" :class="{ 'channel-working-warning': status.warning }" role="status" :title="shows_progress(message) ? (message.waiting ? message.text : status.text) : '此接入方式看不到进度，可在原窗口查看'">
@@ -1818,7 +2168,7 @@ function copy_message(message) { act("copy", `${view.value.room_site}/r/${room.v
                   @click="act('skip_turn')"><span class="channel-stop-square" /></UButton></UTooltip>
               </template>
               <UTooltip v-else text="停止"><UButton variant="solid" color="neutral" class="channel-stop-button" :aria-label="`停止 ${bridge.display_name(message.author)} 本次执行`" :disabled="!!pending"
-                @click="act('change_member', { member_id: message.member_id, name: message.author, action: 'interrupt' })"><span class="channel-stop-square" /></UButton></UTooltip>
+                :loading="pending === 'change_member' && stopping_member === message.member_id" @click="stop_member(message)"><span class="channel-stop-square" /></UButton></UTooltip>
           </span>
           </div>
           <div v-for="notes in [working_notes(message)].filter((list) => list.length)" :key="message.execution_id" class="channel-working-notes" :class="{ 'is-open': open_working_notes.has(message.execution_id), 'is-single': notes.length === 1 }">
@@ -1897,45 +2247,48 @@ function copy_message(message) { act("copy", `${view.value.room_site}/r/${room.v
           </template>
         </div>
         <template v-else>
-        <UChatMessage :id="String(message.id)" v-memo="[message, reader.state.message_id === message.id, narrow, can_take_back(message), can_branch(message), can_retract(message), view.admin?.identity_version, editing.id === message.id && editing.plan, editing.id === message.id && editing.error, editing.id === message.id, pending === 'rewind_and_send', message_round_labels.get(message.id), expanded_answers.has(message.id), active_message === message.id, waits_for_host(message), request_badges.get(message.id), execution_reports.get(message.id), message_elapsed(message), recommendations.get(message.id), adopting === message.id, answer_execution(message)?.notes, execution_notes.get(answer_execution(message)?.id)]" :data-message-id="message.id" :data-author="bridge.identities[message.author]?.style" tabindex="-1" :role="message.author === '用户' ? 'user' : 'assistant'" :parts="[]" side="left" variant="naked" color="neutral" class="channel-message" :class="{ 'channel-current-message': active_message === message.id }" :ui="{ header: 'channel-message-header', container: 'channel-message-container', body: 'channel-message-body' }">
+        <!-- Each card keeps its own render cache and reads only its card object; a room refresh re-renders only the cards whose inputs changed. -->
+        <template v-for="card in [message_card(message)]" :key="message.id">
+        <MemoBlock :deps="card.deps">
+        <UChatMessage :id="String(message.id)" :data-message-id="message.id" :data-author="bridge.identities[message.author]?.style" tabindex="-1" @pointerenter="card.armed || arm_card(message.id, $event)" :role="message.author === '用户' ? 'user' : 'assistant'" :parts="[]" side="left" variant="naked" color="neutral" class="channel-message" :ui="{ header: 'channel-message-header', container: 'channel-message-container', body: 'channel-message-body' }">
           <template #body>
             <div class="channel-message-byline">
               <UAvatar :src="bridge.identities[message.author]?.icon" :text="bridge.identities[message.author]?.initials || '?'" :alt="bridge.display_name(message.author)" size="md" class="channel-avatar" :class="bridge.identities[message.author]?.style" />
               <div class="channel-message-meta">
-                <div class="channel-message-author"><strong>{{ bridge.display_name(message.author) }}</strong><span class="channel-message-round">{{ message_round_labels.get(message.id) }}</span><UBadge size="xs" color="neutral" variant="soft" class="channel-source">{{ bridge.sources[message.source] }}</UBadge><UBadge v-if="message.kind === 'moderation'" size="xs" color="neutral" variant="soft" class="channel-source">主持人</UBadge><UBadge v-if="message.kind === 'receipt'" size="xs" color="neutral" variant="soft" class="channel-source">运行回执</UBadge><UBadge v-if="message.proactive" size="xs" color="neutral" variant="soft" class="channel-source" title="成员在自己的窗口里应用户要求主动发言，不是在回答房间的请求">主动发言</UBadge><UBadge v-if="waits_for_host(message)" size="xs" color="warning" variant="soft" class="channel-source" :title="speaking_turn ? `${bridge.display_name(speaking_turn.expert)} 说完后交给主持人处理` : '等待主持人处理'">待主持人处理</UBadge><UBadge v-for="badge in request_badges.get(message.id) || []" :key="badge.key" size="xs" :color="badge.color" variant="soft" class="channel-source" :title="badge.title">{{ badge.label }}</UBadge></div>
+                <div class="channel-message-author"><strong>{{ bridge.display_name(message.author) }}</strong><span class="channel-message-round">{{ card.round_label }}</span><UBadge size="xs" color="neutral" variant="soft" class="channel-source">{{ bridge.sources[message.source] }}</UBadge><UBadge v-if="message.kind === 'moderation'" size="xs" color="neutral" variant="soft" class="channel-source">主持人</UBadge><UBadge v-if="message.kind === 'receipt'" size="xs" color="neutral" variant="soft" class="channel-source">运行回执</UBadge><UBadge v-if="message.proactive" size="xs" color="neutral" variant="soft" class="channel-source" title="成员在自己的窗口里应用户要求主动发言，不是在回答房间的请求">主动发言</UBadge><UBadge v-if="card.waits" size="xs" color="warning" variant="soft" class="channel-source" :title="card.speaking_expert ? `${bridge.display_name(card.speaking_expert)} 说完后交给主持人处理` : '等待主持人处理'">待主持人处理</UBadge><UBadge v-for="badge in card.badges" :key="badge.key" size="xs" :color="badge.color" variant="soft" class="channel-source" :title="badge.title">{{ badge.label }}</UBadge></div>
                 <div class="channel-message-provenance"><time :title="new Date(message.created_at).toLocaleString('zh-CN')">{{ bridge.format_time(message.created_at) }}</time><UButton :label="`#${message.id}`" color="neutral" variant="link" size="xs" :aria-label="`查看原文 #${message.id}`" class="channel-message-id" @click="emit('detail', message.id)" /><span v-if="message.submitted_by && message.submitted_by !== message.author && !(message.source === 'proxy' && message.submitted_by === '用户')">{{ bridge.display_name(message.submitted_by) }} 代发</span></div>
               </div>
-              <span v-if="message_elapsed(message) !== null" class="channel-message-provenance channel-message-elapsed">耗时 {{ format_elapsed(message_elapsed(message)) }}</span>
+              <span v-if="card.elapsed !== null" class="channel-message-provenance channel-message-elapsed">耗时 {{ format_elapsed(card.elapsed) }}</span>
             </div>
             <UButton v-if="message.reply_to" :label="`回复 #${message.reply_to}`" icon="i-lucide-corner-up-left" variant="link" color="neutral" size="xs" class="channel-message-reference" :aria-label="`回复 #${message.reply_to} 查看原文`" @click="emit('detail', message.reply_to)" />
             <details v-if="message.kind === 'receipt'" class="channel-receipt">
               <summary :aria-label="`查看运行回执 #${message.id}`">运行回执详情</summary>
               <div class="channel-message-text markdown-body" v-html="message.rendered_text"></div>
             </details>
-            <form v-else-if="editing.id === message.id" class="channel-edit" :aria-label="`编辑消息 #${message.id}`" @submit.prevent="submit_edit">
+            <form v-else-if="card.editing" class="channel-edit" :aria-label="`编辑消息 #${message.id}`" @submit.prevent="submit_edit">
               <textarea v-model="editing.text" rows="3" :maxlength="bridge.max_message_length" aria-label="编辑后的消息" @keydown.esc.prevent="cancel_edit" @keydown.enter.ctrl.prevent="submit_edit" @keydown.enter.meta.prevent="submit_edit"></textarea>
-              <p class="channel-edit-note" :class="{ 'is-error': editing.error }" role="status">{{ editing.error || (editing.plan ? rewind_summary(editing.plan) : '正在读取回退范围…') }}</p>
+              <p class="channel-edit-note" :class="{ 'is-error': card.editing_error }" role="status">{{ card.editing_error || (card.editing_plan ? rewind_summary(card.editing_plan) : '正在读取回退范围…') }}</p>
               <div class="channel-edit-actions">
                 <UButton label="取消" size="xs" variant="ghost" color="neutral" @click="cancel_edit" />
-                <UButton type="submit" label="回退并发送" size="xs" color="primary" :disabled="!editing.plan || (!!pending && pending !== 'rewind_and_send')" :loading="pending === 'rewind_and_send'" />
+                <UButton type="submit" label="回退并发送" size="xs" color="primary" :disabled="!card.editing_plan || (!!card.editing_pending && card.editing_pending !== 'rewind_and_send')" :loading="card.editing_pending === 'rewind_and_send'" />
               </div>
             </form>
             <div v-else class="channel-answer">
-              <div :id="`channel-answer-${message.id}`" class="channel-message-text markdown-body" v-html="expanded_answers.has(message.id) ? message.rendered_text : answer_previews.get(message.id).html"></div>
-              <button v-for="mark in excerpt_marks.get(message.id) || []" :key="mark.id" type="button" class="excerpt-mark" :style="{ left: `${mark.left}px`, top: `${mark.top}px` }" :title="`摘录 ${mark.number}：点击修改批注`" :aria-label="`修改摘录 ${mark.number} 的批注`" @click="open_mark(mark.id)">{{ mark.number }}</button>
-              <UButton v-if="answer_previews.get(message.id).truncated" :label="expanded_answers.has(message.id) ? '收起' : '展开全文'" :trailing-icon="expanded_answers.has(message.id) ? 'i-lucide-chevron-up' : 'i-lucide-chevron-down'" variant="link" color="neutral" size="xs" class="channel-answer-toggle" :aria-label="`${expanded_answers.has(message.id) ? '收起回答' : '展开完整回答'} #${message.id}`" :aria-expanded="expanded_answers.has(message.id)" :aria-controls="`channel-answer-${message.id}`" @click="toggle_answer(message, $event)" />
+              <div :id="`channel-answer-${message.id}`" class="channel-message-text markdown-body" v-html="card.expanded ? message.rendered_text : card.preview.html"></div>
+              <button v-for="mark in card.marks" :key="mark.id" type="button" class="excerpt-mark" :style="{ left: `${mark.left}px`, top: `${mark.top}px` }" :title="`摘录 ${mark.number}：点击修改批注`" :aria-label="`修改摘录 ${mark.number} 的批注`" @click="open_mark(mark.id)">{{ mark.number }}</button>
+              <UButton v-if="card.preview.truncated" :label="card.expanded ? '收起' : '展开全文'" :trailing-icon="card.expanded ? 'i-lucide-chevron-up' : 'i-lucide-chevron-down'" variant="link" color="neutral" size="xs" class="channel-answer-toggle" :aria-label="`${card.expanded ? '收起回答' : '展开完整回答'} #${message.id}`" :aria-expanded="card.expanded" :aria-controls="`channel-answer-${message.id}`" @click="toggle_answer(message, $event)" />
             </div>
             <div v-if="message.summary" class="channel-answer-summary"><small>回答摘要<span v-if="message.summary_by && message.summary_by !== message.author"> · {{ bridge.display_name(message.summary_by) }} 整理</span></small><div class="channel-message-text markdown-body" v-html="message.rendered_summary"></div></div>
-            <ExecutionNotes v-if="answer_execution(message)?.notes" :count="answer_execution(message).notes" :notes="execution_notes.get(answer_execution(message).id)" @load="load_notes(answer_execution(message).id)" />
+            <ExecutionNotes v-if="card.notes_count" :count="card.notes_count" :notes="card.notes" @load="load_notes(card.execution_id)" />
             <div v-if="message.attachments?.length" v-html="bridge.attachment_markup(message.attachments)"></div>
-            <div v-if="recommendations.get(message.id)" class="channel-recommendation" :class="`is-${recommendations.get(message.id).status}`" aria-label="智能调度推荐" aria-live="polite">
-              <template v-for="item in [recommendations.get(message.id)]" :key="item.message_id">
+            <div v-if="card.recommendation" class="channel-recommendation" :class="`is-${card.recommendation.status}`" aria-label="智能调度推荐" aria-live="polite">
+              <template v-for="item in [card.recommendation]" :key="item.message_id">
                 <UIcon name="i-lucide-zap" class="channel-recommendation-icon" />
                 <span v-if="item.status === 'open'">智能调度建议让 <strong>{{ bridge.display_name(item.member) }}</strong> 回答<small :title="`${item.label}，置信度 ${Number(item.confidence).toFixed(2)}`">置信度 {{ Number(item.confidence).toFixed(2) }} · {{ item.remaining }} 秒</small></span>
                 <span v-else-if="item.status === 'waiting'">智能调度：主持人答完后请 {{ bridge.display_name(item.member) }} 回答</span>
                 <span v-else>智能调度：{{ item.mode === 'interrupt' ? `已打断主持人，改由 ${bridge.display_name(item.member)} 回答` : `已请 ${bridge.display_name(item.member)} 回答` }}</span>
                 <template v-if="item.can_adopt">
-                  <UButton v-if="adopting !== item.message_id" label="采纳" icon="i-lucide-check" size="xs" variant="soft" color="primary" :aria-label="`采纳建议，请 ${item.member} 回答 #${item.message_id}`" @click="item.host_busy ? adopting = item.message_id : adopt(item.message_id, 'after')" />
+                  <UButton v-if="!card.adopting" label="采纳" icon="i-lucide-check" size="xs" variant="soft" color="primary" :aria-label="`采纳建议，请 ${item.member} 回答 #${item.message_id}`" @click="item.host_busy ? adopting = item.message_id : adopt(item.message_id, 'after')" />
                   <template v-else>
                     <UButton :label="`打断主持人，改由 ${bridge.display_name(item.member)} 回答`" size="xs" variant="soft" color="warning" @click="adopt(item.message_id, 'interrupt')" />
                     <UButton :label="`主持人答完后再请 ${bridge.display_name(item.member)}`" size="xs" variant="soft" color="neutral" @click="adopt(item.message_id, 'after')" />
@@ -1944,24 +2297,27 @@ function copy_message(message) { act("copy", `${view.value.room_site}/r/${room.v
                 </template>
               </template>
             </div>
-            <section v-for="report in execution_reports.get(message.id) || []" :key="report.id" class="channel-execution-report" :aria-label="`执行报告 #${report.id}`">
+            <section v-for="{ report, allowable, failed } in card.report_rows" :key="report.id" class="channel-execution-report" :aria-label="`执行报告 #${report.id}`">
               <div><strong>执行 #{{ report.id }} · {{ report.label }}</strong></div>
               <p v-if="report.changes?.length">文件变化：{{ report.changes.join('、') }}</p>
               <p v-if="report.status !== 'completed' && report.result">{{ report.result }}</p>
-              <ExecutionDenials v-if="report.denials?.length" :denials="report.denials" :allowable="Boolean(denial_allowance(report))"
-                :busy="allowing === report.id" :error="allow_errors[report.id]" @allow="allow_and_resend(report)" />
-              <UButton v-if="failed_request_message(report)" label="重发" icon="i-lucide-rotate-ccw" size="xs" variant="soft" color="neutral" :aria-label="`把执行 #${report.id} 的原消息填回输入框重发`" @click="resend_failed(report)" />
+              <ExecutionDenials v-if="report.denials?.length" :denials="report.denials" :allowable="allowable"
+                :busy="card.allowing === report.id" :error="card.allow_errors?.[report.id]" @allow="allow_and_resend(report)" />
+              <UButton v-if="failed" label="重发" icon="i-lucide-rotate-ccw" size="xs" variant="soft" color="neutral" :aria-label="`把执行 #${report.id} 的原消息填回输入框重发`" @click="resend_failed(report)" />
             </section>
           </template>
           <template #header><div class="channel-message-actions"><div class="channel-message-toolbar">
-            <UTooltip v-if="has_private_chat(message)" text="私聊：查看这次执行的过程"><UButton icon="i-lucide-messages-square" size="xs" color="neutral" variant="ghost" :aria-label="`查看 #${message.id} 的执行过程`" @click="open_private_chat(act, message.author, answer_execution(message).id)" /></UTooltip>
-            <UTooltip v-else-if="!can_take_back(message)" text="回复"><UButton icon="i-lucide-corner-up-left" size="xs" color="neutral" variant="ghost" :aria-label="`回复 #${message.id}`" @click="reply_to(message)" /></UTooltip>
-            <UTooltip v-if="can_retract(message) && editing.id !== message.id" text="撤回"><UButton icon="i-lucide-undo-2" size="xs" color="neutral" variant="ghost" :aria-label="`撤回 #${message.id}`" @click="act('retract_message', message.id)" /></UTooltip>
-            <UTooltip v-if="can_take_back(message) && editing.id !== message.id" text="编辑"><UButton icon="i-lucide-pencil" size="xs" color="neutral" variant="ghost" :aria-label="`编辑 #${message.id}，回退到它之前重新发送`" @click="start_edit(message)" /></UTooltip>
-            <UTooltip v-if="!narrow && message.kind !== 'receipt' && editing.id !== message.id" :text="reader.state.message_id === message.id ? '停止朗读' : '朗读'"><UButton :icon="reader.state.message_id === message.id ? 'i-lucide-square' : 'i-lucide-volume-2'" size="xs" color="neutral" variant="ghost" :aria-label="reader.state.message_id === message.id ? '停止朗读' : `从 #${message.id} 开始朗读`" @click="reader.state.message_id === message.id ? reader.stop() : reader.start(message.id)" /></UTooltip>
-            <UDropdownMenu :items="message_actions(message)" :content="{ align: 'end', sideOffset: 5 }" :ui="{ content: 'channel-menu' }"><UButton icon="i-lucide-ellipsis" size="xs" color="neutral" variant="ghost" :aria-label="`消息 #${message.id} 的更多操作`" /></UDropdownMenu>
+            <component :is="card.armed ? UTooltip : BareSlot" disable-hoverable-content :ui="KEY_TIP_UI" v-if="card.private_chat" text="私聊：查看这次执行的过程"><UButton icon="i-lucide-messages-square" class="channel-private-chat-key" size="xs" color="neutral" variant="ghost" :aria-label="`查看 #${message.id} 的执行过程`" @click="open_private_chat(act, message.author, card.execution_id)" /></component>
+            <component :is="card.armed ? UTooltip : BareSlot" disable-hoverable-content :ui="KEY_TIP_UI" v-else-if="!card.can_take_back" text="回复"><UButton icon="i-lucide-corner-up-left" size="xs" color="neutral" variant="ghost" :aria-label="`回复 #${message.id}`" @click="reply_to(message)" /></component>
+            <component :is="card.armed ? UTooltip : BareSlot" disable-hoverable-content :ui="KEY_TIP_UI" v-if="card.can_retract && !card.editing" text="撤回"><UButton icon="i-lucide-undo-2" size="xs" color="neutral" variant="ghost" :aria-label="`撤回 #${message.id}`" @click="retract(message.id)" :loading="card.retracting" /></component>
+            <component :is="card.armed ? UTooltip : BareSlot" disable-hoverable-content :ui="KEY_TIP_UI" v-if="card.can_take_back && !card.editing" text="编辑"><UButton icon="i-lucide-pencil" size="xs" color="neutral" variant="ghost" :aria-label="`编辑 #${message.id}，回退到它之前重新发送`" @click="start_edit(message)" /></component>
+            <component :is="card.armed ? UTooltip : BareSlot" disable-hoverable-content :ui="KEY_TIP_UI" v-if="!card.narrow && message.kind !== 'receipt' && !card.editing" :text="card.reading ? '停止朗读' : '朗读'"><UButton :icon="card.reading ? 'i-lucide-square' : 'i-lucide-volume-2'" size="xs" color="neutral" variant="ghost" :aria-label="card.reading ? '停止朗读' : `从 #${message.id} 开始朗读`" @click="card.reading ? reader.stop() : reader.start(message.id)" /></component>
+            <UDropdownMenu v-if="card.armed" :open="card.menu_open" :items="card.actions" :content="{ align: 'end', sideOffset: 5 }" :ui="{ content: 'channel-menu' }" @update:open="(open) => menu_open_id = open ? message.id : 0"><UButton icon="i-lucide-ellipsis" size="xs" color="neutral" variant="ghost" :aria-label="`消息 #${message.id} 的更多操作`" /></UDropdownMenu>
+            <UButton v-else icon="i-lucide-ellipsis" size="xs" color="neutral" variant="ghost" :aria-label="`消息 #${message.id} 的更多操作`" aria-haspopup="menu" @click="open_card_menu(message.id)" />
           </div></div></template>
         </UChatMessage>
+        </MemoBlock>
+        </template>
         <!-- A decision stands between the card that ended the round and the next speaker. -->
         <ScheduleCard v-if="routing_messages.has(message.id) && !scheduler_decisions.get(message.id)?.length" icon="i-lucide-zap" skipped label="智能调度分析中" :expandable="false">
           <template #text><WorkingText text="智能调度：正在分析" seed="智能调度" dots /></template>
@@ -2008,7 +2364,7 @@ function copy_message(message) { act("copy", `${view.value.room_site}/r/${room.v
       <UButton v-if="transcript_messages.length && !follow_tail" icon="i-lucide-arrow-down" color="neutral" variant="outline" aria-label="回到最新消息" class="channel-latest-button" @click="return_to_latest" />
     </div>
     <div class="channel-composer-dock"><div class="channel-composer-column" @dragover="bridge.drop_attachments" @drop="bridge.drop_attachments" @paste="bridge.paste_attachments" @keydown.capture="mention_keydown($event); attachment_shortcut($event)" @input="update_mention" @click="update_mention" @keyup="update_mention" @select="update_mention" @compositionstart="mention_composition" @compositionupdate="mention_composition" @compositionend="mention_composition" @scroll.capture="sync_mirror">
-      <UPopover :open="!!mention_context" :reference="prompt?.$el" :content="{ side: 'top', align: 'start', sideOffset: 8, onOpenAutoFocus: keep_mention_focus, onCloseAutoFocus: keep_mention_focus }" :ui="{ content: 'channel-select-menu channel-mention-menu' }" @update:open="!$event && (mention_context = null)">
+      <UPopover :open="!!mention_context" :reference="mention_anchor" :content="{ side: 'top', align: 'start', sideOffset: 8, onOpenAutoFocus: keep_mention_focus, onCloseAutoFocus: keep_mention_focus }" :ui="{ content: 'channel-select-menu channel-mention-menu' }" @update:open="!$event && (mention_context = null)">
         <template #content>
           <div class="channel-mention-heading"><span>{{ mention_heading }}</span><small>↑↓ 选择 · Enter 确认</small></div>
           <div id="channel-mention-list" ref="mention_list" role="listbox" :aria-label="mention_heading" class="channel-mention-list">

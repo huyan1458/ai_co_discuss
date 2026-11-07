@@ -191,7 +191,7 @@ const summary = computed(() => {
 
 <template>
   <div class="create-discussion">
-    <form id="create-discussion-form" class="create-scroll dialog-form" @submit.prevent="submit">
+    <form id="create-discussion-form" v-keep-reading class="create-scroll dialog-form" @submit.prevent="submit">
       <div v-if="needs_connection" class="create-connect" role="status">
         <p><UIcon name="i-lucide-plug-zap" />本机服务未连接，连接后才能唤醒本机 AI。在运行 AI 的电脑上执行下面的命令并完成网页授权，连上后自动检测。</p>
         <div class="create-connect-command"><code>{{ view.launch.connect_command }}</code><UButton icon="i-lucide-copy" aria-label="复制本机连接命令" variant="ghost" color="neutral" @click="act('copy', view.launch.connect_command)" /></div>

@@ -8,9 +8,11 @@ const emit = defineEmits(["select", "manage", "create", "create-folder", "manage
 const { view, bridge, field } = inject("discussion");
 const author = field("author-select");
 const tools_open = ref(true);
-const view_links = computed(() => props.tabs.map((item) => ({
-  ...item, active: !!view.value.room && view.value.tab === item.value, disabled: !view.value.room || item.disabled, onSelect: () => emit("tab", item.value),
-})));
+// The open tab, or null without a room: the links (and the menu) rebuild only when it changes, not on every view publish.
+const link_state = computed(() => view.value.room ? view.value.tab : null);
+const view_links = computed(() => { const tab = link_state.value; return props.tabs.map((item) => ({
+  ...item, active: tab !== null && tab === item.value, disabled: tab === null || item.disabled, onSelect: () => emit("tab", item.value),
+})); });
 /** The footer's second line: the account call to action until signed in, then the site connection. */
 const account_status = computed(() => {
   const admin = view.value.admin;
@@ -30,7 +32,7 @@ const account_status = computed(() => {
       </span>
       <span class="channel-brand-text"><strong>共议</strong><span>AI CoDiscuss</span></span>
     </header>
-    <div class="channel-sidebar-content">
+    <div v-keep-reading class="channel-sidebar-content">
       <ChannelDirectory @select="emit('select', $event)" @manage="emit('manage', $event)" @create="emit('create', $event)" @create-folder="emit('create-folder')" @manage-folder="emit('manage-folder', $event)" @delete-folder="emit('delete-folder', $event)" @archive-folder="emit('archive-folder', $event)" @archives="emit('archives')" />
       <div class="channel-directory-heading channel-tools-heading"><button type="button" class="channel-section-toggle" :aria-expanded="tools_open" @click="tools_open = !tools_open"><UIcon :name="tools_open ? 'i-lucide-chevron-down' : 'i-lucide-chevron-right'" />频道工具</button></div>
       <UNavigationMenu v-if="tools_open" :items="view_links" orientation="vertical" color="neutral" variant="pill" class="channel-directory channel-view-links" aria-label="房间视图" :ui="{ link: 'channel-link', linkLabel: 'channel-link-label', linkLeadingIcon: 'channel-link-icon' }" />

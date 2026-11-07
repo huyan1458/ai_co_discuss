@@ -19,9 +19,9 @@ const MAX_SENTENCE = 120;
 const MAX_CHUNK = 200;
 const FIRST_CHUNK = 80;
 // What follows is requested only once the audio already requested would run out within this many seconds (a relayed
-// request takes 2–8 s), so a stop leaves little synthesized and billed but never heard. Durations not yet known are
+// request takes 6–9 s on the computer alone, plus ~400 KB to the phone), so a stop leaves little synthesized and billed but never heard. Durations not yet known are
 // estimated at the measured ~4.7 readable characters per second.
-const LEAD_SECONDS = 15;
+const LEAD_SECONDS = 30;
 const CHARS_PER_SECOND = 4.7;
 // Silence added between paragraphs and between messages, on top of the service's own pauses.
 const PARAGRAPH_GAP_MS = 350;
@@ -32,6 +32,11 @@ const FOLLOW_BOTTOM = 0.75;
 const FOLLOW_ANCHOR = 0.3;
 // Synthesized requests kept in this page for instant replay.
 const MEMORY_LIMIT = 60;
+// The computer's relay connection drops now and then and is back within seconds (up to ~11 s seen), and a phone's network
+// can blink; a request failing that way is asked again every RETRY_DELAY_MS for up to RETRY_WINDOW_MS before reading stops.
+const RETRY_WINDOW_MS = 30000;
+const RETRY_DELAY_MS = 2000;
+const transient = (error) => error?.offline === true || error instanceof TypeError;
 // A broadcast reply without a summary is read whole up to this length; a longer one gives its first paragraph (at least
 // BRIEF_MIN_FIRST characters, within this length) and its total length.
 const BRIEF_FULL_LENGTH = 200;
@@ -332,11 +337,22 @@ export function use_read_aloud({ bridge, container, prepare = async () => {}, me
     });
   }
 
+  /** Ask the local service to synthesize, retrying while the computer is briefly unreachable. */
+  async function request_tts(input) {
+    for (const started = Date.now(); ;) {
+      try { return await bridge.local_request("tts", input); }
+      catch (error) {
+        if (!transient(error) || Date.now() - started > RETRY_WINDOW_MS) throw error;
+        await new Promise((resolve) => setTimeout(resolve, RETRY_DELAY_MS));
+      }
+    }
+  }
+
   /** Ask the local service for one request's audio (or reuse it from this page) as a playable URL with word timings. */
   function synthesize(chunk, section_id, speaker) {
     const key = JSON.stringify([chunk.text, speaker, chunk.silence]);
     if (!memory.has(key)) {
-      const pending = bridge.local_request("tts", { text: chunk.text, section_id, speaker: speaker || undefined, silence_ms: chunk.silence })
+      const pending = request_tts({ text: chunk.text, section_id, speaker: speaker || undefined, silence_ms: chunk.silence })
         .then(({ audio, marks }) => ({ url: URL.createObjectURL(new Blob([Uint8Array.from(atob(audio), (character) => character.charCodeAt(0))], { type: "audio/mpeg" })), marks: marks || [] }));
       pending.catch(() => memory.delete(key));
       memory.set(key, pending);

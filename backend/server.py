@@ -1688,6 +1688,11 @@ class DiscussionHandler(BaseHTTPRequestHandler):
         if content_type == "application/json":
             body = json.dumps(body, ensure_ascii=False)
         data = body.encode("utf-8") if isinstance(body, str) else body
+        # The room list and a room's view carry a hash of their bytes; a page that already holds them gets 304 and no body.
+        if self.command == "GET" and status == 200 and parts[:2] == ["api", "rooms"] and len(parts) in (2, 3):
+            self.etag = f'"{hashlib.sha256(data).hexdigest()[:32]}"'
+            if self.headers.get("If-None-Match") == self.etag:
+                status, data = 304, b""
         if getattr(self, "api_record", None):
             # A logged write answers only after its record is stored, so a client that reads the log next sees it.
             self.deferred_response = (status, content_type, data)
@@ -1700,6 +1705,9 @@ class DiscussionHandler(BaseHTTPRequestHandler):
         self.send_header("Content-Type", f"{content_type}; charset=utf-8")
         self.send_header("Content-Length", str(len(data)))
         self.send_header("Cache-Control", "no-store")
+        if getattr(self, "etag", None):
+            self.send_header("ETag", self.etag)
+            self.etag = None
         self.send_header("Referrer-Policy", "no-referrer")
         if getattr(self, "login_cookie", None) is not None:
             self.send_header("Set-Cookie", f"{ADMIN_COOKIE}={self.login_cookie}; Path=/; HttpOnly; Secure; SameSite=Strict; "

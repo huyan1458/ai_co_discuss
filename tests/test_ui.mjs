@@ -1247,14 +1247,14 @@ function free_card_fixture({ messages = [], members = [], executions = [], query
   const view = reactive({ value: { query, mention_only, messages, access: { can_manage: true }, room: {
     id: "room", mode: "free", archived: false, members: [], free: { members, executions, requests: [] }, session: null,
   } } });
-  const context = vm.createContext({ computed, ref, watch, view, room: computed(() => view.value.room), Date: TestDate,
+  const context = vm.createContext({ computed, stable_computed: computed, ref, watch, view,  room: computed(() => view.value.room), Date: TestDate,
     setInterval: callback => { timers.set(++timer_id, callback); return timer_id; }, clearInterval: id => timers.delete(id),
     bridge: { request: async () => ({ notes: [] }) } });
   const busy_start = discussion_source.indexOf("const free = computed(");
   const busy_end = discussion_source.indexOf("/** Progress notes per execution id", busy_start);
   vm.runInContext(`${discussion_source.slice(busy_start, busy_end)}\nglobalThis.cards = { busy: free_busy, working: free_working, now: free_now };`, context);
   const layout_start = discussion_source.indexOf("const free_failures = computed(");
-  const layout_end = discussion_source.indexOf("/** Split continuous history", layout_start);
+  const layout_end = discussion_source.indexOf("/** Id of the top-level message at or before", layout_start);
   vm.runInContext(`${discussion_source.slice(layout_start, layout_end)}\nglobalThis.layout_state = { failures: free_failures, layout: free_layout, rewinds: rewound_runs, toggle: toggle_rewound };`, context);
   return { context, view: view.value, room: view.value.room, cards: context.cards, state: context.layout_state, timers,
     advance(seconds) { current_time += seconds; for (const callback of timers.values()) callback(); } };

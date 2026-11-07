@@ -26,7 +26,20 @@ const NO_TOOL_REMINDER = '普通文本不会被保存。请调用写入工具提
 const TEXT = { type: 'string' };
 const NUMBER = { type: 'integer', minimum: 1 };
 const ROOM_FIELDS = ['id', 'title', 'goal', 'host', 'user_request', 'background', 'boundaries', 'experts', 'phase', 'focus',
-  'current_turn', 'queued_turns', 'limits', 'completed_rounds', 'latest_id', 'members', 'free', 'named_followup', 'scheduler_decisions'];
+  'current_turn', 'queued_turns', 'limits', 'completed_rounds', 'latest_id', 'members', 'free', 'named_followup', 'descriptions'];
+// The room carries every request and execution so far; the model gets open work and a short recent trail, as `room view` does.
+const RECENT_EXECUTIONS = 10;
+const EXECUTION_FIELDS = ['id', 'member', 'status', 'result', 'answer_id', 'request_message_id', 'changes', 'late_answer'];
+const TERMINAL_STATUSES = ['completed', 'cancelled', 'failed'];
+
+function brief_free(free) {
+  if (!free) return free;
+  const executions = free.executions || [];
+  const recent = executions.length - RECENT_EXECUTIONS;
+  return { ...free, requests: (free.requests || []).filter(item => !TERMINAL_STATUSES.includes(item.status)),
+    executions: executions.filter((item, index) => index >= recent || !TERMINAL_STATUSES.includes(item.status))
+      .map(item => Object.fromEntries(EXECUTION_FIELDS.filter(field => field in item).map(field => [field, item[field]]))) };
+}
 
 /** Describe a room tool with an explicit input schema. */
 function tool(name, description, properties = {}, required = []) {
@@ -113,7 +126,8 @@ async function read_room(context) {
   context.independent = Boolean(request?.purpose === 'discuss' && request.read_until !== null
     && request.session_id === context.session?.id && context.session?.phase === 'initial');
   const fields = context.independent ? ROOM_FIELDS : [...ROOM_FIELDS, 'state_text', 'state_until', 'host_brief'];
-  return Object.fromEntries(fields.filter(field => room[field] !== undefined).map(field => [field, room[field]]));
+  return Object.fromEntries(fields.filter(field => room[field] !== undefined)
+    .map(field => [field, field === 'free' ? brief_free(room[field]) : room[field]]));
 }
 
 /** Build a business write without letting the model choose identity, execution or credentials. */

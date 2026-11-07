@@ -325,8 +325,13 @@ test('the machine relay hands requests to the computer, answers once, and never 
   assert.deepEqual(await left, { id: 'request-3', status: 'offline' }, 'a leaving computer fails its requests at once');
   assert.deepEqual(device.sent.pop(), { type: 'presence', online: false });
 
+  // A stalled connection is replaced without ever closing on its own: what it held fails at once, not at the timeout.
+  const stalled = socket();
+  relay.accept(stalled, 'machine');
+  const stuck = relay.relay({ id: 'request-3b', envelope: {} });
   const again = socket();
   relay.accept(again, 'machine');
+  assert.deepEqual(await stuck, { id: 'request-3b', status: 'offline' }, 'a replaced connection fails its requests at once');
   t.mock.timers.enable({ apis: ['setTimeout'] });
   const slow = relay.relay({ id: 'request-4', envelope: {} });
   t.mock.timers.tick(9000);

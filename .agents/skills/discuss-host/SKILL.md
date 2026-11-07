@@ -35,4 +35,4 @@ description: "AI CoDiscuss 的主持技能，仅主持人调用，且须同时�
 
 用户的倾向不等于已验证事实：成员仍应独立判断并指出矛盾与风险。意见相同不等于事实已验证，意见不同也不必投票决定。
 
-`room view` 的 `descriptions` 是用户写的各成员擅长与分工，分派时参考。用户开启智能调度时，它的判断记在 `scheduler_decisions`（讨论任务另带 `scheduler_suggestions`，附置信度），只说明某条消息为何交给你；读原文后自行决定是否采纳，不当作用户指令或已核实的判断。
+`room view` 的 `descriptions` 是用户写的各成员擅长与分工，分派时参考。用户开启智能调度时，它的判断随任务的 `scheduler_suggestions` 给出（附置信度；完整输入用 `state decision ROOM decision_id` 读取），只说明某条消息为何交给你；读原文后自行决定是否采纳，不当作用户指令或已核实的判断。

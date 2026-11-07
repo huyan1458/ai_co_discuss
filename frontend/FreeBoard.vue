@@ -11,6 +11,7 @@ import ProgressBoard from "./ProgressBoard.vue";
 import SpeakingOrder from "./SpeakingOrder.vue";
 import MemberDescriptionDialog from "./MemberDescriptionDialog.vue";
 import { busy, member_actions } from "./member-actions.js";
+import MemoBlock from "./memo-block.js";
 
 const { view, bridge, act, pending } = inject("discussion");
 const LIVE = ["dispatched", "started"];
@@ -62,17 +63,20 @@ function hide_workflow() {
 const member_named = (name) => (free.value.members || []).find((member) => member.name === name);
 const away_names = computed(() => (free.value.members || []).filter((member) => member.status === "away").map((member) => member.name));
 
-// Each overlapping pair of executions is announced once per browser; the room resends its conflicts on every refresh.
-const CONFLICT_SEEN_PREFIX = "discuss-conflicts-notified:";
+// The room resends its conflicts on every refresh. Only pairs that appear while the page is open are announced:
+// conflicts already there on the first read were handed to the host as a room notice when they happened.
 const CONFLICT_FILE_PREVIEW = 2;
 const conflict_key = (item) => item.executions.join("-");
-/** Warn about conflicts this browser has not shown yet, keeping only keys the room still reports. */
+const known_conflicts = new Map();
+/** Warn about conflicts that appeared since this page first read the room. */
 function announce_conflicts(room_id, conflicts) {
-  // Before the room view loads there is no list; treating it as empty would forget what was shown and repeat it.
+  // Before the room view loads there is no list; treating it as empty would make every existing conflict look new.
   if (!room_id || !Array.isArray(conflicts)) return;
-  let seen = [];
-  try { seen = JSON.parse(localStorage.getItem(CONFLICT_SEEN_PREFIX + room_id) || "[]"); } catch { /* Treat as none shown. */ }
-  for (const item of conflicts.filter((conflict) => !seen.includes(conflict_key(conflict)))) {
+  const keys = conflicts.map(conflict_key);
+  const seen = known_conflicts.get(room_id);
+  known_conflicts.set(room_id, new Set([...(seen || []), ...keys]));
+  if (!seen) return;
+  for (const item of conflicts.filter((conflict) => !seen.has(conflict_key(conflict)))) {
     // `confirmed`: both members' own edit tools wrote these; otherwise the files changed while both ran and the writer is unknown.
     const listed = item.confirmed?.length ? item.confirmed : item.files;
     const files = listed.slice(0, CONFLICT_FILE_PREVIEW).join("、") + (listed.length > CONFLICT_FILE_PREVIEW ? " 等" : "");
@@ -81,7 +85,6 @@ function announce_conflicts(room_id, conflicts) {
       ? `冲突：${members} 同时编辑了 ${listed.length} 个相同文件（${files}），后保存的可能覆盖了先保存的，请核对`
       : `可能冲突：${members} 同时运行期间有 ${listed.length} 个文件被改动（${files}），无法确认是谁改的`);
   }
-  try { localStorage.setItem(CONFLICT_SEEN_PREFIX + room_id, JSON.stringify(conflicts.map(conflict_key))); } catch { /* Shown again next visit. */ }
 }
 watch(() => [room.value.id, free.value.conflicts], ([room_id, conflicts]) => announce_conflicts(room_id, conflicts), { immediate: true });
 
@@ -172,6 +175,7 @@ const latest_rounds = computed(() => (free.value.chain_rounds || []).find((chain
 
 /** How far the latest chain got against the room's chain limit, while it runs or after it stopped there; it says when the room stops by itself. */
 const rounds_meter = computed(() => {
+  const rounds = latest_rounds.value;
   if (!rounds || !(status.value.title === "处理中" || status.value.continue_chain)) return null;
   if (rounds.allowed == null) return { text: `第 ${rounds.used} 轮 · 不限`, ratio: null };
   const used = Math.min(rounds.used, rounds.allowed);
@@ -189,6 +193,18 @@ const task = computed(() => {
 });
 const task_expanded = ref(false);
 watch(() => room.value.id, () => { task_expanded.value = false; });
+
+/**
+ * Everything one speaking-order row shows or its menu offers, as one string, so a row re-renders only when it changes
+ * rather than on every view publish (each of which rebuilds the menu items and avatar props).
+ */
+function member_row_key(member, state) {
+  const identity = bridge.identities[member.name];
+  return JSON.stringify([member, state, discussion.value, member_tag(member), member_setup(member), member_model(member),
+    bridge.participant_session_hint(member.name, room.value, view.value.launch.room_models), bridge.display_name(member.name),
+    room.value.descriptions?.[member.name], in_workflow(member.name) && workflow.value.label, identity?.icon, identity?.initials, identity?.style,
+    view.value.access, room.value.session?.status, view.value.launch.available]);
+}
 
 /** The rail's quick entry to a member's actions; the room overview lays the same list out in full. */
 function member_menu(member) {
@@ -266,7 +282,7 @@ watch(() => room.value.id, () => { starting.value = false; });
       <h4>发言顺序</h4>
       <SpeakingOrder :away="away_names" :round="current_round">
         <template #default="{ item }">
-          <template v-for="member in [member_named(item.name)].filter(Boolean)" :key="member.id">
+          <MemoBlock v-for="member in [member_named(item.name)].filter(Boolean)" :key="member.id" :deps="[member_row_key(member, item.state)]">
             <UAvatar :src="bridge.identities[member.name]?.icon" :text="bridge.identities[member.name]?.initials" :alt="member.name" size="xs" class="channel-avatar" :class="bridge.identities[member.name]?.style" />
             <div class="pb-member-body">
               <div class="pb-member-name" :title="room.descriptions?.[member.name] || undefined">{{ bridge.display_name(member.name) }}<span v-if="bridge.display_name(member.name) !== member.name" class="member-id">{{ member.name }}</span><UIcon v-if="member.role === 'host'" name="i-lucide-crown" title="主持人" /><small :title="member_model(member) || undefined">{{ member_tag(member) }}</small></div>
@@ -275,7 +291,7 @@ watch(() => room.value.id, () => { starting.value = false; });
               <div class="pb-member-status" :class="`is-${member_tone(member)}`"><span class="pb-dot"></span><span class="pb-member-status-text" :title="member.execution?.status === 'failed' ? member.execution.result : member.held_until ? member_status(member, item.state) : undefined">{{ member_status(member, item.state) }}</span></div>
             </div>
             <UDropdownMenu :items="member_menu(member)" :content="{ align: 'end' }" :ui="{ content: 'channel-menu' }"><UButton icon="i-lucide-ellipsis" color="neutral" variant="ghost" size="xs" class="pb-member-more" :aria-label="`${member.name} 的更多操作`" /></UDropdownMenu>
-          </template>
+          </MemoBlock>
         </template>
       </SpeakingOrder>
       <UButton v-if="!room.archived" icon="i-lucide-plus" label="邀请 AI 加入" size="sm" color="neutral" variant="outline" class="pb-action pb-action-block pb-action-add" @click="invite_workflow_id = ''; inviting = true" />

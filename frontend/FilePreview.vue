@@ -13,7 +13,11 @@ const tabs = ref([]);
 const active_id = ref("");
 const open = ref(false);
 // Like VS Code's word wrap toggle; narrow screens start wrapped so code is readable without sideways scrolling.
-const wrap = ref(window.matchMedia("(max-width: 640px)").matches);
+const narrow_query = window.matchMedia("(max-width: 640px)");
+const wrap = ref(narrow_query.matches);
+// Narrow screens move the file's own actions down to the breadcrumb row, leaving the tab strip to the tabs.
+const narrow = ref(narrow_query.matches);
+const track_narrow = (event) => { narrow.value = event.matches; };
 
 const name_of = (path) => path.split("/").pop() || "文件预览";
 const tab = computed(() => tabs.value.find(item => item.id === active_id.value) || null);
@@ -130,8 +134,8 @@ function minimize() {
   open.value = false;
 }
 
-// Folding and unfolding move the window between its place and the floating button, which sits at the top-left of the
-// room's content column (below the room header, clear of the navigation) and can be dragged to either side.
+// Folding and unfolding move the window between its place and the floating button, which sits at the top-right of the
+// screen (below the room header, clear of the navigation) and can be dragged to either side.
 // Phones also fold it by pulling it down.
 const FOLD_MS = 240;
 const FLOAT_GAP = 12;
@@ -152,7 +156,7 @@ let pull = null, folding = false;
 const FLOAT_HEIGHT = 40;
 const FLOAT_WIDTH = 44;
 const FLOAT_DRAG_MIN = 6;
-const float_side = ref("left");
+const float_side = ref("right");
 // While dragged, the button follows the pointer at `{ left, top }`.
 const float_drag_place = ref(null);
 let float_top = null, float_drag = null, float_dragged = false;
@@ -274,7 +278,7 @@ function pull_start(event) {
   const selection = document.getSelection();
   if (selection && !selection.isCollapsed) return;
   const content = scroller();
-  const from_bar = Boolean(event.target.closest?.(".project-editor-tabs, .project-editor-breadcrumbs"));
+  const from_bar = Boolean(event.target.closest?.(".project-editor-head"));
   if (!from_bar && !(content?.contains(event.target) && content.scrollTop <= 0)) return;
   const touch = event.touches[0];
   pull = { x: touch.clientX, y: touch.clientY, time: event.timeStamp, distance: 0, speed: 0, active: false, height: frame.value?.offsetHeight || window.innerHeight };
@@ -487,6 +491,7 @@ onMounted(() => {
   file_preview.open = open_file;
   place_float();
   window.addEventListener("resize", place_float);
+  narrow_query.addEventListener("change", track_narrow);
   window.addEventListener("resize", place_file_marks);
   document.addEventListener("selectionchange", schedule_offer);
   document.addEventListener("pointerdown", press);
@@ -497,6 +502,7 @@ onMounted(() => {
 onBeforeUnmount(() => {
   if (file_preview.open === open_file) file_preview.open = null;
   window.removeEventListener("resize", place_float);
+  narrow_query.removeEventListener("change", track_narrow);
   window.removeEventListener("resize", place_file_marks);
   hold_selection(null);
   for (const item of tabs.value) item.request++;
@@ -514,7 +520,7 @@ onBeforeUnmount(() => {
     :ui="{ content: 'project-editor' }" @update:open="value => value ? (open = true) : fold()">
     <template #content>
      <div ref="frame" class="project-editor-frame" @touchstart.passive="pull_start" @touchmove="pull_move" @touchend="pull_end" @touchcancel="pull_end">
-      <div class="project-editor-tabs">
+      <div class="project-editor-head">
         <div class="project-editor-tablist" role="tablist" aria-label="已打开的文件">
           <div v-for="item in tabs" :key="item.id" class="project-editor-tab" :class="{ 'is-active': item.id === active_id }" :title="item.path">
             <button type="button" role="tab" class="project-editor-tab-name" :aria-selected="item.id === active_id" @click="activate(item.id)">
@@ -523,7 +529,7 @@ onBeforeUnmount(() => {
             <button type="button" class="project-editor-tab-close" :aria-label="`关闭 ${name_of(item.path)}`" title="关闭" @click="close_tab(item.id)"><UIcon name="i-lucide-x" /></button>
           </div>
         </div>
-        <div class="project-editor-actions">
+        <div class="project-editor-file-actions">
           <UButton v-if="showing_source" icon="i-lucide-wrap-text" color="neutral" :variant="wrap ? 'soft' : 'ghost'" size="sm" :aria-pressed="wrap"
             :title="wrap ? '关闭自动换行' : '自动换行'" aria-label="自动换行" @click="wrap = !wrap" />
           <UButton v-if="can_read" :icon="reader.state.reading ? 'i-lucide-square' : 'i-lucide-volume-2'" color="neutral" variant="ghost" size="sm"
@@ -532,17 +538,19 @@ onBeforeUnmount(() => {
             <button type="button" :aria-pressed="!source" title="预览" @click="source = false"><UIcon name="i-lucide-eye" class="project-mode-icon" /><span>预览</span></button>
             <button type="button" :aria-pressed="source" title="源码" @click="source = true"><UIcon name="i-lucide-code-xml" class="project-mode-icon" /><span>源码</span></button>
           </div>
-          <UButton icon="i-lucide-minus" color="neutral" variant="ghost" size="sm" title="收起为悬浮窗（手机上也可下拉收起）" aria-label="收起预览" @click="fold" />
-          <UButton icon="i-lucide-x" color="neutral" variant="ghost" size="sm" :title="tabs.length > 1 ? '关闭全部文件' : '关闭预览'" :aria-label="tabs.length > 1 ? '关闭全部文件' : '关闭预览'" @click="close_all" />
         </div>
+        <div class="project-editor-window-actions">
+          <UButton :icon="narrow ? 'i-lucide-chevron-down' : 'i-lucide-minus'" color="neutral" variant="ghost" size="sm" title="收起为悬浮窗（手机上也可下拉收起）" aria-label="收起预览" @click="fold" />
+          <UButton v-if="!narrow || tabs.length > 1" icon="i-lucide-x" color="neutral" variant="ghost" size="sm" :title="tabs.length > 1 ? '关闭全部文件' : '关闭预览'" :aria-label="tabs.length > 1 ? '关闭全部文件' : '关闭预览'" @click="close_all" />
+        </div>
+        <nav class="project-editor-breadcrumbs" aria-label="文件位置">
+          <template v-for="(part, index) in preview_crumbs" :key="part.path">
+            <UIcon v-if="index" name="i-lucide-chevron-right" class="project-crumb-separator" />
+            <button v-if="index < preview_crumbs.length - 1" type="button" title="在列表中打开此文件夹" @click="reveal_folder(part.path)">{{ part.name }}</button>
+            <span v-else class="project-crumb-file"><UIcon :name="preview_type[1]" class="project-file-icon" :class="preview_type[2]" />{{ part.name }}</span>
+          </template>
+        </nav>
       </div>
-      <nav class="project-editor-breadcrumbs" aria-label="文件位置">
-        <template v-for="(part, index) in preview_crumbs" :key="part.path">
-          <UIcon v-if="index" name="i-lucide-chevron-right" class="project-crumb-separator" />
-          <button v-if="index < preview_crumbs.length - 1" type="button" title="在列表中打开此文件夹" @click="reveal_folder(part.path)">{{ part.name }}</button>
-          <span v-else><UIcon :name="preview_type[1]" class="project-file-icon" :class="preview_type[2]" />{{ part.name }}</span>
-        </template>
-      </nav>
       <p v-if="preview?.truncated" class="project-editor-banner"><UIcon name="i-lucide-info" />文件较大，仅显示前 {{ file_size(preview.limit) }}（共 {{ file_size(preview.size) }}）<template v-if="format === 'html'">，HTML 不渲染不完整的内容</template></p>
       <p v-else-if="can_render && !source && format === 'html'" class="project-editor-banner"><UIcon name="i-lucide-shield" />静态预览：脚本、外部样式与外部图片不加载</p>
 
@@ -553,12 +561,12 @@ onBeforeUnmount(() => {
         <div v-else-if="showing_source && wrap" ref="code_scroll" class="project-code is-wrapped" tabindex="0" aria-label="文件内容" :style="{ '--digits': String(line_count).length }">
           <div v-for="(line, index) in lines" :key="index" class="project-code-row"><span class="project-code-number" aria-hidden="true">{{ index + 1 }}</span><span class="project-code-line">{{ line }}</span></div>
         </div>
-        <div v-else-if="showing_source" ref="code_scroll" class="project-code" tabindex="0" aria-label="文件内容">
+        <div v-else-if="showing_source" ref="code_scroll" v-keep-reading class="project-code" tabindex="0" aria-label="文件内容">
           <pre class="project-code-gutter" aria-hidden="true">{{ gutter }}</pre>
           <pre class="project-code-text"><code>{{ preview.text }}</code></pre>
         </div>
         <iframe v-else-if="preview && format === 'html'" class="project-html-preview" sandbox="" referrerpolicy="no-referrer" :srcdoc="html_preview" title="HTML 文件预览"></iframe>
-        <div v-else-if="preview" ref="markdown_scroll" class="project-markdown-scroll" tabindex="0" @scroll.passive="schedule_offer"
+        <div v-else-if="preview" ref="markdown_scroll" v-keep-reading class="project-markdown-scroll" tabindex="0" @scroll.passive="schedule_offer"
           @wheel.passive="stop_following" @touchmove.passive="stop_following" @keydown="stop_following" @pointerdown="stop_following"><div ref="markdown_body" class="markdown-body project-markdown-preview" v-html="rendered"></div>
           <button v-for="mark in file_marks" :key="mark.id" type="button" class="excerpt-mark" :style="{ left: `${mark.left}px`, top: `${mark.top}px` }" :title="`摘录 ${mark.number}：点击修改批注`" :aria-label="`修改摘录 ${mark.number} 的批注`" @click="open_mark(mark.id)">{{ mark.number }}</button></div>
         <ExcerptEditCard v-if="mark_editing" :key="mark_editing.excerpt.id" class="file-selection-offer file-comment" :comment="mark_editing.excerpt.comment" :style="{ left: `${mark_editing.left}px`, top: `${mark_editing.top}px` }"
@@ -616,8 +624,12 @@ onBeforeUnmount(() => {
 /* The window itself, moved and scaled as a whole when it folds into the floating button or is pulled down. */
 .project-editor-frame { display: flex; flex: 1; flex-direction: column; min-height: 0; overflow: hidden; border: 1px solid var(--ui-border-accented); border-radius: 10px;
   background: var(--ui-bg); box-shadow: 0 24px 80px #0000008c; will-change: transform; }
-.project-editor-tabs { display: flex; align-items: stretch; justify-content: space-between; flex-shrink: 0; height: 38px; background: var(--ui-bg-elevated); border-bottom: 1px solid var(--ui-border); }
-.project-editor-tablist { display: flex; flex: 1; min-width: 0; overflow-x: auto; scrollbar-width: none; }
+/* Head: tabs, the file's actions and the window's on one row, breadcrumbs under them; narrow screens move the file's
+   actions to the end of the breadcrumb row. */
+.project-editor-head { display: grid; flex-shrink: 0; grid-template-columns: minmax(0, 1fr) auto auto; grid-template-rows: 38px 26px;
+  grid-template-areas: "tabs file window" "crumbs crumbs crumbs"; }
+.project-editor-head > :is(.project-editor-tablist, .project-editor-file-actions, .project-editor-window-actions) { background: var(--ui-bg-elevated); border-bottom: 1px solid var(--ui-border); }
+.project-editor-tablist { grid-area: tabs; display: flex; min-width: 0; overflow-x: auto; scrollbar-width: none; }
 .project-editor-tab { position: relative; display: flex; align-items: center; flex-shrink: 0; max-width: 240px; font-size: 13px; color: var(--ui-text-muted); border-right: 1px solid var(--ui-border); }
 .project-editor-tab.is-active { background: var(--ui-bg); color: var(--ui-text-highlighted); }
 .project-editor-tab.is-active::before { content: ""; position: absolute; inset: 0 0 auto; height: 2px; background: var(--ui-primary); }
@@ -628,13 +640,17 @@ onBeforeUnmount(() => {
 .project-editor-tab-close > span { width: 14px; height: 14px; }
 .project-editor-tab:is(.is-active, :hover, :focus-within) .project-editor-tab-close { opacity: 1; }
 .project-editor-tab-close:hover { background: var(--ui-bg-accented); color: var(--ui-text); }
-.project-editor-actions { display: flex; align-items: center; flex-shrink: 0; gap: 6px; padding: 0 6px; border-left: 1px solid var(--ui-border); }
+.project-editor-file-actions, .project-editor-window-actions { display: flex; align-items: center; gap: 6px; }
+.project-editor-file-actions { grid-area: file; padding-left: 6px; border-left: 1px solid var(--ui-border); }
+.project-editor-file-actions:empty { display: none; }
+.project-editor-window-actions { grid-area: window; padding: 0 6px; }
+.project-editor-file-actions:empty + .project-editor-window-actions { border-left: 1px solid var(--ui-border); }
 .project-editor-modes { display: flex; padding: 2px; border-radius: 6px; background: var(--ui-bg-accented); }
 .project-editor-modes button { display: inline-flex; align-items: center; gap: 5px; height: 24px; padding: 0 9px; border-radius: 4px; font-size: 12px; color: var(--ui-text-muted); cursor: pointer; }
 .project-mode-icon { flex-shrink: 0; width: 14px; height: 14px; }
 .project-editor-modes button:hover { color: var(--ui-text); }
 .project-editor-modes button[aria-pressed="true"] { background: var(--ui-bg); color: var(--ui-text-highlighted); box-shadow: 0 1px 2px #0000003d; }
-.project-editor-breadcrumbs { display: flex; flex-wrap: nowrap; align-items: center; gap: 2px; flex-shrink: 0; height: 26px; padding: 0 14px; overflow-x: auto; scrollbar-width: none; font-size: 12px; color: var(--ui-text-muted); }
+.project-editor-breadcrumbs { grid-area: crumbs; display: flex; flex-wrap: nowrap; align-items: center; gap: 2px; min-width: 0; padding: 0 14px; overflow-x: auto; scrollbar-width: none; font-size: 12px; color: var(--ui-text-muted); }
 .project-editor-breadcrumbs > * { flex-shrink: 0; }
 .project-editor-breadcrumbs button { padding: 1px 4px; border-radius: 4px; white-space: nowrap; cursor: pointer; }
 .project-editor-breadcrumbs button:hover { background: var(--ui-bg-accented); color: var(--ui-text); }
@@ -672,7 +688,7 @@ onBeforeUnmount(() => {
   background: var(--ui-bg-elevated); border-top: 1px solid var(--ui-border); font-variant-numeric: tabular-nums; white-space: nowrap; overflow: hidden; }
 .project-editor-status-spacer { flex: 1; }
 
-/* Folded window: stuck to the content column's left edge, below the room header, like a mini-program's floating window. */
+/* Folded window: stuck to the screen's right edge by default, below the room header, like a mini-program's floating window. */
 .file-float { position: fixed; z-index: 45; display: flex; align-items: center; height: 40px; padding: 0 4px 0 12px; border: 1px solid var(--ui-border-accented);
   border-left: 0; border-radius: 0 999px 999px 0; background: var(--ui-bg-elevated); box-shadow: 0 6px 20px #0006; animation: file-float-in .2s ease-out;
   touch-action: none; user-select: none; -webkit-user-select: none; -webkit-touch-callout: none; }
@@ -693,9 +709,20 @@ onBeforeUnmount(() => {
   .project-editor-tab { max-width: 160px; }
   .project-editor-tab-name { padding-left: 10px; }
   .project-editor-tab-close { opacity: 1; }
-  .project-editor-actions { gap: 2px; padding: 0 4px; }
-  .project-editor-modes button { padding: 0 8px; }
+  .project-editor-head { grid-template-columns: minmax(0, 1fr) auto; grid-template-rows: 42px 40px; grid-template-areas: "tabs window" "crumbs file"; }
+  .project-editor-head > .project-editor-file-actions { gap: 2px; padding: 0 6px 0 0; background: none; border: 0; }
+  .project-editor-window-actions { gap: 8px; padding: 0 4px; }
+  .project-editor-file-actions:empty + .project-editor-window-actions { border-left: 0; }
+  /* 40px touch targets; the file name is already on its tab, so the breadcrumbs end at its folder. */
+  .project-editor-head :is(.project-editor-file-actions, .project-editor-window-actions) > button,
+  .project-editor-modes button { justify-content: center; width: 40px; height: 40px; padding: 0; }
+  .project-editor-breadcrumbs { font-size: 13px; }
+  .project-crumb-file, .project-editor-breadcrumbs > .project-crumb-separator:nth-last-child(2) { display: none !important; }
+  /* One button showing the mode it switches to, instead of the two-part switch. */
+  .project-editor-modes { padding: 0; background: none; }
+  .project-editor-modes button[aria-pressed="true"] { display: none; }
   .project-editor-modes button > span:not(.project-mode-icon) { display: none; }
+  .project-mode-icon { width: 16px; height: 16px; }
   .project-markdown-preview { padding: 18px 16px 32px; }
   .project-code { font-size: 12px; line-height: 18px; }
   .project-code-gutter { min-width: 40px; padding-inline: 10px !important; }
@@ -704,6 +731,13 @@ onBeforeUnmount(() => {
   .file-float-name { display: none; }
   .file-float-close { display: none; }
   .file-float { padding-right: 10px; }
+}
+/* Tablets keep the one-row head, with touch-sized buttons. */
+@media (min-width: 641px) and (pointer: coarse) {
+  .project-editor-head { grid-template-rows: 44px 30px; }
+  .project-editor-head :is(.project-editor-file-actions, .project-editor-window-actions) > button { justify-content: center; width: 40px; height: 40px; padding: 0; }
+  .project-editor-modes button { height: 36px; padding: 0 12px; }
+  .project-editor-tab-close { width: 28px; height: 28px; opacity: 1; }
 }
 </style>
 

@@ -9,7 +9,7 @@
  * breaks the line and the send and stop buttons do the rest. A line sent while the member works goes into that turn as an
  * interjection; otherwise it runs as the next turn of the member's session.
  */
-import { computed, inject, nextTick, onBeforeUnmount, ref, watch } from "vue";
+import { computed, inject, nextTick, onBeforeUnmount, onMounted, ref, watch } from "vue";
 import { adapter_capabilities } from "../runner/adapters/profiles.mjs";
 import { ENTER_SENDS } from "./enter-sends.js";
 import { private_chat } from "./private-chat.js";
@@ -17,6 +17,9 @@ import { PHASE_LABELS } from "./timeline-model.js";
 
 const { view, bridge, act } = inject("discussion");
 const POLL_MS = 2000;
+// Turns whose steps are read at once, and how long (s) a failed read waits before it is tried again.
+const READ_CONCURRENCY = 4;
+const ERROR_RETRY_S = 30;
 const SHOWN_EXECUTIONS = 30;
 // Output lines a step shows before folding to `… +N 行`, as the CLIs do.
 const OUTPUT_LINES = 3;
@@ -26,6 +29,13 @@ const STEP_NAMES = { command: "Bash", search: "Search", edit: "Update" };
 // The spinner the CLI cycles while it works.
 const SPINNER = ["·", "✢", "✳", "✶", "✻", "✽", "✻", "✶", "✳", "✢"];
 const SPIN_MS = 120;
+// How close to the bottom (px) still counts as following new output.
+const STICK_PX = 40;
+// Space left above a turn opened from a message card, and how long it stays marked.
+const JUMP_GAP_PX = 12;
+const TARGET_MS = 2000;
+// Each member's lines, steps and scroll place, kept while the page is open so switching back does not start over.
+const SESSIONS = new Map();
 
 const room = computed(() => view.value.room);
 const members = computed(() => room.value?.free?.members || []);
@@ -38,7 +48,7 @@ const unsupported = computed(() => !member.value ? "房间里还没有 AI 成员
 
 const chats = ref([]);
 const details = ref(new Map());
-// Why a turn's steps could not be read, by turn, shown in its place.
+// Why a turn's steps could not be read and when ({message, at}), by turn, shown in its place until a retry succeeds.
 const errors = ref(new Map());
 const open_output = ref(new Set());
 const error = ref("");
@@ -47,11 +57,38 @@ let timer = null;
 // Whether the screen follows new output (false once the owner scrolls up to read).
 let stick = true;
 let serial = 0;
+// The scrolling screen and its content (see "Scrolling" below).
+const screen = ref(null);
+const content = ref(null);
+// Set when output arrives while the owner reads further up, so a button can bring the screen back to it.
+const unread = ref(false);
+let touching = false;
+// The line at the top of the screen and its distance from the screen's top, as of the last scroll.
+let anchor = null;
+// The screen's scrollHeight and clientHeight as on_resize last saw them.
+let last_height = 0;
+let last_client = 0;
+// The screen's scrollTop at the last scroll event, to tell the reader moving up from output arriving below.
+let last_top = 0;
+let anchor_frame = 0;
+let observer = null;
+// The screen's lines in order, read again only after the content changes size, not on every scroll.
+let anchor_lines = null;
+// More than a screen above the newest output, when a button offers the way back.
+const away = ref(false);
+// Whether this member's turns have all been read once, so further growth is new output.
+let settled = false;
+// The room and member shown, the key of what SESSIONS keeps for them.
+let session_key = "";
+// The turn a message card asked for: kept on the screen even when older than the last SHOWN_EXECUTIONS, and marked.
+const kept_execution = ref(null);
+const target = ref("");
+let target_timer = null;
 
 /** The room tasks this member ran and its chat lines, oldest first, as one session. */
 const items = computed(() => {
   const executions = (room.value?.free?.executions || []).filter((item) => item.member === name.value)
-    .sort((a, b) => a.id - b.id).slice(-SHOWN_EXECUTIONS);
+    .sort((a, b) => a.id - b.id).filter((item, index, all) => index >= all.length - SHOWN_EXECUTIONS || item.id === kept_execution.value);
   return [...executions.map((execution) => ({ key: `exec-${execution.id}`, at: execution.created_at, execution })),
     ...chats.value.map((chat) => ({ key: `chat-${chat.id}`, at: chat.created_at, chat }))].sort((a, b) => a.at - b.at);
 });
@@ -75,40 +112,71 @@ function elapsed(seconds) {
 }
 
 /**
- * Read the chat from the website, then the steps of every turn not read yet, newest first so the latest show soonest;
- * a running turn is read again each round.
+ * Read the chat from the website, then the steps of every turn not read yet: the turn a message card opened first, then
+ * newest first so the latest show soonest, a few at a time (each read starts a process on the computer, or crosses the
+ * relay). A running turn is read again each round, a failed one again after a while. A hidden page reads nothing and
+ * catches up when shown.
  */
 async function refresh() {
   clearTimeout(timer);
   const target = member.value, room_id = room.value?.id, current = ++serial;
-  if (!target || !room_id) return;
+  if (!target || !room_id || document.hidden) return;
   try {
-    if (!unsupported.value || chats.value.length) chats.value = (await bridge.read_member_chat(room_id, target.id)).chats;
+    // Replaced only when something changed, so an unchanged poll renders nothing (see the v-memo on each turn).
+    if (!unsupported.value || chats.value.length) {
+      const next = (await bridge.read_member_chat(room_id, target.id)).chats;
+      if (JSON.stringify(next) !== JSON.stringify(chats.value)) chats.value = next;
+    }
     error.value = "";
   } catch (failure) {
     if (current === serial) error.value = failure.message || "未能读取私聊";
   }
-  const wanted = [...items.value].reverse().filter((item) => running(item) || (!details.value.has(item.key) && !errors.value.has(item.key)));
-  for (const item of wanted) {
-    try {
-      const result = await bridge.read_execution_details(room_id, item.execution?.id, item.chat ? { chat_id: item.chat.id } : {});
-      if (current !== serial) return;
-      details.value = new Map(details.value).set(item.key, result);
-    } catch (failure) {
-      if (current !== serial) return;
-      errors.value = new Map(errors.value).set(item.key, failure.message || "未能读取过程");
-    }
-  }
-  if (current === serial) timer = setTimeout(refresh, POLL_MS);
+  const retry_after = Date.now() / 1000 - ERROR_RETRY_S;
+  const due = (item) => running(item) || (!details.value.has(item.key) && !(errors.value.get(item.key)?.at > retry_after));
+  const queue = [...items.value].reverse().filter(due);
+  const first = (item) => Number(item.execution?.id === kept_execution.value);
+  queue.sort((a, b) => first(b) - first(a));
+  await Promise.all(Array.from({ length: READ_CONCURRENCY }, async () => {
+    while (queue.length && current === serial) await read_steps(queue.shift(), room_id, current);
+  }));
+  if (current !== serial) return;
+  settled = true;
+  timer = setTimeout(refresh, POLL_MS);
 }
+/** Read one turn's steps; kept only when they changed, and a failure is shown in its place until a retry succeeds. */
+async function read_steps(item, room_id, current) {
+  try {
+    const result = await bridge.read_execution_details(room_id, item.execution?.id, item.chat ? { chat_id: item.chat.id } : {});
+    if (current !== serial) return;
+    if (JSON.stringify(result) !== JSON.stringify(details.value.get(item.key))) details.value = new Map(details.value).set(item.key, result);
+    if (errors.value.has(item.key)) {
+      const next = new Map(errors.value);
+      next.delete(item.key);
+      errors.value = next;
+    }
+  } catch (failure) {
+    if (current !== serial) return;
+    errors.value = new Map(errors.value).set(item.key, { message: failure.message || "未能读取过程", at: Date.now() / 1000 });
+  }
+}
+function on_visibility() {
+  if (!document.hidden) refresh();
+}
+document.addEventListener("visibilitychange", on_visibility);
 // A string key: the room object is replaced on every refresh, and only another room or member starts the page over.
-watch(() => `${room.value?.id}\n${name.value}`, () => {
-  chats.value = []; details.value = new Map(); errors.value = new Map(); open_output.value = new Set(); stick = true; refresh();
+watch(() => `${room.value?.id}\n${name.value}`, (key) => {
+  save_session();
+  session_key = key;
+  const saved = SESSIONS.get(key);
+  chats.value = saved?.chats || []; details.value = saved?.details || new Map(); errors.value = new Map();
+  open_output.value = saved?.open_output || new Set(); anchor = null; anchor_lines = null; unread.value = false; settled = Boolean(saved);
+  restore_scroll(saved?.scroll);
+  refresh();
 }, { immediate: true });
 const clock = setInterval(() => { now.value = Date.now() / 1000; }, 1000);
 const frame = ref(0);
 const spinner = setInterval(() => { if (running_item.value) frame.value = (frame.value + 1) % SPINNER.length; }, SPIN_MS);
-onBeforeUnmount(() => { serial++; clearTimeout(timer); clearInterval(clock); clearInterval(spinner); });
+onBeforeUnmount(() => { serial++; clearTimeout(timer); clearInterval(clock); clearInterval(spinner); document.removeEventListener("visibilitychange", on_visibility); });
 
 /** A room message's text as the page already holds it (the message stream keeps the room's recent messages). */
 function room_text(id) {
@@ -146,7 +214,9 @@ function output_of(item, entry) {
   const shown = all ? lines : lines.slice(0, OUTPUT_LINES);
   return { lines: shown.map((text) => ({ text, tone: diff_tone(entry, text) })), hidden: all ? 0 : Math.max(0, lines.length - OUTPUT_LINES) };
 }
+/** Unfold a step's output in place: the screen stays where it is, even at the bottom. */
 function open_step(item, entry) {
+  stick = false;
   open_output.value = new Set(open_output.value).add(`${item.key}/${entry.id ?? entry.title}`);
 }
 /** What happened to a chat line, when it is not simply answered. */
@@ -161,22 +231,128 @@ function chat_note(chat) {
   return "";
 }
 
-// The screen follows new output unless the owner scrolled up to read.
-const screen = ref(null);
-// Set when output arrives while the owner reads further up, so a button can bring the screen back to it.
-const unread = ref(false);
+/*
+ * Scrolling. The stream changes on its own all the time: each poll re-reads the running turn, older turns' steps arrive
+ * one by one, the oldest turn drops off the top, a room message leaves the page's window. So the screen reacts only to
+ * a real change of the rendered height (a ResizeObserver), not to every poll: following, it goes to the bottom; reading
+ * further up, it keeps the line at the top of the screen where it was (done here, as Safari has no scroll anchoring).
+ * It does not follow while a finger is on the screen, and a wheel turned up stops following at once.
+ */
+function distance_to_bottom(element) {
+  return element.scrollHeight - element.scrollTop - element.clientHeight;
+}
+/** Show the way back once the reader is more than a screen above the newest output. */
+function update_away() {
+  const element = screen.value;
+  if (element) away.value = distance_to_bottom(element) > element.clientHeight;
+}
+/**
+ * Remember the first line still showing at the top of the screen (lines sit in order, so a binary search finds it), with
+ * the scrollTop it was seen at. Not while a size change waits for on_resize: the line would be read where the new
+ * content already pushed it, and the push would never be undone; on_resize remembers it once it has corrected.
+ */
+function remember_anchor() {
+  anchor_frame = 0;
+  const element = screen.value;
+  if (!element || !content.value || element.scrollHeight !== last_height || element.clientHeight !== last_client) return;
+  const top = element.getBoundingClientRect().top;
+  const lines = anchor_lines ||= content.value.querySelectorAll(".term-welcome, .term-turn > *");
+  let low = 0, high = lines.length - 1, found = null;
+  while (low <= high) {
+    const middle = (low + high) >> 1;
+    if (lines[middle].getBoundingClientRect().bottom > top) { found = lines[middle]; high = middle - 1; } else low = middle + 1;
+  }
+  anchor = found ? { line: found, top: found.getBoundingClientRect().top - top, scroll_top: element.scrollTop } : null;
+}
 function on_scroll() {
   const element = screen.value;
-  stick = element.scrollHeight - element.scrollTop - element.clientHeight < 40;
+  // Only a move up is the reader's: output that lands between following to the bottom and this event leaves the
+  // screen short of the bottom without the reader doing anything.
+  if (distance_to_bottom(element) < STICK_PX) stick = true;
+  else if (element.scrollTop < last_top - 1) stick = false;
+  last_top = element.scrollTop;
   if (stick) unread.value = false;
+  update_away();
+  anchor_frame ||= requestAnimationFrame(remember_anchor);
+}
+/** A finger on the screen holds the following still until it lifts. */
+function set_touching(value) {
+  touching = value;
+}
+function on_wheel(event) {
+  if (event.deltaY < 0) stick = false;
+}
+/** The rendered height changed: follow to the bottom, or keep the reader's line in place. */
+function on_resize() {
+  const element = screen.value;
+  if (!element) return;
+  anchor_lines = null;
+  const grew = element.scrollHeight > last_height;
+  last_height = element.scrollHeight;
+  last_client = element.clientHeight;
+  if (stick) {
+    if (!touching) element.scrollTop = element.scrollHeight;
+  } else {
+    if (anchor?.line.isConnected) {
+      // Where the line would be had only the reader's own scrolling since it was remembered moved it.
+      const expected = anchor.top - (element.scrollTop - anchor.scroll_top);
+      const shift = anchor.line.getBoundingClientRect().top - element.getBoundingClientRect().top - expected;
+      if (Math.abs(shift) >= 1) element.scrollTop += shift;
+    }
+    // Steps still arriving for the turns already there are not new output.
+    if (grew && settled) unread.value = true;
+  }
+  update_away();
+  remember_anchor();
 }
 /** Jump to the newest output and follow it again. */
 function to_bottom() {
   stick = true;
   unread.value = false;
+  away.value = false;
   nextTick(() => { if (screen.value) screen.value.scrollTop = screen.value.scrollHeight; });
 }
-watch([items, details], () => { if (stick) to_bottom(); else unread.value = true; }, { deep: true });
+/** Put the screen back where the reader left this member: at the bottom, or at the same place further up. */
+function restore_scroll(top) {
+  if (top == null) return to_bottom();
+  stick = false;
+  nextTick(() => {
+    if (!screen.value) return;
+    screen.value.scrollTop = top;
+    update_away();
+    remember_anchor();
+  });
+}
+/** Keep this member's lines, steps and place, so coming back to it (or to this page) shows them at once. */
+function save_session() {
+  if (!session_key) return;
+  SESSIONS.set(session_key, { chats: chats.value, details: details.value, open_output: open_output.value,
+    scroll: stick || !screen.value ? null : screen.value.scrollTop });
+}
+/** Open the turn a message card asked for ("查看这次执行的过程") at the top of the screen, marked for a moment. */
+function jump_to_execution() {
+  const id = private_chat.execution_id;
+  const section = id && screen.value && content.value?.querySelector(`[data-key="exec-${id}"]`);
+  if (!section) return;
+  private_chat.execution_id = null;
+  stick = false;
+  screen.value.scrollTop += section.getBoundingClientRect().top - screen.value.getBoundingClientRect().top - JUMP_GAP_PX;
+  update_away();
+  remember_anchor();
+  target.value = section.dataset.key;
+  clearTimeout(target_timer);
+  target_timer = setTimeout(() => { target.value = ""; }, TARGET_MS);
+}
+watch(() => [private_chat.execution_id, items.value.length], () => {
+  if (private_chat.execution_id) kept_execution.value = private_chat.execution_id;
+  nextTick(jump_to_execution);
+}, { immediate: true });
+onMounted(() => {
+  observer = new ResizeObserver(on_resize);
+  observer.observe(screen.value);
+  observer.observe(content.value);
+});
+onBeforeUnmount(() => { save_session(); observer?.disconnect(); cancelAnimationFrame(anchor_frame); clearTimeout(target_timer); });
 
 const draft = ref("");
 const sending = ref(false);
@@ -196,7 +372,7 @@ async function send() {
     history_index = -1;
     draft.value = "";
     submission_id = "";
-    stick = true;
+    to_bottom();
     await refresh();
   } catch (failure) {
     error.value = failure.message || "未能发出";
@@ -236,19 +412,23 @@ function recall(event, step) {
   <div class="term" role="tabpanel" aria-label="私聊">
     <nav class="term-tabs" aria-label="成员">
       <button v-for="item in members" :key="item.id" type="button" class="term-tab" :class="{ 'is-current': item.name === name }"
-        :aria-current="item.name === name" @click="private_chat.member = item.name">
+        :aria-current="item.name === name" @click="private_chat.member = item.name; private_chat.execution_id = null">
         <span class="term-dot" :class="{ 'is-busy': ACTIVE.includes(item.execution?.status) }" />{{ bridge.display_name(item.name) }}
       </button>
     </nav>
-    <div ref="screen" class="term-screen" @scroll="on_scroll">
+    <div class="term-stage">
+    <div ref="screen" v-keep-reading class="term-screen" @scroll.passive="on_scroll" @wheel.passive="on_wheel"
+      @touchstart.passive="set_touching(true)" @touchend="set_touching(false)" @touchcancel="set_touching(false)">
+      <div ref="content" class="term-content">
       <div v-if="member" class="term-welcome">
         <div><span class="term-accent">✻</span> 和 <b>{{ bridge.display_name(name) }}</b> 私聊</div>
         <div class="term-dim">用它在房间里的同一个会话回答，记录只有你看得到</div>
       </div>
       <p v-else class="term-dim">房间里还没有 AI 成员</p>
-      <section v-for="item in items" :key="item.key" class="term-turn">
+      <section v-for="item in items" :key="item.key" class="term-turn" :class="{ 'is-target': target === item.key }" :data-key="item.key"
+        v-memo="[prompt_of(item), reply_of(item), running(item), item.chat && chat_note(item.chat), details.get(item.key), errors.get(item.key), open_output, target === item.key]">
         <div v-if="prompt_of(item)" class="term-prompt"><span class="term-body">{{ prompt_of(item) }}</span></div>
-        <div v-if="errors.get(item.key)" class="term-sub term-warn"><span class="term-corner">⎿</span><span class="term-body">未能读取过程：{{ errors.get(item.key) }}</span></div>
+        <div v-if="errors.get(item.key) && !details.has(item.key)" class="term-sub term-warn"><span class="term-corner">⎿</span><span class="term-body">未能读取过程：{{ errors.get(item.key).message }}</span></div>
         <div v-else-if="!details.has(item.key) && running(item)" class="term-sub"><span class="term-corner">⎿</span><span class="term-body">正在读取…</span></div>
         <template v-for="(entry, index) in steps_of(item)" :key="entry.id ?? index">
           <div v-if="entry.kind === 'message'" class="term-line"><span class="term-bullet">●</span><span class="term-body">{{ entry.body }}</span></div>
@@ -269,8 +449,10 @@ function recall(event, step) {
         <div v-if="reply_of(item)" class="term-line"><span class="term-bullet">●</span><span class="term-body">{{ reply_of(item) }}</span></div>
         <div v-if="item.chat && chat_note(item.chat)" class="term-sub" :class="{ 'term-error': item.chat.status === 'failed' }"><span class="term-corner">⎿</span><span class="term-body">{{ chat_note(item.chat) }}</span></div>
       </section>
+      </div>
     </div>
-    <button v-if="unread" type="button" class="term-unread" @click="to_bottom">↓ 新输出</button>
+    <button v-if="unread || away" type="button" class="term-unread" @click="to_bottom">{{ unread ? "↓ 新输出" : "↓ 回到底部" }}</button>
+    </div>
     <div class="term-status" :class="{ 'is-running': running_item }" role="status">
       <span v-if="running_item" class="term-spin">{{ SPINNER[frame] }}</span><span>{{ status_line }}</span>
     </div>
@@ -300,7 +482,7 @@ function recall(event, step) {
   --term-bg: #ffffff; --term-text: #1f1f1f; --term-strong: #000000; --term-dim: #6b6b6b; --term-faint: #a3a3a3;
   --term-band: #f0f0f0; --term-border: #c8c8c8; --term-accent: #d77757; --term-green: #2c7a39; --term-red: #ab2b3f;
   --term-blue: #5769f7; --term-added: #dcf5e0; --term-removed: #fbe3e6;
-  display: flex; flex-direction: column; height: calc(100dvh - 120px); min-height: 360px; color: var(--term-text);
+  display: flex; flex-direction: column; flex: 1 0 0; width: 100%; min-height: 360px; color: var(--term-text);
   font-family: var(--term-font); font-size: var(--term-size); line-height: var(--term-line); background: var(--term-bg); overflow: hidden; }
 .dark .term { --term-bg: #1a1a1a; --term-text: #e6e6e6; --term-strong: #ffffff; --term-dim: #999999; --term-faint: #6b6b6b;
   --term-band: #2e2e2e; --term-border: #4a4a4a; --term-green: #4eba65; --term-red: #ff6b80; --term-blue: #b1b9f9;
@@ -313,8 +495,14 @@ function recall(event, step) {
 .term-dot { display: inline-block; width: 6px; height: 6px; border-radius: 50%; background: var(--term-faint); flex: none; }
 .term-dot.is-busy { background: var(--term-accent); animation: term-pulse 1.2s ease-in-out infinite; }
 @keyframes term-pulse { 50% { opacity: .3; } }
-.term-screen { flex: 1; overflow-y: auto; padding: 16px 20px 12px; overscroll-behavior: contain; }
-.term-screen > * { max-width: 980px; }
+/* The browser's own scroll anchoring is off: the script keeps the reading position, in every browser alike. */
+/* The screen and the button back to the bottom, which sits on the screen's lower edge whatever the input's height. */
+.term-stage { position: relative; display: flex; flex: 1; min-height: 0; }
+.term-screen { flex: 1; min-width: 0; overflow-y: auto; padding: 16px 20px 12px; overscroll-behavior: contain; overflow-anchor: none; }
+.term-content > * { max-width: 980px; }
+/* A turn opened from a message card is marked for a moment. */
+.term-turn.is-target { animation: term-flash 2s ease-out; border-radius: 4px; }
+@keyframes term-flash { from { background: color-mix(in srgb, var(--term-accent) 16%, transparent); } }
 .term-welcome { display: inline-block; max-width: 100%; margin-bottom: 20px; padding: 10px 16px; border: 1px solid var(--term-accent); border-radius: 8px; }
 .term-welcome .term-dim { margin-top: 2px; font-size: 12.5px; }
 .term-welcome b, .term-tool { font-weight: 700; color: var(--term-strong); }
@@ -362,7 +550,7 @@ function recall(event, step) {
 .term-button.is-stop { background: var(--term-band); color: var(--term-red); }
 .term-stop-square { width: 9px; height: 9px; border-radius: 2px; background: currentColor; }
 .term-hint { min-height: 1.7em; padding: 4px 22px calc(8px + env(safe-area-inset-bottom)); color: var(--term-faint); font-size: 11.5px; }
-.term-unread { position: absolute; right: 20px; bottom: 104px; padding: 3px 12px; border: 1px solid var(--term-border); border-radius: 999px;
+.term-unread { position: absolute; right: 20px; bottom: 10px; padding: 3px 12px; border: 1px solid var(--term-border); border-radius: 999px;
   background: var(--term-bg); color: var(--term-text); font: inherit; font-size: 12px; cursor: pointer; }
 .term button { touch-action: manipulation; }
 /* Touch: send and stop buttons with room to tap, and a 16px input so iOS does not zoom (its placeholder stays small). */
@@ -374,7 +562,7 @@ function recall(event, step) {
   .term-more { padding: 4px 0; }
 }
 @media (max-width: 640px) {
-  .term { height: calc(100dvh - 96px); --term-size: 13px; }
+  .term { --term-size: 13px; }
   .term-screen { padding: 12px 12px 8px; }
   .term-input { margin: 0 8px; }
   .term-status { padding: 0 12px 4px; }

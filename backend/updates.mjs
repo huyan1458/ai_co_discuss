@@ -38,7 +38,12 @@ export class MachineRelay {
    * socket keeps which device opened it and until when that device is paired.
    */
   accept(socket, role, device = null) {
-    if (role === "machine") for (const old of this.ctx.getWebSockets("machine")) old.close(1000, "replaced");
+    if (role === "machine") {
+      // Requests waiting now went to the old connection, whose answers can no longer arrive (a stalled one never sends
+      // them): fail them at once so the device can ask again over the new one, instead of waiting out the timeout.
+      for (const id of [...this.pending.keys()]) this.settle(id, { id, status: "offline" });
+      for (const old of this.ctx.getWebSockets("machine")) old.close(1000, "replaced");
+    }
     this.ctx.acceptWebSocket(socket, [role]);
     // The role survives hibernation with the socket, so a woken object still knows who sent a frame.
     socket.serializeAttachment(role === "device" ? { role, device: device?.id ?? "", expires_at: Number(device?.expires_at) || 0 } : { role });
