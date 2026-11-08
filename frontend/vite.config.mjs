@@ -1,3 +1,4 @@
+import { readFileSync } from "node:fs";
 import { cp, mkdir, readdir } from "node:fs/promises";
 
 import { defineConfig } from "vite";
@@ -42,7 +43,9 @@ export default defineConfig(({ mode }) => mode === "markdown" ? {
     lib: { entry: "frontend/backup.mjs", name: "discuss_backup", formats: ["iife"], fileName: () => "backup.js" },
   },
 } : {
-  define: { "process.env.NODE_ENV": JSON.stringify("production") },
+  // The npm package version, shown under the brand; the release script publishes the site and the package together.
+  define: { "process.env.NODE_ENV": JSON.stringify("production"),
+    __APP_VERSION__: JSON.stringify(JSON.parse(readFileSync(new URL("../package.json", import.meta.url), "utf8")).version) },
   plugins: [vue(), ui({
     colorMode: false,
     router: false,

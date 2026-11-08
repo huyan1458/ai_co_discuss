@@ -7,10 +7,10 @@ description: "AI CoDiscuss 快速发版：一次提交全部变更、升 npm 补
 
 按顺序执行以下三个阶段，中间一句话提示，结尾一句本机更新提示。不跑测试，不查看或分析改动内容，不检查其他窗口，不拆分提交，不 publish，push 不加 `--force`。网络类错误（`fetch failed`、`ECONNRESET`、超时、`EOF` 等）不算失败，原样重试该步，第 3 阶段命令已自带重试，用尽后再手动重试一轮；仍失败或遇到非网络错误时才停止并报告，不执行后续调用。数据库删表须先备份，再取得用户明确确认；普通发版授权不代替删表授权。
 
-**第 1 次调用**（构建、提交全部、升版本，并判断 schema 是否自上次发版后有变化），在仓库根目录用 Bash 原样执行，署名行按会话要求替换：
+**第 1 次调用**（构建、升版本、再构建、提交全部，并判断 schema 是否自上次发版后有变化），在仓库根目录用 Bash 原样执行，署名行按会话要求替换。先构建一次，构建失败时不升版本；升版本后再构建，让网页左上角显示的版本号就是本次发布的版本：
 
 ```bash
-npm run build >/dev/null && git add -A && (git diff --cached --quiet || git commit -q -m 'chore: 发版前提交全部变更' -m 'Co-Authored-By: <署名>') && P=$(git log -1 --format=%H --grep='^chore(release)') && V=$(npm version patch --no-git-tag-version) && git commit -q -m "chore(release): 升级至 ${V#v}" -m 'Co-Authored-By: <署名>' -- package.json package-lock.json && echo "$V" && (git diff --quiet "$P" HEAD -- backend/schema.sql && echo "schema: 未变化" || echo "schema: 有变化")
+npm run build >/dev/null && P=$(git log -1 --format=%H --grep='^chore(release)') && V=$(npm version patch --no-git-tag-version) && npm run build >/dev/null && git add -A && git reset -q -- package.json package-lock.json && (git diff --cached --quiet || git commit -q -m 'chore: 发版前提交全部变更' -m 'Co-Authored-By: <署名>') && git commit -q -m "chore(release): 升级至 ${V#v}" -m 'Co-Authored-By: <署名>' -- package.json package-lock.json && echo "$V" && (git diff --quiet "$P" HEAD -- backend/schema.sql && echo "schema: 未变化" || echo "schema: 有变化")
 ```
 
 **提示**：输出“版本 <V> 已提交，可以 `npm publish` 了（未登录先 `npm login`）”，不等待用户。
