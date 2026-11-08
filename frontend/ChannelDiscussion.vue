@@ -2152,7 +2152,7 @@ function copy_message(message) { act("copy", `${view.value.room_site}/r/${room.v
           </div>
           <!-- Private chat sits in the answered card's first toolbar slot (the corner on touch screens), so the key stays put when the work turns into an answer. -->
           <div v-if="view.access?.can_manage && shows_progress(message) && message.execution_id" class="channel-message-actions"><div class="channel-message-toolbar">
-            <UTooltip text="私聊：查看它正在做什么"><UButton icon="i-lucide-message-circle" class="channel-private-chat-key" size="xs" variant="ghost" color="neutral" :aria-label="`私聊 ${bridge.display_name(message.author)}：查看本次执行过程`" @click="open_private_chat(act, message.author, message.execution_id)" /></UTooltip>
+            <UTooltip text="私聊：查看它正在做什么"><UButton icon="i-lucide-message-square" class="channel-private-chat-key" size="xs" variant="ghost" color="neutral" :aria-label="`私聊 ${bridge.display_name(message.author)}：查看本次执行过程`" @click="open_private_chat(act, message.author, message.execution_id)" /></UTooltip>
           </div></div>
           <div class="channel-working-main">
             <span v-for="status in [working_status(message)]" :key="message.id" class="channel-working-status" :class="{ 'channel-working-warning': status.warning }" role="status" :title="shows_progress(message) ? (message.waiting ? message.text : status.text) : '此接入方式看不到进度，可在原窗口查看'">
@@ -2307,7 +2307,7 @@ function copy_message(message) { act("copy", `${view.value.room_site}/r/${room.v
             </section>
           </template>
           <template #header><div class="channel-message-actions"><div class="channel-message-toolbar">
-            <component :is="card.armed ? UTooltip : BareSlot" disable-hoverable-content :ui="KEY_TIP_UI" v-if="card.private_chat" text="私聊：查看这次执行的过程"><UButton icon="i-lucide-message-circle" class="channel-private-chat-key" size="xs" color="neutral" variant="ghost" :aria-label="`查看 #${message.id} 的执行过程`" @click="open_private_chat(act, message.author, card.execution_id)" /></component>
+            <component :is="card.armed ? UTooltip : BareSlot" disable-hoverable-content :ui="KEY_TIP_UI" v-if="card.private_chat" text="私聊：查看这次执行的过程"><UButton icon="i-lucide-message-square" class="channel-private-chat-key" size="xs" color="neutral" variant="ghost" :aria-label="`查看 #${message.id} 的执行过程`" @click="open_private_chat(act, message.author, card.execution_id)" /></component>
             <component :is="card.armed ? UTooltip : BareSlot" disable-hoverable-content :ui="KEY_TIP_UI" v-else-if="!card.can_take_back" text="回复"><UButton icon="i-lucide-corner-up-left" size="xs" color="neutral" variant="ghost" :aria-label="`回复 #${message.id}`" @click="reply_to(message)" /></component>
             <component :is="card.armed ? UTooltip : BareSlot" disable-hoverable-content :ui="KEY_TIP_UI" v-if="card.can_retract && !card.editing" text="撤回"><UButton icon="i-lucide-undo-2" size="xs" color="neutral" variant="ghost" :aria-label="`撤回 #${message.id}`" @click="retract(message.id)" :loading="card.retracting" /></component>
             <component :is="card.armed ? UTooltip : BareSlot" disable-hoverable-content :ui="KEY_TIP_UI" v-if="card.can_take_back && !card.editing" text="编辑"><UButton icon="i-lucide-pencil" size="xs" color="neutral" variant="ghost" :aria-label="`编辑 #${message.id}，回退到它之前重新发送`" @click="start_edit(message)" /></component>

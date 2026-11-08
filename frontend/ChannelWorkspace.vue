@@ -124,9 +124,9 @@ const project_directories = computed((previous) => {
 });
 /** Room tools keep their positions; files shows a hint until a project directory is saved. */
 const tabs = computed(() => [
-  { value: "discussion", label: "消息", icon: "i-lucide-hash" },
+  { value: "discussion", label: "消息", icon: "i-lucide-messages-square" },
+  { value: "private", label: "私聊", icon: "i-lucide-message-square" },
   { value: "timeline", label: "执行", icon: "i-lucide-chart-gantt" },
-  { value: "private", label: "私聊", icon: "i-lucide-message-circle" },
   { value: "overview", label: "房间", icon: "i-lucide-sliders-horizontal" },
   { value: "files", label: "文件", icon: "i-lucide-files", title: project_directory.value || "" },
 ]);
