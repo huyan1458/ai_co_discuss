@@ -1345,17 +1345,9 @@ html[data-motion="off"] *, html[data-motion="off"] *::before, html[data-motion="
 @media (min-width: 701px) { .channel-working-strip { margin-right: var(--message-inset-end); } }
 @media (max-width: 700px) { .channel-working-strip { margin: 0 8px 12px; } }
 /* Private chat sits in the bottom-right corner of both the working strip and the answered card, so the key stays in the
-   same corner when the work turns into an answer. The strip keeps it inside and always shown; the answered card keeps it
-   inside on touch screens and in the hover column's bottom slot outside the card with a mouse. */
+   same corner when the work turns into an answer: with a mouse it is the hover column's bottom slot outside the card,
+   on touch screens (no hover) a key inside the card's bottom-right corner, always shown. */
 .channel-message-corner { display: none; }
-@media (min-width: 701px) and (hover: hover) and (pointer: fine) {
-  .channel-corner-row { display: none; }
-  .channel-message-actions { display: flex; flex-direction: column; }
-  .channel-message-corner { display: flex; position: static; margin-top: auto; }
-  .channel-message-corner .channel-private-chat-key [class*="icon"] { width: 14px; height: 14px; }
-  /* "More" heads the column, in the card's top-right corner, with the other keys under it. */
-  .channel-message-toolbar > :last-child { order: -1; }
-}
 .channel-corner-key { justify-content: center; width: 28px; height: 28px; padding: 5px; border-radius: 4px; color: var(--ui-text-dimmed); }
 .channel-corner-key:hover { color: var(--ui-text-highlighted); background: var(--channel-ghost-hover); }
 /* The square speech bubble reads heavier than the other line icons at the same size, so the private-chat icon is drawn a little smaller. */
@@ -1363,7 +1355,9 @@ html[data-motion="off"] *, html[data-motion="off"] *::before, html[data-motion="
 .channel-tabs [id$="-trigger-private"] [data-slot="leadingIcon"], .is-private-icon { scale: .86; }
 /* Answered card: its own row, pulled into the card padding so it costs little height and never covers the text. */
 .channel-corner-row { display: flex; justify-content: flex-end; margin: 4px -12px -12px 0; }
-/* Working strip: on the last row's right end (the notes row, else the status row beside the stop key). */
+/* Working strip: stop on the head row's right end, private chat inside the bottom-right corner on every device
+   (the notes row, else the status row), in the same 24px column as the stop key. */
+.channel-working-head > .channel-working-actions { margin-left: auto; }
 .channel-working-strip .channel-corner-key { position: absolute; right: 10px; bottom: 10px; width: 24px; height: 24px; padding: 4px; }
 .channel-working-strip:has(.channel-working-notes) .channel-corner-key { bottom: 7px; }
 .channel-working-strip:has(.channel-corner-key) .channel-working-main { padding-right: 32px; }
@@ -1371,6 +1365,22 @@ html[data-motion="off"] *, html[data-motion="off"] *::before, html[data-motion="
   .channel-corner-row { margin: 2px -9px -10px 0; }
   .channel-corner-row .channel-corner-key { width: 25px; height: 24px; padding: 4px; }
   .channel-corner-key [class*="icon"] { width: 12px; height: 12px; }
+}
+/* Placed after the base rules above so the mouse layout overrides them. */
+@media (min-width: 701px) and (hover: hover) and (pointer: fine) {
+  .channel-corner-row { display: none; }
+  .channel-message-stack { display: flex; flex-direction: column; height: 100%; }
+  .channel-message-corner { display: flex; position: static; margin-top: auto; }
+  .channel-message-corner .channel-private-chat-key [class*="icon"] { width: 14px; height: 14px; }
+  /* "More" heads the column, in the card's top-right corner, with the other keys under it. */
+  .channel-message-toolbar > :last-child { order: -1; }
+  /* A short card centres its column on the card's height instead of hanging it from the top (user 2026-11-08);
+     a tall card keeps the toolbar stuck to the top and private chat at the bottom. */
+  .channel-message-actions { container-type: size; }
+  @container (max-height: 160px) {
+    .channel-message-stack { justify-content: center; }
+    .channel-message-stack > .channel-message-corner:not(:first-child) { margin-top: 4px; }
+  }
 }
 /* Dark composer matches the message cards (#313338, lit top rim) as one surface with its footer; the mention panel keeps the frosted float style. */
 :root[data-theme="channel"] .channel-composer { background: #313338 !important; }
