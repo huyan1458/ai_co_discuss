@@ -9,7 +9,7 @@ import { parseArgs } from 'node:util';
 
 import { atomic_json } from './files.mjs';
 import { acquire_lock } from './discussion_runner.mjs';
-import { assert_shared_home, main as service_main, service_home, service_pid, service_ready, start_service } from './discussion_service.mjs';
+import { assert_shared_home, main as service_main, service_home, service_pid, service_ready, service_stopped_by_user, start_service } from './discussion_service.mjs';
 import { detect_python, local_settings } from './discussion_setup.mjs';
 import { unlink_machine } from './remote_launch.mjs';
 import { tone } from './discussion_tui.mjs';
@@ -20,6 +20,8 @@ const VERSION = JSON.parse(readFileSync(new URL('../package.json', import.meta.u
 const START_WAIT_MS = 15000;
 const STOP_WAIT_MS = 25000;
 const POLL_MS = 200;
+// A service that exited without `service stop` (e.g. an old one adopted during an upgrade) is restarted at most this often.
+const SERVICE_REVIVE_MS = 10_000;
 const CONNECTION_TOKEN_BYTES = 32;
 const LOCAL_HELP = `用法：codiscuss local open|start|status|stop [--json]
       codiscuss local connect SITE [--setup-key KEY] [--no-open]
@@ -156,11 +158,17 @@ async function close_owned(child, owned_service, home) {
   }
 }
 
-/** Handle explicit restart requests in the supervisor so replacement service ownership stays local. */
+let revived_at = 0;
+
+/**
+ * Start the service on an explicit request, or again when it exited without `service stop`, so replacement
+ * ownership stays local and an adopted service that exits later does not leave every room unattended.
+ */
 async function requested_service(home, status, owned_service) {
   const path = join(home, 'local', 'start.request');
-  if (!existsSync(path)) return owned_service;
-  unlinkSync(path);
+  if (existsSync(path)) unlinkSync(path);
+  else if (service_pid(home) || service_stopped_by_user(home) || Date.now() - revived_at < SERVICE_REVIVE_MS) return owned_service;
+  revived_at = Date.now();
   const status_path = join(home, 'local', 'status.json');
   try {
     const service = await start_service(home);

@@ -192,6 +192,31 @@ test('local stop also stops a pre-existing service; occupied port cannot be mist
   }
 });
 
+test('supervisor restarts a service that exited without service stop', async () => {
+  const reservation = await reserve_port();
+  const port = reservation.address().port;
+  await new Promise(done => reservation.close(done));
+  const state = fixture(port);
+  try {
+    const first = state.command(['local', 'start']);
+    // An upgrade's timed-out stop leaves the old service exiting on its own later, with no user stop recorded.
+    writeFileSync(join(state.home, 'stop.request'), '{}');
+    let service = { running: false };
+    for (let waited = 0; waited < 30000 && !(service.running && service.pid !== first.service_pid); waited += 500) {
+      await new Promise(done => setTimeout(done, 500));
+      service = state.command(['service', 'status', '--json']);
+    }
+    assert.equal(service.running, true, startup_diagnostics(state.home, { status: 0, stderr: '', stdout: '' }));
+    const service_log = readFileSync(join(state.home, 'service.log'), 'utf8');
+    assert.equal((service_log.match(/讨论服务已启动 pid=/g) || []).length, 2);
+    assert.equal(state.command(['local', 'status']).pid, first.pid);
+  } finally {
+    state.execute(['local', 'stop']);
+    state.execute(['service', 'stop', '--json']);
+    rmSync(state.home, { recursive: true, force: true });
+  }
+});
+
 for (const independent of [false, true]) test(`local restart ${independent ? 'reuses an independent replacement' : 'owns its replacement service'} without replacing the website`, async () => {
   const reservation = await reserve_port();
   const port = reservation.address().port;

@@ -32,6 +32,8 @@ const REMOTE_SYNC_MS = 3000;
 const RELAY_RESTART_MIN_MS = 1000;
 const START_WAIT_MS = 5000;
 const STOP_WAIT_MS = 20_000;
+// Left by `service stop` and cleared by any start: the local supervisor restarts a service that exited only without it.
+const STOPPED_MARKER = 'service.stopped';
 const REGISTRY_WAIT_MS = 5000;
 // Housekeeping: logs above the limit keep only their newest part; a launch folder no room uses is removed once it is this old.
 const SWEEP_MS = 6 * 60 * 60 * 1000;
@@ -744,6 +746,7 @@ export async function run_service(home, output = () => {}) {
 /** Start the detached service once; an already running service is reused. */
 export async function start_service(home) {
   assert_shared_home(home);
+  rmSync(join(home, STOPPED_MARKER), { force: true });
   const running = service_pid(home);
   if (service_ready(home, running)) return { running: true, ready: true, pid: running, started: false };
   mkdirSync(home, { recursive: true });
@@ -791,6 +794,11 @@ function read_persisted_env() {
     return JSON.parse(powershell("$r=@{}; foreach($s in 'Machine','User'){ $v=[Environment]::GetEnvironmentVariables($s);"
       + " foreach($k in $v.Keys){ $r[$k]=$v[$k] } }; $r | ConvertTo-Json -Compress") || '{}');
   } catch { return {}; }
+}
+
+/** Whether the user stopped the service on purpose, so the local supervisor must not bring it back. */
+export function service_stopped_by_user(home) {
+  return existsSync(join(home, STOPPED_MARKER));
 }
 
 /** Ask the service to pause its runs and exit, then wait for its lock to be released. */
@@ -865,7 +873,9 @@ export async function main(args = process.argv.slice(2), print = value => proces
   switch (command) {
     case 'run': return run_service(home);
     case 'start': return print(await start_service(home));
-    case 'stop': return print(await stop_service(home));
+    case 'stop':
+      atomic_json(join(home, STOPPED_MARKER), { stopped_at: Math.floor(Date.now() / 1000) });
+      return print(await stop_service(home));
     case 'restart': await stop_service(home); return print(await start_service(home));
     case 'status': return print(service_status(home));
     case 'open': return print({ ...(await start_service(home)), opened: open_sites(home) });

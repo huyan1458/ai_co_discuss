@@ -1344,8 +1344,18 @@ html[data-motion="off"] *, html[data-motion="off"] *::before, html[data-motion="
 .channel-working-count:hover { color: var(--ui-text-toned); }
 @media (min-width: 701px) { .channel-working-strip { margin-right: var(--message-inset-end); } }
 @media (max-width: 700px) { .channel-working-strip { margin: 0 8px 12px; } }
-/* Private chat sits in the bottom-right corner of both the working strip and the answered card, always shown on every
-   device, so the key stays in the same corner when the work turns into an answer. */
+/* Private chat sits in the bottom-right corner of both the working strip and the answered card, so the key stays in the
+   same corner when the work turns into an answer. The strip keeps it inside and always shown; the answered card keeps it
+   inside on touch screens and in the hover column's bottom slot outside the card with a mouse. */
+.channel-message-corner { display: none; }
+@media (min-width: 701px) and (hover: hover) and (pointer: fine) {
+  .channel-corner-row { display: none; }
+  .channel-message-actions { display: flex; flex-direction: column; }
+  .channel-message-corner { display: flex; position: static; margin-top: auto; }
+  .channel-message-corner .channel-private-chat-key [class*="icon"] { width: 14px; height: 14px; }
+  /* "More" heads the column, in the card's top-right corner, with the other keys under it. */
+  .channel-message-toolbar > :last-child { order: -1; }
+}
 .channel-corner-key { justify-content: center; width: 28px; height: 28px; padding: 5px; border-radius: 4px; color: var(--ui-text-dimmed); }
 .channel-corner-key:hover { color: var(--ui-text-highlighted); background: var(--channel-ghost-hover); }
 /* The square speech bubble reads heavier than the other line icons at the same size, so the private-chat icon is drawn a little smaller. */
