@@ -409,8 +409,10 @@ html[data-theme^="channel"] .channel-nav-preview-text p { margin-bottom: 6px; }
 .channel-message-group { width: 100%; max-width: var(--channel-reading-width); margin: 0 auto; }
 /* Cards off screen skip layout and paint: on slow devices laying out a long room stalled the earlier-card preload.
    Their height is a guess until they near the screen, so this is only where the browser keeps the reading position as
-   guesses turn real (scroll anchoring). The clip margin keeps the action column hanging beside the card painted. */
-@supports (overflow-anchor: auto) {
+   guesses turn real (scroll anchoring). The clip margin keeps the action column hanging beside the card painted.
+   WebKit is left out (font: -apple-system-body matches only it): after rotating an iPhone back to portrait it kept the
+   cards on screen skipped, leaving the transcript blank until the next manual scroll. */
+@supports (overflow-anchor: auto) and (not (font: -apple-system-body)) {
   .channel-transcript [data-message-id] { content-visibility: auto; contain-intrinsic-block-size: auto 240px; overflow-clip-margin: 64px; }
 }
 /* The topic card reuses .channel-message box rules so its edges and text column match the message cards at every size. */

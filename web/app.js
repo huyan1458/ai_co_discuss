@@ -2330,6 +2330,8 @@ async function pair_this_device(code) {
   // WebAuthn must run on the user's tap, so everything above is ready before the dialog asks for it.
   return passkey_prompt({ title: "配对这台设备", description: "用这台设备的面容、指纹或设备密码确认，完成与电脑的配对。之后打开网页即可使用，无需账号和密码。", confirm_label: "继续",
     run: async () => {
+      // A refused passkey still asks the computer, which accepts it only when this code was made to allow no passkey.
+      let refused = null;
       const created = await (typeof navigator.credentials?.create === "function" ? navigator.credentials.create({ publicKey: { challenge, rp: { id: location.hostname, name: "AI CoDiscuss" },
         user: { id: crypto.getRandomValues(new Uint8Array(16)), name: `codiscuss · ${device_label()}`, displayName: `AI CoDiscuss · ${device_label()}` },
         pubKeyCredParams: [{ type: "public-key", alg: -7 }, { type: "public-key", alg: -257 }],
@@ -2338,11 +2340,14 @@ async function pair_this_device(code) {
         .catch(error => {
           // A browser without a working credential manager (e.g. Android without Google Play services) pairs by its device key alone.
           if (PASSKEY_UNAVAILABLE.has(error?.name)) return null;
-          throw passkey_error(error);
+          if (error?.name !== "NotAllowedError") throw passkey_error(error);
+          refused = error;
+          return null;
         });
       const passkey = created && { id: bytes_to_b64url(created.rawId), client_data_json: bytes_to_b64url(created.response.clientDataJSON),
         attestation_object: bytes_to_b64url(created.response.attestationObject) };
       const answer = await pair_exchange(machine, { public_key: device.public_jwk, label: device_label(), proof, passkey });
+      if (answer.status >= 400 && refused && answer.body?.need === "passkey") throw passkey_error(refused);
       if (answer.status >= 400) throw new Error(answer.body?.error || "配对失败");
       localStorage.setItem(PAIRED_KEY, JSON.stringify({ machine_id: machine.id, fingerprint }));
       Object.assign(state.device, { needs: "", pairing_code: "", pairing_fp: "" });
