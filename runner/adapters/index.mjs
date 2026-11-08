@@ -95,8 +95,9 @@ const DETAIL_BODY_LIMIT = 4000;
 /**
  * What an agent did in one execution, rebuilt from the raw event log its adapter's process wrote: messages, commands
  * with their output, searches, edits and tool calls in order. Each adapter's `events.detail(event)` turns one event into
- * entries `{id?, kind, title?, body?, append?, state?}`; an entry with a known id updates the earlier one in place
- * (a command's result fills in its start), `append` extends its body. Returns null when the adapter keeps no such log.
+ * entries `{id?, kind, title?, body?, append?, state?, at?, ended_at?}`; an entry with a known id updates the earlier
+ * one in place (a command's result fills in its start), `append` extends its body. `at` / `ended_at` are ISO times, given
+ * only by software whose log carries them; without them no step time shows. Returns null when the adapter keeps no such log.
  */
 export function execution_details(adapter_id, text) {
   const adapter = adapter_of(adapter_id);

@@ -7,7 +7,8 @@
 import { computed, inject, ref } from "vue";
 import ConfirmDialog from "./ConfirmDialog.vue";
 
-// `dismissible` adds a close button that only hides the row where it is shown; the workflow keeps running.
+// `dismissible` (the right column) adds a close button that only hides the row where it is shown, and leaves out the
+// action that sends the members away: ending a workflow is rare, so it stays on the room settings page.
 const props = defineProps({ workflow: { type: Object, required: true }, dismissible: { type: Boolean, default: false } });
 defineEmits(["dismiss"]);
 const { view, bridge, act, pending } = inject("discussion");
@@ -18,6 +19,14 @@ const present = computed(() => {
   return (room.value.free?.members || []).filter((member) => names.has(member.name) && member.role !== "host" && member.status === "active");
 });
 const can_manage = computed(() => view.value.access?.can_manage && !room.value.archived);
+// A refresh would change something: a card in the library has no active member, or the room still binds a dropped card.
+const out_of_sync = computed(() => {
+  const cards = props.workflow.cards;
+  if (!props.workflow.available || !Array.isArray(cards)) return false;
+  const members = props.workflow.members || {};
+  const active = new Set((room.value.free?.members || []).filter((member) => member.status === "active").map((member) => member.name));
+  return cards.some((card) => !active.has(members[card])) || Object.keys(members).some((card) => !cards.includes(card));
+});
 const names = computed(() => present.value.map((member) => bridge.display_name(member.name)).join("、"));
 const confirming = ref(false);
 const items = computed(() => [
@@ -33,8 +42,8 @@ const items = computed(() => [
       <UIcon name="i-lucide-workflow" class="workflow-control-icon" />
       <span class="workflow-control-name" :title="workflow.label">{{ workflow.label }}</span>
       <span class="workflow-control-state"><span class="workflow-control-dot"></span>{{ workflow.available ? '进行中' : '不可用' }}</span>
-      <button v-if="can_manage && workflow.available" type="button" class="workflow-control-action" :disabled="Boolean(pending)" title="按工作流库里的最新版本补齐成员：新增的卡片加入、离开的请回，已删卡片的成员转为普通成员" @click="act('sync_room_workflow')">刷新</button>
-      <button v-if="can_manage" type="button" class="workflow-control-action" :disabled="Boolean(pending)" title="请离工作流带来的成员并结束工作流，会话保留" @click="confirming = true">{{ present.length ? '请离成员' : '结束' }}</button>
+      <button v-if="can_manage && out_of_sync" type="button" class="workflow-control-action" :disabled="Boolean(pending)" title="刷新：按工作流库里的最新版本补齐成员：新增的卡片加入、离开的请回，已删卡片的成员转为普通成员" aria-label="刷新工作流" @click="act('sync_room_workflow')"><UIcon name="i-lucide-refresh-cw" class="workflow-control-action-icon" /></button>
+      <button v-if="can_manage && !dismissible" type="button" class="workflow-control-action" :disabled="Boolean(pending)" :title="present.length ? '请离成员：请离工作流带来的成员并结束工作流，会话保留' : '结束工作流'" :aria-label="present.length ? '请离成员' : '结束工作流'" @click="confirming = true"><UIcon :name="present.length ? 'i-lucide-user-minus' : 'i-lucide-square'" class="workflow-control-action-icon" /></button>
       <button v-if="dismissible" type="button" class="workflow-control-close" title="收起此区，工作流照常进行；“成员与设置”里仍可请离成员" aria-label="收起工作流区" @click="$emit('dismiss')"><UIcon name="i-lucide-x" class="workflow-control-close-icon" /></button>
     </div>
     <p v-if="!workflow.available" class="workflow-control-note is-warning">无法读取工作流，成员沿用房间里的提示词。</p>
@@ -51,7 +60,8 @@ const items = computed(() => [
 .workflow-control-state { display: inline-flex; flex-shrink: 0; align-items: center; gap: 5px; color: var(--ui-text-muted); }
 .workflow-control-dot { width: 6px; height: 6px; border-radius: 50%; background: #3fb950; }
 .is-warning .workflow-control-dot { background: #e5a50a; }
-.workflow-control-action { flex-shrink: 0; margin-left: 2px; padding: 2px 6px; border-radius: 6px; color: var(--ui-text-muted); font-size: 12px; white-space: nowrap; }
+.workflow-control-action { display: inline-flex; flex-shrink: 0; align-items: center; padding: 3px; border-radius: 6px; color: var(--ui-text-muted); }
+.workflow-control-action-icon { width: 13px; height: 13px; }
 .workflow-control-action:hover:not(:disabled) { background: var(--ui-bg-elevated); color: var(--channel-accent); }
 .workflow-control-action:disabled { opacity: .5; }
 .workflow-control-close { display: inline-flex; flex-shrink: 0; align-items: center; padding: 3px; border-radius: 6px; color: var(--ui-text-dimmed); }

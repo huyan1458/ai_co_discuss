@@ -45,6 +45,11 @@ export function review_capability_version(profile, member, config) {
   return createHash('sha256').update(JSON.stringify(facts)).digest('hex');
 }
 
+/** Whether a process with this pid exists; signal 0 only checks, and EPERM means it exists under another user. */
+function process_alive(pid) {
+  try { process.kill(pid, 0); return true; } catch (error) { return error.code === 'EPERM'; }
+}
+
 /** Identify a working directory consistently, so executions in the same cwd can be compared. */
 export function cwd_key(directory) {
   if (!directory) return '';
@@ -251,6 +256,8 @@ export class FreeRoomRunner {
     this.members = new Map();
     // An empty set proves every tracked handle for this execution closed; a missing set proves nothing after restart.
     this.execution_processes = new Map();
+    // Marks the handles this runner process tracks (`owner:ID` in metadata), so a later runner can tell inherited executions.
+    this.instance = randomUUID();
     // Execution id -> why its session ended on its own, such as a command refused in unattended mode ('' when unknown).
     this.exited = new Map();
     // Executions whose software failed before any turn ran, as its adapter reported; safe to deliver again.
@@ -886,6 +893,7 @@ export class FreeRoomRunner {
     }
     const execution = active.get(row.execution_id);
     if (!execution) {
+      this.forget_owner(row.execution_id);
       this.activity.delete(row.execution_id);
       await this.report_segments(row.execution_id, true);
       this.stop_member(member.name);
@@ -902,6 +910,10 @@ export class FreeRoomRunner {
     }
     // A restart between persisting and invoking cannot prove non-delivery, so it never resends.
     if (row.status === 'delivering') return this.fail(member.name, execution.id, '上次投递结果不明，未自动重发；请核对原会话后重新发送');
+    // Inherited from a runner that stopped or crashed: once its software processes are gone, no answer can come.
+    if (row.status === 'running' && this.orphan(execution.id)?.alive === false) {
+      return this.fail(member.name, execution.id, '本机接入程序重启或异常退出，这次执行的软件进程已结束，未提交回答；请重新发送');
+    }
     if (row.error) return this.retry_or_fail(member.name, execution, row.error);
     if (this.exited.has(execution.id)) {
       const latest = await api(this.config, `/executions/${execution.id}`);
@@ -954,7 +966,7 @@ export class FreeRoomRunner {
     const value = this.store.db.prepare('SELECT value FROM metadata WHERE key=?').get(key)?.value;
     if (!value) return;
     const delivery = stored_delivery(value), processes = this.execution_processes.get(execution_id);
-    const ended = processes ? processes.size === 0 : this.exited.has(execution_id);
+    const ended = processes ? processes.size === 0 : this.exited.has(execution_id) || this.orphan(execution_id)?.alive === false;
     const result = delivery.pending_result && delivery.pending_result !== 'unconfirmed' ? delivery.pending_result
       : !delivery.stoppable ? 'unstoppable' : ended ? 'stopped' : 'unconfirmed';
     if (delivery.stop_result === result) return;
@@ -985,8 +997,27 @@ export class FreeRoomRunner {
       // The site's bounded hold now controls the next delivery; retain handles to observe and retry termination.
       for (const child of processes || []) this.members.get(name)?.delete(child);
     }
-    else { this.store.db.prepare('DELETE FROM metadata WHERE key=?').run(key); this.execution_processes.delete(execution_id); }
+    else { this.store.db.prepare('DELETE FROM metadata WHERE key=?').run(key); this.execution_processes.delete(execution_id); this.forget_owner(execution_id); }
   }
+  /**
+   * An execution whose handles an earlier runner process tracked and this one does not: `{alive}` says whether any of its
+   * recorded software processes still runs. A handle without a pid lived inside that runner, so it ended with it.
+   */
+  orphan(execution_id) {
+    if (this.execution_processes.has(execution_id)) return null;
+    const saved = JSON.parse(this.store.db.prepare('SELECT value FROM metadata WHERE key=?').get(`owner:${execution_id}`)?.value || 'null');
+    if (!saved || saved.instance === this.instance) return null;
+    return { alive: saved.pids.some(process_alive) };
+  }
+  /** Record that this runner process tracks a handle of the execution, with its pid when it is a separate process. */
+  record_owner(execution_id, pid) {
+    const key = `owner:${execution_id}`;
+    const saved = JSON.parse(this.store.db.prepare('SELECT value FROM metadata WHERE key=?').get(key)?.value || 'null');
+    const pids = saved?.instance === this.instance ? saved.pids : [];
+    if (Number.isInteger(pid) && !pids.includes(pid)) pids.push(pid);
+    this.store.db.prepare('INSERT OR REPLACE INTO metadata VALUES (?,?)').run(key, JSON.stringify({ instance: this.instance, pids }));
+  }
+  forget_owner(execution_id) { this.store.db.prepare('DELETE FROM metadata WHERE key=?').run(`owner:${execution_id}`); }
   /** Once a new task received the stop reminders, retire acknowledged unconfirmed reports for its old turns. */
   clear_stopped(name) {
     for (const id of this.stopped_executions(name)) {
@@ -1065,6 +1096,7 @@ export class FreeRoomRunner {
     catch (error) { if (!/HTTP 409/.test(error.message)) throw error; }
     this.save(name, { status: 'idle', error: reason });
     this.stop_member(name);
+    this.forget_owner(execution_id);
   }
   /**
    * Hand the owner's pending interjections to the software running each execution, in order, through the steer handle
@@ -1167,6 +1199,8 @@ export class FreeRoomRunner {
     if (!this.execution_processes.has(execution_id)) this.execution_processes.set(execution_id, new Set());
     const processes = this.execution_processes.get(execution_id);
     processes.add(child);
+    // A handle only the owner may stop keeps running in the user's software, so a later runner must not fail it.
+    if (Number.isInteger(execution_id) && child.stop_on_shutdown !== false) this.record_owner(execution_id, child.pid);
     child.once('close', () => { processes.delete(child); this.children.delete(child); this.members.get(name).delete(child); });
   }
   /** Request termination; only a later close event proves it happened. */

@@ -612,6 +612,23 @@ test('a restart at the software invocation boundary fails for review instead of 
   assert.equal(sent, 1); assert.equal(f.executions.get(id).status, 'failed');
 });
 
+test('an execution inherited from a stopped or crashed runner fails once its software is gone, and waits while it runs', async t => {
+  const exited = spawnSync(process.execPath, ['-e', '']).pid;
+  for (const [pid, outcome] of [[undefined, 'failed'], [exited, 'failed'], [process.pid, 'dispatched']]) {
+    const f = await fixture(t); let sent = 0;
+    const deliver = async (adapter, binding, task) => {
+      sent++; task.on_process(Object.assign(new EventEmitter(), { pid, kill() {} }));
+      return { status: 'accepted' };
+    };
+    await new FreeRoomRunner(f.config, f.store, deliver).tick();
+    const id = f.current_execution().id;
+    // No stop_children(): a crash leaves no mark, so the next runner must judge by the recorded processes alone.
+    await new FreeRoomRunner(f.config, f.store, deliver).tick();
+    assert.equal(sent, 1); assert.equal(f.executions.get(id).status, outcome);
+    if (outcome === 'failed') assert.match(f.executions.get(id).result, /接入程序重启或异常退出/);
+  }
+});
+
 test('an expired execution lease ends that execution without restarting the AI task', async t => {
   const f = await fixture(t); let sent = 0;
   const runner = new FreeRoomRunner(f.config, f.store, async () => { sent++; return { status: 'accepted' }; });
@@ -2716,10 +2733,11 @@ test('execution details rebuild each CLI log in order, a result filling in its c
   assert.deepEqual(codex.entries.map(entry => [entry.kind, entry.title, entry.body, entry.state]), [
     ['message', undefined, '先读任务文件', undefined], ['command', 'rg x', 'hit', 'failed'], ['search', '南半球 七月', undefined, 'done']]);
   const claude = execution_details('claude', lines(
-    { type: 'assistant', message: { content: [{ type: 'thinking', thinking: '', signature: 's' }, { type: 'tool_use', id: 't', name: 'Bash', input: { command: 'ls' } }] } },
-    { type: 'user', message: { content: [{ type: 'tool_result', tool_use_id: 't', content: [{ type: 'text', text: 'a.md' }] }] } },
+    { type: 'assistant', timestamp: '2026-11-07T12:00:00.000Z', message: { content: [{ type: 'thinking', thinking: '', signature: 's' }, { type: 'tool_use', id: 't', name: 'Bash', input: { command: 'ls' } }] } },
+    { type: 'user', timestamp: '2026-11-07T12:00:12.000Z', message: { content: [{ type: 'tool_result', tool_use_id: 't', content: [{ type: 'text', text: 'a.md' }] }] } },
     { type: 'assistant', message: { content: [{ type: 'text', text: '完成' }] } }));
   assert.deepEqual(claude.entries.map(entry => [entry.kind, entry.title, entry.body, entry.state]), [['command', 'ls', 'a.md', 'done'], ['message', undefined, '完成', undefined]]);
+  assert.deepEqual([claude.entries[0].at, claude.entries[0].ended_at], ['2026-11-07T12:00:00.000Z', '2026-11-07T12:00:12.000Z'], 'a step keeps when it started and ended');
   const agy = execution_details('antigravity_cli', lines(
     { event: 'step_update', step_update: { step_index: 1, step_type: 'agent_response', state: 'ACTIVE', text_delta: '正在' } },
     { event: 'step_update', step_update: { step_index: 1, step_type: 'agent_response', state: 'ACTIVE', text_delta: '读取' } },

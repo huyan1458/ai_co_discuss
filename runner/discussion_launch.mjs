@@ -357,12 +357,15 @@ export async function room_models(home, raw, { read_defaults = profile => cached
     api_max_requests: config.api_max_requests ?? DEFAULT_API_MAX_REQUESTS };
 }
 
-/** The room's workflow as the right column shows it; `available` is false when its folder is gone or broken. */
+/**
+ * The room's workflow as the right column shows it; `available` is false when its folder is gone or broken, and
+ * `cards` lists the card IDs the library has now, so the page offers a refresh only when the room differs from it.
+ */
 function room_workflow_status(config, home) {
   if (!config.workflow?.id) return null;
   const loaded = load_room_workflow({ ...config, api_home: config.api_home || home, workflow: { ...config.workflow, enabled: true } });
   return { id: config.workflow.id, label: loaded.label || config.workflow.id, enabled: Boolean(config.workflow.enabled),
-    available: !loaded.error, members: config.workflow.members || {} };
+    available: !loaded.error, members: config.workflow.members || {}, cards: Object.keys(loaded.cards || {}) };
 }
 
 /**

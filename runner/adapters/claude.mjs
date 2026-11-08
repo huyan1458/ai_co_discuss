@@ -227,20 +227,22 @@ function result_text(content) {
 
 /**
  * One stream-json event as execution-detail entries: a tool call and its result share the call's id. Claude Code
- * streams thinking as signed blocks with empty text, so thinking shows only when it carries text.
+ * streams thinking as signed blocks with empty text, so thinking shows only when it carries text. Its assistant and
+ * user events carry an ISO `timestamp` (seen on 2.1.312), which becomes a step's `at` and its result's `ended_at`.
  */
 function claude_detail(event) {
   const blocks = Array.isArray(event.message?.content) ? event.message.content : [];
+  const at = event.timestamp || undefined;
   if (event.type === 'assistant') return blocks.flatMap(block => {
-    if (block.type === 'text' && block.text?.trim()) return [{ kind: 'message', body: block.text }];
-    if (block.type === 'thinking' && block.thinking?.trim()) return [{ kind: 'thinking', body: block.thinking }];
+    if (block.type === 'text' && block.text?.trim()) return [{ kind: 'message', body: block.text, at }];
+    if (block.type === 'thinking' && block.thinking?.trim()) return [{ kind: 'thinking', body: block.thinking, at }];
     if (block.type !== 'tool_use') return [];
     const kind = /^(Bash|PowerShell)$/.test(block.name) ? 'command' : EDIT_TOOL_NAMES.test(block.name) ? 'edit'
       : /^Web(Search|Fetch)$/.test(block.name) ? 'search' : 'tool';
-    return [{ id: `tool-${block.id}`, kind, title: kind === 'command' ? tool_subject(block) : `${block.name} ${tool_subject(block)}`, state: 'running' }];
+    return [{ id: `tool-${block.id}`, kind, title: kind === 'command' ? tool_subject(block) : `${block.name} ${tool_subject(block)}`, state: 'running', at }];
   });
   if (event.type === 'user') return blocks.filter(block => block.type === 'tool_result')
-    .map(block => ({ id: `tool-${block.tool_use_id}`, body: result_text(block.content), state: block.is_error ? 'failed' : 'done' }));
+    .map(block => ({ id: `tool-${block.tool_use_id}`, body: result_text(block.content), state: block.is_error ? 'failed' : 'done', ended_at: at }));
   if (event.type === 'result' && event.is_error) return [{ kind: 'error', body: String(event.result || event.subtype || '本轮失败') }];
   return [];
 }

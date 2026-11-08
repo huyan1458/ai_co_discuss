@@ -23,6 +23,8 @@ const ERROR_RETRY_S = 30;
 const SHOWN_EXECUTIONS = 30;
 // Output lines a step shows before folding to `… +N 行`, as the CLIs do.
 const OUTPUT_LINES = 3;
+// A step that took this long (s) shows its duration without hovering.
+const SLOW_STEP_S = 10;
 const ACTIVE = ["dispatched", "started"];
 // How each kind of step is named on its `●` line.
 const STEP_NAMES = { command: "Bash", search: "Search", edit: "Update" };
@@ -190,6 +192,26 @@ function prompt_of(item) {
 function reply_of(item) {
   return item.chat ? item.chat.reply : room_text(item.execution.answer_id);
 }
+/** A timestamp as a Date: the chat and executions give seconds, room messages an ISO string. */
+function to_date(value) {
+  if (!value) return null;
+  return new Date(typeof value === "number" ? value * 1000 : value);
+}
+/** `14:32` today, `11-05 14:32` on another day. */
+function short_time(date) {
+  const pad = (part) => String(part).padStart(2, "0");
+  const clock = `${pad(date.getHours())}:${pad(date.getMinutes())}`;
+  return date.toDateString() === new Date().toDateString() ? clock : `${pad(date.getMonth() + 1)}-${pad(date.getDate())} ${clock}`;
+}
+/** The turn's header: when it was sent, where it came from, and when the reply came. */
+function turn_meta(item) {
+  const sent = to_date(item.at);
+  const replied = item.chat ? (item.chat.reply ? to_date(item.chat.updated_at) : null)
+    : to_date(view.value.messages?.find((message) => message.id === item.execution.answer_id)?.created_at);
+  return { source: item.chat ? "私聊" : `房间任务 #${item.execution.id}`,
+    sent: sent ? short_time(sent) : "", sent_title: sent ? sent.toLocaleString("zh-CN") : "",
+    replied: replied ? short_time(replied) : "", replied_title: replied ? replied.toLocaleString("zh-CN") : "" };
+}
 /** A turn's steps, without a remark that repeats its final reply. */
 function steps_of(item) {
   const reply = reply_of(item)?.trim();
@@ -200,6 +222,19 @@ function step_line(entry) {
   if (STEP_NAMES[entry.kind]) return { tool: STEP_NAMES[entry.kind], subject: entry.title || "" };
   const [tool, ...rest] = String(entry.title || "tool").split(" ");
   return { tool, subject: rest.join(" ") };
+}
+/**
+ * A step's time, when its software logs one: the clock time it started, shown only on hover, and how long it took,
+ * shown all the time once it took SLOW_STEP_S or more (the step worth noticing) and otherwise only on hover.
+ */
+function step_time(entry) {
+  const started = entry.at ? new Date(entry.at) : null;
+  if (!started || Number.isNaN(started.getTime())) return null;
+  const pad = (part) => String(part).padStart(2, "0");
+  const seconds = entry.ended_at ? Math.max(0, (new Date(entry.ended_at) - started) / 1000) : null;
+  const took = seconds == null ? "" : seconds < 60 ? `${seconds < 10 ? seconds.toFixed(1) : Math.round(seconds)}s` : elapsed(seconds);
+  return { clock: `${pad(started.getHours())}:${pad(started.getMinutes())}:${pad(started.getSeconds())}`, title: started.toLocaleString("zh-CN"),
+    took, slow: seconds != null && seconds >= SLOW_STEP_S };
 }
 /** A diff line's tint: added or removed, as the CLI colours an edit. */
 function diff_tone(entry, line) {
@@ -428,13 +463,17 @@ function recall(event, step) {
       </div>
       <p v-else class="term-dim">房间里还没有 AI 成员</p>
       <section v-for="item in items" :key="item.key" class="term-turn" :class="{ 'is-target': target === item.key }" :data-key="item.key"
-        v-memo="[prompt_of(item), reply_of(item), running(item), item.chat && chat_note(item.chat), details.get(item.key), errors.get(item.key), open_output, target === item.key]">
+        v-memo="[item.at, prompt_of(item), reply_of(item), running(item), item.chat && chat_note(item.chat), details.get(item.key), errors.get(item.key), open_output, target === item.key]">
+        <div v-for="meta in [turn_meta(item)]" :key="'meta'" class="term-meta">
+          <time :title="meta.sent_title">{{ meta.sent }}</time><span>{{ meta.source }}</span>
+          <span v-if="meta.replied" class="term-meta-end">回复于 <time :title="meta.replied_title">{{ meta.replied }}</time></span>
+        </div>
         <div v-if="prompt_of(item)" class="term-prompt"><span class="term-body">{{ prompt_of(item) }}</span></div>
         <div v-if="errors.get(item.key) && !details.has(item.key)" class="term-sub term-warn"><span class="term-corner">⎿</span><span class="term-body">未能读取过程：{{ errors.get(item.key).message }}</span></div>
         <div v-else-if="!details.has(item.key) && running(item)" class="term-sub"><span class="term-corner">⎿</span><span class="term-body">正在读取…</span></div>
         <template v-for="(entry, index) in steps_of(item)" :key="entry.id ?? index">
-          <div v-if="entry.kind === 'message'" class="term-line"><span class="term-bullet">●</span><span class="term-body">{{ entry.body }}</span></div>
-          <div v-else-if="entry.kind === 'interjection'" class="term-prompt"><span class="term-body">{{ entry.body }}</span></div>
+          <div v-if="entry.kind === 'message'" class="term-line term-msg"><span class="term-bullet">●</span><span class="term-body">{{ entry.body }}</span></div>
+          <div v-else-if="entry.kind === 'interjection'" class="term-prompt term-msg"><span class="term-body">{{ entry.body }}</span></div>
           <div v-else-if="entry.kind === 'thinking'" class="term-line term-thinking"><span class="term-bullet">✻</span><span class="term-body">{{ entry.body }}</span></div>
           <div v-else-if="entry.kind === 'plan'" class="term-block">
             <div class="term-line"><span class="term-bullet">●</span><span class="term-body"><b class="term-tool">Update Todos</b></span></div>
@@ -442,13 +481,13 @@ function recall(event, step) {
           </div>
           <div v-else-if="entry.kind === 'error'" class="term-line term-error"><span class="term-bullet">●</span><span class="term-body">{{ entry.body || entry.title }}</span></div>
           <div v-else class="term-block">
-            <div class="term-line"><span class="term-bullet" :class="`is-${entry.state || 'done'}`">●</span><span v-for="step in [step_line(entry)]" :key="'step'" class="term-body"><b class="term-tool">{{ step.tool }}</b><span v-if="step.subject" class="term-subject">({{ step.subject }})</span></span></div>
+            <div class="term-line term-step"><span class="term-bullet" :class="`is-${entry.state || 'done'}`">●</span><span v-for="step in [step_line(entry)]" :key="'step'" class="term-body"><b class="term-tool">{{ step.tool }}</b><span v-if="step.subject" class="term-subject">({{ step.subject }})</span></span><span v-for="time in [step_time(entry)]" :key="'time'" class="term-when"><template v-if="time"><time class="term-clock" :title="time.title">{{ time.clock }}</time><span v-if="time.took" class="term-took" :class="{ 'is-slow': time.slow }">{{ time.took }}</span></template></span></div>
             <div v-if="entry.body" v-for="output in [output_of(item, entry)]" :key="'out'" class="term-sub" :class="{ 'term-error': entry.state === 'failed' }">
               <span class="term-corner">⎿</span><span class="term-body"><span v-for="(line, at) in output.lines" :key="at" class="term-out" :class="line.tone">{{ line.text || " " }}</span><button v-if="output.hidden" type="button" class="term-more" @click="open_step(item, entry)">… +{{ output.hidden }} 行（点击展开）</button></span>
             </div>
           </div>
         </template>
-        <div v-if="reply_of(item)" class="term-line"><span class="term-bullet">●</span><span class="term-body">{{ reply_of(item) }}</span></div>
+        <div v-if="reply_of(item)" class="term-line term-msg"><span class="term-bullet">●</span><span class="term-body">{{ reply_of(item) }}</span></div>
         <div v-if="item.chat && chat_note(item.chat)" class="term-sub" :class="{ 'term-error': item.chat.status === 'failed' }"><span class="term-corner">⎿</span><span class="term-body">{{ chat_note(item.chat) }}</span></div>
       </section>
       </div>
@@ -516,7 +555,17 @@ function recall(event, step) {
 .term-welcome b, .term-tool { font-weight: 700; color: var(--term-strong); }
 .term-accent { color: var(--term-accent); }
 /* A blank line between blocks and between turns, as the CLI leaves one. */
-.term-turn { display: flex; flex-direction: column; gap: 14px; margin-bottom: 22px; }
+.term-turn { display: flex; flex-direction: column; gap: 10px; margin-bottom: 24px; }
+/* Separators come in three strengths: between tasks a solid rule and a header line (when sent, where from, when the
+   reply came); inside a task a dashed rule before each of the member's remarks and its reply; between tool steps only
+   space. An interjection already stands out on its grey band, so it gets space rather than a rule. */
+.term-turn + .term-turn { padding-top: 20px; border-top: 1px solid var(--term-border); }
+.term-turn > .term-line.term-msg { margin-top: 4px; padding-top: 14px; border-top: 1px dashed color-mix(in srgb, var(--term-border) 70%, transparent); }
+.term-turn > .term-prompt.term-msg { margin-top: 8px; }
+.term-turn > :is(.term-meta, .term-prompt) + .term-msg { margin-top: 0; padding-top: 0; border-top: 0; }
+.term-meta { display: flex; align-items: baseline; gap: 1.5ch; margin-bottom: -6px; color: var(--term-faint); font-size: 11.5px; line-height: 18px; font-variant-numeric: tabular-nums; }
+.term-meta time { color: var(--term-dim); }
+.term-meta-end { margin-left: auto; }
 /* As on the message page, turns off the screen skip layout and paint: a long session is tens of thousands of pixels of
    text, and laying all of it out again made scrolling and every arriving step slow. */
 .term-turn { content-visibility: auto; contain-intrinsic-block-size: auto 240px; }
@@ -526,6 +575,14 @@ function recall(event, step) {
 .term-block { display: flex; flex-direction: column; gap: 2px; }
 .term-line, .term-sub { display: grid; grid-template-columns: 1ch minmax(0, 1fr); column-gap: 1ch; }
 .term-sub { padding-left: 2ch; }
+/* A step's time sits at the right of its `●` line, out of the way: a slow step's duration always shows faintly; its
+   clock time and a quick step's duration show while the pointer is over the step (a tap on touch screens). */
+.term-step { grid-template-columns: 1ch minmax(0, 1fr) auto; }
+.term-when { padding-left: 2ch; color: var(--term-faint); font-size: 11.5px; white-space: nowrap; font-variant-numeric: tabular-nums; }
+.term-when > * { display: none; }
+.term-when > .term-took.is-slow { display: inline; }
+.term-block:hover .term-when > * { display: inline; }
+.term-block:hover .term-clock + .term-took::before { content: " · "; }
 .term-body { min-width: 0; white-space: pre-wrap; overflow-wrap: anywhere; }
 .term-prompt .term-body { color: var(--term-text); }
 .term-sub .term-body, .term-dim { color: var(--term-dim); }
