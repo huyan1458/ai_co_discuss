@@ -410,12 +410,14 @@ function recall(event, step) {
 
 <template>
   <div class="term" role="tabpanel" aria-label="私聊">
+    <div class="term-tabs-bar">
     <nav class="term-tabs" aria-label="成员">
       <button v-for="item in members" :key="item.id" type="button" class="term-tab" :class="{ 'is-current': item.name === name }"
         :aria-current="item.name === name" @click="private_chat.member = item.name; private_chat.execution_id = null">
         <span class="term-dot" :class="{ 'is-busy': ACTIVE.includes(item.execution?.status) }" />{{ bridge.display_name(item.name) }}
       </button>
     </nav>
+    </div>
     <div class="term-stage">
     <div ref="screen" v-keep-reading class="term-screen" @scroll.passive="on_scroll" @wheel.passive="on_wheel"
       @touchstart.passive="set_touching(true)" @touchend="set_touching(false)" @touchcancel="set_touching(false)">
@@ -477,17 +479,23 @@ function recall(event, step) {
 /* Laid out and coloured as Claude Code prints it (its light and dark themes): one monospace stream, `>` prompts on a
    grey band, `●` lines with a blank line between blocks, `⎿` output in grey under a step, diff lines tinted, the orange
    spinner line above a rounded input box, and a grey key hint under it. */
+/* Base colours come from the site's own tokens so the page sits in the workspace like the other channels; only the
+   terminal accents (orange, green, red, diff tints) are the CLI's. The line height is whole pixels: a fractional one
+   (13.5px × 1.7) makes each new block round the bottom differently, and the text following the bottom shakes by 1px. */
 .term { position: relative; --term-font: ui-monospace, "Cascadia Mono", "SF Mono", Menlo, Consolas, "Microsoft YaHei UI", "PingFang SC", monospace;
-  --term-size: 13.5px; --term-line: 1.7;
-  --term-bg: #ffffff; --term-text: #1f1f1f; --term-strong: #000000; --term-dim: #6b6b6b; --term-faint: #a3a3a3;
-  --term-band: #f0f0f0; --term-border: #c8c8c8; --term-accent: #d77757; --term-green: #2c7a39; --term-red: #ab2b3f;
-  --term-blue: #5769f7; --term-added: #dcf5e0; --term-removed: #fbe3e6;
+  --term-size: 13.5px; --term-line: 23px; --term-width: var(--channel-reading-width, 960px); --term-gutter: 24px;
+  --term-bg: var(--ui-bg); --term-text: var(--ui-text); --term-strong: var(--ui-text-highlighted); --term-dim: var(--ui-text-muted);
+  --term-faint: var(--ui-text-dimmed); --term-band: color-mix(in srgb, var(--ui-text) 6%, var(--ui-bg)); --term-border: var(--ui-border);
+  --term-field: color-mix(in srgb, var(--ui-text) 4%, var(--ui-bg));
+  --term-accent: #d77757; --term-green: #2c7a39; --term-red: #ab2b3f; --term-blue: #5769f7; --term-added: #dcf5e0; --term-removed: #fbe3e6;
   display: flex; flex-direction: column; flex: 1 0 0; width: 100%; min-height: 360px; color: var(--term-text);
   font-family: var(--term-font); font-size: var(--term-size); line-height: var(--term-line); background: var(--term-bg); overflow: hidden; }
-.dark .term { --term-bg: #1a1a1a; --term-text: #e6e6e6; --term-strong: #ffffff; --term-dim: #999999; --term-faint: #6b6b6b;
-  --term-band: #2e2e2e; --term-border: #4a4a4a; --term-green: #4eba65; --term-red: #ff6b80; --term-blue: #b1b9f9;
-  --term-added: #1f3d25; --term-removed: #45222a; }
-.term-tabs { display: flex; gap: 4px; padding: 6px 12px 0; border-bottom: 1px solid var(--term-band); overflow-x: auto; scrollbar-width: none; scroll-snap-type: x proximity; }
+.dark .term { --term-green: #4eba65; --term-red: #ff6b80; --term-blue: #b1b9f9; --term-added: #1f3d25; --term-removed: #45222a; }
+/* Tabs, stream, status and input share one centred column as wide as the message page's; the stream scrolls across
+   the whole page so its scrollbar sits at the page edge, not beside the column. */
+.term-tabs, .term-content, .term-status, .term-input, .term-hint { width: 100%; max-width: var(--term-width); margin-inline: auto; }
+.term-tabs-bar { border-bottom: 1px solid var(--term-border); }
+.term-tabs { display: flex; gap: 4px; padding: 10px var(--term-gutter) 0; overflow-x: auto; scrollbar-width: none; scroll-snap-type: x proximity; }
 .term-tab { display: flex; align-items: center; gap: 7px; padding: 5px 12px 7px; border: 0; border-bottom: 2px solid transparent; scroll-snap-align: start;
   background: none; color: var(--term-dim); font: inherit; font-size: 12.5px; line-height: 1.4; cursor: pointer; white-space: nowrap; }
 .term-tab:hover { color: var(--term-text); }
@@ -498,8 +506,8 @@ function recall(event, step) {
 /* The browser's own scroll anchoring is off: the script keeps the reading position, in every browser alike. */
 /* The screen and the button back to the bottom, which sits on the screen's lower edge whatever the input's height. */
 .term-stage { position: relative; display: flex; flex: 1; min-height: 0; }
-.term-screen { flex: 1; min-width: 0; overflow-y: auto; padding: 16px 20px 12px; overscroll-behavior: contain; overflow-anchor: none; }
-.term-content > * { max-width: 980px; }
+.term-screen { flex: 1; min-width: 0; overflow-y: auto; padding: 20px 0 12px; overscroll-behavior: contain; overflow-anchor: none; }
+.term-content { padding-inline: var(--term-gutter); }
 /* A turn opened from a message card is marked for a moment. */
 .term-turn.is-target { animation: term-flash 2s ease-out; border-radius: 4px; }
 @keyframes term-flash { from { background: color-mix(in srgb, var(--term-accent) 16%, transparent); } }
@@ -509,6 +517,9 @@ function recall(event, step) {
 .term-accent { color: var(--term-accent); }
 /* A blank line between blocks and between turns, as the CLI leaves one. */
 .term-turn { display: flex; flex-direction: column; gap: 14px; margin-bottom: 22px; }
+/* As on the message page, turns off the screen skip layout and paint: a long session is tens of thousands of pixels of
+   text, and laying all of it out again made scrolling and every arriving step slow. */
+.term-turn { content-visibility: auto; contain-intrinsic-block-size: auto 240px; }
 .term-prompt { display: grid; grid-template-columns: 1ch minmax(0, 1fr); column-gap: 1ch; padding: 3px 10px; border-radius: 4px;
   background: var(--term-band); color: var(--term-text); }
 .term-prompt::before { content: ">"; color: var(--term-dim); }
@@ -532,12 +543,13 @@ function recall(event, step) {
 .term-out.is-removed { background: var(--term-removed); }
 .term-more { all: unset; display: block; cursor: pointer; color: var(--term-faint); }
 .term-more:hover { color: var(--term-dim); text-decoration: underline; }
-.term-status { display: flex; align-items: center; gap: 1ch; min-height: 1.7em; padding: 0 20px 6px; color: var(--term-dim); }
+.term-status { display: flex; align-items: center; gap: 1ch; min-height: 30px; padding: 4px calc(var(--term-gutter) + 2px) 4px; color: var(--term-dim); font-size: 12.5px; }
 .term-status.is-running { color: var(--term-accent); }
 .term-spin { display: inline-block; width: 1ch; text-align: center; }
-.term-input { display: flex; align-items: flex-start; gap: 1ch; margin: 0 14px; padding: 7px 8px 7px 12px;
-  border: 1px solid var(--term-border); border-radius: 8px; transition: border-color .15s; }
-.term-input:focus-within { border-color: var(--term-dim); }
+/* The input box looks like the message composer: a filled, rounded field on the page colour. */
+.term-input { display: flex; align-items: flex-start; gap: 1ch; width: calc(100% - 2 * var(--term-gutter)); max-width: calc(var(--term-width) - 2 * var(--term-gutter));
+  padding: 9px 10px 9px 14px; border: 1px solid var(--term-border); border-radius: 12px; background: var(--term-field); transition: border-color .15s; }
+.term-input:focus-within { border-color: var(--ui-border-accented, var(--term-dim)); }
 .term-caret { line-height: 23px; color: var(--term-dim); }
 .term-input textarea { flex: 1; min-width: 0; height: 23px; min-height: 23px; max-height: 220px; padding: 0; field-sizing: content; resize: none;
   border: 0; outline: 0; background: none; color: var(--term-text); font: inherit; line-height: 23px; }
@@ -549,8 +561,8 @@ function recall(event, step) {
 .term-button:disabled { opacity: .2; cursor: default; }
 .term-button.is-stop { background: var(--term-band); color: var(--term-red); }
 .term-stop-square { width: 9px; height: 9px; border-radius: 2px; background: currentColor; }
-.term-hint { min-height: 1.7em; padding: 4px 22px calc(8px + env(safe-area-inset-bottom)); color: var(--term-faint); font-size: 11.5px; }
-.term-unread { position: absolute; right: 20px; bottom: 10px; padding: 3px 12px; border: 1px solid var(--term-border); border-radius: 999px;
+.term-hint { min-height: 26px; padding: 4px calc(var(--term-gutter) + 2px) calc(10px + env(safe-area-inset-bottom)); color: var(--term-faint); font-size: 11.5px; line-height: 18px; }
+.term-unread { position: absolute; right: max(20px, calc((100% - var(--term-width)) / 2 + 20px)); bottom: 10px; padding: 3px 12px; border: 1px solid var(--term-border); border-radius: 999px;
   background: var(--term-bg); color: var(--term-text); font: inherit; font-size: 12px; cursor: pointer; }
 .term button { touch-action: manipulation; }
 /* Touch: send and stop buttons with room to tap, and a 16px input so iOS does not zoom (its placeholder stays small). */
@@ -562,10 +574,7 @@ function recall(event, step) {
   .term-more { padding: 4px 0; }
 }
 @media (max-width: 640px) {
-  .term { --term-size: 13px; }
-  .term-screen { padding: 12px 12px 8px; }
-  .term-input { margin: 0 8px; }
-  .term-status { padding: 0 12px 4px; }
-  .term-hint { padding-left: 14px; }
+  .term { --term-size: 13px; --term-line: 22px; --term-gutter: 12px; }
+  .term-screen { padding: 12px 0 8px; }
 }
 </style>

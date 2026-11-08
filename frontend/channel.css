@@ -800,6 +800,9 @@ html[data-theme^="channel"] .theme-choices small { color: #a1aab9; }
 /* The same control finishes continue through the host, summary and access views. */
 html[data-theme^="channel"] .content-page { padding: 34px clamp(24px, 4vw, 64px); }
 html[data-theme^="channel"] .content-page > * { max-width: 900px; }
+/* The private chat spans the page edge to edge and centres its own column, so its scrollbar sits at the page edge. */
+html[data-theme^="channel"] .content-page.private-page { padding: 0; }
+html[data-theme^="channel"] .content-page.private-page > * { max-width: none; }
 html[data-theme^="channel"] .page-heading { margin-bottom: 27px; }
 html[data-theme^="channel"] .page-heading h2 { font-size: 20px; font-weight: 600; margin: 0 0 7px; color: #e8edf6; }
 html[data-theme^="channel"] .page-heading .eyebrow { display: none; }
