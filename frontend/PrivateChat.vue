@@ -567,8 +567,12 @@ function recall(event, step) {
 .term-meta time { color: var(--term-dim); }
 .term-meta-end { margin-left: auto; }
 /* As on the message page, turns off the screen skip layout and paint: a long session is tens of thousands of pixels of
-   text, and laying all of it out again made scrolling and every arriving step slow. */
-.term-turn { content-visibility: auto; contain-intrinsic-block-size: auto 240px; }
+   text, and laying all of it out again made scrolling and every arriving step slow. WebKit is left out (font:
+   -apple-system-body matches only it), as on the message page: a turn that turns real above the screen while the
+   reader swipes up makes on_resize write scrollTop, and iOS Safari then drops the swipe and its momentum. */
+@supports not (font: -apple-system-body) {
+  .term-turn { content-visibility: auto; contain-intrinsic-block-size: auto 240px; }
+}
 .term-prompt { display: grid; grid-template-columns: 1ch minmax(0, 1fr); column-gap: 1ch; padding: 3px 10px; border-radius: 4px;
   background: var(--term-band); color: var(--term-text); }
 .term-prompt::before { content: ">"; color: var(--term-dim); }
