@@ -84,7 +84,7 @@ async function on_deleted(id) {
     <div class="workflow-picker-chips" role="group" aria-label="工作流">
       <button v-for="item in workflows" :key="item.id" type="button" :disabled="disabled || Boolean(item.error)" :class="{ 'is-broken': item.error }"
         :aria-expanded="selected === item.id" :title="item.error || `${item.label}（${item.cards} 张卡片）`" @click="selected = selected === item.id ? '' : item.id">
-        <UIcon :name="item.error ? 'i-lucide-triangle-alert' : 'i-lucide-workflow'" />{{ item.label }}
+        <UIcon :name="item.error ? 'i-lucide-triangle-alert' : 'i-lucide-network'" />{{ item.label }}
         <UIcon :name="selected === item.id ? 'i-lucide-chevron-up' : 'i-lucide-chevron-down'" />
       </button>
       <UDropdownMenu :items="add_items" :disabled="disabled" :ui="{ content: 'channel-menu' }">

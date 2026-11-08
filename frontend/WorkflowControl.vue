@@ -39,7 +39,7 @@ const items = computed(() => [
 <template>
   <div class="workflow-control" :class="workflow.available ? 'is-success' : 'is-warning'">
     <div class="workflow-control-row">
-      <UIcon name="i-lucide-workflow" class="workflow-control-icon" />
+      <UIcon name="i-lucide-network" class="workflow-control-icon" />
       <span class="workflow-control-name" :title="workflow.label">{{ workflow.label }}</span>
       <span class="workflow-control-state"><span class="workflow-control-dot"></span>{{ workflow.available ? '进行中' : '不可用' }}</span>
       <button v-if="can_manage && out_of_sync" type="button" class="workflow-control-action" :disabled="Boolean(pending)" title="刷新：按工作流库里的最新版本补齐成员：新增的卡片加入、离开的请回，已删卡片的成员转为普通成员" aria-label="刷新工作流" @click="act('sync_room_workflow')"><UIcon name="i-lucide-refresh-cw" class="workflow-control-action-icon" /></button>
