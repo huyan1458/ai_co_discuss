@@ -126,6 +126,10 @@ UNLIMITED_ROUNDS = 0
 # What the program notices for the host (a failure, a possible conflict, its own "continue when idle") hangs on a visible
 # message from this author. Only the host's own continue costs a round of its chain; an event is free, once per event.
 NOTICE_AUTHOR = "系统"
+# A member's execution with no new output for this long is reported to the host once per quiet spell; nothing is stopped.
+STALL_SECONDS = 600
+# Bounds of the host's timed check-in interval, in minutes.
+CHECKIN_MINUTES = (5, 120)
 MAX_CONTINUE_REASON = 300
 # A host that left gives up the role; the first active runner member (else manual) then takes it.
 RELEASE_HOST = "UPDATE room_members SET role='member' WHERE room_id=? AND role='host' AND status<>'active'"
@@ -676,7 +680,7 @@ def execution_timeline(connection, room_id, after=0):
 
 
 def room_event_log(connection, room_id, token, after=0, before=0):
-    """Read the owner's append-only room event log written by the schema triggers.
+    """Read the room's append-only event log written by the schema triggers; the owner or the present host.
 
     Args:
         after: return events with a larger id (live follow), oldest first.
@@ -688,7 +692,7 @@ def room_event_log(connection, room_id, token, after=0, before=0):
         A write request (`api.*`) is stored after it finishes, so its id follows the changes it caused; its `at` is
         when it arrived, and ordering by `at` puts the input before its effects.
     """
-    require_owner(connection, room_id, token)
+    host = require_owner_or_host(connection, room_id, token)
     after, before = max(0, int(after)), max(0, int(before))
     if after:
         rows = connection.execute("SELECT id,at,kind,data FROM room_events WHERE room_id=? AND id>? ORDER BY id LIMIT ?",
@@ -701,8 +705,26 @@ def room_event_log(connection, room_id, token, after=0, before=0):
         "SELECT 1 FROM room_events WHERE room_id=? AND id<? LIMIT 1", (room_id, first_id)).fetchone() is not None
     members = {str(row["id"]): row["name"] for row in connection.execute("SELECT id,name FROM room_members WHERE room_id=?", (room_id,))}
     events = sorted(({**dict(row), "data": json.loads(row["data"])} for row in rows), key=lambda event: (event["at"], event["id"]))
+    if host:
+        events = [host_event(event) for event in events if not host_hidden_event(event)]
     return {"events": events, "members": members, "more": more, "first_id": first_id,
             "last_id": max((row["id"] for row in rows), default=after)}
+
+
+def host_hidden_event(event):
+    """Private chats stay the owner's: the host's read of the event log leaves out their writes."""
+    path = str(event["data"].get("path", "")) if event["kind"] == "api.write" else ""
+    return "/chat" in path
+
+
+def host_event(event):
+    """The host's copy of an event without message text, so withdrawn messages stay unreadable; it reads text through message commands."""
+    data = dict(event["data"])
+    if event["kind"] == "message.posted":
+        data.pop("text", None)
+    if event["kind"] == "api.write" and "/messages" in str(data.get("path", "")):
+        data.pop("payload", None)
+    return {**event, "data": data}
 
 
 def recent_executions(connection, room_id):
@@ -835,7 +857,9 @@ def free_view(connection, room_id):
     asks = {row["chain_id"]: {"asked_rounds": row["asked_rounds"], "asked_reason": row["asked_reason"]} for row in connection.execute(
         "SELECT chain_id,asked_rounds,asked_reason FROM free_chain_holds WHERE room_id=? AND asked_rounds>0", (room_id,))}
     chains = [{**chain, **asks.get(chain["chain_id"], {})} for chain in chains]
-    return {"members": members, "requests": requests[::-1], "executions": recent_executions(connection, room_id),
+    checkin = connection.execute("SELECT interval_seconds,due_at FROM free_host_checkins WHERE room_id=?", (room_id,)).fetchone()
+    return {"host_checkin": {"minutes": checkin["interval_seconds"] // 60, "due_at": checkin["due_at"]} if checkin else None,
+            "members": members, "requests": requests[::-1], "executions": recent_executions(connection, room_id),
             "conflicts": possible_conflicts(connection, room_id, names), "halted_chains": chains, "max_rounds": max_rounds,
             "chain_rounds": progress, "recommendations": recent_recommendations(connection, room_id, now)[::-1],
             "queued_messages": queue_view(connection, room_id)}
@@ -882,6 +906,18 @@ def register_member(connection, room_id, token, now):
         queue_invited_expert(connection, room_id, member["name"], now)
     reported = connection.execute("SELECT client FROM member_sessions WHERE member_id=?", (member["id"],)).fetchone()
     return {"member": member["name"], "registered_at": stamp, "session_client": reported[0] if reported else ""}
+
+
+def require_owner_or_host(connection, room_id, token):
+    """Allow the owner, or the room's present host reading to diagnose and steer the room; returns the host row or None."""
+    try:
+        require_owner(connection, room_id, token)
+        return None
+    except PermissionError:
+        member = require_member(connection, room_id, token)
+        if member["role"] != "host":
+            raise PermissionError("只有房主或当前主持人可以读取") from None
+        return member
 
 
 def authorize_free_write(connection, room_id, token, operation, payload):
@@ -1776,6 +1812,26 @@ def expire_executions(connection, room_id):
         settle_batches(connection, room_id)
 
 
+def notice_stalled_executions(connection, room_id):
+    """Tell the host about members whose software has shown no new output for STALL_SECONDS.
+
+    Executions have no time limit and the runner keeps renewing a hung one, so nothing else would notice. The host
+    decides whether to wait, steer, interrupt or replace; its own executions are left out, since it cannot read a notice
+    while it runs. A later quiet spell after new output is reported again.
+    """
+    now = int(time.time())
+    rows = connection.execute("""SELECT e.id,e.activity_at,e.created_at,m.name,
+        (SELECT MAX(chain_id) FROM member_requests WHERE execution_id=e.id) AS chain_id
+        FROM member_executions e JOIN room_members m ON m.id=e.member_id
+        WHERE e.room_id=? AND e.status IN ('dispatched','started') AND m.role<>'host' AND MAX(e.activity_at,e.created_at)<=?""",
+                              (room_id, now - STALL_SECONDS)).fetchall()
+    for row in rows:
+        quiet = max(row["activity_at"], row["created_at"])
+        text = (f"{row['name']} 的执行 #{row['id']} 已 {(now - quiet) // 60} 分钟没有新输出，可能卡住。"
+                f"先读这次执行的详情判断，再决定等待、插话、打断、重试或换人。")
+        wake_host(connection, room_id, row["chain_id"], text, f"stall:{row['id']}:{quiet}")
+
+
 def record_cancel_reasons(connection, where, params, reason):
     """Remember why requests are about to be cancelled; call before the status change selects them."""
     connection.execute(f"INSERT OR REPLACE INTO request_cancel_reasons (request_id,reason) SELECT id,? FROM member_requests WHERE {where}", (reason, *params))
@@ -1853,10 +1909,83 @@ def stop_room_work(connection, room_id, reason, cancel_reason):
         finish_execution(connection, row["id"], "cancelled", reason, "cancelled", cancel_reason)
     record_cancel_reasons(connection, "room_id=? AND status='pending'", (room_id,), cancel_reason)
     connection.execute("UPDATE member_requests SET status='cancelled' WHERE room_id=? AND status='pending'", (room_id,))
-    # Stopping everything also stops a goal, or the host's own "continue", from waking the host again.
+    # Stopping everything also stops a goal, the host's own "continue" or its timed check-in from waking the host again.
     connection.execute("DELETE FROM free_host_continues WHERE room_id=?", (room_id,))
+    connection.execute("DELETE FROM free_host_checkins WHERE room_id=?", (room_id,))
     connection.execute("UPDATE room_goals SET status='paused',paused_at=? WHERE room_id=? AND status='active'", (int(time.time()), room_id))
     settle_batches(connection, room_id)
+
+
+def withdraw_dispatch(connection, room_id, token, message_id):
+    """Take back one of the present host's dispatches: its relay or loop stops, waiting steps are cancelled, running ones
+    stopped, and nothing hands back. The runner calls this with the owner credential for a host granted full control.
+    """
+    require_owner(connection, room_id, token)
+    begin_write(connection)
+    message = connection.execute("SELECT author FROM messages WHERE room_id=? AND id=?", (room_id, message_id)).fetchone()
+    if not message:
+        raise LookupError("消息不存在")
+    host = connection.execute("SELECT name FROM room_members WHERE room_id=? AND role='host' AND status='active'", (room_id,)).fetchone()
+    if not host or message["author"] != host["name"]:
+        raise ValueError("只能撤回当前主持人自己的派活消息；用户的消息由用户撤回")
+    sequences = "room_id=? AND message_id=? AND status IN ('running','checkpoint')"
+    batches = [message_id] + [row[0] for row in connection.execute(f"SELECT batch_id FROM free_sequences WHERE {sequences}", (room_id, message_id))]
+    connection.execute(f"UPDATE free_sequences SET status='stopped' WHERE {sequences}", (room_id, message_id))
+    marks = ",".join("?" * len(batches))
+    live = connection.execute(f"""SELECT DISTINCT e.member_id FROM member_requests r JOIN member_executions e ON e.id=r.execution_id
+        WHERE r.room_id=? AND r.batch_id IN ({marks}) AND e.status IN ('dispatched','started')""", (room_id, *batches)).fetchall()
+    for row in live:
+        stop_member_work(connection, row[0], "主持人撤回派活", "user_stop", keep_pending=True)
+    waiting = f"room_id=? AND batch_id IN ({marks}) AND status='pending'"
+    record_cancel_reasons(connection, waiting, (room_id, *batches), "user_stop")
+    connection.execute(f"UPDATE member_requests SET status='cancelled' WHERE {waiting}", (room_id, *batches))
+    connection.execute(f"UPDATE free_batches SET settled=1 WHERE room_id=? AND batch_id IN ({marks})", (room_id, *batches))
+    return free_view(connection, room_id)
+
+
+def set_host_checkin(connection, room_id, token, payload):
+    """The host (through the runner, owner credential) asks to be checked in on every `minutes` while work is in flight,
+    or turns it off. Bound to the chain of the host's running execution, so it must be set while the host works.
+    """
+    require_owner(connection, room_id, token)
+    begin_write(connection)
+    if payload.get("off") is True:
+        connection.execute("DELETE FROM free_host_checkins WHERE room_id=?", (room_id,))
+        return {"checkin": None}
+    minutes = payload.get("minutes")
+    low, high = CHECKIN_MINUTES
+    if type(minutes) is not int or not low <= minutes <= high:
+        raise ValueError(f"minutes 须为 {low}–{high} 的整数")
+    row = connection.execute("""SELECT m.id AS host_id,(SELECT MAX(r.chain_id) FROM member_requests r JOIN member_executions e ON e.id=r.execution_id
+        WHERE e.member_id=m.id AND e.status IN ('dispatched','started')) AS chain_id
+        FROM room_members m WHERE m.room_id=? AND m.role='host' AND m.status='active'""", (room_id,)).fetchone()
+    if not row or not row["chain_id"]:
+        raise FileExistsError("主持人没有进行中的执行；请在处理任务时设置定时检查")
+    due_at = int(time.time()) + minutes * 60
+    connection.execute("""INSERT INTO free_host_checkins (room_id,host_id,chain_id,interval_seconds,due_at) VALUES (?,?,?,?,?)
+        ON CONFLICT(room_id) DO UPDATE SET host_id=excluded.host_id,chain_id=excluded.chain_id,
+        interval_seconds=excluded.interval_seconds,due_at=excluded.due_at""", (room_id, row["host_id"], row["chain_id"], minutes * 60, due_at))
+    return {"checkin": {"minutes": minutes, "due_at": due_at}}
+
+
+def fire_host_checkin(connection, room_id):
+    """Hand the host its timed check-in when due and work is still in flight; an idle room or a changed host ends it."""
+    row = connection.execute("SELECT * FROM free_host_checkins WHERE room_id=?", (room_id,)).fetchone()
+    now = int(time.time())
+    if not row or row["due_at"] > now:
+        return
+    host = connection.execute("SELECT id FROM room_members WHERE room_id=? AND role='host' AND status='active'", (room_id,)).fetchone()
+    busy = connection.execute("""SELECT 1 FROM member_requests WHERE room_id=? AND status IN ('pending','delivering') AND member_id<>?
+        UNION SELECT 1 FROM free_sequences WHERE room_id=? AND status='running'""", (room_id, row["host_id"], room_id)).fetchone()
+    if not host or host["id"] != row["host_id"] or not busy:
+        connection.execute("DELETE FROM free_host_checkins WHERE room_id=?", (room_id,))
+        return
+    connection.execute("UPDATE free_host_checkins SET due_at=? WHERE room_id=?", (now + row["interval_seconds"], room_id))
+    host_working = connection.execute("SELECT 1 FROM member_executions WHERE member_id=? AND status IN ('dispatched','started')",
+                                      (row["host_id"],)).fetchone()
+    if not host_working:
+        wake_host(connection, room_id, row["chain_id"], "定时检查：房间里还有进行中的工作。读一下 room view 与各成员的执行进展，"
+                  "确认没有卡住、跑偏或失败未处理；一切正常就简短说明并结束本次执行。", f"checkin:{row['due_at']}")
 
 
 def inbox(connection, room_id, token):
@@ -1865,6 +1994,8 @@ def inbox(connection, room_id, token):
     begin_write(connection)
     enforce_session_limits(connection, room_id)
     expire_executions(connection, room_id)
+    notice_stalled_executions(connection, room_id)
+    fire_host_checkin(connection, room_id)
     release_recommendations(connection, room_id)
     archived = connection.execute("SELECT archived FROM room_directory WHERE room_id=?", (room_id,)).fetchone()[0]
     members, observers = [], []
@@ -2159,7 +2290,7 @@ def execution_detail(connection, row):
 
 
 def view_execution(connection, room_id, execution_id, token):
-    """Let the owner or the executing member read one execution."""
+    """Let the owner, the present host (to diagnose a member's failure) or the executing member read one execution."""
     row = connection.execute("SELECT * FROM member_executions WHERE room_id=? AND id=?", (room_id, execution_id)).fetchone()
     if not row:
         raise LookupError("执行不存在")
@@ -2167,7 +2298,7 @@ def view_execution(connection, room_id, execution_id, token):
         require_owner(connection, room_id, token)
     except PermissionError:
         member = require_member(connection, room_id, token)
-        if member["id"] != row["member_id"]:
+        if member["id"] != row["member_id"] and member["role"] != "host":
             raise
     return execution_detail(connection, row)
 

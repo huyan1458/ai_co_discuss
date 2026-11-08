@@ -303,7 +303,7 @@ const created = computed(() => room.value.created_at ? new Date(room.value.creat
             <UIcon v-if="reorderable && order.movable.includes(member.name)" name="i-lucide-grip-vertical" class="member-card-grip" title="拖动调整成员顺序，右栏发言顺序与 @全体依次 同步" @pointerdown="grabbed = member.name" @pointerup="grabbed = ''" />
             <UAvatar :src="bridge.identities[member.name]?.icon" :text="bridge.identities[member.name]?.initials" :alt="member.name" size="md" class="channel-avatar" :class="bridge.identities[member.name]?.style" />
             <div class="member-card-name"><strong>{{ bridge.display_name(member.name) }}<span v-if="bridge.display_name(member.name) !== member.name" class="member-id">{{ member.name }}</span><UIcon v-if="member.role === 'host'" name="i-lucide-crown" title="主持人" /></strong><small v-if="room.descriptions?.[member.name]" :title="room.descriptions[member.name]">{{ room.descriptions[member.name] }}</small></div>
-            <UButton v-if="actions(member).host" :icon="actions(member).host.icon" :label="actions(member).host.label" size="xs" variant="ghost" color="neutral" :disabled="actions(member).host.disabled" @click="actions(member).host.onSelect()" />
+            <UButton v-if="actions(member).host" class="member-card-host" :title="actions(member).host.label" :icon="actions(member).host.icon" :label="actions(member).host.label" size="xs" variant="ghost" color="neutral" :disabled="actions(member).host.disabled" @click="actions(member).host.onSelect()" />
             <UBadge v-if="in_workflow(member.name)" color="neutral" variant="outline" size="sm" :title="`来自工作流「${workflow.label}」，提示词按工作流卡片发送`">工作流</UBadge>
             <UBadge :color="unregistered(member) ? 'warning' : member.status === 'active' ? 'success' : 'neutral'" variant="subtle" size="sm">{{ unregistered(member) ? '待注册' : STATUS_LABELS[member.status] || member.status }}</UBadge>
           </header>
@@ -410,7 +410,7 @@ const created = computed(() => room.value.created_at ? new Date(room.value.creat
 .member-card-grip { position: absolute; left: 2px; top: 22px; width: 14px; color: var(--ui-text-dimmed); cursor: grab; opacity: 0; transition: opacity .12s; }
 .member-card:hover .member-card-grip { opacity: 1; }
 .member-card-name { display: grid; flex: 1; min-width: 0; }
-.member-card-name strong { display: flex; align-items: center; gap: 5px; color: var(--ui-text-highlighted); font-size: 14px; font-weight: 600; }
+.member-card-name strong { display: flex; align-items: center; gap: 5px; min-width: 0; white-space: nowrap; color: var(--ui-text-highlighted); font-size: 14px; font-weight: 600; }
 .member-card-name strong .iconify { color: var(--ui-warning, #e5b54a); }
 .member-card-name small { overflow: hidden; color: var(--ui-text-muted); font-size: 12px; text-overflow: ellipsis; white-space: nowrap; }
 .member-card-facts { display: grid; grid-template-columns: 120px minmax(0, 1fr) 210px; gap: 16px; margin: 0; padding: 12px 16px 14px 60px; font-size: 13px; }
@@ -452,7 +452,10 @@ const created = computed(() => room.value.created_at ? new Date(room.value.creat
 @media (max-width: 720px) {
   .member-card-facts { grid-template-columns: 1fr 1fr; padding-left: 16px; }
   .member-card-facts > div:last-child { grid-column: 1 / -1; }
+  /* The name needs the head row's width on a phone, so 设为主持人 keeps only its crown. */
+  .member-card-head { gap: 8px; }
+  .member-card-host :deep([data-slot="label"]) { display: none; }
 }
 /* A member with a nickname also shows its ID, which AI messages, @ and records use. */
-.member-id { margin-left: 4px; color: var(--ui-text-muted); font-size: 11px; font-weight: 400; }
+.member-id { min-width: 0; overflow: hidden; text-overflow: ellipsis; margin-left: 4px; color: var(--ui-text-muted); font-size: 11px; font-weight: 400; }
 </style>

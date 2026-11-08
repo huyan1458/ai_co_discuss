@@ -813,14 +813,14 @@ const mention_folder_self = computed(() => {
 });
 /**
  * A "/" opening the draft offers the platform's saved workflows. Picking one only prefills a request to the host, who
- * enables it and brings its members; that needs the owner's per-room "允许主持人自建工作流".
+ * enables it and brings its members; that needs the owner's per-room "主持人完整权限".
  */
 const room_models = computed(() => view.value.launch?.room_models?.room_id === room.value?.id ? view.value.launch.room_models : null);
 const room_workflow = computed(() => room_models.value ? active_workflow(room_models.value.workflow, room.value?.free?.members) : null);
 const can_pick_workflow = computed(() => free.value && !room.value?.archived && view.value.access?.can_manage && (view.value.launch.available || view.value.launch.remote));
 const workflow_blocked = computed(() => !free_members.value.some((member) => member.role === "host" && member.access === "runner")
   ? "需要一位由本机唤醒的 AI 主持人"
-  : !room_models.value?.host_workflows ? "需先在电脑上的“成员与设置 → 协作设置”打开“允许主持人自建工作流”" : "");
+  : !room_models.value?.host_workflows ? "需先在电脑上的“成员与设置 → 协作设置”打开“主持人完整权限”" : "");
 const workflow_options = computed(() => {
   const query = mention_context.value?.query.toLocaleLowerCase() || "";
   return (view.value.launch.workflows || []).filter((item) => !item.error && `${item.id} ${item.label} ${item.description || ""}`.toLocaleLowerCase().includes(query))

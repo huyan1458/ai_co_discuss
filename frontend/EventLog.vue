@@ -211,5 +211,5 @@ function on_key(event) {
 .ev-link:hover { text-decoration: underline; }
 .ev-raw { margin: 0; padding: 8px; overflow: auto; border-radius: 6px; background: color-mix(in oklab, var(--ui-text) 5%, transparent); font-family: var(--ev-mono); font-size: 11px; line-height: 16px; }
 @media (hover: none) { .ev-row { padding-block: 6px; } }
-@media (max-width: 640px) { .ev-row { grid-template-columns: 64px 36px minmax(0, 1fr); } .ev.has-inspector { grid-template-columns: minmax(0, 1fr); } }
+@media (max-width: 640px) { .ev-row { grid-template-columns: max-content 32px minmax(0, 1fr); } .ev.has-inspector { grid-template-columns: minmax(0, 1fr); } }
 </style>

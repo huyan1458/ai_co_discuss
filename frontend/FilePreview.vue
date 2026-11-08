@@ -18,6 +18,25 @@ const wrap = ref(narrow_query.matches);
 // Narrow screens move the file's own actions down to the breadcrumb row, leaving the tab strip to the tabs.
 const narrow = ref(narrow_query.matches);
 const track_narrow = (event) => { narrow.value = event.matches; };
+// Text size of the preview and source, kept per device: phones and desktops want different sizes.
+const FONT_SCALE_KEY = "ai-codiscuss-file-font-scale";
+const FONT_SCALE_MIN = 0.9;
+const FONT_SCALE_MAX = 1.5;
+const FONT_SCALE_STEP = 0.1;
+const font_scale = ref(read_font_scale());
+
+function read_font_scale() {
+  let saved = NaN;
+  try { saved = Number(localStorage.getItem(FONT_SCALE_KEY)); } catch { /* Use the default size. */ }
+  return saved >= FONT_SCALE_MIN && saved <= FONT_SCALE_MAX ? saved : 1;
+}
+
+/** Step the text size by `steps` (0 resets it) and remember it on this device. */
+function change_font_scale(steps) {
+  const next = steps ? Math.round((font_scale.value + steps * FONT_SCALE_STEP) * 10) / 10 : 1;
+  font_scale.value = Math.min(FONT_SCALE_MAX, Math.max(FONT_SCALE_MIN, next));
+  try { localStorage.setItem(FONT_SCALE_KEY, String(font_scale.value)); } catch { /* Keep it for this visit only. */ }
+}
 
 const name_of = (path) => path.split("/").pop() || "文件预览";
 const tab = computed(() => tabs.value.find(item => item.id === active_id.value) || null);
@@ -225,8 +244,9 @@ function float_click(event) {
 function set_frame(transform, { opacity = "", radius = "", transition = true } = {}) {
   const element = frame.value;
   if (!element) return;
+  // A GPU layer only while moving: a lasting one renders the text without subpixel smoothing, which looks blurred.
   Object.assign(element.style, { transformOrigin: "0 0", transition: transition ? `transform ${FOLD_MS}ms ease, opacity ${FOLD_MS}ms ease, border-radius ${FOLD_MS}ms ease` : "none",
-    transform, opacity, borderRadius: radius });
+    transform, opacity, borderRadius: radius, willChange: transform ? "transform" : "" });
 }
 
 /** The transform that lays the window over the floating button. */
@@ -483,7 +503,7 @@ function stop_following(event) {
 // Folding or closing the window, switching tabs or to source, or the text changing ends any quoting; all but folding
 // also end the reading (closing every file clears the active tab), which goes on while folded.
 watch([open, active_id, source, rendered], () => { offer.value = null; cancel_comment(); close_mark(); });
-watch([open, active_id, source, rendered, () => file_preview.excerpts.map((excerpt) => excerpt.id).join()], () => nextTick(place_file_marks), { flush: "post" });
+watch([open, active_id, source, rendered, font_scale, () => file_preview.excerpts.map((excerpt) => excerpt.id).join()], () => nextTick(place_file_marks), { flush: "post" });
 watch([active_id, source, rendered], () => { if (reader.state.message_id) reader.stop(); });
 // Unfolded, the text is laid out anew; the reading's highlight moves onto it.
 watch(markdown_body, (root) => { if (root) { reader.rebind_document(root); nextTick(place_file_marks); } });
@@ -530,6 +550,11 @@ onBeforeUnmount(() => {
           </div>
         </div>
         <div class="project-editor-file-actions">
+          <div v-if="preview?.text != null && !(format === 'html' && !showing_source)" class="project-editor-font" role="group" aria-label="字号">
+            <button type="button" title="缩小字号" aria-label="缩小字号" :disabled="font_scale <= FONT_SCALE_MIN" @click="change_font_scale(-1)"><UIcon name="i-lucide-a-arrow-down" /></button>
+            <button type="button" class="project-editor-font-value" title="恢复默认字号" aria-label="恢复默认字号" @click="change_font_scale(0)">{{ Math.round(font_scale * 100) }}%</button>
+            <button type="button" title="放大字号" aria-label="放大字号" :disabled="font_scale >= FONT_SCALE_MAX" @click="change_font_scale(1)"><UIcon name="i-lucide-a-arrow-up" /></button>
+          </div>
           <UButton v-if="showing_source" icon="i-lucide-wrap-text" color="neutral" :variant="wrap ? 'soft' : 'ghost'" size="sm" :aria-pressed="wrap"
             :title="wrap ? '关闭自动换行' : '自动换行'" aria-label="自动换行" @click="wrap = !wrap" />
           <UButton v-if="can_read" :icon="reader.state.reading ? 'i-lucide-square' : 'i-lucide-volume-2'" color="neutral" variant="ghost" size="sm"
@@ -554,7 +579,7 @@ onBeforeUnmount(() => {
       <p v-if="preview?.truncated" class="project-editor-banner"><UIcon name="i-lucide-info" />文件较大，仅显示前 {{ file_size(preview.limit) }}（共 {{ file_size(preview.size) }}）<template v-if="format === 'html'">，HTML 不渲染不完整的内容</template></p>
       <p v-else-if="can_render && !source && format === 'html'" class="project-editor-banner"><UIcon name="i-lucide-shield" />静态预览：脚本、外部样式与外部图片不加载</p>
 
-      <div ref="editor_body" class="project-editor-body">
+      <div ref="editor_body" class="project-editor-body" :style="{ '--file-font-scale': font_scale }">
         <div v-if="tab?.loading && !preview" class="project-editor-state" role="status"><UIcon name="i-lucide-loader-circle" class="animate-spin" />正在读取文件…</div>
         <div v-else-if="tab?.error && !preview" class="project-editor-state"><UIcon name="i-lucide-circle-alert" /><p>{{ tab.error }}</p><UButton label="重试" color="neutral" variant="outline" size="sm" @click="load(tab)" /></div>
         <div v-else-if="preview?.text === null" class="project-editor-state"><UIcon :name="preview_type[1]" /><p>{{ preview.reason }}</p></div>
@@ -619,11 +644,13 @@ onBeforeUnmount(() => {
 
 <style scoped>
 /* Preview: a VS Code editor group — tab strip, breadcrumbs, gutter + text, status bar. */
+/* Centered by margins, not the modal's -50% translate, which lands on half pixels and blurs the text. */
 :global(.project-editor) { display: flex; flex-direction: column; width: min(1120px, calc(100vw - 48px)); max-width: none; height: calc(100dvh - 64px); max-height: none; overflow: visible;
+  inset: 0; margin: auto; --tw-translate-x: 0 !important; --tw-translate-y: 0 !important;
   padding: 0; border: 0; border-radius: 0; background: transparent; box-shadow: none; }
 /* The window itself, moved and scaled as a whole when it folds into the floating button or is pulled down. */
 .project-editor-frame { display: flex; flex: 1; flex-direction: column; min-height: 0; overflow: hidden; border: 1px solid var(--ui-border-accented); border-radius: 10px;
-  background: var(--ui-bg); box-shadow: 0 24px 80px #0000008c; will-change: transform; }
+  background: var(--ui-bg); box-shadow: 0 24px 80px #0000008c; }
 /* Head: tabs, the file's actions and the window's on one row, breadcrumbs under them; narrow screens move the file's
    actions to the end of the breadcrumb row. */
 .project-editor-head { display: grid; flex-shrink: 0; grid-template-columns: minmax(0, 1fr) auto auto; grid-template-rows: 38px 26px;
@@ -648,6 +675,12 @@ onBeforeUnmount(() => {
 .project-editor-modes { display: flex; padding: 2px; border-radius: 6px; background: var(--ui-bg-accented); }
 .project-editor-modes button { display: inline-flex; align-items: center; gap: 5px; height: 24px; padding: 0 9px; border-radius: 4px; font-size: 12px; color: var(--ui-text-muted); cursor: pointer; }
 .project-mode-icon { flex-shrink: 0; width: 14px; height: 14px; }
+.project-editor-font { display: flex; align-items: center; }
+.project-editor-font button { display: grid; place-items: center; height: 28px; min-width: 26px; padding: 0 4px; border-radius: 5px; font-size: 11.5px; color: var(--ui-text-muted); cursor: pointer; font-variant-numeric: tabular-nums; }
+.project-editor-font button > span { width: 16px; height: 16px; }
+.project-editor-font button:hover:not(:disabled) { background: var(--ui-bg-accented); color: var(--ui-text); }
+.project-editor-font button:disabled { opacity: .4; cursor: default; }
+.project-editor-font-value { min-width: 40px !important; }
 .project-editor-modes button:hover { color: var(--ui-text); }
 .project-editor-modes button[aria-pressed="true"] { background: var(--ui-bg); color: var(--ui-text-highlighted); box-shadow: 0 1px 2px #0000003d; }
 .project-editor-breadcrumbs { grid-area: crumbs; display: flex; flex-wrap: nowrap; align-items: center; gap: 2px; min-width: 0; padding: 0 14px; overflow-x: auto; scrollbar-width: none; font-size: 12px; color: var(--ui-text-muted); }
@@ -663,7 +696,8 @@ onBeforeUnmount(() => {
 .project-editor-state { display: flex; flex: 1; flex-direction: column; align-items: center; justify-content: center; gap: 12px; padding: 24px; text-align: center; font-size: 13px; color: var(--ui-text-muted); }
 .project-editor-state > span:first-child { width: 28px; height: 28px; color: var(--ui-text-dimmed); }
 .project-editor-state p { margin: 0; max-width: 480px; }
-.project-code { display: flex; flex: 1; align-items: flex-start; min-width: 0; overflow: auto; font: 13px/20px ui-monospace, "Cascadia Code", Consolas, monospace; tab-size: 4; }
+.project-code { display: flex; flex: 1; align-items: flex-start; min-width: 0; overflow: auto; tab-size: 4;
+  font: calc(13px * var(--file-font-scale, 1))/calc(20px * var(--file-font-scale, 1)) ui-monospace, "Cascadia Code", Consolas, monospace; }
 .project-code:focus-visible, .project-markdown-scroll:focus-visible { outline: none; }
 .project-code pre { margin: 0; padding: 10px 0 24px; white-space: pre; font: inherit; }
 .project-code-gutter { position: sticky; left: 0; z-index: 1; flex-shrink: 0; min-width: 52px; padding-inline: 16px 14px !important; text-align: right; color: var(--ui-text-dimmed); background: var(--ui-bg); user-select: none; }
@@ -675,7 +709,7 @@ onBeforeUnmount(() => {
 .project-code-line { flex: 1; min-width: 0; padding-right: 20px; color: var(--ui-text); white-space: pre-wrap; overflow-wrap: anywhere; }
 .project-markdown-scroll { position: relative; flex: 1; min-width: 0; overflow: auto; }
 /* Positioned and isolated so the read-aloud highlight layer sits under the text, as in a message card. */
-.project-markdown-preview { position: relative; isolation: isolate; max-width: 860px; margin: 0 auto; padding: 28px 40px 48px; overflow-wrap: anywhere; }
+.project-markdown-preview { position: relative; isolation: isolate; max-width: 860px; margin: 0 auto; padding: 28px 40px 48px; overflow-wrap: anywhere; font-size: calc(14px * var(--file-font-scale, 1)); }
 /* Selection offers and read-aloud controls stay inside the dialog: under the selection with a pointer, in a bottom dock otherwise. */
 .file-offer-marks { position: absolute; z-index: 4; display: flex; gap: 6px; }
 .file-offer-marks .channel-listen-mark { position: static; }
@@ -724,7 +758,10 @@ onBeforeUnmount(() => {
   .project-editor-modes button > span:not(.project-mode-icon) { display: none; }
   .project-mode-icon { width: 16px; height: 16px; }
   .project-markdown-preview { padding: 18px 16px 32px; }
-  .project-code { font-size: 12px; line-height: 18px; }
+  .project-code { font-size: calc(12px * var(--file-font-scale, 1)); line-height: calc(18px * var(--file-font-scale, 1)); }
+  /* Phones: the percentage is dropped (tapping the minus/plus shows the change); 40px targets as the other buttons. */
+  .project-editor-font-value { display: none !important; }
+  .project-editor-font button { width: 40px; height: 40px; }
   .project-code-gutter { min-width: 40px; padding-inline: 10px !important; }
   .project-code-number { padding: 0 10px; }
   .project-editor-modified, .project-editor-encoding { display: none; }

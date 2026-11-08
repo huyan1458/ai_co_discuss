@@ -722,6 +722,15 @@ CREATE TABLE IF NOT EXISTS free_host_wakes (
 );
 -- The host's latest answer asked to continue once the room is idle; a later request for the host or a new owner
 -- message supersedes it (`after_request` is the newest request when it was asked).
+-- The host's timed check-in: while the room still has work in flight, the host gets a notice every interval to look
+-- for stuck or drifting work; it ends by itself once the room is idle, on stop-all, or when the host changes.
+CREATE TABLE IF NOT EXISTS free_host_checkins (
+    room_id TEXT PRIMARY KEY REFERENCES rooms(id) ON DELETE CASCADE,
+    host_id INTEGER NOT NULL,
+    chain_id INTEGER NOT NULL,
+    interval_seconds INTEGER NOT NULL,
+    due_at INTEGER NOT NULL
+);
 CREATE TABLE IF NOT EXISTS free_host_continues (
     room_id TEXT PRIMARY KEY REFERENCES rooms(id) ON DELETE CASCADE,
     host_id INTEGER NOT NULL,

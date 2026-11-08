@@ -3891,6 +3891,13 @@ function stop_summary(executions) {
 }
 
 /** Stop the whole free room: running work and everything still owed end; a new message starts again. */
+/** The owner turns off the host's timed check-in shown on the free board. */
+async function stop_host_checkin() {
+  const room_id = state.room.id;
+  await request_json(`/api/rooms/${room_id}/host-checkin`, { off: true });
+  if (state.room?.id === room_id) await refresh_room();
+}
+
 async function stop_room() {
   const room_id = state.room.id;
   const live = (state.room.free?.executions || []).filter(item => ["dispatched", "started"].includes(item.status));
@@ -4100,8 +4107,9 @@ async function copy_fork_files(source_id, room_id, token, mapping) {
  */
 async function fork_room(message_id) {
   const source = state.room;
-  const source_token = localStorage.getItem(`discuss-access:${source.id}`);
-  if (!source_token) throw new Error("此浏览器缺少房间控制凭据，请使用创建房间的浏览器");
+  if (!has_room_control(source.id)) throw new Error("此浏览器缺少房间控制凭据，请使用创建房间的浏览器或登录管理员");
+  // Without the room credential the local service or the relay acts with this browser's administrator authority.
+  const source_token = localStorage.getItem(`discuss-access:${source.id}`) || "";
   const snapshot = await request_json(`/api/rooms/${encodeURIComponent(source.id)}/backup`);
   const room_id = crypto.randomUUID().replaceAll("-", "").slice(0, 12);
   const { body, executions } = fork_snapshot(snapshot, message_id, room_id);
@@ -4954,7 +4962,7 @@ async function execute_view_action(name, value) {
     copy_cli: () => copy_context(), copy_background,
     download_member_access, copy_member_access_text, copy_member_join, copy_member_launch: name => copy_member_join(name, true), pause_discussion, restart_discussion, start_room_discussion, end_room_discussion, start_room_goal, update_room_goal, goal_control,
     save_launch_defaults, resume_launch, discard_launch, retry_launch_connection, check_launch_connection: load_launch_settings,
-    load_room_configuration, save_room_configuration, interrupt_member, retry_delivery, retract_message, retract_latest, stop_room, rewind_and_send, fork_room, change_member, reorder_speakers, invite_member,
+    load_room_configuration, save_room_configuration, interrupt_member, retry_delivery, retract_message, retract_latest, stop_room, stop_host_checkin, rewind_and_send, fork_room, change_member, reorder_speakers, invite_member,
     enable_room_workflow, move_workflow_members, sync_room_workflow, set_room_host_workflows,
     adopt_recommendation, rate_decision,
     queue_send: id => queue_request({ action: "send", id }), queue_delete: delete_queued,

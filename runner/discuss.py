@@ -234,7 +234,7 @@ def room_commands(subcommands, registry):
         elif action in ("view", "brief"):
             parser.add_argument("--request", type=positive_int, help="手动成员：按自己的有效请求限制可读原文")
     events = add_leaf(subcommands, registry, "room events",
-                      "房主读取房间事件记录：用户与程序的每次写入（含被拒的）及其引起的状态变化，按发生顺序，用于排查问题；默认最新 500 条", True)
+                      "房主或当前主持人读取房间事件记录（主持人看不到私聊与消息正文）：用户与程序的每次写入（含被拒的）及其引起的状态变化，按发生顺序，用于排查问题；默认最新 500 条", True)
     paging = events.add_mutually_exclusive_group()
     paging.add_argument("--after", type=non_negative_int, help="只读此事件编号之后的记录")
     paging.add_argument("--before", type=non_negative_int, help="读此事件编号之前的一页；按返回的 more 继续向前")

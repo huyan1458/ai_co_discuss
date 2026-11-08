@@ -33,6 +33,8 @@ const SPINNER = ["·", "✢", "✳", "✶", "✻", "✽", "✻", "✶", "✳", "
 const SPIN_MS = 120;
 // How close to the bottom (px) still counts as following new output.
 const STICK_PX = 40;
+// How long (ms) after the last scroll event and the finger lifting the screen counts as still.
+const SCROLL_IDLE_MS = 200;
 // Space left above a turn opened from a message card, and how long it stays marked.
 const JUMP_GAP_PX = 12;
 const TARGET_MS = 2000;
@@ -40,7 +42,12 @@ const TARGET_MS = 2000;
 const SESSIONS = new Map();
 
 const room = computed(() => view.value.room);
-const members = computed(() => room.value?.free?.members || []);
+// Same order as the room page's member cards: the room's default speaking order, others after it.
+const members = computed(() => {
+  const rank = room.value?.speaking_order?.default || [];
+  const place = (name) => rank.includes(name) ? rank.indexOf(name) : rank.length;
+  return [...(room.value?.free?.members || [])].sort((left, right) => place(left.name) - place(right.name));
+});
 const member = computed(() => members.value.find((item) => item.name === private_chat.member) || members.value[0] || null);
 const name = computed(() => member.value?.name || "");
 /** Why this member cannot take a private line here, or "" when it can. */
@@ -78,6 +85,13 @@ let observer = null;
 let anchor_lines = null;
 // More than a screen above the newest output, when a button offers the way back.
 const away = ref(false);
+// When (performance.now()) the screen last scrolled; iOS keeps firing scroll events through momentum.
+let scrolled_at = 0;
+// Step reads that arrived while the reader scrolled, applied once the screen is still (see when_still).
+let deferred = [];
+let still_timer = 0;
+// Turns whose read waits in deferred, so a poll meanwhile does not read them again.
+const waiting = new Set();
 // Whether this member's turns have all been read once, so further growth is new output.
 let settled = false;
 // The room and member shown, the key of what SESSIONS keeps for them.
@@ -94,6 +108,12 @@ const items = computed(() => {
   return [...executions.map((execution) => ({ key: `exec-${execution.id}`, at: execution.created_at, execution })),
     ...chats.value.map((chat) => ({ key: `chat-${chat.id}`, at: chat.created_at, chat }))].sort((a, b) => a.at - b.at);
 });
+// The turns on screen, with what the owner said and the final reply: as of the last moment the screen was still (see
+// when_still), so a turn added or dropped, or a room message leaving the page's window, does not move the screen
+// mid-swipe. Polls and the status line use items itself.
+const shown_items = ref([]);
+const snapshot = () => items.value.map((item) => ({ ...item, prompt: prompt_of(item), reply: reply_of(item) }));
+watch(() => [items.value, view.value.messages], () => when_still(() => { shown_items.value = snapshot(); }), { immediate: true });
 const running = (item) => item.chat ? item.chat.status === "running" : ACTIVE.includes(item.execution.status);
 const running_item = computed(() => [...items.value].reverse().find((item) => running(item) || item.chat?.status === "pending") || null);
 const status_line = computed(() => {
@@ -134,7 +154,7 @@ async function refresh() {
     if (current === serial) error.value = failure.message || "未能读取私聊";
   }
   const retry_after = Date.now() / 1000 - ERROR_RETRY_S;
-  const due = (item) => running(item) || (!details.value.has(item.key) && !(errors.value.get(item.key)?.at > retry_after));
+  const due = (item) => running(item) || (!details.value.has(item.key) && !waiting.has(item.key) && !(errors.value.get(item.key)?.at > retry_after));
   const queue = [...items.value].reverse().filter(due);
   const first = (item) => Number(item.execution?.id === kept_execution.value);
   queue.sort((a, b) => first(b) - first(a));
@@ -150,16 +170,42 @@ async function read_steps(item, room_id, current) {
   try {
     const result = await bridge.read_execution_details(room_id, item.execution?.id, item.chat ? { chat_id: item.chat.id } : {});
     if (current !== serial) return;
-    if (JSON.stringify(result) !== JSON.stringify(details.value.get(item.key))) details.value = new Map(details.value).set(item.key, result);
-    if (errors.value.has(item.key)) {
-      const next = new Map(errors.value);
-      next.delete(item.key);
-      errors.value = next;
-    }
+    waiting.add(item.key);
+    when_still(() => {
+      waiting.delete(item.key);
+      if (JSON.stringify(result) !== JSON.stringify(details.value.get(item.key))) details.value = new Map(details.value).set(item.key, result);
+      if (errors.value.has(item.key)) {
+        const next = new Map(errors.value);
+        next.delete(item.key);
+        errors.value = next;
+      }
+    });
   } catch (failure) {
     if (current !== serial) return;
-    errors.value = new Map(errors.value).set(item.key, { message: failure.message || "未能读取过程", at: Date.now() / 1000 });
+    when_still(() => { errors.value = new Map(errors.value).set(item.key, { message: failure.message || "未能读取过程", at: Date.now() / 1000 }); });
   }
+}
+/**
+ * Apply a change to what the screen shows (a step read, the list of turns) once the screen is still. Content changing
+ * above the reader makes on_resize write scrollTop to keep the top line in place, and iOS Safari drops a swipe or its
+ * momentum on such a write, so the screen jerks and flickers. A change meant for another member (switched away
+ * meanwhile) is dropped; that member's page is set up afresh.
+ */
+function when_still(change) {
+  const key = session_key;
+  deferred.push(() => { if (key === session_key) change(); });
+  apply_when_still();
+}
+function apply_when_still() {
+  clearTimeout(still_timer);
+  const wait = touching ? SCROLL_IDLE_MS : scrolled_at + SCROLL_IDLE_MS - performance.now();
+  if (wait > 0) {
+    still_timer = setTimeout(apply_when_still, wait);
+    return;
+  }
+  const changes = deferred;
+  deferred = [];
+  changes.forEach((change) => change());
 }
 function on_visibility() {
   if (!document.hidden) refresh();
@@ -171,7 +217,7 @@ watch(() => `${room.value?.id}\n${name.value}`, (key) => {
   session_key = key;
   const saved = SESSIONS.get(key);
   chats.value = saved?.chats || []; details.value = saved?.details || new Map(); errors.value = new Map();
-  open_output.value = saved?.open_output || new Set(); anchor = null; anchor_lines = null; unread.value = false; settled = Boolean(saved);
+  open_output.value = saved?.open_output || new Set(); anchor = null; anchor_lines = null; unread.value = false; settled = Boolean(saved); waiting.clear(); shown_items.value = snapshot();
   restore_scroll(saved?.scroll);
   refresh();
 }, { immediate: true });
@@ -214,7 +260,7 @@ function turn_meta(item) {
 }
 /** A turn's steps, without a remark that repeats its final reply. */
 function steps_of(item) {
-  const reply = reply_of(item)?.trim();
+  const reply = item.reply?.trim();
   return (details.value.get(item.key)?.entries || []).filter((entry) => !(reply && entry.kind === "message" && entry.body?.trim() === reply));
 }
 /** The `●` line of a tool step as the CLIs print it, a bold name then its subject in brackets: Bash(…), Update(…). */
@@ -301,6 +347,7 @@ function remember_anchor() {
 }
 function on_scroll() {
   const element = screen.value;
+  scrolled_at = performance.now();
   // Only a move up is the reader's: output that lands between following to the bottom and this event leaves the
   // screen short of the bottom without the reader doing anything.
   if (distance_to_bottom(element) < STICK_PX) stick = true;
@@ -378,7 +425,7 @@ function jump_to_execution() {
   clearTimeout(target_timer);
   target_timer = setTimeout(() => { target.value = ""; }, TARGET_MS);
 }
-watch(() => [private_chat.execution_id, items.value.length], () => {
+watch(() => [private_chat.execution_id, shown_items.value.length], () => {
   if (private_chat.execution_id) kept_execution.value = private_chat.execution_id;
   nextTick(jump_to_execution);
 }, { immediate: true });
@@ -387,7 +434,7 @@ onMounted(() => {
   observer.observe(screen.value);
   observer.observe(content.value);
 });
-onBeforeUnmount(() => { save_session(); observer?.disconnect(); cancelAnimationFrame(anchor_frame); clearTimeout(target_timer); });
+onBeforeUnmount(() => { save_session(); observer?.disconnect(); cancelAnimationFrame(anchor_frame); clearTimeout(target_timer); clearTimeout(still_timer); });
 
 const draft = ref("");
 const sending = ref(false);
@@ -462,13 +509,13 @@ function recall(event, step) {
         <div class="term-dim">用它在房间里的同一个会话回答，记录只有你看得到</div>
       </div>
       <p v-else class="term-dim">房间里还没有 AI 成员</p>
-      <section v-for="item in items" :key="item.key" class="term-turn" :class="{ 'is-target': target === item.key }" :data-key="item.key"
-        v-memo="[item.at, prompt_of(item), reply_of(item), running(item), item.chat && chat_note(item.chat), details.get(item.key), errors.get(item.key), open_output, target === item.key]">
+      <section v-for="item in shown_items" :key="item.key" class="term-turn" :class="{ 'is-target': target === item.key }" :data-key="item.key"
+        v-memo="[item.at, item.prompt, item.reply, running(item), item.chat && chat_note(item.chat), details.get(item.key), errors.get(item.key), open_output, target === item.key]">
         <div v-for="meta in [turn_meta(item)]" :key="'meta'" class="term-meta">
           <time :title="meta.sent_title">{{ meta.sent }}</time><span>{{ meta.source }}</span>
           <span v-if="meta.replied" class="term-meta-end">回复于 <time :title="meta.replied_title">{{ meta.replied }}</time></span>
         </div>
-        <div v-if="prompt_of(item)" class="term-prompt"><span class="term-body">{{ prompt_of(item) }}</span></div>
+        <div v-if="item.prompt" class="term-prompt"><span class="term-body">{{ item.prompt }}</span></div>
         <div v-if="errors.get(item.key) && !details.has(item.key)" class="term-sub term-warn"><span class="term-corner">⎿</span><span class="term-body">未能读取过程：{{ errors.get(item.key).message }}</span></div>
         <div v-else-if="!details.has(item.key) && running(item)" class="term-sub"><span class="term-corner">⎿</span><span class="term-body">正在读取…</span></div>
         <template v-for="(entry, index) in steps_of(item)" :key="entry.id ?? index">
@@ -487,7 +534,7 @@ function recall(event, step) {
             </div>
           </div>
         </template>
-        <div v-if="reply_of(item)" class="term-line term-msg"><span class="term-bullet">●</span><span class="term-body">{{ reply_of(item) }}</span></div>
+        <div v-if="item.reply" class="term-line term-msg"><span class="term-bullet">●</span><span class="term-body">{{ item.reply }}</span></div>
         <div v-if="item.chat && chat_note(item.chat)" class="term-sub" :class="{ 'term-error': item.chat.status === 'failed' }"><span class="term-corner">⎿</span><span class="term-body">{{ chat_note(item.chat) }}</span></div>
       </section>
       </div>

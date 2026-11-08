@@ -257,6 +257,7 @@ html[data-theme^="channel"] .channel-menu.channel-directory-menu { min-width: 15
 .pb-status-detail { margin: 6px 0 0 16px; color: var(--ui-text-dimmed); font-size: 12px; line-height: 1.6; overflow-wrap: anywhere; }
 /* A chain stopped at its round limit can run on from here, without a new message that would start over. */
 .pb-chain-actions { display: flex; flex-wrap: wrap; gap: 6px; margin: 8px 0 0 16px; }
+.pb-checkin { display: flex; align-items: center; justify-content: space-between; gap: 6px; margin: 6px 0 0 16px; color: var(--ui-text-dimmed); font-size: 12px; line-height: 1.6; }
 .pb-error-detail { white-space: pre-wrap; font: inherit; max-height: 240px; overflow: auto; margin-top: 8px; }
 .pb-held { margin: 0 0 8px; }
 .pb-meters { display: grid; gap: 10px; margin-top: 14px; }
@@ -492,10 +493,7 @@ html[data-theme^="channel"] .channel-message.channel-topic-card { color: var(--u
   .channel-message-toolbar { flex-direction: column; width: 100%; }
   .channel-conversation { --message-action-button: 32px; }
   .channel-message-actions button { width: var(--message-action-button); height: var(--message-action-button); }
-  /* The column hangs beside the card, so a short card grows to hold it: 12px insets, 3px toolbar padding and 1px border on each side, 2px between keys. */
-  .channel-message:has(.channel-message-toolbar > :nth-child(3)) { min-height: calc(3 * var(--message-action-button) + 36px); }
-  .channel-message:has(.channel-message-toolbar > :nth-child(4)) { min-height: calc(4 * var(--message-action-button) + 38px); }
-  .channel-message:has(.channel-message-toolbar > :nth-child(5)) { min-height: calc(5 * var(--message-action-button) + 40px); }
+  /* The column hangs beside the card, outside its text: on a short card it runs past the bottom edge instead of padding the card with blank lines. */
 }
 @media (min-width: 701px) and (max-width: 1199px) {
   .channel-conversation { --message-action-width: 52px; --message-action-button: 44px; }
@@ -507,7 +505,6 @@ html[data-theme^="channel"] .channel-message.channel-topic-card { color: var(--u
   :is(.channel-message, .channel-working-strip)::after { content: none; }
   .channel-message-actions { inset: 12px 8px 12px auto; width: auto; }
   .channel-message-toolbar { position: static; flex-direction: row; width: fit-content; }
-  .channel-message:has(.channel-message-toolbar > :nth-child(n)) { min-height: 0; }
   /* Byline keeps clear of the toolbar: keys of 32px, 2px apart, 4px padding and border on each side, less the 14px the card padding already gives. */
   .channel-message-byline { padding-right: 110px; }
   .channel-message:has(.channel-message-toolbar > :nth-child(4)) .channel-message-byline { padding-right: 144px; }
@@ -931,7 +928,8 @@ html[data-theme^="channel"] .advanced-fields { border-color: #414957; }
     .channel-header { padding-block: 0; }
     .channel-host-brief { padding-block: 0; }
     html[data-theme^="channel"] .content-page { padding: 14px 12px 24px; }
-    html[data-theme^="channel"] .page-heading { margin-bottom: 14px; }
+    /* A heading's action (邀请 AI 加入) moves under the text instead of squeezing it. */
+    html[data-theme^="channel"] .page-heading { flex-wrap: wrap; gap: 10px; margin-bottom: 14px; }
     html[data-theme^="channel"] .page-heading h2 { margin-bottom: 4px; font-size: 17px; }
   }
 }

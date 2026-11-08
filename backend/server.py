@@ -33,7 +33,7 @@ from .free_room import (add_member, after_free_message, after_proactive, authori
 from .free_room import convert_suggestion, message_suggestions, save_suggestions, sync_participants
 from .free_room import adopt_recommendation, recommend_member, register_member, require_member
 from .private_chat import chat_action, member_chat
-from .free_room import describe_members, execution_notes, label_members, member_descriptions, member_display_names, member_labels, reorder_speakers, resolve_member_fields, set_chain_rounds, speaking_order, stop_room, stop_room_work
+from .free_room import describe_members, execution_notes, label_members, set_host_checkin, withdraw_dispatch, member_descriptions, member_display_names, member_labels, reorder_speakers, resolve_member_fields, set_chain_rounds, speaking_order, stop_room, stop_room_work
 from .free_room import (ADAPTER_VALUE, ANCHOR_SQL, continue_chain, execution_timeline, group_route_plan, retract_message, rewind_plan, rewind_room,
                         room_event_log, withdrawals)
 from .free_room import review_capability, review_roster, checked_review_plan, save_review_plan, check_review_retry
@@ -1939,6 +1939,11 @@ class DiscussionHandler(BaseHTTPRequestHandler):
                 with closing(connect_db(self.server.database)) as connection:
                     self.admin_as_owner(connection, payload.get("room_id", ""))
                     payload["token"] = self.headers.get("X-Discussion-Token", "")
+            # A fork from a browser without the source room's credential acts as its owner, as the commands above do.
+            if command == "room-fork" and not payload.get("source_token") and not self.bridge_origin:
+                with closing(connect_db(self.server.database)) as connection:
+                    self.admin_as_owner(connection, payload.get("source_room_id", ""))
+                    payload["source_token"] = self.headers.get("X-Discussion-Token", "")
             if command == "machine-link":
                 payload = {"site": site}
         if command == "room-config" and "participants" in payload:
@@ -2303,7 +2308,7 @@ class DiscussionHandler(BaseHTTPRequestHandler):
             result = queue_action(connection, room_id, token, self.read_payload(), post_queued, check_queued, interrupt_for_message)
             connection.commit()
             return self.respond(result)
-        if parts[3:4] in (["inbox"], ["executions"], ["members"], ["chats"], ["suggestions"], ["recommendations"], ["stop"]):
+        if parts[3:4] in (["inbox"], ["executions"], ["members"], ["chats"], ["suggestions"], ["recommendations"], ["stop"], ["dispatches"], ["host-checkin"]):
             return self.handle_free_api(connection, parts, method)
         if parts[3:4] == ["attachments"]:
             return self.handle_attachments(connection, parts, params, method)
@@ -2512,6 +2517,10 @@ class DiscussionHandler(BaseHTTPRequestHandler):
             result = member_capability(connection, room_id, int(parts[4]), token, self.read_payload())
         elif parts[3:] == ["stop"] and method == "POST":
             result = stop_room(connection, room_id, token)
+        elif len(parts) == 6 and parts[3] == "dispatches" and parts[4].isdigit() and parts[5] == "withdraw" and method == "POST":
+            result = withdraw_dispatch(connection, room_id, token, int(parts[4]))
+        elif parts[3:] == ["host-checkin"] and method == "POST":
+            result = set_host_checkin(connection, room_id, token, self.read_payload())
         else:
             raise LookupError("地址不存在")
         drain_room_queue(connection, room_id)

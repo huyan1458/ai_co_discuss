@@ -265,6 +265,7 @@ const summary = computed(() => {
 .create-discussion { display: flex; flex-direction: column; height: min(78dvh, 820px); }
 .create-scroll { flex: 1; min-height: 0; }
 .create-drive { display: flex; align-items: center; gap: 10px; color: var(--ui-text-dimmed); font-size: 12px; }
+.create-drive > span { flex-shrink: 0; }
 .create-drive > .expert-card-modes { width: 300px; max-width: 100%; }
 .create-drive-hint { margin: -4px 0 0; }
 .create-scroll { overflow-y: auto; scrollbar-gutter: stable; padding: 20px 26px 24px; gap: 26px !important; }
@@ -324,6 +325,8 @@ const summary = computed(() => {
   .create-discussion { height: calc(100dvh - 130px); }
   .create-scroll { padding: 18px 18px 20px; }
   .create-modes { grid-template-columns: 1fr; }
+  /* Same as the invite dialog: two members per row on a phone. */
+  .create-experts { grid-template-columns: repeat(2, minmax(0, 1fr)); }
   .create-footer { padding: 12px 18px 14px; }
   .create-summary:not(.is-blocked) { display: none; }
   .create-footer-row { justify-content: flex-end; }

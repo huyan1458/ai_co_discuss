@@ -1168,11 +1168,11 @@ test('claude allows only codiscuss website subcommands and draft writes, then us
   assert.deepEqual(args.slice(directories + 1, directories + 4), [f.directory, f.task.draft_directory, f.task.skill_directories[0]]);
   assert.deepEqual(args.slice(args.indexOf('--disallowedTools') + 1), [`Edit(${claude_rule_path(f.task.skill_directories[0])}/**)`]);
   assert.deepEqual(args.slice(args.indexOf('--allowedTools') + 1, args.indexOf('--disallowedTools')),
-    [...['room', 'message', 'turn', 'state', 'goal', 'mode', 'review', 'sequence', 'execution', 'health', 'schema', 'launch workflow-adopt', 'launch workflow-join']
+    [...['room', 'message', 'turn', 'state', 'goal', 'mode', 'review', 'sequence', 'execution', 'health', 'schema', 'launch workflow-adopt', 'launch workflow-join', 'launch host-control']
       .flatMap(command => [`Bash(codiscuss ${command} *)`, `PowerShell(codiscuss ${command} *)`]),
     `Edit(${claude_rule_path(f.task.draft_directory)}/**)`, 'Read(//d/materials/**)']);
   assert.ok(!args.includes(`Edit(${claude_rule_path(f.directory)}/**)`));
-  assert.ok(!args.some(arg => /(Bash|PowerShell)\(codiscuss (service|launch (?!workflow-(adopt|join) )|run|api|setup|install|local)/.test(arg)));
+  assert.ok(!args.some(arg => /(Bash|PowerShell)\(codiscuss (service|launch (?!(workflow-(adopt|join)|host-control) )|run|api|setup|install|local)/.test(arg)));
   // The prompt is the first stream-json message on stdin, which stays open for interjections.
   assert.ok(args.includes('--input-format') && !args.includes(f.task.prompt));
   assert.equal(JSON.parse(f.calls[0].input).message.content[0].text, f.task.prompt);

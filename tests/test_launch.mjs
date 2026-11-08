@@ -10,7 +10,7 @@ import { PassThrough } from 'node:stream';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import { test } from 'node:test';
 
-import { adopt_member_profile, adopt_workflow, borrowed_session, cached_software_defaults, check_or_save_workflow, join_workflow, launch_discussion, launch_settings, room_configuration, room_files, room_models, room_member, room_member_model, room_settings, room_workflow, save_launch_projects, save_launch_settings, validate_preset } from '../runner/discussion_launch.mjs';
+import { adopt_member_profile, adopt_workflow, host_control, borrowed_session, cached_software_defaults, check_or_save_workflow, join_workflow, launch_discussion, launch_settings, room_configuration, room_files, room_models, room_member, room_member_model, room_settings, room_workflow, save_launch_projects, save_launch_settings, validate_preset } from '../runner/discussion_launch.mjs';
 import { get_workflow, list_workflows, save_workflow } from '../runner/workflows.mjs';
 import { API_PROVIDERS, save_api_key } from '../runner/discussion_api.mjs';
 import { read_project_files } from '../runner/project_files.mjs';
@@ -988,7 +988,7 @@ test('only the host of a room whose owner allowed it adopts a workflow, inviting
   const draft = join(f.directory, 'draft.md');
   writeFileSync(draft, '<!-- workflow-part: 1/1 id: serial -->\n<!-- workflow-file: SKILL.md -->\n---\nname: serial\nlabel: 连载\n---\n先写再审。\n'
     + '<!-- workflow-file: agents/writer.md -->\n---\nname: Claude-writer\nlabel: 写手\nproject_access: full\n---\n按任务书写。\n');
-  await assert.rejects(adopt_workflow(f.home, { access_file: host_access, draft_file: draft }), /没有允许/);
+  await assert.rejects(adopt_workflow(f.home, { access_file: host_access, draft_file: draft }), /主持人完整权限/);
   assert.equal(list_workflows(f.home).length, 0);
   // A browser of the local site without the room credential grants it with the site's administrator authority.
   const granted = await request(f.site, '/api/local/room-workflow', { room_id: config.room, action: 'host', allowed: true }, { 'X-CoDiscuss-Local': '1' });
@@ -1030,6 +1030,35 @@ test('only the host of a room whose owner allowed it adopts a workflow, inviting
   const ledger = load_config(launched.config_path).participants['DeepSeek-inventory'];
   const pick = ({ adapter, base_url, api_protocol, model, api_key_ref: ref, project_access, effort }) => JSON.parse(JSON.stringify({ adapter, base_url, api_protocol, model, api_key_ref: ref, project_access, effort }));
   assert.deepEqual(pick(ledger), { adapter: 'api', base_url: API_PROVIDERS.DeepSeek.base_url, api_protocol: 'chat', model: API_PROVIDERS.DeepSeek.models[0], api_key_ref, project_access: 'write' });
+});
+
+test('with full host control granted, only the host stops, invites at most writing and removes others, never itself', async t => {
+  const f = await fixture(t), token = randomUUID() + randomUUID();
+  save_launch_settings(f.home, { participants: f.input.participants });
+  const launched = await launch_discussion(f.home, { site: f.site, entry: 'web', participants: f.input.participants, token,
+    room: { title: '主持人控制', mode: 'free', host: 'Codex', members: ['Codex'], submission_id: randomUUID() } }, f.options);
+  const config = load_config(launched.config_path);
+  const access = (name, member_token) => {
+    const path = join(f.directory, `${name}.access.json`);
+    writeFileSync(path, JSON.stringify({ site: f.site, room: config.room, member: name, token: member_token }));
+    return path;
+  };
+  const host_access = access('Codex', config.members.Codex.token);
+  await assert.rejects(host_control(f.home, 'stop-all', { access_file: host_access }), /主持人完整权限/);
+  await request(f.site, '/api/local/room-workflow', { room_id: config.room, action: 'host', allowed: true }, { 'X-CoDiscuss-Local': '1' });
+  await assert.rejects(host_control(f.home, 'stop-all', { access_file: access('Other', randomUUID() + randomUUID()) }), /只有本房间的主持人/);
+  await assert.rejects(host_control(f.home, 'invite', { access_file: host_access, name: 'Claude', access: 'full' }), /read 或 write/);
+  const invited = await host_control(f.home, 'invite', { access_file: host_access, name: 'Claude' });
+  assert.equal(invited.project_access, 'write');
+  assert.equal(load_config(launched.config_path).participants[invited.member].project_access, 'write');
+  await assert.rejects(host_control(f.home, 'remove', { access_file: host_access, member: 'Codex' }), /不能对自己/);
+  await assert.rejects(host_control(f.home, 'access', { access_file: host_access, member: invited.member, access: 'full' }), /read 或 write/);
+  await host_control(f.home, 'label', { access_file: host_access, member: invited.member, label: '评审' });
+  assert.equal((await api(config, '')).labels[invited.member], '评审');
+  await assert.rejects(host_control(f.home, 'steer', { access_file: host_access, member: '评审', text: '先看第 3 节' }), /没有进行中的执行/);
+  await host_control(f.home, 'stop-all', { access_file: host_access });
+  await host_control(f.home, 'remove', { access_file: host_access, member: invited.member });
+  assert.ok(!(await api(config, '')).free.members.some(member => member.name === invited.member && member.status === 'active'));
 });
 
 test('a workflow bound at creation ends when its members are sent away, resumes with their sessions, and is replaced by another', async t => {

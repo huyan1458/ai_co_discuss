@@ -84,6 +84,7 @@ const HELP = `用法：codiscuss launch settings [--file FILE]
       codiscuss launch machine-link --file FILE
       codiscuss launch workflow-adopt (--draft FILE | --id WORKFLOW) [--access-file FILE]
       codiscuss launch workflow-join [--card ID[,ID]] [--access-file FILE]
+      codiscuss launch host-control ACTION [选项] [--access-file FILE]
       codiscuss launch workflow-check (--dir DIR | --draft FILE)
       codiscuss launch workflow-save (--dir DIR | --draft FILE)
 
@@ -115,8 +116,21 @@ room-member-adapter 把自由房间里空闲的 Codex 成员在 App（codex）�
 room-profiles 导出房间的本机成员软件配置与实际会话 ID（不含凭据），供备份附带；须提供 site、room_id、token。
 room-restore 把导入房间的本机成员配置登记到本机并核对原会话存在，Claude Code 成员保持手动；须提供 site、room_id、token、local_members。
 room-fork 把从原房间分支出的新房间登记到本机，各本机成员从原会话分叉、不含分支点之后的执行，原会话不变；须提供 site、room_id、token、source_room_id、source_token、executions（{成员名: [排除的执行编号]}）。
-workflow-adopt 主持人在本房间启用工作流：--draft 把自己的草稿（一段，分段头 1/1）保存进工作流库后启用，--id 启用工作流库里已有的工作流（不改动它）；缺的卡片成员由本机服务邀请，项目权限最高可写；须房主已为本房间打开“允许主持人自建工作流”。凭据为本次任务的 access_file（或 DISCUSS_ACCESS_FILE）。
+workflow-adopt 主持人在本房间启用工作流：--draft 把自己的草稿（一段，分段头 1/1）保存进工作流库后启用，--id 启用工作流库里已有的工作流（不改动它）；缺的卡片成员由本机服务邀请，项目权限最高可写；须房主已为本房间打开“主持人完整权限”。凭据为本次任务的 access_file（或 DISCUSS_ACCESS_FILE）。
 workflow-join 主持人为本房间在用工作流里还没有成员的卡片（启用后才新增的）邀请成员，不填 --card 即全部；无需额外授权，离开或移除的成员由用户请回。凭据同上。
+host-control 主持人代房主控制房间，须房主已为本房间打开“主持人完整权限”，凭据同上；成员用 --member（成员 ID 或显示名），不能是主持人自己：
+  诊断：details --execution N 读取该执行的本机过程日志（服务端详情与事件记录用 execution / room events 读取）；
+  恢复：stop --member 打断；stop-all 停止全部执行、请求与接力；steer --member --text 话 [--submission-id ID] 向它进行中的执行插话；
+        retry --execution N 重试失败的执行；model --member [--model M] [--effort E] 改模型与强度（空值恢复默认）；
+        adapter --member --adapter ID 在同一软件的 App 与 CLI 间切换；access --member --access read|write 调整项目权限；
+  成员：invite --name 平台 [--access read|write] [--model M] [--effort E] 用本机已配置的软件邀请，项目权限最高可写；
+        away / remove / back --member 暂离、移除、请回；label --member [--label 显示名] [--description 描述]；
+  撤回：withdraw --message N 撤回自己的一次派活：接力或循环停下，未开始的请求取消，进行中的停止，不再交回；
+  兜底：checkin --minutes N 房间有进行中的工作时每 N 分钟（5–120）给你发一次定时检查，房间空闲、停止全部或换主持人后自动结束；checkin --off 关闭；
+  推进：order 读取发言顺序，order --order 甲,乙 --revision REV 调整尚未发言的部分；
+        discussion 读取讨论，discussion --do start --goal 目标 --revision REV 开启（上限用房间默认值），--do pause|resume|end --revision REV；
+        goal 读取 Goal，goal --do start --goal 目标 --revision REV 开启（预算用房主默认值，默认不限时为 8 次续跑、90 分钟），--do pause|resume|end --revision REV。
+  不开放：批准超出上限的轮数、项目权限高于可写或放行工具、改项目目录、撤回回退用户消息、私聊、对主持人自己操作。
 workflow-check 按导入规则校验工作流文件夹或单段草稿，返回预览，不保存；workflow-save 校验后保存进工作流库（同 ID 覆盖），卡片按声明的项目权限保存。写法见 workflow-creator 技能。
 JSON 指定 site、entry（conversation/web）、room（建房内容，含 submission_id）
 或 room_id（已有房间）、participants（本次软件覆盖配置）。
@@ -605,9 +619,9 @@ function validate_profile(name, profile, binding = false) {
 }
 
 /** Send one request without following redirects that could disclose the room credential. */
-async function site_request(site, path, token, body) {
+async function site_request(site, path, token, body, headers = {}) {
   const response = await fetch(`${site}${path}`, { method: body === undefined ? 'GET' : 'POST',
-    headers: { 'Content-Type': 'application/json', 'X-Discussion-Token': token },
+    headers: { 'Content-Type': 'application/json', 'X-Discussion-Token': token, ...headers },
     body: body === undefined ? undefined : JSON.stringify(body), redirect: 'error', signal: AbortSignal.timeout(10000) });
   const result = await response.json();
   if (!response.ok) throw new Error(`HTTP ${response.status}: ${result.error || '请求失败'}`);
@@ -810,7 +824,7 @@ function manual_access(path, input, name, token) {
  * The local configuration is written before the website call, so a retry reuses the same credential.
  * A manual member answers with its own credential and is never woken.
  */
-export async function room_member(home, raw, locked = false) {
+export async function room_member(home, raw, locked = false, headers = {}) {
   const { input, path } = await member_room_context(home, raw);
   const { action, name } = input;
   const access = input.access || 'runner';
@@ -826,12 +840,12 @@ export async function room_member(home, raw, locked = false) {
     if (action === 'add' && input.new_instance) {
       // A name once bound keeps its session locally, so a new instance never reuses a removed member's name.
       const taken = new Set([...roster.map(member => member.name), ...Object.keys(config.participants), ...Object.keys(config.members || {})]);
-      return room_member(home, { ...raw, name: next_instance(platform_of(name), taken), new_instance: false }, true);
+      return room_member(home, { ...raw, name: next_instance(platform_of(name), taken), new_instance: false }, true, headers);
     }
     const current = roster.find(member => member.name === name);
     if (input.member_token !== undefined && (typeof input.member_token !== 'string' || input.member_token.length < 32 || input.member_token.length > 256)) throw new Error('member_token 须为 32–256 字符');
     if (current?.status === 'active' && input.member_token && config.members?.[name]?.token === input.member_token) {
-      const view = await site_request(input.site, `/api/rooms/${input.room_id}/members/${current.id}`, input.token, { action: 'active', token: input.member_token });
+      const view = await site_request(input.site, `/api/rooms/${input.room_id}/members/${current.id}`, input.token, { action: 'active', token: input.member_token }, headers);
       return { room_id: input.room_id, member: name, access: current.access, free: view, access_file: null };
     }
     if (action === 'add' && !current && config.participants[name] && !locked) {
@@ -842,7 +856,7 @@ export async function room_member(home, raw, locked = false) {
         && !roster.some(member => member.name === key));
       const renamed = retried || free_instance(name, taken);
       const participants = raw.participants?.[name] ? { participants: { ...raw.participants, [renamed]: raw.participants[name] } } : {};
-      return room_member(home, { ...raw, name: renamed, ...participants }, true);
+      return room_member(home, { ...raw, name: renamed, ...participants }, true, headers);
     }
     if (action === 'rejoin' && current?.status !== 'away') throw new Error(`${name} 不是离开状态，无需请回`);
     if (action === 'add' && current) throw new Error(`${name} 已是本房间成员；离开的成员请用请回`);
@@ -866,7 +880,7 @@ export async function room_member(home, raw, locked = false) {
       ? { name, adapter: manual ? '' : profile.adapter, token, access, session_mode: profile?.session_id ? 'borrowed' : 'new' }
       : { action: 'active', token };
     const view = await site_request(input.site, action === 'add' ? `/api/rooms/${input.room_id}/members` : `/api/rooms/${input.room_id}/members/${current.id}`,
-      input.token, body);
+      input.token, body, headers);
     return { room_id: input.room_id, member: name, access: manual ? 'manual' : 'runner', free: view, access_file };
   } finally { release(); }
 }
@@ -1623,7 +1637,7 @@ async function host_room(home, access_file) {
   const room = await api(config, '');
   const roster = room.free?.members || [];
   if (!host || !roster.some(member => member.name === host && member.role === 'host' && member.status === 'active')) throw new Error('只有本房间的主持人能运行此命令');
-  return { path, config, roster };
+  return { path, config, roster, labels: room.labels || {}, host };
 }
 
 /**
@@ -1722,6 +1736,154 @@ export async function join_workflow(home, { access_file, cards }) {
   return sync_workflow_cards(home, path, config, roster, cards?.length ? cards : known.filter(card => !mapped.includes(card)));
 }
 
+// When the owner left the room's goal budget at no limit, a goal the host opens itself still stops by these.
+const HOST_GOAL_BUDGET = { max_continues: 8, max_minutes: 90 };
+const LIVE_EXECUTION = ['dispatched', 'started'];
+
+/** The active-or-away member a host names by member ID or display name; never the host itself. */
+function host_target({ roster, labels, host }, wanted) {
+  if (!wanted) throw new Error('须用 --member 指定成员（成员 ID 或显示名）');
+  const member = roster.find(item => item.status !== 'removed' && (item.name === wanted || labels[item.name] === wanted));
+  if (!member) throw new Error(`本房间没有成员 ${wanted}`);
+  if (member.name === host) throw new Error('主持人不能对自己执行此操作；更换或移除主持人由用户决定');
+  return member;
+}
+
+/** The profile a host-invited member starts from: this computer's saved settings, project access at most write. */
+function host_invite_profile(home, name, { access, model, effort }) {
+  if (access && !HOST_CARD_ACCESS.includes(access)) throw new Error('主持人邀请的成员项目权限只能是 read 或 write');
+  if (!card_platform_ready(home, name)) {
+    const ready = [...new Set([...Object.keys(launch_settings(home).participants), ...Object.keys(API_PROVIDERS).filter(platform => card_api_profile(home, platform))])];
+    throw new Error(`本机没有配置 ${name} 的软件或 API Key；只能邀请本机已配置的平台：${ready.join('、')}`);
+  }
+  const api = card_api_profile(home, platform_of(name));
+  const saved = launch_settings(home).participants[platform_of(name)]?.project_access;
+  const project_access = access || (HOST_CARD_ACCESS.includes(saved) ? saved : 'write');
+  return { ...api, project_access, ...(model ? { model } : {}), ...(effort && !api ? { effort } : {}) };
+}
+
+/** The positive execution number a host passes with --execution. */
+function execution_number(value) {
+  const id = Number(value);
+  if (!Number.isSafeInteger(id) || id <= 0) throw new Error('须用 --execution 指定执行编号');
+  return id;
+}
+
+/** Read the discussion, or start (room default limits), pause, resume or end it with the revision just read. */
+function host_discussion(ctx, { do: step, goal, revision, submission_id }) {
+  if (!step) return ctx.call('/discussion');
+  if (step === 'start') {
+    if (!goal) throw new Error('开启讨论须用 --goal 写明讨论目标');
+    return ctx.call('/discussion', { action: 'start', goal, revision, submission_id: submission_id || randomUUID() });
+  }
+  if (!['pause', 'resume', 'end'].includes(step)) throw new Error('--do 须为 start、pause、resume 或 end');
+  return ctx.call('/discussion', { action: step, revision });
+}
+
+/** Read the goal, or open it under the owner's default budget (a bounded one when that is unlimited), pause, resume or end it. */
+function host_goal(ctx, { do: step, goal, revision }) {
+  if (!step) return ctx.call('/goal');
+  if (step === 'start') {
+    if (!goal) throw new Error('开启 Goal 须用 --goal 写明目标');
+    const preferences = launch_settings(ctx.home).create_preferences || {};
+    const budget = {
+      max_continues: preferences.goal_max_continues || HOST_GOAL_BUDGET.max_continues,
+      max_minutes: preferences.goal_max_minutes || HOST_GOAL_BUDGET.max_minutes,
+    };
+    return ctx.call('/goal', { action: 'start', objective: goal, revision, ...budget });
+  }
+  if (!['pause', 'resume', 'end'].includes(step)) throw new Error('--do 须为 start、pause、resume 或 end');
+  return ctx.call('/goal', { action: step === 'end' ? 'clear' : step, revision });
+}
+
+/** Steer a member's running execution with an interjection; a retry passes the same --submission-id. */
+function host_steer(ctx, { member: wanted, text, submission_id }) {
+  const member = host_target(ctx, wanted);
+  if (!text) throw new Error('须用 --text 写明要对它说的话');
+  if (!LIVE_EXECUTION.includes(member.execution?.status)) throw new Error(`${wanted} 当前没有进行中的执行；要它发言请在回答里用 --to 点名`);
+  return ctx.call(`/executions/${member.execution.id}`, { action: 'interject', text, submission_id: submission_id || randomUUID() });
+}
+
+/** Set a member's display name and, optionally, its description. */
+async function host_label(ctx, { member: wanted, label, description }) {
+  const member = host_target(ctx, wanted);
+  if (!label && !description) throw new Error('须用 --label 或 --description 指定显示名或描述');
+  if (label) await ctx.call('/labels', { labels: { [member.name]: label } });
+  if (description) await ctx.call('/descriptions', { descriptions: { [member.name]: description } });
+  return { member: member.name, label: label || null, description: description || null };
+}
+
+/** Invite a member from this computer's configured software, project access at most write. */
+async function host_invite(ctx, options) {
+  if (!options.name) throw new Error('须用 --name 指定要邀请的平台（如 Claude、Codex）');
+  const taken = new Set(ctx.roster.map(member => member.name));
+  const name = taken.has(options.name) ? free_instance(options.name, taken) : options.name;
+  const profile = host_invite_profile(ctx.home, name, options);
+  const joined = await room_member(ctx.home, { ...ctx.owner, action: 'add', name, participants: { [name]: profile } }, false, ctx.headers);
+  return { member: joined.member, project_access: profile.project_access };
+}
+
+/** Read the speaking order, or change its not-yet-spoken part with the revision just read; display names are accepted. */
+function host_order(ctx, { order, revision }) {
+  if (!order) return ctx.call('/speaking-order');
+  if (!revision) throw new Error('调整发言顺序前先不带 --order 读取当前顺序，再用 --revision 带上其 revision');
+  const names = order.split(',').map(name => name.trim()).filter(Boolean)
+    .map(name => ctx.roster.find(member => member.status === 'active' && ctx.labels[member.name] === name && member.name !== name)?.name || name);
+  return ctx.call('/speaking-order', { revision, order: names });
+}
+
+const HOST_CONTROLS = {
+  stop: (ctx, o) => ctx.call(`/members/${host_target(ctx, o.member).id}/interrupt`, {}),
+  'stop-all': ctx => ctx.call('/stop', {}),
+  steer: host_steer,
+  retry: (ctx, o) => ctx.call(`/executions/${execution_number(o.execution)}`, { action: 'retry' }),
+  details: (ctx, o) => execution_details_command(ctx.home, { ...ctx.owner, execution_id: execution_number(o.execution) }),
+  order: host_order,
+  invite: host_invite,
+  away: (ctx, o) => ctx.call(`/members/${host_target(ctx, o.member).id}`, { action: 'away' }),
+  remove: (ctx, o) => ctx.call(`/members/${host_target(ctx, o.member).id}`, { action: 'remove' }),
+  back: (ctx, o) => room_member(ctx.home, { ...ctx.owner, action: 'rejoin', name: host_target(ctx, o.member).name }, false, ctx.headers),
+  model: (ctx, o) => room_member_model(ctx.home, { ...ctx.owner, name: host_target(ctx, o.member).name, model: o.model || '', effort: o.effort || '' }),
+  access: (ctx, o) => {
+    if (!HOST_CARD_ACCESS.includes(o.access)) throw new Error('主持人只能把成员的项目权限设为 read 或 write');
+    return room_member_access(ctx.home, { ...ctx.owner, name: host_target(ctx, o.member).name, project_access: o.access });
+  },
+  adapter: (ctx, o) => room_member_adapter(ctx.home, { ...ctx.owner, name: host_target(ctx, o.member).name, adapter: o.adapter }),
+  label: host_label,
+  discussion: host_discussion,
+  goal: host_goal,
+  withdraw: (ctx, o) => {
+    const id = Number(o.message);
+    if (!Number.isSafeInteger(id) || id <= 0) throw new Error('须用 --message 指定要撤回的派活消息编号');
+    return ctx.call(`/dispatches/${id}/withdraw`, {});
+  },
+  checkin: (ctx, o) => {
+    if (o.off) return ctx.call('/host-checkin', { off: true });
+    const minutes = Number(o.minutes);
+    if (!Number.isSafeInteger(minutes)) throw new Error('须用 --minutes 指定间隔分钟数（5–120），或 --off 关闭');
+    return ctx.call('/host-checkin', { minutes });
+  },
+};
+
+/**
+ * The host runs a room control the owner otherwise does in the web page, when the owner granted this room full host
+ * control (`host_workflows`), so it can keep work moving and handle what goes wrong by itself: stop, steer or retry a
+ * member, read an execution's local log, change the speaking order, invite (configured software, at most write), send
+ * away, remove or bring back members, change a member's model, effort, client or access (read/write only), label it,
+ * and read, start, pause, resume or end the discussion or goal. The site checks every write as for the owner (revisions
+ * included). What stays the owner's: acting on the host itself, approving rounds beyond the limit, access above write
+ * or tool approvals, project directories, the owner's messages and private chats.
+ */
+export async function host_control(home, action, options) {
+  if (!Object.hasOwn(HOST_CONTROLS, action || '')) throw new Error(`操作须为 ${Object.keys(HOST_CONTROLS).join('、')} 之一`);
+  const { config, roster, labels, host } = await host_room(home, options.access_file);
+  if (!config.host_workflows) throw new Error('房主没有为本房间打开“主持人完整权限”；请让用户在电脑上“成员与设置 → 协作设置”打开后再试');
+  const headers = { 'User-Agent': `AI-CoDiscuss-host:${host}` };
+  const owner = { site: config.site, room_id: config.room, token: config.token };
+  const call = (path, body) => site_request(config.site, `/api/rooms/${config.room}${path}`, config.token, body, headers);
+  return HOST_CONTROLS[action]({ home, config, roster, labels, host, headers, owner, call }, options);
+}
+
 /** Cards as the host may bring them: any access above writing is lowered to it. */
 const host_cards = agents => agents.map(agent => agent.project_access && !HOST_CARD_ACCESS.includes(agent.project_access)
   ? { ...agent, project_access: 'write' } : agent);
@@ -1736,7 +1898,7 @@ const host_cards = agents => agents.map(agent => agent.project_access && !HOST_C
 export async function adopt_workflow(home, { access_file, draft_file, workflow_id }) {
   if (!draft_file === !workflow_id) throw new Error('须提供 --draft 草稿文件或 --id 工作流库中的工作流 ID 之一；凭据用 --access-file 或 DISCUSS_ACCESS_FILE');
   const { config, roster } = await host_room(home, access_file);
-  if (!config.host_workflows) throw new Error('房主没有允许本房间的主持人自建工作流；请让用户在电脑上“成员与设置 → 协作设置”打开后再试');
+  if (!config.host_workflows) throw new Error('房主没有为本房间打开“主持人完整权限”；请让用户在电脑上“成员与设置 → 协作设置”打开后再试');
   const bound = config.workflow?.id;
   let workflow;
   if (workflow_id) workflow = get_workflow(home, workflow_id);
@@ -1795,12 +1957,23 @@ export async function launch_main(args = process.argv.slice(2), input_text) {
     file: { type: 'string' }, 'dry-run': { type: 'boolean' }, browser: { type: 'boolean' }, remote: { type: 'boolean' }, device: { type: 'string' },
     'configuration-locked': { type: 'boolean' }, help: { type: 'boolean', short: 'h' },
     draft: { type: 'string' }, 'access-file': { type: 'string' }, dir: { type: 'string' }, card: { type: 'string' }, id: { type: 'string' },
+    member: { type: 'string' }, order: { type: 'string' }, revision: { type: 'string' }, name: { type: 'string' }, access: { type: 'string' },
+    model: { type: 'string' }, effort: { type: 'string' }, do: { type: 'string' }, execution: { type: 'string' }, text: { type: 'string' },
+    goal: { type: 'string' }, label: { type: 'string' }, description: { type: 'string' }, adapter: { type: 'string' }, 'submission-id': { type: 'string' },
+    message: { type: 'string' }, minutes: { type: 'string' }, off: { type: 'boolean' },
   } });
   if (values.help || !positionals.length) return process.stdout.write(HELP);
   if (positionals[0] === 'workflow-adopt') {
     const home = service_home();
     const result = await adopt_workflow(home, { draft_file: values.draft, workflow_id: values.id, access_file: values['access-file'] || process.env.DISCUSS_ACCESS_FILE });
     return process.stdout.write(`${JSON.stringify(result)}\n`);
+  }
+  if (positionals[0] === 'host-control') {
+    const { member, order, revision, name, access, model, effort, execution, text, goal, label, description, adapter } = values;
+    const result = await host_control(service_home(), positionals[1], { member, order, revision, name, access, model, effort, execution, text, goal,
+      label, description, adapter, message: values.message, minutes: values.minutes, off: values.off, do: values.do, submission_id: values['submission-id'], access_file: values['access-file'] || process.env.DISCUSS_ACCESS_FILE });
+    return process.stdout.write(`${JSON.stringify(result)}
+`);
   }
   if (positionals[0] === 'workflow-join') {
     const cards = (values.card || '').split(',').map(card => card.trim()).filter(Boolean);
@@ -1818,7 +1991,7 @@ export async function launch_main(args = process.argv.slice(2), input_text) {
   // Another device's request may only use what this computer granted; the flag is set by the relay, never by the request.
   if (values.remote) {
     guard_remote_request(positionals[0], input, { projects: launch_projects(home).projects, participants: launch_settings(home).participants, home });
-    if (positionals[0] === 'room-workflow' && input?.action === 'host') throw new Error('“允许主持人自建工作流”只能在电脑上开启');
+    if (positionals[0] === 'room-workflow' && input?.action === 'host') throw new Error('“主持人完整权限”只能在电脑上开启');
     // Another device repeats the saved program locations it cannot see; keep them rather than dropping them.
     if (positionals[0] === 'settings' && input?.participants) input.participants = keep_saved_locations(home, input.participants);
     // Tool approvals saved here stay this computer's decision; a room created from another device does not take them.

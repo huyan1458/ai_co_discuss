@@ -227,6 +227,9 @@ async function save_description({ text, label, as_template }) {
   finally { describing_saving.value = false; }
 }
 
+/** The host's timed check-in, when it set one. */
+const checkin = computed(() => room.value.free?.host_checkin || null);
+
 const starting = ref(false);
 /** A discussion needs an AI host the local service wakes. */
 const can_start = computed(() => Boolean(host.value && host.value.access === "runner") && view.value.launch.available);
@@ -248,6 +251,10 @@ watch(() => room.value.id, () => { starting.value = false; });
       <div v-if="rounds_meter" class="pb-meter pb-rounds" title="主持人连续派活的轮数；到上限自动停下，可继续">
         <div class="pb-meter-label"><span>连续派活</span><b>{{ rounds_meter.text }}</b></div>
         <div v-if="rounds_meter.ratio !== null" class="pb-bar"><i :style="{ width: `${Math.round(rounds_meter.ratio * 100)}%` }"></i></div>
+      </div>
+      <div v-if="checkin" class="pb-checkin" title="主持人给自己设的定时检查：房间还有进行中的工作时按间隔唤醒它查看进展，房间空闲后自动结束">
+        <span>定时检查 · 每 {{ checkin.minutes }} 分钟 · 下次 {{ bridge.format_time(checkin.due_at * 1000) }}</span>
+        <UButton v-if="view.access?.can_manage" label="关闭" size="xs" color="neutral" variant="ghost" :loading="pending === 'stop_host_checkin'" :disabled="!!pending" @click="act('stop_host_checkin')" />
       </div>
       <div v-if="status.continue_chain && view.access?.can_manage" class="pb-chain-actions">
         <UButton v-for="rounds in continue_choices" :key="rounds" :label="rounds === status.asked_rounds ? `批准 ${rounds} 轮` : `继续 ${rounds} 轮`" icon="i-lucide-play" size="sm" color="neutral" variant="outline" class="pb-action"

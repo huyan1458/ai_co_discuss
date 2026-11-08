@@ -764,7 +764,7 @@ const hover_notes = computed(() => {
 .wf-row:hover .wf-note { opacity: .6; }
 
 /* Duration column: tabular figures, the state under it when it is not a plain finish. */
-.wf-end { display: flex; flex-direction: column; align-items: flex-end; justify-content: center; padding-right: 16px; font-family: var(--wf-mono); font-size: 12px; line-height: 16px; font-variant-numeric: tabular-nums; }
+.wf-end { display: flex; flex-direction: column; align-items: flex-end; justify-content: center; padding-right: 16px; white-space: nowrap; font-family: var(--wf-mono); font-size: 12px; line-height: 16px; font-variant-numeric: tabular-nums; }
 .wf-end small { color: var(--wf-muted); font-family: var(--ui-font-sans, inherit); font-size: 11px; }
 .wf-end small.is-failed { color: var(--wf-failed); }
 .wf-end small.is-running { color: var(--wf-accent); }
@@ -845,7 +845,7 @@ const hover_notes = computed(() => {
   .wf-summary dt { font-size: 11px; }
   .wf-summary dd { margin-top: 0; font-size: 14px; line-height: 20px; }
   .wf-legend { gap: 2px 10px; padding-block: 6px; font-size: 11px; }
-  .wf-grid { grid-template-columns: minmax(0, 1fr) 64px; }
+  .wf-grid { grid-template-columns: minmax(0, 1fr) 80px; }
   /* Stacked rows put a label line between lanes, which would break a hand-off line; the rows' indents show it instead. */
   .wf-axis-label, .wf-fold-label, .wf-link { display: none; }
   .wf-run { max-width: 100%; flex-basis: 100%; }

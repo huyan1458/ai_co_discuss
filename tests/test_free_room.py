@@ -387,12 +387,11 @@ class SingleMemberTests(FreeRoomTests):
         self.assertEqual(room["members"][0]["execution"]["status"], "completed")
         self.assertEqual(room["members"][0]["read_until"], saved["message"]["id"])
 
-    def test_event_log_records_request_lifecycle_for_the_owner_only(self):
-        """Triggers log a message, its request and execution in order; members cannot read the log."""
+    def test_event_log_records_request_lifecycle(self):
+        """Triggers log a message, its request and execution in order (who else may read it: see HostTests)."""
         message = self.say("请改首页标题")[1]["message"]
         execution = self.reserve()[1]
         self.answer(execution["id"])
-        self.assertEqual(self.request(f"{self.path}/events", token=self.member)[0], 403)
         log = self.request(f"{self.path}/events", token=self.owner)[1]
         kinds = [event["kind"] for event in log["events"]]
         created = next(event for event in log["events"] if event["kind"] == "request.created")
@@ -1254,6 +1253,87 @@ class HostRoomTests(FreeRoomTests):
 
 class HostTests(HostRoomTests):
     """An AI host routes unnamed messages, dispatches members, and is woken once per finished batch."""
+
+    def test_host_reads_the_event_log_and_others_executions_without_private_chats_or_message_text(self):
+        """The host diagnoses from the log and any member's execution; private chats and message text stay out of its copy."""
+        FreeRoomTests.say(self, "请改首页标题", to=["Codex"])
+        execution = self.reserve_for("Codex")[1]
+        codex = self.member_id("Codex")
+        self.request(f"{self.path}/members/{codex}/chat", {"text": "私下的话", "submission_id": "c-1"}, self.owner)
+        self.assertEqual(self.request(f"{self.path}/events", token=self.codex)[0], 403)
+        status, log = self.request(f"{self.path}/events", token=self.member)
+        self.assertEqual(status, 200, log)
+        text = json.dumps(log, ensure_ascii=False)
+        self.assertNotIn("私下的话", text)
+        self.assertNotIn("请改首页标题", text)
+        self.assertIn("execution.created", [event["kind"] for event in log["events"]])
+        self.assertEqual(self.request(f"{self.path}/executions/{execution['id']}", token=self.member)[0], 200)
+        self.assertEqual(self.request(f"{self.path}/executions/{execution['id']}", token=self.gemini)[0], 403)
+
+    def host_dispatch(self, **extra):
+        """The host answers its route request by dispatching; returns the dispatch message id."""
+        execution = self.reserve_for("Claude")[1]
+        status, saved = self.request(f"{self.path}/messages", {"author": "Claude", "text": "派活", "source": "cli",
+                                                               "submission_id": uuid.uuid4().hex, "execution_id": execution["id"], **extra}, self.member)
+        self.assertEqual(status, 201, saved)
+        return saved["message"]["id"]
+
+    def test_withdrawing_a_host_relay_stops_its_running_step_and_nothing_follows_or_hands_back(self):
+        """A loop between two members, as the host sent it, ends at once when the host withdraws that dispatch."""
+        FreeRoomTests.say(self, "写到第 10 集")
+        message_id = self.host_dispatch(to=["Codex", "Antigravity"], sequential=True, loop=True)
+        running = self.reserve_for("Codex")[1]
+        user = FreeRoomTests.say(self, "别人的消息")[1]["message"]
+        self.assertEqual(self.request(f"{self.path}/dispatches/{user['id']}/withdraw", {}, self.owner)[0], 400)
+        self.assertGreaterEqual(self.request(f"{self.path}/dispatches/{message_id}/withdraw", {}, self.member)[0], 400)
+        status, view = self.request(f"{self.path}/dispatches/{message_id}/withdraw", {}, self.owner)
+        self.assertEqual(status, 200, view)
+        codex = next(member for member in view["members"] if member["name"] == "Codex")
+        self.assertEqual(codex["execution"]["id"], running["id"])
+        self.assertEqual(codex["execution"]["status"], "cancelled")
+        self.assertFalse(any(member == "Antigravity" for member, _, status in self.requests() if status == "pending"))
+        self.assertNotIn(("Claude", "handoff", "pending"), self.requests())
+
+    def test_a_host_checkin_wakes_it_while_work_is_in_flight_and_ends_once_the_room_is_idle(self):
+        """The timed check-in is set during the host's own execution, fires while members work, and ends on idle."""
+        FreeRoomTests.say(self, "请安排")
+        execution = self.reserve_for("Claude")[1]
+        self.assertEqual(self.request(f"{self.path}/host-checkin", {"minutes": 1}, self.owner)[0], 400)
+        self.assertGreaterEqual(self.request(f"{self.path}/host-checkin", {"minutes": 5}, self.member)[0], 400)
+        self.assertEqual(self.request(f"{self.path}/host-checkin", {"minutes": 5}, self.owner)[0], 200)
+        self.request(f"{self.path}/messages", {"author": "Claude", "text": "派活", "source": "cli", "submission_id": uuid.uuid4().hex,
+                                               "execution_id": execution["id"], "to": ["Codex"]}, self.member)
+        due = lambda: self.database_value("UPDATE free_host_checkins SET due_at=unixepoch()-1")
+        due()
+        self.request(self.path + "/inbox", token=self.owner)
+        self.assertIn(("Claude", "notice", "pending"), self.requests())
+        self.work("Claude")
+        self.work("Codex")
+        self.work("Claude")
+        due()
+        self.request(self.path + "/inbox", token=self.owner)
+        with closing(sqlite3.connect(self.database)) as connection:
+            self.assertIsNone(connection.execute("SELECT 1 FROM free_host_checkins").fetchone())
+
+    def database_value(self, sql):
+        """Run one statement on the test database, e.g. to move a timer."""
+        with closing(sqlite3.connect(self.database)) as connection, connection:
+            connection.execute(sql)
+
+    def test_a_member_quiet_past_the_stall_limit_is_reported_to_the_host_once(self):
+        """No output for ten minutes hands the host one notice per quiet spell; the execution keeps running."""
+        FreeRoomTests.say(self, "请安排")
+        self.work("Claude", to=["Codex"])
+        execution = self.reserve_for("Codex")[1]
+        with closing(sqlite3.connect(self.database)) as connection, connection:
+            connection.execute("UPDATE member_executions SET created_at=unixepoch()-900,activity_at=unixepoch()-700 WHERE id=?", (execution["id"],))
+        for _ in range(2):
+            self.request(self.path + "/inbox", token=self.owner)
+        messages = self.request(f"{self.path}/messages", token=self.owner)[1]["messages"]
+        notices = [item for item in messages if item["author"] == "系统" and f"#{execution['id']}" in item["text"]]
+        self.assertEqual(len(notices), 1, notices)
+        self.assertIn(("Claude", "notice", "pending"), self.requests())
+        self.assertEqual(self.request(self.path)[1]["free"]["members"][1]["execution"]["status"], execution["status"])
 
     def test_host_dispatch_hands_back_once_after_every_member_finished(self):
         """Two dispatched members produce exactly one hand-off, after the last of them finishes."""
