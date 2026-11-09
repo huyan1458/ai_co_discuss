@@ -6,7 +6,7 @@ import { render_markdown } from "../frontend/markdown.mjs";
 
 test("renders headings, emphasis, nested lists, quotes, tables, and line breaks", () => {
   const html = render_markdown("### 事实与假设\n\n**已知事实**与*假设*\n第二行\n\n- 第一项\n  - 子项\n\n1. 复核\n2. 收束\n\n> 引用原话\n\n| 项目 | 结果 |\n| --- | --- |\n| 检索 | 通过 |\n\n---");
-  for (const part of ["<h3>事实与假设</h3>", "<strong>已知事实</strong>", "<em>假设</em>", "<br>", "<ul>", "<ol>", "<blockquote>", "<th>项目</th>", "<td>通过</td>", "<hr>"]) assert.ok(html.includes(part), part);
+  for (const part of ["<h3>事实与假设</h3>", "<strong>已知事实</strong>", "<em>假设</em>", "<br>", "<ul>", "<ol>", "<blockquote>", '<th><div class="markdown-cell">项目</div></th>', '<td><div class="markdown-cell">通过</div></td>', "<hr>"]) assert.ok(html.includes(part), part);
   assert.match(html, /class="markdown-table"[^>]+tabindex="0"/);
 });
 

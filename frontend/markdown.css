@@ -43,8 +43,14 @@ html[data-theme="channel-light"] .markdown-body {
 .markdown-body pre { max-width: 100%; overflow-x: auto; margin: .8em 0 1em; padding: 14px 16px; border: 1px solid var(--markdown-line); border-radius: 6px; background: var(--markdown-panel); line-height: 1.6; white-space: pre; overflow-wrap: normal; }
 .markdown-body pre code { padding: 0; border: 0; border-radius: 0; background: none; white-space: inherit; }
 .markdown-body .markdown-table { max-width: 100%; overflow-x: auto; margin: 1em 0; }
-.markdown-body table { width: max-content; min-width: 50%; max-width: 100%; border-collapse: collapse; font-size: .93em; }
-.markdown-body :is(th, td) { border: 1px solid var(--markdown-line); padding: .55em .8em; min-width: 6em; text-align: left; }
+.markdown-body table { width: max-content; min-width: 50%; border-collapse: collapse; font-size: .93em; }
+.markdown-body :is(th, td) { border: 1px solid var(--markdown-line); padding: .55em .8em; text-align: left; vertical-align: top; }
+.markdown-body .markdown-cell { max-width: 20em; overflow-wrap: break-word; }
+.markdown-body .markdown-code { position: relative; }
+.markdown-body div.markdown-code > pre { padding-right: 44px; }
+.markdown-body .markdown-copy { position: absolute; top: 6px; right: 6px; z-index: 1; display: grid; place-items: center; width: 30px; height: 30px; padding: 0;
+  border: 0; border-radius: 5px; color: inherit; background: var(--markdown-panel); opacity: .55; cursor: pointer; user-select: none; }
+.markdown-body .markdown-copy:hover, .markdown-body .markdown-copy:focus-visible { opacity: 1; }
 .markdown-body th { background: var(--markdown-panel); font-weight: 650; }
 .markdown-body img { max-width: 100%; height: auto; }
 .markdown-body .mention { color: var(--markdown-link); background: none; border-radius: 3px; padding: 0 2px; }

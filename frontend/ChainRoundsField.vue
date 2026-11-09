@@ -1,9 +1,8 @@
 <script setup>
 /**
  * How many rounds the host may run from one owner message before it waits: a round is one host dispatch, its members'
- * answers and the hand-back (a whole relay pass counts as one). Written as one sentence with the stepper inline, so the
- * number reads as rounds, never as a count of requests; 0 means unlimited.
- * Shared by the new-room form and the room page's collaboration settings; the default slot appends a note to the help line.
+ * answers and the hand-back (a whole relay pass counts as one); 0 means unlimited.
+ * Shared by the new-room form (which passes a title) and the room page's collaboration settings (whose row label is the title).
  */
 import { ref, watch } from "vue";
 import NumberStepper from "./NumberStepper.vue";
@@ -12,7 +11,7 @@ import NumberStepper from "./NumberStepper.vue";
 const MAX_CHAIN_ROUNDS = 100;
 const UNLIMITED = 0;
 const DEFAULT_FINITE = 10;
-const props = defineProps({ modelValue: { type: Number, required: true }, disabled: Boolean });
+const props = defineProps({ modelValue: { type: Number, required: true }, disabled: Boolean, title: { type: String, default: "" } });
 const emit = defineEmits(["update:modelValue"]);
 // The finite limit to return to when "unlimited" is switched off.
 const finite = ref(DEFAULT_FINITE);
@@ -20,22 +19,25 @@ watch(() => props.modelValue, (value) => { if (value !== UNLIMITED) finite.value
 </script>
 
 <template>
-  <span class="chain-rounds">
-    <span class="chain-rounds-sentence">
-      <template v-if="modelValue === UNLIMITED"><span>主持人收到你的一条消息后，可一直连续派活，不限轮数</span></template>
-      <template v-else>
-        <span>主持人收到你的一条消息后，最多连续派活</span>
-        <NumberStepper :model-value="modelValue" :max="MAX_CHAIN_ROUNDS" label="主持人连续派活轮数" :disabled="disabled" @update:model-value="emit('update:modelValue', $event)" />
-        <span>轮，然后停下等你</span>
-      </template>
-      <UCheckbox :model-value="modelValue === UNLIMITED" :disabled="disabled" label="不限" aria-label="主持人连续派活轮数不限" :ui="{ root: 'items-center' }" @update:model-value="emit('update:modelValue', $event ? UNLIMITED : finite)" />
+  <span class="limit-field">
+    <span class="limit-field-row">
+      <span v-if="title" class="limit-field-title">{{ title }}</span>
+      <span class="limit-field-controls">
+        <template v-if="modelValue !== UNLIMITED">
+          <NumberStepper :model-value="modelValue" :max="MAX_CHAIN_ROUNDS" label="主持人连续派活轮数" :disabled="disabled" @update:model-value="emit('update:modelValue', $event)" />
+          <span>轮</span>
+        </template>
+        <UCheckbox :model-value="modelValue === UNLIMITED" :disabled="disabled" label="不限" aria-label="主持人连续派活轮数不限" :ui="{ root: 'items-center' }" @update:model-value="emit('update:modelValue', $event ? UNLIMITED : finite)" />
+      </span>
     </span>
-    <small class="chain-rounds-help">一轮 = 派活 → 成员回答 → 交回主持人汇总；依次接力走完一圈算一轮。到上限后可一键继续，主持人也可提前申请轮数等你批准；不限时只能靠“全部停止”打断。<slot /></small>
+    <small class="limit-field-help">收到你一条消息后，主持人最多派几轮活就停下等你；派活 → 成员回答 → 交回汇总算一轮。<template v-if="modelValue === UNLIMITED">不限时只能用“全部停止”打断。</template></small>
   </span>
 </template>
 
 <style scoped>
-.chain-rounds { display: flex; flex-direction: column; gap: 6px; }
-.chain-rounds-sentence { display: flex; flex-wrap: wrap; align-items: center; gap: 4px 8px; color: var(--ui-text); font-size: 13px; line-height: 28px; }
-.chain-rounds-help { color: var(--ui-text-muted); font-size: 12px; line-height: 1.6; }
+.limit-field { display: flex; flex-direction: column; gap: 4px; }
+.limit-field-row { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 4px 12px; min-height: 28px; }
+.limit-field-title { color: var(--ui-text); font-size: 13px; }
+.limit-field-controls { display: inline-flex; align-items: center; gap: 8px; color: var(--ui-text); font-size: 13px; white-space: nowrap; }
+.limit-field-help { color: var(--ui-text-muted); font-size: 12px; line-height: 1.6; }
 </style>

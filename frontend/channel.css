@@ -217,6 +217,7 @@ html[data-theme^="channel"] .channel-menu.channel-directory-menu { min-width: 15
 .channel-answer-toggle:hover { color: #d9e0fb; }
 .channel-answer-toggle [class*="icon"] { width: 14px; height: 14px; }
 .channel-answer .markdown-body pre { border: 0; border-radius: 6px; padding: 12px 14px; background: #27292e; }
+.channel-answer .markdown-body .markdown-copy { background: #27292e; }
 .channel-answer .markdown-body :is(th, td) { border-inline: 0; border-color: #ffffff0e; padding: .45em .8em; }
 .channel-answer .markdown-body th { background: #ffffff03; }
 .channel-header { display: flex; align-items: center; gap: 10px; padding: 0 20px; height: 56px; flex-shrink: 0; border-bottom: 1px solid var(--channel-topbar-divider); }
@@ -903,7 +904,9 @@ html[data-theme^="channel"] .advanced-fields { border-color: #414957; }
   .channel-message-author { flex: 1 0 100%; min-width: 0; min-height: 20px; column-gap: 6px; }
   .channel-message-byline strong { font-size: 15px; line-height: 20px; }
   .channel-message-byline .channel-message-provenance { line-height: 16px; }
-  .channel-message-elapsed { margin-left: 0; min-width: 0; overflow: hidden; text-overflow: ellipsis; }
+  /* The byline's 58px right padding keeps the name row clear of the toolbar; the elapsed time sits on the second
+     row below the toolbar, so it takes that padding back and ends flush with the card's text edge. */
+  .channel-message-elapsed { margin-left: auto; margin-right: -58px; min-width: 0; overflow: hidden; text-overflow: ellipsis; }
   .channel-answer-summary { grid-template-columns: minmax(0, 1fr); gap: 4px; margin-top: 14px; }
   .channel-answer-summary > small > span { display: inline; }
   .channel-answer-summary > .channel-message-text { font-size: 14px; }
@@ -1061,7 +1064,7 @@ html[data-motion="off"] *, html[data-motion="off"] *::before, html[data-motion="
   .channel-receipt { border-color: #d6d6d6; background: #fafafa; }
   .channel-receipt > summary, .channel-receipt .channel-message-text { color: var(--ui-text-muted); }
   .channel-receipt > summary:hover { color: var(--ui-text-highlighted); }
-  .channel-answer .markdown-body pre { background: #f6f6f6; }
+  .channel-answer .markdown-body :is(pre, .markdown-copy) { background: #f6f6f6; }
   .channel-answer .markdown-body :is(th, td) { border-color: var(--ui-border); }
   .channel-answer .markdown-body th { background: #f6f6f6; }
   .channel-composer { background: #fff !important; border-color: #c9c9c9; box-shadow: none !important; }

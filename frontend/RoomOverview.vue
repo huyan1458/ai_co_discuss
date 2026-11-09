@@ -351,8 +351,8 @@ const created = computed(() => room.value.created_at ? new Date(room.value.creat
         <div v-if="room.free?.max_rounds != null"><dt>连续派活上限</dt><dd>
           <template v-if="view.access?.can_manage"><ChainRoundsField :model-value="rounds_shown" :disabled="saving_rounds" @update:model-value="save_rounds" />
 </template>
-          <span v-else-if="room.free.max_rounds">主持人收到你的一条消息后，最多连续派活 {{ room.free.max_rounds }} 轮（派活 → 成员回答 → 交回汇总为一轮），然后停下等你</span>
-          <span v-else>主持人收到你的一条消息后，可一直连续派活，不限轮数</span></dd></div>
+          <span v-else-if="room.free.max_rounds">{{ room.free.max_rounds }} 轮后停下等你</span>
+          <span v-else>不限轮数</span></dd></div>
         <div v-if="saved?.registered"><dt>API 请求上限</dt><dd>
           <ApiRequestsField :model-value="requests_shown" :disabled="!view.access?.can_manage || room.archived || saving_requests" @update:model-value="save_requests" /></dd></div>
         <div v-if="!free"><dt>逐人追问</dt><dd>{{ room.named_followup ? '开启：主持人每轮给每位专家写针对性追问' : '关闭：首轮后请专家回应上一轮观点' }}</dd></div>

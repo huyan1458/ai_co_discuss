@@ -93,9 +93,12 @@ function move_pointer(event) {
   const first = slots[0], last = slots[slots.length - 1];
   // The row stays within the list; it lands where its middle crosses another row's middle.
   const offset = Math.min(Math.max(event.clientY - drag.value.start, first.top - slots[from].top), last.top + last.height - slots[from].top - slots[from].height);
+  // Both ways count only rows whose middle the dragged middle has reached; the clamp lets it reach the end rows exactly.
   const middle = slots[from].top + offset + slots[from].height / 2;
-  let to = slots.findIndex((slot) => middle < slot.top + slot.height / 2);
-  if (to < 0) to = slots.length - 1;
+  const centre = (slot) => slot.top + slot.height / 2;
+  let to = from;
+  if (offset < 0) { const above = slots.findIndex((slot, index) => index < from && middle <= centre(slot)); if (above >= 0) to = above; }
+  else slots.forEach((slot, index) => { if (index > from && middle >= centre(slot)) to = index; });
   drag.value = { ...drag.value, offset, to };
 }
 

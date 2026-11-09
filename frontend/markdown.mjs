@@ -26,6 +26,16 @@ markdown.core.ruler.push("source_lines", (state) => {
 });
 markdown.renderer.rules.table_open =() => '<div class="markdown-table" role="region" aria-label="表格，可横向滚动" tabindex="0"><table>\n';
 markdown.renderer.rules.table_close = () => "</table></div>\n";
+// Cell content sits in a width-capped block, so a table keeps its natural width (scrolling sideways when wider than the card)
+// while long cells still wrap instead of stretching into one line.
+for (const cell of ["th", "td"]) {
+  markdown.renderer.rules[`${cell}_open`] = (tokens, index, options, environment, renderer) => `${renderer.renderToken(tokens, index, options)}<div class="markdown-cell">`;
+  markdown.renderer.rules[`${cell}_close`] = (tokens, index, options, environment, renderer) => `</div>${renderer.renderToken(tokens, index, options)}`;
+}
+// Code blocks carry a copy button; the page copies the adjacent <pre> text through a delegated click on [data-copy-code].
+const render_fence = markdown.renderer.rules.fence;
+const COPY_ICON = '<svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="9" y="9" width="12" height="12" rx="2"/><path d="M5 15H4a1 1 0 0 1-1-1V4a1 1 0 0 1 1-1h10a1 1 0 0 1 1 1v1"/></svg>';
+markdown.renderer.rules.fence = (...args) => `<div class="markdown-code"><button type="button" class="markdown-copy" data-copy-code title="复制代码" aria-label="复制代码">${COPY_ICON}</button>${render_fence(...args)}</div>\n`;
 
 /**
  * Render stored Markdown as safe HTML; the source text remains unchanged.

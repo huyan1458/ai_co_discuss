@@ -4252,6 +4252,11 @@ function bind_delegated_actions() {
     }
   });
   document.querySelectorAll("[data-tab]").forEach((tab) => tab.addEventListener("click", () => select_tab(tab.dataset.tab)));
+  // Rendered Markdown code blocks anywhere on the page (cards, previews, workflow skills) copy their own text.
+  document.addEventListener("click", (event) => {
+    const button = event.target.closest("[data-copy-code]");
+    if (button) copy_text(button.parentElement.querySelector("pre")?.textContent || "").catch((error) => show_toast(error.message, true));
+  });
 }
 
 /** Show a targeted confirmation without changing the current channel or draft. */

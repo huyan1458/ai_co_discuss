@@ -73,7 +73,9 @@ const COMMENT_WIDTH = 340;
 const COMMENT_HEIGHT = 40;
 const OFFER_GAP = 6;
 const FOLLOW_KEYS = ["ArrowUp", "ArrowDown", "PageUp", "PageDown", "Home", "End", " "];
-const editor_body = ref(null), markdown_scroll = ref(null), markdown_body = ref(null), code_scroll = ref(null), comment_input = ref(null);
+const editor_body = ref(null), markdown_scroll = ref(null), markdown_body = ref(null), code_scroll = ref(null), comment_input = ref(null), crumbs_nav = ref(null);
+// A deep path shows its end, where the file's own folder is, instead of the root levels.
+watch([() => open.value, active_path], async () => { await nextTick(); if (crumbs_nav.value) crumbs_nav.value.scrollLeft = crumbs_nav.value.scrollWidth; });
 const speech_ready = ref(false);
 // `offer`: a settled selection in the Markdown preview, with what quoting it would add; `commenting`: the offer being
 // added to the chat, waiting for an optional comment.
@@ -92,6 +94,24 @@ const reader = use_read_aloud({ bridge, container: () => markdown_scroll.value, 
   voice_for: async () => { try { return (await speech_settings()).file_voice || ""; } catch { return ""; } },
   title: () => view.value.room?.title || "" });
 const can_read = computed(() => speech_ready.value && format.value === "markdown" && !source.value && Boolean(preview.value?.text));
+/** Phones fold the file's actions into the head's "..." menu; font steps keep it open so taps can repeat. */
+const file_menu = computed(() => {
+  const keep_open = (action) => (event) => { event.preventDefault(); action(); };
+  const groups = [];
+  if (preview.value?.text != null && !(format.value === "html" && !showing_source.value)) groups.push([
+    { label: "缩小字号", icon: "i-lucide-a-arrow-down", disabled: font_scale.value <= FONT_SCALE_MIN, onSelect: keep_open(() => change_font_scale(-1)) },
+    { label: "放大字号", icon: "i-lucide-a-arrow-up", disabled: font_scale.value >= FONT_SCALE_MAX, onSelect: keep_open(() => change_font_scale(1)) },
+    { label: `恢复默认字号（当前 ${Math.round(font_scale.value * 100)}%）`, icon: "i-lucide-rotate-ccw", disabled: font_scale.value === 1, onSelect: keep_open(() => change_font_scale(0)) },
+  ]);
+  const rest = [];
+  if (showing_source.value) rest.push({ label: wrap.value ? "关闭自动换行" : "自动换行", icon: "i-lucide-wrap-text", onSelect: () => { wrap.value = !wrap.value; } });
+  if (can_read.value) rest.push(reader.state.reading ? { label: "停止朗读", icon: "i-lucide-square", onSelect: () => reader.stop() } : { label: "朗读", icon: "i-lucide-volume-2", onSelect: () => read_file() });
+  if (can_render.value) rest.push(source.value ? { label: "预览", icon: "i-lucide-eye", onSelect: () => { source.value = false; } } : { label: "源码", icon: "i-lucide-code-xml", onSelect: () => { source.value = true; } });
+  if (rest.length) groups.push(rest);
+  // Kept out of the head so it is not mistaken for the active tab's own close button.
+  if (tabs.value.length > 1) groups.push([{ label: "关闭全部文件", icon: "i-lucide-x", onSelect: () => close_all() }]);
+  return groups;
+});
 
 /** Check whether this computer has a speech key, so the read-aloud entries show only when they can work. */
 function check_speech() {
@@ -163,6 +183,8 @@ const FLOAT_FALLBACK_TOP = 80;
 const PULL_FOLD_SHARE = 0.25;
 const PULL_FOLD_SPEED = 0.6;
 const PULL_FOLD_MIN = 40;
+// A pull starts only past this downward distance, so a tap's small drift stays a tap (blocking its touchmove cancels the click).
+const PULL_START = 10;
 // While pulled, the window shrinks by up to this much.
 const PULL_SHRINK = 0.15;
 const frame = ref(null);
@@ -310,6 +332,7 @@ function pull_move(event) {
   if (!pull.active) {
     // Upward or sideways first: scrolling or tab strip swiping, not a pull.
     if (dy <= 0 || Math.abs(dx) > dy) { if (Math.abs(dx) + Math.abs(dy) > 4) pull = null; return; }
+    if (dy < PULL_START) return;
     pull.active = true;
   }
   if (event.cancelable) event.preventDefault();
@@ -549,7 +572,7 @@ onBeforeUnmount(() => {
             <button type="button" class="project-editor-tab-close" :aria-label="`关闭 ${name_of(item.path)}`" title="关闭" @click="close_tab(item.id)"><UIcon name="i-lucide-x" /></button>
           </div>
         </div>
-        <div class="project-editor-file-actions">
+        <div v-if="!narrow" class="project-editor-file-actions">
           <div v-if="preview?.text != null && !(format === 'html' && !showing_source)" class="project-editor-font" role="group" aria-label="字号">
             <button type="button" title="缩小字号" aria-label="缩小字号" :disabled="font_scale <= FONT_SCALE_MIN" @click="change_font_scale(-1)"><UIcon name="i-lucide-a-arrow-down" /></button>
             <button type="button" class="project-editor-font-value" title="恢复默认字号" aria-label="恢复默认字号" @click="change_font_scale(0)">{{ Math.round(font_scale * 100) }}%</button>
@@ -565,10 +588,11 @@ onBeforeUnmount(() => {
           </div>
         </div>
         <div class="project-editor-window-actions">
+          <UDropdownMenu v-if="narrow && file_menu.length" :items="file_menu" :content="{ align: 'end', sideOffset: 4 }" :ui="{ content: 'channel-menu' }"><UButton icon="i-lucide-ellipsis" color="neutral" variant="ghost" size="sm" aria-label="文件操作" title="字号、朗读、显示方式" /></UDropdownMenu>
           <UButton :icon="narrow ? 'i-lucide-chevron-down' : 'i-lucide-minus'" color="neutral" variant="ghost" size="sm" title="收起为悬浮窗（手机上也可下拉收起）" aria-label="收起预览" @click="fold" />
-          <UButton v-if="!narrow || tabs.length > 1" icon="i-lucide-x" color="neutral" variant="ghost" size="sm" :title="tabs.length > 1 ? '关闭全部文件' : '关闭预览'" :aria-label="tabs.length > 1 ? '关闭全部文件' : '关闭预览'" @click="close_all" />
+          <UButton v-if="!narrow" icon="i-lucide-x" color="neutral" variant="ghost" size="sm" :title="tabs.length > 1 ? '关闭全部文件' : '关闭预览'" :aria-label="tabs.length > 1 ? '关闭全部文件' : '关闭预览'" @click="close_all" />
         </div>
-        <nav class="project-editor-breadcrumbs" aria-label="文件位置">
+        <nav ref="crumbs_nav" class="project-editor-breadcrumbs" aria-label="文件位置">
           <template v-for="(part, index) in preview_crumbs" :key="part.path">
             <UIcon v-if="index" name="i-lucide-chevron-right" class="project-crumb-separator" />
             <button v-if="index < preview_crumbs.length - 1" type="button" title="在列表中打开此文件夹" @click="reveal_folder(part.path)">{{ part.name }}</button>
@@ -651,8 +675,8 @@ onBeforeUnmount(() => {
 /* The window itself, moved and scaled as a whole when it folds into the floating button or is pulled down. */
 .project-editor-frame { display: flex; flex: 1; flex-direction: column; min-height: 0; overflow: hidden; border: 1px solid var(--ui-border-accented); border-radius: 10px;
   background: var(--ui-bg); box-shadow: 0 24px 80px #0000008c; }
-/* Head: tabs, the file's actions and the window's on one row, breadcrumbs under them; narrow screens move the file's
-   actions to the end of the breadcrumb row. */
+/* Head: tabs, the file's actions and the window's on one row, breadcrumbs under them; narrow screens fold the file's
+   actions into a "..." menu beside the window buttons. */
 .project-editor-head { display: grid; flex-shrink: 0; grid-template-columns: minmax(0, 1fr) auto auto; grid-template-rows: 38px 26px;
   grid-template-areas: "tabs file window" "crumbs crumbs crumbs"; }
 .project-editor-head > :is(.project-editor-tablist, .project-editor-file-actions, .project-editor-window-actions) { background: var(--ui-bg-elevated); border-bottom: 1px solid var(--ui-border); }
@@ -743,25 +767,17 @@ onBeforeUnmount(() => {
   .project-editor-tab { max-width: 160px; }
   .project-editor-tab-name { padding-left: 10px; }
   .project-editor-tab-close { opacity: 1; }
-  .project-editor-head { grid-template-columns: minmax(0, 1fr) auto; grid-template-rows: 42px 40px; grid-template-areas: "tabs window" "crumbs file"; }
-  .project-editor-head > .project-editor-file-actions { gap: 2px; padding: 0 6px 0 0; background: none; border: 0; }
-  .project-editor-window-actions { gap: 8px; padding: 0 4px; }
-  .project-editor-file-actions:empty + .project-editor-window-actions { border-left: 0; }
+  /* The file's actions live in the "..." menu beside the window buttons, so the breadcrumbs get the whole second row. */
+  .project-editor-head { grid-template-columns: minmax(0, 1fr) auto; grid-template-rows: 42px 40px; grid-template-areas: "tabs window" "crumbs crumbs"; }
+  .project-editor-window-actions { gap: 4px; padding: 0 4px; border-left: 0 !important; }
   /* 40px touch targets; the file name is already on its tab, so the breadcrumbs end at its folder. */
-  .project-editor-head :is(.project-editor-file-actions, .project-editor-window-actions) > button,
-  .project-editor-modes button { justify-content: center; width: 40px; height: 40px; padding: 0; }
-  .project-editor-breadcrumbs { font-size: 13px; }
+  .project-editor-window-actions > button { justify-content: center; width: 40px; height: 40px; padding: 0; }
+  /* Each folder fills the row's height, so it is a full touch target rather than its text line. */
+  .project-editor-breadcrumbs { gap: 0; padding: 0 6px; font-size: 13px; }
+  .project-editor-breadcrumbs button { height: 40px; padding: 0 8px; }
   .project-crumb-file, .project-editor-breadcrumbs > .project-crumb-separator:nth-last-child(2) { display: none !important; }
-  /* One button showing the mode it switches to, instead of the two-part switch. */
-  .project-editor-modes { padding: 0; background: none; }
-  .project-editor-modes button[aria-pressed="true"] { display: none; }
-  .project-editor-modes button > span:not(.project-mode-icon) { display: none; }
-  .project-mode-icon { width: 16px; height: 16px; }
   .project-markdown-preview { padding: 18px 16px 32px; }
   .project-code { font-size: calc(12px * var(--file-font-scale, 1)); line-height: calc(18px * var(--file-font-scale, 1)); }
-  /* Phones: the percentage is dropped (tapping the minus/plus shows the change); 40px targets as the other buttons. */
-  .project-editor-font-value { display: none !important; }
-  .project-editor-font button { width: 40px; height: 40px; }
   .project-code-gutter { min-width: 40px; padding-inline: 10px !important; }
   .project-code-number { padding: 0 10px; }
   .project-editor-modified, .project-editor-encoding { display: none; }
