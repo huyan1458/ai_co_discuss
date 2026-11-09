@@ -371,7 +371,7 @@ function resize_nav_by_key(event) {
           <ExecutionTimeline v-if="timeline_view === 'waterfall'" @detail="open_detail" />
           <EventLog v-else @detail="open_detail" />
         </div>
-        <div v-if="view.tab === 'workflows'" v-keep-reading class="content-page" role="tabpanel" aria-label="工作流">
+        <div v-if="view.tab === 'workflows'" class="content-page workflow-page" role="tabpanel" aria-label="工作流">
           <WorkflowLibrary />
         </div>
         <div v-if="view.tab === 'files'" v-keep-reading class="content-page" role="tabpanel" aria-label="文件">
@@ -385,7 +385,7 @@ function resize_nav_by_key(event) {
         </div>
       </div>
       <div v-else-if="view.tab === 'workflows'" class="channel-body">
-        <div class="channel-content"><div v-keep-reading class="content-page" role="tabpanel" aria-label="工作流"><WorkflowLibrary /></div></div>
+        <div class="channel-content"><div class="content-page workflow-page" role="tabpanel" aria-label="工作流"><WorkflowLibrary /></div></div>
       </div>
       <div v-else class="channel-empty"><UIcon name="i-lucide-hash" /><h2>新建一个协作房间</h2><p>邀请 AI 一起协作，随时 @ 提问；需要时开启讨论，保留所有人的观点。</p><UButton icon="i-lucide-plus" label="新建房间" color="neutral" @click="create_channel()" /></div>
     </main>

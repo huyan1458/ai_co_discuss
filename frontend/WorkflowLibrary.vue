@@ -1,74 +1,94 @@
 <script setup>
 /**
- * The 工作流 page: the workflow library of this computer, with or without a room open. Lists every workflow; the
- * selected one shows its relay (from the flow canvas), SKILL.md and cards; 新建 / 导入 / 编辑 / 删除 all happen here.
- * Enabling a workflow in a room stays with the message box's "/" and the side panel.
+ * The 工作流 page: one column listing this computer's workflows, and the selected one as an infinite canvas filling the
+ * rest, edited in place (cards, arrows, checkpoints). Text settings open in a drawer; 保存 writes it all at once.
+ * Works with or without a room open; enabling a workflow in a room stays with the message box's "/" and the side panel.
  */
-import { computed, inject, ref, watch } from "vue";
+import { computed, inject, onBeforeUnmount, onMounted, ref, watch } from "vue";
 import ConfirmDialog from "./ConfirmDialog.vue";
+import WorkflowCanvas from "./WorkflowCanvas.vue";
 import WorkflowEditor from "./WorkflowEditor.vue";
 import { workflow_files_from_folder, workflow_files_from_zip } from "./workflow-files.js";
-import { access_label } from "../runner/expert_prompts.mjs";
-import { compile_flow } from "../runner/workflow_flow.mjs";
+import { flow_in_use } from "../runner/workflow_flow.mjs";
 
-const { view, bridge, act } = inject("discussion");
+const { view, bridge } = inject("discussion");
+const COMMANDS_FILE = "commands.json";
+const NEW_SKILL = "按流程画布的接力派活；每一棒做什么、交回什么，写在派活正文里。";
 const available = computed(() => view.value.launch.available || view.value.launch.remote);
 const workflows = computed(() => view.value.launch.workflows || []);
-const selected = ref("");
-const detail = ref(null);
-const loading = ref(false);
-const editing = ref(false), editor_id = ref(""), editor_draft = ref(null);
-const deleting = ref(false);
+// The workflow on the canvas: a saved one (`saved_id`) or a new or imported draft; `snapshot` is how it was when loaded.
+const draft = ref(null), saved_id = ref(""), snapshot = ref(""), canvas_key = ref(0);
+const commands_allowed = ref(false);
+const details = ref(false), busy = ref(false);
+const deleting = ref(false), leaving = ref(null);
 const zip_input = ref(null), folder_input = ref(null);
 const add_items = [[
-  { label: "新建", icon: "i-lucide-plus", onSelect: () => open_editor("", { agents: [] }) },
-  { label: "导入 zip", icon: "i-lucide-file-archive", onSelect: () => zip_input.value?.click() },
-  { label: "导入文件夹", icon: "i-lucide-folder-input", onSelect: () => folder_input.value?.click() },
+  { label: "新建", icon: "i-lucide-plus", onSelect: () => guard(() => edit_draft({ label: "未命名工作流", description: "", skill: NEW_SKILL, agents: [] })) },
+  { label: "导入 zip", icon: "i-lucide-file-archive", onSelect: () => guard(() => zip_input.value?.click()) },
+  { label: "导入文件夹", icon: "i-lucide-folder-input", onSelect: () => guard(() => folder_input.value?.click()) },
 ]];
-const rendered_skill = computed(() => detail.value ? window.discuss_markdown.render_markdown(detail.value.skill || "") : "");
-const card_label = (agent) => agent.label || bridge.default_name(agent.name);
-// The relay the canvas lays out, in words; null without a canvas.
-const relay = computed(() => {
-  if (!detail.value?.flow) return null;
-  const labels = Object.fromEntries(detail.value.agents.map((agent) => [agent.card, card_label(agent)]));
-  const compiled = compile_flow(detail.value.flow, detail.value.agents.map((agent) => agent.card), labels);
-  if (compiled.errors.length) return { errors: compiled.errors };
-  return { steps: compiled.steps.map((step, index) => {
-    const gate = compiled.gates.find((item) => item.after === index);
-    const mark = !gate ? "" : gate.repeat_from === null ? " ⏸ 主持人把关" : ` ⟲ 可从 ${labels[compiled.steps[gate.repeat_from][0]]} 再来一圈`;
-    return `${step.map((card) => labels[card]).join(" + ")}${mark}`;
-  }) };
-});
 
-/** Read the selected workflow in full; a broken one shows its error from the list instead. */
-async function load(id) {
-  detail.value = null;
-  if (!id || workflows.value.find((item) => item.id === id)?.error) return;
-  loading.value = true;
-  try { detail.value = await bridge.local_request("workflows", { action: "get", id }); }
-  catch (error) { bridge.notify("error", error.message); }
-  finally { loading.value = false; }
+/** What saving would write, the comparison for unsaved changes too: a canvas with only its start counts as none. */
+function payload(value) {
+  const { resources, commands: ignored, flow, directory, ...fields } = value;
+  const cards = new Set(fields.agents.map((agent) => agent.card));
+  const nodes = flow_in_use(flow) ? flow.nodes.filter((node) => node.type !== "card" || cards.has(node.card)) : null;
+  const ids = new Set((nodes || []).map((node) => node.id));
+  const saved_flow = nodes ? { nodes, edges: flow.edges.filter((edge) => ids.has(edge.source) && ids.has(edge.target)) } : null;
+  return { ...fields, flow: saved_flow, resources };
 }
-watch(selected, load);
-// Keep a selection while the library has one: the first workflow at first, the next one after a deletion.
+const dirty = computed(() => Boolean(draft.value) && (!saved_id.value || JSON.stringify(payload(draft.value)) !== snapshot.value));
+
+/** Put a workflow on the canvas. */
+function show(value, id) {
+  draft.value = value;
+  saved_id.value = id;
+  commands_allowed.value = false;
+  canvas_key.value++;
+  // The canvas fills in a start node on mount, so the comparison is taken once it did.
+  setTimeout(() => { snapshot.value = JSON.stringify(payload(draft.value)); }, 0);
+}
+
+/** A new or imported workflow, not yet saved. */
+function edit_draft(value) {
+  show({ agents: [], ...JSON.parse(JSON.stringify(value)), id: value.id || `workflow-${Date.now().toString(36)}` }, "");
+  details.value = Boolean(value.commands?.length);
+}
+
+/** Open a saved workflow; a broken one shows its error instead. */
+async function open_saved(id) {
+  if (!id || workflows.value.find((item) => item.id === id)?.error) { draft.value = null; saved_id.value = id || ""; return; }
+  busy.value = true;
+  try { show(await bridge.local_request("workflows", { action: "get", id }), id); }
+  catch (error) { bridge.notify("error", error.message); }
+  finally { busy.value = false; }
+}
+
+/** Run an action that replaces the canvas, asking first when it holds unsaved changes. */
+function guard(action) {
+  if (dirty.value) leaving.value = action;
+  else action();
+}
+
+function discard() {
+  const action = leaving.value;
+  leaving.value = null;
+  action?.();
+}
+
+// Open the first workflow when the page opens, and keep a valid selection when the library changes.
 watch(workflows, (list) => {
-  if (!list.some((item) => item.id === selected.value)) selected.value = list[0]?.id || "";
+  if (!draft.value && !saved_id.value && list.length) open_saved(list[0].id);
+  else if (saved_id.value && !list.some((item) => item.id === saved_id.value)) open_saved(list[0]?.id || "");
 }, { immediate: true });
 watch(available, (value) => { if (value) bridge.reload_workflows(); }, { immediate: true });
 
-/** Open the editor on a saved workflow, or on a new or imported draft. */
-function open_editor(id, draft = null) {
-  editor_id.value = id;
-  editor_draft.value = draft;
-  editing.value = true;
-}
-
-/** Read the opened files, let the local service check them, and show the result in the editor; nothing is saved yet. */
+/** Read the opened files, let the local service check them, and put the result on the canvas; nothing is saved yet. */
 async function import_files(read) {
   try {
-    const draft = await bridge.local_request("workflows", { action: "preview", files: await read() });
-    if (draft.ignored?.length) bridge.notify("warning", `已忽略不支持的文件：${draft.ignored.join("、")}`);
-    open_editor("", draft);
+    const value = await bridge.local_request("workflows", { action: "preview", files: await read() });
+    if (value.ignored?.length) bridge.notify("warning", `已忽略不支持的文件：${value.ignored.join("、")}`);
+    edit_draft(value);
   } catch (error) { bridge.notify("error", error.message); }
 }
 
@@ -84,103 +104,103 @@ function on_folder(event) {
   if (files.length) import_files(() => workflow_files_from_folder(files));
 }
 
-/** Show the saved workflow, reloading it when it is the one already selected. */
-async function on_saved(workflow) {
-  await bridge.reload_workflows();
-  if (selected.value === workflow.id) await load(workflow.id);
-  else selected.value = workflow.id;
+/** Save the workflow as files; the local service checks every field. A saved one keeps its folder's other files. */
+async function save() {
+  if (!draft.value.label.trim() || !draft.value.skill.trim()) { details.value = true; bridge.notify("warning", "请填写名称和做法说明"); return; }
+  const { resources, ...edited } = payload(draft.value);
+  // An import keeps its commands file only when the user allowed it; the rest of its files come along either way.
+  const kept = resources && !commands_allowed.value ? Object.fromEntries(Object.entries(resources).filter(([path]) => path !== COMMANDS_FILE)) : resources;
+  busy.value = true;
+  try {
+    const result = await bridge.local_request("workflows", { action: "save", workflow: saved_id.value ? edited : { ...edited, resources: kept } });
+    bridge.notify("info", `已保存「${result.label || result.id}」`);
+    await bridge.reload_workflows();
+    show(result, result.id);
+  } catch (error) { bridge.notify("error", error.message); }
+  finally { busy.value = false; }
 }
 
-async function on_deleted() {
-  await bridge.reload_workflows();
+/** Ctrl+S (⌘S) saves the open workflow while this page is shown. */
+function save_key(event) {
+  if (!(event.ctrlKey || event.metaKey) || event.key.toLowerCase() !== "s" || !draft.value) return;
+  event.preventDefault();
+  if (dirty.value && !busy.value) save();
 }
+onMounted(() => window.addEventListener("keydown", save_key));
+onBeforeUnmount(() => window.removeEventListener("keydown", save_key));
 
-/** Delete the selected workflow the user confirmed. */
+/** Delete the open workflow the user confirmed. */
 async function remove() {
-  const id = selected.value;
-  try { await bridge.local_request("workflows", { action: "delete", id }); }
-  catch (error) { bridge.notify("error", error.message); return; }
-  bridge.notify("info", `已删除工作流「${detail.value?.label || id}」`);
   deleting.value = false;
+  details.value = false;
+  try { await bridge.local_request("workflows", { action: "delete", id: saved_id.value }); }
+  catch (error) { bridge.notify("error", error.message); return; }
+  bridge.notify("info", `已删除「${draft.value?.label || saved_id.value}」`);
+  draft.value = null;
+  saved_id.value = "";
   await bridge.reload_workflows();
 }
 </script>
 
 <template>
   <section class="workflow-library" aria-label="工作流">
-    <p v-if="!available" class="workflow-library-empty" role="status">工作流存在运行本机服务的电脑上；连接本机服务（或已配对的电脑）后在这里管理。</p>
-    <template v-else>
-      <aside class="workflow-library-list">
-        <div class="workflow-library-head">
-          <h2>工作流<small>{{ workflows.length }}</small></h2>
-          <UDropdownMenu :items="add_items" :ui="{ content: 'channel-menu' }">
-            <UButton icon="i-lucide-plus" label="添加" size="xs" color="neutral" variant="soft" />
-          </UDropdownMenu>
-        </div>
-        <ul v-if="workflows.length" role="listbox" aria-label="工作流列表">
-          <li v-for="item in workflows" :key="item.id">
-            <button type="button" role="option" :aria-selected="selected === item.id" :class="{ 'is-broken': item.error }" :title="item.error || item.description" @click="selected = item.id">
-              <UIcon :name="item.error ? 'i-lucide-triangle-alert' : 'i-lucide-network'" class="workflow-library-icon" />
-              <span><strong>{{ item.label }}</strong><small>{{ item.error ? '无法读取' : `${item.cards} 张卡片` }}</small></span>
-            </button>
-          </li>
-        </ul>
-        <p v-else class="workflow-library-hint">还没有工作流。点“添加”新建，或导入别人分享的 zip、文件夹。</p>
-        <p class="workflow-library-hint">在房间里用输入框的 <code>/</code> 选工作流交给主持人启用。</p>
-      </aside>
-      <article class="workflow-library-detail">
-        <p v-if="loading" class="workflow-library-hint">正在读取…</p>
-        <p v-else-if="workflows.find((item) => item.id === selected)?.error" class="workflow-library-hint is-warn">{{ workflows.find((item) => item.id === selected).error }}</p>
-        <template v-else-if="detail">
-          <header class="workflow-library-title">
-            <div><h3>{{ detail.label || detail.id }}</h3><p>{{ detail.description || '没有描述。' }}</p></div>
-            <span class="workflow-library-actions">
-              <UButton icon="i-lucide-pencil" label="编辑" size="sm" color="neutral" variant="soft" @click="open_editor(detail.id)" />
-              <UButton icon="i-lucide-copy" label="复制路径" size="sm" color="neutral" variant="ghost" @click="act('copy', detail.directory)" />
-              <UButton icon="i-lucide-trash-2" label="删除" size="sm" color="error" variant="ghost" @click="deleting = true" />
-            </span>
-          </header>
-          <section class="workflow-library-block" aria-label="接力顺序">
-            <h4>接力顺序</h4>
-            <ol v-if="relay?.steps" class="workflow-library-relay"><li v-for="(text, index) in relay.steps" :key="index">{{ text }}</li></ol>
-            <p v-else-if="relay?.errors" class="workflow-library-hint is-warn">流程画布排不成接力：{{ relay.errors.join('；') }}</p>
-            <p v-else class="workflow-library-hint">没有画流程画布，由主持人按做法说明组织。点“编辑”可在画布上连好接力。</p>
-          </section>
-          <section class="workflow-library-block" aria-label="成员卡片">
-            <h4>成员卡片<small>{{ detail.agents.length }}</small></h4>
-            <ul v-if="detail.agents.length" class="workflow-library-cards">
-              <li v-for="agent in detail.agents" :key="agent.card" :data-identity="bridge.identities[agent.name]?.style">
-                <UAvatar :src="bridge.identities[agent.name]?.icon" :text="bridge.identities[agent.name]?.initials" :alt="agent.name" size="xs" />
-                <span><strong>{{ card_label(agent) }}</strong><small>{{ agent.name }} · {{ agent.model || '软件默认模型' }} · 项目{{ access_label(agent.project_access) }}</small>
-                  <em v-if="agent.description">{{ agent.description }}</em></span>
-              </li>
-            </ul>
-            <p v-else class="workflow-library-hint">没有成员卡片。</p>
-          </section>
-          <section class="workflow-library-block" aria-label="做法说明">
-            <h4>做法说明（SKILL.md）</h4>
-            <div class="workflow-library-skill markdown-body" v-html="rendered_skill"></div>
-          </section>
+    <aside class="workflow-library-list">
+      <div class="workflow-library-head">
+        <h2>工作流</h2>
+        <UDropdownMenu v-if="available" :items="add_items" :ui="{ content: 'channel-menu' }">
+          <UButton icon="i-lucide-plus" size="xs" color="neutral" variant="ghost" aria-label="新建或导入工作流" title="新建或导入" />
+        </UDropdownMenu>
+      </div>
+      <ul role="listbox" aria-label="工作流列表">
+        <li v-if="draft && !saved_id">
+          <button type="button" role="option" aria-selected="true"><UIcon name="i-lucide-file-plus-2" class="workflow-library-icon" />
+            <span><strong>{{ draft.label || '未命名工作流' }}</strong><small>未保存</small></span></button>
+        </li>
+        <li v-for="item in workflows" :key="item.id">
+          <button type="button" role="option" :aria-selected="saved_id === item.id" :class="{ 'is-broken': item.error }" :title="item.error || item.description"
+            @click="saved_id !== item.id && guard(() => open_saved(item.id))">
+            <UIcon :name="item.error ? 'i-lucide-triangle-alert' : 'i-lucide-workflow'" class="workflow-library-icon" />
+            <span><strong>{{ item.label }}</strong><small>{{ item.error ? '无法读取' : `${item.cards} 位成员` }}</small></span>
+          </button>
+        </li>
+      </ul>
+    </aside>
+    <div class="workflow-library-stage">
+      <WorkflowCanvas v-if="draft" :key="canvas_key" v-model:flow="draft.flow" v-model:agents="draft.agents">
+        <template #actions>
+          <input v-model="draft.label" class="workflow-library-name" :maxlength="32" placeholder="未命名工作流" aria-label="工作流名称" title="点击改名"
+            :style="{ width: `calc(${Math.max(5, Math.min(16, (draft.label || '').length + 1))}em + 18px)` }" @keydown.enter="$event.target.blur()" />
+          <i v-if="dirty" class="workflow-library-dirty" title="有未保存的修改（Ctrl+S 保存）" />
+          <UTooltip text="名称、描述与做法说明（SKILL.md）"><UButton icon="i-lucide-file-text" size="sm" color="neutral" variant="ghost" aria-label="工作流说明" @click="details = true" /></UTooltip>
+          <UTooltip text="保存（Ctrl+S）"><UButton icon="i-lucide-save" label="保存" size="sm" class="channel-primary-button" :disabled="!dirty" :loading="busy" @click="save" /></UTooltip>
         </template>
-        <p v-else class="workflow-library-hint">选择左侧的工作流查看。</p>
-      </article>
-    </template>
+      </WorkflowCanvas>
+      <div v-else class="workflow-library-empty">
+        <template v-if="!available"><UIcon name="i-lucide-monitor-off" /><p>连接本机服务后管理工作流</p></template>
+        <template v-else-if="workflows.find((item) => item.id === saved_id)?.error"><UIcon name="i-lucide-triangle-alert" /><p>{{ workflows.find((item) => item.id === saved_id).error }}</p></template>
+        <template v-else-if="busy"><UIcon name="i-lucide-loader-circle" class="animate-spin" /></template>
+        <template v-else>
+          <UIcon name="i-lucide-workflow" />
+          <UDropdownMenu :items="add_items" :ui="{ content: 'channel-menu' }"><UButton icon="i-lucide-plus" label="新建工作流" color="neutral" variant="soft" /></UDropdownMenu>
+        </template>
+      </div>
+    </div>
     <input ref="zip_input" type="file" accept=".zip,application/zip" hidden @change="on_zip" />
     <input ref="folder_input" type="file" webkitdirectory hidden @change="on_folder" />
-    <WorkflowEditor v-model:open="editing" :workflow-id="editor_id" :draft="editor_draft" @saved="on_saved" @deleted="on_deleted" />
-    <ConfirmDialog :open="deleting" :title="`删除工作流「${detail?.label || selected}」`" description="工作流文件夹会从本机删除，无法撤销。"
+    <WorkflowEditor v-if="draft" v-model:open="details" v-model:workflow="draft" v-model:commands-allowed="commands_allowed" :saved="Boolean(saved_id)" @delete="deleting = true" />
+    <ConfirmDialog :open="deleting" :title="`删除工作流「${draft?.label || saved_id}」`" description="工作流文件夹会从本机删除，无法撤销。"
       :items="['已启用它的房间会显示“工作流不可用”，成员改用房间里的设置。', '房间成员、消息记录和项目文件不受影响。']" confirm-label="删除" danger
       @update:open="(value) => { if (!value) deleting = false; }" @confirm="remove" />
+    <ConfirmDialog :open="Boolean(leaving)" title="放弃未保存的修改？" description="当前工作流的修改还没有保存。" :items="[]" confirm-label="放弃修改" danger
+      @update:open="(value) => { if (!value) leaving = null; }" @confirm="discard" />
   </section>
 </template>
 
 <style scoped>
-.workflow-library { display: grid; grid-template-columns: minmax(200px, 260px) minmax(0, 1fr); gap: 20px; align-items: start; }
-.workflow-library-empty { grid-column: 1 / -1; margin: 24px 0; color: var(--ui-text-muted); font-size: 13px; text-align: center; }
-.workflow-library-list { position: sticky; top: 0; display: grid; gap: 10px; }
-.workflow-library-head { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
-.workflow-library-head h2, .workflow-library-block h4 { display: flex; align-items: baseline; gap: 6px; margin: 0; color: var(--ui-text-highlighted); font-size: 14px; font-weight: 600; }
-.workflow-library-head small, .workflow-library-block h4 small { color: var(--ui-text-dimmed); font-size: 11px; font-weight: 400; }
+.workflow-library { display: grid; grid-template-columns: 220px minmax(0, 1fr); height: 100%; min-height: 0; }
+.workflow-library-list { display: flex; flex-direction: column; gap: 6px; min-height: 0; padding: 14px 10px; overflow-y: auto; border-right: 1px solid var(--ui-border-muted); }
+.workflow-library-head { display: flex; align-items: center; justify-content: space-between; padding: 0 4px 4px; }
+.workflow-library-head h2 { margin: 0; color: var(--ui-text-highlighted); font-size: 13px; font-weight: 600; }
 .workflow-library-list ul { display: grid; gap: 2px; margin: 0; padding: 0; list-style: none; }
 .workflow-library-list li > button { display: flex; align-items: center; gap: 8px; width: 100%; padding: 7px 8px; border-radius: 8px; text-align: left; color: var(--ui-text-toned); }
 .workflow-library-list li > button:hover { background: var(--ui-bg-elevated); }
@@ -190,29 +210,17 @@ async function remove() {
 .workflow-library-list strong { overflow: hidden; font-size: 13px; font-weight: 500; white-space: nowrap; text-overflow: ellipsis; }
 .workflow-library-list small { color: var(--ui-text-dimmed); font-size: 11px; }
 .workflow-library-icon { flex-shrink: 0; width: 15px; height: 15px; }
-.workflow-library-hint { margin: 0; color: var(--ui-text-muted); font-size: 12px; line-height: 1.6; }
-.workflow-library-hint.is-warn { color: var(--ui-warning, #e0a33a); }
-.workflow-library-hint code { padding: 0 4px; border-radius: 4px; background: var(--ui-bg-accented); }
-.workflow-library-detail { display: grid; gap: 18px; min-width: 0; }
-.workflow-library-title { display: flex; flex-wrap: wrap; align-items: flex-start; justify-content: space-between; gap: 10px; }
-.workflow-library-title h3 { margin: 0; color: var(--ui-text-highlighted); font-size: 18px; font-weight: 600; }
-.workflow-library-title p { margin: 4px 0 0; color: var(--ui-text-toned); font-size: 13px; overflow-wrap: anywhere; }
-.workflow-library-actions { display: flex; flex-wrap: wrap; gap: 4px; }
-.workflow-library-block { display: grid; gap: 8px; }
-.workflow-library-relay { display: flex; flex-wrap: wrap; gap: 4px 0; margin: 0; padding: 0; list-style: none; counter-reset: step; font-size: 13px; color: var(--ui-text-toned); }
-.workflow-library-relay li { counter-increment: step; }
-.workflow-library-relay li::before { content: counter(step); display: inline-grid; place-items: center; width: 18px; height: 18px; margin-right: 5px; border-radius: 50%;
-  background: color-mix(in srgb, var(--channel-accent, var(--ui-primary)) 18%, transparent); color: var(--channel-accent, var(--ui-primary)); font-size: 11px; }
-.workflow-library-relay li:not(:last-child)::after { content: "→"; margin: 0 10px; color: var(--ui-text-dimmed); }
-.workflow-library-cards { display: grid; grid-template-columns: repeat(auto-fill, minmax(240px, 1fr)); gap: 8px; margin: 0; padding: 0; list-style: none; }
-.workflow-library-cards li { display: flex; gap: 8px; padding: 9px 10px; border: 1px solid var(--ui-border-muted); border-radius: 8px; font-size: 12px; }
-.workflow-library-cards li > span { display: grid; gap: 2px; min-width: 0; }
-.workflow-library-cards strong { color: var(--ui-text-highlighted); font-weight: 600; }
-.workflow-library-cards small { overflow: hidden; color: var(--ui-text-dimmed); white-space: nowrap; text-overflow: ellipsis; }
-.workflow-library-cards em { color: var(--ui-text-toned); font-style: normal; overflow-wrap: anywhere; }
-.workflow-library-skill { padding: 12px 14px; border: 1px solid var(--ui-border-muted); border-radius: 8px; }
+.workflow-library-stage { position: relative; min-width: 0; min-height: 0; }
+.workflow-library-empty { display: grid; place-content: center; justify-items: center; gap: 12px; height: 100%; color: var(--ui-text-muted); font-size: 13px; }
+.workflow-library-empty > span:first-child { width: 36px; height: 36px; color: var(--ui-text-dimmed); }
+.workflow-library-empty p { margin: 0; }
+.workflow-library-name { min-width: 0; height: 30px; padding: 0 8px; border: 1px solid transparent; border-radius: 7px; background: transparent; color: var(--ui-text-highlighted);
+  font-size: 13px; font-weight: 600; outline: none; }
+.workflow-library-name:hover { border-color: var(--ui-border-muted); }
+.workflow-library-name:focus { border-color: var(--channel-accent, var(--ui-primary)); background: var(--ui-bg); }
+.workflow-library-dirty { flex-shrink: 0; width: 7px; height: 7px; margin-right: 4px; border-radius: 50%; background: var(--ui-warning, #e0a33a); }
 @media (max-width: 760px) {
-  .workflow-library { grid-template-columns: minmax(0, 1fr); }
-  .workflow-library-list { position: static; }
+  .workflow-library { grid-template-columns: minmax(0, 1fr); grid-template-rows: auto minmax(0, 1fr); }
+  .workflow-library-list { max-height: 160px; border-right: 0; border-bottom: 1px solid var(--ui-border-muted); }
 }
 </style>

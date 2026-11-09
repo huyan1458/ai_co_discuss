@@ -494,10 +494,12 @@ export function load_room_workflow(config) {
     const workflow = get_workflow(config.api_home, binding.id);
     const { directory } = workflow;
     const cards = Object.fromEntries(workflow.agents.map(agent => [agent.card, agent]));
+    // A canvas whose start has no arrow yet asks for no relay.
+    const flow = workflow.flow ? compile_flow(workflow.flow, Object.keys(cards)) : null;
     return { id: binding.id, label: workflow.label || binding.id, description: workflow.description || '', directory, skill_path: join(directory, 'SKILL.md'), skill: workflow.skill,
       revision: createHash('sha256').update(workflow.skill).digest('hex').slice(0, REVISION_LENGTH),
       members: binding.members || {}, cards, commands: workflow.commands,
-      ...(workflow.flow ? { flow: compile_flow(workflow.flow, Object.keys(cards)) } : {}) };
+      ...(flow && !flow.empty ? { flow } : {}) };
   } catch (error) { return { id: binding.id, error: error.message }; }
 }
 

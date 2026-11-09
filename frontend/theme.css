@@ -17,6 +17,9 @@
 .content-page > * { max-width: 900px; margin-left: auto; margin-right: auto; }
 /* The private chat fills the page and scrolls inside itself, so the page has no scrollbar of its own around it. */
 .content-page.private-page { display: flex; flex-direction: column; }
+/* The workflow page is an infinite canvas: it fills the area edge to edge and scrolls nothing itself. */
+html[data-theme] .content-page.workflow-page, .content-page.workflow-page { padding: 0; overflow: hidden; }
+html[data-theme] .content-page.workflow-page > *, .content-page.workflow-page > * { max-width: none; height: 100%; }
 .page-heading { display: flex; justify-content: space-between; align-items: center; gap: 20px; margin-bottom: 34px; }
 .eyebrow { color: #7f8d93; font-size: 10px; letter-spacing: .07em; }
 .page-heading h2 { font-size: 23px; color: #e0e6e8; font-weight: 500; margin: 7px 0 10px; letter-spacing: -.03em; }

@@ -106,7 +106,8 @@ export function compile_flow(flow, cards = [], labels = {}) {
   if (starts.length !== 1) return { steps: [], gates: [], errors: ['画布须有且只有一个开始节点'], empty: false };
   const start = starts[0];
   const used = shape.nodes.filter(node => node.type !== 'start');
-  if (!used.length) return { steps: [], gates: [], errors: [], empty: true };
+  // Cards laid out with no arrow from the start yet are no relay at all, not a broken one.
+  if (!used.length || !shape.edges.some(edge => edge.source === start.id)) return { steps: [], gates: [], errors: [], empty: true };
   const known = new Set(cards);
   const label = node => node.type === 'host' ? '主持人检查点' : node.type === 'start' ? '开始' : `卡片 ${labels[node.card] || node.card}`;
   const placed = new Set();

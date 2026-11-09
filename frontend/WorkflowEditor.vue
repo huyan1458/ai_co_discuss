@@ -1,234 +1,76 @@
 <script setup>
 /**
- * One workflow in an editor, new, imported or saved: its name, description, the host's SKILL.md and its member cards.
- * Nothing is written until 保存; the local service checks every field. The ID is the folder name, set by the program.
+ * A workflow's text settings in a side drawer beside its canvas: name, one-line description, the host's SKILL.md, the
+ * commands an import registers, the folder and deletion. The cards and the relay are edited on the canvas itself.
  */
-import { computed, inject, ref, watch } from "vue";
-import ConfirmDialog from "./ConfirmDialog.vue";
-import ExpertCard from "./ExpertCard.vue";
-import RosterAdd from "./RosterAdd.vue";
-import WorkflowCanvas from "./WorkflowCanvas.vue";
-import { access_label } from "../runner/expert_prompts.mjs";
-import { flow_in_use } from "../runner/workflow_flow.mjs";
+import { computed, inject, ref } from "vue";
 
 const open = defineModel("open", { type: Boolean, default: false });
-// `workflowId` loads a saved workflow; otherwise `draft` (a new or imported one) is edited.
-const props = defineProps({ workflowId: { type: String, default: "" }, draft: { type: Object, default: null } });
-const emit = defineEmits(["saved", "deleted"]);
-const { view, bridge, act } = inject("discussion");
-const MAX_SKILL = 20000;
-const PRESET_PREFIX = "preset:";
-// A card ID becomes the member name's suffix; 16 characters at most, so a numbered one keeps room for its digits.
-const CARD_BASE = /^[a-z0-9_]{1,14}$/;
-const PRESET_FIELDS = ["label", "description", "project_access", "model", "effort", "system_prompt"];
-const platforms = Object.keys(bridge.identities).filter((name) => name !== "用户");
-const workflow = ref(null);
-const busy = ref(false);
-const previewing = ref(false);
-const deleting = ref(false);
-// The cards show on the flow canvas, where arrows set the relay, or as a plain list; both edit the same cards.
-const card_view = ref("canvas");
+const workflow = defineModel("workflow", { type: Object, required: true });
 // An import's commands run on this computer when an API member calls them, so they are kept only once the user allows them.
-const COMMANDS_FILE = "commands.json";
-const commands_allowed = ref(false);
-const saved = computed(() => Boolean(props.workflowId));
-const commands = computed(() => workflow.value?.commands || []);
+const commands_allowed = defineModel("commandsAllowed", { type: Boolean, default: false });
+const props = defineProps({ saved: Boolean });
+const emit = defineEmits(["delete"]);
+const { view, act } = inject("discussion");
+const MAX_SKILL = 20000;
+const previewing = ref(false);
+const commands = computed(() => workflow.value.commands || []);
 // An import carrying an ID already in the library replaces that workflow when saved.
-const replaced = computed(() => !saved.value && (view.value.launch.workflows || []).find((item) => item.id === workflow.value?.id));
+const replaced = computed(() => !props.saved && (view.value.launch.workflows || []).find((item) => item.id === workflow.value.id));
 const rendered = computed(() => previewing.value ? window.discuss_markdown.render_markdown(workflow.value.skill || "") : "");
-const roster_items = computed(() => [...platforms.map((name) => ({ value: name, name: bridge.display_name(name), ...bridge.identities[name],
-  title: `添加一张 ${bridge.display_name(name)} 卡片`, aria_label: `添加 ${name} 卡片` })),
-  ...view.value && bridge.expert_presets().map((preset, index) => ({ value: PRESET_PREFIX + preset.name, name: preset.label || preset.name,
-    ...bridge.identities[bridge.platform_of(preset.name)], separated: index === 0, title: preset.description || "专家预设", aria_label: `按预设 ${preset.label || preset.name} 添加卡片` }))]);
-
-/** Run one request, report its failure on the toast and keep the editor open. */
-async function run(action) {
-  busy.value = true;
-  try { return await action(); }
-  catch (error) { bridge.notify("error", error.message); return null; }
-  finally { busy.value = false; }
-}
-
-watch(open, async (value) => {
-  if (!value) return;
-  previewing.value = false;
-  commands_allowed.value = false;
-  card_view.value = "canvas";
-  if (!props.workflowId) {
-    const draft = JSON.parse(JSON.stringify(props.draft || {}));
-    workflow.value = { label: "", description: "", skill: "", agents: [], ...draft, id: draft.id || `workflow-${Date.now().toString(36)}` };
-    return;
-  }
-  workflow.value = null;
-  workflow.value = await run(() => bridge.local_request("workflows", { action: "get", id: props.workflowId }));
-  if (!workflow.value) open.value = false;
-}, { immediate: true });
-
-/** The first free card ID from a base: writer, writer2 … or role1, role2 … */
-function next_card(base) {
-  const taken = new Set(workflow.value.agents.map((agent) => agent.card.toLowerCase()));
-  const root = CARD_BASE.test(base) ? base : "role";
-  for (let number = 1; ; number++) {
-    const card = number === 1 && root !== "role" ? root : `${root}${number}`;
-    if (!taken.has(card)) return card;
-  }
-}
-
-/** Add a blank card on a platform, or one filled from an expert preset. */
-function add_card(value) {
-  if (!value.startsWith(PRESET_PREFIX)) {
-    const card = next_card("role");
-    workflow.value.agents.push({ card, name: `${value}-${card}`, project_access: "read" });
-    return;
-  }
-  const preset = bridge.expert_presets().find((item) => item.name === value.slice(PRESET_PREFIX.length));
-  if (!preset) return;
-  const platform = bridge.platform_of(preset.name);
-  const card = next_card(preset.name.slice(platform.length + 1).toLowerCase());
-  const fields = Object.fromEntries(PRESET_FIELDS.filter((key) => preset[key]).map((key) => [key, preset[key]]));
-  workflow.value.agents.push({ project_access: "read", ...fields, card, name: `${platform}-${card}` });
-}
-
-/** Add the current room's members as cards, prompts verbatim; the user then edits or removes them. */
-async function cards_from_room() {
-  const result = await run(() => bridge.local_request("workflows", { action: "room-cards", room_id: view.value.room.id }));
-  if (!result) return;
-  for (const item of result.cards) {
-    const card = next_card(item.card.toLowerCase().slice(0, 14));
-    workflow.value.agents.push({ ...item, card, name: `${bridge.platform_of(item.name)}-${card}` });
-  }
-  bridge.notify("info", `已从当前房间带入 ${result.cards.length} 张卡片；请删去不需要的，并确认提示词里没有本机路径或密钥`);
-}
-
-/** An imported card asked for more than reading; the user grants it card by card. */
-function grant(agent, allowed) {
-  agent.project_access = allowed ? agent.requested_access : "read";
-}
-
-/** The canvas to save: none when it holds only the start, and without cards removed in the list view. */
-function saved_flow(flow) {
-  if (!flow_in_use(flow)) return null;
-  const cards = new Set(workflow.value.agents.map((agent) => agent.card));
-  const nodes = flow.nodes.filter((node) => node.type !== "card" || cards.has(node.card));
-  const ids = new Set(nodes.map((node) => node.id));
-  return { nodes, edges: flow.edges.filter((edge) => ids.has(edge.source) && ids.has(edge.target)) };
-}
-
-/** Save the workflow as files; the server checks every field. A saved workflow keeps its folder's other files as they are. */
-async function save() {
-  const { resources, commands: ignored, flow, ...fields } = workflow.value;
-  const edited = { ...fields, flow: saved_flow(flow) };
-  // An import keeps its commands file only when the user allowed it; the rest of its files come along either way.
-  const kept = resources && !commands_allowed.value ? Object.fromEntries(Object.entries(resources).filter(([path]) => path !== COMMANDS_FILE)) : resources;
-  const result = await run(() => bridge.local_request("workflows", { action: "save", workflow: saved.value ? edited : { ...edited, resources: kept } }));
-  if (!result) return;
-  bridge.notify("info", `已保存工作流「${result.label || result.id}」`);
-  open.value = false;
-  emit("saved", result);
-}
-
-/** Delete the saved workflow the user confirmed. */
-async function remove() {
-  if (!await run(() => bridge.local_request("workflows", { action: "delete", id: props.workflowId }))) return;
-  open.value = false;
-  emit("deleted", props.workflowId);
-}
 </script>
 
 <template>
-  <UModal :content="{ onInteractOutside: (event) => event.preventDefault() }" v-model:open="open" :title="saved ? '编辑工作流' : '新建工作流'"
-    description="做法说明给主持人读，成员卡片是它带来的成员。在流程画布上连好接力时，程序按画布的顺序、并行与循环交接；没连时由主持人按说明组织。"
-    :ui="{ content: 'glass-panel studio-modal workflow-editor-modal is-canvas', body: 'dialog-body' }">
+  <USlideover v-model:open="open" side="right" title="工作流说明" :ui="{ content: 'workflow-details', body: 'workflow-details-body' }">
     <template #body>
-      <p v-if="!workflow" class="fine-print">正在读取工作流…</p>
-      <form v-else id="workflow-editor-form" class="workflow-editor" @submit.prevent="save">
-        <UFormField label="名称" required><UInput v-model="workflow.label" :maxlength="32" autofocus placeholder="例如：小说剧本连载" class="w-full" /></UFormField>
-        <UFormField label="一句话描述" description="主持人凭它判断什么时候用这个工作流。">
-          <UInput v-model="workflow.description" :maxlength="500" placeholder="例如：主持人定方向与骨架，写手按任务书写集，批评家挑常识与设定硬伤。" class="w-full" />
+      <div class="workflow-details-form">
+        <UFormField label="名称" required><UInput v-model="workflow.label" :maxlength="32" class="w-full" /></UFormField>
+        <UFormField label="一句话描述" hint="主持人凭它判断何时使用">
+          <UInput v-model="workflow.description" :maxlength="500" class="w-full" />
         </UFormField>
-        <UFormField label="做法说明（SKILL.md）" required :description="`给主持人读：按成员名称说明分工、顺序和产物位置，不引用卡片提示词。${workflow.skill.length} / ${MAX_SKILL}`">
-          <template #hint><button type="button" class="workflow-editor-toggle" :aria-pressed="previewing" @click="previewing = !previewing">{{ previewing ? '编辑' : '预览' }}</button></template>
-          <div v-if="previewing" class="workflow-editor-preview markdown-body" v-html="rendered"></div>
-          <UTextarea v-else v-model="workflow.skill" :rows="10" autoresize :maxrows="20" :maxlength="MAX_SKILL" class="w-full" />
+        <UFormField label="做法说明" required :hint="`${workflow.skill.length} / ${MAX_SKILL}`">
+          <template #description>
+            <button type="button" class="workflow-details-toggle" :aria-pressed="previewing" @click="previewing = !previewing">
+              <UIcon :name="previewing ? 'i-lucide-pencil' : 'i-lucide-eye'" class="workflow-details-icon" />{{ previewing ? '编辑' : '预览' }}</button>
+          </template>
+          <div v-if="previewing" class="workflow-details-preview markdown-body" v-html="rendered"></div>
+          <UTextarea v-else v-model="workflow.skill" :rows="16" :maxlength="MAX_SKILL" class="w-full" />
         </UFormField>
-        <section class="workflow-editor-cards" aria-label="成员卡片">
-          <h4>成员卡片<small>{{ workflow.agents.length }}</small>
-            <span class="workflow-editor-views" role="radiogroup" aria-label="卡片显示方式">
-              <button type="button" role="radio" :aria-checked="card_view === 'canvas'" @click="card_view = 'canvas'"><UIcon name="i-lucide-workflow" class="workflow-editor-view-icon" />流程画布</button>
-              <button type="button" role="radio" :aria-checked="card_view === 'list'" @click="card_view = 'list'"><UIcon name="i-lucide-layout-grid" class="workflow-editor-view-icon" />卡片列表</button>
-            </span></h4>
-          <RosterAdd label="添加成员卡片" :items="roster_items" @add="add_card" />
-          <WorkflowCanvas v-if="card_view === 'canvas'" v-model:flow="workflow.flow" v-model:agents="workflow.agents" />
-          <div v-else-if="workflow.agents.length" class="workflow-editor-grid">
-            <div v-for="(agent, index) in workflow.agents" :key="agent.card" class="workflow-editor-card">
-              <ExpertCard v-model:preset="workflow.agents[index]" :name="agent.name" mode="cli" :status="{ text: '', tone: '' }"
-                :access_locked="Boolean(agent.requested_access && agent.project_access === 'read')" @remove="workflow.agents.splice(index, 1)" />
-              <label v-if="agent.requested_access" class="workflow-editor-grant"><input type="checkbox" :checked="agent.project_access !== 'read'" @change="grant(agent, $event.target.checked)" />
-                允许卡片要求的「{{ access_label(agent.requested_access) }}」</label>
-            </div>
-          </div>
-          <p v-else class="workflow-editor-empty">还没有成员卡片。点上方添加；只有做法说明时，主持人带着房间里已有的成员按它做。</p>
-          <UButton v-if="view.room?.id" icon="i-lucide-users" label="从当前房间成员导入" size="xs" color="neutral" variant="soft" class="workflow-editor-room" :loading="busy" @click="cards_from_room" />
-        </section>
-        <section v-if="commands.length" class="workflow-editor-commands" aria-label="登记的命令">
-          <h4>登记的命令<small>{{ commands.length }}</small></h4>
-          <p class="fine-print">房间启用本工作流后，模型 API 成员可以在项目目录里运行下面这些命令（只读成员只能运行只读命令），本地软件成员不受影响。</p>
+        <section v-if="commands.length" class="workflow-details-commands" aria-label="登记的命令">
+          <h4><UIcon name="i-lucide-terminal" class="workflow-details-icon" />API 成员可运行的命令</h4>
           <ul>
-            <li v-for="command in commands" :key="command.id"><strong>{{ command.id }}</strong>（{{ command.access === 'read' ? '只读' : '会改文件' }}）：{{ command.description }}
+            <li v-for="command in commands" :key="command.id" :title="command.description"><strong>{{ command.id }}</strong>
+              <UBadge :label="command.access === 'read' ? '只读' : '会改文件'" size="sm" variant="soft" :color="command.access === 'read' ? 'neutral' : 'warning'" />
               <code>{{ command.run.join(' ') }}</code></li>
           </ul>
-          <label v-if="!saved" class="workflow-editor-grant"><input v-model="commands_allowed" type="checkbox" />
-            允许这些命令在本机运行；不勾选则保存时不带命令</label>
+          <label v-if="!saved" class="workflow-details-grant"><input v-model="commands_allowed" type="checkbox" />允许这些命令在本机运行</label>
         </section>
-        <p v-if="replaced" class="fine-print is-warn">工作流库里已有同 ID 的「{{ replaced.label }}」，保存会覆盖它。</p>
-        <p v-if="saved" class="fine-print workflow-editor-path">修改会作用于所有启用它的房间，成员下一次执行时读到新内容。文件夹：{{ workflow.directory }}
-          <UButton label="复制路径" size="xs" variant="ghost" icon="i-lucide-copy" @click="act('copy', workflow.directory)" /></p>
-      </form>
+        <p v-if="replaced" class="workflow-details-warn"><UIcon name="i-lucide-triangle-alert" class="workflow-details-icon" />保存会覆盖库里的「{{ replaced.label }}」</p>
+        <div v-if="saved" class="workflow-details-footer">
+          <UButton icon="i-lucide-folder" label="复制文件夹路径" size="xs" color="neutral" variant="ghost" :title="workflow.directory" @click="act('copy', workflow.directory)" />
+          <UButton icon="i-lucide-trash-2" label="删除工作流" size="xs" color="error" variant="ghost" @click="emit('delete')" />
+        </div>
+      </div>
     </template>
-    <template #footer>
-      <UButton v-if="saved" icon="i-lucide-trash-2" label="删除" color="error" variant="ghost" :disabled="busy || !workflow" @click="deleting = true" />
-      <span class="workflow-editor-spacer" />
-      <UButton label="取消" color="neutral" variant="ghost" @click="open = false" />
-      <UButton type="submit" form="workflow-editor-form" label="保存" class="channel-primary-button" :loading="busy"
-        :disabled="!workflow || !workflow.label.trim() || !workflow.skill.trim()" />
-    </template>
-  </UModal>
-  <ConfirmDialog :open="deleting" :title="`删除工作流「${workflow?.label || ''}」`" description="工作流文件夹会从本机删除，无法撤销。"
-    :items="['已启用它的房间会显示“工作流不可用”，成员改用房间里的设置。', '房间成员、消息记录和项目文件不受影响。']" confirm-label="删除" danger
-    @update:open="(value) => { if (!value) deleting = false; }" @confirm="remove" />
+  </USlideover>
 </template>
 
 <style scoped>
-.workflow-editor { display: flex; flex-direction: column; gap: 14px; }
-.workflow-editor-toggle { color: var(--ui-text-muted); font-size: 12px; }
-.workflow-editor-toggle:hover { color: var(--ui-text-highlighted); }
-.workflow-editor-preview { min-height: 120px; max-height: 420px; overflow: auto; padding: 10px 12px; border: 1px solid var(--ui-border-muted); border-radius: 8px; }
-.workflow-editor-cards { display: grid; gap: 10px; }
-.workflow-editor-cards h4 { display: flex; align-items: baseline; gap: 6px; margin: 0; color: var(--ui-text-highlighted); font-size: 13px; }
-.workflow-editor-cards h4 small { color: var(--ui-text-dimmed); font-size: 11px; font-weight: 400; }
-.workflow-editor-views { display: inline-flex; margin-left: auto; padding: 2px; border: 1px solid var(--ui-border-muted); border-radius: 7px; }
-.workflow-editor-views > button { display: inline-flex; align-items: center; gap: 4px; height: 22px; padding: 0 8px; border-radius: 5px; color: var(--ui-text-muted); font-size: 12px; font-weight: 400; }
-.workflow-editor-view-icon { width: 13px; height: 13px; }
-.workflow-editor-views > button[aria-checked="true"] { background: var(--ui-bg-accented); color: var(--ui-text-highlighted); }
-/* Same card grid as the new-room member list. */
-.workflow-editor-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(min(248px, 100%), 272px)); align-items: start; gap: 8px; }
-.workflow-editor-card { display: grid; gap: 6px; }
-.workflow-editor-grant { display: flex; gap: 6px; align-items: flex-start; color: var(--ui-warning, #e0a33a); font-size: 12px; }
-.workflow-editor-empty { margin: 0; padding: 18px 12px; border: 1px dashed var(--ui-border); border-radius: 8px; text-align: center; color: var(--ui-text-muted); font-size: 12px; }
-.workflow-editor-room { justify-self: start; }
-.workflow-editor-commands { display: grid; gap: 6px; }
-.workflow-editor-commands h4 { display: flex; align-items: baseline; gap: 6px; margin: 0; color: var(--ui-text-highlighted); font-size: 13px; }
-.workflow-editor-commands h4 small { color: var(--ui-text-dimmed); font-size: 11px; font-weight: 400; }
-.workflow-editor-commands ul { display: grid; gap: 4px; margin: 0; padding-left: 18px; font-size: 12px; }
-.workflow-editor-commands code { display: block; overflow-wrap: anywhere; color: var(--ui-text-muted); }
-.workflow-editor-path { display: flex; flex-wrap: wrap; align-items: center; gap: 4px; overflow-wrap: anywhere; }
-.workflow-editor .fine-print { margin: 0; }
-.workflow-editor .is-warn { color: var(--ui-warning, #e0a33a); }
-.workflow-editor-spacer { flex: 1; }
-@media (max-width: 600px) { .workflow-editor-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); } }
+.workflow-details-form { display: grid; gap: 16px; }
+.workflow-details-icon { flex-shrink: 0; width: 13px; height: 13px; }
+.workflow-details-toggle { display: inline-flex; align-items: center; gap: 4px; color: var(--ui-text-muted); font-size: 12px; }
+.workflow-details-toggle:hover { color: var(--ui-text-highlighted); }
+.workflow-details-preview { max-height: 60vh; overflow: auto; padding: 10px 12px; border: 1px solid var(--ui-border-muted); border-radius: 8px; }
+.workflow-details-commands { display: grid; gap: 6px; }
+.workflow-details-commands h4 { display: flex; align-items: center; gap: 6px; margin: 0; color: var(--ui-text-highlighted); font-size: 13px; }
+.workflow-details-commands ul { display: grid; gap: 6px; margin: 0; padding: 0; list-style: none; font-size: 12px; }
+.workflow-details-commands li { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; }
+.workflow-details-commands code { flex-basis: 100%; overflow-wrap: anywhere; color: var(--ui-text-muted); }
+.workflow-details-grant { display: flex; gap: 6px; align-items: center; color: var(--ui-warning, #e0a33a); font-size: 12px; }
+.workflow-details-warn { display: flex; gap: 6px; align-items: center; margin: 0; color: var(--ui-warning, #e0a33a); font-size: 12px; }
+.workflow-details-footer { display: flex; justify-content: space-between; gap: 8px; padding-top: 8px; border-top: 1px solid var(--ui-border-muted); }
 </style>
 
 <style>
-/* The flow canvas needs room: the editor widens beyond the plain form's width. */
-html[data-theme^="channel"] .studio-modal.workflow-editor-modal.is-canvas { max-width: 1240px; }
+html[data-theme^="channel"] .workflow-details { max-width: min(560px, 100vw); }
 </style>
