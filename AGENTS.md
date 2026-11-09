@@ -28,7 +28,7 @@
 | `runner/` | `codiscuss` CLI 与本机接入程序（房间编排 `free_runner.mjs`、常驻服务、启动配置、智能调度 `scheduler.mjs`） | `Ref_技术细节.md`“接入程序”、`tests/test_runner.mjs`；影响使用时同步 `docs/runner.md` |
 | `runner/adapters/` | **适配层**：`profiles.mjs` 各软件的静态事实（显示名、配置字段、档位、能力；不依赖 Node，网页也引用），每家软件一个行为模块（投递、停止能力、会话截断与分叉、模型读取），`index.mjs` 是对外唯一入口 | 新接一家软件只在这里新增 profile 与行为模块；`Ref_外部软件通信.md` 对应小节；`Ref_技术细节.md`“适配能力”；`tests/test_runner.mjs`、`tests/test_session_cut.mjs` |
 | `.agents/skills/` | 分发技能 discuss-host / discuss-participant / discuss-report / workflow-creator；`codiscuss-setup` 仅在源码仓库使用，不进 npm 包、不由安装器复制 | 只有 `.gitignore` 白名单内的技能入库，新增分发技能同步白名单 |
-| `workflows/` | 随包发布的房间工作流（现为 `story-serial`），`codiscuss setup` 时装入用户工作流库 | 内容须通用、不写某部作品或本机路径，卡片不写死模型；改后跑 `tests/test_setup.mjs` |
+| `workflows/` | 随包发布的房间工作流（现为 `story-serial`），`codiscuss setup` 时装入用户工作流库。**只是副本，不在仓库里改**（见 §5“随包工作流”） | 复制后跑 `tests/test_setup.mjs` |
 | `tests/`、`scripts/`、`deploy/` | 测试、构建脚本、部署配置 | — |
 | `docs/` | 对外精简文档 | 见 §6 |
 | `.dev/docs/`、`.dev/plans/` | 开发文档、任务计划（gitignore） | 见 §6 |
@@ -82,6 +82,7 @@
 - **其他设备远程控制与电脑功能对等**，不做阉割；新增本机操作须同时支持经已配对电脑转交。
 - **UI 硬约束**：中间区只放 AI 已发生或正在发生的动作，失败也必须留卡；状态与控制放右栏（针对单张卡片的操作——撤回、编辑、停止、暂停、跳过——放在该卡片上）；新建房间面板与右栏的相同功能入口复用同一份控件。`Design_UI设计说明.md` 未覆盖的场景按其原则判断，改后与用户核实并同步该文档，不自行补写未核实的设计意图。
 - **通知**：操作结果统一用右下角提示条（`web/app.js` 调 `notify(level, message)`，Vue 组件调 `bridge.notify`，`level` 取 `error` / `warning` / `info`），不再新增原位红字或 `*_error` / `*_notice` 状态字段；仍留原位的几类与样式见 `Design_UI设计说明.md`“通知提示条”。
+- **随包工作流以本机工作流库为准**（2026-11-08 用户确认）：仓库 `workflows/<id>/` 永远是本机库 `~/.codiscuss/workflows/<id>/` 的副本。要改工作流，改本机库那份（在房间里由主持人用 `workflow-creator` 改，或在本仓库用 `codiscuss launch workflow-save` 保存）；不要直接编辑仓库里的文件。需要发布时，把本机库那份整份复制覆盖仓库对应目录，不做任何改写。原因：用户和主持人都会改工作流，两边各改会分叉。因此本机库里也不写具体作品的事实或本机路径，作品信息放在作品自己的 README。
 - **附件**：现阶段只存储和网页展示，本地软件自行下载读取。长期方向是按参与者能力分流（原文件 / 带来源的衍生内容 / 明确提示无法读取，不静默丢弃），网站不调用模型。实现前先确认 `.dev/plans/跨平台附件适配/` 的待决事项，不预先建表或改协议。语音是文本输入方式，不是附件。
 
 ## 6. 文档约定
