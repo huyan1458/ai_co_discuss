@@ -15,8 +15,10 @@ BEGIN
     INSERT INTO room_directory (room_id,position)
         VALUES (NEW.id,(SELECT COALESCE(MAX(position),0)+1 FROM room_directory));
 END;
+-- `directories` is a JSON array of absolute paths: the first is the main project directory of rooms created in the
+-- folder, the rest their other project directories. Rooms keep their own copy; editing the folder only changes new rooms.
 CREATE TABLE IF NOT EXISTS topic_folders (
-    id TEXT PRIMARY KEY, name TEXT NOT NULL, position INTEGER NOT NULL DEFAULT 0
+    id TEXT PRIMARY KEY, name TEXT NOT NULL, position INTEGER NOT NULL DEFAULT 0, directories TEXT NOT NULL DEFAULT '[]'
 );
 -- Site-wide preferences of the person managing the site; `last_room` is the room they last opened on any device.
 CREATE TABLE IF NOT EXISTS site_preferences (

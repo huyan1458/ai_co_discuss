@@ -716,24 +716,24 @@ async function assign_channel_folder(id, folder_id) {
 }
 
 /** Display a provisional folder while its identifier is being assigned. */
-async function create_folder(name) {
-  const folder = { id: `pending-${new_submission_id()}`, name: name.trim(), pending: true };
+async function create_folder({ name, directories = [] }) {
+  const folder = { id: `pending-${new_submission_id()}`, name: name.trim(), directories, pending: true };
   return update_directory({ key: "create-folder", label: `文件夹「${folder.name}」创建`,
     apply: () => { state.folders = [...state.folders, folder]; },
     rollback: () => { state.folders = state.folders.filter(item => item.id !== folder.id); },
-    save: () => request_json("/api/folders", { name: folder.name }),
+    save: () => request_json("/api/folders", { name: folder.name, directories }),
     commit: saved => { state.folders = state.folders.map(item => item.id === folder.id ? saved : item); } });
 }
 
-/** Rename the exact folder without moving its conversations or changing selection. */
-async function rename_folder({ id, name }) {
+/** Rename the exact folder and replace its project paths, without moving its conversations or changing selection. */
+async function rename_folder({ id, name, directories }) {
   const folder = state.folders.find(item => item.id === id);
   if (!folder || folder.pending || !name.trim()) return;
-  const display = value => { state.folders = state.folders.map(item => item.id === id ? { ...item, name: value } : item); };
-  return update_directory({ key: `folder-name:${id}`, label: `文件夹「${folder.name}」重命名`,
-    apply: () => display(name.trim()), rollback: () => display(folder.name),
-    save: () => request_json(`/api/folders/${encodeURIComponent(id)}/rename`, { name: name.trim() }),
-    commit: saved => display(saved.name) });
+  const display = (value, paths) => { state.folders = state.folders.map(item => item.id === id ? { ...item, name: value, directories: paths } : item); };
+  return update_directory({ key: `folder-name:${id}`, label: `文件夹「${folder.name}」保存`,
+    apply: () => display(name.trim(), directories), rollback: () => display(folder.name, folder.directories),
+    save: () => request_json(`/api/folders/${encodeURIComponent(id)}/rename`, { name: name.trim(), directories }),
+    commit: saved => display(saved.name, saved.directories) });
 }
 
 /** Remove only a grouping; keep its conversations, current transcript and drafts. */
@@ -1158,11 +1158,11 @@ function mentioned(text, name) {
 }
 
 /** Clear this room's text, project and roster, then restore the user's last reusable choices. */
-function reset_create_form() {
+function reset_create_form(folder = null) {
   element("room-form").reset();
   render_expert_inputs("new-expert-modes", default_experts());
   render_host_options("new-room-host", [], "");
-  state.launch.workspace = {};
+  state.launch.workspace = folder_workspace(folder);
   state.create_goal = null;
   apply_create_preferences();
   state.launch.profiles = JSON.parse(JSON.stringify(state.launch.saved_profiles || {}));
@@ -1170,6 +1170,14 @@ function reset_create_form() {
   render_launch_settings();
   publish_view();
   return refresh_create_preferences();
+}
+
+/** A room created in a folder starts in the folder's project paths: the first is its main directory, the rest its other
+ * directories. Only the local service resolves paths, so a device reaching its computer through the queued relay starts empty. */
+function folder_workspace(folder) {
+  const [cwd, ...extra_directories] = folder?.directories || [];
+  if (!cwd || !state.launch.available) return {};
+  return extra_directories.length ? { cwd, extra_directories } : { cwd };
 }
 
 /** Restore choices without touching the new room's title, project, members, host or goal text. */

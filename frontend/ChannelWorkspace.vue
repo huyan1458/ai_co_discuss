@@ -171,12 +171,12 @@ async function choose_room(id) { nav_open.value = false; await act("room", id); 
 function open_detail(id) { detail_id.value = id; modal.value = "message"; }
 
 /** Open the shared creation form from either navigation surface. */
-function create_channel(folder = null) { bridge.reset_create_form(); target_folder.value = folder; nav_open.value = false; modal.value = "create"; }
+function create_channel(folder = null) { bridge.reset_create_form(folder); target_folder.value = folder; nav_open.value = false; modal.value = "create"; }
 
 /** Open folder creation after closing the mobile directory. */
 function create_folder() { target_folder.value = null; nav_open.value = false; modal.value = "folder"; }
 
-/** Open the folder name editor without changing the active conversation. */
+/** Open the folder name and project paths editor without changing the active conversation. */
 function edit_folder(folder) { target_folder.value = folder; nav_open.value = false; modal.value = "rename-folder"; }
 
 /** Confirm removal of a grouping without selecting or deleting a conversation. */

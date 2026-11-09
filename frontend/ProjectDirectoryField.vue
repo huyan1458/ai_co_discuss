@@ -172,6 +172,7 @@ async function save_projects() {
       <UIcon name="i-lucide-plus" /><span v-if="!props.compact">常用项目</span>
     </button>
     <UInput :model-value="cwd" :placeholder="props.placeholder" variant="none" class="project-path" aria-label="项目目录完整路径" :disabled="props.disabled" @update:model-value="write_cwd" />
+    <slot name="badge" />
     <UButton v-if="browsable" icon="i-lucide-folder-open" color="neutral" variant="ghost" size="xs" class="project-browse" :aria-label="native ? '在本机选择项目目录' : '浏览电脑上的文件夹'"
       :title="!native ? '浏览电脑上常用项目中的文件夹' : picking ? '目录选择窗口已打开，请在本机窗口中选择' : '在本机选择文件夹'" :loading="picking" :disabled="props.disabled" @click="pick_directory" />
   </div>

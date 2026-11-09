@@ -419,7 +419,8 @@ class DiscussionTests(unittest.TestCase):
         self.assertEqual(status, 200)
         tables = snapshot["tables"]
         self.assertEqual(tables["room_directory"][0]["archived"], 1)
-        self.assertEqual(tables["topic_folders"], [folder])
+        # The backup keeps raw rows, so the folder's project paths stay JSON text there.
+        self.assertEqual(tables["topic_folders"], [{**folder, "directories": "[]"}])
         self.assertEqual(len(tables["room_folder_assignments"]), 1)
         self.assertEqual([row["text"] for row in tables["messages"]], ["本房间原文"])
         self.assertNotIn(other["id"], json.dumps(snapshot))
@@ -663,6 +664,21 @@ class DiscussionTests(unittest.TestCase):
         self.assertEqual(next(item for item in directory["folders"] if item["id"] == folder_id)["name"], "产品讨论")
         self.assertEqual(next(item for item in directory["rooms"] if item["id"] == self.room["id"])["folder_id"], folder_id)
         self.assertEqual(self.request(room_path + "/folder", {"actor": "用户", "folder_id": None})[1]["folder_id"], None)
+
+    def test_folder_project_paths_validate_and_persist(self):
+        """A folder keeps its project paths for new rooms; renaming without paths leaves them unchanged."""
+        for invalid in ("D:/a", ["relative/path"], [""], [42], ["D:/a", "d:\\A\\"], ["D:/x"] * 10):
+            self.assertEqual(self.request("/api/folders", {"name": "路径", "directories": invalid})[0], 400, invalid)
+        status, folder = self.request("/api/folders", {"name": "项目", "directories": [" D:/work/main ", "/srv/other"]})
+        self.assertEqual(status, 201)
+        self.assertEqual(folder["directories"], ["D:/work/main", "/srv/other"])
+        path = f"/api/folders/{folder['id']}/rename"
+        self.assertEqual(self.request(path, {"name": "改名"})[1]["directories"], ["D:/work/main", "/srv/other"])
+        self.assertEqual(self.request(path, {"name": "改名", "directories": ["E:\\code"]})[1]["directories"], ["E:\\code"])
+        if not self.external:
+            init_database(self.database)
+        saved = next(item for item in self.request("/api/rooms")[1]["folders"] if item["id"] == folder["id"])
+        self.assertEqual((saved["name"], saved["directories"]), ("改名", ["E:\\code"]))
 
     def test_folder_removal_preserves_active_and_archived_rooms(self):
         """Removing a group clears assignments without deleting any room records."""

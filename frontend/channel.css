@@ -719,6 +719,12 @@ html[data-theme^="channel"] .dialog-form .project-box input { background: transp
 html[data-theme^="channel"] .dialog-form.project-manager { gap: 12px; }
 html[data-theme^="channel"] .dialog-form label[data-slot="label"] { color: #c1c9d6; font-size: 12px; }
 html[data-theme^="channel"] .channel-folder-modal { max-width: 420px; }
+html[data-theme^="channel"] .channel-folder-modal:has(.channel-folder-directories) { max-width: 520px; }
+.channel-folder-directories { display: flex; flex-direction: column; gap: 6px; }
+.channel-folder-directory { display: flex; align-items: center; gap: 4px; }
+.channel-folder-directory > :first-child { flex: 1; min-width: 0; }
+.channel-folder-primary { align-self: center; flex-shrink: 0; margin-inline-end: 2px; padding: 1px 6px; border-radius: 4px; background: var(--ui-bg-accented); color: var(--ui-text-muted); font-size: 11px; line-height: 18px; }
+.channel-folder-path { overflow-wrap: anywhere; font-size: 12px; }
 html[data-theme^="channel"] .channel-folder-modal [data-slot="header"] { min-height: 0; padding: 20px 24px 12px; border-bottom: 0; }
 html[data-theme^="channel"] .channel-folder-modal [data-slot="close"] { position: static; margin-inline-start: auto; flex-shrink: 0; }
 /* Keep the input's outer stroke inside the scrollable body. */

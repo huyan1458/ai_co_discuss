@@ -2,6 +2,8 @@
 import { computed, inject, ref, watch } from "vue";
 import CreateDiscussion from "./CreateDiscussion.vue";
 import DiscussionLimits from "./DiscussionLimits.vue";
+import ExtraDirectoriesField from "./ExtraDirectoriesField.vue";
+import ProjectDirectoryField from "./ProjectDirectoryField.vue";
 import AccountSettings from "./AccountSettings.vue";
 import SpeechSettings from "./SpeechSettings.vue";
 
@@ -13,7 +15,7 @@ const rendered_mode = ref(mode.value);
 watch(mode, (value) => { if (value) rendered_mode.value = value; });
 const { view, bridge, act, pending } = inject("discussion");
 const open = computed({ get: () => Boolean(mode.value), set: (value) => { if (!value) mode.value = ""; } });
-const titles = { settings: "设置", create: "新建房间", folder: "新建文件夹", "rename-folder": "重命名文件夹", "delete-folder": "移除文件夹", "archive-folder": "存档文件夹", edit: "编辑议题", message: "消息原文" };
+const titles = { settings: "设置", create: "新建房间", folder: "新建文件夹", "rename-folder": "编辑文件夹", "delete-folder": "移除文件夹", "archive-folder": "存档文件夹", edit: "编辑议题", message: "消息原文" };
 Object.assign(titles, { rename: "重命名房间", archive: "存档房间", restore: "恢复房间", delete: "删除房间" });
 const descriptions = { settings: "管理员账号与界面外观。", create: "邀请 AI 一起协作；需要深入讨论时，可在创建时或之后随时开启。", edit: "维护话题目标、背景与讨论默认上限。", message: "保留作者、来源、提交人和引用关系。" };
 Object.assign(descriptions, { rename: "名称变化不会影响讨论记录和阅读地址。", archive: "保留所有记录，并暂停尚未收束的讨论。", restore: "移回讨论列表，保持当前讨论阶段。", delete: "永久删除房间及其所有记录，无法撤销。" });
@@ -73,7 +75,16 @@ async function delete_all_archives() {
 
 const management_title = ref("");
 const folder_name = ref("");
-watch(() => [mode.value, props.targetFolder?.id], () => { folder_name.value = mode.value === "rename-folder" ? props.targetFolder?.name || "" : ""; });
+// The folder's project paths, edited as the new-room form does: a main directory, then other directories.
+const folder_main = ref("");
+const folder_extras = ref([]);
+watch(() => [mode.value, props.targetFolder?.id], () => {
+  const editing = mode.value === "rename-folder";
+  const [main = "", ...extras] = editing ? props.targetFolder?.directories || [] : [];
+  folder_name.value = editing ? props.targetFolder?.name || "" : "";
+  folder_main.value = main;
+  folder_extras.value = extras;
+});
 const folder_dialog = computed(() => ["folder", "rename-folder", "delete-folder", "archive-folder"].includes(rendered_mode.value));
 watch(() => [mode.value, props.targetRoom?.id], () => { management_title.value = mode.value === "rename" ? props.targetRoom?.title || "" : ""; });
 
@@ -84,12 +95,21 @@ async function save_management() {
   await act("manage_channel", request);
 }
 
+/** Removing the main directory promotes the first other directory, as other directories need a main one. */
+function remove_folder_main() {
+  const [next = "", ...rest] = folder_extras.value;
+  folder_main.value = next;
+  folder_extras.value = rest;
+}
+
 /** Capture the folder edit and release the dialog before saving. */
 async function save_folder() {
   const name = folder_name.value.trim();
   if (!name || pending.value) return;
   const renaming = mode.value === "rename-folder";
-  const request = renaming ? { id: props.targetFolder.id, name } : name;
+  const main = folder_main.value.trim();
+  const directories = main ? [main, ...folder_extras.value.map(path => path.trim()).filter(Boolean)] : [];
+  const request = renaming ? { id: props.targetFolder.id, name, directories } : { name, directories };
   mode.value = "";
   await act(renaming ? "rename_folder" : "create_folder", request);
 }
@@ -230,7 +250,22 @@ const keep_open = (event) => event.preventDefault();
       </form>
       <form v-else-if="folder_dialog" class="dialog-form" @submit.prevent="save_folder">
         <UInput v-model="folder_name" icon="i-lucide-folder" :aria-label="rendered_mode === 'folder' ? '新文件夹名称' : '文件夹名称'" placeholder="文件夹名称" autofocus required :maxlength="40" class="w-full" autocomplete="off" :readonly="Boolean(pending)" @keydown.enter.prevent="!$event.isComposing && save_folder()" />
-        <div class="dialog-actions"><UButton label="取消" color="neutral" variant="ghost" @click="mode = ''" /><UButton type="submit" :label="rendered_mode === 'folder' ? '创建文件夹' : '保存名称'" class="channel-primary-button" :loading="pending === 'create_folder' || pending === 'rename_folder'" :disabled="!folder_name.trim() || Boolean(pending)" /></div>
+        <UFormField v-if="['folder', 'rename-folder'].includes(rendered_mode)" label="项目路径（可选）" description="在此文件夹中新建对话时自动带入，已有对话不受影响。">
+          <div v-if="view.launch.available" class="channel-folder-directories">
+            <div class="channel-folder-directory">
+              <ProjectDirectoryField v-model="folder_main" compact placeholder="主目录的完整路径，或选择项目" :disabled="Boolean(pending)">
+                <template v-if="folder_main.trim()" #badge><span class="channel-folder-primary">主目录</span></template>
+              </ProjectDirectoryField>
+              <UButton icon="i-lucide-x" color="neutral" variant="ghost" size="xs" :aria-label="`移除主目录 ${folder_main}`" :class="{ invisible: !folder_main.trim() }" :disabled="Boolean(pending)" @click="remove_folder_main" />
+            </div>
+            <ExtraDirectoriesField v-if="folder_main.trim()" v-model="folder_extras" :disabled="Boolean(pending)" />
+          </div>
+          <div v-else class="channel-folder-directories">
+            <code v-for="path in [folder_main, ...folder_extras].filter(Boolean)" :key="path" class="channel-folder-path">{{ path }}</code>
+            <p class="fine-print">项目路径须在电脑上或已连接电脑的网页中设置。</p>
+          </div>
+        </UFormField>
+        <div class="dialog-actions"><UButton label="取消" color="neutral" variant="ghost" @click="mode = ''" /><UButton type="submit" :label="rendered_mode === 'folder' ? '创建文件夹' : '保存'" class="channel-primary-button" :loading="pending === 'create_folder' || pending === 'rename_folder'" :disabled="!folder_name.trim() || Boolean(pending)" /></div>
       </form>
       <form v-else-if="['rename', 'archive', 'restore', 'delete'].includes(rendered_mode)" class="dialog-form" @submit.prevent="save_management">
         <p class="channel-management-target">{{ targetRoom?.title }} <span>· {{ targetRoom?.message_count }} 条消息</span></p>

@@ -80,6 +80,10 @@ PAGE_SIZE = 20
 # A reader may ask for larger pages (`limit`) so a long transcript loads in one request instead of many.
 MAX_PAGE_SIZE = 200
 UNCATEGORIZED_FOLDER_ID = "__uncategorized__"
+# A folder's project paths: one main directory plus MAX_EXTRA_DIRECTORIES (runner/discussion_runner.mjs) others.
+MAX_FOLDER_DIRECTORIES = 9
+MAX_DIRECTORY_PATH = 1000
+ABSOLUTE_PATH_PATTERN = re.compile(r"(?:[A-Za-z]:[\\/]|/)")
 ASSETS = {"/": ("index.html", "text/html"),
           "/app.js": ("app.js", "text/javascript"),
           "/modern.js": ("modern.js", "text/javascript"),
@@ -348,6 +352,8 @@ def init_database(database, seed=True):
             if "changes" not in columns:
                 connection.execute("ALTER TABLE member_executions ADD COLUMN changes TEXT NOT NULL DEFAULT ''")
         connection.executescript(SCHEMA)
+        if "directories" not in {row[1] for row in connection.execute("PRAGMA table_info(topic_folders)")}:
+            connection.execute("ALTER TABLE topic_folders ADD COLUMN directories TEXT NOT NULL DEFAULT '[]'")
         migrate_free_tables(connection)
         if seed and is_new:
             seed_demo(connection)
@@ -722,11 +728,40 @@ def remember_last_room(connection, payload):
     return {"last_room": room_id}
 
 
+def folder_record(row):
+    """Return one folder with its project paths decoded."""
+    return {**dict(row), "directories": json.loads(row["directories"])}
+
+
 def folder_directory(connection):
     """Return real folders and the virtual group's index (null keeps it last)."""
     settings = connection.execute("SELECT uncategorized_position FROM directory_settings WHERE id=1").fetchone()
-    return {"folders": [dict(row) for row in connection.execute("SELECT id,name,position FROM topic_folders ORDER BY position,name,id")],
-            "uncategorized_position": settings[0] if settings else None}
+    rows = connection.execute("SELECT id,name,position,directories FROM topic_folders ORDER BY position,name,id")
+    return {"folders": [folder_record(row) for row in rows], "uncategorized_position": settings[0] if settings else None}
+
+
+def same_path_key(path):
+    """Compare paths as Windows does: without case, separator style or a trailing separator."""
+    return path.replace("\\", "/").rstrip("/").lower()
+
+
+def folder_directories_value(payload):
+    """Validate a folder's project paths: absolute, distinct, the first being the main directory.
+
+    The paths are only checked for form here; the local service checks they exist when a room is created from them.
+    """
+    directories = payload.get("directories", [])
+    if not isinstance(directories, list) or len(directories) > MAX_FOLDER_DIRECTORIES:
+        raise ValueError(f"项目路径须为最多 {MAX_FOLDER_DIRECTORIES} 项的列表")
+    paths = []
+    for item in directories:
+        path = item.strip() if isinstance(item, str) else ""
+        if not path or len(path) > MAX_DIRECTORY_PATH or not ABSOLUTE_PATH_PATTERN.match(path):
+            raise ValueError("项目路径须为完整的绝对路径")
+        if same_path_key(path) in [same_path_key(known) for known in paths]:
+            raise ValueError(f"项目路径重复：{path}")
+        paths.append(path)
+    return paths
 
 
 def folder_name_value(payload):
@@ -741,12 +776,16 @@ def folder_name_value(payload):
 
 
 def rename_folder(connection, folder_id, payload):
-    """Rename one folder, retaining its position and all room assignments."""
+    """Rename one folder and, when given, replace its project paths; positions and room assignments stay."""
     begin_write(connection)
     name = folder_name_value(payload)
-    if connection.execute("UPDATE topic_folders SET name=? WHERE id=?", (name, folder_id)).rowcount == 0:
+    changes = {"name": name}
+    if "directories" in payload:
+        changes["directories"] = json.dumps(folder_directories_value(payload), ensure_ascii=False)
+    assignments = ",".join(f"{column}=?" for column in changes)
+    if connection.execute(f"UPDATE topic_folders SET {assignments} WHERE id=?", (*changes.values(), folder_id)).rowcount == 0:
         raise LookupError("文件夹不存在")
-    return dict(connection.execute("SELECT id,name,position FROM topic_folders WHERE id=?", (folder_id,)).fetchone())
+    return folder_record(connection.execute("SELECT id,name,position,directories FROM topic_folders WHERE id=?", (folder_id,)).fetchone())
 
 
 def delete_folder(connection, folder_id):
@@ -2168,12 +2207,15 @@ class DiscussionHandler(BaseHTTPRequestHandler):
             connection.commit()
             return self.respond(result, 200 if result.get("skipped") else 201)
         if parts == ["api", "folders"] and method == "POST":
-            name = folder_name_value(self.read_payload())
+            payload = self.read_payload()
+            name = folder_name_value(payload)
+            directories = folder_directories_value(payload)
             folder_id = uuid.uuid4().hex
             position = connection.execute("SELECT COALESCE(MAX(position),0)+1 FROM topic_folders").fetchone()[0]
-            connection.execute("INSERT INTO topic_folders (id,name,position) VALUES (?,?,?)", (folder_id, name, position))
+            connection.execute("INSERT INTO topic_folders (id,name,position,directories) VALUES (?,?,?,?)",
+                               (folder_id, name, position, json.dumps(directories, ensure_ascii=False)))
             connection.commit()
-            return self.respond({"id": folder_id, "name": name, "position": position}, 201)
+            return self.respond({"id": folder_id, "name": name, "position": position, "directories": directories}, 201)
         if len(parts) == 4 and parts[:2] == ["api", "folders"] and parts[3] == "move" and method == "POST":
             result = move_folder(connection, parts[2], self.read_payload())
             connection.commit()

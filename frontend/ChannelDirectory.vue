@@ -98,7 +98,7 @@ watch(() => view.value.room?.id, () => {
 /** Keep folder editing and keyboard-equivalent movement on the folder's own menu. */
 function folder_actions(folder, index) {
   const ordering = view.value.directory_pending.includes("folder-order") || view.value.directory_pending.includes("create-folder");
-  return [...(folder.id ? [[{ label: "重命名", icon: "i-lucide-pencil", disabled: folder.pending || view.value.directory_pending.includes(`folder-name:${folder.id}`), onSelect: () => emit("manage-folder", folder) }]] : []), [
+  return [...(folder.id ? [[{ label: "编辑", icon: "i-lucide-pencil", disabled: folder.pending || view.value.directory_pending.includes(`folder-name:${folder.id}`), onSelect: () => emit("manage-folder", folder) }]] : []), [
     { label: "上移", icon: "i-lucide-arrow-up", disabled: ordering || index === 0 || Boolean(pending.value), onSelect: () => act("move_folder", { id: folder.order_id, direction: -1 }) },
     { label: "下移", icon: "i-lucide-arrow-down", disabled: ordering || index === folders.value.length - 1 || Boolean(pending.value), onSelect: () => act("move_folder", { id: folder.order_id, direction: 1 }) },
   ], [{ label: "导入房间…", icon: "i-lucide-download", disabled: folder.pending || view.value.backup_pending, onSelect: () => choose_import_target(folder.id || null) },
