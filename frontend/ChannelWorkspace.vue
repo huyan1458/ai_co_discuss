@@ -123,18 +123,29 @@ const project_directories = computed((previous) => {
   const next = project_directory.value ? [project_directory.value, ...(view.value.launch.room_models?.extra_directories || [])] : [];
   return previous?.length === next.length && next.every((directory, index) => Object.is(directory, previous[index])) ? previous : next;
 });
-/** Room tools keep their positions; files shows a hint until a project directory is saved. The workflow library belongs to
- * this computer, not a room, so its page (`global`) opens with no room selected too. */
+/** Room tools keep their positions; files shows a hint until a project directory is saved. */
 const tabs = computed(() => [
   { value: "discussion", label: "消息", icon: "i-lucide-messages-square" },
   { value: "private", label: "私聊", icon: "i-lucide-message-square", ui: { linkLeadingIcon: "is-private-icon" } },
   { value: "timeline", label: "执行", icon: "i-lucide-chart-gantt" },
   { value: "overview", label: "房间", icon: "i-lucide-sliders-horizontal" },
-  { value: "workflows", label: "工作流", icon: "i-lucide-network", global: true },
   { value: "files", label: "文件", icon: "i-lucide-files", title: project_directory.value || "" },
 ]);
+/** The sidebar's tools: the room's views, plus the workflow library. The library belongs to this computer, not a room, so
+ * it is no room tab: it opens as a large panel over the page (`global`: with no room selected too). */
+const tool_links = computed(() => [...tabs.value.slice(0, -1), { value: "workflows", label: "工作流", icon: "i-lucide-network", global: true }, ...tabs.value.slice(-1)]);
+const workflows_open = ref(false);
+const workflow_library = ref(null);
+/** Close the workflow panel, asking first when the open workflow has unsaved changes. */
+const workflows_panel = computed({
+  get: () => workflows_open.value,
+  set: (open) => {
+    if (open || !workflow_library.value?.dirty) { workflows_open.value = open; return; }
+    workflow_library.value.guard(() => { workflows_open.value = false; });
+  },
+});
 // Retired pages: consensus and discussion history open from the host brief, access moved into the room page.
-const MERGED_TABS = { context: "discussion", history: "discussion", access: "overview" };
+const MERGED_TABS = { context: "discussion", history: "discussion", access: "overview", workflows: "discussion" };
 const free_room = computed(() => !["active", "paused"].includes(room.value?.session?.status));
 watch(() => MERGED_TABS[view.value.tab], (merged) => { if (merged) act("tab", merged); }, { immediate: true });
 // A free room shows the brief bar only once it has something to read; starting a discussion stays on the rail.
@@ -165,7 +176,11 @@ function manage_room({ room, action }) { managed_room.value = room; nav_open.val
 function open_archives() { nav_open.value = false; modal.value = "archives"; }
 
 /** Switch the room view and close the mobile navigation. */
-function choose_tab(value) { nav_open.value = false; act("tab", value); }
+function choose_tab(value) {
+  nav_open.value = false;
+  if (value === "workflows") workflows_open.value = true;
+  else act("tab", value);
+}
 
 /** Select a shared room and close the mobile navigation. */
 async function choose_room(id) { nav_open.value = false; await act("room", id); }
@@ -307,7 +322,7 @@ function resize_nav_by_key(event) {
 
 <template>
   <div class="channel-shell" :class="{ 'channel-resizing': rail_drag || nav_drag, 'channel-nav-collapsed': !nav_docked, 'channel-has-rail': show_rail }" :style="layout_style">
-    <ChannelSidebar v-if="nav_docked" :tabs="tabs" @select="choose_room" @manage="manage_room" @create="create_channel" @create-folder="create_folder" @manage-folder="edit_folder" @delete-folder="remove_folder" @archive-folder="archive_folder" @archives="open_archives" @tab="choose_tab" @settings="modal = 'settings'" />
+    <ChannelSidebar v-if="nav_docked" :tabs="tool_links" @select="choose_room" @manage="manage_room" @create="create_channel" @create-folder="create_folder" @manage-folder="edit_folder" @delete-folder="remove_folder" @archive-folder="archive_folder" @archives="open_archives" @tab="choose_tab" @settings="modal = 'settings'" />
     <div v-if="nav_docked" class="channel-nav-resizer" role="separator" tabindex="0" aria-label="调整房间栏宽度" aria-orientation="vertical" aria-controls="channel-sidebar" :aria-valuemin="NAV_MIN" :aria-valuemax="nav_max" :aria-valuenow="effective_nav_width" :aria-valuetext="`${effective_nav_width} 像素`" title="拖动调整房间栏宽度，也可使用方向键" @pointerdown="start_nav_resize" @pointermove="resize_nav" @pointerup="finish_nav_resize" @pointercancel="finish_nav_resize" @lostpointercapture="finish_nav_resize" @keydown="resize_nav_by_key"></div>
 
     <main class="channel-main">
@@ -371,9 +386,6 @@ function resize_nav_by_key(event) {
           <ExecutionTimeline v-if="timeline_view === 'waterfall'" @detail="open_detail" />
           <EventLog v-else @detail="open_detail" />
         </div>
-        <div v-if="view.tab === 'workflows'" class="content-page workflow-page" role="tabpanel" aria-label="工作流">
-          <WorkflowLibrary />
-        </div>
         <div v-if="view.tab === 'files'" v-keep-reading class="content-page" role="tabpanel" aria-label="文件">
           <ProjectFiles v-if="project_directory" :key="room.id" :directories="project_directories" />
           <p v-else class="channel-files-unset" role="status">当前未设置项目目录</p>
@@ -384,11 +396,12 @@ function resize_nav_by_key(event) {
         <FilePreview />
         </div>
       </div>
-      <div v-else-if="view.tab === 'workflows'" class="channel-body">
-        <div class="channel-content"><div class="content-page workflow-page" role="tabpanel" aria-label="工作流"><WorkflowLibrary /></div></div>
-      </div>
       <div v-else class="channel-empty"><UIcon name="i-lucide-hash" /><h2>新建一个协作房间</h2><p>邀请 AI 一起协作，随时 @ 提问；需要时开启讨论，保留所有人的观点。</p><UButton icon="i-lucide-plus" label="新建房间" color="neutral" @click="create_channel()" /></div>
     </main>
+    <UModal v-model:open="workflows_panel" title="工作流" description="这台电脑的工作流：SKILL.md、成员卡片与画布"
+      :content="{ onInteractOutside: (event) => event.preventDefault() }" :ui="{ content: 'glass-panel workflow-panel', header: 'workflow-panel-header', close: 'workflow-panel-close', description: 'sr-only', body: 'workflow-panel-body' }">
+      <template #body><WorkflowLibrary v-if="workflows_open" ref="workflow_library" /></template>
+    </UModal>
     <UModal :content="{ onInteractOutside: (event) => event.preventDefault() }" v-if="room" v-model:open="consensus_open" title="共识与讨论记录" description="主持人整理的结论、共识与分歧，以及每场讨论结束时的结论。" :ui="{ content: 'glass-panel studio-modal channel-consensus-modal', body: 'dialog-body' }">
       <template #body>
         <div class="merged-page channel-consensus-body">
@@ -417,7 +430,7 @@ function resize_nav_by_key(event) {
     </aside>
 
     <USlideover v-model:open="nav_open" side="left" title="房间导航" :ui="{ overlay: 'channel-drawer-overlay', content: 'channel-navigation-drawer' }">
-      <template #content><ChannelSidebar :tabs="tabs" @select="choose_room" @manage="manage_room" @create="create_channel" @create-folder="create_folder" @manage-folder="edit_folder" @delete-folder="remove_folder" @archive-folder="archive_folder" @archives="open_archives" @tab="choose_tab" @settings="nav_open = false; modal = 'settings'" /></template>
+      <template #content><ChannelSidebar :tabs="tool_links" @select="choose_room" @manage="manage_room" @create="create_channel" @create-folder="create_folder" @manage-folder="edit_folder" @delete-folder="remove_folder" @archive-folder="archive_folder" @archives="open_archives" @tab="choose_tab" @settings="nav_open = false; modal = 'settings'" /></template>
     </USlideover>
     <USlideover v-if="room" v-model:open="info_open" side="right" title="讨论进度" :description="room.title" :ui="{ overlay: 'channel-drawer-overlay', content: 'progress-drawer', body: 'progress-drawer-body' }">
       <template #body><FreeBoard /></template>

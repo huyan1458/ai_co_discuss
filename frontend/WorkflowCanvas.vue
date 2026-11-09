@@ -21,7 +21,7 @@ import { access_label } from "../runner/expert_prompts.mjs";
 import { MAX_EDGE_LABEL, MAX_HOST_LABEL, empty_flow, flow_shape } from "../runner/workflow_flow.mjs";
 
 const flow = defineModel("flow", { type: Object, default: null });
-// Clicking the "主持人按做法说明派活" hint opens the workflow's SKILL.md.
+// Clicking SKILL.md in the "派活以 SKILL.md 为准" hint opens it.
 const emit = defineEmits(["open-skill"]);
 const agents = defineModel("agents", { type: Array, required: true });
 // On a phone the canvas is small: tools show icons only, and the minimap and the SKILL.md hint step aside.
@@ -508,7 +508,7 @@ function drag_stop() { dragging = false; commit(); }
       <Panel position="top-right" class="workflow-canvas-toolbar is-plain"><slot name="actions" /></Panel>
       <Panel v-if="!props.compact" position="bottom-left" class="workflow-canvas-status">
         <UIcon name="i-lucide-info" class="workflow-icon" /><span>连线只作示意，派活以</span>
-        <button type="button" class="workflow-canvas-skill" @click="emit('open-skill')">做法说明</button><span>为准</span>
+        <button type="button" class="workflow-canvas-skill" @click="emit('open-skill')">SKILL.md</button><span>为准</span>
       </Panel>
     </VueFlow>
     <UPopover :open="adding" :reference="add_anchor" :content="{ side: 'bottom', align: 'start', sideOffset: 8, collisionPadding: 12 }"

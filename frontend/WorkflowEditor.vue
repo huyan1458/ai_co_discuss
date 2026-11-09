@@ -31,12 +31,12 @@ function edit() {
 </script>
 
 <template>
-  <aside class="workflow-skill" :class="{ 'is-compact': compact }" aria-label="做法说明（SKILL.md）">
+  <aside class="workflow-skill" :class="{ 'is-compact': compact }" aria-label="工作流（SKILL.md）">
     <header class="workflow-skill-head">
-      <h3><UIcon name="i-lucide-file-text" class="workflow-skill-icon" />做法说明<small>SKILL.md · 主持人照它派活</small></h3>
+      <h3><UIcon name="i-lucide-file-text" class="workflow-skill-icon" />工作流<small>SKILL.md · 主持人照它派活</small></h3>
       <UButton :icon="editing ? 'i-lucide-eye' : 'i-lucide-pencil'" :label="editing ? '预览' : '编辑'" size="xs" color="neutral" variant="soft"
         @click="editing ? (editing = false) : edit()" />
-      <UTooltip v-if="!compact" text="收起做法说明"><UButton icon="i-lucide-panel-right-close" size="xs" color="neutral" variant="ghost" aria-label="收起做法说明" @click="emit('collapse')" /></UTooltip>
+      <UTooltip v-if="!compact" text="收起 SKILL.md"><UButton icon="i-lucide-panel-right-close" size="xs" color="neutral" variant="ghost" aria-label="收起 SKILL.md" @click="emit('collapse')" /></UTooltip>
     </header>
     <label class="workflow-skill-description">
       <span>一句话描述 <small>主持人凭它判断何时使用</small></span>

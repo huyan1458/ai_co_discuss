@@ -15,7 +15,7 @@ import { flow_in_use } from "../runner/workflow_flow.mjs";
 
 const { view, bridge, act } = inject("discussion");
 const COMMANDS_FILE = "commands.json";
-const NEW_SKILL = "按流程画布的接力派活；每一棒做什么、交回什么，写在派活正文里。";
+const NEW_SKILL = "写下主持人怎么组织这个工作流：每一步找哪位成员、交回什么、怎么验收。";
 const available = computed(() => view.value.launch.available || view.value.launch.remote);
 const workflows = computed(() => view.value.launch.workflows || []);
 // The workflow on the canvas: a saved one (`saved_id`) or a new or imported draft; `snapshot` is how it was when loaded.
@@ -33,11 +33,11 @@ const SKILL_OPEN_KEY = "codiscuss.workflow_skill_open";
 const list_width = ref(stored_width(LIST_WIDTH)), skill_width = ref(stored_width(SKILL_WIDTH));
 const skill_open = ref(remembered(SKILL_OPEN_KEY) !== "0");
 // A phone, and a tablet held upright, stack the page: workflows as tabs on top, then one of SKILL.md and the canvas at a
-// time, starting on SKILL.md, the text the host works from. (A tablet lays the site out 1440px wide, so width alone
+// time ("画布" first, then "工作流" for SKILL.md, as the user ordered them). (A tablet lays the site out 1440px wide, so width alone
 // cannot tell an upright tablet.)
 const STACKED_QUERY = "(max-width: 760px), (pointer: coarse) and (orientation: portrait)";
 const stacked_media = window.matchMedia(STACKED_QUERY);
-const stacked = ref(stacked_media.matches), pane = ref("skill");
+const stacked = ref(stacked_media.matches), pane = ref("canvas");
 const follow_stacked = (event) => { stacked.value = event.matches; };
 stacked_media.addEventListener("change", follow_stacked);
 onBeforeUnmount(() => stacked_media.removeEventListener("change", follow_stacked));
@@ -64,6 +64,7 @@ function payload(value) {
   return { ...fields, flow: saved_flow, resources };
 }
 const dirty = computed(() => Boolean(draft.value) && (!saved_id.value || JSON.stringify(payload(draft.value)) !== snapshot.value));
+defineExpose({ dirty, guard });
 
 /** Put a workflow on the canvas. */
 function show(value, id) {
@@ -132,7 +133,7 @@ function on_folder(event) {
 
 /** Save the workflow as files; the local service checks every field. A saved one keeps its folder's other files. */
 async function save() {
-  if (!draft.value.label.trim() || !draft.value.skill.trim()) { set_skill_open(true); bridge.notify("warning", "请填写名称和做法说明"); return; }
+  if (!draft.value.label.trim() || !draft.value.skill.trim()) { set_skill_open(true); bridge.notify("warning", "请填写名称和 SKILL.md 正文"); return; }
   const { resources, ...edited } = payload(draft.value);
   // An import keeps its commands file only when the user allowed it; the rest of its files come along either way.
   const kept = resources && !commands_allowed.value ? Object.fromEntries(Object.entries(resources).filter(([path]) => path !== COMMANDS_FILE)) : resources;
@@ -267,16 +268,15 @@ function start_resize(event, bounds) {
           <UButton icon="i-lucide-plus" size="xs" color="neutral" variant="ghost" aria-label="新建或导入工作流" class="workflow-tabs-add" />
         </UDropdownMenu>
       </div>
-      <div v-if="draft" class="workflow-tabs-view" role="tablist" aria-label="做法说明或示意图">
-        <button type="button" role="tab" :aria-selected="pane === 'skill'" aria-label="做法说明" title="做法说明" @click="pane = 'skill'"><UIcon name="i-lucide-file-text" class="workflow-library-icon" /></button>
-        <button type="button" role="tab" :aria-selected="pane === 'canvas'" aria-label="示意图" title="示意图" @click="pane = 'canvas'"><UIcon name="i-lucide-network" class="workflow-library-icon" /></button>
+      <div v-if="draft" class="workflow-tabs-view" role="tablist" aria-label="画布或工作流说明">
+        <button type="button" role="tab" :aria-selected="pane === 'canvas'" title="画布：成员卡片与示意连线" @click="pane = 'canvas'"><UIcon name="i-lucide-network" class="workflow-library-icon" />画布</button>
+        <button type="button" role="tab" :aria-selected="pane === 'skill'" title="工作流：主持人照着派活的 SKILL.md" @click="pane = 'skill'"><UIcon name="i-lucide-file-text" class="workflow-library-icon" />工作流</button>
       </div>
     </nav>
     <aside v-else class="workflow-library-list">
-      <div class="workflow-library-head">
-        <h2>工作流</h2>
-        <UDropdownMenu v-if="available" :items="add_items" :ui="{ content: 'channel-menu' }">
-          <UButton icon="i-lucide-plus" size="xs" color="neutral" variant="ghost" aria-label="新建或导入工作流" title="新建或导入" />
+      <div v-if="available" class="workflow-library-head">
+        <UDropdownMenu :items="add_items" :ui="{ content: 'channel-menu' }">
+          <UButton icon="i-lucide-plus" label="新建或导入" size="xs" color="neutral" variant="ghost" />
         </UDropdownMenu>
       </div>
       <ul role="listbox" aria-label="工作流列表">
@@ -310,7 +310,7 @@ function start_resize(event, bounds) {
           <input v-if="!stacked" v-model="draft.label" class="workflow-library-name" :maxlength="32" placeholder="未命名工作流" aria-label="工作流名称" title="点击改名"
             :style="{ width: `calc(${Math.max(5, Math.min(16, (draft.label || '').length + 1))}em + 18px)` }" @keydown.enter="$event.target.blur()" />
           <i v-if="dirty" class="workflow-library-dirty" title="有未保存的修改（Ctrl+S 保存）" />
-          <UTooltip v-if="!skill_open && !stacked" text="展开做法说明（SKILL.md）：主持人派活照着它"><UButton icon="i-lucide-panel-right-open" label="做法说明" size="sm" color="neutral" variant="ghost" @click="set_skill_open(true)" /></UTooltip>
+          <UTooltip v-if="!skill_open && !stacked" text="展开 SKILL.md：主持人照它派活"><UButton icon="i-lucide-panel-right-open" label="SKILL.md" size="sm" color="neutral" variant="ghost" @click="set_skill_open(true)" /></UTooltip>
           <UTooltip text="保存（Ctrl+S）"><UButton icon="i-lucide-save" :label="stacked ? undefined : '保存'" aria-label="保存" size="sm" class="channel-primary-button" :disabled="!dirty" :loading="busy" @click="save" /></UTooltip>
         </template>
       </WorkflowCanvas>
@@ -327,7 +327,7 @@ function start_resize(event, bounds) {
     <input ref="zip_input" type="file" accept=".zip,application/zip" hidden @change="on_zip" />
     <input ref="folder_input" type="file" webkitdirectory hidden @change="on_folder" />
     <template v-if="show_skill">
-      <div v-if="!stacked" class="workflow-library-resize is-skill" role="separator" aria-orientation="vertical" aria-label="调整做法说明宽度" tabindex="0" title="拖动调整宽度，双击还原"
+      <div v-if="!stacked" class="workflow-library-resize is-skill" role="separator" aria-orientation="vertical" aria-label="调整 SKILL.md 面板宽度" tabindex="0" title="拖动调整宽度，双击还原"
         :aria-valuenow="skill_width" :aria-valuemin="SKILL_WIDTH.min" :aria-valuemax="SKILL_WIDTH.max" @pointerdown.prevent="start_resize($event, SKILL_WIDTH)"
         @dblclick="set_width(SKILL_WIDTH, SKILL_WIDTH.initial)" @keydown.left.prevent="set_width(SKILL_WIDTH, skill_width + SKILL_WIDTH.step)"
         @keydown.right.prevent="set_width(SKILL_WIDTH, skill_width - SKILL_WIDTH.step)" />
@@ -397,6 +397,6 @@ function start_resize(event, bounds) {
   color: var(--ui-text-highlighted); font-size: 13px; outline: none; }
 .workflow-tabs-add { flex-shrink: 0; align-self: center; margin: 0 4px; }
 .workflow-tabs-view { display: flex; flex-shrink: 0; align-items: center; gap: 2px; padding: 0 6px; border-left: 1px solid var(--ui-border-muted); }
-.workflow-tabs-view button { display: grid; place-items: center; width: 34px; height: 28px; border-radius: 7px; color: var(--ui-text-muted); }
+.workflow-tabs-view button { display: flex; align-items: center; gap: 4px; height: 28px; padding: 0 8px; border-radius: 7px; color: var(--ui-text-muted); font-size: 12px; white-space: nowrap; }
 .workflow-tabs-view button[aria-selected="true"] { background: var(--ui-bg-accented); color: var(--ui-text-highlighted); }
 </style>

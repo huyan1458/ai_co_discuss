@@ -52,7 +52,7 @@ description: AI CoDiscuss 工作流的创建与修改技能。用户要把房间
   templates/ 等（可选）  主持人要用的模板、参考资料，只认文本文件
 ```
 
-**流程画布**（`flow.json`）：用户在“工作流”页看到的示意图，帮用户一眼看懂 SKILL.md 里谁接谁。它只是示意：程序不执行它，主持人也收不到它，派活只按 SKILL.md。所以流程照常完整写在 SKILL.md，图照着 SKILL.md 画，两边对不上时以 SKILL.md 为准，并把图改对。
+**流程画布**（`flow.json`）：用户在工作流面板里看到的示意图，帮用户一眼看懂 SKILL.md 里谁接谁。它只是示意：程序不执行它，主持人也收不到它，派活只按 SKILL.md。所以流程照常完整写在 SKILL.md，图照着 SKILL.md 画，两边对不上时以 SKILL.md 为准，并把图改对。
 
 ```json
 { "nodes": [

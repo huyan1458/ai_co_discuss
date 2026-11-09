@@ -888,9 +888,12 @@ html[data-theme^="channel"] .advanced-fields { border-color: #414957; }
   .channel-work-status { padding: 0 6px; }
   .channel-tabbar { display: flex; height: 36px; padding-inline: 8px; }
   .channel-tabs [data-slot="list"] { padding-block: 3px; }
-  /* Six tabs on a phone: each takes the width its own label needs, so "工作流" is not cut while two-character labels share the rest. */
-  .channel-tabs [data-slot="list"] { gap: 2px; }
-  .channel-tabs [data-slot="trigger"] { flex: 1 1 auto; height: 28px; padding: 0 5px; gap: 3px; }
+  /* Phone room tabs keep a finger-sized target; past the width they scroll sideways rather than squeeze. */
+  .channel-tabbar { height: 44px; }
+  .channel-tabs { max-width: none; overflow-x: auto; scrollbar-width: none; }
+  .channel-tabs::-webkit-scrollbar { display: none; }
+  .channel-tabs [data-slot="list"] { width: max-content; min-width: 100%; }
+  .channel-tabs [data-slot="trigger"] { flex: 1 0 auto; height: 36px; padding: 0 10px; }
   .channel-host-brief { padding: 8px 16px; }
   .channel-brief-heading { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 8px; }
   .channel-brief-content { padding: 4px 0 6px 20px; }
