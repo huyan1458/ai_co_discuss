@@ -25,6 +25,8 @@ export const GOAL_IDLE_MS = 30_000;
 // A manual member's session that refuses a delivery is retried in the same execution, after a wait the owner can cut short.
 const MAX_DELIVERY_RETRIES = 3;
 const RETRY_DELAY_SECONDS = 60;
+// The cause is gone once the restarted runner is back, so its retry needs no long wait.
+const RESTART_RETRY_DELAY_SECONDS = 5;
 const MAX_RETRY_REASON = 500;
 const LIVE = ['reserving', 'delivering', 'sidecar_pending', 'running', 'retry_wait'];
 // The longest private chat reply the site keeps.
@@ -912,9 +914,10 @@ export class FreeRoomRunner {
     }
     // A restart between persisting and invoking cannot prove non-delivery, so it never resends.
     if (row.status === 'delivering') return this.fail(member.name, execution.id, '上次投递结果不明，未自动重发；请核对原会话后重新发送');
-    // Inherited from a runner that stopped or crashed: once its software processes are gone, no answer can come.
+    // Inherited from a runner that stopped or crashed: once its software processes are gone, no answer can come, so the
+    // same execution is delivered again after the retry wait instead of handing the failure to the host.
     if (row.status === 'running' && this.orphan(execution.id)?.alive === false) {
-      return this.fail(member.name, execution.id, '本机接入程序重启或异常退出，这次执行的软件进程已结束，未提交回答；请重新发送');
+      return this.retry_or_fail(member.name, execution, '本机接入程序重启或异常退出，这次执行的软件进程已结束，未提交回答', { restarted: true });
     }
     if (row.error) return this.retry_or_fail(member.name, execution, row.error);
     if (this.exited.has(execution.id)) {
@@ -1073,19 +1076,19 @@ export class FreeRoomRunner {
   }
   /**
    * A manual member's session refused the delivery, or the software failed before any turn ran: keep the execution and
-   * deliver again after a wait shown on the website, up to MAX_DELIVERY_RETRIES times; anything else, or the last
-   * attempt, fails as before.
+   * deliver again after a wait shown on the website, up to MAX_DELIVERY_RETRIES times; so is an execution whose software
+   * ended with the previous runner process (`restarted`). Anything else, or the last attempt, fails as before.
    */
-  async retry_or_fail(name, execution, reason) {
+  async retry_or_fail(name, execution, reason, { restarted = false } = {}) {
     const attempt = (execution.retry?.attempt || 0) + 1;
     const not_started = this.not_started.delete(execution.id);
     if (this.not_retryable.delete(execution.id)) return this.fail(name, execution.id, reason);
-    if (this.config.participants[name]?.project_access !== 'own' && !not_started) return this.fail(name, execution.id, reason);
+    if (!restarted && this.config.participants[name]?.project_access !== 'own' && !not_started) return this.fail(name, execution.id, reason);
     if (attempt > MAX_DELIVERY_RETRIES) return this.fail(name, execution.id, `${reason}（已自动重试 ${MAX_DELIVERY_RETRIES} 次）`);
     this.stop_member(name);
     this.exited.delete(execution.id);
     await api(this.config, `/executions/${execution.id}`, { action: 'retry_wait', attempt,
-      retry_at: Math.floor(Date.now() / 1000) + RETRY_DELAY_SECONDS, reason: reason.slice(0, MAX_RETRY_REASON) });
+      retry_at: Math.floor(Date.now() / 1000) + (restarted ? RESTART_RETRY_DELAY_SECONDS : RETRY_DELAY_SECONDS), reason: reason.slice(0, MAX_RETRY_REASON) });
     this.save(name, { status: 'retry_wait', error: '' });
   }
   /** Record the cause on the website, then stop this member's own processes. */

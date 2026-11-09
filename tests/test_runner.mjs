@@ -612,9 +612,9 @@ test('a restart at the software invocation boundary fails for review instead of 
   assert.equal(sent, 1); assert.equal(f.executions.get(id).status, 'failed');
 });
 
-test('an execution inherited from a stopped or crashed runner fails once its software is gone, and waits while it runs', async t => {
+test('an execution inherited from a stopped or crashed runner retries once its software is gone, and waits while it runs', async t => {
   const exited = spawnSync(process.execPath, ['-e', '']).pid;
-  for (const [pid, outcome] of [[undefined, 'failed'], [exited, 'failed'], [process.pid, 'dispatched']]) {
+  for (const [pid, gone] of [[undefined, true], [exited, true], [process.pid, false]]) {
     const f = await fixture(t); let sent = 0;
     const deliver = async (adapter, binding, task) => {
       sent++; task.on_process(Object.assign(new EventEmitter(), { pid, kill() {} }));
@@ -623,9 +623,15 @@ test('an execution inherited from a stopped or crashed runner fails once its sof
     await new FreeRoomRunner(f.config, f.store, deliver).tick();
     const id = f.current_execution().id;
     // No stop_children(): a crash leaves no mark, so the next runner must judge by the recorded processes alone.
-    await new FreeRoomRunner(f.config, f.store, deliver).tick();
-    assert.equal(sent, 1); assert.equal(f.executions.get(id).status, outcome);
-    if (outcome === 'failed') assert.match(f.executions.get(id).result, /接入程序重启或异常退出/);
+    const restarted = new FreeRoomRunner(f.config, f.store, deliver);
+    await restarted.tick();
+    assert.equal(sent, 1); assert.equal(f.executions.get(id).status, 'dispatched');
+    assert.equal(Boolean(f.executions.get(id).retry), gone);
+    if (!gone) continue;
+    assert.match(f.executions.get(id).retry.reason, /接入程序重启或异常退出/);
+    f.executions.get(id).retry.retry_at = 1;
+    await restarted.tick();
+    assert.equal(sent, 2); assert.equal(f.executions.size, 1, 'the retry keeps the one execution card');
   }
 });
 
