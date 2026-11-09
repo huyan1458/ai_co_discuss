@@ -54,8 +54,8 @@ export function participant_tools(context) {
     tool('read_message', '读取指定原文；服务端按本次请求限制讨论中的可见范围', { id: NUMBER }, ['id']),
     ...file_tools(context.project), ...command_tools(context.commands, context.project)];
   const answer = { text: { ...TEXT, maxLength: 32000 }, summary: { ...TEXT, maxLength: 1000 }, reply_to: NUMBER };
-  const submit = tool('submit_chat', '保存本次执行的完整回答并结束；summary 仅在回答较长时填写；只有主持人可用 to 点名成员，派出的工作做完或失败都会交回你（只点名一位、回答已足以直接给用户时可加 no_handoff: true，失败仍交回）；to 点名多位并加 sequential: true 时按点名顺序依次接力、最后交回你，依次接力走完一圈算一轮，再加 loop: true 则交回为检查点；主持人要在房间空闲后接着推进时填 continue（写明继续做什么），算本链一轮；派活时可用 need_rounds（本任务从这次派活起还需要的轮数）加 rounds_reason 向用户申请轮数，超过本链剩余时任务链立即停下等用户批准',
-    { ...answer, ...(context.role === 'host' ? { to: { type: 'array', items: TEXT }, sequential: { type: 'boolean' }, loop: { type: 'boolean' }, no_handoff: { type: 'boolean' }, continue: { ...TEXT, maxLength: 300 },
+  const submit = tool('submit_chat', '保存本次执行的完整回答并结束；summary 仅在回答较长时填写；只有主持人可用 to 点名成员，派出的工作做完或失败都会交回你（只点名一位、回答已足以直接给用户时可加 no_handoff: true，失败仍交回）；to 点名多位并加 sequential: true 时按点名顺序依次接力、最后交回你，依次接力走完一圈算一轮，再加 loop: true 则交回为检查点；parallel 列出要同一棒同时做的几组成员（每组至少两位、在 to 中相邻），这一组全部结束才交下一棒，组里有人失败则接力停下交回你；detach 列出与这次派活同时开工、但不等待的成员（不计入交回或下一棒），它失败时程序通知你；主持人要在房间空闲后接着推进时填 continue（写明继续做什么），算本链一轮；派活时可用 need_rounds（本任务从这次派活起还需要的轮数）加 rounds_reason 向用户申请轮数，超过本链剩余时任务链立即停下等用户批准',
+    { ...answer, ...(context.role === 'host' ? { to: { type: 'array', items: TEXT }, sequential: { type: 'boolean' }, loop: { type: 'boolean' }, parallel: { type: 'array', items: { type: 'array', items: TEXT } }, detach: { type: 'array', items: TEXT }, no_handoff: { type: 'boolean' }, continue: { ...TEXT, maxLength: 300 },
       need_rounds: { type: 'integer', minimum: 1, maximum: 100 }, rounds_reason: { ...TEXT, maxLength: 300 },
       next_review: TEXT, review_scope: { ...TEXT, maxLength: 2000 } } : {}) }, ['text']);
   const discussion_host = context.role === 'host' && context.discussion_request?.purpose === 'discuss_host';
@@ -144,8 +144,9 @@ function write_action(context, name, args) {
     to: context.role === 'host' ? args.to || [] : [],
     ...(context.role === 'host' && typeof args.continue === 'string' && args.continue.trim() ? { continue: args.continue } : {}),
     ...(context.role === 'host' && args.no_handoff === true ? { no_handoff: true } : {}),
+    ...(context.role === 'host' && Array.isArray(args.detach) && args.detach.length ? { detach: args.detach } : {}),
     ...(context.role === 'host' && Number.isInteger(args.need_rounds) ? { need_rounds: args.need_rounds, rounds_reason: args.rounds_reason } : {}),
-    ...(context.role === 'host' && args.sequential === true ? { sequential: true, ...(args.loop === true ? { loop: true } : {}) } : {}),
+    ...(context.role === 'host' && args.sequential === true ? { sequential: true, ...(args.loop === true ? { loop: true } : {}), ...(Array.isArray(args.parallel) && args.parallel.length ? { parallel: args.parallel } : {}) } : {}),
     ...(context.role === 'host' && args.next_review ? { next_review: args.next_review, review_scope: args.review_scope, review_roster: args.review_roster } : {}),
   }, terminal: true };
   const actions = {
@@ -258,7 +259,7 @@ export function system_prompt(context) {
 下文是本项目的参与技能${host ? '与主持技能' : ''}，与本地软件参与者使用同一份。你经本机接入程序以 API 参与，环境差异如下，与技能冲突时以本段为准：
 - 只能使用提供的${context.project ? '房间工具和项目文件工具' : '房间工具'}，没有${command_tools(context.commands, context.project).length ? '通用' : ''}命令行、浏览器、附件下载或其他软件。接入程序负责执行认领、续租和凭据管理；你的房间写入工具都绑定本次执行，不要重试结果不明的写入。
 - 命令与工具对应：room view → read_room；message list / view → read_messages / read_message；message post --kind chat → submit_chat。${host ? 'state decision → read_decision（按任务的决策编号读取完整判断）。' : ''}${discussion && host
-    ? '主持讨论工具还包括 state set → save_state；room update → update_topic；turn create --plan-file → arrange_turns；turn continue → continue_plan；turn roster → read_roster，读后 turn ask → ask_interjection；取消安排 → cancel_turn；room limits --done → finish_discussion / declare_done。' : ''}${host ? ' 派活用 to，派出的工作结束后都会交回你；房间空闲后要接着推进时填 continue；message post --sequential / --loop → submit_chat 的 sequential / loop；sequence view → read_sequence；sequence continue → continue_sequence。' : ''}${goal_host(context) ? ' goal view → read_goal；goal start → start_goal；goal done / block → finish_goal。' : ''}
+    ? '主持讨论工具还包括 state set → save_state；room update → update_topic；turn create --plan-file → arrange_turns；turn continue → continue_plan；turn roster → read_roster，读后 turn ask → ask_interjection；取消安排 → cancel_turn；room limits --done → finish_discussion / declare_done。' : ''}${host ? ' 派活用 to，派出的工作结束后都会交回你；房间空闲后要接着推进时填 continue；message post --sequential / --loop / --with / --detach → submit_chat 的 sequential / loop / parallel / detach；sequence view → read_sequence；sequence continue → continue_sequence。' : ''}${goal_host(context) ? ' goal view → read_goal；goal start → start_goal；goal done / block → finish_goal。' : ''}
 ${project_text(context.project, context.commands)}
 - ${max_requests(context) ? `本次执行最多 ${max_requests(context)} 次模型请求，每轮都计入；` : ''}互不依赖的读取或修改（如同一文件的多处 edit）在同一轮一次调用多个工具，减少模型请求次数。
 - 必须通过写入工具保存真实结果，普通文本输出不会保存。确实无法继续时不调用写入工具直接结束，本次执行会暂停等待用户。

@@ -25,6 +25,8 @@ const SHOWN_EXECUTIONS = 30;
 const OUTPUT_LINES = 3;
 // A step that took this long (s) shows its duration without hovering.
 const SLOW_STEP_S = 10;
+// Room (px) a step's time needs right of the column to sit beside it; matches --term-aside below.
+const ASIDE_PX = 150;
 const ACTIVE = ["dispatched", "started"];
 // How each kind of step is named on its `●` line.
 const STEP_NAMES = { command: "Bash", search: "Search", edit: "Update" };
@@ -85,6 +87,8 @@ let observer = null;
 let anchor_lines = null;
 // More than a screen above the newest output, when a button offers the way back.
 const away = ref(false);
+// Whether the screen is wide enough for steps' times to sit right of the column instead of over its text.
+const aside = ref(false);
 // When (performance.now()) the screen last scrolled; iOS keeps firing scroll events through momentum.
 let scrolled_at = 0;
 // Step reads that arrived while the reader scrolled, applied once the screen is still (see when_still).
@@ -368,6 +372,11 @@ function on_wheel(event) {
 function on_resize() {
   const element = screen.value;
   if (!element) return;
+  if (content.value) {
+    const pad = parseFloat(getComputedStyle(content.value).paddingRight) || 0;
+    const free = element.getBoundingClientRect().left + element.clientWidth - content.value.getBoundingClientRect().right + pad;
+    aside.value = free >= ASIDE_PX;
+  }
   anchor_lines = null;
   const grew = element.scrollHeight > last_height;
   last_height = element.scrollHeight;
@@ -501,7 +510,7 @@ function recall(event, step) {
     </nav>
     </div>
     <div class="term-stage">
-    <div ref="screen" v-keep-reading class="term-screen" @scroll.passive="on_scroll" @wheel.passive="on_wheel"
+    <div ref="screen" v-keep-reading class="term-screen" :class="{ 'has-aside': aside }" @scroll.passive="on_scroll" @wheel.passive="on_wheel"
       @touchstart.passive="set_touching(true)" @touchend="set_touching(false)" @touchcancel="set_touching(false)">
       <div ref="content" class="term-content">
       <div v-if="member" class="term-welcome">
@@ -596,7 +605,7 @@ function recall(event, step) {
 .term-content { padding-inline: var(--term-gutter); }
 /* A turn opened from a message card is marked for a moment. */
 .term-turn.is-target { animation: term-flash 2s ease-out; border-radius: 4px; }
-@keyframes term-flash { from { background: color-mix(in srgb, var(--term-accent) 16%, transparent); } }
+@keyframes term-flash { from { background-color: color-mix(in srgb, var(--term-accent) 16%, transparent); } }
 .term-welcome { display: inline-block; max-width: 100%; margin-bottom: 20px; padding: 10px 16px; border: 1px solid var(--term-accent); border-radius: 8px; }
 .term-welcome .term-dim { margin-top: 2px; font-size: 12.5px; }
 .term-welcome b, .term-tool { font-weight: 700; color: var(--term-strong); }
@@ -626,14 +635,24 @@ function recall(event, step) {
 .term-block { display: flex; flex-direction: column; gap: 2px; }
 .term-line, .term-sub { display: grid; grid-template-columns: 1ch minmax(0, 1fr); column-gap: 1ch; }
 .term-sub { padding-left: 2ch; }
-/* A step's time sits at the right of its `●` line, out of the way: a slow step's duration always shows faintly; its
-   clock time and a quick step's duration show while the pointer is over the step (a tap on touch screens). */
-.term-step { grid-template-columns: 1ch minmax(0, 1fr) auto; }
-.term-when { padding-left: 2ch; color: var(--term-faint); font-size: 11.5px; white-space: nowrap; font-variant-numeric: tabular-nums; }
+/* A step's time takes no room from the text, so showing it never rewraps the line. Where the screen has room right of
+   the column (has-aside) it sits there: a slow step's duration always, faintly; its clock time and a quick step's
+   duration while the pointer is over the step. Turns stretch their box into that room (and draw their top rule as
+   before), since content-visibility clips what overflows them. On a narrower screen (phone, tablet) everything shows
+   only while the step is hovered or tapped, laid over the right end of its line on the page background. */
+.term-step { position: relative; }
+.term-when { position: absolute; top: 0; right: 0; padding-left: 3ch; color: var(--term-faint); font-size: 11.5px; white-space: nowrap;
+  font-variant-numeric: tabular-nums; pointer-events: none; }
 .term-when > * { display: none; }
-.term-when > .term-took.is-slow { display: inline; }
+.term-block:hover .term-when { background: linear-gradient(to right, transparent, var(--term-bg) 2ch); }
 .term-block:hover .term-when > * { display: inline; }
 .term-block:hover .term-clock + .term-took::before { content: " · "; }
+.has-aside { --term-aside: 150px; }
+.has-aside .term-turn { margin-right: calc(-1 * var(--term-aside)); padding-right: var(--term-aside); }
+.has-aside .term-turn + .term-turn { border-top-color: transparent;
+  background: linear-gradient(var(--term-border) 0 0) 0 0 / calc(100% - var(--term-aside)) 1px no-repeat border-box; }
+.has-aside .term-when, .has-aside .term-block:hover .term-when { left: 100%; right: auto; padding-left: 2ch; background: none; }
+.has-aside .term-when > .term-took.is-slow { display: inline; }
 .term-body { min-width: 0; white-space: pre-wrap; overflow-wrap: anywhere; }
 .term-prompt .term-body { color: var(--term-text); }
 .term-sub .term-body, .term-dim { color: var(--term-dim); }

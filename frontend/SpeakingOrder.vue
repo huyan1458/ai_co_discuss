@@ -52,8 +52,8 @@ const rows = computed(() => {
   const seen = {};
   let place = 0;
   return shown.map((item, index) => ({ ...item, key: `${item.name}#${seen[item.name] = (seen[item.name] || 0) + 1}`,
-    // A lone member has no order to show.
-    place: in_order(item) && ranked > 1 ? ++place : 0,
+    // A lone member has no order to show; members of one relay step working at once share its number.
+    place: in_order(item) && ranked > 1 ? (item.step && item.step === shown[index - 1]?.step ? place : ++place) : 0,
     outside: !in_order(item) && index > 0 && in_order(shown[index - 1]) }));
 });
 const movable_index = (index) => index - rows.value.findIndex((item) => item.state === movable_state.value);
@@ -148,7 +148,7 @@ function step(event, index, direction) {
             <span class="speaking-order-number">{{ item.place }}</span><UIcon name="i-lucide-grip-vertical" class="speaking-order-handle" />
           </button>
           <span v-else-if="item.state === 'done'" class="speaking-order-place" title="已发言" aria-label="已发言"><UIcon name="i-lucide-check" /></span>
-          <span v-else class="speaking-order-place" :title="item.state === 'speaking' ? '正在发言' : undefined">{{ item.place || '' }}</span>
+          <span v-else class="speaking-order-place" :title="item.step ? '与同序号的成员同时做' : item.state === 'speaking' ? '正在发言' : undefined">{{ item.place || '' }}</span>
           <slot :item="item" :place="item.place" />
         </li>
       </template>

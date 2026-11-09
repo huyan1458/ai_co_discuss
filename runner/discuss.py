@@ -28,9 +28,9 @@ MAX_TEXT_LENGTH = 32000
 MAX_SUMMARY_LENGTH = 1000
 MAX_BRIEF_LENGTH = 1600
 MAX_MEMBER_HANDLE = 80
-PARTICIPANTS = ("用户", "Codex", "Claude", "Antigravity", "DeepSeek", "Qwen", "Grok")
+PARTICIPANTS = ("用户", "Codex", "Claude", "Antigravity", "DeepSeek", "Qwen", "Grok", "OpenAI", "Custom")
 # A platform is a type; `Claude-review` is a second Claude instance with its own session. Mirrors backend/identity.py.
-INSTANCE_PATTERN = re.compile(r"(Codex|Claude|Antigravity|DeepSeek|Qwen|Grok)(?:-[0-9A-Za-z_]{1,16})?")
+INSTANCE_PATTERN = re.compile(r"(Codex|Claude|Antigravity|DeepSeek|Qwen|Grok|OpenAI|Custom)(?:-[0-9A-Za-z_]{1,16})?")
 KINDS = ("opinion", "moderation", "chat")
 OVERVIEW_FIELDS = ("id", "title", "goal", "host", "phase", "focus", "message_count",
                    "latest_id", "state_until", "current_turn", "queued_turns", "held_since", "limits", "completed_rounds", "answered_turns", "duplicate", "submission_id",
@@ -98,6 +98,29 @@ class RequestPlan:
     download_file: str | None = None
 
 
+class JoinPreviousStep(argparse.Action):
+    """`--with NAME`: append NAME to `--to` and remember that it shares the step of the member named just before it."""
+
+    def __call__(self, parser, namespace, value, option_string=None):
+        names = list(getattr(namespace, self.dest) or [])
+        if not names:
+            parser.error("--with 须跟在一个 --to 之后")
+        names.append(value)
+        setattr(namespace, self.dest, names)
+        namespace.joined_steps = [*getattr(namespace, "joined_steps", []), len(names) - 1]
+
+
+def parallel_groups(names, joined):
+    """The `parallel` field from the `--to` list and the positions `--with` joined to the step before them."""
+    groups = []
+    for index in sorted(joined):
+        if groups and groups[-1][-1] == names[index - 1]:
+            groups[-1].append(names[index])
+        else:
+            groups.append([names[index - 1], names[index]])
+    return groups
+
+
 def positive_int(value):
     """Parse a positive page or resource identifier."""
     try:
@@ -112,7 +135,7 @@ def positive_int(value):
 def ai_name(value):
     """Accept an AI platform or a named instance of one, such as Claude-review."""
     if not INSTANCE_PATTERN.fullmatch(value):
-        raise argparse.ArgumentTypeError("须为 Codex/Claude/Antigravity/DeepSeek/Qwen/Grok，或平台名-后缀（后缀 1–16 个英文字母、数字或下划线）")
+        raise argparse.ArgumentTypeError("须为 Codex/Claude/Antigravity/DeepSeek/Qwen/Grok/OpenAI/Custom，或平台名-后缀（后缀 1–16 个英文字母、数字或下划线）")
     return value
 
 
@@ -289,6 +312,10 @@ def message_commands(subcommands, registry):
                       help="自由房间主持人：--to 点名的多位成员按点名顺序依次接力，走完一圈算一轮，最后一位做完交回你")
     post.add_argument("--loop", action="store_true",
                       help="与 --sequential 同用：交回成为检查点，用 sequence continue 开始下一圈，不继续即直接验收")
+    post.add_argument("--detach", type=member_handle, action="append", default=[], metavar="MEMBER",
+                      help="自由房间主持人：与 --to 同用，点名一位与这次派活同时开工、但不等它的成员（不计入交回或下一棒的等待）；它失败时程序通知你；可重复")
+    post.add_argument("--with", dest="to", type=member_handle, action=JoinPreviousStep, metavar="MEMBER",
+                      help="与 --sequential 同用：点名一位成员，与紧挨在前的 --to（或 --with）同一棒、同时做；这一组全部结束才交下一棒，组里有人失败则接力停下交回你；可重复")
     post.add_argument("--need-rounds", type=positive_int, metavar="N",
                       help="自由房间主持人：与 --to 同用，声明本任务从这次派活起还需要的轮数（须带 --rounds-reason）；超过本链剩余轮数时任务链立即停下，请用户一键批准差额")
     post.add_argument("--rounds-reason", metavar="REASON", help="与 --need-rounds 同用：为什么需要这些轮（≤300 字），展示给用户")
@@ -678,10 +705,19 @@ def plan_message(args):
         payload["rounds_reason"] = args.rounds_reason
     if args.loop and not args.sequential:
         raise CliError("--loop 须与 --sequential 一起使用")
+    if args.detach:
+        if not args.to:
+            raise CliError("--detach 须与 --to 一起使用")
+        payload["detach"] = args.detach
+    joined = getattr(args, "joined_steps", [])
+    if joined and not args.sequential:
+        raise CliError("--with 须与 --sequential 一起使用")
     if args.sequential:
         if len(args.to) < 2:
             raise CliError("--sequential 须用 --to 按顺序点名至少两位成员")
         payload["sequential"] = True
+        if joined:
+            payload["parallel"] = parallel_groups(args.to, joined)
     if args.loop:
         payload["loop"] = True
     for field in ("next_review", "review_scope", "review_roster"):

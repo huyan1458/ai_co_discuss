@@ -1495,6 +1495,77 @@ class HostTests(HostRoomTests):
         self.assertEqual(chain["used"], 1, "a whole pass is one round")
         self.assertEqual(self.request(self.path)[1]["speaking_order"]["kind"], "default")
 
+    def test_parallel_relay_step_waits_for_its_whole_group(self):
+        """A group step asks its members at once and goes on only after all end; one failing stops it until retried."""
+        kimi = uuid.uuid4().hex
+        self.request(f"{self.path}/members", {"name": "Codex-2", "adapter": "codex_cli", "token": kimi}, self.owner)
+        self.tokens["Codex-2"] = kimi
+        FreeRoomTests.say(self, "写一稿，两位同时审")
+        execution = self.reserve_for("Claude")[1]["id"]
+        post = lambda **extra: self.request(f"{self.path}/messages", {"author": "Claude", "text": "接力", "source": "cli",
+            "submission_id": uuid.uuid4().hex, "execution_id": execution, "sequential": True, "loop": True, **extra}, self.member)
+        self.assertEqual(post(to=["Codex", "Antigravity", "Codex-2"], parallel=[["Codex", "Codex-2"]])[0], 400, "a group stands together")
+        self.assertEqual(post(to=["Antigravity", "Codex", "Codex-2"], parallel=[["Codex"]])[0], 400, "a group has two members")
+        status, saved = post(to=["Antigravity", "Codex", "Codex-2"], parallel=[["Codex", "Codex-2"]])
+        self.assertEqual(status, 201, saved)
+        self.work("Antigravity")
+        self.assertEqual(self.requests()[-2:], [("Codex", "ask", "pending"), ("Codex-2", "ask", "pending")])
+        order = self.request(self.path)[1]["speaking_order"]
+        self.assertEqual([(item["name"], item["state"], item.get("step")) for item in order["items"]][:3],
+                         [("Antigravity", "done", None), ("Codex", "speaking", 2), ("Codex-2", "speaking", 2)])
+        pending = next(item for item in self.request(f"{self.path}/inbox", token=self.owner)[1]["members"] if item["name"] == "Codex")["pending"]
+        self.assertEqual((pending[0]["sequence"]["order"], pending[0]["sequence"]["together"]), (["Antigravity", ["Codex", "Codex-2"]], ["Codex-2"]))
+        self.work("Codex")
+        self.assertNotIn(("Claude", "handoff", "pending"), self.requests(), "the group waits for Kimi")
+        failing = self.reserve_for("Codex-2")[1]
+        url = f"{self.path}/executions/{failing['id']}"
+        self.request(url, {"action": "fail", "reason": "超时"}, self.owner)
+        self.assertEqual(self.requests()[-1], ("Claude", "notice", "pending"), "one failure in the group stops the relay")
+        self.assertEqual(self.request(url, {"action": "retry"}, self.owner)[0], 200)
+        self.work("Codex-2")
+        checkpoint = next(item for item in self.request(f"{self.path}/inbox", token=self.owner)[1]["members"] if item["name"] == "Claude")["pending"]
+        checkpoint = next(item for item in checkpoint if item["purpose"] == "handoff")
+        self.assertEqual(checkpoint["sequence"]["phase"], "checkpoint")
+        sequence = self.request(f"{self.path}/sequences/{checkpoint['sequence']['id']}", token=self.member)[1]
+        self.assertEqual([(item["member"], item["step"], item["status"]) for item in sequence["answers"]],
+                         [("Antigravity", 1, "completed"), ("Codex", 2, "completed"), ("Codex-2", 2, "completed")])
+
+    def test_detached_member_starts_with_a_dispatch_but_is_not_waited_for(self):
+        """A member sent along with `detach` works at once; the batch hands back without it, and its failure tells the host."""
+        FreeRoomTests.say(self, "审稿同时记账")
+        execution = self.reserve_for("Claude")[1]["id"]
+        post = lambda **extra: self.request(f"{self.path}/messages", {"author": "Claude", "text": "派活", "source": "cli",
+            "submission_id": uuid.uuid4().hex, "execution_id": execution, **extra}, self.member)
+        self.assertEqual(post(to=["Codex"], detach=["Codex"])[0], 400, "a detached member is not also waited for")
+        self.assertEqual(post(detach=["Codex"])[0], 400, "detach rides on a dispatch")
+        status, saved = post(to=["Codex"], detach=["Antigravity"])
+        self.assertEqual(status, 201, saved)
+        self.assertEqual(self.requests()[-2:], [("Codex", "ask", "pending"), ("Antigravity", "ask", "pending")])
+        self.work("Codex")
+        self.assertIn(("Claude", "handoff", "pending"), self.requests(), "the batch hands back without waiting for Antigravity")
+        self.assertIn(("Antigravity", "ask", "pending"), self.requests())
+        self.work("Claude")
+        failing = self.reserve_for("Antigravity")[1]
+        self.request(f"{self.path}/executions/{failing['id']}", {"action": "fail", "reason": "超时"}, self.owner)
+        self.assertEqual(self.requests()[-1], ("Claude", "notice", "pending"), "a detached failure reaches the host")
+
+    def test_a_held_dispatch_keeps_its_detached_members(self):
+        """At the round limit a dispatch is held with its detached members; continuing the chain sends them all."""
+        from backend import free_room
+        original = free_room.CHAIN_ROUNDS
+        free_room.CHAIN_ROUNDS = 1
+        try:
+            FreeRoomTests.say(self, "上限")
+            self.work("Claude", to=["Antigravity"])
+            self.work("Antigravity")
+            self.work("Claude", to=["Codex"], detach=["Antigravity"])
+            free = self.request(self.path)[1]["free"]
+            self.assertEqual([item["reason"] for item in free["halted_chains"]], ["budget"])
+            self.request(f"{self.path}/chains/{free['halted_chains'][0]['chain_id']}", {"action": "continue", "rounds": 1}, self.owner)
+            self.assertEqual(self.requests()[-2:], [("Codex", "ask", "pending"), ("Antigravity", "ask", "pending")])
+        finally:
+            free_room.CHAIN_ROUNDS = original
+
     def test_retrying_a_failed_relay_step_resumes_the_relay(self):
         """A failed step stops the relay and tells the host; retrying it runs the relay again, so its answer goes on."""
         FreeRoomTests.say(self, "接力失败重试")

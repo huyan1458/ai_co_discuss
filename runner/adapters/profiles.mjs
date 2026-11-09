@@ -36,6 +36,17 @@
  * - `task_rules(cli, {runs_commands})`: fixed task text this software needs, added by the runner so no member prompt drops it.
  */
 const ALL_ACCESS = ['read', 'write', 'auto', 'full'];
+/** API slot defaults; identity and wire protocol stay independent, and a custom slot starts without a provider. */
+export const API_PROVIDERS = {
+  Codex: { label: 'OpenAI', base_url: 'https://api.openai.com/v1', api_protocol: 'responses', models: ['gpt-6.1-sol', 'gpt-6-astra', 'gpt-6-luna'] },
+  Claude: { label: 'Anthropic', base_url: 'https://api.anthropic.com/v1', api_protocol: 'anthropic', models: ['claude-sonnet-5-5', 'claude-opus-5-5', 'claude-haiku-5-5', 'claude-fable-5-1'] },
+  Antigravity: { label: 'Google', base_url: 'https://generativelanguage.googleapis.com/v1beta', api_protocol: 'gemini', models: ['gemini-4-argon', 'gemini-3.8-flash'] },
+  DeepSeek: { label: 'DeepSeek', base_url: 'https://api.deepseek.com/v1', api_protocol: 'chat', models: ['deepseek-flash', 'deepseek-v4-pro'] },
+  Qwen: { label: '阿里云百炼', base_url: 'https://dashscope.aliyuncs.com/compatible-mode/v1', api_protocol: 'chat', models: ['qwen3.8-flash', 'qwen3.7-plus', 'qwen3.8-max'] },
+  Grok: { label: 'xAI', base_url: 'https://api.x.ai/v1', api_protocol: 'responses', models: ['grok-4.7'] },
+  OpenAI: { label: 'OpenAI', base_url: 'https://api.openai.com/v1', api_protocol: 'responses', models: ['gpt-6.1-sol', 'gpt-6-astra', 'gpt-6-luna'] },
+  Custom: { label: '自定义 API', base_url: '', api_protocol: 'chat', models: [] },
+};
 /** Model requests one model-API execution may make unless the room sets its own; 0 means no limit, up to the maximum. */
 export const DEFAULT_API_MAX_REQUESTS = 300;
 export const MAX_API_MAX_REQUESTS = 1000;

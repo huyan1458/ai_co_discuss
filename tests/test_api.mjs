@@ -93,17 +93,20 @@ function profiles(home, base_url) {
 
 test('provider presets preserve model IDs, separate identity from protocol and bind private keys to URLs', async t => {
   const f = await site_fixture(t);
-  assert.deepEqual(Object.keys(API_PROVIDERS), ['Codex', 'Claude', 'Antigravity', 'DeepSeek', 'Qwen', 'Grok']);
+  assert.equal(API_PROVIDERS.OpenAI.base_url, 'https://api.openai.com/v1');
+  assert.equal(API_PROVIDERS.OpenAI.api_protocol, 'responses');
+  assert.equal(API_PROVIDERS.Custom.base_url, '');
+  assert.equal(API_PROVIDERS.Custom.api_protocol, 'chat');
   assert.equal(api_base_url('https://openrouter.ai/api/v1/'), 'https://openrouter.ai/api/v1');
   assert.throws(() => api_base_url('https://key@example.test/v1'), /凭据/);
-  const profile = profiles(f.home, 'https://openrouter.ai/api/v1').Grok;
+  const profile = profiles(f.home, 'https://openrouter.ai/api/v1').Custom;
   profile.api_protocol = 'chat';
   assert.equal(read_api_key(f.home, profile), SECRET);
   assert.ok(!JSON.stringify(profile).includes(SECRET));
   assert.throws(() => read_api_key(f.home, { ...profile, base_url: 'https://api.x.ai/v1' }), /重新填写/);
   const request = api_request(profile, { system: 'test', history: [], tools: participant_tools({ role: 'expert' }) });
   assert.equal(request.path, '/chat/completions');
-  assert.equal(request.body.model, 'Grok/model.1');
+  assert.equal(request.body.model, 'Custom/model.1');
   assert.ok(!('reasoning_effort' in request.body));
 });
 
@@ -169,7 +172,7 @@ test('API host schedules a real session round and providers answer through execu
   const r = await start_free_session(t, { fixture: f, participants, host: 'Codex', title: 'API 模拟讨论' });
   await until(async () => (await api(r.config, '')).session?.status === 'concluded', () => r.runner.tick());
   const room = await api(r.config, ''), messages = await api(r.config, '/messages');
-  assert.equal(messages.messages.length, 6);
+  assert.equal(messages.messages.length, Object.keys(participants).length);
   assert.deepEqual(messages.messages.map(message => message.author).filter((_, index) => messages.messages[index].kind !== 'moderation').sort(), Object.keys(API_PROVIDERS).filter(name => name !== 'Codex').sort());
   assert.ok(messages.messages.some(message => message.author === 'Codex' && message.kind === 'moderation'));
   assert.ok(messages.messages.every(message => message.source === 'api' && message.submitted_by === message.author));

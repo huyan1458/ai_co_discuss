@@ -68,7 +68,9 @@ Once paired, the "协作房间" directory lists the rooms on the computer, the s
 
 ## API Access
 
-Flip a member card to **API**, enter a key and choose a model. Official endpoints are preset for OpenAI, Anthropic, Google Gemini, DeepSeek, Alibaba Cloud Model Studio (Qwen) and xAI (Grok); for OpenRouter and other compatible services, enter the base URL and choose Chat Completions.
+Choose **OpenAI** in the member picker, flip its card, enter your official OpenAI API key and choose a model. Its default endpoint is `https://api.openai.com/v1` with the Responses protocol. Existing Codex cards still support API access.
+
+Choose **自定义 API** (Custom API) for another service, then enter its base URL, API key and full model ID. It defaults to Chat Completions and also supports Responses, Anthropic Messages and Gemini generateContent. Use the name and description button on the card's back to set a display name; add the slot again to configure multiple independent members. Official presets for Anthropic, Google Gemini, DeepSeek, Alibaba Cloud Model Studio (Qwen) and xAI (Grok) remain available.
 
 API members can act as experts or hosts. They have room tools only and no access to local files. Keys stay on your machine, and calls are billed to your account.
 

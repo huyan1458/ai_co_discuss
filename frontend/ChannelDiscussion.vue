@@ -2160,6 +2160,7 @@ function copy_message(message) { act("copy", `${view.value.room_site}/r/${room.v
             <UAvatar :src="bridge.identities[message.author]?.icon" :text="bridge.identities[message.author]?.initials || '?'" :alt="bridge.display_name(message.author)" size="2xs" class="channel-avatar" :class="bridge.identities[message.author]?.style" />
             <strong class="channel-working-name">{{ bridge.display_name(message.author) }}</strong>
             <small class="channel-working-elapsed">{{ message.waiting ? `手动启动${message.created_at ? ` · 已等 ${format_elapsed(Math.max(0, free_now - message.created_at))}` : ''}` : `已用 ${format_elapsed(Math.max(0, free_now - message.created_at))}` }}{{ message.attempt ? ` · 第 ${message.attempt}/${MAX_DELIVERY_RETRIES} 次重试` : '' }}</small>
+            <UTooltip v-if="view.access?.can_manage && shows_progress(message) && message.execution_id" text="私聊：查看它正在做什么"><UButton icon="i-lucide-message-square" class="channel-private-chat-key channel-corner-key" size="xs" variant="ghost" color="neutral" :aria-label="`私聊 ${bridge.display_name(message.author)}：查看本次执行过程`" @click="open_private_chat(act, message.author, message.execution_id)" /></UTooltip>
           <span v-if="view.access?.can_manage" class="channel-working-actions">
               <!-- In a discussion, stopping the current speaker skips the turn so the next one speaks. -->
               <template v-if="speaking_turn?.expert === message.author && message.discussion_request">
@@ -2171,10 +2172,9 @@ function copy_message(message) { act("copy", `${view.value.room_site}/r/${room.v
                 :loading="pending === 'change_member' && stopping_member === message.member_id" @click="stop_member(message)"><span class="channel-stop-square" /></UButton></UTooltip>
           </span>
           </div>
-          <!-- Private chat, as on the answered card: in the hover column outside the strip with a mouse, inside its bottom-right corner on touch
-               screens; the stop key keeps the head row's right end. -->
+          <!-- Private chat, as on the answered card: in the hover column outside the strip with a mouse; on touch screens the
+               head-row key above takes the right end and the stop key moves to the bottom-right corner. -->
           <template v-if="view.access?.can_manage && shows_progress(message) && message.execution_id">
-            <UTooltip text="私聊：查看它正在做什么"><UButton icon="i-lucide-message-square" class="channel-private-chat-key channel-corner-key" size="xs" variant="ghost" color="neutral" :aria-label="`私聊 ${bridge.display_name(message.author)}：查看本次执行过程`" @click="open_private_chat(act, message.author, message.execution_id)" /></UTooltip>
             <div class="channel-message-actions"><div class="channel-message-stack"><div class="channel-message-toolbar channel-message-corner">
               <UTooltip text="私聊：查看它正在做什么"><UButton icon="i-lucide-message-square" class="channel-private-chat-key" size="xs" variant="ghost" color="neutral" :aria-label="`私聊 ${bridge.display_name(message.author)}：查看本次执行过程`" @click="open_private_chat(act, message.author, message.execution_id)" /></UTooltip>
             </div></div></div>

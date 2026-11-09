@@ -604,6 +604,10 @@ def resolve_member_fields(connection, room_id, payload):
     resolve = lambda value: handles.get(value.strip(), value) if isinstance(value, str) else value
     if isinstance(payload.get("to"), list):
         payload["to"] = [resolve(item) for item in payload["to"]]
+    if isinstance(payload.get("detach"), list):
+        payload["detach"] = [resolve(item) for item in payload["detach"]]
+    if isinstance(payload.get("parallel"), list):
+        payload["parallel"] = [[resolve(item) for item in group] if isinstance(group, list) else group for group in payload["parallel"]]
     for key in ("next_review", "expert"):
         if key in payload:
             payload[key] = resolve(payload[key])
@@ -985,7 +989,7 @@ def recipients(connection, room_id, payload):
 
 # What a proactive post may not carry: it answers no request. Only the host's may also dispatch, as an answer does.
 PROACTIVE_EXCLUDED = ("execution_id", "request_ids", "next_review", "turn_id")
-HOST_ONLY_PROACTIVE = ("to", "handoff", "no_handoff", "continue", "sequential", "loop", "need_rounds", "rounds_reason")
+HOST_ONLY_PROACTIVE = ("to", "handoff", "no_handoff", "continue", "sequential", "loop", "parallel", "detach", "need_rounds", "rounds_reason")
 
 
 def check_need_rounds(member, payload):
@@ -1058,10 +1062,10 @@ def after_proactive(connection, room_id, message_id, member, payload):
         return
     if payload.get("to") and payload.get("sequential") is True:
         start_sequence(connection, room_id, member, message_id, payload["to"], message_id, payload.get("loop") is True,
-                       need_plan(payload))
+                       need_plan(payload), payload.get("parallel"), payload.get("detach"))
     elif payload.get("to"):
         dispatch(connection, room_id, member, message_id, payload["to"], message_id, payload.get("handoff") is True,
-                 payload.get("no_handoff") is True, {"need": need_plan(payload)})
+                 payload.get("no_handoff") is True, {"need": need_plan(payload)}, payload.get("detach"))
     remember_continue(connection, room_id, member, message_id, message_id, payload)
     settle_batches(connection, room_id)
 
@@ -1280,14 +1284,17 @@ def continue_chain(connection, room_id, token, chain_id, payload):
     connection.execute("""UPDATE free_chain_holds SET message_id=0,host_id=0,names='[]',handoff=0,asked_rounds=0,asked_reason=''
         WHERE room_id=? AND chain_id=?""", (room_id, chain_id))
     if held["message_id"]:
-        dispatch(connection, room_id, host, held["message_id"], json.loads(held["names"]), chain_id, bool(held["handoff"]))
+        names = json.loads(held["names"])
+        names, detach = (names["to"], names["detach"]) if isinstance(names, dict) else (names, None)
+        dispatch(connection, room_id, host, held["message_id"], names, chain_id, bool(held["handoff"]), detach=detach)
     return free_view(connection, room_id)
 
 
-def hold_dispatch(connection, room_id, host, message_id, names, chain_id, handoff, ask=None):
+def hold_dispatch(connection, room_id, host, message_id, names, chain_id, handoff, ask=None, detach=None):
     """Stop a chain at its round limit, keeping the dispatch it held back so the owner can send it by continuing.
 
     `ask` is the host's request for more rounds ({"rounds": the rounds to add, "reason"}), shown to the owner to approve.
+    Members sent along without being waited for (`detach`) are held with it: `names` then keeps {"to", "detach"}.
     """
     halt_chain(connection, room_id, chain_id, "budget")
     asked, reason = (ask["rounds"], ask["reason"]) if ask else (0, "")
@@ -1295,7 +1302,8 @@ def hold_dispatch(connection, room_id, host, message_id, names, chain_id, handof
         VALUES (?,?,?,?,?,?,?,?)
         ON CONFLICT(room_id,chain_id) DO UPDATE SET message_id=excluded.message_id,host_id=excluded.host_id,names=excluded.names,
         handoff=excluded.handoff,asked_rounds=excluded.asked_rounds,asked_reason=excluded.asked_reason""",
-                       (room_id, chain_id, message_id, host["id"], json.dumps(list(names), ensure_ascii=False), int(handoff), asked, reason))
+                       (room_id, chain_id, message_id, host["id"], json.dumps({"to": list(names), "detach": list(detach)} if detach else list(names),
+                                                                              ensure_ascii=False), int(handoff), asked, reason))
 
 
 def wake_host(connection, room_id, chain_id, text, key):
@@ -1368,13 +1376,14 @@ def resume_host(connection, room_id):
     wake_host(connection, room_id, row["chain_id"], f"主持人续跑（接 #{row['message_id']}）：{row['reason']}", f"continue:{row['message_id']}")
 
 
-def dispatch(connection, room_id, host, message_id, names, chain_id, handoff=False, direct=False, plan=None):
+def dispatch(connection, room_id, host, message_id, names, chain_id, handoff=False, direct=False, plan=None, detach=None):
     """Queue the host's named members as one batch, one round; it hands back to the host when it ends.
 
     `direct` (the host's `no_handoff`) lets a one-member batch that completed reach the user without coming back; a
     failure still comes back. `plan` carries either `relay` (a relay's later step in the same pass: free, never held)
     or `need` (the host's `need_rounds`: {"rounds", "reason"}); a need above the rounds left stops the chain right away
-    and asks the owner for the difference.
+    and asks the owner for the difference. Members in `detach` start with the batch but stay outside it: nothing waits for
+    them, and a failure of theirs reaches the host like any request outside a batch.
     """
     plan = plan or {}
     member_ids = named_members(active_members(connection, room_id), names, exclude=host["name"])
@@ -1384,10 +1393,12 @@ def dispatch(connection, room_id, host, message_id, names, chain_id, handoff=Fal
     remaining = None if plan.get("relay") else rounds_left(connection, room_id, chain_id)
     if remaining is not None and (remaining < 1 or need and remaining < need["rounds"]):
         ask = {"rounds": need["rounds"] - max(remaining, 0), "reason": need["reason"]} if need else None
-        hold_dispatch(connection, room_id, host, message_id, names, chain_id, handoff, ask)
+        hold_dispatch(connection, room_id, host, message_id, names, chain_id, handoff, ask, detach)
         return
     for member_id in member_ids:
         insert_request(connection, room_id, member_id, message_id, chain_id, "ask", "host", batch_id=message_id)
+    for member_id in named_members(active_members(connection, room_id), detach or [], exclude=host["name"]):
+        insert_request(connection, room_id, member_id, message_id, chain_id, "ask", "host")
     connection.execute("INSERT INTO free_batches (room_id,batch_id,chain_id,host_id) VALUES (?,?,?,?)",
                        (room_id, message_id, chain_id, host["id"]))
     if plan.get("relay"):
@@ -1467,7 +1478,10 @@ def advance_queues(connection, room_id):
 
 def checked_sequence(actor, payload):
     """Validate a host's one-after-another dispatch (optionally a loop) before its message is saved."""
+    checked_detach(actor, payload)
     sequential, loop = payload.get("sequential", False), payload.get("loop", False)
+    if payload.get("parallel") is not None and sequential is not True:
+        raise ValueError("parallel 只与 sequential 一起使用")
     if not isinstance(actor, dict) or (sequential is False and loop is False):
         return
     if sequential is not True or type(loop) is not bool:
@@ -1479,46 +1493,108 @@ def checked_sequence(actor, payload):
         raise ValueError("依次接力须用 to 按顺序点名至少两位不同成员，每位只出现一次")
     if payload.get("next_review"):
         raise ValueError("依次接力不能同时声明预授权评审；评审者直接排进顺序即可")
+    relay_order(names, payload.get("parallel"))
 
 
-def start_sequence(connection, room_id, host, message_id, names, chain_id, loop, need=None):
-    """Start a host's one-after-another dispatch with its first member; the rest follow as each answer arrives."""
-    member_ids = named_members(active_members(connection, room_id), names, exclude=host["name"])
+def checked_detach(actor, payload):
+    """`detach`: members the host sends along with a dispatch without waiting for them; they are not among those in `to`."""
+    detach = payload.get("detach")
+    if detach is None:
+        return
+    if not isinstance(actor, dict) or actor["role"] != "host":
+        raise PermissionError("只有主持人派活时可以带上不等待的成员")
+    names = payload.get("to") or []
+    if (not isinstance(detach, list) or not detach or any(not isinstance(name, str) for name in detach)
+            or len(set(detach)) != len(detach)):
+        raise ValueError("detach 须为不重复的成员名列表")
+    if not names or set(detach) & set(names):
+        raise ValueError("detach 须与 to 同用，且不包含 to 中的成员")
+
+
+def relay_order(names, parallel):
+    """The relay's steps from `to` and `parallel`: each step a list of names; a group named in `parallel` is one step.
+
+    Each group lists at least two members who stand next to each other in `to`; a member belongs to at most one group.
+    """
+    if parallel is None:
+        return [[name] for name in names]
+    groups = parallel if isinstance(parallel, list) else None
+    if not groups or any(not isinstance(group, list) or len(group) < 2 or len(set(group)) != len(group)
+                         or any(name not in names for name in group) for group in groups):
+        raise ValueError("parallel 须为若干组成员名，每组至少两位不同成员，且都在 to 中")
+    grouped = [name for group in groups for name in group]
+    if len(set(grouped)) != len(grouped):
+        raise ValueError("parallel 中每位成员只能属于一组")
+    steps, index = [], 0
+    while index < len(names):
+        group = next((group for group in groups if names[index] in group), None)
+        if group is None:
+            steps.append([names[index]])
+            index += 1
+            continue
+        if set(names[index:index + len(group)]) != set(group):
+            raise ValueError("parallel 的同一组成员须在 to 中相邻")
+        steps.append(names[index:index + len(group)])
+        index += len(group)
+    return steps
+
+
+def relay_steps(sequence):
+    """The relay's steps as lists of member ids; a step stored as one id (single member) reads as a one-member list."""
+    return [step if isinstance(step, list) else [step] for step in json.loads(sequence["member_ids"])]
+
+
+def stored_step(member_ids):
+    """How a step is kept in `member_ids` and `steps`: one member as its id, as before groups existed; a group as a list."""
+    return member_ids[0] if len(member_ids) == 1 else member_ids
+
+
+def start_sequence(connection, room_id, host, message_id, names, chain_id, loop, need=None, parallel=None, detach=None):
+    """Start a host's one-after-another dispatch with its first step; the rest follow as each step ends.
+
+    A step named in `parallel` is a group: its members work at once and the relay goes on only after all of them end.
+    """
+    active = active_members(connection, room_id)
+    named_members(active, names, exclude=host["name"])
     if not chain_id:
         return
+    order = relay_order(names, parallel)
+    steps = [stored_step([active[name]["id"] for name in step]) for step in order]
     connection.execute("""INSERT INTO free_sequences (room_id,message_id,chain_id,host_id,member_ids,loop,batch_id,steps)
-        VALUES (?,?,?,?,?,?,?,?)""", (room_id, message_id, chain_id, host["id"], json.dumps(member_ids), int(loop), message_id,
-                                      json.dumps([[1, member_ids[0], message_id]])))
-    dispatch(connection, room_id, host, message_id, names[:1], chain_id, plan={"need": need})
+        VALUES (?,?,?,?,?,?,?,?)""", (room_id, message_id, chain_id, host["id"], json.dumps(steps), int(loop), message_id,
+                                      json.dumps([[1, steps[0], message_id]])))
+    dispatch(connection, room_id, host, message_id, order[0], chain_id, plan={"need": need}, detach=detach)
 
 
 def sequence_step(connection, room_id, sequence, host, position, pass_number, message_id):
-    """Ask the member at `position`, hung on `message_id`; one step is one batch.
+    """Ask the members still here of the step at `position`, hung on `message_id`; one step is one batch.
 
     A pass's first step costs one round (or waits at the limit); later steps of the same pass ride on it.
     """
-    member_id = json.loads(sequence["member_ids"])[position]
-    name = connection.execute("SELECT name FROM room_members WHERE id=?", (member_id,)).fetchone()[0]
-    steps = json.loads(sequence["steps"]) + [[pass_number, member_id, message_id]]
+    present = {row["id"]: name for name, row in active_members(connection, room_id).items()}
+    member_ids = [member_id for member_id in relay_steps(sequence)[position] if member_id in present]
+    steps = json.loads(sequence["steps"]) + [[pass_number, stored_step(member_ids), message_id]]
     connection.execute("UPDATE free_sequences SET status='running',pass=?,position=?,batch_id=?,steps=? WHERE id=?",
                        (pass_number, position, message_id, json.dumps(steps), sequence["id"]))
-    dispatch(connection, room_id, host, message_id, [name], sequence["chain_id"], plan={"relay": pass_number == sequence["pass"]})
+    dispatch(connection, room_id, host, message_id, [present[member_id] for member_id in member_ids], sequence["chain_id"],
+             plan={"relay": pass_number == sequence["pass"]})
 
 
 def next_present(connection, room_id, sequence, start):
-    """The first position from `start` whose member is still here and can be asked; members who left are skipped."""
+    """The first position from `start` with a member still here who can be asked; steps whose members all left are skipped."""
     present = {row["id"] for row in active_members(connection, room_id).values()}
-    return next((index for index, member_id in enumerate(json.loads(sequence["member_ids"])) if index >= start and member_id in present), None)
+    return next((index for index, step in enumerate(relay_steps(sequence)) if index >= start and present.intersection(step)), None)
 
 
 def advance_sequence(connection, room_id, sequence, host, completed, failed=False):
-    """Pass a finished step on to the next member; after the last one hand back to the host, as a checkpoint for a loop.
+    """Pass a finished step on to the next one; after the last one hand back to the host, as a checkpoint for a loop.
 
-    A step nobody completed ends the sequence. A failed step is told to the present host, which decides what follows; a
-    stopped one (or one whose member left) halts the chain like any stopped batch.
+    A step nobody completed ends the sequence. A failed step, a group step with one member failed included, is told to
+    the present host, which decides what follows (retrying the failure carries the relay on); a stopped one (or one whose
+    members left) halts the chain like any stopped batch.
     """
-    if not completed or not host or host["id"] != sequence["host_id"]:
-        if not completed and failed and host:
+    if not completed or failed or not host or host["id"] != sequence["host_id"]:
+        if failed and host:
             wake_host(connection, room_id, sequence["chain_id"], f"依次派活 #{sequence['message_id']} 在第 {sequence['position'] + 1} 棒失败，"
                       "接力已停下。请主持人决定重试、改派还是告知用户。", f"sequence:{sequence['id']}:{sequence['batch_id']}")
         elif not completed:
@@ -1550,19 +1626,24 @@ def sequence_view(connection, room_id, sequence_id, token):
     names = {item["id"]: item["name"] for item in connection.execute("SELECT id,name FROM room_members WHERE room_id=?", (room_id,))}
     origin = connection.execute("SELECT id,author,text FROM messages WHERE id=?", (row["message_id"],)).fetchone()
     answers = []
-    for pass_number, member_id, batch_id in json.loads(row["steps"]):
-        if pass_number != row["pass"]:
-            continue
-        answer = connection.execute("""SELECT r.status,m.id,m.text FROM member_requests r LEFT JOIN messages m ON m.id=r.answer_id
-            WHERE r.room_id=? AND r.batch_id=? AND r.member_id=? AND r.purpose='ask'""", (room_id, batch_id, member_id)).fetchone()
-        answers.append({"member": names.get(member_id), "status": answer["status"] if answer else "waiting",
-                        "message_id": answer["id"] if answer else None, "text": answer["text"] if answer else None})
+    steps_of_pass = [(member_ids, batch_id) for pass_number, member_ids, batch_id in json.loads(row["steps"]) if pass_number == row["pass"]]
+    for step_number, (member_ids, batch_id) in enumerate(steps_of_pass, 1):
+        for member_id in member_ids if isinstance(member_ids, list) else [member_ids]:
+            answer = connection.execute("""SELECT r.status,m.id,m.text FROM member_requests r LEFT JOIN messages m ON m.id=r.answer_id
+                WHERE r.room_id=? AND r.batch_id=? AND r.member_id=? AND r.purpose='ask'""", (room_id, batch_id, member_id)).fetchone()
+            answers.append({"member": names.get(member_id), "step": step_number, "status": answer["status"] if answer else "waiting",
+                            "message_id": answer["id"] if answer else None, "text": answer["text"] if answer else None})
     handoff = connection.execute("SELECT status FROM member_requests WHERE id=?", (row["handoff_request"],)).fetchone()
-    return {"id": row["id"], "message_id": row["message_id"], "order": [names.get(item) for item in json.loads(row["member_ids"])],
+    return {"id": row["id"], "message_id": row["message_id"], "order": order_names(row, names),
             "loop": bool(row["loop"]), "pass": row["pass"], "position": row["position"], "status": row["status"],
             "chain_id": row["chain_id"], "remaining_rounds": rounds_left(connection, room_id, row["chain_id"]),
             "handoff_request": row["handoff_request"] or None, "handoff_status": handoff[0] if handoff else None,
             "origin": dict(origin) if origin else None, "answers": answers}
+
+
+def order_names(sequence, names):
+    """The relay's order by name: a one-member step as the name, a group step as the list of its members' names."""
+    return [names.get(step[0]) if len(step) == 1 else [names.get(item) for item in step] for step in relay_steps(sequence)]
 
 
 def continue_sequence(connection, room_id, token, payload):
@@ -1611,16 +1692,17 @@ def sequence_request_context(connection, request):
     if not sequence:
         return {}
     names = {item["id"]: item["name"] for item in connection.execute("SELECT id,name FROM room_members WHERE room_id=?", (row["room_id"],))}
-    member_ids = json.loads(sequence["member_ids"])
-    order = [names.get(item) for item in member_ids]
+    steps = relay_steps(sequence)
+    order = order_names(sequence, names)
     phase = "step" if row["purpose"] == "ask" else "checkpoint" if sequence["loop"] else "end"
-    if phase == "step" and row["member_id"] not in member_ids:
+    position = next((index for index, step in enumerate(steps) if row["member_id"] in step), None) if phase == "step" else len(order) - 1
+    if position is None:
         return {}
-    position = member_ids.index(row["member_id"]) if phase == "step" else len(order) - 1
     following = order[position + 1] if phase == "step" and position + 1 < len(order) else None
+    together = [names.get(item) for item in steps[position] if item != row["member_id"]] if phase == "step" else []
     return {"sequence": {"id": sequence["id"], "message_id": sequence["message_id"], "order": order, "loop": bool(sequence["loop"]),
                          "pass": sequence["pass"], "position": position, "phase": phase, "next": following,
-                         "answer_id": sequence["answer_id"] or None}}
+                         **({"together": together} if together else {}), "answer_id": sequence["answer_id"] or None}}
 
 
 def default_order(connection, room_id, members):
@@ -1652,10 +1734,12 @@ def speaking_order(connection, room):
     if sequence:
         # A host's one-after-another dispatch shows like a queue: this pass's members, done up to the one asked now.
         kind, target = "queue", sequence["message_id"]
-        for index, member_id in enumerate(json.loads(sequence["member_ids"])):
-            if member_id in by_id:
-                state = "done" if sequence["status"] == "checkpoint" or index < sequence["position"] else "speaking" if index == sequence["position"] else "queued"
-                items.append({"name": by_id[member_id]["name"], "state": state})
+        for index, step in enumerate(relay_steps(sequence)):
+            state = "done" if sequence["status"] == "checkpoint" or index < sequence["position"] else "speaking" if index == sequence["position"] else "queued"
+            for member_id in step:
+                if member_id in by_id:
+                    # Members of a group step share its number: they work at once.
+                    items.append({"name": by_id[member_id]["name"], "state": state, **({"step": index + 1} if len(step) > 1 else {})})
     elif not session:
         target = connection.execute("""SELECT MAX(message_id) FROM (
             SELECT MAX(message_id) AS message_id FROM free_queue_waiting WHERE room_id=?
@@ -1673,7 +1757,8 @@ def speaking_order(connection, room):
     items += [{"name": name, "state": "idle"} for name in dict.fromkeys(ordered) if name not in listed]
     movable = "queued" if kind != "default" else "idle"
     relay = {"id": sequence["id"], "loop": bool(sequence["loop"]), "pass": sequence["pass"]} if sequence else None
-    state = json.dumps([kind, target, [[item["name"], item["state"]] for item in items], later, session_plan_state, relay], ensure_ascii=False)
+    state = json.dumps([kind, target, [[item["name"], item["state"], item.get("step")] for item in items], later, session_plan_state, relay],
+                       ensure_ascii=False)
     return {"kind": kind, "message_id": target, "items": items, "later": later, "movable": [item["name"] for item in items if item["state"] == movable],
             "default": [member["name"] for member in default_order(connection, room["id"], active)],
             **({"sequence": relay} if relay else {}),
@@ -1708,13 +1793,18 @@ def reorder_speakers(connection, room, token, payload):
         raise ValueError("新顺序须恰好包含尚未发言的成员" + (f"；缺少：{'、'.join(missing)}" if missing else "") + (f"；多出：{'、'.join(extra)}" if extra else ""))
     names = {member["name"]: member["id"] for member in room["members"] if member["status"] == "active"}
     if current.get("sequence"):
-        # Later passes of a loop keep the new order too; members who left stay in place at the end.
+        # Later passes of a loop keep the new order too; a group moves as one step, placed where its first member is
+        # named; steps whose members all left stay in place at the end.
         sequence = connection.execute("SELECT * FROM free_sequences WHERE id=?", (current["sequence"]["id"],)).fetchone()
-        member_ids = json.loads(sequence["member_ids"])
-        kept = member_ids[:sequence["position"] + 1]
-        moved = [names[name] for name in order]
-        member_ids = kept + moved + [item for item in member_ids if item not in kept and item not in moved]
-        connection.execute("UPDATE free_sequences SET member_ids=? WHERE id=?", (json.dumps(member_ids), sequence["id"]))
+        steps = relay_steps(sequence)
+        kept, rest, moved = steps[:sequence["position"] + 1], steps[sequence["position"] + 1:], []
+        for name in order:
+            step = next(step for step in rest if names[name] in step)
+            if step not in moved:
+                moved.append(step)
+        steps = kept + moved + [step for step in rest if step not in moved]
+        connection.execute("UPDATE free_sequences SET member_ids=? WHERE id=?",
+                           (json.dumps([stored_step(step) for step in steps]), sequence["id"]))
     elif current["kind"] == "queue":
         connection.execute(f"DELETE FROM free_queue WHERE message_id=? AND NOT {QUEUE_ASKED.format(row='free_queue')}", (current["message_id"],))
         for name in order:
@@ -1773,10 +1863,11 @@ def after_free_message(connection, room_id, message_id, actor, payload):
                            (message_id, execution_id))
     connection.execute("UPDATE room_members SET read_until=MAX(read_until,?) WHERE id=?", (message_id, actor["id"]))
     if actor["role"] == "host" and payload.get("to") and payload.get("sequential") is True:
-        start_sequence(connection, room_id, actor, message_id, payload["to"], chain_id, payload.get("loop") is True, need_plan(payload))
+        start_sequence(connection, room_id, actor, message_id, payload["to"], chain_id, payload.get("loop") is True, need_plan(payload),
+                       payload.get("parallel"), payload.get("detach"))
     elif actor["role"] == "host" and payload.get("to"):
         dispatch(connection, room_id, actor, message_id, payload["to"], chain_id, payload.get("handoff") is True or bool(payload.get("next_review")),
-                 payload.get("no_handoff") is True, {"need": need_plan(payload)})
+                 payload.get("no_handoff") is True, {"need": need_plan(payload)}, payload.get("detach"))
     if actor["role"] == "host":
         remember_continue(connection, room_id, actor, message_id, chain_id, payload)
     settle_batches(connection, room_id)
@@ -1913,13 +2004,15 @@ def withdraw_dispatch(connection, room_id, token, message_id):
     batches = [message_id] + [row[0] for row in connection.execute(f"SELECT batch_id FROM free_sequences WHERE {sequences}", (room_id, message_id))]
     connection.execute(f"UPDATE free_sequences SET status='stopped' WHERE {sequences}", (room_id, message_id))
     marks = ",".join("?" * len(batches))
+    # The dispatch's members sent along without being waited for (no batch) are taken back too.
+    taken = f"(r.batch_id IN ({marks}) OR r.message_id=? AND r.batch_id=0 AND r.created_by='host' AND r.purpose='ask')"
     live = connection.execute(f"""SELECT DISTINCT e.member_id FROM member_requests r JOIN member_executions e ON e.id=r.execution_id
-        WHERE r.room_id=? AND r.batch_id IN ({marks}) AND e.status IN ('dispatched','started')""", (room_id, *batches)).fetchall()
+        WHERE r.room_id=? AND {taken} AND e.status IN ('dispatched','started')""", (room_id, *batches, message_id)).fetchall()
     for row in live:
         stop_member_work(connection, row[0], "主持人撤回派活", "user_stop", keep_pending=True)
-    waiting = f"room_id=? AND batch_id IN ({marks}) AND status='pending'"
-    record_cancel_reasons(connection, waiting, (room_id, *batches), "user_stop")
-    connection.execute(f"UPDATE member_requests SET status='cancelled' WHERE {waiting}", (room_id, *batches))
+    waiting = f"id IN (SELECT r.id FROM member_requests r WHERE r.room_id=? AND {taken} AND r.status='pending')"
+    record_cancel_reasons(connection, waiting, (room_id, *batches, message_id), "user_stop")
+    connection.execute(f"UPDATE member_requests SET status='cancelled' WHERE {waiting}", (room_id, *batches, message_id))
     connection.execute(f"UPDATE free_batches SET settled=1 WHERE room_id=? AND batch_id IN ({marks})", (room_id, *batches))
     return free_view(connection, room_id)
 
@@ -2545,8 +2638,11 @@ def retry_failed(connection, room_id, execution):
                        [request["id"] for request in requests])
     for request in requests:
         batch_id, chain_id = request["batch_id"], request["chain_id"]
-        if batch_id and not connection.execute(
-                "SELECT 1 FROM member_requests WHERE room_id=? AND batch_id=? AND status='completed'", (room_id, batch_id)).fetchone():
+        # A relay step stopped by one failed member of its group resumes too: the others' answers wait for this one.
+        if batch_id and (not connection.execute(
+                "SELECT 1 FROM member_requests WHERE room_id=? AND batch_id=? AND status='completed'", (room_id, batch_id)).fetchone()
+                or connection.execute("SELECT 1 FROM free_sequences WHERE room_id=? AND batch_id=? AND status='stopped'",
+                                      (room_id, batch_id)).fetchone()):
             connection.execute("UPDATE free_batches SET settled=0 WHERE room_id=? AND batch_id=?", (room_id, batch_id))
             connection.execute("DELETE FROM free_chains WHERE room_id=? AND chain_id=? AND reason='all_failed'", (room_id, chain_id))
             connection.execute("UPDATE free_sequences SET status='running' WHERE room_id=? AND batch_id=? AND status='stopped'",

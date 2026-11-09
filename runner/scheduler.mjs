@@ -48,7 +48,7 @@ export const REVIEW_PROMPT_VERSION = 1;
 export const REVIEW_CONFIDENCE = 0.85;
 export const MAX_REVIEW_INPUT = 60000;
 /** A loop's checkpoint: another pass costs every member a run, so going on needs the review threshold; ending only wakes the host. */
-export const SEQUENCE_PROMPT_VERSION = 1;
+export const SEQUENCE_PROMPT_VERSION = 2;
 export const SEQUENCE_CONFIDENCE = 0.85;
 const HOST_CHOICE = '__host__';
 const NOTE_CHOICE = '__note__';
@@ -397,15 +397,20 @@ export async function decide_review_completion(home, scheduler, ready, fetch_imp
 export async function decide_sequence_checkpoint(home, scheduler, sequence, fetch_impl) {
   const fallback = reason => ({ action: 'host', confidence: null, label: reason });
   const answers_of_pass = sequence.answers || [];
-  const last = answers_of_pass.at(-1);
+  const last_step = answers_of_pass.at(-1)?.step;
+  // The last step may be a group working at once: all of its answers carry the pass's conclusion.
+  const lasts = last_step === undefined ? answers_of_pass.slice(-1) : answers_of_pass.filter(item => item.step === last_step);
   if (sequence.status !== 'checkpoint' || !['pending', 'delivering'].includes(sequence.handoff_status)) return fallback('检查点已处理或循环已结束，交给主持人');
-  if (!sequence.origin?.text?.trim() || !last?.text?.trim()) return fallback('缺少主持人安排或本圈回答原文，交给主持人');
+  if (!sequence.origin?.text?.trim() || !lasts.length || lasts.some(item => !item.text?.trim())) return fallback('缺少主持人安排或本圈回答原文，交给主持人');
   if (typeof sequence.remaining_rounds === 'number' && sequence.remaining_rounds < 1) return fallback('任务链剩余轮数不足，交给主持人');
-  const first = sequence.order.find(Boolean);
+  const step_name = step => Array.isArray(step) ? `${step.join('、')}（同时）` : step;
+  const first = [sequence.order.find(Boolean)].flat().join('、');
+  const last = { member: lasts.map(item => item.member).join('、') };
+  const group = lasts.length > 1;
   const questions = [{ type: 'choice', name: 'checkpoint',
-    instructions: `主持人安排成员按固定顺序（${sequence.order.join(' → ')}）循环接力，第 ${sequence.pass} 圈已走完。根据本圈最后一位（${last.member}）回答里表达的结论，判断是否按主持人的安排再走一圈。只识别回答表达的结论，不自行评价工作质量，不选择成员，不改变顺序。`, choices: [
-      { value: 'continue', description: `再走一圈：${last.member} 明确要求返工，或指出必须修改后才能采用的问题，下一圈由 ${first} 按这些意见修改` },
-      { value: HOST_CHOICE, description: `交给主持人：${last.member} 认可当前结果，或只剩可以不采纳的建议；需要主持人或用户裁定取舍；成员之间有分歧；回答没有明确结论` }] }];
+    instructions: `主持人安排成员按固定顺序（${sequence.order.map(step_name).join(' → ')}）循环接力，第 ${sequence.pass} 圈已走完。根据本圈最后一${group ? '棒（' : '位（'}${last.member}${group ? '，同时完成' : ''}）回答里表达的结论，判断是否按主持人的安排再走一圈。只识别回答表达的结论，不自行评价工作质量，不选择成员，不改变顺序。`, choices: [
+      { value: 'continue', description: `再走一圈：${last.member}${group ? ' 中任一位' : ''} 明确要求返工，或指出必须修改后才能采用的问题，下一圈由 ${first} 按这些意见修改` },
+      { value: HOST_CHOICE, description: `交给主持人：${last.member}${group ? ' 都' : ''} 认可当前结果，或只剩可以不采纳的建议；需要主持人或用户裁定取舍；成员之间有分歧；回答没有明确结论` }] }];
   const state = JSON.stringify({ arrangement: sequence.origin, order: sequence.order, pass: sequence.pass,
     answers: answers_of_pass.map(({ member, text }) => ({ member, text })) });
   if (JSON.stringify({ state, questions }).length > MAX_REVIEW_INPUT) return fallback('本圈回答原文超过 60000 字符，交给主持人');

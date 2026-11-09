@@ -1357,31 +1357,33 @@ html[data-motion="off"] *, html[data-motion="off"] *::before, html[data-motion="
 /* The square speech bubble reads heavier than the other line icons at the same size, so the private-chat icon is drawn a little smaller. */
 .channel-corner-key [class*="icon"], .channel-message-toolbar .channel-private-chat-key [class*="icon"] { width: 14px; height: 14px; }
 .channel-tabs [id$="-trigger-private"] [data-slot="leadingIcon"], .is-private-icon { scale: .86; }
-/* Working strip: stop on the head row's right end; on touch screens private chat inside the bottom-right corner
-   (the notes row, else the status row), in the same 24px column as the stop key. */
+/* Working strip: stop on the head row's right end. On touch screens private chat takes that end and the stop keys
+   move to the status row's right end, with or without notes below (user 2026-11-08). The status row starts below
+   the 10px padding, the 24px head row and its 4px gap; the 28px stop key centres on its 24px line. */
 .channel-working-head > .channel-working-actions { margin-left: auto; }
-.channel-working-strip .channel-corner-key { position: absolute; right: 10px; bottom: 10px; width: 24px; height: 24px; padding: 4px; }
-.channel-working-strip:has(.channel-working-notes) .channel-corner-key { bottom: 7px; }
-.channel-working-strip:has(.channel-corner-key) .channel-working-main { padding-right: 32px; }
+.channel-working-strip .channel-corner-key { flex-shrink: 0; margin-left: auto; width: 24px; height: 24px; padding: 4px; }
+.channel-working-head > .channel-corner-key + .channel-working-actions { position: absolute; top: 36px; right: 10px; }
+.channel-working-strip:has(.channel-corner-key) .channel-working-main { padding-right: 36px; }
+.channel-working-strip:has(.channel-corner-key + .channel-working-actions > :nth-child(2)) .channel-working-main { padding-right: 68px; }
 @media (max-width: 700px) {
   .channel-corner-key [class*="icon"], .channel-message-toolbar .channel-private-chat-key [class*="icon"] { width: 12px; height: 12px; }
 }
 /* Placed after the base rules above so the mouse layout overrides them. */
 @media (min-width: 701px) and (hover: hover) and (pointer: fine) {
   .channel-working-strip .channel-corner-key { display: none; }
+  .channel-working-head > .channel-corner-key + .channel-working-actions { position: static; margin-left: auto; }
   .channel-working-strip:has(.channel-corner-key) .channel-working-main { padding-right: 0; }
+  .channel-working-strip:has(.channel-corner-key + .channel-working-actions > :nth-child(2)) .channel-working-main { padding-right: 0; }
   .channel-working-strip > .channel-message-actions { inset-block: 6px; }
   .channel-message-corner { display: flex; position: static; }
   /* "More" heads the column in the card's top-right corner; private chat closes it at the bottom. */
   .channel-message-toolbar > :last-child { order: -1; }
   .channel-message-toolbar > .channel-private-chat-key { order: 1; }
-  /* A short card centres its column on the card's height instead of hanging it from the top (user 2026-11-08);
-     a tall card keeps the toolbar stuck to the top. */
-  .channel-message-actions { container-type: size; }
-  .channel-message-stack { display: flex; flex-direction: column; height: 100%; }
-  @container (max-height: 160px) {
-    .channel-message-stack { justify-content: center; }
-  }
+  /* The toolbar hangs from the card's top while its keys fit the card's height; only keys taller than the card
+     centre on it, spilling evenly past both edges (user 2026-11-08). The spacer takes the free space when there is
+     any, so centring only acts on an overflow. */
+  .channel-message-stack { display: flex; flex-direction: column; justify-content: center; height: 100%; }
+  .channel-message-stack::after { content: ""; flex: 1 0 0; }
 }
 /* Dark composer matches the message cards (#313338, lit top rim) as one surface with its footer; the mention panel keeps the frosted float style. */
 :root[data-theme="channel"] .channel-composer { background: #313338 !important; }

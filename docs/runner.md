@@ -99,7 +99,9 @@ codiscuss local connect https://你的站点
 
 ## API 接入
 
-翻开成员卡片选择 API，填写密钥并选择模型。默认提供 OpenAI、Anthropic、Google Gemini、DeepSeek、阿里云百炼（Qwen）、xAI（Grok）的官方地址；OpenRouter 等兼容服务填写其 Base URL 并选择 Chat Completions。
+在“添加”行选择 **OpenAI**，翻开卡片填写 OpenAI 官方 API Key 并选择模型；已预填官方地址 `https://api.openai.com/v1` 和 Responses 协议。原有 Codex 卡片仍可选择 API 接入。
+
+选择 **自定义 API** 可接入其他服务：翻开卡片填写 Base URL、API Key 和完整模型 ID，默认使用 Chat Completions，也可选择 Responses、Anthropic Messages 或 Gemini generateContent。卡片背面的“名称与描述”按钮可修改显示名称；重复点击添加可配置多个不同的 API 成员。Anthropic、Google Gemini、DeepSeek、阿里云百炼（Qwen）、xAI（Grok）也保留官方地址预设。
 
 API 成员可以担任专家或主持人。房间指定了项目目录时，它可以用接入程序提供的文件工具读取、搜索项目文件；项目权限设为可写时还能新建和编辑文件，但没有命令行，不能运行测试或构建。`.env`、私钥等密钥文件、`.git` 目录和本机服务目录始终不开放，读到的内容会发给你配置的模型服务商。密钥只保存在本机，调用费用按你的账号计费。
 

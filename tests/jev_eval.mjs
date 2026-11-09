@@ -41,7 +41,13 @@ async function run_case(item) {
     return { result, acted: result.action === 'review' ? 'review' : '__host__' };
   }
   if (item.scene === 'sequence') {
-    const order = item.answers.map(answer => answer.member);
+    // Answers sharing a step number are one group step, shown in the order as a list of names.
+    const order = item.answers.reduce((steps, answer, index) => {
+      const previous = item.answers[index - 1];
+      if (answer.step !== undefined && previous?.step === answer.step) steps.at(-1).push(answer.member);
+      else steps.push([answer.member]);
+      return steps;
+    }, []).map(step => step.length > 1 ? step : step[0]);
     const result = await decide_sequence_checkpoint(home, scheduler, { status: 'checkpoint', handoff_status: 'pending', remaining_rounds: 5,
       order, pass: item.pass || 1, origin: { id: 1, author: '主持人', text: item.original }, answers: item.answers });
     return { result, acted: result.action === 'continue' ? 'continue' : '__host__' };

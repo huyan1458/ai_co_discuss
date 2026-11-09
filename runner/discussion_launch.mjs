@@ -28,7 +28,7 @@ import { assert_shared_home, CONNECTION_FIELDS, configuration_snapshot, read_reg
 
 // A platform is a type; `Claude-review` is another Claude instance with its own session, model and effort. An ID is
 // English letters, digits and underscores only; a Chinese name is a display label.
-const INSTANCE_PATTERN = /^(Codex|Claude|Antigravity|DeepSeek|Qwen|Grok)(?:-[0-9A-Za-z_]{1,16})?$/;
+const INSTANCE_PATTERN = /^(Codex|Claude|Antigravity|DeepSeek|Qwen|Grok|OpenAI|Custom)(?:-[0-9A-Za-z_]{1,16})?$/;
 
 /** The platform of an AI instance name, or null. */
 export function platform_of(name) { return typeof name === 'string' ? INSTANCE_PATTERN.exec(name)?.[1] ?? null : null; }
@@ -539,7 +539,7 @@ const MAX_PRESET_LABEL = 32;
 function english_preset_ids(presets) {
   const taken = new Set(presets.map(preset => preset.name));
   return presets.map(preset => {
-    const platform = /^(Codex|Claude|Antigravity|DeepSeek|Qwen|Grok)(?:-|$)/.exec(preset.name || '')?.[1];
+    const platform = /^(Codex|Claude|Antigravity|DeepSeek|Qwen|Grok|OpenAI|Custom)(?:-|$)/.exec(preset.name || '')?.[1];
     if (!platform || platform_of(preset.name)) return preset;
     let number = 1;
     while (taken.has(`${platform}-preset${number}`)) number++;

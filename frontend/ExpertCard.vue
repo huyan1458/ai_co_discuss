@@ -40,7 +40,7 @@ const profile = computed(() => preset.value ? {
   ...view.value.launch.profiles[bridge.platform_of(props.name)],
   model: "", effort: "", system_prompt: "", project_access: "read", ...preset.value,
 } : view.value.launch.profiles[props.name] || {});
-const member_label = computed(() => preset.value ? preset.value.label || bridge.default_name(props.name) : bridge.member_label(props.name));
+const member_label = computed(() => preset.value ? preset.value.label || bridge.default_name(props.name) : view.value && bridge.member_label(props.name));
 const entry_items = computed(() => bridge.launch_clients[props.name] || []);
 // Manual start needs a local AI session; a platform reachable only through its API cannot offer it.
 const offered = computed(() => props.choices.filter((option) => option !== "manual" || entry_items.value.some((item) => item.value !== "api")));
@@ -175,7 +175,7 @@ function cancel() {
 // Drafts live in the bridge, so reading the published view ties this to each update.
 const description = computed(() => preset.value ? (preset.value.description || "").trim() : view.value && bridge.description_draft(props.name).trim());
 const describing = ref(false);
-const describe_title = computed(() => description.value ? `描述：${description.value}` : "添加描述：擅长什么、适合分到什么工作");
+const describe_title = computed(() => description.value ? `编辑名称与描述：${description.value}` : "编辑名称与描述");
 
 /** Keep the card's description for the room or invitation, and optionally as this platform's default. */
 function save_description({ text, label, as_template }) {
@@ -381,7 +381,7 @@ onBeforeUnmount(() => { document.removeEventListener("pointerdown", close_on_out
         </div>
         <span class="expert-card-tools">
           <!-- A card with a back keeps the description beside the prompt there; one without a back has only the front. A manual card has none, as its settings live in the user's own session. -->
-          <button v-if="!can_flip && !manual" type="button" :class="{ 'is-set': description }" :aria-label="`编辑 ${name} 的描述`" :title="describe_title" @click="describing = true"><UIcon name="i-lucide-user-pen" /></button>
+          <button v-if="!can_flip && !manual" type="button" :class="{ 'is-set': description }" :aria-label="`编辑 ${name} 的名称与描述`" :title="describe_title" @click="describing = true"><UIcon name="i-lucide-user-pen" /></button>
           <button v-if="hostable" type="button" class="expert-card-host" :aria-pressed="host" :aria-label="host ? `${name} 是主持人` : `设 ${name} 为主持人`" :title="host ? '主持人' : '设为主持人'" @click="emit('host')"><UIcon name="i-lucide-crown" /></button>
           <button type="button" :aria-label="`移出 ${name}`" title="移出" @click="emit('remove')"><UIcon name="i-lucide-x" /></button>
         </span>
@@ -390,7 +390,7 @@ onBeforeUnmount(() => { document.removeEventListener("pointerdown", close_on_out
         <div class="expert-card-back-body">
         <div class="expert-card-heading"><strong>{{ member_label }}<span v-if="member_label !== name">{{ name }}</span><span>设置</span></strong>
           <span class="expert-card-heading-tools">
-          <button type="button" class="expert-card-back-tool" :class="{ 'is-set': description }" :aria-label="`编辑 ${name} 的描述`" :title="describe_title" @click="describing = true"><UIcon name="i-lucide-user-pen" /></button>
+          <button type="button" class="expert-card-back-tool" :class="{ 'is-set': description }" :aria-label="`编辑 ${name} 的名称与描述`" :title="describe_title" @click="describing = true"><UIcon name="i-lucide-user-pen" /></button>
           <button v-if="preset || profile.adapter" type="button" class="expert-card-back-tool" :class="{ 'is-set': prompt_text, 'is-own': prompt_own && prompt_text }" :title="prompt_title" :aria-label="`编辑 ${name} 的专属提示词`" @click="open_prompt"><UIcon name="i-lucide-scroll-text" /></button>
           <UButton v-if="api_mode" icon="i-lucide-zap" :aria-label="`检查 ${name} 的 API 配置`" title="检查配置：发送一次极短请求，核对地址、密钥、协议与模型" size="xs" :color="api_check.state === 'ok' ? 'success' : api_check.state === 'error' ? 'error' : 'neutral'" variant="ghost" :loading="api_check.state === 'loading'" :disabled="!profile.api_key_ref || !profile.model || !view.launch.available" @click="check_api" /></span></div>
         <div v-if="!preset && automatic && entry_items.length > 1" class="expert-card-field">

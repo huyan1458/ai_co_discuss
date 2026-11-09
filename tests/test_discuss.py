@@ -201,9 +201,10 @@ class CliTests(unittest.TestCase):
         self.assertEqual(preview["body"]["request_ids"], [3])
         preview = self.cli(*args, "--execution", 4, "--to", "Codex", "--to", "Codex", "--submission-id", str(uuid.uuid4()), "--dry-run")
         self.assertEqual(preview["body"]["to"], ["Codex"])
-        preview = self.cli("message", "post", room["id"], "--as", "Claude-review", "--kind", "chat", "--body", "x", "--to", "Codex-2",
-                           "--execution", 4, "--submission-id", str(uuid.uuid4()), "--dry-run")
-        self.assertEqual((preview["body"]["author"], preview["body"]["to"]), ("Claude-review", ["Codex-2"]))
+        for author, target in (("Claude-review", "Codex-2"), ("OpenAI", "Custom"), ("Custom-review", "OpenAI-2")):
+            preview = self.cli("message", "post", room["id"], "--as", author, "--kind", "chat", "--body", "x", "--to", target,
+                               "--execution", 4, "--submission-id", str(uuid.uuid4()), "--dry-run")
+            self.assertEqual((preview["body"]["author"], preview["body"]["to"]), (author, [target]))
         self.assertIn("平台名-后缀", str(self.rejected(["message", "post", room["id"], "--as", "Claudex", "--body", "x",
                                                     "--submission-id", str(uuid.uuid4()), "--dry-run"])))
 
@@ -590,6 +591,13 @@ class CliContractTests(unittest.TestCase):
                               "--to", "Antigravity", "--next-review", "Codex", "--review-scope", "功能", "--review-roster", "revision"])
         plan = discuss.plan_message(args)
         self.assertEqual((plan.body["next_review"], plan.body["review_scope"], plan.body["review_roster"]), ("Codex", "功能", "revision"))
+        args, _ = self.parse(["message", "post", "room", "--as", "Claude", "--body", "接力", "--submission-id", "relay-test-123",
+                              "--to", "写手", "--to", "人物", "--with", "设定", "--sequential", "--loop"])
+        plan = discuss.plan_message(args)
+        self.assertEqual((plan.body["to"], plan.body["parallel"]), (["写手", "人物", "设定"], [["人物", "设定"]]))
+        args, _ = self.parse(["message", "post", "room", "--as", "Claude", "--body", "派活", "--submission-id", "detach-test-123",
+                              "--to", "人物", "--to", "设定", "--detach", "记录员"])
+        self.assertEqual(discuss.plan_message(args).body["detach"], ["记录员"])
         args, _ = self.parse(["member", "review-capability", "room", "7"])
         self.assertEqual(discuss.plan_member(args).path, "/api/rooms/room/members/7/review-capability")
 

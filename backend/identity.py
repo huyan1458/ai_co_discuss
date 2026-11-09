@@ -7,14 +7,14 @@ own session, model and thinking effort. Platform names alone keep their historic
 import re
 
 USER = "用户"
-AI_PLATFORMS = ("Codex", "Claude", "Antigravity", "DeepSeek", "Qwen", "Grok")
+AI_PLATFORMS = ("Codex", "Claude", "Antigravity", "DeepSeek", "Qwen", "Grok", "OpenAI", "Custom")
 PARTICIPANTS = [USER, *AI_PLATFORMS]
 MAX_INSTANCE_SUFFIX = 16
 # AI instances one room may hold, across platforms.
 MAX_ROOM_AGENTS = 12
 INSTANCE_PATTERN = re.compile(rf"({'|'.join(AI_PLATFORMS)})(?:-[0-9A-Za-z_]{{1,{MAX_INSTANCE_SUFFIX}}})?")
 # The name people and AIs call a platform when it differs from its ID; web/app.js PLATFORM_IDENTITIES shows the same.
-PLATFORM_NICKNAMES = {"Antigravity": "Gemini"}
+PLATFORM_NICKNAMES = {"Antigravity": "Gemini", "Custom": "自定义 API"}
 
 
 def is_ai(name):

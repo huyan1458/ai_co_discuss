@@ -81,13 +81,15 @@ const SOURCE_LABELS = { demo: "示例", user: "本人发言", proxy: "用户代�
 const TURN_LABELS = { pending: "待处理", notified: "已通知，待回答", answered: "已回答", cancelled: "已取消" };
 const PLATFORM_IDENTITIES = {
   "用户": { label: "User", initials: "U", style: "user", icon: "/icons/user.svg", description: "发起与协助" },
-  Codex: { initials: "CX", style: "codex", icon: "/icons/openai.svg", description: "AI 身份" },
+  Codex: { initials: "CX", style: "codex", icon: "/icons/openai.svg", api_label: "OpenAI API", description: "AI 身份" },
   Claude: { initials: "CL", style: "claude", icon: "/icons/claude.svg", description: "AI 身份" },
   // The platform ID is Antigravity (the software); screens show its nickname Gemini.
   Antigravity: { label: "Gemini", initials: "GM", style: "gemini", icon: "/icons/gemini.svg", description: "AI 身份" },
   DeepSeek: { initials: "DS", style: "deepseek", icon: "/icons/deepseek.svg", description: "AI 身份" },
   Qwen: { initials: "QW", style: "qwen", icon: "/icons/qwen.svg", description: "AI 身份" },
   Grok: { initials: "GK", style: "grok", description: "AI 身份" },
+  OpenAI: { initials: "OA", style: "codex", icon: "/icons/openai.svg", description: "AI 身份" },
+  Custom: { label: "自定义 API", initials: "API", style: "custom", api_label: "自定义 API", description: "AI 身份" },
 };
 // An instance shows its platform's nickname with its own suffix: Antigravity-2 → Gemini-2.
 const IDENTITIES = by_platform(PLATFORM_IDENTITIES, (identity, name) => ({ ...identity, label: identity.label ? identity.label + name.slice(platform_of(name).length) : name, description: "AI 实例" }));
@@ -149,11 +151,11 @@ const PLATFORM_CLIENTS = { Codex: [{ value: "codex_cli", label: "Codex CLI" }, {
   Claude: [{ value: "claude", label: "Claude Code CLI" }],
   Antigravity: [{ value: "antigravity_cli", label: "Antigravity CLI" }, { value: "antigravity", label: "Antigravity App" }] };
 for (const name of Object.keys(PLATFORM_IDENTITIES).filter(name => name !== "用户")) {
-  (PLATFORM_CLIENTS[name] ||= []).push({ value: "api", label: `${name === "Codex" ? "OpenAI" : PLATFORM_IDENTITIES[name].label || name} API` });
+  (PLATFORM_CLIENTS[name] ||= []).push({ value: "api", label: PLATFORM_IDENTITIES[name].api_label || `${PLATFORM_IDENTITIES[name].label || name} API` });
 }
 // A platform is a type; `Claude-review` is another instance of it. Lookups by instance name fall back to the
 // platform, while iteration still lists the platforms only.
-const INSTANCE_PATTERN = /^(Codex|Claude|Antigravity|DeepSeek|Qwen|Grok)(?:-[0-9A-Za-z_]{1,16})?$/;
+const INSTANCE_PATTERN = /^(Codex|Claude|Antigravity|DeepSeek|Qwen|Grok|OpenAI|Custom)(?:-[0-9A-Za-z_]{1,16})?$/;
 /** The platform of an AI instance name, or null for the user and invalid names. */
 function platform_of(name) { return INSTANCE_PATTERN.exec(String(name))?.[1] ?? null; }
 /** Resolve instance names to their platform's entry without listing instances as keys. */
@@ -3242,7 +3244,7 @@ function write_launch_field(name, field, value) {
     else state.launch.profiles[name][field] = value;
     if (field === "adapter" && value === "api") {
       const profile = state.launch.profiles[name], preset = state.launch.api_providers?.[platform_of(name)];
-      if (preset && !profile.base_url) Object.assign(profile, { base_url: preset.base_url, api_protocol: preset.api_protocol, model: preset.models[0] });
+      if (preset && !profile.base_url) Object.assign(profile, { base_url: preset.base_url, api_protocol: preset.api_protocol, model: preset.models[0] || "" });
       for (const key of ["effort", "session_id", "project_access", "project_id", "executable", "source_thread_id", "ipc_directory", "allowed_tools"]) delete profile[key];
     }
     if (field === "base_url") delete state.launch.profiles[name].api_key_ref;
