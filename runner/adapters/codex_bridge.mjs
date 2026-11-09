@@ -11,6 +11,13 @@
 import { spawn } from 'node:child_process';
 import { createInterface } from 'node:readline';
 
+/**
+ * The under-development `context_management` feature lets the model call `new_context`, which drops the history without a
+ * summary and relies on `notes`/`history` tools to recover it; when those tools fail ("The backend request failed" on
+ * every call, 0.163, 2026-11), the turn forgets the room task and ends without answering. Room turns keep Codex's
+ * summarizing compaction instead.
+ */
+const CONTEXT_OVERRIDES = ['-c', 'features.context_management=false'];
 const [executable, ...server_args] = process.argv.slice(2);
 const pending = new Map();
 let next_id = 0;
@@ -19,7 +26,7 @@ let turn_id = '';
 let finished = false;
 const queued_steers = [];
 
-const server = spawn(executable, ['app-server', ...server_args], { windowsHide: true, shell: false, stdio: ['pipe', 'pipe', 'pipe'] });
+const server = spawn(executable, ['app-server', ...CONTEXT_OVERRIDES, ...server_args], { windowsHide: true, shell: false, stdio: ['pipe', 'pipe', 'pipe'] });
 server.stderr.pipe(process.stderr);
 server.once('error', error => fail(error.message));
 server.once('close', code => { if (!finished) fail(`Codex app-server 意外退出（${code}）`); });
