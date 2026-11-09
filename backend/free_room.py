@@ -1341,32 +1341,6 @@ def wake_after_failure(connection, execution_id, requests, reason):
               f"failed:{execution_id}")
 
 
-def wake_on_conflicts(connection, room_id, execution_id):
-    """Files an execution just reported overlap another member's overlapping execution: tell the host once per pair.
-
-    Two executions of one host batch are left out: the batch comes back to the host anyway, and `room view` lists the
-    conflict there.
-    """
-    names = member_display_names(connection, room_id)
-    by_id = {row["id"]: names.get(row["name"], row["name"])
-             for row in connection.execute("SELECT id,name FROM room_members WHERE room_id=?", (room_id,))}
-    chain = connection.execute("SELECT MAX(chain_id) FROM member_requests WHERE execution_id=?", (execution_id,)).fetchone()[0]
-    for conflict in possible_conflicts(connection, room_id, by_id):
-        if execution_id not in conflict["executions"]:
-            continue
-        pair = sorted(conflict["executions"])
-        batches = [connection.execute("SELECT MAX(batch_id) FROM member_requests WHERE execution_id=?", (item,)).fetchone()[0] for item in pair]
-        if batches[0] and batches[0] == batches[1]:
-            continue
-        listed = conflict["confirmed"] or conflict["files"]
-        files = "、".join(listed[:5]) + (" 等" if len(listed) > 5 else "")
-        members = " 与 ".join(conflict["members"])
-        text = (f"冲突：{members} 的重叠执行（#{pair[0]}、#{pair[1]}）都编辑了 {len(listed)} 个相同文件（{files}），后保存的可能覆盖了先保存的。"
-                if conflict["confirmed"] else
-                f"可能冲突：{members} 的重叠执行（#{pair[0]}、#{pair[1]}）期间有 {len(listed)} 个文件被改动（{files}），无法确认是谁改的。")
-        wake_host(connection, room_id, chain, text + "请主持人核实并处理。", f"conflict:{pair[0]}-{pair[1]}")
-
-
 def remember_continue(connection, room_id, host, message_id, chain_id, payload):
     """The host's latest answer decides whether it continues once the room is idle: `continue` keeps its reason, none clears it."""
     if not payload.get("continue"):
@@ -1752,14 +1726,21 @@ def reorder_speakers(connection, room, token, payload):
                            (room["id"], json.dumps([names[name] for name in order])))
 
 
+# A request from an owner message that named the host alone: a side question, which must not move the chain of work it lands beside.
+SIDE_QUESTION = """(member_requests.purpose='ask' AND member_requests.created_by='user'
+    AND member_requests.member_id IN (SELECT id FROM room_members WHERE role='host')
+    AND NOT EXISTS (SELECT 1 FROM member_requests other WHERE other.message_id=member_requests.message_id AND other.id<>member_requests.id))"""
+ANSWERED_CHAIN = f"COALESCE(MAX(CASE WHEN NOT {SIDE_QUESTION} THEN chain_id END),MAX(chain_id))"
+
+
 def answered_chain(connection, payload, actor):
-    """The chain an answer continues: the newest chain among the requests it completes."""
+    """The chain an answer continues: the newest chain among the requests it completes, side questions only when alone."""
     if actor["access"] == "manual":
         ids = payload.get("request_ids") or [0]
         marks = ",".join("?" * len(ids))
-        row = connection.execute(f"SELECT MAX(chain_id) FROM member_requests WHERE id IN ({marks})", ids).fetchone()
+        row = connection.execute(f"SELECT {ANSWERED_CHAIN} FROM member_requests WHERE id IN ({marks})", ids).fetchone()
     else:
-        row = connection.execute("SELECT MAX(chain_id) FROM member_requests WHERE execution_id=?", (payload["execution_id"],)).fetchone()
+        row = connection.execute(f"SELECT {ANSWERED_CHAIN} FROM member_requests WHERE execution_id=?", (payload["execution_id"],)).fetchone()
     return row[0] or 0
 
 
@@ -2455,7 +2436,6 @@ def execution_action(connection, room_id, execution_id, token, payload):
         changes = changed_files(payload)
         connection.execute("UPDATE member_executions SET changes=?,edited=? WHERE id=?",
                            (json.dumps(changes, ensure_ascii=False), edited_files(payload, changes), execution_id))
-        wake_on_conflicts(connection, room_id, execution_id)
     elif action == "denials":
         # Like file changes, read from the software's output once its process ends; recorded once.
         saved = connection.execute("INSERT OR IGNORE INTO execution_denials (execution_id,room_id,denials) VALUES (?,?,?)",

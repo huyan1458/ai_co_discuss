@@ -28,6 +28,7 @@
 | `runner/` | `codiscuss` CLI 与本机接入程序（房间编排 `free_runner.mjs`、常驻服务、启动配置、智能调度 `scheduler.mjs`） | `Ref_技术细节.md`“接入程序”、`tests/test_runner.mjs`；影响使用时同步 `docs/runner.md` |
 | `runner/adapters/` | **适配层**：`profiles.mjs` 各软件的静态事实（显示名、配置字段、档位、能力；不依赖 Node，网页也引用），每家软件一个行为模块（投递、停止能力、会话截断与分叉、模型读取），`index.mjs` 是对外唯一入口 | 新接一家软件只在这里新增 profile 与行为模块；`Ref_外部软件通信.md` 对应小节；`Ref_技术细节.md`“适配能力”；`tests/test_runner.mjs`、`tests/test_session_cut.mjs` |
 | `.agents/skills/` | 分发技能 discuss-host / discuss-participant / discuss-report / workflow-creator；`codiscuss-setup` 仅在源码仓库使用，不进 npm 包、不由安装器复制 | 只有 `.gitignore` 白名单内的技能入库，新增分发技能同步白名单 |
+| `workflows/` | 随包发布的房间工作流（现为 `story-serial`），`codiscuss setup` 时装入用户工作流库 | 内容须通用、不写某部作品或本机路径，卡片不写死模型；改后跑 `tests/test_setup.mjs` |
 | `tests/`、`scripts/`、`deploy/` | 测试、构建脚本、部署配置 | — |
 | `docs/` | 对外精简文档 | 见 §6 |
 | `.dev/docs/`、`.dev/plans/` | 开发文档、任务计划（gitignore） | 见 §6 |

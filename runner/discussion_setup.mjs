@@ -9,7 +9,7 @@ import { parseArgs } from 'node:util';
 import { atomic_json } from './files.mjs';
 import { launch_settings, save_launch_settings } from './discussion_launch.mjs';
 import { assert_shared_home, service_home } from './discussion_service.mjs';
-import { SKILLS, install_skills, remove_legacy_skills } from './discussion_skills.mjs';
+import { SKILLS, install_skills, install_workflows, remove_legacy_skills } from './discussion_skills.mjs';
 import { ask, checkbox_prompt, intro, outro, pad, short_path, spinner, step, styled, text_width, tone } from './discussion_tui.mjs';
 export { checkbox_prompt } from './discussion_tui.mjs';
 
@@ -352,7 +352,8 @@ async function setup(options) {
   const { remote_port: retired, ...kept } = previous;
   atomic_json(join(home, 'local-settings.json'), { ...kept, python, port });
   step('已写入软件配置与技能', configured.skills.map(group => `${pad(group.client, width)}  ${tone.dim(short_path(dirname(group.results[0].path)))}`));
-  const result = { home, python, clients: selected.map(item => item.name), ...configured,
+  const workflows = install_workflows(home);
+  const result = { home, python, clients: selected.map(item => item.name), ...configured, workflows,
     command: check_command(), ai_verified: false };
   result.issues = setup_issues(result);
   result.configured = result.issues.length === 0;
@@ -381,6 +382,14 @@ async function setup(options) {
   return result;
 }
 
+// A kept workflow is the user's own edit, not a problem to fix, so it is reported here and not as an issue.
+const WORKFLOW_STATUS = { installed: '已安装', updated: '已更新', unchanged: '已是最新', kept: '有你的修改，保留原样未更新' };
+
+/** One line naming each shipped workflow and what setup did with it. */
+function workflow_summary(workflows) {
+  return workflows.map(item => `${item.name} ${WORKFLOW_STATUS[item.status]}`).join(' · ');
+}
+
 /** Print a concise human receipt while keeping stdout machine-readable. */
 function report_setup(result, options = {}) {
   if (styled) return report_styled(result, options);
@@ -394,6 +403,7 @@ function report_setup(result, options = {}) {
     if (permission.status === 'removed') lines.push(`${permission.client}：已移除旧版全局放行规则（${permission.path}）`);
   }
   for (const group of result.skills) lines.push(`${group.client} Skill：${group.results.filter(skill => skill.status !== 'conflict').length}/${group.results.length} 份文件就绪，目录 ${dirname(group.results[0].path)}`);
+  if (result.workflows.length) lines.push(`内置工作流：${workflow_summary(result.workflows)}`);
   if (result.command.path) lines.push(`持久命令：${result.command.path}（${result.command.status}）`);
   if (result.local?.running) {
     lines.push(`本机网站：${result.local.url}${options['no-open'] ? '' : '（已在浏览器打开）'}`,
@@ -418,6 +428,7 @@ function report_styled(result, options) {
     if (permission.status === 'removed') rows.push([permission.client, '已移除旧版全局放行规则', short_path(permission.path)]);
   }
   if (result.skills.length) rows.push(['技能', result.skills.map(group => `${group.client} ${group.results.filter(skill => skill.status !== 'conflict').length}/${group.results.length}`).join(' · '), 'discuss-host · discuss-participant · discuss-report · workflow-creator']);
+  if (result.workflows.length) rows.push(['工作流', workflow_summary(result.workflows), '']);
   if (result.command.path) rows.push(['命令', `codiscuss ${tone.dim(`(${result.command.status})`)}`, short_path(result.command.path)]);
   const notes = result.issues.map(issue => tone.yellow(`▲ ${issue}`));
   if (result.local?.running) {

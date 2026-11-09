@@ -24,7 +24,11 @@ const workflow = ref(null);
 const busy = ref(false);
 const previewing = ref(false);
 const deleting = ref(false);
+// An import's commands run on this computer when an API member calls them, so they are kept only once the user allows them.
+const COMMANDS_FILE = "commands.json";
+const commands_allowed = ref(false);
 const saved = computed(() => Boolean(props.workflowId));
+const commands = computed(() => workflow.value?.commands || []);
 // An import carrying an ID already in the library replaces that workflow when saved.
 const replaced = computed(() => !saved.value && (view.value.launch.workflows || []).find((item) => item.id === workflow.value?.id));
 const rendered = computed(() => previewing.value ? window.discuss_markdown.render_markdown(workflow.value.skill || "") : "");
@@ -44,6 +48,7 @@ async function run(action) {
 watch(open, async (value) => {
   if (!value) return;
   previewing.value = false;
+  commands_allowed.value = false;
   if (!props.workflowId) {
     const draft = JSON.parse(JSON.stringify(props.draft || {}));
     workflow.value = { label: "", description: "", skill: "", agents: [], ...draft, id: draft.id || `workflow-${Date.now().toString(36)}` };
@@ -97,8 +102,10 @@ function grant(agent, allowed) {
 
 /** Save the workflow as files; the server checks every field. A saved workflow keeps its folder's other files as they are. */
 async function save() {
-  const { resources, ...edited } = workflow.value;
-  const result = await run(() => bridge.local_request("workflows", { action: "save", workflow: saved.value ? edited : workflow.value }));
+  const { resources, commands: ignored, ...edited } = workflow.value;
+  // An import keeps its commands file only when the user allowed it; the rest of its files come along either way.
+  const kept = resources && !commands_allowed.value ? Object.fromEntries(Object.entries(resources).filter(([path]) => path !== COMMANDS_FILE)) : resources;
+  const result = await run(() => bridge.local_request("workflows", { action: "save", workflow: saved.value ? edited : { ...edited, resources: kept } }));
   if (!result) return;
   bridge.notify("info", `已保存工作流「${result.label || result.id}」`);
   open.value = false;
@@ -143,6 +150,16 @@ async function remove() {
           <p v-else class="workflow-editor-empty">还没有成员卡片。点上方添加；只有做法说明时，主持人带着房间里已有的成员按它做。</p>
           <UButton v-if="view.room?.id" icon="i-lucide-users" label="从当前房间成员导入" size="xs" color="neutral" variant="soft" class="workflow-editor-room" :loading="busy" @click="cards_from_room" />
         </section>
+        <section v-if="commands.length" class="workflow-editor-commands" aria-label="登记的命令">
+          <h4>登记的命令<small>{{ commands.length }}</small></h4>
+          <p class="fine-print">房间启用本工作流后，模型 API 成员可以在项目目录里运行下面这些命令（只读成员只能运行只读命令），本地软件成员不受影响。</p>
+          <ul>
+            <li v-for="command in commands" :key="command.id"><strong>{{ command.id }}</strong>（{{ command.access === 'read' ? '只读' : '会改文件' }}）：{{ command.description }}
+              <code>{{ command.run.join(' ') }}</code></li>
+          </ul>
+          <label v-if="!saved" class="workflow-editor-grant"><input v-model="commands_allowed" type="checkbox" />
+            允许这些命令在本机运行；不勾选则保存时不带命令</label>
+        </section>
         <p v-if="replaced" class="fine-print is-warn">工作流库里已有同 ID 的「{{ replaced.label }}」，保存会覆盖它。</p>
         <p v-if="saved" class="fine-print workflow-editor-path">修改会作用于所有启用它的房间，成员下一次执行时读到新内容。文件夹：{{ workflow.directory }}
           <UButton label="复制路径" size="xs" variant="ghost" icon="i-lucide-copy" @click="act('copy', workflow.directory)" /></p>
@@ -175,6 +192,11 @@ async function remove() {
 .workflow-editor-grant { display: flex; gap: 6px; align-items: flex-start; color: var(--ui-warning, #e0a33a); font-size: 12px; }
 .workflow-editor-empty { margin: 0; padding: 18px 12px; border: 1px dashed var(--ui-border); border-radius: 8px; text-align: center; color: var(--ui-text-muted); font-size: 12px; }
 .workflow-editor-room { justify-self: start; }
+.workflow-editor-commands { display: grid; gap: 6px; }
+.workflow-editor-commands h4 { display: flex; align-items: baseline; gap: 6px; margin: 0; color: var(--ui-text-highlighted); font-size: 13px; }
+.workflow-editor-commands h4 small { color: var(--ui-text-dimmed); font-size: 11px; font-weight: 400; }
+.workflow-editor-commands ul { display: grid; gap: 4px; margin: 0; padding-left: 18px; font-size: 12px; }
+.workflow-editor-commands code { display: block; overflow-wrap: anywhere; color: var(--ui-text-muted); }
 .workflow-editor-path { display: flex; flex-wrap: wrap; align-items: center; gap: 4px; overflow-wrap: anywhere; }
 .workflow-editor .fine-print { margin: 0; }
 .workflow-editor .is-warn { color: var(--ui-warning, #e0a33a); }

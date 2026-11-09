@@ -627,7 +627,7 @@ onBeforeUnmount(() => {
         </div>
         <form v-if="commenting" class="file-selection-offer selection-comment file-comment" :class="{ 'is-docked': commenting.touch }"
           :style="commenting.touch ? {} : { left: `${commenting.left}px`, top: `${commenting.top}px` }" @submit.prevent="add_excerpt">
-          <input ref="comment_input" v-model="comment" type="text" placeholder="添加批注（可选）" aria-label="摘录的批注（可选）" enterkeyhint="send" @keydown="comment_keydown">
+          <textarea ref="comment_input" v-model="comment" rows="1" placeholder="添加批注（可选）" aria-label="摘录的批注（可选）" enterkeyhint="send" @keydown="comment_keydown"></textarea>
           <button type="button" class="selection-comment-cancel" aria-label="取消添加" title="取消" @click="cancel_comment"><UIcon name="i-lucide-x" /></button>
           <button type="submit" class="selection-comment-send" aria-label="添加到对话" title="添加到对话（Enter）"><UIcon name="i-lucide-arrow-up" /></button>
         </form>

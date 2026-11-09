@@ -1294,6 +1294,23 @@ class HostTests(HostRoomTests):
         self.assertFalse(any(member == "Antigravity" for member, _, status in self.requests() if status == "pending"))
         self.assertNotIn(("Claude", "handoff", "pending"), self.requests())
 
+    def test_naming_only_the_host_skips_the_queue_and_leaves_its_relay_running(self):
+        """A side question to the host goes out at once, even while it works; the relay goes on."""
+        FreeRoomTests.say(self, "写到第 10 集")
+        self.host_dispatch(to=["Codex", "Antigravity"], sequential=True, loop=True)
+        relay_step = self.reserve_for("Codex")[1]
+        status, asked = FreeRoomTests.say(self, "现在啥情况", to=["Claude"], queue=True)
+        self.assertEqual((status, "queued" in asked), (201, False), asked)
+        host_execution = self.reserve_for("Claude")[1]
+        status, again = FreeRoomTests.say(self, "还有呢", to=["Claude"], queue=True)
+        self.assertEqual((status, "queued" in again), (201, False), "a busy host takes it next instead of the queue")
+        self.assertIn(("Claude", "ask", "pending"), self.requests())
+        for name, execution in (("Claude", host_execution), ("Codex", relay_step)):
+            status, saved = self.request(f"{self.path}/messages", {"author": name, "text": f"{name} 完成", "source": "cli",
+                                                                   "submission_id": uuid.uuid4().hex, "execution_id": execution["id"]}, self.tokens[name])
+            self.assertEqual(status, 201, saved)
+        self.assertIn("pending", [status for member, _, status in self.requests() if member == "Antigravity"], "the relay goes on")
+
     def test_a_host_checkin_wakes_it_while_work_is_in_flight_and_ends_once_the_room_is_idle(self):
         """The timed check-in is set during the host's own execution, fires while members work, and ends on idle."""
         FreeRoomTests.say(self, "请安排")
@@ -1658,15 +1675,16 @@ class HostTests(HostRoomTests):
                                                                "submission_id": uuid.uuid4().hex}, token)
         self.assertEqual((status, saved["message"]["proactive"]), (201, 1), saved)
 
-    def test_possible_conflict_wakes_the_host_once(self):
-        """Overlapping members changing one file are reported to the host once per pair."""
+    def test_possible_conflict_neither_wakes_the_host_nor_joins_the_transcript(self):
+        """Overlapping members changing one file only show in `free.conflicts`: no notice message, no host request."""
         FreeRoomTests.say(self, "改首页", to=["Codex", "Antigravity"])
         codex, antigravity = self.reserve_for("Codex")[1], self.reserve_for("Antigravity")[1]
+        before = self.messages()
         for execution in (codex, antigravity):
             self.request(f"{self.path}/executions/{execution['id']}", {"action": "report", "changes": ["index.html"]}, self.owner)
-        self.assertEqual(self.requests()[-1], ("Claude", "notice", "pending"))
-        self.assertIn("index.html", self.messages()[-1][1])
-        self.assertEqual(self.requests().count(("Claude", "notice", "pending")), 1)
+        self.assertEqual(self.messages(), before)
+        self.assertNotIn(("Claude", "notice", "pending"), self.requests())
+        self.assertEqual(self.request(self.path)[1]["free"]["conflicts"][0]["files"], ["index.html"])
 
     def test_no_handoff_sends_one_completed_answer_straight_to_the_user(self):
         """`no_handoff` skips the hand-back for one member who completed; a failure still comes back."""

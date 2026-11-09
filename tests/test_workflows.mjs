@@ -5,7 +5,9 @@ import { mkdtempSync, mkdirSync, readFileSync, rmSync, symlinkSync, writeFileSyn
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 import { test } from 'node:test';
-import { system_prompt } from '../runner/adapters/api.mjs';
+import { participant_tools, system_prompt } from '../runner/adapters/api.mjs';
+import { run_command } from '../runner/adapters/api_commands.mjs';
+import { open_project } from '../runner/adapters/api_files.mjs';
 import { validate_preset } from '../runner/discussion_launch.mjs';
 import { free_task_files } from '../runner/free_runner.mjs';
 import { delete_workflow, get_workflow, list_workflows, load_room_workflow, parse_workflow_draft, preview_workflow, save_workflow, workflow_in_use } from '../runner/workflows.mjs';
@@ -30,7 +32,7 @@ test('a workflow saves as plain files, reads back the same, and refuses unsafe o
   const saved = save_workflow(home, NOVEL, validate_preset);
   // Cards come back in file-name order.
   const by_card = list => [...list].sort((a, b) => a.card.localeCompare(b.card));
-  assert.deepEqual({ ...saved, directory: undefined, agents: by_card(saved.agents) }, { ...NOVEL, directory: undefined, agents: by_card(NOVEL.agents), resources: {} });
+  assert.deepEqual({ ...saved, directory: undefined, agents: by_card(saved.agents) }, { ...NOVEL, directory: undefined, agents: by_card(NOVEL.agents), resources: {}, commands: [] });
   const card = readFileSync(join(home, 'workflows', 'novel-serial', 'agents', 'writer.md'), 'utf8');
   // A card file reads like an agent definition: its name is the card ID, the software is its own field, empty fields are left out.
   assert.equal(card, '---\nname: writer\nplatform: Antigravity\nlabel: 执笔\ndescription: 按骨架写正文\nproject_access: write\n---\n克制、具体。\n');
@@ -234,4 +236,51 @@ test('an API host reads the workflow for fitting requests beside the built-in de
   assert.doesNotMatch(system_prompt({ participant: 'DeepSeek', role: 'member', mode: 'free', workflow }), /先出骨架/);
   workflow.members[0].project_access = 'own';
   assert.match(system_prompt({ participant: 'DeepSeek', role: 'host', mode: 'free', workflow }), /项目权限 沿用原会话权限/);
+});
+
+test('registered commands travel with the workflow, and an API member runs only them, within its access and project', async t => {
+  const home = home_fixture(t);
+  const node = process.execPath;
+  const registered = { commands: [
+    { id: 'check', description: '检查作品', run: [node, '{workflow}/tools/check.mjs', '{path}'], path: '作品文件夹', access: 'read' },
+    { id: 'fail', description: '退出码 3', run: [node, '-e', 'process.stderr.write("坏了");process.exit(3)'], access: 'read' },
+    { id: 'slow', description: '超时', run: [node, '-e', 'setTimeout(()=>{},60000)'], access: 'read', timeout_seconds: 1 },
+    { id: 'fix', description: '会改文件', run: [node, '-e', 'console.log("fixed")'], access: 'write' },
+  ] };
+  const resources = { 'commands.json': JSON.stringify(registered), 'tools/check.mjs': 'console.log("checked " + process.argv[2].split(/[\\\\/]/).pop())' };
+  const saved = save_workflow(home, { ...NOVEL, resources }, validate_preset);
+  assert.deepEqual(saved.commands.map(item => [item.id, item.access, item.timeout_seconds]), [['check', 'read', 120], ['fail', 'read', 120], ['slow', 'read', 1], ['fix', 'write', 120]]);
+  // An import shows its commands for the user to allow; a host draft carries no files, so it can neither add nor drop them.
+  assert.equal(preview_workflow({ folder: saved.directory }, validate_preset, () => true).commands.length, 4);
+  save_workflow(home, { ...NOVEL, skill: '新版' }, validate_preset);
+  assert.equal(get_workflow(home, NOVEL.id).commands.length, 4);
+  for (const [commands, message] of [
+    [[{ id: 'x', description: 'd', run: ['a', '{path}'], access: 'read' }], /须用 path 说明/],
+    [[{ id: 'x', description: 'd', run: ['a'], access: 'all' }], /access 须为/],
+    [[{ id: 'x', description: 'd', run: 'a b', access: 'read' }], /run 须为/],
+    [[{ id: 'x', description: 'd', run: ['a'], access: 'read', shell: true }], /不支持的字段/]]) {
+    assert.throws(() => save_workflow(home, { ...NOVEL, resources: { 'commands.json': JSON.stringify({ commands }) } }, validate_preset), message);
+  }
+
+  const project = mkdtempSync(join(tmpdir(), 'workflow-project-'));
+  t.after(() => rmSync(project, { recursive: true, force: true }));
+  mkdirSync(join(project, '首部'));
+  writeFileSync(join(project, '.env'), 'TOKEN=secret');
+  const commands = { directory: saved.directory, list: saved.commands };
+  const reader = open_project({ cwd: project, project_access: 'read' });
+  const tool = participant_tools({ role: 'member', project: reader, commands }).find(item => item.name === 'run_command');
+  // A read-only member is offered only the read-only commands; with no workflow commands there is no such tool.
+  assert.deepEqual(tool.parameters.properties.command.enum, ['check', 'fail', 'slow']);
+  assert.ok(!participant_tools({ role: 'member', project: reader }).some(item => item.name === 'run_command'));
+  assert.match(system_prompt({ participant: 'DeepSeek', role: 'member', project: reader, commands }), /可用 run_command 运行工作流登记的只读命令/);
+  assert.equal(await run_command(reader, commands, { command: 'check', path: '首部' }), 'checked 首部\n');
+  assert.equal(await run_command(reader, commands, { command: 'fail' }), '[stderr]\n坏了\n[exit code: 3]');
+  assert.match(await run_command(reader, commands, { command: 'slow' }), /\[timed out after 1000ms\]/);
+  for (const [args, message] of [[{ command: 'fix' }, /not a command registered for you/], [{ command: 'rm -rf .' }, /not a command registered/],
+    [{ command: 'check' }, /needs path/], [{ command: 'check', path: '..' }, /outside the project/], [{ command: 'check', path: '.env' }, /secret file/],
+    [{ command: 'fail', path: '首部' }, /takes no path/]]) {
+    assert.match((await run_command(reader, commands, args)).error, message, JSON.stringify(args));
+  }
+  const writer = open_project({ cwd: project, project_access: 'write' });
+  assert.equal(await run_command(writer, commands, { command: 'fix' }), 'fixed\n');
 });

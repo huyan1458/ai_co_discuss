@@ -32,6 +32,73 @@ const MAX_RESOURCE_BYTES = 1000000;
 // Each path segment: no leading dot, no Windows-reserved characters.
 const RESOURCE_SEGMENT = /^[^./\\:*?"<>|\x00-\x1f][^/\\:*?"<>|\x00-\x1f]{0,99}$/;
 const utf8 = new TextDecoder('utf-8', { fatal: true });
+// Commands an API member may run, registered beside SKILL.md so they travel with the workflow.
+export const COMMANDS_FILE = 'commands.json';
+const COMMAND_ID_PATTERN = /^(?=.{1,40}$)[a-z0-9]+(?:-[a-z0-9]+)*$/;
+const COMMAND_FIELDS = ['id', 'description', 'run', 'path', 'access', 'timeout_seconds'];
+const MAX_COMMANDS = 20;
+const MAX_COMMAND_ARGS = 32;
+const MAX_COMMAND_ARG = 1000;
+const MAX_COMMAND_TEXT = 300;
+const DEFAULT_COMMAND_TIMEOUT = 120;
+const MAX_COMMAND_TIMEOUT = 600;
+// Replaced when the command runs: the workflow folder, the project directory and the one path the member passes.
+const PATH_PLACEHOLDER = '{path}';
+
+/** One single-line text field of a command, trimmed. */
+function command_text(value, label, required) {
+  const text = typeof value === 'string' ? value.trim() : '';
+  if (value !== undefined && typeof value !== 'string') throw new Error(`${label} 须为文本`);
+  if (required && !text) throw new Error(`${label} 不能为空`);
+  if (text.length > MAX_COMMAND_TEXT || /\n/.test(text)) throw new Error(`${label} 最多 ${MAX_COMMAND_TEXT} 字，且不能换行`);
+  return text;
+}
+
+/**
+ * Parse and check `commands.json`: `{ "commands": [{ id, description, run: [程序, 参数…], path?, access, timeout_seconds? }] }`.
+ * `run` is an argument list started without a shell, so the member cannot add to it; `{workflow}` and `{project}` stand for
+ * the two folders, and `{path}` for the one project path the member passes, allowed only when `path` says what it means.
+ * @returns {{id: string, description: string, run: string[], path: string, access: 'read' | 'write', timeout_seconds: number}[]}
+ */
+export function parse_workflow_commands(text) {
+  let value;
+  try { value = JSON.parse(text); } catch (error) { throw new Error(`${COMMANDS_FILE} 不是合法 JSON：${error.message}`); }
+  const list = value?.commands;
+  if (!value || typeof value !== 'object' || Array.isArray(value) || Object.keys(value).some(key => key !== 'commands') || !Array.isArray(list)) {
+    throw new Error(`${COMMANDS_FILE} 须为 { "commands": [ … ] }`);
+  }
+  if (list.length > MAX_COMMANDS) throw new Error(`${COMMANDS_FILE} 最多登记 ${MAX_COMMANDS} 条命令`);
+  const ids = new Set();
+  return list.map((item, index) => {
+    const label = `${COMMANDS_FILE} 第 ${index + 1} 条命令`;
+    if (!item || typeof item !== 'object' || Array.isArray(item)) throw new Error(`${label} 须为对象`);
+    const unknown = Object.keys(item).filter(key => !COMMAND_FIELDS.includes(key));
+    if (unknown.length) throw new Error(`${label} 含不支持的字段：${unknown.join('、')}`);
+    if (!COMMAND_ID_PATTERN.test(item.id || '')) throw new Error(`${label} 的 id 只能用小写英文和数字，可用单个连字符连接，1—40 位`);
+    if (ids.has(item.id)) throw new Error(`${COMMANDS_FILE} 的命令 id 重复：${item.id}`);
+    ids.add(item.id);
+    const description = command_text(item.description, `${label} 的 description`, true);
+    const path = command_text(item.path, `${label} 的 path`, false);
+    const { run } = item;
+    if (!Array.isArray(run) || !run.length || run.length > MAX_COMMAND_ARGS
+      || run.some(arg => typeof arg !== 'string' || !arg || arg.length > MAX_COMMAND_ARG)) {
+      throw new Error(`${label} 的 run 须为 1—${MAX_COMMAND_ARGS} 个非空文本（程序与参数），每个最多 ${MAX_COMMAND_ARG} 字`);
+    }
+    if (run[0].includes(PATH_PLACEHOLDER)) throw new Error(`${label} 的程序名不能含 ${PATH_PLACEHOLDER}`);
+    if (run.some(arg => arg.includes(PATH_PLACEHOLDER)) !== Boolean(path)) {
+      throw new Error(`${label}：run 里用了 ${PATH_PLACEHOLDER} 就须用 path 说明成员要传什么路径，没用就不写 path`);
+    }
+    if (!['read', 'write'].includes(item.access)) throw new Error(`${label} 的 access 须为 read（只读文件）或 write（会改文件）`);
+    const timeout = item.timeout_seconds ?? DEFAULT_COMMAND_TIMEOUT;
+    if (!Number.isInteger(timeout) || timeout < 1 || timeout > MAX_COMMAND_TIMEOUT) throw new Error(`${label} 的 timeout_seconds 须为 1—${MAX_COMMAND_TIMEOUT} 的整数`);
+    return { id: item.id, description, run: [...run], path, access: item.access, timeout_seconds: timeout };
+  });
+}
+
+/** The commands a workflow's files register; none without `commands.json`. */
+function workflow_commands(resources) {
+  return typeof resources?.[COMMANDS_FILE] === 'string' ? parse_workflow_commands(resources[COMMANDS_FILE]) : [];
+}
 
 /** The folder holding every workflow of this computer. */
 export function workflows_home(home) { return join(home, 'workflows'); }
@@ -109,6 +176,7 @@ function validate_resources(resources) {
     if (typeof text !== 'string') throw new Error(`附带文件 ${path} 须为文本`);
     if (Buffer.byteLength(text, 'utf8') > MAX_RESOURCE_BYTES) throw new Error(`附带文件 ${path} 超过 ${MAX_RESOURCE_BYTES / 1000000} MB`);
   }
+  workflow_commands(resources);
   return Object.fromEntries(entries.sort(([a], [b]) => a.localeCompare(b)));
 }
 
@@ -268,7 +336,7 @@ function read_saved_workflow(home, id) {
   const directory = workflow_directory(home, id);
   if (!existsSync(directory)) throw new Error(`工作流不存在：${id}`);
   const { workflow } = read_workflow_folder(directory);
-  return { ...workflow, id, directory };
+  return { ...workflow, id, directory, commands: workflow_commands(workflow.resources) };
 }
 
 /** One workflow in full, as the editor shows it. */
@@ -276,27 +344,41 @@ export function get_workflow(home, id) {
   return with_workflow_lock(home, () => read_saved_workflow(home, id));
 }
 
+/** Fill a staging folder, then swap it in for the library entry, recoverable if the process dies midway. Call under the lock. */
+function publish_directory(home, id, fill) {
+  const directory = workflow_directory(home, id);
+  if (existsSync(directory)) assert_no_links(directory);
+  const staging = join(workflows_home(home), `.tmp-${id}-${randomUUID()}`);
+  mkdirSync(staging, { recursive: true });
+  fill(staging, directory);
+  const old = existsSync(directory) ? join(workflows_home(home), `.old-${id}-${randomUUID()}`) : '';
+  if (old) renameSync(directory, old);
+  try { renameSync(staging, directory); }
+  catch (error) { if (old) renameSync(old, directory); throw error; }
+  if (old) rmSync(old, { recursive: true, force: true });
+}
+
+/** Copy a distributed workflow folder into the library as it is, replacing any entry of that ID. */
+export function install_workflow_folder(home, id, source) {
+  assert_no_links(source);
+  with_workflow_lock(home, () => publish_directory(home, id, staging => cpSync(source, staging, { recursive: true })));
+}
+
 /** Write a checked workflow as files, publishing a complete directory with crash recovery. */
 export function save_workflow(home, input, validate_card) {
   const workflow = validate_workflow(input, validate_card);
   return with_workflow_lock(home, () => {
-    const directory = workflow_directory(home, workflow.id);
-    if (existsSync(directory)) assert_no_links(directory);
-    const staging = join(workflows_home(home), `.tmp-${workflow.id}-${randomUUID()}`);
-    mkdirSync(join(staging, 'agents'), { recursive: true });
-    writeFileSync(join(staging, 'SKILL.md'), serialize_markdown({ name: workflow.id, label: workflow.label, description: workflow.description }, workflow.skill));
-    for (const { card, system_prompt, name, ...fields } of workflow.agents) {
-      const platform = name.slice(0, name.length - card.length - 1);
-      writeFileSync(join(staging, 'agents', `${card}.md`), serialize_markdown({ name: card, platform,
-        ...Object.fromEntries(CARD_FIELDS.slice(1).map(key => [key, fields[key]])) }, system_prompt));
-    }
-    if (workflow.resources) write_resources(staging, workflow.resources);
-    else if (existsSync(directory)) keep_resources(directory, staging);
-    const old = existsSync(directory) ? join(workflows_home(home), `.old-${workflow.id}-${randomUUID()}`) : '';
-    if (old) renameSync(directory, old);
-    try { renameSync(staging, directory); }
-    catch (error) { if (old) renameSync(old, directory); throw error; }
-    if (old) rmSync(old, { recursive: true, force: true });
+    publish_directory(home, workflow.id, (staging, directory) => {
+      mkdirSync(join(staging, 'agents'), { recursive: true });
+      writeFileSync(join(staging, 'SKILL.md'), serialize_markdown({ name: workflow.id, label: workflow.label, description: workflow.description }, workflow.skill));
+      for (const { card, system_prompt, name, ...fields } of workflow.agents) {
+        const platform = name.slice(0, name.length - card.length - 1);
+        writeFileSync(join(staging, 'agents', `${card}.md`), serialize_markdown({ name: card, platform,
+          ...Object.fromEntries(CARD_FIELDS.slice(1).map(key => [key, fields[key]])) }, system_prompt));
+      }
+      if (workflow.resources) write_resources(staging, workflow.resources);
+      else if (existsSync(directory)) keep_resources(directory, staging);
+    });
     return read_saved_workflow(home, workflow.id);
   });
 }
@@ -371,7 +453,8 @@ export function preview_workflow(input, validate_card, known_platform) {
     return { ...agent, ...(requested ? { project_access: READ_ONLY, requested_access: requested } : {}),
       ...(known_platform(agent.name) ? {} : { needs_platform: true }) };
   });
-  return { ...workflow, agents, ignored: source.ignored };
+  // Shown for the user to allow before saving: the page drops an import's commands file unless they do.
+  return { ...workflow, agents, commands: workflow_commands(workflow.resources), ignored: source.ignored };
 }
 
 /**
@@ -387,7 +470,7 @@ export function load_room_workflow(config) {
     const cards = Object.fromEntries(workflow.agents.map(agent => [agent.card, agent]));
     return { id: binding.id, label: workflow.label || binding.id, description: workflow.description || '', directory, skill_path: join(directory, 'SKILL.md'), skill: workflow.skill,
       revision: createHash('sha256').update(workflow.skill).digest('hex').slice(0, REVISION_LENGTH),
-      members: binding.members || {}, cards };
+      members: binding.members || {}, cards, commands: workflow.commands };
   } catch (error) { return { id: binding.id, error: error.message }; }
 }
 

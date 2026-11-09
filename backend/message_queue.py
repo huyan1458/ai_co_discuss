@@ -1,7 +1,8 @@
 """Owner messages queued while members work, posted one by one once the room is idle.
 
 The owner's composer sends with `queue: true`; when the room is busy (or earlier messages still wait) the message is kept
-here instead of being posted. Each idle moment posts the head through the normal message path with its own submission_id,
+here instead of being posted. A message naming only the host is never queued: it is a side question the host answers
+next, beside members still at work, so the owner can always ask how the work stands. Each idle moment posts the head through the normal message path with its own submission_id,
 so a repeated drain finds the posted message and only removes the row. A failed post keeps the row with its reason and holds
 the queue; the owner's stop pauses it. The owner may send one at once, edit, delete, reorder or resume the queue.
 """
@@ -47,10 +48,19 @@ def queue_view(connection, room_id):
 
 def should_queue(connection, room_id, payload):
     """Queue an owner message that asked for it while the room is busy or earlier messages still wait."""
-    if payload.get("queue") is not True:
+    if payload.get("queue") is not True or names_only_host(connection, room_id, payload):
         return False
     return room_busy(connection, room_id) or connection.execute(
         "SELECT 1 FROM queued_messages WHERE room_id=? LIMIT 1", (room_id,)).fetchone() is not None
+
+
+def names_only_host(connection, room_id, payload):
+    """The owner's message names the active host alone: a side question, answered next and kept out of the queue."""
+    named = payload.get("to")
+    if not isinstance(named, list) or len(set(named)) != 1:
+        return False
+    return connection.execute("SELECT 1 FROM room_members WHERE room_id=? AND name=? AND role='host' AND status='active'",
+                              (room_id, named[0])).fetchone() is not None
 
 
 def enqueue(connection, room_id, payload):

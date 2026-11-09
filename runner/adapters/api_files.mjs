@@ -148,6 +148,11 @@ function target(project, requested, exists = true, modify = false) {
   return { path, shown: display(project, path) };
 }
 
+/** An existing file or directory the member may read, as its real path; throws the reason it may not. */
+export function project_path(project, requested) {
+  return target(project, requested).path;
+}
+
 /** A file's observed version: a later mutation fails when it changed since the read. */
 function version(info) {
   return `${info.mtimeMs}:${info.size}`;

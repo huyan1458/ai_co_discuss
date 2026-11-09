@@ -52,6 +52,24 @@ description: AI CoDiscuss 工作流的创建与修改技能。用户要把房间
 
 `SKILL.md` 和 `agents/` 之外的文件随工作流一起保存和分享；在 SKILL.md 里按相对路径指给主持人，如“照本工作流文件夹下 `templates/` 建项目”。粘贴草稿只能带 SKILL.md 和卡片；用草稿保存时，文件夹里已有的这些文件原样保留。
 
+### 登记命令（给模型 API 成员）
+
+以 API 方式加入的成员没有命令行。某个角色需要自己跑检查脚本之类的命令时，在文件夹根目录放 `commands.json` 登记，脚本本身也放进文件夹（如 `tools/`），这样随工作流一起分享：
+
+```json
+{ "commands": [
+  { "id": "state-check", "description": "检查作品状态账能否解析、引文是否对得上",
+    "run": ["python", "-X", "utf8", "{workflow}/tools/状态检查.py", "{path}"],
+    "path": "作品文件夹，相对项目目录", "access": "read", "timeout_seconds": 120 }
+] }
+```
+
+- `run` 是程序加参数的列表，不经 shell，成员只能按 `id` 运行、改不了命令行。`{workflow}` 换成工作流文件夹，`{project}` 换成项目目录，`{path}` 换成成员传入的一个项目内路径；用了 `{path}` 就写 `path` 说明要传什么。
+- `access`：`read` 只读文件，只读成员也能运行；`write` 会改文件，只给可写成员。按命令实际行为如实写。
+- 不写本机绝对路径；程序名用各电脑都有的（如 `python`、`node`），脚本依赖写进 SKILL.md。
+- 本地软件成员（Claude、Codex、Antigravity）有自己的命令行，不用登记；在 SKILL.md 里写清哪个角色用哪条命令、什么时候跑。
+- 别人导入时要勾选允许才会带上命令；主持人的草稿不能增删命令。
+
 `SKILL.md`：
 
 ```

@@ -94,8 +94,9 @@ export const ADAPTER_PROFILES = {
   api: {
     platform: '', label: '模型 API', kind: 'api', location: '', fields: ['base_url', 'api_protocol', 'api_key_ref'],
     efforts: null, models: false, access_levels: ['read', 'write'], per_tool_allow: false, adopt: '', host_existing: false,
-    access_hints: { read: '用接入程序的文件工具读取、搜索项目文件', write: '还可新建、覆盖、局部编辑项目文件；没有命令行' },
-    unsupported_hints: { auto: 'API 成员没有命令行，没有需要软件审批的操作', full: 'API 成员没有命令行，没有需要软件审批的操作' },
+    access_hints: { read: '用接入程序的文件工具读取、搜索项目文件，可运行工作流登记的只读命令',
+      write: '还可新建、覆盖、局部编辑项目文件，可运行工作流登记的全部命令；没有通用命令行' },
+    unsupported_hints: { auto: 'API 成员没有通用命令行，没有需要软件审批的操作', full: 'API 成员没有通用命令行，没有需要软件审批的操作' },
     capabilities: { delivery: PROCESS, rewind: 'fresh', project: true, file_tools: true, limits_directories: true, chat: true },
   },
 };

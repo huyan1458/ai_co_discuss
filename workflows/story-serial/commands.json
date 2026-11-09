@@ -1,0 +1,18 @@
+{
+  "commands": [
+    {
+      "id": "state-check",
+      "description": "检查作品的状态账：能否解析、引文是否在现定稿正文里、线索集号与停了几集、文件指向",
+      "run": [
+        "python",
+        "-X",
+        "utf8",
+        "{workflow}/tools/状态检查.py",
+        "{path}"
+      ],
+      "path": "作品文件夹（含 状态/ 与 正文/），相对项目目录",
+      "access": "read",
+      "timeout_seconds": 120
+    }
+  ]
+}

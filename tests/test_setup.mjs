@@ -6,7 +6,9 @@ import { delimiter, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import test from 'node:test';
 
-import { install_skills } from '../runner/discussion_skills.mjs';
+import { install_skills, install_workflows, tree_hash } from '../runner/discussion_skills.mjs';
+import { validate_preset } from '../runner/discussion_launch.mjs';
+import { get_workflow, preview_workflow } from '../runner/workflows.mjs';
 import { agy_rule } from '../runner/adapters/antigravity_cli.mjs';
 import { detect_clients, detect_python, remove_legacy_agy_rules } from '../runner/discussion_setup.mjs';
 
@@ -105,6 +107,38 @@ test('complete skills install idempotently, preserve user edits and keep hashes 
     assert.equal(install_skills(skills, record)[0].status, 'conflict');
     assert.equal(readFileSync(path, 'utf8'), 'custom skill');
   } finally { rmSync(directory, { recursive: true, force: true }); }
+});
+
+test('shipped workflows install into the library, update only untouched copies and keep the user’s own', () => {
+  const home = mkdtempSync(join(tmpdir(), 'codiscuss-workflows-'));
+  try {
+    // What ships passes the same check as any import, so the library can read it.
+    const shipped = fileURLToPath(new URL('../workflows/story-serial', import.meta.url));
+    assert.equal(preview_workflow({ folder: shipped }, validate_preset, () => true).id, 'story-serial');
+    assert.deepEqual(install_workflows(home).map(item => [item.name, item.status]), [['story-serial', 'installed']]);
+    assert.equal(get_workflow(home, 'story-serial').commands[0].id, 'state-check');
+    assert.equal(install_workflows(home)[0].status, 'unchanged');
+    // A newer package replaces a copy still as an older installer left it.
+    const record = join(home, 'workflows-manifest.json');
+    const folder = join(home, 'workflows', 'story-serial');
+    const skill = join(folder, 'SKILL.md');
+    writeFileSync(skill, 'older shipped version');
+    writeFileSync(record, JSON.stringify({ 'story-serial': tree_hash(folder) }));
+    assert.equal(install_workflows(home)[0].status, 'updated');
+    assert.notEqual(readFileSync(skill, 'utf8'), 'older shipped version');
+    // A copy that matches no recorded version is the user's, even when no record exists.
+    writeFileSync(skill, 'my own version');
+    rmSync(record);
+    assert.equal(install_workflows(home)[0].status, 'kept');
+    assert.equal(readFileSync(skill, 'utf8'), 'my own version');
+    rmSync(record);
+    rmSync(join(home, 'workflows', 'story-serial'), { recursive: true });
+    install_workflows(home);
+    const edited = join(home, 'workflows', 'story-serial', 'agents', 'critic.md');
+    writeFileSync(edited, 'my own critic');
+    assert.equal(install_workflows(home)[0].status, 'kept');
+    assert.equal(readFileSync(edited, 'utf8'), 'my own critic');
+  } finally { rmSync(home, { recursive: true, force: true }); }
 });
 
 test('setup configures native CLI, preserves existing profile and uses configured Python', () => {

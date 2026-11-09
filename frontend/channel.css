@@ -641,11 +641,12 @@ html[data-theme^="channel"] .channel-round-button:active:not(:disabled) { transf
 .excerpt-actions button:hover { background: var(--ui-bg-accented); color: var(--ui-text); }
 .excerpt-actions button > span { width: 14px; height: 14px; }
 /* Adding a selection to the chat: a comment box beside it, the selection kept highlighted, then a number mark at its end. */
-.selection-comment { position: fixed; z-index: 40; display: flex; align-items: center; gap: 4px; width: 340px; height: 40px; padding: 0 5px 0 14px; border: 1px solid var(--ui-border-accented);
-  border-radius: 999px; background: var(--ui-bg-elevated); box-shadow: 0 8px 24px #0006; }
+.selection-comment { position: fixed; z-index: 40; display: flex; align-items: flex-end; gap: 4px; width: 340px; min-height: 40px; padding: 5px 5px 5px 14px; border: 1px solid var(--ui-border-accented);
+  border-radius: 20px; background: var(--ui-bg-elevated); box-shadow: 0 8px 24px #0006; }
 .selection-comment.is-docked { inset: auto 12px calc(env(safe-area-inset-bottom) + 12px); width: auto; }
-.selection-comment input { flex: 1; min-width: 0; border: 0; outline: none; background: transparent; color: var(--ui-text); font-size: 13px; }
-.selection-comment input::placeholder { color: var(--ui-text-dimmed); }
+.selection-comment textarea { flex: 1; align-self: center; min-width: 0; max-height: 120px; padding: 0; border: 0; outline: none; resize: none; field-sizing: content; background: transparent;
+  color: var(--ui-text); font-size: 13px; line-height: 20px; }
+.selection-comment textarea::placeholder { color: var(--ui-text-dimmed); }
 .selection-comment button { display: grid; place-items: center; flex-shrink: 0; width: 28px; height: 28px; border-radius: 50%; cursor: pointer; }
 .selection-comment button > span { width: 16px; height: 16px; }
 .selection-comment-cancel { color: var(--ui-text-muted); }

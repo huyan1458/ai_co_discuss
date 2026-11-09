@@ -1284,6 +1284,10 @@ let pending_jump = null;
 // Real scrolling (not the offsets written here) holds idle slices back: writing scrollTop ends an iOS momentum scroll.
 let last_scroll_at = 0;
 let written_top = null;
+// A finger on the transcript, and the momentum after it, owns the position: on iOS a scrollTop written then also lands on
+// the main thread's older offset, so the page jumps back. Touch scrolling holds even the slices the reader waits on.
+let touch_active = false;
+let touch_scroll = false;
 /** Whether the reader is waiting on earlier cards: near the top, or heading for one not rendered. */
 function preload_urgent(element) {
   return element.scrollTop < LOAD_EARLIER_MARGIN || not_rendered(pending_jump) || not_rendered(preload_wanted);
@@ -1311,7 +1315,7 @@ async function preload_slice() {
   // A hidden transcript has no layout to keep; showing it again tracks the scroll, which resumes the preload.
   if (preload_busy || !element?.clientHeight || !render_start.value) return;
   const urgent = preload_urgent(element);
-  if (!urgent && (glide.isAnimating() || performance.now() - last_scroll_at < SCROLL_SETTLE_MS)) return schedule_preload();
+  if ((!urgent || touch_scroll) && (glide.isAnimating() || touch_active || performance.now() - last_scroll_at < SCROLL_SETTLE_MS)) return schedule_preload();
   preload_busy = true;
   const started = performance.now();
   const from_bottom = element.scrollHeight - element.scrollTop;
@@ -1569,9 +1573,16 @@ function stop_following(event) {
 /** Manual scrolling resumes tracking the message at the viewport's upper edge; it also takes over from a glide. */
 function resume_tracking(event) {
   glide.stop();
+  touch_scroll = touch_active = event.type === "touchstart";
   // Scrolling by hand drops a jump still waiting for its card.
   pending_jump = null;
   if (event.type !== "keydown" || ["ArrowUp", "ArrowDown", "PageUp", "PageDown", "Home", "End", " "].includes(event.key)) jump_target.value = null;
+}
+
+/** Lifting the finger starts the momentum; its scroll events keep the earlier-card preload waiting until it settles. */
+function end_touch() {
+  touch_active = false;
+  last_scroll_at = performance.now();
 }
 
 /** One Tab stop enters the map; arrow keys can inspect every compact tick. */
@@ -2103,12 +2114,12 @@ function copy_message(message) { act("copy", `${view.value.room_site}/r/${room.v
       <button v-if="listen_here.speech" type="button" class="channel-listen-mark" title="从选中处开始朗读" aria-label="从选中处开始朗读" @mousedown.prevent @click="listen_from_selection"><UIcon name="i-lucide-headphones" />朗读</button>
     </div>
     <form v-if="quoting" class="selection-comment" :class="{ 'is-docked': quoting.touch }" :style="quoting.touch ? {} : { left: `${quoting.left}px`, top: `${quoting.top}px` }" @submit.prevent="submit_quote">
-      <input ref="quote_input" v-model="quote_comment" type="text" placeholder="添加批注（可选）" aria-label="摘录的批注（可选）" enterkeyhint="send" @keydown="quote_keydown">
+      <textarea ref="quote_input" v-model="quote_comment" rows="1" placeholder="添加批注（可选）" aria-label="摘录的批注（可选）" enterkeyhint="send" @keydown="quote_keydown"></textarea>
       <button type="button" class="selection-comment-cancel" aria-label="取消添加" title="取消" @click="cancel_quote"><UIcon name="i-lucide-x" /></button>
       <button type="submit" class="selection-comment-send" aria-label="添加到对话" title="添加到对话（Enter）"><UIcon name="i-lucide-arrow-up" /></button>
     </form>
     <ExcerptEditCard v-if="mark_editing" :key="mark_editing.excerpt.id" :comment="mark_editing.excerpt.comment" :style="{ left: `${mark_editing.left}px`, top: `${mark_editing.top}px` }" @save="save_mark" @cancel="close_mark" @remove="remove_mark" />
-    <div ref="transcript" v-memo="[message_groups, view.sending_preview, message_round_labels, free, room.session, can_manage, expanded_answers.size, reader.state.message_id, room.title, view.query, view.mention_only, view.host_only, topic_anchor, end_anchor, request_badges, execution_reports, recommendations, adopting, scheduler_decisions, host_arrangements, pending, execution_notes, open_working_notes, editing, rewound_runs, retracting_id, armed_cards.size, menu_open_id, stopping_member, free_now, allowing, allow_errors, late_answers, has_draft, view.sending_message, routing_messages, speaking_turn, room.free]" class="channel-transcript" aria-label="聊天记录" @scroll="schedule_track_scroll" @wheel.passive="resume_tracking($event); stop_following($event)" @touchstart.passive="resume_tracking" @touchmove.passive="stop_following" @pointerdown="stop_following" @keydown="resume_tracking($event); stop_following($event)">
+    <div ref="transcript" v-memo="[message_groups, view.sending_preview, message_round_labels, free, room.session, can_manage, expanded_answers.size, reader.state.message_id, room.title, view.query, view.mention_only, view.host_only, topic_anchor, end_anchor, request_badges, execution_reports, recommendations, adopting, scheduler_decisions, host_arrangements, pending, execution_notes, open_working_notes, editing, rewound_runs, retracting_id, armed_cards.size, menu_open_id, stopping_member, free_now, allowing, allow_errors, late_answers, has_draft, view.sending_message, routing_messages, speaking_turn, room.free]" class="channel-transcript" aria-label="聊天记录" @scroll="schedule_track_scroll" @wheel.passive="resume_tracking($event); stop_following($event)" @touchstart.passive="resume_tracking" @touchmove.passive="stop_following" @touchend.passive="end_touch" @touchcancel.passive="end_touch" @pointerdown="stop_following" @keydown="resume_tracking($event); stop_following($event)">
       <div v-if="!view.query && !view.mention_only && !view.host_only && !topic_anchor && render_start === 0" class="channel-message-group channel-topic-group"><TopicCard :ref="(card) => topic_card = card" @edit="emit('edit')" /></div>
       <div v-for="group in message_groups" :key="group.key" class="channel-message-group">
         <USeparator :label="group.label" class="channel-date-divider" />

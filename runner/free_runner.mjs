@@ -794,6 +794,8 @@ export class FreeRoomRunner {
           cwd: directory, project_access: adapter.project_access, extra_directories: task.extra_directories,
           requests: execution.requests, read_after: execution.read_until, session, discussion_request: session_request,
           scheduler_suggestions, review_handoffs, ...(task.workflow ? { workflow: task.workflow } : {}),
+          // Commands the enabled workflow registers; software with its own command line ignores them.
+          ...(workflow?.commands?.length ? { commands: { directory: workflow.directory, list: workflow.commands } } : {}),
           ...(Number.isInteger(this.config.api_max_requests) ? { max_requests: this.config.api_max_requests } : {}),
           ...(task.goal ? { goal: task.goal } : {}) },
         on_binding: session => this.store.bind(member.name, session),

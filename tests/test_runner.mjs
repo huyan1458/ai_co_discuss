@@ -228,7 +228,7 @@ test('API profiles need a bound key and no software, and take only the access th
   assert.equal(config.participants.Grok.cwd, home);
   assert.equal(config.participants.Grok.executable, undefined);
   // Without a command line there is nothing for a software to approve, so 自动 and 全放开 are refused.
-  assert.throws(() => validate_config({ ...input, participants: { Grok: { ...input.participants.Grok, project_access: 'full' } } }, home), /没有命令行/);
+  assert.throws(() => validate_config({ ...input, participants: { Grok: { ...input.participants.Grok, project_access: 'full' } } }, home), /没有通用命令行/);
   assert.throws(() => validate_config({ ...input, participants: { Grok: { ...input.participants.Grok, base_url: 'https://api.x.ai/v1' } } }, home), /重新填写/);
   assert.deepEqual(saved_api_keys(home), { [base_url]: key.api_key_ref });
 });

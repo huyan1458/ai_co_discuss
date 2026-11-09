@@ -1,17 +1,21 @@
-/** Install complete skills without replacing an unmanaged or locally edited copy; hashes live in the service home. */
+/**
+ * Install complete skills, and the workflows this package ships, without replacing an unmanaged or locally edited copy;
+ * hashes live in the service home.
+ */
 import { createHash } from 'node:crypto';
 import { cpSync, existsSync, lstatSync, mkdirSync, readFileSync, readdirSync, rmSync } from 'node:fs';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 import { atomic_json } from './files.mjs';
+import { WORKFLOW_ID_PATTERN, install_workflow_folder, workflow_directory } from './workflows.mjs';
 
 const SOURCE = fileURLToPath(new URL('../.agents/skills/', import.meta.url));
 export const SKILLS = ['discuss-host', 'discuss-participant', 'discuss-report', 'workflow-creator'];
 const LEGACY_MANIFEST = '.codiscuss-skills.json';
 
 /** Hash names and contents, rejecting links instead of following them outside a skill. */
-function tree_hash(directory) {
+export function tree_hash(directory) {
   if (lstatSync(directory).isSymbolicLink()) throw new Error('技能目录包含符号链接');
   const hash = createHash('sha256');
   for (const name of readdirSync(directory).sort()) {
@@ -85,5 +89,37 @@ export function remove_legacy_skills(directory, record) {
   const { [root]: _, ...rest } = data;
   save_record(record, root, Object.keys(kept).length ? { ...rest, [root]: kept } : rest);
   if (!readdirSync(root).length) rmSync(root, { recursive: true });
+  return results;
+}
+
+const WORKFLOW_SOURCE = fileURLToPath(new URL('../workflows/', import.meta.url));
+const WORKFLOW_RECORD = 'workflows-manifest.json';
+
+/**
+ * Install the workflows this package ships into the service home's library, by the same rule as skills: a missing one is
+ * copied, one still as this installer left it is updated, and one the user edited (or made under the same ID) is kept.
+ * @param {string} home - the service home.
+ * @returns {{name: string, status: 'installed' | 'updated' | 'unchanged' | 'kept', path: string}[]}
+ */
+export function install_workflows(home) {
+  if (!existsSync(WORKFLOW_SOURCE)) return [];
+  const record = join(home, WORKFLOW_RECORD);
+  const previous = existsSync(record) ? JSON.parse(readFileSync(record, 'utf8')) : {};
+  const managed = { ...previous };
+  const results = readdirSync(WORKFLOW_SOURCE).filter(name => WORKFLOW_ID_PATTERN.test(name)).sort().map(name => {
+    const source = join(WORKFLOW_SOURCE, name), destination = workflow_directory(home, name);
+    const hash = tree_hash(source);
+    if (existsSync(destination)) {
+      let current;
+      try { current = tree_hash(destination); } catch { return { name, status: 'kept', path: destination }; }
+      if (current === hash) { managed[name] = hash; return { name, status: 'unchanged', path: destination }; }
+      if (current !== previous[name]) return { name, status: 'kept', path: destination };
+    }
+    install_workflow_folder(home, name, source);
+    managed[name] = hash;
+    return { name, status: previous[name] ? 'updated' : 'installed', path: destination };
+  });
+  mkdirSync(home, { recursive: true });
+  atomic_json(record, managed);
   return results;
 }
