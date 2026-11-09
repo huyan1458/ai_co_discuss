@@ -6,7 +6,7 @@ import { delimiter, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import test from 'node:test';
 
-import { install_skills, install_workflows, tree_hash } from '../runner/discussion_skills.mjs';
+import { install_skills, install_workflows } from '../runner/discussion_skills.mjs';
 import { validate_preset } from '../runner/discussion_launch.mjs';
 import { get_workflow, preview_workflow } from '../runner/workflows.mjs';
 import { agy_rule } from '../runner/adapters/antigravity_cli.mjs';
@@ -109,7 +109,7 @@ test('complete skills install idempotently, preserve user edits and keep hashes 
   } finally { rmSync(directory, { recursive: true, force: true }); }
 });
 
-test('shipped workflows install into the library, update only untouched copies and keep the user’s own', () => {
+test('shipped workflows install only when asked, replacing a different copy after backing it up', () => {
   const home = mkdtempSync(join(tmpdir(), 'codiscuss-workflows-'));
   try {
     // What ships passes the same check as any import, so the library can read it.
@@ -118,26 +118,13 @@ test('shipped workflows install into the library, update only untouched copies a
     assert.deepEqual(install_workflows(home).map(item => [item.name, item.status]), [['story-serial', 'installed']]);
     assert.equal(get_workflow(home, 'story-serial').commands[0].id, 'state-check');
     assert.equal(install_workflows(home)[0].status, 'unchanged');
-    // A newer package replaces a copy still as an older installer left it.
-    const record = join(home, 'workflows-manifest.json');
-    const folder = join(home, 'workflows', 'story-serial');
-    const skill = join(folder, 'SKILL.md');
-    writeFileSync(skill, 'older shipped version');
-    writeFileSync(record, JSON.stringify({ 'story-serial': tree_hash(folder) }));
-    assert.equal(install_workflows(home)[0].status, 'updated');
-    assert.notEqual(readFileSync(skill, 'utf8'), 'older shipped version');
-    // A copy that matches no recorded version is the user's, even when no record exists.
-    writeFileSync(skill, 'my own version');
-    rmSync(record);
-    assert.equal(install_workflows(home)[0].status, 'kept');
-    assert.equal(readFileSync(skill, 'utf8'), 'my own version');
-    rmSync(record);
-    rmSync(join(home, 'workflows', 'story-serial'), { recursive: true });
-    install_workflows(home);
+    // An edited copy is replaced by the shipped one, and the edit survives in the backup.
     const edited = join(home, 'workflows', 'story-serial', 'agents', 'critic.md');
     writeFileSync(edited, 'my own critic');
-    assert.equal(install_workflows(home)[0].status, 'kept');
-    assert.equal(readFileSync(edited, 'utf8'), 'my own critic');
+    const [result] = install_workflows(home);
+    assert.equal(result.status, 'updated');
+    assert.notEqual(readFileSync(edited, 'utf8'), 'my own critic');
+    assert.equal(readFileSync(join(result.backup, 'agents', 'critic.md'), 'utf8'), 'my own critic');
   } finally { rmSync(home, { recursive: true, force: true }); }
 });
 
@@ -176,6 +163,10 @@ test('setup configures native CLI, preserves existing profile and uses configure
     assert.equal(effective.cwd, directory);
     assert(!existsSync(join(env.DISCUSS_SERVICE_HOME, 'runner.lock')));
     assert(existsSync(join(directory, '.agents/skills/discuss-report/assets/Discussion_Report_Template.md')));
+    // Shipped workflows go in only on a run that asks for them.
+    assert(!existsSync(join(env.DISCUSS_SERVICE_HOME, 'workflows', 'story-serial')));
+    const asked = execute(['setup', ...options, '--workflows']);
+    assert.deepEqual(JSON.parse(asked.stdout).workflows.map(item => item.status), ['installed']);
     const schema = execute(['schema', 'message', 'post']);
     assert.equal(schema.status, 0, schema.stderr);
     const missing = execute(['setup', ...options, '--python', join(directory, 'missing-python')]);

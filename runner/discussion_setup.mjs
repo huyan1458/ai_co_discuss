@@ -9,8 +9,8 @@ import { parseArgs } from 'node:util';
 import { atomic_json } from './files.mjs';
 import { launch_settings, save_launch_settings } from './discussion_launch.mjs';
 import { assert_shared_home, service_home } from './discussion_service.mjs';
-import { SKILLS, install_skills, install_workflows, remove_legacy_skills } from './discussion_skills.mjs';
-import { ask, checkbox_prompt, intro, outro, pad, short_path, spinner, step, styled, text_width, tone } from './discussion_tui.mjs';
+import { SKILLS, install_skills, install_workflows, remove_legacy_skills, shipped_workflows } from './discussion_skills.mjs';
+import { ask, checkbox_prompt, intro, outro, pad, short_path, spinner, step, styled, text_width, tone, tree_prompt } from './discussion_tui.mjs';
 export { checkbox_prompt } from './discussion_tui.mjs';
 
 const ROOT = fileURLToPath(new URL('../', import.meta.url));
@@ -34,7 +34,7 @@ const CLIENTS = {
 const OPTIONS = { yes: { type: 'boolean' }, clients: { type: 'string' }, python: { type: 'string' },
   codex: { type: 'string' }, claude: { type: 'string' }, antigravity: { type: 'string' }, cursor: { type: 'string' },
   port: { type: 'string' }, prefix: { type: 'string' }, 'skills-home': { type: 'string' },
-  'no-start': { type: 'boolean' }, 'no-open': { type: 'boolean' }, json: { type: 'boolean' }, help: { type: 'boolean', short: 'h' } };
+  'no-start': { type: 'boolean' }, 'no-open': { type: 'boolean' }, workflows: { type: 'boolean' }, json: { type: 'boolean' }, help: { type: 'boolean', short: 'h' } };
 const HELP = `用法：codiscuss install [选项] / codiscuss setup [选项]
 install 将当前 npm 包安装为持久命令，再运行 setup；setup 配置已有安装。
   --yes                     使用已检测且支持自动接入的软件，冲突保留并报告
@@ -45,6 +45,8 @@ install 将当前 npm 包安装为持久命令，再运行 setup；setup 配置�
   --no-start / --no-open     只配置 / 启动但不打开浏览器
   --prefix DIR              npm 安装前缀（install）
   --skills-home DIR         技能用户根目录（默认当前用户目录）
+  --workflows               安装全部随包工作流，已有同名的覆盖为最新版（原来的先备份到服务目录 backups/）；
+                            交互运行时也可在“安装配置”里逐个勾选；不选则不安装，选择不会记住
 Antigravity（显示名 Gemini）使用 agy；Grok 使用 Cursor CLI（agent / cursor-agent）。仅检测 CLI。
 Cursor 当前只安装技能，可手动参与；全自动接入尚未提供。已有软件设置保留。
 显式软件路径可更新已支持的 CLI 配置。安装不会开始讨论。
@@ -160,6 +162,22 @@ async function selected_clients(options, detected) {
     choice = detected.filter((_, index) => checked[index]).map(item => item.key).join(',') || 'none';
   } else if (!styled) for (const item of detected) process.stderr.write(`${item.name}：${item.executable || '未检测到 CLI'}\n`);
   return requested_clients(choice, detected);
+}
+
+/**
+ * Which shipped workflows to install on this run. Nothing by default: an interactive run offers them unchecked in the
+ * install settings, and a non-interactive one installs them only with --workflows. Never remembered between runs.
+ */
+async function selected_workflows(options) {
+  const shipped = shipped_workflows();
+  // The tree needs key-by-key input; a terminal that cannot give it keeps the default.
+  if (options.workflows !== undefined || options.yes || !process.stdin.isTTY || typeof process.stdin.setRawMode !== 'function' || !shipped.length) {
+    return options.workflows ? shipped.map(item => item.name) : [];
+  }
+  const [picked] = await tree_prompt('安装配置', [{ label: '随包工作流',
+    description: '把安装包自带的工作流装进本机工作流库；已有同名的覆盖为最新版，原来那份先备份到服务目录 backups/workflows/',
+    items: shipped.map(item => ({ label: item.label, hint: item.name, description: item.description, checked: false })) }]);
+  return shipped.filter((_, index) => picked[index]).map(item => item.name);
 }
 
 /** Validate an explicit selection without prompting or changing files. */
@@ -347,12 +365,14 @@ async function setup(options) {
     ? detected.map(item => `${pad(item.name, width)}  ${tone.dim(item.executable ? short_path(item.executable) : '未检测到 CLI')}`) : [];
   scan.done(`检测到 ${detected.filter(item => item.executable).length} 个可接入的 CLI`, listed);
   const selected = await selected_clients(options, detected);
+  const workflow_names = await selected_workflows(options);
   const configured = await configure_clients(home, selected, options, launch_settings(home).participants);
   // The remote entry is retired: a saved remote_port from an older version is dropped here.
   const { remote_port: retired, ...kept } = previous;
   atomic_json(join(home, 'local-settings.json'), { ...kept, python, port });
   step('已写入软件配置与技能', configured.skills.map(group => `${pad(group.client, width)}  ${tone.dim(short_path(dirname(group.results[0].path)))}`));
-  const workflows = install_workflows(home);
+  // Shipped workflows are installed only when asked for each time, so a copy the user or a host edited is never replaced unasked.
+  const workflows = workflow_names.length ? install_workflows(home, workflow_names) : [];
   const result = { home, python, clients: selected.map(item => item.name), ...configured, workflows,
     command: check_command(), ai_verified: false };
   result.issues = setup_issues(result);
@@ -382,12 +402,11 @@ async function setup(options) {
   return result;
 }
 
-// A kept workflow is the user's own edit, not a problem to fix, so it is reported here and not as an issue.
-const WORKFLOW_STATUS = { installed: '已安装', updated: '已更新', unchanged: '已是最新', kept: '有你的修改，保留原样未更新' };
+const WORKFLOW_STATUS = { installed: '已安装', updated: '已覆盖为最新版，原来的备份在', unchanged: '已是最新' };
 
 /** One line naming each shipped workflow and what setup did with it. */
 function workflow_summary(workflows) {
-  return workflows.map(item => `${item.name} ${WORKFLOW_STATUS[item.status]}`).join(' · ');
+  return workflows.map(item => `${item.name} ${WORKFLOW_STATUS[item.status]}${item.backup ? `：${item.backup}` : ''}`).join(' · ');
 }
 
 /** Print a concise human receipt while keeping stdout machine-readable. */

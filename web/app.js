@@ -1507,7 +1507,7 @@ async function set_member_adapter({ name, adapter }) {
 }
 
 /** Owner changes use the website; only automatic members need the local service to reconnect. */
-async function change_member({ member_id, name, action, role, latest_id }) {
+async function change_member({ member_id, name, action, role, latest_id, quiet = false }) {
   const room_id = state.room.id;
   if (action === "rejoin") {
     const member = (state.room.free?.members || state.room.members).find(item => item.id === member_id);
@@ -1517,7 +1517,7 @@ async function change_member({ member_id, name, action, role, latest_id }) {
       ? await local_launch_request("room-member", { room_id, token, action: "rejoin", name, member_token: record.member.token })
       : await request_json(`/api/rooms/${room_id}/members/${member_id}`, { action: "active", token: record.member.token });
     finish_member_request(room_id, token, record, result);
-    if (state.room?.id === room_id) notify("info", member.access === "manual" ? `${name} 已请回，凭证已更新；请用新的启动指令让它重新注册。` : `${name} 已请回，续接原会话。`);
+    if (!quiet && state.room?.id === room_id) notify("info", member.access === "manual" ? `${name} 已请回，凭证已更新；请用新的启动指令让它重新注册。` : `${name} 已请回，续接原会话。`);
   } else {
     await request_json(`/api/rooms/${room_id}/members/${member_id}${action === "interrupt" ? "/interrupt" : ""}`,
       action === "interrupt" ? {} : { action, ...(role ? { role } : {}), ...(latest_id !== undefined ? { latest_id } : {}) });
@@ -4131,7 +4131,9 @@ async function fork_room(message_id) {
   const registered = new Set((local?.members || []).filter(member => member.status !== "failed").map(member => member.name));
   for (const member of (state.room.free?.members || []).filter(item => item.status === "away")) {
     if (member.access === "runner" && !registered.has(member.name)) continue;
-    try { await change_member({ member_id: member.id, name: member.name, action: "rejoin" }); }
+    // The fork's own notice below sums up who continues and who starts anew, so automatic members rejoin silently;
+    // a manual member still says it must register again with its new start command.
+    try { await change_member({ member_id: member.id, name: member.name, action: "rejoin", quiet: member.access === "runner" }); }
     catch (error) { problems.push(`${member.name} 未能请回：${error.message}`); }
   }
   const fresh = (local?.members || []).filter(member => member.status === "fresh").map(member => member.name);

@@ -162,6 +162,95 @@ export function checkbox_prompt(message, items, input = process.stdin, output = 
   });
 }
 
+/** A group's mark from how many of its items are on: all, none or some. */
+function group_mark(on, total) {
+  return on === total ? tone.green('[✓]') : on ? tone.yellow('[−]') : tone.dim('[ ]');
+}
+
+/**
+ * Optional settings as a folded tree, after the health-check menus: an overview first (→ to edit, enter to go on), then
+ * groups that unfold into items. Arrows move, space toggles an item or a whole group, → unfolds, ← folds or returns to
+ * the overview, enter confirms. Choices apply to this run only.
+ * @param {string} message - the step title.
+ * @param {{label: string, description: string, items: {label: string, hint: string, description: string, checked: boolean}[]}[]} groups
+ * @returns {Promise<boolean[][]>} The checked state of every item, by group.
+ */
+export function tree_prompt(message, groups, input = process.stdin, output = process.stderr) {
+  const checked = groups.map(group => group.items.map(item => Boolean(item.checked)));
+  const expanded = new Set();
+  const total = checked.flat().length;
+  const width = Math.max(...groups.flatMap(group => [text_width(group.label) + 2, ...group.items.map(item => text_width(item.label))]));
+  let editing = false, cursor = 0, drawn = 0;
+  const count = index => checked[index].filter(Boolean).length;
+  const enabled = () => checked.flat().filter(Boolean).length;
+  const rows = () => groups.flatMap((group, index) => [{ group: index },
+    ...(expanded.has(index) ? group.items.map((_, item) => ({ group: index, item })) : [])]);
+  const draw = lines => {
+    if (drawn) output.write(`\x1b[${drawn}A`);
+    output.write(`${lines.map(line => `\x1b[2K${line}`).join('\n')}\n`);
+    if (lines.length < drawn) output.write('\x1b[J');
+    drawn = lines.length;
+  };
+  const row_text = ({ group, item }, focused) => {
+    const pointer = focused ? tone.cyan('›') : ' ';
+    if (item === undefined) {
+      const arrow = expanded.has(group) ? '▾' : '▸';
+      const label = pad(groups[group].label, width - 2);
+      return `${bar()} ${pointer} ${arrow} ${group_mark(count(group), checked[group].length)} ${focused ? tone.bold(label) : label}  ${tone.dim(`${count(group)} / ${checked[group].length}`)}`;
+    }
+    const value = groups[group].items[item];
+    const box = checked[group][item] ? tone.green('[✓]') : tone.dim('[ ]');
+    return `${bar()} ${pointer}     ${box} ${focused ? tone.bold(pad(value.label, width)) : pad(value.label, width)}  ${tone.dim(value.hint)}`;
+  };
+  const overview = () => [`${tone.cyan('◆')}  ${message}`, bar(),
+    ...groups.map((group, index) => `${bar()}  ${pad(group.label, width)}  ${tone.dim(`${count(index)} / ${checked[index].length}`)}`),
+    bar(), `${bar()}  ${tone.dim('▸ 修改安装配置（→ 展开）')}`, `${tone.gray('└')}  ${tone.dim('回车 继续 · Ctrl+C 退出')}`];
+  const editor = () => {
+    const list = rows(), focus = list[cursor];
+    const detail = focus.item === undefined ? groups[focus.group].description : groups[focus.group].items[focus.item].description;
+    return [`${tone.cyan('◆')}  ${message}`, bar(), ...list.map((row, index) => row_text(row, index === cursor)), bar(),
+      `${bar()}  ${tone.dim(detail)}`, `${bar()}  ${tone.cyan(`${enabled()} / ${total} 项启用 · 仅本次生效`)}`, bar(),
+      `${bar()}  ${tone.dim('↑↓ 移动 · 空格 开关 · → 展开 · ← 收起 / 返回概览')}`, `${tone.gray('└')}  ${tone.dim('回车 继续 · Ctrl+C 退出')}`];
+  };
+  return new Promise((done, fail) => {
+    const finish = error => {
+      input.off('keypress', on_key);
+      input.setRawMode(false);
+      input.pause();
+      const summary = groups.map((group, index) => `${group.label}：${group.items.filter((_, item) => checked[index][item]).map(item => item.label).join('、') || '不安装'}`);
+      draw(error ? [`${tone.red('■')}  ${message}`, `${bar()}  ${tone.dim('已取消')}`]
+        : [`${tone.green('◇')}  ${message}`, ...summary.map(line => `${bar()}  ${tone.dim(line)}`), bar()]);
+      output.write('\x1b[?25h');
+      if (error) fail(error); else done(checked);
+    };
+    const on_key = (_text, key = {}) => {
+      if (key.ctrl && key.name === 'c') return finish(new Error('已取消安装配置'));
+      if (key.name === 'return' || key.name === 'enter') return finish();
+      if (!editing) {
+        if (key.name === 'right') editing = true;
+        return draw(editing ? editor() : overview());
+      }
+      const list = rows(), row = list[cursor];
+      if (key.name === 'up' || key.name === 'down') cursor = (cursor + (key.name === 'down' ? 1 : list.length - 1)) % list.length;
+      else if (key.name === 'space') {
+        if (row.item === undefined) checked[row.group].fill(!checked[row.group].every(Boolean));
+        else checked[row.group][row.item] = !checked[row.group][row.item];
+      } else if (key.name === 'right') expanded.add(row.group);
+      else if (key.name === 'left') {
+        if (row.item === undefined && !expanded.has(row.group)) editing = false;
+        else { expanded.delete(row.group); cursor = rows().findIndex(item => item.group === row.group && item.item === undefined); }
+      }
+      draw(editing ? editor() : overview());
+    };
+    emitKeypressEvents(input);
+    input.setRawMode(true);
+    input.resume();
+    input.on('keypress', on_key);
+    output.write('\x1b[?25l');
+    draw(overview());
+  });
+}
+
 /** Close the gutter with a titled block of aligned rows, notes and a final line. */
 export function outro(title, rows, notes, closing, mark = tone.green('◆')) {
   const width = Math.max(0, ...rows.map(([label]) => text_width(label)));
