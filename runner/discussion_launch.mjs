@@ -18,12 +18,12 @@ import { adapter_of, adoption_adapter, BRANCHABLE_ADAPTERS, branch_session, exec
 import { ADAPTER_IDS, ADAPTER_PROFILES, adapter_profile, DEFAULT_API_MAX_REQUESTS, MAX_API_MAX_REQUESTS, platform_adapters, same_session_family } from './adapters/profiles.mjs';
 import { API_PROVIDERS, api_check, api_models, save_api_key, saved_api_keys, validate_api_profile } from './discussion_api.mjs';
 import { DEFAULT_SCHEDULER_MODE, SCHEDULER_MODES, SCHEDULER_PROVIDERS, scheduler_check } from './scheduler.mjs';
-import { save_tts_settings, tts_settings, tts_speak } from './tts.mjs';
+import { save_tts_settings, tts_release, tts_settings, tts_speak } from './tts.mjs';
 import { stt_part } from './stt.mjs';
 import { access_levels, BUILTIN_EXPERT_PRESETS, MAX_EXPERT_PROMPT, PROJECT_ACCESS } from './expert_prompts.mjs';
 import { acquire_lock, api, check_extra_directories, DiscussionStore, service_drafts, validate_config } from './discussion_runner.mjs';
 import { FreeRoomRunner, free_task_files } from './free_runner.mjs';
-import { bind_room_workflow, delete_workflow, get_workflow, list_workflows, load_room_workflow, parse_workflow_draft, preview_workflow, save_workflow, workflow_directory, WORKFLOW_ID_PATTERN } from './workflows.mjs';
+import { assert_workflow_enabled, bind_room_workflow, delete_workflow, get_workflow, list_workflows, load_room_workflow, parse_workflow_draft, preview_workflow, rename_workflow, save_workflow, set_workflow_disabled, workflow_directory, WORKFLOW_ID_PATTERN } from './workflows.mjs';
 import { assert_shared_home, CONNECTION_FIELDS, configuration_snapshot, read_registry, registered_identity, register_room, service_home, service_pid, start_service } from './discussion_service.mjs';
 
 // A platform is a type; `Claude-review` is another Claude instance with its own session, model and effort. An ID is
@@ -66,6 +66,7 @@ const HELP = `用法：codiscuss launch settings [--file FILE]
       codiscuss launch scheduler-check --file FILE
       codiscuss launch tts-settings [--file FILE]
       codiscuss launch tts --file FILE
+      codiscuss launch tts-release
       codiscuss launch stt --file FILE
       codiscuss launch room-member --file FILE
       codiscuss launch room-member-access --file FILE
@@ -98,8 +99,9 @@ models 按 adapter、executable 或 API profile 读取模型目录，不启动�
 api-key 将 base_url、api_key 保存于本机私有目录，只返回 api_key_ref。
 api-check 用 API profile 向模型发送一次极短请求，核对地址、密钥、协议与模型是否可用。
 scheduler-check 用智能调度配置（provider、model、api_key_ref）向决策模型发送一道是非题，核对供应商、模型与密钥是否可用。
-tts-settings 读取朗读设置；内容非空时保存（语音服务 provider：volcengine / aliyun / azure，语速 speech_rate、语气提示 context，以及 providers.<服务> 的 api_key_ref、speaker、member_voices、file_voice，Azure 另有 region）。
-tts 用朗读设置把 text（不超过 300 字）合成为 MP3，返回 base64。
+tts-settings 读取朗读设置；内容非空时保存（语音服务 provider：volcengine / aliyun / azure / local（本机，由 local-tts-setup 技能安装），语速 speech_rate、语气提示 context，以及 providers.<服务> 的 api_key_ref、speaker、member_voices、file_voice，Azure 另有 region）。
+tts 用朗读设置把 text（不超过 300 字）合成为音频（本机服务为 m4a，其余为 MP3），返回 base64。
+tts-release 用户停止朗读：所选服务释放在这台电脑上占用的资源（本机语音在 5 秒内结束、释放显存），云端服务无操作。
 stt 按序接收录音片段（upload_id、index、base64 PCM 16 kHz 单声道、final）；最后一段时识别整段录音并返回 text。
 pick-directory 在本机弹出系统目录选择窗口，返回所选路径；取消时不返回路径。
 browse-directory 列出常用项目及其中的子文件夹（只含文件夹名，分页），供其他设备选择目录；path 为空时列出常用项目。
@@ -699,7 +701,7 @@ function free_launch_config(home, input, room, directory, options) {
   const members = launch_members(input, names, options);
   // A workflow chosen at creation is written with the members, so the first wake already carries it.
   const workflow = input.workflow ? bind_room_workflow({}, { ...input.workflow, enabled: true }).workflow : undefined;
-  if (workflow) get_workflow(home, workflow.id);
+  if (workflow) { get_workflow(home, workflow.id); assert_workflow_enabled(home, workflow.id); }
   if (workflow && Object.values(workflow.members).some(name => !names.includes(name))) throw new Error('工作流成员须在本次邀请的成员中');
   return validate_config({ site: input.site, room: room.id || 'preview', token: options.token, mode: 'free', participants, members, api_home: home,
     scheduler: input.scheduler || undefined, cwd: input.cwd, extra_directories: input.extra_directories, project_access: input.project_access || undefined, workflow,
@@ -1539,18 +1541,20 @@ async function perform_launch(home, context, options) {
   } catch (error) { error.launch = progress; throw error; }
 }
 
-/** The workflow library: list, read, save, delete, preview an import, or read a room's member cards. */
+/** The workflow library: list, read, save, rename, disable or enable, delete, preview an import, or read a room's member cards. */
 export function workflows_command(home, input = {}) {
   const action = input.action || 'list';
   if (action === 'list') return { workflows: list_workflows(home) };
   if (action === 'get') return get_workflow(home, input.id);
   if (action === 'save') return save_workflow(home, input.workflow, validate_preset);
   if (action === 'delete') return delete_workflow(home, input.id);
+  if (action === 'rename') return rename_workflow(home, input.id, input.label);
+  if (action === 'disable' || action === 'enable') return set_workflow_disabled(home, input.id, action === 'disable');
   if (action === 'preview') {
     return preview_workflow(input, validate_preset, name => card_platform_ready(home, name));
   }
   if (action === 'room-cards') return room_cards(home, input);
-  throw new Error('action 须为 list、get、save、delete、preview 或 room-cards');
+  throw new Error('action 须为 list、get、save、rename、disable、enable、delete、preview 或 room-cards');
 }
 
 /** Cards made from a registered room's members as configured here, prompts verbatim; no credential or path is returned. */
@@ -1595,6 +1599,7 @@ export async function room_workflow(home, raw) {
     }
     if (input.action === 'enable') {
       get_workflow(home, input.workflow?.id);
+      assert_workflow_enabled(home, input.workflow.id);
       const next = bind_room_workflow(config, { ...input.workflow, enabled: true });
       validate_config({ ...next, api_home: home }, dirname(path));
       atomic_json(path, next);
@@ -1907,6 +1912,7 @@ export async function adopt_workflow(home, { access_file, draft_file, workflow_i
     if (bound !== draft.id && list_workflows(home).some(item => item.id === draft.id)) throw new Error(`工作流库已有 ${draft.id}，主持人不能覆盖其他工作流；要启用它请用 --id ${draft.id}，新建请换一个 ID`);
     workflow = draft;
   }
+  assert_workflow_enabled(home, workflow.id);
   const missing = workflow.agents.filter(agent => !card_platform_ready(home, agent.name)).map(agent => agent.name || agent.card);
   if (missing.length) {
     const ready = [...new Set([...Object.keys(launch_settings(home).participants), ...Object.keys(API_PROVIDERS).filter(platform => card_api_profile(home, platform))])];
@@ -2010,6 +2016,7 @@ export async function launch_main(args = process.argv.slice(2), input_text) {
   else if (positionals[0] === 'scheduler-check' && input) result = await scheduler_check(home, input);
   else if (positionals[0] === 'tts-settings') result = input && Object.keys(input).length ? save_tts_settings(home, input) : tts_settings(home);
   else if (positionals[0] === 'tts' && input) result = await tts_speak(home, input);
+  else if (positionals[0] === 'tts-release') result = tts_release(home);
   else if (positionals[0] === 'stt' && input) result = await stt_part(home, input);
   else if (positionals[0] === 'room-models' && input) result = await room_models(home, input);
   else if (positionals[0] === 'room-files' && input) result = await room_files(home, input);

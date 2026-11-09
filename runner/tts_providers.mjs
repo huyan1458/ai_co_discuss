@@ -2,9 +2,16 @@
  * Read-aloud providers: what each speech service offers (voices, key root, console) and how one paragraph is
  * synthesized there. Every provider answers the same shape, `{ audio: base64 MP3, format: "mp3", marks: [{ w, t }] }`;
  * `marks` holds per-character start times in ms when the service gives them, otherwise it is empty and the page spreads
- * the highlight by length.
+ * the highlight by length. The local service answers AAC in MP4 (`format: "m4a"`) instead, as its bundled converter
+ * cannot write MP3.
  */
+import { execFile, spawn } from 'node:child_process';
 import { randomUUID } from 'node:crypto';
+import { existsSync, mkdtempSync, readFileSync, rmSync, statSync, utimesSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
+import { fileURLToPath } from 'node:url';
+import { promisify } from 'node:util';
 
 const TTS_TIMEOUT_MS = 45_000;
 const VOLC_ENDPOINT = 'https://openspeech.bytedance.com/api/v3/tts/unidirectional';
@@ -25,6 +32,28 @@ const SAMPLE_RATE = 24000;
 const SILENT_FRAME = Buffer.concat([Buffer.from([0xff, 0xf3, 0x44, 0xc0]), Buffer.alloc(92)]);
 const SILENT_FRAME_MS = 24;
 const AZURE_FORMAT = 'audio-24khz-48kbitrate-mono-mp3';
+// Local speech: yovoice serving Qwen3-TTS CustomVoice on this computer, installed by the local-tts-setup skill into
+// `<service home>/yovoice` (CLI in `cli/`, engine and model in `data/`). The runner starts it through a supervisor
+// (`tts_local_service.mjs`) and renews its lease on every request; a minute without one, or the user stopping reading, stops it, so the model does
+// not hold graphics memory between readings, even when the runner has crashed.
+const LOCAL_HOST = '127.0.0.1:18765';
+const LOCAL_URL = `http://${LOCAL_HOST}`;
+const LOCAL_MODEL = 'qwen3-tts-customvoice-q8';
+const LOCAL_DIR = 'yovoice';
+const LOCAL_START_MS = 30_000;
+const LOCAL_POLL_MS = 500;
+const LOCAL_CONVERT_MS = 30_000;
+// 64 kbps AAC (8 KB/s, as the MP3 services) keeps a 300-character answer under the 1 MiB relay limit.
+const LOCAL_BIT_RATE = '64k';
+const LOCAL_EXE = process.platform === 'win32' ? '.exe' : '';
+const run_file = promisify(execFile);
+const LOCAL_SUPERVISOR = fileURLToPath(new URL('./tts_local_service.mjs', import.meta.url));
+// While another page request is generating, ask again this often.
+const LOCAL_BUSY_MS = 300;
+// A released lease is dated 1970; anything before this is one.
+const RELEASED_BEFORE_MS = 1000;
+// The engine runs one generation at a time and answers 409 to any other, so requests wait their turn here.
+let local_queue = Promise.resolve();
 
 const VOLC_VOICES = [
   ['zh_female_vv_uranus_bigtts', 'Vivi · 通用女声'], ['zh_female_xiaohe_uranus_bigtts', '小何 · 通用女声'],
@@ -57,12 +86,19 @@ const AZURE_VOICES = [
   ['zh-CN-YunjianNeural', '云健 · 男声'], ['zh-CN-YunyangNeural', '云扬 · 新闻男声'], ['zh-CN-YunfengNeural', '云枫 · 男声'],
   ['zh-CN-YunzeNeural', '云泽 · 男声'],
 ];
+// Qwen3-TTS CustomVoice's built-in speakers; all of them read Chinese, the last four with their own accent.
+const LOCAL_VOICES = [
+  ['Vivian', 'Vivian · 明亮女声'], ['Serena', 'Serena · 温柔女声'], ['Uncle_Fu', 'Uncle Fu · 低沉男声'],
+  ['Dylan', 'Dylan · 北京青年男声'], ['Eric', 'Eric · 成都男声'], ['Ryan', 'Ryan · 英语男声'], ['Aiden', 'Aiden · 美式男声'],
+  ['Ono_Anna', 'Ono Anna · 日语女声'], ['Sohee', 'Sohee · 韩语女声'],
+];
 const voices = (list) => list.map(([id, label]) => ({ id, label }));
 
 /**
  * The speech services the page can choose between. `key_base_url` is the root a saved key is bound to; `context` says
  * whether the tone instruction applies; `region` says whether the service also needs a region; `voice_input` marks the
- * one whose key also serves voice input.
+ * one whose key also serves voice input; `rate: false` marks one that ignores the speech rate; `local` marks the service
+ * on this computer, whose token the setup skill saves, so the page asks for no key.
  */
 export const TTS_PROVIDERS = [
   { id: 'volcengine', label: '火山引擎', key_base_url: 'https://openspeech.bytedance.com', console_url: 'https://console.volcengine.com/speech/new',
@@ -74,6 +110,9 @@ export const TTS_PROVIDERS = [
   { id: 'azure', label: 'Azure', key_base_url: 'https://tts.speech.microsoft.com', console_url: 'https://portal.azure.com/#create/Microsoft.CognitiveServicesSpeechServices',
     note: '每月免费约 25 万字，超出约 2 元/万字', voices: voices(AZURE_VOICES),
     default_speaker: 'zh-CN-XiaoxiaoNeural', context: false, region: true, voice_input: false },
+  { id: 'local', label: '本机', key_base_url: LOCAL_URL, console_url: 'https://github.com/leemysw/yovoice',
+    note: '本机显卡运行 Qwen3-TTS，不计费；用 local-tts-setup 技能安装', voices: voices(LOCAL_VOICES),
+    default_speaker: 'Vivian', context: true, region: false, voice_input: false, rate: false, local: true },
 ];
 
 /** Trailing silence as silent MP3 frames matching Aliyun's and Azure's output. */
@@ -194,16 +233,130 @@ async function azure_speak({ key, region, text, speaker, rate, silence }, reques
   return { audio: Buffer.concat([audio, silence_frames(silence)]).toString('base64'), format: 'mp3', marks: [] };
 }
 
+/** Append trailing silence to a PCM WAV by extending its last (data) chunk with zeroed samples. */
+export function wav_with_silence(wav, silence_ms) {
+  if (!silence_ms) return wav;
+  let offset = 12;
+  while (wav.toString('latin1', offset, offset + 4) !== 'data') offset += 8 + wav.readUInt32LE(offset + 4);
+  const block = wav.readUInt16LE(32);
+  const silence = Buffer.alloc(Math.round(wav.readUInt32LE(28) * silence_ms / 1000 / block) * block);
+  const result = Buffer.concat([wav, silence]);
+  result.writeUInt32LE(result.length - 8, 4);
+  result.writeUInt32LE(result.length - offset - 8, offset + 4);
+  return result;
+}
+
+/** Ask the local service for one paragraph; the answer is a 24 kHz mono WAV. */
+function local_generate({ key, text, speaker, context }, request) {
+  return request(`${LOCAL_URL}/v1/generate`, { method: 'POST', redirect: 'error', signal: AbortSignal.timeout(TTS_TIMEOUT_MS),
+    headers: { Authorization: `Bearer ${key}`, 'Content-Type': 'application/json' },
+    body: JSON.stringify({ text, modelId: LOCAL_MODEL, speaker, language: 'zh', ...(context ? { voiceDescription: context } : {}) }) });
+}
+
+/**
+ * Renew the local service's lease; its supervisor stops the service once the lease is a minute old. A renewal when a
+ * request ends keeps a release that came meanwhile (the user stopped reading), so the release still stops the service.
+ */
+function local_renew(home, { keep_release = false } = {}) {
+  const lease = join(home, LOCAL_DIR, 'lease');
+  try {
+    if (keep_release && statSync(lease).mtimeMs < RELEASED_BEFORE_MS) return;
+    writeFileSync(lease, '');
+  } catch { /* Not installed: the request reports it. */ }
+}
+
+/** Reading stopped: date the lease back to 1970, so the supervisor stops the service at its next check (within 5 s). */
+function local_release(home) {
+  try { utimesSync(join(home, LOCAL_DIR, 'lease'), 0, 0); } catch { /* Not running or not installed. */ }
+}
+
+/** Start the installed service under its supervisor, detached so it outlives this process, and wait until it answers. */
+async function local_start(home, key, request) {
+  const directory = join(home, LOCAL_DIR);
+  const executable = join(directory, 'cli', `yovoice${LOCAL_EXE}`);
+  if (!existsSync(executable)) throw new Error('本机语音尚未安装：请让本机 AI 按 local-tts-setup 技能安装');
+  local_renew(home);
+  spawn(process.execPath, [LOCAL_SUPERVISOR, executable, directory, LOCAL_HOST],
+    { detached: true, windowsHide: true, stdio: 'ignore', env: { ...process.env, YOVOICE_API_TOKEN: key } }).unref();
+  for (const deadline = Date.now() + LOCAL_START_MS; Date.now() < deadline;) {
+    await new Promise(resolve => setTimeout(resolve, LOCAL_POLL_MS));
+    try { if ((await request(`${LOCAL_URL}/v1/status`, { headers: { Authorization: `Bearer ${key}` } })).ok) return; } catch { /* Still starting. */ }
+  }
+  throw new Error(`本机语音服务启动超时，请查看 ${join(directory, 'serve.log')}`);
+}
+
+/** Convert the WAV to 64 kbps AAC with the converter yovoice ships, which reads and writes files only. */
+async function local_convert(home, wav) {
+  const work = mkdtempSync(join(tmpdir(), 'codiscuss-tts-'));
+  try {
+    writeFileSync(join(work, 'in.wav'), wav);
+    await run_file(join(home, LOCAL_DIR, 'cli', 'tools', `ffmpeg${LOCAL_EXE}`), ['-hide_banner', '-loglevel', 'error', '-i', join(work, 'in.wav'),
+      '-c:a', 'aac', '-b:a', LOCAL_BIT_RATE, '-f', 'ipod', join(work, 'out.m4a')], { windowsHide: true, timeout: LOCAL_CONVERT_MS })
+      .catch(() => { throw new Error('本机语音转码失败：请重新运行 local-tts-setup 技能修复安装'); });
+    return readFileSync(join(work, 'out.m4a'));
+  } finally { rmSync(work, { recursive: true, force: true }); }
+}
+
+/**
+ * One paragraph on the local service, starting it first when nothing listens. The page's requests each run in their own
+ * process, so another may be generating: the engine keeps no queue and answers 409, and this one waits its turn.
+ */
+async function local_once({ home, key, text, speaker, context, silence }, { request, convert, start }) {
+  const deadline = Date.now() + TTS_TIMEOUT_MS;
+  let response, started = false;
+  for (;;) {
+    try { response = await local_generate({ key, text, speaker, context }, request); }
+    catch (error) {
+      if (error.name === 'TimeoutError') throw new Error('本机语音合成超时，请稍后再试');
+      if (started) throw new Error(`本机语音服务已启动但连接失败，请查看 ${join(home, LOCAL_DIR, 'serve.log')}`);
+      await start(home, key, request);
+      started = true;
+      continue;
+    }
+    if (response.status !== 409 || Date.now() > deadline) break;
+    await new Promise(resolve => setTimeout(resolve, LOCAL_BUSY_MS));
+  }
+  if (response.status === 401) throw new Error('本机语音服务拒绝了令牌：请重新运行 local-tts-setup 技能，或结束旧的 yovoice 进程后重试');
+  if (response.status === 409) throw new Error('本机语音一直在忙，请稍后再试');
+  if (!response.ok) {
+    const code = (await response.json().catch(() => ({}))).error?.code;
+    throw new Error(`本机语音合成失败（HTTP ${response.status}${code ? ` ${code}` : ''}），请查看 ${join(home, LOCAL_DIR, 'data', 'logs')}`);
+  }
+  const audio = await convert(home, wav_with_silence(Buffer.from(await response.arrayBuffer()), silence));
+  return { audio: audio.toString('base64'), format: 'm4a', marks: [] };
+}
+
+/** Queue this process's local requests; each renews the lease when it arrives and, unless reading was stopped, when it ends. */
+function local_speak(input, transport) {
+  local_renew(input.home);
+  const result = local_queue.then(() => local_once(input, transport));
+  local_queue = result.catch(() => {}).then(() => local_renew(input.home, { keep_release: true }));
+  return result;
+}
+
 const SPEAKERS = { volcengine: volc_speak, aliyun: aliyun_speak, azure: azure_speak };
 
 /**
  * Synthesize one paragraph with one provider.
  * @param {string} provider One of TTS_PROVIDERS' ids.
- * @param {{ key: string, text: string, speaker: string, rate: number, context?: string, silence: number, section_id?: string, region?: string }} input
- *   `rate` is -50..100 (percent faster), `silence` the trailing silence in ms.
- * @param {{ request?: Function, open?: Function }} [transport] `fetch` and WebSocket factory, replaceable in tests.
+ * @param {{ key: string, text: string, speaker: string, rate: number, context?: string, silence: number, section_id?: string, region?: string, home?: string }} input
+ *   `rate` is -50..100 (percent faster), `silence` the trailing silence in ms; `home` (the service home) locates the local service.
+ * @param {{ request?: Function, open?: Function, convert?: Function, start?: Function }} [transport] `fetch`, WebSocket factory and
+ *   the local service's converter and starter, replaceable in tests.
  * @returns {Promise<{ audio: string, format: string, marks: { w: string, t: number }[] }>}
  */
-export function provider_speak(provider, input, { request = fetch, open = (url, init) => new WebSocket(url, init) } = {}) {
+export function provider_speak(provider, input, { request = fetch, open = (url, init) => new WebSocket(url, init), convert = local_convert,
+  start = local_start } = {}) {
+  if (provider === 'local') return local_speak(input, { request, convert, start });
   return SPEAKERS[provider](input, provider === 'aliyun' ? open : request);
+}
+
+/**
+ * The user stopped reading: a service that runs on this computer frees its resources now instead of after its lease;
+ * the cloud services hold nothing between requests.
+ * @param {string} provider One of TTS_PROVIDERS' ids.
+ * @param {string} home The service home.
+ */
+export function provider_release(provider, home) {
+  if (provider === 'local') local_release(home);
 }

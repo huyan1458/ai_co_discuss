@@ -18,11 +18,29 @@ const MAX_SENTENCE = 120;
 // the message is reached, so the same text always makes the same requests and a replay is served from the cache.
 const MAX_CHUNK = 200;
 const FIRST_CHUNK = 80;
-// What follows is requested only once the audio already requested would run out within this many seconds (a relayed
-// request takes 6–9 s on the computer alone, plus ~400 KB to the phone), so a stop leaves little synthesized and billed but never heard. Durations not yet known are
-// estimated at the measured ~4.7 readable characters per second.
-const LEAD_SECONDS = 30;
+// Read-ahead: what follows is requested once the audio already requested would run out within `lead.seconds`. It adapts
+// to how fast this device gets audio: a wait the listener hears mid-reading raises it at once (twice the wait plus 5 s),
+// and a request answered while none other was pending sets a floor of three times its time (a relayed request takes
+// 6–9 s on the computer alone, plus ~400 KB to a phone; the local model 1–7 s). Above that floor it eases back a tenth per
+// request, so a stop leaves little synthesized (and billed) but never heard. Kept per device, as the network is.
+// Durations not yet known are estimated from the pace of speech: at first the measured ~4.7 readable characters per
+// second, then learned from each request played (a voice, the speech rate or another service changes it); requests too
+// short to say much about the pace are left out, and the learned pace stays within PACE_MIN..PACE_MAX.
+const LEAD_START = 30;
+const LEAD_MIN = 15;
+const LEAD_MAX = 120;
+const LEAD_WAIT_FACTOR = 2;
+const LEAD_WAIT_EXTRA = 5;
+const LEAD_REQUEST_FACTOR = 3;
+const LEAD_EASE = 0.1;
+// Awaiting audio that is already there takes no time; a longer await is a wait the listener hears.
+const HEARD_WAIT_SECONDS = 0.3;
+const LEAD_KEY = "codiscuss.read_lead";
 const CHARS_PER_SECOND = 4.7;
+const PACE_MIN = 2;
+const PACE_MAX = 12;
+const PACE_MIN_CHARS = 20;
+const PACE_EASE = 0.3;
 // Silence added between paragraphs and between messages, on top of the service's own pauses.
 const PARAGRAPH_GAP_MS = 350;
 const MESSAGE_GAP_MS = 700;
@@ -50,6 +68,40 @@ const DOCUMENT_ID = -2;
 // Readers on this page (the transcript's and a file preview's) share the speakers: one plays at a time, and a broadcast
 // waits while another reader is reading on request.
 const readers = new Set();
+
+/** The read-ahead this device learned before; storage may be unavailable (private windows), then it starts afresh. */
+function stored_lead() {
+  try {
+    const seconds = Number(localStorage.getItem(LEAD_KEY));
+    return seconds >= LEAD_MIN && seconds <= LEAD_MAX ? seconds : LEAD_START;
+  } catch { return LEAD_START; }
+}
+// Shared by the page's readers: the device and its network are the same for all of them.
+const lead = { seconds: stored_lead(), requests: 0 };
+
+function set_lead(seconds) {
+  lead.seconds = Math.min(LEAD_MAX, Math.max(LEAD_MIN, seconds));
+  try { localStorage.setItem(LEAD_KEY, String(Math.round(lead.seconds))); } catch { /* Kept for this page only. */ }
+}
+
+// Readable characters per second of speech, shared by the page's readers.
+const pace = { chars_per_second: CHARS_PER_SECOND };
+
+/** A request of `chars` readable characters played for `seconds` (its trailing silence left out): move the pace toward it. */
+function learn_pace(chars, seconds) {
+  if (chars < PACE_MIN_CHARS || !(seconds > 0)) return;
+  const measured = Math.min(PACE_MAX, Math.max(PACE_MIN, chars / seconds));
+  pace.chars_per_second += (measured - pace.chars_per_second) * PACE_EASE;
+}
+
+/** The listener waited `seconds` for audio in the middle of a reading: read further ahead from now on. */
+const lead_after_wait = (seconds) => set_lead(lead.seconds + seconds * LEAD_WAIT_FACTOR + LEAD_WAIT_EXTRA);
+
+/** A request answered while no other was pending took `seconds`: never less than three times that, otherwise ease back. */
+function lead_after_request(seconds) {
+  const floor = seconds * LEAD_REQUEST_FACTOR;
+  set_lead(lead.seconds < floor ? floor : lead.seconds - (lead.seconds - floor) * LEAD_EASE);
+}
 
 /** The position just past the first `count` readable characters, so text shown before the reading start is skipped. */
 function skip_readable(text, count) {
@@ -142,7 +194,7 @@ function selection_index({ points }, selection) {
  * @param {(name: string) => Promise<string>} options.voice_for Voice for a member, or "" for the default voice.
  * @param {() => string} options.title Room title shown on the lock screen.
  * @param {string} [options.hosts] Selector of the elements the highlight is drawn in (positioned, isolated).
- * @returns {{ state: object, start: Function, read_document: Function, stop: Function, dispose: Function, follow: Function, toggle_pause: Function, body_of: Function, unlock: Function, set_broadcast: Function, announce: Function }}
+ * @returns {{ state: object, start: Function, read_document: Function, stop: Function, halt: Function, dispose: Function, follow: Function, toggle_pause: Function, body_of: Function, unlock: Function, set_broadcast: Function, announce: Function }}
  */
 export function use_read_aloud({ bridge, container, prepare = async () => {}, message_of = () => null, voice_for, title, hosts = ".channel-answer, .channel-answer-summary" }) {
   // `reading`: a reading on request is running (not a broadcast). `following`: the transcript scrolls with the sentence
@@ -150,8 +202,13 @@ export function use_read_aloud({ bridge, container, prepare = async () => {}, me
   const state = reactive({ message_id: 0, loading: false, paused: false, broadcasting: false, reading: false, following: false });
   let run = 0, element = null, ending = null, switching = false, layer = null, current = null, silent_url = "";
   let queue = [], draining = false, broadcast_section = "", document_plan = null;
+  // Whether this reading (or broadcast item) has played anything yet: only later waits are ones the listener hears.
+  let heard = false;
   // Synthesized paragraphs already heard in this page, so replaying is instant even over the relay.
   const memory = new Map();
+  // Requests not yet sent, in the order asked, and the one on its way (see `send_next`).
+  const waiting = [];
+  let on_way = null;
   const author = (id) => message_of(id)?.author || "";
 
   const body_of = (id) => container()?.querySelector(`.channel-message[data-message-id="${id}"] .channel-answer > .channel-message-text`) || null;
@@ -263,7 +320,7 @@ export function use_read_aloud({ bridge, container, prepare = async () => {}, me
     const session = navigator.mediaSession;
     session.setActionHandler("play", () => { if (state.paused) toggle_pause(); });
     session.setActionHandler("pause", () => { if (!state.paused) toggle_pause(); });
-    session.setActionHandler("stop", () => { set_broadcast(false); stop(); });
+    session.setActionHandler("stop", () => { set_broadcast(false); stop_reading(); });
     session.setActionHandler("nexttrack", () => {
       if (queue.length || state.broadcasting) return stop();
       const next = next_message(state.message_id);
@@ -352,10 +409,12 @@ export function use_read_aloud({ bridge, container, prepare = async () => {}, me
   function synthesize(chunk, section_id, speaker) {
     const key = JSON.stringify([chunk.text, speaker, chunk.silence]);
     if (!memory.has(key)) {
-      const pending = request_tts({ text: chunk.text, section_id, speaker: speaker || undefined, silence_ms: chunk.silence })
-        .then(({ audio, marks }) => ({ url: URL.createObjectURL(new Blob([Uint8Array.from(atob(audio), (character) => character.charCodeAt(0))], { type: "audio/mpeg" })), marks: marks || [] }));
-      pending.catch(() => memory.delete(key));
+      const pending = new Promise((resolve, reject) => {
+        waiting.push({ key, run, resolve, reject, send: () => request_tts({ text: chunk.text, section_id, speaker: speaker || undefined, silence_ms: chunk.silence }) });
+      }).then(({ audio, format, marks }) => ({ url: URL.createObjectURL(new Blob([Uint8Array.from(atob(audio), (character) => character.charCodeAt(0))], { type: format === "m4a" ? "audio/mp4" : "audio/mpeg" })), marks: marks || [] }));
+      pending.catch(() => { if (memory.get(key) === pending) memory.delete(key); });
       memory.set(key, pending);
+      send_next();
       if (memory.size > MEMORY_LIMIT) {
         const [oldest] = memory.keys();
         memory.get(oldest).then(({ url }) => URL.revokeObjectURL(url), () => {});
@@ -366,17 +425,53 @@ export function use_read_aloud({ bridge, container, prepare = async () => {}, me
   }
 
   /**
+   * Send the next waiting request once none of this reader's is on its way. One at a time, in the order asked: the
+   * paragraph needed next always comes first (several sent at once could finish out of order, and a local model that
+   * generates one at a time would serve whichever came first), a stop leaves at most one synthesized but unheard, and each
+   * request's time is its own, which is what the read-ahead learns from. A paragraph takes 1–9 s to get and plays about
+   * 40 s, so one at a time keeps up. One still on its way for a reading that has stopped does not hold up the new one.
+   */
+  function send_next() {
+    if (!waiting.length || on_way?.run === run) return;
+    const job = on_way = waiting.shift();
+    // Another reader's request on its way would share the connection; only a request alone measures this device's speed.
+    const alone = lead.requests === 0, started = performance.now();
+    lead.requests += 1;
+    job.send().then((result) => {
+      if (alone) lead_after_request((performance.now() - started) / 1000);
+      job.resolve(result);
+    }, job.reject).finally(() => {
+      lead.requests -= 1;
+      if (on_way === job) on_way = null;
+      send_next();
+    });
+  }
+
+  /** Drop the requests not yet sent: the reading they were for has stopped. A later reading asks for them afresh. */
+  function drop_waiting() {
+    for (const job of waiting.splice(0)) {
+      memory.delete(job.key);
+      job.reject(new Error("朗读已停止"));
+    }
+  }
+
+  /**
    * Play one request, moving the highlight as the audio clock (which stops while paused) passes each sentence.
    * `on_progress` gets the seconds left of it; `timeupdate` also fires with the screen locked, unlike animation frames.
    */
   function play(chunk, { url, marks }, on_progress) {
     return new Promise((resolve, reject) => {
       const audio = player();
-      let frame = 0, shown = -1, starts = null;
+      let frame = 0, shown = -1, starts = null, learned = false;
       const done = (error) => {
         cancelAnimationFrame(frame); ending = null; audio.onended = audio.onerror = audio.ontimeupdate = null; error ? reject(error) : resolve();
       };
-      audio.ontimeupdate = () => { if (Number.isFinite(audio.duration)) on_progress(audio.duration - audio.currentTime); };
+      // `timeupdate` also fires with the screen locked, so the pace is learned there rather than in the highlight loop.
+      audio.ontimeupdate = () => {
+        if (!Number.isFinite(audio.duration)) return;
+        if (!learned) { learned = true; learn_pace(readable_length(chunk.text), audio.duration - chunk.silence / 1000); }
+        on_progress(audio.duration - audio.currentTime);
+      };
       ending = () => done();
       const follow = () => {
         starts ||= Number.isFinite(audio.duration) ? sentence_starts(chunk, marks, audio.duration * 1000 - chunk.silence) : null;
@@ -441,10 +536,10 @@ export function use_read_aloud({ bridge, container, prepare = async () => {}, me
   }
 
   /** Estimated seconds of speech in one request. */
-  const seconds_of = (chunk) => readable_length(chunk.text) / CHARS_PER_SECOND;
+  const seconds_of = (chunk) => readable_length(chunk.text) / pace.chars_per_second;
 
   /** Start requests from `index` on until they hold about `seconds` of speech. */
-  function fetch_lead(plan, index, section_id, seconds = LEAD_SECONDS) {
+  function fetch_lead(plan, index, section_id, seconds = lead.seconds) {
     for (let next = index; next < plan.chunks.length && seconds > 0; next += 1) {
       fetch_chunk(plan, next, section_id);
       seconds -= seconds_of(plan.chunks[next]);
@@ -453,21 +548,26 @@ export function use_read_aloud({ bridge, container, prepare = async () => {}, me
 
   /**
    * Play one plan's requests. While one plays, what follows is requested once the audio already requested would run out
-   * within LEAD_SECONDS; past the plan's last request, `on_tail` lets the next item start preparing.
+   * within the read-ahead; past the plan's last request, `on_tail` lets the next item start preparing. A wait for audio
+   * after something was already heard in this reading is one the listener notices, and raises the read-ahead.
    */
   async function read_plan(plan, token, section_id, on_tail) {
     const { chunks } = plan;
     for (let index = 0; index < chunks.length; index += 1) {
       fetch_chunk(plan, index, section_id);
       state.loading = true;
+      const waiting = performance.now();
       const audio = await plan.pending[index];
+      const waited = (performance.now() - waiting) / 1000;
       state.loading = false;
       if (token !== run) return false;
+      if (heard && waited > HEARD_WAIT_SECONDS) lead_after_wait(waited);
+      heard = true;
       await play(chunks[index], audio, (left) => {
         let next = index + 1;
         while (next < chunks.length && plan.pending[next]) left += seconds_of(chunks[next++]);
-        if (left >= LEAD_SECONDS) return;
-        if (next < chunks.length) fetch_lead(plan, next, section_id, LEAD_SECONDS - left);
+        if (left >= lead.seconds) return;
+        if (next < chunks.length) fetch_lead(plan, next, section_id, lead.seconds - left);
         else on_tail();
       });
       if (token !== run) return false;
@@ -478,6 +578,7 @@ export function use_read_aloud({ bridge, container, prepare = async () => {}, me
   /** Stop what is playing; a broadcast goes on with its next queued item unless it was turned off. */
   function stop() {
     run += 1;
+    drop_waiting();
     ending?.();
     if (element) { element.pause(); element.removeAttribute("src"); }
     Object.assign(state, { message_id: 0, loading: false, paused: false, reading: false });
@@ -486,9 +587,19 @@ export function use_read_aloud({ bridge, container, prepare = async () => {}, me
     queueMicrotask(() => readers.forEach((reader) => reader.drain()));
   }
 
+  /**
+   * The user stopped or left reading: stop, and tell this computer reading is over, so a speech model running there
+   * frees its memory now rather than a minute later. Stops inside a reading (starting another, the next item) do not.
+   */
+  function stop_reading() {
+    const playing = Boolean(state.message_id);
+    stop();
+    if (playing && !reading_elsewhere()) bridge.local_request("tts-release", {}).catch(() => {});
+  }
+
   /** Stop any other reader on the page that is playing, so a reading on request is heard alone. */
   function claim() {
-    for (const reader of readers) if (reader !== api && reader.state.message_id) reader.stop();
+    for (const reader of readers) if (reader !== api && reader.state.message_id) reader.halt();
   }
   const reading_elsewhere = () => [...readers].some((reader) => reader !== api && reader.state.reading);
 
@@ -523,6 +634,7 @@ export function use_read_aloud({ bridge, container, prepare = async () => {}, me
     try {
       while (queue.length && token === run && state.broadcasting) {
         const item = queue.shift();
+        heard = false;
         const plan = item.message_id ? await plan_brief(item.message_id) : plan_line(item.text);
         if (!plan || token !== run) continue;
         state.message_id = plan.id;
@@ -545,6 +657,7 @@ export function use_read_aloud({ bridge, container, prepare = async () => {}, me
   async function start(message_id, selection = null) {
     stop();
     const token = run;
+    heard = false;
     // Unlock the element within this click; later paragraphs then play without a gesture, also with the screen locked.
     unlock();
     claim();
@@ -595,6 +708,7 @@ export function use_read_aloud({ bridge, container, prepare = async () => {}, me
   async function read_document(root, { selection = null, skip = 0, heading = "" } = {}) {
     stop();
     const token = run;
+    heard = false;
     unlock();
     claim();
     Object.assign(state, { message_id: DOCUMENT_ID, reading: true, following: false });
@@ -630,12 +744,12 @@ export function use_read_aloud({ bridge, container, prepare = async () => {}, me
 
   /** Stop and leave the page's readers, for a reader whose view goes away. */
   function dispose() {
-    stop();
+    stop_reading();
     readers.delete(api);
     window.removeEventListener("resize", redraw);
   }
 
-  const api = { state, start, read_document, rebind_document, stop, dispose, drain, follow, toggle_pause, body_of, unlock, set_broadcast, announce };
+  const api = { state, start, read_document, rebind_document, stop: stop_reading, halt: stop, dispose, drain, follow, toggle_pause, body_of, unlock, set_broadcast, announce };
   readers.add(api);
   return api;
 }

@@ -6,7 +6,7 @@ import { createHash, randomUUID } from 'node:crypto';
 import { cpSync, existsSync, lstatSync, mkdirSync, readdirSync, readFileSync, renameSync, rmSync, writeFileSync } from 'node:fs';
 import { dirname, join, resolve } from 'node:path';
 import { DatabaseSync } from 'node:sqlite';
-import { compile_flow, flow_dispatch, flow_in_use, normalize_flow } from './workflow_flow.mjs';
+import { flow_in_use, normalize_flow } from './workflow_flow.mjs';
 
 // A workflow ID follows the Agent Skills naming rule: lowercase letters and digits joined by single hyphens.
 export const WORKFLOW_ID_PATTERN = /^(?=.{1,40}$)[a-z0-9]+(?:-[a-z0-9]+)*$/;
@@ -166,13 +166,16 @@ function workflow_from_files(skill_text, cards, resources = {}) {
     agents: Object.entries(cards).map(([card, text]) => card_from_markdown(card, text)), resources: rest, ...(flow ? { flow } : {}) };
 }
 
-/** A checked canvas over the workflow's cards, or null for none; an arrangement the relay cannot follow is refused. */
+/**
+ * A well-formed canvas over the workflow's cards, or null for none. It only illustrates SKILL.md, so any arrangement of
+ * arrows is kept; only a malformed file or a card the workflow lacks is refused.
+ */
 function validate_flow(flow, cards) {
   if (flow === undefined || flow === null) return flow;
   const normalized = normalize_flow(flow);
   if (!flow_in_use(normalized)) return null;
-  const compiled = compile_flow(normalized, cards);
-  if (compiled.errors.length) throw new Error(`流程画布：${compiled.errors.join('；')}`);
+  const unknown = normalized.nodes.filter(node => node.type === 'card' && !cards.includes(node.card)).map(node => node.card);
+  if (unknown.length) throw new Error(`流程画布引用了不存在的卡片：${unknown.join('、')}`);
   return normalized;
 }
 
@@ -346,12 +349,59 @@ export function read_workflow_files(files) {
 
 /** Summaries for the library list; a broken folder is listed with its error instead of hiding it. */
 export function list_workflows(home) {
-  return with_workflow_lock(home, () => readdirSync(workflows_home(home)).filter(name => WORKFLOW_ID_PATTERN.test(name)).sort().map(id => {
-    try {
-      const workflow = read_saved_workflow(home, id);
-      return { id, label: workflow.label || id, description: workflow.description, cards: workflow.agents.length };
-    } catch (error) { return { id, label: id, description: '', cards: 0, error: error.message }; }
-  }));
+  return with_workflow_lock(home, () => {
+    const disabled = disabled_workflows(home);
+    return readdirSync(workflows_home(home)).filter(name => WORKFLOW_ID_PATTERN.test(name)).sort().map(id => {
+      const flag = disabled.includes(id) ? { disabled: true } : {};
+      try {
+        const workflow = read_saved_workflow(home, id);
+        return { id, label: workflow.label || id, description: workflow.description, cards: workflow.agents.length, ...flag };
+      } catch (error) { return { id, label: id, description: '', cards: 0, error: error.message, ...flag }; }
+    });
+  });
+}
+
+// IDs of workflows the user switched off on this computer: kept in the library, but no room may use them. It is this
+// computer's choice, so it lives beside the library and never travels with a workflow folder.
+function disabled_path(home) { return join(home, 'workflows-disabled.json'); }
+
+/** The disabled workflow IDs. */
+function disabled_workflows(home) {
+  try { const list = JSON.parse(readFileSync(disabled_path(home), 'utf8')); return Array.isArray(list) ? list : []; }
+  catch { return []; }
+}
+
+/** Write the disabled IDs (call under the lock). */
+function write_disabled(home, list) {
+  writeFileSync(disabled_path(home), `${JSON.stringify([...new Set(list)].sort())}
+`);
+}
+
+/** Switch a workflow off or back on for every room on this computer. */
+export function set_workflow_disabled(home, id, disabled) {
+  return with_workflow_lock(home, () => {
+    if (!existsSync(workflow_directory(home, id))) throw new Error(`工作流不存在：${id}`);
+    const others = disabled_workflows(home).filter(item => item !== id);
+    write_disabled(home, disabled ? [...others, id] : others);
+    return { id, disabled: Boolean(disabled) };
+  });
+}
+
+/** Refuse a workflow the user disabled, before a room starts using it. */
+export function assert_workflow_enabled(home, id) {
+  if (disabled_workflows(home).includes(id)) throw new Error(`工作流 ${id} 已停用；请先在“工作流”页启用`);
+}
+
+/** Change only a workflow's display name; its cards, canvas and files stay as they are. */
+export function rename_workflow(home, id, label) {
+  const text = String(label || '').trim();
+  if (!text) throw new Error('工作流名称不能为空');
+  if (text.length > MAX_WORKFLOW_LABEL) throw new Error(`工作流显示名最多 ${MAX_WORKFLOW_LABEL} 字`);
+  return with_workflow_lock(home, () => {
+    const workflow = read_saved_workflow(home, id);
+    writeFileSync(join(workflow.directory, 'SKILL.md'), serialize_markdown({ name: id, label: text, description: workflow.description }, workflow.skill));
+    return { id, label: text };
+  });
 }
 
 /** Read a library entry while its caller holds the publication lock. */
@@ -416,6 +466,7 @@ export function delete_workflow(home, id) {
     if (!existsSync(directory)) throw new Error(`工作流不存在：${id}`);
     assert_no_links(directory);
     rmSync(directory, { recursive: true, force: true });
+    if (disabled_workflows(home).includes(id)) write_disabled(home, disabled_workflows(home).filter(item => item !== id));
     return { deleted: id };
   });
 }
@@ -447,7 +498,7 @@ export function parse_workflow_draft(parts) {
     const marker = FILE_LINE.exec(line);
     if (!marker) { current?.push(line); continue; }
     const path = marker[1];
-    if (path !== 'SKILL.md' && !CARD_PATH.test(path)) throw new Error(`草稿只能包含 SKILL.md 和 agents/卡片ID.md：${path}`);
+    if (path !== 'SKILL.md' && path !== FLOW_FILE && !CARD_PATH.test(path)) throw new Error(`草稿只能包含 SKILL.md、${FLOW_FILE} 和 agents/卡片ID.md：${path}`);
     if (files.has(path)) throw new Error(`草稿里 ${path} 出现了两次`);
     current = [];
     files.set(path, current);
@@ -455,8 +506,10 @@ export function parse_workflow_draft(parts) {
   if (!files.size) throw new Error('草稿里没有任何 <!-- workflow-file: 路径 --> 分隔行');
   if (!files.has('SKILL.md')) throw new Error('草稿里缺少 SKILL.md');
   const text = path => files.get(path).join('\n').replace(/\s+$/, '');
-  const cards = Object.fromEntries([...files.keys()].filter(path => path !== 'SKILL.md').map(path => [CARD_PATH.exec(path)[1], text(path)]));
-  const workflow = workflow_from_files(text('SKILL.md'), cards);
+  const cards = Object.fromEntries([...files.keys()].filter(path => CARD_PATH.test(path)).map(path => [CARD_PATH.exec(path)[1], text(path)]));
+  // A draft carries no other files, so it leaves the saved folder's templates and tools alone (no `resources` at all);
+  // its canvas, when it has one, replaces the saved one.
+  const { resources: none, ...workflow } = workflow_from_files(text('SKILL.md'), cards, files.has(FLOW_FILE) ? { [FLOW_FILE]: text(FLOW_FILE) } : {});
   if (workflow.id !== id) throw new Error(`SKILL.md 的 name（${workflow.id}）与分段头的 id（${id}）不一致`);
   return workflow;
 }
@@ -491,15 +544,14 @@ export function load_room_workflow(config) {
   const binding = config.workflow;
   if (!binding?.enabled || !config.api_home) return null;
   try {
+    assert_workflow_enabled(config.api_home, binding.id);
     const workflow = get_workflow(config.api_home, binding.id);
     const { directory } = workflow;
     const cards = Object.fromEntries(workflow.agents.map(agent => [agent.card, agent]));
-    // A canvas whose start has no arrow yet asks for no relay.
-    const flow = workflow.flow ? compile_flow(workflow.flow, Object.keys(cards)) : null;
+    // The canvas is for the user to see; the host works from SKILL.md alone.
     return { id: binding.id, label: workflow.label || binding.id, description: workflow.description || '', directory, skill_path: join(directory, 'SKILL.md'), skill: workflow.skill,
       revision: createHash('sha256').update(workflow.skill).digest('hex').slice(0, REVISION_LENGTH),
-      members: binding.members || {}, cards, commands: workflow.commands,
-      ...(flow && !flow.empty ? { flow } : {}) };
+      members: binding.members || {}, cards, commands: workflow.commands };
   } catch (error) { return { id: binding.id, error: error.message }; }
 }
 
@@ -530,19 +582,7 @@ export function workflow_task_field(workflow, room_members, participants) {
     .map(card => ({ card: card.card, label: card.label || '', description: card.description || '' }));
   // The host reads SKILL.md only when a request fits the description and its revision is one it has not read.
   return { id: workflow.id, label: workflow.label, description: workflow.description || '', revision: workflow.revision || '', members,
-    ...(missing.length ? { missing } : {}), ...(workflow.flow ? { flow: flow_task_field(workflow.flow, members) } : {}) };
-}
-
-/**
- * The relay the canvas asks for, ready for the host to dispatch: the order in words, the CLI flags and the API fields.
- * Cards whose member is away or removed are named instead, since the relay cannot run without them.
- */
-function flow_task_field(compiled, members) {
-  if (compiled.errors.length) return { errors: compiled.errors };
-  const member_of = Object.fromEntries(members.filter(item => item.status === 'active').map(item => [item.card, item.member]));
-  const { missing, order, cli, to, parallel, gates } = flow_dispatch(compiled, member_of);
-  if (missing.length) return { missing_cards: missing };
-  return { order, cli, api: { to, sequential: true, ...(parallel ? { parallel } : {}), ...(gates ? { gates } : {}) } };
+    ...(missing.length ? { missing } : {}) };
 }
 
 /**

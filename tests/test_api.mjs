@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import { spawn } from 'node:child_process';
 import { randomUUID } from 'node:crypto';
-import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from 'node:fs';
 import { createServer } from 'node:http';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -470,6 +470,46 @@ test('read-aloud switches to Aliyun or Azure with their own keys, keeping Volcen
     assert.match(call.init.body, /<voice name="zh-CN-XiaoxiaoNeural"><prosody rate="\+20%">a&#60;b<\/prosody>/);
     assert.deepEqual(Buffer.from(azure_audio.audio, 'base64'), Buffer.from([7]));
     await assert.rejects(tts_speak(home, { text: '再试' }, { request: async () => new Response('', { status: 401 }) }), /Azure 拒绝/);
+  } finally { rmSync(home, { recursive: true, force: true }); }
+});
+
+test('read-aloud on the local service uses the token the setup skill saved and starts the service when nothing listens', async () => {
+  const { save_tts_settings, tts_release, tts_settings, tts_speak } = await import('../runner/tts.mjs');
+  const home = mkdtempSync(join(tmpdir(), 'codiscuss-tts-local-'));
+  try {
+    save_tts_settings(home, { provider: 'local', context: '慢一点' });
+    assert.equal(tts_settings(home).api_key_ref, '', 'not ready before the skill saves a token');
+    await assert.rejects(tts_speak(home, { text: '你好' }), /local-tts-setup/);
+    const token = save_api_key(home, { base_url: 'http://127.0.0.1:18765', api_key: 'local-token' }).api_key_ref;
+    assert.equal(tts_settings(home).api_key_ref, token, 'the saved token is picked up without the page');
+    // A 24 kHz mono 16-bit WAV with two samples; 1 ms of trailing silence adds 24 more.
+    const wav = Buffer.alloc(48);
+    wav.write('RIFF', 0); wav.writeUInt32LE(40, 4); wav.write('WAVEfmt ', 8); wav.writeUInt32LE(16, 16); wav.writeUInt16LE(1, 20);
+    wav.writeUInt16LE(1, 22); wav.writeUInt32LE(24000, 24); wav.writeUInt32LE(48000, 28); wav.writeUInt16LE(2, 32); wav.writeUInt16LE(16, 34);
+    wav.write('data', 36); wav.writeUInt32LE(4, 40);
+    mkdirSync(join(home, 'yovoice'));
+    const lease = join(home, 'yovoice', 'lease');
+    // Nothing listens at first; once started, another page request is still generating (409) before this one gets its turn.
+    let listening = false, busy = 1, body, converted;
+    const request = async (url, init) => {
+      if (!listening) throw new TypeError('fetch failed');
+      if (busy-- > 0) return new Response('{}', { status: 409 });
+      body = JSON.parse(init.body);
+      assert.equal(init.headers.Authorization, 'Bearer local-token');
+      return new Response(wav);
+    };
+    const start = async (start_home, key) => { assert.equal(start_home, home); assert.equal(key, 'local-token'); listening = true; };
+    const convert = async (convert_home, input) => { converted = input; return Buffer.from([9]); };
+    const spoken = await tts_speak(home, { text: '你好', silence_ms: 1 }, { request, start, convert });
+    assert(Date.now() - statSync(lease).mtimeMs < 60_000, 'a request renews the service lease');
+    // Stopping reading dates the lease back, so the supervisor stops the service at its next check.
+    tts_release(home);
+    assert(statSync(lease).mtimeMs < 1000);
+    assert.deepEqual(body, { text: '你好', modelId: 'qwen3-tts-customvoice-q8', speaker: 'Vivian', language: 'zh', voiceDescription: '慢一点' });
+    assert.equal(converted.length, 48 + 48);
+    assert.equal(converted.readUInt32LE(40), 4 + 48, 'the data chunk grows by the silence');
+    assert.equal(converted.readUInt32LE(4), 96 - 8);
+    assert.deepEqual({ ...spoken, audio: Buffer.from(spoken.audio, 'base64') }, { audio: Buffer.from([9]), format: 'm4a', marks: [] });
   } finally { rmSync(home, { recursive: true, force: true }); }
 });
 

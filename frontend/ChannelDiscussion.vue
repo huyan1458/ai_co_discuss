@@ -823,7 +823,7 @@ const workflow_blocked = computed(() => !free_members.value.some((member) => mem
   : !room_models.value?.host_workflows ? "需先在电脑上的“成员与设置 → 协作设置”打开“主持人完整权限”" : "");
 const workflow_options = computed(() => {
   const query = mention_context.value?.query.toLocaleLowerCase() || "";
-  return (view.value.launch.workflows || []).filter((item) => !item.error && `${item.id} ${item.label} ${item.description || ""}`.toLocaleLowerCase().includes(query))
+  return (view.value.launch.workflows || []).filter((item) => !item.error && !item.disabled && `${item.id} ${item.label} ${item.description || ""}`.toLocaleLowerCase().includes(query))
     .map((item) => ({ key: `workflow:${item.id}`, workflow: item, group: "工作流", enabled: room_workflow.value?.id === item.id, disabled: workflow_blocked.value }));
 });
 /**

@@ -248,16 +248,7 @@ function workflow_text(workflow) {
   return `本房间启用了工作流「${workflow.label}」${workflow.description ? `（用途：${workflow.description}）` : ''}。请求与它的用途相符或用户要求按它做时，按下面的工作流说明组织工作；其他请求照常处理。只点名下列在场成员，缺少的角色在回答里说明，不另找成员代替。
 成员：
 ${members.join('\n') || '（无）'}
-${flow_text(workflow.flow)}
 ${workflow.skill}`;
-}
-
-/** The relay the workflow's canvas lays out, for an API host to dispatch with submit_chat as given. */
-function flow_text(flow) {
-  if (!flow) return '';
-  if (flow.errors) return `流程画布排不成接力（${flow.errors.join('；')}），按下面的说明组织，并在回答里提醒用户修改画布。\n`;
-  if (flow.missing_cards) return `流程画布要用的卡片 ${flow.missing_cards.join('、')} 现在没有在场成员，不能照画布派活；在回答里说明缺谁。\n`;
-  return `流程画布排好的接力（照它派活时把下面的字段原样放进 submit_chat，正文写清每一棒做什么）：\n${flow.order.join('\n')}\n字段：${JSON.stringify(flow.api)}\n`;
 }
 
 /** Map the shared skills onto the API environment, which has room tools and, with a project, file tools. */

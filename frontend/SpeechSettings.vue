@@ -1,7 +1,8 @@
 <script setup>
 /**
- * Speech settings kept by the local service: read-aloud uses the chosen service (Volcengine, Aliyun or Azure), each with
- * its own key and voices; voice input always uses the Volcengine key. Keys never come back to the page.
+ * Speech settings kept by the local service: read-aloud uses the chosen service (Volcengine, Aliyun, Azure or the speech
+ * model on this computer), each with its own key and voices; voice input always uses the Volcengine key. Keys never come
+ * back to the page; the local service's token is saved by its setup skill, so it asks for none.
  */
 import { computed, inject, onMounted, reactive, ref } from "vue";
 
@@ -87,8 +88,8 @@ async function preview(platform) {
   busy.value = `preview:${platform}`;
   try {
     const speaker = voice_of(platform);
-    const { audio } = await bridge.local_request("tts", { text: PREVIEW_TEXT, speaker });
-    sample.src = URL.createObjectURL(new Blob([Uint8Array.from(atob(audio), (character) => character.charCodeAt(0))], { type: "audio/mpeg" }));
+    const { audio, format } = await bridge.local_request("tts", { text: PREVIEW_TEXT, speaker });
+    sample.src = URL.createObjectURL(new Blob([Uint8Array.from(atob(audio), (character) => character.charCodeAt(0))], { type: format === "m4a" ? "audio/mp4" : "audio/mpeg" }));
     sample.onended = () => URL.revokeObjectURL(sample.src);
     await sample.play();
   } catch (error) { bridge.notify("error", error.message); }
@@ -112,8 +113,9 @@ async function preview(platform) {
             </div>
             <p class="fine-print speech-note" :title="service.note">{{ service.note }} · <a :href="service.console_url" target="_blank" rel="noopener">控制台</a></p>
             <label class="speech-row"><span>密钥</span>
+              <UInput v-if="service.local" disabled :placeholder="own.api_key_ref ? '已由安装技能配置，无需填写' : '尚未安装：让本机 AI 按 local-tts-setup 技能安装'" aria-label="本机语音令牌" size="sm" class="w-full" />
               <!-- A text field masked by CSS keeps browsers from offering to generate or save a password. -->
-              <UInput v-model="typed_keys[service.id]" type="text" autocomplete="off" spellcheck="false" data-1p-ignore data-lpignore="true" :placeholder="own.api_key_ref ? SAVED_MARK : '粘贴 API Key，只存这台电脑'" :title="own.api_key_ref && !typed_keys[service.id] ? '已保存；本机不回传密钥，输入新 Key 可更换' : undefined" :aria-label="`${service.label} API Key`" size="sm" class="w-full" :loading="busy === `key:${service.id}`" :ui="{ base: visible_keys[service.id] ? '' : 'speech-key-masked', trailing: 'pe-0.5' }" @change="save_key(service)">
+              <UInput v-else v-model="typed_keys[service.id]" type="text" autocomplete="off" spellcheck="false" data-1p-ignore data-lpignore="true" :placeholder="own.api_key_ref ? SAVED_MARK : '粘贴 API Key，只存这台电脑'" :title="own.api_key_ref && !typed_keys[service.id] ? '已保存；本机不回传密钥，输入新 Key 可更换' : undefined" :aria-label="`${service.label} API Key`" size="sm" class="w-full" :loading="busy === `key:${service.id}`" :ui="{ base: visible_keys[service.id] ? '' : 'speech-key-masked', trailing: 'pe-0.5' }" @change="save_key(service)">
                 <template #trailing><UButton :icon="visible_keys[service.id] ? 'i-lucide-eye' : 'i-lucide-eye-off'" :disabled="!typed_keys[service.id]" :aria-label="visible_keys[service.id] ? '隐藏密钥' : '显示密钥'" :aria-pressed="Boolean(visible_keys[service.id])" size="xs" color="neutral" variant="link" @click="visible_keys[service.id] = !visible_keys[service.id]" /></template>
               </UInput>
             </label>
@@ -142,7 +144,7 @@ async function preview(platform) {
             </div>
             <p class="fine-print speech-note">未单独设置的 AI 与其他消息用通用音色</p>
             <div class="speech-row"><span>语速</span>
-              <div class="speech-rates" role="group" aria-label="朗读语速"><UButton v-for="rate in rates" :key="rate.value" :label="rate.label" color="neutral" variant="ghost" size="xs" :class="{ chosen: settings.speech_rate === rate.value }" :aria-pressed="settings.speech_rate === rate.value" @click="settings.speech_rate = rate.value; save()" /></div>
+              <div class="speech-rates" role="group" aria-label="朗读语速" :title="service.rate === false ? '当前接入不支持调节语速' : undefined"><UButton v-for="rate in rates" :key="rate.value" :label="rate.label" color="neutral" variant="ghost" size="xs" :disabled="service.rate === false" :class="{ chosen: settings.speech_rate === rate.value }" :aria-pressed="settings.speech_rate === rate.value" @click="settings.speech_rate = rate.value; save()" /></div>
             </div>
             <label class="speech-row"><span>语气</span>
               <UInput v-if="service.context" v-model="settings.context" :maxlength="200" placeholder="可选，如：像朋友聊天一样自然地读" aria-label="朗读语气提示" size="sm" class="w-full" @change="save" />

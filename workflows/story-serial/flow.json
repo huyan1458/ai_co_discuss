@@ -1,0 +1,132 @@
+{
+  "nodes": [
+    {
+      "id": "start",
+      "type": "start",
+      "x": 0,
+      "y": 0
+    },
+    {
+      "id": "screenwriter",
+      "type": "card",
+      "card": "screenwriter",
+      "x": 0,
+      "y": 0
+    },
+    {
+      "id": "brief",
+      "type": "host",
+      "label": "改任务书",
+      "x": 0,
+      "y": 0
+    },
+    {
+      "id": "writer",
+      "type": "card",
+      "card": "writer",
+      "x": 0,
+      "y": 0
+    },
+    {
+      "id": "critic_people",
+      "type": "card",
+      "card": "critic_people",
+      "x": 0,
+      "y": 0
+    },
+    {
+      "id": "critic",
+      "type": "card",
+      "card": "critic",
+      "x": 0,
+      "y": 0
+    },
+    {
+      "id": "accept",
+      "type": "host",
+      "label": "验收",
+      "x": 0,
+      "y": 0
+    },
+    {
+      "id": "recorder",
+      "type": "card",
+      "card": "recorder",
+      "x": 0,
+      "y": 0
+    },
+    {
+      "id": "read_through",
+      "type": "card",
+      "card": "critic_people",
+      "x": 0,
+      "y": 0
+    },
+    {
+      "id": "ruling",
+      "type": "host",
+      "label": "逐条裁定",
+      "x": 0,
+      "y": 0
+    }
+  ],
+  "edges": [
+    {
+      "source": "start",
+      "target": "screenwriter",
+      "label": "任务书"
+    },
+    {
+      "source": "screenwriter",
+      "target": "brief",
+      "label": "分场建议"
+    },
+    {
+      "source": "brief",
+      "target": "writer"
+    },
+    {
+      "source": "writer",
+      "target": "critic_people",
+      "label": "同时审"
+    },
+    {
+      "source": "writer",
+      "target": "critic",
+      "label": "同时审"
+    },
+    {
+      "source": "critic_people",
+      "target": "accept"
+    },
+    {
+      "source": "critic",
+      "target": "accept"
+    },
+    {
+      "source": "accept",
+      "target": "writer",
+      "label": "返工"
+    },
+    {
+      "source": "accept",
+      "target": "recorder",
+      "label": "不等交回"
+    },
+    {
+      "source": "accept",
+      "target": "screenwriter",
+      "label": "下一集"
+    },
+    {
+      "source": "accept",
+      "target": "read_through",
+      "label": "阶段末通读"
+    },
+    {
+      "source": "read_through",
+      "target": "ruling",
+      "label": "他为什么不清单"
+    }
+  ]
+}

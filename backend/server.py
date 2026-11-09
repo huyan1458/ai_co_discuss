@@ -1923,7 +1923,7 @@ class DiscussionHandler(BaseHTTPRequestHandler):
         site = self.local_request_site(method)
         route = parts[2:]
         if method == "OPTIONS" and route in (["settings"], ["launch"], ["room-models"], ["room-files"], ["execution-details"], ["room-member"], ["room-member-access"], ["room-member-allow"], ["room-member-adapter"], ["room-member-model"], ["room-profiles"], ["room-restore"], ["room-fork"], ["models"], ["api-key"], ["api-check"],
-                                             ["scheduler-check"], ["tts-settings"], ["tts"], ["stt"], ["pick-directory"], ["browse-directory"], ["projects"], ["presets"], ["workflows"], ["room-workflow"], ["room-settings"], ["machine-link"], ["device-pairing"], ["devices"]):
+                                             ["scheduler-check"], ["tts-settings"], ["tts"], ["tts-release"], ["stt"], ["pick-directory"], ["browse-directory"], ["projects"], ["presets"], ["workflows"], ["room-workflow"], ["room-settings"], ["machine-link"], ["device-pairing"], ["devices"]):
             return self.respond({"ok": True})
         if route == ["settings"] and method in ("GET", "POST"):
             command = "settings"
@@ -1941,7 +1941,7 @@ class DiscussionHandler(BaseHTTPRequestHandler):
             command = "api-check"
         elif route == ["scheduler-check"] and method == "POST":
             command = "scheduler-check"
-        elif route in (["tts-settings"], ["tts"], ["stt"]) and method == "POST":
+        elif route in (["tts-settings"], ["tts"], ["tts-release"], ["stt"]) and method == "POST":
             command = route[0]
         elif route in (["room-member"], ["room-member-access"], ["room-member-allow"], ["room-member-adapter"], ["room-member-model"]) and method == "POST":
             command = route[0]

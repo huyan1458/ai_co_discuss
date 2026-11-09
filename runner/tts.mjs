@@ -1,14 +1,14 @@
 /**
- * Read-aloud: synthesize short text with the speech service chosen in settings (Volcengine, Aliyun or Azure); keys stay
+ * Read-aloud: synthesize short text with the speech service chosen in settings (Volcengine, Aliyun, Azure or the local service); keys stay
  * in the local private store. Each service keeps its own key and voices, so switching back finds them as they were.
  */
 import { createHash } from 'node:crypto';
 import { existsSync, mkdirSync, readdirSync, readFileSync, rmSync, statSync } from 'node:fs';
 import { join } from 'node:path';
 
-import { read_saved_api_key } from './discussion_api.mjs';
+import { read_saved_api_key, saved_api_keys } from './discussion_api.mjs';
 import { atomic_json } from './files.mjs';
-import { provider_speak, TTS_PROVIDERS } from './tts_providers.mjs';
+import { provider_release, provider_speak, TTS_PROVIDERS } from './tts_providers.mjs';
 
 // Volcengine's key root; its key also serves voice input.
 export const TTS_BASE_URL = 'https://openspeech.bytedance.com';
@@ -43,14 +43,18 @@ function provider_settings(provider, saved = {}) {
  * Read the saved read-aloud settings; only key references are kept, never keys. Settings saved before services could be
  * chosen held Volcengine's key and voices at the top level and are read as Volcengine's.
  * The chosen service's key reference and voices are also given at the top level for readers that only play.
+ * The local service's token is saved by the setup skill, so without a reference it uses the latest saved for its address.
  */
 export function tts_settings(home) {
   const path = join(home, SETTINGS_FILE);
   const saved = existsSync(path) ? JSON.parse(readFileSync(path, 'utf8')) : {};
   const stored = saved.providers || { volcengine: { api_key_ref: saved.api_key_ref, speaker: saved.speaker, member_voices: saved.member_voices,
     file_voice: saved.file_voice } };
-  const providers = Object.fromEntries(TTS_PROVIDERS.map(provider => [provider.id,
-    provider_settings(provider, Object.fromEntries(Object.entries(stored[provider.id] || {}).filter(([, value]) => value !== undefined)))]));
+  const keys = saved_api_keys(home);
+  const providers = Object.fromEntries(TTS_PROVIDERS.map(provider => {
+    const own = provider_settings(provider, Object.fromEntries(Object.entries(stored[provider.id] || {}).filter(([, value]) => value !== undefined)));
+    return [provider.id, provider.local && !own.api_key_ref ? { ...own, api_key_ref: keys[provider.key_base_url] || '' } : own];
+  }));
   const provider = PROVIDER_IDS.includes(saved.provider) ? saved.provider : 'volcengine';
   const active = providers[provider];
   const ready = Boolean(active.api_key_ref && (!provider_of(provider).region || active.region));
@@ -95,6 +99,12 @@ export function save_tts_settings(home, input) {
   return tts_settings(home);
 }
 
+/** The user stopped reading: the chosen service frees what it holds on this computer (the local model's memory). */
+export function tts_release(home) {
+  provider_release(tts_settings(home).provider, home);
+  return { released: true };
+}
+
 /** Read a cached synthesis, refreshing its time so the most recently heard stay; null when absent or unreadable. */
 function cache_read(path) {
   try { const value = JSON.parse(readFileSync(path, 'utf8')); atomic_json(path, value); return value; } catch { return null; }
@@ -130,7 +140,8 @@ export async function tts_speak(home, input, transport) {
   const settings = tts_settings(home);
   const provider = provider_of(settings.provider);
   const own = settings.providers[provider.id];
-  if (!own.api_key_ref) throw new Error(`尚未配置语音：请在设置的“语音”中填写${provider.label} API Key`);
+  if (!own.api_key_ref) throw new Error(provider.local ? '本机语音尚未安装：请让本机 AI 按 local-tts-setup 技能安装'
+    : `尚未配置语音：请在设置的“语音”中填写${provider.label} API Key`);
   const speaker = SPEAKER_PATTERN.test(input.speaker || '') ? input.speaker : own.speaker;
   const silence = Math.max(0, Math.min(MAX_SILENCE_MS, Math.round(Number(input.silence_ms) || 0)));
   const context = provider.context ? settings.context : '';
@@ -142,7 +153,7 @@ export async function tts_speak(home, input, transport) {
   if (!in_flight.has(cache_path)) {
     const key = read_saved_api_key(home, provider.key_base_url, own.api_key_ref);
     const section_id = KEY_REF_PATTERN.test(input.section_id || '') ? input.section_id : undefined;
-    in_flight.set(cache_path, provider_speak(provider.id, { key, text, speaker, rate: settings.speech_rate, context, silence, section_id, region: own.region }, transport)
+    in_flight.set(cache_path, provider_speak(provider.id, { key, text, speaker, rate: settings.speech_rate, context, silence, section_id, region: own.region, home }, transport)
       .then((result) => { cache_write(directory, cache_path, result); return result; })
       .finally(() => in_flight.delete(cache_path)));
   }

@@ -10,8 +10,7 @@ import { run_command } from '../runner/adapters/api_commands.mjs';
 import { open_project } from '../runner/adapters/api_files.mjs';
 import { validate_preset } from '../runner/discussion_launch.mjs';
 import { free_task_files } from '../runner/free_runner.mjs';
-import { compile_flow, flow_dispatch } from '../runner/workflow_flow.mjs';
-import { delete_workflow, get_workflow, list_workflows, load_room_workflow, parse_workflow_draft, preview_workflow, save_workflow, workflow_in_use } from '../runner/workflows.mjs';
+import { assert_workflow_enabled, delete_workflow, get_workflow, list_workflows, load_room_workflow, parse_workflow_draft, preview_workflow, rename_workflow, save_workflow, set_workflow_disabled, workflow_in_use } from '../runner/workflows.mjs';
 
 const NOVEL = {
   id: 'novel-serial', label: '连载小说', description: '主编出骨架，执笔写正文',
@@ -294,37 +293,12 @@ function canvas(arrows, extra = []) {
   edges: arrows.map(([source, target]) => ({ source, target })) };
 }
 
-test('a canvas compiles into relay steps, parallel groups and gates, and names what it cannot run', () => {
-  const cards = ['plan', 'writer', 'people', 'world', 'recorder'];
-  // Plan, then writer ⇄ two critics until passed, a host checkpoint, then the recorder.
-  const novel = canvas([['start', 'plan'], ['plan', 'writer'], ['writer', 'people'], ['writer', 'world'], ['people', 'host1'], ['world', 'host1'],
-    ['host1', 'writer'], ['host1', 'recorder']]);
-  // The host node closes the loop back to the writer: one gate after the critics' step, repeating from the writer.
-  assert.deepEqual(compile_flow(novel, cards), { steps: [['plan'], ['writer'], ['people', 'world'], ['recorder']],
-    gates: [{ after: 2, repeat_from: 1 }], errors: [], empty: false });
-  const dispatch = flow_dispatch(compile_flow(novel, cards), { plan: '编剧', writer: '写手', people: '批评家·人物', world: '批评家·设定', recorder: '记录员' });
-  assert.deepEqual([dispatch.to, dispatch.parallel, dispatch.gates], [['编剧', '写手', '批评家·人物', '批评家·设定', '记录员'],
-    [['批评家·人物', '批评家·设定']], [{ after: '批评家·人物', repeat_from: '写手' }]]);
-  assert.equal(dispatch.cli, '--to 编剧 --to 写手 --to "批评家·人物" --with "批评家·设定" --to 记录员 --sequential --repeat "批评家·人物=写手"');
-  // A plain checkpoint in the middle; one at the very end changes nothing and is dropped.
-  assert.deepEqual(compile_flow(canvas([['start', 'plan'], ['plan', 'host1'], ['host1', 'writer'], ['writer', 'host2']]), cards).gates,
-    [{ after: 0, repeat_from: null }]);
-  assert.deepEqual(compile_flow(canvas([]), cards), { steps: [], gates: [], errors: [], empty: true });
-  for (const [flow, pattern] of [
-    [canvas([['start', 'plan'], ['plan', 'writer'], ['start', 'writer']]), /同一棒/],
-    [canvas([['start', 'plan'], ['plan', 'writer'], ['plan', 'people'], ['writer', 'world']]), /同一棒/],
-    [canvas([['start', 'plan']], ['writer']), /没有从开始节点连过来/],
-    [canvas([['start', 'plan']]), /至少要有两位/],
-    [canvas([['start', 'ghost'], ['ghost', 'plan']]), /不存在的卡片 ghost/],
-    [canvas([['start', 'host1'], ['host1', 'plan'], ['plan', 'writer']]), /先接卡片/],
-    [canvas([['start', 'plan'], ['plan', 'writer'], ['writer', 'host1'], ['host1', 'people'], ['people', 'plan']]), /跨过了前一个检查点/],
-  ]) assert.match(compile_flow(flow, cards).errors.join('；'), pattern);
-});
-
-test('a workflow keeps its canvas in flow.json, refuses one it cannot run, and hands the host the relay to dispatch', t => {
+test('a workflow keeps its canvas in flow.json as an illustration: any arrows are kept and the host never gets it', t => {
   const { home, config, task } = room_fixture(t);
-  const flow = canvas([['start', 'writer'], ['writer', 'science'], ['science', 'writer']]);
-  assert.throws(() => save_workflow(home, { ...NOVEL, flow: canvas([['start', 'writer'], ['writer', 'ghost']]) }, validate_preset), /流程画布：.*ghost/);
+  // Arrows the old relay compiler refused (a branch, a card no arrow reaches) are fine in a picture.
+  const flow = canvas([['start', 'writer'], ['writer', 'science'], ['writer', 'host1'], ['science', 'writer']]);
+  assert.throws(() => save_workflow(home, { ...NOVEL, flow: canvas([['start', 'writer'], ['writer', 'ghost']]) }, validate_preset), /不存在的卡片：ghost/);
+  assert.throws(() => save_workflow(home, { ...NOVEL, flow: { nodes: 'x', edges: [] } }, validate_preset), /flow 须为/);
   save_workflow(home, { ...NOVEL, flow }, validate_preset);
   assert.deepEqual(JSON.parse(readFileSync(join(home, 'workflows', 'novel-serial', 'flow.json'), 'utf8')), flow);
   assert.deepEqual(get_workflow(home, 'novel-serial').flow, flow);
@@ -333,8 +307,74 @@ test('a workflow keeps its canvas in flow.json, refuses one it cannot run, and h
   save_workflow(home, { ...NOVEL, skill: '改了说明' }, validate_preset);
   assert.deepEqual(get_workflow(home, 'novel-serial').flow, flow);
   task('Claude', 'host');
-  // The science card has no member here, so the host is told it cannot dispatch the canvas as drawn.
-  assert.deepEqual(JSON.parse(readFileSync(join(config.directory, 'free-1.task.json'), 'utf8')).workflow.flow, { missing_cards: ['science'] });
+  // The host works from SKILL.md alone.
+  assert.equal(JSON.parse(readFileSync(join(config.directory, 'free-1.task.json'), 'utf8')).workflow.flow, undefined);
   save_workflow(home, { ...NOVEL, flow: null }, validate_preset);
   assert.equal(get_workflow(home, 'novel-serial').flow, undefined);
+});
+
+test('a disabled workflow stays in the library but no room may enable or keep using it; renaming changes only its name', t => {
+  const home = home_fixture(t);
+  save_workflow(home, NOVEL, validate_preset);
+  const config = { api_home: home, workflow: { id: 'novel-serial', enabled: true, members: { writer: 'Antigravity-writer' } } };
+  assert.deepEqual(set_workflow_disabled(home, 'novel-serial', true), { id: 'novel-serial', disabled: true });
+  assert.equal(list_workflows(home)[0].disabled, true);
+  assert.throws(() => assert_workflow_enabled(home, 'novel-serial'), /已停用/);
+  // A room that had it enabled falls back to its own settings, as with an unreadable workflow.
+  assert.match(load_room_workflow(config).error, /已停用/);
+  set_workflow_disabled(home, 'novel-serial', false);
+  assert.equal(list_workflows(home)[0].disabled, undefined);
+  assert.equal(load_room_workflow(config).label, '连载小说');
+  assert.deepEqual(rename_workflow(home, 'novel-serial', ' 长篇连载 '), { id: 'novel-serial', label: '长篇连载' });
+  const renamed = get_workflow(home, 'novel-serial');
+  assert.deepEqual([renamed.label, renamed.skill, renamed.agents.length], ['长篇连载', NOVEL.skill, 2]);
+  assert.throws(() => rename_workflow(home, 'novel-serial', ' '), /不能为空/);
+  // Deleting forgets the switch, so a later workflow of the same ID starts enabled.
+  set_workflow_disabled(home, 'novel-serial', true);
+  delete_workflow(home, 'novel-serial');
+  save_workflow(home, NOVEL, validate_preset);
+  assert.equal(list_workflows(home)[0].disabled, undefined);
+});
+
+test('a host draft may carry the canvas and never clears the folder\'s other files', t => {
+  const home = home_fixture(t);
+  save_workflow(home, { ...NOVEL, resources: { 'templates/outline.md': '提纲模板', 'commands.json': '{ "commands": [] }' },
+    flow: canvas([['start', 'writer']]) }, validate_preset);
+  const draft = flow => [`<!-- workflow-part: 1/1 id: novel-serial -->
+<!-- workflow-file: SKILL.md -->
+---
+name: novel-serial
+label: 连载小说
+---
+改过的说明
+<!-- workflow-file: agents/writer.md -->
+---
+name: writer
+platform: Antigravity
+---
+克制。${flow ? `
+<!-- workflow-file: flow.json -->
+${JSON.stringify(flow)}` : ''}`];
+  // Without a canvas: the saved one and the templates stay.
+  save_workflow(home, parse_workflow_draft(draft()), validate_preset);
+  let saved = get_workflow(home, 'novel-serial');
+  assert.deepEqual([saved.skill, saved.resources['templates/outline.md'], saved.flow.edges.length], ['改过的说明', '提纲模板', 1]);
+  // With a canvas written without positions: it replaces the saved one; the templates still stay.
+  const flow = { nodes: [{ id: 'start', type: 'start' }, { id: 'w', type: 'card', card: 'writer' }, { id: 'h', type: 'host' }],
+    edges: [{ source: 'start', target: 'w' }, { source: 'w', target: 'h' }, { source: 'h', target: 'w' }] };
+  save_workflow(home, parse_workflow_draft(draft(flow)), validate_preset);
+  saved = get_workflow(home, 'novel-serial');
+  assert.deepEqual([saved.flow.edges.length, saved.flow.nodes[1], saved.resources['templates/outline.md']], [3, { id: 'w', type: 'card', card: 'writer', x: 0, y: 0 }, '提纲模板']);
+  assert.throws(() => parse_workflow_draft([draft().join('').replace('agents/writer.md', 'notes.md')]), /只能包含 SKILL.md、flow.json/);
+});
+
+test('the canvas keeps short notes on host nodes and arrows, and refuses long or multi-line ones', t => {
+  const home = home_fixture(t);
+  const flow = { nodes: [{ id: 'start', type: 'start', x: 0, y: 0 }, { id: 'w', type: 'card', card: 'writer', x: 1, y: 0 }, { id: 'h', type: 'host', label: ' 验收 ', x: 2, y: 0 }],
+    edges: [{ source: 'start', target: 'w' }, { source: 'w', target: 'h', label: '' }, { source: 'h', target: 'w', label: '返工' }] };
+  save_workflow(home, { ...NOVEL, flow }, validate_preset);
+  const saved = get_workflow(home, 'novel-serial').flow;
+  assert.deepEqual([saved.nodes[2].label, saved.edges.map(edge => edge.label)], ['验收', [undefined, undefined, '返工']]);
+  assert.throws(() => save_workflow(home, { ...NOVEL, flow: { ...flow, edges: [{ source: 'start', target: 'w', label: 'x'.repeat(17) }] } }, validate_preset), /最多 16 字/);
+  assert.throws(() => save_workflow(home, { ...NOVEL, flow: { ...flow, edges: [{ source: 'start', target: 'w', label: '两\n行' }] } }, validate_preset), /不换行/);
 });
