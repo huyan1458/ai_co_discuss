@@ -11,7 +11,6 @@ import ExtraDirectoriesField from "./ExtraDirectoriesField.vue";
 import ProjectDirectoryField from "./ProjectDirectoryField.vue";
 import RosterAdd from "./RosterAdd.vue";
 import SchedulerSettings from "./SchedulerSettings.vue";
-import WorkflowPicker from "./WorkflowPicker.vue";
 import HostWorkflowSwitch from "./HostWorkflowSwitch.vue";
 
 const props = defineProps({ targetFolder: { type: Object, default: null } });
@@ -226,7 +225,6 @@ const summary = computed(() => {
 
       <section class="create-section">
         <h3><span>3</span>协作方式（可选）</h3>
-        <WorkflowPicker remember />
         <HostWorkflowSwitch v-if="view.launch.available || view.launch.remote" :model-value="Boolean(view.create_host_workflows)" @update:model-value="bridge.write_create_host_workflows($event)" />
         <div class="create-drive">
           <span>创建后</span>

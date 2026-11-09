@@ -11,9 +11,11 @@ const tools_open = ref(true);
 const app_version = __APP_VERSION__;
 // The open tab, or null without a room: the links (and the menu) rebuild only when it changes, not on every view publish.
 const link_state = computed(() => view.value.room ? view.value.tab : null);
-const view_links = computed(() => { const tab = link_state.value; return props.tabs.map((item) => ({
-  ...item, active: tab !== null && tab === item.value, disabled: tab === null || item.disabled, onSelect: () => emit("tab", item.value),
-})); });
+// A `global` page (the workflow library) needs no room; the others wait for one.
+const view_links = computed(() => { const tab = link_state.value; return props.tabs.map((item) => {
+  const usable = tab !== null || item.global;
+  return { ...item, active: usable && view.value.tab === item.value, disabled: !usable || item.disabled, onSelect: () => emit("tab", item.value) };
+}); });
 /** The footer's second line: the account call to action until signed in, then the site connection. */
 const account_status = computed(() => {
   const admin = view.value.admin;

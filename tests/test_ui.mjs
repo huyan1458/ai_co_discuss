@@ -1096,31 +1096,6 @@ test('new-room choices survive cancellation and reload while room text, project 
   await reloaded.context.flush_create_preferences();
 });
 
-test('browsing and saving a workflow never adds members or binds it to a new room', async () => {
-  const f = theme_fixture(), state = f.context.test_state, requests = [];
-  const workflow = { id: 'writing', label: '写作', description: '协作写作', agents: [{ card: 'writer', name: 'Codex-writer' }] };
-  Object.assign(state.launch, { available: true, workflows: [workflow], profiles: { Codex: { adapter: 'codex_cli' } } });
-  const view = ref({ launch: state.launch, experts: { 'new-expert-modes': { Codex: 'cli' } }, fields: { 'new-room-host': 'Codex' } });
-  const before = JSON.stringify({ experts: view.value.experts, fields: view.value.fields, options: f.context.creation_launch_options() });
-  const bridge = { local_request: async (route, input) => { requests.push([route, input.action]); return workflow; },
-    reload_workflows: async () => view.value.launch.workflows, notify: () => {} };
-  const picker = vm.createContext({ computed, ref, defineProps: () => ({}), inject: () => ({ view, bridge }) });
-  const component = readFileSync(new URL('../frontend/WorkflowPicker.vue', import.meta.url), 'utf8');
-  vm.runInContext(component.match(/<script setup>([\s\S]*?)<\/script>/)[1].replace(/^import .*;$/gm, ''), picker);
-  vm.runInContext("selected.value = 'writing'", picker);
-  await picker.show();
-  assert.equal(vm.runInContext('viewing.value.id', picker), 'writing');
-  picker.open_editor('writing');
-  assert.equal(vm.runInContext('editor_id.value', picker), 'writing');
-  await picker.on_saved(workflow);
-  assert.equal(vm.runInContext('current.value.id', picker), 'writing');
-  assert.deepEqual(requests, [['workflows', 'get']]);
-  assert.equal(JSON.stringify({ experts: view.value.experts, fields: view.value.fields, options: f.context.creation_launch_options() }), before);
-  assert.equal(f.context.creation_launch_options().workflow, undefined);
-  await picker.on_deleted('writing');
-  assert.equal(vm.runInContext('selected.value', picker), '');
-});
-
 /** Invite dialog fixture for the shared member board. */
 function participant_connection_fixture(props = {}) {
   const view = ref({ room: { id: "one", members: [] }, launch: { available: true, profiles: {}, workspace: {} } });

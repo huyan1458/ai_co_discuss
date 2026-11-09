@@ -291,6 +291,29 @@ const created = computed(() => room.value.created_at ? new Date(room.value.creat
 
 <template>
   <section class="merged-section room-overview" aria-label="成员与设置">
+    <!-- The room's project directories lead the page: every member works in them. One row each, the main one locked once set. -->
+    <section v-if="saved?.registered" class="overview-section overview-project" aria-label="项目目录">
+      <header class="overview-project-head"><UIcon name="i-lucide-folder-tree" /><h3>项目目录</h3>
+        <span class="overview-muted">{{ saved.project_directory
+          ? '成员按自己的项目权限读写其他目录，在别处工作的成员只读。改动从各成员下一次执行起生效，会话保留。'
+          : '主目录只能设置一次，之后不能更改。已在房间的成员保留原会话，按自己的项目权限读写它；之后邀请的成员在其中工作。' }}</span></header>
+      <div class="overview-directories">
+        <template v-if="saved.project_directory">
+          <!-- Shaped like the extra directory rows below, but locked: the lock replaces the project picker, copy replaces removal. -->
+          <div class="overview-main-directory">
+            <div class="overview-main-box" title="主目录，设置后不能更改"><span class="overview-main-prefix"><UIcon name="i-lucide-lock" /></span>
+              <span class="overview-main-path">{{ saved.project_directory }}</span><span class="overview-main-tag">主目录</span></div>
+            <UButton icon="i-lucide-copy" color="neutral" variant="ghost" size="xs" aria-label="复制项目目录" title="复制路径" @click="act('copy', saved.project_directory)" /></div>
+          <ExtraDirectoriesField v-model="directories_draft" :disabled="!directories_editable || saving_directories" />
+        </template>
+        <ProjectDirectoryField v-else-if="directories_editable" v-model="main_draft" compact placeholder="为本房间设置项目目录的完整路径" :disabled="saving_directories" />
+        <span v-else class="overview-muted">未指定</span>
+        <div v-if="directories_changed" class="overview-directories-actions">
+          <UButton label="取消" color="neutral" variant="ghost" size="xs" :disabled="saving_directories" @click="reset_directories" />
+          <UButton label="保存" size="xs" class="channel-primary-button" :loading="saving_directories" @click="save_directories" />
+        </div>
+      </div>
+    </section>
     <div class="page-heading"><div><h2>成员与设置</h2><p>成员的接入、权限与全部操作，以及房间的协作设置；右栏成员菜单是同样操作的快捷入口。</p></div><UButton v-if="!room.archived" icon="i-lucide-plus" label="邀请 AI 加入" variant="outline" color="neutral" class="channel-surface-button" :disabled="!view.access?.can_manage" @click="inviting = true" /></div>
     <section class="overview-section">
       <h3>成员</h3>
@@ -323,9 +346,9 @@ const created = computed(() => room.value.created_at ? new Date(room.value.creat
                   :disabled="option.disabled || !files(member).editable || Boolean(switching)" @click="switch_access(member, option.value)">{{ option.label }}</button>
               </div>
               <span v-else class="overview-muted" :title="files(member).hint">{{ files(member).text }}</span>
-              <p v-if="saved?.participants?.[member.name]?.outside_directory" class="overview-outside" :title="saved.participants[member.name].outside_directory">
-                <UIcon name="i-lucide-triangle-alert" />在 {{ saved.participants[member.name].outside_directory }} 工作，房间目录{{ saved.participants[member.name].outside_enforced ? '只读' : '只读（仅任务要求，程序拦不住）' }}</p>
             </dd></div>
+            <div v-if="saved?.participants?.[member.name]?.outside_directory" class="overview-outside" :title="saved.participants[member.name].outside_directory">
+              <UIcon name="i-lucide-triangle-alert" /><span>在 {{ saved.participants[member.name].outside_directory }} 工作，房间目录{{ saved.participants[member.name].outside_enforced ? '只读' : '只读（仅任务要求，程序拦不住）' }}</span></div>
           </dl>
           <footer class="member-card-actions" :aria-label="`${member.name} 的操作`">
             <div><UButton v-for="item in actions(member).taking_part" :key="item.label" :icon="item.icon" :label="item.label" size="xs" variant="ghost" color="neutral" :disabled="item.disabled" @click="item.onSelect()" /></div>
@@ -356,22 +379,6 @@ const created = computed(() => room.value.created_at ? new Date(room.value.creat
         <div v-if="saved?.registered"><dt>API 请求上限</dt><dd>
           <ApiRequestsField :model-value="requests_shown" :disabled="!view.access?.can_manage || room.archived || saving_requests" @update:model-value="save_requests" /></dd></div>
         <div v-if="!free"><dt>逐人追问</dt><dd>{{ room.named_followup ? '开启：主持人每轮给每位专家写针对性追问' : '关闭：首轮后请专家回应上一轮观点' }}</dd></div>
-        <!-- One row for every project directory: the main one locked once set, the extra ones edited below it. -->
-        <div v-if="saved?.registered"><dt>项目目录</dt><dd class="overview-directories">
-          <template v-if="saved.project_directory">
-            <div class="overview-address" title="主目录，设置后不能更改"><UIcon name="i-lucide-lock" class="overview-lock" /><code>{{ saved.project_directory }}</code>
-              <UButton icon="i-lucide-copy" color="neutral" variant="ghost" size="xs" aria-label="复制项目目录" @click="act('copy', saved.project_directory)" /></div>
-            <ExtraDirectoriesField v-model="directories_draft" :disabled="!directories_editable || saving_directories" />
-          </template>
-          <ProjectDirectoryField v-else-if="directories_editable" v-model="main_draft" compact placeholder="为本房间设置项目目录的完整路径" :disabled="saving_directories" />
-          <span v-else class="overview-muted">未指定</span>
-          <div v-if="directories_changed" class="overview-directories-actions">
-            <UButton label="取消" color="neutral" variant="ghost" size="xs" :disabled="saving_directories" @click="reset_directories" />
-            <UButton label="保存" size="xs" class="channel-primary-button" :loading="saving_directories" @click="save_directories" />
-          </div>
-          <span class="overview-muted">{{ saved.project_directory
-            ? '成员按自己的项目权限读写其他目录，在别处工作的成员只读。改动从各成员下一次执行起生效，会话保留。'
-            : '主目录只能设置一次，之后不能更改。已在房间的成员保留原会话，按自己的项目权限读写它；之后邀请的成员在其中工作。' }}</span></dd></div>
         <div><dt>阅读地址</dt><dd class="overview-address"><code>{{ reading }}</code><UButton icon="i-lucide-copy" color="neutral" variant="ghost" size="xs" aria-label="复制阅读地址" @click="act('copy', reading)" /></dd></div>
         <div v-if="created"><dt>创建时间</dt><dd>{{ created }}</dd></div>
       </dl>
@@ -434,12 +441,27 @@ const created = computed(() => room.value.created_at ? new Date(room.value.creat
 .member-card-actions { display: flex; flex-wrap: wrap; justify-content: space-between; gap: 4px 16px; padding: 6px 10px; border-top: 1px solid var(--ui-border-muted); }
 .member-card-actions > div { display: flex; flex-wrap: wrap; gap: 2px; }
 .overview-address { display: flex; align-items: center; gap: 4px; min-width: 0; }
-.overview-outside { display: flex; align-items: center; gap: 4px; margin: 4px 0 0; overflow: hidden; color: var(--ui-warning, #d9a441); font-size: 12px; white-space: nowrap; text-overflow: ellipsis; }
+/* Spans the whole facts row so a long directory path is not squeezed into the narrow 项目文件 column. */
+.overview-outside { grid-column: 1 / -1; display: flex; align-items: center; gap: 4px; min-width: 0; margin-top: -8px; color: var(--ui-warning, #d9a441); font-size: 12px; }
+.overview-outside > span { overflow: hidden; white-space: nowrap; text-overflow: ellipsis; }
 .overview-outside > [class*="icon"] { flex-shrink: 0; width: 12px; height: 12px; }
 .overview-lock { flex-shrink: 0; width: 12px; height: 12px; color: var(--ui-text-dimmed); }
-.overview-directories { display: flex; flex-direction: column; gap: 6px; max-width: 560px; }
+/* Project directories: a card at the top of the page, shaped like the member cards below. */
+.overview-project { padding: 14px 16px 16px; border: 1px solid var(--ui-border); border-radius: 10px; background: var(--ui-bg-elevated); }
+.overview-project-head { display: flex; flex-wrap: wrap; align-items: baseline; gap: 4px 10px; margin-bottom: 12px; }
+.overview-project-head > [class*="icon"] { align-self: center; width: 15px; height: 15px; color: var(--channel-accent); }
+.overview-project-head h3 { margin: 0; }
+.overview-project-head > span { flex-basis: 100%; font-size: 12px; line-height: 1.5; }
+.overview-directories { display: flex; flex-direction: column; gap: 8px; }
+/* Matches ProjectDirectoryField's box so the locked main directory reads as the same kind of row, only dimmer. */
+.overview-main-directory { display: flex; align-items: center; gap: 4px; }
+.overview-main-box { display: flex; flex: 1; align-items: stretch; min-width: 0; min-height: 32px; border: 1px solid var(--ui-border-muted);
+  border-radius: 6px; background: color-mix(in srgb, var(--ui-bg) 55%, transparent); cursor: default; }
+.overview-main-prefix { display: inline-flex; flex-shrink: 0; align-items: center; justify-content: center; width: 49px; border-right: 1px solid var(--ui-border-muted); color: var(--ui-text-dimmed); }
+.overview-main-prefix > [class*="icon"] { width: 13px; height: 13px; }
+.overview-main-path { flex: 1; min-width: 0; align-self: center; padding-inline: 10px; overflow: hidden; color: var(--ui-text); font-size: 14px; white-space: nowrap; text-overflow: ellipsis; }
+.overview-main-tag { flex-shrink: 0; align-self: center; margin-right: 8px; padding: 1px 6px; border-radius: 4px; background: var(--ui-bg-accented, rgba(255,255,255,.06)); color: var(--ui-text-muted); font-size: 11px; }
 .overview-directories-actions { display: flex; justify-content: flex-end; gap: 6px; }
-.overview-directories > .overview-muted { font-size: 12px; }
 .overview-address code { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 12px; }
 .overview-local { display: flex; gap: 10px; margin: 0 0 8px; color: var(--ui-text-muted); font-size: 12px; }
 .overview-result { margin: 8px 0 0; color: var(--ui-text-muted); font-size: 12px; }
@@ -451,7 +473,7 @@ const created = computed(() => room.value.created_at ? new Date(room.value.creat
 .overview-settings dd { flex: 1; min-width: 0; margin: 0; color: var(--ui-text); overflow-wrap: anywhere; }
 @media (max-width: 720px) {
   .member-card-facts { grid-template-columns: 1fr 1fr; padding-left: 16px; }
-  .member-card-facts > div:last-child { grid-column: 1 / -1; }
+  .member-card-facts > div:nth-child(3) { grid-column: 1 / -1; }
   /* The name needs the head row's width on a phone, so 设为主持人 keeps only its crown. */
   .member-card-head { gap: 8px; }
   .member-card-host :deep([data-slot="label"]) { display: none; }

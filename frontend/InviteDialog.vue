@@ -3,7 +3,6 @@
 import { computed, inject, ref, watch } from "vue";
 import ExpertCard from "./ExpertCard.vue";
 import RosterAdd from "./RosterAdd.vue";
-import WorkflowPicker from "./WorkflowPicker.vue";
 
 const props = defineProps({ description: { type: String, default: "新成员由程序按本机软件配置启动，或由你手动启动。" }, workflowId: { type: String, default: "" } });
 const inviting = defineModel("open", { type: Boolean, default: false });
@@ -187,7 +186,6 @@ async function refresh_after(invited_any) {
         <!-- A workflow invitation only confirms the workflow's own cards; the platform and preset rows belong to ordinary invitations. -->
         <template v-if="!invite_workflow">
           <RosterAdd label="选择 AI（可多选）" :items="library_items" @add="add_library_item" @remove="(value) => bridge.delete_expert_preset(value.slice(PRESET_PREFIX.length))" />
-          <WorkflowPicker :disabled="submitting" />
         </template>
         <p v-for="member in invite_workflow?.existing || []" :key="member.card" class="fine-print">{{ bridge.display_name(member.name) }}：{{ record(member.name)?.status === 'away' ? '确认后请回，保留原会话' : '已在场，沿用原成员' }}</p>
         <div v-if="invite_picks.length" class="pb-invite-cards">

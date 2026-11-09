@@ -87,7 +87,7 @@ const PLATFORM_IDENTITIES = {
   Antigravity: { label: "Gemini", initials: "GM", style: "gemini", icon: "/icons/gemini.svg", description: "AI 身份" },
   DeepSeek: { initials: "DS", style: "deepseek", icon: "/icons/deepseek.svg", description: "AI 身份" },
   Qwen: { initials: "QW", style: "qwen", icon: "/icons/qwen.svg", description: "AI 身份" },
-  Grok: { initials: "GK", style: "grok", description: "AI 身份" },
+  Grok: { initials: "GK", style: "grok", icon: "/icons/grok.svg", description: "AI 身份" },
   OpenAI: { initials: "OA", style: "codex", icon: "/icons/openai.svg", description: "AI 身份" },
   Custom: { label: "自定义 API", initials: "API", style: "custom", api_label: "自定义 API", description: "AI 身份" },
 };

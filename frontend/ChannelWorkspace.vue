@@ -10,6 +10,7 @@ import RoomOverview from "./RoomOverview.vue";
 import ExecutionTimeline from "./ExecutionTimeline.vue";
 import EventLog from "./EventLog.vue";
 import ProjectFiles from "./ProjectFiles.vue";
+import WorkflowLibrary from "./WorkflowLibrary.vue";
 import PrivateChat from "./PrivateChat.vue";
 import FilePreview from "./FilePreview.vue";
 import { busy } from "./member-actions.js";
@@ -122,12 +123,14 @@ const project_directories = computed((previous) => {
   const next = project_directory.value ? [project_directory.value, ...(view.value.launch.room_models?.extra_directories || [])] : [];
   return previous?.length === next.length && next.every((directory, index) => Object.is(directory, previous[index])) ? previous : next;
 });
-/** Room tools keep their positions; files shows a hint until a project directory is saved. */
+/** Room tools keep their positions; files shows a hint until a project directory is saved. The workflow library belongs to
+ * this computer, not a room, so its page (`global`) opens with no room selected too. */
 const tabs = computed(() => [
   { value: "discussion", label: "消息", icon: "i-lucide-messages-square" },
   { value: "private", label: "私聊", icon: "i-lucide-message-square", ui: { linkLeadingIcon: "is-private-icon" } },
   { value: "timeline", label: "执行", icon: "i-lucide-chart-gantt" },
   { value: "overview", label: "房间", icon: "i-lucide-sliders-horizontal" },
+  { value: "workflows", label: "工作流", icon: "i-lucide-network", global: true },
   { value: "files", label: "文件", icon: "i-lucide-files", title: project_directory.value || "" },
 ]);
 // Retired pages: consensus and discussion history open from the host brief, access moved into the room page.
@@ -368,6 +371,9 @@ function resize_nav_by_key(event) {
           <ExecutionTimeline v-if="timeline_view === 'waterfall'" @detail="open_detail" />
           <EventLog v-else @detail="open_detail" />
         </div>
+        <div v-if="view.tab === 'workflows'" v-keep-reading class="content-page" role="tabpanel" aria-label="工作流">
+          <WorkflowLibrary />
+        </div>
         <div v-if="view.tab === 'files'" v-keep-reading class="content-page" role="tabpanel" aria-label="文件">
           <ProjectFiles v-if="project_directory" :key="room.id" :directories="project_directories" />
           <p v-else class="channel-files-unset" role="status">当前未设置项目目录</p>
@@ -377,6 +383,9 @@ function resize_nav_by_key(event) {
         </div>
         <FilePreview />
         </div>
+      </div>
+      <div v-else-if="view.tab === 'workflows'" class="channel-body">
+        <div class="channel-content"><div v-keep-reading class="content-page" role="tabpanel" aria-label="工作流"><WorkflowLibrary /></div></div>
       </div>
       <div v-else class="channel-empty"><UIcon name="i-lucide-hash" /><h2>新建一个协作房间</h2><p>邀请 AI 一起协作，随时 @ 提问；需要时开启讨论，保留所有人的观点。</p><UButton icon="i-lucide-plus" label="新建房间" color="neutral" @click="create_channel()" /></div>
     </main>

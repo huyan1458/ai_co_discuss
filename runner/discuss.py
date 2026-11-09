@@ -121,6 +121,14 @@ def parallel_groups(names, joined):
     return groups
 
 
+def repeat_gate(value):
+    """`--repeat AFTER=START`: a loop's checkpoint after AFTER's step whose next pass starts at START's step."""
+    after, separator, start = value.partition("=")
+    if not separator:
+        raise argparse.ArgumentTypeError("须写成 检查点成员=再来一圈的起点成员，如 批评家=写手")
+    return {"after": member_handle(after), "repeat_from": member_handle(start)}
+
+
 def positive_int(value):
     """Parse a positive page or resource identifier."""
     try:
@@ -312,6 +320,10 @@ def message_commands(subcommands, registry):
                       help="自由房间主持人：--to 点名的多位成员按点名顺序依次接力，走完一圈算一轮，最后一位做完交回你")
     post.add_argument("--loop", action="store_true",
                       help="与 --sequential 同用：交回成为检查点，用 sequence continue 开始下一圈，不继续即直接验收")
+    post.add_argument("--checkpoint", type=member_handle, action="append", default=[], metavar="MEMBER",
+                      help="与 --sequential 同用：该成员所在那一棒结束后交回你（检查点），你用 sequence continue 往下一棒走，直接回答即结束接力；可重复")
+    post.add_argument("--repeat", type=repeat_gate, action="append", default=[], metavar="MEMBER=START",
+                      help="与 --sequential 同用：MEMBER 所在那一棒结束后为循环检查点，sequence continue 从 START 所在那一棒再来一圈，加 --proceed 往下一棒走；START 不能早于前一个检查点；可重复")
     post.add_argument("--detach", type=member_handle, action="append", default=[], metavar="MEMBER",
                       help="自由房间主持人：与 --to 同用，点名一位与这次派活同时开工、但不等它的成员（不计入交回或下一棒的等待）；它失败时程序通知你；可重复")
     post.add_argument("--with", dest="to", type=member_handle, action=JoinPreviousStep, metavar="MEMBER",
@@ -475,8 +487,9 @@ def sequence_commands(subcommands, registry):
     """Read a host's one-after-another relay and run a loop's next pass from its checkpoint."""
     view = add_leaf(subcommands, registry, "sequence view", "房主或主持人读取依次接力的顺序、当前圈与本圈各棒原文；此读取不派发任务", True)
     view.add_argument("id", type=positive_int, help="依次接力编号（任务文件 requests[].sequence.id）")
-    advance = add_leaf(subcommands, registry, "sequence continue", "主持人在循环检查点开始下一圈，只结束这条检查点交接；不继续则直接验收回答", True)
-    advance.add_argument("--request", type=positive_int, required=True, help="检查点交接请求编号（purpose=handoff 且 sequence.phase=checkpoint）")
+    advance = add_leaf(subcommands, registry, "sequence continue", "主持人在检查点让接力继续：循环检查点再来一圈（加 --proceed 往下一棒），普通检查点往下一棒；只结束这条检查点交接，不继续则直接回答即结束接力", True)
+    advance.add_argument("--request", type=positive_int, required=True, help="检查点交接请求编号（purpose=handoff 且 sequence.phase 为 checkpoint 或 gate）")
+    advance.add_argument("--proceed", action="store_true", help="循环检查点不再来一圈，往下一棒走；最后一棒之后没有下一棒")
 
 
 def build_parser(prog="discuss"):
@@ -720,6 +733,11 @@ def plan_message(args):
             payload["parallel"] = parallel_groups(args.to, joined)
     if args.loop:
         payload["loop"] = True
+    gates = [{"after": name} for name in args.checkpoint] + args.repeat
+    if gates:
+        if not args.sequential:
+            raise CliError("--checkpoint 与 --repeat 须与 --sequential 一起使用")
+        payload["gates"] = gates
     for field in ("next_review", "review_scope", "review_roster"):
         if getattr(args, field, None) is not None:
             payload[field] = getattr(args, field)
@@ -933,7 +951,8 @@ def plan_sequence(args):
     """Read a relay, or continue a loop bound to its one checkpoint request."""
     if args.action == "view":
         return RequestPlan(f"/api/rooms/{args.room}/sequences/{args.id}")
-    return RequestPlan(f"/api/rooms/{args.room}/sequences/continue", "POST", {"actor": require_actor(args), "request_id": args.request})
+    return RequestPlan(f"/api/rooms/{args.room}/sequences/continue", "POST", {"actor": require_actor(args), "request_id": args.request,
+                                                                               **({"proceed": True} if args.proceed else {})})
 
 
 def build_plan(args):

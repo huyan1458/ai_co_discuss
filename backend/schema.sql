@@ -589,7 +589,9 @@ CREATE TABLE IF NOT EXISTS free_batches (
 );
 -- A host's one-after-another dispatch: each step is a one-member batch hung on the previous answer and costs one chain round.
 -- After the last member it hands back to the host; a loop's hand-back is a checkpoint from which the host (or smart
--- scheduling for it) may run the next pass. `steps` lists [pass, member_id, batch_id] for every step started.
+-- scheduling for it) may run the next pass. `steps` lists [pass, member_id, batch_id, position] for every step started.
+-- `gates` are hand-backs after a step in the middle or at the end: [{after, repeat_from}] by step index; at one the host
+-- goes on to the next step, or (with repeat_from) runs the steps from repeat_from again. `loop` is a gate after the last step.
 CREATE TABLE IF NOT EXISTS free_sequences (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     room_id TEXT NOT NULL REFERENCES rooms(id) ON DELETE CASCADE,
@@ -604,7 +606,8 @@ CREATE TABLE IF NOT EXISTS free_sequences (
     answer_id INTEGER NOT NULL DEFAULT 0,
     handoff_request INTEGER NOT NULL DEFAULT 0,
     steps TEXT NOT NULL DEFAULT '[]',
-    status TEXT NOT NULL DEFAULT 'running' CHECK(status IN ('running','checkpoint','done','stopped'))
+    status TEXT NOT NULL DEFAULT 'running' CHECK(status IN ('running','checkpoint','done','stopped')),
+    gates TEXT NOT NULL DEFAULT '[]'
 );
 CREATE INDEX IF NOT EXISTS free_sequences_batch ON free_sequences(room_id,batch_id);
 CREATE INDEX IF NOT EXISTS free_sequences_handoff ON free_sequences(handoff_request);

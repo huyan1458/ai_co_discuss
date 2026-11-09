@@ -10,6 +10,7 @@ import { run_command } from '../runner/adapters/api_commands.mjs';
 import { open_project } from '../runner/adapters/api_files.mjs';
 import { validate_preset } from '../runner/discussion_launch.mjs';
 import { free_task_files } from '../runner/free_runner.mjs';
+import { compile_flow, flow_dispatch } from '../runner/workflow_flow.mjs';
 import { delete_workflow, get_workflow, list_workflows, load_room_workflow, parse_workflow_draft, preview_workflow, save_workflow, workflow_in_use } from '../runner/workflows.mjs';
 
 const NOVEL = {
@@ -283,4 +284,57 @@ test('registered commands travel with the workflow, and an API member runs only 
   }
   const writer = open_project({ cwd: project, project_access: 'write' });
   assert.equal(await run_command(writer, commands, { command: 'fix' }), 'fixed\n');
+});
+
+/** A canvas from a list of arrows between named nodes; `host…` names are checkpoints, the rest cards of that ID. */
+function canvas(arrows, extra = []) {
+  const names = [...new Set([...arrows.flat(), ...extra])].filter(name => name !== 'start');
+  return { nodes: [{ id: 'start', type: 'start', x: 0, y: 0 }, ...names.map((name, index) => name.startsWith('host')
+    ? { id: name, type: 'host', x: 0, y: 0 } : { id: name, type: 'card', card: name, x: index * 10, y: index })],
+  edges: arrows.map(([source, target]) => ({ source, target })) };
+}
+
+test('a canvas compiles into relay steps, parallel groups and gates, and names what it cannot run', () => {
+  const cards = ['plan', 'writer', 'people', 'world', 'recorder'];
+  // Plan, then writer ⇄ two critics until passed, a host checkpoint, then the recorder.
+  const novel = canvas([['start', 'plan'], ['plan', 'writer'], ['writer', 'people'], ['writer', 'world'], ['people', 'host1'], ['world', 'host1'],
+    ['host1', 'writer'], ['host1', 'recorder']]);
+  // The host node closes the loop back to the writer: one gate after the critics' step, repeating from the writer.
+  assert.deepEqual(compile_flow(novel, cards), { steps: [['plan'], ['writer'], ['people', 'world'], ['recorder']],
+    gates: [{ after: 2, repeat_from: 1 }], errors: [], empty: false });
+  const dispatch = flow_dispatch(compile_flow(novel, cards), { plan: '编剧', writer: '写手', people: '批评家·人物', world: '批评家·设定', recorder: '记录员' });
+  assert.deepEqual([dispatch.to, dispatch.parallel, dispatch.gates], [['编剧', '写手', '批评家·人物', '批评家·设定', '记录员'],
+    [['批评家·人物', '批评家·设定']], [{ after: '批评家·人物', repeat_from: '写手' }]]);
+  assert.equal(dispatch.cli, '--to 编剧 --to 写手 --to "批评家·人物" --with "批评家·设定" --to 记录员 --sequential --repeat "批评家·人物=写手"');
+  // A plain checkpoint in the middle; one at the very end changes nothing and is dropped.
+  assert.deepEqual(compile_flow(canvas([['start', 'plan'], ['plan', 'host1'], ['host1', 'writer'], ['writer', 'host2']]), cards).gates,
+    [{ after: 0, repeat_from: null }]);
+  assert.deepEqual(compile_flow(canvas([]), cards), { steps: [], gates: [], errors: [], empty: true });
+  for (const [flow, pattern] of [
+    [canvas([['start', 'plan'], ['plan', 'writer'], ['start', 'writer']]), /同一棒/],
+    [canvas([['start', 'plan'], ['plan', 'writer'], ['plan', 'people'], ['writer', 'world']]), /同一棒/],
+    [canvas([['start', 'plan']], ['writer']), /没有从开始节点连过来/],
+    [canvas([['start', 'plan']]), /至少要有两位/],
+    [canvas([['start', 'ghost'], ['ghost', 'plan']]), /不存在的卡片 ghost/],
+    [canvas([['start', 'host1'], ['host1', 'plan'], ['plan', 'writer']]), /先接卡片/],
+    [canvas([['start', 'plan'], ['plan', 'writer'], ['writer', 'host1'], ['host1', 'people'], ['people', 'plan']]), /跨过了前一个检查点/],
+  ]) assert.match(compile_flow(flow, cards).errors.join('；'), pattern);
+});
+
+test('a workflow keeps its canvas in flow.json, refuses one it cannot run, and hands the host the relay to dispatch', t => {
+  const { home, config, task } = room_fixture(t);
+  const flow = canvas([['start', 'writer'], ['writer', 'science'], ['science', 'writer']]);
+  assert.throws(() => save_workflow(home, { ...NOVEL, flow: canvas([['start', 'writer'], ['writer', 'ghost']]) }, validate_preset), /流程画布：.*ghost/);
+  save_workflow(home, { ...NOVEL, flow }, validate_preset);
+  assert.deepEqual(JSON.parse(readFileSync(join(home, 'workflows', 'novel-serial', 'flow.json'), 'utf8')), flow);
+  assert.deepEqual(get_workflow(home, 'novel-serial').flow, flow);
+  assert.equal(get_workflow(home, 'novel-serial').resources['flow.json'], undefined, 'the canvas is its own field, not a resource');
+  // A save without a flow (a host draft) keeps the canvas; null removes it.
+  save_workflow(home, { ...NOVEL, skill: '改了说明' }, validate_preset);
+  assert.deepEqual(get_workflow(home, 'novel-serial').flow, flow);
+  task('Claude', 'host');
+  // The science card has no member here, so the host is told it cannot dispatch the canvas as drawn.
+  assert.deepEqual(JSON.parse(readFileSync(join(config.directory, 'free-1.task.json'), 'utf8')).workflow.flow, { missing_cards: ['science'] });
+  save_workflow(home, { ...NOVEL, flow: null }, validate_preset);
+  assert.equal(get_workflow(home, 'novel-serial').flow, undefined);
 });

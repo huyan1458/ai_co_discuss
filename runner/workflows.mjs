@@ -6,6 +6,7 @@ import { createHash, randomUUID } from 'node:crypto';
 import { cpSync, existsSync, lstatSync, mkdirSync, readdirSync, readFileSync, renameSync, rmSync, writeFileSync } from 'node:fs';
 import { dirname, join, resolve } from 'node:path';
 import { DatabaseSync } from 'node:sqlite';
+import { compile_flow, flow_dispatch, flow_in_use, normalize_flow } from './workflow_flow.mjs';
 
 // A workflow ID follows the Agent Skills naming rule: lowercase letters and digits joined by single hyphens.
 export const WORKFLOW_ID_PATTERN = /^(?=.{1,40}$)[a-z0-9]+(?:-[a-z0-9]+)*$/;
@@ -34,6 +35,8 @@ const RESOURCE_SEGMENT = /^[^./\\:*?"<>|\x00-\x1f][^/\\:*?"<>|\x00-\x1f]{0,99}$/
 const utf8 = new TextDecoder('utf-8', { fatal: true });
 // Commands an API member may run, registered beside SKILL.md so they travel with the workflow.
 export const COMMANDS_FILE = 'commands.json';
+// The canvas of cards and arrows the host's relay follows; a field of its own, not one of the folder's other files.
+export const FLOW_FILE = 'flow.json';
 const COMMAND_ID_PATTERN = /^(?=.{1,40}$)[a-z0-9]+(?:-[a-z0-9]+)*$/;
 const COMMAND_FIELDS = ['id', 'description', 'run', 'path', 'access', 'timeout_seconds'];
 const MAX_COMMANDS = 20;
@@ -151,16 +154,31 @@ function card_from_markdown(card, text) {
   return value;
 }
 
-/** Turn SKILL.md, card files and the folder's other files into one workflow object, unchecked. */
+/** Turn SKILL.md, card files and the folder's other files into one workflow object, unchecked; flow.json becomes `flow`. */
 function workflow_from_files(skill_text, cards, resources = {}) {
   const { fields, body } = parse_markdown(skill_text, 'SKILL.md');
+  const { [FLOW_FILE]: flow_text, ...rest } = resources;
+  let flow;
+  if (typeof flow_text === 'string') {
+    try { flow = JSON.parse(flow_text); } catch (error) { throw new Error(`${FLOW_FILE} 不是合法 JSON：${error.message}`); }
+  }
   return { id: fields.name || '', label: fields.label || '', description: fields.description || '', skill: body,
-    agents: Object.entries(cards).map(([card, text]) => card_from_markdown(card, text)), resources };
+    agents: Object.entries(cards).map(([card, text]) => card_from_markdown(card, text)), resources: rest, ...(flow ? { flow } : {}) };
+}
+
+/** A checked canvas over the workflow's cards, or null for none; an arrangement the relay cannot follow is refused. */
+function validate_flow(flow, cards) {
+  if (flow === undefined || flow === null) return flow;
+  const normalized = normalize_flow(flow);
+  if (!flow_in_use(normalized)) return null;
+  const compiled = compile_flow(normalized, cards);
+  if (compiled.errors.length) throw new Error(`流程画布：${compiled.errors.join('；')}`);
+  return normalized;
 }
 
 /** A path, relative to the workflow folder, that a resource may take: inside it, not SKILL.md and not under agents/. */
 function resource_path_allowed(path) {
-  return path !== 'SKILL.md' && !path.startsWith('agents/') && path.split('/').every(segment => RESOURCE_SEGMENT.test(segment));
+  return path !== 'SKILL.md' && path !== FLOW_FILE && !path.startsWith('agents/') && path.split('/').every(segment => RESOURCE_SEGMENT.test(segment));
 }
 
 /** Check resource files `{ "relative/path": text }`. */
@@ -185,6 +203,8 @@ function read_resource_folder(directory, prefix, resources, ignored) {
   for (const name of readdirSync(directory).sort()) {
     const relative = `${prefix}${name}`;
     if (relative === 'SKILL.md' || relative === 'agents') continue;
+    // The canvas is read as a resource here and taken out as `flow` with the rest of the folder.
+    if (relative === FLOW_FILE) { resources[relative] = readFileSync(join(directory, name), 'utf8'); continue; }
     const path = join(directory, name);
     if (lstatSync(path).isDirectory()) { read_resource_folder(path, `${relative}/`, resources, ignored); continue; }
     let text = null;
@@ -245,8 +265,11 @@ export function validate_workflow(input, validate_card) {
     return { card, ...kept };
   });
   // Absent resources mean "keep the saved folder's other files" (a host draft or the editor carries none); `{}` clears them.
+  // Likewise an absent flow keeps the saved canvas, and null removes it.
+  const flow = validate_flow(input.flow, normalized.map(agent => agent.card));
   return { id, label, description, skill, agents: normalized,
-    ...(input.resources === undefined ? {} : { resources: validate_resources(input.resources) }) };
+    ...(input.resources === undefined ? {} : { resources: validate_resources(input.resources) }),
+    ...(flow === undefined ? {} : { flow }) };
 }
 
 /** Refuse links anywhere in a folder, so a shared workflow cannot point outside itself. */
@@ -315,7 +338,7 @@ export function read_workflow_files(files) {
     if (path === 'SKILL.md') continue;
     const match = CARD_PATH.exec(path);
     if (match && typeof files[path] === 'string') cards[match[1]] = files[path];
-    else if (typeof files[path] === 'string' && resource_path_allowed(path)) resources[path] = files[path];
+    else if (typeof files[path] === 'string' && (path === FLOW_FILE || resource_path_allowed(path))) resources[path] = files[path];
     else ignored.push(path);
   }
   return { workflow: workflow_from_files(files['SKILL.md'], cards, resources), ignored };
@@ -378,6 +401,9 @@ export function save_workflow(home, input, validate_card) {
       }
       if (workflow.resources) write_resources(staging, workflow.resources);
       else if (existsSync(directory)) keep_resources(directory, staging);
+      if (workflow.flow) writeFileSync(join(staging, FLOW_FILE), `${JSON.stringify(workflow.flow, null, 2)}
+`);
+      else if (workflow.flow === null || workflow.resources) rmSync(join(staging, FLOW_FILE), { force: true });
     });
     return read_saved_workflow(home, workflow.id);
   });
@@ -470,7 +496,8 @@ export function load_room_workflow(config) {
     const cards = Object.fromEntries(workflow.agents.map(agent => [agent.card, agent]));
     return { id: binding.id, label: workflow.label || binding.id, description: workflow.description || '', directory, skill_path: join(directory, 'SKILL.md'), skill: workflow.skill,
       revision: createHash('sha256').update(workflow.skill).digest('hex').slice(0, REVISION_LENGTH),
-      members: binding.members || {}, cards, commands: workflow.commands };
+      members: binding.members || {}, cards, commands: workflow.commands,
+      ...(workflow.flow ? { flow: compile_flow(workflow.flow, Object.keys(cards)) } : {}) };
   } catch (error) { return { id: binding.id, error: error.message }; }
 }
 
@@ -501,7 +528,19 @@ export function workflow_task_field(workflow, room_members, participants) {
     .map(card => ({ card: card.card, label: card.label || '', description: card.description || '' }));
   // The host reads SKILL.md only when a request fits the description and its revision is one it has not read.
   return { id: workflow.id, label: workflow.label, description: workflow.description || '', revision: workflow.revision || '', members,
-    ...(missing.length ? { missing } : {}) };
+    ...(missing.length ? { missing } : {}), ...(workflow.flow ? { flow: flow_task_field(workflow.flow, members) } : {}) };
+}
+
+/**
+ * The relay the canvas asks for, ready for the host to dispatch: the order in words, the CLI flags and the API fields.
+ * Cards whose member is away or removed are named instead, since the relay cannot run without them.
+ */
+function flow_task_field(compiled, members) {
+  if (compiled.errors.length) return { errors: compiled.errors };
+  const member_of = Object.fromEntries(members.filter(item => item.status === 'active').map(item => [item.card, item.member]));
+  const { missing, order, cli, to, parallel, gates } = flow_dispatch(compiled, member_of);
+  if (missing.length) return { missing_cards: missing };
+  return { order, cli, api: { to, sequential: true, ...(parallel ? { parallel } : {}), ...(gates ? { gates } : {}) } };
 }
 
 /**

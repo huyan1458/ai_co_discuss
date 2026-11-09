@@ -170,6 +170,7 @@ LATER_COLUMNS = {"room_members": {"access": "TEXT NOT NULL DEFAULT 'runner'", "s
                  "member_requests": {"chain_id": "INTEGER NOT NULL DEFAULT 0", "batch_id": "INTEGER NOT NULL DEFAULT 0",
                                      "purpose": "TEXT NOT NULL DEFAULT 'ask'", "created_by": "TEXT NOT NULL DEFAULT 'user'"},
                  "free_chain_holds": {"asked_rounds": "INTEGER NOT NULL DEFAULT 0", "asked_reason": "TEXT NOT NULL DEFAULT ''"},
+                 "free_sequences": {"gates": "TEXT NOT NULL DEFAULT '[]'"},
                  "execution_capabilities": {"steer": "INTEGER"}}
 
 
@@ -608,6 +609,9 @@ def resolve_member_fields(connection, room_id, payload):
         payload["detach"] = [resolve(item) for item in payload["detach"]]
     if isinstance(payload.get("parallel"), list):
         payload["parallel"] = [[resolve(item) for item in group] if isinstance(group, list) else group for group in payload["parallel"]]
+    if isinstance(payload.get("gates"), list):
+        payload["gates"] = [{**gate, **{key: resolve(gate[key]) for key in ("after", "repeat_from") if key in gate}}
+                            if isinstance(gate, dict) else gate for gate in payload["gates"]]
     for key in ("next_review", "expert"):
         if key in payload:
             payload[key] = resolve(payload[key])
@@ -989,7 +993,7 @@ def recipients(connection, room_id, payload):
 
 # What a proactive post may not carry: it answers no request. Only the host's may also dispatch, as an answer does.
 PROACTIVE_EXCLUDED = ("execution_id", "request_ids", "next_review", "turn_id")
-HOST_ONLY_PROACTIVE = ("to", "handoff", "no_handoff", "continue", "sequential", "loop", "parallel", "detach", "need_rounds", "rounds_reason")
+HOST_ONLY_PROACTIVE = ("to", "handoff", "no_handoff", "continue", "sequential", "loop", "parallel", "gates", "detach", "need_rounds", "rounds_reason")
 
 
 def check_need_rounds(member, payload):
@@ -1062,7 +1066,7 @@ def after_proactive(connection, room_id, message_id, member, payload):
         return
     if payload.get("to") and payload.get("sequential") is True:
         start_sequence(connection, room_id, member, message_id, payload["to"], message_id, payload.get("loop") is True,
-                       need_plan(payload), payload.get("parallel"), payload.get("detach"))
+                       need_plan(payload), payload.get("parallel"), payload.get("detach"), payload.get("gates"))
     elif payload.get("to"):
         dispatch(connection, room_id, member, message_id, payload["to"], message_id, payload.get("handoff") is True,
                  payload.get("no_handoff") is True, {"need": need_plan(payload)}, payload.get("detach"))
@@ -1482,6 +1486,8 @@ def checked_sequence(actor, payload):
     sequential, loop = payload.get("sequential", False), payload.get("loop", False)
     if payload.get("parallel") is not None and sequential is not True:
         raise ValueError("parallel 只与 sequential 一起使用")
+    if payload.get("gates") is not None and sequential is not True:
+        raise ValueError("gates 只与 sequential 一起使用")
     if not isinstance(actor, dict) or (sequential is False and loop is False):
         return
     if sequential is not True or type(loop) is not bool:
@@ -1493,7 +1499,7 @@ def checked_sequence(actor, payload):
         raise ValueError("依次接力须用 to 按顺序点名至少两位不同成员，每位只出现一次")
     if payload.get("next_review"):
         raise ValueError("依次接力不能同时声明预授权评审；评审者直接排进顺序即可")
-    relay_order(names, payload.get("parallel"))
+    relay_gates(relay_order(names, payload.get("parallel")), payload.get("gates"), loop)
 
 
 def checked_detach(actor, payload):
@@ -1539,6 +1545,51 @@ def relay_order(names, parallel):
     return steps
 
 
+def relay_gates(order, gates, loop=False):
+    """`gates` by member name turned into step indexes: [{after, repeat_from}], sorted by `after`.
+
+    A gate hands back to the host after the step holding `after`; with `repeat_from` it is a loop's checkpoint whose next
+    pass starts at the step holding that member, which may not reach back past the gate before it. `loop` already is a
+    gate after the last step, so a gate there is refused alongside it.
+    """
+    if gates is None:
+        return []
+    if not isinstance(gates, list) or not gates or any(not isinstance(gate, dict) for gate in gates):
+        raise ValueError("gates 须为检查点列表，每项为 {after, repeat_from?}")
+    step_of = {name: index for index, step in enumerate(order) for name in step}
+    checked = []
+    for gate in gates:
+        after, repeat_from = gate.get("after"), gate.get("repeat_from")
+        if after not in step_of or repeat_from is not None and repeat_from not in step_of:
+            raise ValueError("gates 的 after 与 repeat_from 须是 to 中的成员")
+        checked.append({"after": step_of[after], "repeat_from": None if repeat_from is None else step_of[repeat_from]})
+    checked.sort(key=lambda gate: gate["after"])
+    afters = [gate["after"] for gate in checked]
+    if len(set(afters)) != len(afters):
+        raise ValueError("同一棒之后只能有一个检查点")
+    if loop and afters[-1] == len(order) - 1:
+        raise ValueError("loop 已在最后一棒之后设了检查点，gates 不能再设在最后一棒")
+    for index, gate in enumerate(checked):
+        start = checked[index - 1]["after"] + 1 if index else 0
+        if gate["repeat_from"] is not None and not start <= gate["repeat_from"] <= gate["after"]:
+            raise ValueError("循环检查点的 repeat_from 须在本段内：不早于前一个检查点之后的第一棒，不晚于 after")
+    return checked
+
+
+def sequence_gates(sequence):
+    """The relay's gates by step index, the loop's checkpoint after the last step included."""
+    gates = json.loads(sequence["gates"] or "[]")
+    last = len(relay_steps(sequence)) - 1
+    if sequence["loop"] and not any(gate["after"] == last for gate in gates):
+        gates = gates + [{"after": last, "repeat_from": 0}]
+    return gates
+
+
+def current_gate(sequence):
+    """The gate the relay stands at or heads for: the first one at or after its current step."""
+    return next((gate for gate in sequence_gates(sequence) if gate["after"] >= sequence["position"]), None)
+
+
 def relay_steps(sequence):
     """The relay's steps as lists of member ids; a step stored as one id (single member) reads as a one-member list."""
     return [step if isinstance(step, list) else [step] for step in json.loads(sequence["member_ids"])]
@@ -1549,10 +1600,11 @@ def stored_step(member_ids):
     return member_ids[0] if len(member_ids) == 1 else member_ids
 
 
-def start_sequence(connection, room_id, host, message_id, names, chain_id, loop, need=None, parallel=None, detach=None):
+def start_sequence(connection, room_id, host, message_id, names, chain_id, loop, need=None, parallel=None, detach=None, gates=None):
     """Start a host's one-after-another dispatch with its first step; the rest follow as each step ends.
 
     A step named in `parallel` is a group: its members work at once and the relay goes on only after all of them end.
+    `gates` hand back to the host after the steps they name (see `relay_gates`).
     """
     active = active_members(connection, room_id)
     named_members(active, names, exclude=host["name"])
@@ -1560,24 +1612,25 @@ def start_sequence(connection, room_id, host, message_id, names, chain_id, loop,
         return
     order = relay_order(names, parallel)
     steps = [stored_step([active[name]["id"] for name in step]) for step in order]
-    connection.execute("""INSERT INTO free_sequences (room_id,message_id,chain_id,host_id,member_ids,loop,batch_id,steps)
-        VALUES (?,?,?,?,?,?,?,?)""", (room_id, message_id, chain_id, host["id"], json.dumps(steps), int(loop), message_id,
-                                      json.dumps([[1, steps[0], message_id]])))
+    connection.execute("""INSERT INTO free_sequences (room_id,message_id,chain_id,host_id,member_ids,loop,batch_id,steps,gates)
+        VALUES (?,?,?,?,?,?,?,?,?)""", (room_id, message_id, chain_id, host["id"], json.dumps(steps), int(loop), message_id,
+                                        json.dumps([[1, steps[0], message_id, 0]]), json.dumps(relay_gates(order, gates, loop))))
     dispatch(connection, room_id, host, message_id, order[0], chain_id, plan={"need": need}, detach=detach)
 
 
-def sequence_step(connection, room_id, sequence, host, position, pass_number, message_id):
+def sequence_step(connection, room_id, sequence, host, position, pass_number, message_id, new_round=None):
     """Ask the members still here of the step at `position`, hung on `message_id`; one step is one batch.
 
-    A pass's first step costs one round (or waits at the limit); later steps of the same pass ride on it.
+    A pass's first step, or the first after the host lets a gate go on (`new_round`), costs one round (or waits at the
+    limit); later steps ride on it.
     """
     present = {row["id"]: name for name, row in active_members(connection, room_id).items()}
     member_ids = [member_id for member_id in relay_steps(sequence)[position] if member_id in present]
-    steps = json.loads(sequence["steps"]) + [[pass_number, stored_step(member_ids), message_id]]
+    steps = json.loads(sequence["steps"]) + [[pass_number, stored_step(member_ids), message_id, position]]
     connection.execute("UPDATE free_sequences SET status='running',pass=?,position=?,batch_id=?,steps=? WHERE id=?",
                        (pass_number, position, message_id, json.dumps(steps), sequence["id"]))
     dispatch(connection, room_id, host, message_id, [present[member_id] for member_id in member_ids], sequence["chain_id"],
-             plan={"relay": pass_number == sequence["pass"]})
+             plan={"relay": not (pass_number != sequence["pass"] if new_round is None else new_round)})
 
 
 def next_present(connection, room_id, sequence, start):
@@ -1604,13 +1657,17 @@ def advance_sequence(connection, room_id, sequence, host, completed, failed=Fals
     answer_id = connection.execute("""SELECT answer_id FROM member_requests WHERE room_id=? AND batch_id=? AND purpose='ask'
         AND status='completed' ORDER BY id DESC""", (room_id, sequence["batch_id"])).fetchone()[0]
     position = next_present(connection, room_id, sequence, sequence["position"] + 1)
-    if position is not None:
+    end = len(relay_steps(sequence)) if position is None else position
+    # A gate after this step, or after steps skipped because their members left, stops the relay there for the host.
+    gate = next((gate for gate in sequence_gates(sequence) if sequence["position"] <= gate["after"] < end), None)
+    if position is not None and not gate:
         sequence_step(connection, room_id, sequence, host, position, sequence["pass"], answer_id)
         return
     insert_request(connection, room_id, host["id"], sequence["batch_id"], sequence["chain_id"], "handoff", "host")
     request_id = connection.execute("SELECT last_insert_rowid()").fetchone()[0]
-    connection.execute("UPDATE free_sequences SET status=?,answer_id=?,handoff_request=? WHERE id=?",
-                       ("checkpoint" if sequence["loop"] else "done", answer_id, request_id, sequence["id"]))
+    connection.execute("UPDATE free_sequences SET status=?,answer_id=?,handoff_request=?,position=? WHERE id=?",
+                       ("checkpoint" if gate else "done", answer_id, request_id, gate["after"] if gate else sequence["position"],
+                        sequence["id"]))
 
 
 def sequence_view(connection, room_id, sequence_id, token):
@@ -1626,8 +1683,12 @@ def sequence_view(connection, room_id, sequence_id, token):
     names = {item["id"]: item["name"] for item in connection.execute("SELECT id,name FROM room_members WHERE room_id=?", (room_id,))}
     origin = connection.execute("SELECT id,author,text FROM messages WHERE id=?", (row["message_id"],)).fetchone()
     answers = []
-    steps_of_pass = [(member_ids, batch_id) for pass_number, member_ids, batch_id in json.loads(row["steps"]) if pass_number == row["pass"]]
-    for step_number, (member_ids, batch_id) in enumerate(steps_of_pass, 1):
+    # This pass of the stretch the relay is in: steps after the gate before it; older rows lack the step's position.
+    start = max((gate["after"] + 1 for gate in sequence_gates(row) if gate["after"] < row["position"]), default=0)
+    steps_of_pass = [(entry[3] + 1 if len(entry) > 3 else None, entry[1], entry[2]) for entry in json.loads(row["steps"])
+                     if entry[0] == row["pass"] and (len(entry) < 4 or entry[3] >= start)]
+    for counted, (position, member_ids, batch_id) in enumerate(steps_of_pass, 1):
+        step_number = position or counted
         for member_id in member_ids if isinstance(member_ids, list) else [member_ids]:
             answer = connection.execute("""SELECT r.status,m.id,m.text FROM member_requests r LEFT JOIN messages m ON m.id=r.answer_id
                 WHERE r.room_id=? AND r.batch_id=? AND r.member_id=? AND r.purpose='ask'""", (room_id, batch_id, member_id)).fetchone()
@@ -1636,9 +1697,19 @@ def sequence_view(connection, room_id, sequence_id, token):
     handoff = connection.execute("SELECT status FROM member_requests WHERE id=?", (row["handoff_request"],)).fetchone()
     return {"id": row["id"], "message_id": row["message_id"], "order": order_names(row, names),
             "loop": bool(row["loop"]), "pass": row["pass"], "position": row["position"], "status": row["status"],
+            "gates": sequence_gates(row), "gate": gate_view(row) if row["status"] == "checkpoint" else None,
             "chain_id": row["chain_id"], "remaining_rounds": rounds_left(connection, room_id, row["chain_id"]),
             "handoff_request": row["handoff_request"] or None, "handoff_status": handoff[0] if handoff else None,
             "origin": dict(origin) if origin else None, "answers": answers}
+
+
+def gate_view(sequence):
+    """The gate the relay stands at, as the host decides on it: where another pass starts and whether it may go on."""
+    gate = current_gate(sequence)
+    if not gate:
+        return None
+    return {"after": gate["after"] + 1, "repeat_from": None if gate["repeat_from"] is None else gate["repeat_from"] + 1,
+            "can_proceed": gate["after"] < len(relay_steps(sequence)) - 1}
 
 
 def order_names(sequence, names):
@@ -1659,9 +1730,12 @@ def continue_sequence(connection, room_id, token, payload):
     request_id = payload.get("request_id")
     if type(request_id) is not int:
         raise ValueError("须提供检查点交接请求 request_id")
-    sequence = connection.execute("SELECT * FROM free_sequences WHERE room_id=? AND handoff_request=? AND loop=1", (room_id, request_id)).fetchone()
-    if not sequence:
-        raise LookupError("该请求不是循环接力的检查点")
+    proceed = payload.get("proceed", False)
+    if type(proceed) is not bool:
+        raise ValueError("proceed 须为布尔值")
+    sequence = connection.execute("SELECT * FROM free_sequences WHERE room_id=? AND handoff_request=?", (room_id, request_id)).fetchone()
+    if not sequence or sequence["status"] == "done" or not sequence_gates(sequence):
+        raise LookupError("该请求不是依次接力的检查点")
     request = connection.execute("SELECT * FROM member_requests WHERE id=?", (request_id,)).fetchone()
     if sequence["status"] == "running" and request["status"] == "completed":
         execution = connection.execute("SELECT status FROM member_executions WHERE id=?", (request["execution_id"],)).fetchone()
@@ -1669,13 +1743,19 @@ def continue_sequence(connection, room_id, token, payload):
                 "execution_completed": bool(execution and execution[0] == "completed")}
     if sequence["status"] != "checkpoint" or request["status"] not in ("pending", "delivering") or request["member_id"] != host["id"]:
         raise FileExistsError("这个检查点已处理、循环已结束，或主持人已更换")
-    position = next_present(connection, room_id, sequence, 0)
+    gate = current_gate(sequence)
+    repeat = gate["repeat_from"] is not None and not proceed
+    if not repeat and gate["after"] >= len(relay_steps(sequence)) - 1:
+        raise ValueError("这是最后一棒之后的检查点，没有下一棒；直接回答即结束接力")
+    position = next_present(connection, room_id, sequence, gate["repeat_from"] if repeat else gate["after"] + 1)
     if position is None:
-        raise FileExistsError("循环中的成员都已离开，无法继续")
+        raise FileExistsError("后面的成员都已离开，无法继续")
     connection.execute("UPDATE member_requests SET status='completed' WHERE id=?", (request_id,))
     completed = finish_review_handoff(connection, request, "sequence_continued")
-    sequence_step(connection, room_id, sequence, host, position, sequence["pass"] + 1, sequence["answer_id"])
-    return {"sequence_id": sequence["id"], "pass": sequence["pass"] + 1, "duplicate": False, "execution_completed": completed}
+    # Another pass counts on; going on past a gate starts the next stretch at its first pass. Either costs one round.
+    pass_number = sequence["pass"] + 1 if repeat else 1
+    sequence_step(connection, room_id, sequence, host, position, pass_number, sequence["answer_id"], new_round=True)
+    return {"sequence_id": sequence["id"], "pass": pass_number, "proceeded": not repeat, "duplicate": False, "execution_completed": completed}
 
 
 def sequence_request_context(connection, request):
@@ -1694,15 +1774,18 @@ def sequence_request_context(connection, request):
     names = {item["id"]: item["name"] for item in connection.execute("SELECT id,name FROM room_members WHERE room_id=?", (row["room_id"],))}
     steps = relay_steps(sequence)
     order = order_names(sequence, names)
-    phase = "step" if row["purpose"] == "ask" else "checkpoint" if sequence["loop"] else "end"
-    position = next((index for index, step in enumerate(steps) if row["member_id"] in step), None) if phase == "step" else len(order) - 1
+    gate = current_gate(sequence) if row["purpose"] == "handoff" and sequence["status"] == "checkpoint" else None
+    phase = "step" if row["purpose"] == "ask" else "end" if not gate else "checkpoint" if gate["repeat_from"] is not None else "gate"
+    position = next((index for index, step in enumerate(steps) if row["member_id"] in step), None) if phase == "step" \
+        else gate["after"] if gate else len(order) - 1
     if position is None:
         return {}
     following = order[position + 1] if phase == "step" and position + 1 < len(order) else None
     together = [names.get(item) for item in steps[position] if item != row["member_id"]] if phase == "step" else []
     return {"sequence": {"id": sequence["id"], "message_id": sequence["message_id"], "order": order, "loop": bool(sequence["loop"]),
                          "pass": sequence["pass"], "position": position, "phase": phase, "next": following,
-                         **({"together": together} if together else {}), "answer_id": sequence["answer_id"] or None}}
+                         **({"together": together} if together else {}), "answer_id": sequence["answer_id"] or None,
+                         **({"gate": gate_view(sequence)} if gate else {})}}
 
 
 def default_order(connection, room_id, members):
@@ -1735,7 +1818,8 @@ def speaking_order(connection, room):
         # A host's one-after-another dispatch shows like a queue: this pass's members, done up to the one asked now.
         kind, target = "queue", sequence["message_id"]
         for index, step in enumerate(relay_steps(sequence)):
-            state = "done" if sequence["status"] == "checkpoint" or index < sequence["position"] else "speaking" if index == sequence["position"] else "queued"
+            at_gate = sequence["status"] == "checkpoint" and index == sequence["position"]
+            state = "done" if at_gate or index < sequence["position"] else "speaking" if index == sequence["position"] else "queued"
             for member_id in step:
                 if member_id in by_id:
                     # Members of a group step share its number: they work at once.
@@ -1755,8 +1839,10 @@ def speaking_order(connection, room):
                     items.append({"name": by_id[row["member_id"]]["name"], "state": state})
     listed = {item["name"] for item in items}
     items += [{"name": name, "state": "idle"} for name in dict.fromkeys(ordered) if name not in listed]
-    movable = "queued" if kind != "default" else "idle"
-    relay = {"id": sequence["id"], "loop": bool(sequence["loop"]), "pass": sequence["pass"]} if sequence else None
+    # A relay with gates in it keeps its order: moving members would shift where the gates stand.
+    movable = "none" if sequence and json.loads(sequence["gates"] or "[]") else "queued" if kind != "default" else "idle"
+    relay = {"id": sequence["id"], "loop": any(gate["repeat_from"] is not None for gate in sequence_gates(sequence)),
+             "pass": sequence["pass"]} if sequence else None
     state = json.dumps([kind, target, [[item["name"], item["state"], item.get("step")] for item in items], later, session_plan_state, relay],
                        ensure_ascii=False)
     return {"kind": kind, "message_id": target, "items": items, "later": later, "movable": [item["name"] for item in items if item["state"] == movable],
@@ -1864,7 +1950,7 @@ def after_free_message(connection, room_id, message_id, actor, payload):
     connection.execute("UPDATE room_members SET read_until=MAX(read_until,?) WHERE id=?", (message_id, actor["id"]))
     if actor["role"] == "host" and payload.get("to") and payload.get("sequential") is True:
         start_sequence(connection, room_id, actor, message_id, payload["to"], chain_id, payload.get("loop") is True, need_plan(payload),
-                       payload.get("parallel"), payload.get("detach"))
+                       payload.get("parallel"), payload.get("detach"), payload.get("gates"))
     elif actor["role"] == "host" and payload.get("to"):
         dispatch(connection, room_id, actor, message_id, payload["to"], chain_id, payload.get("handoff") is True or bool(payload.get("next_review")),
                  payload.get("no_handoff") is True, {"need": need_plan(payload)}, payload.get("detach"))

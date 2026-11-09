@@ -7,7 +7,9 @@ import { computed, inject, ref, watch } from "vue";
 import ConfirmDialog from "./ConfirmDialog.vue";
 import ExpertCard from "./ExpertCard.vue";
 import RosterAdd from "./RosterAdd.vue";
+import WorkflowCanvas from "./WorkflowCanvas.vue";
 import { access_label } from "../runner/expert_prompts.mjs";
+import { flow_in_use } from "../runner/workflow_flow.mjs";
 
 const open = defineModel("open", { type: Boolean, default: false });
 // `workflowId` loads a saved workflow; otherwise `draft` (a new or imported one) is edited.
@@ -24,6 +26,8 @@ const workflow = ref(null);
 const busy = ref(false);
 const previewing = ref(false);
 const deleting = ref(false);
+// The cards show on the flow canvas, where arrows set the relay, or as a plain list; both edit the same cards.
+const card_view = ref("canvas");
 // An import's commands run on this computer when an API member calls them, so they are kept only once the user allows them.
 const COMMANDS_FILE = "commands.json";
 const commands_allowed = ref(false);
@@ -49,6 +53,7 @@ watch(open, async (value) => {
   if (!value) return;
   previewing.value = false;
   commands_allowed.value = false;
+  card_view.value = "canvas";
   if (!props.workflowId) {
     const draft = JSON.parse(JSON.stringify(props.draft || {}));
     workflow.value = { label: "", description: "", skill: "", agents: [], ...draft, id: draft.id || `workflow-${Date.now().toString(36)}` };
@@ -100,9 +105,19 @@ function grant(agent, allowed) {
   agent.project_access = allowed ? agent.requested_access : "read";
 }
 
+/** The canvas to save: none when it holds only the start, and without cards removed in the list view. */
+function saved_flow(flow) {
+  if (!flow_in_use(flow)) return null;
+  const cards = new Set(workflow.value.agents.map((agent) => agent.card));
+  const nodes = flow.nodes.filter((node) => node.type !== "card" || cards.has(node.card));
+  const ids = new Set(nodes.map((node) => node.id));
+  return { nodes, edges: flow.edges.filter((edge) => ids.has(edge.source) && ids.has(edge.target)) };
+}
+
 /** Save the workflow as files; the server checks every field. A saved workflow keeps its folder's other files as they are. */
 async function save() {
-  const { resources, commands: ignored, ...edited } = workflow.value;
+  const { resources, commands: ignored, flow, ...fields } = workflow.value;
+  const edited = { ...fields, flow: saved_flow(flow) };
   // An import keeps its commands file only when the user allowed it; the rest of its files come along either way.
   const kept = resources && !commands_allowed.value ? Object.fromEntries(Object.entries(resources).filter(([path]) => path !== COMMANDS_FILE)) : resources;
   const result = await run(() => bridge.local_request("workflows", { action: "save", workflow: saved.value ? edited : { ...edited, resources: kept } }));
@@ -122,8 +137,8 @@ async function remove() {
 
 <template>
   <UModal :content="{ onInteractOutside: (event) => event.preventDefault() }" v-model:open="open" :title="saved ? '编辑工作流' : '新建工作流'"
-    description="做法说明给主持人读，成员卡片是它带来的成员。启用后怎么做由主持人按说明组织，程序不保证工序。"
-    :ui="{ content: 'glass-panel studio-modal workflow-editor-modal', body: 'dialog-body' }">
+    description="做法说明给主持人读，成员卡片是它带来的成员。在流程画布上连好接力时，程序按画布的顺序、并行与循环交接；没连时由主持人按说明组织。"
+    :ui="{ content: 'glass-panel studio-modal workflow-editor-modal is-canvas', body: 'dialog-body' }">
     <template #body>
       <p v-if="!workflow" class="fine-print">正在读取工作流…</p>
       <form v-else id="workflow-editor-form" class="workflow-editor" @submit.prevent="save">
@@ -137,9 +152,14 @@ async function remove() {
           <UTextarea v-else v-model="workflow.skill" :rows="10" autoresize :maxrows="20" :maxlength="MAX_SKILL" class="w-full" />
         </UFormField>
         <section class="workflow-editor-cards" aria-label="成员卡片">
-          <h4>成员卡片<small>{{ workflow.agents.length }}</small></h4>
+          <h4>成员卡片<small>{{ workflow.agents.length }}</small>
+            <span class="workflow-editor-views" role="radiogroup" aria-label="卡片显示方式">
+              <button type="button" role="radio" :aria-checked="card_view === 'canvas'" @click="card_view = 'canvas'"><UIcon name="i-lucide-workflow" class="workflow-editor-view-icon" />流程画布</button>
+              <button type="button" role="radio" :aria-checked="card_view === 'list'" @click="card_view = 'list'"><UIcon name="i-lucide-layout-grid" class="workflow-editor-view-icon" />卡片列表</button>
+            </span></h4>
           <RosterAdd label="添加成员卡片" :items="roster_items" @add="add_card" />
-          <div v-if="workflow.agents.length" class="workflow-editor-grid">
+          <WorkflowCanvas v-if="card_view === 'canvas'" v-model:flow="workflow.flow" v-model:agents="workflow.agents" />
+          <div v-else-if="workflow.agents.length" class="workflow-editor-grid">
             <div v-for="(agent, index) in workflow.agents" :key="agent.card" class="workflow-editor-card">
               <ExpertCard v-model:preset="workflow.agents[index]" :name="agent.name" mode="cli" :status="{ text: '', tone: '' }"
                 :access_locked="Boolean(agent.requested_access && agent.project_access === 'read')" @remove="workflow.agents.splice(index, 1)" />
@@ -186,6 +206,10 @@ async function remove() {
 .workflow-editor-cards { display: grid; gap: 10px; }
 .workflow-editor-cards h4 { display: flex; align-items: baseline; gap: 6px; margin: 0; color: var(--ui-text-highlighted); font-size: 13px; }
 .workflow-editor-cards h4 small { color: var(--ui-text-dimmed); font-size: 11px; font-weight: 400; }
+.workflow-editor-views { display: inline-flex; margin-left: auto; padding: 2px; border: 1px solid var(--ui-border-muted); border-radius: 7px; }
+.workflow-editor-views > button { display: inline-flex; align-items: center; gap: 4px; height: 22px; padding: 0 8px; border-radius: 5px; color: var(--ui-text-muted); font-size: 12px; font-weight: 400; }
+.workflow-editor-view-icon { width: 13px; height: 13px; }
+.workflow-editor-views > button[aria-checked="true"] { background: var(--ui-bg-accented); color: var(--ui-text-highlighted); }
 /* Same card grid as the new-room member list. */
 .workflow-editor-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(min(248px, 100%), 272px)); align-items: start; gap: 8px; }
 .workflow-editor-card { display: grid; gap: 6px; }
@@ -202,4 +226,9 @@ async function remove() {
 .workflow-editor .is-warn { color: var(--ui-warning, #e0a33a); }
 .workflow-editor-spacer { flex: 1; }
 @media (max-width: 600px) { .workflow-editor-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); } }
+</style>
+
+<style>
+/* The flow canvas needs room: the editor widens beyond the plain form's width. */
+html[data-theme^="channel"] .studio-modal.workflow-editor-modal.is-canvas { max-width: 1240px; }
 </style>

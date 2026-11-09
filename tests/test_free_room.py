@@ -1605,6 +1605,86 @@ class HostTests(HostRoomTests):
         self.assertEqual(self.request(url, {"actor": "Claude", "request_id": second["id"]}, self.member)[0], 409, "an accepted checkpoint is closed")
         self.assertEqual(self.request(self.path)[1]["speaking_order"]["kind"], "default")
 
+    def host_pending(self):
+        """The host's pending hand-back as the inbox shows it."""
+        host = next(item for item in self.request(f"{self.path}/inbox", token=self.owner)[1]["members"] if item["name"] == "Claude")
+        return next(item for item in host["pending"] if item["purpose"] == "handoff")
+
+    def test_relay_gates_are_checked_before_the_dispatch_is_saved(self):
+        """Gates ride on a one-after-another dispatch, name its members, and a loop may not reach back past the gate before it."""
+        self.request(f"{self.path}/members", {"name": "Codex-2", "adapter": "codex_cli", "token": uuid.uuid4().hex}, self.owner)
+        FreeRoomTests.say(self, "画布")
+        execution = self.reserve_for("Claude")[1]["id"]
+        post = lambda **extra: self.request(f"{self.path}/messages", {"author": "Claude", "text": "接力", "source": "cli",
+            "submission_id": uuid.uuid4().hex, "execution_id": execution, "to": ["Antigravity", "Codex", "Codex-2"], **extra}, self.member)
+        for bad in ({"gates": [{"after": "Codex"}]},
+                    {"sequential": True, "gates": [{"after": "Nobody"}]},
+                    {"sequential": True, "gates": [{"after": "Codex", "repeat_from": "Codex-2"}]},
+                    {"sequential": True, "gates": [{"after": "Antigravity"}, {"after": "Codex-2", "repeat_from": "Antigravity"}]},
+                    {"sequential": True, "loop": True, "gates": [{"after": "Codex-2"}]},
+                    {"sequential": True, "gates": [{"after": "Codex"}, {"after": "Codex"}]}):
+            self.assertEqual(post(**bad)[0], 400, bad)
+        self.assertEqual(post(sequential=True, gates=[{"after": "Antigravity"}, {"after": "Codex-2", "repeat_from": "Codex"}])[0], 201)
+
+    def test_a_gate_hands_back_in_the_middle_and_the_host_goes_on(self):
+        """A gate after a step hands back to the host; continuing goes on to the next step and costs a round."""
+        self.request(f"{self.path}/budget", {"max_rounds": 5}, self.owner)
+        FreeRoomTests.say(self, "写完先验收")
+        self.work("Claude", to=["Antigravity", "Codex"], sequential=True, gates=[{"after": "Antigravity"}])
+        self.work("Antigravity")
+        gate = self.host_pending()
+        self.assertEqual((gate["sequence"]["phase"], gate["sequence"]["gate"]), ("gate", {"after": 1, "repeat_from": None, "can_proceed": True}))
+        order = self.request(self.path)[1]["speaking_order"]
+        self.assertEqual(([(item["name"], item["state"]) for item in order["items"]][:2], order["movable"]),
+                         ([("Antigravity", "done"), ("Codex", "queued")], []), "a relay with gates keeps its order")
+        url = f"{self.path}/sequences/continue"
+        status, result = self.request(url, {"actor": "Claude", "request_id": gate["id"]}, self.member)
+        self.assertEqual((status, result["proceeded"], result["pass"]), (200, True, 1), result)
+        self.assertEqual(self.requests()[-1], ("Codex", "ask", "pending"))
+        self.assertEqual(self.request(self.path)[1]["free"]["chain_rounds"][0]["used"], 2, "going on past a gate is a round")
+        self.work("Codex")
+        end = self.host_pending()
+        self.assertEqual(end["sequence"]["phase"], "end")
+        self.assertEqual(self.request(url, {"actor": "Claude", "request_id": end["id"]}, self.member)[0], 404)
+
+    def test_a_gate_loops_over_part_of_the_relay_then_goes_on(self):
+        """A gate with repeat_from runs only its stretch again; proceed carries the relay on to the steps after it."""
+        self.request(f"{self.path}/members", {"name": "Codex-2", "adapter": "codex_cli", "token": (token := uuid.uuid4().hex)}, self.owner)
+        self.tokens["Codex-2"] = token
+        self.request(f"{self.path}/budget", {"max_rounds": 6}, self.owner)
+        FreeRoomTests.say(self, "写审循环后记账")
+        self.work("Claude", to=["Antigravity", "Codex", "Codex-2"], sequential=True, gates=[{"after": "Codex", "repeat_from": "Codex"}])
+        self.work("Antigravity")
+        self.work("Codex")
+        checkpoint = self.host_pending()
+        self.assertEqual((checkpoint["sequence"]["phase"], checkpoint["sequence"]["gate"]),
+                         ("checkpoint", {"after": 2, "repeat_from": 2, "can_proceed": True}))
+        url = f"{self.path}/sequences/continue"
+        status, result = self.request(url, {"actor": "Claude", "request_id": checkpoint["id"]}, self.member)
+        self.assertEqual((status, result["pass"], result["proceeded"]), (200, 2, False), result)
+        self.assertEqual(self.requests()[-1], ("Codex", "ask", "pending"), "only the looped stretch runs again")
+        self.work("Codex")
+        second = self.host_pending()
+        sequence = self.request(f"{self.path}/sequences/{second['sequence']['id']}", token=self.member)[1]
+        self.assertEqual([(item["member"], item["step"]) for item in sequence["answers"]], [("Codex", 2)])
+        self.assertEqual(self.request(url, {"actor": "Claude", "request_id": second["id"], "proceed": "yes"}, self.member)[0], 400)
+        status, result = self.request(url, {"actor": "Claude", "request_id": second["id"], "proceed": True}, self.member)
+        self.assertEqual((status, result["proceeded"]), (200, True), result)
+        self.assertEqual(self.requests()[-1], ("Codex-2", "ask", "pending"))
+        self.work("Codex-2")
+        self.assertEqual(self.host_pending()["sequence"]["phase"], "end")
+
+    def test_proceeding_past_the_last_step_is_refused(self):
+        """A loop's checkpoint after the last step has nothing to go on to; the host accepts by answering."""
+        FreeRoomTests.say(self, "循环")
+        self.work("Claude", to=["Antigravity", "Codex"], sequential=True, loop=True)
+        self.work("Antigravity")
+        self.work("Codex")
+        checkpoint = self.host_pending()
+        self.assertEqual(checkpoint["sequence"]["gate"]["can_proceed"], False)
+        self.assertEqual(self.request(f"{self.path}/sequences/continue", {"actor": "Claude", "request_id": checkpoint["id"], "proceed": True},
+                                      self.member)[0], 400)
+
     def test_loop_stops_at_the_round_limit_and_continuing_the_chain_resumes_it(self):
         """The room's round limit bounds a loop by passes: the next pass past it is held, and the owner's continue sends it on."""
         from backend import free_room
