@@ -355,7 +355,7 @@ export function list_workflows(home) {
       const flag = disabled.includes(id) ? { disabled: true } : {};
       try {
         const workflow = read_saved_workflow(home, id);
-        return { id, label: workflow.label || id, description: workflow.description, cards: workflow.agents.length, ...flag };
+        return { id, label: workflow.label || id, description: workflow.description, cards: workflow.agents.length, directory: workflow.directory, ...flag };
       } catch (error) { return { id, label: id, description: '', cards: 0, error: error.message, ...flag }; }
     });
   });

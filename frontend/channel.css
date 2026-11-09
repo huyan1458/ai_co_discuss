@@ -888,7 +888,9 @@ html[data-theme^="channel"] .advanced-fields { border-color: #414957; }
   .channel-work-status { padding: 0 6px; }
   .channel-tabbar { display: flex; height: 36px; padding-inline: 8px; }
   .channel-tabs [data-slot="list"] { padding-block: 3px; }
-  .channel-tabs [data-slot="trigger"] { height: 28px; }
+  /* Six tabs on a phone: each takes the width its own label needs, so "工作流" is not cut while two-character labels share the rest. */
+  .channel-tabs [data-slot="list"] { gap: 2px; }
+  .channel-tabs [data-slot="trigger"] { flex: 1 1 auto; height: 28px; padding: 0 5px; gap: 3px; }
   .channel-host-brief { padding: 8px 16px; }
   .channel-brief-heading { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 8px; }
   .channel-brief-content { padding: 4px 0 6px 20px; }

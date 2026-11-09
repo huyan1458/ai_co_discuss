@@ -32,17 +32,17 @@ const NODE_WIDTH = { card: 272, start: 84, host: 104 };
 const NODE_HEIGHT = { card: 268, start: 40, host: 40 };
 const COLUMN_GAP = 120, ROW_GAP = 28;
 const CARD_HANDLE = ".workflow-card-grip";
+// The whole-workflow view (double click, the fit button): as far out as it takes, on a phone further still.
 const FIT = { padding: 0.08, maxZoom: 1, minZoom: 0.25 };
-// A phone's canvas is narrow: fitting may zoom further out so the whole picture shows; pinch in for detail.
 const COMPACT_FIT = { ...FIT, minZoom: 0.15 };
+// The view a workflow opens at: the whole of it when that is still readable, else readable from the start onwards.
+const READABLE_ZOOM = 0.6, OPEN_PADDING = 24;
 // Undo keeps this many steps; edits within this many milliseconds of each other (typing, say) are one step.
 const HISTORY_LIMIT = 100, HISTORY_DELAY = 400;
 // A loop's path: how far it leaves its ends sideways, how far below the nodes it passes, and its corner radius.
 const LOOP_OUT = 24, LOOP_CLEARANCE = 32, LOOP_RADIUS = 14;
 // Each wider loop runs this much lower than the one inside it, so loops never share a line.
 const LOOP_STACK = 22;
-// Zoomed out below this, cards show a large name plate and notes grow (up to NOTE_SCALE_MAX) so the picture stays readable.
-const FAR_ZOOM = 0.7, NOTE_SCALE_MAX = 2.5;
 const STATUS = { text: "", tone: "" };
 const PRESET_PREFIX = "preset:";
 // A card ID becomes the member name's suffix; 16 characters at most, so a numbered one keeps room for its digits.
@@ -333,24 +333,30 @@ function ready(flow_instance) {
   requestAnimationFrame(fit_once);
 }
 
-// The current zoom, for the zoomed-out view.
-const zoom = ref(1);
-const far = computed(() => zoom.value < FAR_ZOOM);
-const note_scale = computed(() => Math.min(NOTE_SCALE_MAX, Math.max(1, 1 / zoom.value)).toFixed(2));
-
 /** Put a card already in the workflow on the canvas once more (a role that acts at two points of the flow). */
 function place_again(card) {
   adding.value = false;
   add_node(to_node({ id: next_id("card_"), type: "card", card }));
 }
 
-/** Fit the whole workflow in view: when the pane is ready and again once Vue Flow has measured its nodes (either may come first). */
+/** Open the workflow in view: when the pane is ready and again once Vue Flow has measured its nodes (either may come first). */
 let fitted = false;
 function fit_once() {
-  // Vue Flow reports every node added later too; only the first measurement fits.
+  // Vue Flow reports every node added later too; only the first measurement places the view.
   if (fitted || !instance.value || !nodes.value.length) return;
   fitted = true;
-  instance.value.fitView(fit_options());
+  open_view();
+}
+
+/** The whole workflow when it fits at a readable size; otherwise readable size, its start at the left, its height centred. */
+function open_view() {
+  const pane = canvas_element.value?.getBoundingClientRect();
+  if (!pane?.width || !pane.height) return;
+  const left = Math.min(...nodes.value.map((node) => node.position.x)), right = Math.max(...nodes.value.map((node) => node.position.x + NODE_WIDTH[node.type]));
+  const top = Math.min(...nodes.value.map((node) => node.position.y)), bottom = Math.max(...nodes.value.map((node) => node.position.y + NODE_HEIGHT[node.type]));
+  const whole = Math.min(pane.width / ((right - left) * (1 + 2 * FIT.padding)), pane.height / ((bottom - top) * (1 + 2 * FIT.padding)));
+  if (whole >= READABLE_ZOOM) { instance.value.fitView(FIT); return; }
+  instance.value.setViewport({ x: OPEN_PADDING - left * READABLE_ZOOM, y: pane.height / 2 - (top + bottom) / 2 * READABLE_ZOOM, zoom: READABLE_ZOOM });
 }
 
 /** How far fitting may zoom out. */
@@ -358,9 +364,9 @@ function fit_options() {
   return props.compact ? COMPACT_FIT : FIT;
 }
 
-/** Fit the whole workflow in view now (a phone shows the canvas only after switching to it). */
+/** Place the opening view now (a phone or a tablet held upright shows the canvas only after switching to it). */
 function fit() {
-  instance.value?.fitView(fit_options());
+  if (instance.value) open_view();
 }
 defineExpose({ fit });
 
@@ -430,10 +436,10 @@ function drag_stop() { dragging = false; commit(); }
 </script>
 
 <template>
-  <div ref="canvas_element" class="workflow-canvas" :class="{ 'is-far': far }" :style="{ '--note-scale': note_scale }" @dblclick="pane_double_click">
+  <div ref="canvas_element" class="workflow-canvas" @dblclick="pane_double_click">
     <VueFlow v-model:nodes="nodes" v-model:edges="edges" :min-zoom="0.2" :max-zoom="1.8" :delete-key-code="['Delete', 'Backspace']" :zoom-on-double-click="false"
       :is-valid-connection="valid_connection" elevate-nodes-on-select @connect="connect" @connect-start="connect_start" @connect-end="connect_end"
-      @node-drag-start="drag_start" @node-drag-stop="drag_stop" @pane-ready="ready" @nodes-initialized="fit_once" @viewport-change="(viewport) => { zoom = viewport.zoom; }">
+      @node-drag-start="drag_start" @node-drag-stop="drag_stop" @pane-ready="ready" @nodes-initialized="fit_once">
       <template #node-start>
         <UTooltip text="从右侧圆点拖线连到成员，示意谁先接手；拖到空白处可直接添加">
           <div class="workflow-pill is-start">
@@ -451,7 +457,6 @@ function drag_stop() { dragging = false; commit(); }
               aria-label="主持人在这里做什么" :style="{ width: `${Math.max(3, (node.data.label || '').length + 1)}em` }"
               @input="set_note('nodes', node.id, $event.target.value)" @keydown.enter="$event.target.blur()" />
             <b v-else-if="node.data.label" class="workflow-pill-note">{{ node.data.label }}</b>
-            <span v-if="far" class="workflow-far-tag">{{ node.data.label ? `主持人｜${node.data.label}` : '主持人' }}</span>
             <button type="button" class="workflow-pill-close nodrag" aria-label="删除主持人节点" @click.stop="remove_node(node.id)"><UIcon name="i-lucide-x" class="workflow-icon" /></button>
             <Handle type="source" :position="Position.Right" class="workflow-handle" />
           </div>
@@ -464,10 +469,6 @@ function drag_stop() { dragging = false; commit(); }
             <UIcon name="i-lucide-grip-horizontal" class="workflow-icon" />
           </div>
           <div class="workflow-card-body nodrag nopan nowheel">
-            <div v-if="far" class="workflow-card-far" aria-hidden="true">
-              <strong>{{ label_of(node.data.card) }}</strong>
-              <small>{{ agent_of(node.data.card).description || bridge.display_name(bridge.platform_of(agent_of(node.data.card).name)) }}</small>
-            </div>
             <ExpertCard :preset="agent_of(node.data.card)" :name="agent_of(node.data.card).name" mode="cli" :status="STATUS"
               :access_locked="Boolean(agent_of(node.data.card).requested_access && agent_of(node.data.card).project_access === 'read')"
               @update:preset="(value) => set_agent(node.data.card, value)" @remove="remove_card(node.data.card)" />
@@ -483,7 +484,7 @@ function drag_stop() { dragging = false; commit(); }
           :class="{ 'is-loop': shape.loops.has(edge.id), 'is-selected': edge.selected }" />
         <EdgeLabelRenderer>
           <div v-if="edge.selected || edge.data?.label" class="workflow-edge-note nodrag nopan" :class="{ 'is-loop': shape.loops.has(edge.id), 'is-selected': edge.selected }"
-            :style="{ transform: `translate(-50%, -50%) translate(${edge_path(edge)[1]}px, ${edge_path(edge)[2]}px) scale(var(--note-scale, 1))` }">
+            :style="{ transform: `translate(-50%, -50%) translate(${edge_path(edge)[1]}px, ${edge_path(edge)[2]}px)` }">
             <template v-if="edge.selected">
               <input :value="edge.data?.label" class="workflow-note-input" :maxlength="MAX_EDGE_LABEL" placeholder="说明，如“返工”" aria-label="这条连线的说明"
                 :style="{ width: `${Math.max(6, (edge.data?.label || '').length + 1)}em` }" @input="set_note('edges', edge.id, $event.target.value)" @keydown.enter="$event.target.blur()" />
@@ -556,15 +557,7 @@ function drag_stop() { dragging = false; commit(); }
   background: var(--ui-bg-elevated); color: var(--ui-text-muted); font-size: 12px; cursor: grab; }
 .workflow-card-grip:active { cursor: grabbing; }
 .workflow-card.is-selected .workflow-card-grip { border-color: var(--channel-accent, var(--ui-primary)); box-shadow: 0 0 0 2px color-mix(in srgb, var(--channel-accent, var(--ui-primary)) 30%, transparent); }
-.workflow-card-body { opacity: .7; }
 .workflow-card-body { cursor: default; }
-.workflow-card-body { position: relative; }
-.workflow-card-far { position: absolute; inset: 0; z-index: 2; display: grid; align-content: center; gap: 10px; padding: 18px; border: 1px solid var(--channel-edge-control, var(--ui-border));
-  border-radius: 12px; background: var(--ui-bg-elevated); }
-.workflow-card-far strong { overflow: hidden; color: var(--ui-text-highlighted); font-size: calc(17px * var(--note-scale, 2)); font-weight: 600; line-height: 1.2; white-space: nowrap; text-overflow: ellipsis; }
-.workflow-card-far small { display: -webkit-box; overflow: hidden; color: var(--ui-text-muted); font-size: calc(10px * var(--note-scale, 2)); line-height: 1.35; -webkit-line-clamp: 3; -webkit-box-orient: vertical; }
-.workflow-far-tag { position: absolute; bottom: calc(100% + 6px); left: 50%; transform: translateX(-50%) scale(var(--note-scale, 1)); transform-origin: bottom center;
-  color: #c99a2e; font-size: 12px; font-weight: 600; white-space: nowrap; pointer-events: none; }
 .workflow-canvas-skill { color: var(--channel-accent, var(--ui-primary)); text-decoration: underline; text-underline-offset: 3px; }
 .workflow-canvas-skill:hover { color: var(--ui-text-highlighted); }
 .workflow-card-grant { display: flex; gap: 6px; align-items: center; margin-top: 6px; color: var(--ui-warning, #e0a33a); font-size: 12px; }

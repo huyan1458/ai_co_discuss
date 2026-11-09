@@ -13,7 +13,7 @@ import WorkflowEditor from "./WorkflowEditor.vue";
 import { workflow_files_from_folder, workflow_files_from_zip } from "./workflow-files.js";
 import { flow_in_use } from "../runner/workflow_flow.mjs";
 
-const { view, bridge } = inject("discussion");
+const { view, bridge, act } = inject("discussion");
 const COMMANDS_FILE = "commands.json";
 const NEW_SKILL = "按流程画布的接力派活；每一棒做什么、交回什么，写在派活正文里。";
 const available = computed(() => view.value.launch.available || view.value.launch.remote);
@@ -28,21 +28,23 @@ const deleting_label = computed(() => workflows.value.find((item) => item.id ===
 // The list column's and the SKILL.md panel's widths, dragged at their edges and remembered in this browser, and whether
 // the panel is open (it is unless the user folded it away).
 const LIST_WIDTH = { min: 160, max: 420, initial: 220, step: 16, key: "codiscuss.workflow_list_width" };
-const SKILL_WIDTH = { min: 300, max: 760, initial: 400, step: 16, key: "codiscuss.workflow_skill_width" };
+const SKILL_WIDTH = { min: 280, max: 760, initial: 340, step: 16, key: "codiscuss.workflow_skill_width" };
 const SKILL_OPEN_KEY = "codiscuss.workflow_skill_open";
 const list_width = ref(stored_width(LIST_WIDTH)), skill_width = ref(stored_width(SKILL_WIDTH));
 const skill_open = ref(remembered(SKILL_OPEN_KEY) !== "0");
-// A phone has room for one of SKILL.md and the canvas at a time; it starts on SKILL.md, the text the host works from.
-const PHONE_QUERY = "(max-width: 760px)";
-const phone_media = window.matchMedia(PHONE_QUERY);
-const phone = ref(phone_media.matches), phone_view = ref("skill");
-const follow_phone = (event) => { phone.value = event.matches; };
-phone_media.addEventListener("change", follow_phone);
-onBeforeUnmount(() => phone_media.removeEventListener("change", follow_phone));
+// A phone, and a tablet held upright, stack the page: workflows as tabs on top, then one of SKILL.md and the canvas at a
+// time, starting on SKILL.md, the text the host works from. (A tablet lays the site out 1440px wide, so width alone
+// cannot tell an upright tablet.)
+const STACKED_QUERY = "(max-width: 760px), (pointer: coarse) and (orientation: portrait)";
+const stacked_media = window.matchMedia(STACKED_QUERY);
+const stacked = ref(stacked_media.matches), pane = ref("skill");
+const follow_stacked = (event) => { stacked.value = event.matches; };
+stacked_media.addEventListener("change", follow_stacked);
+onBeforeUnmount(() => stacked_media.removeEventListener("change", follow_stacked));
 const canvas = ref(null);
-// The canvas was laid out hidden on a phone; fit it once it shows.
-watch(phone_view, (value) => { if (value === "canvas") nextTick(() => requestAnimationFrame(() => canvas.value?.fit())); });
-const show_skill = computed(() => Boolean(draft.value) && (phone.value ? phone_view.value === "skill" : skill_open.value));
+// The canvas was laid out hidden; place its view once it shows.
+watch(pane, (value) => { if (value === "canvas") nextTick(() => requestAnimationFrame(() => canvas.value?.fit())); });
+const show_skill = computed(() => Boolean(draft.value) && (stacked.value ? pane.value === "skill" : skill_open.value));
 const renaming = ref(""), rename_text = ref("");
 let rename_input = null;
 const zip_input = ref(null), folder_input = ref(null);
@@ -169,6 +171,7 @@ function item_menu(item) {
   return [[
     { label: "重命名", icon: "i-lucide-pencil", disabled: Boolean(item.error), onSelect: () => start_rename(item) },
     { label: item.disabled ? "启用" : "停用", icon: item.disabled ? "i-lucide-circle-play" : "i-lucide-circle-pause", onSelect: () => set_disabled(item, !item.disabled) },
+    { label: "复制文件夹路径", icon: "i-lucide-folder", disabled: !item.directory, onSelect: () => act("copy", item.directory) },
   ], [
     { label: "删除", icon: "i-lucide-trash-2", color: "error", onSelect: () => { deleting.value = item.id; } },
   ]];
@@ -244,9 +247,32 @@ function start_resize(event, bounds) {
 </script>
 
 <template>
-  <section class="workflow-library" :class="{ 'has-skill': show_skill, 'is-phone': phone }" aria-label="工作流"
+  <section class="workflow-library" :class="{ 'has-skill': show_skill, 'is-stacked': stacked }" aria-label="工作流"
     :style="{ '--workflow-list-width': `${list_width}px`, '--workflow-skill-width': `${skill_width}px` }">
-    <aside class="workflow-library-list">
+    <nav v-if="stacked" class="workflow-tabs" aria-label="工作流">
+      <div class="workflow-tabs-scroll" role="tablist">
+        <span v-if="draft && !saved_id" class="workflow-tab is-active">
+          <button type="button" role="tab" aria-selected="true"><UIcon name="i-lucide-file-plus-2" class="workflow-library-icon" />{{ draft.label || '未命名工作流' }}<small>未保存</small></button>
+        </span>
+        <span v-for="item in workflows" :key="item.id" class="workflow-tab" :class="{ 'is-active': saved_id === item.id, 'is-disabled': item.disabled, 'is-broken': item.error }">
+          <input v-if="renaming === item.id" :ref="(element) => { if (element) rename_input = element; }" v-model="rename_text" :maxlength="32" aria-label="新名称"
+            @keydown.enter.prevent="commit_rename" @keydown.esc.prevent="renaming = ''" @blur="commit_rename" />
+          <button v-else type="button" role="tab" :aria-selected="saved_id === item.id" :title="item.error || item.description" @click="saved_id !== item.id && guard(() => open_saved(item.id))">
+            <UIcon :name="item.error ? 'i-lucide-triangle-alert' : item.disabled ? 'i-lucide-circle-pause' : 'i-lucide-workflow'" class="workflow-library-icon" />{{ item.label }}</button>
+          <UDropdownMenu v-if="available && saved_id === item.id && renaming !== item.id" :items="item_menu(item)" :ui="{ content: 'channel-menu' }">
+            <UButton icon="i-lucide-ellipsis" size="xs" color="neutral" variant="ghost" :aria-label="`「${item.label}」的更多操作`" />
+          </UDropdownMenu>
+        </span>
+        <UDropdownMenu v-if="available" :items="add_items" :ui="{ content: 'channel-menu' }">
+          <UButton icon="i-lucide-plus" size="xs" color="neutral" variant="ghost" aria-label="新建或导入工作流" class="workflow-tabs-add" />
+        </UDropdownMenu>
+      </div>
+      <div v-if="draft" class="workflow-tabs-view" role="tablist" aria-label="做法说明或示意图">
+        <button type="button" role="tab" :aria-selected="pane === 'skill'" aria-label="做法说明" title="做法说明" @click="pane = 'skill'"><UIcon name="i-lucide-file-text" class="workflow-library-icon" /></button>
+        <button type="button" role="tab" :aria-selected="pane === 'canvas'" aria-label="示意图" title="示意图" @click="pane = 'canvas'"><UIcon name="i-lucide-network" class="workflow-library-icon" /></button>
+      </div>
+    </nav>
+    <aside v-else class="workflow-library-list">
       <div class="workflow-library-head">
         <h2>工作流</h2>
         <UDropdownMenu v-if="available" :items="add_items" :ui="{ content: 'channel-menu' }">
@@ -275,21 +301,17 @@ function start_resize(event, bounds) {
         </li>
       </ul>
     </aside>
-    <div class="workflow-library-resize" role="separator" aria-orientation="vertical" aria-label="调整列表宽度" tabindex="0" title="拖动调整宽度，双击还原"
+    <div v-if="!stacked" class="workflow-library-resize" role="separator" aria-orientation="vertical" aria-label="调整列表宽度" tabindex="0" title="拖动调整宽度，双击还原"
       :aria-valuenow="list_width" :aria-valuemin="LIST_WIDTH.min" :aria-valuemax="LIST_WIDTH.max" @pointerdown.prevent="start_resize($event, LIST_WIDTH)" @dblclick="set_width(LIST_WIDTH, LIST_WIDTH.initial)"
       @keydown.left.prevent="set_width(LIST_WIDTH, list_width - LIST_WIDTH.step)" @keydown.right.prevent="set_width(LIST_WIDTH, list_width + LIST_WIDTH.step)" />
-    <div v-if="phone && draft" class="workflow-library-switch" role="tablist" aria-label="做法说明或示意图">
-      <button type="button" role="tab" :aria-selected="phone_view === 'skill'" @click="phone_view = 'skill'"><UIcon name="i-lucide-file-text" class="workflow-library-icon" />做法说明</button>
-      <button type="button" role="tab" :aria-selected="phone_view === 'canvas'" @click="phone_view = 'canvas'"><UIcon name="i-lucide-network" class="workflow-library-icon" />示意图</button>
-    </div>
-    <div v-show="!phone || phone_view === 'canvas' || !draft" class="workflow-library-stage">
-      <WorkflowCanvas v-if="draft" ref="canvas" :key="canvas_key" v-model:flow="draft.flow" v-model:agents="draft.agents" :compact="phone" @open-skill="set_skill_open(true)">
+    <div v-show="!stacked || pane === 'canvas' || !draft" class="workflow-library-stage">
+      <WorkflowCanvas v-if="draft" ref="canvas" :key="canvas_key" v-model:flow="draft.flow" v-model:agents="draft.agents" :compact="stacked" @open-skill="stacked ? (pane = 'skill') : set_skill_open(true)">
         <template #actions>
-          <input v-model="draft.label" class="workflow-library-name" :maxlength="32" placeholder="未命名工作流" aria-label="工作流名称" title="点击改名"
+          <input v-if="!stacked" v-model="draft.label" class="workflow-library-name" :maxlength="32" placeholder="未命名工作流" aria-label="工作流名称" title="点击改名"
             :style="{ width: `calc(${Math.max(5, Math.min(16, (draft.label || '').length + 1))}em + 18px)` }" @keydown.enter="$event.target.blur()" />
           <i v-if="dirty" class="workflow-library-dirty" title="有未保存的修改（Ctrl+S 保存）" />
-          <UTooltip v-if="!skill_open && !phone" text="展开做法说明（SKILL.md）：主持人派活照着它"><UButton icon="i-lucide-panel-right-open" label="做法说明" size="sm" color="neutral" variant="ghost" @click="set_skill_open(true)" /></UTooltip>
-          <UTooltip text="保存（Ctrl+S）"><UButton icon="i-lucide-save" label="保存" size="sm" class="channel-primary-button" :disabled="!dirty" :loading="busy" @click="save" /></UTooltip>
+          <UTooltip v-if="!skill_open && !stacked" text="展开做法说明（SKILL.md）：主持人派活照着它"><UButton icon="i-lucide-panel-right-open" label="做法说明" size="sm" color="neutral" variant="ghost" @click="set_skill_open(true)" /></UTooltip>
+          <UTooltip text="保存（Ctrl+S）"><UButton icon="i-lucide-save" :label="stacked ? undefined : '保存'" aria-label="保存" size="sm" class="channel-primary-button" :disabled="!dirty" :loading="busy" @click="save" /></UTooltip>
         </template>
       </WorkflowCanvas>
       <div v-else class="workflow-library-empty">
@@ -305,12 +327,12 @@ function start_resize(event, bounds) {
     <input ref="zip_input" type="file" accept=".zip,application/zip" hidden @change="on_zip" />
     <input ref="folder_input" type="file" webkitdirectory hidden @change="on_folder" />
     <template v-if="show_skill">
-      <div v-if="!phone" class="workflow-library-resize is-skill" role="separator" aria-orientation="vertical" aria-label="调整做法说明宽度" tabindex="0" title="拖动调整宽度，双击还原"
+      <div v-if="!stacked" class="workflow-library-resize is-skill" role="separator" aria-orientation="vertical" aria-label="调整做法说明宽度" tabindex="0" title="拖动调整宽度，双击还原"
         :aria-valuenow="skill_width" :aria-valuemin="SKILL_WIDTH.min" :aria-valuemax="SKILL_WIDTH.max" @pointerdown.prevent="start_resize($event, SKILL_WIDTH)"
         @dblclick="set_width(SKILL_WIDTH, SKILL_WIDTH.initial)" @keydown.left.prevent="set_width(SKILL_WIDTH, skill_width + SKILL_WIDTH.step)"
         @keydown.right.prevent="set_width(SKILL_WIDTH, skill_width - SKILL_WIDTH.step)" />
       <WorkflowEditor :key="canvas_key" v-model:workflow="draft" v-model:commands-allowed="commands_allowed" :saved="Boolean(saved_id)"
-        :collapsible="!phone" @delete="deleting = saved_id" @collapse="set_skill_open(false)" />
+        :compact="stacked" @collapse="set_skill_open(false)" />
     </template>
     <ConfirmDialog :open="Boolean(deleting)" :title="`删除工作流「${deleting_label}」`" description="工作流文件夹会从本机删除，无法撤销。"
       :items="['已启用它的房间会显示“工作流不可用”，成员改用房间里的设置。', '房间成员、消息记录和项目文件不受影响。']" confirm-label="删除" danger
@@ -340,9 +362,6 @@ function start_resize(event, bounds) {
 .workflow-library-resize { position: absolute; top: 0; bottom: 0; left: calc(var(--workflow-list-width, 220px) - 3px); z-index: 7; width: 6px; cursor: col-resize; touch-action: none; }
 /* Touch: a wider grip for the edges (a tablet shows the desktop layout scaled down). */
 @media (pointer: coarse) { .workflow-library-resize { width: 20px; margin-left: -7px; } .workflow-library-resize.is-skill { margin-left: 0; margin-right: -7px; } }
-.workflow-library-switch { display: flex; gap: 4px; padding: 6px 10px; border-bottom: 1px solid var(--ui-border-muted); }
-.workflow-library-switch button { display: flex; flex: 1; align-items: center; justify-content: center; gap: 6px; height: 34px; border-radius: 8px; color: var(--ui-text-muted); font-size: 13px; }
-.workflow-library-switch button[aria-selected="true"] { background: var(--ui-bg-accented); color: var(--ui-text-highlighted); font-weight: 500; }
 .workflow-library-resize.is-skill { left: auto; right: calc(var(--workflow-skill-width, 400px) - 3px); }
 .workflow-library-resize:hover, .workflow-library-resize:focus-visible { background: color-mix(in srgb, var(--channel-accent, var(--ui-primary)) 45%, transparent); outline: none; }
 .workflow-library-list li > button[role="option"]:hover { background: var(--ui-bg-elevated); }
@@ -361,10 +380,23 @@ function start_resize(event, bounds) {
 .workflow-library-name:hover { border-color: var(--ui-border-muted); }
 .workflow-library-name:focus { border-color: var(--channel-accent, var(--ui-primary)); background: var(--ui-bg); }
 .workflow-library-dirty { flex-shrink: 0; width: 7px; height: 7px; margin-right: 4px; border-radius: 50%; background: var(--ui-warning, #e0a33a); }
-@media (max-width: 760px) {
-  .workflow-library, .workflow-library.has-skill { grid-template-columns: minmax(0, 1fr); grid-template-rows: auto auto minmax(0, 1fr); }
-  .workflow-library :deep(.workflow-skill) { min-height: 0; border-left: 0; }
-  .workflow-library-list { max-height: 160px; border-right: 0; border-bottom: 1px solid var(--ui-border-muted); }
-  .workflow-library-resize { display: none; }
-}
+/* Stacked (phone, upright tablet): workflows as tabs like open files, one row; the rest is SKILL.md or the canvas. */
+.workflow-library.is-stacked, .workflow-library.is-stacked.has-skill { grid-template-columns: minmax(0, 1fr); grid-template-rows: auto minmax(0, 1fr); }
+.workflow-library.is-stacked :deep(.workflow-skill) { min-height: 0; border-left: 0; }
+.workflow-tabs { display: flex; align-items: stretch; min-width: 0; height: 38px; border-bottom: 1px solid var(--ui-border-muted); background: var(--ui-bg-elevated); }
+.workflow-tabs-scroll { display: flex; flex: 1; align-items: stretch; min-width: 0; overflow-x: auto; scrollbar-width: none; }
+.workflow-tabs-scroll::-webkit-scrollbar { display: none; }
+.workflow-tab { position: relative; display: flex; flex-shrink: 0; align-items: center; max-width: 220px; border-right: 1px solid var(--ui-border-muted); color: var(--ui-text-muted); }
+.workflow-tab > button { display: flex; align-items: center; gap: 6px; min-width: 0; height: 100%; padding: 0 12px; overflow: hidden; font-size: 13px; white-space: nowrap; text-overflow: ellipsis; }
+.workflow-tab > button small { color: var(--ui-text-dimmed); font-size: 11px; }
+.workflow-tab.is-active { background: var(--ui-bg); color: var(--ui-text-highlighted); box-shadow: inset 0 2px 0 var(--channel-accent, var(--ui-primary)); }
+.workflow-tab.is-active > button { padding-right: 2px; }
+.workflow-tab.is-disabled > button { opacity: .6; }
+.workflow-tab.is-broken { color: var(--ui-warning, #e0a33a); }
+.workflow-tab > input { width: 9em; height: 26px; margin: 0 6px; padding: 0 6px; border: 1px solid var(--channel-accent, var(--ui-primary)); border-radius: 6px; background: var(--ui-bg);
+  color: var(--ui-text-highlighted); font-size: 13px; outline: none; }
+.workflow-tabs-add { flex-shrink: 0; align-self: center; margin: 0 4px; }
+.workflow-tabs-view { display: flex; flex-shrink: 0; align-items: center; gap: 2px; padding: 0 6px; border-left: 1px solid var(--ui-border-muted); }
+.workflow-tabs-view button { display: grid; place-items: center; width: 34px; height: 28px; border-radius: 7px; color: var(--ui-text-muted); }
+.workflow-tabs-view button[aria-selected="true"] { background: var(--ui-bg-accented); color: var(--ui-text-highlighted); }
 </style>

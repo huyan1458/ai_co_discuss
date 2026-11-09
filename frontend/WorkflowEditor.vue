@@ -1,18 +1,18 @@
 <script setup>
 /**
  * The workflow's SKILL.md beside its canvas, as a docked panel: the host dispatches by this text alone, so it stays in
- * view. It reads as rendered Markdown and switches to editing the source; the one-line description, the commands an
- * import registers, the folder and deletion sit with it. The name is edited on the canvas, the cards on the canvas too.
+ * view. It reads as rendered Markdown and switches to editing the source; the one-line description and (folded) the
+ * commands an import registers sit with it. The name, the folder and deletion are in the workflow list's "…" menu.
  */
 import { computed, inject, nextTick, ref } from "vue";
 
 const workflow = defineModel("workflow", { type: Object, required: true });
 // An import's commands run on this computer when an API member calls them, so they are kept only once the user allows them.
 const commands_allowed = defineModel("commandsAllowed", { type: Boolean, default: false });
-// `collapsible`: the panel can fold away beside the canvas (not on a phone, where it is one of two views).
-const props = defineProps({ saved: Boolean, collapsible: { type: Boolean, default: true } });
-const emit = defineEmits(["delete", "collapse"]);
-const { view, act } = inject("discussion");
+// `compact`: the stacked page (phone, upright tablet), where the panel is one of two views and cannot fold away.
+const props = defineProps({ saved: Boolean, compact: Boolean });
+const emit = defineEmits(["collapse"]);
+const { view } = inject("discussion");
 const MAX_SKILL = 20000;
 // A workflow with no SKILL.md text yet opens in editing; otherwise the rendered text comes first.
 const editing = ref(!workflow.value.skill?.trim());
@@ -31,12 +31,12 @@ function edit() {
 </script>
 
 <template>
-  <aside class="workflow-skill" aria-label="做法说明（SKILL.md）">
+  <aside class="workflow-skill" :class="{ 'is-compact': compact }" aria-label="做法说明（SKILL.md）">
     <header class="workflow-skill-head">
       <h3><UIcon name="i-lucide-file-text" class="workflow-skill-icon" />做法说明<small>SKILL.md · 主持人照它派活</small></h3>
       <UButton :icon="editing ? 'i-lucide-eye' : 'i-lucide-pencil'" :label="editing ? '预览' : '编辑'" size="xs" color="neutral" variant="soft"
         @click="editing ? (editing = false) : edit()" />
-      <UTooltip v-if="collapsible" text="收起做法说明"><UButton icon="i-lucide-panel-right-close" size="xs" color="neutral" variant="ghost" aria-label="收起做法说明" @click="emit('collapse')" /></UTooltip>
+      <UTooltip v-if="!compact" text="收起做法说明"><UButton icon="i-lucide-panel-right-close" size="xs" color="neutral" variant="ghost" aria-label="收起做法说明" @click="emit('collapse')" /></UTooltip>
     </header>
     <label class="workflow-skill-description">
       <span>一句话描述 <small>主持人凭它判断何时使用</small></span>
@@ -48,20 +48,16 @@ function edit() {
       <button v-else type="button" class="workflow-skill-empty" @click="edit"><UIcon name="i-lucide-pencil" class="workflow-skill-icon" />写下主持人怎么组织这个工作流</button>
     </div>
     <p v-if="editing" class="workflow-skill-count">{{ (workflow.skill || '').length }} / {{ MAX_SKILL }}</p>
-    <section v-if="commands.length" class="workflow-skill-commands" aria-label="登记的命令">
-      <h4><UIcon name="i-lucide-terminal" class="workflow-skill-icon" />API 成员可运行的命令</h4>
+    <details v-if="commands.length" class="workflow-skill-commands" :open="!saved">
+      <summary><UIcon name="i-lucide-terminal" class="workflow-skill-icon" />API 成员可运行的命令（{{ commands.length }}）</summary>
       <ul>
         <li v-for="command in commands" :key="command.id" :title="command.description"><strong>{{ command.id }}</strong>
           <UBadge :label="command.access === 'read' ? '只读' : '会改文件'" size="sm" variant="soft" :color="command.access === 'read' ? 'neutral' : 'warning'" />
           <code>{{ command.run.join(' ') }}</code></li>
       </ul>
       <label v-if="!saved" class="workflow-skill-grant"><input v-model="commands_allowed" type="checkbox" />允许这些命令在本机运行</label>
-    </section>
+    </details>
     <p v-if="replaced" class="workflow-skill-warn"><UIcon name="i-lucide-triangle-alert" class="workflow-skill-icon" />保存会覆盖库里的「{{ replaced.label }}」</p>
-    <footer v-if="saved" class="workflow-skill-footer">
-      <UButton icon="i-lucide-folder" label="复制文件夹路径" size="xs" color="neutral" variant="ghost" :title="workflow.directory" @click="act('copy', workflow.directory)" />
-      <UButton icon="i-lucide-trash-2" label="删除工作流" size="xs" color="error" variant="ghost" @click="emit('delete')" />
-    </footer>
   </aside>
 </template>
 
@@ -85,10 +81,16 @@ function edit() {
 .workflow-skill-empty:hover { color: var(--ui-text-highlighted); border-color: var(--channel-accent, var(--ui-primary)); }
 .workflow-skill-count { margin: -4px 0 0; color: var(--ui-text-dimmed); font-size: 11px; text-align: right; }
 .workflow-skill-commands { display: grid; gap: 6px; padding-top: 8px; border-top: 1px solid var(--ui-border-muted); }
-.workflow-skill-commands h4 { display: flex; align-items: center; gap: 6px; margin: 0; color: var(--ui-text-highlighted); font-size: 12px; }
+.workflow-skill-commands summary { display: flex; align-items: center; gap: 6px; color: var(--ui-text-muted); font-size: 12px; cursor: pointer; list-style: none; }
+.workflow-skill-commands summary::-webkit-details-marker { display: none; }
+.workflow-skill-commands summary::after { content: "›"; margin-left: auto; transition: transform .15s; }
+.workflow-skill-commands[open] summary::after { transform: rotate(90deg); }
+.workflow-skill-commands[open] summary { color: var(--ui-text-highlighted); }
 .workflow-skill-commands ul { display: grid; gap: 6px; margin: 0; padding: 0; list-style: none; font-size: 12px; }
 .workflow-skill-commands li { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; }
 .workflow-skill-commands code { flex-basis: 100%; overflow-wrap: anywhere; color: var(--ui-text-muted); }
 .workflow-skill-grant, .workflow-skill-warn { display: flex; gap: 6px; align-items: center; margin: 0; color: var(--ui-warning, #e0a33a); font-size: 12px; }
-.workflow-skill-footer { display: flex; justify-content: space-between; gap: 8px; padding-top: 8px; border-top: 1px solid var(--ui-border-muted); }
+/* Stacked page: tighter, the subtitle gives way to the text. */
+.workflow-skill.is-compact { gap: 8px; padding: 8px 12px; }
+.workflow-skill.is-compact .workflow-skill-head small, .workflow-skill.is-compact .workflow-skill-description small { display: none; }
 </style>
