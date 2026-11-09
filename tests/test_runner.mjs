@@ -1098,6 +1098,10 @@ test('agy separates native project permissions from the selected project and pre
   const original_path = join(projects, 'original.json');
   const original_text = JSON.stringify(original);
   writeFileSync(original_path, original_text);
+  // A folder agy loads skills from through skills.json stays readable but is never writable.
+  const shared_skills = join(user_home, '.agents', 'skills');
+  mkdirSync(shared_skills, { recursive: true });
+  writeFileSync(join(user_home, '.gemini', 'config', 'skills.json'), JSON.stringify({ entries: [{ path: shared_skills }] }));
   const task = { ...session_task(f.config), room_title: '架构评审' };
   const config = { project_id: 'original', project_access: 'read' };
   const first = prepare_agy_project(config, {}, task, user_home);
@@ -1108,7 +1112,7 @@ test('agy separates native project permissions from the selected project and pre
   assert.deepEqual(read.settings, {});
   assert.deepEqual(read.permissionGrants.permissionGrants.allow, [agy_rule(), rule(task.draft_directory)]);
   assert.ok(read.permissionGrants.permissionGrants.deny.includes(rule(join(f.config.directory, 'source'))));
-  for (const path of [task.directory, ...task.skill_directories, join(user_home, '.gemini')]) {
+  for (const path of [task.directory, ...task.skill_directories, shared_skills, join(user_home, '.gemini')]) {
     assert.ok(read.permissionGrants.permissionGrants.deny.includes(rule(path)));
   }
   assert.ok(read.permissionGrants.permissionGrants.deny.includes('mcp(*)'));

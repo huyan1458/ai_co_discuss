@@ -19,7 +19,8 @@ const AGY_MODEL_TAG = [0xe2, 0x01];
 
 /**
  * One operation a headless agy run refused, from the failed tool step, with the project grant that would allow it.
- * agy names the check that failed: a sandboxed or unsandboxed command, or a file write.
+ * agy names the check that failed: a sandboxed or unsandboxed command, a file write, or (1.5.3+) a file read outside
+ * the project folders.
  */
 export function agy_denial(step) {
   const message = step.tool_info?.error?.message || '';
@@ -28,9 +29,9 @@ export function agy_denial(step) {
   // Older agy did not name the check; a refused step with a command line was a command.
   const kind = message.match(/permission check failed for (\w+)/)?.[1] || (parameters.CommandLine ? 'command' : '');
   if (!kind) return null;
-  if (kind === 'write_file') {
-    const path = String(parameters.Path || parameters.TargetFile || message.match(/write_file\(([^)]+)\)/)?.[1] || '');
-    return { tool: 'write_file', detail: path.slice(0, DENIAL_FIELD), rule: path ? `write_file(${resolve(dirname(path)).replaceAll('\\', '/')})` : '' };
+  if (kind === 'write_file' || kind === 'read_file') {
+    const path = String(parameters.Path || parameters.TargetFile || message.match(new RegExp(`${kind}\\(([^)]+)\\)`))?.[1] || '');
+    return { tool: kind, detail: path.slice(0, DENIAL_FIELD), rule: path ? `${kind}(${resolve(dirname(path)).replaceAll('\\', '/')})` : '' };
   }
   const command = String(parameters.CommandLine || '');
   const rule = `${kind === 'unsandboxed' ? 'unsandboxed_command' : 'command'}(${command})`;
@@ -51,6 +52,18 @@ function check_agy_shell(user_home) {
   if (grants.some(rule => rule === '*' || /^(?:command|unsandboxed|unsandboxed_command)\((?:\*|regex:\.\*)\)$/.test(rule))) {
     throw new Error('agy 全局设置放行了所有命令，会绕过讨论项目的权限；请移除全局 command(*) / unsandboxed(*) 放行，具体命令的放行不受影响（本工具旧版写入的规则可运行 codiscuss setup 清理），未交付讨论任务');
   }
+}
+
+/**
+ * Skill folders agy loads by itself: its own folder and every entry in its global skills.json. agy shows the model these
+ * skills' paths, so a run must be able to read them (1.5.3 refuses reads outside the added directories); agy leaves ~/
+ * unexpanded on Windows.
+ */
+export function agy_skill_directories(user_home = homedir()) {
+  const entries = read_json(join(user_home, '.gemini', 'config', 'skills.json')).entries;
+  const listed = (Array.isArray(entries) ? entries : []).map(entry => entry?.path).filter(value => typeof value === 'string')
+    .map(value => process.platform !== 'win32' && value.startsWith('~/') ? join(user_home, value.slice(2)) : value);
+  return [join(user_home, '.gemini', 'config', 'skills'), ...listed].filter(value => isAbsolute(value) && existsSync(value));
 }
 
 /** Test directory containment on the current platform, including Windows drive boundaries. */
@@ -94,7 +107,7 @@ function agy_project_grants(config, task, resources, user_home) {
   const read_only = (task.extra_directories || []).filter(item => item.access === 'read').map(item => item.path);
   const projects = [...new Set([project_directory(config), ...folders].filter(directory => directory && !same_path(directory, task.draft_directory)
     && !read_only.some(path => same_path(path, directory))))];
-  const protected_paths = [task.directory, ...task.skill_directories, join(user_home, '.gemini'),
+  const protected_paths = [task.directory, ...task.skill_directories, ...agy_skill_directories(user_home), join(user_home, '.gemini'),
     ...(config.project_access === 'read' ? projects : []), ...read_only];
   if (protected_paths.some(directory => within_directory(directory, task.draft_directory))) {
     throw new Error('agy 草稿目录不能位于只读项目、运行目录、技能或 .gemini 配置目录中，未交付讨论任务');
@@ -156,7 +169,8 @@ export function remove_agy_projects(directory, user_home = homedir()) {
 function invocation(config, binding, task, user_home) {
   const project = config.session_id ? null : prepare_agy_project(config, binding, task, user_home);
   const args = ['--output-format', 'stream-json', '--print-timeout', '0', '--add-dir', task.directory,
-    '--add-dir', task.draft_directory, ...[...task.skill_directories, ...(task.extra_directories || []).map(item => item.path)].flatMap(directory => ['--add-dir', directory])];
+    '--add-dir', task.draft_directory, ...[...task.skill_directories, ...agy_skill_directories(user_home),
+      ...(task.extra_directories || []).map(item => item.path)].flatMap(directory => ['--add-dir', directory])];
   // Headless agy refuses `--mode auto` ("not available for this account", 1.4.10–1.4.11) though its interactive window
   // offers it; 全放开 uses the flag its own denial message suggests on top of the open project grants.
   args.push('--mode', 'accept-edits', ...(config.project_access === 'full' ? ['--dangerously-skip-permissions'] : []),
@@ -176,7 +190,8 @@ function lifecycle(state, event, task, bind) {
   const denied = step?.state === 'ERROR' ? agy_denial(step) : null;
   if (denied) {
     if (!state.denials.some(item => item.detail === denied.detail) && state.denials.length < MAX_DENIALS) state.denials.push(denied);
-    state.denial = `${denied.tool === 'write_file' ? '写入' : '运行'}了未授权的${denied.tool === 'write_file' ? '文件' : '命令'}「${denied.detail.slice(0, 120)}」，无人值守模式下无法确认权限而被自动拒绝，随后会话结束`;
+    const action = { write_file: '写入了未授权的文件', read_file: '读取了未授权的文件' }[denied.tool] || '运行了未授权的命令';
+    state.denial = `${action}「${denied.detail.slice(0, 120)}」，无人值守模式下无法确认权限而被自动拒绝，随后会话结束`;
   }
   if (event.event === 'result') {
     const result = event.result || {};
