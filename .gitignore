@@ -19,6 +19,7 @@ MEMORY.local.md
 !.agents/skills/discuss-host/
 !.agents/skills/discuss-participant/
 !.agents/skills/discuss-goal/
+!.agents/skills/discuss-session/
 !.agents/skills/discuss-report/
 !.agents/skills/workflow-creator/
 !.agents/skills/local-tts-setup/

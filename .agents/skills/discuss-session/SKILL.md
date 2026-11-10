@@ -1,6 +1,11 @@
-# 协作房间中的讨论参与
+---
+name: discuss-session
+description: "AI CoDiscuss 的讨论模式技能，房间开启讨论后由参与讨论的成员调用，且须同时调用 discuss-participant（主持人另调 discuss-host）。专家用本页处理讨论请求：独立观点、阅读边界与回答；主持人另读 references/host.md：发言计划、名单变化、推进判断、到限与收束。编辑技能本身不启动讨论。"
+---
 
-本页用于协作房间中的讨论请求。房间模式始终是 `free`；自动任务用 `discussion_request.purpose` 区分专家 `discuss` 请求与主持 `discuss_host` 请求，`session.phase` 标明讨论阶段。收到主持任务时另读 discuss-host；没有 `discussion_request` 时按 [自由协作](free.md) 处理。
+# 讨论模式（discuss-session）
+
+本页用于协作房间中的讨论请求。房间模式始终是 `free`；自动任务用 `discussion_request.purpose` 区分专家 `discuss` 请求与主持 `discuss_host` 请求，`session.phase` 标明讨论阶段。本页是专家要读的部分，读写与提交规则仍以 [discuss-participant](../discuss-participant/SKILL.md) 为准；收到主持任务时另读 [讨论主持](references/host.md)。没有 `discussion_request` 时按 [自由协作](../discuss-participant/references/free.md) 处理。
 
 ## 硬约束
 
@@ -18,7 +23,7 @@
 
 ### 手动成员
 
-先按 [手动接入](manual.md) 使用自己的成员凭据注册。之后从 `room view ROOM` 的 `free.requests` 核对自己的待处理请求编号与用途；未注册或没有属于自己的请求时不发言。
+先按 [手动接入](../discuss-participant/references/manual.md) 使用自己的成员凭据注册。之后从 `room view ROOM` 的 `free.requests` 核对自己的待处理请求编号与用途；未注册或没有属于自己的请求时不发言。
 
 ## 阅读与回答
 

@@ -107,6 +107,7 @@ AI 按随包分发的技能参与房间，`codiscuss setup` 会为选定的软�
 | --- | --- | --- |
 | [discuss-participant](../.agents/skills/discuss-participant/SKILL.md) | 所有成员 | 阅读、发言与可靠写入 |
 | [discuss-host](../.agents/skills/discuss-host/SKILL.md) | 主持人（同时调用参与技能） | 自由协作中分派与接续成员的工作；讨论中安排发言、保存进度与收束 |
+| [discuss-session](../.agents/skills/discuss-session/SKILL.md) | 讨论中的专家与主持人 | 独立观点与阅读边界；主持人另读其中的讨论主持：发言计划、到限与收束 |
 | [discuss-goal](../.agents/skills/discuss-goal/SKILL.md) | 主持人（Goal 开启时） | 开启 Goal、每次唤醒时推进、声明等待或待确认、核验后宣告完成或卡住 |
 | [discuss-report](../.agents/skills/discuss-report/SKILL.md) | 报告整理者 | 把已有讨论整理为带原文引用的报告 |
 

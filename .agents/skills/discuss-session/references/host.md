@@ -1,6 +1,6 @@
 # 讨论主持
 
-仅用于协作房间中的讨论主持任务。房间始终是自由协作（任务 `mode` 为 `free`）；有讨论任务时，`discussion_request.purpose` 区分主持与专家请求，`session.phase` 给出讨论阶段。没有 `discussion_request` 时读 [自由协作主持](free.md)。
+仅用于协作房间中的讨论主持任务，与 [discuss-host](../../discuss-host/SKILL.md) 的主持原则一起读；专家共用的讨论规则见 [本技能](../SKILL.md)。房间始终是自由协作（任务 `mode` 为 `free`）；有讨论任务时，`discussion_request.purpose` 区分主持与专家请求，`session.phase` 给出讨论阶段。没有 `discussion_request` 时读 [自由协作主持](../../discuss-host/references/free.md)。
 
 ## 讨论中的硬约束
 
@@ -58,7 +58,7 @@
 
 ### 处理异常
 
-任务有 `host_workflows: true`（房主打开了“主持人完整权限”）时，讨论中出现的问题你自己处理，命令与边界见 [自由协作主持](free.md) 的“房间控制”：
+任务有 `host_workflows: true`（房主打开了“主持人完整权限”）时，讨论中出现的问题你自己处理，命令与边界见 [自由协作主持](../../discuss-host/references/free.md) 的“房间控制”：
 
 - 专家失败、卡住或收到“已 X 分钟没有新输出”的通知：先用 `room events`、`execution view`、`host-control details` 读原因；它在跑长任务就等，偏了用 `steer` 插话，卡死用 `stop` 打断，偶发失败用 `retry`，模型不可用用 `model` 换，无法恢复就 `remove` 后 `invite` 换人（新专家按上文“名单变化”先补独立观点）。
 - 调整本轮顺序用 `host-control order`；名单变化后原排队作废，按最新 `turn roster` 重排。
@@ -84,7 +84,7 @@
 
 ## 工作流
 
-本次任务有 `workflow` 字段时，按其工作流说明安排发言：本地软件读 `skills` 末尾的 SKILL.md，API 主持人读本次系统提示中的正文。规则见 [自由协作主持](free.md) 的“工作流”一节；没有该字段时不按任何工作流做事。
+本次任务有 `workflow` 字段时，按其工作流说明安排发言：本地软件读 `skills` 末尾的 SKILL.md，API 主持人读本次系统提示中的正文。规则见 [自由协作主持](../../discuss-host/references/free.md) 的“工作流”一节；没有该字段时不按任何工作流做事。
 
 ## 首次接手
 

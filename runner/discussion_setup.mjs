@@ -446,7 +446,7 @@ function report_styled(result, options) {
   for (const permission of result.permissions) {
     if (permission.status === 'removed') rows.push([permission.client, '已移除旧版全局放行规则', short_path(permission.path)]);
   }
-  if (result.skills.length) rows.push(['技能', result.skills.map(group => `${group.client} ${group.results.filter(skill => skill.status !== 'conflict').length}/${group.results.length}`).join(' · '), 'discuss-host · discuss-participant · discuss-goal · discuss-report · workflow-creator · local-tts-setup · local-stt-setup']);
+  if (result.skills.length) rows.push(['技能', result.skills.map(group => `${group.client} ${group.results.filter(skill => skill.status !== 'conflict').length}/${group.results.length}`).join(' · '), 'discuss-host · discuss-participant · discuss-goal · discuss-session · discuss-report · workflow-creator · local-tts-setup · local-stt-setup']);
   if (result.workflows.length) rows.push(['工作流', workflow_summary(result.workflows), '']);
   if (result.command.path) rows.push(['命令', `codiscuss ${tone.dim(`(${result.command.status})`)}`, short_path(result.command.path)]);
   const notes = result.issues.map(issue => tone.yellow(`▲ ${issue}`));

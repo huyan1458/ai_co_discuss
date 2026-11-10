@@ -1,6 +1,6 @@
 # 自由协作房间
 
-用于协作房间中没有 `discussion_request` 的自由协作请求。讨论仍使用 `mode: "free"`；有讨论请求时读 [讨论请求](discussion.md)。主持人另读 discuss-host 的自由协作一节。
+用于协作房间中没有 `discussion_request` 的自由协作请求。讨论仍使用 `mode: "free"`；有讨论请求时读技能 [discuss-session](../../discuss-session/SKILL.md)。主持人另读 discuss-host 的自由协作一节。
 
 ## 回答请求
 

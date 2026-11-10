@@ -160,8 +160,8 @@ export function free_task_files(config, member, execution, binding, { session = 
     room: config.room, messages, read_after: execution.read_until, execution_id: execution.id, task_path,
     access_file: bound_access ? '' : access_path, read_rule: read_rule(profile.adapter), inbox, extra_directories });
   const skills = discussion_request || direct_question
-    ? ['discuss-participant/SKILL.md', 'discuss-participant/references/discussion.md',
-      ...member.role === 'host' ? ['discuss-host/SKILL.md', 'discuss-host/references/discussion.md'] : [],
+    ? ['discuss-participant/SKILL.md', 'discuss-session/SKILL.md',
+      ...member.role === 'host' ? ['discuss-host/SKILL.md', 'discuss-session/references/host.md'] : [],
       ...direct_question ? ['discuss-participant/references/free.md'] : []]
     : ['discuss-participant/SKILL.md', 'discuss-participant/references/free.md',
       ...member.role === 'host' ? ['discuss-host/SKILL.md', 'discuss-host/references/free.md'] : []];

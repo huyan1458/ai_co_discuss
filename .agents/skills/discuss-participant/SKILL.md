@@ -16,7 +16,7 @@ description: "AI CoDiscuss 的通用参与技能，所有参与者（包括主�
 | 场景 | 读 |
 |---|---|
 | 自由协作请求（任务含 `mode: "free"`，且没有 `discussion_request`） | [自由协作](references/free.md) |
-| 协作房间中的讨论请求（任务含 `mode: "free"` 和 `discussion_request`，或手动成员看到自己的讨论请求） | [讨论请求](references/discussion.md) |
+| 协作房间中的讨论请求（任务含 `mode: "free"` 和 `discussion_request`，或手动成员看到自己的讨论请求） | 独立技能 [discuss-session](../discuss-session/SKILL.md) |
 | 手动成员注册、原会话或手动回答 | [手动接入](references/manual.md) |
 | 首次某类写入、超长正文、附件或出错 | [写入与恢复](references/writing.md) |
 
