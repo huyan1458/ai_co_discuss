@@ -581,13 +581,10 @@ export class FreeRoomRunner {
     if (!notice || Date.now() < notice.due || Date.now() - (this.notice_failed_at ?? 0) < NOTICE_RETRY_MS) return;
     if (!this.notifier.ready() || this.notifier.sent(notice.key)) return;
     try {
-      const question = notice.goal.phase_note ? `主持人在等你确认：
-${notice.goal.phase_note}` : await this.latest_excerpt(room);
-      const text = `${question}
-
-Goal：${notice.goal.objective}
-直接回复这条消息，会作为你的发言发到这个房间。`;
-      const result = await this.notifier.send({ key: notice.key, room: { site: this.config.site, room: this.config.room, title: room.title }, text });
+      // Weixin folds single line breaks, so each part is its own paragraph.
+      const question = notice.goal.phase_note ? ['主持人在等你确认：', notice.goal.phase_note] : await this.latest_excerpt(room);
+      const paragraphs = [...question, `目标：${notice.goal.objective}`, '直接回复这条消息，会作为你的发言发回这个房间。'];
+      const result = await this.notifier.send({ key: notice.key, room: { site: this.config.site, room: this.config.room, title: room.title }, paragraphs });
       if (result.status === 'sent') this.log(`Goal 待确认已发微信通知 #${result.number}`);
     } catch (error) {
       this.notice_failed_at = Date.now();
@@ -598,10 +595,9 @@ Goal：${notice.goal.objective}
   async latest_excerpt(room) {
     const page = await api(this.config, `/messages?after=${Math.max(0, (room.latest_id || 0) - 5)}`);
     const latest = (page.messages || []).filter(message => message.author !== '系统').at(-1);
-    if (!latest) return '房间在等你的决定或补充信息，详情见房间。';
+    if (!latest) return ['房间在等你的决定或补充信息，详情见房间。'];
     const text = latest.text.length > NOTICE_EXCERPT ? `${latest.text.slice(0, NOTICE_EXCERPT)}…` : latest.text;
-    return `房间在等你回复，最近一条是 ${latest.author} 说：
-${text}`;
+    return [`房间在等你回复。最近一条是 ${latest.author} 说：`, text];
   }
   /** Ask the decision model whether the idle goal room needs its host, from the latest messages and who is in it. */
   async judge_goal(room, goal) {

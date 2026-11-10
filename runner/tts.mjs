@@ -156,8 +156,9 @@ export async function tts_speak(home, input, transport) {
   const silence = Math.max(0, Math.min(MAX_SILENCE_MS, Math.round(Number(input.silence_ms) || 0)));
   const context = provider.context ? settings.context : '';
   const directory = join(home, CACHE_DIR);
+  // Local audio cached before 2026-11-10 has its index at the end, which iPhone Safari cannot play; a new key leaves it unused.
   const cache_path = join(directory, `${createHash('sha256').update(JSON.stringify([text, speaker, settings.speech_rate, context, silence,
-    ...(provider.id === 'volcengine' ? [] : [provider.id])])).digest('hex')}.json`);
+    ...(provider.id === 'volcengine' ? [] : [provider.local ? 'local-faststart' : provider.id])])).digest('hex')}.json`);
   const cached = existsSync(cache_path) && cache_read(cache_path);
   if (cached?.audio) return { ...cached, cached: true };
   if (!in_flight.has(cache_path)) {

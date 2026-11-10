@@ -2053,7 +2053,7 @@ test('a goal the host declared pending skips the decision model and reaches Weix
   await runner.tick();
   await runner.tick();
   assert.equal(sent.length, 1);
-  assert.match(sent[0].text, /选 A 还是 B？/);
+  assert.deepEqual(sent[0].paragraphs.slice(0, 2), ['主持人在等你确认：', '选 A 还是 B？']);
   assert.equal(sent[0].room.room, 'room');
   assert.deepEqual(f.state.goal_posts, [{ action: 'continue', revision: 'goal-r2' }], 'an expired pending wakes the host without asking the model');
   assert.equal(model_called, false);
@@ -2070,7 +2070,7 @@ test('a pending goal without the host note (set by the decision model) quotes th
   const runner = new FreeRoomRunner(f.config, f.store, async () => ({ status: 'accepted' }));
   runner.notifier = { ready: () => true, sent: () => false, send: async notice => { sent.push(notice); return { status: 'sent', number: 1 }; } };
   await runner.tick();
-  assert.match(sent[0].text, /Codex 说：\n前四项已修复。要不要继续修后四项，请你决定。/);
+  assert.deepEqual(sent[0].paragraphs.slice(0, 2), ['房间在等你回复。最近一条是 Codex 说：', '前四项已修复。要不要继续修后四项，请你决定。']);
 });
 
 function scheduler_fetch(answers) {

@@ -2,6 +2,7 @@
 
 import hashlib
 import json
+import mimetypes
 import os
 import sqlite3
 import tempfile
@@ -761,19 +762,27 @@ class DiscussionTests(unittest.TestCase):
                 self.assertEqual(connection.execute("PRAGMA foreign_key_check").fetchall(), [])
 
     def test_frontend_assets_have_browser_compatible_content_types(self):
-        """The channel workspace loads compiled assets through the static routes."""
+        """Compiled assets and every bundled brand icon load through the static routes."""
         assets = {"/": "text/html", "/app.js": "text/javascript",
                   "/modern.js": "text/javascript", "/modern.css": "text/css",
                   "/markdown.js": "text/javascript", "/markdown.css": "text/css",
-                  "/icons/LICENSE.txt": "text/plain", "/icons/typesafe.png": "image/png"}
-        assets.update({f"/icons/{name}.svg": "image/svg+xml"
-                       for name in ("openai", "claude", "gemini", "deepseek", "qwen", "user")})
+                  "/icons/LICENSE.txt": "text/plain"}
+        icons = Path(__file__).resolve().parent.parent / "web" / "icons"
+        for icon in icons.iterdir():
+            if not icon.is_file() or icon.name.startswith(".") or icon.name == "LICENSE.txt":
+                continue
+            content_type = mimetypes.guess_type(icon.name)[0] or ""
+            self.assertTrue(content_type.startswith("image/"), f"Unknown icon type: {icon.name}")
+            assets[f"/icons/{icon.name}"] = content_type
         for path, content_type in assets.items():
             with self.subTest(path=path), urlopen(self.base + path, timeout=5) as response:
                 self.assertEqual(response.status, 200)
                 accepted_types = ("text/javascript", "application/javascript") if content_type == "text/javascript" else (content_type,)
                 self.assertIn(response.headers["Content-Type"].split(";")[0].strip(), accepted_types)
-                self.assertTrue(response.read())
+                content = response.read()
+                self.assertTrue(content)
+                if path.startswith("/icons/"):
+                    self.assertEqual(content, (icons / path.removeprefix("/icons/")).read_bytes())
 
     def test_room_reads_answer_304_until_their_content_changes(self):
         """The room list and a room's view carry an ETag; a matching If-None-Match gets 304, a change gets the new body."""

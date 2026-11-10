@@ -304,13 +304,16 @@ function local_start(home, key, request) {
     ready: `${LOCAL_URL}/v1/status` }, request);
 }
 
-/** Convert the WAV to 64 kbps AAC with the converter yovoice ships, which reads and writes files only. */
+/**
+ * Convert the WAV to 64 kbps AAC with the converter yovoice ships, which reads and writes files only. The index (moov)
+ * goes before the audio: iPhone Safari rejects a blob with it at the end ("The operation is not supported.").
+ */
 async function local_convert(home, wav) {
   const work = mkdtempSync(join(tmpdir(), 'codiscuss-tts-'));
   try {
     writeFileSync(join(work, 'in.wav'), wav);
     await run_file(join(home, LOCAL_DIR, 'cli', 'tools', `ffmpeg${LOCAL_EXE}`), ['-hide_banner', '-loglevel', 'error', '-i', join(work, 'in.wav'),
-      '-c:a', 'aac', '-b:a', LOCAL_BIT_RATE, '-f', 'ipod', join(work, 'out.m4a')], { windowsHide: true, timeout: LOCAL_CONVERT_MS })
+      '-c:a', 'aac', '-b:a', LOCAL_BIT_RATE, '-movflags', '+faststart', '-f', 'ipod', join(work, 'out.m4a')], { windowsHide: true, timeout: LOCAL_CONVERT_MS })
       .catch(() => { throw new Error('本机语音转码失败：请重新运行 local-tts-setup 技能修复安装'); });
     return readFileSync(join(work, 'out.m4a'));
   } finally { rmSync(work, { recursive: true, force: true }); }

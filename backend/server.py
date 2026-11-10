@@ -7,6 +7,7 @@ import hashlib
 import hmac
 import json
 import logging
+import mimetypes
 import os
 import re
 import secrets
@@ -91,10 +92,12 @@ ASSETS = {"/": ("index.html", "text/html"),
           "/markdown.js": ("markdown.js", "text/javascript"),
           "/backup.js": ("backup.js", "text/javascript"),
           "/markdown.css": ("markdown.css", "text/css"),
-          "/icons/LICENSE.txt": ("icons/LICENSE.txt", "text/plain"),
-          "/icons/typesafe.png": ("icons/typesafe.png", "image/png")}
-ASSETS.update({f"/icons/{name}.svg": (f"icons/{name}.svg", "image/svg+xml")
-               for name in ("openai", "claude", "gemini", "deepseek", "qwen", "user")})
+          "/icons/LICENSE.txt": ("icons/LICENSE.txt", "text/plain")}
+# Serve bundled images without maintaining a second list of brand names.
+for icon in (WEB_ROOT / "icons").iterdir():
+    icon_type = mimetypes.guess_type(icon.name)[0] or ""
+    if icon.is_file() and not icon.name.startswith(".") and icon_type.startswith("image/"):
+        ASSETS[f"/icons/{icon.name}"] = (f"icons/{icon.name}", icon_type)
 ASSETS.update({"/pdfjs/" + file.relative_to(WEB_ROOT / "pdfjs").as_posix():
                (file.relative_to(WEB_ROOT).as_posix(),
                 {".mjs": "text/javascript", ".js": "text/javascript", ".wasm": "application/wasm"}.get(file.suffix, "application/octet-stream"))

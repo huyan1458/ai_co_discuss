@@ -311,8 +311,8 @@ class RoomWorker {
     if ('notifier' in this.runner) this.runner.notifier = { ready: () => can_notify(this.home), sent: key => notice_sent(this.home, key),
       send: async notice => {
         const link = await phone_link(this.home, notice.room.site, notice.room.room);
-        return send_notice(this.home, { ...notice, text: link ? `${notice.text}
-打开房间：${link}（需在已配对的设备上打开）` : notice.text });
+        const opening = link ? [`打开房间（需在已配对的设备上）：${link}`] : [];
+        return send_notice(this.home, { ...notice, paragraphs: [...notice.paragraphs, ...opening] });
       } };
     Object.assign(this.state, { site: config.site, room: config.room, config_version: snapshot.version });
   }

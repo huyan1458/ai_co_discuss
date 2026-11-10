@@ -23,8 +23,8 @@ const RECEIVE_RETRY_MS = 10_000;
 const UNBOUND_CHECK_MS = 5_000;
 const CHUNK_BYTES = 3_500;
 const RECENT_NOTICES = 50;
-// Every notice starts with this tag; quoting a notice in Weixin sends the reply to that notice's room.
-const NOTICE_TAG = /\[CoDiscuss #(\d+)\]/;
+// Messages name their source first, as coder_notifier's do (`💬 Codex（…）：`), since one Weixin may get both.
+const SOURCE = 'CoDiscuss';
 
 /** An explicit API rejection, distinguishable from an uncertain transport outcome. */
 export class IlinkError extends Error {
@@ -129,6 +129,44 @@ export class IlinkClient {
   }
 }
 
+/**
+ * Weixin shows plain text only: turn common Markdown into readable text, keeping code and link targets. Copied from
+ * coder_notifier's `weixin_text`.
+ */
+export function weixin_text(text) {
+  const code = [];
+  const marker = `\uE000${randomUUID()}:`;
+  let plain = text.replace(/```[^\n]*\n([\s\S]*?)```|`([^`\n]+)`/g, (_match, block, inline) => {
+    code.push(block ?? inline); return `${marker}${code.length - 1}\uE001`;
+  });
+  plain = plain.replace(/!?(?:\[([^\]\n]*)\])\(([^)\n]+)\)/g,
+    (_match, label, url) => label === url ? url : `${label || '链接'}（${url}）`)
+    .replace(/^ {0,3}#{1,6}\s+(.+?)(?:\s+#+)?$/gm, '$1')
+    .replace(/\*\*([^\n]+?)\*\*|__([^\n]+?)__|~~([^\n]+?)~~/g, (_match, bold, under, strike) => bold ?? under ?? strike)
+    .replace(/(^|\s)\*([^*\n]+)\*(?=\s|[，。！？,.!?]|$)/g, '$1$2')
+    .replace(/(^|\s)_([^_\n]+)_(?=\s|[，。！？,.!?]|$)/g, '$1$2')
+    .replace(/^[\t ]*[-*+][\t ]+/gm, '• ').replace(/^[\t ]*>[\t ]?/gm, '')
+    .replace(/^[\t ]*(?:---+|\*\*\*+|___+)[\t ]*$/gm, '')
+    .replace(/^[\t ]*\|?[\t ]*:?-{3,}:?[\t ]*(?:\|[\t ]*:?-{3,}:?[\t ]*)+\|?[\t ]*$/gm, '')
+    .replace(/^[\t ]*\|(.+)\|[\t ]*$/gm, (_match, row) => row.split('|').map(cell => cell.trim()).join('；'));
+  code.forEach((value, index) => { plain = plain.replaceAll(`${marker}${index}\uE001`, value); });
+  return plain.trim();
+}
+
+/**
+ * A notice as Weixin shows it: the source and room on the first line, a blank line, then plain-text paragraphs.
+ * Weixin folds single line breaks into spaces, so `paragraphs` are joined by blank lines.
+ */
+export function format_notice(title, paragraphs) {
+  const body = paragraphs.filter(Boolean).map(part => weixin_text(part)).join('\n\n');
+  return `💬 ${SOURCE}${title ? `（${title}）` : ''}：\n\n${body}`;
+}
+
+/** A reply the receiver writes itself, not from a room. */
+export function system_text(text) {
+  return `🔔 ${SOURCE} 系统通知：\n\n${text}`;
+}
+
 /** Split text on code points so each chunk stays under iLink's payload size. */
 export function split_text(text, limit = CHUNK_BYTES) {
   const chunks = [];
@@ -223,10 +261,11 @@ export function unbind(home) {
 }
 
 /**
- * Send one notice to the owner. `key` makes it idempotent; `room` ({site, room, title}) is where replies to it go.
- * Returns `sent`, `duplicate`, `unbound` or `no_context` (the owner has not messaged the bot since binding).
+ * Send one notice to the owner. `key` makes it idempotent; `room` ({site, room, title}) is where replies to it go;
+ * `paragraphs` are shown separated by blank lines. Returns `sent`, `duplicate`, `unbound` or `no_context` (the owner
+ * has not messaged the bot since binding).
  */
-export async function send_notice(home, { key, room = null, text }, client_options = {}) {
+export async function send_notice(home, { key, room = null, paragraphs }, client_options = {}) {
   const account = weixin_account(home);
   if (!account) return { status: 'unbound' };
   const state = read_state(home);
@@ -234,17 +273,21 @@ export async function send_notice(home, { key, room = null, text }, client_optio
   if (!state.context_token) return { status: 'no_context' };
   const number = state.next_notice;
   const client = new IlinkClient(account, client_options);
-  const body = `[CoDiscuss #${number}]${room?.title ? ` ${room.title}` : ''}\n${text}`;
+  const body = format_notice(room?.title, paragraphs);
+  // Weixin's message ids let a quoted reply find its notice without showing any number to the owner.
+  const server_ids = [];
   try {
     for (const chunk of split_text(body)) {
-      await client.send({ peer_id: account.owner_id, client_id: randomUUID(), context_token: state.context_token, text: chunk });
+      const result = await client.send({ peer_id: account.owner_id, client_id: randomUUID(), context_token: state.context_token, text: chunk });
+      if (String(result.message_id ?? '').trim()) server_ids.push(String(result.message_id));
     }
   } catch (error) {
     write_json(state_path(home), { ...read_state(home), last_error: error.message });
     throw error;
   }
   const latest = read_state(home);
-  latest.notices = [...latest.notices, { number, key: key || '', site: room?.site || '', room: room?.room || '', sent_at: Date.now() }].slice(-RECENT_NOTICES);
+  latest.notices = [...latest.notices, { number, key: key || '', site: room?.site || '', room: room?.room || '', sent_at: Date.now(),
+    server_ids, text: body }].slice(-RECENT_NOTICES);
   write_json(state_path(home), { ...latest, next_notice: number + 1, last_error: '' });
   return { status: 'sent', number };
 }
@@ -257,17 +300,26 @@ export function owner_texts(account, response) {
         || (message.to_user_id && message.to_user_id !== account.account_id)) continue;
     const items = message.item_list ?? [];
     const text = items.filter(item => item.type === 1 && typeof item.text_item?.text === 'string').map(item => item.text_item.text).join('\n').trim();
-    const quoted = items.map(item => item.ref_msg).filter(Boolean)
-      .map(reference => `${reference.message_item?.text_item?.text ?? ''}\n${reference.title ?? ''}`.match(NOTICE_TAG)?.[1]).find(Boolean);
-    texts.push({ text, quoted: quoted ? Number(quoted) : 0, media: items.some(item => item.type !== 1), context_token: message.context_token });
+    const quoted = items.map(item => item.ref_msg).filter(Boolean).map(reference => ({
+      server_id: reference.svr_id == null ? '' : String(reference.svr_id),
+      text: (reference.message_item?.text_item?.text ?? reference.title ?? '').trim() }));
+    texts.push({ text, quoted, media: items.some(item => item.type !== 1), context_token: message.context_token });
   }
   return texts;
 }
 
-/** The room a reply answers: the quoted notice's, else the latest notice that came from a room. */
-function reply_target(state, quoted) {
+/**
+ * The room a reply answers: the quoted notice's (found by Weixin's message id, else by its text), else the latest
+ * notice that came from a room.
+ */
+function reply_target(state, quoted = []) {
   const rooms = state.notices.filter(notice => notice.room);
-  return (quoted && rooms.find(notice => notice.number === quoted)) || rooms.at(-1) || null;
+  for (const reference of quoted) {
+    const found = rooms.findLast(notice => (reference.server_id && notice.server_ids?.includes(reference.server_id))
+      || (reference.text && notice.text?.includes(reference.text)));
+    if (found) return found;
+  }
+  return rooms.at(-1) || null;
 }
 
 /**
@@ -303,13 +355,13 @@ async function answer(home, account, client, item, on_reply, log) {
   const target = reply_target(state, item.quoted);
   let reply;
   if (!item.text) reply = item.media ? '目前只能转发文字回复。' : '';
-  else if (!target?.room) reply = '已收到。目前还没有房间通知，回复无处可发。';
+  else if (!target?.room) reply = '已收到。还没有房间给你发过通知，这条回复没有可发往的房间。';
   else {
     try { reply = await on_reply({ site: target.site, room: target.room, text: item.text }); }
     catch (error) { reply = `未能发到房间：${error.message}`; log(`微信回复未能发到房间 ${target.room}：${error.message}`); }
   }
   if (!reply || !state.context_token) return;
-  try { await client.send({ peer_id: account.owner_id, client_id: randomUUID(), context_token: state.context_token, text: reply }); }
+  try { await client.send({ peer_id: account.owner_id, client_id: randomUUID(), context_token: state.context_token, text: system_text(reply) }); }
   catch (error) { log(`微信回执发送失败：${error.message}`); }
 }
 
@@ -331,7 +383,8 @@ export async function weixin_command(home, input = {}) {
   if (action === 'complete') return { ...await complete_login(home), ...weixin_status(home) };
   if (action === 'unbind') return unbind(home);
   if (action === 'test') {
-    const result = await send_notice(home, { text: '这是一条测试通知。房间里的 Goal 等你确认时，会像这样发到微信；直接回复即可发回该房间。' });
+    const result = await send_notice(home, { room: { title: '测试' }, paragraphs: ['这是一条测试通知。',
+      '房间里的 Goal 等你确认时，会像这样发到微信。直接回复通知，就会作为你的发言发回那个房间。'] });
     if (result.status === 'no_context') throw new Error('还收不到你的消息：请先在微信里给机器人发一条消息，再点发送测试');
     if (result.status === 'unbound') throw new Error('尚未绑定微信');
     return { ...result, ...weixin_status(home) };
