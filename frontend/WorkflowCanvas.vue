@@ -31,12 +31,21 @@ const { view, bridge } = inject("discussion");
 const NODE_WIDTH = { card: 272, start: 84, host: 104 };
 const NODE_HEIGHT = { card: 268, start: 40, host: 40 };
 const COLUMN_GAP = 120, ROW_GAP = 28;
+// How far below a node's top its round connection points sit: a card's are level with its body, below the drag bar, a
+// pill's in its middle. Layout lines these up, not the nodes' middles, so arrows between a pill and a card run straight.
+const HANDLE_Y = { card: 146, start: 20, host: 20 };
+// Before Vue Flow has measured a pill, its width is estimated from its text: the bare pill, then per character of its note.
+const PILL_TEXT = { base: 92, note: 18, char: 13 };
+// An arrow's note sits on its middle: the gap it crosses leaves this much on each side of the note (ports, arrowhead).
+const NOTE_CHAR = 11, NOTE_PAD = 16, NOTE_MARGIN = 36;
+// A column an arrow skips over is lifted this far clear of the line the arrow runs along (room for its note too).
+const BYPASS_CLEARANCE = 44;
 const CARD_HANDLE = ".workflow-card-grip";
 // The whole-workflow view (double click, the fit button): as far out as it takes, on a phone further still.
 const FIT = { padding: 0.08, maxZoom: 1, minZoom: 0.25 };
 const COMPACT_FIT = { ...FIT, minZoom: 0.15 };
 // The view a workflow opens at: the whole of it when that is still readable, else readable from the start onwards.
-const READABLE_ZOOM = 0.6, OPEN_PADDING = 24;
+const READABLE_ZOOM = 0.8, OPEN_PADDING = 24;
 // Undo keeps this many steps; edits within this many milliseconds of each other (typing, say) are one step.
 const HISTORY_LIMIT = 100, HISTORY_DELAY = 400;
 // A loop's path: how far it leaves its ends sideways, how far below the nodes it passes, and its corner radius.
@@ -68,6 +77,8 @@ function set_note(kind, id, label) {
   list.value = list.value.map((item) => item.id === id ? { ...item, data: { ...item.data, label } } : item);
 }
 
+// Vue Flow's instance (set once its pane is ready; layout reads measured sizes from it) and the canvas element.
+const instance = ref(null), canvas_element = ref(null);
 const cards = computed(() => agents.value.map((agent) => agent.card));
 const agent_of = (card) => agents.value.find((agent) => agent.card === card);
 const label_of = (card) => { const agent = agent_of(card); return agent ? agent.label || bridge.default_name(agent.name) : card; };
@@ -82,12 +93,12 @@ function initial_nodes() {
   const missing = cards.value.filter((card) => !list.some((node) => node.type === "card" && node.data.card === card));
   if (list.length > 1 && list.every((node) => !node.position.x && !node.position.y)) {
     const all = [...list, ...missing.map((card) => to_node({ id: `card_${card}`, type: "card", card }))];
-    const placed = layout(all, flow_shape(saved).layers);
+    const placed = layout(all, flow_shape(saved), saved.edges);
     return { list: all.map((node) => ({ ...node, position: placed.get(node.id) })), edges: saved.edges };
   }
   const left = Math.max(...list.map((node) => node.position.x + NODE_WIDTH[node.type])) + COLUMN_GAP;
   missing.forEach((card, index) => list.push(to_node({ id: `card_${card}`, type: "card", card,
-    x: left, y: (index - (missing.length - 1) / 2) * (NODE_HEIGHT.card + ROW_GAP) - NODE_HEIGHT.card / 2 + NODE_HEIGHT.start / 2 })));
+    x: left, y: (index - (missing.length - 1) / 2) * (NODE_HEIGHT.card + ROW_GAP) - HANDLE_Y.card })));
   return { list, edges: saved.edges };
 }
 const initial = initial_nodes();
@@ -301,33 +312,58 @@ function edge_path(edge) {
   return edge.sourceX > edge.targetX + 2 * LOOP_OUT ? loop_path(edge) : getSmoothStepPath({ ...edge, borderRadius: LOOP_RADIUS, offset: LOOP_OUT });
 }
 
-const instance = ref(null), canvas_element = ref(null);
 /** Lay the canvas out in columns by step, members of one step stacked, then fit it in view. */
 function arrange() {
-  const placed = layout(nodes.value, shape.value.layers);
+  const placed = layout(nodes.value, shape.value, edges.value);
   nodes.value = nodes.value.map((node) => ({ ...node, position: placed.get(node.id) || node.position }));
   // Fit once Vue Flow has moved the nodes, a frame after the positions change.
   nextTick(() => requestAnimationFrame(() => instance.value?.fitView({ ...fit_options(), duration: 250 })));
 }
 
-/** Positions for nodes in columns by their layer (nodes the start does not reach go last), each column centred. */
-function layout(list, layers) {
+/** A node's width: as Vue Flow measured it, else the layout size (a host pill's estimated from its note). */
+function node_width(node) {
+  const measured = instance.value?.findNode(node.id)?.dimensions?.width;
+  if (measured) return measured;
+  const label = node.data?.label || "";
+  return node.type === "host" ? PILL_TEXT.base + (label ? PILL_TEXT.note + label.length * PILL_TEXT.char : 0) : NODE_WIDTH[node.type];
+}
+
+/** The gap after a column: wide enough for the longest note on a forward arrow leaving it (loops run below). */
+function column_gap(column, arrows, loops) {
+  const ids = new Set(column.map((node) => node.id));
+  const notes = arrows.filter((edge) => ids.has(edge.source) && !loops.has(`${edge.source}>${edge.target}`))
+    .map((edge) => (edge.label ?? edge.data?.label ?? "").trim().length).filter(Boolean);
+  return Math.max(COLUMN_GAP, ...notes.map((length) => length * NOTE_CHAR + NOTE_PAD + 2 * NOTE_MARGIN));
+}
+
+/**
+ * Positions for nodes in columns by their layer (nodes the start does not reach go last): each column as wide as its
+ * widest node, nodes centred in it, the column centred on its connection points, and gaps wide enough for arrow notes.
+ */
+function layout(list, { layers, loops }, arrows) {
   const columns = [];
-  for (const node of list) {
-    const column = layers.has(node.id) ? layers.get(node.id) : Math.max(0, ...layers.values()) + 1;
-    (columns[column] ||= []).push(node);
+  const index_of = (id) => layers.has(id) ? layers.get(id) : Math.max(0, ...layers.values()) + 1;
+  for (const node of list) (columns[index_of(node.id)] ||= []).push(node);
+  // Columns a forward arrow skips (a branch that leaves a step out) move up, so that arrow runs straight below them.
+  const skipped = new Set();
+  for (const edge of arrows) {
+    if (loops.has(`${edge.source}>${edge.target}`) || !list.some((node) => node.id === edge.source) || !list.some((node) => node.id === edge.target)) continue;
+    for (let column = index_of(edge.source) + 1; column < index_of(edge.target); column++) skipped.add(column);
   }
   let x = 0;
   const placed = new Map();
-  for (const column of columns.filter(Boolean)) {
+  for (const [index, column] of columns.entries()) {
+    if (!column) continue;
     column.sort((left, right) => left.position.y - right.position.y);
     const height = column.reduce((sum, node) => sum + NODE_HEIGHT[node.type], 0) + ROW_GAP * (column.length - 1);
     let y = -height / 2;
-    for (const node of column) {
-      placed.set(node.id, { x, y });
-      y += NODE_HEIGHT[node.type] + ROW_GAP;
-    }
-    x += Math.max(...column.map((node) => NODE_WIDTH[node.type])) + COLUMN_GAP;
+    const tops = column.map((node) => { const top = y; y += NODE_HEIGHT[node.type] + ROW_GAP; return top; });
+    // Shift the column so its connection points centre on the line the other columns' do.
+    const shift = column.reduce((sum, node, row) => sum + tops[row] + HANDLE_Y[node.type], 0) / column.length;
+    const lift = skipped.has(index) ? Math.max(...column.map((node, row) => tops[row] - shift + NODE_HEIGHT[node.type])) + BYPASS_CLEARANCE : 0;
+    const width = Math.max(...column.map(node_width));
+    column.forEach((node, row) => placed.set(node.id, { x: x + (width - node_width(node)) / 2, y: tops[row] - shift - lift }));
+    x += width + column_gap(column, arrows, loops);
   }
   return placed;
 }
@@ -715,6 +751,15 @@ function drag_stop() { dragging = false; layered.value = true; stored.value = li
 </style>
 
 <style>
+/* Light theme: on a white canvas the cards' grey secondary text washes out once zoomed out, so it is one step darker. */
+html[data-theme="channel-light"] .workflow-canvas .expert-card-summary,
+html[data-theme="channel-light"] .workflow-canvas .expert-card-facts dd { color: var(--ui-text); }
+html[data-theme="channel-light"] .workflow-canvas .expert-card-names > small,
+html[data-theme="channel-light"] .workflow-canvas .expert-card-facts dt,
+html[data-theme="channel-light"] .workflow-canvas .workflow-edge-note { color: var(--ui-text-toned); }
+html[data-theme="channel-light"] .workflow-canvas .workflow-pill.is-host,
+html[data-theme="channel-light"] .workflow-canvas .workflow-edge-note.is-loop { color: #8a5d00; }
+
 /* The add menu renders outside the canvas. */
 .workflow-canvas-add { padding: 10px 12px; max-width: min(560px, 92vw); }
 .workflow-canvas-add-body { display: grid; gap: 10px; justify-items: start; }

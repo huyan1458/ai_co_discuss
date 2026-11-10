@@ -6,6 +6,7 @@ import ExtraDirectoriesField from "./ExtraDirectoriesField.vue";
 import ProjectDirectoryField from "./ProjectDirectoryField.vue";
 import AccountSettings from "./AccountSettings.vue";
 import SpeechSettings from "./SpeechSettings.vue";
+import WeixinSettings from "./WeixinSettings.vue";
 
 const props = defineProps({ detailId: { type: Number, default: null }, targetRoom: { type: Object, default: null }, targetFolder: { type: Object, default: null }, readingOptions: { type: Array, default: () => [] }, effectOptions: { type: Array, default: () => [] } });
 const mode = defineModel({ type: String, default: "" });
@@ -289,6 +290,7 @@ const keep_open = (event) => event.preventDefault();
           <p class="fine-print">精简模式关闭毛玻璃模糊与多层阴影，适合配置较低或需要更流畅滚动的设备。</p>
         </section>
         <SpeechSettings />
+        <WeixinSettings />
       </div>
       <CreateDiscussion v-else-if="rendered_mode === 'create'" :target-folder="targetFolder" @submit="save_form" @cancel="mode = ''" />
       <form v-else-if="rendered_mode === 'edit'" class="dialog-form" @submit.prevent="save_form">

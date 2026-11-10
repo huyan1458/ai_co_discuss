@@ -125,16 +125,16 @@ export function row_status(row, now_ms) {
 }
 
 /**
- * What a round's time came down to. The critical path ends with the execution finishing last (a running one ends
- * now) and runs back through what each step waited for: the execution still at work latest before it was requested,
- * its dispatcher on a tie. A host summing up waits on the member who finished last, though the record hangs the summary
- * under the host's earlier execution, so the path follows time, not the dispatch record. The round could not end
- * sooner than this path, so it is what a reader looks at to see why a round took as long as it did. `members` sums the
- * path's work time per member, longest first; `wait` is the path's time between requests and the first sign of work.
+ * What the latest task came down to. Its chain ends with the execution finishing last (a running one ends now) and runs
+ * back through what each step waited for: the execution still at work latest before it was requested, its dispatcher on
+ * a tie (a host summing up waits on the member who finished last, though the record hangs the summary under the host's
+ * earlier execution, so the chain follows time, not the dispatch record). It stops at an execution nothing dispatched:
+ * the one a user's message started. No time threshold decides where a task begins. This chain is the critical path: the
+ * task could not end sooner. `start`/`end` bound it; `members` sums its work time per member, longest first; `wait` is its
+ * time between requests and the first sign of work. Running, failed and stalled counts cover every row given.
  */
 export function round_digest(rows, now_ms) {
-  if (!rows.length) return { total: 0, path: new Set(), members: [], wait: 0, running: [], failed: 0, stalled: 0 };
-  const by_key = new Map(rows.map((row) => [row.key, row]));
+  if (!rows.length) return { total: 0, start: 0, end: 0, path: new Set(), members: [], wait: 0, running: [], failed: 0, stalled: 0 };
   const last = rows.reduce((latest, row) => row.end > latest.end || (row.end === latest.end && row.item.state === "running") ? row : latest);
   // What a row waited for: of the executions started before it was requested, the one at work latest by then.
   const waited_on = (row) => {
@@ -147,7 +147,12 @@ export function round_digest(rows, now_ms) {
     return best;
   };
   const path = new Set();
-  for (let row = last; row && !path.has(row.key); row = waited_on(row)) path.add(row.key);
+  let start = last.start;
+  for (let row = last; row && !path.has(row.key); row = row.item.parent_id ? waited_on(row) : null) {
+    path.add(row.key);
+    start = Math.min(start, row.start);
+  }
+  const by_key = new Map(rows.map((row) => [row.key, row]));
   const members = new Map();
   let wait = 0;
   for (const key of path) {
@@ -158,7 +163,7 @@ export function round_digest(rows, now_ms) {
   }
   const running = rows.filter((row) => row.item.state === "running");
   return {
-    total: Math.max(...rows.map((row) => row.end)) - Math.min(...rows.map((row) => row.start)),
+    total: last.end - start, start, end: last.end,
     path, wait, running,
     members: [...members].map(([member, ms]) => ({ member, ms })).sort((a, b) => b.ms - a.ms),
     failed: rows.filter((row) => row.item.state === "failed").length,
@@ -281,49 +286,51 @@ export function timeline_rows(timeline, now_ms) {
   return ordered;
 }
 
+/** When an execution was asked for, in seconds: its request, else its delivery. */
+export const requested_at = (item) => item.queued_at || item.dispatched_at || 0;
+
 /**
- * The stretches of work on the timeline, newest first. Collaboration splits wherever nobody worked for longer than
- * FOLD_GAP_MS, the same gap the axis folds, so one stretch is one unfolded block of time: a sitting of work, however
- * many messages, hand-offs or host continuations it took. (Splitting by the user message a dispatch tree answers made
- * a "run" of every @, and cut one sitting into several wherever the user cut in or the host carried on.) A discussion
- * keeps its own run, which is a clear unit. Each stretch says when it ran, who worked in it and for how long (`work`:
- * per member, longest first), how long requests waited before work began (`wait`), how many executions it took and
- * whether any is still running or failed; `runs.of` maps an execution's key to its stretch.
+ * The latest `count` executions by request time, plus the execution that dispatched any of them (and so on up), so a
+ * hand-off is never cut in half. One continuous timeline needs no grouping: how much it shows is a count the reader
+ * extends, and idle time folds on the axis.
  */
-export function timeline_runs(timeline, now_ms) {
-  const entries = timeline.executions.map((item) => ({ item, key: `${item.source}:${item.id}`, ...execution_stages(item, now_ms) }))
-    .sort((a, b) => a.start - b.start || a.key.localeCompare(b.key));
-  const list = [];
-  const of = new Map();
-  const discussions = new Map();
-  const open = (key, source, entry) => {
-    const run = { key, source, start: entry.start, end: entry.end, count: 0, running: false, failed: false, members: [], work: new Map(), wait: 0, task: entry.item.task || "" };
-    list.push(run);
-    return run;
-  };
-  let stretch = null;
-  for (const entry of entries) {
-    let run;
-    if (entry.item.source === "discussion") {
-      const key = `run:${entry.item.run_id || entry.item.id}`;
-      run = discussions.get(key) || open(key, "discussion", entry);
-      discussions.set(key, run);
-    } else {
-      if (!stretch || entry.start > stretch.end + FOLD_GAP_MS) stretch = open(`span:${entry.key}`, "free", entry);
-      run = stretch;
-    }
-    run.start = Math.min(run.start, entry.start);
-    run.end = Math.max(run.end, entry.end);
-    run.count += 1;
-    run.running ||= entry.item.state === "running";
-    run.failed ||= entry.item.state === "failed";
-    if (!run.members.includes(entry.item.member)) run.members.push(entry.item.member);
-    run.work.set(entry.item.member, (run.work.get(entry.item.member) || 0) + (entry.work ? entry.work[1] - entry.work[0] : 0));
-    run.wait += (entry.work ? entry.work[0] : entry.end) - entry.queue[0];
-    of.set(entry.key, run.key);
+export function recent_window(executions, count) {
+  const picked = new Set([...executions].sort((a, b) => requested_at(b) - requested_at(a)).slice(0, count));
+  const free = new Map(executions.filter((item) => item.source === "free").map((item) => [item.id, item]));
+  for (const item of [...picked]) {
+    for (let parent = free.get(item.parent_id); parent && !picked.has(parent); parent = free.get(parent.parent_id)) picked.add(parent);
   }
-  for (const run of list) run.work = [...run.work].map(([member, ms]) => ({ member, ms })).sort((a, b) => b.ms - a.ms);
-  return { list: list.sort((a, b) => b.start - a.start), of };
+  return executions.filter((item) => picked.has(item));
+}
+
+/**
+ * The room day by day, newest first: a day is a unit people already use, so nothing here sets a threshold. For each, how
+ * many executions, how long work actually went on (time with at least one execution running, overlaps counted once),
+ * who did the work and for how long (`work`, longest first), how long requests waited before work began, and whether
+ * any is still running or failed. `start` is the day's midnight.
+ */
+export function daily_overview(executions, now_ms) {
+  const days = new Map();
+  for (const item of executions) {
+    const stages = execution_stages(item, now_ms);
+    const date = new Date(stages.start);
+    const midnight = new Date(date.getFullYear(), date.getMonth(), date.getDate()).getTime();
+    const day = days.get(midnight) || { key: midnight, start: midnight, count: 0, running: false, failed: false, work: new Map(), wait: 0, spans: [] };
+    day.count += 1;
+    day.running ||= item.state === "running";
+    day.failed ||= item.state === "failed";
+    day.work.set(item.member, (day.work.get(item.member) || 0) + (stages.work ? stages.work[1] - stages.work[0] : 0));
+    day.wait += (stages.work ? stages.work[0] : stages.end) - stages.queue[0];
+    day.spans.push([stages.start, stages.end]);
+    days.set(midnight, day);
+  }
+  return [...days.values()].sort((a, b) => b.start - a.start).map(({ spans, ...day }) => {
+    let busy = 0, reach = -Infinity;
+    for (const [start, end] of spans.sort((a, b) => a[0] - b[0])) {
+      if (end > reach) { busy += end - Math.max(start, reach); reach = end; }
+    }
+    return { ...day, busy, work: [...day.work].map(([member, ms]) => ({ member, ms })).sort((a, b) => b.ms - a.ms) };
+  });
 }
 
 /**

@@ -12,6 +12,7 @@ import { same_session_family } from './adapters/profiles.mjs';
 import { atomic_json } from './files.mjs';
 import { DiscussionStore, acquire_lock, api, load_config, pause_if_running, service_drafts, validate_config } from './discussion_runner.mjs';
 import { FreeRoomRunner } from './free_runner.mjs';
+import { can_notify, notice_sent, receive_replies, send_notice } from './weixin.mjs';
 
 const POLL_MS = 2000;
 // The service loop only checks which rooms are due; each room keeps its own interval, so a short loop costs no site requests.
@@ -264,6 +265,23 @@ export function unregister_room(home, config_path) {
 }
 
 /** One registered room: its own data-directory lock, store and dispatcher. */
+/**
+ * A link to the room that opens on a phone: the room's own site when it is not this computer's loopback address, else a
+ * hosted site this computer is paired with (its page reaches the room through the relay). None when neither exists.
+ */
+export async function phone_link(home, site, room) {
+  const remote = origin => { try { return !LOOPBACK.has(new URL(origin).hostname); } catch { return false; } };
+  let origin = remote(site) ? new URL(site).origin : null;
+  if (!origin) {
+    try {
+      // Loaded lazily, as in run_service: the launch module depends on this one.
+      const { machine_links } = await import('./remote_launch.mjs');
+      origin = Object.keys(machine_links(home).sites).find(remote) || null;
+    } catch { origin = null; }
+  }
+  return origin ? `${origin}/?room=${encodeURIComponent(room)}` : '';
+}
+
 class RoomWorker {
   constructor(path, create_runner, log, home) {
     this.path = path;
@@ -289,6 +307,13 @@ class RoomWorker {
     this.runner = this.create_runner(config, this.store, message => this.log(`${config.room}: ${message}`));
     // A settled scheduling decision changed the room; its next step should not wait for the next poll.
     if (this.runner.on_decided) this.runner.on_decided = () => this.wake();
+    // A goal waiting on the owner reaches their Weixin, when this computer has one bound.
+    if ('notifier' in this.runner) this.runner.notifier = { ready: () => can_notify(this.home), sent: key => notice_sent(this.home, key),
+      send: async notice => {
+        const link = await phone_link(this.home, notice.room.site, notice.room.room);
+        return send_notice(this.home, { ...notice, text: link ? `${notice.text}
+打开房间：${link}（需在已配对的设备上打开）` : notice.text });
+      } };
     Object.assign(this.state, { site: config.site, room: config.room, config_version: snapshot.version });
   }
   /** Reload connection paths and credentials while retaining the exact conversation context. */
@@ -539,6 +564,14 @@ export class DiscussionService {
     this.log(`${worker.state.site || ''}/${worker.state.room || path}: 房间已在网站删除，已撤销登记并删除本机文件`);
   }
   /** Pause running rooms and release every lock and child process, once their current ticks finish. */
+  /** Post the owner's Weixin reply to the room it answers, as the owner, and check that room at once. */
+  async weixin_reply({ site, room, text }) {
+    const worker = [...this.workers.values()].find(item => item.config?.site === site && item.config?.room === room);
+    if (!worker) throw new Error('这台电脑已不再接入该房间');
+    await api(worker.config, '/messages', { author: '用户', text, submission_id: randomUUID() });
+    worker.wake();
+    return `已发到房间「${worker.runner?.room_title || room}」`;
+  }
   async close() {
     this.closed = true;
     for (const stream of this.streams.values()) stream.controller.abort();
@@ -681,7 +714,7 @@ export async function run_service(home, output = () => {}) {
   service.push = true;
   const stop_path = join(home, 'stop.request');
   if (existsSync(stop_path)) unlinkSync(stop_path);
-  let stopped = false, syncing = null, relaying = null, channels = null;
+  let stopped = false, syncing = null, relaying = null, channels = null, receiving = null;
   const relay_stop = new AbortController();
   const stop = () => { stopped = true; relay_stop.abort(); };
   process.once('SIGINT', stop);
@@ -695,6 +728,9 @@ export async function run_service(home, output = () => {}) {
     const { start_relay_channels } = await import('./relay_channel.mjs');
     if ((await import('./admin_account.mjs')).remove_legacy_admin_accounts(home)) log_line('已删除旧版本明文保存的管理员密码文件 admin-accounts.json');
     channels = start_relay_channels(home, { log: log_line, signal: relay_stop.signal });
+    // The owner's Weixin replies come back here and go to the room their notice came from.
+    receiving = receive_replies(home, { on_reply: reply => service.weixin_reply(reply), log: log_line, signal: relay_stop.signal })
+      .catch(error => log_line(`微信收件停止：${error.message}`));
     let synced_at = 0, swept_at = 0, relay_failed_at = 0;
     // A long-poll of its own: the site answers as soon as another device relays a command, and the next claim starts
     // the moment one returns, so a device sending several commands never waits on the loop; a failure retries after the sync interval.
@@ -733,7 +769,7 @@ export async function run_service(home, output = () => {}) {
     }
   } finally {
     relay_stop.abort();
-    await Promise.all([syncing, relaying, channels?.done()]);
+    await Promise.all([syncing, relaying, channels?.done(), receiving]);
     await service.close();
     if (existsSync(stop_path)) unlinkSync(stop_path);
     log_line('讨论服务已停止');

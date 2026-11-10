@@ -2771,10 +2771,158 @@
         0.72,
         0.79
       ]
+    },
+    {
+      "id": "Y1",
+      "scene": "goal",
+      "note": "复核结论仍阻止部署：结果需要主持人处理（来源 #811）",
+      "expect": "continue",
+      "choice": "continue",
+      "acted": "continue",
+      "runs": 3,
+      "confidence": 0.98,
+      "expected_probability": 0.97,
+      "probabilities": {
+        "continue": 0.97,
+        "wait": 0.03
+      },
+      "duration_ms": 318,
+      "status": "PASS",
+      "expected_range": [
+        0.97,
+        0.98
+      ]
+    },
+    {
+      "id": "Y2",
+      "scene": "goal",
+      "note": "主持人已向用户提问，等用户选方案",
+      "expect": "wait",
+      "choice": "wait",
+      "acted": "wait",
+      "runs": 3,
+      "confidence": 0.9,
+      "expected_probability": 0.92,
+      "probabilities": {
+        "continue": 0.08,
+        "wait": 0.92
+      },
+      "duration_ms": 330,
+      "status": "PASS",
+      "expected_range": [
+        0.9,
+        0.93
+      ]
+    },
+    {
+      "id": "Y3",
+      "scene": "goal",
+      "note": "已向用户汇报目标完成、请用户验收",
+      "expect": "wait",
+      "choice": "wait",
+      "acted": "wait",
+      "runs": 3,
+      "confidence": 0.87,
+      "expected_probability": 0.88,
+      "probabilities": {
+        "continue": 0.12,
+        "wait": 0.88
+      },
+      "duration_ms": 345,
+      "status": "PASS",
+      "expected_range": [
+        0.87,
+        0.9
+      ]
+    },
+    {
+      "id": "Y4",
+      "scene": "goal",
+      "note": "只完成一部分，目标未完成",
+      "expect": "continue",
+      "choice": "continue",
+      "acted": "continue",
+      "runs": 3,
+      "confidence": 0.99,
+      "expected_probability": 0.99,
+      "probabilities": {
+        "continue": 0.99,
+        "wait": 0.01
+      },
+      "duration_ms": 311,
+      "status": "PASS",
+      "expected_range": [
+        0.99,
+        0.99
+      ]
+    },
+    {
+      "id": "Y5",
+      "scene": "goal",
+      "note": "成员需要用户改权限才能继续",
+      "expect": "wait",
+      "choice": "wait",
+      "acted": "wait",
+      "runs": 3,
+      "confidence": 0.91,
+      "expected_probability": 0.89,
+      "probabilities": {
+        "continue": 0.11,
+        "wait": 0.89
+      },
+      "duration_ms": 406,
+      "status": "PASS",
+      "expected_range": [
+        0.88,
+        0.91
+      ]
+    },
+    {
+      "id": "Y6",
+      "scene": "goal",
+      "note": "实现完成但测试失败，原因待查",
+      "expect": "continue",
+      "choice": "continue",
+      "acted": "continue",
+      "runs": 3,
+      "confidence": 0.96,
+      "expected_probability": 0.96,
+      "probabilities": {
+        "continue": 0.96,
+        "wait": 0.04
+      },
+      "duration_ms": 337,
+      "status": "PASS",
+      "expected_range": [
+        0.95,
+        0.96
+      ]
+    },
+    {
+      "id": "Y7",
+      "scene": "goal",
+      "note": "主持人只说了下一步计划，还没派活",
+      "expect": "continue",
+      "choice": "continue",
+      "acted": "continue",
+      "runs": 3,
+      "confidence": 0.97,
+      "expected_probability": 0.97,
+      "probabilities": {
+        "continue": 0.97,
+        "wait": 0.03
+      },
+      "duration_ms": 355,
+      "status": "PASS",
+      "expected_range": [
+        0.97,
+        0.97
+      ]
     }
   ],
   "thresholds": {
     "member": 0.6,
     "wide": 0.8
-  }
+  },
+  "goal_prompt": 2
 }

@@ -15,6 +15,14 @@ MAX_MINUTES = 7 * 24 * 60
 # The same wake-up failing this many times in a row stops the goal instead of retrying forever.
 FAILED_CONTINUATIONS = 3
 GOAL_AUTHOR = "系统"
+# How long the room stays idle before the host is woken while the goal is being worked on; the owner sets it per room.
+DEFAULT_IDLE_SECONDS = 120
+MIN_IDLE_SECONDS = 30
+MAX_IDLE_SECONDS = 1800
+# Phases the host may declare on an active goal. Waiting and pending stop idle wake-ups; each has one fallback wake-up.
+PHASES = ("doing", "waiting", "pending")
+PHASE_DEFAULT_MINUTES = {"waiting": 30, "pending": 60}
+MAX_PHASE_MINUTES = 24 * 60
 END_LABELS = {"complete": "Goal 已完成", "blocked": "Goal 已停止：卡住", "budget_limited": "Goal 预算已用完：请主持人收尾，总结进展、剩余工作和下一步",
               "cleared": "Goal 已结束"}
 
@@ -59,7 +67,17 @@ def clean_budget(payload, current=None):
         if type(value) is not int or not 0 <= value <= limit:
             raise ValueError(f"{field} 须为 0–{limit} 的整数，0 表示不限")
         result[field] = value
+    value = payload.get("idle_seconds", (current or {}).get("idle_seconds", DEFAULT_IDLE_SECONDS))
+    if type(value) is not int or not MIN_IDLE_SECONDS <= value <= MAX_IDLE_SECONDS:
+        raise ValueError(f"idle_seconds 须为 {MIN_IDLE_SECONDS}–{MAX_IDLE_SECONDS} 的整数（秒）")
+    result["idle_seconds"] = value
     return result
+
+
+def last_idle_seconds(connection, room_id):
+    """A new goal keeps the idle wait the owner chose for this room's previous goal."""
+    row = connection.execute("SELECT idle_seconds FROM room_goals WHERE room_id=? ORDER BY id DESC LIMIT 1", (room_id,)).fetchone()
+    return {"idle_seconds": row[0]} if row else None
 
 
 def elapsed_seconds(goal, now=None):
@@ -92,6 +110,9 @@ def room_idle(connection, room_id, goal):
         SELECT 1 FROM internal_task_messages t WHERE t.message_id=m.id) ORDER BY id DESC LIMIT 1""", (room_id,)).fetchone()
     if last and last[0] == "用户":
         return False
+    if goal["phase"] != "doing":
+        # The host said it is waiting on background work or on the user: only its fallback deadline wakes it.
+        return bool(goal["phase_until"]) and int(time.time()) >= goal["phase_until"]
     # A wake-up that failed did no work, so the next idle moment may try again until the failure limit stops the goal.
     return bool(goal["armed"]) or continuation_statuses(connection, goal["id"], 1) == ["failed"]
 
@@ -102,7 +123,8 @@ def goal_revision(connection, room_id, goal):
     work = [list(row) for row in connection.execute(
         "SELECT id,status FROM member_requests WHERE room_id=? AND status IN ('pending','delivering') ORDER BY id", (room_id,))]
     session = connection.execute("SELECT id,status FROM discussion_sessions WHERE room_id=? ORDER BY id DESC LIMIT 1", (room_id,)).fetchone()
-    row = [goal[key] for key in ("id", "status", "objective", "armed", "continues", "max_continues", "max_minutes")] if goal else None
+    row = [goal[key] for key in ("id", "status", "objective", "armed", "continues", "max_continues", "max_minutes",
+                                 "idle_seconds", "phase", "phase_until")] if goal else None
     encoded = json.dumps([room_id, row, latest, work, list(session) if session else None], ensure_ascii=False, separators=(",", ":"))
     return hashlib.sha256(encoded.encode()).hexdigest()[:16]
 
@@ -142,8 +164,9 @@ def create_goal(connection, room_id, objective, budget, start_request_id=None):
     the host's reply sits right under the command, so a separate notice would land after the reply.
     """
     now = int(time.time())
-    cursor = connection.execute("""INSERT INTO room_goals (room_id,objective,max_continues,max_minutes,start_request_id,started_at)
-        VALUES (?,?,?,?,?,?)""", (room_id, objective, budget["max_continues"], budget["max_minutes"], start_request_id, now))
+    cursor = connection.execute("""INSERT INTO room_goals (room_id,objective,max_continues,max_minutes,idle_seconds,start_request_id,started_at)
+        VALUES (?,?,?,?,?,?,?)""", (room_id, objective, budget["max_continues"], budget["max_minutes"], budget["idle_seconds"],
+                                     start_request_id, now))
     goal_id = cursor.lastrowid
     if start_request_id is not None:
         message_id = connection.execute("SELECT message_id FROM member_requests WHERE id=?", (start_request_id,)).fetchone()[0]
@@ -216,15 +239,15 @@ def control_goal(connection, goal, action):
     elif action == "clear":
         end_goal(connection, goal, "cleared", "用户结束")
     else:
-        raise ValueError("action 须为 start、continue、wait、done、block、pause、resume、clear 或 update")
+        raise ValueError("action 须为 start、continue、wait、state、done、block、pause、resume、clear 或 update")
 
 
 def update_goal(connection, goal, payload):
     """Owner edits of the open goal's objective or budgets."""
     objective = clean_objective(payload["objective"]) if "objective" in payload else goal["objective"]
     budget = clean_budget(payload, goal)
-    connection.execute("UPDATE room_goals SET objective=?,max_continues=?,max_minutes=? WHERE id=?",
-                       (objective, budget["max_continues"], budget["max_minutes"], goal["id"]))
+    connection.execute("UPDATE room_goals SET objective=?,max_continues=?,max_minutes=?,idle_seconds=? WHERE id=?",
+                       (objective, budget["max_continues"], budget["max_minutes"], budget["idle_seconds"], goal["id"]))
 
 
 def start_goal(connection, room_id, token, payload):
@@ -243,11 +266,11 @@ def start_goal(connection, room_id, token, payload):
         if (not request or request["purpose"] != "goal_start" or request["member_id"] != member["id"]
                 or request["status"] not in ("pending", "delivering")):
             raise FileExistsError("Goal 启动请求不存在、不属于你或已处理；只有用户的 /goal 命令能开启 Goal")
-        budget = clean_budget({})
+        budget = clean_budget({}, last_idle_seconds(connection, room_id))
     else:
         require_owner(connection, room_id, token)
         require_revision(connection, room_id, payload, "开启 Goal")
-        budget = clean_budget(payload)
+        budget = clean_budget(payload, last_idle_seconds(connection, room_id))
     check_exclusive(connection, room_id)
     host = goal_host(connection, room_id)
     goal_id = create_goal(connection, room_id, objective, budget, request_id)
@@ -282,29 +305,74 @@ def continue_goal(connection, room_id, token, payload):
         end_goal(connection, goal, "budget_limited", "")
         message_id = connection.execute("SELECT ended_message_id FROM room_goals WHERE id=?", (goal["id"],)).fetchone()[0]
     else:
-        message_id = system_message(connection, room_id, f"Goal 续跑 #{number}：房间已空闲，请主持人继续推进目标。",
+        message_id = system_message(connection, room_id, f"Goal 续跑 #{number}：{continue_reason(goal)}",
                                     f"goal-{goal['id']}-continue-{number}")
     insert_request(connection, room_id, host["id"], message_id, message_id, "goal_continue", "user")
     request_id = connection.execute("SELECT id FROM member_requests WHERE message_id=? AND member_id=?", (message_id, host["id"])).fetchone()[0]
     connection.execute("INSERT INTO goal_continuations (goal_id,room_id,message_id,request_id,wrapup) VALUES (?,?,?,?,?)",
                        (goal["id"], room_id, message_id, request_id, int(bool(over))))
     if not over:
-        connection.execute("UPDATE room_goals SET continues=?,armed=0 WHERE id=?", (number, goal["id"]))
+        # The host is awake again and decides afresh; a pending fallback is spent until the user next speaks.
+        connection.execute("""UPDATE room_goals SET continues=?,armed=0,phase='doing',phase_note='',phase_until=0,
+            pending_fallback=pending_fallback OR ? WHERE id=?""", (number, int(goal["phase"] == "pending"), goal["id"]))
+    return goal_view(connection, room_id)
+
+
+def continue_reason(goal):
+    """Why the host is woken, so it can tell a plain idle room from an expired wait."""
+    minutes = max(1, (goal["phase_until"] - goal["phase_since"]) // 60) if goal["phase_until"] else 0
+    if goal["phase"] == "waiting":
+        return f"等待已超过 {minutes} 分钟，请主持人检查后台工作是否完成，完成就接着推进，未完成可再次声明等待。"
+    if goal["phase"] == "pending":
+        return (f"用户 {minutes} 分钟未回复，请主持人评估这项决定能否不等用户自行做出：能就说明依据后继续推进；"
+                "不能就再次声明待确认，此后一直等到用户回复。")
+    return "房间已空闲，请主持人继续推进目标。"
+
+
+def set_goal_phase(connection, room_id, token, payload):
+    """The host declares whether the goal is being worked on, waits on background work, or waits on the user."""
+    begin_write(connection)
+    member = require_member(connection, room_id, token)
+    if member["role"] != "host":
+        raise PermissionError("只有主持人能声明 Goal 状态")
+    require_revision(connection, room_id, payload, "声明 Goal 状态")
+    goal = open_goal(connection, room_id)
+    if not goal or goal["status"] != "active":
+        raise FileExistsError("房间没有推进中的 Goal")
+    phase = payload.get("state")
+    if phase not in PHASES:
+        raise ValueError("state 须为 doing、waiting 或 pending；完成与卡住用 goal done / goal block")
+    note = str(payload.get("note") or "").strip()
+    if len(note) > MAX_NOTE_LENGTH:
+        raise ValueError(f"说明最多 {MAX_NOTE_LENGTH} 字")
+    minutes = payload.get("minutes", PHASE_DEFAULT_MINUTES.get(phase, 0))
+    if phase != "doing" and (type(minutes) is not int or not 1 <= minutes <= MAX_PHASE_MINUTES):
+        raise ValueError(f"minutes 须为 1–{MAX_PHASE_MINUTES} 的整数")
+    now = int(time.time())
+    # After its one fallback the pending goal waits for the user with no further deadline.
+    until = 0 if phase == "doing" or phase == "pending" and goal["pending_fallback"] else now + minutes * 60
+    connection.execute("""UPDATE room_goals SET phase=?,phase_note=?,phase_since=?,phase_until=?,armed=CASE WHEN ?='doing' THEN 1 ELSE armed END
+        WHERE id=?""", (phase, note if phase != "doing" else "", now, until, phase, goal["id"]))
     return goal_view(connection, room_id)
 
 
 def wait_goal(connection, room_id, token, payload):
-    """The runner's decision model judged the idle room to be waiting for the user: stand down until new work arrives.
+    """The runner's decision model judged the idle room to be waiting for the user: mark the goal pending.
 
+    This is what the host would declare itself on being woken, so the decision model only saves that wake-up: the same
+    fallback wake-up and Weixin notice follow, and a room without the model ends in the same state one execution later.
     Only an armed goal stands down; an idle moment after a failed wake-up keeps retrying toward the failure limit.
     """
     require_owner(connection, room_id, token)
     begin_write(connection)
     require_revision(connection, room_id, payload, "Goal 等待用户")
     goal = open_goal(connection, room_id)
-    if not goal or not goal["armed"] or not room_idle(connection, room_id, goal):
+    if not goal or goal["phase"] != "doing" or not goal["armed"] or not room_idle(connection, room_id, goal):
         raise FileExistsError("Goal 当前不在等待唤醒")
-    connection.execute("UPDATE room_goals SET armed=0 WHERE id=?", (goal["id"],))
+    now = int(time.time())
+    until = 0 if goal["pending_fallback"] else now + PHASE_DEFAULT_MINUTES["pending"] * 60
+    connection.execute("""UPDATE room_goals SET armed=0,phase='pending',phase_note='',phase_since=?,phase_until=? WHERE id=?""",
+                       (now, until, goal["id"]))
     return goal_view(connection, room_id)
 
 
@@ -339,6 +407,8 @@ def goal_action(connection, room_id, token, payload):
         return continue_goal(connection, room_id, token, payload)
     if action == "wait":
         return wait_goal(connection, room_id, token, payload)
+    if action == "state":
+        return set_goal_phase(connection, room_id, token, payload)
     if action in ("done", "block"):
         return finish_goal(connection, room_id, token, payload, "complete" if action == "done" else "blocked")
     require_owner(connection, room_id, token)

@@ -238,8 +238,8 @@ const summary = computed(() => {
           <DiscussionLimits ref="limit_picker" :rounds="Number(value('limit-max_rounds'))" :minutes="Number(value('limit-max_minutes'))" :named_followup="Boolean(view.named_followup)"
             @update:rounds="write('limit-max_rounds', String($event))" @update:minutes="write('limit-max_minutes', String($event))" @update:named_followup="bridge.write_named_followup($event)" />
         </template>
-        <GoalConfig v-if="goal" ref="goal_config" :objective="goal.objective" :continues="goal.max_continues" :minutes="goal.max_minutes"
-          @update:objective="bridge.write_create_goal({ objective: $event })" @update:continues="bridge.write_create_goal({ max_continues: $event })" @update:minutes="bridge.write_create_goal({ max_minutes: $event })" />
+        <GoalConfig v-if="goal" ref="goal_config" :objective="goal.objective" :continues="goal.max_continues" :minutes="goal.max_minutes" :idle="goal.idle_seconds ?? 120"
+          @update:objective="bridge.write_create_goal({ objective: $event })" @update:continues="bridge.write_create_goal({ max_continues: $event })" @update:minutes="bridge.write_create_goal({ max_minutes: $event })" @update:idle="bridge.write_create_goal({ idle_seconds: $event })" />
       </section>
 
       <details class="create-advanced" :open="Boolean(view.launch.create_preferences?.advanced_open)" @toggle="bridge.write_create_preferences({ advanced_open: $event.target.open })">

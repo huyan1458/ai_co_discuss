@@ -1958,8 +1958,10 @@ def after_free_message(connection, room_id, message_id, actor, payload):
     """Create requests for the owner's message, or close what the member's answer covers."""
     now = int(time.time())
     if actor == "用户":
-        # New owner input lets an active goal wake the host again once the room falls idle.
-        connection.execute("UPDATE room_goals SET armed=1 WHERE room_id=? AND status='active'", (room_id,))
+        # New owner input lets an active goal wake the host again once the room falls idle, and answers whatever the
+        # host was waiting on: the goal is back to being worked on and a later pending gets its fallback again.
+        connection.execute("""UPDATE room_goals SET armed=1,phase='doing',phase_note='',phase_until=0,pending_fallback=0
+            WHERE room_id=? AND status='active'""", (room_id,))
         # It also replaces whatever the host meant to continue with.
         connection.execute("DELETE FROM free_host_continues WHERE room_id=?", (room_id,))
         if discussion.hold_user_message(connection, room_id, message_id, payload):

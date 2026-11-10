@@ -27,7 +27,7 @@
 | `web/` | 直接运行的静态网页与构建产物 | 不手改产物（如 `web/modern.js`） |
 | `runner/` | `codiscuss` CLI 与本机接入程序（房间编排 `free_runner.mjs`、常驻服务、启动配置、智能调度 `scheduler.mjs`） | `Ref_技术细节.md`“接入程序”、`tests/test_runner.mjs`；影响使用时同步 `docs/runner.md` |
 | `runner/adapters/` | **适配层**：`profiles.mjs` 各软件的静态事实（显示名、配置字段、档位、能力；不依赖 Node，网页也引用），每家软件一个行为模块（投递、停止能力、会话截断与分叉、模型读取），`index.mjs` 是对外唯一入口 | 新接一家软件只在这里新增 profile 与行为模块；`Ref_外部软件通信.md` 对应小节；`Ref_技术细节.md`“适配能力”；`tests/test_runner.mjs`、`tests/test_session_cut.mjs` |
-| `.agents/skills/` | 分发技能 discuss-host / discuss-participant / discuss-report / workflow-creator / local-tts-setup / local-stt-setup；`codiscuss-setup` 仅在源码仓库使用，不进 npm 包、不由安装器复制 | 只有 `.gitignore` 白名单内的技能入库，新增分发技能同步白名单 |
+| `.agents/skills/` | 分发技能 discuss-host / discuss-participant / discuss-goal / discuss-report / workflow-creator / local-tts-setup / local-stt-setup；`codiscuss-setup` 仅在源码仓库使用，不进 npm 包、不由安装器复制 | 只有 `.gitignore` 白名单内的技能入库，新增分发技能同步白名单 |
 | `workflows/` | 随包发布的房间工作流（现为 `story-serial`），只有在 `codiscuss setup` 的“安装配置”里勾选或加 `--workflows` 才装入用户工作流库（覆盖同名、先备份，选择不记住）。**只是副本，不在仓库里改**（见 §5“随包工作流”） | 复制后跑 `tests/test_setup.mjs` |
 | `tests/`、`scripts/`、`deploy/` | 测试、构建脚本、部署配置 | — |
 | `docs/` | 对外精简文档 | 见 §6 |
@@ -69,7 +69,7 @@
 4. **回答必须绑定来源。** 自动回答绑定有效执行，手动回答绑定请求；执行失效后迟到的回答不得改作普通发言。例外（2026-11-10 用户确认）：runner 判失败（不是用户停止、撤回或回退）、其请求之后未被重试的执行，迟到的回答仍作为该执行的回答收下——失败只是 runner 的判断，回答到了说明判断错了。用户在成员自己的窗口里要它发言，或主持人需要主动说明、派活、补交失败任务的结果时，用“主动发言”（`proactive`）：不关联执行或请求、单独标记，成员有进行中的执行时须用该执行回答；只有主持人的主动发言可派活或续跑，从该消息起算新任务链，受轮数上限约束。
 5. **不接入网页 AI。** 在线聊天产品不再作为成员接入（读 `/r` 阅读页、由用户或主持人代发的方式已放弃并清理）；旧网页成员已置为移除，旧代发消息只读展示，不为它新增功能；旧 URL 发布入口保持停用。
 6. **不打包上下文。** 通知与唤醒只给对象、待回应问题和入口，成员自主决定读取深度（渐进式披露）；复制通知不算通知成功。独立观点阶段的读取边界由房间后端校验。
-7. **自包含。** runner 只用 Node.js 内置模块；仓库不依赖其他项目的代码、数据、个人工具或维护者个人目录，不纳入维护者个人的通知 Skill。
+7. **自包含。** runner 只用 Node.js 内置模块；仓库不依赖其他项目的代码、数据、个人工具或维护者个人目录，不纳入维护者个人的通知 Skill；需要别的项目里的代码时整份复制进本仓库维护（如 `runner/weixin.mjs` 的微信通知）。
 8. **不擅自对外动作。** 未经用户明确要求，不提交、推送、部署或启动真实讨论；创建或编辑技能不启动真实讨论或定时任务。不提交 `data/`、`.wrangler/`、`wrangler.local.jsonc`、令牌、聊天记录或本机路径。
 9. **产品功能不越过适配层。** 网站、网页与 runner 的房间编排只依据适配层给出的通用接口、能力与结果工作，不按软件名（`claude`、`codex_cli` 等）写行为分支，也不自行解读某家软件的投递方式或会话格式。某家软件缺少某项能力时，在适配层补齐或由适配层如实声明不支持，由产品层按声明降级显示；不得为了做出某个体验在产品层打软件特例。（原因：特例散在产品层会让新接一家软件要改遍全项目，且软件升级时无处统一修正，最终显示与 AI 实际状态脱节。）
 

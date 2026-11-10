@@ -21,7 +21,14 @@ const ACTIVITY_REPORT_MS = 10_000;
 const PROGRESS_REPORT_MS = 2_000;
 const MAX_DELIVERY_ATTEMPTS = 3;
 // An idle room under an active goal waits this long before the host is woken, leaving the owner time to speak first.
-export const GOAL_IDLE_MS = 30_000;
+// Fallback when the room's goal does not carry its own idle wait (older website).
+export const GOAL_IDLE_MS = 120_000;
+// A goal waiting on the owner reaches their Weixin only after this long: right after the question they may be typing.
+export const PENDING_NOTICE_MS = 5 * 60_000;
+// A failed Weixin notice is tried again after this long instead of on every tick.
+const NOTICE_RETRY_MS = 60_000;
+// Without the host's note, the notice quotes the room's latest message, up to this many characters.
+const NOTICE_EXCERPT = 300;
 // A manual member's session that refuses a delivery is retried in the same execution, after a wait the owner can cut short.
 const MAX_DELIVERY_RETRIES = 3;
 const RETRY_DELAY_SECONDS = 60;
@@ -161,9 +168,10 @@ export function free_task_files(config, member, execution, binding, { session = 
   // The host works a goal while it is open, and also handles the request that opens it or the wrap-up after it ends.
   const goal_task = member.role === 'host' && (['active', 'paused'].includes(goal?.status)
     || requests.some(item => ['goal_start', 'goal_continue'].includes(item.purpose)));
-  if (goal_task) skills.push('discuss-host/references/goal.md');
+  if (goal_task) skills.push('discuss-goal/SKILL.md');
   const goal_field = goal_task && goal ? { id: goal.id, objective: goal.objective, status: goal.status, continues: goal.continues,
-    max_continues: goal.max_continues, elapsed_seconds: goal.elapsed_seconds, max_minutes: goal.max_minutes } : null;
+    max_continues: goal.max_continues, elapsed_seconds: goal.elapsed_seconds, max_minutes: goal.max_minutes,
+    phase: goal.phase ?? 'doing', ...(goal.phase_note ? { phase_note: goal.phase_note } : {}) } : null;
   const skills_directory = join(config.project, '.agents', 'skills');
   const workflow_field = host_workflow ? workflow_task_field(host_workflow, room_members, config.participants) : null;
   atomic_json(task_path, { site: config.site, room: config.room, mode: 'free', member: member.name,
@@ -268,6 +276,8 @@ export class FreeRoomRunner {
     this.decisions = new Set();
     // Called when a scheduling decision settles; the service checks the room at once instead of waiting for the next poll.
     this.on_decided = () => {};
+    // Set by the service when it can reach the owner's Weixin: { ready(), sent(key), send(notice) }.
+    this.notifier = null;
     // Routed requests whose decision is still pending: their host waits, so one pick replaces the host's start.
     this.routing = new Set();
     this.children = new Set();
@@ -517,8 +527,11 @@ export class FreeRoomRunner {
   idle() {
     const inbox = this.inbox;
     if (!inbox || this.routing.size || [...this.members.values()].some(children => children.size)) return false;
-    // A goal waiting out its idle grace still needs ticks to wake the host when it ends.
+    // A goal waiting out its idle grace still needs ticks to wake the host when it ends, and one waiting on the owner
+    // needs them to send its Weixin notice on time.
     if (this.room?.goal_state?.goal?.idle) return false;
+    const notice = this.pending_notice(this.room);
+    if (notice && this.notifier.ready() && !this.notifier.sent(notice.key)) return false;
     if (this.room?.session?.status === 'active' || inbox.executions.length || inbox.members.some(member => member.pending.length)) return false;
     return !this.store.db.prepare('SELECT status FROM free_deliveries').all().some(row => LIVE.includes(row.status));
   }
@@ -529,12 +542,15 @@ export class FreeRoomRunner {
    */
   async continue_goal(room) {
     const view = room.goal_state;
+    await this.notify_pending(room);
     if (!view?.goal?.idle) { this.goal_idle = null; return; }
     if (this.goal_idle?.revision !== view.revision) { this.goal_idle = { revision: view.revision, since: Date.now() }; return; }
-    if (this.goal_idle.busy || Date.now() - this.goal_idle.since < (this.config.goal_idle_ms ?? GOAL_IDLE_MS)) return;
+    const grace = this.config.goal_idle_ms ?? (view.goal.idle_seconds ? view.goal.idle_seconds * 1000 : GOAL_IDLE_MS);
+    if (this.goal_idle.busy || Date.now() - this.goal_idle.since < grace) return;
     this.goal_idle.busy = true;
     let decision = null;
-    if (this.config.scheduler && view.goal.armed) {
+    // A phase the host declared (waiting, pending) is its own judgement; the decision model only weighs a plain idle room.
+    if (this.config.scheduler && view.goal.armed && (view.goal.phase ?? 'doing') === 'doing') {
       try { decision = await this.judge_goal(room, view.goal); }
       catch (error) { this.log(`Goal 空闲判断失败，照常唤醒主持人：${error.message}`); }
     }
@@ -551,6 +567,41 @@ export class FreeRoomRunner {
     finally { this.goal_idle = null; }
     if (decision?.detail) await this.record_decision(decision.after_message_id, decision, decision.label, applied,
       { prompt: GOAL_PROMPT_VERSION, threshold: ROUTE_CONFIDENCE, wide_threshold: ROUTE_CONFIDENCE, scene: 'goal' });
+  }
+  /** The Weixin notice an active goal waiting on the owner calls for, or null. */
+  pending_notice(room) {
+    const goal = room?.goal_state?.goal;
+    if (!this.notifier || goal?.status !== 'active' || goal.phase !== 'pending') return null;
+    return { key: `${this.config.site}/${this.config.room}/goal-${goal.id}-pending-${goal.phase_since}`,
+      due: goal.phase_since * 1000 + PENDING_NOTICE_MS, goal };
+  }
+  /** Tell the owner on Weixin once the goal has waited on them a while; their reply comes back to this room. */
+  async notify_pending(room) {
+    const notice = this.pending_notice(room);
+    if (!notice || Date.now() < notice.due || Date.now() - (this.notice_failed_at ?? 0) < NOTICE_RETRY_MS) return;
+    if (!this.notifier.ready() || this.notifier.sent(notice.key)) return;
+    try {
+      const question = notice.goal.phase_note ? `主持人在等你确认：
+${notice.goal.phase_note}` : await this.latest_excerpt(room);
+      const text = `${question}
+
+Goal：${notice.goal.objective}
+直接回复这条消息，会作为你的发言发到这个房间。`;
+      const result = await this.notifier.send({ key: notice.key, room: { site: this.config.site, room: this.config.room, title: room.title }, text });
+      if (result.status === 'sent') this.log(`Goal 待确认已发微信通知 #${result.number}`);
+    } catch (error) {
+      this.notice_failed_at = Date.now();
+      this.log(`Goal 待确认微信通知失败：${error.message}`);
+    }
+  }
+  /** The room's latest message from a person or member, for a pending goal nobody wrote a note for. */
+  async latest_excerpt(room) {
+    const page = await api(this.config, `/messages?after=${Math.max(0, (room.latest_id || 0) - 5)}`);
+    const latest = (page.messages || []).filter(message => message.author !== '系统').at(-1);
+    if (!latest) return '房间在等你的决定或补充信息，详情见房间。';
+    const text = latest.text.length > NOTICE_EXCERPT ? `${latest.text.slice(0, NOTICE_EXCERPT)}…` : latest.text;
+    return `房间在等你回复，最近一条是 ${latest.author} 说：
+${text}`;
   }
   /** Ask the decision model whether the idle goal room needs its host, from the latest messages and who is in it. */
   async judge_goal(room, goal) {

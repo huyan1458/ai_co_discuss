@@ -2035,6 +2035,44 @@ for (const [answer, posted] of [[{ choice: 'wait', probabilities: { wait: 0.9, c
   });
 }
 
+test('a goal the host declared pending skips the decision model and reaches Weixin once after the delay', async t => {
+  const f = await free_fixture(t);
+  f.config = { ...with_scheduler(f.config), goal_idle_ms: 0 };
+  f.state.pending = [];
+  const since = Math.floor(Date.now() / 1000);
+  const goal = { id: 1, status: 'active', idle: false, armed: 1, objective: '修完 8 项问题', phase: 'pending', phase_note: '选 A 还是 B？', phase_since: since };
+  f.state.room.goal_state = { goal, revision: 'goal-r1' };
+  const sent = [];
+  let model_called = false;
+  const runner = new FreeRoomRunner(f.config, f.store, async () => ({ status: 'accepted' }), () => {}, async () => { model_called = true; return { ok: false }; });
+  runner.notifier = { ready: () => true, sent: key => sent.some(item => item.key === key), send: async notice => { sent.push(notice); return { status: 'sent', number: 1 }; } };
+  await runner.tick();
+  assert.equal(sent.length, 0, 'the owner may still be typing');
+  assert.equal(runner.idle(), false, 'the service keeps ticking until the notice is due');
+  f.state.room.goal_state = { goal: { ...goal, phase_since: since - 301, idle: true }, revision: 'goal-r2' };
+  await runner.tick();
+  await runner.tick();
+  assert.equal(sent.length, 1);
+  assert.match(sent[0].text, /选 A 还是 B？/);
+  assert.equal(sent[0].room.room, 'room');
+  assert.deepEqual(f.state.goal_posts, [{ action: 'continue', revision: 'goal-r2' }], 'an expired pending wakes the host without asking the model');
+  assert.equal(model_called, false);
+});
+
+test('a pending goal without the host note (set by the decision model) quotes the latest message on Weixin', async t => {
+  const f = await free_fixture(t);
+  f.state.pending = [];
+  f.state.messages = [{ id: 11, author: 'Codex', text: '前四项已修复。要不要继续修后四项，请你决定。' }, { id: 12, author: '系统', text: 'Goal 续跑 #1' }];
+  f.state.room.latest_id = 12;
+  f.state.room.goal_state = { goal: { id: 1, status: 'active', idle: false, objective: '修完 8 项问题', phase: 'pending', phase_note: '',
+    phase_since: Math.floor(Date.now() / 1000) - 301 }, revision: 'goal-r1' };
+  const sent = [];
+  const runner = new FreeRoomRunner(f.config, f.store, async () => ({ status: 'accepted' }));
+  runner.notifier = { ready: () => true, sent: () => false, send: async notice => { sent.push(notice); return { status: 'sent', number: 1 }; } };
+  await runner.tick();
+  assert.match(sent[0].text, /Codex 说：\n前四项已修复。要不要继续修后四项，请你决定。/);
+});
+
 function scheduler_fetch(answers) {
   return async () => ({ ok: true, json: async () => ({ answers }) });
 }

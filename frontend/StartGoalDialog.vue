@@ -11,6 +11,7 @@ const { view, act, pending } = inject("discussion");
 const objective = ref("");
 const continues = ref(0);
 const minutes = ref(0);
+const idle = ref(120);
 const config = ref(null);
 const action = computed(() => props.edit ? "update_room_goal" : "start_room_goal");
 watch(open, (opened) => {
@@ -18,13 +19,15 @@ watch(open, (opened) => {
   objective.value = props.initial?.objective || "";
   continues.value = props.initial?.max_continues || 0;
   minutes.value = props.initial?.max_minutes || 0;
+  // A new goal keeps the idle wait the room's last goal used.
+  idle.value = props.initial?.idle_seconds || view.value.room?.goal_state?.goal?.idle_seconds || 120;
 });
 
 /** Save the goal; the dialog keeps its input when the request fails. */
 async function submit() {
   config.value?.settle();
   const whole = (value) => Number.isInteger(Number(value)) && Number(value) > 0 ? Number(value) : 0;
-  const saved = await act(action.value, { objective: objective.value.trim(), max_continues: whole(continues.value), max_minutes: whole(minutes.value) });
+  const saved = await act(action.value, { objective: objective.value.trim(), max_continues: whole(continues.value), max_minutes: whole(minutes.value), idle_seconds: idle.value });
   if (saved) open.value = false;
 }
 </script>
@@ -34,7 +37,7 @@ async function submit() {
     :description="edit ? '修改目标或上限，下一次唤醒主持人时生效。' : continuing ? '沿用上次的目标和上限重新开启，可先修改；记录全部保留。' : '主持人持续推进这个目标：房间空闲时自动接着做，直到完成、卡住或你结束。'" :ui="{ content: 'glass-panel studio-modal', body: 'dialog-body' }">
     <template #body>
       <form class="start-goal" aria-label="Goal 设置" @submit.prevent="submit">
-        <GoalConfig ref="config" v-model:objective="objective" v-model:continues="continues" v-model:minutes="minutes" />
+        <GoalConfig ref="config" v-model:objective="objective" v-model:continues="continues" v-model:minutes="minutes" v-model:idle="idle" />
         <div class="start-goal-footer">
           <UButton label="取消" color="neutral" variant="ghost" @click="open = false" />
           <UButton type="submit" :icon="edit ? 'i-lucide-check' : 'i-lucide-target'" :label="edit ? '保存' : '开始 Goal'" class="channel-primary-button"

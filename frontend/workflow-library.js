@@ -85,7 +85,8 @@ function create_library({ view, bridge, act }) {
   function select(id) {
     if (page_open.value && saved_id.value === id && draft.value) return;
     if (saved_id.value === id && draft.value) { page_open.value = true; return; }
-    guard(() => { page_open.value = true; open_saved(id); });
+    // The choice is taken before the page opens, so opening it does not also load the first workflow in the list.
+    guard(() => { draft.value = null; saved_id.value = id; page_open.value = true; open_saved(id); });
   }
 
   /** Leave the page for the room, asking first about unsaved changes; `then` runs once it is left. */

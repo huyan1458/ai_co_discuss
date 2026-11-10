@@ -442,6 +442,14 @@ def goal_commands(subcommands, registry):
         parser = add_leaf(subcommands, registry, f"goal {action}", help_text, True)
         parser.add_argument("--revision", required=True, help="goal view 返回的 revision；状态变化后须重新读取")
         add_text(parser, "note")
+    state = add_leaf(subcommands, registry, "goal state",
+                     "主持人可选声明 Goal 当前状态：doing 推进中（空闲即唤醒）、waiting 等待后台工作、pending 待用户确认；"
+                     "后两种不在空闲时唤醒，到时限兜底唤醒一次；先 goal view 取 revision", True)
+    state.add_argument("--state", required=True, choices=("doing", "waiting", "pending"), help="要声明的状态")
+    state.add_argument("--revision", required=True, help="goal view 返回的 revision；状态变化后须重新读取")
+    state.add_argument("--minutes", type=positive_int, default=argparse.SUPPRESS,
+                       help="waiting / pending 的兜底时限（分钟），默认 waiting 30、pending 60")
+    add_text(state, "note")
     for action in ("pause", "resume", "clear"):
         add_leaf(subcommands, registry, f"goal {action}", "房主暂停、恢复或结束 Goal", True)
     update = add_leaf(subcommands, registry, "goal update", "房主修改 Goal 的目标或预算（0 表示不限）", True)
@@ -449,6 +457,8 @@ def goal_commands(subcommands, registry):
     for parser in (start, update):
         for name in ("max-continues", "max-minutes"):
             parser.add_argument(f"--{name}", type=non_negative_int, default=argparse.SUPPRESS, help="房主可选预算，0 表示不限")
+        parser.add_argument("--idle-seconds", type=positive_int, default=argparse.SUPPRESS,
+                            help="房主可选：房间空闲多少秒后唤醒主持人（30–1800，默认 120）")
 
 
 def mode_commands(subcommands, registry):
@@ -893,10 +903,12 @@ def plan_goal(args):
     objective = text_field(args, "objective") if args.action in ("start", "update") else None
     if objective is not None:
         body["objective"] = objective
-    note = text_field(args, "note") if args.action in ("done", "block") else None
+    note = text_field(args, "note") if args.action in ("done", "block", "state") else None
     if note is not None:
         body["note"] = note
-    for key in ("max_continues", "max_minutes"):
+    if args.action == "state":
+        body["state"] = args.state
+    for key in ("max_continues", "max_minutes", "idle_seconds", "minutes"):
         if hasattr(args, key):
             body[key] = getattr(args, key)
     if args.action == "start":

@@ -72,7 +72,10 @@ export function participant_tools(context) {
     tool('start_goal', '只用于任务中 purpose 为 goal_start 的请求：用户发了 /goal，补全目标后开启；用户带了文本以原文为准，提炼不出明确目标就不开启并在 submit_chat 说明原因',
       { request_id: NUMBER, objective: { ...TEXT, maxLength: 2000 } }, ['request_id', 'objective']),
     tool('finish_goal', '对照实际状态核验后宣告 Goal 完成（done），或同一阻碍连续 3 次续跑仍未解决时宣告卡住（block，须写明阻碍）；程序自取最新 revision',
-      { status: { type: 'string', enum: ['done', 'block'] }, note: { ...TEXT, maxLength: 1000 } }, ['status']));
+      { status: { type: 'string', enum: ['done', 'block'] }, note: { ...TEXT, maxLength: 1000 } }, ['status']),
+    tool('set_goal_state', '可选声明 Goal 当前状态：doing 推进中（房间空闲即唤醒你）；waiting 在等后台工作；pending 在等用户决定或补充信息（note 写清要用户做什么）。后两种空闲时不唤醒，到 minutes 时限兜底唤醒一次；用户发言后自动回到 doing；程序自取最新 revision',
+      { state: { type: 'string', enum: ['doing', 'waiting', 'pending'] }, note: { ...TEXT, maxLength: 1000 },
+        minutes: { type: 'integer', minimum: 1, maximum: 1440 } }, ['state']));
   if (context.role === 'host' && (context.requests || []).some(item => item.purpose === 'discuss_start')) tools.push(
     tool('start_discussion', '只用于 purpose 为 discuss_start 的请求：用户发了 /discuss，补全讨论目标后开启；用户带了文本以原文为准，提炼不出明确的讨论问题就不开启并在 submit_chat 说明原因；上限用房间默认值',
       { request_id: NUMBER, goal: { ...TEXT, maxLength: 1000 } }, ['request_id', 'goal']));
@@ -164,6 +167,8 @@ function write_action(context, name, args) {
     start_goal: ['/goal', { action: 'start', request_id: args.request_id, objective: args.objective }, false],
     start_discussion: ['/discussion', { action: 'start', request_id: args.request_id, goal: args.goal }, false],
     finish_goal: ['/goal', { action: args.status === 'block' ? 'block' : 'done', revision: args.goal_revision, note: args.note }, false],
+    set_goal_state: ['/goal', { action: 'state', state: args.state, revision: args.goal_revision, note: args.note,
+      ...(Number.isInteger(args.minutes) ? { minutes: args.minutes } : {}) }, false],
   };
   const [path, body, terminal] = actions[name];
   return { path, body: { actor, ...body }, terminal };
@@ -188,7 +193,7 @@ async function execute_tool(context, call, definitions) {
   if (call.name === 'read_review_ready') return { result: await room_request(context, `/reviews/${Number.isSafeInteger(args.batch_id) ? args.batch_id : 0}/ready`) };
   if (call.name === 'read_sequence') return { result: await room_request(context, `/sequences/${Number.isSafeInteger(args.id) ? args.id : 0}`) };
   if (call.name === 'read_goal') return { result: await room_request(context, '/goal') };
-  if (call.name === 'finish_goal') args.goal_revision = (await room_request(context, '/goal')).revision;
+  if (call.name === 'finish_goal' || call.name === 'set_goal_state') args.goal_revision = (await room_request(context, '/goal')).revision;
   if (call.name === 'read_decision') {
     if (!Number.isInteger(args.id) || args.id < 1) return { result: { error: 'id 须为正整数' } };
     return { result: await room_request(context, `/scheduler-decisions/${args.id}`) };
@@ -259,7 +264,7 @@ export function system_prompt(context) {
 下文是本项目的参与技能${host ? '与主持技能' : ''}，与本地软件参与者使用同一份。你经本机接入程序以 API 参与，环境差异如下，与技能冲突时以本段为准：
 - 只能使用提供的${context.project ? '房间工具和项目文件工具' : '房间工具'}，没有${command_tools(context.commands, context.project).length ? '通用' : ''}命令行、浏览器、附件下载或其他软件。接入程序负责执行认领、续租和凭据管理；你的房间写入工具都绑定本次执行，不要重试结果不明的写入。
 - 命令与工具对应：room view → read_room；message list / view → read_messages / read_message；message post --kind chat → submit_chat。${host ? 'state decision → read_decision（按任务的决策编号读取完整判断）。' : ''}${discussion && host
-    ? '主持讨论工具还包括 state set → save_state；room update → update_topic；turn create --plan-file → arrange_turns；turn continue → continue_plan；turn roster → read_roster，读后 turn ask → ask_interjection；取消安排 → cancel_turn；room limits --done → finish_discussion / declare_done。' : ''}${host ? ' 派活用 to，派出的工作结束后都会交回你；房间空闲后要接着推进时填 continue；message post --sequential / --loop / --with / --checkpoint / --repeat / --detach → submit_chat 的 sequential / loop / parallel / gates / detach；sequence view → read_sequence；sequence continue → continue_sequence。' : ''}${goal_host(context) ? ' goal view → read_goal；goal start → start_goal；goal done / block → finish_goal。' : ''}
+    ? '主持讨论工具还包括 state set → save_state；room update → update_topic；turn create --plan-file → arrange_turns；turn continue → continue_plan；turn roster → read_roster，读后 turn ask → ask_interjection；取消安排 → cancel_turn；room limits --done → finish_discussion / declare_done。' : ''}${host ? ' 派活用 to，派出的工作结束后都会交回你；房间空闲后要接着推进时填 continue；message post --sequential / --loop / --with / --checkpoint / --repeat / --detach → submit_chat 的 sequential / loop / parallel / gates / detach；sequence view → read_sequence；sequence continue → continue_sequence。' : ''}${goal_host(context) ? ' goal view → read_goal；goal start → start_goal；goal done / block → finish_goal；goal state → set_goal_state。' : ''}
 ${project_text(context.project, context.commands)}
 - ${max_requests(context) ? `本次执行最多 ${max_requests(context)} 次模型请求，每轮都计入；` : ''}互不依赖的读取或修改（如同一文件的多处 edit）在同一轮一次调用多个工具，减少模型请求次数。
 - 必须通过写入工具保存真实结果，普通文本输出不会保存。确实无法继续时不调用写入工具直接结束，本次执行会暂停等待用户。
@@ -269,7 +274,7 @@ ${project_text(context.project, context.commands)}
     ...(host ? [skill_text('discuss-host'), skill_text('discuss-host', page)] : []),
     // A workflow applies only to requests that fit it, so the development flow stays for the rest.
     ...(host && !discussion ? [skill_text('discuss-host', 'references/dev-flow.md')] : []),
-    ...(goal_host(context) ? [skill_text('discuss-host', 'references/goal.md')] : []),
+    ...(goal_host(context) ? [skill_text('discuss-goal')] : []),
     ...(host && context.workflow ? [workflow_text(context.workflow)] : []),
     ...(context.expert_prompt ? [`用户为你单独设置的提示（补充做法与偏好，不改变权限与技能规则）：\n${context.expert_prompt}`] : [])].join('\n\n---\n\n');
 }

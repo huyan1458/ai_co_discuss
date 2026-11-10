@@ -19,6 +19,7 @@ import { ADAPTER_IDS, ADAPTER_PROFILES, adapter_profile, DEFAULT_API_MAX_REQUEST
 import { API_PROVIDERS, api_check, api_models, save_api_key, saved_api_keys, validate_api_profile } from './discussion_api.mjs';
 import { DEFAULT_SCHEDULER_MODE, SCHEDULER_MODES, SCHEDULER_PROVIDERS, scheduler_check } from './scheduler.mjs';
 import { save_tts_settings, tts_release, tts_settings, tts_speak } from './tts.mjs';
+import { weixin_command } from './weixin.mjs';
 import { stt_part } from './stt.mjs';
 import { access_levels, BUILTIN_EXPERT_PRESETS, MAX_EXPERT_PROMPT, PROJECT_ACCESS } from './expert_prompts.mjs';
 import { acquire_lock, api, check_extra_directories, DiscussionStore, service_drafts, validate_config } from './discussion_runner.mjs';
@@ -68,6 +69,7 @@ const HELP = `用法：codiscuss launch settings [--file FILE]
       codiscuss launch tts-settings [--file FILE]
       codiscuss launch tts --file FILE
       codiscuss launch tts-release
+      codiscuss launch weixin [--file FILE]
       codiscuss launch stt --file FILE
       codiscuss launch room-member --file FILE
       codiscuss launch room-member-access --file FILE
@@ -103,6 +105,7 @@ api-check 用 API profile 向模型发送一次极短请求，核对地址、密
 scheduler-check 用智能调度配置（provider、model、api_key_ref）向决策模型发送一道是非题，核对供应商、模型与密钥是否可用。
 tts-settings 读取朗读设置；内容非空时保存（语音服务 provider：volcengine / aliyun / azure / local（本机，由 local-tts-setup 技能安装），语速 speech_rate、语气提示 context，以及 providers.<服务> 的 api_key_ref、speaker、member_voices、file_voice，Azure 另有 region）。
 tts 用朗读设置把 text（不超过 300 字）合成为音频（本机服务为 m4a，其余为 MP3），返回 base64。
+weixin 微信通知：action 为 status（默认，读取绑定状态）、login（生成扫码内容）、complete（等待扫码确认，约 20 秒）、test（发一条测试通知）或 unbind（解除本机绑定）。Goal 待确认 5 分钟仍未回复时通知房主，房主在微信回复即作为房主发言发回该房间；只用本机服务目录保存凭据。
 tts-release 用户停止朗读：所选服务释放在这台电脑上占用的资源（本机语音在 5 秒内结束、释放显存），云端服务无操作。
 stt 按序接收录音片段（upload_id、index、base64 PCM 16 kHz 单声道、final）；最后一段时识别整段录音并返回 text。
 pick-directory 在本机弹出系统目录选择窗口，返回所选路径；取消时不返回路径。
@@ -2050,6 +2053,7 @@ export async function launch_main(args = process.argv.slice(2), input_text) {
   else if (positionals[0] === 'tts-settings') result = input && Object.keys(input).length ? save_tts_settings(home, input) : tts_settings(home);
   else if (positionals[0] === 'tts' && input) result = await tts_speak(home, input);
   else if (positionals[0] === 'tts-release') result = tts_release(home);
+  else if (positionals[0] === 'weixin') result = await weixin_command(home, input || {});
   else if (positionals[0] === 'stt' && input) result = await stt_part(home, input);
   else if (positionals[0] === 'room-models' && input) result = await room_models(home, input);
   else if (positionals[0] === 'room-files' && input) result = await room_files(home, input);

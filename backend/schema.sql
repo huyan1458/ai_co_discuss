@@ -1694,7 +1694,16 @@ CREATE TABLE IF NOT EXISTS room_goals (
     paused_at INTEGER NOT NULL DEFAULT 0,
     paused_seconds INTEGER NOT NULL DEFAULT 0,
     ended_at INTEGER NOT NULL DEFAULT 0,
-    end_note TEXT NOT NULL DEFAULT ''
+    end_note TEXT NOT NULL DEFAULT '',
+    -- Seconds the room stays idle before an active goal in phase `doing` wakes the host.
+    idle_seconds INTEGER NOT NULL DEFAULT 120,
+    -- Host-declared phase: doing (idle wakes it), waiting (background work) or pending (the user's input). The last two
+    -- wake the host only once `phase_until` passes (0 = never); `pending_fallback` marks that wake-up spent until the user speaks.
+    phase TEXT NOT NULL DEFAULT 'doing' CHECK(phase IN ('doing','waiting','pending')),
+    phase_note TEXT NOT NULL DEFAULT '',
+    phase_since INTEGER NOT NULL DEFAULT 0,
+    phase_until INTEGER NOT NULL DEFAULT 0,
+    pending_fallback INTEGER NOT NULL DEFAULT 0
 );
 CREATE UNIQUE INDEX IF NOT EXISTS one_open_goal ON room_goals(room_id) WHERE status IN ('active','paused');
 CREATE UNIQUE INDEX IF NOT EXISTS room_goals_start_request ON room_goals(start_request_id) WHERE start_request_id IS NOT NULL;
@@ -1719,9 +1728,12 @@ DROP TRIGGER IF EXISTS event_goal_changed;
 CREATE TRIGGER event_goal_changed AFTER UPDATE ON room_goals
     WHEN OLD.status IS NOT NEW.status OR OLD.continues IS NOT NEW.continues OR OLD.objective IS NOT NEW.objective
         OR OLD.max_continues IS NOT NEW.max_continues OR OLD.max_minutes IS NOT NEW.max_minutes
+        OR OLD.idle_seconds IS NOT NEW.idle_seconds OR OLD.phase IS NOT NEW.phase OR OLD.phase_until IS NOT NEW.phase_until
 BEGIN
     INSERT INTO room_events (room_id,at,kind,data) VALUES (NEW.room_id,CAST((julianday('now')-2440587.5)*86400000 AS INTEGER),'goal.changed',
         json_object('goal_id',NEW.id,'status',NEW.status,'from_status',OLD.status,'continues',NEW.continues,
             'objective',CASE WHEN OLD.objective IS NOT NEW.objective THEN substr(NEW.objective,1,80) END,
-            'max_continues',NEW.max_continues,'max_minutes',NEW.max_minutes,'note',substr(NEW.end_note,1,200)));
+            'max_continues',NEW.max_continues,'max_minutes',NEW.max_minutes,'note',substr(NEW.end_note,1,200),
+            'idle_seconds',NEW.idle_seconds,'phase',NEW.phase,'from_phase',OLD.phase,'phase_until',NEW.phase_until,
+            'phase_note',CASE WHEN OLD.phase IS NOT NEW.phase THEN substr(NEW.phase_note,1,200) END));
 END;

@@ -320,6 +320,12 @@ def seed_demo(connection):
     connection.execute("UPDATE rooms SET state_text=?,state_until=6 WHERE id='welcome'", (summary,))
 
 
+GOAL_PHASE_COLUMNS = (("idle_seconds", "INTEGER NOT NULL DEFAULT 120"),
+                      ("phase", "TEXT NOT NULL DEFAULT 'doing' CHECK(phase IN ('doing','waiting','pending'))"),
+                      ("phase_note", "TEXT NOT NULL DEFAULT ''"), ("phase_since", "INTEGER NOT NULL DEFAULT 0"),
+                      ("phase_until", "INTEGER NOT NULL DEFAULT 0"), ("pending_fallback", "INTEGER NOT NULL DEFAULT 0"))
+
+
 def migrate_legacy_discussion(connection, tables):
     """Remove retired discussion tables atomically before applying the current schema."""
     if not {"discussion_turns", "room_floor"}.intersection(tables):
@@ -352,6 +358,12 @@ def init_database(database, seed=True):
             columns = {row[1] for row in connection.execute("PRAGMA table_info(member_executions)")}
             if "changes" not in columns:
                 connection.execute("ALTER TABLE member_executions ADD COLUMN changes TEXT NOT NULL DEFAULT ''")
+        # The goal-changed trigger in the schema reads these columns, so they must exist before it is created.
+        if "room_goals" in tables:
+            columns = {row[1] for row in connection.execute("PRAGMA table_info(room_goals)")}
+            for name, kind in GOAL_PHASE_COLUMNS:
+                if name not in columns:
+                    connection.execute(f"ALTER TABLE room_goals ADD COLUMN {name} {kind}")
         connection.executescript(SCHEMA)
         if "directories" not in {row[1] for row in connection.execute("PRAGMA table_info(topic_folders)")}:
             connection.execute("ALTER TABLE topic_folders ADD COLUMN directories TEXT NOT NULL DEFAULT '[]'")
@@ -1924,7 +1936,7 @@ class DiscussionHandler(BaseHTTPRequestHandler):
         site = self.local_request_site(method)
         route = parts[2:]
         if method == "OPTIONS" and route in (["settings"], ["launch"], ["room-models"], ["room-files"], ["room-page"], ["execution-details"], ["room-member"], ["room-member-access"], ["room-member-allow"], ["room-member-adapter"], ["room-member-model"], ["room-profiles"], ["room-restore"], ["room-fork"], ["models"], ["api-key"], ["api-check"],
-                                             ["scheduler-check"], ["tts-settings"], ["tts"], ["tts-release"], ["stt"], ["pick-directory"], ["browse-directory"], ["projects"], ["presets"], ["workflows"], ["room-workflow"], ["room-settings"], ["machine-link"], ["device-pairing"], ["devices"]):
+                                             ["scheduler-check"], ["tts-settings"], ["tts"], ["tts-release"], ["stt"], ["weixin"], ["pick-directory"], ["browse-directory"], ["projects"], ["presets"], ["workflows"], ["room-workflow"], ["room-settings"], ["machine-link"], ["device-pairing"], ["devices"]):
             return self.respond({"ok": True})
         if route == ["settings"] and method in ("GET", "POST"):
             command = "settings"
@@ -1942,7 +1954,7 @@ class DiscussionHandler(BaseHTTPRequestHandler):
             command = "api-check"
         elif route == ["scheduler-check"] and method == "POST":
             command = "scheduler-check"
-        elif route in (["tts-settings"], ["tts"], ["tts-release"], ["stt"]) and method == "POST":
+        elif route in (["tts-settings"], ["tts"], ["tts-release"], ["stt"], ["weixin"]) and method == "POST":
             command = route[0]
         elif route in (["room-member"], ["room-member-access"], ["room-member-allow"], ["room-member-adapter"], ["room-member-model"]) and method == "POST":
             command = route[0]

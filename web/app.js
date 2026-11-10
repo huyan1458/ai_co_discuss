@@ -1189,7 +1189,8 @@ function apply_create_preferences() {
   state.named_followup = preferences.named_followup ?? false;
   state.create_discussion = preferences.drive === "discussion";
   state.create_goal = preferences.drive === "goal" ? { objective: state.create_goal?.objective || "",
-    max_continues: preferences.goal_max_continues ?? 0, max_minutes: preferences.goal_max_minutes ?? 0 } : null;
+    max_continues: preferences.goal_max_continues ?? 0, max_minutes: preferences.goal_max_minutes ?? 0,
+    idle_seconds: preferences.goal_idle_seconds ?? GOAL_IDLE_SECONDS } : null;
   state.create_chain_rounds = preferences.chain_rounds ?? DEFAULT_CHAIN_ROUNDS;
   state.create_host_workflows = preferences.host_workflows ?? false;
   state.create_api_max_requests = preferences.api_max_requests ?? DEFAULT_API_MAX_REQUESTS;
@@ -2133,12 +2134,15 @@ async function open_discussion_after_creation(room_id, { goal, named_followup, l
   }
 }
 
+// How long an idle room waits before the goal wakes the host, unless the owner chose otherwise (backend/goal_room.py).
+const GOAL_IDLE_SECONDS = 120;
+
 /** Open the goal of a room just created; a failure leaves the room as an ordinary free room. */
-async function open_goal_after_creation(room_id, { objective, max_continues, max_minutes }) {
+async function open_goal_after_creation(room_id, { objective, max_continues, max_minutes, idle_seconds = GOAL_IDLE_SECONDS }) {
   const path = `/api/rooms/${room_id}/goal`;
   try {
     const current = await request_json(path);
-    await request_json(path, { action: "start", revision: current.revision, objective, max_continues, max_minutes });
+    await request_json(path, { action: "start", revision: current.revision, objective, max_continues, max_minutes, idle_seconds });
     state.create_goal = null;
   } catch (error) {
     notify("warning", `房间已创建，但开启 Goal 失败：${error.message}；可在右侧成员栏重试`);
@@ -3475,10 +3479,11 @@ function write_create_discussion(value) {
 function write_create_goal(patch) {
   const preferences = state.launch.create_preferences || {};
   state.create_goal = patch === null ? null : { objective: "", max_continues: preferences.goal_max_continues ?? 0,
-    max_minutes: preferences.goal_max_minutes ?? 0, ...(state.create_goal || {}), ...patch };
+    max_minutes: preferences.goal_max_minutes ?? 0, idle_seconds: preferences.goal_idle_seconds ?? GOAL_IDLE_SECONDS, ...(state.create_goal || {}), ...patch };
   if (state.create_goal) state.create_discussion = false;
   write_create_preferences({ drive: state.create_goal ? "goal" : state.create_discussion ? "discussion" : "free",
-    ...(state.create_goal ? { goal_max_continues: state.create_goal.max_continues, goal_max_minutes: state.create_goal.max_minutes } : {}) });
+    ...(state.create_goal ? { goal_max_continues: state.create_goal.max_continues, goal_max_minutes: state.create_goal.max_minutes,
+      goal_idle_seconds: state.create_goal.idle_seconds } : {}) });
   publish_view();
 }
 
@@ -3814,22 +3819,22 @@ async function start_room_discussion({ goal, max_rounds, max_minutes, named_foll
 }
 
 /** Open a goal from the page with the revision just read; the host is woken right away to start on it. */
-async function start_room_goal({ objective, max_continues = 0, max_minutes = 0 }) {
+async function start_room_goal({ objective, max_continues = 0, max_minutes = 0, idle_seconds = GOAL_IDLE_SECONDS }) {
   const room_id = state.room.id, path = `/api/rooms/${room_id}/goal`;
   if (!has_room_control(room_id)) throw new Error(MANAGEMENT_LOGIN_HINT);
   const current = await request_json(path);
   if (state.room?.id !== room_id) return;
-  await request_json(path, { action: "start", revision: current.revision, objective, max_continues, max_minutes });
+  await request_json(path, { action: "start", revision: current.revision, objective, max_continues, max_minutes, idle_seconds });
   if (state.room?.id !== room_id) return;
   await refresh_room();
   show_toast("Goal 已开启，主持人会持续推进；需本机接入程序保持运行");
 }
 
 /** Change the open goal's objective or budgets. */
-async function update_room_goal({ objective, max_continues = 0, max_minutes = 0 }) {
+async function update_room_goal({ objective, max_continues = 0, max_minutes = 0, idle_seconds = GOAL_IDLE_SECONDS }) {
   const room_id = state.room.id;
   if (!has_room_control(room_id)) throw new Error(MANAGEMENT_LOGIN_HINT);
-  await request_json(`/api/rooms/${room_id}/goal`, { action: "update", objective, max_continues, max_minutes });
+  await request_json(`/api/rooms/${room_id}/goal`, { action: "update", objective, max_continues, max_minutes, idle_seconds });
   if (state.room?.id !== room_id) return;
   await refresh_room();
   show_toast("Goal 已更新");

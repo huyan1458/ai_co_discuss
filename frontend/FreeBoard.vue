@@ -31,6 +31,16 @@ const goal_usage = computed(() => {
   const minutes = Math.floor((value.elapsed_seconds || 0) / 60);
   return `${continues} · 用时 ${format_duration(minutes)}${value.max_minutes ? ` / ${format_duration(value.max_minutes)}` : ""}`;
 });
+// What the goal is doing now: the host may say it waits on background work or on you, which holds idle wake-ups.
+const goal_phase = computed(() => {
+  const value = goal.value;
+  if (!value) return "";
+  if (value.status !== "active") return "已暂停";
+  const until = value.phase_until ? `，${new Date(value.phase_until * 1000).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })} 兜底唤醒` : "";
+  if (value.phase === "pending") return `待你确认${until || "，等你回复"}`;
+  if (value.phase === "waiting") return `等待后台工作${until}`;
+  return value.idle ? "进行中 · 空闲，稍后唤醒主持人" : "进行中";
+});
 const goal_expanded = ref(false);
 const goal_dialog = ref(false);
 const current_round = computed(() => discussion.value ? room.value.current_turn?.round || (room.value.completed_rounds || 0) + 1 : 0);
@@ -263,7 +273,8 @@ watch(() => room.value.id, () => { starting.value = false; });
     </section>
     <section v-if="goal" class="pb-section" aria-label="Goal">
       <h4>Goal</h4>
-      <div class="pb-goal-status" :class="goal.status === 'active' ? 'is-success' : 'is-paused'"><span class="pb-dot"></span><span role="status">{{ goal.status === 'active' ? (goal.idle ? '进行中 · 空闲，稍后唤醒主持人' : '进行中') : '已暂停' }}</span></div>
+      <div class="pb-goal-status" :class="goal.status !== 'active' ? 'is-paused' : goal.phase === 'pending' ? 'is-warning' : 'is-success'"><span class="pb-dot"></span><span role="status">{{ goal_phase }}</span></div>
+      <p v-if="goal.status === 'active' && goal.phase !== 'doing' && goal.phase_note" class="pb-goal-usage">{{ goal.phase_note }}</p>
       <p class="pb-focus" :class="{ 'is-expanded': goal_expanded }">{{ goal.objective }}</p>
       <button v-if="goal.objective.length > GOAL_PREVIEW_LENGTH" type="button" class="pb-link" @click="goal_expanded = !goal_expanded">{{ goal_expanded ? '收起' : '展开' }}</button>
       <p class="pb-goal-usage">{{ goal_usage }}</p>

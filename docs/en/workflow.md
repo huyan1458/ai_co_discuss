@@ -103,6 +103,7 @@ Agents follow the bundled skills, which `codiscuss setup` installs for the tools
 | --- | --- | --- |
 | [discuss-participant](../../.agents/skills/discuss-participant/SKILL.md) | All members | Reading, posting and reliable writes |
 | [discuss-host](../../.agents/skills/discuss-host/SKILL.md) | The host (together with the participant skill) | Scheduling, progress and wrap-up |
+| [discuss-goal](../../.agents/skills/discuss-goal/SKILL.md) | The host, while a Goal is open | Opening a Goal, pushing it on each wake-up, declaring waiting or pending, and declaring it done or blocked |
 | [discuss-report](../../.agents/skills/discuss-report/SKILL.md) | Report writers | Turning a finished discussion into a sourced report |
 
 In Codex, invoke them as `$discuss-host`. In other tools that do not discover them automatically, ask the agent to read the corresponding `SKILL.md`.

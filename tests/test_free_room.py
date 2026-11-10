@@ -2086,8 +2086,48 @@ class GoalTests(HostRoomTests):
         self.assertEqual(self.goal_write("wait", token=self.tokens["Claude"])[0], 403)
         status, view = self.goal_write("wait")
         self.assertEqual((status, view["goal"]["idle"], view["goal"]["continues"]), (200, False, 0), view)
+        # The same pending state the host would declare once woken, with its fallback wake-up.
+        self.assertEqual(view["goal"]["phase"], "pending")
+        self.assertGreater(view["goal"]["phase_until"], 0)
         self.assertEqual(self.goal_write("wait")[0], 409)
         FreeRoomTests.say(self, "你们的意见我看了，继续")
+        self.work("Claude")
+        self.assertTrue(self.goal()["goal"]["idle"])
+
+    def expire_phase(self):
+        """Move the declared phase's deadline into the past instead of waiting for it."""
+        with closing(sqlite3.connect(self.database)) as connection, connection:
+            shift = "phase_until-CAST(strftime('%s','now') AS INTEGER)+1"
+            connection.execute(f"UPDATE room_goals SET phase_since=phase_since-({shift}),phase_until=phase_until-({shift}) WHERE phase_until>0")
+
+    def test_host_declared_phases_hold_idle_wake_ups_until_their_fallback(self):
+        """Waiting and pending stop idle wake-ups; each deadline wakes the host once; a pending fallback is spent until the user speaks."""
+        self.open_from_page(idle_seconds=300)
+        self.assertEqual(self.goal()["goal"]["idle_seconds"], 300)
+        self.assertEqual(self.goal_write("state", token=self.codex, state="waiting")[0], 403)
+        self.assertEqual(self.goal_write("state", token=self.tokens["Claude"], state="done")[0], 400)
+        status, view = self.goal_write("state", token=self.tokens["Claude"], state="waiting", minutes=10)
+        self.assertEqual((status, view["goal"]["phase"]), (200, "waiting"), view)
+        self.work("Claude", to=["Codex"])
+        self.work("Codex")
+        self.work("Claude")
+        self.assertFalse(self.goal()["goal"]["idle"], "a declared wait holds even with new work done")
+        self.expire_phase()
+        status, view = self.goal_write("continue")
+        self.assertEqual((status, view["goal"]["phase"]), (200, "doing"), view)
+        self.assertIn("等待已超过 10 分钟", self.messages()[-1][1])
+        self.goal_write("state", token=self.tokens["Claude"], state="pending", note="选方案 A 还是 B？")
+        self.work("Claude")
+        self.assertFalse(self.goal()["goal"]["idle"])
+        self.expire_phase()
+        self.assertEqual(self.goal_write("wait")[0], 409, "the decision model never overrides a declared phase")
+        self.assertEqual(self.goal_write("continue")[0], 200)
+        self.assertIn("用户 60 分钟未回复", self.messages()[-1][1])
+        view = self.goal_write("state", token=self.tokens["Claude"], state="pending", note="仍需你选")[1]
+        self.assertEqual(view["goal"]["phase_until"], 0, "after its one fallback a pending goal waits for the user")
+        self.work("Claude")
+        FreeRoomTests.say(self, "选 A")
+        self.assertEqual((self.goal()["goal"]["phase"], self.goal()["goal"]["pending_fallback"]), ("doing", 0))
         self.work("Claude")
         self.assertTrue(self.goal()["goal"]["idle"])
 

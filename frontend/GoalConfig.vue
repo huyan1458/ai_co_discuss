@@ -8,6 +8,9 @@ const COUNT = { label: "续跑上限", unit: "次", noun: "续跑次数", group:
 const objective = defineModel("objective", { type: String, default: "" });
 const continues = defineModel("continues", { type: Number, default: 0 });
 const minutes = defineModel("minutes", { type: Number, default: 0 });
+const idle = defineModel("idle", { type: Number, default: 120 });
+// Choices for how long the room stays idle before the host is woken (30–1800 seconds on the website).
+const IDLE_CHOICES = [30, 60, 120, 300, 600, 900, 1800].map((value) => ({ value, label: value < 60 ? `${value} 秒` : `${value / 60} 分钟` }));
 defineProps({ disabled: Boolean });
 const picker = ref(null);
 
@@ -32,6 +35,9 @@ defineExpose({ settle });
       <div class="goal-config-budgets">
         <LimitPicker ref="picker" :count="COUNT" :rounds="continues" :minutes="minutes" @update:rounds="continues = $event" @update:minutes="minutes = $event" />
         <p class="fine-print">续跑指房间空闲时程序再唤醒一次主持人；开启后计时，暂停期间不计时。默认都不限。</p>
+        <UFormField label="空闲多久后唤醒" description="成员都做完后等这么久才唤醒主持人，留出你阅读和回复的时间。主持人声明在等后台或等你确认时不按此唤醒。">
+          <USelect v-model="idle" :items="IDLE_CHOICES" class="w-40" />
+        </UFormField>
         <p class="goal-config-rule" aria-live="polite"><UIcon name="i-lucide-target" />{{ rule }}</p>
       </div>
     </details>

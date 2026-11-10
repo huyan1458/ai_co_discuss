@@ -322,7 +322,7 @@ export async function decide_interjection(home, scheduler, { title, goal, user_r
 }
 
 /** Scene 7 wording version; it is the same in both modes, like the @everyone and review questions. */
-export const GOAL_PROMPT_VERSION = 1;
+export const GOAL_PROMPT_VERSION = 2;
 const GOAL_WAIT = 'wait';
 const GOAL_CONTINUE = 'continue';
 // What a member of the room would know about a goal: who drives it and what an unneeded wake-up costs.
@@ -337,7 +337,7 @@ const GOAL_GUIDE = ['这是 AI CoDiscuss 的协作房间，用户开启了 Goal�
 export async function decide_goal_wake(home, scheduler, { title, objective, context, host, members = [] }, fetch_impl) {
   const questions = [{ type: 'choice', name: 'wake', choices: [
     { value: GOAL_CONTINUE, description: `唤醒主持人 ${host} 接着推进：最近的结果还需要主持人处理，比如交付要核对、阻止或失败要修、下一步要派活，或者目标还没完成` },
-    { value: GOAL_WAIT, description: '不唤醒，等用户回复：最近的回答已经向用户提问、请用户授权或拍板，或已经向用户汇报目标完成；用户这句话回来之前，主持人做不了更多' }],
+    { value: GOAL_WAIT, description: '不唤醒，转为等用户确认：最近的回答已经向用户提问、请用户授权或拍板，或已经向用户汇报目标完成；用户这句话回来之前，主持人做不了更多。用户回复后接着推进；一小时没回复时唤醒主持人一次，评估能否不等用户自行决定' }],
     instructions: '目标进行中，房间刚空闲下来。读最近的消息，判断现在唤醒主持人能不能让目标往前走，还是房间在等用户。' }];
   const people = members.length ? `成员：\n${members.map(member => `- ${member.role === 'host' ? '主持人' : '专家'} ${member.description}`).join('\n')}` : '';
   const recent = context.slice(-ROUTE_CONTEXT_MESSAGES).map(excerpt);
