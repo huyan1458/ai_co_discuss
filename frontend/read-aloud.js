@@ -69,6 +69,20 @@ const DOCUMENT_ID = -2;
 // waits while another reader is reading on request.
 const readers = new Set();
 
+/**
+ * Ask the computer to synthesize, retrying while it is briefly unreachable (the relay reconnecting, a phone's network
+ * blinking); reading and the voice samples in settings both use it.
+ */
+export async function request_tts(bridge, input) {
+  for (const started = Date.now(); ;) {
+    try { return await bridge.local_request("tts", input); }
+    catch (error) {
+      if (!transient(error) || Date.now() - started > RETRY_WINDOW_MS) throw error;
+      await new Promise((resolve) => setTimeout(resolve, RETRY_DELAY_MS));
+    }
+  }
+}
+
 /** The read-ahead this device learned before; storage may be unavailable (private windows), then it starts afresh. */
 function stored_lead() {
   try {
@@ -395,23 +409,13 @@ export function use_read_aloud({ bridge, container, prepare = async () => {}, me
     });
   }
 
-  /** Ask the local service to synthesize, retrying while the computer is briefly unreachable. */
-  async function request_tts(input) {
-    for (const started = Date.now(); ;) {
-      try { return await bridge.local_request("tts", input); }
-      catch (error) {
-        if (!transient(error) || Date.now() - started > RETRY_WINDOW_MS) throw error;
-        await new Promise((resolve) => setTimeout(resolve, RETRY_DELAY_MS));
-      }
-    }
-  }
 
   /** Ask the local service for one request's audio (or reuse it from this page) as a playable URL with word timings. */
   function synthesize(chunk, section_id, speaker) {
     const key = JSON.stringify([chunk.text, speaker, chunk.silence]);
     if (!memory.has(key)) {
       const pending = new Promise((resolve, reject) => {
-        waiting.push({ key, run, resolve, reject, send: () => request_tts({ text: chunk.text, section_id, speaker: speaker || undefined, silence_ms: chunk.silence }) });
+        waiting.push({ key, run, resolve, reject, send: () => request_tts(bridge, { text: chunk.text, section_id, speaker: speaker || undefined, silence_ms: chunk.silence }) });
       }).then(({ audio, format, marks }) => ({ url: URL.createObjectURL(new Blob([Uint8Array.from(atob(audio), (character) => character.charCodeAt(0))], { type: format === "m4a" ? "audio/mp4" : "audio/mpeg" })), marks: marks || [] }));
       pending.catch(() => { if (memory.get(key) === pending) memory.delete(key); });
       memory.set(key, pending);

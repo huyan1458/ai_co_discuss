@@ -349,7 +349,7 @@ function setup_issues(result) {
 /** Ask before restarting a running website; non-interactive runs never stop it and report the pending restart instead. */
 async function confirm_restart(reason, options) {
   if (options.yes || !process.stdin.isTTY) return false;
-  const choice = await ask(`${reason}\n重启后生效，重启会暂停托管中的讨论。现在重启？`, '[Y/N，默认 Y]');
+  const choice = await ask(`${reason}\n重启后生效。重启会暂停进行中的讨论；进行中的执行会中断，随后在原会话里自动续跑。现在重启？`, '[Y/N，默认 Y]');
   return !choice.trim() || ['重启', 'restart', 'r', 'y', 'yes'].includes(choice.trim().toLowerCase());
 }
 
@@ -382,7 +382,7 @@ async function setup(options) {
     const { local_main, restart_reason } = await import('./discussion_local.mjs');
     const reason = restart_reason(home);
     if (reason && !await confirm_restart(reason, options)) {
-      result.issues.push(`${reason}；重启后才生效，重启会暂停托管中的讨论。确认后运行 codiscuss local stop，再运行 codiscuss local open。`);
+      result.issues.push(`${reason}；重启后才生效。重启会暂停进行中的讨论，进行中的执行会中断并在原会话里自动续跑。确认后运行 codiscuss local stop，再运行 codiscuss local open。`);
       result.configured = false;
       result.status = 'needs_attention';
       return result;
@@ -446,7 +446,7 @@ function report_styled(result, options) {
   for (const permission of result.permissions) {
     if (permission.status === 'removed') rows.push([permission.client, '已移除旧版全局放行规则', short_path(permission.path)]);
   }
-  if (result.skills.length) rows.push(['技能', result.skills.map(group => `${group.client} ${group.results.filter(skill => skill.status !== 'conflict').length}/${group.results.length}`).join(' · '), 'discuss-host · discuss-participant · discuss-report · workflow-creator · local-tts-setup']);
+  if (result.skills.length) rows.push(['技能', result.skills.map(group => `${group.client} ${group.results.filter(skill => skill.status !== 'conflict').length}/${group.results.length}`).join(' · '), 'discuss-host · discuss-participant · discuss-report · workflow-creator · local-tts-setup · local-stt-setup']);
   if (result.workflows.length) rows.push(['工作流', workflow_summary(result.workflows), '']);
   if (result.command.path) rows.push(['命令', `codiscuss ${tone.dim(`(${result.command.status})`)}`, short_path(result.command.path)]);
   const notes = result.issues.map(issue => tone.yellow(`▲ ${issue}`));

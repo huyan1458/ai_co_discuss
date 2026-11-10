@@ -8,7 +8,7 @@ import { join } from 'node:path';
 
 import { read_saved_api_key, saved_api_keys } from './discussion_api.mjs';
 import { atomic_json } from './files.mjs';
-import { provider_release, provider_speak, TTS_PROVIDERS } from './tts_providers.mjs';
+import { provider_release, provider_speak, STT_PROVIDERS, TTS_PROVIDERS } from './tts_providers.mjs';
 
 // Volcengine's key root; its key also serves voice input.
 export const TTS_BASE_URL = 'https://openspeech.bytedance.com';
@@ -33,6 +33,7 @@ export const TTS_DEFAULT_CONTEXT = '请用自然放松的语气朗读，像给�
 const in_flight = new Map();
 const PROVIDER_IDS = TTS_PROVIDERS.map(provider => provider.id);
 const provider_of = (id) => TTS_PROVIDERS.find(provider => provider.id === id);
+const STT_IDS = STT_PROVIDERS.map(provider => provider.id);
 
 /** One service's saved part with its defaults: key reference, voices and (Azure) region. */
 function provider_settings(provider, saved = {}) {
@@ -44,6 +45,8 @@ function provider_settings(provider, saved = {}) {
  * chosen held Volcengine's key and voices at the top level and are read as Volcengine's.
  * The chosen service's key reference and voices are also given at the top level for readers that only play.
  * The local service's token is saved by the setup skill, so without a reference it uses the latest saved for its address.
+ * Voice input chooses its own service (`stt_provider`); `stt_key_ref` is the key reference of the one chosen, empty
+ * until it is set up: Volcengine's key from its reading part, the local service's token as its skill saved it.
  */
 export function tts_settings(home) {
   const path = join(home, SETTINGS_FILE);
@@ -58,9 +61,11 @@ export function tts_settings(home) {
   const provider = PROVIDER_IDS.includes(saved.provider) ? saved.provider : 'volcengine';
   const active = providers[provider];
   const ready = Boolean(active.api_key_ref && (!provider_of(provider).region || active.region));
+  const stt_provider = STT_IDS.includes(saved.stt_provider) ? saved.stt_provider : 'volcengine';
+  const stt = STT_PROVIDERS.find(item => item.id === stt_provider);
   return { provider, speech_rate: saved.speech_rate ?? 0, context: saved.context ?? TTS_DEFAULT_CONTEXT, providers, catalog: TTS_PROVIDERS,
     api_key_ref: ready ? active.api_key_ref : '', speaker: active.speaker, member_voices: active.member_voices, file_voice: active.file_voice,
-    stt_key_ref: providers.volcengine.api_key_ref };
+    stt_provider, stt_catalog: STT_PROVIDERS, stt_key_ref: stt.local ? keys[stt.key_base_url] || '' : providers.volcengine.api_key_ref };
 }
 
 /** Validate one service's part as the page sent it. */
@@ -84,7 +89,10 @@ function check_provider(provider, input = {}) {
   return { api_key_ref, speaker, member_voices, file_voice, ...(provider.region ? { region } : {}) };
 }
 
-/** Validate and save the read-aloud settings the page edits: the chosen service, each service's part, rate and tone. */
+/**
+ * Validate and save the speech settings the page edits: the reading service, each service's part, rate and tone, and
+ * the voice-input service (kept as it was when not sent, as by pages from before it could be chosen).
+ */
 export function save_tts_settings(home, input) {
   const provider = String(input.provider || 'volcengine');
   if (!PROVIDER_IDS.includes(provider)) throw new Error('请选择语音服务');
@@ -92,10 +100,12 @@ export function save_tts_settings(home, input) {
   if (!Number.isInteger(speech_rate) || speech_rate < -50 || speech_rate > 100) throw new Error('语速须为 -50 到 100 的整数');
   const context = String(input.context ?? '').trim();
   if (context.length > MAX_CONTEXT) throw new Error(`语气提示不超过 ${MAX_CONTEXT} 字`);
-  const current = tts_settings(home).providers;
-  const providers = Object.fromEntries(TTS_PROVIDERS.map(item => [item.id, check_provider(item, input.providers?.[item.id] || current[item.id])]));
+  const current = tts_settings(home);
+  const stt_provider = String(input.stt_provider || current.stt_provider);
+  if (!STT_IDS.includes(stt_provider)) throw new Error('请选择语音输入服务');
+  const providers = Object.fromEntries(TTS_PROVIDERS.map(item => [item.id, check_provider(item, input.providers?.[item.id] || current.providers[item.id])]));
   mkdirSync(home, { recursive: true, mode: 0o700 });
-  atomic_json(join(home, SETTINGS_FILE), { provider, speech_rate, context, providers });
+  atomic_json(join(home, SETTINGS_FILE), { provider, speech_rate, context, providers, stt_provider });
   return tts_settings(home);
 }
 

@@ -538,6 +538,36 @@ test('voice input joins ordered parts into one WAV and returns the recognized te
   } finally { rmSync(home, { recursive: true, force: true }); }
 });
 
+test('voice input on the local recognizer uses the token its skill saved and starts the service when nothing listens', async () => {
+  const { stt_part } = await import('../runner/stt.mjs');
+  const { save_tts_settings, tts_settings } = await import('../runner/tts.mjs');
+  const home = mkdtempSync(join(tmpdir(), 'codiscuss-stt-local-'));
+  try {
+    save_tts_settings(home, { stt_provider: 'local' });
+    // A page from before voice input could be chosen saves without it, and the choice stays.
+    save_tts_settings(home, { speech_rate: 20 });
+    assert.equal(tts_settings(home).stt_provider, 'local');
+    const part = (final) => ({ upload_id: randomUUID(), index: 0, data: Buffer.from([1, 0, 2, 0]).toString('base64'), final });
+    await assert.rejects(stt_part(home, part(true)), /local-stt-setup/);
+    save_api_key(home, { base_url: 'http://127.0.0.1:18766', api_key: 'stt-token' });
+    mkdirSync(join(home, 'crispasr'));
+    let listening = false, sent;
+    const request = async (url, init) => {
+      if (!listening) throw new TypeError('fetch failed');
+      sent = { url, init };
+      return new Response(JSON.stringify({ text: ' 你好，Claude。 ', segments: [] }));
+    };
+    const start = async (start_home, key) => { assert.equal(start_home, home); assert.equal(key, 'stt-token'); listening = true; };
+    assert.deepEqual(await stt_part(home, part(true), request, start), { text: '你好，Claude。' });
+    assert.equal(sent.url, 'http://127.0.0.1:18766/inference');
+    assert.equal(sent.init.headers.Authorization, 'Bearer stt-token');
+    const wav = Buffer.from(await sent.init.body.get('file').arrayBuffer());
+    assert.deepEqual([wav.subarray(0, 4).toString(), [...wav.subarray(44)]], ['RIFF', [1, 0, 2, 0]]);
+    assert.equal(sent.init.body.get('language'), 'zh');
+    assert(Date.now() - statSync(join(home, 'crispasr', 'lease')).mtimeMs < 60_000, 'a recognition renews the service lease');
+  } finally { rmSync(home, { recursive: true, force: true }); }
+});
+
 /** A plain text answer in any of the four provider protocols. */
 function text_reply(call, text) {
   if (call.path.endsWith('/responses')) return { status: 'completed', output: [{ type: 'message', role: 'assistant', content: [{ type: 'output_text', text }] }] };

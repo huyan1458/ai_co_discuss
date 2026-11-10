@@ -21,6 +21,7 @@ MEMORY.local.md
 !.agents/skills/discuss-report/
 !.agents/skills/workflow-creator/
 !.agents/skills/local-tts-setup/
+!.agents/skills/local-stt-setup/
 
 # Runtime data
 data/

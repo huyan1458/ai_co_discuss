@@ -33,9 +33,10 @@ const SILENT_FRAME = Buffer.concat([Buffer.from([0xff, 0xf3, 0x44, 0xc0]), Buffe
 const SILENT_FRAME_MS = 24;
 const AZURE_FORMAT = 'audio-24khz-48kbitrate-mono-mp3';
 // Local speech: yovoice serving Qwen3-TTS CustomVoice on this computer, installed by the local-tts-setup skill into
-// `<service home>/yovoice` (CLI in `cli/`, engine and model in `data/`). The runner starts it through a supervisor
-// (`tts_local_service.mjs`) and renews its lease on every request; a minute without one, or the user stopping reading, stops it, so the model does
-// not hold graphics memory between readings, even when the runner has crashed.
+// `<service home>/yovoice` (CLI in `cli/`, engine and model in `data/`). Like voice input's local service, the runner
+// starts it through a supervisor (`local_speech_service.mjs`) and renews its lease on every request; a minute without
+// one, or the user stopping reading, stops it, so the model does not hold graphics memory between uses, even when the
+// runner has crashed.
 const LOCAL_HOST = '127.0.0.1:18765';
 const LOCAL_URL = `http://${LOCAL_HOST}`;
 const LOCAL_MODEL = 'qwen3-tts-customvoice-q8';
@@ -47,7 +48,16 @@ const LOCAL_CONVERT_MS = 30_000;
 const LOCAL_BIT_RATE = '64k';
 const LOCAL_EXE = process.platform === 'win32' ? '.exe' : '';
 const run_file = promisify(execFile);
-const LOCAL_SUPERVISOR = fileURLToPath(new URL('./tts_local_service.mjs', import.meta.url));
+const LOCAL_SUPERVISOR = fileURLToPath(new URL('./local_speech_service.mjs', import.meta.url));
+// Voice input on this computer: CrispASR serving Qwen3-ASR 0.6B, installed by the local-stt-setup skill into
+// `<service home>/crispasr` (program in `cli/`, model in `models/`), started, renewed and stopped like the read-aloud
+// service. Measured 2026-11-10 (RTX 5060, cuda13): about 35× realtime once loaded, a 5-minute recording in 8.5 s.
+const LOCAL_STT_HOST = '127.0.0.1';
+const LOCAL_STT_PORT = '18766';
+const LOCAL_STT_URL = `http://${LOCAL_STT_HOST}:${LOCAL_STT_PORT}`;
+const LOCAL_STT_DIR = 'crispasr';
+const LOCAL_STT_MODEL = 'qwen3-asr-0.6b-q8_0.gguf';
+const LOCAL_STT_TIMEOUT_MS = 120_000;
 // While another page request is generating, ask again this often.
 const LOCAL_BUSY_MS = 300;
 // A released lease is dated 1970; anything before this is one.
@@ -254,35 +264,44 @@ function local_generate({ key, text, speaker, context }, request) {
 }
 
 /**
- * Renew the local service's lease; its supervisor stops the service once the lease is a minute old. A renewal when a
- * request ends keeps a release that came meanwhile (the user stopped reading), so the release still stops the service.
+ * Renew a local service's lease (in its directory); its supervisor stops the service once the lease is a minute old. A
+ * renewal when a request ends keeps a release that came meanwhile (the user stopped reading), so the release still stops it.
  */
-function local_renew(home, { keep_release = false } = {}) {
-  const lease = join(home, LOCAL_DIR, 'lease');
+function local_renew(directory, { keep_release = false } = {}) {
+  const lease = join(directory, 'lease');
   try {
     if (keep_release && statSync(lease).mtimeMs < RELEASED_BEFORE_MS) return;
     writeFileSync(lease, '');
   } catch { /* Not installed: the request reports it. */ }
 }
 
-/** Reading stopped: date the lease back to 1970, so the supervisor stops the service at its next check (within 5 s). */
-function local_release(home) {
-  try { utimesSync(join(home, LOCAL_DIR, 'lease'), 0, 0); } catch { /* Not running or not installed. */ }
+/** Use stopped: date the lease back to 1970, so the supervisor stops the service at its next check (within 5 s). */
+function local_release(directory) {
+  try { utimesSync(join(directory, 'lease'), 0, 0); } catch { /* Not running or not installed. */ }
 }
 
-/** Start the installed service under its supervisor, detached so it outlives this process, and wait until it answers. */
-async function local_start(home, key, request) {
-  const directory = join(home, LOCAL_DIR);
-  const executable = join(directory, 'cli', `yovoice${LOCAL_EXE}`);
-  if (!existsSync(executable)) throw new Error('本机语音尚未安装：请让本机 AI 按 local-tts-setup 技能安装');
-  local_renew(home);
-  spawn(process.execPath, [LOCAL_SUPERVISOR, executable, directory, LOCAL_HOST],
-    { detached: true, windowsHide: true, stdio: 'ignore', env: { ...process.env, YOVOICE_API_TOKEN: key } }).unref();
-  for (const deadline = Date.now() + LOCAL_START_MS; Date.now() < deadline;) {
+/**
+ * Start an installed local service under its supervisor, detached so it outlives this process, and wait until `ready`
+ * answers 200 with the token. `skill` names the setup skill to point at when it is missing.
+ */
+async function local_supervise({ directory, executable, args, env, ready, key, skill, wait_ms = LOCAL_START_MS }, request) {
+  if (!existsSync(executable)) throw new Error(`本机服务尚未安装：请让本机 AI 按 ${skill} 技能安装`);
+  local_renew(directory);
+  spawn(process.execPath, [LOCAL_SUPERVISOR, directory, executable, ...args],
+    { detached: true, windowsHide: true, stdio: 'ignore', env: { ...process.env, ...env } }).unref();
+  for (const deadline = Date.now() + wait_ms; Date.now() < deadline;) {
     await new Promise(resolve => setTimeout(resolve, LOCAL_POLL_MS));
-    try { if ((await request(`${LOCAL_URL}/v1/status`, { headers: { Authorization: `Bearer ${key}` } })).ok) return; } catch { /* Still starting. */ }
+    try { if ((await request(ready, { headers: { Authorization: `Bearer ${key}` } })).ok) return; } catch { /* Still starting. */ }
   }
-  throw new Error(`本机语音服务启动超时，请查看 ${join(directory, 'serve.log')}`);
+  throw new Error(`本机服务启动超时，请查看 ${join(directory, 'serve.log')}`);
+}
+
+/** Start the read-aloud service (yovoice). */
+function local_start(home, key, request) {
+  const directory = join(home, LOCAL_DIR);
+  return local_supervise({ directory, executable: join(directory, 'cli', `yovoice${LOCAL_EXE}`), key, skill: 'local-tts-setup',
+    args: ['serve', '--listen', LOCAL_HOST, '--data-dir', join(directory, 'data')], env: { YOVOICE_API_TOKEN: key },
+    ready: `${LOCAL_URL}/v1/status` }, request);
 }
 
 /** Convert the WAV to 64 kbps AAC with the converter yovoice ships, which reads and writes files only. */
@@ -328,10 +347,61 @@ async function local_once({ home, key, text, speaker, context, silence }, { requ
 
 /** Queue this process's local requests; each renews the lease when it arrives and, unless reading was stopped, when it ends. */
 function local_speak(input, transport) {
-  local_renew(input.home);
+  const directory = join(input.home, LOCAL_DIR);
+  local_renew(directory);
   const result = local_queue.then(() => local_once(input, transport));
-  local_queue = result.catch(() => {}).then(() => local_renew(input.home, { keep_release: true }));
+  local_queue = result.catch(() => {}).then(() => local_renew(directory, { keep_release: true }));
   return result;
+}
+
+/**
+ * The voice-input services the page can choose between; `key_base_url` is the root a saved key is bound to, `local`
+ * marks the service on this computer, whose token the setup skill saves.
+ */
+export const STT_PROVIDERS = [
+  { id: 'volcengine', label: '火山引擎', key_base_url: 'https://openspeech.bytedance.com', note: '用火山引擎「录音文件识别2.0」识别，单次最长 5 分钟' },
+  { id: 'local', label: '本机', key_base_url: LOCAL_STT_URL, note: '本机显卡运行 Qwen3-ASR，不计费；用 local-stt-setup 技能安装', local: true },
+];
+
+/** Start the voice-input service (CrispASR); its token comes in the environment, never on the command line. */
+function local_stt_start(home, key, request) {
+  const directory = join(home, LOCAL_STT_DIR);
+  return local_supervise({ directory, executable: join(directory, 'cli', `crispasr${LOCAL_EXE}`), key, skill: 'local-stt-setup',
+    args: ['--server', '--host', LOCAL_STT_HOST, '--port', LOCAL_STT_PORT, '--backend', 'qwen3', '-m', join(directory, 'models', LOCAL_STT_MODEL), '-l', 'zh'],
+    env: { CRISPASR_API_KEYS: key }, ready: `${LOCAL_STT_URL}/health` }, request);
+}
+
+/** Send a recording (16 kHz mono WAV) to the local service. */
+function local_stt_send(key, wav, request) {
+  const form = new FormData();
+  form.append('file', new Blob([wav], { type: 'audio/wav' }), 'speech.wav');
+  form.append('language', 'zh');
+  return request(`${LOCAL_STT_URL}/inference`, { method: 'POST', redirect: 'error', signal: AbortSignal.timeout(LOCAL_STT_TIMEOUT_MS),
+    headers: { Authorization: `Bearer ${key}` }, body: form });
+}
+
+/**
+ * Recognize a finished recording on this computer, starting the service when nothing listens.
+ * @param {{ home: string, key: string, wav: Buffer }} input
+ * @param {{ request?: Function, start?: Function }} [transport] `fetch` and the starter, replaceable in tests.
+ * @returns {Promise<string>} The recognized text.
+ */
+export async function local_transcribe({ home, key, wav }, { request = fetch, start = local_stt_start } = {}) {
+  const directory = join(home, LOCAL_STT_DIR);
+  local_renew(directory);
+  try {
+    let response;
+    try { response = await local_stt_send(key, wav, request); }
+    catch (error) {
+      if (error.name === 'TimeoutError') throw new Error('本机语音识别超时，请稍后再试');
+      await start(home, key, request);
+      try { response = await local_stt_send(key, wav, request); }
+      catch { throw new Error(`本机语音识别服务已启动但连接失败，请查看 ${join(directory, 'serve.log')}`); }
+    }
+    if (response.status === 401) throw new Error('本机语音识别服务拒绝了令牌：请重新运行 local-stt-setup 技能，或结束旧的 crispasr 进程后重试');
+    if (!response.ok) throw new Error(`本机语音识别失败（HTTP ${response.status}），请查看 ${join(directory, 'serve.log')}`);
+    return String((await response.json()).text || '').trim();
+  } finally { local_renew(directory); }
 }
 
 const SPEAKERS = { volcengine: volc_speak, aliyun: aliyun_speak, azure: azure_speak };
@@ -358,5 +428,5 @@ export function provider_speak(provider, input, { request = fetch, open = (url, 
  * @param {string} home The service home.
  */
 export function provider_release(provider, home) {
-  if (provider === 'local') local_release(home);
+  if (provider === 'local') local_release(join(home, LOCAL_DIR));
 }

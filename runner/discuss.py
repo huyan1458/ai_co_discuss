@@ -10,6 +10,7 @@ import re
 import secrets
 import sys
 import tempfile
+import time
 from dataclasses import dataclass
 from http.client import HTTPException
 from pathlib import Path
@@ -19,6 +20,9 @@ from urllib.request import HTTPRedirectHandler, Request, build_opener
 
 VERSION = "0.2.0"
 DEFAULT_TIMEOUT = 20
+# A refused connection never reached the site, so resending is safe; the local site is back within seconds of an upgrade restart.
+REFUSED_RETRY_SECONDS = 10
+REFUSED_RETRY_INTERVAL = 1.0
 MAX_BODY_BYTES = 512 * 1024
 MAX_ATTACHMENT_BYTES = 20 * 1024 * 1024
 MAX_MESSAGE_ATTACHMENTS = 10
@@ -495,7 +499,7 @@ def sequence_commands(subcommands, registry):
 def build_parser(prog="discuss"):
     """Build help and schema from the same command definitions."""
     parser = Parser(prog=prog, description="AI CoDiscuss CLI：通过 HTTP 操作现有讨论网站。",
-                    allow_abbrev=False, epilog="站点、房间、操作者与执行编号省略时取自凭据文件；提交编号省略时按内容生成；不保存当前房间，不自动重试写入。")
+                    allow_abbrev=False, epilog="站点、房间、操作者与执行编号省略时取自凭据文件；提交编号省略时按内容生成；不保存当前房间；只在连接被拒绝时于 10 秒内自动重试，其他写入失败不重试。")
     add_common(parser)
     parser.add_argument("--version", action="version", version=f"{prog} {VERSION}")
     subcommands = parser.add_subparsers(dest="resource", required=True)
@@ -1060,22 +1064,33 @@ def http_error(error, plan):
                     outcome="unknown" if uncertain else "rejected")
 
 
+def connection_refused(error):
+    """Whether the request failed before anything reached the site."""
+    cause = error.reason if isinstance(error, URLError) else error
+    return isinstance(cause, ConnectionRefusedError)
+
+
 def send_request(plan, url, timeout, headers=None):
-    """Send exactly once, preserving TLS verification and bounded waiting."""
+    """Send once it is accepted, retrying only a refused connection, with TLS verification and bounded waiting."""
     data = request_data(plan)
     content_type = "application/octet-stream" if plan.upload_file is not None else "application/json"
     request = Request(url, data=data, method=plan.method,
                       headers={"Content-Type": content_type, "Accept": "*/*" if plan.download_file else "application/json, text/plain",
                                "User-Agent": f"AI-CoDiscuss-CLI/{VERSION}", **(headers or {})})
-    try:
-        with build_opener(NoRedirect()).open(request, timeout=timeout) as response:
-            return decode_response(response, plan)
-    except HTTPError as error:
-        with error:
-            raise http_error(error, plan) from error
-    except (URLError, OSError, HTTPException) as error:
-        raise CliError(f"网络请求失败: {error}", 3,
-                       outcome="unknown" if plan.method == "POST" else "unavailable") from error
+    deadline = time.monotonic() + REFUSED_RETRY_SECONDS
+    while True:
+        try:
+            with build_opener(NoRedirect()).open(request, timeout=timeout) as response:
+                return decode_response(response, plan)
+        except HTTPError as error:
+            with error:
+                raise http_error(error, plan) from error
+        except (URLError, OSError, HTTPException) as error:
+            if connection_refused(error) and time.monotonic() < deadline:
+                time.sleep(REFUSED_RETRY_INTERVAL)
+                continue
+            raise CliError(f"网络请求失败: {error}", 3,
+                           outcome="unknown" if plan.method == "POST" else "unavailable") from error
 
 
 def select_fields(value, names):
@@ -1136,7 +1151,7 @@ def command_schema(args, registry):
     if not name:
         return {"version": VERSION, "commands": {key: item.description for key, item in registry.items()},
                 "exit_codes": EXIT_CODES, "site": "--site > DISCUSS_URL > 凭据（--access-file / DISCUSS_ACCESS_FILE / DISCUSS_ACCESS）中的 site；无内置默认站点",
-                "output": "默认 JSON；成功 stdout，错误 stderr；无交互提示、无自动重试"}
+                "output": "默认 JSON；成功 stdout，错误 stderr；无交互提示；只在连接被拒绝时于 10 秒内自动重试"}
     if name not in registry:
         raise CliError(f"未知命令 {name}；运行 discuss schema 查看可用命令")
     parser = registry[name]

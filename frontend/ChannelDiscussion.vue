@@ -739,7 +739,7 @@ const in_turn = (members) => {
   return [...members].sort((left, right) => place(left.name) - place(right.name));
 };
 const mention_all = computed(() => free.value && free_members.value.length > 1);
-const mention_index = ref(0);
+const mention_index = ref(null);
 const mention_list = ref(null);
 let mention_composing = false;
 const mention_members = computed(() => {
@@ -775,29 +775,53 @@ function in_extra_directory(entry) {
   return { ...entry, path: `${directory.replace(/[\\/]+$/, "")}${separator}${entry.path.split("/").join(separator)}`, absolute: true };
 }
 let mention_search_timer = 0;
-watch(() => mention_folder.value?.key, (key, previous) => {
-  clearTimeout(mention_search_timer);
-  // A lookup cancelled before it started is forgotten, so returning to it reads again instead of loading forever.
-  if (previous && mention_results.value[previous] === null) {
-    const { [previous]: _cancelled, ...kept } = mention_results.value;
-    mention_results.value = kept;
-  }
-  const folder = mention_folder.value;
-  if (!key || key in mention_results.value) return;
+let mention_pending = "";
+// Keys read since the popup opened. Older results stay on screen while they are read again, so the popup keeps its
+// height instead of growing once the files arrive.
+const mention_fresh = new Set();
+/** Read one folder or search into the results; `delay` waits for a pause in typing. */
+function load_mention_folder(folder, delay = 0) {
+  const { key } = folder;
   const room_id = room.value.id;
-  mention_results.value = { ...mention_results.value, [key]: null };
-  // Searching walks the whole project, so it waits for a pause in typing; a folder is read at once.
+  mention_fresh.add(key);
+  mention_pending = key;
+  if (!(key in mention_results.value)) mention_results.value = { ...mention_results.value, [key]: null };
   mention_search_timer = setTimeout(async () => {
+    mention_pending = "";
     let entries = [];
     try {
       const result = await bridge.read_room_files(room_id, folder.path || "", 0, folder.search || "");
       if (["directory", "search"].includes(result.kind)) entries = result.entries.filter((entry) => entry.kind !== "unavailable").map(in_extra_directory);
     } catch { /* An unreadable folder or failed search simply offers no files. */ }
     if (room.value?.id === room_id && key in mention_results.value) mention_results.value = { ...mention_results.value, [key]: entries };
-  }, folder.search ? MENTION_SEARCH_DELAY_MS : 0);
+  }, delay);
+}
+watch(() => mention_folder.value?.key, (key) => {
+  clearTimeout(mention_search_timer);
+  // A lookup cancelled before it started is forgotten, so returning to it reads again instead of loading forever.
+  if (mention_pending) {
+    mention_fresh.delete(mention_pending);
+    if (mention_results.value[mention_pending] === null) {
+      const { [mention_pending]: _cancelled, ...kept } = mention_results.value;
+      mention_results.value = kept;
+    }
+    mention_pending = "";
+  }
+  const folder = mention_folder.value;
+  // Searching walks the whole project, so it waits for a pause in typing; a folder is read at once.
+  if (key && !mention_fresh.has(key)) load_mention_folder(folder, folder.search ? MENTION_SEARCH_DELAY_MS : 0);
 });
 // Read again each time the popup opens so new files appear.
-watch(() => !!mention_context.value, (open) => { if (!open) mention_results.value = {}; });
+watch(() => !!mention_context.value, (open) => { if (!open) mention_fresh.clear(); });
+// Another room's files never show; its project root is read ahead so the first @ opens at full height.
+watch([() => room.value?.id, project_directory], () => {
+  mention_results.value = {};
+  mention_fresh.clear();
+  if (project_directory.value && !mention_context.value) {
+    load_mention_folder({ key: "dir:", path: "", filter: "" });
+    mention_fresh.clear();
+  }
+}, { immediate: true });
 const mention_files = computed(() => {
   const folder = mention_folder.value;
   return (folder && mention_results.value[folder.key] || [])
@@ -845,7 +869,8 @@ const can_call_skill = computed(() => free.value && !room.value?.archived && fre
  */
 const can_use_modes = computed(() => free.value && !room.value?.archived && view.value.access?.can_manage);
 const mode_options = computed(() => {
-  if (!can_use_modes.value) return [];
+  // Modes are only recognised as the start of a message.
+  if (!can_use_modes.value || mention_context.value?.start) return [];
   const goal = ["active", "paused"].includes(room.value?.goal_state?.goal?.status) ? room.value.goal_state.goal : null;
   const session = ["active", "paused"].includes(room.value?.session?.status) ? room.value.session : null;
   const host_ready = free_members.value.some((member) => member.role === "host" && member.access === "runner");
@@ -879,7 +904,12 @@ const mention_options = computed(() => mention_context.value?.command ? [...mode
   ...mention_files.value.map((entry) => ({ key: `file:${entry.path}`, entry, group: mention_files_group.value })),
 ]);
 const mention_heading = computed(() => mention_context.value?.command ? "选择模式、工作流或技能" : project_directory.value ? "选择成员或文件" : "选择成员");
-const mention_active = computed(() => mention_options.value[Math.min(mention_index.value, mention_options.value.length - 1)]);
+/** Until the user moves the selection, a bare @ selects the host, who takes unaddressed messages; otherwise the first. */
+const mention_default = computed(() => {
+  const host = !mention_context.value?.query && !mention_context.value?.command && free_members.value.find((member) => member.role === "host");
+  return Math.max(0, host ? mention_options.value.findIndex((option) => option.name === host.name) : 0);
+});
+const mention_active = computed(() => mention_options.value[Math.min(mention_index.value ?? mention_default.value, mention_options.value.length - 1)]);
 watch([() => room.value?.id, () => view.value.tab], () => { mention_context.value = null; });
 
 /** A path starting with a member's handle would wake that member, so it is written as ./path instead. */
@@ -902,12 +932,12 @@ function find_mention(value, start, end = start) {
   return { start: start - match[1].length - 1, end: start, query: match[1] };
 }
 
-/** Locate a "/" command at the very start of the draft, so paths later in the text never trigger it. */
+/** Locate a "/" command at the start of the draft or after whitespace, so paths such as a/b never trigger it. */
 function find_command(value, start, end = start) {
   if (start !== end || !(can_use_modes.value || can_pick_workflow.value || can_call_skill.value)) return null;
-  const match = value.slice(0, start).match(/^\/([^\s/]*)$/u);
+  const match = value.slice(0, start).match(/(?:^|\s)\/([^\s/]*)$/u);
   if (!match) return null;
-  return { start: 0, end: start, query: match[1], command: true };
+  return { start: start - match[1].length - 1, end: start, query: match[1], command: true };
 }
 
 /**
@@ -935,7 +965,7 @@ function update_mention(event) {
   if (event.type === "keyup" && !["ArrowLeft", "ArrowRight", "Home", "End"].includes(event.key)) return;
   const context = find_command(editor.value, editor.selectionStart, editor.selectionEnd)
     || find_mention(editor.value, editor.selectionStart, editor.selectionEnd);
-  if (context?.query !== mention_context.value?.query || context?.start !== mention_context.value?.start) mention_index.value = 0;
+  if (context?.query !== mention_context.value?.query || context?.start !== mention_context.value?.start) mention_index.value = null;
   mention_context.value = context;
 }
 
@@ -945,9 +975,9 @@ const mention_handle = (name) => GROUP_MENTIONS[name] ? name : bridge.mention_ha
 async function select_mention(option) {
   if (!mention_context.value || mention_context.value.composing || !mention_options.value.some((item) => item.key === option.key)) return;
   const { start, end } = mention_context.value;
-  if (option.mode) return pick_mode(option, end);
-  if (option.workflow) return pick_workflow(option, end);
-  if (option.skill) return pick_skill(option, end);
+  if (option.mode) return pick_mode(option, start, end);
+  if (option.workflow) return pick_workflow(option, start, end);
+  if (option.skill) return pick_skill(option, start, end);
   const { entry } = option;
   // A folder opens its contents in the popup (paths with spaces cannot be typed after @, so those are picked whole);
   // a picked file or folder keeps its @path in the text and also becomes a card above the editor.
@@ -961,7 +991,7 @@ async function select_mention(option) {
   mention_context.value = null;
   const editor = prompt.value?.textareaRef;
   if (browse && editor) {
-    mention_index.value = 0;
+    mention_index.value = null;
     mention_context.value = find_mention(editor.value, editor.selectionStart);
   }
 }
@@ -970,28 +1000,28 @@ async function select_mention(option) {
  * Replace the "/command" with a request asking the host to enable the workflow, leaving the caret after it for the
  * task. Enabling another workflow replaces the current one; the members the old one brought stay as ordinary members.
  */
-async function pick_workflow(option, end) {
+async function pick_workflow(option, start, end) {
   mention_context.value = null;
   if (option.enabled) return bridge.notify("info", `本房间已启用工作流「${option.workflow.label}」`);
   if (option.disabled) return bridge.notify("warning", option.disabled);
-  await replace_draft(0, replace_end(end, " "), `启用工作流「${option.workflow.label}」（${option.workflow.id}），`);
+  await replace_draft(start, replace_end(end, " "), `启用工作流「${option.workflow.label}」（${option.workflow.id}），`);
   mention_context.value = null;
 }
 
 /** Write the mode's command in place of the typed "/…"; one that needs text after it keeps the caret there. */
-async function pick_mode(option, end) {
+async function pick_mode(option, start, end) {
   mention_context.value = null;
   if (option.mode.disabled) return bridge.notify("warning", option.mode.disabled);
   const { command } = option.mode;
-  await replace_draft(0, replace_end(end, " "), command);
+  await replace_draft(start, replace_end(end, " "), command);
   mention_context.value = null;
 }
 
 /** Replace the "/command" with the skill's request to the host, leaving the caret after it for the user's details. */
-async function pick_skill(option, end) {
+async function pick_skill(option, start, end) {
   mention_context.value = null;
   const { prompt: request } = option.skill;
-  await replace_draft(0, replace_end(end, " "), request);
+  await replace_draft(start, replace_end(end, " "), request);
   mention_context.value = null;
 }
 
@@ -1026,7 +1056,7 @@ function mention_composition(event) {
   if (event.type === "compositionupdate") {
     const draft = editor.value.slice(0, composition_start) + (event.data || "").replace(/['\s]/g, "");
     const context = find_command(draft, draft.length) || find_mention(draft, draft.length);
-    if (context?.query !== mention_context.value?.query) mention_index.value = 0;
+    if (context?.query !== mention_context.value?.query) mention_index.value = null;
     mention_context.value = context && { ...context, composing: true };
     return;
   }

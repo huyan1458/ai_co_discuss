@@ -624,6 +624,30 @@ class CliContractTests(unittest.TestCase):
         self.assertEqual(failure.exception.details["outcome"], "unknown")
         self.assertEqual(failure.exception.details["submission_id"], "uncertain-001")
 
+    def test_refused_connection_is_retried_until_the_site_answers(self):
+        """Nothing reached the site while it restarts, so the same write is sent again within the window."""
+        plan = discuss.RequestPlan("/api/rooms/x/messages", "POST", {"submission_id": "refused-001"})
+        accepted = io.BytesIO(b'{"ok": true, "data": {"id": 1}}')
+        accepted.headers = {"Content-Type": "application/json"}
+        with patch.object(discuss, "build_opener") as opener, patch.object(discuss.time, "sleep") as sleep:
+            opener.return_value.open.side_effect = [URLError(ConnectionRefusedError(111, "refused")), ConnectionRefusedError(111, "refused"), accepted]
+            result = discuss.send_request(plan, "https://example.org/api", 1)
+        self.assertEqual(opener.return_value.open.call_count, 3)
+        self.assertEqual(sleep.call_count, 2)
+        self.assertEqual(result["data"]["id"], 1)
+
+    def test_refused_connection_gives_up_after_the_window(self):
+        """A site that stays down is reported once the window passes, not retried forever."""
+        plan = discuss.RequestPlan("/api/rooms/x/messages", "POST", {"submission_id": "refused-002"})
+        clock = iter([0, 0, 20])
+        with patch.object(discuss, "build_opener") as opener, patch.object(discuss.time, "sleep"), \
+                patch.object(discuss.time, "monotonic", side_effect=lambda: next(clock)):
+            opener.return_value.open.side_effect = URLError(ConnectionRefusedError(111, "refused"))
+            with self.assertRaises(discuss.CliError) as failure:
+                discuss.send_request(plan, "https://example.org/api", 1)
+        self.assertEqual(opener.return_value.open.call_count, 2)
+        self.assertEqual(failure.exception.code, 3)
+
     def test_http_server_failure_is_uncertain_and_not_replayed(self):
         """A server error after POST cannot be advertised as definitely not saved."""
         plan = discuss.RequestPlan("/api/rooms/x/messages", "POST", {"submission_id": "server-001"})

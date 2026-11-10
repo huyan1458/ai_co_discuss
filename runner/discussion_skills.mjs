@@ -11,7 +11,7 @@ import { atomic_json } from './files.mjs';
 import { WORKFLOW_ID_PATTERN, install_workflow_folder, parse_markdown, workflow_directory } from './workflows.mjs';
 
 const SOURCE = fileURLToPath(new URL('../.agents/skills/', import.meta.url));
-export const SKILLS = ['discuss-host', 'discuss-participant', 'discuss-report', 'workflow-creator', 'local-tts-setup'];
+export const SKILLS = ['discuss-host', 'discuss-participant', 'discuss-report', 'workflow-creator', 'local-tts-setup', 'local-stt-setup'];
 const LEGACY_MANIFEST = '.codiscuss-skills.json';
 
 /** Hash names and contents, rejecting links instead of following them outside a skill. */

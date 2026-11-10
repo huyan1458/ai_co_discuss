@@ -28,7 +28,7 @@ import { agy_rule, prepare_agy_project, remove_agy_projects } from '../runner/ad
 import { kill_process_tree, run_program, TASK_SUBCOMMANDS } from '../runner/adapters/common.mjs';
 const activity_phase = (adapter, event) => adapter_of(adapter).events.phase(event);
 import { save_api_key, saved_api_keys } from '../runner/discussion_api.mjs';
-import { certainty, decide, decide_group_order, decide_interjection, decide_next_speaker, decide_round, ROUTE_CONFIDENCE, ROUTE_WIDE_CONFIDENCE, route_free_message, scheduler_thresholds, scheduler_answers, scheduler_check, scheduler_request, SCHEDULER_PROVIDERS, scheduler_state, validate_scheduler } from '../runner/scheduler.mjs';
+import { certainty, decide, decide_interjection, decide_next_speaker, decide_round, ROUTE_CONFIDENCE, ROUTE_WIDE_CONFIDENCE, route_free_message, scheduler_thresholds, scheduler_answers, scheduler_check, scheduler_request, SCHEDULER_PROVIDERS, scheduler_state, validate_scheduler } from '../runner/scheduler.mjs';
 
 /** Every room configuration keeps one member credential per woken participant. */
 const with_members = config => ({ ...config, members: Object.fromEntries(Object.keys(config.participants).map(name => [name, { token: 'm'.repeat(32) }])) });
@@ -121,16 +121,6 @@ test('smart scheduling maps one neutral question set to both providers and reads
   assert.match(sent_to_model.state, /房间成员（名字不区分大小写）：Claude（主持人）、Codex/);
   assert.match(sent_to_model.questions.handler.instructions, /按下面的顺序：1）正文叫了某位成员的名字.*选该成员，即使上一条是别人的回答/);
   assert.doesNotMatch(sent_to_model.questions.handler.criteria.__host__, /延续主持人自己的回答/);
-  // Both @全体成员 directions require confidence; weak and invalid answers keep the task with the host.
-  const order = (choice, confidence) => async () => ({ ok: true, json: async () => ({ answers: { order: { type: 'choice', choice, confidence, probabilities: {} } } }) });
-  const group = { title: '房间', context: [], message: { id: 4, author: '用户', text: '@全体成员 接龙' }, members: ['Claude', 'Codex'] };
-  assert.equal((await decide_group_order(home, jev, group, order('sequential', ROUTE_CONFIDENCE))).action, 'sequential');
-  assert.equal((await decide_group_order(home, jev, group, order('sequential', ROUTE_CONFIDENCE - 0.01))).action, 'host');
-  assert.equal((await decide_group_order(home, jev, group, order('parallel', ROUTE_CONFIDENCE))).action, 'all');
-  assert.equal((await decide_group_order(home, jev, group, order('parallel', ROUTE_CONFIDENCE - 0.01))).action, 'host');
-  assert.equal((await decide_group_order(home, jev, group, order('__host__', 0.99))).action, 'host');
-  assert.equal((await decide_group_order(home, jev, group, order('invalid', 0.99))).action, 'host');
-  assert.equal((await decide_group_order(home, jev, group, scheduler_fetch({}))).action, 'host');
   // The configuration check asks one yes/no question and rejects an answer without a probability.
   const checked = [];
   assert.deepEqual(await scheduler_check(home, jev, async (url, init) => { checked.push([url, JSON.parse(init.body)]);
@@ -615,9 +605,9 @@ test('a restart at the software invocation boundary fails for review instead of 
 test('an execution inherited from a stopped or crashed runner retries once its software is gone, and waits while it runs', async t => {
   const exited = spawnSync(process.execPath, ['-e', '']).pid;
   for (const [pid, gone] of [[undefined, true], [exited, true], [process.pid, false]]) {
-    const f = await fixture(t); let sent = 0;
+    const f = await fixture(t); const prompts = [];
     const deliver = async (adapter, binding, task) => {
-      sent++; task.on_process(Object.assign(new EventEmitter(), { pid, kill() {} }));
+      prompts.push(task.prompt); task.on_process(Object.assign(new EventEmitter(), { pid, kill() {} }));
       return { status: 'accepted' };
     };
     await new FreeRoomRunner(f.config, f.store, deliver).tick();
@@ -625,13 +615,17 @@ test('an execution inherited from a stopped or crashed runner retries once its s
     // No stop_children(): a crash leaves no mark, so the next runner must judge by the recorded processes alone.
     const restarted = new FreeRoomRunner(f.config, f.store, deliver);
     await restarted.tick();
-    assert.equal(sent, 1); assert.equal(f.executions.get(id).status, 'dispatched');
+    assert.equal(prompts.length, 1); assert.equal(f.executions.get(id).status, 'dispatched');
     assert.equal(Boolean(f.executions.get(id).retry), gone);
     if (!gone) continue;
     assert.match(f.executions.get(id).retry.reason, /接入程序重启或异常退出/);
     f.executions.get(id).retry.retry_at = 1;
-    await restarted.tick();
-    assert.equal(sent, 2); assert.equal(f.executions.size, 1, 'the retry keeps the one execution card');
+    // Another restart during the wait: the site's retry record still marks the redelivery as a continuation.
+    await new FreeRoomRunner(f.config, f.store, deliver).tick();
+    assert.equal(prompts.length, 2); assert.equal(f.executions.size, 1, 'the retry keeps the one execution card');
+    // The session still holds the work so far: the redelivery asks to continue, with the original task after the notice.
+    assert.match(prompts[1], new RegExp(`^本机接入程序重启或异常退出.*执行 #${id}.*不必重做`));
+    assert.ok(prompts[1].endsWith(prompts[0]), 'the original task follows the restart notice unchanged');
   }
 });
 
@@ -1950,11 +1944,6 @@ async function free_fixture(t) {
         members: members.map(member => ({ ...member, description: state.room.descriptions?.[member.name] || '' })),
         title: state.room.title, goal: state.room.goal, latest_id: state.room.latest_id };
     } else if (url.startsWith('/recommendations/') && state.pending.some(item => item.purpose === 'group')) {
-      if (state.fail_apply || state.change_apply) {
-        const status = state.fail_apply ? 503 : 409;
-        if (state.fail_apply) state.fail_apply--; else state.change_apply--;
-        response.writeHead(status, { 'Content-Type': 'application/json' }); response.end(JSON.stringify({ error: 'group apply unavailable' })); return;
-      }
       (state.group_posts ||= []).push(body);
       state.pending = state.pending.map(item => item.purpose === 'group' ? { ...item,
         purpose: body.action === 'host' ? 'route' : body.action === 'all' ? 'all' : 'ask', group_action: body.action } : item);
@@ -2324,35 +2313,13 @@ async function group_fixture(t) {
   return fixture;
 }
 
-test('group context, timeout and unusable-answer failures hand back once, clear analysing and survive a runner restart', async t => {
-  for (const failure of ['context', 'missing_message', 'timeout', 'answer']) await t.test(failure, async t => {
-    const { state, config, store } = await group_fixture(t);
-    state.fail_messages = failure === 'context';
-    if (failure === 'missing_message') state.messages = [];
-    let asked = 0, delivered = 0;
-    const model = async () => { asked++; if (failure === 'timeout') throw new Error('timeout'); return scheduler_fetch({})(); };
-    const deliver = async () => { delivered++; return { status: 'accepted' }; };
-    const runner = new FreeRoomRunner(config, store, deliver, () => {}, model);
-    await runner.tick();
-    await Promise.all(runner.decisions);
-    assert.deepEqual(state.group_posts.map(item => item.action), ['host']);
-    assert.equal(state.routing.at(-1).active, false);
-    assert.equal(asked, ['context', 'missing_message'].includes(failure) ? 0 : 1);
-    const restarted = new FreeRoomRunner(config, store, deliver, () => {}, async () => assert.fail('fallback must not re-enter unnamed routing'));
-    await restarted.tick();
-    await Promise.all(restarted.decisions);
-    assert.equal(delivered, 1);
-    assert.equal(state.executions[0].requests[0].id, 1);
-    assert.equal(state.executions[0].requests[0].message_id, 11);
-    const suggestion = JSON.parse(readFileSync(join(config.directory, `free-${state.executions[0].id}.task.json`), 'utf8')).scheduler_suggestions[0];
-    assert.deepEqual([suggestion.request_id, suggestion.message_id, suggestion.actual_action, suggestion.applied], [1, 11, 'host', false]);
-    assert.equal('confidence' in suggestion || 'probabilities' in suggestion, false);
-    if (failure !== 'answer') {
-      assert.equal(suggestion.model_judgment, false);
-      assert.equal(suggestion.decision_id, undefined);
-      assert.match(suggestion.reason, /没有模型判断/);
-    }
-  });
+test('with smart scheduling configured, @全体成员 still answers at once without asking the model', async t => {
+  const { state, config, store } = await group_fixture(t);
+  const runner = new FreeRoomRunner(config, store, async () => ({ status: 'accepted' }), () => {}, async () => assert.fail('@全体成员 must not be judged'));
+  await runner.tick();
+  await Promise.all(runner.decisions);
+  assert.deepEqual(state.group_posts.map(item => [item.action, item.revision]), [['all', 'group-r1']]);
+  assert.equal(state.calls.some(call => call === 'POST /scheduler-routing'), false);
 });
 
 test('unnamed host handoffs survive restart without repeating a judgment and stay bound to their request', async t => {

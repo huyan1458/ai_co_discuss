@@ -11,7 +11,7 @@ import { readFileSync, writeFileSync } from 'node:fs';
 import { parseArgs } from 'node:util';
 import { saved_api_keys } from '../runner/discussion_api.mjs';
 import { service_home } from '../runner/discussion_service.mjs';
-import { DEFAULT_SCHEDULER_MODE, GOAL_PROMPT_VERSION, REVIEW_PROMPT_VERSION, SEQUENCE_PROMPT_VERSION, decide_sequence_checkpoint, discussion_prompt_version, SCHEDULER_MODES, SCHEDULER_PROVIDERS, route_prompt_version, decide_group_order, decide_interjection, decide_review_completion,
+import { DEFAULT_SCHEDULER_MODE, GOAL_PROMPT_VERSION, REVIEW_PROMPT_VERSION, SEQUENCE_PROMPT_VERSION, decide_sequence_checkpoint, discussion_prompt_version, SCHEDULER_MODES, SCHEDULER_PROVIDERS, route_prompt_version, decide_interjection, decide_review_completion,
   decide_goal_wake, decide_next_speaker, decide_round, route_free_message } from '../runner/scheduler.mjs';
 
 const { values: options } = parseArgs({ options: { provider: { type: 'string', default: 'jev' }, model: { type: 'string' }, mode: { type: 'string', default: DEFAULT_SCHEDULER_MODE },
@@ -61,12 +61,6 @@ async function run_case(item) {
   if (item.scene === 'route') {
     const result = await route_free_message(home, scheduler, { title: free.title, goal: free.goal, context, message, host: free.host, members: item.members || free.members });
     return { result, acted: { member: result.member, all: '__all__', sequential: '__all_seq__', none: '__none__', some: result.choice }[result.action] || '__host__' };
-  }
-  if (item.scene === 'group') {
-    const members = [free.host.name, ...free.members.map(member => member.name)];
-    const descriptions = [free.host, ...free.members];
-    const result = await decide_group_order(home, scheduler, { title: free.title, goal: free.goal, context, message, members, descriptions });
-    return { result, acted: { all: 'parallel', sequential: 'sequential' }[result.action] || '__host__' };
   }
   if (item.scene === 'interjection') {
     const experts = [...new Set([...(item.waiting || []), ...(item.spoken || []), talk.host])];

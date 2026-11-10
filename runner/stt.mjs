@@ -1,6 +1,7 @@
 /**
  * Voice input: the page records 16 kHz mono PCM and sends it in small parts (each fits one relayed request);
- * the last part assembles a WAV file and Volcengine's flash recognizer turns it into text. The key stays local.
+ * the last part assembles a WAV file and the voice-input service chosen in settings turns it into text: Volcengine's
+ * flash recognizer, or the recognizer on this computer (`local_transcribe`). Keys stay local.
  */
 import { randomUUID } from 'node:crypto';
 import { existsSync, mkdirSync, readdirSync, readFileSync, rmSync, statSync, writeFileSync } from 'node:fs';
@@ -8,6 +9,7 @@ import { join } from 'node:path';
 
 import { read_saved_api_key } from './discussion_api.mjs';
 import { TTS_BASE_URL, tts_settings } from './tts.mjs';
+import { local_transcribe, STT_PROVIDERS } from './tts_providers.mjs';
 
 const STT_ENDPOINT = `${TTS_BASE_URL}/api/v3/auc/bigmodel/recognize/flash`;
 // The console's “录音文件识别2.0” grants this resource; it answers on the flash route (verified 2026-11-03). The 1.0
@@ -72,13 +74,17 @@ async function recognize(key, wav, request) {
  * Store one part of a recording; the final part recognizes the whole recording and returns its text.
  * @param {string} home Local service directory.
  * @param {{ upload_id: string, index: number, data: string, final?: boolean }} input Base64 PCM part in order.
+ * @param {Function} [request] `fetch`, replaceable in tests.
+ * @param {Function} [start] Starts the local recognizer, replaceable in tests.
  * @returns {Promise<{ received: number } | { text: string }>}
  */
-export async function stt_part(home, input, request = fetch) {
+export async function stt_part(home, input, request = fetch, start = undefined) {
   const { upload_id, index, data, final } = input || {};
   if (!/^[a-f0-9-]{36}$/i.test(upload_id || '') || !Number.isInteger(index) || index < 0 || typeof data !== 'string') throw new Error('录音片段无效');
   const settings = tts_settings(home);
-  if (!settings.stt_key_ref) throw new Error('语音输入使用火山引擎：请在设置的“语音”中填写火山引擎 API Key');
+  const service = STT_PROVIDERS.find(item => item.id === settings.stt_provider);
+  if (!settings.stt_key_ref) throw new Error(service.local ? '本机语音识别尚未安装：请让本机 AI 按 local-stt-setup 技能安装'
+    : '语音输入使用火山引擎：请在设置的“语音”中填写火山引擎 API Key');
   const part = Buffer.from(data, 'base64');
   if (part.length > PART_MAX_BYTES || part.length % 2) throw new Error('录音片段无效');
   const root = join(home, 'stt');
@@ -98,7 +104,8 @@ export async function stt_part(home, input, request = fetch) {
     const pcm = Buffer.concat(parts);
     if (pcm.length > STT_MAX_BYTES) throw new Error('录音超过 5 分钟，请分段录制');
     if (!pcm.length) return { text: '' };
-    const key = read_saved_api_key(home, TTS_BASE_URL, settings.stt_key_ref);
+    const key = read_saved_api_key(home, service.key_base_url, settings.stt_key_ref);
+    if (service.local) return { text: await local_transcribe({ home, key, wav: pcm_to_wav(pcm) }, { request, ...(start ? { start } : {}) }) };
     return { text: await recognize(key, pcm_to_wav(pcm), request) };
   } finally { rmSync(directory, { recursive: true, force: true }); }
 }

@@ -1,22 +1,30 @@
 <script setup>
 /**
  * Speech settings kept by the local service: read-aloud uses the chosen service (Volcengine, Aliyun, Azure or the speech
- * model on this computer), each with its own key and voices; voice input always uses the Volcengine key. Keys never come
- * back to the page; the local service's token is saved by its setup skill, so it asks for none.
+ * model on this computer), each with its own key and voices; voice input chooses its own service (Volcengine with its
+ * key, or the recognizer on this computer). Keys never come back to the page; a local service's token is saved by its
+ * setup skill, so it asks for none.
  */
-import { computed, inject, onMounted, reactive, ref } from "vue";
+import { computed, inject, onBeforeUnmount, onMounted, reactive, ref } from "vue";
+
+import { request_tts } from "./read-aloud.js";
 
 const { bridge } = inject("discussion");
 const SAVED_MARK = "••••••••••••";
 const PREVIEW_TEXT = "你好，我会用这个声音为你朗读房间里的消息。";
 const VOICE_INPUT = "volcengine";
 const rates = [{ value: -20, label: "0.8×" }, { value: 0, label: "1×" }, { value: 20, label: "1.2×" }, { value: 50, label: "1.5×" }, { value: 100, label: "2×" }];
-const settings = reactive({ provider: "volcengine", speech_rate: 0, context: "", providers: {}, catalog: [], api_key_ref: "" });
+const settings = reactive({ provider: "volcengine", speech_rate: 0, context: "", providers: {}, catalog: [], api_key_ref: "", stt_provider: "volcengine", stt_catalog: [], stt_key_ref: "" });
 // One voice per AI platform; members of an unset platform, the user and program messages use the default voice.
 const platforms = Object.keys(bridge.launch_clients).map((name) => ({ name, label: bridge.identities[name]?.label || name }));
 // Key of the project-file voice row, apart from platform names.
 const FILE_KEY = ":file";
+// Key of the default-voice row for a playing sample, apart from platform names and the file row.
+const GENERAL_KEY = ":general";
 const loaded = ref(false), unavailable = ref(""), busy = ref("");
+// The row whose sample is playing (its button turns into stop) and that sample's audio.
+const playing = ref("");
+let sample_audio = null;
 // A newly typed key per service, cleared once stored.
 const typed_keys = reactive({});
 // Whether a typed key shows in clear, per service.
@@ -27,7 +35,8 @@ const service = computed(() => settings.catalog.find((item) => item.id === setti
 const own = computed(() => settings.providers[settings.provider] || { member_voices: {} });
 const status = computed(() => unavailable.value ? "需连接本机服务" : !loaded.value ? "读取中…"
   : !settings.api_key_ref ? `${service.value.label} · 未配置` : `已配置 · ${service.value.label} · ${voice_items.value.find((voice) => voice.value === own.value.speaker)?.label || own.value.speaker}`);
-// Voice input needs Volcengine's key; it gets its own key row when reading uses another service.
+// The voice-input service chosen; Volcengine's needs its key, which gets its own row when reading uses another service.
+const stt_service = computed(() => settings.stt_catalog.find((item) => item.id === settings.stt_provider) || {});
 const input_service = computed(() => settings.provider === VOICE_INPUT ? null : settings.catalog.find((item) => item.id === VOICE_INPUT));
 
 onMounted(async () => {
@@ -37,9 +46,16 @@ onMounted(async () => {
 
 /** Save every field together; the service validates and answers with what it kept. */
 async function save() {
-  const { provider, speech_rate, context, providers } = settings;
-  try { Object.assign(settings, await bridge.local_request("tts-settings", { provider, speech_rate, context, providers })); }
+  const { provider, speech_rate, context, providers, stt_provider } = settings;
+  try { Object.assign(settings, await bridge.local_request("tts-settings", { provider, speech_rate, context, providers, stt_provider })); }
   catch (error) { bridge.notify("error", error.message); }
+}
+
+/** Switch the voice-input service. */
+function choose_input(provider) {
+  if (provider === settings.stt_provider) return;
+  settings.stt_provider = provider;
+  save();
 }
 
 /** Switch the reading service; each keeps its own key and voices. */
@@ -83,18 +99,36 @@ async function save_key(item) {
 
 /** Play a short sample in one voice (the default when empty); the element is started in the click so phones allow sound. */
 async function preview(platform) {
+  if (playing.value === platform) return stop_preview();
+  stop_preview();
   const sample = new Audio();
   sample.play().catch(() => {});
   busy.value = `preview:${platform}`;
   try {
     const speaker = voice_of(platform);
-    const { audio, format } = await bridge.local_request("tts", { text: PREVIEW_TEXT, speaker });
+    const { audio, format } = await request_tts(bridge, { text: PREVIEW_TEXT, speaker });
     sample.src = URL.createObjectURL(new Blob([Uint8Array.from(atob(audio), (character) => character.charCodeAt(0))], { type: format === "m4a" ? "audio/mp4" : "audio/mpeg" }));
-    sample.onended = () => URL.revokeObjectURL(sample.src);
+    sample.onended = () => { if (sample_audio === sample) stop_preview(); };
+    sample_audio = sample;
+    playing.value = platform;
     await sample.play();
-  } catch (error) { bridge.notify("error", error.message); }
+    // A browser plays to an output with nothing plugged in without any error, so say that it plays and where to look.
+    const label = voice_items.value.find((voice) => voice.value === speaker)?.label || speaker;
+    bridge.notify("info", `正在试听：${label}。听不到声音时，请检查这台设备的音量和声音输出（耳机或音箱）`);
+  } catch (error) {
+    if (sample_audio === sample) stop_preview();
+    bridge.notify("error", error.message);
+  }
   finally { busy.value = ""; }
 }
+
+/** Stop the sample playing, if any, and free its audio. */
+function stop_preview() {
+  if (sample_audio) { sample_audio.pause(); URL.revokeObjectURL(sample_audio.src); }
+  sample_audio = null;
+  playing.value = "";
+}
+onBeforeUnmount(stop_preview);
 </script>
 
 <template>
@@ -127,19 +161,19 @@ async function preview(platform) {
             <div class="speech-row"><span>通用</span>
               <div class="speech-inline">
                 <USelectMenu :model-value="own.speaker" :items="voice_items" value-key="value" create-item :search-input="{ placeholder: '搜索或输入音色 ID' }" aria-label="通用音色" size="sm" class="min-w-0 flex-1" @update:model-value="set_voice('', $event)" @create="set_voice('', $event)" />
-                <UButton icon="i-lucide-volume-2" aria-label="试听通用音色" color="neutral" variant="ghost" size="sm" :loading="busy === 'preview:'" :disabled="!settings.api_key_ref || Boolean(busy)" @click="preview('')" />
+                <UButton :icon="playing === GENERAL_KEY ? 'i-lucide-square' : 'i-lucide-volume-2'" :aria-label="playing === GENERAL_KEY ? '停止试听' : '试听通用音色'" color="neutral" variant="ghost" size="sm" :loading="busy === `preview:${GENERAL_KEY}`" :disabled="!settings.api_key_ref || Boolean(busy)" @click="preview(GENERAL_KEY)" />
               </div>
             </div>
             <div class="speech-row"><span>文件</span>
               <div class="speech-inline">
                 <USelectMenu :model-value="own.file_voice || ''" :items="platform_items" value-key="value" create-item :search-input="{ placeholder: '搜索或输入音色 ID' }" aria-label="朗读文件的音色" size="sm" class="min-w-0 flex-1" @update:model-value="set_voice(FILE_KEY, $event)" @create="set_voice(FILE_KEY, $event)" />
-                <UButton icon="i-lucide-volume-2" aria-label="试听朗读文件的音色" color="neutral" variant="ghost" size="sm" :loading="busy === `preview:${FILE_KEY}`" :disabled="!settings.api_key_ref || Boolean(busy)" @click="preview(FILE_KEY)" />
+                <UButton :icon="playing === FILE_KEY ? 'i-lucide-square' : 'i-lucide-volume-2'" :aria-label="playing === FILE_KEY ? '停止试听' : '试听朗读文件的音色'" color="neutral" variant="ghost" size="sm" :loading="busy === `preview:${FILE_KEY}`" :disabled="!settings.api_key_ref || Boolean(busy)" @click="preview(FILE_KEY)" />
               </div>
             </div>
             <div v-for="platform in platforms" :key="platform.name" class="speech-row"><span :title="platform.label">{{ platform.label }}</span>
               <div class="speech-inline">
                 <USelectMenu :model-value="own.member_voices[platform.name] || ''" :items="platform_items" value-key="value" create-item :search-input="{ placeholder: '搜索或输入音色 ID' }" :aria-label="`${platform.label} 的音色`" size="sm" class="min-w-0 flex-1" @update:model-value="set_voice(platform.name, $event)" @create="set_voice(platform.name, $event)" />
-                <UButton icon="i-lucide-volume-2" :aria-label="`试听 ${platform.label} 的音色`" color="neutral" variant="ghost" size="sm" :loading="busy === `preview:${platform.name}`" :disabled="!settings.api_key_ref || Boolean(busy)" @click="preview(platform.name)" />
+                <UButton :icon="playing === platform.name ? 'i-lucide-square' : 'i-lucide-volume-2'" :aria-label="playing === platform.name ? '停止试听' : `试听 ${platform.label} 的音色`" color="neutral" variant="ghost" size="sm" :loading="busy === `preview:${platform.name}`" :disabled="!settings.api_key_ref || Boolean(busy)" @click="preview(platform.name)" />
               </div>
             </div>
             <p class="fine-print speech-note">未单独设置的 AI 与其他消息用通用音色</p>
@@ -152,9 +186,13 @@ async function preview(platform) {
             </label>
             <p class="fine-print speech-note">输入框右下角的播报按钮自动读新回复摘要</p>
             <h4>语音输入</h4>
-            <p class="fine-print speech-note">用火山引擎识别，单次最长 5 分钟</p>
+            <div class="speech-row"><span>服务</span>
+              <div class="speech-rates" role="group" aria-label="语音输入服务"><UButton v-for="item in settings.stt_catalog" :key="item.id" :label="item.label" color="neutral" variant="ghost" size="xs" :class="{ chosen: settings.stt_provider === item.id }" :aria-pressed="settings.stt_provider === item.id" @click="choose_input(item.id)" /></div>
+            </div>
+            <p class="fine-print speech-note" :title="stt_service.note">{{ stt_service.note }}</p>
             <label class="speech-row"><span>密钥</span>
-              <UInput v-if="input_service" v-model="typed_keys[input_service.id]" type="text" autocomplete="off" spellcheck="false" data-1p-ignore data-lpignore="true" :placeholder="settings.providers[input_service.id]?.api_key_ref ? SAVED_MARK : '粘贴火山引擎 API Key'" :title="settings.providers[input_service.id]?.api_key_ref && !typed_keys[input_service.id] ? '已保存；本机不回传密钥，输入新 Key 可更换' : undefined" aria-label="语音输入的火山引擎 API Key" size="sm" class="w-full" :loading="busy === `key:${input_service.id}`" :ui="{ base: visible_keys[input_service.id] ? '' : 'speech-key-masked', trailing: 'pe-0.5' }" @change="save_key(input_service)">
+              <UInput v-if="stt_service.local" disabled :placeholder="settings.stt_key_ref ? '已由安装技能配置，无需填写' : '尚未安装：让本机 AI 按 local-stt-setup 技能安装'" aria-label="本机语音识别令牌" size="sm" class="w-full" />
+              <UInput v-else-if="input_service" v-model="typed_keys[input_service.id]" type="text" autocomplete="off" spellcheck="false" data-1p-ignore data-lpignore="true" :placeholder="settings.providers[input_service.id]?.api_key_ref ? SAVED_MARK : '粘贴火山引擎 API Key'" :title="settings.providers[input_service.id]?.api_key_ref && !typed_keys[input_service.id] ? '已保存；本机不回传密钥，输入新 Key 可更换' : undefined" aria-label="语音输入的火山引擎 API Key" size="sm" class="w-full" :loading="busy === `key:${input_service.id}`" :ui="{ base: visible_keys[input_service.id] ? '' : 'speech-key-masked', trailing: 'pe-0.5' }" @change="save_key(input_service)">
                 <template #trailing><UButton :icon="visible_keys[input_service.id] ? 'i-lucide-eye' : 'i-lucide-eye-off'" :disabled="!typed_keys[input_service.id]" :aria-label="visible_keys[input_service.id] ? '隐藏密钥' : '显示密钥'" :aria-pressed="Boolean(visible_keys[input_service.id])" size="xs" color="neutral" variant="link" @click="visible_keys[input_service.id] = !visible_keys[input_service.id]" /></template>
               </UInput>
               <UInput v-else disabled placeholder="与朗读共用上方的火山引擎 Key" aria-label="语音输入的火山引擎 API Key" size="sm" class="w-full" />

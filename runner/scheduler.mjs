@@ -13,7 +13,7 @@ export const ROUTE_CONFIDENCE = 0.7;
 export const ROUTE_WIDE_CONFIDENCE = 0.85;
 /**
  * The guided wording gives lower probabilities for the same correct pick, so it has its own thresholds, set where the
- * regression set gains correct picks without any new wrong one (2026-10-31). @全体成员 and review keep their own.
+ * regression set gains correct picks without any new wrong one (2026-10-31). Review keeps its own.
  */
 export const GUIDED_CONFIDENCE = 0.6;
 export const GUIDED_WIDE_CONFIDENCE = 0.8;
@@ -286,25 +286,6 @@ export async function route_free_message(home, scheduler, { title, goal, context
   if (sure && group) return { action: 'some', members: group, choice, confidence, ...judged };
   if (sure && members.some(item => item.name === choice)) return { action: 'member', member: choice, choice, confidence, ...judged };
   return { action: 'host', choice, confidence, ...judged };
-}
-
-/**
- * The user named everyone (@全体成员): decide whether they answer at once (parallel) or one after another (sequential).
- * Both automatic actions need confidence; unclear division of work or a weak answer returns control to the host.
- */
-export async function decide_group_order(home, scheduler, { title, goal, context, message, members, descriptions = [] }, fetch_impl) {
-  const questions = [{ type: 'choice', name: 'order', choices: [
-    { value: 'parallel', description: '同时回答：各自独立回应即可，不需要看到别人的回答，如打招呼、各自介绍、各说一句看法、各自投票' },
-    { value: 'sequential', description: `依次回答：后发言的需要看到前面的回答，如接龙、轮流补充或反驳、逐个评审上一位的结果、按顺序分工接力；按房间发言顺序（${members.join('、')}）逐个回答` },
-    { value: HOST_CHOICE, description: '交给主持人：任务或分工还不清楚，需要先澄清、分配范围或协调；仅把大家排成依次回答不能解决这些问题' }],
-    instructions: '用户用 @全体成员 请房间里所有成员回应这条消息。根据任务是否已明确以及成员间的依赖，判断应同时各自回答、按既定顺序依次回答（后一位看到前一位的回答再接着说），还是先由主持人安排。' }];
-  const facts = descriptions.length ? `成员的软件、项目权限与当前任务：\n${descriptions.map(member => `- ${member.description}`).join('\n')}` : '';
-  const state = [scheduler_state(title, context, message, goal, '', {}, ROUTE_CONTEXT_MESSAGES), facts].filter(Boolean).join('\n\n');
-  const answers = await decide(home, scheduler, state, questions, fetch_impl);
-  const confidence = certainty(answers.order);
-  const choice = answers.order?.choice ?? null;
-  const action = confidence !== null && confidence >= ROUTE_CONFIDENCE ? { parallel: 'all', sequential: 'sequential' }[choice] || 'host' : 'host';
-  return { action, choice, confidence, ...judged_of(state, questions, answers) };
 }
 
 /**

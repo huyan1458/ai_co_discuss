@@ -11,7 +11,7 @@ import { atomic_json } from './files.mjs';
 import { outside_directory, room_directories } from './project_files.mjs';
 import { SessionDriver } from './session_driver.mjs';
 import { effective_profile, load_room_workflow, workflow_in_use, workflow_task_field } from './workflows.mjs';
-import { DEFAULT_SCHEDULER_MODE, GOAL_PROMPT_VERSION, decide_goal_wake, decide_sequence_checkpoint, REVIEW_CONFIDENCE, REVIEW_PROMPT_VERSION, SEQUENCE_CONFIDENCE, SEQUENCE_PROMPT_VERSION, ROUTE_CONFIDENCE, ROUTE_CONTEXT_MESSAGES, ROUTE_PROMPT_VERSION, ROUTE_WIDE_CONFIDENCE, decide_group_order, decide_review_completion, route_free_message, route_prompt_version, scheduler_thresholds, some_members } from './scheduler.mjs';
+import { DEFAULT_SCHEDULER_MODE, GOAL_PROMPT_VERSION, decide_goal_wake, decide_sequence_checkpoint, REVIEW_CONFIDENCE, REVIEW_PROMPT_VERSION, SEQUENCE_CONFIDENCE, SEQUENCE_PROMPT_VERSION, ROUTE_CONFIDENCE, ROUTE_CONTEXT_MESSAGES, decide_review_completion, route_free_message, route_prompt_version, scheduler_thresholds, some_members } from './scheduler.mjs';
 
 const PACKAGE_VERSION = JSON.parse(readFileSync(new URL('../package.json', import.meta.url), 'utf8')).version;
 const RENEW_MS = 30_000;
@@ -27,6 +27,8 @@ const MAX_DELIVERY_RETRIES = 3;
 const RETRY_DELAY_SECONDS = 60;
 // The cause is gone once the restarted runner is back, so its retry needs no long wait.
 const RESTART_RETRY_DELAY_SECONDS = 5;
+// The retry reason the site keeps for an execution a runner restart cut off; its redelivery asks to continue.
+const RESTART_REASON = '本机接入程序重启或异常退出，这次执行的软件进程已结束，未提交回答';
 const MAX_RETRY_REASON = 500;
 const LIVE = ['reserving', 'delivering', 'sidecar_pending', 'running', 'retry_wait'];
 // The longest private chat reply the site keeps.
@@ -197,6 +199,16 @@ export function resume_prompt(execution_id, texts) {
     + `按补充调整后接着完成原任务，已经做完的部分不必重做；完成后照常用 codiscuss 提交这次执行的回答。\n\n${texts.join('\n\n')}`;
 }
 
+/**
+ * The preface of a task delivered again after the runner restarted mid-execution: the member's session usually still
+ * holds the work done so far, so it continues instead of starting over. The original task follows, for a session that
+ * never received it.
+ */
+export function restart_notice(execution_id) {
+  return `本机接入程序重启或异常退出，中断了你正在做的这次房间任务（执行 #${execution_id}，仍在进行，没有结束）。`
+    + '如果本会话里已经开始了它，接着完成，已经做完的部分不必重做；完成后照常用 codiscuss 提交这次执行的回答。原任务如下。\n\n';
+}
+
 // The fixed opening of a private chat turn: where the words come from and how to answer them; the owner's text follows.
 const CHAT_PREAMBLE = '房主在私聊窗口直接对你说（不在房间消息流里，其他成员看不到）。像在终端里对话一样直接用文字回答，不要用 codiscuss 提交到房间，除非房主明确要求；可以照常按你的权限读写项目文件。';
 
@@ -349,7 +361,7 @@ export class FreeRoomRunner {
     // Smart scheduling runs beside delivery: the host waits for its answer (or failure) before starting, see `routing`.
     if (this.config.scheduler && !inbox.archived) this.recommend_unnamed(inbox, room);
     if (this.config.scheduler && !inbox.archived) this.schedule_handoffs(inbox);
-    if (!inbox.archived) this.arrange_groups(inbox, room);
+    if (!inbox.archived) this.arrange_groups(inbox);
     this.room_title = room.title;
     this.room = room;
     if (!inbox.archived) await this.continue_goal(room);
@@ -577,75 +589,24 @@ export class FreeRoomRunner {
       decision.finally(() => { this.decisions.delete(decision); this.on_decided(); });
     }
   }
-  /** For each message naming everyone, have them answer at once, or one after another when smart scheduling says so. */
-  arrange_groups(inbox, room) {
+  /**
+   * For each message naming everyone, have them all answer at once. @全体成员 is the user's explicit choice, so smart
+   * scheduling never judges it; answering one after another has its own entry (@全体依次).
+   */
+  arrange_groups(inbox) {
     const everyone = [...inbox.members, ...(inbox.observers || [])];
     for (const request of everyone.flatMap(member => member.pending).filter(item => item.purpose === 'group' && !this.grouped.has(item.id))) {
       this.grouped.add(request.id);
-      const arranged = (this.config.scheduler ? this.mark_routing(request.message_id, true).then(() => this.order_group(request, room))
-        .finally(() => this.mark_routing(request.message_id, false)) : this.order_group(request, room))
+      const arranged = this.order_group(request)
         .catch(error => { this.grouped.delete(request.id); this.log(`全体成员 #${request.message_id} 未能安排：${error.message}`); });
       this.decisions.add(arranged);
       arranged.finally(() => { this.decisions.delete(arranged); this.on_decided(); });
     }
   }
-  /** Read and judge together; either kind of failure hands this one numbered group request back to its host. */
-  async judge_group(request, room) {
-    try {
-      const plan = await api(this.config, `/recommendations/${request.message_id}`);
-      const page = await api(this.config, `/messages?after=${Math.max(0, request.message_id - ROUTE_CONTEXT_MESSAGES)}`);
-      const message = page.messages.find(item => item.id === request.message_id);
-      if (!message) throw new Error('读取不到这条消息');
-      const descriptions = Object.fromEntries(plan.members.map(member => [member.name, member.description]));
-      const facts = this.route_members(plan.members, { ...room, descriptions }, message.id);
-      const profiles = JSON.stringify(this.config.participants);
-      const decision = await decide_group_order(this.config.api_home, this.config.scheduler,
-        { title: plan.title, goal: plan.goal, context: page.messages, message,
-          members: plan.members.map(member => member.name), descriptions: facts }, this.fetch);
-      return { decision, revision: plan.revision, profiles };
-    } catch (error) {
-      this.log(`智能调度 #${request.message_id} 未判断全体回答方式，交给主持人：${error.message}`);
-      return { decision: { action: 'host' } };
-    }
-  }
-  /** Persist a judgment before applying it: website retries and runner restarts must not ask the model again. */
-  async order_group(request, room) {
-    if (!this.config.scheduler) {
-      const plan = await api(this.config, `/recommendations/${request.message_id}`);
-      const result = await this.apply_group(request.message_id, { action: 'all' }, plan.revision);
-      if (!result.applied) throw new Error(result.error);
-      return;
-    }
-    const key = `group-decision:${request.id}`;
-    const saved = this.store.db.prepare('SELECT value FROM metadata WHERE key=?').get(key)?.value;
-    const judged = saved ? JSON.parse(saved) : await this.judge_group(request, room);
-    if (!saved) this.store.db.prepare('INSERT OR REPLACE INTO metadata VALUES (?,?)').run(key, JSON.stringify(judged));
-    const { decision, revision, profiles } = judged;
-    this.save_suggestion(request, { action: decision.action, actual_action: 'unverified', applied: false,
-      model_judgment: Boolean(decision.detail), reason: decision.detail ? '判断已产生，自动动作结果尚未核验' : '没有模型判断，交给主持人' });
-    const labels = { all: '请全体同时回答', sequential: '请全体按发言顺序依次回答', host: '交给主持人处理原消息' };
-    let result = profiles && profiles !== JSON.stringify(this.config.participants)
-      ? { status: 'changed', applied: false, error: '成员本机配置已变化' }
-      : await this.apply_group(request.message_id, decision, revision);
-    let actual_action = result.applied ? decision.action : 'unverified';
-    let label = labels[decision.action];
-    if (result.status === 'changed' && decision.action !== 'host') {
-      label += '（未生效，状态已变化）';
-      const fallback = await this.apply_group(request.message_id, { action: 'host' });
-      if (fallback.applied) actual_action = 'host';
-      if (fallback.status === 'failed') result = fallback;
-    }
-    let record;
-    if (decision.detail) {
-      if (result.status === 'failed') label += '（未生效，网站写入失败）';
-      // The @全体成员 question has one wording in every mode.
-      record = await this.record_decision(request.message_id, decision, label, result.applied && decision.action !== 'host', { prompt: ROUTE_PROMPT_VERSION, threshold: ROUTE_CONFIDENCE, wide_threshold: ROUTE_WIDE_CONFIDENCE });
-    }
-    this.save_suggestion(request, { action: decision.action, actual_action,
-      applied: result.applied && decision.action !== 'host', model_judgment: Boolean(decision.detail),
-      ...(record?.id ? { decision_id: record.id } : {}), reason: decision.detail ? label : '没有模型判断，交给主持人' });
-    if (result.status === 'failed') throw new Error(result.error);
-    this.store.db.prepare('DELETE FROM metadata WHERE key=?').run(key);
+  async order_group(request) {
+    const plan = await api(this.config, `/recommendations/${request.message_id}`);
+    const result = await this.apply_group(request.message_id, { action: 'all' }, plan.revision);
+    if (!result.applied) throw new Error(result.error);
   }
   /** Apply once with the state that was judged; distinguish conflicts from failed writes and actual success. */
   async apply_group(message_id, decision, revision) {
@@ -758,7 +719,7 @@ export class FreeRoomRunner {
     await this.invoke(member, execution);
   }
   /** Hand the execution to the member's software; only proven non-delivery is released for retry. */
-  async invoke(member, execution, { resume = '' } = {}) {
+  async invoke(member, execution, { resume = '', preface = '' } = {}) {
     const adapter = this.config.participants[member.name];
     const review_request = execution.requests?.find(request => request.review?.phase === 'review');
     if (review_request) {
@@ -805,7 +766,7 @@ export class FreeRoomRunner {
       invoked = true;
       this.segments.start(execution.id);
       if (warning) this.note(execution.id, warning);
-      const result = await this.deliver(review_request ? structuredClone(task.profile) : task.profile, binding, { ...task, ...(resume ? { prompt: resume } : {}), room_title: this.room_title,
+      const result = await this.deliver(review_request ? structuredClone(task.profile) : task.profile, binding, { ...task, ...(resume ? { prompt: resume } : preface ? { prompt: preface + task.prompt } : {}), room_title: this.room_title,
         ...(review_request ? { before_model_start: () => this.check_review_delivery(member, review_request) } : {}),
         api_context: { site: this.config.site, room: this.config.room, token: this.config.members[member.name].token,
           home: this.config.api_home, mode: 'free', role: member.role || 'member', execution_id: execution.id,
@@ -928,7 +889,9 @@ export class FreeRoomRunner {
       if (retry?.retry_at && Date.now() >= retry.retry_at * 1000) {
         await api(this.config, `/executions/${execution.id}`, { action: 'retry_start' });
         this.save(member.name, { status: 'delivering' });
-        return this.invoke(member, await api(this.config, `/executions/${execution.id}`));
+        // Read from the site's retry record, so a second restart during the wait still delivers it as a continuation.
+        const preface = retry?.reason === RESTART_REASON ? restart_notice(execution.id) : '';
+        return this.invoke(member, await api(this.config, `/executions/${execution.id}`), { preface });
       }
     }
     // A restart between persisting and invoking cannot prove non-delivery, so it never resends.
@@ -940,7 +903,7 @@ export class FreeRoomRunner {
       // Inherited from a runner that stopped or crashed: once its software processes are gone, no answer can come, so the
       // same execution is delivered again after the retry wait instead of handing the failure to the host.
       if (row.status === 'running' && this.orphan(execution.id)?.alive === false) {
-        return this.retry_or_fail(member.name, execution, '本机接入程序重启或异常退出，这次执行的软件进程已结束，未提交回答', { restarted: true });
+        return this.retry_or_fail(member.name, execution, RESTART_REASON, { restarted: true });
       }
       if (row.error) return this.retry_or_fail(member.name, execution, row.error);
       if (this.exited.has(execution.id)) {
