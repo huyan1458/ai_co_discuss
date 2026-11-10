@@ -299,6 +299,9 @@ CREATE TABLE IF NOT EXISTS member_executions (
     cwd TEXT NOT NULL DEFAULT '',
     activity TEXT NOT NULL DEFAULT '',
     activity_at INTEGER NOT NULL DEFAULT 0,
+    -- When the owner paused it from the private chat (0 = not paused): the runner stopped its software turn and resumes
+    -- the same execution in the same session with the owner's next line; the execution itself stays live.
+    paused_at INTEGER NOT NULL DEFAULT 0,
     UNIQUE(room_id,client_id)
 );
 -- What the owner wrote about each member (strengths, division of work), by name so it survives leaving and rejoining.
@@ -445,7 +448,9 @@ CREATE TABLE IF NOT EXISTS execution_capabilities (
     stoppable INTEGER CHECK(stoppable IN (0,1)),
     progress INTEGER CHECK(progress IN (0,1)),
     stop_result TEXT NOT NULL DEFAULT '' CHECK(stop_result IN ('','stopped','unstoppable','unconfirmed')),
-    steer INTEGER CHECK(steer IN (0,1))
+    steer INTEGER CHECK(steer IN (0,1)),
+    -- The runner can stop the software's turn and continue the same session, so a pause keeps the execution.
+    resume INTEGER CHECK(resume IN (0,1))
 );
 -- What the owner said into one running execution without ending it (an interjection from the private-chat page), and
 -- whether the runner got it into the member's software: pending until the runner reports delivered or failed. A retry

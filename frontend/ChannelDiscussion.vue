@@ -425,10 +425,12 @@ const free_busy = computed(() => {
       const retry = execution.retry?.retry_at && !execution.retry.stopped ? execution.retry : null;
       const attempt = !retry && !execution.retry?.stopped ? execution.retry?.attempt || 0 : 0;
       return [{ id: `free-${execution.id}`, author: member.name, member_id: member.id, retry, attempt,
-        text: execution.stale ? "执行失联：网站已不再接受本次回答，软件停止未确认" : retry ? "投递未成功，等待自动重试" : ACTIVITY_LABELS[execution.activity] || "正在处理",
-        working: !execution.stale && !retry, created_at: execution.created_at, adapter: member.adapter, capabilities: execution.capabilities,
+        text: execution.stale ? "执行失联：网站已不再接受本次回答，软件停止未确认" : retry ? "投递未成功，等待自动重试"
+          : execution.paused_at ? "已在私聊中暂停，等你补充后接着做" : ACTIVITY_LABELS[execution.activity] || "正在处理",
+        paused: Boolean(execution.paused_at), working: !execution.stale && !retry, created_at: execution.created_at, adapter: member.adapter, capabilities: execution.capabilities,
         activity: execution.activity, activity_at: execution.activity_at, notes: execution.notes || 0,
         execution_id: execution.id, request_message_id: reports.get(execution.id)?.request_message_id, anchor_message_id: reports.get(execution.id)?.anchor_message_id,
+        dispatched_after: reports.get(execution.id)?.dispatched_after,
         discussion_request: reports.get(execution.id)?.requests?.find((request) => request.discussion_session_id) }];
     }
     return [];
@@ -496,6 +498,8 @@ function working_status(message) {
   // Data shown after the page was hidden or offline may be old; silence counts only up to when it was last current.
   const observed = view.value.observed_until ? Math.min(free_now.value, Math.floor(view.value.observed_until / 1000)) : free_now.value;
   const silent = Math.max(0, observed - (message.activity_at || message.created_at));
+  // Paused from the private chat: its software is stopped on purpose, so the silence is no hang.
+  if (message.paused) return { text: message.text, live: false };
   if (!message.working || !shows_progress(message) || silent < STALL_SECONDS) return { text: message.text, live: message.working };
   if (message.activity === "command") return { text: `命令已运行 ${format_elapsed(silent)}`, live: true };
   // Deep reasoning reports nothing until it ends; only a much longer silence there suggests a hang.
@@ -1156,7 +1160,7 @@ const free_failures = computed(() => {
   return (room.value.free?.executions || []).filter((execution) => execution.status === "failed")
     .map((execution) => ({ id: `failed-${execution.id}`, author: execution.member || names.get(execution.member_id) || "成员", slot_card: true, created_at: execution.created_at,
       execution_id: execution.id, request_message_id: execution.request_message_id, anchor_message_id: execution.anchor_message_id,
-      discussion_request: execution.requests?.find((request) => request.discussion_session_id),
+      dispatched_after: execution.dispatched_after, discussion_request: execution.requests?.find((request) => request.discussion_session_id),
       failure: { ...execution, elapsed_seconds: execution.finished_at ? Math.max(0, execution.finished_at - execution.created_at) : null } }))
     .concat(undeliverable_requests());
 });
@@ -1194,6 +1198,9 @@ function toggle_rewound(id) {
  * (it differs from `request_message_id`, the dispatch message), and the handoff follows the whole batch, so it goes under
  * the last top-level message up to that answer, never into the batch's nested slots: what the user asked meanwhile, and
  * its answer, then stay above it instead of below a card that looks stuck in the middle.
+ * Likewise a relay step dispatched from an answer nested under an older top-level message, after the user posted
+ * meanwhile (`dispatched_after`, the latest message when it was dispatched, lies past that group), goes under the last
+ * top-level message at dispatch instead of back up into the old nesting, where it would appear far above the reader.
  */
 const free_layout = computed(() => {
   const messages = view.value.messages.filter((message) => !rewound_runs.value.hidden.has(message.id));
@@ -1204,14 +1211,19 @@ const free_layout = computed(() => {
   // Shown top-level messages in id order, filled while the messages are placed; a handoff resolves to the last one up to its answer.
   const root_ids = [];
   const root_at = (id) => root_ids.findLast((root) => root <= id) ?? id;
+  // The top-level message each placed card ends up under, so a relay step can tell whether the user posted since.
+  const group_of = new Map();
   const place = (item) => {
     if ((!item.execution_id && !item.cancelled_turn && !item.arrangement && !item.undeliverable) || item.withdrawn) return false;
     const request = item.discussion_request || executions.get(item.execution_id)?.requests?.find((value) => value.discussion_session_id);
     const own = item.anchor_message_id ?? item.request_message_id;
-    const free_anchor = own !== item.request_message_id ? root_at(own) : own;
+    let free_anchor = own !== item.request_message_id ? root_at(own) : own;
+    const latest_root = item.dispatched_after ? root_at(item.dispatched_after) : null;
+    if (latest_root && free_anchor === own && (group_of.get(own) ?? own) < latest_root && shown.has(latest_root)) free_anchor = latest_root;
     const anchor = item.arrangement?.after_message_id ?? item.cancelled_turn?.after_message_id ?? (request ? request.after_message_id : free_anchor);
     if (!((request || item.cancelled_turn || item.arrangement) && anchor === 0) && !shown.has(anchor)) return false;
     slots.set(anchor, [...(slots.get(anchor) || []), item]);
+    group_of.set(item.id, group_of.get(anchor) ?? anchor);
     return true;
   };
   const roots = messages.filter((message) => {
@@ -1233,7 +1245,8 @@ const free_layout = computed(() => {
       const request = execution.requests?.find((item) => item.discussion_session_id);
       if (request || execution.capabilities) place({ id: `stopped-${execution.id}`, author: execution.member,
         slot_card: true, cancelled_execution: execution, execution_id: execution.id, created_at: execution.created_at,
-        request_message_id: execution.request_message_id, anchor_message_id: execution.anchor_message_id, discussion_request: request });
+        request_message_id: execution.request_message_id, anchor_message_id: execution.anchor_message_id,
+        dispatched_after: execution.dispatched_after, discussion_request: request });
     }
   }
   const tail = free_working.value.map((item) => ({ ...item, slot_card: true })).filter((item) => !place(item));

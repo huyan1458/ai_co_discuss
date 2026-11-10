@@ -468,7 +468,7 @@ function drag_stop() { dragging = false; commit(); }
           <div class="workflow-card-grip" title="按住拖动">
             <UIcon name="i-lucide-grip-horizontal" class="workflow-icon" />
           </div>
-          <div class="workflow-card-body nodrag nopan nowheel">
+          <div class="workflow-card-body nodrag nopan">
             <ExpertCard :preset="agent_of(node.data.card)" :name="agent_of(node.data.card).name" mode="cli" :status="STATUS"
               :access_locked="Boolean(agent_of(node.data.card).requested_access && agent_of(node.data.card).project_access === 'read')"
               @update:preset="(value) => set_agent(node.data.card, value)" @remove="remove_card(node.data.card)" />

@@ -188,6 +188,15 @@ export function free_task_files(config, member, execution, binding, { session = 
     profile, ...(workflow_field ? { workflow: { ...workflow_field, skill: host_workflow.skill } } : {}) };
 }
 
+/**
+ * The prompt that resumes an execution the owner paused from the private chat: the same task goes on in the same
+ * session, steered by what the owner added. The task file and credentials are written again as at its first delivery.
+ */
+export function resume_prompt(execution_id, texts) {
+  return `房主在私聊窗口暂停了你正在做的这次房间任务（执行 #${execution_id}，仍在进行，没有结束），并补充了下面的话。`
+    + `按补充调整后接着完成原任务，已经做完的部分不必重做；完成后照常用 codiscuss 提交这次执行的回答。\n\n${texts.join('\n\n')}`;
+}
+
 // The fixed opening of a private chat turn: where the words come from and how to answer them; the owner's text follows.
 const CHAT_PREAMBLE = '房主在私聊窗口直接对你说（不在房间消息流里，其他成员看不到）。像在终端里对话一样直接用文字回答，不要用 codiscuss 提交到房间，除非房主明确要求；可以照常按你的权限读写项目文件。';
 
@@ -262,6 +271,8 @@ export class FreeRoomRunner {
     this.instance = randomUUID();
     // Execution id -> why its session ended on its own, such as a command refused in unattended mode ('' when unknown).
     this.exited = new Map();
+    // Per execution, which delivery is current: a turn stopped by a pause may report its exit after the resumed one began.
+    this.generations = new Map();
     // Executions whose software failed before any turn ran, as its adapter reported; safe to deliver again.
     this.not_started = new Set();
     // Executions whose software failed in a way a retry meets again (a used-up limit, a lost login), as its adapter reported.
@@ -747,7 +758,7 @@ export class FreeRoomRunner {
     await this.invoke(member, execution);
   }
   /** Hand the execution to the member's software; only proven non-delivery is released for retry. */
-  async invoke(member, execution) {
+  async invoke(member, execution, { resume = '' } = {}) {
     const adapter = this.config.participants[member.name];
     const review_request = execution.requests?.find(request => request.review?.phase === 'review');
     if (review_request) {
@@ -762,13 +773,18 @@ export class FreeRoomRunner {
     // The room's other directories this member may write are watched as well; their changes are reported with full paths.
     const extras = member_extra_directories(this.config, adapter).filter(item => item.access === 'write')
       .map(item => ({ directory: item.path, before: workspace_snapshot(item.path) })).filter(item => item.before);
-    if (before || extras.length) this.snapshots.set(execution.id, { member: member.name, directory, before, extras });
+    // A resumed execution keeps the snapshot of its first delivery, so changes made before the pause are reported too.
+    if ((before || extras.length) && !this.snapshots.has(execution.id)) this.snapshots.set(execution.id, { member: member.name, directory, before, extras });
+    const generation = (this.generations.get(execution.id) || 0) + 1;
+    this.generations.set(execution.id, generation);
+    const current = () => this.generations.get(execution.id) === generation;
     const binding = this.store.binding(member.name);
     // A member whose session a rewind restarted is bound to '' and must not fall back to the session it was invited with.
     if (binding.session_id === undefined && adapter.session_id) binding.session_id = adapter.session_id;
     let invoked = false;
     try {
-      const warning = await this.cut_rewound(member.name, adapter, binding, execution);
+      // A resumed execution's session was already cut at its first delivery.
+      const warning = resume ? '' : await this.cut_rewound(member.name, adapter, binding, execution);
       const session_request = execution.requests?.find(item => item.session_request_id && ['discuss', 'discuss_host'].includes(item.purpose));
       const session = this.room?.session ? { ...this.room.session } : null;
       const scheduler_suggestions = !this.config.scheduler || member.role !== 'host' ? []
@@ -789,7 +805,7 @@ export class FreeRoomRunner {
       invoked = true;
       this.segments.start(execution.id);
       if (warning) this.note(execution.id, warning);
-      const result = await this.deliver(review_request ? structuredClone(task.profile) : task.profile, binding, { ...task, room_title: this.room_title,
+      const result = await this.deliver(review_request ? structuredClone(task.profile) : task.profile, binding, { ...task, ...(resume ? { prompt: resume } : {}), room_title: this.room_title,
         ...(review_request ? { before_model_start: () => this.check_review_delivery(member, review_request) } : {}),
         api_context: { site: this.config.site, room: this.config.room, token: this.config.members[member.name].token,
           home: this.config.api_home, mode: 'free', role: member.role || 'member', execution_id: execution.id,
@@ -813,11 +829,12 @@ export class FreeRoomRunner {
         },
         // A stopped process may report after the next execution started; only its own execution takes the result.
         on_failure: (error, { not_started = false, retryable = true } = {}) => {
+          if (!current()) return;
           if (not_started) this.not_started.add(execution.id);
           if (!retryable) this.not_retryable.add(execution.id);
           try { if (this.row(member.name)?.execution_id === execution.id) this.save(member.name, { error }); } catch { /* Store may already be closed at shutdown. */ }
         },
-        on_exit: denial => this.exited.set(execution.id, denial || ''),
+        on_exit: denial => { if (current()) this.exited.set(execution.id, denial || ''); },
         // Shown beside the answer or failure so the owner can allow them; a lost report only hides the list.
         on_denials: denials => api(this.config, `/executions/${execution.id}`, { action: 'denials', denials }).catch(() => {}),
       });
@@ -825,7 +842,9 @@ export class FreeRoomRunner {
       this.clear_stopped(member.name);
       this.save(member.name, { status: result.status === 'sidecar_pending' ? 'sidecar_pending' : 'running', attempts: 0 });
       if (result.steer) this.steers.set(execution.id, result.steer);
-      await this.report_delivery(execution.id, { ...(result.capabilities || capabilities_of(adapter.adapter).delivery), steer: Boolean(result.steer) }, member.name);
+      const delivery = result.capabilities || capabilities_of(adapter.adapter).delivery;
+      await this.report_delivery(execution.id, { ...delivery, steer: Boolean(result.steer),
+        resume: Boolean(capabilities_of(adapter.adapter).resume && delivery.stoppable) }, member.name);
     } catch (error) {
       if (review_request && error.delivery_status === 'not_sent') return this.reject_review(member, execution, error.message);
       if (adapter.project_access === 'own') return this.retry_or_fail(member.name, execution, `投递失败：${error.message}`);
@@ -914,19 +933,24 @@ export class FreeRoomRunner {
     }
     // A restart between persisting and invoking cannot prove non-delivery, so it never resends.
     if (row.status === 'delivering') return this.fail(member.name, execution.id, '上次投递结果不明，未自动重发；请核对原会话后重新发送');
-    // Inherited from a runner that stopped or crashed: once its software processes are gone, no answer can come, so the
-    // same execution is delivered again after the retry wait instead of handing the failure to the host.
-    if (row.status === 'running' && this.orphan(execution.id)?.alive === false) {
-      return this.retry_or_fail(member.name, execution, '本机接入程序重启或异常退出，这次执行的软件进程已结束，未提交回答', { restarted: true });
-    }
-    if (row.error) return this.retry_or_fail(member.name, execution, row.error);
-    if (this.exited.has(execution.id)) {
-      const latest = await api(this.config, `/executions/${execution.id}`);
-      const denial = this.exited.get(execution.id);
-      if (['dispatched', 'started'].includes(latest.status)) return this.fail(member.name, execution.id, denial
-        ? `${member.name} ${denial}，未提交本次回答`
-        : `${member.name} 会话已结束，但未提交本次回答；请核对原会话确认是否已有内容`);
-      return this.save(member.name, { status: 'idle' });
+    if (execution.paused_at) {
+      // A paused turn ending is not a failure: the execution waits, renewed, for the owner's words.
+      if (await this.hold_paused(member, row, execution)) return;
+    } else {
+      // Inherited from a runner that stopped or crashed: once its software processes are gone, no answer can come, so the
+      // same execution is delivered again after the retry wait instead of handing the failure to the host.
+      if (row.status === 'running' && this.orphan(execution.id)?.alive === false) {
+        return this.retry_or_fail(member.name, execution, '本机接入程序重启或异常退出，这次执行的软件进程已结束，未提交回答', { restarted: true });
+      }
+      if (row.error) return this.retry_or_fail(member.name, execution, row.error);
+      if (this.exited.has(execution.id)) {
+        const latest = await api(this.config, `/executions/${execution.id}`);
+        const denial = this.exited.get(execution.id);
+        if (['dispatched', 'started'].includes(latest.status)) return this.fail(member.name, execution.id, denial
+          ? `${member.name} ${denial}，未提交本次回答`
+          : `${member.name} 会话已结束，但未提交本次回答；请核对原会话确认是否已有内容`);
+        return this.save(member.name, { status: 'idle' });
+      }
     }
     // Segments and notes go first, quietly and often, so a renewal in the same tick already shows the notes it announces.
     if (this.segments.due(execution.id, PROGRESS_REPORT_MS)) await this.report_segments(execution.id);
@@ -941,13 +965,38 @@ export class FreeRoomRunner {
     }
   }
   /**
+   * An execution the owner paused from the private chat, or that takes an interjection only by a pause: stop its
+   * software turn and keep the execution live; once that turn has ended and the owner's words wait, resume the same
+   * execution in the same session with them. Returns true when it resumed, so the caller does nothing more this tick.
+   */
+  async hold_paused(member, row, execution) {
+    this.steers.delete(execution.id);
+    const processes = this.execution_processes.get(execution.id);
+    for (const child of processes || []) this.request_stop(child);
+    this.exited.delete(execution.id);
+    this.not_started.delete(execution.id);
+    this.not_retryable.delete(execution.id);
+    if (row.error) this.save(member.name, { error: '' });
+    if (processes?.size || !execution.interjections?.length) return false;
+    this.save(member.name, { status: 'delivering', error: '' });
+    await api(this.config, `/executions/${execution.id}`, { action: 'resume' });
+    await this.invoke(member, execution, { resume: resume_prompt(execution.id, execution.interjections.map(item => item.text)) });
+    if (this.row(member.name)?.status !== 'running') return true;
+    for (const interjection of execution.interjections) {
+      this.interjecting.set(interjection.id, { status: 'delivered' });
+      await api(this.config, `/executions/${execution.id}`, { action: 'interjection', interjection_id: interjection.id, status: 'delivered' })
+        .catch(error => this.log(`插话 #${interjection.id} 的结果未能上报：${error.message}`));
+    }
+    return true;
+  }
+  /**
    * Tell the site what this delivery can do, as the adapter reported it: whether the runner can stop it and see its
    * progress. Kept locally until the execution ends so a restarted runner still knows whether it could stop it.
    * A lost report is retained for the final stop result; sites and runners must use the same capability protocol.
    */
-  async report_delivery(execution_id, { stoppable, progress, steer = false }, member) {
+  async report_delivery(execution_id, { stoppable, progress, steer = false, resume = false }, member) {
     this.store.db.prepare('INSERT OR REPLACE INTO metadata VALUES (?,?)').run(`delivery:${execution_id}`, JSON.stringify({ stoppable, progress, member }));
-    await api(this.config, `/executions/${execution_id}`, { action: 'delivery', stoppable, progress, steer })
+    await api(this.config, `/executions/${execution_id}`, { action: 'delivery', stoppable, progress, steer, resume })
       .catch(error => this.log(`执行 #${execution_id} 的投递能力未能上报：${error.message}`));
   }
   /** Retry durable stop reports even after the member went idle, left, or started a later execution. */
@@ -1111,6 +1160,8 @@ export class FreeRoomRunner {
     const live = new Set(executions.map(item => item.id));
     for (const id of this.steers.keys()) if (!live.has(id)) this.steers.delete(id);
     for (const execution of executions) {
+      // A paused execution hears its interjections when it resumes (hold_paused).
+      if (execution.paused_at) continue;
       for (const interjection of execution.interjections || []) {
         // An interjection is handed over once; a lost report is sent again with the same outcome.
         let report = this.interjecting.get(interjection.id);

@@ -210,7 +210,9 @@ function clamp_float_top(top) {
 /** Put the floating button on its side (left: the content column's edge), at the top or where it was dragged to. */
 function place_float() {
   const content = document.querySelector(".channel-content")?.getBoundingClientRect();
-  float_place.value = content ? { left: content.left, top: content.top + FLOAT_GAP } : { left: 0, top: FLOAT_FALLBACK_TOP };
+  // Measured with the page unscrolled: a phone's keyboard (open while commenting) scrolls the page up, and a top taken
+  // then would leave the button above the screen once the keyboard closes.
+  float_place.value = content ? { left: content.left, top: clamp_float_top(content.top + window.scrollY + FLOAT_GAP) } : { left: 0, top: FLOAT_FALLBACK_TOP };
   if (float_side.value === "right") float_place.value.left = window.innerWidth - FLOAT_WIDTH;
   if (float_top !== null) float_place.value.top = clamp_float_top(float_top);
 }

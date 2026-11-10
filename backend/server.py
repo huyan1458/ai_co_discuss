@@ -34,7 +34,7 @@ from .free_room import convert_suggestion, message_suggestions, save_suggestions
 from .free_room import adopt_recommendation, recommend_member, register_member, require_member
 from .private_chat import chat_action, member_chat
 from .free_room import describe_members, execution_notes, label_members, set_host_checkin, withdraw_dispatch, member_descriptions, member_display_names, member_labels, reorder_speakers, resolve_member_fields, set_chain_rounds, speaking_order, stop_room, stop_room_work
-from .free_room import (ADAPTER_VALUE, ANCHOR_SQL, continue_chain, execution_timeline, group_route_plan, retract_message, rewind_plan, rewind_room,
+from .free_room import (ADAPTER_VALUE, ANCHOR_SQL, DISPATCHED_AFTER_SQL, continue_chain, execution_timeline, group_route_plan, retract_message, rewind_plan, rewind_room,
                         room_event_log, withdrawals)
 from .free_room import review_capability, review_roster, checked_review_plan, save_review_plan, check_review_retry
 from .free_room import review_ready, advance_review, late_answer
@@ -176,14 +176,14 @@ MESSAGE_QUERY = """SELECT messages.*, COALESCE(details.kind,'opinion') AS kind,
 COALESCE(details.submitted_by, CASE WHEN messages.source IN ('cli','api','url','user')
 THEN messages.author ELSE '用户' END) AS submitted_by,
 COALESCE(summaries.text,'') AS summary, COALESCE(summaries.author,'') AS summary_by, timing.elapsed_seconds,
-answered.execution_id, answered.request_message_id, answered.anchor_message_id, COALESCE(withdrawn.kind,'') AS withdrawn,
+answered.execution_id, answered.request_message_id, answered.anchor_message_id, answered.dispatched_after, COALESCE(withdrawn.kind,'') AS withdrawn,
 EXISTS(SELECT 1 FROM proactive_messages p WHERE p.message_id=messages.id) AS proactive
 FROM messages LEFT JOIN message_details AS details ON details.message_id=messages.id
 LEFT JOIN message_withdrawals AS withdrawn ON withdrawn.message_id=messages.id
 LEFT JOIN message_summaries AS summaries ON summaries.message_id=messages.id
 LEFT JOIN message_timings AS timing ON timing.message_id=messages.id
 LEFT JOIN (SELECT r.answer_id, MIN(r.execution_id) AS execution_id, MIN(r.message_id) AS request_message_id,
-  MIN(""" + ANCHOR_SQL + """) AS anchor_message_id
+  MIN(""" + ANCHOR_SQL + """) AS anchor_message_id, MIN(""" + DISPATCHED_AFTER_SQL + """) AS dispatched_after
   FROM member_requests r WHERE r.answer_id IS NOT NULL AND r.execution_id IS NOT NULL GROUP BY r.answer_id) AS answered
   ON answered.answer_id=messages.id"""
 # Messages the owner took back leave AI reads; the page asks for them with withdrawn=include to keep them in place.
@@ -270,8 +270,9 @@ def _hide_execution_after_boundary(execution, boundary):
     if hidden_request:
         execution["request_message_id"] = None
         execution["result"] = ""
-    if isinstance(execution.get("anchor_message_id"), int) and execution["anchor_message_id"] > boundary:
-        execution["anchor_message_id"] = None
+    for field in ("anchor_message_id", "dispatched_after"):
+        if isinstance(execution.get(field), int) and execution[field] > boundary:
+            execution[field] = None
     for request in execution.get("requests", []):
         _hide_after_boundary(request, boundary, ("message_id", "answer_id", "source_message_id", "after_message_id"))
         if request.get("discussion_session_id") and request.get("source_question"):

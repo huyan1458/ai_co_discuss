@@ -1925,6 +1925,7 @@ async function free_fixture(t) {
         if (state.stop_failure === 'after') { response.destroy(); return; }
       }
       if (body?.action === 'renew') state.renewed = body;
+      if (body?.action === 'resume') execution.paused_at = 0;
       if (body?.action === 'retry_wait') execution.retry = { attempt: body.attempt, retry_at: body.retry_at, reason: body.reason, stopped: 0 };
       if (body?.action === 'retry_start') execution.retry.retry_at = 0;
       if (body?.action === 'segments') { (state.segments ||= []).push(body.segments); if (body.notes) (state.notes ||= []).push(body.notes); }
@@ -2600,6 +2601,39 @@ test('free room configurations require a member credential for every participant
     participants: { Claude: { adapter: 'claude', executable: process.execPath } } };
   assert.throws(() => validate_config(config, directory), /成员凭证/);
   assert.equal(validate_config({ ...config, members: { Claude: { token: 'member-credential'.repeat(3) } } }, directory).mode, 'free');
+});
+
+test('a paused free execution stops its turn, waits, and resumes the same execution in its session with the owner words', async t => {
+  const { state, store, config } = await free_fixture(t);
+  const tasks = [];
+  const runner = new FreeRoomRunner(config, store, async (adapter, binding, task) => {
+    const child = Object.assign(new EventEmitter(), { killed: false, kill() { this.killed = true; this.emit('close'); } });
+    tasks.push({ task, child, session: binding.session_id });
+    task.on_process(child);
+    return { status: 'accepted', session_id: 'session-1' };
+  });
+  await runner.tick();
+  state.executions[0].paused_at = 1;
+  await runner.tick();
+  assert.equal(tasks[0].child.killed, true, 'a pause stops the software turn');
+  tasks[0].task.on_failure('Claude 退出码 null');
+  tasks[0].task.on_exit();
+  await runner.tick();
+  assert.equal(state.executions[0].status, 'dispatched', 'the stopped turn does not end the execution');
+  assert.equal(tasks.length, 1, 'it waits for the owner words');
+  state.executions[0].interjections = [{ id: 5, text: '改用第三人称' }];
+  await runner.tick();
+  assert.equal(tasks.length, 2);
+  assert.equal(tasks[1].session, 'session-1', 'the same session goes on');
+  assert.match(tasks[1].task.prompt, /执行 #1[\s\S]*改用第三人称/);
+  assert.equal(state.executions[0].paused_at, 0);
+  assert.ok(state.calls.includes('POST /executions/1 interjection'));
+  // The stopped turn reporting late cannot fail the resumed one.
+  tasks[0].task.on_failure('late');
+  tasks[0].task.on_exit();
+  await runner.tick();
+  assert.equal(state.executions[0].status, 'dispatched');
+  assert.ok(!state.calls.includes('POST /executions/1 fail'));
 });
 
 test('a stopped free process reporting late cannot fail the next execution', async t => {

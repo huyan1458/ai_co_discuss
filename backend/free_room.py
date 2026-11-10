@@ -51,6 +51,10 @@ ROOM_EVENT_PAGE = 500
 # and answer sit under that answer; later messages (the user asking something meanwhile) then stay above it.
 ANCHOR_SQL = """CASE WHEN r.purpose='handoff' THEN COALESCE((SELECT MAX(a.answer_id) FROM member_requests a
     WHERE a.room_id=r.room_id AND a.batch_id=r.message_id AND a.purpose<>'handoff'), r.message_id) ELSE r.message_id END"""
+# The room's latest message when a request (aliased `r`) was made. A relay step dispatched from an answer that sits in an
+# older message's slot, after the user posted meanwhile, goes under the latest top-level message rather than back up there.
+DISPATCHED_AFTER_SQL = """(SELECT MAX(m.id) FROM messages m WHERE m.room_id=r.room_id AND m.id>=r.message_id
+    AND m.id<=COALESCE(r.answer_id,m.id) AND CAST(strftime('%s',m.created_at) AS INTEGER)<=r.created_at)"""
 # Rounds used and the owner's additions in the room's recent chains, for "第 2/3 轮"; parameter: the room.
 # A round is a host dispatch (a batch) or a continue the host asked for (`free_host_wakes` with a `continue:` key); a
 # relay's later steps in the same pass (`free_relay_steps`) ride on its first, so a whole pass is one round.
@@ -143,7 +147,7 @@ SESSION_MODES = ("new", "borrowed")
 FREE_OPERATIONS = ("messages", "attachments", "move", "folder", "rename", "archive", "restore", "delete")
 MEMBER_FIELDS = ("id", "name", "adapter", "role", "status", "access", "session_mode", "read_until")
 EXECUTION_FIELDS = ("id", "member_id", "status", "session_id", "lease_until", "created_at", "finished_at", "result",
-                    "activity", "activity_at")
+                    "activity", "activity_at", "paused_at")
 # What the runner found when a voided execution's software was to stop; '' until it reports.
 STOP_RESULTS = ("stopped", "unstoppable", "unconfirmed")
 # How long a member voided where the runner could not stop it gets no new delivery unless its late answer shows the turn ended.
@@ -154,24 +158,28 @@ REWIND_EFFECTS = ("cut", "fresh", "kept")
 CAPABILITY_COLUMNS = """(SELECT stoppable FROM execution_capabilities c WHERE c.execution_id=e.id) AS stoppable,
     (SELECT progress FROM execution_capabilities c WHERE c.execution_id=e.id) AS progress,
     (SELECT stop_result FROM execution_capabilities c WHERE c.execution_id=e.id) AS stop_result,
-    (SELECT steer FROM execution_capabilities c WHERE c.execution_id=e.id) AS steer"""
+    (SELECT steer FROM execution_capabilities c WHERE c.execution_id=e.id) AS steer,
+    (SELECT resume FROM execution_capabilities c WHERE c.execution_id=e.id) AS resume"""
 
 
 def reported_capabilities(row):
-    """`{stoppable, progress, steer}` as the runner reported them for one execution, or None before it did (or an older runner).
-    `steer`: the owner can add an interjection the running software takes without ending its turn."""
+    """`{stoppable, progress, steer, resume}` as the runner reported them for one execution, or None before it did (or an older runner).
+    `steer`: the owner can add an interjection the running software takes without ending its turn. `resume`: the runner
+    can stop the software's turn and continue the same session, so the owner may pause the execution without ending it."""
     if row["stoppable"] is None:
         return None
-    return {"stoppable": bool(row["stoppable"]), "progress": bool(row["progress"]), "steer": bool(row["steer"])}
+    return {"stoppable": bool(row["stoppable"]), "progress": bool(row["progress"]), "steer": bool(row["steer"]),
+            "resume": bool(row["resume"])}
 # Columns added after the first free-room tables; Python databases created by that build gain them here.
 LATER_COLUMNS = {"room_members": {"access": "TEXT NOT NULL DEFAULT 'runner'", "session_mode": "TEXT NOT NULL DEFAULT 'new'"},
                  "member_executions": {"changes": "TEXT NOT NULL DEFAULT ''", "edited": "TEXT NOT NULL DEFAULT ''", "cwd": "TEXT NOT NULL DEFAULT ''",
-                                       "activity": "TEXT NOT NULL DEFAULT ''", "activity_at": "INTEGER NOT NULL DEFAULT 0"},
+                                       "activity": "TEXT NOT NULL DEFAULT ''", "activity_at": "INTEGER NOT NULL DEFAULT 0",
+                                       "paused_at": "INTEGER NOT NULL DEFAULT 0"},
                  "member_requests": {"chain_id": "INTEGER NOT NULL DEFAULT 0", "batch_id": "INTEGER NOT NULL DEFAULT 0",
                                      "purpose": "TEXT NOT NULL DEFAULT 'ask'", "created_by": "TEXT NOT NULL DEFAULT 'user'"},
                  "free_chain_holds": {"asked_rounds": "INTEGER NOT NULL DEFAULT 0", "asked_reason": "TEXT NOT NULL DEFAULT ''"},
                  "free_sequences": {"gates": "TEXT NOT NULL DEFAULT '[]'"},
-                 "execution_capabilities": {"steer": "INTEGER"}}
+                 "execution_capabilities": {"steer": "INTEGER", "resume": "INTEGER"}}
 
 
 def migrate_free_tables(connection):
@@ -742,6 +750,7 @@ def recent_executions(connection, room_id):
         (SELECT MAX(answer_id) FROM member_requests WHERE execution_id=e.id) AS answer_id,
         (SELECT MIN(message_id) FROM member_requests WHERE execution_id=e.id) AS request_message_id,
         (SELECT MIN({ANCHOR_SQL}) FROM member_requests r WHERE r.execution_id=e.id) AS anchor_message_id,
+        (SELECT MIN({DISPATCHED_AFTER_SQL}) FROM member_requests r WHERE r.execution_id=e.id) AS dispatched_after,
         (SELECT COUNT(*) FROM execution_notes WHERE execution_id=e.id) AS note_count,
         (SELECT denials FROM execution_denials WHERE execution_id=e.id) AS denials,{CAPABILITY_COLUMNS},
         (SELECT json_object('created_at',created_at) FROM late_answers WHERE execution_id=e.id) AS late_answer
@@ -754,7 +763,7 @@ def recent_executions(connection, room_id):
         executions.append({**public_execution(row), "member": row["member"], "cwd": row["cwd"], "changes": json.loads(row["changes"] or "[]"),
             "changes_recorded": bool(row["changes"]), "request_ids": json.loads(row["request_ids"]),
             "answer_id": row["answer_id"], "request_message_id": row["request_message_id"],
-            "anchor_message_id": row["anchor_message_id"], "requests": requests,
+            "anchor_message_id": row["anchor_message_id"], "dispatched_after": row["dispatched_after"], "requests": requests,
             "notes": row["note_count"], "denials": json.loads(row["denials"] or "[]"),
             "capabilities": reported_capabilities(row), "stop_result": row["stop_result"] or "",
             "late_answer": json.loads(row["late_answer"]) if row["late_answer"] else None,
@@ -2551,13 +2560,16 @@ def add_interjection(connection, room_id, row, payload, now):
         if earlier["execution_id"] != row["id"] or earlier["text"] != text:
             raise FileExistsError("submission_id 已用于另一条插话")
         return public_interjection(earlier, row["status"])
-    capability = connection.execute("SELECT steer FROM execution_capabilities WHERE execution_id=?", (row["id"],)).fetchone()
-    if not capability or not capability["steer"]:
+    capability = connection.execute("SELECT steer,resume FROM execution_capabilities WHERE execution_id=?", (row["id"],)).fetchone()
+    if not capability or not (capability["steer"] or capability["resume"]):
         raise FileExistsError("这位成员的软件不支持执行中插话，可停止后带上这句话重问")
     if connection.execute("SELECT COUNT(*) FROM execution_interjections WHERE execution_id=?", (row["id"],)).fetchone()[0] >= MAX_INTERJECTIONS:
         raise FileExistsError(f"一次执行最多插话 {MAX_INTERJECTIONS} 条")
     cursor = connection.execute("""INSERT INTO execution_interjections (execution_id,room_id,submission_id,text,created_at,updated_at)
         VALUES (?,?,?,?,?,?)""", (row["id"], room_id, submission_id, text, now, now))
+    # Software that cannot take it mid-turn hears it by a pause: the runner stops the turn and resumes with it.
+    if not capability["steer"] and not row["paused_at"]:
+        connection.execute("UPDATE member_executions SET paused_at=? WHERE id=?", (now, row["id"]))
     return public_interjection(connection.execute("SELECT * FROM execution_interjections WHERE id=?", (cursor.lastrowid,)).fetchone(), row["status"])
 
 
@@ -2639,12 +2651,13 @@ def execution_action(connection, room_id, execution_id, token, payload):
         # What this delivery can do, as the runner's adapter reported; a retried delivery may differ, so the latest counts.
         if type(payload.get("stoppable")) is not bool or type(payload.get("progress")) is not bool:
             raise ValueError("delivery 须带布尔值 stoppable 与 progress")
-        # Older runners report no `steer`; their deliveries take no interjection.
-        if type(payload.get("steer", False)) is not bool:
-            raise ValueError("delivery 的 steer 须为布尔值")
-        connection.execute("""INSERT INTO execution_capabilities (execution_id,room_id,stoppable,progress,steer) VALUES (?,?,?,?,?)
-            ON CONFLICT(execution_id) DO UPDATE SET stoppable=excluded.stoppable,progress=excluded.progress,steer=excluded.steer""",
-                           (execution_id, room_id, int(payload["stoppable"]), int(payload["progress"]), int(payload.get("steer", False))))
+        # Older runners report no `steer` or `resume`; their deliveries take no interjection and no pause.
+        if type(payload.get("steer", False)) is not bool or type(payload.get("resume", False)) is not bool:
+            raise ValueError("delivery 的 steer 与 resume 须为布尔值")
+        connection.execute("""INSERT INTO execution_capabilities (execution_id,room_id,stoppable,progress,steer,resume) VALUES (?,?,?,?,?,?)
+            ON CONFLICT(execution_id) DO UPDATE SET stoppable=excluded.stoppable,progress=excluded.progress,steer=excluded.steer,
+            resume=excluded.resume""", (execution_id, room_id, int(payload["stoppable"]), int(payload["progress"]),
+                                        int(payload.get("steer", False)), int(payload.get("resume", False))))
     elif action == "interjection":
         # The runner's report on one interjection: it reached the software, or why it could not; a repeated report changes nothing.
         record_interjection_result(connection, room_id, execution_id, payload, now)
@@ -2663,6 +2676,17 @@ def execution_action(connection, room_id, execution_id, token, payload):
                            (now + LEASE_SECONDS, activity, activity_at, execution_id))
         connection.executemany("INSERT OR IGNORE INTO execution_notes (execution_id,seq,room_id,text,created_at) VALUES (?,?,?,?,?)",
                                [(execution_id, note["seq"], room_id, note["text"], now) for note in notes])
+    elif action == "pause":
+        # The owner's pause from the private chat: the runner stops the software's turn, the execution stays live and
+        # resumes in the same session with the owner's next line. Ending the turn is the member's interrupt instead.
+        capability = connection.execute("SELECT resume FROM execution_capabilities WHERE execution_id=?", (execution_id,)).fetchone()
+        if not capability or not capability["resume"]:
+            raise FileExistsError("这位成员的接入方式不能暂停后接着做；要结束这次执行请用停止")
+        if not row["paused_at"]:
+            connection.execute("UPDATE member_executions SET paused_at=? WHERE id=?", (now, execution_id))
+    elif action == "resume":
+        # The runner resumed the paused turn in the same session.
+        connection.execute("UPDATE member_executions SET paused_at=0 WHERE id=?", (execution_id,))
     elif action == "interject":
         interjection = add_interjection(connection, room_id, row, payload, now)
         detail = execution_detail(connection, connection.execute("SELECT * FROM member_executions WHERE id=?", (execution_id,)).fetchone())

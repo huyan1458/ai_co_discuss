@@ -174,6 +174,31 @@ class SingleMemberTests(FreeRoomTests):
         self.assertEqual(interject("太晚了", "i-3")[0], 409, "an ended execution takes no interjection")
         self.assertEqual(second["status"], "pending")
 
+    def test_pause_keeps_a_resumable_execution_live_and_an_interjection_pauses_one_that_cannot_steer(self):
+        """Only a resumable delivery pauses; the execution stays live, takes the owner's line and is resumed by the runner."""
+        self.say("开始", to=["Claude"])
+        execution = self.reserve()[1]
+        url = f"{self.path}/executions/{execution['id']}"
+        pause = lambda token=None: self.request(url, {"action": "pause"}, token or self.owner)
+        self.request(url, {"action": "delivery", "stoppable": True, "progress": True}, self.owner)
+        self.assertEqual(pause()[0], 409, "a delivery that cannot resume is not paused")
+        self.request(url, {"action": "delivery", "stoppable": True, "progress": True, "resume": True}, self.owner)
+        self.assertEqual(pause(self.member)[0], 403)
+        self.assertEqual(pause()[0], 200)
+        inbox = lambda: self.request(self.path + "/inbox", token=self.owner)[1]["executions"][0]
+        self.assertGreater(inbox()["paused_at"], 0)
+        self.assertEqual(inbox()["status"], execution["status"], "a pause does not end the execution")
+        member_id = self.request(self.path)[1]["free"]["members"][0]["id"]
+        joined = self.request(f"{self.path}/members/{member_id}/chat", {"text": "改用第三人称", "submission_id": "p-1"}, self.owner)[1]
+        self.assertEqual((joined["status"], joined["execution_id"]), ("interjected", execution["id"]))
+        self.assertEqual([item["text"] for item in inbox()["interjections"]], ["改用第三人称"])
+        self.assertEqual(self.request(url, {"action": "resume"}, self.owner)[0], 200)
+        self.assertEqual(inbox()["paused_at"], 0)
+        # Software that cannot take an interjection mid-turn hears it by a pause.
+        self.request(url, {"action": "interject", "text": "再短一点", "submission_id": "p-2"}, self.owner)
+        self.assertGreater(inbox()["paused_at"], 0)
+        self.assertEqual(self.answer(execution["id"])[0], 201)
+
     def test_private_chat_waits_for_an_idle_member_or_joins_its_running_execution(self):
         """Only the owner chats; an idle member's line waits for the runner, a steerable running execution takes it as an interjection."""
         member_id = self.request(self.path)[1]["free"]["members"][0]["id"]

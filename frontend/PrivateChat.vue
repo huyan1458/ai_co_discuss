@@ -5,8 +5,9 @@
  * lines (a long one folds to `… +N 行`, opened by a click), all in one flowing stream with no per-answer folding. The
  * owner's lines and replies are kept by the website (owner only); the room tasks the same session ran come from the
  * room; each turn's steps are read from this computer's own log. Keys follow a local CLI: Enter sends, Shift+Enter breaks
- * the line, ↑/↓ recall earlier lines, Esc interrupts. On phones and tablets, as in the message composer, the return key
- * breaks the line and the send and stop buttons do the rest. A line sent while the member works goes into that turn as an
+ * the line, ↑/↓ recall earlier lines, Esc pauses a room task (its turn goes on with the next line) or stops a chat
+ * line. On phones and tablets, as in the message composer, the return key breaks the line and the send and stop
+ * buttons do the rest. A line sent while the member works goes into that turn as an
  * interjection; otherwise it runs as the next turn of the member's session.
  */
 import { computed, inject, nextTick, onBeforeUnmount, onMounted, ref, watch } from "vue";
@@ -40,7 +41,7 @@ const SCROLL_IDLE_MS = 200;
 // Space left above a turn opened from a message card, and how long it stays marked.
 const JUMP_GAP_PX = 12;
 const TARGET_MS = 2000;
-// Each member's lines, steps and scroll place, kept while the page is open so switching back does not start over.
+// Each member's lines and steps, kept while the page is open so switching back shows them at once (at the bottom).
 const SESSIONS = new Map();
 
 const room = computed(() => view.value.room);
@@ -120,14 +121,19 @@ const snapshot = () => items.value.map((item) => ({ ...item, prompt: prompt_of(i
 watch(() => [items.value, view.value.messages], () => when_still(() => { shown_items.value = snapshot(); }), { immediate: true });
 const running = (item) => item.chat ? item.chat.status === "running" : ACTIVE.includes(item.execution.status);
 const running_item = computed(() => [...items.value].reverse().find((item) => running(item) || item.chat?.status === "pending") || null);
+// A room task the owner paused here: its software stopped, the task itself goes on with the owner's next line.
+const paused = computed(() => Boolean(running_item.value?.execution?.paused_at));
+// Esc pauses a room task (its turn in the room goes on) and stops a private chat line.
+const stop_label = computed(() => running_item.value?.execution ? "暂停" : "打断");
 const status_line = computed(() => {
   const item = running_item.value;
   if (!item) return `${bridge.display_name(name.value)} · 空闲`;
   if (item.chat?.status === "pending") return `等 ${bridge.display_name(name.value)} 空闲后处理${ENTER_SENDS ? "（esc 撤回）" : ""}`;
+  if (paused.value) return "已暂停，发一句补充后它接着做这次任务";
   const started = item.chat ? item.chat.updated_at : item.execution.created_at;
   const phase = item.execution && member.value?.execution?.id === item.execution.id && member.value.execution.activity
     ? `${PHASE_LABELS[member.value.execution.activity] || "处理"}中` : "处理中";
-  return `${phase}…（${elapsed(now.value - started)}${ENTER_SENDS ? " · esc 打断" : ""}）`;
+  return `${phase}…（${elapsed(now.value - started)}${ENTER_SENDS ? ` · esc ${stop_label.value}` : ""}）`;
 });
 
 /** `m:ss` or `h:mm:ss`. */
@@ -222,7 +228,7 @@ watch(() => `${room.value?.id}\n${name.value}`, (key) => {
   const saved = SESSIONS.get(key);
   chats.value = saved?.chats || []; details.value = saved?.details || new Map(); errors.value = new Map();
   open_output.value = saved?.open_output || new Set(); anchor = null; anchor_lines = null; unread.value = false; settled = Boolean(saved); waiting.clear(); shown_items.value = snapshot();
-  restore_scroll(saved?.scroll);
+  to_bottom();
   refresh();
 }, { immediate: true });
 const clock = setInterval(() => { now.value = Date.now() / 1000; }, 1000);
@@ -403,22 +409,10 @@ function to_bottom() {
   away.value = false;
   nextTick(() => { if (screen.value) screen.value.scrollTop = screen.value.scrollHeight; });
 }
-/** Put the screen back where the reader left this member: at the bottom, or at the same place further up. */
-function restore_scroll(top) {
-  if (top == null) return to_bottom();
-  stick = false;
-  nextTick(() => {
-    if (!screen.value) return;
-    screen.value.scrollTop = top;
-    update_away();
-    remember_anchor();
-  });
-}
-/** Keep this member's lines, steps and place, so coming back to it (or to this page) shows them at once. */
+/** Keep this member's lines and steps, so coming back to it (or to this page) shows them at once. */
 function save_session() {
   if (!session_key) return;
-  SESSIONS.set(session_key, { chats: chats.value, details: details.value, open_output: open_output.value,
-    scroll: stick || !screen.value ? null : screen.value.scrollTop });
+  SESSIONS.set(session_key, { chats: chats.value, details: details.value, open_output: open_output.value });
 }
 /** Open the turn a message card asked for ("查看这次执行的过程") at the top of the screen, marked for a moment. */
 function jump_to_execution() {
@@ -475,15 +469,22 @@ function on_enter(event) {
   event.preventDefault();
   send();
 }
-/** Esc stops what is running: a chat line, or the room task the member works on. */
+/**
+ * Esc stops a private chat line, or pauses the room task the member works on: its software stops, but the task and
+ * its turn in the room go on with the owner's next line. Ending the task is the stop on its message card.
+ */
 async function interrupt() {
   const item = running_item.value;
-  if (!item) return;
+  if (!item || paused.value) return;
   try {
     if (item.chat) await bridge.stop_member_chat(room.value.id, item.chat.id);
-    else await act("change_member", { member_id: member.value.id, name: name.value, action: "interrupt" });
+    else if (!item.execution.capabilities?.resume) throw new Error("这位成员的接入方式不能暂停后接着做；要结束这次任务请用消息卡片上的停止");
+    else {
+      await bridge.pause_execution(room.value.id, item.execution.id);
+      await act("refresh");
+    }
     await refresh();
-  } catch (failure) { error.value = failure.message || "未能打断"; }
+  } catch (failure) { error.value = failure.message || `未能${stop_label.value}`; }
 }
 /** ↑/↓ walk earlier lines when the caret is on the first or last line, as a shell does. */
 function recall(event, step) {
@@ -550,22 +551,22 @@ function recall(event, step) {
     </div>
     <button v-if="unread || away" type="button" class="term-unread" @click="to_bottom">{{ unread ? "↓ 新输出" : "↓ 回到底部" }}</button>
     </div>
-    <div class="term-status" :class="{ 'is-running': running_item }" role="status">
-      <span v-if="running_item" class="term-spin">{{ SPINNER[frame] }}</span><span>{{ status_line }}</span>
+    <div class="term-status" :class="{ 'is-running': running_item && !paused }" role="status">
+      <span v-if="running_item && !paused" class="term-spin">{{ SPINNER[frame] }}</span><span>{{ status_line }}</span>
     </div>
     <div class="term-input">
       <span class="term-caret" aria-hidden="true">&gt;</span>
-      <textarea v-model="draft" rows="1" :enterkeyhint="ENTER_SENDS ? 'send' : 'enter'" :disabled="Boolean(unsupported) || sending" :placeholder="unsupported ? '暂不可用' : running_item ? '插话引导它…' : '输入消息…'"
+      <textarea v-model="draft" rows="1" :enterkeyhint="ENTER_SENDS ? 'send' : 'enter'" :disabled="Boolean(unsupported) || sending" :placeholder="unsupported ? '暂不可用' : paused ? '补充后它接着做…' : running_item ? '插话引导它…' : '输入消息…'"
         aria-label="私聊输入" maxlength="4000" @keydown.enter.exact="on_enter" @keydown.esc.prevent="interrupt"
         @keydown.up="recall($event, -1)" @keydown.down="recall($event, 1)" />
       <!-- Touch keyboards have no Esc and often no Enter that sends, so both keys also have buttons. -->
-      <button v-if="running_item" type="button" class="term-button is-stop" aria-label="打断" title="打断（Esc）" @click="interrupt"><span class="term-stop-square" /></button>
+      <button v-if="running_item && !paused" type="button" class="term-button is-stop" :aria-label="stop_label" :title="`${stop_label}（Esc）`" @click="interrupt"><span class="term-stop-square" /></button>
       <button type="button" class="term-button" aria-label="发送" :title="ENTER_SENDS ? '发送（Enter）' : '发送'" :disabled="!draft.trim() || sending || Boolean(unsupported)" @click="send">↑</button>
     </div>
     <div class="term-hint">
       <span v-if="error" class="term-warn">{{ error }}</span>
       <span v-else-if="unsupported" class="term-warn">{{ unsupported }}</span>
-      <span v-else-if="ENTER_SENDS">enter 发送 · shift+enter 换行 · ↑↓ 历史{{ running_item ? " · esc 打断" : "" }}</span>
+      <span v-else-if="ENTER_SENDS">enter 发送 · shift+enter 换行 · ↑↓ 历史{{ running_item && !paused ? ` · esc ${stop_label}` : "" }}</span>
     </div>
   </div>
 </template>

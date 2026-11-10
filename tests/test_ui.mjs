@@ -1591,7 +1591,7 @@ test("the execution timeline nests dispatched work, places phases after delivery
   assert.ok(axis.x((second + 40) * 1000) < axis.folds[0].from + 1e-9 && axis.x((second + 3600) * 1000) >= axis.folds[0].from + axis.folds[0].width - 1e-9);
   assert.equal(axis.x(axis.end), 1);
   const summary = timeline_summary(rows);
-  assert.deepEqual([summary.executions, summary.running, summary.tool_segments, summary.slowest.tool], [4, 2, 1, "Bash"]);
+  assert.deepEqual([summary.executions, summary.running, summary.slowest.tool], [4, 2, "Bash"]);
   assert.deepEqual([format_duration(820), format_duration(6900), format_duration(185_000), format_duration(7_500_000)], ["820ms", "6.9s", "3m 05s", "2h 05m"]);
 });
 

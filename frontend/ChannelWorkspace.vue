@@ -131,9 +131,8 @@ const tabs = computed(() => [
   { value: "overview", label: "房间", icon: "i-lucide-sliders-horizontal" },
   { value: "files", label: "文件", icon: "i-lucide-files", title: project_directory.value || "" },
 ]);
-/** The sidebar's tools: the room's views, plus the workflow library. The library belongs to this computer, not a room, so
- * it is no room tab: it opens as a large panel over the page (`global`: with no room selected too). */
-const tool_links = computed(() => [...tabs.value.slice(0, -1), { value: "workflows", label: "工作流", icon: "i-lucide-network", global: true }, ...tabs.value.slice(-1)]);
+/** The workflow library belongs to this computer, not a room, so it is neither a room tab nor one of 频道工具: the sidebar
+ * has its own row for it, which opens it as a large panel over the page (with no room selected too). */
 const workflows_open = ref(false);
 const workflow_library = ref(null);
 /** Close the workflow panel, asking first when the open workflow has unsaved changes. */
@@ -176,11 +175,10 @@ function manage_room({ room, action }) { managed_room.value = room; nav_open.val
 function open_archives() { nav_open.value = false; modal.value = "archives"; }
 
 /** Switch the room view and close the mobile navigation. */
-function choose_tab(value) {
-  nav_open.value = false;
-  if (value === "workflows") workflows_open.value = true;
-  else act("tab", value);
-}
+function choose_tab(value) { nav_open.value = false; act("tab", value); }
+
+/** Open the workflow library panel and close the mobile navigation. */
+function open_workflows() { nav_open.value = false; workflows_open.value = true; }
 
 /** Select a shared room and close the mobile navigation. */
 async function choose_room(id) { nav_open.value = false; await act("room", id); }
@@ -322,7 +320,7 @@ function resize_nav_by_key(event) {
 
 <template>
   <div class="channel-shell" :class="{ 'channel-resizing': rail_drag || nav_drag, 'channel-nav-collapsed': !nav_docked, 'channel-has-rail': show_rail }" :style="layout_style">
-    <ChannelSidebar v-if="nav_docked" :tabs="tool_links" @select="choose_room" @manage="manage_room" @create="create_channel" @create-folder="create_folder" @manage-folder="edit_folder" @delete-folder="remove_folder" @archive-folder="archive_folder" @archives="open_archives" @tab="choose_tab" @settings="modal = 'settings'" />
+    <ChannelSidebar v-if="nav_docked" :tabs="tabs" @select="choose_room" @manage="manage_room" @create="create_channel" @create-folder="create_folder" @manage-folder="edit_folder" @delete-folder="remove_folder" @archive-folder="archive_folder" @archives="open_archives" @workflows="open_workflows" @tab="choose_tab" @settings="modal = 'settings'" />
     <div v-if="nav_docked" class="channel-nav-resizer" role="separator" tabindex="0" aria-label="调整房间栏宽度" aria-orientation="vertical" aria-controls="channel-sidebar" :aria-valuemin="NAV_MIN" :aria-valuemax="nav_max" :aria-valuenow="effective_nav_width" :aria-valuetext="`${effective_nav_width} 像素`" title="拖动调整房间栏宽度，也可使用方向键" @pointerdown="start_nav_resize" @pointermove="resize_nav" @pointerup="finish_nav_resize" @pointercancel="finish_nav_resize" @lostpointercapture="finish_nav_resize" @keydown="resize_nav_by_key"></div>
 
     <main class="channel-main">
@@ -430,7 +428,7 @@ function resize_nav_by_key(event) {
     </aside>
 
     <USlideover v-model:open="nav_open" side="left" title="房间导航" :ui="{ overlay: 'channel-drawer-overlay', content: 'channel-navigation-drawer' }">
-      <template #content><ChannelSidebar :tabs="tool_links" @select="choose_room" @manage="manage_room" @create="create_channel" @create-folder="create_folder" @manage-folder="edit_folder" @delete-folder="remove_folder" @archive-folder="archive_folder" @archives="open_archives" @tab="choose_tab" @settings="nav_open = false; modal = 'settings'" /></template>
+      <template #content><ChannelSidebar :tabs="tabs" @select="choose_room" @manage="manage_room" @create="create_channel" @create-folder="create_folder" @manage-folder="edit_folder" @delete-folder="remove_folder" @archive-folder="archive_folder" @archives="open_archives" @workflows="open_workflows" @tab="choose_tab" @settings="nav_open = false; modal = 'settings'" /></template>
     </USlideover>
     <USlideover v-if="room" v-model:open="info_open" side="right" title="讨论进度" :description="room.title" :ui="{ overlay: 'channel-drawer-overlay', content: 'progress-drawer', body: 'progress-drawer-body' }">
       <template #body><FreeBoard /></template>

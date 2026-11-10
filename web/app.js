@@ -3080,6 +3080,14 @@ function stop_member_chat(room_id, chat_id) {
 }
 
 /**
+ * Pause a member's running room execution from the private chat without ending it: the runner stops the software's
+ * turn and resumes the same execution in the same session with the owner's next line.
+ */
+function pause_execution(room_id, execution_id) {
+  return request_json(`/api/rooms/${room_id}/executions/${execution_id}`, { action: "pause" });
+}
+
+/**
  * Describe registered launch choices: the card's choice, else what the member's session last ran with, else what the software's settings select;
  * anything unknown is "默认".
  */
@@ -5015,7 +5023,7 @@ window.discuss_view = { snapshot: view_snapshot, write_field: write_view_field, 
   device: { request: device_request, pair: pair_this_device, take_scanned: take_scanned_pairing, invite: invite_device, renew: renew_this_device, forget: forget_pairing,
     label: device_label, prompt_confirm: () => state.device.prompt?.run(), prompt_cancel: () => state.device.prompt?.cancel() },
   request: request_json, rewind_plan, identities: IDENTITIES, display_name, mention_handles, mentioned_members, render_room_markdown, sources: SOURCE_LABELS,
-  set_member_access, set_member_model, allow_denials, set_member_adapter, reload_room_models, read_room_files, read_execution_details, interject_execution, read_member_chat, send_member_chat, stop_member_chat, limits_label, stop_reason_label, participant_model, participant_files, participant_session_hint, participant_access,
+  set_member_access, set_member_model, allow_denials, set_member_adapter, reload_room_models, read_room_files, read_execution_details, interject_execution, read_member_chat, send_member_chat, stop_member_chat, pause_execution, limits_label, stop_reason_label, participant_model, participant_files, participant_session_hint, participant_access,
   turn_label, turn_guidance, round_groups, limit_rounds, progress_speaker, brief_meta, max_message_length: MAX_MESSAGE_LENGTH, provenance: message_provenance, format_time };
 
 restore_theme();

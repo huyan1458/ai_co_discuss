@@ -269,6 +269,7 @@ export function use_read_aloud({ bridge, container, prepare = async () => {}, me
     current = sentence;
     const host = sentence?.ranges[0]?.startContainer.parentElement?.closest(hosts);
     if (!host) return;
+    if (watched !== host) { layout_watch?.disconnect(); layout_watch?.observe(host); watched = host; }
     const origin = host.getBoundingClientRect();
     layer = document.createElement("div");
     layer.className = "channel-reading-layer";
@@ -738,15 +739,24 @@ export function use_read_aloud({ bridge, container, prepare = async () => {}, me
     redraw();
   }
 
-  // Re-draw on resize: the boxes are fixed to where the text was laid out.
+  // Re-draw whenever the text may have been laid out again: the boxes are fixed to where it was. Switching pages or
+  // tabs hides and re-shows the text without a window resize, so also watch the text's own box and page visibility.
   const redraw = () => { if (current) highlight(current); };
+  const redraw_visible = () => { if (document.visibilityState === "visible") redraw(); };
+  let watched = null;
+  const layout_watch = typeof ResizeObserver === "function" ? new ResizeObserver(redraw) : null;
   window.addEventListener("resize", redraw);
+  window.addEventListener("pageshow", redraw);
+  document.addEventListener("visibilitychange", redraw_visible);
 
   /** Stop and leave the page's readers, for a reader whose view goes away. */
   function dispose() {
     stop_reading();
     readers.delete(api);
     window.removeEventListener("resize", redraw);
+    window.removeEventListener("pageshow", redraw);
+    document.removeEventListener("visibilitychange", redraw_visible);
+    layout_watch?.disconnect();
   }
 
   const api = { state, start, read_document, rebind_document, stop: stop_reading, halt: stop, dispose, drain, follow, toggle_pause, body_of, unlock, set_broadcast, announce };

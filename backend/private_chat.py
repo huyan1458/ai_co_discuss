@@ -2,7 +2,8 @@
 Private chat: the owner talks to one room member directly, in the member's own session, outside the room's messages.
 
 Each row of `private_chats` is one thing the owner said and the member's reply. While the member works on a room
-execution that takes interjections, a new line goes in as an interjection of that execution; otherwise it waits until
+execution that takes interjections (mid-turn, or by pausing and resuming its turn), a new line goes in as an
+interjection of that execution; otherwise it waits until
 the member is idle and the runner runs it as a turn of its own, taking the reply from the software's output. Only the
 owner reads or writes chats; the runner, which holds the owner credential, reports their progress.
 """
@@ -67,9 +68,11 @@ def member_chat(connection, room_id, member_id, token, payload=None):
             raise FileExistsError("submission_id 已用于另一句私聊")
         return public_chat(connection, earlier)
     now = int(time.time())
-    # A room execution that takes interjections hears it now; one that cannot waits, like a turn already running.
+    # A room execution that takes interjections (mid-turn, or by a pause and resume) hears it now; one that cannot
+    # waits, like a turn already running.
     execution = connection.execute("""SELECT e.* FROM member_executions e JOIN execution_capabilities c ON c.execution_id=e.id
-        WHERE e.member_id=? AND e.status IN ('dispatched','started') AND c.steer=1 ORDER BY e.id DESC LIMIT 1""", (member["id"],)).fetchone()
+        WHERE e.member_id=? AND e.status IN ('dispatched','started') AND (c.steer=1 OR c.resume=1) ORDER BY e.id DESC LIMIT 1""",
+                                   (member["id"],)).fetchone()
     status, execution_id = "pending", None
     if execution:
         add_interjection(connection, room_id, execution, {"text": text, "submission_id": INTERJECTION_PREFIX + submission_id}, now)

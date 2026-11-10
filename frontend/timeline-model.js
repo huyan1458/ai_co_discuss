@@ -5,7 +5,7 @@
  */
 
 export const PHASE_LABELS = { thinking: "思考", command: "命令", tool: "工具", editing: "编辑", writing: "撰写" };
-/** Bars are colored by member and shaded by kind, as in a trace: the model's own turns dark, its tool work light. */
+/** Bars are colored by kind of time: the model's own turns solid, its tool work light, waiting hatched. */
 export const PHASE_KINDS = { thinking: "model", writing: "model", command: "tool", tool: "tool", editing: "tool" };
 export const STATE_LABELS = { running: "进行中", done: "完成", failed: "失败", cancelled: "已撤销" };
 /** Idle stretches longer than this fold into a band; each band takes this share of the axis. */
@@ -56,37 +56,138 @@ export const STALL_MS = 3 * 60_000;
 /** Thinking reports nothing until it ends, so a silent thinking phase is called stuck only after this long. */
 export const THINKING_STALL_MS = 10 * 60_000;
 
+/** Pieces of one kind closer than this join into one block on the bar. */
+const BLOCK_JOIN_MS = 1000;
+export const KIND_LABELS = { model: "模型", tool: "工具" };
+
 /**
- * The line under a row's name, so the timeline reads without hovering: what a running execution last said (else its
- * phase), that it may be stuck, why it failed, or what it answered. `tone` is live, warn, failed, done or muted.
- * Output is known from the runner's last report, segment or note; with none (an App or manual member) nothing is
- * called stuck, since silence there says nothing.
+ * A row's phase segments as drawn: neighbouring segments of one kind (thinking then writing, command then edit) join
+ * into one block, so a bar reads as a few stretches of model and tool time rather than a row of slivers. Each block
+ * keeps its parts, and `seen` / `live` as the last part has them.
+ */
+export function bar_blocks(row) {
+  const blocks = [];
+  for (const segment of row.segments) {
+    const kind = PHASE_KINDS[segment.phase];
+    const last = blocks.at(-1);
+    if (last && last.kind === kind && segment.start - last.seen <= BLOCK_JOIN_MS) {
+      Object.assign(last, { seen: segment.seen, end: segment.end, live: segment.live });
+      last.parts.push(segment);
+    } else blocks.push({ kind, start: segment.start, seen: segment.seen, end: segment.end, live: segment.live, parts: [segment] });
+  }
+  return blocks;
+}
+
+/** A block's own name (its phase, when it is one phase throughout) and what its time went to, by phase and tool. */
+export function block_summary(block) {
+  const totals = new Map();
+  for (const part of block.parts) {
+    const key = `${PHASE_LABELS[part.phase]}${part.tool ? ` ${part.tool}` : ""}`;
+    totals.set(key, (totals.get(key) || 0) + Math.max(0, part.seen - part.start));
+  }
+  const phases = new Set(block.parts.map((part) => part.phase));
+  return {
+    label: phases.size === 1 ? PHASE_LABELS[block.parts[0].phase] : KIND_LABELS[block.kind],
+    text: [...totals].sort((a, b) => b[1] - a[1]).map(([key, ms]) => `${key} ${format_duration(ms)}`).join(" · "),
+  };
+}
+
+/** A wait (request to first sign of work) at least this long is marked on the bar and in the round's digest. */
+export const WAIT_WARN_MS = 2 * 60_000;
+
+/**
+ * Where one execution's time went: the wait from the request to the first sign of work (queue and wake), each phase's
+ * recorded time (a live phase's assumed tail is left out) and the work with no phase detail. `phases` is sorted longest
+ * first.
+ */
+export function row_breakdown(row) {
+  const work_start = row.work ? row.work[0] : row.end;
+  const totals = new Map();
+  for (const segment of row.segments) totals.set(segment.phase, (totals.get(segment.phase) || 0) + Math.max(0, segment.seen - segment.start));
+  return {
+    wait: Math.max(0, work_start - row.queue[0]),
+    work: row.work ? row.work[1] - row.work[0] : 0,
+    phases: [...totals].map(([phase, ms]) => ({ phase, ms })).sort((a, b) => b.ms - a.ms),
+  };
+}
+/**
+ * A row's time by kind, for a bar that shows proportions rather than order: waiting, the model's own turns, tool work,
+ * and the rest of the work that no phase report covers (no detail, or a live phase past its last output).
+ */
+export function row_mix(row) {
+  const { wait, work, phases } = row_breakdown(row);
+  const by_kind = (kind) => phases.filter((part) => PHASE_KINDS[part.phase] === kind).reduce((sum, part) => sum + part.ms, 0);
+  const model = by_kind("model");
+  const tool = by_kind("tool");
+  return { wait, model, tool, other: Math.max(0, work - model - tool) };
+}
+/** Phases shorter than this are left out of a row's line, and so is a shorter wait. */
+const LINE_MIN_MS = 1000;
+const LINE_MIN_WAIT_MS = 10_000;
+const LINE_PHASES = 3;
+
+/**
+ * The line under a row's name, about time rather than content (what was said lives on the message page): where a
+ * finished execution's time went, how long a running one has gone without output and whether it may be stuck, or why
+ * one failed. `tone` is live, warn, failed, done or muted. Output is known from the runner's last report, segment or
+ * note; with none (an App or manual member) nothing is called stuck, since silence there says nothing.
  */
 export function row_status(row, now_ms) {
   const { item } = row;
-  if (item.state === "failed") return { tone: "failed", text: item.reason || "执行失败" };
+  if (item.state === "failed") return { tone: "failed", text: `失败：${item.reason || "执行失败"}` };
   if (item.state === "cancelled") return { tone: "muted", text: "已撤销" };
   if (item.state === "done") {
-    const changes = item.changes ? ` · 改动 ${item.changes} 个文件` : "";
-    return { tone: "done", text: `${item.result || "已完成"}${changes}` };
+    const { wait, work, phases } = row_breakdown(row);
+    const parts = phases.filter((part) => part.ms >= LINE_MIN_MS).slice(0, LINE_PHASES).map((part) => `${PHASE_LABELS[part.phase]} ${format_duration(part.ms)}`);
+    if (!parts.length) parts.push(`执行 ${format_duration(work)}${row.segments.length ? "" : "（无阶段明细）"}`);
+    if (wait >= LINE_MIN_WAIT_MS) parts.push(`等待 ${format_duration(wait)}`);
+    return { tone: "done", text: parts.join(" · ") };
   }
-  if (!item.dispatched_at) return { tone: "muted", text: "排队中" };
+  if (!item.dispatched_at) return { tone: "muted", text: `排队中 · 已 ${format_duration(now_ms - row.queue[0])}` };
   const dispatched = item.dispatched_at * 1000;
   const last_segment = item.segments.at(-1);
   const last_output = Math.max(item.activity_at ? item.activity_at * 1000 : 0,
     last_segment ? dispatched + last_segment.end_ms : 0, ...(item.notes || []).map((at) => at * 1000));
-  const silent = last_output ? now_ms - last_output : 0;
+  if (!last_output) return { tone: "live", text: "处理中 · 这种接入方式不上报进度" };
+  const silent = Math.max(0, now_ms - last_output);
+  const phase = last_segment ? `${PHASE_LABELS[last_segment.phase]}${last_segment.tool ? ` ${last_segment.tool}` : ""}中` : "处理中";
   if (silent >= STALL_MS) {
     // A long command prints nothing while it runs; that is not a stall.
-    if (last_segment?.phase === "command") return { tone: "warn", text: `命令已运行 ${format_duration(silent)}` };
-    if (last_segment?.phase === "thinking" && silent < THINKING_STALL_MS) {
-      return { tone: "live", text: `思考中，已 ${format_duration(silent)} 无中间输出` };
-    }
-    return { tone: "warn", text: `已 ${format_duration(silent)} 无输出，可能卡住` };
+    if (last_segment?.phase === "command") return { tone: "warn", text: `${phase} · 命令已运行 ${format_duration(silent)}` };
+    if (last_segment?.phase === "thinking" && silent < THINKING_STALL_MS) return { tone: "live", text: `${phase} · 已 ${format_duration(silent)} 无中间输出` };
+    return { tone: "warn", text: `可能卡住 · 已 ${format_duration(silent)} 无输出` };
   }
-  if (item.last_note) return { tone: "live", text: item.last_note };
-  if (last_segment) return { tone: "live", text: `${PHASE_LABELS[last_segment.phase]}${last_segment.tool ? ` · ${last_segment.tool}` : ""}中` };
-  return { tone: "live", text: "处理中" };
+  return { tone: "live", text: `${phase} · 距上次输出 ${format_duration(silent)}` };
+}
+
+/**
+ * What a round's time came down to. The critical path is the dispatch chain that ends with the execution finishing
+ * last (a running one ends now): the round could not end sooner than it, so it is what a reader looks at to see why a
+ * round took as long as it did. `members` sums the path's work time per member, longest first; `wait` is the path's
+ * time between requests and the first sign of work.
+ */
+export function round_digest(rows, now_ms) {
+  if (!rows.length) return { total: 0, path: new Set(), members: [], wait: 0, running: [], failed: 0, stalled: 0 };
+  const by_key = new Map(rows.map((row) => [row.key, row]));
+  const last = rows.reduce((latest, row) => row.end > latest.end || (row.end === latest.end && row.item.state === "running") ? row : latest);
+  const path = new Set();
+  for (let row = last; row && !path.has(row.key); row = by_key.get(row.parent)) path.add(row.key);
+  const members = new Map();
+  let wait = 0;
+  for (const key of path) {
+    const row = by_key.get(key);
+    const breakdown = row_breakdown(row);
+    wait += breakdown.wait;
+    members.set(row.item.member, (members.get(row.item.member) || 0) + (row.end - row.start - breakdown.wait));
+  }
+  const running = rows.filter((row) => row.item.state === "running");
+  return {
+    total: Math.max(...rows.map((row) => row.end)) - Math.min(...rows.map((row) => row.start)),
+    path, wait, running,
+    members: [...members].map(([member, ms]) => ({ member, ms })).sort((a, b) => b.ms - a.ms),
+    failed: rows.filter((row) => row.item.state === "failed").length,
+    stalled: running.filter((row) => row_status(row, now_ms).tone === "warn").length,
+  };
 }
 
 /**
@@ -138,9 +239,12 @@ export function notes_between(notes, start, end) {
 }
 
 /**
- * Rows in time order with each free execution under the one that dispatched it; a parent outside the list makes a root.
- * A member continuing its own earlier execution, such as the host summing up a round it dispatched, sits beside that
- * execution rather than under it, so a long chain reads as rounds one after another instead of a deepening staircase.
+ * Rows in time order, at most two levels deep: each free execution under the one that dispatched it, or under that
+ * one's own top-level row when the dispatcher is itself nested; a parent outside the list makes a root. A member
+ * continuing its own earlier execution up its chain, as far back as the nearest top-level row, such as the host summing
+ * up a round after a relay of members, sits beside that execution rather than under it, so a long chain reads as rounds
+ * one after another instead of a deepening staircase. `dispatched_by` is the execution that dispatched the row (none
+ * when it continues itself), which the hand-off line starts from.
  */
 export function timeline_rows(timeline, now_ms) {
   const rows = timeline.executions.map((item) => ({
@@ -148,12 +252,36 @@ export function timeline_rows(timeline, now_ms) {
     truncated: item.segments.length >= timeline.segment_limit, ...execution_stages(item, now_ms),
   }));
   const by_key = new Map(rows.map((row) => [row.key, row]));
-  const placed_under = (row) => {
-    let parent = by_key.get(row.parent);
-    for (const seen = new Set([row.key]); parent?.item.member === row.item.member && !seen.has(parent.key); parent = by_key.get(parent.parent)) {
+  const ancestors_of = (row) => {
+    const list = [];
+    for (let parent = by_key.get(row.parent), seen = new Set([row.key]); parent && !seen.has(parent.key); parent = by_key.get(parent.parent)) {
       seen.add(parent.key);
+      list.push(parent);
     }
-    return parent && parent.key !== row.key && parent.item.member !== row.item.member ? parent.key : "";
+    return list;
+  };
+  const placement = new Map();
+  const placing = new Set();
+  // Where a row sits: "" (top level) or the key of a top-level row; a cycle leaves its rows to the fallback below.
+  const placed_under = (row) => {
+    if (placement.has(row.key)) return placement.get(row.key).under;
+    if (placing.has(row.key)) return "";
+    placing.add(row.key);
+    const ancestors = ancestors_of(row);
+    const dispatcher = ancestors[0];
+    // The round's top-level row closes the search, so a member is never placed back in an earlier round.
+    let earlier_self = null;
+    for (const ancestor of ancestors) {
+      if (ancestor.item.member === row.item.member) { earlier_self = ancestor; break; }
+      if (!placed_under(ancestor)) break;
+    }
+    let under = "";
+    if (earlier_self) under = placed_under(earlier_self);
+    else if (dispatcher) under = placed_under(dispatcher) || dispatcher.key;
+    if (under === row.key) under = "";
+    placing.delete(row.key);
+    placement.set(row.key, { under, dispatched_by: dispatcher && dispatcher.item.member !== row.item.member ? dispatcher.key : "" });
+    return under;
   };
   const children = new Map();
   for (const row of rows) {
@@ -167,13 +295,13 @@ export function timeline_rows(timeline, now_ms) {
     for (const row of (children.get(parent) || []).sort((a, b) => a.start - b.start || a.key.localeCompare(b.key))) {
       if (seen.has(row.key)) continue;
       seen.add(row.key);
-      ordered.push({ ...row, depth, ancestors, placed_parent: parent, has_children: Boolean(children.get(row.key)?.length) });
+      ordered.push({ ...row, depth, ancestors, placed_parent: parent, dispatched_by: placement.get(row.key)?.dispatched_by || "", has_children: Boolean(children.get(row.key)?.length) });
       visit(row.key, depth + 1, [...ancestors, row.key]);
     }
   };
   visit("", 0, []);
   // A cycle leaves its members unvisited; they still show, at the top level.
-  for (const row of rows) if (!seen.has(row.key)) ordered.push({ ...row, depth: 0, ancestors: [], placed_parent: "", has_children: false });
+  for (const row of rows) if (!seen.has(row.key)) ordered.push({ ...row, depth: 0, ancestors: [], placed_parent: "", dispatched_by: "", has_children: false });
   return ordered;
 }
 
@@ -217,7 +345,7 @@ export function timeline_runs(timeline, now_ms) {
 }
 
 /**
- * Hand-off lines, one per dispatched execution whose dispatcher is shown above it: from the dispatcher's bar at the
+ * Hand-off lines, one per dispatched execution whose dispatcher (`dispatched_by`) is shown above it: from the dispatcher's bar at the
  * moment of dispatch (the request's time) straight down to the dispatched row. Returns, per row key, the pieces that
  * row draws: `start` (a dot on the dispatcher's bar and the line leaving it), `through` (rows in between) and `end`
  * (the elbow into the dispatched bar), each at fraction `x` and named by the dispatched member.
@@ -227,7 +355,7 @@ export function handoff_lines(rows, axis) {
   const pieces = new Map();
   const add = (key, piece) => { if (!pieces.has(key)) pieces.set(key, []); pieces.get(key).push(piece); };
   rows.forEach((row, position) => {
-    const from = index.get(row.placed_parent);
+    const from = index.get(row.dispatched_by);
     if (from === undefined || from >= position) return;
     const x = axis.x(row.queue[0]);
     const member = row.item.member;
@@ -240,13 +368,13 @@ export function handoff_lines(rows, axis) {
 
 /**
  * Totals a live axis may show, so it rescales in round steps rather than every frame. Neighbours differ by at most
- * 1.25×, so crossing a step never drops work below LIVE_FILL / 1.25 (60%) of the width.
+ * 1.25×, so crossing a step never drops work below LIVE_FILL / 1.25 (68%) of the width.
  */
 const LIVE_TOTALS_MS = [5, 6, 7, 8, 10, 12, 15, 18, 20, 24, 30, 36, 45, 50, 60, 75, 90, 105, 120, 150, 180, 210, 240, 300, 360,
   420, 480, 600, 720, 900, 1080, 1200, 1500, 1800, 2100, 2400, 3000, 3600, 4500, 5400, 6300, 7200, 9000, 10800, 12600, 14400,
   18000, 21600, 25200, 28800, 36000, 43200, 54000, 64800, 72000, 86400].map((seconds) => seconds * 1000);
 /** While work runs, it fills at most this share of the axis; the rest is room for it to grow into. */
-const LIVE_FILL = 0.75;
+const LIVE_FILL = 0.85;
 
 /**
  * The axis: busy stretches keep their length and idle stretches longer than FOLD_GAP_MS fold into bands, so a room
@@ -353,8 +481,8 @@ export function pan_window(window, delta) {
   return { from: Math.min(1 - window.span, Math.max(0, window.from + delta * window.span)), span: window.span };
 }
 
-/** Counts for the summary and the step a reader should look at first: the longest recorded phase segment. */
-export function timeline_summary(rows, now_ms = Date.now()) {
+/** The step a reader should look at first: the longest recorded phase segment, and the counts the run picker needs. */
+export function timeline_summary(rows) {
   // Only recorded time counts: a live segment's assumed tail would make a stuck execution look like the slowest step.
   let slowest = null;
   for (const row of rows) {
@@ -365,10 +493,6 @@ export function timeline_summary(rows, now_ms = Date.now()) {
   return {
     executions: rows.length,
     running: rows.filter((row) => row.item.state === "running").length,
-    failed: rows.filter((row) => row.item.state === "failed").length,
-    stalled: rows.filter((row) => row.item.state === "running" && row_status(row, now_ms).tone === "warn").length,
-    // Consecutive calls of one tool merge into one segment, so this counts segments, not calls.
-    tool_segments: rows.reduce((sum, row) => sum + row.segments.filter((segment) => ["command", "tool", "editing"].includes(segment.phase)).length, 0),
     slowest,
   };
 }

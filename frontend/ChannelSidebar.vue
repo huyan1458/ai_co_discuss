@@ -4,16 +4,16 @@ import ChannelDirectory from "./ChannelDirectory.vue";
 
 /** The room sidebar, shared by the docked desktop column and the tablet and phone drawer. */
 const props = defineProps({ tabs: { type: Array, required: true } });
-const emit = defineEmits(["select", "manage", "create", "create-folder", "manage-folder", "delete-folder", "archive-folder", "archives", "tab", "settings"]);
+const emit = defineEmits(["select", "manage", "create", "create-folder", "manage-folder", "delete-folder", "archive-folder", "archives", "workflows", "tab", "settings"]);
 const { view, bridge, field } = inject("discussion");
 const author = field("author-select");
 const tools_open = ref(true);
 const app_version = __APP_VERSION__;
 // The open tab, or null without a room: the links (and the menu) rebuild only when it changes, not on every view publish.
 const link_state = computed(() => view.value.room ? view.value.tab : null);
-// A `global` page (the workflow library) needs no room; the others wait for one.
+// The room's views wait for a room.
 const view_links = computed(() => { const tab = link_state.value; return props.tabs.map((item) => {
-  const usable = tab !== null || item.global;
+  const usable = tab !== null;
   return { ...item, active: usable && view.value.tab === item.value, disabled: !usable || item.disabled, onSelect: () => emit("tab", item.value) };
 }); });
 /** The footer's second line: the account call to action until signed in, then the site connection. */
@@ -37,6 +37,8 @@ const account_status = computed(() => {
     </header>
     <div v-keep-reading class="channel-sidebar-content">
       <ChannelDirectory @select="emit('select', $event)" @manage="emit('manage', $event)" @create="emit('create', $event)" @create-folder="emit('create-folder')" @manage-folder="emit('manage-folder', $event)" @delete-folder="emit('delete-folder', $event)" @archive-folder="emit('archive-folder', $event)" @archives="emit('archives')" />
+      <!-- The workflow library belongs to this computer, not a room: its own row, so 频道工具 stays the room's views (the same list as a phone's top tabs). -->
+      <UButton icon="i-lucide-network" label="工作流" color="neutral" variant="ghost" class="channel-archive-toggle channel-workflows-toggle" aria-haspopup="dialog" @click="emit('workflows')" />
       <div class="channel-directory-heading channel-tools-heading"><button type="button" class="channel-section-toggle" :aria-expanded="tools_open" @click="tools_open = !tools_open"><UIcon :name="tools_open ? 'i-lucide-chevron-down' : 'i-lucide-chevron-right'" />频道工具</button></div>
       <UNavigationMenu v-if="tools_open" :items="view_links" orientation="vertical" color="neutral" variant="pill" class="channel-directory channel-view-links" aria-label="房间视图" :ui="{ link: 'channel-link', linkLabel: 'channel-link-label', linkLeadingIcon: 'channel-link-icon' }" />
     </div>

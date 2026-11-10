@@ -363,9 +363,11 @@ onBeforeUnmount(() => { document.removeEventListener("pointerdown", close_on_out
             <span class="expert-card-names">
               <span v-if="manual"><strong>{{ bridge.display_name(name) }}（手动）<span v-if="bridge.display_name(name) !== name" class="member-id">{{ name }}</span></strong><span v-if="host && !hostable" class="expert-card-badge">主持</span></span>
               <span v-else><strong>{{ member_label }}<span v-if="member_label !== name" class="member-id">{{ name }}</span></strong><span v-if="host && !hostable" class="expert-card-badge">主持</span></span>
-              <small v-if="description" :title="description">{{ description }}</small>
+              <small v-if="description && !preset" :title="description">{{ description }}</small>
             </span>
           </span>
+          <!-- A workflow card (preset) is read for what it does, so its description fills the middle of the front. -->
+          <p v-if="preset" class="expert-card-summary" :class="{ 'is-empty': !description }" :title="description">{{ description || '还没有描述' }}</p>
           <dl class="expert-card-facts">
             <div v-for="fact in facts" :key="fact.label"><dt>{{ fact.label }}</dt><dd :class="fact.tone ? ['expert-card-status', `is-${fact.tone}`] : ''" :title="fact.value"><i v-if="fact.tone" aria-hidden="true" />{{ fact.value }}</dd></div>
           </dl>
@@ -387,7 +389,8 @@ onBeforeUnmount(() => { document.removeEventListener("pointerdown", close_on_out
         </span>
       </div>
       <div v-if="can_flip" class="expert-card-face expert-card-back" :inert="!visible_back" :aria-hidden="!visible_back">
-        <div class="expert-card-back-body">
+        <!-- nowheel: inside the workflow canvas the wheel scrolls these settings instead of zooming (Vue Flow skips such elements); no effect elsewhere. -->
+        <div class="expert-card-back-body nowheel">
         <div class="expert-card-heading"><strong>{{ member_label }}<span v-if="member_label !== name">{{ name }}</span><span>设置</span></strong>
           <span class="expert-card-heading-tools">
           <button type="button" class="expert-card-back-tool" :class="{ 'is-set': description }" :aria-label="`编辑 ${name} 的名称与描述`" :title="describe_title" @click="describing = true"><UIcon name="i-lucide-user-pen" /></button>
@@ -476,6 +479,10 @@ onBeforeUnmount(() => { document.removeEventListener("pointerdown", close_on_out
 .expert-card-names > span { display: flex; align-items: center; gap: 8px; min-width: 0; }
 /* The description reads as the member's subtitle: one line here, the full text on hover and in the dialog. */
 .expert-card-names > small { overflow: hidden; color: var(--ui-text-muted); font-size: 11px; line-height: 16px; white-space: nowrap; text-overflow: ellipsis; }
+/* A workflow card's description: as many lines as fit between the name and the facts, the full text on hover. */
+.expert-card-summary { display: -webkit-box; flex: 1; min-height: 0; margin: 0; overflow: hidden; color: var(--ui-text-toned); font-size: 12px; line-height: 18px;
+  -webkit-box-orient: vertical; -webkit-line-clamp: 4; overflow-wrap: anywhere; }
+.expert-card-summary.is-empty { color: var(--ui-text-dimmed); }
 .expert-card-identity strong { overflow: hidden; color: var(--ui-text-highlighted); font-size: 13px; font-weight: 600; white-space: nowrap; text-overflow: ellipsis; }
 .expert-card-badge { flex-shrink: 0; padding: 0 5px; border-radius: 4px; background: color-mix(in srgb, #e0b44a 16%, transparent); color: #e0b44a; font-size: 10px; font-weight: 500; line-height: 16px; }
 .expert-card-facts .expert-card-status > i { display: inline-block; margin: 0 5px 1px 0; vertical-align: middle; width: 5px; height: 5px; border-radius: 50%; background: var(--ui-text-dimmed); }
