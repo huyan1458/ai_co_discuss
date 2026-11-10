@@ -1127,13 +1127,18 @@ def check_answer(connection, room_id, member, payload):
     row = connection.execute("SELECT * FROM member_executions WHERE room_id=? AND id=?", (room_id, execution_id)).fetchone()
     if not row or row["member_id"] != member["id"]:
         raise PermissionError("执行编号不属于本成员")
-    if row["status"] not in ACTIVE or row["lease_until"] <= int(time.time()):
+    revived = revive_failed(connection, room_id, row) if row["status"] == "failed" else None
+    if revived:
+        row = revived
+    elif row["status"] not in ACTIVE or row["lease_until"] <= int(time.time()):
         if row["status"] == "cancelled":
             # Kept apart from the transcript: the page shows it folded, and it marks the end of a turn the runner could not stop.
             connection.execute("INSERT OR IGNORE INTO late_answers (execution_id,room_id,text,created_at) VALUES (?,?,?,?)",
                                (execution_id, room_id, str(payload.get("text") or ""), int(time.time())))
             connection.commit()
-        raise FileExistsError("本次执行已结束、被打断或已过期；回答不能改作普通发言，请保留草稿")
+        hint = ("主持人可改用 --proactive 主动发言提交结果（不关联执行，可同时派活）" if member["role"] == "host"
+                else "请保留草稿，告诉用户或主持人")
+        raise FileExistsError(f"本次执行已结束、被停止或已被重试，回答不能再关联它；{hint}")
     requests = [dict(item) for item in connection.execute(
         "SELECT id,purpose FROM member_requests WHERE execution_id=? AND status='delivering'", (execution_id,))]
     discussion.validate_session_request_answer(connection, room_id, requests)
@@ -1345,8 +1350,9 @@ def wake_host(connection, room_id, chain_id, text, key):
 def wake_after_failure(connection, execution_id, requests, reason):
     """A member's execution failed on requests outside a host batch (a user's direct question): tell the host.
 
-    The host's own failures and discussion turns are left out: the first would wake a host that just failed, the second
-    has its own hand-back. A batch's failure reaches the host through settle_batches.
+    The host's own failure wakes it once too, so the room does not stall until the owner looks; a failure while handling
+    that very notice wakes nobody, so a host that cannot run (e.g. out of quota) is not woken in a loop. Discussion turns
+    are left out: they have their own hand-back. A batch's failure reaches the host through settle_batches.
     """
     requests = [item for item in requests if not item["batch_id"]
                 and not connection.execute("SELECT 1 FROM session_requests WHERE member_request_id=?", (item["id"],)).fetchone()]
@@ -1354,12 +1360,31 @@ def wake_after_failure(connection, execution_id, requests, reason):
         return
     member = connection.execute("SELECT * FROM room_members WHERE id=?", (requests[0]["member_id"],)).fetchone()
     if member["role"] == "host":
+        wake_after_own_failure(connection, member, execution_id, requests, reason)
         return
     name = member_display_names(connection, member["room_id"]).get(member["name"], member["name"])
     messages = "、".join(f"#{item['message_id']}" for item in requests)
     wake_host(connection, member["room_id"], max(item["chain_id"] for item in requests),
               f"{name} 处理 {messages} 的执行失败（执行 #{execution_id}）：{reason[:200]}。请主持人决定重试、改派还是告知用户。",
               f"failed:{execution_id}")
+
+
+def wake_after_own_failure(connection, host, execution_id, requests, reason):
+    """Tell the host its own execution failed, unless it failed on such a notice: it retries, resubmits or tells the user.
+
+    A failed Goal wake-up is left to the Goal, which wakes again and counts failures in a row on its own.
+    """
+    marks = ",".join("?" * len(requests))
+    if connection.execute(f"SELECT 1 FROM member_requests WHERE id IN ({marks}) AND purpose='goal_continue'",
+                          [item["id"] for item in requests]).fetchone():
+        return
+    if connection.execute(f"SELECT 1 FROM free_host_wakes WHERE room_id=? AND key LIKE 'host_failed:%' AND message_id IN ({marks})",
+                          (host["room_id"], *[item["message_id"] for item in requests])).fetchone():
+        return
+    messages = "、".join(f"#{item['message_id']}" for item in requests)
+    wake_host(connection, host["room_id"], max(item["chain_id"] for item in requests),
+              f"主持人处理 {messages} 的执行失败（执行 #{execution_id}）：{reason[:200]}。主持人请核对自己的会话：已有结果就用 --execution {execution_id} 补交原回答，"
+              f"未做完就接着做完再这样补交（或 host-control retry --execution {execution_id} 重试），做不了时告知用户；最后用本次执行简短回复这条提醒。", f"host_failed:{execution_id}")
 
 
 def remember_continue(connection, room_id, host, message_id, chain_id, payload):
@@ -2746,6 +2771,36 @@ def retry_failed(connection, room_id, execution):
         raise FileExistsError("该成员已离开或暂离，无法重试")
     connection.execute(f"UPDATE member_requests SET status='pending',execution_id=NULL WHERE id IN ({','.join('?' * len(requests))})",
                        [request["id"] for request in requests])
+    reopen_batches(connection, room_id, requests)
+
+
+def revive_failed(connection, room_id, execution):
+    """Take a late answer to an execution the runner failed, as long as nobody acted on that failure since.
+
+    The runner fails an execution when it sees the software's turn end with no answer; an answer arriving afterwards
+    shows that judgement was wrong (e.g. the turn waited on a background agent). Its requests still marked failed and
+    not retried make the execution live again inside the caller's transaction, so the answer then completes it as usual.
+    A stopped, withdrawn or rewound execution is cancelled, not failed, and is never revived.
+
+    Returns:
+        The live execution row, or None when the failure was already retried or was a discussion turn.
+    """
+    if execution["status"] != "failed":
+        return None
+    requests = connection.execute("""SELECT id,batch_id,chain_id FROM member_requests r WHERE execution_id=? AND status='failed'
+        AND NOT EXISTS(SELECT 1 FROM session_requests s WHERE s.member_request_id=r.id)""", (execution["id"],)).fetchall()
+    if not requests:
+        return None
+    connection.execute(f"UPDATE member_requests SET status='delivering' WHERE id IN ({','.join('?' * len(requests))})",
+                       [request["id"] for request in requests])
+    connection.execute("UPDATE member_executions SET status='started',lease_until=? WHERE id=?",
+                       (int(time.time()) + LEASE_SECONDS, execution["id"]))
+    reopen_batches(connection, room_id, requests)
+    return connection.execute("SELECT * FROM member_executions WHERE id=?", (execution["id"],)).fetchone()
+
+
+def reopen_batches(connection, room_id, requests):
+    """Reopen what a failure closed for these requests: the batch, an all-failed chain, a relay stopped at that step."""
     for request in requests:
         batch_id, chain_id = request["batch_id"], request["chain_id"]
         # A relay step stopped by one failed member of its group resumes too: the others' answers wait for this one.

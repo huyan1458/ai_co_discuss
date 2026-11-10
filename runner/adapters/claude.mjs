@@ -241,8 +241,10 @@ function claude_detail(event) {
       : /^Web(Search|Fetch)$/.test(block.name) ? 'search' : 'tool';
     return [{ id: `tool-${block.id}`, kind, title: kind === 'command' ? tool_subject(block) : `${block.name} ${tool_subject(block)}`, state: 'running', at }];
   });
+  // A background agent's launch result leaves its call running; the report the window logs later ends it.
   if (event.type === 'user') return blocks.filter(block => block.type === 'tool_result')
-    .map(block => ({ id: `tool-${block.tool_use_id}`, body: result_text(block.content), state: block.is_error ? 'failed' : 'done', ended_at: at }));
+    .map(block => event.background ? { id: `tool-${block.tool_use_id}`, state: 'running' }
+      : { id: `tool-${block.tool_use_id}`, body: result_text(block.content), state: block.is_error ? 'failed' : 'done', ended_at: at });
   if (event.type === 'result' && event.is_error) return [{ kind: 'error', body: String(event.result || event.subtype || '本轮失败') }];
   return [];
 }
@@ -330,8 +332,9 @@ async function inbox_delivery(config, window, task) {
   await post_inbox(window.inbox, `CoDiscuss 本机服务代房间转达（你已注册为该房间成员，这是房间分派给你的任务）：\n${task.prompt}`);
   // The discussion runner enters the execution once the session is known, as it does when a process reports it.
   task.on_binding?.(config.session_id);
-  watch_window_turn({ file, offset, pid: window.pid, marker: `${task.id}.task.json` }, task);
-  return { session_id: config.session_id, status: 'accepted', capabilities: WINDOW };
+  // The turn's steps, read from the session log, are the execution's process log, so the private chat can show them.
+  watch_window_turn({ file, offset, pid: window.pid, marker: `${task.id}.task.json`, log_path: resolve(task.directory, `claude-${task.id}.log`) }, task);
+  return { session_id: config.session_id, status: 'accepted', capabilities: { ...WINDOW, progress: true } };
 }
 
 /**
@@ -414,8 +417,8 @@ function window_state(pid, env = process.env) {
  * Follow a message posted into an open window through the session log, from `offset` on, until the turn that took it
  * ends (`system/turn_duration`) or the window closes: report the API error that turn ended on as a failure, otherwise its
  * end. For a room task it notes once when the window has not taken it by `unstarted_after`; an answer it never submitted
- * then fails the execution. For a `chat` turn it reports the turn's steps to `log_path` and its texts as notes, waits
- * also for every interjection `expect`ed, and fails with the reason when the window does not take the message in time,
+ * then fails the execution. Given a `log_path`, it reports the turn's steps there and its texts as notes. It waits past a
+ * turn end while a background agent the turn launched has not reported. For a `chat` turn it waits also for every interjection `expect`ed, and fails with the reason when the window does not take the message in time,
  * waits on a prompt for `waiting_after`, closes, or runs past `turn_limit`. A turn Esc ended (`[Request interrupted by
  * user…]`, which records no `turn_duration`) ends the watch too. `stop()` asks the turn to stop: `stop_key()` sends one
  * Esc key, only while the registry says the window is busy, the turn has not ended, and no tool call waits for its result
@@ -426,7 +429,7 @@ export function watch_window_turn({ file, offset, pid, marker, session_id = '', 
   const { interval = WINDOW_POLL_MS, unstarted_after = INBOX_CHECK_MS, chat = false, start_after = CHAT_START_MS,
     waiting_after = CHAT_WAITING_MS, turn_limit = CHAT_TURN_MS, env = process.env, on_end, stop_key,
     stop_poll = STOP_POLL_MS, stop_tool_wait = STOP_TOOL_WAIT_MS, stop_end_wait = STOP_END_WAIT_MS } = options;
-  const since = Date.now(), awaited = new Set([marker]), open_tools = new Set();
+  const since = Date.now(), awaited = new Set([marker]), open_tools = new Set(), background = new Set();
   let pending = Buffer.alloc(0), taken = false, noted = false, error = null, done = false, waiting_since = 0;
   let stop_asked = 0, stop_sent = 0, stop_timer = null;
   const finish = (reason = '') => {
@@ -448,9 +451,10 @@ export function watch_window_turn({ file, offset, pid, marker, session_id = '', 
       }
       const api_error = claude_api_error(entry);
       error = api_error || error;
-      if (chat && !api_error) report(entry);
-      if (!entry.isSidechain) track_tools(entry);
-      if (entry.type === 'system' && entry.subtype === 'turn_duration' && !awaited.size) return finish();
+      if ((chat || log_path) && !api_error) report(entry);
+      if (!entry.isSidechain) { track_tools(entry); track_background(entry); }
+      // A turn that left a background agent running ends while the window waits for it; its report starts the next turn.
+      if (entry.type === 'system' && entry.subtype === 'turn_duration' && !awaited.size && !background.size) return finish();
     }
     if (!process_alive(pid)) return finish(chat ? '这位成员的 Claude 窗口在这轮私聊结束前关闭了' : '');
     if (stop_asked) return try_stop();
@@ -476,8 +480,15 @@ export function watch_window_turn({ file, offset, pid, marker, session_id = '', 
   timer.unref();
   /** Pass one entry of the turn on: its steps to the process log in the stream-json shape, its text as a remark. */
   function report(entry) {
-    if (entry.isSidechain || !['assistant', 'user'].includes(entry.type)) return;
-    if (log_path) task.on_output?.(log_path, `${JSON.stringify({ type: entry.type, message: entry.message })}\n`);
+    if (entry.isSidechain) return;
+    // A background agent's report closes its call, which stayed running since the launch.
+    for (const { id, status, summary } of log_path ? task_notifications(entry) : []) {
+      task.on_output?.(log_path, `${JSON.stringify({ type: 'user', timestamp: entry.timestamp,
+        message: { content: [{ type: 'tool_result', tool_use_id: id, content: summary || status, is_error: status === 'failed' }] } })}\n`);
+    }
+    if (!['assistant', 'user'].includes(entry.type)) return;
+    if (log_path) task.on_output?.(log_path, `${JSON.stringify({ type: entry.type, timestamp: entry.timestamp, message: entry.message,
+      ...(entry.toolUseResult?.isAsync ? { background: true } : {}) })}\n`);
     const note = events.note(entry);
     if (note) task.on_note?.(note);
   }
@@ -504,6 +515,19 @@ export function watch_window_turn({ file, offset, pid, marker, session_id = '', 
       if (entry.type === 'assistant' && block?.type === 'tool_use') open_tools.add(block.id);
       if (entry.type === 'user' && block?.type === 'tool_result') open_tools.delete(block.tool_use_id);
     }
+  }
+  /**
+   * Note the background agents the turn launched (an `Agent` result marked `isAsync`) and drop each once its
+   * `<task-notification>` naming that tool call reaches the window. Background shell commands are not awaited: a
+   * server started in the background never reports.
+   */
+  function track_background(entry) {
+    if (entry.type === 'user' && entry.toolUseResult?.isAsync) {
+      for (const block of Array.isArray(entry.message?.content) ? entry.message.content : []) {
+        if (block?.type === 'tool_result') background.add(block.tool_use_id);
+      }
+    }
+    for (const { id } of task_notifications(entry)) background.delete(id);
   }
   /** Send the one Esc key of a stop once the turn can take it, or say why the turn was not stopped. */
   function try_stop() {
@@ -532,6 +556,18 @@ export function watch_window_turn({ file, offset, pid, marker, session_id = '', 
     },
     cancel() { done = true; clearInterval(timer); clearInterval(stop_timer); },
   };
+}
+
+/**
+ * The background task reports a session-log entry carries, as `{id, status, summary}` with `id` the tool call that
+ * started the task: a `<task-notification>` in a queued message, or in the prompt of the turn it starts.
+ */
+function task_notifications(entry) {
+  const text = entry.type === 'attachment' ? prompt_text(entry.attachment?.prompt) : entry.type === 'user' ? prompt_text(entry.message?.content) : '';
+  const field = (block, name) => block.match(new RegExp(`<${name}>([\\s\\S]*?)</${name}>`))?.[1].trim() || '';
+  return [...text.matchAll(/<task-notification>([\s\S]*?)<\/task-notification>/g)]
+    .map(([, block]) => ({ id: field(block, 'tool-use-id'), status: field(block, 'status'), summary: field(block, 'summary') }))
+    .filter(item => item.id);
 }
 
 /** One user message as a stream-json input line. */

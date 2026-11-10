@@ -309,7 +309,7 @@ def message_commands(subcommands, registry):
                       help="已上传附件 ID；可重复指定，最多 10 个")
     add_text(post, "summary")
     post.add_argument("--kind", choices=("chat", "moderation"), default="chat")
-    post.add_argument("--execution", type=positive_int, help="自由房间：本次执行编号；省略时用凭据绑定的执行。执行失效后不能改作普通发言")
+    post.add_argument("--execution", type=positive_int, help="自由房间：本次执行编号；省略时用凭据绑定的执行。执行失效后不能改作普通发言；只被本机服务判失败、未被重试的执行仍收下回答")
     post.add_argument("--to", type=member_handle, action="append", default=[],
                       help="自由房间：主持人点名派活，普通成员提出回应建议（须房主确认）；可重复")
     post.add_argument("--handoff", action="store_true",
@@ -317,7 +317,7 @@ def message_commands(subcommands, registry):
     post.add_argument("--no-handoff", action="store_true",
                       help="自由房间主持人：只点名一位成员、它的回答已足以直接给用户时用；做完不交回你，失败仍交回")
     post.add_argument("--proactive", action="store_true",
-                      help="自由房间成员：不是房间派来的任务、而是你的用户在你自己的窗口里要你发言时用；不关联执行或请求，有进行中的执行或讨论进行中不可用；主持人还可同时 --to 派活或 --continue，从这条消息起算新任务链")
+                      help="自由房间成员：不是房间派来的任务、而是你的用户在你自己的窗口里要你发言时用（主持人也可在需要主动说明、派活或补交失效执行的结果时自行使用）；不关联执行或请求，有进行中的执行或讨论进行中不可用；主持人还可同时 --to 派活或 --continue，从这条消息起算新任务链")
     post.add_argument("--continue", dest="continue_reason", metavar="REASON",
                       help="自由房间主持人：房间没有其他进行中的工作时再唤醒你一次，写明继续做什么（≤300 字）；算本链一轮，用户发新消息或你下次回答不带它即取消")
     post.add_argument("--sequential", action="store_true",

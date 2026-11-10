@@ -10,7 +10,7 @@ import { PassThrough } from 'node:stream';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import { test } from 'node:test';
 
-import { adopt_member_profile, adopt_workflow, host_control, borrowed_session, cached_software_defaults, check_or_save_workflow, join_workflow, launch_discussion, launch_settings, room_configuration, room_files, room_models, room_member, room_member_model, room_settings, room_workflow, save_launch_projects, save_launch_settings, validate_preset } from '../runner/discussion_launch.mjs';
+import { adopt_member_profile, adopt_workflow, host_control, borrowed_session, cached_software_defaults, check_or_save_workflow, join_workflow, launch_discussion, launch_settings, room_configuration, room_files, room_models, room_page, room_member, room_member_model, room_settings, room_workflow, save_launch_projects, save_launch_settings, validate_preset } from '../runner/discussion_launch.mjs';
 import { get_workflow, list_workflows, save_workflow } from '../runner/workflows.mjs';
 import { API_PROVIDERS, save_api_key } from '../runner/discussion_api.mjs';
 import { read_project_files } from '../runner/project_files.mjs';
@@ -303,6 +303,45 @@ test('room files use the saved project and require the authenticated bridge and 
   const no_project = await room_models(f.home, input, { read_defaults: async () => ({}), read_session: () => ({}) });
   assert.equal(no_project.project_directory, '', 'a member directory does not enable the room project page');
   await assert.rejects(room_files(f.home, input), /未设置项目目录/);
+});
+
+test('a room page inlines only the project files it refers to, for the owner, in parts through the relay', async t => {
+  const f = await fixture(t);
+  const project = join(f.directory, 'project');
+  mkdirSync(join(project, 'site', 'img'), { recursive: true });
+  writeFileSync(join(f.directory, 'secret.css'), 'body{color:red}');
+  writeFileSync(join(project, 'site', 'style.css'), 'body{background:url("img/bg.png")}');
+  writeFileSync(join(project, 'site', 'img', 'bg.png'), Buffer.from([137, 80, 78, 71]));
+  writeFileSync(join(project, 'site', 'app.js'), 'document.title = "ok";');
+  writeFileSync(join(project, 'site', 'index.html'), '<link rel="stylesheet" href="style.css"><link rel="stylesheet" href="../../secret.css">'
+    + '<script src="app.js"></script><script>const s = "<img src=\'app.js\'>";</script><img src="img/missing.png"><a href="app.js">源码</a>');
+  const launched = await launch_discussion(f.home, { ...f.input, cwd: project }, f.options);
+  const config = load_config(launched.config_path);
+  const input = { site: f.site, room_id: config.room, token: config.token, path: 'site/index.html' };
+  const page = await room_page(f.home, input);
+  const html = Buffer.from(page.data, 'base64').toString('utf8');
+  const inlined = (text) => `data:text/css;base64,${Buffer.from(text).toString('base64')}`;
+  assert.ok(html.includes(`href="${inlined(`body{background:url(data:image/png;base64,${Buffer.from([137, 80, 78, 71]).toString('base64')})}`)}"`), 'a style sheet comes with its own references');
+  assert.ok(html.includes(`src="data:text/javascript;base64,${Buffer.from('document.title = "ok";').toString('base64')}"`));
+  assert.ok(html.includes('href="../../secret.css"'), 'a file outside the project is never read');
+  assert.ok(html.includes('const s = "<img src=\'app.js\'>";') && html.includes('<a href="app.js">'), 'script text and links stay as written');
+  assert.deepEqual(page.missing.sort(), ['../secret.css', 'site/img/missing.png'].sort());
+  assert.equal(page.total, Buffer.byteLength(html));
+  await assert.rejects(room_page(f.home, { ...input, path: '../secret.css' }), /相对路径/);
+  await assert.rejects(room_page(f.home, { ...input, path: 'site/app.js' }), /HTML/);
+  await assert.rejects(room_page(f.home, { ...input, token: 'invalid-owner' }), /403/);
+  // Through the relay the page comes in parts that join into the same bytes.
+  writeFileSync(join(project, 'site', 'img', 'bg.png'), Buffer.alloc(300 * 1024, 1));
+  const whole = await room_page(f.home, input);
+  const parts = [];
+  for (let offset = 0; offset < whole.total;) {
+    const part = await room_page(f.home, { ...input, offset }, { trust: true, parts: true });
+    assert.equal(part.version, whole.version);
+    parts.push(Buffer.from(part.data, 'base64'));
+    offset += parts.at(-1).length;
+  }
+  assert.ok(parts.length > 1);
+  assert.equal(Buffer.concat(parts).toString('base64'), whole.data);
 });
 
 test('a room shares extra project directories set at creation or later, and names a member working outside them', async t => {
@@ -1052,6 +1091,9 @@ test('with full host control granted, only the host stops, invites at most writi
   assert.equal(invited.project_access, 'write');
   assert.equal(load_config(launched.config_path).participants[invited.member].project_access, 'write');
   await assert.rejects(host_control(f.home, 'remove', { access_file: host_access, member: 'Codex' }), /不能对自己/);
+  await assert.rejects(host_control(f.home, 'stop', { access_file: host_access, member: 'Codex' }), /不能对自己/);
+  await host_control(f.home, 'model', { access_file: host_access, member: 'Codex', model: 'gpt-5' });
+  assert.equal(load_config(launched.config_path).participants.Codex.model, 'gpt-5', 'the host may switch its own model');
   await assert.rejects(host_control(f.home, 'access', { access_file: host_access, member: invited.member, access: 'full' }), /read 或 write/);
   await host_control(f.home, 'label', { access_file: host_access, member: invited.member, label: '评审' });
   assert.equal((await api(config, '')).labels[invited.member], '评审');

@@ -46,14 +46,53 @@ const reference_path = computed(() => !tab.value?.root ? active_path.value
   : `${tab.value.directory.replace(/[\\/]+$/, "")}/${active_path.value}`);
 const preview = computed(() => tab.value?.data || null);
 const source = computed({ get: () => Boolean(tab.value?.source), set: (value) => { if (tab.value) tab.value.source = value; } });
-const preview_crumbs = computed(() => crumbs_of(tab.value?.directory || "", active_path.value));
+const preview_crumbs = computed(() => tab.value?.attachment ? [{ name: "消息附件", path: "" }, { name: active_path.value, path: active_path.value }]
+  : crumbs_of(tab.value?.directory || "", active_path.value));
 const preview_name = computed(() => name_of(active_path.value));
 const preview_type = computed(() => file_type(preview_name.value));
 const format = computed(() => /\.(md|markdown)$/i.test(active_path.value) ? "markdown" : /\.html?$/i.test(active_path.value) ? "html" : "text");
 const rendered = computed(() => format.value === "markdown" && preview.value?.text ? window.discuss_markdown.render_markdown(preview.value.text, [], { source_lines: true }) : "");
-// The iframe has an opaque origin, no scripts or forms, and loads only inline styles and embedded images/fonts.
-const html_preview = computed(() => `<meta http-equiv="Content-Security-Policy" content="default-src 'none'; style-src 'unsafe-inline'; img-src data:; font-src data:; base-uri 'none'; form-action 'none'"><meta charset="utf-8">${preview.value?.text || ""}`);
-const can_render = computed(() => preview.value?.text != null && format.value !== "text" && !(format.value === "html" && preview.value.truncated));
+// HTML renders in full, its scripts and external resources included, in a sandbox without `allow-same-origin`: an
+// opaque origin that cannot reach this site's storage, cookies or pages. The same sandbox is used in a new tab.
+const HTML_SANDBOX = "allow-scripts allow-popups allow-popups-to-escape-sandbox allow-forms allow-modals";
+// Sent into the in-page preview so a selection can be quoted: once a selection settles it posts its text and boxes
+// (in the frame's viewport) to this page, which offers "添加到对话"; it clears the selection when asked. The file's own
+// scripts could post the same message; at worst that shows an offer the user still has to confirm.
+const selection_bridge = () => `<script>(()=>{let timer=0,down=false;const post=(text,rects)=>parent.postMessage({codiscuss_selection:{text,rects}},"*");
+const send=()=>{const s=getSelection(),r=s&&s.rangeCount&&!s.isCollapsed?s.getRangeAt(0):null;
+post(r?s.toString():"",r?[...r.getClientRects()].filter(b=>b.width).slice(0,50).map(b=>[b.left,b.top,b.right,b.bottom]):[]);};
+const later=()=>{clearTimeout(timer);post("",[]);if(!down)timer=setTimeout(send,${OFFER_SETTLE_MS});};
+document.addEventListener("selectionchange",later);addEventListener("scroll",later,{passive:true});
+addEventListener("pointerdown",()=>{down=true;},true);addEventListener("pointerup",()=>{down=false;later();},true);addEventListener("pointercancel",()=>{down=false;later();},true);
+addEventListener("message",e=>{if(e.source===parent&&e.data&&e.data.codiscuss_clear){const s=getSelection();if(s)s.removeAllRanges();}});})();<\/script>`;
+// What goes before the file: after its doctype, so a page that declares one is not shown in quirks mode.
+function html_document(text, extra = "") {
+  const doctype = /^﻿?\s*<!doctype[^>]*>/i.exec(text)?.[0] || "";
+  return `${doctype}<meta charset="utf-8">${extra}${text.slice(doctype.length)}`;
+}
+// A project's HTML file is shown as the computer bundles it (the files it refers to inlined); an attachment as it is.
+const html_text = computed(() => tab.value?.page?.text ?? preview.value?.text ?? "");
+const html_preview = computed(() => html_document(html_text.value, selection_bridge()));
+const can_open_html = computed(() => format.value === "html" && can_render.value && !tab.value?.loading);
+// What the rendered HTML lacks: files it refers to that could not be included, or none at all for an attachment.
+const html_notice = computed(() => {
+  if (format.value !== "html" || !tab.value || tab.value.loading) return "";
+  if (tab.value.attachment) return "附件没有所在目录，相对路径引用的样式、脚本与图片不会载入";
+  if (tab.value.page_error) return `引用的文件未能载入（${tab.value.page_error}），只显示 HTML 本身`;
+  const { missing = [], skipped = [] } = tab.value.page || {};
+  const parts = [missing.length ? `${missing.length} 个不存在或在项目目录外` : "", skipped.length ? `${skipped.length} 个超出 8 MiB 上限` : ""].filter(Boolean);
+  return parts.length ? `引用的文件有 ${parts.join("、")}，未载入：${[...missing, ...skipped].join("、")}` : "";
+});
+
+/** Show the HTML file in a new tab: a page of ours holding only the sandboxed file, so it never runs as this site. */
+function open_html_tab() {
+  const attribute = (value) => value.replace(/&/g, "&amp;").replace(/"/g, "&quot;").replace(/</g, "&lt;");
+  const page = `<!doctype html><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><title>${attribute(preview_name.value)}</title>`
+    + `<style>html,body{margin:0;height:100%}iframe{display:block;width:100%;height:100%;border:0}</style>`
+    + `<iframe sandbox="${HTML_SANDBOX}" referrerpolicy="no-referrer" srcdoc="${attribute(html_document(html_text.value))}"></iframe>`;
+  window.open(URL.createObjectURL(new Blob([page], { type: "text/html" })), "_blank");
+}
+const can_render = computed(() => preview.value?.text != null && format.value !== "text" && !(format.value === "html" && preview.value.truncated && !tab.value?.page));
 const showing_source = computed(() => preview.value?.text != null && (!can_render.value || source.value));
 // One gutter string keeps line numbers to a single DOM node even for the largest previews.
 const lines = computed(() => preview.value?.text == null ? [] : preview.value.text.split("\n"));
@@ -73,7 +112,7 @@ const COMMENT_WIDTH = 340;
 const COMMENT_HEIGHT = 40;
 const OFFER_GAP = 6;
 const FOLLOW_KEYS = ["ArrowUp", "ArrowDown", "PageUp", "PageDown", "Home", "End", " "];
-const editor_body = ref(null), markdown_scroll = ref(null), markdown_body = ref(null), code_scroll = ref(null), comment_input = ref(null), crumbs_nav = ref(null);
+const editor_body = ref(null), markdown_scroll = ref(null), markdown_body = ref(null), code_scroll = ref(null), comment_input = ref(null), crumbs_nav = ref(null), code_text = ref(null), html_frame = ref(null);
 // A deep path shows its end, where the file's own folder is, instead of the root levels.
 watch([() => open.value, active_path], async () => { await nextTick(); if (crumbs_nav.value) crumbs_nav.value.scrollLeft = crumbs_nav.value.scrollWidth; });
 const speech_ready = ref(false);
@@ -106,6 +145,7 @@ const file_menu = computed(() => {
   const rest = [];
   if (showing_source.value) rest.push({ label: wrap.value ? "关闭自动换行" : "自动换行", icon: "i-lucide-wrap-text", onSelect: () => { wrap.value = !wrap.value; } });
   if (can_read.value) rest.push(reader.state.reading ? { label: "停止朗读", icon: "i-lucide-square", onSelect: () => reader.stop() } : { label: "朗读", icon: "i-lucide-volume-2", onSelect: () => read_file() });
+  if (can_open_html.value) rest.push({ label: "在新标签页打开", icon: "i-lucide-external-link", onSelect: () => open_html_tab() });
   if (can_render.value) rest.push(source.value ? { label: "预览", icon: "i-lucide-eye", onSelect: () => { source.value = false; } } : { label: "源码", icon: "i-lucide-code-xml", onSelect: () => { source.value = true; } });
   if (rest.length) groups.push(rest);
   // Kept out of the head so it is not mistaken for the active tab's own close button.
@@ -118,13 +158,33 @@ function check_speech() {
   speech_settings().then((settings) => { speech_ready.value = Boolean(settings.api_key_ref); }, () => { speech_ready.value = false; });
 }
 
+// A message attachment is read up to this size, like a project file.
+const ATTACHMENT_TEXT_LIMIT = 2 * 1024 * 1024;
+
+/** Read a message attachment's bytes as text, in the shape of the room-files answer. */
+async function read_attachment(attachment) {
+  const response = await fetch(attachment.url);
+  if (!response.ok) throw new Error(`附件读取失败（${response.status}）`);
+  const blob = await response.blob();
+  const truncated = blob.size > ATTACHMENT_TEXT_LIMIT;
+  const text = new TextDecoder("utf-8").decode(await (truncated ? blob.slice(0, ATTACHMENT_TEXT_LIMIT) : blob).arrayBuffer());
+  return { text, truncated, limit: ATTACHMENT_TEXT_LIMIT, size: blob.size, modified_at: attachment.created_at, encoding: "utf-8" };
+}
+
 /** Read one tab's file, discarding answers to its earlier requests; a tab already shown keeps its text meanwhile. */
 async function load(item) {
   const request = (item.request || 0) + 1;
   Object.assign(item, { request, loading: true, error: "" });
   try {
-    const result = await bridge.read_room_files(item.room_id, item.path, 0, "", item.root || 0);
+    const result = item.attachment ? await read_attachment(item.attachment) : await bridge.read_room_files(item.room_id, item.path, 0, "", item.root || 0);
     if (item.request === request) item.data = result;
+    // The computer inlines what a project's HTML file refers to, so it renders as it would opened on that computer.
+    if (item.request === request && !item.attachment && /\.html?$/i.test(item.path)) {
+      try {
+        const page = await bridge.read_room_page(item.room_id, item.path, item.root || 0);
+        if (item.request === request) Object.assign(item, { page, page_error: "" });
+      } catch (error) { if (item.request === request) item.page_error = error.message; }
+    }
   } catch (error) {
     if (item.request === request) item.error = error.message;
   } finally { if (item.request === request) item.loading = false; }
@@ -139,6 +199,21 @@ function open_file(path, directory, root = 0) {
   let item = tabs.value.find(entry => entry.id === id);
   if (!item) {
     tabs.value.push({ id, room_id, directory, root, path, data: null, loading: false, error: "", source: false, scroll: 0, request: 0 });
+    item = tabs.value[tabs.value.length - 1];
+  }
+  active_id.value = id;
+  open.value = true;
+  check_speech();
+  load(item);
+}
+
+/** Open a message attachment (`{ room_id, id, file_name, url, created_at }`) in its own tab, read as text. */
+function open_attachment(attachment) {
+  remember_scroll();
+  const id = `${attachment.room_id}\nattachment\n${attachment.id}`;
+  let item = tabs.value.find(entry => entry.id === id);
+  if (!item) {
+    tabs.value.push({ id, room_id: attachment.room_id, directory: "", root: 0, path: attachment.file_name, attachment, data: null, loading: false, error: "", source: false, scroll: 0, request: 0 });
     item = tabs.value[tabs.value.length - 1];
   }
   active_id.value = id;
@@ -423,28 +498,92 @@ function selected_lines(range) {
   return first && last ? { start: first[0], end: Math.max(first[0], last[1]) } : { start: 0, end: 0 };
 }
 
-/** Place `{ left, top }` in the text area for a box of this size above the range's start, or below its end when there is no room. */
-function place_by(range, width, height) {
+/** Place `{ left, top }` in the text area for a box of this size above the first box, or below the last when there is no room. */
+function place_rects(rects, width, height) {
   const box = editor_body.value.getBoundingClientRect();
-  const rects = range.getClientRects(), first = rects[0] || range.getBoundingClientRect(), last = rects[rects.length - 1] || first;
+  const first = rects[0], last = rects[rects.length - 1] || first;
   const above = first.top - box.top - height - OFFER_GAP;
   const left = above >= 0 ? first.left - box.left : last.right - box.left - width / 2;
   return { left: Math.max(8, Math.min(left, box.width - width - 8)), top: above >= 0 ? above : last.bottom - box.top + OFFER_GAP };
 }
 
-/** Offer quoting (and reading from) a selection made in the Markdown preview: above it, or in the bottom dock on touch screens. */
+/** Place a box above the range's start, or below its end when there is no room. */
+function place_by(range, width, height) {
+  const rects = [...range.getClientRects()];
+  return place_rects(rects.length ? rects : [range.getBoundingClientRect()], width, height);
+}
+
+const offer_text = (text) => text.replace(/\r/g, "").replace(/\n{3,}/g, "\n\n").trim();
+const touch_screen = () => window.matchMedia("(pointer: coarse)").matches;
+
+/**
+ * Where a point of a selection in the source view lies in the file's text, or -1 when it is not on a line: wrapped,
+ * from its row's line and the offset within the line; unwrapped, from the offset in the single text block.
+ */
+function source_index(container, offset) {
+  const element = container.nodeType === Node.TEXT_NODE ? container.parentElement : container;
+  if (code_text.value?.contains(container)) return text_offset(code_text.value, container, offset);
+  const row = element?.closest?.(".project-code-row");
+  if (!row || !code_scroll.value?.contains(row)) return -1;
+  const line = Number(row.dataset.line) - 1;
+  const span = element.closest(".project-code-line");
+  const at = span ? Math.min(text_offset(span, container, offset), lines.value[line].length) : 0;
+  return lines.value.slice(0, line).reduce((sum, text) => sum + text.length + 1, 0) + at;
+}
+
+/** A selection in the source view as `{ text, start, end }` taken from the file itself, so line numbers never get in. */
+function source_selection(range) {
+  const from = source_index(range.startContainer, range.startOffset), to = source_index(range.endContainer, range.endOffset);
+  if (from < 0 || to <= from) return null;
+  const all = preview.value.text, line_of = (index) => all.slice(0, index).split("\n").length;
+  const text = all.slice(from, to);
+  const start = line_of(from + (text.length - text.trimStart().length));
+  return { text: offer_text(text), start, end: Math.max(start, line_of(from + text.trimEnd().length)) };
+}
+
+/** Offer quoting (and reading from) a selection made in the Markdown preview or the source view: above it, or in the bottom dock on touch screens. */
 function track_selection() {
   if (commenting.value) return;
   const selection = document.getSelection();
   const range = selection?.rangeCount && !selection.isCollapsed ? selection.getRangeAt(0) : null;
+  if (!range || !editor_body.value) return;
+  if (showing_source.value) {
+    const quoted = code_scroll.value?.contains(range.startContainer) ? source_selection(range) : null;
+    if (quoted?.text) offer.value = { range: range.cloneRange(), ...quoted, touch: touch_screen(), ...place_by(range, OFFER_WIDTH, OFFER_HEIGHT) };
+    return;
+  }
   const body = markdown_body.value;
-  if (!range || !editor_body.value || source.value || !body?.contains(range.startContainer)) return;
-  const text = range.toString().replace(/\r/g, "").replace(/\n{3,}/g, "\n\n").trim();
+  if (source.value || !body?.contains(range.startContainer)) return;
+  const text = offer_text(range.toString());
   if (!text) return;
   const to = body.contains(range.endContainer) ? text_offset(body, range.endContainer, range.endOffset) : body.textContent.length;
   const from = text_offset(body, range.startContainer, range.startOffset);
-  offer.value = { range: range.cloneRange(), text, from, to, ...selected_lines(range), touch: window.matchMedia("(pointer: coarse)").matches,
+  offer.value = { range: range.cloneRange(), text, from, to, ...selected_lines(range), touch: touch_screen(),
     ...place_by(range, OFFER_WIDTH, OFFER_HEIGHT) };
+}
+
+// Longest selection, and most boxes, a message from the HTML preview may carry.
+const FRAME_TEXT_MAX = 20000;
+const FRAME_RECTS_MAX = 50;
+
+/** A selection settled (or cleared) in the HTML preview: offer quoting it, placed by its boxes moved into this page. */
+function frame_selection(event) {
+  const frame = html_frame.value;
+  const data = event.data?.codiscuss_selection;
+  if (!frame || event.source !== frame.contentWindow || !data || commenting.value) return;
+  offer.value = null;
+  const text = typeof data.text === "string" ? offer_text(data.text.slice(0, FRAME_TEXT_MAX)) : "";
+  const boxes = Array.isArray(data.rects) ? data.rects.slice(0, FRAME_RECTS_MAX).filter((box) => Array.isArray(box) && box.length === 4 && box.every(Number.isFinite)) : [];
+  if (!text || !boxes.length || source.value || !editor_body.value) return;
+  const origin = frame.getBoundingClientRect();
+  const rects = boxes.map(([left, top, right, bottom]) => ({ left: origin.left + left, top: origin.top + top, right: origin.left + right, bottom: origin.top + bottom }));
+  offer.value = { rects, text, start: 0, end: 0, touch: touch_screen(), ...place_rects(rects, OFFER_WIDTH, OFFER_HEIGHT) };
+}
+
+/** Clear the selection in this page and ask the HTML preview to clear its own. */
+function clear_selection() {
+  document.getSelection()?.removeAllRanges();
+  html_frame.value?.contentWindow?.postMessage({ codiscuss_clear: true }, "*");
 }
 
 /** Re-measure where each excerpt of the shown file ends, for its number mark. */
@@ -489,8 +628,10 @@ function listen_from_selection() {
 
 /** Ask for an optional comment on the selection before it goes to the chat. */
 async function start_comment() {
-  commenting.value = { ...offer.value, ...place_by(offer.value.range, COMMENT_WIDTH, COMMENT_HEIGHT) };
-  hold_selection(offer.value.range);
+  // A selection in the HTML preview stays shown there by the frame itself.
+  const { range, rects } = offer.value;
+  commenting.value = { ...offer.value, ...(range ? place_by(range, COMMENT_WIDTH, COMMENT_HEIGHT) : place_rects(rects, COMMENT_WIDTH, COMMENT_HEIGHT)) };
+  if (range) hold_selection(range);
   offer.value = null;
   comment.value = "";
   document.getSelection()?.removeAllRanges();
@@ -505,7 +646,7 @@ async function add_excerpt() {
   const { text, start, end, from, to } = commenting.value;
   const excerpt = { path: reference_path.value, name: preview_name.value, start, end, text, from, to, comment: comment.value.trim() };
   cancel_comment();
-  document.getSelection()?.removeAllRanges();
+  clear_selection();
   await to_tab_room();
   act("tab", "discussion");
   fold(() => put_excerpt(excerpt));
@@ -534,6 +675,8 @@ watch([active_id, source, rendered], () => { if (reader.state.message_id) reader
 watch(markdown_body, (root) => { if (root) { reader.rebind_document(root); nextTick(place_file_marks); } });
 onMounted(() => {
   file_preview.open = open_file;
+  window.addEventListener("message", frame_selection);
+  bridge.set_text_preview(open_attachment);
   place_float();
   window.addEventListener("resize", place_float);
   narrow_query.addEventListener("change", track_narrow);
@@ -546,6 +689,8 @@ onMounted(() => {
 });
 onBeforeUnmount(() => {
   if (file_preview.open === open_file) file_preview.open = null;
+  window.removeEventListener("message", frame_selection);
+  bridge.set_text_preview(null);
   window.removeEventListener("resize", place_float);
   narrow_query.removeEventListener("change", track_narrow);
   window.removeEventListener("resize", place_file_marks);
@@ -584,6 +729,7 @@ onBeforeUnmount(() => {
             :title="wrap ? '关闭自动换行' : '自动换行'" aria-label="自动换行" @click="wrap = !wrap" />
           <UButton v-if="can_read" :icon="reader.state.reading ? 'i-lucide-square' : 'i-lucide-volume-2'" color="neutral" variant="ghost" size="sm"
             :title="reader.state.reading ? '停止朗读' : '朗读'" :aria-label="reader.state.reading ? '停止朗读' : '从头朗读此文件'" @click="reader.state.reading ? reader.stop() : read_file()" />
+          <UButton v-if="can_open_html" icon="i-lucide-external-link" color="neutral" variant="ghost" size="sm" title="在新标签页打开" aria-label="在新标签页打开" @click="open_html_tab" />
           <div v-if="can_render" class="project-editor-modes" role="group" aria-label="显示方式">
             <button type="button" :aria-pressed="!source" title="预览" @click="source = false"><UIcon name="i-lucide-eye" class="project-mode-icon" /><span>预览</span></button>
             <button type="button" :aria-pressed="source" title="源码" @click="source = true"><UIcon name="i-lucide-code-xml" class="project-mode-icon" /><span>源码</span></button>
@@ -597,26 +743,28 @@ onBeforeUnmount(() => {
         <nav ref="crumbs_nav" class="project-editor-breadcrumbs" aria-label="文件位置">
           <template v-for="(part, index) in preview_crumbs" :key="part.path">
             <UIcon v-if="index" name="i-lucide-chevron-right" class="project-crumb-separator" />
-            <button v-if="index < preview_crumbs.length - 1" type="button" title="在列表中打开此文件夹" @click="reveal_folder(part.path)">{{ part.name }}</button>
+            <span v-if="index < preview_crumbs.length - 1 && tab?.attachment">{{ part.name }}</span>
+            <button v-else-if="index < preview_crumbs.length - 1" type="button" title="在列表中打开此文件夹" @click="reveal_folder(part.path)">{{ part.name }}</button>
             <span v-else class="project-crumb-file"><UIcon :name="preview_type[1]" class="project-file-icon" :class="preview_type[2]" />{{ part.name }}</span>
           </template>
         </nav>
       </div>
-      <p v-if="preview?.truncated" class="project-editor-banner"><UIcon name="i-lucide-info" />文件较大，仅显示前 {{ file_size(preview.limit) }}（共 {{ file_size(preview.size) }}）<template v-if="format === 'html'">，HTML 不渲染不完整的内容</template></p>
-      <p v-else-if="can_render && !source && format === 'html'" class="project-editor-banner"><UIcon name="i-lucide-shield" />静态预览：脚本、外部样式与外部图片不加载</p>
+      <p v-if="preview?.truncated && !(format === 'html' && tab?.page && !source)" class="project-editor-banner"><UIcon name="i-lucide-info" />文件较大，仅显示前 {{ file_size(preview.limit) }}（共 {{ file_size(preview.size) }}）<template v-if="format === 'html'">，HTML 不渲染不完整的内容</template></p>
+      <p v-else-if="html_notice && !source" class="project-editor-banner" :title="html_notice"><UIcon name="i-lucide-info" /><span class="project-editor-banner-text">{{ html_notice }}</span></p>
 
       <div ref="editor_body" class="project-editor-body" :style="{ '--file-font-scale': font_scale }">
         <div v-if="tab?.loading && !preview" class="project-editor-state" role="status"><UIcon name="i-lucide-loader-circle" class="animate-spin" />正在读取文件…</div>
         <div v-else-if="tab?.error && !preview" class="project-editor-state"><UIcon name="i-lucide-circle-alert" /><p>{{ tab.error }}</p><UButton label="重试" color="neutral" variant="outline" size="sm" @click="load(tab)" /></div>
         <div v-else-if="preview?.text === null" class="project-editor-state"><UIcon :name="preview_type[1]" /><p>{{ preview.reason }}</p></div>
-        <div v-else-if="showing_source && wrap" ref="code_scroll" class="project-code is-wrapped" tabindex="0" aria-label="文件内容" :style="{ '--digits': String(line_count).length }">
-          <div v-for="(line, index) in lines" :key="index" class="project-code-row"><span class="project-code-number" aria-hidden="true">{{ index + 1 }}</span><span class="project-code-line">{{ line }}</span></div>
+        <div v-else-if="showing_source && wrap" ref="code_scroll" class="project-code is-wrapped" tabindex="0" @scroll.passive="schedule_offer" aria-label="文件内容" :style="{ '--digits': String(line_count).length }">
+          <div v-for="(line, index) in lines" :key="index" class="project-code-row" :data-line="index + 1"><span class="project-code-number" aria-hidden="true">{{ index + 1 }}</span><span class="project-code-line">{{ line }}</span></div>
         </div>
-        <div v-else-if="showing_source" ref="code_scroll" v-keep-reading class="project-code" tabindex="0" aria-label="文件内容">
+        <div v-else-if="showing_source" ref="code_scroll" v-keep-reading class="project-code" tabindex="0" @scroll.passive="schedule_offer" aria-label="文件内容">
           <pre class="project-code-gutter" aria-hidden="true">{{ gutter }}</pre>
-          <pre class="project-code-text"><code>{{ preview.text }}</code></pre>
+          <pre class="project-code-text"><code ref="code_text">{{ preview.text }}</code></pre>
         </div>
-        <iframe v-else-if="preview && format === 'html'" class="project-html-preview" sandbox="" referrerpolicy="no-referrer" :srcdoc="html_preview" title="HTML 文件预览"></iframe>
+        <div v-else-if="preview && format === 'html' && tab?.loading && !tab.page" class="project-editor-state" role="status"><UIcon name="i-lucide-loader-circle" class="animate-spin" />正在载入页面引用的文件…</div>
+        <iframe v-else-if="preview && format === 'html'" ref="html_frame" class="project-html-preview" :sandbox="HTML_SANDBOX" referrerpolicy="no-referrer" :srcdoc="html_preview" title="HTML 文件预览"></iframe>
         <div v-else-if="preview" ref="markdown_scroll" v-keep-reading class="project-markdown-scroll" tabindex="0" @scroll.passive="schedule_offer"
           @wheel.passive="stop_following" @touchmove.passive="stop_following" @keydown="stop_following" @pointerdown="stop_following"><div ref="markdown_body" class="markdown-body project-markdown-preview" v-html="rendered"></div>
           <button v-for="mark in file_marks" :key="mark.id" type="button" class="excerpt-mark" :style="{ left: `${mark.left}px`, top: `${mark.top}px` }" :title="`摘录 ${mark.number}：点击修改批注`" :aria-label="`修改摘录 ${mark.number} 的批注`" @click="open_mark(mark.id)">{{ mark.number }}</button></div>
@@ -718,6 +866,7 @@ onBeforeUnmount(() => {
 .project-editor-banner { display: flex; align-items: center; gap: 8px; flex-shrink: 0; margin: 0; padding: 6px 14px; font-size: 12px; color: var(--ui-text-muted);
   background: color-mix(in srgb, var(--ui-primary) 9%, transparent); border-block: 1px solid color-mix(in srgb, var(--ui-primary) 22%, transparent); }
 .project-editor-banner > span { flex-shrink: 0; width: 14px; height: 14px; color: var(--ui-primary); }
+.project-editor-banner > .project-editor-banner-text { flex: 1; width: auto; height: auto; min-width: 0; overflow: hidden; white-space: nowrap; text-overflow: ellipsis; color: inherit; }
 .project-editor-body { position: relative; flex: 1; min-height: 0; display: flex; border-top: 1px solid var(--ui-border); }
 .project-editor-state { display: flex; flex: 1; flex-direction: column; align-items: center; justify-content: center; gap: 12px; padding: 24px; text-align: center; font-size: 13px; color: var(--ui-text-muted); }
 .project-editor-state > span:first-child { width: 28px; height: 28px; color: var(--ui-text-dimmed); }

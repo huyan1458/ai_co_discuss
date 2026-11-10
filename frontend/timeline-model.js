@@ -5,7 +5,7 @@
  */
 
 export const PHASE_LABELS = { thinking: "思考", command: "命令", tool: "工具", editing: "编辑", writing: "撰写" };
-/** Bars are colored by kind of time: the model's own turns solid, its tool work light, waiting hatched. */
+/** Bars are colored by member and shaded by kind, as in a trace: the model's own turns dark, its tool work light. */
 export const PHASE_KINDS = { thinking: "model", writing: "model", command: "tool", tool: "tool", editing: "tool" };
 export const STATE_LABELS = { running: "进行中", done: "完成", failed: "失败", cancelled: "已撤销" };
 /** Idle stretches longer than this fold into a band; each band takes this share of the axis. */
@@ -55,42 +55,6 @@ export function execution_stages(item, now_ms) {
 export const STALL_MS = 3 * 60_000;
 /** Thinking reports nothing until it ends, so a silent thinking phase is called stuck only after this long. */
 export const THINKING_STALL_MS = 10 * 60_000;
-
-/** Pieces of one kind closer than this join into one block on the bar. */
-const BLOCK_JOIN_MS = 1000;
-export const KIND_LABELS = { model: "模型", tool: "工具" };
-
-/**
- * A row's phase segments as drawn: neighbouring segments of one kind (thinking then writing, command then edit) join
- * into one block, so a bar reads as a few stretches of model and tool time rather than a row of slivers. Each block
- * keeps its parts, and `seen` / `live` as the last part has them.
- */
-export function bar_blocks(row) {
-  const blocks = [];
-  for (const segment of row.segments) {
-    const kind = PHASE_KINDS[segment.phase];
-    const last = blocks.at(-1);
-    if (last && last.kind === kind && segment.start - last.seen <= BLOCK_JOIN_MS) {
-      Object.assign(last, { seen: segment.seen, end: segment.end, live: segment.live });
-      last.parts.push(segment);
-    } else blocks.push({ kind, start: segment.start, seen: segment.seen, end: segment.end, live: segment.live, parts: [segment] });
-  }
-  return blocks;
-}
-
-/** A block's own name (its phase, when it is one phase throughout) and what its time went to, by phase and tool. */
-export function block_summary(block) {
-  const totals = new Map();
-  for (const part of block.parts) {
-    const key = `${PHASE_LABELS[part.phase]}${part.tool ? ` ${part.tool}` : ""}`;
-    totals.set(key, (totals.get(key) || 0) + Math.max(0, part.seen - part.start));
-  }
-  const phases = new Set(block.parts.map((part) => part.phase));
-  return {
-    label: phases.size === 1 ? PHASE_LABELS[block.parts[0].phase] : KIND_LABELS[block.kind],
-    text: [...totals].sort((a, b) => b[1] - a[1]).map(([key, ms]) => `${key} ${format_duration(ms)}`).join(" · "),
-  };
-}
 
 /** A wait (request to first sign of work) at least this long is marked on the bar and in the round's digest. */
 export const WAIT_WARN_MS = 2 * 60_000;
@@ -161,17 +125,29 @@ export function row_status(row, now_ms) {
 }
 
 /**
- * What a round's time came down to. The critical path is the dispatch chain that ends with the execution finishing
- * last (a running one ends now): the round could not end sooner than it, so it is what a reader looks at to see why a
- * round took as long as it did. `members` sums the path's work time per member, longest first; `wait` is the path's
- * time between requests and the first sign of work.
+ * What a round's time came down to. The critical path ends with the execution finishing last (a running one ends
+ * now) and runs back through what each step waited for: the execution still at work latest before it was requested,
+ * its dispatcher on a tie. A host summing up waits on the member who finished last, though the record hangs the summary
+ * under the host's earlier execution, so the path follows time, not the dispatch record. The round could not end
+ * sooner than this path, so it is what a reader looks at to see why a round took as long as it did. `members` sums the
+ * path's work time per member, longest first; `wait` is the path's time between requests and the first sign of work.
  */
 export function round_digest(rows, now_ms) {
   if (!rows.length) return { total: 0, path: new Set(), members: [], wait: 0, running: [], failed: 0, stalled: 0 };
   const by_key = new Map(rows.map((row) => [row.key, row]));
   const last = rows.reduce((latest, row) => row.end > latest.end || (row.end === latest.end && row.item.state === "running") ? row : latest);
+  // What a row waited for: of the executions started before it was requested, the one at work latest by then.
+  const waited_on = (row) => {
+    let best = null, best_at = -Infinity;
+    for (const other of rows) {
+      if (other.key === row.key || other.start >= row.queue[0]) continue;
+      const at = Math.min(other.end, row.queue[0]);
+      if (at > best_at || (at === best_at && other.key === row.parent)) { best = other; best_at = at; }
+    }
+    return best;
+  };
   const path = new Set();
-  for (let row = last; row && !path.has(row.key); row = by_key.get(row.parent)) path.add(row.key);
+  for (let row = last; row && !path.has(row.key); row = waited_on(row)) path.add(row.key);
   const members = new Map();
   let wait = 0;
   for (const key of path) {
@@ -306,42 +282,48 @@ export function timeline_rows(timeline, now_ms) {
 }
 
 /**
- * The run an execution belongs to, as a trace is one agent run: a free execution's run is the request that started its
- * chain (the task of the execution at the top of its dispatch tree), so every hand-off and summary of one user message
- * reads as one trace; a discussion execution's run is its discussion run.
- */
-export function run_key(item, by_id) {
-  if (item.source === "discussion") return `run:${item.run_id || item.id}`;
-  let root = item;
-  for (const seen = new Set([item.id]); root.parent_id && by_id.has(root.parent_id) && !seen.has(root.parent_id); root = by_id.get(root.parent_id)) {
-    seen.add(root.parent_id);
-  }
-  return root.task_id ? `task:${root.task_id}` : `exec:${root.id}`;
-}
-
-/**
- * The runs on the timeline, newest first: what started each (its opening request or discussion question), when it ran,
- * how many executions it took and whether any is still running or failed. `key` of each execution is in `runs.of`.
+ * The stretches of work on the timeline, newest first. Collaboration splits wherever nobody worked for longer than
+ * FOLD_GAP_MS, the same gap the axis folds, so one stretch is one unfolded block of time: a sitting of work, however
+ * many messages, hand-offs or host continuations it took. (Splitting by the user message a dispatch tree answers made
+ * a "run" of every @, and cut one sitting into several wherever the user cut in or the host carried on.) A discussion
+ * keeps its own run, which is a clear unit. Each stretch says when it ran, who worked in it and for how long (`work`:
+ * per member, longest first), how long requests waited before work began (`wait`), how many executions it took and
+ * whether any is still running or failed; `runs.of` maps an execution's key to its stretch.
  */
 export function timeline_runs(timeline, now_ms) {
-  const free = new Map(timeline.executions.filter((item) => item.source === "free").map((item) => [item.id, item]));
-  const runs = new Map();
+  const entries = timeline.executions.map((item) => ({ item, key: `${item.source}:${item.id}`, ...execution_stages(item, now_ms) }))
+    .sort((a, b) => a.start - b.start || a.key.localeCompare(b.key));
+  const list = [];
   const of = new Map();
-  for (const item of timeline.executions) {
-    const key = run_key(item, free);
-    of.set(`${item.source}:${item.id}`, key);
-    const stages = execution_stages(item, now_ms);
-    const run = runs.get(key) || { key, source: item.source, start: stages.start, end: stages.end, count: 0, running: false, failed: false, task: "", first: Infinity };
-    run.start = Math.min(run.start, stages.start);
-    run.end = Math.max(run.end, stages.end);
+  const discussions = new Map();
+  const open = (key, source, entry) => {
+    const run = { key, source, start: entry.start, end: entry.end, count: 0, running: false, failed: false, members: [], work: new Map(), wait: 0, task: entry.item.task || "" };
+    list.push(run);
+    return run;
+  };
+  let stretch = null;
+  for (const entry of entries) {
+    let run;
+    if (entry.item.source === "discussion") {
+      const key = `run:${entry.item.run_id || entry.item.id}`;
+      run = discussions.get(key) || open(key, "discussion", entry);
+      discussions.set(key, run);
+    } else {
+      if (!stretch || entry.start > stretch.end + FOLD_GAP_MS) stretch = open(`span:${entry.key}`, "free", entry);
+      run = stretch;
+    }
+    run.start = Math.min(run.start, entry.start);
+    run.end = Math.max(run.end, entry.end);
     run.count += 1;
-    run.running ||= item.state === "running";
-    run.failed ||= item.state === "failed";
-    // The opening request names the run: the task of its earliest execution that has one.
-    if (item.task && stages.start < run.first) { run.task = item.task; run.first = stages.start; }
-    runs.set(key, run);
+    run.running ||= entry.item.state === "running";
+    run.failed ||= entry.item.state === "failed";
+    if (!run.members.includes(entry.item.member)) run.members.push(entry.item.member);
+    run.work.set(entry.item.member, (run.work.get(entry.item.member) || 0) + (entry.work ? entry.work[1] - entry.work[0] : 0));
+    run.wait += (entry.work ? entry.work[0] : entry.end) - entry.queue[0];
+    of.set(entry.key, run.key);
   }
-  return { list: [...runs.values()].sort((a, b) => b.start - a.start), of };
+  for (const run of list) run.work = [...run.work].map(([member, ms]) => ({ member, ms })).sort((a, b) => b.ms - a.ms);
+  return { list: list.sort((a, b) => b.start - a.start), of };
 }
 
 /**

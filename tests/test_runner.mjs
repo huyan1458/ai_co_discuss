@@ -1266,8 +1266,8 @@ test('a taken-over Claude member whose own window is open gets its task through 
   const access_path = join(home, 'access.json'); writeFileSync(access_path, JSON.stringify({ token: 'member', session_id: '' }));
   const spawned = [], bound = [];
   const result = await deliver_task({ ...profile, executable: process.execPath }, { session_id: original },
-    { id: 'free-7', inbox: true, access_path, prompt: '请先读取任务文件 free-7.task.json', on_note: () => {}, on_binding: session => bound.push(session) }, (...args) => { spawned.push(args); throw new Error('no process'); });
-  assert.deepEqual(result, { session_id: original, status: 'accepted', capabilities: { stoppable: false, progress: false } }, 'the adapter reports it cannot stop a window');
+    { id: 'free-7', inbox: true, access_path, directory: home, prompt: '请先读取任务文件 free-7.task.json', on_note: () => {}, on_binding: session => bound.push(session) }, (...args) => { spawned.push(args); throw new Error('no process'); });
+  assert.deepEqual(result, { session_id: original, status: 'accepted', capabilities: { stoppable: false, progress: true } }, 'the adapter reports it cannot stop a window, but reads its progress');
   assert.deepEqual(spawned, []);
   assert.deepEqual(bound, [original], 'the discussion runner enters the execution once the session is reported');
   for (let waited = 0; received.length < 2 && waited < 2000; waited += 20) await delay(20);
@@ -1300,6 +1300,22 @@ test('a Claude window turn that ends on a usage limit fails without retry, and o
   assert.deepEqual(await follow(prompt + line({ type: 'assistant', message: { content: [{ type: 'text', text: '好' }] } }) + turn_end), ['exit']);
   assert.equal(claude_api_error({ type: 'assistant', is_api_error_message: true, error: 'server_error',
     message: { content: [{ type: 'text', text: 'API Error: 529 Overloaded' }] } }).lasting, false, 'an overloaded server is retried');
+  // Shapes recorded by Claude Code 2.1.322 (2026-11-10): the turn ends while a background agent runs; its report starts the next.
+  const launched = line({ type: 'assistant', message: { content: [{ type: 'tool_use', id: 'toolu_bg', name: 'Agent', input: {} }] } })
+    + line({ type: 'user', message: { content: [{ type: 'tool_result', tool_use_id: 'toolu_bg', content: [{ type: 'text', text: 'Async agent launched' }] }] },
+      toolUseResult: { isAsync: true, status: 'async_launched', agentId: 'a1' } });
+  const reported = line({ type: 'attachment', attachment: { type: 'queued_command', commandMode: 'task-notification',
+    prompt: '<task-notification>\n<task-id>a1</task-id>\n<tool-use-id>toolu_bg</tool-use-id>\n<status>completed</status>\n</task-notification>' } });
+  const file = join(home, `${randomUUID()}.jsonl`);
+  writeFileSync(file, '');
+  const seen = [];
+  watch_window_turn({ file, offset: 0, pid: process.pid, marker: 'free-9.task.json' }, { on_exit: () => seen.push('exit') }, { interval: 10 });
+  appendFileSync(file, prompt + launched + turn_end);
+  await delay(100);
+  assert.deepEqual(seen, [], 'a turn waiting for its background agent has not ended');
+  appendFileSync(file, reported + turn_end);
+  for (let waited = 0; !seen.length && waited < 2000; waited += 20) await delay(20);
+  assert.deepEqual(seen, ['exit']);
 });
 
 test('agy 全放开 skips its permission prompts, which no other level does', async t => {

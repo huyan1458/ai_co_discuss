@@ -389,9 +389,8 @@ const MIDDLE_BUTTON = 1, DOUBLE_PRESS_MS = 400;
 let middle_pressed_at = 0;
 function middle_press(event) {
   if (event.button !== MIDDLE_BUTTON) return;
-  // Keep the browser's autoscroll from starting on the canvas.
-  event.preventDefault();
-  if (event.timeStamp - middle_pressed_at < DOUBLE_PRESS_MS) { middle_pressed_at = 0; reset_view(); return; }
+  // The pan this press starts stops any view animation, so the reset runs once the press has been handled.
+  if (event.timeStamp - middle_pressed_at < DOUBLE_PRESS_MS) { middle_pressed_at = 0; setTimeout(reset_view, 0); return; }
   middle_pressed_at = event.timeStamp;
 }
 

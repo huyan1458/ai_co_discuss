@@ -10,7 +10,7 @@ import { setTimeout as sleep } from 'node:timers/promises';
 import { gzipSync } from 'node:zlib';
 
 import { atomic_json } from './files.mjs';
-import { remote_room_files } from './discussion_launch.mjs';
+import { remote_room_files, remote_room_page } from './discussion_launch.mjs';
 import { acquire_lock } from './discussion_runner.mjs';
 import { local_settings } from './discussion_setup.mjs';
 import { machine_links, relay_cipher, save_machine_links, relayed_command, ROOM_ACTIONS, run_launch_command, sync_remote_launches, unseal } from './remote_launch.mjs';
@@ -162,10 +162,15 @@ export function computer_command(home, site, action, payload) {
   return relayed_command(room?.site ?? local_origin(home), action, input);
 }
 
-/** Run one local operation; browsing project files is answered in this process, since it is asked for on every folder opened. */
+/**
+ * Run one local operation; browsing project files and reading an HTML page are answered in this process, since they
+ * are asked for on every folder opened or page part.
+ */
 async function run_command(home, command, run) {
-  if (command.command !== 'room-files' || run !== run_launch_command) return run(command);
-  return { status: 200, body: await remote_room_files(home, command.input) };
+  if (run !== run_launch_command) return run(command);
+  if (command.command === 'room-files') return { status: 200, body: await remote_room_files(home, command.input) };
+  if (command.command === 'room-page') return { status: 200, body: await remote_room_page(home, command.input) };
+  return run(command);
 }
 
 /** Answer one relayed request: room routes and uploads go to the local website, everything else to the local entrypoint as before. */

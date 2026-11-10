@@ -10,7 +10,7 @@ import { pathToFileURL } from 'node:url';
 import { parseArgs } from 'node:util';
 
 import { atomic_json } from './files.mjs';
-import { outside_directory, read_only_enforced, read_project_files, room_directories, search_project_roots } from './project_files.mjs';
+import { bundle_project_page, outside_directory, read_only_enforced, read_project_files, room_directories, search_project_roots } from './project_files.mjs';
 import { guard_remote_request, list_remote_directories } from './remote_policy.mjs';
 import { list_devices, machine_fingerprint, revoke_device, start_pairing } from './device_auth.mjs';
 import { setup_sidecar } from './adapters/antigravity_app.mjs';
@@ -59,6 +59,7 @@ const HELP = `用法：codiscuss launch settings [--file FILE]
       codiscuss launch room-config --file FILE
       codiscuss launch room-models --file FILE
       codiscuss launch room-files --file FILE
+      codiscuss launch room-page --file FILE
       codiscuss launch execution-details --file FILE
       codiscuss launch models --file FILE
       codiscuss launch api-key --file FILE
@@ -94,6 +95,7 @@ start 使用启动 JSON 创建或接入房间并启动；--dry-run 只校验和�
 room-config 修正已暂停房间的软件路径或切换 Codex App / CLI，不启动讨论；须提供 site、room_id、token。
 room-models 只读指定 site、room_id 的本机登记模型与思考强度，不启动讨论；quick 为 true 时不查询 agy 的默认模型（较慢），该成员标 defaults_pending。
 room-files 只读房间已保存的项目目录，须提供 site、room_id、token，可选相对 path 和目录分页 offset；文件返回最多前 128 KiB 文本；给 query 时改为按名称搜索整个项目（含 / 时按路径），最多返回 50 项。
+room-page 只读项目目录里的一个 HTML 文件（path，可选 root），把它按相对路径引用的样式、脚本、图片、字体与音视频内联为 data URL，以 base64 的 data 返回（最多 8 MiB）；其他设备经中转时分段返回，按 offset 续读并核对 version；未能载入的引用列在 missing（不存在或在项目目录外）与 skipped（超出大小）。
 execution-details 只读房间某次执行的过程细节（中间说明、命令与输出、搜索、改动、工具调用），由本机日志还原，须提供 site、room_id、token、execution_id；细节只留在本机，不写入网站。
 models 按 adapter、executable 或 API profile 读取模型目录，不启动讨论或生成回答。
 api-key 将 base_url、api_key 保存于本机私有目录，只返回 api_key_ref。
@@ -120,10 +122,10 @@ room-restore 把导入房间的本机成员配置登记到本机并核对原会�
 room-fork 把从原房间分支出的新房间登记到本机，各本机成员从原会话分叉、不含分支点之后的执行，原会话不变；须提供 site、room_id、token、source_room_id、source_token、executions（{成员名: [排除的执行编号]}）。
 workflow-adopt 主持人在本房间启用工作流：--draft 把自己的草稿（一段，分段头 1/1）保存进工作流库后启用，--id 启用工作流库里已有的工作流（不改动它）；缺的卡片成员由本机服务邀请，项目权限最高可写；须房主已为本房间打开“主持人完整权限”。凭据为本次任务的 access_file（或 DISCUSS_ACCESS_FILE）。
 workflow-join 主持人为本房间在用工作流里还没有成员的卡片（启用后才新增的）邀请成员，不填 --card 即全部；无需额外授权，离开或移除的成员由用户请回。凭据同上。
-host-control 主持人代房主控制房间，须房主已为本房间打开“主持人完整权限”，凭据同上；成员用 --member（成员 ID 或显示名），不能是主持人自己：
+host-control 主持人代房主控制房间，须房主已为本房间打开“主持人完整权限”，凭据同上；成员用 --member（成员 ID 或显示名），除 retry、model、label 外不能是主持人自己：
   诊断：details --execution N 读取该执行的本机过程日志（服务端详情与事件记录用 execution / room events 读取）；
   恢复：stop --member 打断；stop-all 停止全部执行、请求与接力；steer --member --text 话 [--submission-id ID] 向它进行中的执行插话；
-        retry --execution N 重试失败的执行；model --member [--model M] [--effort E] 改模型与强度（空值恢复默认）；
+        retry --execution N 重试失败的执行（含你自己的）；model --member [--model M] [--effort E] 改模型与强度（空值恢复默认）；
         adapter --member --adapter ID 在同一软件的 App 与 CLI 间切换；access --member --access read|write 调整项目权限；
   成员：invite --name 平台 [--access read|write] [--model M] [--effort E] 用本机已配置的软件邀请，项目权限最高可写；
         away / remove / back --member 暂离、移除、请回；label --member [--label 显示名] [--description 描述]；
@@ -132,7 +134,7 @@ host-control 主持人代房主控制房间，须房主已为本房间打开“�
   推进：order 读取发言顺序，order --order 甲,乙 --revision REV 调整尚未发言的部分；
         discussion 读取讨论，discussion --do start --goal 目标 --revision REV 开启（上限用房间默认值），--do pause|resume|end --revision REV；
         goal 读取 Goal，goal --do start --goal 目标 --revision REV 开启（预算用房主默认值，默认不限时为 8 次续跑、90 分钟），--do pause|resume|end --revision REV。
-  不开放：批准超出上限的轮数、项目权限高于可写或放行工具、改项目目录、撤回回退用户消息、私聊、对主持人自己操作。
+  不开放：批准超出上限的轮数、项目权限高于可写或放行工具、改项目目录、撤回回退用户消息、私聊、对主持人自己的其他操作。
 workflow-check 按导入规则校验工作流文件夹或单段草稿，返回预览，不保存；workflow-save 校验后保存进工作流库（同 ID 覆盖），卡片按声明的项目权限保存。写法见 workflow-creator 技能。
 JSON 指定 site、entry（conversation/web）、room（建房内容，含 submission_id）
 或 room_id（已有房间）、participants（本次软件覆盖配置）。
@@ -405,6 +407,33 @@ export async function remote_room_files(home, input) {
   assert_shared_home(home);
   guard_remote_request('room-files', input, { projects: launch_projects(home).projects, participants: launch_settings(home).participants, home });
   return room_files(home, input, { trust: true });
+}
+
+// A relayed answer carries this much of a page at a time, within the relay's encrypted envelope after base64.
+const PAGE_PART_BYTES = 192 * 1024;
+
+/**
+ * One HTML file of the room's project with the files it refers to inlined (see `bundle_project_page`), as base64
+ * `data` from `offset`. With `parts` (another device, through the relay) at most `PAGE_PART_BYTES` at a time; the
+ * caller asks again from where a part ended and checks `version` stays the same.
+ */
+export async function room_page(home, raw, { trust = false, parts = false } = {}) {
+  const { input, config } = await member_room_context(home, raw, { trust });
+  const directories = room_directories(config);
+  const root = input.root ?? 0;
+  const offset = input.offset ?? 0;
+  if (!Number.isSafeInteger(root) || root < 0 || root >= Math.max(1, directories.length)) throw new Error('项目目录编号无效，请刷新后重试');
+  if (!Number.isSafeInteger(offset) || offset < 0) throw new Error('页面读取位置无效');
+  const { bytes, ...page } = bundle_project_page(directories[root], input.path);
+  const part = bytes.subarray(offset, parts ? offset + PAGE_PART_BYTES : bytes.length);
+  return { room_id: input.room_id, root, ...page, total: bytes.length, offset, data: part.toString('base64') };
+}
+
+/** `room-page` asked for by another device, answered inside the relay's own process in parts, like `remote_room_files`. */
+export async function remote_room_page(home, input) {
+  assert_shared_home(home);
+  guard_remote_request('room-page', input, { projects: launch_projects(home).projects, participants: launch_settings(home).participants, home });
+  return room_page(home, input, { trust: true, parts: true });
 }
 
 // The newest part of a long-running execution's log is what its detail view needs; older lines are dropped.
@@ -1745,12 +1774,16 @@ export async function join_workflow(home, { access_file, cards }) {
 const HOST_GOAL_BUDGET = { max_continues: 8, max_minutes: 90 };
 const LIVE_EXECUTION = ['dispatched', 'started'];
 
-/** The active-or-away member a host names by member ID or display name; never the host itself. */
-function host_target({ roster, labels, host }, wanted) {
+/**
+ * The active-or-away member a host names by member ID or display name. The host itself only with `self`: changes that
+ * apply from its next delivery (model, label) let it recover, e.g. from one model's quota; stopping, access and
+ * presence stay with the owner.
+ */
+function host_target({ roster, labels, host }, wanted, { self = false } = {}) {
   if (!wanted) throw new Error('须用 --member 指定成员（成员 ID 或显示名）');
   const member = roster.find(item => item.status !== 'removed' && (item.name === wanted || labels[item.name] === wanted));
   if (!member) throw new Error(`本房间没有成员 ${wanted}`);
-  if (member.name === host) throw new Error('主持人不能对自己执行此操作；更换或移除主持人由用户决定');
+  if (member.name === host && !self) throw new Error('主持人不能对自己执行此操作（自己只能改模型与强度、显示名）；更换或移除主持人由用户决定');
   return member;
 }
 
@@ -1811,7 +1844,7 @@ function host_steer(ctx, { member: wanted, text, submission_id }) {
 
 /** Set a member's display name and, optionally, its description. */
 async function host_label(ctx, { member: wanted, label, description }) {
-  const member = host_target(ctx, wanted);
+  const member = host_target(ctx, wanted, { self: true });
   if (!label && !description) throw new Error('须用 --label 或 --description 指定显示名或描述');
   if (label) await ctx.call('/labels', { labels: { [member.name]: label } });
   if (description) await ctx.call('/descriptions', { descriptions: { [member.name]: description } });
@@ -1848,7 +1881,7 @@ const HOST_CONTROLS = {
   away: (ctx, o) => ctx.call(`/members/${host_target(ctx, o.member).id}`, { action: 'away' }),
   remove: (ctx, o) => ctx.call(`/members/${host_target(ctx, o.member).id}`, { action: 'remove' }),
   back: (ctx, o) => room_member(ctx.home, { ...ctx.owner, action: 'rejoin', name: host_target(ctx, o.member).name }, false, ctx.headers),
-  model: (ctx, o) => room_member_model(ctx.home, { ...ctx.owner, name: host_target(ctx, o.member).name, model: o.model || '', effort: o.effort || '' }),
+  model: (ctx, o) => room_member_model(ctx.home, { ...ctx.owner, name: host_target(ctx, o.member, { self: true }).name, model: o.model || '', effort: o.effort || '' }),
   access: (ctx, o) => {
     if (!HOST_CARD_ACCESS.includes(o.access)) throw new Error('主持人只能把成员的项目权限设为 read 或 write');
     return room_member_access(ctx.home, { ...ctx.owner, name: host_target(ctx, o.member).name, project_access: o.access });
@@ -2020,6 +2053,7 @@ export async function launch_main(args = process.argv.slice(2), input_text) {
   else if (positionals[0] === 'stt' && input) result = await stt_part(home, input);
   else if (positionals[0] === 'room-models' && input) result = await room_models(home, input);
   else if (positionals[0] === 'room-files' && input) result = await room_files(home, input);
+  else if (positionals[0] === 'room-page' && input) result = await room_page(home, input, { parts: Boolean(values.remote) });
   else if (positionals[0] === 'execution-details' && input) result = await execution_details_command(home, input);
   else if (positionals[0] === 'models' && adapter_profile(input?.adapter)?.kind === 'api') result = await api_models(home, input);
   else if (positionals[0] === 'models' && input) {

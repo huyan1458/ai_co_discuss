@@ -1736,6 +1736,14 @@ function attachment_size(size) {
   return size < 1024 ? `${size} B` : size < 1024 * 1024 ? `${(size / 1024).toFixed(1)} KiB` : `${(size / 1024 / 1024).toFixed(1)} MiB`;
 }
 
+// Attachments read as text in the file preview window (Markdown and HTML rendered, the rest as source).
+const TEXT_ATTACHMENT = /\.(md|markdown|txt|log|csv|tsv|json|jsonc|ya?ml|toml|ini|xml|html?|css|vue|[cm]?js|jsx|tsx?|py|sql|sh|ps1|bat)$/i;
+
+/** Whether an attachment opens in the file preview window as text. */
+function is_text_attachment(file) {
+  return TEXT_ATTACHMENT.test(file.file_name);
+}
+
 /** Render a file-shaped type badge; the extension is a label, not a preview capability. */
 function attachment_file_icon(file_name) {
   const extension = String(file_name).match(/\.([a-z0-9]{1,5})$/i)?.[1].toUpperCase() || "FILE";
@@ -1834,7 +1842,7 @@ function attachment_markup(files = []) {
     if (file.content_type.startsWith("image/")) return `<button type="button" class="attachment-image" ${preview_attributes}>
       <img ${source} alt="${name}" loading="lazy"></button>`;
     const content = `${attachment_file_icon(file.file_name)}<span class="attachment-name"><span title="${name}">${name}</span><small>${attachment_size(file.size)}</small></span>`;
-    return `<div class="attachment-file">${file.content_type === "application/pdf"
+    return `<div class="attachment-file">${file.content_type === "application/pdf" || is_text_attachment(file)
       ? `<button type="button" class="attachment-file-main" ${preview_attributes}>${content}</button>`
       : `<a class="attachment-file-main" ${download} download aria-label="下载 ${name}">${content}</a>`}
       <a class="attachment-download" ${download} download aria-label="下载 ${name}" title="下载 ${name}">
@@ -1862,6 +1870,13 @@ async function preview_attachment({ room_id, id }) {
   if (state.remote_rooms) {
     file.url = file.download_url = await relay_file_url(new URL(file.url, location.origin).pathname);
     if (state.attachment_preview !== preview) return;
+  }
+  if (is_text_attachment(file)) {
+    state.attachment_preview = null;
+    // The file preview window belongs to the Vue workspace; without it the file is downloaded.
+    if (state.text_preview) state.text_preview(file);
+    else location.assign(file.download_url);
+    return;
   }
   preview.file = file;
   const is_pdf = file.content_type === "application/pdf";
@@ -3054,6 +3069,28 @@ function reload_room_models() {
 /** Read a directory or file from the room's saved project through the authenticated local connection. */
 function read_room_files(room_id, path = "", offset = 0, query = "", root = 0) {
   return local_launch_request("room-files", { room_id, path, offset, ...(query ? { query } : { root }), token: localStorage.getItem(`discuss-access:${room_id}`) });
+}
+
+/**
+ * Read one HTML file of the room's project with the files it refers to inlined by the computer, in parts when it comes
+ * through the relay; `{ text, missing, skipped, modified_at }`.
+ */
+async function read_room_page(room_id, path, root = 0) {
+  const parts = [];
+  let offset = 0, answer, version = "";
+  do {
+    answer = await local_launch_request("room-page", { room_id, path, root, offset, token: localStorage.getItem(`discuss-access:${room_id}`) });
+    if (version && answer.version !== version) throw new Error("页面在读取时发生了变化，请重试");
+    version = answer.version;
+    const bytes = base64_to_bytes(answer.data || "");
+    if (!bytes.length && offset < answer.total) throw new Error("页面读取失败");
+    parts.push(bytes);
+    offset += bytes.length;
+  } while (offset < answer.total);
+  const bytes = new Uint8Array(offset);
+  let at = 0;
+  for (const part of parts) { bytes.set(part, at); at += part.length; }
+  return { text: new TextDecoder().decode(bytes), missing: answer.missing || [], skipped: answer.skipped || [], modified_at: answer.modified_at };
 }
 
 /**
@@ -5014,7 +5051,7 @@ window.discuss_view = { snapshot: view_snapshot, write_field: write_view_field, 
   write_launch: write_launch_field, default_launch_entry, description_template, save_description_template, description_draft, write_description_draft, describe_member, set_chain_rounds, continue_chain, expert_presets, apply_expert_preset, unique_instance, member_label, default_name, label_draft, write_label_draft, preset_identity, save_expert_preset, delete_expert_preset, write_room_connection, write_room_adapter, launch_clients: LAUNCH_CLIENTS,
   launch_model_state, load_launch_models, write_launch_model, save_launch_api_key, write_scheduler, save_scheduler_api_key, check_scheduler, write_named_followup, write_create_discussion, write_create_goal, write_create_chain_rounds, check_launch_api, launch_summary, launch_can_set_access, pick_launch_directory, browse_local_directory, list_remote_directories, save_launch_projects, restore_launch_profile, reset_create_form, empty_discussion_message,
   start_drag: start_directory_drag, reconnect: reconnect_live_updates, stop_label, local_request: local_launch_request,
-  attachment_markup, attachment_size, attachment_file_icon, drop_attachments, paste_attachments,
+  attachment_markup, attachment_size, attachment_file_icon, drop_attachments, paste_attachments, set_text_preview: (open) => { state.text_preview = open; },
   write_expert: write_view_expert, add_instance: add_view_instance, add_preset: add_preset_instance, platform_of, execute: execute_view_action, theme: change_view_theme,
   reload_workflows, workflow_preset, write_create_host_workflows, write_create_api_max_requests, set_room_api_max_requests, set_room_extra_directories, set_room_project_directory,
   admin: { register: register_admin, login: login_admin, logout: logout_admin,
@@ -5023,7 +5060,7 @@ window.discuss_view = { snapshot: view_snapshot, write_field: write_view_field, 
   device: { request: device_request, pair: pair_this_device, take_scanned: take_scanned_pairing, invite: invite_device, renew: renew_this_device, forget: forget_pairing,
     label: device_label, prompt_confirm: () => state.device.prompt?.run(), prompt_cancel: () => state.device.prompt?.cancel() },
   request: request_json, rewind_plan, identities: IDENTITIES, display_name, mention_handles, mentioned_members, render_room_markdown, sources: SOURCE_LABELS,
-  set_member_access, set_member_model, allow_denials, set_member_adapter, reload_room_models, read_room_files, read_execution_details, interject_execution, read_member_chat, send_member_chat, stop_member_chat, pause_execution, limits_label, stop_reason_label, participant_model, participant_files, participant_session_hint, participant_access,
+  set_member_access, set_member_model, allow_denials, set_member_adapter, reload_room_models, read_room_files, read_room_page, read_execution_details, interject_execution, read_member_chat, send_member_chat, stop_member_chat, pause_execution, limits_label, stop_reason_label, participant_model, participant_files, participant_session_hint, participant_access,
   turn_label, turn_guidance, round_groups, limit_rounds, progress_speaker, brief_meta, max_message_length: MAX_MESSAGE_LENGTH, provenance: message_provenance, format_time };
 
 restore_theme();

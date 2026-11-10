@@ -1460,6 +1460,39 @@ class HostTests(HostRoomTests):
         self.assertIn("重试后已结束", self.messages()[-1][1])
         self.assertEqual(self.requests().count(("Claude", "notice", "pending")), 0, "the waiting hand-back reads it")
 
+    def test_a_late_answer_completes_an_execution_the_runner_failed_unless_it_was_retried(self):
+        """The runner's failure was a judgement; the member's answer arriving later still completes it, once."""
+        FreeRoomTests.say(self, "迟到的回答")
+        self.work("Claude", to=["Codex", "Antigravity"])
+        failed = {}
+        for name in ("Codex", "Antigravity"):
+            failed[name] = self.reserve_for(name)[1]
+            self.request(f"{self.path}/executions/{failed[name]['id']}", {"action": "fail", "reason": "会话已结束，但未提交本次回答"}, self.owner)
+        post = lambda name: self.request(f"{self.path}/messages", {"author": name, "text": f"{name} 迟到的结果", "source": "cli",
+                                                                    "submission_id": uuid.uuid4().hex, "execution_id": failed[name]["id"]}, self.tokens[name])
+        status, saved = post("Codex")
+        self.assertEqual(status, 201, saved)
+        execution = self.request(f"{self.path}/executions/{failed['Codex']['id']}", token=self.owner)[1]
+        self.assertEqual(execution["status"], "completed", execution)
+        self.assertIn(("Codex", "ask", "completed"), self.requests())
+        self.assertEqual(post("Codex")[0], 409, "a completed execution takes no second answer")
+        self.request(f"{self.path}/executions/{failed['Antigravity']['id']}", {"action": "retry"}, self.owner)
+        self.assertEqual(post("Antigravity")[0], 409, "a retried failure belongs to its new delivery")
+
+    def test_the_hosts_own_failure_wakes_it_once_and_a_failure_on_that_notice_wakes_nobody(self):
+        """A failed host is told so it can resubmit or retry; failing again on that notice does not loop."""
+        FreeRoomTests.say(self, "交给主持人")
+        first = self.reserve_for("Claude")[1]
+        self.request(f"{self.path}/executions/{first['id']}", {"action": "fail", "reason": "会话已结束"}, self.owner)
+        self.assertEqual(self.requests()[-1], ("Claude", "notice", "pending"))
+        self.assertIn(f"--execution {first['id']}", self.messages()[-1][1])
+        notice = self.reserve_for("Claude")[1]
+        self.request(f"{self.path}/executions/{notice['id']}", {"action": "fail", "reason": "用量已达上限"}, self.owner)
+        self.assertEqual([item for item in self.requests() if item == ("Claude", "notice", "pending")], [])
+        status, saved = self.request(f"{self.path}/messages", {"author": "Claude", "text": "补交", "source": "cli",
+                                                                "submission_id": uuid.uuid4().hex, "execution_id": first["id"]}, self.member)
+        self.assertEqual(status, 201, saved)
+
     def test_round_limit_holds_the_next_dispatch_until_the_owner_continues(self):
         """A round is a host dispatch: its hand-back always comes, the next dispatch past the limit is held, and continuing sends it."""
         from backend import free_room

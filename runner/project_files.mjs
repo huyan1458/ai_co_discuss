@@ -1,6 +1,7 @@
 /** Read-only directory and text previews, confined to a room's saved project directories. */
-import { closeSync, fstatSync, openSync, readdirSync, readSync, realpathSync, statSync } from 'node:fs';
-import { isAbsolute, relative, resolve } from 'node:path';
+import { createHash } from 'node:crypto';
+import { closeSync, fstatSync, openSync, readdirSync, readFileSync, readSync, realpathSync, statSync } from 'node:fs';
+import { isAbsolute, posix, relative, resolve } from 'node:path';
 import { adapter_profile } from './adapters/profiles.mjs';
 import { PINYIN_TABLE } from './pinyin_table.mjs';
 
@@ -221,6 +222,105 @@ export function read_project_files(cwd, path = '', offset = 0, query = '') {
   }
   return { path: normalized, kind: 'directory', entries, total: items.length,
     next_offset: offset + entries.length < items.length ? offset + entries.length : null };
+}
+
+// An HTML page with the files it refers to inlined stays within this size; references past it are left as they are.
+export const PAGE_MAX_BYTES = 8 * 1024 * 1024;
+// Media types of the files a page may refer to; others are left as they are.
+const PAGE_TYPES = {
+  css: 'text/css', js: 'text/javascript', mjs: 'text/javascript', json: 'application/json', txt: 'text/plain', csv: 'text/csv',
+  png: 'image/png', jpg: 'image/jpeg', jpeg: 'image/jpeg', gif: 'image/gif', webp: 'image/webp', avif: 'image/avif', svg: 'image/svg+xml',
+  ico: 'image/x-icon', bmp: 'image/bmp', woff: 'font/woff', woff2: 'font/woff2', ttf: 'font/ttf', otf: 'font/otf',
+  mp3: 'audio/mpeg', wav: 'audio/wav', ogg: 'audio/ogg', m4a: 'audio/mp4', mp4: 'video/mp4', webm: 'video/webm',
+};
+// Script and style bodies are kept apart so only real tags are rewritten; comments are left alone.
+const PAGE_PARTS = /(<script\b[^>]*>)([\s\S]*?)(<\/script\s*>)|(<style\b[^>]*>)([\s\S]*?)(<\/style\s*>)|(<!--[\s\S]*?-->)|(<[a-zA-Z][^>]*>)/gi;
+const TAG_ATTRIBUTE = /(\s)(src|poster|href|style)(\s*=\s*)(?:"([^"]*)"|'([^']*)'|([^\s"'=<>`]+))/gi;
+const CSS_URL = /url\(\s*(['"]?)([^'")]+)\1\s*\)/gi;
+const CSS_IMPORT = /@import\s+(['"])([^'"]+)\1/gi;
+
+/** The project path a reference in the file at `base` (a folder) names, or null for other URLs (schemes, fragments). */
+function page_reference(base, reference) {
+  const value = reference.trim().replace(/&amp;/g, '&');
+  if (!value || /^([a-z][a-z0-9+.-]*:|\/\/|#)/i.test(value)) return null;
+  let path = value.replace(/[?#].*$/, '');
+  try { path = decodeURIComponent(path); } catch { /* Kept as written. */ }
+  return posix.normalize(path.startsWith('/') ? path.slice(1) : posix.join(base, path));
+}
+
+/** A referenced project file as a data URL (a style sheet with its own references inlined), or null when it is left as written. */
+function page_resource(path, state, depth) {
+  if (path === null) return null;
+  if (state.inlined.has(path)) return state.inlined.get(path);
+  const type = PAGE_TYPES[posix.extname(path).slice(1).toLowerCase()];
+  if (!type) return null;
+  let bytes;
+  try {
+    if (path.startsWith('..')) throw new Error('outside');
+    const target = project_path(state.root, path);
+    if (!statSync(target).isFile()) throw new Error('not a file');
+    bytes = readFileSync(target);
+  } catch { state.missing.add(path); return null; }
+  if (type === 'text/css' && depth < 4) bytes = Buffer.from(page_css(bytes.toString('utf8'), posix.dirname(path), state, depth + 1));
+  const url = `data:${type};base64,${bytes.toString('base64')}`;
+  if (url.length > state.budget) { state.skipped.add(path); return null; }
+  state.budget -= url.length;
+  state.inlined.set(path, url);
+  return url;
+}
+
+/** Inline the files a style sheet refers to; `base` is the folder its relative URLs start from. */
+function page_css(css, base, state, depth) {
+  return css.replace(CSS_IMPORT, (whole, quote, reference) => {
+    const url = page_resource(page_reference(base, reference), state, depth);
+    return url ? `@import url(${url})` : whole;
+  }).replace(CSS_URL, (whole, quote, reference) => {
+    const url = page_resource(page_reference(base, reference), state, depth);
+    return url ? `url(${url})` : whole;
+  });
+}
+
+/** Inline the files one tag refers to: `src`/`poster` of any tag, `href` of style sheets and icons, URLs in `style`. */
+function page_tag(tag, base, state) {
+  const name = /^<([a-zA-Z][\w-]*)/.exec(tag)[1].toLowerCase();
+  const linked = name === 'link' && /\brel\s*=\s*["']?[^"'>]*\b(stylesheet|icon)\b/i.test(tag);
+  return tag.replace(TAG_ATTRIBUTE, (whole, space, attribute, equals, double, single, bare) => {
+    const value = double ?? single ?? bare;
+    const key = attribute.toLowerCase();
+    if (key === 'style') {
+      const css = page_css(value, base, state, 0);
+      return css === value ? whole : `${space}${attribute}${equals}"${css.replace(/"/g, '&quot;')}"`;
+    }
+    if (key === 'href' && !linked) return whole;
+    const url = page_resource(page_reference(base, value), state, 0);
+    return url ? `${space}${attribute}${equals}"${url}"` : whole;
+  });
+}
+
+/**
+ * One HTML file of a project with the style sheets, scripts, images, fonts and media it refers to by relative path
+ * inlined as data URLs, so it shows in full where only its text can be sent (another device, through the relay).
+ * Only files inside the project directory are read; references that are missing, outside it or past the size limit
+ * are left as written and listed. Resources a script asks for while running are not included.
+ */
+export function bundle_project_page(cwd, path) {
+  const root = project_root(cwd);
+  const target = project_path(root, path);
+  if (!/\.html?$/i.test(target)) throw new Error('只能打开 HTML 文件');
+  const info = statSync(target);
+  if (!info.isFile()) throw new Error('只能预览普通文件');
+  if (info.size > PAGE_MAX_BYTES) throw new Error('HTML 文件超过 8 MiB，无法完整显示');
+  const normalized = path.replaceAll('\\', '/').split('/').filter(part => part && part !== '.').join('/');
+  const base = posix.dirname(normalized);
+  const state = { root, budget: PAGE_MAX_BYTES - info.size, inlined: new Map(), missing: new Set(), skipped: new Set() };
+  const html = readFileSync(target, 'utf8').replace(PAGE_PARTS, (whole, script_open, script_body, script_close, style_open, style_body, style_close, comment, tag) => {
+    if (script_open) return page_tag(script_open, base, state) + script_body + script_close;
+    if (style_open) return style_open + page_css(style_body, base, state, 0) + style_close;
+    return comment ?? page_tag(tag, base, state);
+  });
+  const bytes = Buffer.from(html, 'utf8');
+  return { path: normalized, bytes, version: createHash('sha256').update(bytes).digest('hex').slice(0, 16), modified_at: info.mtime.toISOString(),
+    missing: [...state.missing], skipped: [...state.skipped] };
 }
 
 /** Search names under every directory of a room at once; each entry's `root` is the index of its directory. */
