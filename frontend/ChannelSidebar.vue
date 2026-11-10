@@ -50,6 +50,8 @@ const account_status = computed(() => {
     </header>
     <div v-keep-reading class="channel-sidebar-content">
       <ChannelDirectory @select="emit('select', $event)" @manage="emit('manage', $event)" @create="emit('create', $event)" @create-folder="emit('create-folder')" @manage-folder="emit('manage-folder', $event)" @delete-folder="emit('delete-folder', $event)" @archive-folder="emit('archive-folder', $event)" @archives="emit('archives')" />
+      <div class="channel-directory-heading channel-tools-heading"><button type="button" class="channel-section-toggle" :aria-expanded="tools_open" @click="tools_open = !tools_open"><UIcon :name="tools_open ? 'i-lucide-chevron-down' : 'i-lucide-chevron-right'" />频道工具</button></div>
+      <UNavigationMenu v-if="tools_open" :items="view_links" orientation="vertical" color="neutral" variant="pill" class="channel-directory channel-view-links" aria-label="房间视图" :ui="{ link: 'channel-link', linkLabel: 'channel-link-label', linkLeadingIcon: 'channel-link-icon' }" />
       <!-- The workflow library belongs to this computer, not a room: its own section beside 协作房间 and 频道工具; a row opens the workflow page in the middle. -->
       <div class="channel-directory-heading channel-tools-heading">
         <button type="button" class="channel-section-toggle" :aria-expanded="workflows_open" @click="workflows_open = !workflows_open"><UIcon :name="workflows_open ? 'i-lucide-chevron-down' : 'i-lucide-chevron-right'" />工作流</button>
@@ -62,11 +64,11 @@ const account_status = computed(() => {
           <button type="button" class="channel-room-select" :aria-current="page_open ? 'page' : undefined" @click="library.page_open.value = true; emit('workflows')"><UIcon name="i-lucide-file-plus-2" /><span>{{ draft.label || '未命名工作流' }}</span><small class="channel-room-time">未保存</small></button>
         </div>
         <div v-for="item in workflows" :key="item.id" class="channel-room-row" :class="{ active: page_open && saved_id === item.id, 'is-disabled': item.disabled, 'is-broken': item.error }">
-          <span v-if="renaming === item.id" class="channel-workflow-rename"><UIcon name="i-lucide-workflow" />
+          <span v-if="renaming === item.id" class="channel-workflow-rename"><UIcon name="i-lucide-network" />
             <input v-model="rename_text" data-workflow-rename :maxlength="32" aria-label="新名称" @keydown.enter.prevent="library.commit_rename" @keydown.esc.prevent="renaming = ''" @blur="library.commit_rename" /></span>
           <button v-else type="button" class="channel-room-select" :title="item.error || item.description" :aria-current="page_open && saved_id === item.id ? 'page' : undefined"
             @click="open_workflow(item.id)" @dblclick="!item.error && library.start_rename(item)">
-            <UIcon :name="item.error ? 'i-lucide-triangle-alert' : item.disabled ? 'i-lucide-circle-pause' : 'i-lucide-workflow'" /><span>{{ item.label }}</span>
+            <UIcon :name="item.error ? 'i-lucide-triangle-alert' : item.disabled ? 'i-lucide-circle-pause' : 'i-lucide-network'" /><span>{{ item.label }}</span>
             <small class="channel-room-time">{{ item.error ? '无法读取' : item.disabled ? '已停用' : `${item.cards} 位成员` }}</small></button>
           <div v-if="available && renaming !== item.id" class="channel-room-actions">
             <UDropdownMenu :items="library.item_menu(item)" :content="{ align: 'start', side: 'bottom', sideOffset: 6 }" :ui="{ content: 'channel-menu channel-topic-menu' }"><UButton icon="i-lucide-ellipsis" :aria-label="`「${item.label}」的更多操作`" title="更多操作" size="xs" color="neutral" variant="ghost" /></UDropdownMenu>
@@ -75,8 +77,6 @@ const account_status = computed(() => {
         <p v-if="!available" class="channel-directory-empty">连接本机服务后管理工作流</p>
         <p v-else-if="!workflows.length && !draft" class="channel-directory-empty">暂无工作流</p>
       </nav>
-      <div class="channel-directory-heading channel-tools-heading"><button type="button" class="channel-section-toggle" :aria-expanded="tools_open" @click="tools_open = !tools_open"><UIcon :name="tools_open ? 'i-lucide-chevron-down' : 'i-lucide-chevron-right'" />频道工具</button></div>
-      <UNavigationMenu v-if="tools_open" :items="view_links" orientation="vertical" color="neutral" variant="pill" class="channel-directory channel-view-links" aria-label="房间视图" :ui="{ link: 'channel-link', linkLabel: 'channel-link-label', linkLeadingIcon: 'channel-link-icon' }" />
     </div>
   <footer class="channel-sidebar-footer">
     <button type="button" class="channel-self-button" :aria-label="`账号与设置：${bridge.display_name(author)}${account_status ? '，' + account_status : ''}`" @click="emit('settings')">

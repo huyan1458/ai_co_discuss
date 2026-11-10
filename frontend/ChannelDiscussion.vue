@@ -373,6 +373,9 @@ const PRELOAD_MAX_SLICE = 20;
 // Idle slices wait this long at most (ms) for an idle moment, and hold off this long after the reader last scrolled.
 const PRELOAD_IDLE_TIMEOUT_MS = 300;
 const SCROLL_SETTLE_MS = 150;
+// WebKit (every iOS browser) has no scroll anchoring and keeps scrollTop in whole pixels, so each slice rendered above
+// shifts the cards on screen by the sub-pixel remainder; idle slices repeated through a long room made the text wobble.
+const SCROLL_ANCHORING = CSS.supports("overflow-anchor", "auto");
 const READING_OFFSET = 20;
 const room = computed(() => view.value.room);
 /** Whether two derived values hold the same data: identical leaves, or Maps, arrays and plain objects with equal entries. */
@@ -1300,9 +1303,10 @@ function floor_before(messages, index) {
   return 0;
 }
 // A long room first mounts only its newest cards (mounting hundreds at once held the page for seconds), then renders the
-// earlier ones a few at a time, each slice sized to fit within a frame: while the page is idle, or on every frame while
-// the reader nears the top or waits on a jump. Null follows the newest batch; otherwise it is the id of the first shown
-// message, so new arrivals never push cards out above the reader.
+// earlier ones a few at a time, each slice sized to fit within a frame: while the page is idle (only where the browser
+// has scroll anchoring, see SCROLL_ANCHORING), or on every frame while the reader nears the top or waits on a jump.
+// Null follows the newest batch; otherwise it is the id of the first shown message, so new arrivals never push cards out
+// above the reader.
 const render_floor = ref(null);
 const render_start = computed(() => {
   const messages = transcript_messages.value;
@@ -1358,6 +1362,8 @@ async function preload_slice() {
   // A hidden transcript has no layout to keep; showing it again tracks the scroll, which resumes the preload.
   if (preload_busy || !element?.clientHeight || !render_start.value) return;
   const urgent = preload_urgent(element);
+  // Without scroll anchoring earlier cards render only when the reader waits on them (near the top, or a jump).
+  if (!urgent && !SCROLL_ANCHORING) return;
   if ((!urgent || touch_scroll) && (glide.isAnimating() || touch_active || performance.now() - last_scroll_at < SCROLL_SETTLE_MS)) return schedule_preload();
   preload_busy = true;
   const started = performance.now();

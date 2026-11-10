@@ -325,8 +325,10 @@ function resize_nav_by_key(event) {
           <UTooltip v-if="rail_inline" :text="nav_collapsed ? '展开房间栏' : '收起房间栏'"><UButton icon="i-lucide-panel-left" color="neutral" variant="ghost" size="sm" class="channel-desktop-nav channel-icon-button channel-panel-toggle" :aria-label="nav_collapsed ? '展开房间栏' : '收起房间栏'" :aria-expanded="!nav_collapsed" aria-controls="channel-sidebar" @click="nav_collapsed = !nav_collapsed" /></UTooltip>
           <UButton v-else icon="i-lucide-panel-left" color="neutral" variant="ghost" size="sm" class="channel-mobile-nav channel-icon-button channel-panel-toggle" aria-label="打开房间导航" :aria-expanded="nav_open" @click="nav_open = true" />
           <template v-if="workflow_page">
-            <span class="channel-title-icon"><UIcon name="i-lucide-workflow" /></span>
-            <div class="channel-title"><div class="channel-title-copy"><h1 :title="workflow_draft?.label">{{ workflow_draft?.label || '工作流' }}</h1></div></div>
+            <span class="channel-title-icon"><UIcon name="i-lucide-network" /></span>
+            <div class="channel-title"><div class="channel-title-copy"><h1 v-if="!workflow_draft">工作流</h1><h1 v-else>
+              <input v-model="workflow_draft.label" class="channel-title-input" :maxlength="32" placeholder="未命名工作流" aria-label="工作流名称" title="点击改名"
+                :style="{ width: `calc(${Math.max(5, Math.min(16, (workflow_draft.label || '').length + 1))}em + 14px)` }" @keydown.enter="$event.target.blur()" /></h1></div></div>
             <span v-if="workflow_draft" class="channel-header-context">工作流<span>·</span>{{ workflow_saved ? `${workflow_draft.agents?.length || 0} 位成员` : '未保存' }}</span>
           </template>
           <template v-else>

@@ -7,7 +7,7 @@
  * of the workflow is on the canvas. Edits can be undone and redone; a double click on empty canvas fits it in view. The
  * `actions` slot sits top right.
  */
-import { computed, inject, nextTick, onBeforeUnmount, ref, watch } from "vue";
+import { computed, inject, nextTick, onBeforeUnmount, onMounted, ref, shallowRef, watch } from "vue";
 import { BaseEdge, EdgeLabelRenderer, Handle, MarkerType, Panel, Position, VueFlow, getBezierPath, getSmoothStepPath } from "@vue-flow/core";
 import { Background } from "@vue-flow/background";
 import { Controls } from "@vue-flow/controls";
@@ -96,13 +96,17 @@ const edges = ref(initial.edges.filter((edge) => nodes.value.some((node) => node
 const known = new Set(cards.value);
 
 // What is saved: positions rounded, arrows only between nodes still here.
-const stored = computed(() => {
+const live = computed(() => {
   const ids = new Set(nodes.value.map((node) => node.id));
   const noted = (item) => item.data?.label?.trim() ? { label: item.data.label.trim() } : {};
   return { nodes: nodes.value.map((node) => ({ id: node.id, type: node.type, ...(node.type === "card" ? { card: node.data.card } : {}),
     ...(node.type === "host" ? noted(node) : {}), x: Math.round(node.position.x), y: Math.round(node.position.y) })),
     edges: edges.value.filter((edge) => ids.has(edge.source) && ids.has(edge.target)).map((edge) => ({ source: edge.source, target: edge.target, ...noted(edge) })) };
 });
+// The saved form (and through it the undo history, the loop layout and the page's unsaved check) follows the canvas,
+// but not on every frame of a drag: that is taken once the card is let go, so dragging stays smooth.
+const stored = shallowRef(live.value);
+watch(live, (value) => { if (!dragging) stored.value = value; });
 watch(stored, (value) => { flow.value = value; }, { immediate: true });
 const shape = computed(() => flow_shape(stored.value));
 /** Nodes with no arrow leading on (loops aside): where a new node is appended. */
@@ -391,6 +395,105 @@ function middle_press(event) {
   middle_pressed_at = event.timeStamp;
 }
 
+// ── Two-finger pinch: it always zooms the view, wherever the fingers land, cards included (Vue Flow leaves a touch
+// that starts on a card to the card's drag, so a pinch half on a card panned and dragged at once). The browser never
+// zooms the page from the canvas: pinches and Ctrl+wheel (a touchpad pinch) stop here. ──
+const ZOOM = { min: 0.2, max: 1.8 };
+// The canvas is one layer the GPU only shifts and scales while the view pans or zooms, instead of being repainted every
+// frame. A layer keeps the scale it was drawn at, so after a zoom it is dropped for two frames to draw the text sharp.
+const layered = ref(true);
+let zoom_at_start = 1;
+
+function view_moved() {
+  zoom_at_start = instance.value?.getViewport().zoom ?? 1;
+}
+
+function view_settled() {
+  if (!instance.value || instance.value.getViewport().zoom === zoom_at_start) return;
+  layered.value = false;
+  requestAnimationFrame(() => requestAnimationFrame(() => { layered.value = true; }));
+}
+let pinch = null, pinch_frame = 0, pinch_target = null, touch_positions = null;
+
+/** The touches currently down on the canvas. */
+function canvas_touches(event) {
+  return [...event.touches].filter((touch) => canvas_element.value?.contains(touch.target));
+}
+
+/** Midpoint and spread of two touches. */
+function touch_pair([first, second]) {
+  return { x: (first.clientX + second.clientX) / 2, y: (first.clientY + second.clientY) / 2, spread: Math.hypot(first.clientX - second.clientX, first.clientY - second.clientY) || 1 };
+}
+
+/** Remember the cards' places as a touch begins; a second finger turns it into a pinch, and the cards go back. */
+function touch_start(event) {
+  const touches = canvas_touches(event);
+  if (!pinch && touches.length === 1) touch_positions = new Map(nodes.value.map((node) => [node.id, { ...node.position }]));
+  if (touches.length < 2 || !instance.value) return;
+  event.stopPropagation();
+  event.preventDefault();
+  if (!pinch) {
+    for (const node of nodes.value) {
+      const before = touch_positions?.get(node.id);
+      if (before && (before.x !== node.position.x || before.y !== node.position.y)) instance.value.updateNode(node.id, { position: before });
+    }
+  }
+  if (!pinch) view_moved();
+  begin_pinch(touches);
+}
+
+/** Take the fingers' current midpoint and spread as the pinch's start; the canvas point under the midpoint stays under it. */
+function begin_pinch(touches) {
+  const pane = canvas_element.value.getBoundingClientRect(), viewport = instance.value.getViewport(), pair = touch_pair(touches);
+  pinch = { pair, zoom: viewport.zoom, point: { x: (pair.x - pane.left - viewport.x) / viewport.zoom, y: (pair.y - pane.top - viewport.y) / viewport.zoom } };
+}
+
+/** Follow the fingers, one viewport change per frame. */
+function touch_move(event) {
+  const touches = canvas_touches(event);
+  if (touches.length >= 2) event.preventDefault();
+  if (!pinch) return;
+  event.stopPropagation();
+  if (touches.length < 2) return;
+  pinch_target = touch_pair(touches);
+  if (!pinch_frame) pinch_frame = requestAnimationFrame(apply_pinch);
+}
+
+function apply_pinch() {
+  pinch_frame = 0;
+  if (!pinch || !pinch_target || !instance.value) return;
+  const pane = canvas_element.value.getBoundingClientRect();
+  const zoom = Math.min(ZOOM.max, Math.max(ZOOM.min, pinch.zoom * pinch_target.spread / pinch.pair.spread));
+  instance.value.setViewport({ x: pinch_target.x - pane.left - pinch.point.x * zoom, y: pinch_target.y - pane.top - pinch.point.y * zoom, zoom });
+}
+
+/** A lifted finger lets the card drags and the pane end; the pinch lasts until every finger is up. */
+function touch_end(event) {
+  if (!pinch) return;
+  const touches = canvas_touches(event);
+  // Two fingers still down (a third was lifted): carry on from where they are, without a jump.
+  if (touches.length >= 2) begin_pinch(touches);
+  else if (!touches.length) { pinch = null; pinch_target = null; view_settled(); }
+}
+
+/** Ctrl+wheel is a touchpad pinch: Vue Flow zooms the view with it, the page must not zoom. */
+function wheel(event) {
+  if (event.ctrlKey) event.preventDefault();
+}
+
+/** Safari's own pinch gesture events. */
+function gesture(event) {
+  event.preventDefault();
+}
+
+const TOUCH_LISTENERS = [["touchstart", touch_start], ["touchmove", touch_move], ["touchend", touch_end], ["touchcancel", touch_end], ["wheel", wheel],
+  ["gesturestart", gesture], ["gesturechange", gesture]];
+onMounted(() => { for (const [type, listener] of TOUCH_LISTENERS) canvas_element.value.addEventListener(type, listener, { capture: true, passive: false }); });
+onBeforeUnmount(() => {
+  for (const [type, listener] of TOUCH_LISTENERS) canvas_element.value?.removeEventListener(type, listener, { capture: true });
+  cancelAnimationFrame(pinch_frame);
+});
+
 // ── Undo and redo: snapshots of the canvas and its cards; a drag counts once it ends. ──
 const state = computed(() => JSON.stringify({ flow: stored.value, agents: agents.value }));
 const past = ref([]), future = ref([]);
@@ -446,15 +549,16 @@ function history_key(event) {
 window.addEventListener("keydown", history_key);
 onBeforeUnmount(() => { window.removeEventListener("keydown", history_key); clearTimeout(timer); });
 
-function drag_start() { dragging = true; }
-function drag_stop() { dragging = false; commit(); }
+/** A card being dragged would repaint the whole one-layer canvas every frame, so the layer waits until it is let go. */
+function drag_start() { dragging = true; layered.value = false; }
+function drag_stop() { dragging = false; layered.value = true; stored.value = live.value; commit(); }
 </script>
 
 <template>
-  <div ref="canvas_element" class="workflow-canvas" @dblclick="pane_double_click" @pointerdown.capture="middle_press">
-    <VueFlow v-model:nodes="nodes" v-model:edges="edges" :min-zoom="0.2" :max-zoom="1.8" :delete-key-code="['Delete', 'Backspace']" :zoom-on-double-click="false"
+  <div ref="canvas_element" class="workflow-canvas" :class="{ 'is-layered': layered }" @dblclick="pane_double_click" @pointerdown.capture="middle_press">
+    <VueFlow v-model:nodes="nodes" v-model:edges="edges" :min-zoom="ZOOM.min" :max-zoom="ZOOM.max" :delete-key-code="['Delete', 'Backspace']" :zoom-on-double-click="false"
       :is-valid-connection="valid_connection" elevate-nodes-on-select @connect="connect" @connect-start="connect_start" @connect-end="connect_end"
-      @node-drag-start="drag_start" @node-drag-stop="drag_stop" @pane-ready="ready" @nodes-initialized="fit_once">
+      @node-drag-start="drag_start" @node-drag-stop="drag_stop" @pane-ready="ready" @nodes-initialized="fit_once" @move-start="view_moved" @move-end="view_settled">
       <template #node-start>
         <UTooltip text="从右侧圆点拖线连到成员，示意谁先接手；拖到空白处可直接添加">
           <div class="workflow-pill is-start">
@@ -510,7 +614,7 @@ function drag_stop() { dragging = false; commit(); }
         </EdgeLabelRenderer>
       </template>
       <Background :gap="22" :size="1.2" color="var(--ui-border-accented)" />
-      <Controls :show-interactive="false" position="bottom-left" class="workflow-canvas-controls" />
+      <Controls :show-interactive="false" position="top-right" class="workflow-canvas-controls" />
       <MiniMap v-if="!props.compact" pannable zoomable position="bottom-right" class="workflow-canvas-minimap" :width="168" :height="104" :node-border-radius="8" />
       <Panel position="top-left" class="workflow-canvas-toolbar">
         <UTooltip text="添加成员（也可从圆点拖线到空白处）"><UButton icon="i-lucide-user-plus" :label="props.compact ? undefined : '成员'" aria-label="添加成员" size="sm" color="neutral" variant="ghost" @click="open_add" /></UTooltip>
@@ -519,8 +623,8 @@ function drag_stop() { dragging = false; commit(); }
         <UTooltip text="撤销 (Ctrl+Z)"><UButton icon="i-lucide-undo-2" size="sm" color="neutral" variant="ghost" aria-label="撤销" :disabled="!past.length" @click="undo" /></UTooltip>
         <UTooltip text="重做 (Ctrl+Shift+Z)"><UButton icon="i-lucide-redo-2" size="sm" color="neutral" variant="ghost" aria-label="重做" :disabled="!future.length" @click="redo" /></UTooltip>
         <UTooltip text="自动整理"><UButton icon="i-lucide-wand-sparkles" size="sm" color="neutral" variant="ghost" aria-label="自动整理" @click="arrange" /></UTooltip>
+        <template v-if="$slots.actions"><span class="workflow-canvas-divider" /><slot name="actions" /></template>
       </Panel>
-      <Panel position="top-right" class="workflow-canvas-toolbar is-plain"><slot name="actions" /></Panel>
       <Panel v-if="!props.compact" position="bottom-left" class="workflow-canvas-status">
         <UIcon name="i-lucide-info" class="workflow-icon" /><span>连线只作示意，派活以</span>
         <button type="button" class="workflow-canvas-skill" @click="emit('open-skill')">SKILL.md</button><span>为准</span>
@@ -550,10 +654,11 @@ function drag_stop() { dragging = false; commit(); }
 .workflow-canvas { position: relative; width: 100%; height: 100%; min-height: 0; overflow: hidden; background: color-mix(in srgb, var(--ui-bg-elevated) 30%, var(--ui-bg)); }
 .workflow-icon { flex-shrink: 0; width: 14px; height: 14px; }
 .workflow-canvas-toolbar { display: flex; align-items: center; gap: 2px; padding: 3px; border: 1px solid var(--ui-border-muted); border-radius: 10px;
-  background: color-mix(in srgb, var(--ui-bg-elevated) 92%, transparent); box-shadow: 0 6px 20px rgb(0 0 0 / .14); backdrop-filter: blur(8px); }
+  background: var(--ui-bg-elevated); box-shadow: 0 6px 20px rgb(0 0 0 / .14); }
 .workflow-canvas-divider { width: 1px; height: 18px; margin: 0 3px; background: var(--ui-border-muted); }
-.workflow-canvas-status { display: flex; align-items: center; gap: 4px; margin-left: 52px !important; padding: 6px 12px; border: 1px solid var(--ui-border-muted); border-radius: 999px;
-  background: color-mix(in srgb, var(--ui-bg-elevated) 92%, transparent); color: var(--ui-text-muted); font-size: 12px; white-space: nowrap; backdrop-filter: blur(8px); }
+.workflow-canvas-status { display: flex; align-items: center; gap: 4px; padding: 6px 12px; border: 1px solid var(--ui-border-muted); border-radius: 999px;
+  background: var(--ui-bg-elevated); color: var(--ui-text-muted); font-size: 12px; white-space: nowrap; }
+.workflow-canvas.is-layered :deep(.vue-flow__transformationpane) { will-change: transform; }
 
 /* Start and host: small pills. */
 .workflow-pill { position: relative; display: flex; width: max-content; align-items: center; gap: 6px; height: 40px; padding: 0 16px; border: 1px solid var(--ui-border-accented);
@@ -600,8 +705,9 @@ function drag_stop() { dragging = false; commit(); }
 :deep(.vue-flow__connection-path) { stroke: var(--channel-accent, var(--ui-primary)); stroke-width: 1.8; stroke-dasharray: 5 4; }
 :deep(.vue-flow__edge-path) { fill: none; }
 :deep(.vue-flow__node) { cursor: grab; }
-:deep(.workflow-canvas-controls) { border: 1px solid var(--ui-border-muted); border-radius: 8px; overflow: hidden; box-shadow: none; }
-:deep(.workflow-canvas-controls .vue-flow__controls-button) { border-bottom-color: var(--ui-border-muted); background: var(--ui-bg-elevated); fill: var(--ui-text-muted); color: var(--ui-text-muted); }
+:deep(.workflow-canvas-controls) { display: flex; border: 1px solid var(--ui-border-muted); border-radius: 10px; overflow: hidden; box-shadow: 0 6px 20px rgb(0 0 0 / .14); }
+:deep(.workflow-canvas-controls .vue-flow__controls-button) { width: 32px; height: 32px; border-bottom: 0; border-right: 1px solid var(--ui-border-muted); background: var(--ui-bg-elevated); fill: var(--ui-text-muted); color: var(--ui-text-muted); }
+:deep(.workflow-canvas-controls .vue-flow__controls-button:last-child) { border-right: 0; }
 :deep(.workflow-canvas-controls .vue-flow__controls-button:hover) { background: var(--ui-bg-accented); }
 :deep(.workflow-canvas-minimap) { border: 1px solid var(--ui-border-muted); border-radius: 8px; overflow: hidden; background: var(--ui-bg-elevated); }
 :deep(.workflow-canvas-minimap .vue-flow__minimap-node) { fill: var(--ui-bg-accented); stroke: none; }

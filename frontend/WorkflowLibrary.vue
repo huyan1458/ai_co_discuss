@@ -90,19 +90,17 @@ function start_resize(event) {
 <template>
   <section class="workflow-library" :class="{ 'has-skill': show_skill, 'is-stacked': stacked }" aria-label="工作流"
     :style="{ '--workflow-skill-width': `${skill_width}px` }">
-    <div v-if="stacked && draft" class="workflow-tabs-view" role="tablist" aria-label="画布或工作流说明">
+    <div v-if="stacked && draft" class="workflow-tabs-view"><div class="workflow-tabs-segment" role="tablist" aria-label="画布或工作流说明">
       <button type="button" role="tab" :aria-selected="pane === 'canvas'" title="画布：成员卡片与示意连线" @click="pane = 'canvas'"><UIcon name="i-lucide-network" class="workflow-library-icon" />画布</button>
       <button type="button" role="tab" :aria-selected="pane === 'skill'" title="工作流：主持人照着派活的 SKILL.md" @click="pane = 'skill'"><UIcon name="i-lucide-file-text" class="workflow-library-icon" />工作流</button>
-      <i v-if="dirty" class="workflow-library-dirty" title="有未保存的修改" />
-    </div>
+    </div></div>
     <div v-show="!stacked || pane === 'canvas' || !draft" class="workflow-library-stage">
       <WorkflowCanvas v-if="draft" ref="canvas" :key="canvas_key" v-model:flow="draft.flow" v-model:agents="draft.agents" :compact="stacked" @open-skill="show_skill_text">
         <template #actions>
-          <input v-if="!stacked" v-model="draft.label" class="workflow-library-name" :maxlength="32" placeholder="未命名工作流" aria-label="工作流名称" title="点击改名"
-            :style="{ width: `calc(${Math.max(5, Math.min(16, (draft.label || '').length + 1))}em + 18px)` }" @keydown.enter="$event.target.blur()" />
-          <i v-if="dirty && !stacked" class="workflow-library-dirty" title="有未保存的修改（Ctrl+S 保存）" />
           <UTooltip v-if="!skill_open && !stacked" text="展开 SKILL.md：主持人照它派活"><UButton icon="i-lucide-panel-right-open" label="SKILL.md" size="sm" color="neutral" variant="ghost" @click="set_skill_open(true)" /></UTooltip>
-          <UTooltip text="保存（Ctrl+S）"><UButton icon="i-lucide-save" :label="stacked ? undefined : '保存'" aria-label="保存" size="sm" class="channel-primary-button" :disabled="!dirty" :loading="busy" @click="library.save()" /></UTooltip>
+          <UTooltip :text="dirty ? '保存（Ctrl+S）：有未保存的修改' : '没有未保存的修改'"><span class="workflow-library-save">
+            <UButton icon="i-lucide-save" :label="stacked ? undefined : '保存'" aria-label="保存" size="sm" class="channel-primary-button" :disabled="!dirty" :loading="busy" @click="library.save()" />
+            <i v-if="dirty" class="workflow-library-dirty" /></span></UTooltip>
         </template>
       </WorkflowCanvas>
       <div v-else class="workflow-library-empty">
@@ -110,7 +108,7 @@ function start_resize(event) {
         <template v-else-if="broken"><UIcon name="i-lucide-triangle-alert" /><p>{{ broken }}</p></template>
         <template v-else-if="busy"><UIcon name="i-lucide-loader-circle" class="animate-spin" /></template>
         <template v-else>
-          <UIcon name="i-lucide-workflow" />
+          <UIcon name="i-lucide-network" />
           <UDropdownMenu :items="add_items" :ui="{ content: 'channel-menu' }"><UButton icon="i-lucide-plus" label="新建工作流" color="neutral" variant="soft" /></UDropdownMenu>
         </template>
       </div>
@@ -138,16 +136,16 @@ function start_resize(event) {
 .workflow-library-empty { display: grid; place-content: center; justify-items: center; gap: 12px; height: 100%; color: var(--ui-text-muted); font-size: 13px; }
 .workflow-library-empty > span:first-child { width: 36px; height: 36px; color: var(--ui-text-dimmed); }
 .workflow-library-empty p { margin: 0; }
-.workflow-library-name { min-width: 0; height: 30px; padding: 0 8px; border: 1px solid transparent; border-radius: 7px; background: transparent; color: var(--ui-text-highlighted);
-  font-size: 13px; font-weight: 600; outline: none; }
-.workflow-library-name:hover { border-color: var(--ui-border-muted); }
-.workflow-library-name:focus { border-color: var(--channel-accent, var(--ui-primary)); background: var(--ui-bg); }
-.workflow-library-dirty { flex-shrink: 0; width: 7px; height: 7px; margin-right: 4px; border-radius: 50%; background: var(--ui-warning, #e0a33a); }
-/* Stacked (phone, upright tablet): a "画布 | 工作流" switch on top; the rest is the canvas or SKILL.md. */
+/* Unsaved changes: a dot on the save button's corner. */
+.workflow-library-save { position: relative; display: inline-flex; }
+.workflow-library-dirty { position: absolute; top: -2px; right: -2px; width: 8px; height: 8px; border: 2px solid var(--ui-bg-elevated); border-radius: 50%; background: var(--ui-warning, #e0a33a);
+  pointer-events: none; }
+/* Stacked (phone, upright tablet): a centred "画布 | 工作流" segmented switch on top; the rest is the canvas or SKILL.md. */
 .workflow-library.is-stacked, .workflow-library.is-stacked.has-skill { grid-template-columns: minmax(0, 1fr); grid-template-rows: auto minmax(0, 1fr); }
 .workflow-library.is-stacked :deep(.workflow-skill) { min-height: 0; border-left: 0; }
-.workflow-tabs-view { display: flex; align-items: center; gap: 2px; height: 38px; padding: 0 8px; border-bottom: 1px solid var(--ui-border-muted); background: var(--ui-bg-elevated); }
-.workflow-tabs-view button { display: flex; align-items: center; gap: 4px; height: 28px; padding: 0 10px; border-radius: 7px; color: var(--ui-text-muted); font-size: 12px; white-space: nowrap; }
-.workflow-tabs-view button[aria-selected="true"] { background: var(--ui-bg-accented); color: var(--ui-text-highlighted); }
-.workflow-tabs-view .workflow-library-dirty { margin-left: auto; }
+.workflow-tabs-view { display: flex; justify-content: center; padding: 6px 12px; border-bottom: 1px solid var(--ui-border-muted); background: var(--ui-bg); }
+.workflow-tabs-segment { display: flex; gap: 2px; width: min(260px, 100%); padding: 2px; border-radius: 9px; background: var(--ui-bg-accented); }
+.workflow-tabs-segment > button { display: flex; flex: 1; align-items: center; justify-content: center; gap: 5px; height: 30px; border-radius: 7px; color: var(--ui-text-muted);
+  font-size: 13px; white-space: nowrap; }
+.workflow-tabs-segment > button[aria-selected="true"] { background: var(--ui-bg-elevated); color: var(--ui-text-highlighted); box-shadow: 0 1px 3px rgb(0 0 0 / .2); }
 </style>

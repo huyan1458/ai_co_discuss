@@ -1,10 +1,10 @@
 <script setup>
 /**
  * The workflow's SKILL.md beside its canvas, as a docked panel: the host dispatches by this text alone, so it stays in
- * view. It reads as rendered Markdown and switches to editing the source; the one-line description and (folded) the
- * commands an import registers sit with it. The name, the folder and deletion are in the workflow list's "…" menu.
+ * view. It reads as rendered Markdown and switches to editing the source; the one-line description heads the text and
+ * scrolls away with it, and (folded) the commands an import registers sit below. The name, the folder and deletion are in the workflow list's "…" menu.
  */
-import { computed, inject, nextTick, ref } from "vue";
+import { computed, inject, nextTick, ref, watch } from "vue";
 
 const workflow = defineModel("workflow", { type: Object, required: true });
 // An import's commands run on this computer when an API member calls them, so they are kept only once the user allows them.
@@ -28,6 +28,15 @@ function edit() {
   nextTick(() => source.value?.focus());
 }
 
+/** The source box grows with its text, so the panel scrolls as one (description included) rather than the box alone. */
+function fit_source() {
+  const box = source.value;
+  if (!box) return;
+  box.style.height = "auto";
+  box.style.height = `${box.scrollHeight + 2}px`;
+}
+watch([source, () => workflow.value.skill], () => nextTick(fit_source));
+
 </script>
 
 <template>
@@ -38,11 +47,11 @@ function edit() {
         @click="editing ? (editing = false) : edit()" />
       <UTooltip v-if="!compact" text="收起 SKILL.md"><UButton icon="i-lucide-panel-right-close" size="xs" color="neutral" variant="ghost" aria-label="收起 SKILL.md" @click="emit('collapse')" /></UTooltip>
     </header>
-    <label class="workflow-skill-description">
-      <span>一句话描述 <small>主持人凭它判断何时使用</small></span>
-      <input v-model="workflow.description" :maxlength="500" placeholder="做什么、什么时候用" />
-    </label>
     <div class="workflow-skill-body">
+      <label class="workflow-skill-description">
+        <span>一句话描述 <small>主持人凭它判断何时使用</small></span>
+        <input v-model="workflow.description" :maxlength="500" placeholder="做什么、什么时候用" />
+      </label>
       <textarea v-if="editing" ref="source" v-model="workflow.skill" :maxlength="MAX_SKILL" class="workflow-skill-source" spellcheck="false" aria-label="SKILL.md 正文" />
       <div v-else-if="workflow.skill?.trim()" class="workflow-skill-preview markdown-body" v-html="rendered" @dblclick="edit"></div>
       <button v-else type="button" class="workflow-skill-empty" @click="edit"><UIcon name="i-lucide-pencil" class="workflow-skill-icon" />写下主持人怎么组织这个工作流</button>
@@ -72,11 +81,12 @@ function edit() {
 .workflow-skill-description input { height: 30px; padding: 0 8px; border: 1px solid var(--ui-border-muted); border-radius: 7px; background: var(--ui-bg-elevated); color: var(--ui-text);
   font-size: 13px; outline: none; }
 .workflow-skill-description input:focus { border-color: var(--channel-accent, var(--ui-primary)); }
-.workflow-skill-body { display: flex; flex: 1; min-height: 0; }
-.workflow-skill-source { flex: 1; min-height: 0; padding: 10px 12px; border: 1px solid var(--channel-accent, var(--ui-primary)); border-radius: 8px; background: var(--ui-bg-elevated);
+/* One scrolling column: the description, then the text (the source box grows to its text and fills at least the rest). */
+.workflow-skill-body { display: flex; flex: 1; flex-direction: column; gap: 10px; min-height: 0; overflow-y: auto; }
+.workflow-skill-source { flex: 1 0 auto; min-height: 240px; padding: 10px 12px; overflow: hidden; border: 1px solid var(--channel-accent, var(--ui-primary)); border-radius: 8px; background: var(--ui-bg-elevated);
   color: var(--ui-text); font: 13px/1.65 ui-monospace, SFMono-Regular, Consolas, monospace; resize: none; outline: none; }
-.workflow-skill-preview { flex: 1; min-height: 0; overflow: auto; padding: 4px 4px 12px; font-size: 13px; line-height: 1.7; }
-.workflow-skill-empty { display: flex; flex: 1; align-items: center; justify-content: center; gap: 6px; border: 1px dashed var(--ui-border-accented); border-radius: 8px;
+.workflow-skill-preview { flex: 1 0 auto; padding: 4px 4px 12px; font-size: 13px; line-height: 1.7; }
+.workflow-skill-empty { display: flex; flex: 1 0 auto; min-height: 160px; align-items: center; justify-content: center; gap: 6px; border: 1px dashed var(--ui-border-accented); border-radius: 8px;
   color: var(--ui-text-muted); font-size: 13px; }
 .workflow-skill-empty:hover { color: var(--ui-text-highlighted); border-color: var(--channel-accent, var(--ui-primary)); }
 .workflow-skill-count { margin: -4px 0 0; color: var(--ui-text-dimmed); font-size: 11px; text-align: right; }
