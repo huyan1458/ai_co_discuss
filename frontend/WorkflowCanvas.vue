@@ -56,7 +56,7 @@ const STATUS = { text: "", tone: "" };
 const PRESET_PREFIX = "preset:";
 // A card ID becomes the member name's suffix; 16 characters at most, so a numbered one keeps room for its digits.
 const CARD_BASE = /^[a-z0-9_]{1,14}$/;
-const PRESET_FIELDS = ["label", "description", "project_access", "model", "effort", "system_prompt"];
+const PRESET_FIELDS = ["label", "description", "project_access", "model", "effort", "image_model", "system_prompt"];
 
 /** A stored node as Vue Flow draws it; a card is dragged by its title bar so its own buttons keep working. */
 function to_node(item) {

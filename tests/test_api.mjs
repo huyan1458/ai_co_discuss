@@ -236,6 +236,69 @@ test('free-room API replies bind to their reserved execution and complete the re
   assert.equal(messages.find(message => message.author === 'Grok').source, 'api');
 });
 
+test('an API member with an image model generates and edits images through the Images API and answers with them attached', async t => {
+  const f = await site_fixture(t);
+  const PNG = Buffer.from('89504e470d0a1a0a0000000d49484452', 'hex');
+  let source = '', step = 0;
+  const mock = await model_fixture(t, call => {
+    if (call.path.endsWith('/images/generations')) return { output_format: 'png', size: '1024x1024', data: [{ b64_json: PNG.toString('base64') }, { b64_json: PNG.toString('base64') }] };
+    if (call.path.endsWith('/images/edits')) return { data: [{ b64_json: PNG.toString('base64') }] };
+    return [() => tool_reply(call, 'generate_image', { prompt: '一只猫', n: 2, quality: 'low', file_name: '猫' }),
+      () => tool_reply(call, 'edit_image', { prompt: '给猫戴帽子', images: [{ attachment_id: source }], output_format: 'webp' }),
+      () => tool_reply(call, 'submit_chat', { text: '画好了。' })][step++]();
+  });
+  const participants = { Codex: { ...profiles(f.home, mock.base_url).Codex, image_model: 'gpt-image-2.6-flare' } };
+  const started = await launch_discussion(f.home, { site: f.site, entry: 'web', participants,
+    room: { title: '生图', mode: 'free', host: '用户', members: ['Codex'], submission_id: randomUUID() } }, { start_service: async () => ({ running: true }) });
+  const config = load_config(started.config_path), store = new DiscussionStore(config.directory), runner = new FreeRoomRunner(config, store);
+  f.cleanup.push(() => { runner.stop_children(); store.close(); });
+  const query = new URLSearchParams({ actor: '用户', file_name: 'cat.png', submission_id: randomUUID() });
+  const uploaded = await fetch(`${config.site}/api/rooms/${config.room}/attachments?${query}`, { method: 'POST', body: PNG, headers: { 'X-Discussion-Token': config.token } });
+  source = (await uploaded.json()).attachment.id;
+  await api(config, '/messages', { author: '用户', text: '画只猫', to: ['Codex'], attachment_ids: [source], submission_id: randomUUID() });
+  await until(async () => (await api(config, '/messages')).messages.some(message => message.author === 'Codex'), () => runner.tick());
+  const answer = (await api(config, '/messages')).messages.find(message => message.author === 'Codex');
+  assert.deepEqual(answer.attachments.map(item => [item.file_name, item.content_type]),
+    [['猫-1.png', 'image/png'], ['猫-2.png', 'image/png'], [answer.attachments[2].file_name, 'image/png']]);
+  assert.match(answer.attachments[2].file_name, /^image-\d{14}\.webp$/);
+  const generation = mock.calls.find(call => call.path === '/custom/v1/images/generations');
+  assert.deepEqual(generation.body, { model: 'gpt-image-2.6-flare', prompt: '一只猫', n: 2, quality: 'low' });
+  assert.equal(generation.headers.authorization, `Bearer ${SECRET}`);
+  const edit = mock.calls.find(call => call.path === '/custom/v1/images/edits');
+  assert.equal(edit.body.images[0].image_url, `data:image/png;base64,${PNG.toString('base64')}`);
+  const tools = mock.calls.find(call => call.path.endsWith('/responses')).body.tools.map(item => item.name);
+  assert.ok(tools.includes('generate_image') && tools.includes('edit_image'));
+  // The runner reports the image model, so the host reading the room sees who can draw.
+  await until(async () => (await api(config, '')).members.find(member => member.name === 'Codex').image_model === 'gpt-image-2.6-flare', () => runner.tick());
+});
+
+test('images an API member generated before its execution failed go out with a later answer instead of being drawn again', async t => {
+  const f = await site_fixture(t);
+  const PNG = Buffer.from('89504e470d0a1a0a0000000d49484452', 'hex');
+  let step = 0, unsent = null;
+  const mock = await model_fixture(t, call => {
+    if (call.path.endsWith('/images/generations')) return { data: [{ b64_json: PNG.toString('base64') }] };
+    const { task } = room_prompt(call);
+    if (step === 0) { step++; return tool_reply(call, 'generate_image', { prompt: '封面' }); }
+    // The first execution then stops without answering, and fails.
+    if (!task.unsent_images) return { status: 'completed', output: [{ type: 'message', role: 'assistant', content: [{ type: 'output_text', text: '先不提交' }] }] };
+    unsent = task.unsent_images;
+    return tool_reply(call, 'submit_chat', { text: '补发上次的封面。', attachments: [unsent[0].attachment_id] });
+  });
+  const participants = { Codex: { ...profiles(f.home, mock.base_url).Codex, image_model: 'gpt-image-2.6-flare' } };
+  const started = await launch_discussion(f.home, { site: f.site, entry: 'web', participants,
+    room: { title: '补发', mode: 'free', host: '用户', members: ['Codex'], submission_id: randomUUID() } }, { start_service: async () => ({ running: true }) });
+  const config = load_config(started.config_path), store = new DiscussionStore(config.directory), runner = new FreeRoomRunner(config, store);
+  f.cleanup.push(() => { runner.stop_children(); store.close(); });
+  await api(config, '/messages', { author: '用户', text: '画封面', to: ['Codex'], submission_id: randomUUID() });
+  await until(async () => (await api(config, '')).free.requests.some(item => item.status === 'failed'), () => runner.tick());
+  await api(config, '/messages', { author: '用户', text: '把刚才的封面发出来', to: ['Codex'], submission_id: randomUUID() });
+  await until(async () => (await api(config, '/messages')).messages.some(message => message.author === 'Codex'), () => runner.tick());
+  const answer = (await api(config, '/messages')).messages.find(message => message.author === 'Codex');
+  assert.deepEqual(answer.attachments.map(item => item.id), [unsent[0].attachment_id]);
+  assert.equal(mock.calls.filter(call => call.path.endsWith('/images/generations')).length, 1);
+});
+
 test('smart scheduling holds the host until its decision, and a confident pick replaces the host', async t => {
   const f = await site_fixture(t);
   let release_decision;
@@ -473,6 +536,18 @@ test('read-aloud switches to Aliyun or Azure with their own keys, keeping Volcen
     assert.match(call.init.body, /<voice name="zh-CN-XiaoxiaoNeural"><prosody rate="\+20%">a&#60;b<\/prosody>/);
     assert.deepEqual(Buffer.from(azure_audio.audio, 'base64'), Buffer.from([7]));
     await assert.rejects(tts_speak(home, { text: '再试' }, { request: async () => new Response('', { status: 401 }) }), /Azure 拒绝/);
+    // OpenAI uses the key already saved for model API members, sends the tone as instructions and answers ADTS AAC.
+    save_api_key(home, { base_url: 'https://api.openai.com/v1', api_key: 'openai-key' });
+    save_tts_settings(home, { ...tts_settings(home), provider: 'openai' });
+    assert.ok(tts_settings(home).api_key_ref, 'the saved OpenAI key is used without entering it again');
+    const openai_audio = await tts_speak(home, { text: '你好', silence_ms: 128 }, { request: async (url, init) => { call = { url, init }; return new Response(new Uint8Array([9])); } });
+    assert.equal(call.url, 'https://api.openai.com/v1/audio/speech');
+    assert.equal(call.init.headers.Authorization, 'Bearer openai-key');
+    const body = JSON.parse(call.init.body);
+    assert.deepEqual([body.model, body.voice, body.response_format, body.speed, body.instructions],
+      ['gpt-4o-mini-tts', 'marin', 'aac', 1.2, '用标准普通话朗读，语气平稳自然，句间自然停顿。']);
+    assert.equal(openai_audio.format, 'aac');
+    assert.equal(Buffer.from(openai_audio.audio, 'base64').length, 1 + 3 * 11, 'trailing silence is three silent AAC frames');
   } finally { rmSync(home, { recursive: true, force: true }); }
 });
 
@@ -480,6 +555,18 @@ test('read-aloud on the local service uses the token the setup skill saved and s
   const { save_tts_settings, tts_release, tts_settings, tts_speak } = await import('../runner/tts.mjs');
   const home = mkdtempSync(join(tmpdir(), 'codiscuss-tts-local-'));
   try {
+    // Before any choice the services on this computer are the default once their skills have saved tokens.
+    const fresh = mkdtempSync(join(tmpdir(), 'codiscuss-tts-fresh-'));
+    assert.deepEqual([tts_settings(fresh).provider, tts_settings(fresh).stt_provider], ['volcengine', 'volcengine']);
+    // Editing other settings before installing does not pin the cloud services; only picking one does.
+    save_tts_settings(fresh, { speech_rate: 20, providers: tts_settings(fresh).providers });
+    save_api_key(fresh, { base_url: 'http://127.0.0.1:18765', api_key: 'local-token' });
+    save_api_key(fresh, { base_url: 'http://127.0.0.1:18766', api_key: 'local-stt-token' });
+    assert.deepEqual([tts_settings(fresh).provider, tts_settings(fresh).stt_provider], ['local', 'local']);
+    save_tts_settings(fresh, { provider: 'volcengine', providers: tts_settings(fresh).providers });
+    save_tts_settings(fresh, { speech_rate: 0, providers: tts_settings(fresh).providers });
+    assert.deepEqual([tts_settings(fresh).provider, tts_settings(fresh).stt_provider], ['volcengine', 'local'], 'a picked service stays picked');
+    rmSync(fresh, { recursive: true, force: true });
     save_tts_settings(home, { provider: 'local', providers: { local: { context: '慢一点' } } });
     assert.equal(tts_settings(home).api_key_ref, '', 'not ready before the skill saves a token');
     await assert.rejects(tts_speak(home, { text: '你好' }), /local-tts-setup/);
@@ -538,6 +625,15 @@ test('voice input joins ordered parts into one WAV and returns the recognized te
     await assert.rejects(stt_part(home, { upload_id: missing, index: 1, data: '', final: true }, recognize), /片段缺失/);
     const silent = async () => new Response('{}', { headers: { 'X-Api-Status-Code': '20000003' } });
     assert.deepEqual(await stt_part(home, { upload_id: randomUUID(), index: 0, data: Buffer.from([0, 0]).toString('base64'), final: true }, silent), { text: '' });
+    // OpenAI's transcription uses the OpenAI key already saved and receives the WAV as a form upload.
+    save_api_key(home, { base_url: 'https://api.openai.com/v1', api_key: 'openai-key' });
+    save_tts_settings(home, { stt_provider: 'openai' });
+    const openai = async (url, init) => { sent = { url, init }; return new Response(JSON.stringify({ text: ' 你好 ' })); };
+    assert.deepEqual(await stt_part(home, { upload_id: randomUUID(), index: 0, data: Buffer.from([5, 0]).toString('base64'), final: true }, openai), { text: '你好' });
+    assert.equal(sent.url, 'https://api.openai.com/v1/audio/transcriptions');
+    assert.equal(sent.init.headers.Authorization, 'Bearer openai-key');
+    assert.equal(sent.init.body.get('model'), 'gpt-transcribe');
+    assert.deepEqual([...Buffer.from(await sent.init.body.get('file').arrayBuffer()).subarray(44)], [5, 0]);
   } finally { rmSync(home, { recursive: true, force: true }); }
 });
 

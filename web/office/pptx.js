@@ -1,0 +1,1 @@
+import{n as e}from"./chunks/pptx-DbjWegUB-CU8ZIJEP.js";async function t(t,n){let r=new e(t);return await r.load(n),r}export{t as mount_pptx};

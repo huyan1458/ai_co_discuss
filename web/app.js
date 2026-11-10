@@ -1339,7 +1339,7 @@ function unique_instance(base, taken) {
 function apply_expert_preset(name, preset) {
   const { session_id, system_prompt, ...base } = state.launch.profiles[platform_of(name)] || {};
   const profile = { ...structuredClone(base), project_access: preset.project_access || "read" };
-  for (const field of ["model", "effort", "system_prompt"]) if (Object.hasOwn(preset, field)) profile[field] = preset[field];
+  for (const field of ["model", "effort", "image_model", "system_prompt"]) if (Object.hasOwn(preset, field)) profile[field] = preset[field];
   state.launch.profiles[name] = profile;
   description_drafts[name] = preset.description || "";
   // A second copy of a preset keeps the number its instance name got: 评审官 → 评审官2.
@@ -1394,7 +1394,7 @@ async function save_expert_preset(name, label) {
   const id = label === undefined ? name : preset_identity(name, label);
   const shown = label === undefined ? expert_presets().find(item => item.name === name)?.label || "" : label.trim();
   const preset = { name: id, ...shown && shown !== id ? { label: shown } : {}, description: description_draft(name).trim(), project_access: profile.project_access || "read" };
-  for (const field of ["model", "effort", "system_prompt"]) if (Object.hasOwn(profile, field) && profile[field] !== "") preset[field] = profile[field];
+  for (const field of ["model", "effort", "image_model", "system_prompt"]) if (Object.hasOwn(profile, field) && profile[field] !== "") preset[field] = profile[field];
   try {
     await save_presets({ presets: [...state.launch.presets.filter(item => item.name !== id), preset] });
     show_toast(`已存为预设「${preset.label || id}」`);
@@ -1737,19 +1737,37 @@ function attachment_size(size) {
   return size < 1024 ? `${size} B` : size < 1024 * 1024 ? `${(size / 1024).toFixed(1)} KiB` : `${(size / 1024 / 1024).toFixed(1)} MiB`;
 }
 
-// Attachments read as text in the file preview window (Markdown and HTML rendered, the rest as source).
-const TEXT_ATTACHMENT = /\.(md|markdown|txt|log|csv|tsv|json|jsonc|ya?ml|toml|ini|xml|html?|css|vue|[cm]?js|jsx|tsx?|py|sql|sh|ps1|bat)$/i;
+// Attachments opened in the file preview window: Markdown and HTML rendered, CSV/TSV as tables, subtitles as a
+// timeline, Office documents in their previews, a Premiere project unpacked to its XML, the rest as source.
+const TEXT_ATTACHMENT = /\.(md|markdown|txt|log|csv|tsv|json|jsonc|ya?ml|toml|ini|xml|html?|css|vue|[cm]?js|jsx|tsx?|py|sql|sh|ps1|bat|srt|vtt|ass|ssa|lrc|fcpxml|kdenlive|mlt|otio|edl|docx|xlsx|xls|ods|pptx|prproj)$/i;
 
-/** Whether an attachment opens in the file preview window as text. */
+/** Whether an attachment opens in the file preview window. */
 function is_text_attachment(file) {
   return TEXT_ATTACHMENT.test(file.file_name);
 }
 
+// What a file is, by extension, so an attachment is shown as a known kind rather than a bare file: [label, icon tone].
+// Mirrors FILE_TYPES in frontend/file-preview.js, which this classic script cannot import.
+const ATTACHMENT_KINDS = [
+  [/^(docx?|rtf|odt)$/, "文档", "blue"], [/^(xlsx?|ods|csv|tsv)$/, "表格", "green"], [/^(pptx?|odp|key)$/, "演示文稿", "orange"],
+  [/^pdf$/, "PDF", "red"], [/^(mp4|m4v|webm|mov|mkv|avi|wmv|flv|ogv|mts|m2ts|3gp)$/, "视频", "purple"],
+  [/^(mp3|wav|ogg|oga|opus|m4a|aac|flac|aiff?|wma)$/, "音频", "purple"], [/^(srt|vtt|ass|ssa|lrc|sub|sbv)$/, "字幕", "purple"],
+  [/^(prproj|fcpxml|fcpbundle|kdenlive|mlt|otio|edl|aep|aepx|drp|veg|imovieproj)$/, "剪辑工程", "purple"],
+  [/^(json|jsonc|ya?ml|toml|ini|xml|env)$/, "配置数据", "gray"], [/^(md|markdown|txt|log)$/, "文本", "blue"],
+  [/^(html?|css|vue|[cm]?js|jsx|tsx?|py|sql|sh|ps1|bat)$/, "代码", "gray"], [/^(zip|rar|7z|tar|gz|tgz)$/, "压缩包", "gray"],
+];
+
+/** `[label, tone]` of a file's kind, or a plain file for an extension not listed. */
+function attachment_kind(file_name) {
+  const extension = String(file_name).match(/\.([a-z0-9]{1,12})$/i)?.[1].toLowerCase() || "";
+  const kind = ATTACHMENT_KINDS.find(([pattern]) => pattern.test(extension));
+  return kind ? [kind[1], kind[2]] : ["文件", "blue"];
+}
+
 /** Render a file-shaped type badge; the extension is a label, not a preview capability. */
 function attachment_file_icon(file_name) {
-  const extension = String(file_name).match(/\.([a-z0-9]{1,5})$/i)?.[1].toUpperCase() || "FILE";
-  const tone = extension === "PDF" ? "red" : /^(XLSX?|CSV)$/.test(extension) ? "green"
-    : /^(PPTX?)$/.test(extension) ? "orange" : "blue";
+  const extension = String(file_name).match(/\.([a-z0-9]{1,12})$/i)?.[1].toUpperCase().slice(0, 5) || "FILE";
+  const tone = attachment_kind(file_name)[1];
   return `<span class="attachment-file-icon" data-tone="${tone}" aria-hidden="true">
     <svg viewBox="0 0 36 44" fill="none"><path d="M4 0h19l13 13v27a4 4 0 0 1-4 4H4a4 4 0 0 1-4-4V4a4 4 0 0 1 4-4Z" fill="currentColor"/><path d="M23 0v9a4 4 0 0 0 4 4h9" fill="#fff" fill-opacity=".3"/></svg>
     <span>${extension}</span></span>`;
@@ -1842,7 +1860,17 @@ function attachment_markup(files = []) {
     const download = state.remote_rooms ? `href="#" data-relay-href="${url}" data-file-name="${name}"` : `href="${url}?download=1"`;
     if (file.content_type.startsWith("image/")) return `<button type="button" class="attachment-image" ${preview_attributes}>
       <img ${source} alt="${name}" loading="lazy"></button>`;
-    const content = `${attachment_file_icon(file.file_name)}<span class="attachment-name"><span title="${name}">${name}</span><small>${attachment_size(file.size)}</small></span>`;
+    // Audio and video play in place with the browser's own controls; a format it cannot decode still has its download.
+    if (/^(audio|video)\//.test(file.content_type)) {
+      const tag = file.content_type.startsWith("video/") ? "video" : "audio";
+      // The Vue workspace registers the Video.js players (Chinese labels, speed, full screen); the classic page has none.
+      const skinned = Boolean(customElements.get(`${tag}-player`));
+      const media = `<${tag} ${source} ${skinned ? "" : "controls "}preload="metadata" playsinline aria-label="${name}"></${tag}>`;
+      return `<div class="attachment-media attachment-${tag}">${skinned ? `<${tag}-player><${tag}-skin class="attachment-player">${media}</${tag}-skin></${tag}-player>` : media}
+        <span class="attachment-media-failed">浏览器无法播放这个文件的格式，请点下面的文件名下载后用本机软件打开。</span>
+        <a class="attachment-media-name" ${download} download title="下载 ${name}">${name}<small>${attachment_size(file.size)}</small></a></div>`;
+    }
+    const content = `${attachment_file_icon(file.file_name)}<span class="attachment-name"><span title="${name}">${name}</span><small>${attachment_kind(file.file_name)[0]} · ${attachment_size(file.size)}</small></span>`;
     return `<div class="attachment-file">${file.content_type === "application/pdf" || is_text_attachment(file)
       ? `<button type="button" class="attachment-file-main" ${preview_attributes}>${content}</button>`
       : `<a class="attachment-file-main" ${download} download aria-label="下载 ${name}">${content}</a>`}
@@ -1877,6 +1905,12 @@ async function preview_attachment({ room_id, id }) {
     // The file preview window belongs to the Vue workspace; without it the file is downloaded.
     if (state.text_preview) state.text_preview(file);
     else location.assign(file.download_url);
+    return;
+  }
+  // The Vue workspace shows an image full screen with zoom, rotate and flip; the classic page keeps its dialog.
+  if (file.content_type.startsWith("image/") && state.image_viewer) {
+    state.attachment_preview = null;
+    state.image_viewer(file);
     return;
   }
   preview.file = file;
@@ -2680,7 +2714,7 @@ function relay_file_url(path) {
 /** Show images of the computer's rooms as they appear; one that cannot be read keeps its name. */
 // Only the added nodes are searched: a whole-document query on every change walks the entire transcript.
 function show_relay_images(records) {
-  const selector = "img[data-relay-src]:not([src]):not([data-relay-failed])";
+  const selector = ":is(img, video, audio)[data-relay-src]:not([src]):not([data-relay-failed])";
   for (const record of records) {
     for (const node of record.addedNodes) {
       if (node.nodeType !== Node.ELEMENT_NODE || !node.isConnected) continue;
@@ -2689,6 +2723,16 @@ function show_relay_images(records) {
       }
     }
   }
+}
+
+/**
+ * A format the browser cannot decode (AVI, WMV, some MOV) hides its player and says so, leaving the download link;
+ * media errors do not bubble, so this listens in the capture phase.
+ */
+function mark_failed_media(event) {
+  if (!["VIDEO", "AUDIO"].includes(event.target?.tagName)) return;
+  const box = event.target.closest(".attachment-media");
+  if (box) box.dataset.failed = "1";
 }
 
 /** Download a file of the computer's rooms through the relay instead of from this website. */
@@ -3073,6 +3117,31 @@ function reload_room_models() {
 /** Read a directory or file from the room's saved project through the authenticated local connection. */
 function read_room_files(room_id, path = "", offset = 0, query = "", root = 0) {
   return local_launch_request("room-files", { room_id, path, offset, ...(query ? { query } : { root }), token: localStorage.getItem(`discuss-access:${room_id}`) });
+}
+
+/**
+ * Open one image, video or audio file of the room's project for the preview's viewer and players. The computer's own
+ * page gets a short-lived address its website streams from disk (seeking reads only what is needed); another device
+ * gets the whole file through the relay in parts, up to the computer's limit, as a Blob URL the caller revokes.
+ * `{ url, content_type, size, blob }`; `on_progress(loaded, total)` follows a relayed read.
+ */
+async function read_room_media(room_id, path, root = 0, on_progress = () => {}) {
+  const token = localStorage.getItem(`discuss-access:${room_id}`);
+  let answer = await local_launch_request("room-media", { room_id, path, root, offset: 0, token });
+  if (answer.url) return { url: `${local_connection?.endpoint || ""}${answer.url}`, content_type: answer.content_type, size: answer.size, blob: false };
+  const parts = [], version = answer.version;
+  let offset = 0;
+  for (;;) {
+    if (answer.version !== version) throw new Error("文件在读取时发生了变化，请重试");
+    const bytes = base64_to_bytes(answer.data || "");
+    if (!bytes.length && offset < answer.total) throw new Error("文件读取失败");
+    parts.push(bytes);
+    offset += bytes.length;
+    on_progress(offset, answer.total);
+    if (offset >= answer.total) break;
+    answer = await local_launch_request("room-media", { room_id, path, root, offset, token });
+  }
+  return { url: URL.createObjectURL(new Blob(parts, { type: answer.content_type })), content_type: answer.content_type, size: answer.total, blob: true };
 }
 
 /**
@@ -4748,6 +4817,7 @@ async function initialize() {
   }
   const launch_settings = load_launch_settings();
   document.addEventListener("click", download_relay_file, true);
+  document.addEventListener("error", mark_failed_media, true);
   new MutationObserver((records) => { if (state.remote_rooms) show_relay_images(records); }).observe(document.body, { childList: true, subtree: true });
   window.addEventListener("hashchange", () => {
     if (new URLSearchParams(location.hash.slice(1)).has("codiscuss-connect")) load_launch_settings();
@@ -5056,7 +5126,7 @@ window.discuss_view = { snapshot: view_snapshot, write_field: write_view_field, 
   write_launch: write_launch_field, default_launch_entry, description_template, save_description_template, description_draft, write_description_draft, describe_member, set_chain_rounds, continue_chain, expert_presets, apply_expert_preset, unique_instance, member_label, default_name, label_draft, write_label_draft, preset_identity, save_expert_preset, delete_expert_preset, write_room_connection, write_room_adapter, launch_clients: LAUNCH_CLIENTS,
   launch_model_state, load_launch_models, write_launch_model, save_launch_api_key, write_scheduler, save_scheduler_api_key, check_scheduler, write_named_followup, write_create_discussion, write_create_goal, write_create_chain_rounds, check_launch_api, launch_summary, launch_can_set_access, pick_launch_directory, browse_local_directory, list_remote_directories, save_launch_projects, restore_launch_profile, reset_create_form, empty_discussion_message,
   start_drag: start_directory_drag, reconnect: reconnect_live_updates, stop_label, local_request: local_launch_request,
-  attachment_markup, attachment_size, attachment_file_icon, drop_attachments, paste_attachments, set_text_preview: (open) => { state.text_preview = open; },
+  attachment_markup, attachment_size, attachment_file_icon, drop_attachments, paste_attachments, set_text_preview: (open) => { state.text_preview = open; }, set_image_viewer: (open) => { state.image_viewer = open; },
   write_expert: write_view_expert, add_instance: add_view_instance, add_preset: add_preset_instance, platform_of, execute: execute_view_action, theme: change_view_theme,
   reload_workflows, workflow_preset, write_create_host_workflows, write_create_api_max_requests, set_room_api_max_requests, set_room_extra_directories, set_room_project_directory,
   admin: { register: register_admin, login: login_admin, logout: logout_admin,
@@ -5065,7 +5135,7 @@ window.discuss_view = { snapshot: view_snapshot, write_field: write_view_field, 
   device: { request: device_request, pair: pair_this_device, take_scanned: take_scanned_pairing, invite: invite_device, renew: renew_this_device, forget: forget_pairing,
     label: device_label, prompt_confirm: () => state.device.prompt?.run(), prompt_cancel: () => state.device.prompt?.cancel() },
   request: request_json, rewind_plan, identities: IDENTITIES, display_name, mention_handles, mentioned_members, render_room_markdown, sources: SOURCE_LABELS,
-  set_member_access, set_member_model, allow_denials, set_member_adapter, reload_room_models, read_room_files, read_room_page, read_execution_details, interject_execution, read_member_chat, send_member_chat, stop_member_chat, pause_execution, limits_label, stop_reason_label, participant_model, participant_files, participant_session_hint, participant_access,
+  set_member_access, set_member_model, allow_denials, set_member_adapter, reload_room_models, read_room_files, read_room_page, read_room_media, read_execution_details, interject_execution, read_member_chat, send_member_chat, stop_member_chat, pause_execution, limits_label, stop_reason_label, participant_model, participant_files, participant_session_hint, participant_access,
   turn_label, turn_guidance, round_groups, limit_rounds, progress_speaker, brief_meta, max_message_length: MAX_MESSAGE_LENGTH, provenance: message_provenance, format_time };
 
 restore_theme();

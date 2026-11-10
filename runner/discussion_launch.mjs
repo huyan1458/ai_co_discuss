@@ -10,7 +10,7 @@ import { pathToFileURL } from 'node:url';
 import { parseArgs } from 'node:util';
 
 import { atomic_json } from './files.mjs';
-import { bundle_project_page, outside_directory, read_only_enforced, read_project_files, room_directories, search_project_roots } from './project_files.mjs';
+import { bundle_project_markdown, bundle_project_page, outside_directory, project_media, read_only_enforced, read_project_files, room_directories, search_project_roots } from './project_files.mjs';
 import { guard_remote_request, list_remote_directories } from './remote_policy.mjs';
 import { list_devices, machine_fingerprint, revoke_device, start_pairing } from './device_auth.mjs';
 import { setup_sidecar } from './adapters/antigravity_app.mjs';
@@ -48,7 +48,7 @@ function free_instance(name, taken) {
 
 /** Supported local clients of an instance's platform. */
 function clients_of(name) { return platform_adapters(platform_of(name)); }
-const PROFILE_FIELDS = ['adapter', 'executable', 'model', 'effort', 'source_thread_id', 'ipc_directory', 'allowed_tools', 'cwd', 'project_name', 'project_id', 'base_url', 'api_protocol', 'api_key_ref', 'system_prompt'];
+const PROFILE_FIELDS = ['adapter', 'executable', 'model', 'effort', 'source_thread_id', 'ipc_directory', 'allowed_tools', 'cwd', 'project_name', 'project_id', 'base_url', 'api_protocol', 'api_key_ref', 'image_model', 'system_prompt'];
 const MAX_MINUTES = 1440;
 const SESSION_ID_PATTERN = /^[0-9A-Za-z_-]{8,128}$/;
 const LOCAL_MEMBERS_FORMAT = 'ai-codiscuss-local-members';
@@ -61,6 +61,7 @@ const HELP = `用法：codiscuss launch settings [--file FILE]
       codiscuss launch room-models --file FILE
       codiscuss launch room-files --file FILE
       codiscuss launch room-page --file FILE
+      codiscuss launch room-media --file FILE
       codiscuss launch execution-details --file FILE
       codiscuss launch models --file FILE
       codiscuss launch api-key --file FILE
@@ -97,13 +98,14 @@ start 使用启动 JSON 创建或接入房间并启动；--dry-run 只校验和�
 room-config 修正已暂停房间的软件路径或切换 Codex App / CLI，不启动讨论；须提供 site、room_id、token。
 room-models 只读指定 site、room_id 的本机登记模型与思考强度，不启动讨论；quick 为 true 时不查询 agy 的默认模型（较慢），该成员标 defaults_pending。
 room-files 只读房间已保存的项目目录，须提供 site、room_id、token，可选相对 path 和目录分页 offset；文件返回最多前 128 KiB 文本；给 query 时改为按名称搜索整个项目（含 / 时按路径），最多返回 50 项。
-room-page 只读项目目录里的一个 HTML 文件（path，可选 root），把它按相对路径引用的样式、脚本、图片、字体与音视频内联为 data URL，以 base64 的 data 返回（最多 8 MiB）；其他设备经中转时分段返回，按 offset 续读并核对 version；未能载入的引用列在 missing（不存在或在项目目录外）与 skipped（超出大小）。
+room-page 只读项目目录里的一个 HTML 文件（path，可选 root），把它按相对路径引用的样式、脚本、图片、字体与音视频内联为 data URL，以 base64 的 data 返回（最多 8 MiB）；Markdown 文件则返回它按相对路径引用的项目图片 {项目路径: data URL} 的 JSON；其他设备经中转时分段返回，按 offset 续读并核对 version；未能载入的引用列在 missing（不存在或在项目目录外）与 skipped（超出大小）。
+room-media 核对项目目录里的一个图片、视频或音频文件（path，可选 root）可读：本机网站凭它登记一个 10 分钟有效的播放地址，按 Range 直接读盘，网页拿不到文件路径；其他设备经中转时分段返回 base64 的 data（按 offset 续读并核对 version），最多 64 MB。
 execution-details 只读房间某次执行的过程细节（中间说明、命令与输出、搜索、改动、工具调用），由本机日志还原，须提供 site、room_id、token、execution_id；细节只留在本机，不写入网站。
 models 按 adapter、executable 或 API profile 读取模型目录，不启动讨论或生成回答。
 api-key 将 base_url、api_key 保存于本机私有目录，只返回 api_key_ref。
 api-check 用 API profile 向模型发送一次极短请求，核对地址、密钥、协议与模型是否可用。
 scheduler-check 用智能调度配置（provider、model、api_key_ref）向决策模型发送一道是非题，核对供应商、模型与密钥是否可用。
-tts-settings 读取朗读设置；内容非空时保存（语音服务 provider：volcengine / aliyun / azure / local（本机，由 local-tts-setup 技能安装），语速 speech_rate，以及 providers.<服务> 的 api_key_ref、speaker、member_voices、file_voice，火山引擎与本机另有语气提示 context（各自默认不同），Azure 另有 region）。
+tts-settings 读取朗读设置；内容非空时保存（语音服务 provider：local（本机，由 local-tts-setup 技能安装）/ volcengine / aliyun / azure / openai，语速 speech_rate，以及 providers.<服务> 的 api_key_ref、speaker、member_voices、file_voice，本机、火山引擎与 OpenAI 另有语气提示 context（各自默认不同），Azure 另有 region；语音输入服务 stt_provider：local / volcengine / openai）。
 tts 用朗读设置把 text（不超过 300 字）合成为音频（本机服务为 m4a，其余为 MP3），返回 base64。
 weixin 微信通知：action 为 status（默认，读取绑定状态）、login（生成扫码内容）、complete（等待扫码确认，约 20 秒）、test（发一条测试通知）或 unbind（解除本机绑定）。Goal 待确认 5 分钟仍未回复时通知房主，房主在微信回复即作为房主发言发回该房间；只用本机服务目录保存凭据。
 tts-release 用户停止朗读：所选服务释放在这台电脑上占用的资源（本机语音在 5 秒内结束、释放显存），云端服务无操作。
@@ -416,7 +418,8 @@ export async function remote_room_files(home, input) {
 const PAGE_PART_BYTES = 192 * 1024;
 
 /**
- * One HTML file of the room's project with the files it refers to inlined (see `bundle_project_page`), as base64
+ * One HTML file of the room's project with the files it refers to inlined (see `bundle_project_page`), or the images a
+ * Markdown file shows (`bundle_project_markdown`), as base64
  * `data` from `offset`. With `parts` (another device, through the relay) at most `PAGE_PART_BYTES` at a time; the
  * caller asks again from where a part ended and checks `version` stays the same.
  */
@@ -427,9 +430,42 @@ export async function room_page(home, raw, { trust = false, parts = false } = {}
   const offset = input.offset ?? 0;
   if (!Number.isSafeInteger(root) || root < 0 || root >= Math.max(1, directories.length)) throw new Error('项目目录编号无效，请刷新后重试');
   if (!Number.isSafeInteger(offset) || offset < 0) throw new Error('页面读取位置无效');
-  const { bytes, ...page } = bundle_project_page(directories[root], input.path);
+  const bundle = /\.(md|markdown)$/i.test(String(input.path || '')) ? bundle_project_markdown : bundle_project_page;
+  const { bytes, ...page } = bundle(directories[root], input.path);
   const part = bytes.subarray(offset, parts ? offset + PAGE_PART_BYTES : bytes.length);
   return { room_id: input.room_id, root, ...page, total: bytes.length, offset, data: part.toString('base64') };
+}
+
+// Through the relay a media file comes whole, in parts, so another device plays at most this much.
+export const REMOTE_MEDIA_MAX_BYTES = 64 * 1024 * 1024;
+
+/**
+ * One image, video or audio file of the room's project (see `project_media`). For the computer's own page it names
+ * the real file, which the local site streams by a ticket and never shows the page; with `parts` (another device,
+ * through the relay) it returns base64 `data` from `offset`, at most `PAGE_PART_BYTES` at a time, for files up to
+ * `REMOTE_MEDIA_MAX_BYTES`, and the caller checks `version` stays the same.
+ */
+export async function room_media(home, raw, { trust = false, parts = false } = {}) {
+  const { input, config } = await member_room_context(home, raw, { trust });
+  const directories = room_directories(config);
+  const root = input.root ?? 0;
+  const offset = input.offset ?? 0;
+  if (!Number.isSafeInteger(root) || root < 0 || root >= Math.max(1, directories.length)) throw new Error('项目目录编号无效，请刷新后重试');
+  if (!Number.isSafeInteger(offset) || offset < 0) throw new Error('文件读取位置无效');
+  const { file, ...media } = project_media(directories[root], input.path);
+  if (!parts) return { room_id: input.room_id, root, ...media, file };
+  if (media.size > REMOTE_MEDIA_MAX_BYTES) throw new Error(`文件 ${Math.ceil(media.size / 1024 / 1024)} MB，超过其他设备可播放的 ${REMOTE_MEDIA_MAX_BYTES / 1024 / 1024} MB 上限；请在这台电脑上打开`);
+  const part = Buffer.alloc(Math.max(0, Math.min(PAGE_PART_BYTES, media.size - offset)));
+  const handle = openSync(file, 'r');
+  try { readSync(handle, part, 0, part.length, offset); } finally { closeSync(handle); }
+  return { room_id: input.room_id, root, ...media, total: media.size, offset, data: part.toString('base64') };
+}
+
+/** `room-media` asked for by another device, answered inside the relay's own process in parts. */
+export async function remote_room_media(home, input) {
+  assert_shared_home(home);
+  guard_remote_request('room-media', input, { projects: launch_projects(home).projects, participants: launch_settings(home).participants, home });
+  return room_media(home, input, { trust: true, parts: true });
 }
 
 /** `room-page` asked for by another device, answered inside the relay's own process in parts, like `remote_room_files`. */
@@ -563,7 +599,7 @@ const MAX_EXPERT_PRESETS = 30;
 const MAX_PRESET_DESCRIPTION = 500;
 const MAX_PRESET_FIELD = 200;
 // name is the instance a preset adds (platform-suffix); label is the free name shown for it, on the add row and in the room.
-const PRESET_FIELDS = ['name', 'label', 'description', 'system_prompt', 'project_access', 'model', 'effort'];
+const PRESET_FIELDS = ['name', 'label', 'description', 'system_prompt', 'project_access', 'model', 'effort', 'image_model'];
 const MAX_PRESET_LABEL = 32;
 
 /**
@@ -594,7 +630,7 @@ export function expert_presets(home) {
 
 /** Check one expert preset; a workflow's agent card is a preset and obeys the same rule. */
 export function validate_preset(preset) {
-  if (!preset || typeof preset !== 'object' || Object.keys(preset).some(key => !PRESET_FIELDS.includes(key))) throw new Error('预设只能包含名称、显示名、描述、提示词、项目权限、模型与强度');
+  if (!preset || typeof preset !== 'object' || Object.keys(preset).some(key => !PRESET_FIELDS.includes(key))) throw new Error('预设只能包含名称、显示名、描述、提示词、项目权限、模型、强度与图片模型');
   if (!platform_of(preset.name) || !clients_of(preset.name)) throw new Error(`预设 ID 须为“平台名”或“平台名-后缀”，后缀只用英文、数字和下划线：${preset.name}`);
   if (Object.values(preset).some(value => typeof value !== 'string')) throw new Error(`${preset.name} 的字段必须为文本`);
   if ((preset.label || '').trim().length > MAX_PRESET_LABEL) throw new Error(`${preset.name} 的显示名最多 ${MAX_PRESET_LABEL} 字`);
@@ -602,6 +638,7 @@ export function validate_preset(preset) {
   if ((preset.system_prompt || '').length > MAX_EXPERT_PROMPT) throw new Error(`${preset.name} 的提示词最多 ${MAX_EXPERT_PROMPT} 字`);
   if (preset.project_access && !PROJECT_ACCESS.includes(preset.project_access)) throw new Error(`${preset.name} 的项目权限须为 read、write、auto 或 full`);
   if ([preset.model, preset.effort].some(value => (value || '').length > MAX_PRESET_FIELD)) throw new Error(`${preset.name} 的模型或强度过长`);
+  if (preset.image_model && !/^[A-Za-z0-9][A-Za-z0-9._:/@-]*$/.test(preset.image_model)) throw new Error(`${preset.name} 的图片模型只能是模型 ID，例如 gpt-image-2.6-flare`);
 }
 
 /** Replace the user's presets, default descriptions or deleted built-ins (whichever the input carries); every field is checked first. */
@@ -641,7 +678,7 @@ function validate_profile(name, profile, binding = false) {
     } else if (typeof value !== 'string') throw new Error(`${name}.${key} 必须为文本`);
     if (['executable', 'cwd', 'ipc_directory'].includes(key) && value && !isAbsolute(value)) throw new Error(`${name}.${key} 必须为完整绝对路径`);
     // The model is passed as one CLI argument, so it must not look like a flag or contain spaces.
-    if (key === 'model' && value && !/^[A-Za-z0-9][A-Za-z0-9._:/@[\]-]*$/.test(value)) throw new Error(`${name}.model 只能是模型名称，例如 gpt-6-astra、opus 或 gemini-4-argon-high`);
+    if (['model', 'image_model'].includes(key) && value && !/^[A-Za-z0-9][A-Za-z0-9._:/@[\]-]*$/.test(value)) throw new Error(`${name}.${key} 只能是模型名称，例如 gpt-6-astra、opus 或 gemini-4-argon-high`);
     if (key === 'system_prompt' && value.length > MAX_EXPERT_PROMPT) throw new Error(`${name} 的专属提示词最多 ${MAX_EXPERT_PROMPT} 字`);
   }
   const facts = adapter_profile(profile.adapter);
@@ -1605,7 +1642,7 @@ async function room_cards(home, raw) {
     taken.add(card.toLowerCase());
     // A card names its member platform-card; the room member it came from may have another suffix.
     return { card, name: `${platform_of(name)}-${card}`, label: room.labels?.[name] || '', description: room.descriptions?.[name] || '',
-      ...Object.fromEntries(['system_prompt', 'project_access', 'model', 'effort']
+      ...Object.fromEntries(['system_prompt', 'project_access', 'model', 'effort', 'image_model']
       .filter(field => profile[field] && profile[field] !== 'own').map(field => [field, profile[field]])) };
   }) };
 }
@@ -1710,7 +1747,7 @@ async function join_workflow_cards(home, config, roster, workflow, members, card
     const taken = new Set([...roster.map(member => member.name), ...Object.values(next)]);
     const name = taken.has(agent.name) ? free_instance(agent.name, taken) : agent.name;
     const api = card_api_profile(home, platform_of(agent.name));
-    const card = Object.fromEntries(['project_access', 'model', 'effort'].filter(field => agent[field] && !(api && field === 'effort')).map(field => [field, agent[field]]));
+    const card = Object.fromEntries(['project_access', 'model', 'effort', 'image_model'].filter(field => agent[field] && !(api && field === 'effort')).map(field => [field, agent[field]]));
     // An API member has no command line, so a card asking for more than writing gets the most it allows.
     if (api && card.project_access && !access_levels('api').includes(card.project_access)) card.project_access = 'write';
     const profile = { ...api, ...card };
@@ -2058,6 +2095,7 @@ export async function launch_main(args = process.argv.slice(2), input_text) {
   else if (positionals[0] === 'room-models' && input) result = await room_models(home, input);
   else if (positionals[0] === 'room-files' && input) result = await room_files(home, input);
   else if (positionals[0] === 'room-page' && input) result = await room_page(home, input, { parts: Boolean(values.remote) });
+  else if (positionals[0] === 'room-media' && input) result = await room_media(home, input, { parts: Boolean(values.remote) });
   else if (positionals[0] === 'execution-details' && input) result = await execution_details_command(home, input);
   else if (positionals[0] === 'models' && adapter_profile(input?.adapter)?.kind === 'api') result = await api_models(home, input);
   else if (positionals[0] === 'models' && input) {

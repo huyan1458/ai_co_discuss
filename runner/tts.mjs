@@ -44,9 +44,10 @@ function provider_settings(provider, saved = {}) {
  * chosen held Volcengine's key and voices at the top level and are read as Volcengine's; so is a tone saved at the top
  * level before each service kept its own.
  * The chosen service's key reference and voices are also given at the top level for readers that only play.
- * The local service's token is saved by the setup skill, so without a reference it uses the latest saved for its address.
+ * The local service's token is saved by the setup skill, so without a reference it uses the latest saved for its address;
+ * so does OpenAI, whose key is usually saved already for model API members.
  * Voice input chooses its own service (`stt_provider`); `stt_key_ref` is the key reference of the one chosen, empty
- * until it is set up: Volcengine's key from its reading part, the local service's token as its skill saved it.
+ * until it is set up: a cloud service's key from its reading part of the same id, the local service's token as its skill saved it.
  */
 export function tts_settings(home) {
   const path = join(home, SETTINGS_FILE);
@@ -57,16 +58,19 @@ export function tts_settings(home) {
   const keys = saved_api_keys(home);
   const providers = Object.fromEntries(TTS_PROVIDERS.map(provider => {
     const own = provider_settings(provider, Object.fromEntries(Object.entries(stored[provider.id] || {}).filter(([, value]) => value !== undefined)));
-    return [provider.id, provider.local && !own.api_key_ref ? { ...own, api_key_ref: keys[provider.key_base_url] || '' } : own];
+    return [provider.id, (provider.local || provider.shared_key) && !own.api_key_ref ? { ...own, api_key_ref: keys[provider.key_base_url] || '' } : own];
   }));
-  const provider = PROVIDER_IDS.includes(saved.provider) ? saved.provider : 'volcengine';
+  // Never chosen: the service on this computer once installed (it needs no key), unless an older file holds a Volcengine key.
+  const provider = PROVIDER_IDS.includes(saved.provider) ? saved.provider
+    : providers.local.api_key_ref && !stored.volcengine?.api_key_ref ? 'local' : 'volcengine';
   const active = providers[provider];
   const ready = Boolean(active.api_key_ref && (!provider_of(provider).region || active.region));
-  const stt_provider = STT_IDS.includes(saved.stt_provider) ? saved.stt_provider : 'volcengine';
+  const local_stt = STT_PROVIDERS.find(item => item.local);
+  const stt_provider = STT_IDS.includes(saved.stt_provider) ? saved.stt_provider : keys[local_stt.key_base_url] ? local_stt.id : 'volcengine';
   const stt = STT_PROVIDERS.find(item => item.id === stt_provider);
   return { provider, speech_rate: saved.speech_rate ?? 0, providers, catalog: TTS_PROVIDERS,
     api_key_ref: ready ? active.api_key_ref : '', speaker: active.speaker, member_voices: active.member_voices, file_voice: active.file_voice,
-    stt_provider, stt_catalog: STT_PROVIDERS, stt_key_ref: stt.local ? keys[stt.key_base_url] || '' : providers.volcengine.api_key_ref };
+    stt_provider, stt_catalog: STT_PROVIDERS, stt_key_ref: stt.local ? keys[stt.key_base_url] || '' : providers[stt.id]?.api_key_ref || '' };
 }
 
 /** Validate one service's part as the page sent it. */
@@ -94,16 +98,19 @@ function check_provider(provider, input = {}) {
 
 /**
  * Validate and save the speech settings the page edits: the reading service, each service's part (its tone among them), rate, and
- * the voice-input service (kept as it was when not sent, as by pages from before it could be chosen).
+ * the voice-input service. A service is saved only once the user picks one; until then neither is sent and the default
+ * follows what is installed, so editing a voice or the rate before installing the local service does not pin the cloud one.
  */
 export function save_tts_settings(home, input) {
-  const provider = String(input.provider || 'volcengine');
-  if (!PROVIDER_IDS.includes(provider)) throw new Error('请选择语音服务');
+  const current = tts_settings(home);
+  const path = join(home, SETTINGS_FILE);
+  const saved = existsSync(path) ? JSON.parse(readFileSync(path, 'utf8')) : {};
+  const provider = input.provider ?? saved.provider;
+  if (provider !== undefined && !PROVIDER_IDS.includes(provider)) throw new Error('请选择语音服务');
   const speech_rate = Number(input.speech_rate ?? 0);
   if (!Number.isInteger(speech_rate) || speech_rate < -50 || speech_rate > 100) throw new Error('语速须为 -50 到 100 的整数');
-  const current = tts_settings(home);
-  const stt_provider = String(input.stt_provider || current.stt_provider);
-  if (!STT_IDS.includes(stt_provider)) throw new Error('请选择语音输入服务');
+  const stt_provider = input.stt_provider ?? saved.stt_provider;
+  if (stt_provider !== undefined && !STT_IDS.includes(stt_provider)) throw new Error('请选择语音输入服务');
   const providers = Object.fromEntries(TTS_PROVIDERS.map(item => [item.id, check_provider(item, input.providers?.[item.id] || current.providers[item.id])]));
   mkdirSync(home, { recursive: true, mode: 0o700 });
   atomic_json(join(home, SETTINGS_FILE), { provider, speech_rate, providers, stt_provider });

@@ -53,6 +53,8 @@ const MEMORY_LIMIT = 60;
 // The computer's relay connection drops now and then and is back within seconds (up to ~11 s seen), and a phone's network
 // can blink; a request failing that way is asked again every RETRY_DELAY_MS for up to RETRY_WINDOW_MS before reading stops.
 const RETRY_WINDOW_MS = 30000;
+// The audio formats the services answer in; anything else is MP3.
+const AUDIO_TYPES = { m4a: "audio/mp4", aac: "audio/aac" };
 const RETRY_DELAY_MS = 2000;
 const transient = (error) => error?.offline === true || error instanceof TypeError;
 // A broadcast reply without a summary is read whole up to this length; a longer one gives its first paragraph (at least
@@ -419,7 +421,7 @@ export function use_read_aloud({ bridge, container, prepare = async () => {}, me
     if (!memory.has(key)) {
       const pending = new Promise((resolve, reject) => {
         waiting.push({ key, run, resolve, reject, send: () => request_tts(bridge, { text: chunk.text, section_id, speaker: speaker || undefined, silence_ms: chunk.silence }) });
-      }).then(({ audio, format, marks }) => ({ url: URL.createObjectURL(new Blob([Uint8Array.from(atob(audio), (character) => character.charCodeAt(0))], { type: format === "m4a" ? "audio/mp4" : "audio/mpeg" })), marks: marks || [] }));
+      }).then(({ audio, format, marks }) => ({ url: URL.createObjectURL(new Blob([Uint8Array.from(atob(audio), (character) => character.charCodeAt(0))], { type: AUDIO_TYPES[format] || "audio/mpeg" })), marks: marks || [] }));
       pending.catch(() => { if (memory.get(key) === pending) memory.delete(key); });
       memory.set(key, pending);
       send_next();

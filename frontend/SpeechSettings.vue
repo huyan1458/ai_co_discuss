@@ -1,8 +1,8 @@
 <script setup>
 /**
- * Speech settings kept by the local service: read-aloud uses the chosen service (Volcengine, Aliyun, Azure or the speech
- * model on this computer), each with its own key and voices; voice input chooses its own service (Volcengine with its
- * key, or the recognizer on this computer). Keys never come back to the page; a local service's token is saved by its
+ * Speech settings kept by the local service: read-aloud uses the chosen service (the speech model on this computer,
+ * Volcengine, Aliyun, Azure or OpenAI), each with its own key and voices; voice input chooses its own service (Volcengine
+ * or OpenAI with the key of its reading part, or the recognizer on this computer). Keys never come back to the page; a local service's token is saved by its
  * setup skill, so it asks for none.
  */
 import { computed, inject, onBeforeUnmount, onMounted, reactive, ref } from "vue";
@@ -12,7 +12,6 @@ import { request_tts } from "./read-aloud.js";
 const { bridge } = inject("discussion");
 const SAVED_MARK = "••••••••••••";
 const PREVIEW_TEXT = "你好，我会用这个声音为你朗读房间里的消息。";
-const VOICE_INPUT = "volcengine";
 const rates = [{ value: -20, label: "0.8×" }, { value: 0, label: "1×" }, { value: 20, label: "1.2×" }, { value: 50, label: "1.5×" }, { value: 100, label: "2×" }];
 const settings = reactive({ provider: "volcengine", speech_rate: 0, providers: {}, catalog: [], api_key_ref: "", stt_provider: "volcengine", stt_catalog: [], stt_key_ref: "" });
 // One voice per AI platform; members of an unset platform, the user and program messages use the default voice.
@@ -35,34 +34,38 @@ const service = computed(() => settings.catalog.find((item) => item.id === setti
 const own = computed(() => settings.providers[settings.provider] || { member_voices: {} });
 const status = computed(() => unavailable.value ? "需连接本机服务" : !loaded.value ? "读取中…"
   : !settings.api_key_ref ? `${service.value.label} · 未配置` : `已配置 · ${service.value.label} · ${voice_items.value.find((voice) => voice.value === own.value.speaker)?.label || own.value.speaker}`);
-// The voice-input service chosen; Volcengine's needs its key, which gets its own row when reading uses another service.
+// The voice-input service chosen; a cloud one shares the key of its reading part, which gets its own row when reading uses another service.
 const stt_service = computed(() => settings.stt_catalog.find((item) => item.id === settings.stt_provider) || {});
-const input_service = computed(() => settings.provider === VOICE_INPUT ? null : settings.catalog.find((item) => item.id === VOICE_INPUT));
+const input_service = computed(() => settings.provider === settings.stt_provider ? null : settings.catalog.find((item) => item.id === settings.stt_provider));
 
 onMounted(async () => {
   try { Object.assign(settings, await bridge.local_request("tts-settings", {})); loaded.value = true; }
   catch (error) { unavailable.value = error.message; }
 });
 
-/** Save every field together; the service validates and answers with what it kept. */
-async function save() {
-  const { provider, speech_rate, providers, stt_provider } = settings;
-  try { Object.assign(settings, await bridge.local_request("tts-settings", { provider, speech_rate, providers, stt_provider })); }
+/**
+ * Save the rate and every service's part, with `chosen` holding a service the user just picked. Services are sent only
+ * then, so until the user picks one the default keeps following what is installed on this computer.
+ */
+async function save_with(chosen) {
+  const { speech_rate, providers } = settings;
+  try { Object.assign(settings, await bridge.local_request("tts-settings", { speech_rate, providers, ...chosen })); }
   catch (error) { bridge.notify("error", error.message); }
 }
+const save = () => save_with({});
 
 /** Switch the voice-input service. */
 function choose_input(provider) {
   if (provider === settings.stt_provider) return;
   settings.stt_provider = provider;
-  save();
+  save_with({ stt_provider: provider });
 }
 
 /** Switch the reading service; each keeps its own key and voices. */
 function choose(provider) {
   if (provider === settings.provider) return;
   settings.provider = provider;
-  save();
+  save_with({ provider });
 }
 
 // Known voices of the chosen service show by name; IDs typed earlier (enabled in its console) are kept and shown as themselves.
@@ -192,10 +195,10 @@ onBeforeUnmount(stop_preview);
             <p class="fine-print speech-note" :title="stt_service.note">{{ stt_service.note }}</p>
             <div class="speech-row"><span>密钥</span>
               <UInput v-if="stt_service.local" disabled :placeholder="settings.stt_key_ref ? '已由安装技能配置，无需填写' : '尚未安装：让本机 AI 按 local-stt-setup 技能安装'" aria-label="本机语音识别令牌" size="sm" class="w-full" />
-              <UInput v-else-if="input_service" v-model="typed_keys[input_service.id]" type="text" autocomplete="off" spellcheck="false" data-1p-ignore data-lpignore="true" :placeholder="settings.providers[input_service.id]?.api_key_ref ? SAVED_MARK : '粘贴火山引擎 API Key'" :title="settings.providers[input_service.id]?.api_key_ref && !typed_keys[input_service.id] ? '已保存；本机不回传密钥，输入新 Key 可更换' : undefined" aria-label="语音输入的火山引擎 API Key" size="sm" class="w-full" :loading="busy === `key:${input_service.id}`" :ui="{ base: visible_keys[input_service.id] ? '' : 'speech-key-masked', trailing: 'pe-0.5' }" @change="save_key(input_service)">
+              <UInput v-else-if="input_service" v-model="typed_keys[input_service.id]" type="text" autocomplete="off" spellcheck="false" data-1p-ignore data-lpignore="true" :placeholder="settings.providers[input_service.id]?.api_key_ref ? SAVED_MARK : `粘贴${input_service.label} API Key`" :title="settings.providers[input_service.id]?.api_key_ref && !typed_keys[input_service.id] ? '已保存；本机不回传密钥，输入新 Key 可更换' : undefined" :aria-label="`语音输入的${input_service.label} API Key`" size="sm" class="w-full" :loading="busy === `key:${input_service.id}`" :ui="{ base: visible_keys[input_service.id] ? '' : 'speech-key-masked', trailing: 'pe-0.5' }" @change="save_key(input_service)">
                 <template #trailing><UButton :icon="visible_keys[input_service.id] ? 'i-lucide-eye' : 'i-lucide-eye-off'" :disabled="!typed_keys[input_service.id]" :aria-label="visible_keys[input_service.id] ? '隐藏密钥' : '显示密钥'" :aria-pressed="Boolean(visible_keys[input_service.id])" size="xs" color="neutral" variant="link" @click="visible_keys[input_service.id] = !visible_keys[input_service.id]" /></template>
               </UInput>
-              <UInput v-else disabled placeholder="与朗读共用上方的火山引擎 Key" aria-label="语音输入的火山引擎 API Key" size="sm" class="w-full" />
+              <UInput v-else disabled :placeholder="`与朗读共用上方的${stt_service.label} Key`" :aria-label="`语音输入的${stt_service.label} API Key`" size="sm" class="w-full" />
             </div>
           </template>
           <p v-else class="fine-print">正在读取语音设置…</p>

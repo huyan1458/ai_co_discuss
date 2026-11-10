@@ -2,7 +2,7 @@ import assert from 'node:assert/strict';
 import { spawn, spawnSync } from 'node:child_process';
 import { randomUUID } from 'node:crypto';
 import { EventEmitter } from 'node:events';
-import { mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync, existsSync, symlinkSync } from 'node:fs';
+import { mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync, existsSync, symlinkSync, truncateSync } from 'node:fs';
 import { request as http_request } from 'node:http';
 import { tmpdir } from 'node:os';
 import { dirname, join, resolve } from 'node:path';
@@ -10,7 +10,7 @@ import { PassThrough } from 'node:stream';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import { test } from 'node:test';
 
-import { adopt_member_profile, adopt_workflow, host_control, borrowed_session, cached_software_defaults, check_or_save_workflow, join_workflow, launch_discussion, launch_settings, room_configuration, room_files, room_models, room_page, room_member, room_member_model, room_settings, room_workflow, save_launch_projects, save_launch_settings, validate_preset } from '../runner/discussion_launch.mjs';
+import { adopt_member_profile, adopt_workflow, host_control, borrowed_session, cached_software_defaults, check_or_save_workflow, join_workflow, launch_discussion, launch_settings, room_configuration, room_files, room_media, room_models, room_page, room_member, room_member_model, room_settings, room_workflow, save_launch_projects, save_launch_settings, validate_preset } from '../runner/discussion_launch.mjs';
 import { get_workflow, list_workflows, save_workflow } from '../runner/workflows.mjs';
 import { API_PROVIDERS, save_api_key } from '../runner/discussion_api.mjs';
 import { read_project_files } from '../runner/project_files.mjs';
@@ -342,6 +342,69 @@ test('a room page inlines only the project files it refers to, for the owner, in
   }
   assert.ok(parts.length > 1);
   assert.equal(Buffer.concat(parts).toString('base64'), whole.data);
+});
+
+test('a Markdown preview gets the project images it shows, keyed as the page resolves the rendered image paths', async t => {
+  const f = await fixture(t);
+  const project = join(f.directory, 'project');
+  mkdirSync(join(project, 'docs', 'images'), { recursive: true });
+  const PNG = Buffer.from([137, 80, 78, 71]), SVG = Buffer.from('<svg xmlns="http://www.w3.org/2000/svg"/>'), GIF = Buffer.from('GIF89a');
+  writeFileSync(join(project, 'docs', 'images', '封面 1.png'), PNG);
+  writeFileSync(join(project, 'docs', 'images', 'logo.svg'), SVG);
+  writeFileSync(join(project, 'anim.gif'), GIF);
+  writeFileSync(join(f.directory, 'outside.png'), PNG);
+  const text = '![封面](<images/封面 1.png>)\n\n![logo](./images/logo.svg "标志")\n\n![动图][a]\n\n![外面](../../outside.png)\n\n![缺](images/none.webp)\n\n[a]: ../anim.gif\n';
+  writeFileSync(join(project, 'docs', 'guide.md'), text);
+  const launched = await launch_discussion(f.home, { ...f.input, cwd: project }, f.options);
+  const config = load_config(launched.config_path);
+  const page = await room_page(f.home, { site: f.site, room_id: config.room, token: config.token, path: 'docs/guide.md' });
+  const images = JSON.parse(Buffer.from(page.data, 'base64').toString('utf8'));
+  assert.deepEqual(Object.keys(images).sort(), ['anim.gif', 'docs/images/logo.svg', 'docs/images/封面 1.png']);
+  assert.equal(images['docs/images/logo.svg'], `data:image/svg+xml;base64,${SVG.toString('base64')}`);
+  assert.deepEqual(page.missing.sort(), ['../outside.png', 'docs/images/none.webp']);
+  // The page renders the same file and finds each image under the key the computer sent.
+  const { render_markdown } = await import('../frontend/markdown.mjs');
+  const { inline_markdown_images } = await import('../frontend/file-preview.js');
+  const html = inline_markdown_images(render_markdown(text), images, 'docs');
+  for (const url of Object.values(images)) assert.ok(html.includes(`<img src="${url}"`), url.slice(0, 30));
+  assert.ok(html.includes('src="../../outside.png"'), 'a path outside the project stays as written');
+});
+
+test('a project media file is named to the local site, and reaches another device only in parts within the limit', async t => {
+  const f = await fixture(t);
+  const project = join(f.directory, 'project');
+  mkdirSync(join(project, 'media'), { recursive: true });
+  const clip = Buffer.alloc(300 * 1024, 7);
+  writeFileSync(join(project, 'media', 'clip.mp4'), clip);
+  writeFileSync(join(project, 'media', 'notes.txt'), 'text');
+  writeFileSync(join(project, 'media', 'huge.webm'), '');
+  truncateSync(join(project, 'media', 'huge.webm'), 65 * 1024 * 1024);
+  writeFileSync(join(f.directory, 'outside.mp3'), 'ID3');
+  const launched = await launch_discussion(f.home, { ...f.input, cwd: project }, f.options);
+  const config = load_config(launched.config_path);
+  const input = { site: f.site, room_id: config.room, token: config.token, path: 'media/clip.mp4' };
+  const local = await room_media(f.home, input);
+  assert.equal(local.content_type, 'video/mp4');
+  assert.equal(local.file, join(project, 'media', 'clip.mp4'), 'the local site streams the checked file');
+  const parts = [];
+  for (let offset = 0; offset < clip.length;) {
+    const part = await room_media(f.home, { ...input, offset }, { trust: true, parts: true });
+    assert.equal(part.file, undefined, 'a relayed answer never names the file');
+    assert.equal(part.version, local.version);
+    parts.push(Buffer.from(part.data, 'base64'));
+    offset += parts.at(-1).length;
+  }
+  assert.ok(parts.length > 1);
+  assert.ok(Buffer.concat(parts).equals(clip));
+  await assert.rejects(room_media(f.home, { ...input, path: 'media/huge.webm' }, { trust: true, parts: true }), /64 MB/);
+  // Office documents and the compressed Premiere project are read whole the same way, for the page's previews.
+  writeFileSync(join(project, 'media', 'report.docx'), 'PK');
+  writeFileSync(join(project, 'media', 'cut.prproj'), Buffer.from([0x1f, 0x8b]));
+  assert.match((await room_media(f.home, { ...input, path: 'media/report.docx' })).content_type, /wordprocessingml/);
+  assert.equal((await room_media(f.home, { ...input, path: 'media/cut.prproj' })).content_type, 'application/gzip');
+  await assert.rejects(room_media(f.home, { ...input, path: 'media/notes.txt' }), /图片、音视频、Office 文档/);
+  await assert.rejects(room_media(f.home, { ...input, path: '../outside.mp3' }), /相对路径/);
+  await assert.rejects(room_media(f.home, { ...input, token: 'invalid-owner' }), /403/);
 });
 
 test('a room shares extra project directories set at creation or later, and names a member working outside them', async t => {

@@ -2,7 +2,12 @@
 import { computed, inject, nextTick, onBeforeUnmount, onMounted, ref, watch } from "vue";
 import { use_read_aloud } from "./read-aloud.js";
 import ExcerptEditCard from "./ExcerptEditCard.vue";
-import { add_excerpt as put_excerpt, crumbs_of, excerpt_mark_place, excerpt_range, file_preview, file_size, file_type, hold_selection, modified_time, text_offset } from "./file-preview.js";
+import MediaViewer from "./MediaViewer.vue";
+import { open_image_viewer } from "./image-viewer.js";
+import OfficeViewer from "./OfficeViewer.vue";
+import Papa from "papaparse";
+import { gunzipSync } from "fflate";
+import { add_excerpt as put_excerpt, crumbs_of, document_kind_of, excerpt_mark_place, excerpt_range, file_preview, file_size, file_type, hold_selection, inline_markdown_images, media_of, modified_time, subtitle_cues, text_kind_of, text_offset } from "./file-preview.js";
 
 // The file preview window: several files open as tabs; it folds into a floating button that keeps every tab, its mode
 // and scroll position, so the user can go to the messages or another room and come back. Mounted once for the workspace,
@@ -50,8 +55,24 @@ const preview_crumbs = computed(() => tab.value?.attachment ? [{ name: "消息�
   : crumbs_of(tab.value?.directory || "", active_path.value));
 const preview_name = computed(() => name_of(active_path.value));
 const preview_type = computed(() => file_type(preview_name.value));
-const format = computed(() => /\.(md|markdown)$/i.test(active_path.value) ? "markdown" : /\.html?$/i.test(active_path.value) ? "html" : "text");
-const rendered = computed(() => format.value === "markdown" && preview.value?.text ? window.discuss_markdown.render_markdown(preview.value.text, [], { source_lines: true }) : "");
+const format = computed(() => /\.(md|markdown)$/i.test(active_path.value) ? "markdown" : /\.html?$/i.test(active_path.value) ? "html"
+  : text_kind_of(active_path.value) || "text");
+// Word, Excel and PowerPoint files open in the Office previews (`office_kind`); a Premiere project is unpacked to its XML.
+const document_kind = computed(() => document_kind_of(active_path.value));
+const office_kind = computed(() => (document_kind.value === "prproj" ? "" : document_kind.value));
+// Rows of a CSV / TSV preview and cues of a subtitle preview; the source view keeps the whole text.
+const MAX_TABLE_ROWS = 5000;
+const table = computed(() => {
+  if (format.value !== "table" || preview.value?.text == null) return { rows: [], cut: false };
+  const parsed = Papa.parse(preview.value.text, { delimiter: /\.tsv$/i.test(active_path.value) ? "\t" : "", skipEmptyLines: true, preview: MAX_TABLE_ROWS + 1 });
+  return { rows: parsed.data.slice(0, MAX_TABLE_ROWS), cut: parsed.data.length > MAX_TABLE_ROWS || Boolean(preview.value.truncated) };
+});
+const cues = computed(() => (format.value === "subtitle" && preview.value?.text != null ? subtitle_cues(preview.value.text, active_path.value) : []));
+// Images, video and audio of a project open in the viewer and players instead of as text (an SVG keeps its source view).
+const media_kind = computed(() => (tab.value?.attachment ? "" : media_of(active_path.value)));
+// Images a project Markdown file refers to by relative path are read by the computer (`tab.page.images`).
+const rendered = computed(() => format.value === "markdown" && preview.value?.text
+  ? inline_markdown_images(window.discuss_markdown.render_markdown(preview.value.text, [], { source_lines: true }), tab.value?.page?.images, active_path.value.split("/").slice(0, -1).join("/")) : "");
 // HTML renders in full, its scripts and external resources included, in a sandbox without `allow-same-origin`: an
 // opaque origin that cannot reach this site's storage, cookies or pages. The same sandbox is used in a new tab.
 const HTML_SANDBOX = "allow-scripts allow-popups allow-popups-to-escape-sandbox allow-forms allow-modals";
@@ -76,9 +97,10 @@ const html_preview = computed(() => html_document(html_text.value, selection_bri
 const can_open_html = computed(() => format.value === "html" && can_render.value && !tab.value?.loading);
 // What the rendered HTML lacks: files it refers to that could not be included, or none at all for an attachment.
 const html_notice = computed(() => {
-  if (format.value !== "html" || !tab.value || tab.value.loading) return "";
+  if (!["markdown", "html"].includes(format.value) || media_kind.value || !tab.value || tab.value.loading) return "";
+  if (format.value === "markdown" && tab.value.attachment) return "";
   if (tab.value.attachment) return "附件没有所在目录，相对路径引用的样式、脚本与图片不会载入";
-  if (tab.value.page_error) return `引用的文件未能载入（${tab.value.page_error}），只显示 HTML 本身`;
+  if (tab.value.page_error) return format.value === "markdown" ? `引用的图片未能载入（${tab.value.page_error}）` : `引用的文件未能载入（${tab.value.page_error}），只显示 HTML 本身`;
   const { missing = [], skipped = [] } = tab.value.page || {};
   const parts = [missing.length ? `${missing.length} 个不存在或在项目目录外` : "", skipped.length ? `${skipped.length} 个超出 8 MiB 上限` : ""].filter(Boolean);
   return parts.length ? `引用的文件有 ${parts.join("、")}，未载入：${[...missing, ...skipped].join("、")}` : "";
@@ -92,7 +114,7 @@ function open_html_tab() {
     + `<iframe sandbox="${HTML_SANDBOX}" referrerpolicy="no-referrer" srcdoc="${attribute(html_document(html_text.value))}"></iframe>`;
   window.open(URL.createObjectURL(new Blob([page], { type: "text/html" })), "_blank");
 }
-const can_render = computed(() => preview.value?.text != null && format.value !== "text" && !(format.value === "html" && preview.value.truncated && !tab.value?.page));
+const can_render = computed(() => preview.value?.text != null && (format.value !== "text" || Boolean(media_kind.value)) && !(format.value === "html" && preview.value.truncated && !tab.value?.page));
 const showing_source = computed(() => preview.value?.text != null && (!can_render.value || source.value));
 // One gutter string keeps line numbers to a single DOM node even for the largest previews.
 const lines = computed(() => preview.value?.text == null ? [] : preview.value.text.split("\n"));
@@ -176,18 +198,59 @@ async function load(item) {
   const request = (item.request || 0) + 1;
   Object.assign(item, { request, loading: true, error: "" });
   try {
-    const result = item.attachment ? await read_attachment(item.attachment) : await bridge.read_room_files(item.room_id, item.path, 0, "", item.root || 0);
+    // An Office attachment is read whole by its preview, never decoded as text.
+    const result = item.attachment && document_kind_of(item.path) ? { text: null, reason: "", size: item.attachment.size, modified_at: item.attachment.created_at }
+      : item.attachment ? await read_attachment(item.attachment) : await bridge.read_room_files(item.room_id, item.path, 0, "", item.root || 0);
     if (item.request === request) item.data = result;
-    // The computer inlines what a project's HTML file refers to, so it renders as it would opened on that computer.
-    if (item.request === request && !item.attachment && /\.html?$/i.test(item.path)) {
+    // The computer inlines what a project's HTML file refers to, so it renders as it would opened on that computer;
+    // for Markdown it reads the images the file shows.
+    const markdown = /\.(md|markdown)$/i.test(item.path);
+    if (item.request === request && !item.attachment && (markdown || /\.html?$/i.test(item.path))) {
       try {
         const page = await bridge.read_room_page(item.room_id, item.path, item.root || 0);
+        if (markdown) page.images = JSON.parse(page.text || "{}");
         if (item.request === request) Object.assign(item, { page, page_error: "" });
       } catch (error) { if (item.request === request) item.page_error = error.message; }
     }
+    if (item.request === request && !item.attachment && (media_of(item.path) || document_kind_of(item.path))) await load_media(item, request);
+    if (item.request === request && item.attachment && document_kind_of(item.path)) item.media = { url: item.attachment.url, blob: false };
+    if (item.request === request && document_kind_of(item.path) === "prproj" && item.media) await unpack_project(item, request);
   } catch (error) {
     if (item.request === request) item.error = error.message;
   } finally { if (item.request === request) item.loading = false; }
+}
+
+/** Give a media tab its playable address: a stream of the computer's website, or the whole file through the relay. */
+async function load_media(item, request) {
+  release_media(item);
+  Object.assign(item, { media_error: "", media_progress: 0 });
+  try {
+    const media = await bridge.read_room_media(item.room_id, item.path, item.root || 0, (loaded, total) => {
+      if (item.request === request) item.media_progress = total ? loaded / total : 0;
+    });
+    if (item.request !== request) { if (media.blob) URL.revokeObjectURL(media.url); return; }
+    item.media = media;
+  } catch (error) { if (item.request === request) item.media_error = error.message; }
+}
+
+/** A Premiere project is gzip-compressed XML: show that XML as the tab's text. */
+async function unpack_project(item, request) {
+  try {
+    const response = await fetch(item.media.url);
+    if (!response.ok) throw new Error(`文件读取失败（${response.status}）`);
+    const bytes = gunzipSync(new Uint8Array(await response.arrayBuffer()));
+    const truncated = bytes.length > ATTACHMENT_TEXT_LIMIT;
+    const text = new TextDecoder("utf-8").decode(truncated ? bytes.subarray(0, ATTACHMENT_TEXT_LIMIT) : bytes);
+    if (item.request === request) item.data = { ...item.data, text, truncated, limit: ATTACHMENT_TEXT_LIMIT, encoding: "utf-8", reason: "" };
+  } catch (error) {
+    if (item.request === request) item.data = { ...item.data, text: null, reason: `Premiere 工程无法解压：${error.message}` };
+  }
+}
+
+/** Free the Blob a relayed media file was read into, when its tab reloads or closes. */
+function release_media(item) {
+  if (item.media?.blob) URL.revokeObjectURL(item.media.url);
+  item.media = null;
 }
 
 /** Open a file of the current room in its own tab (or re-read the tab it already has) and show the window. */
@@ -236,6 +299,7 @@ function close_tab(id) {
   const index = tabs.value.findIndex(item => item.id === id);
   if (index < 0) return;
   tabs.value[index].request++;
+  release_media(tabs.value[index]);
   tabs.value.splice(index, 1);
   if (id !== active_id.value) return;
   active_id.value = tabs.value[Math.min(index, tabs.value.length - 1)]?.id || "";
@@ -435,7 +499,7 @@ function pull_end() {
 }
 
 function close_all() {
-  for (const item of tabs.value) item.request++;
+  for (const item of tabs.value) { item.request++; release_media(item); }
   tabs.value = [];
   active_id.value = "";
   open.value = false;
@@ -677,6 +741,7 @@ onMounted(() => {
   file_preview.open = open_file;
   window.addEventListener("message", frame_selection);
   bridge.set_text_preview(open_attachment);
+  bridge.set_image_viewer(open_image_viewer);
   place_float();
   window.addEventListener("resize", place_float);
   narrow_query.addEventListener("change", track_narrow);
@@ -691,6 +756,7 @@ onBeforeUnmount(() => {
   if (file_preview.open === open_file) file_preview.open = null;
   window.removeEventListener("message", frame_selection);
   bridge.set_text_preview(null);
+  bridge.set_image_viewer(null);
   window.removeEventListener("resize", place_float);
   narrow_query.removeEventListener("change", track_narrow);
   window.removeEventListener("resize", place_file_marks);
@@ -749,19 +815,41 @@ onBeforeUnmount(() => {
           </template>
         </nav>
       </div>
-      <p v-if="preview?.truncated && !(format === 'html' && tab?.page && !source)" class="project-editor-banner"><UIcon name="i-lucide-info" />文件较大，仅显示前 {{ file_size(preview.limit) }}（共 {{ file_size(preview.size) }}）<template v-if="format === 'html'">，HTML 不渲染不完整的内容</template></p>
+      <p v-if="preview?.truncated && !(format === 'html' && tab?.page && !source) && !(media_kind && !source) && !office_kind" class="project-editor-banner"><UIcon name="i-lucide-info" />文件较大，仅显示前 {{ file_size(preview.limit) }}（共 {{ file_size(preview.size) }}）<template v-if="format === 'html'">，HTML 不渲染不完整的内容</template></p>
       <p v-else-if="html_notice && !source" class="project-editor-banner" :title="html_notice"><UIcon name="i-lucide-info" /><span class="project-editor-banner-text">{{ html_notice }}</span></p>
 
       <div ref="editor_body" class="project-editor-body" :style="{ '--file-font-scale': font_scale }">
         <div v-if="tab?.loading && !preview" class="project-editor-state" role="status"><UIcon name="i-lucide-loader-circle" class="animate-spin" />正在读取文件…</div>
         <div v-else-if="tab?.error && !preview" class="project-editor-state"><UIcon name="i-lucide-circle-alert" /><p>{{ tab.error }}</p><UButton label="重试" color="neutral" variant="outline" size="sm" @click="load(tab)" /></div>
-        <div v-else-if="preview?.text === null" class="project-editor-state"><UIcon :name="preview_type[1]" /><p>{{ preview.reason }}</p></div>
+        <template v-else-if="media_kind && !source">
+          <div v-if="tab.media_error" class="project-editor-state"><UIcon name="i-lucide-circle-alert" /><p>{{ tab.media_error }}</p><UButton label="重试" color="neutral" variant="outline" size="sm" @click="load(tab)" /></div>
+          <MediaViewer v-else-if="tab.media" :kind="media_kind" :url="tab.media.url" :name="preview_name" />
+          <div v-else class="project-editor-state" role="status"><UIcon name="i-lucide-loader-circle" class="animate-spin" />{{ tab.media_progress ? `正在经电脑读取…${Math.round(tab.media_progress * 100)}%` : '正在打开…' }}</div>
+        </template>
+        <template v-else-if="office_kind">
+          <div v-if="tab.media_error" class="project-editor-state"><UIcon name="i-lucide-circle-alert" /><p>{{ tab.media_error }}</p><UButton label="重试" color="neutral" variant="outline" size="sm" @click="load(tab)" /></div>
+          <OfficeViewer v-else-if="tab.media" :kind="office_kind" :url="tab.media.url" />
+          <div v-else class="project-editor-state" role="status"><UIcon name="i-lucide-loader-circle" class="animate-spin" />{{ tab.media_progress ? `正在经电脑读取…${Math.round(tab.media_progress * 100)}%` : '正在打开…' }}</div>
+        </template>
+        <div v-else-if="preview?.text === null" class="project-editor-state"><UIcon :name="preview_type[1]" /><p>{{ preview.reason || '这个格式只能下载后用本机软件打开' }}</p></div>
         <div v-else-if="showing_source && wrap" ref="code_scroll" class="project-code is-wrapped" tabindex="0" @scroll.passive="schedule_offer" aria-label="文件内容" :style="{ '--digits': String(line_count).length }">
           <div v-for="(line, index) in lines" :key="index" class="project-code-row" :data-line="index + 1"><span class="project-code-number" aria-hidden="true">{{ index + 1 }}</span><span class="project-code-line">{{ line }}</span></div>
         </div>
         <div v-else-if="showing_source" ref="code_scroll" v-keep-reading class="project-code" tabindex="0" @scroll.passive="schedule_offer" aria-label="文件内容">
           <pre class="project-code-gutter" aria-hidden="true">{{ gutter }}</pre>
           <pre class="project-code-text"><code ref="code_text">{{ preview.text }}</code></pre>
+        </div>
+        <div v-else-if="preview && format === 'table'" class="project-table-scroll" tabindex="0" aria-label="表格内容">
+          <p v-if="table.cut" class="project-table-note">只显示前 {{ table.rows.length }} 行，完整内容见源码。</p>
+          <table class="project-table"><tbody>
+            <tr v-for="(row, index) in table.rows" :key="index" :class="{ 'is-head': index === 0 }"><td class="project-table-number">{{ index + 1 }}</td><td v-for="(cell, column) in row" :key="column">{{ cell }}</td></tr>
+          </tbody></table>
+        </div>
+        <div v-else-if="preview && format === 'subtitle'" class="project-table-scroll" tabindex="0" aria-label="字幕时间轴">
+          <p v-if="!cues.length" class="project-table-note">没有识别出字幕条目，请切换到源码查看。</p>
+          <table v-else class="project-table is-subtitle"><thead><tr><th>#</th><th>开始</th><th>结束</th><th>内容</th></tr></thead><tbody>
+            <tr v-for="(cue, index) in cues" :key="index"><td class="project-table-number">{{ index + 1 }}</td><td>{{ cue.start }}</td><td>{{ cue.end }}</td><td class="is-text">{{ cue.text }}</td></tr>
+          </tbody></table>
         </div>
         <div v-else-if="preview && format === 'html' && tab?.loading && !tab.page" class="project-editor-state" role="status"><UIcon name="i-lucide-loader-circle" class="animate-spin" />正在载入页面引用的文件…</div>
         <iframe v-else-if="preview && format === 'html'" ref="html_frame" class="project-html-preview" :sandbox="HTML_SANDBOX" referrerpolicy="no-referrer" :srcdoc="html_preview" title="HTML 文件预览"></iframe>
@@ -957,4 +1045,11 @@ onBeforeUnmount(() => {
 .project-file-icon.is-purple { color: #a074c4; }
 .project-file-icon.is-red { color: #cc3e44; }
 .project-file-icon.is-muted { color: var(--ui-text-muted); }
+.project-table-scroll { height: 100%; overflow: auto; }
+.project-table-note { margin: 0; padding: 6px 12px; color: var(--ui-text-muted); font-size: 12px; }
+.project-table { border-collapse: collapse; font-size: calc(13px * var(--file-font-scale, 1)); }
+.project-table td, .project-table th { padding: 3px 10px; border: 1px solid var(--ui-border); white-space: nowrap; text-align: left; vertical-align: top; }
+.project-table tr.is-head td, .project-table th { position: sticky; top: 0; z-index: 1; font-weight: 600; background: var(--ui-bg-elevated); }
+.project-table .project-table-number { color: var(--ui-text-dimmed); text-align: right; user-select: none; }
+.project-table.is-subtitle .is-text { white-space: pre-wrap; min-width: 240px; }
 </style>

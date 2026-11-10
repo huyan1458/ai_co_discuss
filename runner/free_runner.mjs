@@ -3,7 +3,7 @@ import { spawnSync } from 'node:child_process';
 import { createHash, randomUUID } from 'node:crypto';
 import { appendFileSync, existsSync, mkdirSync, readFileSync, statSync } from 'node:fs';
 import { basename, join, resolve } from 'node:path';
-import { adapter_of, BRANCHABLE_ADAPTERS, branch_session, capabilities_of, cleanup_room, deliver_task, delivery_receipt, session_exists, stored_delivery } from './adapters/index.mjs';
+import { adapter_of, BRANCHABLE_ADAPTERS, branch_session, capabilities_of, cleanup_room, deliver_task, delivery_receipt, image_model_of, session_exists, stored_delivery } from './adapters/index.mjs';
 import { api, overlapping_directories, read_rule } from './discussion_runner.mjs';
 import { SegmentLog } from './execution_progress.mjs';
 import { free_task_text, TASK_SUBCOMMANDS, with_expert_prompt } from './expert_prompts.mjs';
@@ -242,7 +242,8 @@ function member_description(name, profile, work) {
   const access = !capabilities_of(profile.adapter).project ? '，只能读写房间消息' : profile.project_access === 'own' ? '，权限沿用其会话设置' : !profile.cwd ? '，未指定项目目录'
     : profile.project_access === 'read' ? `，项目 ${project} 只读`
       : `，可修改项目 ${project} 的文件${capabilities_of(profile.adapter).file_tools ? '（不能运行命令）' : '并运行命令'}`;
-  return `${name}（${adapter_of(profile.adapter)?.label || profile.adapter}${access}${work}）`;
+  const images = image_model_of(profile) ? `，可生成和修改图片（${image_model_of(profile)}）` : '';
+  return `${name}（${adapter_of(profile.adapter)?.label || profile.adapter}${access}${images}${work}）`;
 }
 
 /** The other messages a member is answering or has queued, so a correction can follow the message it corrects. */
@@ -414,16 +415,20 @@ export class FreeRoomRunner {
       } catch (error) { this.log(`只读评审能力未同步：${member.name}：${error.message}`); }
     }
   }
-  /** Tell the site what a rewind does to each member's session, as its adapter says; only a change is sent. */
+  /**
+   * Tell the site what each member can do, as its adapter says: what a rewind does to its session, and the image model
+   * it can draw with, so the host and every reader of the room see it. Only a change is sent.
+   */
   async sync_member_capabilities(inbox) {
     for (const member of inbox.members) {
       const profile = this.config.participants[member.name];
-      // An older site lists no effect and takes no report.
+      // An older site lists no effect and takes no report; one without image_model takes only the rewind effect.
       if (member.rewind === undefined || !profile) continue;
       const rewind = capabilities_of(profile.adapter).rewind;
-      if (member.rewind === rewind) continue;
-      try { await api(this.config, `/members/${member.id}/capabilities`, { rewind }); member.rewind = rewind; }
-      catch (error) { this.log(`成员会话能力未同步：${member.name}：${error.message}`); }
+      const report = { rewind, ...(member.image_model === undefined ? {} : { image_model: image_model_of(profile) }) };
+      if (member.rewind === rewind && (report.image_model === undefined || member.image_model === report.image_model)) continue;
+      try { await api(this.config, `/members/${member.id}/capabilities`, report); Object.assign(member, report); }
+      catch (error) { this.log(`成员能力未同步：${member.name}：${error.message}`); }
     }
   }
   /** Hold only pending hand-backs with a declared next step while it is judged: a preauthorized review, or a loop's next pass. */

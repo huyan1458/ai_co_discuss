@@ -72,6 +72,11 @@ MACHINE_COMMAND_POLL_SECONDS = 0.5
 DIRECTORY_OPERATIONS = ("move", "folder")
 ADMIN_OPERATIONS = ("rename", "archive", "restore", "delete")
 DIRECTORY_PICKER_TIMEOUT = 600  # the folder dialog waits for the person at the computer
+# Files are streamed to players in pieces of this size.
+FILE_CHUNK_BYTES = 1024 * 1024
+# A project media file the local page plays is served by a random ticket for this long after the runner checked access.
+MEDIA_TICKET_SECONDS = 600
+MAX_MEDIA_TICKETS = 64
 MAX_TEXT_LENGTH = 32000
 SESSION_ID_PATTERN = re.compile(r"[0-9A-Za-z_-]{8,128}")
 MAX_STATE_LENGTH = 4000
@@ -102,6 +107,12 @@ ASSETS.update({"/pdfjs/" + file.relative_to(WEB_ROOT / "pdfjs").as_posix():
                (file.relative_to(WEB_ROOT).as_posix(),
                 {".mjs": "text/javascript", ".js": "text/javascript", ".wasm": "application/wasm"}.get(file.suffix, "application/octet-stream"))
                for file in (WEB_ROOT / "pdfjs").rglob("*") if file.is_file()})
+# Office previews the page imports only when such a file is opened, with their WebAssembly and workers.
+if (WEB_ROOT / "office").is_dir():
+    ASSETS.update({"/office/" + file.relative_to(WEB_ROOT / "office").as_posix():
+                   (file.relative_to(WEB_ROOT).as_posix(),
+                    {".mjs": "text/javascript", ".js": "text/javascript", ".wasm": "application/wasm", ".css": "text/css"}.get(file.suffix, "application/octet-stream"))
+                   for file in (WEB_ROOT / "office").rglob("*") if file.is_file()})
 # KaTeX's stylesheet and the fonts it loads only when a formula is shown.
 ASSETS.update({"/katex/" + file.relative_to(WEB_ROOT / "katex").as_posix():
                (file.relative_to(WEB_ROOT).as_posix(),
@@ -407,9 +418,10 @@ def require_room(connection, room_id):
     room["round_groups"] = merge_round_groups(connection, room_id)
     room["members"] = [dict(row) for row in connection.execute(
         """SELECT m.id,m.name,m.adapter,m.role,m.status,m.access,m.session_mode,COALESCE(s.session_id,'') AS reported_session,COALESCE(s.client,'') AS reported_client,
-        COALESCE(r.registered_at,'') AS registered_at
+        COALESCE(r.registered_at,'') AS registered_at,COALESCE(c.image_model,'') AS image_model
         FROM room_members AS m LEFT JOIN member_sessions AS s ON s.member_id=m.id
         LEFT JOIN member_registrations AS r ON r.member_id=m.id AND r.token_hash=m.token_hash
+        LEFT JOIN member_capabilities AS c ON c.member_id=m.id
         WHERE m.room_id=? AND m.status<>'removed' ORDER BY m.id""", (room_id,))]
     # Members are called by label in text and in @; the ID (name) is part of the full record, like the description.
     shown = member_display_names(connection, room_id)
@@ -1065,8 +1077,18 @@ def attachment_metadata(params):
     return {"file_name": name, "actor": actor, "submission_id": submission_value(params.get("submission_id"))}
 
 
+# An SVG document: optional BOM, XML declaration, comments and doctype, then the <svg> root element.
+SVG_START = re.compile(rb"^(?:\xef\xbb\xbf)?\s*(?:<\?xml[^>]*>\s*)?(?:<!--.*?-->\s*)*(?:<!DOCTYPE\s+svg[^>]*>\s*)?(?:<!--.*?-->\s*)*<svg[\s>/]",
+                       re.IGNORECASE | re.DOTALL)
+SVG_SNIFF_BYTES = 4096
+
+
 def attachment_content_type(data):
-    """Allow inline preview only for recognized raster images and PDF bytes."""
+    """Allow inline preview only for recognized images and PDF bytes.
+
+    SVG is shown only as an <img>, where its scripts and external loads never run; opened directly it is still served
+    with a sandboxing Content-Security-Policy (see respond_attachment).
+    """
     signatures = ((b"\x89PNG\r\n\x1a\n", "image/png"), (b"\xff\xd8\xff", "image/jpeg"),
                   (b"GIF87a", "image/gif"), (b"GIF89a", "image/gif"), (b"%PDF-", "application/pdf"))
     for signature, content_type in signatures:
@@ -1074,6 +1096,32 @@ def attachment_content_type(data):
             return content_type
     if data.startswith(b"RIFF") and data[8:12] == b"WEBP":
         return "image/webp"
+    if SVG_START.match(data[:SVG_SNIFF_BYTES]):
+        return "image/svg+xml"
+    return media_content_type(data)
+
+
+def media_content_type(data):
+    """Audio and video by their container signature, for the page's players; unknown bytes stay a download."""
+    if data[4:8] == b"ftyp":
+        brand = data[8:12]
+        return "audio/mp4" if brand in (b"M4A ", b"M4B ") else "video/quicktime" if brand == b"qt  " else "video/mp4"
+    if data.startswith(b"\x1a\x45\xdf\xa3"):
+        return "video/webm" if b"webm" in data[:64] else "video/x-matroska"
+    if data.startswith(b"OggS"):
+        return "video/ogg" if b"theora" in data[:128] else "audio/ogg"
+    if data.startswith(b"RIFF") and data[8:12] == b"WAVE":
+        return "audio/wav"
+    if data.startswith(b"fLaC"):
+        return "audio/flac"
+    if data.startswith(b"ID3"):
+        return "audio/mpeg"
+    if len(data) > 1 and data[0] == 0xFF:
+        # ADTS AAC frames have layer bits 00; MPEG audio frames (MP3) have a non-zero layer.
+        if data[1] & 0xF6 == 0xF0:
+            return "audio/aac"
+        if data[1] & 0xE0 == 0xE0 and data[1] & 0x06:
+            return "audio/mpeg"
     return "application/octet-stream"
 
 
@@ -1675,6 +1723,9 @@ class DiscussionServer(ThreadingHTTPServer):
         if local_launch and (address[0] != "127.0.0.1" or hub):
             raise ValueError("本机启动入口须绑定 127.0.0.1")
         self.local_launch = local_launch
+        # Project media the local page may play: ticket -> (path, size, mtime_ns, content_type, name, expires).
+        self.media_tickets = {}
+        self.media_lock = threading.Lock()
         self.local_site = not hub and address[0] in ("127.0.0.1", "::1", "localhost")
         self.admin_setup_key = os.getenv("DISCUSS_ADMIN_SETUP_KEY") or secrets.token_urlsafe(18)
         service_home = os.getenv("DISCUSS_SERVICE_HOME")
@@ -1757,7 +1808,9 @@ class DiscussionHandler(BaseHTTPRequestHandler):
     def send_payload(self, status, content_type, data):
         """Write the status line, headers and encoded body."""
         self.send_response(status)
-        self.send_header("Content-Type", f"{content_type}; charset=utf-8")
+        # Binary assets (WebAssembly, fonts, images) carry no charset; `application/wasm` must stay exact for streaming compile.
+        textual = content_type.startswith("text/") or content_type == "application/json"
+        self.send_header("Content-Type", f"{content_type}; charset=utf-8" if textual else content_type)
         self.send_header("Content-Length", str(len(data)))
         self.send_header("Cache-Control", "no-store")
         if getattr(self, "etag", None):
@@ -1818,6 +1871,8 @@ class DiscussionHandler(BaseHTTPRequestHandler):
         """Route one request and map validation, permission and lookup errors to their status codes."""
         try:
             self.bridged = self.relay_bridge(parts)
+            if parts[:3] == ["api", "local", "media"] and len(parts) == 4 and method == "GET":
+                return self.serve_media_ticket(parts[3])
             if parts[:2] == ["api", "local"]:
                 return self.handle_local_launch(parts, method)
             if parts == ["api", "updates"] and method == "GET":
@@ -1938,7 +1993,7 @@ class DiscussionHandler(BaseHTTPRequestHandler):
         """Forward authenticated browser requests to the shared Node entrypoint and pin their website."""
         site = self.local_request_site(method)
         route = parts[2:]
-        if method == "OPTIONS" and route in (["settings"], ["launch"], ["room-models"], ["room-files"], ["room-page"], ["execution-details"], ["room-member"], ["room-member-access"], ["room-member-allow"], ["room-member-adapter"], ["room-member-model"], ["room-profiles"], ["room-restore"], ["room-fork"], ["models"], ["api-key"], ["api-check"],
+        if method == "OPTIONS" and route in (["settings"], ["launch"], ["room-models"], ["room-files"], ["room-page"], ["room-media"], ["execution-details"], ["room-member"], ["room-member-access"], ["room-member-allow"], ["room-member-adapter"], ["room-member-model"], ["room-profiles"], ["room-restore"], ["room-fork"], ["models"], ["api-key"], ["api-check"],
                                              ["scheduler-check"], ["tts-settings"], ["tts"], ["tts-release"], ["stt"], ["weixin"], ["pick-directory"], ["browse-directory"], ["projects"], ["presets"], ["workflows"], ["room-workflow"], ["room-settings"], ["machine-link"], ["device-pairing"], ["devices"]):
             return self.respond({"ok": True})
         if route == ["settings"] and method in ("GET", "POST"):
@@ -1961,7 +2016,7 @@ class DiscussionHandler(BaseHTTPRequestHandler):
             command = route[0]
         elif route in (["room-member"], ["room-member-access"], ["room-member-allow"], ["room-member-adapter"], ["room-member-model"]) and method == "POST":
             command = route[0]
-        elif route in (["room-profiles"], ["room-files"], ["room-page"], ["execution-details"], ["room-restore"], ["room-fork"]) and method == "POST":
+        elif route in (["room-profiles"], ["room-files"], ["room-page"], ["room-media"], ["execution-details"], ["room-restore"], ["room-fork"]) and method == "POST":
             command = route[0]
         elif route == ["pick-directory"] and method == "POST":
             command = "pick-directory"
@@ -1987,10 +2042,10 @@ class DiscussionHandler(BaseHTTPRequestHandler):
             if self.headers.get_content_type() != "application/json":
                 raise ValueError("本机操作须使用 application/json")
             payload = self.read_payload()
-            if command in ("start", "room-config", "room-models", "room-files", "room-page", "execution-details", "room-member", "room-member-access", "room-member-allow", "room-member-adapter", "room-member-model", "room-profiles", "room-restore", "room-fork", "room-workflow", "room-settings", "workflows"):
+            if command in ("start", "room-config", "room-models", "room-files", "room-page", "room-media", "execution-details", "room-member", "room-member-access", "room-member-allow", "room-member-adapter", "room-member-model", "room-profiles", "room-restore", "room-fork", "room-workflow", "room-settings", "workflows"):
                 payload.pop("access_file", None)
                 payload.update(site=site, entry="web")
-            if command in ("room-files", "room-page", "execution-details", "room-workflow", "room-settings", "room-member", "room-member-access", "room-member-allow", "room-member-model", "room-member-adapter") and not payload.get("token") and not self.bridge_origin:
+            if command in ("room-files", "room-page", "room-media", "execution-details", "room-workflow", "room-settings", "room-member", "room-member-access", "room-member-allow", "room-member-model", "room-member-adapter") and not payload.get("token") and not self.bridge_origin:
                 with closing(connect_db(self.server.database)) as connection:
                     self.admin_as_owner(connection, payload.get("room_id", ""))
                     payload["token"] = self.headers.get("X-Discussion-Token", "")
@@ -2003,8 +2058,47 @@ class DiscussionHandler(BaseHTTPRequestHandler):
                 payload = {"site": site}
         if command == "room-config" and "participants" in payload:
             return self.save_local_room_configuration(command, payload)
+        # The computer's own page plays a project media file straight from disk by a ticket, with ranges for seeking.
+        if command == "room-media" and not self.bridge_origin:
+            return self.issue_media_ticket(payload)
         # A connected website's page is another device's entry: it gets the same limits as the relay.
         return self.run_local_command(command, payload, remote=bool(self.bridge_origin) and command != "machine-link")
+
+    def issue_media_ticket(self, payload):
+        """Let the runner check the member's access to one project media file, then hand the page a ticket URL for it.
+
+        The page never learns the file's path; the ticket names one file as it was checked and expires.
+        """
+        status, result = self.local_command_result("room-media", payload)
+        if status != 200:
+            return self.respond(result, status)
+        path = Path(result.pop("file"))
+        info = path.stat()
+        ticket = secrets.token_urlsafe(32)
+        now = time.time()
+        with self.server.media_lock:
+            tickets = self.server.media_tickets
+            for key in [key for key, item in tickets.items() if item[5] <= now]:
+                del tickets[key]
+            while len(tickets) >= MAX_MEDIA_TICKETS:
+                del tickets[next(iter(tickets))]
+            tickets[ticket] = (path, info.st_size, info.st_mtime_ns, result["content_type"], path.name, now + MEDIA_TICKET_SECONDS)
+        return self.respond({**result, "url": f"/api/local/media/{ticket}"})
+
+    def serve_media_ticket(self, ticket):
+        """Stream the project media file a ticket names, refusing it once expired or changed since it was checked."""
+        with self.server.media_lock:
+            item = self.server.media_tickets.get(ticket)
+        if not item or item[5] <= time.time():
+            raise LookupError("播放地址已过期，请重新打开文件")
+        path, size, mtime_ns, content_type, name, _ = item
+        try:
+            info = path.stat()
+        except OSError:
+            raise LookupError("文件已不存在") from None
+        if (info.st_size, info.st_mtime_ns) != (size, mtime_ns):
+            raise FileExistsError("文件已变化，请重新打开")
+        self.send_file(path, content_type, name, "inline")
 
     def save_local_room_configuration(self, command, payload):
         """Keep session pause/revision validation and local file replacement in one boundary."""
@@ -2020,7 +2114,12 @@ class DiscussionHandler(BaseHTTPRequestHandler):
             return self.run_local_command(command, payload, configuration_locked=True)
 
     def run_local_command(self, command, payload, configuration_locked=False, remote=False):
-        """Run the fixed local Node entrypoint after the same-origin request checks."""
+        """Run the fixed local Node entrypoint after the same-origin request checks, and answer with its result."""
+        status, result = self.local_command_result(command, payload, configuration_locked, remote)
+        return self.respond(result, status)
+
+    def local_command_result(self, command, payload, configuration_locked=False, remote=False):
+        """Run the fixed local Node entrypoint; returns `(status, result)`, 400 with its error when it fails."""
         arguments = ["node", str(ROOT / "runner" / "discussion_launch.mjs"), command]
         if remote:
             arguments.append("--remote")
@@ -2045,8 +2144,8 @@ class DiscussionHandler(BaseHTTPRequestHandler):
                 failure = json.loads(result.stderr.strip())
             except ValueError:
                 raise ValueError(result.stderr.strip())
-            return self.respond(failure, 400)
-        return self.respond(json.loads(result.stdout))
+            return 400, failure
+        return 200, json.loads(result.stdout)
 
     def admin_token(self):
         """The administrator login from its HttpOnly cookie, or from the header scripts and tests use."""
@@ -2505,19 +2604,49 @@ class DiscussionHandler(BaseHTTPRequestHandler):
         path = attachment_path(self.server.database, attachment)
         if not path.is_file():
             raise LookupError("附件原文件缺失")
-        data = path.read_bytes()
         disposition = "attachment" if download or attachment["content_type"] == "application/octet-stream" else "inline"
-        self.send_response(200)
-        self.send_header("Content-Type", attachment["content_type"])
-        self.send_header("Content-Length", str(len(data)))
-        self.send_header("Content-Disposition", f"{disposition}; filename*=UTF-8''{quote(attachment['file_name'], safe='')}")
-        self.send_header("X-Content-SHA256", attachment["sha256"])
+        self.send_file(path, attachment["content_type"], attachment["file_name"], disposition, {"X-Content-SHA256": attachment["sha256"]})
+
+    def send_file(self, path, content_type, file_name, disposition, extra=None):
+        """Send one stored file, or the single byte range a player asks for, never as executable content."""
+        size = path.stat().st_size
+        start, end, status = 0, size - 1, 200
+        match = re.fullmatch(r"bytes=(\d*)-(\d*)", self.headers.get("Range", "").strip())
+        if match and (match[1] or match[2]):
+            if match[1]:
+                start, end = int(match[1]), min(int(match[2]), size - 1) if match[2] else size - 1
+            else:
+                start = max(0, size - int(match[2]))
+            if start > end or start >= size:
+                self.send_response(416)
+                self.send_header("Content-Range", f"bytes */{size}")
+                self.send_header("Content-Length", "0")
+                self.end_headers()
+                return
+            status = 206
+        self.send_response(status)
+        self.send_header("Content-Type", content_type)
+        self.send_header("Content-Length", str(max(0, end - start + 1)))
+        self.send_header("Accept-Ranges", "bytes")
+        if status == 206:
+            self.send_header("Content-Range", f"bytes {start}-{end}/{size}")
+        self.send_header("Content-Disposition", f"{disposition}; filename*=UTF-8''{quote(file_name, safe='')}")
+        for name, value in (extra or {}).items():
+            self.send_header(name, value)
         self.send_header("X-Content-Type-Options", "nosniff")
         self.send_header("Content-Security-Policy", "default-src 'none'; sandbox")
         self.send_header("Cache-Control", "no-store")
         self.send_header("Referrer-Policy", "no-referrer")
         self.end_headers()
-        self.wfile.write(data)
+        with path.open("rb") as source:
+            source.seek(start)
+            left = end - start + 1
+            while left > 0:
+                chunk = source.read(min(FILE_CHUNK_BYTES, left))
+                if not chunk:
+                    break
+                self.wfile.write(chunk)
+                left -= len(chunk)
 
     def handle_scheduler_api(self, connection, parts, method):
         """Smart-scheduling decisions, their feedback and the routing marks of the local service."""

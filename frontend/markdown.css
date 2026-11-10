@@ -70,6 +70,18 @@ html[data-theme="channel-light"] .markdown-body {
   border: 2px solid color-mix(in srgb, currentColor 25%, transparent); border-top-color: color-mix(in srgb, currentColor 70%, transparent);
   border-radius: 50%; animation: attachment-spin .8s linear infinite; }
 .attachment-image:has(img[data-relay-failed])::after { content: "图片加载失败"; font-size: 12px; opacity: .6; }
+/* Audio and video attachments play in place; the name below links the original for a download. */
+.attachment-media { display: grid; gap: 4px; width: min(400px, 100%); }
+.attachment-media video { display: block; width: 100%; max-height: 320px; border-radius: 8px; background: #000; }
+.attachment-media audio { display: block; width: 100%; }
+.attachment-media .attachment-player { display: block; width: 100%; }
+.attachment-video .attachment-player { aspect-ratio: 16 / 9; max-height: 320px; border-radius: 8px; overflow: hidden; }
+.attachment-media-failed { display: none; padding: 10px 12px; border: 1px dashed currentColor; border-radius: 8px; font-size: 12px; opacity: .7; }
+.attachment-media[data-failed] :is(video-player, audio-player, video, audio) { display: none; }
+.attachment-media[data-failed] .attachment-media-failed { display: block; }
+.attachment-media-name { display: flex; gap: 8px; align-items: baseline; min-width: 0; overflow: hidden; color: inherit; font-size: 12px; opacity: .75; text-decoration: none; white-space: nowrap; text-overflow: ellipsis; }
+.attachment-media-name:hover { text-decoration: underline; text-underline-offset: 3px; }
+.attachment-media-name small { flex-shrink: 0; opacity: .8; }
 .attachment-file, .attachment-draft-file { display: flex; align-items: center; color: #253044; background: #fff; border: 1px solid #dce1e9; border-radius: 8px; }
 .attachment-file { width: min(400px, 100%); min-height: 76px; padding-right: 12px; }
 .attachment-file-main { display: flex; flex: 1; gap: 14px; align-items: center; padding: 14px 16px; min-width: 0; text-align: left; color: inherit; background: none; border: 0; border-radius: inherit; cursor: pointer; text-decoration: none; font: inherit; }
@@ -80,6 +92,8 @@ html[data-theme="channel-light"] .markdown-body {
 .attachment-file-icon[data-tone="red"] { color: #e65c58; }
 .attachment-file-icon[data-tone="green"] { color: #2aa875; }
 .attachment-file-icon[data-tone="orange"] { color: #e58b3b; }
+.attachment-file-icon[data-tone="purple"] { color: #8b5cf6; }
+.attachment-file-icon[data-tone="gray"] { color: #6b7280; }
 .attachment-name { display: block; min-width: 0; flex: 1; font-size: 13px; line-height: 1.5; }
 .attachment-name > span { display: block; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .attachment-name small { display: block; margin-top: 4px; color: #808998; font-size: 11px; font-weight: normal; }

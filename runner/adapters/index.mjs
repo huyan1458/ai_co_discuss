@@ -32,10 +32,10 @@ import { claude } from './claude.mjs';
 import { codex } from './codex_app.mjs';
 import { codex_cli } from './codex_cli.mjs';
 import { execution_marker, MODEL_PATTERN } from './common.mjs';
-import { adapter_capabilities, adapter_profile, ADAPTER_IDS } from './profiles.mjs';
+import { adapter_capabilities, adapter_profile, ADAPTER_IDS, image_model_of } from './profiles.mjs';
 
 export { execution_marker };
-export { adapter_capabilities as capabilities_of };
+export { adapter_capabilities as capabilities_of, image_model_of };
 
 export const ADAPTERS = Object.fromEntries([codex_cli, codex, claude, antigravity_cli, antigravity, api]
   .map(behaviour => [behaviour.id, { ...adapter_profile(behaviour.id), ...behaviour }]));

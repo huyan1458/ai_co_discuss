@@ -45,7 +45,7 @@ codiscuss setup
 - 保持改动集中，优先复用现有模块；不因整理文档重写后端。
 - 文本换行由 `.gitattributes` 统一为 LF，Windows `.cmd` 保留 CRLF；测试比较文本内容时不把平台换行差异当作业务失败。
 - 业务协议变更同步 `backend/server.py`、`backend/worker.mjs`、`backend/schema.sql`、CLI 与相关文档，覆盖行为差异和旧库迁移；根目录 `server.py` 仅保留启动入口。
-- Vue、Markdown 与备份源码在 `frontend/`；共享控制器和经典主题在 `web/app.js`、`web/style.css`。前端编辑后运行 `npm run build:ui`，将对应 `web/` 生成产物一起纳入变更；不手改生成 JS/CSS。
+- Vue、Markdown 与备份源码在 `frontend/`；共享控制器和经典主题在 `web/app.js`、`web/style.css`。前端编辑后运行 `npm run build:ui`，将对应 `web/` 生成产物一起纳入变更；不手改生成 JS/CSS。文件预览的 Office 渲染器（`frontend/office/`）单独构建到 `web/office/`，`build:ui` 已包含这一步。
 - 新增或升级依赖时同步 `docs/THIRD_PARTY_NOTICES.md` 中实际使用的包、版本和上游许可；发布产物自动附带根许可证和第三方声明。
 - Skill 的维护源在 `.agents/skills/`，只有 `.gitignore` 白名单内的技能入库；主持与参与共享参与规则，归档技能只读已有讨论并写本地成果。保持路径可迁移，安装不自动启动真实任务。
 - 公共函数写 docstring / JSDoc，使用语义化英文命名，函数保持单一职责；新测试只覆盖关键行为缺口。

@@ -5,6 +5,21 @@ import { defineConfig } from "vite";
 import vue from "@vitejs/plugin-vue";
 import ui from "@nuxt/ui/vite";
 
+const VIDEOJS_ELEMENTS = new Set(["video-player", "video-skin", "audio-player", "audio-skin"]);
+
+/**
+ * Video.js loads its 50-odd interface languages lazily, and a single-file build inlines every one of them; the page
+ * registers the Chinese pack itself (MediaViewer.vue), so the loader is left with none.
+ */
+function videojs_single_locale() {
+  return { name: "videojs-single-locale", transform(code, id) {
+    if (!id.replaceAll("\\", "/").endsWith("@videojs/core/dist/default/core/i18n/load-locale.js")) return null;
+    const stripped = code.replace(/const loaders = \{[\s\S]*?\n\};/, "const loaders = {};");
+    if (stripped === code) throw new Error("Video.js 语言加载器的写法变了，请更新 videojs_single_locale");
+    return stripped;
+  } };
+}
+
 /** Bundle PDF.js and its fonts/decoders locally so previews do not depend on a CDN. */
 function pdf_assets() {
   return { name: "local-pdf-assets", async closeBundle() {
@@ -37,6 +52,21 @@ export default defineConfig(({ mode }) => mode === "markdown" ? {
     emptyOutDir: false,
     lib: { entry: "frontend/markdown-entry.js", name: "discuss_markdown", formats: ["iife"], fileName: () => "markdown.js", cssFileName: "markdown" },
   },
+} : mode === "office" ? {
+  // Office previews are separate modules the page imports on demand from /office/, with their WebAssembly and workers
+  // as files beside them, so the page itself stays small.
+  base: "/office/",
+  build: {
+    outDir: "web/office",
+    emptyOutDir: true,
+    modulePreload: false,
+    rolldownOptions: {
+      input: { docx: "frontend/office/docx.js", xlsx: "frontend/office/xlsx.js", pptx: "frontend/office/pptx.js" },
+      preserveEntrySignatures: "exports-only",
+      output: { format: "es", entryFileNames: "[name].js", chunkFileNames: "chunks/[name]-[hash].js", assetFileNames: "assets/[name]-[hash][extname]" },
+    },
+  },
+  worker: { format: "es" },
 } : mode === "backup" ? {
   build: {
     outDir: "web", emptyOutDir: false,
@@ -46,7 +76,8 @@ export default defineConfig(({ mode }) => mode === "markdown" ? {
   // The npm package version, shown under the brand; the release script publishes the site and the package together.
   define: { "process.env.NODE_ENV": JSON.stringify("production"),
     __APP_VERSION__: JSON.stringify(JSON.parse(readFileSync(new URL("../package.json", import.meta.url), "utf8")).version) },
-  plugins: [vue(), ui({
+  // The Video.js players are custom elements, which Vue leaves to the browser.
+  plugins: [videojs_single_locale(), vue({ template: { compilerOptions: { isCustomElement: (tag) => VIDEOJS_ELEMENTS.has(tag) } } }), ui({
     colorMode: false,
     router: false,
     dts: false,

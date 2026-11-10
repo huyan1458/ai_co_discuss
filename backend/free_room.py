@@ -179,7 +179,8 @@ LATER_COLUMNS = {"room_members": {"access": "TEXT NOT NULL DEFAULT 'runner'", "s
                                      "purpose": "TEXT NOT NULL DEFAULT 'ask'", "created_by": "TEXT NOT NULL DEFAULT 'user'"},
                  "free_chain_holds": {"asked_rounds": "INTEGER NOT NULL DEFAULT 0", "asked_reason": "TEXT NOT NULL DEFAULT ''"},
                  "free_sequences": {"gates": "TEXT NOT NULL DEFAULT '[]'"},
-                 "execution_capabilities": {"steer": "INTEGER", "resume": "INTEGER"}}
+                 "execution_capabilities": {"steer": "INTEGER", "resume": "INTEGER"},
+                 "member_capabilities": {"image_model": "TEXT NOT NULL DEFAULT ''"}}
 
 
 def migrate_free_tables(connection):
@@ -536,9 +537,10 @@ def held_until(connection, member_id):
 
 
 def member_capability(connection, room_id, member_id, token, payload):
-    """Record what a rewind does to one runner member's session, as the runner's adapter for it reports.
+    """Record what one runner member can do, as the runner's adapter for it reports: what a rewind does to its session,
+    and the image model it generates images with ('' for none; an older runner that omits it keeps the stored one).
 
-    Bound to one known member and replaced whole, so it takes no revision. Returns `{member_id, rewind}`.
+    Bound to one known member and replaced whole, so it takes no revision. Returns `{member_id, rewind, image_model}`.
     """
     require_owner(connection, room_id, token)
     begin_write(connection)
@@ -546,9 +548,14 @@ def member_capability(connection, room_id, member_id, token, payload):
         raise LookupError("成员不存在")
     if payload.get("rewind") not in REWIND_EFFECTS:
         raise ValueError(f"rewind 须为 {'、'.join(REWIND_EFFECTS)}")
-    connection.execute("""INSERT INTO member_capabilities (member_id,room_id,rewind) VALUES (?,?,?)
-        ON CONFLICT(member_id) DO UPDATE SET rewind=excluded.rewind""", (member_id, room_id, payload["rewind"]))
-    return {"member_id": member_id, "rewind": payload["rewind"]}
+    previous = connection.execute("SELECT image_model FROM member_capabilities WHERE member_id=?", (member_id,)).fetchone()
+    image_model = payload.get("image_model", previous[0] if previous else "")
+    if not isinstance(image_model, str) or not re.fullmatch(r"(?:[A-Za-z0-9][A-Za-z0-9._:/@-]{0,79})?", image_model):
+        raise ValueError("image_model 须为图片模型 ID（最多 80 字）或空")
+    connection.execute("""INSERT INTO member_capabilities (member_id,room_id,rewind,image_model) VALUES (?,?,?,?)
+        ON CONFLICT(member_id) DO UPDATE SET rewind=excluded.rewind,image_model=excluded.image_model""",
+                       (member_id, room_id, payload["rewind"], image_model))
+    return {"member_id": member_id, "rewind": payload["rewind"], "image_model": image_model}
 
 
 def execution_retry(connection, execution_id):
@@ -2210,8 +2217,8 @@ def inbox(connection, room_id, token):
         member_view["review_capability"] = review_capability(connection, room_id, row["id"], token)
         member_view["held_until"] = held_until(connection, row["id"])
         # The runner compares this with its adapter's effect and reports a change.
-        reported = connection.execute("SELECT rewind FROM member_capabilities WHERE member_id=?", (row["id"],)).fetchone()
-        member_view["rewind"] = reported[0] if reported else ""
+        reported = connection.execute("SELECT rewind,image_model FROM member_capabilities WHERE member_id=?", (row["id"],)).fetchone()
+        member_view["rewind"], member_view["image_model"] = (reported[0], reported[1]) if reported else ("", "")
         # Private chat lines the runner still has to run in this member's session (backend/private_chat.py).
         member_view["chats"] = [dict(item) for item in connection.execute(
             "SELECT id,text,status FROM private_chats WHERE member_id=? AND status IN ('pending','running') ORDER BY id", (row["id"],))]

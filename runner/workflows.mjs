@@ -22,8 +22,8 @@ const MAX_DRAFT_PARTS = 20;
 const WORKFLOW_LOCK_WAIT_MS = 5000;
 const BACKUP_DIRECTORY = /^\.old-([a-z0-9_-]{1,40})-[0-9a-f-]{36}$/;
 // A card file is shaped like an agent definition: `name` is the card ID (its file name) and `platform` the software.
-const CARD_FIELDS = ['name', 'label', 'description', 'project_access', 'model', 'effort'];
-const CARD_FILE_FIELDS = ['name', 'platform', 'label', 'description', 'project_access', 'model', 'effort'];
+const CARD_FIELDS = ['name', 'label', 'description', 'project_access', 'model', 'effort', 'image_model'];
+const CARD_FILE_FIELDS = ['name', 'platform', 'label', 'description', 'project_access', 'model', 'effort', 'image_model'];
 const PART_LINE = /^<!-- workflow-part: (\d+)\/(\d+) id: ([a-z0-9_-]{1,40}) -->$/;
 const FILE_LINE = /^<!-- workflow-file: (\S+) -->$/;
 const CARD_PATH = /^agents\/([A-Za-z0-9_]{1,16})\.md$/;

@@ -48,6 +48,14 @@ export const API_PROVIDERS = {
   OpenAI: { label: 'OpenAI', base_url: 'https://api.openai.com/v1', api_protocol: 'responses', models: ['gpt-6.1-sol', 'gpt-6-astra', 'gpt-6-luna'] },
   Custom: { label: '自定义 API', base_url: '', api_protocol: 'chat', models: [] },
 };
+/**
+ * Image models a model API member may call through the Images API (`image_model`), newest first: 2.6 adds complexity,
+ * SVG and GIF output; 2.5 and 2.6 take markup edits and the xhigh / max qualities (OpenAI docs, 2026-11-10). Any other
+ * ID may still be typed in. Only the protocols below share the Images API's address and Bearer authentication.
+ */
+export const IMAGE_MODELS = ['gpt-image-2.6-flare', 'gpt-image-2.6-sunburst', 'gpt-image-2.5-flare', 'gpt-image-2.5-sunburst',
+  'gpt-image-2', 'gpt-image-1.5', 'gpt-image-1-mini', 'chatgpt-image-latest'];
+export const IMAGE_PROTOCOLS = ['responses', 'chat'];
 /** Model requests one model-API execution may make unless the room sets its own; 0 means no limit, up to the maximum. */
 export const DEFAULT_API_MAX_REQUESTS = 300;
 export const MAX_API_MAX_REQUESTS = 1000;
@@ -104,7 +112,7 @@ export const ADAPTER_PROFILES = {
     capabilities: { delivery: IN_APP, rewind: 'kept', project: true, chat: true },
   },
   api: {
-    platform: '', label: '模型 API', kind: 'api', location: '', fields: ['base_url', 'api_protocol', 'api_key_ref'],
+    platform: '', label: '模型 API', kind: 'api', location: '', fields: ['base_url', 'api_protocol', 'api_key_ref', 'image_model'],
     efforts: null, models: false, access_levels: ['read', 'write'], per_tool_allow: false, adopt: '', host_existing: false,
     access_hints: { read: '用接入程序的文件工具读取、搜索项目文件，可运行工作流登记的只读命令',
       write: '还可新建、覆盖、局部编辑项目文件，可运行工作流登记的全部命令；没有通用命令行' },
@@ -112,6 +120,11 @@ export const ADAPTER_PROFILES = {
     capabilities: { delivery: PROCESS, rewind: 'fresh', project: true, file_tools: true, limits_directories: true, chat: true },
   },
 };
+
+/** The image model a member's profile can generate images with: a model API on an OpenAI-style protocol; '' for none. */
+export function image_model_of(profile) {
+  return ADAPTER_PROFILES[profile?.adapter]?.kind === 'api' && IMAGE_PROTOCOLS.includes(profile.api_protocol) ? profile.image_model || '' : '';
+}
 
 /** Every configured `adapter` value this version supports. */
 export const ADAPTER_IDS = Object.keys(ADAPTER_PROFILES);

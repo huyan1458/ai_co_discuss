@@ -3,7 +3,7 @@
  * synthesized there. Every provider answers the same shape, `{ audio: base64 MP3, format: "mp3", marks: [{ w, t }] }`;
  * `marks` holds per-character start times in ms when the service gives them, otherwise it is empty and the page spreads
  * the highlight by length. The local service answers AAC in MP4 (`format: "m4a"`) instead, as its bundled converter
- * cannot write MP3.
+ * cannot write MP3, and OpenAI answers ADTS AAC (`format: "aac"`), its MP3 being too large for the relay.
  */
 import { execFile, spawn } from 'node:child_process';
 import { randomUUID } from 'node:crypto';
@@ -32,6 +32,17 @@ const SAMPLE_RATE = 24000;
 const SILENT_FRAME = Buffer.concat([Buffer.from([0xff, 0xf3, 0x44, 0xc0]), Buffer.alloc(92)]);
 const SILENT_FRAME_MS = 24;
 const AZURE_FORMAT = 'audio-24khz-48kbitrate-mono-mp3';
+// OpenAI's Speech API (2026-11-10 docs): gpt-4o-mini-tts takes a tone instruction and a speed of 0.25–4; the docs say all
+// its speech models shut down on 2027-01-06, the successor being a Realtime model that /v1/audio/speech does not serve.
+const OPENAI_BASE_URL = 'https://api.openai.com/v1';
+const OPENAI_MODEL = 'gpt-4o-mini-tts';
+// Its MP3 is 128 kbps (measured 2026-11-10: 211 characters gave 890 KB, over the relay's 1 MiB frame once in base64);
+// its AAC, ADTS at 24 kHz mono, gave 465 KB for the same text.
+const OPENAI_FORMAT = 'aac';
+// One silent AAC-LC frame (24 kHz, mono): an ADTS header for an 11-byte frame and a raw block holding one channel
+// element with no spectral data, then the end element; 1024 samples, about 42.7 ms.
+const SILENT_AAC_FRAME = Buffer.from([0xff, 0xf1, 0x58, 0x40, 0x01, 0x7f, 0xfc, 0x00, 0x00, 0x00, 0x07]);
+const SILENT_AAC_FRAME_MS = 1024 / 24;
 // Local speech: yovoice serving Qwen3-TTS CustomVoice on this computer, installed by the local-tts-setup skill into
 // `<service home>/yovoice` (CLI in `cli/`, engine and model in `data/`). Like voice input's local service, the runner
 // starts it through a supervisor (`local_speech_service.mjs`) and renews its lease on every request; a minute without
@@ -102,15 +113,25 @@ const LOCAL_VOICES = [
   ['Dylan', 'Dylan · 北京青年男声'], ['Eric', 'Eric · 成都男声'], ['Ryan', 'Ryan · 英语男声'], ['Aiden', 'Aiden · 美式男声'],
   ['Ono_Anna', 'Ono Anna · 日语女声'], ['Sohee', 'Sohee · 韩语女声'],
 ];
+// gpt-4o-mini-tts's built-in voices; the docs call them optimized for English and recommend marin or cedar.
+const OPENAI_VOICES = [
+  ['marin', 'Marin · 女声（推荐）'], ['cedar', 'Cedar · 男声（推荐）'], ['alloy', 'Alloy · 中性'], ['ash', 'Ash · 男声'],
+  ['ballad', 'Ballad · 男声'], ['coral', 'Coral · 女声'], ['echo', 'Echo · 男声'], ['fable', 'Fable · 男声'], ['nova', 'Nova · 女声'],
+  ['onyx', 'Onyx · 低沉男声'], ['sage', 'Sage · 女声'], ['shimmer', 'Shimmer · 女声'], ['verse', 'Verse · 男声'],
+];
 const voices = (list) => list.map(([id, label]) => ({ id, label }));
 
 /**
  * The speech services the page can choose between. `key_base_url` is the root a saved key is bound to; `context` says
  * whether the tone instruction applies and `default_context` is the tone each starts with; `region` says whether the service also needs a region; `voice_input` marks the
  * one whose key also serves voice input; `rate: false` marks one that ignores the speech rate; `local` marks the service
- * on this computer, whose token the setup skill saves, so the page asks for no key.
+ * on this computer, whose token the setup skill saves, so the page asks for no key; `shared_key` marks one that, without a
+ * key of its own, uses the latest key saved for its address (OpenAI's, saved for model API members).
  */
 export const TTS_PROVIDERS = [
+  { id: 'local', label: '本机', key_base_url: LOCAL_URL, console_url: 'https://github.com/leemysw/yovoice',
+    note: '本机显卡运行 Qwen3-TTS，不计费；用 local-tts-setup 技能安装', voices: voices(LOCAL_VOICES),
+    default_speaker: 'Vivian', context: true, default_context: '语气平静克制，语调平稳，娓娓道来。', region: false, voice_input: false, rate: false, local: true },
   { id: 'volcengine', label: '火山引擎', key_base_url: 'https://openspeech.bytedance.com', console_url: 'https://console.volcengine.com/speech/new',
     note: '约 3 元/万字，语音输入共用此 Key', voices: voices(VOLC_VOICES),
     default_speaker: 'zh_female_vv_uranus_bigtts', context: true,
@@ -121,9 +142,10 @@ export const TTS_PROVIDERS = [
   { id: 'azure', label: 'Azure', key_base_url: 'https://tts.speech.microsoft.com', console_url: 'https://portal.azure.com/#create/Microsoft.CognitiveServicesSpeechServices',
     note: '每月免费约 25 万字，超出约 2 元/万字', voices: voices(AZURE_VOICES),
     default_speaker: 'zh-CN-XiaoxiaoNeural', context: false, region: true, voice_input: false },
-  { id: 'local', label: '本机', key_base_url: LOCAL_URL, console_url: 'https://github.com/leemysw/yovoice',
-    note: '本机显卡运行 Qwen3-TTS，不计费；用 local-tts-setup 技能安装', voices: voices(LOCAL_VOICES),
-    default_speaker: 'Vivian', context: true, default_context: '语气平静克制，语调平稳，娓娓道来。', region: false, voice_input: false, rate: false, local: true },
+  { id: 'openai', label: 'OpenAI', key_base_url: OPENAI_BASE_URL, console_url: 'https://platform.openai.com/api-keys',
+    note: 'gpt-4o-mini-tts，约 0.1 元/分钟；音色偏英语口音，官方定于 2027-01-06 停用', voices: voices(OPENAI_VOICES),
+    default_speaker: 'marin', context: true, default_context: '用标准普通话朗读，语气平稳自然，句间自然停顿。', region: false,
+    voice_input: false, shared_key: true },
 ];
 
 /** Trailing silence as silent MP3 frames matching Aliyun's and Azure's output. */
@@ -242,6 +264,26 @@ async function azure_speak({ key, region, text, speaker, rate, silence }, reques
   if (!response.ok) throw new Error(`语音合成失败：Azure 返回 HTTP ${response.status}，请核对音色名称`);
   const audio = Buffer.from(await response.arrayBuffer());
   return { audio: Buffer.concat([audio, silence_frames(silence)]).toString('base64'), format: 'mp3', marks: [] };
+}
+
+/** OpenAI's Speech API; it gives no word timings. `rate` (-50..100 percent) maps to its speed multiplier. */
+async function openai_speak({ key, text, speaker, rate, context, silence }, request) {
+  let response;
+  try {
+    response = await request(`${OPENAI_BASE_URL}/audio/speech`, { method: 'POST', redirect: 'error', signal: AbortSignal.timeout(TTS_TIMEOUT_MS),
+      headers: { Authorization: `Bearer ${key}`, 'Content-Type': 'application/json' },
+      body: JSON.stringify({ model: OPENAI_MODEL, input: text, voice: speaker, response_format: OPENAI_FORMAT, speed: 1 + rate / 100,
+        ...(context ? { instructions: context } : {}) }) });
+  } catch { throw new Error('语音合成请求超时或连接失败：请检查这台电脑能否访问 api.openai.com 后重试'); }
+  if (!response.ok) {
+    const reason = await response.json().then(body => body?.error?.message || '', () => '');
+    if (response.status === 401) throw new Error('OpenAI 拒绝了 API Key：请在设置的“语音”中更换');
+    if (response.status === 429) throw new Error(`OpenAI 请求过于频繁或额度不足，请稍后再试${reason ? `：${reason}` : ''}`);
+    throw new Error(`语音合成失败：OpenAI 返回 HTTP ${response.status}${reason ? `：${reason}` : ''}`);
+  }
+  const audio = Buffer.from(await response.arrayBuffer());
+  const pause = Buffer.concat(Array(Math.round(silence / SILENT_AAC_FRAME_MS)).fill(SILENT_AAC_FRAME));
+  return { audio: Buffer.concat([audio, pause]).toString('base64'), format: 'aac', marks: [] };
 }
 
 /** Append trailing silence to a PCM WAV by extending its last (data) chunk with zeroed samples. */
@@ -363,8 +405,9 @@ function local_speak(input, transport) {
  * marks the service on this computer, whose token the setup skill saves.
  */
 export const STT_PROVIDERS = [
-  { id: 'volcengine', label: '火山引擎', key_base_url: 'https://openspeech.bytedance.com', note: '用火山引擎「录音文件识别2.0」识别，单次最长 5 分钟' },
   { id: 'local', label: '本机', key_base_url: LOCAL_STT_URL, note: '本机显卡运行 Qwen3-ASR，不计费；用 local-stt-setup 技能安装', local: true },
+  { id: 'volcengine', label: '火山引擎', key_base_url: 'https://openspeech.bytedance.com', note: '用火山引擎「录音文件识别2.0」识别，单次最长 5 分钟' },
+  { id: 'openai', label: 'OpenAI', key_base_url: OPENAI_BASE_URL, note: 'gpt-transcribe 识别，与朗读共用 OpenAI Key；官方定于 2027-02-26 停用' },
 ];
 
 /** Start the voice-input service (CrispASR); its token comes in the environment, never on the command line. */
@@ -408,7 +451,7 @@ export async function local_transcribe({ home, key, wav }, { request = fetch, st
   } finally { local_renew(directory); }
 }
 
-const SPEAKERS = { volcengine: volc_speak, aliyun: aliyun_speak, azure: azure_speak };
+const SPEAKERS = { volcengine: volc_speak, aliyun: aliyun_speak, azure: azure_speak, openai: openai_speak };
 
 /**
  * Synthesize one paragraph with one provider.

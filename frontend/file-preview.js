@@ -119,12 +119,90 @@ const FILE_TYPES = {
   png: ["图片", "i-lucide-file-image", "is-purple"], jpg: ["图片", "i-lucide-file-image", "is-purple"], jpeg: ["图片", "i-lucide-file-image", "is-purple"],
   gif: ["图片", "i-lucide-file-image", "is-purple"], webp: ["图片", "i-lucide-file-image", "is-purple"], svg: ["SVG", "i-lucide-file-image", "is-orange"],
   zip: ["压缩包", "i-lucide-file-archive", "is-muted"], pdf: ["PDF", "i-lucide-file-text", "is-red"], txt: ["纯文本", "i-lucide-file-text", "is-muted"],
+  csv: ["CSV 表格", "i-lucide-sheet", "is-green"], tsv: ["TSV 表格", "i-lucide-sheet", "is-green"], xml: ["XML", "i-lucide-file-code", "is-orange"],
+  ini: ["INI", "i-lucide-file-cog", "is-purple"], log: ["日志", "i-lucide-file-text", "is-muted"],
+  docx: ["Word 文档", "i-lucide-file-text", "is-blue"], doc: ["Word 文档（旧版）", "i-lucide-file-text", "is-blue"],
+  xlsx: ["Excel 表格", "i-lucide-sheet", "is-green"], xls: ["Excel 表格（旧版）", "i-lucide-sheet", "is-green"], ods: ["ODS 表格", "i-lucide-sheet", "is-green"],
+  pptx: ["PowerPoint 演示", "i-lucide-presentation", "is-orange"], ppt: ["PowerPoint 演示（旧版）", "i-lucide-presentation", "is-orange"],
+  mp4: ["视频", "i-lucide-file-play", "is-purple"], m4v: ["视频", "i-lucide-file-play", "is-purple"], webm: ["视频", "i-lucide-file-play", "is-purple"],
+  mov: ["视频", "i-lucide-file-play", "is-purple"], mkv: ["视频", "i-lucide-file-play", "is-purple"], avi: ["视频", "i-lucide-file-play", "is-purple"],
+  ogv: ["视频", "i-lucide-file-play", "is-purple"], mp3: ["音频", "i-lucide-file-audio", "is-purple"], wav: ["音频", "i-lucide-file-audio", "is-purple"],
+  ogg: ["音频", "i-lucide-file-audio", "is-purple"], oga: ["音频", "i-lucide-file-audio", "is-purple"], opus: ["音频", "i-lucide-file-audio", "is-purple"],
+  m4a: ["音频", "i-lucide-file-audio", "is-purple"], aac: ["音频", "i-lucide-file-audio", "is-purple"], flac: ["音频", "i-lucide-file-audio", "is-purple"],
+  avif: ["图片", "i-lucide-file-image", "is-purple"], bmp: ["图片", "i-lucide-file-image", "is-purple"], ico: ["图标", "i-lucide-file-image", "is-purple"],
+  srt: ["字幕", "i-lucide-captions", "is-purple"], vtt: ["字幕", "i-lucide-captions", "is-purple"], ass: ["字幕", "i-lucide-captions", "is-purple"],
+  ssa: ["字幕", "i-lucide-captions", "is-purple"], lrc: ["歌词字幕", "i-lucide-captions", "is-purple"],
+  prproj: ["Premiere 工程", "i-lucide-clapperboard", "is-purple"], fcpxml: ["Final Cut 工程", "i-lucide-clapperboard", "is-purple"],
+  kdenlive: ["Kdenlive 工程", "i-lucide-clapperboard", "is-purple"], mlt: ["MLT 工程", "i-lucide-clapperboard", "is-purple"],
+  otio: ["OpenTimelineIO 工程", "i-lucide-clapperboard", "is-purple"], edl: ["EDL 剪辑表", "i-lucide-clapperboard", "is-purple"],
+  aep: ["After Effects 工程", "i-lucide-clapperboard", "is-purple"], drp: ["DaVinci 工程", "i-lucide-clapperboard", "is-purple"],
+  veg: ["Vegas 工程", "i-lucide-clapperboard", "is-purple"],
 };
+
+// What the preview shows in its viewer or players, by extension; mirrors MEDIA_TYPES in runner/project_files.mjs.
+const MEDIA_KINDS = { image: ["png", "jpg", "jpeg", "gif", "webp", "avif", "svg", "bmp", "ico"],
+  video: ["mp4", "m4v", "webm", "mov", "mkv", "ogv"], audio: ["mp3", "wav", "ogg", "oga", "opus", "m4a", "aac", "flac"] };
+
+/** `image`, `video` or `audio` for a file the preview plays, or "" for one it shows as text. */
+export function media_of(name) {
+  const extension = /\.([^.\/]+)$/.exec(name)?.[1]?.toLowerCase();
+  return Object.keys(MEDIA_KINDS).find((kind) => MEDIA_KINDS[kind].includes(extension)) || "";
+}
+
+// How the preview opens text files that are not shown as plain source: tables and subtitle timelines.
+const TEXT_KINDS = { table: ["csv", "tsv"], subtitle: ["srt", "vtt", "ass", "ssa", "lrc"] };
+// Binary documents the preview reads whole: Office files rendered by the modules under /office/, and the Premiere
+// project, a gzip-compressed XML shown as its text.
+const DOCUMENT_KINDS = { docx: ["docx"], sheet: ["xlsx", "xls", "ods"], slides: ["pptx"], prproj: ["prproj"] };
+
+/** The lower-case extension of a file name, or "". */
+function extension_of(name) {
+  return /\.([^.\/]+)$/.exec(name)?.[1]?.toLowerCase() || "";
+}
+
+/** `table` or `subtitle` for a text file with its own view, or "". */
+export function text_kind_of(name) {
+  const extension = extension_of(name);
+  return Object.keys(TEXT_KINDS).find((kind) => TEXT_KINDS[kind].includes(extension)) || "";
+}
+
+/** `docx`, `sheet`, `slides` or `prproj` for a binary document the preview renders, or "". */
+export function document_kind_of(name) {
+  const extension = extension_of(name);
+  return Object.keys(DOCUMENT_KINDS).find((kind) => DOCUMENT_KINDS[kind].includes(extension)) || "";
+}
 
 /** Look up the display type of a file by its extension. */
 export function file_type(name) {
   const extension = /\.([^.\\/]+)$/.exec(name)?.[1]?.toLowerCase();
   return FILE_TYPES[extension] || ["纯文本", "i-lucide-file", "is-muted"];
+}
+
+/**
+ * The project path an image of a Markdown file at folder `base` names, as rendered `src` (escaped, percent-encoded),
+ * or null for a URL with a scheme, a fragment or a path leaving the project. Mirrors `page_reference` in
+ * runner/project_files.mjs, which keys the images the computer sends by the same path.
+ */
+export function markdown_image_path(base, src) {
+  const value = src.replace(/&amp;/g, "&").trim();
+  if (!value || /^([a-z][a-z0-9+.-]*:|\/\/|#)/i.test(value)) return null;
+  let path = value.replace(/[?#].*$/, "");
+  try { path = decodeURIComponent(path); } catch { /* Kept as written. */ }
+  const parts = [];
+  for (const part of (path.startsWith("/") ? path.slice(1) : `${base}/${path}`).split("/")) {
+    if (part === "..") { if (!parts.length) return null; parts.pop(); }
+    else if (part && part !== ".") parts.push(part);
+  }
+  return parts.join("/");
+}
+
+/** Point the images of rendered Markdown at the data URLs the computer read for them; others stay as written. */
+export function inline_markdown_images(html, images, base) {
+  if (!images) return html;
+  return html.replace(/<img src="([^"]*)"/g, (whole, src) => {
+    const url = images[markdown_image_path(base, src)];
+    return url ? `<img src="${url}"` : whole;
+  });
 }
 
 /** Split a project-relative path into clickable crumbs, rooted at the project folder's own name. */
@@ -165,4 +243,49 @@ export function excerpts_markdown(excerpts) {
     return [`摘录 ${index + 1}：${source}${lines ? ` ${lines}` : ""}`, quote, excerpt.comment ? `批注：${excerpt.comment}` : ""]
       .filter(Boolean).join("\n\n");
   }).join("\n\n");
+}
+
+// Subtitle cues shown in the timeline view; a longer file keeps its full text in the source view.
+const MAX_SUBTITLE_CUES = 5000;
+const SRT_TIME = /(\d{1,2}:\d{2}:\d{2}[,.]\d{1,3}|\d{1,2}:\d{2}[,.]\d{1,3})\s*-->\s*(\d{1,2}:\d{2}:\d{2}[,.]\d{1,3}|\d{1,2}:\d{2}[,.]\d{1,3})/;
+
+/**
+ * The cues of a subtitle file as `[{ start, end, text }]`, times as written: SRT and WebVTT blocks, ASS/SSA `Dialogue`
+ * lines (style overrides such as `{\an8}` removed, `\N` as a line break) and LRC `[mm:ss.xx]` lyric lines.
+ */
+export function subtitle_cues(text, name) {
+  const extension = extension_of(name);
+  const cues = [];
+  if (extension === "ass" || extension === "ssa") {
+    let fields = null;
+    for (const line of text.split(/\r?\n/)) {
+      if (/^Format:/i.test(line) && !fields) fields = line.slice(7).split(",").map(field => field.trim().toLowerCase());
+      if (!/^Dialogue:/i.test(line) || !fields) continue;
+      const values = line.slice(9).split(",");
+      const at = (name) => values[fields.indexOf(name)]?.trim() || "";
+      // The text field is last and may itself contain commas.
+      const body = values.slice(fields.indexOf("text")).join(",").replace(/\{[^}]*\}/g, "").replace(/\\[Nn]/g, "\n").trim();
+      cues.push({ start: at("start"), end: at("end"), text: body });
+      if (cues.length >= MAX_SUBTITLE_CUES) break;
+    }
+    return cues;
+  }
+  if (extension === "lrc") {
+    for (const line of text.split(/\r?\n/)) {
+      const times = [...line.matchAll(/\[(\d{1,3}:\d{2}(?:[.:]\d{1,3})?)\]/g)].map(match => match[1]);
+      const body = line.replace(/\[[^\]]*\]/g, "").trim();
+      for (const start of times) cues.push({ start, end: "", text: body });
+      if (cues.length >= MAX_SUBTITLE_CUES) break;
+    }
+    return cues;
+  }
+  for (const block of text.replace(/^﻿/, "").split(/\r?\n\s*\r?\n/)) {
+    const lines = block.split(/\r?\n/);
+    const index = lines.findIndex(line => SRT_TIME.test(line));
+    if (index < 0) continue;
+    const [, start, end] = SRT_TIME.exec(lines[index]);
+    cues.push({ start, end, text: lines.slice(index + 1).join("\n").replace(/<[^>]+>/g, "").trim() });
+    if (cues.length >= MAX_SUBTITLE_CUES) break;
+  }
+  return cues;
 }

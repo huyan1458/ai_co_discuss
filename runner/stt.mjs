@@ -1,7 +1,7 @@
 /**
  * Voice input: the page records 16 kHz mono PCM and sends it in small parts (each fits one relayed request);
  * the last part assembles a WAV file and the voice-input service chosen in settings turns it into text: Volcengine's
- * flash recognizer, or the recognizer on this computer (`local_transcribe`). Keys stay local.
+ * flash recognizer, OpenAI's transcription, or the recognizer on this computer (`local_transcribe`). Keys stay local.
  */
 import { randomUUID } from 'node:crypto';
 import { existsSync, mkdirSync, readdirSync, readFileSync, rmSync, statSync, writeFileSync } from 'node:fs';
@@ -19,6 +19,10 @@ const STT_DONE_CODE = '20000000';
 const STT_SILENT_CODE = '20000003';
 const STT_TIMEOUT_MS = 50_000;
 const SAMPLE_RATE = 16000;
+// OpenAI's transcription (2026-11-10 docs): gpt-transcribe is the recommended model; it and the others shut down on
+// 2027-02-26. `languages` lists the languages the speech may be in; both forms of the array field were accepted.
+const OPENAI_MODEL = 'gpt-transcribe';
+const OPENAI_LANGUAGES = ['zh', 'en'];
 // About 5 minutes of 16-bit mono audio at 16 kHz.
 export const STT_MAX_BYTES = 10 * 1024 * 1024;
 const PART_MAX_BYTES = 256 * 1024;
@@ -70,6 +74,25 @@ async function recognize(key, wav, request) {
   return String(data?.result?.text || '').trim();
 }
 
+/** Send a finished recording to OpenAI's transcription and return its text. */
+async function openai_transcribe(base_url, key, wav, request) {
+  const form = new FormData();
+  form.append('file', new Blob([wav], { type: 'audio/wav' }), 'speech.wav');
+  form.append('model', OPENAI_MODEL);
+  for (const language of OPENAI_LANGUAGES) form.append('languages[]', language);
+  let response;
+  try {
+    response = await request(`${base_url}/audio/transcriptions`, { method: 'POST', redirect: 'error', signal: AbortSignal.timeout(STT_TIMEOUT_MS),
+      headers: { Authorization: `Bearer ${key}` }, body: form });
+  } catch { throw new Error('语音识别请求超时或连接失败：请检查这台电脑能否访问 api.openai.com 后重试'); }
+  if (!response.ok) {
+    const reason = await response.json().then(body => body?.error?.message || '', () => '');
+    if (response.status === 401) throw new Error('OpenAI 拒绝了 API Key：请在设置的“语音”中更换');
+    throw new Error(`语音识别失败：OpenAI 返回 HTTP ${response.status}${reason ? `：${reason}` : ''}`);
+  }
+  return String((await response.json())?.text || '').trim();
+}
+
 /**
  * Store one part of a recording; the final part recognizes the whole recording and returns its text.
  * @param {string} home Local service directory.
@@ -84,7 +107,7 @@ export async function stt_part(home, input, request = fetch, start = undefined) 
   const settings = tts_settings(home);
   const service = STT_PROVIDERS.find(item => item.id === settings.stt_provider);
   if (!settings.stt_key_ref) throw new Error(service.local ? '本机语音识别尚未安装：请让本机 AI 按 local-stt-setup 技能安装'
-    : '语音输入使用火山引擎：请在设置的“语音”中填写火山引擎 API Key');
+    : `语音输入使用${service.label}：请在设置的“语音”中填写${service.label} API Key`);
   const part = Buffer.from(data, 'base64');
   if (part.length > PART_MAX_BYTES || part.length % 2) throw new Error('录音片段无效');
   const root = join(home, 'stt');
@@ -106,6 +129,7 @@ export async function stt_part(home, input, request = fetch, start = undefined) 
     if (!pcm.length) return { text: '' };
     const key = read_saved_api_key(home, service.key_base_url, settings.stt_key_ref);
     if (service.local) return { text: await local_transcribe({ home, key, wav: pcm_to_wav(pcm) }, { request, ...(start ? { start } : {}) }) };
+    if (service.id === 'openai') return { text: await openai_transcribe(service.key_base_url, key, pcm_to_wav(pcm), request) };
     return { text: await recognize(key, pcm_to_wav(pcm), request) };
   } finally { rmSync(directory, { recursive: true, force: true }); }
 }

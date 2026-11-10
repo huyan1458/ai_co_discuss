@@ -490,10 +490,12 @@ CREATE TABLE IF NOT EXISTS private_chats (
 CREATE INDEX IF NOT EXISTS private_chats_member ON private_chats(member_id,id);
 -- What a rewind does to each runner member's session, as its adapter reported: cut by the runner, rebuilt each time
 -- (fresh), or kept as it is. A member without a report is kept; manual and online members are always kept.
+-- image_model: the image model it can generate and edit images with, '' when it has none.
 CREATE TABLE IF NOT EXISTS member_capabilities (
     member_id INTEGER PRIMARY KEY REFERENCES room_members(id) ON DELETE CASCADE,
     room_id TEXT NOT NULL,
-    rewind TEXT NOT NULL CHECK(rewind IN ('cut','fresh','kept'))
+    rewind TEXT NOT NULL CHECK(rewind IN ('cut','fresh','kept')),
+    image_model TEXT NOT NULL DEFAULT ''
 );
 -- What a member submitted for an execution the user had already voided. Refused as an answer, so it never joins the
 -- transcript or AI reads; kept so the page can show the late work folded, and so a member the runner could not stop

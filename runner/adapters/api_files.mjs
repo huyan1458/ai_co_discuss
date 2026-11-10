@@ -374,6 +374,27 @@ function grep(project, args) {
   return `Found ${kept} of ${seen} matches\n\n${body}\n\n(The complete result could not be saved; narrow pattern, path, or include to see more.)`;
 }
 
+/** The bytes of a project file the member may read, up to `limit` bytes, for tools that take binary input such as images. */
+export function read_project_bytes(project, requested, limit) {
+  const file = target(project, requested);
+  const info = statSync(file.path);
+  if (!info.isFile()) throw new Error(`cannot read "${file.shown}": not a regular file`);
+  if (info.size > limit) throw new Error(`cannot read "${file.shown}": ${info.size} bytes exceeds the ${limit}-byte limit`);
+  return { data: readFileSync(file.path), shown: file.shown };
+}
+
+/**
+ * Save new binary content, such as a generated image, at a path the member may write. It never replaces an existing
+ * file, since a binary file cannot be read first. Returns the real path and the path shown to the model.
+ */
+export function write_new_project_file(project, requested, data) {
+  const file = target(project, requested, false, true);
+  try { statSync(file.path); throw new Error(`cannot write "${file.shown}": it already exists; choose a new path`); }
+  catch (error) { if (error.code !== 'ENOENT') throw error; }
+  atomic_write(file, data, null);
+  return file;
+}
+
 const RUNNERS = { read, glob, grep, write, edit };
 
 /** Whether a tool name is one of the file tools. */

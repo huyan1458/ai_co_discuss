@@ -323,6 +323,66 @@ export function bundle_project_page(cwd, path) {
     missing: [...state.missing], skipped: [...state.skipped] };
 }
 
+// Images a Markdown file shows: inline `![alt](path "title")`, `![alt](<path with spaces>)` and reference definitions `[id]: path`.
+const MARKDOWN_IMAGE = /!\[[^\]]*\]\(\s*(?:<([^>]+)>|([^)\s]+))/g;
+const MARKDOWN_DEFINITION = /^ {0,3}\[[^\]]+\]:\s*(?:<([^>]+)>|(\S+))/gm;
+const IMAGE_EXTENSIONS = ['png', 'jpg', 'jpeg', 'gif', 'webp', 'avif', 'svg', 'bmp', 'ico'];
+
+/**
+ * The project images one Markdown file refers to by relative path, as `{project path: data URL}` (JSON bytes, sent
+ * like a page), so the preview shows them where only text reaches the page (another device, through the relay). The
+ * preview resolves each rendered image the same way (`frontend/file-preview.js` `markdown_image_path`). Only image
+ * files inside the project are read; missing ones and those past the size limit are listed instead.
+ */
+export function bundle_project_markdown(cwd, path) {
+  const root = project_root(cwd);
+  const target = project_path(root, path);
+  if (!/\.(md|markdown)$/i.test(target)) throw new Error('只能打开 Markdown 文件');
+  const info = statSync(target);
+  if (!info.isFile()) throw new Error('只能预览普通文件');
+  if (info.size > PAGE_MAX_BYTES) throw new Error('Markdown 文件超过 8 MiB，图片不载入');
+  const normalized = path.replaceAll('\\', '/').split('/').filter(part => part && part !== '.').join('/');
+  const base = posix.dirname(normalized);
+  const state = { root, budget: PAGE_MAX_BYTES, inlined: new Map(), missing: new Set(), skipped: new Set() };
+  const text = readFileSync(target, 'utf8');
+  for (const match of [...text.matchAll(MARKDOWN_IMAGE), ...text.matchAll(MARKDOWN_DEFINITION)]) {
+    const reference = page_reference(base, match[1] ?? match[2]);
+    // A definition may name a link rather than an image; only image files are read.
+    if (reference !== null && IMAGE_EXTENSIONS.includes(posix.extname(reference).slice(1).toLowerCase())) page_resource(reference, state, 0);
+  }
+  const bytes = Buffer.from(JSON.stringify(Object.fromEntries(state.inlined)), 'utf8');
+  return { path: normalized, bytes, version: createHash('sha256').update(bytes).digest('hex').slice(0, 16), modified_at: info.mtime.toISOString(),
+    missing: [...state.missing], skipped: [...state.skipped] };
+}
+
+// Binary files the preview reads whole, by extension: images and media for its viewer and players (the browser decides
+// what it can decode), Office documents and compressed edit projects for its document previews.
+export const MEDIA_TYPES = {
+  png: 'image/png', jpg: 'image/jpeg', jpeg: 'image/jpeg', gif: 'image/gif', webp: 'image/webp', avif: 'image/avif', svg: 'image/svg+xml',
+  bmp: 'image/bmp', ico: 'image/x-icon',
+  mp4: 'video/mp4', m4v: 'video/mp4', webm: 'video/webm', mov: 'video/quicktime', mkv: 'video/x-matroska', ogv: 'video/ogg',
+  mp3: 'audio/mpeg', wav: 'audio/wav', ogg: 'audio/ogg', oga: 'audio/ogg', opus: 'audio/ogg', m4a: 'audio/mp4', aac: 'audio/aac', flac: 'audio/flac',
+  // Office documents and the compressed Premiere project, read whole by the page's previews.
+  docx: 'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
+  xlsx: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet', xls: 'application/vnd.ms-excel',
+  ods: 'application/vnd.oasis.opendocument.spreadsheet',
+  pptx: 'application/vnd.openxmlformats-officedocument.presentationml.presentation', prproj: 'application/gzip',
+};
+
+/**
+ * One image, video, audio, Office or compressed edit-project file of a project, checked like any preview: inside the project, a regular file of a
+ * known media type. Returns its real path (for the local site to stream), size, type and a version that changes with it.
+ */
+export function project_media(cwd, path) {
+  const root = project_root(cwd);
+  const target = project_path(root, path);
+  const content_type = MEDIA_TYPES[posix.extname(target.replaceAll('\\', '/')).slice(1).toLowerCase()];
+  if (!content_type) throw new Error('只能打开图片、音视频、Office 文档或剪辑工程文件');
+  const info = statSync(target);
+  if (!info.isFile()) throw new Error('只能预览普通文件');
+  return { file: target, size: info.size, content_type, modified_at: info.mtime.toISOString(), version: `${info.mtimeMs}:${info.size}` };
+}
+
 /** Search names under every directory of a room at once; each entry's `root` is the index of its directory. */
 export function search_project_roots(directories, query) {
   if (!directories.length) project_root('');

@@ -7,6 +7,7 @@ import os
 import sqlite3
 import tempfile
 import threading
+import time
 import unittest
 import uuid
 from concurrent.futures import ThreadPoolExecutor, TimeoutError as FutureTimeoutError
@@ -327,6 +328,23 @@ class DiscussionTests(unittest.TestCase):
         if not self.external:
             self.assertEqual(list(Path(str(self.database) + ".attachments").iterdir()), [])
 
+    def test_media_ticket_streams_only_its_checked_file_until_it_expires_or_changes(self):
+        """A local page plays a project file by a random ticket; an unknown, expired or outdated ticket reads nothing."""
+        if self.external:
+            self.skipTest("media tickets belong to the local site")
+        path = Path(str(self.database) + ".media.mp3")
+        path.write_bytes(b"ID3" + bytes(1000))
+        info = path.stat()
+        self.server.media_tickets["good"] = (path, info.st_size, info.st_mtime_ns, "audio/mpeg", path.name, time.time() + 60)
+        self.server.media_tickets["old"] = (path, info.st_size, info.st_mtime_ns, "audio/mpeg", path.name, time.time() - 1)
+        status, headers, body = self.attachment_request("/api/local/media/good", headers={"Range": "bytes=0-2"})
+        self.assertEqual((status, body, headers["Content-Type"]), (206, b"ID3", "audio/mpeg"))
+        self.assertIn("sandbox", headers["Content-Security-Policy"])
+        self.assertEqual(self.attachment_request("/api/local/media/unknown")[0], 404)
+        self.assertEqual(self.attachment_request("/api/local/media/old")[0], 404)
+        path.write_bytes(b"ID3" + bytes(10))
+        self.assertEqual(self.attachment_request("/api/local/media/good")[0], 409)
+
     def test_attachments_reject_cross_room_owner_path_and_size(self):
         """Untrusted MIME and filenames cannot create executable or cross-room file access."""
         base = f"/api/rooms/{self.room['id']}"
@@ -337,6 +355,24 @@ class DiscussionTests(unittest.TestCase):
         headers = self.attachment_request(file["url"])[1]
         self.assertEqual(headers["Content-Type"], "application/octet-stream")
         self.assertTrue(headers["Content-Disposition"].startswith("attachment"))
+        # An SVG shows inline as an image; opened directly, the sandboxing policy still keeps its scripts from running.
+        svg = b'<?xml version="1.0"?>\n<svg xmlns="http://www.w3.org/2000/svg"><script>bad()</script></svg>'
+        svg_params = {**params, "file_name": "图.svg", "submission_id": "upload-svg"}
+        svg_file = json.loads(self.attachment_request(base + "/attachments?" + urlencode(svg_params), svg)[2])["attachment"]
+        self.assertEqual(svg_file["content_type"], "image/svg+xml")
+        svg_headers = self.attachment_request(svg_file["url"])[1]
+        self.assertTrue(svg_headers["Content-Disposition"].startswith("inline"))
+        self.assertIn("sandbox", svg_headers["Content-Security-Policy"])
+        # A video is recognized for the page's player and served in the byte ranges a player seeks with.
+        video = b"\x00\x00\x00\x18ftypisom" + bytes(range(256)) * 4
+        video_params = {**params, "file_name": "片段.mp4", "submission_id": "upload-video"}
+        video_file = json.loads(self.attachment_request(base + "/attachments?" + urlencode(video_params), video)[2])["attachment"]
+        self.assertEqual(video_file["content_type"], "video/mp4")
+        status, video_headers, body = self.attachment_request(video_file["url"], headers={"Range": "bytes=10-19"})
+        self.assertEqual((status, body, video_headers["Content-Range"]), (206, video[10:20], f"bytes 10-19/{len(video)}"))
+        self.assertEqual(self.attachment_request(video_file["url"], headers={"Range": "bytes=-5"})[2], video[-5:])
+        self.assertEqual(self.attachment_request(video_file["url"], headers={"Range": f"bytes={len(video)}-"})[0], 416)
+        self.assertEqual(self.attachment_request(video_file["url"])[2], video)
         other = self.request("/api/rooms", {"title": "另一房间"})[1]["id"]
         self.assertEqual(self.request(f"/api/rooms/{other}/attachments/{file['id']}")[0], 404)
         self.assertEqual(self.request(f"/api/rooms/{other}/messages", {"author": "用户", "text": "", "attachment_ids": [file["id"]], "submission_id": "cross-room"})[0], 404)
