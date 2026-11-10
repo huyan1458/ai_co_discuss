@@ -1,6 +1,6 @@
 {
   "name": "ai_co_discuss",
-  "version": "0.4.9",
+  "version": "0.4.10",
   "bin": {
     "codiscuss": "runner/codiscuss.mjs"
   },
@@ -84,6 +84,7 @@
     ".agents/skills/discuss-host/**",
     ".agents/skills/discuss-participant/**",
     ".agents/skills/discuss-goal/**",
+    ".agents/skills/discuss-session/**",
     ".agents/skills/discuss-report/**",
     ".agents/skills/workflow-creator/**",
     ".agents/skills/local-tts-setup/**",
