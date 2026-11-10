@@ -648,7 +648,7 @@ def update_topic(connection, room_id, payload):
     room = require_room(connection, room_id)
     require_host(room, payload)
     if "phase" in payload:
-        raise ValueError("自由协作房间的讨论阶段由 discussion 会话控制")
+        raise ValueError("房间的讨论阶段由 discussion 会话控制")
     if room["archived"]:
         raise ValueError("房间已存档；恢复后才能修改话题资料")
     settings = topic_values(payload, room)
@@ -1188,7 +1188,7 @@ def append_free_message(connection, room, payload, actor):
             raise ValueError("主持说明不能声明评审授权、依次接力或申请轮数；请在派活时提交")
         return append_free_moderation(connection, room, payload, actor)
     if payload.get("kind") not in (None, "chat"):
-        raise ValueError("自由协作与新讨论使用 kind=chat，并以 execution_id 或 request_ids 关联请求")
+        raise ValueError("房间请求与讨论的回答都使用 kind=chat，并以 execution_id 或 request_ids 关联请求")
     resolve_member_fields(connection, room["id"], payload)
     if payload.get("turn_id") is not None and current_session(connection, room["id"], active_only=True):
         raise ValueError("新讨论使用 kind=chat，并以 execution_id 或 request_ids 关联请求")
@@ -1571,7 +1571,7 @@ def room_text(connection, room_id, params):
                f"主持人：{room['host']}；阶段：{PHASES[room['phase']]}；当前焦点：{room['focus'] or '尚未填写'}",
                f"当前记录截止 #{room['latest_id']}；共 {room['message_count']} 条；已完成 {room['completed_rounds']} 轮讨论（所有参与专家各发言一次）。"]
     limits = room["limits"]
-    content.append(f"讨论上限：{limits['max_rounds'] or '不限'} 轮；总时长 {limits['max_minutes'] or '不限'} 分钟；到限后讨论结束，房间回到自由协作。到限：{limits['reached']}。")
+    content.append(f"讨论上限：{limits['max_rounds'] or '不限'} 轮；总时长 {limits['max_minutes'] or '不限'} 分钟；到限后讨论结束，房间照常协作。到限：{limits['reached']}。")
     participant = params.get("participant", params.get("for"))
     members = "；".join(f"{item['name']}（已读至 #{item['read_until']}，待投递 {item['pending']}）" for item in room["free"]["members"])
     if current_session(connection, room_id, active_only=True):
@@ -1579,7 +1579,7 @@ def room_text(connection, room_id, params):
         assignment = f"当前安排 #{current['id']}：{current['expert']}" if current else "当前没有专家安排"
         content.append(f"讨论会话处于{PHASES[room['phase']]}；{assignment}。其余成员安排按队列执行。成员：{members or '无'}。专家回答须关联本次执行或手动请求，已结束的执行或失效请求不能改作普通发言。")
     else:
-        content.append(f"自由协作房间：无发言权、安排与轮次。成员：{members or '无'}。用户的消息点名成员后生成请求；成员回答须带本次执行编号，执行结束、被打断或过期后的回答会被拒绝，不能改作普通发言；只被本机服务判失败、未被重试的执行仍收下回答。")
+        content.append(f"房间（未开讨论）：无发言权、安排与轮次。成员：{members or '无'}。用户的消息点名成员后生成请求；成员回答须带本次执行编号，执行结束、被打断或过期后的回答会被拒绝，不能改作普通发言；只被本机服务判失败、未被重试的执行仍收下回答。")
     content.extend(["", "## 按需展开", f"背景、边界与参与专家：{base}/brief",
                     f"共识与分歧（整理至 #{room['state_until']}）：{base}/state",
                     "## 读取与检索", f"完整历史（分页）：{base}/messages?page=1",
@@ -1620,18 +1620,18 @@ def protocol_text(room):
     base = f"/api/rooms/{room['id']}"
     paragraphs = [
         "# 协作房间参与协议",
-        "当前主持人：HOST。讨论是房间内的会话；自由协作请求与讨论请求共用成员执行。",
+        "当前主持人：HOST。房间是底座，讨论与 Goal 是房间内临时开启的模式；房间请求与讨论请求共用成员执行。",
         "先用 room view 读取成员、职责、free.requests、session 与阶段，再按需读取原文。任务中的 purpose=discuss 表示讨论发言，discuss_host 表示主持任务，ask 表示直接提问；内部任务来源不是普通发言。",
         "用户管理和讨论开关使用房主凭据；本地成员使用本人的 --access-file，不借用其他身份。凭据私下交付，不公开 token。API 参与者遵循相同请求与执行约束，source=api；本地 CLI 使用 source=cli。",
         "runner 成员等待本机接入程序交付任务，用 execution view 核对本次执行和请求，再以 message post --as 本人 --kind chat --execution 本次编号 --access-file FILE 回答。执行失效后保留草稿，不能去掉编号改作普通发言；认领、续租与后续投递由接入程序处理。",
         "manual 本地成员首次用 member register 注册，会话 ID 由 CLI 自动取得；回答用 --request 请求编号，不编造执行编号。讨论不使用原生定时；原会话不能托管时由用户触发。",
-        "自由协作中的 host 可用 --to 点名成员，route 表示未点名的用户请求，handoff 表示派出任务已结束；链上 AI 派活受房间预算限制。--to 多位并加 --sequential 时按点名顺序依次接力，每棒一轮，最后交回主持人；--with 成员 与紧挨在前的 --to 同一棒同时做，这一组全部结束才交下一棒；--detach 成员 与这次派活同时开工但不等它（失败时通知主持人）；再加 --loop 则交回为检查点，用 sequence continue --request 交接请求编号 开始下一圈，不继续即直接验收。普通成员的 --to 或正文 @ 只保存回应建议，不直接唤醒；不点名自己、不扩大授权。",
+        "房间里的 host 可用 --to 点名成员，route 表示未点名的用户请求，handoff 表示派出任务已结束；链上 AI 派活受房间预算限制。--to 多位并加 --sequential 时按点名顺序依次接力，每棒一轮，最后交回主持人；--with 成员 与紧挨在前的 --to 同一棒同时做，这一组全部结束才交下一棒；--detach 成员 与这次派活同时开工但不等它（失败时通知主持人）；再加 --loop 则交回为检查点，用 sequence continue --request 交接请求编号 开始下一圈，不继续即直接验收。普通成员的 --to 或正文 @ 只保存回应建议，不直接唤醒；不点名自己、不扩大授权。",
         "讨论中的用户 @ 直接提问独立排队，不计讨论轮次、不与讨论发言合并。initial 阶段先独立判断；服务端按讨论请求的 read_until 限制读取。直接提问和主持任务不继承该阅读限制。",
         "主持安排前先 turn roster 读取在场专家、waiting、unregistered 和 revision，再 turn create --roster revision；单项和多项都要带凭据，多项计划须覆盖本轮 waiting。继续排队同样先读 roster，再 turn continue --roster revision。状态或新消息变化后旧凭据被拒绝，重新读取再判断；每个回答保存后由程序推进下一项。",
         "局部追问先 turn roster 读取 host_requests 的请求与原消息编号，再 turn ask --request ID --expert NAME --roster revision --submission-id UUID；普通提问不计轮次、不改讨论队列，可问已发言者和主持人，只结束指定请求。",
         "计划或收束成功即完成本次主持执行，无需再提交回答回执。主持说明使用 kind=moderation，不替代专家回答，也不会完成主持执行；主持人作为专家发言须回答自己的 discuss 请求。",
         "讨论状态读取 GET BASE/discussion；房主先读取 revision，再 POST 同路径提交 start、pause、resume 或 end。CLI 对应 run view/start/pause/resume/stop。开启可携带 submission_id，原编号与原内容重试返回原会话，已结束的会话不会因重试恢复。",
-        "room limits 返回轮次、时长和进度；到限立即结束讨论并回到自由协作，不再唤醒主持人总结。暂停不计时，并作废讨论请求和执行；恢复生成新任务，旧执行不得继续写。",
+        "room limits 返回轮次、时长和进度；到限立即结束讨论，不再唤醒主持人总结。暂停不计时，并作废讨论请求和执行；恢复生成新任务，旧执行不得继续写。",
         "原会话送达失败可等待 60 秒后自动重试，最多 3 次；重试用尽只失败该请求，并交回主持人判断跳过、重排或暂停，不自动暂停整场。结果不明的写入不作为新提交重发。",
         "保存 state 与主持简报时，until 只覆盖实际已读原文。主动收束前先保存有依据的总结与状态，再 room conclusion 获取 blockers 和 revision，无阻碍后用 room limits --done --conclusion revision；有未处理内容或状态变化时拒绝收束。",
         "message list --after 按 next_after/has_more 增量读取；message view 核对原文；历史可筛选 opinion/moderation/chat。内部任务不出现在普通消息列表、搜索和统计中，也没有普通发言的撤回或编辑入口。",

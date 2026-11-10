@@ -2339,19 +2339,6 @@ for (const outcome of ['accepted', 'cancelled', 'expired']) test(`free Sidecar d
   assert.equal(store.binding('Claude').session_id || '', outcome === 'accepted' ? 'free-session' : '');
 });
 
-test('a free room without smart scheduling has everyone named by @全体成员 answer at once and never delivers the group request', async t => {
-  const { state, store, config } = await free_fixture(t);
-  state.pending = [{ id: 1, message_id: 11, purpose: 'group' }];
-  const delivered = [];
-  const runner = new FreeRoomRunner(config, store, async (adapter, binding, task) => { delivered.push(task); return { status: 'accepted' }; });
-  await runner.tick();
-  await Promise.all(runner.decisions);
-  await runner.tick();
-  assert.deepEqual([state.calls.filter(call => call.startsWith('POST /recommendations/11')), delivered.length], [['POST /recommendations/11 all'], 1]);
-  assert.equal(state.executions[0].requests[0].purpose, 'all');
-  assert.equal(state.calls.some(call => call === 'POST /scheduler-routing'), false);
-});
-
 /** A group request with real local member facts; provider calls stay test doubles. */
 async function group_fixture(t) {
   const fixture = await free_fixture(t);

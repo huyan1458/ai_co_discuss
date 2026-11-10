@@ -22,7 +22,7 @@ flowchart LR
 - **The site never runs models** — it does not start local processes, store model keys or call models; the local runner does.
 - **Read, then write, enforced by the server** — writes that depend on the room's overall state (such as scheduling a full round or wrapping up) must carry the revision obtained when reading. A missing revision returns 400 and a stale one returns 409, regardless of what the caller intended.
 - **The site record is the source of truth** — a session ID, a process exit or a delivery receipt does not mean a task is done, and tasks with uncertain delivery are never resent automatically.
-- **One execution flow** — discussion turns and free collaboration share requests, executions, leases, failure retries and progress reports. A discussion session only controls its goal, speaker order, phase and limits.
+- **One execution flow** — discussion turns and ordinary room requests share requests, executions, leases, failure retries and progress reports. A discussion session only controls its goal, speaker order, phase and limits.
 
 ## Components
 

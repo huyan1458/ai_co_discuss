@@ -15,6 +15,9 @@ from urllib.request import Request, urlopen
 
 from backend.server import DiscussionServer, init_database
 
+# shutdown() waits for the server loop to notice; the default 0.5 s poll made every test end half a second late.
+SERVER_POLL_SECONDS = 0.02
+
 SETUP_KEY = "install-token-for-tests"
 PASSWORD = "correct horse battery"
 
@@ -38,7 +41,7 @@ class AdminTests(unittest.TestCase):
         self.server = DiscussionServer(("127.0.0.1", 0), self.database)
         self.server.local_site = False
         self.server.admin_setup_key = SETUP_KEY
-        self.thread = threading.Thread(target=self.server.serve_forever, daemon=True)
+        self.thread = threading.Thread(target=self.server.serve_forever, kwargs={"poll_interval": SERVER_POLL_SECONDS}, daemon=True)
         self.thread.start()
         self.base = f"http://127.0.0.1:{self.server.server_port}"
 
@@ -309,7 +312,7 @@ class RelayBridgeTests(unittest.TestCase):
             self.server = DiscussionServer(("127.0.0.1", 0), self.database)
         finally:
             os.environ.pop("DISCUSS_SERVICE_HOME") if previous is None else os.environ.__setitem__("DISCUSS_SERVICE_HOME", previous)
-        self.thread = threading.Thread(target=self.server.serve_forever, daemon=True)
+        self.thread = threading.Thread(target=self.server.serve_forever, kwargs={"poll_interval": SERVER_POLL_SECONDS}, daemon=True)
         self.thread.start()
         self.base = f"http://127.0.0.1:{self.server.server_port}"
 

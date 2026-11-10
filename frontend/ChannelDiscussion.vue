@@ -882,14 +882,14 @@ const mode_options = computed(() => {
     goal.status === "active" ? { command: "/goal pause", label: "暂停 Goal", description: "房间空闲时不再唤醒主持人" }
       : { command: "/goal resume", label: "继续 Goal", description: "继续推进，房间空闲时唤醒主持人" },
     { command: "/goal edit ", label: "修改 Goal 目标", description: "在后面写新的目标" },
-    { command: "/goal clear", label: "结束 Goal", description: "房间回到自由协作" },
+    { command: "/goal clear", label: "结束 Goal", description: "主持人不再自动推进，记录保留" },
   ] : session ? [
     session.status === "active" ? { command: "/discuss pause", label: "暂停讨论", description: "停止讨论中的执行，继续后由主持人重新安排" }
       : { command: "/discuss resume", label: "继续讨论", description: "由主持人检查队列并继续" },
-    { command: "/discuss stop", label: "结束讨论", description: "房间回到自由协作，记录与结论保留" },
+    { command: "/discuss stop", label: "结束讨论", description: "记录与结论保留" },
   ] : [
     { command: "/goal ", label: "Goal", description: blocked || "设定目标，主持人持续推进；房间空闲时自动接着做", disabled: blocked },
-    { command: "/discuss ", label: "讨论", description: blocked || "主持人安排成员轮流发言，到上限或结束后回到自由协作", disabled: blocked },
+    { command: "/discuss ", label: "讨论", description: blocked || "主持人安排成员轮流发言，到上限或结束时停止", disabled: blocked },
   ];
   const query = mention_context.value?.query.toLocaleLowerCase() || "";
   return items.filter((item) => `${item.command} ${item.label} goal discuss 目标 讨论`.toLocaleLowerCase().includes(query))

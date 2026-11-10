@@ -5,11 +5,17 @@
 
 依赖 PyYAML（pip install pyyaml）。
 
-检查四项:
+“最新一集”按 分集记录.yaml 记到的最后一集算：正文里比它新的集是还没记账的稿子，
+只在开头提示“待记账”，不参与下面的计算。
+
+检查五项:
     1. 状态/ 下每个 YAML 能否解析；
-    2. 账里用中文引号“”括起的引文，是否真的出现在现定稿正文里（不含 正文/旧稿_* 目录）；
-    3. 线索.yaml 里“埋于”“最后一次动”的集号是否存在，按最新一集重算“停了几集”，与账上写的对比；
-    4. 账里“见某某.yaml”的指向，文件是否存在。
+    2. 分集记录与正文是否逐集对应（记了账却没有正文、中间漏记的集）；
+    3. 账里用中文引号“”括起的引文，是否真的出现在现定稿正文里（不含 正文/旧稿_* 目录）；
+    4. 线索.yaml 里“埋于”“最后一次动”的集号是否存在，按最新一集重算“停了几集”，与账上写的对比；
+    5. 账里“见某某.yaml”的指向，文件是否存在。
+
+退出码：0 全部通过；1 有问题；2 没有可检查的内容（缺文件夹、没有账本或没有正文）。
 """
 
 import logging
@@ -22,8 +28,10 @@ import yaml
 BOOK_DIR = Path(sys.argv[1] if len(sys.argv) > 1 else ".").resolve()
 STATE_DIR = BOOK_DIR / "状态"
 TEXT_DIR = BOOK_DIR / "正文"
+EPISODE_LOG_FILE = "分集记录.yaml"
+EXIT_NOTHING_TO_CHECK = 2
 MIN_QUOTE_LEN = 6  # 少于这个字数的引号内容多半是称呼、单字记号，不当引文查
-EPISODE_PATTERN = re.compile(r"第\s?(\d{1,2})\s?集")
+EPISODE_PATTERN = re.compile(r"第\s?(\d{1,3})\s?集")
 QUOTE_PATTERN = re.compile(r"“([^“”]+)”")
 REFERENCE_PATTERN = re.compile(r"([一-龥]+\.yaml)")
 STRIP_PATTERN = re.compile(r"[\s　*【】，。、；：！？,.;:!?‘’“”\"'（）()—…·]")
@@ -70,6 +78,36 @@ def walk_strings(node, trail=""):
         yield trail, node
 
 
+def parse_episode(value):
+    """从“第04集”一类文字里取出集号，取不到返回 None。"""
+    match = EPISODE_PATTERN.search(str(value or ""))
+    return int(match.group(1)) if match else None
+
+
+def recorded_episodes(data):
+    """返回分集记录里记过账的集号集合。"""
+    content = data.get(EPISODE_LOG_FILE) or {}
+    entries = content.get("分集记录", []) if isinstance(content, dict) else []
+    numbers = set()
+    for entry in entries or []:
+        number = parse_episode(entry.get("集数")) if isinstance(entry, dict) else None
+        if number is not None:
+            numbers.add(number)
+    return numbers
+
+
+def check_coverage(episodes, recorded):
+    """查分集记录与正文是否逐集对应，返回问题列表。"""
+    problems = [f"分集记录有第 {number:02d} 集，正文里没有这一集" for number in sorted(recorded - set(episodes))]
+    latest = max(recorded)
+    problems += [
+        f"第 {number:02d} 集有正文，分集记录漏记（账已记到第 {latest:02d} 集）"
+        for number in sorted(set(episodes) - recorded)
+        if number < latest
+    ]
+    return problems
+
+
 def check_quotes(data, episodes):
     """查引文是否出现在现正文里，返回问题列表。"""
     all_text = "".join(episodes.values())
@@ -85,24 +123,19 @@ def check_quotes(data, episodes):
     return problems
 
 
-def parse_episode(value):
-    """从“第04集”一类文字里取出集号，取不到返回 None。"""
-    match = EPISODE_PATTERN.search(value or "")
-    return int(match.group(1)) if match else None
-
-
-def check_threads(data, latest):
+def check_threads(data, episodes, latest):
     """查线索的集号和“停了几集”，返回问题列表。"""
     problems = []
-    threads = data.get("线索.yaml", {}).get("线索", [])
-    for item in threads:
-        name = item.get("线", "（无名）")[:24]
+    content = data.get("线索.yaml") or {}
+    threads = content.get("线索", []) if isinstance(content, dict) else []
+    for item in threads or []:
+        name = str(item.get("线", "（无名）"))[:24]
         for field in ("埋于", "最后一次动"):
             number = parse_episode(item.get(field))
-            if number is None or number > latest:
-                problems.append(f"{name}：{field}“{item.get(field)}”不是已写出的集号")
+            if number is None or number not in episodes or number > latest:
+                problems.append(f"{name}：{field}“{item.get(field)}”不是已记账的集号")
         last = parse_episode(item.get("最后一次动"))
-        recorded = re.search(r"停\s?(\d+)\s?集", item.get("停", ""))
+        recorded = re.search(r"停\s?(\d+)\s?集", str(item.get("停", "")))
         if last and recorded and int(recorded.group(1)) != latest - last:
             problems.append(f"{name}：账上写停 {recorded.group(1)} 集，按第 {latest} 集算应为 {latest - last} 集")
     return problems
@@ -127,19 +160,39 @@ def report(title, problems):
         log.info("  - %s", line)
 
 
-def main():
-    """运行全部检查，有问题时返回 1。"""
+def nothing_to_check(episodes, data, parse_errors, recorded):
+    """没有可检查的内容时返回原因，否则返回空字符串。"""
     if not STATE_DIR.is_dir() or not TEXT_DIR.is_dir():
-        log.info("%s 下没有 状态/ 和 正文/：参数须是作品文件夹", BOOK_DIR)
-        return 2
-    episodes = load_episodes()
-    latest = max(episodes) if episodes else 0
-    data, parse_errors = load_state()
-    log.info("正文：第 01—%02d 集；状态文件：%s", latest, "、".join(data))
+        return "没有 状态/ 和 正文/：参数须是作品文件夹"
+    if not episodes:
+        return "正文/ 里没有“第NN集_标题.md”"
+    if not data and not parse_errors:
+        return "状态/ 里没有账本"
+    if EPISODE_LOG_FILE in data and not recorded:
+        return f"{EPISODE_LOG_FILE} 里还没有记过任何一集"
+    return ""
+
+
+def main():
+    """运行全部检查：有问题返回 1，没有可检查的内容返回 2。"""
+    episodes = load_episodes() if TEXT_DIR.is_dir() else {}
+    data, parse_errors = load_state() if STATE_DIR.is_dir() else ({}, [])
+    recorded = recorded_episodes(data)
+    reason = nothing_to_check(episodes, data, parse_errors, recorded)
+    if reason:
+        log.info("%s：%s。尚无可检查内容，不算通过", BOOK_DIR, reason)
+        return EXIT_NOTHING_TO_CHECK
+    latest = max(recorded) if recorded else max(episodes)
+    pending = sorted(number for number in episodes if number > latest)
+    log.info("账记到第 %02d 集；状态文件：%s", latest, "、".join(data))
+    if pending:
+        log.info("待记账（不参与下面的计算）：%s", "、".join(f"第 {number:02d} 集" for number in pending))
+    checked = {number: text for number, text in episodes.items() if number <= latest}
     report("解析", parse_errors)
     sections = [
-        ("引文不在现正文里", check_quotes(data, episodes)),
-        ("线索集号与停了几集", check_threads(data, latest)),
+        ("分集记录与正文对应", check_coverage(episodes, recorded) if recorded else []),
+        ("引文不在现正文里", check_quotes(data, checked)),
+        ("线索集号与停了几集", check_threads(data, checked, latest)),
         ("文件指向", check_references(data)),
     ]
     for title, problems in sections:

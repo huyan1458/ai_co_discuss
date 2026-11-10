@@ -1,6 +1,6 @@
 # 讨论主持
 
-仅用于协作房间中的讨论主持任务，与 [discuss-host](../../discuss-host/SKILL.md) 的主持原则一起读；专家共用的讨论规则见 [本技能](../SKILL.md)。房间始终是自由协作（任务 `mode` 为 `free`）；有讨论任务时，`discussion_request.purpose` 区分主持与专家请求，`session.phase` 给出讨论阶段。没有 `discussion_request` 时读 [自由协作主持](../../discuss-host/references/free.md)。
+仅用于协作房间中的讨论主持任务，与 [discuss-host](../../discuss-host/SKILL.md) 的主持原则一起读；专家共用的讨论规则见 [本技能](../SKILL.md)。`discussion_request.purpose` 区分主持与专家请求，`session.phase` 给出讨论阶段。没有 `discussion_request` 时读 [请求与派活](../../discuss-host/references/room.md)。
 
 ## 讨论中的硬约束
 
@@ -14,7 +14,7 @@
 1. **核验执行**：首次读到新任务时用 `execution view ROOM 执行编号 --access-file FILE` 核对它仍有效；执行已失效就停止。
 2. **恢复现场**：先读 `room view`，结合任务的 `discussion_request.purpose`、`session.phase`、当前安排、`queued_turns`、`limits` 和执行状态判断；网站已有的安排优先于旧笔记，没有待处理的专家安排不等于主持人没有工作。首次接手时目标、背景、边界为空，先补全（见「首次接手」）。
 3. **读新内容**：新增的相关回答、用户留言及必要原文。智能调度有把握时会代你完成插话分流和无点名追问的衔接，没把握时才唤醒你。
-   若任务带 `scheduler_suggestions`，按请求与原消息编号读原文；未自动生效的建议不是既定安排，需要依据时用 `state decision ROOM DECISION_ID` 取回完整判断，再自行决定。“没有模型判断”或结果尚未核验时按字段如实处理。
+   任务带 `scheduler_suggestions` 时按主持技能的“智能调度的建议”处理。
 4. **判断并选一种交接**（见下表）。不要只回复“已就绪”或只写一段摘要就退出。
 5. **先保存进度，再提交交接**：判断、争点、下一步或阶段变化时用 `state set` 保存（见「保存进度」）；随后创建安排或收束。成功后本次写入资格即结束：立即结束，只回一句话，此后只回读核验，不再补 state 或输出总结。结果不明按参与技能核对原提交，不另创安排。
 
@@ -58,7 +58,7 @@
 
 ### 处理异常
 
-任务有 `host_workflows: true`（房主打开了“主持人完整权限”）时，讨论中出现的问题你自己处理，命令与边界见 [自由协作主持](../../discuss-host/references/free.md) 的“房间控制”：
+任务有 `host_workflows: true`（房主打开了“主持人完整权限”）时，讨论中出现的问题你自己处理，命令与边界见 [请求与派活](../../discuss-host/references/room.md) 的“房间控制”：
 
 - 专家失败、卡住或收到“已 X 分钟没有新输出”的通知：先用 `room events`、`execution view`、`host-control details` 读原因；它在跑长任务就等，偏了用 `steer` 插话，卡死用 `stop` 打断，偶发失败用 `retry`，模型不可用用 `model` 换，无法恢复就 `remove` 后 `invite` 换人（新专家按上文“名单变化”先补独立观点）。
 - 调整本轮顺序用 `host-control order`；名单变化后原排队作废，按最新 `turn roster` 重排。
@@ -84,7 +84,7 @@
 
 ## 工作流
 
-本次任务有 `workflow` 字段时，按其工作流说明安排发言：本地软件读 `skills` 末尾的 SKILL.md，API 主持人读本次系统提示中的正文。规则见 [自由协作主持](../../discuss-host/references/free.md) 的“工作流”一节；没有该字段时不按任何工作流做事。
+本次任务有 `workflow` 字段时，按其工作流说明安排发言：本地软件读 `skills` 末尾的 SKILL.md，API 主持人读本次系统提示中的正文。规则见 [请求与派活](../../discuss-host/references/room.md) 的“工作流”一节；没有该字段时不按任何工作流做事。
 
 ## 首次接手
 
@@ -96,16 +96,16 @@
 
 开场安排第一位专家前，先核对目标与上限：若按目标推算，本次轮次或时长上限显然不够完成（如要求报数到 10，3 人 3 轮只有 9 次发言），先发一条主持消息告诉用户冲突所在、上限内能做到哪一步，以及调整的办法（结束后在中间区点“继续讨论”设新上限）；然后在上限内照常推进，不等待答复，也不自行放宽上限。只写进 state 或简报不算告知。
 
-到限或目标完成后讨论结束、房间回到自由协作，是否再开启由用户决定：
+到限或目标完成后讨论结束、房间照常协作，是否再开启由用户决定（房主打开主持人完整权限时你也可以开启，见 [请求与派活](../../discuss-host/references/room.md) 的“房间控制”）：
 
-- 到限：用 `room limits ROOM --check --as 本人`（凭据方式遵循参与技能）处理。返回后房间已回到自由协作，本次执行随之换代，停止即可；之后用户的未点名留言照常交给你处理。用户要总结时，按「收束」写出最终 `moderation`。
+- 到限：用 `room limits ROOM --check --as 本人`（凭据方式遵循参与技能）处理。返回后讨论已结束，本次执行随之换代，停止即可；之后用户的未点名留言照常交给你处理。用户要总结时，按「收束」写出最终 `moderation`。
 - 目标提前完成：先保存有原文依据的结论、state 与简报，再 `room conclusion` 取得 `revision`，用 `room limits ROOM --done --conclusion <revision> --as 本人` 通知程序（未带、过期或有未处理留言、state 落后都会被拒绝）。
 
 ## 收束
 
 1. 保存有原文依据的最终判断、state 与简报（`until` 须覆盖实际读过的最新材料）；需要留主持说明时按参与技能写入。主持说明本身不结束讨论。
 2. `room conclusion ROOM` 申请收束状态，得到阻碍项 `blockers` 与 `revision`。
-3. 目标已完成且无阻碍时，用 `room limits ROOM --done --conclusion <revision> --as 本人` 收束（也可 `mode view ROOM` 取 revision 后 `mode done ROOM --revision <revision>`，效果相同）。到限则用 `room limits ROOM --check --as 本人`。有未处理留言、state 落后或仍有排队安排会被拒绝；状态变化后 revision 失效需重取。成功后房间回到自由协作，本次执行结束，不再补 chat 回执；已结束的讨论只有用户能重新开启。
+3. 目标已完成且无阻碍时，用 `room limits ROOM --done --conclusion <revision> --as 本人` 收束（也可 `mode view ROOM` 取 revision 后 `mode done ROOM --revision <revision>`，效果相同）。到限则用 `room limits ROOM --check --as 本人`。有未处理留言、state 落后或仍有排队安排会被拒绝；状态变化后 revision 失效需重取。成功后讨论结束，本次执行结束，不再补 chat 回执。
 
 最终总结按议题组织结论、不同意见、重要条件与未验证影响，不强制固定栏目。用户要求独立报告时再调用仓库的 discuss-report，报告不表示建议已获采纳。
 

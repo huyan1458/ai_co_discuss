@@ -7,6 +7,13 @@
       "y": 0
     },
     {
+      "id": "draft_brief",
+      "type": "host",
+      "label": "出任务书",
+      "x": 0,
+      "y": 0
+    },
+    {
       "id": "screenwriter",
       "type": "card",
       "card": "screenwriter",
@@ -68,11 +75,60 @@
       "label": "逐条裁定",
       "x": 0,
       "y": 0
+    },
+    {
+      "id": "read_through_facts",
+      "type": "card",
+      "card": "critic",
+      "x": 0,
+      "y": 0
+    },
+    {
+      "id": "read_through_reader",
+      "type": "card",
+      "card": "reader",
+      "x": 0,
+      "y": 0
+    },
+    {
+      "id": "reader_check",
+      "type": "card",
+      "card": "reader",
+      "x": 0,
+      "y": 0
+    },
+    {
+      "id": "stage_plan",
+      "type": "host",
+      "label": "阶段构思",
+      "x": 0,
+      "y": 0
+    },
+    {
+      "id": "stage_screenwriter",
+      "type": "card",
+      "card": "screenwriter",
+      "x": 0,
+      "y": 0
+    },
+    {
+      "id": "stage_critic",
+      "type": "card",
+      "card": "critic",
+      "x": 0,
+      "y": 0
+    },
+    {
+      "id": "stage_done",
+      "type": "host",
+      "label": "收进待办",
+      "x": 0,
+      "y": 0
     }
   ],
   "edges": [
     {
-      "source": "start",
+      "source": "draft_brief",
       "target": "screenwriter",
       "label": "任务书"
     },
@@ -97,7 +153,17 @@
     },
     {
       "source": "critic_people",
-      "target": "accept"
+      "target": "writer",
+      "label": "返工·不经主持人"
+    },
+    {
+      "source": "critic",
+      "target": "writer"
+    },
+    {
+      "source": "critic_people",
+      "target": "accept",
+      "label": "通过或需裁定"
     },
     {
       "source": "critic",
@@ -106,7 +172,7 @@
     {
       "source": "accept",
       "target": "writer",
-      "label": "返工"
+      "label": "验收不通过"
     },
     {
       "source": "accept",
@@ -115,7 +181,7 @@
     },
     {
       "source": "accept",
-      "target": "screenwriter",
+      "target": "draft_brief",
       "label": "下一集"
     },
     {
@@ -127,6 +193,66 @@
       "source": "read_through",
       "target": "ruling",
       "label": "他为什么不清单"
+    },
+    {
+      "source": "start",
+      "target": "stage_plan"
+    },
+    {
+      "source": "stage_plan",
+      "target": "stage_screenwriter",
+      "label": "这一阶段的坎"
+    },
+    {
+      "source": "stage_plan",
+      "target": "stage_critic",
+      "label": "会撑不住的地方"
+    },
+    {
+      "source": "stage_screenwriter",
+      "target": "stage_done"
+    },
+    {
+      "source": "stage_critic",
+      "target": "stage_done"
+    },
+    {
+      "source": "stage_done",
+      "target": "draft_brief"
+    },
+    {
+      "source": "accept",
+      "target": "reader_check",
+      "label": "按需·读感受"
+    },
+    {
+      "source": "reader_check",
+      "target": "accept"
+    },
+    {
+      "source": "accept",
+      "target": "read_through_facts",
+      "label": "阶段末通读"
+    },
+    {
+      "source": "accept",
+      "target": "read_through_reader",
+      "label": "阶段末通读"
+    },
+    {
+      "source": "read_through_facts",
+      "target": "ruling",
+      "label": "跨集对不上的事实"
+    },
+    {
+      "source": "read_through_reader",
+      "target": "ruling",
+      "label": "连读感受"
+    },
+    {
+      "source": "ruling",
+      "target": "stage_plan",
+      "label": "下一阶段"
     }
   ]
 }

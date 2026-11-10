@@ -348,10 +348,10 @@ test('API participants load the shared skills and map CLI commands onto their ro
   const expert = system_prompt({ participant: 'Qwen', role: 'member', mode: 'free', discussion_request: { purpose: 'discuss' } });
   const free = system_prompt({ participant: 'Grok', role: 'host', mode: 'free' });
   for (const prompt of [host, expert, free]) {
-    assert.match(prompt, /# 讨论参与（discuss-participant）/);
+    assert.match(prompt, /# 房间参与（discuss-participant）/);
     assert.doesNotMatch(prompt, /^name: discuss/m, 'skill frontmatter stays out of the prompt');
   }
-  assert.match(host, /# 讨论主持（discuss-host）/);
+  assert.match(host, /# 房间主持（discuss-host）/);
   assert.match(host, /turn create --plan-file → arrange_turns/);
   assert.doesNotMatch(expert, /# 讨论主持/);
   assert.doesNotMatch(expert, /arrange_turns/, 'experts are not told about host tools');
@@ -361,14 +361,14 @@ test('API participants load the shared skills and map CLI commands onto their ro
   assert.match(host, /turn roster → read_roster，读后 turn ask → ask_interjection/);
   assert.match(free, /# 开发协作/, 'an API free-room host cannot open references, so it gets the development reference inline');
   assert.doesNotMatch(expert, /# 开发协作/);
-  assert.match(free, /# 自由协作主持/);
+  assert.match(free, /# 请求与派活/);
   assert.doesNotMatch(free, /## 自动主持流程|# 讨论模式（discuss-session）/, 'a free-room host gets the host core and free-room pages, not the discussion pages');
   assert.match(host, /## 自动主持流程/);
   assert.match(host, /# 讨论主持/);
-  assert.match(expert, /# 讨论参与（discuss-participant）/);
+  assert.match(expert, /# 房间参与（discuss-participant）/);
   assert.match(expert, /# 讨论模式（discuss-session）/);
-  assert.doesNotMatch(expert, /# 自由协作房间/, 'discussion experts do not load the free-room page');
-  assert.match(free, /# 自由协作房间/);
+  assert.doesNotMatch(expert, /# 回答房间请求/, 'discussion experts do not load the free-room page');
+  assert.match(free, /# 回答房间请求/);
   assert.match(free, /continue/, 'free-room API participants get the free-room rules, which live in a reference');
   assert.doesNotMatch(expert, /填 continue/, 'discussion rooms do not carry the free-room rules');
 });

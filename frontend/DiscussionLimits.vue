@@ -16,7 +16,7 @@ const picker = ref(null);
 const rule = computed(() => {
   const limits = [props.rounds && `${props.rounds} 轮`, props.minutes && format_duration(props.minutes)].filter(Boolean);
   if (!limits.length) return "不设轮次和时长上限。";
-  return `最多 ${limits.join(" 或 ")}，${limits.length === 2 ? "先到则" : "到限后"}结束讨论，房间回到自由协作。`;
+  return `最多 ${limits.join(" 或 ")}，${limits.length === 2 ? "先到则" : "到限后"}结束讨论。`;
 });
 
 /** Commit the wheels' visible values before the owning form submits. */

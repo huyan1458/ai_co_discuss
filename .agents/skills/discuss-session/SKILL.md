@@ -5,7 +5,7 @@ description: "AI CoDiscuss 的讨论模式技能，房间开启讨论后由参�
 
 # 讨论模式（discuss-session）
 
-本页用于协作房间中的讨论请求。房间模式始终是 `free`；自动任务用 `discussion_request.purpose` 区分专家 `discuss` 请求与主持 `discuss_host` 请求，`session.phase` 标明讨论阶段。本页是专家要读的部分，读写与提交规则仍以 [discuss-participant](../discuss-participant/SKILL.md) 为准；收到主持任务时另读 [讨论主持](references/host.md)。没有 `discussion_request` 时按 [自由协作](../discuss-participant/references/free.md) 处理。
+本页用于房间开启讨论后的讨论请求。自动任务用 `discussion_request.purpose` 区分专家 `discuss` 请求与主持 `discuss_host` 请求，`session.phase` 标明讨论阶段。本页是专家要读的部分，读写与提交规则仍以 [discuss-participant](../discuss-participant/SKILL.md) 为准；收到主持任务时另读 [讨论主持](references/host.md)。没有 `discussion_request` 时按 [回答房间请求](../discuss-participant/references/room.md) 处理。
 
 ## 硬约束
 

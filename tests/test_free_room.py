@@ -16,6 +16,9 @@ from urllib.request import Request, urlopen
 from backend.server import DiscussionServer, init_database
 
 
+# shutdown() waits for the server loop to notice; the default 0.5 s poll made every test end half a second late.
+SERVER_POLL_SECONDS = 0.02
+
 class FreeRoomTests(unittest.TestCase):
     """Exercise the Python backend only; the Worker rejects free rooms in P1."""
 
@@ -26,7 +29,7 @@ class FreeRoomTests(unittest.TestCase):
         init_database(self.database, seed=False)
         self.server = DiscussionServer(("127.0.0.1", 0), self.database)
         self.server.local_site = False  # these tests exercise room credential rules, not the account-free local site
-        self.thread = threading.Thread(target=self.server.serve_forever, daemon=True)
+        self.thread = threading.Thread(target=self.server.serve_forever, kwargs={"poll_interval": SERVER_POLL_SECONDS}, daemon=True)
         self.thread.start()
         self.base = f"http://127.0.0.1:{self.server.server_port}"
         self.owner = uuid.uuid4().hex
@@ -523,11 +526,14 @@ class SingleMemberTests(FreeRoomTests):
     def test_interrupt_voids_the_running_turn_and_keeps_what_arrived_meanwhile(self):
         """Stopping a member voids its running turn; a message sent meanwhile waits for its next turn, with any new one."""
         self.say("一")
-        self.reserve()
+        stopped = self.reserve()[1]
         self.say("二")
         member_id = self.request(self.path)[1]["free"]["members"][0]["id"]
         view = self.request(f"{self.path}/members/{member_id}/interrupt", {}, self.owner)[1]
         self.assertEqual([item["status"] for item in view["requests"]], ["cancelled", "pending"])
+        free = self.request(self.path)[1]["free"]
+        self.assertEqual(free["requests"][0]["cancel_reason"], "user_stop")
+        self.assertEqual(next(item for item in free["executions"] if item["id"] == stopped["id"])["status"], "cancelled")
         self.say("三")
         execution = self.reserve()[1]
         self.assertEqual(len(execution["requests"]), 2)
@@ -1021,6 +1027,7 @@ class MultiMemberTests(FreeRoomTests):
         paused = self.request(f"{self.path}/discussion", {"action": "pause", "revision": view["revision"]}, self.owner)
         self.assertEqual(paused[0], 200, paused[1])
         self.assertEqual(self.answer(first["id"], token=self.member)[0], 409)
+        self.assertEqual(self.request(f"{self.path}/executions/{first['id']}", token=self.owner)[1]["status"], "cancelled")
         view = self.request(f"{self.path}/discussion")[1]
         self.assertEqual(self.request(f"{self.path}/discussion", {"action": "resume", "revision": view["revision"]}, self.owner)[0], 200)
         status, plan = self.arrange_session([{"expert": "Claude", "question": "取消测试"}])

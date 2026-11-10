@@ -679,12 +679,12 @@ function launch_input(input) {
   if (!value.room_id && !value.room?.submission_id) throw new Error('新房间须提供 room.submission_id；重试沿用原编号');
   if (value.room?.mode === 'free') {
     // P1: a free room is launched once, at creation, from the web page.
-    if (value.entry !== 'web' || value.room_id) throw new Error('自由协作房间目前只能在网页创建时启动');
+    if (value.entry !== 'web' || value.room_id) throw new Error('房间目前只能在网页创建时启动');
     const members = value.room.members;
     const names = members?.map(member => typeof member === 'string' ? member : member.name);
     const woken = Array.isArray(members) ? members.filter(woken_member).map(member => typeof member === 'string' ? member : member.name) : [];
     if ((!woken.length && !value.scheduler && !value.cwd) || !names?.length || new Set(names).size !== names.length || woken.some(name => !clients_of(name))) {
-      throw new Error('自由协作房间须选择至少 1 位支持自动接入的 AI 成员（或开启智能调度、指定项目目录），且不能重复');
+      throw new Error('房间须选择至少 1 位支持自动接入的 AI 成员（或开启智能调度、指定项目目录），且不能重复');
     }
   }
   if (value.access_file) {

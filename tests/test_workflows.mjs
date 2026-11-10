@@ -231,8 +231,8 @@ test('an API host reads the workflow for fitting requests beside the built-in de
   assert.match(host, /本房间启用了工作流「连载小说」（用途：按集连载小说）/);
   assert.match(host, /- 执笔（卡片 writer，执笔；在场；项目权限 可写）：写正文/);
   assert.match(host, /先出骨架。/);
-  assert.match(host, /# 开发协作（自由协作房间的主持人）/, 'requests the workflow does not fit still follow the development flow');
-  assert.match(system_prompt({ participant: 'DeepSeek', role: 'host', mode: 'free' }), /# 开发协作（自由协作房间的主持人）/);
+  assert.match(host, /# 开发协作/, 'requests the workflow does not fit still follow the development flow');
+  assert.match(system_prompt({ participant: 'DeepSeek', role: 'host', mode: 'free' }), /# 开发协作/);
   assert.doesNotMatch(system_prompt({ participant: 'DeepSeek', role: 'member', mode: 'free', workflow }), /先出骨架/);
   workflow.members[0].project_access = 'own';
   assert.match(system_prompt({ participant: 'DeepSeek', role: 'host', mode: 'free', workflow }), /项目权限 沿用原会话权限/);

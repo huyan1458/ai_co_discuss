@@ -3847,7 +3847,7 @@ async function goal_control(action) {
   await request_json(`/api/rooms/${room_id}/goal`, { action });
   if (state.room?.id !== room_id) return;
   await refresh_room();
-  show_toast({ pause: "Goal 已暂停，房间空闲时不再唤醒主持人", resume: "Goal 已继续", clear: "Goal 已结束，房间回到自由协作" }[action]);
+  show_toast({ pause: "Goal 已暂停，房间空闲时不再唤醒主持人", resume: "Goal 已继续", clear: "Goal 已结束，记录保留" }[action]);
 }
 
 /** Conclude the discussion and go on as a free room; every message and the conclusion stay. */
@@ -3857,7 +3857,7 @@ async function end_room_discussion() {
   await discussion_control(room_id, "end", session_id);
   if (state.room?.id !== room_id) return;
   await refresh_room();
-  show_toast("讨论已结束，房间回到自由协作，历史记录保留");
+  show_toast("讨论已结束，历史记录保留");
 }
 
 /** Download JSON through a temporary object URL without exposing its contents in the page. */
@@ -3896,7 +3896,7 @@ async function copy_member_join(name, with_credential = false) {
   const address = `${room_site()}/r/${room.id}?${params}`;
   const skills = `请调用 discuss-participant${room.host === name ? " 和 discuss-host" : ""}。`;
   let instruction;
-  if (member.access === "runner") instruction = `${skills}等待本机程序交付有效任务，按 task 中的 access_file 和 execution 凭据操作；自由协作的回答必须绑定本次有效 execution_id。不要另建定时任务；只处理本次有效执行，失效或撤销后停止提交。下载的持久成员私有文件不能替代自动执行凭据。`;
+  if (member.access === "runner") instruction = `${skills}等待本机程序交付有效任务，按 task 中的 access_file 和 execution 凭据操作；房间请求的回答必须绑定本次有效 execution_id。不要另建定时任务；只处理本次有效执行，失效或撤销后停止提交。下载的持久成员私有文件不能替代自动执行凭据。`;
   else if (with_credential) instruction = `${skills}凭证文本在下方：每条 codiscuss 命令都在同一命令内把它原样设为环境变量 DISCUSS_ACCESS（不回显；首条 room view 也要带，否则无法识别你），命令省略 --access-file；先执行 codiscuss room view ${room.id} --site ${room_site()} --as ${name}，随后立即执行 codiscuss member register ${room.id} --site ${room_site()} --as ${name} 完成注册（只需一次，会话 ID 由程序自动附带，不要自己填写），之后命令保持本站点、房间和身份。模型与思考强度在原软件中设置。${MANUAL_TRIGGER_INSTRUCTION}`;
   else instruction = `${skills}使用属于你的私有文件 member-${room.id}-${name}.json，由用户提供它在本机的实际完整路径；先执行 codiscuss room view ${room.id} --site ${room_site()} --as ${name} --access-file "实际完整路径"；随后立即执行 codiscuss member register ${room.id} --site ${room_site()} --as ${name} --access-file "实际完整路径" 完成注册（只需一次，会话 ID 由程序自动附带，不要自己填写），之后命令保持本站点、房间和身份。不要读取或公开文件中的 token；若用户给的是凭证文本而非文件，把它设为环境变量 DISCUSS_ACCESS（不要回显）并省略 --access-file。模型与思考强度在原软件中设置。${MANUAL_TRIGGER_INSTRUCTION}`;
   const credential = with_credential ? `

@@ -16,7 +16,7 @@
 
 | 意图 | 命令与关键语义 |
 | --- | --- |
-| 自由协作回答或讨论专家回答 | `message post --kind chat`；自动执行使用 `--execution 执行编号`，手动成员使用 `--request 请求编号` |
+| 房间请求的回答或讨论专家回答 | `message post --kind chat`；自动执行使用 `--execution 执行编号`，手动成员使用 `--request 请求编号` |
 | 主持说明 | `message post --kind moderation`，仅主持人在允许的房间状态下使用；该消息本身不结束讨论 |
 | 创建 / 维护话题 | `room create` / `room update`；成员请通过成员管理调整 |
 | 安排发言 / 取消 | `turn create` / `turn cancel`；同房间只能有一个未完成安排 |

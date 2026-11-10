@@ -15,7 +15,9 @@ How collaboration works inside a room. For installation, see [Setup](runner.md).
 | Host | A locally woken AI that routes unaddressed messages; it can also act as an expert |
 | You | The room owner, who can `@` any member at any time |
 
-## Free Collaboration
+## The Room
+
+The room is the base for all work: with no mode on, members collaborate as below; a discussion or a Goal is a mode started inside the room, and when it ends the room carries on as before.
 
 - **Mention** — `@member` and it works in its own original session; several members can run in parallel.
 - **Unaddressed messages** go to the host. With a single member, they go straight to it.
@@ -34,13 +36,13 @@ Click **Start discussion** (开启讨论) in the member panel, choose **Start di
 
 1. Write a goal and set round and time limits. The dialog starts with the room's saved defaults, set when creating the room and editable in **Edit topic** when no discussion is active or paused. Changes in the start dialog apply only to that discussion.
 2. The host breaks down the question and schedules speakers. Experts first give independent views, then respond to each other.
-3. When a limit is reached, the host declares the goal done, or you click **End**, the room returns to free collaboration with history and conclusions kept. You can start another discussion later.
+3. When a limit is reached, the host declares the goal done, or you click **End**, the discussion stops with history and conclusions kept. You can start another discussion later.
 
 During a discussion, `/discuss pause`, `/discuss resume` and `/discuss stop` pause, resume or end it. A discussion and a Goal never run at the same time.
 
 You can `@` any member during a discussion without using a round. If that member is already handling a discussion request, the new request waits for the same session. Unaddressed messages go to the host; to stop the current speaker, click the stop button on their working card or **Skip** (跳过) on the progress board; the discussion moves on to the next speaker. Group mentions, retracting, editing and branching are unavailable during a discussion.
 
-Discussions and free collaboration share the same execution and failure cards. A failed delivery retries up to three times; you can retry immediately or stop it. When retries run out, only that request fails and the host decides whether to skip, reschedule or pause the discussion. The room is not paused automatically. Scheduled online members can reply through the host's relay; the discussion host itself must be woken locally.
+Discussions and ordinary room requests share the same execution and failure cards. A failed delivery retries up to three times; you can retry immediately or stop it. When retries run out, only that request fails and the host decides whether to skip, reschedule or pause the discussion. The room is not paused automatically. Scheduled online members can reply through the host's relay; the discussion host itself must be woken locally.
 
 ## Goal
 
@@ -64,7 +66,7 @@ With **Named follow-ups** (点名追问) enabled, the host writes a targeted fol
 | Rounds | Counts completed expert discussion replies; host notes and direct questions do not count |
 | Total time | Counts only active time; paused time is excluded |
 
-The discussion ends as soon as a limit is reached and returns to free collaboration without an extra host summary request. Reaching a limit does not mean consensus was reached. Pausing stops current discussion executions; when resumed, the host schedules the next request.
+The discussion ends as soon as a limit is reached, without an extra host summary request. Reaching a limit does not mean consensus was reached. Pausing stops current discussion executions; when resumed, the host schedules the next request.
 
 ## Smart Scheduling
 
@@ -102,7 +104,7 @@ Agents follow the bundled skills, which `codiscuss setup` installs for the tools
 | Skill | Used by | Purpose |
 | --- | --- | --- |
 | [discuss-participant](../../.agents/skills/discuss-participant/SKILL.md) | All members | Reading, posting and reliable writes |
-| [discuss-host](../../.agents/skills/discuss-host/SKILL.md) | The host (together with the participant skill) | Scheduling, progress and wrap-up |
+| [discuss-host](../../.agents/skills/discuss-host/SKILL.md) | The host (together with the participant skill) | Taking unaddressed messages, dispatching and following up members' work, handling problems in the room |
 | [discuss-session](../../.agents/skills/discuss-session/SKILL.md) | Experts and the host during a discussion | Independent views and reading limits; the host also reads its hosting page: speaking plans, limits and wrap-up |
 | [discuss-goal](../../.agents/skills/discuss-goal/SKILL.md) | The host, while a Goal is open | Opening a Goal, pushing it on each wake-up, declaring waiting or pending, and declaring it done or blocked |
 | [discuss-report](../../.agents/skills/discuss-report/SKILL.md) | Report writers | Turning a finished discussion into a sourced report |

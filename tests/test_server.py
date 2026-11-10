@@ -18,6 +18,9 @@ from urllib.request import Request, urlopen
 from backend.server import DiscussionServer, connect_db, create_room, init_database, require_room
 
 
+# shutdown() waits for the server loop to notice; the default 0.5 s poll made every test end half a second late.
+SERVER_POLL_SECONDS = 0.02
+
 class DiscussionTests(unittest.TestCase):
     """Verify the observable POC workflow using isolated SQLite databases."""
 
@@ -35,7 +38,7 @@ class DiscussionTests(unittest.TestCase):
             init_database(self.database, seed=False)
             self.server = DiscussionServer(("127.0.0.1", 0), self.database)
             self.server.local_site = False  # these tests exercise room credential rules, not the account-free local site
-            self.thread = threading.Thread(target=self.server.serve_forever, daemon=True)
+            self.thread = threading.Thread(target=self.server.serve_forever, kwargs={"poll_interval": SERVER_POLL_SECONDS}, daemon=True)
             self.thread.start()
             self.base = f"http://127.0.0.1:{self.server.server_port}"
         self.room = self.request("/api/rooms", {"title": "测试议题", "goal": "保持完整记录"})[1]
@@ -105,27 +108,6 @@ class DiscussionTests(unittest.TestCase):
                 current = self.request(path)[1]["free"]["requests"]
                 self.assertEqual([(item["purpose"], item["status"]) for item in current if item["message_id"] == message], [("group", "pending")])
                 self.assertEqual(self.request(url, {"action": "host"})[0], 200)
-
-    def test_user_stop_keeps_messages_sent_while_the_member_worked(self):
-        """Stopping a member voids its live execution only; a message sent meanwhile waits for its next turn."""
-        names = ["Claude", "Codex"]
-        status, room = self.request("/api/rooms", {"title": "停止保留追问", "mode": "free", "host": "Claude",
-            "members": [{"name": name, "access": "runner", "token": self.member_tokens[name]} for name in names]})
-        self.assertEqual(status, 201, room)
-        path = f"/api/rooms/{room['id']}"
-        def say(text):
-            return self.request(path + "/messages", {"author": "用户", "text": text, "to": ["Codex"],
-                                                     "submission_id": uuid.uuid4().hex})[1]["message"]["id"]
-        first = say("先做这个")
-        codex = next(item for item in self.request(path + "/inbox")[1]["members"] if item["name"] == "Codex")
-        execution = self.request(path + "/executions", {"member_id": codex["id"], "client_id": uuid.uuid4().hex})[1]
-        follow_up = say("再补充一句")
-        self.assertEqual(self.request(f"{path}/members/{codex['id']}/interrupt", {})[0], 200)
-        view = self.request(path)[1]["free"]
-        requests = {item["message_id"]: item for item in view["requests"]}
-        self.assertEqual([requests[first]["status"], requests[first]["cancel_reason"]], ["cancelled", "user_stop"])
-        self.assertEqual(requests[follow_up]["status"], "pending")
-        self.assertEqual(next(item for item in view["executions"] if item["id"] == execution["id"])["status"], "cancelled")
 
     def test_runner_reports_delivery_and_how_a_voided_execution_stopped(self):
         """The page learns how each execution reached its software and whether a stop really ended it."""
@@ -958,12 +940,10 @@ class DiscussionTests(unittest.TestCase):
         self.assertEqual(status, 200, result)
         return result
 
-    def test_answers_need_no_speaking_floor(self):
+    def test_answers_bind_to_their_request_and_other_messages_leave_the_plan_open(self):
         """Answers bind to their issued request; ordinary messages do not finish the discussion plan."""
         self.configure_host()
         base = f"/api/rooms/{self.room['id']}"
-        self.assertNotIn("floor", self.request(base)[1])
-        self.assertEqual(self.request(base + "/floor")[0], 404)
         plan = self.schedule()[1]["turn"]
         answer = {"author": "Antigravity", "kind": "chat", "request_ids": [plan["member_request_id"]],
                   "text": "被点名者的真实回答", "submission_id": "floor-answer"}

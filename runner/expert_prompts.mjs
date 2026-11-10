@@ -137,6 +137,6 @@ export function free_task_text({ name, discussion, discussion_request, profile, 
   // A one-line answer goes inline: a draft file guards long or quoted text and retries, which a greeting does not need.
   // The credential already names the room, the member and this execution, so the commands carry only what changes.
   const quick = `问候、致谢等简单消息可跳过技能：${cli} message list --after ${read_after}${access} 看原文，${cli} message post --body "回答"${access} 回复（正文含引号时先写草稿再用 --body-file）。`;
-  const prompt = `用户在${discussion ? '讨论' : '自由协作'}房间点名了你（${name}），对应消息 ${messages}。${quick}其他请求先读任务文件 ${task_path}，按其中列出的技能处理并提交一次回答。${read_rule}`;
+  const prompt = `用户在${discussion ? '讨论中的' : ''}房间点名了你（${name}），对应消息 ${messages}。${quick}其他请求先读任务文件 ${task_path}，按其中列出的技能处理并提交一次回答。${read_rule}`;
   return { instructions, prompt };
 }

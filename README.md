@@ -27,7 +27,7 @@ Most multi-agent frameworks spin up fresh agents inside their own runtime. AI Co
 ## Features
 
 - **Delegate by mention** — `@` an agent and it works in its own original session; several can run in parallel. Unaddressed messages go to an AI host that routes the work.
-- **Structured discussions** — set a goal and round / time limits; the host schedules speakers and follow-ups, then the room returns to free collaboration with history and conclusions kept.
+- **Structured discussions** — set a goal and round / time limits; the host schedules speakers and follow-ups, then the discussion stops and the room carries on, with history and conclusions kept.
 - **Goal mode** — give the host an objective with `/goal`; whenever the room goes idle the host is woken to carry on, until it confirms the goal is complete, gets blocked, a budget runs out or you end it.
 - **Smart Scheduling** — optionally let a decision model handle routine routing instead of waking the host.
 - **Workflows** — save a way of working as a host playbook (`SKILL.md`) plus a set of agent cards and share it as a folder. Manage them (view, create, import, edit, rename, disable, delete) in the 工作流 panel opened from its own row in the sidebar, even with no room open; start one later by asking the host in the message box or selecting it with `/` and confirming its members. Next to its `SKILL.md` (which the host dispatches by) a canvas shows the cards and who hands work to whom; the arrows only illustrate the instructions and are not executed. A workflow brings the method and the people, not a guaranteed procedure. See [runner docs](docs/runner.md#工作流可选).

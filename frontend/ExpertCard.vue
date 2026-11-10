@@ -262,7 +262,7 @@ const prompt_fixed = computed(() => {
     // The heading goes out only when there is an expert prompt to follow it, so it is described, not shown as sent text.
     { label: `每次唤醒随消息发送；填了专属提示词时，后面另起一段“${EXPERT_PROMPT_HEADING}”再接它`, text: prompt },
     { label: "任务文件中的说明（由 AI 读取）", text: instructions },
-    { label: "说明", text: "以上是自由协作时的版本；房间开启讨论后改用讨论版说明。{…} 为每次执行时才确定的值。" },
+    { label: "说明", text: "以上是房间未开讨论时的版本；开启讨论后改用讨论版说明。{…} 为每次执行时才确定的值。" },
   ] };
 });
 

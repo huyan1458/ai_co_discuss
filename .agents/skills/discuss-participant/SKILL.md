@@ -1,9 +1,9 @@
 ---
 name: discuss-participant
-description: "AI CoDiscuss 的通用参与技能，所有参与者（包括主持人）使用。在自由协作房间完成被点名的请求，或在讨论中独立判断、回应论证，并可靠保存回答；支持自动任务与手动接入。编辑技能本身不启动讨论。"
+description: "AI CoDiscuss 的通用参与技能，所有参与者（包括主持人）使用。在房间里完成交给你的请求，或在讨论中独立判断、回应论证，并可靠保存回答；支持自动任务与手动接入。编辑技能本身不启动讨论。"
 ---
 
-# 讨论参与（discuss-participant）
+# 房间参与（discuss-participant）
 
 **主要任务是把被交给你的问题想清楚：理解问题，检验证据与假设，回应其他人的论证，形成或修正自己的判断。** 网站操作负责保存这份工作，不应代替思考或成为发言主题。
 
@@ -11,12 +11,12 @@ description: "AI CoDiscuss 的通用参与技能，所有参与者（包括主�
 
 ## 先确认你在哪个场景
 
-本页是各场景共用的规则；再按场景读一份对应说明（任务已列出要读的文件时直接读它们）。
+房间是所有工作的底座：没开任何模式时就是房间本身；讨论和 Goal 是房间里临时开启的模式，结束后房间照常协作。任务里的 `mode: "free"` 是沿用的字段名，指房间本身，不表示某种模式。本页是各场景共用的规则；再按场景读一份对应说明（任务已列出要读的文件时直接读它们）。
 
 | 场景 | 读 |
 |---|---|
-| 自由协作请求（任务含 `mode: "free"`，且没有 `discussion_request`） | [自由协作](references/free.md) |
-| 协作房间中的讨论请求（任务含 `mode: "free"` 和 `discussion_request`，或手动成员看到自己的讨论请求） | 独立技能 [discuss-session](../discuss-session/SKILL.md) |
+| 房间里的请求（默认；任务没有 `discussion_request`，Goal 进行中也是） | [回答房间请求](references/room.md) |
+| 讨论中的请求（任务有 `discussion_request`，或手动成员看到自己的讨论请求） | 独立技能 [discuss-session](../discuss-session/SKILL.md) |
 | 手动成员注册、原会话或手动回答 | [手动接入](references/manual.md) |
 | 首次某类写入、超长正文、附件或出错 | [写入与恢复](references/writing.md) |
 

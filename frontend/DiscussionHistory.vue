@@ -43,12 +43,12 @@ function toggle(id) {
 
 <template>
   <section class="merged-section discussion-history" aria-label="讨论记录">
-    <div class="page-heading"><div><h2>讨论记录</h2><p>每场讨论及其结束时的结论，最新的在上；自由协作的消息按段汇总。</p></div></div>
+    <div class="page-heading"><div><h2>讨论记录</h2><p>每场讨论及其结束时的结论，最新的在上；讨论之外的消息按段汇总。</p></div></div>
     <p v-if="!room.discussions?.length" class="fine-print">还没有开启过讨论。</p>
     <ol class="history-timeline">
       <li v-for="item in segments" :key="item.key" :class="`is-${item.kind}`">
         <span class="history-dot" aria-hidden="true"></span>
-        <p v-if="item.kind === 'free'" class="history-free">自由协作 · {{ item.count }} 条消息</p>
+        <p v-if="item.kind === 'free'" class="history-free">讨论之外 · {{ item.count }} 条消息</p>
         <article v-else class="history-discussion">
           <header>
             <h3><small>讨论 {{ item.number }}</small>{{ item.goal || '未填写目标' }}</h3>

@@ -1,6 +1,6 @@
-# 自由协作主持
+# 请求与派活
 
-仅用于自由协作房间的主持人（任务 `role` 为 `host`）。成员的回答与提交方式见参与技能的自由协作一节。
+用于房间主持人（任务 `role` 为 `host`）处理没有 `discussion_request` 的请求：房间未开任何模式时、Goal 进行中时都是这里。成员的回答与提交方式见参与技能的 [回答房间请求](../../discuss-participant/references/room.md)。
 
 ## 请求类型
 
@@ -13,13 +13,11 @@
 - `goal_start`、`goal_continue`：用户开启了 Goal，按技能 [discuss-goal](../../discuss-goal/SKILL.md) 处理。
 - `discuss_start`：用户发了 `/discuss`，等你补全讨论目标后开启讨论。消息带了文本时以原文为准，只整理措辞；没带时从最近对话提炼，提炼不出明确的讨论问题就不开启，直接回答并说明缺什么。开启：`run start ROOM --request 请求编号 --goal-file 草稿`，上限用房间默认值，你不设置。然后照常简短回答；之后程序会给你讨论主持任务，按技能 [discuss-session](../../discuss-session/SKILL.md) 的 [讨论主持](../../discuss-session/references/host.md) 安排发言。
 
-先 `room view` 看成员与状态，再决定由谁处理。
-
-任务若有 `scheduler_suggestions`，按其中的 `request_id`、`message_id` 先读原问题；`applied:false` 表示未自动生效，`actual_action:unverified` 表示动作结果尚未核验。需要依据时用 `state decision ROOM DECISION_ID` 读取 `decision_id` 对应的完整判断，再自行决定；“没有模型判断”或没有记录编号时，不假定模型已经给过建议。
+先 `room view` 看成员与状态，再决定由谁处理。任务带 `scheduler_suggestions` 时按主持技能的“智能调度的建议”处理。
 
 ## 派活
 
-- 需要他人时在回答中加 `--to 显示名`（可重复，不能点名自己），写明各自负责的文件或模块；不需要他人时不加，本次即结束。显示名是 `room view` 中 `members[].label`（如 `Gemini`），正文称呼也用它，不写 `name`（成员 ID，如 `Antigravity`）。
+- 需要他人时在回答中加 `--to 显示名`（可重复，不能点名自己），写明各自负责的文件或模块；不需要他人时不加，本次即结束。
 - 派出的工作无论点名几位，全部结束（含失败）后都会交回你，由你接着安排或汇总。只点名一位、它的回答已足以直接给用户（简单问答、无需验收）时可加 `--no-handoff`（API 为 `no_handoff: true`），做完不再交回；失败仍交回你。要评审、验证或接着安排的不要加。
 - 发现还要继续、但本次执行不便接着做时（如等成员的结果之外还要复查、分几步推进），回答加 `--continue 继续做什么`（API 为 `continue`）：房间没有其他进行中的工作时，程序再唤醒你一次。你下次回答不带它、或用户发了新消息，就取消。不要用它等用户回复；需要用户定的事直接在回答里问。它只管一次续跑；用户开启了 Goal 时由 Goal 负责空闲续跑，不必再加。
 - 需要预先指定实现后的只读评审时，先读 `review roster ROOM`，再在派实现的 `message post` 中带 `--next-review NAME --review-scope 范围 --review-roster REVISION`；评审者不能是本批实现者。授权与实现任务同时保存，自动要求该批交回主持人。候选目前限程序启动的 Codex CLI；没有合格成员时读取结果给出原因。

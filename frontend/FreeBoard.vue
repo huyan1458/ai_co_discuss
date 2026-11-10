@@ -248,7 +248,7 @@ watch(() => room.value.id, () => { starting.value = false; });
 
 <template>
   <div class="progress-board is-docked">
-    <header class="pb-header"><strong>{{ discussion ? '讨论进度' : '自由协作' }}</strong><span class="pb-mode">{{ host ? `${bridge.display_name(host.name)} 主持` : '无主持人' }}</span></header>
+    <header class="pb-header"><strong>{{ discussion ? '讨论进度' : '房间' }}</strong><span class="pb-mode">{{ host ? `${bridge.display_name(host.name)} 主持` : '无主持人' }}</span></header>
     <ProgressBoard v-if="discussion" />
     <section v-else class="pb-status" :class="`is-${status.tone}`" aria-label="房间状态">
       <div class="pb-status-line"><span class="pb-dot"></span><strong role="status">{{ status.title }}</strong>
@@ -283,7 +283,7 @@ watch(() => room.value.id, () => { starting.value = false; });
           :title="goal.status === 'active' ? '房间空闲时不再唤醒主持人，正在进行的工作不受影响' : '继续推进，房间空闲时唤醒主持人'"
           :loading="pending === 'goal_control'" :disabled="Boolean(pending)" @click="act('goal_control', goal.status === 'active' ? 'pause' : 'resume')" />
         <UButton label="编辑" icon="i-lucide-pencil" size="xs" color="neutral" variant="outline" :disabled="Boolean(pending)" @click="goal_dialog = true" />
-        <UButton label="结束" icon="i-lucide-square" size="xs" color="neutral" variant="outline" title="结束 Goal，房间回到自由协作；正在进行的工作不受影响"
+        <UButton label="结束" icon="i-lucide-square" size="xs" color="neutral" variant="outline" title="结束 Goal，主持人不再自动推进；正在进行的工作不受影响"
           :loading="pending === 'goal_control'" :disabled="Boolean(pending)" @click="act('goal_control', 'clear')" />
       </div>
     </section>
@@ -316,7 +316,7 @@ watch(() => room.value.id, () => { starting.value = false; });
     </section>
     <section v-if="!room.archived && !discussion && !goal" class="pb-actions pb-start-actions" aria-label="操作">
       <div class="pb-start-pair">
-        <UButton icon="i-lucide-messages-square" label="开启讨论" size="sm" color="neutral" variant="outline" class="pb-action pb-restart" title="由主持人推进成员轮流发言，到上限或结束后房间回到自由协作" :disabled="!can_start" @click="starting = true" />
+        <UButton icon="i-lucide-messages-square" label="开启讨论" size="sm" color="neutral" variant="outline" class="pb-action pb-restart" title="由主持人推进成员轮流发言，到上限或结束时停止" :disabled="!can_start" @click="starting = true" />
         <UButton icon="i-lucide-target" label="开启 Goal" size="sm" color="neutral" variant="outline" class="pb-action pb-restart" title="主持人持续推进一个目标：房间空闲时自动接着做，直到完成、卡住或你结束" :disabled="!can_start" @click="goal_dialog = true" />
       </div>
       <p v-if="!can_start" class="pb-free-note">开启讨论或 Goal 需要一位由本机唤醒的 AI 主持人。</p>

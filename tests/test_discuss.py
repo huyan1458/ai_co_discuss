@@ -17,6 +17,9 @@ from urllib.request import Request, urlopen
 from backend.server import DiscussionServer, init_database
 from runner import discuss
 
+# shutdown() waits for the server loop to notice; the default 0.5 s poll made every test end half a second late.
+SERVER_POLL_SECONDS = 0.02
+
 ROOT = Path(__file__).resolve().parent.parent
 
 
@@ -36,7 +39,7 @@ class CliTests(unittest.TestCase):
         database = Path(cls.directory.name) / "cli.sqlite3"
         init_database(database, seed=False)
         cls.server = DiscussionServer(("127.0.0.1", 0), database)
-        cls.thread = threading.Thread(target=cls.server.serve_forever, daemon=True)
+        cls.thread = threading.Thread(target=cls.server.serve_forever, kwargs={"poll_interval": SERVER_POLL_SECONDS}, daemon=True)
         cls.thread.start()
         cls.base = f"http://127.0.0.1:{cls.server.server_port}"
 

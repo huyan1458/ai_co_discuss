@@ -85,19 +85,6 @@ test("only API routes invoke the Function", async (test_case) => {
   assert.match(await readFile(join(output, "404.html"), "utf8"), /页面不存在/);
 });
 
-test("Pages binds D1 directly and has no external Worker service dependency", async () => {
-  const config = JSON.parse(await readFile(join(PROJECT_ROOT, "wrangler.jsonc"), "utf8"));
-  assert.equal(config.pages_build_output_dir, "./dist/pages");
-  assert.equal(config.services, undefined);
-  assert.equal(config.main, undefined);
-  assert.equal(config.d1_databases.length, 1);
-  assert.equal(config.d1_databases[0].binding, "DB");
-  assert.ok(config.d1_databases[0].database_id);
-  const scripts = JSON.parse(await readFile(join(PROJECT_ROOT, "package.json"), "utf8")).scripts;
-  assert.match(scripts.deploy, /npm run build && wrangler pages deploy/);
-  assert.equal(scripts["deploy:pages"], "npm run deploy");
-});
-
 /** Call a website path, with optional extra headers; answers whatever status the website gives. */
 async function call(f, path, payload, headers = {}) {
   const response = await worker.fetch(new Request(`https://discussion.test${path}`, {

@@ -18,4 +18,4 @@
 
 ## 手动回答
 
-本技能不创建原生定时任务。手动成员在用户或主持人触发后，先读 `room view ROOM`，从 `free.requests` 找到属于自己的待处理请求，再按 [自由协作](free.md) 或技能 [discuss-session](../../discuss-session/SKILL.md) 的阅读边界回答，并用 `--kind chat --request 请求编号` 关联。没有自己的待处理请求时不发言、不接管主持。
+本技能不创建原生定时任务。手动成员在用户或主持人触发后，先读 `room view ROOM`，从 `free.requests` 找到属于自己的待处理请求，再按 [回答房间请求](room.md) 或技能 [discuss-session](../../discuss-session/SKILL.md) 的阅读边界回答，并用 `--kind chat --request 请求编号` 关联。没有自己的待处理请求时不发言、不接管主持。

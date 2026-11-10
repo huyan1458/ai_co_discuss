@@ -99,10 +99,10 @@ onMounted(() => {
 onBeforeUnmount(() => window.clearInterval(connection_timer));
 
 // After creation the room may stay free, open a discussion or open a goal: one choice, since they exclude each other.
-const DRIVE_OPTIONS = [{ value: "free", label: "自由协作" }, { value: "discussion", label: "开启讨论" }, { value: "goal", label: "开启 Goal" }];
+const DRIVE_OPTIONS = [{ value: "free", label: "不开启" }, { value: "discussion", label: "开启讨论" }, { value: "goal", label: "开启 Goal" }];
 const DRIVE_HINTS = {
   free: "成员被点名时工作，做完就停下等你。讨论和 Goal 都可以建房后再开启。",
-  discussion: "主持人安排成员轮流发言，到上限或结束后回到自由协作。",
+  discussion: "主持人安排成员轮流发言，到上限或结束时停止。",
   goal: "主持人持续推进一个目标，房间空闲时自动接着做，直到完成、卡住或你结束。",
 };
 const drive = computed(() => discussing.value ? "discussion" : goal.value ? "goal" : "free");

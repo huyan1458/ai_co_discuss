@@ -162,9 +162,9 @@ export function free_task_files(config, member, execution, binding, { session = 
   const skills = discussion_request || direct_question
     ? ['discuss-participant/SKILL.md', 'discuss-session/SKILL.md',
       ...member.role === 'host' ? ['discuss-host/SKILL.md', 'discuss-session/references/host.md'] : [],
-      ...direct_question ? ['discuss-participant/references/free.md'] : []]
-    : ['discuss-participant/SKILL.md', 'discuss-participant/references/free.md',
-      ...member.role === 'host' ? ['discuss-host/SKILL.md', 'discuss-host/references/free.md'] : []];
+      ...direct_question ? ['discuss-participant/references/room.md'] : []]
+    : ['discuss-participant/SKILL.md', 'discuss-participant/references/room.md',
+      ...member.role === 'host' ? ['discuss-host/SKILL.md', 'discuss-host/references/room.md'] : []];
   // The host works a goal while it is open, and also handles the request that opens it or the wrap-up after it ends.
   const goal_task = member.role === 'host' && (['active', 'paused'].includes(goal?.status)
     || requests.some(item => ['goal_start', 'goal_continue'].includes(item.purpose)));

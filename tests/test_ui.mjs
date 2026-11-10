@@ -73,7 +73,9 @@ function mention_fixture() {
   const free_members = ref([{ name: "Codex" }, { name: "Claude-review" }]);
   const editor = { value: "", selectionStart: 0, selectionEnd: 0, focus() {}, setSelectionRange(start, end) { this.selectionStart = start; this.selectionEnd = end; } };
   const context = vm.createContext({ computed, ref, watch, nextTick, text, room, free, free_members, ENTER_SENDS: true,
-    view: ref({ tab: "messages" }), prompt: ref({ textareaRef: editor }), bridge: { display_name: name => name } });
+    view: ref({ tab: "messages" }), prompt: ref({ textareaRef: editor }), bridge: { display_name: name => name },
+    // No browser editing command here: replacing a draft falls back to writing the text directly.
+    document: { execCommand: () => false } });
   const start = discussion_source.indexOf("const mention_context =");
   const end = discussion_source.indexOf("/** End a structured excerpt", start);
   vm.runInContext(discussion_source.slice(start, end) + "\nglobalThis.mention_state = { context: mention_context, members: mention_members, active: mention_active };", context);
@@ -412,7 +414,7 @@ function expert_card_fixture(initial_preset = null) {
     cleanup: () => cleanups.forEach((callback) => callback()) };
 }
 
-test('expert card offers project permissions for CLI and API members and shows that web experts never see project files', () => {
+test('expert card offers project permissions for CLI and API members', () => {
   const f = expert_card_fixture();
   const project = () => vm.runInContext('facts.value.find(fact => fact.label === "项目")?.value', f.context);
   f.view.value.launch.workspace = { project_access: 'write' };
