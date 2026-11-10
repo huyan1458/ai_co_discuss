@@ -2438,7 +2438,8 @@ function copy_message(message) { act("copy", `${view.value.room_site}/r/${room.v
               <template v-else-if="option.workflow">
                 <UIcon name="i-lucide-network" class="channel-mention-file-icon" />
                 <span :class="{ 'channel-mention-disabled': option.disabled && !option.enabled }">{{ option.workflow.label }}</span>
-                <small :title="option.workflow.description">{{ option.enabled ? '已启用' : option.disabled || option.workflow.description }}</small>
+                <small class="channel-mention-brief" :title="option.workflow.description">{{ !option.enabled && option.disabled || option.workflow.description }}</small>
+                <b v-if="option.enabled" class="channel-mention-tag">已启用</b>
               </template>
               <template v-else-if="option.skill">
                 <UIcon name="i-lucide-sparkles" class="channel-mention-file-icon" />

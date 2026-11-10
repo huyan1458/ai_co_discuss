@@ -373,7 +373,22 @@ defineExpose({ fit });
 /** A double click on empty canvas (not a card, an arrow or a floating tool) resets the view to the whole workflow. */
 function pane_double_click(event) {
   if (event.target.closest(".vue-flow__node, .vue-flow__edge, .vue-flow__panel, .vue-flow__edge-labels, .workflow-edge-note")) return;
+  reset_view();
+}
+
+function reset_view() {
   instance.value?.fitView({ ...fit_options(), duration: 250 });
+}
+
+/** A middle-button double press anywhere on the canvas resets the view too (browsers fire no dblclick for it). */
+const MIDDLE_BUTTON = 1, DOUBLE_PRESS_MS = 400;
+let middle_pressed_at = 0;
+function middle_press(event) {
+  if (event.button !== MIDDLE_BUTTON) return;
+  // Keep the browser's autoscroll from starting on the canvas.
+  event.preventDefault();
+  if (event.timeStamp - middle_pressed_at < DOUBLE_PRESS_MS) { middle_pressed_at = 0; reset_view(); return; }
+  middle_pressed_at = event.timeStamp;
 }
 
 // ── Undo and redo: snapshots of the canvas and its cards; a drag counts once it ends. ──
@@ -436,7 +451,7 @@ function drag_stop() { dragging = false; commit(); }
 </script>
 
 <template>
-  <div ref="canvas_element" class="workflow-canvas" @dblclick="pane_double_click">
+  <div ref="canvas_element" class="workflow-canvas" @dblclick="pane_double_click" @pointerdown.capture="middle_press">
     <VueFlow v-model:nodes="nodes" v-model:edges="edges" :min-zoom="0.2" :max-zoom="1.8" :delete-key-code="['Delete', 'Backspace']" :zoom-on-double-click="false"
       :is-valid-connection="valid_connection" elevate-nodes-on-select @connect="connect" @connect-start="connect_start" @connect-end="connect_end"
       @node-drag-start="drag_start" @node-drag-stop="drag_stop" @pane-ready="ready" @nodes-initialized="fit_once">

@@ -1,6 +1,7 @@
 <script setup>
 import { computed, inject, ref } from "vue";
 import ChannelDirectory from "./ChannelDirectory.vue";
+import { use_workflow_library } from "./workflow-library.js";
 
 /** The room sidebar, shared by the docked desktop column and the tablet and phone drawer. */
 const props = defineProps({ tabs: { type: Array, required: true } });
@@ -8,13 +9,25 @@ const emit = defineEmits(["select", "manage", "create", "create-folder", "manage
 const { view, bridge, field } = inject("discussion");
 const author = field("author-select");
 const tools_open = ref(true);
+const workflows_open = ref(true);
+const library = use_workflow_library();
+const { workflows, available, draft, saved_id, page_open, renaming, rename_text } = library;
+
+/** Show a workflow on the page and close the drawer. */
+function open_workflow(id) {
+  library.select(id);
+  emit("workflows");
+}
+
+/** New or import from the heading's "+", then close the drawer once the page shows the draft. */
+const add_items = library.add_items.map((group) => group.map((item) => ({ ...item, onSelect: () => { item.onSelect(); emit("workflows"); } })));
 const app_version = __APP_VERSION__;
 // The open tab, or null without a room: the links (and the menu) rebuild only when it changes, not on every view publish.
-const link_state = computed(() => view.value.room ? view.value.tab : null);
+const link_state = computed(() => view.value.room ? `${view.value.tab}:${page_open.value}` : null);
 // The room's views wait for a room.
 const view_links = computed(() => { const tab = link_state.value; return props.tabs.map((item) => {
   const usable = tab !== null;
-  return { ...item, active: usable && view.value.tab === item.value, disabled: !usable || item.disabled, onSelect: () => emit("tab", item.value) };
+  return { ...item, active: usable && !page_open.value && view.value.tab === item.value, disabled: !usable || item.disabled, onSelect: () => emit("tab", item.value) };
 }); });
 /** The footer's second line: the account call to action until signed in, then the site connection. */
 const account_status = computed(() => {
@@ -37,8 +50,31 @@ const account_status = computed(() => {
     </header>
     <div v-keep-reading class="channel-sidebar-content">
       <ChannelDirectory @select="emit('select', $event)" @manage="emit('manage', $event)" @create="emit('create', $event)" @create-folder="emit('create-folder')" @manage-folder="emit('manage-folder', $event)" @delete-folder="emit('delete-folder', $event)" @archive-folder="emit('archive-folder', $event)" @archives="emit('archives')" />
-      <!-- The workflow library belongs to this computer, not a room: its own row, so 频道工具 stays the room's views (the same list as a phone's top tabs). -->
-      <UButton icon="i-lucide-network" label="工作流" color="neutral" variant="ghost" class="channel-archive-toggle channel-workflows-toggle" aria-haspopup="dialog" @click="emit('workflows')" />
+      <!-- The workflow library belongs to this computer, not a room: its own section beside 协作房间 and 频道工具; a row opens the workflow page in the middle. -->
+      <div class="channel-directory-heading channel-tools-heading">
+        <button type="button" class="channel-section-toggle" :aria-expanded="workflows_open" @click="workflows_open = !workflows_open"><UIcon :name="workflows_open ? 'i-lucide-chevron-down' : 'i-lucide-chevron-right'" />工作流</button>
+        <div v-if="available" class="channel-directory-actions">
+          <UDropdownMenu :items="add_items" :content="{ align: 'end', sideOffset: 4 }" :ui="{ content: 'channel-menu' }"><UButton icon="i-lucide-plus" aria-label="新建或导入工作流" title="新建或导入" size="xs" color="neutral" variant="ghost" /></UDropdownMenu>
+        </div>
+      </div>
+      <nav v-show="workflows_open" aria-label="工作流列表" class="channel-room-list channel-workflow-list">
+        <div v-if="draft && !saved_id" class="channel-room-row" :class="{ active: page_open }">
+          <button type="button" class="channel-room-select" :aria-current="page_open ? 'page' : undefined" @click="library.page_open.value = true; emit('workflows')"><UIcon name="i-lucide-file-plus-2" /><span>{{ draft.label || '未命名工作流' }}</span><small class="channel-room-time">未保存</small></button>
+        </div>
+        <div v-for="item in workflows" :key="item.id" class="channel-room-row" :class="{ active: page_open && saved_id === item.id, 'is-disabled': item.disabled, 'is-broken': item.error }">
+          <span v-if="renaming === item.id" class="channel-workflow-rename"><UIcon name="i-lucide-workflow" />
+            <input v-model="rename_text" data-workflow-rename :maxlength="32" aria-label="新名称" @keydown.enter.prevent="library.commit_rename" @keydown.esc.prevent="renaming = ''" @blur="library.commit_rename" /></span>
+          <button v-else type="button" class="channel-room-select" :title="item.error || item.description" :aria-current="page_open && saved_id === item.id ? 'page' : undefined"
+            @click="open_workflow(item.id)" @dblclick="!item.error && library.start_rename(item)">
+            <UIcon :name="item.error ? 'i-lucide-triangle-alert' : item.disabled ? 'i-lucide-circle-pause' : 'i-lucide-workflow'" /><span>{{ item.label }}</span>
+            <small class="channel-room-time">{{ item.error ? '无法读取' : item.disabled ? '已停用' : `${item.cards} 位成员` }}</small></button>
+          <div v-if="available && renaming !== item.id" class="channel-room-actions">
+            <UDropdownMenu :items="library.item_menu(item)" :content="{ align: 'start', side: 'bottom', sideOffset: 6 }" :ui="{ content: 'channel-menu channel-topic-menu' }"><UButton icon="i-lucide-ellipsis" :aria-label="`「${item.label}」的更多操作`" title="更多操作" size="xs" color="neutral" variant="ghost" /></UDropdownMenu>
+          </div>
+        </div>
+        <p v-if="!available" class="channel-directory-empty">连接本机服务后管理工作流</p>
+        <p v-else-if="!workflows.length && !draft" class="channel-directory-empty">暂无工作流</p>
+      </nav>
       <div class="channel-directory-heading channel-tools-heading"><button type="button" class="channel-section-toggle" :aria-expanded="tools_open" @click="tools_open = !tools_open"><UIcon :name="tools_open ? 'i-lucide-chevron-down' : 'i-lucide-chevron-right'" />频道工具</button></div>
       <UNavigationMenu v-if="tools_open" :items="view_links" orientation="vertical" color="neutral" variant="pill" class="channel-directory channel-view-links" aria-label="房间视图" :ui="{ link: 'channel-link', linkLabel: 'channel-link-label', linkLeadingIcon: 'channel-link-icon' }" />
     </div>

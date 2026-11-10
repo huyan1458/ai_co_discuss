@@ -146,6 +146,14 @@ html[data-theme^="channel"] .channel-menu.channel-directory-menu { min-width: 15
 :is(.channel-directory-actions, .channel-room-actions, .channel-folder-actions) button [class*="icon"] { width: 13px; height: 13px; }
 .channel-room-row:is(:hover, :focus-within, [data-state="open"]) .channel-room-actions, .channel-room-row:has([aria-expanded="true"]) .channel-room-actions { opacity: 1; pointer-events: auto; }
 .channel-directory-empty { padding: 12px 8px; color: #929ba9; font-size: var(--channel-nav-text); }
+/* Workflow rows reuse the room rows, without the drag grip. */
+.channel-workflow-list .channel-room-row { grid-template-columns: minmax(0, 1fr) auto; padding-left: 8px; }
+.channel-workflow-list .channel-room-row.is-disabled .channel-room-select > span { opacity: .55; }
+.channel-workflow-list .channel-room-row.is-broken .channel-room-select { color: var(--ui-warning, #e0a33a); }
+.channel-workflow-rename { display: flex; align-items: center; gap: 8px; min-width: 0; padding: 4px 0; }
+.channel-workflow-rename > [class*="icon"] { flex-shrink: 0; width: 17px; height: 17px; color: #808998; }
+.channel-workflow-rename input { flex: 1; min-width: 0; height: 28px; padding: 0 6px; border: 1px solid var(--channel-accent, var(--ui-primary)); border-radius: 6px;
+  background: var(--ui-bg); color: var(--ui-text-highlighted); font-size: var(--channel-nav-text); outline: none; }
 .channel-folder-section, .channel-folder-rooms, .channel-root-rooms { min-width: 0; }
 .channel-folder-section { position: relative; }
 .channel-folder-row { position: relative; display: grid; grid-template-columns: minmax(0, 1fr) auto; align-items: center; padding-right: 8px; border-radius: 6px; }
@@ -331,6 +339,7 @@ html[data-theme^="channel"] .pb-end:hover { border-color: color-mix(in srgb, #f0
 .channel-tabs [data-slot="indicator"] { background: #414552; border-radius: 5px; box-shadow: none; }
 .channel-tabs [data-slot="leadingIcon"] { width: 14px; height: 14px; }
 .channel-body { flex: 1; display: flex; min-height: 0; }
+.channel-workflow-body > .workflow-library { flex: 1; min-width: 0; }
 .channel-content { flex: 1; min-width: 0; min-height: 0; display: flex; flex-direction: column; }
 
 /* The right rail exposes actual topic context and configured participants. */
@@ -618,6 +627,8 @@ html[data-theme^="channel"] .channel-round-button:active:not(:disabled) { transf
 .channel-mention-option > span:not(.channel-avatar) { flex: none; max-width: 60%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .channel-mention-option small { margin-left: auto; color: var(--ui-text-muted); font-size: 11px; }
 .channel-mention-option small { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.channel-mention-option .channel-mention-brief { max-width: 320px; }
+.channel-mention-tag { flex: none; padding: 1px 6px; border-radius: 4px; background: color-mix(in srgb, var(--channel-accent) 16%, transparent); color: var(--channel-accent); font-size: 10px; font-weight: 500; }
 .attachment-draft-ref .attachment-name small { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .attachment-ref-folder { flex-shrink: 0; width: 28px; height: 28px; color: var(--ui-text-muted); }
 /* Excerpts wait in the composer as one small chip; it opens the numbered list, where comments are edited or excerpts removed. */

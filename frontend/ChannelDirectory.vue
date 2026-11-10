@@ -2,9 +2,12 @@
 import { computed, inject, ref, watch } from "vue";
 import ImportDialog from "./ImportDialog.vue";
 import MemoBlock from "./memo-block.js";
+import { use_workflow_library } from "./workflow-library.js";
 
 const emit = defineEmits(["select", "manage", "create", "create-folder", "manage-folder", "delete-folder", "archive-folder", "archives"]);
 const { view, bridge, act, pending } = inject("discussion");
+// While the workflow page fills the middle, no room row is shown as the open one.
+const { page_open: workflow_page } = use_workflow_library();
 const rooms = computed(() => view.value.rooms.filter((room) => !room.archived));
 const archived_count = computed(() => view.value.rooms.filter((room) => room.archived).length);
 const folders = computed(() => (view.value.folder_groups || []).map((folder) => ({ ...folder,
@@ -71,13 +74,13 @@ function room_time_title(room) {
 // Everything a room row and its menus read besides the room itself, so a row re-renders only when this, the room or its
 // time label changes rather than on every view publish.
 const row_state = computed(() => JSON.stringify([view.value.directory_pending, view.value.archive_pending, view.value.backup_pending,
-  view.value.folders, view.value.room_site, manual_order.value, view.value.room?.id, pending.value]));
+  view.value.folders, view.value.room_site, manual_order.value, view.value.room?.id, pending.value, workflow_page.value]));
 /**
  * Plain values for one room row. They are read here, in the row's own render, because the menu and tooltip slots are run
  * by those components, which would otherwise track the view and re-render every row on each publish.
  */
 function room_row(room, index, count) {
-  return { items: actions(room, index, room.folder_id || null, count), active: room.id === view.value.room?.id, busy: Boolean(pending.value),
+  return { items: actions(room, index, room.folder_id || null, count), active: !workflow_page.value && room.id === view.value.room?.id, busy: Boolean(pending.value),
     archiving: view.value.archive_pending.includes(room.id), time: room_time(room), title: room_time_title(room) };
 }
 /** Plain values for one folder's heading row, and the key it re-renders on; read here for the same reason as room_row. */
