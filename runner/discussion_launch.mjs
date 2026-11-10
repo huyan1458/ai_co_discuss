@@ -103,7 +103,7 @@ models 按 adapter、executable 或 API profile 读取模型目录，不启动�
 api-key 将 base_url、api_key 保存于本机私有目录，只返回 api_key_ref。
 api-check 用 API profile 向模型发送一次极短请求，核对地址、密钥、协议与模型是否可用。
 scheduler-check 用智能调度配置（provider、model、api_key_ref）向决策模型发送一道是非题，核对供应商、模型与密钥是否可用。
-tts-settings 读取朗读设置；内容非空时保存（语音服务 provider：volcengine / aliyun / azure / local（本机，由 local-tts-setup 技能安装），语速 speech_rate、语气提示 context，以及 providers.<服务> 的 api_key_ref、speaker、member_voices、file_voice，Azure 另有 region）。
+tts-settings 读取朗读设置；内容非空时保存（语音服务 provider：volcengine / aliyun / azure / local（本机，由 local-tts-setup 技能安装），语速 speech_rate，以及 providers.<服务> 的 api_key_ref、speaker、member_voices、file_voice，火山引擎与本机另有语气提示 context（各自默认不同），Azure 另有 region）。
 tts 用朗读设置把 text（不超过 300 字）合成为音频（本机服务为 m4a，其余为 MP3），返回 base64。
 weixin 微信通知：action 为 status（默认，读取绑定状态）、login（生成扫码内容）、complete（等待扫码确认，约 20 秒）、test（发一条测试通知）或 unbind（解除本机绑定）。Goal 待确认 5 分钟仍未回复时通知房主，房主在微信回复即作为房主发言发回该房间；只用本机服务目录保存凭据。
 tts-release 用户停止朗读：所选服务释放在这台电脑上占用的资源（本机语音在 5 秒内结束、释放显存），云端服务无操作。

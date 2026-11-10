@@ -27,22 +27,22 @@ const CACHE_DIR = 'tts-cache';
 const CACHE_LIMIT_BYTES = 50 * 1024 * 1024;
 const CACHE_KEEP_BYTES = 40 * 1024 * 1024;
 const MAX_MEMBER_VOICES = 50;
-// A default tone instruction (Volcengine's context_texts) so reading sounds told rather than recited; users may change or clear it.
-export const TTS_DEFAULT_CONTEXT = '请用自然放松的语气朗读，像给朋友讲故事一样，有轻重缓急，句子之间自然停顿。';
 // A paragraph asked for again while its synthesis is still running (another device, a quick restart) waits for that call.
 const in_flight = new Map();
 const PROVIDER_IDS = TTS_PROVIDERS.map(provider => provider.id);
 const provider_of = (id) => TTS_PROVIDERS.find(provider => provider.id === id);
 const STT_IDS = STT_PROVIDERS.map(provider => provider.id);
 
-/** One service's saved part with its defaults: key reference, voices and (Azure) region. */
+/** One service's saved part with its defaults: key reference, voices, tone (services that take one) and (Azure) region. */
 function provider_settings(provider, saved = {}) {
-  return { api_key_ref: '', speaker: provider.default_speaker, member_voices: {}, file_voice: '', ...(provider.region ? { region: '' } : {}), ...saved };
+  return { api_key_ref: '', speaker: provider.default_speaker, member_voices: {}, file_voice: '', ...(provider.context ? { context: provider.default_context } : {}),
+    ...(provider.region ? { region: '' } : {}), ...saved };
 }
 
 /**
  * Read the saved read-aloud settings; only key references are kept, never keys. Settings saved before services could be
- * chosen held Volcengine's key and voices at the top level and are read as Volcengine's.
+ * chosen held Volcengine's key and voices at the top level and are read as Volcengine's; so is a tone saved at the top
+ * level before each service kept its own.
  * The chosen service's key reference and voices are also given at the top level for readers that only play.
  * The local service's token is saved by the setup skill, so without a reference it uses the latest saved for its address.
  * Voice input chooses its own service (`stt_provider`); `stt_key_ref` is the key reference of the one chosen, empty
@@ -53,6 +53,7 @@ export function tts_settings(home) {
   const saved = existsSync(path) ? JSON.parse(readFileSync(path, 'utf8')) : {};
   const stored = saved.providers || { volcengine: { api_key_ref: saved.api_key_ref, speaker: saved.speaker, member_voices: saved.member_voices,
     file_voice: saved.file_voice } };
+  if (saved.context !== undefined && stored.volcengine?.context === undefined) stored.volcengine = { ...stored.volcengine, context: saved.context };
   const keys = saved_api_keys(home);
   const providers = Object.fromEntries(TTS_PROVIDERS.map(provider => {
     const own = provider_settings(provider, Object.fromEntries(Object.entries(stored[provider.id] || {}).filter(([, value]) => value !== undefined)));
@@ -63,7 +64,7 @@ export function tts_settings(home) {
   const ready = Boolean(active.api_key_ref && (!provider_of(provider).region || active.region));
   const stt_provider = STT_IDS.includes(saved.stt_provider) ? saved.stt_provider : 'volcengine';
   const stt = STT_PROVIDERS.find(item => item.id === stt_provider);
-  return { provider, speech_rate: saved.speech_rate ?? 0, context: saved.context ?? TTS_DEFAULT_CONTEXT, providers, catalog: TTS_PROVIDERS,
+  return { provider, speech_rate: saved.speech_rate ?? 0, providers, catalog: TTS_PROVIDERS,
     api_key_ref: ready ? active.api_key_ref : '', speaker: active.speaker, member_voices: active.member_voices, file_voice: active.file_voice,
     stt_provider, stt_catalog: STT_PROVIDERS, stt_key_ref: stt.local ? keys[stt.key_base_url] || '' : providers.volcengine.api_key_ref };
 }
@@ -86,11 +87,13 @@ function check_provider(provider, input = {}) {
   if (file_voice && !SPEAKER_PATTERN.test(file_voice)) throw new Error('文件音色无效，请重新选择');
   const region = String(input.region ?? '').trim().toLowerCase();
   if (region && !REGION_PATTERN.test(region)) throw new Error('Azure 区域应为如 eastasia 的小写英文与数字');
-  return { api_key_ref, speaker, member_voices, file_voice, ...(provider.region ? { region } : {}) };
+  const context = String(input.context ?? provider.default_context ?? '').trim();
+  if (context.length > MAX_CONTEXT) throw new Error(`语气提示不超过 ${MAX_CONTEXT} 字`);
+  return { api_key_ref, speaker, member_voices, file_voice, ...(provider.context ? { context } : {}), ...(provider.region ? { region } : {}) };
 }
 
 /**
- * Validate and save the speech settings the page edits: the reading service, each service's part, rate and tone, and
+ * Validate and save the speech settings the page edits: the reading service, each service's part (its tone among them), rate, and
  * the voice-input service (kept as it was when not sent, as by pages from before it could be chosen).
  */
 export function save_tts_settings(home, input) {
@@ -98,14 +101,12 @@ export function save_tts_settings(home, input) {
   if (!PROVIDER_IDS.includes(provider)) throw new Error('请选择语音服务');
   const speech_rate = Number(input.speech_rate ?? 0);
   if (!Number.isInteger(speech_rate) || speech_rate < -50 || speech_rate > 100) throw new Error('语速须为 -50 到 100 的整数');
-  const context = String(input.context ?? '').trim();
-  if (context.length > MAX_CONTEXT) throw new Error(`语气提示不超过 ${MAX_CONTEXT} 字`);
   const current = tts_settings(home);
   const stt_provider = String(input.stt_provider || current.stt_provider);
   if (!STT_IDS.includes(stt_provider)) throw new Error('请选择语音输入服务');
   const providers = Object.fromEntries(TTS_PROVIDERS.map(item => [item.id, check_provider(item, input.providers?.[item.id] || current.providers[item.id])]));
   mkdirSync(home, { recursive: true, mode: 0o700 });
-  atomic_json(join(home, SETTINGS_FILE), { provider, speech_rate, context, providers, stt_provider });
+  atomic_json(join(home, SETTINGS_FILE), { provider, speech_rate, providers, stt_provider });
   return tts_settings(home);
 }
 
@@ -154,7 +155,7 @@ export async function tts_speak(home, input, transport) {
     : `尚未配置语音：请在设置的“语音”中填写${provider.label} API Key`);
   const speaker = SPEAKER_PATTERN.test(input.speaker || '') ? input.speaker : own.speaker;
   const silence = Math.max(0, Math.min(MAX_SILENCE_MS, Math.round(Number(input.silence_ms) || 0)));
-  const context = provider.context ? settings.context : '';
+  const context = provider.context ? own.context : '';
   const directory = join(home, CACHE_DIR);
   // Local audio cached before 2026-11-10 has its index at the end, which iPhone Safari cannot play; a new key leaves it unused.
   const cache_path = join(directory, `${createHash('sha256').update(JSON.stringify([text, speaker, settings.speech_rate, context, silence,

@@ -14,7 +14,7 @@ const SAVED_MARK = "••••••••••••";
 const PREVIEW_TEXT = "你好，我会用这个声音为你朗读房间里的消息。";
 const VOICE_INPUT = "volcengine";
 const rates = [{ value: -20, label: "0.8×" }, { value: 0, label: "1×" }, { value: 20, label: "1.2×" }, { value: 50, label: "1.5×" }, { value: 100, label: "2×" }];
-const settings = reactive({ provider: "volcengine", speech_rate: 0, context: "", providers: {}, catalog: [], api_key_ref: "", stt_provider: "volcengine", stt_catalog: [], stt_key_ref: "" });
+const settings = reactive({ provider: "volcengine", speech_rate: 0, providers: {}, catalog: [], api_key_ref: "", stt_provider: "volcengine", stt_catalog: [], stt_key_ref: "" });
 // One voice per AI platform; members of an unset platform, the user and program messages use the default voice.
 const platforms = Object.keys(bridge.launch_clients).map((name) => ({ name, label: bridge.identities[name]?.label || name }));
 // Key of the project-file voice row, apart from platform names.
@@ -46,8 +46,8 @@ onMounted(async () => {
 
 /** Save every field together; the service validates and answers with what it kept. */
 async function save() {
-  const { provider, speech_rate, context, providers, stt_provider } = settings;
-  try { Object.assign(settings, await bridge.local_request("tts-settings", { provider, speech_rate, context, providers, stt_provider })); }
+  const { provider, speech_rate, providers, stt_provider } = settings;
+  try { Object.assign(settings, await bridge.local_request("tts-settings", { provider, speech_rate, providers, stt_provider })); }
   catch (error) { bridge.notify("error", error.message); }
 }
 
@@ -146,18 +146,18 @@ onBeforeUnmount(stop_preview);
               <div class="speech-rates" role="group" aria-label="朗读语音服务"><UButton v-for="item in settings.catalog" :key="item.id" :label="item.label" color="neutral" variant="ghost" size="xs" :class="{ chosen: settings.provider === item.id }" :aria-pressed="settings.provider === item.id" @click="choose(item.id)" /></div>
             </div>
             <p class="fine-print speech-note" :title="service.note">{{ service.note }} · <a :href="service.console_url" target="_blank" rel="noopener">控制台</a></p>
-            <label class="speech-row"><span>密钥</span>
+            <div class="speech-row"><span>密钥</span>
               <UInput v-if="service.local" disabled :placeholder="own.api_key_ref ? '已由安装技能配置，无需填写' : '尚未安装：让本机 AI 按 local-tts-setup 技能安装'" aria-label="本机语音令牌" size="sm" class="w-full" />
               <!-- A text field masked by CSS keeps browsers from offering to generate or save a password. -->
               <UInput v-else v-model="typed_keys[service.id]" type="text" autocomplete="off" spellcheck="false" data-1p-ignore data-lpignore="true" :placeholder="own.api_key_ref ? SAVED_MARK : '粘贴 API Key，只存这台电脑'" :title="own.api_key_ref && !typed_keys[service.id] ? '已保存；本机不回传密钥，输入新 Key 可更换' : undefined" :aria-label="`${service.label} API Key`" size="sm" class="w-full" :loading="busy === `key:${service.id}`" :ui="{ base: visible_keys[service.id] ? '' : 'speech-key-masked', trailing: 'pe-0.5' }" @change="save_key(service)">
                 <template #trailing><UButton :icon="visible_keys[service.id] ? 'i-lucide-eye' : 'i-lucide-eye-off'" :disabled="!typed_keys[service.id]" :aria-label="visible_keys[service.id] ? '隐藏密钥' : '显示密钥'" :aria-pressed="Boolean(visible_keys[service.id])" size="xs" color="neutral" variant="link" @click="visible_keys[service.id] = !visible_keys[service.id]" /></template>
               </UInput>
-            </label>
+            </div>
             <!-- Rows a service does not use stay in place, disabled, so switching services never moves the rows below. -->
-            <label class="speech-row"><span>区域</span>
+            <div class="speech-row"><span>区域</span>
               <UInput v-if="service.region" v-model="own.region" placeholder="语音资源所在区域，如 eastasia" aria-label="Azure 区域" size="sm" class="w-full" @change="save" />
               <UInput v-else disabled placeholder="此服务无需区域" aria-label="区域" size="sm" class="w-full" />
-            </label>
+            </div>
             <div class="speech-row"><span>通用</span>
               <div class="speech-inline">
                 <USelectMenu :model-value="own.speaker" :items="voice_items" value-key="value" create-item :search-input="{ placeholder: '搜索或输入音色 ID' }" aria-label="通用音色" size="sm" class="min-w-0 flex-1" @update:model-value="set_voice('', $event)" @create="set_voice('', $event)" />
@@ -180,23 +180,23 @@ onBeforeUnmount(stop_preview);
             <div class="speech-row"><span>语速</span>
               <div class="speech-rates" role="group" aria-label="朗读语速" :title="service.rate === false ? '当前接入不支持调节语速' : undefined"><UButton v-for="rate in rates" :key="rate.value" :label="rate.label" color="neutral" variant="ghost" size="xs" :disabled="service.rate === false" :class="{ chosen: settings.speech_rate === rate.value }" :aria-pressed="settings.speech_rate === rate.value" @click="settings.speech_rate = rate.value; save()" /></div>
             </div>
-            <label class="speech-row"><span>语气</span>
-              <UInput v-if="service.context" v-model="settings.context" :maxlength="200" placeholder="可选，如：像朋友聊天一样自然地读" aria-label="朗读语气提示" size="sm" class="w-full" @change="save" />
+            <div class="speech-row"><span>语气</span>
+              <UInput v-if="service.context" v-model="own.context" :maxlength="200" placeholder="可选，如：像朋友聊天一样自然地读" aria-label="朗读语气提示" size="sm" class="w-full" @change="save" />
               <UInput v-else disabled placeholder="当前接入不支持自定义语气" aria-label="朗读语气提示" size="sm" class="w-full" />
-            </label>
+            </div>
             <p class="fine-print speech-note">输入框右下角的播报按钮自动读新回复摘要</p>
             <h4>语音输入</h4>
             <div class="speech-row"><span>服务</span>
               <div class="speech-rates" role="group" aria-label="语音输入服务"><UButton v-for="item in settings.stt_catalog" :key="item.id" :label="item.label" color="neutral" variant="ghost" size="xs" :class="{ chosen: settings.stt_provider === item.id }" :aria-pressed="settings.stt_provider === item.id" @click="choose_input(item.id)" /></div>
             </div>
             <p class="fine-print speech-note" :title="stt_service.note">{{ stt_service.note }}</p>
-            <label class="speech-row"><span>密钥</span>
+            <div class="speech-row"><span>密钥</span>
               <UInput v-if="stt_service.local" disabled :placeholder="settings.stt_key_ref ? '已由安装技能配置，无需填写' : '尚未安装：让本机 AI 按 local-stt-setup 技能安装'" aria-label="本机语音识别令牌" size="sm" class="w-full" />
               <UInput v-else-if="input_service" v-model="typed_keys[input_service.id]" type="text" autocomplete="off" spellcheck="false" data-1p-ignore data-lpignore="true" :placeholder="settings.providers[input_service.id]?.api_key_ref ? SAVED_MARK : '粘贴火山引擎 API Key'" :title="settings.providers[input_service.id]?.api_key_ref && !typed_keys[input_service.id] ? '已保存；本机不回传密钥，输入新 Key 可更换' : undefined" aria-label="语音输入的火山引擎 API Key" size="sm" class="w-full" :loading="busy === `key:${input_service.id}`" :ui="{ base: visible_keys[input_service.id] ? '' : 'speech-key-masked', trailing: 'pe-0.5' }" @change="save_key(input_service)">
                 <template #trailing><UButton :icon="visible_keys[input_service.id] ? 'i-lucide-eye' : 'i-lucide-eye-off'" :disabled="!typed_keys[input_service.id]" :aria-label="visible_keys[input_service.id] ? '隐藏密钥' : '显示密钥'" :aria-pressed="Boolean(visible_keys[input_service.id])" size="xs" color="neutral" variant="link" @click="visible_keys[input_service.id] = !visible_keys[input_service.id]" /></template>
               </UInput>
               <UInput v-else disabled placeholder="与朗读共用上方的火山引擎 Key" aria-label="语音输入的火山引擎 API Key" size="sm" class="w-full" />
-            </label>
+            </div>
           </template>
           <p v-else class="fine-print">正在读取语音设置…</p>
         </div>

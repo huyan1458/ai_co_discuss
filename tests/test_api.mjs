@@ -387,6 +387,9 @@ test('read-aloud sends the saved key only to Volcengine and joins chunked audio'
     assert.equal(legacy.api_key_ref, api_key_ref);
     assert.equal(legacy.stt_key_ref, api_key_ref);
     assert.deepEqual(legacy.member_voices, { Codex: 'zh_male_m191_uranus_bigtts' });
+    // A tone saved before each service kept its own is Volcengine's; the local service starts with its own default.
+    assert.equal(legacy.providers.volcengine.context, '自然一点');
+    assert.equal(legacy.providers.local.context, '语气平静克制，语调平稳，娓娓道来。');
     save_tts_settings(home, legacy);
     assert.equal(tts_settings(home).providers.volcengine.api_key_ref, api_key_ref);
     assert.equal(JSON.stringify(tts_settings(home)).includes(SECRET), false);
@@ -477,7 +480,7 @@ test('read-aloud on the local service uses the token the setup skill saved and s
   const { save_tts_settings, tts_release, tts_settings, tts_speak } = await import('../runner/tts.mjs');
   const home = mkdtempSync(join(tmpdir(), 'codiscuss-tts-local-'));
   try {
-    save_tts_settings(home, { provider: 'local', context: '慢一点' });
+    save_tts_settings(home, { provider: 'local', providers: { local: { context: '慢一点' } } });
     assert.equal(tts_settings(home).api_key_ref, '', 'not ready before the skill saves a token');
     await assert.rejects(tts_speak(home, { text: '你好' }), /local-tts-setup/);
     const token = save_api_key(home, { base_url: 'http://127.0.0.1:18765', api_key: 'local-token' }).api_key_ref;

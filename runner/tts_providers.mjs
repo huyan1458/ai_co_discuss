@@ -106,14 +106,15 @@ const voices = (list) => list.map(([id, label]) => ({ id, label }));
 
 /**
  * The speech services the page can choose between. `key_base_url` is the root a saved key is bound to; `context` says
- * whether the tone instruction applies; `region` says whether the service also needs a region; `voice_input` marks the
+ * whether the tone instruction applies and `default_context` is the tone each starts with; `region` says whether the service also needs a region; `voice_input` marks the
  * one whose key also serves voice input; `rate: false` marks one that ignores the speech rate; `local` marks the service
  * on this computer, whose token the setup skill saves, so the page asks for no key.
  */
 export const TTS_PROVIDERS = [
   { id: 'volcengine', label: '火山引擎', key_base_url: 'https://openspeech.bytedance.com', console_url: 'https://console.volcengine.com/speech/new',
     note: '约 3 元/万字，语音输入共用此 Key', voices: voices(VOLC_VOICES),
-    default_speaker: 'zh_female_vv_uranus_bigtts', context: true, region: false, voice_input: true },
+    default_speaker: 'zh_female_vv_uranus_bigtts', context: true,
+    default_context: '请用自然放松的语气朗读，像给朋友讲故事一样，有轻重缓急，句子之间自然停顿。', region: false, voice_input: true },
   { id: 'aliyun', label: '阿里云百炼', key_base_url: 'https://dashscope.aliyuncs.com', console_url: 'https://bailian.console.aliyun.com/?tab=model#/api-key',
     note: '约 2 元/万字（汉字计 2 字符）', voices: voices(ALIYUN_VOICES),
     default_speaker: 'longxiaochun_v3', context: false, region: false, voice_input: false },
@@ -122,7 +123,7 @@ export const TTS_PROVIDERS = [
     default_speaker: 'zh-CN-XiaoxiaoNeural', context: false, region: true, voice_input: false },
   { id: 'local', label: '本机', key_base_url: LOCAL_URL, console_url: 'https://github.com/leemysw/yovoice',
     note: '本机显卡运行 Qwen3-TTS，不计费；用 local-tts-setup 技能安装', voices: voices(LOCAL_VOICES),
-    default_speaker: 'Vivian', context: true, region: false, voice_input: false, rate: false, local: true },
+    default_speaker: 'Vivian', context: true, default_context: '语气平静克制，语调平稳，娓娓道来。', region: false, voice_input: false, rate: false, local: true },
 ];
 
 /** Trailing silence as silent MP3 frames matching Aliyun's and Azure's output. */

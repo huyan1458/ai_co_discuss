@@ -74,10 +74,13 @@ const readers = new Set();
  * blinking); reading and the voice samples in settings both use it.
  */
 export async function request_tts(bridge, input) {
-  for (const started = Date.now(); ;) {
+  // The window starts at the first failure: a request stuck on a stalled relay connection fails only when the computer
+  // reconnects, which may be past the window counted from when it was sent.
+  for (let failed_at = 0; ;) {
     try { return await bridge.local_request("tts", input); }
     catch (error) {
-      if (!transient(error) || Date.now() - started > RETRY_WINDOW_MS) throw error;
+      failed_at ||= Date.now();
+      if (!transient(error) || Date.now() - failed_at > RETRY_WINDOW_MS) throw error;
       await new Promise((resolve) => setTimeout(resolve, RETRY_DELAY_MS));
     }
   }
