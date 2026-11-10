@@ -1,6 +1,6 @@
 {
   "name": "ai_co_discuss",
-  "version": "0.4.4",
+  "version": "0.4.5",
   "bin": {
     "codiscuss": "runner/codiscuss.mjs"
   },
@@ -86,6 +86,7 @@
     ".agents/skills/discuss-report/**",
     ".agents/skills/workflow-creator/**",
     ".agents/skills/local-tts-setup/**",
+    ".agents/skills/local-stt-setup/**",
     "workflows/**",
     ".github/SECURITY.md",
     "docs/**",
