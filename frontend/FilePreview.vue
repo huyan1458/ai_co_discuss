@@ -830,7 +830,7 @@ onBeforeUnmount(() => {
 .project-editor-head { display: grid; flex-shrink: 0; grid-template-columns: minmax(0, 1fr) auto auto; grid-template-rows: 38px 26px;
   grid-template-areas: "tabs file window" "crumbs crumbs crumbs"; }
 .project-editor-head > :is(.project-editor-tablist, .project-editor-file-actions, .project-editor-window-actions) { background: var(--ui-bg-elevated); border-bottom: 1px solid var(--ui-border); }
-.project-editor-tablist { grid-area: tabs; display: flex; min-width: 0; overflow-x: auto; scrollbar-width: none; }
+.project-editor-tablist { grid-area: tabs; display: flex; min-width: 0; overflow-x: auto; overflow-y: hidden; overscroll-behavior-x: contain; scrollbar-width: none; }
 .project-editor-tab { position: relative; display: flex; align-items: center; flex-shrink: 0; max-width: 240px; font-size: 13px; color: var(--ui-text-muted); border-right: 1px solid var(--ui-border); }
 .project-editor-tab.is-active { background: var(--ui-bg); color: var(--ui-text-highlighted); }
 .project-editor-tab.is-active::before { content: ""; position: absolute; inset: 0 0 auto; height: 2px; background: var(--ui-primary); }

@@ -6,23 +6,24 @@
  * dispatched it, its bar split into waiting, model and tool time and labelled where wide enough. A sentence at the top
  * says what the round came down to; the critical path stays bright and the rest steps back.
  * Phase reports wake no other page, so this page reads on its own: in full when opened, then only what is running or
- * just ended, every two seconds while anything runs and whenever the room changes. Running bars grow once a second.
+ * just ended, every two seconds while anything runs and whenever the room changes. Running bars grow every frame.
  * A finished run can be replayed: the same drawing, with the playback position as now.
- * On a phone a shared time axis has no resolution left, so each row shows its own duration split by kind instead.
+ * On a phone a clock axis over hours has no resolution left, so each top-level row and the executions under it share
+ * an axis of their own and still step down as a waterfall.
  */
 import { computed, inject, nextTick, onBeforeUnmount, onMounted, reactive, ref, watch } from "vue";
 import { FOLD_GAP_MS, PHASE_KINDS, PHASE_LABELS, STATE_LABELS, WAIT_WARN_MS, axis_ticks, execution_log, format_duration, handoff_lines, notes_between,
-  pan_window, round_digest, row_breakdown, row_mix, row_status, snapshot_at, timeline_axis, timeline_rows, timeline_summary, recent_window, daily_overview, requested_at, view_axis, zoom_window } from "./timeline-model.js";
+  pan_window, round_digest, row_breakdown, row_status, snapshot_at, timeline_axis, timeline_rows, timeline_summary, recent_window, daily_overview, requested_at, view_axis, zoom_window } from "./timeline-model.js";
 
 const emit = defineEmits(["detail"]);
 const { view, bridge } = inject("discussion");
 const LIVE_REFRESH_MS = 2000;
 const FULL_REFRESH_MS = 60_000;
-// Running bars and silence counters move this often; a monitor needs no smoother motion.
-const LIVE_TICK_MS = 1000;
-// A replay redraws every frame with few rows; with many, this often.
+// Running bars grow and a replay plays every frame with few rows; with many, this often.
 const CLOCK_MS = 100;
 const SMOOTH_ROWS = 60;
+// A row that appears while watching slides in for this long.
+const ENTER_MS = 520;
 // A replay at "auto" speed lasts about this long, whatever the run's length; manual speeds are these multiples.
 const REPLAY_TARGET_MS = 20_000;
 const REPLAY_SPEEDS = [1, 2, 4, 8, 16, 32];
@@ -33,15 +34,10 @@ const DEPTH_PX = 14;
 const COMPACT_DEPTH_PX = 12;
 // At or below this page width, rows switch from the shared axis to their own durations.
 const COMPACT_MAX_PX = 640;
-// A bar piece this wide carries its full label ("思考 15m"), this wide only the duration, narrower none.
-const LABEL_FULL_PX = 76;
-const LABEL_SHORT_PX = 48;
 // About one axis tick per this many pixels of axis, and never fewer or more than these.
 const TICK_SPACING_PX = 90;
 const MIN_TICKS = 2;
 const MAX_TICKS = 8;
-// A track keeps this margin on each side, the axis included.
-const TRACK_MARGIN_PX = 12;
 const section_element = ref(null);
 const section_width = ref(0);
 const axis_element = ref(null);
@@ -70,7 +66,6 @@ let reading = false;
 // A read asked for during another: "" none, "next" incremental, "full" whole.
 let reload = "";
 let refresh_timer = 0;
-let live_timer = 0;
 let frame = 0;
 let last_frame = 0;
 let last_paint = 0;
@@ -114,10 +109,8 @@ const running = computed(() => timeline.value?.executions.some((item) => item.st
 // Only running work changes the timeline between room changes, and a hidden page need not follow it.
 watch(running, (live) => {
   clearInterval(refresh_timer);
-  clearInterval(live_timer);
   if (!live) return;
   refresh_timer = setInterval(() => { if (!document.hidden) load(); }, LIVE_REFRESH_MS);
-  live_timer = setInterval(() => { if (!document.hidden) now.value = Date.now(); }, LIVE_TICK_MS);
 }, { immediate: true });
 watch(room_id, () => {
   executions.value = new Map(); limits.value = null; collapsed.value = new Set(); note_texts.value = new Map(); opened.value = "";
@@ -163,7 +156,7 @@ function stop_autoscroll(event) { if (event.button === 1 && event.target.closest
 
 /** The open detail closes on a click anywhere else, or on Esc. */
 function close_on_outside(event) {
-  if (opened.value && !event.target.closest?.(".wf-detail, .wf-names, .wf-bar, .wf-note, .wf-mix-lane, .wf-now-card")) opened.value = "";
+  if (opened.value && !event.target.closest?.(".wf-detail, .wf-names, .wf-bar, .wf-note, .wf.is-compact .wf-lane, .wf-now-card")) opened.value = "";
 }
 function close_on_escape(event) { if (event.key === "Escape") opened.value = ""; }
 onMounted(() => {
@@ -184,7 +177,7 @@ watch(axis_element, (element, previous) => {
   if (element) size_observer?.observe(element);
 });
 onBeforeUnmount(() => {
-  clearInterval(refresh_timer); clearInterval(live_timer); cancelAnimationFrame(frame);
+  clearInterval(refresh_timer); cancelAnimationFrame(frame);
   document.removeEventListener("pointerdown", close_on_outside);
   document.removeEventListener("keydown", close_on_escape);
   size_observer?.disconnect();
@@ -246,17 +239,23 @@ const speed_items = computed(() => [{ label: `自动 · ${Math.round(auto_speed.
 const replay_speed = computed(() => replay.speed || auto_speed.value);
 const can_replay = computed(() => !overview.value && !base_live.value && bounds.value.duration > 0);
 
-/** The replay clock: every frame, at most ten times a second with many rows. */
+/** One clock for live growth and replay: every frame while either is on, at most ten times a second with many rows.
+ *  Running bars grow smoothly, as a waterfall is drawn; a hidden page skips the frames (the browser pauses them). */
 function step(timestamp) {
   const elapsed = last_frame ? Math.min(timestamp - last_frame, 250) : 0;
   last_frame = timestamp;
-  play_position += elapsed * replay_speed.value;
-  if (play_position >= bounds.value.duration) Object.assign(replay, { position: null, playing: false });
-  else if (all_rows.value.length <= SMOOTH_ROWS || timestamp - last_paint >= CLOCK_MS) { replay.position = play_position; last_paint = timestamp; }
-  frame = replay.playing ? requestAnimationFrame(step) : 0;
+  const due = all_rows.value.length <= SMOOTH_ROWS || timestamp - last_paint >= CLOCK_MS;
+  if (replay.playing) {
+    play_position += elapsed * replay_speed.value;
+    if (play_position >= bounds.value.duration) Object.assign(replay, { position: null, playing: false });
+    else if (due) replay.position = play_position;
+  }
+  if (running.value && due) now.value = Date.now();
+  if (due) last_paint = timestamp;
+  frame = running.value || replay.playing ? requestAnimationFrame(step) : 0;
   if (!frame) last_frame = 0;
 }
-watch(() => replay.playing, (playing) => { if (playing && !frame) frame = requestAnimationFrame(step); });
+watch([running, () => replay.playing], () => { if (!frame && (running.value || replay.playing)) frame = requestAnimationFrame(step); }, { immediate: true });
 
 /** Replay from the start, or go on from where it was paused; the run's note texts are read first, to surface as they were written. */
 function play() {
@@ -272,6 +271,22 @@ function scrub(event) { play_position = Number(event.target.value); Object.assig
 function close_player() { show_player.value = false; Object.assign(replay, { position: null, playing: false }); }
 // Another room starts from its real, final state.
 watch(room_id, close_player);
+
+/** Rows that appear while watching (a new execution starting, or one a replay reaches) slide in; the first drawing does not. */
+const entering = ref(new Set());
+let known_rows = null;
+watch(() => rows.value.map((row) => row.key).join(), () => {
+  const keys = rows.value.map((row) => row.key);
+  if (!known_rows) { known_rows = new Set(keys); return; }
+  const added = keys.filter((key) => !known_rows.has(key));
+  added.forEach((key) => known_rows.add(key));
+  if (!added.length) return;
+  entering.value = new Set([...entering.value, ...added]);
+  setTimeout(() => { entering.value = new Set([...entering.value].filter((key) => !added.includes(key))); }, ENTER_MS);
+});
+// A replay from its start draws its rows in again; another room or view is a first drawing.
+watch([room_id, view_mode], () => { known_rows = null; });
+watch(() => replay.position === 0, (at_start) => { if (at_start) known_rows = new Set(); });
 
 const lines = computed(() => compact.value ? new Map() : handoff_lines(rows.value, shown_axis.value));
 const ticks = computed(() => axis_ticks(axis.value,
@@ -407,19 +422,9 @@ function focus_row(card) {
     nextTick(() => wf_element.value?.querySelector(`[data-row="${CSS.escape(row.key)}"]`)?.scrollIntoView({ block: "start", behavior: "smooth" }));
   });
 }
-/** On a phone a finished row off the latest task's critical path, history included, is one line: a watcher rarely needs it. */
-const brief = (row) => compact.value && all_rows.value.length > 1 && !digest.value.path.has(row.key) && row.item.state === "done" && opened.value !== row.key;
-const MIX_KINDS = [["wait", "等待"], ["model", "模型"], ["tool", "工具"], ["work", "执行"]];
-/** A phone row's bar: its time by kind, in proportion, against the longest execution in the round. */
-function mix_parts(row) {
-  const mix = row_mix(row);
-  const values = { wait: mix.wait, model: mix.model, tool: mix.tool, work: mix.other };
-  return MIX_KINDS.filter(([kind]) => values[kind] > 0).map(([kind, label]) => {
-    const px = values[kind] / longest_row.value * track_px.value;
-    const text = kind === "work" && row.segments.length ? "未上报" : label;
-    return { kind, ms: values[kind], text: px >= LABEL_FULL_PX ? `${text} ${format_duration(values[kind])}` : px >= LABEL_SHORT_PX ? format_duration(values[kind]) : "" };
-  });
-}
+/** On a phone a finished row before the latest task (history) is one line: a watcher rarely needs it. */
+const in_task = (row) => row.start >= digest.value.start;
+const brief = (row) => compact.value && all_rows.value.length > 1 && !in_task(row) && row.item.state === "done" && opened.value !== row.key;
 
 function toggle(key) {
   const next = new Set(collapsed.value);
@@ -427,13 +432,23 @@ function toggle(key) {
   collapsed.value = next;
 }
 
-// On a phone every bar starts at the left and the longest execution fills the width.
-const longest_row = computed(() => Math.max(1, ...rows.value.map((row) => row.end - row.start)));
-const track_px = computed(() => compact.value ? Math.max(0, section_width.value - 2 * TRACK_MARGIN_PX - 2) : axis_width.value);
-/** A piece's left and right edge as shares of the track: on the shared axis, or within its own row on a phone. */
+/** On a phone each top-level row and the executions under it share one axis, from the first start to the last end among
+ *  them, so a dispatch still steps down as a waterfall without a clock axis over hours. */
+const group_spans = computed(() => {
+  const spans = new Map();
+  for (const row of all_rows.value) {
+    const top = row.ancestors[0] || row.key;
+    const span = spans.get(top);
+    spans.set(top, span ? [Math.min(span[0], row.start), Math.max(span[1], row.end)] : [row.start, row.end]);
+  }
+  return spans;
+});
+/** A piece's left and right edge as shares of the track: on the shared axis, or within its group on a phone. */
 function span_of(row, start, end) {
-  if (compact.value) return [(start - row.start) / longest_row.value, (end - row.start) / longest_row.value];
-  return [shown_axis.value.x(start), shown_axis.value.x(end)];
+  if (!compact.value) return [shown_axis.value.x(start), shown_axis.value.x(end)];
+  const [from, to] = group_spans.value.get(row.ancestors[0] || row.key) || [row.start, row.end];
+  const span = Math.max(1, to - from);
+  return [(start - from) / span, (end - from) / span];
 }
 /** A bar piece's position. Segments leave a 1 px gap after them, so neighbouring phases read apart. */
 function place(row, start, end, gap = false) {
@@ -511,6 +526,24 @@ const selected_title = computed(() => {
   if (piece.note) return `过程说明 · ${clock(piece.note.at)}`;
   return `${piece.label} · ${format_duration(piece.end - piece.start)}${piece.live ? " · 进行中" : ""}`;
 });
+/** The opened execution's time, part by part, for the detail's distribution bar and its legend: waiting, each phase, and
+ *  the work no phase report covers. Shares are of the whole execution. */
+const opened_parts = computed(() => {
+  const row = opened_row.value;
+  if (!row) return [];
+  const { wait, work, phases } = row_breakdown(row);
+  const total = Math.max(1, row.end - row.start);
+  const reported = phases.reduce((sum, part) => sum + part.ms, 0);
+  const parts = [
+    ...(wait > 0 ? [{ key: "wait", kind: "wait", label: "等待", ms: wait }] : []),
+    ...phases.map((part) => ({ key: part.phase, kind: PHASE_KINDS[part.phase], label: PHASE_LABELS[part.phase], ms: part.ms })),
+    ...(work - reported > 0 ? [{ key: "other", kind: "other", label: row.segments.length ? "未上报" : "执行", ms: work - reported }] : []),
+  ];
+  return parts.map((part) => ({ ...part, share: part.ms / total }));
+});
+const percent = (share) => share >= 0.995 ? "100%" : share < 0.01 ? "<1%" : `${Math.round(share * 100)}%`;
+const opened_task_open = ref(false);
+watch(opened, () => { opened_task_open.value = false; });
 const selected_notes = computed(() => {
   if (!selected.value || !opened_row.value) return [];
   const texts = note_texts.value.get(opened_row.value.item.id);
@@ -585,7 +618,7 @@ const selected_notes = computed(() => {
           <span class="wf-axis-end">用时</span>
         </template>
         <div v-for="row in rows" :key="row.key" role="listitem" class="wf-row"
-          :class="[`is-${row.item.state}`, { 'is-open': opened === row.key, 'is-stalled': row.item.state === 'running' && status(row).tone === 'warn', 'is-off-path': off_path(row), 'is-brief': brief(row) }]">
+          :class="[`is-${row.item.state}`, { 'is-open': opened === row.key, 'is-stalled': row.item.state === 'running' && status(row).tone === 'warn', 'is-off-path': off_path(row), 'is-brief': brief(row), 'is-entering': entering.has(row.key) }]">
           <div class="wf-label" :data-row="row.key" :style="{ '--depth': row.depth }">
             <span v-if="row.depth" class="wf-guides" aria-hidden="true"></span>
             <button v-if="row.has_children" type="button" class="wf-toggle" :class="{ 'is-open': !collapsed.has(row.key) }" :aria-expanded="!collapsed.has(row.key)"
@@ -600,12 +633,8 @@ const selected_notes = computed(() => {
               <span v-if="!compact" class="wf-status" :class="`is-${status(row).tone}`">{{ status(row).text }}</span>
             </button>
           </div>
-          <button v-if="compact && !brief(row)" type="button" class="wf-mix-lane" :aria-label="row_label(row)" @click="open_row(row, $event)">
-            <span class="wf-mix" :data-tone="member_tone.get(row.item.member)" :style="{ width: `${(row.end - row.start) / longest_row * 100}%` }">
-              <span v-for="part in mix_parts(row)" :key="part.kind" class="wf-mix-part" :class="[`is-${part.kind}`, { 'is-long': part.kind === 'wait' && part.ms >= WAIT_WARN_MS }]" :style="{ flexGrow: part.ms }">{{ part.text }}</span>
-            </span>
-          </button>
-          <div v-if="!compact" class="wf-lane" role="img" :aria-label="row_label(row)"><div class="wf-track">
+          <div class="wf-lane" :role="compact ? 'button' : 'img'" :tabindex="compact ? 0 : undefined" :aria-label="row_label(row)"
+            @click="compact && open_row(row, $event)" @keydown.enter="compact && open_row(row, $event)"><div class="wf-track">
             <template v-if="!compact">
               <i v-for="tick in shown_ticks" :key="tick.at" class="wf-gridline" :style="{ left: `${tick.x * 100}%` }"></i>
               <i v-for="fold in shown_axis.folds" :key="fold.start" class="wf-fold" :style="{ left: `${fold.from * 100}%`, width: `${fold.width * 100}%` }"></i>
@@ -632,7 +661,13 @@ const selected_notes = computed(() => {
           <span v-else-if="!brief(row)" class="wf-row-status wf-status" :class="`is-${status(row).tone}`">{{ status(row).text }}</span>
           <div v-if="opened === row.key && (compact || detail_anchor)" class="wf-detail" role="dialog" @mouseenter="hover_keep" @mouseleave="hover_leave" :aria-label="`${name(row.item.member)} 的这次执行`"
             :style="compact ? undefined : { top: `${detail_anchor.top}px`, left: `${detail_anchor.left}px` }">
-            <header class="wf-detail-head"><strong>{{ name(row.item.member) }}</strong><small>{{ role_label(row) }} · {{ STATE_LABELS[row.item.state] }} · {{ clock(row.start) }} 起 · {{ format_duration(row.end - row.start) }}</small>
+            <header class="wf-detail-head">
+              <UAvatar :src="bridge.identities[row.item.member]?.icon" :text="bridge.identities[row.item.member]?.initials" :alt="row.item.member" size="sm" class="channel-avatar wf-avatar" :class="bridge.identities[row.item.member]?.style" />
+              <div class="wf-detail-title">
+                <span class="wf-detail-name"><strong>{{ name(row.item.member) }}</strong><em class="wf-pill wf-state-pill" :class="`is-${row.item.state}`">{{ STATE_LABELS[row.item.state] }}</em></span>
+                <small>{{ role_label(row) }} · {{ clock(row.start) }} 起</small>
+              </div>
+              <span class="wf-detail-total">{{ format_duration(row.end - row.start) }}</span>
               <button type="button" class="wf-card-close" aria-label="关闭" @click="opened = ''"><UIcon name="i-lucide-x" /></button></header>
             <section v-if="selected" class="wf-detail-piece">
               <strong>{{ selected_title }}</strong>
@@ -642,20 +677,39 @@ const selected_notes = computed(() => {
                 <ol><li v-for="note in selected_notes" :key="note.at + note.text"><time>{{ clock(note.at) }}</time>{{ note.text }}</li></ol>
               </template>
             </section>
-            <dl>
-              <div><dt>时间</dt><dd>{{ status(row).text }}</dd></div>
-              <div v-if="row.item.task"><dt>任务</dt><dd>{{ row.item.task }}<button v-if="row.item.task_id" type="button" class="subtle-link" @click="emit('detail', row.item.task_id)">#{{ row.item.task_id }}</button></dd></div>
-              <div v-if="row.item.answer_id"><dt>回答</dt><dd><button type="button" class="subtle-link" @click="emit('detail', row.item.answer_id)">在消息中查看 #{{ row.item.answer_id }}</button></dd></div>
-              <div v-if="row.item.changes"><dt>改动</dt><dd>{{ row.item.changes }} 个文件</dd></div>
-            </dl>
-            <ol v-if="opened_log.length" class="wf-log" aria-label="过程">
-              <li v-for="entry in opened_log" :key="`${entry.kind}-${entry.at}-${entry.phase || ''}`" :class="`log-${entry.kind}`">
-                <time>{{ clock(entry.at) }}</time>
-                <template v-if="entry.kind === 'phase'"><i class="wf-swatch" :class="`is-${PHASE_KINDS[entry.phase]}`" :data-tone="member_tone.get(row.item.member)" aria-hidden="true"></i><span>{{ PHASE_LABELS[entry.phase] }}<template v-if="entry.tool"> · {{ entry.tool }}</template> · {{ entry.live ? '进行中' : format_duration(entry.duration) }}</span></template>
-                <span v-else class="wf-log-note">{{ entry.text }}</span>
-              </li>
-            </ol>
-            <p v-else class="fine-print">这次执行没有阶段明细或过程说明。</p>
+            <p v-if="row.item.state !== 'done'" class="wf-detail-status wf-status" :class="`is-${status(row).tone}`">{{ status(row).text }}</p>
+            <section v-if="opened_parts.length" class="wf-detail-block" aria-label="时间分布">
+              <span class="wf-dist" :data-tone="member_tone.get(row.item.member)">
+                <i v-for="part in opened_parts" :key="part.key" :class="`is-${part.kind}`" :style="{ flexGrow: part.ms }"></i></span>
+              <ul class="wf-dist-key" :data-tone="member_tone.get(row.item.member)">
+                <li v-for="part in opened_parts" :key="part.key"><i class="wf-swatch" :class="`is-${part.kind}`" aria-hidden="true"></i>{{ part.label }}
+                  <b>{{ format_duration(part.ms) }}</b><small>{{ percent(part.share) }}</small></li>
+              </ul>
+            </section>
+            <section v-if="row.item.task" class="wf-detail-block">
+              <h4>任务<button v-if="row.item.task_id" type="button" class="wf-detail-link" @click="emit('detail', row.item.task_id)">#{{ row.item.task_id }}<UIcon name="i-lucide-arrow-up-right" /></button></h4>
+              <p class="wf-detail-task" :class="{ 'is-open': opened_task_open }">{{ row.item.task }}</p>
+              <button v-if="row.item.task.length > 80" type="button" class="wf-text-button wf-detail-more" @click="opened_task_open = !opened_task_open">{{ opened_task_open ? '收起' : '展开全文' }}</button>
+            </section>
+            <div v-if="row.item.answer_id || row.item.changes" class="wf-detail-actions">
+              <button v-if="row.item.answer_id" type="button" class="wf-detail-chip is-link" @click="emit('detail', row.item.answer_id)"><UIcon name="i-lucide-message-square-text" />查看回答 #{{ row.item.answer_id }}</button>
+              <span v-if="row.item.changes" class="wf-detail-chip"><UIcon name="i-lucide-file-diff" />改动 {{ row.item.changes }} 个文件</span>
+            </div>
+            <section class="wf-detail-block">
+              <h4>过程<small v-if="opened_log.length">{{ opened_log.length }} 条</small></h4>
+              <ol v-if="opened_log.length" class="wf-log" aria-label="过程" :data-tone="member_tone.get(row.item.member)">
+                <li v-for="entry in opened_log" :key="`${entry.kind}-${entry.at}-${entry.phase || ''}`" :class="[`log-${entry.kind}`, entry.kind === 'phase' && `kind-${PHASE_KINDS[entry.phase]}`, { 'is-live': entry.live }]">
+                  <i class="wf-log-dot" aria-hidden="true"></i>
+                  <template v-if="entry.kind === 'phase'">
+                    <span class="wf-log-phase"><b>{{ PHASE_LABELS[entry.phase] }}</b><span v-if="entry.tool" class="wf-log-tool">{{ entry.tool }}</span></span>
+                    <span class="wf-log-dur">{{ entry.live ? '进行中' : format_duration(entry.duration) }}</span>
+                    <time>{{ clock(entry.at) }}</time>
+                  </template>
+                  <template v-else><p class="wf-log-note">{{ entry.text }}</p><time>{{ clock(entry.at) }}</time></template>
+                </li>
+              </ol>
+              <p v-else class="fine-print">这次执行没有阶段明细或过程说明。</p>
+            </section>
           </div>
         </div>
       </div>
@@ -889,25 +943,69 @@ const selected_notes = computed(() => {
 :is(.wf-end, .wf-name-end) small.is-failed { color: var(--wf-failed); }
 :is(.wf-end, .wf-name-end) small.is-running { color: var(--wf-accent); }
 
-/* Detail: a panel floating under the opened name; on a phone it opens in place under the row. */
-.wf-detail { position: absolute; z-index: 20; width: min(560px, calc(100% - 16px)); max-height: min(60vh, 520px); padding: 12px 14px; overflow: auto;
-  border: 1px solid var(--channel-edge-float, var(--wf-border)); border-radius: 10px; background: var(--ui-bg-elevated); box-shadow: var(--channel-shadow-float, 0 12px 32px rgb(0 0 0 / .3)); font-size: 13px; }
-.wf-detail-head { position: relative; display: flex; flex-wrap: wrap; align-items: baseline; gap: 4px 8px; margin: 0 0 10px; padding-right: 32px; }
-.wf-detail-head strong { color: var(--wf-text); font-size: 14px; }
-.wf-detail-head small { color: var(--wf-muted); font-size: 12px; }
-.wf-detail .wf-card-close { top: -6px; right: -6px; }
-.wf-detail dl { display: grid; gap: 6px; margin: 0 0 10px; }
-.wf-detail dl > div { display: grid; grid-template-columns: 48px minmax(0, 1fr); gap: 8px; }
-.wf-detail dt { color: var(--wf-muted); font-size: 12px; }
-.wf-detail dd { margin: 0; overflow-wrap: anywhere; }
-.wf-detail .subtle-link { margin-left: 8px; }
-.wf-detail dd > .subtle-link:first-child { margin-left: 0; }
-.wf-log { display: grid; gap: 4px; max-height: 320px; margin: 0; padding: 10px 0 0; overflow: auto; border-top: 1px solid var(--wf-border); list-style: none; }
-.wf-log li { display: grid; grid-template-columns: 64px 12px minmax(0, 1fr); align-items: baseline; gap: 8px; font-size: 12px; }
-.wf-log li.log-note { grid-template-columns: 64px minmax(0, 1fr); }
-.wf-log time { color: var(--wf-muted); font-family: var(--wf-mono); font-size: 11px; font-variant-numeric: tabular-nums; }
-.wf-log li.log-phase span { color: var(--wf-muted); }
-.wf-log-note { color: var(--wf-text); line-height: 1.6; white-space: pre-wrap; overflow-wrap: anywhere; }
+/* Detail: a panel floating under the opened name; on a phone it opens in place under the row. Sections read top-down:
+   who and how long, where the time went, what was asked, what came of it, then the story in time order. */
+.wf-detail { position: absolute; z-index: 20; display: grid; gap: 14px; width: min(560px, calc(100% - 16px)); max-height: min(70vh, 600px); padding: 14px 16px 16px; overflow: auto;
+  border: 1px solid var(--channel-edge-float, var(--wf-border)); border-radius: 12px; background: var(--ui-bg-elevated); box-shadow: var(--channel-shadow-float, 0 12px 32px rgb(0 0 0 / .3));
+  font-size: 13px; line-height: 1.6; overscroll-behavior: contain; }
+.wf-detail-head { position: relative; display: flex; align-items: center; gap: 10px; min-width: 0; padding-right: 30px; }
+.wf-detail-title { display: grid; flex: 1; gap: 1px; min-width: 0; }
+.wf-detail-name { display: flex; align-items: center; gap: 8px; min-width: 0; }
+.wf-detail-name strong { overflow: hidden; color: var(--wf-text); font-size: 15px; font-weight: 650; text-overflow: ellipsis; white-space: nowrap; }
+.wf-detail-title small { color: var(--wf-muted); font-size: 12px; font-variant-numeric: tabular-nums; }
+.wf-detail-total { flex: none; color: var(--wf-text); font-family: var(--wf-mono); font-size: 15px; font-weight: 600; font-variant-numeric: tabular-nums; }
+.wf-state-pill { background: var(--wf-well); color: var(--wf-muted); }
+.wf-state-pill.is-done { background: color-mix(in oklab, var(--ui-success, #22c55e) 14%, transparent); color: var(--ui-success, #22c55e); }
+.wf-state-pill.is-running { background: color-mix(in oklab, var(--wf-accent) 14%, transparent); color: var(--wf-accent); }
+.wf-state-pill.is-failed { background: color-mix(in oklab, var(--wf-failed) 14%, transparent); color: var(--wf-failed); }
+.wf-detail .wf-card-close { top: 50%; right: -8px; transform: translateY(-50%); }
+.wf-detail-status { margin: -4px 0 0; white-space: normal; line-height: 1.5; }
+.wf-detail-block { display: grid; gap: 8px; min-width: 0; }
+.wf-detail-block h4 { display: flex; align-items: center; gap: 8px; margin: 0; color: var(--wf-muted); font-size: 12px; font-weight: 600; letter-spacing: .02em; }
+.wf-detail-block h4 small { font-weight: 400; }
+/* Where the time went: one bar in the member's hue, then each part with its length and share. */
+.wf-dist { display: flex; gap: 2px; height: 10px; overflow: hidden; border-radius: 5px; background: var(--wf-well); }
+.wf-dist i { flex-basis: 0; min-width: 3px; }
+.wf-dist-key { display: grid; grid-template-columns: repeat(auto-fill, minmax(132px, 1fr)); gap: 4px 14px; margin: 0; padding: 0; list-style: none; }
+.wf-dist-key li { display: flex; align-items: center; gap: 6px; min-width: 0; color: var(--wf-muted); font-size: 12px; }
+.wf-dist-key b { margin-left: auto; color: var(--wf-text); font-family: var(--wf-mono); font-weight: 500; font-variant-numeric: tabular-nums; }
+.wf-dist-key small { width: 32px; color: var(--ui-text-dimmed); font-family: var(--wf-mono); font-size: 11px; text-align: right; font-variant-numeric: tabular-nums; }
+:is(.wf-dist, .wf-dist-key) .is-wait { background: repeating-linear-gradient(-45deg, var(--wf-hatch) 0 1px, transparent 1px 4px); box-shadow: inset 0 0 0 1px var(--wf-hatch); }
+:is(.wf-dist, .wf-dist-key) .is-other { background: color-mix(in oklab, var(--tone, var(--wf-plain)) 28%, var(--wf-surface)); box-shadow: inset 0 0 0 1px color-mix(in oklab, var(--tone, var(--wf-plain)) 55%, transparent); }
+/* What was asked, as a quote in body type; a long task shows four lines until opened. */
+.wf-detail-task { display: -webkit-box; margin: 0; padding: 8px 12px; overflow: hidden; border-left: 2px solid color-mix(in oklab, var(--wf-text) 18%, transparent); border-radius: 0 6px 6px 0;
+  background: var(--wf-well); color: var(--ui-text); font-size: 14px; line-height: 1.75; white-space: pre-wrap; overflow-wrap: anywhere; -webkit-box-orient: vertical; -webkit-line-clamp: 4; }
+.wf-detail-task.is-open { display: block; }
+.wf-detail-more { justify-self: start; margin: -4px 0 0 4px; color: var(--wf-accent); }
+.wf-detail-link { display: inline-flex; align-items: center; gap: 2px; margin-left: auto; padding: 0 4px; border: 0; border-radius: 4px; background: none; color: var(--wf-accent); font: inherit; font-family: var(--wf-mono); font-weight: 500; cursor: pointer; }
+.wf-detail-link:hover { background: var(--wf-hover); }
+.wf-detail-link :deep(svg) { width: 12px; height: 12px; }
+.wf-detail-actions { display: flex; flex-wrap: wrap; gap: 8px; }
+.wf-detail-chip { display: inline-flex; align-items: center; gap: 6px; height: 30px; padding: 0 12px; border: 1px solid var(--wf-border); border-radius: 8px; background: var(--wf-well); color: var(--wf-muted); font: inherit; font-size: 12px; }
+.wf-detail-chip.is-link { color: var(--wf-text); cursor: pointer; }
+.wf-detail-chip.is-link:hover { border-color: var(--wf-guide); background: var(--wf-hover); }
+.wf-detail-chip :deep(svg) { width: 14px; height: 14px; }
+/* The story: a rail of dots in the member's hue, the model's turns solid and tool work hollow; notes read as text on it. */
+.wf-log { position: relative; display: grid; margin: 0; padding: 0; list-style: none; }
+.wf-log::before { position: absolute; top: 10px; bottom: 10px; left: 4px; width: 1px; background: var(--wf-guide); content: ""; }
+.wf-log li { position: relative; display: grid; grid-template-columns: minmax(0, 1fr) auto; align-items: baseline; gap: 0 10px; padding: 5px 0 5px 20px; }
+.wf-log-dot { position: absolute; top: 11px; left: 0; width: 9px; height: 9px; border-radius: 50%; background: var(--wf-plain); box-shadow: 0 0 0 3px var(--ui-bg-elevated); }
+.wf-log li.kind-model .wf-log-dot { background: var(--tone, var(--wf-plain)); }
+.wf-log li.kind-tool .wf-log-dot { background: var(--ui-bg-elevated); box-shadow: inset 0 0 0 1.5px var(--tone, var(--wf-plain)), 0 0 0 3px var(--ui-bg-elevated); }
+.wf-log li.log-note .wf-log-dot { top: 14px; left: 2px; width: 5px; height: 5px; background: var(--wf-muted); }
+.wf-log li.is-live .wf-log-dot { animation: wf-pulse 1.4s ease-in-out infinite; }
+.wf-log-phase { display: flex; align-items: baseline; gap: 6px; min-width: 0; }
+.wf-log-phase b { flex: none; color: var(--wf-text); font-weight: 550; }
+.wf-log-tool { overflow: hidden; color: var(--wf-muted); font-family: var(--wf-mono); font-size: 12px; text-overflow: ellipsis; white-space: nowrap; }
+.wf-log-dur { color: var(--wf-text); font-family: var(--wf-mono); font-size: 12px; text-align: right; font-variant-numeric: tabular-nums; }
+.wf-log li.is-live .wf-log-dur { color: var(--wf-accent); font-family: inherit; }
+.wf-log time { grid-column: 1 / -1; color: var(--ui-text-dimmed); font-family: var(--wf-mono); font-size: 11px; line-height: 15px; font-variant-numeric: tabular-nums; }
+.wf-log-note { grid-column: 1 / -1; margin: 0; padding: 8px 10px; border-radius: 8px; background: var(--wf-well); color: var(--ui-text); line-height: 1.7; white-space: pre-wrap; overflow-wrap: anywhere; }
+.wf-log li.log-note time { margin-top: 3px; }
+/* A phase is one line: what, how long, when. */
+.wf-log li.log-phase { grid-template-columns: minmax(0, 1fr) auto 62px; }
+.wf-log li.log-phase time { grid-column: auto; text-align: right; }
+.wf-log li.log-phase .wf-log-dot { top: 50%; margin-top: -4.5px; }
 
 /* Footer: the three kinds of time, folded idle and truncation notes, and the way into a replay. */
 .wf-foot { display: flex; flex-wrap: wrap; align-items: center; gap: 4px 18px; padding: 8px 16px; border-top: 1px solid var(--wf-border); color: var(--wf-muted); font-size: 12px; }
@@ -937,6 +1035,19 @@ const selected_notes = computed(() => {
 
 @keyframes wf-ping { from { opacity: .7; transform: scale(1); } 70%, to { opacity: 0; transform: scale(2.8); } }
 @keyframes wf-spin { to { transform: rotate(360deg); } }
+@keyframes wf-pulse { 50% { opacity: .45; } }
+/* Motion: the waterfall draws itself. Running bars grow every frame (in script), their leading edge fades out as a trace
+   draws running spans, and a light sweeps along them; a row that appears slides in and its bars unroll from the left. */
+.is-running .wf-bar.is-work:not(.has-detail), .wf-seg.is-live:not(.is-tail) { overflow: hidden;
+  -webkit-mask-image: linear-gradient(90deg, #000 calc(100% - 24px), rgb(0 0 0 / .35)); mask-image: linear-gradient(90deg, #000 calc(100% - 24px), rgb(0 0 0 / .35)); }
+.is-running .wf-bar.is-work:not(.has-detail)::after, .wf-seg.is-live:not(.is-tail)::after { position: absolute; inset: 0; content: "";
+  background: linear-gradient(90deg, transparent, rgb(255 255 255 / .38), transparent) no-repeat; background-size: 64px 100%; animation: wf-sweep 1.8s linear infinite; }
+@keyframes wf-sweep { from { background-position: -64px 0; } to { background-position: calc(100% + 64px) 0; } }
+.wf-row.is-entering > :not(.wf-detail) { animation: wf-enter 520ms cubic-bezier(.2, .8, .2, 1) both; }
+.wf-row.is-entering .wf-track > .wf-bar { transform-origin: left center; animation: wf-unroll 640ms cubic-bezier(.2, .8, .2, 1) both; }
+@keyframes wf-enter { from { opacity: 0; transform: translateY(8px); } }
+@keyframes wf-unroll { from { transform: scaleX(0); } }
+@media (prefers-reduced-motion: reduce) { .wf *, .wf *::before, .wf *::after { animation: none !important; transition: none !important; } }
 
 /* Narrow pages (a small window, or both rails open): a shorter label column, so the lanes keep room. */
 .execution-timeline { container: wf / inline-size; }
@@ -945,8 +1056,8 @@ const selected_notes = computed(() => {
   .wf-grid { grid-template-columns: var(--wf-label-col) minmax(0, 1fr) 68px; }
   .wf-end { padding-right: 10px; }
 }
-/* Phones (decided by the page's own width, in script): no shared axis. Each execution is three lines: when, who and how
-   long; its own duration split by kind, against the longest in the round; what its time went to. */
+/* Phones (decided by the page's own width, in script): no clock axis. Each execution is three lines: when, who and how
+   long; its bar, the latest task's rows on one axis from its start to its end so they still step down; where its time went. */
 .wf.is-compact .wf-head, .wf.is-compact .wf-foot, .wf.is-compact .wf-player { padding-inline: 12px; }
 .wf.is-compact .wf-run { padding-inline: 12px; }
 /* On a phone a stretch is two lines: when, who led, how many and how long; then the bar. */
@@ -959,19 +1070,16 @@ const selected_notes = computed(() => {
 .wf.is-compact .wf-names { padding: 0; }
 .wf.is-compact .wf-clock { flex: none; color: var(--wf-muted); font-family: var(--wf-mono); font-size: 11px; font-variant-numeric: tabular-nums; }
 .wf.is-compact .wf-name-end { display: inline-flex; flex: none; align-items: baseline; gap: 6px; margin-left: auto; font-family: var(--wf-mono); font-size: 12px; font-variant-numeric: tabular-nums; }
-.wf.is-compact .wf-lane { height: 22px; }
+/* The whole lane is the tap target; the pieces inside are too thin to aim at with a finger. */
+.wf.is-compact .wf-lane { --wf-bar-h: 10px; display: block; padding: 6px 0 4px; cursor: pointer; }
+.wf.is-compact .wf-lane:focus-visible { outline: 2px solid var(--wf-accent); outline-offset: -2px; }
+.wf.is-compact .wf-track { height: 12px; }
+.wf.is-compact .wf-track > * { pointer-events: none; }
+.wf.is-compact .wf-well, .wf.is-compact .wf-bar { border-radius: 5px; }
 .wf.is-compact .wf-row-status { padding: 0 12px 6px; }
-.wf.is-compact .wf-row.is-brief .wf-label { padding-bottom: 6px; }
-/* A phone row's bar: proportions by kind, against the longest execution; a tap opens the row like its name does. */
-.wf-mix-lane { display: block; width: 100%; padding: 4px 12px; border: 0; background: var(--wf-tint, transparent); text-align: left; cursor: pointer; }
-.wf-mix { display: flex; gap: 1px; min-width: 4px; height: var(--wf-bar-h); overflow: hidden; border-radius: 3px; }
-.wf-mix-part { flex-basis: 0; min-width: 2px; padding: 0 4px; overflow: hidden; color: var(--wf-text); font-size: 11px; font-weight: 500; line-height: var(--wf-bar-h); white-space: nowrap; }
-.wf-mix-part.is-wait { color: var(--wf-muted); background: repeating-linear-gradient(-45deg, var(--wf-hatch) 0 1px, transparent 1px 5px); box-shadow: inset 0 0 0 1px var(--wf-hatch); }
-.wf-mix-part.is-wait.is-long { color: var(--wf-warn); --wf-hatch: color-mix(in oklab, var(--wf-warn) 55%, transparent); }
-.wf-mix-part.is-work { background: color-mix(in oklab, var(--tone, var(--wf-plain)) 32%, var(--wf-surface)); }
-.wf-mix-part.is-model { color: var(--ui-bg); }
-.is-failed .wf-mix { box-shadow: inset 0 0 0 1px var(--wf-failed); }
-.is-stalled .wf-mix { box-shadow: inset 0 0 0 1.5px var(--wf-warn); }
+/* A history row keeps its bar, thinner, so the whole list still reads as a waterfall. */
+.wf.is-compact .wf-row.is-brief .wf-lane { --wf-bar-h: 6px; padding: 4px 0 8px; }
+.wf.is-compact .wf-row.is-brief .wf-track { height: 6px; }
 /* What needs a look, above the rows: running work and failures as cards; a tap opens the row below. */
 .wf-now { display: grid; gap: 8px; padding: 10px 12px; border-bottom: 1px solid var(--wf-border); }
 .wf-now-card { display: grid; gap: 3px; width: 100%; padding: 8px 10px; border: 1px solid var(--wf-border); border-radius: 8px; background: var(--wf-well); color: inherit; font: inherit; text-align: left; cursor: pointer; }
@@ -982,7 +1090,8 @@ const selected_notes = computed(() => {
 .wf-now-time { flex: none; margin-left: auto; color: var(--wf-muted); font-family: var(--wf-mono); font-size: 12px; font-variant-numeric: tabular-nums; }
 .wf-now-status { display: -webkit-box; font-size: 13px; line-height: 18px; white-space: normal; -webkit-box-orient: vertical; -webkit-line-clamp: 2; }
 .wf-now-note { overflow: hidden; color: var(--wf-muted); font-size: 12px; line-height: 17px; text-overflow: ellipsis; white-space: nowrap; }
-.wf.is-compact .wf-detail { position: static; width: auto; max-height: none; margin: 0 8px 8px; box-shadow: none; }
+.wf.is-compact .wf-detail { position: static; width: auto; max-height: none; margin: 2px 10px 12px; padding: 14px; box-shadow: none; }
+.wf.is-compact .wf-dist-key { grid-template-columns: repeat(2, minmax(0, 1fr)); }
 /* Touch: controls keep their look but take a fingertip; a note's tick is easier to hit. */
 @media (pointer: coarse) {
   .wf-toggle { flex: 0 0 32px; width: 32px; height: 32px; margin: -8px; }

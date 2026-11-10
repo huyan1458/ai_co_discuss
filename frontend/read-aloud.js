@@ -471,21 +471,23 @@ export function use_read_aloud({ bridge, container, prepare = async () => {}, me
       const done = (error) => {
         cancelAnimationFrame(frame); ending = null; audio.onended = audio.onerror = audio.ontimeupdate = null; error ? reject(error) : resolve();
       };
-      // `timeupdate` also fires with the screen locked, so the pace is learned there rather than in the highlight loop.
-      audio.ontimeupdate = () => {
-        if (!Number.isFinite(audio.duration)) return;
-        if (!learned) { learned = true; learn_pace(readable_length(chunk.text), audio.duration - chunk.silence / 1000); }
-        on_progress(audio.duration - audio.currentTime);
-      };
-      ending = () => done();
-      const follow = () => {
+      const sync = () => {
         starts ||= Number.isFinite(audio.duration) ? sentence_starts(chunk, marks, audio.duration * 1000 - chunk.silence) : null;
         const elapsed = audio.currentTime * 1000;
         let index = 0;
         while (starts && index + 1 < starts.length && starts[index + 1] <= elapsed) index += 1;
         if (index !== shown) { shown = index; highlight(chunk.sentences[index]); follow_scroll(); }
-        frame = requestAnimationFrame(follow);
       };
+      // `timeupdate` also fires with the page hidden or the screen locked, unlike animation frames: the pace is learned
+      // there, and the sentence being read keeps moving so the page shows the right one when it comes back.
+      audio.ontimeupdate = () => {
+        if (!Number.isFinite(audio.duration)) return;
+        if (!learned) { learned = true; learn_pace(readable_length(chunk.text), audio.duration - chunk.silence / 1000); }
+        on_progress(audio.duration - audio.currentTime);
+        sync();
+      };
+      ending = () => done();
+      const follow = () => { sync(); frame = requestAnimationFrame(follow); };
       audio.onended = () => done();
       audio.onerror = () => done(new Error("音频无法播放"));
       switching = true;
@@ -746,7 +748,7 @@ export function use_read_aloud({ bridge, container, prepare = async () => {}, me
   // Re-draw whenever the text may have been laid out again: the boxes are fixed to where it was. Switching pages or
   // tabs hides and re-shows the text without a window resize, so also watch the text's own box and page visibility.
   const redraw = () => { if (current) highlight(current); };
-  const redraw_visible = () => { if (document.visibilityState === "visible") redraw(); };
+  const redraw_visible = () => { if (document.visibilityState === "visible") { redraw(); follow_scroll(); } };
   let watched = null;
   const layout_watch = typeof ResizeObserver === "function" ? new ResizeObserver(redraw) : null;
   window.addEventListener("resize", redraw);
