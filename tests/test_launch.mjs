@@ -118,27 +118,33 @@ test('agy skill discovery reads local manifests, filters excluded skills and pre
 test('agy default model is run once a day, not on every room read, and read again on retry', async t => {
   const home = mkdtempSync(join(tmpdir(), 'codiscuss-defaults-'));
   t.after(() => rmSync(home, { recursive: true, force: true }));
-  let runs = 0;
+  let runs = 0, setting = '';
+  const stamp = () => setting;
   const query = async () => { runs++; return { model: 'gemini-test-high', effort: '' }; };
   const profile = { adapter: 'antigravity_cli', executable: join(home, 'agy.exe') };
-  assert.equal((await cached_software_defaults(home, profile, { query })).model, 'gemini-test-high');
-  assert.equal((await cached_software_defaults(home, profile, { query })).model, 'gemini-test-high');
+  assert.equal((await cached_software_defaults(home, profile, { query, stamp })).model, 'gemini-test-high');
+  assert.equal((await cached_software_defaults(home, profile, { query, stamp })).model, 'gemini-test-high');
   assert.equal(runs, 1);
   // agy updating itself changes the executable, which must not start another run.
   writeFileSync(profile.executable, 'updated');
-  await cached_software_defaults(home, profile, { query });
+  await cached_software_defaults(home, profile, { query, stamp });
   assert.equal(runs, 1);
-  await cached_software_defaults(home, profile, { query, refresh: true });
+  await cached_software_defaults(home, profile, { query, stamp, refresh: true });
   assert.equal(runs, 2);
+  // Choosing another default model in agy's own settings reads it again at once.
+  setting = 'Gemini 4 Carbon (High)';
+  await cached_software_defaults(home, profile, { query, stamp });
+  await cached_software_defaults(home, profile, { query, stamp });
+  assert.equal(runs, 3);
   // A run that cannot sign in keeps the last good answer and is not repeated on the next read.
   const failing = async () => { runs++; return { model: '', effort: '' }; };
-  assert.equal((await cached_software_defaults(home, profile, { query: failing, refresh: true })).model, 'gemini-test-high');
-  assert.equal((await cached_software_defaults(home, profile, { query: failing })).model, 'gemini-test-high');
-  assert.equal(runs, 3);
+  assert.equal((await cached_software_defaults(home, profile, { query: failing, stamp, refresh: true })).model, 'gemini-test-high');
+  assert.equal((await cached_software_defaults(home, profile, { query: failing, stamp })).model, 'gemini-test-high');
+  assert.equal(runs, 4);
   // Software that reads its own settings file is never cached, so a changed setting shows at once.
   await cached_software_defaults(home, { adapter: 'claude', executable: profile.executable }, { query });
   await cached_software_defaults(home, { adapter: 'claude', executable: profile.executable }, { query });
-  assert.equal(runs, 5);
+  assert.equal(runs, 6);
 });
 
 test('paused room path correction is authenticated, versioned and adopted before an explicit restart', async t => {

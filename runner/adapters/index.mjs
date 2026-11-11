@@ -192,6 +192,11 @@ export async function software_defaults(profile, options = {}) {
   return (await adapter_of(profile.adapter)?.models?.defaults(profile, options)) || { model: '', effort: '' };
 }
 
+/** A cheap marker of the software's default-model setting, so a cached default is read again after the user changes it. */
+export function software_defaults_stamp(profile) {
+  return adapter_of(profile.adapter)?.models?.defaults_stamp?.(profile) || '';
+}
+
 /** List only skills the member's own adapter can discover; an unsupported source is not an empty catalog. */
 export async function software_skills(profile, options = {}) {
   const read = adapter_of(profile.adapter)?.skills;

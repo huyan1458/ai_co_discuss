@@ -475,6 +475,11 @@ async function defaults(profile, options = {}) {
   catch { return { model: '', effort: '' }; }
 }
 
+/** The model chosen in agy's own settings; when it changes, a cached default is stale. Permission rules in the same file are ignored. */
+function defaults_stamp(profile, user_home = homedir()) {
+  return String(read_json(join(user_home, '.gemini', 'antigravity-cli', 'settings.json')).model || '');
+}
+
 /**
  * Whether another agy process has this conversation open: while it does, agy holds an exclusive lock on
  * presence/<id>.lock, and reading the locked byte fails. Only Windows enforces that lock, so elsewhere this says false.
@@ -540,6 +545,6 @@ export const antigravity_cli = {
   deliver,
   invocation, lifecycle, events,
   session: { path: session_path, exists: session_exists, owns: session_exists, branch, settings: session_settings },
-  models: { list: models, effort, defaults },
+  models: { list: models, effort, defaults, defaults_stamp },
   skills: agy_skills,
 };

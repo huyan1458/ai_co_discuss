@@ -143,7 +143,7 @@ function library_description(name) {
 
 // Presets follow the platforms, after a divider; each adds a named instance already set up for its job.
 const PRESET_PREFIX = "preset:";
-const library_items = computed(() => [...experts.map((name) => ({ value: name, name: bridge.display_name(name), ...bridge.identities[name],
+const library_items = computed(() => [...experts.map((name) => ({ value: name, name: bridge.default_name(name), ...bridge.identities[name],
   disabled: !bridge.launch_clients[name], title: library_description(name), aria_label: `添加 ${name} 实例` })),
   ...view.value && bridge.expert_presets().map((preset, index) => ({ value: PRESET_PREFIX + preset.name, name: preset.label || preset.name, ...bridge.identities[bridge.platform_of(preset.name)],
     separated: index === 0, title: preset.description || "专家预设", aria_label: `添加预设 ${preset.label || preset.name}`, removable: true }))]);

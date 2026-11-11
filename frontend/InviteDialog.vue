@@ -82,7 +82,7 @@ function add_invite(name) {
 
 // The same add row as the create form: platforms first, presets on their own row.
 const PRESET_PREFIX = "preset:";
-const library_items = computed(() => [...invite_choices.value.map((name) => ({ value: name, name: bridge.display_name(name), ...bridge.identities[name],
+const library_items = computed(() => [...invite_choices.value.map((name) => ({ value: name, name: bridge.default_name(name), ...bridge.identities[name],
   title: invite_count(name) ? `已在场 ${invite_count(name)} 位 · 将添加新实例` : "", aria_label: `添加 ${name} 实例` })),
   ...invite_presets.value.map((preset, index) => ({ value: PRESET_PREFIX + preset.name, name: preset.label || preset.name, ...bridge.identities[bridge.platform_of(preset.name)],
     separated: index === 0, title: preset.description || "专家预设", aria_label: `添加预设 ${preset.label || preset.name}`, removable: true }))]);

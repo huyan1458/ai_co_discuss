@@ -14,7 +14,7 @@ import { bundle_project_markdown, bundle_project_page, outside_directory, projec
 import { guard_remote_request, list_remote_directories } from './remote_policy.mjs';
 import { list_devices, machine_fingerprint, revoke_device, start_pairing } from './device_auth.mjs';
 import { setup_sidecar } from './adapters/antigravity_app.mjs';
-import { adapter_of, adoption_adapter, BRANCHABLE_ADAPTERS, branch_session, execution_details, session_settings, software_defaults, software_effort, software_models, software_skills } from './adapters/index.mjs';
+import { adapter_of, adoption_adapter, BRANCHABLE_ADAPTERS, branch_session, execution_details, session_settings, software_defaults, software_defaults_stamp, software_effort, software_models, software_skills } from './adapters/index.mjs';
 import { ADAPTER_IDS, ADAPTER_PROFILES, adapter_profile, DEFAULT_API_MAX_REQUESTS, MAX_API_MAX_REQUESTS, platform_adapters, same_session_family } from './adapters/profiles.mjs';
 import { API_PROVIDERS, api_check, api_models, save_api_key, saved_api_keys, validate_api_profile } from './discussion_api.mjs';
 import { DEFAULT_SCHEDULER_MODE, SCHEDULER_MODES, SCHEDULER_PROVIDERS, scheduler_check } from './scheduler.mjs';
@@ -302,20 +302,22 @@ function executable_stamp(profile) {
  * cheap and always fresh; one that must run the CLI (agy) is kept for a day, because each run may refresh the
  * software's login and, when that refresh fails, it opens a browser sign-in. `refresh` reads it again.
  * agy updates itself often, so the key leaves out the executable stamp; a failed run is recorded too and keeps the
- * last good answer, so a run that cannot sign in is not repeated on every room read.
+ * last good answer, so a run that cannot sign in is not repeated on every room read. Changing the default model in the
+ * software's own settings (`stamp`) reads it again at once.
  */
-export async function cached_software_defaults(home, profile, { refresh = false, query = software_defaults } = {}) {
+export async function cached_software_defaults(home, profile, { refresh = false, query = software_defaults, stamp = software_defaults_stamp } = {}) {
   if (!adapter_profile(profile.adapter)?.defaults_by_query) return query(profile);
   const path = join(home, 'model-catalogs.json');
   const key = JSON.stringify(['defaults', profile.adapter, profile.executable || '']);
   let cache = {};
   try { cache = JSON.parse(readFileSync(path, 'utf8')); } catch {}
   const entry = cache[key];
-  if (!refresh && entry && Date.now() - entry.at < MODEL_CACHE_MS) return entry.result;
+  const setting = stamp(profile);
+  if (!refresh && entry && Date.now() - entry.at < MODEL_CACHE_MS && (entry.setting ?? '') === setting) return entry.result;
   const answer = await query(profile);
   const result = answer?.model ? answer : entry?.result || answer;
   try { cache = JSON.parse(readFileSync(path, 'utf8')); } catch {}
-  atomic_json(path, { ...cache, [key]: { at: Date.now(), result } });
+  atomic_json(path, { ...cache, [key]: { at: Date.now(), setting, result } });
   return result;
 }
 
