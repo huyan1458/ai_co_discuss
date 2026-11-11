@@ -26,8 +26,8 @@ const narrow = ref(narrow_query.matches);
 const track_narrow = (event) => { narrow.value = event.matches; };
 // Text size of the preview and source, kept per device: phones and desktops want different sizes.
 const FONT_SCALE_KEY = "ai-codiscuss-file-font-scale";
-const FONT_SCALE_MIN = 0.9;
-const FONT_SCALE_MAX = 1.5;
+const FONT_SCALE_MIN = 0.5;
+const FONT_SCALE_MAX = 2;
 const FONT_SCALE_STEP = 0.1;
 const font_scale = ref(read_font_scale());
 
@@ -61,6 +61,9 @@ const format = computed(() => /\.(md|markdown)$/i.test(active_path.value) ? "mar
 // Word, Excel and PowerPoint files open in the Office previews (`office_kind`); a Premiere project is unpacked to its XML.
 const document_kind = computed(() => document_kind_of(active_path.value));
 const office_kind = computed(() => (document_kind.value === "prproj" ? "" : document_kind.value));
+// Word and Excel previews follow the same size steps as text; slides and PDF fit the window themselves.
+const can_scale = computed(() => office_kind.value ? ["docx", "sheet"].includes(office_kind.value)
+  : preview.value?.text != null && !(format.value === "html" && !showing_source.value));
 // Rows of a CSV / TSV preview and cues of a subtitle preview; the source view keeps the whole text.
 const MAX_TABLE_ROWS = 5000;
 const table = computed(() => {
@@ -160,7 +163,7 @@ const can_read = computed(() => speech_ready.value && format.value === "markdown
 const file_menu = computed(() => {
   const keep_open = (action) => (event) => { event.preventDefault(); action(); };
   const groups = [];
-  if (preview.value?.text != null && !(format.value === "html" && !showing_source.value)) groups.push([
+  if (can_scale.value) groups.push([
     { label: "缩小字号", icon: "i-lucide-a-arrow-down", disabled: font_scale.value <= FONT_SCALE_MIN, onSelect: keep_open(() => change_font_scale(-1)) },
     { label: "放大字号", icon: "i-lucide-a-arrow-up", disabled: font_scale.value >= FONT_SCALE_MAX, onSelect: keep_open(() => change_font_scale(1)) },
     { label: `恢复默认字号（当前 ${Math.round(font_scale.value * 100)}%）`, icon: "i-lucide-rotate-ccw", disabled: font_scale.value === 1, onSelect: keep_open(() => change_font_scale(0)) },
@@ -797,7 +800,7 @@ onBeforeUnmount(() => {
           </div>
         </div>
         <div v-if="!narrow" class="project-editor-file-actions">
-          <div v-if="preview?.text != null && !(format === 'html' && !showing_source)" class="project-editor-font" role="group" aria-label="字号">
+          <div v-if="can_scale" class="project-editor-font" role="group" aria-label="字号">
             <button type="button" title="缩小字号" aria-label="缩小字号" :disabled="font_scale <= FONT_SCALE_MIN" @click="change_font_scale(-1)"><UIcon name="i-lucide-a-arrow-down" /></button>
             <button type="button" class="project-editor-font-value" title="恢复默认字号" aria-label="恢复默认字号" @click="change_font_scale(0)">{{ Math.round(font_scale * 100) }}%</button>
             <button type="button" title="放大字号" aria-label="放大字号" :disabled="font_scale >= FONT_SCALE_MAX" @click="change_font_scale(1)"><UIcon name="i-lucide-a-arrow-up" /></button>
@@ -839,7 +842,7 @@ onBeforeUnmount(() => {
         </template>
         <template v-else-if="office_kind">
           <div v-if="tab.media_error" class="project-editor-state"><UIcon name="i-lucide-circle-alert" /><p>{{ tab.media_error }}</p><UButton label="重试" color="neutral" variant="outline" size="sm" @click="load(tab)" /></div>
-          <OfficeViewer v-else-if="tab.media" :kind="office_kind" :url="tab.media.url" />
+          <OfficeViewer v-else-if="tab.media" :kind="office_kind" :url="tab.media.url" :scale="font_scale" />
           <PreviewLoading v-else :label="tab.media_progress ? `正在经电脑读取… ${Math.round(tab.media_progress * 100)}%` : '正在打开…'" :progress="tab.media_progress || 0" />
         </template>
         <div v-else-if="preview?.text === null" class="project-editor-state"><UIcon :name="preview_type[1]" /><p>{{ preview.reason || '这个格式只能下载后用本机软件打开' }}</p></div>

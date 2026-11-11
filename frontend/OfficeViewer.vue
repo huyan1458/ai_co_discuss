@@ -3,14 +3,15 @@
  * The file preview's read-only view of one Office document or PDF. The renderers load only when such a file opens:
  * docx-preview (Word), SheetJS (Excel) and @silurus/ooxml (PowerPoint) are separate modules under /office/ (built from
  * frontend/office/ with `--mode office`); PDF.js comes from /pdfjs/. Word and Excel content sits in frames without
- * scripts, so nothing in a file runs as this site; slides and PDF pages are drawn on canvases. The module and the
+ * scripts (same-origin only so the page can size them), so nothing in a file runs as this site; slides and PDF pages are drawn on canvases. The module and the
  * file's bytes load together, and the loading animation covers the content while it lays out at its real size.
  * `url` is a stream address of the computer's website, an attachment's address, or a Blob URL read through the relay.
  */
 import { nextTick, onBeforeUnmount, ref, watch } from "vue";
 import PreviewLoading from "./PreviewLoading.vue";
 
-const props = defineProps({ kind: { type: String, required: true }, url: { type: String, required: true } });
+// `scale` is the preview's size step for Word and Excel (1 = Word fitted to the width, Excel at its normal size).
+const props = defineProps({ kind: { type: String, required: true }, url: { type: String, required: true }, scale: { type: Number, default: 1 } });
 const MODULES = { docx: "/office/docx.js", sheet: "/office/xlsx.js", slides: "/office/pptx.js", pdf: "/pdfjs/pdf.min.mjs" };
 const LABELS = { docx: "正在排版 Word 文档…", sheet: "正在读取表格…", slides: "正在绘制幻灯片…", pdf: "正在打开 PDF…" };
 // The Word frame may be reached from this page to lay the document out, but runs no scripts of its own.
@@ -26,7 +27,7 @@ const PDF_MAX_PIXEL_RATIO = 2;
 const PDF_MAX_SCALE = 2;
 const PDF_GUTTER = 24;
 const state = ref("loading"), error = ref(""), sheets = ref([]), sheet = ref(0);
-const docx_frame = ref(null), slides_host = ref(null), pdf_host = ref(null), frame_loaded = ref(false);
+const docx_frame = ref(null), sheet_frame = ref(null), slides_host = ref(null), pdf_host = ref(null), frame_loaded = ref(false);
 let viewer = null, pdf_task = null, pdf_document = null, page_observer = null, resize_observer = null, version = 0;
 let sheet_worker = null, cancel_sheet = null;
 
@@ -52,13 +53,19 @@ function read_sheets() {
   });
 }
 
-/** Scale the Word pages down to the frame's width; a phone shows the whole page instead of its top-left corner. */
+/** Fit the Word pages to the frame's width (a phone shows the whole page), then apply the chosen size step. */
 function fit_docx() {
   const frame = docx_frame.value, wrapper = frame?.contentDocument?.querySelector(".docx-wrapper");
   const page = wrapper?.querySelector("section.docx");
   if (!page) return;
   wrapper.style.zoom = "";
-  wrapper.style.zoom = String(Math.min(1, frame.clientWidth / (page.offsetWidth + 24)));
+  wrapper.style.zoom = String(Math.min(1, frame.clientWidth / (page.offsetWidth + 24)) * props.scale);
+}
+
+/** Size the sheet's table by the chosen step; the frame runs no scripts but is same-origin so it can be reached. */
+function scale_sheet() {
+  const body = sheet_frame.value?.contentDocument?.body;
+  if (body) body.style.zoom = String(props.scale);
 }
 
 /** Lay out a Word document inside its frame; links open in a new tab instead of inside the preview. */
@@ -168,6 +175,7 @@ async function render() {
 }
 
 watch(() => [props.kind, props.url], render, { immediate: true });
+watch(() => props.scale, () => (props.kind === "docx" ? fit_docx() : scale_sheet()));
 onBeforeUnmount(() => { version++; release(); });
 </script>
 
@@ -179,7 +187,7 @@ onBeforeUnmount(() => { version++; release(); });
         <button v-for="(item, index) in sheets" :key="item.name" type="button" :aria-pressed="sheet === index" @click="sheet !== index && (state = 'loading', sheet = index)">{{ item.name }}</button>
       </nav>
       <p v-if="sheets[sheet]?.cut" class="office-viewer-note">只显示前 5000 行；完整内容请下载后查看。表格只显示数值与合并单元格，不含样式与图表。</p>
-      <iframe v-if="sheets.length" :key="sheet" class="office-viewer-frame" sandbox="" referrerpolicy="no-referrer" :srcdoc="SHEET_STYLE + (sheets[sheet]?.html || '')" title="表格预览" @load="state = 'ready'"></iframe>
+      <iframe v-if="sheets.length" ref="sheet_frame" :key="sheet" class="office-viewer-frame" sandbox="allow-same-origin" referrerpolicy="no-referrer" :srcdoc="SHEET_STYLE + (sheets[sheet]?.html || '')" title="表格预览" @load="scale_sheet(); state = 'ready'"></iframe>
     </template>
     <div v-else-if="kind === 'pdf'" ref="pdf_host" class="office-viewer-pages" tabindex="0" aria-label="PDF 页面"></div>
     <div v-else ref="slides_host" class="office-viewer-slides"></div>

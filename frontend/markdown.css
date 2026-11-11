@@ -73,7 +73,9 @@ html[data-theme="channel-light"] .markdown-body {
 .attachment-image:has(img[data-relay-failed])::after { content: "图片加载失败"; font-size: 12px; opacity: .6; }
 /* Audio and video attachments play in place; the name below links the original for a download. */
 .attachment-media { display: grid; gap: 4px; width: min(400px, 100%); }
-.attachment-media video { display: block; width: 100%; max-height: 320px; border-radius: 8px; background: #000; }
+.attachment-media video { display: block; width: 100%; background: #000; }
+/* Only the bare video is capped: inside the player the cap would survive full screen and pin the picture to the top. */
+.attachment-media > video { max-height: 320px; border-radius: 8px; }
 .attachment-media audio { display: block; width: 100%; }
 .attachment-media .attachment-player { display: block; width: 100%; }
 .attachment-video .attachment-player { aspect-ratio: 16 / 9; max-height: 320px; border-radius: 8px; overflow: hidden; }
