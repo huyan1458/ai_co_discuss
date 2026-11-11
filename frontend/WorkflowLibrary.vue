@@ -14,7 +14,7 @@ import { use_workflow_library } from "./workflow-library.js";
 
 const library = use_workflow_library();
 const { available, workflows, draft, saved_id, canvas_key, commands_allowed, busy, loading, failure, dirty, add_items, skill_request,
-  scope, current, reserved } = library;
+  scope, current, reserved, subs } = library;
 // The SKILL.md panel's width, dragged at its left edge and remembered in this browser, and whether the panel is open
 // (it is unless the user folded it away).
 const SKILL_WIDTH = { min: 280, max: 760, initial: 340, step: 16, key: "codiscuss.workflow_skill_width" };
@@ -100,7 +100,9 @@ function start_resize(event) {
       <button type="button" role="tab" :aria-selected="pane === 'skill'" title="工作流：主持人照着派活的 SKILL.md" @click="pane = 'skill'"><UIcon :name="scope ? 'i-lucide-git-branch' : 'i-lucide-file-text'" class="workflow-library-icon" />{{ scope ? '子工作流' : '工作流' }}</button>
     </div></div>
     <div v-show="!stacked || pane === 'canvas' || (!draft && !loading)" class="workflow-library-stage">
-      <WorkflowCanvas v-if="draft" ref="canvas" :key="canvas_key" v-model:flow="current.flow" v-model:agents="current.agents" :reserved="reserved" :compact="stacked" @open-skill="show_skill_text">
+      <WorkflowCanvas v-if="draft" ref="canvas" :key="canvas_key" v-model:flow="current.flow" v-model:agents="current.agents" :reserved="reserved" :compact="stacked"
+        :shared="scope ? draft.agents : null" :subs="scope ? null : subs" :new-sub="() => library.add_sub(false)"
+        @update:shared="(value) => { draft.agents = value; }" @open-sub="library.enter_sub" @open-skill="show_skill_text">
         <template #actions>
           <UTooltip v-if="!skill_open && !stacked" text="展开 SKILL.md：主持人照它派活"><UButton icon="i-lucide-panel-right-open" label="SKILL.md" size="sm" color="neutral" variant="ghost" @click="set_skill_open(true)" /></UTooltip>
           <UTooltip :text="dirty ? '保存（Ctrl+S）：有未保存的修改' : '没有未保存的修改'"><span class="workflow-library-save">

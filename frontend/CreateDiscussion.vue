@@ -11,6 +11,7 @@ import ExtraDirectoriesField from "./ExtraDirectoriesField.vue";
 import ProjectDirectoryField from "./ProjectDirectoryField.vue";
 import RosterAdd from "./RosterAdd.vue";
 import SchedulerSettings from "./SchedulerSettings.vue";
+import ImageService from "./ImageService.vue";
 import HostWorkflowSwitch from "./HostWorkflowSwitch.vue";
 
 const props = defineProps({ targetFolder: { type: Object, default: null } });
@@ -221,6 +222,7 @@ const summary = computed(() => {
           <span>{{ host_options.length ? '点卡片上的皇冠指定主持人：没 @ 任何人的消息由它分配；其他成员只在被你或主持人点名时发言。' : '需要一位本地 AI 做主持人，没 @ 的消息才有人接。' }}</span>
         </div>
         <SchedulerSettings :free="true" :blocker="scheduling_blocker" />
+        <ImageService v-if="view.launch.available || view.launch.remote" :enabled="view.create_image_generation" @update:enabled="bridge.write_create_image_generation" />
       </section>
 
       <section class="create-section">

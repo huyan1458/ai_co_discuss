@@ -1,7 +1,8 @@
 /**
- * Model API adapter: the runner itself calls the user's configured model API, with room-scoped tools, project file tools
- * (api_files.mjs) when the room has a project, the commands its workflow registered (api_commands.mjs), and the shared
- * skills as its system prompt. It holds no software session: each execution rebuilds its context from the room.
+ * Model API adapter: a room execution runs in the Pi harness (api_pi.mjs), which calls the user's configured model API
+ * and keeps the member's session; Pi gets only our tools (api_pi_extension.mjs): room-scoped tools, project file tools
+ * (api_files.mjs) when the room has a project, the commands its workflow registered (api_commands.mjs) and image tools,
+ * with the shared skills as its system prompt. A private chat still calls the API from the runner and keeps no session.
  */
 import { randomUUID } from 'node:crypto';
 import { EventEmitter } from 'node:events';
@@ -14,7 +15,11 @@ import { access_label, expert_prompt } from '../expert_prompts.mjs';
 import { command_tools, is_command_tool, run_command, runs_write_commands } from './api_commands.mjs';
 import { file_tools, is_file_tool, open_project, run_file_tool, WRITE_TOOLS } from './api_files.mjs';
 import { forget_sent_images, image_tools, is_image_tool, MAX_MESSAGE_ATTACHMENTS, run_image_tool, unsent_images } from './api_images.mjs';
-import { DEFAULT_API_MAX_REQUESTS, image_model_of } from './profiles.mjs';
+import { events as pi_events, pi_delivery, session as pi_session } from './api_pi.mjs';
+import { ensure_pi } from '../pi_runtime.mjs';
+import { execution_marker, not_sent } from './common.mjs';
+import { DEFAULT_API_MAX_REQUESTS } from './profiles.mjs';
+import { room_image } from '../image_service.mjs';
 
 // API participants follow the same skills that local software loads, read fresh for every execution.
 const SKILLS = fileURLToPath(new URL('../../.agents/skills/', import.meta.url));
@@ -24,7 +29,6 @@ const MODEL_RETRIES = 2;
 // With this many requests left the model is told to submit what it has, so a long run ends with an answer.
 const WRAP_UP_TURNS = 3;
 const MODEL_RETRY_DELAY_MS = 3000;
-const NO_TOOL_REMINDER = '普通文本不会被保存。请调用写入工具提交真实结果；确实无法继续才不调用工具直接结束。';
 const TEXT = { type: 'string' };
 const NUMBER = { type: 'integer', minimum: 1 };
 const ROOM_FIELDS = ['id', 'title', 'goal', 'host', 'user_request', 'background', 'boundaries', 'experts', 'phase', 'focus',
@@ -179,7 +183,7 @@ function write_action(context, name, args) {
 }
 
 /** Execute one allowlisted tool; uncertain writes retain their exact submission in a private journal. */
-async function execute_tool(context, call, definitions) {
+export async function execute_tool(context, call, definitions) {
   if (!definitions.some(item => item.name === call.name)) throw new Error('模型调用了当前职责不允许的工具');
   let args;
   try { args = typeof call.arguments === 'string' ? JSON.parse(call.arguments) : call.arguments || {}; }
@@ -309,12 +313,11 @@ function max_requests(context) {
   return Number.isInteger(context.max_requests) ? context.max_requests : DEFAULT_API_MAX_REQUESTS;
 }
 
-/** Add a user note after the tool results, inside the same turn where the protocol pairs results in one message. */
-function append_note(profile, history, text) {
-  const last = history.at(-1);
-  if (profile.api_protocol === 'anthropic') last.content.push({ type: 'text', text });
-  else if (profile.api_protocol === 'gemini') last.parts.push({ text });
-  else history.push({ role: 'user', content: text });
+/** The note added to tool results once only a few model requests are left after `turns` of them, else ''. */
+export function wrap_up_note(context, turns) {
+  const left = max_requests(context) - turns;
+  return max_requests(context) && left > 0 && left <= WRAP_UP_TURNS
+    ? `本次执行只剩 ${left} 次模型请求。停止继续读取和修改，现在用 submit_chat 提交已完成的部分，写明未完成的事项。` : '';
 }
 
 /**
@@ -348,96 +351,64 @@ async function generate_with_retry(profile, key, state, signal) {
   }
 }
 
-/** Run tool turns, up to the room's request limit, while the parent dispatcher continues renewing leases and observing pause. */
-async function run_participant(profile, key, context) {
+/**
+ * The execution's prompt: the room as read now and the task. It names the execution marker, which is how a rewind finds
+ * where this execution entered the member's Pi session.
+ */
+async function task_prompt(context) {
   const room = await read_room(context);
-  const definitions = participant_tools(context);
-  const prompt = JSON.stringify({ room, task: { role: context.role, execution_id: context.execution_id, requests: context.requests,
+  return `${JSON.stringify({ room, task: { role: context.role, execution_id: context.execution_id, requests: context.requests,
     session: context.session, discussion_request: context.discussion_request, read_after: context.read_after,
     ...(context.role === 'host' && context.workflow ? { workflow: {
       id: context.workflow.id, label: context.workflow.label, members: context.workflow.members } } : {}),
     ...(context.scheduler_suggestions?.length ? { scheduler_suggestions: context.scheduler_suggestions } : {}),
     ...(context.review_handoffs?.length ? { review_handoffs: context.review_handoffs } : {}),
-    ...(context.unsent_images?.length ? { unsent_images: context.unsent_images } : {}) } });
-  const state = { system: system_prompt(context), history: api_history(profile, prompt), tools: definitions };
-  let reminded = false;
-  let used_tools = false;
-  const turns = max_requests(context);
-  for (let index = 0; !turns || index < turns; index++) {
-    // The owner's interjections join the conversation before the next model request, inside the same turn.
-    for (const text of (context.interjections || []).splice(0)) add_user_text(profile, state.history, `用户插话：${text}`);
-    context.on_activity?.('thinking');
-    const calls = await generate_with_retry(profile, key, state, context.signal);
-    if (!calls.length) {
-      // Some models answer in plain text mid-run; one reminder avoids pausing on a recoverable slip.
-      if (reminded) {
-        const reply = last_reply_text(state.history);
-        throw new Error(used_tools ? `模型未提交结果就结束了本次执行，可能在等你决定或补充${reply ? `。模型说明：${reply}` : ''}`
-          : `模型未调用房间工具保存结果，请核对模型是否支持工具调用${reply ? `（其回复：${reply}）` : ''}`);
-      }
-      reminded = true;
-      state.history.push(profile.api_protocol === 'gemini' ? { role: 'user', parts: [{ text: NO_TOOL_REMINDER }] } : { role: 'user', content: NO_TOOL_REMINDER });
-      continue;
-    }
-    used_tools = true;
-    // Text written beside tool calls is a progress remark; the runner caps its length.
-    const remark = last_reply_text(state.history, Infinity);
-    if (remark) context.on_note?.(remark);
-    const results = [];
-    for (const call of calls) {
-      context.signal.throwIfAborted();
-      context.on_activity?.(WRITE_TOOLS.includes(call.name) ? 'editing' : 'tool', String(call.name || ''));
-      const outcome = await execute_tool(context, call, definitions);
-      if (outcome.terminal) return;
-      results.push({ ...call, result: outcome.result });
-    }
-    api_tool_results(profile, state.history, results);
-    const left = turns - index - 1;
-    if (turns && left > 0 && left <= WRAP_UP_TURNS) append_note(profile, state.history,
-      `本次执行只剩 ${left} 次模型请求。停止继续读取和修改，现在用 submit_chat 提交已完成的部分，写明未完成的事项。`);
-  }
-  throw new Error(`API 执行超过 ${turns} 次模型请求，已停止并保留原文；可在「成员与设置 → 协作设置」调高上限`);
+    ...(context.unsent_images?.length ? { unsent_images: context.unsent_images } : {}) } })}\n\n（执行标记 ${execution_marker(context.execution_id)}，无需处理）`;
 }
 
-/**
- * The member's image model, called at its own Base URL with its own key; only the OpenAI-style protocols share the
- * Images API's address and Bearer authentication. Null when it has none.
- */
-export function image_settings(profile, key) {
-  const model = image_model_of(profile);
-  return model ? { model, base_url: api_base_url(profile.base_url), key } : null;
+// The member's profile fields the extension needs; the key travels only in the Pi process's environment.
+const PROFILE_FIELDS = ['adapter', 'base_url', 'api_protocol', 'model'];
+
+/** Rebuild an execution's tool context inside the Pi process from the setup the runner wrote. */
+export function extension_context(setup, key) {
+  const context = { ...setup, signal: new AbortController().signal, generated_attachments: [], image: room_image(setup.home, setup),
+    project: open_project(setup, [setup.home, setup.directory]) };
+  if (context.image) context.unsent_images = unsent_images(context);
+  return context;
 }
 
 /** Return immediately with an abortable handle; API work follows the same process callbacks as CLIs. */
-export async function api_delivery(profile, binding, task) {
-  const key = read_api_key(task.api_context.home, profile);
-  const session_id = binding.session_id || `api-${randomUUID()}`;
-  const controller = new AbortController();
-  const child = new EventEmitter();
-  child.kill = () => { controller.abort(); return true; };
-  const interjections = [];
-  let running = true;
-  const context = { ...task.api_context, participant: task.participant, directory: task.directory, interjections,
-    task_id: task.id, signal: controller.signal, on_activity: task.on_activity, on_note: task.on_note, on_edits: task.on_edits,
-    expert_prompt: expert_prompt(profile), image: image_settings(profile, key), generated_attachments: [],
-    // The service home holds API keys and the task directory holds room credentials; neither is a project file.
-    project: open_project(task.api_context, [task.api_context.home, task.directory]) };
-  if (context.image) context.unsent_images = unsent_images(context);
-  task.on_binding?.(session_id);
-  task.on_process?.(child);
+/**
+ * Start one room execution in Pi. What it needs is written next to the task: the tool context for the extension and the
+ * system prompt (too long for a Windows command line). A failure before Pi starts is reported as not sent.
+ */
+export async function api_delivery(profile, binding, task, spawn_process) {
+  let key, prompt, context, cli;
+  try {
+    key = read_api_key(task.api_context.home, profile);
+    cli = await ensure_pi(task.api_context.home);
+    context = { ...task.api_context, participant: task.participant, directory: task.directory, task_id: task.id,
+      signal: AbortSignal.timeout(SITE_TIMEOUT_MS), expert_prompt: expert_prompt(profile), image: room_image(task.api_context.home, task.api_context),
+      // The service home holds API keys and the task directory holds room credentials; neither is a project file.
+      project: open_project(task.api_context, [task.api_context.home, task.directory]) };
+    if (context.image) context.unsent_images = unsent_images(context);
+    prompt = await task_prompt(context);
+  } catch (error) {
+    const message = String(error.message || error);
+    throw not_sent(new Error(key ? message.replaceAll(key, '[已隐藏]') : message));
+  }
+  const setup = { ...task.api_context, participant: task.participant, directory: task.directory, task_id: task.id,
+    expert_prompt: context.expert_prompt, base_url: api_base_url(profile.base_url),
+    profile: Object.fromEntries(PROFILE_FIELDS.filter(field => profile[field] !== undefined).map(field => [field, profile[field]])) };
+  const context_file = join(task.directory, `${task.id}-pi-context.json`);
+  const system_file = join(task.directory, `${task.id}-pi-system.md`);
+  writeFileSync(context_file, JSON.stringify(setup), { mode: 0o600 });
+  writeFileSync(system_file, system_prompt(context), { mode: 0o600 });
   // Without a command line, every file it writes goes through the write tools, so its edit list is complete; a registered
   // command that changes files writes without telling, so then the list is left untracked.
   if (context.project && !runs_write_commands(context.commands, context.project)) task.on_edits?.([]);
-  setImmediate(async () => {
-    try {
-      await run_participant(profile, key, context);
-    } catch (error) {
-      if (!controller.signal.aborted) task.on_failure?.(error.message.replaceAll(key, '[已隐藏]'));
-    } finally { running = false; child.emit('close', 0); task.on_exit?.(); }
-  });
-  // Taken at the next model request; the request already under way is not cut short.
-  const steer = text => { if (!running) return false; interjections.push(text); return true; };
-  return { status: 'accepted', session_id, capabilities: API_CALL, steer };
+  return pi_delivery({ cli, profile, key, binding, task, context_file, system_file, prompt, max_requests: max_requests(context),
+    project_root: context.project?.root || '', service_home: task.api_context.home, ...(spawn_process ? { spawn_process } : {}) });
 }
 
 // The call is the runner's own, so it can be aborted and its tool steps are seen.
@@ -517,6 +488,7 @@ export const api = {
   id: 'api',
   deliver: api_delivery,
   chat: api_chat,
-  session: null,
+  session: pi_session,
+  events: pi_events,
   models: null,
 };

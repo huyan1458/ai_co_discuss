@@ -8,8 +8,8 @@ description: "为 AI CoDiscuss 安装本机语音识别：下载 CrispASR 与 Qw
 装好后的样子：
 
 - `SERVICE_HOME/crispasr/cli/`：CrispASR 程序（`crispasr.exe` 及其 DLL）；`SERVICE_HOME/crispasr/models/qwen3-asr-0.6b-q8_0.gguf`：识别模型（约 1 GB）。`SERVICE_HOME` 见“前提”第 2 条。
-- 访问令牌存在 CoDiscuss 的本机私有密钥里（地址 `http://127.0.0.1:18766`），不写进其他文件或命令行。
-- 语音输入切到“本机”。CrispASR 由 CoDiscuss 本机程序在识别时自动启动，只监听 `127.0.0.1:18766`；1 分钟没有识别请求自动结束并释放显存（CoDiscuss 崩溃也一样），不需要开机自启。
+- 访问令牌存在 CoDiscuss 的本机私有密钥里（地址 `http://127.0.0.1/crispasr`，只用来标识本机识别服务，不含端口），不写进其他文件或命令行。
+- 语音输入切到“本机”。CrispASR 由 CoDiscuss 本机程序在识别时自动启动，只监听本机地址，优先用端口 37642，被占用时自动换一个空闲端口；1 分钟没有识别请求自动结束并释放显存（CoDiscuss 崩溃也一样），不需要开机自启。
 
 全程只在用户电脑上操作：不改 CoDiscuss 源码，不把令牌写进回复、日志或命令行参数；下载与安装前把预计占用（下文“前提”）告诉用户。
 
@@ -39,7 +39,7 @@ description: "为 AI CoDiscuss 安装本机语音识别：下载 CrispASR 与 Qw
 
 1. **下载程序**：读 `https://api.github.com/repos/CrispStrobe/CrispASR/releases/latest`，取上表对应资产，记下资产的 `digest`（`sha256:...`）。下载到空目录 `SERVICE_HOME/crispasr/download/`，核对 SHA-256 与 `digest` 一致后解压。压缩包里有一层以资产名命名的文件夹，把其中全部文件移到 `SERVICE_HOME/crispasr/cli/`，使 `cli/crispasr.exe` 与 DLL 在同一层。已装过时先结束正在运行的 crispasr 进程再覆盖。用 `crispasr.exe --version` 确认。
 2. **模型**：下载 `https://huggingface.co/cstr/qwen3-asr-0.6b-GGUF/resolve/main/qwen3-asr-0.6b-q8_0.gguf` 到 `SERVICE_HOME/crispasr/models/`（约 1 GB）。不要用文件名带 `imatrix` 的版本（长录音可能陷入重复）。
-3. **令牌**：生成 64 位十六进制随机串，写入临时文件 `{"base_url": "http://127.0.0.1:18766", "api_key": "<令牌>"}`，运行 `codiscuss launch api-key --file <临时文件>`，随即删除临时文件。
+3. **令牌**：生成 64 位十六进制随机串，写入临时文件 `{"base_url": "http://127.0.0.1/crispasr", "api_key": "<令牌>"}`，运行 `codiscuss launch api-key --file <临时文件>`，随即删除临时文件。
 4. **切换语音输入**：把 `codiscuss launch tts-settings` 的输出存成临时文件，只改 `stt_provider` 为 `"local"`，其余字段不动（读出的 `catalog`、`stt_catalog` 等字段保存时会被忽略），用 `codiscuss launch tts-settings --file <临时文件>` 保存后删除临时文件。用户只要求安装、不想马上切换时跳过这一步，之后可在网页“设置 → 语音 → 语音输入”里点“本机”。
 5. **验证**：先结束正在运行的 crispasr 进程（旧令牌启动的服务会拒绝新令牌）。准备一段 16 kHz 单声道 16 位 WAV（可用本机朗读或任意录音转换），去掉 44 字节文件头得到 PCM，base64 后写入临时文件 `{"upload_id": "<新 UUID>", "index": 0, "data": "<base64>", "final": true}`（单段不超过 256 KB，约 8 秒；更长的录音按序号分段，只有最后一段带 `"final": true`），运行 `codiscuss launch stt --file <临时文件>`：返回 `text` 即成功，`SERVICE_HOME/crispasr/serve.log` 会出现 `crispasr-server: transcribed ...`。第一次要启动服务并加载模型，约 5–15 秒。参考：RTX 5060 8 GB + `cuda13`，服务启动后约 35 倍实时，5 分钟录音约 8.5 秒。
 6. **清理与汇报**：删除 `SERVICE_HOME/crispasr/download/` 与所有临时文件。向用户报告程序包、模型与实测耗时，并说明：中英混说、标点与英文大小写识别较好；逐字母念的缩写（如 npm 念成 N-P-M）和代码标识符（如 `tts_providers`）容易识别成别的写法；切回火山引擎只需在设置里点选。
@@ -53,6 +53,6 @@ description: "为 AI CoDiscuss 安装本机语音识别：下载 CrispASR 与 Qw
 | 现象 | 原因与处理 |
 |---|---|
 | 本机语音识别尚未安装 | 没找到令牌或 `cli/crispasr.exe`：重做第 1、3 步 |
-| 服务拒绝了令牌 | 18766 端口上是旧令牌启动的 crispasr：结束该进程后重试 |
-| 本机服务启动超时 | 看 `serve.log`：缺 DLL 时重做第 1 步（确认文件已移到 `cli/` 同一层）；CUDA 报错时检查驱动，或换 `-vulkan` / `-cpu` 包；端口被占用时请用户释放 18766 |
+| 服务拒绝了令牌 | 正在运行的是旧令牌启动的 crispasr：在设置页“本机进程”结束它，或结束 crispasr 进程后重试 |
+| 本机服务启动超时 | 看 `serve.log`：缺 DLL 时重做第 1 步（确认文件已移到 `cli/` 同一层）；CUDA 报错时检查驱动，或换 `-vulkan` / `-cpu` 包 |
 | 识别失败（HTTP 500） | 看 `serve.log`；显存不足（out of memory）时关闭占显存的程序，或等本机朗读用完自动退出后再试 |

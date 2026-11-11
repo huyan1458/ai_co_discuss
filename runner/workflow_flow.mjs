@@ -1,10 +1,11 @@
 /**
- * A workflow's canvas (`flow.json`): member cards and host nodes joined by arrows, drawn to help the user see how the
+ * A workflow's canvas (`flow.json`): member cards, host nodes and (on the main flow) sub-workflow nodes joined by arrows,
+ * drawn to help the user see how the
  * workflow's members work together. It only illustrates SKILL.md: the program neither runs it nor hands it to the host,
  * who dispatches by SKILL.md alone. Plain JavaScript without Node modules: the web editor and the runner share it.
  */
 
-export const FLOW_NODE_TYPES = ['start', 'card', 'host'];
+export const FLOW_NODE_TYPES = ['start', 'card', 'host', 'sub'];
 export const MAX_FLOW_NODES = 60;
 export const MAX_FLOW_EDGES = 120;
 const NODE_ID = /^[A-Za-z0-9_-]{1,40}$/;
@@ -36,12 +37,14 @@ export function normalize_flow(flow) {
   if (flow.nodes.length > MAX_FLOW_NODES || flow.edges.length > MAX_FLOW_EDGES) throw new Error(`画布最多 ${MAX_FLOW_NODES} 个节点、${MAX_FLOW_EDGES} 条连线`);
   const ids = new Set();
   const nodes = flow.nodes.map(node => {
-    if (!node || !NODE_ID.test(node.id) || ids.has(node.id) || !FLOW_NODE_TYPES.includes(node.type)) throw new Error('画布节点须有不重复的 id 与类型 start / card / host');
+    if (!node || !NODE_ID.test(node.id) || ids.has(node.id) || !FLOW_NODE_TYPES.includes(node.type)) throw new Error('画布节点须有不重复的 id 与类型 start / card / host / sub');
     if (node.type === 'card' && (typeof node.card !== 'string' || !node.card)) throw new Error(`节点 ${node.id} 没有指明卡片`);
+    if (node.type === 'sub' && (typeof node.sub !== 'string' || !node.sub)) throw new Error(`节点 ${node.id} 没有指明子工作流`);
     ids.add(node.id);
     const x = Number.isFinite(node.x) ? Math.round(node.x) : 0, y = Number.isFinite(node.y) ? Math.round(node.y) : 0;
     const label = node.type === 'host' ? note(node.label, MAX_HOST_LABEL, `主持人节点 ${node.id} `) : '';
-    return { id: node.id, type: node.type, ...(node.type === 'card' ? { card: node.card } : {}), ...(label ? { label } : {}), x, y };
+    return { id: node.id, type: node.type, ...(node.type === 'card' ? { card: node.card } : {}), ...(node.type === 'sub' ? { sub: node.sub } : {}),
+      ...(label ? { label } : {}), x, y };
   });
   const seen = new Set();
   const edges = flow.edges.map(edge => {

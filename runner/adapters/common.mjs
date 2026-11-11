@@ -177,10 +177,11 @@ export function json_line(line) {
  */
 export function query_catalog(profile, args, reader, options = {}) {
   return new Promise((resolve_result, reject) => {
+    const label = options.catalog_label || '模型';
     const env = { ...process.env };
     delete env.CLAUDECODE;
     const child = (options.spawn || spawn)(profile.executable, args, {
-      cwd: tmpdir(), env, shell: false, windowsHide: true, stdio: ['pipe', 'pipe', 'pipe'],
+      cwd: options.cwd || tmpdir(), env, shell: false, windowsHide: true, stdio: ['pipe', 'pipe', 'pipe'],
     });
     let finished = false, bytes = 0;
     const finish = (error, models) => {
@@ -188,24 +189,24 @@ export function query_catalog(profile, args, reader, options = {}) {
       finished = true; clearTimeout(timer); lines.close(); child.stdin.destroy(); child.kill();
       if (error) reject(error); else resolve_result(models);
     };
-    const timer = setTimeout(() => finish(new Error('读取模型列表超时，请检查软件登录和网络后重试')), options.timeout_ms ?? QUERY_TIMEOUT_MS);
+    const timer = setTimeout(() => finish(new Error(`读取${label}列表超时，请检查软件登录和网络后重试`)), options.timeout_ms ?? QUERY_TIMEOUT_MS);
     const lines = createInterface({ input: child.stdout });
     const send = value => child.stdin.write(`${JSON.stringify(value)}\n`);
     const receive = reader(send, finish);
-    child.once('error', () => finish(new Error('无法启动模型查询，请检查 CLI 路径')));
-    child.stdin.on('error', () => finish(new Error('模型查询连接已关闭')));
+    child.once('error', () => finish(new Error(`无法启动${label}查询，请检查 CLI 路径`)));
+    child.stdin.on('error', () => finish(new Error(`${label}查询连接已关闭`)));
     child.stderr.on('data', () => {}); // CLI diagnostics can contain private account or configuration data.
     child.stdout.on('data', chunk => {
       bytes += chunk.length;
-      if (bytes > MAX_OUTPUT_BYTES) finish(new Error('模型目录响应超出大小限制'));
+      if (bytes > MAX_OUTPUT_BYTES) finish(new Error(`${label}目录响应超出大小限制`));
     });
     lines.on('line', line => {
       if (finished) return;
-      try { receive.line(line); } catch { finish(new Error('软件模型目录格式无法识别，请检查 CLI 版本')); }
+      try { receive.line(line); } catch { finish(new Error(`软件${label}目录格式无法识别，请检查 CLI 版本`)); }
     });
     child.once('close', code => {
       if (!finished && code === 0 && receive.complete) finish(null, receive.complete());
-      else if (!finished) finish(new Error(`软件未返回模型目录（退出码 ${code ?? '未知'}），请检查版本、登录与网络`));
+      else if (!finished) finish(new Error(`软件未返回${label}目录（退出码 ${code ?? '未知'}），请检查版本、登录与网络`));
     });
     receive.start();
   });

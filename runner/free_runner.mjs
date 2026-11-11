@@ -3,11 +3,12 @@ import { spawnSync } from 'node:child_process';
 import { createHash, randomUUID } from 'node:crypto';
 import { appendFileSync, existsSync, mkdirSync, readFileSync, statSync } from 'node:fs';
 import { basename, join, resolve } from 'node:path';
-import { adapter_of, BRANCHABLE_ADAPTERS, branch_session, capabilities_of, cleanup_room, deliver_task, delivery_receipt, image_model_of, session_exists, stored_delivery } from './adapters/index.mjs';
+import { adapter_of, BRANCHABLE_ADAPTERS, branch_session, capabilities_of, cleanup_room, deliver_task, delivery_receipt, session_exists, stored_delivery } from './adapters/index.mjs';
 import { api, overlapping_directories, read_rule } from './discussion_runner.mjs';
 import { SegmentLog } from './execution_progress.mjs';
 import { free_task_text, TASK_SUBCOMMANDS, with_expert_prompt } from './expert_prompts.mjs';
 import { atomic_json } from './files.mjs';
+import { image_settings } from './image_service.mjs';
 import { outside_directory, room_directories } from './project_files.mjs';
 import { SessionDriver } from './session_driver.mjs';
 import { effective_profile, load_room_workflow, workflow_in_use, workflow_task_field } from './workflows.mjs';
@@ -174,6 +175,7 @@ export function free_task_files(config, member, execution, binding, { session = 
     phase: goal.phase ?? 'doing', ...(goal.phase_note ? { phase_note: goal.phase_note } : {}) } : null;
   const skills_directory = join(config.project, '.agents', 'skills');
   const workflow_field = host_workflow ? workflow_task_field(host_workflow, room_members, config.participants) : null;
+  const image = config.image_generation && image_settings(config.api_home).configured ? image_settings(config.api_home) : null;
   atomic_json(task_path, { site: config.site, room: config.room, mode: 'free', member: member.name,
     execution_id: execution.id, requests, request_messages: execution.requests.map(item => item.message_id),
     request_purposes: execution.requests.map(item => item.purpose || 'ask'),
@@ -191,6 +193,8 @@ export function free_task_files(config, member, execution, binding, { session = 
     // The workflow's SKILL.md is not a skill read on every task: the host opens it when a request fits its description.
     ...(workflow_field ? { workflow: { ...workflow_field, skill_path: host_workflow.skill_path } } : {}),
     ...(member.role === 'host' && config.host_workflows ? { host_workflows: true } : {}),
+    // Present only while the owner has drawing on and this computer has an image service.
+    ...(image ? { image: { model: image.model, command: `${cli} launch image --file REQUEST.json` } } : {}),
     cli, subcommands: TASK_SUBCOMMANDS,
     ...(bound_access ? { access_env: 'DISCUSS_ACCESS_FILE' } : { access_file: access_path }), instructions });
   return { id, participant: member.name, directory: config.directory, draft_directory, extra_directories, ...(goal_field ? { goal: goal_field } : {}),
@@ -249,8 +253,7 @@ function member_description(name, profile, work) {
   const access = !capabilities_of(profile.adapter).project ? '，只能读写房间消息' : profile.project_access === 'own' ? '，权限沿用其会话设置' : !profile.cwd ? '，未指定项目目录'
     : profile.project_access === 'read' ? `，项目 ${project} 只读`
       : `，可修改项目 ${project} 的文件${capabilities_of(profile.adapter).file_tools ? '（不能运行命令）' : '并运行命令'}`;
-  const images = image_model_of(profile) ? `，可生成和修改图片（${image_model_of(profile)}）` : '';
-  return `${name}（${adapter_of(profile.adapter)?.label || profile.adapter}${access}${images}${work}）`;
+  return `${name}（${adapter_of(profile.adapter)?.label || profile.adapter}${access}${work}）`;
 }
 
 /** The other messages a member is answering or has queued, so a correction can follow the message it corrects. */
@@ -423,17 +426,18 @@ export class FreeRoomRunner {
     }
   }
   /**
-   * Tell the site what each member can do, as its adapter says: what a rewind does to its session, and the image model
-   * it can draw with, so the host and every reader of the room see it. Only a change is sent.
+   * Tell the site what each member can do, as its adapter says: what a rewind does to its session, so the host and every
+   * reader of the room see it. Only a change is sent.
    */
   async sync_member_capabilities(inbox) {
     for (const member of inbox.members) {
       const profile = this.config.participants[member.name];
-      // An older site lists no effect and takes no report; one without image_model takes only the rewind effect.
+      // An older site lists no effect and takes no report.
       if (member.rewind === undefined || !profile) continue;
       const rewind = capabilities_of(profile.adapter).rewind;
-      const report = { rewind, ...(member.image_model === undefined ? {} : { image_model: image_model_of(profile) }) };
-      if (member.rewind === rewind && (report.image_model === undefined || member.image_model === report.image_model)) continue;
+      // Members no longer draw with an image model of their own (drawing is the room's switch); an old report is cleared.
+      const report = { rewind, ...(member.image_model ? { image_model: '' } : {}) };
+      if (member.rewind === rewind && report.image_model === undefined) continue;
       try { await api(this.config, `/members/${member.id}/capabilities`, report); Object.assign(member, report); }
       catch (error) { this.log(`成员能力未同步：${member.name}：${error.message}`); }
     }
@@ -835,6 +839,7 @@ export class FreeRoomRunner {
           // Commands the enabled workflow registers; software with its own command line ignores them.
           ...(workflow?.commands?.length ? { commands: { directory: workflow.directory, list: workflow.commands } } : {}),
           ...(Number.isInteger(this.config.api_max_requests) ? { max_requests: this.config.api_max_requests } : {}),
+          ...(this.config.image_generation ? { image_generation: true } : {}),
           ...(task.goal ? { goal: task.goal } : {}) },
         on_binding: session => this.store.bind(member.name, session),
         on_process: child => this.track(member.name, child, execution.id),

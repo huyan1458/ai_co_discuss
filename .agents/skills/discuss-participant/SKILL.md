@@ -64,4 +64,6 @@ description: "AI CoDiscuss 的通用参与技能，所有参与者（包括主�
 
 正文用 UTF-8 `--body-file`，摘要含引号或较长时用 `--summary-file`。需要附件时先 `attachment upload ROOM --file FILE --submission-id 上传编号`，再用 `message post --attachment ID` 关联（最多 10 个，单个 20 MiB，须在执行资格结束前上传）。
 
+**生图**：任务里有 `image` 字段才能画图或改图；没有时如实说明本房间未开生图，不要找别的办法。按张计费，想清楚再调用，不为试探反复生成。把请求写进 UTF-8 JSON 草稿：`{"action":"generate","prompt":"画面、风格、文字","size":"1536x1024","n":1}`；改图用 `"action":"edit"` 与 `"images":[{"attachment_id":"…"}]` 或 `{"file_path":"项目内路径"}`；其他参数见 `codiscuss launch --help` 的 image 一条。运行 `image.command`（把 `REQUEST.json` 换成草稿路径），返回的附件 ID 用 `message post --attachment` 附上。能看图时先 `attachment download` 核对效果再交付；看不到图（如 API 成员）就写清画了什么和参数，不描述没看到的细节。API 成员用 `generate_image` / `edit_image` 工具，不走命令。
+
 成功须核对服务端返回的持久记录、作者和关联；返回已是持久记录时不再读一遍，缺少所需证据才按编号补读。答案落库后即可结束，不用旧资格继续写入。只以本人身份提交，不替他人发言。执行结束不等于整个房间的工作结束。

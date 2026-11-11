@@ -468,7 +468,7 @@ onBeforeUnmount(() => { document.removeEventListener("pointerdown", close_on_out
 /* Both faces keep one size; long settings scroll inside the back while its actions stay in place.
    Perspective makes the turn read as a flip rather than a squeeze; the faces stay flat, and
    the hidden one is switched by data-face at 90°, where the card is edge-on. */
-.expert-card-turn { display: grid; grid-template: minmax(0, 1fr) / minmax(0, 1fr); height: 240px; }
+.expert-card-turn { display: grid; grid-template: minmax(0, 1fr) / minmax(0, 1fr); height: 100cqi; }
 .expert-card-face { grid-area: 1 / 1; min-width: 0; min-height: 0; border: 1px solid var(--channel-edge-control, var(--ui-border)); border-radius: 8px; background: color-mix(in srgb, var(--ui-bg-elevated) 45%, var(--ui-bg)); box-shadow: var(--channel-shadow-control); }
 .expert-card[data-face="front"] .expert-card-back, .expert-card[data-face="back"] .expert-card-front { visibility: hidden; }
 .expert-card.is-host .expert-card-front { border-color: color-mix(in srgb, #e0b44a 45%, var(--ui-border)); }
@@ -544,7 +544,7 @@ onBeforeUnmount(() => { document.removeEventListener("pointerdown", close_on_out
 /* Narrow card (two per row on a phone): the name moves under the avatar so the corner tools leave it the full
    width, the card grows by that line, and 恢复默认 joins the settings flow instead of sitting under the actions. */
 @container (max-width: 220px) {
-  .expert-card-turn { height: 268px; }
+  .expert-card-turn { height: 272px; }
   .expert-card-identity { flex-wrap: wrap; row-gap: 6px; padding-right: 0; }
   .expert-card-names { flex-basis: 100%; }
   .expert-card-defaults { position: static; align-self: flex-start; margin-left: -4px; }

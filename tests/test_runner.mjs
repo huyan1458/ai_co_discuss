@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict';
-import { mkdtempSync, mkdirSync, writeFileSync, appendFileSync, rmSync, existsSync, readFileSync, utimesSync } from 'node:fs';
+import { mkdtempSync, mkdirSync, writeFileSync, appendFileSync, readdirSync, rmSync, existsSync, readFileSync, utimesSync } from 'node:fs';
 import { spawn, spawnSync } from 'node:child_process';
 import { createHash, randomUUID } from 'node:crypto';
 import { EventEmitter, once } from 'node:events';
@@ -19,13 +19,16 @@ import { SessionDriver } from '../runner/session_driver.mjs';
 import { EXPERT_PROMPT_PRESETS, expert_prompt, free_task_text, software_rules } from '../runner/expert_prompts.mjs';
 import { participant_tools, system_prompt } from '../runner/adapters/api.mjs';
 import { glob_regex, open_project, run_file_tool } from '../runner/adapters/api_files.mjs';
-import { DiscussionService, migrate_platform_ids, migrate_service_home, persisted_env, read_registry, register_room, service_pid, service_ready, start_service, sweep_service_home, unregister_room } from '../runner/discussion_service.mjs';
+import { DiscussionService, migrate_platform_ids, migrate_service_home, persisted_env, read_registry, register_room, remove_room_files, service_pid, service_ready, start_service, sweep_service_home, unregister_room } from '../runner/discussion_service.mjs';
 import { restore_room, room_profiles } from '../runner/discussion_launch.mjs';
 import { adapter_of, deliver_task, execution_details } from '../runner/adapters/index.mjs';
 import { adopted_fork, claude_api_error, claude_permissions, claude_exit_error, claude_inbox_ready, claude_rule_path, standalone_claude_env, watch_window_turn } from '../runner/adapters/claude.mjs';
 import { codex_permissions } from '../runner/adapters/codex_cli.mjs';
-import { agy_rule, prepare_agy_project, remove_agy_projects } from '../runner/adapters/antigravity_cli.mjs';
+import { agy_rule, prepare_agy_project, remove_agy_projects, sweep_legacy_agy_projects } from '../runner/adapters/antigravity_cli.mjs';
 import { kill_process_tree, run_program, TASK_SUBCOMMANDS } from '../runner/adapters/common.mjs';
+
+// The service and setup install Pi from npm unless one is given; tests never download it.
+process.env.CODISCUSS_PI_CLI ??= 'pi-not-needed-in-this-test';
 const activity_phase = (adapter, event) => adapter_of(adapter).events.phase(event);
 import { save_api_key, saved_api_keys } from '../runner/discussion_api.mjs';
 import { certainty, decide, decide_interjection, decide_next_speaker, decide_round, ROUTE_CONFIDENCE, ROUTE_WIDE_CONFIDENCE, route_free_message, scheduler_thresholds, scheduler_answers, scheduler_check, scheduler_request, SCHEDULER_PROVIDERS, scheduler_state, validate_scheduler } from '../runner/scheduler.mjs';
@@ -888,7 +891,8 @@ test(`${adapter} starts headlessly, binds emitted identity and preserves UTF-8 p
     assert.equal(call.args[call.args.indexOf('-p') + 1], f.task.prompt);
     assert.equal(call.args[call.args.indexOf('--output-format') + 1], 'stream-json');
     assert.equal(call.args[call.args.indexOf('--print-timeout') + 1], '0');
-    assert.match(call.args[call.args.indexOf('--project') + 1], /^[a-f0-9-]{36}$/);
+    assert.equal(call.args[call.args.indexOf('--project') + 1], 'outside-of-project');
+    assert.ok(existsSync(call.args[call.args.indexOf('--settings') + 1]));
     assert.equal(call.args[call.args.indexOf('--mode') + 1], 'accept-edits');
   }
   assert.match(readFileSync(join(f.directory, `${adapter}-event-1.log`), 'utf8'), /中文/);
@@ -904,7 +908,7 @@ test(`${adapter} resumes only the bound conversation and honors its configured c
     const hosted = await cli_delivery_fixture(t, adapter, { binding: { session_id: 'actual-cli-session' }, config: { cwd: project, session_id: 'actual-cli-session' } });
     const args = hosted.calls[0].args;
     assert.equal(args[args.indexOf('--conversation') + 1], 'actual-cli-session');
-    assert.equal(args.includes('--project'), false); assert.deepEqual(hosted.errors, []);
+    assert.equal(args.includes('--project'), false); assert.equal(args.includes('--settings'), false); assert.deepEqual(hosted.errors, []);
     return;
   }
   const f = await cli_delivery_fixture(t, adapter, { binding: { session_id: 'actual-cli-session' },
@@ -1071,11 +1075,12 @@ test('extra project directories follow the member access, and stay read-only for
   const user_home = join(f.config.directory, 'user');
   mkdirSync(join(user_home, '.gemini', 'config', 'projects'), { recursive: true });
   const agy = prepare_agy_project({ cwd: elsewhere, project_access: 'write' }, {}, task, user_home);
-  const project = JSON.parse(readFileSync(join(user_home, '.gemini', 'config', 'projects', `${agy.project_id}.json`), 'utf8'));
+  const grants = JSON.parse(readFileSync(agy.settings_path, 'utf8')).permissions;
   const rule = path => `write_file(${resolve(path).replaceAll('\\', '/')})`;
-  assert.ok(project.permissionGrants.permissionGrants.deny.includes(rule(main)) && !project.permissionGrants.permissionGrants.allow.includes(rule(main)));
-  assert.ok(project.permissionGrants.permissionGrants.allow.includes(rule(docs)));
-  assert.equal(project.projectResources.resources.length, 3);
+  assert.ok(grants.deny.includes(rule(main)) && !grants.allow.includes(rule(main)));
+  assert.ok(grants.allow.includes(rule(docs)));
+  assert.equal(agy.directories.length, 3);
+  assert.deepEqual(readdirSync(join(user_home, '.gemini', 'config', 'projects')), ['outside-of-project.json']);
 
   writeFileSync(join(main, 'a.md'), 'main');
   writeFileSync(join(docs, 'b.md'), 'docs');
@@ -1092,8 +1097,9 @@ test('agy separates native project permissions from the selected project and pre
   const user_home = join(f.config.directory, 'user');
   const projects = join(user_home, '.gemini', 'config', 'projects');
   mkdirSync(projects, { recursive: true });
+  const source_dir = join(f.config.directory, 'source');
   const original = { id: 'original', name: 'Original project', settings: { keep: true },
-    projectResources: { resources: [{ folder: { folderUri: pathToFileURL(join(f.config.directory, 'source')).href } }] },
+    projectResources: { resources: [{ folder: { folderUri: pathToFileURL(source_dir).href } }] },
     permissionGrants: { permissionGrants: { allow: ['command(*)'] } } };
   const original_path = join(projects, 'original.json');
   const original_text = JSON.stringify(original);
@@ -1105,37 +1111,69 @@ test('agy separates native project permissions from the selected project and pre
   const task = { ...session_task(f.config), room_title: '架构评审' };
   const config = { project_id: 'original', project_access: 'read' };
   const first = prepare_agy_project(config, {}, task, user_home);
-  const read = JSON.parse(readFileSync(join(projects, `${first.project_id}.json`), 'utf8'));
-  assert.equal(read.name, `CoDiscuss · 架构评审 · ${task.participant}`);
+  assert.equal(first.project_id, 'outside-of-project');
+  assert.deepEqual(readdirSync(projects).sort(), ['original.json', 'outside-of-project.json']);
+  assert.deepEqual(first.directories, [resolve(source_dir)]);
+  const read = JSON.parse(readFileSync(first.settings_path, 'utf8')).permissions;
   const rule = path => `write_file(${resolve(path).replaceAll('\\', '/')})`;
-  assert.deepEqual(read.projectResources, original.projectResources);
-  assert.deepEqual(read.settings, {});
-  assert.deepEqual(read.permissionGrants.permissionGrants.allow, [agy_rule(), rule(task.draft_directory)]);
-  assert.ok(read.permissionGrants.permissionGrants.deny.includes(rule(join(f.config.directory, 'source'))));
+  assert.deepEqual(read.allow, [agy_rule(), rule(task.draft_directory)]);
+  assert.ok(read.deny.includes(rule(source_dir)));
   for (const path of [task.directory, ...task.skill_directories, shared_skills, join(user_home, '.gemini')]) {
-    assert.ok(read.permissionGrants.permissionGrants.deny.includes(rule(path)));
+    assert.ok(read.deny.includes(rule(path)));
   }
-  assert.ok(read.permissionGrants.permissionGrants.deny.includes('mcp(*)'));
+  assert.ok(read.deny.includes('mcp(*)'));
   first.bind('real-session');
   const resumed = prepare_agy_project({ ...config, project_access: 'write' }, { session_id: 'real-session' }, task, user_home);
-  assert.equal(resumed.project_id, first.project_id);
-  const write = JSON.parse(readFileSync(join(projects, `${first.project_id}.json`), 'utf8')).permissionGrants.permissionGrants;
-  assert.ok(write.allow.includes(rule(join(f.config.directory, 'source'))));
-  assert.ok(!write.deny.includes(rule(join(f.config.directory, 'source'))));
+  assert.equal(resumed.project_id, 'outside-of-project');
+  const write = JSON.parse(readFileSync(resumed.settings_path, 'utf8')).permissions;
+  assert.ok(write.allow.includes(rule(source_dir)));
+  assert.ok(!write.deny.includes(rule(source_dir)));
   assert.ok(write.deny.includes(rule(task.directory)));
-  assert.ok(write.allow.includes('command(*)') && !read.permissionGrants.permissionGrants.allow.includes('command(*)'));
+  assert.ok(write.allow.includes('command(*)') && !read.allow.includes('command(*)'));
   assert.ok(!write.allow.includes('unsandboxed_command(*)') && write.deny.includes('mcp(*)'));
   prepare_agy_project({ ...config, project_access: 'full' }, { session_id: 'real-session' }, task, user_home);
-  const full = JSON.parse(readFileSync(join(projects, `${first.project_id}.json`), 'utf8')).permissionGrants.permissionGrants;
+  const full = JSON.parse(readFileSync(resumed.settings_path, 'utf8')).permissions;
   assert.ok(full.allow.includes('unsandboxed_command(*)') && !full.deny.includes('mcp(*)'));
   assert.ok(full.deny.includes(rule(task.directory)), 'run data stays protected at every level');
   assert.equal(readFileSync(original_path, 'utf8'), original_text);
   assert.throws(() => prepare_agy_project(config, { session_id: 'other-session' }, task, user_home), /会话绑定不符/);
-  // Deleting the room removes only the projects it created.
+  // Legacy per-room UUID records self-migrate (whether or not their old project file still exists), and room cleanup clears both files.
+  const legacy_id = '11111111-2222-3333-4444-555555555555';
+  const record_file = readdirSync(task.directory).find(name => name.startsWith('agy-project-'));
+  writeFileSync(join(projects, `${legacy_id}.json`), JSON.stringify({ id: legacy_id, name: 'CoDiscuss · 旧项目' }));
+  writeFileSync(join(task.directory, record_file), JSON.stringify({ project_id: legacy_id, session_id: 'real-session' }));
+  prepare_agy_project(config, { session_id: 'real-session' }, task, user_home);
+  assert.equal(existsSync(join(projects, `${legacy_id}.json`)), false);
+  writeFileSync(join(task.directory, record_file), JSON.stringify({ project_id: legacy_id, session_id: 'real-session' }));
+  assert.equal( prepare_agy_project(config, { session_id: 'real-session' }, task, user_home).project_id, 'outside-of-project');
   assert.equal(remove_agy_projects(task.directory, user_home), 1);
-  assert.equal(existsSync(join(projects, `${first.project_id}.json`)), false);
+  assert.equal(existsSync(first.settings_path), false);
+  assert.equal(existsSync(join(projects, 'outside-of-project.json')), true);
   assert.equal(readFileSync(original_path, 'utf8'), original_text);
   assert.equal(remove_agy_projects(task.directory, user_home), 0);
+  // Service room removal calls adapter cleanup on the room's runtime directory as well as its launch folder.
+  const external_runtime = join(f.config.directory, 'external-runtime');
+  mkdirSync(external_runtime, { recursive: true });
+  const stale = prepare_agy_project({}, {}, { ...task, directory: external_runtime }, user_home);
+  remove_room_files(f.config.directory, join(f.config.directory, 'launches', 'stale', 'config.json'), external_runtime);
+  assert.equal(existsSync(stale.settings_path), false);
+  // Housekeeping backs up and deletes retired CoDiscuss blank projects while sparing user, built-in and Sidecar-pinned ones.
+  const orphan_a = '22222222-2222-3333-4444-555555555555', orphan_b = '33333333-2222-3333-4444-555555555555';
+  const pinned_id = '44444444-2222-3333-4444-555555555555', user_id = '55555555-2222-3333-4444-555555555555';
+  writeFileSync(join(projects, `${orphan_a}.json`), JSON.stringify({ id: orphan_a, name: 'CoDiscuss · 旧房间 · Antigravity' }));
+  writeFileSync(join(projects, `${orphan_b}.json`), JSON.stringify({ id: orphan_b, name: 'codiscuss-92c5cc2e7bed' }));
+  writeFileSync(join(projects, `${pinned_id}.json`), JSON.stringify({ id: pinned_id, name: 'CoDiscuss · Sidecar' }));
+  writeFileSync(join(projects, `${user_id}.json`), JSON.stringify({ id: user_id, name: 'My Real Project' }));
+  writeFileSync(join(projects, 'default-cli-project.json'), JSON.stringify({ id: 'default-cli-project', name: 'CLI Project' }));
+  writeFileSync(join(user_home, '.gemini', 'config', 'config.json'), JSON.stringify({ sidecars: { s: { projectId: pinned_id } } }));
+  assert.equal(sweep_legacy_agy_projects(f.config.directory, user_home), 2);
+  assert.deepEqual(readdirSync(projects).sort(), [
+    `${pinned_id}.json`, `${user_id}.json`, 'default-cli-project.json', 'original.json', 'outside-of-project.json',
+  ]);
+  const backup_folders = readdirSync(join(f.config.directory, 'backups'));
+  assert.equal(backup_folders.length, 1);
+  assert.deepEqual(readdirSync(join(f.config.directory, 'backups', backup_folders[0])).sort(), [`${orphan_a}.json`, `${orphan_b}.json`]);
+  assert.equal(sweep_legacy_agy_projects(f.config.directory, user_home), 0);
 });
 
 test('agy refuses inherited shell bypasses before invoking a model and leaves settings unchanged', async t => {
@@ -1143,23 +1181,28 @@ test('agy refuses inherited shell bypasses before invoking a model and leaves se
   const user_home = join(f.config.directory, 'user');
   const cli_path = join(user_home, '.gemini', 'antigravity-cli', 'settings.json');
   const shared_path = join(user_home, '.gemini', 'config', 'config.json');
+  const outside_path = join(user_home, '.gemini', 'config', 'projects', 'outside-of-project.json');
   mkdirSync(join(user_home, '.gemini', 'antigravity-cli'), { recursive: true });
-  mkdirSync(join(user_home, '.gemini', 'config'), { recursive: true });
+  mkdirSync(join(user_home, '.gemini', 'config', 'projects'), { recursive: true });
   const task = session_task(f.config);
-  for (const [cli, shared] of [
-    [{ permissions: { allow: ['command(*)'] } }, {}], [{ permissions: { allow: ['*'] } }, {}],
-    [{}, { userSettings: { globalPermissionGrants: { allow: ['unsandboxed_command(*)'] } } }],
-    [{}, { userSettings: { globalPermissionGrants: { allow: ['unsandboxed(*)'] } } }],
+  for (const [cli, shared, outside] of [
+    [{ permissions: { allow: ['command(*)'] } }, {}, { id: 'outside-of-project' }],
+    [{ permissions: { allow: ['*'] } }, {}, { id: 'outside-of-project' }],
+    [{}, { userSettings: { globalPermissionGrants: { allow: ['unsandboxed_command(*)'] } } }, { id: 'outside-of-project' }],
+    [{}, { userSettings: { globalPermissionGrants: { allow: ['unsandboxed(*)'] } } }, { id: 'outside-of-project' }],
+    [{}, {}, { id: 'outside-of-project', permissionGrants: { permissionGrants: { allow: ['command(*)'] } } }],
   ]) {
-    writeFileSync(cli_path, JSON.stringify(cli)); writeFileSync(shared_path, JSON.stringify(shared));
+    writeFileSync(cli_path, JSON.stringify(cli)); writeFileSync(shared_path, JSON.stringify(shared)); writeFileSync(outside_path, JSON.stringify(outside));
     await assert.rejects(deliver_task({ adapter: 'antigravity_cli' }, {}, task,
       () => assert.fail('must reject before spawning'), user_home), error => error.delivery_status === 'not_sent');
     assert.deepEqual(JSON.parse(readFileSync(cli_path, 'utf8')), cli);
     assert.deepEqual(JSON.parse(readFileSync(shared_path, 'utf8')), shared);
+    assert.deepEqual(JSON.parse(readFileSync(outside_path, 'utf8')), outside);
   }
   writeFileSync(cli_path, JSON.stringify({ toolPermission: 'always-proceed', permissions: { allow: ['read_file(*)', 'command(git status)'] } }));
   writeFileSync(shared_path, JSON.stringify({ userSettings: { globalPermissionGrants: { allow: ['read_url(https://example.com)'] } } }));
-  assert.ok(prepare_agy_project({}, {}, task, user_home).project_id);
+  writeFileSync(outside_path, JSON.stringify({ id: 'outside-of-project', permissionGrants: { permissionGrants: { allow: ['command(git status)'] } } }));
+  assert.equal(prepare_agy_project({}, {}, task, user_home).project_id, 'outside-of-project');
 });
 
 test('claude allows only codiscuss website subcommands and draft writes, then user rules', async t => {
@@ -1172,11 +1215,11 @@ test('claude allows only codiscuss website subcommands and draft writes, then us
   assert.deepEqual(args.slice(directories + 1, directories + 4), [f.directory, f.task.draft_directory, f.task.skill_directories[0]]);
   assert.deepEqual(args.slice(args.indexOf('--disallowedTools') + 1), [`Edit(${claude_rule_path(f.task.skill_directories[0])}/**)`]);
   assert.deepEqual(args.slice(args.indexOf('--allowedTools') + 1, args.indexOf('--disallowedTools')),
-    [...['room', 'message', 'turn', 'state', 'goal', 'mode', 'review', 'sequence', 'execution', 'health', 'schema', 'launch workflow-adopt', 'launch workflow-join', 'launch workflow-leave', 'launch host-control']
+    [...['room', 'message', 'turn', 'state', 'goal', 'mode', 'review', 'sequence', 'execution', 'health', 'schema', 'launch workflow-adopt', 'launch workflow-join', 'launch workflow-leave', 'launch host-control', 'attachment', 'launch image']
       .flatMap(command => [`Bash(codiscuss ${command} *)`, `PowerShell(codiscuss ${command} *)`]),
     `Edit(${claude_rule_path(f.task.draft_directory)}/**)`, 'Read(//d/materials/**)']);
   assert.ok(!args.includes(`Edit(${claude_rule_path(f.directory)}/**)`));
-  assert.ok(!args.some(arg => /(Bash|PowerShell)\(codiscuss (service|launch (?!(workflow-(adopt|join|leave)|host-control) )|run|api|setup|install|local)/.test(arg)));
+  assert.ok(!args.some(arg => /(Bash|PowerShell)\(codiscuss (service|launch (?!(workflow-(adopt|join|leave)|host-control|image) )|run|api|setup|install|local)/.test(arg)));
   // The prompt is the first stream-json message on stdin, which stays open for interjections.
   assert.ok(args.includes('--input-format') && !args.includes(f.task.prompt));
   assert.equal(JSON.parse(f.calls[0].input).message.content[0].text, f.task.prompt);
@@ -1325,6 +1368,7 @@ test('agy 全放开 skips its permission prompts, which no other level does', as
     assert.deepEqual(f.errors, []);
     assert.equal(f.calls[0].args.includes('--dangerously-skip-permissions'), project_access === 'full');
     assert.equal(f.calls[0].args.includes('--project'), project_access !== 'own');
+    assert.equal(f.calls[0].args.includes('--settings'), project_access !== 'own');
   }
 });
 

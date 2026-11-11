@@ -56,7 +56,11 @@ export function validate_config(input, base_directory) {
   if (!config.project || !existsSync(join(config.project, 'runner', 'discuss.py'))) throw new Error('cli_project 必须指向 AI CoDiscuss 项目；省略时默认使用本仓库');
   // A free room of manual members runs here only for smart scheduling or a preset project directory, which need no local software.
   if (!config.participants || (!Object.keys(config.participants).length && !(config.scheduler || config.cwd))) throw new Error('请配置本机参与软件');
+  // Drawing is the room's switch now; a room made while a member's own card named an image model keeps drawing on.
+  if (config.image_generation === undefined && Object.values(config.participants || {}).some(item => item?.image_model)) config.image_generation = true;
+  if (config.image_generation !== undefined && typeof config.image_generation !== 'boolean') throw new Error('image_generation 须为 true 或 false');
   for (const participant of Object.values(config.participants)) {
+    delete participant.image_model;
     const api = adapter_profile(participant.adapter)?.kind === 'api';
     if (api) {
       read_api_key(config.api_home, participant);

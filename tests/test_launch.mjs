@@ -10,7 +10,7 @@ import { PassThrough } from 'node:stream';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import { test } from 'node:test';
 
-import { adopt_member_profile, adopt_workflow, host_control, borrowed_session, cached_software_defaults, check_or_save_workflow, join_workflow, launch_discussion, leave_sub_workflow, launch_settings, room_configuration, room_files, room_media, room_models, room_page, room_member, room_member_model, room_settings, room_workflow, save_launch_projects, save_launch_settings, validate_preset } from '../runner/discussion_launch.mjs';
+import { adopt_member_profile, adopt_workflow, host_control, borrowed_session, cached_software_defaults, check_or_save_workflow, join_workflow, launch_discussion, leave_sub_workflow, launch_settings, room_configuration, room_files, room_media, room_models, room_page, room_member, room_member_model, room_settings, room_skills, room_workflow, save_launch_projects, save_launch_settings, validate_preset } from '../runner/discussion_launch.mjs';
 import { get_workflow, list_workflows, save_workflow } from '../runner/workflows.mjs';
 import { API_PROVIDERS, save_api_key } from '../runner/discussion_api.mjs';
 import { read_project_files } from '../runner/project_files.mjs';
@@ -18,7 +18,7 @@ import { api, DiscussionStore, load_config } from '../runner/discussion_runner.m
 import { FreeRoomRunner } from '../runner/free_runner.mjs';
 import { DiscussionService, read_registry } from '../runner/discussion_service.mjs';
 import { save_site_connection } from '../runner/discussion_local.mjs';
-import { software_models } from '../runner/adapters/index.mjs';
+import { software_models, software_skills } from '../runner/adapters/index.mjs';
 import { device_command, pairing_passkey_challenge, pairing_proof, start_pairing } from '../runner/device_auth.mjs';
 import { software_device, software_passkey } from './passkey_authenticator.mjs';
 
@@ -67,6 +67,52 @@ test('model discovery initializes Codex and reads every catalog page without cre
   assert.deepEqual(f.requests.map(row => row.method), ['initialize', 'initialized', 'model/list', 'model/list']);
   assert.equal(f.child.killed, true);
   assert.equal(f.invocations[0][2].shell, false);
+});
+
+test('skill catalogs use native discovery in the member directory without a model turn', async () => {
+  const codex = catalog_process((request, child) => {
+    const result = request.method === 'initialize' ? {} : request.method === 'skills/list' ? { data: [{ skills: [
+      { name: 'review', description: 'project', enabled: true }, { name: 'review', description: 'user', enabled: true },
+      { name: 'disabled', enabled: false },
+    ] }] } : null;
+    if (result) child.stdout.write(`${JSON.stringify({ id: request.id, result })}\n`);
+  });
+  const skills = await software_skills({ adapter: 'codex_cli', executable: process.execPath, cwd: ROOT }, codex);
+  assert.deepEqual(skills.skills, [{ id: 'review', label: 'review', description: 'project', prompt: '$review ' }]);
+  assert.deepEqual(codex.requests.map(row => row.method), ['initialize', 'initialized', 'skills/list']);
+  assert.deepEqual(codex.requests.at(-1).params.cwds, [ROOT]);
+  assert.equal(codex.invocations[0][2].cwd, ROOT);
+  assert.equal(codex.child.killed, true);
+  const claude = catalog_process((request, child) => child.stdout.write(`${JSON.stringify({ type: 'control_response', response: {
+    subtype: 'success', request_id: request.request_id, response: { commands: [
+      { name: 'compact', builtin: true }, { name: 'plugin:review', description: 'Review changes' },
+    ] },
+  } })}\n`));
+  const native = await software_skills({ adapter: 'claude', executable: process.execPath, cwd: ROOT }, claude);
+  assert.deepEqual(native.skills, [{ id: 'plugin:review', label: 'plugin:review', description: 'Review changes', prompt: '请调用技能「plugin:review」：' }]);
+  assert.equal(claude.requests.length, 1);
+  assert.equal(claude.requests[0].request.subtype, 'initialize');
+  assert.ok(claude.invocations[0][1].includes('{"disableAllHooks":true}'));
+  assert.equal(claude.child.killed, true);
+  assert.equal((await software_skills({ adapter: 'api' })).available, false);
+});
+
+test('agy skill discovery reads local manifests, filters excluded skills and prefers project copies', async t => {
+  const home = mkdtempSync(join(tmpdir(), 'codiscuss-skills-'));
+  t.after(() => rmSync(home, { recursive: true, force: true }));
+  const project = join(home, 'project'), global = join(home, '.gemini', 'config');
+  const write_skill = (directory, name, description) => {
+    mkdirSync(directory, { recursive: true });
+    writeFileSync(join(directory, 'SKILL.md'), `---\nname: ${name}\ndescription: ${description}\n---\nDo not expose this body.`);
+  };
+  write_skill(join(global, 'skills', 'review'), 'review', 'personal');
+  write_skill(join(project, '.agents', 'skills', 'review'), 'review', '>\n  Project review\n  across lines');
+  write_skill(join(home, 'shared', 'nested', 'report'), 'report', 'Shared report');
+  write_skill(join(home, 'shared', 'hidden'), 'hidden', 'Excluded');
+  writeFileSync(join(global, 'skills.json'), JSON.stringify({ entries: [{ path: join(home, 'shared'), include_only: ['nested/report', 'hidden'], exclude: ['hidden'] }] }));
+  const result = await software_skills({ adapter: 'antigravity_cli', cwd: project }, { home });
+  assert.deepEqual(result.skills.map(skill => [skill.id, skill.description]), [['review', 'Project review across lines'], ['report', 'Shared report']]);
+  assert.doesNotMatch(JSON.stringify(result), /Do not expose this body/);
 });
 
 test('agy default model is run once a day, not on every room read, and read again on retry', async t => {
@@ -303,6 +349,37 @@ test('room files use the saved project and require the authenticated bridge and 
   const no_project = await room_models(f.home, input, { read_defaults: async () => ({}), read_session: () => ({}) });
   assert.equal(no_project.project_directory, '', 'a member directory does not enable the room project page');
   await assert.rejects(room_files(f.home, input), /未设置项目目录/);
+});
+
+test('room skills require owner authentication and ignore caller supplied software and directories, locally and over relay', async t => {
+  const f = await fixture(t);
+  const launched = await launch_discussion(f.home, { ...f.input, cwd: f.directory }, f.options);
+  const config = load_config(launched.config_path);
+  const input = { site: f.site, room_id: config.room, token: config.token, name: 'Codex' };
+  const calls = [], read_skills = async profile => { calls.push(profile); return { available: true, skills: [{ id: 'review' }] }; };
+  await assert.rejects(room_skills(f.home, { ...input, token: '' }, { read_skills }), /控制凭据/);
+  await assert.rejects(room_skills(f.home, { ...input, token: 'invalid-owner' }, { read_skills }), /403/);
+  assert.equal(calls.length, 0);
+  const result = await room_skills(f.home, { ...input, cwd: join(f.directory, 'untrusted'), executable: 'untrusted', adapter: 'api' }, { read_skills });
+  assert.deepEqual(result.skills, [{ id: 'review' }]);
+  assert.equal(calls[0].cwd, f.directory);
+  assert.equal(calls[0].adapter, 'codex_cli');
+  assert.equal(calls[0].executable, process.execPath);
+  assert.equal((await room_skills(f.home, { ...input, name: 'absent' }, { read_skills })).available, false);
+  const body = { room_id: config.room, name: 'absent' };
+  assert.equal((await request(f.site, '/api/local/room-skills', body)).status, 403);
+  const local = await request(f.site, '/api/local/room-skills', body, { 'X-CoDiscuss-Local': '1' });
+  assert.equal(local.status, 200, JSON.stringify(local.body));
+  assert.equal(local.body.available, false);
+  assert.equal((await request(f.site, '/api/local/room-skills', { ...body, token: 'invalid-owner' }, { 'X-CoDiscuss-Local': '1' })).status, 400);
+  const { computer_command } = await import('../runner/relay_channel.mjs');
+  const { relayed_command } = await import('../runner/remote_launch.mjs');
+  writeFileSync(join(f.home, 'local-settings.json'), JSON.stringify({ port: Number(new URL(f.site).port) }));
+  const command = computer_command(f.home, 'https://paired.test', 'room-skills', body);
+  assert.equal(command.command, 'room-skills');
+  assert.deepEqual(await room_skills(f.home, command.input), local.body);
+  assert.equal(relayed_command(f.site, 'room-skills', { ...input, site: 'https://evil.test', access_file: 'ignored' }).input.site, f.site);
+  assert.equal(relayed_command(f.site, 'room-skills', { ...input, access_file: 'ignored' }).input.access_file, undefined);
 });
 
 test('a room page inlines only the project files it refers to, for the owner, in parts through the relay', async t => {

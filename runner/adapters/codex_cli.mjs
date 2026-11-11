@@ -316,6 +316,30 @@ function models(profile, options) {
   }, options);
 }
 
+/** Read Codex's enabled skills for this member's directory without creating a thread or starting a turn. */
+export function codex_skills(profile, options = {}) {
+  const cwd = profile.cwd || homedir();
+  return query_catalog(profile, ['app-server', '--listen', 'stdio://'], (send, finish) => ({
+    start: () => send({ id: 0, method: 'initialize', params: { clientInfo: { name: 'codiscuss', version: '0.2.1' } } }),
+    line: line => {
+      const reply = json_line(line);
+      if (!reply || ![0, 1].includes(reply.id)) return;
+      if (reply.error) return finish(new Error('Codex 技能目录查询失败，请检查 CLI 版本'));
+      if (reply.id === 0) {
+        send({ method: 'initialized', params: {} });
+        send({ id: 1, method: 'skills/list', params: { cwds: [cwd], forceReload: true } });
+        return;
+      }
+      const catalog = reply.result?.data?.[0];
+      if (!Array.isArray(catalog?.skills)) return finish(new Error('Codex 未返回技能目录'));
+      finish(null, catalog.skills.filter(skill => skill.enabled !== false).map(skill => ({
+        id: skill.name, label: skill.interface?.displayName || skill.name, description: skill.description || '',
+        prompt: `$${skill.name} `,
+      })));
+    },
+  }), { ...options, cwd, catalog_label: '技能' });
+}
+
 /**
  * A private chat turn. When the owner keeps the bound session open with `codex --remote unix://`, the shared app-server
  * daemon holds it, so the turn runs there and shows in that window; otherwise it is a usual delivery, which reports an
@@ -337,4 +361,5 @@ export const codex_cli = {
   session: { path: session_path, exists: session_exists, owns: (id, options) => session_exists(id, options) && !desktop_thread(id, options),
     branch, settings: session_settings },
   models: { list: models, defaults },
+  skills: codex_skills,
 };

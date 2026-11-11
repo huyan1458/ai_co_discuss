@@ -11,6 +11,9 @@ import { listen_local } from './local_port.mjs';
 import { detect_python } from '../runner/discussion_setup.mjs';
 import { connection_site } from '../runner/discussion_local.mjs';
 
+// Setup installs Pi from npm unless one is given; tests never download it.
+process.env.CODISCUSS_PI_CLI ??= 'pi-not-needed-in-this-test';
+
 const CLI = fileURLToPath(new URL('../runner/codiscuss.mjs', import.meta.url));
 
 /** Include background process diagnostics before the fixture removes its temporary home. */

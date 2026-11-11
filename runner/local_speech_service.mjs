@@ -5,15 +5,20 @@
  * or crashed. Started detached by `runner/tts_providers.mjs`:
  *   node local_speech_service.mjs <service dir> <executable> [arguments...]
  * The service's token comes in the environment and passes on to it; its output is appended to `<service dir>/serve.log`.
+ * The runner records the port it chose in `<service dir>/port` before starting this; once the service ends the record is
+ * removed, unless a later start has recorded another port meanwhile.
  */
 import { spawn } from 'node:child_process';
-import { closeSync, openSync, statSync } from 'node:fs';
+import { closeSync, openSync, readFileSync, rmSync, statSync } from 'node:fs';
 import { join } from 'node:path';
 
 const LEASE_MS = 60_000;
 const CHECK_MS = 5_000;
 
 const [directory, executable, ...service_arguments] = process.argv.slice(2);
+const port_path = join(directory, 'port');
+let recorded_port = '';
+try { recorded_port = readFileSync(port_path, 'utf8'); } catch { /* Started without a record. */ }
 const log = openSync(join(directory, 'serve.log'), 'a');
 const service = spawn(executable, service_arguments, { windowsHide: true, stdio: ['ignore', log, log] });
 closeSync(log);
@@ -21,7 +26,10 @@ closeSync(log);
 service.on('exit', () => process.exit(0));
 service.on('error', () => process.exit(1));
 const stop = () => service.kill();
-process.on('exit', stop);
+const forget_port = () => {
+  try { if (readFileSync(port_path, 'utf8') === recorded_port) rmSync(port_path); } catch { /* Already gone. */ }
+};
+process.on('exit', () => { stop(); forget_port(); });
 for (const signal of ['SIGINT', 'SIGTERM', 'SIGHUP']) process.on(signal, stop);
 
 setInterval(() => {

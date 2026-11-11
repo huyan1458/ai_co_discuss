@@ -7,8 +7,7 @@ import { randomUUID } from 'node:crypto';
 import { existsSync, mkdirSync, readdirSync, readFileSync, rmSync, statSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 
-import { read_saved_api_key } from './discussion_api.mjs';
-import { TTS_BASE_URL, tts_settings } from './tts.mjs';
+import { read_service_key, TTS_BASE_URL, tts_settings } from './tts.mjs';
 import { local_transcribe, STT_PROVIDERS } from './tts_providers.mjs';
 
 const STT_ENDPOINT = `${TTS_BASE_URL}/api/v3/auc/bigmodel/recognize/flash`;
@@ -127,7 +126,7 @@ export async function stt_part(home, input, request = fetch, start = undefined) 
     const pcm = Buffer.concat(parts);
     if (pcm.length > STT_MAX_BYTES) throw new Error('录音超过 5 分钟，请分段录制');
     if (!pcm.length) return { text: '' };
-    const key = read_saved_api_key(home, service.key_base_url, settings.stt_key_ref);
+    const key = read_service_key(home, service, settings.stt_key_ref);
     if (service.local) return { text: await local_transcribe({ home, key, wav: pcm_to_wav(pcm) }, { request, ...(start ? { start } : {}) }) };
     if (service.id === 'openai') return { text: await openai_transcribe(service.key_base_url, key, pcm_to_wav(pcm), request) };
     return { text: await recognize(key, pcm_to_wav(pcm), request) };

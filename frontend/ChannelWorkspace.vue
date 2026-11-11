@@ -79,6 +79,36 @@ const work_status = computed(() => {
   const text = working.length === 1 ? `${bridge.display_name(working[0].name)} ${state(working[0])}` : `${working.length} 位执行中`;
   return { tone, text, members: working.slice(0, STATUS_AVATARS), title: working.map((member) => `${bridge.display_name(member.name)} ${state(member)}`).join("\n") };
 });
+/** Card kinds the transcript filter offers; ChannelDiscussion recognises each value. */
+const CARD_FILTERS = [
+  { value: "failed", label: "失败与报错", icon: "i-lucide-circle-alert" },
+  { value: "stopped", label: "已停止与撤回", icon: "i-lucide-circle-stop" },
+  { value: "scheduler", label: "智能调度", icon: "i-lucide-zap" },
+  { value: "arrangement", label: "主持人安排", icon: "i-lucide-list-ordered" },
+  { value: "changes", label: "文件变化", icon: "i-lucide-file-diff" },
+];
+/** Transcript source filter: any checked source shows (host view, the user, @user, each member); the menu stays open while ticking. */
+const source_filter_items = computed(() => {
+  const keep_open = (event) => event.preventDefault();
+  const toggle_author = (name, checked) => act("filter", { authors: checked ? [...view.value.authors, name] : view.value.authors.filter((item) => item !== name) });
+  const host = (room.value?.members || []).find((member) => member.role === "host")?.name;
+  const members = (room.value?.members || []).filter((member) => member.name !== host).map((member) => ({
+    type: "checkbox", label: bridge.display_name(member.name), checked: view.value.authors.includes(member.name),
+    onUpdateChecked: (checked) => toggle_author(member.name, checked), onSelect: keep_open,
+  }));
+  const groups = [[
+    { type: "checkbox", label: "主持人", icon: "i-lucide-crown", description: "主持人的发言、主持说明与程序通知", checked: view.value.host_only, onUpdateChecked: (checked) => act("filter", { host: checked }), onSelect: keep_open },
+    { type: "checkbox", label: "用户", icon: "i-lucide-user", checked: view.value.authors.includes("用户"), onUpdateChecked: (checked) => toggle_author("用户", checked), onSelect: keep_open },
+    { type: "checkbox", label: `@${bridge.display_name("用户")}`, icon: "i-lucide-at-sign", description: "提到用户的消息", checked: view.value.mention_only, onUpdateChecked: (checked) => act("filter", { mention: checked }), onSelect: keep_open },
+  ]];
+  if (members.length) groups.push([{ type: "label", label: "成员" }, ...members]);
+  groups.push([{ type: "label", label: "卡片" }, ...CARD_FILTERS.map((kind) => ({
+    type: "checkbox", label: kind.label, icon: kind.icon, checked: view.value.card_kinds.includes(kind.value), onSelect: keep_open,
+    onUpdateChecked: (checked) => act("filter", { kinds: checked ? [...view.value.card_kinds, kind.value] : view.value.card_kinds.filter((item) => item !== kind.value) }),
+  }))]);
+  if (view.value.source_filter) groups.push([{ label: "清除筛选", icon: "i-lucide-x", onSelect: () => act("filter", { host: false, mention: false, authors: [], kinds: [] }) }]);
+  return groups;
+});
 const show_work_status = computed(() => !workflow_page.value && Boolean(room.value) && !room.value.archived && !(rail_inline.value && show_rail.value));
 const brief_preview = computed(() => {
   const template = document.createElement("template");
@@ -346,7 +376,7 @@ function resize_nav_by_key(event) {
                 <template #trailing><UButton v-if="search || view.query" icon="i-lucide-x" color="neutral" variant="ghost" size="xs" aria-label="清除搜索" @click="search = ''; act('filter', { query: '' })" /><UButton type="submit" icon="i-lucide-corner-down-left" color="neutral" variant="ghost" size="xs" aria-label="搜索" :disabled="!room" /></template>
               </UInput>
             </form>
-            <UTooltip v-if="!workflow_page && view.tab === 'discussion'" text="只看主持：主持人的发言与主持说明（含讨论总结）"><UButton icon="i-lucide-crown" :variant="view.host_only ? 'soft' : 'ghost'" color="neutral" size="sm" class="channel-icon-button channel-host-filter" :aria-pressed="view.host_only" aria-label="只看主持" :disabled="!room" @click="act('filter', { host: !view.host_only })" /></UTooltip>
+            <UDropdownMenu v-if="!workflow_page && view.tab === 'discussion'" :items="source_filter_items" :disabled="!room" :content="{ align: 'end', sideOffset: 4 }" :ui="{ content: 'channel-menu channel-source-menu' }"><UButton icon="i-lucide-list-filter" :variant="view.source_filter ? 'soft' : 'ghost'" color="neutral" size="sm" class="channel-icon-button channel-source-filter" :aria-pressed="view.source_filter" aria-label="筛选消息与卡片" title="筛选消息与卡片" :disabled="!room" /></UDropdownMenu>
           </div>
           <UTooltip v-if="!workflow_page" :text="info_label"><UButton icon="i-lucide-panel-right" color="neutral" variant="ghost" size="sm" class="channel-icon-button channel-panel-toggle channel-info-button" :aria-label="info_label" :disabled="!room && !(rail_inline && view.tab === 'discussion')" :aria-expanded="rail_inline && view.tab === 'discussion' ? show_rail : info_open" @click="toggle_info" /></UTooltip>
         </header>

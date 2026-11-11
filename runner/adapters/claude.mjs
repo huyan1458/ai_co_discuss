@@ -710,6 +710,25 @@ function models(profile, options) {
   }), options);
 }
 
+/** Read installed, user-invocable skills from initialization; no prompt, hooks, MCP servers or saved session. */
+function skills(profile, options = {}) {
+  const args = ['-p', '--input-format', 'stream-json', '--output-format', 'stream-json', '--verbose',
+    '--no-session-persistence', '--strict-mcp-config', '--mcp-config', '{"mcpServers":{}}',
+    '--settings', '{"disableAllHooks":true}'];
+  return query_catalog(profile, args, (send, finish) => ({
+    start: () => send({ type: 'control_request', request_id: 'skills', request: { subtype: 'initialize' } }),
+    line: line => {
+      const reply = json_line(line);
+      if (reply?.type !== 'control_response' || reply.response?.request_id !== 'skills') return;
+      const commands = reply.response.response?.commands;
+      if (reply.response.subtype !== 'success' || !Array.isArray(commands)) return finish(new Error('Claude 未返回技能目录'));
+      finish(null, commands.filter(command => !command.builtin).map(command => ({
+        id: command.name, label: command.name, description: command.description || '', prompt: `请调用技能「${command.name}」：`,
+      })));
+    },
+  }), { ...options, cwd: profile.cwd || homedir(), catalog_label: '技能' });
+}
+
 /** Claude Code's behaviour; its static facts are in profiles.mjs. */
 export const claude = {
   id: 'claude', catalog_source: 'claude-cli',
@@ -717,4 +736,5 @@ export const claude = {
   deliver, chat, events,
   session: { path: session_path, exists: session_exists, owns: session_exists, cwd: session_cwd, branch, settings: session_settings },
   models: { list: models, defaults },
+  skills,
 };

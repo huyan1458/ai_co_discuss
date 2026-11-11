@@ -12,7 +12,8 @@ import { listen_local } from './local_port.mjs';
 import { API_PROVIDERS, api_base_url, api_check, api_generate, api_history, api_models, api_request, api_response, api_tool_results, read_api_key, save_api_key } from '../runner/discussion_api.mjs';
 import { participant_tools, system_prompt } from '../runner/adapters/api.mjs';
 import { deliver_task, execution_details } from '../runner/adapters/index.mjs';
-import { launch_discussion, validate_preset } from '../runner/discussion_launch.mjs';
+import { draw_image, launch_discussion, room_settings, validate_preset } from '../runner/discussion_launch.mjs';
+import { save_image_settings } from '../runner/image_service.mjs';
 import { save_workflow } from '../runner/workflows.mjs';
 import { api, DiscussionStore, load_config } from '../runner/discussion_runner.mjs';
 import { FreeRoomRunner } from '../runner/free_runner.mjs';
@@ -20,6 +21,8 @@ import { ROUTE_GUIDED_PROMPT_VERSION } from '../runner/scheduler.mjs';
 
 const ROOT = fileURLToPath(new URL('..', import.meta.url));
 const SECRET = 'mock-api-key-never-in-room-or-prompt';
+// Room executions of API members run in the Pi harness; the tests use the pinned dev copy.
+process.env.CODISCUSS_PI_CLI = join(ROOT, 'node_modules', '@earendil-works', 'pi-coding-agent', 'dist', 'bundle', 'cli.js');
 
 /** A temporary real website and an isolated private configuration directory. */
 async function site_fixture(t) {
@@ -31,7 +34,14 @@ async function site_fixture(t) {
   const closed = new Promise(resolve => child.once('close', resolve));
   let errors = '';
   child.stderr.on('data', chunk => { errors += chunk; });
-  t.after(async () => { for (const close of cleanup) await close(); child.kill(); await closed; rmSync(home, { recursive: true, force: true }); });
+  t.after(async () => {
+    for (const close of cleanup) await close();
+    child.kill(); await closed;
+    // A Pi process ends a moment after its answer is saved; Windows keeps its files until then.
+    for (let attempt = 0; ; attempt++) {
+      try { rmSync(home, { recursive: true, force: true }); break; } catch (error) { if (attempt >= 50) throw error; await delay(200); }
+    }
+  });
   const port = await new Promise((resolve, reject) => {
     child.stdout.once('data', chunk => resolve(Number(String(chunk).trim())));
     child.once('error', reject); child.once('exit', () => reject(new Error(errors)));
@@ -44,12 +54,15 @@ async function model_fixture(t, respond) {
   const calls = [];
   const server = createServer(async (request, response) => {
     let text = ''; for await (const chunk of request) text += chunk;
-    const call = { path: request.url, headers: request.headers, body: text ? JSON.parse(text) : null };
+    const call = { path: request.url.split('?')[0], headers: request.headers, body: text ? JSON.parse(text) : null };
     calls.push(call);
     try {
       const result = await respond(call, calls);
       if (result === undefined) return;
-      response.setHeader('Content-Type', 'application/json'); response.end(JSON.stringify(result));
+      // Pi streams every request; the runner's own calls (private chat, checks) do not.
+      if (call.body?.stream || call.path.includes(':streamGenerateContent')) {
+        response.setHeader('Content-Type', 'text/event-stream'); response.end(sse(call, result));
+      } else { response.setHeader('Content-Type', 'application/json'); response.end(JSON.stringify(result)); }
     } catch (error) { response.statusCode = 500; response.end(JSON.stringify({ error: error.message })); }
   });
   await listen_local(server);
@@ -62,14 +75,51 @@ function tool_reply(call, name, args = {}) {
   const id = randomUUID();
   if (call.path.endsWith('/responses')) return { status: 'completed', output: [{ type: 'function_call', call_id: id, name, arguments: JSON.stringify(args) }] };
   if (call.path.endsWith('/messages')) return { stop_reason: 'tool_use', content: [{ type: 'tool_use', id, name, input: args }] };
-  if (call.path.includes(':generateContent')) return { candidates: [{ finishReason: 'STOP', content: { role: 'model', parts: [{ functionCall: { name, args }, thoughtSignature: 'opaque-signature' }] } }] };
+  if (/generatecontent/i.test(call.path)) return { candidates: [{ finishReason: 'STOP', content: { role: 'model', parts: [{ functionCall: { name, args }, thoughtSignature: 'opaque-signature' }] } }] };
   return { choices: [{ finish_reason: 'tool_calls', message: { role: 'assistant', reasoning_content: 'opaque-reasoning', tool_calls: [{ id, type: 'function', function: { name, arguments: JSON.stringify(args) } }] } }] };
 }
 
-/** Read the first room prompt from a protocol-specific request. */
+/** One non-streaming reply as the server-sent events of a streaming request in the same protocol. */
+function sse(call, reply) {
+  const data = events => events.map(event => `data: ${JSON.stringify(event)}\n\n`).join('');
+  if (call.path.includes(':streamGenerateContent')) return data([{ ...reply, usageMetadata: { promptTokenCount: 1, candidatesTokenCount: 1, totalTokenCount: 2 } }]);
+  if (call.path.endsWith('/responses')) {
+    const output = (reply.output || []).map((item, index) => ({ id: `item_${index}`, ...item }));
+    return data([{ type: 'response.created', response: { id: 'resp_1', status: 'in_progress', output: [] } },
+      ...output.flatMap((item, index) => [
+        { type: 'response.output_item.added', output_index: index, item: item.type === 'function_call' ? { ...item, arguments: '' } : { ...item, content: [] } },
+        { type: 'response.output_item.done', output_index: index, item }]),
+      { type: 'response.completed', response: { id: 'resp_1', status: reply.status || 'completed', output, usage: { input_tokens: 1, output_tokens: 1, total_tokens: 2 } } }]);
+  }
+  if (call.path.endsWith('/messages')) {
+    const events = [{ type: 'message_start', message: { id: 'msg_1', type: 'message', role: 'assistant', content: [], model: call.body.model, stop_reason: null, usage: { input_tokens: 1, output_tokens: 0 } } }];
+    (reply.content || []).forEach((block, index) => events.push(block.type === 'tool_use'
+      ? { type: 'content_block_start', index, content_block: { ...block, input: {} } } : { type: 'content_block_start', index, content_block: { type: 'text', text: '' } },
+    block.type === 'tool_use' ? { type: 'content_block_delta', index, delta: { type: 'input_json_delta', partial_json: JSON.stringify(block.input) } }
+      : { type: 'content_block_delta', index, delta: { type: 'text_delta', text: block.text } }, { type: 'content_block_stop', index }));
+    events.push({ type: 'message_delta', delta: { stop_reason: reply.stop_reason }, usage: { output_tokens: 1 } }, { type: 'message_stop' });
+    return events.map(event => `event: ${event.type}\ndata: ${JSON.stringify(event)}\n\n`).join('');
+  }
+  const { message, finish_reason } = reply.choices[0];
+  const delta = { role: 'assistant', ...(message.content ? { content: message.content } : {}), ...(message.reasoning_content ? { reasoning_content: message.reasoning_content } : {}),
+    ...(message.tool_calls ? { tool_calls: message.tool_calls.map((tool, index) => ({ index, ...tool })) } : {}) };
+  const chunk = { id: 'chunk_1', object: 'chat.completion.chunk', created: 0, model: call.body.model };
+  return `${data([{ ...chunk, choices: [{ index: 0, delta, finish_reason: null }] },
+    { ...chunk, choices: [{ index: 0, delta: {}, finish_reason }], usage: { prompt_tokens: 1, completion_tokens: 1, total_tokens: 2 } }])}data: [DONE]\n\n`;
+}
+
+/** The text of each user message in a protocol-specific request, in order; tool results are not text. */
+function user_texts(call) {
+  const items = call.body.input || call.body.messages || call.body.contents || [];
+  return items.filter(item => item.role === 'user').map(item => (typeof item.content === 'string' ? item.content
+    : (item.content || item.parts || []).map(part => (typeof part === 'string' ? part
+      : ['text', 'input_text'].includes(part.type) || (!part.type && typeof part.text === 'string') ? part.text : '')).join('')));
+}
+
+/** Read the room prompt of the execution a request belongs to: the latest one, as a member's session keeps earlier ones. */
 function room_prompt(call) {
-  const message = (call.body.input || call.body.messages?.filter(item => item.role !== 'system') || call.body.contents)[0];
-  return JSON.parse(message.content || message.parts[0].text);
+  const text = user_texts(call).findLast(item => item.startsWith('{"room"'));
+  return JSON.parse(text.slice(0, text.lastIndexOf('}') + 1));
 }
 
 /** Wait on observable effects while continuing real runner ticks. */
@@ -81,6 +131,19 @@ async function until(check, tick = async () => {}, timeout = 12000) {
     await delay(15);
   }
   throw new Error('fixture timed out');
+}
+
+/** This computer's image service at the mock. */
+function save_image_service(home, base_url) {
+  save_image_settings(home, { base_url, model: 'gpt-image-2.6-flare', ...save_api_key(home, { base_url, api_key: SECRET }) });
+}
+
+/** This computer's image service at the mock, and the room's drawing switch turned on through the owner's setting. */
+async function enable_images(home, base_url, started) {
+  save_image_service(home, base_url);
+  const config = load_config(started.config_path);
+  await room_settings(home, { site: config.site, room_id: config.room, token: config.token, image_generation: true });
+  return load_config(started.config_path);
 }
 
 /** Build local profiles for every visible provider without any installed AI software. */
@@ -177,7 +240,7 @@ test('API host schedules a real session round and providers answer through execu
   assert.ok(messages.messages.some(message => message.author === 'Codex' && message.kind === 'moderation'));
   assert.ok(messages.messages.every(message => message.source === 'api' && message.submitted_by === message.author));
   assert.ok(!readFileSync(r.started.config_path, 'utf8').includes(SECRET));
-  assert.ok(mock.calls.some(call => call.path.includes('/models/Antigravity%2Fmodel.1:generateContent')));
+  assert.ok(mock.calls.some(call => call.path.includes(':streamGenerateContent')));
   assert.equal(room.session.status, 'concluded');
 });
 
@@ -185,7 +248,8 @@ test('API workflow tasks identify the host playbook and give each member only it
   const f = await site_fixture(t);
   const mock = await model_fixture(t, call => {
     const { task } = room_prompt(call);
-    const system = call.body.instructions || call.body.system || call.body.messages?.find(item => item.role === 'system')?.content;
+    // Where the system prompt goes differs by protocol; the whole request must carry it, and a member's must not carry the playbook.
+    const system = JSON.stringify(call.body);
     if (task.role === 'host') {
       assert.equal(task.workflow.id, 'writing');
       assert.equal(task.workflow.members.length, 1);
@@ -236,7 +300,7 @@ test('free-room API replies bind to their reserved execution and complete the re
   assert.equal(messages.find(message => message.author === 'Grok').source, 'api');
 });
 
-test('an API member with an image model generates and edits images through the Images API and answers with them attached', async t => {
+test('in a room with drawing on, an API member generates and edits images with the image service and answers with them attached, and a CLI member draws with its credential', async t => {
   const f = await site_fixture(t);
   const PNG = Buffer.from('89504e470d0a1a0a0000000d49484452', 'hex');
   let source = '', step = 0;
@@ -247,10 +311,10 @@ test('an API member with an image model generates and edits images through the I
       () => tool_reply(call, 'edit_image', { prompt: '给猫戴帽子', images: [{ attachment_id: source }], output_format: 'webp' }),
       () => tool_reply(call, 'submit_chat', { text: '画好了。' })][step++]();
   });
-  const participants = { Codex: { ...profiles(f.home, mock.base_url).Codex, image_model: 'gpt-image-2.6-flare' } };
+  const participants = { Codex: profiles(f.home, mock.base_url).Codex };
   const started = await launch_discussion(f.home, { site: f.site, entry: 'web', participants,
     room: { title: '生图', mode: 'free', host: '用户', members: ['Codex'], submission_id: randomUUID() } }, { start_service: async () => ({ running: true }) });
-  const config = load_config(started.config_path), store = new DiscussionStore(config.directory), runner = new FreeRoomRunner(config, store);
+  const config = await enable_images(f.home, mock.base_url, started), store = new DiscussionStore(config.directory), runner = new FreeRoomRunner(config, store);
   f.cleanup.push(() => { runner.stop_children(); store.close(); });
   const query = new URLSearchParams({ actor: '用户', file_name: 'cat.png', submission_id: randomUUID() });
   const uploaded = await fetch(`${config.site}/api/rooms/${config.room}/attachments?${query}`, { method: 'POST', body: PNG, headers: { 'X-Discussion-Token': config.token } });
@@ -268,8 +332,14 @@ test('an API member with an image model generates and edits images through the I
   assert.equal(edit.body.images[0].image_url, `data:image/png;base64,${PNG.toString('base64')}`);
   const tools = mock.calls.find(call => call.path.endsWith('/responses')).body.tools.map(item => item.name);
   assert.ok(tools.includes('generate_image') && tools.includes('edit_image'));
-  // The runner reports the image model, so the host reading the room sees who can draw.
-  await until(async () => (await api(config, '')).members.find(member => member.name === 'Codex').image_model === 'gpt-image-2.6-flare', () => runner.tick());
+  // A CLI member draws with its task credential; the images become its own attachments to post with its answer.
+  const access_file = join(f.home, 'member.access.json');
+  writeFileSync(access_file, JSON.stringify({ site: config.site, room: config.room, member: 'Codex', token: config.members.Codex.token }));
+  const drawn = await draw_image(f.home, { access_file, request: { action: 'generate', prompt: '封面' } });
+  assert.equal(drawn.images.length, 2);
+  assert.match(drawn.images[0].attachment_id, /^[a-f0-9]{32}$/);
+  await room_settings(f.home, { site: config.site, room_id: config.room, token: config.token, image_generation: false });
+  await assert.rejects(draw_image(f.home, { access_file, request: { action: 'generate', prompt: '封面' } }), /没有添加生图服务/);
 });
 
 test('images an API member generated before its execution failed go out with a later answer instead of being drawn again', async t => {
@@ -285,8 +355,10 @@ test('images an API member generated before its execution failed go out with a l
     unsent = task.unsent_images;
     return tool_reply(call, 'submit_chat', { text: '补发上次的封面。', attachments: [unsent[0].attachment_id] });
   });
-  const participants = { Codex: { ...profiles(f.home, mock.base_url).Codex, image_model: 'gpt-image-2.6-flare' } };
-  const started = await launch_discussion(f.home, { site: f.site, entry: 'web', participants,
+  const participants = { Codex: profiles(f.home, mock.base_url).Codex };
+  // Drawing chosen while creating the room.
+  save_image_service(f.home, mock.base_url);
+  const started = await launch_discussion(f.home, { site: f.site, entry: 'web', participants, image_generation: true,
     room: { title: '补发', mode: 'free', host: '用户', members: ['Codex'], submission_id: randomUUID() } }, { start_service: async () => ({ running: true }) });
   const config = load_config(started.config_path), store = new DiscussionStore(config.directory), runner = new FreeRoomRunner(config, store);
   f.cleanup.push(() => { runner.stop_children(); store.close(); });
@@ -399,11 +471,13 @@ test('provider errors fail the session request after bounded retries without lea
   const mock = await model_fixture(t, () => { throw new Error(`upstream echoed ${SECRET}`); });
   const f = await site_fixture(t), participants = profiles(f.home, mock.base_url);
   const r = await start_free_session(t, { fixture: f, participants: { Grok: participants.Grok }, host: 'Grok', title: 'API 错误' });
-  await until(async () => mock.calls.length === 3, () => r.runner.tick());
-  await until(async () => (await api(r.config, '/inbox')).executions.length === 0, () => r.runner.tick());
+  await until(async () => mock.calls.length > 0, () => r.runner.tick());
+  // Pi waits 2, 4 and 8 seconds between its retries.
+  await until(async () => (await api(r.config, '/inbox')).executions.length === 0, () => r.runner.tick(), 40000);
   const inbox = await api(r.config, '/inbox'), messages = await api(r.config, '/messages');
   assert.ok(!JSON.stringify({ inbox, messages, log: r.log }).includes(SECRET));
-  assert.equal(mock.calls.length, 3, 'a 5xx is retried twice, then the request fails without a third retry');
+  // Pi retries a 5xx a bounded number of times (3 on Pi 1.5.2), then the request fails.
+  assert.ok(mock.calls.length > 1 && mock.calls.length <= 5, `${mock.calls.length} model requests`);
 });
 
 test('API participants load the shared skills and map CLI commands onto their room tools', () => {
@@ -560,8 +634,8 @@ test('read-aloud on the local service uses the token the setup skill saved and s
     assert.deepEqual([tts_settings(fresh).provider, tts_settings(fresh).stt_provider], ['volcengine', 'volcengine']);
     // Editing other settings before installing does not pin the cloud services; only picking one does.
     save_tts_settings(fresh, { speech_rate: 20, providers: tts_settings(fresh).providers });
-    save_api_key(fresh, { base_url: 'http://127.0.0.1:18765', api_key: 'local-token' });
-    save_api_key(fresh, { base_url: 'http://127.0.0.1:18766', api_key: 'local-stt-token' });
+    save_api_key(fresh, { base_url: 'http://127.0.0.1/yovoice', api_key: 'local-token' });
+    save_api_key(fresh, { base_url: 'http://127.0.0.1/crispasr', api_key: 'local-stt-token' });
     assert.deepEqual([tts_settings(fresh).provider, tts_settings(fresh).stt_provider], ['local', 'local']);
     save_tts_settings(fresh, { provider: 'volcengine', providers: tts_settings(fresh).providers });
     save_tts_settings(fresh, { speech_rate: 0, providers: tts_settings(fresh).providers });
@@ -570,6 +644,7 @@ test('read-aloud on the local service uses the token the setup skill saved and s
     save_tts_settings(home, { provider: 'local', providers: { local: { context: '慢一点' } } });
     assert.equal(tts_settings(home).api_key_ref, '', 'not ready before the skill saves a token');
     await assert.rejects(tts_speak(home, { text: '你好' }), /local-tts-setup/);
+    // A token saved before the service's port could change is bound to its former fixed port, and still serves.
     const token = save_api_key(home, { base_url: 'http://127.0.0.1:18765', api_key: 'local-token' }).api_key_ref;
     assert.equal(tts_settings(home).api_key_ref, token, 'the saved token is picked up without the page');
     // A 24 kHz mono 16-bit WAV with two samples; 1 ms of trailing silence adds 24 more.
@@ -648,8 +723,10 @@ test('voice input on the local recognizer uses the token its skill saved and sta
     assert.equal(tts_settings(home).stt_provider, 'local');
     const part = (final) => ({ upload_id: randomUUID(), index: 0, data: Buffer.from([1, 0, 2, 0]).toString('base64'), final });
     await assert.rejects(stt_part(home, part(true)), /local-stt-setup/);
-    save_api_key(home, { base_url: 'http://127.0.0.1:18766', api_key: 'stt-token' });
+    save_api_key(home, { base_url: 'http://127.0.0.1/crispasr', api_key: 'stt-token' });
     mkdirSync(join(home, 'crispasr'));
+    // The port recorded when the service started is where requests go.
+    writeFileSync(join(home, 'crispasr', 'port'), '50123');
     let listening = false, sent;
     const request = async (url, init) => {
       if (!listening) throw new TypeError('fetch failed');
@@ -658,7 +735,7 @@ test('voice input on the local recognizer uses the token its skill saved and sta
     };
     const start = async (start_home, key) => { assert.equal(start_home, home); assert.equal(key, 'stt-token'); listening = true; };
     assert.deepEqual(await stt_part(home, part(true), request, start), { text: '你好，Claude。' });
-    assert.equal(sent.url, 'http://127.0.0.1:18766/inference');
+    assert.equal(sent.url, 'http://127.0.0.1:50123/inference');
     assert.equal(sent.init.headers.Authorization, 'Bearer stt-token');
     const wav = Buffer.from(await sent.init.body.get('file').arrayBuffer());
     assert.deepEqual([wav.subarray(0, 4).toString(), [...wav.subarray(44)]], ['RIFF', [1, 0, 2, 0]]);
@@ -667,14 +744,20 @@ test('voice input on the local recognizer uses the token its skill saved and sta
   } finally { rmSync(home, { recursive: true, force: true }); }
 });
 
-test('force-stopping a local speech service ends only its own program listening on its port', async () => {
+test('force-stopping a local speech service ends only its own program listening on its recorded port', async () => {
   const { local_service_stop, local_services } = await import('../runner/tts_providers.mjs');
   const home = mkdtempSync(join(tmpdir(), 'codiscuss-local-speech-'));
   try {
-    const owners = { 18765: { pid: 41, name: 'yovoice.exe' }, 18766: { pid: 42, name: 'other-app.exe' } };
+    const owners = { 37641: { pid: 40, name: 'python.exe' }, 50001: { pid: 41, name: 'yovoice.exe' }, 50002: { pid: 42, name: 'other-app.exe' } };
     const killed = [];
     const find = async port => owners[port] || null;
-    const lookup = { find, probe: async () => false, kill: async pid => { killed.push(pid); delete owners[18765]; } };
+    const lookup = { find, probe: async () => false, kill: async pid => { killed.push(pid); delete owners[50001]; } };
+    // Another program on the preferred port is no running service: without a recorded port the next start picks another.
+    assert.equal((await local_services(home, lookup)).tts.state, 'stopped');
+    mkdirSync(join(home, 'yovoice'));
+    mkdirSync(join(home, 'crispasr'));
+    writeFileSync(join(home, 'yovoice', 'port'), '50001');
+    writeFileSync(join(home, 'crispasr', 'port'), '50002');
     assert.deepEqual([(await local_services(home, lookup)).tts.state, (await local_services(home, lookup)).stt.state], ['running', 'other']);
     await assert.rejects(local_service_stop(home, 'stt', lookup), /其他程序/);
     assert.deepEqual(killed, [], 'a program that is not the service keeps running');

@@ -50,13 +50,13 @@
 | 接入方式 | 参与者 | 说明 |
 | --- | --- | --- |
 | **自动唤醒** | Claude Code CLI · Codex App / CLI · Antigravity App / CLI | 由本机服务唤醒并续接原会话，可担任主持人 |
-| **模型 API** | OpenAI · Claude · Gemini · DeepSeek · Qwen · Grok · OpenAI 兼容服务 | 由本机服务调用，仅有房间工具，可担任主持人 |
+| **模型 API** | OpenAI · Claude · Gemini · DeepSeek · Qwen · Grok · OpenAI 兼容服务 | 在本机的 [Pi](https://github.com/earendil-works/pi) 中运行，只有房间与项目文件工具，有自己的会话，可担任主持人 |
 | **手动接入** | 任何可运行 `codiscuss` 的本地 AI（如 Cursor CLI） | 凭自己的成员凭证读写 |
 
 ## 快速开始
 
 > [!NOTE]
-> 需要 **Node.js 24+** 和 **Python 3.10+**。先安装并登录要使用的 AI 软件；只用 API 时准备 API Key 即可。
+> 需要 **Node.js 24+** 和 **Python 3.10+**。先安装并登录要使用的 AI 软件；使用 API 成员时准备 API Key 即可（运行它们的 Pi 由安装器自动安装，版本为本版测试过的那一版）。
 
 ```sh
 npm install --global ai_co_discuss@latest

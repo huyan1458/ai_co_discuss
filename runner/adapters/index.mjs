@@ -9,14 +9,16 @@
  *     software can take an interjection without ending its turn) passes one in, resolving false once the turn is over;
  *   - `session`: `{path, exists, branch, settings}` for the software's own session store, or null;
  *   - `models`: `{list, effort?, defaults}` read from the installed software, or null when it is chosen inside the App;
+ *   - optional `skills(profile, options)` lists installed skills `{id, label, description, prompt}` without a model turn;
  *   - optional `chat(config, binding, task, spawn_process, user_home)` for a private chat turn whose software a usual
  *     delivery cannot follow (an App, an open window, the model API): same result as `deliver`, and it reports through
  *     the task's callbacks — `on_note(text)` for each remark (the last is the reply), `on_exit()` or `on_failure(reason)`
  *     at the end, `on_process(handle)` with `kill()` when it can stop (`handle.stop_on_shutdown = false` when only the owner's stop may
  *     run it, not the runner's shutdown), `on_output(path, line)` for its process log;
  *   - optional `receipt(config, id)` for deliveries confirmed later (`status: 'sidecar_pending'`),
- *     `into_window(profile, binding)` (this delivery goes into the member's own open window) and `cleanup(directory)`
- *     (remove what a deleted room left in the software).
+ *     `into_window(profile, binding)` (this delivery goes into the member's own open window), `cleanup(directory)`
+ *     (remove what a deleted room left in the software) and `sweep(service_home, user_home)` (back up and remove retired
+ *     artifacts from earlier versions).
  *
  * `adapter_of` merges the two. The room runner, launch settings and the website use these, never a software name
  * (AGENTS.md red line 9).
@@ -32,10 +34,10 @@ import { claude } from './claude.mjs';
 import { codex } from './codex_app.mjs';
 import { codex_cli } from './codex_cli.mjs';
 import { execution_marker, MODEL_PATTERN } from './common.mjs';
-import { adapter_capabilities, adapter_profile, ADAPTER_IDS, image_model_of } from './profiles.mjs';
+import { adapter_capabilities, adapter_profile, ADAPTER_IDS } from './profiles.mjs';
 
 export { execution_marker };
-export { adapter_capabilities as capabilities_of, image_model_of };
+export { adapter_capabilities as capabilities_of };
 
 export const ADAPTERS = Object.fromEntries([codex_cli, codex, claude, antigravity_cli, antigravity, api]
   .map(behaviour => [behaviour.id, { ...adapter_profile(behaviour.id), ...behaviour }]));
@@ -62,9 +64,14 @@ export function validate_participant(participant) {
   adapter.validate?.(participant);
 }
 
-/** Remove what a deleted room's members left inside their software, e.g. agy's private projects. */
+/** Remove what a deleted room's members left inside their software, e.g. agy's session records and legacy projects. */
 export function cleanup_room(directory) {
   for (const adapter of Object.values(ADAPTERS)) adapter.cleanup?.(directory);
+}
+
+/** Back up and remove retired adapter artifacts left by earlier versions, without touching user-owned software state. */
+export function sweep_adapters(service_home, user_home) {
+  return Object.values(ADAPTERS).reduce((count, adapter) => count + (adapter.sweep?.(service_home, user_home) || 0), 0);
 }
 
 /** Deliver one task through its member's adapter; only allowlisted adapters run. */
@@ -183,4 +190,15 @@ export async function software_effort(profile, options = {}) {
 /** What a CLI runs with when the card leaves model or effort empty. */
 export async function software_defaults(profile, options = {}) {
   return (await adapter_of(profile.adapter)?.models?.defaults(profile, options)) || { model: '', effort: '' };
+}
+
+/** List only skills the member's own adapter can discover; an unsupported source is not an empty catalog. */
+export async function software_skills(profile, options = {}) {
+  const read = adapter_of(profile.adapter)?.skills;
+  if (!read) return { available: false, reason: '此接入方式暂不支持读取本机技能', skills: [] };
+  const skills = await read(profile, options);
+  // Native catalogs can contain a project and a user copy with the same invocation name; keep the first (higher priority).
+  const unique = new Map();
+  for (const skill of skills) if (!unique.has(skill.id)) unique.set(skill.id, skill);
+  return { available: true, skills: [...unique.values()] };
 }

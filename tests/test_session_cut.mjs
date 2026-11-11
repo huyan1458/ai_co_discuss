@@ -1,7 +1,7 @@
 /** Branch member sessions before taken-back executions, from each software's own session format; originals stay intact. */
 import assert from 'node:assert/strict';
 import { EventEmitter } from 'node:events';
-import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { PassThrough } from 'node:stream';
@@ -108,4 +108,32 @@ test('agy copies its conversation database without the steps from the first take
   assert.equal(kept.prepare('SELECT COUNT(*) AS count FROM steps').get().count, 4);
   kept.close();
   assert.ok(readFileSync(file).length);
+});
+
+test('a model API member copies its Pi session up to the first taken-back prompt into a new session', async t => {
+  const home = home_fixture(t), directory = join(home, '.codiscuss', 'pi', 'sessions');
+  mkdirSync(directory, { recursive: true });
+  const user = (id, parent, execution) => ({ type: 'message', id, parentId: parent,
+    message: { role: 'user', content: [{ type: 'text', text: `{"room":{}}\n\n（执行标记 ${execution_marker(execution)}，无需处理）` }] } });
+  const assistant = (id, parent) => ({ type: 'message', id, parentId: parent, message: { role: 'assistant', content: [] } });
+  const original = lines([{ type: 'session', version: 3, id: SESSION, cwd: home },
+    { type: 'model_change', id: 'm0', parentId: null, provider: 'codiscuss', modelId: 'deepseek-flash' },
+    user('u1', 'm0', 1), assistant('a1', 'u1'), user('u2', 'a1', 2), assistant('a2', 'u2')]);
+  const file = join(directory, `2026-11-11T00-00-00-000Z_${SESSION}.jsonl`);
+  writeFileSync(file, original);
+  const profile = { adapter: 'api' };
+  const copy_of = id => readFileSync(join(directory, readdirSync(directory).find(name => name.endsWith(`_${id}.jsonl`))), 'utf8')
+    .trim().split('\n').map(line => JSON.parse(line));
+
+  assert.equal(await branch_session(profile, SESSION, [3], { home }), null, 'nothing taken back is in the session');
+  const cut = await branch_session(profile, SESSION, [2], { home });
+  assert.ok(session_exists('api', cut.session_id, { home }));
+  const copy = copy_of(cut.session_id);
+  assert.deepEqual(copy.map(entry => entry.id), [cut.session_id, 'm0', 'u1', 'a1']);
+  assert.equal(copy[0].parentSession, file);
+  assert.equal(readFileSync(file, 'utf8'), original);
+  assert.deepEqual(await branch_session(profile, SESSION, [1], { home }), { session_id: '' }, 'a cut before every prompt starts anew');
+  // A forked room copies the whole session; one bound before Pi ran API members has no session here and starts anew.
+  assert.deepEqual(copy_of((await branch_session(profile, SESSION, [], { home, always: true })).session_id).length, 6);
+  assert.deepEqual(await branch_session(profile, 'api-0000', [], { home, always: true }), { session_id: '' });
 });

@@ -1,7 +1,6 @@
 <script setup>
 /** An entered key stays only in this component's memory; the local private store returns just an opaque reference. */
 import { computed, inject, ref, watch } from "vue";
-import { IMAGE_MODELS, IMAGE_PROTOCOLS } from "../runner/adapters/profiles.mjs";
 
 const props = defineProps({ name: { type: String, required: true } });
 const { view, bridge } = inject("discussion");
@@ -16,10 +15,6 @@ const protocols = [{ value: "responses", label: "OpenAI Responses" }, { value: "
 // A key entered for one address does not belong to another.
 watch(() => profile.value.base_url, () => { api_key.value = saved_key.value = ""; });
 const write = (field, value) => bridge.write_launch(props.name, field, value);
-const image_models = IMAGE_MODELS.map(value => ({ value, label: value }));
-// The Images API shares the address and Bearer key of the OpenAI-style protocols only; empty turns image tools off.
-const images_supported = computed(() => IMAGE_PROTOCOLS.includes(profile.value.api_protocol));
-const write_image_model = value => write("image_model", String(value || "").trim() || null);
 
 /** Persist the entered key once input is committed (blur or Enter); it stays in the field so it can still be shown. */
 async function save_key() {
@@ -45,9 +40,6 @@ async function save_key() {
     <div class="api-field"><span>模型</span>
       <div class="api-inline"><UInputMenu mode="autocomplete" ignore-filter :model-value="profile.model || ''" :items="models.items" value-key="value" :aria-label="`${name} API 模型 ID`" placeholder="推荐模型或完整 ID" class="w-full min-w-0" size="xs" @update:model-value="write('model', $event)" />
         <UButton icon="i-lucide-refresh-cw" :aria-label="`读取 ${name} 的模型列表`" title="读取模型列表" size="xs" color="neutral" variant="ghost" :loading="models.loading" :disabled="!profile.api_key_ref" @click="bridge.load_launch_models(name, true)" /></div>
-    </div>
-    <div v-if="images_supported" class="api-field" title="填写后此成员可生成和修改图片（Images API，同一地址与密钥，按张计费）；留空不生图。"><span>生图</span>
-      <UInputMenu mode="autocomplete" ignore-filter :model-value="profile.image_model || ''" :items="image_models" value-key="value" :aria-label="`${name} 图片模型 ID`" placeholder="不生图；选择或填写图片模型" class="w-full min-w-0" size="xs" @update:model-value="write_image_model" />
     </div>
     <p v-if="models.error" role="alert">{{ models.error }}</p>
   </div>

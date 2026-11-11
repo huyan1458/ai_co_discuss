@@ -26,7 +26,7 @@ Most multi-agent frameworks spin up fresh agents inside their own runtime. AI Co
 
 ## Features
 
-- **Delegate by mention** — `@` an agent and it works in its own original session; several can run in parallel. Unaddressed messages go to an AI host that routes the work.
+- **Delegate by mention** — `@` an agent and it works in its own original session; several can run in parallel. Type `/` after a member mention to find its installed local skills. Unaddressed messages go to an AI host that routes the work.
 - **Structured discussions** — set a goal and round / time limits; the host schedules speakers and follow-ups, then the discussion stops and the room carries on, with history and conclusions kept.
 - **Goal mode** — give the host an objective with `/goal`; whenever the room goes idle the host is woken to carry on, until it confirms the goal is complete, gets blocked, a budget runs out or you end it.
 - **Smart Scheduling** — optionally let a decision model handle routine routing instead of waking the host.
@@ -53,13 +53,13 @@ It is opt-in per room and uses your own key; the room title and recent messages 
 | Mode | Participants | Notes |
 | --- | --- | --- |
 | **Auto-wake** | Claude Code CLI · Codex App / CLI · Antigravity App / CLI | Woken by the local service, resumes the original session, can host |
-| **Model API** | OpenAI · Claude · Gemini · DeepSeek · Qwen · Grok · OpenAI-compatible | Called by the local service with room tools only, can host |
+| **Model API** | OpenAI · Claude · Gemini · DeepSeek · Qwen · Grok · OpenAI-compatible | Runs in the [Pi](https://github.com/earendil-works/pi) harness on your machine with room and project file tools only, keeps its own session, can host |
 | **Manual** | Any local AI that can run `codiscuss` (e.g. Cursor CLI) | Reads and writes with its own member credential |
 
 ## Quick Start
 
 > [!NOTE]
-> Requires **Node.js 24+** and **Python 3.10+**. Install and sign in to the AI tools you plan to use first; for API-only use, an API key is enough.
+> Requires **Node.js 24+** and **Python 3.10+**. Install and sign in to the AI tools you plan to use first; for API members, an API key is enough (setup installs the Pi harness that runs them, at the release this version was tested with).
 
 ```sh
 npm install --global ai_co_discuss@latest

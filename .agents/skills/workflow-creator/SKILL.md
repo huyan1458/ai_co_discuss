@@ -67,7 +67,7 @@ description: AI CoDiscuss 工作流的创建与修改技能。用户要把房间
 
 - 什么时候拆成子工作流：不是每轮都做、有自己完整的步骤、离开主线也说得通。每轮都做的步骤留在主线。
 - `workflows/<子工作流ID>/SKILL.md` 的头信息：`name`（= 文件夹名，规则同工作流 ID）、`description`（必填，最多 500 字，写清做什么、什么时候用）、可选 `metadata` 下的 `label`（显示名）；正文最多 20,000 字。最多 10 个，不再嵌套。
-- 它的卡片放在它自己的 `agents/` 下，格式与主线卡片相同；卡片 ID 在整个工作流里（含主线和各子工作流）不能重复。启用工作流时只请进主线卡片，这些卡片由主持人用子工作流时请进、用完请离。示意图 `flow.json` 也放在它自己的文件夹里，只能画它自己的卡片。
+- 它的卡片放在它自己的 `agents/` 下，格式与主线卡片相同；卡片 ID 在整个工作流里（含主线和各子工作流）不能重复。启用工作流时只请进主线卡片，这些卡片由主持人用子工作流时请进、用完请离。示意图 `flow.json` 也放在它自己的文件夹里，可以画它自己的卡片，也可以画参与其中的主线卡片（节点写主线的卡片 ID，不另建卡片）。主线的示意图用 `{"id": "sub_1", "type": "sub", "sub": "<子工作流ID>"}` 节点标出转去子工作流的地方；子工作流的示意图里不能再放这种节点。
 - 它的脚本放在它自己的文件夹里（如 `scripts/`），在它的 SKILL.md 里按相对路径写；要给 API 成员运行，照常在根目录 `commands.json` 登记，路径写 `{workflow}/workflows/<子工作流ID>/scripts/…`。
 - 工作流文件夹对成员只读：子工作流要积累的东西（知识库、缓存）写到项目文件夹或本机服务目录下，不写进自己的文件夹。
 - 子工作流用文件夹保存（`workflow-save --dir`）或在工作流页编辑；粘贴草稿不带子工作流，用草稿保存时已有的子工作流原样保留。
@@ -118,7 +118,7 @@ project_access: write
 - **工作流 ID**（文件夹名 = SKILL.md 的 `name`）：小写英文和数字，可用单个连字符连接（不在首尾），1—40 位。`metadata` 下的 `label`（显示名）最多 32 字；早期写在顶层的 `label` 仍可读取，保存时移到 `metadata` 下。
 - **`description`** 最多 500 字：写清做什么、什么时候用。主持人只凭它判断一条请求该不该按这个工作流做，写含糊了，该用时会不用、不该用时会套用。
 - **卡片**：最多 30 张。`name` 是卡片 ID，等于文件名，只用小写英文、数字和下划线，最多 16 位。`platform` 是平台 ID：`Claude`、`Codex`、`Antigravity`、`DeepSeek`、`Qwen`、`Grok`、`OpenAI`、`Custom`（网页显示的 Gemini 写 `Antigravity`，自定义 API 写 `Custom`），须是本机已配置的软件，或已配置的模型 API（官方平台可按已保存的 API Key 加入；Custom 须先保存完整的本机 API 配置）。成员名由程序拼成 `平台-卡片ID`。
-- **卡片可选字段**：`label`、`description`、`project_access`（read / write / auto / full）、`model`、`effort`、`image_model`（图片模型 ID，如 `gpt-image-2.6-flare`，只对 `OpenAI` 等 Responses / Chat Completions 协议的 API 成员生效，有了它这张卡片的成员能生成和修改图片）。不用的字段直接省略；模型和强度省略即用本机默认值。接入方式、可执行文件、密钥不写进卡片，由各自电脑的配置决定。各角色挑哪个平台和模型，见 [给卡片挑平台和模型](references/model-selection.md)。
+- **卡片可选字段**：`label`、`description`、`project_access`（read / write / auto / full）、`model`、`effort`。生图不是卡片字段：房间添加了生图卡片后所有成员都能画，卡片提示词写清谁负责出图即可。不用的字段直接省略；模型和强度省略即用本机默认值。接入方式、可执行文件、密钥不写进卡片，由各自电脑的配置决定。各角色挑哪个平台和模型，见 [给卡片挑平台和模型](references/model-selection.md)。
 - 头信息只支持单行 `key: value`，以及 `metadata:` 下缩进一层的单行 `key: value`；不支持多行值和列表。
 - 卡片正文留空时使用该软件的默认提示。
 

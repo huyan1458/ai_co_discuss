@@ -22,7 +22,8 @@ const MAX_DRAFT_PARTS = 20;
 const WORKFLOW_LOCK_WAIT_MS = 5000;
 const BACKUP_DIRECTORY = /^\.old-([a-z0-9_-]{1,40})-[0-9a-f-]{36}$/;
 // A card file is shaped like an agent definition: `name` is the card ID (its file name) and `platform` the software.
-const CARD_FIELDS = ['name', 'label', 'description', 'project_access', 'model', 'effort', 'image_model'];
+const CARD_FIELDS = ['name', 'label', 'description', 'project_access', 'model', 'effort'];
+// `image_model` is still read from older card files and dropped: drawing is now the room's switch.
 const CARD_FILE_FIELDS = ['name', 'platform', 'label', 'description', 'project_access', 'model', 'effort', 'image_model'];
 const PART_LINE = /^<!-- workflow-part: (\d+)\/(\d+) id: ([a-z0-9_-]{1,40}) -->$/;
 const FILE_LINE = /^<!-- workflow-file: (\S+) -->$/;
@@ -231,14 +232,20 @@ function workflow_from_files(skill_text, cards, resources = {}) {
 
 /**
  * A well-formed canvas over the workflow's cards, or null for none. It only illustrates SKILL.md, so any arrangement of
- * arrows is kept; only a malformed file or a card the workflow lacks is refused.
+ * arrows is kept; only a malformed file, a card the workflow lacks or a sub-workflow node that names no sub-workflow is
+ * refused. `subs`: the sub-workflow IDs the main flow may show, undefined when the save keeps the saved ones (not
+ * checked), null on a sub-workflow's canvas (it may show none).
  */
-function validate_flow(flow, cards) {
+function validate_flow(flow, cards, subs) {
   if (flow === undefined || flow === null) return flow;
   const normalized = normalize_flow(flow);
   if (!flow_in_use(normalized)) return null;
   const unknown = normalized.nodes.filter(node => node.type === 'card' && !cards.includes(node.card)).map(node => node.card);
   if (unknown.length) throw new Error(`流程画布引用了不存在的卡片：${unknown.join('、')}`);
+  const parts = normalized.nodes.filter(node => node.type === 'sub');
+  if (parts.length && subs === null) throw new Error('子工作流的画布不能再放子工作流');
+  const missing = subs ? parts.filter(node => !subs.includes(node.sub)).map(node => node.sub) : [];
+  if (missing.length) throw new Error(`流程画布引用了不存在的子工作流：${missing.join('、')}`);
   return normalized;
 }
 
@@ -283,8 +290,11 @@ const SUB_DIRECTORY = 'workflows';
 const SUB_FILE = /^workflows\/([^/]+)\/(SKILL\.md|flow\.json|agents\/([^/]+)\.md)$/;
 const MAX_SUB_WORKFLOWS = 10;
 
-/** Check the sub-workflows a save carries; each obeys a workflow's rules, and its canvas may name only its own cards. */
-function validate_sub_workflows(list, validate_card) {
+/**
+ * Check the sub-workflows a save carries; each obeys a workflow's rules. Its canvas may show its own cards and the main
+ * flow's (`main_cards`: a main-flow member taking part in it), but no sub-workflow.
+ */
+function validate_sub_workflows(list, validate_card, main_cards) {
   if (!Array.isArray(list) || list.length > MAX_SUB_WORKFLOWS) throw new Error(`子工作流须为列表，最多 ${MAX_SUB_WORKFLOWS} 个`);
   const ids = new Set();
   return list.map(sub => {
@@ -301,7 +311,7 @@ function validate_sub_workflows(list, validate_card) {
     const agents = sub.agents || [];
     if (!Array.isArray(agents) || agents.length > MAX_WORKFLOW_CARDS) throw new Error(`${name}的卡片须为列表，最多 ${MAX_WORKFLOW_CARDS} 张`);
     const normalized = agents.map(agent => normalize_card(agent, validate_card));
-    const flow = validate_flow(sub.flow, normalized.map(agent => agent.card));
+    const flow = validate_flow(sub.flow, [...normalized.map(agent => agent.card), ...main_cards], null);
     return { id, label, description, skill, agents: normalized, ...(flow ? { flow } : {}) };
   });
 }
@@ -412,9 +422,10 @@ export function validate_workflow(input, validate_card) {
   // Absent resources mean "keep the saved folder's other files" (a host draft or the editor carries none); `{}` clears them.
   // Likewise an absent flow keeps the saved canvas, and null removes it; absent sub-workflows keep the saved ones.
   const resources = input.resources === undefined ? undefined : validate_resources(input.resources);
-  const sub_workflows = input.sub_workflows === undefined ? undefined : validate_sub_workflows(input.sub_workflows, validate_card);
+  const main_cards = normalized.map(agent => agent.card);
+  const sub_workflows = input.sub_workflows === undefined ? undefined : validate_sub_workflows(input.sub_workflows, validate_card, main_cards);
   workflow_cards({ agents: normalized, sub_workflows });
-  const flow = validate_flow(input.flow, normalized.map(agent => agent.card));
+  const flow = validate_flow(input.flow, main_cards, sub_workflows?.map(sub => sub.id));
   return { id, label, description, skill, agents: normalized,
     ...(resources === undefined ? {} : { resources }),
     ...(sub_workflows === undefined ? {} : { sub_workflows }),

@@ -13,7 +13,7 @@
  */
 import { computed, inject, nextTick, onBeforeUnmount, onMounted, reactive, ref, watch } from "vue";
 import { FOLD_GAP_MS, PHASE_KINDS, PHASE_LABELS, STATE_LABELS, WAIT_WARN_MS, axis_ticks, execution_log, format_duration, handoff_lines, notes_between,
-  pan_window, round_digest, row_breakdown, row_status, snapshot_at, timeline_axis, timeline_rows, timeline_summary, recent_window, daily_overview, requested_at, view_axis, zoom_window } from "./timeline-model.js";
+  pan_window, row_breakdown, row_status, snapshot_at, task_digest, timeline_axis, timeline_rows, timeline_segments, recent_window, task_overview, requested_at, view_axis, zoom_window } from "./timeline-model.js";
 
 const emit = defineEmits(["detail"]);
 const { view, bridge } = inject("discussion");
@@ -191,34 +191,68 @@ onBeforeUnmount(() => {
   size_observer?.disconnect();
 });
 
-/** One continuous timeline: the latest executions (WINDOW_STEP at first, more a click away), with the dispatcher of any
- *  of them added so hand-offs stay whole; or the room day by day. Nothing is grouped: idle time folds on the axis.
- *  (Rounds by user message made a round of every @; stretches split by idle time needed a threshold that was always wrong.) */
+/** One continuous timeline: the latest executions (WINDOW_STEP at first, more a click away), reaching back to the start
+ *  of the task the earliest of them belongs to, so no task is cut in half, with a line where each task begins; or the
+ *  room task by task. A task begins where the owner asked for something new while the room was idle (timeline_segments). */
 const WINDOW_STEP = 20;
 const window_count = ref(WINDOW_STEP);
 const view_mode = ref("timeline");
-const overview = computed(() => view_mode.value === "days");
+const overview = computed(() => view_mode.value === "tasks");
 watch(room_id, () => { window_count.value = WINDOW_STEP; view_mode.value = "timeline"; });
-const shown = computed(() => !timeline.value || overview.value ? timeline.value
-  : { ...timeline.value, executions: recent_window(timeline.value.executions, window_count.value) });
+const segments = computed(() => timeline.value ? timeline_segments(timeline.value.executions, now.value) : []);
+const segment_of = computed(() => {
+  const map = new Map();
+  for (const segment of segments.value) for (const key of segment.keys) map.set(key, segment);
+  return map;
+});
+const shown = computed(() => {
+  if (!timeline.value || overview.value) return timeline.value;
+  const keys = new Set();
+  for (const item of recent_window(timeline.value.executions, window_count.value)) {
+    for (const key of segment_of.value.get(`${item.source}:${item.id}`)?.keys || [`${item.source}:${item.id}`]) keys.add(key);
+  }
+  return { ...timeline.value, executions: timeline.value.executions.filter((item) => keys.has(`${item.source}:${item.id}`)) };
+});
 const earlier_count = computed(() => timeline.value && !overview.value ? timeline.value.executions.length - shown.value.executions.length : 0);
 const when = (ms) => new Date(ms).toLocaleString("zh-CN", { month: "numeric", day: "numeric", hour: "2-digit", minute: "2-digit", hour12: false });
-const days = computed(() => overview.value && timeline.value ? daily_overview(timeline.value.executions, now.value) : []);
-const longest_day = computed(() => Math.max(1, ...days.value.map((day) => day.busy)));
-const WEEKDAYS = "日一二三四五六";
-const day_label = (day) => { const date = new Date(day.start); return `${date.getMonth() + 1}/${date.getDate()} 周${WEEKDAYS[date.getDay()]}`; };
-/** A day opens on the timeline, reaching back to that day's first execution. */
-function open_day(day) {
-  const since = timeline.value.executions.filter((item) => requested_at(item) * 1000 >= day.start).length;
-  window_count.value = Math.max(window_count.value, since);
-  view_mode.value = "timeline";
+const tasks = computed(() => overview.value ? task_overview(segments.value) : []);
+// The site returns only the latest executions, so the first task may have begun before them.
+const truncated = computed(() => Boolean(timeline.value && timeline.value.executions.length >= timeline.value.execution_limit));
+const partial = (task) => !task.opened && truncated.value;
+/** A task is named by the message that opened it; a short one ("全部同意", "继续") also shows the answer it got. */
+const SHORT_TASK_CHARS = 10;
+const task_title = (text) => text || "（没有记录起因）";
+const task_note = (text, result) => [...(text || "")].length < SHORT_TASK_CHARS ? result || "" : "";
+/** Where each task begins on the timeline: before its first top-level row in view. */
+const segment_heads = computed(() => {
+  const heads = new Map();
+  let last = null;
+  for (const row of rows.value) {
+    const segment = segment_of.value.get(row.key);
+    if (row.depth || !segment || segment === last) continue;
+    heads.set(row.key, segment);
+    last = segment;
+  }
+  return heads;
+});
+const segment_start = (segment) => Math.min(...segment.items.map(({ stages }) => stages.start));
+const interjected = computed(() => new Set(segments.value.flatMap((segment) => segment.interjections.map((item) => item.key))));
+const shown_interjections = ref(new Set());
+function toggle_interjections(key) {
+  const next = new Set(shown_interjections.value);
+  next.has(key) ? next.delete(key) : next.add(key);
+  shown_interjections.value = next;
 }
+const longest_task = computed(() => Math.max(1, ...tasks.value.map((task) => task.end - task.start)));
+/** A task opens on the timeline at the execution that started it. */
+const open_task = (task) => focus_row({ key: task.key });
 
 // The run as it really is; its bounds are what a replay plays through.
 const base_rows = computed(() => shown.value && !overview.value ? timeline_rows(shown.value, now.value) : []);
 const base_live = computed(() => base_rows.value.some((row) => row.item.state === "running"));
-// A replay plays the latest task (its chain, as the digest finds it in the real rows), not the whole window.
-const base_digest = computed(() => round_digest(base_rows.value, now.value));
+// The latest task is the last one; a replay plays it, not the whole window.
+const latest_keys = computed(() => segments.value.at(-1)?.keys || new Set());
+const base_digest = computed(() => task_digest(base_rows.value, latest_keys.value, now.value));
 const bounds = computed(() => {
   const { start, end } = base_digest.value;
   return start ? { start, end, duration: Math.max(0, end - start) } : { start: 0, end: 0, duration: 0 };
@@ -323,10 +357,7 @@ const shown_ticks = computed(() => {
 });
 // Data read before the page was hidden or went offline may be old, so possible stalls are judged only up to that read.
 const status_time = computed(() => replaying.value ? view_time.value : Math.min(view_time.value, read_at.value));
-const summary = computed(() => timeline_summary(all_rows.value));
-const digest = computed(() => round_digest(all_rows.value, status_time.value));
-/** Within the latest task, executions off its critical path step back; earlier history is left as it is. */
-const off_path = (row) => all_rows.value.length > 1 && row.start >= digest.value.start && !digest.value.path.has(row.key);
+const digest = computed(() => task_digest(all_rows.value, latest_keys.value, status_time.value));
 const parents = computed(() => all_rows.value.filter((row) => row.has_children).map((row) => row.key));
 const opened_row = computed(() => all_rows.value.find((row) => row.key === opened.value));
 const opened_log = computed(() => opened_row.value ? execution_log(opened_row.value, note_texts.value.get(opened_row.value.item.id)) : []);
@@ -336,19 +367,19 @@ const name = (member) => bridge.display_name(member);
  *  came down to. Each part carries a tone, so a stall or a failure stands out within the line. */
 const headline = computed(() => {
   if (overview.value) {
-    return [{ text: `${days.value.length} 天 · ${timeline.value?.executions.length || 0} 次执行` }, { text: "点一天在时间线上查看" }];
+    return [{ text: `${tasks.value.length} 个任务 · ${timeline.value?.executions.length || 0} 次执行` }, { text: "点一个任务在时间线上查看" }];
   }
-  const { running: live, members, wait, failed, stalled, total, path } = digest.value;
+  const { running: live, members, wait, failed, stalled, total, keys } = digest.value;
   const parts = [];
   // On a phone the running work has its own cards above the rows, so the sentence speaks for the latest task.
   if (live.length && !compact.value) {
-    const row = live.find((item) => path.has(item.key)) || live[0];
+    const row = live.find((item) => keys.has(item.key)) || live[0];
     const state = status(row);
     parts.push({ text: `${name(row.item.member)} 已运行 ${format_duration(status_time.value - row.start)}` }, { text: state.text, tone: state.tone });
     if (live.length > 1) parts.push({ text: `另 ${live.length - 1} 个进行中` });
   } else {
     parts.push({ text: `最近一次任务${live.length ? "已进行" : "用时"} ${format_duration(total)}` });
-    if (members.length && path.size > 1) parts.push({ text: `关键路径上 ${members.slice(0, 2).map((part) => `${name(part.member)} ${format_duration(part.ms)}`).join("、")}` });
+    if (members.length > 1) parts.push({ text: members.slice(0, 2).map((part) => `${name(part.member)} ${format_duration(part.ms)}`).join("、") });
   }
   if (wait >= WAIT_WARN_MS || (!live.length && wait >= 60_000)) parts.push({ text: `等待 ${format_duration(wait)}`, tone: wait >= WAIT_WARN_MS ? "warn" : "" });
   if (stalled && !compact.value && !(live.length === 1 && stalled === 1)) parts.push({ text: `可能卡住 ${stalled}`, tone: "warn" });
@@ -413,7 +444,7 @@ const live_status = (row) => row_status(row, live_time.value);
  *  task's failures (latest first); an earlier failure is history, not something to act on now. */
 const attention = computed(() => compact.value ? [
   ...live_rows.value,
-  ...all_rows.value.filter((row) => row.item.state === "failed" && row.start >= digest.value.start).sort((a, b) => b.end - a.end),
+  ...all_rows.value.filter((row) => row.item.state === "failed" && digest.value.keys.has(row.key)).sort((a, b) => b.end - a.end),
 ] : []);
 const card_status = (row) => row.item.state === "running" ? live_status(row) : status(row);
 /** A card opens its execution's row on the timeline, unfolded and scrolled into view, reaching back for it if need be. */
@@ -431,7 +462,7 @@ function focus_row(card) {
   });
 }
 /** On a phone a finished row before the latest task (history) is one line: a watcher rarely needs it. */
-const in_task = (row) => row.start >= digest.value.start;
+const in_task = (row) => digest.value.keys.has(row.key);
 const brief = (row) => compact.value && all_rows.value.length > 1 && !in_task(row) && row.item.state === "done" && opened.value !== row.key;
 
 function toggle(key) {
@@ -468,7 +499,7 @@ const queue_piece = (row) => ({ label: "排队", start: row.queue[0], end: row.q
 const wake_piece = (row) => ({ label: row.wake_approx ? "唤醒（约）" : "唤醒", start: row.wake[0], end: row.wake[1], text: "从投递到成员开始工作" });
 const segment_piece = (segment) => ({ label: `${PHASE_LABELS[segment.phase]}${segment.tool ? ` · ${segment.tool}` : ""}`, start: segment.start, end: segment.end, live: segment.live });
 const note_piece = (note) => ({ note, start: note.at, end: note.at });
-/** Each member keeps one hue on every mark that is theirs, on the timeline and the day overview alike, so a glance says who
+/** Each member keeps one hue on every mark that is theirs, on the timeline and the task overview alike, so a glance says who
  *  worked when. Hues go by first appearance in the room. */
 const MEMBER_TONES = 5;
 const member_tone = computed(() => {
@@ -480,16 +511,11 @@ const member_tone = computed(() => {
 });
 // The overview names the members who took the most time; the rest are counted.
 const OVERVIEW_MEMBERS = 4;
-/** A day's bar: each member's work time and the waiting, in proportion, in the member's hue. */
+/** A task's bar: its span shared out moment by moment, each member's share in its hue, then the time it stood waiting
+ *  (a hatch) and idle (empty), so the parts add up to the task's length and nothing counts twice. */
 function run_parts(run) {
-  return [...run.work.filter((part) => part.ms > 0).map((part) => ({ key: part.member, ms: part.ms, tone: member_tone.value.get(part.member) })),
-    ...(run.wait > 0 ? [{ key: "wait", ms: run.wait, wait: true }] : [])];
-}
-/** On a phone a day names only who took the most time; the bar shows the rest. */
-function run_lead(run) {
-  const lead = run.work[0];
-  if (!lead) return "";
-  return run.work.length > 1 ? `${name(lead.member)}等 ${run.work.length} 人` : name(lead.member);
+  return run.parts.filter((part) => part.ms > 0).map((part) => ({ ...part, key: part.member ?? (part.wait ? "wait" : "idle"),
+    tone: part.member === undefined ? undefined : member_tone.value.get(part.member) }));
 }
 function run_people(run) {
   const shown_members = run.work.slice(0, OVERVIEW_MEMBERS).map((part) => `${name(part.member)} ${format_duration(part.ms)}`).join(" · ");
@@ -571,7 +597,7 @@ const selected_notes = computed(() => {
         <div class="wf-head-line">
           <span class="wf-modes" role="tablist" aria-label="查看方式">
             <button type="button" role="tab" :aria-selected="!overview" :class="{ 'is-active': !overview }" @click="view_mode = 'timeline'">时间线</button>
-            <button type="button" role="tab" :aria-selected="overview" :class="{ 'is-active': overview }" @click="view_mode = 'days'">按天</button>
+            <button type="button" role="tab" :aria-selected="overview" :class="{ 'is-active': overview }" @click="view_mode = 'tasks'">按任务</button>
           </span>
           <span v-if="replaying" class="wf-state is-replay">回放中 · {{ clock(view_time) }}</span>
           <span v-else-if="!overview" class="wf-state" :class="{ 'is-live': digest.running.length }">{{ digest.running.length ? `${digest.running.length} 个进行中` : '均已结束' }}</span>
@@ -592,15 +618,18 @@ const selected_notes = computed(() => {
       </section>
 
       <p v-if="earlier_count" class="wf-earlier">显示最近 {{ shown.executions.length }} 次执行<button type="button" class="wf-text-button" @click="window_count += WINDOW_STEP">显示更早的 {{ Math.min(WINDOW_STEP, earlier_count) }} 次</button></p>
-      <ol v-if="overview" class="wf-runs" aria-label="按天">
-        <li v-for="day in days" :key="day.key">
-          <button type="button" class="wf-run" @click="open_day(day)">
-            <span class="wf-run-line"><time>{{ day_label(day) }}</time><strong>{{ compact ? run_lead(day) : run_people(day) }}</strong>
-              <span v-if="day.wait >= WAIT_WARN_MS && !compact" class="wf-run-wait">等待 {{ format_duration(day.wait) }}</span>
-              <span class="wf-run-meta">{{ day.count }} 次 · 工作 {{ format_duration(day.busy) }}</span>
-              <em v-if="day.running" class="wf-pill is-live">进行中</em><em v-else-if="day.failed" class="wf-pill is-failed">有失败</em></span>
-            <span class="wf-run-bar"><span class="wf-run-fill" :style="{ width: `${day.busy / longest_day * 100}%` }">
-              <i v-for="part in run_parts(day)" :key="part.key" :class="{ 'is-wait': part.wait, 'is-long': part.wait && part.ms >= WAIT_WARN_MS }" :data-tone="part.tone" :style="{ flexGrow: part.ms }"></i>
+      <ol v-if="overview" class="wf-runs" aria-label="按任务">
+        <li v-for="task in tasks" :key="task.key">
+          <button type="button" class="wf-run" @click="open_task(task)">
+            <span class="wf-run-line"><time>{{ when(task.start) }}</time><strong>{{ task_title(task.task) }}</strong>
+              <span class="wf-run-meta">{{ task.count }} 次 · 用时 {{ format_duration(task.end - task.start) }}</span>
+              <em v-if="task.running" class="wf-pill is-live">进行中</em><em v-else-if="task.failed" class="wf-pill is-failed">有失败</em></span>
+            <span v-if="task_note(task.task, task.result)" class="wf-run-note">{{ task_note(task.task, task.result) }}</span>
+            <span v-if="task.interjections.length || partial(task)" class="wf-run-note">
+              <template v-if="task.interjections.length">插话 {{ task.interjections.length }} 条</template><template v-if="task.interjections.length && partial(task)"> · </template><template v-if="partial(task)">更早部分未加载</template></span>
+            <span class="wf-run-people">{{ run_people(task) }}<span v-if="task.wait >= WAIT_WARN_MS" class="wf-run-wait">等待 {{ format_duration(task.wait) }}</span></span>
+            <span class="wf-run-bar"><span class="wf-run-fill" :style="{ width: `${(task.end - task.start) / longest_task * 100}%` }">
+              <i v-for="part in run_parts(task)" :key="part.key" :class="{ 'is-wait': part.wait, 'is-idle': part.idle, 'is-long': part.wait && part.ms >= WAIT_WARN_MS }" :data-tone="part.tone" :style="{ flexGrow: part.ms }"></i>
             </span></span>
           </button>
         </li>
@@ -626,8 +655,19 @@ const selected_notes = computed(() => {
           </div>
           <span class="wf-axis-end">用时</span>
         </template>
-        <div v-for="row in rows" :key="row.key" role="listitem" class="wf-row"
-          :class="[`is-${row.item.state}`, { 'is-open': opened === row.key, 'is-stalled': row.item.state === 'running' && status(row).tone === 'warn', 'is-off-path': off_path(row), 'is-brief': brief(row), 'is-entering': entering.has(row.key) }]">
+        <template v-for="row in rows" :key="row.key">
+        <div v-for="segment in (segment_heads.has(row.key) ? [segment_heads.get(row.key)] : [])" :key="segment.key" class="wf-segment">
+          <span class="wf-segment-line"><time>{{ when(segment_start(segment)) }}</time><strong>{{ task_title(segment.opener.task) }}</strong>
+            <button v-if="segment.interjections.length" type="button" class="wf-text-button" :aria-expanded="shown_interjections.has(segment.key)"
+              @click="toggle_interjections(segment.key)">插话 {{ segment.interjections.length }} 条</button>
+            <small v-if="partial(segment)">更早部分未加载</small></span>
+          <span v-if="task_note(segment.opener.task, segment.opener.result)" class="wf-segment-note">{{ task_note(segment.opener.task, segment.opener.result) }}</span>
+          <ol v-if="shown_interjections.has(segment.key)" class="wf-segment-asides">
+            <li v-for="aside in segment.interjections" :key="aside.key"><time>{{ short_clock(aside.at) }}</time>{{ aside.task }}</li>
+          </ol>
+        </div>
+        <div role="listitem" class="wf-row"
+          :class="[`is-${row.item.state}`, { 'is-open': opened === row.key, 'is-stalled': row.item.state === 'running' && status(row).tone === 'warn', 'is-brief': brief(row), 'is-entering': entering.has(row.key) }]">
           <div class="wf-label" :data-row="row.key" :style="{ '--depth': row.depth }">
             <span v-if="row.depth" class="wf-guides" aria-hidden="true"></span>
             <button v-if="row.has_children" type="button" class="wf-toggle" :class="{ 'is-open': !collapsed.has(row.key) }" :aria-expanded="!collapsed.has(row.key)"
@@ -637,7 +677,7 @@ const selected_notes = computed(() => {
             <span v-else class="wf-toggle-space"></span>
             <UAvatar :src="bridge.identities[row.item.member]?.icon" :text="bridge.identities[row.item.member]?.initials" :alt="row.item.member" size="2xs" class="channel-avatar wf-avatar" :class="bridge.identities[row.item.member]?.style" />
             <button type="button" class="wf-names" :aria-expanded="opened === row.key" @click="open_row(row, $event)" @mouseenter="hover_open(row, $event)" @mouseleave="hover_leave">
-              <span class="wf-name-line"><i v-if="row.item.state === 'running'" class="wf-spinner" aria-hidden="true"></i><time v-if="compact" class="wf-clock">{{ short_clock(row.start) }}</time><strong>{{ name(row.item.member) }}</strong><em v-for="mark in role_marks(row)" :key="mark" class="wf-pill is-role">{{ mark }}</em><em v-if="summary.slowest?.row === row.key" class="wf-pill is-slowest">最慢</em>
+              <span class="wf-name-line"><i v-if="row.item.state === 'running'" class="wf-spinner" aria-hidden="true"></i><time v-if="compact" class="wf-clock">{{ short_clock(row.start) }}</time><strong>{{ name(row.item.member) }}</strong><em v-for="mark in role_marks(row)" :key="mark" class="wf-pill is-role">{{ mark }}</em><em v-if="interjected.has(row.key)" class="wf-pill is-aside">插话</em><em v-if="digest.slowest?.row === row.key" class="wf-pill is-slowest">最慢</em>
                 <span v-if="compact" class="wf-name-end">{{ format_duration(row.end - row.start) }}<small v-if="row.item.state !== 'done'" :class="`is-${row.item.state}`">{{ STATE_LABELS[row.item.state] }}</small></span></span>
               <span v-if="!compact" class="wf-status" :class="`is-${status(row).tone}`">{{ status(row).text }}</span>
             </button>
@@ -721,6 +761,7 @@ const selected_notes = computed(() => {
             </section>
           </div>
         </div>
+        </template>
       </div>
 
       <footer v-if="!overview" class="wf-foot">
@@ -807,7 +848,7 @@ const selected_notes = computed(() => {
   animation: wf-ping 2s cubic-bezier(0, 0, .2, 1) infinite; pointer-events: none; }
 /* A replay is not live work: it says so, and at what time of the run it stands. */
 .wf-state.is-replay { background: color-mix(in oklab, var(--wf-warn) 14%, transparent); color: var(--wf-warn); font-family: var(--wf-mono); font-variant-numeric: tabular-nums; }
-/* Timeline or days: a two-way switch. */
+/* Timeline or tasks: a two-way switch. */
 .wf-modes { display: inline-flex; gap: 2px; padding: 2px; border: 1px solid var(--wf-border); border-radius: 7px; background: var(--wf-well); }
 .wf-modes button { height: 22px; padding: 0 10px; border: 0; border-radius: 5px; background: transparent; color: var(--wf-muted); font: inherit; font-size: 12px; cursor: pointer; }
 .wf-modes button:hover { color: var(--wf-text); }
@@ -821,7 +862,7 @@ const selected_notes = computed(() => {
 /* The timeline shows the latest executions; one line says how many and reaches further back. */
 .wf-earlier { display: flex; flex-wrap: wrap; align-items: center; gap: 4px 8px; margin: 0; padding: 6px 16px; border-bottom: 1px solid var(--wf-border); color: var(--wf-muted); font-size: 12px; }
 .wf-earlier .wf-text-button { color: var(--wf-accent); }
-/* Days: one line per day, its length as a bar against the longest; a click opens that run. */
+/* Tasks: what started each (the message), then who worked how long, then a bar against the longest task; a click opens it on the timeline. */
 .wf-runs { margin: 0; padding: 4px 0; list-style: none; }
 .wf-run { display: grid; gap: 4px; width: 100%; padding: 8px 16px; border: 0; background: transparent; color: inherit; font: inherit; text-align: left; cursor: pointer; }
 .wf-run:hover { background: var(--wf-hover); }
@@ -835,10 +876,12 @@ const selected_notes = computed(() => {
 .wf-run-bar { display: block; height: 8px; border-radius: 3px; background: var(--wf-well); }
 .wf-run-fill { display: flex; gap: 1px; min-width: 3px; height: 100%; overflow: hidden; border-radius: 3px; }
 .wf-run-fill i { flex-basis: 0; min-width: 2px; background: var(--tone, var(--wf-plain)); }
+.wf-run-fill i.is-idle { background: transparent; }
 .wf-run-fill i.is-wait { background: repeating-linear-gradient(-45deg, var(--wf-hatch) 0 1px, transparent 1px 4px); box-shadow: inset 0 0 0 1px var(--wf-hatch); }
 /* A long wait is marked in the bar too, so a phone, which leaves the words out, still shows it. */
 .wf-run-fill i.is-wait.is-long { --wf-hatch: color-mix(in oklab, var(--wf-warn) 70%, transparent); }
 .wf-run-wait { flex: none; color: var(--wf-warn); font-family: var(--wf-mono); font-size: 12px; font-variant-numeric: tabular-nums; }
+.wf-run-people { display: flex; flex-wrap: wrap; gap: 0 12px; min-width: 0; color: var(--wf-muted); font-size: 12px; line-height: 18px; }
 
 /* Grid: the label column, the lanes and the duration column share one template, the axis included. */
 .wf-grid { display: grid; grid-template-columns: var(--wf-label-col) minmax(0, 1fr) 76px; }
@@ -867,8 +910,18 @@ const selected_notes = computed(() => {
 .wf-row { display: contents; }
 .wf-row > :not(.wf-detail) { min-height: var(--wf-row-h); background: var(--wf-tint, transparent); transition: background-color 120ms ease, opacity 120ms ease; }
 .wf-row:hover > :not(.wf-detail), .wf-row.is-open > :not(.wf-detail) { --wf-tint: var(--wf-hover); }
-/* Only the words step back: the bars keep their colors, so the waterfall stays whole. */
-.wf-row.is-off-path:not(:hover, .is-open) > :is(.wf-label, .wf-end, .wf-row-status) { opacity: .5; }
+/* Where a task begins: a full-width line with when and the message that opened it. */
+.wf-segment { grid-column: 1 / -1; display: grid; gap: 2px; padding: 10px 16px 6px; border-top: 1px solid var(--wf-guide); background: color-mix(in oklab, var(--ui-text) 3%, var(--wf-surface)); }
+.wf-segment-line { display: flex; align-items: baseline; gap: 10px; min-width: 0; }
+.wf-segment-line time { flex: none; color: var(--wf-muted); font-family: var(--wf-mono); font-size: 12px; font-variant-numeric: tabular-nums; }
+.wf-segment-line strong { min-width: 0; overflow: hidden; color: var(--wf-text); font-weight: 600; text-overflow: ellipsis; white-space: nowrap; }
+.wf-segment-line .wf-text-button { flex: none; color: var(--wf-accent); }
+.wf-segment-line small { flex: none; color: var(--wf-muted); font-size: 12px; }
+.wf-segment-note, .wf-run-note { overflow: hidden; color: var(--wf-muted); font-size: 12px; line-height: 18px; text-overflow: ellipsis; white-space: nowrap; }
+.wf-segment-asides { display: grid; gap: 4px; margin: 4px 0 0; padding: 0; list-style: none; font-size: 12px; line-height: 1.6; }
+.wf-segment-asides li { display: grid; grid-template-columns: 44px minmax(0, 1fr); gap: 8px; color: var(--ui-text); overflow-wrap: anywhere; }
+.wf-segment-asides time { color: var(--wf-muted); font-family: var(--wf-mono); font-variant-numeric: tabular-nums; }
+.wf-pill.is-aside { background: color-mix(in oklab, var(--wf-accent) 14%, transparent); color: var(--wf-accent); font-weight: 500; }
 .wf-label { position: relative; display: flex; align-items: center; gap: 6px; min-width: 0; padding: 0 10px 0 calc(10px + var(--depth) * var(--wf-depth-px)); border-right: 1px solid var(--wf-border); }
 .wf-guides { position: absolute; top: 0; bottom: 0; left: 18px; width: 2px; border-radius: 1px; background: var(--wf-guide); pointer-events: none; }
 .wf-toggle, .wf-toggle-space { display: grid; flex: 0 0 16px; place-items: center; width: 16px; height: 16px; padding: 0; border: 0; border-radius: 4px; background: transparent; color: var(--wf-muted); cursor: pointer; }
@@ -1069,8 +1122,12 @@ const selected_notes = computed(() => {
    long; its bar, the latest task's rows on one axis from its start to its end so they still step down; where its time went. */
 .wf.is-compact .wf-head, .wf.is-compact .wf-foot, .wf.is-compact .wf-player { padding-inline: 12px; }
 .wf.is-compact .wf-run { padding-inline: 12px; }
-/* On a phone a stretch is two lines: when, who led, how many and how long; then the bar. */
-.wf.is-compact .wf-run-line { gap: 8px; }
+.wf.is-compact .wf-segment { padding-inline: 12px; }
+.wf.is-compact .wf-segment-line strong { white-space: normal; display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 2; }
+/* On a phone the message that started a task gets its own line (two at most) under when, how many and how long. */
+.wf.is-compact .wf-run-line { flex-wrap: wrap; gap: 2px 8px; }
+.wf.is-compact .wf-run-meta { margin-left: auto; }
+.wf.is-compact .wf-run-line strong { display: -webkit-box; flex-basis: 100%; order: 3; line-height: 20px; white-space: normal; -webkit-box-orient: vertical; -webkit-line-clamp: 2; }
 .wf.is-compact .wf-grid { grid-template-columns: minmax(0, 1fr); }
 .wf.is-compact .wf-row > :not(.wf-detail) { min-height: 0; }
 .wf.is-compact .wf-label { padding: 6px 12px 0 calc(12px + var(--depth) * var(--wf-depth-px)); border-top: 1px solid var(--wf-border); border-right: 0; }

@@ -149,12 +149,12 @@ async function save_key() {
 /* Same size front and back, so flipping never moves the dialog; long back content scrolls inside. */
 /* Same track as the member cards (.create-experts); the slot frame (4px padding + 1px border per side) is added so the card itself matches their width. */
 .scheduler-cards { display: grid; grid-template-columns: repeat(auto-fill, minmax(min(258px, 100%), 282px)); align-items: start; gap: 8px; }
-.scheduler-card { position: relative; display: flex; flex-direction: column; min-width: 0; height: 240px; border: 1px solid var(--channel-edge-control, var(--ui-border)); border-radius: 8px; background: color-mix(in srgb, var(--ui-bg-elevated) 45%, var(--ui-bg)); box-shadow: var(--channel-shadow-control); }
+.scheduler-card { position: relative; display: flex; flex-direction: column; min-width: 0; height: 100cqi; border: 1px solid var(--channel-edge-control, var(--ui-border)); border-radius: 8px; background: color-mix(in srgb, var(--ui-bg-elevated) 45%, var(--ui-bg)); box-shadow: var(--channel-shadow-control); }
 .scheduler-card:hover { border-color: var(--ui-border-accented); }
 /* The empty state matches the member list's placeholder (.create-experts-empty). */
 .scheduler-empty { margin: 0; padding: 18px 12px; border: 1px dashed var(--ui-border); border-radius: 8px; text-align: center; color: var(--ui-text-muted); font-size: 12px; }
 /* A filled slot keeps a dashed frame around the card, so the card reads as sitting in the one slot. */
-.scheduler-slot { padding: 4px; border: 1px dashed var(--ui-border); border-radius: 8px; }
+.scheduler-slot { container-type: inline-size; padding: 4px; border: 1px dashed var(--ui-border); border-radius: 8px; }
 .scheduler-open { display: flex; flex: 1; flex-direction: column; gap: 10px; width: 100%; padding: 12px 12px 30px; text-align: left; border-radius: inherit; outline: none; }
 .scheduler-identity { display: flex; align-items: center; gap: 8px; min-width: 0; min-height: 26px; padding-right: 30px; }
 .scheduler-identity strong { overflow: hidden; color: var(--ui-text-highlighted); font-size: 13px; font-weight: 600; white-space: nowrap; text-overflow: ellipsis; }

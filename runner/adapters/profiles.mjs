@@ -5,7 +5,7 @@
  *
  * Fields of one profile:
  * - `platform`: the AI platform it serves (`Codex`, `Claude`, `Antigravity`); '' serves any platform (model API).
- * - `label`: display name. `kind`: `cli` (a process the runner starts), `app` (a desktop App) or `api` (the runner's own call).
+ * - `label`: display name. `kind`: `cli` (a process the runner starts), `app` (a desktop App) or `api` (a model API the runner calls through Pi).
  * - `location`: the config field locating the installed software (`executable`, `ipc_directory`), or '' when none.
  * - `fields`: further config fields the user may set for it.
  * - `efforts`: thinking levels it accepts, or null when chosen inside the App; `efforts_per_model`: the levels are read
@@ -49,13 +49,12 @@ export const API_PROVIDERS = {
   Custom: { label: '自定义 API', base_url: '', api_protocol: 'chat', models: [] },
 };
 /**
- * Image models a model API member may call through the Images API (`image_model`), newest first: 2.6 adds complexity,
- * SVG and GIF output; 2.5 and 2.6 take markup edits and the xhigh / max qualities (OpenAI docs, 2026-11-10). Any other
- * ID may still be typed in. Only the protocols below share the Images API's address and Bearer authentication.
+ * Image models this computer's image service (image_service.mjs) offers for the Images API, newest first: 2.6 adds
+ * complexity, SVG and GIF output; 2.5 and 2.6 take markup edits and the xhigh / max qualities (OpenAI docs, 2026-11-10).
+ * Any other ID may still be typed in.
  */
 export const IMAGE_MODELS = ['gpt-image-2.6-flare', 'gpt-image-2.6-sunburst', 'gpt-image-2.5-flare', 'gpt-image-2.5-sunburst',
   'gpt-image-2', 'gpt-image-1.5', 'gpt-image-1-mini', 'chatgpt-image-latest'];
-export const IMAGE_PROTOCOLS = ['responses', 'chat'];
 /** Model requests one model-API execution may make unless the room sets its own; 0 means no limit, up to the maximum. */
 export const DEFAULT_API_MAX_REQUESTS = 300;
 export const MAX_API_MAX_REQUESTS = 1000;
@@ -96,10 +95,10 @@ export const ADAPTER_PROFILES = {
     access_hints: { read: '只放行网站命令；碰到未放行的命令会直接结束本轮', write: '可写项目，命令全部放行（在 agy 沙箱内）',
       full: '跳过全部权限确认（--dangerously-skip-permissions），并放开沙箱外命令与 MCP 工具' },
     unsupported_hints: { auto: 'agy 只在交互窗口提供自动模式，后台运行（-p）不支持' },
-    // Only a conversation this tool created gets its discussion project; an existing one keeps its own project and permissions.
+    // Only a conversation this tool created gets its session rules; an existing one keeps its own project and permissions.
     client: 'antigravity', adopt: 'session', host_existing: false, own_project_when_bound: true,
     capabilities: { delivery: PROCESS, rewind: 'cut', project: true, access_env: true, chat: true },
-    // A read-only agy project allows only codiscuss commands and headless agy ends the turn on a denied one; agy streams no
+    // A read-only agy session allows only codiscuss commands and headless agy ends the turn on a denied one; agy streams no
     // thinking text, so without a word at each turning point the page cannot show how far it got.
     task_rules: (cli, { runs_commands }) => (runs_commands ? ''
       : `无人值守下 run_command 只能运行 ${cli} 的 subcommands 子命令，其他命令会被自动拒绝并使会话直接结束；列目录、搜索或读取文件用 list_dir、find_by_name、grep_search、view_file。`)
@@ -112,19 +111,15 @@ export const ADAPTER_PROFILES = {
     capabilities: { delivery: IN_APP, rewind: 'kept', project: true, chat: true },
   },
   api: {
-    platform: '', label: '模型 API', kind: 'api', location: '', fields: ['base_url', 'api_protocol', 'api_key_ref', 'image_model'],
+    platform: '', label: '模型 API', kind: 'api', location: '', fields: ['base_url', 'api_protocol', 'api_key_ref'],
     efforts: null, models: false, access_levels: ['read', 'write'], per_tool_allow: false, adopt: '', host_existing: false,
     access_hints: { read: '用接入程序的文件工具读取、搜索项目文件，可运行工作流登记的只读命令',
       write: '还可新建、覆盖、局部编辑项目文件，可运行工作流登记的全部命令；没有通用命令行' },
     unsupported_hints: { auto: 'API 成员没有通用命令行，没有需要软件审批的操作', full: 'API 成员没有通用命令行，没有需要软件审批的操作' },
-    capabilities: { delivery: PROCESS, rewind: 'fresh', project: true, file_tools: true, limits_directories: true, chat: true },
+    // Runs in the Pi harness (api_pi.mjs), which keeps a session the runner cuts like a CLI's.
+    capabilities: { delivery: PROCESS, rewind: 'cut', project: true, file_tools: true, limits_directories: true, chat: true },
   },
 };
-
-/** The image model a member's profile can generate images with: a model API on an OpenAI-style protocol; '' for none. */
-export function image_model_of(profile) {
-  return ADAPTER_PROFILES[profile?.adapter]?.kind === 'api' && IMAGE_PROTOCOLS.includes(profile.api_protocol) ? profile.image_model || '' : '';
-}
 
 /** Every configured `adapter` value this version supports. */
 export const ADAPTER_IDS = Object.keys(ADAPTER_PROFILES);

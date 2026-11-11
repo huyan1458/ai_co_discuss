@@ -373,9 +373,20 @@ async function setup(options) {
   step('已写入软件配置与技能', configured.skills.map(group => `${pad(group.client, width)}  ${tone.dim(short_path(dirname(group.results[0].path)))}`));
   // Shipped workflows are installed only when asked for each time, so a copy the user or a host edited is never replaced unasked.
   const workflows = workflow_names.length ? install_workflows(home, workflow_names) : [];
+  // Model API members run in Pi, which codiscuss installs itself, at the release this version pins.
+  let pi = null, pi_error = '';
+  // A given Pi (CODISCUSS_PI_CLI, as in tests) is used as it is.
+  if (!process.env.CODISCUSS_PI_CLI) {
+    const pi_step = spinner('安装 Pi（模型 API 成员的运行框架）');
+    try {
+      pi = await (await import('./pi_runtime.mjs')).install_pi(home);
+      pi_step.done(`Pi ${pi.version}${pi.updated ? ' 已安装' : ' 已就绪'}`);
+    } catch (error) { pi_error = error.message; pi_step.fail(`Pi 安装失败：${error.message}`); }
+  }
   const result = { home, python, clients: selected.map(item => item.name), ...configured, workflows,
-    command: check_command(), ai_verified: false };
+    command: check_command(), ai_verified: false, ...(pi ? { pi: pi.version } : {}) };
   result.issues = setup_issues(result);
+  if (pi_error) result.issues.push(`Pi 安装失败（${pi_error}）；模型 API 成员首次执行时会再试，或检查网络与 npm 后重新运行 setup。`);
   result.configured = result.issues.length === 0;
   result.status = result.configured ? 'configured' : 'needs_attention';
   if (!options['no-start']) {

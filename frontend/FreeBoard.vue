@@ -130,7 +130,7 @@ function member_status(member, state) {
  */
 function member_tag(member) {
   if (member.access !== "runner") return ACCESS_LABELS[member.access];
-  return [member.adapter === "api" ? "API" : "", member_model(member), member.image_model ? `生图 ${member.image_model}` : ""].filter(Boolean).join(" · ");
+  return [member.adapter === "api" ? "API" : "", member_model(member)].filter(Boolean).join(" · ");
 }
 
 /** Only woken members have a model the site knows; others choose it in their own chat. */

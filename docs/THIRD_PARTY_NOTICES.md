@@ -12,7 +12,7 @@
 
 PDF 站内预览使用 [Mozilla PDF.js](https://github.com/mozilla/pdf.js) 的 `pdfjs-dist 6.4.299`，遵循 Apache-2.0；完整许可证随 [web/pdfjs/LICENSE](../web/pdfjs/LICENSE) 分发。CMap、标准字体、ICC 与 WASM 解码器的独立许可证保留在 `web/pdfjs/cmaps/`、`standard_fonts/`、`iccs/`、`wasm/` 中。构建只复制所需运行文件及这些许可证，不使用远程 CDN。
 
-`package.json` 声明直接依赖，`package-lock.json` 记录实际版本、来源及包许可元数据。Vue、Nuxt UI、Markdown-it、KaTeX、Motion、Iconify / Lucide、fflate、uqr、jsQR 等第三方代码用于前端渲染、本地备份、配对二维码的显示与扫描；文件预览的图片查看器 Viewer.js、音视频播放器 Video.js 10（@videojs/*）与 CSV 解析 PapaParse 打包进 `web/modern.js`；Office 预览的 docx-preview（含 JSZip）、SheetJS 社区版（xlsx，从 SheetJS 官方 CDN 安装）与 @silurus/ooxml（含其 WebAssembly 解析器）单独打包在 `web/office/`，只在打开对应文件时加载；Vite、Tailwind CSS 与 Wrangler 用于构建和部署。
+`package.json` 声明直接依赖，`package-lock.json` 记录实际版本、来源及包许可元数据。Vue、Nuxt UI、Markdown-it、KaTeX、Motion、Iconify / Lucide、fflate、uqr、jsQR 等第三方代码用于前端渲染、本地备份、配对二维码的显示与扫描；文件预览的图片查看器 Viewer.js、音视频播放器 Video.js 10（@videojs/*）与 CSV 解析 PapaParse 打包进 `web/modern.js`；Office 预览的 docx-preview（含 JSZip）、SheetJS 社区版（xlsx，从 SheetJS 官方 CDN 安装）与 @silurus/ooxml（含其 WebAssembly 解析器）单独打包在 `web/office/`，只在打开对应文件时加载；Vite、Tailwind CSS 与 Wrangler 用于构建和部署。[Pi](https://github.com/earendil-works/pi)（`@earendil-works/pi-coding-agent 1.5.2`，MIT）运行模型 API 成员的房间执行：`codiscuss setup` 从 npm 把 `package.json` 开发依赖固定的版本（现为 1.5.2，测试同样用它）安装到本机服务目录，它保留自身的 MIT 许可；它不进入 codiscuss 的 npm 包，代码不复制进本仓库。
 
 发布带依赖的程序或重新打包前端时，应保留所使用包中的 LICENSE / NOTICE 文件和生成产物中的许可注释。KaTeX 的样式表与公式字体随前端复制到 `web/katex/`（附其 LICENSE），其包内许可同样适用；Lucide 图标遵循该图标集自身许可。依赖安装后的原始许可位于各 `node_modules/<package>/`，下方附录保存直接依赖及当前前端实际打包模块的许可文本，便于源码与静态产物一同分发。
 

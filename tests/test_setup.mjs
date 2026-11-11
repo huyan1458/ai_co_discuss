@@ -11,6 +11,10 @@ import { validate_preset } from '../runner/discussion_launch.mjs';
 import { get_workflow, preview_workflow } from '../runner/workflows.mjs';
 import { agy_rule } from '../runner/adapters/antigravity_cli.mjs';
 import { detect_clients, detect_python, remove_legacy_agy_rules } from '../runner/discussion_setup.mjs';
+import { current_pi, install_pi, PI_VERSION, pi_outdated } from '../runner/pi_runtime.mjs';
+
+// Setup installs Pi from npm unless one is given; tests never download it.
+process.env.CODISCUSS_PI_CLI ??= 'pi-not-needed-in-this-test';
 
 const CLI = fileURLToPath(new URL('../runner/codiscuss.mjs', import.meta.url));
 
@@ -304,4 +308,40 @@ test('Cursor setup installs complete skills without writing an unsupported launc
     assert.deepEqual(JSON.parse(readFileSync(join(home, 'launch-settings.json'), 'utf8')).participants, {});
     assert(!existsSync(join(home, 'runner.lock')));
   } finally { rmSync(directory, { recursive: true, force: true }); }
+});
+
+
+test('codiscuss installs the Pi release package.json pins, switching only to one that passes its check', async t => {
+  const home = mkdtempSync(join(tmpdir(), 'codiscuss-pi-'));
+  t.after(() => rmSync(home, { recursive: true, force: true }));
+  let healthy = true;
+  const installs = [];
+  // A fake npm that lays out the CLI script of the requested release under the given prefix.
+  const npm = async args => {
+    installs.push(args.at(-1));
+    const cli = join(args[args.indexOf('--prefix') + 1], 'node_modules', '@earendil-works', 'pi-coding-agent', 'dist', 'bundle', 'cli.js');
+    mkdirSync(join(cli, '..'), { recursive: true });
+    writeFileSync(cli, '');
+    return '';
+  };
+  const check = async () => { if (!healthy) throw new Error('没有应答'); };
+  const env = {};
+  assert.match(PI_VERSION, /^\d+\.\d+\.\d+$/, 'the tested release is pinned in package.json');
+  assert.equal(pi_outdated(home), true);
+  const first = await install_pi(home, { npm, check });
+  assert.deepEqual([first.version, first.updated, current_pi(home, env), pi_outdated(home)], [PI_VERSION, true, first.cli, false]);
+  assert.deepEqual(installs, [`@earendil-works/pi-coding-agent@${PI_VERSION}`]);
+  assert.equal((await install_pi(home, { npm, check })).updated, false, 'the pinned release already in use is not installed again');
+  // A codiscuss upgrade pinning a release that fails its check keeps the one in use, and removes the failed one.
+  healthy = false;
+  await assert.rejects(install_pi(home, { version: '9.0.0', npm, check }), /没有应答/);
+  assert.equal(current_pi(home, env), first.cli);
+  assert.equal(existsSync(join(home, 'pi', 'runtime', '9.0.0')), false);
+  // One that passes becomes current; the previous release is kept for one more change, older ones go.
+  healthy = true;
+  await install_pi(home, { version: '9.0.0', npm, check });
+  await install_pi(home, { version: '9.1.0', npm, check });
+  assert.deepEqual([PI_VERSION, '9.0.0', '9.1.0'].map(version => existsSync(join(home, 'pi', 'runtime', version))), [false, true, true]);
+  assert.match(current_pi(home, env), /9\.1\.0/);
+  assert.equal(current_pi(home, { CODISCUSS_PI_CLI: '/given/cli.js' }), '/given/cli.js');
 });

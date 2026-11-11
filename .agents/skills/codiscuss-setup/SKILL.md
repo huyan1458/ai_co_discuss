@@ -33,7 +33,7 @@ description: "AI CoDiscuss 源码仓库的安装与运维技能：在已克隆�
 
 依次运行并记录实际版本：`git --version`、`node --version`（需 24+）、`npm --version`、Python（Windows 先试 `python --version`，再试 `py -3 --version`；其他系统 `python3 --version`，需 3.10+）。
 
-只需手动接入、不用全自动讨论时，Python 即可运行网站；全自动接入与 `codiscuss` 命令需要 Node.js 24+。AI CLI 由 `setup` 检测，这里不逐个探测。告诉用户：所选 CLI 需事先登录，安装器只检查能否启动，不检查账号。
+只需手动接入、不用全自动讨论时，Python 即可运行网站；全自动接入与 `codiscuss` 命令需要 Node.js 24+。AI CLI 由 `setup` 检测，这里不逐个探测。告诉用户：所选 CLI 需事先登录，安装器只检查能否启动，不检查账号。运行模型 API 成员的 Pi 由 `setup` 自动安装（版本固定为本版测试过的那一版），安装失败时按 setup 的提示检查网络与 npm 后重跑。
 
 ## 首次安装
 

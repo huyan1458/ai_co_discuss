@@ -10,7 +10,7 @@ import { homedir } from 'node:os';
 import { dirname, join, resolve } from 'node:path';
 import { setTimeout as sleep } from 'node:timers/promises';
 import { CodexAppClient } from './codex_app_client.mjs';
-import { branch, desktop_thread, session_exists, session_path, session_settings } from './codex_cli.mjs';
+import { branch, codex_skills, desktop_thread, session_exists, session_path, session_settings } from './codex_cli.mjs';
 import { bind_access, CALL_TIMEOUT_MS, not_sent, read_json, run_program, same_path } from './common.mjs';
 
 // The desktop has no stop or interrupt tool (its tool list, checked 2026-10-30), and the turn's output stays in the App.
@@ -314,4 +314,5 @@ export const codex = {
   chat: (config, binding, task) => codex_chat(config, binding, task),
   session: { path: session_path, exists: session_exists, owns: desktop_thread, branch, settings: session_settings },
   models: null,
+  skills: codex_skills,
 };

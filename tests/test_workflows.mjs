@@ -267,10 +267,19 @@ test('sub-workflows live in workflows/<id>/ as workflows of their own: their car
     [{ sub_workflows: [{ ...check, description: '' }] }, /描述不能为空/],
     [{ sub_workflows: [{ ...check, id: 'Bad_id' }] }, /子工作流 ID/],
     [{ sub_workflows: [check, check] }, /子工作流 ID 重复/],
-    [{ sub_workflows: [{ ...rehearsal, flow: { nodes: [{ id: 'start', type: 'start' }, { id: 'w', type: 'card', card: 'writer' }], edges: [] } }] }, /不存在的卡片/],
+    [{ sub_workflows: [{ ...rehearsal, flow: { nodes: [{ id: 'start', type: 'start' }, { id: 'g', type: 'card', card: 'ghost' }], edges: [] } }] }, /不存在的卡片/],
+    [{ sub_workflows: [{ ...rehearsal, flow: { nodes: [{ id: 'start', type: 'start' }, { id: 's', type: 'sub', sub: 'aigc-check' }], edges: [] } }, check] }, /不能再放子工作流/],
+    [{ sub_workflows: [check], flow: { nodes: [{ id: 'start', type: 'start' }, { id: 's', type: 'sub', sub: 'rehearsal' }], edges: [] } }, /不存在的子工作流：rehearsal/],
     [{ resources: { 'workflows/x/SKILL.md': 'x' } }, /不算附带文件/],
   ]) assert.throws(() => save_workflow(home, { ...NOVEL, ...change }, validate_preset), pattern);
   assert.equal(get_workflow(home, 'novel-serial').sub_workflows.length, 2, 'a refused save leaves the saved version');
+  // The main canvas shows where a sub-workflow is used; a sub-workflow's canvas may show a main-flow member taking part.
+  const main_flow = { nodes: [{ id: 'start', type: 'start', x: 0, y: 0 }, { id: 's', type: 'sub', sub: 'aigc-check', x: 1, y: 0 }], edges: [{ source: 'start', target: 's' }] };
+  const check_flow = { nodes: [{ id: 'start', type: 'start', x: 0, y: 0 }, { id: 'w', type: 'card', card: 'writer', x: 1, y: 0 }], edges: [{ source: 'start', target: 'w' }] };
+  save_workflow(home, { ...NOVEL, flow: main_flow, sub_workflows: [rehearsal, { ...check, flow: check_flow }] }, validate_preset);
+  const drawn = get_workflow(home, 'novel-serial');
+  assert.deepEqual([drawn.flow.nodes[1], drawn.sub_workflows.find(sub => sub.id === 'aigc-check').flow.nodes[1]],
+    [main_flow.nodes[1], check_flow.nodes[1]]);
   // An import offers a sub-workflow's cards card by card, like the main flow's.
   const files = { 'SKILL.md': readFileSync(join(folder, 'SKILL.md'), 'utf8'),
     'workflows/rehearsal/SKILL.md': readFileSync(join(folder, 'workflows', 'rehearsal', 'SKILL.md'), 'utf8'),

@@ -7,7 +7,7 @@ import { API_PROVIDERS } from "../runner/discussion_api.mjs";
 import { member_actions } from "../frontend/member-actions.js";
 import { access_label, access_options, EXPERT_PROMPT_PRESETS } from "../runner/expert_prompts.mjs";
 import { adapter_profile } from "../runner/adapters/profiles.mjs";
-import { format_duration, snapshot_at, timeline_axis, timeline_rows, timeline_summary } from "../frontend/timeline-model.js";
+import { format_duration, snapshot_at, timeline_axis, timeline_rows, timeline_segments, timeline_summary } from "../frontend/timeline-model.js";
 
 const source = readFileSync(new URL("../web/app.js", import.meta.url), "utf8").replace(/\nrestore_theme\(\);[\s\S]*$/, "");
 const discussion_source = readFileSync(new URL("../frontend/ChannelDiscussion.vue", import.meta.url), "utf8");
@@ -866,10 +866,6 @@ test("failed cards survive fresh snapshots and stay beside their request without
   await nextTick();
   assert.equal(f.state.failures.value.length, 0);
   f.view.query = "";
-  f.view.mention_only = true;
-  await nextTick();
-  assert.equal(f.state.failures.value.length, 0);
-  f.view.mention_only = false;
   f.view.access.can_manage = false;
   assert.equal(f.context.failed_message(f.state.failures.value[0].failure), null, "resend requires owner access");
 });
@@ -1235,11 +1231,11 @@ test("model discovery shares executable catalogs without leaking a late response
 });
 
 /** Evaluate the unified execution card and transcript slot calculations with reactive room snapshots. */
-function free_card_fixture({ messages = [], members = [], executions = [], query = "", mention_only = false, now = 1000 } = {}) {
+function free_card_fixture({ messages = [], members = [], executions = [], query = "", source_filter = false, now = 1000 } = {}) {
   const timers = new Map();
   let timer_id = 0, current_time = now;
   class TestDate extends Date { static now() { return current_time * 1000; } }
-  const view = reactive({ value: { query, mention_only, messages, access: { can_manage: true }, room: {
+  const view = reactive({ value: { query, source_filter, authors: [], messages, access: { can_manage: true }, room: {
     id: "room", mode: "free", archived: false, members: [], free: { members, executions, requests: [] }, session: null,
   } } });
   const context = vm.createContext({ computed, stable_computed: computed, ref, watch, view,  room: computed(() => view.value.room), Date: TestDate,
@@ -1660,6 +1656,21 @@ test('late reply text is fetched only for the owner and discarded when access or
   room.value.id = 'two';
   await nextTick();
   assert.equal(context.cache.value.size, 0);
+});
+
+test("a task begins only at the owner's new message while the room is idle; interjections, follow-ups and retries join it", () => {
+  const run = (id, queued, finished, task_id, task_author) => ({ source: "free", id, member: "M", role: "host", status: "completed", state: "done",
+    queued_at: queued, dispatched_at: queued, started_at: 0, finished_at: finished, reason: "", parent_id: null, segments: [], task_id, task_author, task: `#${task_id}` });
+  const segments = timeline_segments([
+    run(1, 100, 200, 10, "用户"),       // opens a task
+    run(2, 150, 260, 11, "用户"),       // the owner interjects while it runs
+    run(3, 210, 300, 12, "Claude"),     // the host dispatches
+    run(4, 400, 420, 10, "用户"),       // a retry of the first message, after the room fell idle
+    run(5, 500, 520, 13, "系统"),       // a program wake while idle
+    run(6, 600, 640, 14, "用户"),       // a new request while idle
+  ], 1_000_000);
+  assert.deepEqual(segments.map((segment) => [...segment.keys]), [["free:1", "free:2", "free:3", "free:4", "free:5"], ["free:6"]]);
+  assert.deepEqual(segments[0].interjections.map((item) => item.key), ["free:2"]);
 });
 
 test('backup import applies the adapter restore policy without interpreting the adapter name', () => {

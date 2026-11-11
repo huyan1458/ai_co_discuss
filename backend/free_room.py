@@ -85,6 +85,7 @@ TIMELINE_SQL = f"""SELECT x.*,(SELECT COALESCE(NULLIF(s.text,''),substr(a.text,1
         CASE WHEN e.status='failed' THEN e.result ELSE '' END AS reason,
         (SELECT parent.execution_id FROM member_requests r JOIN member_requests parent ON parent.answer_id=r.message_id
             WHERE r.execution_id=e.id AND parent.execution_id IS NOT NULL ORDER BY r.id LIMIT 1) AS parent_id,
+        (SELECT q.author FROM messages q WHERE q.id=(SELECT MIN(r.message_id) FROM member_requests r WHERE r.execution_id=e.id)) AS task_author,
         e.activity_at,(SELECT MIN(r.message_id) FROM member_requests r WHERE r.execution_id=e.id) AS task_id,
         (SELECT substr(q.text,1,160) FROM messages q WHERE q.id=(SELECT MIN(r.message_id) FROM member_requests r WHERE r.execution_id=e.id)) AS task,
         (SELECT MAX(r.answer_id) FROM member_requests r WHERE r.execution_id=e.id) AS answer_id,
@@ -685,7 +686,8 @@ def execution_timeline(connection, room_id, after=0):
     """Read the room's recent executions with their phase segments and note times, for the timeline page.
 
     Times are epoch seconds and segments are millisecond offsets from `dispatched_at`. An execution's parent is the
-    execution that wrote the message it answers. `state` is running, done, failed
+    execution that wrote the message it answers; `task_author` wrote the message that started it ("用户" for the owner),
+    which the page needs to tell a new request from the room's own follow-ups. `state` is running, done, failed
     or cancelled, so the page never interprets execution statuses itself. A positive `after` reads only executions
     still running or ended since then, so a page following live work rereads little.
     """

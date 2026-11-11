@@ -1,8 +1,8 @@
 /**
- * Image tools of a model API member: generate_image and edit_image call the OpenAI Images API (`/images/generations`,
- * `/images/edits`) at the member's own Base URL with its own key, when its profile names an `image_model`. The images
- * are saved as room attachments of this execution (and, on request, as new project files) and go out with its
- * submit_chat answer. The model never sees the image bytes; inputs come from room attachments or project files by
+ * Image tools: generate_image and edit_image call the OpenAI Images API (`/images/generations`, `/images/edits`) with
+ * this computer's image service (image_service.mjs), in a room whose owner turned drawing on. An API member calls them
+ * as tools and its images go out with its submit_chat answer; a CLI member runs `codiscuss launch image`, which calls
+ * `run_image_tool` too. The images are saved as the member's room attachments (and, on request, as new project files). The model never sees the image bytes; inputs come from room attachments or project files by
  * reference. The Images API rather than the Responses `image_generation` tool, because only the Images API serves every
  * GPT Image model and the SVG, GIF, markup and complexity options (measured against the OpenAI docs, 2026-11-10).
  */

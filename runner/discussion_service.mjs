@@ -3,16 +3,18 @@ import { spawn, spawnSync } from 'node:child_process';
 import { createHash, randomUUID } from 'node:crypto';
 import { appendFileSync, closeSync, existsSync, mkdirSync, openSync, readdirSync, readFileSync, readSync, realpathSync, renameSync, rmSync, statSync, unlinkSync, writeFileSync } from 'node:fs';
 import { homedir } from 'node:os';
-import { dirname, join, resolve } from 'node:path';
+import { basename, dirname, join, resolve } from 'node:path';
 import { DatabaseSync } from 'node:sqlite';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import { parseArgs } from 'node:util';
 import { setTimeout as sleep } from 'node:timers/promises';
+import { cleanup_room, sweep_adapters } from './adapters/index.mjs';
 import { same_session_family } from './adapters/profiles.mjs';
 import { atomic_json } from './files.mjs';
 import { DiscussionStore, acquire_lock, api, load_config, pause_if_running, service_drafts, validate_config } from './discussion_runner.mjs';
 import { FreeRoomRunner } from './free_runner.mjs';
 import { can_notify, notice_sent, receive_replies, send_notice } from './weixin.mjs';
+import { install_pi, pi_outdated } from './pi_runtime.mjs';
 
 const POLL_MS = 2000;
 // The service loop only checks which rooms are due; each room keeps its own interval, so a short loop costs no site requests.
@@ -590,10 +592,11 @@ function changed_rooms(frame) {
   catch { return null; }
 }
 
-/** Delete one room's local files: its answer drafts, and its launch folder when the service created it under launches/. */
+/** Delete one room's local files: its adapter state, answer drafts, and its launch folder when created under launches/. */
 export function remove_room_files(home, config_path, data_directory) {
   const folder = dirname(resolve(config_path));
   for (const directory of [data_directory, folder, join(folder, 'runtime')].filter(Boolean)) {
+    cleanup_room(directory);
     rmSync(service_drafts(home, directory), { recursive: true, force: true });
   }
   if (dirname(folder) === resolve(home, 'launches')) rmSync(folder, { recursive: true, force: true });
@@ -651,7 +654,11 @@ function launch_touched(folder) {
  */
 export function sweep_service_home(home, now = Date.now()) {
   const registered = read_registry(home).map(path => dirname(resolve(path)));
-  const launches = join(home, 'launches'), removed = { launches: [], drafts: [], logs: [], execution_files: 0 };
+  const launches = join(home, 'launches'), removed = { launches: [], drafts: [], logs: [], execution_files: 0, adapter_files: 0 };
+  const resolved_home = resolve(home);
+  if (basename(resolved_home) === '.codiscuss') {
+    try { removed.adapter_files = sweep_adapters(resolved_home, dirname(resolved_home)); } catch { /* Sandboxed or held; the next sweep retries. */ }
+  }
   for (const name of existsSync(launches) ? readdirSync(launches) : []) {
     const folder = join(launches, name);
     if (registered.includes(folder) || service_pid(folder) || service_pid(join(folder, 'runtime')) || now - launch_touched(folder) < STALE_LAUNCH_MS) continue;
@@ -714,7 +721,7 @@ export async function run_service(home, output = () => {}) {
   service.push = true;
   const stop_path = join(home, 'stop.request');
   if (existsSync(stop_path)) unlinkSync(stop_path);
-  let stopped = false, syncing = null, relaying = null, channels = null, receiving = null;
+  let stopped = false, syncing = null, relaying = null, channels = null, receiving = null, updating_pi = null, pi_checked = false;
   const relay_stop = new AbortController();
   const stop = () => { stopped = true; relay_stop.abort(); };
   process.once('SIGINT', stop);
@@ -752,8 +759,8 @@ export async function run_service(home, output = () => {}) {
         swept_at = Date.now();
         try {
           const removed = sweep_service_home(home);
-          if (removed.launches.length || removed.drafts.length || removed.logs.length || removed.execution_files) {
-            log_line(`清理本机文件：启动目录 ${removed.launches.length} 个，草稿 ${removed.drafts.length} 个，执行文件 ${removed.execution_files} 个，日志 ${removed.logs.join('、') || '无'}`);
+          if (removed.launches.length || removed.drafts.length || removed.logs.length || removed.execution_files || removed.adapter_files) {
+            log_line(`清理本机文件：启动目录 ${removed.launches.length} 个，草稿 ${removed.drafts.length} 个，执行文件 ${removed.execution_files} 个，软件遗留项 ${removed.adapter_files} 个，日志 ${removed.logs.join('、') || '无'}`);
           }
         } catch (error) { log_line(`清理本机文件失败：${error.message}`); }
       }
@@ -765,11 +772,18 @@ export async function run_service(home, output = () => {}) {
           .finally(() => { syncing = null; });
       }
       if (!relaying && Date.now() - relay_failed_at >= REMOTE_SYNC_MS) start_relay();
+      // Pi, which runs model API members, is the release this codiscuss version pins; after a codiscuss upgrade pins
+      // another, it is installed once, in the background. A release that fails its check is not switched to.
+      if (!pi_checked && !process.env.CODISCUSS_PI_CLI) {
+        pi_checked = true;
+        if (pi_outdated(home)) updating_pi = install_pi(home, { signal: relay_stop.signal }).then(result => { if (result.updated) log_line(`Pi 已安装 ${result.version}`); })
+          .catch(error => { if (!relay_stop.signal.aborted) log_line(`Pi 安装失败，继续使用当前版本：${error.message}`); }).finally(() => { updating_pi = null; });
+      }
       await sleep(LOOP_MS);
     }
   } finally {
     relay_stop.abort();
-    await Promise.all([syncing, relaying, channels?.done(), receiving]);
+    await Promise.all([syncing, relaying, channels?.done(), receiving, updating_pi]);
     await service.close();
     if (existsSync(stop_path)) unlinkSync(stop_path);
     log_line('讨论服务已停止');

@@ -180,7 +180,7 @@ async function refresh_after(invited_any) {
 <template>
   <UModal :content="{ onInteractOutside: (event) => event.preventDefault() }" v-model:open="inviting" title="邀请成员" :description="description" :ui="{ content: 'glass-panel studio-modal pb-invite-modal', body: 'dialog-body' }">
     <template #body>
-      <div v-if="loading" class="pb-invite-cards" role="status" aria-label="正在读取工作流成员"><USkeleton v-for="card in 2" :key="card" class="h-48 w-full" /></div>
+      <div v-if="loading" class="pb-invite-cards" role="status" aria-label="正在读取工作流成员"><USkeleton v-for="card in 2" :key="card" class="pb-invite-skeleton w-full" /></div>
       <div v-else-if="failure" class="pb-invite" role="status"><p>{{ failure }}</p><UButton label="重试" icon="i-lucide-refresh-cw" color="neutral" variant="soft" @click="choose_workflow(workflowId)" /></div>
       <div v-else-if="invited_manual.length && !invite_picks.length" class="pb-invite" aria-label="启动手动成员">
         <p class="pb-invite-lead">{{ invited_manual.length > 1 ? `${invited_manual.length} 位手动成员已加入` : '手动成员已加入' }}，把启动指令交给各自的 AI 会话，注册后才算到场。</p>
@@ -224,6 +224,7 @@ async function refresh_after(invited_any) {
 <style scoped>
 .pb-invite { display: flex; flex-direction: column; gap: 14px; }
 .pb-invite-cards { display: grid; grid-template-columns: repeat(auto-fill, minmax(min(248px, 100%), 272px)); align-items: start; gap: 8px; }
+.pb-invite-skeleton { aspect-ratio: 1; }
 .pb-invite-pick { display: flex; flex-direction: column; gap: 8px; min-width: 0; }
 .pb-invite-pick .fine-print { margin: 0; }
 .pb-invite-lead { margin: 0; color: var(--ui-text-toned); font-size: 13px; }

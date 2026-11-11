@@ -33,6 +33,24 @@ const PROVIDER_IDS = TTS_PROVIDERS.map(provider => provider.id);
 const provider_of = (id) => TTS_PROVIDERS.find(provider => provider.id === id);
 const STT_IDS = STT_PROVIDERS.map(provider => provider.id);
 
+/** The latest key saved for a service's root, or else for its former root (the local services' fixed ports before 2026-11-11). */
+const latest_key_ref = (keys, service) => keys[service.key_base_url] || keys[service.legacy_key_base_url] || '';
+
+/**
+ * Read a service's saved key by reference; a local service's token saved for its former root is still accepted.
+ * @param {string} home The service home.
+ * @param {{ key_base_url: string, legacy_key_base_url?: string }} service One of TTS_PROVIDERS or STT_PROVIDERS.
+ * @param {string} api_key_ref The key reference.
+ * @returns {string} The key.
+ */
+export function read_service_key(home, service, api_key_ref) {
+  try { return read_saved_api_key(home, service.key_base_url, api_key_ref); }
+  catch (error) {
+    if (!service.legacy_key_base_url) throw error;
+    return read_saved_api_key(home, service.legacy_key_base_url, api_key_ref);
+  }
+}
+
 /** One service's saved part with its defaults: key reference, voices, tone (services that take one) and (Azure) region. */
 function provider_settings(provider, saved = {}) {
   return { api_key_ref: '', speaker: provider.default_speaker, member_voices: {}, file_voice: '', ...(provider.context ? { context: provider.default_context } : {}),
@@ -58,7 +76,7 @@ export function tts_settings(home) {
   const keys = saved_api_keys(home);
   const providers = Object.fromEntries(TTS_PROVIDERS.map(provider => {
     const own = provider_settings(provider, Object.fromEntries(Object.entries(stored[provider.id] || {}).filter(([, value]) => value !== undefined)));
-    return [provider.id, (provider.local || provider.shared_key) && !own.api_key_ref ? { ...own, api_key_ref: keys[provider.key_base_url] || '' } : own];
+    return [provider.id, (provider.local || provider.shared_key) && !own.api_key_ref ? { ...own, api_key_ref: latest_key_ref(keys, provider) } : own];
   }));
   // Never chosen: the service on this computer once installed (it needs no key), unless an older file holds a Volcengine key.
   const provider = PROVIDER_IDS.includes(saved.provider) ? saved.provider
@@ -66,11 +84,11 @@ export function tts_settings(home) {
   const active = providers[provider];
   const ready = Boolean(active.api_key_ref && (!provider_of(provider).region || active.region));
   const local_stt = STT_PROVIDERS.find(item => item.local);
-  const stt_provider = STT_IDS.includes(saved.stt_provider) ? saved.stt_provider : keys[local_stt.key_base_url] ? local_stt.id : 'volcengine';
+  const stt_provider = STT_IDS.includes(saved.stt_provider) ? saved.stt_provider : latest_key_ref(keys, local_stt) ? local_stt.id : 'volcengine';
   const stt = STT_PROVIDERS.find(item => item.id === stt_provider);
   return { provider, speech_rate: saved.speech_rate ?? 0, providers, catalog: TTS_PROVIDERS,
     api_key_ref: ready ? active.api_key_ref : '', speaker: active.speaker, member_voices: active.member_voices, file_voice: active.file_voice,
-    stt_provider, stt_catalog: STT_PROVIDERS, stt_key_ref: stt.local ? keys[stt.key_base_url] || '' : providers[stt.id]?.api_key_ref || '' };
+    stt_provider, stt_catalog: STT_PROVIDERS, stt_key_ref: stt.local ? latest_key_ref(keys, stt) : providers[stt.id]?.api_key_ref || '' };
 }
 
 /** Validate one service's part as the page sent it. */
@@ -170,7 +188,7 @@ export async function tts_speak(home, input, transport) {
   const cached = existsSync(cache_path) && cache_read(cache_path);
   if (cached?.audio) return { ...cached, cached: true };
   if (!in_flight.has(cache_path)) {
-    const key = read_saved_api_key(home, provider.key_base_url, own.api_key_ref);
+    const key = read_service_key(home, provider, own.api_key_ref);
     const section_id = KEY_REF_PATTERN.test(input.section_id || '') ? input.section_id : undefined;
     in_flight.set(cache_path, provider_speak(provider.id, { key, text, speaker, rate: settings.speech_rate, context, silence, section_id, region: own.region, home }, transport)
       .then((result) => { cache_write(directory, cache_path, result); return result; })

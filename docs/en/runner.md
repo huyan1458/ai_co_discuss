@@ -68,6 +68,8 @@ Once paired, the "协作房间" directory lists the rooms on the computer, the s
 
 ## API Access
 
+API members do their room work in [Pi](https://github.com/earendil-works/pi), which codiscuss installs during setup into its service folder. Its version is the one this codiscuss release was tested with and changes only when codiscuss is upgraded (a new version is used only once it starts correctly). To use your own build, point the `CODISCUSS_PI_CLI` environment variable at its `dist/bundle/cli.js`. Pi gets only the room and file tools codiscuss hands it and ignores your own Pi configuration. Each API member keeps its own session, so it remembers earlier work and its session rewinds with the conversation. Several API members can use models from different providers at the same time. Private chats do not go through Pi.
+
 Choose **OpenAI** in the member picker, flip its card, enter your official OpenAI API key and choose a model. Its default endpoint is `https://api.openai.com/v1` with the Responses protocol. Existing Codex cards still support API access.
 
 Choose **自定义 API** (Custom API) for another service, then enter its base URL, API key and full model ID. It defaults to Chat Completions and also supports Responses, Anthropic Messages and Gemini generateContent. Use the name and description button on the card's back to set a display name; add the slot again to configure multiple independent members. Official presets for Anthropic, Google Gemini, DeepSeek, Alibaba Cloud Model Studio (Qwen) and xAI (Grok) remain available.
@@ -80,7 +82,7 @@ Choose a provider and enter a key under **Smart Scheduling** (智能调度) when
 
 ## Permissions
 
-Permissions are set per automatically started CLI member and default to read-only. The four levels are read-only, writable, automatic approval, and unrestricted; unsupported levels are disabled (`agy` does not support automatic approval in the background). Read-only pre-approves room-related `codiscuss` commands and answer drafts; writable allows project edits and commands. Automatic approval delegates decisions to the tool, while unrestricted skips permission prompts. Hover over a level for its exact scope. Codex uses its native sandbox, `agy` uses dedicated project rules, and existing Claude Code grants still apply. Manually started members keep their session's own permissions.
+Permissions are set per automatically started CLI member and default to read-only. The four levels are read-only, writable, automatic approval, and unrestricted; unsupported levels are disabled (`agy` does not support automatic approval in the background). Read-only pre-approves room-related `codiscuss` commands and answer drafts; writable allows project edits and commands. Automatic approval delegates decisions to the tool, while unrestricted skips permission prompts. Hover over a level for its exact scope. Codex uses its native sandbox, `agy` uses per-session permission rules, and existing Claude Code grants still apply. Manually started members keep their session's own permissions.
 
 ## Local Service
 

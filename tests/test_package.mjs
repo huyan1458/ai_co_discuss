@@ -8,6 +8,9 @@ import { fileURLToPath } from 'node:url';
 import { setTimeout as delay } from 'node:timers/promises';
 import test from 'node:test';
 
+// Setup installs Pi from npm unless one is given; tests never download it.
+process.env.CODISCUSS_PI_CLI ??= 'pi-not-needed-in-this-test';
+
 const ROOT = fileURLToPath(new URL('../', import.meta.url));
 const NPM = process.env.npm_execpath || join(dirname(process.execPath), process.platform === 'win32'
   ? 'node_modules/npm/bin/npm-cli.js' : '../lib/node_modules/npm/bin/npm-cli.js');

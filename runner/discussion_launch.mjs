@@ -14,7 +14,7 @@ import { bundle_project_markdown, bundle_project_page, outside_directory, projec
 import { guard_remote_request, list_remote_directories } from './remote_policy.mjs';
 import { list_devices, machine_fingerprint, revoke_device, start_pairing } from './device_auth.mjs';
 import { setup_sidecar } from './adapters/antigravity_app.mjs';
-import { adapter_of, adoption_adapter, BRANCHABLE_ADAPTERS, branch_session, execution_details, session_settings, software_defaults, software_effort, software_models } from './adapters/index.mjs';
+import { adapter_of, adoption_adapter, BRANCHABLE_ADAPTERS, branch_session, execution_details, session_settings, software_defaults, software_effort, software_models, software_skills } from './adapters/index.mjs';
 import { ADAPTER_IDS, ADAPTER_PROFILES, adapter_profile, DEFAULT_API_MAX_REQUESTS, MAX_API_MAX_REQUESTS, platform_adapters, same_session_family } from './adapters/profiles.mjs';
 import { API_PROVIDERS, api_check, api_models, save_api_key, saved_api_keys, validate_api_profile } from './discussion_api.mjs';
 import { DEFAULT_SCHEDULER_MODE, SCHEDULER_MODES, SCHEDULER_PROVIDERS, scheduler_check } from './scheduler.mjs';
@@ -22,6 +22,9 @@ import { save_tts_settings, tts_release, tts_settings, tts_speak } from './tts.m
 import { local_service_stop, local_services } from './tts_providers.mjs';
 import { weixin_command } from './weixin.mjs';
 import { stt_part } from './stt.mjs';
+import { image_settings, room_image, save_image_settings } from './image_service.mjs';
+import { open_project } from './adapters/api_files.mjs';
+import { run_image_tool } from './adapters/api_images.mjs';
 import { access_levels, BUILTIN_EXPERT_PRESETS, MAX_EXPERT_PROMPT, PROJECT_ACCESS } from './expert_prompts.mjs';
 import { acquire_lock, api, check_extra_directories, DiscussionStore, service_drafts, validate_config } from './discussion_runner.mjs';
 import { FreeRoomRunner, free_task_files } from './free_runner.mjs';
@@ -49,7 +52,9 @@ function free_instance(name, taken) {
 
 /** Supported local clients of an instance's platform. */
 function clients_of(name) { return platform_adapters(platform_of(name)); }
-const PROFILE_FIELDS = ['adapter', 'executable', 'model', 'effort', 'source_thread_id', 'ipc_directory', 'allowed_tools', 'cwd', 'project_name', 'project_id', 'base_url', 'api_protocol', 'api_key_ref', 'image_model', 'system_prompt'];
+const PROFILE_FIELDS = ['adapter', 'executable', 'model', 'effort', 'source_thread_id', 'ipc_directory', 'allowed_tools', 'cwd', 'project_name', 'project_id', 'base_url', 'api_protocol', 'api_key_ref', 'system_prompt'];
+// Saved before drawing became the room's switch; read as absent.
+const LEGACY_PROFILE_FIELDS = ['image_model'];
 const MAX_MINUTES = 1440;
 const SESSION_ID_PATTERN = /^[0-9A-Za-z_-]{8,128}$/;
 const LOCAL_MEMBERS_FORMAT = 'ai-codiscuss-local-members';
@@ -60,6 +65,7 @@ const HELP = `用法：codiscuss launch settings [--file FILE]
       codiscuss launch start --file FILE [--dry-run]
       codiscuss launch room-config --file FILE
       codiscuss launch room-models --file FILE
+      codiscuss launch room-skills --file FILE
       codiscuss launch room-files --file FILE
       codiscuss launch room-page --file FILE
       codiscuss launch room-media --file FILE
@@ -68,6 +74,8 @@ const HELP = `用法：codiscuss launch settings [--file FILE]
       codiscuss launch api-key --file FILE
       codiscuss launch api-check --file FILE
       codiscuss launch scheduler-check --file FILE
+      codiscuss launch image-settings [--file FILE]
+      codiscuss launch image --file REQUEST [--access-file FILE]
       codiscuss launch tts-settings [--file FILE]
       codiscuss launch tts --file FILE
       codiscuss launch tts-release
@@ -100,6 +108,7 @@ settings 读取本机软件默认配置；指定文件时保存，不启动 AI�
 start 使用启动 JSON 创建或接入房间并启动；--dry-run 只校验和预览。
 room-config 修正已暂停房间的软件路径或切换 Codex App / CLI，不启动讨论；须提供 site、room_id、token。
 room-models 只读指定 site、room_id 的本机登记模型与思考强度，不启动讨论；quick 为 true 时不查询 agy 的默认模型（较慢），该成员标 defaults_pending。
+room-skills 只读指定成员本机安装的技能，须提供 site、room_id、token、name；软件与项目目录只取本机已保存配置，不启动 AI。
 room-files 只读房间已保存的项目目录，须提供 site、room_id、token，可选相对 path 和目录分页 offset；文件返回最多前 128 KiB 文本；给 query 时改为按名称搜索整个项目（含 / 时按路径），最多返回 50 项。
 room-page 只读项目目录里的一个 HTML 文件（path，可选 root），把它按相对路径引用的样式、脚本、图片、字体与音视频内联为 data URL，以 base64 的 data 返回（最多 8 MiB）；Markdown 文件则返回它按相对路径引用的项目图片 {项目路径: data URL} 的 JSON；其他设备经中转时分段返回，按 offset 续读并核对 version；未能载入的引用列在 missing（不存在或在项目目录外）与 skipped（超出大小）。
 room-media 核对项目目录里的一个图片、视频或音频文件（path，可选 root）可读：本机网站凭它登记一个 10 分钟有效的播放地址，按 Range 直接读盘，网页拿不到文件路径；其他设备经中转时分段返回 base64 的 data（按 offset 续读并核对 version），最多 64 MB。
@@ -108,6 +117,8 @@ models 按 adapter、executable 或 API profile 读取模型目录，不启动�
 api-key 将 base_url、api_key 保存于本机私有目录，只返回 api_key_ref。
 api-check 用 API profile 向模型发送一次极短请求，核对地址、密钥、协议与模型是否可用。
 scheduler-check 用智能调度配置（provider、model、api_key_ref）向决策模型发送一道是非题，核对供应商、模型与密钥是否可用。
+image-settings 读取这台电脑的生图服务（base_url、图片模型 model、api_key_ref，configured 表示已配置 Key）；内容非空时保存。
+image 成员按任务凭据生图（房间须添加了生图卡片）：REQUEST 为 JSON，必填 action（generate 生成 / edit 改图）与 prompt；可选 size（auto、1024x1024、1536x1024、1024x1536 或 16 倍数的 宽x高）、quality（auto/low/medium/high，2.5、2.6 系列另有 xhigh/max）、n（1–10 张）、output_format（png/jpeg/webp/gif，生成另可 svg）、background（auto/opaque/transparent）、file_name（附件名）、save_path（另存进可写项目）；edit 另需 images（1–16 个 {attachment_id} 或 {file_path}，第一张为主图），可加 mask 或 markup（同样格式，二选一）。图片存为成员的附件，返回附件 ID，再用 message post --attachment 附上。
 tts-settings 读取朗读设置；内容非空时保存（语音服务 provider：local（本机，由 local-tts-setup 技能安装）/ volcengine / aliyun / azure / openai，语速 speech_rate，以及 providers.<服务> 的 api_key_ref、speaker、member_voices、file_voice，本机、火山引擎与 OpenAI 另有语气提示 context（各自默认不同），Azure 另有 region；语音输入服务 stt_provider：local / volcengine / openai）。
 tts 用朗读设置把 text（不超过 300 字）合成为音频（本机服务为 m4a，其余为 MP3），返回 base64。
 weixin 微信通知：action 为 status（默认，读取绑定状态）、login（生成扫码内容）、complete（等待扫码确认，约 20 秒）、test（发一条测试通知）或 unbind（解除本机绑定）。Goal 待确认 5 分钟仍未回复时通知房主，房主在微信回复即作为房主发言发回该房间；只用本机服务目录保存凭据。
@@ -339,7 +350,9 @@ export async function cached_software_models(home, profile, { refresh = false, q
 /** Read private defaults without selecting a global room or identity. */
 export function launch_settings(home) {
   const path = join(home, 'launch-settings.json');
-  return existsSync(path) ? JSON.parse(readFileSync(path, 'utf8')) : { participants: {} };
+  const settings = existsSync(path) ? JSON.parse(readFileSync(path, 'utf8')) : { participants: {} };
+  for (const profile of Object.values(settings.participants || {})) for (const field of LEGACY_PROFILE_FIELDS) delete profile?.[field];
+  return settings;
 }
 
 /**
@@ -382,7 +395,18 @@ export async function room_models(home, raw, { read_defaults = profile => cached
   return { room_id: input.room_id, registered: paths.length > 0, participants, scheduler, project_directory: config.cwd || '',
     extra_directories: config.extra_directories || [],
     workflow: room_workflow_status(config, home), host_workflows: Boolean(config.host_workflows),
-    api_max_requests: config.api_max_requests ?? DEFAULT_API_MAX_REQUESTS };
+    api_max_requests: config.api_max_requests ?? DEFAULT_API_MAX_REQUESTS,
+    // Whether members may draw here, and whether this computer has an image service to draw with.
+    image_generation: Boolean(config.image_generation), image_configured: image_settings(home).configured };
+}
+
+/** Read one member's installed skills for the room owner, using only this computer's saved software and directory. */
+export async function room_skills(home, raw, { read_skills = software_skills } = {}) {
+  const { input, config } = await member_room_context(home, raw);
+  const profile = config.participants?.[input.name];
+  if (!profile) return { room_id: input.room_id, member: input.name, available: false, skills: [], reason: '本机没有此成员的软件配置，无法读取技能' };
+  const result = await read_skills({ ...profile, cwd: profile.cwd || config.cwd || '' });
+  return { room_id: input.room_id, member: input.name, ...result };
 }
 
 /**
@@ -607,7 +631,7 @@ const MAX_EXPERT_PRESETS = 30;
 const MAX_PRESET_DESCRIPTION = 500;
 const MAX_PRESET_FIELD = 200;
 // name is the instance a preset adds (platform-suffix); label is the free name shown for it, on the add row and in the room.
-const PRESET_FIELDS = ['name', 'label', 'description', 'system_prompt', 'project_access', 'model', 'effort', 'image_model'];
+const PRESET_FIELDS = ['name', 'label', 'description', 'system_prompt', 'project_access', 'model', 'effort'];
 const MAX_PRESET_LABEL = 32;
 
 /**
@@ -632,13 +656,15 @@ export function expert_presets(home) {
   const path = join(home, 'expert-presets.json');
   const saved = existsSync(path) ? JSON.parse(readFileSync(path, 'utf8')) : {};
   const hidden_builtins = saved.hidden_builtins || [];
-  return { presets: english_preset_ids(saved.presets || []), description_templates: saved.description_templates || {}, hidden_builtins,
+  // A preset saved while members drew with their own image model keeps the rest; drawing is the room's switch now.
+  const presets = (saved.presets || []).map(({ image_model, ...preset }) => preset);
+  return { presets: english_preset_ids(presets), description_templates: saved.description_templates || {}, hidden_builtins,
     builtin_presets: BUILTIN_EXPERT_PRESETS.filter(preset => !hidden_builtins.includes(preset.name)) };
 }
 
 /** Check one expert preset; a workflow's agent card is a preset and obeys the same rule. */
 export function validate_preset(preset) {
-  if (!preset || typeof preset !== 'object' || Object.keys(preset).some(key => !PRESET_FIELDS.includes(key))) throw new Error('预设只能包含名称、显示名、描述、提示词、项目权限、模型、强度与图片模型');
+  if (!preset || typeof preset !== 'object' || Object.keys(preset).some(key => !PRESET_FIELDS.includes(key))) throw new Error('预设只能包含名称、显示名、描述、提示词、项目权限、模型与强度');
   if (!platform_of(preset.name) || !clients_of(preset.name)) throw new Error(`预设 ID 须为“平台名”或“平台名-后缀”，后缀只用英文、数字和下划线：${preset.name}`);
   if (Object.values(preset).some(value => typeof value !== 'string')) throw new Error(`${preset.name} 的字段必须为文本`);
   if ((preset.label || '').trim().length > MAX_PRESET_LABEL) throw new Error(`${preset.name} 的显示名最多 ${MAX_PRESET_LABEL} 字`);
@@ -646,7 +672,6 @@ export function validate_preset(preset) {
   if ((preset.system_prompt || '').length > MAX_EXPERT_PROMPT) throw new Error(`${preset.name} 的提示词最多 ${MAX_EXPERT_PROMPT} 字`);
   if (preset.project_access && !PROJECT_ACCESS.includes(preset.project_access)) throw new Error(`${preset.name} 的项目权限须为 read、write、auto 或 full`);
   if ([preset.model, preset.effort].some(value => (value || '').length > MAX_PRESET_FIELD)) throw new Error(`${preset.name} 的模型或强度过长`);
-  if (preset.image_model && !/^[A-Za-z0-9][A-Za-z0-9._:/@-]*$/.test(preset.image_model)) throw new Error(`${preset.name} 的图片模型只能是模型 ID，例如 gpt-image-2.6-flare`);
 }
 
 /** Replace the user's presets, default descriptions or deleted built-ins (whichever the input carries); every field is checked first. */
@@ -686,7 +711,7 @@ function validate_profile(name, profile, binding = false) {
     } else if (typeof value !== 'string') throw new Error(`${name}.${key} 必须为文本`);
     if (['executable', 'cwd', 'ipc_directory'].includes(key) && value && !isAbsolute(value)) throw new Error(`${name}.${key} 必须为完整绝对路径`);
     // The model is passed as one CLI argument, so it must not look like a flag or contain spaces.
-    if (['model', 'image_model'].includes(key) && value && !/^[A-Za-z0-9][A-Za-z0-9._:/@[\]-]*$/.test(value)) throw new Error(`${name}.${key} 只能是模型名称，例如 gpt-6-astra、opus 或 gemini-4-argon-high`);
+    if (key === 'model' && value && !/^[A-Za-z0-9][A-Za-z0-9._:/@[\]-]*$/.test(value)) throw new Error(`${name}.${key} 只能是模型名称，例如 gpt-6-astra、opus 或 gemini-4-argon-high`);
     if (key === 'system_prompt' && value.length > MAX_EXPERT_PROMPT) throw new Error(`${name} 的专属提示词最多 ${MAX_EXPERT_PROMPT} 字`);
   }
   const facts = adapter_profile(profile.adapter);
@@ -783,6 +808,7 @@ function free_launch_config(home, input, room, directory, options) {
   return validate_config({ site: input.site, room: room.id || 'preview', token: options.token, mode: 'free', participants, members, api_home: home,
     scheduler: input.scheduler || undefined, cwd: input.cwd, extra_directories: input.extra_directories, project_access: input.project_access || undefined, workflow,
     host_workflows: input.host_workflows === true || undefined, api_max_requests: input.api_max_requests,
+    image_generation: input.image_generation === true || undefined,
     data_directory: join(directory, 'runtime'), draft_directory: service_drafts(home, join(directory, 'runtime')) }, directory);
 }
 
@@ -975,13 +1001,14 @@ export async function room_member(home, raw, locked = false, headers = {}) {
  */
 export async function room_settings(home, raw) {
   const { input, path } = await member_room_context(home, raw);
-  const { api_max_requests: requests, extra_directories: directories, cwd } = input;
-  if (requests === undefined && directories === undefined && cwd === undefined) throw new Error('须提供 api_max_requests、cwd 或 extra_directories');
+  const { api_max_requests: requests, extra_directories: directories, cwd, image_generation: images } = input;
+  if (requests === undefined && directories === undefined && cwd === undefined && images === undefined) throw new Error('须提供 api_max_requests、image_generation、cwd 或 extra_directories');
   if (requests !== undefined && !Number.isInteger(requests)) throw new Error('api_max_requests 须为整数');
+  if (images !== undefined && typeof images !== 'boolean') throw new Error('image_generation 须为 true 或 false');
   const release = acquire_lock(join(dirname(path), 'configuration-edit'));
   try {
     const config = configuration_snapshot(path).config;
-    const next = { ...config, ...(requests !== undefined ? { api_max_requests: requests } : {}) };
+    const next = { ...config, ...(requests !== undefined ? { api_max_requests: requests } : {}), ...(images !== undefined ? { image_generation: images } : {}) };
     if (cwd !== undefined) {
       if (config.cwd) throw new Error('本房间已有项目目录，建房后不能更改；可添加其他项目目录');
       if (typeof cwd !== 'string' || !isAbsolute(cwd) || !existsSync(cwd) || !statSync(cwd).isDirectory()) throw new Error('项目目录须为本机已有文件夹的完整路径');
@@ -994,7 +1021,7 @@ export async function room_settings(home, raw) {
     }
     validate_config(next, dirname(path));
     atomic_json(path, next);
-    return { room_id: input.room_id, ...(requests !== undefined ? { api_max_requests: requests } : {}),
+    return { room_id: input.room_id, ...(requests !== undefined ? { api_max_requests: requests } : {}), ...(images !== undefined ? { image_generation: images } : {}),
       ...(cwd !== undefined ? { project_directory: cwd } : {}), ...(directories !== undefined ? { extra_directories: directories } : {}) };
   } finally { release(); }
 }
@@ -1206,9 +1233,11 @@ export async function restore_room(home, raw) {
   for (const [name, exported] of Object.entries(local.participants)) {
     try {
       const profile = participant_profile(name, {}, { cwd: local.cwd, adopt: true, participants: { [name]: exported } }, false);
-      // A member without a software session store (an API member) kept its binding in the old runtime directory, so it starts fresh.
-      if (!adapter_of(profile.adapter)?.session) delete profile.session_id;
-      const resumed = profile.session_id ? borrowed_session(name, profile, local.cwd) : profile;
+      // A member whose software cannot take over other conversations (an API member) resumes only its own session, and
+      // only while this machine still has it; otherwise, like one without a session store, it starts fresh.
+      const software = adapter_of(profile.adapter);
+      if (!software?.session || (!software.adopt && !software.session.exists(profile.session_id))) delete profile.session_id;
+      const resumed = profile.session_id && software.adopt ? borrowed_session(name, profile, local.cwd) : profile;
       if (adapter_profile(profile.adapter)?.restore_manual) {
         keep_manual.push(name);
         const cwd = resumed.cwd || local.cwd || '';
@@ -1650,7 +1679,7 @@ async function room_cards(home, raw) {
     taken.add(card.toLowerCase());
     // A card names its member platform-card; the room member it came from may have another suffix.
     return { card, name: `${platform_of(name)}-${card}`, label: room.labels?.[name] || '', description: room.descriptions?.[name] || '',
-      ...Object.fromEntries(['system_prompt', 'project_access', 'model', 'effort', 'image_model']
+      ...Object.fromEntries(['system_prompt', 'project_access', 'model', 'effort']
       .filter(field => profile[field] && profile[field] !== 'own').map(field => [field, profile[field]])) };
   }) };
 }
@@ -1722,6 +1751,37 @@ async function host_room(home, access_file) {
   return { path, config, roster, labels: room.labels || {}, host };
 }
 
+const IMAGE_ACTIONS = { generate: 'generate_image', edit: 'edit_image' };
+
+/**
+ * One drawing by a member, with its task credential: `{action: generate|edit, ...the image tool's arguments}` (the same
+ * arguments an API member's generate_image / edit_image take). Allowed only while the room's owner has drawing on and
+ * this computer has an image service. The images become the member's attachments, which it posts with
+ * `message post --attachment ID`; project files are read and written under the member's own project access.
+ */
+export async function draw_image(home, { access_file, request }) {
+  if (!access_file) throw new Error('凭据用 --access-file 或 DISCUSS_ACCESS_FILE');
+  const access = JSON.parse(readFileSync(resolve(access_file), 'utf8').replace(/^﻿/, ''));
+  const path = registered_room_path(home, String(access.site || '').replace(/\/$/, ''), access.room);
+  if (!path) throw new Error('本机没有登记这个房间');
+  const config = configuration_snapshot(path).config;
+  const member = Object.keys(config.members || {}).find(name => config.members[name].token === access.token);
+  if (!member) throw new Error('凭据不属于本房间的成员');
+  if (!config.image_generation) throw new Error('本房间没有添加生图服务，请房主在“成员与设置 → 协作设置”的“生图”中添加');
+  const image = room_image(home, config);
+  if (!image) throw new Error('这台电脑的生图服务还没有填写密钥（房间“生图”卡片的设置）');
+  const { action, ...args } = request || {};
+  if (!IMAGE_ACTIONS[action]) throw new Error('action 须为 generate 或 edit');
+  const profile = config.participants?.[member] || {};
+  const project = open_project({ cwd: profile.cwd ?? config.cwd, project_access: profile.project_access === 'read' ? 'read' : 'write',
+    extra_directories: config.extra_directories || [] }, [home, dirname(path)]);
+  const context = { image, site: config.site, room: config.room, token: access.token, participant: member, directory: dirname(path),
+    project, signal: new AbortController().signal, generated_attachments: [] };
+  const result = await run_image_tool(context, IMAGE_ACTIONS[action], args);
+  if (result.error) throw new Error(result.error);
+  return { ...result, note: '图片已存为你的附件；回答时用 message post --attachment 附件ID 附上（可重复，最多 10 个）' };
+}
+
 /**
  * The API settings a program-started card on a platform without local software starts from, as the invite form fills
  * them: the platform's official API with the key last saved here for that root. Null when the platform has saved
@@ -1756,7 +1816,7 @@ async function join_workflow_cards(home, config, roster, workflow, members, card
     const taken = new Set([...roster.map(member => member.name), ...Object.values(next)]);
     const name = taken.has(agent.name) ? free_instance(agent.name, taken) : agent.name;
     const api = card_api_profile(home, platform_of(agent.name));
-    const card = Object.fromEntries(['project_access', 'model', 'effort', 'image_model'].filter(field => agent[field] && !(api && field === 'effort')).map(field => [field, agent[field]]));
+    const card = Object.fromEntries(['project_access', 'model', 'effort'].filter(field => agent[field] && !(api && field === 'effort')).map(field => [field, agent[field]]));
     // An API member has no command line, so a card asking for more than writing gets the most it allows.
     if (api && card.project_access && !access_levels('api').includes(card.project_access)) card.project_access = 'write';
     const profile = { ...api, ...card };
@@ -2101,6 +2161,12 @@ export async function launch_main(args = process.argv.slice(2), input_text) {
     return process.stdout.write(`${JSON.stringify(result)}
 `);
   }
+  if (positionals[0] === 'image') {
+    if (!values.file) throw new Error('用 --file 指定请求 JSON：{"action":"generate"|"edit","prompt":"…",…}');
+    const request = JSON.parse(readFileSync(values.file, 'utf8').replace(/^﻿/, ''));
+    const result = await draw_image(service_home(), { request, access_file: values['access-file'] || process.env.DISCUSS_ACCESS_FILE });
+    return process.stdout.write(`${JSON.stringify(result)}\n`);
+  }
   if (['workflow-check', 'workflow-save'].includes(positionals[0])) {
     const result = check_or_save_workflow(service_home(), { dir: values.dir, draft: values.draft }, positionals[0] === 'workflow-save');
     return process.stdout.write(`${JSON.stringify(result)}\n`);
@@ -2128,6 +2194,7 @@ export async function launch_main(args = process.argv.slice(2), input_text) {
   else if (positionals[0] === 'api-key' && input) result = save_api_key(home, input);
   else if (positionals[0] === 'api-check' && input) result = await api_check(home, input);
   else if (positionals[0] === 'scheduler-check' && input) result = await scheduler_check(home, input);
+  else if (positionals[0] === 'image-settings') result = input && Object.keys(input).length ? save_image_settings(home, input) : image_settings(home);
   else if (positionals[0] === 'tts-settings') result = input && Object.keys(input).length ? save_tts_settings(home, input) : tts_settings(home);
   else if (positionals[0] === 'tts' && input) result = await tts_speak(home, input);
   else if (positionals[0] === 'tts-release') result = tts_release(home);
@@ -2135,6 +2202,7 @@ export async function launch_main(args = process.argv.slice(2), input_text) {
   else if (positionals[0] === 'weixin') result = await weixin_command(home, input || {});
   else if (positionals[0] === 'stt' && input) result = await stt_part(home, input);
   else if (positionals[0] === 'room-models' && input) result = await room_models(home, input);
+  else if (positionals[0] === 'room-skills' && input) result = await room_skills(home, input);
   else if (positionals[0] === 'room-files' && input) result = await room_files(home, input);
   else if (positionals[0] === 'room-page' && input) result = await room_page(home, input, { parts: Boolean(values.remote) });
   else if (positionals[0] === 'room-media' && input) result = await room_media(home, input, { parts: Boolean(values.remote) });

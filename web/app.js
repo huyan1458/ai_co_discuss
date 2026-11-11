@@ -93,7 +93,7 @@ const PLATFORM_IDENTITIES = {
 };
 // An instance shows its platform's nickname with its own suffix: Antigravity-2 → Gemini-2.
 const IDENTITIES = by_platform(PLATFORM_IDENTITIES, (identity, name) => ({ ...identity, label: identity.label ? identity.label + name.slice(platform_of(name).length) : name, description: "AI 实例" }));
-const state = { rooms: [], folders: [], room: null, page: 1, pages: 1, query: "", mention_only: false, host_only: false,
+const state = { rooms: [], folders: [], room: null, page: 1, pages: 1, query: "", mention_only: false, host_only: false, authors: [], card_kinds: [],
   named_followup: false, create_discussion: false, create_goal: null,
   archive_view: false, directory_sort: "manual", management: null, dragged_room: null, folder_moves: new Map(), folder_version: 0,
   reply_to: null, tab: "discussion", refresh_version: 0, context_dirty: false, topic_dirty: false,
@@ -146,6 +146,8 @@ state.create_host_workflows = false;
 // Mirrors DEFAULT_API_MAX_REQUESTS in runner/adapters/profiles.mjs; this classic script cannot import it.
 const DEFAULT_API_MAX_REQUESTS = 300;
 state.create_api_max_requests = DEFAULT_API_MAX_REQUESTS;
+// Whether the new room lets its members draw with this computer's image service; chosen per room, never remembered.
+state.create_image_generation = false;
 let create_preferences_pending = {}, create_preferences_saving = null, create_preferences_version = 0;
 const PLATFORM_CLIENTS = { Codex: [{ value: "codex_cli", label: "Codex CLI" }, { value: "codex", label: "Codex App" }],
   Claude: [{ value: "claude", label: "Claude Code CLI" }],
@@ -922,8 +924,6 @@ function render_messages(result) {
 /** Join bounded cursor batches for the interactive transcript; refresh only new records. */
 async function load_message_history(room_id, version) {
   const params = new URLSearchParams({ q: state.query, withdrawn: "include" });
-  if (state.mention_only) params.set("mention", element("author-select").value);
-  if (state.host_only) params.set("host", "1");
   const key = `${room_id}?${params}`;
   // Large batches: a long transcript loads in one round-trip, and the site counts the room's messages once, not per batch.
   params.set("limit", MESSAGE_HISTORY_BATCH);
@@ -1050,6 +1050,8 @@ async function select_room(room_id) {
   state.query = "";
   state.mention_only = false;
   state.host_only = false;
+  state.authors = [];
+  state.card_kinds = [];
   state.context_dirty = false;
   state.topic_dirty = false;
   state.pending_submission = null;
@@ -1361,7 +1363,7 @@ function unique_instance(base, taken) {
 function apply_expert_preset(name, preset) {
   const { session_id, system_prompt, ...base } = state.launch.profiles[platform_of(name)] || {};
   const profile = { ...structuredClone(base), project_access: preset.project_access || "read" };
-  for (const field of ["model", "effort", "image_model", "system_prompt"]) if (Object.hasOwn(preset, field)) profile[field] = preset[field];
+  for (const field of ["model", "effort", "system_prompt"]) if (Object.hasOwn(preset, field)) profile[field] = preset[field];
   state.launch.profiles[name] = profile;
   description_drafts[name] = preset.description || "";
   // A second copy of a preset keeps the number its instance name got: 评审官 → 评审官2.
@@ -1416,7 +1418,7 @@ async function save_expert_preset(name, label) {
   const id = label === undefined ? name : preset_identity(name, label);
   const shown = label === undefined ? expert_presets().find(item => item.name === name)?.label || "" : label.trim();
   const preset = { name: id, ...shown && shown !== id ? { label: shown } : {}, description: description_draft(name).trim(), project_access: profile.project_access || "read" };
-  for (const field of ["model", "effort", "image_model", "system_prompt"]) if (Object.hasOwn(profile, field) && profile[field] !== "") preset[field] = profile[field];
+  for (const field of ["model", "effort", "system_prompt"]) if (Object.hasOwn(profile, field) && profile[field] !== "") preset[field] = profile[field];
   try {
     await save_presets({ presets: [...state.launch.presets.filter(item => item.name !== id), preset] });
     show_toast(`已存为预设「${preset.label || id}」`);
@@ -1620,6 +1622,8 @@ async function finish_message(result, room_id, drafts) {
   state.query = "";
   state.mention_only = false;
   state.host_only = false;
+  state.authors = [];
+  state.card_kinds = [];
   element("search-input").value = "";
   element("mention-filter").setAttribute("aria-pressed", "false");
   state.page = 1;
@@ -1895,9 +1899,13 @@ function attachment_markup(files = []) {
         <a class="attachment-media-name" ${download} download title="下载 ${name}">${name}<small>${attachment_size(file.size)}</small></a></div>`;
     }
     const content = `${attachment_file_icon(file.file_name)}<span class="attachment-name"><span title="${name}">${name}</span><small>${attachment_kind(file.file_name)[0]} · ${attachment_size(file.size)}</small></span>`;
-    return `<div class="attachment-file">${file.content_type === "application/pdf" || is_text_attachment(file)
+    const previewable = file.content_type === "application/pdf" || is_text_attachment(file);
+    return `<div class="attachment-file">${previewable
       ? `<button type="button" class="attachment-file-main" ${preview_attributes}>${content}</button>`
       : `<a class="attachment-file-main" ${download} download aria-label="下载 ${name}">${content}</a>`}
+      ${previewable ? `<button type="button" class="attachment-download" ${preview_attributes} title="预览 ${name}">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M2 12s3.6-7 10-7 10 7 10 7-3.6 7-10 7S2 12 2 12Z"/><circle cx="12" cy="12" r="3"/></svg>
+      </button>` : ""}
       <a class="attachment-download" ${download} download aria-label="下载 ${name}" title="下载 ${name}">
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 3v12m-5-5 5 5 5-5M4 15v4a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2v-4"/></svg>
       </a></div>`;
@@ -3162,6 +3170,11 @@ function read_room_files(room_id, path = "", offset = 0, query = "", root = 0) {
   return local_launch_request("room-files", { room_id, path, offset, ...(query ? { query } : { root }), token: localStorage.getItem(`discuss-access:${room_id}`) });
 }
 
+/** Read the selected member's local skill catalog through the same owner-authenticated connection. */
+function read_member_skills(room_id, name) {
+  return local_launch_request("room-skills", { room_id, name, token: localStorage.getItem(`discuss-access:${room_id}`) });
+}
+
 /**
  * Open one image, video or audio file of the room's project for the preview's viewer and players. The computer's own
  * page gets a short-lived address its website streams from disk (seeking reads only what is needed); another device
@@ -3446,7 +3459,14 @@ function creation_launch_options() {
   const { enabled, provider, model, api_key_ref, mode } = state.launch.scheduler;
   return { ...launch_options(), ...(enabled && provider && model && api_key_ref ? { scheduler: { provider, model, api_key_ref, ...(mode ? { mode } : {}) } } : {}),
     ...(state.create_host_workflows ? { host_workflows: true } : {}),
-    ...(state.create_api_max_requests !== DEFAULT_API_MAX_REQUESTS ? { api_max_requests: state.create_api_max_requests } : {}) };
+    ...(state.create_api_max_requests !== DEFAULT_API_MAX_REQUESTS ? { api_max_requests: state.create_api_max_requests } : {}),
+    ...(state.create_image_generation ? { image_generation: true } : {}) };
+}
+
+/** Whether the new room lets its members draw with this computer's image service. */
+function write_create_image_generation(value) {
+  state.create_image_generation = Boolean(value);
+  publish_view();
 }
 
 /** How many model requests one execution of the new room's API members may make (0 = no limit). */
@@ -3492,6 +3512,15 @@ async function set_room_api_max_requests(value) {
   const room_id = state.room.id;
   const token = localStorage.getItem(`discuss-access:${room_id}`) || "";
   try { await local_launch_request("room-settings", { room_id, token, api_max_requests: value }); }
+  catch (error) { notify("error", error.message); throw error; }
+  await reload_room_models();
+}
+
+/** Let this room's members draw with this computer's image service, or stop them; applies from each member's next execution. */
+async function set_room_image_generation(enabled) {
+  const room_id = state.room.id;
+  const token = localStorage.getItem(`discuss-access:${room_id}`) || "";
+  try { await local_launch_request("room-settings", { room_id, token, image_generation: Boolean(enabled) }); }
   catch (error) { notify("error", error.message); throw error; }
   await reload_room_models();
 }
@@ -4920,12 +4949,13 @@ function view_snapshot() {
     attachment_drafts: state.attachment_drafts.map(item => ({ id: item.id, file_name: item.file.name, size: item.file.size, preview_url: item.preview_url,
       uploading: state.sending_message && !item.uploaded })),
     upload_status: state.upload_status, sending_message: state.sending_message, sending_preview: state.sending_preview,
-    mention_only: state.mention_only, host_only: state.host_only, messages_loading: Boolean(state.messages_loading), messages_failure: state.messages_failure || "", reply_to: state.reply_to, editing_queued: state.editing_queued?.id ?? null,
+    mention_only: state.mention_only, host_only: state.host_only, authors: state.authors, card_kinds: state.card_kinds,
+    source_filter: state.mention_only || state.host_only || state.authors.length > 0 || state.card_kinds.length > 0, messages_loading: Boolean(state.messages_loading), messages_failure: state.messages_failure || "", reply_to: state.reply_to, editing_queued: state.editing_queued?.id ?? null,
     access: access_snapshot(), admin: admin_snapshot(),
     device: { id: state.device.id, needs: state.device.needs, pairing_code: state.device.pairing_code,
       prompt: state.device.prompt ? { title: state.device.prompt.title, description: state.device.prompt.description, confirm_label: state.device.prompt.confirm_label } : null },
     tab: state.tab, snapshot_id: state.snapshot_id, context_dirty: state.context_dirty,
-    theme: document.documentElement.dataset.theme, fields, experts, launch: structuredClone(state.launch), named_followup: state.named_followup, create_discussion: state.create_discussion, create_goal: state.create_goal, create_chain_rounds: state.create_chain_rounds, create_host_workflows: state.create_host_workflows, create_api_max_requests: state.create_api_max_requests };
+    theme: document.documentElement.dataset.theme, fields, experts, launch: structuredClone(state.launch), named_followup: state.named_followup, create_discussion: state.create_discussion, create_goal: state.create_goal, create_chain_rounds: state.create_chain_rounds, create_host_workflows: state.create_host_workflows, create_api_max_requests: state.create_api_max_requests, create_image_generation: state.create_image_generation };
 }
 
 /** Update a shared draft using the same input events as the original controls; `publish: false` leaves the views to keep their own copy. */
@@ -4985,10 +5015,19 @@ function set_view_reply(message) {
 }
 
 /** Apply filters to the continuous transcript through the existing controller. */
-async function filter_view({ query = state.query, mention = state.mention_only, host = state.host_only, page = 1 }) {
+async function filter_view({ query = state.query, mention = state.mention_only, host = state.host_only, authors = state.authors, kinds = state.card_kinds, page = 1 }) {
+  const same_query = query.trim() === state.query && page === state.page;
   state.query = query.trim();
   state.mention_only = mention;
   state.host_only = host;
+  state.authors = [...authors];
+  state.card_kinds = [...kinds];
+  // Speaker and card filters apply to the loaded transcript in the page; only a new search reads the site.
+  if (same_query) {
+    element("mention-filter").setAttribute("aria-pressed", String(mention));
+    publish_view();
+    return;
+  }
   state.page = page;
   state.messages_loading = true;
   state.messages_failure = "";
@@ -5182,14 +5221,14 @@ window.discuss_view = { snapshot: view_snapshot, write_field: write_view_field, 
   start_drag: start_directory_drag, reconnect: reconnect_live_updates, stop_label, local_request: local_launch_request,
   attachment_markup, attachment_size, attachment_file_icon, drop_attachments, paste_attachments, set_text_preview: (open) => { state.text_preview = open; }, set_image_viewer: (open) => { state.image_viewer = open; }, attachment_url,
   write_expert: write_view_expert, add_instance: add_view_instance, add_preset: add_preset_instance, platform_of, execute: execute_view_action, theme: change_view_theme,
-  reload_workflows, workflow_preset, write_create_host_workflows, write_create_api_max_requests, set_room_api_max_requests, set_room_extra_directories, set_room_project_directory,
+  reload_workflows, workflow_preset, write_create_host_workflows, write_create_api_max_requests, write_create_image_generation, set_room_api_max_requests, set_room_image_generation, set_room_extra_directories, set_room_project_directory,
   admin: { register: register_admin, login: login_admin, logout: logout_admin,
     update_profile: update_admin_profile, avatar_from_file: admin_avatar_from_file, validate: validate_admin_form,
     sessions: admin_sessions, revoke: revoke_admin_sessions, change_password: change_admin_password },
   device: { request: device_request, pair: pair_this_device, take_scanned: take_scanned_pairing, invite: invite_device, renew: renew_this_device, forget: forget_pairing,
     label: device_label, prompt_confirm: () => state.device.prompt?.run(), prompt_cancel: () => state.device.prompt?.cancel() },
   request: request_json, rewind_plan, identities: IDENTITIES, display_name, mention_handles, mentioned_members, render_room_markdown, sources: SOURCE_LABELS,
-  set_member_access, set_member_model, allow_denials, set_member_adapter, reload_room_models, read_room_files, read_room_page, read_room_media, read_execution_details, interject_execution, read_member_chat, send_member_chat, stop_member_chat, pause_execution, limits_label, stop_reason_label, participant_model, participant_files, participant_session_hint, participant_access,
+  set_member_access, set_member_model, allow_denials, set_member_adapter, reload_room_models, read_member_skills, read_room_files, read_room_page, read_room_media, read_execution_details, interject_execution, read_member_chat, send_member_chat, stop_member_chat, pause_execution, limits_label, stop_reason_label, participant_model, participant_files, participant_session_hint, participant_access,
   turn_label, turn_guidance, round_groups, limit_rounds, progress_speaker, brief_meta, max_message_length: MAX_MESSAGE_LENGTH, provenance: message_provenance, format_time };
 
 restore_theme();

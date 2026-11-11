@@ -1993,8 +1993,8 @@ class DiscussionHandler(BaseHTTPRequestHandler):
         """Forward authenticated browser requests to the shared Node entrypoint and pin their website."""
         site = self.local_request_site(method)
         route = parts[2:]
-        if method == "OPTIONS" and route in (["settings"], ["launch"], ["room-models"], ["room-files"], ["room-page"], ["room-media"], ["execution-details"], ["room-member"], ["room-member-access"], ["room-member-allow"], ["room-member-adapter"], ["room-member-model"], ["room-profiles"], ["room-restore"], ["room-fork"], ["models"], ["api-key"], ["api-check"],
-                                             ["scheduler-check"], ["tts-settings"], ["tts"], ["tts-release"], ["local-speech"], ["stt"], ["weixin"], ["pick-directory"], ["browse-directory"], ["projects"], ["presets"], ["workflows"], ["room-workflow"], ["room-settings"], ["machine-link"], ["device-pairing"], ["devices"]):
+        if method == "OPTIONS" and route in (["settings"], ["launch"], ["room-models"], ["room-skills"], ["room-files"], ["room-page"], ["room-media"], ["execution-details"], ["room-member"], ["room-member-access"], ["room-member-allow"], ["room-member-adapter"], ["room-member-model"], ["room-profiles"], ["room-restore"], ["room-fork"], ["models"], ["api-key"], ["api-check"],
+                                             ["scheduler-check"], ["image-settings"], ["tts-settings"], ["tts"], ["tts-release"], ["local-speech"], ["stt"], ["weixin"], ["pick-directory"], ["browse-directory"], ["projects"], ["presets"], ["workflows"], ["room-workflow"], ["room-settings"], ["machine-link"], ["device-pairing"], ["devices"]):
             return self.respond({"ok": True})
         if route == ["settings"] and method in ("GET", "POST"):
             command = "settings"
@@ -2012,11 +2012,11 @@ class DiscussionHandler(BaseHTTPRequestHandler):
             command = "api-check"
         elif route == ["scheduler-check"] and method == "POST":
             command = "scheduler-check"
-        elif route in (["tts-settings"], ["tts"], ["tts-release"], ["local-speech"], ["stt"], ["weixin"]) and method == "POST":
+        elif route in (["image-settings"], ["tts-settings"], ["tts"], ["tts-release"], ["local-speech"], ["stt"], ["weixin"]) and method == "POST":
             command = route[0]
         elif route in (["room-member"], ["room-member-access"], ["room-member-allow"], ["room-member-adapter"], ["room-member-model"]) and method == "POST":
             command = route[0]
-        elif route in (["room-profiles"], ["room-files"], ["room-page"], ["room-media"], ["execution-details"], ["room-restore"], ["room-fork"]) and method == "POST":
+        elif route in (["room-profiles"], ["room-skills"], ["room-files"], ["room-page"], ["room-media"], ["execution-details"], ["room-restore"], ["room-fork"]) and method == "POST":
             command = route[0]
         elif route == ["pick-directory"] and method == "POST":
             command = "pick-directory"
@@ -2042,10 +2042,10 @@ class DiscussionHandler(BaseHTTPRequestHandler):
             if self.headers.get_content_type() != "application/json":
                 raise ValueError("本机操作须使用 application/json")
             payload = self.read_payload()
-            if command in ("start", "room-config", "room-models", "room-files", "room-page", "room-media", "execution-details", "room-member", "room-member-access", "room-member-allow", "room-member-adapter", "room-member-model", "room-profiles", "room-restore", "room-fork", "room-workflow", "room-settings", "workflows"):
+            if command in ("start", "room-config", "room-models", "room-skills", "room-files", "room-page", "room-media", "execution-details", "room-member", "room-member-access", "room-member-allow", "room-member-adapter", "room-member-model", "room-profiles", "room-restore", "room-fork", "room-workflow", "room-settings", "workflows"):
                 payload.pop("access_file", None)
                 payload.update(site=site, entry="web")
-            if command in ("room-files", "room-page", "room-media", "execution-details", "room-workflow", "room-settings", "room-member", "room-member-access", "room-member-allow", "room-member-model", "room-member-adapter") and not payload.get("token") and not self.bridge_origin:
+            if command in ("room-skills", "room-files", "room-page", "room-media", "execution-details", "room-workflow", "room-settings", "room-member", "room-member-access", "room-member-allow", "room-member-model", "room-member-adapter") and not payload.get("token") and not self.bridge_origin:
                 with closing(connect_db(self.server.database)) as connection:
                     self.admin_as_owner(connection, payload.get("room_id", ""))
                     payload["token"] = self.headers.get("X-Discussion-Token", "")
@@ -2405,6 +2405,7 @@ class DiscussionHandler(BaseHTTPRequestHandler):
                         execution["task"] = ""
                         execution["task_id"] = None
                         execution["reason"] = ""
+                        execution["task_author"] = None
                     execution["last_note"] = ""
                     execution["notes"] = []
                     hidden_answer = isinstance(execution.get("answer_id"), int) and execution["answer_id"] > boundary

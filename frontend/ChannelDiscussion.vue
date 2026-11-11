@@ -449,7 +449,7 @@ watch(() => free_busy.value.length > 0, (busy, _previous, cleanup) => {
   const timer = setInterval(() => { free_now.value = Math.floor(Date.now() / 1000); }, 1000);
   cleanup(() => clearInterval(timer));
 }, { immediate: true });
-const free_working = computed(() => view.value.query || view.value.mention_only || view.value.host_only ? [] : free_busy.value);
+const free_working = computed(() => view.value.query ? [] : free_busy.value);
 /** Progress notes per execution id; only counts come with the room, so texts are read when a card shows more or a fold opens. */
 const execution_notes = ref(new Map());
 /** Late text is owner-only and fetched only when its fold opens; never cache it across rooms or loss of access. */
@@ -660,7 +660,7 @@ const routing_messages = stable_computed(() => new Set(room.value.scheduler_rout
 /** The host's own plans stand beside the decisions, under the message they followed. */
 const host_arrangements = stable_computed(() => {
   const rows = new Map();
-  if (view.value.query || view.value.mention_only || view.value.host_only) return rows;
+  if (view.value.query) return rows;
   for (const item of room.value.host_arrangements || []) {
     rows.set(item.after_message_id, [...(rows.get(item.after_message_id) || []),
       { ...item, label: item.turns.map((turn) => bridge.display_name(turn.expert)).join(" → ") }]);
@@ -861,8 +861,7 @@ const workflow_options = computed(() => {
     .map((item) => ({ key: `workflow:${item.id}`, workflow: item, group: "工作流", enabled: room_workflow.value?.id === item.id, disabled: workflow_blocked.value }));
 });
 /**
- * Platform skills a user may call with "/". A fixed list, never every installed skill: most are the AIs' own operating
- * notes that load by themselves. Picking one only inserts `$id` (rendered as a skill tag, see markdown.mjs) and adds no
+ * Platform skills a user may call with an unaddressed "/". Picking one only inserts `$id` (rendered as a skill tag, see markdown.mjs) and adds no
  * wording of its own: what to do is the user's to write. It brings no member.
  */
 const PLATFORM_SKILL_COMMANDS = [
@@ -914,12 +913,41 @@ const sub_workflow_options = computed(() => {
     .map((item) => ({ key: `sub-workflow:${item.id}`, group: `工作流「${workflow.label}」的子工作流`,
       skill: { ...item, prompt: `用工作流「${workflow.label}」的子工作流「${item.label}」（${item.id}）：` } }));
 });
-const mention_options = computed(() => mention_context.value?.command ? [...mode_options.value, ...(can_pick_workflow.value ? workflow_options.value : []), ...sub_workflow_options.value, ...skill_options.value] : [
+const member_skill_catalog = ref({});
+const skill_member = computed(() => mention_context.value?.member || "");
+let skill_read_version = 0;
+watch([() => room.value?.id, skill_member], async ([room_id, name], [previous_room]) => {
+  const version = ++skill_read_version;
+  if (room_id !== previous_room) member_skill_catalog.value = {};
+  if (!name || member_skill_catalog.value[name]?.available) return;
+  if (!view.value.access?.can_manage || !(view.value.launch.available || view.value.launch.remote)) {
+    member_skill_catalog.value = { ...member_skill_catalog.value, [name]: { available: false, reason: "连接成员所在电脑后可读取技能" } };
+    return;
+  }
+  member_skill_catalog.value = { ...member_skill_catalog.value, [name]: null };
+  try {
+    const catalog = await bridge.read_member_skills(room_id, name);
+    if (version === skill_read_version) member_skill_catalog.value = { ...member_skill_catalog.value, [name]: catalog };
+  } catch (error) {
+    if (version !== skill_read_version) return;
+    member_skill_catalog.value = { ...member_skill_catalog.value, [name]: { available: false, reason: "技能列表未载入，重新输入 / 可重试" } };
+    bridge.notify("error", error.message);
+  }
+});
+const member_skills_loading = computed(() => !!skill_member.value && !member_skill_catalog.value[skill_member.value]);
+const member_skill_options = computed(() => {
+  const query = mention_context.value?.query.toLocaleLowerCase() || "";
+  return (member_skill_catalog.value[skill_member.value]?.skills || [])
+    .filter(skill => `${skill.id} ${skill.label} ${skill.description}`.toLocaleLowerCase().includes(query))
+    .map(skill => ({ key: `member-skill:${skill.id}`, skill, group: `${bridge.display_name(skill_member.value)} 的技能` }));
+});
+const member_skills_empty = computed(() => member_skill_catalog.value[skill_member.value]?.reason || "没有匹配的本机技能");
+const mention_options = computed(() => skill_member.value ? member_skill_options.value : mention_context.value?.command ? [...mode_options.value, ...(can_pick_workflow.value ? workflow_options.value : []), ...sub_workflow_options.value, ...skill_options.value] : [
   ...mention_members.value.map((name) => ({ key: `member:${name}`, name, group: "成员" })),
   ...mention_folder_self.value.map((option) => ({ ...option, group: mention_files_group.value })),
   ...mention_files.value.map((entry) => ({ key: `file:${entry.path}`, entry, group: mention_files_group.value })),
 ]);
-const mention_heading = computed(() => mention_context.value?.command ? "选择模式、工作流或技能" : project_directory.value ? "选择成员或文件" : "选择成员");
+const mention_heading = computed(() => skill_member.value ? `${bridge.display_name(skill_member.value)} 的本机技能` : mention_context.value?.command ? "选择模式、工作流或技能" : project_directory.value ? "选择成员或文件" : "选择成员");
 /** Until the user moves the selection, a bare @ selects the host, who takes unaddressed messages; otherwise the first. */
 const mention_default = computed(() => {
   const host = !mention_context.value?.query && !mention_context.value?.command && free_members.value.find((member) => member.role === "host");
@@ -953,7 +981,12 @@ function find_command(value, start, end = start) {
   if (start !== end || !(can_use_modes.value || can_pick_workflow.value || can_call_skill.value)) return null;
   const match = value.slice(0, start).match(/(?:^|\s)\/([^\s/]*)$/u);
   if (!match) return null;
-  return { start: start - match[1].length - 1, end: start, query: match[1], command: true };
+  const command_start = start - match[1].length - 1;
+  const before = value.slice(0, command_start).trimEnd();
+  const names = free_members.value.map(member => member.name);
+  const mentioned = bridge.mentioned_members(before, names);
+  const member = names.find(name => mentioned.has(name) && bridge.mention_handles(name, names).some(handle => before.endsWith(`@${handle}`)));
+  return { start: command_start, end: start, query: match[1], command: true, member };
 }
 
 /**
@@ -1051,6 +1084,7 @@ function mention_keydown(event) {
     mention_index.value = (mention_options.value.indexOf(mention_active.value) + direction + mention_options.value.length) % mention_options.value.length;
     nextTick(() => mention_list.value?.querySelector('[aria-selected="true"]')?.scrollIntoView({ block: "nearest" }));
   } else if (["Enter", "Tab"].includes(event.key) && mention_active.value) select_mention(mention_active.value);
+  else if (["Enter", "Tab"].includes(event.key) && member_skills_loading.value) { /* Wait for the catalog, never send its unfinished slash. */ }
   else return;
   event.preventDefault();
   event.stopPropagation();
@@ -1178,7 +1212,34 @@ function build_answer_preview(message) {
 }
 
 /** Merge execution cards without adding them to message counts, references or round navigation. */
-const transcript_messages = computed(() => free_layout.value);
+const transcript_messages = computed(() => view.value.source_filter ? free_layout.value.filter(matches_filter) : free_layout.value);
+/** Card kinds the header filter offers, each recognised from how the transcript shows it. */
+const CARD_KINDS = {
+  // Failed cards, a message whose request failed, and refused operations reported under a message.
+  failed: (item) => Boolean(item.failure) || (!item.slot_card && ((request_badges.value.get(item.id) || []).some((badge) => badge.color === "error")
+    || (execution_reports.value.get(item.id) || []).some((report) => report.denials?.length))),
+  stopped: (item) => Boolean(item.cancelled_turn || item.cancelled_execution) || Boolean(!item.slot_card && item.withdrawn),
+  arrangement: (item) => Boolean(item.arrangement),
+  scheduler: (item) => !item.slot_card && (scheduler_decisions.value.has(item.id) || routing_messages.value.has(item.id) || recommendations.value.has(item.id)),
+  changes: (item) => !item.slot_card && (execution_reports.value.get(item.id) || []).some((report) => report.changes?.length),
+};
+/** Leave the filter and scroll the full transcript to this card, or to the message it shows under. */
+async function locate(item) {
+  const target = item.slot_card ? layout_anchors.get(item.id) : item.id;
+  await act("filter", { query: "", mention: false, host: false, authors: [], kinds: [] });
+  await nextTick();
+  if (target != null) jump_to(target);
+}
+/** The header filter: a card shows when any checked speaker or card kind matches it. */
+function matches_filter(item) {
+  if (view.value.card_kinds.some((kind) => CARD_KINDS[kind]?.(item))) return true;
+  if (item.slot_card) return false;
+  const host = room.value.members?.find((member) => member.role === "host")?.name;
+  // The host view also carries the program's notices to the host and Goal progress.
+  if (view.value.host_only && (item.kind === "moderation" || ["notice", "goal"].includes(item.source) || (host && item.author === host))) return true;
+  if (view.value.authors.includes(item.author)) return true;
+  return view.value.mention_only && [...new Set(["用户", bridge.display_name("用户")])].some((handle) => (item.text || "").includes(`@${handle}`));
+}
 /** A discussion opened mid-room shows the topic where it began (or at the end before anyone answers); otherwise it stays on top. */
 const topic_anchor = stable_computed(() => {
   const started = Date.parse(room.value?.session?.created_at || "");
@@ -1203,7 +1264,7 @@ const end_anchor = stable_computed(() => {
 const failure_wakes = computed(() => new Map((room.value.free?.failure_wakes || []).map((wake) => [wake.message_id, wake.execution_id])));
 /** Failed free-room executions, shaped like working cards so a failure stays where its work was shown. */
 const free_failures = computed(() => {
-  if (view.value.query || view.value.mention_only || view.value.host_only) return [];
+  if (view.value.query) return [];
   const names = new Map((room.value.free?.members || []).map((member) => [member.id, member.name]));
   // A host failure whose wake-up has started is shown by that wake-up's card in the same place.
   const followed = new Set((room.value.free?.executions || []).map((execution) => failure_wakes.value.get(execution.request_message_id)).filter(Boolean));
@@ -1252,6 +1313,8 @@ function toggle_rewound(id) {
  * meanwhile (`dispatched_after`, the latest message when it was dispatched, lies past that group), goes under the last
  * top-level message at dispatch instead of back up into the old nesting, where it would appear far above the reader.
  */
+/** Slot card id → id of the message it shows under; filled with the layout, read when locating a filtered card. */
+const layout_anchors = new Map();
 const free_layout = computed(() => {
   const messages = view.value.messages.filter((message) => !rewound_runs.value.hidden.has(message.id)
     && !(message.source === "notice" && failure_wakes.value.has(message.id)));
@@ -1284,7 +1347,7 @@ const free_layout = computed(() => {
   });
   // A failure whose request is no longer shown is dropped rather than piled at the end.
   free_failures.value.forEach(place);
-  if (!view.value.query && !view.value.mention_only && !view.value.host_only) {
+  if (!view.value.query) {
     for (const plan of room.value.host_arrangements || []) place({ id: plan.key || `plan-${plan.id}`, slot_card: true,
       arrangement: plan, created_at: new Date(plan.created_at).getTime() / 1000 });
     for (const turn of room.value.cancelled_turns || []) place({ id: `cancelled-${turn.key || turn.id}`, author: turn.expert,
@@ -1305,12 +1368,15 @@ const free_layout = computed(() => {
     ?? (typeof item.created_at === "number" ? item.created_at : new Date(item.created_at).getTime() / 1000);
   const by_start = (left, right) => (slot_time(left) - slot_time(right)) || ((left.execution_id || 0) - (right.execution_id || 0));
   const ordered = [];
-  const visit = (item) => {
+  layout_anchors.clear();
+  // Each card remembers the message it hangs under, so a filtered card can lead back to its place in the full transcript.
+  const visit = (item, anchor = null) => {
     ordered.push(item);
-    for (const child of (slots.get(item.id) || []).sort(by_start)) visit(child);
+    if (anchor !== null) layout_anchors.set(item.id, anchor);
+    for (const child of (slots.get(item.id) || []).sort(by_start)) visit(child, item.slot_card ? anchor : item.id);
   };
-  (slots.get(0) || []).sort(by_start).forEach(visit);
-  roots.forEach(visit);
+  (slots.get(0) || []).sort(by_start).forEach((item) => visit(item));
+  roots.forEach((item) => visit(item));
   return [...ordered, ...tail];
 });
 /** Id of the top-level message at or before `index`, where a shown range can start without splitting a slot; 0 shows all. */
@@ -1411,7 +1477,8 @@ function note_scroll() {
 const message_groups = stable_computed(() => {
   const groups = [];
   for (const message of transcript_messages.value.slice(render_start.value)) {
-    if (message.slot_card && groups.length) { groups.at(-1).messages.push(message); continue; }
+    // Filtered cards stand apart from their messages, so each one takes its own day.
+    if (message.slot_card && groups.length && !view.value.source_filter) { groups.at(-1).messages.push(message); continue; }
     const date = new Date(message.slot_card ? (message.created_at ?? 0) * 1000 : message.created_at);
     const key = date.toLocaleDateString();
     if (groups.at(-1)?.key !== key) groups.push({ key, label: date_formatter.format(date), messages: [] });
@@ -1577,7 +1644,7 @@ watch(() => view.value.messages, (messages) => {
   rising_id = sent.id;
   paint_rising(send_entry.get());
 }, { flush: "post" });
-watch([() => view.value.room?.id, () => view.value.query, () => view.value.mention_only, () => view.value.host_only], () => {
+watch([() => view.value.room?.id, () => view.value.query, () => view.value.source_filter, () => view.value.authors, () => view.value.card_kinds], () => {
   jump_target.value = null;
   active_message.value = null;
   reset_preview();
@@ -2151,7 +2218,7 @@ function copy_message(message) { act("copy", `${view.value.room_site}/r/${room.v
 
 <template>
   <section class="channel-conversation" role="tabpanel" aria-label="消息">
-    <div v-if="view.query || view.mention_only || view.host_only" class="channel-filter-summary"><span>{{ [view.query && `“${view.query}”`, view.host_only && '只看主持', view.mention_only && `@${bridge.display_name(author)}`].filter(Boolean).join(' · ') }} · {{ view.messages_loading ? '正在筛选…' : `${view.total} 条结果` }}</span><UButton label="清除筛选" size="xs" variant="link" color="neutral" @click="search = ''; act('filter', { query: '', mention: false, host: false })" /></div>
+    <div v-if="view.query || view.source_filter" class="channel-filter-summary"><span>{{ [view.query && `“${view.query}”`, [view.host_only && '主持人', ...view.authors.map((name) => bridge.display_name(name)), view.mention_only && `@${bridge.display_name('用户')}`, view.card_kinds.length && `${view.card_kinds.length} 类卡片`].filter(Boolean).join('、')].filter(Boolean).join(' · ') }} · {{ view.messages_loading ? '正在筛选…' : `${view.source_filter ? transcript_messages.length : view.total} 条结果` }}</span><UButton label="清除筛选" size="xs" variant="link" color="neutral" @click="search = ''; act('filter', { query: '', mention: false, host: false, authors: [], kinds: [] })" /></div>
     <nav v-if="view.messages.length" ref="message_map" class="channel-message-map" :style="{ '--nav-entry-height': `${NAV_ENTRY_HEIGHT}px` }" aria-label="发言快速导航" @wheel.stop.passive="browse_navigation" @pointerleave="close_preview" @focusout="close_preview" @keydown.esc.stop="close_preview" @contextmenu="navigation_context_menu" @pointerdown="start_scrub" @pointermove="move_scrub" @pointerup="end_scrub" @pointercancel="end_scrub">
       <div class="channel-map-track">
         <div v-for="section in navigation_sections" :key="section.entries[0].key"v-memo="[section, preview_open, active_round === section.number ? active_message : null, section_preview_position(section)]" class="channel-map-round" :style="{ '--round-message-count': section.count }">
@@ -2186,13 +2253,13 @@ function copy_message(message) { act("copy", `${view.value.room_site}/r/${room.v
       <button type="submit" class="selection-comment-send" aria-label="添加到对话" title="添加到对话（Enter）"><UIcon name="i-lucide-arrow-up" /></button>
     </form>
     <ExcerptEditCard v-if="mark_editing" :key="mark_editing.excerpt.id" :comment="mark_editing.excerpt.comment" :style="{ left: `${mark_editing.left}px`, top: `${mark_editing.top}px` }" @save="save_mark" @cancel="close_mark" @remove="remove_mark" />
-    <div ref="transcript" v-memo="[message_groups, view.messages_loading, view.messages_failure, view.sending_preview, message_round_labels, free, room.session, can_manage, expanded_answers.size, reader.state.message_id, room.title, view.query, view.mention_only, view.host_only, topic_anchor, end_anchor, request_badges, execution_reports, recommendations, adopting, scheduler_decisions, host_arrangements, pending, execution_notes, open_working_notes, editing, rewound_runs, retracting_id, armed_cards.size, menu_open_id, stopping_member, free_now, allowing, allow_errors, late_answers, has_draft, view.sending_message, routing_messages, speaking_turn, room.free]" class="channel-transcript" aria-label="聊天记录" @scroll="schedule_track_scroll" @wheel.passive="resume_tracking($event); stop_following($event)" @touchstart.passive="resume_tracking" @touchmove.passive="stop_following" @touchend.passive="end_touch" @touchcancel.passive="end_touch" @pointerdown="stop_following" @keydown="resume_tracking($event); stop_following($event)">
-      <div v-if="!view.query && !view.mention_only && !view.host_only && !topic_anchor && render_start === 0" class="channel-message-group channel-topic-group"><TopicCard :ref="(card) => topic_card = card" @edit="emit('edit')" /></div>
+    <div ref="transcript" v-memo="[message_groups, view.messages_loading, view.messages_failure, view.sending_preview, message_round_labels, free, room.session, can_manage, expanded_answers.size, reader.state.message_id, room.title, view.query, view.source_filter, view.authors, view.card_kinds, topic_anchor, end_anchor, request_badges, execution_reports, recommendations, adopting, scheduler_decisions, host_arrangements, pending, execution_notes, open_working_notes, editing, rewound_runs, retracting_id, armed_cards.size, menu_open_id, stopping_member, free_now, allowing, allow_errors, late_answers, has_draft, view.sending_message, routing_messages, speaking_turn, room.free]" class="channel-transcript" aria-label="聊天记录" @scroll="schedule_track_scroll" @wheel.passive="resume_tracking($event); stop_following($event)" @touchstart.passive="resume_tracking" @touchmove.passive="stop_following" @touchend.passive="end_touch" @touchcancel.passive="end_touch" @pointerdown="stop_following" @keydown="resume_tracking($event); stop_following($event)">
+      <div v-if="!view.query && !view.source_filter && !topic_anchor && render_start === 0" class="channel-message-group channel-topic-group"><TopicCard :ref="(card) => topic_card = card" @edit="emit('edit')" /></div>
       <div v-for="group in message_groups" :key="group.key" class="channel-message-group">
         <USeparator :label="group.label" class="channel-date-divider" />
         <template v-for="message in group.messages" :key="message.id">
-        <DiscussionEndCard v-if="message.id === end_anchor && !view.query && !view.mention_only && !view.host_only" />
-        <TopicCard v-if="message.id === topic_anchor && !view.query && !view.mention_only && !view.host_only" :ref="(card) => topic_card = card" @edit="emit('edit')" />
+        <DiscussionEndCard v-if="message.id === end_anchor && !view.query && !view.source_filter" />
+        <TopicCard v-if="message.id === topic_anchor && !view.query && !view.source_filter" :ref="(card) => topic_card = card" @edit="emit('edit')" />
         <!-- A free-room working card holds the slot its answer will take. -->
         <ScheduleCard v-if="message.arrangement" icon="i-lucide-list-ordered" plain title="主持人创建的发言安排" label="主持人安排" toggle-label="展开或收起各专家的任务">
           <template #text>主持人安排：{{ host_arrangements.get(message.arrangement.after_message_id)?.find((plan) => plan.id === message.arrangement.id)?.label }}<small v-if="message.arrangement.after_message_id">耗时 {{ format_elapsed(arrangement_seconds(message.arrangement, view.messages.find((item) => item.id === message.arrangement.after_message_id))) }}</small></template>
@@ -2406,6 +2473,7 @@ function copy_message(message) { act("copy", `${view.value.room_site}/r/${room.v
           <template #text><WorkingText text="智能调度：正在分析" seed="智能调度" dots /></template>
         </ScheduleCard>
         <SchedulerDecision v-for="decision in scheduler_decisions.get(message.id) || []" :key="`decision-${decision.id}`" :decision="decision" :free="free" />
+        <div v-if="view.source_filter" class="channel-locate"><UButton label="在原文中定位" icon="i-lucide-locate" size="xs" color="neutral" variant="link" @click="locate(message)" /></div>
         </template>
         </template>
       </div>
@@ -2433,13 +2501,13 @@ function copy_message(message) { act("copy", `${view.value.room_site}/r/${room.v
           </template>
         </UChatMessage>
       </motion.div>
-      <div v-if="(topic_anchor === 'end' || end_anchor === 'end') && !view.query && !view.mention_only && !view.host_only" class="channel-message-group">
+      <div v-if="(topic_anchor === 'end' || end_anchor === 'end') && !view.query && !view.source_filter" class="channel-message-group">
         <TopicCard v-if="topic_anchor === 'end'" :ref="(card) => topic_card = card" @edit="emit('edit')" />
         <DiscussionEndCard v-if="end_anchor === 'end'" />
       </div>
       <div v-if="view.messages_loading && !transcript_messages.length" class="channel-message-group grid gap-6 py-6" role="status" aria-label="正在读取消息"><div v-for="row in 3" :key="row" class="grid gap-3"><USkeleton class="h-5 w-28" /><USkeleton class="h-4 w-full" /><USkeleton class="h-4 w-2/3" /></div></div>
       <div v-else-if="view.messages_failure" class="channel-empty" role="status"><p>{{ view.messages_failure }}</p><UButton label="重新读取消息" icon="i-lucide-refresh-cw" color="neutral" variant="soft" @click="act('refresh')" /></div>
-      <div v-else-if="!transcript_messages.length && !free_working.length" class="channel-empty"><UIcon :name="view.query || view.mention_only || view.host_only ? 'i-lucide-search' : 'i-lucide-hash'" /><h2>{{ view.query || view.mention_only || view.host_only ? '没有找到消息' : room.title }}</h2><p>{{ view.query || view.mention_only || view.host_only ? '试试其他关键词，或清除筛选。' : bridge.empty_discussion_message(room) }}</p></div>
+      <div v-else-if="!transcript_messages.length && !free_working.length" class="channel-empty"><UIcon :name="view.query || view.source_filter ? 'i-lucide-search' : 'i-lucide-hash'" /><h2>{{ view.query || view.source_filter ? '没有找到消息' : room.title }}</h2><p>{{ view.query || view.source_filter ? '试试其他关键词，或清除筛选。' : bridge.empty_discussion_message(room) }}</p></div>
     </div>
     <div v-if="(transcript_messages.length && !follow_tail) || listen_here?.touch || reader.state.message_id" class="channel-latest-dock">
       <button v-if="listen_here?.touch" type="button" class="channel-listen-pill" @mousedown.prevent @click="start_quote"><UIcon name="i-lucide-message-square-quote" />添加到对话</button>
@@ -2485,7 +2553,9 @@ function copy_message(message) { act("copy", `${view.value.room_site}/r/${room.v
               </template>
             </button>
             </template>
-            <p v-if="mention_files_loading" class="channel-mention-empty">正在读取项目目录…</p>
+            <p v-if="member_skills_loading" class="channel-mention-empty">正在读取本机技能…</p>
+            <p v-else-if="skill_member && !mention_options.length" class="channel-mention-empty">{{ member_skills_empty }}</p>
+            <p v-else-if="mention_files_loading" class="channel-mention-empty">正在读取项目目录…</p>
             <p v-else-if="!mention_options.length" class="channel-mention-empty">{{ mention_context?.command ? '没有匹配的工作流或技能' : project_directory ? '没有匹配的成员或文件' : '没有匹配的成员' }}</p>
           </div>
         </template>

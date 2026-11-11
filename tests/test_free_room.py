@@ -1333,6 +1333,16 @@ class HostTests(HostRoomTests):
         self.assertEqual(status, 201, saved)
         return saved["message"]["id"]
 
+    def test_timeline_names_who_wrote_the_message_each_execution_started_from(self):
+        """Only the owner's messages read as the owner's; the host's dispatch and hand-back are the host's own."""
+        FreeRoomTests.say(self, "写第一集")
+        self.host_dispatch(to=["Codex"])
+        self.work("Codex")
+        self.work("Claude")
+        timeline = self.request(f"{self.path}/timeline")[1]["executions"]
+        self.assertEqual(sorted((item["member"], item["task_author"]) for item in timeline),
+                         sorted([("Claude", "用户"), ("Codex", "Claude"), ("Claude", "Claude")]))
+
     def test_withdrawing_a_host_relay_stops_its_running_step_and_nothing_follows_or_hands_back(self):
         """A loop between two members, as the host sent it, ends at once when the host withdraws that dispatch."""
         FreeRoomTests.say(self, "写到第 10 集")

@@ -125,53 +125,6 @@ export function row_status(row, now_ms) {
 }
 
 /**
- * What the latest task came down to. Its chain ends with the execution finishing last (a running one ends now) and runs
- * back through what each step waited for: the execution still at work latest before it was requested, its dispatcher on
- * a tie (a host summing up waits on the member who finished last, though the record hangs the summary under the host's
- * earlier execution, so the chain follows time, not the dispatch record). It stops at an execution nothing dispatched:
- * the one a user's message started. No time threshold decides where a task begins. This chain is the critical path: the
- * task could not end sooner. `start`/`end` bound it; `members` sums its work time per member, longest first; `wait` is its
- * time between requests and the first sign of work. Running, failed and stalled counts cover every row given.
- */
-export function round_digest(rows, now_ms) {
-  if (!rows.length) return { total: 0, start: 0, end: 0, path: new Set(), members: [], wait: 0, running: [], failed: 0, stalled: 0 };
-  const last = rows.reduce((latest, row) => row.end > latest.end || (row.end === latest.end && row.item.state === "running") ? row : latest);
-  // What a row waited for: of the executions started before it was requested, the one at work latest by then.
-  const waited_on = (row) => {
-    let best = null, best_at = -Infinity;
-    for (const other of rows) {
-      if (other.key === row.key || other.start >= row.queue[0]) continue;
-      const at = Math.min(other.end, row.queue[0]);
-      if (at > best_at || (at === best_at && other.key === row.parent)) { best = other; best_at = at; }
-    }
-    return best;
-  };
-  const path = new Set();
-  let start = last.start;
-  for (let row = last; row && !path.has(row.key); row = row.item.parent_id ? waited_on(row) : null) {
-    path.add(row.key);
-    start = Math.min(start, row.start);
-  }
-  const by_key = new Map(rows.map((row) => [row.key, row]));
-  const members = new Map();
-  let wait = 0;
-  for (const key of path) {
-    const row = by_key.get(key);
-    const breakdown = row_breakdown(row);
-    wait += breakdown.wait;
-    members.set(row.item.member, (members.get(row.item.member) || 0) + (row.end - row.start - breakdown.wait));
-  }
-  const running = rows.filter((row) => row.item.state === "running");
-  return {
-    total: last.end - start, start, end: last.end,
-    path, wait, running,
-    members: [...members].map(([member, ms]) => ({ member, ms })).sort((a, b) => b.ms - a.ms),
-    failed: rows.filter((row) => row.item.state === "failed").length,
-    stalled: running.filter((row) => row_status(row, now_ms).tone === "warn").length,
-  };
-}
-
-/**
  * One execution's story in time order for its detail: each phase segment and each progress note, so a reader follows
  * what the agent did and said. Note texts come separately and may still be loading.
  */
@@ -304,33 +257,103 @@ export function recent_window(executions, count) {
 }
 
 /**
- * The room day by day, newest first: a day is a unit people already use, so nothing here sets a threshold. For each, how
- * many executions, how long work actually went on (time with at least one execution running, overlaps counted once),
- * who did the work and for how long (`work`, longest first), how long requests waited before work began, and whether
- * any is still running or failed. `start` is the day's midnight.
+ * The room cut into tasks, oldest first. A task starts only where the owner asked for something new while the room was
+ * idle: an execution started by a message the owner wrote (`task_author` "用户") that no earlier execution answered, with
+ * every execution requested before it already ended. Everything else joins the task in progress: the owner's
+ * interjections while work runs, the host's dispatches and proactive posts, hand-backs, the program's wakes, Goal runs and
+ * retries. No time threshold and no dispatch chain decide it.
+ *
+ * Each task: `key` (the execution that opened it), `opener` (that execution's item), `items` (each `{ item, stages }`),
+ * `keys` (their row keys), `interjections` (the owner's messages that joined it while work ran: `key`, `task_id`, `task`,
+ * `at`), and `opened` (false for the first task when it does not begin at an owner's message, as when older executions
+ * were not loaded).
  */
-export function daily_overview(executions, now_ms) {
-  const days = new Map();
-  for (const item of executions) {
-    const stages = execution_stages(item, now_ms);
-    const date = new Date(stages.start);
-    const midnight = new Date(date.getFullYear(), date.getMonth(), date.getDate()).getTime();
-    const day = days.get(midnight) || { key: midnight, start: midnight, count: 0, running: false, failed: false, work: new Map(), wait: 0, spans: [] };
-    day.count += 1;
-    day.running ||= item.state === "running";
-    day.failed ||= item.state === "failed";
-    day.work.set(item.member, (day.work.get(item.member) || 0) + (stages.work ? stages.work[1] - stages.work[0] : 0));
-    day.wait += (stages.work ? stages.work[0] : stages.end) - stages.queue[0];
-    day.spans.push([stages.start, stages.end]);
-    days.set(midnight, day);
-  }
-  return [...days.values()].sort((a, b) => b.start - a.start).map(({ spans, ...day }) => {
-    let busy = 0, reach = -Infinity;
-    for (const [start, end] of spans.sort((a, b) => a[0] - b[0])) {
-      if (end > reach) { busy += end - Math.max(start, reach); reach = end; }
+export function timeline_segments(executions, now_ms) {
+  const ordered = executions.map((item) => ({ item, stages: execution_stages(item, now_ms) }))
+    .sort((a, b) => a.stages.queue[0] - b.stages.queue[0] || a.item.id - b.item.id);
+  const segments = [];
+  const asked = new Set();
+  let busy_until = -Infinity;
+  for (const entry of ordered) {
+    const { item, stages } = entry;
+    const key = `${item.source}:${item.id}`;
+    const new_ask = item.task_author === "用户" && item.task_id != null && !asked.has(item.task_id);
+    if (!segments.length || (new_ask && stages.queue[0] >= busy_until)) {
+      segments.push({ key, opener: item, opened: new_ask, items: [], keys: new Set(), interjections: [] });
+    } else if (new_ask) {
+      segments.at(-1).interjections.push({ key, task_id: item.task_id, task: item.task || "", at: stages.queue[0] });
     }
-    return { ...day, busy, work: [...day.work].map(([member, ms]) => ({ member, ms })).sort((a, b) => b.ms - a.ms) };
-  });
+    const segment = segments.at(-1);
+    segment.items.push(entry);
+    segment.keys.add(key);
+    if (item.task_id != null) asked.add(item.task_id);
+    busy_until = Math.max(busy_until, stages.end);
+  }
+  return segments;
+}
+
+/**
+ * The tasks as a list, newest first: what opened each (`task`, `task_id`, and the answer to it as `result`), when it began
+ * and last ended, how many executions, who did the work and for how long (`work`, longest first; members working at once
+ * each count), and how its time went in one sweep (`parts`, `wait`; see time_parts). Also whether any is still running
+ * or failed, and how many interjections joined it.
+ */
+export function task_overview(segments) {
+  return segments.map((segment) => {
+    const work = new Map();
+    for (const { item, stages } of segment.items) work.set(item.member, (work.get(item.member) || 0) + (stages.work ? stages.work[1] - stages.work[0] : 0));
+    return {
+      key: segment.key, opened: segment.opened, task: segment.opener.task || "", task_id: segment.opener.task_id || null,
+      result: segment.opener.result || "", interjections: segment.interjections,
+      start: Math.min(...segment.items.map(({ stages }) => stages.start)), end: Math.max(...segment.items.map(({ stages }) => stages.end)),
+      count: segment.items.length,
+      running: segment.items.some(({ item }) => item.state === "running"), failed: segment.items.some(({ item }) => item.state === "failed"),
+      work: [...work].map(([member, ms]) => ({ member, ms })).sort((a, b) => b.ms - a.ms),
+      ...time_parts(segment.items),
+    };
+  }).reverse();
+}
+
+/**
+ * What the latest task came down to, for the sentence at the top, the replay and "最慢": the rows of the last task
+ * (`keys`), their span (`start`, `end`, `total`), each member's work time (`members`, longest first), the time it stood
+ * waiting with nobody at work (`wait`), and its slowest recorded phase. Running, failed and stalled counts cover every
+ * row given, so live work elsewhere is never missed.
+ */
+export function task_digest(rows, keys, now_ms) {
+  const running = rows.filter((row) => row.item.state === "running");
+  const counts = { running, failed: rows.filter((row) => row.item.state === "failed").length,
+    stalled: running.filter((row) => row_status(row, now_ms).tone === "warn").length };
+  const task = rows.filter((row) => keys.has(row.key));
+  if (!task.length) return { ...counts, keys, start: 0, end: 0, total: 0, members: [], wait: 0, slowest: null };
+  const start = Math.min(...task.map((row) => row.start));
+  const end = Math.max(...task.map((row) => row.end));
+  const members = new Map();
+  for (const row of task) members.set(row.item.member, (members.get(row.item.member) || 0) + (row.work ? row.work[1] - row.work[0] : 0));
+  const { wait } = time_parts(task.map((row) => ({ item: row.item, stages: row })));
+  return { ...counts, keys, start, end, total: end - start, wait, slowest: timeline_summary(task).slowest,
+    members: [...members].map(([member, ms]) => ({ member, ms })).sort((a, b) => b.ms - a.ms) };
+}
+
+/** One sweep over a task's executions: work shared among whoever works at each moment, then waiting, then idle. */
+function time_parts(members) {
+  const spans = members.flatMap(({ item, stages }) => [
+    ...(stages.work ? [{ from: stages.work[0], to: stages.work[1], member: item.member }] : []),
+    { from: stages.queue[0], to: stages.work ? stages.work[0] : stages.end, wait: true },
+  ]).filter((span) => span.to > span.from);
+  const edges = [...new Set(spans.flatMap((span) => [span.from, span.to]))].sort((a, b) => a - b);
+  const shares = new Map();
+  let wait = 0, idle = 0;
+  for (let index = 0; index + 1 < edges.length; index += 1) {
+    const [from, to] = [edges[index], edges[index + 1]];
+    const active = spans.filter((span) => span.from <= from && span.to >= to);
+    const working = [...new Set(active.filter((span) => span.member !== undefined).map((span) => span.member))];
+    if (working.length) for (const member of working) shares.set(member, (shares.get(member) || 0) + (to - from) / working.length);
+    else if (active.length) wait += to - from;
+    else idle += to - from;
+  }
+  return { wait, parts: [...[...shares].map(([member, ms]) => ({ member, ms })).sort((a, b) => b.ms - a.ms),
+    ...(wait ? [{ wait: true, ms: wait }] : []), ...(idle ? [{ idle: true, ms: idle }] : [])] };
 }
 
 /**
