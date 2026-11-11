@@ -719,13 +719,12 @@ async function start_comment() {
 
 function cancel_comment() { commenting.value = null; hold_selection(null); }
 
-/** Put the selection (and comment) in the composer of the file's room as an excerpt, fold the window and go to the messages. */
-async function add_excerpt() {
+/** Put the selection (and comment) in the composer of the room shown now as an excerpt, fold the window and go to the messages. */
+function add_excerpt() {
   const { text, start, end, from, to } = commenting.value;
   const excerpt = { path: reference_path.value, name: preview_name.value, start, end, text, from, to, comment: comment.value.trim() };
   cancel_comment();
   clear_selection();
-  await to_tab_room();
   act("tab", "discussion");
   fold(() => put_excerpt(excerpt));
 }

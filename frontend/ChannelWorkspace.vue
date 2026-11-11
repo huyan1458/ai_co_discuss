@@ -97,9 +97,9 @@ const source_filter_items = computed(() => {
     onUpdateChecked: (checked) => toggle_author(member.name, checked), onSelect: keep_open,
   }));
   const groups = [[
-    { type: "checkbox", label: "主持人", icon: "i-lucide-crown", description: "主持人的发言、主持说明与程序通知", checked: view.value.host_only, onUpdateChecked: (checked) => act("filter", { host: checked }), onSelect: keep_open },
+    { type: "checkbox", label: "主持人", icon: "i-lucide-crown", checked: view.value.host_only, onUpdateChecked: (checked) => act("filter", { host: checked }), onSelect: keep_open },
     { type: "checkbox", label: "用户", icon: "i-lucide-user", checked: view.value.authors.includes("用户"), onUpdateChecked: (checked) => toggle_author("用户", checked), onSelect: keep_open },
-    { type: "checkbox", label: `@${bridge.display_name("用户")}`, icon: "i-lucide-at-sign", description: "提到用户的消息", checked: view.value.mention_only, onUpdateChecked: (checked) => act("filter", { mention: checked }), onSelect: keep_open },
+    { type: "checkbox", label: `@${bridge.display_name("用户")}`, icon: "i-lucide-at-sign", checked: view.value.mention_only, onUpdateChecked: (checked) => act("filter", { mention: checked }), onSelect: keep_open },
   ]];
   if (members.length) groups.push([{ type: "label", label: "成员" }, ...members]);
   groups.push([{ type: "label", label: "卡片" }, ...CARD_FILTERS.map((kind) => ({
@@ -109,6 +109,15 @@ const source_filter_items = computed(() => {
   if (view.value.source_filter) groups.push([{ label: "清除筛选", icon: "i-lucide-x", onSelect: () => act("filter", { host: false, mention: false, authors: [], kinds: [] }) }]);
   return groups;
 });
+// On phones the filter menu hugs the screen's right edge: an oversized offset is clamped back by the collision padding.
+const narrow_query = window.matchMedia("(max-width: 700px)");
+const narrow = ref(narrow_query.matches);
+const track_narrow = (event) => { narrow.value = event.matches; };
+narrow_query.addEventListener("change", track_narrow);
+onBeforeUnmount(() => narrow_query.removeEventListener("change", track_narrow));
+const source_filter_content = computed(() => (narrow.value
+  ? { align: "end", sideOffset: 4, alignOffset: -1000, collisionPadding: 8 }
+  : { align: "end", sideOffset: 4 }));
 const show_work_status = computed(() => !workflow_page.value && Boolean(room.value) && !room.value.archived && !(rail_inline.value && show_rail.value));
 const brief_preview = computed(() => {
   const template = document.createElement("template");
@@ -376,7 +385,7 @@ function resize_nav_by_key(event) {
                 <template #trailing><UButton v-if="search || view.query" icon="i-lucide-x" color="neutral" variant="ghost" size="xs" aria-label="清除搜索" @click="search = ''; act('filter', { query: '' })" /><UButton type="submit" icon="i-lucide-corner-down-left" color="neutral" variant="ghost" size="xs" aria-label="搜索" :disabled="!room" /></template>
               </UInput>
             </form>
-            <UDropdownMenu v-if="!workflow_page && view.tab === 'discussion'" :items="source_filter_items" :disabled="!room" :content="{ align: 'end', sideOffset: 4 }" :ui="{ content: 'channel-menu channel-source-menu' }"><UButton icon="i-lucide-list-filter" :variant="view.source_filter ? 'soft' : 'ghost'" color="neutral" size="sm" class="channel-icon-button channel-source-filter" :aria-pressed="view.source_filter" aria-label="筛选消息与卡片" title="筛选消息与卡片" :disabled="!room" /></UDropdownMenu>
+            <UDropdownMenu v-if="!workflow_page && view.tab === 'discussion'" :items="source_filter_items" :disabled="!room" :content="source_filter_content" :ui="{ content: 'channel-menu channel-source-menu' }"><UButton icon="i-lucide-list-filter" :variant="view.source_filter ? 'soft' : 'ghost'" color="neutral" size="sm" class="channel-icon-button channel-source-filter" :aria-pressed="view.source_filter" aria-label="筛选消息与卡片" title="筛选消息与卡片" :disabled="!room" /></UDropdownMenu>
           </div>
           <UTooltip v-if="!workflow_page" :text="info_label"><UButton icon="i-lucide-panel-right" color="neutral" variant="ghost" size="sm" class="channel-icon-button channel-panel-toggle channel-info-button" :aria-label="info_label" :disabled="!room && !(rail_inline && view.tab === 'discussion')" :aria-expanded="rail_inline && view.tab === 'discussion' ? show_rail : info_open" @click="toggle_info" /></UTooltip>
         </header>

@@ -1,6 +1,6 @@
 <script setup>
 /**
- * The open workflow's parts, floating on its canvas under the toolbar: the main flow and its sub-workflows (each a
+ * The open workflow's parts, floating on its canvas under the toolbar (on a phone, in its bottom-left corner): the main flow and its sub-workflows (each a
  * workflow of its own, used on demand beside the main flow, with its own SKILL.md, cards and canvas). Picking one shows
  * its canvas and SKILL.md; all of them save together. Folded, it names where you are; on a phone it starts folded.
  */
@@ -104,7 +104,10 @@ function remove(id) {
   .workflow-parts-remove { opacity: 1; }
   .workflow-parts { top: 66px; }
 }
-/* Phone and upright tablet: the toolbar shows icons only; the list keeps clear of the canvas's right-hand zoom buttons. */
-.workflow-parts.is-compact { top: 58px; left: 10px; max-width: calc(100% - 64px); }
-@media (pointer: coarse) { .workflow-parts.is-compact { top: 64px; } }
+/* Phone and upright tablet: the top row holds the toolbar and zoom buttons, so the parts sit in the bottom-left corner,
+   10px in like the canvas panels, and open upwards. */
+.workflow-parts.is-compact { top: auto; bottom: 10px; left: 10px; display: flex; flex-direction: column-reverse; max-width: calc(100% - 20px); font-size: 12px; }
+.workflow-parts.is-compact .workflow-parts-list { margin: 0 0 3px; padding: 0 0 3px; border-top: 0; border-bottom: 1px solid var(--ui-border-muted); }
+.workflow-parts.is-compact :is(.workflow-parts-toggle, .workflow-parts-back) { min-height: 28px; }
+.workflow-parts.is-compact .workflow-parts-back { width: 28px; }
 </style>

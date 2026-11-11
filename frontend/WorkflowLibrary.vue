@@ -103,10 +103,10 @@ function start_resize(event) {
       <WorkflowCanvas v-if="draft" ref="canvas" :key="canvas_key" v-model:flow="current.flow" v-model:agents="current.agents" :reserved="reserved" :compact="stacked"
         :shared="scope ? draft.agents : null" :subs="scope ? null : subs" :new-sub="() => library.add_sub(false)"
         @update:shared="(value) => { draft.agents = value; }" @open-sub="library.enter_sub" @open-skill="show_skill_text">
-        <template #actions>
-          <UTooltip v-if="!skill_open && !stacked" text="展开 SKILL.md：主持人照它派活"><UButton icon="i-lucide-panel-right-open" label="SKILL.md" size="sm" color="neutral" variant="ghost" @click="set_skill_open(true)" /></UTooltip>
+        <template #actions="{ iconsOnly }">
+          <UTooltip v-if="!skill_open && !stacked" text="展开 SKILL.md：主持人照它派活"><UButton icon="i-lucide-panel-right-open" :label="iconsOnly ? undefined : 'SKILL.md'" aria-label="展开 SKILL.md" size="sm" color="neutral" variant="ghost" @click="set_skill_open(true)" /></UTooltip>
           <UTooltip :text="dirty ? '保存（Ctrl+S）：有未保存的修改' : '没有未保存的修改'"><span class="workflow-library-save">
-            <UButton icon="i-lucide-save" :label="stacked ? undefined : '保存'" aria-label="保存" size="sm" class="channel-primary-button" :disabled="!dirty" :loading="busy" @click="library.save()" />
+            <UButton icon="i-lucide-save" :label="iconsOnly ? undefined : '保存'" aria-label="保存" :size="stacked ? 'xs' : 'sm'" class="channel-primary-button" :disabled="!dirty" :loading="busy" @click="library.save()" />
             <i v-if="dirty" class="workflow-library-dirty" /></span></UTooltip>
         </template>
       </WorkflowCanvas>

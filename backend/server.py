@@ -729,12 +729,15 @@ def list_rooms(connection, params=None):
     where = "WHERE EXISTS (SELECT 1 FROM room_creations WHERE room_id=rooms.id AND submission_id=?)" if identifier else ""
     rows = connection.execute(f"""SELECT rooms.*,
         COALESCE(stats.message_count,0) AS message_count,COALESCE(stats.latest_id,0) AS latest_id,
-        (SELECT created_at FROM messages WHERE id=stats.latest_id) AS latest_at
+        (SELECT created_at FROM messages WHERE id=stats.latest_id) AS latest_at,
+        EXISTS (SELECT 1 FROM member_executions e WHERE e.room_id=rooms.id
+            AND e.status IN ('dispatched','started') AND e.lease_until>?) AS running
         FROM rooms LEFT JOIN room_message_stats stats ON stats.room_id=rooms.id {where}
-        GROUP BY rooms.id ORDER BY rooms.created_at, rooms.id""", (identifier,) if identifier else ())
+        GROUP BY rooms.id ORDER BY rooms.created_at, rooms.id""", (int(time.time()), *((identifier,) if identifier else ())))
     directory = {row["room_id"]: dict(row) for row in connection.execute("SELECT * FROM room_directory")}
     assignments = {row["room_id"]: row["folder_id"] for row in connection.execute("SELECT room_id,folder_id FROM room_folder_assignments")}
-    rooms = [{**dict(row), "archived": bool(directory[row["id"]]["archived"]), "folder_id": assignments[row["id"]]} for row in rows]
+    rooms = [{**dict(row), "archived": bool(directory[row["id"]]["archived"]), "running": bool(row["running"]),
+              "folder_id": assignments[row["id"]]} for row in rows]
     return {"rooms": sorted(rooms, key=lambda room: directory[room["id"]]["position"]),
             **folder_directory(connection)}
 

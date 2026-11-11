@@ -216,7 +216,7 @@ onBeforeUnmount(stop_preview);
               <div class="speech-rates" role="group" aria-label="朗读语速" :title="service.rate === false ? '当前接入不支持调节语速' : undefined"><UButton v-for="rate in rates" :key="rate.value" :label="rate.label" color="neutral" variant="ghost" size="xs" :disabled="service.rate === false" :class="{ chosen: settings.speech_rate === rate.value }" :aria-pressed="settings.speech_rate === rate.value" @click="settings.speech_rate = rate.value; save()" /></div>
             </div>
             <div class="speech-row"><span>语气</span>
-              <UInput v-if="service.context" v-model="own.context" :maxlength="200" placeholder="可选，如：像朋友聊天一样自然地读" aria-label="朗读语气提示" size="sm" class="w-full" @change="save" />
+              <UTextarea v-if="service.context" v-model="own.context" :maxlength="200" :rows="1" autoresize :maxrows="4" placeholder="可选，如：像朋友聊天一样自然地读" aria-label="朗读语气提示" size="sm" class="w-full" @change="save" />
               <UInput v-else disabled placeholder="当前接入不支持自定义语气" aria-label="朗读语气提示" size="sm" class="w-full" />
             </div>
             <p class="fine-print speech-note">输入框右下角的播报按钮自动读新回复摘要</p>

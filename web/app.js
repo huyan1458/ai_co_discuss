@@ -1686,6 +1686,20 @@ async function delete_queued(id) {
 }
 
 /**
+ * Send a queued message now. The row leaves the tray at once (QueuedMessages hides it) and the message shows as a
+ * sending card until the refreshed transcript carries it; a refusal brings the row back with the reason.
+ */
+async function send_queued(id) {
+  const item = state.room?.free?.queued_messages?.items?.find(entry => entry.id === id);
+  // A send from the composer already owns the sending card; this one then just waits in its row.
+  const preview = item && !state.sending_preview
+    ? { author: "用户", text: item.text, created_at: new Date().toISOString(), files: item.attachments.map(file => file.file_name) } : null;
+  if (preview) { state.sending_preview = preview; publish_view(); }
+  try { await queue_request({ action: "send", id }); }
+  finally { if (preview && state.sending_preview === preview) { state.sending_preview = null; publish_view(); } }
+}
+
+/**
  * The message being edited left the queue (sent or deleted elsewhere): stop editing so sending works again,
  * keeping the edited text in the composer as an ordinary draft.
  */
@@ -5195,7 +5209,7 @@ async function execute_view_action(name, value) {
     load_room_configuration, save_room_configuration, interrupt_member, retry_delivery, retract_message, retract_latest, stop_room, stop_host_checkin, rewind_and_send, fork_room, change_member, reorder_speakers, invite_member,
     enable_room_workflow, move_workflow_members, sync_room_workflow, set_room_host_workflows,
     adopt_recommendation, rate_decision,
-    queue_send: id => queue_request({ action: "send", id }), queue_delete: delete_queued,
+    queue_send: send_queued, queue_delete: delete_queued,
     queue_reorder: ids => queue_request({ action: "reorder", ids }), queue_resume: () => queue_request({ action: "resume" }),
     queue_toggle: enabled => queue_request({ action: "queueing", enabled }), queue_edit: edit_queued, queue_cancel_edit: cancel_queued_edit,
     busy: () => { throw new Error("上一个操作仍在处理中，请稍候；长时间无响应请刷新页面"); },

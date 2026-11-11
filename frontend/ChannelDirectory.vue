@@ -74,14 +74,18 @@ function room_time_title(room) {
 // Everything a room row and its menus read besides the room itself, so a row re-renders only when this, the room or its
 // time label changes rather than on every view publish.
 const row_state = computed(() => JSON.stringify([view.value.directory_pending, view.value.archive_pending, view.value.backup_pending,
-  view.value.folders, view.value.room_site, manual_order.value, view.value.room?.id, pending.value, workflow_page.value]));
+  view.value.folders, view.value.room_site, manual_order.value, view.value.room?.id, pending.value, workflow_page.value, open_room_running.value]));
+/** The open room's own live state is fresher than the directory's, so its light follows that. */
+const open_room_running = computed(() => (view.value.room?.free?.members || [])
+  .some((member) => ["dispatched", "started"].includes(member.execution?.status)));
 /**
  * Plain values for one room row. They are read here, in the row's own render, because the menu and tooltip slots are run
  * by those components, which would otherwise track the view and re-render every row on each publish.
  */
 function room_row(room, index, count) {
   return { items: actions(room, index, room.folder_id || null, count), active: !workflow_page.value && room.id === view.value.room?.id, busy: Boolean(pending.value),
-    archiving: view.value.archive_pending.includes(room.id), time: room_time(room), title: room_time_title(room) };
+    archiving: view.value.archive_pending.includes(room.id), time: room_time(room), title: room_time_title(room),
+    running: room.id === view.value.room?.id ? open_room_running.value : Boolean(room.running) };
 }
 /** Plain values for one folder's heading row, and the key it re-renders on; read here for the same reason as room_row. */
 function folder_head(folder, index) {
@@ -191,7 +195,7 @@ function actions(room, index, folder_id, folder_room_count) {
       <UContextMenu :items="row.items" :ui="{ content: 'channel-menu channel-topic-menu' }">
         <div class="channel-room-row" :class="{ active: row.active }" :data-drag-room="room.id">
           <button class="channel-room-grip" data-drag-handle :aria-label="`拖动 ${room.title}`" title="拖动排序；上下方向键移动" :disabled="row.busy" @pointerdown="bridge.start_drag($event)" @keydown.up.prevent="act('move_channel', { id: room.id, direction: -1, folder_id: room.folder_id || null })" @keydown.down.prevent="act('move_channel', { id: room.id, direction: 1, folder_id: room.folder_id || null })"><UIcon name="i-lucide-grip-vertical" /></button>
-          <button class="channel-room-select" data-drag-title :title="row.title" :aria-label="room.title" :aria-current="row.active ? 'page' : undefined" @pointerdown="!pending && bridge.start_drag($event)" @click="emit('select', room.id)"><span>{{ room.title }}</span><small class="channel-room-time" aria-hidden="true">{{ row.time }}</small></button>
+          <button class="channel-room-select" data-drag-title :title="row.title" :aria-label="room.title" :aria-current="row.active ? 'page' : undefined" @pointerdown="!pending && bridge.start_drag($event)" @click="emit('select', room.id)"><span>{{ room.title }}</span><small class="channel-room-time" aria-hidden="true">{{ row.time }}</small><i v-if="row.running" class="channel-room-running" title="正在执行" /></button>
           <div class="channel-room-actions">
             <UTooltip :text="room.archived ? '恢复房间' : '存档房间'" :ui="{ content: 'channel-topic-tooltip' }">
               <UButton :icon="room.archived ? 'i-lucide-archive-restore' : 'i-lucide-archive'" :aria-label="`${room.archived ? '恢复' : '存档'} ${room.title}`" size="xs" color="neutral" variant="ghost" :disabled="row.busy || row.archiving" @click="emit('manage', { room, action: room.archived ? 'restore' : 'archive' })" />

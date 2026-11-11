@@ -397,8 +397,8 @@ onBeforeUnmount(() => { document.removeEventListener("pointerdown", close_on_out
         </span>
       </div>
       <div v-if="can_flip" class="expert-card-face expert-card-back" :inert="!visible_back" :aria-hidden="!visible_back">
-        <!-- nowheel / nopan: inside the workflow canvas the wheel and a finger scroll these settings instead of zooming or panning (Vue Flow skips such elements); no effect elsewhere. -->
-        <div class="expert-card-back-body nowheel nopan">
+        <!-- nowheel / nopan / nodrag: inside the workflow canvas the wheel and a finger scroll these settings instead of zooming, panning or dragging the card (Vue Flow skips such elements); no effect elsewhere. -->
+        <div class="expert-card-back-body nowheel nopan nodrag">
         <div class="expert-card-heading"><strong>{{ member_label }}<span v-if="member_label !== name">{{ name }}</span><span>设置</span></strong>
           <span class="expert-card-heading-tools">
           <button type="button" class="expert-card-back-tool" :class="{ 'is-set': description }" :aria-label="`编辑 ${name} 的名称与描述`" :title="describe_title" @click="describing = true"><UIcon name="i-lucide-user-pen" /></button>

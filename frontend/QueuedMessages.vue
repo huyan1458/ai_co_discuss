@@ -21,8 +21,9 @@ const list = ref(null);
 const drag = ref(null);
 let press = null;
 
+// The row being sent now leaves the tray at once, even if a refresh in flight still lists it; a refusal brings it back.
 const items = computed(() => {
-  const queued = props.queue.items || [];
+  const queued = (props.queue.items || []).filter((item) => item.id !== sending.value);
   if (!local_order.value) return queued;
   const by_id = new Map(queued.map((item) => [item.id, item]));
   const ordered = local_order.value.map((id) => by_id.get(id)).filter(Boolean);
@@ -191,10 +192,10 @@ onBeforeUnmount(release);
 
 <style scoped>
 /* A tray tucked behind the composer's top edge, a little narrower than it, as in Codex. */
-.queued-messages { position: relative; display: flex; flex-direction: column; max-height: 30dvh; margin: 0 12px -12px; padding: 4px 4px 16px; overflow-x: hidden; overflow-y: auto; overscroll-behavior: contain;
+.queued-messages { position: relative; display: flex; flex-direction: column; max-height: 30dvh; margin: 0 12px -12px; padding: 2px 4px 14px; overflow-x: hidden; overflow-y: auto; overscroll-behavior: contain;
   border: 1px solid var(--ui-border); border-bottom: 0; border-radius: 12px 12px 0 0; background: var(--ui-bg-elevated); }
 .queued-messages.is-dragging { overflow-y: hidden; }
-.queued-row { position: relative; display: flex; align-items: center; gap: 8px; min-height: 32px; padding: 0 2px 0 8px; border-radius: 8px; font-size: 13px; color: var(--ui-text-muted);
+.queued-row { position: relative; display: flex; align-items: center; gap: 8px; min-height: 28px; padding: 0 2px 0 8px; border-radius: 8px; font-size: 13px; color: var(--ui-text-muted);
   transition: transform .16s ease, opacity .18s, background .12s; -webkit-touch-callout: none; user-select: none; }
 .queued-row:hover { background: var(--ui-bg-accented); }
 .queued-row.is-reorderable { cursor: grab; }

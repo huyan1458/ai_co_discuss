@@ -139,6 +139,7 @@ html[data-theme^="channel"] .channel-menu.channel-directory-menu { min-width: 15
 .channel-room-select { display: flex; align-items: center; gap: 8px; min-width: 0; padding: 8px 4px; text-align: left; cursor: pointer; font-size: var(--channel-nav-text); user-select: none; touch-action: pan-y; }
 .channel-room-row.active .channel-room-select, .channel-folder-row.active .channel-folder-heading { color: var(--ui-text-highlighted); font-weight: 600; }
 .channel-room-select > [class*="icon"] { flex-shrink: 0; width: 17px; height: 17px; color: #808998; }
+.channel-room-running { flex-shrink: 0; width: 7px; height: 7px; margin-left: -2px; border-radius: 50%; background: #22c55e; box-shadow: 0 0 6px #22c55e99; }
 .channel-room-select > span:not([class*="icon"]) { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; flex: 1; }
 .channel-directory-count, .channel-room-time { flex-shrink: 0; margin-left: auto; padding-left: 6px; color: var(--ui-text-dimmed); font-size: var(--channel-nav-meta); font-weight: 400; font-variant-numeric: tabular-nums; }.channel-room-actions, .channel-folder-actions { display: flex; align-items: center; justify-content: flex-end; min-width: 48px; opacity: 0; pointer-events: none; }
 :is(.channel-directory-actions, .channel-room-actions, .channel-folder-actions) button { display: grid; place-items: center; width: 24px; height: 26px; padding: 5px; border-radius: 4px; color: color-mix(in srgb, var(--ui-text-muted) 75%, transparent); background: transparent; box-shadow: none; }
@@ -341,7 +342,9 @@ html[data-theme^="channel"] .pb-end:hover { border-color: color-mix(in srgb, #f0
 .channel-body { flex: 1; display: flex; min-height: 0; }
 .channel-workflow-body > .workflow-library { flex: 1; min-width: 0; }
 /* The workflow page's name, edited in the title: reads as the title until hovered or focused. */
-.channel-title-input { max-width: 100%; height: 30px; margin-left: -7px; padding: 0 6px; border: 1px solid transparent; border-radius: 7px; background: transparent; color: inherit;
+/* The title clips its text for the ellipsis; with the box inside, it must not clip the box's border. */
+.channel-title h1:has(> .channel-title-input) { overflow: visible; }
+.channel-title-input { display: block; max-width: 100%; height: 30px; margin-left: -7px; padding: 0 6px; border: 1px solid transparent; border-radius: 7px; background: transparent; color: inherit;
   font: inherit; outline: none; }
 .channel-title-input:hover { border-color: var(--ui-border-muted); }
 .channel-title-input:focus { border-color: var(--channel-accent, var(--ui-primary)); background: var(--ui-bg); }
@@ -709,6 +712,13 @@ html[data-theme^="channel"] :is(.channel-menu, .channel-select-menu) [data-slot=
 html[data-theme^="channel"] :is(.channel-menu, .channel-select-menu) [data-slot="item"][data-highlighted]::before { background: var(--channel-ghost-hover); }
 html[data-theme^="channel"] :is(.channel-menu, .channel-select-menu) [data-slot="itemLeadingIcon"] { width: 14px; height: 14px; color: #a4aebe; }
 html[data-theme^="channel"] .channel-menu [data-slot="label"] { color: #8e97a9; padding: 7px 8px 5px; font-size: 10px; font-weight: 400; }
+/* Phone filter menu: one line per item, tighter rows and group labels so the whole list fits without scrolling. */
+@media (max-width: 700px) {
+  html[data-theme^="channel"] .channel-menu.channel-source-menu { min-width: 168px; }
+  html[data-theme^="channel"] .channel-source-menu [data-slot="item"] { min-height: 30px; padding: 5px 8px; margin: 0; }
+  html[data-theme^="channel"] .channel-source-menu [data-slot="label"] { padding: 5px 8px 3px; }
+  html[data-theme^="channel"] .channel-source-menu [data-slot="separator"] { margin: 3px 0; }
+}
 /* Project paths are long: the menu stays readable width and paths end in an ellipsis (full path in the manager). */
 html[data-theme^="channel"] .channel-menu.project-menu { width: min(400px, calc(100vw - 32px)); }
 html[data-theme^="channel"] .project-menu :is([data-slot="itemWrapper"], [data-slot="itemLabel"], [data-slot="itemDescription"]) { min-width: 0; overflow: hidden; white-space: nowrap; text-overflow: ellipsis; }
