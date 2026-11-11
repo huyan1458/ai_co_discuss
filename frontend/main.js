@@ -46,5 +46,17 @@ function fit_workspace_to_keyboard() {
 }
 window.visualViewport?.addEventListener("resize", fit_workspace_to_keyboard);
 
+/**
+ * With the workspace fitted to the keyboard there is nothing to scroll the page to, yet iOS still scrolls it while typing
+ * (the candidate bar changes the keyboard's height, and it keeps the caret in view), shifting the whole layout up and
+ * back. Put it back at once whenever that happens.
+ */
+function keep_page_pinned() {
+  if (!document.documentElement.style.getPropertyValue("--keyboard-viewport-height")) return;
+  if (window.scrollX || window.scrollY) window.scrollTo(0, 0);
+}
+window.addEventListener("scroll", keep_page_pinned, { passive: true });
+window.visualViewport?.addEventListener("scroll", keep_page_pinned);
+
 if (document.readyState === "loading") document.addEventListener("DOMContentLoaded", mount_workspace);
 else mount_workspace();

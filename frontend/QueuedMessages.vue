@@ -1,5 +1,5 @@
 <script setup>
-import { computed, inject, onBeforeUnmount, ref } from "vue";
+import { computed, inject, onBeforeUnmount, reactive, ref, watch } from "vue";
 
 /**
  * Owner messages the site holds while members work, listed above the composer like Codex's queued follow-ups:
@@ -7,7 +7,7 @@ import { computed, inject, onBeforeUnmount, ref } from "vue";
  * A mouse drags a row at once; a finger holds it first, so a swipe still scrolls the list.
  */
 const props = defineProps({ queue: { type: Object, required: true }, roomId: { type: String, required: true } });
-const { view, act, pending } = inject("discussion");
+const { bridge, view, act, pending } = inject("discussion");
 const PREVIEW_DELAY_MS = 700;
 const LONG_PRESS_MS = 350;
 const MOUSE_DRAG_THRESHOLD_PX = 4;
@@ -39,10 +39,18 @@ function summary(item) {
   return images === item.attachments.length ? `${images} 张图片` : `${item.attachments.length} 个附件`;
 }
 
-function thumbnail(item) {
-  const image = item.attachments.find((file) => file.content_type?.startsWith("image/"));
-  return image ? `/api/rooms/${props.roomId}/attachments/${image.id}/content` : "";
-}
+/** The row's first image, if it carries one. */
+const image_of = (item) => item.attachments.find((file) => file.content_type?.startsWith("image/")) || null;
+// Thumbnail addresses by attachment id: the computer's rooms read the file through the relay, so it is fetched as the
+// row appears; until it is there, or if it cannot be read, the row shows an image icon instead.
+const thumbnails = reactive({});
+watch(items, (rows) => {
+  for (const image of rows.map(image_of)) {
+    if (!image || image.id in thumbnails) continue;
+    thumbnails[image.id] = "";
+    bridge.attachment_url({ room_id: props.roomId, id: image.id }).then((url) => { thumbnails[image.id] = url; }).catch(() => {});
+  }
+}, { immediate: true });
 
 async function send_now(item) {
   sending.value = item.id;
@@ -166,7 +174,10 @@ onBeforeUnmount(release);
             <UIcon v-else name="i-lucide-list-end" />
           </span>
         </UTooltip>
-        <img v-if="thumbnail(item)" :src="thumbnail(item)" alt="图片附件" class="queued-thumbnail" draggable="false">
+        <template v-if="image_of(item)">
+          <img v-if="thumbnails[image_of(item).id]" :src="thumbnails[image_of(item).id]" alt="图片附件" class="queued-thumbnail" draggable="false" @error="thumbnails[image_of(item).id] = ''">
+          <span v-else class="queued-thumbnail queued-thumbnail-icon" aria-label="图片附件"><UIcon name="i-lucide-image" /></span>
+        </template>
         <UTooltip :disabled="!!drag" :delay-duration="PREVIEW_DELAY_MS" :ui="{ content: 'queued-tooltip queued-preview' }">
           <span class="queued-text" tabindex="0" :aria-label="`排队消息 ${index + 1}：${summary(item).slice(0, 80)}`">{{ summary(item) }}</span>
           <template #content>
@@ -207,6 +218,7 @@ onBeforeUnmount(release);
 .queued-row.is-reorderable:hover .queued-leading, .queued-row.is-lifted .queued-leading { color: var(--ui-text-muted); }
 .queued-warning { color: var(--ui-warning); }
 .queued-thumbnail { flex-shrink: 0; width: 22px; height: 22px; border: 1px solid var(--ui-border-accented); border-radius: 4px; object-fit: cover; }
+.queued-thumbnail-icon { display: grid; place-items: center; color: var(--ui-text-muted); background: var(--ui-bg-elevated); font-size: 14px; }
 .queued-text { flex: 1; min-width: 0; overflow: hidden; color: var(--ui-text-toned); white-space: nowrap; text-overflow: ellipsis; outline: none; }
 .queued-row.is-failed .queued-text { color: var(--ui-text-muted); }
 .queued-actions { display: flex; flex-shrink: 0; align-items: center; gap: 0; }

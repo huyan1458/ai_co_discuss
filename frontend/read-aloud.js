@@ -44,6 +44,13 @@ const PACE_EASE = 0.3;
 // Silence added between paragraphs and between messages, on top of the service's own pauses.
 const PARAGRAPH_GAP_MS = 350;
 const MESSAGE_GAP_MS = 700;
+// Without word timings a request's duration is spread over its sentences; the pauses after punctuation and between
+// paragraphs take time too, so each counts as this many readable characters, at the end of the sentence it follows.
+const CLAUSE_PAUSE_CHARS = 1;
+const SENTENCE_PAUSE_CHARS = 2;
+const PARAGRAPH_PAUSE_CHARS = 3;
+const CLAUSE_MARKS = /[，,、：:；;—]/g;
+const SENTENCE_MARKS = /[。！？!?…]+/g;
 // The sentence being read stays between these fractions of the transcript height; when it leaves, it is brought to the anchor.
 const FOLLOW_TOP = 0.12;
 const FOLLOW_BOTTOM = 0.75;
@@ -401,15 +408,31 @@ export function use_read_aloud({ bridge, container, prepare = async () => {}, me
     return [...(head ? [head] : []), ...chunks.slice(index + 1)];
   }
 
-  /** When each sentence starts: readable characters matched to the word timings, or spread evenly if they do not line up. */
+  /**
+   * When each sentence starts: readable characters matched to the word timings, or, if they do not line up, the
+   * duration spread by readable characters plus the pauses after each sentence.
+   */
   function sentence_starts(chunk, marks, duration) {
     const times = [];
     for (const mark of marks) for (let count = readable_length(mark.w); count > 0; count -= 1) times.push(mark.t);
     const total = chunk.prefix + chunk.sentences.reduce((sum, sentence) => sum + readable_length(sentence.text), 0);
+    if (times.length >= total) {
+      let offset = chunk.prefix;
+      return chunk.sentences.map((sentence, index) => {
+        const at = index === 0 ? 0 : times[offset];
+        offset += readable_length(sentence.text);
+        return at;
+      });
+    }
+    const weights = chunk.sentences.map((sentence, index) => readable_length(sentence.text)
+      + (sentence.text.match(CLAUSE_MARKS) || []).length * CLAUSE_PAUSE_CHARS
+      + (sentence.text.match(SENTENCE_MARKS) || []).length * SENTENCE_PAUSE_CHARS
+      + (sentence.paragraph_end && index < chunk.sentences.length - 1 ? PARAGRAPH_PAUSE_CHARS : 0));
+    const weighted = chunk.prefix + weights.reduce((sum, weight) => sum + weight, 0);
     let offset = chunk.prefix;
-    return chunk.sentences.map((sentence, index) => {
-      const at = index === 0 ? 0 : times.length >= total ? times[offset] : (offset / Math.max(1, total)) * duration;
-      offset += readable_length(sentence.text);
+    return weights.map((weight, index) => {
+      const at = index === 0 ? 0 : (offset / Math.max(1, weighted)) * duration;
+      offset += weight;
       return at;
     });
   }
@@ -753,7 +776,9 @@ export function use_read_aloud({ bridge, container, prepare = async () => {}, me
   // Re-draw whenever the text may have been laid out again: the boxes are fixed to where it was. Switching pages or
   // tabs hides and re-shows the text without a window resize, so also watch the text's own box and page visibility.
   const redraw = () => { if (current) highlight(current); };
-  const redraw_visible = () => { if (document.visibilityState === "visible") { redraw(); follow_scroll(); } };
+  /** Redraw the highlight where the text is now and bring it back into view when following (the text was shown again). */
+  const refresh = () => { redraw(); follow_scroll(); };
+  const redraw_visible = () => { if (document.visibilityState === "visible") refresh(); };
   let watched = null;
   const layout_watch = typeof ResizeObserver === "function" ? new ResizeObserver(redraw) : null;
   window.addEventListener("resize", redraw);
@@ -770,7 +795,7 @@ export function use_read_aloud({ bridge, container, prepare = async () => {}, me
     layout_watch?.disconnect();
   }
 
-  const api = { state, start, read_document, rebind_document, stop: stop_reading, halt: stop, dispose, drain, follow, toggle_pause, body_of, unlock, set_broadcast, announce };
+  const api = { state, start, read_document, rebind_document, refresh, stop: stop_reading, halt: stop, dispose, drain, follow, toggle_pause, body_of, unlock, set_broadcast, announce };
   readers.add(api);
   return api;
 }

@@ -453,14 +453,21 @@ function fold(after) {
 async function unfold() {
   place_float();
   open.value = true;
-  if (reduced_motion()) return;
   await nextTick();
+  // The reading's highlight is drawn and followed again once the window has its full size and its scroll back.
+  if (reduced_motion()) { requestAnimationFrame(() => reader.refresh()); return; }
   requestAnimationFrame(() => {
     const element = frame.value;
     if (!element) return;
     set_frame(float_transform(element.getBoundingClientRect()), { opacity: "0", radius: "14px", transition: false });
     element.getBoundingClientRect();
     set_frame("", {});
+    const grown = (event) => {
+      if (event.target !== element || event.propertyName !== "transform") return;
+      element.removeEventListener("transitionend", grown);
+      reader.refresh();
+    };
+    element.addEventListener("transitionend", grown);
   });
 }
 

@@ -1055,6 +1055,7 @@ async function select_room(room_id) {
   state.context_dirty = false;
   state.topic_dirty = false;
   state.pending_submission = null;
+  state.sending_drafts = null;
   clear_attachment_drafts();
   state.launch.repair = null;
   state.launch.room_models = null;
@@ -1614,10 +1615,9 @@ async function invite_member({ name, access, project_access = "read", session_id
 /** Clear only the composer that produced the saved message. */
 async function finish_message(result, room_id, drafts) {
   show_toast(`留言已保存 · #${result.message.id}`);
-  if (state.room?.id !== room_id || state.attachment_drafts !== drafts) return;
+  if (state.room?.id !== room_id || state.sending_drafts !== drafts) return;
   // The composer was emptied on send; what is in it now was typed since and stays.
   state.pending_submission = null;
-  clear_attachment_drafts();
   cancel_reply();
   state.query = "";
   state.mention_only = false;
@@ -1639,9 +1639,8 @@ async function finish_message(result, room_id, drafts) {
 
 /** A message the site queued: clear the composer; it waits above the composer until the room is idle. */
 async function finish_queued(result, room_id, drafts) {
-  if (state.room?.id !== room_id || state.attachment_drafts !== drafts) return;
+  if (state.room?.id !== room_id || state.sending_drafts !== drafts) return;
   state.pending_submission = null;
-  clear_attachment_drafts();
   cancel_reply();
   state.sending_preview = null;
   if (state.room.free) state.room = { ...state.room, free: { ...state.room.free, queued_messages: result.queue } };
@@ -1737,6 +1736,9 @@ async function send_message(event) {
   const draft = element("message-input").value;
   element("message-input").value = "";
   const preview = { author: payload.author, text: payload.text, created_at: new Date().toISOString(), files: drafts.map(file => file.file.name) };
+  // The files leave with it and upload in the background; a failed send puts them back too.
+  state.sending_drafts = drafts;
+  state.attachment_drafts = [];
   // A message the site will likely queue skips the in-transcript card, which would flash before moving above the composer.
   const queue = state.room.free?.queued_messages;
   const likely_queued = payload.queue && (queue?.busy || queue?.items?.length);
@@ -1759,11 +1761,15 @@ async function send_message(event) {
       // Anything typed meanwhile follows the restored draft, so neither is lost.
       const typed = element("message-input").value;
       element("message-input").value = typed.trim() ? `${draft}\n\n${typed}` : draft;
+      if (state.sending_drafts === drafts) state.attachment_drafts = [...drafts, ...state.attachment_drafts];
       error.notified = true;
     }
     throw error;
   } finally {
     state.sending_message = false;
+    // Previews of files not put back into the composer are no longer shown anywhere.
+    if (!state.attachment_drafts.includes(drafts[0])) for (const file of drafts) if (file.preview_url) URL.revokeObjectURL(file.preview_url);
+    if (state.sending_drafts === drafts) state.sending_drafts = null;
     sent();
     if (!state.sending_preview?.failed) state.sending_preview = null;
     state.upload_status = "";
@@ -1816,7 +1822,7 @@ function attachment_file_icon(file_name) {
 
 /** Keep original files in memory until sending; reject an invalid selection as a whole. */
 function add_attachments(files) {
-  if (!state.room || state.sending_message) return;
+  if (!state.room) return;
   const selected = Array.from(files);
   if (state.attachment_drafts.length + selected.length > MAX_MESSAGE_ATTACHMENTS) notify("warning", "每条消息最多 10 个附件");
   else if (selected.some(file => file.size > MAX_ATTACHMENT_BYTES)) notify("warning", "单个附件最多 20 MiB");
@@ -1835,7 +1841,6 @@ function clear_attachment_drafts() {
 
 /** Remove one unsent file without disturbing the text draft. */
 function remove_attachment(id) {
-  if (state.sending_message) return;
   const file = state.attachment_drafts.find(item => item.id === id);
   if (file?.preview_url) URL.revokeObjectURL(file.preview_url);
   state.attachment_drafts = state.attachment_drafts.filter(item => item.id !== id);
@@ -1849,9 +1854,8 @@ function render_attachment_drafts() {
   if (!container) return;
   container.innerHTML = state.attachment_drafts.map(item => `<div class="attachment-draft">${item.preview_url ? `<img src="${item.preview_url}" alt="">` : ""}
     <span>${escape_html(item.file.name)}<small>${attachment_size(item.file.size)}</small></span>
-    <button type="button" data-remove-attachment="${item.id}" aria-label="移除 ${escape_html(item.file.name)}" ${state.sending_message ? "disabled" : ""}>×</button></div>`).join("");
+    <button type="button" data-remove-attachment="${item.id}" aria-label="移除 ${escape_html(item.file.name)}">×</button></div>`).join("");
   element("attachment-status").textContent = state.upload_status;
-  element("choose-attachments").disabled = state.sending_message;
 }
 
 /** Upload once per actual uploader, retaining receipts across ambiguous send failures. */
@@ -4960,8 +4964,7 @@ function view_snapshot() {
     archive_pending: [...state.archive_changes.keys()], import_progress: structuredClone(state.import_progress),
     directory_pending: [...state.directory_pending.keys()], folder_pending: [...state.folder_moves.keys()], creating_room: state.creating_room,
     connected: state.connected, reconnecting: state.reconnecting, observed_until: state.observed_until, backup_pending: Boolean(state.backup_pending), page: state.page, pages: state.pages, query: state.query,
-    attachment_drafts: state.attachment_drafts.map(item => ({ id: item.id, file_name: item.file.name, size: item.file.size, preview_url: item.preview_url,
-      uploading: state.sending_message && !item.uploaded })),
+    attachment_drafts: state.attachment_drafts.map(item => ({ id: item.id, file_name: item.file.name, size: item.file.size, preview_url: item.preview_url })),
     upload_status: state.upload_status, sending_message: state.sending_message, sending_preview: state.sending_preview,
     mention_only: state.mention_only, host_only: state.host_only, authors: state.authors, card_kinds: state.card_kinds,
     source_filter: state.mention_only || state.host_only || state.authors.length > 0 || state.card_kinds.length > 0, messages_loading: Boolean(state.messages_loading), messages_failure: state.messages_failure || "", reply_to: state.reply_to, editing_queued: state.editing_queued?.id ?? null,

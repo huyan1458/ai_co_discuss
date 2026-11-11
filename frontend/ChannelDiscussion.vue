@@ -2602,8 +2602,7 @@ function copy_message(message) { act("copy", `${view.value.room_site}/r/${room.v
                 <span v-html="bridge.attachment_file_icon(file.file_name)"></span>
                 <span class="attachment-name"><span :title="file.file_name">{{ file.file_name }}</span><small>{{ bridge.attachment_size(file.size) }}</small></span>
               </template>
-              <button type="button" class="attachment-remove" :aria-label="`移除 ${file.file_name}`" :disabled="view.sending_message" @click="act('remove_attachment', file.id)"><UIcon name="i-lucide-x" /></button>
-              <span v-if="file.uploading" class="attachment-uploading" role="status" :aria-label="`正在上传 ${file.file_name}`"><UIcon name="i-lucide-loader-circle" /></span>
+              <button type="button" class="attachment-remove" :aria-label="`移除 ${file.file_name}`" @click="act('remove_attachment', file.id)"><UIcon name="i-lucide-x" /></button>
             </div>
           </div>
           <div v-for="unregistered_member in unregistered_members" :key="unregistered_member.name" class="channel-reply-draft channel-queue-hint"><UIcon name="i-lucide-user-round-x" /><span>{{ bridge.display_name(unregistered_member.name) }} 待注册：在其会话中粘贴启动指令</span><UButton v-if="view.access?.can_manage" :icon="launch_copied === unregistered_member.name ? 'i-lucide-check' : 'i-lucide-copy'" :label="launch_copied === unregistered_member.name ? '已复制' : '复制启动指令'" aria-live="polite" size="xs" color="neutral" variant="ghost" class="channel-launch-copy" @click="copy_launch(unregistered_member.name)" /></div>
@@ -2623,7 +2622,7 @@ function copy_message(message) { act("copy", `${view.value.room_site}/r/${room.v
             <UTooltip :text="ENTER_SENDS ? '完成，转成文字 · Enter' : '完成，转成文字'"><UButton type="button" icon="i-lucide-check" color="neutral" size="sm" class="channel-primary-button channel-round-button" aria-label="结束录音并转成文字" :loading="voice.state.status !== 'recording'" @click="voice.toggle()" /></UTooltip>
           </template>
           <template v-else>
-            <UButton type="button" icon="i-lucide-paperclip" aria-label="添加附件" title="图片、PDF 或其他文件 · 每个最多 20 MiB" color="neutral" variant="ghost" size="sm" :disabled="view.sending_message" @click="act('choose_attachments')" />
+            <UButton type="button" icon="i-lucide-paperclip" aria-label="添加附件" title="图片、PDF 或其他文件 · 每个最多 20 MiB" color="neutral" variant="ghost" size="sm" @click="act('choose_attachments')" />
             <UTooltip v-if="speech_ready" :text="broadcast.on.value ? '关闭语音播报' : '语音播报：新回复自动朗读摘要'"><UButton type="button" icon="i-lucide-radio" color="neutral" variant="ghost" size="sm" class="channel-voice-button channel-broadcast-button" :class="{ 'is-on': broadcast.on.value }" :aria-pressed="broadcast.on.value" :aria-label="broadcast.on.value ? '关闭语音播报' : '开启语音播报'" @click="broadcast.toggle()" /></UTooltip>
             <UTooltip :text="ENTER_SENDS ? '语音输入 · 也可按住空格说话' : '按住说话，或轻点开始'"><UButton type="button" icon="i-lucide-mic" color="neutral" variant="ghost" size="sm" class="channel-voice-button channel-voice-mic" aria-label="语音输入" :disabled="view.sending_message" @pointerdown="voice_pointerdown" @click="voice_click" @contextmenu.prevent /></UTooltip>
             <UButton type="button" icon="i-lucide-arrow-up" color="neutral" size="sm" class="channel-primary-button channel-round-button channel-send" aria-label="发送" title="发送 · Enter" :disabled="!has_draft" @click="send" />
