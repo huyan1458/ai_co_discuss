@@ -115,55 +115,118 @@ export function workflow_directory(home, id) {
   return join(workflows_home(home), id);
 }
 
-/** Split single-line `key: value` frontmatter from a Markdown body. */
+/** One `key: value` frontmatter line split in two; quotes around a value are YAML's, not part of it. */
+function frontmatter_pair(line, label) {
+  const colon = line.indexOf(':');
+  if (colon < 1) throw new Error(`${label} 的头信息只支持单行 key: value：${line.trim()}`);
+  return [line.slice(0, colon).trim(), line.slice(colon + 1).trim().replace(/^(["'])(.*)\1$/, '$2')];
+}
+
+/**
+ * Split frontmatter from a Markdown body. Fields are single-line `key: value`; a key with no value followed by indented
+ * `key: value` lines is a map (the Agent Skills `metadata` field).
+ */
 export function parse_markdown(text, label) {
   const lines = String(text).replace(/^﻿/, '').replace(/\r\n/g, '\n').split('\n');
   if (lines[0] !== '---') throw new Error(`${label} 须以 --- 开头的头信息开始`);
   const end = lines.indexOf('---', 1);
   if (end < 0) throw new Error(`${label} 的头信息缺少结尾 ---`);
   const fields = {};
+  let map = null;
   for (const line of lines.slice(1, end)) {
     if (!line.trim()) continue;
-    const colon = line.indexOf(':');
-    if (colon < 1) throw new Error(`${label} 的头信息只支持单行 key: value：${line}`);
-    // Quotes around a value are YAML's, not part of it.
-    fields[line.slice(0, colon).trim()] = line.slice(colon + 1).trim().replace(/^(["'])(.*)\1$/, '$2');
+    if (/^\s/.test(line)) {
+      if (!map) throw new Error(`${label} 的头信息缩进行须在无值的 key: 之下：${line.trim()}`);
+      const [key, value] = frontmatter_pair(line, label);
+      map[key] = value;
+      continue;
+    }
+    const [key, value] = frontmatter_pair(line, label);
+    map = value ? null : {};
+    fields[key] = map || value;
   }
   return { fields, body: lines.slice(end + 1).join('\n').trim() };
 }
 
-/** Write fields back as single-line frontmatter; empty fields are left out. */
+/** Write fields back as frontmatter; a map is written as indented lines, and empty fields are left out. */
 export function serialize_markdown(fields, body) {
-  const header = Object.entries(fields).filter(([, value]) => value !== undefined && value !== '').map(([key, value]) => `${key}: ${String(value ?? '').replace(/\s*\n\s*/g, ' ')}`.trimEnd());
+  const one_line = value => String(value ?? '').replace(/\s*\n\s*/g, ' ');
+  const filled = value => value !== undefined && value !== '';
+  const header = Object.entries(fields).flatMap(([key, value]) => {
+    if (value && typeof value === 'object') {
+      const entries = Object.entries(value).filter(([, item]) => filled(item));
+      return entries.length ? [`${key}:`, ...entries.map(([name, item]) => `  ${name}: ${one_line(item)}`.trimEnd())] : [];
+    }
+    return filled(value) ? [`${key}: ${one_line(value)}`.trimEnd()] : [];
+  });
   return `---\n${header.join('\n')}\n---\n${body ? `${body.trim()}\n` : ''}`;
 }
 
+/** A skill's display name: `metadata.label`, or the older top-level `label` field. */
+function skill_label(fields) {
+  return (fields.metadata && typeof fields.metadata === 'object' ? fields.metadata.label : '') || (typeof fields.label === 'string' ? fields.label : '');
+}
+
+/** SKILL.md frontmatter as the Agent Skills format writes it: the display name goes under `metadata`. */
+function skill_fields(id, label, description) {
+  return { name: id, description, metadata: { label } };
+}
+
 /** Turn one parsed card file into the card shape the page edits. */
-function card_from_markdown(card, text) {
-  const { fields, body } = parse_markdown(text, `agents/${card}.md`);
-  const unknown = Object.keys(fields).filter(key => !CARD_FILE_FIELDS.includes(key));
-  if (unknown.length) throw new Error(`agents/${card}.md 含不支持的字段：${unknown.join('、')}`);
+function card_from_markdown(card, text, file = `agents/${card}.md`) {
+  const { fields, body } = parse_markdown(text, file);
+  const unknown = Object.keys(fields).filter(key => !CARD_FILE_FIELDS.includes(key) || typeof fields[key] !== 'string');
+  if (unknown.length) throw new Error(`${file} 含不支持的字段：${unknown.join('、')}`);
   const value = { card };
   for (const key of CARD_FIELDS) if (fields[key]) value[key] = fields[key];
   // Older cards wrote the member name `platform-card` as `name` and had no `platform`.
   if (fields.platform) {
-    if (fields.name && fields.name !== card) throw new Error(`agents/${card}.md 的 name 须与文件名相同：${fields.name}`);
+    if (fields.name && fields.name !== card) throw new Error(`${file} 的 name 须与文件名相同：${fields.name}`);
     value.name = `${fields.platform}-${card}`;
   }
   if (body) value.system_prompt = body;
   return value;
 }
 
+/** A canvas file read as JSON; `file` names it in the error. */
+function parse_flow_text(text, file) {
+  try { return JSON.parse(text); } catch (error) { throw new Error(`${file} 不是合法 JSON：${error.message}`); }
+}
+
+/**
+ * Take the sub-workflows' own files (`workflows/<id>/SKILL.md`, `agents/<card>.md`, `flow.json`) out of a folder's other
+ * files and read each like a workflow, unchecked; their other files (scripts, references) stay resources.
+ */
+function split_sub_workflows(resources) {
+  const found = new Map(), rest = {};
+  for (const [path, text] of Object.entries(resources)) {
+    const match = SUB_FILE.exec(path);
+    if (!match || typeof text !== 'string') { rest[path] = text; continue; }
+    const [, id, file, card] = match;
+    if (!found.has(id)) found.set(id, { cards: {} });
+    if (card !== undefined) found.get(id).cards[card] = text;
+    else found.get(id)[file] = text;
+  }
+  const sub_workflows = [...found.keys()].sort().map(id => {
+    const files = found.get(id), prefix = `${SUB_DIRECTORY}/${id}/`;
+    if (typeof files['SKILL.md'] !== 'string') throw new Error(`${prefix} 没有 SKILL.md`);
+    const { fields, body } = parse_markdown(files['SKILL.md'], `${prefix}SKILL.md`);
+    if (fields.name !== id) throw new Error(`${prefix}SKILL.md 的 name 须与文件夹名相同：${typeof fields.name === 'string' && fields.name || '（空）'}`);
+    const flow = typeof files[FLOW_FILE] === 'string' ? parse_flow_text(files[FLOW_FILE], `${prefix}${FLOW_FILE}`) : undefined;
+    return { id, label: skill_label(fields), description: typeof fields.description === 'string' ? fields.description : '', skill: body,
+      agents: Object.entries(files.cards).map(([card, text]) => card_from_markdown(card, text, `${prefix}agents/${card}.md`)), ...(flow ? { flow } : {}) };
+  });
+  return { sub_workflows, rest };
+}
+
 /** Turn SKILL.md, card files and the folder's other files into one workflow object, unchecked; flow.json becomes `flow`. */
 function workflow_from_files(skill_text, cards, resources = {}) {
   const { fields, body } = parse_markdown(skill_text, 'SKILL.md');
-  const { [FLOW_FILE]: flow_text, ...rest } = resources;
-  let flow;
-  if (typeof flow_text === 'string') {
-    try { flow = JSON.parse(flow_text); } catch (error) { throw new Error(`${FLOW_FILE} 不是合法 JSON：${error.message}`); }
-  }
-  return { id: fields.name || '', label: fields.label || '', description: fields.description || '', skill: body,
-    agents: Object.entries(cards).map(([card, text]) => card_from_markdown(card, text)), resources: rest, ...(flow ? { flow } : {}) };
+  const { [FLOW_FILE]: flow_text, ...others } = resources;
+  const flow = typeof flow_text === 'string' ? parse_flow_text(flow_text, FLOW_FILE) : undefined;
+  const { sub_workflows, rest } = split_sub_workflows(others);
+  return { id: fields.name || '', label: skill_label(fields), description: fields.description || '', skill: body,
+    agents: Object.entries(cards).map(([card, text]) => card_from_markdown(card, text)), resources: rest, sub_workflows, ...(flow ? { flow } : {}) };
 }
 
 /**
@@ -179,6 +242,99 @@ function validate_flow(flow, cards) {
   return normalized;
 }
 
+/** The short hash of a SKILL.md body the host compares with what it read before. */
+function revision_of(text) {
+  return createHash('sha256').update(text).digest('hex').slice(0, REVISION_LENGTH);
+}
+
+/** Check one card against the preset rule and the member name it implies; returns it with only known, filled fields. */
+function normalize_card(agent, validate_card) {
+  // requested_access and needs_platform are an import preview's notes for the page, not card fields.
+  const { card, sub_workflow: ignored_sub, requested_access: ignored_request, needs_platform: ignored_platform, ...preset } = agent || {};
+  if (!CARD_ID_PATTERN.test(card || '')) throw new Error(`卡片 ID 只能用小写英文、数字和下划线，1—16 位：${card || '（空）'}`);
+  // Empty fields are dropped; unknown ones stay so the preset check refuses them.
+  const kept = Object.fromEntries(Object.entries(preset).filter(([, value]) => value !== undefined && value !== ''));
+  try { validate_card(kept); } catch (error) { throw new Error(`卡片 ${card}：${error.message}`); }
+  if (!kept.name?.endsWith(`-${card}`)) throw new Error(`卡片 ${card} 的成员名须为“平台-${card}”：${kept.name || '（空）'}`);
+  if ((kept.description || '').includes('\n')) throw new Error(`${kept.name} 的描述不能换行`);
+  return { card, ...kept };
+}
+
+/**
+ * Every card of a workflow, the main flow's first, each sub-workflow's tagged with `sub_workflow`. Refuses two sharing
+ * an ID or member name: a room maps each card ID to one member.
+ */
+export function workflow_cards(workflow) {
+  const all = [...(workflow.agents || []),
+    ...(workflow.sub_workflows || []).flatMap(sub => sub.agents.map(agent => ({ ...agent, sub_workflow: sub.id })))];
+  const ids = new Set(), names = new Set();
+  for (const agent of all) {
+    if (ids.has(agent.card.toLowerCase())) throw new Error(`卡片 ID 重复（不区分大小写，含子工作流的卡片）：${agent.card}`);
+    ids.add(agent.card.toLowerCase());
+    if (agent.name && names.has(agent.name)) throw new Error(`同一工作流内卡片名称重复：${agent.name}`);
+    if (agent.name) names.add(agent.name);
+  }
+  return all;
+}
+
+// A sub-workflow is a workflow inside one, in `workflows/<id>/` (SKILL.md, agents/, flow.json and its own other files):
+// used on demand beside the main flow, its cards join the room only when it is used. It has no sub-workflows of its own.
+const SUB_DIRECTORY = 'workflows';
+const SUB_FILE = /^workflows\/([^/]+)\/(SKILL\.md|flow\.json|agents\/([^/]+)\.md)$/;
+const MAX_SUB_WORKFLOWS = 10;
+
+/** Check the sub-workflows a save carries; each obeys a workflow's rules, and its canvas may name only its own cards. */
+function validate_sub_workflows(list, validate_card) {
+  if (!Array.isArray(list) || list.length > MAX_SUB_WORKFLOWS) throw new Error(`子工作流须为列表，最多 ${MAX_SUB_WORKFLOWS} 个`);
+  const ids = new Set();
+  return list.map(sub => {
+    const id = sub?.id;
+    if (!WORKFLOW_ID_PATTERN.test(id || '')) throw new Error(`子工作流 ID 只能用小写英文和数字，可用单个连字符连接，1—40 位：${id || '（空）'}`);
+    if (ids.has(id)) throw new Error(`子工作流 ID 重复：${id}`);
+    ids.add(id);
+    const label = String(sub.label || '').trim(), description = String(sub.description || '').trim(), skill = String(sub.skill || '').trim();
+    const name = `子工作流「${label || id}」`;
+    if (label.length > MAX_WORKFLOW_LABEL) throw new Error(`${name}的显示名最多 ${MAX_WORKFLOW_LABEL} 字`);
+    if (!description || description.length > MAX_WORKFLOW_DESCRIPTION || /\n/.test(description)) throw new Error(`${name}的描述不能为空，最多 ${MAX_WORKFLOW_DESCRIPTION} 字，且不能换行：主持人凭它判断何时用`);
+    if (!skill) throw new Error(`${name}的 SKILL.md 正文不能为空`);
+    if (skill.length > MAX_WORKFLOW_SKILL) throw new Error(`${name}的 SKILL.md 正文最多 ${MAX_WORKFLOW_SKILL} 字`);
+    const agents = sub.agents || [];
+    if (!Array.isArray(agents) || agents.length > MAX_WORKFLOW_CARDS) throw new Error(`${name}的卡片须为列表，最多 ${MAX_WORKFLOW_CARDS} 张`);
+    const normalized = agents.map(agent => normalize_card(agent, validate_card));
+    const flow = validate_flow(sub.flow, normalized.map(agent => agent.card));
+    return { id, label, description, skill, agents: normalized, ...(flow ? { flow } : {}) };
+  });
+}
+
+/** Write checked sub-workflows into a staging folder, replacing their own files and removing ones the list dropped. */
+function write_sub_workflows(staging, list) {
+  const root = join(staging, SUB_DIRECTORY);
+  const keep = new Set(list.map(sub => sub.id));
+  if (existsSync(root)) {
+    for (const name of readdirSync(root)) {
+      const folder = join(root, name);
+      if (!keep.has(name)) { rmSync(folder, { recursive: true, force: true }); continue; }
+      for (const own of ['SKILL.md', FLOW_FILE, 'agents']) rmSync(join(folder, own), { recursive: true, force: true });
+    }
+  }
+  for (const sub of list) {
+    const folder = join(root, sub.id);
+    mkdirSync(join(folder, 'agents'), { recursive: true });
+    writeFileSync(join(folder, 'SKILL.md'), serialize_markdown(skill_fields(sub.id, sub.label, sub.description), sub.skill));
+    write_cards(join(folder, 'agents'), sub.agents);
+    if (sub.flow) writeFileSync(join(folder, FLOW_FILE), `${JSON.stringify(sub.flow, null, 2)}\n`);
+  }
+}
+
+/** Write card files `<card>.md` into a folder. */
+function write_cards(directory, agents) {
+  for (const { card, system_prompt, name, ...fields } of agents) {
+    const platform = name.slice(0, name.length - card.length - 1);
+    writeFileSync(join(directory, `${card}.md`), serialize_markdown({ name: card, platform,
+      ...Object.fromEntries(CARD_FIELDS.slice(1).map(key => [key, fields[key]])) }, system_prompt));
+  }
+}
+
 /** A path, relative to the workflow folder, that a resource may take: inside it, not SKILL.md and not under agents/. */
 function resource_path_allowed(path) {
   return path !== 'SKILL.md' && path !== FLOW_FILE && !path.startsWith('agents/') && path.split('/').every(segment => RESOURCE_SEGMENT.test(segment));
@@ -192,6 +348,7 @@ function validate_resources(resources) {
   const seen = new Set();
   for (const [path, text] of entries) {
     if (!resource_path_allowed(path)) throw new Error(`附带文件路径不合法：${path}`);
+    if (SUB_FILE.test(path)) throw new Error(`子工作流的 SKILL.md、卡片与画布不算附带文件：${path}`);
     if (seen.has(path.toLowerCase())) throw new Error(`附带文件路径重复（不区分大小写）：${path}`);
     seen.add(path.toLowerCase());
     if (typeof text !== 'string') throw new Error(`附带文件 ${path} 须为文本`);
@@ -251,27 +408,16 @@ export function validate_workflow(input, validate_card) {
   if (skill.length > MAX_WORKFLOW_SKILL) throw new Error(`SKILL.md 正文最多 ${MAX_WORKFLOW_SKILL} 字`);
   const agents = input.agents || [];
   if (!Array.isArray(agents) || agents.length > MAX_WORKFLOW_CARDS) throw new Error(`卡片须为列表，最多 ${MAX_WORKFLOW_CARDS} 张`);
-  const cards = new Set(), names = new Set();
-  const normalized = agents.map(agent => {
-    // requested_access and needs_platform are an import preview's notes for the page, not card fields.
-    const { card, requested_access: ignored_request, needs_platform: ignored_platform, ...preset } = agent || {};
-    if (!CARD_ID_PATTERN.test(card || '')) throw new Error(`卡片 ID 只能用小写英文、数字和下划线，1—16 位：${card || '（空）'}`);
-    if (cards.has(card.toLowerCase())) throw new Error(`卡片 ID 重复（不区分大小写）：${card}`);
-    cards.add(card.toLowerCase());
-    // Empty fields are dropped; unknown ones stay so the preset check refuses them.
-    const kept = Object.fromEntries(Object.entries(preset).filter(([, value]) => value !== undefined && value !== ''));
-    try { validate_card(kept); } catch (error) { throw new Error(`卡片 ${card}：${error.message}`); }
-    if (!kept.name?.endsWith(`-${card}`)) throw new Error(`卡片 ${card} 的成员名须为“平台-${card}”：${kept.name || '（空）'}`);
-    if (names.has(kept.name)) throw new Error(`同一工作流内卡片名称重复：${kept.name}`);
-    names.add(kept.name);
-    if ((kept.description || '').includes('\n')) throw new Error(`${kept.name} 的描述不能换行`);
-    return { card, ...kept };
-  });
+  const normalized = agents.map(agent => normalize_card(agent, validate_card));
   // Absent resources mean "keep the saved folder's other files" (a host draft or the editor carries none); `{}` clears them.
-  // Likewise an absent flow keeps the saved canvas, and null removes it.
+  // Likewise an absent flow keeps the saved canvas, and null removes it; absent sub-workflows keep the saved ones.
+  const resources = input.resources === undefined ? undefined : validate_resources(input.resources);
+  const sub_workflows = input.sub_workflows === undefined ? undefined : validate_sub_workflows(input.sub_workflows, validate_card);
+  workflow_cards({ agents: normalized, sub_workflows });
   const flow = validate_flow(input.flow, normalized.map(agent => agent.card));
   return { id, label, description, skill, agents: normalized,
-    ...(input.resources === undefined ? {} : { resources: validate_resources(input.resources) }),
+    ...(resources === undefined ? {} : { resources }),
+    ...(sub_workflows === undefined ? {} : { sub_workflows }),
     ...(flow === undefined ? {} : { flow }) };
 }
 
@@ -399,7 +545,7 @@ export function rename_workflow(home, id, label) {
   if (text.length > MAX_WORKFLOW_LABEL) throw new Error(`工作流显示名最多 ${MAX_WORKFLOW_LABEL} 字`);
   return with_workflow_lock(home, () => {
     const workflow = read_saved_workflow(home, id);
-    writeFileSync(join(workflow.directory, 'SKILL.md'), serialize_markdown({ name: id, label: text, description: workflow.description }, workflow.skill));
+    writeFileSync(join(workflow.directory, 'SKILL.md'), serialize_markdown(skill_fields(id, text, workflow.description), workflow.skill));
     return { id, label: text };
   });
 }
@@ -409,6 +555,7 @@ function read_saved_workflow(home, id) {
   const directory = workflow_directory(home, id);
   if (!existsSync(directory)) throw new Error(`工作流不存在：${id}`);
   const { workflow } = read_workflow_folder(directory);
+  workflow_cards(workflow);
   return { ...workflow, id, directory, commands: workflow_commands(workflow.resources) };
 }
 
@@ -443,17 +590,17 @@ export function save_workflow(home, input, validate_card) {
   return with_workflow_lock(home, () => {
     publish_directory(home, workflow.id, (staging, directory) => {
       mkdirSync(join(staging, 'agents'), { recursive: true });
-      writeFileSync(join(staging, 'SKILL.md'), serialize_markdown({ name: workflow.id, label: workflow.label, description: workflow.description }, workflow.skill));
-      for (const { card, system_prompt, name, ...fields } of workflow.agents) {
-        const platform = name.slice(0, name.length - card.length - 1);
-        writeFileSync(join(staging, 'agents', `${card}.md`), serialize_markdown({ name: card, platform,
-          ...Object.fromEntries(CARD_FIELDS.slice(1).map(key => [key, fields[key]])) }, system_prompt));
-      }
+      writeFileSync(join(staging, 'SKILL.md'), serialize_markdown(skill_fields(workflow.id, workflow.label, workflow.description), workflow.skill));
+      write_cards(join(staging, 'agents'), workflow.agents);
       if (workflow.resources) write_resources(staging, workflow.resources);
       else if (existsSync(directory)) keep_resources(directory, staging);
       if (workflow.flow) writeFileSync(join(staging, FLOW_FILE), `${JSON.stringify(workflow.flow, null, 2)}
 `);
       else if (workflow.flow === null || workflow.resources) rmSync(join(staging, FLOW_FILE), { force: true });
+      if (workflow.sub_workflows) write_sub_workflows(staging, workflow.sub_workflows);
+      // Kept sub-workflows were not part of the check: their cards must not clash with the main flow's new ones.
+      try { workflow_cards(read_workflow_folder(staging).workflow); }
+      catch (error) { rmSync(staging, { recursive: true, force: true }); throw error; }
     });
     return read_saved_workflow(home, workflow.id);
   });
@@ -507,9 +654,9 @@ export function parse_workflow_draft(parts) {
   if (!files.has('SKILL.md')) throw new Error('草稿里缺少 SKILL.md');
   const text = path => files.get(path).join('\n').replace(/\s+$/, '');
   const cards = Object.fromEntries([...files.keys()].filter(path => CARD_PATH.test(path)).map(path => [CARD_PATH.exec(path)[1], text(path)]));
-  // A draft carries no other files, so it leaves the saved folder's templates and tools alone (no `resources` at all);
-  // its canvas, when it has one, replaces the saved one.
-  const { resources: none, ...workflow } = workflow_from_files(text('SKILL.md'), cards, files.has(FLOW_FILE) ? { [FLOW_FILE]: text(FLOW_FILE) } : {});
+  // A draft carries no other files, so it leaves the saved folder's templates, tools and sub-workflows alone (no
+  // `resources` or `sub_workflows` at all); its canvas, when it has one, replaces the saved one.
+  const { resources: none, sub_workflows: kept, ...workflow } = workflow_from_files(text('SKILL.md'), cards, files.has(FLOW_FILE) ? { [FLOW_FILE]: text(FLOW_FILE) } : {});
   if (workflow.id !== id) throw new Error(`SKILL.md 的 name（${workflow.id}）与分段头的 id（${id}）不一致`);
   return workflow;
 }
@@ -527,13 +674,17 @@ export function preview_workflow(input, validate_card, known_platform) {
   else if (typeof input.folder === 'string' && input.folder) source = read_workflow_folder(resolve(input.folder));
   else source = { workflow: parse_workflow_draft(input.parts), ignored: [] };
   const workflow = validate_workflow(source.workflow, validate_card);
-  const agents = workflow.agents.map(agent => {
+  const mark = agent => {
     const requested = agent.project_access && agent.project_access !== READ_ONLY ? agent.project_access : '';
     return { ...agent, ...(requested ? { project_access: READ_ONLY, requested_access: requested } : {}),
       ...(known_platform(agent.name) ? {} : { needs_platform: true }) };
-  });
+  };
+  const agents = workflow.agents.map(mark);
+  // A sub-workflow's cards are offered the same way, card by card, when the page shows that sub-workflow.
+  // A draft carries none, which keeps the saved ones; a folder or files carry them all.
+  const sub_workflows = workflow.sub_workflows?.map(sub => ({ ...sub, agents: sub.agents.map(mark) }));
   // Shown for the user to allow before saving: the page drops an import's commands file unless they do.
-  return { ...workflow, agents, commands: workflow_commands(workflow.resources), ignored: source.ignored };
+  return { ...workflow, agents, ...(sub_workflows ? { sub_workflows } : {}), commands: workflow_commands(workflow.resources), ignored: source.ignored };
 }
 
 /**
@@ -547,11 +698,14 @@ export function load_room_workflow(config) {
     assert_workflow_enabled(config.api_home, binding.id);
     const workflow = get_workflow(config.api_home, binding.id);
     const { directory } = workflow;
-    const cards = Object.fromEntries(workflow.agents.map(agent => [agent.card, agent]));
+    // A sub-workflow's cards play members like the main flow's, so they are looked up in one map.
+    const cards = Object.fromEntries(workflow_cards(workflow).map(agent => [agent.card, agent]));
+    // Like the main SKILL.md, the host reads a sub-workflow's only when a request fits it; its canvas is the user's.
+    const sub_workflows = workflow.sub_workflows.map(sub => ({ id: sub.id, label: sub.label || sub.id, description: sub.description, skill: sub.skill,
+      revision: revision_of(sub.skill), skill_path: join(directory, SUB_DIRECTORY, sub.id, 'SKILL.md'), cards: sub.agents.map(agent => agent.card) }));
     // The canvas is for the user to see; the host works from SKILL.md alone.
     return { id: binding.id, label: workflow.label || binding.id, description: workflow.description || '', directory, skill_path: join(directory, 'SKILL.md'), skill: workflow.skill,
-      revision: createHash('sha256').update(workflow.skill).digest('hex').slice(0, REVISION_LENGTH),
-      members: binding.members || {}, cards, commands: workflow.commands };
+      revision: revision_of(workflow.skill), members: binding.members || {}, cards, sub_workflows, commands: workflow.commands };
   } catch (error) { return { id: binding.id, error: error.message }; }
 }
 
@@ -576,13 +730,18 @@ export function workflow_task_field(workflow, room_members, participants) {
     const source = workflow.cards[card];
     if (!member || member.status === 'removed' || !source) return null;
     return { card, member: member.label || name, label: source.label || '', description: source.description || '',
-      status: member.status, project_access: participants?.[name]?.project_access || 'read' };
+      status: member.status, project_access: participants?.[name]?.project_access || 'read', ...(source.sub_workflow ? { sub_workflow: source.sub_workflow } : {}) };
   }).filter(Boolean);
-  const missing = Object.values(workflow.cards).filter(card => !workflow.members[card.card])
+  // A sub-workflow's cards join only when it is used, so only the main flow's cards count as missing.
+  const missing = Object.values(workflow.cards).filter(card => !card.sub_workflow && !workflow.members[card.card])
     .map(card => ({ card: card.card, label: card.label || '', description: card.description || '' }));
+  // Like the main SKILL.md, a sub-workflow is read only when a request fits its description and its revision is new.
+  const sub_workflows = (workflow.sub_workflows || []).map(sub => ({ id: sub.id, label: sub.label, description: sub.description,
+    revision: sub.revision, skill_path: sub.skill_path, cards: sub.cards.map(card => ({ card, label: workflow.cards[card]?.label || '',
+      description: workflow.cards[card]?.description || '' })) }));
   // The host reads SKILL.md only when a request fits the description and its revision is one it has not read.
   return { id: workflow.id, label: workflow.label, description: workflow.description || '', revision: workflow.revision || '', members,
-    ...(missing.length ? { missing } : {}) };
+    ...(missing.length ? { missing } : {}), ...(sub_workflows.length ? { sub_workflows } : {}) };
 }
 
 /**

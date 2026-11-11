@@ -133,6 +133,14 @@ def repeat_gate(value):
     return {"after": member_handle(after), "repeat_from": member_handle(start)}
 
 
+def user_gate(value):
+    """`--wait-user AFTER[=START]`: after AFTER's step wait for the owner; their next message goes on, or reruns from START."""
+    after, separator, start = value.partition("=")
+    if separator and not start:
+        raise argparse.ArgumentTypeError("须写成 成员 或 成员=再来一圈的起点成员，如 法师=地下城主")
+    return {"after": member_handle(after), "user": True, **({"repeat_from": member_handle(start)} if separator else {})}
+
+
 def positive_int(value):
     """Parse a positive page or resource identifier."""
     try:
@@ -328,6 +336,9 @@ def message_commands(subcommands, registry):
                       help="与 --sequential 同用：该成员所在那一棒结束后交回你（检查点），你用 sequence continue 往下一棒走，直接回答即结束接力；可重复")
     post.add_argument("--repeat", type=repeat_gate, action="append", default=[], metavar="MEMBER=START",
                       help="与 --sequential 同用：MEMBER 所在那一棒结束后为循环检查点，sequence continue 从 START 所在那一棒再来一圈，加 --proceed 往下一棒走；START 不能早于前一个检查点；可重复")
+    post.add_argument("--wait-user", type=user_gate, action="append", default=[], metavar="MEMBER[=START]",
+                      help="与 --sequential 同用：MEMBER 所在那一棒结束后等用户发言，不交回你；用户下一条未点名的消息接着往下一棒走，"
+                           "写了 =START 则从 START 所在那一棒再来一圈（最后一棒之后须写 START），该消息交给下一棒先读；可重复")
     post.add_argument("--detach", type=member_handle, action="append", default=[], metavar="MEMBER",
                       help="自由房间主持人：与 --to 同用，点名一位与这次派活同时开工、但不等它的成员（不计入交回或下一棒的等待）；它失败时程序通知你；可重复")
     post.add_argument("--with", dest="to", type=member_handle, action=JoinPreviousStep, metavar="MEMBER",
@@ -747,10 +758,10 @@ def plan_message(args):
             payload["parallel"] = parallel_groups(args.to, joined)
     if args.loop:
         payload["loop"] = True
-    gates = [{"after": name} for name in args.checkpoint] + args.repeat
+    gates = [{"after": name} for name in args.checkpoint] + args.repeat + args.wait_user
     if gates:
         if not args.sequential:
-            raise CliError("--checkpoint 与 --repeat 须与 --sequential 一起使用")
+            raise CliError("--checkpoint、--repeat 与 --wait-user 须与 --sequential 一起使用")
         payload["gates"] = gates
     for field in ("next_review", "review_scope", "review_roster"):
         if getattr(args, field, None) is not None:

@@ -1,5 +1,5 @@
 <script setup>
-import { computed, inject, ref, watch } from "vue";
+import { computed, inject, onBeforeUnmount, ref, watch } from "vue";
 import CreateDiscussion from "./CreateDiscussion.vue";
 import DiscussionLimits from "./DiscussionLimits.vue";
 import ExtraDirectoriesField from "./ExtraDirectoriesField.vue";
@@ -141,6 +141,8 @@ const pending_theme = ref(null);
 const pending_attachment = ref(null);
 const detail = ref(null);
 const detail_error = ref("");
+let detail_request = 0, detail_target = null;
+onBeforeUnmount(() => { detail_request++; });
 const themes = [{ value: "channel", title: "协作频道", description: "深灰界面 · 房间导航 · 成员侧栏" }, { value: "channel-light", title: "协作频道 · 浅色", description: "纯白界面 · 中性灰阶 · 清晰阅读" }];
 
 /** Map the topic form onto the existing controller's draft fields. */
@@ -178,7 +180,7 @@ function open_attachment(event) {
   const button = event.target.closest("[data-preview-attachment]");
   if (!button) return;
   event.stopPropagation();
-  pending_attachment.value = { room_id: button.dataset.attachmentRoom, id: button.dataset.previewAttachment };
+  pending_attachment.value = { ...button.dataset, room_id: button.dataset.attachmentRoom, id: button.dataset.previewAttachment };
   mode.value = "";
 }
 
@@ -192,23 +194,25 @@ function after_dialog_leave() {
 }
 
 /** Fetch an exact message and discard replies from a previously closed dialog. */
-watch(() => [mode.value, props.detailId], async ([kind, id], previous, on_cleanup) => {
-  if (kind !== "message" || !id || !view.value.room) return;
-  let cancelled = false;
-  on_cleanup(() => { cancelled = true; });
+watch(() => [mode.value, props.detailId, view.value.room?.id], ([kind, id]) => {
+  detail_request++;
+  if (kind === "message" && id && view.value.room) load_detail(id);
+});
+
+/** Switch the original-message view immediately, then fill it only with the latest requested message. */
+async function load_detail(id) {
+  const request = ++detail_request, room_id = view.value.room.id;
+  detail_target = id;
   detail.value = null;
   detail_error.value = "";
   try {
-    const result = await bridge.request(`/api/rooms/${view.value.room.id}/messages/${id}`);
-    if (!cancelled) detail.value = result;
-  } catch (error) { if (!cancelled) detail_error.value = error.message; }
-});
+    const result = await bridge.request(`/api/rooms/${room_id}/messages/${id}`);
+    if (request === detail_request) detail.value = result;
+  } catch (error) { if (request === detail_request) detail_error.value = error.message; }
+}
 
 /** Follow a reply chain inside the same original-message dialog. */
-async function follow_reply() {
-  try { detail.value = await bridge.request(`/api/rooms/${view.value.room.id}/messages/${detail.value.reply_to}`); }
-  catch (error) { detail_error.value = error.message; }
-}
+function follow_reply() { load_detail(detail.value.reply_to); }
 
 /** A half-filled create form closes only through its own Cancel, close button or Escape. */
 const keep_open = (event) => event.preventDefault();
@@ -305,7 +309,7 @@ const keep_open = (event) => event.preventDefault();
         <UCollapsible v-model:open="details_open" class="advanced-fields"><UButton :trailing-icon="details_open ? 'i-lucide-chevron-up' : 'i-lucide-chevron-down'" label="用户原文、背景与边界" color="neutral" variant="ghost" block class="advanced-trigger" /><template #content><div class="advanced-content"><UFormField v-for="item in [{ key: 'user_request', label: '用户原文' }, { key: 'background', label: '背景' }, { key: 'boundaries', label: '讨论边界' }]" :key="item.key" :label="item.label"><UTextarea :model-value="view.fields[form_id(item.key)]" :maxlength="4000" :rows="2" class="w-full" @update:model-value="bridge.write_field(form_id(item.key), $event)" /></UFormField></div></template></UCollapsible>
         <div class="dialog-actions"><UButton label="取消" color="neutral" variant="ghost" @click="mode = ''" /><UButton type="submit" class="channel-primary-button" label="保存议题" :loading="pending === 'create' || pending === 'save_topic'" /></div>
       </form>
-      <div v-else-if="rendered_mode === 'message'" class="original-message"><p v-if="detail_error" role="alert">{{ detail_error }}</p><template v-else-if="detail"><div class="original-meta"><strong>{{ bridge.display_name(detail.author) }}</strong><span>#{{ detail.id }}</span><UBadge color="neutral" variant="subtle">{{ bridge.sources[detail.source] }}</UBadge></div><p class="fine-print">{{ bridge.provenance(detail) }} · {{ new Date(detail.created_at).toLocaleString('zh-CN') }}</p><section v-if="detail.summary" class="channel-answer-summary"><small>回答摘要 · {{ bridge.display_name(detail.summary_by) }}</small><p class="message-prose">{{ detail.summary }}</p></section><p class="message-prose">{{ detail.text }}</p><div v-if="detail.attachments?.length" @click="open_attachment" v-html="bridge.attachment_markup(detail.attachments)"></div><UButton v-if="detail.reply_to" :label="`查看被回复的原文 #${detail.reply_to}`" icon="i-lucide-corner-up-left" variant="outline" color="neutral" class="channel-surface-button" @click="follow_reply" /></template><p v-else class="fine-print">正在读取原文…</p></div>
+      <div v-else-if="rendered_mode === 'message'" class="original-message"><p v-if="detail_error" role="alert">{{ detail_error }}<UButton label="重试" color="neutral" variant="link" size="xs" @click="load_detail(detail_target)" /></p><template v-else-if="detail"><div class="original-meta"><strong>{{ bridge.display_name(detail.author) }}</strong><span>#{{ detail.id }}</span><UBadge color="neutral" variant="subtle">{{ bridge.sources[detail.source] }}</UBadge></div><p class="fine-print">{{ bridge.provenance(detail) }} · {{ new Date(detail.created_at).toLocaleString('zh-CN') }}</p><section v-if="detail.summary" class="channel-answer-summary"><small>回答摘要 · {{ bridge.display_name(detail.summary_by) }}</small><p class="message-prose">{{ detail.summary }}</p></section><p class="message-prose">{{ detail.text }}</p><div v-if="detail.attachments?.length" @click="open_attachment" v-html="bridge.attachment_markup(detail.attachments)"></div><UButton v-if="detail.reply_to" :label="`查看被回复的原文 #${detail.reply_to}`" icon="i-lucide-corner-up-left" variant="outline" color="neutral" class="channel-surface-button" @click="follow_reply" /></template><div v-else class="grid gap-4 py-2" role="status" aria-label="正在读取原文"><USkeleton class="h-5 w-36" /><USkeleton v-for="line in 6" :key="line" class="h-4" :class="line % 3 ? 'w-full' : 'w-2/3'" /></div></div>
     </template>
   </UModal>
 </template>

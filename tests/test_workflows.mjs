@@ -32,7 +32,7 @@ test('a workflow saves as plain files, reads back the same, and refuses unsafe o
   const saved = save_workflow(home, NOVEL, validate_preset);
   // Cards come back in file-name order.
   const by_card = list => [...list].sort((a, b) => a.card.localeCompare(b.card));
-  assert.deepEqual({ ...saved, directory: undefined, agents: by_card(saved.agents) }, { ...NOVEL, directory: undefined, agents: by_card(NOVEL.agents), resources: {}, commands: [] });
+  assert.deepEqual({ ...saved, directory: undefined, agents: by_card(saved.agents) }, { ...NOVEL, directory: undefined, agents: by_card(NOVEL.agents), resources: {}, sub_workflows: [], commands: [] });
   const card = readFileSync(join(home, 'workflows', 'novel-serial', 'agents', 'writer.md'), 'utf8');
   // A card file reads like an agent definition: its name is the card ID, the software is its own field, empty fields are left out.
   assert.equal(card, '---\nname: writer\nplatform: Antigravity\nlabel: 执笔\ndescription: 按骨架写正文\nproject_access: write\n---\n克制、具体。\n');
@@ -236,6 +236,70 @@ test('an API host reads the workflow for fitting requests beside the built-in de
   assert.doesNotMatch(system_prompt({ participant: 'DeepSeek', role: 'member', mode: 'free', workflow }), /先出骨架/);
   workflow.members[0].project_access = 'own';
   assert.match(system_prompt({ participant: 'DeepSeek', role: 'host', mode: 'free', workflow }), /项目权限 沿用原会话权限/);
+});
+
+test('sub-workflows live in workflows/<id>/ as workflows of their own: their cards join only when used and the host reads them on demand', t => {
+  const home = home_fixture(t);
+  const rehearsal = { id: 'rehearsal', label: '剧情试演', description: '请主角视角试演一场戏', skill: '请主角视角试演。',
+    agents: [{ card: 'hero', name: 'Claude-hero', label: '主角视角', description: '代入主角', project_access: 'write', system_prompt: '你就是主角。' }],
+    flow: { nodes: [{ id: 'start', type: 'start' }, { id: 'hero', type: 'card', card: 'hero' }], edges: [{ source: 'start', target: 'hero' }] } };
+  const check = { id: 'aigc-check', label: 'AI 率检查', description: '查 AI 率', skill: '运行 scripts/check.py。', agents: [] };
+  save_workflow(home, { ...NOVEL, sub_workflows: [rehearsal, check], resources: { 'workflows/aigc-check/scripts/check.py': 'print(1)\n' } }, validate_preset);
+  const folder = join(home, 'workflows', 'novel-serial');
+  // Each part is written the Agent Skills way: the display name under metadata, cards and canvas beside its SKILL.md.
+  assert.match(readFileSync(join(folder, 'SKILL.md'), 'utf8'), /\nmetadata:\n {2}label: 连载小说\n/);
+  assert.match(readFileSync(join(folder, 'workflows', 'rehearsal', 'SKILL.md'), 'utf8'), /^---\nname: rehearsal\ndescription: 请主角视角试演一场戏\nmetadata:\n {2}label: 剧情试演\n---\n/);
+  assert.match(readFileSync(join(folder, 'workflows', 'rehearsal', 'agents', 'hero.md'), 'utf8'), /platform: Claude/);
+  const saved = get_workflow(home, 'novel-serial');
+  assert.deepEqual(saved.sub_workflows.map(sub => [sub.id, sub.label, sub.agents.map(agent => agent.card), Boolean(sub.flow)]),
+    [['aigc-check', 'AI 率检查', [], false], ['rehearsal', '剧情试演', ['hero'], true]]);
+  assert.deepEqual(Object.keys(saved.resources), ['workflows/aigc-check/scripts/check.py'], 'only a part\'s other files are resources');
+  // A save without sub-workflows (a host draft) keeps them; a save with a list replaces them, keeping a kept part's other files.
+  save_workflow(home, { ...NOVEL, skill: '改过的主线' }, validate_preset);
+  assert.equal(get_workflow(home, 'novel-serial').sub_workflows.length, 2);
+  save_workflow(home, { ...NOVEL, sub_workflows: [{ ...check, skill: '改过的检查' }] }, validate_preset);
+  const edited = get_workflow(home, 'novel-serial');
+  assert.deepEqual(edited.sub_workflows.map(sub => [sub.id, sub.skill]), [['aigc-check', '改过的检查']]);
+  assert.equal(edited.resources['workflows/aigc-check/scripts/check.py'], 'print(1)\n');
+  save_workflow(home, { ...NOVEL, sub_workflows: [rehearsal, check] }, validate_preset);
+  for (const [change, pattern] of [
+    [{ agents: [...NOVEL.agents, { card: 'hero', name: 'Claude-hero' }] }, /卡片 ID 重复/],
+    [{ sub_workflows: [{ ...check, description: '' }] }, /描述不能为空/],
+    [{ sub_workflows: [{ ...check, id: 'Bad_id' }] }, /子工作流 ID/],
+    [{ sub_workflows: [check, check] }, /子工作流 ID 重复/],
+    [{ sub_workflows: [{ ...rehearsal, flow: { nodes: [{ id: 'start', type: 'start' }, { id: 'w', type: 'card', card: 'writer' }], edges: [] } }] }, /不存在的卡片/],
+    [{ resources: { 'workflows/x/SKILL.md': 'x' } }, /不算附带文件/],
+  ]) assert.throws(() => save_workflow(home, { ...NOVEL, ...change }, validate_preset), pattern);
+  assert.equal(get_workflow(home, 'novel-serial').sub_workflows.length, 2, 'a refused save leaves the saved version');
+  // An import offers a sub-workflow's cards card by card, like the main flow's.
+  const files = { 'SKILL.md': readFileSync(join(folder, 'SKILL.md'), 'utf8'),
+    'workflows/rehearsal/SKILL.md': readFileSync(join(folder, 'workflows', 'rehearsal', 'SKILL.md'), 'utf8'),
+    'workflows/rehearsal/agents/hero.md': readFileSync(join(folder, 'workflows', 'rehearsal', 'agents', 'hero.md'), 'utf8') };
+  const imported = preview_workflow({ files }, validate_preset, () => true);
+  assert.deepEqual(imported.sub_workflows[0].agents[0], { ...rehearsal.agents[0], project_access: 'read', requested_access: 'write' });
+  assert.throws(() => preview_workflow({ files: { ...files, 'workflows/rehearsal/SKILL.md': undefined, 'workflows/orphan/agents/a.md': files['workflows/rehearsal/agents/hero.md'] } }, validate_preset, () => true), /没有 SKILL\.md/);
+  // The host sees each sub-workflow to read on demand; its cards are not "missing" until it is used.
+  const config = { api_home: home, workflow: { id: 'novel-serial', enabled: true, members: { writer: 'Antigravity-writer', hero: 'Claude-hero' } } };
+  const workflow = load_room_workflow(config);
+  const room_members = [{ name: 'Claude', role: 'host', status: 'active' }, { name: 'Antigravity-writer', status: 'active' }, { name: 'Claude-hero', label: '主角视角', status: 'active' }];
+  const directory = join(home, 'runtime');
+  mkdirSync(directory);
+  const run_config = { ...config, mode: 'free', site: 'https://discussion.test', room: 'room', token: 'o'.repeat(32), directory, project: resolve('.'),
+    members: { Claude: { token: 'c'.repeat(32) }, 'Claude-hero': { token: 'h'.repeat(32) } },
+    participants: { Claude: { adapter: 'claude' }, 'Claude-hero': { adapter: 'claude', system_prompt: '旧的' } } };
+  const task = name => free_task_files(run_config, { name, role: name === 'Claude' ? 'host' : 'member' }, { id: 1, read_until: 0,
+    requests: [{ id: 1, message_id: 9, purpose: 'route' }] }, {}, { workflow, room_members });
+  const host = task('Claude');
+  const field = JSON.parse(readFileSync(join(directory, 'free-1.task.json'), 'utf8')).workflow;
+  assert.deepEqual(field.missing.map(card => card.card), ['science']);
+  assert.equal(field.members.find(member => member.card === 'hero').sub_workflow, 'rehearsal');
+  const part = field.sub_workflows.find(sub => sub.id === 'rehearsal');
+  assert.ok(part.skill_path.endsWith(join('workflows', 'rehearsal', 'SKILL.md')));
+  assert.match(part.revision, /^[0-9a-f]{12}$/);
+  assert.deepEqual(part.cards, [{ card: 'hero', label: '主角视角', description: '代入主角' }]);
+  // An API host has no files outside the project, so it gets each sub-workflow's text in its system prompt.
+  assert.match(system_prompt({ participant: 'DeepSeek', role: 'host', mode: 'free', workflow: host.workflow }), /子工作流「剧情试演」（rehearsal）[\s\S]*请主角视角试演。/);
+  assert.match(task('Claude-hero').prompt, /你就是主角。/, 'a sub-workflow member gets its card prompt');
 });
 
 test('registered commands travel with the workflow, and an API member runs only them, within its access and project', async t => {

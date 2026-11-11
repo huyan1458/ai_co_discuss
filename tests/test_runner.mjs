@@ -1172,11 +1172,11 @@ test('claude allows only codiscuss website subcommands and draft writes, then us
   assert.deepEqual(args.slice(directories + 1, directories + 4), [f.directory, f.task.draft_directory, f.task.skill_directories[0]]);
   assert.deepEqual(args.slice(args.indexOf('--disallowedTools') + 1), [`Edit(${claude_rule_path(f.task.skill_directories[0])}/**)`]);
   assert.deepEqual(args.slice(args.indexOf('--allowedTools') + 1, args.indexOf('--disallowedTools')),
-    [...['room', 'message', 'turn', 'state', 'goal', 'mode', 'review', 'sequence', 'execution', 'health', 'schema', 'launch workflow-adopt', 'launch workflow-join', 'launch host-control']
+    [...['room', 'message', 'turn', 'state', 'goal', 'mode', 'review', 'sequence', 'execution', 'health', 'schema', 'launch workflow-adopt', 'launch workflow-join', 'launch workflow-leave', 'launch host-control']
       .flatMap(command => [`Bash(codiscuss ${command} *)`, `PowerShell(codiscuss ${command} *)`]),
     `Edit(${claude_rule_path(f.task.draft_directory)}/**)`, 'Read(//d/materials/**)']);
   assert.ok(!args.includes(`Edit(${claude_rule_path(f.directory)}/**)`));
-  assert.ok(!args.some(arg => /(Bash|PowerShell)\(codiscuss (service|launch (?!(workflow-(adopt|join)|host-control) )|run|api|setup|install|local)/.test(arg)));
+  assert.ok(!args.some(arg => /(Bash|PowerShell)\(codiscuss (service|launch (?!(workflow-(adopt|join|leave)|host-control) )|run|api|setup|install|local)/.test(arg)));
   // The prompt is the first stream-json message on stdin, which stays open for interjections.
   assert.ok(args.includes('--input-format') && !args.includes(f.task.prompt));
   assert.equal(JSON.parse(f.calls[0].input).message.content[0].text, f.task.prompt);
@@ -1296,7 +1296,7 @@ test('a Claude window turn that ends on a usage limit fails without retry, and o
   };
   const [failed] = await follow(prompt + limit + turn_end);
   assert.equal(failed.retryable, false);
-  assert.match(failed.error, /用量已达上限.*5-hour limit/);
+  assert.equal(failed.error, 'Claude 5-hour 用量已达上限，11:50am 重置');
   assert.deepEqual(await follow(prompt + line({ type: 'assistant', message: { content: [{ type: 'text', text: '好' }] } }) + turn_end), ['exit']);
   assert.equal(claude_api_error({ type: 'assistant', is_api_error_message: true, error: 'server_error',
     message: { content: [{ type: 'text', text: 'API Error: 529 Overloaded' }] } }).lasting, false, 'an overloaded server is retried');

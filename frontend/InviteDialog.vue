@@ -1,6 +1,6 @@
 <script setup>
 /** Invite dialog shared by the discussion board and the free-room board: pick AIs, set up each card, then invite them one by one. */
-import { computed, inject, ref, watch } from "vue";
+import { computed, inject, onBeforeUnmount, ref, watch } from "vue";
 import ExpertCard from "./ExpertCard.vue";
 import RosterAdd from "./RosterAdd.vue";
 
@@ -58,7 +58,13 @@ const invite_blocked = computed(() => submitting.value || (!invite_picks.value.l
 // The workflow whose cards this invitation adds: { id, label }; enabled once all its cards have joined.
 const invite_workflow = ref(null);
 const submitting = ref(false);
+const loading = ref(false), failure = ref("");
+let workflow_request = 0;
+onBeforeUnmount(() => { workflow_request++; });
 watch(inviting, async (open) => {
+  workflow_request++;
+  loading.value = false;
+  failure.value = "";
   if (!open) return;
   invite_workflow.value = null;
   invite_picks.value = [];
@@ -99,9 +105,14 @@ function add_invite_preset(preset) {
 async function choose_workflow(id) {
   if (submitting.value) return;
   if (!id) { invite_picks.value = invite_picks.value.filter(pick => !pick.card); invite_workflow.value = null; return; }
+  const request = ++workflow_request;
+  loading.value = true;
+  failure.value = "";
   let workflow;
   try { workflow = await bridge.local_request("workflows", { action: "get", id }); }
-  catch (error) { return bridge.notify("error", error.message); }
+  catch (error) { if (request === workflow_request) failure.value = error.message; return; }
+  finally { if (request === workflow_request) loading.value = false; }
+  if (request !== workflow_request) return;
   invite_picks.value = invite_picks.value.filter(pick => !pick.card);
   const binding = view.value.launch.room_models?.workflow;
   const existing = workflow.agents.map(agent => ({ ...record(binding?.id === id ? binding.members?.[agent.card] : ""), card: agent.card }))
@@ -169,7 +180,9 @@ async function refresh_after(invited_any) {
 <template>
   <UModal :content="{ onInteractOutside: (event) => event.preventDefault() }" v-model:open="inviting" title="邀请成员" :description="description" :ui="{ content: 'glass-panel studio-modal pb-invite-modal', body: 'dialog-body' }">
     <template #body>
-      <div v-if="invited_manual.length && !invite_picks.length" class="pb-invite" aria-label="启动手动成员">
+      <div v-if="loading" class="pb-invite-cards" role="status" aria-label="正在读取工作流成员"><USkeleton v-for="card in 2" :key="card" class="h-48 w-full" /></div>
+      <div v-else-if="failure" class="pb-invite" role="status"><p>{{ failure }}</p><UButton label="重试" icon="i-lucide-refresh-cw" color="neutral" variant="soft" @click="choose_workflow(workflowId)" /></div>
+      <div v-else-if="invited_manual.length && !invite_picks.length" class="pb-invite" aria-label="启动手动成员">
         <p class="pb-invite-lead">{{ invited_manual.length > 1 ? `${invited_manual.length} 位手动成员已加入` : '手动成员已加入' }}，把启动指令交给各自的 AI 会话，注册后才算到场。</p>
         <ul class="pb-invite-launches">
           <li v-for="name in invited_manual" :key="name">

@@ -62,7 +62,9 @@ const DETAIL_WIDTH_PX = 560;
 const compact = computed(() => section_width.value > 0 && section_width.value <= COMPACT_MAX_PX);
 let last_read = 0;
 let last_full = 0;
-let reading = false;
+const reading = ref(false);
+let reading_room = "", read_version = 0;
+onBeforeUnmount(() => { read_version++; reload = ""; });
 // A read asked for during another: "" none, "next" incremental, "full" whole.
 let reload = "";
 let refresh_timer = 0;
@@ -79,12 +81,14 @@ async function load(full = false) {
   const id = room_id.value;
   if (!id) return;
   // A read asked for while another is in flight runs once that one ends, so a room switch is never dropped.
-  if (reading) { reload = reload === "full" || full ? "full" : "next"; return; }
-  reading = true;
+  if (reading.value && reading_room === id) { reload = reload === "full" || full ? "full" : "next"; return; }
+  const version = ++read_version;
+  reading.value = true;
+  reading_room = id;
   const after = full || !last_read || Date.now() - last_full >= FULL_REFRESH_MS ? 0 : last_read - OVERLAP_SECONDS;
   try {
     const result = await bridge.request(`/api/rooms/${id}/timeline${after ? `?after=${after}` : ""}`);
-    if (id !== room_id.value) return;
+    if (version !== read_version || id !== room_id.value) return;
     const next = after ? new Map(executions.value) : new Map();
     for (const item of result.executions) next.set(`${item.source}:${item.id}`, item);
     executions.value = next;
@@ -95,12 +99,14 @@ async function load(full = false) {
     if (!after) last_full = Date.now();
     error.value = "";
   } catch (failure) {
-    error.value = `读取执行记录失败：${failure.message}`;
+    if (version === read_version) error.value = `读取执行记录失败：${failure.message}`;
   } finally {
-    reading = false;
-    const pending = reload;
-    reload = "";
-    if (pending) load(pending === "full");
+    if (version === read_version) {
+      reading.value = false;
+      const pending = reload;
+      reload = "";
+      if (pending) load(pending === "full");
+    }
   }
 }
 
@@ -115,6 +121,8 @@ watch(running, (live) => {
 watch(room_id, () => {
   executions.value = new Map(); limits.value = null; collapsed.value = new Set(); note_texts.value = new Map(); opened.value = "";
   last_read = 0;
+  error.value = "";
+  reload = "";
   load(true);
 }, { immediate: true });
 // A new execution, an answer or a failure changes the room; read at once instead of waiting for the next tick.
@@ -554,7 +562,8 @@ const selected_notes = computed(() => {
 <template>
   <section ref="section_element" class="merged-section execution-timeline" aria-label="执行时间线">
     <div v-if="!compact" class="page-heading"><div><h2>执行时间线</h2><p>每次执行的时间花在哪、谁在等谁；点名字看详情。</p></div></div>
-    <p v-if="error" role="alert" class="fine-print wf-error">{{ error }}</p>
+    <div v-if="reading && !timeline" class="grid gap-4 py-4" role="status" aria-label="正在读取执行时间线"><div v-for="row in 6" :key="row" class="flex items-center gap-6"><USkeleton class="h-5 w-24 shrink-0" /><USkeleton class="h-6" :class="row % 2 ? 'w-2/3' : 'w-1/3'" /></div></div>
+    <p v-else-if="error" role="alert" class="fine-print wf-error">{{ error }}<UButton label="重试" color="neutral" variant="link" size="xs" :loading="reading" @click="load(true)" /></p>
     <p v-if="timeline && !timeline.executions.length" class="fine-print">还没有执行记录。</p>
     <div v-if="timeline?.executions.length" ref="wf_element" class="wf" :class="{ 'is-compact': compact }"
       :style="{ '--wf-depth-px': `${compact ? COMPACT_DEPTH_PX : DEPTH_PX}px` }">

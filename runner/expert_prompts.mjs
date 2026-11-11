@@ -4,7 +4,7 @@
  * system_prompt, even an empty one, replaces its preset. They add guidance and never widen permissions.
  */
 // Plain data with no imports of its own, so this module stays loadable by the web page.
-import { adapter_profile } from './adapters/profiles.mjs';
+import { adapter_profile, IMAGE_MODELS } from './adapters/profiles.mjs';
 
 export const MAX_EXPERT_PROMPT = 4000;
 
@@ -12,7 +12,7 @@ export const MAX_EXPERT_PROMPT = 4000;
 export const EXPERT_PROMPT_PRESETS = {};
 
 /**
- * Expert presets: a named instance with its description, prompt, project access and optionally model and effort,
+ * Expert presets: a named instance with its description, prompt, project access and optionally model, effort and image model,
  * added in one click. The user's own presets live on this computer (`expert-presets.json` in the service home);
  * one with a built-in's name replaces it.
  */
@@ -23,6 +23,9 @@ export const BUILTIN_EXPERT_PRESETS = [
   { name: 'Antigravity-docs', label: 'Gemini-文档', builtin: true, project_access: 'write',
     description: '专门整理文档：按改动同步说明，只改文档不改代码。',
     system_prompt: '你负责整理文档。先读计划文档与本次改动，按仓库现有文档的分工同步说明，只改文档文件，不改代码；不确定的事实标为待核实，不自行补写。' },
+  { name: 'OpenAI-image', label: 'OpenAI-生图', builtin: true, project_access: 'read', image_model: IMAGE_MODELS[0],
+    description: '专门生成和修改图片：按要求出图、改图，结果作为附件交付。',
+    system_prompt: '你负责生成和修改图片。按请求写清画面内容、风格与尺寸后出图；改图时以请求指定的附件为原图，未要求改动的部分尽量保持不变。成图作为附件随回答提交，并写明所用图片模型与参数。' },
 ];
 
 /** The prompt this member receives: its own text when set, otherwise its software's preset. */
@@ -74,9 +77,9 @@ export function access_label(level) { return level === 'own' ? '自行决定' : 
 
 /**
  * Subcommands an automatic task may run; service, run, api, setup and the rest of launch stay unapproved.
- * `launch workflow-adopt` and `launch workflow-join` and `launch host-control` check themselves that the caller is the room's host (adopt and host-control also need the owner's grant).
+ * `launch workflow-adopt`, `launch workflow-join`, `launch workflow-leave` and `launch host-control` check themselves that the caller is the room's host (adopt and host-control also need the owner's grant).
  */
-export const TASK_SUBCOMMANDS = ['room', 'message', 'turn', 'state', 'goal', 'mode', 'review', 'sequence', 'execution', 'health', 'schema', 'launch workflow-adopt', 'launch workflow-join', 'launch host-control'];
+export const TASK_SUBCOMMANDS = ['room', 'message', 'turn', 'state', 'goal', 'mode', 'review', 'sequence', 'execution', 'health', 'schema', 'launch workflow-adopt', 'launch workflow-join', 'launch workflow-leave', 'launch host-control'];
 
 /**
  * Whether a member may run commands beyond the codiscuss subcommands: every level but 只读, and 可写 only with a project

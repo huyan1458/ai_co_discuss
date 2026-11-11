@@ -5,8 +5,9 @@ import ExcerptEditCard from "./ExcerptEditCard.vue";
 import MediaViewer from "./MediaViewer.vue";
 import { open_image_viewer } from "./image-viewer.js";
 import OfficeViewer from "./OfficeViewer.vue";
+import PreviewLoading from "./PreviewLoading.vue";
 import Papa from "papaparse";
-import { gunzipSync } from "fflate";
+import { gunzip } from "fflate";
 import { add_excerpt as put_excerpt, crumbs_of, document_kind_of, excerpt_mark_place, excerpt_range, file_preview, file_size, file_type, hold_selection, inline_markdown_images, media_of, modified_time, subtitle_cues, text_kind_of, text_offset } from "./file-preview.js";
 
 // The file preview window: several files open as tabs; it folds into a floating button that keeps every tab, its mode
@@ -197,27 +198,34 @@ async function read_attachment(attachment) {
 async function load(item) {
   const request = (item.request || 0) + 1;
   Object.assign(item, { request, loading: true, error: "" });
+  const page_read = !item.attachment && /\.(md|markdown|html?)$/i.test(item.path) ? load_page(item, request) : null;
   try {
+    // The tab is already open with its loading animation; an attachment's address (through the relay for the
+    // computer's rooms) is fetched only now.
+    if (item.attachment && !item.attachment.url) item.attachment.url = await bridge.attachment_url(item.attachment);
     // An Office attachment is read whole by its preview, never decoded as text.
-    const result = item.attachment && document_kind_of(item.path) ? { text: null, reason: "", size: item.attachment.size, modified_at: item.attachment.created_at }
+    const binary = media_of(item.path) || document_kind_of(item.path);
+    const result = binary ? { text: null, reason: "", size: item.attachment?.size ?? item.metadata?.size, modified_at: item.attachment?.created_at || item.metadata?.modified_at }
       : item.attachment ? await read_attachment(item.attachment) : await bridge.read_room_files(item.room_id, item.path, 0, "", item.root || 0);
     if (item.request === request) item.data = result;
     // The computer inlines what a project's HTML file refers to, so it renders as it would opened on that computer;
     // for Markdown it reads the images the file shows.
-    const markdown = /\.(md|markdown)$/i.test(item.path);
-    if (item.request === request && !item.attachment && (markdown || /\.html?$/i.test(item.path))) {
-      try {
-        const page = await bridge.read_room_page(item.room_id, item.path, item.root || 0);
-        if (markdown) page.images = JSON.parse(page.text || "{}");
-        if (item.request === request) Object.assign(item, { page, page_error: "" });
-      } catch (error) { if (item.request === request) item.page_error = error.message; }
-    }
+    await page_read;
     if (item.request === request && !item.attachment && (media_of(item.path) || document_kind_of(item.path))) await load_media(item, request);
-    if (item.request === request && item.attachment && document_kind_of(item.path)) item.media = { url: item.attachment.url, blob: false };
+    if (item.request === request && item.attachment && binary) item.media = { url: item.attachment.url, blob: false };
     if (item.request === request && document_kind_of(item.path) === "prproj" && item.media) await unpack_project(item, request);
   } catch (error) {
     if (item.request === request) item.error = error.message;
   } finally { if (item.request === request) item.loading = false; }
+}
+
+/** Read referenced images or bundled HTML beside the source file instead of adding another serial round trip. */
+async function load_page(item, request) {
+  try {
+    const page = await bridge.read_room_page(item.room_id, item.path, item.root || 0);
+    if (/\.(md|markdown)$/i.test(item.path)) page.images = JSON.parse(page.text || "{}");
+    if (item.request === request) Object.assign(item, { page, page_error: "" });
+  } catch (error) { if (item.request === request) item.page_error = error.message; }
 }
 
 /** Give a media tab its playable address: a stream of the computer's website, or the whole file through the relay. */
@@ -230,6 +238,7 @@ async function load_media(item, request) {
     });
     if (item.request !== request) { if (media.blob) URL.revokeObjectURL(media.url); return; }
     item.media = media;
+    if (item.data) item.data.size = media.size;
   } catch (error) { if (item.request === request) item.media_error = error.message; }
 }
 
@@ -238,7 +247,8 @@ async function unpack_project(item, request) {
   try {
     const response = await fetch(item.media.url);
     if (!response.ok) throw new Error(`文件读取失败（${response.status}）`);
-    const bytes = gunzipSync(new Uint8Array(await response.arrayBuffer()));
+    const compressed = new Uint8Array(await response.arrayBuffer());
+    const bytes = await new Promise((resolve, reject) => gunzip(compressed, (error, data) => error ? reject(error) : resolve(data)));
     const truncated = bytes.length > ATTACHMENT_TEXT_LIMIT;
     const text = new TextDecoder("utf-8").decode(truncated ? bytes.subarray(0, ATTACHMENT_TEXT_LIMIT) : bytes);
     if (item.request === request) item.data = { ...item.data, text, truncated, limit: ATTACHMENT_TEXT_LIMIT, encoding: "utf-8", reason: "" };
@@ -254,7 +264,7 @@ function release_media(item) {
 }
 
 /** Open a file of the current room in its own tab (or re-read the tab it already has) and show the window. */
-function open_file(path, directory, root = 0) {
+function open_file(path, directory, root = 0, metadata = null) {
   remember_scroll();
   const room_id = view.value.room?.id;
   if (!room_id) return;
@@ -265,6 +275,7 @@ function open_file(path, directory, root = 0) {
     item = tabs.value[tabs.value.length - 1];
   }
   active_id.value = id;
+  item.metadata = metadata;
   open.value = true;
   check_speech();
   load(item);
@@ -741,7 +752,7 @@ onMounted(() => {
   file_preview.open = open_file;
   window.addEventListener("message", frame_selection);
   bridge.set_text_preview(open_attachment);
-  bridge.set_image_viewer(open_image_viewer);
+  bridge.set_image_viewer((file) => open_image_viewer(file, () => bridge.attachment_url(file)));
   place_float();
   window.addEventListener("resize", place_float);
   narrow_query.addEventListener("change", track_narrow);
@@ -819,17 +830,17 @@ onBeforeUnmount(() => {
       <p v-else-if="html_notice && !source" class="project-editor-banner" :title="html_notice"><UIcon name="i-lucide-info" /><span class="project-editor-banner-text">{{ html_notice }}</span></p>
 
       <div ref="editor_body" class="project-editor-body" :style="{ '--file-font-scale': font_scale }">
-        <div v-if="tab?.loading && !preview" class="project-editor-state" role="status"><UIcon name="i-lucide-loader-circle" class="animate-spin" />正在读取文件…</div>
+        <PreviewLoading v-if="tab?.loading && !preview" :label="tab?.attachment && !tab.attachment.url ? '正在读取附件…' : '正在读取文件…'" />
         <div v-else-if="tab?.error && !preview" class="project-editor-state"><UIcon name="i-lucide-circle-alert" /><p>{{ tab.error }}</p><UButton label="重试" color="neutral" variant="outline" size="sm" @click="load(tab)" /></div>
         <template v-else-if="media_kind && !source">
           <div v-if="tab.media_error" class="project-editor-state"><UIcon name="i-lucide-circle-alert" /><p>{{ tab.media_error }}</p><UButton label="重试" color="neutral" variant="outline" size="sm" @click="load(tab)" /></div>
           <MediaViewer v-else-if="tab.media" :kind="media_kind" :url="tab.media.url" :name="preview_name" />
-          <div v-else class="project-editor-state" role="status"><UIcon name="i-lucide-loader-circle" class="animate-spin" />{{ tab.media_progress ? `正在经电脑读取…${Math.round(tab.media_progress * 100)}%` : '正在打开…' }}</div>
+          <PreviewLoading v-else :label="tab.media_progress ? `正在经电脑读取… ${Math.round(tab.media_progress * 100)}%` : '正在打开…'" :progress="tab.media_progress || 0" />
         </template>
         <template v-else-if="office_kind">
           <div v-if="tab.media_error" class="project-editor-state"><UIcon name="i-lucide-circle-alert" /><p>{{ tab.media_error }}</p><UButton label="重试" color="neutral" variant="outline" size="sm" @click="load(tab)" /></div>
           <OfficeViewer v-else-if="tab.media" :kind="office_kind" :url="tab.media.url" />
-          <div v-else class="project-editor-state" role="status"><UIcon name="i-lucide-loader-circle" class="animate-spin" />{{ tab.media_progress ? `正在经电脑读取…${Math.round(tab.media_progress * 100)}%` : '正在打开…' }}</div>
+          <PreviewLoading v-else :label="tab.media_progress ? `正在经电脑读取… ${Math.round(tab.media_progress * 100)}%` : '正在打开…'" :progress="tab.media_progress || 0" />
         </template>
         <div v-else-if="preview?.text === null" class="project-editor-state"><UIcon :name="preview_type[1]" /><p>{{ preview.reason || '这个格式只能下载后用本机软件打开' }}</p></div>
         <div v-else-if="showing_source && wrap" ref="code_scroll" class="project-code is-wrapped" tabindex="0" @scroll.passive="schedule_offer" aria-label="文件内容" :style="{ '--digits': String(line_count).length }">
@@ -851,7 +862,7 @@ onBeforeUnmount(() => {
             <tr v-for="(cue, index) in cues" :key="index"><td class="project-table-number">{{ index + 1 }}</td><td>{{ cue.start }}</td><td>{{ cue.end }}</td><td class="is-text">{{ cue.text }}</td></tr>
           </tbody></table>
         </div>
-        <div v-else-if="preview && format === 'html' && tab?.loading && !tab.page" class="project-editor-state" role="status"><UIcon name="i-lucide-loader-circle" class="animate-spin" />正在载入页面引用的文件…</div>
+        <PreviewLoading v-else-if="preview && format === 'html' && tab?.loading && !tab.page" label="正在载入页面引用的文件…" />
         <iframe v-else-if="preview && format === 'html'" ref="html_frame" class="project-html-preview" :sandbox="HTML_SANDBOX" referrerpolicy="no-referrer" :srcdoc="html_preview" title="HTML 文件预览"></iframe>
         <div v-else-if="preview" ref="markdown_scroll" v-keep-reading class="project-markdown-scroll" tabindex="0" @scroll.passive="schedule_offer"
           @wheel.passive="stop_following" @touchmove.passive="stop_following" @keydown="stop_following" @pointerdown="stop_following"><div ref="markdown_body" class="markdown-body project-markdown-preview" v-html="rendered"></div>

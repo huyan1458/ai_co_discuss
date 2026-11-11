@@ -7,9 +7,14 @@ const markdown = new MarkdownIt({ html: false, breaks: true, linkify: true })
   .use(markdown_it_cjk_friendly)
   .use(katex, { delimiters: "all", throwOnError: false, trust: false, logger: () => "ignore" });
 
-// Work on text tokens so mentions never alter code, URLs, or generated math.
+// Platform skills the "/" menu inserts as `$id` (keep in step with PLATFORM_SKILL_COMMANDS in ChannelDiscussion.vue).
+const PLATFORM_SKILLS = ["workflow-creator"];
+const SKILL_PATTERN = new RegExp(`(^|[\\s(（，,。；;：:])(\\$(?:${PLATFORM_SKILLS.join("|")}))(?![\\w-])`, "gu");
+const SKILL_ICON = '<svg viewBox="0 0 24 24" width="13" height="13" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M21 8 12 3 3 8v8l9 5 9-5z"/><path d="m3 8 9 5 9-5M12 13v8"/></svg>';
+
+// Work on text tokens so mentions and skill references never alter code, URLs, or generated math.
 markdown.renderer.rules.text = (tokens, index, options, environment) => {
-  const html = markdown.utils.escapeHtml(tokens[index].content);
+  const html = markdown.utils.escapeHtml(tokens[index].content).replace(SKILL_PATTERN, `$1<span class="skill-ref">${SKILL_ICON}$2</span>`);
   return environment?.mention ? html.replace(environment.mention, '$1<span class="mention">$2</span>') : html;
 };
 markdown.renderer.rules.link_open = (tokens, index, options, environment, renderer) => {

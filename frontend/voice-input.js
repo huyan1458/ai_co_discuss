@@ -85,9 +85,14 @@ export function use_voice_input({ bridge, on_text }) {
     context ??= new AudioContext();
     context.resume().catch(() => {});
     const token = starting = {};
+    state.status = "starting";
     let stream;
     try { stream = await navigator.mediaDevices.getUserMedia({ audio: { channelCount: 1, echoCancellation: true, noiseSuppression: true } }); }
-    catch (error) { throw new Error(error.name === "NotAllowedError" ? "没有麦克风权限，请在浏览器设置中允许本站使用麦克风" : `无法打开麦克风：${error.message}`); }
+    catch (error) {
+      if (starting === token) state.status = "";
+      if (token.cancelled) return;
+      throw new Error(error.name === "NotAllowedError" ? "没有麦克风权限，请在浏览器设置中允许本站使用麦克风" : `无法打开麦克风：${error.message}`);
+    }
     finally { if (starting === token) starting = null; }
     // Cancelled while the browser was still opening the microphone.
     if (token.cancelled) { stream.getTracks().forEach((track) => track.stop()); return; }

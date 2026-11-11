@@ -19,12 +19,13 @@ import { ADAPTER_IDS, ADAPTER_PROFILES, adapter_profile, DEFAULT_API_MAX_REQUEST
 import { API_PROVIDERS, api_check, api_models, save_api_key, saved_api_keys, validate_api_profile } from './discussion_api.mjs';
 import { DEFAULT_SCHEDULER_MODE, SCHEDULER_MODES, SCHEDULER_PROVIDERS, scheduler_check } from './scheduler.mjs';
 import { save_tts_settings, tts_release, tts_settings, tts_speak } from './tts.mjs';
+import { local_service_stop, local_services } from './tts_providers.mjs';
 import { weixin_command } from './weixin.mjs';
 import { stt_part } from './stt.mjs';
 import { access_levels, BUILTIN_EXPERT_PRESETS, MAX_EXPERT_PROMPT, PROJECT_ACCESS } from './expert_prompts.mjs';
 import { acquire_lock, api, check_extra_directories, DiscussionStore, service_drafts, validate_config } from './discussion_runner.mjs';
 import { FreeRoomRunner, free_task_files } from './free_runner.mjs';
-import { assert_workflow_enabled, bind_room_workflow, delete_workflow, get_workflow, list_workflows, load_room_workflow, parse_workflow_draft, preview_workflow, rename_workflow, save_workflow, set_workflow_disabled, workflow_directory, WORKFLOW_ID_PATTERN } from './workflows.mjs';
+import { assert_workflow_enabled, bind_room_workflow, delete_workflow, get_workflow, list_workflows, load_room_workflow, parse_workflow_draft, preview_workflow, rename_workflow, save_workflow, set_workflow_disabled, workflow_cards, workflow_directory, WORKFLOW_ID_PATTERN } from './workflows.mjs';
 import { assert_shared_home, CONNECTION_FIELDS, configuration_snapshot, read_registry, registered_identity, register_room, service_home, service_pid, start_service } from './discussion_service.mjs';
 
 // A platform is a type; `Claude-review` is another Claude instance with its own session, model and effort. An ID is
@@ -70,6 +71,7 @@ const HELP = `用法：codiscuss launch settings [--file FILE]
       codiscuss launch tts-settings [--file FILE]
       codiscuss launch tts --file FILE
       codiscuss launch tts-release
+      codiscuss launch local-speech [--file FILE]
       codiscuss launch weixin [--file FILE]
       codiscuss launch stt --file FILE
       codiscuss launch room-member --file FILE
@@ -88,7 +90,8 @@ const HELP = `用法：codiscuss launch settings [--file FILE]
       codiscuss launch presets [--file FILE]
       codiscuss launch machine-link --file FILE
       codiscuss launch workflow-adopt (--draft FILE | --id WORKFLOW) [--access-file FILE]
-      codiscuss launch workflow-join [--card ID[,ID]] [--access-file FILE]
+      codiscuss launch workflow-join [--card ID[,ID] | --sub SUB] [--access-file FILE]
+      codiscuss launch workflow-leave --sub SUB [--access-file FILE]
       codiscuss launch host-control ACTION [选项] [--access-file FILE]
       codiscuss launch workflow-check (--dir DIR | --draft FILE)
       codiscuss launch workflow-save (--dir DIR | --draft FILE)
@@ -109,6 +112,7 @@ tts-settings 读取朗读设置；内容非空时保存（语音服务 provider�
 tts 用朗读设置把 text（不超过 300 字）合成为音频（本机服务为 m4a，其余为 MP3），返回 base64。
 weixin 微信通知：action 为 status（默认，读取绑定状态）、login（生成扫码内容）、complete（等待扫码确认，约 20 秒）、test（发一条测试通知）或 unbind（解除本机绑定）。Goal 待确认 5 分钟仍未回复时通知房主，房主在微信回复即作为房主发言发回该房间；只用本机服务目录保存凭据。
 tts-release 用户停止朗读：所选服务释放在这台电脑上占用的资源（本机语音在 5 秒内结束、释放显存），云端服务无操作。
+local-speech 读取本机朗读（tts，yovoice）与语音识别（stt，crispasr）服务的运行状态（state：running / stopped / other（端口被其他程序占用），及 pid、进程名）；内容为 {"stop": "tts" | "stt"} 时强行结束该服务（连同子进程），只结束端口上属于该服务程序的进程。
 stt 按序接收录音片段（upload_id、index、base64 PCM 16 kHz 单声道、final）；最后一段时识别整段录音并返回 text。
 pick-directory 在本机弹出系统目录选择窗口，返回所选路径；取消时不返回路径。
 browse-directory 列出常用项目及其中的子文件夹（只含文件夹名，分页），供其他设备选择目录；path 为空时列出常用项目。
@@ -126,7 +130,8 @@ room-profiles 导出房间的本机成员软件配置与实际会话 ID（不含
 room-restore 把导入房间的本机成员配置登记到本机并核对原会话存在，Claude Code 成员保持手动；须提供 site、room_id、token、local_members。
 room-fork 把从原房间分支出的新房间登记到本机，各本机成员从原会话分叉、不含分支点之后的执行，原会话不变；须提供 site、room_id、token、source_room_id、source_token、executions（{成员名: [排除的执行编号]}）。
 workflow-adopt 主持人在本房间启用工作流：--draft 把自己的草稿（一段，分段头 1/1）保存进工作流库后启用，--id 启用工作流库里已有的工作流（不改动它）；缺的卡片成员由本机服务邀请，项目权限最高可写；须房主已为本房间打开“主持人完整权限”。凭据为本次任务的 access_file（或 DISCUSS_ACCESS_FILE）。
-workflow-join 主持人为本房间在用工作流里还没有成员的卡片（启用后才新增的）邀请成员，不填 --card 即全部；无需额外授权，离开或移除的成员由用户请回。凭据同上。
+workflow-join 主持人为本房间在用工作流里还没有成员的卡片（启用后才新增的）邀请成员，不填 --card 即全部主线卡片；无需额外授权，离开或移除的成员由用户请回。--sub 改为请进该子工作流的卡片成员（离开的请回原会话）。凭据同上。
+workflow-leave 主持人用完子工作流后，把 --sub 子工作流卡片的成员设为离开（会话保留，下次 workflow-join --sub 请回）；主线成员不能这样请离。凭据同上。
 host-control 主持人代房主控制房间，须房主已为本房间打开“主持人完整权限”，凭据同上；成员用 --member（成员 ID 或显示名），除 retry、model、label 外不能是主持人自己：
   诊断：details --execution N 读取该执行的本机过程日志（服务端详情与事件记录用 execution / room events 读取）；
   恢复：stop --member 打断；stop-all 停止全部执行、请求与接力；steer --member --text 话 [--submission-id ID] 向它进行中的执行插话；
@@ -387,8 +392,11 @@ export async function room_models(home, raw, { read_defaults = profile => cached
 function room_workflow_status(config, home) {
   if (!config.workflow?.id) return null;
   const loaded = load_room_workflow({ ...config, api_home: config.api_home || home, workflow: { ...config.workflow, enabled: true } });
+  // `cards` are the main flow's, which a refresh fills; a sub-workflow's cards join only when it is used.
+  const cards = Object.values(loaded.cards || {});
   return { id: config.workflow.id, label: loaded.label || config.workflow.id, enabled: Boolean(config.workflow.enabled),
-    available: !loaded.error, members: config.workflow.members || {}, cards: Object.keys(loaded.cards || {}) };
+    available: !loaded.error, members: config.workflow.members || {}, cards: cards.filter(card => !card.sub_workflow).map(card => card.card),
+    sub_workflows: (loaded.sub_workflows || []).map(sub => ({ id: sub.id, label: sub.label || sub.id, description: sub.description, cards: sub.cards })) };
 }
 
 /**
@@ -1740,7 +1748,8 @@ function card_platform_ready(home, name) {
 async function join_workflow_cards(home, config, roster, workflow, members, cards) {
   const owner = { site: config.site, room_id: config.room, token: config.token };
   const next = { ...members }, labels = {}, descriptions = {};
-  for (const agent of workflow.agents.filter(item => !cards || cards.includes(item.card))) {
+  // Without a list, the main flow's cards; a sub-workflow's cards are named when it is used.
+  for (const agent of cards ? workflow_cards(workflow).filter(item => cards.includes(item.card)) : workflow.agents) {
     const current = roster.find(member => member.name === next[agent.card] && member.status !== 'removed');
     if (current?.status === 'active') continue;
     if (current?.status === 'away') { await room_member(home, { ...owner, action: 'rejoin', name: current.name }); continue; }
@@ -1769,7 +1778,7 @@ async function join_workflow_cards(home, config, roster, workflow, members, card
 async function sync_workflow_cards(home, path, config, roster, cards) {
   if (!config.workflow?.id || !config.workflow.enabled) throw new Error('本房间没有在用的工作流');
   const workflow = get_workflow(home, config.workflow.id);
-  const known = workflow.agents.map(agent => agent.card);
+  const known = workflow_cards(workflow).map(agent => agent.card);
   const unknown = (cards || []).filter(card => !known.includes(card));
   if (unknown.length) throw new Error(`工作流 ${workflow.id} 没有这些卡片：${unknown.join('、')}；现有卡片：${known.join('、') || '无'}`);
   const kept = Object.fromEntries(Object.entries(config.workflow.members || {}).filter(([card]) => known.includes(card)));
@@ -1801,13 +1810,39 @@ async function refresh_room_workflow(home, raw) {
  * authorized the workflow's cards, so this needs no further grant. Only cards with no member yet may be named, so a
  * member the user sent away or removed stays so. Returns the room's workflow status and the card map.
  */
-export async function join_workflow(home, { access_file, cards }) {
+export async function join_workflow(home, { access_file, cards, sub }) {
   const { path, config, roster } = await host_room(home, access_file);
+  if (sub) return sync_workflow_cards(home, path, config, roster, sub_workflow_cards(home, config, sub));
   const mapped = Object.keys(config.workflow?.members || {});
   const taken = (cards || []).filter(card => mapped.includes(card));
   if (taken.length) throw new Error(`这些卡片已有成员：${taken.join('、')}；离开或移除的成员由用户请回`);
   const known = config.workflow?.id && config.workflow.enabled ? get_workflow(home, config.workflow.id).agents.map(agent => agent.card) : [];
   return sync_workflow_cards(home, path, config, roster, cards?.length ? cards : known.filter(card => !mapped.includes(card)));
+}
+
+/** The cards a sub-workflow of the room's workflow in use brings; refuses one it lacks or one with no cards. */
+function sub_workflow_cards(home, config, sub) {
+  if (!config.workflow?.id || !config.workflow.enabled) throw new Error('本房间没有在用的工作流');
+  const list = get_workflow(home, config.workflow.id).sub_workflows;
+  const found = list.find(item => item.id === sub);
+  if (!found) throw new Error(`工作流 ${config.workflow.id} 没有子工作流 ${sub}；现有子工作流：${list.map(item => item.id).join('、') || '无'}`);
+  if (!found.agents.length) throw new Error(`子工作流 ${sub} 没有卡片，不需要请成员加入`);
+  return found.agents.map(agent => agent.card);
+}
+
+/**
+ * The host ends a sub-workflow's use: the members its cards brought are set away (pending requests cancelled, running work
+ * stopped, sessions kept), so `workflow-join --sub` brings them back to their own sessions. Only a sub-workflow's cards
+ * may be sent away this way; the main flow's members stay for the user to manage.
+ */
+export async function leave_sub_workflow(home, { access_file, sub }) {
+  if (!sub) throw new Error('须用 --sub 指定子工作流');
+  const { config, roster } = await host_room(home, access_file);
+  const cards = sub_workflow_cards(home, config, sub);
+  const names = cards.map(card => config.workflow.members?.[card]).filter(Boolean);
+  const away = roster.filter(member => names.includes(member.name) && member.status === 'active' && member.role !== 'host');
+  for (const member of away) await site_request(config.site, `/api/rooms/${config.room}/members/${member.id}`, config.token, { action: 'away' });
+  return { room_id: config.room, sub, away: away.map(member => member.name) };
 }
 
 // When the owner left the room's goal budget at no limit, a goal the host opens itself still stops by these.
@@ -2008,8 +2043,9 @@ export function check_or_save_workflow(home, { dir, draft }, save = false) {
   const source = dir ? { folder: dir } : { parts: [readFileSync(resolve(draft), 'utf8')] };
   const preview = workflows_command(home, { action: 'preview', ...source });
   if (!save) return preview;
-  const agents = preview.agents.map(({ requested_access, ...agent }) => requested_access ? { ...agent, project_access: requested_access } : agent);
-  return save_workflow(home, { ...preview, agents }, validate_preset);
+  const declared = list => list.map(({ requested_access, ...agent }) => requested_access ? { ...agent, project_access: requested_access } : agent);
+  const sub_workflows = preview.sub_workflows?.map(sub => ({ ...sub, agents: declared(sub.agents) }));
+  return save_workflow(home, { ...preview, agents: declared(preview.agents), ...(sub_workflows ? { sub_workflows } : {}) }, validate_preset);
 }
 
 const WRITING_ACCESS = new Set(['write', 'auto', 'full', 'own']);
@@ -2035,7 +2071,7 @@ export async function launch_main(args = process.argv.slice(2), input_text) {
   const { values, positionals } = parseArgs({ args, allowPositionals: true, options: {
     file: { type: 'string' }, 'dry-run': { type: 'boolean' }, browser: { type: 'boolean' }, remote: { type: 'boolean' }, device: { type: 'string' },
     'configuration-locked': { type: 'boolean' }, help: { type: 'boolean', short: 'h' },
-    draft: { type: 'string' }, 'access-file': { type: 'string' }, dir: { type: 'string' }, card: { type: 'string' }, id: { type: 'string' },
+    draft: { type: 'string' }, 'access-file': { type: 'string' }, dir: { type: 'string' }, card: { type: 'string' }, sub: { type: 'string' }, id: { type: 'string' },
     member: { type: 'string' }, order: { type: 'string' }, revision: { type: 'string' }, name: { type: 'string' }, access: { type: 'string' },
     model: { type: 'string' }, effort: { type: 'string' }, do: { type: 'string' }, execution: { type: 'string' }, text: { type: 'string' },
     goal: { type: 'string' }, label: { type: 'string' }, description: { type: 'string' }, adapter: { type: 'string' }, 'submission-id': { type: 'string' },
@@ -2056,7 +2092,12 @@ export async function launch_main(args = process.argv.slice(2), input_text) {
   }
   if (positionals[0] === 'workflow-join') {
     const cards = (values.card || '').split(',').map(card => card.trim()).filter(Boolean);
-    const result = await join_workflow(service_home(), { cards, access_file: values['access-file'] || process.env.DISCUSS_ACCESS_FILE });
+    const result = await join_workflow(service_home(), { cards, sub: values.sub, access_file: values['access-file'] || process.env.DISCUSS_ACCESS_FILE });
+    return process.stdout.write(`${JSON.stringify(result)}
+`);
+  }
+  if (positionals[0] === 'workflow-leave') {
+    const result = await leave_sub_workflow(service_home(), { sub: values.sub, access_file: values['access-file'] || process.env.DISCUSS_ACCESS_FILE });
     return process.stdout.write(`${JSON.stringify(result)}
 `);
   }
@@ -2090,6 +2131,7 @@ export async function launch_main(args = process.argv.slice(2), input_text) {
   else if (positionals[0] === 'tts-settings') result = input && Object.keys(input).length ? save_tts_settings(home, input) : tts_settings(home);
   else if (positionals[0] === 'tts' && input) result = await tts_speak(home, input);
   else if (positionals[0] === 'tts-release') result = tts_release(home);
+  else if (positionals[0] === 'local-speech') result = input?.stop ? await local_service_stop(home, input.stop) : await local_services(home);
   else if (positionals[0] === 'weixin') result = await weixin_command(home, input || {});
   else if (positionals[0] === 'stt' && input) result = await stt_part(home, input);
   else if (positionals[0] === 'room-models' && input) result = await room_models(home, input);

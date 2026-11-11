@@ -126,11 +126,11 @@ function member_status(member, state) {
 
 /**
  * The quiet line beside a name: a woken CLI shows only its model and effort, since being woken here is the usual case;
- * API, manual and web members also say how they take part. The crown already marks the host.
+ * API, manual and web members also say how they take part; one that can make images names its image model too. The crown already marks the host.
  */
 function member_tag(member) {
   if (member.access !== "runner") return ACCESS_LABELS[member.access];
-  return [member.adapter === "api" ? "API" : "", member_model(member)].filter(Boolean).join(" · ");
+  return [member.adapter === "api" ? "API" : "", member_model(member), member.image_model ? `生图 ${member.image_model}` : ""].filter(Boolean).join(" · ");
 }
 
 /** Only woken members have a model the site knows; others choose it in their own chat. */
@@ -303,7 +303,7 @@ watch(() => room.value.id, () => { starting.value = false; });
           <MemoBlock v-for="member in [member_named(item.name)].filter(Boolean)" :key="member.id" :deps="[member_row_key(member, item.state)]">
             <UAvatar :src="bridge.identities[member.name]?.icon" :text="bridge.identities[member.name]?.initials" :alt="member.name" size="xs" class="channel-avatar" :class="bridge.identities[member.name]?.style" />
             <div class="pb-member-body">
-              <div class="pb-member-name" :title="room.descriptions?.[member.name] || undefined">{{ bridge.display_name(member.name) }}<span v-if="bridge.display_name(member.name) !== member.name" class="member-id">{{ member.name }}</span><UIcon v-if="member.role === 'host'" name="i-lucide-crown" title="主持人" /><small :title="member_model(member) || undefined">{{ member_tag(member) }}</small></div>
+              <div class="pb-member-name" :title="room.descriptions?.[member.name] || undefined">{{ bridge.display_name(member.name) }}<span v-if="bridge.display_name(member.name) !== member.name" class="member-id">{{ member.name }}</span><UIcon v-if="member.role === 'host'" name="i-lucide-crown" title="主持人" /><small :title="member_tag(member) || undefined">{{ member_tag(member) }}</small></div>
               <small v-if="in_workflow(member.name)" class="pb-workflow-member" :title="`来自工作流「${workflow.label}」`">工作流</small>
               <div v-if="member_setup(member)" class="pb-member-model" :title="bridge.participant_session_hint(member.name, room, view.launch.room_models)">{{ member_setup(member) }}</div>
               <div class="pb-member-status" :class="`is-${member_tone(member)}`"><span class="pb-dot"></span><span class="pb-member-status-text" :title="member.execution?.status === 'failed' ? member.execution.result : member.held_until ? member_status(member, item.state) : undefined">{{ member_status(member, item.state) }}</span></div>

@@ -3,7 +3,7 @@
  * browser, or from another device through a folder list limited to the saved projects. A device without the local
  * service picks only among the projects its paired computer published. With `v-model` it edits that path instead of
  * the launch's cwd (one row of the extra project directories); the paired-computer project picker has no such mode. */
-import { computed, inject, nextTick, ref } from "vue";
+import { computed, inject, nextTick, onBeforeUnmount, ref } from "vue";
 
 const props = defineProps({ placeholder: { type: String, default: "输入完整路径，或选择项目" }, disabled: { type: Boolean, default: false },
   modelValue: { type: String, default: undefined }, compact: { type: Boolean, default: false } });
@@ -49,19 +49,25 @@ async function pick_directory() {
 // ---- Folder list for other devices: only folder names, inside the saved projects, checked on the computer. ----
 const folder = ref({ open: false, path: "", parent: null, entries: [], next_offset: null, truncated: false, loading: false, error: "" });
 let folder_done = null;
+let folder_request = 0;
+onBeforeUnmount(() => { folder_request++; folder_done?.(""); });
 
 /** Show one folder's sub-folders, or the saved projects when `path` is empty; `more` appends the next page. */
 async function open_folder(path, more = false) {
+  const request = ++folder_request;
+  if (!more) Object.assign(folder.value, { path, parent: path.replace(/[\\/]+[^\\/]+[\\/]*$/, ""), entries: [], next_offset: null, truncated: false });
   folder.value.loading = true;
   folder.value.error = "";
   try {
     const page = await bridge.list_remote_directories(path, more ? folder.value.next_offset : 0);
+    if (request !== folder_request) return;
     folder.value = { ...folder.value, ...page, entries: more ? [...folder.value.entries, ...page.entries] : page.entries };
   } catch (failure) {
+    if (request !== folder_request) return;
     folder.value.error = failure.message;
     // A typed path outside the projects starts the list from the projects instead.
     if (path && !more && !folder.value.entries.length) return open_folder("");
-  } finally { folder.value.loading = false; }
+  } finally { if (request === folder_request) folder.value.loading = false; }
 }
 
 /** Let another device browse for a folder; resolves to the chosen path, or "" when closed. */
@@ -72,6 +78,7 @@ function choose_folder(start) {
 }
 
 function finish_folder(path) {
+  folder_request++;
   folder.value.open = false;
   folder_done?.(path);
   folder_done = null;
@@ -234,15 +241,16 @@ async function save_projects() {
           <UButton icon="i-lucide-arrow-left" color="neutral" variant="ghost" size="xs" aria-label="上一级" :disabled="!folder.path || folder.loading" @click="open_folder(folder.parent || '')" />
           <span class="folder-path" :title="folder.path">{{ folder.path || "常用项目" }}</span>
         </div>
-        <ul class="folder-list" aria-label="文件夹">
+        <ul class="folder-list" aria-label="文件夹" :aria-busy="folder.loading">
+          <template v-if="folder.loading && !folder.entries.length"><li v-for="row in 5" :key="`loading-${row}`" class="folder-entry" aria-hidden="true"><USkeleton class="h-4 w-4 shrink-0" /><USkeleton class="h-4 w-2/3" /></li></template>
           <li v-for="entry in folder.entries" :key="entry.path">
             <button type="button" class="folder-entry" :disabled="folder.loading" @click="open_folder(entry.path)"><UIcon name="i-lucide-folder" />{{ entry.name }}</button>
           </li>
-          <li v-if="!folder.entries.length && !folder.loading" class="folder-empty">{{ folder.path ? "没有子文件夹" : "电脑上还没有常用项目，请先在电脑上添加" }}</li>
+          <li v-if="!folder.entries.length && !folder.loading && !folder.error" class="folder-empty">{{ folder.path ? "没有子文件夹" : "电脑上还没有常用项目，请先在电脑上添加" }}</li>
         </ul>
-        <button v-if="folder.next_offset !== null" type="button" class="project-add-trigger" :disabled="folder.loading" @click="open_folder(folder.path, true)">加载更多</button>
+        <UButton v-if="folder.next_offset !== null" label="加载更多" color="neutral" variant="ghost" :loading="folder.loading" @click="open_folder(folder.path, true)" />
         <p v-if="folder.truncated" class="project-note">文件夹过多，只列出了一部分</p>
-        <p v-if="folder.error" role="alert" class="project-error"><UIcon name="i-lucide-circle-alert" />{{ folder.error }}</p>
+        <p v-if="folder.error" role="alert" class="project-error"><UIcon name="i-lucide-circle-alert" />{{ folder.error }}<UButton label="重试" color="neutral" variant="link" size="xs" @click="open_folder(folder.path)" /></p>
         <div class="project-footer">
           <UButton label="取消" color="neutral" variant="ghost" @click="finish_folder('')" />
           <UButton label="选择此文件夹" class="channel-primary-button" :disabled="!folder.path || folder.loading" @click="finish_folder(folder.path)" />

@@ -199,13 +199,15 @@ async function track_selection() {
   const text = card ? range.toString().replace(/\r/g, "").replace(/\n{3,}/g, "\n\n").trim() : "";
   if (!text) { listen_here.value = null; return; }
   const kept = range.cloneRange();
-  const speech = await speech_configured().catch(() => false);
   if (pointer_down || quoting.value) return;
   // On touch screens the system's own selection menu sits next to the selection, so the buttons wait above the composer instead.
   const touch = window.matchMedia("(pointer: coarse)").matches;
   const to = body.contains(kept.endContainer) ? text_offset(body, kept.endContainer, kept.endOffset) : body.textContent.length;
   const from = text_offset(body, kept.startContainer, kept.startOffset);
-  listen_here.value = { id: Number(card.dataset.messageId), range: kept, text, from, to, speech, touch, ...place_by(kept, QUOTE_OFFER_WIDTH, QUOTE_OFFER_HEIGHT) };
+  listen_here.value = { id: Number(card.dataset.messageId), range: kept, text, from, to, speech: false, touch, ...place_by(kept, QUOTE_OFFER_WIDTH, QUOTE_OFFER_HEIGHT) };
+  const shown = listen_here.value;
+  const speech = await speech_configured().catch(() => false);
+  if (listen_here.value === shown) shown.speech = speech;
 }
 /** Open the comment box for the offered selection, keeping the selected text highlighted meanwhile. */
 async function start_quote() {
@@ -472,10 +474,11 @@ function working_notes(message) {
   return execution_notes.value.get(message.execution_id) || [];
 }
 async function load_notes(execution_id) {
+  const room_id = room.value.id;
   try {
-    const { notes } = await bridge.request(`/api/rooms/${room.value.id}/executions/${execution_id}/notes`);
-    execution_notes.value = new Map(execution_notes.value).set(execution_id, notes);
-  } catch { /* Notes only accompany the work; a failed read leaves the card as it was. */ }
+    const { notes } = await bridge.request(`/api/rooms/${room_id}/executions/${execution_id}/notes`);
+    if (room.value.id === room_id) execution_notes.value = new Map(execution_notes.value).set(execution_id, notes);
+  } catch (error) { return error.message || "过程说明读取失败"; }
 }
 /** Execution ids whose working notes are unfolded; folded by default to the latest note. */
 const open_working_notes = ref(new Set());
@@ -859,11 +862,12 @@ const workflow_options = computed(() => {
 });
 /**
  * Platform skills a user may call with "/". A fixed list, never every installed skill: most are the AIs' own operating
- * notes that load by themselves. Picking one only prefills a request to the host; it brings no member.
+ * notes that load by themselves. Picking one only inserts `$id` (rendered as a skill tag, see markdown.mjs) and adds no
+ * wording of its own: what to do is the user's to write. It brings no member.
  */
 const PLATFORM_SKILL_COMMANDS = [
   { id: "workflow-creator", label: "新建 / 修改工作流", search: "workflow creator 新建 创建 修改 工作流",
-    description: "请主持人按 workflow-creator 技能写工作流", prompt: "用 workflow-creator 技能新建一个工作流：" },
+    description: "请主持人按 workflow-creator 技能写工作流", prompt: "$workflow-creator " },
 ];
 const can_call_skill = computed(() => free.value && !room.value?.archived && free_members.value.some((member) => member.role === "host"));
 /**
@@ -901,7 +905,16 @@ const skill_options = computed(() => {
   return PLATFORM_SKILL_COMMANDS.filter((item) => `${item.id} ${item.label} ${item.search}`.toLocaleLowerCase().includes(query))
     .map((item) => ({ key: `skill:${item.id}`, skill: item, group: "平台技能" }));
 });
-const mention_options = computed(() => mention_context.value?.command ? [...mode_options.value, ...(can_pick_workflow.value ? workflow_options.value : []), ...skill_options.value] : [
+/** The sub-workflows of the workflow in use; like a platform skill, picking one only prefills a request to the host. */
+const sub_workflow_options = computed(() => {
+  const workflow = room_workflow.value;
+  if (!can_call_skill.value || !workflow?.sub_workflows?.length) return [];
+  const query = mention_context.value?.query.toLocaleLowerCase() || "";
+  return workflow.sub_workflows.filter((item) => `${item.id} ${item.label} ${item.description || ""}`.toLocaleLowerCase().includes(query))
+    .map((item) => ({ key: `sub-workflow:${item.id}`, group: `工作流「${workflow.label}」的子工作流`,
+      skill: { ...item, prompt: `用工作流「${workflow.label}」的子工作流「${item.label}」（${item.id}）：` } }));
+});
+const mention_options = computed(() => mention_context.value?.command ? [...mode_options.value, ...(can_pick_workflow.value ? workflow_options.value : []), ...sub_workflow_options.value, ...skill_options.value] : [
   ...mention_members.value.map((name) => ({ key: `member:${name}`, name, group: "成员" })),
   ...mention_folder_self.value.map((option) => ({ ...option, group: mention_files_group.value })),
   ...mention_files.value.map((entry) => ({ key: `file:${entry.path}`, entry, group: mention_files_group.value })),
@@ -1186,11 +1199,15 @@ const end_anchor = stable_computed(() => {
   const index = messages.findIndex((message) => !message.slot_card && Number(message.id) > session.ended_message_id);
   return index < 0 ? "end" : messages[index].id;
 });
+/** Notices waking the host after its own failure, by message id: the wake-up takes the failed card's place, not a new card. */
+const failure_wakes = computed(() => new Map((room.value.free?.failure_wakes || []).map((wake) => [wake.message_id, wake.execution_id])));
 /** Failed free-room executions, shaped like working cards so a failure stays where its work was shown. */
 const free_failures = computed(() => {
   if (view.value.query || view.value.mention_only || view.value.host_only) return [];
   const names = new Map((room.value.free?.members || []).map((member) => [member.id, member.name]));
-  return (room.value.free?.executions || []).filter((execution) => execution.status === "failed")
+  // A host failure whose wake-up has started is shown by that wake-up's card in the same place.
+  const followed = new Set((room.value.free?.executions || []).map((execution) => failure_wakes.value.get(execution.request_message_id)).filter(Boolean));
+  return (room.value.free?.executions || []).filter((execution) => execution.status === "failed" && !followed.has(execution.id))
     .map((execution) => ({ id: `failed-${execution.id}`, author: execution.member || names.get(execution.member_id) || "成员", slot_card: true, created_at: execution.created_at,
       execution_id: execution.id, request_message_id: execution.request_message_id, anchor_message_id: execution.anchor_message_id,
       dispatched_after: execution.dispatched_after, discussion_request: execution.requests?.find((request) => request.discussion_session_id),
@@ -1236,7 +1253,8 @@ function toggle_rewound(id) {
  * top-level message at dispatch instead of back up into the old nesting, where it would appear far above the reader.
  */
 const free_layout = computed(() => {
-  const messages = view.value.messages.filter((message) => !rewound_runs.value.hidden.has(message.id));
+  const messages = view.value.messages.filter((message) => !rewound_runs.value.hidden.has(message.id)
+    && !(message.source === "notice" && failure_wakes.value.has(message.id)));
   // Work on a taken-back message is no longer shown under it; a failure there is dropped like any other unshown one.
   const shown = new Set(messages.filter((message) => !message.withdrawn).map((message) => message.id));
   const slots = new Map();
@@ -2133,7 +2151,7 @@ function copy_message(message) { act("copy", `${view.value.room_site}/r/${room.v
 
 <template>
   <section class="channel-conversation" role="tabpanel" aria-label="消息">
-    <div v-if="view.query || view.mention_only || view.host_only" class="channel-filter-summary"><span>{{ [view.query && `“${view.query}”`, view.host_only && '只看主持', view.mention_only && `@${bridge.display_name(author)}`].filter(Boolean).join(' · ') }} · {{ view.total }} 条结果</span><UButton label="清除筛选" size="xs" variant="link" color="neutral" @click="search = ''; act('filter', { query: '', mention: false, host: false })" /></div>
+    <div v-if="view.query || view.mention_only || view.host_only" class="channel-filter-summary"><span>{{ [view.query && `“${view.query}”`, view.host_only && '只看主持', view.mention_only && `@${bridge.display_name(author)}`].filter(Boolean).join(' · ') }} · {{ view.messages_loading ? '正在筛选…' : `${view.total} 条结果` }}</span><UButton label="清除筛选" size="xs" variant="link" color="neutral" @click="search = ''; act('filter', { query: '', mention: false, host: false })" /></div>
     <nav v-if="view.messages.length" ref="message_map" class="channel-message-map" :style="{ '--nav-entry-height': `${NAV_ENTRY_HEIGHT}px` }" aria-label="发言快速导航" @wheel.stop.passive="browse_navigation" @pointerleave="close_preview" @focusout="close_preview" @keydown.esc.stop="close_preview" @contextmenu="navigation_context_menu" @pointerdown="start_scrub" @pointermove="move_scrub" @pointerup="end_scrub" @pointercancel="end_scrub">
       <div class="channel-map-track">
         <div v-for="section in navigation_sections" :key="section.entries[0].key"v-memo="[section, preview_open, active_round === section.number ? active_message : null, section_preview_position(section)]" class="channel-map-round" :style="{ '--round-message-count': section.count }">
@@ -2168,7 +2186,7 @@ function copy_message(message) { act("copy", `${view.value.room_site}/r/${room.v
       <button type="submit" class="selection-comment-send" aria-label="添加到对话" title="添加到对话（Enter）"><UIcon name="i-lucide-arrow-up" /></button>
     </form>
     <ExcerptEditCard v-if="mark_editing" :key="mark_editing.excerpt.id" :comment="mark_editing.excerpt.comment" :style="{ left: `${mark_editing.left}px`, top: `${mark_editing.top}px` }" @save="save_mark" @cancel="close_mark" @remove="remove_mark" />
-    <div ref="transcript" v-memo="[message_groups, view.sending_preview, message_round_labels, free, room.session, can_manage, expanded_answers.size, reader.state.message_id, room.title, view.query, view.mention_only, view.host_only, topic_anchor, end_anchor, request_badges, execution_reports, recommendations, adopting, scheduler_decisions, host_arrangements, pending, execution_notes, open_working_notes, editing, rewound_runs, retracting_id, armed_cards.size, menu_open_id, stopping_member, free_now, allowing, allow_errors, late_answers, has_draft, view.sending_message, routing_messages, speaking_turn, room.free]" class="channel-transcript" aria-label="聊天记录" @scroll="schedule_track_scroll" @wheel.passive="resume_tracking($event); stop_following($event)" @touchstart.passive="resume_tracking" @touchmove.passive="stop_following" @touchend.passive="end_touch" @touchcancel.passive="end_touch" @pointerdown="stop_following" @keydown="resume_tracking($event); stop_following($event)">
+    <div ref="transcript" v-memo="[message_groups, view.messages_loading, view.messages_failure, view.sending_preview, message_round_labels, free, room.session, can_manage, expanded_answers.size, reader.state.message_id, room.title, view.query, view.mention_only, view.host_only, topic_anchor, end_anchor, request_badges, execution_reports, recommendations, adopting, scheduler_decisions, host_arrangements, pending, execution_notes, open_working_notes, editing, rewound_runs, retracting_id, armed_cards.size, menu_open_id, stopping_member, free_now, allowing, allow_errors, late_answers, has_draft, view.sending_message, routing_messages, speaking_turn, room.free]" class="channel-transcript" aria-label="聊天记录" @scroll="schedule_track_scroll" @wheel.passive="resume_tracking($event); stop_following($event)" @touchstart.passive="resume_tracking" @touchmove.passive="stop_following" @touchend.passive="end_touch" @touchcancel.passive="end_touch" @pointerdown="stop_following" @keydown="resume_tracking($event); stop_following($event)">
       <div v-if="!view.query && !view.mention_only && !view.host_only && !topic_anchor && render_start === 0" class="channel-message-group channel-topic-group"><TopicCard :ref="(card) => topic_card = card" @edit="emit('edit')" /></div>
       <div v-for="group in message_groups" :key="group.key" class="channel-message-group">
         <USeparator :label="group.label" class="channel-date-divider" />
@@ -2293,7 +2311,7 @@ function copy_message(message) { act("copy", `${view.value.room_site}/r/${room.v
                 :disabled="!!pending" :loading="pending === 'retry_delivery'" @click="act('retry_delivery', { execution_id: message.failure.id, action: 'retry' })" /></UTooltip>
             </div>
           </div>
-          <ExecutionNotes v-if="message.failure.notes" :count="message.failure.notes" :notes="execution_notes.get(message.failure.id)" @load="load_notes(message.failure.id)" />
+          <ExecutionNotes v-if="message.failure.notes" :count="message.failure.notes" :notes="execution_notes.get(message.failure.id)" :load="() => load_notes(message.failure.id)" />
           <ExecutionDenials v-if="message.failure.denials?.length" :denials="message.failure.denials" :allowable="Boolean(denial_allowance(message.failure))"
             :busy="allowing === message.failure.id" :error="allow_errors[message.failure.id]" @allow="allow_and_resend(message.failure)" />
         </section>
@@ -2343,7 +2361,7 @@ function copy_message(message) { act("copy", `${view.value.room_site}/r/${room.v
               <UButton v-if="card.preview.truncated" :label="card.expanded ? '收起' : '展开全文'" :trailing-icon="card.expanded ? 'i-lucide-chevron-up' : 'i-lucide-chevron-down'" variant="link" color="neutral" size="xs" class="channel-answer-toggle" :aria-label="`${card.expanded ? '收起回答' : '展开完整回答'} #${message.id}`" :aria-expanded="card.expanded" :aria-controls="`channel-answer-${message.id}`" @click="toggle_answer(message, $event)" />
             </div>
             <div v-if="message.summary" class="channel-answer-summary"><small>回答摘要<span v-if="message.summary_by && message.summary_by !== message.author"> · {{ bridge.display_name(message.summary_by) }} 整理</span></small><div class="channel-message-text markdown-body" v-html="message.rendered_summary"></div></div>
-            <ExecutionNotes v-if="card.notes_count" :count="card.notes_count" :notes="card.notes" @load="load_notes(card.execution_id)" />
+            <ExecutionNotes v-if="card.notes_count" :count="card.notes_count" :notes="card.notes" :load="() => load_notes(card.execution_id)" />
             <div v-if="message.attachments?.length" v-html="bridge.attachment_markup(message.attachments)"></div>
             <div v-if="card.recommendation" class="channel-recommendation" :class="`is-${card.recommendation.status}`" aria-label="智能调度推荐" aria-live="polite">
               <template v-for="item in [card.recommendation]" :key="item.message_id">
@@ -2419,7 +2437,9 @@ function copy_message(message) { act("copy", `${view.value.room_site}/r/${room.v
         <TopicCard v-if="topic_anchor === 'end'" :ref="(card) => topic_card = card" @edit="emit('edit')" />
         <DiscussionEndCard v-if="end_anchor === 'end'" />
       </div>
-      <div v-if="!transcript_messages.length && !free_working.length" class="channel-empty"><UIcon :name="view.query || view.mention_only || view.host_only ? 'i-lucide-search' : 'i-lucide-hash'" /><h2>{{ view.query || view.mention_only || view.host_only ? '没有找到消息' : room.title }}</h2><p>{{ view.query || view.mention_only || view.host_only ? '试试其他关键词，或清除筛选。' : bridge.empty_discussion_message(room) }}</p></div>
+      <div v-if="view.messages_loading && !transcript_messages.length" class="channel-message-group grid gap-6 py-6" role="status" aria-label="正在读取消息"><div v-for="row in 3" :key="row" class="grid gap-3"><USkeleton class="h-5 w-28" /><USkeleton class="h-4 w-full" /><USkeleton class="h-4 w-2/3" /></div></div>
+      <div v-else-if="view.messages_failure" class="channel-empty" role="status"><p>{{ view.messages_failure }}</p><UButton label="重新读取消息" icon="i-lucide-refresh-cw" color="neutral" variant="soft" @click="act('refresh')" /></div>
+      <div v-else-if="!transcript_messages.length && !free_working.length" class="channel-empty"><UIcon :name="view.query || view.mention_only || view.host_only ? 'i-lucide-search' : 'i-lucide-hash'" /><h2>{{ view.query || view.mention_only || view.host_only ? '没有找到消息' : room.title }}</h2><p>{{ view.query || view.mention_only || view.host_only ? '试试其他关键词，或清除筛选。' : bridge.empty_discussion_message(room) }}</p></div>
     </div>
     <div v-if="(transcript_messages.length && !follow_tail) || listen_here?.touch || reader.state.message_id" class="channel-latest-dock">
       <button v-if="listen_here?.touch" type="button" class="channel-listen-pill" @mousedown.prevent @click="start_quote"><UIcon name="i-lucide-message-square-quote" />添加到对话</button>
@@ -2528,9 +2548,9 @@ function copy_message(message) { act("copy", `${view.value.room_site}/r/${room.v
             <UTooltip :text="ENTER_SENDS ? '取消 · Esc' : '取消'"><UButton type="button" icon="i-lucide-x" color="neutral" variant="ghost" size="sm" class="channel-voice-button" aria-label="取消语音输入" @click="voice.cancel()" /></UTooltip>
             <span class="channel-voice-levels" :class="{ 'is-discarding': voice_hold.discard }" role="status" :aria-label="voice.state.status === 'recording' ? `正在录音 ${format_voice_time(voice.state.seconds)}` : '正在识别'">
               <template v-if="voice.state.status === 'recording'"><span class="channel-voice-bars"><i v-for="(level, index) in voice.state.levels" :key="index" :style="{ transform: `scaleY(${0.15 + level * 0.85})` }" /></span><small>{{ format_voice_time(voice.state.seconds) }}</small><small v-if="voice_hold.by" class="channel-voice-hint">{{ voice_hold.discard ? '松开取消' : voice_hold.by === 'touch' ? '松开转文字 · 上滑取消' : '松开空格转文字' }}</small></template>
-              <small v-else>正在识别…</small>
+              <small v-else>{{ voice.state.status === 'starting' ? '正在打开麦克风…' : '正在识别…' }}</small>
             </span>
-            <UTooltip :text="ENTER_SENDS ? '完成，转成文字 · Enter' : '完成，转成文字'"><UButton type="button" icon="i-lucide-check" color="neutral" size="sm" class="channel-primary-button channel-round-button" aria-label="结束录音并转成文字" :loading="voice.state.status === 'transcribing'" @click="voice.toggle()" /></UTooltip>
+            <UTooltip :text="ENTER_SENDS ? '完成，转成文字 · Enter' : '完成，转成文字'"><UButton type="button" icon="i-lucide-check" color="neutral" size="sm" class="channel-primary-button channel-round-button" aria-label="结束录音并转成文字" :loading="voice.state.status !== 'recording'" @click="voice.toggle()" /></UTooltip>
           </template>
           <template v-else>
             <UButton type="button" icon="i-lucide-paperclip" aria-label="添加附件" title="图片、PDF 或其他文件 · 每个最多 20 MiB" color="neutral" variant="ghost" size="sm" :disabled="view.sending_message" @click="act('choose_attachments')" />

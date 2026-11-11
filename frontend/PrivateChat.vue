@@ -64,6 +64,7 @@ const details = ref(new Map());
 const errors = ref(new Map());
 const open_output = ref(new Set());
 const error = ref("");
+const loading = ref(false);
 const now = ref(Date.now() / 1000);
 let timer = null;
 // Whether the screen follows new output (false once the owner scrolls up to read).
@@ -153,16 +154,21 @@ async function refresh() {
   clearTimeout(timer);
   const target = member.value, room_id = room.value?.id, current = ++serial;
   if (!target || !room_id || document.hidden) return;
+  loading.value = true;
   try {
     // Replaced only when something changed, so an unchanged poll renders nothing (see the v-memo on each turn).
     if (!unsupported.value || chats.value.length) {
       const next = (await bridge.read_member_chat(room_id, target.id)).chats;
+      if (current !== serial) return;
       if (JSON.stringify(next) !== JSON.stringify(chats.value)) chats.value = next;
     }
     error.value = "";
   } catch (failure) {
     if (current === serial) error.value = failure.message || "未能读取私聊";
+  } finally {
+    if (current === serial) loading.value = false;
   }
+  if (current !== serial) return;
   const retry_after = Date.now() / 1000 - ERROR_RETRY_S;
   const due = (item) => running(item) || (!details.value.has(item.key) && !waiting.has(item.key) && !(errors.value.get(item.key)?.at > retry_after));
   const queue = [...items.value].reverse().filter(due);
@@ -519,6 +525,7 @@ function recall(event, step) {
         <div class="term-dim">用它在房间里的同一个会话回答，记录只有你看得到</div>
       </div>
       <p v-else class="term-dim">房间里还没有 AI 成员</p>
+      <div v-if="loading && !shown_items.length" class="grid gap-4 py-4" role="status" aria-label="正在读取私聊"><USkeleton v-for="row in 4" :key="row" class="h-4" :class="row % 2 ? 'w-2/3' : 'w-full'" /></div>
       <section v-for="item in shown_items" :key="item.key" class="term-turn" :class="{ 'is-target': target === item.key }" :data-key="item.key"
         v-memo="[item.at, item.prompt, item.reply, running(item), item.chat && chat_note(item.chat), details.get(item.key), errors.get(item.key), open_output, target === item.key]">
         <div v-for="meta in [turn_meta(item)]" :key="'meta'" class="term-meta">
@@ -527,7 +534,7 @@ function recall(event, step) {
         </div>
         <div v-if="item.prompt" class="term-prompt"><span class="term-body">{{ item.prompt }}</span></div>
         <div v-if="errors.get(item.key) && !details.has(item.key)" class="term-sub term-warn"><span class="term-corner">⎿</span><span class="term-body">未能读取过程：{{ errors.get(item.key).message }}</span></div>
-        <div v-else-if="!details.has(item.key) && running(item)" class="term-sub"><span class="term-corner">⎿</span><span class="term-body">正在读取…</span></div>
+        <div v-else-if="!details.has(item.key)" class="term-sub" role="status"><span class="term-corner">⎿</span><USkeleton class="h-4 w-2/3" /><span class="sr-only">正在读取过程…</span></div>
         <template v-for="(entry, index) in steps_of(item)" :key="entry.id ?? index">
           <div v-if="entry.kind === 'message'" class="term-line term-msg"><span class="term-bullet">●</span><span class="term-body">{{ entry.body }}</span></div>
           <div v-else-if="entry.kind === 'interjection'" class="term-prompt term-msg"><span class="term-body">{{ entry.body }}</span></div>

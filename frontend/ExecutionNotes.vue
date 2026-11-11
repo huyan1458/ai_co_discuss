@@ -13,14 +13,24 @@ const props = defineProps({
   notes: { type: Array, default: null },
   /** Open and without a toggle while the member is still working. */
   live: Boolean,
+  /** Read missing notes; returns a failure message, or nothing after success. */
+  load: { type: Function, default: null },
 });
-const emit = defineEmits(["load"]);
 const open = ref(false);
+const loading = ref(false), failure = ref("");
+
+async function read() {
+  if (loading.value || !props.load) return;
+  loading.value = true;
+  failure.value = "";
+  try { failure.value = await props.load() || ""; }
+  finally { loading.value = false; }
+}
 
 function toggle() {
   open.value = !open.value;
   // Notes read while the member worked may miss the last few, so a shorter list is read again.
-  if (open.value && (props.notes?.length ?? -1) < props.count) emit("load");
+  if (open.value && (props.notes?.length ?? -1) < props.count) read();
 }
 </script>
 
@@ -31,6 +41,8 @@ function toggle() {
       <ol v-if="live || open" :class="{ 'is-live': live }">
         <li v-for="note in notes || []" :key="note.seq">{{ note.text }}</li>
       </ol>
+      <div v-if="open && loading" class="grid gap-2 py-2" role="status" aria-label="正在读取过程说明"><USkeleton class="h-4 w-full" /><USkeleton class="h-4 w-2/3" /></div>
+      <p v-else-if="open && failure" class="fine-print" role="status">{{ failure }}<UButton label="重试" color="neutral" variant="link" size="xs" @click="read" /></p>
       <UButton v-if="!live" :label="open ? '收起' : `${count} 段`" :trailing-icon="open ? 'i-lucide-chevron-up' : 'i-lucide-chevron-down'"
         variant="link" color="neutral" size="xs" class="channel-answer-toggle" :class="{ 'is-folded': !open }" :aria-expanded="open"
         :aria-label="open ? '收起过程说明' : `展开 ${count} 段过程说明`" @click="toggle" />

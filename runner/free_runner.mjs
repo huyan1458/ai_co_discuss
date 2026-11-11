@@ -195,7 +195,14 @@ export function free_task_files(config, member, execution, binding, { session = 
     ...(bound_access ? { access_env: 'DISCUSS_ACCESS_FILE' } : { access_file: access_path }), instructions });
   return { id, participant: member.name, directory: config.directory, draft_directory, extra_directories, ...(goal_field ? { goal: goal_field } : {}),
     skill_directories: [skills_directory, ...(host_workflow ? [host_workflow.directory] : [])], access_path, prompt: with_expert_prompt(prompt, profile), inbox,
-    profile, ...(workflow_field ? { workflow: { ...workflow_field, skill: host_workflow.skill } } : {}) };
+    profile, ...(workflow_field ? { workflow: { ...workflow_field, skill: host_workflow.skill, ...api_sub_workflows(workflow_field, host_workflow) } } : {}) };
+}
+
+/** An API host cannot open files outside the project, so its sub-workflows carry their text instead of a path. */
+function api_sub_workflows(field, workflow) {
+  if (!field.sub_workflows) return {};
+  return { sub_workflows: field.sub_workflows.map(({ skill_path: ignored, ...sub }) => ({ ...sub,
+    skill: workflow.sub_workflows.find(item => item.id === sub.id)?.skill || '' })) };
 }
 
 /**

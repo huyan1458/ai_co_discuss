@@ -57,9 +57,9 @@ export function participant_tools(context) {
   const answer = { text: { ...TEXT, maxLength: 32000 }, summary: { ...TEXT, maxLength: 1000 }, reply_to: NUMBER,
     ...(context.image ? { attachments: { type: 'array', maxItems: MAX_MESSAGE_ATTACHMENTS, items: TEXT,
       description: `要随回答发出的图片附件 ID，按顺序：本次生成的，或 task.unsent_images 里之前生成未发出的；不填则发出本次生成的全部图片（最多 ${MAX_MESSAGE_ATTACHMENTS} 张）` } } : {}) };
-  const submit = tool('submit_chat', '保存本次执行的完整回答并结束；summary 仅在回答较长时填写；只有主持人可用 to 点名成员，派出的工作做完或失败都会交回你（只点名一位、回答已足以直接给用户时可加 no_handoff: true，失败仍交回）；to 点名多位并加 sequential: true 时按点名顺序依次接力、最后交回你，依次接力走完一圈算一轮，再加 loop: true 则交回为检查点；parallel 列出要同一棒同时做的几组成员（每组至少两位、在 to 中相邻），这一组全部结束才交下一棒，组里有人失败则接力停下交回你；gates 在接力中途设检查点（每项 {after: 成员, repeat_from?: 成员}）：after 所在那一棒结束后交回你，带 repeat_from 时为循环检查点、可从 repeat_from 所在那一棒再来一圈，repeat_from 不能早于前一个检查点；detach 列出与这次派活同时开工、但不等待的成员（不计入交回或下一棒），它失败时程序通知你；主持人要在房间空闲后接着推进时填 continue（写明继续做什么），算本链一轮；派活时可用 need_rounds（本任务从这次派活起还需要的轮数）加 rounds_reason 向用户申请轮数，超过本链剩余时任务链立即停下等用户批准',
+  const submit = tool('submit_chat', '保存本次执行的完整回答并结束；summary 仅在回答较长时填写；只有主持人可用 to 点名成员，派出的工作做完或失败都会交回你（只点名一位、回答已足以直接给用户时可加 no_handoff: true，失败仍交回）；to 点名多位并加 sequential: true 时按点名顺序依次接力、最后交回你，依次接力走完一圈算一轮，再加 loop: true 则交回为检查点；parallel 列出要同一棒同时做的几组成员（每组至少两位、在 to 中相邻），这一组全部结束才交下一棒，组里有人失败则接力停下交回你；gates 在接力中途设检查点（每项 {after: 成员, repeat_from?: 成员, user?: true}）：after 所在那一棒结束后交回你，带 repeat_from 时为循环检查点、可从 repeat_from 所在那一棒再来一圈，repeat_from 不能早于前一个检查点；带 user: true 时改为等用户发言、不交回你，用户下一条未点名的消息接着往下一棒走（带 repeat_from 则再来一圈），最后一棒之后须带 repeat_from；detach 列出与这次派活同时开工、但不等待的成员（不计入交回或下一棒），它失败时程序通知你；主持人要在房间空闲后接着推进时填 continue（写明继续做什么），算本链一轮；派活时可用 need_rounds（本任务从这次派活起还需要的轮数）加 rounds_reason 向用户申请轮数，超过本链剩余时任务链立即停下等用户批准',
     { ...answer, ...(context.role === 'host' ? { to: { type: 'array', items: TEXT }, sequential: { type: 'boolean' }, loop: { type: 'boolean' }, parallel: { type: 'array', items: { type: 'array', items: TEXT } },
-      gates: { type: 'array', items: { type: 'object', properties: { after: TEXT, repeat_from: TEXT }, required: ['after'] } }, detach: { type: 'array', items: TEXT }, no_handoff: { type: 'boolean' }, continue: { ...TEXT, maxLength: 300 },
+      gates: { type: 'array', items: { type: 'object', properties: { after: TEXT, repeat_from: TEXT, user: { type: 'boolean' } }, required: ['after'] } }, detach: { type: 'array', items: TEXT }, no_handoff: { type: 'boolean' }, continue: { ...TEXT, maxLength: 300 },
       need_rounds: { type: 'integer', minimum: 1, maximum: 100 }, rounds_reason: { ...TEXT, maxLength: 300 },
       next_review: TEXT, review_scope: { ...TEXT, maxLength: 2000 } } : {}) }, ['text']);
   const discussion_host = context.role === 'host' && context.discussion_request?.purpose === 'discuss_host';
@@ -264,10 +264,19 @@ function project_text(project, commands) {
 /** The enabled workflow for an API host: its SKILL.md body and which present member plays each card. */
 function workflow_text(workflow) {
   const members = workflow.members.map(item => `- ${item.member}（卡片 ${item.card}${item.label ? `，${item.label}` : ''}；${item.status === 'active' ? '在场' : '离开'}；项目权限 ${item.project_access === 'own' ? '沿用原会话权限' : access_label(item.project_access)}）${item.description ? `：${item.description}` : ''}`);
+  const subs = (workflow.sub_workflows || []).map(sub => `### 子工作流「${sub.label}」（${sub.id}）
+用途：${sub.description}${sub.cards.length ? `\n成员卡片：${sub.cards.map(card => card.label || card.card).join('、')}（只在用到时由主持人用命令行请进房间；你没有命令行，不能请它们加入，用到时在回答里说明缺这些角色，不另找成员代替）` : ''}
+
+${sub.skill}`);
   return `本房间启用了工作流「${workflow.label}」${workflow.description ? `（用途：${workflow.description}）` : ''}。请求与它的用途相符或用户要求按它做时，按下面的工作流说明组织工作；其他请求照常处理。只点名下列在场成员，缺少的角色在回答里说明，不另找成员代替。
 成员：
 ${members.join('\n') || '（无）'}
-${workflow.skill}`;
+${workflow.skill}${subs.length ? `
+
+## 工作流的子工作流
+主线之外按需使用：请求与某个子工作流的用途相符、用户点名要用它，或主线写明此处用它时，按它的说明做。
+
+${subs.join('\n\n')}` : ''}`;
 }
 
 /** Map the shared skills onto the API environment, which has room tools and, with a project, file tools. */

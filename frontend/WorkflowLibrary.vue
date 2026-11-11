@@ -4,14 +4,17 @@
  * infinite canvas, edited in place (cards, arrows), and its SKILL.md docked on the right, the text the host dispatches by.
  * 保存 writes it all at once. The list, new, import, rename, disable and delete live in the sidebar (`workflow-library.js`).
  * Works with or without a room open; enabling a workflow in a room stays with the message box's "/" and the side panel.
+ * A workflow may hold sub-workflows: the list under the toolbar switches the canvas and SKILL.md to one of them.
  */
 import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from "vue";
 import WorkflowCanvas from "./WorkflowCanvas.vue";
 import WorkflowEditor from "./WorkflowEditor.vue";
+import WorkflowParts from "./WorkflowParts.vue";
 import { use_workflow_library } from "./workflow-library.js";
 
 const library = use_workflow_library();
-const { available, workflows, draft, saved_id, canvas_key, commands_allowed, busy, dirty, add_items, skill_request } = library;
+const { available, workflows, draft, saved_id, canvas_key, commands_allowed, busy, loading, failure, dirty, add_items, skill_request,
+  scope, current, reserved } = library;
 // The SKILL.md panel's width, dragged at its left edge and remembered in this browser, and whether the panel is open
 // (it is unless the user folded it away).
 const SKILL_WIDTH = { min: 280, max: 760, initial: 340, step: 16, key: "codiscuss.workflow_skill_width" };
@@ -30,8 +33,10 @@ const canvas = ref(null);
 // The canvas was laid out hidden; place its view once it shows.
 watch(pane, (value) => { if (value === "canvas") nextTick(() => requestAnimationFrame(() => canvas.value?.fit())); });
 watch(skill_request, () => show_skill_text());
-const show_skill = computed(() => Boolean(draft.value) && (stacked.value ? pane.value === "skill" : skill_open.value));
+const show_skill = computed(() => Boolean(draft.value || loading.value) && (stacked.value ? pane.value === "skill" : skill_open.value));
 const broken = computed(() => workflows.value.find((item) => item.id === saved_id.value)?.error || "");
+// While a saved workflow is fetched (slow through the relay), an empty, inert canvas with its controls shows at once.
+const placeholder = ref({ flow: null, agents: [] });
 
 /** Show SKILL.md: the panel on a wide page, the 工作流 pane when stacked. */
 function show_skill_text() {
@@ -90,12 +95,12 @@ function start_resize(event) {
 <template>
   <section class="workflow-library" :class="{ 'has-skill': show_skill, 'is-stacked': stacked }" aria-label="工作流"
     :style="{ '--workflow-skill-width': `${skill_width}px` }">
-    <div v-if="stacked && draft" class="workflow-tabs-view"><div class="workflow-tabs-segment" role="tablist" aria-label="画布或工作流说明">
+    <div v-if="stacked && (draft || loading)" class="workflow-tabs-view"><div class="workflow-tabs-segment" role="tablist" aria-label="画布或工作流说明">
       <button type="button" role="tab" :aria-selected="pane === 'canvas'" title="画布：成员卡片与示意连线" @click="pane = 'canvas'"><UIcon name="i-lucide-network" class="workflow-library-icon" />画布</button>
-      <button type="button" role="tab" :aria-selected="pane === 'skill'" title="工作流：主持人照着派活的 SKILL.md" @click="pane = 'skill'"><UIcon name="i-lucide-file-text" class="workflow-library-icon" />工作流</button>
+      <button type="button" role="tab" :aria-selected="pane === 'skill'" title="工作流：主持人照着派活的 SKILL.md" @click="pane = 'skill'"><UIcon :name="scope ? 'i-lucide-git-branch' : 'i-lucide-file-text'" class="workflow-library-icon" />{{ scope ? '子工作流' : '工作流' }}</button>
     </div></div>
-    <div v-show="!stacked || pane === 'canvas' || !draft" class="workflow-library-stage">
-      <WorkflowCanvas v-if="draft" ref="canvas" :key="canvas_key" v-model:flow="draft.flow" v-model:agents="draft.agents" :compact="stacked" @open-skill="show_skill_text">
+    <div v-show="!stacked || pane === 'canvas' || (!draft && !loading)" class="workflow-library-stage">
+      <WorkflowCanvas v-if="draft" ref="canvas" :key="canvas_key" v-model:flow="current.flow" v-model:agents="current.agents" :reserved="reserved" :compact="stacked" @open-skill="show_skill_text">
         <template #actions>
           <UTooltip v-if="!skill_open && !stacked" text="展开 SKILL.md：主持人照它派活"><UButton icon="i-lucide-panel-right-open" label="SKILL.md" size="sm" color="neutral" variant="ghost" @click="set_skill_open(true)" /></UTooltip>
           <UTooltip :text="dirty ? '保存（Ctrl+S）：有未保存的修改' : '没有未保存的修改'"><span class="workflow-library-save">
@@ -103,10 +108,15 @@ function start_resize(event) {
             <i v-if="dirty" class="workflow-library-dirty" /></span></UTooltip>
         </template>
       </WorkflowCanvas>
+      <WorkflowParts v-if="draft" :compact="stacked" />
+      <template v-else-if="loading">
+        <WorkflowCanvas v-model:flow="placeholder.flow" v-model:agents="placeholder.agents" :compact="stacked" inert />
+        <div class="workflow-library-loading" role="status"><UIcon name="i-lucide-loader-circle" class="animate-spin" /><span>{{ loading }}</span></div>
+      </template>
       <div v-else class="workflow-library-empty">
         <template v-if="!available"><UIcon name="i-lucide-monitor-off" /><p>连接本机服务后管理工作流</p></template>
         <template v-else-if="broken"><UIcon name="i-lucide-triangle-alert" /><p>{{ broken }}</p></template>
-        <template v-else-if="busy"><UIcon name="i-lucide-loader-circle" class="animate-spin" /></template>
+        <template v-else-if="failure"><UIcon name="i-lucide-triangle-alert" /><p>{{ failure }}</p><UButton label="重试" icon="i-lucide-refresh-cw" color="neutral" variant="soft" @click="library.retry()" /></template>
         <template v-else>
           <UIcon name="i-lucide-network" />
           <UDropdownMenu :items="add_items" :ui="{ content: 'channel-menu' }"><UButton icon="i-lucide-plus" label="新建工作流" color="neutral" variant="soft" /></UDropdownMenu>
@@ -118,8 +128,9 @@ function start_resize(event) {
         :aria-valuenow="skill_width" :aria-valuemin="SKILL_WIDTH.min" :aria-valuemax="SKILL_WIDTH.max" @pointerdown.prevent="start_resize"
         @dblclick="set_width(SKILL_WIDTH.initial)" @keydown.left.prevent="set_width(skill_width + SKILL_WIDTH.step)"
         @keydown.right.prevent="set_width(skill_width - SKILL_WIDTH.step)" />
-      <WorkflowEditor :key="canvas_key" v-model:workflow="draft" v-model:commands-allowed="commands_allowed" :saved="Boolean(saved_id)"
-        :compact="stacked" @collapse="set_skill_open(false)" />
+      <div v-if="loading" class="workflow-skill-loading" role="status" :aria-label="loading"><USkeleton class="h-6 w-36" /><USkeleton v-for="line in 8" :key="line" class="h-4" :class="line % 3 ? 'w-full' : 'w-2/3'" /></div>
+      <WorkflowEditor v-else :key="canvas_key" :workflow="current" v-model:commands-allowed="commands_allowed" :saved="Boolean(saved_id)"
+        :sub="Boolean(scope)" :compact="stacked" @collapse="set_skill_open(false)" />
     </template>
   </section>
 </template>
@@ -136,6 +147,10 @@ function start_resize(event) {
 .workflow-library-empty { display: grid; place-content: center; justify-items: center; gap: 12px; height: 100%; color: var(--ui-text-muted); font-size: 13px; }
 .workflow-library-empty > span:first-child { width: 36px; height: 36px; color: var(--ui-text-dimmed); }
 .workflow-library-empty p { margin: 0; }
+.workflow-library-loading { position: absolute; inset: 0; display: grid; place-content: center; justify-items: center; gap: 12px; color: var(--ui-text-dimmed); pointer-events: none; font-size: 13px; }
+.workflow-library-loading > span { width: 28px; height: 28px; }
+.workflow-library-loading > span:last-child { width: auto; height: auto; }
+.workflow-skill-loading { display: flex; flex-direction: column; gap: 18px; padding: 24px; border-left: 1px solid var(--ui-border-muted); }
 /* Unsaved changes: a dot on the save button's corner. */
 .workflow-library-save { position: relative; display: inline-flex; }
 .workflow-library-dirty { position: absolute; top: -2px; right: -2px; width: 8px; height: 8px; border: 2px solid var(--ui-bg-elevated); border-radius: 50%; background: var(--ui-warning, #e0a33a);

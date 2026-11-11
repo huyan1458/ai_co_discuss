@@ -25,7 +25,9 @@ const out_of_sync = computed(() => {
   if (!props.workflow.available || !Array.isArray(cards)) return false;
   const members = props.workflow.members || {};
   const active = new Set((room.value.free?.members || []).filter((member) => member.status === "active").map((member) => member.name));
-  return cards.some((card) => !active.has(members[card])) || Object.keys(members).some((card) => !cards.includes(card));
+  // A sub-workflow's cards join only while it is used, so they never call for a refresh, but they are not dropped cards either.
+  const known = [...cards, ...(props.workflow.sub_workflows || []).flatMap((sub) => sub.cards || [])];
+  return cards.some((card) => !active.has(members[card])) || Object.keys(members).some((card) => !known.includes(card));
 });
 const names = computed(() => present.value.map((member) => bridge.display_name(member.name)).join("、"));
 const confirming = ref(false);
@@ -42,7 +44,7 @@ const items = computed(() => [
       <UIcon name="i-lucide-network" class="workflow-control-icon" />
       <span class="workflow-control-name" :title="workflow.label">{{ workflow.label }}</span>
       <span class="workflow-control-state"><span class="workflow-control-dot"></span>{{ workflow.available ? '进行中' : '不可用' }}</span>
-      <button v-if="can_manage && out_of_sync" type="button" class="workflow-control-action" :disabled="Boolean(pending)" title="刷新：按工作流库里的最新版本补齐成员：新增的卡片加入、离开的请回，已删卡片的成员转为普通成员" aria-label="刷新工作流" @click="act('sync_room_workflow')"><UIcon name="i-lucide-refresh-cw" class="workflow-control-action-icon" /></button>
+      <button v-if="can_manage && out_of_sync" type="button" class="workflow-control-action" :disabled="Boolean(pending)" title="刷新：按工作流库里的最新版本补齐成员：新增的卡片加入、离开的请回，已删卡片的成员转为普通成员" aria-label="刷新工作流" @click="act('sync_room_workflow')"><UIcon name="i-lucide-refresh-cw" class="workflow-control-action-icon" :class="{ 'animate-spin': pending === 'sync_room_workflow' }" /></button>
       <button v-if="can_manage && !dismissible" type="button" class="workflow-control-action" :disabled="Boolean(pending)" :title="present.length ? '请离成员：请离工作流带来的成员并结束工作流，会话保留' : '结束工作流'" :aria-label="present.length ? '请离成员' : '结束工作流'" @click="confirming = true"><UIcon :name="present.length ? 'i-lucide-user-minus' : 'i-lucide-square'" class="workflow-control-action-icon" /></button>
       <button v-if="dismissible" type="button" class="workflow-control-close" title="收起此区，工作流照常进行；“成员与设置”里仍可请离成员" aria-label="收起工作流区" @click="$emit('dismiss')"><UIcon name="i-lucide-x" class="workflow-control-close-icon" /></button>
     </div>

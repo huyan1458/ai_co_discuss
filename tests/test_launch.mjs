@@ -10,7 +10,7 @@ import { PassThrough } from 'node:stream';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import { test } from 'node:test';
 
-import { adopt_member_profile, adopt_workflow, host_control, borrowed_session, cached_software_defaults, check_or_save_workflow, join_workflow, launch_discussion, launch_settings, room_configuration, room_files, room_media, room_models, room_page, room_member, room_member_model, room_settings, room_workflow, save_launch_projects, save_launch_settings, validate_preset } from '../runner/discussion_launch.mjs';
+import { adopt_member_profile, adopt_workflow, host_control, borrowed_session, cached_software_defaults, check_or_save_workflow, join_workflow, launch_discussion, leave_sub_workflow, launch_settings, room_configuration, room_files, room_media, room_models, room_page, room_member, room_member_model, room_settings, room_workflow, save_launch_projects, save_launch_settings, validate_preset } from '../runner/discussion_launch.mjs';
 import { get_workflow, list_workflows, save_workflow } from '../runner/workflows.mjs';
 import { API_PROVIDERS, save_api_key } from '../runner/discussion_api.mjs';
 import { read_project_files } from '../runner/project_files.mjs';
@@ -1229,6 +1229,38 @@ test('a card added to a workflow in use joins when the host names it, and a refr
   assert.deepEqual(synced.members, { writer: 'Claude' });
   assert.deepEqual(load_config(launched.config_path).workflow, { id: 'writing', enabled: true, members: { writer: 'Claude' } });
   assert.equal((await api(config, '')).free.members.find(member => member.name === 'Claude-reviewer').status, 'active');
+});
+
+test('a sub-workflow brings its own cards only when the host uses it, and sends them away when done', async t => {
+  const f = await fixture(t), token = randomUUID() + randomUUID();
+  save_launch_settings(f.home, { participants: f.input.participants });
+  const writer = { card: 'writer', name: 'Claude-writer', project_access: 'read' };
+  const sub_workflows = [{ id: 'rehearsal', label: '剧情试演', description: '剧情试演', skill: '试演。',
+    agents: [{ card: 'hero', name: 'Claude-hero', label: '主角视角', project_access: 'read', system_prompt: '你是主角。' }] }];
+  save_workflow(f.home, { id: 'writing', label: '写作', skill: '先写再审。', agents: [writer], sub_workflows }, validate_preset);
+  const launched = await launch_discussion(f.home, { site: f.site, entry: 'web', participants: f.input.participants, token,
+    workflow: { id: 'writing', members: { writer: 'Claude' } },
+    room: { title: '子工作流', mode: 'free', host: 'Codex', members: ['Codex', 'Claude'], submission_id: randomUUID() } }, f.options);
+  const config = load_config(launched.config_path), input = { site: f.site, room_id: launched.room.id, token };
+  const host_access = join(f.directory, 'host.access.json');
+  writeFileSync(host_access, JSON.stringify({ site: f.site, room: config.room, member: 'Codex', token: config.members.Codex.token }));
+  // The owner's refresh fills the main flow only; a sub-workflow's card is no missing card.
+  assert.deepEqual((await room_workflow(f.home, { ...input, action: 'sync' })).members, { writer: 'Claude' });
+  await assert.rejects(join_workflow(f.home, { access_file: host_access, sub: 'nothing' }), /没有子工作流/);
+  const joined = await join_workflow(f.home, { access_file: host_access, sub: 'rehearsal' });
+  assert.deepEqual(joined.members, { writer: 'Claude', hero: 'Claude-hero' });
+  assert.equal((await api(config, '')).labels['Claude-hero'], '主角视角');
+  const left = await leave_sub_workflow(f.home, { access_file: host_access, sub: 'rehearsal' });
+  assert.deepEqual(left.away, ['Claude-hero']);
+  let room = await api(config, '');
+  assert.equal(room.free.members.find(member => member.name === 'Claude-hero').status, 'away');
+  assert.equal(room.free.members.find(member => member.name === 'Claude').status, 'active', 'the main flow stays');
+  // A refresh keeps the sub-workflow's card in the binding; using it again brings the same member back.
+  assert.deepEqual((await room_workflow(f.home, { ...input, action: 'sync' })).members, { writer: 'Claude', hero: 'Claude-hero' });
+  await join_workflow(f.home, { access_file: host_access, sub: 'rehearsal' });
+  room = await api(config, '');
+  assert.equal(room.free.members.find(member => member.name === 'Claude-hero').status, 'active');
+  assert.equal(room.free.members.length, 3);
 });
 
 test('members join, leave and return while a free room keeps running', async t => {

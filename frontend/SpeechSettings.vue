@@ -5,7 +5,7 @@
  * or OpenAI with the key of its reading part, or the recognizer on this computer). Keys never come back to the page; a local service's token is saved by its
  * setup skill, so it asks for none.
  */
-import { computed, inject, onBeforeUnmount, onMounted, reactive, ref } from "vue";
+import { computed, inject, onBeforeUnmount, onMounted, reactive, ref, watch } from "vue";
 
 import { request_tts } from "./read-aloud.js";
 
@@ -42,6 +42,38 @@ onMounted(async () => {
   try { Object.assign(settings, await bridge.local_request("tts-settings", {})); loaded.value = true; }
   catch (error) { unavailable.value = error.message; }
 });
+
+// The local read-aloud and voice-input services' processes, so one left running after a crash can be seen and ended.
+const SERVICES_POLL_MS = 10_000;
+const services = ref({});
+let services_timer = 0;
+/** Read whether the local services run; a failed read keeps the last state. */
+async function load_services() {
+  try { services.value = await bridge.local_request("local-speech", {}); } catch { /* Shown again at the next read. */ }
+}
+watch([open, loaded], ([shown, ready]) => {
+  clearInterval(services_timer);
+  if (!shown || !ready) return;
+  load_services();
+  services_timer = setInterval(load_services, SERVICES_POLL_MS);
+});
+onBeforeUnmount(() => clearInterval(services_timer));
+/** The state line of one local service. */
+function service_label(id) {
+  const item = services.value[id];
+  if (!item) return "读取中…";
+  if (item.state === "running") return item.pid ? `运行中 · ${item.name} · PID ${item.pid}` : "运行中";
+  if (item.state === "other") return `端口 ${item.port} 被 ${item.name}（PID ${item.pid}）占用`;
+  return item.installed ? "未运行" : "未安装";
+}
+/** Force one local service to stop, with its child processes. */
+async function stop_service(id) {
+  if (busy.value) return;
+  busy.value = `stop:${id}`;
+  try { services.value = await bridge.local_request("local-speech", { stop: id }); }
+  catch (error) { bridge.notify("error", error.message); }
+  finally { busy.value = ""; }
+}
 
 /**
  * Save the rate and every service's part, with `chosen` holding a service the user just picked. Services are sent only
@@ -188,6 +220,12 @@ onBeforeUnmount(stop_preview);
               <UInput v-else disabled placeholder="当前接入不支持自定义语气" aria-label="朗读语气提示" size="sm" class="w-full" />
             </div>
             <p class="fine-print speech-note">输入框右下角的播报按钮自动读新回复摘要</p>
+            <div class="speech-row"><span>本机进程</span>
+              <div class="speech-inline speech-process">
+                <span :class="['speech-process-state', services.tts?.state]" :title="service_label('tts')">{{ service_label('tts') }}</span>
+                <UButton v-if="services.tts?.state === 'running'" icon="i-lucide-power" aria-label="强行停止本机朗读服务" title="强行停止本机朗读服务（连同子进程）" color="error" variant="ghost" size="sm" :loading="busy === 'stop:tts'" :disabled="Boolean(busy)" @click="stop_service('tts')" />
+              </div>
+            </div>
             <h4>语音输入</h4>
             <div class="speech-row"><span>服务</span>
               <div class="speech-rates" role="group" aria-label="语音输入服务"><UButton v-for="item in settings.stt_catalog" :key="item.id" :label="item.label" color="neutral" variant="ghost" size="xs" :class="{ chosen: settings.stt_provider === item.id }" :aria-pressed="settings.stt_provider === item.id" @click="choose_input(item.id)" /></div>
@@ -199,6 +237,12 @@ onBeforeUnmount(stop_preview);
                 <template #trailing><UButton :icon="visible_keys[input_service.id] ? 'i-lucide-eye' : 'i-lucide-eye-off'" :disabled="!typed_keys[input_service.id]" :aria-label="visible_keys[input_service.id] ? '隐藏密钥' : '显示密钥'" :aria-pressed="Boolean(visible_keys[input_service.id])" size="xs" color="neutral" variant="link" @click="visible_keys[input_service.id] = !visible_keys[input_service.id]" /></template>
               </UInput>
               <UInput v-else disabled :placeholder="`与朗读共用上方的${stt_service.label} Key`" :aria-label="`语音输入的${stt_service.label} API Key`" size="sm" class="w-full" />
+            </div>
+            <div class="speech-row"><span>本机进程</span>
+              <div class="speech-inline speech-process">
+                <span :class="['speech-process-state', services.stt?.state]" :title="service_label('stt')">{{ service_label('stt') }}</span>
+                <UButton v-if="services.stt?.state === 'running'" icon="i-lucide-power" aria-label="强行停止本机语音识别服务" title="强行停止本机语音识别服务（连同子进程）" color="error" variant="ghost" size="sm" :loading="busy === 'stop:stt'" :disabled="Boolean(busy)" @click="stop_service('stt')" />
+              </div>
             </div>
           </template>
           <p v-else class="fine-print">正在读取语音设置…</p>
@@ -230,5 +274,9 @@ onBeforeUnmount(stop_preview);
 .speech-rates { display: flex; flex-wrap: wrap; gap: 2px; padding: 2px; border-radius: 8px; background: var(--ui-bg-elevated); width: fit-content; }
 .speech-rates button { min-width: 44px; justify-content: center; color: var(--ui-text-muted); }
 .speech-rates button.chosen { background: var(--ui-bg-accented); color: var(--ui-text-highlighted); }
+.speech-process { align-items: center; min-height: 32px; }
+.speech-process-state { min-width: 0; flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.speech-process-state.running { color: var(--ui-success); }
+.speech-process-state.other { color: var(--ui-warning); }
 .speech-settings :deep(.speech-key-masked) { -webkit-text-security: disc; }
 </style>

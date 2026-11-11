@@ -96,11 +96,14 @@ async function read_directory(path = "", append = false) {
       <div v-memo="[listing, loading, directory, root]" class="project-files-rows">
         <button v-for="entry in listing?.entries || []" :key="entry.path" type="button" class="project-file-row" :class="{ 'is-hidden': entry.name.startsWith('.') }"
           :disabled="entry.kind === 'unavailable'" :title="entry.kind === 'unavailable' ? `${entry.name}（无法读取或指向项目外）` : entry.name"
-          @click="entry.kind === 'directory' ? read_directory(entry.path) : file_preview.open?.(entry.path, directory, root)">
+          @click="entry.kind === 'directory' ? read_directory(entry.path) : file_preview.open?.(entry.path, directory, root, entry)">
           <span class="project-file-name"><UIcon :name="entry_icon(entry)[0]" class="project-file-icon" :class="entry_icon(entry)[1]" /><span>{{ entry.name }}</span></span>
           <span class="project-file-size">{{ file_size(entry.size) }}</span><time :datetime="entry.modified_at">{{ modified_time(entry.modified_at) }}</time>
         </button>
-        <p v-if="!listing" class="project-files-empty" role="status">{{ loading ? '正在读取项目目录…' : '点击刷新重新读取目录' }}</p>
+        <div v-if="!listing && loading" role="status" aria-label="正在读取项目目录">
+          <div v-for="row in 6" :key="row" class="project-file-row" aria-hidden="true"><span class="project-file-name"><USkeleton class="h-4 w-4 shrink-0" /><USkeleton class="h-4 w-2/3" /></span><USkeleton class="h-3 w-12 justify-self-end" /><USkeleton class="h-3 w-24 project-file-date" /></div>
+        </div>
+        <p v-else-if="!listing" class="project-files-empty"><UButton label="重新读取目录" icon="i-lucide-refresh-cw" color="neutral" variant="ghost" @click="read_directory(current_path)" /></p>
         <p v-else-if="!listing.entries.length" class="project-files-empty"><UIcon name="i-lucide-folder-open" />此文件夹为空</p>
       </div>
       <footer v-if="listing" class="project-files-footer">
@@ -150,6 +153,6 @@ async function read_directory(path = "", append = false) {
 
 @media (max-width: 640px) {
   .project-files-columns, .project-file-row { grid-template-columns: minmax(0, 1fr) 64px; gap: 8px; }
-  .project-files-columns > :last-child, .project-file-row > time { display: none; }
+  .project-files-columns > :last-child, .project-file-row > time, .project-file-date { display: none; }
 }
 </style>

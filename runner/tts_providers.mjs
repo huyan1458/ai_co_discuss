@@ -8,6 +8,7 @@
 import { execFile, spawn } from 'node:child_process';
 import { randomUUID } from 'node:crypto';
 import { existsSync, mkdtempSync, readFileSync, rmSync, statSync, utimesSync, writeFileSync } from 'node:fs';
+import { createConnection } from 'node:net';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -48,7 +49,8 @@ const SILENT_AAC_FRAME_MS = 1024 / 24;
 // starts it through a supervisor (`local_speech_service.mjs`) and renews its lease on every request; a minute without
 // one, or the user stopping reading, stops it, so the model does not hold graphics memory between uses, even when the
 // runner has crashed.
-const LOCAL_HOST = '127.0.0.1:18765';
+const LOCAL_PORT = 18765;
+const LOCAL_HOST = `127.0.0.1:${LOCAL_PORT}`;
 const LOCAL_URL = `http://${LOCAL_HOST}`;
 const LOCAL_MODEL = 'qwen3-tts-customvoice-q8';
 const LOCAL_DIR = 'yovoice';
@@ -69,6 +71,14 @@ const LOCAL_STT_URL = `http://${LOCAL_STT_HOST}:${LOCAL_STT_PORT}`;
 const LOCAL_STT_DIR = 'crispasr';
 const LOCAL_STT_MODEL = 'qwen3-asr-0.6b-q8_0.gguf';
 const LOCAL_STT_TIMEOUT_MS = 120_000;
+// The local services the settings page shows, by the program each runs; a stuck one (its supervisor killed) is found by
+// the port it listens on and ended there, but only when the listener is that program, never another one holding the port.
+const LOCAL_SERVICES = {
+  tts: { directory: LOCAL_DIR, port: LOCAL_PORT, program: 'yovoice' },
+  stt: { directory: LOCAL_STT_DIR, port: Number(LOCAL_STT_PORT), program: 'crispasr' },
+};
+const LOCAL_PROBE_MS = 1000;
+const LOCAL_LOOKUP_MS = 10_000;
 // While another page request is generating, ask again this often.
 const LOCAL_BUSY_MS = 300;
 // A released lease is dated 1970; anything before this is one.
@@ -476,4 +486,83 @@ export function provider_speak(provider, input, { request = fetch, open = (url, 
  */
 export function provider_release(provider, home) {
   if (provider === 'local') local_release(join(home, LOCAL_DIR));
+}
+
+/** The process listening on a local TCP port as `{ pid, name }`, or null when none or it cannot be looked up. */
+async function find_listener(port) {
+  try {
+    if (process.platform === 'win32') {
+      const { stdout } = await run_file('netstat', ['-ano', '-p', 'TCP'], { windowsHide: true, timeout: LOCAL_LOOKUP_MS });
+      const line = stdout.split('\n').map(text => text.trim().split(/\s+/))
+        .find(fields => fields[0] === 'TCP' && fields[1]?.endsWith(`:${port}`) && fields[3] === 'LISTENING');
+      if (!line) return null;
+      const pid = Number(line[4]);
+      const listed = (await run_file('tasklist', ['/FI', `PID eq ${pid}`, '/FO', 'CSV', '/NH'], { windowsHide: true, timeout: LOCAL_LOOKUP_MS })).stdout;
+      return { pid, name: listed.match(/^"([^"]+)"/m)?.[1] || '' };
+    }
+    const { stdout } = await run_file('lsof', ['-nP', `-iTCP:${port}`, '-sTCP:LISTEN', '-Fpc'], { timeout: LOCAL_LOOKUP_MS });
+    const pid = Number(stdout.match(/^p(\d+)/m)?.[1]);
+    return pid ? { pid, name: stdout.match(/^c(.+)$/m)?.[1] || '' } : null;
+  } catch { return null; }
+}
+
+/** Whether something accepts connections on a local port; used when the listener cannot be looked up. */
+function port_open(port) {
+  return new Promise(resolve => {
+    const socket = createConnection({ host: '127.0.0.1', port, timeout: LOCAL_PROBE_MS });
+    const done = (open) => { socket.destroy(); resolve(open); };
+    socket.once('connect', () => done(true)).once('error', () => done(false)).once('timeout', () => done(false));
+  });
+}
+
+/** End a process and, on Windows, its children (yovoice's inference process). */
+async function kill_tree(pid) {
+  if (process.platform === 'win32') await run_file('taskkill', ['/PID', String(pid), '/T', '/F'], { windowsHide: true, timeout: LOCAL_LOOKUP_MS });
+  else process.kill(pid, 'SIGKILL');
+}
+
+/** One local service's state: `running` (its program listens), `other` (another program holds its port) or `stopped`. */
+async function local_service_status(home, id, { find, probe }) {
+  const { directory, port, program } = LOCAL_SERVICES[id];
+  const installed = existsSync(join(home, directory, 'cli', `${program}${LOCAL_EXE}`));
+  const owner = await find(port);
+  if (owner) return { installed, port, pid: owner.pid, name: owner.name, state: owner.name.toLowerCase().startsWith(program) ? 'running' : 'other' };
+  return { installed, port, pid: null, name: '', state: await probe(port) ? 'running' : 'stopped' };
+}
+
+/**
+ * Whether the local read-aloud (`tts`) and voice-input (`stt`) services are running, so the settings page can show one
+ * left behind (its supervisor gone) that still holds graphics memory.
+ * @param {string} home The service home.
+ * @param {{ find?: Function, probe?: Function }} [lookup] Port listener lookup and probe, replaceable in tests.
+ * @returns {Promise<{ tts: object, stt: object }>} Per service `{ installed, port, pid, name, state }`.
+ */
+export async function local_services(home, { find = find_listener, probe = port_open } = {}) {
+  const [tts, stt] = await Promise.all(['tts', 'stt'].map(id => local_service_status(home, id, { find, probe })));
+  return { tts, stt };
+}
+
+/**
+ * Force one local service to stop: end the process listening on its port with its children, only when that process is
+ * the service's own program (its supervisor then exits with it). When the listener cannot be looked up, release the
+ * lease instead, so a live supervisor stops it within 5 s.
+ * @param {string} home The service home.
+ * @param {string} id `tts` or `stt`.
+ * @param {{ find?: Function, probe?: Function, kill?: Function }} [lookup] Replaceable in tests.
+ * @returns {Promise<{ tts: object, stt: object }>} The states afterwards.
+ */
+export async function local_service_stop(home, id, { find = find_listener, probe = port_open, kill = kill_tree } = {}) {
+  if (!LOCAL_SERVICES[id]) throw new Error('未知的本机语音服务');
+  const status = await local_service_status(home, id, { find, probe });
+  if (status.state === 'other') throw new Error(`端口 ${status.port} 被其他程序（${status.name}，PID ${status.pid}）占用，未结束它`);
+  if (status.state !== 'running') return local_services(home, { find, probe });
+  if (!status.pid) {
+    local_release(join(home, LOCAL_SERVICES[id].directory));
+    return local_services(home, { find, probe });
+  }
+  // It may have ended meanwhile (its lease ran out); whether it still runs afterwards is what counts.
+  try { await kill(status.pid); } catch { /* Checked below. */ }
+  const after = await local_services(home, { find, probe });
+  if (after[id].state === 'running' && after[id].pid === status.pid) throw new Error(`未能结束 ${status.name}（PID ${status.pid}），请在任务管理器中结束它`);
+  return after;
 }

@@ -122,7 +122,7 @@ test("a slash offers only whitelisted platform skills, and picking one prefills 
   assert.equal(fixture.state.active.value.skill.id, "workflow-creator");
   fixture.key("Enter");
   await nextTick();
-  assert.equal(fixture.text.value, "用 workflow-creator 技能新建一个工作流：");
+  assert.equal(fixture.text.value, "$workflow-creator ");
   fixture.type("/discuss-host");
   assert.equal(fixture.state.active.value, undefined, "operating notes the AIs load by themselves are not offered");
 });
@@ -706,6 +706,24 @@ function theme_fixture(saved_theme = null, shared_storage = null) {
   return { context, nodes, classes, storage, loaded, buttons, notified, root: document.documentElement };
 }
 
+test('attachment button metadata reaches preview without a metadata or relay read first', async () => {
+  const { context } = theme_fixture(), opened = [];
+  Object.assign(context, {
+    request_json: () => assert.fail('button metadata already identifies the attachment'),
+    attachment_url: () => assert.fail('the opened viewer resolves its own content address'),
+  });
+  context.test_state.remote_rooms = true;
+  context.test_state.text_preview = file => opened.push(file);
+  context.test_state.image_viewer = file => opened.push(file);
+  for (const [fileName, contentType] of [['table.xlsx', 'application/octet-stream'], ['image.png', 'image/png']]) {
+    const opening = context.preview_attachment({ room_id: 'one', id: 'attachment', fileName, contentType, fileSize: '42', createdAt: '2026-11-10' });
+    assert.equal(opened.at(-1).file_name, fileName);
+    assert.equal(opened.at(-1).size, 42);
+    assert.equal(opened.at(-1).created_at, '2026-11-10');
+    await opening;
+  }
+});
+
 test('topic editing saves details without changing the discussion phase or a live session limit', async () => {
   const { context, nodes } = theme_fixture(), calls = [];
   const experts = { Codex: 'cli', Claude: 'cli' };
@@ -1111,7 +1129,7 @@ function participant_connection_fixture(props = {}) {
     if (controls.on_action) return controls.on_action(name, payload);
     return true;
   };
-  const dialog = vm.createContext({ computed, ref, watch, defineProps: () => props, defineModel: () => ref(false),
+  const dialog = vm.createContext({ computed, ref, watch, onBeforeUnmount() {}, defineProps: () => props, defineModel: () => ref(false),
     inject: () => ({ view, bridge: { launch_clients: {}, platform_of: (name) => name.split("-")[0],
       unique_instance: (base, taken) => { let name = base; for (let number = 2; taken.has(name); number++) name = `${base}-${number}`; return name; } }, pending, act }) });
   const invite_dialog = readFileSync(new URL("../frontend/InviteDialog.vue", import.meta.url), "utf8");
@@ -1230,7 +1248,7 @@ function free_card_fixture({ messages = [], members = [], executions = [], query
   const busy_start = discussion_source.indexOf("const free = computed(");
   const busy_end = discussion_source.indexOf("/** Progress notes per execution id", busy_start);
   vm.runInContext(`${discussion_source.slice(busy_start, busy_end)}\nglobalThis.cards = { busy: free_busy, working: free_working, now: free_now };`, context);
-  const layout_start = discussion_source.indexOf("const free_failures = computed(");
+  const layout_start = discussion_source.indexOf("const failure_wakes = computed(");
   const layout_end = discussion_source.indexOf("/** Id of the top-level message at or before", layout_start);
   vm.runInContext(`${discussion_source.slice(layout_start, layout_end)}\nglobalThis.layout_state = { failures: free_failures, layout: free_layout, rewinds: rewound_runs, toggle: toggle_rewound };`, context);
   return { context, view: view.value, room: view.value.room, cards: context.cards, state: context.layout_state, timers,

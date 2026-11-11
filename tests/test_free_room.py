@@ -1084,15 +1084,17 @@ class MultiMemberTests(FreeRoomTests):
         self.assertEqual([item["member"] for item in saved["message"]["suggestions"]], ["Antigravity"])
 
     def test_member_suggestion_requires_owner_and_converts_once_with_fresh_chain(self):
-        """A suggestion stays inert, then one owner confirmation creates a deliverable request."""
+        """A suggestion for an ordinary member stays inert, then one owner confirmation creates a deliverable request."""
+        antigravity = uuid.uuid4().hex
+        self.request(f"{self.path}/members", {"name": "Antigravity", "adapter": "antigravity_cli", "token": antigravity}, self.owner)
         original = self.say("先请 Claude 看看")[1]["message"]
         execution = self.reserve_for("Claude")[1]
-        status, saved = self.answer(execution["id"], "建议 @Codex 检查边界。", to=["Codex", "Codex"])
+        status, saved = self.answer(execution["id"], "建议 @Gemini 检查边界。", to=["Antigravity", "Antigravity"])
         self.assertEqual(status, 201, saved)
         source = saved["message"]
-        self.assertEqual([item["member"] for item in source["suggestions"]], ["Codex"])
+        self.assertEqual([item["member"] for item in source["suggestions"]], ["Antigravity"])
         self.assertEqual(len(self.request(self.path)[1]["free"]["requests"]), 1)
-        payload = {"message_id": source["id"], "member_id": self.member_id("Codex")}
+        payload = {"message_id": source["id"], "member_id": self.member_id("Antigravity")}
         for token in (None, "wrong-token", self.member, self.codex):
             self.assertEqual(self.request(f"{self.path}/suggestions", payload, token)[0], 403)
         status, converted = self.request(f"{self.path}/suggestions", payload, self.owner)
@@ -1107,14 +1109,35 @@ class MultiMemberTests(FreeRoomTests):
             retry = self.request(f"{self.path}/suggestions", payload, self.owner)[1]
             self.assertTrue(retry["duplicate"])
             self.assertEqual(retry["request"]["id"], request["id"])
-        delivered = self.reserve_for("Codex")[1]
+        delivered = self.reserve_for("Antigravity")[1]
         self.assertEqual([item["message_id"] for item in delivered["requests"]], [source["id"]])
-        self.assertEqual(self.answer(delivered["id"], author="Codex", token=self.codex)[0], 201)
+        self.assertEqual(self.answer(delivered["id"], author="Antigravity", token=antigravity)[0], 201)
         retry = self.request(f"{self.path}/suggestions", payload, self.owner)[1]
         self.assertEqual(retry["request"]["status"], "completed")
         source = self.request(f"{self.path}/messages/{source['id']}")[1]
         self.assertEqual(source["suggestions"][0]["request_id"], request["id"])
         self.assertEqual(len(self.request(self.path)[1]["free"]["requests"]), 2)
+
+    def test_member_mention_wakes_the_host_once_the_room_is_idle(self):
+        """A member's @host waits while other work is open, then wakes the host once with a notice."""
+        antigravity = uuid.uuid4().hex
+        self.request(f"{self.path}/members", {"name": "Antigravity", "adapter": "antigravity_cli", "token": antigravity}, self.owner)
+        self.say("请 Gemini 查资料", to=["Antigravity"])
+        self.say("请 Claude 看看", to=["Claude"])
+        execution = self.reserve_for("Claude")[1]
+        status, saved = self.answer(execution["id"], "我没有改工作流的权限，需要 @Codex 处理。")
+        self.assertEqual(status, 201, saved)
+        host_requests = lambda: [item for item in self.request(self.path)[1]["free"]["requests"] if item["member"] == "Codex"]
+        self.assertEqual(host_requests(), [])
+        busy = self.reserve_for("Antigravity")[1]
+        self.assertEqual(self.answer(busy["id"], author="Antigravity", token=antigravity)[0], 201)
+        woken = host_requests()
+        self.assertEqual([item["purpose"] for item in woken], ["notice"])
+        notice = self.request(f"{self.path}/messages/{woken[0]['message_id']}")[1]
+        self.assertIn(f"#{saved['message']['id']}", notice["text"])
+        work = self.reserve_for("Codex")[1]
+        self.assertEqual(self.answer(work["id"], "已处理。", token=self.codex, author="Codex")[0], 201)
+        self.assertEqual(len(host_requests()), 1)
 
     def test_away_voids_work_and_return_needs_a_new_credential(self):
         """Leaving cancels only that member's work; old credential copies never revive."""
@@ -1494,6 +1517,14 @@ class HostTests(HostRoomTests):
         self.assertEqual(self.requests()[-1], ("Claude", "notice", "pending"))
         self.assertIn(f"--execution {first['id']}", self.messages()[-1][1])
         notice = self.reserve_for("Claude")[1]
+        free = self.request(self.path)[1]["free"]
+        reports = {item["id"]: item for item in free["executions"]}
+        # The wake-up sits where the failed execution was, so the page shows it in that card's place.
+        self.assertEqual(reports[notice["id"]]["anchor_message_id"], reports[first["id"]]["request_message_id"])
+        self.assertIn({"message_id": reports[notice["id"]]["request_message_id"], "execution_id": first["id"]}, free["failure_wakes"])
+        status, refused = self.request(f"{self.path}/messages", {"author": "Claude", "text": "补交", "source": "cli",
+                                                                  "submission_id": uuid.uuid4().hex, "execution_id": first["id"]}, self.member)
+        self.assertEqual(status, 409, "a failed execution is not revived while the member has another live one")
         self.request(f"{self.path}/executions/{notice['id']}", {"action": "fail", "reason": "用量已达上限"}, self.owner)
         self.assertEqual([item for item in self.requests() if item == ("Claude", "notice", "pending")], [])
         status, saved = self.request(f"{self.path}/messages", {"author": "Claude", "text": "补交", "source": "cli",
@@ -1738,6 +1769,37 @@ class HostTests(HostRoomTests):
         self.assertEqual(self.requests()[-1], ("Codex-2", "ask", "pending"))
         self.work("Codex-2")
         self.assertEqual(self.host_pending()["sequence"]["phase"], "end")
+
+    def test_a_user_gate_waits_for_the_owner_whose_next_message_carries_the_relay_on(self):
+        """A user gate hands nothing back to the host; the owner's next unaddressed message runs the stretch again, a named one does not."""
+        self.request(f"{self.path}/budget", {"max_rounds": 6}, self.owner)
+        FreeRoomTests.say(self, "跑团")
+        execution = self.reserve_for("Claude")[1]["id"]
+        post = lambda gates: self.request(f"{self.path}/messages", {"author": "Claude", "text": "开团", "source": "cli",
+            "submission_id": uuid.uuid4().hex, "execution_id": execution, "to": ["Antigravity", "Codex"], "sequential": True, "gates": gates}, self.member)
+        for bad in ([{"after": "Codex", "user": True}], [{"after": "Codex", "repeat_from": "Antigravity", "user": "yes"}]):
+            self.assertEqual(post(bad)[0], 400, bad)
+        self.assertEqual(post([{"after": "Codex", "repeat_from": "Antigravity", "user": True}])[0], 201)
+        self.work("Antigravity")
+        self.work("Codex")
+        self.assertNotIn(("Claude", "handoff", "pending"), self.requests(), "a user gate does not hand back to the host")
+        order = self.request(self.path)[1]["speaking_order"]
+        self.assertEqual((order["sequence"]["waiting_user"], order["sequence"]["pass"]), (True, 1))
+        status, saved = FreeRoomTests.say(self, "我的行动：开门")
+        self.assertEqual(status, 201, saved)
+        self.assertEqual(self.requests()[-1], ("Antigravity", "ask", "pending"), "the owner's message reruns from repeat_from")
+        self.assertNotIn(("Claude", "route", "pending"), self.requests(), "and is not routed to the host")
+        asked = next(item for item in self.request(self.path)[1]["free"]["requests"] if item["status"] == "pending")
+        self.assertEqual(asked["message_id"], saved["message"]["id"], "the next step reads the owner's message")
+        self.work("Antigravity")
+        self.work("Codex")
+        self.assertEqual(self.request(self.path)[1]["speaking_order"]["sequence"]["pass"], 2)
+        FreeRoomTests.say(self, "问一下主持人", to=["Claude"])
+        self.assertEqual(self.requests()[-1], ("Claude", "ask", "pending"), "a named message leaves the relay waiting")
+        self.work("Claude")
+        self.assertEqual(self.request(f"{self.path}/stop", {}, self.owner)[0], 200)
+        FreeRoomTests.say(self, "停了以后")
+        self.assertEqual(self.requests()[-1], ("Claude", "route", "pending"), "stopping everything ends the wait")
 
     def test_proceeding_past_the_last_step_is_refused(self):
         """A loop's checkpoint after the last step has nothing to go on to; the host accepts by answering."""

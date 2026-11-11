@@ -16,3 +16,11 @@ export function workbook_sheets(data) {
     return { name, html: utils.sheet_to_html(sheet, { header: "", footer: "", editable: false }), cut: rows > MAX_ROWS };
   });
 }
+
+// The same built module is the worker entry; importing it in tests still exposes the pure parser.
+if (typeof document === "undefined" && typeof self !== "undefined") {
+  self.onmessage = ({ data }) => {
+    try { self.postMessage({ sheets: workbook_sheets(data) }); }
+    catch (error) { self.postMessage({ error: error.message || String(error) }); }
+  };
+}

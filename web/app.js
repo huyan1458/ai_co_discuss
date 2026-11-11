@@ -914,6 +914,7 @@ function render_messages(result) {
   if (messages.length !== state.messages.length || messages.some((message, index) => message !== state.messages[index])) state.messages = messages;
   state.message_total = result.total;
   state.messages_loading = false;
+  state.messages_failure = "";
   // The Vue transcript renders from state.messages; the hidden controller markup is not rebuilt on every refresh.
   state.pages = result.pages;
 }
@@ -946,6 +947,29 @@ function cached_message_history(room_id) {
   return messages ? { messages, total: messages.length, page: 1, pages: 1 } : null;
 }
 
+/** Show the room and transcript as each arrives, independently of the directory read. */
+async function refresh_room_content(room_id, version, versions) {
+  const current = () => version === state.refresh_version && state.room?.id === room_id;
+  const room_read = request_json(`/api/rooms/${room_id}`).then((room) => {
+    if (!current()) return;
+    cache_room_entry(room_views, room_id, room);
+    state.room = merge_room_folder(room, versions.folder, versions.archive, versions.directory);
+    render_room();
+    publish_view();
+    load_room_models();
+  });
+  const history_read = state.tab === "discussion" ? load_message_history(room_id, version).then((result) => {
+    if (current() && result) { render_messages(result); publish_view(); }
+  }) : null;
+  if (history_read && !state.messages.length) { state.messages_loading = true; publish_view(); }
+  try {
+    await Promise.all([room_read, history_read]);
+  } catch (error) {
+    if (current()) { state.messages_loading = false; state.messages_failure = error.message; publish_view(); }
+    throw error;
+  }
+}
+
 /** Refresh a room with version guards so slower requests cannot change the active view. */
 async function refresh_room({ room: read_room = true } = {}) {
   if (state.dragged_room) return;
@@ -964,11 +988,9 @@ async function refresh_room({ room: read_room = true } = {}) {
   // The room and its transcript are read beside the directory rather than after it, saving a round trip on every open.
   const directory_read = request_json("/api/rooms");
   const reading = state.room && read_room ? room_id : null;
-  const room_read = reading ? request_json(`/api/rooms/${room_id}`) : null;
-  const history_read = reading && state.tab === "discussion" ? load_message_history(room_id, version) : null;
+  const content_read = reading ? refresh_room_content(room_id, version, { folder: folder_version, archive: archive_version, directory: directory_version }) : null;
   // A room removed meanwhile answers 404; the directory decides what is shown, so such answers may go unread.
-  room_read?.catch(() => {});
-  history_read?.catch(() => {});
+  content_read?.catch(() => {});
   if (reading) live_updates.refreshed_at = Date.now();
   const directory = await directory_read;
   if (version !== state.refresh_version) return;
@@ -976,6 +998,8 @@ async function refresh_room({ room: read_room = true } = {}) {
     state.rooms = directory.rooms.map((room) => merge_room_folder(room, folder_version, archive_version, directory_version));
     set_folder_directory(directory);
   }
+  render_rooms();
+  publish_view();
   if (directory.last_room !== undefined && !state.room) state.last_room = directory.last_room;
   if (state.room && !state.rooms.some((item) => item.id === state.room.id)) return select_room(visible_rooms()[0]?.id);
   if (!state.room || !read_room) {
@@ -984,15 +1008,10 @@ async function refresh_room({ room: read_room = true } = {}) {
     set_connection(true);
     return;
   }
-  const [room, result] = await Promise.all([room_read, history_read]);
+  await content_read;
   if (version !== state.refresh_version || state.room?.id !== room_id) return;
-  cache_room_entry(room_views, room_id, room);
-  state.room = merge_room_folder(room, folder_version, archive_version, directory_version);
   render_rooms();
-  render_room();
-  if (result) render_messages(result);
   set_connection(true);
-  load_room_models();
 }
 
 /** Select a room and reset room-specific draft and filter state. */
@@ -1057,10 +1076,13 @@ async function select_room(room_id) {
   }
   const cached_history = cached && cached_message_history(room_id);
   state.messages_loading = Boolean(state.room) && !cached_history;
+  state.messages_failure = "";
   render_rooms();
   if (cached) render_room();
   if (cached_history) render_messages(cached_history);
+  publish_view();
   try { await refresh_room(); }
+  catch (error) { if (state.room?.id === room_id) state.messages_failure = error.message; throw error; }
   finally { if (state.messages_loading && state.room?.id === room_id) { state.messages_loading = false; publish_view(); } }
 }
 
@@ -1398,7 +1420,8 @@ async function save_expert_preset(name, label) {
   try {
     await save_presets({ presets: [...state.launch.presets.filter(item => item.name !== id), preset] });
     show_toast(`已存为预设「${preset.label || id}」`);
-  } catch (error) { show_toast(`预设未保存：${error.message}`, true); }
+    return true;
+  } catch (error) { show_toast(`预设未保存：${error.message}`, true); return false; }
 }
 
 /** Remove the preset of this name from the add row: the user's own one, and a built-in one of the same name with it. */
@@ -1854,7 +1877,8 @@ function attachment_markup(files = []) {
   return `<div class="message-attachments">${files.map(file => {
     const url = `/api/rooms/${encodeURIComponent(file.room_id)}/attachments/${encodeURIComponent(file.id)}/content`;
     const name = escape_html(file.file_name);
-    const preview_attributes = `data-preview-attachment="${escape_html(file.id)}" data-attachment-room="${escape_html(file.room_id)}" aria-label="预览 ${name}"`;
+    // The button carries what the preview needs, so it opens at once instead of first asking the site about the file.
+    const preview_attributes = `data-preview-attachment="${escape_html(file.id)}" data-attachment-room="${escape_html(file.room_id)}" data-file-name="${name}" data-content-type="${escape_html(file.content_type)}" data-file-size="${Number(file.size) || 0}" data-created-at="${escape_html(file.created_at || "")}" aria-label="预览 ${name}"`;
     // Files of the computer's rooms are not on this website: they are read through the relay once shown or clicked.
     const source = state.remote_rooms ? `data-relay-src="${url}"` : `src="${url}"`;
     const download = state.remote_rooms ? `href="#" data-relay-href="${url}" data-file-name="${name}"` : `href="${url}?download=1"`;
@@ -1890,27 +1914,45 @@ function close_attachment_preview() {
 }
 
 /** Open images or the local PDF.js reader without leaving the discussion. */
-async function preview_attachment({ room_id, id }) {
+/**
+ * An attachment's address for reading its bytes: its route on this website, or, for the computer's rooms, a Blob URL
+ * read through the relay (cached, so a thumbnail already shown costs nothing).
+ */
+async function attachment_url(file) {
+  const path = `/api/rooms/${encodeURIComponent(file.room_id)}/attachments/${encodeURIComponent(file.id)}/content`;
+  return state.remote_rooms ? relay_file_url(path) : path;
+}
+
+async function preview_attachment(input) {
+  const { room_id, id } = input;
+  // DOM datasets use camelCase; API records use snake_case.
+  const file_name = input.file_name || input.fileName, content_type = input.content_type || input.contentType;
+  const file_size = input.file_size ?? input.fileSize ?? input.size, created_at = input.created_at || input.createdAt;
   close_attachment_preview();
   const preview = { page: 1, zoom: 1, render_version: 0 };
   state.attachment_preview = preview;
-  const file = await request_json(`/api/rooms/${encodeURIComponent(room_id)}/attachments/${encodeURIComponent(id)}`);
+  // A button rendered by attachment_markup names the file; an older caller passes only its ID.
+  const known = file_name && content_type;
+  const file = known ? { room_id, id, file_name, content_type, size: Number(file_size) || 0, created_at: created_at || "" }
+    : await request_json(`/api/rooms/${encodeURIComponent(room_id)}/attachments/${encodeURIComponent(id)}`);
   if (state.attachment_preview !== preview) return;
-  if (state.remote_rooms) {
-    file.url = file.download_url = await relay_file_url(new URL(file.url, location.origin).pathname);
-    if (state.attachment_preview !== preview) return;
-  }
-  if (is_text_attachment(file)) {
+  // The Vue workspace opens the preview window at once and reads the file there, with its loading animation; PDF
+  // opens there too. The classic page reads first and keeps its dialog.
+  if ((is_text_attachment(file) || file.content_type === "application/pdf") && state.text_preview) {
     state.attachment_preview = null;
-    // The file preview window belongs to the Vue workspace; without it the file is downloaded.
-    if (state.text_preview) state.text_preview(file);
-    else location.assign(file.download_url);
+    state.text_preview(file);
     return;
   }
-  // The Vue workspace shows an image full screen with zoom, rotate and flip; the classic page keeps its dialog.
   if (file.content_type.startsWith("image/") && state.image_viewer) {
     state.attachment_preview = null;
     state.image_viewer(file);
+    return;
+  }
+  file.url = file.download_url = state.remote_rooms ? await attachment_url(file) : file.url || await attachment_url(file);
+  if (state.attachment_preview !== preview) return;
+  if (is_text_attachment(file)) {
+    state.attachment_preview = null;
+    location.assign(file.download_url);
     return;
   }
   preview.file = file;
@@ -1978,7 +2020,7 @@ function bind_attachment_controls() {
   element("message-input").addEventListener("paste", paste_attachments);
   document.addEventListener("click", event => {
     const preview = event.target.closest("[data-preview-attachment]");
-    if (preview) run_action(() => preview_attachment({ room_id: preview.dataset.attachmentRoom, id: preview.dataset.previewAttachment }));
+    if (preview) run_action(() => preview_attachment({ ...preview.dataset, room_id: preview.dataset.attachmentRoom, id: preview.dataset.previewAttachment }));
     const remove = event.target.closest("[data-remove-attachment]");
     if (remove) remove_attachment(remove.dataset.removeAttachment);
   });
@@ -3078,6 +3120,7 @@ async function load_room_models() {
   const current = { room_id: room.id, revision, loading: true, participants: same_room ? previous.participants : null,
     project_directory: same_room ? previous.project_directory : "", extra_directories: same_room ? previous.extra_directories : [] };
   state.launch.room_models = current;
+  publish_view();
   const live = () => state.launch.room_models === current && state.room?.id === room.id;
   // agy is run to name its default model, which takes seconds; everything else is shown first and agy follows.
   try {
@@ -4877,7 +4920,7 @@ function view_snapshot() {
     attachment_drafts: state.attachment_drafts.map(item => ({ id: item.id, file_name: item.file.name, size: item.file.size, preview_url: item.preview_url,
       uploading: state.sending_message && !item.uploaded })),
     upload_status: state.upload_status, sending_message: state.sending_message, sending_preview: state.sending_preview,
-    mention_only: state.mention_only, host_only: state.host_only, reply_to: state.reply_to, editing_queued: state.editing_queued?.id ?? null,
+    mention_only: state.mention_only, host_only: state.host_only, messages_loading: Boolean(state.messages_loading), messages_failure: state.messages_failure || "", reply_to: state.reply_to, editing_queued: state.editing_queued?.id ?? null,
     access: access_snapshot(), admin: admin_snapshot(),
     device: { id: state.device.id, needs: state.device.needs, pairing_code: state.device.pairing_code,
       prompt: state.device.prompt ? { title: state.device.prompt.title, description: state.device.prompt.description, confirm_label: state.device.prompt.confirm_label } : null },
@@ -4947,11 +4990,22 @@ async function filter_view({ query = state.query, mention = state.mention_only, 
   state.mention_only = mention;
   state.host_only = host;
   state.page = page;
+  state.messages_loading = true;
+  state.messages_failure = "";
   element("search-input").value = state.query;
   element("mention-filter").setAttribute("aria-pressed", String(mention));
   // The filter control changes at once; the filtered transcript follows when the site answers.
   publish_view();
-  await refresh_room();
+  const reading = refresh_room(), version = state.refresh_version;
+  try { await reading; }
+  catch (error) {
+    if (version === state.refresh_version) {
+      state.messages_loading = false;
+      state.messages_failure = error.message;
+      publish_view();
+    }
+    throw error;
+  }
 }
 
 /** Download one complete room snapshot independently of visible filters or later navigation. */
@@ -5126,7 +5180,7 @@ window.discuss_view = { snapshot: view_snapshot, write_field: write_view_field, 
   write_launch: write_launch_field, default_launch_entry, description_template, save_description_template, description_draft, write_description_draft, describe_member, set_chain_rounds, continue_chain, expert_presets, apply_expert_preset, unique_instance, member_label, default_name, label_draft, write_label_draft, preset_identity, save_expert_preset, delete_expert_preset, write_room_connection, write_room_adapter, launch_clients: LAUNCH_CLIENTS,
   launch_model_state, load_launch_models, write_launch_model, save_launch_api_key, write_scheduler, save_scheduler_api_key, check_scheduler, write_named_followup, write_create_discussion, write_create_goal, write_create_chain_rounds, check_launch_api, launch_summary, launch_can_set_access, pick_launch_directory, browse_local_directory, list_remote_directories, save_launch_projects, restore_launch_profile, reset_create_form, empty_discussion_message,
   start_drag: start_directory_drag, reconnect: reconnect_live_updates, stop_label, local_request: local_launch_request,
-  attachment_markup, attachment_size, attachment_file_icon, drop_attachments, paste_attachments, set_text_preview: (open) => { state.text_preview = open; }, set_image_viewer: (open) => { state.image_viewer = open; },
+  attachment_markup, attachment_size, attachment_file_icon, drop_attachments, paste_attachments, set_text_preview: (open) => { state.text_preview = open; }, set_image_viewer: (open) => { state.image_viewer = open; }, attachment_url,
   write_expert: write_view_expert, add_instance: add_view_instance, add_preset: add_preset_instance, platform_of, execute: execute_view_action, theme: change_view_theme,
   reload_workflows, workflow_preset, write_create_host_workflows, write_create_api_max_requests, set_room_api_max_requests, set_room_extra_directories, set_room_project_directory,
   admin: { register: register_admin, login: login_admin, logout: logout_admin,

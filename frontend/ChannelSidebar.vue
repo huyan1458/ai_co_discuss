@@ -11,7 +11,7 @@ const author = field("author-select");
 const tools_open = ref(true);
 const workflows_open = ref(true);
 const library = use_workflow_library();
-const { workflows, available, draft, saved_id, page_open, renaming, rename_text } = library;
+const { workflows, available, draft, saved_id, page_open, renaming, rename_text, pending_items } = library;
 
 /** Show a workflow on the page and close the drawer. */
 function open_workflow(id) {
@@ -67,11 +67,11 @@ const account_status = computed(() => {
           <span v-if="renaming === item.id" class="channel-workflow-rename"><UIcon name="i-lucide-network" />
             <input v-model="rename_text" data-workflow-rename :maxlength="32" aria-label="新名称" @keydown.enter.prevent="library.commit_rename" @keydown.esc.prevent="renaming = ''" @blur="library.commit_rename" /></span>
           <button v-else type="button" class="channel-room-select" :title="item.error || item.description" :aria-current="page_open && saved_id === item.id ? 'page' : undefined"
-            @click="open_workflow(item.id)" @dblclick="!item.error && library.start_rename(item)">
-            <UIcon :name="item.error ? 'i-lucide-triangle-alert' : item.disabled ? 'i-lucide-circle-pause' : 'i-lucide-network'" /><span>{{ item.label }}</span>
+            @click="open_workflow(item.id)" @dblclick="!item.error && !pending_items.has(item.id) && library.start_rename(item)">
+            <UIcon :name="pending_items.has(item.id) ? 'i-lucide-loader-circle' : item.error ? 'i-lucide-triangle-alert' : item.disabled ? 'i-lucide-circle-pause' : 'i-lucide-network'" :class="{ 'animate-spin': pending_items.has(item.id) }" /><span>{{ item.label }}</span>
             <small class="channel-room-time">{{ item.error ? '无法读取' : item.disabled ? '已停用' : `${item.cards} 位成员` }}</small></button>
           <div v-if="available && renaming !== item.id" class="channel-room-actions">
-            <UDropdownMenu :items="library.item_menu(item)" :content="{ align: 'start', side: 'bottom', sideOffset: 6 }" :ui="{ content: 'channel-menu channel-topic-menu' }"><UButton icon="i-lucide-ellipsis" :aria-label="`「${item.label}」的更多操作`" title="更多操作" size="xs" color="neutral" variant="ghost" /></UDropdownMenu>
+            <UDropdownMenu :disabled="pending_items.has(item.id)" :items="library.item_menu(item)" :content="{ align: 'start', side: 'bottom', sideOffset: 6 }" :ui="{ content: 'channel-menu channel-topic-menu' }"><UButton icon="i-lucide-ellipsis" :disabled="pending_items.has(item.id)" :aria-label="`「${item.label}」的更多操作`" title="更多操作" size="xs" color="neutral" variant="ghost" /></UDropdownMenu>
           </div>
         </div>
         <p v-if="!available" class="channel-directory-empty">连接本机服务后管理工作流</p>

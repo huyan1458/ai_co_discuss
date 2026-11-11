@@ -153,7 +153,7 @@ export function media_of(name) {
 const TEXT_KINDS = { table: ["csv", "tsv"], subtitle: ["srt", "vtt", "ass", "ssa", "lrc"] };
 // Binary documents the preview reads whole: Office files rendered by the modules under /office/, and the Premiere
 // project, a gzip-compressed XML shown as its text.
-const DOCUMENT_KINDS = { docx: ["docx"], sheet: ["xlsx", "xls", "ods"], slides: ["pptx"], prproj: ["prproj"] };
+const DOCUMENT_KINDS = { docx: ["docx"], sheet: ["xlsx", "xls", "ods"], slides: ["pptx"], pdf: ["pdf"], prproj: ["prproj"] };
 
 /** The lower-case extension of a file name, or "". */
 function extension_of(name) {
@@ -166,7 +166,7 @@ export function text_kind_of(name) {
   return Object.keys(TEXT_KINDS).find((kind) => TEXT_KINDS[kind].includes(extension)) || "";
 }
 
-/** `docx`, `sheet`, `slides` or `prproj` for a binary document the preview renders, or "". */
+/** `docx`, `sheet`, `slides`, `pdf` or `prproj` for a binary document the preview renders, or "". */
 export function document_kind_of(name) {
   const extension = extension_of(name);
   return Object.keys(DOCUMENT_KINDS).find((kind) => DOCUMENT_KINDS[kind].includes(extension)) || "";

@@ -6,7 +6,7 @@
  * that moment (replayed from the log) and the other records about the same request, execution or message. It does not
  * look inside the AI software: the execution waterfall shows phases. Owner only.
  */
-import { computed, inject, ref, watch } from "vue";
+import { computed, inject, onBeforeUnmount, ref, watch } from "vue";
 import { EVENT_GROUPS, EXECUTION_STATUS, PURPOSES, REQUEST_STATUS, event_entities, event_text, state_at } from "./timeline-model.js";
 
 const emit = defineEmits(["detail"]);
@@ -18,7 +18,9 @@ const more = ref(false);
 const error = ref("");
 const selected = ref(null);
 const filter = ref("");
-let reading = false;
+const reading = ref(false);
+let read_version = 0;
+onBeforeUnmount(() => { read_version++; });
 
 // Paging cursors are event ids; rows are shown by arrival time (`at`), since a write is stored after its effects.
 const cursor = { first: 0, last: 0 };
@@ -27,13 +29,14 @@ const by_time = (left, right) => left.at - right.at || left.id - right.id;
 /** Read the newest page, or older (`before`) or newer (`after`) records, and merge them in time order. */
 async function load(mode = "reset") {
   const id = room_id.value;
-  if (!id || reading) return;
+  if (!id || (reading.value && mode !== "reset")) return;
+  const version = ++read_version;
   const list = events.value;
   const query = mode === "older" && list.length ? `?before=${cursor.first}` : mode === "newer" && list.length ? `?after=${cursor.last}` : "";
-  reading = true;
+  reading.value = true;
   try {
     const result = await bridge.request(`/api/rooms/${id}/events${query}`);
-    if (id !== room_id.value) return;
+    if (version !== read_version || id !== room_id.value) return;
     // Every room change asks for newer records; when there are none, keep the lists so the rows are not rebuilt.
     if (mode === "newer" && !result.events.length) { error.value = ""; return; }
     members.value = result.members;
@@ -44,12 +47,12 @@ async function load(mode = "reset") {
     events.value = mode === "reset" ? result.events : [...list, ...result.events].sort(by_time);
     error.value = "";
   } catch (failure) {
-    error.value = `读取事件记录失败：${failure.message}`;
+    if (version === read_version) error.value = `读取事件记录失败：${failure.message}`;
   } finally {
-    reading = false;
+    if (version === read_version) reading.value = false;
   }
 }
-watch(room_id, () => { events.value = []; selected.value = null; filter.value = ""; load(); }, { immediate: true });
+watch(room_id, () => { events.value = []; selected.value = null; filter.value = ""; error.value = ""; load(); }, { immediate: true });
 // Every room change shows in the room view, so read what is new then instead of polling.
 watch(() => view.value.room, (room, previous) => { if (room?.id && room.id === previous?.id && events.value.length) load("newer"); });
 
@@ -103,14 +106,15 @@ function on_key(event) {
 <template>
   <section class="merged-section event-log" aria-label="事件记录" @keydown="on_key">
     <div class="page-heading"><div><h2>事件记录</h2><p>网站如实记下的用户与程序的每次写入（含被拒的）及其引起的状态变化，按发生顺序排列；点一行看原始记录、此刻仍未结束的请求与执行，以及同一对象的其他记录。AI 可用 <code>codiscuss room events</code> 读取同一份记录。</p></div></div>
-    <p v-if="error" role="alert" class="fine-print ev-error">{{ error }}</p>
+    <div v-if="reading && !events.length" class="grid gap-3 py-4" role="status" aria-label="正在读取事件记录"><USkeleton v-for="row in 8" :key="row" class="h-5" :class="row % 3 ? 'w-full' : 'w-2/3'" /></div>
+    <p v-else-if="error" role="alert" class="fine-print ev-error">{{ error }}<UButton label="重试" color="neutral" variant="link" size="xs" :loading="reading" @click="load()" /></p>
     <p v-else-if="!events.length" class="fine-print">还没有事件记录。此功能上线前的历史没有记录。</p>
     <div v-if="events.length" class="ev" :class="{ 'has-inspector': selected_event }">
       <div class="ev-ledger">
         <header class="ev-head">
           <span class="ev-title">{{ rows.length }} 条记录</span>
           <button v-if="filter" type="button" class="ev-chip is-active" @click="filter = ''">只看 {{ entity_label(filter) }} ✕</button>
-          <button v-if="more && !filter" type="button" class="subtle-link" @click="load('older')">加载更早</button>
+          <UButton v-if="more && !filter" label="加载更早" color="neutral" variant="link" size="xs" :loading="reading" @click="load('older')" />
         </header>
         <ol class="ev-rows" role="listbox" aria-label="事件">
           <template v-for="row in rows" :key="row.event.id">

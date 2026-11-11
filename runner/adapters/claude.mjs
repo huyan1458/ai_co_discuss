@@ -94,10 +94,12 @@ export function claude_api_error(entry) {
   return { kind, text: text || String(entry.api_error || kind || '未知错误'), lasting: LASTING_ERRORS.includes(kind) };
 }
 
-/** How a Claude API error reads on the failed execution; a lasting one says it is not retried. */
+/** How a Claude API error reads on the failed card: a usage limit keeps only which limit and when it resets. */
 export function claude_error_reason(error) {
+  const limit = error.kind === 'rate_limit' && /hit your (.+?) limit\b.*?\bresets (.+?)\s*$/i.exec(error.text);
+  if (limit) return `Claude ${limit[1]} 用量已达上限，${limit[2]} 重置`;
   const label = { rate_limit: 'Claude 用量已达上限', authentication_failed: 'Claude 未登录或登录已失效' }[error.kind] || 'Claude 接口出错';
-  return `${label}：${error.text}${error.lasting ? '（不自动重试；恢复后请重新发送）' : ''}`;
+  return `${label}：${error.text}`;
 }
 
 /** The first program a shell command runs, skipping `cd` and `Set-Location` steps, for a prefix rule that also allows a retry. */

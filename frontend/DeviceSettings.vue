@@ -65,24 +65,37 @@ async function pair() {
 
 // Scanning in the page: the camera frames are read here until a pairing link shows up, then pairing starts at once.
 const scanning = ref(false);
+const camera_ready = ref(false);
+let scan_version = 0;
 const video = ref(null);
 let stream = null;
 function stop_scan() {
+  scan_version++;
   stream?.getTracks().forEach((track) => track.stop());
   stream = null;
   scanning.value = false;
+  camera_ready.value = false;
 }
 async function scan() {
+  if (scanning.value) return;
+  const version = ++scan_version;
+  scanning.value = true;
   try {
-    stream = await navigator.mediaDevices.getUserMedia({ video: { facingMode: "environment" }, audio: false });
+    const opened = await navigator.mediaDevices.getUserMedia({ video: { facingMode: "environment" }, audio: false });
+    if (version !== scan_version) { opened.getTracks().forEach((track) => track.stop()); return; }
+    stream = opened;
   } catch {
+    if (version !== scan_version) return;
+    stop_scan();
     bridge.notify("error", "无法打开相机：请允许本网站使用相机，或用系统相机扫码");
     return;
   }
-  scanning.value = true;
   await new Promise(requestAnimationFrame);
+  if (version !== scan_version || !video.value) return;
   video.value.srcObject = stream;
   await video.value.play().catch(() => {});
+  if (version !== scan_version) return;
+  camera_ready.value = true;
   const canvas = document.createElement("canvas");
   const context = canvas.getContext("2d", { willReadFrequently: true });
   const frame = () => {
@@ -182,9 +195,10 @@ const date = (time) => new Date(time).toLocaleString("zh-CN", { month: "numeric"
       <p class="fine-print">扫描电脑本机网页 设置 → 添加设备 的二维码，或输入配对码。</p>
       <div class="device-pair-row">
         <UInput v-model="code" placeholder="XXXX-XXXX-XXXX" autocomplete="off" :maxlength="16" class="w-full" aria-label="配对码" />
-        <UButton icon="i-lucide-scan-line" color="neutral" variant="outline" aria-label="扫码" title="扫码" :disabled="Boolean(busy)" @click="scan" />
+        <UButton icon="i-lucide-scan-line" color="neutral" variant="outline" aria-label="扫码" title="扫码" :disabled="Boolean(busy) || scanning" :loading="scanning && !camera_ready" @click="scan" />
       </div>
       <div v-if="scanning" class="device-scan">
+        <p v-if="!camera_ready" class="fine-print" role="status">正在打开相机…</p>
         <video ref="video" muted playsinline aria-label="相机画面" />
         <UButton label="取消" color="neutral" variant="soft" size="xs" @click="stop_scan" />
       </div>

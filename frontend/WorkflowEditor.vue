@@ -10,16 +10,17 @@ const workflow = defineModel("workflow", { type: Object, required: true });
 // An import's commands run on this computer when an API member calls them, so they are kept only once the user allows them.
 const commands_allowed = defineModel("commandsAllowed", { type: Boolean, default: false });
 // `compact`: the stacked page (phone, upright tablet), where the panel is one of two views and cannot fold away.
-const props = defineProps({ saved: Boolean, compact: Boolean });
+// `sub`: a sub-workflow of the open workflow, named here (the page title names the workflow) and carrying no commands.
+const props = defineProps({ saved: Boolean, compact: Boolean, sub: Boolean });
 const emit = defineEmits(["collapse"]);
 const { view } = inject("discussion");
 const MAX_SKILL = 20000;
 // A workflow with no SKILL.md text yet opens in editing; otherwise the rendered text comes first.
 const editing = ref(!workflow.value.skill?.trim());
 const source = ref(null);
-const commands = computed(() => workflow.value.commands || []);
+const commands = computed(() => props.sub ? [] : workflow.value.commands || []);
 // An import carrying an ID already in the library replaces that workflow when saved.
-const replaced = computed(() => !props.saved && (view.value.launch.workflows || []).find((item) => item.id === workflow.value.id));
+const replaced = computed(() => !props.saved && !props.sub && (view.value.launch.workflows || []).find((item) => item.id === workflow.value.id));
 const rendered = computed(() => editing.value ? "" : window.discuss_markdown.render_markdown(workflow.value.skill || ""));
 
 /** Switch to editing the source, with the cursor in it. */
@@ -42,19 +43,23 @@ watch([source, () => workflow.value.skill], () => nextTick(fit_source));
 <template>
   <aside class="workflow-skill" :class="{ 'is-compact': compact }" aria-label="工作流（SKILL.md）">
     <header class="workflow-skill-head">
-      <h3><UIcon name="i-lucide-file-text" class="workflow-skill-icon" />工作流<small>SKILL.md · 主持人照它派活</small></h3>
+      <h3><UIcon :name="sub ? 'i-lucide-git-branch' : 'i-lucide-file-text'" class="workflow-skill-icon" />{{ sub ? '子工作流' : '工作流' }}<small>SKILL.md · {{ sub ? '主持人按需照它做' : '主持人照它派活' }}</small></h3>
       <UButton :icon="editing ? 'i-lucide-eye' : 'i-lucide-pencil'" :label="editing ? '预览' : '编辑'" size="xs" color="neutral" variant="soft"
         @click="editing ? (editing = false) : edit()" />
       <UTooltip v-if="!compact" text="收起 SKILL.md"><UButton icon="i-lucide-panel-right-close" size="xs" color="neutral" variant="ghost" aria-label="收起 SKILL.md" @click="emit('collapse')" /></UTooltip>
     </header>
     <div class="workflow-skill-body">
+      <label v-if="sub" class="workflow-skill-description">
+        <span>名称</span>
+        <input v-model="workflow.label" :maxlength="32" placeholder="子工作流的名称" />
+      </label>
       <label class="workflow-skill-description">
         <span>一句话描述 <small>主持人凭它判断何时使用</small></span>
-        <input v-model="workflow.description" :maxlength="500" placeholder="做什么、什么时候用" />
+        <input v-model="workflow.description" :maxlength="500" :placeholder="sub ? '做什么、什么时候用（必填）' : '做什么、什么时候用'" />
       </label>
       <textarea v-if="editing" ref="source" v-model="workflow.skill" :maxlength="MAX_SKILL" class="workflow-skill-source" spellcheck="false" aria-label="SKILL.md 正文" />
       <div v-else-if="workflow.skill?.trim()" class="workflow-skill-preview markdown-body" v-html="rendered" @dblclick="edit"></div>
-      <button v-else type="button" class="workflow-skill-empty" @click="edit"><UIcon name="i-lucide-pencil" class="workflow-skill-icon" />写下主持人怎么组织这个工作流</button>
+      <button v-else type="button" class="workflow-skill-empty" @click="edit"><UIcon name="i-lucide-pencil" class="workflow-skill-icon" />写下主持人怎么组织这个{{ sub ? '子工作流' : '工作流' }}</button>
     </div>
     <p v-if="editing" class="workflow-skill-count">{{ (workflow.skill || '').length }} / {{ MAX_SKILL }}</p>
     <details v-if="commands.length" class="workflow-skill-commands" :open="!saved">

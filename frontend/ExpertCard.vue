@@ -194,6 +194,7 @@ function save_description({ text, label, as_template }) {
 const own_preset = computed(() => view.value.launch.presets.some((preset) => preset.name === props.name));
 // A card not added from its own preset is saved under a name the user gives; the platform prefix is only a suggestion.
 const naming = ref(false), naming_draft = ref("");
+const saving_preset = ref(false);
 const naming_text = computed(() => naming_draft.value.trim());
 const naming_blank = computed(() => !naming_text.value || naming_text.value === `${bridge.default_name(bridge.platform_of(props.name))}-`);
 const naming_id = computed(() => view.value && !naming_blank.value ? bridge.preset_identity(props.name, naming_text.value) : "");
@@ -206,7 +207,8 @@ const naming_note = computed(() => {
 
 /** Update the card's own preset in place; any other card asks for a name first. */
 function save_preset() {
-  if (own_preset.value) return bridge.save_expert_preset(props.name);
+  if (saving_preset.value) return;
+  if (own_preset.value) return store_preset();
   // Suggest the first numbered name that no saved preset holds yet.
   const taken = new Set(bridge.expert_presets().map((preset) => preset.name));
   const platform = bridge.platform_of(props.name);
@@ -219,9 +221,15 @@ function save_preset() {
 
 /** Save under the typed name and close. */
 async function save_named_preset() {
-  if (naming_blank.value) return;
-  await bridge.save_expert_preset(props.name, naming_text.value);
-  naming.value = false;
+  if (naming_blank.value || saving_preset.value) return;
+  if (await store_preset(naming_text.value)) naming.value = false;
+}
+
+/** Keep saving visible and retain the named draft on failure. */
+async function store_preset(label) {
+  saving_preset.value = true;
+  try { return await bridge.save_expert_preset(props.name, label); }
+  finally { saving_preset.value = false; }
 }
 
 // The expert prompt adds guidance for this member alone; its own text, even empty, replaces the software's preset.
@@ -389,8 +397,8 @@ onBeforeUnmount(() => { document.removeEventListener("pointerdown", close_on_out
         </span>
       </div>
       <div v-if="can_flip" class="expert-card-face expert-card-back" :inert="!visible_back" :aria-hidden="!visible_back">
-        <!-- nowheel: inside the workflow canvas the wheel scrolls these settings instead of zooming (Vue Flow skips such elements); no effect elsewhere. -->
-        <div class="expert-card-back-body nowheel">
+        <!-- nowheel / nopan: inside the workflow canvas the wheel and a finger scroll these settings instead of zooming or panning (Vue Flow skips such elements); no effect elsewhere. -->
+        <div class="expert-card-back-body nowheel nopan">
         <div class="expert-card-heading"><strong>{{ member_label }}<span v-if="member_label !== name">{{ name }}</span><span>设置</span></strong>
           <span class="expert-card-heading-tools">
           <button type="button" class="expert-card-back-tool" :class="{ 'is-set': description }" :aria-label="`编辑 ${name} 的名称与描述`" :title="describe_title" @click="describing = true"><UIcon name="i-lucide-user-pen" /></button>
@@ -427,7 +435,7 @@ onBeforeUnmount(() => { document.removeEventListener("pointerdown", close_on_out
         </div>
         <span class="expert-card-flip-actions">
           <template v-if="view.launch.available && !workflow && !preset">
-            <button type="button" class="expert-card-flip is-cancel" :aria-label="`${own_preset ? '更新' : '存为'}预设「${name}」`" title="存下描述、提示词、项目权限、模型与强度，之后在“预设”行一键加入" @click="save_preset">{{ own_preset ? '更新预设' : '存为预设' }}</button>
+            <button type="button" class="expert-card-flip is-cancel" :disabled="saving_preset" :aria-label="`${own_preset ? '更新' : '存为'}预设「${name}」`" title="存下描述、提示词、项目权限、模型与强度，之后在“预设”行一键加入" @click="save_preset">{{ saving_preset ? '保存中…' : own_preset ? '更新预设' : '存为预设' }}</button>
           </template>
           <button type="button" class="expert-card-flip is-cancel" :aria-label="`放弃 ${name} 的修改`" @click="cancel">取消</button>
           <button ref="back_button" type="button" class="expert-card-flip is-done" :aria-label="`保存并返回 ${name} 角色卡片`" @click="flip(false)"><UIcon name="i-lucide-check" />完成</button>
@@ -447,7 +455,7 @@ onBeforeUnmount(() => { document.removeEventListener("pointerdown", close_on_out
           <p>{{ naming_note }}</p>
           <div class="expert-card-naming-actions">
             <UButton label="取消" color="neutral" variant="ghost" @click="naming = false" />
-            <UButton type="submit" label="保存" class="channel-primary-button" :disabled="naming_blank" />
+            <UButton type="submit" label="保存" class="channel-primary-button" :disabled="naming_blank" :loading="saving_preset" />
           </div>
         </form>
       </template>

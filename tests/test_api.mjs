@@ -667,6 +667,22 @@ test('voice input on the local recognizer uses the token its skill saved and sta
   } finally { rmSync(home, { recursive: true, force: true }); }
 });
 
+test('force-stopping a local speech service ends only its own program listening on its port', async () => {
+  const { local_service_stop, local_services } = await import('../runner/tts_providers.mjs');
+  const home = mkdtempSync(join(tmpdir(), 'codiscuss-local-speech-'));
+  try {
+    const owners = { 18765: { pid: 41, name: 'yovoice.exe' }, 18766: { pid: 42, name: 'other-app.exe' } };
+    const killed = [];
+    const find = async port => owners[port] || null;
+    const lookup = { find, probe: async () => false, kill: async pid => { killed.push(pid); delete owners[18765]; } };
+    assert.deepEqual([(await local_services(home, lookup)).tts.state, (await local_services(home, lookup)).stt.state], ['running', 'other']);
+    await assert.rejects(local_service_stop(home, 'stt', lookup), /其他程序/);
+    assert.deepEqual(killed, [], 'a program that is not the service keeps running');
+    const after = await local_service_stop(home, 'tts', lookup);
+    assert.deepEqual([killed, after.tts.state], [[41], 'stopped']);
+  } finally { rmSync(home, { recursive: true, force: true }); }
+});
+
 /** A plain text answer in any of the four provider protocols. */
 function text_reply(call, text) {
   if (call.path.endsWith('/responses')) return { status: 'completed', output: [{ type: 'message', role: 'assistant', content: [{ type: 'output_text', text }] }] };

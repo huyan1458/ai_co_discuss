@@ -392,6 +392,8 @@ function resize_nav_by_key(event) {
         </div>
         <div v-if="view.tab === 'files'" v-keep-reading class="content-page" role="tabpanel" aria-label="文件">
           <ProjectFiles v-if="project_directory" :key="room.id" :directories="project_directories" />
+          <div v-else-if="view.launch.room_models?.loading || (!view.launch.room_models && view.launch.available)" class="grid gap-4 py-4" role="status" aria-label="正在读取项目目录"><USkeleton class="h-6 w-40" /><USkeleton v-for="row in 6" :key="row" class="h-5 w-full" /></div>
+          <p v-else-if="view.launch.room_models?.error" class="channel-files-unset" role="status">{{ view.launch.room_models.error }}<UButton label="重试" color="neutral" variant="link" size="xs" @click="bridge.reload_room_models()" /></p>
           <p v-else class="channel-files-unset" role="status">当前未设置项目目录</p>
         </div>
         <div v-if="view.tab === 'private'" v-keep-reading class="content-page private-page">

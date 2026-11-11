@@ -25,7 +25,8 @@ const flow = defineModel("flow", { type: Object, default: null });
 const emit = defineEmits(["open-skill"]);
 const agents = defineModel("agents", { type: Array, required: true });
 // On a phone the canvas is small: tools show icons only, and the minimap and the SKILL.md hint step aside.
-const props = defineProps({ compact: Boolean });
+// `reserved`: card IDs the workflow's other canvases (its main flow or sub-workflows) already use; IDs are unique across them.
+const props = defineProps({ compact: Boolean, reserved: { type: Array, default: () => [] } });
 const { view, bridge } = inject("discussion");
 // Sizes the layout leaves for each kind of node, and the gaps between columns and rows.
 const NODE_WIDTH = { card: 272, start: 84, host: 104 };
@@ -41,6 +42,8 @@ const NOTE_CHAR = 11, NOTE_PAD = 16, NOTE_MARGIN = 36;
 // A column an arrow skips over is lifted this far clear of the line the arrow runs along (room for its note too).
 const BYPASS_CLEARANCE = 44;
 const CARD_HANDLE = ".workflow-card-grip";
+// On touch, a finger landing on a card's body pans the canvas (taps still reach its controls); a mouse there selects text.
+const TOUCH = window.matchMedia("(pointer: coarse)").matches;
 // The whole-workflow view (double click, the fit button): as far out as it takes, on a phone further still.
 const FIT = { padding: 0.08, maxZoom: 1, minZoom: 0.25 };
 const COMPACT_FIT = { ...FIT, minZoom: 0.15 };
@@ -180,7 +183,7 @@ const roster_items = computed(() => [...platforms.map((name) => ({ value: name, 
 
 /** The first free card ID from a base: writer, writer2 … or role1, role2 … */
 function next_card(base) {
-  const taken = new Set(agents.value.map((agent) => agent.card.toLowerCase()));
+  const taken = new Set([...agents.value.map((agent) => agent.card), ...props.reserved].map((card) => card.toLowerCase()));
   const root = CARD_BASE.test(base) ? base : "role";
   for (let number = 1; ; number++) {
     const card = number === 1 && root !== "role" ? root : `${root}${number}`;
@@ -622,7 +625,7 @@ function drag_stop() { dragging = false; layered.value = true; stored.value = li
           <div class="workflow-card-grip" title="按住拖动">
             <UIcon name="i-lucide-grip-horizontal" class="workflow-icon" />
           </div>
-          <div class="workflow-card-body nodrag nopan">
+          <div class="workflow-card-body nodrag" :class="{ nopan: !TOUCH }">
             <ExpertCard :preset="agent_of(node.data.card)" :name="agent_of(node.data.card).name" mode="cli" :status="STATUS"
               :access_locked="Boolean(agent_of(node.data.card).requested_access && agent_of(node.data.card).project_access === 'read')"
               @update:preset="(value) => set_agent(node.data.card, value)" @remove="remove_card(node.data.card)" />

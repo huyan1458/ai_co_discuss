@@ -54,6 +54,7 @@ html[data-theme="channel-light"] .markdown-body {
 .markdown-body th { background: var(--markdown-panel); font-weight: 650; }
 .markdown-body img { max-width: 100%; height: auto; }
 .markdown-body .mention { color: var(--markdown-link); background: none; border-radius: 3px; padding: 0 2px; }
+.markdown-body .skill-ref { display: inline-flex; align-items: center; gap: 3px; color: var(--markdown-link); font-weight: 600; }
 .markdown-body .katex { font-size: 1.1em; }
 .markdown-body .katex-display { max-width: 100%; overflow-x: auto; overflow-y: hidden; padding: .3em 0; }
 .markdown-body .katex-error { color: inherit; font-family: ui-monospace, Consolas, monospace; white-space: pre-wrap; }

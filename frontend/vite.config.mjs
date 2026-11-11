@@ -82,7 +82,8 @@ export default defineConfig(({ mode }) => mode === "markdown" ? {
     router: false,
     dts: false,
     autoImport: false,
-    ui: { colors: { primary: "emerald", neutral: "zinc" } },
+    // Elevated panels are white in the light theme; placeholders need a distinct surface in both themes.
+    ui: { colors: { primary: "emerald", neutral: "zinc" }, skeleton: { base: "animate-pulse rounded-md bg-accented" } },
     icon: { clientBundle: { scan: true } },
   })],
   build: {
