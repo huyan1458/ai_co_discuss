@@ -529,6 +529,17 @@ export async function execution_details_command(home, raw, { trust = false } = {
   return { room_id: input.room_id, [chat ? 'chat_id' : 'execution_id']: execution_id, available: Boolean(parsed), ...parsed };
 }
 
+/**
+ * `execution-details` asked for by another device, answered inside the relay's own process like `remote_room_files`:
+ * the private-chat page reads it for every turn and again every poll for a running one, so starting Node and asking
+ * the site to check the credential each time made the page wait seconds for what is already on this computer.
+ */
+export async function remote_execution_details(home, input) {
+  assert_shared_home(home);
+  guard_remote_request('execution-details', input, { projects: launch_projects(home).projects, participants: launch_settings(home).participants, home });
+  return execution_details_command(home, input, { trust: true });
+}
+
 /** The last bytes of a log as text, starting at a whole line. */
 function read_log_tail(path) {
   const size = statSync(path).size, length = Math.min(size, DETAIL_LOG_TAIL_BYTES);

@@ -145,41 +145,52 @@ function elapsed(seconds) {
 }
 
 /**
- * Read the chat from the website, then the steps of every turn not read yet: the turn a message card opened first, then
- * newest first so the latest show soonest, a few at a time (each read starts a process on the computer, or crosses the
- * relay). A running turn is read again each round, a failed one again after a while. A hidden page reads nothing and
- * catches up when shown.
+ * Read the chat from the website and the steps of every turn not read yet. The room's tasks are already known from the
+ * room, so their steps are read alongside the chat rather than after it (through the relay each read is a round trip);
+ * the chat's own turns follow once the chat is in. The turn a message card opened goes first, then newest first so the
+ * latest show soonest, a few at a time. A running turn is read again each round, a failed one again after a while. A
+ * hidden page reads nothing and catches up when shown.
  */
 async function refresh() {
   clearTimeout(timer);
   const target = member.value, room_id = room.value?.id, current = ++serial;
   if (!target || !room_id || document.hidden) return;
   loading.value = true;
-  try {
-    // Replaced only when something changed, so an unchanged poll renders nothing (see the v-memo on each turn).
-    if (!unsupported.value || chats.value.length) {
-      const next = (await bridge.read_member_chat(room_id, target.id)).chats;
-      if (current !== serial) return;
-      if (JSON.stringify(next) !== JSON.stringify(chats.value)) chats.value = next;
+  const read = new Set();
+  const chat_read = (async () => {
+    try {
+      // Replaced only when something changed, so an unchanged poll renders nothing (see the v-memo on each turn).
+      if (!unsupported.value || chats.value.length) {
+        const next = (await bridge.read_member_chat(room_id, target.id)).chats;
+        if (current !== serial) return;
+        if (JSON.stringify(next) !== JSON.stringify(chats.value)) chats.value = next;
+      }
+      error.value = "";
+    } catch (failure) {
+      if (current === serial) error.value = failure.message || "未能读取私聊";
+    } finally {
+      if (current === serial) loading.value = false;
     }
-    error.value = "";
-  } catch (failure) {
-    if (current === serial) error.value = failure.message || "未能读取私聊";
-  } finally {
-    if (current === serial) loading.value = false;
-  }
+  })();
+  await Promise.all([chat_read, read_due(room_id, current, read, (item) => item.execution)]);
   if (current !== serial) return;
-  const retry_after = Date.now() / 1000 - ERROR_RETRY_S;
-  const due = (item) => running(item) || (!details.value.has(item.key) && !waiting.has(item.key) && !(errors.value.get(item.key)?.at > retry_after));
-  const queue = [...items.value].reverse().filter(due);
-  const first = (item) => Number(item.execution?.id === kept_execution.value);
-  queue.sort((a, b) => first(b) - first(a));
-  await Promise.all(Array.from({ length: READ_CONCURRENCY }, async () => {
-    while (queue.length && current === serial) await read_steps(queue.shift(), room_id, current);
-  }));
+  await read_due(room_id, current, read, () => true);
   if (current !== serial) return;
   settled = true;
   timer = setTimeout(refresh, POLL_MS);
+}
+/** Read the steps of the turns `pick` chooses that are due and not yet `read` this round, a few at a time. */
+async function read_due(room_id, current, read, pick) {
+  const retry_after = Date.now() / 1000 - ERROR_RETRY_S;
+  const due = (item) => pick(item) && !read.has(item.key)
+    && (running(item) || (!details.value.has(item.key) && !waiting.has(item.key) && !(errors.value.get(item.key)?.at > retry_after)));
+  const queue = [...items.value].reverse().filter(due);
+  const first = (item) => Number(item.execution?.id === kept_execution.value);
+  queue.sort((a, b) => first(b) - first(a));
+  queue.forEach((item) => read.add(item.key));
+  await Promise.all(Array.from({ length: READ_CONCURRENCY }, async () => {
+    while (queue.length && current === serial) await read_steps(queue.shift(), room_id, current);
+  }));
 }
 /** Read one turn's steps; kept only when they changed, and a failure is shown in its place until a retry succeeds. */
 async function read_steps(item, room_id, current) {
@@ -240,7 +251,8 @@ watch(() => `${room.value?.id}\n${name.value}`, (key) => {
 const clock = setInterval(() => { now.value = Date.now() / 1000; }, 1000);
 const frame = ref(0);
 const spinner = setInterval(() => { if (running_item.value) frame.value = (frame.value + 1) % SPINNER.length; }, SPIN_MS);
-onBeforeUnmount(() => { serial++; clearTimeout(timer); clearInterval(clock); clearInterval(spinner); document.removeEventListener("visibilitychange", on_visibility); });
+// Leaving the page keeps what it showed, so coming back starts from there instead of empty while the reads catch up.
+onBeforeUnmount(() => { save_session(); serial++; clearTimeout(timer); clearInterval(clock); clearInterval(spinner); document.removeEventListener("visibilitychange", on_visibility); });
 
 /** A room message's text as the page already holds it (the message stream keeps the room's recent messages). */
 function room_text(id) {

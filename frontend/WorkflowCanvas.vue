@@ -51,9 +51,10 @@ const HANDLE_Y = { card: 136, start: 20, host: 68, sub: 68 };
 const NOTE_CHAR = 11, NOTE_PAD = 16, NOTE_MARGIN = 36;
 // A column an arrow skips over is lifted this far clear of the line the arrow runs along (room for its note too).
 const BYPASS_CLEARANCE = 44;
-// On touch, a finger anywhere on a card drags it (taps still reach its controls); a mouse drags only by the title bar, so its body's text can be selected.
+// A card moves only by its top bar, with a mouse or a finger alike; its body works like the card on the new-room page.
+// A swipe on the body pans the canvas on touch; with a mouse the body neither pans nor drags, so its text can be selected.
 const TOUCH = window.matchMedia("(pointer: coarse)").matches;
-const CARD_HANDLE = TOUCH ? undefined : ".workflow-card-grip";
+const CARD_HANDLE = ".workflow-card-grip";
 // The whole-workflow view (double click, the fit button): as far out as it takes, on a phone further still.
 const FIT = { padding: 0.08, maxZoom: 1, minZoom: 0.25 };
 const COMPACT_FIT = { ...FIT, minZoom: 0.15 };
@@ -71,7 +72,7 @@ const PRESET_PREFIX = "preset:";
 const CARD_BASE = /^[a-z0-9_]{1,14}$/;
 const PRESET_FIELDS = ["label", "description", "project_access", "model", "effort", "system_prompt"];
 
-/** A stored node as Vue Flow draws it; with a mouse a card is dragged by its title bar so its own buttons keep working. */
+/** A stored node as Vue Flow draws it; a card is dragged by its top bar so its own buttons and swipes keep working. */
 function to_node(item) {
   const base = { id: item.id, type: item.type, position: { x: item.x || 0, y: item.y || 0 } };
   if (item.type === "card") return { ...base, data: { card: item.card }, dragHandle: CARD_HANDLE };
@@ -685,7 +686,7 @@ function drag_stop() { dragging = false; layered.value = true; stored.value = li
           <div class="workflow-card-grip" title="按住拖动">
             <UIcon name="i-lucide-grip-horizontal" class="workflow-icon" />
           </div>
-          <div class="workflow-card-body" :class="{ 'nodrag nopan': !TOUCH }">
+          <div class="workflow-card-body nodrag" :class="{ nopan: !TOUCH }">
             <ExpertCard :preset="agent_of(node.data.card)" :name="agent_of(node.data.card).name" mode="cli" :status="STATUS"
               :access_locked="Boolean(agent_of(node.data.card).requested_access && agent_of(node.data.card).project_access === 'read')"
               @update:preset="(value) => set_agent(node.data.card, value)" @remove="remove_card(node.data.card)" />

@@ -12,7 +12,7 @@
  * an axis of their own and still step down as a waterfall.
  */
 import { computed, inject, nextTick, onBeforeUnmount, onMounted, reactive, ref, watch } from "vue";
-import { FOLD_GAP_MS, PHASE_KINDS, PHASE_LABELS, STATE_LABELS, WAIT_WARN_MS, axis_ticks, execution_log, format_duration, handoff_lines, notes_between,
+import { FOLD_GAP_MS, PHASE_KINDS, add_user_turns, is_user_row, PHASE_LABELS, STATE_LABELS, WAIT_WARN_MS, axis_ticks, execution_log, format_duration, handoff_lines, notes_between,
   pan_window, row_breakdown, row_status, snapshot_at, task_digest, timeline_axis, timeline_rows, timeline_segments, recent_window, task_overview, requested_at, view_axis, zoom_window } from "./timeline-model.js";
 
 const emit = defineEmits(["detail"]);
@@ -199,7 +199,9 @@ const window_count = ref(WINDOW_STEP);
 const view_mode = ref("timeline");
 const overview = computed(() => view_mode.value === "tasks");
 watch(room_id, () => { window_count.value = WINDOW_STEP; view_mode.value = "timeline"; });
-const segments = computed(() => timeline.value ? timeline_segments(timeline.value.executions, now.value) : []);
+// Each task with the owner's own rows added (add_user_turns); `with_users` is every execution and owner row.
+const segments = computed(() => timeline.value ? add_user_turns(timeline_segments(timeline.value.executions, now.value), now.value) : []);
+const with_users = computed(() => timeline.value ? [...timeline.value.executions, ...segments.value.flatMap((segment) => segment.users)] : []);
 const segment_of = computed(() => {
   const map = new Map();
   for (const segment of segments.value) for (const key of segment.keys) map.set(key, segment);
@@ -211,9 +213,10 @@ const shown = computed(() => {
   for (const item of recent_window(timeline.value.executions, window_count.value)) {
     for (const key of segment_of.value.get(`${item.source}:${item.id}`)?.keys || [`${item.source}:${item.id}`]) keys.add(key);
   }
-  return { ...timeline.value, executions: timeline.value.executions.filter((item) => keys.has(`${item.source}:${item.id}`)) };
+  return { ...timeline.value, executions: with_users.value.filter((item) => keys.has(`${item.source}:${item.id}`)) };
 });
-const earlier_count = computed(() => timeline.value && !overview.value ? timeline.value.executions.length - shown.value.executions.length : 0);
+const earlier_count = computed(() => timeline.value && !overview.value
+  ? timeline.value.executions.length - shown.value.executions.filter((item) => item.source !== "user").length : 0);
 const when = (ms) => new Date(ms).toLocaleString("zh-CN", { month: "numeric", day: "numeric", hour: "2-digit", minute: "2-digit", hour12: false });
 const tasks = computed(() => overview.value ? task_overview(segments.value) : []);
 // The site returns only the latest executions, so the first task may have begun before them.
@@ -371,13 +374,14 @@ const headline = computed(() => {
   }
   const { running: live, members, wait, failed, stalled, total, keys } = digest.value;
   const parts = [];
-  // On a phone the running work has its own cards above the rows, so the sentence speaks for the latest task.
-  if (live.length && !compact.value) {
+  // On a phone the running and failed work has its own cards above the rows, so the sentence keeps only the alerts:
+  // the latest task's time totals said nothing a phone needs (2026-11-11).
+  if (!compact.value && live.length) {
     const row = live.find((item) => keys.has(item.key)) || live[0];
     const state = status(row);
     parts.push({ text: `${name(row.item.member)} 已运行 ${format_duration(status_time.value - row.start)}` }, { text: state.text, tone: state.tone });
     if (live.length > 1) parts.push({ text: `另 ${live.length - 1} 个进行中` });
-  } else {
+  } else if (!compact.value) {
     parts.push({ text: `最近一次任务${live.length ? "已进行" : "用时"} ${format_duration(total)}` });
     if (members.length > 1) parts.push({ text: members.slice(0, 2).map((part) => `${name(part.member)} ${format_duration(part.ms)}`).join("、") });
   }
@@ -524,9 +528,10 @@ function run_people(run) {
 
 /** The marks after a name: only what tells rows apart. */
 function role_marks(row) {
+  if (is_user_row(row)) return row.item.aside ? ["插话"] : [];
   return row.item.role === "host" ? ["主持"] : [];
 }
-const role_label = (row) => row.item.role === "host" ? "协作 · 主持" : "协作";
+const role_label = (row) => is_user_row(row) ? (row.item.aside ? "用户 · 插话" : "用户") : row.item.role === "host" ? "协作 · 主持" : "协作";
 const status = (row) => row_status(row, status_time.value);
 
 function row_label(row) {
@@ -552,7 +557,7 @@ const short_clock = (ms) => new Date(ms).toLocaleTimeString("zh-CN", { hour: "2-
 const tick_label = (tick) => new Date(tick.at).toLocaleTimeString("zh-CN", { hour: "2-digit", minute: "2-digit", ...(tick.seconds ? { second: "2-digit" } : {}), hour12: false });
 
 const piece_id = (row, piece) => `${row.key}:${piece.note ? "note" : piece.label}:${piece.start}`;
-const work_piece = (row) => ({ label: row.segments.length ? "执行" : "执行 · 无阶段明细", start: row.work[0], end: row.work[1], live: row.item.state === "running" });
+const work_piece = (row) => ({ label: is_user_row(row) ? (row.work[1] > row.work[0] ? "阅读与思考" : "发出消息") : row.segments.length ? "执行" : "执行 · 无阶段明细", start: row.work[0], end: row.work[1], live: row.item.state === "running" });
 
 const selected_title = computed(() => {
   const piece = selected.value?.piece;
@@ -564,7 +569,7 @@ const selected_title = computed(() => {
  *  the work no phase report covers. Shares are of the whole execution. */
 const opened_parts = computed(() => {
   const row = opened_row.value;
-  if (!row) return [];
+  if (!row || is_user_row(row)) return [];
   const { wait, work, phases } = row_breakdown(row);
   const total = Math.max(1, row.end - row.start);
   const reported = phases.reduce((sum, part) => sum + part.ms, 0);
@@ -602,7 +607,7 @@ const selected_notes = computed(() => {
           <span v-if="replaying" class="wf-state is-replay">回放中 · {{ clock(view_time) }}</span>
           <span v-else-if="!overview" class="wf-state" :class="{ 'is-live': digest.running.length }">{{ digest.running.length ? `${digest.running.length} 个进行中` : '均已结束' }}</span>
         </div>
-        <p class="wf-headline"><span v-for="(part, index) in headline" :key="index" :class="part.tone && `is-${part.tone}`">{{ part.text }}</span></p>
+        <p v-if="headline.length" class="wf-headline"><span v-for="(part, index) in headline" :key="index" :class="part.tone && `is-${part.tone}`">{{ part.text }}</span></p>
       </header>
 
       <section v-if="attention.length" class="wf-now" aria-label="需要关注">
@@ -694,7 +699,7 @@ const selected_notes = computed(() => {
             <i v-if="now_x !== null && !compact" class="wf-cursor" :style="{ left: `${now_x * 100}%` }"></i>
             <i class="wf-bar is-queue" :style="place(row, ...row.queue)" @click="open_row(row, $event, queue_piece(row))" @mouseenter="hover_open(row, $event, queue_piece(row))" @mouseleave="hover_leave"></i>
             <i v-if="row.wake" class="wf-bar is-wake" :style="place(row, ...row.wake)" @click="open_row(row, $event, wake_piece(row))" @mouseenter="hover_open(row, $event, wake_piece(row))" @mouseleave="hover_leave"></i>
-            <i v-if="row.work" class="wf-bar is-work" :class="{ 'has-detail': row.segments.length }" :data-tone="row.segments.length ? undefined : member_tone.get(row.item.member)"
+            <i v-if="row.work" class="wf-bar is-work" :class="{ 'has-detail': row.segments.length, 'is-user': is_user_row(row) }" :data-tone="row.segments.length ? undefined : member_tone.get(row.item.member)"
               :style="place(row, ...row.work)" @click="open_row(row, $event, work_piece(row))" @mouseenter="hover_open(row, $event, work_piece(row))" @mouseleave="hover_leave"></i>
             <template v-for="segment in row.segments" :key="segment.start + segment.phase">
               <i class="wf-bar wf-seg" :class="[`is-${PHASE_KINDS[segment.phase]}`, { 'is-live': segment.live }]" :data-tone="member_tone.get(row.item.member)"
@@ -708,7 +713,7 @@ const selected_notes = computed(() => {
           </div></div>
           <span v-if="!compact" class="wf-end">{{ format_duration(row.end - row.start) }}<small v-if="row.item.state !== 'done'" :class="`is-${row.item.state}`">{{ STATE_LABELS[row.item.state] }}</small><small v-if="row.truncated">明细已截断</small></span>
           <span v-else-if="!brief(row)" class="wf-row-status wf-status" :class="`is-${status(row).tone}`">{{ status(row).text }}</span>
-          <div v-if="opened === row.key && (compact || detail_anchor)" class="wf-detail" role="dialog" @mouseenter="hover_keep" @mouseleave="hover_leave" :aria-label="`${name(row.item.member)} 的这次执行`"
+          <div v-if="opened === row.key && (compact || detail_anchor)" class="wf-detail" role="dialog" @mouseenter="hover_keep" @mouseleave="hover_leave" :aria-label="is_user_row(row) ? `${name(row.item.member)} 的这条消息` : `${name(row.item.member)} 的这次执行`"
             :style="compact ? undefined : { top: `${detail_anchor.top}px`, left: `${detail_anchor.left}px` }">
             <header class="wf-detail-head">
               <UAvatar :src="bridge.identities[row.item.member]?.icon" :text="bridge.identities[row.item.member]?.initials" :alt="row.item.member" size="sm" class="channel-avatar wf-avatar" :class="bridge.identities[row.item.member]?.style" />
@@ -744,7 +749,7 @@ const selected_notes = computed(() => {
               <button v-if="row.item.answer_id" type="button" class="wf-detail-chip is-link" @click="emit('detail', row.item.answer_id)"><UIcon name="i-lucide-message-square-text" />查看回答 #{{ row.item.answer_id }}</button>
               <span v-if="row.item.changes" class="wf-detail-chip"><UIcon name="i-lucide-file-diff" />改动 {{ row.item.changes }} 个文件</span>
             </div>
-            <section class="wf-detail-block">
+            <section v-if="!is_user_row(row)" class="wf-detail-block">
               <h4>过程<small v-if="opened_log.length">{{ opened_log.length }} 条</small></h4>
               <ol v-if="opened_log.length" class="wf-log" aria-label="过程" :data-tone="member_tone.get(row.item.member)">
                 <li v-for="entry in opened_log" :key="`${entry.kind}-${entry.at}-${entry.phase || ''}`" :class="[`log-${entry.kind}`, entry.kind === 'phase' && `kind-${PHASE_KINDS[entry.phase]}`, { 'is-live': entry.live }]">
@@ -970,6 +975,9 @@ const selected_notes = computed(() => {
 .wf-fold { top: 0; bottom: 0; background: color-mix(in oklab, var(--ui-text) 4%, transparent); }
 .wf-well { top: calc(50% - var(--wf-bar-h) / 2); right: 0; left: 0; height: var(--wf-bar-h); border-radius: 3px; background: var(--wf-well); }
 .wf-bar { top: calc(50% - var(--wf-bar-h) / 2); height: var(--wf-bar-h); min-width: 2px; border-radius: 3px; cursor: pointer; transition: filter 120ms ease; }
+/* The owner's time: the channel accent, hatched, apart from every member's hue; a message alone is a short mark. */
+.wf-bar.is-work.is-user { min-width: 4px; background: repeating-linear-gradient(135deg, color-mix(in oklab, var(--channel-accent, var(--ui-primary)) 30%, transparent) 0 4px,
+  color-mix(in oklab, var(--channel-accent, var(--ui-primary)) 14%, transparent) 4px 8px); box-shadow: inset 0 0 0 1px color-mix(in oklab, var(--channel-accent, var(--ui-primary)) 65%, transparent); }
 .wf-bar:hover { z-index: 1; filter: brightness(1.15); box-shadow: 0 0 0 2px color-mix(in oklab, var(--wf-text) 30%, transparent); }
 .wf-bar.is-queue { background: repeating-linear-gradient(-45deg, var(--wf-hatch) 0 1px, transparent 1px 5px); box-shadow: inset 0 0 0 1px var(--wf-hatch); }
 .wf-bar.is-wake { background: color-mix(in oklab, var(--wf-wake) 55%, var(--wf-surface)); box-shadow: inset 0 0 0 1px var(--wf-wake); }

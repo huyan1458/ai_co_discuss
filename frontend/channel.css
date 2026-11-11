@@ -139,7 +139,9 @@ html[data-theme^="channel"] .channel-menu.channel-directory-menu { min-width: 15
 .channel-room-select { display: flex; align-items: center; gap: 8px; min-width: 0; padding: 8px 4px; text-align: left; cursor: pointer; font-size: var(--channel-nav-text); user-select: none; touch-action: pan-y; }
 .channel-room-row.active .channel-room-select, .channel-folder-row.active .channel-folder-heading { color: var(--ui-text-highlighted); font-weight: 600; }
 .channel-room-select > [class*="icon"] { flex-shrink: 0; width: 17px; height: 17px; color: #808998; }
-.channel-room-running { flex-shrink: 0; width: 7px; height: 7px; margin-left: -2px; border-radius: 50%; background: #22c55e; box-shadow: 0 0 6px #22c55e99; }
+/* Pinned to the row's right edge so swapping time ↔ actions on hover does not move it. */
+.channel-room-row:has(.channel-room-running) { padding-right: 20px; }
+.channel-room-running { position: absolute; right: 8px; top: 50%; width: 7px; height: 7px; margin-top: -3.5px; border-radius: 50%; background: #22c55e; box-shadow: 0 0 6px #22c55e99; }
 .channel-room-select > span:not([class*="icon"]) { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; flex: 1; }
 .channel-directory-count, .channel-room-time { flex-shrink: 0; margin-left: auto; padding-left: 6px; color: var(--ui-text-dimmed); font-size: var(--channel-nav-meta); font-weight: 400; font-variant-numeric: tabular-nums; }.channel-room-actions, .channel-folder-actions { display: flex; align-items: center; justify-content: flex-end; min-width: 48px; opacity: 0; pointer-events: none; }
 :is(.channel-directory-actions, .channel-room-actions, .channel-folder-actions) button { display: grid; place-items: center; width: 24px; height: 26px; padding: 5px; border-radius: 4px; color: color-mix(in srgb, var(--ui-text-muted) 75%, transparent); background: transparent; box-shadow: none; }

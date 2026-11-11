@@ -10,7 +10,7 @@ import { setTimeout as sleep } from 'node:timers/promises';
 import { gzipSync } from 'node:zlib';
 
 import { atomic_json } from './files.mjs';
-import { remote_room_files, remote_room_media, remote_room_page } from './discussion_launch.mjs';
+import { remote_execution_details, remote_room_files, remote_room_media, remote_room_page } from './discussion_launch.mjs';
 import { acquire_lock } from './discussion_runner.mjs';
 import { local_settings } from './discussion_setup.mjs';
 import { machine_links, relay_cipher, save_machine_links, relayed_command, ROOM_ACTIONS, run_launch_command, sync_remote_launches, unseal } from './remote_launch.mjs';
@@ -163,14 +163,15 @@ export function computer_command(home, site, action, payload) {
 }
 
 /**
- * Run one local operation; browsing project files and reading an HTML page are answered in this process, since they
- * are asked for on every folder opened or page part.
+ * Run one local operation; browsing project files, reading an HTML page and a turn's steps are answered in this
+ * process, since they are asked for on every folder opened, page part or private-chat poll.
  */
 async function run_command(home, command, run) {
   if (run !== run_launch_command) return run(command);
   if (command.command === 'room-files') return { status: 200, body: await remote_room_files(home, command.input) };
   if (command.command === 'room-page') return { status: 200, body: await remote_room_page(home, command.input) };
   if (command.command === 'room-media') return { status: 200, body: await remote_room_media(home, command.input) };
+  if (command.command === 'execution-details') return { status: 200, body: await remote_execution_details(home, command.input) };
   return run(command);
 }
 

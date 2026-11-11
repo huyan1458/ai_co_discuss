@@ -98,6 +98,7 @@ const LINE_PHASES = 3;
  */
 export function row_status(row, now_ms) {
   const { item } = row;
+  if (item.source === "user") return { tone: "done", text: row.end > row.start ? `阅读与思考 ${format_duration(row.end - row.start)}` : "发出消息" };
   if (item.state === "failed") return { tone: "failed", text: `失败：${item.reason || "执行失败"}` };
   if (item.state === "cancelled") return { tone: "muted", text: "已撤销" };
   if (item.state === "done") {
@@ -226,7 +227,7 @@ export function timeline_rows(timeline, now_ms) {
   const ordered = [];
   const seen = new Set();
   const visit = (parent, depth, ancestors) => {
-    for (const row of (children.get(parent) || []).sort((a, b) => a.start - b.start || a.key.localeCompare(b.key))) {
+    for (const row of (children.get(parent) || []).sort((a, b) => a.start - b.start || (b.item.source === "user") - (a.item.source === "user") || a.key.localeCompare(b.key))) {
       if (seen.has(row.key)) continue;
       seen.add(row.key);
       ordered.push({ ...row, depth, ancestors, placed_parent: parent, dispatched_by: placement.get(row.key)?.dispatched_by || "", has_children: Boolean(children.get(row.key)?.length) });
@@ -292,6 +293,35 @@ export function timeline_segments(executions, now_ms) {
   return segments;
 }
 
+/** The owner as a member of the timeline: rows named this, drawn from the owner's messages rather than executions. */
+export const USER_MEMBER = "用户";
+export const is_user_row = (row) => row.item.source === "user";
+
+/**
+ * Put the owner on the timeline (2026-11-11 user's choice): each task gains a row for the owner, its bar the time from
+ * the room handing back (the previous task's end) to the message that opened this task, the owner reading, thinking
+ * and checking; the first task, with nothing handed back before it, gets only the moment. Each interjection is a
+ * moment too. Rows are built from the tasks' own records, so no extra read is needed. Each segment gains `users` (the
+ * owner items) and has them in `items` and `keys`.
+ */
+export function add_user_turns(segments, now_ms) {
+  let handed_back = 0;
+  return segments.map((segment) => {
+    const moment = (task_id, task, at, from = at) => ({ source: "user", id: task_id, member: USER_MEMBER, role: "user", state: "done", parent_id: null,
+      queued_at: from / 1000, dispatched_at: from / 1000, started_at: from / 1000, finished_at: at / 1000, segments: [], notes: [],
+      task, task_id, task_author: USER_MEMBER });
+    const users = [];
+    if (segment.opened && segment.opener.task_id != null) {
+      const at = execution_stages(segment.opener, now_ms).queue[0];
+      users.push(moment(segment.opener.task_id, segment.opener.task || "", at, handed_back && handed_back < at ? handed_back : at));
+    }
+    for (const aside of segment.interjections) if (aside.task_id != null) users.push({ ...moment(aside.task_id, aside.task, aside.at), aside: true });
+    const entries = users.map((item) => ({ item, stages: execution_stages(item, now_ms) }));
+    handed_back = Math.max(...segment.items.map(({ stages }) => stages.end));
+    return { ...segment, users, items: [...entries, ...segment.items], keys: new Set([...users.map((item) => `user:${item.id}`), ...segment.keys]) };
+  });
+}
+
 /**
  * The tasks as a list, newest first: what opened each (`task`, `task_id`, and the answer to it as `result`), when it began
  * and last ended, how many executions, who did the work and for how long (`work`, longest first; members working at once
@@ -302,14 +332,17 @@ export function task_overview(segments) {
   return segments.map((segment) => {
     const work = new Map();
     for (const { item, stages } of segment.items) work.set(item.member, (work.get(item.member) || 0) + (stages.work ? stages.work[1] - stages.work[0] : 0));
+    // The owner's time is named among the people; the task's span, count and bar are the room's work, so a night
+    // between tasks does not stretch one.
+    const runs = segment.items.filter(({ item }) => item.source !== "user");
     return {
       key: segment.key, opened: segment.opened, task: segment.opener.task || "", task_id: segment.opener.task_id || null,
       result: segment.opener.result || "", interjections: segment.interjections,
-      start: Math.min(...segment.items.map(({ stages }) => stages.start)), end: Math.max(...segment.items.map(({ stages }) => stages.end)),
-      count: segment.items.length,
-      running: segment.items.some(({ item }) => item.state === "running"), failed: segment.items.some(({ item }) => item.state === "failed"),
-      work: [...work].map(([member, ms]) => ({ member, ms })).sort((a, b) => b.ms - a.ms),
-      ...time_parts(segment.items),
+      start: Math.min(...runs.map(({ stages }) => stages.start)), end: Math.max(...runs.map(({ stages }) => stages.end)),
+      count: runs.length,
+      running: runs.some(({ item }) => item.state === "running"), failed: runs.some(({ item }) => item.state === "failed"),
+      work: [...work].map(([member, ms]) => ({ member, ms })).filter((part) => part.ms > 0).sort((a, b) => b.ms - a.ms),
+      ...time_parts(runs),
     };
   }).reverse();
 }
@@ -325,9 +358,11 @@ export function task_digest(rows, keys, now_ms) {
   const counts = { running, failed: rows.filter((row) => row.item.state === "failed").length,
     stalled: running.filter((row) => row_status(row, now_ms).tone === "warn").length };
   const task = rows.filter((row) => keys.has(row.key));
-  if (!task.length) return { ...counts, keys, start: 0, end: 0, total: 0, members: [], wait: 0, slowest: null };
-  const start = Math.min(...task.map((row) => row.start));
-  const end = Math.max(...task.map((row) => row.end));
+  // The task's span (and so its replay) is the room's work; the owner's time before it shows among the members.
+  const work_rows = task.filter((row) => !is_user_row(row));
+  if (!work_rows.length) return { ...counts, keys, start: 0, end: 0, total: 0, members: [], wait: 0, slowest: null };
+  const start = Math.min(...work_rows.map((row) => row.start));
+  const end = Math.max(...work_rows.map((row) => row.end));
   const members = new Map();
   for (const row of task) members.set(row.item.member, (members.get(row.item.member) || 0) + (row.work ? row.work[1] - row.work[0] : 0));
   const { wait } = time_parts(task.map((row) => ({ item: row.item, stages: row })));
@@ -395,7 +430,8 @@ const LIVE_FILL = 0.85;
  * rescales only now and then.
  */
 export function timeline_axis(rows, live = false) {
-  const spans = rows.map((row) => [row.start, row.end]).sort((a, b) => a[0] - b[0]);
+  // The owner's bar spans the room standing idle, which still folds; only the moment the owner wrote counts as busy.
+  const spans = rows.map((row) => is_user_row(row) ? [row.end, row.end] : [row.start, row.end]).sort((a, b) => a[0] - b[0]);
   if (!spans.length) return { start: 0, end: 0, busy_ms: 0, folds: [], spans: [], x: () => 0 };
   const busy = [];
   for (const [start, end] of spans) {
