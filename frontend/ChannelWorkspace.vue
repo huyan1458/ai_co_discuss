@@ -15,6 +15,7 @@ import ConfirmDialog from "./ConfirmDialog.vue";
 import { use_workflow_library } from "./workflow-library.js";
 import PrivateChat from "./PrivateChat.vue";
 import FilePreview from "./FilePreview.vue";
+import RoomWelcome from "./RoomWelcome.vue";
 import { busy } from "./member-actions.js";
 
 const { view, bridge, field, act, pending } = inject("discussion");
@@ -203,8 +204,13 @@ async function save_consensus() {
   if (await act("save_context")) editing_context.value = false;
 }
 
-/** Open management for the exact sidebar item while leaving its draft untouched. */
-function manage_room({ room, action }) { managed_room.value = room; nav_open.value = false; modal.value = action; }
+/** Open management for the exact sidebar item while leaving its draft untouched; archiving needs no dialog, it offers undo. */
+function manage_room({ room, action }) {
+  nav_open.value = false;
+  if (action === "archive") return act("manage_channel", { id: room.id, action, undo: true });
+  managed_room.value = room;
+  modal.value = action;
+}
 
 /** Open archive management without selecting a channel or changing its draft. */
 function open_archives() { nav_open.value = false; modal.value = "archives"; }
@@ -441,7 +447,7 @@ function resize_nav_by_key(event) {
         <FilePreview />
         </div>
       </div>
-      <div v-else-if="!workflow_page" class="channel-empty"><UIcon name="i-lucide-hash" /><h2>新建一个协作房间</h2><p>邀请 AI 一起协作，随时 @ 提问；需要时开启讨论，保留所有人的观点。</p><UButton icon="i-lucide-plus" label="新建房间" color="neutral" @click="create_channel()" /></div>
+      <RoomWelcome v-else-if="!workflow_page" />
     </main>
     <input ref="workflow_zip" type="file" accept=".zip,application/zip" hidden @change="workflow_library.on_zip" />
     <input ref="workflow_folder" type="file" webkitdirectory hidden @change="workflow_library.on_folder" />

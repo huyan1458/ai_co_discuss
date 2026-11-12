@@ -10,6 +10,11 @@ const WORKING_STATUSES = ["dispatched", "started"];
 const UPDATE_BATCH_MS = 100;
 const UPDATE_DRAG_RETRY_MS = 500;
 const TOAST_DURATION_MS = 3500;
+// How long an archived room can be taken back before the archive is saved.
+const ARCHIVE_UNDO_MS = 4000;
+// Limits of the new-room form's title and discussion goal, applied when the welcome page fills them from a message.
+const ROOM_TITLE_MAX_LENGTH = 80;
+const ROOM_GOAL_MAX_LENGTH = 1000;
 const SUBMISSION_ID_BYTES = 16;
 const MAX_MESSAGE_LENGTH = 32000;
 const MAX_SUMMARY_LENGTH = 1000;
@@ -544,9 +549,9 @@ function room_menu_html(room, index, count) {
 function toggle_archives() { state.archive_view = !state.archive_view; render_rooms(); publish_view(); }
 
 /** Dispatch directory changes without waiting for unrelated reads. */
-async function manage_channel({ id, action, title, before_id, folder_id }) {
+async function manage_channel({ id, action, title, before_id, folder_id, undo }) {
   if (action === "folder") return assign_channel_folder(id, folder_id ?? null);
-  if (["archive", "restore"].includes(action)) return archive_channel(id, action === "archive");
+  if (["archive", "restore"].includes(action)) return archive_channel(id, action === "archive", { undo });
   if (action === "rename") return rename_channel(id, title);
   if (action === "move") return reorder_channel(id, before_id);
   if (action === "delete") return delete_channel(id);
@@ -651,8 +656,19 @@ function display_channel_archive(id, change, expected) {
   publish_view();
 }
 
-/** Move a channel immediately and reconcile only its archive fields after saving. */
-async function archive_channel(id, archived) {
+/** Offer an undo notice for an archive shown but not yet saved; resolves false when the user takes it back. */
+function archive_undo_window(id, title) {
+  return new Promise(resolve => {
+    let settled = false;
+    const settle = keep => { if (!settled) { settled = true; resolve(keep); } };
+    document.dispatchEvent(new CustomEvent("discuss:undo", { detail: { id: `archive:${id}`, message: `已存档「${title}」`,
+      duration: ARCHIVE_UNDO_MS, view: () => execute_view_action("room", id), settle } }));
+  });
+}
+
+/** Move a channel immediately and reconcile only its archive fields after saving. With undo, an archive waits out
+ * the undo notice before it is saved, since saving stops the room's work and restoring would not bring that back. */
+async function archive_channel(id, archived, { undo = false } = {}) {
   const room = state.room?.id === id ? state.room : state.rooms.find((item) => item.id === id);
   if (!room || state.archive_changes.has(id) || Boolean(room.archived) === archived) return;
   const previous = { archived: Boolean(room.archived), phase: room.phase };
@@ -660,6 +676,15 @@ async function archive_channel(id, archived) {
   state.archive_changes.set(id, change);
   state.archive_version++;
   display_channel_archive(id, change);
+  if (archived && undo) {
+    if (state.room?.id === id) await open_welcome();
+    if (!await archive_undo_window(id, room.title)) {
+      display_channel_archive(id, previous, change);
+      state.archive_changes.delete(id);
+      state.archive_version++;
+      return publish_view();
+    }
+  }
   try {
     const saved = await request_json(`/api/rooms/${id}/${archived ? "archive" : "restore"}`, { actor: "用户" });
     display_channel_archive(id, { archived: Boolean(saved.archived), phase: saved.phase }, change);
@@ -1003,7 +1028,7 @@ async function refresh_room({ room: read_room = true } = {}) {
   if (directory.last_room !== undefined && !state.room) state.last_room = directory.last_room;
   if (state.room && !state.rooms.some((item) => item.id === state.room.id)) return select_room(visible_rooms()[0]?.id);
   if (!state.room || !read_room) {
-    if (!state.room && visible_rooms().length) return select_room(opening_room());
+    if (!state.room && !state.welcome && visible_rooms().length) return select_room(opening_room());
     render_rooms();
     set_connection(true);
     return;
@@ -1038,6 +1063,7 @@ function remember_room(room_id) {
 }
 
 async function select_room(room_id) {
+  if (room_id) state.welcome = false;
   state.navigation_version++;
   state.refresh_version++;
   state.editing_queued = null;
@@ -2222,6 +2248,39 @@ async function submit_room(event, folder_id = null) {
   }
   if (launching) clear_launch_overrides(launch_draft);
   if (state.navigation_version === navigation) { state.archive_view = false; await select_room(room.id); }
+}
+
+/** Show the new-room welcome page in the middle, leaving no room selected until the user picks or creates one. */
+function open_welcome() {
+  state.welcome = true;
+  return select_room(null);
+}
+
+/** Whether a member woken through the local service, or the paired computer, can start right away. */
+function launch_ready(name) {
+  if (!state.launch.available) return Boolean(state.launch.relay?.clients?.[platform_of(name)]);
+  const profile = state.launch.profiles[name] || {};
+  if (profile.adapter === "api") return Boolean(profile.base_url && profile.api_protocol && profile.api_key_ref && profile.model);
+  return Boolean(profile.adapter && (profile.adapter === "antigravity" ? profile.ipc_directory : profile.executable));
+}
+
+/** Create a room from the welcome page's first message: the new-room panel's saved defaults, the first AI in its list
+ * that can start as the only member and host, the message's first line as the title; then send the message there. */
+async function quick_create_room(text) {
+  text = String(text || "").trim();
+  if (!text) return;
+  await reset_create_form(null);
+  const name = Object.keys(IDENTITIES).find(item => item !== "用户" && LAUNCH_CLIENTS[item] && (default_launch_entry(item), launch_ready(item)));
+  if (!name) throw new Error("还没有可直接唤醒的 AI：请先配置本机 AI 的接入");
+  write_view_expert("new-expert-modes", name, "cli");
+  write_view_field("new-room-host", name, { publish: false });
+  write_view_field("new-room-title", text.split("\n")[0].slice(0, ROOM_TITLE_MAX_LENGTH), { publish: false });
+  if (state.create_discussion) write_view_field("new-room-goal", text.slice(0, ROOM_GOAL_MAX_LENGTH), { publish: false });
+  if (state.create_goal) state.create_goal = { ...state.create_goal, objective: text };
+  await submit_room({ preventDefault() {} });
+  if (!state.room || state.room.archived) return;
+  element("message-input").value = text;
+  await send_message({ preventDefault() {} });
 }
 
 /** Open and start the discussion of a room just created; a failure leaves the room as an ordinary free room. */
@@ -5203,7 +5262,7 @@ async function execute_view_action(name, value) {
   const actions = { refresh: refresh_room, room: select_room, tab: select_tab,
     archives: toggle_archives, backup: backup_room, backup_rooms, import_rooms, manage_channel, move_channel, create_folder, move_folder, rename_folder, delete_folder, sort_directory,
     send: () => send_message(event), discard_sending: () => { state.sending_preview = null; }, choose_attachments: () => element("attachment-input").click(), remove_attachment, preview_attachment,
-    create: (folder_id) => submit_room(event, folder_id),
+    create: (folder_id) => submit_room(event, folder_id), quick_create: quick_create_room,
     save_context: () => save_context(event), save_topic: () => save_topic(event),
     filter: filter_view, reply: set_view_reply, cancel_reply, skip_turn,
     copy_cli: () => copy_context(), copy_background,

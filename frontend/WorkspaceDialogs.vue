@@ -17,9 +17,9 @@ watch(mode, (value) => { if (value) rendered_mode.value = value; });
 const { view, bridge, act, pending } = inject("discussion");
 const open = computed({ get: () => Boolean(mode.value), set: (value) => { if (!value) mode.value = ""; } });
 const titles = { settings: "设置", create: "新建房间", folder: "新建文件夹", "rename-folder": "编辑文件夹", "delete-folder": "移除文件夹", "archive-folder": "存档文件夹", edit: "编辑议题", message: "消息原文" };
-Object.assign(titles, { rename: "重命名房间", archive: "存档房间", restore: "恢复房间", delete: "删除房间" });
+Object.assign(titles, { rename: "重命名房间", restore: "恢复房间", delete: "删除房间" });
 const descriptions = { settings: "管理员账号与界面外观。", create: "邀请 AI 一起协作；需要深入讨论时，可在创建时或之后随时开启。", edit: "维护话题目标、背景与讨论默认上限。", message: "保留作者、来源、提交人和引用关系。" };
-Object.assign(descriptions, { rename: "名称变化不会影响讨论记录和阅读地址。", archive: "保留所有记录，并暂停尚未收束的讨论。", restore: "移回讨论列表，保持当前讨论阶段。", delete: "永久删除房间及其所有记录，无法撤销。" });
+Object.assign(descriptions, { rename: "名称变化不会影响讨论记录和阅读地址。", restore: "移回讨论列表，保持当前讨论阶段。", delete: "永久删除房间及其所有记录，无法撤销。" });
 titles.archives = "已存档房间";
 descriptions.archives = "查看记录、恢复房间或彻底删除。";
 const archived_rooms = computed(() => view.value.rooms.filter((room) => room.archived));
@@ -219,7 +219,7 @@ const keep_open = (event) => event.preventDefault();
 </script>
 
 <template>
-  <UModal v-model:open="open" :title="titles[rendered_mode] || '讨论'" :description="descriptions[rendered_mode]" :ui="{ content: ['glass-panel studio-modal', folder_dialog && 'channel-folder-modal', ['rename', 'archive', 'restore', 'delete'].includes(rendered_mode) && 'channel-folder-modal channel-manage-modal', rendered_mode === 'archives' && 'channel-archive-modal', rendered_mode === 'settings' && 'channel-settings-modal', rendered_mode === 'create' && 'channel-create-modal'], body: 'dialog-body' }" :content="{ onInteractOutside: keep_open }" @after:leave="after_dialog_leave">
+  <UModal v-model:open="open" :title="titles[rendered_mode] || '讨论'" :description="descriptions[rendered_mode]" :ui="{ content: ['glass-panel studio-modal', folder_dialog && 'channel-folder-modal', ['rename', 'restore', 'delete'].includes(rendered_mode) && 'channel-folder-modal channel-manage-modal', rendered_mode === 'archives' && 'channel-archive-modal', rendered_mode === 'settings' && 'channel-settings-modal', rendered_mode === 'create' && 'channel-create-modal'], body: 'dialog-body' }" :content="{ onInteractOutside: keep_open }" @after:leave="after_dialog_leave">
     <template #body>
       <section v-if="rendered_mode === 'archives'" class="channel-archive-manager">
         <div class="channel-archive-toolbar">
@@ -272,9 +272,8 @@ const keep_open = (event) => event.preventDefault();
         </UFormField>
         <div class="dialog-actions"><UButton label="取消" color="neutral" variant="ghost" @click="mode = ''" /><UButton type="submit" :label="rendered_mode === 'folder' ? '创建文件夹' : '保存'" class="channel-primary-button" :loading="pending === 'create_folder' || pending === 'rename_folder'" :disabled="!folder_name.trim() || Boolean(pending)" /></div>
       </form>
-      <form v-else-if="['rename', 'archive', 'restore', 'delete'].includes(rendered_mode)" class="dialog-form" @submit.prevent="save_management">
+      <form v-else-if="['rename', 'restore', 'delete'].includes(rendered_mode)" class="dialog-form" @submit.prevent="save_management">
         <p class="channel-management-target">{{ targetRoom?.title }} <span>· {{ targetRoom?.message_count }} 条消息</span></p>
-        <p v-if="rendered_mode === 'archive'" class="fine-print">存档后可在侧栏「已存档」中查阅与恢复。已有发言安排会保留；专家需在下次检查时停止自己的定时任务。</p>
         <p v-if="rendered_mode === 'restore'" class="fine-print">恢复不会自动继续讨论；需要继续时，在主持设置中调整阶段。</p>
         <p v-if="rendered_mode === 'delete'" class="fine-print">消息、共识和发言安排将一起删除，无法撤销。</p>
         <UFormField v-if="rendered_mode === 'rename'" label="房间名称" required><UInput v-model="management_title" autofocus :maxlength="80" required class="w-full" autocomplete="off" /></UFormField>
