@@ -92,7 +92,7 @@ export function run_powershell(script, { elevated = false, timeout = DEFAULT_TIM
     const wrapper = `$process = Start-Process ${POWERSHELL} -Verb RunAs -WindowStyle Hidden -Wait -PassThru -ArgumentList '-NoProfile','-ExecutionPolicy','Bypass','-Command',${quote(`& ${quote(file)} *> ${quote(output)}; exit $LASTEXITCODE`)}
 exit $process.ExitCode`;
     const result = spawnSync(POWERSHELL, ['-NoProfile', '-ExecutionPolicy', 'Bypass', '-Command', wrapper], { encoding: 'utf8', windowsHide: true, timeout: ELEVATED_TIMEOUT_MS });
-    const text = existsSync(output) ? readFileSync(output, 'utf8').replace(/^\ufeff/, '').trim() : '';
+    const text = existsSync(output) ? read_output(output).trim() : '';
     if (result.status !== 0) throw new Error(text || (result.stderr || '').trim() || '没有获得管理员权限（提权确认被取消或超时）');
     return text;
   } finally { rmSync(job, { recursive: true, force: true }); }
@@ -170,89 +170,18 @@ $process.Id`;
   try {
     run(start, { timeout: timeout + 10_000 });
     if (!wait) return { folder, output };
-    return existsSync(output) ? readFileSync(output, 'utf8').replace(/^\ufeff/, '').trim() : '';
+    return existsSync(output) ? read_output(output).trim() : '';
   } finally { if (wait) rmSync(folder, { recursive: true, force: true }); }
 }
 
-/** The last JSON object a script printed. */
-function last_json(text) {
-  const line = String(text).split(/\r?\n/).reverse().find(item => item.trim().startsWith('{'));
-  if (!line) throw new Error(String(text).trim() || '没有读到结果');
-  return JSON.parse(line);
-}
-
-// Reads the Antigravity sign-in entry Windows keeps for the current user (Credential Manager, target gemini:antigravity).
-const AGY_CREDENTIAL_CHECK = `Add-Type @'
-using System; using System.Runtime.InteropServices;
-public static class AgyCredential {
-  [DllImport("advapi32.dll", CharSet=CharSet.Unicode, SetLastError=true)] static extern bool CredReadW(string target, uint type, uint flags, out IntPtr credential);
-  [DllImport("advapi32.dll")] static extern void CredFree(IntPtr buffer);
-  public static bool Exists() { IntPtr pointer; if (!CredReadW("gemini:antigravity", 1, 0, out pointer)) return false; CredFree(pointer); return true; }
-}
-'@`;
-
 /**
- * Which command-line programs are signed in under the account's user.
- *
- * Returns:
- *   { claude, codex, agy }: each true when signed in. Claude counts as signed in when its token variable is set.
+ * What a job script printed. Windows PowerShell 5.1 writes `*>` redirections as UTF-16 with a byte-order mark; anything
+ * else is read as UTF-8.
  */
-export function cli_status(data, account, options = {}) {
-  const clis = cli_sources();
-  const text = run_as_user(data, account, `${AGY_CREDENTIAL_CHECK}
-$claude = [bool][Environment]::GetEnvironmentVariable('CLAUDE_CODE_OAUTH_TOKEN', 'User')
-$codex = $false
-if (Test-Path ${quote(clis.codex.executable)}) { & ${quote(clis.codex.executable)} login status *> $null; $codex = $LASTEXITCODE -eq 0 }
-@{ claude = $claude; codex = $codex; agy = [AgyCredential]::Exists() } | ConvertTo-Json -Compress`, options);
-  return last_json(text);
-}
-
-/** Give the account's Claude Code a long-lived token from `claude setup-token`, as a user environment variable. */
-export function set_claude_token(data, account, token, options = {}) {
-  const value = String(token || '').trim();
-  if (!/^sk-ant-oat\d+-[A-Za-z0-9_-]{20,}$/.test(value)) throw new Error('请粘贴 claude setup-token 生成的令牌（以 sk-ant-oat 开头）');
-  run_as_user(data, account, `[Environment]::SetEnvironmentVariable('CLAUDE_CODE_OAUTH_TOKEN', (Get-Content (Join-Path $Job 'token.txt') -Raw).Trim(), 'User')
-Remove-Item (Join-Path $Job 'token.txt') -Force
-'ok'`, { ...options, files: { 'token.txt': value } });
-}
-
-/** Remove the account's Claude Code token. */
-export function clear_claude_token(data, account, options = {}) {
-  run_as_user(data, account, `[Environment]::SetEnvironmentVariable('CLAUDE_CODE_OAUTH_TOKEN', $null, 'User'); 'ok'`, options);
-}
-
-/**
- * Start Codex's browser sign-in as the account's user.
- *
- * Codex prints a sign-in link and waits on 127.0.0.1:1455 for the browser to come back, so the link must be opened in a
- * browser on this computer. Returns the job, whose output carries the link; read it with codex_login_progress.
- */
-export function start_codex_login(data, account, options = {}) {
-  const codex = cli_sources().codex.executable;
-  if (!existsSync(codex)) throw new Error('还没有安装共享的 Codex，请先在“命令行登录”页安装命令行程序');
-  return run_as_user(data, account, `Set-Location $env:USERPROFILE\n& ${quote(codex)} login`, { ...options, wait: false });
-}
-
-/** The sign-in link and outcome of a Codex sign-in job. */
-export function codex_login_progress(job) {
-  const text = existsSync(job.output) ? readFileSync(job.output, 'utf8') : '';
-  const link = text.match(/https:\/\/auth\.openai\.com\/oauth\/authorize\?\S+/)?.[0] || '';
-  return { link, done: /Successfully logged in/i.test(text), failed: /error|failed/i.test(text) && !/Successfully logged in/i.test(text) };
-}
-
-/**
- * Open Antigravity's own sign-in as the account's user, in a window on this desktop.
- *
- * agy reads the authorization code only from its own console, so a person signs in there: open the link it shows,
- * approve, and paste the code back into that window.
- */
-export function open_agy_login(data, account, options = {}) {
-  const agy = cli_sources().agy.target;
-  if (!existsSync(agy)) throw new Error('还没有安装共享的 Antigravity CLI，请先在“命令行登录”页安装命令行程序');
-  return run_as_user(data, account, `$Host.UI.RawUI.WindowTitle = "Antigravity 登录（$(whoami)）"
-Set-Location $env:USERPROFILE
-Write-Host '在浏览器打开下方链接并同意，再把页面上的授权码粘贴到这里。完成后输入 /exit 或关闭窗口。' -ForegroundColor Yellow
-& ${quote(agy)}`, { ...options, visible: true, wait: false });
+export function read_output(path) {
+  const bytes = readFileSync(path);
+  if (bytes[0] === 0xff && bytes[1] === 0xfe) return bytes.subarray(2).toString('utf16le');
+  return bytes.toString('utf8').replace(/^﻿/, '');
 }
 
 /**

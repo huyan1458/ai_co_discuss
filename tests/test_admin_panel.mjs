@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict';
-import { mkdtempSync, readdirSync, readFileSync, rmSync } from 'node:fs';
+import { mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import http from 'node:http';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -19,8 +19,9 @@ function fixture() {
   const data = mkdtempSync(join(tmpdir(), 'panel-')), folder = `${data}-demo`;
   folders.push(data, folder);
   add_account(data, 'demo');
-  // Windows operations are stubbed: the panel's own checks are what these tests cover.
-  const ops = { list_accounts: async () => [{ name: 'demo' }], shared_cli_state: () => ({}) };
+  writeFileSync(join(data, 'local-settings.json'), JSON.stringify({ hosting: true }));
+  // Windows and service operations are stubbed: the panel's own checks are what these tests cover.
+  const ops = { list_accounts: async () => [{ name: 'demo' }], shared_cli_state: () => ({}), service_overview: () => ({ running: true }), autostart_enabled: () => false };
   return { data, ops };
 }
 
@@ -59,6 +60,12 @@ test('the panel opens only with the owner key, only for its own address, and ref
   const created = await request('/api/accounts', { cookie, body: { name: 'next' } });
   assert.equal(created.status, 200);
   assert.ok((await created.json()).password);
+  // With hosting off the panel keeps its overview but refuses every account operation.
+  writeFileSync(join(data, 'local-settings.json'), JSON.stringify({}));
+  const plain = await (await request('/api/state', { cookie })).json();
+  assert.deepEqual([plain.hosting, plain.accounts], [false, []]);
+  assert.equal((await request('/api/accounts', { cookie, body: { name: 'third' } })).status, 400);
+  assert.equal((await request('/api/accounts/demo/keys', { cookie })).status, 400);
 });
 
 test('a key the owner gives an account is marked as provided and never returned in full', async () => {

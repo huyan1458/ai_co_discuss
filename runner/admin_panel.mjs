@@ -8,7 +8,7 @@
  * owner's private service directory.
  */
 import { spawn, spawnSync } from 'node:child_process';
-import { randomBytes, randomUUID } from 'node:crypto';
+import { randomBytes } from 'node:crypto';
 import { existsSync, readdirSync, readFileSync, renameSync, rmSync, statSync, writeFileSync } from 'node:fs';
 import http from 'node:http';
 import { tmpdir } from 'node:os';
@@ -18,14 +18,21 @@ import { parseArgs } from 'node:util';
 
 import { account_home, add_account, data_home, instance_home, read_accounts, remove_account, reset_password } from '../gateway/gateway.mjs';
 import { API_PROVIDERS, save_api_key } from './discussion_api.mjs';
-import { clear_claude_token, cli_status, codex_login_progress, create_os_user, install_shared_clis, open_agy_login, read_os_users,
-  remove_os_user, set_claude_token, shared_cli_state, shared_executables, start_codex_login, start_instance_as_user } from './os_users.mjs';
+import { apply_login, cancel_login, LOGIN_METHODS, login_progress, login_status, logout, start_login, submit_login } from './cli_login.mjs';
+import { create_os_user, install_shared_clis, read_os_users, remove_os_user, shared_cli_state, shared_executables, start_instance_as_user } from './os_users.mjs';
+import { local_status } from './discussion_local.mjs';
+import { autostart_enabled, launcher_path, set_autostart } from './launcher.mjs';
 import { show_tray } from './tray.mjs';
 
 const ROOT = dirname(dirname(fileURLToPath(import.meta.url)));
 const WEB = join(ROOT, 'web');
 const LOCAL_SCRIPT = join(ROOT, 'runner', 'discussion_local.mjs');
 const DEFAULT_PORT = 8790;
+const VERSION = JSON.parse(readFileSync(join(ROOT, 'package.json'), 'utf8')).version;
+const NPM_PACKAGE = 'ai_co_discuss';
+const LATEST_URL = `https://registry.npmjs.org/${NPM_PACKAGE}/latest`;
+const LATEST_TTL_MS = 60 * 60 * 1000;
+const LATEST_TIMEOUT_MS = 8000;
 const STATE_FILE = 'admin-panel.json';
 const SESSION_COOKIE = 'codiscuss_panel';
 const BODY_LIMIT = 64 * 1024;
@@ -40,6 +47,58 @@ const HELP = `用法：codiscuss panel [run|start|open|stop] [--port ${DEFAULT_P
   open   打开管理面板（未运行时先启动）
   stop   停止管理面板与任务栏图标
 `;
+
+// ---- This computer's service ----
+
+/** The owner's own service as the overview shows it: whether it runs, where, and which version. */
+function service_overview(data) {
+  const status = local_status(data);
+  return { running: Boolean(status.running), website: Boolean(status.website_running), url: status.url || '', version: status.version || '',
+    home: data, error: status.service_error || '' };
+}
+
+let latest = { at: 0, version: '' };
+
+/** The newest published version, asked of the npm registry at most once an hour (nothing about this computer is sent). */
+async function latest_version(force = false) {
+  if (!force && latest.version && Date.now() - latest.at < LATEST_TTL_MS) return latest.version;
+  const response = await fetch(LATEST_URL, { signal: AbortSignal.timeout(LATEST_TIMEOUT_MS) });
+  if (!response.ok) throw new Error(`查询新版本失败（HTTP ${response.status}）`);
+  latest = { at: Date.now(), version: String((await response.json()).version || '') };
+  return latest.version;
+}
+
+/** Whether version a is newer than b (plain x.y.z). */
+export function newer_version(a, b) {
+  const left = String(a).split('.').map(Number), right = String(b).split('.').map(Number);
+  for (let index = 0; index < 3; index += 1) if ((left[index] || 0) !== (right[index] || 0)) return (left[index] || 0) > (right[index] || 0);
+  return false;
+}
+
+/** Run a command to its end, failing with the last of its output. */
+function run_command(command, args) {
+  return new Promise((done, fail) => {
+    // npm is a .cmd on Windows, which only a shell runs.
+    const child = spawn(command, args, { shell: process.platform === 'win32', windowsHide: true, stdio: ['ignore', 'pipe', 'pipe'] });
+    let output = '';
+    child.stdout.on('data', chunk => { output = (output + chunk).slice(-4000); });
+    child.stderr.on('data', chunk => { output = (output + chunk).slice(-4000); });
+    child.on('error', fail);
+    child.on('exit', code => code === 0 ? done() : fail(new Error(`${command} ${args.join(' ')} 失败：${output.trim().split(/\r?\n/).slice(-3).join(' ')}`)));
+  });
+}
+
+/**
+ * Install a published version over the global package and restart the owner's service on it. The panel itself still runs
+ * the old code afterwards; `on_updated` restarts it. Hosted accounts' instances keep their old code until restarted.
+ */
+async function update_package(data, version, on_updated) {
+  await run_command('npm', ['install', '--global', `${NPM_PACKAGE}@${version}`]);
+  await run_owner_service(data, 'stop');
+  await run_owner_service(data, 'start');
+  setTimeout(on_updated, 500);
+  return { version };
+}
 
 // ---- Accounts ----
 
@@ -133,19 +192,53 @@ function cookie(request, name) {
  *   ops: Injected for tests; defaults to the real account and Windows operations.
  */
 export function create_panel({ data, key, port, ops = {} }) {
-  const sessions = new Set(), logins = new Map();
-  const op = { list_accounts, add_account, reset_password, remove_account, run_instance, create_os_user, remove_os_user, cli_status,
-    set_claude_token, clear_claude_token, start_codex_login, codex_login_progress, open_agy_login, install_shared_clis, shared_cli_state,
-    save_api_key, list_keys, remove_key, use_shared_programs, ...ops };
+  const sessions = new Set();
+  const op = { list_accounts, add_account, reset_password, remove_account, run_instance, create_os_user, remove_os_user,
+    login_status, apply_login, logout, start_login, login_progress, submit_login, cancel_login, install_shared_clis, shared_cli_state,
+    save_api_key, list_keys, remove_key, use_shared_programs, service_overview, run_owner_service, latest_version, update_package,
+    autostart_enabled, set_autostart, on_updated: () => {}, ...ops };
   const hosts = new Set([`127.0.0.1:${port}`, `localhost:${port}`]);
 
   async function api(method, path, body) {
     const parts = path.split('/').filter(Boolean).slice(1);
     const [section, name, action, extra] = parts;
     const account = () => { if (!read_accounts(data)[name]) throw new Error(`账号不存在：${name}`); return name; };
+    const hosting = hosting_enabled(data);
     if (method === 'GET' && section === 'state') {
-      return { accounts: await op.list_accounts(data), clis: op.shared_cli_state(), providers: API_PROVIDERS, platform: process.platform };
+      const windows = process.platform === 'win32';
+      return { hosting, version: VERSION, service: op.service_overview(data), platform: process.platform,
+        launcher: windows && existsSync(launcher_path(data)), autostart: windows && op.autostart_enabled(), login_methods: LOGIN_METHODS,
+        ...(hosting ? { accounts: await op.list_accounts(data), clis: op.shared_cli_state(), providers: API_PROVIDERS } : { accounts: [], clis: {}, providers: {} }) };
     }
+    // This computer: the owner's own service, its updates and login autostart.
+    if (method === 'POST' && section === 'service' && ['start', 'stop', 'restart'].includes(name)) {
+      if (name !== 'start') await op.run_owner_service(data, 'stop');
+      if (name !== 'stop') await op.run_owner_service(data, 'start');
+      return op.service_overview(data);
+    }
+    if (method === 'GET' && section === 'update') {
+      const current = op.service_overview(data).version || VERSION, version = await op.latest_version(name === 'check');
+      return { current, latest: version, available: newer_version(version, current) };
+    }
+    if (method === 'POST' && section === 'update') return op.update_package(data, await op.latest_version(true), op.on_updated);
+    if (method === 'POST' && section === 'autostart') return { autostart: op.set_autostart(Boolean(body.on), data) };
+    // Command-line sign-in: '_' is the owner; an account name is a hosted account with its own Windows user.
+    if (section === 'login-jobs') {
+      if (method === 'GET') return op.login_progress(name);
+      if (method === 'POST' && action === 'submit') return op.submit_login(name, body.text);
+      if (method === 'POST' && action === 'cancel') return op.cancel_login(name);
+    }
+    if (section === 'logins') {
+      const target = name === '_' ? '' : name;
+      if (target && (!hosting || !read_accounts(data)[target])) throw new Error(target && !hosting ? '托管管理未打开' : `账号不存在：${target}`);
+      if (method === 'GET' && !action) return op.login_status(data, target);
+      if (method === 'POST' && extra === 'apply') return op.apply_login(data, target, action, body);
+      if (method === 'POST' && extra === 'logout') return op.logout(data, target, action);
+      if (method === 'POST' && extra === 'start') return op.start_login(data, target, action, body.method);
+      throw new Error('接口不存在');
+    }
+    // Hosting: only once the owner turned it on in setup.
+    if (!hosting) throw new Error('托管管理未打开：运行 codiscuss setup 勾选“托管管理（管理面板）”');
     if (method === 'POST' && section === 'clis' && name === 'install') return op.install_shared_clis();
     if (section !== 'accounts') throw new Error('接口不存在');
     if (method === 'POST' && !name) return op.add_account(data, String(body.name || '').trim());
@@ -159,18 +252,6 @@ export function create_panel({ data, key, port, ops = {} }) {
       op.use_shared_programs(data, name);
       return result;
     }
-    if (method === 'GET' && action === 'cli') return op.cli_status(data, name);
-    if (method === 'POST' && action === 'claude' && extra === 'clear') { op.clear_claude_token(data, name); return { ok: true }; }
-    if (method === 'POST' && action === 'claude') { op.set_claude_token(data, name, body.token); return { ok: true }; }
-    if (method === 'POST' && action === 'codex') { const id = randomUUID(); logins.set(id, op.start_codex_login(data, name)); return { id }; }
-    if (method === 'GET' && action === 'codex' && extra) {
-      const job = logins.get(extra);
-      if (!job) throw new Error('登录已结束，请重新开始');
-      const progress = op.codex_login_progress(job);
-      if (progress.done) logins.delete(extra);
-      return progress;
-    }
-    if (method === 'POST' && action === 'agy') { op.open_agy_login(data, name); return { ok: true }; }
     const service = instance_home(data, name);
     if (method === 'GET' && action === 'keys') return op.list_keys(service);
     if (method === 'POST' && action === 'keys' && extra === 'remove') { op.remove_key(service, String(body.ref || '')); return { ok: true }; }
@@ -278,59 +359,72 @@ function site_url(data) {
   catch { return 'http://127.0.0.1:8765/'; }
 }
 
+/** A runner script of the installed codiscuss package (npm puts its command beside node_modules), or this tree's copy. */
+function installed_script(name) {
+  const command_file = spawnSync('where.exe', ['codiscuss.cmd'], { encoding: 'utf8', windowsHide: true }).stdout?.split(/\r?\n/).find(Boolean);
+  const installed = command_file && join(dirname(command_file), 'node_modules', NPM_PACKAGE, 'runner', name);
+  return installed && existsSync(installed) ? installed : join(ROOT, 'runner', name);
+}
+
 /**
  * Start or stop the owner's own local service (website and discussion service), the way `codiscuss local` does.
  *
- * The installed `codiscuss` command is preferred, so a restart keeps the version the owner installed; this source tree's
- * copy is the fallback. Hosted accounts' instances are separate processes and are left alone.
+ * The installed package's script is preferred, so a restart keeps the version the owner installed. Hosted accounts'
+ * instances are separate processes and are left alone.
  */
 function run_owner_service(data, command) {
-  // npm puts the codiscuss command beside node_modules; its package's own local script is run with node, skipping cmd.exe.
-  const command_file = spawnSync('where.exe', ['codiscuss.cmd'], { encoding: 'utf8', windowsHide: true }).stdout?.split(/\r?\n/).find(Boolean);
-  const installed = command_file && join(dirname(command_file), 'node_modules', 'ai_co_discuss', 'runner', 'discussion_local.mjs');
-  const script = installed && existsSync(installed) ? installed : LOCAL_SCRIPT;
-  const child = spawn(process.execPath, [script, command], { stdio: 'ignore', windowsHide: true, env: { ...process.env, DISCUSS_SERVICE_HOME: data } });
+  const child = spawn(process.execPath, [installed_script('discussion_local.mjs'), command], { stdio: 'ignore', windowsHide: true, env: { ...process.env, DISCUSS_SERVICE_HOME: data } });
   return new Promise((done, fail) => {
     child.on('error', fail);
     child.on('exit', code => code === 0 ? done() : fail(new Error(`codiscuss local ${command} 失败（退出码 ${code}）`)));
   });
 }
 
-/** Whether the owner turned on hosting (setup's "托管管理"); only then does this process serve the panel. */
+/** Whether the owner turned on hosting (setup's "托管管理"); only then does the panel show the hosting pages. */
 export function hosting_enabled(data) {
   try { return JSON.parse(readFileSync(join(data, 'local-settings.json'), 'utf8')).hosting === true; } catch { return false; }
 }
 
 /** Run the server and the icon until the icon's "close service" entry or `panel stop`. */
 function run_panel(data, port) {
-  const hosting = hosting_enabled(data);
   const running = read_state(data);
   if (running && running.pid !== process.pid && alive(running.pid)) throw new Error(`管理面板已在运行：http://127.0.0.1:${running.port}`);
-  const state = { pid: process.pid, port: hosting ? port : 0, key: hosting ? randomBytes(24).toString('hex') : '' };
-  const server = hosting ? create_panel({ data, key: state.key, port }) : null;
-  if (server) {
-    server.listen(port, '127.0.0.1', () => {
-      writeFileSync(state_path(data), JSON.stringify(state), { mode: 0o600 });
-      process.stdout.write(`管理面板已启动：http://127.0.0.1:${port}\n`);
-    });
-  } else {
-    writeFileSync(state_path(data), JSON.stringify(state), { mode: 0o600 });
-    process.stdout.write('任务栏图标已启动（没有管理面板）\n');
-  }
-  const rendered = join(data, 'launcher', 'codiscuss.ico');
-  const tray = show_tray({ title: hosting ? '共议 · 管理面板' : '共议', icon_path: existsSync(rendered) ? rendered : '', window_title: hosting ? WINDOW_TITLE : '',
-    host: join(data, 'launcher', '共议.exe'), on_action: action => {
-    // A launcher built before the icon could run without a panel still offers "open panel"; it opens the site then.
-    if (action === 'open') { if (hosting) open_panel_window(data, panel_url(state), false); else open_browser(site_url(data)); }
-    if (action === 'site') open_browser(site_url(data));
-    if (action === 'restart') run_owner_service(data, 'stop').then(() => run_owner_service(data, 'start')).catch(() => {});
-    if (action === 'stop') run_owner_service(data, 'stop').catch(() => {}).finally(shutdown);
-  } });
-  function shutdown() {
-    tray?.close();
-    server?.close();
-    if (read_state(data)?.pid === process.pid) rmSync(state_path(data), { force: true });
+  const state = { pid: process.pid, port, key: randomBytes(24).toString('hex'), version: VERSION };
+  // After an update this process still runs the old code: it steps aside and starts the newly installed panel.
+  const on_updated = () => {
+    shutdown(false);
+    spawn(process.execPath, [installed_script('admin_panel.mjs'), 'start', '--data', data, '--port', String(port)], { detached: true, stdio: 'ignore', windowsHide: true }).unref();
     setTimeout(() => process.exit(0), 300);
+  };
+  const server = create_panel({ data, key: state.key, port, ops: { on_updated } });
+  server.listen(port, '127.0.0.1', () => {
+    writeFileSync(state_path(data), JSON.stringify(state), { mode: 0o600 });
+    process.stdout.write(`管理面板已启动：http://127.0.0.1:${port}\n`);
+  });
+  const rendered = join(data, 'launcher', 'codiscuss.ico');
+  const tray = show_tray({ title: '共议', icon_path: existsSync(rendered) ? rendered : '', window_title: WINDOW_TITLE,
+    host: join(data, 'launcher', '共议.exe'), on_action: action => {
+    if (action === 'open') open_panel_window(data, panel_url(state), false);
+    if (action === 'site') open_browser(site_url(data));
+    // Restarting and closing take seconds and show nothing of their own, so the icon says what is happening.
+    if (action === 'restart') {
+      tray.notify('busy', '正在重启共议服务…');
+      run_owner_service(data, 'stop').then(() => run_owner_service(data, 'start'))
+        .then(() => tray.notify('done', '共议服务已重启'), error => tray.notify('error', `重启失败：${error.message}。可在命令行运行 codiscuss local open`));
+    }
+    if (action === 'stop') {
+      tray.notify('busy', '正在关闭共议服务…');
+      run_owner_service(data, 'stop')
+        .then(() => tray.notify('done', '共议服务已关闭'), error => tray.notify('error', `关闭失败：${error.message}`))
+        // The note goes with the icon, so it stays a moment before the icon closes.
+        .finally(() => setTimeout(shutdown, 2500));
+    }
+  } });
+  function shutdown(exit = true) {
+    tray?.close();
+    server.close();
+    if (read_state(data)?.pid === process.pid) rmSync(state_path(data), { force: true });
+    if (exit) setTimeout(() => process.exit(0), 300);
   }
   process.on('SIGINT', shutdown);
   process.on('SIGTERM', shutdown);
@@ -340,7 +434,13 @@ function run_panel(data, port) {
 /** Start the panel in the background unless it already runs; returns its state. */
 async function start_panel(data, port) {
   const running = read_state(data);
-  if (running && alive(running.pid)) return running;
+  if (running && alive(running.pid) && running.version === VERSION) return running;
+  // A panel of another version (left running across an update) is replaced, so the icon and panel match what is installed.
+  if (running && alive(running.pid)) {
+    process.kill(running.pid);
+    rmSync(state_path(data), { force: true });
+    await new Promise(done => setTimeout(done, 800));
+  }
   const log = join(data, 'admin-panel.log');
   const child = spawn(process.execPath, [fileURLToPath(import.meta.url), 'run', '--port', String(port)],
     { detached: true, stdio: ['ignore', 'ignore', 'ignore'], windowsHide: true, env: { ...process.env, CODISCUSS_GATEWAY_HOME: data } });
@@ -359,12 +459,11 @@ export async function panel_main(args) {
   if (values.help) return process.stdout.write(HELP);
   const data = data_home(values.data), port = Number(values.port || DEFAULT_PORT);
   if (command === 'run') return run_panel(data, port);
-  if (command === 'start') { const state = await start_panel(data, port); return process.stdout.write(state.port ? `管理面板：http://127.0.0.1:${state.port}\n` : '任务栏图标已启动（没有管理面板）\n'); }
+  if (command === 'start') { const state = await start_panel(data, port); return process.stdout.write(`管理面板：http://127.0.0.1:${state.port}\n`); }
   if (command === 'open') {
-    if (!hosting_enabled(data)) throw new Error('托管管理未打开：运行 codiscuss setup 勾选“托管管理（管理面板）”，或 codiscuss setup --hosting');
     const state = await start_panel(data, port);
-    // An icon started before hosting was turned on has no panel; setup restarts it, this covers a hand-edited setting.
-    if (!state.port) throw new Error('任务栏图标是在打开托管管理之前启动的：运行 codiscuss panel stop 后再运行 codiscuss panel open');
+    // An icon from 0.4.28 or 0.4.29 may run without a panel; it is replaced by one that has it.
+    if (!state.port) throw new Error('正在运行的任务栏图标来自旧版本：运行 codiscuss panel stop 后再运行 codiscuss panel open');
     open_panel_window(data, panel_url(state));
     return;
   }

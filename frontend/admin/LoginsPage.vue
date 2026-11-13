@@ -1,12 +1,11 @@
 <script setup>
 /**
- * AI command-line sign-ins of each hosted account, made under that account's Windows user.
- *
- * Claude takes a long-lived token from `claude setup-token`; Codex signs in through a browser on this computer; Antigravity
- * signs in inside its own window, which opens on this computer's desktop.
+ * Command-line sign-in: which of Claude Code, Codex and Antigravity are signed in, and how, for the computer owner and
+ * for each hosted account that has its own Windows user; a dialog signs one in any way it supports.
  */
-import { computed, inject, onBeforeUnmount, onMounted, ref, watch } from "vue";
+import { computed, inject, onMounted, ref, watch } from "vue";
 import { call } from "./api.js";
+import LoginDialog from "./LoginDialog.vue";
 
 const { state, reload, notify } = inject("panel");
 const CLIS = [
@@ -14,23 +13,43 @@ const CLIS = [
   { key: "codex", label: "Codex", icon: "/icons/openai.svg" },
   { key: "agy", label: "Antigravity", icon: "/icons/gemini.svg" },
 ];
-const status = ref({});
-const checking = ref({});
-const installing = ref(false);
+// How each status reads on its row.
+const METHOD_LABELS = { setup_token: "Setup Token", subscription: "Claude 账号", api_key: "API 密钥", api_key_helper: "密钥脚本", third_party: "第三方 API",
+  chatgpt: "ChatGPT 账号", access_token: "访问令牌", google: "Google 账号", bedrock: "Bedrock", vertex: "Vertex", foundry: "Foundry" };
+const OWNER = { name: "_", title: "本机", sub: "你自己的命令行程序；没有 Windows 用户的托管账号也用这里的登录" };
+
+const status = ref({}), checking = ref({}), installing = ref(false);
+const dialog = ref({ open: false, target: "_", who: "", cli: null });
 const isolated = computed(() => state.value.accounts.filter((account) => account.os_user));
 const plain = computed(() => state.value.accounts.filter((account) => !account.os_user));
-const installed = computed(() => CLIS.filter((cli) => state.value.clis?.[cli.key]));
+const targets = computed(() => [OWNER, ...isolated.value.map((account) => ({ name: account.name, title: account.name, sub: `Windows 用户 ${account.os_user}，登录与你和其他用户互不影响`, os_user: account.os_user }))]);
 
-/** Ask Windows, as the account's user, which programs are signed in; this takes a few seconds per account. */
-async function check(account) {
-  checking.value = { ...checking.value, [account.name]: true };
-  try { status.value = { ...status.value, [account.name]: await call(`accounts/${account.name}/cli`) }; }
-  catch (failure) { status.value = { ...status.value, [account.name]: { error: failure.message } }; }
-  finally { checking.value = { ...checking.value, [account.name]: false }; }
+/** Ask, as the target's user, which programs are signed in; a few seconds each. */
+async function check(target) {
+  checking.value = { ...checking.value, [target]: true };
+  try { status.value = { ...status.value, [target]: await call(`logins/${target}`) }; }
+  catch (failure) { status.value = { ...status.value, [target]: { error: failure.message } }; }
+  finally { checking.value = { ...checking.value, [target]: false }; }
 }
-async function check_all() { for (const account of isolated.value) await check(account); }
+async function check_all() { for (const target of targets.value) await check(target.name); }
 onMounted(check_all);
-watch(() => isolated.value.map((account) => account.name).join(), (now, before) => { if (now !== before) check_all(); });
+watch(() => targets.value.map((target) => target.name).join(), (now, before) => { if (now !== before) check_all(); });
+
+function row(target, cli) { return status.value[target]?.[cli.key] || null; }
+function describe(item) {
+  if (!item) return "检查中…";
+  if (!item.installed) return "未安装";
+  if (!item.signed_in) return item.error ? `无法读取：${item.error}` : "未登录";
+  return `已登录 · ${METHOD_LABELS[item.method] || item.method}${item.detail ? ` · ${item.detail}` : ""}`;
+}
+
+function open(target, cli) { dialog.value = { open: true, target: target.name, who: target.name === "_" ? "本机（你自己）" : `托管账号 ${target.name}`, cli }; }
+function finished(message, level = "info") { notify(level, message); if (level !== "error") check(dialog.value.target); }
+
+async function sign_out(target, cli) {
+  try { await call(`logins/${target.name}/${cli.key}/logout`, {}); notify("info", `${cli.label} 已退出登录`); check(target.name); }
+  catch (failure) { notify("error", failure.message); }
+}
 
 async function install() {
   installing.value = true;
@@ -41,134 +60,57 @@ async function install() {
   } catch (failure) { notify("error", failure.message); }
   finally { installing.value = false; }
 }
-
-// ---- Claude: paste a token ----
-const claude = ref(null);
-async function save_claude() {
-  claude.value.saving = true;
-  try {
-    await call(`accounts/${claude.value.account}/claude`, { token: claude.value.token });
-    notify("info", "Claude Code 令牌已保存");
-    const account = state.value.accounts.find((item) => item.name === claude.value.account);
-    claude.value = null;
-    if (account) check(account);
-  } catch (failure) { notify("error", failure.message); claude.value.saving = false; }
-}
-async function clear_claude(account) {
-  try { await call(`accounts/${account.name}/claude/clear`, {}); notify("info", "已移除 Claude Code 令牌"); check(account); }
-  catch (failure) { notify("error", failure.message); }
-}
-
-// ---- Codex: a browser sign-in on this computer ----
-const codex = ref(null);
-let poll = null;
-async function start_codex(account) {
-  try {
-    const { id } = await call(`accounts/${account.name}/codex`, {});
-    codex.value = { account, id, link: "", done: false };
-    clearInterval(poll);
-    poll = setInterval(async () => {
-      try {
-        const progress = await call(`accounts/${account.name}/codex/${id}`);
-        if (!codex.value || codex.value.id !== id) return;
-        Object.assign(codex.value, progress);
-        if (progress.done) { clearInterval(poll); notify("info", `${account.name} 的 Codex 已登录`); check(account); }
-      } catch (failure) { clearInterval(poll); if (codex.value?.id === id) codex.value.error = failure.message; }
-    }, 1500);
-  } catch (failure) { notify("error", failure.message); }
-}
-function close_codex() { clearInterval(poll); codex.value = null; }
-onBeforeUnmount(() => clearInterval(poll));
-
-// ---- Antigravity: its own window ----
-async function open_agy(account) {
-  try { await call(`accounts/${account.name}/agy`, {}); notify("info", "已在这台电脑上打开 Antigravity 登录窗口"); }
-  catch (failure) { notify("error", failure.message); }
-}
-
-function action(account, cli) {
-  if (cli.key === "claude") claude.value = { account: account.name, token: "", saving: false };
-  if (cli.key === "codex") start_codex(account);
-  if (cli.key === "agy") open_agy(account);
-}
-const signed_in = (account, cli) => status.value[account.name]?.[cli.key] === true;
 </script>
 
 <template>
   <section>
-    <h3 class="panel-section-title"><UIcon name="i-lucide-package" />共享命令行程序</h3>
-    <article class="panel-card">
-      <div class="panel-tile"><UIcon name="i-lucide-hard-drive-download" /></div>
-      <div class="panel-main">
-        <div class="panel-title">安装到所有用户可用的位置
-          <span v-for="cli in CLIS" :key="cli.key" class="panel-tag" :class="state.clis?.[cli.key] ? 'is-green' : 'is-gray'">
-            <UIcon :name="state.clis?.[cli.key] ? 'i-lucide-check' : 'i-lucide-minus'" />{{ cli.label }}</span>
-        </div>
-        <span class="panel-sub">把这台电脑上你自己的 Claude Code、Codex、Antigravity 复制到 C:\ProgramData\CoDiscuss\cli，各用户的 AI 从这里运行。更新命令行后再点一次。</span>
-      </div>
-      <div class="panel-side">
-        <button type="button" class="panel-button is-outline is-small" :disabled="installing" @click="install">
-          <UIcon :name="installing ? 'i-lucide-loader' : 'i-lucide-download'" :class="{ 'animate-spin': installing }" />{{ installed.length ? "更新" : "安装" }}</button>
-      </div>
-    </article>
-
-    <h3 class="panel-section-title"><UIcon name="i-lucide-users" />各用户的登录</h3>
     <div class="panel-list">
-      <div v-if="!isolated.length" class="panel-empty"><UIcon name="i-lucide-shield" />还没有带 Windows 用户的账号。先在“用户”页的卡片菜单里创建 Windows 用户。</div>
-      <article v-for="account in isolated" :key="account.name" class="panel-card is-tall">
+      <article v-for="target in targets" :key="target.name" class="panel-card is-tall">
         <div class="panel-card-row">
-          <div class="panel-tile">{{ account.name.slice(0, 1).toUpperCase() }}</div>
+          <div class="panel-tile"><UIcon v-if="target.name === '_'" name="i-lucide-monitor" /><template v-else>{{ target.name.slice(0, 1).toUpperCase() }}</template></div>
           <div class="panel-main">
-            <div class="panel-title">{{ account.name }}<span class="panel-tag is-blue"><UIcon name="i-lucide-shield" />{{ account.os_user }}</span></div>
-            <span v-if="status[account.name]?.error" class="panel-sub" style="color: #dc2626">{{ status[account.name].error }}</span>
-            <span v-else class="panel-sub">登录信息保存在这个 Windows 用户里，与你和其他用户的登录互不影响。</span>
+            <div class="panel-title">{{ target.title }}<span v-if="target.os_user" class="panel-tag is-blue"><UIcon name="i-lucide-shield" />{{ target.os_user }}</span></div>
+            <span v-if="status[target.name]?.error" class="panel-sub" style="color: #dc2626">{{ status[target.name].error }}</span>
+            <span v-else class="panel-sub">{{ target.sub }}</span>
           </div>
           <div class="panel-side">
-            <button type="button" class="panel-icon-button" :class="{ 'is-spinning': checking[account.name] }" :disabled="checking[account.name]" title="重新检查登录状态" aria-label="重新检查登录状态" @click="check(account)"><UIcon name="i-lucide-refresh-cw" /></button>
+            <button type="button" class="panel-icon-button" :class="{ 'is-spinning': checking[target.name] }" :disabled="checking[target.name]" title="重新检查登录状态" aria-label="重新检查登录状态" @click="check(target.name)"><UIcon name="i-lucide-refresh-cw" /></button>
           </div>
         </div>
         <div class="panel-logins">
           <div v-for="cli in CLIS" :key="cli.key" class="panel-login">
             <img :src="cli.icon" alt="" />
             <div class="panel-login-text">{{ cli.label }}
-              <small v-if="checking[account.name] && !status[account.name]">检查中…</small>
-              <small v-else-if="signed_in(account, cli)" class="is-ok">已登录</small>
-              <small v-else-if="!state.clis?.[cli.key]">未安装共享程序</small>
-              <small v-else>未登录</small>
+              <small :class="{ 'is-ok': row(target.name, cli)?.signed_in }" :title="describe(row(target.name, cli))">{{ describe(row(target.name, cli)) }}</small>
             </div>
-            <UDropdownMenu v-if="cli.key === 'claude' && signed_in(account, cli)" :items="[[{ label: '更换令牌', icon: 'i-lucide-replace', onSelect: () => action(account, cli) }, { label: '移除令牌', icon: 'i-lucide-trash-2', onSelect: () => clear_claude(account) }]]" :content="{ align: 'end' }">
+            <UDropdownMenu v-if="row(target.name, cli)?.signed_in" :items="[[{ label: '更换登录方式', icon: 'i-lucide-replace', onSelect: () => open(target, cli) }, { label: '退出登录', icon: 'i-lucide-log-out', color: 'error', onSelect: () => sign_out(target, cli) }]]" :content="{ align: 'end' }">
               <button type="button" class="panel-button is-outline is-small">管理</button>
             </UDropdownMenu>
-            <button v-else type="button" class="panel-button is-outline is-small" :disabled="!state.clis?.[cli.key]" @click="action(account, cli)">{{ signed_in(account, cli) ? "重新登录" : "登录" }}</button>
+            <button v-else type="button" class="panel-button is-outline is-small" :disabled="!row(target.name, cli)?.installed" @click="open(target, cli)">登录</button>
           </div>
         </div>
       </article>
-      <p v-if="plain.length" class="panel-note"><UIcon name="i-lucide-info" />{{ plain.map((account) => account.name).join("、") }} 还没有 Windows 用户，它们的 AI 用的是你自己的登录。</p>
     </div>
+
+    <template v-if="state.hosting">
+      <h3 class="panel-section-title"><UIcon name="i-lucide-package" />托管账号用的命令行程序</h3>
+      <article class="panel-card">
+        <div class="panel-tile"><UIcon name="i-lucide-hard-drive-download" /></div>
+        <div class="panel-main">
+          <div class="panel-title">安装到所有用户可用的位置
+            <span v-for="cli in CLIS" :key="cli.key" class="panel-tag" :class="state.clis?.[cli.key] ? 'is-green' : 'is-gray'">
+              <UIcon :name="state.clis?.[cli.key] ? 'i-lucide-check' : 'i-lucide-minus'" />{{ cli.label }}</span>
+          </div>
+          <span class="panel-sub">把你自己的 Claude Code、Codex、Antigravity 复制到 C:\ProgramData\CoDiscuss\cli，各用户的 AI 从这里运行。更新命令行后再点一次。</span>
+        </div>
+        <div class="panel-side">
+          <button type="button" class="panel-button is-outline is-small" :disabled="installing" @click="install">
+            <UIcon :name="installing ? 'i-lucide-loader' : 'i-lucide-download'" :class="{ 'animate-spin': installing }" />{{ CLIS.some((cli) => state.clis?.[cli.key]) ? "更新" : "安装" }}</button>
+        </div>
+      </article>
+      <p v-if="plain.length" class="panel-note" style="margin-top: 14px"><UIcon name="i-lucide-info" />{{ plain.map((account) => account.name).join("、") }} 还没有 Windows 用户，它们的 AI 用的是“本机”的登录。可在“用户”页的卡片菜单里创建 Windows 用户。</p>
+    </template>
   </section>
 
-  <UModal :open="Boolean(claude)" title="Claude Code 令牌" :description="`为 ${claude?.account} 填写 claude setup-token 生成的长期令牌`" @update:open="(open) => !open && (claude = null)">
-    <template #body>
-      <form class="panel-field" @submit.prevent="save_claude">令牌
-        <input v-model="claude.token" class="panel-input" type="password" placeholder="sk-ant-oat01-…" autocomplete="off" spellcheck="false" />
-        <small>在任意一台已登录 Claude 的电脑上运行 claude setup-token 获得。令牌只保存在这个用户的环境变量里。</small>
-      </form>
-      <div class="panel-form-foot">
-        <button type="button" class="panel-button is-plain" @click="claude = null">取消</button>
-        <button type="button" class="panel-button is-primary" :disabled="!claude?.token.trim() || claude?.saving" @click="save_claude">保存</button>
-      </div>
-    </template>
-  </UModal>
-
-  <UModal :open="Boolean(codex)" title="登录 Codex" :description="`为 ${codex?.account.name} 登录`" @update:open="(open) => !open && close_codex()">
-    <template #body>
-      <p v-if="codex?.error" class="panel-note is-amber"><UIcon name="i-lucide-circle-alert" />{{ codex.error }}</p>
-      <p v-else-if="codex?.done" class="panel-note"><UIcon name="i-lucide-circle-check" style="color: #16a34a" />登录完成，可以关闭此窗口。</p>
-      <template v-else-if="codex?.link">
-        <p class="panel-note"><UIcon name="i-lucide-info" />请在这台电脑的浏览器中打开，选择要给 {{ codex.account.name }} 使用的 ChatGPT 账号并同意。授权完成后会自动回到这里。</p>
-        <div class="panel-form-foot"><a class="panel-button is-primary" :href="codex.link" target="_blank" rel="noopener"><UIcon name="i-lucide-external-link" />在浏览器中打开</a></div>
-      </template>
-      <p v-else class="panel-note"><UIcon name="i-lucide-loader" class="animate-spin" />正在以 {{ codex?.account.os_user }} 的身份启动 Codex 登录…</p>
-    </template>
-  </UModal>
+  <LoginDialog v-model:open="dialog.open" :target="dialog.target" :who="dialog.who" :cli="dialog.cli" :methods="dialog.cli ? state.login_methods?.[dialog.cli.key] || [] : []" @done="finished" />
 </template>

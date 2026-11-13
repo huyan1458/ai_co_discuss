@@ -58,7 +58,8 @@ static class Launcher {
       MessageBox.Show("找不到 Node.js 或共议程序。请在命令行运行 codiscuss launcher 重新生成启动器。", "共议", MessageBoxButtons.OK, MessageBoxIcon.Warning);
       return;
     }
-    Start(LocalScript, "open");
+    // "--start" (the login autostart shortcut) starts quietly; a double click also opens the site.
+    Start(LocalScript, args.Length > 0 && args[0] == "--start" ? "start" : "open");
     if (PanelScript.Length > 0 && File.Exists(PanelScript)) Start(PanelScript, "start");
   }
 
@@ -171,6 +172,23 @@ static class Tray {
       if (click.Button == MouseButtons.Right) TrayMenu.Show(menu, Cursor.Position);
     };
     icon.Visible = true;
+    // Notes from the panel arrive as "toast KIND TEXT" lines on standard input. Reading blocks, so it runs on its own
+    // thread and hands each note to this one, which owns the windows.
+    Control sync = new Control(); sync.CreateControl();
+    System.Threading.Thread reader = new System.Threading.Thread(delegate () {
+      try {
+        StreamReader input = new StreamReader(Console.OpenStandardInput(), new UTF8Encoding(false));
+        string line;
+        while ((line = input.ReadLine()) != null) {
+          string[] parts = line.Split(new char[] { ' ' }, 3);
+          if (parts.Length < 3 || parts[0] != "toast") continue;
+          string kind = parts[1], text = parts[2];
+          sync.BeginInvoke((MethodInvoker)delegate { Toast.Show(kind, text); });
+        }
+      } catch { }
+    });
+    reader.IsBackground = true;
+    reader.Start();
     Timer watch = new Timer();
     watch.Interval = 2000;
     watch.Tick += delegate {
@@ -335,6 +353,56 @@ static class Confirm {
     }
   }
 }
+
+/** A small note above the taskbar, in the menu's look, saying what a menu choice is doing: "busy" stays until the next
+ * note, "done" goes after three seconds, "error" stays until clicked. It never takes the focus. */
+static class Toast {
+  [DllImport("dwmapi.dll")] static extern int DwmSetWindowAttribute(IntPtr window, int attribute, ref int value, int size);
+
+  class Note : Form {
+    protected override bool ShowWithoutActivation { get { return true; } }
+    // Shadow; and topmost, no activation, kept off the taskbar and Alt+Tab.
+    protected override CreateParams CreateParams { get { CreateParams p = base.CreateParams; p.ClassStyle |= 0x20000; p.ExStyle |= 0x08000088; return p; } }
+    protected override void OnHandleCreated(EventArgs e) { base.OnHandleCreated(e); int round = 2; DwmSetWindowAttribute(Handle, 33, ref round, 4); }
+  }
+
+  static Note current;
+
+  static void Close(Note note) {
+    if (note != null && !note.IsDisposed) note.Close();
+    if (current == note) current = null;
+  }
+
+  public static void Show(string kind, string text) {
+    Close(current);
+    float scale; using (Graphics probe = Graphics.FromHwnd(IntPtr.Zero)) scale = probe.DpiX / 96f;
+    Func<int, int> px = value => (int)Math.Round(value * scale);
+    Note note = new Note();
+    note.FormBorderStyle = FormBorderStyle.None; note.ShowInTaskbar = false; note.StartPosition = FormStartPosition.Manual;
+    note.AutoScaleMode = AutoScaleMode.None; note.BackColor = Color.FromArgb(249, 249, 249);
+    Font font = new Font("Microsoft YaHei UI", 10f);
+    int dot = px(10), left = px(16) + dot + px(12), width = px(260);
+    Size measured = TextRenderer.MeasureText(text, font, new Size(width, 0), TextFormatFlags.WordBreak);
+    note.ClientSize = new Size(left + width + px(16), Math.Max(px(52), measured.Height + px(32)));
+    Color mark = kind == "error" ? Color.FromArgb(196, 43, 28) : kind == "done" ? Color.FromArgb(15, 123, 15) : Color.FromArgb(0, 95, 184);
+    note.Paint += delegate (object source, PaintEventArgs e) {
+      e.Graphics.SmoothingMode = SmoothingMode.AntiAlias;
+      using (SolidBrush brush = new SolidBrush(mark)) e.Graphics.FillEllipse(brush, px(16), (note.ClientSize.Height - dot) / 2, dot, dot);
+      TextRenderer.DrawText(e.Graphics, text, font, new Rectangle(left, 0, width, note.ClientSize.Height), Color.FromArgb(26, 26, 26),
+        TextFormatFlags.VerticalCenter | TextFormatFlags.WordBreak | TextFormatFlags.Left);
+    };
+    note.Click += delegate { Close(note); };
+    Rectangle area = Screen.PrimaryScreen.WorkingArea;
+    note.Location = new Point(area.Right - note.Width - px(12), area.Bottom - note.Height - px(12));
+    note.Show();
+    current = note;
+    if (kind == "done") {
+      Timer later = new Timer(); later.Interval = 3000;
+      later.Tick += delegate { later.Stop(); later.Dispose(); Close(note); };
+      later.Start();
+    }
+  }
+}
 `;
 }
 
@@ -391,15 +459,41 @@ function installed_script(name) {
   return installed && existsSync(installed) ? installed : join(RUNNER, name);
 }
 
-/** Put a shortcut to the exe in a special folder (Desktop or Programs); values pass through the environment. */
-function write_shortcut(folder, exe, icon) {
+/** Put a shortcut to the exe in a special folder (Desktop, Programs or Startup); values pass through the environment. */
+function write_shortcut(folder, exe, icon, args = '') {
   const script = "$d=[Environment]::GetFolderPath($env:SC_FOLDER); $p=Join-Path $d $env:SC_NAME;"
-    + " $s=(New-Object -ComObject WScript.Shell).CreateShortcut($p); $s.TargetPath=$env:SC_TARGET; $s.WorkingDirectory=$env:SC_CWD;"
+    + " $s=(New-Object -ComObject WScript.Shell).CreateShortcut($p); $s.TargetPath=$env:SC_TARGET; $s.Arguments=$env:SC_ARGS; $s.WorkingDirectory=$env:SC_CWD;"
     + " if ($env:SC_ICON) { $s.IconLocation=$env:SC_ICON }; $s.Description='启动共议'; $s.Save(); Write-Output $p";
   const result = spawnSync('powershell.exe', ['-NoProfile', '-NonInteractive', '-Command', `[Console]::OutputEncoding=[Text.Encoding]::UTF8; ${script}`],
-    { encoding: 'utf8', windowsHide: true, env: { ...process.env, SC_FOLDER: folder, SC_NAME: SHORTCUT_NAME, SC_TARGET: exe, SC_CWD: dirname(exe), SC_ICON: icon || '' } });
+    { encoding: 'utf8', windowsHide: true, env: { ...process.env, SC_FOLDER: folder, SC_NAME: SHORTCUT_NAME, SC_TARGET: exe, SC_ARGS: args, SC_CWD: dirname(exe), SC_ICON: icon || '' } });
   if (result.status !== 0) throw new Error(`创建快捷方式失败：${result.stderr}`);
   return result.stdout.trim();
+}
+
+/** The path of this user's login (Startup) folder shortcut, asked of Windows. */
+function startup_shortcut() {
+  const folder = spawnSync('powershell.exe', ['-NoProfile', '-NonInteractive', '-Command',
+    "[Console]::OutputEncoding=[Text.Encoding]::UTF8; [Environment]::GetFolderPath('Startup')"], { encoding: 'utf8', windowsHide: true }).stdout?.trim();
+  return folder ? join(folder, SHORTCUT_NAME) : '';
+}
+
+/** Whether 共议 starts by itself when this user signs in to Windows. */
+export function autostart_enabled() {
+  const path = startup_shortcut();
+  return Boolean(path) && existsSync(path);
+}
+
+/**
+ * Start 共议 on sign-in, or stop doing so: a shortcut in the Startup folder runs the launcher with `--start`, which starts
+ * the service and the taskbar icon without opening the site. Needs the launcher (`codiscuss launcher`).
+ */
+export function set_autostart(on, home = join(homedir(), '.codiscuss')) {
+  if (!on) { const path = startup_shortcut(); if (path) rmSync(path, { force: true }); return false; }
+  const exe = launcher_path(home);
+  if (!existsSync(exe)) throw new Error('还没有“共议”程序：先在 codiscuss setup 里勾选创建桌面快捷方式，或运行 codiscuss launcher');
+  const icon = join(home, 'launcher', 'codiscuss.ico');
+  write_shortcut('Startup', exe, existsSync(icon) ? icon : '', '--start');
+  return true;
 }
 
 /** Where the launcher of a service home lives. */

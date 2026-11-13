@@ -149,7 +149,8 @@ export function show_tray({ title, on_action, icon_path = '', window_title = '',
   let child;
   if (host && icon_path && existsSync(host)) {
     // The launcher exe hosts the icon, so Windows keeps the owner's "show on the taskbar" choice for it across restarts.
-    child = spawn_process(host, ['--tray', String(process.pid), icon_path, title, window_title || '-'], { windowsHide: true, stdio: ['ignore', 'pipe', 'pipe'] });
+    // Standard input carries notes back to the icon (see notify below).
+    child = spawn_process(host, ['--tray', String(process.pid), icon_path, title, window_title || '-'], { windowsHide: true, stdio: ['pipe', 'pipe', 'pipe'] });
   } else {
     // Windows PowerShell 5.1 reads a script file without a byte-order mark in the ANSI code page, which garbles Chinese labels.
     const script = join(tmpdir(), `codiscuss-tray-${process.pid}.ps1`);
@@ -166,5 +167,16 @@ export function show_tray({ title, on_action, icon_path = '', window_title = '',
     for (const line of lines.map(text => text.trim())) if (ACTIONS.has(line)) on_action(line);
   });
   child.on('error', () => {});
-  return { child, close() { try { child.kill(); } catch {} } };
+  child.stdin?.on('error', () => {});
+  return {
+    child,
+    close() { try { child.kill(); } catch {} },
+    /**
+     * Show a note above the taskbar: kind 'busy' (stays), 'done' (goes after three seconds) or 'error' (stays until
+     * clicked). Only the launcher exe shows notes; the PowerShell icon cannot read input without freezing its clicks.
+     */
+    notify(kind, text) {
+      if (child.stdin?.writable) child.stdin.write(`toast ${kind} ${String(text).replace(/\s+/g, ' ')}\n`);
+    },
+  };
 }

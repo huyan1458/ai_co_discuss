@@ -3,15 +3,16 @@ import { spawn, spawnSync } from 'node:child_process';
 import { accessSync, constants, copyFileSync, existsSync, mkdtempSync, readFileSync, readdirSync, realpathSync, rmSync, statSync } from 'node:fs';
 import { homedir, tmpdir } from 'node:os';
 import { basename, delimiter, dirname, isAbsolute, join, resolve } from 'node:path';
-import { fileURLToPath } from 'node:url';
+import { fileURLToPath, pathToFileURL } from 'node:url';
 import { parseArgs } from 'node:util';
+import { Worker } from 'node:worker_threads';
 
 import { atomic_json } from './files.mjs';
 import { launch_settings, save_launch_settings } from './discussion_launch.mjs';
 import { assert_shared_home, service_home } from './discussion_service.mjs';
 import { SKILLS, install_skills, install_workflows, remove_legacy_skills, shipped_workflows } from './discussion_skills.mjs';
 import { ask, checkbox_prompt, intro, outro, pad, short_path, spinner, step, styled, text_width, tone, tree_prompt } from './discussion_tui.mjs';
-import { install_launcher, launcher_installed } from './launcher.mjs';
+import { launcher_installed } from './launcher.mjs';
 export { checkbox_prompt } from './discussion_tui.mjs';
 
 const ROOT = fileURLToPath(new URL('../', import.meta.url));
@@ -46,7 +47,7 @@ install 将当前 npm 包安装为持久命令，再运行 setup；setup 配置�
   --no-start / --no-open     只配置 / 启动但不打开浏览器
   --prefix DIR              npm 安装前缀（install）
   --skills-home DIR         技能用户根目录（默认当前用户目录）
-  --hosting / --no-hosting  打开 / 关闭托管管理（Windows 任务栏图标里的管理面板），选择会记住
+  --hosting / --no-hosting  在管理面板中显示 / 隐藏托管管理（用户、Windows 用户、命令行登录、API 密钥），选择会记住
   --workflows               安装全部随包工作流，已有同名的覆盖为最新版（原来的先备份到服务目录 backups/）；
                             交互运行时也可在“安装配置”里逐个勾选；不选则不安装，选择不会记住
 Antigravity（显示名 Gemini）使用 agy；Grok 使用 Cursor CLI（agent / cursor-agent）。仅检测 CLI。
@@ -198,7 +199,7 @@ async function install_choices(options, home, previous) {
       : { label: '创建“共议”快捷方式', hint: 'launcher', description: '用本机自带的 C# 编译器生成 共议.exe，不下载任何东西', checked: true }] });
   if (offer_hosting) groups.push({ key: 'hosting', label: '托管管理',
     description: '给别人开账号用这台电脑上的 AI 时才需要；一般自用不用勾。勾选会记住，下次 setup 可取消',
-    items: [{ label: '托管管理（管理面板）', hint: 'hosting', description: '任务栏图标多出“打开管理面板”，左键打开面板：管理托管账号、Windows 用户、命令行登录与 API 密钥',
+    items: [{ label: '托管管理', hint: 'hosting', description: '管理面板里多出用户、命令行登录、API 密钥三页：给托管账号开户、建 Windows 用户、登录与分配密钥',
       checked: defaults.hosting }] });
   const picked = await tree_prompt('安装配置', groups);
   const chosen = key => picked[groups.findIndex(group => group.key === key)];
@@ -209,12 +210,22 @@ async function install_choices(options, home, previous) {
   };
 }
 
-/** Restart the owner's taskbar icon if it is running (`panel stop` then `panel start`). */
-function restart_panel_icon(home) {
-  const state = join(home, 'admin-panel.json');
-  if (process.platform !== 'win32' || !existsSync(state)) return;
-  const script = join(dirname(fileURLToPath(import.meta.url)), 'admin_panel.mjs');
-  for (const command of ['stop', 'start']) spawnSync(process.execPath, [script, command, '--data', home], { stdio: 'ignore', windowsHide: true, timeout: 20_000 });
+/**
+ * Build the launcher in a worker thread: it renders the icon with Edge and compiles the exe through synchronous calls that
+ * take several seconds, which on the main thread would freeze the spinner and look like a hang.
+ */
+function install_launcher_in_worker(home) {
+  const module = pathToFileURL(join(dirname(fileURLToPath(import.meta.url)), 'launcher.mjs')).href;
+  // Only dynamic imports, so the code runs whether Node evaluates it as CommonJS or as a module.
+  const code = `import('node:worker_threads').then(async ({ parentPort, workerData }) => {
+  try { parentPort.postMessage({ result: (await import(workerData.module)).install_launcher(workerData.home) }); }
+  catch (error) { parentPort.postMessage({ error: error.message }); }
+});`;
+  return new Promise((done, fail) => {
+    const worker = new Worker(code, { eval: true, workerData: { module, home } });
+    worker.once('message', message => message.error ? fail(new Error(message.error)) : done(message.result));
+    worker.once('error', fail);
+  });
 }
 
 /** Validate an explicit selection without prompting or changing files. */
@@ -407,10 +418,9 @@ async function setup(options) {
   const configured = await configure_clients(home, selected, options, launch_settings(home).participants);
   // The remote entry is retired: a saved remote_port from an older version is dropped here.
   const { remote_port: retired, ...kept } = previous;
-  const { hosting: was_hosting, ...rest } = kept;
+  // The panel reads hosting on each request, so a change shows on its next refresh.
+  const { hosting: _previous_hosting, ...rest } = kept;
   atomic_json(join(home, 'local-settings.json'), { ...rest, python, port, ...(choices.hosting ? { hosting: true } : {}) });
-  // A running taskbar icon read the setting when it started; restart it so the panel comes or goes now.
-  if (Boolean(was_hosting) !== choices.hosting) restart_panel_icon(home);
   step('已写入软件配置与技能', configured.skills.map(group => `${pad(group.client, width)}  ${tone.dim(short_path(dirname(group.results[0].path)))}`));
   // Shipped workflows are installed only when asked for each time, so a copy the user or a host edited is never replaced unasked.
   const workflows = workflow_names.length ? install_workflows(home, workflow_names) : [];
@@ -426,7 +436,11 @@ async function setup(options) {
   }
   let launcher = null, launcher_error = '';
   if (choices.launcher) {
-    try { launcher = install_launcher(home); } catch (error) { launcher_error = error.message; }
+    const work = spinner('生成“共议”程序与桌面快捷方式');
+    try {
+      launcher = await install_launcher_in_worker(home);
+      work.done('“共议”快捷方式已就绪', [tone.dim(short_path(launcher.shortcuts[0]))]);
+    } catch (error) { launcher_error = error.message; work.fail(error.message); }
   }
   const result = { home, python, clients: selected.map(item => item.name), ...configured, workflows, ...(choices.hosting ? { hosting: true } : {}),
     command: check_command(), ai_verified: false, ...(pi ? { pi: pi.version } : {}), ...(launcher ? { launcher: launcher.shortcuts[0] } : {}) };
@@ -481,7 +495,7 @@ function report_setup(result, options = {}) {
   for (const group of result.skills) lines.push(`${group.client} Skill：${group.results.filter(skill => skill.status !== 'conflict').length}/${group.results.length} 份文件就绪，目录 ${dirname(group.results[0].path)}`);
   if (result.workflows.length) lines.push(`内置工作流：${workflow_summary(result.workflows)}`);
   if (result.launcher) lines.push(`快捷方式：${result.launcher}（双击启动共议）`);
-  if (result.hosting) lines.push('托管管理：已打开，任务栏图标可打开管理面板');
+  if (result.hosting) lines.push('托管管理：已打开，在管理面板中可用');
   if (result.command.path) lines.push(`持久命令：${result.command.path}（${result.command.status}）`);
   if (result.local?.running) {
     lines.push(`本机网站：${result.local.url}${options['no-open'] ? '' : '（已在浏览器打开）'}`,
@@ -508,7 +522,7 @@ function report_styled(result, options) {
   if (result.skills.length) rows.push(['技能', result.skills.map(group => `${group.client} ${group.results.filter(skill => skill.status !== 'conflict').length}/${group.results.length}`).join(' · '), 'discuss-host · discuss-participant · discuss-goal · discuss-session · discuss-report · workflow-creator · local-tts-setup · local-stt-setup']);
   if (result.workflows.length) rows.push(['工作流', workflow_summary(result.workflows), '']);
   if (result.launcher) rows.push(['快捷方式', '双击“共议”启动', short_path(result.launcher)]);
-  if (result.hosting) rows.push(['托管管理', '已打开', '任务栏图标可打开管理面板']);
+  if (result.hosting) rows.push(['托管管理', '已打开', '在管理面板中可用']);
   if (result.command.path) rows.push(['命令', `codiscuss ${tone.dim(`(${result.command.status})`)}`, short_path(result.command.path)]);
   const notes = result.issues.map(issue => tone.yellow(`▲ ${issue}`));
   if (result.local?.running) {

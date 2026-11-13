@@ -4,6 +4,7 @@ import ImportDialog from "./ImportDialog.vue";
 import MemoBlock from "./memo-block.js";
 import { use_workflow_library } from "./workflow-library.js";
 
+const EXPANDED_KEY = "ai-codiscuss-folders-expanded";
 const emit = defineEmits(["select", "manage", "create", "create-folder", "manage-folder", "delete-folder", "archive-folder", "archives"]);
 const { view, bridge, act, pending } = inject("discussion");
 // While the workflow page fills the middle, no room row is shown as the open one.
@@ -90,17 +91,21 @@ function room_row(room, index, count) {
 /** Plain values for one folder's heading row, and the key it re-renders on; read here for the same reason as room_row. */
 function folder_head(folder, index) {
   const items = folder.id ? folder_actions(folder, index) : [];
-  const head = { items, collapsed: collapsed.value.has(folder.id), active: view.value.room?.folder_id === folder.id,
+  const head = { items, collapsed: !folder_open(folder.id), active: view.value.room?.folder_id === folder.id,
     creating: view.value.directory_pending.includes("create-room") };
   head.key = JSON.stringify([folder, head.collapsed, head.active, head.creating, items.map((group) => group.map((item) => [item.label, item.disabled]))]);
   return head;
 }
 const rooms_open = ref(true);
-const collapsed = ref(read_collapsed());
-watch(() => view.value.room?.id, () => {
-  const folder_id = view.value.room?.folder_id || "";
-  if (folder_id && collapsed.value.has(folder_id)) toggle_folder(folder_id);
+// Folders start collapsed; only the ones the user opened are remembered. Moving to a room in a closed folder opens it
+// for this page load only, so a refresh shows the folders exactly as the user left them.
+const expanded = ref(read_expanded());
+const revealed = ref("");
+watch(() => view.value.room?.id, (room_id, previous_id) => {
+  if (previous_id) revealed.value = view.value.room?.folder_id || "";
 });
+/** Whether one folder's rooms are shown; the unfiled group is always shown. */
+function folder_open(id) { return !id || expanded.value.has(id) || revealed.value === id; }
 
 /** Keep folder editing and keyboard-equivalent movement on the folder's own menu. */
 function folder_actions(folder, index) {
@@ -125,18 +130,20 @@ function folder_export(folder) {
     onSelect: () => act("backup_rooms", { ids, name: folder.name || "未分组" }) };
 }
 
-/** Restore the user's collapsed folder IDs when local storage is available. */
-function read_collapsed() {
-  try { return new Set(JSON.parse(localStorage.getItem("ai-codiscuss-folders-collapsed") || "[]")); }
+/** Restore the folder IDs the user expanded when local storage is available. */
+function read_expanded() {
+  try { return new Set(JSON.parse(localStorage.getItem(EXPANDED_KEY) || "[]")); }
   catch { return new Set(); }
 }
 
-/** Toggle one group and persist the presentation preference. */
+/** Toggle one folder and remember the user's choice. */
 function toggle_folder(id) {
-  const next = new Set(collapsed.value);
-  if (next.has(id)) next.delete(id); else next.add(id);
-  collapsed.value = next;
-  try { localStorage.setItem("ai-codiscuss-folders-collapsed", JSON.stringify([...next])); } catch { /* Keep the current view. */ }
+  const open = folder_open(id);
+  const next = new Set(expanded.value);
+  if (open) next.delete(id); else next.add(id);
+  if (open && revealed.value === id) revealed.value = "";
+  expanded.value = next;
+  try { localStorage.setItem(EXPANDED_KEY, JSON.stringify([...next])); } catch { /* Keep the current view. */ }
 }
 
 /** Keep actions targeted to the clicked channel without changing the open draft. */
@@ -188,7 +195,7 @@ function actions(room, index, folder_id, folder_room_count) {
        </div>
        </MemoBlock>
        </template>
-       <div v-if="!folder.id || !collapsed.has(folder.id)" :class="folder.id ? 'channel-folder-rooms' : 'channel-root-rooms'" :data-drop-folder="folder.id ? undefined : ''">
+       <div v-if="folder_open(folder.id)" :class="folder.id ? 'channel-folder-rooms' : 'channel-root-rooms'" :data-drop-folder="folder.id ? undefined : ''">
       <p v-if="view.creating_room && (view.creating_room.folder_id || '') === folder.id" class="channel-directory-empty" role="status">正在创建：{{ view.creating_room.title }}</p>
       <MemoBlock v-for="(room, index) in folder.rooms" :key="room.id" :deps="[JSON.stringify(room), index, folder.rooms.length, row_state, room_time(room)]">
       <template v-for="row in [room_row(room, index, folder.rooms.length)]" :key="room.id">
