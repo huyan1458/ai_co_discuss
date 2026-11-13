@@ -43,7 +43,9 @@ const profile = computed(() => preset.value ? {
 const member_label = computed(() => preset.value ? preset.value.label || bridge.default_name(props.name) : view.value && bridge.member_label(props.name));
 const entry_items = computed(() => bridge.launch_clients[props.name] || []);
 // Manual start needs a local AI session; a platform reachable only through its API cannot offer it.
-const offered = computed(() => props.choices.filter((option) => option !== "manual" || entry_items.value.some((item) => item.value !== "api")));
+// A hosted account runs members only the way the computer owner set them up: no manual start, no choice of software entry.
+const restricted = computed(() => view.value.launch.projects_restricted === true);
+const offered = computed(() => props.choices.filter((option) => option !== "manual" || !restricted.value && entry_items.value.some((item) => item.value !== "api")));
 const automatic = computed(() => props.mode === "cli");
 // Short labels for the front control; the 启动 row spells out what each one means.
 const ACCESS_LABELS = { cli: "程序启动", manual: "手动启动" };
@@ -81,7 +83,9 @@ const configuration_note = computed(() => configurable.value && connection.value
   : profile.value.adapter ? "模型与思考强度在 App 原聊天中选择，本页不覆盖 App 设置。" : "先选择软件入口。支持启动参数的 CLI 可在这里设置模型与强度。");
 const EFFORT_LABELS = { low: "Low", medium: "Medium", high: "High", xhigh: "Extra High", max: "Max", ultra: "Ultra" };
 const effort_items = computed(() => {
-  const levels = models.value.efforts || (preset.value ? adapter_profile(profile.value.adapter)?.efforts : null);
+  // A preset or a software that lists no models (a model API) offers the levels its profile declares.
+  const facts = adapter_profile(profile.value.adapter);
+  const levels = models.value.efforts || (preset.value || !facts?.models ? facts?.efforts : null);
   return levels?.length ? [{ label: "默认强度", value: "" }, ...levels.map((level) => ({ label: EFFORT_LABELS[level] || level, value: level }))] : null;
 });
 // An empty choice shows what the software's own settings select; only when they say nothing does the software decide.
@@ -111,7 +115,7 @@ const facts = computed(() => preset.value ? [
   { label: "启动", value: launch_fact.value },
   ...automatic.value ? [{ label: "软件", value: entry_label.value }] : [],
   ...configurable.value ? [{ label: "模型", value: profile.value.model || models.value.defaults?.model || "软件默认模型" }] : [],
-  ...configurable.value && profile.value.adapter !== "api" ? [{ label: "强度", value: effort_label.value }] : [],
+  ...configurable.value && (profile.value.adapter !== "api" || profile.value.effort) ? [{ label: "强度", value: effort_label.value }] : [],
   // A workflow card that may change files is pointed out before it joins.
   ...sets_access.value ? [{ label: "项目", value: access_label(access.value), ...(props.workflow && access.value !== "read" ? { tone: "warn" } : {}) }] : [],
   // The crown already offers hosting and the badge names the host, so only the refusal needs a row.
@@ -404,10 +408,10 @@ onBeforeUnmount(() => { document.removeEventListener("pointerdown", close_on_out
           <button type="button" class="expert-card-back-tool" :class="{ 'is-set': description }" :aria-label="`编辑 ${name} 的名称与描述`" :title="describe_title" @click="describing = true"><UIcon name="i-lucide-user-pen" /></button>
           <button v-if="preset || profile.adapter" type="button" class="expert-card-back-tool" :class="{ 'is-set': prompt_text, 'is-own': prompt_own && prompt_text }" :title="prompt_title" :aria-label="`编辑 ${name} 的专属提示词`" @click="open_prompt"><UIcon name="i-lucide-scroll-text" /></button>
           <UButton v-if="api_mode" icon="i-lucide-zap" :aria-label="`检查 ${name} 的 API 配置`" title="检查配置：发送一次极短请求，核对地址、密钥、协议与模型" size="xs" :color="api_check.state === 'ok' ? 'success' : api_check.state === 'error' ? 'error' : 'neutral'" variant="ghost" :loading="api_check.state === 'loading'" :disabled="!profile.api_key_ref || !profile.model || !view.launch.available" @click="check_api" /></span></div>
-        <div v-if="!preset && automatic && entry_items.length > 1" class="expert-card-field">
+        <div v-if="!preset && automatic && !restricted && entry_items.length > 1" class="expert-card-field">
           <span>接入</span><USelect :model-value="profile.adapter || ''" :items="entry_items" placeholder="选择 API / App / CLI" :aria-label="`${name} 软件入口`" size="xs" class="w-full" @update:model-value="bridge.write_launch(name, 'adapter', $event)" />
         </div>
-        <div v-for="item in connection" :key="item.field" class="expert-card-field">
+        <div v-for="item in restricted ? [] : connection" :key="item.field" class="expert-card-field">
           <span>{{ item.label }}</span><UInput :model-value="profile[item.field] || ''" :placeholder="item.placeholder" :aria-label="`${name} ${item.placeholder}`" size="xs" class="w-full" @update:model-value="bridge.write_launch(name, item.field, $event)" />
         </div>
         <div v-if="sets_access" class="expert-card-field">

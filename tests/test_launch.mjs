@@ -2,7 +2,7 @@ import assert from 'node:assert/strict';
 import { spawn, spawnSync } from 'node:child_process';
 import { randomUUID } from 'node:crypto';
 import { EventEmitter } from 'node:events';
-import { mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync, existsSync, symlinkSync, truncateSync } from 'node:fs';
+import { mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, statSync, writeFileSync, existsSync, symlinkSync, truncateSync } from 'node:fs';
 import { request as http_request } from 'node:http';
 import { tmpdir } from 'node:os';
 import { dirname, join, resolve } from 'node:path';
@@ -524,11 +524,48 @@ test('a room shares extra project directories set at creation or later, and name
   assert.equal(outside.outside_enforced, true, 'Codex CLI keeps the room read-only by its sandbox');
 });
 
-test('a room created without a project sets its main directory once, and its members keep their sessions', async t => {
+test('the owner turns a room\'s smart scheduling on, changes it and turns it off after creation', async t => {
+  const f = await fixture(t);
+  const launched = await launch_discussion(f.home, f.input, f.options);
+  const config = load_config(launched.config_path);
+  const input = { site: f.site, room_id: config.room, token: config.token };
+  const models = async () => (await room_models(f.home, input, { read_defaults: async () => ({}), read_session: () => ({}) })).scheduler;
+  assert.equal(await models(), null);
+  await assert.rejects(room_settings(f.home, { ...input, scheduler: { provider: 'jev', model: 'jev-latest', api_key_ref: 'missing' } }), /密钥|API Key|key/i, 'a key never saved is refused');
+  const { api_key_ref } = save_api_key(f.home, { base_url: 'https://api.typesafe.ai/v1', api_key: 'test-key' });
+  await assert.rejects(room_settings(f.home, { ...input, scheduler: { provider: 'nobody', model: 'x', api_key_ref } }), /供应商/);
+  await assert.rejects(room_settings(f.home, { ...input, scheduler: { provider: 'jev', model: 'jev-latest', api_key_ref }, token: 'invalid-owner' }), /403/);
+  const on = await room_settings(f.home, { ...input, scheduler: { provider: 'jev', model: 'jev-latest', api_key_ref, mode: 'stable' } });
+  assert.deepEqual(on.scheduler, { provider: 'jev', model: 'jev-latest', mode: 'stable' }, 'the key reference is never sent back');
+  assert.deepEqual(await models(), { provider: 'jev', model: 'jev-latest', mode: 'stable' });
+  assert.equal(load_config(launched.config_path).scheduler.api_key_ref, api_key_ref);
+  assert.equal((await room_settings(f.home, { ...input, scheduler: null })).scheduler, null);
+  assert.equal(await models(), null);
+  // Written as null, not dropped, so the running service's merge of the reloaded configuration turns scheduling off as well.
+  assert.equal(load_config(launched.config_path).scheduler, null);
+});
+
+test('a room created without a project works in its own folder of the draft space, which stays its project', async t => {
+  const f = await fixture(t);
+  const launched = await launch_discussion(f.home, f.input, f.options);
+  const config = load_config(launched.config_path);
+  assert.equal(dirname(config.cwd), `${f.home}-workspace`);
+  assert.ok(statSync(config.cwd).isDirectory());
+  const input = { site: f.site, room_id: config.room, token: config.token };
+  await assert.rejects(room_settings(f.home, { ...input, cwd: f.directory }), /不能更改/);
+  assert.equal((await room_models(f.home, input, { read_defaults: async () => ({}), read_session: () => ({}) })).project_directory, config.cwd);
+  const second = await launch_discussion(f.home, { ...f.input, room: { ...f.input.room, submission_id: randomUUID() } }, f.options);
+  assert.notEqual(load_config(second.config_path).cwd, config.cwd, 'each room has its own folder');
+});
+
+test('a room from before the draft space, without a project, sets its main directory once, and its members keep their sessions', async t => {
   const f = await fixture(t);
   const project = join(f.directory, 'later');
   mkdirSync(project);
   const launched = await launch_discussion(f.home, f.input, f.options);
+  const { cwd: _draft, ...before } = JSON.parse(readFileSync(launched.config_path, 'utf8'));
+  before.participants = Object.fromEntries(Object.entries(before.participants).map(([name, { cwd: _cwd, ...profile }]) => [name, profile]));
+  writeFileSync(launched.config_path, JSON.stringify(before));
   const config = load_config(launched.config_path);
   const input = { site: f.site, room_id: config.room, token: config.token };
   assert.equal((await room_settings(f.home, { ...input, cwd: project })).project_directory, project);
@@ -1214,7 +1251,14 @@ test('only the host of a room whose owner allowed it adopts a workflow, inviting
   assert.deepEqual((await adopt_workflow(f.home, { access_file: host_access, workflow_id: 'ledger' })).members, { inventory: 'DeepSeek-inventory' });
   const ledger = load_config(launched.config_path).participants['DeepSeek-inventory'];
   const pick = ({ adapter, base_url, api_protocol, model, api_key_ref: ref, project_access, effort }) => JSON.parse(JSON.stringify({ adapter, base_url, api_protocol, model, api_key_ref: ref, project_access, effort }));
-  assert.deepEqual(pick(ledger), { adapter: 'api', base_url: API_PROVIDERS.DeepSeek.base_url, api_protocol: 'chat', model: API_PROVIDERS.DeepSeek.models[0], api_key_ref, project_access: 'write' });
+  assert.deepEqual(pick(ledger), { adapter: 'api', base_url: API_PROVIDERS.DeepSeek.base_url, api_protocol: 'chat', model: API_PROVIDERS.DeepSeek.models[0], api_key_ref, project_access: 'write', effort: 'high' });
+  // An API member's effort changes alone, keeping its model; a level Pi would clamp is refused.
+  await room_member_model(f.home, { ...input, name: 'DeepSeek-inventory', effort: 'medium' });
+  assert.deepEqual(pick(load_config(launched.config_path).participants['DeepSeek-inventory']), { ...pick(ledger), effort: 'medium' });
+  await assert.rejects(room_member_model(f.home, { ...input, name: 'DeepSeek-inventory', effort: 'max' }), /不支持思考强度/);
+  await room_member_model(f.home, { ...input, name: 'DeepSeek-inventory', model: 'deepseek-v4-pro', effort: '' });
+  const { effort: ignored, ...without_effort } = pick(ledger);
+  assert.deepEqual(pick(load_config(launched.config_path).participants['DeepSeek-inventory']), { ...without_effort, model: 'deepseek-v4-pro' });
 });
 
 test('with full host control granted, only the host stops, invites at most writing and removes others, never itself', async t => {
@@ -1257,7 +1301,7 @@ test('a workflow bound at creation ends when its members are sent away, resumes 
   const launched = await launch_discussion(f.home, { site: f.site, entry: 'web', participants: f.input.participants, token, workflow,
     room: { title: '无项目工作流', mode: 'free', host: 'Codex', members: ['Codex', 'Claude'], submission_id: randomUUID() } }, f.options);
   const input = { site: f.site, room_id: launched.room.id, token }, config = load_config(launched.config_path);
-  assert.equal(config.cwd || '', '');
+  assert.equal(dirname(config.cwd), `${f.home}-workspace`);
   assert.deepEqual(config.workflow, { ...workflow, enabled: true });
   await assert.rejects(room_workflow(f.home, { ...input, token: 'wrong-owner', action: 'away' }), /403/);
   await api(config, '/messages', { author: '用户', text: '@Claude 写正文', to: ['Claude'], submission_id: randomUUID() });

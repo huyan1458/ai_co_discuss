@@ -25,7 +25,12 @@ export function validate_api_profile(profile) {
   if (!/^[a-f0-9-]{36}$/i.test(profile.api_key_ref || '')) throw new Error('请保存此 Base URL 对应的 API Key');
 }
 
-/** Save a key privately; browsers and room configuration receive only an opaque reference. */
+/**
+ * Save a key privately; browsers and room configuration receive only an opaque reference.
+ *
+ * `managed: true` marks a key the computer owner gave a hosted account from the management panel: that account's page
+ * shows it as provided and does not let it be replaced from a card.
+ */
 export function save_api_key(home, input) {
   const base_url = api_base_url(input.base_url);
   const api_key = typeof input.api_key === 'string' ? input.api_key.trim() : '';
@@ -33,8 +38,17 @@ export function save_api_key(home, input) {
   const api_key_ref = randomUUID();
   const directory = join(home, 'api-keys');
   mkdirSync(directory, { recursive: true, mode: 0o700 });
-  writeFileSync(join(directory, `${api_key_ref}.json`), JSON.stringify({ base_url, api_key }), { flag: 'wx', mode: 0o600 });
+  writeFileSync(join(directory, `${api_key_ref}.json`), JSON.stringify({ base_url, api_key, ...(input.managed === true ? { managed: true } : {}) }), { flag: 'wx', mode: 0o600 });
   return { api_key_ref };
+}
+
+/** The references of keys the computer owner provided (see save_api_key). */
+export function managed_api_keys(home) {
+  const directory = join(home, 'api-keys');
+  if (!existsSync(directory)) return [];
+  return readdirSync(directory).filter(name => /^[a-f0-9-]{36}\.json$/i.test(name)).filter(name => {
+    try { return JSON.parse(readFileSync(join(directory, name), 'utf8')).managed === true; } catch { return false; }
+  }).map(name => name.slice(0, -5));
 }
 
 /** Map each API root to its most recently saved key reference, so a new form need not ask again. */

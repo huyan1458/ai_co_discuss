@@ -112,7 +112,7 @@ function start_resize(event) {
       </WorkflowCanvas>
       <WorkflowParts v-if="draft" :compact="stacked" />
       <template v-else-if="loading">
-        <WorkflowCanvas v-model:flow="placeholder.flow" v-model:agents="placeholder.agents" :compact="stacked" inert />
+        <WorkflowCanvas v-model:flow="placeholder.flow" v-model:agents="placeholder.agents" :compact="stacked" class="workflow-library-placeholder" inert />
         <div class="workflow-library-loading" role="status"><UIcon name="i-lucide-loader-circle" class="animate-spin" /><span>{{ loading }}</span></div>
       </template>
       <div v-else class="workflow-library-empty">
@@ -149,6 +149,8 @@ function start_resize(event) {
 .workflow-library-empty { display: grid; place-content: center; justify-items: center; gap: 12px; height: 100%; color: var(--ui-text-muted); font-size: 13px; }
 .workflow-library-empty > span:first-child { width: 36px; height: 36px; color: var(--ui-text-dimmed); }
 .workflow-library-empty p { margin: 0; }
+/* The loading placeholder keeps the grid and toolbar only; its default start node would sit under the spinner. */
+.workflow-library-placeholder :deep(.vue-flow__nodes), .workflow-library-placeholder :deep(.vue-flow__edges) { visibility: hidden; }
 .workflow-library-loading { position: absolute; inset: 0; display: grid; place-content: center; justify-items: center; gap: 12px; color: var(--ui-text-dimmed); pointer-events: none; font-size: 13px; }
 .workflow-library-loading > span { width: 28px; height: 28px; }
 .workflow-library-loading > span:last-child { width: auto; height: auto; }

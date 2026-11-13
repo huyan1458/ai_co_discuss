@@ -9,9 +9,12 @@ const PROJECT_ROOT = dirname(dirname(fileURLToPath(import.meta.url)));
 const OUTPUT_PARTS = ["dist", "pages"];
 
 /** Exclude hidden files and source directories in older release snapshots. */
+// The computer owner's management panel is served only by runner/admin_panel.mjs on that computer, never online.
+const LOCAL_ONLY = new Set(["admin.html", "admin.js", "admin.css", "mark.svg", "mark-tile.svg"]);
+
 function is_web_asset(web_root, file_path) {
   const parts = relative(web_root, file_path).split(sep);
-  return parts[0] !== "modern" && !parts.some((part) => part.startsWith("."));
+  return parts[0] !== "modern" && !LOCAL_ONLY.has(parts[0]) && !parts.some((part) => part.startsWith("."));
 }
 
 /** Clear only the fixed Pages output under the supplied project directory. */

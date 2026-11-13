@@ -73,7 +73,7 @@ async function read_directory(path = "", append = false) {
 <template>
   <section class="project-files">
     <header class="project-files-heading">
-      <div><h2>项目文件</h2><p :title="directory">{{ directory }}</p></div>
+      <div><h2>项目文件</h2><p>{{ bridge.display_path(directory) }}</p></div>
       <UButton icon="i-lucide-refresh-cw" color="neutral" variant="ghost" size="sm" aria-label="刷新" title="刷新" :loading="loading" @click="read_directory(current_path)" />
     </header>
 

@@ -9,6 +9,7 @@ import { setTimeout as sleep } from 'node:timers/promises';
 import { pathToFileURL } from 'node:url';
 import { parseArgs } from 'node:util';
 
+import { account_projects, account_space, create_account_project, draft_folder } from './account_space.mjs';
 import { atomic_json } from './files.mjs';
 import { bundle_project_markdown, bundle_project_page, outside_directory, project_media, read_only_enforced, read_project_files, room_directories, search_project_roots } from './project_files.mjs';
 import { guard_remote_request, list_remote_directories } from './remote_policy.mjs';
@@ -16,7 +17,7 @@ import { list_devices, machine_fingerprint, revoke_device, start_pairing } from 
 import { setup_sidecar } from './adapters/antigravity_app.mjs';
 import { adapter_of, adoption_adapter, BRANCHABLE_ADAPTERS, branch_session, execution_details, session_settings, software_defaults, software_defaults_stamp, software_effort, software_models, software_skills } from './adapters/index.mjs';
 import { ADAPTER_IDS, ADAPTER_PROFILES, adapter_profile, DEFAULT_API_MAX_REQUESTS, MAX_API_MAX_REQUESTS, platform_adapters, same_session_family } from './adapters/profiles.mjs';
-import { API_PROVIDERS, api_check, api_models, save_api_key, saved_api_keys, validate_api_profile } from './discussion_api.mjs';
+import { API_PROVIDERS, api_check, api_models, managed_api_keys, save_api_key, saved_api_keys, validate_api_profile } from './discussion_api.mjs';
 import { DEFAULT_SCHEDULER_MODE, SCHEDULER_MODES, SCHEDULER_PROVIDERS, scheduler_check } from './scheduler.mjs';
 import { save_tts_settings, tts_release, tts_settings, tts_speak } from './tts.mjs';
 import { local_service_stop, local_services } from './tts_providers.mjs';
@@ -135,7 +136,7 @@ machine-link 返回本机连接指定 site 的电脑编号、名称与凭据，�
 room-member 为房间邀请、请回一位成员；须提供 site、room_id、token、action（add/rejoin）、name。
 room-member-access 修改一位本机唤醒成员的项目权限（project_access 为 read/write/auto/full），下次投递起生效、保留原会话；须提供 site、room_id、token、name、project_access。
 room-member-allow 把被拒绝的操作加入一位本机唤醒的 Claude Code 或 agy 成员的 allowed_tools，下次投递起生效；须提供 site、room_id、token、name、rules。
-room-member-model 修改一位本机唤醒 CLI 成员的模型与思考强度（空值恢复软件默认），下次投递起生效、保留原会话；须提供 site、room_id、token、name、model、effort。
+room-member-model 修改一位本机唤醒 CLI 或 API 成员的模型与思考强度（空值恢复软件默认；API 成员空模型保留原模型），下次投递起生效、保留原会话；须提供 site、room_id、token、name、model、effort。
 room-member-adapter 把自由房间里空闲的 Codex 成员在 App（codex）与 CLI（codex_cli）间切换，保留原会话；须提供 site、room_id、token、name、adapter。
 room-profiles 导出房间的本机成员软件配置与实际会话 ID（不含凭据），供备份附带；须提供 site、room_id、token。
 room-restore 把导入房间的本机成员配置登记到本机并核对原会话存在，Claude Code 成员保持手动；须提供 site、room_id、token、local_members。
@@ -146,7 +147,7 @@ workflow-leave 主持人用完子工作流后，把 --sub 子工作流卡片的�
 host-control 主持人代房主控制房间，须房主已为本房间打开“主持人完整权限”，凭据同上；成员用 --member（成员 ID 或显示名），除 retry、model、label 外不能是主持人自己：
   诊断：details --execution N 读取该执行的本机过程日志（服务端详情与事件记录用 execution / room events 读取）；
   恢复：stop --member 打断；stop-all 停止全部执行、请求与接力；steer --member --text 话 [--submission-id ID] 向它进行中的执行插话；
-        retry --execution N 重试失败的执行（含你自己的）；model --member [--model M] [--effort E] 改模型与强度（空值恢复默认）；
+        retry --execution N 重试失败的执行（含你自己的）；model --member [--model M] [--effort E] 改 CLI 或 API 成员的模型与强度（空值恢复默认；API 成员不填模型则保留原模型）；
         adapter --member --adapter ID 在同一软件的 App 与 CLI 间切换；access --member --access read|write 调整项目权限；
   成员：invite --name 平台 [--access read|write] [--model M] [--effort E] 用本机已配置的软件邀请，项目权限最高可写；
         away / remove / back --member 暂离、移除、请回；label --member [--label 显示名] [--description 描述]；
@@ -444,7 +445,7 @@ export async function room_files(home, raw, { trust = false } = {}) {
  */
 export async function remote_room_files(home, input) {
   assert_shared_home(home);
-  guard_remote_request('room-files', input, { projects: launch_projects(home).projects, participants: launch_settings(home).participants, home });
+  guard_remote_request('room-files', input, { projects: granted_projects(home), participants: launch_settings(home).participants, home });
   return room_files(home, input, { trust: true });
 }
 
@@ -498,14 +499,14 @@ export async function room_media(home, raw, { trust = false, parts = false } = {
 /** `room-media` asked for by another device, answered inside the relay's own process in parts. */
 export async function remote_room_media(home, input) {
   assert_shared_home(home);
-  guard_remote_request('room-media', input, { projects: launch_projects(home).projects, participants: launch_settings(home).participants, home });
+  guard_remote_request('room-media', input, { projects: granted_projects(home), participants: launch_settings(home).participants, home });
   return room_media(home, input, { trust: true, parts: true });
 }
 
 /** `room-page` asked for by another device, answered inside the relay's own process in parts, like `remote_room_files`. */
 export async function remote_room_page(home, input) {
   assert_shared_home(home);
-  guard_remote_request('room-page', input, { projects: launch_projects(home).projects, participants: launch_settings(home).participants, home });
+  guard_remote_request('room-page', input, { projects: granted_projects(home), participants: launch_settings(home).participants, home });
   return room_page(home, input, { trust: true, parts: true });
 }
 
@@ -536,7 +537,7 @@ export async function execution_details_command(home, raw, { trust = false } = {
  */
 export async function remote_execution_details(home, input) {
   assert_shared_home(home);
-  guard_remote_request('execution-details', input, { projects: launch_projects(home).projects, participants: launch_settings(home).participants, home });
+  guard_remote_request('execution-details', input, { projects: granted_projects(home), participants: launch_settings(home).participants, home });
   return execution_details_command(home, input, { trust: true });
 }
 
@@ -617,6 +618,9 @@ const PROJECT_ID_PATTERN = /^[0-9a-f]{8,32}$/;
 
 /** Read the named project directories saved on this computer, offered as launch cwd choices. */
 export function launch_projects(home) {
+  // An ordinary account's projects are the folders under its projects root; it keeps no list of its own.
+  const { projects_root } = account_space(home);
+  if (projects_root) return { projects: account_projects(projects_root), restricted: true };
   const path = join(home, 'launch-projects.json');
   return existsSync(path) ? JSON.parse(readFileSync(path, 'utf8')) : { projects: [] };
 }
@@ -624,6 +628,12 @@ export function launch_projects(home) {
 /** Replace the project list; every path must be an existing folder on this computer. */
 // The id outlives renames and moves: other devices choose a project by id and never see its path.
 export function save_launch_projects(home, input) {
+  const { projects_root } = account_space(home);
+  if (projects_root) {
+    if (typeof input.create !== 'string') throw new Error('此账号的项目只能在自己的项目文件夹内新建：请提供 create（项目名称）');
+    const created = create_account_project(projects_root, input.create);
+    return { ...launch_projects(home), created };
+  }
   if (!Array.isArray(input.projects)) throw new Error('projects 必须为列表');
   const projects = input.projects.map(item => ({ id: PROJECT_ID_PATTERN.test(item?.id) ? item.id : randomUUID().replaceAll('-', '').slice(0, 16),
     name: String(item?.name || '').trim(), path: String(item?.path || '').trim() }));
@@ -1010,18 +1020,23 @@ export async function room_member(home, raw, locked = false, headers = {}) {
  * changes: sessions and file-change tracking are bound to it); `extra_directories`, the project directories shared
  * besides the main one, replaced as a whole. Members already in a room that gets its main directory keep working where
  * their sessions are (their `cwd` is pinned to '') and reach the room's directories as extra ones; members invited later
- * work in it. Everything is read at each delivery, so it applies from the next execution and keeps every session.
+ * work in it; `image_generation`, whether members may draw with this computer's image service; `scheduler`, the room's
+ * smart scheduling ({provider, model, api_key_ref, mode}, or null to turn it off), picked up by the running service at
+ * its next tick. Everything is read at each delivery, so it applies from the next execution and keeps every session.
  */
 export async function room_settings(home, raw) {
   const { input, path } = await member_room_context(home, raw);
-  const { api_max_requests: requests, extra_directories: directories, cwd, image_generation: images } = input;
-  if (requests === undefined && directories === undefined && cwd === undefined && images === undefined) throw new Error('须提供 api_max_requests、image_generation、cwd 或 extra_directories');
+  const { api_max_requests: requests, extra_directories: directories, cwd, image_generation: images, scheduler } = input;
+  if (requests === undefined && directories === undefined && cwd === undefined && images === undefined && scheduler === undefined) throw new Error('须提供 api_max_requests、image_generation、scheduler、cwd 或 extra_directories');
+  if (scheduler !== undefined && scheduler !== null && (typeof scheduler !== 'object' || Array.isArray(scheduler))) throw new Error('scheduler 须为智能调度配置或 null');
   if (requests !== undefined && !Number.isInteger(requests)) throw new Error('api_max_requests 须为整数');
   if (images !== undefined && typeof images !== 'boolean') throw new Error('image_generation 须为 true 或 false');
   const release = acquire_lock(join(dirname(path), 'configuration-edit'));
   try {
     const config = configuration_snapshot(path).config;
     const next = { ...config, ...(requests !== undefined ? { api_max_requests: requests } : {}), ...(images !== undefined ? { image_generation: images } : {}) };
+    // Off is written as null, not dropped, so the running service's merge of the new configuration turns it off too.
+    if (scheduler !== undefined) next.scheduler = scheduler && { provider: scheduler.provider, model: scheduler.model, api_key_ref: scheduler.api_key_ref, ...(scheduler.mode ? { mode: scheduler.mode } : {}) };
     if (cwd !== undefined) {
       if (config.cwd) throw new Error('本房间已有项目目录，建房后不能更改；可添加其他项目目录');
       if (typeof cwd !== 'string' || !isAbsolute(cwd) || !existsSync(cwd) || !statSync(cwd).isDirectory()) throw new Error('项目目录须为本机已有文件夹的完整路径');
@@ -1035,6 +1050,7 @@ export async function room_settings(home, raw) {
     validate_config(next, dirname(path));
     atomic_json(path, next);
     return { room_id: input.room_id, ...(requests !== undefined ? { api_max_requests: requests } : {}), ...(images !== undefined ? { image_generation: images } : {}),
+      ...(scheduler !== undefined ? { scheduler: next.scheduler ? { provider: next.scheduler.provider, model: next.scheduler.model, mode: next.scheduler.mode || DEFAULT_SCHEDULER_MODE } : null } : {}),
       ...(cwd !== undefined ? { project_directory: cwd } : {}), ...(directories !== undefined ? { extra_directories: directories } : {}) };
   } finally { release(); }
 }
@@ -1067,9 +1083,10 @@ export async function room_member_access(home, raw) {
 }
 
 /**
- * Change a woken CLI member's model and thinking effort after the room is created. Each run passes them to the CLI, and
- * neither is part of the member's session context, so the change applies from its next delivery and keeps its session.
- * An empty value goes back to the software's default.
+ * Change a woken CLI or API member's model and thinking effort after the room is created. Each run passes them to the
+ * software, and neither is part of the member's session context, so the change applies from its next delivery and keeps
+ * its session. An empty value goes back to the software's default; an API member has no default model, so an empty
+ * model keeps its current one.
  */
 export async function room_member_model(home, raw) {
   const { input, path } = await member_room_context(home, raw);
@@ -1083,15 +1100,18 @@ export async function room_member_model(home, raw) {
     if (!profile) throw new Error(`${name} 不由本机唤醒，模型由它自己的会话决定`);
     if (profile.project_access === 'own') throw new Error(`${name} 是手动接入的成员，模型与强度沿用它自己会话的设置`);
     const facts = adapter_profile(profile.adapter);
-    if (!facts?.models) throw new Error(`${name} 的模型在 ${facts?.label || '它的软件'} 内设置`);
-    if (effort && !facts.efforts?.includes(effort)) throw new Error(`${facts.label} 不支持思考强度 ${effort}`);
-    const next = { ...profile, model, effort };
-    if (!model) delete next.model;
+    // An App chooses its model and effort in its own window; a CLI or API member's run is started with them.
+    if (!facts || facts.kind === 'app') throw new Error(`${name} 的模型在 ${facts?.label || '它的软件'} 内设置`);
+    if (effort && !facts.efforts?.includes(effort)) {
+      throw new Error(`${facts.label} 不支持思考强度 ${effort}${facts.efforts ? `，可选 ${facts.efforts.join(' / ')}` : ''}`);
+    }
+    const next = { ...profile, model: model || (facts.kind === 'api' ? profile.model : ''), effort };
+    if (!next.model) delete next.model;
     if (!effort) delete next.effort;
     const updated = { ...config, participants: { ...config.participants, [name]: next } };
     validate_config(updated, dirname(path));
     atomic_json(path, updated);
-    return { room_id: input.room_id, member: name, model, effort };
+    return { room_id: input.room_id, member: name, model: next.model || '', effort };
   } finally { release(); }
 }
 
@@ -1222,7 +1242,8 @@ export async function room_profiles(home, raw) {
     return [name, session_id ? { ...kept, session_id } : kept];
   }));
   return { room_id: input.room_id, local_members: { format: LOCAL_MEMBERS_FORMAT, version: 1, mode: 'free',
-    cwd: config.cwd, discussion_project: config.discussion_project, project_access: config.project_access, scheduler: config.scheduler, participants } };
+    cwd: config.cwd, discussion_project: config.discussion_project, project_access: config.project_access, scheduler: config.scheduler,
+    workflow: config.workflow, participants } };
 }
 
 /**
@@ -1280,7 +1301,7 @@ function register_copied_room(home, input, local, participants, keep_manual, see
   const config = { site: input.site, room: input.room_id, token: input.token, mode: 'free', participants, keep_manual, api_home: home,
     members: Object.fromEntries(Object.keys(participants).map(name => [name, { token: `${randomUUID()}${randomUUID()}`, pending: '' }])),
     scheduler: local.scheduler || undefined, cwd: local.cwd || undefined, discussion_project: local.discussion_project || undefined,
-    project_access: local.project_access || undefined, data_directory: join(directory, 'runtime'), draft_directory: service_drafts(home, join(directory, 'runtime')) };
+    project_access: local.project_access || undefined, workflow: local.workflow || undefined, data_directory: join(directory, 'runtime'), draft_directory: service_drafts(home, join(directory, 'runtime')) };
   validate_config(config, directory);
   mkdirSync(directory, { recursive: true });
   atomic_json(join(directory, 'config.json'), config);
@@ -1599,6 +1620,8 @@ async function prepare_launch(home, input, directory, options = {}) {
 export async function launch_discussion(home, raw, options = {}) {
   assert_shared_home(home);
   const input = launch_input(raw);
+  // A room created from the page without a project works in its own folder of the draft space, which is then its project.
+  if (!input.room_id && !input.cwd && input.entry === 'web' && !options.dry_run) input.cwd = draft_folder(home, input.room.title, input.room.submission_id);
   const key = createHash('sha256').update(`${input.site}/${input.room_id || input.room.submission_id}`).digest('hex');
   const directory = join(home, 'launches', key);
   let release;
@@ -1788,7 +1811,7 @@ export async function draw_image(home, { access_file, request }) {
   const profile = config.participants?.[member] || {};
   const project = open_project({ cwd: profile.cwd ?? config.cwd, project_access: profile.project_access === 'read' ? 'read' : 'write',
     extra_directories: config.extra_directories || [] }, [home, dirname(path)]);
-  const context = { image, site: config.site, room: config.room, token: access.token, participant: member, directory: dirname(path),
+  const context = { home, image, site: config.site, room: config.room, token: access.token, participant: member, directory: dirname(path),
     project, signal: new AbortController().signal, generated_attachments: [] };
   const result = await run_image_tool(context, IMAGE_ACTIONS[action], args);
   if (result.error) throw new Error(result.error);
@@ -1829,7 +1852,7 @@ async function join_workflow_cards(home, config, roster, workflow, members, card
     const taken = new Set([...roster.map(member => member.name), ...Object.values(next)]);
     const name = taken.has(agent.name) ? free_instance(agent.name, taken) : agent.name;
     const api = card_api_profile(home, platform_of(agent.name));
-    const card = Object.fromEntries(['project_access', 'model', 'effort'].filter(field => agent[field] && !(api && field === 'effort')).map(field => [field, agent[field]]));
+    const card = Object.fromEntries(['project_access', 'model', 'effort'].filter(field => agent[field]).map(field => [field, agent[field]]));
     // An API member has no command line, so a card asking for more than writing gets the most it allows.
     if (api && card.project_access && !access_levels('api').includes(card.project_access)) card.project_access = 'write';
     const profile = { ...api, ...card };
@@ -1945,7 +1968,7 @@ function host_invite_profile(home, name, { access, model, effort }) {
   const api = card_api_profile(home, platform_of(name));
   const saved = launch_settings(home).participants[platform_of(name)]?.project_access;
   const project_access = access || (HOST_CARD_ACCESS.includes(saved) ? saved : 'write');
-  return { ...api, project_access, ...(model ? { model } : {}), ...(effort && !api ? { effort } : {}) };
+  return { ...api, project_access, ...(model ? { model } : {}), ...(effort ? { effort } : {}) };
 }
 
 /** The positive execution number a host passes with --execution. */
@@ -2130,6 +2153,17 @@ function room_config_by_id(home, room_id) {
   return paths.length === 1 ? configuration_snapshot(paths[0]).config : null;
 }
 
+/**
+ * The folders a request without this computer owner's standing may use: for an ordinary account, its own projects and
+ * draft space; for another device of the owner, the saved projects.
+ */
+function granted_projects(home) {
+  const { projects_root, workspace } = account_space(home);
+  if (!projects_root) return launch_projects(home).projects;
+  mkdirSync(workspace, { recursive: true });
+  return [...account_projects(projects_root), { name: '草稿空间', path: workspace }];
+}
+
 /** Fill program locations another device left out with the ones saved here, so saving defaults cannot drop them. */
 function keep_saved_locations(home, participants) {
   const saved = launch_settings(home).participants;
@@ -2188,23 +2222,28 @@ export async function launch_main(args = process.argv.slice(2), input_text) {
   const home = service_home();
   assert_shared_home(home);
   // Another device's request may only use what this computer granted; the flag is set by the relay, never by the request.
-  if (values.remote) {
-    guard_remote_request(positionals[0], input, { projects: launch_projects(home).projects, participants: launch_settings(home).participants, home });
-    if (positionals[0] === 'room-workflow' && input?.action === 'host') throw new Error('“主持人完整权限”只能在电脑上开启');
+  // An ordinary account's instance holds every request, from any page, to that account's own folders.
+  const space = account_space(home), restricted = Boolean(space.projects_root);
+  if (values.remote || restricted) {
+    guard_remote_request(positionals[0], input, { projects: granted_projects(home), participants: launch_settings(home).participants, home });
+    if (values.remote && positionals[0] === 'room-workflow' && input?.action === 'host') throw new Error('“主持人完整权限”只能在电脑上开启');
+    if (restricted && positionals[0] === 'pick-directory') throw new Error('此账号只能使用自己的项目文件夹');
     // Another device repeats the saved program locations it cannot see; keep them rather than dropping them.
     if (positionals[0] === 'settings' && input?.participants) input.participants = keep_saved_locations(home, input.participants);
+  }
+  if (values.remote) {
     // Tool approvals saved here stay this computer's decision; a room created from another device does not take them.
     if (positionals[0] === 'start' && input) input.without_saved_tools = true;
   }
   let result;
   if (positionals[0] === 'settings') result = { ...(input ? save_launch_settings(home, input) : launch_settings(home)), api_providers: API_PROVIDERS,
-    scheduler_providers: SCHEDULER_PROVIDERS, scheduler_modes: SCHEDULER_MODES, scheduler_default_mode: DEFAULT_SCHEDULER_MODE, api_keys: saved_api_keys(home), projects: launch_projects(home).projects, ...expert_presets(home), workflows: list_workflows(home) };
+    scheduler_providers: SCHEDULER_PROVIDERS, scheduler_modes: SCHEDULER_MODES, scheduler_default_mode: DEFAULT_SCHEDULER_MODE, api_keys: saved_api_keys(home), managed_api_keys: restricted ? managed_api_keys(home) : [], projects: launch_projects(home).projects, projects_restricted: restricted, workspace: space.workspace, user_home: restricted ? homedir() : '', ...expert_presets(home), workflows: list_workflows(home) };
   else if (positionals[0] === 'projects') result = input ? save_launch_projects(home, input) : launch_projects(home);
   else if (positionals[0] === 'presets') result = input ? save_expert_presets(home, input) : expert_presets(home);
   else if (positionals[0] === 'workflows') result = await workflows_command(home, input || {});
   else if (positionals[0] === 'room-workflow' && input) result = await room_workflow(home, input);
   else if (positionals[0] === 'room-settings' && input) result = await room_settings(home, input);
-  else if (positionals[0] === 'api-key' && input) result = save_api_key(home, input);
+  else if (positionals[0] === 'api-key' && input) result = save_api_key(home, { base_url: input.base_url, api_key: input.api_key });
   else if (positionals[0] === 'api-check' && input) result = await api_check(home, input);
   else if (positionals[0] === 'scheduler-check' && input) result = await scheduler_check(home, input);
   else if (positionals[0] === 'image-settings') result = input && Object.keys(input).length ? save_image_settings(home, input) : image_settings(home);
@@ -2235,7 +2274,7 @@ export async function launch_main(args = process.argv.slice(2), input_text) {
   else if (positionals[0] === 'room-restore' && input) result = await restore_room(home, input);
   else if (positionals[0] === 'room-fork' && input) result = await fork_room(home, input);
   else if (positionals[0] === 'pick-directory') result = await pick_directory();
-  else if (positionals[0] === 'browse-directory') result = list_remote_directories(input || {}, { projects: launch_projects(home).projects, home });
+  else if (positionals[0] === 'browse-directory') result = list_remote_directories(input || {}, { projects: granted_projects(home), home });
   // Device trust from this computer's own screen; other devices reach the same actions through the relay instead.
   else if (positionals[0] === 'device-pairing' && !values.remote) {
     // The QR code opens the paired website and carries this computer's key fingerprint for the new device to check.

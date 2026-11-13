@@ -2,13 +2,14 @@
 /**
  * Image generation for a room, shaped like smart scheduling: adding the card lets the room's members draw, removing it
  * stops them. The card's address, key and image model belong to this computer (saved once, brought back for every room);
- * whether this room may draw is `enabled`, which the parent keeps (the new-room form, or the room's own settings).
+ * whether this room may draw is `enabled`, which the parent keeps (the new-room form, or the room's own settings, shown
+ * `compact` as a switch with a one-line summary whose settings open on demand).
  * The key goes only to the local private store and never comes back to the page.
  */
 import { computed, inject, nextTick, onMounted, reactive, ref } from "vue";
 import RosterAdd from "./RosterAdd.vue";
 
-const props = defineProps({ enabled: { type: Boolean, default: false }, disabled: { type: Boolean, default: false } });
+const props = defineProps({ enabled: { type: Boolean, default: false }, disabled: { type: Boolean, default: false }, compact: { type: Boolean, default: false } });
 const emit = defineEmits(["update:enabled"]);
 const { bridge } = inject("discussion");
 const LABEL = "OpenAI Images";
@@ -74,6 +75,14 @@ async function save_key() {
   finally { saving.value = false; }
 }
 function add() { if (!props.enabled) emit("update:enabled", true); }
+/** The compact row's switch: on opens the settings when this computer has no usable service yet, off closes them. */
+function toggle(enabled) {
+  emit("update:enabled", enabled);
+  if (enabled && status.value.tone !== "ready") open_settings();
+  if (!enabled) editing.value = false;
+}
+// The compact row's one line: the model, or what this computer's service still lacks.
+const summary = computed(() => !props.enabled ? "未开启" : status.value.tone !== "ready" ? `${LABEL} · ${status.value.text}` : `${LABEL} · ${settings.model}`);
 function remove() {
   editing.value = false;
   emit("update:enabled", false);
@@ -82,14 +91,21 @@ function remove() {
 </script>
 
 <template>
-  <div class="image-service">
-    <div>
+  <div class="image-service" :class="{ 'is-compact': compact }">
+    <div v-if="compact" class="image-row">
+      <UCheckbox :model-value="enabled" :disabled="disabled || Boolean(unavailable)" label="开启" aria-label="本房间开启生图"
+        :title="unavailable ? `需连接本机服务：${unavailable}` : undefined" @update:model-value="toggle" />
+      <span class="image-summary" :title="summary">{{ summary }}</span>
+      <UButton v-if="enabled && !disabled && !unavailable" :icon="editing ? 'i-lucide-chevron-up' : 'i-lucide-settings-2'" :label="editing ? '收起' : '设置'" size="xs" color="neutral" variant="ghost"
+        :aria-expanded="editing" aria-label="设置生图服务" @click="editing ? editing = false : open_settings()" />
+    </div>
+    <div v-else>
       <p class="image-title">生图<UBadge size="xs" variant="soft" class="image-badge">图片模型</UBadge><small>可选</small></p>
       <p class="image-description">接入图片模型，房间里的成员都能按需出图、改图，图片随回答发出；按张计费。</p>
     </div>
-    <RosterAdd ref="add_row" label="添加生图服务" :items="add_items" @add="add" />
-    <p v-if="!enabled" class="image-empty">未添加。房间里的成员不能画图。</p>
-    <div v-else class="image-cards">
+    <RosterAdd v-if="!compact" ref="add_row" label="添加生图服务" :items="add_items" @add="add" />
+    <p v-if="!enabled && !compact" class="image-empty">未添加。房间里的成员不能画图。</p>
+    <div v-else-if="enabled && (!compact || editing)" class="image-cards">
       <div class="image-slot">
         <div class="image-card" :class="{ 'is-editing': editing }">
           <template v-if="!editing">
@@ -133,6 +149,10 @@ function remove() {
 <style scoped>
 /* Same card, slot and sizes as smart scheduling (SchedulerSettings.vue), so the two sections read as one kind. */
 .image-service { display: flex; flex-direction: column; gap: 10px; padding-top: 14px; border-top: 1px solid var(--ui-border-muted); }
+/* In the room's settings the row sits in its own cell, so it needs no top rule. */
+.image-service.is-compact { padding-top: 0; border-top: 0; }
+.image-row { display: flex; align-items: center; gap: 10px; min-width: 0; }
+.image-summary { flex: 1; min-width: 0; overflow: hidden; color: var(--ui-text-muted); font-size: 13px; white-space: nowrap; text-overflow: ellipsis; }
 .image-cards { display: grid; grid-template-columns: repeat(auto-fill, minmax(min(258px, 100%), 282px)); align-items: start; gap: 8px; }
 .image-card { position: relative; display: flex; flex-direction: column; min-width: 0; height: 100cqi; border: 1px solid var(--channel-edge-control, var(--ui-border)); border-radius: 8px; background: color-mix(in srgb, var(--ui-bg-elevated) 45%, var(--ui-bg)); box-shadow: var(--channel-shadow-control); }
 .image-card:hover { border-color: var(--ui-border-accented); }

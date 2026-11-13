@@ -247,7 +247,7 @@ html[data-theme^="channel"] .channel-menu.channel-directory-menu { min-width: 15
 .channel-search-input [class*="icon"] { width: 14px; height: 14px; color: #929ba9; }
 .channel-search-input [data-slot="trailing"] > button { width: 23px; height: 23px; padding: 4px; border-radius: 3px; }
 .channel-source-filter[aria-pressed="true"] { color: #c4caff !important; background: #5865f22b; }
-.channel-work-status { display: flex; align-items: center; gap: 6px; min-width: 0; height: 29px; padding: 0 9px; border: 0; border-radius: 5px; background: transparent; color: var(--ui-text-toned); font-size: 12px; white-space: nowrap; cursor: pointer; }
+.channel-work-status { display: flex; align-items: center; gap: 6px; min-width: 0; max-width: 240px; height: 29px; padding: 0 9px; border: 0; border-radius: 5px; background: transparent; color: var(--ui-text-toned); font-size: 12px; white-space: nowrap; cursor: pointer; }
 .channel-work-status:hover { background: var(--ui-bg-elevated); }
 .channel-work-avatars { display: flex; }
 .channel-work-avatars > * + * { margin-left: -6px; }
@@ -390,7 +390,7 @@ html[data-theme^="channel"] .pb-end:hover { border-color: color-mix(in srgb, #f0
 .channel-person-label small { display: block; color: #828c9b; font-size: 10px; line-height: 16px; }
 
 /* Center the transcript and composer in one shared, user-selected reading column. */
-.channel-conversation { position: relative; min-height: 0; flex: 1; display: grid; grid-template-columns: 84px minmax(0, 1fr); grid-template-rows: auto minmax(0, 1fr) auto; }
+.channel-conversation, .room-welcome { position: relative; min-height: 0; flex: 1; display: grid; grid-template-columns: 84px minmax(0, 1fr); grid-template-rows: auto minmax(0, 1fr) auto; }
 .channel-filter-summary { grid-column: 1 / -1; grid-row: 1; display: flex; align-items: center; justify-content: space-between; padding: 7px 24px; background: #5865f214; border-bottom: 1px solid #5865f224; font-size: 12px; color: #bfc7f4; }
 .channel-locate { display: flex; justify-content: flex-end; margin: -6px 0 6px; }
 /* The map spans the composer row too, so a growing draft never shifts its center. */
@@ -428,6 +428,8 @@ html[data-theme^="channel"] .channel-nav-preview { position: fixed; top: 0; z-in
 html[data-theme^="channel"] .channel-nav-preview-text :is(h1, h2, h3, h4, h5, h6) { font-size: 13px; margin-block: 0 5px; }
 html[data-theme^="channel"] .channel-nav-preview-text p { margin-bottom: 6px; }
 .channel-transcript { grid-column: 2; grid-row: 2; min-width: 0; min-height: 0; overflow-y: auto; overscroll-behavior: contain; scrollbar-gutter: stable both-edges; padding: 16px 0 28px; }
+/* Without scroll anchoring, the sub-pixel pad that keeps each earlier slice's shift a whole pixel (preload_slice). */
+.channel-transcript::before { content: ""; display: block; height: var(--preload-pad, 0px); }
 .channel-message-group { width: 100%; max-width: var(--channel-reading-width); margin: 0 auto; }
 /* Cards off screen skip layout and paint: on slow devices laying out a long room stalled the earlier-card preload.
    Their height is a guess until they near the screen, so this is only where the browser keeps the reading position as
@@ -503,7 +505,7 @@ html[data-theme^="channel"] .channel-message.channel-topic-card { color: var(--u
   .channel-working-strip:is(:hover, :focus-within) .channel-message-toolbar { opacity: 1; pointer-events: auto; }
 }
 @media (min-width: 701px) {
-  .channel-conversation { --message-action-width: 40px; --message-action-gap: 8px; --message-inset-end: calc(16px + var(--message-action-width) + var(--message-action-gap)); }
+  .channel-conversation, .room-welcome { --message-action-width: 40px; --message-action-gap: 8px; --message-inset-end: calc(16px + var(--message-action-width) + var(--message-action-gap)); }
   .channel-message { margin-right: var(--message-inset-end) !important; }
   .channel-composer-dock > .channel-composer-column { padding-right: var(--message-inset-end); }
   .channel-latest-dock { padding-right: calc(var(--message-inset-end) - 16px); }
@@ -517,12 +519,12 @@ html[data-theme^="channel"] .channel-message.channel-topic-card { color: var(--u
   /* The column hangs beside the card, outside its text: on a short card it runs past the bottom edge instead of padding the card with blank lines. */
 }
 @media (min-width: 701px) and (max-width: 1199px) {
-  .channel-conversation { --message-action-width: 52px; --message-action-button: 44px; }
+  .channel-conversation, .room-welcome { --message-action-width: 52px; --message-action-button: 44px; }
 }
 /* Touch screens wider than a phone have no hover, so a column beside every card would always show detached from it:
    the toolbar sits in the card's top-right corner as on a phone, and the cards take back the column's width. */
 @media (min-width: 701px) and (hover: none), (min-width: 701px) and (pointer: coarse) {
-  .channel-conversation { --message-inset-end: 16px; --message-action-button: 32px; }
+  .channel-conversation, .room-welcome { --message-inset-end: 16px; --message-action-button: 32px; }
   :is(.channel-message, .channel-working-strip)::after { content: none; }
   .channel-message-actions { inset: 12px 8px 12px auto; width: auto; }
   .channel-message-toolbar { position: static; flex-direction: row; width: fit-content; }
@@ -723,6 +725,8 @@ html[data-theme^="channel"] .channel-menu [data-slot="label"] { color: #8e97a9; 
 }
 /* Project paths are long: the menu stays readable width and paths end in an ellipsis (full path in the manager). */
 html[data-theme^="channel"] .channel-menu.project-menu { width: min(400px, calc(100vw - 32px)); }
+/* Opened from a full-width field, the list takes the field's width like a select. */
+html[data-theme^="channel"] .channel-menu.project-menu.project-menu-field { width: var(--reka-dropdown-menu-trigger-width); max-height: min(320px, var(--reka-dropdown-menu-content-available-height)); }
 html[data-theme^="channel"] .project-menu :is([data-slot="itemWrapper"], [data-slot="itemLabel"], [data-slot="itemDescription"]) { min-width: 0; overflow: hidden; white-space: nowrap; text-overflow: ellipsis; }
 html[data-theme^="channel"] .project-menu [data-slot="itemDescription"] { font-family: ui-monospace, SFMono-Regular, Consolas, monospace; font-size: 10.5px; }
 html[data-theme^="channel"] .project-menu [data-slot="itemTrailingIcon"] { color: var(--channel-accent); }
@@ -916,7 +920,7 @@ html[data-theme^="channel"] .advanced-fields { border-color: #414957; }
   .channel-header-actions { grid-column: 3; grid-row: 1; min-width: 0; max-width: 52vw; margin-left: 0; gap: 3px; }
   .channel-info-button { grid-column: 4; grid-row: 1; }
   .channel-title-icon, .channel-search { display: none; }
-  .channel-work-status { padding: 0 6px; }
+  .channel-work-status { max-width: 132px; padding: 0 6px; }
   .channel-tabbar { display: flex; height: 36px; padding-inline: 8px; }
   .channel-tabs [data-slot="list"] { padding-block: 3px; }
   /* Phone room tabs keep a finger-sized target; past the width they scroll sideways rather than squeeze. */
@@ -931,7 +935,7 @@ html[data-theme^="channel"] .advanced-fields { border-color: #414957; }
   .channel-brief-footer { flex-direction: column; gap: 2px; }
   .channel-brief-footer small { margin-left: 0; }
   .channel-brief-text { font-size: 13px; }
-  .channel-conversation { grid-template-columns: 0 minmax(0, 1fr); }
+  .channel-conversation, .room-welcome { grid-template-columns: 0 minmax(0, 1fr); }
   .channel-message-map { display: none; }
   .channel-composer-dock { grid-column: 1 / -1; }
   .channel-filter-summary { padding: 6px 16px; font-size: 11px; }

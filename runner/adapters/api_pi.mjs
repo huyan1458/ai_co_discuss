@@ -19,6 +19,7 @@ import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { marked, prompt_text, tree_killable } from './common.mjs';
 import { WRITE_TOOLS } from './api_files.mjs';
+import { adapter_profile } from './profiles.mjs';
 
 // The provider our extension registers; the model ID is passed to Pi unchanged.
 export const PI_PROVIDER = 'codiscuss';
@@ -43,14 +44,23 @@ export function pi_home(service_home) {
   return { agent: join(root, 'agent'), sessions: join(root, 'sessions') };
 }
 
+/**
+ * The thinking level Pi is started with: the member's effort when it is one the API profile offers, else '' so no
+ * reasoning parameter is sent and the provider's own default applies. Pi maps the level to each protocol's parameter.
+ */
+export function pi_thinking(profile) {
+  return adapter_profile('api').efforts.includes(profile.effort) ? profile.effort : '';
+}
+
 /** The provider our extension registers for one member: its Base URL, protocol and model, its key from the environment. */
 export function pi_provider(profile, base_url) {
   const api = PI_APIS[profile.api_protocol];
   if (!api) throw new Error('不支持的 API 请求协议');
   // Pi's Anthropic SDK adds /v1 itself; the other protocols take the root including the version, as we store it.
   const url = profile.api_protocol === 'anthropic' ? base_url.replace(/\/v1$/, '') : base_url;
+  // Pi drops the thinking level for a model not marked as reasoning, so only a chosen effort marks it.
   return { name: 'CoDiscuss', baseUrl: url, apiKey: '$CODISCUSS_PI_KEY', api, models: [{ id: profile.model, name: profile.model,
-    reasoning: false, input: ['text'], cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 }, contextWindow: CONTEXT_WINDOW,
+    reasoning: Boolean(pi_thinking(profile)), input: ['text'], cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 }, contextWindow: CONTEXT_WINDOW,
     maxTokens: MAX_OUTPUT_TOKENS }] };
 }
 
@@ -166,7 +176,8 @@ export function pi_delivery({ cli, profile, key, binding, task, context_file, sy
   const args = [cli, '--mode', 'rpc', '--no-builtin-tools', '--no-context-files', '--no-skills', '--no-prompt-templates',
     '--no-themes', '--no-mcp', '--no-approve', '-e', EXTENSION, '--session-dir', dirs.sessions,
     ...(existing ? ['--session', existing] : ['--session-id', session_id]),
-    '--provider', PI_PROVIDER, '--model', profile.model, '--system-prompt', system_file];
+    '--provider', PI_PROVIDER, '--model', profile.model, ...(pi_thinking(profile) ? ['--thinking', pi_thinking(profile)] : []),
+    '--system-prompt', system_file];
   // Pi tells the model its working directory, so it is the project root our file tools resolve relative paths against;
   // without a project, Pi's own directory. Never the room's: Windows cannot remove a running process's directory.
   const child = tree_killable(spawn_process(process.execPath, args, { cwd: project_root || dirs.agent, windowsHide: true, shell: false,

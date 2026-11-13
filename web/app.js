@@ -133,8 +133,10 @@ state.attachment_drafts = [];
 state.upload_status = "";
 state.sending_message = false;
 // The message being sent, shown in the transcript as soon as Send is pressed until the site answers;
-// a failed send keeps it in place, marked with its reason, until it is retried or discarded.
+// a failed send leaves it for a failed card (failed_sends), kept until it is sent again or discarded.
 state.sending_preview = null;
+// Sends that failed, each kept as a card that sends it again: [{ id, preview, room_id, draft, drafts, reply_to, submission }].
+state.failed_sends = [];
 state.attachment_preview = null;
 state.archive_changes = new Map();
 state.archive_version = 0;
@@ -1082,6 +1084,8 @@ async function select_room(room_id) {
   state.topic_dirty = false;
   state.pending_submission = null;
   state.sending_drafts = null;
+  for (const failed of state.failed_sends) release_files(failed.drafts);
+  state.failed_sends = [];
   clear_attachment_drafts();
   state.launch.repair = null;
   state.launch.room_models = null;
@@ -1644,7 +1648,6 @@ async function finish_message(result, room_id, drafts) {
   if (state.room?.id !== room_id || state.sending_drafts !== drafts) return;
   // The composer was emptied on send; what is in it now was typed since and stays.
   state.pending_submission = null;
-  cancel_reply();
   state.query = "";
   state.mention_only = false;
   state.host_only = false;
@@ -1667,7 +1670,6 @@ async function finish_message(result, room_id, drafts) {
 async function finish_queued(result, room_id, drafts) {
   if (state.room?.id !== room_id || state.sending_drafts !== drafts) return;
   state.pending_submission = null;
-  cancel_reply();
   state.sending_preview = null;
   if (state.room.free) state.room = { ...state.room, free: { ...state.room.free, queued_messages: result.queue } };
   run_action(refresh_room);
@@ -1718,7 +1720,7 @@ async function send_queued(id) {
   const item = state.room?.free?.queued_messages?.items?.find(entry => entry.id === id);
   // A send from the composer already owns the sending card; this one then just waits in its row.
   const preview = item && !state.sending_preview
-    ? { author: "用户", text: item.text, created_at: new Date().toISOString(), files: item.attachments.map(file => file.file_name) } : null;
+    ? { author: "用户", text: item.text, created_at: new Date().toISOString(), files: item.attachments.map(file => ({ name: file.file_name })) } : null;
   if (preview) { state.sending_preview = preview; publish_view(); }
   try { await queue_request({ action: "send", id }); }
   finally { if (preview && state.sending_preview === preview) { state.sending_preview = null; publish_view(); } }
@@ -1758,11 +1760,13 @@ async function send_message(event) {
   payload.submission_id = state.pending_submission.id;
   element("send-message").disabled = true;
   state.sending_message = true;
-  // The text leaves the composer at once and lives on as the sending card; a failed send puts it back.
+  // The text, the reply and the files leave the composer at once and live on as the sending card; a failed send stays
+  // there as a failed card that sends again, and the composer is never filled back (2026-11-12 user's choice).
   const draft = element("message-input").value;
   element("message-input").value = "";
-  const preview = { author: payload.author, text: payload.text, created_at: new Date().toISOString(), files: drafts.map(file => file.file.name) };
-  // The files leave with it and upload in the background; a failed send puts them back too.
+  const reply_to = state.reply_to;
+  cancel_reply();
+  const preview = { author: payload.author, text: payload.text, created_at: new Date().toISOString(), files: drafts.map(file => ({ name: file.file.name, preview_url: file.preview_url })) };
   state.sending_drafts = drafts;
   state.attachment_drafts = [];
   // A message the site will likely queue skips the in-transcript card, which would flash before moving above the composer.
@@ -1774,35 +1778,76 @@ async function send_message(event) {
   publish_view();
   try {
     payload.attachment_ids = await upload_message_attachments(room_id, payload.submitted_by, drafts);
+    // The saved card shows these files from this browser's own copy rather than reading them back through the relay.
+    for (const item of drafts) {
+      const path = `/api/rooms/${encodeURIComponent(room_id)}/attachments/${encodeURIComponent(item.uploaded)}/content`;
+      if (!relay_files.has(path)) relay_files.set(path, Promise.resolve(URL.createObjectURL(item.file)));
+    }
     const result = await request_json(`/api/rooms/${room_id}/messages`, payload);
     saved = true;
     if (result.queued) await finish_queued(result, room_id, drafts);
     else await finish_message(result, room_id, drafts);
   } catch (error) {
     if (state.room?.id !== room_id) throw error;
-    // An unsaved message stays as a failed card in place, the one signal of this failure; the draft is kept for the retry.
+    // An unsaved message stays as a failed card in place, the one signal of this failure; the card keeps what it sends again.
     if (saved) notify_failure(error, `留言已保存，但页面刷新失败：${error.message}`);
     else {
-      state.sending_preview = { ...preview, failed: error.message };
-      // Anything typed meanwhile follows the restored draft, so neither is lost.
-      const typed = element("message-input").value;
-      element("message-input").value = typed.trim() ? `${draft}\n\n${typed}` : draft;
-      if (state.sending_drafts === drafts) state.attachment_drafts = [...drafts, ...state.attachment_drafts];
+      state.failed_sends = [...state.failed_sends, { id: new_submission_id(), preview: { ...preview, failed: error.message },
+        room_id, draft, drafts, reply_to, submission: state.pending_submission }];
       error.notified = true;
     }
     throw error;
   } finally {
     state.sending_message = false;
-    // Previews of files not put back into the composer are no longer shown anywhere.
-    if (!state.attachment_drafts.includes(drafts[0])) for (const file of drafts) if (file.preview_url) URL.revokeObjectURL(file.preview_url);
+    // Previews of files not kept by a failed card are no longer shown anywhere.
+    if (!state.failed_sends.some((failed) => failed.drafts === drafts)) release_files(drafts);
     if (state.sending_drafts === drafts) state.sending_drafts = null;
-    sent();
-    if (!state.sending_preview?.failed) state.sending_preview = null;
+    sent(saved);
+    state.sending_preview = null;
     state.upload_status = "";
     element("send-message").disabled = false;
     render_attachment_drafts();
     publish_view();
   }
+}
+
+/** Let go of the local previews of files no card shows any more. */
+function release_files(drafts) {
+  for (const file of drafts) if (file.preview_url) URL.revokeObjectURL(file.preview_url);
+}
+
+/**
+ * Send a failed card's message again, as it was, with the same submission (so a send that did reach the site is not
+ * saved twice); whatever is in the composer now stays there. Failed cards are this page's own and any number may wait.
+ */
+async function retry_sending(id) {
+  const failed = state.failed_sends.find((item) => item.id === id);
+  if (!failed || state.sending_message || state.room?.id !== failed.room_id) return;
+  const typed = element("message-input").value, typed_drafts = state.attachment_drafts, typed_reply = state.reply_to;
+  const typed_submission = state.pending_submission, reply_hidden = element("reply-preview").hidden;
+  element("message-input").value = failed.draft;
+  state.attachment_drafts = failed.drafts;
+  state.reply_to = failed.reply_to;
+  state.pending_submission = failed.submission;
+  state.failed_sends = state.failed_sends.filter((item) => item !== failed);
+  // send_message takes the message before its first wait; the composer gets back what it held.
+  const sending = send_message({ preventDefault() {} });
+  element("message-input").value = typed;
+  state.attachment_drafts = typed_drafts;
+  state.reply_to = typed_reply;
+  element("reply-preview").hidden = reply_hidden;
+  if (typed_submission) state.pending_submission = typed_submission;
+  render_attachment_drafts();
+  publish_view();
+  await sending;
+}
+
+/** Drop a failed card and the message it held. */
+function discard_sending(id) {
+  const failed = state.failed_sends.find((item) => item.id === id);
+  if (!failed) return;
+  release_files(failed.drafts);
+  state.failed_sends = state.failed_sends.filter((item) => item !== failed);
 }
 
 /** Format sizes for the file cards and composer. */
@@ -1848,7 +1893,8 @@ function attachment_file_icon(file_name) {
 
 /** Keep original files in memory until sending; reject an invalid selection as a whole. */
 function add_attachments(files) {
-  if (!state.room) return;
+  // Without a room the welcome page's composer collects them for the room its first message creates.
+  if (state.room?.archived) return;
   const selected = Array.from(files);
   if (state.attachment_drafts.length + selected.length > MAX_MESSAGE_ATTACHMENTS) notify("warning", "每条消息最多 10 个附件");
   else if (selected.some(file => file.size > MAX_ATTACHMENT_BYTES)) notify("warning", "单个附件最多 20 MiB");
@@ -2268,18 +2314,29 @@ function launch_ready(name) {
  * that can start as the only member and host, the message's first line as the title; then send the message there. */
 async function quick_create_room(text) {
   text = String(text || "").trim();
-  if (!text) return;
-  await reset_create_form(null);
-  const name = Object.keys(IDENTITIES).find(item => item !== "用户" && LAUNCH_CLIENTS[item] && (default_launch_entry(item), launch_ready(item)));
-  if (!name) throw new Error("还没有可直接唤醒的 AI：请先配置本机 AI 的接入");
-  write_view_expert("new-expert-modes", name, "cli");
-  write_view_field("new-room-host", name, { publish: false });
-  write_view_field("new-room-title", text.split("\n")[0].slice(0, ROOM_TITLE_MAX_LENGTH), { publish: false });
-  if (state.create_discussion) write_view_field("new-room-goal", text.slice(0, ROOM_GOAL_MAX_LENGTH), { publish: false });
-  if (state.create_goal) state.create_goal = { ...state.create_goal, objective: text };
-  await submit_room({ preventDefault() {} });
-  if (!state.room || state.room.archived) return;
+  // The files picked on the welcome page go with the first message; opening the new room would otherwise drop them.
+  const drafts = state.attachment_drafts;
+  if (!text && !drafts.length) return;
+  state.attachment_drafts = [];
+  try {
+    await reset_create_form(null);
+    const name = Object.keys(IDENTITIES).find(item => item !== "用户" && LAUNCH_CLIENTS[item] && (default_launch_entry(item), launch_ready(item)));
+    if (!name) throw new Error("还没有可直接唤醒的 AI：请先配置本机 AI 的接入");
+    write_view_expert("new-expert-modes", name, "cli");
+    write_view_field("new-room-host", name, { publish: false });
+    const title = text.split("\n")[0] || drafts[0].file.name;
+    write_view_field("new-room-title", title.slice(0, ROOM_TITLE_MAX_LENGTH), { publish: false });
+    if (state.create_discussion) write_view_field("new-room-goal", (text || title).slice(0, ROOM_GOAL_MAX_LENGTH), { publish: false });
+    if (state.create_goal) state.create_goal = { ...state.create_goal, objective: text || title };
+    await submit_room({ preventDefault() {} });
+  } finally {
+    // Still on the welcome page (creation failed): the files stay in its composer for another try.
+    if (!state.room) { state.attachment_drafts = drafts; render_attachment_drafts(); }
+  }
+  if (!state.room) return;
+  if (state.room.archived) { release_files(drafts); return; }
   element("message-input").value = text;
+  state.attachment_drafts = drafts;
   await send_message({ preventDefault() {} });
 }
 
@@ -2356,13 +2413,16 @@ async function local_launch_request(action, payload) {
   // A website without rooms of its own reaches the computer only through the relay; pairing itself still needs the local bridge.
   if (relay_machine && (!local_connection || computer_rooms_only() && action !== "machine-link")) return relay_command(action, payload);
   // Only the computer's own page has a local service at this address; elsewhere the computer is reached through the relay alone.
-  if (!local_connection && !["127.0.0.1", "localhost"].includes(location.hostname)) throw Object.assign(new Error(COMPUTER_UNREACHABLE), { preflight: true });
+  // An account entry on the computer forwards to the local website, which then reports itself as local under another address.
+  if (!local_connection && !state.admin.local && !["127.0.0.1", "localhost"].includes(location.hostname)) throw Object.assign(new Error(COMPUTER_UNREACHABLE), { preflight: true });
   const headers = { "Content-Type": "application/json", "X-CoDiscuss-Local": "1" };
   if (local_connection) headers["X-CoDiscuss-Connection"] = local_connection.token;
   let response;
   try {
+    // A bridged website's request carries its own credential header; the page's own site may sit behind an account entry,
+    // whose sign-in is a cookie.
     response = await fetch(`${local_connection?.endpoint || ""}/api/local/${action}`, {
-      method: payload === undefined ? "GET" : "POST", headers, credentials: "omit", redirect: "error",
+      method: payload === undefined ? "GET" : "POST", headers, credentials: local_connection ? "omit" : "same-origin", redirect: "error",
       body: payload === undefined ? undefined : JSON.stringify(payload),
       ...(payload === undefined || ["room-models", "models", "api-check", "scheduler-check"].includes(action)
         ? { signal: AbortSignal.timeout(["room-models", "models", "api-check", "scheduler-check"].includes(action) ? MODEL_CATALOG_TIMEOUT_MS : LOCAL_CONNECTION_TIMEOUT_MS) } : {}) });
@@ -3087,7 +3147,7 @@ function discard_launch(id) {
 
 /** Load reusable client settings once; this neither registers rooms nor starts AI. */
 async function load_launch_settings() {
-  const local = ["127.0.0.1", "localhost"].includes(location.hostname);
+  const local = state.admin.local || ["127.0.0.1", "localhost"].includes(location.hostname);
   state.launch.room_models = null;
   state.launch.model_catalogs = {};
   state.launch.connect_command = local ? "codiscuss local open" : `codiscuss local connect "${location.origin}"`;
@@ -3112,7 +3172,7 @@ async function load_launch_settings() {
     // Keep the saved machine defaults so every new form can start from them again.
     state.launch.saved_profiles = JSON.parse(JSON.stringify(settings.participants || {}));
     state.launch.create_preferences = { ...settings.create_preferences, ...create_preferences_pending };
-    Object.assign(state.launch, { available: true, profiles: settings.participants, projects: settings.projects || [], api_providers: settings.api_providers || {}, api_keys: settings.api_keys || {},
+    Object.assign(state.launch, { available: true, profiles: settings.participants, projects: settings.projects || [], projects_restricted: settings.projects_restricted === true, user_home: settings.user_home || "", api_providers: settings.api_providers || {}, api_keys: settings.api_keys || {}, managed_api_keys: settings.managed_api_keys || [],
       presets: settings.presets || [], builtin_presets: settings.builtin_presets || [], hidden_builtins: settings.hidden_builtins || [], workflows: settings.workflows || [], description_templates: settings.description_templates || {},
       scheduler_providers: settings.scheduler_providers || {}, scheduler_modes: settings.scheduler_modes || {}, scheduler_default_mode: settings.scheduler_default_mode || "", error: "",
       notice: relay_machine ? `经电脑「${relay_machine.name}」执行本机操作` : local_connection ? "已连接本机服务，讨论保存在当前网站" : "" });
@@ -3212,7 +3272,8 @@ async function load_room_models() {
     const result = await local_launch_request("room-models", { room_id: room.id, quick: true });
     if (live() && result.room_id === room.id) Object.assign(current, { participants: result.participants, registered: result.registered,
       scheduler: result.scheduler || null, project_directory: result.project_directory || "", extra_directories: result.extra_directories || [],
-      workflow: result.workflow || null, host_workflows: Boolean(result.host_workflows), api_max_requests: result.api_max_requests });
+      workflow: result.workflow || null, host_workflows: Boolean(result.host_workflows), api_max_requests: result.api_max_requests,
+      image_generation: Boolean(result.image_generation), image_configured: Boolean(result.image_configured) });
     if (live() && result.room_id === room.id) {
       // Compared with the last answer for this room, which a reload clears from the state but not from here.
       if (members_seen?.room_id === room.id) warn_outside_members(members_seen.participants, result.participants);
@@ -3597,9 +3658,29 @@ async function set_room_api_max_requests(value) {
 async function set_room_image_generation(enabled) {
   const room_id = state.room.id;
   const token = localStorage.getItem(`discuss-access:${room_id}`) || "";
-  try { await local_launch_request("room-settings", { room_id, token, image_generation: Boolean(enabled) }); }
+  let result;
+  try { result = await local_launch_request("room-settings", { room_id, token, image_generation: Boolean(enabled) }); }
   catch (error) { notify("error", error.message); throw error; }
-  await reload_room_models();
+  update_room_models(room_id, { image_generation: Boolean(result.image_generation) });
+}
+
+/**
+ * Turn this room's smart scheduling on with `{provider, model, api_key_ref, mode}`, change it, or turn it off with null;
+ * the running service picks it up at its next check. Throws the local service's reason.
+ */
+async function set_room_scheduler(scheduler) {
+  const room_id = state.room.id;
+  const token = localStorage.getItem(`discuss-access:${room_id}`) || "";
+  const value = scheduler && { provider: scheduler.provider, model: scheduler.model, api_key_ref: scheduler.api_key_ref, ...(scheduler.mode ? { mode: scheduler.mode } : {}) };
+  const result = await local_launch_request("room-settings", { room_id, token, scheduler: value });
+  update_room_models(room_id, { scheduler: result.scheduler || null });
+}
+
+/** Change the saved room choices in place, so open settings stay open instead of the whole section being read again. */
+function update_room_models(room_id, fields) {
+  if (state.launch.room_models?.room_id !== room_id) return;
+  Object.assign(state.launch.room_models, fields);
+  publish_view();
 }
 
 /** Whether the new room's host may save and enable workflows by itself, inviting their cards. */
@@ -3730,20 +3811,21 @@ function write_scheduler(field, value) {
 }
 
 /** Ask the local service to send the decision model one tiny question; throws its reason on failure. */
-async function check_scheduler() {
-  const { provider, model, api_key_ref } = state.launch.scheduler;
+async function check_scheduler(scheduler = state.launch.scheduler) {
+  const { provider, model, api_key_ref } = scheduler;
   await local_launch_request("scheduler-check", { provider, model, api_key_ref });
 }
 
-/** Save the scheduling provider's key to the local private store, under that provider's official root. */
-async function save_scheduler_api_key(api_key) {
+/** Save a scheduling provider's key (the draft's by default) to the local private store, under its official root; returns its reference. */
+async function save_scheduler_api_key(api_key, provider = state.launch.scheduler.provider) {
   const scheduler = state.launch.scheduler;
-  const base_url = state.launch.scheduler_providers?.[scheduler.provider]?.base_url;
+  const base_url = state.launch.scheduler_providers?.[provider]?.base_url;
   if (!base_url) throw new Error("请先选择智能调度供应商");
   const result = await local_launch_request("api-key", { base_url, api_key });
   state.launch.api_keys = { ...state.launch.api_keys, [base_url]: result.api_key_ref };
-  if (state.launch.scheduler === scheduler && state.launch.scheduler_providers[scheduler.provider].base_url === base_url) scheduler.api_key_ref = result.api_key_ref;
+  if (state.launch.scheduler === scheduler && state.launch.scheduler_providers[scheduler.provider]?.base_url === base_url) scheduler.api_key_ref = result.api_key_ref;
   publish_view();
+  return result.api_key_ref;
 }
 
 /** Describe effective placement and binding from the same explicit draft sent to the launcher. */
@@ -3751,7 +3833,7 @@ function launch_summary(name) {
   const profile = state.launch.profiles[name] || {};
   if (profile.adapter === "api") {
     const directory = profile.cwd || state.launch.workspace.cwd;
-    return { client: `API · ${profile.model || "待选择模型"}`, session: "按房间记录接续", cwd: directory || "未指定，只读写房间消息",
+    return { client: `API · ${profile.model || "待选择模型"}`, session: "按房间记录接续", cwd: display_path(directory) || "未指定，只读写房间消息",
       project: "房间上下文", access: directory ? `项目${ACCESS_LABELS[launch_access(name)] || "只读"}（文件工具，无命令行）` : "无项目目录" };
   }
   if (!profile.adapter) return { client: "尚未选择客户端", session: "尚未配置",
@@ -3773,7 +3855,7 @@ function launch_summary(name) {
   return { client: cli_directory && choice ? `${label} · ${choice}` : label,
     session: profile.session_id ? "复用指定会话" : "新建会话",
     cwd: !cli_directory && profile.session_id ? "沿用指定会话的目录"
-      : directory || (cli_directory ? "本次讨论的私有目录" : "由 App 项目确定"), project, access };
+      : display_path(directory) || (cli_directory ? "本次讨论的私有目录" : "由 App 项目确定"), project, access };
 }
 
 
@@ -3847,6 +3929,21 @@ async function save_launch_projects(projects) {
   const result = await local_launch_request("projects", { projects });
   state.launch.projects = result.projects;
   publish_view();
+}
+
+/** Create a project folder for an account whose projects all sit in its own folder; returns the new project. */
+/** A path on the computer as pages show it: the user's own folder is written `~`, so the account name stays off the page. */
+function display_path(path) {
+  const text = String(path || ""), home = String(state.launch.user_home || "").replace(/[\\/]+$/, "");
+  const rest = text.slice(home.length);
+  return home && text.toLowerCase().startsWith(home.toLowerCase()) && (!rest || /^[\\/]/.test(rest)) ? `~${rest}` : text;
+}
+
+async function create_launch_project(name) {
+  const result = await local_launch_request("projects", { create: name });
+  state.launch.projects = result.projects;
+  publish_view();
+  return result.created;
 }
 
 /** Save machine defaults without per-discussion session IDs or project write access. */
@@ -4240,8 +4337,7 @@ async function stop_and_rewind(room_id, message_id, refusal) {
 /** Take back the owner's latest message, after a send still in flight is saved; the site refuses once a member started on it. */
 async function retract_latest() {
   if (state.sending_message) {
-    await state.sending_done;
-    if (state.sending_preview?.failed) return;
+    if (!await state.sending_done) return;
   }
   const message = state.messages.findLast(item => item.author === "用户" && !item.withdrawn);
   if (message) await retract_message(message.id);
@@ -5025,6 +5121,7 @@ function view_snapshot() {
     connected: state.connected, reconnecting: state.reconnecting, observed_until: state.observed_until, backup_pending: Boolean(state.backup_pending), page: state.page, pages: state.pages, query: state.query,
     attachment_drafts: state.attachment_drafts.map(item => ({ id: item.id, file_name: item.file.name, size: item.file.size, preview_url: item.preview_url })),
     upload_status: state.upload_status, sending_message: state.sending_message, sending_preview: state.sending_preview,
+    failed_sends: state.failed_sends.map((failed) => ({ id: failed.id, ...failed.preview })),
     mention_only: state.mention_only, host_only: state.host_only, authors: state.authors, card_kinds: state.card_kinds,
     source_filter: state.mention_only || state.host_only || state.authors.length > 0 || state.card_kinds.length > 0, messages_loading: Boolean(state.messages_loading), messages_failure: state.messages_failure || "", reply_to: state.reply_to, editing_queued: state.editing_queued?.id ?? null,
     access: access_snapshot(), admin: admin_snapshot(),
@@ -5261,7 +5358,7 @@ async function execute_view_action(name, value) {
   const event = { preventDefault() {} };
   const actions = { refresh: refresh_room, room: select_room, tab: select_tab,
     archives: toggle_archives, backup: backup_room, backup_rooms, import_rooms, manage_channel, move_channel, create_folder, move_folder, rename_folder, delete_folder, sort_directory,
-    send: () => send_message(event), discard_sending: () => { state.sending_preview = null; }, choose_attachments: () => element("attachment-input").click(), remove_attachment, preview_attachment,
+    send: () => send_message(event), discard_sending, retry_sending, choose_attachments: () => element("attachment-input").click(), remove_attachment, preview_attachment,
     create: (folder_id) => submit_room(event, folder_id), quick_create: quick_create_room,
     save_context: () => save_context(event), save_topic: () => save_topic(event),
     filter: filter_view, reply: set_view_reply, cancel_reply, skip_turn,
@@ -5293,11 +5390,11 @@ function change_view_theme(theme) {
 
 window.discuss_view = { snapshot: view_snapshot, write_field: write_view_field, write_create_preferences, notify, load_decision_input,
   write_launch: write_launch_field, default_launch_entry, description_template, save_description_template, description_draft, write_description_draft, describe_member, set_chain_rounds, continue_chain, expert_presets, apply_expert_preset, unique_instance, member_label, default_name, label_draft, write_label_draft, preset_identity, save_expert_preset, delete_expert_preset, write_room_connection, write_room_adapter, launch_clients: LAUNCH_CLIENTS,
-  launch_model_state, load_launch_models, write_launch_model, save_launch_api_key, write_scheduler, save_scheduler_api_key, check_scheduler, write_named_followup, write_create_discussion, write_create_goal, write_create_chain_rounds, check_launch_api, launch_summary, launch_can_set_access, pick_launch_directory, browse_local_directory, list_remote_directories, save_launch_projects, restore_launch_profile, reset_create_form, empty_discussion_message,
+  launch_model_state, load_launch_models, write_launch_model, save_launch_api_key, create_launch_project, display_path, write_scheduler, save_scheduler_api_key, check_scheduler, write_named_followup, write_create_discussion, write_create_goal, write_create_chain_rounds, check_launch_api, launch_summary, launch_can_set_access, pick_launch_directory, browse_local_directory, list_remote_directories, save_launch_projects, restore_launch_profile, reset_create_form, empty_discussion_message,
   start_drag: start_directory_drag, reconnect: reconnect_live_updates, stop_label, local_request: local_launch_request,
   attachment_markup, attachment_size, attachment_file_icon, drop_attachments, paste_attachments, set_text_preview: (open) => { state.text_preview = open; }, set_image_viewer: (open) => { state.image_viewer = open; }, attachment_url,
   write_expert: write_view_expert, add_instance: add_view_instance, add_preset: add_preset_instance, platform_of, execute: execute_view_action, theme: change_view_theme,
-  reload_workflows, workflow_preset, write_create_host_workflows, write_create_api_max_requests, write_create_image_generation, set_room_api_max_requests, set_room_image_generation, set_room_extra_directories, set_room_project_directory,
+  reload_workflows, workflow_preset, write_create_host_workflows, write_create_api_max_requests, write_create_image_generation, set_room_api_max_requests, set_room_image_generation, set_room_scheduler, set_room_extra_directories, set_room_project_directory,
   admin: { register: register_admin, login: login_admin, logout: logout_admin,
     update_profile: update_admin_profile, avatar_from_file: admin_avatar_from_file, validate: validate_admin_form,
     sessions: admin_sessions, revoke: revoke_admin_sessions, change_password: change_admin_password },

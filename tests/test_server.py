@@ -405,7 +405,7 @@ class DiscussionTests(unittest.TestCase):
         self.assertTrue(snapshot["exported_at"])
         tables = snapshot["tables"]
         self.assertEqual(set(tables), {"rooms", "room_directory", "room_folder_assignments", "topic_folders", "room_creations",
-                                      "room_briefs", "room_user_requests", "topic_settings", "discussion_limits", "messages", "message_withdrawals", "message_details", "message_summaries", "message_timings", "attachments", "room_modes", "room_members", "member_requests", "member_suggestions", "member_recommendations",
+                                      "room_briefs", "room_user_requests", "topic_settings", "discussion_limits", "member_labels", "member_descriptions", "messages", "message_withdrawals", "message_details", "message_summaries", "message_timings", "attachments", "room_modes", "room_members", "member_requests", "member_suggestions", "member_recommendations",
                                       "scheduler_decisions", "review_plans",
                                       "discussion_sessions", "discussion_conclusions", "session_requests",
                                       "task_message_sources", "session_state", "session_limits",

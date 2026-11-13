@@ -67,6 +67,16 @@ export default defineConfig(({ mode }) => mode === "markdown" ? {
     },
   },
   worker: { format: "es" },
+} : mode === "admin" ? {
+  // The computer owner's management panel (runner/admin_panel.mjs): its own page and bundle, light theme only.
+  define: { "process.env.NODE_ENV": JSON.stringify("production") },
+  plugins: [vue(), ui({ colorMode: false, router: false, dts: false, autoImport: false,
+    ui: { colors: { primary: "blue", neutral: "zinc" } }, icon: { clientBundle: { scan: true } } })],
+  build: {
+    outDir: "web", emptyOutDir: false,
+    lib: { entry: "frontend/admin/main.js", formats: ["es"], fileName: () => "admin.js", cssFileName: "admin" },
+    rolldownOptions: { output: { codeSplitting: false, minify: true, comments: false } },
+  },
 } : mode === "backup" ? {
   build: {
     outDir: "web", emptyOutDir: false,

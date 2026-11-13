@@ -9,7 +9,7 @@
  * - `location`: the config field locating the installed software (`executable`, `ipc_directory`), or '' when none.
  * - `fields`: further config fields the user may set for it.
  * - `efforts`: thinking levels it accepts, or null when chosen inside the App; `efforts_per_model`: the levels are read
- *   from the software for the chosen model. `models`: whether its CLI lists models.
+ *   from the software for the chosen model. `models`: whether its CLI lists models (an API member's model is a typed ID).
  * - `access_levels`: project access levels it can enforce per run, or null when the App or API decides; `access_hints`
  *   says what each level does in it (measured headless on Claude Code 2.1.312, Codex CLI 0.163, agy 1.4.10; not yet
  *   rechecked on Claude Code 2.1.319 or agy 1.5.2) and
@@ -112,7 +112,9 @@ export const ADAPTER_PROFILES = {
   },
   api: {
     platform: '', label: '模型 API', kind: 'api', location: '', fields: ['base_url', 'api_protocol', 'api_key_ref'],
-    efforts: null, models: false, access_levels: ['read', 'write'], per_tool_allow: false, adopt: '', host_existing: false,
+    // Pi passes the level as each protocol's own reasoning parameter; it clamps xhigh / max to high without a per-model map,
+    // so only the three levels every protocol takes are offered. A chat endpoint without a reasoning parameter ignores it.
+    efforts: ['low', 'medium', 'high'], models: false, access_levels: ['read', 'write'], per_tool_allow: false, adopt: '', host_existing: false,
     access_hints: { read: '用接入程序的文件工具读取、搜索项目文件，可运行工作流登记的只读命令',
       write: '还可新建、覆盖、局部编辑项目文件，可运行工作流登记的全部命令；没有通用命令行' },
     unsupported_hints: { auto: 'API 成员没有通用命令行，没有需要软件审批的操作', full: 'API 成员没有通用命令行，没有需要软件审批的操作' },

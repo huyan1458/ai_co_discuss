@@ -32,10 +32,12 @@ const OVERLAP_SECONDS = 5;
 // Each depth level indents a row's label by this much.
 const DEPTH_PX = 14;
 const COMPACT_DEPTH_PX = 12;
-// At or below this page width, rows switch from the shared axis to their own durations.
+// At or below this page width, the timeline takes its phone layout (one column, rows stacked, details in place).
 const COMPACT_MAX_PX = 640;
 // About one axis tick per this many pixels of axis, and never fewer or more than these.
 const TICK_SPACING_PX = 90;
+// Phones space them closer: four ticks over a few hours land on two-hour steps, and folds and the edge leave none.
+const COMPACT_TICK_SPACING_PX = 64;
 const MIN_TICKS = 2;
 const MAX_TICKS = 8;
 const section_element = ref(null);
@@ -246,7 +248,17 @@ function toggle_interjections(key) {
   next.has(key) ? next.delete(key) : next.add(key);
   shown_interjections.value = next;
 }
-const longest_task = computed(() => Math.max(1, ...tasks.value.map((task) => task.end - task.start)));
+/** The overview unfolds a task in place: what was asked, who did what, and what came of it. */
+const opened_tasks = ref(new Set());
+function toggle_task(key) {
+  const next = new Set(opened_tasks.value);
+  next.has(key) ? next.delete(key) : next.add(key);
+  opened_tasks.value = next;
+}
+// An unfolded task lists this many steps; the rest are on the timeline.
+const TASK_STEPS_SHOWN = 12;
+/** A step's second line: why it failed, else what it was asked when that differs from the task itself. */
+const step_note = (task, step) => step.state === "failed" ? step.reason : step.ask && step.ask !== task.task ? step.ask : "";
 /** A task opens on the timeline at the execution that started it. */
 const open_task = (task) => focus_row({ key: task.key });
 
@@ -335,7 +347,7 @@ watch(() => replay.position === 0, (at_start) => { if (at_start) known_rows = ne
 
 const lines = computed(() => compact.value ? new Map() : handoff_lines(rows.value, shown_axis.value));
 const ticks = computed(() => axis_ticks(axis.value,
-  Math.min(MAX_TICKS, Math.max(MIN_TICKS, Math.round((axis_width.value || TICK_SPACING_PX * 6) / TICK_SPACING_PX))), zoom.value)
+  Math.min(MAX_TICKS, Math.max(MIN_TICKS, Math.round((axis_width.value || TICK_SPACING_PX * 6) / (compact.value ? COMPACT_TICK_SPACING_PX : TICK_SPACING_PX)))), zoom.value)
   .map((tick) => ({ ...tick, x: (tick.x - zoom.value.from) / zoom.value.span })));
 // Folded idle bands say how long they were on the axis; a label needs this many pixels clear of the next one and of a
 // tick, and a tick this many before the axis ends, or the texts run into each other.
@@ -370,7 +382,7 @@ const name = (member) => bridge.display_name(member);
  *  came down to. Each part carries a tone, so a stall or a failure stands out within the line. */
 const headline = computed(() => {
   if (overview.value) {
-    return [{ text: `${tasks.value.length} 个任务 · ${timeline.value?.executions.length || 0} 次执行` }, { text: "点一个任务在时间线上查看" }];
+    return [{ text: `${tasks.value.length} 个任务 · ${timeline.value?.executions.length || 0} 次执行` }, { text: "点开任务看要求、过程与结果" }];
   }
   const { running: live, members, wait, failed, stalled, total, keys } = digest.value;
   const parts = [];
@@ -465,9 +477,6 @@ function focus_row(card) {
     nextTick(() => wf_element.value?.querySelector(`[data-row="${CSS.escape(row.key)}"]`)?.scrollIntoView({ block: "start", behavior: "smooth" }));
   });
 }
-/** On a phone a finished row before the latest task (history) is one line: a watcher rarely needs it. */
-const in_task = (row) => digest.value.keys.has(row.key);
-const brief = (row) => compact.value && all_rows.value.length > 1 && !in_task(row) && row.item.state === "done" && opened.value !== row.key;
 
 function toggle(key) {
   const next = new Set(collapsed.value);
@@ -475,23 +484,9 @@ function toggle(key) {
   collapsed.value = next;
 }
 
-/** On a phone each top-level row and the executions under it share one axis, from the first start to the last end among
- *  them, so a dispatch still steps down as a waterfall without a clock axis over hours. */
-const group_spans = computed(() => {
-  const spans = new Map();
-  for (const row of all_rows.value) {
-    const top = row.ancestors[0] || row.key;
-    const span = spans.get(top);
-    spans.set(top, span ? [Math.min(span[0], row.start), Math.max(span[1], row.end)] : [row.start, row.end]);
-  }
-  return spans;
-});
-/** A piece's left and right edge as shares of the track: on the shared axis, or within its group on a phone. */
+/** A piece's left and right edge as shares of the track, on the one axis every row shares (phones included). */
 function span_of(row, start, end) {
-  if (!compact.value) return [shown_axis.value.x(start), shown_axis.value.x(end)];
-  const [from, to] = group_spans.value.get(row.ancestors[0] || row.key) || [row.start, row.end];
-  const span = Math.max(1, to - from);
-  return [(start - from) / span, (end - from) / span];
+  return [shown_axis.value.x(start), shown_axis.value.x(end)];
 }
 /** A bar piece's position. Segments leave a 1 px gap after them, so neighbouring phases read apart. */
 function place(row, start, end, gap = false) {
@@ -513,18 +508,6 @@ const member_tone = computed(() => {
   }
   return tones;
 });
-// The overview names the members who took the most time; the rest are counted.
-const OVERVIEW_MEMBERS = 4;
-/** A task's bar: its span shared out moment by moment, each member's share in its hue, then the time it stood waiting
- *  (a hatch) and idle (empty), so the parts add up to the task's length and nothing counts twice. */
-function run_parts(run) {
-  return run.parts.filter((part) => part.ms > 0).map((part) => ({ ...part, key: part.member ?? (part.wait ? "wait" : "idle"),
-    tone: part.member === undefined ? undefined : member_tone.value.get(part.member) }));
-}
-function run_people(run) {
-  const shown_members = run.work.slice(0, OVERVIEW_MEMBERS).map((part) => `${name(part.member)} ${format_duration(part.ms)}`).join(" · ");
-  return run.work.length > OVERVIEW_MEMBERS ? `${shown_members} · 另 ${run.work.length - OVERVIEW_MEMBERS} 位` : shown_members;
-}
 
 /** The marks after a name: only what tells rows apart. */
 function role_marks(row) {
@@ -602,7 +585,7 @@ const selected_notes = computed(() => {
         <div class="wf-head-line">
           <span class="wf-modes" role="tablist" aria-label="查看方式">
             <button type="button" role="tab" :aria-selected="!overview" :class="{ 'is-active': !overview }" @click="view_mode = 'timeline'">时间线</button>
-            <button type="button" role="tab" :aria-selected="overview" :class="{ 'is-active': overview }" @click="view_mode = 'tasks'">按任务</button>
+            <button type="button" role="tab" :aria-selected="overview" :class="{ 'is-active': overview }" @click="view_mode = 'tasks'">任务概览</button>
           </span>
           <span v-if="replaying" class="wf-state is-replay">回放中 · {{ clock(view_time) }}</span>
           <span v-else-if="!overview" class="wf-state" :class="{ 'is-live': digest.running.length }">{{ digest.running.length ? `${digest.running.length} 个进行中` : '均已结束' }}</span>
@@ -623,30 +606,53 @@ const selected_notes = computed(() => {
       </section>
 
       <p v-if="earlier_count" class="wf-earlier">显示最近 {{ shown.executions.length }} 次执行<button type="button" class="wf-text-button" @click="window_count += WINDOW_STEP">显示更早的 {{ Math.min(WINDOW_STEP, earlier_count) }} 次</button></p>
-      <ol v-if="overview" class="wf-runs" aria-label="按任务">
-        <li v-for="task in tasks" :key="task.key">
-          <button type="button" class="wf-run" @click="open_task(task)">
-            <span class="wf-run-line"><time>{{ when(task.start) }}</time><strong>{{ task_title(task.task) }}</strong>
+      <ol v-if="overview" class="wf-runs" aria-label="任务概览">
+        <li v-for="task in tasks" :key="task.key" :class="{ 'is-open': opened_tasks.has(task.key) }">
+          <button type="button" class="wf-run" :aria-expanded="opened_tasks.has(task.key)" @click="toggle_task(task.key)">
+            <span class="wf-run-line"><UIcon name="i-lucide-chevron-right" class="wf-run-caret" /><time>{{ when(task.start) }}</time><strong>{{ task_title(task.task) }}</strong>
               <span class="wf-run-meta">{{ task.count }} 次 · 用时 {{ format_duration(task.end - task.start) }}</span>
               <em v-if="task.running" class="wf-pill is-live">进行中</em><em v-else-if="task.failed" class="wf-pill is-failed">有失败</em></span>
-            <span v-if="task_note(task.task, task.result)" class="wf-run-note">{{ task_note(task.task, task.result) }}</span>
             <span v-if="task.interjections.length || partial(task)" class="wf-run-note">
               <template v-if="task.interjections.length">插话 {{ task.interjections.length }} 条</template><template v-if="task.interjections.length && partial(task)"> · </template><template v-if="partial(task)">更早部分未加载</template></span>
-            <span class="wf-run-people">{{ run_people(task) }}<span v-if="task.wait >= WAIT_WARN_MS" class="wf-run-wait">等待 {{ format_duration(task.wait) }}</span></span>
-            <span class="wf-run-bar"><span class="wf-run-fill" :style="{ width: `${(task.end - task.start) / longest_task * 100}%` }">
-              <i v-for="part in run_parts(task)" :key="part.key" :class="{ 'is-wait': part.wait, 'is-idle': part.idle, 'is-long': part.wait && part.ms >= WAIT_WARN_MS }" :data-tone="part.tone" :style="{ flexGrow: part.ms }"></i>
-            </span></span>
           </button>
+          <div v-if="opened_tasks.has(task.key)" class="wf-run-body">
+            <section>
+              <h4>要求</h4>
+              <p class="wf-run-text">{{ task_title(task.task) }}</p>
+              <ol v-if="task.interjections.length" class="wf-segment-asides">
+                <li v-for="aside in task.interjections" :key="aside.key"><time>{{ short_clock(aside.at) }}</time><span class="wf-run-aside">{{ aside.task }}</span></li>
+              </ol>
+            </section>
+            <section>
+              <h4>过程<small>{{ task.steps.length }} 次执行</small></h4>
+              <ol class="wf-run-steps">
+                <li v-for="step in task.steps.slice(0, TASK_STEPS_SHOWN)" :key="step.key">
+                  <span class="wf-run-step-line"><i class="wf-run-dot" :data-tone="member_tone.get(step.member)"></i><strong>{{ name(step.member) }}</strong>
+                    <em v-if="step.role === 'host'" class="wf-pill is-role">主持</em>
+                    <span class="wf-run-step-state" :class="`is-${step.state}`">{{ STATE_LABELS[step.state] }}</span>
+                    <span class="wf-run-meta">{{ format_duration(step.ms) }}</span></span>
+                  <span v-if="step_note(task, step)" class="wf-run-step-note" :class="{ 'is-failed': step.state === 'failed' }">{{ step_note(task, step) }}</span>
+                </li>
+              </ol>
+              <p v-if="task.steps.length > TASK_STEPS_SHOWN" class="wf-run-more">另 {{ task.steps.length - TASK_STEPS_SHOWN }} 次执行，在时间线中查看</p>
+            </section>
+            <section>
+              <h4>结果<small v-if="task.changes">改动 {{ task.changes }} 个文件</small></h4>
+              <p v-if="task.outcome" class="wf-run-text"><strong>{{ name(task.outcome.member) }}：</strong>{{ task.outcome.text }}</p>
+              <p v-else class="wf-run-text is-muted">{{ task.running ? '仍在进行，还没有结果' : '没有记录到回答' }}</p>
+            </section>
+            <button type="button" class="wf-text-button wf-run-jump" @click="open_task(task)"><UIcon name="i-lucide-arrow-right" />在时间线中查看</button>
+          </div>
         </li>
       </ol>
 
       <div v-else class="wf-grid" :class="{ 'is-zoomed': zoomed, 'is-panning': pan }" role="list"
         @wheel="on_wheel" @mousedown="stop_autoscroll" @pointerdown="on_pan_start" @pointermove="on_pan_move" @pointerup="on_pan_end" @pointercancel="on_pan_end" @dblclick="reset_on_dblclick">
-        <template v-if="!compact">
-          <div class="wf-axis-label" title="Ctrl + 滚轮缩放；放大后按住中键或拖动时间轴平移，双击时间线还原">
-            <span>执行 · {{ rows.length }}/{{ all_rows.length }}</span>
-            <span v-if="zoomed" class="wf-zoom">放大 {{ (1 / zoom.span).toFixed(1) }}×<button type="button" class="wf-zoom-reset" title="双击时间线也可还原" @click="zoom = WHOLE">
-              <UIcon name="i-lucide-locate-fixed" />{{ base_live ? '重置跟随' : '重置' }}</button></span>
+        <div v-if="!compact" class="wf-axis-label" title="Ctrl + 滚轮缩放；放大后按住中键或拖动时间轴平移，双击时间线还原">
+            <span class="wf-axis-count">执行 · {{ rows.length }}/{{ all_rows.length }}</span>
+            <span v-if="zoomed" class="wf-zoom" title="当前放大倍数">{{ (1 / zoom.span).toFixed(1) }}×<button type="button" class="wf-zoom-reset"
+              :title="`${base_live ? '重置跟随' : '重置'}（双击时间线也可还原）`" :aria-label="base_live ? '重置跟随' : '重置'" @click="zoom = WHOLE">
+              <UIcon name="i-lucide-locate-fixed" /></button></span>
             <span v-if="parents.length" class="wf-branch">
               <button type="button" class="wf-text-button" @click="collapsed = new Set()">展开</button>
               <button type="button" class="wf-text-button" @click="collapsed = new Set(parents)">收起</button>
@@ -658,8 +664,7 @@ const selected_notes = computed(() => {
               :style="{ left: `${(fold.from + fold.width / 2) * 100}%` }" :title="`${clock(fold.start)} – ${clock(fold.end)} 没有执行，已折叠`">⋯ {{ format_duration(fold.end - fold.start) }}</span>
             <span v-if="now_x !== null" class="wf-cursor-head" :style="{ left: `${now_x * 100}%` }"></span>
           </div>
-          <span class="wf-axis-end">用时</span>
-        </template>
+          <span v-if="!compact" class="wf-axis-end">用时</span>
         <template v-for="row in rows" :key="row.key">
         <div v-for="segment in (segment_heads.has(row.key) ? [segment_heads.get(row.key)] : [])" :key="segment.key" class="wf-segment">
           <span class="wf-segment-line"><time>{{ when(segment_start(segment)) }}</time><strong>{{ task_title(segment.opener.task) }}</strong>
@@ -672,7 +677,7 @@ const selected_notes = computed(() => {
           </ol>
         </div>
         <div role="listitem" class="wf-row"
-          :class="[`is-${row.item.state}`, { 'is-open': opened === row.key, 'is-stalled': row.item.state === 'running' && status(row).tone === 'warn', 'is-brief': brief(row), 'is-entering': entering.has(row.key) }]">
+          :class="[`is-${row.item.state}`, { 'is-open': opened === row.key, 'is-stalled': row.item.state === 'running' && status(row).tone === 'warn', 'is-entering': entering.has(row.key), 'is-instant': is_user_row(row) && row.end <= row.start }]">
           <div class="wf-label" :data-row="row.key" :style="{ '--depth': row.depth }">
             <span v-if="row.depth" class="wf-guides" aria-hidden="true"></span>
             <button v-if="row.has_children" type="button" class="wf-toggle" :class="{ 'is-open': !collapsed.has(row.key) }" :aria-expanded="!collapsed.has(row.key)"
@@ -689,14 +694,12 @@ const selected_notes = computed(() => {
           </div>
           <div class="wf-lane" :role="compact ? 'button' : 'img'" :tabindex="compact ? 0 : undefined" :aria-label="row_label(row)"
             @click="compact && open_row(row, $event)" @keydown.enter="compact && open_row(row, $event)"><div class="wf-track">
-            <template v-if="!compact">
-              <i v-for="tick in shown_ticks" :key="tick.at" class="wf-gridline" :style="{ left: `${tick.x * 100}%` }"></i>
-              <i v-for="fold in shown_axis.folds" :key="fold.start" class="wf-fold" :style="{ left: `${fold.from * 100}%`, width: `${fold.width * 100}%` }"></i>
-            </template>
+            <i v-for="tick in shown_ticks" :key="tick.at" class="wf-gridline" :style="{ left: `${tick.x * 100}%` }"></i>
+            <i v-for="fold in shown_axis.folds" :key="fold.start" class="wf-fold" :style="{ left: `${fold.from * 100}%`, width: `${fold.width * 100}%` }"></i>
             <i class="wf-well"></i>
             <i v-for="(line, index) in lines.get(row.key) || []" :key="`link-${index}`" class="wf-link" :class="`is-${line.part}`"
               :data-tone="member_tone.get(line.member)" :style="{ left: `${line.x * 100}%` }"></i>
-            <i v-if="now_x !== null && !compact" class="wf-cursor" :style="{ left: `${now_x * 100}%` }"></i>
+            <i v-if="now_x !== null" class="wf-cursor" :style="{ left: `${now_x * 100}%` }"></i>
             <i class="wf-bar is-queue" :style="place(row, ...row.queue)" @click="open_row(row, $event, queue_piece(row))" @mouseenter="hover_open(row, $event, queue_piece(row))" @mouseleave="hover_leave"></i>
             <i v-if="row.wake" class="wf-bar is-wake" :style="place(row, ...row.wake)" @click="open_row(row, $event, wake_piece(row))" @mouseenter="hover_open(row, $event, wake_piece(row))" @mouseleave="hover_leave"></i>
             <i v-if="row.work" class="wf-bar is-work" :class="{ 'has-detail': row.segments.length, 'is-user': is_user_row(row) }" :data-tone="row.segments.length ? undefined : member_tone.get(row.item.member)"
@@ -712,7 +715,7 @@ const selected_notes = computed(() => {
               @click="open_row(row, $event, note_piece(note))" @mouseenter="hover_open(row, $event, note_piece(note))" @mouseleave="hover_leave"></button>
           </div></div>
           <span v-if="!compact" class="wf-end">{{ format_duration(row.end - row.start) }}<small v-if="row.item.state !== 'done'" :class="`is-${row.item.state}`">{{ STATE_LABELS[row.item.state] }}</small><small v-if="row.truncated">明细已截断</small></span>
-          <span v-else-if="!brief(row)" class="wf-row-status wf-status" :class="`is-${status(row).tone}`">{{ status(row).text }}</span>
+          <span v-else-if="row.item.state === 'running' || row.item.state === 'failed'" class="wf-row-status wf-status" :class="`is-${status(row).tone}`">{{ status(row).text }}</span>
           <div v-if="opened === row.key && (compact || detail_anchor)" class="wf-detail" role="dialog" @mouseenter="hover_keep" @mouseleave="hover_leave" :aria-label="is_user_row(row) ? `${name(row.item.member)} 的这条消息` : `${name(row.item.member)} 的这次执行`"
             :style="compact ? undefined : { top: `${detail_anchor.top}px`, left: `${detail_anchor.left}px` }">
             <header class="wf-detail-head">
@@ -867,26 +870,40 @@ const selected_notes = computed(() => {
 /* The timeline shows the latest executions; one line says how many and reaches further back. */
 .wf-earlier { display: flex; flex-wrap: wrap; align-items: center; gap: 4px 8px; margin: 0; padding: 6px 16px; border-bottom: 1px solid var(--wf-border); color: var(--wf-muted); font-size: 12px; }
 .wf-earlier .wf-text-button { color: var(--wf-accent); }
-/* Tasks: what started each (the message), then who worked how long, then a bar against the longest task; a click opens it on the timeline. */
+/* Tasks: one line each, the message that started it; a click unfolds what was asked, who did what, and what came of it. */
 .wf-runs { margin: 0; padding: 4px 0; list-style: none; }
+.wf-runs > li + li { border-top: 1px solid var(--wf-border); }
 .wf-run { display: grid; gap: 4px; width: 100%; padding: 8px 16px; border: 0; background: transparent; color: inherit; font: inherit; text-align: left; cursor: pointer; }
-.wf-run:hover { background: var(--wf-hover); }
+.wf-run:hover, .is-open > .wf-run { background: var(--wf-hover); }
 .wf-run:focus-visible { outline: 2px solid var(--wf-accent); outline-offset: -2px; }
 .wf-run-line { display: flex; align-items: baseline; gap: 10px; min-width: 0; }
+.wf-run-caret { flex: none; align-self: center; width: 14px; height: 14px; color: var(--wf-muted); transition: transform .15s; }
+.is-open .wf-run-caret { transform: rotate(90deg); }
 .wf-run-line time { flex: none; color: var(--wf-muted); font-family: var(--wf-mono); font-size: 12px; font-variant-numeric: tabular-nums; }
 .wf-run-line strong { flex: 1; min-width: 0; overflow: hidden; font-weight: 500; text-overflow: ellipsis; white-space: nowrap; }
 .wf-run-meta { flex: none; color: var(--wf-muted); font-family: var(--wf-mono); font-size: 12px; font-variant-numeric: tabular-nums; }
-/* The bar is as long as the stretch against the longest one; inside, who took the time, in each member's hue, and the
-   waiting as a hatch. */
-.wf-run-bar { display: block; height: 8px; border-radius: 3px; background: var(--wf-well); }
-.wf-run-fill { display: flex; gap: 1px; min-width: 3px; height: 100%; overflow: hidden; border-radius: 3px; }
-.wf-run-fill i { flex-basis: 0; min-width: 2px; background: var(--tone, var(--wf-plain)); }
-.wf-run-fill i.is-idle { background: transparent; }
-.wf-run-fill i.is-wait { background: repeating-linear-gradient(-45deg, var(--wf-hatch) 0 1px, transparent 1px 4px); box-shadow: inset 0 0 0 1px var(--wf-hatch); }
-/* A long wait is marked in the bar too, so a phone, which leaves the words out, still shows it. */
-.wf-run-fill i.is-wait.is-long { --wf-hatch: color-mix(in oklab, var(--wf-warn) 70%, transparent); }
-.wf-run-wait { flex: none; color: var(--wf-warn); font-family: var(--wf-mono); font-size: 12px; font-variant-numeric: tabular-nums; }
-.wf-run-people { display: flex; flex-wrap: wrap; gap: 0 12px; min-width: 0; color: var(--wf-muted); font-size: 12px; line-height: 18px; }
+.wf-run > .wf-run-note { padding-left: 24px; }
+.wf-run-body { display: grid; gap: 14px; padding: 4px 16px 12px 40px; background: var(--wf-hover); font-size: 13px; }
+.wf-run-body section { display: grid; gap: 6px; min-width: 0; }
+.wf-run-body h4 { display: flex; align-items: center; gap: 8px; margin: 0; color: var(--wf-muted); font-size: 12px; font-weight: 600; letter-spacing: .02em; }
+.wf-run-body h4 small { font-weight: 400; }
+.wf-run-text { margin: 0; line-height: 1.6; white-space: pre-wrap; overflow-wrap: anywhere; }
+.wf-run-text.is-muted { color: var(--wf-muted); }
+.wf-run-steps { display: grid; gap: 6px; margin: 0; padding: 0; list-style: none; }
+.wf-run-steps li { display: grid; gap: 2px; min-width: 0; }
+.wf-run-step-line { display: flex; align-items: center; gap: 8px; min-width: 0; }
+.wf-run-step-line strong { font-weight: 500; }
+.wf-run-dot { flex: none; width: 8px; height: 8px; border-radius: 50%; background: var(--tone, var(--wf-plain)); }
+.wf-run-step-state { color: var(--wf-muted); font-size: 12px; }
+.wf-run-step-state.is-running { color: var(--wf-accent); }
+.wf-run-step-state.is-failed { color: var(--wf-failed); }
+.wf-run-step-line .wf-run-meta { margin-left: auto; }
+.wf-run-step-note { padding-left: 16px; overflow: hidden; color: var(--wf-muted); font-size: 12px; line-height: 18px; text-overflow: ellipsis; white-space: nowrap; }
+.wf-run-step-note.is-failed { color: var(--wf-failed); }
+/* In the overview an interjection is two lines at most; the timeline's segment line lists them in full. */
+.wf-run-aside { display: -webkit-box; overflow: hidden; -webkit-box-orient: vertical; -webkit-line-clamp: 2; }
+.wf-run-more { margin: 0; color: var(--wf-muted); font-size: 12px; }
+.wf-run-jump { justify-self: start; margin-left: -6px; color: var(--wf-accent); }
 
 /* Grid: the label column, the lanes and the duration column share one template, the axis included. */
 .wf-grid { display: grid; grid-template-columns: var(--wf-label-col) minmax(0, 1fr) 76px; }
@@ -899,6 +916,7 @@ const selected_notes = computed(() => {
 /* The axis keeps side margins to line up with the tracks; its shadow fills them, so rows never show through. */
 .wf-axis { box-shadow: -12px 0 0 var(--wf-surface), 12px 0 0 var(--wf-surface); }
 .wf-axis-label { display: flex; align-items: center; gap: 8px; min-width: 0; height: 30px; padding: 0 8px 0 16px; border-right: 1px solid var(--wf-border); border-bottom: 1px solid var(--wf-border); color: var(--wf-muted); font-size: 12px; cursor: help; }
+.wf-axis-count { flex-shrink: 0; white-space: nowrap; }
 .wf-branch { display: flex; gap: 2px; margin-left: auto; }
 .wf-text-button { display: inline-flex; align-items: center; gap: 4px; height: 22px; padding: 0 6px; border: 0; border-radius: 4px; background: transparent; color: var(--wf-muted); font: inherit; cursor: pointer; white-space: nowrap; }
 .wf-text-button:hover { background: var(--wf-hover); color: var(--wf-text); }
@@ -958,7 +976,7 @@ const selected_notes = computed(() => {
 .wf-grid.is-zoomed .wf-axis { cursor: grab; }
 .wf-grid.is-panning, .wf-grid.is-panning * { cursor: grabbing !important; user-select: none; }
 .wf-zoom { display: inline-flex; align-items: center; gap: 2px; color: var(--wf-accent); font-family: var(--wf-mono); font-size: 11px; white-space: nowrap; }
-.wf-zoom-reset { display: inline-flex; align-items: center; gap: 4px; height: 22px; margin-left: 6px; padding: 0 8px; border: 1px solid color-mix(in oklab, var(--wf-accent) 45%, transparent); border-radius: 999px;
+.wf-zoom-reset { display: inline-flex; align-items: center; justify-content: center; width: 22px; height: 22px; margin-left: 4px; padding: 0; border: 1px solid color-mix(in oklab, var(--wf-accent) 45%, transparent); border-radius: 999px;
   background: color-mix(in oklab, var(--wf-accent) 12%, transparent); color: var(--wf-accent); font: inherit; font-family: var(--ui-font-sans, inherit); font-size: 11px; font-weight: 600; cursor: pointer; }
 .wf-zoom-reset:hover { background: color-mix(in oklab, var(--wf-accent) 22%, transparent); }
 .wf-zoom-reset :deep(svg) { width: 12px; height: 12px; }
@@ -1126,17 +1144,28 @@ const selected_notes = computed(() => {
   .wf-grid { grid-template-columns: var(--wf-label-col) minmax(0, 1fr) 68px; }
   .wf-end { padding-right: 10px; }
 }
-/* Phones (decided by the page's own width, in script): no clock axis. Each execution is three lines: when, who and how
-   long; its bar, the latest task's rows on one axis from its start to its end so they still step down; where its time went. */
+/* Phones (decided by the page's own width, in script): the same one axis as on a PC, idle folded, a few clock ticks on
+   top, so every bar reads left to right in time and a dispatch steps down. Each execution is two lines: when, who and how
+   long, then its bar; running and failed rows add where their time went. A tap opens the row's own detail, at its own
+   scale, in place of zooming. */
 .wf.is-compact .wf-head, .wf.is-compact .wf-foot, .wf.is-compact .wf-player { padding-inline: 12px; }
 .wf.is-compact .wf-run { padding-inline: 12px; }
+.wf.is-compact .wf-run-body { padding-inline: 12px; }
+.wf.is-compact .wf-run > .wf-run-note { padding-left: 0; }
 .wf.is-compact .wf-segment { padding-inline: 12px; }
-.wf.is-compact .wf-segment-line strong { white-space: normal; display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 2; }
+.wf.is-compact .wf-segment-line { flex-wrap: wrap; gap: 2px 8px; }
+.wf.is-compact .wf-segment-line strong { display: -webkit-box; flex-basis: 100%; order: 3; line-height: 20px; white-space: normal; -webkit-box-orient: vertical; -webkit-line-clamp: 2; }
+/* A user message sent without reading time has no bar worth drawing: just when and who, the message is in the line above. */
+.wf.is-compact .wf-row.is-instant .wf-lane, .wf.is-compact .wf-row.is-instant .wf-name-end { display: none; }
+.wf.is-compact .wf-row.is-instant .wf-label { padding-bottom: 6px; }
 /* On a phone the message that started a task gets its own line (two at most) under when, how many and how long. */
 .wf.is-compact .wf-run-line { flex-wrap: wrap; gap: 2px 8px; }
 .wf.is-compact .wf-run-meta { margin-left: auto; }
 .wf.is-compact .wf-run-line strong { display: -webkit-box; flex-basis: 100%; order: 3; line-height: 20px; white-space: normal; -webkit-box-orient: vertical; -webkit-line-clamp: 2; }
 .wf.is-compact .wf-grid { grid-template-columns: minmax(0, 1fr); }
+.wf.is-compact .wf-axis { height: 26px; font-size: 10px; }
+.wf.is-compact .wf-fold-label { font-size: 9px; }
+.wf.is-compact .wf-gridline { opacity: .6; }
 .wf.is-compact .wf-row > :not(.wf-detail) { min-height: 0; }
 .wf.is-compact .wf-label { padding: 6px 12px 0 calc(12px + var(--depth) * var(--wf-depth-px)); border-top: 1px solid var(--wf-border); border-right: 0; }
 .wf.is-compact .wf-row:first-of-type .wf-label { border-top: 0; }
@@ -1151,9 +1180,6 @@ const selected_notes = computed(() => {
 .wf.is-compact .wf-track > * { pointer-events: none; }
 .wf.is-compact .wf-well, .wf.is-compact .wf-bar { border-radius: 5px; }
 .wf.is-compact .wf-row-status { padding: 0 12px 6px; }
-/* A history row keeps its bar, thinner, so the whole list still reads as a waterfall. */
-.wf.is-compact .wf-row.is-brief .wf-lane { --wf-bar-h: 6px; padding: 4px 0 8px; }
-.wf.is-compact .wf-row.is-brief .wf-track { height: 6px; }
 /* What needs a look, above the rows: running work and failures as cards; a tap opens the row below. */
 .wf-now { display: grid; gap: 8px; padding: 10px 12px; border-bottom: 1px solid var(--wf-border); }
 .wf-now-card { display: grid; gap: 3px; width: 100%; padding: 8px 10px; border: 1px solid var(--wf-border); border-radius: 8px; background: var(--wf-well); color: inherit; font: inherit; text-align: left; cursor: pointer; }

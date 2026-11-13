@@ -87,13 +87,11 @@ function announce_conflicts(room_id, conflicts) {
   known_conflicts.set(room_id, new Set([...(seen || []), ...keys]));
   if (!seen) return;
   for (const item of conflicts.filter((conflict) => !seen.has(conflict_key(conflict)))) {
-    // `confirmed`: both members' own edit tools wrote these; otherwise the files changed while both ran and the writer is unknown.
-    const listed = item.confirmed?.length ? item.confirmed : item.files;
+    // Both members' own edit tools wrote these files.
+    const listed = item.files;
     const files = listed.slice(0, CONFLICT_FILE_PREVIEW).join("、") + (listed.length > CONFLICT_FILE_PREVIEW ? " 等" : "");
     const members = item.members.map((name) => bridge.display_name(name)).join(" 与 ");
-    bridge.notify("warning", item.confirmed?.length
-      ? `冲突：${members} 同时编辑了 ${listed.length} 个相同文件（${files}），后保存的可能覆盖了先保存的，请核对`
-      : `可能冲突：${members} 同时运行期间有 ${listed.length} 个文件被改动（${files}），无法确认是谁改的`);
+    bridge.notify("warning", `冲突：${members} 同时编辑了 ${listed.length} 个相同文件（${files}），后保存的可能覆盖了先保存的，请核对`);
   }
 }
 watch(() => [room.value.id, free.value.conflicts], ([room_id, conflicts]) => announce_conflicts(room_id, conflicts), { immediate: true });

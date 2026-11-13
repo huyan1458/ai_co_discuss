@@ -356,6 +356,8 @@ class SingleMemberTests(FreeRoomTests):
         execution = self.reserve()[1]
         self.assertEqual(self.answer(execution["id"], "看完了")[0], 201)
         self.assertEqual(self.say("再看一处")[0], 201)
+        self.assertEqual(self.request(f"{self.path}/labels", {"labels": {"Claude": "批评家"}}, self.owner)[0], 200)
+        self.assertEqual(self.request(f"{self.path}/descriptions", {"descriptions": {"Claude": "审设定"}}, self.owner)[0], 200)
         backup = json.loads(json.dumps(self.request(f"{self.path}/backup")[1]).replace(self.room["id"], "freecopy"))
         importer = uuid.uuid4().hex
         status, result = self.request("/api/rooms/import", backup, importer)
@@ -364,6 +366,7 @@ class SingleMemberTests(FreeRoomTests):
         self.assertEqual((room["mode"], room["phase"]), ("free", "discussing"))
         member = room["free"]["members"][0]
         self.assertEqual((member["name"], member["status"]), ("Claude", "away"))
+        self.assertEqual((room["labels"], room["descriptions"]), ({"Claude": "批评家"}, {"Claude": "审设定"}))
         requests = sorted(room["free"]["requests"], key=lambda item: item["id"])
         self.assertEqual([item["status"] for item in requests], ["completed", "cancelled"])
         self.assertEqual(self.request("/api/rooms/freecopy/messages", {"author": "用户", "text": "旧凭据", "submission_id": "old-credential"}, self.owner)[0], 403)
@@ -1245,8 +1248,8 @@ class MultiMemberTests(FreeRoomTests):
         states = {item["member"]: item["status"] for item in self.request(self.path)[1]["free"]["requests"]}
         self.assertEqual(states, {"Antigravity": "completed", "Claude": "pending"})
 
-    def test_overlapping_changes_to_the_same_file_are_reported_as_possible_conflicts(self):
-        """Two members changing one file in overlapping windows are flagged; the report is recorded once."""
+    def test_changes_without_edited_files_are_not_reported_as_conflicts(self):
+        """Overlapping snapshots alone cannot tell who wrote a file, so they are not flagged; the report is recorded once."""
         self.say("改首页", to=["Claude", "Codex"])
         claude, codex = self.reserve_for("Claude")[1], self.reserve_for("Codex")[1]
 
@@ -1256,12 +1259,10 @@ class MultiMemberTests(FreeRoomTests):
         self.assertEqual(report(claude, ["b.css"])[0], 409)
         self.assertEqual(report(codex, "x")[0], 400)
         self.assertEqual(report(codex, ["index.html"])[0], 200)
-        conflicts = self.request(self.path)[1]["free"]["conflicts"]
-        self.assertEqual(conflicts, [{"members": ["Claude", "Codex"], "executions": [claude["id"], codex["id"]], "files": ["index.html"],
-                                      "confirmed": []}])
+        self.assertEqual(self.request(self.path)[1]["free"]["conflicts"], [])
 
     def test_conflicts_follow_the_files_each_member_reported_editing(self):
-        """Concurrent snapshots see each other's files: a file only one side's edit tools wrote is not flagged, one both wrote is confirmed."""
+        """Concurrent snapshots see each other's files: only a file both sides' edit tools wrote is flagged."""
         self.say("分头改", to=["Claude", "Codex"])
         claude, codex = self.reserve_for("Claude")[1], self.reserve_for("Codex")[1]
 
@@ -1271,7 +1272,7 @@ class MultiMemberTests(FreeRoomTests):
         self.assertEqual(report(claude, ["a.css", "shared.md", "outside.txt"])[0], 200)
         self.assertEqual(report(codex, ["index.html", "shared.md"])[0], 200)
         conflicts = self.request(self.path)[1]["free"]["conflicts"]
-        self.assertEqual([(item["files"], item["confirmed"]) for item in conflicts], [(["shared.md"], ["shared.md"])])
+        self.assertEqual(conflicts, [{"members": ["Claude", "Codex"], "executions": [claude["id"], codex["id"]], "files": ["shared.md"]}])
 
 class HostRoomTests(FreeRoomTests):
     """A room hosted by Claude with Codex and Antigravity as runner members; shared by host and goal tests."""
@@ -1969,7 +1970,8 @@ class HostTests(HostRoomTests):
         codex, antigravity = self.reserve_for("Codex")[1], self.reserve_for("Antigravity")[1]
         before = self.messages()
         for execution in (codex, antigravity):
-            self.request(f"{self.path}/executions/{execution['id']}", {"action": "report", "changes": ["index.html"]}, self.owner)
+            self.request(f"{self.path}/executions/{execution['id']}",
+                         {"action": "report", "changes": ["index.html"], "edited": ["index.html"]}, self.owner)
         self.assertEqual(self.messages(), before)
         self.assertNotIn(("Claude", "notice", "pending"), self.requests())
         self.assertEqual(self.request(self.path)[1]["free"]["conflicts"][0]["files"], ["index.html"])

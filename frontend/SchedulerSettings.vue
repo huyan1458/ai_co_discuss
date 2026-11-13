@@ -1,11 +1,43 @@
 <script setup>
-/** Optional smart scheduling chosen while creating a room; the key goes only to the local private store. */
+/**
+ * Optional smart scheduling: the new-room form edits the draft for the room to create; the room's settings (`room`) edit
+ * the open room's own scheduling, shown `compact` as a switch with a one-line summary whose settings open on demand.
+ * The key goes only to the local private store.
+ */
 import { computed, inject, nextTick, ref, watch } from "vue";
 import RosterAdd from "./RosterAdd.vue";
 
-const props = defineProps({ free: { type: Boolean, default: false }, blocker: { type: String, default: "" } });
+const props = defineProps({ free: { type: Boolean, default: false }, blocker: { type: String, default: "" },
+  room: { type: Boolean, default: false }, compact: { type: Boolean, default: false }, disabled: { type: Boolean, default: false } });
 const { view, bridge } = inject("discussion");
-const scheduler = computed(() => view.value.launch.scheduler || {});
+// The open room's saved scheduling, with the key saved on this computer for its provider's root.
+const room_saved = computed(() => {
+  const saved = view.value.launch.room_models?.scheduler;
+  if (!saved) return { enabled: false };
+  const base_url = view.value.launch.scheduler_providers?.[saved.provider]?.base_url;
+  return { enabled: true, ...saved, api_key_ref: view.value.launch.api_keys?.[base_url] || "" };
+});
+// In a room, a choice that cannot be saved yet (no model or key) waits here until it is complete.
+const room_draft = ref(null);
+const scheduler = computed(() => props.room ? room_draft.value || room_saved.value : view.value.launch.scheduler || {});
+/** Change some fields, in order: the draft writes the new-room form; a room saves once provider, model and key are all there. */
+async function write(fields) {
+  if (!props.room) { for (const [field, value] of Object.entries(fields)) bridge.write_scheduler(field, value); return; }
+  const next = { ...scheduler.value, ...fields };
+  if ("provider" in fields || (fields.enabled && !next.provider)) {
+    const providers = view.value.launch.scheduler_providers || {};
+    next.provider ||= Object.keys(providers).find((name) => view.value.launch.api_keys?.[providers[name].base_url]) || Object.keys(providers)[0] || "";
+    const preset = providers[next.provider];
+    next.model = preset?.models[0] || "";
+    next.api_key_ref = preset ? view.value.launch.api_keys?.[preset.base_url] || "" : "";
+    next.mode ||= view.value.launch.scheduler_default_mode || "";
+  }
+  if (next.enabled && !(next.provider && next.model && next.api_key_ref)) { room_draft.value = next; return; }
+  room_draft.value = next;
+  try { if (next.enabled || room_saved.value.enabled) await bridge.set_room_scheduler(next.enabled ? next : null); }
+  catch (failure) { bridge.notify("error", failure.message); }
+  finally { if (room_draft.value === next) room_draft.value = null; }
+}
 const providers = computed(() => Object.entries(view.value.launch.scheduler_providers || {}).map(([value, item]) => ({ value, label: item.label })));
 const models = computed(() => (view.value.launch.scheduler_providers?.[scheduler.value.provider]?.models || []).map((id) => ({ label: id, value: id })));
 // Brand marks for the add row and card; OpenAI's mark reuses the Codex avatar colors.
@@ -19,36 +51,58 @@ const add_items = computed(() => providers.value.map(({ value, label }) => {
     title: selected ? "当前决策模型" : active.value ? `替换为 ${label}` : label, aria_label: active.value && !selected ? `替换决策模型为 ${label}` : `添加决策模型 ${label}` };
 }));
 const api_key = ref(""), key_visible = ref(false), saving = ref(false);
-// The card shows a summary; its settings stay behind "设置" like the participant cards.
+// The card shows a summary; its settings stay behind "设置" like the participant cards. A compact row shows only the back.
 const editing = ref(false);
 // Opening the back remembers the settings so Cancel can restore them.
 let opened_with = null;
 function open_settings() {
-  const { model, api_key_ref } = scheduler.value;
-  opened_with = { model, api_key_ref };
+  opened_with = { ...scheduler.value };
   editing.value = true;
+}
+/** Keep what was saved and close the back; in a room, a choice still missing its model or key is dropped. */
+function close_settings() {
+  opened_with = null;
+  editing.value = false;
+  if (props.room) room_draft.value = null;
 }
 /** Discard edits made since the back opened. */
 function cancel_settings() {
-  if (opened_with) for (const field of ["model", "api_key_ref"]) bridge.write_scheduler(field, opened_with[field]);
+  const before = opened_with;
   opened_with = null;
   api_key.value = "";
   editing.value = false;
+  if (!before) return;
+  if (!props.room) { write({ model: before.model, api_key_ref: before.api_key_ref }); return; }
+  // A room puts back what it had saved, or drops a choice that was never saved.
+  room_draft.value = null;
+  const now = room_saved.value;
+  if (["enabled", "provider", "model", "mode"].some((field) => (before[field] || "") !== (now[field] || ""))) {
+    const complete = before.enabled && before.provider && before.model && before.api_key_ref;
+    bridge.set_room_scheduler(complete ? before : null).catch((failure) => bridge.notify("error", failure.message));
+  }
 }
 /** Add one provider as the room's decision model; the provider goes first so it brings its preset model and saved key. */
 function add_provider(provider) {
   if (active.value && scheduler.value.provider === provider) return;
-  // Replacing closes the back of the previous provider's card.
+  // Replacing closes the back of the previous provider's card; a compact row keeps its settings open for the new one.
   editing.value = false;
   opened_with = null;
-  bridge.write_scheduler("provider", provider);
-  bridge.write_scheduler("enabled", true);
+  write({ provider, enabled: true });
+  if (props.compact) open_settings();
 }
 /** Remove the decision model and return keyboard focus to the add row. */
 function remove_provider() {
-  bridge.write_scheduler("enabled", false);
+  write({ enabled: false });
   nextTick(() => add_row.value?.focus_first());
 }
+/** The compact row's switch: on opens the settings when something is still missing, off closes them. */
+async function toggle(enabled) {
+  await write({ enabled });
+  if (enabled && status.value.tone !== "ready") open_settings();
+}
+// The compact row's one line: provider, model and judging style, or what is still missing.
+const summary = computed(() => !active.value ? "未开启" : status.value.tone !== "ready" ? `${provider_label.value} · ${status.value.text}`
+  : [provider_label.value, scheduler.value.model, view.value.launch.scheduler_modes?.[mode.value]].filter(Boolean).join(" · "));
 const provider_label = computed(() => providers.value.find((item) => item.value === scheduler.value.provider)?.label || "未选择");
 const status = computed(() => !scheduler.value.model ? { tone: "warn", text: "未选模型" } : !scheduler.value.api_key_ref ? { tone: "warn", text: "缺少密钥" } : { tone: "ready", text: "已配置" });
 // A key saved earlier is never sent back to the page, so only a masked mark stands in for it.
@@ -64,7 +118,7 @@ watch(() => scheduler.value.enabled, (enabled) => { if (!enabled) editing.value 
 /** Send one tiny question through the local service so the configuration is proven before the room relies on it. */
 async function check_config() {
   check.value = { state: "loading" };
-  try { await bridge.check_scheduler(); check.value = { state: "ok" }; bridge.notify("info", "检查通过：决策模型已响应"); }
+  try { await bridge.check_scheduler(scheduler.value); check.value = { state: "ok" }; bridge.notify("info", "检查通过：决策模型已响应"); }
   catch (failure) { check.value = { state: "error" }; bridge.notify("error", failure.message); }
 }
 // How the routing question is worded: the experimental guided wording is the default while it is being refined.
@@ -79,21 +133,30 @@ const description = computed(() => props.free
 async function save_key() {
   if (!api_key.value.trim() || saving.value) return;
   saving.value = true;
-  try { await bridge.save_scheduler_api_key(api_key.value); }
+  try {
+    const api_key_ref = await bridge.save_scheduler_api_key(api_key.value, scheduler.value.provider);
+    if (props.room) await write({ api_key_ref });
+  }
   catch (failure) { bridge.notify("error", failure.message); }
   finally { saving.value = false; }
 }
 </script>
 
 <template>
-  <div class="scheduler-settings">
-    <div>
+  <div class="scheduler-settings" :class="{ 'is-compact': compact }">
+    <div v-if="compact" class="scheduler-row">
+      <UCheckbox :model-value="active" :disabled="disabled || Boolean(blocker)" label="开启" aria-label="本房间开启智能调度" @update:model-value="toggle" />
+      <span class="scheduler-summary" :title="summary">{{ summary }}</span>
+      <UButton v-if="active && !disabled" :icon="editing ? 'i-lucide-chevron-up' : 'i-lucide-settings-2'" :label="editing ? '收起' : '设置'" size="xs" color="neutral" variant="ghost"
+        :aria-expanded="editing" aria-label="设置本房间的决策模型" @click="editing ? close_settings() : open_settings()" />
+    </div>
+    <div v-else>
       <p class="scheduler-title">智能调度<UBadge size="xs" variant="soft" class="scheduler-badge">决策模型</UBadge><small>可选</small></p>
       <p class="scheduler-description">{{ blocker ? `${description}（${blocker}）` : description }}</p>
     </div>
-    <RosterAdd ref="add_row" label="添加决策模型" :items="add_items" @add="add_provider" />
-    <p v-if="!active" class="scheduler-empty">未添加决策模型。只能放一个，点其他供应商会替换。</p>
-    <div v-else class="scheduler-cards">
+    <RosterAdd v-if="!compact || editing" ref="add_row" label="添加决策模型" :items="add_items" @add="add_provider" />
+    <p v-if="!active && !compact" class="scheduler-empty">未添加决策模型。只能放一个，点其他供应商会替换。</p>
+    <div v-else-if="active && (!compact || editing)" class="scheduler-cards">
     <div class="scheduler-slot">
     <div class="scheduler-card" :class="{ 'is-editing': editing }">
       <template v-if="!editing">
@@ -117,7 +180,7 @@ async function save_key() {
               :color="check.state === 'ok' ? 'success' : check.state === 'error' ? 'error' : 'neutral'" :loading="check.state === 'loading'"
               :disabled="!scheduler.api_key_ref || !scheduler.model || !view.launch.available" @click="check_config" />
           </div>
-          <div class="scheduler-field"><span>模型</span><UInputMenu mode="autocomplete" ignore-filter :model-value="scheduler.model || ''" :items="models" value-key="value" aria-label="智能调度模型" placeholder="模型 ID" size="xs" class="w-full" @update:model-value="bridge.write_scheduler('model', $event)" /></div>
+          <div class="scheduler-field"><span>模型</span><UInputMenu mode="autocomplete" ignore-filter :model-value="scheduler.model || ''" :items="models" value-key="value" aria-label="智能调度模型" placeholder="模型 ID" size="xs" class="w-full" @update:model-value="write({ model: $event })" /></div>
           <div class="scheduler-field"><span>密钥</span>
             <!-- A text field masked by CSS keeps browsers from offering to generate or save a password. -->
             <UInput v-model="api_key" type="text" autocomplete="off" spellcheck="false" data-1p-ignore data-lpignore="true" :placeholder="scheduler.api_key_ref ? SAVED_MARK : '填写所选供应商的 API Key'" :title="scheduler.api_key_ref && !api_key ? '已保存；本机不回传密钥，输入新 Key 可更换' : undefined" aria-label="智能调度 API Key" size="xs" class="w-full" :loading="saving" :ui="{ base: key_visible ? '' : 'scheduler-key-masked', trailing: 'pe-0.5' }" @change="save_key">
@@ -128,17 +191,17 @@ async function save_key() {
         </div>
         <span class="scheduler-flip-actions">
           <button type="button" class="scheduler-flip is-cancel" aria-label="放弃决策模型的修改" @click="cancel_settings">取消</button>
-          <button type="button" class="scheduler-flip is-done" aria-label="完成并返回决策模型卡片" @click="editing = false"><UIcon name="i-lucide-check" />完成</button>
+          <button type="button" class="scheduler-flip is-done" aria-label="完成并返回决策模型卡片" @click="close_settings"><UIcon name="i-lucide-check" />完成</button>
         </span>
       </template>
     </div>
     </div>
     </div>
-    <div v-if="active && free && modes.length > 1" class="scheduler-mode">
+    <div v-if="active && free && modes.length > 1 && (!compact || editing)" class="scheduler-mode">
       <span>判断方式</span>
       <div class="expert-card-modes" role="radiogroup" aria-label="智能调度判断方式">
         <button v-for="option in modes" :key="option.value" type="button" role="radio" :title="MODE_HINTS[option.value]"
-          :aria-checked="mode === option.value" @click="bridge.write_scheduler('mode', option.value)">{{ option.label }}</button>
+          :aria-checked="mode === option.value" @click="write({ mode: option.value })">{{ option.label }}</button>
       </div>
     </div>
   </div>
@@ -146,6 +209,10 @@ async function save_key() {
 
 <style scoped>
 .scheduler-settings { display: flex; flex-direction: column; gap: 10px; padding-top: 14px; border-top: 1px solid var(--ui-border-muted); }
+/* In the room's settings the row sits in its own cell, so it needs no top rule. */
+.scheduler-settings.is-compact { padding-top: 0; border-top: 0; }
+.scheduler-row { display: flex; align-items: center; gap: 10px; min-width: 0; }
+.scheduler-summary { flex: 1; min-width: 0; overflow: hidden; color: var(--ui-text-muted); font-size: 13px; white-space: nowrap; text-overflow: ellipsis; }
 /* Same size front and back, so flipping never moves the dialog; long back content scrolls inside. */
 /* Same track as the member cards (.create-experts); the slot frame (4px padding + 1px border per side) is added so the card itself matches their width. */
 .scheduler-cards { display: grid; grid-template-columns: repeat(auto-fill, minmax(min(258px, 100%), 282px)); align-items: start; gap: 8px; }

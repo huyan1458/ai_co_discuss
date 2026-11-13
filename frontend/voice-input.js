@@ -2,7 +2,8 @@
  * Voice input for the composer: record the microphone as 16 kHz mono PCM, send it to the local service in parts while
  * recording, and when stopped have the last part recognized into text.
  */
-import { reactive } from "vue";
+import { nextTick, onBeforeUnmount, onMounted, reactive } from "vue";
+import { ENTER_SENDS } from "./enter-sends.js";
 
 const TARGET_RATE = 16000;
 // Six seconds per part keeps each relayed request (base64, then sealed and base64 again) under the 512 KiB body limit.
@@ -144,4 +145,96 @@ export function use_voice_input({ bridge, on_text }) {
   function resume() { context?.resume().catch(() => {}); }
 
   return { state, toggle, cancel, resume };
+}
+
+// Touch: hold the microphone to talk and let go to finish, slide up to discard; a short tap keeps recording until ✓.
+const VOICE_HOLD_MS = 300;
+const VOICE_CANCEL_SLIDE_PX = 60;
+
+/** Recording time as m:ss. */
+export const format_voice_time = (seconds) => `${Math.floor(seconds / 60)}:${String(seconds % 60).padStart(2, "0")}`;
+
+/**
+ * How the composer's microphone is pressed: tap or hold on touch, click with a mouse, hold Space on desktop, and while
+ * recording Esc discards and Enter finishes. Call from a component's setup; the keys are watched while it is mounted.
+ * @param {object} options
+ * @param {ReturnType<typeof use_voice_input>} options.voice The recorder.
+ * @param {() => HTMLTextAreaElement | undefined} options.textarea The composer's text area.
+ * @param {import("vue").Ref<string>} options.text The composer's text.
+ * @param {() => boolean} options.busy Whether a send is in progress, which keeps recording from starting.
+ * @returns {{ hold: { by: string, discard: boolean }, pointerdown: Function, click: Function }}
+ */
+export function use_voice_press({ voice, textarea, text, busy }) {
+  // How the current recording is being held: "" (tap mode), "touch" or "space"; `discard` while slid up to cancel.
+  const hold = reactive({ by: "", discard: false });
+  let press = null, touch_click = false;
+
+  function pointerdown(event) {
+    touch_click = event.pointerType !== "mouse";
+    if (!touch_click || voice.state.status || busy()) return;
+    press = { id: event.pointerId, y: event.clientY, at: event.timeStamp };
+    Object.assign(hold, { by: "touch", discard: false });
+    // The button is replaced by the recording bar under the finger, so the rest of the press is followed on the window.
+    window.addEventListener("pointermove", pointermove);
+    window.addEventListener("pointerup", pointerup);
+    window.addEventListener("pointercancel", pointerup);
+    voice.toggle();
+  }
+  function pointermove(event) {
+    if (event.pointerId === press?.id) hold.discard = press.y - event.clientY > VOICE_CANCEL_SLIDE_PX;
+  }
+  function pointerup(event) {
+    if (event.pointerId !== press?.id) return;
+    window.removeEventListener("pointermove", pointermove);
+    window.removeEventListener("pointerup", pointerup);
+    window.removeEventListener("pointercancel", pointerup);
+    const held = event.type === "pointerup" && event.timeStamp - press.at >= VOICE_HOLD_MS, { discard } = hold;
+    press = null;
+    Object.assign(hold, { by: "", discard: false });
+    voice.resume();
+    if (discard) voice.cancel();
+    // A tap, or a hold the browser would not record yet (first permission prompt), stays on as tap mode.
+    else if (held && voice.state.status === "recording" && voice.state.capturing) voice.toggle();
+  }
+  /** Mouse clicks toggle recording; the click that ends a touch press is already handled by the press. */
+  function click() {
+    if (touch_click) { touch_click = false; return; }
+    voice.toggle();
+  }
+  // Desktop: holding Space in the composer (or with nothing focused) talks until it is let go. A hold is known once
+  // the key starts repeating; the one space the first press typed is taken back.
+  function space_down(event) {
+    if (hold.by === "space") { event.preventDefault(); return; }
+    const area = textarea();
+    if (!event.repeat || voice.state.status || busy() || ![area, document.body].includes(event.target)) return;
+    event.preventDefault();
+    const caret = area?.selectionStart ?? 0;
+    if (event.target === area && text.value?.[caret - 1] === " ") {
+      text.value = `${text.value.slice(0, caret - 1)}${text.value.slice(caret)}`;
+      nextTick(() => area.setSelectionRange(caret - 1, caret - 1));
+    }
+    hold.by = "space";
+    voice.toggle();
+  }
+  function keyup(event) {
+    if (event.code !== "Space" || hold.by !== "space") return;
+    event.preventDefault();
+    hold.by = "";
+    if (voice.state.status === "recording") voice.toggle();
+  }
+  /** While voice input is on, Esc discards it and Enter finishes it instead of sending; runs before the composer's keys. */
+  function keydown(event) {
+    if (event.isComposing) return;
+    if (event.code === "Space" && !(event.ctrlKey || event.metaKey || event.altKey || event.shiftKey)) return space_down(event);
+    if (!voice.state.status) return;
+    const finish = event.key === "Enter" && ENTER_SENDS && !event.shiftKey;
+    if (event.key !== "Escape" && !finish) return;
+    event.preventDefault();
+    event.stopPropagation();
+    if (event.key === "Escape") voice.cancel();
+    else if (voice.state.status === "recording") voice.toggle();
+  }
+  onMounted(() => { window.addEventListener("keydown", keydown, true); window.addEventListener("keyup", keyup, true); });
+  onBeforeUnmount(() => { window.removeEventListener("keydown", keydown, true); window.removeEventListener("keyup", keyup, true); });
+  return { hold, pointerdown, click };
 }

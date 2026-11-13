@@ -15,6 +15,8 @@ const protocols = [{ value: "responses", label: "OpenAI Responses" }, { value: "
 // A key entered for one address does not belong to another.
 watch(() => profile.value.base_url, () => { api_key.value = saved_key.value = ""; });
 const write = (field, value) => bridge.write_launch(props.name, field, value);
+// A key the computer owner provided to this hosted account is used as is; the account neither sees nor replaces it here.
+const provided = computed(() => view.value.launch.projects_restricted && (view.value.launch.managed_api_keys || []).includes(profile.value.api_key_ref));
 
 /** Persist the entered key once input is committed (blur or Enter); it stays in the field so it can still be shown. */
 async function save_key() {
@@ -31,7 +33,8 @@ async function save_key() {
   <div class="api-settings">
     <label class="api-field" title="Base URL"><span>地址</span><UInput :model-value="profile.base_url || ''" :aria-label="`${name} Base URL`" placeholder="Base URL" class="w-full" size="xs" @update:model-value="write('base_url', $event)" /></label>
     <div class="api-field" title="OpenRouter 等兼容服务可选 Chat Completions，并填写该服务的完整模型 ID。"><span>协议</span><USelect :model-value="profile.api_protocol || ''" :items="protocols" :aria-label="`${name} API 请求协议`" class="w-full" size="xs" @update:model-value="write('api_protocol', $event)" /></div>
-    <div class="api-field"><span>密钥</span>
+    <div v-if="provided" class="api-field"><span>密钥</span><span class="api-provided"><UIcon name="i-lucide-shield-check" />管理员已提供</span></div>
+    <div v-else class="api-field"><span>密钥</span>
       <!-- A text field masked by CSS keeps browsers from offering to generate or save a password. -->
       <UInput v-model="api_key" type="text" autocomplete="off" spellcheck="false" data-1p-ignore data-lpignore="true" :placeholder="profile.api_key_ref ? SAVED_MARK : '填写 API Key'" :title="profile.api_key_ref && !api_key ? '已保存；本机不回传密钥，输入新 Key 可更换' : undefined" :aria-label="`${name} API Key`" size="xs" class="w-full" :loading="saving" :ui="{ base: key_visible ? '' : 'api-key-masked', trailing: 'pe-0.5' }" @change="save_key">
         <template #trailing><UButton :icon="key_visible ? 'i-lucide-eye' : 'i-lucide-eye-off'" :disabled="!api_key" :aria-label="key_visible ? '隐藏密钥' : '显示密钥'" :aria-pressed="key_visible" size="xs" color="neutral" variant="link" @click="key_visible = !key_visible" /></template>
@@ -51,5 +54,7 @@ async function save_key() {
 .api-inline { display: flex; gap: 4px; min-width: 0; }
 .api-inline > button { flex-shrink: 0; }
 .api-settings :deep(.api-key-masked) { -webkit-text-security: disc; }
+.api-provided { display: inline-flex; align-items: center; gap: 5px; min-height: 24px; color: var(--ui-text-muted); }
+.api-provided > [class*="icon"] { width: 13px; height: 13px; color: var(--ui-success, #3ec486); }
 .api-settings p { margin: 0; color: var(--ui-text-muted); font-size: 10px; line-height: 1.5; overflow-wrap: anywhere; }
 </style>

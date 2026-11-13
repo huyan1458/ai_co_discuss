@@ -6,6 +6,7 @@
 import { computed, inject, ref, watch } from "vue";
 import ApiRequestsField from "./ApiRequestsField.vue";
 import ImageService from "./ImageService.vue";
+import SchedulerSettings from "./SchedulerSettings.vue";
 import ChainRoundsField from "./ChainRoundsField.vue";
 import EffortSlider from "./EffortSlider.vue";
 import ExtraDirectoriesField from "./ExtraDirectoriesField.vue";
@@ -18,6 +19,7 @@ import MemberDescriptionDialog from "./MemberDescriptionDialog.vue";
 import MemoBlock from "./memo-block.js";
 import { member_actions } from "./member-actions.js";
 import { access_label, access_options } from "../runner/expert_prompts.mjs";
+import { adapter_profile } from "../runner/adapters/profiles.mjs";
 
 const { view, bridge, act } = inject("discussion");
 const ACCESS_LABELS = { manual: "手动接入" };
@@ -191,22 +193,23 @@ async function switch_access(member, project_access) {
   finally { switching.value = ""; }
 }
 
-// CLIs whose model and effort this tool passes on each run; Apps choose their own and API members keep the model set at invitation.
-const MODEL_CLIENTS = ["codex_cli", "claude", "antigravity_cli"];
 const EFFORT_LABELS = { low: "Low", medium: "Medium", high: "High", xhigh: "Extra High", max: "Max", ultra: "Ultra" };
 
-/** Whether this member's model and effort can be changed here. */
+/** Whether this member's model and effort can be changed here: a CLI or API member starts each run with them, an App chooses its own. */
 function model_editable(member) {
   const profile = saved.value?.participants?.[member.name];
-  return member.access === "runner" && MODEL_CLIENTS.includes(profile?.adapter) && profile.project_access !== "own"
+  const kind = adapter_profile(profile?.adapter)?.kind;
+  return member.access === "runner" && Boolean(kind) && kind !== "app" && profile.project_access !== "own"
     && !waiting(member.name) && view.value.access?.can_manage && view.value.launch.available;
 }
 
 // The member whose model is being changed, with the draft the dialog edits.
 const model_edit = ref(null), model_saving = ref(false);
 const model_state = computed(() => model_edit.value && bridge.launch_model_state(model_edit.value.name, view.value.launch, model_edit.value.draft));
+// A software that lists no models (a model API) takes a typed model ID and offers its declared effort levels.
+const model_typed = computed(() => model_edit.value && !adapter_profile(model_edit.value.draft.adapter)?.models);
 const model_efforts = computed(() => {
-  const levels = model_state.value?.efforts;
+  const levels = model_state.value?.efforts || (model_typed.value ? adapter_profile(model_edit.value.draft.adapter)?.efforts : null);
   return levels?.length ? [{ label: "默认强度", value: "" }, ...levels.map((level) => ({ label: EFFORT_LABELS[level] || level, value: level }))] : null;
 });
 
@@ -214,7 +217,7 @@ const model_efforts = computed(() => {
 function edit_model(member) {
   const { adapter, model, effort } = saved.value.participants[member.name];
   model_edit.value = { name: member.name, draft: { adapter, model: model || "", effort: effort || "" } };
-  bridge.load_launch_models(member.name, false, model_edit.value.draft);
+  if (!model_typed.value) bridge.load_launch_models(member.name, false, model_edit.value.draft);
 }
 
 /** Pick a model; an effort the new model does not offer goes back to the default. */
@@ -303,8 +306,8 @@ const created = computed(() => room.value.created_at ? new Date(room.value.creat
           <!-- Shaped like the extra directory rows below, but locked: the lock replaces the project picker, copy replaces removal. -->
           <div class="overview-main-directory">
             <div class="overview-main-box" title="主目录，设置后不能更改"><span class="overview-main-prefix"><UIcon name="i-lucide-lock" /></span>
-              <span class="overview-main-path">{{ saved.project_directory }}</span><span class="overview-main-tag">主目录</span></div>
-            <UButton icon="i-lucide-copy" color="neutral" variant="ghost" size="xs" aria-label="复制项目目录" title="复制路径" @click="act('copy', saved.project_directory)" /></div>
+              <span class="overview-main-path">{{ bridge.display_path(saved.project_directory) }}</span><span class="overview-main-tag">主目录</span></div>
+            <UButton v-if="!view.launch.projects_restricted" icon="i-lucide-copy" color="neutral" variant="ghost" size="xs" aria-label="复制项目目录" title="复制路径" @click="act('copy', saved.project_directory)" /></div>
           <ExtraDirectoriesField v-model="directories_draft" :disabled="!directories_editable || saving_directories" />
         </template>
         <ProjectDirectoryField v-else-if="directories_editable" v-model="main_draft" compact placeholder="为本房间设置项目目录的完整路径" :disabled="saving_directories" />
@@ -348,8 +351,8 @@ const created = computed(() => room.value.created_at ? new Date(room.value.creat
               </div>
               <span v-else class="overview-muted" :title="files(member).hint">{{ files(member).text }}</span>
             </dd></div>
-            <div v-if="saved?.participants?.[member.name]?.outside_directory" class="overview-outside" :title="saved.participants[member.name].outside_directory">
-              <UIcon name="i-lucide-triangle-alert" /><span>在 {{ saved.participants[member.name].outside_directory }} 工作，房间目录{{ saved.participants[member.name].outside_enforced ? '只读' : '只读（仅任务要求，程序拦不住）' }}</span></div>
+            <div v-if="saved?.participants?.[member.name]?.outside_directory" class="overview-outside" :title="bridge.display_path(saved.participants[member.name].outside_directory)">
+              <UIcon name="i-lucide-triangle-alert" /><span>在 {{ bridge.display_path(saved.participants[member.name].outside_directory) }} 工作，房间目录{{ saved.participants[member.name].outside_enforced ? '只读' : '只读（仅任务要求，程序拦不住）' }}</span></div>
           </dl>
           <footer class="member-card-actions" :aria-label="`${member.name} 的操作`">
             <div><UButton v-for="item in actions(member).taking_part" :key="item.label" :icon="item.icon" :label="item.label" size="xs" variant="ghost" color="neutral" :disabled="item.disabled" @click="item.onSelect()" /></div>
@@ -364,7 +367,9 @@ const created = computed(() => room.value.created_at ? new Date(room.value.creat
       <h3>协作设置</h3>
       <dl class="overview-settings">
         <div><dt>主持人</dt><dd>{{ room.host ? bridge.display_name(room.host) : '未指定' }}</dd></div>
-        <div><dt>智能调度</dt><dd>{{ scheduler }}</dd></div>
+        <div><dt>智能调度</dt><dd>
+          <SchedulerSettings v-if="saved?.registered" room compact :free="free" :disabled="!view.access?.can_manage || room.archived" />
+          <template v-else>{{ scheduler }}</template></dd></div>
         <div><dt>工作流</dt><dd class="overview-workflow">
           <WorkflowControl v-if="workflow" :workflow="workflow" />
           <span v-else class="overview-muted">没有进行中的工作流；在输入框打 / 或邀请成员时选择</span>
@@ -380,7 +385,7 @@ const created = computed(() => room.value.created_at ? new Date(room.value.creat
         <div v-if="saved?.registered"><dt>API 请求上限</dt><dd>
           <ApiRequestsField :model-value="requests_shown" :disabled="!view.access?.can_manage || room.archived || saving_requests" @update:model-value="save_requests" /></dd></div>
         <div v-if="saved?.registered"><dt>生图</dt><dd>
-          <ImageService :enabled="Boolean(saved.image_generation)" :disabled="!view.access?.can_manage || room.archived" @update:enabled="act('set_room_image_generation', $event)" /></dd></div>
+          <ImageService compact :enabled="Boolean(saved.image_generation)" :disabled="!view.access?.can_manage || room.archived" @update:enabled="act('set_room_image_generation', $event)" /></dd></div>
         <div v-if="!free"><dt>逐人追问</dt><dd>{{ room.named_followup ? '开启：主持人每轮给每位专家写针对性追问' : '关闭：首轮后请专家回应上一轮观点' }}</dd></div>
         <div><dt>阅读地址</dt><dd class="overview-address"><code>{{ reading }}</code><UButton icon="i-lucide-copy" color="neutral" variant="ghost" size="xs" aria-label="复制阅读地址" @click="act('copy', reading)" /></dd></div>
         <div v-if="created"><dt>创建时间</dt><dd>{{ created }}</dd></div>
@@ -390,8 +395,9 @@ const created = computed(() => room.value.created_at ? new Date(room.value.creat
     <UModal :content="{ onInteractOutside: (event) => event.preventDefault() }" :open="Boolean(model_edit)" :title="model_edit ? `${bridge.display_name(model_edit.name)} 的模型与强度` : ''" description="下次处理请求起生效，保留原会话。" :ui="{ content: 'glass-panel studio-modal', body: 'dialog-body' }" @update:open="(open) => { if (!open) model_edit = null; }">
       <template #body>
         <form v-if="model_edit" class="overview-model-form" @submit.prevent="save_model">
-          <label><span>模型</span><USelect :model-value="model_edit.draft.model || '__default__'" :items="model_state.items" :title="model_state.source" :aria-label="`${model_edit.name} 使用的模型`" class="w-full" @update:model-value="pick_model" /></label>
-          <p v-if="model_state.loading || model_state.error" class="overview-muted">{{ model_state.loading ? '正在读取软件模型列表…' : model_state.error }}</p>
+          <label v-if="model_typed"><span>模型 ID</span><UInput v-model.trim="model_edit.draft.model" :aria-label="`${model_edit.name} 使用的模型 ID`" class="w-full" /></label>
+          <label v-else><span>模型</span><USelect :model-value="model_edit.draft.model || '__default__'" :items="model_state.items" :title="model_state.source" :aria-label="`${model_edit.name} 使用的模型`" class="w-full" @update:model-value="pick_model" /></label>
+          <p v-if="!model_typed && (model_state.loading || model_state.error)" class="overview-muted">{{ model_state.loading ? '正在读取软件模型列表…' : model_state.error }}</p>
           <EffortSlider v-if="model_efforts" caption="强度" :items="model_efforts" :model-value="model_edit.draft.effort" :label="`${model_edit.name} 的思考强度`" @update:model-value="model_edit.draft.effort = $event" />
           <p v-else class="overview-muted">{{ model_state.effort_note }}</p>
           <div class="overview-model-actions">

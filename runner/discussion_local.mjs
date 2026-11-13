@@ -2,6 +2,7 @@
 import { spawn } from 'node:child_process';
 import { createHash, randomBytes } from 'node:crypto';
 import { appendFileSync, closeSync, existsSync, mkdirSync, openSync, readFileSync, unlinkSync } from 'node:fs';
+import { homedir } from 'node:os';
 import { delimiter, dirname, join, resolve } from 'node:path';
 import { setTimeout as sleep } from 'node:timers/promises';
 import { fileURLToPath, pathToFileURL } from 'node:url';
@@ -180,6 +181,20 @@ async function requested_service(home, status, owned_service) {
   return owned_service;
 }
 
+// The computer owner's management panel and its taskbar icon; hosted accounts (with a projects root) have none.
+const PANEL_SCRIPT = join(dirname(fileURLToPath(import.meta.url)), 'admin_panel.mjs');
+const ACCOUNT_MODULE = join(dirname(dirname(fileURLToPath(import.meta.url))), 'gateway', 'gateway.mjs');
+
+/** Start the management panel in the background on the owner's Windows instance; it keeps running on its own. */
+function start_panel_icon(home, settings) {
+  // Only the owner's default service directory: a test or a second copy elsewhere must not put up another icon.
+  if (process.platform !== 'win32' || settings.projects_root || resolve(home) !== resolve(homedir(), '.codiscuss')) return;
+  if (!existsSync(PANEL_SCRIPT) || !existsSync(ACCOUNT_MODULE)) return;
+  const child = spawn(process.execPath, [PANEL_SCRIPT, 'start', '--data', home], { detached: true, stdio: 'ignore', windowsHide: true });
+  child.on('error', () => {});
+  child.unref();
+}
+
 /** Run one supervisor, recording readiness and handling an explicit local stop request. */
 async function supervise(home) {
   assert_shared_home(home);
@@ -200,6 +215,7 @@ async function supervise(home) {
     website = website_process(home, settings, url);
     await wait_website(website.child, website.progress, url);
     owned_service = await start_service(home);
+    start_panel_icon(home, settings);
     const ready = { ...status, ready: true, database: website.database, website_pid: website.child.pid };
     atomic_json(status_path, { ...ready, service_pid: owned_service.pid });
     while (!stopped && !existsSync(stop_path) && website.child.exitCode === null && !website.child.signalCode) {

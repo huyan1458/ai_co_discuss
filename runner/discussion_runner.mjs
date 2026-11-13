@@ -64,7 +64,9 @@ export function validate_config(input, base_directory) {
     const api = adapter_profile(participant.adapter)?.kind === 'api';
     if (api) {
       read_api_key(config.api_home, participant);
-      for (const field of ['project_id', 'executable', 'effort']) delete participant[field];
+      for (const field of ['project_id', 'executable']) delete participant[field];
+      // A level carried over from a CLI's settings is dropped; one the API profile offers goes to Pi.
+      if (!adapter_profile(participant.adapter).efforts.includes(participant.effort)) delete participant.effort;
     }
     participant.cwd = participant.cwd ?? config.cwd;
     participant.project_name = participant.project_name ?? config.discussion_project;

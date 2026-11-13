@@ -269,11 +269,11 @@ function attachment_fixture() {
     return nodes.get(id);
   };
   element("author-select").value = "用户";
-  const state = { room: { id: "one", host: "Codex" }, attachment_drafts: [], messages: [], message_total: 0 };
+  const state = { room: { id: "one", host: "Codex" }, attachment_drafts: [], failed_sends: [], messages: [], message_total: 0 };
   let identifier = 0, fail = true;
   const context = vm.createContext({ state, element, MAX_MESSAGE_LENGTH: 30000, MAX_SUMMARY_LENGTH: 1000,
     MAX_MESSAGE_ATTACHMENTS: 10, MAX_ATTACHMENT_BYTES: 20 * 1024 * 1024, URLSearchParams,
-    new_submission_id: () => String(++identifier), escape_html: text => text,
+    new_submission_id: () => String(++identifier), escape_html: text => text, relay_files: new Map(),
     URL: { createObjectURL: () => "blob:test", revokeObjectURL: url => revoked.push(url) },
     localStorage: { getItem: () => null }, admin_headers: () => ({}), publish_view() {}, show_toast() {}, cancel_reply() {},
     notify: (level, message) => notified.push([level, message]),
@@ -295,17 +295,19 @@ test("attachment retries retain files and reuse both upload and message receipts
   const fixture = attachment_fixture(), { context, state, uploads, posts } = fixture;
   context.add_attachments([{ name: "截图.png", size: 10, type: "image/png" }]);
   await assert.rejects(context.send_message({ preventDefault() {} }), /连接中断/);
-  assert.equal(state.attachment_drafts.length, 1);
-  assert.equal(state.sending_preview.failed, "连接中断", "a failed send stays in the transcript as a failed card");
+  assert.equal(state.attachment_drafts.length, 0, "a failed send does not fill the composer back");
+  assert.equal(state.failed_sends[0].drafts.length, 1, "the failed card keeps its files");
+  assert.equal(state.failed_sends[0].preview.failed, "连接中断", "a failed send stays in the transcript as a failed card");
   assert.equal(fixture.notified.length, 0, "the failed card is the only signal of the failure");
   const first_id = posts[0][1].submission_id;
   fixture.succeed();
-  await context.send_message({ preventDefault() {} });
+  await context.retry_sending(state.failed_sends[0].id);
   assert.equal(uploads.length, 1);
   assert.equal(posts[1][1].submission_id, first_id);
   assert.equal(posts[1][1].text, "", "files-only messages are submitted");
   assert.deepEqual(Array.from(state.messages, message => message.id), [1], "the saved message shows before the room is read again");
   assert.equal(state.sending_preview, null, "the retry replaces the failed card with the saved message");
+  assert.equal(state.failed_sends.length, 0);
   assert.equal(state.attachment_drafts.length, 0);
   assert.deepEqual(fixture.revoked, ["blob:test"]);
 });

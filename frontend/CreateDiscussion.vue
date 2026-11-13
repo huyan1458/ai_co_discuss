@@ -200,7 +200,7 @@ const summary = computed(() => {
       <section class="create-section">
         <h3><span>1</span>这次做什么</h3>
         <UFormField label="话题名称" required><UInput :model-value="value('title')" :maxlength="80" required autofocus size="lg" placeholder="这次要一起做什么？" class="w-full" @update:model-value="write('title', $event)" /></UFormField>
-        <UFormField label="项目目录（可选）" :description="view.launch.available ? '本机唤醒的成员在此目录读写文件；不填则各用软件默认目录。' : relay ? `由电脑「${relay.name}」唤醒的成员在所选项目中读写文件；不选则各用软件默认目录。` : '连接本机服务后可指定：本机唤醒的成员将在此目录读写文件。'">
+        <UFormField label="项目目录（可选）" :description="view.launch.available ? '本机唤醒的成员在此目录读写文件；不选则使用草稿空间，为这个房间单独建一个文件夹。' : relay ? `由电脑「${relay.name}」唤醒的成员在所选项目中读写文件；不选则各用软件默认目录。` : '连接本机服务后可指定：本机唤醒的成员将在此目录读写文件。'">
           <ProjectDirectoryField :disabled="!launchable" />
           <!-- Rarely needed, so only a link under the main directory until the first extra one is added. -->
           <ExtraDirectoriesField v-if="view.launch.available && view.launch.workspace.cwd" class="create-extra-directories" :model-value="view.launch.workspace.extra_directories || []"

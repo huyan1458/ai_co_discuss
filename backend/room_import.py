@@ -85,6 +85,11 @@ def member_statements(tables, room_id, maps):
                                                 uuid.uuid4().hex * 2, remap_until(member.get("read_until"), maps["messages"]),
                                                 member["created_at"], "manual" if member.get("access") == "online" else member.get("access") or "manual",
                                                 member.get("session_mode") or "new")))
+    # The owner's display labels and descriptions, by member name; older backups have neither.
+    statements += [("INSERT INTO member_labels (room_id,name,label,updated_at) VALUES (?,?,?,?)",
+                    (room_id, row["name"], row["label"], row["updated_at"])) for row in tables.get("member_labels", [])]
+    statements += [("INSERT INTO member_descriptions (room_id,name,description,updated_at) VALUES (?,?,?,?)",
+                    (room_id, row["name"], row["description"], row["updated_at"])) for row in tables.get("member_descriptions", [])]
     return statements
 
 

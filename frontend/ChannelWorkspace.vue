@@ -82,6 +82,7 @@ const work_status = computed(() => {
 });
 /** Card kinds the transcript filter offers; ChannelDiscussion recognises each value. */
 const CARD_FILTERS = [
+  { value: "working", label: "运行中", icon: "i-lucide-loader" },
   { value: "failed", label: "失败与报错", icon: "i-lucide-circle-alert" },
   { value: "stopped", label: "已停止与撤回", icon: "i-lucide-circle-stop" },
   { value: "scheduler", label: "智能调度", icon: "i-lucide-zap" },

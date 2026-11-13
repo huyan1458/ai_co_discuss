@@ -326,7 +326,9 @@ export function add_user_turns(segments, now_ms) {
  * The tasks as a list, newest first: what opened each (`task`, `task_id`, and the answer to it as `result`), when it began
  * and last ended, how many executions, who did the work and for how long (`work`, longest first; members working at once
  * each count), and how its time went in one sweep (`parts`, `wait`; see time_parts). Also whether any is still running
- * or failed, and how many interjections joined it.
+ * or failed, and how many interjections joined it. For the overview's unfolded task: `steps` (each execution in the order
+ * it began: `key`, `member`, `role`, `state`, `ask` what it was asked, `reason` why it failed, `ms` its span), `outcome`
+ * (the answer of the last execution to finish with one, as `member` and `text`) and `changes` (files changed in all).
  */
 export function task_overview(segments) {
   return segments.map((segment) => {
@@ -335,7 +337,13 @@ export function task_overview(segments) {
     // The owner's time is named among the people; the task's span, count and bar are the room's work, so a night
     // between tasks does not stretch one.
     const runs = segment.items.filter(({ item }) => item.source !== "user");
+    const steps = [...runs].sort((a, b) => a.stages.start - b.stages.start).map(({ item, stages }) => ({
+      key: `${item.source}:${item.id}`, member: item.member, role: item.role, state: item.state,
+      ask: item.task || "", reason: item.reason || "", ms: stages.end - stages.start }));
+    const answered = runs.filter(({ item }) => item.state === "done" && item.result).sort((a, b) => b.stages.end - a.stages.end)[0];
     return {
+      steps, outcome: answered ? { member: answered.item.member, text: answered.item.result } : null,
+      changes: runs.reduce((sum, { item }) => sum + (item.changes || 0), 0),
       key: segment.key, opened: segment.opened, task: segment.opener.task || "", task_id: segment.opener.task_id || null,
       result: segment.opener.result || "", interjections: segment.interjections,
       start: Math.min(...runs.map(({ stages }) => stages.start)), end: Math.max(...runs.map(({ stages }) => stages.end)),

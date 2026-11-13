@@ -665,6 +665,12 @@ def note_count(connection, execution_id):
     return connection.execute("SELECT COUNT(*) FROM execution_notes WHERE execution_id=?", (execution_id,)).fetchone()[0]
 
 
+def step_count(connection, execution_id):
+    """How many actions (commands, tool calls, file edits) an execution has reported, so its card shows it is working."""
+    return connection.execute("""SELECT COUNT(*) FROM execution_segments WHERE source='free' AND execution_id=?
+        AND phase IN ('command','tool','editing')""", (execution_id,)).fetchone()[0]
+
+
 def execution_notes(connection, room_id, execution_id, token=""):
     """Read one execution's progress notes in order, with the same access as the room view."""
     execution = connection.execute("SELECT member_id FROM member_executions WHERE room_id=? AND id=?", (room_id, execution_id)).fetchone()
@@ -798,12 +804,11 @@ def session_request_source(connection, member_request_id, message_id):
 
 
 def possible_conflicts(connection, room_id, names):
-    """Report files that executions of different members with overlapping time windows may both have written.
+    """Report files that executions of different members with overlapping time windows both wrote.
 
-    A working-tree snapshot sees every change made while an execution ran, including another member's. Where the
-    runner also reported `edited` (the files the agent's own edit tools wrote), a shared file counts only if every side
-    that reported it named it, so concurrent work on separate files is not flagged. `confirmed` lists the files both
-    sides' edit tools wrote. Writes made through commands are not in `edited`, and writes outside the scanned working
+    A working-tree snapshot sees every change made while an execution ran, including another member's, so it cannot
+    tell who wrote a file. A file counts only when both sides reported `edited` (the files the agent's own edit tools
+    wrote) and both named it. Writes made through commands are not in `edited`, and writes outside the scanned working
     directory are not seen at all.
     """
     now = int(time.time())
@@ -821,13 +826,12 @@ def possible_conflicts(connection, room_id, names):
                 continue
             if first["created_at"] > second["end"] or second["created_at"] > first["end"]:
                 continue
-            pair = (second, first)
-            files = sorted(path for path in first["files"] & second["files"]
-                           if all(row["edited"] is None or path in row["edited"] for row in pair))
+            if first["edited"] is None or second["edited"] is None:
+                continue
+            files = sorted(first["files"] & second["files"] & first["edited"] & second["edited"])
             if files:
-                confirmed = [path for path in files if all(row["edited"] is not None for row in pair)]
                 conflicts.append({"members": [names.get(second["member_id"], ""), names.get(first["member_id"], "")],
-                                  "executions": [second["id"], first["id"]], "files": files, "confirmed": confirmed})
+                                  "executions": [second["id"], first["id"]], "files": files})
     return conflicts
 
 
@@ -868,6 +872,7 @@ def free_view(connection, room_id):
         if latest and latest["status"] in ACTIVE:
             member["execution"]["stale"] = latest["lease_until"] <= now
             member["execution"]["notes"] = note_count(connection, latest["id"])
+            member["execution"]["steps"] = step_count(connection, latest["id"])
             member["execution"]["retry"] = execution_retry(connection, latest["id"])
         member["pending"] = connection.execute("SELECT COUNT(*) FROM member_requests WHERE member_id=? AND status='pending'",
                                                (row["id"],)).fetchone()[0]

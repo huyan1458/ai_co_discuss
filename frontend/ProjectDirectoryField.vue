@@ -2,7 +2,8 @@
 /** Launch cwd field: type a path, pick a saved project, or browse for a folder: with the computer's own dialog in its
  * browser, or from another device through a folder list limited to the saved projects. A device without the local
  * service picks only among the projects its paired computer published. With `v-model` it edits that path instead of
- * the launch's cwd (one row of the extra project directories); the paired-computer project picker has no such mode. */
+ * the launch's cwd (one row of the extra project directories); the paired-computer project picker has no such mode.
+ * An account whose projects all sit in its own folder only picks among them or creates one by name. */
 import { computed, inject, nextTick, onBeforeUnmount, ref } from "vue";
 
 const props = defineProps({ placeholder: { type: String, default: "输入完整路径，或选择项目" }, disabled: { type: Boolean, default: false },
@@ -17,6 +18,8 @@ const projects = computed(() => relay.value ? relay.value.projects : launch.valu
 // The folder dialog opens on the computer running the service, so only its own browser (not a connected website) offers it;
 // other devices browse a folder list the computer limits to its saved projects.
 const native = computed(() => launch.value.available && !launch.value.remote);
+// The computer keeps this account to project folders it creates by name; no path is typed or browsed.
+const restricted = computed(() => launch.value.available && launch.value.projects_restricted === true);
 const browsable = computed(() => launch.value.available);
 const cwd = computed(() => (bound.value ? props.modelValue : launch.value.workspace.cwd) || "");
 const chosen = computed(() => relay.value ? projects.value.find((project) => project.id === launch.value.workspace.local_project)
@@ -84,9 +87,32 @@ function finish_folder(path) {
   folder_done = null;
 }
 
+// A select: the draft space and every project are always listed, the current one checked; creating sits apart at the end.
+const restricted_items = computed(() => [
+  bound.value ? [] : [{ label: "草稿空间", description: "不指定项目，为这个房间单独建一个文件夹", icon: "i-lucide-folder-open",
+    ...(chosen.value ? {} : { trailingIcon: "i-lucide-check" }), onSelect: () => write_cwd("") }],
+  projects.value.length ? [{ type: "label", label: "我的项目" },
+    ...projects.value.map((project) => ({ label: project.name, icon: "i-lucide-folder",
+      ...(chosen.value === project ? { trailingIcon: "i-lucide-check" } : {}), onSelect: () => write_cwd(project.path) }))] : [],
+  [{ label: "新建项目…", icon: "i-lucide-folder-plus", onSelect: () => { creating.value = { open: true, name: "", saving: false, error: "" }; } }],
+].filter((group) => group.length));
+
+// ---- New project for a restricted account: a name only; the computer creates the folder. ----
+const creating = ref({ open: false, name: "", saving: false, error: "" });
+async function create_project() {
+  const name = creating.value.name.trim();
+  if (!name) return;
+  Object.assign(creating.value, { saving: true, error: "" });
+  try {
+    const project = await bridge.create_launch_project(name);
+    write_cwd(project.path);
+    creating.value.open = false;
+  } catch (failure) { creating.value.error = failure.message; } finally { creating.value.saving = false; }
+}
+
 const menu_items = computed(() => [
   [{ type: "label", label: relay.value ? `电脑「${relay.value.name}」上的项目` : "常用项目" },
-    ...projects.value.map((project) => ({ label: project.name, description: relay.value ? undefined : project.path, icon: "i-lucide-folder",
+    ...projects.value.map((project) => ({ label: project.name, description: relay.value ? undefined : bridge.display_path(project.path), icon: "i-lucide-folder",
       ...(chosen.value === project ? { trailingIcon: "i-lucide-check" } : {}), onSelect: () => choose(project) }))],
   relay.value ? (chosen.value ? [{ label: "不指定项目", icon: "i-lucide-circle-slash", onSelect: () => choose(null) }] : [])
     : [{ label: "管理项目…", icon: "i-lucide-settings-2", onSelect: open_manager }],
@@ -157,7 +183,7 @@ async function save_projects() {
 
 <template>
   <div v-if="relay" class="project-field">
-    <UDropdownMenu :items="menu_items" :content="{ align: 'start', sideOffset: 4 }" :ui="{ content: 'channel-menu project-menu' }" :disabled="props.disabled || !projects.length">
+    <UDropdownMenu :items="menu_items" :content="{ align: 'start', sideOffset: 4 }" :ui="{ content: 'channel-menu project-menu project-menu-field' }" :disabled="props.disabled || !projects.length">
       <button type="button" class="project-select" :class="{ 'is-empty': !chosen }" :disabled="props.disabled || !projects.length">
         <UIcon :name="chosen ? 'i-lucide-folder' : 'i-lucide-folder-search'" class="project-select-icon" />
         <span>{{ chosen ? chosen.name : projects.length ? "选择项目" : `电脑「${relay.name}」上还没有项目` }}</span>
@@ -167,11 +193,21 @@ async function save_projects() {
     <p v-if="!relay.online" class="project-note"><UIcon name="i-lucide-moon" />电脑「{{ relay.name }}」当前离线，创建请求会等它上线后执行。</p>
   </div>
 
+  <div v-else-if="restricted" class="project-field">
+    <UDropdownMenu :items="restricted_items" :content="{ align: 'start', sideOffset: 4 }" :ui="{ content: 'channel-menu project-menu project-menu-field' }" :disabled="props.disabled">
+      <button type="button" class="project-select" :class="{ 'is-empty': !chosen && bound }" :disabled="props.disabled">
+        <UIcon :name="chosen ? 'i-lucide-folder' : bound ? 'i-lucide-folder-search' : 'i-lucide-folder-open'" class="project-select-icon" />
+        <span>{{ chosen ? chosen.name : bound ? "选择项目" : "草稿空间" }}</span>
+        <UIcon name="i-lucide-chevron-down" class="project-select-chevron" />
+      </button>
+    </UDropdownMenu>
+  </div>
+
   <!-- One field in two parts: the saved-project picker leads, naming the chosen project, and the typed path follows,
        with the computer's folder dialog at its end like any input's trailing action. -->
   <div v-else class="project-box" :class="{ 'is-disabled': props.disabled, 'is-chosen': chosen }">
     <UDropdownMenu v-if="projects.length" :items="menu_items" :content="{ align: 'start', sideOffset: 6 }" :ui="{ content: 'channel-menu project-menu' }" :disabled="props.disabled">
-      <button type="button" class="project-prefix" :class="{ 'is-chosen': chosen }" :title="chosen ? chosen.path : '从常用项目中选择'" aria-label="选择常用项目" :disabled="props.disabled">
+      <button type="button" class="project-prefix" :class="{ 'is-chosen': chosen }" :title="chosen ? bridge.display_path(chosen.path) : '从常用项目中选择'" aria-label="选择常用项目" :disabled="props.disabled">
         <UIcon :name="chosen ? 'i-lucide-folder' : 'i-lucide-folders'" /><span v-if="!props.compact">{{ chosen ? chosen.name : "常用项目" }}</span><UIcon name="i-lucide-chevron-down" class="project-prefix-chevron" />
       </button>
     </UDropdownMenu>
@@ -201,7 +237,7 @@ async function save_projects() {
               <UButton icon="i-lucide-check" color="neutral" variant="ghost" size="xs" aria-label="完成编辑" :disabled="!complete(project)" @click="editing = -1" />
             </template>
             <template v-else>
-              <div class="project-text"><strong>{{ project.name }}</strong><small :title="project.path">{{ project.path }}</small></div>
+              <div class="project-text"><strong>{{ project.name }}</strong><small :title="bridge.display_path(project.path)">{{ bridge.display_path(project.path) }}</small></div>
               <div class="project-actions">
                 <UButton icon="i-lucide-pencil" color="neutral" variant="ghost" size="xs" :aria-label="`编辑 ${project.name}`" @click="adding = null; editing = index" />
                 <UButton icon="i-lucide-trash-2" color="neutral" variant="ghost" size="xs" :aria-label="`移除 ${project.name}`" @click="remove(index)" />
@@ -233,13 +269,26 @@ async function save_projects() {
     </template>
   </UModal>
 
+  <UModal v-model:open="creating.open" title="新建项目" description="在你的项目文件夹里新建一个文件夹，房间成员在其中读写文件。" :ui="{ content: 'glass-panel studio-modal project-modal', body: 'dialog-body' }">
+    <template #body>
+      <form class="project-manager dialog-form" @submit.prevent="create_project">
+        <UFormField label="名称"><UInput v-model="creating.name" placeholder="例如 新品方案" :maxlength="80" autofocus class="w-full" /></UFormField>
+        <p v-if="creating.error" role="alert" class="project-error"><UIcon name="i-lucide-circle-alert" />{{ creating.error }}</p>
+        <div class="project-footer">
+          <UButton label="取消" color="neutral" variant="ghost" @click="creating.open = false" />
+          <UButton type="submit" label="新建" class="channel-primary-button" :loading="creating.saving" :disabled="!creating.name.trim()" />
+        </div>
+      </form>
+    </template>
+  </UModal>
+
   <UModal :open="folder.open" title="选择电脑上的文件夹" description="只列出常用项目中的文件夹；范围由电脑决定。" :ui="{ content: 'glass-panel studio-modal project-modal', body: 'dialog-body' }"
     @update:open="(open) => !open && finish_folder('')">
     <template #body>
       <div class="folder-picker">
         <div class="folder-head">
           <UButton icon="i-lucide-arrow-left" color="neutral" variant="ghost" size="xs" aria-label="上一级" :disabled="!folder.path || folder.loading" @click="open_folder(folder.parent || '')" />
-          <span class="folder-path" :title="folder.path">{{ folder.path || "常用项目" }}</span>
+          <span class="folder-path" :title="bridge.display_path(folder.path)">{{ bridge.display_path(folder.path) || "常用项目" }}</span>
         </div>
         <ul class="folder-list" aria-label="文件夹" :aria-busy="folder.loading">
           <template v-if="folder.loading && !folder.entries.length"><li v-for="row in 5" :key="`loading-${row}`" class="folder-entry" aria-hidden="true"><USkeleton class="h-4 w-4 shrink-0" /><USkeleton class="h-4 w-2/3" /></li></template>

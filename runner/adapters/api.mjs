@@ -367,7 +367,7 @@ async function task_prompt(context) {
 }
 
 // The member's profile fields the extension needs; the key travels only in the Pi process's environment.
-const PROFILE_FIELDS = ['adapter', 'base_url', 'api_protocol', 'model'];
+const PROFILE_FIELDS = ['adapter', 'base_url', 'api_protocol', 'model', 'effort'];
 
 /** Rebuild an execution's tool context inside the Pi process from the setup the runner wrote. */
 export function extension_context(setup, key) {

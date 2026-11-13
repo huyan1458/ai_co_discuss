@@ -289,7 +289,7 @@ test('API host tools read the latest roster and expose discussion actions only f
 test('free-room API replies bind to their reserved execution and complete the request', async t => {
   const f = await site_fixture(t);
   const mock = await model_fixture(t, call => tool_reply(call, 'submit_chat', { text: '处理了本次请求。', summary: '已处理。' }));
-  const participants = { Grok: profiles(f.home, mock.base_url).Grok };
+  const participants = { Grok: { ...profiles(f.home, mock.base_url).Grok, effort: 'medium' } };
   const started = await launch_discussion(f.home, { site: f.site, entry: 'web', participants,
     room: { title: '自由房间 API', mode: 'free', host: '用户', members: ['Grok'], submission_id: randomUUID() } }, { start_service: async () => ({ running: true }) });
   const config = load_config(started.config_path), store = new DiscussionStore(config.directory), runner = new FreeRoomRunner(config, store);
@@ -298,6 +298,8 @@ test('free-room API replies bind to their reserved execution and complete the re
   await until(async () => (await api(config, '/messages')).messages.some(message => message.author === 'Grok'), () => runner.tick());
   const messages = (await api(config, '/messages')).messages;
   assert.equal(messages.find(message => message.author === 'Grok').source, 'api');
+  // The member's thinking effort reaches the provider as the protocol's own reasoning parameter.
+  assert.equal(mock.calls[0].body.reasoning?.effort, 'medium');
 });
 
 test('in a room with drawing on, an API member generates and edits images with the image service and answers with them attached, and a CLI member draws with its credential', async t => {
@@ -338,6 +340,9 @@ test('in a room with drawing on, an API member generates and edits images with t
   const drawn = await draw_image(f.home, { access_file, request: { action: 'generate', prompt: '封面' } });
   assert.equal(drawn.images.length, 2);
   assert.match(drawn.images[0].attachment_id, /^[a-f0-9]{32}$/);
+  // The room has no project, so its folder of the draft space also holds the images.
+  assert.match(drawn.images[0].saved_path, /^images\/[0-9a-f]{6}-image-\d{14}-1\.png$/);
+  assert.deepEqual(readFileSync(join(config.cwd, drawn.images[1].saved_path)), PNG);
   await room_settings(f.home, { site: config.site, room_id: config.room, token: config.token, image_generation: false });
   await assert.rejects(draw_image(f.home, { access_file, request: { action: 'generate', prompt: '封面' } }), /没有添加生图服务/);
 });

@@ -158,7 +158,7 @@ ROOM_BACKUP_QUERIES = {
     "rooms": "SELECT * FROM rooms WHERE id=?",
     **{table: f"SELECT * FROM {table} WHERE room_id=?" for table in (
         "room_directory", "room_folder_assignments", "room_creations", "room_briefs", "room_user_requests",
-        "topic_settings", "discussion_limits")},
+        "topic_settings", "discussion_limits", "member_labels", "member_descriptions")},
     "scheduler_decisions": f"{DECISION_SELECT} WHERE d.room_id=? ORDER BY d.id",
     "topic_folders": "SELECT * FROM topic_folders WHERE id IN (SELECT folder_id FROM room_folder_assignments WHERE room_id=?)",
     "messages": "SELECT * FROM messages WHERE room_id=? ORDER BY id",

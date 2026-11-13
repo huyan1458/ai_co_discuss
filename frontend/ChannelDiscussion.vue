@@ -14,7 +14,7 @@ import { open_private_chat } from "./private-chat.js";
 import { ENTER_SENDS } from "./enter-sends.js";
 import { use_read_aloud } from "./read-aloud.js";
 import { use_broadcast } from "./broadcast.js";
-import { use_voice_input } from "./voice-input.js";
+import { format_voice_time, use_voice_input, use_voice_press } from "./voice-input.js";
 import ExcerptEditCard from "./ExcerptEditCard.vue";
 import { add_excerpt, excerpt_mark_place, excerpt_range, excerpt_source, excerpts_markdown, file_preview, hold_selection, text_offset } from "./file-preview.js";
 import { keep_reading_position } from "./scroll-anchor.js";
@@ -69,80 +69,9 @@ const voice = use_voice_input({ bridge, on_text: (spoken) => {
   // On touch screens focusing would raise the keyboard over the send key, so the text is only inserted.
   nextTick(() => { if (ENTER_SENDS) area?.focus(); area?.setSelectionRange(start + spoken.length, start + spoken.length); });
 } });
-const format_voice_time = (seconds) => `${Math.floor(seconds / 60)}:${String(seconds % 60).padStart(2, "0")}`;
-// Touch: hold the microphone to talk and let go to finish, slide up to discard; a short tap keeps recording until ✓.
-const VOICE_HOLD_MS = 300;
-const VOICE_CANCEL_SLIDE_PX = 60;
-// How the current recording is being held: "" (tap mode), "touch" or "space"; `discard` while slid up to cancel.
-const voice_hold = reactive({ by: "", discard: false });
-let voice_press = null, voice_touch_click = false;
-function voice_pointerdown(event) {
-  voice_touch_click = event.pointerType !== "mouse";
-  if (!voice_touch_click || voice.state.status || view.value.sending_message) return;
-  voice_press = { id: event.pointerId, y: event.clientY, at: event.timeStamp };
-  Object.assign(voice_hold, { by: "touch", discard: false });
-  // The button is replaced by the recording bar under the finger, so the rest of the press is followed on the window.
-  window.addEventListener("pointermove", voice_pointermove);
-  window.addEventListener("pointerup", voice_pointerup);
-  window.addEventListener("pointercancel", voice_pointerup);
-  voice.toggle();
-}
-function voice_pointermove(event) {
-  if (event.pointerId === voice_press?.id) voice_hold.discard = voice_press.y - event.clientY > VOICE_CANCEL_SLIDE_PX;
-}
-function voice_pointerup(event) {
-  if (event.pointerId !== voice_press?.id) return;
-  window.removeEventListener("pointermove", voice_pointermove);
-  window.removeEventListener("pointerup", voice_pointerup);
-  window.removeEventListener("pointercancel", voice_pointerup);
-  const held = event.type === "pointerup" && event.timeStamp - voice_press.at >= VOICE_HOLD_MS, { discard } = voice_hold;
-  voice_press = null;
-  Object.assign(voice_hold, { by: "", discard: false });
-  voice.resume();
-  if (discard) voice.cancel();
-  // A tap, or a hold the browser would not record yet (first permission prompt), stays on as tap mode.
-  else if (held && voice.state.status === "recording" && voice.state.capturing) voice.toggle();
-}
-/** Mouse clicks toggle recording; the click that ends a touch press is already handled by the press. */
-function voice_click() {
-  if (voice_touch_click) { voice_touch_click = false; return; }
-  voice.toggle();
-}
-// Desktop: holding Space in the composer (or with nothing focused) talks until it is let go. A hold is known once
-// the key starts repeating; the one space the first press typed is taken back.
-function voice_space_down(event) {
-  if (voice_hold.by === "space") { event.preventDefault(); return; }
-  const area = prompt.value?.textareaRef;
-  if (!event.repeat || voice.state.status || view.value.sending_message || ![area, document.body].includes(event.target)) return;
-  event.preventDefault();
-  const caret = area?.selectionStart ?? 0;
-  if (event.target === area && text.value?.[caret - 1] === " ") {
-    text.value = `${text.value.slice(0, caret - 1)}${text.value.slice(caret)}`;
-    nextTick(() => area.setSelectionRange(caret - 1, caret - 1));
-  }
-  voice_hold.by = "space";
-  voice.toggle();
-}
-function voice_keyup(event) {
-  if (event.code !== "Space" || voice_hold.by !== "space") return;
-  event.preventDefault();
-  voice_hold.by = "";
-  if (voice.state.status === "recording") voice.toggle();
-}
-/** While voice input is on, Esc discards it and Enter finishes it instead of sending; runs before the composer's keys. */
-function voice_keydown(event) {
-  if (event.isComposing) return;
-  if (event.code === "Space" && !(event.ctrlKey || event.metaKey || event.altKey || event.shiftKey)) return voice_space_down(event);
-  if (!voice.state.status) return;
-  const finish = event.key === "Enter" && ENTER_SENDS && !event.shiftKey;
-  if (event.key !== "Escape" && !finish) return;
-  event.preventDefault();
-  event.stopPropagation();
-  if (event.key === "Escape") voice.cancel();
-  else if (voice.state.status === "recording") voice.toggle();
-}
-onMounted(() => { window.addEventListener("keydown", voice_keydown, true); window.addEventListener("keyup", voice_keyup, true); });
-onBeforeUnmount(() => { window.removeEventListener("keydown", voice_keydown, true); window.removeEventListener("keyup", voice_keyup, true); });
+// Tap, hold or Space to talk, the same as on the welcome page's composer.
+const voice_press = use_voice_press({ voice, textarea: () => prompt.value?.textareaRef, text, busy: () => view.value.sending_message });
+const voice_hold = voice_press.hold;
 // Where "listen from here" shows for text selected in a message, with the selection kept for the click.
 const listen_here = ref(null);
 // The phone toolbar has room for three buttons, so read-aloud joins the "more" menu there.
@@ -375,8 +304,8 @@ const PRELOAD_MAX_SLICE = 20;
 // Idle slices wait this long at most (ms) for an idle moment, and hold off this long after the reader last scrolled.
 const PRELOAD_IDLE_TIMEOUT_MS = 300;
 const SCROLL_SETTLE_MS = 150;
-// WebKit (every iOS browser) has no scroll anchoring and keeps scrollTop in whole pixels, so each slice rendered above
-// shifts the cards on screen by the sub-pixel remainder; idle slices repeated through a long room made the text wobble.
+// WebKit (every iOS browser) has no scroll anchoring and keeps scrollTop in whole pixels, so a slice rendered above would
+// shift the cards on screen by its sub-pixel remainder (the text wobbled); there a top pad under 1px makes each shift whole.
 const SCROLL_ANCHORING = CSS.supports("overflow-anchor", "auto");
 const READING_OFFSET = 20;
 const room = computed(() => view.value.room);
@@ -433,7 +362,7 @@ const free_busy = computed(() => {
         text: execution.stale ? "执行失联：网站已不再接受本次回答，软件停止未确认" : retry ? "投递未成功，等待自动重试"
           : execution.paused_at ? "已在私聊中暂停，等你补充后接着做" : ACTIVITY_LABELS[execution.activity] || "正在处理",
         paused: Boolean(execution.paused_at), working: !execution.stale && !retry, created_at: execution.created_at, adapter: member.adapter, capabilities: execution.capabilities,
-        activity: execution.activity, activity_at: execution.activity_at, notes: execution.notes || 0,
+        activity: execution.activity, activity_at: execution.activity_at, notes: execution.notes || 0, steps: execution.steps || 0,
         execution_id: execution.id, request_message_id: reports.get(execution.id)?.request_message_id, anchor_message_id: reports.get(execution.id)?.anchor_message_id,
         dispatched_after: reports.get(execution.id)?.dispatched_after,
         discussion_request: reports.get(execution.id)?.requests?.find((request) => request.discussion_session_id) }];
@@ -1215,6 +1144,7 @@ function build_answer_preview(message) {
 const transcript_messages = computed(() => view.value.source_filter ? free_layout.value.filter(matches_filter) : free_layout.value);
 /** Card kinds the header filter offers, each recognised from how the transcript shows it. */
 const CARD_KINDS = {
+  working: (item) => Boolean(item.slot_card && item.working),
   // Failed cards, a message whose request failed, and refused operations reported under a message.
   failed: (item) => Boolean(item.failure) || (!item.slot_card && ((request_badges.value.get(item.id) || []).some((badge) => badge.color === "error")
     || (execution_reports.value.get(item.id) || []).some((report) => report.denials?.length))),
@@ -1233,11 +1163,13 @@ async function locate(item) {
 /** The header filter: a card shows when any checked speaker or card kind matches it. */
 function matches_filter(item) {
   if (view.value.card_kinds.some((kind) => CARD_KINDS[kind]?.(item))) return true;
-  if (item.slot_card) return false;
-  const host = room.value.members?.find((member) => member.role === "host")?.name;
-  // The host view also carries the program's notices to the host and Goal progress.
-  if (view.value.host_only && (item.kind === "moderation" || ["notice", "goal"].includes(item.source) || (host && item.author === host))) return true;
+  // A speaker filter also keeps that member's own working, failed and stopped cards.
   if (view.value.authors.includes(item.author)) return true;
+  const host = room.value.members?.find((member) => member.role === "host")?.name;
+  if (view.value.host_only && host && item.author === host) return true;
+  if (item.slot_card) return false;
+  // The host view also carries the program's notices to the host and Goal progress.
+  if (view.value.host_only && (item.kind === "moderation" || ["notice", "goal"].includes(item.source))) return true;
   return view.value.mention_only && [...new Set(["用户", bridge.display_name("用户")])].some((handle) => (item.text || "").includes(`@${handle}`));
 }
 /** A discussion opened mid-room shows the topic where it began (or at the end before anyone answers); otherwise it stays on top. */
@@ -1387,8 +1319,8 @@ function floor_before(messages, index) {
   return 0;
 }
 // A long room first mounts only its newest cards (mounting hundreds at once held the page for seconds), then renders the
-// earlier ones a few at a time, each slice sized to fit within a frame: while the page is idle (only where the browser
-// has scroll anchoring, see SCROLL_ANCHORING), or on every frame while the reader nears the top or waits on a jump.
+// earlier ones a few at a time, each slice sized to fit within a frame: while the page is idle, so they are ready before
+// the reader scrolls up to them, or on every frame while the reader nears the top or waits on a jump.
 // Null follows the newest batch; otherwise it is the id of the first shown message, so new arrivals never push cards out
 // above the reader.
 const render_floor = ref(null);
@@ -1419,6 +1351,8 @@ let written_top = null;
 // the main thread's older offset, so the page jumps back. Touch scrolling holds even the slices the reader waits on.
 let touch_active = false;
 let touch_scroll = false;
+// Without scroll anchoring: the sub-pixel pad (px, 0 to 1) above the cards that keeps each slice's shift whole.
+let preload_pad = 0;
 /** Whether the reader is waiting on earlier cards: near the top, or heading for one not rendered. */
 function preload_urgent(element) {
   return element.scrollTop < LOAD_EARLIER_MARGIN || not_rendered(pending_jump) || not_rendered(preload_wanted);
@@ -1446,16 +1380,24 @@ async function preload_slice() {
   // A hidden transcript has no layout to keep; showing it again tracks the scroll, which resumes the preload.
   if (preload_busy || !element?.clientHeight || !render_start.value) return;
   const urgent = preload_urgent(element);
-  // Without scroll anchoring earlier cards render only when the reader waits on them (near the top, or a jump).
-  if (!urgent && !SCROLL_ANCHORING) return;
   if ((!urgent || touch_scroll) && (glide.isAnimating() || touch_active || performance.now() - last_scroll_at < SCROLL_SETTLE_MS)) return schedule_preload();
   preload_busy = true;
   const started = performance.now();
   const from_bottom = element.scrollHeight - element.scrollTop;
+  const anchor = SCROLL_ANCHORING ? null : message_nodes(element)[0];
+  // Measured in content coordinates, so a scroll made meanwhile (the composer growing keeps the end in view) is kept.
+  const anchor_top = anchor && anchor.getBoundingClientRect().top + element.scrollTop;
   render_floor.value = floor_before(transcript_messages.value, render_start.value - preload_size);
   await nextTick();
   // Browsers with scroll anchoring have already kept the place; the others are corrected before the frame paints.
-  written_top = element.scrollHeight - from_bottom;
+  if (anchor?.isConnected) {
+    // The cards moved down by `shift`, a fraction of a pixel included; the pad takes the fraction so scrollTop follows exactly.
+    const shift = anchor.getBoundingClientRect().top + element.scrollTop - anchor_top;
+    const pad = (((preload_pad - shift) % 1) + 1) % 1;
+    element.style.setProperty("--preload-pad", `${pad}px`);
+    written_top = Math.round(element.scrollTop + shift + pad - preload_pad);
+    preload_pad = pad;
+  } else written_top = element.scrollHeight - from_bottom;
   if (element.scrollTop !== written_top) element.scrollTop = written_top;
   const spent = performance.now() - started;
   const budget = not_rendered(pending_jump) ? PRELOAD_JUMP_BUDGET_MS : urgent ? PRELOAD_URGENT_BUDGET_MS : PRELOAD_BUDGET_MS;
@@ -1634,7 +1576,7 @@ send_entry.on("animationComplete", () => {
 // The sending card shows before the site answers; it rises in while the transcript glides to it.
 watch(() => Boolean(view.value.sending_preview), (shown) => {
   if (!shown) return;
-  if (!view.value.sending_preview.failed) { send_entry.jump(0); send_entry.set(1); }
+  send_entry.jump(0); send_entry.set(1);
   follow_messages(true);
 });
 // Applied after the DOM update and before paint, so the saved card never shows a frame at full opacity.
@@ -1960,6 +1902,15 @@ watch(preview_open, (open) => preview_visibility.set(open ? 1 : 0));
 onMounted(() => window.addEventListener("resize", refresh_layout));
 onBeforeUnmount(() => window.removeEventListener("resize", refresh_layout));
 
+// Nuxt UI measures the editor on every keystroke by shrinking it to one row first; the transcript grows for that moment
+// and its scrollTop is clamped, so with a multi-line draft the cards dropped a line on each keystroke. Keep the offset.
+let held_scroll = null;
+function hold_transcript() { held_scroll = transcript.value?.scrollTop ?? null; }
+function release_transcript() {
+  if (held_scroll !== null && transcript.value && transcript.value.scrollTop !== held_scroll) transcript.value.scrollTop = written_top = held_scroll;
+  held_scroll = null;
+}
+
 /** Re-fits the editor rows when its width changes; Nuxt UI only measures on mount and on input, so a draft measured while the column was narrow stays too tall. */
 function fit_editor() {
   const editor = prompt.value?.textareaRef;
@@ -2175,10 +2126,17 @@ async function send() {
   const extra = [file_refs_line(), excerpts_markdown(excerpts.value)].filter(Boolean).join("\n\n");
   if (extra) text.value = draft.trim() ? `${draft.trimEnd()}\n\n${extra}` : extra;
   const sent_text = text.value;
-  await act("send");
-  // The controller clears the editor once the message is saved; otherwise the cards stay and the typed text comes back.
-  if (extra && text.value === sent_text) text.value = draft;
-  else if (extra) { file_refs.value = []; file_preview.excerpts = []; }
+  // The cards leave the composer with the text at once, as the message goes out; a failed send brings them back.
+  const sent_refs = file_refs.value, sent_excerpts = file_preview.excerpts;
+  if (extra) { file_refs.value = []; file_preview.excerpts = []; }
+  const sent = await act("send");
+  // Nothing was sent (another action was still running): the cards return and the text loses what they added. A send
+  // that failed keeps everything in its failed card instead.
+  if (extra && !sent && text.value === sent_text) {
+    text.value = draft;
+    file_refs.value = [...sent_refs, ...file_refs.value];
+    file_preview.excerpts = [...sent_excerpts, ...file_preview.excerpts];
+  }
   await follow_messages();
 }
 
@@ -2191,7 +2149,7 @@ let last_escape = 0;
 function retract_shortcut(event) {
   if (event.key !== "Escape" || event.isComposing || event.defaultPrevented) return;
   const from_composer = event.target === prompt.value?.textareaRef || event.target === document.body;
-  if (!from_composer || (has_draft.value && !view.value.sending_message) || view.value.sending_preview?.failed) { last_escape = 0; return; }
+  if (!from_composer || (has_draft.value && !view.value.sending_message)) { last_escape = 0; return; }
   if (event.timeStamp - last_escape > RETRACT_ESCAPE_WINDOW_MS) { last_escape = event.timeStamp; return; }
   last_escape = 0;
   event.preventDefault();
@@ -2253,7 +2211,7 @@ function copy_message(message) { act("copy", `${view.value.room_site}/r/${room.v
       <button type="submit" class="selection-comment-send" aria-label="添加到对话" title="添加到对话（Enter）"><UIcon name="i-lucide-arrow-up" /></button>
     </form>
     <ExcerptEditCard v-if="mark_editing" :key="mark_editing.excerpt.id" :comment="mark_editing.excerpt.comment" :style="{ left: `${mark_editing.left}px`, top: `${mark_editing.top}px` }" @save="save_mark" @cancel="close_mark" @remove="remove_mark" />
-    <div ref="transcript" v-memo="[message_groups, view.messages_loading, view.messages_failure, view.sending_preview, message_round_labels, free, room.session, can_manage, expanded_answers.size, reader.state.message_id, room.title, view.query, view.source_filter, view.authors, view.card_kinds, topic_anchor, end_anchor, request_badges, execution_reports, recommendations, adopting, scheduler_decisions, host_arrangements, pending, execution_notes, open_working_notes, editing, rewound_runs, retracting_id, armed_cards.size, menu_open_id, stopping_member, free_now, allowing, allow_errors, late_answers, has_draft, view.sending_message, routing_messages, speaking_turn, room.free]" class="channel-transcript" aria-label="聊天记录" @scroll="schedule_track_scroll" @wheel.passive="resume_tracking($event); stop_following($event)" @touchstart.passive="resume_tracking" @touchmove.passive="stop_following" @touchend.passive="end_touch" @touchcancel.passive="end_touch" @pointerdown="stop_following" @keydown="resume_tracking($event); stop_following($event)">
+    <div ref="transcript" v-memo="[message_groups, view.messages_loading, view.messages_failure, view.sending_preview, view.failed_sends, message_round_labels, free, room.session, can_manage, expanded_answers.size, reader.state.message_id, room.title, view.query, view.source_filter, view.authors, view.card_kinds, topic_anchor, end_anchor, request_badges, execution_reports, recommendations, adopting, scheduler_decisions, host_arrangements, pending, execution_notes, open_working_notes, editing, rewound_runs, retracting_id, armed_cards.size, menu_open_id, stopping_member, free_now, allowing, allow_errors, late_answers, has_draft, view.sending_message, routing_messages, speaking_turn, room.free]" class="channel-transcript" aria-label="聊天记录" @scroll="schedule_track_scroll" @wheel.passive="resume_tracking($event); stop_following($event)" @touchstart.passive="resume_tracking" @touchmove.passive="stop_following" @touchend.passive="end_touch" @touchcancel.passive="end_touch" @pointerdown="stop_following" @keydown="resume_tracking($event); stop_following($event)">
       <div v-if="!view.query && !view.source_filter && !topic_anchor && render_start === 0" class="channel-message-group channel-topic-group"><TopicCard :ref="(card) => topic_card = card" @edit="emit('edit')" /></div>
       <div v-for="group in message_groups" :key="group.key" class="channel-message-group">
         <USeparator :label="group.label" class="channel-date-divider" />
@@ -2293,7 +2251,7 @@ function copy_message(message) { act("copy", `${view.value.room_site}/r/${room.v
           <div class="channel-working-head">
             <UAvatar :src="bridge.identities[message.author]?.icon" :text="bridge.identities[message.author]?.initials || '?'" :alt="bridge.display_name(message.author)" size="2xs" class="channel-avatar" :class="bridge.identities[message.author]?.style" />
             <strong class="channel-working-name">{{ bridge.display_name(message.author) }}</strong>
-            <small class="channel-working-elapsed">{{ message.waiting ? `手动启动${message.created_at ? ` · 已等 ${format_elapsed(Math.max(0, free_now - message.created_at))}` : ''}` : `已用 ${format_elapsed(Math.max(0, free_now - message.created_at))}` }}{{ message.attempt ? ` · 第 ${message.attempt}/${MAX_DELIVERY_RETRIES} 次重试` : '' }}</small>
+            <small class="channel-working-elapsed">{{ message.waiting ? `手动启动${message.created_at ? ` · 已等 ${format_elapsed(Math.max(0, free_now - message.created_at))}` : ''}` : `已用 ${format_elapsed(Math.max(0, free_now - message.created_at))}` }}{{ message.steps ? ` · 已执行 ${message.steps} 步` : '' }}{{ message.attempt ? ` · 第 ${message.attempt}/${MAX_DELIVERY_RETRIES} 次重试` : '' }}</small>
             <UTooltip v-if="view.access?.can_manage && shows_progress(message) && message.execution_id" text="私聊：查看它正在做什么"><UButton icon="i-lucide-message-square" class="channel-private-chat-key channel-corner-key" size="xs" variant="ghost" color="neutral" :aria-label="`私聊 ${bridge.display_name(message.author)}：查看本次执行过程`" @click="open_private_chat(act, message.author, message.execution_id)" /></UTooltip>
           <span v-if="view.access?.can_manage" class="channel-working-actions">
               <!-- In a discussion, stopping the current speaker skips the turn so the next one speaks. -->
@@ -2477,27 +2435,49 @@ function copy_message(message) { act("copy", `${view.value.room_site}/r/${room.v
         </template>
         </template>
       </div>
-      <!-- The message being sent shows at once; the saved copy replaces it when the site answers, and a failed send stays here as a failed card. -->
+      <!-- Sends that failed stay as cards in their place, any number of them: each sends its message again or drops it.
+           They are this page's own (no one else sees them), so a failed card works as a ready-to-send draft. -->
+      <div v-for="card in view.failed_sends" :key="card.id" class="channel-message-group">
+        <UChatMessage :data-author="bridge.identities[card.author]?.style" role="user" :parts="[]" side="left" variant="naked" color="neutral" class="channel-message channel-sending-message is-failed" :ui="{ header: 'channel-message-header', container: 'channel-message-container', body: 'channel-message-body' }">
+          <template #body>
+            <div class="channel-message-byline">
+              <UAvatar :src="bridge.identities[card.author]?.icon" :text="bridge.identities[card.author]?.initials || '?'" :alt="bridge.display_name(card.author)" size="md" class="channel-avatar" :class="bridge.identities[card.author]?.style" />
+              <div class="channel-message-meta">
+                <div class="channel-message-author"><strong>{{ bridge.display_name(card.author) }}</strong><UBadge label="发送失败" color="error" variant="soft" size="xs" /></div>
+                <div class="channel-message-provenance"><time>{{ bridge.format_time(card.created_at) }}</time></div>
+              </div>
+            </div>
+            <div class="channel-answer"><div class="channel-message-text markdown-body" v-html="bridge.render_room_markdown(card.text)"></div></div>
+            <div v-if="card.files.some((file) => file.preview_url)" class="message-attachments">
+              <span v-for="file in card.files.filter((item) => item.preview_url)" :key="file.preview_url" class="attachment-image"><img :src="file.preview_url" :alt="file.name"></span>
+            </div>
+            <div v-if="card.files.some((file) => !file.preview_url)" class="channel-message-provenance">附件：{{ card.files.filter((file) => !file.preview_url).map((file) => file.name).join('、') }}</div>
+            <p class="channel-message-text channel-failure-reason" role="alert">{{ card.failed }}</p>
+            <div class="channel-failure-actions">
+              <UButton label="重新发送" icon="i-lucide-rotate-ccw" size="sm" variant="soft" color="primary" aria-label="重新发送这条消息" :disabled="view.sending_message" @click="act('retry_sending', card.id)" />
+              <UButton label="放弃" icon="i-lucide-x" size="sm" variant="soft" color="neutral" aria-label="放弃发送，移除这张卡片" @click="act('discard_sending', card.id)" />
+            </div>
+          </template>
+        </UChatMessage>
+      </div>
+      <!-- The message being sent shows at once; the saved copy replaces it when the site answers, and a failed send becomes a failed card above. -->
       <!-- It mirrors a saved card line for line, so the swap changes only "发送中…" into the message number. -->
       <motion.div v-if="view.sending_preview" class="channel-message-group" :style="{ opacity: send_entry, y: send_y }">
-        <UChatMessage id="channel-sending-message" :data-author="bridge.identities[view.sending_preview.author]?.style" role="user" :parts="[]" side="left" variant="naked" color="neutral" class="channel-message channel-sending-message" :class="{ 'is-failed': view.sending_preview.failed }" :ui="{ header: 'channel-message-header', container: 'channel-message-container', body: 'channel-message-body' }">
+        <UChatMessage id="channel-sending-message" :data-author="bridge.identities[view.sending_preview.author]?.style" role="user" :parts="[]" side="left" variant="naked" color="neutral" class="channel-message channel-sending-message" :ui="{ header: 'channel-message-header', container: 'channel-message-container', body: 'channel-message-body' }">
           <template #body>
             <div class="channel-message-byline">
               <UAvatar :src="bridge.identities[view.sending_preview.author]?.icon" :text="bridge.identities[view.sending_preview.author]?.initials || '?'" :alt="bridge.display_name(view.sending_preview.author)" size="md" class="channel-avatar" :class="bridge.identities[view.sending_preview.author]?.style" />
               <div class="channel-message-meta">
-                <div class="channel-message-author"><strong>{{ bridge.display_name(view.sending_preview.author) }}</strong><UBadge v-if="view.sending_preview.failed" label="发送失败" color="error" variant="soft" size="xs" /></div>
-                <div class="channel-message-provenance"><time>{{ bridge.format_time(view.sending_preview.created_at) }}</time><span v-if="!view.sending_preview.failed" class="channel-sending-status" role="status">发送中…</span></div>
+                <div class="channel-message-author"><strong>{{ bridge.display_name(view.sending_preview.author) }}</strong></div>
+                <div class="channel-message-provenance"><time>{{ bridge.format_time(view.sending_preview.created_at) }}</time><span class="channel-sending-status" role="status">发送中…</span></div>
               </div>
             </div>
             <div class="channel-answer"><div class="channel-message-text markdown-body" v-html="sending_html"></div></div>
-            <div v-if="view.sending_preview.files.length" class="channel-message-provenance">附件：{{ view.sending_preview.files.join('、') }}</div>
-            <template v-if="view.sending_preview.failed">
-              <p class="channel-message-text channel-failure-reason" role="alert">{{ view.sending_preview.failed }}；草稿已保留在输入框</p>
-              <div class="channel-failure-actions">
-                <UButton label="重试" icon="i-lucide-rotate-ccw" size="sm" variant="soft" color="primary" aria-label="重新发送这条消息" :disabled="!has_draft || view.sending_message" @click="send" />
-                <UButton label="放弃" icon="i-lucide-x" size="sm" variant="soft" color="neutral" aria-label="放弃发送，移除这张卡片" :disabled="view.sending_message" @click="act('discard_sending')" />
-              </div>
-            </template>
+            <!-- The files show at once from this browser's own copy while they upload. -->
+            <div v-if="view.sending_preview.files.some((file) => file.preview_url)" class="message-attachments">
+              <span v-for="file in view.sending_preview.files.filter((item) => item.preview_url)" :key="file.preview_url" class="attachment-image"><img :src="file.preview_url" :alt="file.name"></span>
+            </div>
+            <div v-if="view.sending_preview.files.some((file) => !file.preview_url)" class="channel-message-provenance">附件：{{ view.sending_preview.files.filter((file) => !file.preview_url).map((file) => file.name).join('、') }}</div>
           </template>
         </UChatMessage>
       </motion.div>
@@ -2516,7 +2496,7 @@ function copy_message(message) { act("copy", `${view.value.room_site}/r/${room.v
       <button v-if="reader.state.reading" type="button" class="channel-listen-pill" aria-label="退出朗读" @click="reader.stop()"><UIcon name="i-lucide-square" />退出</button>
       <UButton v-if="transcript_messages.length && !follow_tail" icon="i-lucide-arrow-down" color="neutral" variant="outline" aria-label="回到最新消息" class="channel-latest-button" @click="return_to_latest" />
     </div>
-    <div class="channel-composer-dock"><div class="channel-composer-column" @dragover="bridge.drop_attachments" @drop="bridge.drop_attachments" @paste="bridge.paste_attachments" @keydown.capture="mention_keydown($event); attachment_shortcut($event)" @input="update_mention" @click="update_mention" @keyup="update_mention" @select="update_mention" @compositionstart="mention_composition" @compositionupdate="mention_composition" @compositionend="mention_composition" @scroll.capture="sync_mirror">
+    <div class="channel-composer-dock"><div class="channel-composer-column" @dragover="bridge.drop_attachments" @drop="bridge.drop_attachments" @paste="bridge.paste_attachments" @keydown.capture="mention_keydown($event); attachment_shortcut($event)" @input.capture="hold_transcript" @input="release_transcript(); update_mention($event)" @click="update_mention" @keyup="update_mention" @select="update_mention" @compositionstart="mention_composition" @compositionupdate="mention_composition" @compositionend="mention_composition" @scroll.capture="sync_mirror">
       <UPopover :open="!!mention_context" :reference="mention_anchor" :content="{ side: 'top', align: 'start', sideOffset: 8, onOpenAutoFocus: keep_mention_focus, onCloseAutoFocus: keep_mention_focus }" :ui="{ content: 'channel-select-menu channel-mention-menu' }" @update:open="!$event && (mention_context = null)">
         <template #content>
           <div class="channel-mention-heading"><span>{{ mention_heading }}</span><small>↑↓ 选择 · Enter 确认</small></div>
@@ -2624,7 +2604,7 @@ function copy_message(message) { act("copy", `${view.value.room_site}/r/${room.v
           <template v-else>
             <UButton type="button" icon="i-lucide-paperclip" aria-label="添加附件" title="图片、PDF 或其他文件 · 每个最多 20 MiB" color="neutral" variant="ghost" size="sm" @click="act('choose_attachments')" />
             <UTooltip v-if="speech_ready" :text="broadcast.on.value ? '关闭语音播报' : '语音播报：新回复自动朗读摘要'"><UButton type="button" icon="i-lucide-radio" color="neutral" variant="ghost" size="sm" class="channel-voice-button channel-broadcast-button" :class="{ 'is-on': broadcast.on.value }" :aria-pressed="broadcast.on.value" :aria-label="broadcast.on.value ? '关闭语音播报' : '开启语音播报'" @click="broadcast.toggle()" /></UTooltip>
-            <UTooltip :text="ENTER_SENDS ? '语音输入 · 也可按住空格说话' : '按住说话，或轻点开始'"><UButton type="button" icon="i-lucide-mic" color="neutral" variant="ghost" size="sm" class="channel-voice-button channel-voice-mic" aria-label="语音输入" :disabled="view.sending_message" @pointerdown="voice_pointerdown" @click="voice_click" @contextmenu.prevent /></UTooltip>
+            <UTooltip :text="ENTER_SENDS ? '语音输入 · 也可按住空格说话' : '按住说话，或轻点开始'"><UButton type="button" icon="i-lucide-mic" color="neutral" variant="ghost" size="sm" class="channel-voice-button channel-voice-mic" aria-label="语音输入" :disabled="view.sending_message" @pointerdown="voice_press.pointerdown" @click="voice_press.click" @contextmenu.prevent /></UTooltip>
             <UButton type="button" icon="i-lucide-arrow-up" color="neutral" size="sm" class="channel-primary-button channel-round-button channel-send" aria-label="发送" title="发送 · Enter" :disabled="!has_draft" @click="send" />
           </template>
         </template>

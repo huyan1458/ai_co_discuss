@@ -1,0 +1,141 @@
+@import "tailwindcss" source(none);
+@import "@nuxt/ui";
+@source "./";
+
+/* A light, airy look after CC Switch 3.x: white page, one column of large rounded cards, blue brand, orange main action. */
+:root {
+  --panel-blue: #3b82f6;
+  --panel-blue-soft: #eff6ff;
+  --panel-orange: #f0782f;
+  --panel-green: #16a34a;
+  --panel-green-soft: #ecfdf3;
+  --panel-amber: #b45309;
+  --panel-amber-soft: #fff7e6;
+  --panel-red: #dc2626;
+  --panel-text: #111827;
+  --panel-muted: #6b7280;
+  --panel-faint: #9ca3af;
+  --panel-line: #e5e7eb;
+  --panel-tint: #f3f4f6;
+  --ui-primary: var(--panel-blue);
+}
+html, body { margin: 0; background: #fff; color: var(--panel-text); font-family: -apple-system, "Segoe UI", "PingFang SC", "Microsoft YaHei", system-ui, sans-serif; }
+body { min-height: 100vh; }
+
+.panel { max-width: 980px; margin: 0 auto; padding: 28px 32px 64px; }
+.panel-head { display: flex; align-items: center; gap: 16px; margin-bottom: 30px; }
+.panel-brand { display: flex; align-items: center; gap: 10px; margin-right: auto; }
+.panel-mark { width: 34px; height: 34px; border-radius: 9px; }
+.panel-brand h1 { margin: 0; color: var(--panel-blue); font-size: 26px; font-weight: 700; letter-spacing: -.01em; }
+.panel-brand small { color: var(--panel-faint); font-size: 12px; }
+
+.panel-tabs { display: flex; gap: 2px; padding: 4px; border-radius: 14px; background: var(--panel-tint); }
+.panel-tab { display: flex; align-items: center; gap: 7px; height: 38px; padding: 0 16px; border-radius: 10px; color: var(--panel-muted); font-size: 14px; transition: background-color .15s, color .15s, box-shadow .15s; }
+.panel-tab:hover { color: var(--panel-text); }
+.panel-tab.is-active { background: #fff; color: var(--panel-text); box-shadow: 0 1px 3px #0000001a, 0 1px 2px #0000000d; }
+.panel-tab > [class*="icon"] { width: 16px; height: 16px; }
+
+.panel-tools { display: flex; padding: 3px; border: 1px solid var(--panel-line); border-radius: 14px; }
+.panel-tool { display: grid; place-items: center; width: 38px; height: 36px; border-radius: 10px; color: #374151; transition: background-color .15s; }
+.panel-tool:hover { background: var(--panel-tint); }
+.panel-tool > [class*="icon"] { width: 18px; height: 18px; }
+.panel-add { display: grid; flex-shrink: 0; place-items: center; width: 46px; height: 46px; border-radius: 50%; background: var(--panel-orange); color: #fff;
+  box-shadow: 0 6px 16px #f0782f55; transition: transform .15s, box-shadow .15s; }
+.panel-add:hover { transform: translateY(-1px); box-shadow: 0 8px 20px #f0782f66; }
+.panel-add:disabled { opacity: .45; cursor: not-allowed; transform: none; }
+.panel-add > [class*="icon"] { width: 22px; height: 22px; }
+
+.panel-section-title { display: flex; align-items: center; gap: 8px; margin: 26px 2px 12px; color: var(--panel-muted); font-size: 13px; font-weight: 500; }
+.panel-section-title:first-child { margin-top: 0; }
+.panel-list { display: flex; flex-direction: column; gap: 14px; }
+
+.panel-card { display: flex; align-items: center; gap: 16px; min-height: 86px; padding: 18px 22px; border: 1px solid var(--panel-line); border-radius: 18px; background: #fff;
+  box-shadow: 0 1px 2px #0000000a, 0 2px 8px #00000008; transition: border-color .15s, box-shadow .15s; }
+.panel-card:hover { border-color: #d1d5db; box-shadow: 0 2px 4px #0000000d, 0 6px 18px #0000000d; }
+.panel-card.is-current { border-color: #93c5fd; background: #fbfdff; }
+.panel-tile { display: grid; flex-shrink: 0; place-items: center; width: 46px; height: 46px; border: 1px solid var(--panel-line); border-radius: 14px; background: #fafafa;
+  color: #374151; font-size: 18px; font-weight: 600; }
+.panel-tile img { width: 26px; height: 26px; }
+.panel-tile > [class*="icon"] { width: 22px; height: 22px; }
+.panel-main { display: flex; flex: 1; flex-direction: column; gap: 5px; min-width: 0; }
+.panel-title { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; font-size: 17px; font-weight: 600; }
+.panel-link { overflow: hidden; color: var(--panel-blue); font-size: 14px; white-space: nowrap; text-overflow: ellipsis; text-decoration: none; }
+a.panel-link:hover { text-decoration: underline; }
+.panel-sub { overflow: hidden; color: var(--panel-faint); font-size: 12px; white-space: nowrap; text-overflow: ellipsis; }
+.panel-side { display: flex; flex-shrink: 0; align-items: center; gap: 6px; }
+
+.panel-tag { display: inline-flex; align-items: center; gap: 4px; height: 24px; padding: 0 9px; border-radius: 8px; font-size: 12px; font-weight: 500; }
+.panel-tag > [class*="icon"] { width: 13px; height: 13px; }
+.panel-tag.is-green { background: var(--panel-green-soft); color: var(--panel-green); }
+.panel-tag.is-gray { background: var(--panel-tint); color: var(--panel-muted); }
+.panel-tag.is-blue { background: var(--panel-blue-soft); color: var(--panel-blue); }
+.panel-tag.is-amber { background: var(--panel-amber-soft); color: var(--panel-amber); }
+
+.panel-icon-button { display: grid; place-items: center; width: 36px; height: 36px; border-radius: 10px; color: #4b5563; transition: background-color .15s, color .15s; }
+.panel-icon-button:hover:not(:disabled) { background: var(--panel-tint); color: var(--panel-text); }
+.panel-icon-button:disabled { opacity: .4; cursor: not-allowed; }
+/* Start and stop read at a glance: green to start, red to stop, each with a tint of its colour on hover. */
+.panel-icon-button.is-go { color: var(--panel-green); }
+.panel-icon-button.is-go:hover:not(:disabled) { background: var(--panel-green-soft); color: var(--panel-green); }
+.panel-icon-button.is-stop { color: var(--panel-red); }
+.panel-icon-button.is-stop:hover:not(:disabled) { background: #fef2f2; color: var(--panel-red); }
+.panel-icon-button > [class*="icon"] { width: 18px; height: 18px; }
+.panel-icon-button.is-spinning > [class*="icon"] { animation: panel-spin 1s linear infinite; }
+@keyframes panel-spin { to { transform: rotate(360deg); } }
+
+.panel-empty { display: flex; flex-direction: column; align-items: center; gap: 10px; padding: 56px 20px; border: 1.5px dashed var(--panel-line); border-radius: 18px; color: var(--panel-faint); font-size: 14px; text-align: center; }
+.panel-empty > [class*="icon"] { width: 30px; height: 30px; color: #d1d5db; }
+
+.panel-note { display: flex; align-items: flex-start; gap: 8px; margin: 0; padding: 12px 14px; border-radius: 12px; background: var(--panel-tint); color: var(--panel-muted); font-size: 13px; line-height: 1.6; }
+.panel-note > [class*="icon"] { flex-shrink: 0; width: 16px; height: 16px; margin-top: 3px; }
+.panel-note.is-amber { background: var(--panel-amber-soft); color: var(--panel-amber); }
+
+/* Full-page form, like CC Switch's "add provider" page. */
+.panel-form-head { display: flex; align-items: center; gap: 16px; margin: -4px 0 22px; padding-bottom: 18px; border-bottom: 1px solid var(--panel-line); }
+.panel-form-head h2 { margin: 0; font-size: 22px; font-weight: 700; }
+.panel-back { display: grid; place-items: center; width: 42px; height: 42px; border: 1px solid var(--panel-line); border-radius: 12px; color: #374151; }
+.panel-back:hover { background: var(--panel-tint); }
+.panel-form { display: flex; flex-direction: column; gap: 22px; padding: 26px 28px; border: 1px solid var(--panel-line); border-radius: 18px; }
+.panel-form-row { display: grid; grid-template-columns: 1fr 1fr; gap: 18px; }
+.panel-field { display: flex; flex-direction: column; gap: 8px; font-size: 14px; font-weight: 500; }
+.panel-field small { color: var(--panel-faint); font-size: 12px; font-weight: 400; }
+.panel-input { height: 44px; padding: 0 14px; border: 1px solid var(--panel-line); border-radius: 12px; outline: none; color: var(--panel-text); font: inherit; font-weight: 400; transition: border-color .15s, box-shadow .15s; }
+.panel-input:focus { border-color: var(--panel-blue); box-shadow: 0 0 0 3px #3b82f622; }
+.panel-chips { display: flex; flex-wrap: wrap; gap: 10px; }
+.panel-chip { display: inline-flex; align-items: center; gap: 7px; height: 40px; padding: 0 16px; border-radius: 12px; background: var(--panel-tint); color: #4b5563; font-size: 14px; transition: background-color .15s, color .15s; }
+.panel-chip:hover { background: #e5e7eb; }
+.panel-chip img { width: 16px; height: 16px; }
+.panel-chip.is-active { background: var(--panel-blue); color: #fff; }
+.panel-chip.is-active img { filter: brightness(0) invert(1); }
+.panel-form-foot { display: flex; justify-content: flex-end; gap: 12px; margin-top: 18px; }
+.panel-button { display: inline-flex; align-items: center; gap: 7px; height: 42px; padding: 0 22px; border-radius: 12px; font-size: 14px; font-weight: 500; transition: background-color .15s, opacity .15s; }
+.panel-button > [class*="icon"] { width: 16px; height: 16px; }
+.panel-button.is-plain { color: #374151; }
+.panel-button.is-plain:hover { background: var(--panel-tint); }
+.panel-button.is-primary { background: var(--panel-blue); color: #fff; }
+.panel-button.is-primary:hover:not(:disabled) { background: #2563eb; }
+.panel-button.is-small { height: 34px; padding: 0 14px; border-radius: 10px; font-size: 13px; }
+.panel-button.is-outline { border: 1px solid var(--panel-line); color: #374151; }
+.panel-button.is-outline:hover:not(:disabled) { background: var(--panel-tint); }
+.panel-button:disabled { opacity: .5; cursor: not-allowed; }
+
+/* Command-line sign-in rows inside an account card. */
+.panel-logins { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 10px; margin-top: 12px; }
+.panel-login { display: flex; align-items: center; gap: 10px; padding: 10px 12px; border: 1px solid var(--panel-line); border-radius: 12px; }
+.panel-login img { width: 20px; height: 20px; flex-shrink: 0; }
+.panel-login-text { display: flex; flex: 1; flex-direction: column; gap: 2px; min-width: 0; font-size: 13px; font-weight: 500; }
+.panel-login-text small { color: var(--panel-faint); font-size: 12px; font-weight: 400; }
+.panel-login-text small.is-ok { color: var(--panel-green); }
+.panel-card.is-tall { align-items: stretch; flex-direction: column; gap: 0; }
+.panel-card-row { display: flex; align-items: center; gap: 16px; }
+
+.panel-secret { display: flex; align-items: center; gap: 10px; padding: 14px 16px; border-radius: 12px; background: var(--panel-tint); font-family: ui-monospace, SFMono-Regular, Consolas, monospace; font-size: 18px; letter-spacing: .04em; }
+.panel-secret span { flex: 1; user-select: all; }
+
+@media (max-width: 760px) {
+  .panel { padding: 20px 16px 48px; }
+  .panel-head { flex-wrap: wrap; }
+  .panel-tabs { order: 3; width: 100%; }
+  .panel-tab { flex: 1; justify-content: center; padding: 0 8px; }
+  .panel-logins, .panel-form-row { grid-template-columns: 1fr; }
+}

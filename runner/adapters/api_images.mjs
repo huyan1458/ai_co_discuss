@@ -9,6 +9,7 @@
 import { createHash, randomUUID } from 'node:crypto';
 import { readFileSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
+import { in_draft_space } from '../account_space.mjs';
 import { read_project_bytes, write_new_project_file } from './api_files.mjs';
 
 // Complex prompts, GIF frames and the higher qualities can take minutes.
@@ -22,6 +23,8 @@ const MAX_DATA_URL_CHARS = 20_971_520;
 const MAX_INPUT_BYTES = 50 * 1024 * 1024;
 const MAX_INPUT_IMAGES = 16;
 export const MAX_MESSAGE_ATTACHMENTS = 10;
+// Where a writing member's images are also kept inside its project (or its room's folder of the draft space).
+const IMAGE_FOLDER = 'images';
 const ERROR_EXCERPT_CHARS = 600;
 const ATTACHMENT_ID = /^[a-f0-9]{32}$/;
 const EXTENSIONS = { png: 'png', jpeg: 'jpg', webp: 'webp', gif: 'gif', svg: 'svg' };
@@ -218,6 +221,11 @@ export async function run_image_tool(context, name, args) {
   const images = [];
   try {
     if (args.save_path !== undefined && !context.project?.writable) throw new Error('save_path 需要可写的项目目录');
+    // Without a requested path, a copy is kept under images/ so the room's files hold what was drawn: by a member that
+    // may write its project, and in a room's own folder of the draft space whatever the member's access.
+    const main = context.project?.roots[0];
+    const keeper = main?.writable ? context.project
+      : main && context.home && in_draft_space(context.home, main.root) ? { ...context.project, writable: true, roots: [{ ...main, writable: true }] } : null;
     const body = await image_body(context, name, args);
     const data = await images_request(context, name, name === 'edit_image' ? '/images/edits' : '/images/generations', body);
     const format = data.output_format || body.output_format || 'png';
@@ -225,12 +233,14 @@ export async function run_image_tool(context, name, args) {
     for (const [index, item] of data.data.entries()) {
       const bytes = Buffer.from(item.b64_json, 'base64');
       const image = { size: bytes.length };
-      if (args.save_path) {
-        const saved = write_new_project_file(context.project, numbered_path(args.save_path, index, data.data.length, extension), bytes);
+      const name = file_name(args, index, data.data.length, extension);
+      const kept = args.save_path ? numbered_path(args.save_path, index, data.data.length, extension) : keeper ? `${IMAGE_FOLDER}/${randomUUID().slice(0, 6)}-${name}` : '';
+      if (kept) {
+        const saved = write_new_project_file(args.save_path ? context.project : keeper, kept, bytes);
         context.on_edits?.([saved.path]);
         image.saved_path = saved.shown;
       }
-      const attachment = await upload(context, file_name(args, index, data.data.length, extension), bytes);
+      const attachment = await upload(context, name, bytes);
       context.generated_attachments.push(attachment.id);
       save_unsent(context, [...unsent_images(context), { attachment_id: attachment.id, file_name: attachment.file_name, created_at: new Date().toISOString() }]);
       images.push({ ...image, attachment_id: attachment.id, file_name: attachment.file_name, ...(item.revised_prompt ? { revised_prompt: item.revised_prompt } : {}) });

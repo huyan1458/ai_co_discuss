@@ -42,7 +42,8 @@ test('forking registers members on branches of their sessions without the execut
   writeFileSync(path, JSON.stringify({ site, room: 'source', token: source_token, mode: 'free', data_directory: join(home, 'runtime'),
     members: { Claude: { token: 'claude-member'.repeat(3) }, Codex: { token: 'codex-member'.repeat(3) } }, participants: {
       Claude: { adapter: 'claude', executable: process.execPath },
-      Codex: { adapter: 'codex_cli', executable: process.execPath } } }));
+      Codex: { adapter: 'codex_cli', executable: process.execPath } },
+    workflow: { id: 'story-serial', enabled: true, members: { critic: 'Codex' } } }));
   register_room(home, path);
   const source_store = new DiscussionStore(join(home, 'runtime'));
   source_store.bind('Claude', 'claude-session-1');
@@ -56,6 +57,7 @@ test('forking registers members on branches of their sessions without the execut
   const forked = JSON.parse(readFileSync(forked_path, 'utf8'));
   assert.equal(forked.room, 'forked');
   assert.deepEqual(forked.keep_manual, []);
+  assert.deepEqual(forked.workflow, { id: 'story-serial', enabled: true, members: { critic: 'Codex' } }, 'the fork keeps the workflow binding');
   assert.equal(forked.participants.Claude.cwd, home, 'Claude works where its session was recorded');
   assert.equal('session_id' in forked.participants.Claude, false);
   const store = new DiscussionStore(forked.data_directory);
