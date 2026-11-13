@@ -117,7 +117,7 @@ class CliTests(unittest.TestCase):
         self.assertEqual(self.cli("attachment", "list", self.room, "--submission-id", upload_id)["attachments"][0]["id"], attachment["id"])
         message = self.cli("message", "post", self.room, "--as", "用户", "--attachment", attachment["id"],
                            "--submission-id", str(uuid.uuid4()))["message"]
-        self.assertEqual(message["text"], "")
+        self.assertEqual((message["text_chars"], message["attachments"]), (0, 1))
         self.assertEqual(self.cli("attachment", "list", self.room, "--message", message["id"])["total"], 1)
         destination = source.with_suffix(".download")
         self.cli("attachment", "download", self.room, attachment["id"], "--dest", destination, "--dry-run")
@@ -298,7 +298,8 @@ class CliTests(unittest.TestCase):
         posted = self.invoke(["message", "post", self.room, "--as", "用户", "--body", "环境绑定",
                               "--submission-id", str(uuid.uuid4())], environment=env)
         self.assertEqual(posted.returncode, 0, posted.stderr)
-        self.assertEqual(json.loads(posted.stdout)["data"]["message"]["text"], "环境绑定")
+        posted_id = json.loads(posted.stdout)["data"]["message"]["id"]
+        self.assertEqual(self.cli("message", "view", self.room, posted_id)["text"], "环境绑定")
         preview = self.invoke(["run", "pause", self.room, "--revision", "idle", "--dry-run"], environment=env)
         self.assertNotIn(json.loads(text)["token"], preview.stdout + preview.stderr)
         wrong_room = self.invoke(["run", "view", "other-room"], environment=env)
@@ -501,10 +502,23 @@ class CliTests(unittest.TestCase):
         file.write_text(original, encoding="utf-8-sig")
         message = self.cli("message", "post", self.room, "--body-file", file, "--as", "用户",
                            "--submission-id", "utf8-file-01")["message"]
-        self.assertEqual(message["text"], original)
+        self.assertNotIn("text", message)
+        self.assertEqual(self.cli("message", "view", self.room, message["id"])["text"], original)
         reply = self.cli("message", "post", self.room, "--body-file", "-", "--as", "用户",
                          "--reply-to", message["id"], "--submission-id", "utf8-stdin-01", stdin=original)["message"]
-        self.assertEqual((reply["text"], reply["reply_to"]), (original, message["id"]))
+        self.assertEqual(reply["reply_to"], message["id"])
+        self.assertEqual(self.cli("message", "view", self.room, reply["id"])["text"], original)
+
+    def test_body_file_header_carries_the_summary(self):
+        """One draft holds summary and body; the header is removed from the body, and a second summary is refused."""
+        draft = Path(self.directory.name) / "带摘要.md"
+        draft.write_text("---\nsummary: 一句话结论\n---\n\n正文第一行\n---\n正文继续", encoding="utf-8")
+        posted = self.cli("message", "post", self.room, "--body-file", draft, "--as", "用户",
+                          "--submission-id", "header-summary-01")["message"]
+        self.assertEqual(posted["summary"], "一句话结论")
+        self.assertEqual(self.cli("message", "view", self.room, posted["id"])["text"], "正文第一行\n---\n正文继续")
+        self.rejected(["message", "post", self.room, "--body-file", draft, "--summary", "另一句", "--as", "用户",
+                       "--submission-id", "header-summary-02"])
 
     def test_explicit_site_overrides_environment_and_room_is_required(self):
         """No global current room or environment identity can redirect a write."""

@@ -434,12 +434,15 @@ export function watch_window_turn({ file, offset, pid, marker, session_id = '', 
   const since = Date.now(), awaited = new Set([marker]), open_tools = new Set(), background = new Set();
   let pending = Buffer.alloc(0), taken = false, noted = false, error = null, done = false, waiting_since = 0;
   let stop_asked = 0, stop_sent = 0, stop_timer = null;
-  const finish = (reason = '') => {
+  // `ended` says why a room task's turn ended without finishing (interrupted, window closed): it is an exit, not a
+  // failure to retry, and its last remark is not an answer.
+  const finish = (reason = '', ended = '') => {
     if (done) return;
     done = true;
     clearInterval(timer); clearInterval(stop_timer);
     if (error) task.on_failure?.(claude_error_reason(error), { retryable: !error.lasting });
     else if (reason) task.on_failure?.(reason);
+    else if (ended) task.on_exit?.(ended);
     else task.on_exit?.();
     on_end?.();
   };
@@ -449,7 +452,7 @@ export function watch_window_turn({ file, offset, pid, marker, session_id = '', 
       for (const item of awaited) if (takes(entry, item)) { awaited.delete(item); taken = true; }
       if (!taken) continue;
       if (entry.type === 'user' && INTERRUPTED.test(prompt_text(entry.message?.content).trim())) {
-        return finish(!chat ? '' : stop_asked ? '已停止' : '这一轮在 Claude 窗口里被中断了');
+        return chat ? finish(stop_asked ? '已停止' : '这一轮在 Claude 窗口里被中断了') : finish('', '在原窗口里被中断了这一轮');
       }
       const api_error = claude_api_error(entry);
       error = api_error || error;
@@ -458,7 +461,7 @@ export function watch_window_turn({ file, offset, pid, marker, session_id = '', 
       // A turn that left a background agent running ends while the window waits for it; its report starts the next turn.
       if (entry.type === 'system' && entry.subtype === 'turn_duration' && !awaited.size && !background.size) return finish();
     }
-    if (!process_alive(pid)) return finish(chat ? '这位成员的 Claude 窗口在这轮私聊结束前关闭了' : '');
+    if (!process_alive(pid)) return chat ? finish('这位成员的 Claude 窗口在这轮私聊结束前关闭了') : finish('', '所在的原窗口在这一轮结束前关闭了');
     if (stop_asked) return try_stop();
     const elapsed = Date.now() - since;
     if (!chat) {
@@ -491,6 +494,9 @@ export function watch_window_turn({ file, offset, pid, marker, session_id = '', 
     if (!['assistant', 'user'].includes(entry.type)) return;
     if (log_path) task.on_output?.(log_path, `${JSON.stringify({ type: entry.type, timestamp: entry.timestamp, message: entry.message,
       ...(entry.toolUseResult?.isAsync ? { background: true } : {}) })}\n`);
+    // Only entries of the turn that took the message reach here, so this is the window's own work, never "not started yet".
+    const phase = events.phase(entry);
+    if (phase) task.on_activity?.(phase, events.tool(entry));
     const note = events.note(entry);
     if (note) task.on_note?.(note);
   }

@@ -21,6 +21,8 @@ const ACTIVITY_REPORT_MS = 10_000;
 /** Segments and progress notes are reported quietly, waking no page, so they may go every tick. */
 const PROGRESS_REPORT_MS = 2_000;
 const MAX_DELIVERY_ATTEMPTS = 3;
+// The website's message limit: a longer remark is not captured, never cut short.
+const MAX_CAPTURED_REPLY = 32000;
 // An idle room under an active goal waits this long before the host is woken, leaving the owner time to speak first.
 // Fallback when the room's goal does not carry its own idle wait (older website).
 export const GOAL_IDLE_MS = 120_000;
@@ -304,6 +306,10 @@ export class FreeRoomRunner {
     this.instance = randomUUID();
     // Execution id -> why its session ended on its own, such as a command refused in unattended mode ('' when unknown).
     this.exited = new Map();
+    // Execution id -> the software's last full remark once it began working: its reply, kept for an execution that ends unsubmitted.
+    this.replies = new Map();
+    // Executions whose software reported refused operations; their last remark is not captured.
+    this.denied = new Set();
     // Per execution, which delivery is current: a turn stopped by a pause may report its exit after the resumed one began.
     this.generations = new Map();
     // Executions whose software failed before any turn ran, as its adapter reported; safe to deliver again.
@@ -806,6 +812,8 @@ export class FreeRoomRunner {
     // A member whose session a rewind restarted is bound to '' and must not fall back to the session it was invited with.
     if (binding.session_id === undefined && adapter.session_id) binding.session_id = adapter.session_id;
     let invoked = false;
+    // Remarks before the software shows any work (an adapter's own "not started yet") are never its reply.
+    let worked = false;
     try {
       // A resumed execution's session was already cut at its first delivery.
       const warning = resume ? '' : await this.cut_rewound(member.name, adapter, binding, execution);
@@ -844,8 +852,11 @@ export class FreeRoomRunner {
         on_binding: session => this.store.bind(member.name, session),
         on_process: child => this.track(member.name, child, execution.id),
         on_output: (path, chunk) => { appendFileSync(path, chunk, { mode: 0o600 }); this.touch(execution.id); this.segments.mark(execution.id); },
-        on_activity: (phase, tool) => { this.touch(execution.id, phase); this.segments.mark(execution.id, phase, tool); },
-        on_note: text => this.note(execution.id, text),
+        on_activity: (phase, tool) => { worked = true; this.touch(execution.id, phase); this.segments.mark(execution.id, phase, tool); },
+        on_note: text => {
+          this.note(execution.id, text);
+          if (worked && current()) this.replies.set(execution.id, text);
+        },
         // Files the agent edited with its own tools, read from its events; an empty call says the list is tracked.
         on_edits: paths => {
           const snapshot = this.snapshots.get(execution.id);
@@ -861,7 +872,11 @@ export class FreeRoomRunner {
         },
         on_exit: denial => { if (current()) this.exited.set(execution.id, denial || ''); },
         // Shown beside the answer or failure so the owner can allow them; a lost report only hides the list.
-        on_denials: denials => api(this.config, `/executions/${execution.id}`, { action: 'denials', denials }).catch(() => {}),
+        on_denials: denials => {
+          // A refused operation means the turn may be unfinished: its last remark is never captured as the answer.
+          if (denials?.length && current()) this.denied.add(execution.id);
+          api(this.config, `/executions/${execution.id}`, { action: 'denials', denials }).catch(() => {});
+        },
       });
       if (result.session_id) this.store.bind(member.name, result.session_id);
       this.clear_stopped(member.name);
@@ -973,6 +988,9 @@ export class FreeRoomRunner {
       if (this.exited.has(execution.id)) {
         const latest = await api(this.config, `/executions/${execution.id}`);
         const denial = this.exited.get(execution.id);
+        if (['dispatched', 'started'].includes(latest.status) && !denial && await this.capture_reply(member.name, execution.id)) {
+          return this.save(member.name, { status: 'idle' });
+        }
         if (['dispatched', 'started'].includes(latest.status)) return this.fail(member.name, execution.id, denial
           ? `${member.name} ${denial}，未提交本次回答`
           : `${member.name} 会话已结束，但未提交本次回答；请核对原会话确认是否已有内容`);
@@ -1001,6 +1019,8 @@ export class FreeRoomRunner {
     const processes = this.execution_processes.get(execution.id);
     for (const child of processes || []) this.request_stop(child);
     this.exited.delete(execution.id);
+    this.replies.delete(execution.id);
+    this.denied.delete(execution.id);
     this.not_started.delete(execution.id);
     this.not_retryable.delete(execution.id);
     if (row.error) this.save(member.name, { error: '' });
@@ -1132,6 +1152,26 @@ export class FreeRoomRunner {
     this.touch(execution_id);
     this.segments.note(execution_id, text);
   }
+  /**
+   * The software ended normally without submitting: save its last remark as this execution's answer, marked as
+   * captured (`source: auto`), under the member's own credential. It dispatches nothing. Returns false when there is
+   * no usable remark or the website refused it, so the caller reports the missing answer as before.
+   */
+  async capture_reply(name, execution_id) {
+    const text = this.replies.get(execution_id)?.trim() || '';
+    this.replies.delete(execution_id);
+    if (this.denied.delete(execution_id)) return false;
+    const token = this.config.members?.[name]?.token;
+    if (!text || text === '(pass)' || text.length > MAX_CAPTURED_REPLY || !token) return false;
+    try {
+      await api(this.config, '/messages', { author: name, submitted_by: name, source: 'auto', kind: 'chat', text,
+        execution_id, submission_id: `auto-capture-${execution_id}` }, token);
+      return true;
+    } catch (error) {
+      this.log(`${name} 执行 #${execution_id} 的回答未能自动收录：${error.message}`);
+      return false;
+    }
+  }
   /** Report observed file changes once an execution has ended and its member's processes have exited. */
   async report_finished(active) {
     for (const [execution_id, snapshot] of this.snapshots) {
@@ -1163,6 +1203,8 @@ export class FreeRoomRunner {
     if (attempt > MAX_DELIVERY_RETRIES) return this.fail(name, execution.id, `${reason}（已自动重试 ${MAX_DELIVERY_RETRIES} 次）`);
     this.stop_member(name);
     this.exited.delete(execution.id);
+    this.replies.delete(execution.id);
+    this.denied.delete(execution.id);
     await api(this.config, `/executions/${execution.id}`, { action: 'retry_wait', attempt,
       retry_at: Math.floor(Date.now() / 1000) + (restarted ? RESTART_RETRY_DELAY_SECONDS : RETRY_DELAY_SECONDS), reason: reason.slice(0, MAX_RETRY_REASON) });
     this.save(name, { status: 'retry_wait', error: '' });

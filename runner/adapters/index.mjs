@@ -13,7 +13,8 @@
  *   - optional `chat(config, binding, task, spawn_process, user_home)` for a private chat turn whose software a usual
  *     delivery cannot follow (an App, an open window, the model API): same result as `deliver`, and it reports through
  *     the task's callbacks — `on_note(text)` for each remark (the last is the reply), `on_exit()` or `on_failure(reason)`
- *     at the end, `on_process(handle)` with `kill()` when it can stop (`handle.stop_on_shutdown = false` when only the owner's stop may
+ *     at the end (`on_exit(reason)` when the turn ended unfinished but should not be retried, such as an interrupted or
+ *     closed window or a refused operation: the runner then neither captures the last remark nor retries), `on_process(handle)` with `kill()` when it can stop (`handle.stop_on_shutdown = false` when only the owner's stop may
  *     run it, not the runner's shutdown), `on_output(path, line)` for its process log;
  *   - optional `receipt(config, id)` for deliveries confirmed later (`status: 'sidecar_pending'`),
  *     `into_window(profile, binding)` (this delivery goes into the member's own open window), `cleanup(directory)`

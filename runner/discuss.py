@@ -52,6 +52,9 @@ GUIDANCE = {
 }
 BRIEF_FIELDS = ("id", "title", "goal", "host", "user_request", "background", "boundaries", "experts")
 ROOM_LIST_FIELDS = ("id", "title", "goal", "message_count", "latest_id", "created_at")
+# A posted message echoes only what proves where it landed; the full text stays one `message view` away.
+RECEIPT_FIELDS = ("id", "author", "kind", "execution_id", "request_message_id", "reply_to", "submission_id",
+                  "created_at", "summary", "proactive")
 EXIT_CODES = {"0": "成功", "1": "HTTP/API 错误", "2": "参数或输入错误",
               "3": "网络失败或响应无法确认", "130": "被中断，写入结果需核对"}
 
@@ -311,7 +314,9 @@ def message_commands(subcommands, registry):
     view.add_argument("--request", type=positive_int, help="手动成员：按自己的有效请求限制可读原文")
     group = add_leaf(subcommands, registry, "message group-plan", "房主读取全体请求、成员、顺序与 revision；安排全体前先读，提交时携带该 revision", True)
     group.add_argument("id", type=positive_int, help="全体请求的原消息编号")
-    post = add_leaf(subcommands, registry, "message post", "提交观点、主持说明或协作回答", True)
+    post = add_leaf(subcommands, registry, "message post",
+                    "提交观点、主持说明或协作回答；成功只返回回执（编号、作者、关联、摘要、正文字数），不回显正文。"
+                    "--body-file 开头可用 `---` / `summary: 摘要` / `---` 三行携带摘要", True)
     add_text(post, "body")
     post.add_argument("--attachment", action="append", type=attachment_id, default=[],
                       help="已上传附件 ID；可重复指定，最多 10 个")
@@ -590,6 +595,30 @@ def text_field(args, field):
     return read_input(path) if path is not None else values.get(field)
 
 
+def split_summary_header(text):
+    """Take a leading `---` / `summary: …` / `---` block off a body file, so one draft carries both fields.
+
+    Returns `(summary, body)`; `summary` is None when the text does not open with exactly that block.
+    """
+    lines = text.splitlines(keepends=True)
+    if len(lines) < 3 or lines[0].strip() != "---" or not lines[1].startswith("summary:") or lines[2].strip() != "---":
+        return None, text
+    return lines[1][len("summary:"):].strip(), "".join(lines[3:]).lstrip("\r\n")
+
+
+def message_text_and_summary(args):
+    """Read body and summary; a body file may hold the summary in its header instead of `--summary(-file)`."""
+    body = text_field(args, "body") or ""
+    summary = text_field(args, "summary")
+    if getattr(args, "body_file", None) is not None:
+        header, rest = split_summary_header(body)
+        if header is not None:
+            if summary is not None:
+                raise CliError("正文文件头已带 summary，不能再用 --summary / --summary-file")
+            body, summary = rest, header
+    return body, summary
+
+
 def require_actor(args):
     """Use the declared operator, or the member a task credential is bound to."""
     actor = getattr(args, "actor", None) or load_access(args).get("member")
@@ -711,15 +740,15 @@ def plan_message(args):
         raise CliError("主持说明须关联本次 --execution 或有效 --request")
     if args.execution and args.request:
         raise CliError("--execution 用于接入程序交付的执行，--request 用于手动接入成员，二者不能同用")
+    text, summary = message_text_and_summary(args)
     payload = {"author": actor, "submitted_by": actor, "source": "cli",
-               "kind": args.kind, "text": text_field(args, "body") or "", "submission_id": args.submission_id}
+               "kind": args.kind, "text": text, "submission_id": args.submission_id}
     if len(args.attachment) > MAX_MESSAGE_ATTACHMENTS or len(set(args.attachment)) != len(args.attachment):
         raise CliError("每条消息最多 10 个附件，不能重复")
     if args.attachment:
         payload["attachment_ids"] = args.attachment
     if (not payload["text"].strip() and not args.attachment) or len(payload["text"].strip()) > MAX_TEXT_LENGTH:
         raise CliError(f"发言需包含正文或附件，正文最多 {MAX_TEXT_LENGTH} 个 Unicode 字符；不会自动截断或分段")
-    summary = text_field(args, "summary")
     if summary is not None:
         if len(summary.strip()) > MAX_SUMMARY_LENGTH:
             raise CliError(f"回答摘要最多 {MAX_SUMMARY_LENGTH} 个 Unicode 字符；不会自动截断")
@@ -775,7 +804,7 @@ def plan_message(args):
             payload["session_id"] = session_id
             payload["session_client"] = client
             break
-    return RequestPlan(base, "POST", payload)
+    return RequestPlan(base, "POST", payload, "message_receipt")
 
 
 def plan_attachment(args):
@@ -1137,6 +1166,11 @@ def project_result(value, plan, site):
         return result
     if plan.view == "message_list":
         return fit_message_page(value)
+    if plan.view == "message_receipt" and isinstance(value.get("message"), dict):
+        message = value["message"]
+        receipt = {**select_fields(message, RECEIPT_FIELDS), "text_chars": len(message.get("text") or ""),
+                   "attachments": len(message.get("attachments") or [])}
+        return {**{key: item for key, item in value.items() if key != "message"}, "message": receipt}
     return value
 
 

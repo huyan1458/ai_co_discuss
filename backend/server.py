@@ -1235,6 +1235,16 @@ def check_message_references(connection, room_id, message):
         raise ValueError("回复的消息不在当前房间中")
 
 
+CAPTURE_REFUSED_FIELDS = ("to", "handoff", "continue", "sequential", "loop", "parallel", "gates", "detach", "need_rounds",
+                          "next_review", "review_scope", "proactive", "request_ids", "reply_to", "attachment_ids")
+
+
+def check_captured_reply(payload):
+    """A reply the local service captured after the software ended unsubmitted: it answers its execution and nothing more."""
+    if type(payload.get("execution_id")) is not int or any(payload.get(field) for field in CAPTURE_REFUSED_FIELDS):
+        raise ValueError("自动收录的回答只能关联本次执行 execution_id，不能派活、续跑、引用或带附件")
+
+
 def append_free_message(connection, room, payload, actor):
     """Append a free-room message: the owner's creates requests, a member's completes its execution."""
     if payload.get("kind") == "moderation":
@@ -1251,8 +1261,11 @@ def append_free_message(connection, room, payload, actor):
     if actor == "用户" and (author != "用户" or payload.get("submitted_by", "用户") != "用户"):
         raise PermissionError("房间控制凭据只能以用户身份发言")
     submitted_by = author
+    source = payload.get("source") if payload.get("source") in ("api", "auto") else "cli"
     expected = {"author": author, "text": text, "reply_to": reply_to, "kind": "chat", "submitted_by": submitted_by,
-                "source": "user" if author == "用户" else "api" if payload.get("source") == "api" else "cli"}
+                "source": "user" if author == "用户" else source}
+    if expected["source"] == "auto":
+        check_captured_reply(payload)
     expected.update(message_summary(payload, expected))
     identifiers = attachment_ids(payload)
     previous = connection.execute(f"{MESSAGE_QUERY} WHERE room_id=? AND submission_id=?", (room_id, submission_id)).fetchone()
@@ -1283,7 +1296,9 @@ def append_free_message(connection, room, payload, actor):
                        (cursor.lastrowid, expected["summary"], expected["summary_by"]))
     for position, identifier in enumerate(identifiers):
         connection.execute("UPDATE attachments SET message_id=?,position=? WHERE id=?", (cursor.lastrowid, position, identifier))
-    save_suggestions(connection, room_id, cursor.lastrowid, actor, payload)
+    # A captured reply keeps its text, but its mentions wake nobody: only a submitted answer may ask for a host.
+    if expected["source"] != "auto":
+        save_suggestions(connection, room_id, cursor.lastrowid, actor, payload)
     save_review_plan(connection, room_id, cursor.lastrowid, review_plan)
     if actor != "用户" and payload.get("proactive") is True:
         # Spoken on its own: it completes no request; only the host's may dispatch.

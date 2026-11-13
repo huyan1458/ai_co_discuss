@@ -1361,6 +1361,59 @@ test('a Claude window turn that ends on a usage limit fails without retry, and o
   assert.deepEqual(seen, ['exit']);
 });
 
+test('a Claude window turn reports its own work as activity, so its last remark can be captured', async t => {
+  const home = mkdtempSync(join(tmpdir(), 'claude-window-')); t.after(() => rmSync(home, { recursive: true, force: true }));
+  const line = entry => `${JSON.stringify(entry)}
+`;
+  const file = join(home, `${randomUUID()}.jsonl`), log_path = join(home, 'window.log');
+  writeFileSync(file, '');
+  const seen = [];
+  watch_window_turn({ file, offset: 0, pid: process.pid, marker: 'free-9.task.json', log_path },
+    { on_activity: phase => seen.push(`activity:${phase}`), on_note: text => seen.push(`note:${text}`), on_output: () => {}, on_exit: () => seen.push('exit') },
+    { interval: 10 });
+  appendFileSync(file, line({ type: 'user', message: { role: 'user', content: '读取 free-9.task.json' } })
+    + line({ type: 'assistant', message: { content: [{ type: 'text', text: '完整回答' }] } })
+    + line({ type: 'system', subtype: 'turn_duration', durationMs: 10 }));
+  for (let waited = 0; !seen.includes('exit') && waited < 2000; waited += 20) await delay(20);
+  assert.ok(seen.indexOf('activity:writing') >= 0 && seen.indexOf('activity:writing') < seen.indexOf('note:完整回答'), seen.join());
+  assert.equal(seen.at(-1), 'exit');
+});
+
+test('a Claude window turn interrupted or closed before it finished exits with that reason, and its remark is not captured', async t => {
+  const home = mkdtempSync(join(tmpdir(), 'claude-window-')); t.after(() => rmSync(home, { recursive: true, force: true }));
+  const line = entry => `${JSON.stringify(entry)}
+`;
+  const start = line({ type: 'user', message: { role: 'user', content: '读取 free-9.task.json' } })
+    + line({ type: 'assistant', message: { content: [{ type: 'text', text: '我接下来会修改文件，尚未完成' }] } });
+  const follow = async (pid, tail) => {
+    const file = join(home, `${randomUUID()}.jsonl`); writeFileSync(file, '');
+    const seen = [];
+    watch_window_turn({ file, offset: 0, pid, marker: 'free-9.task.json', log_path: join(home, 'window.log') },
+      { on_activity: () => {}, on_note: () => {}, on_output: () => {}, on_failure: reason => seen.push(`failure:${reason}`),
+        on_exit: reason => seen.push(`exit:${reason || ''}`) }, { interval: 10 });
+    appendFileSync(file, start + tail);
+    for (let waited = 0; !seen.length && waited < 2000; waited += 20) await delay(20);
+    return seen;
+  };
+  const interrupted = await follow(process.pid, line({ type: 'user', message: { content: [{ type: 'text', text: '[Request interrupted by user]' }] } }));
+  assert.deepEqual(interrupted, ['exit:在原窗口里被中断了这一轮']);
+  const closed = await follow(2 ** 22 + 12345, '');
+  assert.deepEqual(closed, ['exit:所在的原窗口在这一轮结束前关闭了']);
+  // The runner fails such an execution at once: no capture and no retry.
+  const { state, store, config } = await free_fixture(t);
+  config.participants.Claude = { adapter: 'claude', project_access: 'own' };
+  const runner = new FreeRoomRunner(config, store, async (adapter, binding, task) => {
+    setImmediate(() => { task.on_activity('writing'); task.on_note('我接下来会修改文件，尚未完成'); task.on_exit('在原窗口里被中断了这一轮'); });
+    return { status: 'accepted' };
+  });
+  await runner.tick();
+  await runner.tick();
+  assert.equal(state.executions[0].status, 'failed');
+  assert.equal(state.posts, undefined);
+  assert.match(state.executions[0].result, /在原窗口里被中断了这一轮，未提交本次回答/);
+  assert.ok(!state.calls.some(call => call.endsWith('retry_wait')));
+});
+
 test('agy 全放开 skips its permission prompts, which no other level does', async t => {
   for (const project_access of ['read', 'write', 'full', 'own']) {
     const session = project_access === 'own' ? { session_id: 'actual-cli-session' } : {};
@@ -1989,6 +2042,12 @@ async function free_fixture(t) {
       // Like the website: one page of at most 20 messages after the cursor.
       const after = Number(url.split('=')[1]);
       result = { messages: (state.messages || []).filter(item => item.id > after).slice(0, 20) };
+    } else if (url === '/messages' && request.method === 'POST') {
+      // Like the website: an answer bound to a live execution completes it.
+      (state.posts ||= []).push({ body, token: request.headers['x-discussion-token'] });
+      const answered = state.executions.find(item => item.id === body.execution_id);
+      if (answered) answered.status = 'completed';
+      result = { message: { id: 99, ...body }, duplicate: false };
     } else if (url === '/discussion') result = { session: state.session, revision: 'session-r1' };
     else if (url === '/turns/roster') result = state.roster;
     else if (url.startsWith('/turns') && request.method === 'GET') {
@@ -2505,6 +2564,35 @@ test('a free member that exits without answering fails only its own execution', 
   assert.equal(state.executions[0].status, 'failed');
   assert.ok(state.calls.includes('POST /executions/1 fail'));
   assert.match(state.executions[0].result, /会话已结束，但未提交本次回答.*请核对原会话/);
+});
+
+test('a member whose operations were refused is not captured, even when its session ends plainly', async t => {
+  const { state, store, config } = await free_fixture(t);
+  const runner = new FreeRoomRunner(config, store, async (adapter, binding, task) => {
+    setImmediate(() => { task.on_activity('writing'); task.on_note('还差一步'); task.on_denials([{ tool: 'Bash', input: 'rm -rf x' }]); task.on_exit(); });
+    return { status: 'accepted' };
+  });
+  await runner.tick();
+  await runner.tick();
+  assert.equal(state.executions[0].status, 'failed');
+  assert.equal(state.posts, undefined);
+});
+
+test('a member that worked and ended without submitting has its last remark captured as the answer', async t => {
+  const { state, store, config } = await free_fixture(t);
+  const runner = new FreeRoomRunner(config, store, async (adapter, binding, task) => {
+    setImmediate(() => { task.on_note('还没开始'); task.on_activity('writing'); task.on_note('中途说明'); task.on_note('  最终答复  '); task.on_exit(); });
+    return { status: 'accepted' };
+  });
+  await runner.tick();
+  await runner.tick();
+  assert.equal(state.executions[0].status, 'completed');
+  assert.ok(!state.calls.includes('POST /executions/1 fail'));
+  assert.equal(state.posts.length, 1);
+  const { body, token } = state.posts[0];
+  assert.deepEqual([body.text, body.source, body.execution_id, body.author, body.kind], ['最终答复', 'auto', 1, 'Claude', 'chat']);
+  assert.equal(token, config.members.Claude.token, 'captured under the member, not the owner');
+  assert.equal(body.to, undefined);
 });
 
 test("an expert prompt is only the member's own text, and the API file rule is fixed in its system prompt", () => {

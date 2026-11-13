@@ -122,6 +122,20 @@ class FreeRoomTests(unittest.TestCase):
 class SingleMemberTests(FreeRoomTests):
     """Single-member rooms; subclasses of FreeRoomTests reuse its fixture without re-running these."""
 
+    def test_captured_reply_answers_only_its_execution(self):
+        """A reply the local service captured is saved as `auto`, closes its execution, and can dispatch nothing."""
+        self.say("帮我看看")
+        execution = self.reserve()[1]
+        status, error = self.answer(execution["id"], text="收录", source="auto", to=["Claude"])
+        self.assertEqual(status, 400, error)
+        self.assertEqual(self.answer(None, text="收录", source="auto")[0], 400)
+        status, result = self.answer(execution["id"], text="最后一段回复", source="auto")
+        self.assertEqual(status, 201, result)
+        self.assertEqual(result["message"]["source"], "auto")
+        self.assertEqual(result["message"]["execution_id"], execution["id"])
+        executions = self.request(self.path)[1]["free"]["executions"]
+        self.assertEqual(next(item for item in executions if item["id"] == execution["id"])["status"], "completed")
+
     def test_stop_before_delivery_holds_until_confirmed_or_original_deadline(self):
         """Late capability reports and uncertain stops retain the original bounded wait."""
         member_id = self.request(self.path)[1]["free"]["members"][0]["id"]
@@ -1141,6 +1155,15 @@ class MultiMemberTests(FreeRoomTests):
         work = self.reserve_for("Codex")[1]
         self.assertEqual(self.answer(work["id"], "已处理。", token=self.codex, author="Codex")[0], 201)
         self.assertEqual(len(host_requests()), 1)
+
+    def test_captured_reply_mentioning_the_host_wakes_nobody(self):
+        """A captured reply keeps its @host text but never asks the host, even once the room is idle."""
+        self.say("请 Claude 看看", to=["Claude"])
+        execution = self.reserve_for("Claude")[1]
+        status, saved = self.answer(execution["id"], "需要 @Codex 处理。", source="auto")
+        self.assertEqual(status, 201, saved)
+        self.assertEqual(self.request(f"{self.path}/messages/{saved['message']['id']}")[1]["text"], "需要 @Codex 处理。")
+        self.assertEqual([item for item in self.request(self.path)[1]["free"]["requests"] if item["member"] == "Codex"], [])
 
     def test_away_voids_work_and_return_needs_a_new_credential(self):
         """Leaving cancels only that member's work; old credential copies never revive."""

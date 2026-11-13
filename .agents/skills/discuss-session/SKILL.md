@@ -43,6 +43,6 @@ codiscuss message post ROOM --as 本人 --kind chat --execution 执行编号 --b
 codiscuss message post ROOM --as 本人 --kind chat --request 请求编号 --body-file draft.md --access-file FILE
 ```
 
-需要摘要时一并使用 `--summary` 或 `--summary-file`。成功提交后当前请求即完成；不要再补一条普通 chat 或状态回执。
+需要摘要时写在正文草稿开头（`---`、`summary: 摘要`、`---` 三行），或用 `--summary` / `--summary-file`。成功提交后当前请求即完成；不要再补一条普通 chat 或状态回执。
 
 任务执行失败时，用 `execution fail ROOM 执行编号 --reason 原因 --access-file FILE` 失败本次执行并保留草稿。该操作只处理当前请求，不自动暂停整场讨论；主持人会收到专家请求失败并判断后续安排。不要改用其他成员、请求编号或身份绕过拒绝。
