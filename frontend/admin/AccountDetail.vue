@@ -92,8 +92,10 @@ async function copy(text) {
 
       <article class="panel-card is-tall">
         <LoginCard v-if="account.os_user" :target="account.name" :who="`托管账号 ${account.name}`" />
-        <p v-else class="panel-note" style="margin: 0"><UIcon name="i-lucide-info" />未隔离的账号用你自己的命令行登录。
-          <button type="button" class="panel-button is-plain is-small" @click="emit('local')">去“本机”查看</button></p>
+        <div v-else class="detail-shared">
+          <p class="panel-note" style="margin: 0; flex: 1"><UIcon name="i-lucide-info" />未隔离的账号用你自己的命令行登录，在“概览”页管理。</p>
+          <button type="button" class="panel-button is-outline is-small" @click="emit('local')">去概览</button>
+        </div>
       </article>
 
       <article v-if="account.os_user" class="panel-card is-tall"><AccountEnv :account="account.name" /></article>
@@ -138,4 +140,5 @@ async function copy(text) {
 <style scoped>
 .panel-form-head h2 { margin-right: 4px; }
 .detail-danger { display: flex; justify-content: flex-end; padding-top: 4px; }
+.detail-shared { display: flex; align-items: center; gap: 12px; }
 </style>

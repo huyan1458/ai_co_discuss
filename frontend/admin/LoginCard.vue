@@ -9,7 +9,7 @@ import LoginDialog from "./LoginDialog.vue";
 
 const props = defineProps({ target: { type: String, required: true }, who: { type: String, required: true } });
 const emit = defineEmits(["status"]);
-const { state, notify } = inject("panel");
+const { state, notify, refreshed } = inject("panel");
 
 const CLIS = [
   { key: "claude", label: "Claude Code", icon: "/icons/claude.svg" },
@@ -29,6 +29,7 @@ async function check() {
   finally { checking.value = false; emit("status", status.value); }
 }
 onMounted(check);
+watch(refreshed, check);
 watch(() => props.target, check);
 defineExpose({ check });
 

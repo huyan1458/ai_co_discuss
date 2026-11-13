@@ -8,7 +8,7 @@ import { call, provider_icon, provider_of } from "./api.js";
 
 const props = defineProps({ account: { type: String, required: true } });
 const emit = defineEmits(["changed"]);
-const { state, notify } = inject("panel");
+const { state, notify, refreshed } = inject("panel");
 const keys = ref([]), adding = ref(false), saving = ref(false), removing = ref(null);
 const presets = computed(() => Object.entries(state.value.providers || {}).filter(([key]) => key !== "OpenAI").map(([key, provider]) => ({ key, ...provider })));
 const form = ref({ preset: "", base_url: "", api_key: "" });
@@ -18,6 +18,7 @@ async function load() {
   catch (failure) { notify("error", failure.message); }
 }
 onMounted(load);
+watch(refreshed, load);
 watch(() => props.account, load);
 
 function start() {

@@ -3,11 +3,11 @@
  * This computer: the owner's own service (status, start, restart, stop), the owner's command-line sign-ins, updates with
  * a report of every step, and starting with Windows.
  */
-import { computed, inject, onMounted, ref } from "vue";
+import { computed, inject, onMounted, ref, watch } from "vue";
 import { call } from "./api.js";
 import LoginCard from "./LoginCard.vue";
 
-const { state, reload, notify } = inject("panel");
+const { state, reload, notify, refreshed } = inject("panel");
 const service = computed(() => state.value.service || {});
 const busy = ref("");
 const update = ref(null), checking = ref(false), confirming = ref(false);
@@ -48,6 +48,8 @@ async function toggle_autostart() {
 }
 
 onMounted(() => check());
+// The header's refresh asks npm again rather than reusing the hourly answer.
+watch(refreshed, () => check(true));
 </script>
 
 <template>

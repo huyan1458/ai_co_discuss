@@ -38,7 +38,19 @@ async function reload() {
 
 function choose(key) { chosen.value = key; history.replaceState(null, "", `#${key}`); }
 
-provide("panel", { state, reload, notify });
+// The header's refresh reloads everything shown: the panel state here, and each card that reads its own (sign-ins, an
+// account's AI environment, the version check) re-reads when this number changes. It spins for at least half a second
+// and says when it is done, so a quick refresh is still visibly a refresh.
+const refreshed = ref(0), refreshing = ref(false);
+async function refresh_all() {
+  refreshing.value = true;
+  refreshed.value += 1;
+  await Promise.all([reload(), new Promise((done) => setTimeout(done, 500))]);
+  refreshing.value = false;
+  notify("info", "已刷新");
+}
+
+provide("panel", { state, reload, notify, refreshed });
 onMounted(reload);
 </script>
 
@@ -53,7 +65,7 @@ onMounted(reload);
           </button>
         </nav>
         <div class="panel-tools">
-          <button type="button" class="panel-tool" :class="{ 'is-spinning': loading }" title="刷新" aria-label="刷新" @click="reload"><UIcon name="i-lucide-refresh-cw" /></button>
+          <button type="button" class="panel-tool" :class="{ 'is-spinning': refreshing }" :disabled="refreshing" title="刷新全部：服务、登录状态、账号与版本" aria-label="刷新全部" @click="refresh_all"><UIcon name="i-lucide-refresh-cw" /></button>
         </div>
       </header>
       <OverviewPage v-if="page === 'overview'" />

@@ -4,10 +4,10 @@
  * is there, and edit the system prompt new accounts start with. Installing a library skill for an account is done on
  * that account's page.
  */
-import { inject, onMounted, ref } from "vue";
+import { inject, onMounted, ref, watch } from "vue";
 import { call } from "./api.js";
 
-const { notify } = inject("panel");
+const { notify, refreshed } = inject("panel");
 const skills = ref([]), over = ref(false), importing = ref(""), removing = ref(null);
 const prompt = ref({ open: false, text: "", saved: "", saving: false });
 
@@ -15,6 +15,7 @@ async function load() {
   try { skills.value = await call("skill-library"); } catch (failure) { notify("error", failure.message); }
 }
 onMounted(load);
+watch(refreshed, load);
 
 function base64(buffer) {
   let text = "";

@@ -21,9 +21,14 @@
 }
 html, body { margin: 0; background: #fff; color: var(--panel-text); font-family: -apple-system, "Segoe UI", "PingFang SC", "Microsoft YaHei", system-ui, sans-serif; }
 body { min-height: 100vh; }
+/* Keep room for the scrollbar on every page, so the centred layout does not shift sideways when a long page shows it. */
+html { scrollbar-gutter: stable; }
 
-.panel { max-width: 980px; margin: 0 auto; padding: 28px 32px 64px; }
-.panel-head { display: flex; align-items: center; gap: 16px; margin-bottom: 30px; }
+/* Fixed geometry on every page: the header keeps its height and stays at the top, sections share one title row height,
+   and buttons on a row share one height, so moving between pages never shifts anything. */
+.panel { max-width: 980px; margin: 0 auto; padding: 0 32px 64px; }
+/* The header's white reaches over the page's side padding, so cards scrolling under it never show at its edges. */
+.panel-head { position: sticky; top: 0; z-index: 20; display: flex; align-items: center; gap: 16px; height: 106px; margin: 0 -32px 4px; padding: 4px 32px 0; background: #fff; }
 .panel-brand { display: flex; align-items: center; gap: 10px; margin-right: auto; }
 .panel-mark { width: 34px; height: 34px; border-radius: 9px; }
 .panel-brand h1 { margin: 0; color: var(--panel-blue); font-size: 26px; font-weight: 700; letter-spacing: -.01em; }
@@ -46,7 +51,9 @@ body { min-height: 100vh; }
 .panel-add > [class*="icon"] { width: 22px; height: 22px; }
 .panel-add.is-placeholder { visibility: hidden; }
 
-.panel-section-title { display: flex; align-items: center; gap: 8px; margin: 26px 2px 12px; color: var(--panel-muted); font-size: 13px; font-weight: 500; }
+.panel-section-title { display: flex; align-items: center; gap: 8px; height: 34px; margin: 18px 2px 8px; color: var(--panel-muted); font-size: 13px; font-weight: 500; }
+/* An action on a section title ("新建账号") sits at its right without making the row taller. */
+.panel-section-action { margin-left: auto; }
 .panel-section-title:first-child { margin-top: 0; }
 .panel-list { display: flex; flex-direction: column; gap: 14px; }
 
@@ -72,7 +79,7 @@ a.panel-link:hover { text-decoration: underline; }
 .panel-tag.is-blue { background: var(--panel-blue-soft); color: var(--panel-blue); }
 .panel-tag.is-amber { background: var(--panel-amber-soft); color: var(--panel-amber); }
 
-.panel-icon-button { display: grid; place-items: center; width: 36px; height: 36px; border-radius: 10px; color: #4b5563; transition: background-color .15s, color .15s; }
+.panel-icon-button { display: grid; flex-shrink: 0; place-items: center; width: 34px; height: 34px; border-radius: 10px; color: #4b5563; transition: background-color .15s, color .15s; }
 .panel-icon-button:hover:not(:disabled) { background: var(--panel-tint); color: var(--panel-text); }
 .panel-icon-button:disabled { opacity: .4; cursor: not-allowed; }
 /* Start and stop read at a glance: green to start, red to stop, each with a tint of its colour on hover. */
@@ -81,7 +88,7 @@ a.panel-link:hover { text-decoration: underline; }
 .panel-icon-button.is-stop { color: var(--panel-red); }
 .panel-icon-button.is-stop:hover:not(:disabled) { background: #fef2f2; color: var(--panel-red); }
 .panel-icon-button > [class*="icon"] { width: 18px; height: 18px; }
-.panel-icon-button.is-spinning > [class*="icon"] { animation: panel-spin 1s linear infinite; }
+.panel-icon-button.is-spinning > [class*="icon"], .panel-tool.is-spinning > [class*="icon"] { animation: panel-spin 1s linear infinite; }
 @keyframes panel-spin { to { transform: rotate(360deg); } }
 
 .panel-empty { display: flex; flex-direction: column; align-items: center; gap: 10px; padding: 56px 20px; border: 1.5px dashed var(--panel-line); border-radius: 18px; color: var(--panel-faint); font-size: 14px; text-align: center; }
@@ -92,9 +99,9 @@ a.panel-link:hover { text-decoration: underline; }
 .panel-note.is-amber { background: var(--panel-amber-soft); color: var(--panel-amber); }
 
 /* Full-page form, like CC Switch's "add provider" page. */
-.panel-form-head { display: flex; align-items: center; gap: 16px; margin: -4px 0 22px; padding-bottom: 18px; border-bottom: 1px solid var(--panel-line); }
+.panel-form-head { display: flex; align-items: center; gap: 16px; height: 34px; margin: 0 0 22px; padding-bottom: 18px; box-sizing: content-box; border-bottom: 1px solid var(--panel-line); }
 .panel-form-head h2 { margin: 0; font-size: 22px; font-weight: 700; }
-.panel-back { display: grid; place-items: center; width: 42px; height: 42px; border: 1px solid var(--panel-line); border-radius: 12px; color: #374151; }
+.panel-back { display: grid; flex-shrink: 0; place-items: center; width: 34px; height: 34px; border: 1px solid var(--panel-line); border-radius: 10px; color: #374151; }
 .panel-back:hover { background: var(--panel-tint); }
 .panel-form { display: flex; flex-direction: column; gap: 22px; padding: 26px 28px; border: 1px solid var(--panel-line); border-radius: 18px; }
 .panel-form-row { display: grid; grid-template-columns: 1fr 1fr; gap: 18px; }
@@ -134,8 +141,8 @@ a.panel-link:hover { text-decoration: underline; }
 .panel-secret span { flex: 1; user-select: all; }
 
 @media (max-width: 760px) {
-  .panel { padding: 20px 16px 48px; }
-  .panel-head { flex-wrap: wrap; }
+  .panel { padding: 0 16px 48px; }
+  .panel-head { flex-wrap: wrap; height: auto; margin: 0 -16px 4px; padding: 16px 16px 12px; }
   .panel-tabs { order: 3; width: 100%; }
   .panel-tab { flex: 1; justify-content: center; padding: 0 8px; }
   .panel-logins, .panel-form-row { grid-template-columns: 1fr; }

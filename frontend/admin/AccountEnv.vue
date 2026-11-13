@@ -8,7 +8,7 @@ import { computed, inject, onMounted, ref, watch } from "vue";
 import { call } from "./api.js";
 
 const props = defineProps({ account: { type: String, required: true } });
-const { reload, notify } = inject("panel");
+const { reload, notify, refreshed } = inject("panel");
 const env = ref(null), library = ref([]), loading = ref(false), busy = ref(""), chosen = ref({}), prompt = ref(""), prompt_open = ref(false);
 
 async function load() {
@@ -21,6 +21,7 @@ async function load() {
   finally { loading.value = false; }
 }
 onMounted(load);
+watch(refreshed, load);
 watch(() => props.account, load);
 
 const installed = computed(() => new Set((env.value?.skills || []).map((skill) => skill.name)));
