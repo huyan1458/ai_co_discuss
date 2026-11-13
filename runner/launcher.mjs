@@ -82,6 +82,11 @@ static class Tray {
   [DllImport("user32.dll")] static extern bool IsIconic(IntPtr window);
   [DllImport("user32.dll")] static extern bool ShowWindow(IntPtr window, int command);
   [DllImport("user32.dll")] static extern bool SetForegroundWindow(IntPtr window);
+  [DllImport("user32.dll")] static extern IntPtr GetForegroundWindow();
+  [DllImport("user32.dll")] static extern bool BringWindowToTop(IntPtr window);
+  [DllImport("user32.dll")] static extern uint GetWindowThreadProcessId(IntPtr window, IntPtr process);
+  [DllImport("user32.dll")] static extern bool AttachThreadInput(uint from, uint to, bool attach);
+  [DllImport("kernel32.dll")] static extern uint GetCurrentThreadId();
   [DllImport("user32.dll")] static extern bool SetProcessDPIAware();
   [DllImport("user32.dll")] static extern bool SetProcessDpiAwarenessContext(IntPtr context);
 
@@ -105,16 +110,23 @@ static class Tray {
     return found;
   }
 
-  // Bring the panel window forward (this process was just clicked, so Windows lets it), or ask for one; a window takes a
-  // few seconds to appear, so a second click meanwhile does not ask again.
+  // Bring a window forward. Windows may refuse SetForegroundWindow to a taskbar icon's program even right after its click,
+  // leaving the window behind the others; sharing input with the program in front (the taskbar) makes it allowed.
+  static void Raise(IntPtr window) {
+    ShowWindow(window, IsIconic(window) ? 9 : 5);
+    uint mine = GetCurrentThreadId(), front = GetWindowThreadProcessId(GetForegroundWindow(), IntPtr.Zero);
+    bool attached = front != 0 && front != mine && AttachThreadInput(front, mine, true);
+    BringWindowToTop(window);
+    SetForegroundWindow(window);
+    if (attached) AttachThreadInput(front, mine, false);
+  }
+
+  // Bring the panel window forward, or ask for one; a new window takes a few seconds to appear, so a click meanwhile does
+  // not ask again.
   static void OpenPanel() {
     List<IntPtr> windows = Windows();
-    if (windows.Count > 0) {
-      if (IsIconic(windows[0])) ShowWindow(windows[0], 9);
-      SetForegroundWindow(windows[0]);
-      return;
-    }
-    if ((DateTime.Now - asked).TotalSeconds < 10) return;
+    if (windows.Count > 0) { Raise(windows[0]); return; }
+    if ((DateTime.Now - asked).TotalSeconds < 5) return;
     asked = DateTime.Now;
     Say("open");
   }
@@ -385,9 +397,17 @@ function write_shortcut(folder, exe, icon) {
   return result.stdout.trim();
 }
 
-/** Where the launcher of a service home lives; setup offers to build it only while it does not exist. */
+/** Where the launcher of a service home lives. */
 export function launcher_path(home = join(homedir(), '.codiscuss')) {
   return join(home, 'launcher', EXE_NAME);
+}
+
+/** Whether the launcher and its desktop shortcut both exist; the desktop is asked of Windows, as it may be redirected. */
+export function launcher_installed(home = join(homedir(), '.codiscuss')) {
+  if (!existsSync(launcher_path(home))) return false;
+  const desktop = spawnSync('powershell.exe', ['-NoProfile', '-NonInteractive', '-Command',
+    "[Console]::OutputEncoding=[Text.Encoding]::UTF8; [Environment]::GetFolderPath('Desktop')"], { encoding: 'utf8', windowsHide: true }).stdout?.trim();
+  return Boolean(desktop) && existsSync(join(desktop, SHORTCUT_NAME));
 }
 
 /**

@@ -246,9 +246,11 @@ const EDGE_PATHS = [join(process.env['ProgramFiles(x86)'] || 'C:\\Program Files 
 /**
  * Show the panel in a window of its own: Edge, which every Windows 10/11 has, in app mode (no address bar or tabs, its
  * own taskbar entry), with a profile kept in the owner's service directory. A window already open is brought forward
- * instead of opening another; without Edge the default browser opens the page.
+ * instead of opening another; without Edge the default browser opens the page. `look_first` is false when the taskbar
+ * icon asks: it has just looked for the window itself, and looking again here delays the new window by a second.
  */
-function open_panel_window(data, url) {
+function open_panel_window(data, url, look_first = true) {
+  if (!look_first) return launch_panel_window(data, url);
   // The title goes in a script file with a byte-order mark: on a command line Windows would pass it in the ANSI code page,
   // the Chinese title would no longer match, and every call would open another window.
   const script = join(tmpdir(), `codiscuss-focus-${process.pid}.ps1`);
@@ -256,6 +258,10 @@ function open_panel_window(data, url) {
   const focused = spawnSync('powershell.exe', ['-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', script], { encoding: 'utf8', windowsHide: true, timeout: 10_000 });
   rmSync(script, { force: true });
   if (focused.stdout?.trim() === 'focused') return;
+  launch_panel_window(data, url);
+}
+
+function launch_panel_window(data, url) {
   const edge = EDGE_PATHS.find(path => existsSync(path));
   if (!edge) return open_browser(url);
   spawn(edge, [`--app=${url}`, `--user-data-dir=${join(data, 'panel-window')}`, `--window-size=${WINDOW_SIZE}`, '--no-first-run', '--no-default-browser-check', '--lang=zh-CN', '--disable-features=Translate,msTranslate'],
@@ -302,7 +308,7 @@ function run_panel(data, port) {
   });
   const rendered = join(data, 'launcher', 'codiscuss.ico');
   const tray = show_tray({ title: '共议 · 管理面板', icon_path: existsSync(rendered) ? rendered : '', window_title: WINDOW_TITLE, host: join(data, 'launcher', '共议.exe'), on_action: action => {
-    if (action === 'open') open_panel_window(data, panel_url(state));
+    if (action === 'open') open_panel_window(data, panel_url(state), false);
     if (action === 'site') open_browser(site_url(data));
     if (action === 'restart') run_owner_service(data, 'stop').then(() => run_owner_service(data, 'start')).catch(() => {});
     if (action === 'stop') run_owner_service(data, 'stop').catch(() => {}).finally(shutdown);
