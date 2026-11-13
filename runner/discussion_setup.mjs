@@ -35,7 +35,7 @@ const CLIENTS = {
 const OPTIONS = { yes: { type: 'boolean' }, clients: { type: 'string' }, python: { type: 'string' },
   codex: { type: 'string' }, claude: { type: 'string' }, antigravity: { type: 'string' }, cursor: { type: 'string' },
   port: { type: 'string' }, prefix: { type: 'string' }, 'skills-home': { type: 'string' },
-  'no-start': { type: 'boolean' }, 'no-open': { type: 'boolean' }, workflows: { type: 'boolean' }, json: { type: 'boolean' }, help: { type: 'boolean', short: 'h' } };
+  'no-start': { type: 'boolean' }, hosting: { type: 'boolean' }, 'no-hosting': { type: 'boolean' }, 'no-open': { type: 'boolean' }, workflows: { type: 'boolean' }, json: { type: 'boolean' }, help: { type: 'boolean', short: 'h' } };
 const HELP = `用法：codiscuss install [选项] / codiscuss setup [选项]
 install 将当前 npm 包安装为持久命令，再运行 setup；setup 配置已有安装。
   --yes                     使用已检测且支持自动接入的软件，冲突保留并报告
@@ -46,6 +46,7 @@ install 将当前 npm 包安装为持久命令，再运行 setup；setup 配置�
   --no-start / --no-open     只配置 / 启动但不打开浏览器
   --prefix DIR              npm 安装前缀（install）
   --skills-home DIR         技能用户根目录（默认当前用户目录）
+  --hosting / --no-hosting  打开 / 关闭托管管理（Windows 任务栏图标里的管理面板），选择会记住
   --workflows               安装全部随包工作流，已有同名的覆盖为最新版（原来的先备份到服务目录 backups/）；
                             交互运行时也可在“安装配置”里逐个勾选；不选则不安装，选择不会记住
 Antigravity（显示名 Gemini）使用 agy；Grok 使用 Cursor CLI（agent / cursor-agent）。仅检测 CLI。
@@ -166,34 +167,54 @@ async function selected_clients(options, detected) {
 }
 
 /**
- * The install settings of this run: which shipped workflows to install, and whether to build the 共议 launcher.
+ * The install settings of this run: which shipped workflows to install, whether to build the 共议 launcher, and whether
+ * hosting (the management panel) is on.
  * Workflows: nothing by default; an interactive run offers them unchecked, a non-interactive one installs them only with
- * --workflows. Launcher: always offered to an interactive run on Windows, checked while the exe or its desktop shortcut
- * is missing and unchecked (to rebuild) once both exist; a non-interactive run never builds it (`codiscuss launcher`
- * does). Never remembered between runs.
+ * --workflows. Never remembered.
+ * Launcher: always offered to an interactive run on Windows, checked while the exe or its desktop shortcut is missing and
+ * unchecked (to rebuild) once both exist; a non-interactive run never builds it (`codiscuss launcher` does).
+ * Hosting: offered on Windows, checked as last saved (off at first); --hosting / --no-hosting set it without asking.
+ * Remembered in local-settings.json, as it stays on rather than being a one-off action.
  */
-async function install_choices(options, home) {
+async function install_choices(options, home, previous) {
   const shipped = shipped_workflows();
+  const windows = process.platform === 'win32';
+  const hosting_flag = options.hosting ? true : options['no-hosting'] ? false : undefined;
   const offer_workflows = options.workflows === undefined && shipped.length;
-  const offer_launcher = process.platform === 'win32';
-  const defaults = { workflows: options.workflows ? shipped.map(item => item.name) : [], launcher: false };
+  const offer_hosting = windows && hosting_flag === undefined;
+  const defaults = { workflows: options.workflows ? shipped.map(item => item.name) : [], launcher: false,
+    hosting: windows && (hosting_flag ?? previous.hosting === true) };
   // The tree needs key-by-key input; a terminal that cannot give it keeps the default.
-  if (options.yes || !process.stdin.isTTY || typeof process.stdin.setRawMode !== 'function' || (!offer_workflows && !offer_launcher)) return defaults;
-  const installed = offer_launcher && launcher_installed(home);
+  if (options.yes || !process.stdin.isTTY || typeof process.stdin.setRawMode !== 'function' || (!offer_workflows && !windows)) return defaults;
+  const installed = windows && launcher_installed(home);
   const groups = [];
-  if (offer_workflows) groups.push({ label: '随包工作流',
+  if (offer_workflows) groups.push({ key: 'workflows', label: '随包工作流',
     description: '把安装包自带的工作流装进本机工作流库；已有同名的覆盖为最新版，原来那份先备份到服务目录 backups/workflows/',
     items: shipped.map(item => ({ label: item.label, hint: item.name, description: item.description, checked: false })) });
-  if (offer_launcher) groups.push({ label: '桌面快捷方式',
+  if (windows) groups.push({ key: 'launcher', label: '桌面快捷方式',
     description: '在桌面与开始菜单放一个“共议”，双击启动网站与讨论服务；以后也可运行 codiscuss launcher 生成',
     items: [installed
       ? { label: '重新生成“共议”快捷方式', hint: 'launcher', description: '已经有了；Node 或共议的安装位置变了、双击打不开时再勾选', checked: false }
       : { label: '创建“共议”快捷方式', hint: 'launcher', description: '用本机自带的 C# 编译器生成 共议.exe，不下载任何东西', checked: true }] });
+  if (offer_hosting) groups.push({ key: 'hosting', label: '托管管理',
+    description: '给别人开账号用这台电脑上的 AI 时才需要；一般自用不用勾。勾选会记住，下次 setup 可取消',
+    items: [{ label: '托管管理（管理面板）', hint: 'hosting', description: '任务栏图标多出“打开管理面板”，左键打开面板：管理托管账号、Windows 用户、命令行登录与 API 密钥',
+      checked: defaults.hosting }] });
   const picked = await tree_prompt('安装配置', groups);
+  const chosen = key => picked[groups.findIndex(group => group.key === key)];
   return {
-    workflows: offer_workflows ? shipped.filter((_, index) => picked[0][index]).map(item => item.name) : defaults.workflows,
-    launcher: offer_launcher && picked[groups.length - 1][0],
+    workflows: offer_workflows ? shipped.filter((_, index) => chosen('workflows')[index]).map(item => item.name) : defaults.workflows,
+    launcher: windows && chosen('launcher')[0],
+    hosting: offer_hosting ? chosen('hosting')[0] : defaults.hosting,
   };
+}
+
+/** Restart the owner's taskbar icon if it is running (`panel stop` then `panel start`). */
+function restart_panel_icon(home) {
+  const state = join(home, 'admin-panel.json');
+  if (process.platform !== 'win32' || !existsSync(state)) return;
+  const script = join(dirname(fileURLToPath(import.meta.url)), 'admin_panel.mjs');
+  for (const command of ['stop', 'start']) spawnSync(process.execPath, [script, command, '--data', home], { stdio: 'ignore', windowsHide: true, timeout: 20_000 });
 }
 
 /** Validate an explicit selection without prompting or changing files. */
@@ -381,12 +402,15 @@ async function setup(options) {
     ? detected.map(item => `${pad(item.name, width)}  ${tone.dim(item.executable ? short_path(item.executable) : '未检测到 CLI')}`) : [];
   scan.done(`检测到 ${detected.filter(item => item.executable).length} 个可接入的 CLI`, listed);
   const selected = await selected_clients(options, detected);
-  const choices = await install_choices(options, home);
+  const choices = await install_choices(options, home, previous);
   const workflow_names = choices.workflows;
   const configured = await configure_clients(home, selected, options, launch_settings(home).participants);
   // The remote entry is retired: a saved remote_port from an older version is dropped here.
   const { remote_port: retired, ...kept } = previous;
-  atomic_json(join(home, 'local-settings.json'), { ...kept, python, port });
+  const { hosting: was_hosting, ...rest } = kept;
+  atomic_json(join(home, 'local-settings.json'), { ...rest, python, port, ...(choices.hosting ? { hosting: true } : {}) });
+  // A running taskbar icon read the setting when it started; restart it so the panel comes or goes now.
+  if (Boolean(was_hosting) !== choices.hosting) restart_panel_icon(home);
   step('已写入软件配置与技能', configured.skills.map(group => `${pad(group.client, width)}  ${tone.dim(short_path(dirname(group.results[0].path)))}`));
   // Shipped workflows are installed only when asked for each time, so a copy the user or a host edited is never replaced unasked.
   const workflows = workflow_names.length ? install_workflows(home, workflow_names) : [];
@@ -404,7 +428,7 @@ async function setup(options) {
   if (choices.launcher) {
     try { launcher = install_launcher(home); } catch (error) { launcher_error = error.message; }
   }
-  const result = { home, python, clients: selected.map(item => item.name), ...configured, workflows,
+  const result = { home, python, clients: selected.map(item => item.name), ...configured, workflows, ...(choices.hosting ? { hosting: true } : {}),
     command: check_command(), ai_verified: false, ...(pi ? { pi: pi.version } : {}), ...(launcher ? { launcher: launcher.shortcuts[0] } : {}) };
   result.issues = setup_issues(result);
   if (pi_error) result.issues.push(`Pi 安装失败（${pi_error}）；模型 API 成员首次执行时会再试，或检查网络与 npm 后重新运行 setup。`);
@@ -457,6 +481,7 @@ function report_setup(result, options = {}) {
   for (const group of result.skills) lines.push(`${group.client} Skill：${group.results.filter(skill => skill.status !== 'conflict').length}/${group.results.length} 份文件就绪，目录 ${dirname(group.results[0].path)}`);
   if (result.workflows.length) lines.push(`内置工作流：${workflow_summary(result.workflows)}`);
   if (result.launcher) lines.push(`快捷方式：${result.launcher}（双击启动共议）`);
+  if (result.hosting) lines.push('托管管理：已打开，任务栏图标可打开管理面板');
   if (result.command.path) lines.push(`持久命令：${result.command.path}（${result.command.status}）`);
   if (result.local?.running) {
     lines.push(`本机网站：${result.local.url}${options['no-open'] ? '' : '（已在浏览器打开）'}`,
@@ -483,6 +508,7 @@ function report_styled(result, options) {
   if (result.skills.length) rows.push(['技能', result.skills.map(group => `${group.client} ${group.results.filter(skill => skill.status !== 'conflict').length}/${group.results.length}`).join(' · '), 'discuss-host · discuss-participant · discuss-goal · discuss-session · discuss-report · workflow-creator · local-tts-setup · local-stt-setup']);
   if (result.workflows.length) rows.push(['工作流', workflow_summary(result.workflows), '']);
   if (result.launcher) rows.push(['快捷方式', '双击“共议”启动', short_path(result.launcher)]);
+  if (result.hosting) rows.push(['托管管理', '已打开', '任务栏图标可打开管理面板']);
   if (result.command.path) rows.push(['命令', `codiscuss ${tone.dim(`(${result.command.status})`)}`, short_path(result.command.path)]);
   const notes = result.issues.map(issue => tone.yellow(`▲ ${issue}`));
   if (result.local?.running) {

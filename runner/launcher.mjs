@@ -90,9 +90,10 @@ static class Tray {
   [DllImport("user32.dll")] static extern bool SetProcessDPIAware();
   [DllImport("user32.dll")] static extern bool SetProcessDpiAwarenessContext(IntPtr context);
 
-  // Menu entries in order; an empty label is a separator.
+  // Menu entries in order; an empty label is a separator. Without a panel ("-" for its window title) the first is left out.
   static readonly string[] Labels = { "打开管理面板", "打开共议", "", "重启服务", "关闭服务" };
   static ContextMenuStrip menu;
+  static bool has_panel;
 
   static string panel;
   static Icon small, big;
@@ -133,6 +134,7 @@ static class Tray {
 
   // Keep one panel window, carrying this icon: Edge lays a dark backing under the rounded corners of its own.
   static void Tend() {
+    if (!has_panel) return;
     List<IntPtr> windows = Windows();
     for (int index = 1; index < windows.Count; index++) PostMessage(windows[index], 0x10, IntPtr.Zero, IntPtr.Zero);
     if (windows.Count > 0 && small != null && SendMessage(windows[0], 0x7F, IntPtr.Zero, IntPtr.Zero) != small.Handle) {
@@ -141,19 +143,22 @@ static class Tray {
     }
   }
 
-  static void Choose(int id) {
-    if (id == 1) OpenPanel();
-    if (id == 2) Say("site");
-    if (id == 4) Say("restart");
+  static void Choose(string label) {
+    if (label == "打开管理面板") OpenPanel();
+    if (label == "打开共议") Say("site");
+    if (label == "重启服务") Say("restart");
     // Closing everything asks first: a stray click must not take the owner's site and rooms down.
-    if (id == 5 && Confirm.Ask("关闭共议服务？", "本机网站、讨论服务与管理面板都会停止。" + Environment.NewLine + "托管用户的实例不受影响。", "关闭服务", "取消")) Say("stop");
+    if (label == "关闭服务" && Confirm.Ask("关闭共议服务？", "本机网站、讨论服务与管理面板都会停止。" + Environment.NewLine + "托管用户的实例不受影响。", "关闭服务", "取消")) Say("stop");
   }
 
   public static void Run(int owner, string icon_path, string title, string window_title) {
     panel = window_title;
+    has_panel = window_title != "-";
     // Sharp text on scaled screens: per-monitor awareness where Windows has it, system awareness otherwise.
     try { if (!SetProcessDpiAwarenessContext((IntPtr)(-4))) SetProcessDPIAware(); } catch { SetProcessDPIAware(); }
-    menu = TrayMenu.Build(Labels, Choose);
+    List<string> labels = new List<string>(Labels);
+    if (!has_panel) labels.Remove("打开管理面板");
+    menu = TrayMenu.Build(labels.ToArray(), Choose);
     NotifyIcon icon = new NotifyIcon();
     try {
       icon.Icon = new Icon(icon_path, SystemInformation.SmallIconSize);
@@ -162,7 +167,7 @@ static class Tray {
     } catch { icon.Icon = SystemIcons.Application; }
     icon.Text = title.Length > 63 ? title.Substring(0, 63) : title;
     icon.MouseUp += delegate (object source, MouseEventArgs click) {
-      if (click.Button == MouseButtons.Left) OpenPanel();
+      if (click.Button == MouseButtons.Left) { if (has_panel) OpenPanel(); else Say("site"); }
       if (click.Button == MouseButtons.Right) TrayMenu.Show(menu, Cursor.Position);
     };
     icon.Visible = true;
@@ -217,7 +222,7 @@ static class TrayMenu {
   // A blank row above and below the entries.
   static ToolStripLabel Gap() { ToolStripLabel gap = new ToolStripLabel(""); gap.AutoSize = false; gap.Height = 6; gap.Margin = Padding.Empty; gap.Enabled = false; return gap; }
 
-  public static ContextMenuStrip Build(string[] labels, Action<int> chosen) {
+  public static ContextMenuStrip Build(string[] labels, Action<string> chosen) {
     ContextMenuStrip strip = new ContextMenuStrip();
     strip.Renderer = new Look();
     strip.ShowImageMargin = false;
@@ -233,8 +238,8 @@ static class TrayMenu {
       item.TextAlign = ContentAlignment.MiddleLeft;
       item.Padding = new Padding(14, 0, 14, 0);
       item.Margin = Padding.Empty;
-      int id = index + 1;
-      item.Click += delegate { chosen(id); };
+      string label = labels[index];
+      item.Click += delegate { chosen(label); };
       strip.Items.Add(item);
     }
     strip.Items.Add(Gap());
@@ -424,7 +429,7 @@ export function install_launcher(home = join(homedir(), '.codiscuss')) {
   const icon = render_icon(folder);
   const source = join(folder, 'launcher.cs'), exe = launcher_path(home);
   writeFileSync(source, `\ufeff${launcher_source({ node: process.execPath, local_script: installed_script('discussion_local.mjs'),
-    panel_script: existsSync(join(ROOT, 'gateway', 'gateway.mjs')) ? join(RUNNER, 'admin_panel.mjs') : '', home })}`, 'utf8');
+    panel_script: installed_script('admin_panel.mjs'), home })}`, 'utf8');
   const result = spawnSync(CSC, ['/nologo', '/target:winexe', '/codepage:65001', '/optimize+', '/r:System.Windows.Forms.dll', '/r:System.Drawing.dll',
     `/out:${exe}`, ...(icon ? [`/win32icon:${icon}`] : []), source], { encoding: 'utf8', windowsHide: true });
   if (result.status !== 0) throw new Error(`编译启动器失败：${(result.stdout || result.stderr).trim()}`);

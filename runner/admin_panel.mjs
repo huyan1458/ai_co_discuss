@@ -296,26 +296,39 @@ function run_owner_service(data, command) {
   });
 }
 
+/** Whether the owner turned on hosting (setup's "托管管理"); only then does this process serve the panel. */
+export function hosting_enabled(data) {
+  try { return JSON.parse(readFileSync(join(data, 'local-settings.json'), 'utf8')).hosting === true; } catch { return false; }
+}
+
 /** Run the server and the icon until the icon's "close service" entry or `panel stop`. */
 function run_panel(data, port) {
+  const hosting = hosting_enabled(data);
   const running = read_state(data);
   if (running && running.pid !== process.pid && alive(running.pid)) throw new Error(`管理面板已在运行：http://127.0.0.1:${running.port}`);
-  const state = { pid: process.pid, port, key: randomBytes(24).toString('hex') };
-  const server = create_panel({ data, key: state.key, port });
-  server.listen(port, '127.0.0.1', () => {
+  const state = { pid: process.pid, port: hosting ? port : 0, key: hosting ? randomBytes(24).toString('hex') : '' };
+  const server = hosting ? create_panel({ data, key: state.key, port }) : null;
+  if (server) {
+    server.listen(port, '127.0.0.1', () => {
+      writeFileSync(state_path(data), JSON.stringify(state), { mode: 0o600 });
+      process.stdout.write(`管理面板已启动：http://127.0.0.1:${port}\n`);
+    });
+  } else {
     writeFileSync(state_path(data), JSON.stringify(state), { mode: 0o600 });
-    process.stdout.write(`管理面板已启动：http://127.0.0.1:${port}\n`);
-  });
+    process.stdout.write('任务栏图标已启动（没有管理面板）\n');
+  }
   const rendered = join(data, 'launcher', 'codiscuss.ico');
-  const tray = show_tray({ title: '共议 · 管理面板', icon_path: existsSync(rendered) ? rendered : '', window_title: WINDOW_TITLE, host: join(data, 'launcher', '共议.exe'), on_action: action => {
-    if (action === 'open') open_panel_window(data, panel_url(state), false);
+  const tray = show_tray({ title: hosting ? '共议 · 管理面板' : '共议', icon_path: existsSync(rendered) ? rendered : '', window_title: hosting ? WINDOW_TITLE : '',
+    host: join(data, 'launcher', '共议.exe'), on_action: action => {
+    // A launcher built before the icon could run without a panel still offers "open panel"; it opens the site then.
+    if (action === 'open') { if (hosting) open_panel_window(data, panel_url(state), false); else open_browser(site_url(data)); }
     if (action === 'site') open_browser(site_url(data));
     if (action === 'restart') run_owner_service(data, 'stop').then(() => run_owner_service(data, 'start')).catch(() => {});
     if (action === 'stop') run_owner_service(data, 'stop').catch(() => {}).finally(shutdown);
   } });
   function shutdown() {
     tray?.close();
-    server.close();
+    server?.close();
     if (read_state(data)?.pid === process.pid) rmSync(state_path(data), { force: true });
     setTimeout(() => process.exit(0), 300);
   }
@@ -346,8 +359,15 @@ export async function panel_main(args) {
   if (values.help) return process.stdout.write(HELP);
   const data = data_home(values.data), port = Number(values.port || DEFAULT_PORT);
   if (command === 'run') return run_panel(data, port);
-  if (command === 'start') { const state = await start_panel(data, port); return process.stdout.write(`管理面板：http://127.0.0.1:${state.port}\n`); }
-  if (command === 'open') { open_panel_window(data, panel_url(await start_panel(data, port))); return; }
+  if (command === 'start') { const state = await start_panel(data, port); return process.stdout.write(state.port ? `管理面板：http://127.0.0.1:${state.port}\n` : '任务栏图标已启动（没有管理面板）\n'); }
+  if (command === 'open') {
+    if (!hosting_enabled(data)) throw new Error('托管管理未打开：运行 codiscuss setup 勾选“托管管理（管理面板）”，或 codiscuss setup --hosting');
+    const state = await start_panel(data, port);
+    // An icon started before hosting was turned on has no panel; setup restarts it, this covers a hand-edited setting.
+    if (!state.port) throw new Error('任务栏图标是在打开托管管理之前启动的：运行 codiscuss panel stop 后再运行 codiscuss panel open');
+    open_panel_window(data, panel_url(state));
+    return;
+  }
   if (command === 'stop') {
     const state = read_state(data);
     if (state && alive(state.pid)) process.kill(state.pid);

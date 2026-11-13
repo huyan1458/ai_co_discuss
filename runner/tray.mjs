@@ -24,7 +24,8 @@ const ICON_SIZE = 32;
 export function tray_script(title, icon_path = '', owner_pid = 0, window_title = '') {
   const quote = text => `'${String(text).replaceAll("'", "''")}'`;
   // Each entry carries its action in Tag, so one plain handler serves them all (no closures over script functions).
-  const items = MENU.map(([label, action]) => label === '-' ? '$menu.Items.Add((New-Object System.Windows.Forms.ToolStripSeparator)) | Out-Null'
+  // Without a panel (no window title) there is no entry to open it, and a left click opens the site instead.
+  const items = MENU.filter(([, action]) => window_title || action !== 'open').map(([label, action]) => label === '-' ? '$menu.Items.Add((New-Object System.Windows.Forms.ToolStripSeparator)) | Out-Null'
     : `$item = $menu.Items.Add(${quote(label)}); $item.Tag = ${quote(action)}; $item.add_Click({ param($source) if ($source.Tag -eq 'open') { Open-Panel } elseif ($source.Tag -ne 'stop' -or [System.Windows.Forms.MessageBox]::Show('关闭共议服务？本机网站、讨论服务与管理面板都会停止，托管用户的实例不受影响。', '共议', 'YesNo', 'Question') -eq 'Yes') { Say $source.Tag } })`).join('\n');
   return `$ErrorActionPreference = 'Stop'
 Add-Type -AssemblyName System.Windows.Forms, System.Drawing
@@ -70,7 +71,7 @@ $icon.Text = ${quote(String(title).slice(0, 63))}
 $menu = New-Object System.Windows.Forms.ContextMenuStrip
 ${items}
 $icon.ContextMenuStrip = $menu
-$icon.add_MouseClick({ param($source, $click) if ($click.Button -eq [System.Windows.Forms.MouseButtons]::Left) { Open-Panel } })
+$icon.add_MouseClick({ param($source, $click) if ($click.Button -eq [System.Windows.Forms.MouseButtons]::Left) { if ($panel) { Open-Panel } else { Say 'site' } } })
 $icon.Visible = $true
 # The icon goes away with its owner. Reading standard input would block the message loop (Console.In is synchronous in
 # Windows PowerShell), so a timer checks that the owner process is still there instead.

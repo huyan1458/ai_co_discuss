@@ -89,9 +89,13 @@ test('an account page cannot mark its own key as provided by the owner', () => {
 test('Windows user names stay within the system limit, and the tray script names its menu entries', () => {
   assert.equal(os_user_name('demo'), 'cd-demo');
   assert.throws(() => os_user_name('a-very-long-account-name'), /最多 20/);
-  const script = tray_script("Owner's panel");
+  const script = tray_script("Owner's panel", '', 0, '共议 · 管理面板');
   assert.match(script, /'打开管理面板'/);
   assert.match(script, /'Owner''s panel'/);
+  // Without a panel the icon still runs the service entries, with nothing to open the panel.
+  const bare = tray_script('共议');
+  assert.doesNotMatch(bare, /'打开管理面板'/);
+  assert.match(bare, /'关闭服务'/);
 });
 
 test('the launcher icon file lists each size and the launcher source quotes paths for C#', async () => {

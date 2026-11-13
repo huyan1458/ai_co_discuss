@@ -181,15 +181,15 @@ async function requested_service(home, status, owned_service) {
   return owned_service;
 }
 
-// The computer owner's management panel and its taskbar icon; hosted accounts (with a projects root) have none.
+// The computer owner's taskbar icon, with the management panel where gateway/ is present; hosted accounts (with a
+// projects root) have neither.
 const PANEL_SCRIPT = join(dirname(fileURLToPath(import.meta.url)), 'admin_panel.mjs');
-const ACCOUNT_MODULE = join(dirname(dirname(fileURLToPath(import.meta.url))), 'gateway', 'gateway.mjs');
 
-/** Start the management panel in the background on the owner's Windows instance; it keeps running on its own. */
+/** Start the taskbar icon (and panel) in the background on the owner's Windows instance; it keeps running on its own. */
 function start_panel_icon(home, settings) {
   // Only the owner's default service directory: a test or a second copy elsewhere must not put up another icon.
   if (process.platform !== 'win32' || settings.projects_root || resolve(home) !== resolve(homedir(), '.codiscuss')) return;
-  if (!existsSync(PANEL_SCRIPT) || !existsSync(ACCOUNT_MODULE)) return;
+  if (!existsSync(PANEL_SCRIPT)) return;
   const child = spawn(process.execPath, [PANEL_SCRIPT, 'start', '--data', home], { detached: true, stdio: 'ignore', windowsHide: true });
   child.on('error', () => {});
   child.unref();

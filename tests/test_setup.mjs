@@ -171,6 +171,16 @@ test('setup configures native CLI, preserves existing profile and uses configure
     assert(!existsSync(join(env.DISCUSS_SERVICE_HOME, 'workflows', 'story-serial')));
     const asked = execute(['setup', ...options, '--workflows']);
     assert.deepEqual(JSON.parse(asked.stdout).workflows.map(item => item.status), ['installed']);
+    // Hosting (the management panel) is remembered once turned on, and stays until turned off.
+    if (process.platform === 'win32') {
+      const hosting = () => JSON.parse(readFileSync(join(env.DISCUSS_SERVICE_HOME, 'local-settings.json'), 'utf8')).hosting;
+      assert.equal(hosting(), undefined);
+      execute(['setup', ...options, '--hosting']);
+      execute(['setup', ...options]);
+      assert.equal(hosting(), true);
+      execute(['setup', ...options, '--no-hosting']);
+      assert.equal(hosting(), undefined);
+    }
     const schema = execute(['schema', 'message', 'post']);
     assert.equal(schema.status, 0, schema.stderr);
     const missing = execute(['setup', ...options, '--python', join(directory, 'missing-python')]);
