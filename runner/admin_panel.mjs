@@ -19,7 +19,9 @@ import { parseArgs } from 'node:util';
 import { account_home, add_account, data_home, instance_home, read_accounts, remove_account, reset_password } from '../gateway/gateway.mjs';
 import { API_PROVIDERS, save_api_key } from './discussion_api.mjs';
 import { apply_login, cancel_login, LOGIN_METHODS, login_progress, login_status, logout, start_login, submit_login } from './cli_login.mjs';
-import { create_os_user, install_shared_clis, read_os_users, remove_os_user, shared_cli_state, shared_executables, start_instance_as_user } from './os_users.mjs';
+import { create_os_user, install_shared_runtime, read_os_users, remove_os_user, run_as_user, shared_cli_state, shared_executables, shared_paths, start_instance_as_user } from './os_users.mjs';
+import { install_workflows, shipped_workflows } from './discussion_skills.mjs';
+import { hosted_prompt, import_skill, library_root, list_library, remove_library_skill, save_hosted_prompt } from './skill_library.mjs';
 import { local_status } from './discussion_local.mjs';
 import { autostart_enabled, launcher_path, set_autostart } from './launcher.mjs';
 import { show_tray } from './tray.mjs';
@@ -34,8 +36,13 @@ const LATEST_URL = `https://registry.npmjs.org/${NPM_PACKAGE}/latest`;
 const LATEST_TTL_MS = 60 * 60 * 1000;
 const LATEST_TIMEOUT_MS = 8000;
 const STATE_FILE = 'admin-panel.json';
+// Where account_env.mjs (and setup) record the skills they installed, in the service home.
+const SKILL_RECORD = 'skills-manifest.json';
+// How a panel started by an update receives its predecessor's key and sessions (only that child process sees it).
+const HANDOVER_VARIABLE = 'CODISCUSS_PANEL_HANDOVER';
 const SESSION_COOKIE = 'codiscuss_panel';
 const BODY_LIMIT = 64 * 1024;
+const UPLOAD_LIMIT = 40 * 1024 * 1024;
 const PROBE_TIMEOUT_MS = 1500;
 const STATIC_FILES = { '/': 'admin.html', '/admin.html': 'admin.html', '/admin.js': 'admin.js', '/admin.css': 'admin.css', '/mark.svg': 'mark.svg' };
 const TYPES = { '.html': 'text/html; charset=utf-8', '.js': 'text/javascript; charset=utf-8', '.css': 'text/css; charset=utf-8',
@@ -84,20 +91,35 @@ function run_command(command, args) {
     child.stdout.on('data', chunk => { output = (output + chunk).slice(-4000); });
     child.stderr.on('data', chunk => { output = (output + chunk).slice(-4000); });
     child.on('error', fail);
-    child.on('exit', code => code === 0 ? done() : fail(new Error(`${command} ${args.join(' ')} 失败：${output.trim().split(/\r?\n/).slice(-3).join(' ')}`)));
+    child.on('exit', code => code === 0 ? done() : fail(Object.assign(new Error(`${command} ${args.join(' ')} 失败（退出码 ${code}）：${output.trim().split(/\r?\n/).slice(-3).join(' ')}`), { code })));
   });
 }
 
 /**
- * Install a published version over the global package and restart the owner's service on it. The panel itself still runs
- * the old code afterwards; `on_updated` restarts it. Hosted accounts' instances keep their old code until restarted.
+ * Install a published version and bring everything on this computer onto it, reporting each step: the owner's skills
+ * (setup without questions), the owner's service, and with hosting on, the shared copy and every account with its own
+ * Windows user (skills, missing workflows, a running instance restarted). A step that fails is reported and the rest go
+ * on. The panel itself still runs the old code afterwards; `on_updated` restarts it.
  */
 async function update_package(data, version, on_updated) {
   await run_command('npm', ['install', '--global', `${NPM_PACKAGE}@${version}`]);
-  await run_owner_service(data, 'stop');
-  await run_owner_service(data, 'start');
+  const steps = [`已安装 v${version}`];
+  const step = async (done, work) => { try { await work(); steps.push(done); } catch (error) { steps.push(`${done.replace(/^已/, '')}失败：${error.message}`); } };
+  await step('已更新本机技能', () => run_command(process.execPath, [installed_script('codiscuss.mjs'), 'setup', '--yes', '--no-start', '--json']).catch(error => {
+    // Setup exits 2 when it finished with items to look at (an edited skill is kept, for one); that still counts.
+    if (error.code !== 2) throw error;
+  }));
+  await step('已重启本机服务', async () => { await run_owner_service(data, 'stop'); await run_owner_service(data, 'start'); });
+  if (hosting_enabled(data)) {
+    await step('已更新共享运行环境', () => { const result = install_runtime(data); if (result.warnings.length) throw new Error(result.warnings.join('；')); });
+    for (const account of await list_accounts(data)) {
+      if (!account.os_user) continue;
+      await step(`已更新 ${account.name} 的技能`, () => prepare_account(data, account.name));
+      if (account.running) await step(`已重启 ${account.name} 的实例`, async () => { await run_instance(data, account.name, 'stop'); await run_instance(data, account.name, 'start'); });
+    }
+  }
   setTimeout(on_updated, 500);
-  return { version };
+  return { version, steps };
 }
 
 // ---- Accounts ----
@@ -114,25 +136,92 @@ function instance_running(port) {
 async function list_accounts(data) {
   const users = read_os_users(data);
   return Promise.all(Object.entries(read_accounts(data)).map(async ([name, account]) => ({ name, port: account.port, home: account_home(data, name),
-    os_user: users[name]?.user || '', running: await instance_running(account.port), keys: list_keys(instance_home(data, name)).length })));
+    os_user: users[name]?.user || '', running: await instance_running(account.port), keys: list_keys(instance_home(data, name)).length,
+    // The AI environment is set up once account_env.mjs has run for its Windows user (it records skills in the service home).
+    skills: Boolean(users[name]) && existsSync(join(instance_home(data, name), SKILL_RECORD)) })));
 }
 
-/** Point the account's command-line members at the shared copies every Windows user can run. */
-function use_shared_programs(data, name) {
-  const path = join(instance_home(data, name), 'launch-settings.json');
-  const settings = existsSync(path) ? JSON.parse(readFileSync(path, 'utf8')) : {};
-  const shared = shared_executables(), participants = { ...(settings.participants || {}) };
-  for (const [member, profile] of Object.entries(participants)) if (shared[profile?.adapter]) participants[member] = { ...profile, executable: shared[profile.adapter] };
+function write_settings(path, value) {
   const draft = `${path}.${process.pid}.tmp`;
-  writeFileSync(draft, `${JSON.stringify({ ...settings, participants }, null, 2)}\n`, { mode: 0o600 });
+  writeFileSync(draft, `${JSON.stringify(value, null, 2)}\n`, { mode: 0o600 });
   renameSync(draft, path);
 }
 
-/** Start or stop an account's instance: as its Windows user when it has one, otherwise as the owner. */
+/** Point the account's command-line members and its website's Python at the shared copies every Windows user can run. */
+function use_shared_programs(data, name) {
+  const service = instance_home(data, name), path = join(service, 'launch-settings.json');
+  const settings = existsSync(path) ? JSON.parse(readFileSync(path, 'utf8')) : {};
+  const shared = shared_executables(), participants = { ...(settings.participants || {}) };
+  for (const [member, profile] of Object.entries(participants)) if (shared[profile?.adapter]) participants[member] = { ...profile, executable: shared[profile.adapter] };
+  write_settings(path, { ...settings, participants });
+  const local = join(service, 'local-settings.json'), python = shared_paths().python;
+  if (existsSync(local) && existsSync(python)) write_settings(local, { ...JSON.parse(readFileSync(local, 'utf8')), python });
+}
+
+/** The Python the owner's own website runs, which the shared copy is made from. */
+function owner_python(data) {
+  try { return JSON.parse(readFileSync(join(data, 'local-settings.json'), 'utf8')).python || ''; } catch { return ''; }
+}
+
+/** Copy the shared programs, then point every account with its own Windows user at them. */
+function install_runtime(data) {
+  const result = install_shared_runtime(owner_python(data));
+  for (const name of Object.keys(read_os_users(data))) if (read_accounts(data)[name]) use_shared_programs(data, name);
+  return result;
+}
+
+/**
+ * Run account_env.mjs as the account's own Windows user, from the shared copy, and return its JSON answer.
+ * `folders` are folders of the owner's copied into the job folder for it (library skills).
+ */
+function account_env(data, name, action, request = {}, folders = {}) {
+  const { env_script } = shared_paths();
+  if (!existsSync(env_script)) throw new Error('还没有安装共享运行环境，请先在“托管账号”页安装');
+  const text = run_as_user(data, name, `& ${ps_quote(process.execPath)} ${ps_quote(env_script)} ${action} $Job`,
+    { files: { 'request.json': JSON.stringify(request) }, folders, timeout: 120_000 });
+  const line = text.split(/\r?\n/).reverse().find(item => item.trim().startsWith('{'));
+  const result = line ? JSON.parse(line) : { error: text.trim().slice(0, 300) || '没有读到结果' };
+  if (result.error) throw new Error(result.error);
+  return result;
+}
+
+/**
+ * Set up an account's AI environment, safe to repeat: for an account with its own Windows user, the shared skills folder
+ * and system prompt laid out like the owner's, the discussion skills, and the shipped workflows its instance lacks (an
+ * existing prompt and workflows are kept). One without its own user uses the owner's, so only its workflows are filled in.
+ */
+function prepare_account(data, name) {
+  const service = instance_home(data, name);
+  if (!read_os_users(data)[name]) {
+    const missing = shipped_workflows().map(item => item.name).filter(item => !existsSync(join(service, 'workflows', item)));
+    return { skills: [], workflows: (missing.length ? install_workflows(service, missing) : []).map(({ name: item, status }) => ({ name: item, status })) };
+  }
+  return account_env(data, name, 'init', { home: service, prompt: hosted_prompt(data) });
+}
+
+/** Install library skills for an account's own Windows user and remove others: { install: [name], remove: [name] }. */
+function account_skills(data, name, { install = [], remove = [] } = {}) {
+  const library = library_root(data), folders = {};
+  for (const skill of install) {
+    if (!existsSync(join(library, String(skill), 'SKILL.md'))) throw new Error(`技能库里没有 ${skill}`);
+    folders[join('skills', String(skill))] = join(library, String(skill));
+  }
+  return account_env(data, name, 'skills', { remove }, folders);
+}
+
+const ps_quote = text => `'${String(text).replaceAll("'", "''")}'`;
+
+/** Start or stop an account's instance: as its Windows user from the shared copy when it has one, otherwise as the owner. */
 function run_instance(data, name, command) {
   if (!read_accounts(data)[name]) throw new Error(`账号不存在：${name}`);
   const service = instance_home(data, name);
-  if (command === 'start' && read_os_users(data)[name]) return start_instance_as_user(data, name, service, LOCAL_SCRIPT);
+  if (command === 'start' && read_os_users(data)[name]) {
+    const { local_script } = shared_paths();
+    if (!existsSync(local_script)) throw new Error('还没有安装共享运行环境，请先在“托管账号”页安装');
+    // Whatever was set up first, the instance starts on the shared copies its Windows user can run.
+    use_shared_programs(data, name);
+    return start_instance_as_user(data, name, service, local_script);
+  }
   const child = spawn(process.execPath, [LOCAL_SCRIPT, command, '--json'], { stdio: 'ignore', windowsHide: true, env: { ...process.env, DISCUSS_SERVICE_HOME: service } });
   return new Promise((done, fail) => {
     child.on('error', fail);
@@ -169,10 +258,10 @@ function send_json(response, status, value) {
   response.end(JSON.stringify(value));
 }
 
-function read_body(request) {
+function read_body(request, limit = BODY_LIMIT) {
   return new Promise((done, fail) => {
     let size = 0; const chunks = [];
-    request.on('data', chunk => { size += chunk.length; if (size > BODY_LIMIT) { fail(new Error('请求过大')); request.destroy(); } else chunks.push(chunk); });
+    request.on('data', chunk => { size += chunk.length; if (size > limit) { fail(new Error(limit > BODY_LIMIT ? '技能太大（上限 40 MB）' : '请求过大')); request.destroy(); } else chunks.push(chunk); });
     request.on('end', () => { try { done(chunks.length ? JSON.parse(Buffer.concat(chunks).toString('utf8')) : {}); } catch { fail(new Error('请求不是 JSON')); } });
     request.on('error', fail);
   });
@@ -191,10 +280,9 @@ function cookie(request, name) {
  *   port: The port this server listens on, so only requests addressed to it as a local page are accepted.
  *   ops: Injected for tests; defaults to the real account and Windows operations.
  */
-export function create_panel({ data, key, port, ops = {} }) {
-  const sessions = new Set();
+export function create_panel({ data, key, port, ops = {}, sessions = new Set() }) {
   const op = { list_accounts, add_account, reset_password, remove_account, run_instance, create_os_user, remove_os_user,
-    login_status, apply_login, logout, start_login, login_progress, submit_login, cancel_login, install_shared_clis, shared_cli_state,
+    login_status, apply_login, logout, start_login, login_progress, submit_login, cancel_login, install_runtime, prepare_account, account_env, account_skills, shared_cli_state,
     save_api_key, list_keys, remove_key, use_shared_programs, service_overview, run_owner_service, latest_version, update_package,
     autostart_enabled, set_autostart, on_updated: () => {}, ...ops };
   const hosts = new Set([`127.0.0.1:${port}`, `localhost:${port}`]);
@@ -239,7 +327,17 @@ export function create_panel({ data, key, port, ops = {} }) {
     }
     // Hosting: only once the owner turned it on in setup.
     if (!hosting) throw new Error('托管管理未打开：运行 codiscuss setup 勾选“托管管理（管理面板）”');
-    if (method === 'POST' && section === 'clis' && name === 'install') return op.install_shared_clis();
+    if (method === 'POST' && section === 'clis' && name === 'install') return op.install_runtime(data);
+    // The skill library and the default system prompt, both the owner's, for hosted accounts.
+    if (section === 'skill-library') {
+      if (method === 'GET') return list_library(data);
+      if (method === 'POST' && !name) return import_skill(data, body);
+      if (method === 'POST' && action === 'remove') { remove_library_skill(data, name); return { ok: true }; }
+    }
+    if (section === 'hosted-prompt') {
+      if (method === 'GET') return { text: hosted_prompt(data) };
+      if (method === 'POST') { save_hosted_prompt(data, body.text); return { ok: true }; }
+    }
     if (section !== 'accounts') throw new Error('接口不存在');
     if (method === 'POST' && !name) return op.add_account(data, String(body.name || '').trim());
     account();
@@ -252,6 +350,11 @@ export function create_panel({ data, key, port, ops = {} }) {
       op.use_shared_programs(data, name);
       return result;
     }
+    // Its AI environment: set up (safe to repeat), what is installed, chosen library skills, its system prompt.
+    if (method === 'POST' && action === 'env' && extra === 'init') return op.prepare_account(data, name);
+    if (method === 'GET' && action === 'env') return op.account_env(data, name, 'status');
+    if (method === 'POST' && action === 'env' && extra === 'skills') return op.account_skills(data, name, { install: body.install || [], remove: body.remove || [] });
+    if (method === 'POST' && action === 'env' && extra === 'prompt') return op.account_env(data, name, 'prompt', { prompt: String(body.text ?? '') });
     const service = instance_home(data, name);
     if (method === 'GET' && action === 'keys') return op.list_keys(service);
     if (method === 'POST' && action === 'keys' && extra === 'remove') { op.remove_key(service, String(body.ref || '')); return { ok: true }; }
@@ -279,7 +382,8 @@ export function create_panel({ data, key, port, ops = {} }) {
         if (request.method !== 'GET' && (!origin || !hosts.has(origin.replace(/^http:\/\//, '')) || request.headers['x-codiscuss-panel'] !== '1')) {
           return send_json(response, 403, { error: '拒绝跨站请求' });
         }
-        const body = request.method === 'POST' ? await read_body(request) : {};
+        // A dropped skill arrives whole (its files in base64), so that one request may be large.
+        const body = request.method === 'POST' ? await read_body(request, url.pathname === '/api/skill-library' ? UPLOAD_LIMIT : BODY_LIMIT) : {};
         return send_json(response, 200, await api(request.method, url.pathname, body));
       }
       const name = STATIC_FILES[url.pathname] || (url.pathname.startsWith('/icons/') && /^\/icons\/[\w.-]+$/.test(url.pathname) ? url.pathname.slice(1) : '');
@@ -389,14 +493,20 @@ export function hosting_enabled(data) {
 function run_panel(data, port) {
   const running = read_state(data);
   if (running && running.pid !== process.pid && alive(running.pid)) throw new Error(`管理面板已在运行：http://127.0.0.1:${running.port}`);
-  const state = { pid: process.pid, port, key: randomBytes(24).toString('hex'), version: VERSION };
+  // A panel started by an update takes over its predecessor's key and sessions, so the open window keeps working.
+  let handover = {};
+  try { handover = JSON.parse(process.env[HANDOVER_VARIABLE] || '{}'); } catch { handover = {}; }
+  delete process.env[HANDOVER_VARIABLE];
+  const state = { pid: process.pid, port, key: handover.key || randomBytes(24).toString('hex'), version: VERSION };
+  const sessions = new Set(Array.isArray(handover.sessions) ? handover.sessions : []);
   // After an update this process still runs the old code: it steps aside and starts the newly installed panel.
   const on_updated = () => {
     shutdown(false);
-    spawn(process.execPath, [installed_script('admin_panel.mjs'), 'start', '--data', data, '--port', String(port)], { detached: true, stdio: 'ignore', windowsHide: true }).unref();
+    spawn(process.execPath, [installed_script('admin_panel.mjs'), 'start', '--data', data, '--port', String(port)], { detached: true, stdio: 'ignore', windowsHide: true,
+      env: { ...process.env, [HANDOVER_VARIABLE]: JSON.stringify({ key: state.key, sessions: [...sessions] }) } }).unref();
     setTimeout(() => process.exit(0), 300);
   };
-  const server = create_panel({ data, key: state.key, port, ops: { on_updated } });
+  const server = create_panel({ data, key: state.key, port, ops: { on_updated }, sessions });
   server.listen(port, '127.0.0.1', () => {
     writeFileSync(state_path(data), JSON.stringify(state), { mode: 0o600 });
     process.stdout.write(`管理面板已启动：http://127.0.0.1:${port}\n`);

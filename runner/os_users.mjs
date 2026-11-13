@@ -12,7 +12,8 @@ import { spawnSync } from 'node:child_process';
 import { randomBytes } from 'node:crypto';
 import { cpSync, existsSync, mkdirSync, readFileSync, renameSync, rmSync, writeFileSync } from 'node:fs';
 import { homedir } from 'node:os';
-import { dirname, join } from 'node:path';
+import { basename, dirname, join } from 'node:path';
+import { fileURLToPath } from 'node:url';
 
 const USERS_FILE = 'os-users.json';
 const USER_PREFIX = 'cd-';
@@ -20,6 +21,13 @@ const USER_PREFIX = 'cd-';
 const MAX_USER_NAME = 20;
 const SHARED_ROOT = join(process.env.ProgramData || 'C:\\ProgramData', 'CoDiscuss');
 const CLI_ROOT = join(SHARED_ROOT, 'cli');
+const APP_ROOT = join(SHARED_ROOT, 'app');
+const PYTHON_ROOT = join(SHARED_ROOT, 'python');
+const PACKAGE_ROOT = dirname(dirname(fileURLToPath(import.meta.url)));
+// What an account's instance runs from the shared copy of this program.
+const APP_PARTS = ['package.json', 'server.py', 'runner', 'gateway', 'backend', 'web', '.agents', 'workflows'];
+// Parts of a Python installation the website does not need; site-packages is most of its size.
+const PYTHON_SKIP = new Set(['site-packages', 'Doc', 'include', 'libs', 'tcl', 'share', 'Scripts', 'test', 'idlelib', 'tkinter', 'turtledemo', '__pycache__']);
 const JOB_ROOT = join(SHARED_ROOT, 'jobs');
 const POWERSHELL = 'powershell.exe';
 const DEFAULT_TIMEOUT_MS = 120_000;
@@ -150,15 +158,17 @@ function job_folder(user) {
  * Start a PowerShell script as the account's user.
  *
  * Args:
- *   script: Runs with $Job set to its job folder; input files can be placed there first through `files`.
+ *   script: Runs with $Job set to its job folder; input files can be placed there first through `files` (name → text)
+ *     and `folders` (name → a folder of the owner's, copied in, as the account's user cannot read the owner's files).
  *   visible: Show its window on this desktop instead of running hidden (for programs that need a person to type).
  *   wait: Wait for it and return its output; otherwise return { folder } at once, and the caller reads output.txt later.
  */
-export function run_as_user(data, account, script, { files = {}, visible = false, wait = true, timeout = DEFAULT_TIMEOUT_MS, run = run_powershell } = {}) {
+export function run_as_user(data, account, script, { files = {}, folders = {}, visible = false, wait = true, timeout = DEFAULT_TIMEOUT_MS, run = run_powershell } = {}) {
   const record = read_os_users(data)[account];
-  if (!record) throw new Error(`账号 ${account} 还没有 Windows 用户，请先在“用户”页创建`);
+  if (!record) throw new Error(`账号 ${account} 还没有 Windows 用户，请先隔离这个账号`);
   const folder = job_folder(record.user);
   for (const [name, text] of Object.entries(files)) writeFileSync(join(folder, name), text, 'utf8');
+  for (const [name, source] of Object.entries(folders)) cpSync(source, join(folder, name), { recursive: true });
   const job = join(folder, 'job.ps1'), output = join(folder, 'output.txt');
   writeFileSync(job, `\ufeff[Console]::OutputEncoding = [Text.Encoding]::UTF8\n$Job = ${quote(folder)}\n${script}\n`, 'utf8');
   const command = visible ? `-NoProfile -ExecutionPolicy Bypass -NoExit -File ${quote(job)}`
@@ -171,7 +181,10 @@ $process.Id`;
     run(start, { timeout: timeout + 10_000 });
     if (!wait) return { folder, output };
     return existsSync(output) ? read_output(output).trim() : '';
-  } finally { if (wait) rmSync(folder, { recursive: true, force: true }); }
+  } finally {
+    // A program the script started may still hold the folder; the job's result does not depend on removing it.
+    if (wait) try { rmSync(folder, { recursive: true, force: true }); } catch { /* left for the next cleanup */ }
+  }
 }
 
 /**
@@ -184,26 +197,52 @@ export function read_output(path) {
   return bytes.toString('utf8').replace(/^﻿/, '');
 }
 
+/** Where the shared copies of this program and of Python are, for accounts with their own Windows user. */
+export function shared_paths() {
+  return { app: APP_ROOT, local_script: join(APP_ROOT, 'runner', 'discussion_local.mjs'), env_script: join(APP_ROOT, 'runner', 'account_env.mjs'),
+    python: join(PYTHON_ROOT, 'python.exe') };
+}
+
+/** Copy a folder over an older copy, reporting a file in use (a running instance holds Python) instead of failing. */
+function copy_over(source, target, filter) {
+  try { cpSync(source, target, { recursive: true, force: true, filter }); return ''; }
+  catch (error) { return error.code === 'EBUSY' || error.code === 'EPERM' ? '部分文件正被运行中的实例使用，停止实例后再更新一次' : error.message; }
+}
+
 /**
- * Copy the owner's command-line programs to a folder every user can run them from.
+ * Copy what an account's own Windows user needs to run to a folder every user can read: the owner's command-line
+ * programs, this program (the owner's npm folder is inside the owner's profile, which other users cannot open) and the
+ * Python the owner's instance uses, without its third-party packages, tests and documentation (the website needs only
+ * the standard library).
  *
  * Returns:
- *   { installed: [label], missing: [label] }.
+ *   { installed: [label], missing: [label], warnings: [text] }.
  */
-export function install_shared_clis() {
-  const installed = [], missing = [];
+export function install_shared_runtime(python_source = '') {
+  const installed = [], missing = [], warnings = [];
   for (const cli of Object.values(cli_sources())) {
     if (!existsSync(cli.source)) { missing.push(cli.label); continue; }
     mkdirSync(dirname(cli.target), { recursive: true });
-    cpSync(cli.source, cli.target, { recursive: Boolean(cli.folder), force: true });
-    installed.push(cli.label);
+    const failed = cli.folder ? copy_over(cli.source, cli.target) : (() => { try { cpSync(cli.source, cli.target, { force: true }); return ''; } catch (error) { return error.message; } })();
+    if (failed) warnings.push(`${cli.label}：${failed}`); else installed.push(cli.label);
   }
-  return { installed, missing };
+  mkdirSync(APP_ROOT, { recursive: true });
+  const app_failed = APP_PARTS.filter(part => existsSync(join(PACKAGE_ROOT, part))).map(part => copy_over(join(PACKAGE_ROOT, part), join(APP_ROOT, part))).find(Boolean);
+  if (app_failed) warnings.push(`共议程序：${app_failed}`); else installed.push('共议程序');
+  if (python_source && existsSync(python_source)) {
+    const failed = copy_over(dirname(python_source), PYTHON_ROOT, source => !PYTHON_SKIP.has(basename(source)));
+    if (failed) warnings.push(`Python：${failed}`); else installed.push('Python');
+  } else missing.push('Python');
+  return { installed, missing, warnings };
 }
 
-/** Which shared programs are installed: { claude, codex, agy } booleans. */
+/** Which shared programs are installed: { claude, codex, agy, app, python } booleans, and the shared program's version. */
 export function shared_cli_state() {
-  return Object.fromEntries(Object.entries(cli_sources()).map(([key, cli]) => [key, existsSync(cli.executable || cli.target)]));
+  const paths = shared_paths();
+  let app_version = '';
+  try { app_version = JSON.parse(readFileSync(join(APP_ROOT, 'package.json'), 'utf8')).version; } catch { /* not installed */ }
+  return { ...Object.fromEntries(Object.entries(cli_sources()).map(([key, cli]) => [key, existsSync(cli.executable || cli.target)])),
+    app: existsSync(paths.local_script), python: existsSync(paths.python), app_version };
 }
 
 /**
@@ -212,6 +251,8 @@ export function shared_cli_state() {
  * The instance supervisor runs with the account's service directory; it keeps running after this returns.
  */
 export function start_instance_as_user(data, account, service_home, local_script, node = process.execPath, options = {}) {
+  // The instance keeps running in its own folder rather than in the job folder, which is removed afterwards.
   run_as_user(data, account, `$env:DISCUSS_SERVICE_HOME = ${quote(service_home)}
+Set-Location ${quote(service_home)}
 & ${quote(node)} ${quote(local_script)} start --json`, { ...options, timeout: 90_000 });
 }
