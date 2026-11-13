@@ -641,6 +641,8 @@ html[data-theme^="channel"] .channel-round-button:active:not(:disabled) { transf
 .channel-mention-option small { margin-left: auto; color: var(--ui-text-muted); font-size: 11px; }
 .channel-mention-option small { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .channel-mention-option .channel-mention-brief { max-width: 320px; }
+.channel-mention-option .channel-mention-disabled { color: var(--ui-text-dimmed); }
+.channel-mention-option .channel-mention-broken { color: var(--ui-warning, #e0a33a); }
 .channel-mention-tag { flex: none; padding: 1px 6px; border-radius: 4px; background: color-mix(in srgb, var(--channel-accent) 16%, transparent); color: var(--channel-accent); font-size: 10px; font-weight: 500; }
 .attachment-draft-ref .attachment-name small { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .attachment-ref-folder { flex-shrink: 0; width: 28px; height: 28px; color: var(--ui-text-muted); }

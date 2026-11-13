@@ -124,6 +124,13 @@
       "label": "收进待办",
       "x": 0,
       "y": 0
+    },
+    {
+      "id": "aigc_reduce",
+      "type": "sub",
+      "sub": "aigc-reduce",
+      "x": 0,
+      "y": 0
     }
   ],
   "edges": [
@@ -253,6 +260,16 @@
       "source": "ruling",
       "target": "stage_plan",
       "label": "下一阶段"
+    },
+    {
+      "source": "accept",
+      "target": "aigc_reduce",
+      "label": "读着像模型腔"
+    },
+    {
+      "source": "aigc_reduce",
+      "target": "accept",
+      "label": "改完再验收"
     }
   ]
 }

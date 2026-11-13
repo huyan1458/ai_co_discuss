@@ -431,12 +431,12 @@ test('expert card offers project permissions for CLI and API members', () => {
   f.cleanup();
 });
 
-test('editing and cancelling a workflow card never changes the same member in a room or copies its connection fields', () => {
+test('editing a workflow card never changes the same member in a room or copies its connection fields', () => {
   const original = { card: 'role', name: 'Codex', label: '作者', description: '原描述', system_prompt: '原提示词', project_access: 'read' };
   const f = expert_card_fixture({ ...original });
   try {
     const room_profile = JSON.stringify(f.view.value.launch.profiles);
-    f.context.flip(true);
+    assert.equal(vm.runInContext('can_flip.value', f.context), false, 'a workflow card is set up in 专家配置, not on its back');
     f.context.write_model('new-model');
     f.context.write_setting('project_access', 'write');
     f.context.save_description({ text: '新描述', label: '执笔', as_template: true });
@@ -447,9 +447,6 @@ test('editing and cancelling a workflow card never changes the same member in a 
     assert.equal(f.preset.value.model, 'new-model');
     assert.equal(JSON.stringify(f.view.value.launch.profiles), room_profile);
     assert.equal(f.preset.value.adapter, undefined, 'software details stay out of the portable card');
-    f.context.cancel();
-    assert.deepEqual(JSON.parse(JSON.stringify(f.preset.value)), original);
-    assert.equal(JSON.stringify(f.view.value.launch.profiles), room_profile);
     f.context.write_setting('system_prompt', '');
     assert.equal(vm.runInContext('prompt_text.value', f.context), (EXPERT_PROMPT_PRESETS.codex_cli || '').trim());
   } finally { f.cleanup(); }

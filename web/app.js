@@ -3173,7 +3173,7 @@ async function load_launch_settings() {
     state.launch.saved_profiles = JSON.parse(JSON.stringify(settings.participants || {}));
     state.launch.create_preferences = { ...settings.create_preferences, ...create_preferences_pending };
     Object.assign(state.launch, { available: true, profiles: settings.participants, projects: settings.projects || [], projects_restricted: settings.projects_restricted === true, user_home: settings.user_home || "", api_providers: settings.api_providers || {}, api_keys: settings.api_keys || {}, managed_api_keys: settings.managed_api_keys || [],
-      presets: settings.presets || [], builtin_presets: settings.builtin_presets || [], hidden_builtins: settings.hidden_builtins || [], workflows: settings.workflows || [], description_templates: settings.description_templates || {},
+      presets: settings.presets || [], builtin_presets: settings.builtin_presets || [], hidden_builtins: settings.hidden_builtins || [], workflows: settings.workflows || [], card_platforms: settings.platforms || [], description_templates: settings.description_templates || {},
       scheduler_providers: settings.scheduler_providers || {}, scheduler_modes: settings.scheduler_modes || {}, scheduler_default_mode: settings.scheduler_default_mode || "", error: "",
       notice: relay_machine ? `经电脑「${relay_machine.name}」执行本机操作` : local_connection ? "已连接本机服务，讨论保存在当前网站" : "" });
     Object.values(state.launch.profiles).forEach(fill_api_key);
@@ -3704,6 +3704,8 @@ async function set_room_host_workflows(allowed) {
 async function reload_workflows() {
   const result = await local_launch_request("workflows", { action: "list" });
   state.launch.workflows = result.workflows || [];
+  // The platforms cards may name on that computer; a card naming another cannot join until its platform changes.
+  state.launch.card_platforms = result.platforms || [];
   publish_view();
   return state.launch.workflows;
 }

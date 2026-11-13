@@ -10,6 +10,7 @@ import ExecutionNotes from "./ExecutionNotes.vue";
 import WorkingText from "./WorkingText.vue";
 import QueuedMessages from "./QueuedMessages.vue";
 import { active_workflow } from "./workflow-state.js";
+import { workflow_problem } from "./workflow-library.js";
 import { open_private_chat } from "./private-chat.js";
 import { ENTER_SENDS } from "./enter-sends.js";
 import { use_read_aloud } from "./read-aloud.js";
@@ -786,8 +787,12 @@ const workflow_blocked = computed(() => !free_members.value.some((member) => mem
   : !room_models.value?.host_workflows ? "需先在电脑上的“成员与设置 → 协作设置”打开“主持人完整权限”" : "");
 const workflow_options = computed(() => {
   const query = mention_context.value?.query.toLocaleLowerCase() || "";
-  return (view.value.launch.workflows || []).filter((item) => !item.error && !item.disabled && `${item.id} ${item.label} ${item.description || ""}`.toLocaleLowerCase().includes(query))
-    .map((item) => ({ key: `workflow:${item.id}`, workflow: item, group: "工作流", enabled: room_workflow.value?.id === item.id, disabled: workflow_blocked.value }));
+  // A workflow that cannot run here stays listed with its reason, but cannot be picked.
+  return (view.value.launch.workflows || []).filter((item) => !item.disabled && `${item.id} ${item.label} ${item.description || ""}`.toLocaleLowerCase().includes(query))
+    .map((item) => {
+      const problem = workflow_problem(item);
+      return { key: `workflow:${item.id}`, workflow: item, group: "工作流", enabled: room_workflow.value?.id === item.id, broken: Boolean(problem), disabled: problem || workflow_blocked.value };
+    });
 });
 /**
  * Platform skills a user may call with an unaddressed "/". Picking one only inserts `$id` (rendered as a skill tag, see markdown.mjs) and adds no
@@ -2510,9 +2515,9 @@ function copy_message(message) { act("copy", `${view.value.room_site}/r/${room.v
                 <small :title="option.mode.description">{{ option.mode.description }}</small>
               </template>
               <template v-else-if="option.workflow">
-                <UIcon name="i-lucide-network" class="channel-mention-file-icon" />
+                <UIcon :name="option.broken ? 'i-lucide-triangle-alert' : 'i-lucide-network'" class="channel-mention-file-icon" :class="{ 'channel-mention-broken': option.broken }" />
                 <span :class="{ 'channel-mention-disabled': option.disabled && !option.enabled }">{{ option.workflow.label }}</span>
-                <small class="channel-mention-brief" :title="option.workflow.description">{{ !option.enabled && option.disabled || option.workflow.description }}</small>
+                <small class="channel-mention-brief" :class="{ 'channel-mention-broken': option.broken }" :title="!option.enabled && option.disabled || option.workflow.description">{{ !option.enabled && option.disabled || option.workflow.description }}</small>
                 <b v-if="option.enabled" class="channel-mention-tag">已启用</b>
               </template>
               <template v-else-if="option.skill">

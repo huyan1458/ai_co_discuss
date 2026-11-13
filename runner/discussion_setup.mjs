@@ -11,6 +11,7 @@ import { launch_settings, save_launch_settings } from './discussion_launch.mjs';
 import { assert_shared_home, service_home } from './discussion_service.mjs';
 import { SKILLS, install_skills, install_workflows, remove_legacy_skills, shipped_workflows } from './discussion_skills.mjs';
 import { ask, checkbox_prompt, intro, outro, pad, short_path, spinner, step, styled, text_width, tone, tree_prompt } from './discussion_tui.mjs';
+import { install_launcher, launcher_path } from './launcher.mjs';
 export { checkbox_prompt } from './discussion_tui.mjs';
 
 const ROOT = fileURLToPath(new URL('../', import.meta.url));
@@ -165,19 +166,30 @@ async function selected_clients(options, detected) {
 }
 
 /**
- * Which shipped workflows to install on this run. Nothing by default: an interactive run offers them unchecked in the
- * install settings, and a non-interactive one installs them only with --workflows. Never remembered between runs.
+ * The install settings of this run: which shipped workflows to install, and whether to build the 共议 launcher.
+ * Workflows: nothing by default; an interactive run offers them unchecked, a non-interactive one installs them only with
+ * --workflows. Launcher: offered checked to an interactive run on Windows until it exists, so only the first setup asks;
+ * a non-interactive run never builds it (`codiscuss launcher` does). Never remembered between runs.
  */
-async function selected_workflows(options) {
+async function install_choices(options, home) {
   const shipped = shipped_workflows();
+  const offer_workflows = options.workflows === undefined && shipped.length;
+  const offer_launcher = process.platform === 'win32' && !existsSync(launcher_path(home));
+  const defaults = { workflows: options.workflows ? shipped.map(item => item.name) : [], launcher: false };
   // The tree needs key-by-key input; a terminal that cannot give it keeps the default.
-  if (options.workflows !== undefined || options.yes || !process.stdin.isTTY || typeof process.stdin.setRawMode !== 'function' || !shipped.length) {
-    return options.workflows ? shipped.map(item => item.name) : [];
-  }
-  const [picked] = await tree_prompt('安装配置', [{ label: '随包工作流',
+  if (options.yes || !process.stdin.isTTY || typeof process.stdin.setRawMode !== 'function' || (!offer_workflows && !offer_launcher)) return defaults;
+  const groups = [];
+  if (offer_workflows) groups.push({ label: '随包工作流',
     description: '把安装包自带的工作流装进本机工作流库；已有同名的覆盖为最新版，原来那份先备份到服务目录 backups/workflows/',
-    items: shipped.map(item => ({ label: item.label, hint: item.name, description: item.description, checked: false })) }]);
-  return shipped.filter((_, index) => picked[index]).map(item => item.name);
+    items: shipped.map(item => ({ label: item.label, hint: item.name, description: item.description, checked: false })) });
+  if (offer_launcher) groups.push({ label: '桌面快捷方式',
+    description: '在桌面与开始菜单放一个“共议”，双击启动网站与讨论服务；以后也可运行 codiscuss launcher 生成',
+    items: [{ label: '创建“共议”快捷方式', hint: 'launcher', description: '用本机自带的 C# 编译器生成 共议.exe，不下载任何东西', checked: true }] });
+  const picked = await tree_prompt('安装配置', groups);
+  return {
+    workflows: offer_workflows ? shipped.filter((_, index) => picked[0][index]).map(item => item.name) : defaults.workflows,
+    launcher: offer_launcher && picked[groups.length - 1][0],
+  };
 }
 
 /** Validate an explicit selection without prompting or changing files. */
@@ -365,7 +377,8 @@ async function setup(options) {
     ? detected.map(item => `${pad(item.name, width)}  ${tone.dim(item.executable ? short_path(item.executable) : '未检测到 CLI')}`) : [];
   scan.done(`检测到 ${detected.filter(item => item.executable).length} 个可接入的 CLI`, listed);
   const selected = await selected_clients(options, detected);
-  const workflow_names = await selected_workflows(options);
+  const choices = await install_choices(options, home);
+  const workflow_names = choices.workflows;
   const configured = await configure_clients(home, selected, options, launch_settings(home).participants);
   // The remote entry is retired: a saved remote_port from an older version is dropped here.
   const { remote_port: retired, ...kept } = previous;
@@ -383,10 +396,15 @@ async function setup(options) {
       pi_step.done(`Pi ${pi.version}${pi.updated ? ' 已安装' : ' 已就绪'}`);
     } catch (error) { pi_error = error.message; pi_step.fail(`Pi 安装失败：${error.message}`); }
   }
+  let launcher = null, launcher_error = '';
+  if (choices.launcher) {
+    try { launcher = install_launcher(home); } catch (error) { launcher_error = error.message; }
+  }
   const result = { home, python, clients: selected.map(item => item.name), ...configured, workflows,
-    command: check_command(), ai_verified: false, ...(pi ? { pi: pi.version } : {}) };
+    command: check_command(), ai_verified: false, ...(pi ? { pi: pi.version } : {}), ...(launcher ? { launcher: launcher.shortcuts[0] } : {}) };
   result.issues = setup_issues(result);
   if (pi_error) result.issues.push(`Pi 安装失败（${pi_error}）；模型 API 成员首次执行时会再试，或检查网络与 npm 后重新运行 setup。`);
+  if (launcher_error) result.issues.push(`未能创建“共议”快捷方式（${launcher_error}）；可稍后运行 codiscuss launcher 重试。`);
   result.configured = result.issues.length === 0;
   result.status = result.configured ? 'configured' : 'needs_attention';
   if (!options['no-start']) {
@@ -434,6 +452,7 @@ function report_setup(result, options = {}) {
   }
   for (const group of result.skills) lines.push(`${group.client} Skill：${group.results.filter(skill => skill.status !== 'conflict').length}/${group.results.length} 份文件就绪，目录 ${dirname(group.results[0].path)}`);
   if (result.workflows.length) lines.push(`内置工作流：${workflow_summary(result.workflows)}`);
+  if (result.launcher) lines.push(`快捷方式：${result.launcher}（双击启动共议）`);
   if (result.command.path) lines.push(`持久命令：${result.command.path}（${result.command.status}）`);
   if (result.local?.running) {
     lines.push(`本机网站：${result.local.url}${options['no-open'] ? '' : '（已在浏览器打开）'}`,
@@ -459,6 +478,7 @@ function report_styled(result, options) {
   }
   if (result.skills.length) rows.push(['技能', result.skills.map(group => `${group.client} ${group.results.filter(skill => skill.status !== 'conflict').length}/${group.results.length}`).join(' · '), 'discuss-host · discuss-participant · discuss-goal · discuss-session · discuss-report · workflow-creator · local-tts-setup · local-stt-setup']);
   if (result.workflows.length) rows.push(['工作流', workflow_summary(result.workflows), '']);
+  if (result.launcher) rows.push(['快捷方式', '双击“共议”启动', short_path(result.launcher)]);
   if (result.command.path) rows.push(['命令', `codiscuss ${tone.dim(`(${result.command.status})`)}`, short_path(result.command.path)]);
   const notes = result.issues.map(issue => tone.yellow(`▲ ${issue}`));
   if (result.local?.running) {

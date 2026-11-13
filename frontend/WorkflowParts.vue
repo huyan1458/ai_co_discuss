@@ -21,6 +21,13 @@ function pick(id) {
   library.open_scope(id);
 }
 
+/** How many members a sub-workflow uses: its own cards and the main flow's cards placed on its canvas, each once. */
+function member_count(sub) {
+  const known = new Set([...draft.value.agents, ...sub.agents].map((agent) => agent.card));
+  const placed = (sub.flow?.nodes || []).filter((node) => node.type === "card" && known.has(node.card)).map((node) => node.card);
+  return new Set([...sub.agents.map((agent) => agent.card), ...placed]).size;
+}
+
 function remove(id) {
   confirming.value = "";
   library.remove_sub(id);
@@ -54,7 +61,7 @@ function remove(id) {
         </template>
         <template v-else>
           <button type="button" class="workflow-parts-item is-sub" :aria-current="scope === sub.id ? 'page' : undefined" :title="sub.description || sub.label" @click="pick(sub.id)">
-            <UIcon name="i-lucide-git-branch" class="workflow-parts-icon" /><span>{{ sub.label || sub.id }}</span><small>{{ sub.agents.length }} 位</small>
+            <UIcon name="i-lucide-git-branch" class="workflow-parts-icon" /><span>{{ sub.label || sub.id }}</span><small>{{ member_count(sub) }} 位</small>
           </button>
           <button type="button" class="workflow-parts-remove" :aria-label="`删除子工作流 ${sub.label || sub.id}`" title="删除子工作流" @click="confirming = sub.id">
             <UIcon name="i-lucide-trash-2" class="workflow-parts-icon" />

@@ -1,6 +1,6 @@
 ---
 name: critic
-platform: OpenAI
+platform: Codex
 label: 批评家·设定
 description: 只读审稿：查设定、连续性、账目和影响剧情的硬常识；与批评家·人物同时审，各给各的结论
 project_access: read

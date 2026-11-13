@@ -134,7 +134,7 @@ static class Tray {
     if (id == 2) Say("site");
     if (id == 4) Say("restart");
     // Closing everything asks first: a stray click must not take the owner's site and rooms down.
-    if (id == 5 && MessageBox.Show("关闭共议服务？本机网站、讨论服务与管理面板都会停止，托管用户的实例不受影响。", "共议", MessageBoxButtons.YesNo, MessageBoxIcon.Question) == DialogResult.Yes) Say("stop");
+    if (id == 5 && Confirm.Ask("关闭共议服务？", "本机网站、讨论服务与管理面板都会停止。" + Environment.NewLine + "托管用户的实例不受影响。", "关闭服务", "取消")) Say("stop");
   }
 
   public static void Run(int owner, string icon_path, string title, string window_title) {
@@ -193,12 +193,13 @@ static class TrayMenu {
       int middle = e.Item.Height / 2;
       using (Pen line = new Pen(Color.FromArgb(225, 225, 225))) e.Graphics.DrawLine(line, 12, middle, e.ToolStrip.ClientSize.Width - 14, middle);
     }
-    static GraphicsPath Rounded(Rectangle box, int radius) {
-      GraphicsPath path = new GraphicsPath(); int d = radius * 2;
-      path.AddArc(box.X, box.Y, d, d, 180, 90); path.AddArc(box.Right - d, box.Y, d, d, 270, 90);
-      path.AddArc(box.Right - d, box.Bottom - d, d, d, 0, 90); path.AddArc(box.X, box.Bottom - d, d, d, 90, 90);
-      path.CloseFigure(); return path;
-    }
+  }
+
+  public static GraphicsPath Rounded(Rectangle box, int radius) {
+    GraphicsPath path = new GraphicsPath(); int d = radius * 2;
+    path.AddArc(box.X, box.Y, d, d, 180, 90); path.AddArc(box.Right - d, box.Y, d, d, 270, 90);
+    path.AddArc(box.Right - d, box.Bottom - d, d, d, 0, 90); path.AddArc(box.X, box.Bottom - d, d, d, 90, 90);
+    path.CloseFigure(); return path;
   }
 
   // A blank row above and below the entries.
@@ -239,6 +240,82 @@ static class TrayMenu {
     strip.Show(new Point(at.X, at.Y - strip.Height), ToolStripDropDownDirection.BelowRight);
     // A menu closes on an outside click only when this program is in the foreground.
     SetForegroundWindow(strip.Handle);
+  }
+}
+
+/** A confirmation in the same Windows 11 look as the menu: a heading, one line of detail, and a footer with two rounded
+ * buttons. The safe button holds the focus, so Enter or Esc cancels. */
+static class Confirm {
+  [DllImport("dwmapi.dll")] static extern int DwmSetWindowAttribute(IntPtr window, int attribute, ref int value, int size);
+
+  // No title bar, like the menu; the class style adds the shadow a borderless window lacks.
+  class Sheet : Form {
+    protected override CreateParams CreateParams { get { CreateParams p = base.CreateParams; p.ClassStyle |= 0x20000; return p; } }
+  }
+
+  class Pill : Button {
+    readonly bool primary; readonly int radius; bool over, down;
+    public Pill(string text, bool primary, int radius) {
+      Text = text; this.primary = primary; this.radius = radius;
+      SetStyle(ControlStyles.UserPaint | ControlStyles.AllPaintingInWmPaint | ControlStyles.OptimizedDoubleBuffer, true);
+    }
+    protected override void OnMouseEnter(EventArgs e) { over = true; Invalidate(); base.OnMouseEnter(e); }
+    protected override void OnMouseLeave(EventArgs e) { over = false; Invalidate(); base.OnMouseLeave(e); }
+    protected override void OnMouseDown(MouseEventArgs e) { down = true; Invalidate(); base.OnMouseDown(e); }
+    protected override void OnMouseUp(MouseEventArgs e) { down = false; Invalidate(); base.OnMouseUp(e); }
+    protected override void OnPaint(PaintEventArgs e) {
+      Graphics g = e.Graphics;
+      g.Clear(Parent.BackColor);
+      g.SmoothingMode = SmoothingMode.AntiAlias;
+      Color fill = primary ? (down ? Color.FromArgb(51, 127, 198) : over ? Color.FromArgb(25, 111, 192) : Color.FromArgb(0, 95, 184))
+        : (down ? Color.FromArgb(245, 245, 245) : over ? Color.FromArgb(246, 246, 246) : Color.FromArgb(251, 251, 251));
+      using (GraphicsPath path = TrayMenu.Rounded(new Rectangle(0, 0, Width - 1, Height - 1), radius)) {
+        using (SolidBrush brush = new SolidBrush(fill)) g.FillPath(brush, path);
+        if (!primary) using (Pen edge = new Pen(Color.FromArgb(229, 229, 229))) g.DrawPath(edge, path);
+      }
+      if (Focused && ShowFocusCues) using (GraphicsPath ring = TrayMenu.Rounded(new Rectangle(1, 1, Width - 3, Height - 3), radius)) using (Pen pen = new Pen(Color.FromArgb(26, 26, 26), 2)) g.DrawPath(pen, ring);
+      Color ink = primary ? Color.White : down ? Color.FromArgb(93, 93, 93) : Color.FromArgb(26, 26, 26);
+      TextRenderer.DrawText(g, Text, Font, ClientRectangle, ink, TextFormatFlags.HorizontalCenter | TextFormatFlags.VerticalCenter | TextFormatFlags.SingleLine);
+    }
+  }
+
+  public static bool Ask(string heading, string detail, string yes, string no) {
+    using (Form form = new Sheet()) {
+      float scale; using (Graphics probe = Graphics.FromHwnd(IntPtr.Zero)) scale = probe.DpiX / 96f;
+      Func<int, int> px = value => (int)Math.Round(value * scale);
+      form.Text = "共议";
+      form.FormBorderStyle = FormBorderStyle.None;
+      form.ShowInTaskbar = false; form.TopMost = true;
+      form.StartPosition = FormStartPosition.CenterScreen;
+      form.AutoScaleMode = AutoScaleMode.None;
+      form.BackColor = Color.White;
+      form.Font = new Font("Microsoft YaHei UI", 9.5f);
+      form.ClientSize = new Size(px(420), px(196));
+
+      Label title = new Label();
+      title.Text = heading; title.Font = new Font("Microsoft YaHei UI", 13f, FontStyle.Bold); title.ForeColor = Color.FromArgb(26, 26, 26);
+      title.AutoSize = true; title.Location = new Point(px(24), px(26));
+      Label body = new Label();
+      body.Text = detail; body.ForeColor = Color.FromArgb(96, 96, 96);
+      body.AutoSize = false; body.Location = new Point(px(24), px(68)); body.Size = new Size(px(372), px(48));
+
+      Panel footer = new Panel();
+      footer.Dock = DockStyle.Bottom; footer.Height = px(76); footer.BackColor = Color.FromArgb(243, 243, 243);
+      footer.Paint += delegate (object source, PaintEventArgs e) {
+        using (Pen line = new Pen(Color.FromArgb(229, 229, 229))) e.Graphics.DrawLine(line, 0, 0, footer.Width, 0);
+      };
+      int width = (px(420) - px(24) * 2 - px(8)) / 2;
+      Pill accept = new Pill(yes, true, px(4)); accept.DialogResult = DialogResult.Yes;
+      Pill cancel = new Pill(no, false, px(4)); cancel.DialogResult = DialogResult.No;
+      accept.Bounds = new Rectangle(px(24), px(22), width, px(32));
+      cancel.Bounds = new Rectangle(px(24) + width + px(8), px(22), width, px(32));
+      footer.Controls.Add(accept); footer.Controls.Add(cancel);
+
+      form.Controls.Add(title); form.Controls.Add(body); form.Controls.Add(footer);
+      form.CancelButton = cancel;
+      form.Shown += delegate { int round = 2; DwmSetWindowAttribute(form.Handle, 33, ref round, 4); form.Activate(); cancel.Focus(); };
+      return form.ShowDialog() == DialogResult.Yes;
+    }
   }
 }
 `;
@@ -308,6 +385,11 @@ function write_shortcut(folder, exe, icon) {
   return result.stdout.trim();
 }
 
+/** Where the launcher of a service home lives; setup offers to build it only while it does not exist. */
+export function launcher_path(home = join(homedir(), '.codiscuss')) {
+  return join(home, 'launcher', EXE_NAME);
+}
+
 /**
  * Build 共议.exe and its shortcuts.
  *
@@ -320,7 +402,7 @@ export function install_launcher(home = join(homedir(), '.codiscuss')) {
   const folder = join(home, 'launcher');
   mkdirSync(folder, { recursive: true });
   const icon = render_icon(folder);
-  const source = join(folder, 'launcher.cs'), exe = join(folder, EXE_NAME);
+  const source = join(folder, 'launcher.cs'), exe = launcher_path(home);
   writeFileSync(source, `\ufeff${launcher_source({ node: process.execPath, local_script: installed_script('discussion_local.mjs'),
     panel_script: existsSync(join(ROOT, 'gateway', 'gateway.mjs')) ? join(RUNNER, 'admin_panel.mjs') : '', home })}`, 'utf8');
   const result = spawnSync(CSC, ['/nologo', '/target:winexe', '/codepage:65001', '/optimize+', '/r:System.Windows.Forms.dll', '/r:System.Drawing.dll',

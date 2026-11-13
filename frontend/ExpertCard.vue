@@ -74,7 +74,9 @@ const MANUAL_NOTES = {
 const manual_note = computed(() => MANUAL_NOTES[bridge.platform_of(props.name)] || "");
 const resuming = computed(() => Boolean(profile.value.session_id));
 // Software paths and models typed here belong to this browser's computer, so a relayed member keeps the paired computer's settings.
-const can_flip = computed(() => Boolean(preset.value) || automatic.value && entry_items.value.length > 0 && !(view.value.launch.relay && !view.value.launch.available));
+// A workflow card does not turn over: its software, model, strength and access are set together in the workflow's
+// 专家配置, and its description and prompt from the front.
+const can_flip = computed(() => !preset.value && automatic.value && entry_items.value.length > 0 && !(view.value.launch.relay && !view.value.launch.available));
 const card_label = computed(() => preset.value ? `编辑 ${props.name} 的卡片` : `配置 ${props.name} 的启动方式`);
 const models = computed(() => bridge.launch_model_state(props.name, view.value.launch, profile.value));
 const preset_model_input = computed(() => preset.value && !adapter_profile(profile.value.adapter)?.models);
@@ -104,9 +106,14 @@ const access = computed(() => profile.value.project_access || view.value.launch.
 const launch_fact = computed(() => props.mode === "manual" ? "你来启动 · 自主发言"
   : `程序启动 · ${resuming.value ? "续接会话" : profile.value.adapter === "api" ? "调用 API" : "新会话"}`);
 const host_fact = computed(() => "不可（须本机唤醒）");
+// A workflow card naming software this computer has not set up (known once the library listed the platforms).
+const platform_missing = computed(() => {
+  const ready = view.value.launch.card_platforms || [];
+  return Boolean(preset.value) && ready.length > 0 && !ready.includes(bridge.platform_of(props.name));
+});
 // The front states only what is decided or an exception; placeholders such as "set in the original software" stay off it.
 const facts = computed(() => preset.value ? [
-  ...preset.value.needs_platform ? [{ label: "平台", value: "本机未配置此软件", tone: "warn" }] : [],
+  ...preset.value.needs_platform || platform_missing.value ? [{ label: "平台", value: "本机未配置此软件", tone: "warn" }] : [],
   { label: "模型", value: profile.value.model || "软件默认模型" },
   ...profile.value.effort ? [{ label: "强度", value: effort_label.value }] : [],
   { label: "项目", value: access_label(access.value), ...(access.value !== "read" ? { tone: "warn" } : {}) },
@@ -396,6 +403,7 @@ onBeforeUnmount(() => { document.removeEventListener("pointerdown", close_on_out
         <span class="expert-card-tools">
           <!-- A card with a back keeps the description beside the prompt there; one without a back has only the front. A manual card has none, as its settings live in the user's own session. -->
           <button v-if="!can_flip && !manual" type="button" :class="{ 'is-set': description }" :aria-label="`编辑 ${name} 的名称与描述`" :title="describe_title" @click="describing = true"><UIcon name="i-lucide-user-pen" /></button>
+          <button v-if="preset" type="button" :class="{ 'is-set': prompt_text }" :title="prompt_title" :aria-label="`编辑 ${name} 的专属提示词`" @click="open_prompt"><UIcon name="i-lucide-scroll-text" /></button>
           <button v-if="hostable" type="button" class="expert-card-host" :aria-pressed="host" :aria-label="host ? `${name} 是主持人` : `设 ${name} 为主持人`" :title="host ? '主持人' : '设为主持人'" @click="emit('host')"><UIcon name="i-lucide-crown" /></button>
           <button type="button" :aria-label="`移出 ${name}`" title="移出" @click="emit('remove')"><UIcon name="i-lucide-x" /></button>
         </span>

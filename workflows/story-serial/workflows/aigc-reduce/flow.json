@@ -1,0 +1,107 @@
+{
+  "nodes": [
+    {
+      "id": "start",
+      "type": "start",
+      "x": 0,
+      "y": 0
+    },
+    {
+      "id": "check",
+      "type": "host",
+      "label": "查分定位",
+      "x": 0,
+      "y": 0
+    },
+    {
+      "id": "writer",
+      "type": "card",
+      "card": "writer",
+      "x": 0,
+      "y": 0
+    },
+    {
+      "id": "retest",
+      "type": "host",
+      "label": "复测",
+      "x": 0,
+      "y": 0
+    },
+    {
+      "id": "critic_people",
+      "type": "card",
+      "card": "critic_people",
+      "x": 0,
+      "y": 0
+    },
+    {
+      "id": "critic",
+      "type": "card",
+      "card": "critic",
+      "x": 0,
+      "y": 0
+    },
+    {
+      "id": "note",
+      "type": "host",
+      "label": "记知识库",
+      "x": 0,
+      "y": 0
+    },
+    {
+      "id": "recorder",
+      "type": "card",
+      "card": "recorder",
+      "x": 0,
+      "y": 0
+    }
+  ],
+  "edges": [
+    {
+      "source": "start",
+      "target": "check"
+    },
+    {
+      "source": "check",
+      "target": "writer",
+      "label": "按定位整块重写"
+    },
+    {
+      "source": "writer",
+      "target": "retest"
+    },
+    {
+      "source": "retest",
+      "target": "writer",
+      "label": "没过·同块至多三次"
+    },
+    {
+      "source": "retest",
+      "target": "critic_people",
+      "label": "动了对白或事实"
+    },
+    {
+      "source": "retest",
+      "target": "critic",
+      "label": "动了对白或事实"
+    },
+    {
+      "source": "critic_people",
+      "target": "note"
+    },
+    {
+      "source": "critic",
+      "target": "note"
+    },
+    {
+      "source": "retest",
+      "target": "note",
+      "label": "只动叙述口气"
+    },
+    {
+      "source": "note",
+      "target": "recorder",
+      "label": "已记账的集改了事实"
+    }
+  ]
+}

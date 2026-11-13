@@ -43,6 +43,9 @@ test('a workflow saves as plain files, reads back the same, and refuses unsafe o
   writeFileSync(join(home, 'workflows', 'novel-serial', 'agents', 'writer.md'), card.replace('克制、具体。', '更克制。'));
   assert.equal(get_workflow(home, 'novel-serial').agents.find(agent => agent.card === 'writer').system_prompt, '更克制。');
   assert.deepEqual(list_workflows(home).map(item => [item.id, item.cards]), [['novel-serial', 2]]);
+  // The list names the cards whose software this computer has not set up.
+  assert.deepEqual(list_workflows(home, name => name.startsWith('Antigravity-'))[0].unavailable, [{ card: 'science', label: '科学顾问', platform: 'DeepSeek' }]);
+  assert.equal(list_workflows(home, () => true)[0].unavailable, undefined);
   for (const [change, pattern] of [
     [{ id: '../x' }, /工作流 ID/],
     [{ id: 'novel_serial' }, /工作流 ID/],

@@ -12,6 +12,17 @@ const NEW_SUB_SKILL = "写下主线之外什么时候用这个子工作流，以
 const MAX_SUB_WORKFLOWS = 10;
 let library = null;
 
+/**
+ * Why a listed workflow cannot be used on this computer now, or "": it cannot be read, or some cards name software
+ * this computer has not set up (their members could not join). A paused workflow is the user's choice, not a fault.
+ */
+export function workflow_problem(item) {
+  if (item.error) return `无法读取：${item.error}`;
+  if (!item.unavailable?.length) return "";
+  const cards = item.unavailable.map((card) => `${card.label}（${card.platform}）`).join("、");
+  return `本机未配置这些卡片的软件：${cards}。可在工作流页的“专家配置”里换用本机已有的软件`;
+}
+
 /** The shared library, created on first use with the injected discussion context. */
 export function use_workflow_library() {
   if (!library) library = effectScope(true).run(() => create_library(inject("discussion")));
@@ -174,6 +185,9 @@ function create_library({ view, bridge, act }) {
     if (open) prefetch(list);
   });
   watch(available, (value) => { if (value) bridge.reload_workflows(); }, { immediate: true });
+  // Software set up or a key saved may make a workflow's cards usable (or not), so the list's health is read again.
+  watch(() => JSON.stringify([Object.keys(view.value.launch.saved_profiles || {}), Object.keys(view.value.launch.api_keys || {})]),
+    (now, before) => { if (available.value && before !== undefined) bridge.reload_workflows().catch(() => {}); });
 
   const add_items = [[
     { label: "新建", icon: "i-lucide-plus", onSelect: () => guard(() => edit_draft({ label: "未命名工作流", description: "", skill: NEW_SKILL, agents: [] })) },

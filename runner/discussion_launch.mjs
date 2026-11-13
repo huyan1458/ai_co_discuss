@@ -1686,7 +1686,7 @@ async function perform_launch(home, context, options) {
 /** The workflow library: list, read, save, rename, disable or enable, delete, preview an import, or read a room's member cards. */
 export function workflows_command(home, input = {}) {
   const action = input.action || 'list';
-  if (action === 'list') return { workflows: list_workflows(home) };
+  if (action === 'list') return workflow_library(home);
   if (action === 'get') return get_workflow(home, input.id);
   if (action === 'save') return save_workflow(home, input.workflow, validate_preset);
   if (action === 'delete') return delete_workflow(home, input.id);
@@ -1830,6 +1830,16 @@ function card_api_profile(home, platform) {
   return api_key_ref ? { adapter: 'api', base_url: provider.base_url, api_protocol: provider.api_protocol, model: provider.models[0], api_key_ref } : null;
 }
 
+/** The platforms a card may name on this computer: saved software settings, or an API with a saved key. */
+function configured_platforms(home) {
+  return [...new Set([...Object.keys(launch_settings(home).participants), ...Object.keys(API_PROVIDERS).filter(platform => card_api_profile(home, platform))])];
+}
+
+/** The library as listed: each workflow with the cards this computer cannot start, and the platforms cards may name here. */
+function workflow_library(home) {
+  return { workflows: list_workflows(home, name => card_platform_ready(home, name)), platforms: configured_platforms(home) };
+}
+
 /** Whether a card's platform can start here: saved software settings, or an API with a saved key. */
 function card_platform_ready(home, name) {
   const platform = platform_of(name || '');
@@ -1962,7 +1972,7 @@ function host_target({ roster, labels, host }, wanted, { self = false } = {}) {
 function host_invite_profile(home, name, { access, model, effort }) {
   if (access && !HOST_CARD_ACCESS.includes(access)) throw new Error('主持人邀请的成员项目权限只能是 read 或 write');
   if (!card_platform_ready(home, name)) {
-    const ready = [...new Set([...Object.keys(launch_settings(home).participants), ...Object.keys(API_PROVIDERS).filter(platform => card_api_profile(home, platform))])];
+    const ready = configured_platforms(home);
     throw new Error(`本机没有配置 ${name} 的软件或 API Key；只能邀请本机已配置的平台：${ready.join('、')}`);
   }
   const api = card_api_profile(home, platform_of(name));
@@ -2119,7 +2129,7 @@ export async function adopt_workflow(home, { access_file, draft_file, workflow_i
   assert_workflow_enabled(home, workflow.id);
   const missing = workflow.agents.filter(agent => !card_platform_ready(home, agent.name)).map(agent => agent.name || agent.card);
   if (missing.length) {
-    const ready = [...new Set([...Object.keys(launch_settings(home).participants), ...Object.keys(API_PROVIDERS).filter(platform => card_api_profile(home, platform))])];
+    const ready = configured_platforms(home);
     throw new Error(`本机没有配置这些卡片的软件或 API Key：${missing.join('、')}；卡片的 platform 只能用本机已配置的平台 ID：${ready.join('、')}`);
   }
   workflow = workflow_id ? { ...workflow, agents: host_cards(workflow.agents) }
@@ -2237,7 +2247,7 @@ export async function launch_main(args = process.argv.slice(2), input_text) {
   }
   let result;
   if (positionals[0] === 'settings') result = { ...(input ? save_launch_settings(home, input) : launch_settings(home)), api_providers: API_PROVIDERS,
-    scheduler_providers: SCHEDULER_PROVIDERS, scheduler_modes: SCHEDULER_MODES, scheduler_default_mode: DEFAULT_SCHEDULER_MODE, api_keys: saved_api_keys(home), managed_api_keys: restricted ? managed_api_keys(home) : [], projects: launch_projects(home).projects, projects_restricted: restricted, workspace: space.workspace, user_home: restricted ? homedir() : '', ...expert_presets(home), workflows: list_workflows(home) };
+    scheduler_providers: SCHEDULER_PROVIDERS, scheduler_modes: SCHEDULER_MODES, scheduler_default_mode: DEFAULT_SCHEDULER_MODE, api_keys: saved_api_keys(home), managed_api_keys: restricted ? managed_api_keys(home) : [], projects: launch_projects(home).projects, projects_restricted: restricted, workspace: space.workspace, user_home: restricted ? homedir() : '', ...expert_presets(home), ...workflow_library(home) };
   else if (positionals[0] === 'projects') result = input ? save_launch_projects(home, input) : launch_projects(home);
   else if (positionals[0] === 'presets') result = input ? save_expert_presets(home, input) : expert_presets(home);
   else if (positionals[0] === 'workflows') result = await workflows_command(home, input || {});

@@ -1,7 +1,7 @@
 <script setup>
 import { computed, inject, ref } from "vue";
 import ChannelDirectory from "./ChannelDirectory.vue";
-import { use_workflow_library } from "./workflow-library.js";
+import { use_workflow_library, workflow_problem } from "./workflow-library.js";
 
 /** The room sidebar, shared by the docked desktop column and the tablet and phone drawer. */
 const props = defineProps({ tabs: { type: Array, required: true } });
@@ -63,13 +63,13 @@ const account_status = computed(() => {
         <div v-if="draft && !saved_id" class="channel-room-row" :class="{ active: page_open }">
           <button type="button" class="channel-room-select" :aria-current="page_open ? 'page' : undefined" @click="library.page_open.value = true; emit('workflows')"><UIcon name="i-lucide-file-plus-2" /><span>{{ draft.label || '未命名工作流' }}</span><small class="channel-room-time">未保存</small></button>
         </div>
-        <div v-for="item in workflows" :key="item.id" class="channel-room-row" :class="{ active: page_open && saved_id === item.id, 'is-disabled': item.disabled, 'is-broken': item.error }">
+        <div v-for="item in workflows" :key="item.id" class="channel-room-row" :class="{ active: page_open && saved_id === item.id, 'is-disabled': item.disabled, 'is-broken': workflow_problem(item) }">
           <span v-if="renaming === item.id" class="channel-workflow-rename"><UIcon name="i-lucide-network" />
             <input v-model="rename_text" data-workflow-rename :maxlength="32" aria-label="新名称" @keydown.enter.prevent="library.commit_rename" @keydown.esc.prevent="renaming = ''" @blur="library.commit_rename" /></span>
-          <button v-else type="button" class="channel-room-select" :title="item.error || item.description" :aria-current="page_open && saved_id === item.id ? 'page' : undefined"
+          <button v-else type="button" class="channel-room-select" :title="workflow_problem(item) || item.description" :aria-current="page_open && saved_id === item.id ? 'page' : undefined"
             @click="open_workflow(item.id)" @dblclick="!item.error && !pending_items.has(item.id) && library.start_rename(item)">
-            <UIcon :name="pending_items.has(item.id) ? 'i-lucide-loader-circle' : item.error ? 'i-lucide-triangle-alert' : item.disabled ? 'i-lucide-circle-pause' : 'i-lucide-network'" :class="{ 'animate-spin': pending_items.has(item.id) }" /><span>{{ item.label }}</span>
-            <small class="channel-room-time">{{ item.error ? '无法读取' : item.disabled ? '已停用' : `${item.cards} 位成员` }}</small></button>
+            <UIcon :name="pending_items.has(item.id) ? 'i-lucide-loader-circle' : workflow_problem(item) ? 'i-lucide-triangle-alert' : item.disabled ? 'i-lucide-circle-pause' : 'i-lucide-network'" :class="{ 'animate-spin': pending_items.has(item.id) }" /><span>{{ item.label }}</span>
+            <small class="channel-room-time">{{ item.error ? '无法读取' : item.disabled ? '已停用' : item.unavailable?.length ? `${item.unavailable.length} 张卡片不可用` : `${item.cards} 位成员` }}</small></button>
           <div v-if="available && renaming !== item.id" class="channel-room-actions">
             <UDropdownMenu :disabled="pending_items.has(item.id)" :items="library.item_menu(item)" :content="{ align: 'start', side: 'bottom', sideOffset: 6 }" :ui="{ content: 'channel-menu channel-topic-menu' }"><UButton icon="i-lucide-ellipsis" :disabled="pending_items.has(item.id)" :aria-label="`「${item.label}」的更多操作`" title="更多操作" size="xs" color="neutral" variant="ghost" /></UDropdownMenu>
           </div>

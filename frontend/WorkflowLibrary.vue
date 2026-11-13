@@ -6,10 +6,11 @@
  * Works with or without a room open; enabling a workflow in a room stays with the message box's "/" and the side panel.
  * A workflow may hold sub-workflows: the list under the toolbar switches the canvas and SKILL.md to one of them.
  */
-import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from "vue";
+import { computed, inject, nextTick, onBeforeUnmount, onMounted, ref, watch } from "vue";
 import WorkflowCanvas from "./WorkflowCanvas.vue";
 import WorkflowEditor from "./WorkflowEditor.vue";
 import WorkflowParts from "./WorkflowParts.vue";
+import WorkflowExperts from "./WorkflowExperts.vue";
 import { use_workflow_library } from "./workflow-library.js";
 
 const library = use_workflow_library();
@@ -30,6 +31,14 @@ const follow_stacked = (event) => { stacked.value = event.matches; };
 stacked_media.addEventListener("change", follow_stacked);
 onBeforeUnmount(() => stacked_media.removeEventListener("change", follow_stacked));
 const canvas = ref(null);
+// 专家配置: one table for every card's software, model, strength and access; marked when a card's software is not set up here.
+const { view } = inject("discussion");
+const experts_open = ref(false);
+const experts_missing = computed(() => {
+  const ready = view.value.launch.card_platforms || [];
+  const cards = draft.value ? [draft.value, ...subs.value].flatMap((part) => part.agents) : [];
+  return ready.length > 0 && cards.some((agent) => !ready.includes(agent.name.slice(0, agent.name.length - agent.card.length - 1)));
+});
 // The canvas was laid out hidden; place its view once it shows.
 watch(pane, (value) => { if (value === "canvas") nextTick(() => requestAnimationFrame(() => canvas.value?.fit())); });
 watch(skill_request, () => show_skill_text());
@@ -104,6 +113,8 @@ function start_resize(event) {
         :shared="scope ? draft.agents : null" :subs="scope ? null : subs" :new-sub="() => library.add_sub(false)"
         @update:shared="(value) => { draft.agents = value; }" @open-sub="library.enter_sub" @open-skill="show_skill_text">
         <template #actions="{ iconsOnly }">
+          <UTooltip :text="experts_missing ? '专家配置：有卡片的软件本机未配置' : '专家配置：每张卡片的软件、模型、强度与项目权限'"><span class="workflow-library-save">
+            <UButton :icon="experts_missing ? 'i-lucide-triangle-alert' : 'i-lucide-sliders-horizontal'" :label="iconsOnly ? undefined : '专家配置'" aria-label="专家配置" size="sm" :color="experts_missing ? 'warning' : 'neutral'" variant="ghost" @click="experts_open = true" /></span></UTooltip>
           <UTooltip v-if="!skill_open && !stacked" text="展开 SKILL.md：主持人照它派活"><UButton icon="i-lucide-panel-right-open" :label="iconsOnly ? undefined : 'SKILL.md'" aria-label="展开 SKILL.md" size="sm" color="neutral" variant="ghost" @click="set_skill_open(true)" /></UTooltip>
           <UTooltip :text="dirty ? '保存（Ctrl+S）：有未保存的修改' : '没有未保存的修改'"><span class="workflow-library-save">
             <UButton icon="i-lucide-save" :label="iconsOnly ? undefined : '保存'" aria-label="保存" :size="stacked ? 'xs' : 'sm'" class="channel-primary-button" :disabled="!dirty" :loading="busy" @click="library.save()" />
@@ -111,6 +122,7 @@ function start_resize(event) {
         </template>
       </WorkflowCanvas>
       <WorkflowParts v-if="draft" :compact="stacked" />
+      <WorkflowExperts v-if="draft" v-model:open="experts_open" />
       <template v-else-if="loading">
         <WorkflowCanvas v-model:flow="placeholder.flow" v-model:agents="placeholder.agents" :compact="stacked" class="workflow-library-placeholder" inert />
         <div class="workflow-library-loading" role="status"><UIcon name="i-lucide-loader-circle" class="animate-spin" /><span>{{ loading }}</span></div>

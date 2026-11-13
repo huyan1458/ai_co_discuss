@@ -505,14 +505,19 @@ export function read_workflow_files(files) {
 }
 
 /** Summaries for the library list; a broken folder is listed with its error instead of hiding it. */
-export function list_workflows(home) {
+export function list_workflows(home, card_ready = null) {
   return with_workflow_lock(home, () => {
     const disabled = disabled_workflows(home);
     return readdirSync(workflows_home(home)).filter(name => WORKFLOW_ID_PATTERN.test(name)).sort().map(id => {
       const flag = disabled.includes(id) ? { disabled: true } : {};
       try {
         const workflow = read_saved_workflow(home, id);
-        return { id, label: workflow.label || id, description: workflow.description, cards: workflow.agents.length, directory: workflow.directory, ...flag };
+        // Cards whose software this computer has not set up: the workflow cannot bring them until they change platform.
+        const unavailable = card_ready ? workflow_cards(workflow).filter(agent => !card_ready(agent.name)).map(agent => ({
+          card: agent.card, label: agent.label || agent.card, platform: agent.name.slice(0, agent.name.length - agent.card.length - 1),
+          ...(agent.sub_workflow ? { sub_workflow: agent.sub_workflow } : {}) })) : [];
+        return { id, label: workflow.label || id, description: workflow.description, cards: workflow.agents.length, directory: workflow.directory,
+          ...(unavailable.length ? { unavailable } : {}), ...flag };
       } catch (error) { return { id, label: id, description: '', cards: 0, error: error.message, ...flag }; }
     });
   });
