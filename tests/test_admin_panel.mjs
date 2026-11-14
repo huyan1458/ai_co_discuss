@@ -318,3 +318,17 @@ test('waiting for a restarted instance keeps to its time limit even when each ch
     conforms: async () => { await slow(600); return false; } }), /没有按入口保护启动起来/);
   assert.ok(Date.now() - started < 1700, `gave up after ${Date.now() - started} ms`);
 });
+
+test('setup sets the entry up only when hosting is asked for, and keeps it to this computer without a domain', async () => {
+  const { configure_hosting, hosting_requested } = await import('../runner/hosting_setup.mjs');
+  const { entry_settings } = await import('../gateway/gateway.mjs');
+  // The panel's update runs `setup --yes` without --hosting: it must not turn the entry or starting with Windows back on.
+  assert.equal(hosting_requested({ yes: true }, true), false);
+  assert.equal(hosting_requested({ hosting: true }, true), process.platform === 'win32');
+  const data = mkdtempSync(join(tmpdir(), 'hosting-'));
+  folders.push(data);
+  const result = configure_hosting(data, { hosting: true, 'entry-port': '8790' }, { interactive: false });
+  assert.deepEqual({ ...entry_settings(data) }, { port: 8790, public_url: '', running: true, tunnel: null });
+  // No launcher in a fresh folder: starting with Windows is left for the owner, and said so.
+  assert.ok(result.issues.some(issue => issue.includes('登录自启')));
+});

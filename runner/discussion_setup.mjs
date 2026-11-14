@@ -13,6 +13,7 @@ import { assert_shared_home, service_home } from './discussion_service.mjs';
 import { SKILLS, install_skills, install_workflows, remove_legacy_skills, shipped_workflows } from './discussion_skills.mjs';
 import { ask, checkbox_prompt, intro, outro, pad, short_path, spinner, step, styled, text_width, tone, tree_prompt } from './discussion_tui.mjs';
 import { launcher_installed } from './launcher.mjs';
+import { configure_hosting, finish_hosting, hosting_requested } from './hosting_setup.mjs';
 export { checkbox_prompt } from './discussion_tui.mjs';
 
 const ROOT = fileURLToPath(new URL('../', import.meta.url));
@@ -36,7 +37,8 @@ const CLIENTS = {
 const OPTIONS = { yes: { type: 'boolean' }, clients: { type: 'string' }, python: { type: 'string' },
   codex: { type: 'string' }, claude: { type: 'string' }, antigravity: { type: 'string' }, cursor: { type: 'string' },
   port: { type: 'string' }, prefix: { type: 'string' }, 'skills-home': { type: 'string' },
-  'no-start': { type: 'boolean' }, hosting: { type: 'boolean' }, 'no-hosting': { type: 'boolean' }, 'no-open': { type: 'boolean' }, workflows: { type: 'boolean' }, json: { type: 'boolean' }, help: { type: 'boolean', short: 'h' } };
+  'no-start': { type: 'boolean' }, hosting: { type: 'boolean' }, 'no-hosting': { type: 'boolean' }, 'no-open': { type: 'boolean' }, workflows: { type: 'boolean' }, json: { type: 'boolean' }, help: { type: 'boolean', short: 'h' },
+  'public-host': { type: 'string' }, 'tunnel-name': { type: 'string' }, 'entry-port': { type: 'string' } };
 const HELP = `用法：codiscuss install [选项] / codiscuss setup [选项]
 install 将当前 npm 包安装为持久命令，再运行 setup；setup 配置已有安装。
   --yes                     使用已检测且支持自动接入的软件，冲突保留并报告
@@ -47,7 +49,12 @@ install 将当前 npm 包安装为持久命令，再运行 setup；setup 配置�
   --no-start / --no-open     只配置 / 启动但不打开浏览器
   --prefix DIR              npm 安装前缀（install）
   --skills-home DIR         技能用户根目录（默认当前用户目录）
-  --hosting / --no-hosting  在管理面板中显示 / 隐藏托管管理（用户、Windows 用户、命令行登录、API 密钥），选择会记住
+  --hosting / --no-hosting  在管理面板中显示 / 隐藏托管管理（用户、Windows 用户、命令行登录、API 密钥），选择会记住；
+                            Windows 上加 --hosting 时还会设好登录入口（随管理面板启动）、开启登录自启，并检查入口能否打开
+  --entry-port PORT         登录入口端口，默认 8780
+  --public-host 域名         外网地址（可选），如 ai.example.com：域名须已托管在 Cloudflare；会安装 cloudflared、
+                            在浏览器里授权 Cloudflare、建固定隧道并添加域名记录，隧道由管理面板运行
+  --tunnel-name NAME        Cloudflare 隧道名，默认 codiscuss
   --workflows               安装全部随包工作流，已有同名的覆盖为最新版（原来的先备份到服务目录 backups/）；
                             交互运行时也可在“安装配置”里逐个勾选；不选则不安装，选择不会记住
 Antigravity（显示名 Gemini）使用 agy；Grok 使用 Cursor CLI（agent / cursor-agent）。仅检测 CLI。
@@ -442,9 +449,18 @@ async function setup(options) {
       work.done('“共议”快捷方式已就绪', [tone.dim(short_path(launcher.shortcuts[0]))]);
     } catch (error) { launcher_error = error.message; work.fail(error.message); }
   }
+  // Hosting asked for: the entry, its optional outside address and starting with Windows, before the service starts.
+  const hosting_setup = hosting_requested(options, choices.hosting);
+  let hosting = null;
+  if (hosting_setup) {
+    // No spinner: installing cloudflared and signing in to Cloudflare print and wait for the owner.
+    hosting = configure_hosting(home, options, { say: line => process.stderr.write(`${line}\n`) });
+    step(hosting.issues.length ? '登录入口已设置，有待处理项' : '登录入口已设置', [...hosting.lines, ...hosting.issues]);
+  }
   const result = { home, python, clients: selected.map(item => item.name), ...configured, workflows, ...(choices.hosting ? { hosting: true } : {}),
-    command: check_command(), ai_verified: false, ...(pi ? { pi: pi.version } : {}), ...(launcher ? { launcher: launcher.shortcuts[0] } : {}) };
-  result.issues = setup_issues(result);
+    command: check_command(), ai_verified: false, ...(pi ? { pi: pi.version } : {}), ...(launcher ? { launcher: launcher.shortcuts[0] } : {}),
+    ...(hosting ? { hosting_setup: hosting.lines } : {}) };
+  result.issues = [...setup_issues(result), ...(hosting?.issues || [])];
   if (pi_error) result.issues.push(`Pi 安装失败（${pi_error}）；模型 API 成员首次执行时会再试，或检查网络与 npm 后重新运行 setup。`);
   if (launcher_error) result.issues.push(`未能创建“共议”快捷方式（${launcher_error}）；可稍后运行 codiscuss launcher 重试。`);
   result.configured = result.issues.length === 0;
@@ -464,6 +480,13 @@ async function setup(options) {
       result.local = await local_main([options['no-open'] ? 'start' : 'open'], () => {});
       launch.done('网站与讨论服务已在后台运行', [`${tone.cyan(result.local.url)}${options['no-open'] ? tone.dim('  未打开浏览器，可直接访问此地址') : tone.dim('  已在浏览器打开')}`]);
       if (result.configured) result.status = 'ready';
+      if (hosting_setup) {
+        const check = spinner('重启管理面板并检查登录入口（外网检查最多 2 分钟）');
+        const checked = await finish_hosting(home);
+        check.done(checked.issues.length ? '登录入口检查未全部通过' : '登录入口检查通过', [...checked.lines, ...checked.issues]);
+        result.hosting_setup.push(...checked.lines);
+        if (checked.issues.length) { result.issues.push(...checked.issues); result.configured = false; result.status = 'needs_attention'; }
+      }
     } catch (error) {
       launch.fail(error.message);
       result.status = 'start_failed';
@@ -496,6 +519,7 @@ function report_setup(result, options = {}) {
   if (result.workflows.length) lines.push(`内置工作流：${workflow_summary(result.workflows)}`);
   if (result.launcher) lines.push(`快捷方式：${result.launcher}（双击启动共议）`);
   if (result.hosting) lines.push('托管管理：已打开，在管理面板中可用');
+  for (const line of result.hosting_setup || []) lines.push(`托管：${line}`);
   if (result.command.path) lines.push(`持久命令：${result.command.path}（${result.command.status}）`);
   if (result.local?.running) {
     lines.push(`本机网站：${result.local.url}${options['no-open'] ? '' : '（已在浏览器打开）'}`,
@@ -523,6 +547,7 @@ function report_styled(result, options) {
   if (result.workflows.length) rows.push(['工作流', workflow_summary(result.workflows), '']);
   if (result.launcher) rows.push(['快捷方式', '双击“共议”启动', short_path(result.launcher)]);
   if (result.hosting) rows.push(['托管管理', '已打开', '在管理面板中可用']);
+  for (const line of result.hosting_setup || []) rows.push(['托管', line, '']);
   if (result.command.path) rows.push(['命令', `codiscuss ${tone.dim(`(${result.command.status})`)}`, short_path(result.command.path)]);
   const notes = result.issues.map(issue => tone.yellow(`▲ ${issue}`));
   if (result.local?.running) {

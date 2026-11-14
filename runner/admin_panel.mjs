@@ -21,6 +21,7 @@ import { account_home, add_account, data_home, entry_settings, entry_status, ins
 import { verified_connection } from './entry_client.mjs';
 import { API_PROVIDERS, save_api_key } from './discussion_api.mjs';
 import { STT_PROVIDERS, TTS_PROVIDERS } from './tts_providers.mjs';
+import { ensure_tunnel, tunnel_status } from './hosting_tunnel.mjs';
 import { apply_login, cancel_login, LOGIN_METHODS, login_progress, login_status, logout, start_login, submit_login } from './cli_login.mjs';
 import { create_os_user, install_shared_runtime, instance_key_file, place_instance_key, read_os_users, remove_os_user, run_as_user, shared_cli_state, shared_executables, shared_paths,
   start_instance_as_user } from './os_users.mjs';
@@ -48,6 +49,9 @@ const STATE_FILE = 'admin-panel.json';
 const UPDATE_JOB_FILE = 'panel-update.json';
 const UPDATE_STALE_MS = 10 * 60 * 1000;
 const OWNER_ENV_TIMEOUT_MS = 120_000;
+// How often the panel makes sure the entry's tunnel runs as set, and how long an update waits for the entry to be back.
+const TUNNEL_CHECK_MS = 60_000;
+const ENTRY_BACK_MS = 15_000;
 // Hosted accounts' failures, relayed to the owner's Weixin: how often, how far each account's outbox was read, and limits
 // on what one notice carries (the outbox is in the account's own folder, so its text is the account's, not ours).
 const RELAY_MS = 30_000;
@@ -144,6 +148,8 @@ async function begin_update(data, version, hand_over) {
   write_update_job(data, job);
   (async () => {
     await update_step(job.steps, '已停止本机服务', () => run_owner_service(data, 'stop'));
+    // The entry runs the package's code too: stopped here, the installed panel starts it again on the new version.
+    if (hosting_enabled(data) && (await entry_status(data)).running) await update_step(job.steps, '已停止登录入口', () => stop_entry(data));
     for (const account of running) if (!account.os_user) await update_step(job.steps, `已停止 ${account.name} 的实例`, () => run_instance(data, account.name, 'stop'));
     const updater = join(data, 'update', 'panel_updater.mjs');
     mkdirSync(dirname(updater), { recursive: true });
@@ -173,6 +179,11 @@ async function finish_update(data) {
     if (error.code !== 2) throw error;
   }));
   await update_step(steps, '已启动本机服务', () => run_owner_service(data, 'start'));
+  // The panel itself starts an entry left on (run_panel); the report says once it serves again.
+  if (hosting_enabled(data) && entry_settings(data).running) await update_step(steps, '已重新启动登录入口', async () => {
+    for (let waited = 0; waited < ENTRY_BACK_MS; waited += 500) { if ((await entry_status(data)).running) return; await new Promise(done => setTimeout(done, 500)); }
+    throw new Error('入口没有重新启动，在“概览”页“托管”下点“启动”看原因');
+  });
   if (hosting_enabled(data)) {
     if (installed) await update_step(steps, '已同步隔离账号的程序副本', () => { const result = install_runtime(data); if (result.warnings.length) throw new Error(result.warnings.join('；')); });
     for (const account of await list_accounts(data)) {
@@ -552,7 +563,7 @@ export function create_panel({ data, key, port, ops = {}, sessions = new Set() }
   const op = { list_accounts, add_account, reset_password, set_account_disabled, remove_account, run_instance, create_os_user, remove_os_user,
     login_status, apply_login, logout, start_login, login_progress, submit_login, cancel_login, install_runtime, prepare_account, account_env, account_skills, account_workflows, owner_env, owner_skills, owner_prompts, save_owner_prompt, shared_cli_state,
     save_api_key, list_keys, remove_key, use_shared_programs, service_overview, run_owner_service, latest_version, begin_update,
-    autostart_enabled, set_autostart, entry_overview, start_entry, stop_entry, protect_account, start_verified, hand_over: () => {}, ...ops };
+    autostart_enabled, set_autostart, entry_overview, start_entry, stop_entry, keep_tunnel, protect_account, start_verified, hand_over: () => {}, ...ops };
   const hosts = new Set([`127.0.0.1:${port}`, `localhost:${port}`]);
 
   async function api(method, path, body) {
@@ -622,6 +633,8 @@ export function create_panel({ data, key, port, ops = {}, sessions = new Set() }
     if (method === 'POST' && section === 'entry' && (name === 'start' || name === 'stop')) {
       await (name === 'start' ? op.start_entry(data) : op.stop_entry(data));
       save_entry_settings(data, { running: name === 'start' });
+      // Its tunnel goes with it.
+      await op.keep_tunnel(data);
       return op.entry_overview(data);
     }
     if (method === 'POST' && section === 'entry' && name === 'settings') { save_entry_settings(data, { public_url: body.public_url }); return op.entry_overview(data); }
@@ -703,9 +716,16 @@ export function create_panel({ data, key, port, ops = {}, sessions = new Set() }
 }
 
 /** The account entry as the hosting page shows it: whether it runs, its loopback port and the address customers open. */
+/** Keep the entry's tunnel as the settings say: running while hosting is on and the entry is meant to run. */
+function keep_tunnel(data) {
+  const { tunnel, port, running } = entry_settings(data);
+  return ensure_tunnel(data, hosting_enabled(data) ? tunnel : null, port, running);
+}
+
 async function entry_overview(data) {
-  const { port, public_url } = entry_settings(data), status = await entry_status(data);
-  return { running: status.running, port: status.running ? status.port : port, public_url };
+  const { port, public_url, tunnel } = entry_settings(data), status = await entry_status(data);
+  return { running: status.running, port: status.running ? status.port : port, public_url,
+    tunnel: tunnel ? { host: tunnel.host, ...(await tunnel_status(data)) } : null };
 }
 
 // ---- Hosted accounts' failures, to the owner's Weixin ----
@@ -917,8 +937,13 @@ function run_panel(data, port) {
     setTimeout(() => process.exit(0), 300);
   };
   const server = create_panel({ data, key: state.key, port, ops: { hand_over }, sessions });
-  // An entry left on starts again with the panel (only the entry: the accounts' instances and the HTTPS tunnel are separate).
+  // An entry left on starts again with the panel (only the entry: the accounts' instances are separate).
   if (hosting_enabled(data) && entry_settings(data).running) start_entry(data).catch(error => process.stderr.write(`入口没有启动：${error.message}\n`));
+  // The entry's outside address runs on its own; the panel keeps it as set now and every minute (restarted if it stopped
+  // or its settings changed, stopped when the entry is off).
+  const keep = () => keep_tunnel(data).catch(error => process.stderr.write(`隧道：${error.message}\n`));
+  keep();
+  const keeper = setInterval(keep, TUNNEL_CHECK_MS);
   // Hosted accounts' failures reach the owner's Weixin; one pass at a time.
   let relaying = false;
   const relay = setInterval(() => {
@@ -952,6 +977,8 @@ function run_panel(data, port) {
   } });
   function shutdown(exit = true) {
     clearInterval(relay);
+    // The tunnel runs on without the panel, like the entry.
+    clearInterval(keeper);
     tray?.close();
     server.close();
     if (read_state(data)?.pid === process.pid) rmSync(state_path(data), { force: true });

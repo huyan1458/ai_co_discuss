@@ -506,16 +506,18 @@ function run_instance(data, name, command) {
 /** The entry's saved settings: the loopback port it listens on and the public address customers open. */
 export function entry_settings(data) {
   const saved = read_json(join(data, ENTRY_SETTINGS_FILE));
+  const tunnel = saved.tunnel && typeof saved.tunnel === 'object' && ['name', 'host', 'id', 'credentials'].every(key => saved.tunnel[key]) ? saved.tunnel : null;
   return { port: Number.isInteger(saved.port) ? saved.port : DEFAULT_ENTRY_PORT, public_url: typeof saved.public_url === 'string' ? saved.public_url : '',
-    running: saved.running === true };
+    running: saved.running === true, tunnel };
 }
 
 /**
  * Save part of the entry's settings.
  *
  * Args:
- *   changes: `port` (1–65535), `public_url` (an https address, kept as its origin; empty clears it) and `running`, the
- *     state the panel restores when it starts again.
+ *   changes: `port` (1–65535), `public_url` (an https address, kept as its origin; empty clears it), `running`, the
+ *     state the panel restores when it starts again, and `tunnel`, the Cloudflare tunnel the panel runs for the outside
+ *     address ({ name, host, id, credentials } from hosting_tunnel.mjs, or null for none).
  *
  * Returns:
  *   The settings as saved.
@@ -529,6 +531,7 @@ export function save_entry_settings(data, changes) {
   }
   if (changes.public_url !== undefined) next.public_url = public_origin(changes.public_url);
   if (changes.running !== undefined) next.running = Boolean(changes.running);
+  if (changes.tunnel !== undefined) next.tunnel = changes.tunnel || null;
   write_json(join(data, ENTRY_SETTINGS_FILE), next);
   return next;
 }
