@@ -11,7 +11,7 @@ import { spawn, spawnSync } from 'node:child_process';
 import { randomBytes } from 'node:crypto';
 import { closeSync, copyFileSync, cpSync, existsSync, mkdirSync, mkdtempSync, openSync, realpathSync, readdirSync, readFileSync, readSync, renameSync, rmSync, statSync, writeFileSync } from 'node:fs';
 import http from 'node:http';
-import { tmpdir } from 'node:os';
+import { homedir, tmpdir } from 'node:os';
 import { dirname, extname, join, resolve } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import { parseArgs } from 'node:util';
@@ -20,6 +20,7 @@ import { account_home, add_account, data_home, entry_settings, entry_status, ins
   instance_key, set_account_disabled, set_account_protected, start_entry, stop_entry } from '../gateway/gateway.mjs';
 import { verified_connection } from './entry_client.mjs';
 import { API_PROVIDERS, save_api_key } from './discussion_api.mjs';
+import { STT_PROVIDERS, TTS_PROVIDERS } from './tts_providers.mjs';
 import { apply_login, cancel_login, LOGIN_METHODS, login_progress, login_status, logout, start_login, submit_login } from './cli_login.mjs';
 import { create_os_user, install_shared_runtime, instance_key_file, place_instance_key, read_os_users, remove_os_user, run_as_user, shared_cli_state, shared_executables, shared_paths,
   start_instance_as_user } from './os_users.mjs';
@@ -105,8 +106,8 @@ export function newer_version(a, b) {
 /** Run a command to its end, failing with the last of its output. */
 function run_command(command, args) {
   return new Promise((done, fail) => {
-    // npm is a .cmd on Windows, which only a shell runs.
-    const child = spawn(command, args, { shell: process.platform === 'win32', windowsHide: true, stdio: ['ignore', 'pipe', 'pipe'] });
+    // No shell: an unquoted path with a space (C:\Program Files\nodejs\node.exe) would be cut at the space.
+    const child = spawn(command, args, { windowsHide: true, stdio: ['ignore', 'pipe', 'pipe'] });
     let output = '';
     child.stdout.on('data', chunk => { output = (output + chunk).slice(-4000); });
     child.stderr.on('data', chunk => { output = (output + chunk).slice(-4000); });
@@ -372,6 +373,46 @@ function owner_env(action, request = {}, folders = {}) {
   } finally { rmSync(job, { recursive: true, force: true }); }
 }
 
+// The owner's system prompts: one file per program, often hard links to one file (the layout account_env.mjs sets up).
+const OWNER_PROMPTS = [['claude', 'Claude Code', ['.claude', 'CLAUDE.md']], ['codex', 'Codex', ['.codex', 'AGENTS.md']],
+  ['agy', 'Antigravity', ['.gemini', 'config', 'AGENTS.md']]];
+
+/** A file's identity, the same for its hard links; '' when it does not exist. */
+function file_id(path) {
+  try { const stat = statSync(path, { bigint: true }); return `${stat.dev}:${stat.ino}`; } catch { return ''; }
+}
+
+/**
+ * The owner's system prompts, grouped by file: hard links to one file form one group, edited once. Each group is
+ * { key, programs: [{ key, label, path }], exists, text }; `key` is the first program's, for saving.
+ */
+export function owner_prompts(home = homedir()) {
+  const groups = [];
+  for (const [key, label, parts] of OWNER_PROMPTS) {
+    const path = join(home, ...parts), id = file_id(path);
+    const group = id && groups.find(item => item.id === id);
+    const shown = join('~', ...parts);
+    if (group) { group.programs.push({ key, label, path: shown }); continue; }
+    groups.push({ id, key, programs: [{ key, label, path: shown }], exists: Boolean(id), text: id ? readFileSync(path, 'utf8') : '' });
+  }
+  return groups.map(({ id: _id, ...group }) => group);
+}
+
+/**
+ * Save one of the owner's system prompts in place, which keeps its hard links. `original` is the text the page read: a
+ * file changed since (edited elsewhere) is refused rather than overwritten.
+ */
+export function save_owner_prompt(key, text, original, home = homedir()) {
+  const entry = OWNER_PROMPTS.find(([name]) => name === key);
+  if (!entry) throw new Error(`未知程序：${key}`);
+  const path = join(home, ...entry[2]);
+  const current = existsSync(path) ? readFileSync(path, 'utf8') : '';
+  if (current !== String(original ?? '')) throw Object.assign(new Error('文件已在别处被修改，请重新读取后再编辑'), { status: 409 });
+  mkdirSync(dirname(path), { recursive: true });
+  writeFileSync(path, String(text ?? ''));
+  return owner_prompts(home);
+}
+
 function owner_skills(data, { install = [], remove = [] } = {}) {
   return owner_env('skills', { remove }, library_folders(data, install));
 }
@@ -437,6 +478,18 @@ function run_instance(data, name, command) {
 const KEY_FILE = /^[a-f0-9-]{36}\.json$/i;
 
 /** The keys saved in an instance, newest first, with only the last characters of each key. */
+/**
+ * What a saved key is for when it belongs to a speech service, read from its address: the speech services keep their keys
+ * in the same folder as the model API keys. Returns { label, uses: ['语音朗读' | '语音识别'], local } or null.
+ */
+export function key_use(base_url) {
+  const root = String(base_url || '').replace(/\/+$/, '');
+  const match = list => list.find(item => [item.key_base_url, item.legacy_key_base_url].some(url => url && url.replace(/\/+$/, '') === root));
+  const speak = match(TTS_PROVIDERS), listen = match(STT_PROVIDERS), provider = speak || listen;
+  if (!provider) return null;
+  return { label: provider.local ? '本机语音服务' : provider.label, uses: [speak && '语音朗读', listen && '语音识别'].filter(Boolean), local: Boolean(provider.local) };
+}
+
 export function list_keys(service) {
   const directory = join(service, 'api-keys');
   if (!existsSync(directory)) return [];
@@ -444,7 +497,8 @@ export function list_keys(service) {
     const path = join(directory, name);
     try {
       const saved = JSON.parse(readFileSync(path, 'utf8'));
-      return { ref: name.slice(0, -5), base_url: saved.base_url, managed: saved.managed === true, tail: String(saved.api_key || '').slice(-4), time: statSync(path).mtimeMs };
+      return { ref: name.slice(0, -5), base_url: saved.base_url, managed: saved.managed === true, tail: String(saved.api_key || '').slice(-4), time: statSync(path).mtimeMs,
+        speech: key_use(saved.base_url) };
     } catch { return null; }
   }).filter(Boolean).sort((left, right) => right.time - left.time);
 }
@@ -485,7 +539,7 @@ function cookie(request, name) {
  */
 export function create_panel({ data, key, port, ops = {}, sessions = new Set() }) {
   const op = { list_accounts, add_account, reset_password, set_account_disabled, remove_account, run_instance, create_os_user, remove_os_user,
-    login_status, apply_login, logout, start_login, login_progress, submit_login, cancel_login, install_runtime, prepare_account, account_env, account_skills, owner_env, owner_skills, shared_cli_state,
+    login_status, apply_login, logout, start_login, login_progress, submit_login, cancel_login, install_runtime, prepare_account, account_env, account_skills, owner_env, owner_skills, owner_prompts, save_owner_prompt, shared_cli_state,
     save_api_key, list_keys, remove_key, use_shared_programs, service_overview, run_owner_service, latest_version, begin_update,
     autostart_enabled, set_autostart, entry_overview, start_entry, stop_entry, protect_account, start_verified, hand_over: () => {}, ...ops };
   const hosts = new Set([`127.0.0.1:${port}`, `localhost:${port}`]);
@@ -534,6 +588,8 @@ export function create_panel({ data, key, port, ops = {}, sessions = new Set() }
     if (section === 'owner') {
       if (method === 'GET' && name === 'env') return op.owner_env('status');
       if (method === 'POST' && name === 'env' && action === 'skills') return op.owner_skills(data, { install: body.install || [], remove: body.remove || [] });
+      if (method === 'GET' && name === 'prompts') return op.owner_prompts();
+      if (method === 'POST' && name === 'prompts') return op.save_owner_prompt(String(body.key || ''), body.text, body.original);
       if (method === 'GET' && name === 'keys') return op.list_keys(data);
       if (method === 'POST' && name === 'keys' && action === 'remove') { op.remove_key(data, String(body.ref || '')); return { ok: true }; }
       if (method === 'POST' && name === 'keys') return op.save_api_key(data, { base_url: body.base_url, api_key: body.api_key });
@@ -624,7 +680,7 @@ export function create_panel({ data, key, port, ops = {}, sessions = new Set() }
       response.end(readFileSync(file));
     } catch (error) {
       if (response.headersSent) response.destroy();
-      else send_json(response, 400, { error: error.message });
+      else send_json(response, error.status || 400, { error: error.message });
     }
   });
 }

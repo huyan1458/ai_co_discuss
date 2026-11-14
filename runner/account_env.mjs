@@ -113,7 +113,8 @@ function describe(folder) {
 }
 
 function status() {
-  const skills = existsSync(SKILLS_DIR) ? readdirSync(SKILLS_DIR, { withFileTypes: true }).filter(entry => entry.isDirectory() || entry.isSymbolicLink())
+  // Hidden folders (Codex keeps its own under .system) are not skills of this account.
+  const skills = existsSync(SKILLS_DIR) ? readdirSync(SKILLS_DIR, { withFileTypes: true }).filter(entry => (entry.isDirectory() || entry.isSymbolicLink()) && !entry.name.startsWith('.'))
     .map(entry => ({ name: entry.name, discussion: SKILLS.includes(entry.name), description: describe(join(SKILLS_DIR, entry.name)) })) : [];
   return { skills, prompt: existsSync(PROMPT) ? readFileSync(PROMPT, 'utf8') : '', layout: layout_status() };
 }

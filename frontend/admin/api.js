@@ -26,7 +26,7 @@ export function provider_icon(key) {
 /** The preset whose address a saved key belongs to, so the key list can show its name and icon. */
 export function provider_of(providers, base_url) {
   const found = Object.entries(providers).find(([key, provider]) => key !== "OpenAI" && provider.base_url && provider.base_url === base_url);
-  return found ? { key: found[0], ...found[1] } : { key: "Custom", label: "自定义地址" };
+  return found ? { key: found[0], ...found[1] } : { key: "Custom", label: "自定义接口" };
 }
 
 /** The address a hosted account's person opens: the entry's public address, else its address on this computer. */

@@ -127,8 +127,8 @@ async function copy(text) {
       <article class="panel-card is-tall">
         <LoginCard v-if="account.os_user" :target="account.name" :who="`托管账号 ${account.name}`" />
         <div v-else class="detail-shared">
-          <p class="panel-note" style="margin: 0; flex: 1"><UIcon name="i-lucide-info" />命令行登录与管理员共用：未隔离的账号用你自己的登录。隔离后它才有自己的一份。</p>
-          <button type="button" class="panel-button is-outline is-small" @click="emit('owner')">查看“我”的登录</button>
+          <p class="panel-note" style="margin: 0; flex: 1"><UIcon name="i-lucide-info" />未隔离账号与管理员共用命令行登录；隔离后将使用独立登录。</p>
+          <button type="button" class="panel-button is-outline is-small" @click="emit('owner')">查看管理员登录</button>
         </div>
       </article>
 
@@ -137,7 +137,7 @@ async function copy(text) {
         <div class="panel-tile"><UIcon name="i-lucide-sparkles" /></div>
         <div class="panel-main">
           <div class="panel-title">技能与工作流</div>
-          <span class="panel-sub" style="white-space: normal">技能和系统提示词与管理员共用，在“我”里查看。这里只补上它工作流库里还没有的随包工作流（已有的不覆盖）。</span>
+          <span class="panel-sub" style="white-space: normal">未隔离账号与管理员共用技能与系统提示词，可在“管理员”中查看。此处仅补装该账号缺少的随包工作流，不覆盖已有工作流。</span>
         </div>
         <div class="panel-side">
           <button type="button" class="panel-button is-outline is-small" :disabled="Boolean(busy)" @click="act('env/init', skills_message)">

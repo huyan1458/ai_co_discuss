@@ -126,7 +126,7 @@ watch(refreshed, () => check(true));
 
   <UModal :open="confirming" title="更新共议" :description="`从 v${update?.current} 更新到 v${update?.latest}`" @update:open="(open) => !open && (confirming = false)">
     <template #body>
-      <p class="panel-note"><UIcon name="i-lucide-info" />会用 npm 安装新版本，更新你的房间技能，再重启本机网站与讨论服务。{{ state.hosting ? "隔离账号的程序副本和技能也会一起更新，运行中的实例会重启。" : "" }}进行中的讨论会暂停、执行会中断，随后在原会话里自动续跑。工作流不会被覆盖。</p>
+      <p class="panel-note"><UIcon name="i-lucide-info" />将通过 npm 安装新版本，更新共议内置技能，并重启本机网站与讨论服务。{{ state.hosting ? "隔离账号的程序副本和技能也会一起更新，运行中的实例会重启。" : "" }}进行中的讨论会暂停、执行会中断，随后在原会话里自动续跑。工作流不会被覆盖。</p>
       <div class="panel-form-foot">
         <button type="button" class="panel-button is-plain" @click="confirming = false">取消</button>
         <button type="button" class="panel-button is-primary" @click="install">更新并重启</button>
@@ -146,8 +146,8 @@ watch(refreshed, () => check(true));
 
 <style scoped>
 .update-steps { display: flex; flex-direction: column; gap: 10px; margin: 0; padding: 0; list-style: none; font-size: 14px; }
-.update-steps li { display: flex; align-items: center; gap: 8px; }
-.update-steps li > [class*="icon"] { width: 16px; height: 16px; flex-shrink: 0; color: var(--panel-green); }
+.update-steps li { display: flex; align-items: flex-start; gap: 8px; overflow-wrap: anywhere; }
+.update-steps li > [class*="icon"] { width: 16px; height: 16px; flex-shrink: 0; margin-top: 2px; color: var(--panel-green); }
 .update-steps li.is-failed { color: #dc2626; }
 .update-steps li.is-failed > [class*="icon"] { color: #dc2626; }
 </style>

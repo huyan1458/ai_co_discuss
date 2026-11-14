@@ -1,6 +1,6 @@
 <script setup>
 /**
- * Accounts, one at a time: a column listing the owner ("我") and, with hosting on, every hosted account and "新建账号";
+ * Accounts, one at a time: a column listing the owner ("管理员") and, with hosting on, every hosted account and "新建账号";
  * beside it everything about the chosen one (its sign-ins, API keys, skills, and for a hosted account its site,
  * isolation and protection), or the creation wizard.
  */
@@ -28,7 +28,7 @@ function todo(account) {
     <nav class="accounts-side" aria-label="账号">
       <button type="button" class="accounts-item" :class="{ 'is-active': current === OWNER }" @click="chosen = OWNER">
         <span class="accounts-avatar is-owner"><UIcon name="i-lucide-user-cog" /></span>
-        <span class="accounts-text"><strong>我</strong><small>管理员 · 这台电脑的主人</small></span>
+        <span class="accounts-text"><strong>管理员</strong><small>本机账号</small></span>
       </button>
       <template v-if="state.hosting">
         <div class="accounts-group">托管账号</div>
@@ -37,7 +37,7 @@ function todo(account) {
           <span class="accounts-text"><strong>{{ account.name }}</strong>
             <small :class="{ 'is-warn': todo(account) || account.disabled }">{{ account.disabled ? "已停用" : todo(account) ? `待处理：${todo(account)}` : "已隔离" }}</small></span>
         </button>
-        <p v-if="!state.accounts.length" class="accounts-empty">还没有托管账号。给别人开一个账号，对方就能用这台电脑上的 AI。</p>
+        <p v-if="!state.accounts.length" class="accounts-empty">暂无托管账号。创建后，对方可通过登录入口使用本机的 AI。</p>
         <button type="button" class="accounts-item is-new" :class="{ 'is-active': current === NEW }" @click="chosen = NEW">
           <span class="accounts-avatar"><UIcon name="i-lucide-plus" /></span><span class="accounts-text"><strong>新建账号</strong></span>
         </button>

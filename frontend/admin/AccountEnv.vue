@@ -32,9 +32,9 @@ watch(() => props.account, load);
 const library_names = computed(() => new Set(library.value.map((skill) => skill.name)));
 /** Where an installed skill came from, and whether it can be removed here (room skills stay; the owner's own too). */
 function source(skill) {
-  if (skill.discussion) return { label: "房间技能", tag: "is-blue", removable: false };
+  if (skill.discussion) return { label: "共议内置", tag: "is-blue", removable: false };
   if (library_names.value.has(skill.name)) return { label: "技能库", tag: "is-green", removable: true };
-  return { label: owner.value ? "自己装的" : "对方自己加的", tag: "is-gray", removable: !owner.value };
+  return { label: owner.value ? "手动安装" : "账号自行安装", tag: "is-gray", removable: !owner.value };
 }
 const installed = computed(() => [...(env.value?.skills || [])].sort((left, right) => Number(right.discussion) - Number(left.discussion) || left.name.localeCompare(right.name)));
 const installed_names = computed(() => new Set(installed.value.map((skill) => skill.name)));
@@ -72,7 +72,7 @@ function close_library() { library_open.value = false; load(); }
 <template>
   <div class="env">
     <div class="env-head">
-      <span>技能 <small>{{ owner ? "~\\.agents\\skills，Claude Code、Codex、Antigravity 共用" : "Claude Code、Codex、Antigravity 共用一份" }}</small></span>
+      <span>技能 <small>{{ owner ? "~\\.agents\\skills，由 Claude Code、Codex、Antigravity 共用" : "由 Claude Code、Codex、Antigravity 共用" }}</small></span>
       <span class="env-tools">
         <button type="button" class="panel-button is-outline is-small" @click="library_open = true"><UIcon name="i-lucide-library" />管理技能库</button>
         <button type="button" class="panel-icon-button" :class="{ 'is-spinning': loading }" :disabled="loading" title="重新读取" aria-label="重新读取" @click="load"><UIcon name="i-lucide-refresh-cw" /></button>
@@ -85,14 +85,14 @@ function close_library() { library_open.value = false; load(); }
       <div v-if="!owner" class="env-line">
         <UIcon :name="layout_ok ? 'i-lucide-circle-check' : 'i-lucide-circle-dashed'" :class="layout_ok ? 'is-ok' : 'is-warn'" />
         <div class="env-text"><strong>{{ layout_ok ? "AI 环境已初始化" : "AI 环境未初始化" }}</strong>
-          <small>{{ layout_ok ? "房间技能、系统提示词和随包工作流都已装好" : "初始化会装好房间技能、系统提示词和随包工作流" }}</small></div>
+          <small>{{ layout_ok ? "已安装共议内置技能、系统提示词与随包工作流" : "初始化将安装共议内置技能、系统提示词与随包工作流" }}</small></div>
         <button type="button" class="panel-button is-small" :class="layout_ok ? 'is-outline' : 'is-primary'" :disabled="Boolean(busy)" @click="init">
           <UIcon :name="busy === 'init' ? 'i-lucide-loader' : 'i-lucide-wand-sparkles'" :class="{ 'animate-spin': busy === 'init' }" />{{ layout_ok ? "重新初始化" : "初始化" }}</button>
       </div>
 
       <div class="env-block">
-        <strong>已安装 {{ installed.length }} 个</strong>
-        <p v-if="!installed.length" class="env-empty">还没有安装技能。</p>
+        <strong>已安装（{{ installed.length }}）</strong>
+        <p v-if="!installed.length" class="env-empty">暂无已安装技能。</p>
         <div v-for="skill in installed" :key="skill.name" class="env-skill">
           <span><b>{{ skill.name }}</b><em :class="source(skill).tag">{{ source(skill).label }}</em><small :title="skill.description">{{ skill.description || "（SKILL.md 没写描述）" }}</small></span>
           <button v-if="source(skill).removable" type="button" class="panel-button is-plain is-small" :disabled="Boolean(busy)" @click="change(skill.name, false)">
@@ -101,9 +101,9 @@ function close_library() { library_open.value = false; load(); }
       </div>
 
       <div class="env-block">
-        <strong>技能库里可添加的</strong>
-        <p v-if="!library.length" class="env-empty">技能库还是空的。点右上角“管理技能库”导入技能，再回到这里给账号安装。</p>
-        <p v-else-if="!available.length" class="env-empty">技能库里的技能都已安装。</p>
+        <strong>可从技能库安装</strong>
+        <p v-if="!library.length" class="env-empty">技能库为空。请先通过“管理技能库”导入技能。</p>
+        <p v-else-if="!available.length" class="env-empty">技能库中的技能均已安装。</p>
         <div v-for="skill in available" :key="skill.name" class="env-skill">
           <span><b>{{ skill.name }}</b><small :title="skill.description">{{ skill.description || "（SKILL.md 没写描述）" }}</small></span>
           <button type="button" class="panel-button is-outline is-small" :disabled="Boolean(busy)" @click="change(skill.name, true)">
@@ -126,7 +126,7 @@ function close_library() { library_open.value = false; load(); }
     </template>
   </div>
 
-  <UModal :open="library_open" title="技能库" description="导入的技能放在这里，再到各账号的“技能”里安装。" :ui="{ content: 'max-w-3xl' }" @update:open="(open) => !open && close_library()">
+  <UModal :open="library_open" title="技能库" description="集中存放导入的技能，可在各账号的技能分区中安装。" :ui="{ content: 'max-w-3xl' }" @update:open="(open) => !open && close_library()">
     <template #body><SkillLibrary /></template>
   </UModal>
 </template>

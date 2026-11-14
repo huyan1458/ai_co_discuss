@@ -20,7 +20,7 @@ function plan() {
     // The shared programs are copied once; later accounts reuse them.
     if (!state.value.clis?.app || !state.value.clis?.python) list.push({ key: "runtime", label: "安装隔离账号的程序副本（命令行程序、共议、Python）" });
   }
-  list.push({ key: "env/init", label: isolate.value ? "初始化 AI 环境（房间技能、系统提示词、随包工作流）" : "安装随包工作流" });
+  list.push({ key: "env/init", label: isolate.value ? "初始化 AI 环境（共议内置技能、系统提示词、随包工作流）" : "安装随包工作流" });
   if (state.value.platform === "win32") list.push({ key: "protect", label: "开启入口保护（只接受经入口和它自己的 AI 的访问）" });
   if (start.value) list.push({ key: "start", label: "启动实例" });
   return list.map((item) => ({ ...item, status: "pending", error: "" }));

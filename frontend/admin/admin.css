@@ -26,7 +26,9 @@ html { scrollbar-gutter: stable; }
 
 /* Fixed geometry on every page: the header keeps its height and stays at the top, sections share one title row height,
    and buttons on a row share one height, so moving between pages never shifts anything. */
-.panel { max-width: 980px; margin: 0 auto; padding: 0 32px 64px; }
+/* Its own stacking context: the sticky header's z-index then stays inside the page, under dialogs and the corner notices,
+   which are placed at the end of the body without a z-index of their own. */
+.panel { isolation: isolate; max-width: 980px; margin: 0 auto; padding: 0 32px 64px; }
 /* The header's white reaches over the page's side padding, so cards scrolling under it never show at its edges. */
 .panel-head { position: sticky; top: 0; z-index: 20; display: flex; align-items: center; gap: 16px; height: 106px; margin: 0 -32px 4px; padding: 4px 32px 0; background: #fff; }
 .panel-brand { display: flex; align-items: center; gap: 10px; margin-right: auto; }
