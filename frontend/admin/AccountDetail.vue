@@ -41,13 +41,28 @@ const CONFIRMS = {
     text: () => `为 ${props.name} 建一个普通 Windows 用户。之后它的 AI 以这个用户运行，读不到你的个人文件，登录也和你分开。电脑会弹出一次管理员确认，请在这台电脑上点“是”。` },
   "os-user/remove": { title: "删除 Windows 用户", label: "删除", message: "Windows 用户已删除",
     text: () => `删除 ${account.value?.os_user} 及其个人目录（其中的命令行登录和技能一并删除）。账号本身和它的项目文件保留。电脑会弹出一次管理员确认。` },
+  "protect-off": { title: "关闭入口保护", label: "关闭", message: "入口保护已关闭",
+    text: () => `关闭后，${props.name} 的工作台不再要求先证明身份，这台电脑上的其他程序（包括其他账号的 AI）又能直接访问它。正在运行的实例会重启一次。` },
   disable: { title: "停用账号", label: "停用", message: "账号已停用",
     text: () => `${props.name} 的所有登录立即失效，也无法再登录；实例和文件都保留，随时可以重新启用。` },
   remove: { title: "删除账号", label: "删除", message: "账号已删除",
     text: () => `删除后 ${props.name} 无法再登录。它的文件夹 ${account.value?.home} 会保留，需要时手动删除。` },
 };
 function ask(action) { confirming.value = { action, ...CONFIRMS[action] }; }
-async function confirm() { const { action, message } = confirming.value; confirming.value = null; await act(action, message); }
+async function confirm() {
+  const { action, message } = confirming.value;
+  confirming.value = null;
+  if (action === "protect-off") return protect(false, message);
+  await act(action, message);
+}
+
+/** Turn entry protection on or off; a running instance restarts so the change applies at once. */
+async function protect(on, message) {
+  busy.value = "protect";
+  try { await call(`accounts/${props.name}/protect`, { on }); notify("info", message); await reload(); }
+  catch (failure) { notify("error", failure.message); }
+  finally { busy.value = ""; }
+}
 
 async function copy(text) {
   try { await navigator.clipboard.writeText(text); notify("info", "已复制"); } catch { notify("error", "复制失败，请手动选中复制"); }
@@ -94,6 +109,19 @@ async function copy(text) {
           <button v-if="account.os_user" type="button" class="panel-button is-plain is-small" :disabled="Boolean(busy)" @click="ask('os-user/remove')">取消隔离</button>
           <button v-else type="button" class="panel-button is-primary is-small" :disabled="Boolean(busy)" @click="ask('os-user')">
             <UIcon :name="busy === 'os-user' ? 'i-lucide-loader' : 'i-lucide-shield-plus'" :class="{ 'animate-spin': busy === 'os-user' }" />隔离</button>
+        </div>
+      </article>
+
+      <article class="panel-card">
+        <div class="panel-tile"><UIcon :name="account.protected ? 'i-lucide-lock' : 'i-lucide-lock-open'" /></div>
+        <div class="panel-main">
+          <div class="panel-title">入口保护 <span class="panel-tag" :class="account.protected ? 'is-green' : 'is-amber'">{{ account.protected ? "已开启" : "未开启" }}</span></div>
+          <span class="panel-sub" style="white-space: normal">{{ account.protected ? "它的工作台只接受先证明身份的访问：经入口登录的人和它自己的 AI 能用，这台电脑上的其他程序（包括其他账号的 AI）访问不到。从上面的本机链接直接打开会被拒绝。" : "这台电脑上的其他程序（包括其他账号的 AI）能直接访问它的工作台。给别人用时建议开启。" }}</span>
+        </div>
+        <div class="panel-side">
+          <button v-if="account.protected" type="button" class="panel-button is-plain is-small" :disabled="Boolean(busy)" @click="ask('protect-off')">关闭</button>
+          <button v-else type="button" class="panel-button is-primary is-small" :disabled="Boolean(busy)" @click="protect(true, '入口保护已开启')">
+            <UIcon :name="busy === 'protect' ? 'i-lucide-loader' : 'i-lucide-lock'" :class="{ 'animate-spin': busy === 'protect' }" />开启</button>
         </div>
       </article>
 

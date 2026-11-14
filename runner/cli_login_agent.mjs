@@ -226,7 +226,8 @@ function login(job, request) {
   // Codex's own sign-in goes with the official form of the shared provider.
   if (request.cli === 'codex') use_codex_official();
   const child = spawn(request.executables[request.cli], request.args, { cwd: HOME, windowsHide: true, stdio: ['pipe', 'pipe', 'pipe'] });
-  const screen = join(job, 'screen.txt'), typed = join(job, 'input.txt');
+  // The owner writes input.txt and cancel.txt into the job folder; this side may write only into its out folder.
+  const screen = join(job, 'out', 'screen.txt'), typed = join(job, 'input.txt');
   writeFileSync(screen, '');
   child.stdout.on('data', chunk => appendFileSync(screen, chunk));
   child.stderr.on('data', chunk => appendFileSync(screen, chunk));
@@ -239,7 +240,7 @@ function login(job, request) {
   }, POLL_MS);
   // A sign-in nobody finishes ends on its own.
   const limit = setTimeout(() => child.kill(), LOGIN_TIMEOUT_MS);
-  const finish = code => { clearInterval(poll); clearTimeout(limit); writeFileSync(join(job, 'exit.txt'), String(code ?? 1)); };
+  const finish = code => { clearInterval(poll); clearTimeout(limit); writeFileSync(join(job, 'out', 'exit.txt'), String(code ?? 1)); };
   child.on('error', error => { appendFileSync(screen, `\n${error.message}\n`); finish(1); });
   child.on('exit', finish);
 }
@@ -247,7 +248,8 @@ function login(job, request) {
 function main() {
   const [action, job] = process.argv.slice(2);
   const path = join(job, 'request.json'), request = JSON.parse(readFileSync(path, 'utf8'));
-  rmSync(path, { force: true });
+  // Run as an account's own user, the request is the owner's to remove (this side may only read it); run as the owner, it goes now.
+  try { rmSync(path, { force: true }); } catch { /* removed with the job folder */ }
   if (action === 'login') return login(job, request);
   try {
     const result = { status, apply, logout }[action]?.(request);

@@ -164,6 +164,20 @@ export function set_account_disabled(data, name, disabled) {
   write_json(accounts_path(data), { ...accounts, [name]: disabled ? { ...account, disabled: true, session_version: session_version(account) + 1 } : account });
 }
 
+/**
+ * Turn an account's entry protection on with `key` (kept here, in the administrator's directory, as the only copy the
+ * entry reads) or off. Placing the instance's own copy where the instance can read it is the caller's part.
+ */
+export function set_account_protected(data, name, key = '') {
+  const accounts = read_accounts(data);
+  if (!accounts[name]) throw new Error(`账号不存在：${name}`);
+  if (key && !ENTRY_KEY_PATTERN.test(key)) throw new Error('实例密钥格式不对');
+  const keys = read_json(join(data, INSTANCE_KEYS_FILE));
+  const { protected: _previous, ...account } = accounts[name];
+  if (key) write_json(join(data, INSTANCE_KEYS_FILE), { ...keys, [name]: key });
+  write_json(accounts_path(data), { ...accounts, [name]: key ? { ...account, protected: true } : account });
+}
+
 /** The account's session version: a session made under an older one no longer grants access. */
 function session_version(account) {
   return Number.isInteger(account?.session_version) ? account.session_version : 0;
@@ -651,6 +665,9 @@ async function main(args) {
   if (command === 'passwd') return print({ name, password: reset_password(data, name) });
   if (command === 'remove') return print((remove_account(data, name), { removed: name, kept: account_home(data, name) }));
   if (command === 'disable' || command === 'enable') return print((set_account_disabled(data, name, command === 'disable'), { name, disabled: command === 'disable' }));
+  // A protected account starts only from the panel, which gives the instance its key file; started here it would run
+  // without its protection.
+  if (command === 'start' && read_accounts(data)[name]?.protected === true) throw new Error(`账号 ${name} 开启了入口保护，请从管理面板启动它的实例`);
   if (command === 'start' || command === 'stop') return run_instance(data, name, command);
   throw new Error(HELP);
 }

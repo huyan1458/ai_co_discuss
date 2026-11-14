@@ -63,10 +63,10 @@ function check_target(data, target) {
 
 // ---- Running as the target ----
 
-/** A job folder for the owner, in the owner's own temporary folder. */
+/** A job folder for the owner, in the owner's own temporary folder, laid out like an account's (output in `out`). */
 function owner_folder(files) {
   const folder = join(tmpdir(), `codiscuss-login-${randomBytes(6).toString('hex')}`);
-  mkdirSync(folder, { recursive: true });
+  mkdirSync(join(folder, 'out'), { recursive: true });
   for (const [name, text] of Object.entries(files)) writeFileSync(join(folder, name), text, 'utf8');
   return folder;
 }
@@ -151,7 +151,7 @@ function start_console(data, target, exe) {
 }
 
 function screen_text(folder) {
-  const path = join(folder, 'screen.txt');
+  const path = join(folder, 'out', 'screen.txt');
   if (!existsSync(path)) return '';
   return read_output(path).replace(ANSI, '').replace(/\r/g, '');
 }
@@ -174,8 +174,8 @@ export function login_progress(id) {
   const link = { claude: /https:\/\/(?:claude\.com|claude\.ai|platform\.claude\.com|console\.anthropic\.com)\/\S*oauth\/authorize\S*/,
     codex: job.method === 'device' ? /https:\/\/auth\.openai\.com\/codex\/device\S*/ : /https:\/\/auth\.openai\.com\/oauth\/authorize\S*/,
     agy: /https:\/\/accounts\.google\.com\/o\/oauth2\/auth\S*/ }[job.cli];
-  const exit = existsSync(join(job.folder, 'exit.txt')) ? Number(readFileSync(join(job.folder, 'exit.txt'), 'utf8')) : null;
-  const signed = existsSync(join(job.folder, 'done.txt'));
+  const exit = existsSync(join(job.folder, 'out', 'exit.txt')) ? Number(readFileSync(join(job.folder, 'out', 'exit.txt'), 'utf8')) : null;
+  const signed = existsSync(join(job.folder, 'out', 'done.txt'));
   const errors = [...flat.matchAll(/(Invalid code[^.]*\.|Got an error: [^.]*\.?|error[:：][^\n]{0,160})/gi)].map(match => match[1].trim());
   const done = signed || exit === 0;
   // Links are matched line by line: the console is wide enough that none wraps, and joining lines would glue the next
@@ -192,7 +192,7 @@ export function login_progress(id) {
 
 function finish(id, job) {
   jobs.delete(id);
-  if (!existsSync(join(job.folder, 'exit.txt'))) appendFileSync(join(job.folder, 'cancel.txt'), 'x');
+  if (!existsSync(join(job.folder, 'out', 'exit.txt'))) appendFileSync(join(job.folder, 'cancel.txt'), 'x');
   setTimeout(() => rmSync(job.folder, { recursive: true, force: true }), 5000);
 }
 
@@ -276,7 +276,7 @@ public static class ConsoleHost {
     PROCESS_INFORMATION information;
     if (!CreateProcessW(null, new StringBuilder(command_line), IntPtr.Zero, IntPtr.Zero, false, 0x00080000, IntPtr.Zero, directory, ref startup, out information))
       throw new Exception("CreateProcess " + Marshal.GetLastWin32Error());
-    string screen = Path.Combine(folder, "screen.txt"), typed = Path.Combine(folder, "input.txt");
+    string screen = Path.Combine(folder, "out", "screen.txt"), typed = Path.Combine(folder, "input.txt");
     Thread reader = new Thread(delegate () {
       try {
         using (FileStream source = new FileStream(output_read, FileAccess.Read))
@@ -290,7 +290,7 @@ public static class ConsoleHost {
     FileStream writer = new FileStream(input_write, FileAccess.Write);
     long sent = 0; DateTime deadline = DateTime.Now.AddSeconds(timeout_seconds);
     while (WaitForSingleObject(information.hProcess, 300) != 0) {
-      if (!was_signed_in && SignedIn()) { File.WriteAllText(Path.Combine(folder, "done.txt"), "1"); Thread.Sleep(1500); TerminateProcess(information.hProcess, 0); break; }
+      if (!was_signed_in && SignedIn()) { File.WriteAllText(Path.Combine(folder, "out", "done.txt"), "1"); Thread.Sleep(1500); TerminateProcess(information.hProcess, 0); break; }
       if (DateTime.Now > deadline || File.Exists(Path.Combine(folder, "cancel.txt"))) { TerminateProcess(information.hProcess, 1); break; }
       if (!File.Exists(typed)) continue;
       byte[] all = ReadShared(typed);
@@ -299,7 +299,7 @@ public static class ConsoleHost {
     uint code; GetExitCodeProcess(information.hProcess, out code);
     Thread.Sleep(500);
     ClosePseudoConsole(console);
-    File.WriteAllText(Path.Combine(folder, "exit.txt"), code.ToString());
+    File.WriteAllText(Path.Combine(folder, "out", "exit.txt"), code.ToString());
   }
 }
 '@

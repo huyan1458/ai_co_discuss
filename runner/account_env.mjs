@@ -146,7 +146,8 @@ function main() {
   const [action, job] = process.argv.slice(2);
   const path = join(job, 'request.json');
   const request = existsSync(path) ? JSON.parse(readFileSync(path, 'utf8')) : {};
-  rmSync(path, { force: true });
+  // The job folder is the owner's; the request goes when the owner removes it.
+  try { rmSync(path, { force: true }); } catch { /* removed with the job folder */ }
   const run = { init, status, skills: () => skills(job, request), prompt }[action];
   if (!run) throw new Error(`未知操作：${action}`);
   process.stdout.write(`${JSON.stringify(run(request))}\n`);

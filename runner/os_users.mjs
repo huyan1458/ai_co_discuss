@@ -11,7 +11,7 @@
 import { spawnSync } from 'node:child_process';
 import { randomBytes } from 'node:crypto';
 import { cpSync, existsSync, mkdirSync, readFileSync, renameSync, rmSync, writeFileSync } from 'node:fs';
-import { homedir } from 'node:os';
+import { homedir, tmpdir } from 'node:os';
 import { basename, dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
@@ -29,6 +29,9 @@ const APP_PARTS = ['package.json', 'server.py', 'runner', 'gateway', 'backend', 
 // Parts of a Python installation the website does not need; site-packages is most of its size.
 const PYTHON_SKIP = new Set(['site-packages', 'Doc', 'include', 'libs', 'tcl', 'share', 'Scripts', 'test', 'idlelib', 'tkinter', 'turtledemo', '__pycache__']);
 const JOB_ROOT = join(SHARED_ROOT, 'jobs');
+// The owner's own scripts run from the owner's private temporary folder, never from the shared one: they are what secures
+// the shared folder, so they cannot depend on it already being secure.
+const OWNER_JOB_ROOT = join(tmpdir(), 'codiscuss-owner-jobs');
 const POWERSHELL = 'powershell.exe';
 const DEFAULT_TIMEOUT_MS = 120_000;
 const ELEVATED_TIMEOUT_MS = 300_000;
@@ -84,14 +87,15 @@ const quote = text => `'${String(text).replaceAll("'", "''")}'`;
  *   elevated: Run through a UAC prompt; output then comes back through a file.
  */
 export function run_powershell(script, { elevated = false, timeout = DEFAULT_TIMEOUT_MS } = {}) {
-  mkdirSync(JOB_ROOT, { recursive: true });
-  const job = join(JOB_ROOT, `owner-${process.pid}-${randomBytes(6).toString('hex')}`);
+  mkdirSync(OWNER_JOB_ROOT, { recursive: true });
+  const job = join(OWNER_JOB_ROOT, `owner-${process.pid}-${randomBytes(6).toString('hex')}`);
   mkdirSync(job);
-  // The shared folder lets every user read by default; a script may carry a password, so only the owner may open this one.
+  // A script may carry a password, so only the owner may open this one.
   spawnSync('icacls', [job, '/inheritance:r', '/grant:r', `${process.env.USERNAME || 'Administrator'}:(OI)(CI)F`, 'SYSTEM:(OI)(CI)F'], { windowsHide: true });
   try {
     const file = join(job, 'script.ps1'), output = join(job, 'output.txt');
-    writeFileSync(file, `\ufeff$ErrorActionPreference = 'Stop'\ntry {\n${script}\n} catch { [Console]::Error.WriteLine($_.Exception.Message); exit 1 }\n`, 'utf8');
+    // Output and errors in UTF-8: in the console's code page, the Chinese messages arrive garbled.
+    writeFileSync(file, `\ufeff[Console]::OutputEncoding = [Text.Encoding]::UTF8\n$ErrorActionPreference = 'Stop'\ntry {\n${script}\n} catch { [Console]::Error.WriteLine($_.Exception.Message); exit 1 }\n`, 'utf8');
     if (!elevated) {
       const result = spawnSync(POWERSHELL, ['-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', file], { encoding: 'utf8', windowsHide: true, timeout });
       if (result.status !== 0) throw new Error((result.stderr || result.error?.message || 'PowerShell 失败').trim());
@@ -145,12 +149,34 @@ if ($user) {
   write_os_users(data, rest);
 }
 
-/** A job folder the account's user may read and write, for a script it runs and what that script prints. */
-function job_folder(user) {
+let shared_root_secured = false;
+
+/**
+ * A job folder for one run as the account's user: the owner writes the script, its input and any control files into it,
+ * and the account's user may only read them; what the script writes goes to its `out` folder, the one place it may write.
+ *
+ * Nothing the owner writes is ever in a folder the account can change, so the account cannot redirect those writes
+ * (for instance by replacing the folder with a junction). The shared folder is secured once per process first.
+ */
+function job_folder(user, { run = run_powershell } = {}) {
+  // Every folder on the way is secured and checked: the shared folder, then the jobs folder within it.
+  if (!shared_root_secured) {
+    secure_shared_root({ run });
+    secure_folder(JOB_ROOT, [`(New-Object Security.Principal.SecurityIdentifier('${USERS_SID}'))`], { run });
+    shared_root_secured = true;
+  }
   mkdirSync(JOB_ROOT, { recursive: true });
   const folder = join(JOB_ROOT, `${user}-${randomBytes(6).toString('hex')}`);
   mkdirSync(folder);
-  spawnSync('icacls', [folder, '/inheritance:r', '/grant:r', `${process.env.USERNAME || 'Administrator'}:(OI)(CI)F`, `${user}:(OI)(CI)M`, 'SYSTEM:(OI)(CI)F'], { windowsHide: true });
+  const me = process.env.USERNAME || 'Administrator';
+  const sealed = spawnSync('icacls', [folder, '/inheritance:r', '/grant:r', `${me}:(OI)(CI)F`, `${user}:(OI)(CI)RX`, 'SYSTEM:(OI)(CI)F'], { windowsHide: true });
+  const out = join(folder, 'out');
+  mkdirSync(out);
+  const opened = spawnSync('icacls', [out, '/grant', `${user}:(OI)(CI)M`], { windowsHide: true });
+  if (sealed.status !== 0 || opened.status !== 0) {
+    rmSync(folder, { recursive: true, force: true });
+    throw new Error('作业目录的权限没有设置成功，已停止');
+  }
   return folder;
 }
 
@@ -166,11 +192,11 @@ function job_folder(user) {
 export function run_as_user(data, account, script, { files = {}, folders = {}, visible = false, wait = true, timeout = DEFAULT_TIMEOUT_MS, run = run_powershell } = {}) {
   const record = read_os_users(data)[account];
   if (!record) throw new Error(`账号 ${account} 还没有 Windows 用户，请先隔离这个账号`);
-  const folder = job_folder(record.user);
+  const folder = job_folder(record.user, { run });
   for (const [name, text] of Object.entries(files)) writeFileSync(join(folder, name), text, 'utf8');
   for (const [name, source] of Object.entries(folders)) cpSync(source, join(folder, name), { recursive: true });
-  const job = join(folder, 'job.ps1'), output = join(folder, 'output.txt');
-  writeFileSync(job, `\ufeff[Console]::OutputEncoding = [Text.Encoding]::UTF8\n$Job = ${quote(folder)}\n${script}\n`, 'utf8');
+  const job = join(folder, 'job.ps1'), output = join(folder, 'out', 'output.txt');
+  writeFileSync(job, `\ufeff[Console]::OutputEncoding = [Text.Encoding]::UTF8\n$Job = ${quote(folder)}\n$Out = ${quote(join(folder, 'out'))}\n${script}\n`, 'utf8');
   const command = visible ? `-NoProfile -ExecutionPolicy Bypass -NoExit -File ${quote(job)}`
     : `-NoProfile -ExecutionPolicy Bypass -Command & ${quote(job)} *> ${quote(output)}`;
   const start = `$credential = New-Object System.Management.Automation.PSCredential(${quote(record.user)}, (ConvertTo-SecureString ${quote(record.secret)}))
@@ -195,6 +221,107 @@ export function read_output(path) {
   const bytes = readFileSync(path);
   if (bytes[0] === 0xff && bytes[1] === 0xfe) return bytes.subarray(2).toString('utf16le');
   return bytes.toString('utf8').replace(/^﻿/, '');
+}
+
+// ---- Folders no hosted account can change ----
+
+// Well-known SIDs: the local Users group (every hosted account's Windows user belongs to it).
+const USERS_SID = 'S-1-5-32-545';
+const KEY_FILE = 'entry-key.json';
+
+/**
+ * Make `path` a folder whose rights the owner alone decides, and check what is actually in force afterwards.
+ *
+ * The folder must not be a link; its owner becomes the current user; inheritance is cut; the current user, SYSTEM and
+ * Administrators get full control and each of `readers` read-and-run only. The ACL is then read back: an owner other
+ * than those three, inheritance still on, or any other principal allowed more than read-and-run stops with an error,
+ * and so does any failure to set it, so nothing is written into a folder that is not as intended.
+ *
+ * Args:
+ *   readers: PowerShell expressions for the identities that may read, e.g. a SecurityIdentifier or NTAccount.
+ */
+export function secure_folder(path, readers = [], { run = run_powershell } = {}) {
+  return run(`$path = ${quote(path)}
+# No folder on the way may be a link either: each ancestor is checked, up to the drive.
+$parent = [IO.Path]::GetDirectoryName($path)
+while ($parent) {
+  if ((Get-Item -LiteralPath $parent -Force).Attributes -band [IO.FileAttributes]::ReparsePoint) { throw "受保护目录 $path 的上级 $parent 是一个链接，已停止" }
+  $next = [IO.Path]::GetDirectoryName($parent)
+  if (-not $next -or $next -eq $parent) { break }
+  $parent = $next
+}
+if (Test-Path -LiteralPath $path) {
+  if ((Get-Item -LiteralPath $path -Force).Attributes -band [IO.FileAttributes]::ReparsePoint) { throw "受保护目录 $path 是一个链接，已停止" }
+} else { New-Item -ItemType Directory -Path $path | Out-Null }
+$me = [Security.Principal.WindowsIdentity]::GetCurrent().User
+$system = New-Object Security.Principal.SecurityIdentifier('S-1-5-18')
+$admins = New-Object Security.Principal.SecurityIdentifier('S-1-5-32-544')
+$trusted = @($me.Value, $system.Value, $admins.Value)
+$inherit = [Security.AccessControl.InheritanceFlags]'ContainerInherit, ObjectInherit'
+# Only the owner and the access list are written (not the audit list, which would need a privilege the owner lacks).
+$item = Get-Item -LiteralPath $path -Force
+$sections = [Security.AccessControl.AccessControlSections]'Access, Owner'
+$acl = $item.GetAccessControl($sections)
+$acl.SetAccessRuleProtection($true, $false)
+foreach ($rule in @($acl.GetAccessRules($true, $false, [Security.Principal.SecurityIdentifier]))) { [void]$acl.RemoveAccessRuleSpecific($rule) }
+$acl.SetOwner($me)
+foreach ($sid in @($me, $system, $admins)) { $acl.AddAccessRule((New-Object Security.AccessControl.FileSystemAccessRule($sid, 'FullControl', $inherit, 'None', 'Allow'))) }
+foreach ($reader in @(${readers.join(', ')})) { $acl.AddAccessRule((New-Object Security.AccessControl.FileSystemAccessRule($reader, 'ReadAndExecute', $inherit, 'None', 'Allow'))) }
+$item.SetAccessControl($acl)
+$read = Get-Acl -LiteralPath $path
+$owner = (New-Object Security.Principal.NTAccount($read.Owner)).Translate([Security.Principal.SecurityIdentifier]).Value
+if ($trusted -notcontains $owner) { throw "受保护目录 $path 的所有者不对：$($read.Owner)" }
+if (-not $read.AreAccessRulesProtected) { throw "受保护目录 $path 仍在继承上级权限" }
+$allowed = [long]([Security.AccessControl.FileSystemRights]'ReadAndExecute, Synchronize')
+foreach ($rule in $read.Access) {
+  $sid = $rule.IdentityReference.Translate([Security.Principal.SecurityIdentifier]).Value
+  if ($trusted -contains $sid -or $rule.AccessControlType -ne 'Allow') { continue }
+  # Rights are a 32-bit mask; generic rights come back negative as Int32, so they are widened before the comparison.
+  $rights = [long]([int]$rule.FileSystemRights); if ($rights -lt 0) { $rights += 4294967296 }
+  if (($rights -band (-bnot $allowed)) -ne 0) { throw "受保护目录 $path 上 $($rule.IdentityReference) 有超出读取的权限" }
+}
+'ok'`);
+}
+
+/** The shared folder, made one that only the owner can change: every account may read and run what is in it. */
+export function secure_shared_root({ root = SHARED_ROOT, run = run_powershell } = {}) {
+  return secure_folder(root, [`(New-Object Security.Principal.SecurityIdentifier('${USERS_SID}'))`], { run });
+}
+
+/** Where an account's instance reads its key: inside the shared folder, in a folder only that account may read. */
+export function instance_key_file(account, root = SHARED_ROOT) {
+  return join(root, 'keys', account, KEY_FILE);
+}
+
+/**
+ * Place an account's instance key where its instance (and its members' command lines) can read it and nothing hosted
+ * can change it: the shared folder and the account's key folder are secured and checked first, then the key is written
+ * by the owner. An account without its own Windows user runs as the owner, so its folder has no extra reader.
+ *
+ * Returns:
+ *   The key file's path.
+ */
+export function place_instance_key(data, account, key, { root = SHARED_ROOT, run = run_powershell } = {}) {
+  if (!/^[0-9a-f]{64}$/.test(String(key))) throw new Error('实例密钥格式不对');
+  // Each level is secured and checked in turn: the shared folder, the keys folder, then the account's own.
+  secure_shared_root({ root, run });
+  secure_folder(join(root, 'keys'), [`(New-Object Security.Principal.SecurityIdentifier('${USERS_SID}'))`], { run });
+  const user = read_os_users(data)[account]?.user;
+  const folder = join(root, 'keys', account);
+  secure_folder(folder, user ? [`(New-Object Security.Principal.NTAccount(${quote(user)}))`] : [], { run });
+  // A new file of its own (never one that was already there, which could carry its own grants), then only the folder's
+  // inherited rights on the final key, checked.
+  const path = join(folder, KEY_FILE), draft = join(folder, `${randomBytes(12).toString('hex')}.tmp`);
+  writeFileSync(draft, `${JSON.stringify({ key })}\n`, { flag: 'wx' });
+  renameSync(draft, path);
+  run(`$file = ${quote(path)}
+& icacls $file /reset /Q | Out-Null
+if ($LASTEXITCODE -ne 0) { throw "密钥文件的权限没有重置成功" }
+$read = Get-Acl -LiteralPath $file
+if ($read.AreAccessRulesProtected) { throw "密钥文件没有沿用所在目录的权限" }
+foreach ($rule in $read.Access) { if (-not $rule.IsInherited) { throw "密钥文件带有单独的授权：$($rule.IdentityReference)" } }
+'ok'`);
+  return path;
 }
 
 /** Where the shared copies of this program and of Python are, for accounts with their own Windows user. */
@@ -251,8 +378,10 @@ export function shared_cli_state() {
  * The instance supervisor runs with the account's service directory; it keeps running after this returns.
  */
 export function start_instance_as_user(data, account, service_home, local_script, node = process.execPath, options = {}) {
-  // The instance keeps running in its own folder rather than in the job folder, which is removed afterwards.
+  const { key_file = '', ...rest } = options;
+  // The instance keeps running in its own folder rather than in the job folder, which is removed afterwards. A protected
+  // instance, and every member it starts, gets the key file it proves itself with.
   run_as_user(data, account, `$env:DISCUSS_SERVICE_HOME = ${quote(service_home)}
-Set-Location ${quote(service_home)}
-& ${quote(node)} ${quote(local_script)} start --json`, { ...options, timeout: 90_000 });
+${key_file ? `$env:DISCUSS_ENTRY_KEY_FILE = ${quote(key_file)}\n` : ''}Set-Location ${quote(service_home)}
+& ${quote(node)} ${quote(local_script)} start --json`, { ...rest, timeout: 90_000 });
 }

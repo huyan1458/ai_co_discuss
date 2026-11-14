@@ -1,14 +1,15 @@
 import assert from 'node:assert/strict';
+import { spawnSync } from 'node:child_process';
 import { appendFileSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import http from 'node:http';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { after, test } from 'node:test';
 
-import { add_account, instance_home, stop_entry } from '../gateway/gateway.mjs';
+import { add_account, instance_home, read_accounts, stop_entry } from '../gateway/gateway.mjs';
 import { managed_api_keys, save_api_key } from '../runner/discussion_api.mjs';
-import { create_panel, list_keys, relay_operator_events } from '../runner/admin_panel.mjs';
-import { os_user_name } from '../runner/os_users.mjs';
+import { create_panel, instance_conforms, instance_state, list_keys, protect_account, relay_operator_events } from '../runner/admin_panel.mjs';
+import { instance_key_file, os_user_name, place_instance_key, secure_folder, secure_shared_root } from '../runner/os_users.mjs';
 import { tray_script } from '../runner/tray.mjs';
 
 const KEY = 'owner-key';
@@ -194,4 +195,126 @@ test('a rewritten, emptied or flooded outbox, or one bad record, never hides an 
   appendFileSync(outbox('demo'), line('aaaa-0004', '洪水之后'));
   assert.deepEqual(await relay(), ['demo']);
   assert.match(sent.at(-1).paragraphs.join('\n'), /1 次执行失败[\s\S]*洪水之后/);
+});
+
+/** Who may do what on a folder, as Windows reports it (icacls). */
+function rights_of(path) {
+  return spawnSync('icacls', [path], { encoding: 'utf8', windowsHide: true }).stdout;
+}
+
+test('a protected folder ends up with only the owner\'s rights plus read for its readers, and a link is refused', { skip: process.platform !== 'win32' }, () => {
+  const root = mkdtempSync(join(tmpdir(), 'protected-'));
+  folders.push(root);
+  const target = join(root, 'shared');
+  mkdirSync(target);
+  // A grant left by someone else beforehand (here: every user may modify) must not survive.
+  spawnSync('icacls', [target, '/grant', '*S-1-5-32-545:(OI)(CI)M'], { windowsHide: true });
+  assert.match(rights_of(target), /BUILTIN\\Users:.*\(M\)/);
+  assert.equal(secure_shared_root({ root: target }), 'ok');
+  const after_rights = rights_of(target);
+  assert.match(after_rights, /BUILTIN\\Users:\(OI\)\(CI\)\(RX\)/);
+  assert.doesNotMatch(after_rights, /BUILTIN\\Users:.*\((M|F|W)\)/);
+  assert.doesNotMatch(after_rights, /\(I\)/, 'nothing is inherited from above');
+  // A junction in place of the folder is not followed.
+  const elsewhere = join(root, 'elsewhere'), link = join(root, 'link');
+  mkdirSync(elsewhere);
+  spawnSync('cmd', ['/c', 'mklink', '/J', link, elsewhere], { windowsHide: true });
+  assert.throws(() => secure_folder(link), /是一个链接/);
+});
+
+test('an account\'s key is placed in its own protected folder, with only that folder\'s rights, and never through a link on the way', { skip: process.platform !== 'win32' }, () => {
+  const { data } = fixture();
+  const root = mkdtempSync(join(tmpdir(), 'keys-'));
+  folders.push(root);
+  // A key file left there beforehand, readable by every user, is replaced by one with only the folder's rights.
+  mkdirSync(join(root, 'keys', 'demo'), { recursive: true });
+  writeFileSync(join(root, 'keys', 'demo', 'entry-key.json'), '{}');
+  spawnSync('icacls', [join(root, 'keys', 'demo', 'entry-key.json'), '/grant', '*S-1-5-32-545:R'], { windowsHide: true });
+  const key = 'c3'.repeat(32);
+  const path = place_instance_key(data, 'demo', key, { root });
+  assert.equal(path, instance_key_file('demo', root));
+  assert.equal(JSON.parse(readFileSync(path, 'utf8')).key, key);
+  assert.doesNotMatch(rights_of(join(root, 'keys', 'demo')), /BUILTIN\\Users/, 'other accounts cannot read the folder');
+  assert.doesNotMatch(rights_of(path), /BUILTIN\\Users/, 'nor the key file');
+  // The keys folder replaced by a junction elsewhere: refused, though the root and the account folder look fine.
+  const other = mkdtempSync(join(tmpdir(), 'keys-other-'));
+  folders.push(other);
+  rmSync(join(root, 'keys'), { recursive: true, force: true });
+  spawnSync('cmd', ['/c', 'mklink', '/J', join(root, 'keys'), other], { windowsHide: true });
+  assert.throws(() => place_instance_key(data, 'demo', key, { root }), /链接/);
+});
+
+test('protection changes only once a running instance is seen gone, and is reported on only once the restarted one serves as set', async () => {
+  const { data } = fixture();
+  // A stand-in for the instance: whether it listens, and whether it runs protected (as its start found the account).
+  const instance = { state: 'up', protected: false, stops: true, starts: true, conforms: true };
+  const options = (extra = {}) => ({ place: () => '', wait_ms: 0,
+    state: async () => instance.state,
+    conforms: async (port, key) => instance.state === 'up' && instance.conforms && Boolean(key) === instance.protected,
+    restart: async (home, name, command) => {
+      if (command === 'stop' && instance.stops) instance.state = 'down';
+      if (command === 'start' && instance.starts) Object.assign(instance, { state: 'up', protected: read_accounts(home)[name].protected === true });
+    }, ...extra });
+  // Whether it runs cannot be told (the port neither answers nor refuses): nothing changes.
+  instance.state = 'unknown';
+  await assert.rejects(protect_account(data, 'demo', true, options()), /无法确认/);
+  assert.equal(read_accounts(data).demo.protected, undefined);
+  instance.state = 'up';
+  instance.stops = false;
+  await assert.rejects(protect_account(data, 'demo', true, options()), /没有停下来/);
+  assert.equal(read_accounts(data).demo.protected, undefined, 'nothing changed while the old instance still serves');
+  instance.stops = true;
+  assert.deepEqual(await protect_account(data, 'demo', true, options()), { protected: true, running: true });
+  assert.equal(read_accounts(data).demo.protected, true);
+  assert.equal(instance.protected, true);
+  // Started but not serving as set (a wrong key, something else answering): an error, not a success.
+  instance.conforms = false;
+  await assert.rejects(protect_account(data, 'demo', true, options()), /没有按入口保护启动起来/);
+  instance.conforms = true;
+  // Not coming back at all: said so.
+  instance.starts = false;
+  instance.state = 'up';
+  await assert.rejects(protect_account(data, 'demo', false, options()), /没有启动起来/);
+  // Not running: only the mark changes, and that is what is reported.
+  instance.state = 'down';
+  assert.deepEqual(await protect_account(data, 'demo', true, options()), { protected: true, running: false });
+});
+
+test('a port that does not answer is not taken for a stopped instance, and an answer of 403 alone is not taken for protection', async () => {
+  const silent = http.createServer(() => {});
+  const silent_port = await new Promise(done => silent.listen(0, '127.0.0.1', () => done(silent.address().port)));
+  const refusing = http.createServer((request, response) => { response.statusCode = 403; response.end('{}'); });
+  const refusing_port = await new Promise(done => refusing.listen(0, '127.0.0.1', () => done(refusing.address().port)));
+  const closed = http.createServer();
+  const closed_port = await new Promise(done => closed.listen(0, '127.0.0.1', () => done(closed.address().port)));
+  await new Promise(done => closed.close(done));
+  after(() => { silent.closeAllConnections(); silent.close(); refusing.close(); });
+  assert.equal(await instance_state(silent_port), 'unknown');
+  assert.equal(await instance_state(closed_port), 'down');
+  assert.equal(await instance_state(refusing_port), 'up');
+  assert.equal(await instance_conforms(refusing_port, 'a1'.repeat(32)), false, 'refusing everything is not proving the key');
+});
+
+test('a hosted account\'s outbox reached through a junction in its folder is not read', { skip: process.platform !== 'win32' }, async () => {
+  const { data } = fixture();
+  const service = instance_home(data, 'demo'), outside = mkdtempSync(join(tmpdir(), 'outside-'));
+  folders.push(outside);
+  writeFileSync(join(outside, 'operator-events.jsonl'), `${JSON.stringify({ id: 'outside-0001', kind: 'failed', member: 'x', reason: '外面的文件', room: 'r' })}\n`);
+  rmSync(service, { recursive: true, force: true });
+  spawnSync('cmd', ['/c', 'mklink', '/J', service, outside], { windowsHide: true });
+  const sent = [];
+  assert.deepEqual(await relay_operator_events(data, async (home, notice) => { sent.push(notice); return { status: 'sent' }; }, () => true), []);
+  assert.equal(sent.length, 0);
+});
+
+test('waiting for a restarted instance keeps to its time limit even when each check is slow', async () => {
+  const { data } = fixture();
+  let state = 'up';
+  const slow = ms => new Promise(done => setTimeout(done, ms));
+  const started = Date.now();
+  await assert.rejects(protect_account(data, 'demo', true, { place: () => '', wait_ms: 1000,
+    state: async () => state,
+    restart: async (home, name, command) => { state = command === 'stop' ? 'down' : 'up'; },
+    conforms: async () => { await slow(600); return false; } }), /没有按入口保护启动起来/);
+  assert.ok(Date.now() - started < 1700, `gave up after ${Date.now() - started} ms`);
 });

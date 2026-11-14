@@ -9,7 +9,7 @@
  */
 import { spawn, spawnSync } from 'node:child_process';
 import { randomBytes } from 'node:crypto';
-import { closeSync, existsSync, openSync, readdirSync, readFileSync, readSync, renameSync, rmSync, statSync, writeFileSync } from 'node:fs';
+import { closeSync, existsSync, openSync, realpathSync, readdirSync, readFileSync, readSync, renameSync, rmSync, statSync, writeFileSync } from 'node:fs';
 import http from 'node:http';
 import { tmpdir } from 'node:os';
 import { dirname, extname, join, resolve } from 'node:path';
@@ -17,10 +17,12 @@ import { fileURLToPath, pathToFileURL } from 'node:url';
 import { parseArgs } from 'node:util';
 
 import { account_home, add_account, data_home, entry_settings, entry_status, instance_home, read_accounts, remove_account, reset_password, save_entry_settings,
-  set_account_disabled, start_entry, stop_entry } from '../gateway/gateway.mjs';
+  instance_key, set_account_disabled, set_account_protected, start_entry, stop_entry } from '../gateway/gateway.mjs';
+import { verified_connection } from './entry_client.mjs';
 import { API_PROVIDERS, save_api_key } from './discussion_api.mjs';
 import { apply_login, cancel_login, LOGIN_METHODS, login_progress, login_status, logout, start_login, submit_login } from './cli_login.mjs';
-import { create_os_user, install_shared_runtime, read_os_users, remove_os_user, run_as_user, shared_cli_state, shared_executables, shared_paths, start_instance_as_user } from './os_users.mjs';
+import { create_os_user, install_shared_runtime, instance_key_file, place_instance_key, read_os_users, remove_os_user, run_as_user, shared_cli_state, shared_executables, shared_paths,
+  start_instance_as_user } from './os_users.mjs';
 import { install_workflows, shipped_workflows } from './discussion_skills.mjs';
 import { hosted_prompt, import_skill, library_root, list_library, remove_library_skill, save_hosted_prompt } from './skill_library.mjs';
 import { local_status } from './discussion_local.mjs';
@@ -54,6 +56,9 @@ const SESSION_COOKIE = 'codiscuss_panel';
 const BODY_LIMIT = 64 * 1024;
 const UPLOAD_LIMIT = 40 * 1024 * 1024;
 const PROBE_TIMEOUT_MS = 1500;
+// How long a restarted instance may take to answer again, and how often it is asked.
+const INSTANCE_READY_MS = 30_000;
+const INSTANCE_POLL_MS = 500;
 const STATIC_FILES = { '/': 'admin.html', '/admin.html': 'admin.html', '/admin.js': 'admin.js', '/admin.css': 'admin.css', '/mark.svg': 'mark.svg' };
 const TYPES = { '.html': 'text/html; charset=utf-8', '.js': 'text/javascript; charset=utf-8', '.css': 'text/css; charset=utf-8',
   '.svg': 'image/svg+xml', '.png': 'image/png' };
@@ -125,7 +130,8 @@ async function update_package(data, version, on_updated) {
     for (const account of await list_accounts(data)) {
       if (!account.os_user) continue;
       await step(`已更新 ${account.name} 的技能`, () => prepare_account(data, account.name));
-      if (account.running) await step(`已重启 ${account.name} 的实例`, async () => { await run_instance(data, account.name, 'stop'); await run_instance(data, account.name, 'start'); });
+      // Reported restarted only once it serves again as the account is set (start_verified).
+      if (account.running) await step(`已重启 ${account.name} 的实例`, async () => { await run_instance(data, account.name, 'stop'); await start_verified(data, account.name); });
     }
   }
   setTimeout(on_updated, 500);
@@ -135,6 +141,81 @@ async function update_package(data, version, on_updated) {
 // ---- Accounts ----
 
 /** Whether an instance answers on its port. */
+/** The status of a plain GET /api/rooms: a number when answered, 'down' when the port refuses, 'unknown' otherwise. */
+function plain_status(port) {
+  return new Promise(done => {
+    const request = http.get({ host: '127.0.0.1', port, path: '/api/rooms', timeout: PROBE_TIMEOUT_MS }, response => { response.resume(); done(response.statusCode); });
+    request.on('timeout', () => { request.destroy(); done('unknown'); });
+    request.on('error', error => done(error.code === 'ECONNREFUSED' ? 'down' : 'unknown'));
+  });
+}
+
+/** 'up' when something answers on the port, 'down' when nothing listens there, 'unknown' when it cannot be told. */
+export async function instance_state(port) {
+  const status = await plain_status(port);
+  return typeof status === 'number' ? 'up' : status;
+}
+
+/**
+ * Whether the instance on `port` serves as its account is set: unprotected, a plain request is served; protected, a plain
+ * request is refused and one on a connection where the instance proved `key` is served. Any other answer (a 403 from
+ * something that is not the instance, a key that does not match) does not conform.
+ */
+export async function instance_conforms(port, key = '') {
+  const status = await plain_status(port);
+  if (!key) return status === 200;
+  if (status !== 403) return false;
+  try {
+    const { socket, header } = await verified_connection(port, key);
+    return await new Promise(done => {
+      const request = http.request({ host: '127.0.0.1', port, path: '/api/rooms', headers: { 'x-codiscuss-entry': header }, createConnection: () => socket },
+        response => { response.resume(); done(response.statusCode === 200); });
+      request.setTimeout(PROBE_TIMEOUT_MS, () => { request.destroy(); done(false); });
+      request.on('error', () => done(false));
+      request.end();
+    });
+  } catch { return false; }
+}
+
+/** Wait until the instance conforms (see instance_conforms), or `wait_ms` passes; returns whether it did. */
+/**
+ * Ask `probe` until `accept` holds for its answer or `wait_ms` has passed, measured on the clock: each probe gets only
+ * the time left (a probe still running at the deadline counts as not accepted), so the whole wait never runs past it.
+ */
+async function poll_until(probe, accept, wait_ms) {
+  const deadline = Date.now() + wait_ms;
+  for (;;) {
+    const left = Math.max(0, deadline - Date.now());
+    let timer;
+    const answer = await Promise.race([probe(), new Promise(done => { timer = setTimeout(() => done(undefined), left); })]);
+    clearTimeout(timer);
+    if (answer !== undefined && accept(answer)) return true;
+    if (Date.now() >= deadline) return false;
+    await new Promise(done => setTimeout(done, Math.min(INSTANCE_POLL_MS, Math.max(0, deadline - Date.now()))));
+  }
+}
+
+async function instance_ready(port, key, { conforms = instance_conforms, wait_ms = INSTANCE_READY_MS } = {}) {
+  return poll_until(() => conforms(port, key), answer => answer === true, wait_ms);
+}
+
+/** Wait until nothing listens on the instance's port any more; returns whether that happened within `wait_ms`. */
+async function instance_stopped(port, { state = instance_state, wait_ms = INSTANCE_READY_MS } = {}) {
+  return poll_until(() => state(port), answer => answer === 'down', wait_ms);
+}
+
+/** Start an account's instance and wait until it serves as the account is set; a start that does not get there fails. */
+async function start_verified(data, name, { start = run_instance, conforms = instance_conforms, wait_ms = INSTANCE_READY_MS } = {}) {
+  const account = read_accounts(data)[name];
+  if (!account) throw new Error(`账号不存在：${name}`);
+  await start(data, name, 'start');
+  const key = account.protected === true ? instance_key(data, name) : '';
+  if (account.protected === true && !key) throw new Error('这个账号开启了入口保护，但入口读不到它的密钥');
+  if (!await instance_ready(account.port, key, { conforms, wait_ms })) {
+    throw new Error(account.protected === true ? '实例没有按入口保护启动起来（启动失败，或密钥对不上）' : '实例没有启动起来');
+  }
+}
+
 function instance_running(port) {
   return new Promise(done => {
     const request = http.get({ host: '127.0.0.1', port, path: '/api/rooms', timeout: PROBE_TIMEOUT_MS }, response => { response.resume(); done(true); });
@@ -145,7 +226,7 @@ function instance_running(port) {
 
 async function list_accounts(data) {
   const users = read_os_users(data);
-  return Promise.all(Object.entries(read_accounts(data)).map(async ([name, account]) => ({ name, port: account.port, home: account_home(data, name), disabled: Boolean(account.disabled),
+  return Promise.all(Object.entries(read_accounts(data)).map(async ([name, account]) => ({ name, port: account.port, home: account_home(data, name), disabled: Boolean(account.disabled), protected: account.protected === true,
     os_user: users[name]?.user || '', running: await instance_running(account.port), keys: list_keys(instance_home(data, name)).length,
     // The AI environment is set up once account_env.mjs has run for its Windows user (it records skills in the service home).
     skills: Boolean(users[name]) && existsSync(join(instance_home(data, name), SKILL_RECORD)) })));
@@ -221,18 +302,54 @@ function account_skills(data, name, { install = [], remove = [] } = {}) {
 
 const ps_quote = text => `'${String(text).replaceAll("'", "''")}'`;
 
+/**
+ * Turn an account's entry protection on or off, restarting its instance if it runs so the change applies at once (the
+ * instance reads whether it is protected when it starts; its open pages and streams end with the old process).
+ *
+ * On: a new key is placed in the account's protected key folder (checked before anything is written), kept as the
+ * entry's copy, and the account is marked protected. Off: the mark is removed; the entry forwards as before.
+ */
+export async function protect_account(data, name, on, { place = place_instance_key, state = instance_state, conforms = instance_conforms,
+  restart = run_instance, wait_ms = INSTANCE_READY_MS } = {}) {
+  const account = read_accounts(data)[name];
+  if (!account) throw new Error(`账号不存在：${name}`);
+  if (on && process.platform !== 'win32' && place === place_instance_key) throw new Error('入口保护目前只支持 Windows');
+  // Whether the instance runs must be known, not guessed: a port that neither answers nor refuses stops everything.
+  const before = await state(account.port);
+  if (before === 'unknown') throw new Error('无法确认实例是否在运行（端口没有回应），入口保护没有改动');
+  // A running instance is stopped first and must be seen gone (its port refusing connections) before anything changes,
+  // so the account is never marked one way while an instance of the other kind keeps serving.
+  if (before === 'up') {
+    await restart(data, name, 'stop');
+    if (!await instance_stopped(account.port, { state, wait_ms })) throw new Error('实例没有停下来，入口保护没有改动');
+  }
+  if (on) {
+    const key = randomBytes(32).toString('hex');
+    place(data, name, key);
+    set_account_protected(data, name, key);
+  } else set_account_protected(data, name, '');
+  if (before === 'down') return { protected: Boolean(on), running: false };
+  await start_verified(data, name, { start: restart, conforms, wait_ms });
+  return { protected: Boolean(on), running: true };
+}
+
 /** Start or stop an account's instance: as its Windows user from the shared copy when it has one, otherwise as the owner. */
 function run_instance(data, name, command) {
-  if (!read_accounts(data)[name]) throw new Error(`账号不存在：${name}`);
+  const account = read_accounts(data)[name];
+  if (!account) throw new Error(`账号不存在：${name}`);
   const service = instance_home(data, name);
+  // A protected instance starts knowing its key file; it then serves only callers that prove the key.
+  const key_file = account.protected === true ? instance_key_file(name) : '';
   if (command === 'start' && read_os_users(data)[name]) {
     const { local_script } = shared_paths();
     if (!existsSync(local_script)) throw new Error('还没有安装共享运行环境，请先在“托管账号”页安装');
     // Whatever was set up first, the instance starts on the shared copies its Windows user can run.
     use_shared_programs(data, name);
-    return start_instance_as_user(data, name, service, local_script);
+    return start_instance_as_user(data, name, service, local_script, process.execPath, { key_file });
   }
-  const child = spawn(process.execPath, [LOCAL_SCRIPT, command, '--json'], { stdio: 'ignore', windowsHide: true, env: { ...process.env, DISCUSS_SERVICE_HOME: service } });
+  const { DISCUSS_ENTRY_KEY_FILE: _inherited, ...environment } = process.env;
+  const child = spawn(process.execPath, [LOCAL_SCRIPT, command, '--json'], { stdio: 'ignore', windowsHide: true,
+    env: { ...environment, DISCUSS_SERVICE_HOME: service, ...(key_file ? { DISCUSS_ENTRY_KEY_FILE: key_file } : {}) } });
   return new Promise((done, fail) => {
     child.on('error', fail);
     child.on('exit', code => code === 0 ? done() : fail(new Error(`实例${command === 'start' ? '启动' : '停止'}失败（退出码 ${code}）`)));
@@ -294,7 +411,7 @@ export function create_panel({ data, key, port, ops = {}, sessions = new Set() }
   const op = { list_accounts, add_account, reset_password, set_account_disabled, remove_account, run_instance, create_os_user, remove_os_user,
     login_status, apply_login, logout, start_login, login_progress, submit_login, cancel_login, install_runtime, prepare_account, account_env, account_skills, shared_cli_state,
     save_api_key, list_keys, remove_key, use_shared_programs, service_overview, run_owner_service, latest_version, update_package,
-    autostart_enabled, set_autostart, entry_overview, start_entry, stop_entry, on_updated: () => {}, ...ops };
+    autostart_enabled, set_autostart, entry_overview, start_entry, stop_entry, protect_account, start_verified, on_updated: () => {}, ...ops };
   const hosts = new Set([`127.0.0.1:${port}`, `localhost:${port}`]);
 
   async function api(method, path, body) {
@@ -360,9 +477,12 @@ export function create_panel({ data, key, port, ops = {}, sessions = new Set() }
     if (method === 'POST' && !name) return op.add_account(data, String(body.name || '').trim());
     account();
     if (method === 'POST' && action === 'password') return { password: op.reset_password(data, name) };
+    if (method === 'POST' && action === 'protect') return op.protect_account(data, name, body.on !== false);
     if (method === 'POST' && (action === 'disable' || action === 'enable')) { op.set_account_disabled(data, name, action === 'disable'); return { disabled: action === 'disable' }; }
     if (method === 'POST' && action === 'remove') { op.remove_account(data, name); return { removed: name, kept: account_home(data, name) }; }
-    if (method === 'POST' && (action === 'start' || action === 'stop')) { await op.run_instance(data, name, action); return { ok: true }; }
+    // A start is reported only once the instance serves as the account is set (protected or not).
+    if (method === 'POST' && action === 'start') { await op.start_verified(data, name); return { ok: true }; }
+    if (method === 'POST' && action === 'stop') { await op.run_instance(data, name, action); return { ok: true }; }
     if (method === 'POST' && action === 'os-user' && extra === 'remove') { op.remove_os_user(data, name); return { ok: true }; }
     if (method === 'POST' && action === 'os-user') {
       const result = op.create_os_user(data, name, account_home(data, name));
@@ -430,6 +550,12 @@ async function entry_overview(data) {
 
 // ---- Hosted accounts' failures, to the owner's Weixin ----
 
+/** Whether two paths name the same place, as written (Windows paths compare without regard to case). */
+function same_path(a, b) {
+  const left = resolve(a), right = resolve(b);
+  return process.platform === 'win32' ? left.toLowerCase() === right.toLowerCase() : left === right;
+}
+
 const NEWLINE = 0x0a;
 const EVENT_ID = /^[A-Za-z0-9-]{8,64}$/;
 
@@ -492,7 +618,9 @@ export async function relay_operator_events(data, send = send_notice, ready = ca
   for (const name of Object.keys(read_accounts(data))) {
     const path = join(instance_home(data, name), OPERATOR_EVENTS_FILE);
     let read = null;
-    try { read = existsSync(path) ? outbox_failures(path, marks[name] || {}) : null; }
+    // The outbox is in the account's own folder: a link anywhere on its path (the file, or a folder above it that the
+    // account replaced with a junction) is not followed, so only a file really inside that folder is read.
+    try { read = existsSync(path) && same_path(realpathSync.native(path), path) ? outbox_failures(path, marks[name] || {}) : null; }
     catch (error) { process.stderr.write(`托管账号 ${name} 的失败记录读不了：${error.message}\n`); continue; }
     if (!read || (read.mark.offset === marks[name]?.offset && read.mark.head === marks[name]?.head)) continue;
     const { events, mark } = read;

@@ -501,3 +501,28 @@ test('a paired device reads, writes and uploads to a protected instance through 
     index: 0, total: 1, size: content.length, content_type: 'text/plain', data: content.toString('base64') });
   assert.ok([200, 201].includes(uploaded.status), JSON.stringify(uploaded.body));
 });
+
+test('the command line refuses to start a protected account, which would run without its protection', async t => {
+  const f = await fixture(t);
+  const accounts = read_accounts(f.data);
+  writeFileSync(join(f.data, 'gateway-accounts.json'), JSON.stringify({ ...accounts, alice: { ...accounts.alice, protected: true } }));
+  const script = join(import.meta.dirname, '..', 'gateway', 'gateway.mjs');
+  const child = spawn(process.execPath, [script, 'start', 'alice', '--data', f.data], { stdio: ['ignore', 'ignore', 'pipe'] });
+  let errors = '';
+  child.stderr.on('data', chunk => { errors += chunk; });
+  const [code] = await new Promise(done => child.on('exit', (...args) => done(args)));
+  assert.equal(code, 1);
+  assert.match(errors, /入口保护/);
+});
+
+test('the panel\'s readiness check accepts a real protected instance only with its own key', async t => {
+  const root = mkdtempSync(join(tmpdir(), 'codiscuss-conforms-'));
+  const key = '5e'.repeat(32);
+  const port = await protected_site(t, root, key);
+  t.after(() => rmSync(root, { recursive: true, force: true, maxRetries: 10 }));
+  const { instance_conforms, instance_state } = await import('../runner/admin_panel.mjs');
+  assert.equal(await instance_state(port), 'up');
+  assert.equal(await instance_conforms(port, key), true);
+  assert.equal(await instance_conforms(port, '6f'.repeat(32)), false, 'another key does not pass');
+  assert.equal(await instance_conforms(port, ''), false, 'nor does treating it as unprotected');
+});
