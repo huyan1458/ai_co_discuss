@@ -25,6 +25,7 @@ import { apply_login, cancel_login, LOGIN_METHODS, login_progress, login_status,
 import { create_os_user, install_shared_runtime, instance_key_file, place_instance_key, read_os_users, remove_os_user, run_as_user, shared_cli_state, shared_executables, shared_paths,
   start_instance_as_user } from './os_users.mjs';
 import { install_workflows, shipped_workflows } from './discussion_skills.mjs';
+import { list_workflows, workflows_home } from './workflows.mjs';
 import { hosted_prompt, import_skill, library_root, list_library, remove_library_skill, save_hosted_prompt } from './skill_library.mjs';
 import { local_status } from './discussion_local.mjs';
 import { autostart_enabled, launcher_path, set_autostart } from './launcher.mjs';
@@ -413,6 +414,16 @@ export function save_owner_prompt(key, text, original, home = homedir()) {
   return owner_prompts(home);
 }
 
+/**
+ * The workflows in a service home's library, and the shipped workflows it lacks:
+ * { workflows: [{ id, label, description, cards, disabled?, error? }], missing: [id] }.
+ */
+export function account_workflows(home) {
+  const workflows = existsSync(workflows_home(home)) ? list_workflows(home).map(({ directory: _directory, unavailable: _unavailable, ...item }) => item) : [];
+  const installed = new Set(workflows.map(item => item.id));
+  return { workflows, missing: shipped_workflows().map(item => item.name).filter(name => !installed.has(name)) };
+}
+
 function owner_skills(data, { install = [], remove = [] } = {}) {
   return owner_env('skills', { remove }, library_folders(data, install));
 }
@@ -539,7 +550,7 @@ function cookie(request, name) {
  */
 export function create_panel({ data, key, port, ops = {}, sessions = new Set() }) {
   const op = { list_accounts, add_account, reset_password, set_account_disabled, remove_account, run_instance, create_os_user, remove_os_user,
-    login_status, apply_login, logout, start_login, login_progress, submit_login, cancel_login, install_runtime, prepare_account, account_env, account_skills, owner_env, owner_skills, owner_prompts, save_owner_prompt, shared_cli_state,
+    login_status, apply_login, logout, start_login, login_progress, submit_login, cancel_login, install_runtime, prepare_account, account_env, account_skills, account_workflows, owner_env, owner_skills, owner_prompts, save_owner_prompt, shared_cli_state,
     save_api_key, list_keys, remove_key, use_shared_programs, service_overview, run_owner_service, latest_version, begin_update,
     autostart_enabled, set_autostart, entry_overview, start_entry, stop_entry, protect_account, start_verified, hand_over: () => {}, ...ops };
   const hosts = new Set([`127.0.0.1:${port}`, `localhost:${port}`]);
@@ -590,6 +601,9 @@ export function create_panel({ data, key, port, ops = {}, sessions = new Set() }
       if (method === 'POST' && name === 'env' && action === 'skills') return op.owner_skills(data, { install: body.install || [], remove: body.remove || [] });
       if (method === 'GET' && name === 'prompts') return op.owner_prompts();
       if (method === 'POST' && name === 'prompts') return op.save_owner_prompt(String(body.key || ''), body.text, body.original);
+      if (method === 'GET' && name === 'workflows') return op.account_workflows(data);
+      // Only the shipped workflows the owner's library lacks: an existing one, edited or not, is kept.
+      if (method === 'POST' && name === 'workflows' && action === 'install') { install_workflows(data, op.account_workflows(data).missing); return op.account_workflows(data); }
       if (method === 'GET' && name === 'keys') return op.list_keys(data);
       if (method === 'POST' && name === 'keys' && action === 'remove') { op.remove_key(data, String(body.ref || '')); return { ok: true }; }
       if (method === 'POST' && name === 'keys') return op.save_api_key(data, { base_url: body.base_url, api_key: body.api_key });
@@ -638,6 +652,9 @@ export function create_panel({ data, key, port, ops = {}, sessions = new Set() }
     if (method === 'POST' && action === 'env' && extra === 'skills') return op.account_skills(data, name, { install: body.install || [], remove: body.remove || [] });
     if (method === 'POST' && action === 'env' && extra === 'prompt') return op.account_env(data, name, 'prompt', { prompt: String(body.text ?? '') });
     const service = instance_home(data, name);
+    if (method === 'GET' && action === 'workflows') return op.account_workflows(service);
+    // Set up again (safe to repeat): it installs the shipped workflows the account lacks and keeps the rest.
+    if (method === 'POST' && action === 'workflows' && extra === 'install') { await op.prepare_account(data, name); return op.account_workflows(service); }
     if (method === 'GET' && action === 'keys') return op.list_keys(service);
     if (method === 'POST' && action === 'keys' && extra === 'remove') { op.remove_key(service, String(body.ref || '')); return { ok: true }; }
     if (method === 'POST' && action === 'keys') return op.save_api_key(service, { base_url: body.base_url, api_key: body.api_key, managed: true });

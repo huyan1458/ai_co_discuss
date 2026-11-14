@@ -39,6 +39,13 @@ function source(skill) {
 const installed = computed(() => [...(env.value?.skills || [])].sort((left, right) => Number(right.discussion) - Number(left.discussion) || left.name.localeCompare(right.name)));
 const installed_names = computed(() => new Set(installed.value.map((skill) => skill.name)));
 const available = computed(() => library.value.filter((skill) => !installed_names.value.has(skill.name)));
+// The installed list is long (the owner's often holds dozens), so it starts folded with a count per source.
+const installed_open = ref(false);
+const summary = computed(() => {
+  const counts = new Map();
+  for (const skill of installed.value) counts.set(source(skill).label, (counts.get(source(skill).label) || 0) + 1);
+  return [...counts].map(([label, count]) => `${label} ${count}`).join(" · ");
+});
 const layout_ok = computed(() => env.value?.layout && Object.values(env.value.layout).every(Boolean));
 
 async function init() {
@@ -91,9 +98,10 @@ function close_library() { library_open.value = false; load(); }
       </div>
 
       <div class="env-block">
-        <strong>已安装（{{ installed.length }}）</strong>
-        <p v-if="!installed.length" class="env-empty">暂无已安装技能。</p>
-        <div v-for="skill in installed" :key="skill.name" class="env-skill">
+        <button type="button" class="env-toggle" :disabled="!installed.length" @click="installed_open = !installed_open">
+          <strong>已安装（{{ installed.length }}）</strong><small>{{ installed.length ? summary : "暂无已安装技能" }}</small>
+          <UIcon v-if="installed.length" :name="installed_open ? 'i-lucide-chevron-up' : 'i-lucide-chevron-down'" /></button>
+        <div v-for="skill in installed_open ? installed : []" :key="skill.name" class="env-skill">
           <span><b>{{ skill.name }}</b><em :class="source(skill).tag">{{ source(skill).label }}</em><small :title="skill.description">{{ skill.description || "（SKILL.md 没写描述）" }}</small></span>
           <button v-if="source(skill).removable" type="button" class="panel-button is-plain is-small" :disabled="Boolean(busy)" @click="change(skill.name, false)">
             <UIcon v-if="busy === skill.name" name="i-lucide-loader" class="animate-spin" />移除</button>
