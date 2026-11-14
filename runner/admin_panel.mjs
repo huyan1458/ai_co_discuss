@@ -12,6 +12,7 @@ import { randomBytes } from 'node:crypto';
 import { closeSync, copyFileSync, cpSync, existsSync, lstatSync, mkdirSync, mkdtempSync, openSync, realpathSync, readdirSync, readFileSync, readSync, renameSync, rmSync, statSync, writeFileSync } from 'node:fs';
 import http from 'node:http';
 import { homedir, tmpdir } from 'node:os';
+import tls from 'node:tls';
 import { dirname, extname, join, resolve } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import { parseArgs } from 'node:util';
@@ -43,7 +44,12 @@ const VERSION = JSON.parse(readFileSync(join(ROOT, 'package.json'), 'utf8')).ver
 const NPM_PACKAGE = 'ai_co_discuss';
 const LATEST_URL = `https://registry.npmjs.org/${NPM_PACKAGE}/latest`;
 const LATEST_TTL_MS = 60 * 60 * 1000;
-const LATEST_TIMEOUT_MS = 8000;
+const OUTSIDE_TIMEOUT_MS = 15_000, OUTSIDE_ATTEMPTS = 2;
+// Node 24 (OpenSSL 3.5) offers a post-quantum key share first, which makes its TLS greeting span several packets; behind
+// a Clash (Mihomo) TUN such connections were reset more than half the time, while curl and browsers got through (seen
+// 2026-11-14). What the panel fetches outside is public (the latest version, a site's entry address, the relay's state),
+// so it offers the classic key shares only.
+tls.DEFAULT_ECDH_CURVE = 'X25519:prime256v1:secp384r1';
 const STATE_FILE = 'admin-panel.json';
 // An update's progress and report, kept in the service directory (panel_updater.mjs writes it too), and how long an
 // unfinished one blocks another.
@@ -95,10 +101,27 @@ function service_overview(data) {
 
 let latest = { at: 0, version: '' };
 
+/**
+ * Fetch an outside address, trying once more when the connection is dropped; a request that stalls to its timeout is not
+ * tried again (that would keep the owner waiting). Failing is reported naming the host, not as a problem of the site.
+ */
+async function fetch_outside(url, timeout_ms) {
+  for (let attempt = 1; ; attempt += 1) {
+    try {
+      return await fetch(url, { signal: AbortSignal.timeout(timeout_ms) });
+    } catch (error) {
+      const timed_out = error.name === 'TimeoutError';
+      if (!timed_out && attempt < OUTSIDE_ATTEMPTS) continue;
+      const why = timed_out ? `${timeout_ms / 1000} 秒内没有响应` : `连接被断开（${error.cause?.code || error.message}）`;
+      throw new Error(`连不上 ${new URL(url).host}：${why}，请检查这台电脑的网络或代理后重试`);
+    }
+  }
+}
+
 /** The newest published version, asked of the npm registry at most once an hour (nothing about this computer is sent). */
 async function latest_version(force = false) {
   if (!force && latest.version && Date.now() - latest.at < LATEST_TTL_MS) return latest.version;
-  const response = await fetch(LATEST_URL, { signal: AbortSignal.timeout(LATEST_TIMEOUT_MS) });
+  const response = await fetch_outside(LATEST_URL, OUTSIDE_TIMEOUT_MS);
   if (!response.ok) throw new Error(`查询新版本失败（HTTP ${response.status}）`);
   latest = { at: Date.now(), version: String((await response.json()).version || '') };
   return latest.version;
@@ -503,7 +526,7 @@ function run_instance(data, name, command) {
   // An account without its own Windows user runs as the owner and could read everything the owner can; it is not let
   // run while people outside can reach the entry.
   if (command === 'start' && process.platform === 'win32' && !read_os_users(data)[name] && entry_settings(data).mode !== 'local') {
-    throw new Error(`外网访问已开启，${name} 未隔离（以你的身份运行），不能启动：请先隔离该账号，或把外网访问改为“仅本机”`);
+    throw new Error(`外网访问已开启，${name} 未隔离（以你的身份运行），不能启动：请先隔离该账号，或把登录入口的访问方式改为“仅这台电脑”`);
   }
   if (command === 'start' && read_os_users(data)[name]) {
     const { local_script } = shared_paths();
@@ -775,7 +798,7 @@ function bound_site(data) {
 /** Ask the relay's entry Worker whether it is one and whether this computer is connected to it. */
 async function relay_status(relay_url, machine) {
   try {
-    const answer = await fetch(`${relay_url}/_codiscuss/status?machine=${machine || '0'.repeat(32)}`, { signal: AbortSignal.timeout(RELAY_CHECK_MS) });
+    const answer = await fetch_outside(`${relay_url}/_codiscuss/status?machine=${machine || '0'.repeat(32)}`, RELAY_CHECK_MS);
     const result = await answer.json();
     return result.service === 'codiscuss-entry' ? { reachable: true, online: Boolean(result.online) } : { reachable: false, online: false };
   } catch { return { reachable: false, online: false }; }
@@ -820,7 +843,7 @@ async function set_entry_mode(data, mode) {
     const users = read_os_users(data), accounts = read_accounts(data);
     const exposed = [];
     for (const [name, account] of Object.entries(accounts)) if (!users[name] && await instance_running(account.port)) exposed.push(name);
-    if (exposed.length) throw new Error(`未隔离的账号正在运行（${exposed.join('、')}），它们以你的身份运行，开启外网访问前请先停止或隔离`);
+    if (exposed.length) throw new Error(`未隔离的账号正在运行（${exposed.join('、')}），它们以你的身份运行，改用线上中转或自有域名前请先停止或隔离`);
   }
   save_entry_settings(data, { mode });
   if (mode !== 'local' && !(await entry_status(data)).running) { await start_entry(data); save_entry_settings(data, { running: true }); }
@@ -893,7 +916,8 @@ async function join_relay(data, text) {
 
 /** The entry Worker address an online site gives (`GET /api/entry`). */
 async function site_entry_url(site) {
-  const given = await fetch(`${site}/api/entry`, { signal: AbortSignal.timeout(RELAY_CHECK_MS) }).then(answer => answer.json()).catch(() => ({}));
+  const answer = await fetch_outside(`${site}/api/entry`, OUTSIDE_TIMEOUT_MS);
+  const given = await answer.json().catch(() => ({}));
   if (!given.entry_url) throw new Error(`${site} 没有提供入口地址：请部署线上站点的人在部署配置里设置 ENTRY_URL 并重新发布`);
   return given.entry_url;
 }

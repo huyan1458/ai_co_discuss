@@ -40,11 +40,11 @@ export const HELP = `用法：codiscuss admin <命令> [参数]（与管理面�
   service start|stop|restart               只启停共议服务（网站与讨论服务）
   autostart on|off                         登录 Windows 时自动启动
 
-登录入口与外网访问（需打开托管管理）
+登录入口与访问方式（需打开托管管理）
   entry start|stop                         启动或停止登录入口
-  entry mode local|relay|tunnel            外网访问方式
+  entry mode local|relay|tunnel            访问方式：仅这台电脑 | 线上中转 | 自有域名
   entry join <接入码>                       用接入码接入线上站点并切换到线上中转
-  entry connect <站点> <绑定令牌>           只绑定线上站点（管理员远程用），不改外网访问方式
+  entry connect <站点> <绑定令牌>           只绑定线上站点（管理员远程用），不改访问方式
   runtime sync                             同步隔离账号的程序副本
 
 托管账号

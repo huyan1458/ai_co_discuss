@@ -85,7 +85,7 @@ const ICONS = { pending: "i-lucide-circle", running: "i-lucide-loader", done: "i
         <p v-else class="panel-note"><UIcon name="i-lucide-key-round" />账号的登录密码如下，仅显示一次，请先复制保存。</p>
         <div class="panel-secret"><span>{{ entry_address(state.entry) }} · {{ name.trim() }} · {{ password }}</span>
           <button type="button" class="panel-icon-button" aria-label="复制地址、账号和密码" @click="copy(`地址 ${entry_address(state.entry)}，账号 ${name.trim()}，密码 ${password}`)"><UIcon name="i-lucide-copy" /></button></div>
-        <p v-if="!state.entry?.address" class="panel-note is-amber"><UIcon name="i-lucide-triangle-alert" />尚未开启外网访问，该地址仅本机可打开。请在“概览 → 登录入口”中设置。</p>
+        <p v-if="!state.entry?.address" class="panel-note is-amber"><UIcon name="i-lucide-triangle-alert" />登录入口的访问方式是“仅这台电脑”，这个地址在其他设备上打不开。请在“概览 → 登录入口 → 访问方式”里配置线上中转或自有域名。</p>
       </template>
     </div>
 
