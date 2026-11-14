@@ -4,7 +4,7 @@
  * people outside reach it (this computer only, the online relay without a domain, or a Cloudflare tunnel from the owner's
  * own domain; each prepared in its own dialog), and the copy of the programs accounts with their own Windows user run.
  */
-import { computed, inject, ref } from "vue";
+import { computed, inject, ref, watch } from "vue";
 import { call, entry_address } from "./api.js";
 import RelayDialog from "./RelayDialog.vue";
 import TunnelDialog from "./TunnelDialog.vue";
@@ -23,7 +23,12 @@ const MODES = [
   { key: "relay", label: "线上中转", note: "不需要域名，经共议线上站点中转到这台电脑" },
   { key: "tunnel", label: "自有域名", note: "经 Cloudflare 隧道，把你托管在 Cloudflare 的域名转到这台电脑" },
 ];
-const mode_note = computed(() => MODES.find((item) => item.key === entry.value.mode)?.note || "");
+// The way shown on the switch: the one in use, or one picked that still needs preparing (its row then offers "配置").
+const picked = ref("");
+const shown = computed(() => picked.value || entry.value.mode);
+watch(() => entry.value.mode, () => { picked.value = ""; });
+const prepared = (mode) => mode === "local" || (mode === "relay" ? Boolean(entry.value.relay?.site && entry.value.relay?.url) : Boolean(entry.value.tunnel));
+const mode_note = computed(() => MODES.find((item) => item.key === shown.value)?.note || "");
 // The tunnel as cloudflared reports it: connected to Cloudflare, running but not (yet) connected, or not running.
 const tunnel_state = computed(() => {
   const tunnel = entry.value.tunnel;
@@ -48,13 +53,17 @@ async function entry_act(action, body = {}, message = "") {
   finally { entry_busy.value = ""; }
 }
 
-/** Switch how people outside reach the entry; a way not prepared yet opens its dialog instead. */
+/** Switch how people outside reach the entry; a way not prepared yet is only shown, with "配置" to prepare it. */
 async function choose(mode) {
-  if (mode === entry.value.mode || entry_busy.value) return;
-  const relay = entry.value.relay || {};
-  if (mode === "relay" && !(relay.site && relay.url)) return (relay_open.value = true);
-  if (mode === "tunnel" && !entry.value.tunnel) return (tunnel_open.value = true);
+  if (entry_busy.value) return;
+  if (mode === entry.value.mode) { picked.value = ""; return; }
+  if (!prepared(mode)) { picked.value = mode; return; }
+  picked.value = "";
   await entry_act("mode", { mode }, mode === "local" ? "已改为仅本机可访问" : `外网访问已改为${MODES.find((item) => item.key === mode).label}`);
+}
+
+function configure(mode) {
+  if (mode === "relay") relay_open.value = true; else tunnel_open.value = true;
 }
 
 async function copy(text) {
@@ -94,12 +103,16 @@ async function install() {
     <div class="panel-row-extra entry-access">
       <span class="entry-label">外网访问</span>
       <div class="entry-modes" role="radiogroup" aria-label="外网访问方式">
-        <button v-for="item in MODES" :key="item.key" type="button" role="radio" :aria-checked="entry.mode === item.key" class="entry-mode"
-          :class="{ 'is-active': entry.mode === item.key }" :disabled="Boolean(entry_busy)" @click="choose(item.key)">{{ item.label }}</button>
+        <button v-for="item in MODES" :key="item.key" type="button" role="radio" :aria-checked="shown === item.key" class="entry-mode"
+          :class="{ 'is-active': shown === item.key }" :disabled="Boolean(entry_busy)" @click="choose(item.key)">{{ item.label }}</button>
       </div>
     </div>
     <small class="entry-note">{{ mode_note }}</small>
-    <div v-if="entry.mode !== 'local'" class="panel-row-extra entry-detail">
+    <div v-if="picked" class="panel-row-extra entry-detail">
+      <span class="entry-value is-empty">{{ picked === "relay" ? "尚未接入线上站点，配置后生效；当前仍为" : "尚未设置 Cloudflare 隧道，配置后生效；当前仍为" }}{{ MODES.find((item) => item.key === entry.mode)?.label }}</span>
+      <button type="button" class="panel-button is-primary is-small" @click="configure(picked)"><UIcon name="i-lucide-settings-2" />配置</button>
+    </div>
+    <div v-else-if="entry.mode !== 'local'" class="panel-row-extra entry-detail">
       <template v-if="entry.mode === 'relay'">
         <span class="entry-value">{{ entry.relay?.link }}
           <span class="panel-tag" :class="relay_state.tag" :title="relay_state.hint">{{ relay_state.label }}</span>

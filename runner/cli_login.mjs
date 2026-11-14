@@ -162,7 +162,8 @@ function start_console(data, target, exe) {
   const files = { 'host.ps1': `﻿${CONSOLE_HOST}`, 'command.txt': `"${exe}"` };
   if (target) return run_as_user(data, target, "& (Join-Path $Job 'host.ps1') -Job $Job", { files, wait: false });
   const folder = owner_folder(files);
-  spawn(POWERSHELL, ['-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', join(folder, 'host.ps1'), '-Job', folder], { detached: true, stdio: 'ignore', windowsHide: true }).unref();
+  // Not detached: a PowerShell started detached (no console) exits at once with code 0 without running its script.
+  spawn(POWERSHELL, ['-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', join(folder, 'host.ps1'), '-Job', folder], { stdio: 'ignore', windowsHide: true }).unref();
   return { folder };
 }
 
