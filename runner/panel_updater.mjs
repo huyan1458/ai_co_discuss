@@ -52,7 +52,9 @@ async function main() {
   for (let waited = 0; waited < EXIT_WAIT_MS && alive(Number(values.pid)); waited += POLL_MS) await sleep(POLL_MS);
   let failure = null;
   for (let attempt = 1; attempt <= INSTALL_ATTEMPTS; attempt += 1) {
-    try { await npm(['install', '--global', `${NPM_PACKAGE}@${job.version}`], values.data); failure = null; break; }
+    // --prefer-online: the version was just read from the registry, while npm's cached package list may predate it
+    // (a fresh release fails with "notarget" until the cache expires).
+    try { await npm(['install', '--global', '--prefer-online', `${NPM_PACKAGE}@${job.version}`], values.data); failure = null; break; }
     catch (error) { failure = error; if (attempt < INSTALL_ATTEMPTS) await sleep(RETRY_MS); }
   }
   save(failure ? { status: 'install_failed', steps: [...job.steps, `安装失败：${failure.message}`] }
