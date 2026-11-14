@@ -8,7 +8,7 @@
  * after moving them.
  */
 import { spawnSync } from 'node:child_process';
-import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { copyFileSync, existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { homedir, tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -17,7 +17,11 @@ const RUNNER = dirname(fileURLToPath(import.meta.url));
 const ROOT = dirname(RUNNER);
 const EXE_NAME = '共议.exe';
 const SHORTCUT_NAME = '共议.lnk';
-const ICON_SIZES = [256, 48, 32, 16];
+// Every size Windows picks at the common scales (taskbar 24 at 100%, tray 16/20/24, shortcuts 32/40/48/64, large 256).
+const ICON_SIZES = [256, 64, 48, 40, 32, 24, 20, 16];
+// The icon ships with the package, drawn once where it renders right (see render_icon); drawing it on each computer gave
+// opaque corners where that computer's Edge ignored the transparent background.
+const PACKAGED_ICON = join(ROOT, 'web', 'codiscuss.ico');
 const CSC = join(process.env.WINDIR || 'C:\\Windows', 'Microsoft.NET', 'Framework64', 'v4.0.30319', 'csc.exe');
 const EDGE_PATHS = [join(process.env['ProgramFiles(x86)'] || 'C:\\Program Files (x86)', 'Microsoft', 'Edge', 'Application', 'msedge.exe'),
   join(process.env.ProgramFiles || 'C:\\Program Files', 'Microsoft', 'Edge', 'Application', 'msedge.exe')];
@@ -429,9 +433,10 @@ function tile_svg() {
 
 /**
  * Draw the icon in every size with Edge in headless mode, which renders the SVG mark exactly; each size is drawn on its
- * own rather than scaled down, so small sizes stay sharp.
+ * own rather than scaled down, so small sizes stay sharp. Run by hand to refresh the packaged icon after the mark changes
+ * (check its corners are transparent), e.g. node -e "import('./runner/launcher.mjs').then(m => m.render_icon('web'))".
  */
-function render_icon(folder) {
+export function render_icon(folder) {
   const edge = EDGE_PATHS.find(path => existsSync(path));
   if (!edge) return null;
   const work = join(tmpdir(), `codiscuss-icon-${process.pid}`);
@@ -521,7 +526,8 @@ export function install_launcher(home = join(homedir(), '.codiscuss')) {
   if (!existsSync(CSC)) throw new Error(`找不到 .NET Framework 自带的 C# 编译器：${CSC}`);
   const folder = join(home, 'launcher');
   mkdirSync(folder, { recursive: true });
-  const icon = render_icon(folder);
+  const icon = existsSync(PACKAGED_ICON) ? join(folder, 'codiscuss.ico') : null;
+  if (icon) copyFileSync(PACKAGED_ICON, icon);
   const source = join(folder, 'launcher.cs'), exe = launcher_path(home);
   writeFileSync(source, `\ufeff${launcher_source({ node: process.execPath, local_script: installed_script('discussion_local.mjs'),
     panel_script: installed_script('admin_panel.mjs'), home })}`, 'utf8');
@@ -534,5 +540,5 @@ export function install_launcher(home = join(homedir(), '.codiscuss')) {
 
 export function launcher_main() {
   const { exe, icon, shortcuts } = install_launcher();
-  process.stdout.write(`已生成启动器：${exe}\n${icon ? '' : '（没有找到 Edge，启动器使用默认图标）\n'}快捷方式：\n${shortcuts.map(path => `  ${path}`).join('\n')}\n双击即可启动共议。\n`);
+  process.stdout.write(`已生成启动器：${exe}\n${icon ? '' : '（安装包里缺少图标，启动器使用默认图标）\n'}快捷方式：\n${shortcuts.map(path => `  ${path}`).join('\n')}\n双击即可启动共议。\n`);
 }

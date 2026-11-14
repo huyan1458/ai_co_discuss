@@ -961,8 +961,9 @@ function run_panel(data, port) {
     process.stdout.write(`管理面板已启动：http://127.0.0.1:${port}\n`);
     finish_update(data).catch(error => process.stderr.write(`更新收尾失败：${error.message}\n`));
   });
-  const rendered = join(data, 'launcher', 'codiscuss.ico');
-  const tray = show_tray({ title: '共议', icon_path: existsSync(rendered) ? rendered : '', window_title: WINDOW_TITLE,
+  // The icon that ships with the package, the same on every computer.
+  const icon = join(ROOT, 'web', 'codiscuss.ico');
+  const tray = show_tray({ title: '共议', icon_path: existsSync(icon) ? icon : '', window_title: WINDOW_TITLE,
     host: join(data, 'launcher', '共议.exe'), on_action: action => {
     if (action === 'open') open_panel_window(data, panel_url(state), false);
     if (action === 'site') open_browser(site_url(data));

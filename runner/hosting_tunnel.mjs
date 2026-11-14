@@ -97,7 +97,8 @@ function run(cloudflared, args, shown = false) {
 
 function find_tunnel(cloudflared, name) {
   const text = run(cloudflared, ['tunnel', 'list', '--output', 'json']).trim();
-  return text ? JSON.parse(text).find(item => item.name === name) || null : null;
+  // An account without any tunnel lists `null`, not an empty list.
+  return (text ? JSON.parse(text) || [] : []).find(item => item.name === name) || null;
 }
 
 /**
