@@ -11,6 +11,7 @@ import { managed_api_keys, save_api_key } from '../runner/discussion_api.mjs';
 import { create_panel, instance_conforms, instance_state, list_keys, protect_account, relay_operator_events } from '../runner/admin_panel.mjs';
 import { instance_key_file, os_user_name, place_instance_key, secure_folder, secure_shared_root } from '../runner/os_users.mjs';
 import { tray_script } from '../runner/tray.mjs';
+import { admin_cli } from '../runner/admin_cli.mjs';
 
 const KEY = 'owner-key';
 const folders = [];
@@ -371,3 +372,20 @@ test('joining the online relay takes one access code, and a wrong one or a missi
   assert.equal(made.status, 400);
   assert.match((await made.json()).error, /找不到线上站点的部署配置/);
 });
+
+test('the admin command line works the panel with the owner key only, and does what the panel does', async () => {
+  const { data, ops } = fixture();
+  const { port } = await serve(data, ops);
+  const run = async (args) => { let text = ''; await admin_cli([...args, '--data', data], { print: chunk => { text += chunk; } }); return JSON.parse(text); };
+  // Without the key file the owner keeps, nothing is reached.
+  await assert.rejects(run(['status']), /管理面板没有在运行/);
+  writeFileSync(join(data, 'admin-panel.json'), JSON.stringify({ port, key: 'wrong-key', pid: process.pid }));
+  await assert.rejects(run(['status']), /拒绝了钥匙/);
+  writeFileSync(join(data, 'admin-panel.json'), JSON.stringify({ port, key: KEY, pid: process.pid }));
+  assert.equal((await run(['status'])).hosting, true);
+  const created = await run(['key', 'add', 'demo', '--base-url', 'https://api.deepseek.com/v1', '--key', 'sk-secret-5678']);
+  assert.ok(created);
+  const keys = await run(['key', 'list', 'demo']);
+  assert.ok(keys.some(item => item.managed) && !JSON.stringify(keys).includes('sk-secret-5678'), 'added as the owner gives it, never shown in full');
+});
+

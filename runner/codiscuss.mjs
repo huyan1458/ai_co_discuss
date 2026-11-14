@@ -19,6 +19,7 @@ const HELP = `AI CoDiscuss CLI
   local COMMAND         管理本机网站，或 connect 连接线上站点
   token                 生成线上网站的一次性管理员注册令牌
   panel [open|start|stop]  打开本机管理面板（托管用户、命令行登录、API 密钥）
+  admin COMMAND         以命令行完成管理面板的全部操作（启动、退出、更新、托管账号等）
   launcher              生成“共议.exe”与桌面、开始菜单快捷方式，双击即可启动（Windows）
   service COMMAND       启动、停止、查询服务，或登记房间
   launch COMMAND        保存启动配置，或从 AI 对话启动讨论
@@ -124,6 +125,7 @@ async function main(args = process.argv.slice(2)) {
   if (command === 'local') return local_main(args.slice(1));
   if (command === 'token') return admin_main(args.slice(1));
   if (command === 'panel') return (await import('./admin_panel.mjs')).panel_main(args.slice(1));
+  if (command === 'admin') return (await import('./admin_cli.mjs')).admin_cli(args.slice(1));
   if (command === 'launcher') return (await import('./launcher.mjs')).launcher_main();
   if (!command || (command === 'run' && args.length === 1)) return service_cli([]);
   if (SERVICE_COMMANDS.has(command) || command === '--json') return service_cli(args);
