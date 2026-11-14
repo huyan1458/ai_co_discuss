@@ -1,11 +1,11 @@
 <script setup>
 /**
- * This computer: the owner's own service (status, start, restart, stop), the owner's command-line sign-ins, updates with
- * a report of every step, and starting with Windows.
+ * This computer: the owner's own service (status, start, restart, stop), updates with a report of every step, starting
+ * with Windows, and with hosting on, the accounts' entry and program copy. Each account's own setup is on "账号".
  */
 import { computed, inject, onMounted, ref, watch } from "vue";
 import { call } from "./api.js";
-import LoginCard from "./LoginCard.vue";
+import HostingCards from "./HostingCards.vue";
 
 const { state, reload, notify, refreshed } = inject("panel");
 const service = computed(() => state.value.service || {});
@@ -87,12 +87,6 @@ watch(refreshed, () => check(true));
       </div>
     </article>
 
-    <h3 class="panel-section-title"><UIcon name="i-lucide-terminal" />你的 AI 程序</h3>
-    <article class="panel-card is-tall">
-      <LoginCard target="_" who="本机（你自己）" />
-      <p class="panel-sub" style="margin: 10px 4px 0; white-space: normal">房间里你的成员、以及未隔离的托管账号都用这里的登录。Claude Code 推荐用 Setup Token：一次授权，一年有效。</p>
-    </article>
-
     <h3 class="panel-section-title"><UIcon name="i-lucide-download" />更新</h3>
     <article class="panel-card">
       <div class="panel-tile"><UIcon name="i-lucide-package" /></div>
@@ -126,11 +120,13 @@ watch(refreshed, () => check(true));
         </div>
       </article>
     </template>
+
+    <HostingCards v-if="state.hosting" />
   </section>
 
   <UModal :open="confirming" title="更新共议" :description="`从 v${update?.current} 更新到 v${update?.latest}`" @update:open="(open) => !open && (confirming = false)">
     <template #body>
-      <p class="panel-note"><UIcon name="i-lucide-info" />会用 npm 安装新版本，更新你的房间技能，再重启本机网站与讨论服务。{{ state.hosting ? "隔离账号的共享运行环境和技能也会一起更新，运行中的实例会重启。" : "" }}进行中的讨论会暂停、执行会中断，随后在原会话里自动续跑。工作流不会被覆盖。</p>
+      <p class="panel-note"><UIcon name="i-lucide-info" />会用 npm 安装新版本，更新你的房间技能，再重启本机网站与讨论服务。{{ state.hosting ? "隔离账号的程序副本和技能也会一起更新，运行中的实例会重启。" : "" }}进行中的讨论会暂停、执行会中断，随后在原会话里自动续跑。工作流不会被覆盖。</p>
       <div class="panel-form-foot">
         <button type="button" class="panel-button is-plain" @click="confirming = false">取消</button>
         <button type="button" class="panel-button is-primary" @click="install">更新并重启</button>

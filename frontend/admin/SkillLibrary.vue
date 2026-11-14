@@ -1,13 +1,13 @@
 <script setup>
 /**
- * The owner's skill library for hosted accounts: drop skill folders or .zip files in (or pick them), see and delete what
- * is there, and edit the system prompt new accounts start with. Installing a library skill for an account is done on
- * that account's page.
+ * The owner's skill library, for the owner and hosted accounts: drop skill folders or .zip files in (or pick them), see and delete what
+ * is there, and with hosting on edit the system prompt new accounts start with. Installing a library skill is done in
+ * an account's skills.
  */
 import { inject, onMounted, ref, watch } from "vue";
 import { call } from "./api.js";
 
-const { notify, refreshed } = inject("panel");
+const { state, notify, refreshed } = inject("panel");
 const skills = ref([]), over = ref(false), importing = ref(""), removing = ref(null);
 const prompt = ref({ open: false, text: "", saved: "", saving: false });
 
@@ -100,13 +100,13 @@ const size = (bytes) => (bytes > 1048576 ? `${(bytes / 1048576).toFixed(1)} MB` 
         <label class="library-pick">选择 .zip<input type="file" accept=".zip" multiple hidden @change="picked_zip" /></label> 或
         <label class="library-pick">选择文件夹<input type="file" webkitdirectory hidden @change="picked_folder" /></label></small>
     </div>
-    <p v-if="!skills.length" class="library-empty">技能库还是空的。导入后，到账号页勾选要给它装的技能。</p>
+    <p v-if="!skills.length" class="library-empty">技能库还是空的。导入后，到各账号的“技能”里安装。</p>
     <div v-for="skill in skills" :key="skill.name" class="library-row">
       <UIcon name="i-lucide-sparkle" class="library-icon" />
       <div class="library-text"><strong>{{ skill.name }}</strong><small>{{ skill.description || "（SKILL.md 没写描述）" }} · {{ skill.files }} 个文件 · {{ size(skill.size) }}</small></div>
       <button type="button" class="panel-icon-button" title="从技能库删除" aria-label="从技能库删除" @click="removing = skill.name"><UIcon name="i-lucide-trash-2" /></button>
     </div>
-    <div class="library-prompt">
+    <div v-if="state.hosting" class="library-prompt">
       <button type="button" class="library-toggle" @click="open_prompt">
         <strong>新账号的默认系统提示词</strong><small>初始化 AI 环境时，账号还没有系统提示词就用这一份；不会用你自己的</small>
         <UIcon :name="prompt.open ? 'i-lucide-chevron-up' : 'i-lucide-chevron-down'" /></button>

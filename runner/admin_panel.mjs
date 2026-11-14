@@ -9,7 +9,7 @@
  */
 import { spawn, spawnSync } from 'node:child_process';
 import { randomBytes } from 'node:crypto';
-import { closeSync, copyFileSync, existsSync, mkdirSync, openSync, realpathSync, readdirSync, readFileSync, readSync, renameSync, rmSync, statSync, writeFileSync } from 'node:fs';
+import { closeSync, copyFileSync, cpSync, existsSync, mkdirSync, mkdtempSync, openSync, realpathSync, readdirSync, readFileSync, readSync, renameSync, rmSync, statSync, writeFileSync } from 'node:fs';
 import http from 'node:http';
 import { tmpdir } from 'node:os';
 import { dirname, extname, join, resolve } from 'node:path';
@@ -45,6 +45,7 @@ const STATE_FILE = 'admin-panel.json';
 // unfinished one blocks another.
 const UPDATE_JOB_FILE = 'panel-update.json';
 const UPDATE_STALE_MS = 10 * 60 * 1000;
+const OWNER_ENV_TIMEOUT_MS = 120_000;
 // Hosted accounts' failures, relayed to the owner's Weixin: how often, how far each account's outbox was read, and limits
 // on what one notice carries (the outbox is in the account's own folder, so its text is the account's, not ours).
 const RELAY_MS = 30_000;
@@ -171,7 +172,7 @@ async function finish_update(data) {
   }));
   await update_step(steps, '已启动本机服务', () => run_owner_service(data, 'start'));
   if (hosting_enabled(data)) {
-    if (installed) await update_step(steps, '已更新共享运行环境', () => { const result = install_runtime(data); if (result.warnings.length) throw new Error(result.warnings.join('；')); });
+    if (installed) await update_step(steps, '已同步隔离账号的程序副本', () => { const result = install_runtime(data); if (result.warnings.length) throw new Error(result.warnings.join('；')); });
     for (const account of await list_accounts(data)) {
       if (installed && account.os_user) await update_step(steps, `已更新 ${account.name} 的技能`, () => prepare_account(data, account.name));
       // Reported restarted only once it serves again as the account is set (start_verified). Instances run from the
@@ -314,7 +315,7 @@ function install_runtime(data) {
  */
 function account_env(data, name, action, request = {}, folders = {}) {
   const { env_script } = shared_paths();
-  if (!existsSync(env_script)) throw new Error('还没有安装共享运行环境，请先在“托管账号”页安装');
+  if (!existsSync(env_script)) throw new Error('还没有安装隔离账号的程序副本，请先在“托管账号”页底部安装');
   const text = run_as_user(data, name, `& ${ps_quote(process.execPath)} ${ps_quote(env_script)} ${action} $Job`,
     { files: { 'request.json': JSON.stringify(request) }, folders, timeout: 120_000 });
   const line = text.split(/\r?\n/).reverse().find(item => item.trim().startsWith('{'));
@@ -337,14 +338,42 @@ function prepare_account(data, name) {
   return account_env(data, name, 'init', { home: service, prompt: hosted_prompt(data) });
 }
 
-/** Install library skills for an account's own Windows user and remove others: { install: [name], remove: [name] }. */
-function account_skills(data, name, { install = [], remove = [] } = {}) {
+/** The library folders of the skills to install, placed as account_env.mjs expects them in its job folder. */
+function library_folders(data, install) {
   const library = library_root(data), folders = {};
   for (const skill of install) {
     if (!existsSync(join(library, String(skill), 'SKILL.md'))) throw new Error(`技能库里没有 ${skill}`);
     folders[join('skills', String(skill))] = join(library, String(skill));
   }
-  return account_env(data, name, 'skills', { remove }, folders);
+  return folders;
+}
+
+/** Install library skills for an account's own Windows user and remove others: { install: [name], remove: [name] }. */
+function account_skills(data, name, { install = [], remove = [] } = {}) {
+  return account_env(data, name, 'skills', { remove }, library_folders(data, install));
+}
+
+/**
+ * Run account_env.mjs as the owner (this process's own user), whose skills folder is laid out the same way: 'status'
+ * lists the owner's skills, 'skills' installs library skills and removes others. The owner's layout and prompt are not
+ * touched (no 'init' or 'prompt' here).
+ */
+function owner_env(action, request = {}, folders = {}) {
+  if (!['status', 'skills'].includes(action)) throw new Error(`未知操作：${action}`);
+  const job = mkdtempSync(join(tmpdir(), 'codiscuss-env-'));
+  try {
+    writeFileSync(join(job, 'request.json'), JSON.stringify(request));
+    for (const [target, source] of Object.entries(folders)) cpSync(source, join(job, target), { recursive: true });
+    const result = spawnSync(process.execPath, [join(ROOT, 'runner', 'account_env.mjs'), action, job], { encoding: 'utf8', windowsHide: true, timeout: OWNER_ENV_TIMEOUT_MS });
+    const line = String(result.stdout || '').split(/\r?\n/).reverse().find(item => item.trim().startsWith('{'));
+    const parsed = line ? JSON.parse(line) : { error: String(result.stderr || '').trim().slice(0, 300) || '没有读到结果' };
+    if (parsed.error) throw new Error(parsed.error);
+    return parsed;
+  } finally { rmSync(job, { recursive: true, force: true }); }
+}
+
+function owner_skills(data, { install = [], remove = [] } = {}) {
+  return owner_env('skills', { remove }, library_folders(data, install));
 }
 
 const ps_quote = text => `'${String(text).replaceAll("'", "''")}'`;
@@ -389,7 +418,7 @@ function run_instance(data, name, command) {
   const key_file = account.protected === true ? instance_key_file(name) : '';
   if (command === 'start' && read_os_users(data)[name]) {
     const { local_script } = shared_paths();
-    if (!existsSync(local_script)) throw new Error('还没有安装共享运行环境，请先在“托管账号”页安装');
+    if (!existsSync(local_script)) throw new Error('还没有安装隔离账号的程序副本，请先在“托管账号”页底部安装');
     // Whatever was set up first, the instance starts on the shared copies its Windows user can run.
     use_shared_programs(data, name);
     return start_instance_as_user(data, name, service, local_script, process.execPath, { key_file });
@@ -456,7 +485,7 @@ function cookie(request, name) {
  */
 export function create_panel({ data, key, port, ops = {}, sessions = new Set() }) {
   const op = { list_accounts, add_account, reset_password, set_account_disabled, remove_account, run_instance, create_os_user, remove_os_user,
-    login_status, apply_login, logout, start_login, login_progress, submit_login, cancel_login, install_runtime, prepare_account, account_env, account_skills, shared_cli_state,
+    login_status, apply_login, logout, start_login, login_progress, submit_login, cancel_login, install_runtime, prepare_account, account_env, account_skills, owner_env, owner_skills, shared_cli_state,
     save_api_key, list_keys, remove_key, use_shared_programs, service_overview, run_owner_service, latest_version, begin_update,
     autostart_enabled, set_autostart, entry_overview, start_entry, stop_entry, protect_account, start_verified, hand_over: () => {}, ...ops };
   const hosts = new Set([`127.0.0.1:${port}`, `localhost:${port}`]);
@@ -469,9 +498,9 @@ export function create_panel({ data, key, port, ops = {}, sessions = new Set() }
     if (method === 'GET' && section === 'state') {
       const windows = process.platform === 'win32';
       return { hosting, version: VERSION, service: op.service_overview(data), platform: process.platform,
-        launcher: windows && existsSync(launcher_path(data)), autostart: windows && op.autostart_enabled(), login_methods: LOGIN_METHODS,
-        ...(hosting ? { accounts: await op.list_accounts(data), clis: op.shared_cli_state(), providers: API_PROVIDERS, entry: await op.entry_overview(data) }
-          : { accounts: [], clis: {}, providers: {}, entry: null }) };
+        launcher: windows && existsSync(launcher_path(data)), autostart: windows && op.autostart_enabled(), login_methods: LOGIN_METHODS, providers: API_PROVIDERS,
+        ...(hosting ? { accounts: await op.list_accounts(data), clis: op.shared_cli_state(), entry: await op.entry_overview(data) }
+          : { accounts: [], clis: {}, entry: null }) };
     }
     // This computer: the owner's own service, its updates and login autostart.
     if (method === 'POST' && section === 'service' && ['start', 'stop', 'restart'].includes(name)) {
@@ -501,6 +530,21 @@ export function create_panel({ data, key, port, ops = {}, sessions = new Set() }
       if (method === 'POST' && extra === 'start') return op.start_login(data, target, action, body.method);
       throw new Error('接口不存在');
     }
+    // The owner as an account: its skills (from its own folder, library skills installed or removed) and API keys.
+    if (section === 'owner') {
+      if (method === 'GET' && name === 'env') return op.owner_env('status');
+      if (method === 'POST' && name === 'env' && action === 'skills') return op.owner_skills(data, { install: body.install || [], remove: body.remove || [] });
+      if (method === 'GET' && name === 'keys') return op.list_keys(data);
+      if (method === 'POST' && name === 'keys' && action === 'remove') { op.remove_key(data, String(body.ref || '')); return { ok: true }; }
+      if (method === 'POST' && name === 'keys') return op.save_api_key(data, { base_url: body.base_url, api_key: body.api_key });
+      throw new Error('接口不存在');
+    }
+    // The skill library is the owner's, for the owner and the hosted accounts alike.
+    if (section === 'skill-library') {
+      if (method === 'GET') return list_library(data);
+      if (method === 'POST' && !name) return import_skill(data, body);
+      if (method === 'POST' && action === 'remove') { remove_library_skill(data, name); return { ok: true }; }
+    }
     // Hosting: only once the owner turned it on in setup.
     if (!hosting) throw new Error('托管管理未打开：运行 codiscuss setup 勾选“托管管理（管理面板）”');
     if (method === 'POST' && section === 'clis' && name === 'install') return op.install_runtime(data);
@@ -511,12 +555,7 @@ export function create_panel({ data, key, port, ops = {}, sessions = new Set() }
       return op.entry_overview(data);
     }
     if (method === 'POST' && section === 'entry' && name === 'settings') { save_entry_settings(data, { public_url: body.public_url }); return op.entry_overview(data); }
-    // The skill library and the default system prompt, both the owner's, for hosted accounts.
-    if (section === 'skill-library') {
-      if (method === 'GET') return list_library(data);
-      if (method === 'POST' && !name) return import_skill(data, body);
-      if (method === 'POST' && action === 'remove') { remove_library_skill(data, name); return { ok: true }; }
-    }
+    // The default system prompt of new hosted accounts.
     if (section === 'hosted-prompt') {
       if (method === 'GET') return { text: hosted_prompt(data) };
       if (method === 'POST') { save_hosted_prompt(data, body.text); return { ok: true }; }

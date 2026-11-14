@@ -1,7 +1,8 @@
 <script setup>
 /**
- * API keys of one hosted account's instance. Keys added here are marked as provided by the computer owner: the account's
- * API cards use them without showing them and cannot replace them. Keys the account entered itself are listed too.
+ * API keys of one account. For a hosted account's instance, keys added here are marked as provided by the computer owner:
+ * the account's API cards use them without showing them and cannot replace them; keys the account entered itself are
+ * listed too. `account` is "" for the owner, whose own keys these are.
  */
 import { computed, inject, onMounted, ref, watch } from "vue";
 import { call, provider_icon, provider_of } from "./api.js";
@@ -12,9 +13,10 @@ const { state, notify, refreshed } = inject("panel");
 const keys = ref([]), adding = ref(false), saving = ref(false), removing = ref(null);
 const presets = computed(() => Object.entries(state.value.providers || {}).filter(([key]) => key !== "OpenAI").map(([key, provider]) => ({ key, ...provider })));
 const form = ref({ preset: "", base_url: "", api_key: "" });
+const base = computed(() => (props.account ? `accounts/${props.account}/keys` : "owner/keys"));
 
 async function load() {
-  try { keys.value = await call(`accounts/${props.account}/keys`); }
+  try { keys.value = await call(base.value); }
   catch (failure) { notify("error", failure.message); }
 }
 onMounted(load);
@@ -31,7 +33,7 @@ function choose(preset) { form.value.preset = preset.key; form.value.base_url = 
 async function save() {
   saving.value = true;
   try {
-    await call(`accounts/${props.account}/keys`, { base_url: form.value.base_url.trim(), api_key: form.value.api_key });
+    await call(base.value, { base_url: form.value.base_url.trim(), api_key: form.value.api_key });
     notify("info", "API 密钥已保存");
     adding.value = false;
     await load(); emit("changed");
@@ -42,7 +44,7 @@ async function save() {
 async function remove() {
   const key = removing.value;
   removing.value = null;
-  try { await call(`accounts/${props.account}/keys/remove`, { ref: key.ref }); notify("info", "已删除"); await load(); emit("changed"); }
+  try { await call(`${base.value}/remove`, { ref: key.ref }); notify("info", "已删除"); await load(); emit("changed"); }
   catch (failure) { notify("error", failure.message); }
 }
 </script>
@@ -50,7 +52,7 @@ async function remove() {
 <template>
   <div class="keys">
     <div class="keys-head">
-      <span>API 密钥 <small>给它的 API 专家（DeepSeek、Kimi 等）用</small></span>
+      <span>API 密钥 <small>给{{ account ? "它" : "你" }}的 API 专家（DeepSeek、Kimi 等）用</small></span>
       <button v-if="!adding" type="button" class="panel-button is-outline is-small" @click="start"><UIcon name="i-lucide-plus" />添加密钥</button>
     </div>
     <form v-if="adding" class="keys-form" @submit.prevent="save">
@@ -60,7 +62,7 @@ async function remove() {
       </div>
       <label class="panel-field">接口地址<input v-model="form.base_url" class="panel-input" placeholder="https://…" spellcheck="false" /></label>
       <label class="panel-field">密钥<input v-model="form.api_key" class="panel-input" type="password" placeholder="粘贴密钥" autocomplete="off" spellcheck="false" />
-        <small>对方的 API 专家会自动用上，只显示“管理员已提供”，看不到也不能更换。</small></label>
+        <small v-if="account">对方的 API 专家会自动用上，只显示“管理员已提供”，看不到也不能更换。</small></label>
       <div class="panel-form-foot" style="margin-top: 4px">
         <button type="button" class="panel-button is-plain" @click="adding = false">取消</button>
         <button type="submit" class="panel-button is-primary" :disabled="!form.base_url.trim() || !form.api_key.trim() || saving">保存</button>
@@ -71,7 +73,7 @@ async function remove() {
       <img v-if="provider_icon(provider_of(state.providers, key.base_url).key)" :src="provider_icon(provider_of(state.providers, key.base_url).key)" alt="" />
       <UIcon v-else name="i-lucide-key-round" class="keys-icon" />
       <div class="keys-text">
-        <strong>{{ provider_of(state.providers, key.base_url).label }}<span class="panel-tag" :class="key.managed ? 'is-blue' : 'is-gray'">{{ key.managed ? "管理员提供" : "对方自填" }}</span></strong>
+        <strong>{{ provider_of(state.providers, key.base_url).label }}<span v-if="account" class="panel-tag" :class="key.managed ? 'is-blue' : 'is-gray'">{{ key.managed ? "管理员提供" : "对方自填" }}</span></strong>
         <small>{{ key.base_url }} · 尾号 ••••{{ key.tail }}</small>
       </div>
       <button type="button" class="panel-icon-button" title="删除" aria-label="删除密钥" @click="removing = key"><UIcon name="i-lucide-trash-2" /></button>
@@ -80,7 +82,7 @@ async function remove() {
 
   <UModal :open="Boolean(removing)" title="删除 API 密钥" @update:open="(open) => !open && (removing = null)">
     <template #body>
-      <p style="margin: 0; color: #4b5563; font-size: 14px; line-height: 1.7">删除后，{{ account }} 用这个密钥的 API 专家会无法调用。</p>
+      <p style="margin: 0; color: #4b5563; font-size: 14px; line-height: 1.7">删除后，{{ account || "你" }}用这个密钥的 API 专家会无法调用。</p>
       <div class="panel-form-foot">
         <button type="button" class="panel-button is-plain" @click="removing = null">取消</button>
         <button type="button" class="panel-button is-primary" style="background: #dc2626" @click="remove">删除</button>

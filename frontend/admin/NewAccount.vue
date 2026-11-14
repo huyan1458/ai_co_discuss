@@ -18,7 +18,7 @@ function plan() {
   if (isolate.value) {
     list.push({ key: "os-user", label: "创建独立的 Windows 用户", note: "电脑会弹出一次管理员确认，请点“是”" });
     // The shared programs are copied once; later accounts reuse them.
-    if (!state.value.clis?.app || !state.value.clis?.python) list.push({ key: "runtime", label: "安装共享运行环境（命令行程序、共议、Python）" });
+    if (!state.value.clis?.app || !state.value.clis?.python) list.push({ key: "runtime", label: "安装隔离账号的程序副本（命令行程序、共议、Python）" });
   }
   list.push({ key: "env/init", label: isolate.value ? "初始化 AI 环境（房间技能、系统提示词、随包工作流）" : "安装随包工作流" });
   if (state.value.platform === "win32") list.push({ key: "protect", label: "开启入口保护（只接受经入口和它自己的 AI 的访问）" });
@@ -56,7 +56,6 @@ const ICONS = { pending: "i-lucide-circle", running: "i-lucide-loader", done: "i
 <template>
   <section>
     <div class="panel-form-head">
-      <button type="button" class="panel-back" aria-label="返回" :disabled="running" @click="emit('cancel')"><UIcon name="i-lucide-arrow-left" /></button>
       <h2>新建托管账号</h2>
     </div>
 
@@ -84,7 +83,7 @@ const ICONS = { pending: "i-lucide-circle", running: "i-lucide-loader", done: "i
         <p class="panel-note"><UIcon name="i-lucide-circle-check" style="color: #16a34a" />建好了。把入口地址、账号名和下面的密码交给对方（密码只显示这一次）；下一步在账号页给它登录命令行、配置 API 密钥。</p>
         <div class="panel-secret"><span>{{ entry_address(state.entry) }} · {{ name.trim() }} · {{ password }}</span>
           <button type="button" class="panel-icon-button" aria-label="复制地址、账号和密码" @click="copy(`地址 ${entry_address(state.entry)}，账号 ${name.trim()}，密码 ${password}`)"><UIcon name="i-lucide-copy" /></button></div>
-        <p v-if="!state.entry?.public_url" class="panel-note is-amber"><UIcon name="i-lucide-triangle-alert" />还没有设公网地址，这个地址只有这台电脑能打开。在“托管账号”页的“客户入口”填写。</p>
+        <p v-if="!state.entry?.public_url" class="panel-note is-amber"><UIcon name="i-lucide-triangle-alert" />还没有设外网地址，这个地址只有这台电脑能打开。在“概览”页的“登录入口”设置。</p>
       </template>
     </div>
 

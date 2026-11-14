@@ -10,7 +10,7 @@ import AccountKeys from "./AccountKeys.vue";
 import LoginCard from "./LoginCard.vue";
 
 const props = defineProps({ name: { type: String, required: true } });
-const emit = defineEmits(["back", "local"]);
+const emit = defineEmits(["owner"]);
 const { state, reload, notify } = inject("panel");
 const account = computed(() => state.value.accounts.find((item) => item.name === props.name) || null);
 const busy = ref(""), secret = ref(null), confirming = ref(null);
@@ -24,7 +24,7 @@ async function act(action, message) {
     if (result.password) secret.value = { title: `${props.name} 的新密码`, password: result.password };
     else if (message) notify("info", typeof message === "function" ? message(result) : message);
     await reload();
-    if (action === "remove") emit("back");
+    if (action === "remove") emit("owner");
   } catch (failure) { notify("error", failure.message); }
   finally { busy.value = ""; }
 }
@@ -72,7 +72,6 @@ async function copy(text) {
 <template>
   <section v-if="account">
     <div class="panel-form-head">
-      <button type="button" class="panel-back" aria-label="返回账号列表" @click="emit('back')"><UIcon name="i-lucide-arrow-left" /></button>
       <h2>{{ account.name }}</h2>
       <span class="panel-tag" :class="account.running ? 'is-green' : 'is-gray'">{{ account.running ? "运行中" : "已停止" }}</span>
       <span class="panel-tag" :class="account.os_user ? 'is-blue' : 'is-amber'">{{ account.os_user ? `已隔离 · ${account.os_user}` : "未隔离" }}</span>
@@ -86,7 +85,7 @@ async function copy(text) {
           <div class="panel-title">网站</div>
           <span class="detail-address"><a class="panel-link" :href="address" target="_blank" rel="noopener">{{ address }}</a>
             <button type="button" class="panel-icon-button" aria-label="复制入口地址和账号名" @click="copy(`地址 ${address}，账号 ${account.name}`)"><UIcon name="i-lucide-copy" /></button></span>
-          <span class="panel-sub" style="white-space: normal">对方打开这个地址，用账号名和密码登录<template v-if="!state.entry?.public_url">；还没有设公网地址，现在只有这台电脑能打开，在“托管账号”页的“客户入口”填写</template><template v-if="!state.entry?.running">；入口没有在运行</template>。忘了密码可以重设，重设或停用后原有登录立即失效。在这台电脑上直接打开它的网站：<a class="panel-link" :href="`http://127.0.0.1:${account.port}/`" target="_blank" rel="noopener">127.0.0.1:{{ account.port }}</a></span>
+          <span class="panel-sub" style="white-space: normal">对方打开这个地址，用账号名和密码登录<template v-if="!state.entry?.running">；入口没有在运行，到“概览”启动</template><template v-else-if="!state.entry?.public_url">；没设外网地址，只有这台电脑能打开</template>。本机直接打开：<a class="panel-link" :href="`http://127.0.0.1:${account.port}/`" target="_blank" rel="noopener">127.0.0.1:{{ account.port }}</a></span>
         </div>
         <div class="panel-side">
           <button type="button" class="panel-button is-plain is-small" :disabled="Boolean(busy)" @click="act('password')"><UIcon name="i-lucide-key-round" />重设密码</button>
@@ -128,8 +127,8 @@ async function copy(text) {
       <article class="panel-card is-tall">
         <LoginCard v-if="account.os_user" :target="account.name" :who="`托管账号 ${account.name}`" />
         <div v-else class="detail-shared">
-          <p class="panel-note" style="margin: 0; flex: 1"><UIcon name="i-lucide-info" />未隔离的账号用你自己的命令行登录，在“概览”页管理。</p>
-          <button type="button" class="panel-button is-outline is-small" @click="emit('local')">去概览</button>
+          <p class="panel-note" style="margin: 0; flex: 1"><UIcon name="i-lucide-info" />命令行登录与管理员共用：未隔离的账号用你自己的登录。隔离后它才有自己的一份。</p>
+          <button type="button" class="panel-button is-outline is-small" @click="emit('owner')">查看“我”的登录</button>
         </div>
       </article>
 
@@ -138,7 +137,7 @@ async function copy(text) {
         <div class="panel-tile"><UIcon name="i-lucide-sparkles" /></div>
         <div class="panel-main">
           <div class="panel-title">技能与工作流</div>
-          <span class="panel-sub" style="white-space: normal">未隔离的账号用你自己的技能和系统提示词。这里只补上它工作流库里还没有的随包工作流（已有的不覆盖）。</span>
+          <span class="panel-sub" style="white-space: normal">技能和系统提示词与管理员共用，在“我”里查看。这里只补上它工作流库里还没有的随包工作流（已有的不覆盖）。</span>
         </div>
         <div class="panel-side">
           <button type="button" class="panel-button is-outline is-small" :disabled="Boolean(busy)" @click="act('env/init', skills_message)">
@@ -153,7 +152,7 @@ async function copy(text) {
       </div>
     </div>
   </section>
-  <section v-else class="panel-empty"><UIcon name="i-lucide-user-x" />账号已不存在。<button type="button" class="panel-button is-outline is-small" @click="emit('back')">返回列表</button></section>
+  <section v-else class="panel-empty"><UIcon name="i-lucide-user-x" />账号已不存在。</section>
 
   <UModal :open="Boolean(secret)" :title="secret?.title" description="密码只显示这一次，请现在交给对方。" @update:open="(open) => !open && (secret = null)">
     <template #body>

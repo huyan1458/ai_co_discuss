@@ -1,8 +1,9 @@
 <script setup>
 /**
  * The management panel: one header with the page switch, and the page below. Pages share the loaded state.
- * Every owner has the overview: this computer's service, the owner's own command-line sign-ins, updates and startup.
- * With hosting on, "托管账号" holds everything about the accounts, each on its own page.
+ * "概览" is this computer: its service, updates, startup, and with hosting on the accounts' entry and program copy.
+ * "账号" is one account at a time: the owner ("我"), and with hosting on every hosted account, each with its sign-ins,
+ * API keys and skills.
  */
 import { computed, onMounted, provide, ref } from "vue";
 import { useToast } from "@nuxt/ui/composables";
@@ -14,13 +15,12 @@ import AccountsPage from "./AccountsPage.vue";
 // Served beside the page by the panel server, not bundled.
 const MARK = "/mark.svg";
 const OVERVIEW = { key: "overview", label: "概览", icon: "i-lucide-layout-dashboard" };
-const ACCOUNTS = { key: "accounts", label: "托管账号", icon: "i-lucide-users" };
+const ACCOUNTS = { key: "accounts", label: "账号", icon: "i-lucide-users" };
 const state = ref({ hosting: false, service: {}, accounts: [], clis: {}, providers: {}, platform: "" });
-const pages = computed(() => (state.value.hosting ? [OVERVIEW, ACCOUNTS] : [OVERVIEW]));
-// The address keeps the page, so a reload or a link from the taskbar lands on the same one; the accounts page while
-// hosting is off falls back to the overview.
+const pages = [OVERVIEW, ACCOUNTS];
+// The address keeps the page, so a reload or a link from the taskbar lands on the same one.
 const chosen = ref(location.hash.slice(1) || "overview");
-const page = computed(() => (pages.value.some((item) => item.key === chosen.value) ? chosen.value : "overview"));
+const page = computed(() => (pages.some((item) => item.key === chosen.value) ? chosen.value : "overview"));
 const loading = ref(false);
 const toast = useToast();
 
@@ -59,7 +59,7 @@ onMounted(reload);
     <div class="panel">
       <header class="panel-head">
         <div class="panel-brand"><img class="panel-mark" :src="MARK" alt="" /><h1>共议</h1><small>管理面板</small></div>
-        <nav v-if="pages.length > 1" class="panel-tabs" aria-label="管理页面">
+        <nav class="panel-tabs" aria-label="管理页面">
           <button v-for="item in pages" :key="item.key" type="button" class="panel-tab" :class="{ 'is-active': page === item.key }" :aria-current="page === item.key ? 'page' : undefined" @click="choose(item.key)">
             <UIcon :name="item.icon" />{{ item.label }}
           </button>
@@ -69,7 +69,7 @@ onMounted(reload);
         </div>
       </header>
       <OverviewPage v-if="page === 'overview'" />
-      <AccountsPage v-else @local="choose('overview')" />
+      <AccountsPage v-else />
     </div>
   </UApp>
 </template>

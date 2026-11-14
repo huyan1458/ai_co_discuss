@@ -64,7 +64,7 @@ async function sign_out(cli) {
           <UIcon v-if="row(cli)?.signed_in" name="i-lucide-circle-check" /><UIcon v-else-if="row(cli)?.installed" name="i-lucide-circle-dashed" />{{ describe(row(cli)) }}</small>
       </div>
       <template v-if="row(cli)?.signed_in">
-        <button type="button" class="panel-button is-outline is-small" @click="open(cli)"><UIcon name="i-lucide-replace" />切换方式</button>
+        <button type="button" class="panel-button is-outline is-small" @click="open(cli)"><UIcon name="i-lucide-arrow-left-right" />切换方式</button>
         <button type="button" class="panel-button is-plain is-small" @click="sign_out(cli)">退出</button>
       </template>
       <button v-else type="button" class="panel-button is-primary is-small" :disabled="!row(cli)?.installed" @click="open(cli)"><UIcon name="i-lucide-log-in" />登录</button>
