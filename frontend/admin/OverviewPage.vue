@@ -1,7 +1,7 @@
 <script setup>
 /**
- * This computer: the owner's own service (status, start, restart, stop), updates with a report of every step, starting
- * with Windows, and with hosting on, the accounts' entry and program copy. Each account's own setup is on "账号".
+ * This computer: the owner's own service (status, start, restart, stop), with hosting on the accounts' entry and program
+ * copy, and at the bottom updates with a report of every step and starting with Windows. Each account's own setup is on "账号".
  */
 import { computed, inject, onMounted, ref, watch } from "vue";
 import { call } from "./api.js";
@@ -11,6 +11,11 @@ const { state, reload, notify, refreshed } = inject("panel");
 const service = computed(() => state.value.service || {});
 const busy = ref("");
 const update = ref(null), checking = ref(false), confirming = ref(false);
+
+/** Open the owner's site in the default browser; the panel makes the link, which a protected site requires. */
+async function open_site() {
+  try { await call("service/open", {}); } catch (failure) { notify("error", failure.message); }
+}
 
 /** Run one service action and show where it left the service. */
 async function run(action, message) {
@@ -78,7 +83,7 @@ watch(refreshed, () => check(true));
         </div>
         <div class="panel-side">
           <template v-if="service.website || service.running">
-            <a v-if="service.url" class="panel-button is-outline is-small" :href="service.url" target="_blank" rel="noopener"><UIcon name="i-lucide-external-link" />打开网站</a>
+            <button v-if="service.url" type="button" class="panel-button is-outline is-small" @click="open_site"><UIcon name="i-lucide-external-link" />打开网站</button>
             <button type="button" class="panel-button is-plain is-small" :disabled="Boolean(busy)" title="进行中的执行会中断，随后在原会话里续跑" @click="run('restart', '共议服务已重启')">
               <UIcon :name="busy === 'restart' ? 'i-lucide-loader' : 'i-lucide-rotate-cw'" :class="{ 'animate-spin': busy === 'restart' }" />重启</button>
             <button type="button" class="panel-button is-plain is-small is-danger" :disabled="Boolean(busy)" title="本机网站与讨论服务都会停止" @click="run('stop', '共议服务已停止')">
@@ -88,7 +93,12 @@ watch(refreshed, () => check(true));
             <UIcon :name="busy === 'start' ? 'i-lucide-loader' : 'i-lucide-play'" :class="{ 'animate-spin': busy === 'start' }" />启动</button>
         </div>
       </div>
+    </div>
 
+    <HostingCards v-if="state.hosting" />
+
+    <h3 class="panel-section-title"><UIcon name="i-lucide-settings" />更新与启动</h3>
+    <div class="panel-rows">
       <div class="panel-row">
         <div class="panel-tile"><UIcon name="i-lucide-package" /></div>
         <div class="panel-main">
@@ -116,8 +126,6 @@ watch(refreshed, () => check(true));
         </div>
       </div>
     </div>
-
-    <HostingCards v-if="state.hosting" />
   </section>
 
   <UModal :open="confirming" title="更新共议" :description="`从 v${update?.current} 更新到 v${update?.latest}`" @update:open="(open) => !open && (confirming = false)">

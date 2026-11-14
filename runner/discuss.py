@@ -1137,9 +1137,25 @@ ENTRY_NONCE_PATTERN = re.compile(r"^[0-9a-f]{32}$")
 LOOPBACK_HOSTS = ("127.0.0.1", "localhost", "::1")
 
 
-def entry_key():
+def owner_key_file(url):
+    """The owner's own site key file for a request to the owner's port, when that site runs protected (hosting on).
+
+    Used only when the environment names no key file: the owner's command line in a terminal (runner/entry_client.mjs).
+    """
+    home = Path(os.getenv("DISCUSS_SERVICE_HOME") or Path.home() / ".codiscuss")
+    path = home / "local" / "site-key.json"
+    if not path.is_file():
+        return ""
+    try:
+        port = int(json.loads((home / "local-settings.json").read_text(encoding="utf-8")).get("port") or 8765)
+    except (OSError, ValueError, TypeError, AttributeError):
+        port = 8765
+    return str(path) if (urlsplit(url).port or 80) == port else ""
+
+
+def entry_key(url=""):
     """This instance's key when entry protection is configured, '' when it is not; an unusable key stops the request."""
-    path = os.getenv(ENTRY_KEY_VARIABLE)
+    path = os.getenv(ENTRY_KEY_VARIABLE) or (owner_key_file(url) if url else "")
     if not path:
         return ""
     try:
@@ -1191,7 +1207,7 @@ def send_request(plan, url, timeout, headers=None):
               "User-Agent": f"AI-CoDiscuss-CLI/{VERSION}", **(headers or {})}
     request = Request(url, data=data, method=plan.method, headers=fields)
     # A protected instance on this computer is reached only through the handshake; nothing falls back to a plain request.
-    key = entry_key() if urlsplit(url).hostname in LOOPBACK_HOSTS else ""
+    key = entry_key(url) if urlsplit(url).hostname in LOOPBACK_HOSTS else ""
     deadline = time.monotonic() + REFUSED_RETRY_SECONDS
     while True:
         try:

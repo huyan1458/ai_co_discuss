@@ -23,7 +23,8 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from urllib.parse import parse_qs, quote, urlsplit
 
-from .entry_guard import HELLO_PATH, PUBLIC_PATHS, EntryPolicy, answer_hello, request_proven
+from .entry_guard import (BROWSER_COOKIE_SECONDS, HELLO_PATH, OPEN_PATH, PUBLIC_PATHS, EntryPolicy, answer_hello, browser_admitted,
+                          browser_cookie_name, open_link_key, proof, request_proven)
 from .admin import (AdminError, admin_status, change_password, list_sessions, login_admin, logout_admin, register_admin,
                     revoke_sessions, session_valid, update_profile)
 from .remote_launch import (COMMAND_WAIT_MAX, claim_machine_commands, finish_machine_command, list_machines, machine_command_status,
@@ -1899,11 +1900,34 @@ class DiscussionHandler(BaseHTTPRequestHandler):
         self.entry_key = request_proven(self, policy)
         if self.entry_key:
             return False
+        if method == "GET" and parsed.path == OPEN_PATH:
+            return self.open_browser_session(policy, parsed)
+        if browser_admitted(self, policy):
+            return False
         if method == "GET" and (parsed.path in ASSETS or parsed.path in PUBLIC_PATHS):
             return False
         self.close_connection = True
         # Sent directly, not through respond(): a refused caller leaves nothing in any room's event log.
-        self.send_payload(403, "application/json", json.dumps({"error": "这个工作台只接受经入口的访问"}, ensure_ascii=False).encode("utf-8"))
+        message = "这个工作台只接受经入口的访问；本机管理员请从任务栏图标或桌面“共议”打开"
+        self.send_payload(403, "application/json", json.dumps({"error": message}, ensure_ascii=False).encode("utf-8"))
+        return True
+
+    def open_browser_session(self, policy, parsed):
+        """Turn a fresh signed opening link into the browser cookie and go to the site; refuse anything else."""
+        params = {key: values[-1] for key, values in parse_qs(parsed.query).items()}
+        key = open_link_key(policy, params.get("at"), params.get("sig"), int(time.time()))
+        self.close_connection = True
+        if not key:
+            self.send_payload(403, "text/plain", "链接已失效，请从任务栏图标或桌面“共议”重新打开。".encode("utf-8"))
+            return True
+        self.send_response(302)
+        cookie = f"{browser_cookie_name(self.server.server_port)}={proof(key, 'browser', 'site')}"
+        self.send_header("Set-Cookie", f"{cookie}; Max-Age={BROWSER_COOKIE_SECONDS}; Path=/; HttpOnly; SameSite=Strict")
+        self.send_header("Location", "/")
+        self.send_header("Content-Length", "0")
+        self.send_header("Cache-Control", "no-store")
+        self.send_header("Referrer-Policy", "no-referrer")
+        self.end_headers()
         return True
 
     def end_headers(self):

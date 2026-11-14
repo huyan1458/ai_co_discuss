@@ -165,6 +165,7 @@ if (Get-LocalUser -Name ${quote(user)} -ErrorAction SilentlyContinue) { Set-Loca
 else { New-LocalUser -Name ${quote(user)} -Password $secure -PasswordNeverExpires -UserMayNotChangePassword -Description 'AI CoDiscuss hosted account' | Out-Null }
 if (-not (Get-LocalGroupMember -Group 'Users' -Member ${quote(user)} -ErrorAction SilentlyContinue)) { Add-LocalGroupMember -Group 'Users' -Member ${quote(user)} }
 icacls ${quote(account_folder)} /grant ${quote(`${user}:(OI)(CI)M`)} /T /C /Q | Out-Null
+${register_task_script(account, user, '$secure', owner_sid({ run }))}
 'ok'`, { elevated: true });
   write_os_users(data, { ...read_os_users(data), [account]: { user, secret: protect(password) } });
   return { user };
@@ -174,7 +175,8 @@ icacls ${quote(account_folder)} /grant ${quote(`${user}:(OI)(CI)M`)} /T /C /Q | 
 export function remove_os_user(data, account, { run = run_powershell } = {}) {
   const record = read_os_users(data)[account];
   if (!record) throw new Error(`账号 ${account} 没有 Windows 用户`);
-  run(`$user = Get-LocalUser -Name ${quote(record.user)} -ErrorAction SilentlyContinue
+  run(`Unregister-ScheduledTask -TaskName ${quote(task_name(account))} -Confirm:$false -ErrorAction SilentlyContinue
+$user = Get-LocalUser -Name ${quote(record.user)} -ErrorAction SilentlyContinue
 if ($user) {
   Get-CimInstance Win32_UserProfile | Where-Object SID -eq $user.SID.Value | Remove-CimInstance
   Remove-LocalUser -Name ${quote(record.user)}
@@ -239,8 +241,9 @@ $process = Start-Process ${POWERSHELL} -Credential $credential -LoadUserProfile 
 ${wait ? `if (-not $process.WaitForExit(${timeout})) { $process.Kill(); throw '运行超时' }` : ''}
 $process.Id`;
   try {
-    run(start, { timeout: timeout + 10_000 });
-    if (!wait) return { folder, output };
+    const started = run(start, { timeout: timeout + 10_000 });
+    // Not waiting: the started process's id comes back too (the last line the start printed).
+    if (!wait) return { folder, output, pid: Number(String(started).trim().split(/\s+/).pop()) || 0 };
     return existsSync(output) ? read_output(output).trim() : '';
   } finally {
     // A program the script started may still hold the folder; the job's result does not depend on removing it.
@@ -338,6 +341,17 @@ export function instance_key_file(account, root = SHARED_ROOT) {
  */
 export function place_instance_key(data, account, key, { root = SHARED_ROOT, run = run_powershell } = {}) {
   if (!/^[0-9a-f]{64}$/.test(String(key))) throw new Error('实例密钥格式不对');
+  return place_account_file(data, account, KEY_FILE, `${JSON.stringify({ key })}\n`, { root, run });
+}
+
+/**
+ * Write one file into the account's folder of the shared folder, which only the owner can change and only the account's
+ * Windows user (if any) can read: the folder and every level above are secured and checked first.
+ *
+ * Returns:
+ *   The file's path.
+ */
+function place_account_file(data, account, file_name, text, { root = SHARED_ROOT, run = run_powershell } = {}) {
   // Each level is secured and checked in turn: the shared folder, the keys folder, then the account's own.
   secure_shared_root({ root, run });
   secure_folder(join(root, 'keys'), [`(New-Object Security.Principal.SecurityIdentifier('${USERS_SID}'))`], { run });
@@ -345,16 +359,16 @@ export function place_instance_key(data, account, key, { root = SHARED_ROOT, run
   const folder = join(root, 'keys', account);
   secure_folder(folder, user ? [`(New-Object Security.Principal.NTAccount(${quote(user)}))`] : [], { run });
   // A new file of its own (never one that was already there, which could carry its own grants), then only the folder's
-  // inherited rights on the final key, checked.
-  const path = join(folder, KEY_FILE), draft = join(folder, `${randomBytes(12).toString('hex')}.tmp`);
-  writeFileSync(draft, `${JSON.stringify({ key })}\n`, { flag: 'wx' });
+  // inherited rights on the final file, checked.
+  const path = join(folder, file_name), draft = join(folder, `${randomBytes(12).toString('hex')}.tmp`);
+  writeFileSync(draft, text, { flag: 'wx' });
   renameSync(draft, path);
   run(`$file = ${quote(path)}
 & icacls $file /reset /Q | Out-Null
-if ($LASTEXITCODE -ne 0) { throw "密钥文件的权限没有重置成功" }
+if ($LASTEXITCODE -ne 0) { throw "文件的权限没有重置成功" }
 $read = Get-Acl -LiteralPath $file
-if ($read.AreAccessRulesProtected) { throw "密钥文件没有沿用所在目录的权限" }
-foreach ($rule in $read.Access) { if (-not $rule.IsInherited) { throw "密钥文件带有单独的授权：$($rule.IdentityReference)" } }
+if ($read.AreAccessRulesProtected) { throw "文件没有沿用所在目录的权限" }
+foreach ($rule in $read.Access) { if (-not $rule.IsInherited) { throw "文件带有单独的授权：$($rule.IdentityReference)" } }
 'ok'`);
   return path;
 }
@@ -380,8 +394,10 @@ function copy_over(source, target, filter) {
  * Returns:
  *   { installed: [label], missing: [label], warnings: [text] }.
  */
-export function install_shared_runtime(python_source = '') {
+export function install_shared_runtime(python_source = '', { run = run_powershell } = {}) {
   const installed = [], missing = [], warnings = [];
+  // Secured before anything is copied in: a file another user put there first would stay theirs.
+  secure_shared_root({ run });
   for (const cli of Object.values(cli_sources())) {
     if (!existsSync(cli.source)) { missing.push(cli.label); continue; }
     mkdirSync(dirname(cli.target), { recursive: true });
@@ -407,16 +423,81 @@ export function shared_cli_state() {
     app: existsSync(paths.local_script), python: existsSync(paths.python), app_version };
 }
 
+// ---- The instance of an account with its own Windows user: a scheduled task ----
+//
+// The instance runs as a scheduled task of the account's Windows user that runs whether or not anyone is signed in: it
+// is then in a session of its own with no desktop, out of reach of the owner's windows, keyboard and clipboard (a
+// program started with the user's credentials on the owner's desktop would share them), and it comes back when the
+// computer starts. The task runs START_SCRIPT from the account's folder of the shared folder, which only the owner can
+// change; it starts the instance only while RUN_FLAG is there (the owner's start puts it, the owner's stop removes it),
+// so an instance the owner stopped stays stopped after a restart.
+
+const START_SCRIPT = 'start-instance.ps1';
+const RUN_FLAG = 'run.flag';
+const TASK_PREFIX = 'CoDiscuss instance ';
+
+/** The scheduled task of one account's instance. */
+export function task_name(account) {
+  return `${TASK_PREFIX}${account}`;
+}
+
+let cached_owner_sid = '';
+
+/** The owner's own security identifier (granted by the elevated scripts, even when another administrator elevates). */
+function owner_sid({ run = run_powershell } = {}) {
+  if (!cached_owner_sid) cached_owner_sid = run('[Security.Principal.WindowsIdentity]::GetCurrent().User.Value');
+  return cached_owner_sid;
+}
+
 /**
- * Start one account's instance as its Windows user, in the background.
- *
- * The instance supervisor runs with the account's service directory; it keeps running after this returns.
+ * PowerShell, run elevated, that (re)registers the account's instance task as `user` with the SecureString in
+ * `password_variable`, and lets the owner (`sid`) start it without elevation.
  */
-export function start_instance_as_user(data, account, service_home, local_script, node = process.execPath, options = {}) {
-  const { key_file = '', ...rest } = options;
-  // The instance keeps running in its own folder rather than in the job folder, which is removed afterwards. A protected
-  // instance, and every member it starts, gets the key file it proves itself with.
-  run_as_user(data, account, `$env:DISCUSS_SERVICE_HOME = ${quote(service_home)}
-${key_file ? `$env:DISCUSS_ENTRY_KEY_FILE = ${quote(key_file)}\n` : ''}Set-Location ${quote(service_home)}
-& ${quote(node)} ${quote(local_script)} start --json`, { ...rest, timeout: 90_000 });
+function register_task_script(account, user, password_variable, sid) {
+  const script = join(SHARED_ROOT, 'keys', account, START_SCRIPT);
+  return `$action = New-ScheduledTaskAction -Execute ${quote(POWERSHELL)} -Argument ${quote(`-NoProfile -NonInteractive -ExecutionPolicy Bypass -WindowStyle Hidden -File "${script}"`)}
+$trigger = New-ScheduledTaskTrigger -AtStartup
+$settings = New-ScheduledTaskSettingsSet -ExecutionTimeLimit ([TimeSpan]::Zero) -RestartCount 3 -RestartInterval (New-TimeSpan -Minutes 1) -MultipleInstances IgnoreNew -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries -StartWhenAvailable
+$plain = [Runtime.InteropServices.Marshal]::PtrToStringBSTR([Runtime.InteropServices.Marshal]::SecureStringToBSTR(${password_variable}))
+Register-ScheduledTask -TaskName ${quote(task_name(account))} -Action $action -Trigger $trigger -Settings $settings -User ${quote(user)} -Password $plain -RunLevel Limited -Force | Out-Null
+$service = New-Object -ComObject Schedule.Service
+$service.Connect()
+$task = $service.GetFolder('\').GetTask(${quote(task_name(account))})
+$task.SetSecurityDescriptor($task.GetSecurityDescriptor(4) + '(A;;GRGX;;;${sid})', 0)`;
+}
+
+/** Register the instance task of an account isolated before instances ran as tasks (one elevation prompt). */
+function register_instance_task(data, account, { run = run_powershell } = {}) {
+  const record = read_os_users(data)[account];
+  run(`$secure = ConvertTo-SecureString ${quote(record.secret)}
+${register_task_script(account, record.user, '$secure', owner_sid({ run }))}
+'ok'`, { elevated: true });
+}
+
+/**
+ * Start one account's instance as its Windows user, in the background: write its start script and run flag, then start
+ * its task. The instance keeps running after this returns; a protected instance, and every member it starts, gets the
+ * key file it proves itself with.
+ */
+export function start_instance_as_user(data, account, service_home, local_script, node = process.execPath, { key_file = '', run = run_powershell } = {}) {
+  const record = read_os_users(data)[account];
+  if (!record) throw new Error(`账号 ${account} 还没有 Windows 用户，请先隔离这个账号`);
+  place_account_file(data, account, START_SCRIPT, `﻿$flag = ${quote(join(SHARED_ROOT, 'keys', account, RUN_FLAG))}
+if (-not (Test-Path -LiteralPath $flag)) { exit 0 }
+$env:DISCUSS_SERVICE_HOME = ${quote(service_home)}
+${key_file ? `$env:DISCUSS_ENTRY_KEY_FILE = ${quote(key_file)}\n` : ''}Set-Location -LiteralPath ${quote(service_home)}
+& ${quote(node)} ${quote(local_script)} run
+exit $LASTEXITCODE
+`, { run });
+  writeFileSync(join(SHARED_ROOT, 'keys', account, RUN_FLAG), `${Date.now()}\n`);
+  const name = quote(task_name(account));
+  const found = run(`if (Get-ScheduledTask -TaskName ${name} -ErrorAction SilentlyContinue) { 'yes' } else { 'no' }`);
+  if (found !== 'yes') register_instance_task(data, account, { run });
+  run(`Start-ScheduledTask -TaskName ${name}
+'ok'`);
+}
+
+/** Keep a stopped instance stopped when the computer starts again (its supervisor is stopped separately). */
+export function clear_instance_flag(account) {
+  rmSync(join(SHARED_ROOT, 'keys', account, RUN_FLAG), { force: true });
 }

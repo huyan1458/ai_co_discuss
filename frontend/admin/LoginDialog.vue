@@ -69,21 +69,26 @@ async function save() {
   finally { saving.value = false; }
 }
 
+let starting = false;
 async function start() {
+  if (starting) return;
+  starting = true;
   stop_job();
   try {
     const { id } = await call(`logins/${props.target}/${props.cli.key}/start`, { method: choice.value });
     job.value = id;
-    poll = setInterval(async () => {
+    const timer = setInterval(async () => {
       try {
         progress.value = await call(`login-jobs/${id}`);
         if (progress.value.ended) {
-          clearInterval(poll);
+          clearInterval(timer);
           if (progress.value.done) { emit("done", `${props.cli.label} 已登录`); emit("update:open", false); }
         }
-      } catch (failure) { clearInterval(poll); progress.value = { ended: true, error: failure.message }; }
+      } catch (failure) { clearInterval(timer); progress.value = { ended: true, error: failure.message }; }
     }, 1500);
+    poll = timer;
   } catch (failure) { emit("done", failure.message, "error"); }
+  finally { starting = false; }
 }
 
 async function send() {

@@ -21,7 +21,9 @@ async function load() {
   loading.value = true;
   try {
     const [status, skills] = await Promise.all([call(base.value), call("skill-library")]);
-    env.value = status; library.value = skills; prompt.value = status.prompt;
+    // An unsaved edit of the prompt survives a refresh.
+    if (!env.value || env.value.error || prompt.value === env.value.prompt) prompt.value = status.prompt;
+    env.value = status; library.value = skills;
   } catch (failure) { env.value = { error: failure.message }; }
   finally { loading.value = false; }
 }

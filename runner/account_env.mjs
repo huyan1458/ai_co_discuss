@@ -32,7 +32,8 @@ const OLD_AGY_SKILLS = join(HOME, '.gemini', 'config', 'skills');
 const PROMPT = join(HOME, '.codex', 'AGENTS.md');
 const PROMPT_LINKS = [join(HOME, '.claude', 'CLAUDE.md'), join(HOME, '.gemini', 'config', 'AGENTS.md')];
 const RECORD = 'skills-manifest.json';
-const SKILL_NAME = /^[\w.-]{1,64}$/;
+// Starts with a letter, digit or underscore: "." and ".." would name the folder above when joined and removed.
+const SKILL_NAME = /^\w[\w.-]{0,63}$/;
 
 // ---- Layout ----
 

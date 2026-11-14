@@ -10,9 +10,11 @@
  * to another, unverified connection; nothing here retries on a new one.
  */
 import { createHmac, randomBytes, timingSafeEqual } from 'node:crypto';
-import { readFileSync } from 'node:fs';
+import { existsSync, readFileSync, unlinkSync, writeFileSync } from 'node:fs';
 import http from 'node:http';
 import net from 'node:net';
+import { homedir } from 'node:os';
+import { join } from 'node:path';
 import { Readable } from 'node:stream';
 
 export const ENTRY_KEY_PATTERN = /^[0-9a-f]{64}$/;
@@ -113,6 +115,53 @@ export function entry_access() {
   return process.env[KEY_FILE_VARIABLE] ? { entry_key_file: process.env[KEY_FILE_VARIABLE] } : {};
 }
 
+// The computer owner's own site is protected while hosting is on (every hosted account's processes share this loopback);
+// its key then sits in the owner's service directory, which no hosted account can open.
+const OWNER_KEY_FILE = join('local', 'site-key.json');
+
+/** The owner's site key file in a service directory (it exists only while that site runs protected). */
+export function owner_key_file(home) {
+  return join(home, OWNER_KEY_FILE);
+}
+
+/**
+ * Turn the owner site's protection on or off for the next start: on writes a new key file (kept if one is there), off
+ * removes it. Returns the key file's path when on, '' when off.
+ */
+export function set_owner_protection(home, on) {
+  const path = owner_key_file(home);
+  if (!on) { try { unlinkSync(path); } catch { /* already off */ } return ''; }
+  if (!existsSync(path)) writeFileSync(path, `${JSON.stringify({ key: randomBytes(32).toString('hex') })}\n`, { mode: 0o600 });
+  return path;
+}
+
+/**
+ * The key file a request to `target` proves itself with when the caller's environment names none: the owner's own site
+ * key, for the owner's own port only (the owner's command line in a terminal, started outside the service).
+ */
+function default_key_file(target) {
+  const home = process.env.DISCUSS_SERVICE_HOME || join(homedir(), '.codiscuss');
+  const path = owner_key_file(home);
+  if (!existsSync(path)) return '';
+  let port = 8765;
+  try { port = Number(JSON.parse(readFileSync(join(home, 'local-settings.json'), 'utf8')).port) || 8765; } catch { /* default port */ }
+  return Number(target.port || 80) === port ? path : '';
+}
+
+/**
+ * A link that opens the owner's protected site in a browser: the site turns it into a cookie (backend/entry_guard.py).
+ * The URL is returned unchanged when the site is not protected. A fragment is kept (browsers keep it across the redirect).
+ */
+export function signed_site_url(url, home) {
+  const path = owner_key_file(home);
+  let key = '';
+  try { key = String(JSON.parse(readFileSync(path, 'utf8')).key || ''); } catch { return url; }
+  if (!ENTRY_KEY_PATTERN.test(key)) return url;
+  const target = new URL(url);
+  const at = String(Math.floor(Date.now() / 1000));
+  return `${target.origin}/_instance/open?at=${at}&sig=${entry_proof(key, 'open', at)}${target.hash}`;
+}
+
 /** The instance key when protection is configured: '' when it is not, an error when it is but unusable. */
 function configured_key(key_file = process.env[KEY_FILE_VARIABLE]) {
   const path = key_file;
@@ -133,7 +182,7 @@ function configured_key(key_file = process.env[KEY_FILE_VARIABLE]) {
  */
 export async function site_fetch(url, init = {}, { key_file } = {}) {
   const target = new URL(url);
-  const key = LOOPBACK_HOSTS.has(target.hostname) ? configured_key(key_file || process.env[KEY_FILE_VARIABLE]) : '';
+  const key = LOOPBACK_HOSTS.has(target.hostname) ? configured_key(key_file || process.env[KEY_FILE_VARIABLE] || default_key_file(target)) : '';
   if (!key) return fetch(url, init);
   const port = Number(target.port || 80);
   const { socket, header } = await verified_connection(port, key, { signal: init.signal });

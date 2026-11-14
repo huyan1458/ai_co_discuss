@@ -79,11 +79,13 @@ const ICONS = { pending: "i-lucide-circle", running: "i-lucide-loader", done: "i
             <small v-if="step.error" class="is-error">{{ step.error }}</small></div>
         </li>
       </ol>
-      <template v-if="finished">
-        <p class="panel-note"><UIcon name="i-lucide-circle-check" style="color: #16a34a" />建好了。把入口地址、账号名和下面的密码交给对方（密码只显示这一次）；下一步在账号页给它登录命令行、配置 API 密钥。</p>
+      <!-- The password exists from the first step on and is shown at once, so a later failed step cannot lose it. -->
+      <template v-if="password">
+        <p v-if="finished" class="panel-note"><UIcon name="i-lucide-circle-check" style="color: #16a34a" />账号已创建。请将入口地址、账号名与下方密码交给使用者（密码仅显示一次）；随后在账号页{{ isolate ? "登录命令行、" : "" }}配置 API 密钥。</p>
+        <p v-else class="panel-note"><UIcon name="i-lucide-key-round" />账号的登录密码如下，仅显示一次，请先复制保存。</p>
         <div class="panel-secret"><span>{{ entry_address(state.entry) }} · {{ name.trim() }} · {{ password }}</span>
           <button type="button" class="panel-icon-button" aria-label="复制地址、账号和密码" @click="copy(`地址 ${entry_address(state.entry)}，账号 ${name.trim()}，密码 ${password}`)"><UIcon name="i-lucide-copy" /></button></div>
-        <p v-if="!state.entry?.public_url" class="panel-note is-amber"><UIcon name="i-lucide-triangle-alert" />还没有设外网地址，这个地址只有这台电脑能打开。在“概览”页的“登录入口”设置。</p>
+        <p v-if="!state.entry?.address" class="panel-note is-amber"><UIcon name="i-lucide-triangle-alert" />尚未开启外网访问，该地址仅本机可打开。请在“概览 → 登录入口”中设置。</p>
       </template>
     </div>
 
@@ -92,7 +94,7 @@ const ICONS = { pending: "i-lucide-circle", running: "i-lucide-loader", done: "i
         <button type="button" class="panel-button is-plain" @click="emit('cancel')">取消</button>
         <button type="button" class="panel-button is-primary" :disabled="!valid" @click="go"><UIcon name="i-lucide-plus" />创建</button>
       </template>
-      <button v-else-if="finished" type="button" class="panel-button is-primary" @click="emit('done', name.trim())">下一步：登录命令行<UIcon name="i-lucide-arrow-right" /></button>
+      <button v-else-if="finished" type="button" class="panel-button is-primary" @click="emit('done', name.trim())">{{ isolate ? "下一步：登录命令行" : "前往账号页" }}<UIcon name="i-lucide-arrow-right" /></button>
       <button v-else-if="!running" type="button" class="panel-button is-primary" @click="go"><UIcon name="i-lucide-rotate-cw" />从失败的一步重试</button>
     </div>
   </section>

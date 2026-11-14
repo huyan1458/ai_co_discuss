@@ -316,3 +316,32 @@ class CliHandshakeTest(ProtectedInstance):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class BrowserLinkTest(ProtectedInstance):
+    """The owner's browser gets in only through a fresh link signed with the current key, which gives it a cookie."""
+
+    def get(self, path, cookie=None):
+        sock = self.connect()
+        send(sock, path, {"Host": f"127.0.0.1:{self.port}", **({"Cookie": cookie} if cookie else {})})
+        return read_response(sock)
+
+    def link(self, key=None, at=None):
+        at = str(int(time.time()) if at is None else at)
+        return f"/_instance/open?at={at}&sig={proof(key or self.key, 'open', at)}"
+
+    def test_a_signed_link_gives_a_cookie_that_admits_the_browser(self):
+        status, headers, _ = self.get(self.link())
+        self.assertEqual(status, 302)
+        cookie = headers["set-cookie"].split(";")[0]
+        self.assertIn("HttpOnly", headers["set-cookie"])
+        self.assertEqual(self.get("/api/rooms", cookie)[0], 200)
+        self.assertEqual(self.get("/api/rooms")[0], 403, "no cookie")
+        self.assertEqual(self.get("/api/rooms", cookie.split("=")[0] + "=" + "0" * 64)[0], 403, "a forged cookie")
+        self.key_file.write_text(json.dumps({"key": secrets.token_hex(32)}), encoding="utf-8")
+        self.assertEqual(self.get("/api/rooms", cookie)[0], 403, "a new key ends the cookie")
+
+    def test_stale_or_foreign_links_are_refused(self):
+        self.assertEqual(self.get(self.link(at=int(time.time()) - 3600))[0], 403, "stale")
+        self.assertEqual(self.get(self.link(key=secrets.token_hex(32)))[0], 403, "signed with another key")
+        self.assertEqual(self.get("/_instance/open?at=1&sig=x")[0], 403)

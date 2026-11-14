@@ -31,8 +31,8 @@ function notify(level, message) {
 
 async function reload() {
   loading.value = true;
-  try { state.value = await call("state"); }
-  catch (failure) { notify("error", failure.message); }
+  try { state.value = await call("state"); return true; }
+  catch (failure) { notify("error", failure.message); return false; }
   finally { loading.value = false; }
 }
 
@@ -45,9 +45,9 @@ const refreshed = ref(0), refreshing = ref(false);
 async function refresh_all() {
   refreshing.value = true;
   refreshed.value += 1;
-  await Promise.all([reload(), new Promise((done) => setTimeout(done, 500))]);
+  const [ok] = await Promise.all([reload(), new Promise((done) => setTimeout(done, 500))]);
   refreshing.value = false;
-  notify("info", "已刷新");
+  if (ok) notify("info", "已刷新");
 }
 
 provide("panel", { state, reload, notify, refreshed });

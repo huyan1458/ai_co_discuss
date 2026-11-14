@@ -19,7 +19,7 @@ const current = computed(() => (chosen.value === NEW || state.value.accounts.som
 
 /** The list's "⋯" for one account: open that account and hand the operation to its detail page. */
 function menu(account) {
-  const pick = (action) => () => { chosen.value = account.name; request.value = { action, at: Date.now() }; };
+  const pick = (action) => () => { chosen.value = account.name; request.value = { name: account.name, action }; };
   return [[account.disabled ? { label: "启用账号", icon: "i-lucide-user-check", onSelect: pick("enable") }
     : { label: "停用账号", icon: "i-lucide-user-x", onSelect: pick("disable") }],
   [{ label: "删除账号", icon: "i-lucide-trash-2", color: "error", onSelect: pick("remove") }]];
@@ -29,6 +29,7 @@ function menu(account) {
 function todo(account) {
   if (!account.os_user) return "未隔离";
   if (!account.skills) return "AI 环境未初始化";
+  if (!account.protected) return "入口保护未开启";
   return "";
 }
 </script>

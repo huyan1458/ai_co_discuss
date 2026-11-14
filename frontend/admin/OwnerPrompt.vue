@@ -13,8 +13,11 @@ const groups = ref(null), loading = ref(false), open = ref(""), drafts = ref({})
 async function load() {
   loading.value = true;
   try {
+    const before = Array.isArray(groups.value) ? Object.fromEntries(groups.value.map((group) => [group.key, group.text])) : {};
     groups.value = await call("owner/prompts");
-    drafts.value = Object.fromEntries(groups.value.map((group) => [group.key, group.text]));
+    // A group with unsaved edits keeps them; saving then reports a conflict if the file changed meanwhile.
+    drafts.value = Object.fromEntries(groups.value.map((group) => [group.key,
+      group.key in before && drafts.value[group.key] !== before[group.key] ? drafts.value[group.key] : group.text]));
   } catch (failure) { groups.value = { error: failure.message }; }
   finally { loading.value = false; }
 }

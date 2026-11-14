@@ -9,22 +9,22 @@
  */
 import { spawn, spawnSync } from 'node:child_process';
 import { randomBytes } from 'node:crypto';
-import { closeSync, copyFileSync, cpSync, existsSync, mkdirSync, mkdtempSync, openSync, realpathSync, readdirSync, readFileSync, readSync, renameSync, rmSync, statSync, writeFileSync } from 'node:fs';
+import { closeSync, copyFileSync, cpSync, existsSync, lstatSync, mkdirSync, mkdtempSync, openSync, realpathSync, readdirSync, readFileSync, readSync, renameSync, rmSync, statSync, writeFileSync } from 'node:fs';
 import http from 'node:http';
 import { homedir, tmpdir } from 'node:os';
 import { dirname, extname, join, resolve } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import { parseArgs } from 'node:util';
 
-import { account_home, add_account, data_home, entry_settings, entry_status, instance_home, read_accounts, remove_account, reset_password, save_entry_settings,
+import { account_home, add_account, data_home, entry_settings, entry_status, instance_home as plain_instance_home, read_accounts, remove_account, reset_password, save_entry_settings,
   instance_key, set_account_disabled, set_account_protected, start_entry, stop_entry } from '../gateway/gateway.mjs';
-import { verified_connection } from './entry_client.mjs';
+import { signed_site_url, verified_connection } from './entry_client.mjs';
 import { API_PROVIDERS, save_api_key } from './discussion_api.mjs';
 import { STT_PROVIDERS, TTS_PROVIDERS } from './tts_providers.mjs';
 import { ensure_tunnel, start_tunnel_setup, tunnel_setup_state, tunnel_status } from './hosting_tunnel.mjs';
 import { machine_links } from './remote_launch.mjs';
 import { apply_login, cancel_login, LOGIN_METHODS, login_progress, login_status, logout, start_login, submit_login } from './cli_login.mjs';
-import { create_os_user, install_shared_runtime, instance_key_file, place_instance_key, read_os_users, remove_os_user, run_as_user, shared_cli_state, shared_executables, shared_paths,
+import { clear_instance_flag, create_os_user, install_shared_runtime, instance_key_file, place_instance_key, read_os_users, remove_os_user, run_as_user, shared_cli_state, shared_executables, shared_paths,
   start_instance_as_user } from './os_users.mjs';
 import { install_workflows, shipped_workflows } from './discussion_skills.mjs';
 import { list_workflows, workflows_home } from './workflows.mjs';
@@ -188,21 +188,39 @@ async function finish_update(data) {
     throw new Error('入口没有重新启动，在“概览”页“托管”下点“启动”看原因');
   });
   if (hosting_enabled(data)) {
+    const accounts = await list_accounts(data);
+    // Isolated instances run from the shared copy: they stop before it is replaced, or files in use stay old.
+    for (const account of accounts) {
+      if (account.os_user && (job.restart || []).includes(account.name)) await update_step(steps, `已停止 ${account.name} 的实例`, () => run_instance(data, account.name, 'stop'));
+    }
     if (installed) await update_step(steps, '已同步隔离账号的程序副本', () => { const result = install_runtime(data); if (result.warnings.length) throw new Error(result.warnings.join('；')); });
-    for (const account of await list_accounts(data)) {
+    for (const account of accounts) {
       if (installed && account.os_user) await update_step(steps, `已更新 ${account.name} 的技能`, () => prepare_account(data, account.name));
       // Reported restarted only once it serves again as the account is set (start_verified). Instances run from the
-      // package were stopped before the install; those running from the shared copy are stopped here.
-      if ((job.restart || []).includes(account.name)) await update_step(steps, `已重启 ${account.name} 的实例`, async () => {
-        if (account.os_user) await run_instance(data, account.name, 'stop');
-        await start_verified(data, account.name);
-      });
+      // package were stopped before the install; those running from the shared copy were stopped above.
+      if ((job.restart || []).includes(account.name)) await update_step(steps, `已重启 ${account.name} 的实例`, () => start_verified(data, account.name));
     }
   }
   write_update_job(data, { ...job, status: 'done', ok: installed, steps });
 }
 
 // ---- Accounts ----
+
+/**
+ * An account's service directory, for the owner's own reads and writes there. An isolated account may change everything
+ * in its folder, including replacing `service` with a link to one of the owner's folders (its keys, its launch settings);
+ * a path that does not lead where it says is refused, so the owner's writes cannot be redirected.
+ */
+function instance_home(data, name) {
+  const path = plain_instance_home(data, name);
+  // Node reports a junction as a symbolic link too. The owner writes into the folder and its api-keys folder.
+  for (const folder of [path, join(path, 'api-keys')]) {
+    let link = false;
+    try { link = lstatSync(folder).isSymbolicLink(); } catch { link = false; }
+    if (link) throw new Error(`${name} 的服务目录里有指向别处的链接（${folder}），已停止操作`);
+  }
+  return path;
+}
 
 /** Whether an instance answers on its port. */
 /** The status of a plain GET /api/rooms: a number when answered, 'down' when the port refuses, 'unknown' otherwise. */
@@ -331,7 +349,7 @@ function install_runtime(data) {
  */
 function account_env(data, name, action, request = {}, folders = {}) {
   const { env_script } = shared_paths();
-  if (!existsSync(env_script)) throw new Error('还没有安装隔离账号的程序副本，请先在“托管账号”页底部安装');
+  if (!existsSync(env_script)) throw new Error('还没有安装隔离账号的程序副本，请先在“概览 → 托管 → 程序副本”中同步');
   const text = run_as_user(data, name, `& ${ps_quote(process.execPath)} ${ps_quote(env_script)} ${action} $Job`,
     { files: { 'request.json': JSON.stringify(request) }, folders, timeout: 120_000 });
   const line = text.split(/\r?\n/).reverse().find(item => item.trim().startsWith('{'));
@@ -482,13 +500,20 @@ function run_instance(data, name, command) {
   const service = instance_home(data, name);
   // A protected instance starts knowing its key file; it then serves only callers that prove the key.
   const key_file = account.protected === true ? instance_key_file(name) : '';
+  // An account without its own Windows user runs as the owner and could read everything the owner can; it is not let
+  // run while people outside can reach the entry.
+  if (command === 'start' && process.platform === 'win32' && !read_os_users(data)[name] && entry_settings(data).mode !== 'local') {
+    throw new Error(`外网访问已开启，${name} 未隔离（以你的身份运行），不能启动：请先隔离该账号，或把外网访问改为“仅本机”`);
+  }
   if (command === 'start' && read_os_users(data)[name]) {
     const { local_script } = shared_paths();
-    if (!existsSync(local_script)) throw new Error('还没有安装隔离账号的程序副本，请先在“托管账号”页底部安装');
+    if (!existsSync(local_script)) throw new Error('还没有安装隔离账号的程序副本，请先在“概览 → 托管 → 程序副本”中同步');
     // Whatever was set up first, the instance starts on the shared copies its Windows user can run.
     use_shared_programs(data, name);
     return start_instance_as_user(data, name, service, local_script, process.execPath, { key_file });
   }
+  // An isolated instance runs as a scheduled task that comes back when the computer starts unless it was stopped here.
+  if (command === 'stop' && read_os_users(data)[name]) clear_instance_flag(name);
   const { DISCUSS_ENTRY_KEY_FILE: _inherited, ...environment } = process.env;
   const child = spawn(process.execPath, [LOCAL_SCRIPT, command, '--json'], { stdio: 'ignore', windowsHide: true,
     env: { ...environment, DISCUSS_SERVICE_HOME: service, ...(key_file ? { DISCUSS_ENTRY_KEY_FILE: key_file } : {}) } });
@@ -582,6 +607,8 @@ export function create_panel({ data, key, port, ops = {}, sessions = new Set() }
           : { accounts: [], clis: {}, entry: null }) };
     }
     // This computer: the owner's own service, its updates and login autostart.
+    // The owner's site opens in the default browser (not the panel's own window), through a signed link while it is protected.
+    if (method === 'POST' && section === 'service' && name === 'open') { open_browser(signed_site_url(site_url(data), data)); return { ok: true }; }
     if (method === 'POST' && section === 'service' && ['start', 'stop', 'restart'].includes(name)) {
       if (name !== 'start') await op.run_owner_service(data, 'stop');
       if (name !== 'stop') await op.run_owner_service(data, 'start');
@@ -665,7 +692,8 @@ export function create_panel({ data, key, port, ops = {}, sessions = new Set() }
     if (method === 'POST' && action === 'password') return { password: op.reset_password(data, name) };
     if (method === 'POST' && action === 'protect') return op.protect_account(data, name, body.on !== false);
     if (method === 'POST' && (action === 'disable' || action === 'enable')) { op.set_account_disabled(data, name, action === 'disable'); return { disabled: action === 'disable' }; }
-    if (method === 'POST' && action === 'remove') { op.remove_account(data, name); return { removed: name, kept: account_home(data, name) }; }
+    // The instance stops first: its port goes to the next new account, which must not reach this one's instance.
+    if (method === 'POST' && action === 'remove') { await op.run_instance(data, name, 'stop'); op.remove_account(data, name); return { removed: name, kept: account_home(data, name) }; }
     // A start is reported only once the instance serves as the account is set (protected or not).
     if (method === 'POST' && action === 'start') { await op.start_verified(data, name); return { ok: true }; }
     if (method === 'POST' && action === 'stop') { await op.run_instance(data, name, action); return { ok: true }; }
@@ -786,6 +814,12 @@ async function set_entry_mode(data, mode) {
     if (!settings.relay_url) throw new Error('还没有入口地址：先用接入码接入');
   }
   if (mode === 'tunnel' && !settings.tunnel) throw new Error('还没有设好 Cloudflare 隧道：先点“设置”填写你的域名');
+  if (mode !== 'local' && process.platform === 'win32') {
+    const users = read_os_users(data), accounts = read_accounts(data);
+    const exposed = [];
+    for (const [name, account] of Object.entries(accounts)) if (!users[name] && await instance_running(account.port)) exposed.push(name);
+    if (exposed.length) throw new Error(`未隔离的账号正在运行（${exposed.join('、')}），它们以你的身份运行，开启外网访问前请先停止或隔离`);
+  }
   save_entry_settings(data, { mode });
   if (mode !== 'local' && !(await entry_status(data)).running) { await start_entry(data); save_entry_settings(data, { running: true }); }
   if (mode === 'relay' && !local_status(data).running) await run_owner_service(data, 'start');
@@ -946,7 +980,7 @@ export async function relay_operator_events(data, send = send_notice, ready = ca
   try { marks = JSON.parse(readFileSync(state_file, 'utf8')) || {}; } catch { marks = {}; }
   const notified = [];
   for (const name of Object.keys(read_accounts(data))) {
-    const path = join(instance_home(data, name), OPERATOR_EVENTS_FILE);
+    const path = join(plain_instance_home(data, name), OPERATOR_EVENTS_FILE);
     let read = null;
     // The outbox is in the account's own folder: a link anywhere on its path (the file, or a folder above it that the
     // account replaced with a junction) is not followed, so only a file really inside that folder is read.
@@ -1111,7 +1145,7 @@ function run_panel(data, port) {
   const tray = show_tray({ title: '共议', icon_path: existsSync(icon) ? icon : '', window_title: WINDOW_TITLE,
     host: join(data, 'launcher', '共议.exe'), on_action: action => {
     if (action === 'open') open_panel_window(data, panel_url(state), false);
-    if (action === 'site') open_browser(site_url(data));
+    if (action === 'site') open_browser(signed_site_url(site_url(data), data));
     // Restarting and closing take seconds and show nothing of their own, so the icon says what is happening.
     if (action === 'restart') {
       tray.notify('busy', '正在重启共议服务…');

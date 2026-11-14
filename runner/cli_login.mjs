@@ -16,7 +16,7 @@ import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
-import { cli_sources, read_os_users, read_output, run_as_user } from './os_users.mjs';
+import { cli_sources, read_os_users, read_output, run_as_user, run_powershell } from './os_users.mjs';
 
 const AGENT = join(dirname(fileURLToPath(import.meta.url)), 'cli_login_agent.mjs');
 const POWERSHELL = 'powershell.exe';
@@ -138,8 +138,24 @@ function start_agent_login(data, target, cli, args) {
     return run_as_user(data, target, `& ${quote(process.execPath)} (Join-Path $Job 'agent.mjs') login $Job`, { files, wait: false });
   }
   const folder = owner_folder(files);
-  spawn(process.execPath, [AGENT, 'login', folder], { detached: true, stdio: 'ignore', windowsHide: true }).unref();
-  return { folder };
+  const child = spawn(process.execPath, [AGENT, 'login', folder], { detached: true, stdio: 'ignore', windowsHide: true });
+  child.unref();
+  return { folder, pid: child.pid || 0 };
+}
+
+/**
+ * Whether the program listening on Codex's callback port was started by this sign-in (the port is shared by every user
+ * of this computer: another hosted account's process could listen there first and receive the authorization code).
+ */
+function callback_listener_is(pid) {
+  if (!pid) return false;
+  return run_powershell(`$listener = (Get-NetTCPConnection -LocalPort 1455 -State Listen -ErrorAction SilentlyContinue | Select-Object -First 1).OwningProcess
+if (-not $listener) { 'none'; exit 0 }
+$parents = @{}
+Get-CimInstance Win32_Process | ForEach-Object { $parents[[int]$_.ProcessId] = [int]$_.ParentProcessId }
+$current = [int]$listener
+for ($step = 0; $step -lt 12 -and $current; $step++) { if ($current -eq ${Number(pid)}) { 'ours'; exit 0 }; $current = $parents[$current] }
+'other'`) === 'ours';
 }
 
 function start_console(data, target, exe) {
@@ -208,6 +224,9 @@ export async function submit_login(id, text) {
   try { address = new URL(value); } catch { throw new Error('请粘贴浏览器地址栏里的完整地址（以 http://localhost:1455/auth/callback 开头）'); }
   if (!['localhost', '127.0.0.1'].includes(address.hostname) || address.port !== '1455' || address.pathname !== '/auth/callback') {
     throw new Error('这不是 Codex 的登录回调地址：应以 http://localhost:1455/auth/callback 开头');
+  }
+  if (process.platform === 'win32' && !callback_listener_is(job.pid)) {
+    throw new Error('1455 端口上不是本次登录启动的 Codex（可能被其他程序占用），为防止授权码泄露，已停止；请重新开始登录');
   }
   const response = await fetch(`${CODEX_CALLBACK}${address.pathname}${address.search}`, { redirect: 'manual', signal: AbortSignal.timeout(20_000) });
   if (response.status >= 400) throw new Error(`Codex 没有接受这个地址（HTTP ${response.status}），请重新开始登录`);

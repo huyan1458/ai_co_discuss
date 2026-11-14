@@ -14,7 +14,7 @@ import { assert_shared_home, main as service_main, service_home, service_pid, se
 import { detect_python, local_settings } from './discussion_setup.mjs';
 import { unlink_machine } from './remote_launch.mjs';
 import { tone } from './discussion_tui.mjs';
-import { site_fetch } from './entry_client.mjs';
+import { set_owner_protection, signed_site_url, site_fetch } from './entry_client.mjs';
 
 const SCRIPT = fileURLToPath(import.meta.url);
 const SERVER = fileURLToPath(new URL('../server.py', import.meta.url));
@@ -68,7 +68,7 @@ async function connect_site(home, site, no_open, setup_key) {
   const state = await fetch(`${origin}/api/admin`, { redirect: 'error', signal: AbortSignal.timeout(10000) }).then(response => response.json()).catch(() => ({}));
   if (state.devices) {
     await bind_machine(home, origin, setup_key);
-    if (!no_open) open_site(`${local.url}/#settings=devices`);
+    if (!no_open) open_site(signed_site_url(`${local.url}/#settings=devices`, home));
     return { connected: origin, local_url: local.url, url: `${local.url}/#settings=devices`, bound: true };
   }
   const token = randomBytes(CONNECTION_TOKEN_BYTES).toString('hex');
@@ -186,10 +186,27 @@ async function requested_service(home, status, owned_service) {
 // projects root) have neither.
 const PANEL_SCRIPT = join(dirname(fileURLToPath(import.meta.url)), 'admin_panel.mjs');
 
+/** Whether this is the computer owner's own Windows instance (not a hosted account's, a test's or a second copy's). */
+function owner_instance(home, settings) {
+  return process.platform === 'win32' && !settings.projects_root && resolve(home) === resolve(homedir(), '.codiscuss');
+}
+
+/**
+ * Whether the owner's site runs protected: while hosting is on, hosted accounts' processes share this loopback and would
+ * otherwise reach the owner's site as its implicit administrator. Sets this process's environment, which the website,
+ * the discussion service and every member they start inherit, so they all prove themselves.
+ */
+function apply_owner_protection(home, settings) {
+  if (!owner_instance(home, settings)) return Boolean(process.env.DISCUSS_ENTRY_KEY_FILE);
+  const key_file = set_owner_protection(home, settings.hosting === true);
+  if (key_file) process.env.DISCUSS_ENTRY_KEY_FILE = key_file; else delete process.env.DISCUSS_ENTRY_KEY_FILE;
+  return Boolean(key_file);
+}
+
 /** Start the taskbar icon (and panel) in the background on the owner's Windows instance; it keeps running on its own. */
 function start_panel_icon(home, settings) {
   // Only the owner's default service directory: a test or a second copy elsewhere must not put up another icon.
-  if (process.platform !== 'win32' || settings.projects_root || resolve(home) !== resolve(homedir(), '.codiscuss')) return;
+  if (!owner_instance(home, settings)) return;
   if (!existsSync(PANEL_SCRIPT)) return;
   const child = spawn(process.execPath, [PANEL_SCRIPT, 'start', '--data', home], { detached: true, stdio: 'ignore', windowsHide: true });
   child.on('error', () => {});
@@ -208,7 +225,7 @@ async function supervise(home) {
   const stop_path = join(directory, 'stop.request');
   const settings = local_settings(home);
   const url = `http://127.0.0.1:${settings.port || 8765}`;
-  const status = { pid: process.pid, ready: false, url, version: VERSION };
+  const status = { pid: process.pid, ready: false, url, version: VERSION, protected: apply_owner_protection(home, settings) };
   if (existsSync(stop_path)) unlinkSync(stop_path);
   atomic_json(status_path, status);
   let website, owned_service, stopped = false;
@@ -278,6 +295,9 @@ export function restart_reason(home = service_home()) {
   if (current.url !== url) return `本机网站正在 ${current.url} 运行，端口配置已改为 ${url}`;
   // A website started with the retired remote entry is restarted without it.
   if (current.remote_port) return '本机网站仍开着已停用的远程入口';
+  if (owner_instance(home, settings) && Boolean(current.protected) !== (settings.hosting === true)) {
+    return settings.hosting === true ? '托管已开启，本机网站需要以受保护方式重启' : '托管已关闭，本机网站需要取消保护后重启';
+  }
   if (current.version !== VERSION) return `本机网站正在运行${current.version ? `版本 ${current.version}` : '未记录版本的旧程序'}，当前安装为 ${VERSION}`;
   return null;
 }
@@ -348,7 +368,7 @@ export async function local_main(args, output) {
   }
   if (positionals.length > 1 || values['no-open'] || !['open', 'start', 'status', 'stop'].includes(command)) throw new Error(LOCAL_HELP);
   const result = command === 'status' ? local_status(home) : command === 'stop' ? await stop_local(home) : await start_local(home);
-  if (command === 'open') open_site(result.url);
+  if (command === 'open') open_site(signed_site_url(result.url, home));
   report(result, command === 'open');
   return result;
 }

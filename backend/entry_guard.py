@@ -14,6 +14,11 @@ proved the same to it:
 
 The key never travels. Protection is on when the environment names a key file (``DISCUSS_ENTRY_KEY_FILE``); a key file
 that is then missing or unreadable refuses every protected request instead of falling back to no protection.
+
+A browser cannot do the handshake. The computer owner's own site (protected once hosting is on, since every hosted
+account's processes share this loopback) is opened in the owner's browser through a signed link that a key holder makes:
+``GET /_instance/open?at=<unix seconds>&sig=HMAC(K, "open|" + at)``, valid for a few minutes, answers with a cookie
+``HMAC(K, "browser|site")`` (HttpOnly, SameSite=Strict) that then admits that browser's requests. Changing the key ends it.
 """
 import hashlib
 import hmac
@@ -34,6 +39,10 @@ KEY_PATTERN = re.compile(r"^[0-9a-f]{64}$")
 HANDSHAKE_SECONDS = 10
 # Paths any caller may read: the health check and the page's static files carry no data.
 PUBLIC_PATHS = ("/api/health", "/robots.txt")
+OPEN_PATH = "/_instance/open"
+# How long a signed opening link stays usable, and how long the browser cookie it gives lasts.
+OPEN_LINK_SECONDS = 300
+BROWSER_COOKIE_SECONDS = 30 * 24 * 3600
 
 
 def proof(key, purpose, nonce):
@@ -66,6 +75,33 @@ class EntryPolicy:
         except (OSError, ValueError, AttributeError):
             return None
         return value if isinstance(value, str) and KEY_PATTERN.match(value) else None
+
+
+def browser_cookie_name(port):
+    """The cookie name, per port: cookies are shared by every port of a host."""
+    return f"codiscuss_site_{port}"
+
+
+def open_link_key(policy, at, sig, now):
+    """The current key when ``at``/``sig`` are a fresh opening link made with it, else None."""
+    key = policy.key()
+    if not key or not re.fullmatch(r"\d{1,12}", at or "") or abs(now - int(at)) > OPEN_LINK_SECONDS:
+        return None
+    return key if hmac.compare_digest(sig or "", proof(key, "open", at)) else None
+
+
+def browser_admitted(handler, policy):
+    """Whether the request carries the browser cookie of the current key."""
+    key = policy.key()
+    if not key:
+        return False
+    name = browser_cookie_name(handler.server.server_port)
+    expected = proof(key, "browser", "site")
+    for part in handler.headers.get("Cookie", "").split(";"):
+        label, _, value = part.strip().partition("=")
+        if label == name and hmac.compare_digest(value, expected):
+            return True
+    return False
 
 
 def answer_hello(handler, policy):

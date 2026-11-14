@@ -51,7 +51,7 @@ const CONFIRMS = {
 function ask(action) { confirming.value = { action, ...CONFIRMS[action] }; }
 
 watch(() => props.request, (request) => {
-  if (!request) return;
+  if (!request || request.name !== props.name) return;
   emit("handled");
   if (request.action === "enable") act("enable", "账号已启用");
   else ask(request.action);
@@ -121,7 +121,7 @@ async function copy(text) {
             <div class="panel-title">登录信息</div>
             <span class="panel-sub">入口 <a class="panel-link" :href="address" target="_blank" rel="noopener">{{ address }}</a> · 账号 <b class="detail-name">{{ account.name }}</b> · 密码仅在重设时显示一次</span>
             <span v-if="!state.entry?.running" class="panel-sub detail-warn">登录入口未运行，使用者暂时无法登录，请到“概览”启动</span>
-            <span v-else-if="!state.entry?.public_url" class="panel-sub detail-warn">未设置外网地址，目前仅本机可访问</span>
+            <span v-else-if="!state.entry?.address" class="panel-sub detail-warn">尚未开启外网访问，目前仅本机可访问</span>
           </div>
           <div class="panel-side">
             <button type="button" class="panel-button is-outline is-small" @click="copy(`地址 ${address}，账号 ${account.name}`)"><UIcon name="i-lucide-copy" />复制</button>

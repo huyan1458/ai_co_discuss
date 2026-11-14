@@ -12,7 +12,8 @@ import { dirname, join, normalize, relative, sep } from 'node:path';
 
 const LIBRARY = 'skill-library';
 const PROMPT_FILE = 'hosted-system-prompt.md';
-const SKILL_NAME = /^[\w.-]{1,64}$/;
+// Starts with a letter, digit or underscore: "." and ".." would name the folder above when joined and removed.
+const SKILL_NAME = /^\w[\w.-]{0,63}$/;
 const MAX_FILES = 2000;
 // What a hosted account's AI starts with; the owner's own rules are personal and are not given out. How to work in a room
 // is the skills' business, so this holds only what no skill covers: the language, and this account's boundaries.
