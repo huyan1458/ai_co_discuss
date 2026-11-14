@@ -505,6 +505,9 @@ async function fetch_request(request, env) {
     if (!["GET", "POST"].includes(request.method)) return new Response(null, { status: 501 });
     if (parts.length === 4 && parts[1] === "machines" && parts[3] === "relay") return await handle_relay(env, request, parts[2]);
     if (parts.length === 4 && parts[1] === "machines" && parts[3] === "pair") return await handle_pairing(env, request, parts[2]);
+    // Where the hosted accounts' entry Worker of this site is (deployed with it, `ENTRY_URL` in the private config), so a
+    // hosting computer that binds itself here needs no second address typed in. Public: it is the address users open.
+    if (url.pathname === "/api/entry" && request.method === "GET") return respond({ entry_url: typeof env.ENTRY_URL === "string" ? env.ENTRY_URL : "" });
     return await handle_api(env.DB, request, parts, env.ADMIN_SETUP_KEY, env.RELAY ?? null);
   } catch (error) {
     const status = error instanceof HttpError ? error.status : 500;

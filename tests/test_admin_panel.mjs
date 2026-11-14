@@ -359,3 +359,15 @@ test('setup asks for the outside address in a terminal, asks again after a wrong
   await ask_hosting(data, { hosting: true }, { ask: typed.ask, show, interactive: false });
   assert.equal(typed.asked.length, 0);
 });
+
+test('joining the online relay takes one access code, and a wrong one or a missing deployment config is explained', async () => {
+  const { data, ops } = fixture();
+  const { request } = await serve(data, ops);
+  const cookie = (await request('/enter?key=owner-key')).headers.get('set-cookie').split(';')[0];
+  const joined = await request('/api/relay/join', { cookie, body: { code: 'https://site.example/without-token' } });
+  assert.equal(joined.status, 400);
+  assert.match((await joined.json()).error, /接入码不对/);
+  const made = await request('/api/site/code', { cookie, body: { config: join(data, 'missing.jsonc'), site: 'https://site.example' } });
+  assert.equal(made.status, 400);
+  assert.match((await made.json()).error, /找不到线上站点的部署配置/);
+});

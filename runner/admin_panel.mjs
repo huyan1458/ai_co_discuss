@@ -566,7 +566,7 @@ export function create_panel({ data, key, port, ops = {}, sessions = new Set() }
   const op = { list_accounts, add_account, reset_password, set_account_disabled, remove_account, run_instance, create_os_user, remove_os_user,
     login_status, apply_login, logout, start_login, login_progress, submit_login, cancel_login, install_runtime, prepare_account, account_env, account_skills, account_workflows, owner_env, owner_skills, owner_prompts, save_owner_prompt, shared_cli_state,
     save_api_key, list_keys, remove_key, use_shared_programs, service_overview, run_owner_service, latest_version, begin_update,
-    autostart_enabled, set_autostart, entry_overview, start_entry, stop_entry, keep_tunnel, start_tunnel_setup, set_entry_mode, set_relay_url, connect_site, protect_account, start_verified, hand_over: () => {}, ...ops };
+    autostart_enabled, set_autostart, entry_overview, start_entry, stop_entry, keep_tunnel, start_tunnel_setup, set_entry_mode, set_relay_url, connect_site, make_access_code, join_relay, protect_account, start_verified, hand_over: () => {}, ...ops };
   const hosts = new Set([`127.0.0.1:${port}`, `localhost:${port}`]);
 
   async function api(method, path, body) {
@@ -644,6 +644,10 @@ export function create_panel({ data, key, port, ops = {}, sessions = new Set() }
     if (method === 'POST' && section === 'entry' && name === 'mode') return op.set_entry_mode(data, String(body.mode || ''));
     if (method === 'POST' && section === 'entry' && name === 'relay') return op.set_relay_url(data, body.url);
     if (method === 'POST' && section === 'site' && name === 'connect') return op.connect_site(data, body.site, body.setup_key);
+    // The access code: made on the computer that deployed the online site, pasted on a hosting computer.
+    if (method === 'GET' && section === 'site' && name === 'code') return { ...deploy_settings(data), site: deploy_settings(data).site || bound_site(data)?.site || '' };
+    if (method === 'POST' && section === 'site' && name === 'code') return op.make_access_code(data, body);
+    if (method === 'POST' && section === 'relay' && name === 'join') return op.join_relay(data, body.code);
     // The outside address: a Cloudflare tunnel set up by a job of its own (it waits for the owner in the browser).
     if (section === 'tunnel' && name === 'setup') {
       if (method === 'GET') return tunnel_setup_state(data);
@@ -749,28 +753,107 @@ async function relay_status(relay_url, machine) {
   } catch { return { reachable: false, online: false }; }
 }
 
+/** What stands between people outside and this computer over the relay, in the order to look at it; '' when nothing. */
+function relay_problem(relay, entry_running, service_running) {
+  if (!relay.reachable) return '入口地址连不上：检查网络与代理是否放行 *.workers.dev';
+  if (!service_running) return '本机服务没有在运行，电脑连不上线上站点：在上面“本机”里启动共议服务';
+  if (!relay.online) return '电脑还没连上线上站点：本机服务刚启动时稍等几秒；持续如此，可能这台电脑绑定的站点与入口不属于同一个 Cloudflare 账号，重新用接入码接入';
+  if (!entry_running) return '登录入口没有在运行：点上面的“启动”';
+  return '';
+}
+
 async function entry_overview(data) {
   const { port, public_url, tunnel, mode, relay_url } = entry_settings(data), status = await entry_status(data);
   const bound = bound_site(data);
   const relay = { url: relay_url, site: bound?.site || '', link: relay_url && bound ? `${relay_url}/?m=${bound.machine}` : '',
     ...(mode === 'relay' && relay_url && bound ? await relay_status(relay_url, bound.machine) : {}) };
+  if (mode === 'relay') relay.problem = relay_problem(relay, status.running, Boolean(local_status(data).running));
   // The address people open in the mode in use.
   const address = mode === 'relay' ? relay.link : mode === 'tunnel' ? public_url : '';
   return { running: status.running, port: status.running ? status.port : port, public_url, mode, address, relay,
     tunnel: tunnel ? { host: tunnel.host, name: tunnel.name, ...(await tunnel_status(data)) } : null };
 }
 
-/** Switch how people outside reach the entry, once what that way needs is there; the tunnel follows at once. */
+/**
+ * Switch how people outside reach the entry, once what that way needs is there. Reaching it from outside needs the entry
+ * running, and the relay needs this computer's service (which holds the relay connection): both are started here rather
+ * than left for the first person to find a broken link. The tunnel follows at once.
+ */
 async function set_entry_mode(data, mode) {
   const settings = entry_settings(data);
   if (mode === 'relay') {
-    if (!bound_site(data)) throw new Error('这台电脑还没有绑定线上站点：先在下面绑定');
-    if (!settings.relay_url) throw new Error('还没有填写入口地址（入口 Worker 的 workers.dev 地址）');
+    if (!bound_site(data)) throw new Error('这台电脑还没有接入线上站点：先用接入码接入');
+    if (!settings.relay_url) throw new Error('还没有入口地址：先用接入码接入');
   }
   if (mode === 'tunnel' && !settings.tunnel) throw new Error('还没有设好 Cloudflare 隧道：先点“设置”填写你的域名');
   save_entry_settings(data, { mode });
+  if (mode !== 'local' && !(await entry_status(data)).running) { await start_entry(data); save_entry_settings(data, { running: true }); }
+  if (mode === 'relay' && !local_status(data).running) await run_owner_service(data, 'start');
   await keep_tunnel(data);
   return entry_overview(data);
+}
+
+// Where the panel of the computer that deployed the online site remembers its deployment config and the site's address.
+const DEPLOY_FILE = 'panel-deploy.json';
+const BIND_MARK = '#codiscuss-bind=';
+
+function deploy_settings(data) {
+  try { return JSON.parse(readFileSync(join(data, DEPLOY_FILE), 'utf8')); } catch { return {}; }
+}
+
+/** The folder above a deployment config that has wrangler installed, so npx finds it rather than downloading it. */
+function wrangler_folder(config) {
+  for (let folder = dirname(config); ; folder = dirname(folder)) {
+    if (existsSync(join(folder, 'node_modules', 'wrangler'))) return folder;
+    if (dirname(folder) === folder) return dirname(config);
+  }
+}
+
+/**
+ * On the computer that deployed the online site: make an access code for a hosting computer, the site's address with a
+ * one-time binding token (`codiscuss token`, written to the site's database through wrangler, in a child process so the
+ * panel keeps answering). A new code makes an unused earlier one invalid. The config and site are remembered.
+ */
+function make_access_code(data, { config, site }) {
+  const saved = deploy_settings(data);
+  const path = resolve(String(config || saved.config || '').trim() || '.');
+  if (!existsSync(path) || !/\.jsonc?$/.test(path)) throw new Error('找不到线上站点的部署配置：填写源码仓库里 .wrangler\\deploy\\wrangler.jsonc 的完整路径');
+  let origin;
+  try { origin = new URL(String(site || saved.site || bound_site(data)?.site || '').trim()).origin; } catch { throw new Error('站点地址格式不对，例如 https://xxx.pages.dev'); }
+  return new Promise((done, fail) => {
+    const child = spawn(process.execPath, [installed_script('codiscuss.mjs'), 'token', '--config', path], { cwd: wrangler_folder(path), windowsHide: true, stdio: ['ignore', 'pipe', 'pipe'] });
+    let output = '', errors = '';
+    child.stdout.on('data', chunk => { output += chunk; });
+    child.stderr.on('data', chunk => { errors += chunk; });
+    child.on('error', fail);
+    child.on('exit', code => {
+      const token = output.match(/^([0-9a-f]{32,})$/m)?.[1];
+      if (code !== 0 || !token) return fail(new Error(errors.trim().split(/\r?\n/).pop() || '没有生成绑定令牌'));
+      write_settings(join(data, DEPLOY_FILE), { config: path, site: origin });
+      done({ code: `${origin}/${BIND_MARK}${token}`, site: origin });
+    });
+  });
+}
+
+/**
+ * On a hosting computer: join the online relay with an access code, each step reported. Bind to the site (unless bound
+ * already), take the entry address the site gives, then switch to the relay, which starts what it needs.
+ */
+async function join_relay(data, text) {
+  const value = String(text || '').trim();
+  const at = value.indexOf(BIND_MARK);
+  if (at < 0) throw new Error('接入码不对：应是部署线上站点的电脑上生成的一整串，形如 https://xxx.pages.dev/#codiscuss-bind=…');
+  const site = new URL(value.slice(0, at)).origin, token = value.slice(at + BIND_MARK.length);
+  const steps = [];
+  if (bound_site(data)?.site === site) steps.push(`已接入 ${site}`);
+  else { await connect_site(data, site, token); steps.push(`已接入 ${site}`); }
+  const given = await fetch(`${site}/api/entry`, { signal: AbortSignal.timeout(RELAY_CHECK_MS) }).then(answer => answer.json()).catch(() => ({}));
+  if (!given.entry_url) throw new Error(`${site} 没有提供入口地址：请部署线上站点的人在部署配置里设置 ENTRY_URL 并重新发布`);
+  await set_relay_url(data, given.entry_url);
+  steps.push(`入口地址 ${given.entry_url}`);
+  const overview = await set_entry_mode(data, 'relay');
+  steps.push('已切换到线上中转');
+  return { steps, entry: overview };
 }
 
 /** Save the relay's entry address after checking that it answers as one. */

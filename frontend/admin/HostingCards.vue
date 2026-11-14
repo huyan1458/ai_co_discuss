@@ -29,12 +29,10 @@ const tunnel_state = computed(() => {
   if (tunnel?.running) return { label: "隧道连接中", tag: "is-amber", hint: "cloudflared 已运行但还没连上 Cloudflare：刚启动时稍等片刻；持续如此请检查网络与代理是否放行 *.cloudflare.com、*.argotunnel.com，日志在数据目录 tunnel.log" };
   return { label: "隧道未运行", tag: "is-amber", hint: entry.value.running ? "管理面板每分钟会自动拉起一次；持续如此请查看数据目录 tunnel.log" : "登录入口停止时隧道也会停止" };
 });
-// The relay as the entry Worker answers: this computer connected through it, or what is in the way.
+// The relay as this computer sees it: usable from outside, or the first thing in the way and what to do (from the panel).
 const relay_state = computed(() => {
-  const relay = entry.value.relay || {};
-  if (relay.online) return { label: "已连上线上站点", tag: "is-green", hint: "" };
-  if (relay.reachable) return { label: "电脑未连上线上站点", tag: "is-amber", hint: "本机服务没有在运行，或连不上线上站点；本机服务运行时会自动重连" };
-  return { label: "入口地址连不上", tag: "is-amber", hint: "检查入口地址是否正确、网络是否放行 *.workers.dev" };
+  const problem = entry.value.relay?.problem || "";
+  return problem ? { label: "暂时无法从外网访问", tag: "is-amber", hint: problem } : { label: "可从外网访问", tag: "is-green", hint: "" };
 });
 
 /** Start or stop the entry. */
@@ -115,7 +113,7 @@ async function install() {
       <span v-else class="entry-value is-empty">只有这台电脑能打开；要让使用者从外网登录，选“线上中转”（不需要域名）或“自有域名”</span>
     </div>
     <TunnelDialog v-model:open="tunnel_open" />
-    <RelayDialog v-model:open="relay_open" @ready="entry_act('mode', { mode: 'relay' }, '外网访问已改为线上中转')" />
+    <RelayDialog v-model:open="relay_open" />
 
     <div class="panel-row">
       <div class="panel-tile"><UIcon name="i-lucide-hard-drive-download" /></div>

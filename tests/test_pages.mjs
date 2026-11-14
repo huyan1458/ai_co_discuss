@@ -464,3 +464,9 @@ test('hosted accounts reach the computer\'s sign-in entry over the relay only wh
     await rm(home, { recursive: true, force: true });
   }
 });
+
+test('the online site tells a hosting computer where its entry Worker is', async () => {
+  const ask = env => worker.fetch(new Request('https://site.example/api/entry'), env).then(answer => answer.json());
+  assert.deepEqual(await ask({ ENTRY_URL: 'https://codiscuss-entry.example.workers.dev' }), { entry_url: 'https://codiscuss-entry.example.workers.dev' });
+  assert.deepEqual(await ask({}), { entry_url: '' }, 'a site deployed without one says so');
+});

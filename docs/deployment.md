@@ -169,7 +169,13 @@ npx wrangler deploy --config deploy/updates.wrangler.jsonc
 npx wrangler deploy --config deploy/entry.wrangler.jsonc
 ```
 
-它有自己的 `workers.dev` 地址（如 `https://codiscuss-entry.<账号子域>.workers.dev`），与线上站点不同源，托管账号的网页碰不到你已配对设备的密钥。托管电脑绑定线上站点后，在管理面板“概览 → 托管 → 登录入口”的“外网访问”选“线上中转”，填这个地址；面板给出的链接带电脑编号（`?m=…`），发给使用者即可。使用者的请求经入口 Worker 和中转到达这台电脑的登录入口，登录、会话与入口保护都在电脑上；Cloudflare 能看到这些往来内容（与自有域名隧道相同），每个页面的请求都计入 Workers 免费额度。
+它有自己的 `workers.dev` 地址（如 `https://codiscuss-entry.<账号子域>.workers.dev`），与线上站点不同源，托管账号的网页碰不到你已配对设备的密钥。把这个地址写进私有配置的 `vars`，重新部署 Pages，线上站点就会把它告诉来接入的托管电脑：
+
+```json
+"vars": { "ENTRY_URL": "https://codiscuss-entry.<账号子域>.workers.dev" }
+```
+
+接入一台托管电脑：在你（部署线上站点的电脑）的管理面板“概览 → 托管 → 登录入口”选“线上中转”，展开“生成接入码”，填部署配置路径与站点地址后生成（需已登录 wrangler；一次性，再生成会让未用过的作废）；把接入码发给托管电脑，粘贴到它的同一个窗口点“接入并切换”，它会绑定站点、取得入口地址、启动所需服务并切换。面板给出的链接带电脑编号（`?m=…`），发给使用者即可。使用者的请求经入口 Worker 和中转到达这台电脑的登录入口，登录、会话与入口保护都在电脑上；Cloudflare 能看到这些往来内容（与自有域名隧道相同），每个页面的请求都计入 Workers 免费额度。
 
 ## 常见问题
 
