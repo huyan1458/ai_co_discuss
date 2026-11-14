@@ -327,7 +327,7 @@ test('setup sets the entry up only when hosting is asked for, and keeps it to th
   assert.equal(hosting_requested({ hosting: true }, true), process.platform === 'win32');
   const data = mkdtempSync(join(tmpdir(), 'hosting-'));
   folders.push(data);
-  const result = configure_hosting(data, { hosting: true, 'entry-port': '8790' }, { interactive: false });
+  const result = await configure_hosting(data, { hosting: true, 'entry-port': '8790' }, { interactive: false });
   assert.deepEqual({ ...entry_settings(data) }, { port: 8790, public_url: '', running: true, tunnel: null });
   // No launcher in a fresh folder: starting with Windows is left for the owner, and said so.
   assert.ok(result.issues.some(issue => issue.includes('登录自启')));

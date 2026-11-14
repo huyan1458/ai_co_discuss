@@ -54,7 +54,7 @@ export const LOGIN_METHODS = {
 /** The programs a target runs: the owner's own copies, or the shared copies a hosted account's user runs. */
 function executables(target) {
   return Object.fromEntries(Object.entries(cli_sources()).map(([key, cli]) => [key, target ? cli.executable || cli.target
-    : key === 'codex' ? join(cli.source, 'bin', 'codex.exe') : cli.source]));
+    : cli.program || cli.source]));
 }
 
 function check_target(data, target) {

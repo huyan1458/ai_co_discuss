@@ -14,6 +14,8 @@ const LOGO = [
 ];
 const PREFIX_LETTERS = 2;
 const GRADIENT = [[91, 140, 255], [167, 139, 250], [240, 171, 252]];
+// An empty answer sooner than this after a question is a key left from before it, not the owner's answer.
+const STALE_ANSWER_MS = 300;
 
 export const styled = Boolean(process.stderr.isTTY) && !process.env.NO_COLOR;
 const paint = (code, text) => (styled ? `\x1b[${code}m${text}\x1b[0m` : text);
@@ -78,6 +80,18 @@ export function step(title, lines = [], mark = tone.green('◇')) {
   write(`${mark}  ${title}\n${lines.map(line => `${bar()}  ${line}\n`).join('')}${bar()}\n`);
 }
 
+/**
+ * Draw a prompt's lines over its previous drawing and return how many terminal rows it now takes. A line wider than the
+ * terminal wraps onto more rows, so rows are counted by display width: counting lines instead leaves the top of the old
+ * drawing on screen at every redraw in a narrow window.
+ */
+function redraw(output, lines, drawn) {
+  const columns = output.columns || 80;
+  if (drawn) output.write(`\x1b[${drawn}A\r`);
+  output.write(`\x1b[J${lines.join('\n')}\n`);
+  return lines.reduce((sum, line) => sum + Math.max(1, Math.ceil(text_width(line) / columns)), 0);
+}
+
 /** Animate a step while asynchronous work runs; synchronous work simply shows the first frame. */
 export function spinner(title) {
   if (!styled) return { done: () => {}, fail: () => {} };
@@ -94,11 +108,22 @@ export function spinner(title) {
 
 /** Ask one free-text question inside the gutter, falling back to a plain prompt. */
 export async function ask(question, hint = '') {
+  // Keys typed before the question are not its answer: an Enter left from the previous prompt, or keys pressed while setup
+  // worked, would otherwise answer at once (an empty answer, often the default) without the owner seeing the question.
+  // Only at a terminal: input piped in (a script, a test) is written ahead on purpose and is the answer.
+  const terminal = Boolean(process.stdin.isTTY) && typeof process.stdin.setRawMode === 'function';
+  if (terminal) while (process.stdin.read?.() != null) { /* dropped */ }
   const prompt = createInterface({ input: process.stdin, output: process.stderr });
+  const line = async text => {
+    for (;;) {
+      const started = Date.now(), answer = await prompt.question(text);
+      if (answer || !terminal || Date.now() - started >= STALE_ANSWER_MS) return answer;
+    }
+  };
   try {
-    if (!styled) return await prompt.question(`${question}${hint}：`);
+    if (!styled) return await line(`${question}${hint}：`);
     write(`${tone.cyan('◆')}  ${question.split('\n').join(`\n${bar()}  `)}\n`);
-    const answer = await prompt.question(`${bar()}  ${tone.dim(hint)} ${tone.cyan('›')} `);
+    const answer = await line(`${bar()}  ${tone.dim(hint)} ${tone.cyan('›')} `);
     write(`${bar()}\n`);
     return answer;
   } finally { prompt.close(); }
@@ -127,12 +152,7 @@ export function checkbox_prompt(message, items, input = process.stdin, output = 
       if (!items[next].disabled) { cursor = next; return; }
     }
   };
-  const draw = (lines) => {
-    if (drawn) output.write(`\x1b[${drawn}A`);
-    output.write(`${lines.map(line => `\x1b[2K${line}`).join('\n')}\n`);
-    if (lines.length < drawn) output.write(`\x1b[J`);
-    drawn = lines.length;
-  };
+  const draw = lines => { drawn = redraw(output, lines, drawn); };
   const active = () => [`${tone.cyan('◆')}  ${message}`, ...rows.map((item, index) => checkbox_row(item, index === cursor, checked[index])),
     `${tone.gray('└')}  ${tone.dim('↑↓ 移动 · 空格 勾选 · 回车 确认')}`];
   return new Promise((done, fail) => {
@@ -185,12 +205,7 @@ export function tree_prompt(message, groups, input = process.stdin, output = pro
   const enabled = () => checked.flat().filter(Boolean).length;
   const rows = () => groups.flatMap((group, index) => [{ group: index },
     ...(expanded.has(index) ? group.items.map((_, item) => ({ group: index, item })) : [])]);
-  const draw = lines => {
-    if (drawn) output.write(`\x1b[${drawn}A`);
-    output.write(`${lines.map(line => `\x1b[2K${line}`).join('\n')}\n`);
-    if (lines.length < drawn) output.write('\x1b[J');
-    drawn = lines.length;
-  };
+  const draw = lines => { drawn = redraw(output, lines, drawn); };
   const row_text = ({ group, item }, focused) => {
     const pointer = focused ? tone.cyan('›') : ' ';
     if (item === undefined) {

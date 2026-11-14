@@ -457,7 +457,7 @@ async function setup(options) {
     const show = (title, lines) => styled ? step(title, lines, tone.yellow('▲')) : process.stderr.write(`${[title, ...lines].join('\n')}\n`);
     await ask_hosting(home, options, { ask, show });
     // No spinner: installing cloudflared and signing in to Cloudflare print and wait for the owner.
-    hosting = configure_hosting(home, options, { say: line => process.stderr.write(`${line}\n`) });
+    hosting = await configure_hosting(home, options, { say: line => process.stderr.write(`${line}\n`) });
     step(hosting.issues.length ? '登录入口已设置，有待处理项' : '登录入口已设置', [...hosting.lines, ...hosting.issues]);
   }
   const result = { home, python, clients: selected.map(item => item.name), ...configured, workflows, ...(choices.hosting ? { hosting: true } : {}),

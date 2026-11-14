@@ -1,10 +1,12 @@
 <script setup>
 /**
  * This computer's parts of hosting, shown on the overview with hosting on: the entry hosted accounts sign in at (its
- * outside address set on one line), and the copy of the programs accounts with their own Windows user run.
+ * outside address, a Cloudflare tunnel set in its own dialog), and the copy of the programs accounts with their own Windows
+ * user run.
  */
 import { computed, inject, ref } from "vue";
 import { call, entry_address } from "./api.js";
+import TunnelDialog from "./TunnelDialog.vue";
 
 const { state, reload, notify } = inject("panel");
 const installing = ref(false);
@@ -13,7 +15,7 @@ const PARTS = [["claude", "Claude Code"], ["codex", "Codex"], ["agy", "Antigravi
 const runtime_ready = computed(() => PARTS.every(([key]) => runtime.value[key]));
 const runtime_stale = computed(() => runtime.value.app && runtime.value.app_version && runtime.value.app_version !== state.value.version);
 const entry = computed(() => state.value.entry || { running: false, port: 0, public_url: "" });
-const entry_busy = ref(""), public_url = ref(entry.value.public_url), editing = ref(false);
+const entry_busy = ref(""), tunnel_open = ref(false);
 // The tunnel as cloudflared reports it: connected to Cloudflare, running but not (yet) connected, or not running.
 const tunnel_state = computed(() => {
   const tunnel = entry.value.tunnel;
@@ -22,15 +24,13 @@ const tunnel_state = computed(() => {
   return { label: "隧道未运行", tag: "is-amber", hint: entry.value.running ? "管理面板每分钟会自动拉起一次；持续如此请查看数据目录 tunnel.log" : "登录入口停止时隧道也会停止" };
 });
 
-/** Start or stop the entry, or save its outside address. */
+/** Start or stop the entry. */
 async function entry_act(action, body = {}, message = "") {
   entry_busy.value = action;
   try {
     await call(`entry/${action}`, body);
     if (message) notify("info", message);
-    editing.value = false;
     await reload();
-    public_url.value = entry.value.public_url;
   } catch (failure) { notify("error", failure.message); }
   finally { entry_busy.value = ""; }
 }
@@ -67,19 +67,12 @@ async function install() {
     </div>
     <div class="panel-row-extra">
       <span class="entry-label">外网地址</span>
-      <template v-if="!editing">
-        <span class="entry-value" :class="{ 'is-empty': !entry.public_url }">{{ entry.public_url || "未设置，仅本机可访问" }}
-          <span v-if="entry.tunnel" class="panel-tag" :class="tunnel_state.tag" :title="tunnel_state.hint">{{ tunnel_state.label }}</span>
-          <small v-if="entry.tunnel && !entry.tunnel.connected" class="entry-tunnel-error">{{ tunnel_state.hint }}</small></span>
-        <button type="button" class="panel-button is-plain is-small" @click="editing = true"><UIcon name="i-lucide-pencil" />{{ entry.public_url ? "修改" : "设置" }}</button>
-      </template>
-      <form v-else class="entry-url" @submit.prevent="entry_act('settings', { public_url: public_url.trim() }, '外网地址已保存')">
-        <input v-model="public_url" class="panel-input" placeholder="https://entry.example.com" autocomplete="off" spellcheck="false" autofocus />
-        <button type="button" class="panel-button is-plain is-small" @click="editing = false; public_url = entry.public_url">取消</button>
-        <button type="submit" class="panel-button is-primary is-small" :disabled="Boolean(entry_busy)">保存</button>
-      </form>
+      <span class="entry-value" :class="{ 'is-empty': !entry.public_url }">{{ entry.public_url || "未设置，仅本机可访问" }}
+        <span v-if="entry.tunnel" class="panel-tag" :class="tunnel_state.tag" :title="tunnel_state.hint">{{ tunnel_state.label }}</span>
+        <small v-if="entry.tunnel && !entry.tunnel.connected" class="entry-tunnel-error">{{ tunnel_state.hint }}</small></span>
+      <button type="button" class="panel-button is-plain is-small" @click="tunnel_open = true"><UIcon name="i-lucide-pencil" />{{ entry.tunnel ? "修改" : "设置" }}</button>
     </div>
-    <small v-if="editing" class="entry-help">先用 Cloudflare Tunnel 等工具把一个 https 地址转发到本机 {{ entry.port }} 端口，再填入此处；留空则仅本机可访问。</small>
+    <TunnelDialog v-model:open="tunnel_open" />
 
     <div class="panel-row">
       <div class="panel-tile"><UIcon name="i-lucide-hard-drive-download" /></div>
@@ -105,7 +98,4 @@ async function install() {
 .entry-value.is-empty { color: var(--panel-faint); }
 .entry-value .panel-tag { margin-left: 8px; vertical-align: middle; }
 .entry-tunnel-error { display: block; overflow: hidden; color: var(--panel-amber); font-size: 12px; white-space: nowrap; text-overflow: ellipsis; }
-.entry-url { display: flex; flex: 1; align-items: center; gap: 8px; }
-.entry-url .panel-input { flex: 1; min-width: 0; height: 34px; border-radius: 10px; font-size: 13px; }
-.entry-help { margin: -8px 0 12px 54px; color: var(--panel-faint); font-size: 12px; line-height: 1.6; }
 </style>

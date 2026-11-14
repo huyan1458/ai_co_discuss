@@ -73,14 +73,14 @@ export async function ask_hosting(home, options, { ask, show, interactive = Bool
  * Save the entry's settings and prepare the outside address, before the service starts. Returns { lines, issues }:
  * what was set, and what is left for the owner.
  */
-export function configure_hosting(home, options, { interactive = Boolean(process.stdin.isTTY), say = () => {} } = {}) {
+export async function configure_hosting(home, options, { interactive = Boolean(process.stdin.isTTY), say = () => {} } = {}) {
   const lines = [], issues = [];
   const changes = { running: true };
   if (options['entry-port']) changes.port = Number(options['entry-port']);
   if (options['public-host']) {
     try {
       const host = tunnel_host(options['public-host']);
-      const tunnel = prepare_tunnel({ host, name: options['tunnel-name'], interactive, say });
+      const tunnel = await prepare_tunnel({ host, name: options['tunnel-name'], interactive, say });
       Object.assign(changes, { public_url: `https://${host}`, tunnel });
       lines.push(`外网地址 https://${host}，经 Cloudflare 隧道 ${tunnel.name} 转到登录入口；隧道独立运行，由管理面板按设置维持`);
       if (remove_legacy_tunnel_start()) lines.push('已移除旧的“CoDiscuss Tunnel”开机任务，改由管理面板运行隧道');

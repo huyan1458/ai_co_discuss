@@ -21,7 +21,7 @@ import { account_home, add_account, data_home, entry_settings, entry_status, ins
 import { verified_connection } from './entry_client.mjs';
 import { API_PROVIDERS, save_api_key } from './discussion_api.mjs';
 import { STT_PROVIDERS, TTS_PROVIDERS } from './tts_providers.mjs';
-import { ensure_tunnel, tunnel_status } from './hosting_tunnel.mjs';
+import { ensure_tunnel, start_tunnel_setup, tunnel_setup_state, tunnel_status } from './hosting_tunnel.mjs';
 import { apply_login, cancel_login, LOGIN_METHODS, login_progress, login_status, logout, start_login, submit_login } from './cli_login.mjs';
 import { create_os_user, install_shared_runtime, instance_key_file, place_instance_key, read_os_users, remove_os_user, run_as_user, shared_cli_state, shared_executables, shared_paths,
   start_instance_as_user } from './os_users.mjs';
@@ -563,7 +563,7 @@ export function create_panel({ data, key, port, ops = {}, sessions = new Set() }
   const op = { list_accounts, add_account, reset_password, set_account_disabled, remove_account, run_instance, create_os_user, remove_os_user,
     login_status, apply_login, logout, start_login, login_progress, submit_login, cancel_login, install_runtime, prepare_account, account_env, account_skills, account_workflows, owner_env, owner_skills, owner_prompts, save_owner_prompt, shared_cli_state,
     save_api_key, list_keys, remove_key, use_shared_programs, service_overview, run_owner_service, latest_version, begin_update,
-    autostart_enabled, set_autostart, entry_overview, start_entry, stop_entry, keep_tunnel, protect_account, start_verified, hand_over: () => {}, ...ops };
+    autostart_enabled, set_autostart, entry_overview, start_entry, stop_entry, keep_tunnel, start_tunnel_setup, protect_account, start_verified, hand_over: () => {}, ...ops };
   const hosts = new Set([`127.0.0.1:${port}`, `localhost:${port}`]);
 
   async function api(method, path, body) {
@@ -636,6 +636,11 @@ export function create_panel({ data, key, port, ops = {}, sessions = new Set() }
       // Its tunnel goes with it.
       await op.keep_tunnel(data);
       return op.entry_overview(data);
+    }
+    // The outside address: a Cloudflare tunnel set up by a job of its own (it waits for the owner in the browser).
+    if (section === 'tunnel' && name === 'setup') {
+      if (method === 'GET') return tunnel_setup_state(data);
+      if (method === 'POST') return op.start_tunnel_setup(data, body.host, body.name);
     }
     if (method === 'POST' && section === 'entry' && name === 'settings') { save_entry_settings(data, { public_url: body.public_url }); return op.entry_overview(data); }
     // The default system prompt of new hosted accounts.
@@ -725,7 +730,7 @@ function keep_tunnel(data) {
 async function entry_overview(data) {
   const { port, public_url, tunnel } = entry_settings(data), status = await entry_status(data);
   return { running: status.running, port: status.running ? status.port : port, public_url,
-    tunnel: tunnel ? { host: tunnel.host, ...(await tunnel_status(data)) } : null };
+    tunnel: tunnel ? { host: tunnel.host, name: tunnel.name, ...(await tunnel_status(data)) } : null };
 }
 
 // ---- Hosted accounts' failures, to the owner's Weixin ----

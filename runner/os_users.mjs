@@ -40,12 +40,47 @@ const ELEVATED_TIMEOUT_MS = 300_000;
 export function cli_sources(home = homedir(), env = process.env) {
   const app_data = env.APPDATA || join(home, 'AppData', 'Roaming');
   const local = env.LOCALAPPDATA || join(home, 'AppData', 'Local');
+  const codex = codex_source(app_data, env);
   return {
-    claude: { label: 'Claude Code', source: join(home, '.local', 'bin', 'claude.exe'), target: join(CLI_ROOT, 'claude.exe'), adapter: 'claude' },
-    codex: { label: 'Codex', source: join(app_data, 'npm', 'node_modules', '@openai', 'codex', 'node_modules', '@openai', 'codex-win32-x64', 'vendor', 'x86_64-pc-windows-msvc'),
-      target: join(CLI_ROOT, 'codex'), executable: join(CLI_ROOT, 'codex', 'bin', 'codex.exe'), adapter: 'codex_cli', folder: true },
-    agy: { label: 'Antigravity CLI', source: join(local, 'agy', 'bin', 'agy.exe'), target: join(CLI_ROOT, 'agy.exe'), adapter: 'antigravity_cli' },
+    claude: { label: 'Claude Code', source: installed_program(join(home, '.local', 'bin', 'claude.exe'), 'claude.exe', env), target: join(CLI_ROOT, 'claude.exe'), adapter: 'claude' },
+    codex: codex.single
+      ? { label: 'Codex', source: codex.program, target: join(CLI_ROOT, 'codex', 'codex.exe'), adapter: 'codex_cli' }
+      : { label: 'Codex', source: codex.folder, program: codex.program, target: join(CLI_ROOT, 'codex'), executable: join(CLI_ROOT, 'codex', 'bin', 'codex.exe'),
+        adapter: 'codex_cli', folder: true },
+    agy: { label: 'Antigravity CLI', source: installed_program(join(local, 'agy', 'bin', 'agy.exe'), 'agy.exe', env), target: join(CLI_ROOT, 'agy.exe'), adapter: 'antigravity_cli' },
   };
+}
+
+/** The first `name` on PATH, or ''. */
+function on_path(name, env) {
+  const found = spawnSync('where.exe', [name], { encoding: 'utf8', windowsHide: true, env }).stdout?.split(/\r?\n/).find(Boolean);
+  return found?.trim() || '';
+}
+
+/** A program at its installer's usual place, else the one on PATH; the usual place when neither is there. */
+function installed_program(usual, name, env) {
+  return existsSync(usual) ? usual : on_path(name, env) || usual;
+}
+
+const CODEX_PLATFORM = process.arch === 'arm64' ? ['codex-win32-arm64', 'aarch64-pc-windows-msvc'] : ['codex-win32-x64', 'x86_64-pc-windows-msvc'];
+
+/**
+ * Codex's native program as installed. npm puts it in a platform package with the tools it runs beside it (the whole
+ * folder is what the shared copy takes): nested under @openai/codex, or beside it with newer npm, in the npm folder the
+ * codex command is in (any prefix) or the default one. A standalone codex.exe on PATH is taken alone (`single`). Returns
+ * { folder, program, single }; when Codex is not installed, the default npm place, so a message names where it was looked for.
+ */
+function codex_source(app_data, env) {
+  const [platform, triple] = CODEX_PLATFORM;
+  const command = on_path('codex.cmd', env);
+  const npm_folders = [...new Set([command ? dirname(command) : '', join(app_data, 'npm')].filter(Boolean))];
+  const folders = npm_folders.flatMap(npm => [join(npm, 'node_modules', '@openai', 'codex', 'node_modules', '@openai', platform, 'vendor', triple),
+    join(npm, 'node_modules', '@openai', platform, 'vendor', triple)]);
+  const folder = folders.find(item => existsSync(join(item, 'bin', 'codex.exe')));
+  if (folder) return { folder, program: join(folder, 'bin', 'codex.exe'), single: false };
+  const standalone = on_path('codex.exe', env);
+  if (standalone) return { folder: dirname(standalone), program: standalone, single: true };
+  return { folder: folders.at(-2), program: join(folders.at(-2), 'bin', 'codex.exe'), single: false };
 }
 
 /** The shared program each adapter runs for accounts with their own Windows user. */
