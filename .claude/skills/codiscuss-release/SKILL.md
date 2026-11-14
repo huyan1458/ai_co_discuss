@@ -37,11 +37,13 @@ npx wrangler d1 execute DB --remote --config .wrangler/deploy/wrangler.jsonc --f
 
 整份迁移在 D1 上的原子性尚未实测，失败时保留备份并停止，不继续部署。成功后两个脚本均可重复执行。
 
-**第 3 阶段**（部署后推送，已构建过不再重复构建）。私有配置绑定了 `RELAY` 时，先部署中转 Worker，再部署网站；没有绑定时只部署网站：
+**第 3 阶段**（部署后推送，已构建过不再重复构建）。私有配置绑定了 `RELAY` 时，先部署中转 Worker，再部署托管账号的入口 Worker（它绑定中转 Worker 的 Durable Object，须在中转之后），然后部署网站；没有绑定时只部署网站：
 
 ```bash
-set -o pipefail; retry() { for i in 1 2 3 4 5; do "$@" 2>&1 | tail -3 && return 0; echo "== 第 $i 次失败，重试"; done; return 1; }; (! grep -q '"RELAY"' .wrangler/deploy/wrangler.jsonc || retry npx wrangler deploy --config deploy/updates.wrangler.jsonc) && retry npx wrangler pages deploy --branch main --commit-dirty=true --cwd .wrangler/deploy && retry git push
+set -o pipefail; retry() { for i in 1 2 3 4 5; do "$@" 2>&1 | tail -3 && return 0; echo "== 第 $i 次失败，重试"; done; return 1; }; (! grep -q '"RELAY"' .wrangler/deploy/wrangler.jsonc || (retry npx wrangler deploy --config deploy/updates.wrangler.jsonc && retry npx wrangler deploy --config deploy/entry.wrangler.jsonc)) && retry npx wrangler pages deploy --branch main --commit-dirty=true --cwd .wrangler/deploy && retry git push
 ```
+
+入口 Worker 的地址（`https://codiscuss-entry.<账号子域>.workers.dev`）在部署输出里，收尾时报告给用户，托管电脑在管理面板“线上中转”里填它。
 
 `pipefail` 让 `| tail` 不掩盖失败：任一步重试用尽，后续步骤不执行（部署未成功不推送）。
 

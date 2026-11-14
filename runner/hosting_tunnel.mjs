@@ -263,7 +263,7 @@ async function prepare_job(data, host, name) {
   try {
     const tunnel = await prepare_tunnel({ host, name, shown: false, progress: step => save({ step }), on_url: url => save({ url }), say: note => save({ note }) });
     save({ step: '启动隧道', url: '' });
-    const settings = save_entry_settings(data, { public_url: `https://${tunnel.host}`, tunnel });
+    const settings = save_entry_settings(data, { public_url: `https://${tunnel.host}`, tunnel, mode: 'tunnel' });
     remove_legacy_tunnel_start();
     await ensure_tunnel(data, tunnel, settings.port, settings.running);
     save({ status: 'done', step: '', host: tunnel.host });

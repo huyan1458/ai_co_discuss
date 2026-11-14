@@ -22,6 +22,7 @@ import { verified_connection } from './entry_client.mjs';
 import { API_PROVIDERS, save_api_key } from './discussion_api.mjs';
 import { STT_PROVIDERS, TTS_PROVIDERS } from './tts_providers.mjs';
 import { ensure_tunnel, start_tunnel_setup, tunnel_setup_state, tunnel_status } from './hosting_tunnel.mjs';
+import { machine_links } from './remote_launch.mjs';
 import { apply_login, cancel_login, LOGIN_METHODS, login_progress, login_status, logout, start_login, submit_login } from './cli_login.mjs';
 import { create_os_user, install_shared_runtime, instance_key_file, place_instance_key, read_os_users, remove_os_user, run_as_user, shared_cli_state, shared_executables, shared_paths,
   start_instance_as_user } from './os_users.mjs';
@@ -52,6 +53,8 @@ const OWNER_ENV_TIMEOUT_MS = 120_000;
 // How often the panel makes sure the entry's tunnel runs as set, and how long an update waits for the entry to be back.
 const TUNNEL_CHECK_MS = 60_000;
 const ENTRY_BACK_MS = 15_000;
+// How long the panel waits for the relay's entry Worker to answer whether it is reachable.
+const RELAY_CHECK_MS = 5000;
 // Hosted accounts' failures, relayed to the owner's Weixin: how often, how far each account's outbox was read, and limits
 // on what one notice carries (the outbox is in the account's own folder, so its text is the account's, not ours).
 const RELAY_MS = 30_000;
@@ -563,7 +566,7 @@ export function create_panel({ data, key, port, ops = {}, sessions = new Set() }
   const op = { list_accounts, add_account, reset_password, set_account_disabled, remove_account, run_instance, create_os_user, remove_os_user,
     login_status, apply_login, logout, start_login, login_progress, submit_login, cancel_login, install_runtime, prepare_account, account_env, account_skills, account_workflows, owner_env, owner_skills, owner_prompts, save_owner_prompt, shared_cli_state,
     save_api_key, list_keys, remove_key, use_shared_programs, service_overview, run_owner_service, latest_version, begin_update,
-    autostart_enabled, set_autostart, entry_overview, start_entry, stop_entry, keep_tunnel, start_tunnel_setup, protect_account, start_verified, hand_over: () => {}, ...ops };
+    autostart_enabled, set_autostart, entry_overview, start_entry, stop_entry, keep_tunnel, start_tunnel_setup, set_entry_mode, set_relay_url, connect_site, protect_account, start_verified, hand_over: () => {}, ...ops };
   const hosts = new Set([`127.0.0.1:${port}`, `localhost:${port}`]);
 
   async function api(method, path, body) {
@@ -637,6 +640,10 @@ export function create_panel({ data, key, port, ops = {}, sessions = new Set() }
       await op.keep_tunnel(data);
       return op.entry_overview(data);
     }
+    // How people outside reach the entry, the relay's entry address, and binding this computer to an online site.
+    if (method === 'POST' && section === 'entry' && name === 'mode') return op.set_entry_mode(data, String(body.mode || ''));
+    if (method === 'POST' && section === 'entry' && name === 'relay') return op.set_relay_url(data, body.url);
+    if (method === 'POST' && section === 'site' && name === 'connect') return op.connect_site(data, body.site, body.setup_key);
     // The outside address: a Cloudflare tunnel set up by a job of its own (it waits for the owner in the browser).
     if (section === 'tunnel' && name === 'setup') {
       if (method === 'GET') return tunnel_setup_state(data);
@@ -723,14 +730,69 @@ export function create_panel({ data, key, port, ops = {}, sessions = new Set() }
 /** The account entry as the hosting page shows it: whether it runs, its loopback port and the address customers open. */
 /** Keep the entry's tunnel as the settings say: running while hosting is on and the entry is meant to run. */
 function keep_tunnel(data) {
-  const { tunnel, port, running } = entry_settings(data);
-  return ensure_tunnel(data, hosting_enabled(data) ? tunnel : null, port, running);
+  const { tunnel, port, running, mode } = entry_settings(data);
+  return ensure_tunnel(data, hosting_enabled(data) && mode === 'tunnel' ? tunnel : null, port, running);
+}
+
+/** The online site this computer is bound to (`codiscuss local connect`) and its id there, or null. */
+function bound_site(data) {
+  const [site, link] = Object.entries(machine_links(data).sites || {}).find(([, item]) => item?.id && item?.private_key) || [];
+  return site ? { site, machine: link.id } : null;
+}
+
+/** Ask the relay's entry Worker whether it is one and whether this computer is connected to it. */
+async function relay_status(relay_url, machine) {
+  try {
+    const answer = await fetch(`${relay_url}/_codiscuss/status?machine=${machine || '0'.repeat(32)}`, { signal: AbortSignal.timeout(RELAY_CHECK_MS) });
+    const result = await answer.json();
+    return result.service === 'codiscuss-entry' ? { reachable: true, online: Boolean(result.online) } : { reachable: false, online: false };
+  } catch { return { reachable: false, online: false }; }
 }
 
 async function entry_overview(data) {
-  const { port, public_url, tunnel } = entry_settings(data), status = await entry_status(data);
-  return { running: status.running, port: status.running ? status.port : port, public_url,
+  const { port, public_url, tunnel, mode, relay_url } = entry_settings(data), status = await entry_status(data);
+  const bound = bound_site(data);
+  const relay = { url: relay_url, site: bound?.site || '', link: relay_url && bound ? `${relay_url}/?m=${bound.machine}` : '',
+    ...(mode === 'relay' && relay_url && bound ? await relay_status(relay_url, bound.machine) : {}) };
+  // The address people open in the mode in use.
+  const address = mode === 'relay' ? relay.link : mode === 'tunnel' ? public_url : '';
+  return { running: status.running, port: status.running ? status.port : port, public_url, mode, address, relay,
     tunnel: tunnel ? { host: tunnel.host, name: tunnel.name, ...(await tunnel_status(data)) } : null };
+}
+
+/** Switch how people outside reach the entry, once what that way needs is there; the tunnel follows at once. */
+async function set_entry_mode(data, mode) {
+  const settings = entry_settings(data);
+  if (mode === 'relay') {
+    if (!bound_site(data)) throw new Error('这台电脑还没有绑定线上站点：先在下面绑定');
+    if (!settings.relay_url) throw new Error('还没有填写入口地址（入口 Worker 的 workers.dev 地址）');
+  }
+  if (mode === 'tunnel' && !settings.tunnel) throw new Error('还没有设好 Cloudflare 隧道：先点“设置”填写你的域名');
+  save_entry_settings(data, { mode });
+  await keep_tunnel(data);
+  return entry_overview(data);
+}
+
+/** Save the relay's entry address after checking that it answers as one. */
+async function set_relay_url(data, url) {
+  const origin = String(url || '').trim().replace(/\/+$/, '');
+  const checked = await relay_status(origin, bound_site(data)?.machine);
+  if (!checked.reachable) throw new Error(`${origin} 不是共议的入口 Worker，或现在连不上`);
+  save_entry_settings(data, { relay_url: origin });
+  return entry_overview(data);
+}
+
+/** Bind this computer to an online site with a one-time token, as `codiscuss local connect` does. */
+function connect_site(data, site, setup_key) {
+  return new Promise((done, fail) => {
+    const child = spawn(process.execPath, [installed_script('discussion_local.mjs'), 'connect', String(site || '').trim(), '--setup-key', String(setup_key || '').trim(), '--no-open', '--json'],
+      { cwd: data, windowsHide: true, stdio: ['ignore', 'pipe', 'pipe'], env: { ...process.env, DISCUSS_SERVICE_HOME: data } });
+    let output = '', errors = '';
+    child.stdout.on('data', chunk => { output += chunk; });
+    child.stderr.on('data', chunk => { errors += chunk; });
+    child.on('error', fail);
+    child.on('exit', code => (code === 0 ? done(bound_site(data)) : fail(new Error(errors.trim().split(/\r?\n/).pop() || `绑定失败（退出码 ${code}）`))));
+  });
 }
 
 // ---- Hosted accounts' failures, to the owner's Weixin ----

@@ -400,3 +400,67 @@ test('Worker hands relay sockets and requests to the computer relay only after c
   await f.sync();
   assert.equal((await f.signed(path, { ...request, id: 'relay-request-000003' })).status, 401);
 });
+
+test('hosted accounts reach the computer\'s sign-in entry over the relay only while its owner chose it', async () => {
+  const http = await import('node:http');
+  const { default: entry_worker } = await import('../backend/entry_worker.mjs');
+  const { entry_proxy } = await import('../runner/relay_channel.mjs');
+  const home = await mkdtemp(join(tmpdir(), 'relay-entry-'));
+  // The computer's sign-in entry: echoes what it got, sets two cookies, can send a large body.
+  const large = Buffer.alloc(1300 * 1024, 7);
+  const seen = [];
+  const server = http.createServer((request, response) => {
+    const parts = [];
+    request.on('data', part => parts.push(part));
+    request.on('end', () => {
+      seen.push({ host: request.headers.host, proto: request.headers['x-forwarded-proto'], cookie: request.headers.cookie, body: Buffer.concat(parts).length });
+      if (request.url === '/large') return response.end(large);
+      response.writeHead(200, [['Content-Type', 'text/plain'], ['Set-Cookie', 'a=1; Path=/'], ['Set-Cookie', 'b=2; Path=/']]);
+      response.end(`${request.method} ${request.url}`);
+    });
+  });
+  await new Promise(done => server.listen(0, '127.0.0.1', done));
+  const port = server.address().port;
+  const settings = mode => writeFile(join(home, 'gateway-settings.json'), JSON.stringify({ port, mode }));
+  try {
+    const { ctx, socket } = relay_context();
+    const relay = new MachineRelay(ctx);
+    const machine = socket();
+    // The computer's side: frames from the relay go to the runner's handler, its frames back to the relay.
+    const handle = entry_proxy(home, { send: frame => relay.webSocketMessage(machine, JSON.stringify(frame)) });
+    machine.send = text => handle(JSON.parse(text));
+    const env = { RELAY: { idFromName: name => name, get: () => ({ fetch: (url, init) => relay.fetch(new Request(url, init)) }) } };
+    const id = 'a'.repeat(32), site = 'https://codiscuss-entry.example.workers.dev';
+    const visit = (path, init = {}) => entry_worker.fetch(new Request(`${site}${path}`, { ...init, headers: { cookie: `codiscuss_machine=${id}`, ...(init.headers || {}) } }), env);
+
+    // The link handed out keeps its computer in a cookie of this address; without one there is nothing to reach.
+    const opened = await entry_worker.fetch(new Request(`${site}/?m=${id}`), env);
+    assert.equal(opened.status, 302);
+    assert.match(opened.headers.get('set-cookie'), new RegExp(`codiscuss_machine=${id};.*HttpOnly; Secure`));
+    assert.equal((await entry_worker.fetch(new Request(`${site}/`), env)).status, 404);
+    // Not connected yet: a page says so.
+    assert.equal((await visit('/')).status, 503);
+    relay.accept(machine, 'machine');
+    assert.deepEqual(await (await entry_worker.fetch(new Request(`${site}/_codiscuss/status?machine=${id}`), env)).json(), { service: 'codiscuss-entry', online: true });
+
+    // The owner did not choose the relay: the computer refuses, whatever the website sends.
+    await settings('tunnel');
+    const refused = await visit('/');
+    assert.equal(refused.status, 503);
+    assert.equal(seen.length, 0, 'nothing reached the entry');
+
+    await settings('relay');
+    const answer = await visit('/_entry/login?x=1', { method: 'POST', headers: { 'content-type': 'text/plain', 'x-forwarded-for': '1.2.3.4' }, body: large });
+    assert.equal(answer.status, 200);
+    assert.equal(await answer.text(), 'POST /_entry/login?x=1');
+    assert.deepEqual(answer.headers.getSetCookie(), ['a=1; Path=/', 'b=2; Path=/'], 'every cookie the entry sets comes through');
+    assert.deepEqual(seen.at(-1), { host: 'codiscuss-entry.example.workers.dev', proto: 'https', cookie: `codiscuss_machine=${id}`, body: large.length },
+      'the entry sees the browser\'s own host over HTTPS and the whole body, sent in parts');
+    const downloaded = Buffer.from(await (await visit('/large')).arrayBuffer());
+    assert.ok(downloaded.equals(large), 'a large answer comes back whole, in parts');
+    assert.equal(relay.entries.size, 0);
+  } finally {
+    server.close();
+    await rm(home, { recursive: true, force: true });
+  }
+});

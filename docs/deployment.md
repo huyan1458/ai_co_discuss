@@ -161,6 +161,16 @@ npx wrangler deploy --config deploy/updates.wrangler.jsonc
 
 旧版还提供推送对象 `DiscussionUpdates`（绑定名 `UPDATES`），新版已删除：私有配置里有 `UPDATES` 绑定时，先删掉它并重新部署 Pages，再部署中转 Worker，否则 Worker 删除该对象时 Pages 会失去绑定。
 
+### 托管账号的入口（可选）
+
+开了托管管理、想让托管账号的使用者不用自有域名就能从外网登录时，再部署入口 Worker（在中转之后部署，它使用中转的 Durable Object）：
+
+```sh
+npx wrangler deploy --config deploy/entry.wrangler.jsonc
+```
+
+它有自己的 `workers.dev` 地址（如 `https://codiscuss-entry.<账号子域>.workers.dev`），与线上站点不同源，托管账号的网页碰不到你已配对设备的密钥。托管电脑绑定线上站点后，在管理面板“概览 → 托管 → 登录入口”的“外网访问”选“线上中转”，填这个地址；面板给出的链接带电脑编号（`?m=…`），发给使用者即可。使用者的请求经入口 Worker 和中转到达这台电脑的登录入口，登录、会话与入口保护都在电脑上；Cloudflare 能看到这些往来内容（与自有域名隧道相同），每个页面的请求都计入 Workers 免费额度。
+
 ## 常见问题
 
 - **`no such table`**：所连接的数据库尚未执行 schema，先核对配置文件指向的数据库。

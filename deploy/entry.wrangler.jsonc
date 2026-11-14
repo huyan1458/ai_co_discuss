@@ -1,0 +1,15 @@
+{
+  "$schema": "../node_modules/wrangler/config-schema.json",
+  // The hosted accounts' sign-in entry over the online relay (backend/entry_worker.mjs). It has a workers.dev address of
+  // its own, apart from the online site, and reaches each computer through the relay Worker's Durable Object.
+  "name": "codiscuss-entry",
+  "main": "../backend/entry_worker.mjs",
+  "compatibility_date": "2026-10-14",
+  "workers_dev": true,
+  "preview_urls": false,
+  "durable_objects": {
+    "bindings": [
+      { "name": "RELAY", "class_name": "MachineRelay", "script_name": "ai-co-discuss-updates" }
+    ]
+  }
+}

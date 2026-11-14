@@ -1,11 +1,12 @@
 <script setup>
 /**
- * This computer's parts of hosting, shown on the overview with hosting on: the entry hosted accounts sign in at (its
- * outside address, a Cloudflare tunnel set in its own dialog), and the copy of the programs accounts with their own Windows
- * user run.
+ * This computer's parts of hosting, shown on the overview with hosting on: the entry hosted accounts sign in at, with how
+ * people outside reach it (this computer only, the online relay without a domain, or a Cloudflare tunnel from the owner's
+ * own domain; each prepared in its own dialog), and the copy of the programs accounts with their own Windows user run.
  */
 import { computed, inject, ref } from "vue";
 import { call, entry_address } from "./api.js";
+import RelayDialog from "./RelayDialog.vue";
 import TunnelDialog from "./TunnelDialog.vue";
 
 const { state, reload, notify } = inject("panel");
@@ -14,14 +15,26 @@ const runtime = computed(() => state.value.clis || {});
 const PARTS = [["claude", "Claude Code"], ["codex", "Codex"], ["agy", "Antigravity"], ["app", "共议"], ["python", "Python"]];
 const runtime_ready = computed(() => PARTS.every(([key]) => runtime.value[key]));
 const runtime_stale = computed(() => runtime.value.app && runtime.value.app_version && runtime.value.app_version !== state.value.version);
-const entry = computed(() => state.value.entry || { running: false, port: 0, public_url: "" });
-const entry_busy = ref(""), tunnel_open = ref(false);
+const entry = computed(() => state.value.entry || { running: false, port: 0, public_url: "", mode: "local", relay: {} });
+const entry_busy = ref(""), tunnel_open = ref(false), relay_open = ref(false);
+const MODES = [
+  { key: "local", label: "仅本机" },
+  { key: "relay", label: "线上中转（免域名）" },
+  { key: "tunnel", label: "自有域名（Cloudflare 隧道）" },
+];
 // The tunnel as cloudflared reports it: connected to Cloudflare, running but not (yet) connected, or not running.
 const tunnel_state = computed(() => {
   const tunnel = entry.value.tunnel;
   if (tunnel?.connected) return { label: "Cloudflare 隧道已连接", tag: "is-green", hint: "" };
   if (tunnel?.running) return { label: "隧道连接中", tag: "is-amber", hint: "cloudflared 已运行但还没连上 Cloudflare：刚启动时稍等片刻；持续如此请检查网络与代理是否放行 *.cloudflare.com、*.argotunnel.com，日志在数据目录 tunnel.log" };
   return { label: "隧道未运行", tag: "is-amber", hint: entry.value.running ? "管理面板每分钟会自动拉起一次；持续如此请查看数据目录 tunnel.log" : "登录入口停止时隧道也会停止" };
+});
+// The relay as the entry Worker answers: this computer connected through it, or what is in the way.
+const relay_state = computed(() => {
+  const relay = entry.value.relay || {};
+  if (relay.online) return { label: "已连上线上站点", tag: "is-green", hint: "" };
+  if (relay.reachable) return { label: "电脑未连上线上站点", tag: "is-amber", hint: "本机服务没有在运行，或连不上线上站点；本机服务运行时会自动重连" };
+  return { label: "入口地址连不上", tag: "is-amber", hint: "检查入口地址是否正确、网络是否放行 *.workers.dev" };
 });
 
 /** Start or stop the entry. */
@@ -33,6 +46,19 @@ async function entry_act(action, body = {}, message = "") {
     await reload();
   } catch (failure) { notify("error", failure.message); }
   finally { entry_busy.value = ""; }
+}
+
+/** Switch how people outside reach the entry; a way not prepared yet opens its dialog instead. */
+async function choose(mode) {
+  if (mode === entry.value.mode || entry_busy.value) return;
+  const relay = entry.value.relay || {};
+  if (mode === "relay" && !(relay.site && relay.url)) return (relay_open.value = true);
+  if (mode === "tunnel" && !entry.value.tunnel) return (tunnel_open.value = true);
+  await entry_act("mode", { mode }, mode === "local" ? "已改为仅本机可访问" : `外网访问已改为${MODES.find((item) => item.key === mode).label}`);
+}
+
+async function copy(text) {
+  try { await navigator.clipboard.writeText(text); notify("info", "已复制"); } catch { notify("error", "复制失败，请手动选中复制"); }
 }
 
 async function install() {
@@ -65,14 +91,31 @@ async function install() {
           <UIcon :name="entry_busy === 'stop' ? 'i-lucide-loader' : 'i-lucide-square'" :class="{ 'animate-spin': entry_busy === 'stop' }" />停止</button>
       </div>
     </div>
-    <div class="panel-row-extra">
-      <span class="entry-label">外网地址</span>
-      <span class="entry-value" :class="{ 'is-empty': !entry.public_url }">{{ entry.public_url || "未设置，仅本机可访问" }}
-        <span v-if="entry.tunnel" class="panel-tag" :class="tunnel_state.tag" :title="tunnel_state.hint">{{ tunnel_state.label }}</span>
-        <small v-if="entry.tunnel && !entry.tunnel.connected" class="entry-tunnel-error">{{ tunnel_state.hint }}</small></span>
-      <button type="button" class="panel-button is-plain is-small" @click="tunnel_open = true"><UIcon name="i-lucide-pencil" />{{ entry.tunnel ? "修改" : "设置" }}</button>
+    <div class="panel-row-extra entry-access">
+      <span class="entry-label">外网访问</span>
+      <div class="entry-modes" role="radiogroup" aria-label="外网访问方式">
+        <button v-for="item in MODES" :key="item.key" type="button" role="radio" :aria-checked="entry.mode === item.key" class="entry-mode"
+          :class="{ 'is-active': entry.mode === item.key }" :disabled="Boolean(entry_busy)" @click="choose(item.key)">{{ item.label }}</button>
+      </div>
+    </div>
+    <div class="panel-row-extra entry-detail">
+      <template v-if="entry.mode === 'relay'">
+        <span class="entry-value">{{ entry.relay?.link }}
+          <span class="panel-tag" :class="relay_state.tag" :title="relay_state.hint">{{ relay_state.label }}</span>
+          <small v-if="relay_state.hint" class="entry-tunnel-error">{{ relay_state.hint }}</small></span>
+        <button type="button" class="panel-button is-plain is-small" @click="copy(entry.relay?.link)"><UIcon name="i-lucide-copy" />复制链接</button>
+        <button type="button" class="panel-button is-plain is-small" @click="relay_open = true"><UIcon name="i-lucide-pencil" />修改</button>
+      </template>
+      <template v-else-if="entry.mode === 'tunnel'">
+        <span class="entry-value">{{ entry.public_url }}
+          <span class="panel-tag" :class="tunnel_state.tag" :title="tunnel_state.hint">{{ tunnel_state.label }}</span>
+          <small v-if="!entry.tunnel?.connected" class="entry-tunnel-error">{{ tunnel_state.hint }}</small></span>
+        <button type="button" class="panel-button is-plain is-small" @click="tunnel_open = true"><UIcon name="i-lucide-pencil" />修改</button>
+      </template>
+      <span v-else class="entry-value is-empty">只有这台电脑能打开；要让使用者从外网登录，选“线上中转”（不需要域名）或“自有域名”</span>
     </div>
     <TunnelDialog v-model:open="tunnel_open" />
+    <RelayDialog v-model:open="relay_open" @ready="entry_act('mode', { mode: 'relay' }, '外网访问已改为线上中转')" />
 
     <div class="panel-row">
       <div class="panel-tile"><UIcon name="i-lucide-hard-drive-download" /></div>
@@ -94,8 +137,13 @@ async function install() {
 
 <style scoped>
 .entry-label { flex-shrink: 0; color: var(--panel-muted); font-size: 13px; }
+.entry-modes { display: flex; gap: 2px; padding: 3px; border-radius: 10px; background: var(--panel-tint); }
+.entry-mode { height: 28px; padding: 0 12px; border-radius: 8px; color: var(--panel-muted); font-size: 13px; transition: background-color .15s, color .15s; }
+.entry-mode:hover:not(:disabled) { color: var(--panel-text); }
+.entry-mode.is-active { background: #fff; color: var(--panel-text); box-shadow: 0 1px 3px #0000001a; }
+.entry-detail { min-height: 34px; padding-left: 116px; }
 .entry-value { flex: 1; min-width: 0; overflow: hidden; font-size: 13px; white-space: nowrap; text-overflow: ellipsis; }
-.entry-value.is-empty { color: var(--panel-faint); }
+.entry-value.is-empty { color: var(--panel-faint); white-space: normal; }
 .entry-value .panel-tag { margin-left: 8px; vertical-align: middle; }
 .entry-tunnel-error { display: block; overflow: hidden; color: var(--panel-amber); font-size: 12px; white-space: nowrap; text-overflow: ellipsis; }
 </style>

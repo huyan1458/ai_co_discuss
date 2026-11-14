@@ -503,12 +503,20 @@ function run_instance(data, name, command) {
 
 // ---- The entry as a background process the panel starts and stops ----
 
-/** The entry's saved settings: the loopback port it listens on and the public address customers open. */
+// How people outside reach the entry: this computer only, the online relay (no domain needed), or a Cloudflare tunnel
+// from the owner's own domain.
+export const ENTRY_MODES = ['local', 'relay', 'tunnel'];
+
+/**
+ * The entry's saved settings: the loopback port it listens on, the public address customers open, and how they reach it
+ * (`mode`). Settings from before the mode was chosen read as the way they set up: the tunnel when one is, else local.
+ */
 export function entry_settings(data) {
   const saved = read_json(join(data, ENTRY_SETTINGS_FILE));
   const tunnel = saved.tunnel && typeof saved.tunnel === 'object' && ['name', 'host', 'id', 'credentials'].every(key => saved.tunnel[key]) ? saved.tunnel : null;
+  const mode = ENTRY_MODES.includes(saved.mode) ? saved.mode : tunnel ? 'tunnel' : 'local';
   return { port: Number.isInteger(saved.port) ? saved.port : DEFAULT_ENTRY_PORT, public_url: typeof saved.public_url === 'string' ? saved.public_url : '',
-    running: saved.running === true, tunnel };
+    running: saved.running === true, tunnel, mode, relay_url: typeof saved.relay_url === 'string' ? saved.relay_url : '' };
 }
 
 /**
@@ -517,13 +525,19 @@ export function entry_settings(data) {
  * Args:
  *   changes: `port` (1–65535), `public_url` (an https address, kept as its origin; empty clears it), `running`, the
  *     state the panel restores when it starts again, and `tunnel`, the Cloudflare tunnel the panel runs for the outside
- *     address ({ name, host, id, credentials } from hosting_tunnel.mjs, or null for none).
+ *     address ({ name, host, id, credentials } from hosting_tunnel.mjs, or null for none), `mode` (one of ENTRY_MODES)
+ *     and `relay_url`, the address of the relay's entry Worker (an https origin; empty clears it).
  *
  * Returns:
  *   The settings as saved.
  */
 export function save_entry_settings(data, changes) {
   const next = { ...entry_settings(data) };
+  if (changes.mode !== undefined) {
+    if (!ENTRY_MODES.includes(changes.mode)) throw new Error(`未知的外网访问方式：${changes.mode}`);
+    next.mode = changes.mode;
+  }
+  if (changes.relay_url !== undefined) next.relay_url = public_origin(changes.relay_url);
   if (changes.port !== undefined) {
     const port = Number(changes.port);
     if (!Number.isInteger(port) || port < 1 || port > 65535) throw new Error('入口端口须为 1–65535 的整数');

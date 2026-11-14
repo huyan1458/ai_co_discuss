@@ -5,6 +5,7 @@
  */
 import { createHash, randomBytes } from 'node:crypto';
 import { existsSync, readFileSync } from 'node:fs';
+import http from 'node:http';
 import { join } from 'node:path';
 import { setTimeout as sleep } from 'node:timers/promises';
 import { gzipSync } from 'node:zlib';
@@ -17,6 +18,7 @@ import { machine_links, relay_cipher, save_machine_links, relayed_command, ROOM_
 import { claim_relayed_command } from './remote_policy.mjs';
 import { audit, DEVICE_ACTIONS, device_command, open_signed_request } from './device_auth.mjs';
 import { site_fetch } from './entry_client.mjs';
+import { entry_settings } from '../gateway/gateway.mjs';
 
 const RELAY_PROTOCOL = 'codiscuss-relay';
 const BRIDGE_TOKEN_BYTES = 32;
@@ -37,6 +39,14 @@ const UPLOAD_PATH = /^\/api\/rooms\/[A-Za-z0-9_-]+\/attachments(\/[A-Za-z0-9_-]+
 const UPLOAD_MAX_BYTES = 20 * 1024 * 1024;
 const UPLOAD_TTL_MS = 10 * 60 * 1000;
 const uploads = new Map();
+// The hosted accounts' entry over the relay (backend/entry_worker.mjs): answer parts per frame (sent as base64 within the
+// 1 MiB frame), the largest request taken, and when to pause reading an answer the connection has not sent on yet.
+const ENTRY_PART_BYTES = 512 * 1024;
+const ENTRY_BODY_MAX_BYTES = 45 * 1024 * 1024;
+const ENTRY_BUFFER_HIGH = 4 * 1024 * 1024;
+const ENTRY_BUFFER_CHECK_MS = 50;
+const ENTRY_HOP_HEADERS = new Set(['connection', 'keep-alive', 'transfer-encoding', 'upgrade', 'proxy-connection', 'te', 'trailer', 'content-length',
+  'x-forwarded-proto', 'x-forwarded-for', 'x-forwarded-host', 'x-real-ip']);
 
 /** The bridge token for one website, created on first use; the local website keeps only its hash, next to the connection. */
 export function bridge_token(home, site) {
@@ -229,6 +239,67 @@ async function forward_changes(home, socket, signal) {
   }
 }
 
+/**
+ * Answer the hosted accounts' entry traffic the relay hands over (`entry` frames, apart from the administrator's signed
+ * requests). Each request goes only to this computer's sign-in entry on loopback, never anywhere the frame names, and
+ * only while its owner chose this way in the panel (entry settings `mode: 'relay'`), so a tampered website cannot open
+ * the channel on its own. The entry treats it like traffic from a tunnel: HTTPS outside, the browser's own Host.
+ * Returns the frame handler; `send` puts a frame on the connection, `buffered` says how much it holds unsent.
+ */
+export function entry_proxy(home, { send, buffered = () => 0 }) {
+  const open = new Map();
+  const head = (id, status, headers = []) => send({ type: 'entry-head', id, status, headers });
+  const refuse = (id, status, text) => {
+    head(id, status, [['content-type', 'text/plain; charset=utf-8'], ['cache-control', 'no-store']]);
+    send({ type: 'entry-data', id, data: Buffer.from(text).toString('base64') });
+    send({ type: 'entry-end', id });
+  };
+  const forward = id => {
+    const entry = open.get(id);
+    const settings = entry_settings(home);
+    if (settings.mode !== 'relay') { open.delete(id); return refuse(id, 503, '这台电脑没有开启线上中转'); }
+    const body = Buffer.concat(entry.parts);
+    const headers = {};
+    for (const [name, value] of Array.isArray(entry.headers) ? entry.headers : []) {
+      const key = String(name).toLowerCase();
+      if (ENTRY_HOP_HEADERS.has(key)) continue;
+      headers[key] = headers[key] === undefined ? String(value) : `${headers[key]}, ${value}`;
+    }
+    Object.assign(headers, { 'x-forwarded-proto': 'https', 'content-length': String(body.length) });
+    const path = typeof entry.path === 'string' && entry.path.startsWith('/') && !entry.path.startsWith('//') ? entry.path : '/';
+    const request = http.request({ host: '127.0.0.1', port: settings.port, method: String(entry.method || 'GET'), path, headers }, reply => {
+      const kept = [];
+      for (let index = 0; index < reply.rawHeaders.length; index += 2) {
+        if (!ENTRY_HOP_HEADERS.has(reply.rawHeaders[index].toLowerCase())) kept.push([reply.rawHeaders[index], reply.rawHeaders[index + 1]]);
+      }
+      head(id, reply.statusCode, kept);
+      // Hold the answer while the connection is behind, so a large file is not read into memory ahead of it.
+      const drain = () => { if (buffered() > ENTRY_BUFFER_HIGH) { reply.pause(); setTimeout(() => { reply.resume(); drain(); }, ENTRY_BUFFER_CHECK_MS); } };
+      reply.on('data', chunk => {
+        for (let offset = 0; offset < chunk.length; offset += ENTRY_PART_BYTES) send({ type: 'entry-data', id, data: chunk.subarray(offset, offset + ENTRY_PART_BYTES).toString('base64') });
+        drain();
+      });
+      reply.on('end', () => { open.delete(id); send({ type: 'entry-end', id }); });
+      reply.on('error', () => { open.delete(id); send({ type: 'entry-end', id }); });
+    });
+    entry.request = request;
+    request.on('error', () => { if (open.delete(id)) refuse(id, 502, '登录入口没有在运行'); });
+    request.end(body);
+  };
+  return frame => {
+    const id = frame.id;
+    if (typeof id !== 'string') return;
+    if (frame.type === 'entry-cancel') { open.get(id)?.request?.destroy(); open.delete(id); return; }
+    const part = Buffer.from(String(frame.body || ''), 'base64');
+    if (frame.type === 'entry') open.set(id, { method: frame.method, path: frame.path, headers: frame.headers, parts: [part], size: part.length });
+    else if (frame.type === 'entry-body' && open.has(id)) { const entry = open.get(id); entry.parts.push(part); entry.size += part.length; }
+    else return;
+    const entry = open.get(id);
+    if (entry.size > ENTRY_BODY_MAX_BYTES) { open.delete(id); return refuse(id, 413, '请求太大'); }
+    if (!frame.more) forward(id);
+  };
+}
+
 /** Hold one website's relay connection, reconnecting with backoff; `connected` tracks which websites are live. */
 async function hold_channel(home, site, { connected, log, signal }) {
   let delay = RETRY_MIN_MS;
@@ -242,6 +313,9 @@ async function hold_channel(home, site, { connected, log, signal }) {
       try { socket = new WebSocket(url, [RELAY_PROTOCOL, `m.${link.token}`]); } catch { return resolve(false); }
       const events = new AbortController();
       let ping, finished = false;
+      // The hosted accounts' entry traffic on this connection (entry_proxy).
+      const entry = entry_proxy(home, { send: frame => { if (socket.readyState === WebSocket.OPEN) socket.send(JSON.stringify(frame)); },
+        buffered: () => socket.bufferedAmount || 0 });
       // Only the first finish counts: a stalled socket may report its close long after its replacement connected.
       const finish = opened => {
         if (finished) return;
@@ -275,6 +349,7 @@ async function hold_channel(home, site, { connected, log, signal }) {
         if (typeof event.data !== 'string') return;
         let frame;
         try { frame = JSON.parse(event.data); } catch { return; }
+        if (typeof frame.type === 'string' && frame.type.startsWith('entry')) return entry(frame);
         if (frame.type !== 'request' || typeof frame.id !== 'string' || !frame.envelope) return;
         // Disconnecting or re-pairing the website ends this connection at once, not at its next reconnect.
         const current = machine_links(home).sites[site];
