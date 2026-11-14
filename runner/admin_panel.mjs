@@ -810,8 +810,10 @@ async function entry_overview(data) {
 async function set_entry_mode(data, mode) {
   const settings = entry_settings(data);
   if (mode === 'relay') {
-    if (!bound_site(data)) throw new Error('这台电脑还没有接入线上站点：先用接入码接入');
-    if (!settings.relay_url) throw new Error('还没有入口地址：先用接入码接入');
+    const bound = bound_site(data);
+    if (!bound) throw new Error('这台电脑还没有接入线上站点：先用接入码接入');
+    // Bound without an access code (`codiscuss local connect`): the site it is bound to gives the entry address.
+    if (!settings.relay_url) await set_relay_url(data, await site_entry_url(bound.site));
   }
   if (mode === 'tunnel' && !settings.tunnel) throw new Error('还没有设好 Cloudflare 隧道：先点“设置”填写你的域名');
   if (mode !== 'local' && process.platform === 'win32') {
@@ -881,13 +883,19 @@ async function join_relay(data, text) {
   const steps = [];
   if (bound_site(data)?.site === site) steps.push(`已接入 ${site}`);
   else { await connect_site(data, site, token); steps.push(`已接入 ${site}`); }
-  const given = await fetch(`${site}/api/entry`, { signal: AbortSignal.timeout(RELAY_CHECK_MS) }).then(answer => answer.json()).catch(() => ({}));
-  if (!given.entry_url) throw new Error(`${site} 没有提供入口地址：请部署线上站点的人在部署配置里设置 ENTRY_URL 并重新发布`);
-  await set_relay_url(data, given.entry_url);
-  steps.push(`入口地址 ${given.entry_url}`);
+  const entry_url = await site_entry_url(site);
+  await set_relay_url(data, entry_url);
+  steps.push(`入口地址 ${entry_url}`);
   const overview = await set_entry_mode(data, 'relay');
   steps.push('已切换到线上中转');
   return { steps, entry: overview };
+}
+
+/** The entry Worker address an online site gives (`GET /api/entry`). */
+async function site_entry_url(site) {
+  const given = await fetch(`${site}/api/entry`, { signal: AbortSignal.timeout(RELAY_CHECK_MS) }).then(answer => answer.json()).catch(() => ({}));
+  if (!given.entry_url) throw new Error(`${site} 没有提供入口地址：请部署线上站点的人在部署配置里设置 ENTRY_URL 并重新发布`);
+  return given.entry_url;
 }
 
 /** Save the relay's entry address after checking that it answers as one. */

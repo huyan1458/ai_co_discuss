@@ -27,7 +27,8 @@ const MODES = [
 const picked = ref("");
 const shown = computed(() => picked.value || entry.value.mode);
 watch(() => entry.value.mode, () => { picked.value = ""; });
-const prepared = (mode) => mode === "local" || (mode === "relay" ? Boolean(entry.value.relay?.site && entry.value.relay?.url) : Boolean(entry.value.tunnel));
+// The relay needs this computer bound to an online site; its entry address is fetched from that site on switching.
+const prepared = (mode) => mode === "local" || (mode === "relay" ? Boolean(entry.value.relay?.site) : Boolean(entry.value.tunnel));
 const mode_note = computed(() => MODES.find((item) => item.key === shown.value)?.note || "");
 // The tunnel as cloudflared reports it: connected to Cloudflare, running but not (yet) connected, or not running.
 const tunnel_state = computed(() => {
