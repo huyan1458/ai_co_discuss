@@ -9,7 +9,7 @@
  */
 import { spawn, spawnSync } from 'node:child_process';
 import { randomBytes } from 'node:crypto';
-import { closeSync, existsSync, openSync, realpathSync, readdirSync, readFileSync, readSync, renameSync, rmSync, statSync, writeFileSync } from 'node:fs';
+import { closeSync, copyFileSync, existsSync, mkdirSync, openSync, realpathSync, readdirSync, readFileSync, readSync, renameSync, rmSync, statSync, writeFileSync } from 'node:fs';
 import http from 'node:http';
 import { tmpdir } from 'node:os';
 import { dirname, extname, join, resolve } from 'node:path';
@@ -41,6 +41,10 @@ const LATEST_URL = `https://registry.npmjs.org/${NPM_PACKAGE}/latest`;
 const LATEST_TTL_MS = 60 * 60 * 1000;
 const LATEST_TIMEOUT_MS = 8000;
 const STATE_FILE = 'admin-panel.json';
+// An update's progress and report, kept in the service directory (panel_updater.mjs writes it too), and how long an
+// unfinished one blocks another.
+const UPDATE_JOB_FILE = 'panel-update.json';
+const UPDATE_STALE_MS = 10 * 60 * 1000;
 // Hosted accounts' failures, relayed to the owner's Weixin: how often, how far each account's outbox was read, and limits
 // on what one notice carries (the outbox is in the account's own folder, so its text is the account's, not ours).
 const RELAY_MS = 30_000;
@@ -110,36 +114,75 @@ function run_command(command, args) {
   });
 }
 
+function update_job(data) {
+  try { return JSON.parse(readFileSync(join(data, UPDATE_JOB_FILE), 'utf8')); } catch { return null; }
+}
+
+function write_update_job(data, job) {
+  writeFileSync(join(data, UPDATE_JOB_FILE), JSON.stringify(job), { mode: 0o600 });
+}
+
+/** A step of an update, recorded as done or as failed with its reason; the steps after it still run. */
+async function update_step(steps, done, work) {
+  try { await work(); steps.push(done); } catch (error) { steps.push(`${done.replace(/^已/, '')}失败：${error.message}`); }
+}
+
 /**
- * Install a published version and bring everything on this computer onto it, reporting each step: the owner's skills
- * (setup without questions), the owner's service, and with hosting on, the shared copy and every account with its own
- * Windows user (skills, missing workflows, a running instance restarted). A step that fails is reported and the rest go
- * on. The panel itself still runs the old code afterwards; `on_updated` restarts it.
+ * Start installing a published version. npm cannot replace the package while anything runs from it (Windows refuses with
+ * EBUSY), so the owner's service and the running instances of accounts without their own Windows user (they run from the
+ * package) are stopped first; then this panel hands over to panel_updater.mjs, run from the service directory, which
+ * installs and starts the new panel (`finish_update`). The page follows along with GET update/progress.
  */
-async function update_package(data, version, on_updated) {
-  await run_command('npm', ['install', '--global', `${NPM_PACKAGE}@${version}`]);
-  const steps = [`已安装 v${version}`];
-  // The restarted service starts the new version's panel, which replaces a panel of another version; marked as updating,
-  // this one is left to finish its report and hand over itself (`on_updated`).
-  const panel = read_state(data);
-  if (panel?.pid === process.pid) writeFileSync(state_path(data), JSON.stringify({ ...panel, updating: true }), { mode: 0o600 });
-  const step = async (done, work) => { try { await work(); steps.push(done); } catch (error) { steps.push(`${done.replace(/^已/, '')}失败：${error.message}`); } };
-  await step('已更新本机技能', () => run_command(process.execPath, [installed_script('codiscuss.mjs'), 'setup', '--yes', '--no-start', '--json']).catch(error => {
+async function begin_update(data, version, hand_over) {
+  const current = update_job(data);
+  if (current && current.status !== 'done' && Date.now() - current.started_at < UPDATE_STALE_MS) throw new Error('正在更新，请稍候');
+  const running = hosting_enabled(data) ? (await list_accounts(data)).filter(account => account.running) : [];
+  const job = { version, status: 'stopping', steps: [], restart: running.map(account => account.name), started_at: Date.now() };
+  write_update_job(data, job);
+  (async () => {
+    await update_step(job.steps, '已停止本机服务', () => run_owner_service(data, 'stop'));
+    for (const account of running) if (!account.os_user) await update_step(job.steps, `已停止 ${account.name} 的实例`, () => run_instance(data, account.name, 'stop'));
+    const updater = join(data, 'update', 'panel_updater.mjs');
+    mkdirSync(dirname(updater), { recursive: true });
+    copyFileSync(join(ROOT, 'runner', 'panel_updater.mjs'), updater);
+    write_update_job(data, { ...job, status: 'installing' });
+    hand_over(updater);
+  })().catch(error => {
+    // Nothing was installed: what was stopped starts again on finish_update's path.
+    write_update_job(data, { ...job, status: 'install_failed', steps: [...job.steps, `更新失败：${error.message}`] });
+    finish_update(data).catch(() => {});
+  });
+  return { version, status: 'stopping' };
+}
+
+/**
+ * Finish an update panel_updater.mjs installed (or failed to), from the panel it started, reporting each step: with the
+ * new version, the owner's skills (setup without questions), the shared copy and the skills of every account with its own
+ * Windows user; in any case the owner's service started again and the instances that ran before restarted.
+ */
+async function finish_update(data) {
+  const job = update_job(data);
+  if (!['installed', 'install_failed'].includes(job?.status)) return;
+  const installed = job.status === 'installed', steps = [...job.steps];
+  write_update_job(data, { ...job, status: 'finishing' });
+  if (installed) await update_step(steps, '已更新本机技能', () => run_command(process.execPath, [installed_script('codiscuss.mjs'), 'setup', '--yes', '--no-start', '--json']).catch(error => {
     // Setup exits 2 when it finished with items to look at (an edited skill is kept, for one); that still counts.
     if (error.code !== 2) throw error;
   }));
-  await step('已重启本机服务', async () => { await run_owner_service(data, 'stop'); await run_owner_service(data, 'start'); });
+  await update_step(steps, '已启动本机服务', () => run_owner_service(data, 'start'));
   if (hosting_enabled(data)) {
-    await step('已更新共享运行环境', () => { const result = install_runtime(data); if (result.warnings.length) throw new Error(result.warnings.join('；')); });
+    if (installed) await update_step(steps, '已更新共享运行环境', () => { const result = install_runtime(data); if (result.warnings.length) throw new Error(result.warnings.join('；')); });
     for (const account of await list_accounts(data)) {
-      if (!account.os_user) continue;
-      await step(`已更新 ${account.name} 的技能`, () => prepare_account(data, account.name));
-      // Reported restarted only once it serves again as the account is set (start_verified).
-      if (account.running) await step(`已重启 ${account.name} 的实例`, async () => { await run_instance(data, account.name, 'stop'); await start_verified(data, account.name); });
+      if (installed && account.os_user) await update_step(steps, `已更新 ${account.name} 的技能`, () => prepare_account(data, account.name));
+      // Reported restarted only once it serves again as the account is set (start_verified). Instances run from the
+      // package were stopped before the install; those running from the shared copy are stopped here.
+      if ((job.restart || []).includes(account.name)) await update_step(steps, `已重启 ${account.name} 的实例`, async () => {
+        if (account.os_user) await run_instance(data, account.name, 'stop');
+        await start_verified(data, account.name);
+      });
     }
   }
-  setTimeout(on_updated, 500);
-  return { version, steps };
+  write_update_job(data, { ...job, status: 'done', ok: installed, steps });
 }
 
 // ---- Accounts ----
@@ -414,8 +457,8 @@ function cookie(request, name) {
 export function create_panel({ data, key, port, ops = {}, sessions = new Set() }) {
   const op = { list_accounts, add_account, reset_password, set_account_disabled, remove_account, run_instance, create_os_user, remove_os_user,
     login_status, apply_login, logout, start_login, login_progress, submit_login, cancel_login, install_runtime, prepare_account, account_env, account_skills, shared_cli_state,
-    save_api_key, list_keys, remove_key, use_shared_programs, service_overview, run_owner_service, latest_version, update_package,
-    autostart_enabled, set_autostart, entry_overview, start_entry, stop_entry, protect_account, start_verified, on_updated: () => {}, ...ops };
+    save_api_key, list_keys, remove_key, use_shared_programs, service_overview, run_owner_service, latest_version, begin_update,
+    autostart_enabled, set_autostart, entry_overview, start_entry, stop_entry, protect_account, start_verified, hand_over: () => {}, ...ops };
   const hosts = new Set([`127.0.0.1:${port}`, `localhost:${port}`]);
 
   async function api(method, path, body) {
@@ -436,11 +479,12 @@ export function create_panel({ data, key, port, ops = {}, sessions = new Set() }
       if (name !== 'stop') await op.run_owner_service(data, 'start');
       return op.service_overview(data);
     }
+    if (method === 'GET' && section === 'update' && name === 'progress') return update_job(data) || { status: 'none' };
     if (method === 'GET' && section === 'update') {
       const current = op.service_overview(data).version || VERSION, version = await op.latest_version(name === 'check');
       return { current, latest: version, available: newer_version(version, current) };
     }
-    if (method === 'POST' && section === 'update') return op.update_package(data, await op.latest_version(true), op.on_updated);
+    if (method === 'POST' && section === 'update') return op.begin_update(data, await op.latest_version(true), op.hand_over);
     if (method === 'POST' && section === 'autostart') return { autostart: op.set_autostart(Boolean(body.on), data) };
     // Command-line sign-in: '_' is the owner; an account name is a hosted account with its own Windows user.
     if (section === 'login-jobs') {
@@ -737,20 +781,25 @@ export function hosting_enabled(data) {
 function run_panel(data, port) {
   const running = read_state(data);
   if (running && running.pid !== process.pid && alive(running.pid)) throw new Error(`管理面板已在运行：http://127.0.0.1:${running.port}`);
+  // Out of the package folder (the 共议 launcher starts here from it), with everything this starts, the panel window
+  // included: Windows will not let npm replace a folder that is any process's working directory.
+  process.chdir(data);
   // A panel started by an update takes over its predecessor's key and sessions, so the open window keeps working.
   let handover = {};
   try { handover = JSON.parse(process.env[HANDOVER_VARIABLE] || '{}'); } catch { handover = {}; }
   delete process.env[HANDOVER_VARIABLE];
   const state = { pid: process.pid, port, key: handover.key || randomBytes(24).toString('hex'), version: VERSION };
   const sessions = new Set(Array.isArray(handover.sessions) ? handover.sessions : []);
-  // After an update this process still runs the old code: it steps aside and starts the newly installed panel.
-  const on_updated = () => {
+  // For an update this process steps aside: the updater, run from outside the package, installs once it has exited and
+  // starts the installed panel, which takes over the key and sessions.
+  const hand_over = updater => {
     shutdown(false);
-    spawn(process.execPath, [installed_script('admin_panel.mjs'), 'start', '--data', data, '--port', String(port)], { detached: true, stdio: 'ignore', windowsHide: true,
-      env: { ...process.env, [HANDOVER_VARIABLE]: JSON.stringify({ key: state.key, sessions: [...sessions] }) } }).unref();
+    spawn(process.execPath, [updater, '--data', data, '--pid', String(process.pid), '--panel', installed_script('admin_panel.mjs'), '--port', String(port)],
+      { cwd: dirname(updater), detached: true, stdio: 'ignore', windowsHide: true,
+        env: { ...process.env, [HANDOVER_VARIABLE]: JSON.stringify({ key: state.key, sessions: [...sessions] }) } }).unref();
     setTimeout(() => process.exit(0), 300);
   };
-  const server = create_panel({ data, key: state.key, port, ops: { on_updated }, sessions });
+  const server = create_panel({ data, key: state.key, port, ops: { hand_over }, sessions });
   // An entry left on starts again with the panel (only the entry: the accounts' instances and the HTTPS tunnel are separate).
   if (hosting_enabled(data) && entry_settings(data).running) start_entry(data).catch(error => process.stderr.write(`入口没有启动：${error.message}\n`));
   // Hosted accounts' failures reach the owner's Weixin; one pass at a time.
@@ -763,6 +812,7 @@ function run_panel(data, port) {
   server.listen(port, '127.0.0.1', () => {
     writeFileSync(state_path(data), JSON.stringify(state), { mode: 0o600 });
     process.stdout.write(`管理面板已启动：http://127.0.0.1:${port}\n`);
+    finish_update(data).catch(error => process.stderr.write(`更新收尾失败：${error.message}\n`));
   });
   const rendered = join(data, 'launcher', 'codiscuss.ico');
   const tray = show_tray({ title: '共议', icon_path: existsSync(rendered) ? rendered : '', window_title: WINDOW_TITLE,
@@ -798,7 +848,7 @@ function run_panel(data, port) {
 /** Start the panel in the background unless it already runs; returns its state. */
 async function start_panel(data, port) {
   const running = read_state(data);
-  if (running && alive(running.pid) && (running.version === VERSION || running.updating)) return running;
+  if (running && alive(running.pid) && running.version === VERSION) return running;
   // A panel of another version (left running across an update) is replaced, so the icon and panel match what is installed.
   if (running && alive(running.pid)) {
     process.kill(running.pid);

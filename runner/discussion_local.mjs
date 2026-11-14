@@ -199,6 +199,9 @@ function start_panel_icon(home, settings) {
 /** Run one supervisor, recording readiness and handling an explicit local stop request. */
 async function supervise(home) {
   assert_shared_home(home);
+  // Out of the package folder, with the website and service this starts: Windows will not let npm replace a folder that
+  // is any process's working directory (the 共议 launcher starts here from the package).
+  process.chdir(resolve(home));
   const directory = join(home, 'local');
   const release = acquire_lock(directory);
   const status_path = join(directory, 'status.json');

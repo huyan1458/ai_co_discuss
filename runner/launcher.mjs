@@ -67,7 +67,8 @@ static class Launcher {
     ProcessStartInfo info = new ProcessStartInfo(Node, "\\"" + script + "\\" " + command);
     info.UseShellExecute = false;
     info.CreateNoWindow = true;
-    info.WorkingDirectory = Path.GetDirectoryName(script);
+    // Not the package folder: npm cannot replace a folder that is a running process's working directory.
+    info.WorkingDirectory = Directory.Exists(Home) ? Home : Path.GetTempPath();
     info.EnvironmentVariables["DISCUSS_SERVICE_HOME"] = Home;
     Process.Start(info);
   }

@@ -27,7 +27,7 @@ codiscuss setup
 
 `setup` 检测本机 CLI，保存软件配置、安装讨论技能，然后启动本机网站（`http://127.0.0.1:8765`）并打开浏览器。非交互环境可用 `codiscuss setup --yes`，用 `--clients codex,claude` 指定软件。结果提示“待处理”时，按提示处理后重跑 `setup`。
 
-**升级**：先 `codiscuss local stop`，再运行 `npm install --global --prefer-online ai_co_discuss@latest` 和 `codiscuss setup`。
+**升级**：在管理面板“概览”页点“更新”即可；手动升级时先运行 `codiscuss panel stop` 和 `codiscuss local stop`，再运行 `npm install --global --prefer-online ai_co_discuss@latest` 和 `codiscuss setup`。
 
 **卸载**：先 `codiscuss local stop`，再 `npm uninstall --global ai_co_discuss`。讨论数据保存在 `~/.codiscuss`，卸载不会删除。本机服务会自动清理已删除房间的本机文件，并控制日志大小；也可运行 `codiscuss service clean` 立即清理。
 

@@ -27,15 +27,27 @@ async function check(force = false) {
   finally { checking.value = false; }
 }
 
+const UPDATE_POLL_MS = 1500, UPDATE_WAIT_MS = 10 * 60 * 1000;
 const report = ref(null);
 async function install() {
   confirming.value = false;
   busy.value = "update";
   try {
-    // Every step is listed; the panel restarts on the new version meanwhile, and closing the report reloads onto it.
-    report.value = await call("update", {});
+    // The panel goes away while npm installs and comes back on the new version; every step is listed once it is done,
+    // and closing the report reloads onto the new page.
+    await call("update", {});
+    report.value = await update_done();
   } catch (failure) { notify("error", failure.message); }
   finally { busy.value = ""; }
+}
+
+/** Ask for the update's progress until it is done; the panel does not answer while it restarts. */
+async function update_done() {
+  for (let waited = 0; waited < UPDATE_WAIT_MS; waited += UPDATE_POLL_MS) {
+    await new Promise((done) => setTimeout(done, UPDATE_POLL_MS));
+    try { const job = await call("update/progress"); if (job.status === "done") return job; } catch { /* restarting */ }
+  }
+  throw new Error("更新超过 10 分钟没有完成：可运行 codiscuss panel open 重新打开面板查看");
 }
 const failed = (line) => /失败/.test(line);
 function reload_page() { window.location.reload(); }
@@ -126,7 +138,7 @@ watch(refreshed, () => check(true));
     </template>
   </UModal>
 
-  <UModal :open="Boolean(report)" :title="`已更新到 v${report?.version}`" :dismissible="false" @update:open="(open) => !open && reload_page()">
+  <UModal :open="Boolean(report)" :title="report?.ok ? `已更新到 v${report?.version}` : '更新失败'" :dismissible="false" @update:open="(open) => !open && reload_page()">
     <template #body>
       <ul class="update-steps">
         <li v-for="line in report?.steps || []" :key="line" :class="{ 'is-failed': failed(line) }"><UIcon :name="failed(line) ? 'i-lucide-circle-x' : 'i-lucide-circle-check'" />{{ line }}</li>
