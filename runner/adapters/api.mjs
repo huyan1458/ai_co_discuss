@@ -20,6 +20,7 @@ import { ensure_pi } from '../pi_runtime.mjs';
 import { execution_marker, not_sent } from './common.mjs';
 import { DEFAULT_API_MAX_REQUESTS } from './profiles.mjs';
 import { room_image } from '../image_service.mjs';
+import { site_fetch as entry_fetch } from '../entry_client.mjs';
 
 // API participants follow the same skills that local software loads, read fresh for every execution.
 const SKILLS = fileURLToPath(new URL('../../.agents/skills/', import.meta.url));
@@ -111,7 +112,7 @@ function goal_host(context) {
 /** Restrict site requests to this room and keep credentials outside model context. */
 async function room_request(context, path, body) {
   context.signal.throwIfAborted();
-  const response = await fetch(`${context.site}/api/rooms/${context.room}${path}`, {
+  const response = await entry_fetch(`${context.site}/api/rooms/${context.room}${path}`, {
     method: body === undefined ? 'GET' : 'POST', redirect: 'error',
     headers: { 'Content-Type': 'application/json', 'X-Discussion-Token': context.token },
     body: body === undefined ? undefined : JSON.stringify(body),

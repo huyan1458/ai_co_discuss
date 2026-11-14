@@ -32,6 +32,7 @@ process.env.CODISCUSS_PI_CLI ??= 'pi-not-needed-in-this-test';
 const activity_phase = (adapter, event) => adapter_of(adapter).events.phase(event);
 import { save_api_key, saved_api_keys } from '../runner/discussion_api.mjs';
 import { certainty, decide, decide_interjection, decide_next_speaker, decide_round, ROUTE_CONFIDENCE, ROUTE_WIDE_CONFIDENCE, route_free_message, scheduler_thresholds, scheduler_answers, scheduler_check, scheduler_request, SCHEDULER_PROVIDERS, scheduler_state, validate_scheduler } from '../runner/scheduler.mjs';
+import { site_fetch } from '../runner/entry_client.mjs';
 
 /** Every room configuration keeps one member credential per woken participant. */
 const with_members = config => ({ ...config, members: Object.fromEntries(Object.keys(config.participants).map(name => [name, { token: 'm'.repeat(32) }])) });
@@ -1550,7 +1551,7 @@ test('a Sidecar delivery checks and claims one dispatched free-room execution', 
   const source = readFileSync(new URL('../runner/adapters/antigravity_sidecar.mjs', import.meta.url), 'utf8')
     .replace(/^import .+;\r?$/gm, '').split("\natomic_json(join(directory, 'ready.json')")[0];
   const context = vm.createContext({ process: { env: { CODISCUSS_IPC_DIRECTORY: f.config.directory, ANTIGRAVITY_AGENTAPI_EXE: 'test' } },
-    resolve, join, existsSync, readFileSync, writeFileSync, fetch, AbortSignal,
+    resolve, join, existsSync, readFileSync, writeFileSync, fetch, site_fetch, AbortSignal,
     execFileSync: () => { calls++; return JSON.stringify({ response: { newConversation: { conversationId: 'test-session' } } }); },
     atomic_json: (path, value) => writeFileSync(path, JSON.stringify(value)),
   });
@@ -2427,7 +2428,7 @@ for (const outcome of ['accepted', 'cancelled', 'expired']) test(`free Sidecar d
   const source = readFileSync(new URL('../runner/adapters/antigravity_sidecar.mjs', import.meta.url), 'utf8')
     .replace(/^import .+;\r?$/gm, '').split("\natomic_json(join(directory, 'ready.json')")[0];
   const context = vm.createContext({ process: { env: { CODISCUSS_IPC_DIRECTORY: config.directory, ANTIGRAVITY_AGENTAPI_EXE: 'test' } },
-    resolve, join, existsSync, readFileSync, writeFileSync, fetch, AbortSignal,
+    resolve, join, existsSync, readFileSync, writeFileSync, fetch, site_fetch, AbortSignal,
     execFileSync: () => { invoked++; return JSON.stringify({ response: { newConversation: { conversationId: 'free-session' } } }); },
     atomic_json: (path, value) => writeFileSync(path, JSON.stringify(value)),
   });

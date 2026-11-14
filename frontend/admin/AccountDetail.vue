@@ -4,7 +4,7 @@
  * its skills and workflows, its API keys, and removing it.
  */
 import { computed, inject, ref } from "vue";
-import { call } from "./api.js";
+import { call, entry_address } from "./api.js";
 import AccountEnv from "./AccountEnv.vue";
 import AccountKeys from "./AccountKeys.vue";
 import LoginCard from "./LoginCard.vue";
@@ -14,6 +14,7 @@ const emit = defineEmits(["back", "local"]);
 const { state, reload, notify } = inject("panel");
 const account = computed(() => state.value.accounts.find((item) => item.name === props.name) || null);
 const busy = ref(""), secret = ref(null), confirming = ref(null);
+const address = computed(() => entry_address(state.value.entry));
 
 /** Run one account action, keeping its button busy until it ends. */
 async function act(action, message) {
@@ -40,6 +41,8 @@ const CONFIRMS = {
     text: () => `为 ${props.name} 建一个普通 Windows 用户。之后它的 AI 以这个用户运行，读不到你的个人文件，登录也和你分开。电脑会弹出一次管理员确认，请在这台电脑上点“是”。` },
   "os-user/remove": { title: "删除 Windows 用户", label: "删除", message: "Windows 用户已删除",
     text: () => `删除 ${account.value?.os_user} 及其个人目录（其中的命令行登录和技能一并删除）。账号本身和它的项目文件保留。电脑会弹出一次管理员确认。` },
+  disable: { title: "停用账号", label: "停用", message: "账号已停用",
+    text: () => `${props.name} 的所有登录立即失效，也无法再登录；实例和文件都保留，随时可以重新启用。` },
   remove: { title: "删除账号", label: "删除", message: "账号已删除",
     text: () => `删除后 ${props.name} 无法再登录。它的文件夹 ${account.value?.home} 会保留，需要时手动删除。` },
 };
@@ -58,6 +61,7 @@ async function copy(text) {
       <h2>{{ account.name }}</h2>
       <span class="panel-tag" :class="account.running ? 'is-green' : 'is-gray'">{{ account.running ? "运行中" : "已停止" }}</span>
       <span class="panel-tag" :class="account.os_user ? 'is-blue' : 'is-amber'">{{ account.os_user ? `已隔离 · ${account.os_user}` : "未隔离" }}</span>
+      <span v-if="account.disabled" class="panel-tag is-amber">已停用</span>
     </div>
 
     <div class="panel-list">
@@ -65,11 +69,14 @@ async function copy(text) {
         <div class="panel-tile"><UIcon name="i-lucide-globe" /></div>
         <div class="panel-main">
           <div class="panel-title">网站</div>
-          <a class="panel-link" :href="`http://127.0.0.1:${account.port}/`" target="_blank" rel="noopener">http://127.0.0.1:{{ account.port }}</a>
-          <span class="panel-sub">对方用账号名和密码从入口登录；忘了密码可以重设。</span>
+          <span class="detail-address"><a class="panel-link" :href="address" target="_blank" rel="noopener">{{ address }}</a>
+            <button type="button" class="panel-icon-button" aria-label="复制入口地址和账号名" @click="copy(`地址 ${address}，账号 ${account.name}`)"><UIcon name="i-lucide-copy" /></button></span>
+          <span class="panel-sub" style="white-space: normal">对方打开这个地址，用账号名和密码登录<template v-if="!state.entry?.public_url">；还没有设公网地址，现在只有这台电脑能打开，在“托管账号”页的“客户入口”填写</template><template v-if="!state.entry?.running">；入口没有在运行</template>。忘了密码可以重设，重设或停用后原有登录立即失效。在这台电脑上直接打开它的网站：<a class="panel-link" :href="`http://127.0.0.1:${account.port}/`" target="_blank" rel="noopener">127.0.0.1:{{ account.port }}</a></span>
         </div>
         <div class="panel-side">
           <button type="button" class="panel-button is-plain is-small" :disabled="Boolean(busy)" @click="act('password')"><UIcon name="i-lucide-key-round" />重设密码</button>
+          <button v-if="account.disabled" type="button" class="panel-button is-plain is-small" :disabled="Boolean(busy)" @click="act('enable', '账号已启用')"><UIcon name="i-lucide-user-check" />启用</button>
+          <button v-else type="button" class="panel-button is-plain is-small" :disabled="Boolean(busy)" @click="ask('disable')"><UIcon name="i-lucide-user-x" />停用</button>
           <button v-if="!account.running" type="button" class="panel-button is-primary is-small" :disabled="Boolean(busy)" @click="act('start', '实例已启动')">
             <UIcon :name="busy === 'start' ? 'i-lucide-loader' : 'i-lucide-play'" :class="{ 'animate-spin': busy === 'start' }" />启动</button>
           <button v-else type="button" class="panel-button is-outline is-small" :disabled="Boolean(busy)" @click="act('stop', '实例已停止')">
@@ -141,4 +148,5 @@ async function copy(text) {
 .panel-form-head h2 { margin-right: 4px; }
 .detail-danger { display: flex; justify-content: flex-end; padding-top: 4px; }
 .detail-shared { display: flex; align-items: center; gap: 12px; }
+.detail-address { display: flex; align-items: center; gap: 6px; min-width: 0; }
 </style>

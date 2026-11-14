@@ -23,6 +23,7 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from urllib.parse import parse_qs, quote, urlsplit
 
+from .entry_guard import HELLO_PATH, PUBLIC_PATHS, EntryPolicy, answer_hello, request_proven
 from .admin import (AdminError, admin_status, change_password, list_sessions, login_admin, logout_admin, register_admin,
                     revoke_sessions, session_valid, update_profile)
 from .remote_launch import (COMMAND_WAIT_MAX, claim_machine_commands, finish_machine_command, list_machines, machine_command_status,
@@ -1748,6 +1749,8 @@ class DiscussionServer(ThreadingHTTPServer):
         self.admin_setup_key = os.getenv("DISCUSS_ADMIN_SETUP_KEY") or secrets.token_urlsafe(18)
         service_home = os.getenv("DISCUSS_SERVICE_HOME")
         self.connections_file = Path(service_home) / "site-connections.json" if service_home else None
+        # A hosted instance serves only callers that prove they hold its key (backend/entry_guard.py).
+        self.entry_policy = EntryPolicy()
         super().__init__(address, DiscussionHandler)
 
     def server_bind(self):
@@ -1885,9 +1888,35 @@ class DiscussionHandler(BaseHTTPRequestHandler):
             if self.deferred_response:
                 self.send_payload(*self.deferred_response)
 
+    def entry_refused(self, method, parsed):
+        """Under entry protection: answer a hello, or refuse a request that is neither public nor proven on its connection."""
+        policy = self.server.entry_policy
+        if not policy.enabled:
+            return False
+        if method == "GET" and parsed.path == HELLO_PATH:
+            answer_hello(self, policy)
+            return True
+        self.entry_key = request_proven(self, policy)
+        if self.entry_key:
+            return False
+        if method == "GET" and (parsed.path in ASSETS or parsed.path in PUBLIC_PATHS):
+            return False
+        self.close_connection = True
+        # Sent directly, not through respond(): a refused caller leaves nothing in any room's event log.
+        self.send_payload(403, "application/json", json.dumps({"error": "这个工作台只接受经入口的访问"}, ensure_ascii=False).encode("utf-8"))
+        return True
+
+    def end_headers(self):
+        """Say so when an HTTP/1.1 connection (one opened by an entry hello) closes after this response."""
+        if self.request_version == "HTTP/1.1" and self.protocol_version == "HTTP/1.1" and self.close_connection:
+            self.send_header("Connection", "close")
+        super().end_headers()
+
     def dispatch_routes(self, method, parsed, params, parts, text_mode):
         """Route one request and map validation, permission and lookup errors to their status codes."""
         try:
+            if self.entry_refused(method, parsed):
+                return None
             self.bridged = self.relay_bridge(parts)
             if parts[:3] == ["api", "local", "media"] and len(parts) == 4 and method == "GET":
                 return self.serve_media_ticket(parts[3])
@@ -1934,6 +1963,9 @@ class DiscussionHandler(BaseHTTPRequestHandler):
         self.close_connection = True
         self.connection.settimeout(5)
         hub = self.server.hub
+        # Under entry protection a stream ends when the key changes or goes, even if nothing else happens meanwhile.
+        policy = self.server.entry_policy
+        opened_key = getattr(self, "entry_key", None) if policy.enabled else None
         with hub.updates:
             version = hub.update_version
         self.send_response(200)
@@ -1954,6 +1986,8 @@ class DiscussionHandler(BaseHTTPRequestHandler):
                     changed = hub.update_version != version
                     rooms = hub.changed_rooms(version) if changed else None
                     version = hub.update_version
+                if policy.enabled and policy.key() != opened_key:
+                    return
                 self.wfile.write(update_frame(rooms) if changed else b": keepalive\n\n")
                 self.wfile.flush()
         except OSError:
@@ -2173,13 +2207,28 @@ class DiscussionHandler(BaseHTTPRequestHandler):
                 return value
         return self.headers.get("X-Discussion-Admin", "")
 
+    def entry_member_request(self):
+        """Under entry protection, whether the request names a room credential: it then acts only as that credential.
+
+        Passing the entry proves access to this instance, not a role in a room: a member's credential must not be lifted
+        to the owner's because the request also looks like the loopback page.
+        """
+        return self.server.entry_policy.enabled and bool(self.headers.get("X-Discussion-Token"))
+
+    def require_entry_owner(self, connection, room_id, token):
+        """Under entry protection, room management needs the owner's credential or the credential-less page itself."""
+        if self.entry_member_request():
+            require_owner(connection, room_id, token)
+        elif self.server.entry_policy.enabled and not self.local_visitor():
+            raise PermissionError("需要本房间的控制凭据")
+
     def local_visitor(self):
         """Whether this request may act as the loopback-only site's implicit administrator.
 
         The Host must name this loopback port, which defeats DNS rebinding, and a browser request must come from the site
         itself rather than another page. Programs on this computer can still send these headers; this guards browsers only.
         """
-        if not self.server.local_site:
+        if not self.server.local_site or self.entry_member_request():
             return False
         host = self.headers.get("Host", "")
         if host not in (f"127.0.0.1:{self.server.server_port}", f"localhost:{self.server.server_port}"):
@@ -2500,6 +2549,8 @@ class DiscussionHandler(BaseHTTPRequestHandler):
             pass
         elif method == "POST":
             free_actor = authorize_free_write(connection, room_id, token, parts[3] if len(parts) > 3 else "", self.read_payload())
+        if (parts[3:] == ["backup"] and method == "GET") or (len(parts) == 4 and parts[3] in DIRECTORY_OPERATIONS and method == "POST"):
+            self.require_entry_owner(connection, room_id, token)
         if parts[3:] == ["backup"] and method == "GET":
             if session_read_boundary(connection, room_id, token) is not None:
                 raise PermissionError("独立观点阶段需房主凭据导出")
@@ -2867,9 +2918,6 @@ def main():
     except KeyboardInterrupt:
         logging.info("Server stopped")
     finally:
-        if remote:
-            remote.shutdown()
-            remote.server_close()
         server.server_close()
 
 

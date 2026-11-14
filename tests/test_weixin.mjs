@@ -67,3 +67,16 @@ test('a notice waits for the owner to message the bot, is sent once, and replies
     'a quoted notice picks its room by message id or text; a plain reply goes to the latest notice');
   assert.equal(sent.at(-1), '🔔 CoDiscuss 系统通知：\n\n已发到房间');
 });
+
+test('a reply to a notice without a room, quoted or not, goes to no room rather than an older room\'s', async t => {
+  const { home, sent, fetch, receive } = fixture(t);
+  const posted = [];
+  const on_reply = async target => { posted.push(target); return '已发到房间'; };
+  await receive(on_reply, [owner_text('你好')]);
+  await send_notice(home, { key: 'owner', room: room('room-old', '旧房间'), paragraphs: ['要不要继续？'] }, { fetch });
+  await send_notice(home, { key: 'operator-zhang-10', room: { title: '托管账号 zhang' }, paragraphs: ['1 次执行失败：', 'Codex 未登录'] }, { fetch });
+  const failure_id = String(99 + sent.length);
+  await receive(on_reply, [owner_text('知道了', { svr_id: failure_id }), owner_text('我去处理')]);
+  assert.equal(posted.length, 0, 'neither reply becomes the owner\'s message in the older room');
+  assert.match(sent.at(-1), /不对应任何房间/);
+});

@@ -1065,7 +1065,7 @@ function remember_room(room_id) {
 }
 
 async function select_room(room_id) {
-  if (room_id) state.welcome = false;
+  if (room_id) { state.welcome = false; state.welcome_folder = null; }
   state.navigation_version++;
   state.refresh_version++;
   state.editing_queued = null;
@@ -2296,9 +2296,14 @@ async function submit_room(event, folder_id = null) {
   if (state.navigation_version === navigation) { state.archive_view = false; await select_room(room.id); }
 }
 
-/** Show the new-room welcome page in the middle, leaving no room selected until the user picks or creates one. */
-function open_welcome() {
+/**
+ * Show the new-room welcome page in the middle, leaving no room selected until the user picks or creates one. Opened for
+ * a folder (a hosted account's "new conversation" in one), the room its first message creates goes into that folder
+ * with the folder's project directories.
+ */
+function open_welcome(folder = null) {
   state.welcome = true;
+  state.welcome_folder = folder?.id ? { id: folder.id, directories: [...(folder.directories || [])] } : null;
   return select_room(null);
 }
 
@@ -2319,7 +2324,8 @@ async function quick_create_room(text) {
   if (!text && !drafts.length) return;
   state.attachment_drafts = [];
   try {
-    await reset_create_form(null);
+    const folder = state.welcome_folder;
+    await reset_create_form(folder);
     const name = Object.keys(IDENTITIES).find(item => item !== "用户" && LAUNCH_CLIENTS[item] && (default_launch_entry(item), launch_ready(item)));
     if (!name) throw new Error("还没有可直接唤醒的 AI：请先配置本机 AI 的接入");
     write_view_expert("new-expert-modes", name, "cli");
@@ -2328,7 +2334,7 @@ async function quick_create_room(text) {
     write_view_field("new-room-title", title.slice(0, ROOM_TITLE_MAX_LENGTH), { publish: false });
     if (state.create_discussion) write_view_field("new-room-goal", (text || title).slice(0, ROOM_GOAL_MAX_LENGTH), { publish: false });
     if (state.create_goal) state.create_goal = { ...state.create_goal, objective: text || title };
-    await submit_room({ preventDefault() {} });
+    await submit_room({ preventDefault() {} }, folder?.id || null);
   } finally {
     // Still on the welcome page (creation failed): the files stay in its composer for another try.
     if (!state.room) { state.attachment_drafts = drafts; render_attachment_drafts(); }
@@ -5361,7 +5367,7 @@ async function execute_view_action(name, value) {
   const actions = { refresh: refresh_room, room: select_room, tab: select_tab,
     archives: toggle_archives, backup: backup_room, backup_rooms, import_rooms, manage_channel, move_channel, create_folder, move_folder, rename_folder, delete_folder, sort_directory,
     send: () => send_message(event), discard_sending, retry_sending, choose_attachments: () => element("attachment-input").click(), remove_attachment, preview_attachment,
-    create: (folder_id) => submit_room(event, folder_id), quick_create: quick_create_room,
+    create: (folder_id) => submit_room(event, folder_id), quick_create: quick_create_room, welcome: open_welcome,
     save_context: () => save_context(event), save_topic: () => save_topic(event),
     filter: filter_view, reply: set_view_reply, cancel_reply, skip_turn,
     copy_cli: () => copy_context(), copy_background,

@@ -9,14 +9,15 @@
  */
 import { spawn, spawnSync } from 'node:child_process';
 import { randomBytes } from 'node:crypto';
-import { existsSync, readdirSync, readFileSync, renameSync, rmSync, statSync, writeFileSync } from 'node:fs';
+import { closeSync, existsSync, openSync, readdirSync, readFileSync, readSync, renameSync, rmSync, statSync, writeFileSync } from 'node:fs';
 import http from 'node:http';
 import { tmpdir } from 'node:os';
 import { dirname, extname, join, resolve } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import { parseArgs } from 'node:util';
 
-import { account_home, add_account, data_home, instance_home, read_accounts, remove_account, reset_password } from '../gateway/gateway.mjs';
+import { account_home, add_account, data_home, entry_settings, entry_status, instance_home, read_accounts, remove_account, reset_password, save_entry_settings,
+  set_account_disabled, start_entry, stop_entry } from '../gateway/gateway.mjs';
 import { API_PROVIDERS, save_api_key } from './discussion_api.mjs';
 import { apply_login, cancel_login, LOGIN_METHODS, login_progress, login_status, logout, start_login, submit_login } from './cli_login.mjs';
 import { create_os_user, install_shared_runtime, read_os_users, remove_os_user, run_as_user, shared_cli_state, shared_executables, shared_paths, start_instance_as_user } from './os_users.mjs';
@@ -25,6 +26,8 @@ import { hosted_prompt, import_skill, library_root, list_library, remove_library
 import { local_status } from './discussion_local.mjs';
 import { autostart_enabled, launcher_path, set_autostart } from './launcher.mjs';
 import { show_tray } from './tray.mjs';
+import { OPERATOR_EVENTS_FILE } from './account_space.mjs';
+import { can_notify, send_notice } from './weixin.mjs';
 
 const ROOT = dirname(dirname(fileURLToPath(import.meta.url)));
 const WEB = join(ROOT, 'web');
@@ -36,6 +39,13 @@ const LATEST_URL = `https://registry.npmjs.org/${NPM_PACKAGE}/latest`;
 const LATEST_TTL_MS = 60 * 60 * 1000;
 const LATEST_TIMEOUT_MS = 8000;
 const STATE_FILE = 'admin-panel.json';
+// Hosted accounts' failures, relayed to the owner's Weixin: how often, how far each account's outbox was read, and limits
+// on what one notice carries (the outbox is in the account's own folder, so its text is the account's, not ours).
+const RELAY_MS = 30_000;
+const RELAY_STATE_FILE = 'operator-relay.json';
+const RELAY_READ_LIMIT = 64 * 1024;
+const RELAY_LISTED = 5;
+const RELAY_TEXT_LIMIT = 160;
 // Where account_env.mjs (and setup) record the skills they installed, in the service home.
 const SKILL_RECORD = 'skills-manifest.json';
 // How a panel started by an update receives its predecessor's key and sessions (only that child process sees it).
@@ -135,7 +145,7 @@ function instance_running(port) {
 
 async function list_accounts(data) {
   const users = read_os_users(data);
-  return Promise.all(Object.entries(read_accounts(data)).map(async ([name, account]) => ({ name, port: account.port, home: account_home(data, name),
+  return Promise.all(Object.entries(read_accounts(data)).map(async ([name, account]) => ({ name, port: account.port, home: account_home(data, name), disabled: Boolean(account.disabled),
     os_user: users[name]?.user || '', running: await instance_running(account.port), keys: list_keys(instance_home(data, name)).length,
     // The AI environment is set up once account_env.mjs has run for its Windows user (it records skills in the service home).
     skills: Boolean(users[name]) && existsSync(join(instance_home(data, name), SKILL_RECORD)) })));
@@ -281,10 +291,10 @@ function cookie(request, name) {
  *   ops: Injected for tests; defaults to the real account and Windows operations.
  */
 export function create_panel({ data, key, port, ops = {}, sessions = new Set() }) {
-  const op = { list_accounts, add_account, reset_password, remove_account, run_instance, create_os_user, remove_os_user,
+  const op = { list_accounts, add_account, reset_password, set_account_disabled, remove_account, run_instance, create_os_user, remove_os_user,
     login_status, apply_login, logout, start_login, login_progress, submit_login, cancel_login, install_runtime, prepare_account, account_env, account_skills, shared_cli_state,
     save_api_key, list_keys, remove_key, use_shared_programs, service_overview, run_owner_service, latest_version, update_package,
-    autostart_enabled, set_autostart, on_updated: () => {}, ...ops };
+    autostart_enabled, set_autostart, entry_overview, start_entry, stop_entry, on_updated: () => {}, ...ops };
   const hosts = new Set([`127.0.0.1:${port}`, `localhost:${port}`]);
 
   async function api(method, path, body) {
@@ -296,7 +306,8 @@ export function create_panel({ data, key, port, ops = {}, sessions = new Set() }
       const windows = process.platform === 'win32';
       return { hosting, version: VERSION, service: op.service_overview(data), platform: process.platform,
         launcher: windows && existsSync(launcher_path(data)), autostart: windows && op.autostart_enabled(), login_methods: LOGIN_METHODS,
-        ...(hosting ? { accounts: await op.list_accounts(data), clis: op.shared_cli_state(), providers: API_PROVIDERS } : { accounts: [], clis: {}, providers: {} }) };
+        ...(hosting ? { accounts: await op.list_accounts(data), clis: op.shared_cli_state(), providers: API_PROVIDERS, entry: await op.entry_overview(data) }
+          : { accounts: [], clis: {}, providers: {}, entry: null }) };
     }
     // This computer: the owner's own service, its updates and login autostart.
     if (method === 'POST' && section === 'service' && ['start', 'stop', 'restart'].includes(name)) {
@@ -328,6 +339,13 @@ export function create_panel({ data, key, port, ops = {}, sessions = new Set() }
     // Hosting: only once the owner turned it on in setup.
     if (!hosting) throw new Error('托管管理未打开：运行 codiscuss setup 勾选“托管管理（管理面板）”');
     if (method === 'POST' && section === 'clis' && name === 'install') return op.install_runtime(data);
+    // The account entry customers sign in at: started and stopped here, and started again with the panel if it was left on.
+    if (method === 'POST' && section === 'entry' && (name === 'start' || name === 'stop')) {
+      await (name === 'start' ? op.start_entry(data) : op.stop_entry(data));
+      save_entry_settings(data, { running: name === 'start' });
+      return op.entry_overview(data);
+    }
+    if (method === 'POST' && section === 'entry' && name === 'settings') { save_entry_settings(data, { public_url: body.public_url }); return op.entry_overview(data); }
     // The skill library and the default system prompt, both the owner's, for hosted accounts.
     if (section === 'skill-library') {
       if (method === 'GET') return list_library(data);
@@ -342,6 +360,7 @@ export function create_panel({ data, key, port, ops = {}, sessions = new Set() }
     if (method === 'POST' && !name) return op.add_account(data, String(body.name || '').trim());
     account();
     if (method === 'POST' && action === 'password') return { password: op.reset_password(data, name) };
+    if (method === 'POST' && (action === 'disable' || action === 'enable')) { op.set_account_disabled(data, name, action === 'disable'); return { disabled: action === 'disable' }; }
     if (method === 'POST' && action === 'remove') { op.remove_account(data, name); return { removed: name, kept: account_home(data, name) }; }
     if (method === 'POST' && (action === 'start' || action === 'stop')) { await op.run_instance(data, name, action); return { ok: true }; }
     if (method === 'POST' && action === 'os-user' && extra === 'remove') { op.remove_os_user(data, name); return { ok: true }; }
@@ -401,6 +420,99 @@ export function create_panel({ data, key, port, ops = {}, sessions = new Set() }
       else send_json(response, 400, { error: error.message });
     }
   });
+}
+
+/** The account entry as the hosting page shows it: whether it runs, its loopback port and the address customers open. */
+async function entry_overview(data) {
+  const { port, public_url } = entry_settings(data), status = await entry_status(data);
+  return { running: status.running, port: status.running ? status.port : port, public_url };
+}
+
+// ---- Hosted accounts' failures, to the owner's Weixin ----
+
+const NEWLINE = 0x0a;
+const EVENT_ID = /^[A-Za-z0-9-]{8,64}$/;
+
+/** Read bytes [start, end) of a file; fewer when it shrank meanwhile. */
+function read_bytes(path, start, end) {
+  const buffer = Buffer.alloc(Math.max(0, end - start)), handle = openSync(path, 'r');
+  try { return buffer.subarray(0, readSync(handle, buffer, 0, buffer.length, start)); } finally { closeSync(handle); }
+}
+
+/** A recorded failure as the relay uses it, or null for a line that is not one (the outbox is the account's to write). */
+function failure_event(line) {
+  let value = null;
+  try { value = JSON.parse(line); } catch { return null; }
+  if (!value || typeof value !== 'object' || value.kind !== 'failed' || typeof value.id !== 'string' || !EVENT_ID.test(value.id)) return null;
+  const text = field => typeof value[field] === 'string' ? value[field].replace(/\s+/g, ' ').trim().slice(0, RELAY_TEXT_LIMIT) : '';
+  return { id: value.id, title: text('title') || text('room'), member: text('member'), reason: text('reason') };
+}
+
+/**
+ * The failures one account's outbox gained since `mark` ({ offset, head }), and the mark after them.
+ *
+ * The outbox is identified by its first record's id: a file replaced, emptied or rewritten (even to the same length)
+ * has another first record and is read from the start. Lines are cut on the raw bytes, so a character split at the
+ * read limit never shifts the offset; a flood is cut to its tail, and the partial line where the cut falls is skipped.
+ */
+function outbox_failures(path, mark) {
+  const size = statSync(path).size;
+  const first = read_bytes(path, 0, Math.min(size, RELAY_READ_LIMIT));
+  const first_end = first.indexOf(NEWLINE);
+  const head = first_end < 0 ? '' : failure_event(first.subarray(0, first_end).toString('utf8'))?.id || '';
+  let start = mark.head === head && Number.isInteger(mark.offset) && mark.offset <= size ? mark.offset : 0;
+  let partial = false;
+  if (size - start > RELAY_READ_LIMIT) { start = size - RELAY_READ_LIMIT; partial = true; }
+  const bytes = read_bytes(path, start, size);
+  const end = bytes.lastIndexOf(NEWLINE) + 1;
+  let begin = 0;
+  if (partial) begin = bytes.indexOf(NEWLINE) + 1;
+  const lines = end > begin ? bytes.subarray(begin, end).toString('utf8').split('\n').filter(Boolean) : [];
+  return { events: lines.map(failure_event).filter(Boolean), mark: { offset: start + end, head } };
+}
+
+/**
+ * Send one Weixin notice per hosted account whose instance recorded failures since the last pass, and remember how far
+ * each outbox was read. Nothing is read while hosting is off or the owner's Weixin cannot be reached, so failures wait.
+ * One account's unreadable outbox is skipped without holding up the others.
+ *
+ * Args:
+ *   data: The owner's service directory.
+ *   send, ready: The Weixin sender and readiness check, replaceable in tests.
+ *
+ * Returns:
+ *   The accounts a notice was sent for.
+ */
+export async function relay_operator_events(data, send = send_notice, ready = can_notify) {
+  if (!hosting_enabled(data) || !ready(data)) return [];
+  const state_file = join(data, RELAY_STATE_FILE);
+  let marks = {};
+  try { marks = JSON.parse(readFileSync(state_file, 'utf8')) || {}; } catch { marks = {}; }
+  const notified = [];
+  for (const name of Object.keys(read_accounts(data))) {
+    const path = join(instance_home(data, name), OPERATOR_EVENTS_FILE);
+    let read = null;
+    try { read = existsSync(path) ? outbox_failures(path, marks[name] || {}) : null; }
+    catch (error) { process.stderr.write(`托管账号 ${name} 的失败记录读不了：${error.message}\n`); continue; }
+    if (!read || (read.mark.offset === marks[name]?.offset && read.mark.head === marks[name]?.head)) continue;
+    const { events, mark } = read;
+    if (events.length) {
+      const listed = events.slice(-RELAY_LISTED).map(event => `「${event.title}」${event.member}：${event.reason}`);
+      let result = null;
+      try {
+        // Keyed by the last failure it reports, so a later notice is never mistaken for an earlier one.
+        result = await send(data, { key: `operator-${name}-${events.at(-1).id}`, room: { title: `托管账号 ${name}` },
+          paragraphs: [`${events.length} 次执行失败${events.length > RELAY_LISTED ? `，最近 ${RELAY_LISTED} 次` : ''}：`, ...listed,
+            '客户那边看到的是失败卡片和重试按钮；登录失效、额度用完这类问题要你在管理面板处理。'] });
+      } catch { result = null; }
+      // Not sent (no reply context yet, or a network error): read again next time.
+      if (!['sent', 'duplicate'].includes(result?.status)) continue;
+      notified.push(name);
+    }
+    marks[name] = mark;
+  }
+  write_settings(state_file, marks);
+  return notified;
 }
 
 // ---- Process ----
@@ -507,6 +619,15 @@ function run_panel(data, port) {
     setTimeout(() => process.exit(0), 300);
   };
   const server = create_panel({ data, key: state.key, port, ops: { on_updated }, sessions });
+  // An entry left on starts again with the panel (only the entry: the accounts' instances and the HTTPS tunnel are separate).
+  if (hosting_enabled(data) && entry_settings(data).running) start_entry(data).catch(error => process.stderr.write(`入口没有启动：${error.message}\n`));
+  // Hosted accounts' failures reach the owner's Weixin; one pass at a time.
+  let relaying = false;
+  const relay = setInterval(() => {
+    if (relaying) return;
+    relaying = true;
+    relay_operator_events(data).catch(error => process.stderr.write(`失败通知未转发：${error.message}\n`)).finally(() => { relaying = false; });
+  }, RELAY_MS);
   server.listen(port, '127.0.0.1', () => {
     writeFileSync(state_path(data), JSON.stringify(state), { mode: 0o600 });
     process.stdout.write(`管理面板已启动：http://127.0.0.1:${port}\n`);
@@ -531,6 +652,7 @@ function run_panel(data, port) {
     }
   } });
   function shutdown(exit = true) {
+    clearInterval(relay);
     tray?.close();
     server.close();
     if (read_state(data)?.pid === process.pid) rmSync(state_path(data), { force: true });
@@ -544,7 +666,7 @@ function run_panel(data, port) {
 /** Start the panel in the background unless it already runs; returns its state. */
 async function start_panel(data, port) {
   const running = read_state(data);
-  if (running && alive(running.pid) && running.version === VERSION) return running;
+  if (running && alive(running.pid) && (running.version === VERSION || running.updating)) return running;
   // A panel of another version (left running across an update) is replaced, so the icon and panel match what is installed.
   if (running && alive(running.pid)) {
     process.kill(running.pid);

@@ -14,6 +14,7 @@ import { assert_shared_home, main as service_main, service_home, service_pid, se
 import { detect_python, local_settings } from './discussion_setup.mjs';
 import { unlink_machine } from './remote_launch.mjs';
 import { tone } from './discussion_tui.mjs';
+import { site_fetch } from './entry_client.mjs';
 
 const SCRIPT = fileURLToPath(import.meta.url);
 const SERVER = fileURLToPath(new URL('../server.py', import.meta.url));
@@ -118,7 +119,7 @@ async function wait_website(child, progress, url) {
     if (progress.error) throw progress.error;
     if (child.exitCode !== null || child.signalCode) throw new Error('本机网站启动失败，请查看 local/website.log（可能端口已占用）');
     if (progress.ready) {
-      const response = await fetch(`${url}/api/health`, { signal: AbortSignal.timeout(2000) });
+      const response = await site_fetch(`${url}/api/health`, { signal: AbortSignal.timeout(2000) });
       if (response.ok && (await response.json()).ok) return;
     }
     await sleep(POLL_MS);

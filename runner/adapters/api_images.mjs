@@ -10,6 +10,7 @@ import { createHash, randomUUID } from 'node:crypto';
 import { readFileSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { in_draft_space } from '../account_space.mjs';
+import { site_fetch as entry_fetch } from '../entry_client.mjs';
 import { read_project_bytes, write_new_project_file } from './api_files.mjs';
 
 // Complex prompts, GIF frames and the higher qualities can take minutes.
@@ -97,7 +98,7 @@ function image_type(data) {
 /** Fetch one room path with this execution's member credential. */
 async function site_fetch(context, path, init = {}) {
   context.signal.throwIfAborted();
-  return fetch(`${context.site}/api/rooms/${context.room}${path}`, { redirect: 'error', ...init,
+  return entry_fetch(`${context.site}/api/rooms/${context.room}${path}`, { redirect: 'error', ...init,
     headers: { 'X-Discussion-Token': context.token, ...init.headers },
     signal: AbortSignal.any([context.signal, AbortSignal.timeout(SITE_TIMEOUT_MS)]) });
 }

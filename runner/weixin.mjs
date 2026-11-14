@@ -309,17 +309,17 @@ export function owner_texts(account, response) {
 }
 
 /**
- * The room a reply answers: the quoted notice's (found by Weixin's message id, else by its text), else the latest
- * notice that came from a room.
+ * The notice a reply answers: the quoted one (found by Weixin's message id, else by its text), else the latest one. A
+ * notice without a room (a hosted account's failures, a test) answers to no room, and is never passed over for an older
+ * room's: a reply meant for it must not become the owner's message in some other room.
  */
 function reply_target(state, quoted = []) {
-  const rooms = state.notices.filter(notice => notice.room);
   for (const reference of quoted) {
-    const found = rooms.findLast(notice => (reference.server_id && notice.server_ids?.includes(reference.server_id))
+    const found = state.notices.findLast(notice => (reference.server_id && notice.server_ids?.includes(reference.server_id))
       || (reference.text && notice.text?.includes(reference.text)));
     if (found) return found;
   }
-  return rooms.at(-1) || null;
+  return state.notices.at(-1) || null;
 }
 
 /**
@@ -355,7 +355,8 @@ async function answer(home, account, client, item, on_reply, log) {
   const target = reply_target(state, item.quoted);
   let reply;
   if (!item.text) reply = item.media ? '目前只能转发文字回复。' : '';
-  else if (!target?.room) reply = '已收到。还没有房间给你发过通知，这条回复没有可发往的房间。';
+  else if (!target) reply = '已收到。还没有房间给你发过通知，这条回复没有可发往的房间。';
+  else if (!target.room) reply = '已收到。这条通知不对应任何房间，回复不会转发；要回复某个房间，请引用那个房间的通知。';
   else {
     try { reply = await on_reply({ site: target.site, room: target.room, text: item.text }); }
     catch (error) { reply = `未能发到房间：${error.message}`; log(`微信回复未能发到房间 ${target.room}：${error.message}`); }

@@ -14,7 +14,9 @@ import { atomic_json } from './files.mjs';
 import { DiscussionStore, acquire_lock, api, load_config, pause_if_running, service_drafts, validate_config } from './discussion_runner.mjs';
 import { FreeRoomRunner } from './free_runner.mjs';
 import { can_notify, notice_sent, receive_replies, send_notice } from './weixin.mjs';
+import { OPERATOR_EVENTS_FILE, account_space } from './account_space.mjs';
 import { install_pi, pi_outdated } from './pi_runtime.mjs';
+import { site_fetch } from './entry_client.mjs';
 
 const POLL_MS = 2000;
 // The service loop only checks which rooms are due; each room keeps its own interval, so a short loop costs no site requests.
@@ -316,6 +318,11 @@ class RoomWorker {
         const opening = link ? [`打开房间（需在已配对的设备上）：${link}`] : [];
         return send_notice(this.home, { ...notice, paragraphs: [...notice.paragraphs, ...opening] });
       } };
+    // A hosted account's instance has no Weixin of its own: its failures go to an outbox the computer owner's panel relays.
+    if ('on_failed' in this.runner && account_space(this.home).projects_root) {
+      const outbox = join(this.home, OPERATOR_EVENTS_FILE);
+      this.runner.on_failed = event => appendFileSync(outbox, `${JSON.stringify({ id: randomUUID(), at: Date.now(), kind: 'failed', ...event })}\n`, { mode: 0o600 });
+    }
     Object.assign(this.state, { site: config.site, room: config.room, config_version: snapshot.version });
   }
   /** Reload connection paths and credentials while retaining the exact conversation context. */
@@ -485,7 +492,7 @@ export class DiscussionService {
       if (this.closed || watch.busy || Date.now() - watch.at < (watch.supported ? this.intervals.revisions : this.intervals.idle)) continue;
       Object.assign(watch, { at: Date.now(), busy: true });
       const rooms = entries.map(([, worker]) => encodeURIComponent(worker.state.room)).join(',');
-      checks.push(fetch(`${site}/api/revisions?rooms=${rooms}`, { redirect: 'error', signal: AbortSignal.timeout(REVISION_TIMEOUT_MS) })
+      checks.push(site_fetch(`${site}/api/revisions?rooms=${rooms}`, { redirect: 'error', signal: AbortSignal.timeout(REVISION_TIMEOUT_MS) })
         .then(async response => {
           // Without an answer (no such route, or the site failing) the rooms fall back to the regular interval at once,
           // instead of waiting out the safety interval for a revision that may not come.
@@ -524,7 +531,7 @@ export class DiscussionService {
     stream.done = (async () => {
       while (!controller.signal.aborted) {
         try {
-          const response = await fetch(`${site}/api/updates`, { signal: controller.signal, headers: { accept: 'text/event-stream' } });
+          const response = await site_fetch(`${site}/api/updates`, { signal: controller.signal, headers: { accept: 'text/event-stream' } });
           if (response.status === 204) return;
           if (!response.ok || !response.body) throw new Error(`HTTP ${response.status}`);
           stream.heard_at = Date.now();

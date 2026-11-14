@@ -63,6 +63,10 @@ const nav_collapsed = ref(saved_layout.collapsed);
 // The expanded brief floats over the messages, so it always starts collapsed instead of covering them.
 const brief_collapsed = ref(true);
 const rail_collapsed = ref(saved_layout.rail_collapsed);
+// A hosted account's instance is for a person who should not need to know members, hosts or turns: new conversations
+// start from the welcome page, and the room overview starts folded until they open it themselves.
+const hosted = computed(() => view.value.launch.projects_restricted === true);
+watch(hosted, (value) => { if (value && !saved_layout.rail_chosen) rail_collapsed.value = true; }, { immediate: true });
 const rail_inline = computed(() => viewport_width.value >= RAIL_BREAKPOINT);
 // Below the rail breakpoint the room sidebar opens as a drawer too, instead of squeezing the transcript.
 const nav_docked = computed(() => rail_inline.value && !nav_collapsed.value);
@@ -229,7 +233,12 @@ function choose_room(id) { nav_open.value = false; workflow_library.close_page((
 function open_detail(id) { detail_id.value = id; modal.value = "message"; }
 
 /** Open the shared creation form from either navigation surface. */
-function create_channel(folder = null) { if (workflow_page.value) { workflow_library.close_page(() => create_channel(folder)); return; } bridge.reset_create_form(folder); target_folder.value = folder; nav_open.value = false; modal.value = "create"; }
+function create_channel(folder = null) {
+  if (workflow_page.value) { workflow_library.close_page(() => create_channel(folder)); return; }
+  nav_open.value = false;
+  if (hosted.value) { act("welcome", folder); return; }
+  bridge.reset_create_form(folder); target_folder.value = folder; modal.value = "create";
+}
 
 /** Open folder creation after closing the mobile directory. */
 function create_folder() { target_folder.value = null; nav_open.value = false; modal.value = "folder"; }
@@ -255,8 +264,9 @@ function read_layout() {
       collapsed: saved.collapsed === true,
       brief_collapsed: saved.brief_collapsed === true,
       rail_collapsed: saved.rail_collapsed === true,
+      rail_chosen: typeof saved.rail_collapsed === "boolean",
     };
-  } catch { return { reading: "default", effects: "full", rail: RAIL_DEFAULT, nav: default_nav_width(), collapsed: false, brief_collapsed: false, rail_collapsed: false }; }
+  } catch { return { reading: "default", effects: "full", rail: RAIL_DEFAULT, nav: default_nav_width(), collapsed: false, brief_collapsed: false, rail_collapsed: false, rail_chosen: false }; }
 }
 
 /** Preserve the existing responsive navigation width on first use. */

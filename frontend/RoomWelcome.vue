@@ -40,7 +40,8 @@ async function start() {
 <template>
   <div class="room-welcome">
     <div class="room-welcome-hero"><UIcon name="i-lucide-messages-square" /><h2>想和 AI 一起做什么？</h2>
-      <p>发出第一条消息即新建房间，沿用新建面板的默认设置，由第一位可唤醒的 AI 主持。</p></div>
+      <p v-if="view.launch.projects_restricted">说说要做的事，AI 会接手，在这里回复你。</p>
+      <p v-else>发出第一条消息即新建房间，沿用新建面板的默认设置，由第一位可唤醒的 AI 主持。</p></div>
     <div class="channel-composer-dock"><div class="channel-composer-column" @dragover="bridge.drop_attachments" @drop="bridge.drop_attachments" @paste="bridge.paste_attachments">
       <UChatPrompt ref="prompt" v-model="draft" :submit-on-enter="ENTER_SENDS" :enterkeyhint="ENTER_SENDS ? 'send' : 'enter'" :autofocus="ENTER_SENDS" :rows="1" :maxrows="EDITOR_MAX_ROWS" placeholder="描述要一起做的事…" aria-label="第一条消息" variant="outline" color="neutral" class="channel-composer" :ui="{ header: 'channel-composer-header', base: 'channel-editor', footer: 'channel-composer-footer' }" @submit="start">
         <template #header>

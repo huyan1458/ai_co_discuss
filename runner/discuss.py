@@ -3,6 +3,8 @@
 
 import argparse
 import hashlib
+import hmac
+import http.client
 import json
 import math
 import os
@@ -1122,16 +1124,74 @@ def connection_refused(error):
     return isinstance(cause, ConnectionRefusedError)
 
 
+ENTRY_KEY_VARIABLE = "DISCUSS_ENTRY_KEY_FILE"
+ENTRY_KEY_PATTERN = re.compile(r"^[0-9a-f]{64}$")
+ENTRY_NONCE_PATTERN = re.compile(r"^[0-9a-f]{32}$")
+LOOPBACK_HOSTS = ("127.0.0.1", "localhost", "::1")
+
+
+def entry_key():
+    """This instance's key when entry protection is configured, '' when it is not; an unusable key stops the request."""
+    path = os.getenv(ENTRY_KEY_VARIABLE)
+    if not path:
+        return ""
+    try:
+        key = json.loads(Path(path).read_text(encoding="utf-8")).get("key")
+    except (OSError, ValueError, AttributeError):
+        key = None
+    if not isinstance(key, str) or not ENTRY_KEY_PATTERN.match(key):
+        raise CliError("这个工作台开启了入口保护，但读不到它的密钥，请求没有发出", 3, outcome="unavailable")
+    return key
+
+
+def entry_proof(key, purpose, nonce):
+    """HMAC-SHA256 of ``purpose|nonce`` under the hexadecimal key (backend/entry_guard.py)."""
+    return hmac.new(bytes.fromhex(key), f"{purpose}|{nonce}".encode("ascii"), hashlib.sha256).hexdigest()
+
+
+def open_protected(url, method, data, headers, timeout, key):
+    """Send one request to a protected instance on a connection where the instance first proved its key.
+
+    The connection never reopens by itself (``auto_open = 0``): a hello that announces closing, or a connection that
+    drops after it, ends the attempt instead of sending the request on a new, unverified connection.
+    """
+    parts = urlsplit(url)
+    connection = http.client.HTTPConnection(parts.hostname, parts.port or 80, timeout=timeout)
+    connection.auto_open = 0
+    connection.connect()
+    nonce = secrets.token_hex(16)
+    connection.request("GET", "/_instance/hello", headers={"X-CoDiscuss-Nonce": nonce})
+    hello = connection.getresponse()
+    hello.read()
+    challenge = hello.getheader("X-CoDiscuss-Nonce", "")
+    if (hello.status != 204 or hello.will_close or not ENTRY_NONCE_PATTERN.match(challenge)
+            or not hmac.compare_digest(hello.getheader("X-CoDiscuss-Proof", ""), entry_proof(key, "instance", nonce))):
+        connection.close()
+        raise CliError("无法确认这是目标工作台，请求没有发出", 3, outcome="unavailable")
+    path = parts.path + (f"?{parts.query}" if parts.query else "")
+    connection.request(method, path, body=data, headers={**headers, "X-CoDiscuss-Entry": entry_proof(key, "entry", challenge)})
+    response = connection.getresponse()
+    if response.status >= 400:
+        raise HTTPError(url, response.status, response.reason, response.headers, response)
+    return response
+
+
 def send_request(plan, url, timeout, headers=None):
     """Send once it is accepted, retrying only a refused connection, with TLS verification and bounded waiting."""
     data = request_data(plan)
     content_type = "application/octet-stream" if plan.upload_file is not None else "application/json"
-    request = Request(url, data=data, method=plan.method,
-                      headers={"Content-Type": content_type, "Accept": "*/*" if plan.download_file else "application/json, text/plain",
-                               "User-Agent": f"AI-CoDiscuss-CLI/{VERSION}", **(headers or {})})
+    fields = {"Content-Type": content_type, "Accept": "*/*" if plan.download_file else "application/json, text/plain",
+              "User-Agent": f"AI-CoDiscuss-CLI/{VERSION}", **(headers or {})}
+    request = Request(url, data=data, method=plan.method, headers=fields)
+    # A protected instance on this computer is reached only through the handshake; nothing falls back to a plain request.
+    key = entry_key() if urlsplit(url).hostname in LOOPBACK_HOSTS else ""
     deadline = time.monotonic() + REFUSED_RETRY_SECONDS
     while True:
         try:
+            if key:
+                response = open_protected(url, plan.method, data, fields, timeout, key)
+                with response:
+                    return decode_response(response, plan)
             with build_opener(NoRedirect()).open(request, timeout=timeout) as response:
                 return decode_response(response, plan)
         except HTTPError as error:
@@ -1370,6 +1430,10 @@ def run(args, registry):
                 "meta": {**meta, "dry_run": True, "validation": "仅本地参数；未验证房间、身份或服务端状态"}}
     try:
         prepare_creation_access(args, site, plan)
+        # A member started outside the service's environment learns its instance's key file from the task's access file.
+        key_file = load_access(args).get("entry_key_file")
+        if isinstance(key_file, str) and key_file and not os.getenv(ENTRY_KEY_VARIABLE):
+            os.environ[ENTRY_KEY_VARIABLE] = key_file
         headers = access_headers(args, site, plan.path)
         value = send_request(plan, url, timeout, headers) if headers else send_request(plan, url, timeout)
         result = project_result(value, plan, site)

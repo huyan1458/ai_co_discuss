@@ -7,6 +7,7 @@ import { adapter_of, BRANCHABLE_ADAPTERS, branch_session, capabilities_of, clean
 import { api, overlapping_directories, read_rule } from './discussion_runner.mjs';
 import { SegmentLog } from './execution_progress.mjs';
 import { free_task_text, TASK_SUBCOMMANDS, with_expert_prompt } from './expert_prompts.mjs';
+import { entry_access } from './entry_client.mjs';
 import { atomic_json } from './files.mjs';
 import { image_settings } from './image_service.mjs';
 import { outside_directory, room_directories } from './project_files.mjs';
@@ -147,7 +148,7 @@ export function free_task_files(config, member, execution, binding, { session = 
   const profile = effective_profile(config.participants[member.name], member.name, workflow);
   // The host sees the workflow only while its members are here: sending them away ends it.
   const host_workflow = member.role === 'host' && workflow && !workflow.error && workflow_in_use(workflow, room_members) ? workflow : null;
-  atomic_json(access_path, { site: config.site, room: config.room, member: member.name, token: config.members[member.name].token,
+  atomic_json(access_path, { ...entry_access(), site: config.site, room: config.room, member: member.name, token: config.members[member.name].token,
     session_id: binding.session_id || '', execution_id: execution.id });
   const adapter = adapter_of(profile.adapter);
   const extra_directories = member_extra_directories(config, profile);
@@ -243,7 +244,7 @@ export function chat_task_files(config, member, chat, binding) {
   mkdirSync(draft_directory, { recursive: true });
   const access_path = join(config.directory, `${id}.access.json`);
   const profile = effective_profile(config.participants[member.name], member.name, null);
-  atomic_json(access_path, { site: config.site, room: config.room, member: member.name, token: config.members[member.name].token,
+  atomic_json(access_path, { ...entry_access(), site: config.site, room: config.room, member: member.name, token: config.members[member.name].token,
     session_id: binding.session_id || '' });
   return { id, participant: member.name, directory: config.directory, draft_directory, extra_directories: member_extra_directories(config, profile),
     skill_directories: [join(config.project, '.agents', 'skills')], access_path, prompt: `${CHAT_PREAMBLE}\n\n${chat.text}`, inbox: false, profile };
@@ -291,6 +292,8 @@ export class FreeRoomRunner {
     this.on_decided = () => {};
     // Set by the service when it can reach the owner's Weixin: { ready(), sent(key), send(notice) }.
     this.notifier = null;
+    // Set by the service of a hosted account's instance: told of every execution this runner judged failed.
+    this.on_failed = null;
     // Routed requests whose decision is still pending: their host waits, so one pick replaces the host's start.
     this.routing = new Set();
     this.children = new Set();
@@ -1215,8 +1218,13 @@ export class FreeRoomRunner {
     this.not_started.delete(execution_id);
     this.not_retryable.delete(execution_id);
     await this.report_segments(execution_id, true);
+    let recorded = true;
     try { await api(this.config, `/executions/${execution_id}`, { action: 'fail', reason }); }
-    catch (error) { if (!/HTTP 409/.test(error.message)) throw error; }
+    catch (error) { if (!/HTTP 409/.test(error.message)) throw error; recorded = false; }
+    if (recorded && this.on_failed) {
+      try { this.on_failed({ member: name, execution_id, reason, room: this.config.room, title: this.room_title || '' }); }
+      catch (error) { this.log(`失败通知未记录：${error.message}`); }
+    }
     this.save(name, { status: 'idle', error: reason });
     this.stop_member(name);
     this.forget_owner(execution_id);

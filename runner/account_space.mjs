@@ -11,6 +11,8 @@ import { existsSync, mkdirSync, readdirSync, readFileSync, realpathSync } from '
 import { isAbsolute, join, relative, resolve } from 'node:path';
 
 const SETTINGS_FILE = 'local-settings.json';
+// A hosted account's instance writes the failures its runner judged here, one JSON line each; the owner's panel relays them.
+export const OPERATOR_EVENTS_FILE = 'operator-events.jsonl';
 const PROJECT_NAME_LIMIT = 80;
 const DRAFT_TITLE_LIMIT = 40;
 // Characters Windows refuses in a file name, plus control characters.

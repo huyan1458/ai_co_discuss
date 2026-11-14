@@ -1,5 +1,5 @@
 <script setup>
-import { computed, inject, reactive, ref, watch } from "vue";
+import { computed, inject, onMounted, reactive, ref, watch } from "vue";
 import DeviceSettings from "./DeviceSettings.vue";
 
 const { view, bridge } = inject("discussion");
@@ -14,6 +14,12 @@ const display_name = ref("");
 const avatar_input = ref(null);
 const name_changed = computed(() => display_name.value.trim() !== (profile.value?.username || ""));
 const register_blocked = computed(() => state_key.value === "register" && !account.value.setup_available);
+// A hosted account's page opened through the account entry signs out there; opened at the instance itself (the computer
+// owner's direct link) there is no entry sign-in to end, so the section is not shown.
+const via_entry = ref(false);
+onMounted(async () => {
+  try { via_entry.value = (await fetch("/_entry/session", { credentials: "same-origin" })).ok; } catch { via_entry.value = false; }
+});
 
 watch(() => profile.value?.username, (value) => { display_name.value = value || ""; }, { immediate: true });
 watch(state_key, () => { Object.assign(auth_form, { password: "", confirm: "", setup_key: "" }); });
@@ -138,7 +144,14 @@ async function save_password() {
         <UFormField label="显示名称" description="即用户名，对所有访客可见"><div class="account-name-row"><UInput v-model="display_name" autocomplete="username" :maxlength="30" required class="w-full" aria-label="显示名称" /><UButton type="submit" label="保存名称" color="neutral" variant="soft" :loading="busy === 'name'" :disabled="Boolean(busy) || !name_changed || !display_name.trim()" /></div></UFormField>
       </form>
 
-      <DeviceSettings />
+      <!-- A hosted account signs in at the entry, not with paired devices: it signs out there, and its password is reset by
+           whoever opened the account. -->
+      <section v-if="view.launch.projects_restricted && via_entry" class="account-devices" aria-labelledby="account-entry-heading">
+        <h4 id="account-entry-heading">登录</h4>
+        <p class="fine-print">你用开通时拿到的账号名和密码登录。忘记密码或想换密码，请联系为你开通服务的人重设；重设后所有设备上的登录都会失效。</p>
+        <form method="post" action="/_entry/logout"><UButton type="submit" label="退出登录" icon="i-lucide-log-out" color="neutral" variant="outline" size="sm" /></form>
+      </section>
+      <DeviceSettings v-else-if="!view.launch.projects_restricted" />
       <template v-if="!account.local && !account.devices">
         <section class="account-devices" aria-labelledby="account-devices-heading">
           <h4 id="account-devices-heading">网站登录</h4>

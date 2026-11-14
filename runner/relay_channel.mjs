@@ -16,6 +16,7 @@ import { local_settings } from './discussion_setup.mjs';
 import { machine_links, relay_cipher, save_machine_links, relayed_command, ROOM_ACTIONS, run_launch_command, sync_remote_launches, unseal } from './remote_launch.mjs';
 import { claim_relayed_command } from './remote_policy.mjs';
 import { audit, DEVICE_ACTIONS, device_command, open_signed_request } from './device_auth.mjs';
+import { site_fetch } from './entry_client.mjs';
 
 const RELAY_PROTOCOL = 'codiscuss-relay';
 const BRIDGE_TOKEN_BYTES = 32;
@@ -73,7 +74,7 @@ async function seal_compressed(key, value, label) {
  * Read or write one room route on the local website as this computer's bridge. Only room, folder and revision routes
  * of the local website itself are reachable; the device cannot name another address. Binary content comes back as base64.
  */
-export async function room_api(home, site, payload, { fetcher = fetch, device } = {}) {
+export async function room_api(home, site, payload, { fetcher = site_fetch, device } = {}) {
   const { method = 'GET', path, body, token, offset = 0, etag } = payload || {};
   if (!['GET', 'POST'].includes(method) || typeof path !== 'string' || !ROOM_API_PATH.test(path) || path.includes('..')
       || !Number.isSafeInteger(offset) || offset < 0) {
@@ -110,7 +111,7 @@ function bridge_headers(home, site) {
  * Collect one part of an attachment upload; once every part has arrived, send the whole file to the local website as
  * the bridge. Parts may be resent; an unfinished upload is dropped after ten minutes.
  */
-export async function room_upload(home, site, payload, { fetcher = fetch, now = Date.now() } = {}) {
+export async function room_upload(home, site, payload, { fetcher = site_fetch, now = Date.now() } = {}) {
   const { id, path, index, total, size, content_type = 'application/octet-stream', data } = payload || {};
   if (typeof id !== 'string' || !/^[A-Za-z0-9_-]{16,80}$/.test(id) || typeof path !== 'string' || !UPLOAD_PATH.test(path)
       || !Number.isSafeInteger(total) || total < 1 || !Number.isSafeInteger(index) || index < 0 || index >= total
@@ -208,7 +209,7 @@ export async function answer_request(home, site, link, frame, { run = run_launch
 async function forward_changes(home, socket, signal) {
   while (!signal.aborted && socket.readyState === WebSocket.OPEN) {
     try {
-      const response = await fetch(`http://127.0.0.1:${local_settings(home).port || 8765}/api/updates`, { signal, headers: { accept: 'text/event-stream' } });
+      const response = await site_fetch(`http://127.0.0.1:${local_settings(home).port || 8765}/api/updates`, { signal, headers: { accept: 'text/event-stream' } });
       if (!response.ok || !response.body) throw new Error(`HTTP ${response.status}`);
       const decoder = new TextDecoder();
       let buffer = '';

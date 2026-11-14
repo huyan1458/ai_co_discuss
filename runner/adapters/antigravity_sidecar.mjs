@@ -3,6 +3,7 @@ import { execFileSync } from 'node:child_process';
 import { existsSync, readFileSync, readdirSync, writeFileSync } from 'node:fs';
 import { join, resolve } from 'node:path';
 import { atomic_json } from '../files.mjs';
+import { site_fetch } from '../entry_client.mjs';
 
 const directory = resolve(process.env.CODISCUSS_IPC_DIRECTORY || process.cwd());
 const agentapi = process.env.ANTIGRAVITY_AGENTAPI_EXE;
@@ -10,10 +11,10 @@ if (!agentapi) throw new Error('此程序必须由 Antigravity App Sidecar 启�
 
 /** Send only while the room still has this execution dispatched with a live lease. */
 async function check_execution(access, event_id) {
-  const response = await fetch(`${access.site}/api/rooms/${access.room}/executions/${event_id}`, {
+  const response = await site_fetch(`${access.site}/api/rooms/${access.room}/executions/${event_id}`, {
     method: 'GET', redirect: 'error', signal: AbortSignal.timeout(10000),
     headers: { 'Content-Type': 'application/json', 'X-Discussion-Token': access.token },
-  });
+  }, { key_file: access.entry_key_file });
   const event = await response.json();
   if (!response.ok || event.status !== 'dispatched') throw new Error('请求已撤销或状态不明，未调用软件');
   if (event.lease_until <= Math.floor(Date.now() / 1000)) throw new Error('执行租约已到期，未调用软件');

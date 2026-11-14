@@ -5,7 +5,7 @@
  * give and the account's page, where its command-line sign-ins and API keys are set.
  */
 import { computed, inject, ref } from "vue";
-import { call } from "./api.js";
+import { call, entry_address } from "./api.js";
 
 const emit = defineEmits(["cancel", "done"]);
 const { state, reload, notify } = inject("panel");
@@ -80,9 +80,10 @@ const ICONS = { pending: "i-lucide-circle", running: "i-lucide-loader", done: "i
         </li>
       </ol>
       <template v-if="finished">
-        <p class="panel-note"><UIcon name="i-lucide-circle-check" style="color: #16a34a" />建好了。把账号名和下面的密码交给对方（密码只显示这一次）；下一步在账号页给它登录命令行、配置 API 密钥。</p>
-        <div class="panel-secret"><span>{{ name.trim() }} · {{ password }}</span>
-          <button type="button" class="panel-icon-button" aria-label="复制账号和密码" @click="copy(`账号 ${name.trim()}，密码 ${password}`)"><UIcon name="i-lucide-copy" /></button></div>
+        <p class="panel-note"><UIcon name="i-lucide-circle-check" style="color: #16a34a" />建好了。把入口地址、账号名和下面的密码交给对方（密码只显示这一次）；下一步在账号页给它登录命令行、配置 API 密钥。</p>
+        <div class="panel-secret"><span>{{ entry_address(state.entry) }} · {{ name.trim() }} · {{ password }}</span>
+          <button type="button" class="panel-icon-button" aria-label="复制地址、账号和密码" @click="copy(`地址 ${entry_address(state.entry)}，账号 ${name.trim()}，密码 ${password}`)"><UIcon name="i-lucide-copy" /></button></div>
+        <p v-if="!state.entry?.public_url" class="panel-note is-amber"><UIcon name="i-lucide-triangle-alert" />还没有设公网地址，这个地址只有这台电脑能打开。在“托管账号”页的“客户入口”填写。</p>
       </template>
     </div>
 

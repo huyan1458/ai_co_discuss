@@ -13,6 +13,7 @@ import { read_api_key } from './discussion_api.mjs';
 import { access_levels, PROJECT_ACCESS, READ_RULE } from './expert_prompts.mjs';
 import { validate_scheduler } from './scheduler.mjs';
 import { bind_room_workflow } from './workflows.mjs';
+import { site_fetch } from './entry_client.mjs';
 
 const POLL_MS = 2000;
 // A room's members work in its main project directory and at most this many extra ones.
@@ -127,7 +128,7 @@ export function check_extra_directories(cwd, directories, { exists = true } = {}
 
 /** Send exactly one bounded website request; never follow redirects with a capability. */
 export async function api(config, tail, body, token = config.token) {
-  const response = await fetch(`${config.site}/api/rooms/${config.room}${tail}`, {
+  const response = await site_fetch(`${config.site}/api/rooms/${config.room}${tail}`, {
     method: body === undefined ? 'GET' : 'POST', redirect: 'error', signal: AbortSignal.timeout(10000),
     headers: { 'Content-Type': 'application/json', 'X-Discussion-Token': token },
     body: body === undefined ? undefined : JSON.stringify(body),

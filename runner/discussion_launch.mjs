@@ -31,6 +31,7 @@ import { acquire_lock, api, check_extra_directories, DiscussionStore, service_dr
 import { FreeRoomRunner, free_task_files } from './free_runner.mjs';
 import { assert_workflow_enabled, bind_room_workflow, delete_workflow, get_workflow, list_workflows, load_room_workflow, parse_workflow_draft, preview_workflow, rename_workflow, save_workflow, set_workflow_disabled, workflow_cards, workflow_directory, WORKFLOW_ID_PATTERN } from './workflows.mjs';
 import { assert_shared_home, CONNECTION_FIELDS, configuration_snapshot, read_registry, registered_identity, register_room, service_home, service_pid, start_service } from './discussion_service.mjs';
+import { site_fetch } from './entry_client.mjs';
 
 // A platform is a type; `Claude-review` is another Claude instance with its own session, model and effort. An ID is
 // English letters, digits and underscores only; a Chinese name is a display label.
@@ -747,7 +748,7 @@ function validate_profile(name, profile, binding = false) {
 
 /** Send one request without following redirects that could disclose the room credential. */
 async function site_request(site, path, token, body, headers = {}) {
-  const response = await fetch(`${site}${path}`, { method: body === undefined ? 'GET' : 'POST',
+  const response = await site_fetch(`${site}${path}`, { method: body === undefined ? 'GET' : 'POST',
     headers: { 'Content-Type': 'application/json', 'X-Discussion-Token': token, ...headers },
     body: body === undefined ? undefined : JSON.stringify(body), redirect: 'error', signal: AbortSignal.timeout(10000) });
   const result = await response.json();
@@ -1580,7 +1581,7 @@ async function save_room_connection(raw) {
   const input = launch_input({ ...raw, entry: 'web' });
   const url = new URL(input.site);
   if (url.protocol !== 'http:' || !['127.0.0.1', 'localhost'].includes(url.hostname)) throw new Error('本场路径修正须通过已启用本机启动的回环网站');
-  const response = await fetch(`${input.site}/api/local/room-config`, { method: 'POST',
+  const response = await site_fetch(`${input.site}/api/local/room-config`, { method: 'POST',
     headers: { 'Content-Type': 'application/json', 'X-CoDiscuss-Local': '1' },
     body: JSON.stringify(input), redirect: 'error', signal: AbortSignal.timeout(15000) });
   const result = await response.json();

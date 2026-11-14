@@ -28,3 +28,9 @@ export function provider_of(providers, base_url) {
   const found = Object.entries(providers).find(([key, provider]) => key !== "OpenAI" && provider.base_url && provider.base_url === base_url);
   return found ? { key: found[0], ...found[1] } : { key: "Custom", label: "自定义地址" };
 }
+
+/** The address a hosted account's person opens: the entry's public address, else its address on this computer. */
+export function entry_address(entry) {
+  if (!entry) return "";
+  return entry.public_url || `http://127.0.0.1:${entry.port}`;
+}
