@@ -13,7 +13,7 @@ import { assert_shared_home, service_home } from './discussion_service.mjs';
 import { SKILLS, install_skills, install_workflows, remove_legacy_skills, shipped_workflows } from './discussion_skills.mjs';
 import { ask, checkbox_prompt, intro, outro, pad, short_path, spinner, step, styled, text_width, tone, tree_prompt } from './discussion_tui.mjs';
 import { launcher_installed } from './launcher.mjs';
-import { configure_hosting, finish_hosting, hosting_requested } from './hosting_setup.mjs';
+import { ask_hosting, configure_hosting, finish_hosting, hosting_requested } from './hosting_setup.mjs';
 export { checkbox_prompt } from './discussion_tui.mjs';
 
 const ROOT = fileURLToPath(new URL('../', import.meta.url));
@@ -52,7 +52,7 @@ install 将当前 npm 包安装为持久命令，再运行 setup；setup 配置�
   --hosting / --no-hosting  在管理面板中显示 / 隐藏托管管理（用户、Windows 用户、命令行登录、API 密钥），选择会记住；
                             Windows 上加 --hosting 时还会设好登录入口（随管理面板启动）、开启登录自启，并检查入口能否打开
   --entry-port PORT         登录入口端口，默认 8780
-  --public-host 域名         外网地址（可选），如 ai.example.com：域名须已托管在 Cloudflare；会安装 cloudflared、
+  --public-host 域名         外网地址（可选），如 codiscuss.example.com；终端里运行 --hosting 而不给时会询问。域名须已托管在 Cloudflare；会安装 cloudflared、
                             在浏览器里授权 Cloudflare、建固定隧道并添加域名记录，隧道由管理面板运行
   --tunnel-name NAME        Cloudflare 隧道名，默认 codiscuss
   --workflows               安装全部随包工作流，已有同名的覆盖为最新版（原来的先备份到服务目录 backups/）；
@@ -453,6 +453,9 @@ async function setup(options) {
   const hosting_setup = hosting_requested(options, choices.hosting);
   let hosting = null;
   if (hosting_setup) {
+    // The outside address is asked here when not given (a terminal run): the domain, the tunnel name, the Cloudflare checks.
+    const show = (title, lines) => styled ? step(title, lines, tone.yellow('▲')) : process.stderr.write(`${[title, ...lines].join('\n')}\n`);
+    await ask_hosting(home, options, { ask, show });
     // No spinner: installing cloudflared and signing in to Cloudflare print and wait for the owner.
     hosting = configure_hosting(home, options, { say: line => process.stderr.write(`${line}\n`) });
     step(hosting.issues.length ? '登录入口已设置，有待处理项' : '登录入口已设置', [...hosting.lines, ...hosting.issues]);

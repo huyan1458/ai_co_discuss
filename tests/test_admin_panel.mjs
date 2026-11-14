@@ -332,3 +332,30 @@ test('setup sets the entry up only when hosting is asked for, and keeps it to th
   // No launcher in a fresh folder: starting with Windows is left for the owner, and said so.
   assert.ok(result.issues.some(issue => issue.includes('登录自启')));
 });
+
+test('setup asks for the outside address in a terminal, asks again after a wrong domain, and never asks with --yes', async () => {
+  const { ask_hosting } = await import('../runner/hosting_setup.mjs');
+  const data = mkdtempSync(join(tmpdir(), 'hosting-ask-'));
+  folders.push(data);
+  const replies = (...answers) => { const asked = []; return { asked, ask: async question => { asked.push(question); return answers.shift() ?? ''; } }; };
+  const shown = [];
+  const show = title => shown.push(title);
+  // A wrong domain is asked again; a blank tunnel name is the default; then the Cloudflare checks wait for Enter.
+  let typed = replies('https://bad', 'Codiscuss.Example.com', '', '');
+  let options = { hosting: true };
+  await ask_hosting(data, options, { ask: typed.ask, show, interactive: true });
+  assert.equal(options['public-host'], 'codiscuss.example.com');
+  assert.equal(options['tunnel-name'], 'codiscuss');
+  assert.equal(typed.asked.length, 4);
+  assert.ok(shown.some(title => title.includes('外网域名无效')));
+  // Blank keeps the entry to this computer.
+  typed = replies('');
+  options = { hosting: true };
+  await ask_hosting(data, options, { ask: typed.ask, show, interactive: true });
+  assert.equal(options['public-host'], undefined);
+  // --yes (the panel's update) and runs without a terminal ask nothing.
+  typed = replies('x.example.com');
+  await ask_hosting(data, { hosting: true, yes: true }, { ask: typed.ask, show, interactive: true });
+  await ask_hosting(data, { hosting: true }, { ask: typed.ask, show, interactive: false });
+  assert.equal(typed.asked.length, 0);
+});
