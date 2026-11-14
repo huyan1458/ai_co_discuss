@@ -113,15 +113,28 @@ function write_os_users(data, users) {
 
 const quote = text => `'${String(text).replaceAll("'", "''")}'`;
 
+let elevated_already = null;
+
+/**
+ * Whether this process already runs with administrator rights (an elevated terminal, or an administrator's SSH session,
+ * which Windows gives the full token): an elevated script then runs directly, with no prompt nobody could answer.
+ */
+export function running_elevated() {
+  if (elevated_already === null) elevated_already = process.platform === 'win32' && spawnSync('net', ['session'], { stdio: 'ignore', windowsHide: true }).status === 0;
+  return elevated_already;
+}
+
 /**
  * Run a PowerShell script and return what it printed.
  *
  * Args:
  *   script: The script text; written to a file with a byte-order mark, since Windows PowerShell 5.1 reads one without it
  *     in the ANSI code page.
- *   elevated: Run through a UAC prompt; output then comes back through a file.
+ *   elevated: Run through a UAC prompt (directly when this process is already elevated); output then comes back through
+ *     a file.
  */
 export function run_powershell(script, { elevated = false, timeout = DEFAULT_TIMEOUT_MS } = {}) {
+  if (elevated && running_elevated()) elevated = false;
   mkdirSync(OWNER_JOB_ROOT, { recursive: true });
   const job = join(OWNER_JOB_ROOT, `owner-${process.pid}-${randomBytes(6).toString('hex')}`);
   mkdirSync(job);

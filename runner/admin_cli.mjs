@@ -3,8 +3,10 @@
  * running panel's own interface, so a command does exactly what the same click does.
  *
  * It opens the panel the way the taskbar icon does, with the key in the owner's service directory
- * (`admin-panel.json`, readable by the owner only), so only the computer's owner can use it. Elevation prompts and
- * browser windows the panel opens appear in the owner's desktop session, not in this terminal.
+ * (`admin-panel.json`, readable by the owner only), so only the computer's owner can use it. Browser windows the panel
+ * opens appear in the owner's desktop session, not in this terminal. Steps that need administrator rights run in this
+ * command when it already has them (an elevated terminal, an administrator's SSH session), through the panel's own
+ * operations; otherwise the panel asks on the desktop.
  *
  * Starting, stopping, restarting and updating work without the panel running: `start` launches everything in the owner's
  * desktop session (from an SSH session, through a one-time scheduled task that runs there), so the taskbar icon appears
@@ -20,14 +22,18 @@ import { data_home, entry_settings, entry_status, stop_entry } from '../gateway/
 import { local_status } from './discussion_local.mjs';
 import { stop_tunnel } from './hosting_tunnel.mjs';
 import { launcher_path } from './launcher.mjs';
+import { running_elevated } from './os_users.mjs';
 
 const STATE_FILE = 'admin-panel.json';
 const OWNER = 'owner';
+// What needs administrator rights (creating or removing an account's Windows user, which registers its instance task).
+const ELEVATED_PATHS = /^accounts\/[^/]+\/os-user(\/remove)?$/;
 const LOGIN_WAIT_MS = 60_000, UPDATE_WAIT_MS = 10 * 60_000, START_WAIT_MS = 90_000, POLL_MS = 1500;
 const RUNNER = dirname(fileURLToPath(import.meta.url));
 const DESKTOP_TASK = 'CoDiscuss start (one time)';
 
-export const HELP = `用法：codiscuss admin <命令> [参数]（与管理面板的操作一一对应，需管理面板正在运行）
+export const HELP = `用法：codiscuss admin <命令> [参数]（与管理面板的操作一一对应；除启动与退出外，需管理面板正在运行）
+需要管理员权限的步骤（建或删 Windows 用户），在管理员终端或管理员的 SSH 会话里直接执行；否则在电脑桌面上弹出确认。
 
 启动与退出（不需要面板在运行）
   start                                    启动共议：服务、管理面板与任务栏图标、登录入口与隧道（在桌面会话里启动）
@@ -36,7 +42,7 @@ export const HELP = `用法：codiscuss admin <命令> [参数]（与管理面�
   update [check]                           检查更新；不带 check 时安装最新版（面板未运行时先启动）并等待每一步结果
 
 本机
-  status                                   概览：服务、版本、开机自启、登录入口、托管账号
+  status [--full]                          概览：服务、版本、开机自启、登录入口、托管账号；--full 输出面板的完整状态
   service start|stop|restart               只启停共议服务（网站与讨论服务）
   autostart on|off                         登录 Windows 时自动启动
 
@@ -45,16 +51,20 @@ export const HELP = `用法：codiscuss admin <命令> [参数]（与管理面�
   entry mode local|relay|tunnel            访问方式：仅这台电脑 | 线上中转 | 自有域名
   entry join <接入码>                       用接入码接入线上站点并切换到线上中转
   entry connect <站点> <绑定令牌>           只绑定线上站点（管理员远程用），不改访问方式
+  entry code [--config <wrangler.jsonc>] [--site <地址>]   在部署线上站点的电脑上生成接入码（不填用上次的）
+  entry tunnel <域名> [隧道名]              设置自有域名（Cloudflare 隧道），输出授权链接；域名须已托管在 Cloudflare
+  entry tunnel status                      查看自有域名设置的进度
   runtime sync                             同步隔离账号的程序副本
 
 托管账号
   account list
-  account add <名> [--no-isolate] [--no-start]   创建、隔离、初始化 AI 环境、开启入口保护、启动；输出一次性密码
+  account add <名> [--no-isolate] [--no-start]   创建、隔离、初始化 AI 环境、开启入口保护、启动；输出一次性密码。
+                                           中途失败时解决后重新执行同一命令，从缺少的步骤接着做
   account start|stop|disable|enable|remove|password <名>
   account isolate|unisolate|protect|unprotect <名>
 
 命令行登录（目标 owner 为管理员自己，否则为托管账号名）
-  login status <目标>
+  login status <目标>                       各程序的登录状态，以及每个程序可用的登录方式
   login set <目标> <claude|codex> <方式> --set 字段=值 ...   如 login set alice claude setup_token --set token=sk-ant-oat01-…
   login start <目标> <程序> <方式>          浏览器登录：输出链接，之后用 login submit 提交授权码或回调地址
   login submit <作业> <文本>  /  login progress <作业>  /  login cancel <作业>
@@ -97,24 +107,35 @@ const wait = ms => new Promise(done => setTimeout(done, ms));
 const need = (value, usage) => { if (!value) throw new Error(`缺少参数：${usage}`); return value; };
 const is_owner = target => target === OWNER;
 
-/** Create an account the way the panel's wizard does, step by step; the password is reported even if a later step fails. */
+/**
+ * Create an account the way the panel's wizard does, step by step. Run again for an account that exists, it goes on
+ * from the first step missing; the password is reported once created, even if a later step fails.
+ */
 async function add_account(call, name, { isolate, start }) {
   const steps = [];
-  const created = await call('accounts', { name });
-  steps.push('已创建账号与文件夹');
+  const existing = (await call('state')).accounts?.find(item => item.name === name);
+  let password = '';
+  if (existing) steps.push('账号已存在，从缺少的步骤接着做（密码不变；需要新密码用 account password）');
+  else { password = (await call('accounts', { name })).password; steps.push('已创建账号与文件夹'); }
+  const report = extra => ({ name, ...(password ? { password } : {}), steps, ...extra });
   try {
-    if (isolate) {
+    if (isolate && !existing?.os_user) {
       await call(`accounts/${name}/os-user`, {});
-      steps.push('已创建独立的 Windows 用户（电脑上的管理员确认已通过）');
+      steps.push(running_elevated() ? '已创建独立的 Windows 用户' : '已创建独立的 Windows 用户（电脑上的管理员确认已通过）');
+    }
+    if (isolate) {
       const state = await call('state');
       if (!state.clis?.app || !state.clis?.python) { await call('clis/install', {}); steps.push('已安装隔离账号的程序副本'); }
     }
     await call(`accounts/${name}/env/init`, {});
     steps.push(isolate ? '已初始化 AI 环境' : '已安装随包工作流');
-    if (process.platform === 'win32') { await call(`accounts/${name}/protect`, { on: true }); steps.push('已开启入口保护'); }
-    if (start) { await call(`accounts/${name}/start`, {}); steps.push('已启动实例'); }
-  } catch (error) { return { name, password: created.password, steps, failed: error.message }; }
-  return { name, password: created.password, steps };
+    if (process.platform === 'win32' && !existing?.protected) { await call(`accounts/${name}/protect`, { on: true }); steps.push('已开启入口保护'); }
+    if (start && !existing?.running) { await call(`accounts/${name}/start`, {}); steps.push('已启动实例'); }
+  } catch (error) {
+    const rights = /管理员权限/.test(error.message) ? '在管理员终端或管理员的 SSH 会话里执行，或在电脑桌面上确认提权，' : '';
+    return report({ failed: error.message, next: `${rights}解决后重新执行 codiscuss admin account add ${name}，会从这一步接着做` });
+  }
+  return report({});
 }
 
 const ACCOUNT_ACTIONS = { start: 'start', stop: 'stop', disable: 'disable', enable: 'enable', remove: 'remove', password: 'password',
@@ -142,7 +163,10 @@ async function start_login(call, target, cli, method) {
 
 async function login_command(call, [action, ...rest], values) {
   const target = (name) => (is_owner(name) ? '_' : need(name, '目标'));
-  if (action === 'status') return call(`logins/${target(rest[0])}`);
+  if (action === 'status') {
+    const [status, state] = await Promise.all([call(`logins/${target(rest[0])}`), call('state')]);
+    return { status, methods: login_methods(state.login_methods) };
+  }
   if (action === 'set') {
     const [who, cli, method] = rest;
     const fields = Object.fromEntries((values.set || []).map(pair => { const at = pair.indexOf('='); return [pair.slice(0, at), pair.slice(at + 1)]; }));
@@ -153,6 +177,13 @@ async function login_command(call, [action, ...rest], values) {
   if (action === 'progress') return call(`login-jobs/${need(rest[0], '作业')}`);
   if (action === 'cancel') return call(`login-jobs/${need(rest[0], '作业')}/cancel`, {});
   throw new Error(HELP);
+}
+
+/** The ways each program signs in, as `login set` (filled-in fields) or `login start` (in a browser) takes them. */
+function login_methods(methods = {}) {
+  return Object.fromEntries(Object.entries(methods).map(([cli, list]) => [cli, list.map(item => (item.interactive
+    ? `${item.key}：${item.label}（login start <目标> ${cli} ${item.key}）`
+    : `${item.key}：${item.label}（login set <目标> ${cli} ${item.key} ${(item.fields || []).map(field => `--set ${field}=…`).join(' ')}）`))]));
 }
 
 async function key_command(call, [action, who, ref], values) {
@@ -295,12 +326,50 @@ async function update(call, data) {
   throw new Error('更新超过 10 分钟没有完成：之后用 codiscuss admin status 查看版本');
 }
 
-async function entry_command(call, [action, first, second]) {
+async function entry_command(call, [action, first, second], values) {
   if (action === 'start' || action === 'stop') return call(`entry/${action}`, {});
   if (action === 'mode') return call('entry/mode', { mode: need(first, 'local|relay|tunnel') });
   if (action === 'join') return call('relay/join', { code: need(first, '接入码') });
   if (action === 'connect') return call('site/connect', { site: need(first, '站点'), setup_key: need(second, '绑定令牌') });
+  if (action === 'code') return call('site/code', { config: values.config || '', site: values.site || '' });
+  if (action === 'tunnel') return first === 'status' ? call('tunnel/setup') : setup_tunnel(call, need(first, '域名'), second || '');
   throw new Error(HELP);
+}
+
+/** Start setting up the owner's domain and wait for the Cloudflare authorization link (or the end). */
+async function setup_tunnel(call, host, name) {
+  await call('tunnel/setup', { host, name });
+  for (let waited = 0; waited < LOGIN_WAIT_MS; waited += POLL_MS) {
+    await wait(POLL_MS);
+    const job = await call('tunnel/setup');
+    if (job.url) return { ...job, note: '用任一浏览器打开 url，登录 Cloudflare 并选择这个域名授权；之后用 entry tunnel status 查看进度' };
+    if (job.status !== 'running') return job;
+  }
+  return { ...(await call('tunnel/setup')), note: '仍在进行，用 entry tunnel status 查看进度' };
+}
+
+/** The overview at a glance: what runs, where users sign in, and each account in one line. */
+function summary(state) {
+  const { entry, service } = state;
+  const tunnel = entry?.tunnel ? (entry.tunnel.connected ? '已连接' : entry.tunnel.running ? '连接中' : '未运行') : undefined;
+  return { hosting: state.hosting, version: state.version, autostart: state.autostart,
+    service: { running: service.running, url: service.url, version: service.version, error: service.error || undefined },
+    ...(state.hosting ? {
+      entry: entry && { running: entry.running, mode: entry.mode, address: entry.address || `http://127.0.0.1:${entry.port}`, tunnel, problem: entry.relay?.problem || undefined },
+      runtime: state.clis,
+      accounts: state.accounts.map(item => ({ name: item.name, isolated: Boolean(item.os_user), protected: item.protected, running: item.running, disabled: item.disabled })),
+    } : {}) };
+}
+
+/**
+ * The panel's client, with the steps that need administrator rights done in this command when it already has them: an
+ * administrator's SSH session has no desktop to answer the panel's prompt.
+ */
+async function with_elevation(call, data) {
+  if (!running_elevated()) return call;
+  const { create_panel } = await import('./admin_panel.mjs');
+  const { api } = create_panel({ data, key: '', port: 0 });
+  return (path, body) => (body !== undefined && ELEVATED_PATHS.test(path) ? api('POST', `/api/${path}`, body) : call(path, body));
 }
 
 /** Run one `codiscuss admin` command and print its result as JSON. */
@@ -308,6 +377,7 @@ export async function admin_cli(args, { client = panel_client, print = text => p
   const { positionals, values } = parseArgs({ args, allowPositionals: true, options: {
     data: { type: 'string' }, help: { type: 'boolean', short: 'h' }, 'no-isolate': { type: 'boolean' }, 'no-start': { type: 'boolean' },
     set: { type: 'string', multiple: true }, 'base-url': { type: 'string' }, key: { type: 'string' }, file: { type: 'string' }, group: { type: 'string' },
+    full: { type: 'boolean' }, config: { type: 'string' }, site: { type: 'string' },
   } });
   const [command, ...rest] = positionals;
   if (!command || values.help || command === 'help') return print(HELP);
@@ -324,13 +394,16 @@ export async function admin_cli(args, { client = panel_client, print = text => p
     print(`${JSON.stringify(result, null, 2)}\n`);
     return result;
   }
-  const call = await client(data);
+  const call = await with_elevation(await client(data), data);
   const commands = {
-    status: async () => { const { login_methods: _methods, providers: _providers, ...state } = await call('state'); return state; },
+    status: async () => {
+      const { login_methods: _methods, providers: _providers, ...state } = await call('state');
+      return values.full ? state : summary(state);
+    },
     service: () => call(`service/${need(rest[0], 'start|stop|restart')}`, {}),
     autostart: () => call('autostart', { on: need(rest[0], 'on|off') === 'on' }),
     update: () => (rest[0] === 'check' ? call('update/check') : update(call, data)),
-    entry: () => entry_command(call, rest),
+    entry: () => entry_command(call, rest, values),
     runtime: () => (rest[0] === 'sync' ? call('clis/install', {}) : Promise.reject(new Error(HELP))),
     account: () => account_command(call, rest, values),
     login: () => login_command(call, rest, values),
@@ -343,5 +416,7 @@ export async function admin_cli(args, { client = panel_client, print = text => p
   if (!commands[command]) throw new Error(HELP);
   const result = await commands[command]();
   print(`${JSON.stringify(result, null, 2)}\n`);
+  // A step that failed part way (account add) is reported in the result, and in the exit code for scripts.
+  if (result?.failed) process.exitCode = 1;
   return result;
 }

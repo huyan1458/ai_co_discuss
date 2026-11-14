@@ -44,7 +44,7 @@ const VERSION = JSON.parse(readFileSync(join(ROOT, 'package.json'), 'utf8')).ver
 const NPM_PACKAGE = 'ai_co_discuss';
 const LATEST_URL = `https://registry.npmjs.org/${NPM_PACKAGE}/latest`;
 const LATEST_TTL_MS = 60 * 60 * 1000;
-const OUTSIDE_TIMEOUT_MS = 15_000, OUTSIDE_ATTEMPTS = 2;
+const OUTSIDE_TIMEOUT_MS = 8000, OUTSIDE_ATTEMPTS = 2;
 // Node 24 (OpenSSL 3.5) offers a post-quantum key share first, which makes its TLS greeting span several packets; behind
 // a Clash (Mihomo) TUN such connections were reset more than half the time, while curl and browsers got through (seen
 // 2026-11-14). What the panel fetches outside is public (the latest version, a site's entry address, the relay's state),
@@ -102,8 +102,9 @@ function service_overview(data) {
 let latest = { at: 0, version: '' };
 
 /**
- * Fetch an outside address, trying once more when the connection is dropped; a request that stalls to its timeout is not
- * tried again (that would keep the owner waiting). Failing is reported naming the host, not as a problem of the site.
+ * Fetch an outside address, trying once more when it fails: now and then a request to Cloudflare stalls for many seconds
+ * while the next one answers in under two (seen 2026-11-14). Failing is reported naming the host, not as a problem of
+ * the site.
  */
 async function fetch_outside(url, timeout_ms) {
   for (let attempt = 1; ; attempt += 1) {
@@ -111,7 +112,7 @@ async function fetch_outside(url, timeout_ms) {
       return await fetch(url, { signal: AbortSignal.timeout(timeout_ms) });
     } catch (error) {
       const timed_out = error.name === 'TimeoutError';
-      if (!timed_out && attempt < OUTSIDE_ATTEMPTS) continue;
+      if (attempt < OUTSIDE_ATTEMPTS) continue;
       const why = timed_out ? `${timeout_ms / 1000} 秒内没有响应` : `连接被断开（${error.cause?.code || error.message}）`;
       throw new Error(`连不上 ${new URL(url).host}：${why}，请检查这台电脑的网络或代理后重试`);
     }
@@ -741,7 +742,7 @@ export function create_panel({ data, key, port, ops = {}, sessions = new Set() }
     throw new Error('接口不存在');
   }
 
-  return http.createServer(async (request, response) => {
+  const server = http.createServer(async (request, response) => {
     try {
       const url = new URL(request.url, 'http://127.0.0.1');
       // Only a page this browser opened from this address; anything else (another site, a renamed host) is refused.
@@ -780,6 +781,9 @@ export function create_panel({ data, key, port, ops = {}, sessions = new Set() }
       else send_json(response, error.status || 400, { error: error.message });
     }
   });
+  // The same operations without HTTP, for `codiscuss admin` run elevated (the steps that need administrator rights).
+  server.api = api;
+  return server;
 }
 
 /** The account entry as the hosting page shows it: whether it runs, its loopback port and the address customers open. */
