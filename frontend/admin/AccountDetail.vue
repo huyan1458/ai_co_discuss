@@ -1,19 +1,21 @@
 <script setup>
 /**
- * One hosted account, in the order the owner needs it: starting and stopping it (title row), the security settings
+ * One hosted account, in the order the owner needs it: starting and stopping it (title row; disable and remove are
+ * also in the account list's "⋯"), the security settings
  * still to do before giving it to someone (isolation, entry protection; one line once both are done), the sign-in details
  * to hand over, its AI environment (command-line sign-ins, skills, workflows, API keys), and at the bottom the rare and
  * risky operations (disable, undo isolation or protection, remove).
  */
-import { computed, inject, ref } from "vue";
+import { computed, inject, ref, watch } from "vue";
 import { call, entry_address } from "./api.js";
 import AccountEnv from "./AccountEnv.vue";
 import AccountKeys from "./AccountKeys.vue";
 import AccountWorkflows from "./AccountWorkflows.vue";
 import LoginCard from "./LoginCard.vue";
 
-const props = defineProps({ name: { type: String, required: true } });
-const emit = defineEmits(["owner"]);
+// request: an operation picked from the account list's "⋯" ({ action, at }), carried out here with the usual confirmation.
+const props = defineProps({ name: { type: String, required: true }, request: { type: Object, default: null } });
+const emit = defineEmits(["owner", "handled"]);
 const { state, reload, notify } = inject("panel");
 const account = computed(() => state.value.accounts.find((item) => item.name === props.name) || null);
 const busy = ref(""), secret = ref(null), confirming = ref(null);
@@ -48,11 +50,12 @@ const CONFIRMS = {
 };
 function ask(action) { confirming.value = { action, ...CONFIRMS[action] }; }
 
-// The title row's "⋯": the account operations also kept at the bottom of the page, reachable without scrolling.
-const more = computed(() => [[
-  account.value?.disabled ? { label: "启用账号", icon: "i-lucide-user-check", onSelect: () => act("enable", "账号已启用") }
-    : { label: "停用账号", icon: "i-lucide-user-x", onSelect: () => ask("disable") },
-], [{ label: "删除账号", icon: "i-lucide-trash-2", color: "error", onSelect: () => ask("remove") }]]);
+watch(() => props.request, (request) => {
+  if (!request) return;
+  emit("handled");
+  if (request.action === "enable") act("enable", "账号已启用");
+  else ask(request.action);
+}, { immediate: true });
 async function confirm() {
   const { action, message } = confirming.value;
   confirming.value = null;
@@ -84,9 +87,6 @@ async function copy(text) {
           <UIcon :name="busy === 'start' ? 'i-lucide-loader' : 'i-lucide-play'" :class="{ 'animate-spin': busy === 'start' }" />启动</button>
         <button v-else type="button" class="panel-button is-plain is-small is-danger" :disabled="Boolean(busy)" @click="act('stop', '实例已停止')">
           <UIcon :name="busy === 'stop' ? 'i-lucide-loader' : 'i-lucide-square'" :class="{ 'animate-spin': busy === 'stop' }" />停止</button>
-        <UDropdownMenu :items="more" :content="{ align: 'end' }">
-          <button type="button" class="panel-icon-button" :disabled="Boolean(busy)" title="更多操作" aria-label="更多操作"><UIcon name="i-lucide-ellipsis" /></button>
-        </UDropdownMenu>
       </span>
     </div>
 

@@ -55,7 +55,7 @@ onMounted(reload);
 </script>
 
 <template>
-  <UApp :locale="zh_cn" :toaster="{ position: 'bottom-right', max: 4 }">
+  <UApp :locale="zh_cn" :scroll-body="false" :toaster="{ position: 'bottom-right', max: 4 }">
     <div class="panel">
       <header class="panel-head">
         <div class="panel-brand"><img class="panel-mark" :src="MARK" alt="" /><h1>共议</h1><small>管理面板</small></div>

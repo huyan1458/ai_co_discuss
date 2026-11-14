@@ -12,8 +12,18 @@ import OwnerDetail from "./OwnerDetail.vue";
 const OWNER = "", NEW = "\u0000new";
 const { state } = inject("panel");
 const chosen = ref(OWNER);
+// An account operation picked from the list's "⋯": the detail page of that account carries it out (with its confirmation).
+const request = ref(null);
 // A removed account falls back to the owner.
 const current = computed(() => (chosen.value === NEW || state.value.accounts.some((item) => item.name === chosen.value) ? chosen.value : OWNER));
+
+/** The list's "⋯" for one account: open that account and hand the operation to its detail page. */
+function menu(account) {
+  const pick = (action) => () => { chosen.value = account.name; request.value = { action, at: Date.now() }; };
+  return [[account.disabled ? { label: "启用账号", icon: "i-lucide-user-check", onSelect: pick("enable") }
+    : { label: "停用账号", icon: "i-lucide-user-x", onSelect: pick("disable") }],
+  [{ label: "删除账号", icon: "i-lucide-trash-2", color: "error", onSelect: pick("remove") }]];
+}
 
 /** What an account still lacks, in the order to fix it. */
 function todo(account) {
@@ -32,11 +42,16 @@ function todo(account) {
       </button>
       <template v-if="state.hosting">
         <div class="accounts-group">托管账号</div>
-        <button v-for="account in state.accounts" :key="account.name" type="button" class="accounts-item" :class="{ 'is-active': current === account.name }" @click="chosen = account.name">
-          <span class="accounts-avatar">{{ account.name.slice(0, 1).toUpperCase() }}<i :class="account.running ? 'is-on' : 'is-off'" :title="account.running ? '运行中' : '已停止'" /></span>
-          <span class="accounts-text"><strong>{{ account.name }}</strong>
-            <small :class="{ 'is-warn': todo(account) || account.disabled }">{{ account.disabled ? "已停用" : todo(account) ? `待处理：${todo(account)}` : "已隔离" }}</small></span>
-        </button>
+        <div v-for="account in state.accounts" :key="account.name" class="accounts-row">
+          <button type="button" class="accounts-item" :class="{ 'is-active': current === account.name }" @click="chosen = account.name">
+            <span class="accounts-avatar">{{ account.name.slice(0, 1).toUpperCase() }}<i :class="account.running ? 'is-on' : 'is-off'" :title="account.running ? '运行中' : '已停止'" /></span>
+            <span class="accounts-text"><strong>{{ account.name }}</strong>
+              <small :class="{ 'is-warn': todo(account) || account.disabled }">{{ account.disabled ? "已停用" : todo(account) ? `待处理：${todo(account)}` : "已隔离" }}</small></span>
+          </button>
+          <UDropdownMenu :items="menu(account)" :content="{ align: 'start', side: 'right' }">
+            <button type="button" class="accounts-more" title="更多操作" aria-label="更多操作"><UIcon name="i-lucide-ellipsis" /></button>
+          </UDropdownMenu>
+        </div>
         <p v-if="!state.accounts.length" class="accounts-empty">暂无托管账号。创建后，对方可通过登录入口使用本机的 AI。</p>
         <button type="button" class="accounts-item is-new" :class="{ 'is-active': current === NEW }" @click="chosen = NEW">
           <span class="accounts-avatar"><UIcon name="i-lucide-plus" /></span><span class="accounts-text"><strong>新建账号</strong></span>
@@ -46,7 +61,7 @@ function todo(account) {
 
     <div class="accounts-main">
       <NewAccount v-if="current === NEW" @cancel="chosen = OWNER" @done="(name) => (chosen = name)" />
-      <AccountDetail v-else-if="current" :key="current" :name="current" @owner="chosen = OWNER" />
+      <AccountDetail v-else-if="current" :key="current" :name="current" :request="request" @handled="request = null" @owner="chosen = OWNER" />
       <OwnerDetail v-else />
     </div>
   </div>
@@ -71,6 +86,12 @@ function todo(account) {
 .accounts-text strong { overflow: hidden; font-size: 14px; font-weight: 600; white-space: nowrap; text-overflow: ellipsis; }
 .accounts-text small { overflow: hidden; color: var(--panel-faint); font-size: 12px; white-space: nowrap; text-overflow: ellipsis; }
 .accounts-text small.is-warn { color: var(--panel-amber); }
+.accounts-row { position: relative; }
+.accounts-row .accounts-item { padding-right: 36px; }
+.accounts-more { position: absolute; top: 50%; right: 6px; display: grid; place-items: center; width: 26px; height: 26px; border-radius: 8px; color: var(--panel-faint);
+  opacity: 0; transform: translateY(-50%); transition: opacity .15s, background-color .15s; }
+.accounts-row:hover .accounts-more, .accounts-more:focus-visible, .accounts-more[data-state="open"], .accounts-row:has(.is-active) .accounts-more { opacity: 1; }
+.accounts-more:hover, .accounts-more[data-state="open"] { background: rgba(0, 0, 0, .06); color: var(--panel-text); }
 .accounts-item.is-new { color: var(--panel-blue); }
 .accounts-item.is-new .accounts-avatar { border-style: dashed; color: var(--panel-blue); }
 .accounts-empty { margin: 4px 10px; color: var(--panel-faint); font-size: 12px; line-height: 1.6; }

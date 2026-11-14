@@ -21,7 +21,8 @@
 }
 html, body { margin: 0; background: #fff; color: var(--panel-text); font-family: -apple-system, "Segoe UI", "PingFang SC", "Microsoft YaHei", system-ui, sans-serif; }
 body { min-height: 100vh; }
-/* Keep room for the scrollbar on every page, so the centred layout does not shift sideways when a long page shows it. */
+/* Keep room for the scrollbar on every page, so the centred layout does not shift sideways when a long page shows it.
+   Dialogs and menus lock scrolling without padding the body (UApp scroll-body false): the gutter already holds that room. */
 html { scrollbar-gutter: stable; }
 
 /* Fixed geometry on every page: the header keeps its height and stays at the top, sections share one title row height,
