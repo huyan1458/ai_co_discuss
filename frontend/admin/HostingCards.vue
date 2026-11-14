@@ -17,11 +17,13 @@ const runtime_ready = computed(() => PARTS.every(([key]) => runtime.value[key]))
 const runtime_stale = computed(() => runtime.value.app && runtime.value.app_version && runtime.value.app_version !== state.value.version);
 const entry = computed(() => state.value.entry || { running: false, port: 0, public_url: "", mode: "local", relay: {} });
 const entry_busy = ref(""), tunnel_open = ref(false), relay_open = ref(false);
+// Short names on the switch; what each means is the small line under it, for the one chosen.
 const MODES = [
-  { key: "local", label: "仅本机" },
-  { key: "relay", label: "线上中转（免域名）" },
-  { key: "tunnel", label: "自有域名（Cloudflare 隧道）" },
+  { key: "local", label: "仅本机", note: "只有这台电脑能打开" },
+  { key: "relay", label: "线上中转", note: "不需要域名，经共议线上站点中转到这台电脑" },
+  { key: "tunnel", label: "自有域名", note: "经 Cloudflare 隧道，把你托管在 Cloudflare 的域名转到这台电脑" },
 ];
+const mode_note = computed(() => MODES.find((item) => item.key === entry.value.mode)?.note || "");
 // The tunnel as cloudflared reports it: connected to Cloudflare, running but not (yet) connected, or not running.
 const tunnel_state = computed(() => {
   const tunnel = entry.value.tunnel;
@@ -96,7 +98,8 @@ async function install() {
           :class="{ 'is-active': entry.mode === item.key }" :disabled="Boolean(entry_busy)" @click="choose(item.key)">{{ item.label }}</button>
       </div>
     </div>
-    <div class="panel-row-extra entry-detail">
+    <small class="entry-note">{{ mode_note }}</small>
+    <div v-if="entry.mode !== 'local'" class="panel-row-extra entry-detail">
       <template v-if="entry.mode === 'relay'">
         <span class="entry-value">{{ entry.relay?.link }}
           <span class="panel-tag" :class="relay_state.tag" :title="relay_state.hint">{{ relay_state.label }}</span>
@@ -110,7 +113,6 @@ async function install() {
           <small v-if="!entry.tunnel?.connected" class="entry-tunnel-error">{{ tunnel_state.hint }}</small></span>
         <button type="button" class="panel-button is-plain is-small" @click="tunnel_open = true"><UIcon name="i-lucide-pencil" />修改</button>
       </template>
-      <span v-else class="entry-value is-empty">只有这台电脑能打开；要让使用者从外网登录，选“线上中转”（不需要域名）或“自有域名”</span>
     </div>
     <TunnelDialog v-model:open="tunnel_open" />
     <RelayDialog v-model:open="relay_open" />
@@ -140,6 +142,7 @@ async function install() {
 .entry-mode:hover:not(:disabled) { color: var(--panel-text); }
 .entry-mode.is-active { background: #fff; color: var(--panel-text); box-shadow: 0 1px 3px #0000001a; }
 .entry-detail { min-height: 34px; padding-left: 116px; }
+.entry-note { display: block; margin: -10px 0 12px 116px; color: var(--panel-faint); font-size: 12px; }
 .entry-value { flex: 1; min-width: 0; overflow: hidden; font-size: 13px; white-space: nowrap; text-overflow: ellipsis; }
 .entry-value.is-empty { color: var(--panel-faint); white-space: normal; }
 .entry-value .panel-tag { margin-left: 8px; vertical-align: middle; }
