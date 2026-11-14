@@ -66,60 +66,56 @@ watch(refreshed, () => check(true));
 
 <template>
   <section>
-    <h3 class="panel-section-title"><UIcon name="i-lucide-server" />本机服务</h3>
-    <article class="panel-card">
-      <div class="panel-tile"><UIcon name="i-lucide-monitor" /></div>
-      <div class="panel-main">
-        <div class="panel-title">共议
-          <span class="panel-tag" :class="service.running ? 'is-green' : service.website ? 'is-amber' : 'is-gray'">
-            <UIcon :name="service.running ? 'i-lucide-check' : 'i-lucide-minus'" />{{ service.running ? "运行中" : service.website ? "讨论服务未就绪" : "已停止" }}</span>
-          <span v-if="service.version" class="panel-tag is-gray">v{{ service.version }}</span>
-        </div>
-        <a v-if="service.running && service.url" class="panel-link" :href="service.url" target="_blank" rel="noopener">{{ service.url }}</a>
-        <span class="panel-sub">{{ service.error || `数据目录 ${service.home}` }}</span>
-      </div>
-      <div class="panel-side">
-        <button v-if="!service.website" type="button" class="panel-icon-button is-go" :class="{ 'is-spinning': busy === 'start' }" :disabled="Boolean(busy)" title="启动" aria-label="启动" @click="run('start', '共议服务已启动')"><UIcon :name="busy === 'start' ? 'i-lucide-loader' : 'i-lucide-play'" /></button>
-        <template v-else>
-          <button type="button" class="panel-icon-button" :class="{ 'is-spinning': busy === 'restart' }" :disabled="Boolean(busy)" title="重启（进行中的执行会中断，随后在原会话里续跑）" aria-label="重启" @click="run('restart', '共议服务已重启')"><UIcon name="i-lucide-rotate-cw" /></button>
-          <button type="button" class="panel-icon-button is-stop" :disabled="Boolean(busy)" title="停止（本机网站与讨论服务都会停止）" aria-label="停止" @click="run('stop', '共议服务已停止')"><UIcon :name="busy === 'stop' ? 'i-lucide-loader' : 'i-lucide-square'" :class="{ 'animate-spin': busy === 'stop' }" /></button>
-        </template>
-      </div>
-    </article>
-
-    <h3 class="panel-section-title"><UIcon name="i-lucide-download" />更新</h3>
-    <article class="panel-card">
-      <div class="panel-tile"><UIcon name="i-lucide-package" /></div>
-      <div class="panel-main">
-        <div class="panel-title">
-          <template v-if="update?.available">有新版本 v{{ update.latest }}<span class="panel-tag is-blue"><UIcon name="i-lucide-sparkles" />可更新</span></template>
-          <template v-else-if="update?.latest">已是最新版本<span class="panel-tag is-green"><UIcon name="i-lucide-check" />v{{ update.current }}</span></template>
-          <template v-else>版本检查</template>
-        </div>
-        <span class="panel-sub">{{ update?.error ? `检查失败：${update.error}` : update?.available ? `当前 v${update.current}。更新会重启本机服务，进行中的执行会中断，随后在原会话里续跑` : checking ? "正在检查…" : "每小时最多查询一次 npm 上发布的版本" }}</span>
-      </div>
-      <div class="panel-side">
-        <button type="button" class="panel-icon-button" :class="{ 'is-spinning': checking }" :disabled="checking || Boolean(busy)" title="立即检查" aria-label="立即检查" @click="check(true)"><UIcon name="i-lucide-refresh-cw" /></button>
-        <button v-if="update?.available" type="button" class="panel-button is-primary is-small" :disabled="Boolean(busy)" @click="confirming = true">
-          <UIcon :name="busy === 'update' ? 'i-lucide-loader' : 'i-lucide-download'" :class="{ 'animate-spin': busy === 'update' }" />{{ busy === "update" ? "正在更新…" : "更新" }}</button>
-      </div>
-    </article>
-
-    <template v-if="state.platform === 'win32'">
-      <h3 class="panel-section-title"><UIcon name="i-lucide-power" />启动</h3>
-      <article class="panel-card">
-        <div class="panel-tile"><UIcon name="i-lucide-log-in" /></div>
+    <h3 class="panel-section-title"><UIcon name="i-lucide-monitor" />本机</h3>
+    <div class="panel-rows">
+      <div class="panel-row">
+        <div class="panel-tile"><UIcon name="i-lucide-server" /></div>
         <div class="panel-main">
-          <div class="panel-title">登录 Windows 时自动启动
-            <span class="panel-tag" :class="state.autostart ? 'is-green' : 'is-gray'">{{ state.autostart ? "已开启" : "未开启" }}</span></div>
-          <span class="panel-sub">{{ state.launcher ? "在后台启动网站、讨论服务与任务栏图标，不打开浏览器" : "需要先生成“共议”程序：在 codiscuss setup 里勾选创建桌面快捷方式" }}</span>
+          <div class="panel-title">共议服务
+            <span class="panel-tag" :class="service.running ? 'is-green' : service.website ? 'is-amber' : 'is-gray'">
+              <UIcon :name="service.running ? 'i-lucide-check' : 'i-lucide-minus'" />{{ service.running ? "运行中" : service.website ? "讨论服务未就绪" : "已停止" }}</span></div>
+          <span class="panel-sub">{{ service.error || (service.running ? `本机网站与讨论服务 · 数据目录 ${service.home}` : "启动后才能在房间里唤醒本机的 AI 成员") }}</span>
         </div>
         <div class="panel-side">
-          <button type="button" class="panel-button is-outline is-small" :disabled="Boolean(busy) || (!state.launcher && !state.autostart)" @click="toggle_autostart">
-            <UIcon v-if="busy === 'autostart'" name="i-lucide-loader" class="animate-spin" />{{ state.autostart ? "关闭" : "开启" }}</button>
+          <template v-if="service.website || service.running">
+            <a v-if="service.url" class="panel-button is-outline is-small" :href="service.url" target="_blank" rel="noopener"><UIcon name="i-lucide-external-link" />打开网站</a>
+            <button type="button" class="panel-button is-plain is-small" :disabled="Boolean(busy)" title="进行中的执行会中断，随后在原会话里续跑" @click="run('restart', '共议服务已重启')">
+              <UIcon :name="busy === 'restart' ? 'i-lucide-loader' : 'i-lucide-rotate-cw'" :class="{ 'animate-spin': busy === 'restart' }" />重启</button>
+            <button type="button" class="panel-button is-plain is-small is-danger" :disabled="Boolean(busy)" title="本机网站与讨论服务都会停止" @click="run('stop', '共议服务已停止')">
+              <UIcon :name="busy === 'stop' ? 'i-lucide-loader' : 'i-lucide-square'" :class="{ 'animate-spin': busy === 'stop' }" />停止</button>
+          </template>
+          <button v-else type="button" class="panel-button is-primary is-small" :disabled="Boolean(busy)" @click="run('start', '共议服务已启动')">
+            <UIcon :name="busy === 'start' ? 'i-lucide-loader' : 'i-lucide-play'" :class="{ 'animate-spin': busy === 'start' }" />启动</button>
         </div>
-      </article>
-    </template>
+      </div>
+
+      <div class="panel-row">
+        <div class="panel-tile"><UIcon name="i-lucide-package" /></div>
+        <div class="panel-main">
+          <div class="panel-title">版本 v{{ update?.current || service.version || state.version }}
+            <span v-if="update?.available" class="panel-tag is-blue"><UIcon name="i-lucide-sparkles" />可更新到 v{{ update.latest }}</span>
+            <span v-else-if="update?.latest" class="panel-tag is-green"><UIcon name="i-lucide-check" />已是最新</span></div>
+          <span class="panel-sub">{{ update?.error ? `检查失败：${update.error}` : update?.available ? "更新会重启本机服务，进行中的执行会中断，随后在原会话里续跑" : checking ? "正在检查…" : "自动检查 npm 上发布的版本，每小时最多一次" }}</span>
+        </div>
+        <div class="panel-side">
+          <button v-if="!update?.available" type="button" class="panel-button is-plain is-small" :disabled="checking || Boolean(busy)" @click="check(true)">
+            <UIcon name="i-lucide-refresh-cw" :class="{ 'animate-spin': checking }" />检查更新</button>
+          <button v-else type="button" class="panel-button is-primary is-small" :disabled="Boolean(busy)" @click="confirming = true">
+            <UIcon :name="busy === 'update' ? 'i-lucide-loader' : 'i-lucide-download'" :class="{ 'animate-spin': busy === 'update' }" />{{ busy === "update" ? "正在更新…" : "更新" }}</button>
+        </div>
+      </div>
+
+      <div v-if="state.platform === 'win32'" class="panel-row">
+        <div class="panel-tile"><UIcon name="i-lucide-power" /></div>
+        <div class="panel-main">
+          <div class="panel-title">登录 Windows 时自动启动</div>
+          <span class="panel-sub">{{ state.launcher ? "在后台启动网站、讨论服务与任务栏图标，不打开浏览器" : "需要先生成“共议”程序：运行 codiscuss setup 并勾选创建桌面快捷方式" }}</span>
+        </div>
+        <div class="panel-side">
+          <USwitch :model-value="Boolean(state.autostart)" :loading="busy === 'autostart'" :disabled="Boolean(busy) || (!state.launcher && !state.autostart)" aria-label="登录 Windows 时自动启动" @update:model-value="toggle_autostart" />
+        </div>
+      </div>
+    </div>
 
     <HostingCards v-if="state.hosting" />
   </section>

@@ -832,7 +832,12 @@ function open_panel_window(data, url, look_first = true) {
 function launch_panel_window(data, url) {
   const edge = EDGE_PATHS.find(path => existsSync(path));
   if (!edge) return open_browser(url);
-  spawn(edge, [`--app=${url}`, `--user-data-dir=${join(data, 'panel-window')}`, `--window-size=${WINDOW_SIZE}`, '--no-first-run', '--no-default-browser-check', '--lang=zh-CN', '--disable-features=Translate,msTranslate'],
+  const profile = join(data, 'panel-window');
+  // Edge keeps the size and place the owner left the window at (app_window_placement), but --window-size overrides it,
+  // so the default size is given only until Edge has kept one.
+  let placed = false;
+  try { placed = readFileSync(join(profile, 'Default', 'Preferences'), 'utf8').includes('"app_window_placement"'); } catch { placed = false; }
+  spawn(edge, [`--app=${url}`, `--user-data-dir=${profile}`, ...(placed ? [] : [`--window-size=${WINDOW_SIZE}`]), '--no-first-run', '--no-default-browser-check', '--lang=zh-CN', '--disable-features=Translate,msTranslate'],
     { detached: true, stdio: 'ignore', windowsHide: false }).unref();
 }
 

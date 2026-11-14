@@ -142,6 +142,20 @@ a.panel-link:hover { text-decoration: underline; }
 .panel-secret { display: flex; align-items: center; gap: 10px; padding: 14px 16px; border-radius: 12px; background: var(--panel-tint); font-family: ui-monospace, SFMono-Regular, Consolas, monospace; font-size: 18px; letter-spacing: .04em; }
 .panel-secret span { flex: 1; user-select: all; }
 
+/* One card holding related settings as rows: each row is an item with its state and its own labelled actions. */
+.panel-rows { display: flex; flex-direction: column; padding: 4px 22px; border: 1px solid var(--panel-line); border-radius: 18px; background: #fff;
+  box-shadow: 0 1px 2px #0000000a, 0 2px 8px #00000008; }
+.panel-row { display: flex; align-items: center; gap: 14px; min-height: 76px; padding: 14px 0; }
+.panel-rows > * + .panel-row { border-top: 1px solid var(--panel-line); }
+.panel-row > .panel-tile { width: 40px; height: 40px; border-radius: 12px; }
+.panel-row > .panel-tile > [class*="icon"] { width: 19px; height: 19px; }
+.panel-row .panel-title { font-size: 15px; }
+.panel-row .panel-sub { white-space: normal; }
+.panel-row-extra { display: flex; align-items: center; gap: 12px; padding: 0 0 14px 54px; margin-top: -6px; }
+.panel-guide { margin: -2px 2px 10px; color: var(--panel-faint); font-size: 12px; line-height: 1.6; }
+.panel-button.is-danger { color: var(--panel-red); }
+.panel-button.is-danger:hover:not(:disabled) { background: #fef2f2; }
+
 @media (max-width: 760px) {
   .panel { padding: 0 16px 48px; }
   .panel-head { flex-wrap: wrap; height: auto; margin: 0 -16px 4px; padding: 16px 16px 12px; }
