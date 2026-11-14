@@ -119,6 +119,10 @@ function run_command(command, args) {
 async function update_package(data, version, on_updated) {
   await run_command('npm', ['install', '--global', `${NPM_PACKAGE}@${version}`]);
   const steps = [`已安装 v${version}`];
+  // The restarted service starts the new version's panel, which replaces a panel of another version; marked as updating,
+  // this one is left to finish its report and hand over itself (`on_updated`).
+  const panel = read_state(data);
+  if (panel?.pid === process.pid) writeFileSync(state_path(data), JSON.stringify({ ...panel, updating: true }), { mode: 0o600 });
   const step = async (done, work) => { try { await work(); steps.push(done); } catch (error) { steps.push(`${done.replace(/^已/, '')}失败：${error.message}`); } };
   await step('已更新本机技能', () => run_command(process.execPath, [installed_script('codiscuss.mjs'), 'setup', '--yes', '--no-start', '--json']).catch(error => {
     // Setup exits 2 when it finished with items to look at (an edited skill is kept, for one); that still counts.
