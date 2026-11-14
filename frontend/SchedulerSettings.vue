@@ -100,8 +100,9 @@ async function toggle(enabled) {
   await write({ enabled });
   if (enabled && status.value.tone !== "ready") open_settings();
 }
-// The compact row's one line: provider, model and judging style, or what is still missing.
-const summary = computed(() => !active.value ? "未开启" : status.value.tone !== "ready" ? `${provider_label.value} · ${status.value.text}`
+// The compact row's one line: provider, model and judging style, or what is still missing; off, the providers to pick from.
+const summary = computed(() => !active.value ? ["未开启", providers.value.map((item) => item.label).join("、")].filter(Boolean).join(" · 可用 ")
+  : status.value.tone !== "ready" ? `${provider_label.value} · ${status.value.text}`
   : [provider_label.value, scheduler.value.model, view.value.launch.scheduler_modes?.[mode.value]].filter(Boolean).join(" · "));
 const provider_label = computed(() => providers.value.find((item) => item.value === scheduler.value.provider)?.label || "未选择");
 const status = computed(() => !scheduler.value.model ? { tone: "warn", text: "未选模型" } : !scheduler.value.api_key_ref ? { tone: "warn", text: "缺少密钥" } : { tone: "ready", text: "已配置" });
@@ -146,7 +147,7 @@ async function save_key() {
   <div class="scheduler-settings" :class="{ 'is-compact': compact }">
     <div v-if="compact" class="scheduler-row">
       <UCheckbox :model-value="active" :disabled="disabled || Boolean(blocker)" label="开启" aria-label="本房间开启智能调度" @update:model-value="toggle" />
-      <span class="scheduler-summary" :title="summary">{{ summary }}</span>
+      <span class="scheduler-summary" :class="active && `is-${status.tone}`" :title="summary"><i v-if="active" aria-hidden="true" />{{ summary }}</span>
       <UButton v-if="active && !disabled" :icon="editing ? 'i-lucide-chevron-up' : 'i-lucide-settings-2'" :label="editing ? '收起' : '设置'" size="xs" color="neutral" variant="ghost"
         :aria-expanded="editing" aria-label="设置本房间的决策模型" @click="editing ? close_settings() : open_settings()" />
     </div>
@@ -212,7 +213,20 @@ async function save_key() {
 /* In the room's settings the row sits in its own cell, so it needs no top rule. */
 .scheduler-settings.is-compact { padding-top: 0; border-top: 0; }
 .scheduler-row { display: flex; align-items: center; gap: 10px; min-width: 0; }
-.scheduler-summary { flex: 1; min-width: 0; overflow: hidden; color: var(--ui-text-muted); font-size: 13px; white-space: nowrap; text-overflow: ellipsis; }
+/* Switch and 设置 on top, the summary below as the row's help line, like the other room settings. */
+.scheduler-row { flex-wrap: wrap; justify-content: space-between; row-gap: 4px; min-height: 28px; }
+.scheduler-summary { order: 1; flex: 1 0 100%; min-width: 0; color: var(--ui-text-muted); font-size: 12px; line-height: 1.6; }
+.scheduler-summary > i { display: inline-block; width: 6px; height: 6px; margin: 0 6px 1px 0; vertical-align: middle; border-radius: 50%; background: var(--ui-text-dimmed); }
+.scheduler-summary.is-ready { color: var(--ui-text-toned); }
+.scheduler-summary.is-ready > i { background: var(--ui-success, #3fb27f); }
+.scheduler-summary.is-warn > i { background: var(--ui-warning, #e0a33a); }
+/* In the room's settings the expanded settings are a plain panel the width of the row, not a square card in a slot. */
+.is-compact .scheduler-cards { grid-template-columns: minmax(0, 420px); }
+.is-compact .scheduler-slot { padding: 0; border: 0; }
+.is-compact .scheduler-card { height: auto; box-shadow: none; }
+.is-compact .scheduler-back { gap: 10px; padding: 12px 12px 4px; overflow: visible; }
+.is-compact .scheduler-flip-actions { position: static; justify-content: flex-end; padding: 0 8px 8px; }
+.is-compact .scheduler-field { grid-template-columns: 36px minmax(0, 1fr); }
 /* Same size front and back, so flipping never moves the dialog; long back content scrolls inside. */
 /* Same track as the member cards (.create-experts); the slot frame (4px padding + 1px border per side) is added so the card itself matches their width. */
 .scheduler-cards { display: grid; grid-template-columns: repeat(auto-fill, minmax(min(258px, 100%), 282px)); align-items: start; gap: 8px; }
@@ -250,6 +264,7 @@ async function save_key() {
 .scheduler-heading strong > span { margin-left: 6px; color: var(--ui-text-muted); font-size: 10px; font-weight: 400; }
 .scheduler-field { display: grid; grid-template-columns: 40px minmax(0, 1fr); align-items: center; gap: 8px; color: var(--ui-text-dimmed); font-size: 11px; }
 .scheduler-mode { display: flex; align-items: center; gap: 10px; color: var(--ui-text-dimmed); font-size: 12px; }
+.scheduler-mode > span { flex: none; white-space: nowrap; }
 .scheduler-mode > .expert-card-modes { width: 220px; max-width: 100%; }
 .scheduler-note { margin: 0; color: var(--ui-text-muted); font-size: 10px; line-height: 1.5; }
 .scheduler-settings :deep(.scheduler-key-masked) { -webkit-text-security: disc; }

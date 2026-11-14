@@ -723,6 +723,12 @@ CREATE TABLE IF NOT EXISTS free_direct_batches (
     batch_id INTEGER NOT NULL,
     PRIMARY KEY (room_id,batch_id)
 );
+-- A host that dispatched with `keep_working` goes on working in the same software turn: its answered execution is
+-- followed by `next_id`, a new one the runner moves that turn onto; a later answer to the first goes to the live one.
+CREATE TABLE IF NOT EXISTS execution_continuations (
+    execution_id INTEGER PRIMARY KEY REFERENCES member_executions(id) ON DELETE CASCADE,
+    next_id INTEGER NOT NULL REFERENCES member_executions(id) ON DELETE CASCADE
+);
 -- What the program handed to the host once (a failure, a possible conflict, its own continue): `key` keeps it to one
 -- wake-up per event, `chain_id` counts it as a round of that chain, `message_id` is the notice its request hangs on.
 CREATE TABLE IF NOT EXISTS free_host_wakes (

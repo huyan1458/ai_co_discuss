@@ -1237,7 +1237,7 @@ def check_message_references(connection, room_id, message):
 
 
 CAPTURE_REFUSED_FIELDS = ("to", "handoff", "continue", "sequential", "loop", "parallel", "gates", "detach", "need_rounds",
-                          "next_review", "review_scope", "proactive", "request_ids", "reply_to", "attachment_ids")
+                          "next_review", "review_scope", "proactive", "request_ids", "reply_to", "attachment_ids", "keep_working")
 
 
 def check_captured_reply(payload):
@@ -1249,7 +1249,7 @@ def check_captured_reply(payload):
 def append_free_message(connection, room, payload, actor):
     """Append a free-room message: the owner's creates requests, a member's completes its execution."""
     if payload.get("kind") == "moderation":
-        if any(payload.get(field) for field in ("next_review", "review_scope", "review_roster", "sequential", "loop", "parallel", "gates", "detach", "need_rounds")):
+        if any(payload.get(field) for field in ("next_review", "review_scope", "review_roster", "sequential", "loop", "parallel", "gates", "detach", "need_rounds", "keep_working")):
             raise ValueError("主持说明不能声明评审授权、依次接力或申请轮数；请在派活时提交")
         return append_free_moderation(connection, room, payload, actor)
     if payload.get("kind") not in (None, "chat"):
@@ -1695,7 +1695,7 @@ def protocol_text(room):
         "用户管理和讨论开关使用房主凭据；本地成员使用本人的 --access-file，不借用其他身份。凭据私下交付，不公开 token。API 参与者遵循相同请求与执行约束，source=api；本地 CLI 使用 source=cli。",
         "runner 成员等待本机接入程序交付任务，用 execution view 核对本次执行和请求，再以 message post --as 本人 --kind chat --execution 本次编号 --access-file FILE 回答。执行失效后保留草稿，不能去掉编号改作普通发言；认领、续租与后续投递由接入程序处理。",
         "manual 本地成员首次用 member register 注册，会话 ID 由 CLI 自动取得；回答用 --request 请求编号，不编造执行编号。讨论不使用原生定时；原会话不能托管时由用户触发。",
-        "房间里的 host 可用 --to 点名成员，route 表示未点名的用户请求，handoff 表示派出任务已结束；链上 AI 派活受房间预算限制。--to 多位并加 --sequential 时按点名顺序依次接力，每棒一轮，最后交回主持人；--with 成员 与紧挨在前的 --to 同一棒同时做，这一组全部结束才交下一棒；--detach 成员 与这次派活同时开工但不等它（失败时通知主持人）；再加 --loop 则交回为检查点，用 sequence continue --request 交接请求编号 开始下一圈，不继续即直接验收。普通成员的 --to 或正文 @ 只保存回应建议，不直接唤醒；不点名自己、不扩大授权。",
+        "房间里的 host 可用 --to 点名成员，route 表示未点名的用户请求，handoff 表示派出任务已结束；链上 AI 派活受房间预算限制。--to 多位并加 --sequential 时按点名顺序依次接力，每棒一轮，最后交回主持人；--with 成员 与紧挨在前的 --to 同一棒同时做，这一组全部结束才交下一棒；--detach 成员 与这次派活同时开工但不等它（失败时通知主持人）；--keep-working 派活后自己不结束这一轮、接着工作：这条回答收为派活卡，后续工作另起一张卡，做完照常回答（同一执行凭据即可），派出的工作结束时以通知交回；不能与 --continue、--sequential、--next-review 同用；再加 --loop 则交回为检查点，用 sequence continue --request 交接请求编号 开始下一圈，不继续即直接验收。普通成员的 --to 或正文 @ 只保存回应建议，不直接唤醒；不点名自己、不扩大授权。",
         "讨论中的用户 @ 直接提问独立排队，不计讨论轮次、不与讨论发言合并。initial 阶段先独立判断；服务端按讨论请求的 read_until 限制读取。直接提问和主持任务不继承该阅读限制。",
         "主持安排前先 turn roster 读取在场专家、waiting、unregistered 和 revision，再 turn create --roster revision；单项和多项都要带凭据，多项计划须覆盖本轮 waiting。继续排队同样先读 roster，再 turn continue --roster revision。状态或新消息变化后旧凭据被拒绝，重新读取再判断；每个回答保存后由程序推进下一项。",
         "局部追问先 turn roster 读取 host_requests 的请求与原消息编号，再 turn ask --request ID --expert NAME --roster revision --submission-id UUID；普通提问不计轮次、不改讨论队列，可问已发言者和主持人，只结束指定请求。",

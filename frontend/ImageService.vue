@@ -82,7 +82,7 @@ function toggle(enabled) {
   if (!enabled) editing.value = false;
 }
 // The compact row's one line: the model, or what this computer's service still lacks.
-const summary = computed(() => !props.enabled ? "未开启" : status.value.tone !== "ready" ? `${LABEL} · ${status.value.text}` : `${LABEL} · ${settings.model}`);
+const summary = computed(() => !props.enabled ? (unavailable.value ? "未开启 · 需连接本机服务" : `未开启 · 可用 ${LABEL}`) : status.value.tone !== "ready" ? `${LABEL} · ${status.value.text}` : `${LABEL} · ${settings.model}`);
 function remove() {
   editing.value = false;
   emit("update:enabled", false);
@@ -95,7 +95,7 @@ function remove() {
     <div v-if="compact" class="image-row">
       <UCheckbox :model-value="enabled" :disabled="disabled || Boolean(unavailable)" label="开启" aria-label="本房间开启生图"
         :title="unavailable ? `需连接本机服务：${unavailable}` : undefined" @update:model-value="toggle" />
-      <span class="image-summary" :title="summary">{{ summary }}</span>
+      <span class="image-summary" :class="enabled && `is-${status.tone}`" :title="summary"><i v-if="enabled" aria-hidden="true" />{{ summary }}</span>
       <UButton v-if="enabled && !disabled && !unavailable" :icon="editing ? 'i-lucide-chevron-up' : 'i-lucide-settings-2'" :label="editing ? '收起' : '设置'" size="xs" color="neutral" variant="ghost"
         :aria-expanded="editing" aria-label="设置生图服务" @click="editing ? editing = false : open_settings()" />
     </div>
@@ -152,7 +152,20 @@ function remove() {
 /* In the room's settings the row sits in its own cell, so it needs no top rule. */
 .image-service.is-compact { padding-top: 0; border-top: 0; }
 .image-row { display: flex; align-items: center; gap: 10px; min-width: 0; }
-.image-summary { flex: 1; min-width: 0; overflow: hidden; color: var(--ui-text-muted); font-size: 13px; white-space: nowrap; text-overflow: ellipsis; }
+/* Switch and 设置 on top, the summary below as the row's help line, like the other room settings. */
+.image-row { flex-wrap: wrap; justify-content: space-between; row-gap: 4px; min-height: 28px; }
+.image-summary { order: 1; flex: 1 0 100%; min-width: 0; color: var(--ui-text-muted); font-size: 12px; line-height: 1.6; }
+.image-summary > i { display: inline-block; width: 6px; height: 6px; margin: 0 6px 1px 0; vertical-align: middle; border-radius: 50%; background: var(--ui-text-dimmed); }
+.image-summary.is-ready { color: var(--ui-text-toned); }
+.image-summary.is-ready > i { background: var(--ui-success, #3fb27f); }
+.image-summary.is-warn > i { background: var(--ui-warning, #e0a33a); }
+/* In the room's settings the expanded settings are a plain panel the width of the row, not a square card in a slot. */
+.is-compact .image-cards { grid-template-columns: minmax(0, 420px); }
+.is-compact .image-slot { padding: 0; border: 0; }
+.is-compact .image-card { height: auto; box-shadow: none; }
+.is-compact .image-back { gap: 10px; padding: 12px 12px 4px; overflow: visible; }
+.is-compact .image-flip-actions { position: static; justify-content: flex-end; padding: 0 8px 8px; }
+.is-compact .image-field { grid-template-columns: 36px minmax(0, 1fr); }
 .image-cards { display: grid; grid-template-columns: repeat(auto-fill, minmax(min(258px, 100%), 282px)); align-items: start; gap: 8px; }
 .image-card { position: relative; display: flex; flex-direction: column; min-width: 0; height: 100cqi; border: 1px solid var(--channel-edge-control, var(--ui-border)); border-radius: 8px; background: color-mix(in srgb, var(--ui-bg-elevated) 45%, var(--ui-bg)); box-shadow: var(--channel-shadow-control); }
 .image-card:hover { border-color: var(--ui-border-accented); }

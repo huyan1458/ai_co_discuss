@@ -1191,6 +1191,7 @@ html[data-motion="off"] *, html[data-motion="off"] *::before, html[data-motion="
     .channel-workspace-heading, .channel-header { height: 60px; }
     .channel-title h1 { font-size: 18px; }
     .channel-message-byline > .channel-avatar { width: 32px; height: 32px; }
+    .channel-working-strip { --working-avatar: 32px; }
     .channel-message-meta { flex: 1; justify-content: space-between; }
     .channel-message-provenance { margin-left: auto; color: #767676; }
     .channel-message { padding: 20px 22px 24px !important; margin-bottom: 16px !important; }
@@ -1373,13 +1374,15 @@ html[data-motion="off"] *, html[data-motion="off"] *::before, html[data-motion="
 /* the notes below as a subordinate thread (left rule, smaller and dimmer), folded to the latest note. */
 .channel-working-strip { position: relative; margin: 0 16px 16px; padding: 10px 10px 10px 12px; border: 1px solid color-mix(in srgb, var(--ui-border) 80%, transparent); border-radius: 10px; background: color-mix(in srgb, var(--ui-bg-elevated) 45%, transparent); color: var(--ui-text-muted); font-size: 12px; }
 .channel-working-head { display: flex; align-items: center; gap: 8px; min-width: 0; }
-.channel-working-strip .channel-avatar { flex-shrink: 0; width: 20px; height: 20px; font-size: 8px; }
+/* The avatar matches the message byline's at each width, so a member looks the same working and answered. */
+.channel-working-strip { --working-avatar: 28px; }
+.channel-working-strip .channel-avatar { flex-shrink: 0; width: var(--working-avatar); height: var(--working-avatar); font-size: 9px; }
 .channel-working-name { flex-shrink: 0; color: var(--speaker-accent); font-size: 13px; font-weight: 650; }
 .channel-working-elapsed { flex-shrink: 0; color: var(--ui-text-dimmed); font-variant-numeric: tabular-nums; white-space: nowrap; }
-.channel-working-main { display: flex; align-items: center; gap: 8px; min-height: 24px; margin-top: 4px; padding-left: 28px; }
+.channel-working-main { display: flex; align-items: center; gap: 8px; min-height: 24px; margin-top: 4px; padding-left: calc(var(--working-avatar) + 8px); }
 .channel-working-status { flex: 1 1 auto; min-width: 0; overflow: hidden; color: var(--ui-text-highlighted); font-size: 15px; text-overflow: ellipsis; white-space: nowrap; }
 .channel-working-strip .channel-working-actions { display: inline-flex; flex-shrink: 0; align-items: center; gap: 4px; }
-.channel-working-notes { margin-top: 8px; padding: 8px 34px 0 28px; border-top: 1px solid color-mix(in srgb, var(--ui-border) 80%, transparent); color: var(--ui-text-dimmed); font-size: 12px; line-height: 1.6; }
+.channel-working-notes { margin-top: 8px; padding: 8px 34px 0 calc(var(--working-avatar) + 8px); border-top: 1px solid color-mix(in srgb, var(--ui-border) 80%, transparent); color: var(--ui-text-dimmed); font-size: 12px; line-height: 1.6; }
 .channel-working-notes p { margin: 0; white-space: pre-wrap; overflow-wrap: anywhere; }
 .channel-working-notes.is-open { display: grid; gap: 4px; }
 .channel-working-notes.is-open p:not(.channel-working-latest) { opacity: .75; }
@@ -1395,7 +1398,7 @@ html[data-motion="off"] *, html[data-motion="off"] *::before, html[data-motion="
 .channel-working-notes.is-open .channel-working-count [class*="icon"] { transform: rotate(180deg); }
 .channel-working-count:hover { color: var(--ui-text-toned); }
 @media (min-width: 701px) { .channel-working-strip { margin-right: var(--message-inset-end); } }
-@media (max-width: 700px) { .channel-working-strip { margin: 0 8px 12px; } }
+@media (max-width: 700px) { .channel-working-strip { --working-avatar: 32px; margin: 0 8px 12px; } }
 /* Private chat is the last key of a card's toolbar group, at the end opposite "…": the bottom of the hover column with a
    mouse, the left end of the row on touch screens. The working strip has no "…": with a mouse its column holds only
    private chat; on touch screens the key sits inside the strip's bottom-right corner. */

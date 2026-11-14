@@ -365,7 +365,7 @@ const free_busy = computed(() => {
         paused: Boolean(execution.paused_at), working: !execution.stale && !retry, created_at: execution.created_at, adapter: member.adapter, capabilities: execution.capabilities,
         activity: execution.activity, activity_at: execution.activity_at, notes: execution.notes || 0, steps: execution.steps || 0,
         execution_id: execution.id, request_message_id: reports.get(execution.id)?.request_message_id, anchor_message_id: reports.get(execution.id)?.anchor_message_id,
-        dispatched_after: reports.get(execution.id)?.dispatched_after,
+        dispatched_after: reports.get(execution.id)?.dispatched_after, background: Boolean(reports.get(execution.id)?.background),
         discussion_request: reports.get(execution.id)?.requests?.find((request) => request.discussion_session_id) }];
     }
     return [];
@@ -2256,6 +2256,7 @@ function copy_message(message) { act("copy", `${view.value.room_site}/r/${room.v
           <div class="channel-working-head">
             <UAvatar :src="bridge.identities[message.author]?.icon" :text="bridge.identities[message.author]?.initials || '?'" :alt="bridge.display_name(message.author)" size="2xs" class="channel-avatar" :class="bridge.identities[message.author]?.style" />
             <strong class="channel-working-name">{{ bridge.display_name(message.author) }}</strong>
+            <UTooltip v-if="message.background" text="后台进行：主持人没有等它，接着在做别的"><UIcon name="i-lucide-split" class="channel-working-background" role="img" aria-label="后台进行：主持人没有等它" /></UTooltip>
             <small class="channel-working-elapsed">{{ message.waiting ? `手动启动${message.created_at ? ` · 已等 ${format_elapsed(Math.max(0, free_now - message.created_at))}` : ''}` : `已用 ${format_elapsed(Math.max(0, free_now - message.created_at))}` }}{{ message.steps ? ` · 已执行 ${message.steps} 步` : '' }}{{ message.attempt ? ` · 第 ${message.attempt}/${MAX_DELIVERY_RETRIES} 次重试` : '' }}</small>
             <UTooltip v-if="view.access?.can_manage && shows_progress(message) && message.execution_id" text="私聊：查看它正在做什么"><UButton icon="i-lucide-message-square" class="channel-private-chat-key channel-corner-key" size="xs" variant="ghost" color="neutral" :aria-label="`私聊 ${bridge.display_name(message.author)}：查看本次执行过程`" @click="open_private_chat(act, message.author, message.execution_id)" /></UTooltip>
           <span v-if="view.access?.can_manage" class="channel-working-actions">
@@ -2626,6 +2627,7 @@ function copy_message(message) { act("copy", `${view.value.room_site}/r/${room.v
 .channel-free-recipients button.is-on { border-color: color-mix(in srgb, var(--channel-accent) 40%, transparent); background: color-mix(in srgb, var(--channel-accent) 14%, transparent); color: var(--ui-text-highlighted); }
 .channel-message-elapsed { align-self: center; margin-left: auto; white-space: nowrap; }
 .channel-working-warning { color: var(--ui-warning); }
+.channel-working-background { flex-shrink: 0; width: 14px; height: 14px; color: var(--ui-text-dimmed); }
 .channel-working-row { display: flex; align-items: center; gap: 12px; }
 .channel-working-row > .channel-message-text { flex: 1; min-width: 0; }
 .channel-working-actions { display: flex; align-items: center; gap: 6px; flex-shrink: 0; }

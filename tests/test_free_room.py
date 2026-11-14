@@ -1679,6 +1679,30 @@ class HostTests(HostRoomTests):
         self.request(f"{self.path}/executions/{failing['id']}", {"action": "fail", "reason": "超时"}, self.owner)
         self.assertEqual(self.requests()[-1], ("Claude", "notice", "pending"), "a detached failure reaches the host")
 
+    def test_keep_working_closes_the_dispatch_and_carries_the_turn_on_a_new_execution(self):
+        """`keep_working`: the dispatch ends the host's execution, a new one under it takes the answer still bound to the
+        first; the named member shows as background work and its batch hands back by a notice."""
+        FreeRoomTests.say(self, "让 Codex 审，你接着改")
+        first = self.reserve_for("Claude")[1]["id"]
+        post = lambda **extra: self.request(f"{self.path}/messages", {"author": "Claude", "text": "派活", "source": "cli",
+            "submission_id": uuid.uuid4().hex, "execution_id": first, **extra}, self.member)
+        self.assertEqual(post(keep_working=True)[0], 400, "keep_working rides on a dispatch")
+        self.assertEqual(post(to=["Codex"], keep_working=True, **{"continue": "稍后"})[0], 400)
+        status, saved = post(to=["Codex"], keep_working=True)
+        self.assertEqual(status, 201, saved)
+        carried = next(item for item in self.request(f"{self.path}/inbox", token=self.owner)[1]["executions"] if item["member"] == "Claude")
+        self.assertEqual(carried["continues"], first)
+        self.assertIn(("Claude", "keep_working", "delivering"), self.requests())
+        self.work("Codex")
+        self.assertEqual(self.requests()[-1], ("Claude", "notice", "pending"), "the hand-back waits for the host's work as a notice")
+        executions = {item["id"]: item for item in self.request(self.path)[1]["free"]["executions"]}
+        codex = next(item for item in executions.values() if item["member"] == "Codex")
+        self.assertEqual((codex["background"], executions[carried["id"]]["background"]), (True, False))
+        status, final = post(text="改完了")
+        self.assertEqual(status, 201, final)
+        self.assertEqual(final["message"]["execution_id"], carried["id"], "an answer bound to the first execution goes to the live one")
+        self.assertIn(("Claude", "keep_working", "completed"), self.requests())
+
     def test_a_held_dispatch_keeps_its_detached_members(self):
         """At the round limit a dispatch is held with its detached members; continuing the chain sends them all."""
         from backend import free_room

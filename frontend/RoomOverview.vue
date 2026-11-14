@@ -370,6 +370,8 @@ const created = computed(() => room.value.created_at ? new Date(room.value.creat
         <div><dt>智能调度</dt><dd>
           <SchedulerSettings v-if="saved?.registered" room compact :free="free" :disabled="!view.access?.can_manage || room.archived" />
           <template v-else>{{ scheduler }}</template></dd></div>
+        <div v-if="saved?.registered"><dt>生图</dt><dd>
+          <ImageService compact :enabled="Boolean(saved.image_generation)" :disabled="!view.access?.can_manage || room.archived" @update:enabled="bridge.set_room_image_generation($event).catch(() => {})" /></dd></div>
         <div><dt>工作流</dt><dd class="overview-workflow">
           <WorkflowControl v-if="workflow" :workflow="workflow" />
           <span v-else class="overview-muted">没有进行中的工作流；在输入框打 / 或邀请成员时选择</span>
@@ -384,8 +386,6 @@ const created = computed(() => room.value.created_at ? new Date(room.value.creat
           <span v-else>不限轮数</span></dd></div>
         <div v-if="saved?.registered"><dt>API 请求上限</dt><dd>
           <ApiRequestsField :model-value="requests_shown" :disabled="!view.access?.can_manage || room.archived || saving_requests" @update:model-value="save_requests" /></dd></div>
-        <div v-if="saved?.registered"><dt>生图</dt><dd>
-          <ImageService compact :enabled="Boolean(saved.image_generation)" :disabled="!view.access?.can_manage || room.archived" @update:enabled="act('set_room_image_generation', $event)" /></dd></div>
         <div v-if="!free"><dt>逐人追问</dt><dd>{{ room.named_followup ? '开启：主持人每轮给每位专家写针对性追问' : '关闭：首轮后请专家回应上一轮观点' }}</dd></div>
         <div><dt>阅读地址</dt><dd class="overview-address"><code>{{ reading }}</code><UButton icon="i-lucide-copy" color="neutral" variant="ghost" size="xs" aria-label="复制阅读地址" @click="act('copy', reading)" /></dd></div>
         <div v-if="created"><dt>创建时间</dt><dd>{{ created }}</dd></div>

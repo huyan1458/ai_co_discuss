@@ -2596,6 +2596,26 @@ test('a member that worked and ended without submitting has its last remark capt
   assert.equal(body.to, undefined);
 });
 
+test('a host that kept working after its dispatch keeps its turn running, moved onto the new execution', async t => {
+  const { state, store, config } = await free_fixture(t);
+  const child = Object.assign(new EventEmitter(), { killed: false, kill() { this.killed = true; this.emit('close'); } });
+  let task;
+  const runner = new FreeRoomRunner(config, store, async (adapter, binding, given) => {
+    task = given; given.on_process(child); return { status: 'accepted', session_id: 'session-1' };
+  });
+  await runner.tick();
+  // The host's keep_working dispatch: the site completes execution 1 and opens 2 to carry the same turn on.
+  state.executions[0].status = 'completed';
+  const now = Math.floor(Date.now() / 1000);
+  state.executions.push({ id: 2, client_id: 'keep-working-1', status: 'dispatched', member: 'Claude', continues: 1,
+    created_at: now, lease_until: now + 120, requests: [] });
+  await runner.tick();
+  assert.equal(child.killed, false, 'the running turn is not stopped');
+  task.on_activity('writing'); task.on_note('改完了'); task.on_exit();
+  await runner.tick();
+  assert.deepEqual((state.posts || []).map(post => [post.body.execution_id, post.body.text]), [[2, '改完了']]);
+});
+
 test("an expert prompt is only the member's own text, and the API file rule is fixed in its system prompt", () => {
   assert.deepEqual(EXPERT_PROMPT_PRESETS, {}, 'must-know software rules are fixed by the runner, not replaceable presets');
   assert.equal(expert_prompt({ adapter: 'api' }), '');

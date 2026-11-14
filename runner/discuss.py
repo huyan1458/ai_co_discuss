@@ -331,6 +331,9 @@ def message_commands(subcommands, registry):
                       help="旧参数，保留兼容：主持人派出的工作现在总会交回你")
     post.add_argument("--no-handoff", action="store_true",
                       help="自由房间主持人：只点名一位成员、它的回答已足以直接给用户时用；做完不交回你，失败仍交回")
+    post.add_argument("--keep-working", action="store_true",
+                      help="自由房间主持人：与 --to 同用，派活后不结束这一轮、接着自己工作（不等派出的成员）；这条回答收为派活卡，后续工作另起一张卡，"
+                           "做完照常回答（沿用本次凭据），派出的工作结束时以通知交回你；不能与 --continue、--sequential、--next-review 同用")
     post.add_argument("--proactive", action="store_true",
                       help="自由房间成员：不是房间派来的任务、而是你的用户在你自己的窗口里要你发言时用（主持人也可在需要主动说明、派活或补交失效执行的结果时自行使用）；不关联执行或请求，有进行中的执行或讨论进行中不可用；主持人还可同时 --to 派活或 --continue，从这条消息起算新任务链")
     post.add_argument("--continue", dest="continue_reason", metavar="REASON",
@@ -769,6 +772,10 @@ def plan_message(args):
         payload["proactive"] = True
     if args.no_handoff:
         payload["no_handoff"] = True
+    if args.keep_working:
+        if not args.to:
+            raise CliError("--keep-working 须与 --to 一起使用")
+        payload["keep_working"] = True
     if args.need_rounds is not None or args.rounds_reason is not None:
         payload["need_rounds"] = args.need_rounds
         payload["rounds_reason"] = args.rounds_reason

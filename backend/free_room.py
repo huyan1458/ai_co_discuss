@@ -763,6 +763,12 @@ def host_event(event):
     return {**event, "data": data}
 
 
+# An execution (aliased `e`) on work the host handed out without waiting for it: a member it detached, or one it named
+# in a dispatch after which it went on working (`keep_working`, its own request on the same message).
+BACKGROUND_SQL = """EXISTS(SELECT 1 FROM member_requests r WHERE r.execution_id=e.id AND r.purpose='ask' AND r.created_by='host'
+    AND (r.batch_id=0 OR EXISTS(SELECT 1 FROM member_requests k WHERE k.message_id=r.message_id AND k.purpose='keep_working')))"""
+
+
 def recent_executions(connection, room_id):
     """Return bounded public reports, including requests no longer in the recent request list."""
     rows = connection.execute(f"""SELECT e.*,m.name AS member,
@@ -773,7 +779,8 @@ def recent_executions(connection, room_id):
         (SELECT MIN({DISPATCHED_AFTER_SQL}) FROM member_requests r WHERE r.execution_id=e.id) AS dispatched_after,
         (SELECT COUNT(*) FROM execution_notes WHERE execution_id=e.id) AS note_count,
         (SELECT denials FROM execution_denials WHERE execution_id=e.id) AS denials,{CAPABILITY_COLUMNS},
-        (SELECT json_object('created_at',created_at) FROM late_answers WHERE execution_id=e.id) AS late_answer
+        (SELECT json_object('created_at',created_at) FROM late_answers WHERE execution_id=e.id) AS late_answer,
+        {BACKGROUND_SQL} AS background
         FROM member_executions e JOIN room_members m ON m.id=e.member_id WHERE e.room_id=? ORDER BY e.id DESC LIMIT ?""", (room_id, RECENT_EXECUTIONS))
     executions = []
     for row in rows:
@@ -786,7 +793,7 @@ def recent_executions(connection, room_id):
             "anchor_message_id": row["anchor_message_id"], "dispatched_after": row["dispatched_after"], "requests": requests,
             "notes": row["note_count"], "denials": json.loads(row["denials"] or "[]"),
             "capabilities": reported_capabilities(row), "stop_result": row["stop_result"] or "",
-            "late_answer": json.loads(row["late_answer"]) if row["late_answer"] else None,
+            "late_answer": json.loads(row["late_answer"]) if row["late_answer"] else None, "background": bool(row["background"]),
             "interjections": execution_interjections(connection, row["id"], row["status"]),
             "retry": execution_retry(connection, row["id"])})
     return executions
@@ -1023,7 +1030,7 @@ def recipients(connection, room_id, payload):
 
 
 # What a proactive post may not carry: it answers no request. Only the host's may also dispatch, as an answer does.
-PROACTIVE_EXCLUDED = ("execution_id", "request_ids", "next_review", "turn_id")
+PROACTIVE_EXCLUDED = ("execution_id", "request_ids", "next_review", "turn_id", "keep_working")
 HOST_ONLY_PROACTIVE = ("to", "handoff", "no_handoff", "continue", "sequential", "loop", "parallel", "gates", "detach", "need_rounds", "rounds_reason")
 
 
@@ -1119,6 +1126,7 @@ def check_answer(connection, room_id, member, payload):
     if payload.get("handoff") not in (None, False) and (payload["handoff"] is not True or member["role"] != "host" or not payload.get("to")):
         raise ValueError("handoff 只能由主持人与 to 一起使用，值为 true")
     check_no_handoff(member, payload)
+    check_keep_working(member, payload)
     check_need_rounds(member, payload)
     reason = payload.get("continue")
     if reason is not None and (member["role"] != "host" or not isinstance(reason, str) or not reason.strip()
@@ -1150,6 +1158,10 @@ def check_answer(connection, room_id, member, payload):
     row = connection.execute("SELECT * FROM member_executions WHERE room_id=? AND id=?", (room_id, execution_id)).fetchone()
     if not row or row["member_id"] != member["id"]:
         raise PermissionError("执行编号不属于本成员")
+    if row["status"] == "completed":
+        # The host dispatched with keep_working and went on in the same turn: its answer belongs to where that turn went.
+        row = live_continuation(connection, row) or row
+        payload["execution_id"] = row["id"]
     revived = revive_failed(connection, room_id, row) if row["status"] == "failed" else None
     if revived:
         row = revived
@@ -1173,6 +1185,42 @@ def check_dispatch(member, payload, purposes):
     """A host answering only its share of an everyone request answers as a member, so it may not dispatch others."""
     if member["role"] == "host" and payload.get("to") and purposes and all(purpose == "all" for purpose in purposes):
         raise ValueError("这次是请全体成员各自回应，其他成员已收到请求；主持人只回答自己的部分，不能用 --to 派活")
+    if payload.get("keep_working") and any(purpose in ("discuss", "discuss_host") for purpose in purposes):
+        raise ValueError("讨论中的发言不能用 keep_working")
+
+
+def check_keep_working(member, payload):
+    """`keep_working`: the runner-delivered host dispatches and goes on in the same turn instead of ending it."""
+    if payload.get("keep_working") in (None, False):
+        return
+    # A relay checkpoint or a review hands back on the dispatch message itself, where the host's own request now hangs.
+    if (payload["keep_working"] is not True or member["role"] != "host" or member["access"] != "runner" or not payload.get("to")
+            or any(payload.get(field) not in (None, False) for field in ("continue", "sequential", "next_review"))):
+        raise ValueError("keep_working 只能由本机接入的主持人在派活（to）时使用，值为 true，不能与 continue、sequential 或 next_review 同用")
+
+
+def live_continuation(connection, row):
+    """The live execution that a host's `keep_working` moved this answered execution's turn onto, or None."""
+    while row and row["status"] == "completed":
+        link = connection.execute("SELECT next_id FROM execution_continuations WHERE execution_id=?", (row["id"],)).fetchone()
+        row = link and connection.execute("SELECT * FROM member_executions WHERE id=?", (link[0],)).fetchone()
+    return row if row and row["status"] in ACTIVE else None
+
+
+def keep_working(connection, room_id, host, message_id, chain_id, execution_id):
+    """The host dispatched with `keep_working`: its answered execution ends with this message, and a new one, on a request
+    hanging on it, carries the same software turn on, so that work shows as its own card under the dispatch."""
+    now = int(time.time())
+    previous = connection.execute("SELECT * FROM member_executions WHERE id=?", (execution_id,)).fetchone()
+    next_id = connection.execute("""INSERT INTO member_executions (room_id,member_id,client_id,session_id,lease_until,created_at,cwd)
+        VALUES (?,?,?,?,?,?,?)""", (room_id, host["id"], f"keep-working-{execution_id}", previous["session_id"],
+                                    now + LEASE_SECONDS, now, previous["cwd"])).lastrowid
+    connection.execute("""INSERT INTO execution_capabilities (execution_id,room_id,stoppable,progress,steer,resume)
+        SELECT ?,room_id,stoppable,progress,steer,resume FROM execution_capabilities WHERE execution_id=?""", (next_id, execution_id))
+    insert_request(connection, room_id, host["id"], message_id, chain_id, "keep_working", "host")
+    connection.execute("UPDATE member_requests SET status='delivering',execution_id=? WHERE message_id=? AND member_id=?",
+                       (next_id, message_id, host["id"]))
+    connection.execute("INSERT INTO execution_continuations (execution_id,next_id) VALUES (?,?)", (execution_id, next_id))
 
 
 def insert_request(connection, room_id, member_id, message_id, chain_id, purpose, created_by, batch_id=0):
@@ -1530,8 +1578,14 @@ def settle_batches(connection, room_id):
             continue
         # Every other answer and every failure comes back to the host, so it can carry on, retry, reassign or tell the user.
         # The hand-back closes the round it belongs to, so it is never held back: the last round still gets its summary.
-        if not connection.execute("SELECT 1 FROM member_requests WHERE message_id=? AND member_id=?", (batch["batch_id"], host["id"])).fetchone():
+        own = connection.execute("SELECT purpose FROM member_requests WHERE message_id=? AND member_id=?", (batch["batch_id"], host["id"])).fetchone()
+        if not own:
             insert_request(connection, room_id, host["id"], batch["batch_id"], batch["chain_id"], "handoff", "host")
+        elif own["purpose"] == "keep_working":
+            # The host went on working after this dispatch, on a request of its own on the same message: the hand-back
+            # reaches it as a notice, delivered once that work ends.
+            wake_host(connection, room_id, batch["chain_id"], f"#{batch['batch_id']} 派出的工作已结束，请主持人接着处理。",
+                      f"handoff:{batch['batch_id']}")
         else:
             # The batch already came back once (it had failed) and the owner retried it: its new answers reach the host as a notice.
             retried = connection.execute("SELECT MAX(id) FROM member_requests WHERE room_id=? AND batch_id=?", (room_id, batch["batch_id"])).fetchone()[0]
@@ -2079,6 +2133,8 @@ def after_free_message(connection, room_id, message_id, actor, payload):
     elif actor["role"] == "host" and payload.get("to"):
         dispatch(connection, room_id, actor, message_id, payload["to"], chain_id, payload.get("handoff") is True or bool(payload.get("next_review")),
                  payload.get("no_handoff") is True, {"need": need_plan(payload)}, payload.get("detach"))
+    if payload.get("keep_working") is True:
+        keep_working(connection, room_id, actor, message_id, chain_id, payload["execution_id"])
     if actor["role"] == "host":
         remember_continue(connection, room_id, actor, message_id, chain_id, payload)
     settle_batches(connection, room_id)
@@ -2309,7 +2365,10 @@ def inbox(connection, room_id, token):
         pending = [{**request, **review_request_context(connection, request), **sequence_request_context(connection, request)} for request in pending]
         (members if row["access"] == "runner" else observers).append({**member_view, "pending": pending})
     # Pending interjections ride along so the runner hands them to the running software at its next check.
+    # `continues`: the answered execution whose software turn this one carries on (keep_working); the runner moves it over.
     executions = [{**public_execution(row), "member": row["name"], "retry": execution_retry(connection, row["id"]),
+                   "continues": (connection.execute("SELECT execution_id FROM execution_continuations WHERE next_id=?",
+                                                    (row["id"],)).fetchone() or [None])[0],
                    "interjections": [dict(item) for item in connection.execute(
                        "SELECT id,text FROM execution_interjections WHERE execution_id=? AND status='pending' ORDER BY id", (row["id"],))]}
                   for row in connection.execute(

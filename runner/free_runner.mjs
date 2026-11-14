@@ -323,6 +323,8 @@ export class FreeRoomRunner {
     // Execution id -> { phase, at, sent_phase, sent_at }: what the member's software last showed it doing.
     this.activity = new Map();
     this.segments = new SegmentLog();
+    // Execution id -> the execution its software turn moved onto when its host dispatched with keep_working.
+    this.continued = new Map();
     this.context_errors = new Map();
     this.adopt(config);
     this.store.db.exec(`CREATE TABLE IF NOT EXISTS free_deliveries(member TEXT PRIMARY KEY, client_id TEXT NOT NULL,
@@ -397,6 +399,11 @@ export class FreeRoomRunner {
     if (!inbox.archived) await this.continue_goal(room);
     this.inbox = inbox;
     const active = new Map(inbox.executions.map(item => [item.id, item]));
+    // Before anything treats the answered execution as ended (and stops its software), move a turn its host kept working in.
+    for (const next of inbox.executions) {
+      const row = next.continues ? this.row(next.member) : null;
+      if (row && row.execution_id === next.continues && LIVE.includes(row.status)) await this.carry_on(next.member, next.continues, next.id);
+    }
     const present = new Set(inbox.members.map(member => member.name));
     // A member sent away or removed no longer appears; its live work was already voided on the website.
     for (const row of this.store.db.prepare('SELECT * FROM free_deliveries').all()) {
@@ -810,7 +817,9 @@ export class FreeRoomRunner {
     if ((before || extras.length) && !this.snapshots.has(execution.id)) this.snapshots.set(execution.id, { member: member.name, directory, before, extras });
     const generation = (this.generations.get(execution.id) || 0) + 1;
     this.generations.set(execution.id, generation);
-    const current = () => this.generations.get(execution.id) === generation;
+    // The turn's events follow it when a keep_working dispatch moves it onto a new execution.
+    const live = () => this.live_id(execution.id);
+    const current = () => this.generations.get(live()) === generation;
     const binding = this.store.binding(member.name);
     // A member whose session a rewind restarted is bound to '' and must not fall back to the session it was invited with.
     if (binding.session_id === undefined && adapter.session_id) binding.session_id = adapter.session_id;
@@ -853,32 +862,32 @@ export class FreeRoomRunner {
           ...(this.config.image_generation ? { image_generation: true } : {}),
           ...(task.goal ? { goal: task.goal } : {}) },
         on_binding: session => this.store.bind(member.name, session),
-        on_process: child => this.track(member.name, child, execution.id),
-        on_output: (path, chunk) => { appendFileSync(path, chunk, { mode: 0o600 }); this.touch(execution.id); this.segments.mark(execution.id); },
-        on_activity: (phase, tool) => { worked = true; this.touch(execution.id, phase); this.segments.mark(execution.id, phase, tool); },
+        on_process: child => this.track(member.name, child, live()),
+        on_output: (path, chunk) => { appendFileSync(path, chunk, { mode: 0o600 }); this.touch(live()); this.segments.mark(live()); },
+        on_activity: (phase, tool) => { worked = true; this.touch(live(), phase); this.segments.mark(live(), phase, tool); },
         on_note: text => {
-          this.note(execution.id, text);
-          if (worked && current()) this.replies.set(execution.id, text);
+          this.note(live(), text);
+          if (worked && current()) this.replies.set(live(), text);
         },
         // Files the agent edited with its own tools, read from its events; an empty call says the list is tracked.
         on_edits: paths => {
-          const snapshot = this.snapshots.get(execution.id);
+          const snapshot = this.snapshots.get(live());
           if (snapshot) paths.forEach(path => (snapshot.edited ||= new Set()).add(path));
           if (snapshot && !paths.length) snapshot.edited ||= new Set();
         },
         // A stopped process may report after the next execution started; only its own execution takes the result.
         on_failure: (error, { not_started = false, retryable = true } = {}) => {
           if (!current()) return;
-          if (not_started) this.not_started.add(execution.id);
-          if (!retryable) this.not_retryable.add(execution.id);
-          try { if (this.row(member.name)?.execution_id === execution.id) this.save(member.name, { error }); } catch { /* Store may already be closed at shutdown. */ }
+          if (not_started) this.not_started.add(live());
+          if (!retryable) this.not_retryable.add(live());
+          try { if (this.row(member.name)?.execution_id === live()) this.save(member.name, { error }); } catch { /* Store may already be closed at shutdown. */ }
         },
-        on_exit: denial => { if (current()) this.exited.set(execution.id, denial || ''); },
+        on_exit: denial => { if (current()) this.exited.set(live(), denial || ''); },
         // Shown beside the answer or failure so the owner can allow them; a lost report only hides the list.
         on_denials: denials => {
           // A refused operation means the turn may be unfinished: its last remark is never captured as the answer.
-          if (denials?.length && current()) this.denied.add(execution.id);
-          api(this.config, `/executions/${execution.id}`, { action: 'denials', denials }).catch(() => {});
+          if (denials?.length && current()) this.denied.add(live());
+          api(this.config, `/executions/${live()}`, { action: 'denials', denials }).catch(() => {});
         },
       });
       if (result.session_id) this.store.bind(member.name, result.session_id);
@@ -1011,6 +1020,37 @@ export class FreeRoomRunner {
       if (activity) Object.assign(activity, { sent_phase: activity.phase, sent_at: activity.at });
       this.save(member.name, { last_renew: Date.now() });
     }
+  }
+  /** The execution a turn delivered as `id` now belongs to, following keep_working moves. */
+  live_id(id) {
+    while (this.continued.has(id)) id = this.continued.get(id);
+    return id;
+  }
+  /**
+   * The host answered with keep_working and its software turn goes on: move that turn, with what this runner keeps for
+   * it, onto the execution the website opened, instead of stopping it. The answered execution reports its file changes
+   * and progress as they stand; the new one watches from now.
+   */
+  async carry_on(name, old, id) {
+    this.continued.set(old, id);
+    for (const map of [this.generations, this.steers, this.activity, this.replies, this.exited, this.execution_processes]) {
+      if (map.has(old)) { map.set(id, map.get(old)); map.delete(old); }
+    }
+    for (const set of [this.denied, this.not_started, this.not_retryable]) if (set.delete(old)) set.add(id);
+    const snapshot = this.snapshots.get(old);
+    if (snapshot) this.snapshots.set(id, { member: snapshot.member, directory: snapshot.directory,
+      before: snapshot.before ? workspace_snapshot(snapshot.directory) : null,
+      extras: (snapshot.extras || []).map(item => ({ directory: item.directory, before: workspace_snapshot(item.directory) })),
+      ...(snapshot.edited ? { edited: new Set() } : {}) });
+    for (const prefix of ['owner', 'delivery']) {
+      const value = this.store.db.prepare('SELECT value FROM metadata WHERE key=?').get(`${prefix}:${old}`)?.value;
+      if (!value) continue;
+      this.store.db.prepare('INSERT OR REPLACE INTO metadata VALUES (?,?)').run(`${prefix}:${id}`, value);
+      this.store.db.prepare('DELETE FROM metadata WHERE key=?').run(`${prefix}:${old}`);
+    }
+    await this.report_segments(old, true);
+    this.segments.start(id);
+    this.save(name, { execution_id: id, last_renew: 0 });
   }
   /**
    * An execution the owner paused from the private chat, or that takes an interjection only by a pause: stop its
