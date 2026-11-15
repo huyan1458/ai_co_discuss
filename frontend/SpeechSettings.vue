@@ -8,6 +8,7 @@
 import { computed, inject, onBeforeUnmount, onMounted, reactive, ref, watch } from "vue";
 
 import { request_tts } from "./read-aloud.js";
+import { t } from './i18n.js';
 
 const { bridge } = inject("discussion");
 const SAVED_MARK = "••••••••••••";
@@ -32,8 +33,8 @@ const visible_keys = reactive({});
 const open = ref(false);
 const service = computed(() => settings.catalog.find((item) => item.id === settings.provider) || {});
 const own = computed(() => settings.providers[settings.provider] || { member_voices: {} });
-const status = computed(() => unavailable.value ? "需连接本机服务" : !loaded.value ? "读取中…"
-  : !settings.api_key_ref ? `${service.value.label} · 未配置` : `已配置 · ${service.value.label} · ${voice_items.value.find((voice) => voice.value === own.value.speaker)?.label || own.value.speaker}`);
+const status = computed(() => unavailable.value ? t('需连接本机服务') : !loaded.value ? t('读取中…')
+  : !settings.api_key_ref ? t('{value1} · 未配置', { value1: service.value.label }) : t('已配置 · {value1} · {value2}', { value1: service.value.label, value2: voice_items.value.find((voice) => voice.value === own.value.speaker)?.label || own.value.speaker }));
 // The voice-input service chosen; a cloud one shares the key of its reading part, which gets its own row when reading uses another service.
 const stt_service = computed(() => settings.stt_catalog.find((item) => item.id === settings.stt_provider) || {});
 const input_service = computed(() => settings.provider === settings.stt_provider ? null : settings.catalog.find((item) => item.id === settings.stt_provider));
@@ -61,10 +62,10 @@ onBeforeUnmount(() => clearInterval(services_timer));
 /** The state line of one local service. */
 function service_label(id) {
   const item = services.value[id];
-  if (!item) return "读取中…";
-  if (item.state === "running") return item.pid ? `运行中 · ${item.name} · PID ${item.pid}` : "运行中";
-  if (item.state === "other") return `端口 ${item.port} 被 ${item.name}（PID ${item.pid}）占用`;
-  return item.installed ? "未运行" : "未安装";
+  if (!item) return t('读取中…');
+  if (item.state === "running") return item.pid ? t('运行中 · {value1} · PID {value2}', { value1: item.name, value2: item.pid }) : t('运行中');
+  if (item.state === "other") return t('端口 {value1} 被 {value2}（PID {value3}）占用', { value1: item.port, value2: item.name, value3: item.pid });
+  return item.installed ? t('未运行') : t('未安装');
 }
 /** Force one local service to stop, with its child processes. */
 async function stop_service(id) {
@@ -106,7 +107,7 @@ const voice_items = computed(() => {
   const typed = [own.value.speaker, own.value.file_voice, ...Object.values(own.value.member_voices || {})].filter((id) => id && !items.some((item) => item.value === id));
   return [...items, ...[...new Set(typed)].map((id) => ({ label: id, value: id }))];
 });
-const platform_items = computed(() => [{ label: "跟随通用", value: "" }, ...voice_items.value]);
+const platform_items = computed(() => [{ label: t('跟随通用'), value: "" }, ...voice_items.value]);
 /** The voice a row plays: a platform's or the file voice when set, otherwise the default voice. */
 const voice_of = (key) => (key === FILE_KEY ? own.value.file_voice : key ? own.value.member_voices[key] : "") || own.value.speaker;
 /** Set the default voice, one platform's or the file voice (empty follows the default), from a choice or a typed ID. */
@@ -149,7 +150,7 @@ async function preview(platform) {
     await sample.play();
     // A browser plays to an output with nothing plugged in without any error, so say that it plays and where to look.
     const label = voice_items.value.find((voice) => voice.value === speaker)?.label || speaker;
-    bridge.notify("info", `正在试听：${label}。听不到声音时，请检查这台设备的音量和声音输出（耳机或音箱）`);
+    bridge.notify("info", t('正在试听：{value1}。听不到声音时，请检查这台设备的音量和声音输出（耳机或音箱）', { value1: label }));
   } catch (error) {
     if (sample_audio === sample) stop_preview();
     bridge.notify("error", error.message);
@@ -170,82 +171,82 @@ onBeforeUnmount(stop_preview);
   <section class="channel-reading-setting">
     <UCollapsible v-model:open="open">
       <button type="button" class="speech-header" :aria-expanded="open">
-        <h3>语音</h3><small>朗读与语音输入</small><span :class="{ 'is-ready': settings.api_key_ref }">{{ status }}</span><UIcon :name="open ? 'i-lucide-chevron-up' : 'i-lucide-chevron-down'" />
+        <h3>{{ t('语音') }}</h3><small>{{ t('朗读与语音输入') }}</small><span :class="{ 'is-ready': settings.api_key_ref }">{{ status }}</span><UIcon :name="open ? 'i-lucide-chevron-up' : 'i-lucide-chevron-down'" />
       </button>
       <template #content>
         <div class="speech-settings">
-          <p v-if="unavailable" class="fine-print">语音由这台电脑的本机服务调用语音服务，需要连接本机服务或已配对电脑：{{ unavailable }}</p>
+          <p v-if="unavailable" class="fine-print">{{ t('语音由这台电脑的本机服务调用语音服务，需要连接本机服务或已配对电脑：{value1}', { value1: unavailable }) }}</p>
           <template v-else-if="loaded">
-            <h4>朗读</h4>
-            <div class="speech-row"><span>服务</span>
-              <div class="speech-rates" role="group" aria-label="朗读语音服务"><UButton v-for="item in settings.catalog" :key="item.id" :label="item.label" color="neutral" variant="ghost" size="xs" :class="{ chosen: settings.provider === item.id }" :aria-pressed="settings.provider === item.id" @click="choose(item.id)" /></div>
+            <h4>{{ t('朗读') }}</h4>
+            <div class="speech-row"><span>{{ t('服务') }}</span>
+              <div class="speech-rates" role="group" :aria-label="t('朗读语音服务')"><UButton v-for="item in settings.catalog" :key="item.id" :label="item.label" color="neutral" variant="ghost" size="xs" :class="{ chosen: settings.provider === item.id }" :aria-pressed="settings.provider === item.id" @click="choose(item.id)" /></div>
             </div>
-            <p class="fine-print speech-note" :title="service.note">{{ service.note }} · <a :href="service.console_url" target="_blank" rel="noopener">控制台</a></p>
-            <div class="speech-row"><span>密钥</span>
-              <UInput v-if="service.local" disabled :placeholder="own.api_key_ref ? '已由安装技能配置，无需填写' : '尚未安装：让本机 AI 按 local-tts-setup 技能安装'" aria-label="本机语音令牌" size="sm" class="w-full" />
+            <p class="fine-print speech-note" :title="service.note">{{ service.note }} · <a :href="service.console_url" target="_blank" rel="noopener">{{ t('控制台') }}</a></p>
+            <div class="speech-row"><span>{{ t('密钥') }}</span>
+              <UInput v-if="service.local" disabled :placeholder="own.api_key_ref ? t('已由安装技能配置，无需填写') : t('尚未安装：让本机 AI 按 local-tts-setup 技能安装')" :aria-label="t('本机语音令牌')" size="sm" class="w-full" />
               <!-- A text field masked by CSS keeps browsers from offering to generate or save a password. -->
-              <UInput v-else v-model="typed_keys[service.id]" type="text" autocomplete="off" spellcheck="false" data-1p-ignore data-lpignore="true" :placeholder="own.api_key_ref ? SAVED_MARK : '粘贴 API Key，只存这台电脑'" :title="own.api_key_ref && !typed_keys[service.id] ? '已保存；本机不回传密钥，输入新 Key 可更换' : undefined" :aria-label="`${service.label} API Key`" size="sm" class="w-full" :loading="busy === `key:${service.id}`" :ui="{ base: visible_keys[service.id] ? '' : 'speech-key-masked', trailing: 'pe-0.5' }" @change="save_key(service)">
-                <template #trailing><UButton :icon="visible_keys[service.id] ? 'i-lucide-eye' : 'i-lucide-eye-off'" :disabled="!typed_keys[service.id]" :aria-label="visible_keys[service.id] ? '隐藏密钥' : '显示密钥'" :aria-pressed="Boolean(visible_keys[service.id])" size="xs" color="neutral" variant="link" @click="visible_keys[service.id] = !visible_keys[service.id]" /></template>
+              <UInput v-else v-model="typed_keys[service.id]" type="text" autocomplete="off" spellcheck="false" data-1p-ignore data-lpignore="true" :placeholder="own.api_key_ref ? SAVED_MARK : t('粘贴 API Key，只存这台电脑')" :title="own.api_key_ref &amp;&amp; !typed_keys[service.id] ? t('已保存；本机不回传密钥，输入新 Key 可更换') : undefined" :aria-label="`${service.label} API Key`" size="sm" class="w-full" :loading="busy === `key:${service.id}`" :ui="{ base: visible_keys[service.id] ? '' : 'speech-key-masked', trailing: 'pe-0.5' }" @change="save_key(service)">
+                <template #trailing><UButton :icon="visible_keys[service.id] ? 'i-lucide-eye' : 'i-lucide-eye-off'" :disabled="!typed_keys[service.id]" :aria-label="visible_keys[service.id] ? t('隐藏密钥') : t('显示密钥')" :aria-pressed="Boolean(visible_keys[service.id])" size="xs" color="neutral" variant="link" @click="visible_keys[service.id] = !visible_keys[service.id]" /></template>
               </UInput>
             </div>
             <!-- Rows a service does not use stay in place, disabled, so switching services never moves the rows below. -->
-            <div class="speech-row"><span>区域</span>
-              <UInput v-if="service.region" v-model="own.region" placeholder="语音资源所在区域，如 eastasia" aria-label="Azure 区域" size="sm" class="w-full" @change="save" />
-              <UInput v-else disabled placeholder="此服务无需区域" aria-label="区域" size="sm" class="w-full" />
+            <div class="speech-row"><span>{{ t('区域') }}</span>
+              <UInput v-if="service.region" v-model="own.region" :placeholder="t('语音资源所在区域，如 eastasia')" :aria-label="t('Azure 区域')" size="sm" class="w-full" @change="save" />
+              <UInput v-else disabled :placeholder="t('此服务无需区域')" :aria-label="t('区域')" size="sm" class="w-full" />
             </div>
-            <div class="speech-row"><span>通用</span>
+            <div class="speech-row"><span>{{ t('通用') }}</span>
               <div class="speech-inline">
-                <USelectMenu :model-value="own.speaker" :items="voice_items" value-key="value" create-item :search-input="{ placeholder: '搜索或输入音色 ID' }" aria-label="通用音色" size="sm" class="min-w-0 flex-1" @update:model-value="set_voice('', $event)" @create="set_voice('', $event)" />
-                <UButton :icon="playing === GENERAL_KEY ? 'i-lucide-square' : 'i-lucide-volume-2'" :aria-label="playing === GENERAL_KEY ? '停止试听' : '试听通用音色'" color="neutral" variant="ghost" size="sm" :loading="busy === `preview:${GENERAL_KEY}`" :disabled="!settings.api_key_ref || Boolean(busy)" @click="preview(GENERAL_KEY)" />
+                <USelectMenu :model-value="own.speaker" :items="voice_items" value-key="value" create-item :search-input="{ placeholder: t('搜索或输入音色 ID') }" :aria-label="t('通用音色')" size="sm" class="min-w-0 flex-1" @update:model-value="set_voice('', $event)" @create="set_voice('', $event)" />
+                <UButton :icon="playing === GENERAL_KEY ? 'i-lucide-square' : 'i-lucide-volume-2'" :aria-label="playing === GENERAL_KEY ? t('停止试听') : t('试听通用音色')" color="neutral" variant="ghost" size="sm" :loading="busy === `preview:${GENERAL_KEY}`" :disabled="!settings.api_key_ref || Boolean(busy)" @click="preview(GENERAL_KEY)" />
               </div>
             </div>
-            <div class="speech-row"><span>文件</span>
+            <div class="speech-row"><span>{{ t('文件') }}</span>
               <div class="speech-inline">
-                <USelectMenu :model-value="own.file_voice || ''" :items="platform_items" value-key="value" create-item :search-input="{ placeholder: '搜索或输入音色 ID' }" aria-label="朗读文件的音色" size="sm" class="min-w-0 flex-1" @update:model-value="set_voice(FILE_KEY, $event)" @create="set_voice(FILE_KEY, $event)" />
-                <UButton :icon="playing === FILE_KEY ? 'i-lucide-square' : 'i-lucide-volume-2'" :aria-label="playing === FILE_KEY ? '停止试听' : '试听朗读文件的音色'" color="neutral" variant="ghost" size="sm" :loading="busy === `preview:${FILE_KEY}`" :disabled="!settings.api_key_ref || Boolean(busy)" @click="preview(FILE_KEY)" />
+                <USelectMenu :model-value="own.file_voice || ''" :items="platform_items" value-key="value" create-item :search-input="{ placeholder: t('搜索或输入音色 ID') }" :aria-label="t('朗读文件的音色')" size="sm" class="min-w-0 flex-1" @update:model-value="set_voice(FILE_KEY, $event)" @create="set_voice(FILE_KEY, $event)" />
+                <UButton :icon="playing === FILE_KEY ? 'i-lucide-square' : 'i-lucide-volume-2'" :aria-label="playing === FILE_KEY ? t('停止试听') : t('试听朗读文件的音色')" color="neutral" variant="ghost" size="sm" :loading="busy === `preview:${FILE_KEY}`" :disabled="!settings.api_key_ref || Boolean(busy)" @click="preview(FILE_KEY)" />
               </div>
             </div>
             <div v-for="platform in platforms" :key="platform.name" class="speech-row"><span :title="platform.label">{{ platform.label }}</span>
               <div class="speech-inline">
-                <USelectMenu :model-value="own.member_voices[platform.name] || ''" :items="platform_items" value-key="value" create-item :search-input="{ placeholder: '搜索或输入音色 ID' }" :aria-label="`${platform.label} 的音色`" size="sm" class="min-w-0 flex-1" @update:model-value="set_voice(platform.name, $event)" @create="set_voice(platform.name, $event)" />
-                <UButton :icon="playing === platform.name ? 'i-lucide-square' : 'i-lucide-volume-2'" :aria-label="playing === platform.name ? '停止试听' : `试听 ${platform.label} 的音色`" color="neutral" variant="ghost" size="sm" :loading="busy === `preview:${platform.name}`" :disabled="!settings.api_key_ref || Boolean(busy)" @click="preview(platform.name)" />
+                <USelectMenu :model-value="own.member_voices[platform.name] || ''" :items="platform_items" value-key="value" create-item :search-input="{ placeholder: t('搜索或输入音色 ID') }" :aria-label="t('{value1} 的音色', { value1: platform.label })" size="sm" class="min-w-0 flex-1" @update:model-value="set_voice(platform.name, $event)" @create="set_voice(platform.name, $event)" />
+                <UButton :icon="playing === platform.name ? 'i-lucide-square' : 'i-lucide-volume-2'" :aria-label="playing === platform.name ? t('停止试听') : t('试听 {value1} 的音色', { value1: platform.label })" color="neutral" variant="ghost" size="sm" :loading="busy === `preview:${platform.name}`" :disabled="!settings.api_key_ref || Boolean(busy)" @click="preview(platform.name)" />
               </div>
             </div>
-            <p class="fine-print speech-note">未单独设置的 AI 与其他消息用通用音色</p>
-            <div class="speech-row"><span>语速</span>
-              <div class="speech-rates" role="group" aria-label="朗读语速" :title="service.rate === false ? '当前接入不支持调节语速' : undefined"><UButton v-for="rate in rates" :key="rate.value" :label="rate.label" color="neutral" variant="ghost" size="xs" :disabled="service.rate === false" :class="{ chosen: settings.speech_rate === rate.value }" :aria-pressed="settings.speech_rate === rate.value" @click="settings.speech_rate = rate.value; save()" /></div>
+            <p class="fine-print speech-note">{{ t('未单独设置的 AI 与其他消息用通用音色') }}</p>
+            <div class="speech-row"><span>{{ t('语速') }}</span>
+              <div class="speech-rates" role="group" :aria-label="t('朗读语速')" :title="service.rate === false ? t('当前接入不支持调节语速') : undefined"><UButton v-for="rate in rates" :key="rate.value" :label="rate.label" color="neutral" variant="ghost" size="xs" :disabled="service.rate === false" :class="{ chosen: settings.speech_rate === rate.value }" :aria-pressed="settings.speech_rate === rate.value" @click="settings.speech_rate = rate.value; save()" /></div>
             </div>
-            <div class="speech-row"><span>语气</span>
-              <UTextarea v-if="service.context" v-model="own.context" :maxlength="200" :rows="1" autoresize :maxrows="4" placeholder="可选，如：像朋友聊天一样自然地读" aria-label="朗读语气提示" size="sm" class="w-full" @change="save" />
-              <UInput v-else disabled placeholder="当前接入不支持自定义语气" aria-label="朗读语气提示" size="sm" class="w-full" />
+            <div class="speech-row"><span>{{ t('语气') }}</span>
+              <UTextarea v-if="service.context" v-model="own.context" :maxlength="200" :rows="1" autoresize :maxrows="4" :placeholder="t('可选，如：像朋友聊天一样自然地读')" :aria-label="t('朗读语气提示')" size="sm" class="w-full" @change="save" />
+              <UInput v-else disabled :placeholder="t('当前接入不支持自定义语气')" :aria-label="t('朗读语气提示')" size="sm" class="w-full" />
             </div>
-            <p class="fine-print speech-note">输入框右下角的播报按钮自动读新回复摘要</p>
-            <div class="speech-row"><span>本机进程</span>
+            <p class="fine-print speech-note">{{ t('输入框右下角的播报按钮自动读新回复摘要') }}</p>
+            <div class="speech-row"><span>{{ t('本机进程') }}</span>
               <div class="speech-inline speech-process">
                 <span :class="['speech-process-state', services.tts?.state]" :title="service_label('tts')">{{ service_label('tts') }}</span>
-                <UButton v-if="services.tts?.state === 'running'" icon="i-lucide-power" aria-label="强行停止本机朗读服务" title="强行停止本机朗读服务（连同子进程）" color="error" variant="ghost" size="sm" :loading="busy === 'stop:tts'" :disabled="Boolean(busy)" @click="stop_service('tts')" />
+                <UButton v-if="services.tts?.state === 'running'" icon="i-lucide-power" :aria-label="t('强行停止本机朗读服务')" :title="t('强行停止本机朗读服务（连同子进程）')" color="error" variant="ghost" size="sm" :loading="busy === 'stop:tts'" :disabled="Boolean(busy)" @click="stop_service('tts')" />
               </div>
             </div>
-            <h4>语音输入</h4>
-            <div class="speech-row"><span>服务</span>
-              <div class="speech-rates" role="group" aria-label="语音输入服务"><UButton v-for="item in settings.stt_catalog" :key="item.id" :label="item.label" color="neutral" variant="ghost" size="xs" :class="{ chosen: settings.stt_provider === item.id }" :aria-pressed="settings.stt_provider === item.id" @click="choose_input(item.id)" /></div>
+            <h4>{{ t('语音输入') }}</h4>
+            <div class="speech-row"><span>{{ t('服务') }}</span>
+              <div class="speech-rates" role="group" :aria-label="t('语音输入服务')"><UButton v-for="item in settings.stt_catalog" :key="item.id" :label="item.label" color="neutral" variant="ghost" size="xs" :class="{ chosen: settings.stt_provider === item.id }" :aria-pressed="settings.stt_provider === item.id" @click="choose_input(item.id)" /></div>
             </div>
             <p class="fine-print speech-note" :title="stt_service.note">{{ stt_service.note }}</p>
-            <div class="speech-row"><span>密钥</span>
-              <UInput v-if="stt_service.local" disabled :placeholder="settings.stt_key_ref ? '已由安装技能配置，无需填写' : '尚未安装：让本机 AI 按 local-stt-setup 技能安装'" aria-label="本机语音识别令牌" size="sm" class="w-full" />
-              <UInput v-else-if="input_service" v-model="typed_keys[input_service.id]" type="text" autocomplete="off" spellcheck="false" data-1p-ignore data-lpignore="true" :placeholder="settings.providers[input_service.id]?.api_key_ref ? SAVED_MARK : `粘贴${input_service.label} API Key`" :title="settings.providers[input_service.id]?.api_key_ref && !typed_keys[input_service.id] ? '已保存；本机不回传密钥，输入新 Key 可更换' : undefined" :aria-label="`语音输入的${input_service.label} API Key`" size="sm" class="w-full" :loading="busy === `key:${input_service.id}`" :ui="{ base: visible_keys[input_service.id] ? '' : 'speech-key-masked', trailing: 'pe-0.5' }" @change="save_key(input_service)">
-                <template #trailing><UButton :icon="visible_keys[input_service.id] ? 'i-lucide-eye' : 'i-lucide-eye-off'" :disabled="!typed_keys[input_service.id]" :aria-label="visible_keys[input_service.id] ? '隐藏密钥' : '显示密钥'" :aria-pressed="Boolean(visible_keys[input_service.id])" size="xs" color="neutral" variant="link" @click="visible_keys[input_service.id] = !visible_keys[input_service.id]" /></template>
+            <div class="speech-row"><span>{{ t('密钥') }}</span>
+              <UInput v-if="stt_service.local" disabled :placeholder="settings.stt_key_ref ? t('已由安装技能配置，无需填写') : t('尚未安装：让本机 AI 按 local-stt-setup 技能安装')" :aria-label="t('本机语音识别令牌')" size="sm" class="w-full" />
+              <UInput v-else-if="input_service" v-model="typed_keys[input_service.id]" type="text" autocomplete="off" spellcheck="false" data-1p-ignore data-lpignore="true" :placeholder="settings.providers[input_service.id]?.api_key_ref ? SAVED_MARK : t('粘贴{value1} API Key', { value1: input_service.label })" :title="settings.providers[input_service.id]?.api_key_ref &amp;&amp; !typed_keys[input_service.id] ? t('已保存；本机不回传密钥，输入新 Key 可更换') : undefined" :aria-label="t('语音输入的{value1} API Key', { value1: input_service.label })" size="sm" class="w-full" :loading="busy === `key:${input_service.id}`" :ui="{ base: visible_keys[input_service.id] ? '' : 'speech-key-masked', trailing: 'pe-0.5' }" @change="save_key(input_service)">
+                <template #trailing><UButton :icon="visible_keys[input_service.id] ? 'i-lucide-eye' : 'i-lucide-eye-off'" :disabled="!typed_keys[input_service.id]" :aria-label="visible_keys[input_service.id] ? t('隐藏密钥') : t('显示密钥')" :aria-pressed="Boolean(visible_keys[input_service.id])" size="xs" color="neutral" variant="link" @click="visible_keys[input_service.id] = !visible_keys[input_service.id]" /></template>
               </UInput>
-              <UInput v-else disabled :placeholder="`与朗读共用上方的${stt_service.label} Key`" :aria-label="`语音输入的${stt_service.label} API Key`" size="sm" class="w-full" />
+              <UInput v-else disabled :placeholder="t('与朗读共用上方的{value1} Key', { value1: stt_service.label })" :aria-label="t('语音输入的{value1} API Key', { value1: stt_service.label })" size="sm" class="w-full" />
             </div>
-            <div class="speech-row"><span>本机进程</span>
+            <div class="speech-row"><span>{{ t('本机进程') }}</span>
               <div class="speech-inline speech-process">
                 <span :class="['speech-process-state', services.stt?.state]" :title="service_label('stt')">{{ service_label('stt') }}</span>
-                <UButton v-if="services.stt?.state === 'running'" icon="i-lucide-power" aria-label="强行停止本机语音识别服务" title="强行停止本机语音识别服务（连同子进程）" color="error" variant="ghost" size="sm" :loading="busy === 'stop:stt'" :disabled="Boolean(busy)" @click="stop_service('stt')" />
+                <UButton v-if="services.stt?.state === 'running'" icon="i-lucide-power" :aria-label="t('强行停止本机语音识别服务')" :title="t('强行停止本机语音识别服务（连同子进程）')" color="error" variant="ghost" size="sm" :loading="busy === 'stop:stt'" :disabled="Boolean(busy)" @click="stop_service('stt')" />
               </div>
             </div>
           </template>
-          <p v-else class="fine-print">正在读取语音设置…</p>
+          <p v-else class="fine-print">{{ t('正在读取语音设置…') }}</p>
         </div>
       </template>
     </UCollapsible>

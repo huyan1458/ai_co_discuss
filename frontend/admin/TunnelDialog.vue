@@ -7,17 +7,18 @@
  */
 import { computed, inject, onBeforeUnmount, ref, watch } from "vue";
 import { call } from "./api.js";
+import { t } from '../i18n.js';
 
 const props = defineProps({ open: { type: Boolean, required: true } });
 const emit = defineEmits(["update:open"]);
 const { state, reload, notify } = inject("panel");
 const POLL_MS = 1500;
-const STEPS = ["安装 cloudflared", "等待 Cloudflare 授权", "建立隧道", "添加域名记录", "启动隧道"];
+const STEPS = [t('安装 cloudflared'), t('等待 Cloudflare 授权'), t('建立隧道'), t('添加域名记录'), t('启动隧道')];
 const CHECKS = [
-  "缓存规则：不能有对所有主机或这个子域名生效的“缓存全部内容”（Cache Everything），否则一个账号的页面可能被缓存后给到另一个账号",
-  "安全：关闭 Bot Fight Mode，或为这个子域名加跳过规则，否则网页的接口请求会被拦",
-  "速度：关闭 Rocket Loader（会改写页面脚本）",
-  "DNS：这个子域名还没有记录（有的话先删掉）",
+  t('缓存规则：不能有对所有主机或这个子域名生效的“缓存全部内容”（Cache Everything），否则一个账号的页面可能被缓存后给到另一个账号'),
+  t('安全：关闭 Bot Fight Mode，或为这个子域名加跳过规则，否则网页的接口请求会被拦'),
+  t('速度：关闭 Rocket Loader（会改写页面脚本）'),
+  t('DNS：这个子域名还没有记录（有的话先删掉）'),
 ];
 const host = ref(""), name = ref(""), checked = ref(false), job = ref(null), starting = ref(false);
 let timer = null;
@@ -36,7 +37,7 @@ async function poll() {
   stop_polling();
   try { job.value = await call("tunnel/setup"); } catch { /* try again */ }
   if (job.value?.status === "running") timer = setTimeout(poll, POLL_MS);
-  else if (job.value?.status === "done") { notify("info", `外网地址已设为 https://${job.value.host}`); reload(); }
+  else if (job.value?.status === "done") { notify("info", t('外网地址已设为 https://{value1}', { value1: job.value.host })); reload(); }
 }
 onBeforeUnmount(stop_polling);
 
@@ -61,23 +62,21 @@ function close() { emit("update:open", false); }
 </script>
 
 <template>
-  <UModal :open="open" title="设置外网地址" description="让使用者从外网打开登录入口：经 Cloudflare 隧道把你的域名转到这台电脑" :dismissible="job?.status !== 'running'" @update:open="(value) => !value && close()">
+  <UModal :open="open" :title="t('设置外网地址')" :description="t('让使用者从外网打开登录入口：经 Cloudflare 隧道把你的域名转到这台电脑')" :dismissible="job?.status !== 'running'" @update:open="(value) => !value && close()">
     <template #body>
       <form v-if="!job" class="tunnel-form" @submit.prevent="checked && start()">
-        <label class="panel-field">域名
-          <input v-model="host" class="panel-input" placeholder="codiscuss.example.com" autocomplete="off" spellcheck="false" />
-          <small>须已托管在 Cloudflare 的域名下，建议用专门的子域名</small></label>
-        <label class="panel-field">隧道名
-          <input v-model="name" class="panel-input" placeholder="codiscuss" autocomplete="off" spellcheck="false" />
-          <small>这台电脑在 Cloudflare 上的隧道名；同一域名在别的电脑上建过隧道时，换一个名字</small></label>
+        <label class="panel-field">{{ t('域名') }} <input v-model="host" class="panel-input" placeholder="codiscuss.example.com" autocomplete="off" spellcheck="false" />
+          <small>{{ t('须已托管在 Cloudflare 的域名下，建议用专门的子域名') }}</small></label>
+        <label class="panel-field">{{ t('隧道名') }} <input v-model="name" class="panel-input" placeholder="codiscuss" autocomplete="off" spellcheck="false" />
+          <small>{{ t('这台电脑在 Cloudflare 上的隧道名；同一域名在别的电脑上建过隧道时，换一个名字') }}</small></label>
         <div class="tunnel-checks">
-          <strong>开始前在 Cloudflare 后台检查这个域名所在站点</strong>
+          <strong>{{ t('开始前在 Cloudflare 后台检查这个域名所在站点') }}</strong>
           <ol><li v-for="item in CHECKS" :key="item">{{ item }}</li></ol>
-          <label class="tunnel-confirm"><input v-model="checked" type="checkbox" />已检查完</label>
+          <label class="tunnel-confirm"><input v-model="checked" type="checkbox" />{{ t('已检查完') }}</label>
         </div>
         <div class="panel-form-foot">
-          <button type="button" class="panel-button is-plain" @click="close">取消</button>
-          <button type="submit" class="panel-button is-primary" :disabled="!checked || !host.trim() || starting">开始设置</button>
+          <button type="button" class="panel-button is-plain" @click="close">{{ t('取消') }}</button>
+          <button type="submit" class="panel-button is-primary" :disabled="!checked || !host.trim() || starting">{{ t('开始设置') }}</button>
         </div>
       </form>
 
@@ -86,16 +85,14 @@ function close() { emit("update:open", false); }
           <li v-for="step in STEPS" :key="step" :class="`is-${step_state(step)}`">
             <UIcon :name="ICONS[step_state(step)]" :class="{ 'animate-spin': step_state(step) === 'running' }" />{{ step }}</li>
         </ol>
-        <p v-if="job.status === 'running' && job.step === '等待 Cloudflare 授权'" class="panel-note">
-          <UIcon name="i-lucide-info" />浏览器里登录 Cloudflare，选择域名所在站点后点 Authorize。浏览器没有自动打开时
-          <a v-if="job.url" class="panel-link" :href="job.url" target="_blank" rel="noopener">点这里授权</a><template v-else>，请稍候</template>。</p>
+        <p v-if="job.status === 'running' &amp;&amp; job.step === t('等待 Cloudflare 授权')" class="panel-note">
+          <UIcon name="i-lucide-info" />{{ t('浏览器里登录 Cloudflare，选择域名所在站点后点 Authorize。浏览器没有自动打开时') }} <a v-if="job.url" class="panel-link" :href="job.url" target="_blank" rel="noopener">{{ t('点这里授权') }}</a><template v-else>{{ t('，请稍候') }}</template>。</p>
         <p v-if="job.note" class="panel-note is-amber"><UIcon name="i-lucide-triangle-alert" />{{ job.note }}</p>
         <p v-if="job.status === 'failed'" class="panel-note is-amber"><UIcon name="i-lucide-circle-x" />{{ job.error }}</p>
-        <p v-if="job.status === 'done'" class="panel-note"><UIcon name="i-lucide-circle-check" style="color: var(--panel-green)" />
-          外网地址 https://{{ job.host }} 已设好，隧道由这台电脑在后台运行。建议把 Cloudflare 授权文件 ~\.cloudflared\cert.pem 移出这台电脑保管：它能管理整个站点，隧道运行用不到它。</p>
+        <p v-if="job.status === 'done'" class="panel-note"><UIcon name="i-lucide-circle-check" style="color: var(--panel-green)" /> {{ t('外网地址 https://{value1} 已设好，隧道由这台电脑在后台运行。建议把 Cloudflare 授权文件 ~\\.cloudflared\\cert.pem 移出这台电脑保管：它能管理整个站点，隧道运行用不到它。', { value1: job.host }) }}</p>
         <div class="panel-form-foot">
-          <button v-if="job.status === 'failed'" type="button" class="panel-button is-plain" @click="job = null">返回修改</button>
-          <button type="button" class="panel-button is-primary" :disabled="job.status === 'running'" @click="close">{{ job.status === "running" ? "进行中…" : "完成" }}</button>
+          <button v-if="job.status === 'failed'" type="button" class="panel-button is-plain" @click="job = null">{{ t('返回修改') }}</button>
+          <button type="button" class="panel-button is-primary" :disabled="job.status === 'running'" @click="close">{{ job.status === "running" ? t('进行中…') : t('完成') }}</button>
         </div>
       </div>
     </template>

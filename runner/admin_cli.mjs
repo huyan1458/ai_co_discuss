@@ -23,6 +23,7 @@ import { local_status } from './discussion_local.mjs';
 import { stop_tunnel } from './hosting_tunnel.mjs';
 import { launcher_path } from './launcher.mjs';
 import { running_elevated } from './os_users.mjs';
+import { t } from './i18n.mjs';
 
 const STATE_FILE = 'admin-panel.json';
 const OWNER = 'owner';
@@ -32,7 +33,7 @@ const LOGIN_WAIT_MS = 60_000, UPDATE_WAIT_MS = 10 * 60_000, START_WAIT_MS = 90_0
 const RUNNER = dirname(fileURLToPath(import.meta.url));
 const DESKTOP_TASK = 'CoDiscuss start (one time)';
 
-export const HELP = `用法：codiscuss admin <命令> [参数]（与管理面板的操作一一对应；除启动与退出外，需管理面板正在运行）
+export const HELP = t(`用法：codiscuss admin <命令> [参数]（与管理面板的操作一一对应；除启动与退出外，需管理面板正在运行）
 需要管理员权限的步骤（建或删 Windows 用户），在管理员终端或管理员的 SSH 会话里直接执行；否则在电脑桌面上弹出确认。
 
 启动与退出（不需要面板在运行）
@@ -79,32 +80,32 @@ API 密钥、技能、工作流、系统提示词（目标同上）
   prompt default get  /  prompt default set --file <文件>             新托管账号的默认系统提示词
 
 结果以 JSON 输出。--data 指定管理员服务目录（默认 ~/.codiscuss）。
-`;
+`);
 
 /** A client of the running panel: enters with the owner key and keeps the session for the requests that follow. */
 export async function panel_client(data) {
   let state;
   try { state = JSON.parse(readFileSync(join(data, STATE_FILE), 'utf8')); } catch { state = null; }
-  if (!state?.port || !state?.key) throw new Error('管理面板没有在运行：在这台电脑的桌面上运行 codiscuss panel open，或从任务栏图标打开');
+  if (!state?.port || !state?.key) throw new Error(t('管理面板没有在运行：在这台电脑的桌面上运行 codiscuss panel open，或从任务栏图标打开'));
   const origin = `http://127.0.0.1:${state.port}`;
   let entered;
   try { entered = await fetch(`${origin}/enter?key=${state.key}`, { redirect: 'manual', signal: AbortSignal.timeout(10_000) }); }
-  catch { throw new Error('管理面板没有响应：在这台电脑的桌面上运行 codiscuss panel open'); }
+  catch { throw new Error(t('管理面板没有响应：在这台电脑的桌面上运行 codiscuss panel open')); }
   const cookie = (entered.headers.get('set-cookie') || '').split(';')[0];
-  if (entered.status !== 302 || !cookie) throw new Error('管理面板拒绝了钥匙（面板可能刚重启）：稍后重试');
+  if (entered.status !== 302 || !cookie) throw new Error(t('管理面板拒绝了钥匙（面板可能刚重启）：稍后重试'));
   return async function call(path, body) {
     const init = { headers: { cookie }, signal: AbortSignal.timeout(15 * 60_000) };
     if (body !== undefined) Object.assign(init, { method: 'POST', body: JSON.stringify(body),
       headers: { cookie, origin, 'x-codiscuss-panel': '1', 'content-type': 'application/json' } });
     const response = await fetch(`${origin}/api/${path}`, init);
     const result = await response.json().catch(() => ({}));
-    if (!response.ok) throw new Error(result.error || `管理面板返回 ${response.status}`);
+    if (!response.ok) throw new Error(result.error || t('管理面板返回 {value1}', { value1: response.status }));
     return result;
   };
 }
 
 const wait = ms => new Promise(done => setTimeout(done, ms));
-const need = (value, usage) => { if (!value) throw new Error(`缺少参数：${usage}`); return value; };
+const need = (value, usage) => { if (!value) throw new Error(t('缺少参数：{value1}', { value1: usage })); return value; };
 const is_owner = target => target === OWNER;
 
 /**
@@ -115,25 +116,25 @@ async function add_account(call, name, { isolate, start }) {
   const steps = [];
   const existing = (await call('state')).accounts?.find(item => item.name === name);
   let password = '';
-  if (existing) steps.push('账号已存在，从缺少的步骤接着做（密码不变；需要新密码用 account password）');
-  else { password = (await call('accounts', { name })).password; steps.push('已创建账号与文件夹'); }
+  if (existing) steps.push(t('账号已存在，从缺少的步骤接着做（密码不变；需要新密码用 account password）'));
+  else { password = (await call('accounts', { name })).password; steps.push(t('已创建账号与文件夹')); }
   const report = extra => ({ name, ...(password ? { password } : {}), steps, ...extra });
   try {
     if (isolate && !existing?.os_user) {
       await call(`accounts/${name}/os-user`, {});
-      steps.push(running_elevated() ? '已创建独立的 Windows 用户' : '已创建独立的 Windows 用户（电脑上的管理员确认已通过）');
+      steps.push(running_elevated() ? t('已创建独立的 Windows 用户') : t('已创建独立的 Windows 用户（电脑上的管理员确认已通过）'));
     }
     if (isolate) {
       const state = await call('state');
-      if (!state.clis?.app || !state.clis?.python) { await call('clis/install', {}); steps.push('已安装隔离账号的程序副本'); }
+      if (!state.clis?.app || !state.clis?.python) { await call('clis/install', {}); steps.push(t('已安装隔离账号的程序副本')); }
     }
     await call(`accounts/${name}/env/init`, {});
-    steps.push(isolate ? '已初始化 AI 环境' : '已安装随包工作流');
-    if (process.platform === 'win32' && !existing?.protected) { await call(`accounts/${name}/protect`, { on: true }); steps.push('已开启入口保护'); }
-    if (start && !existing?.running) { await call(`accounts/${name}/start`, {}); steps.push('已启动实例'); }
+    steps.push(isolate ? t('已初始化 AI 环境') : t('已安装随包工作流'));
+    if (process.platform === 'win32' && !existing?.protected) { await call(`accounts/${name}/protect`, { on: true }); steps.push(t('已开启入口保护')); }
+    if (start && !existing?.running) { await call(`accounts/${name}/start`, {}); steps.push(t('已启动实例')); }
   } catch (error) {
-    const rights = /管理员权限/.test(error.message) ? '在管理员终端或管理员的 SSH 会话里执行，或在电脑桌面上确认提权，' : '';
-    return report({ failed: error.message, next: `${rights}解决后重新执行 codiscuss admin account add ${name}，会从这一步接着做` });
+    const rights = /管理员权限/.test(error.message) ? t('在管理员终端或管理员的 SSH 会话里执行，或在电脑桌面上确认提权，') : '';
+    return report({ failed: error.message, next: t('{value1}解决后重新执行 codiscuss admin account add {value2}，会从这一步接着做', { value1: rights, value2: name }) });
   }
   return report({});
 }
@@ -143,7 +144,7 @@ const ACCOUNT_ACTIONS = { start: 'start', stop: 'stop', disable: 'disable', enab
 
 async function account_command(call, [action, name], values) {
   if (action === 'list') return (await call('state')).accounts;
-  need(name, `account ${action} <名>`);
+  need(name, t('account {value1} <名>', { value1: action }));
   if (action === 'add') return add_account(call, name, { isolate: !values['no-isolate'], start: !values['no-start'] });
   if (action === 'protect' || action === 'unprotect') return call(`accounts/${name}/protect`, { on: action === 'protect' });
   if (!ACCOUNT_ACTIONS[action]) throw new Error(HELP);
@@ -158,11 +159,11 @@ async function start_login(call, target, cli, method) {
     const progress = await call(`login-jobs/${id}`);
     if (progress.link || progress.ended) return { job: id, ...progress };
   }
-  return { job: id, link: '', note: '一分钟内没有出现登录链接，可用 login progress 继续查看' };
+  return { job: id, link: '', note: t('一分钟内没有出现登录链接，可用 login progress 继续查看') };
 }
 
 async function login_command(call, [action, ...rest], values) {
-  const target = (name) => (is_owner(name) ? '_' : need(name, '目标'));
+  const target = (name) => (is_owner(name) ? '_' : need(name, t('目标')));
   if (action === 'status') {
     const [status, state] = await Promise.all([call(`logins/${target(rest[0])}`), call('state')]);
     return { status, methods: login_methods(state.login_methods) };
@@ -170,27 +171,27 @@ async function login_command(call, [action, ...rest], values) {
   if (action === 'set') {
     const [who, cli, method] = rest;
     const fields = Object.fromEntries((values.set || []).map(pair => { const at = pair.indexOf('='); return [pair.slice(0, at), pair.slice(at + 1)]; }));
-    return call(`logins/${target(who)}/${need(cli, '程序')}/apply`, { method: need(method, '方式'), ...fields });
+    return call(`logins/${target(who)}/${need(cli, t('程序'))}/apply`, { method: need(method, t('方式')), ...fields });
   }
-  if (action === 'start') return start_login(call, target(rest[0]), need(rest[1], '程序'), need(rest[2], '方式'));
-  if (action === 'submit') return call(`login-jobs/${need(rest[0], '作业')}/submit`, { text: need(rest.slice(1).join(' '), '文本') });
-  if (action === 'progress') return call(`login-jobs/${need(rest[0], '作业')}`);
-  if (action === 'cancel') return call(`login-jobs/${need(rest[0], '作业')}/cancel`, {});
+  if (action === 'start') return start_login(call, target(rest[0]), need(rest[1], t('程序')), need(rest[2], t('方式')));
+  if (action === 'submit') return call(`login-jobs/${need(rest[0], t('作业'))}/submit`, { text: need(rest.slice(1).join(' '), t('文本')) });
+  if (action === 'progress') return call(`login-jobs/${need(rest[0], t('作业'))}`);
+  if (action === 'cancel') return call(`login-jobs/${need(rest[0], t('作业'))}/cancel`, {});
   throw new Error(HELP);
 }
 
 /** The ways each program signs in, as `login set` (filled-in fields) or `login start` (in a browser) takes them. */
 function login_methods(methods = {}) {
   return Object.fromEntries(Object.entries(methods).map(([cli, list]) => [cli, list.map(item => (item.interactive
-    ? `${item.key}：${item.label}（login start <目标> ${cli} ${item.key}）`
-    : `${item.key}：${item.label}（login set <目标> ${cli} ${item.key} ${(item.fields || []).map(field => `--set ${field}=…`).join(' ')}）`))]));
+    ? t('{value1}：{value2}（login start <目标> {value3} {value4}）', { value1: item.key, value2: item.label, value3: cli, value4: item.key })
+    : t('{value1}：{value2}（login set <目标> {value3} {value4} {value5}）', { value1: item.key, value2: item.label, value3: cli, value4: item.key, value5: (item.fields || []).map(field => `--set ${field}=…`).join(' ') })))]));
 }
 
 async function key_command(call, [action, who, ref], values) {
-  const base = is_owner(need(who, '目标')) ? 'owner/keys' : `accounts/${who}/keys`;
+  const base = is_owner(need(who, t('目标'))) ? 'owner/keys' : `accounts/${who}/keys`;
   if (action === 'list') return call(base);
   if (action === 'add') return call(base, { base_url: need(values['base-url'], '--base-url'), api_key: need(values.key, '--key') });
-  if (action === 'remove') return call(`${base}/remove`, { ref: need(ref, '编号') });
+  if (action === 'remove') return call(`${base}/remove`, { ref: need(ref, t('编号')) });
   throw new Error(HELP);
 }
 
@@ -211,19 +212,19 @@ function folder_files(folder) {
 async function skill_command(call, [action, who, ...names]) {
   if (action === 'library') return call('skill-library');
   if (action === 'import') {
-    const path = need(who, '文件夹或 .zip');
+    const path = need(who, t('文件夹或 .zip'));
     const body = statSync(path).isDirectory() ? { name: basename(path), files: folder_files(path) } : { zip: readFileSync(path).toString('base64') };
     return call('skill-library', body);
   }
-  if (action === 'delete') return call(`skill-library/${need(who, '名')}/remove`, {});
-  const base = is_owner(need(who, '目标')) ? 'owner/env' : `accounts/${who}/env`;
+  if (action === 'delete') return call(`skill-library/${need(who, t('名'))}/remove`, {});
+  const base = is_owner(need(who, t('目标'))) ? 'owner/env' : `accounts/${who}/env`;
   if (action === 'list') return (await call(base)).skills;
   if (action === 'install' || action === 'remove') return call(`${base}/skills`, { [action]: names });
   throw new Error(HELP);
 }
 
 async function workflow_command(call, [action, who]) {
-  const base = is_owner(need(who, '目标')) ? 'owner/workflows' : `accounts/${who}/workflows`;
+  const base = is_owner(need(who, t('目标'))) ? 'owner/workflows' : `accounts/${who}/workflows`;
   if (action === 'list') return call(base);
   if (action === 'install') return call(`${base}/install`, {});
   throw new Error(HELP);
@@ -235,7 +236,7 @@ async function prompt_command(call, [action, who], values) {
     if (who === 'set') return call('hosted-prompt', { text: readFileSync(need(values.file, '--file'), 'utf8') });
     throw new Error(HELP);
   }
-  need(who, '目标');
+  need(who, t('目标'));
   if (!is_owner(who)) {
     if (action === 'get') return { prompt: (await call(`accounts/${who}/env`)).prompt };
     if (action === 'set') return call(`accounts/${who}/env/prompt`, { text: readFileSync(need(values.file, '--file'), 'utf8') });
@@ -246,7 +247,7 @@ async function prompt_command(call, [action, who], values) {
   if (action !== 'set') throw new Error(HELP);
   // The owner's prompt files are kept as groups of hard links; the one to write is named, or the only one there is.
   const group = values.group ? groups.find(item => item.key === values.group) : groups.length === 1 ? groups[0] : null;
-  if (!group) throw new Error(`请用 --group 指定要写入的组：${groups.map(item => item.key).join('、')}`);
+  if (!group) throw new Error(t('请用 --group 指定要写入的组：{value1}', { value1: groups.map(item => item.key).join('、') }));
   return call('owner/prompts', { key: group.key, text: readFileSync(need(values.file, '--file'), 'utf8'), original: group.text });
 }
 
@@ -280,13 +281,13 @@ Start-Sleep -Seconds 3
 Unregister-ScheduledTask -TaskName ${quote(DESKTOP_TASK)} -Confirm:$false`;
   const result = spawnSync('powershell.exe', ['-NoProfile', '-NonInteractive', '-Command', script], { encoding: 'utf8', windowsHide: true, timeout: 60_000 });
   if (result.status !== 0) {
-    throw new Error(`没能在桌面会话里启动（需要这台电脑上有人登录着 Windows）：${(result.stderr || result.error?.message || '').trim().split(/\r?\n/)[0]}`);
+    throw new Error(t('没能在桌面会话里启动（需要这台电脑上有人登录着 Windows）：{value1}', { value1: (result.stderr || result.error?.message || '').trim().split(/\r?\n/)[0] }));
   }
 }
 
 /** Start everything as the 共议 launcher does at login, and wait until the service and the panel answer. */
 async function start_all(data) {
-  if (local_status(data).running && panel_state(data)?.pid && alive(panel_state(data).pid)) return { started: false, note: '已在运行' };
+  if (local_status(data).running && panel_state(data)?.pid && alive(panel_state(data).pid)) return { started: false, note: t('已在运行') };
   const launcher = launcher_path(data);
   if (existsSync(launcher)) start_in_desktop(launcher, ['--start']);
   else start_in_desktop(process.execPath, [join(RUNNER, 'discussion_local.mjs'), 'start']);
@@ -295,7 +296,7 @@ async function start_all(data) {
     const state = panel_state(data);
     if (local_status(data).running && state?.pid && alive(state.pid)) return { started: true, service: local_status(data).url, panel: state.port };
   }
-  throw new Error(`启动超过 ${START_WAIT_MS / 1000} 秒没有完成：查看 ${join(data, 'local', 'supervisor.log')} 与 admin-panel.log`);
+  throw new Error(t('启动超过 {value1} 秒没有完成：查看 {value2} 与 admin-panel.log', { value1: START_WAIT_MS / 1000, value2: join(data, 'local', 'supervisor.log') }));
 }
 
 /** Quit everything but the hosted accounts' instances, keeping every setting (what ran comes back with the next start). */
@@ -303,17 +304,17 @@ async function stop_all(data) {
   const steps = [];
   const panel = panel_state(data);
   // The panel first: it would start the entry and the tunnel again.
-  if (panel?.pid && alive(panel.pid)) { process.kill(panel.pid); steps.push('已关闭管理面板与任务栏图标'); }
+  if (panel?.pid && alive(panel.pid)) { process.kill(panel.pid); steps.push(t('已关闭管理面板与任务栏图标')); }
   rmSync(join(data, STATE_FILE), { force: true });
-  if ((await entry_status(data)).running) { await stop_entry(data); steps.push('已停止登录入口'); }
-  if (entry_settings(data).tunnel) { stop_tunnel(data); steps.push('已停止隧道'); }
+  if ((await entry_status(data)).running) { await stop_entry(data); steps.push(t('已停止登录入口')); }
+  if (entry_settings(data).tunnel) { stop_tunnel(data); steps.push(t('已停止隧道')); }
   if (local_status(data).pid || local_status(data).service_pid) {
     const result = spawnSync(process.execPath, [join(RUNNER, 'discussion_local.mjs'), 'stop'], { encoding: 'utf8', windowsHide: true,
       env: { ...process.env, DISCUSS_SERVICE_HOME: data }, timeout: 120_000 });
-    if (result.status !== 0) throw new Error(`共议服务没有停下：${(result.stderr || '').trim()}`);
-    steps.push('已停止共议服务');
+    if (result.status !== 0) throw new Error(t('共议服务没有停下：{value1}', { value1: (result.stderr || '').trim() }));
+    steps.push(t('已停止共议服务'));
   }
-  return { stopped: true, steps: steps.length ? steps : ['原本就没有在运行'] };
+  return { stopped: true, steps: steps.length ? steps : [t('原本就没有在运行')] };
 }
 
 /** Install the latest version and wait for the panel, which restarts on it, to report every step. */
@@ -323,16 +324,16 @@ async function update(call, data) {
     await wait(POLL_MS);
     try { const job = await (await panel_client(data))('update/progress'); if (job.status === 'done') return job; } catch { /* restarting */ }
   }
-  throw new Error('更新超过 10 分钟没有完成：之后用 codiscuss admin status 查看版本');
+  throw new Error(t('更新超过 10 分钟没有完成：之后用 codiscuss admin status 查看版本'));
 }
 
 async function entry_command(call, [action, first, second], values) {
   if (action === 'start' || action === 'stop') return call(`entry/${action}`, {});
   if (action === 'mode') return call('entry/mode', { mode: need(first, 'local|relay|tunnel') });
-  if (action === 'join') return call('relay/join', { code: need(first, '接入码') });
-  if (action === 'connect') return call('site/connect', { site: need(first, '站点'), setup_key: need(second, '绑定令牌') });
+  if (action === 'join') return call('relay/join', { code: need(first, t('接入码')) });
+  if (action === 'connect') return call('site/connect', { site: need(first, t('站点')), setup_key: need(second, t('绑定令牌')) });
   if (action === 'code') return call('site/code', { config: values.config || '', site: values.site || '' });
-  if (action === 'tunnel') return first === 'status' ? call('tunnel/setup') : setup_tunnel(call, need(first, '域名'), second || '');
+  if (action === 'tunnel') return first === 'status' ? call('tunnel/setup') : setup_tunnel(call, need(first, t('域名')), second || '');
   throw new Error(HELP);
 }
 
@@ -342,16 +343,16 @@ async function setup_tunnel(call, host, name) {
   for (let waited = 0; waited < LOGIN_WAIT_MS; waited += POLL_MS) {
     await wait(POLL_MS);
     const job = await call('tunnel/setup');
-    if (job.url) return { ...job, note: '用任一浏览器打开 url，登录 Cloudflare 并选择这个域名授权；之后用 entry tunnel status 查看进度' };
+    if (job.url) return { ...job, note: t('用任一浏览器打开 url，登录 Cloudflare 并选择这个域名授权；之后用 entry tunnel status 查看进度') };
     if (job.status !== 'running') return job;
   }
-  return { ...(await call('tunnel/setup')), note: '仍在进行，用 entry tunnel status 查看进度' };
+  return { ...(await call('tunnel/setup')), note: t('仍在进行，用 entry tunnel status 查看进度') };
 }
 
 /** The overview at a glance: what runs, where users sign in, and each account in one line. */
 function summary(state) {
   const { entry, service } = state;
-  const tunnel = entry?.tunnel ? (entry.tunnel.connected ? '已连接' : entry.tunnel.running ? '连接中' : '未运行') : undefined;
+  const tunnel = entry?.tunnel ? (entry.tunnel.connected ? t('已连接') : entry.tunnel.running ? t('连接中') : t('未运行')) : undefined;
   return { hosting: state.hosting, version: state.version, autostart: state.autostart,
     service: { running: service.running, url: service.url, version: service.version, error: service.error || undefined },
     ...(state.hosting ? {
@@ -407,7 +408,7 @@ export async function admin_cli(args, { client = panel_client, print = text => p
     runtime: () => (rest[0] === 'sync' ? call('clis/install', {}) : Promise.reject(new Error(HELP))),
     account: () => account_command(call, rest, values),
     login: () => login_command(call, rest, values),
-    logout: () => call(`logins/${is_owner(need(rest[0], '目标')) ? '_' : rest[0]}/${need(rest[1], '程序')}/logout`, {}),
+    logout: () => call(`logins/${is_owner(need(rest[0], t('目标'))) ? '_' : rest[0]}/${need(rest[1], t('程序'))}/logout`, {}),
     key: () => key_command(call, rest, values),
     skill: () => skill_command(call, rest),
     workflow: () => workflow_command(call, rest),

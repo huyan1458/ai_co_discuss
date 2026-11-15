@@ -27,7 +27,7 @@ codiscuss setup
 
 `setup` detects local CLIs, saves their configuration, installs the discussion skills, and starts the local site at `http://127.0.0.1:8765` in your browser. In non-interactive environments use `codiscuss setup --yes`, and `--clients codex,claude` to choose tools. If the result reports pending items, resolve them and run `setup` again.
 
-**Upgrade** — run `codiscuss local stop`, then `npm install --global --prefer-online ai_co_discuss@latest` and `codiscuss setup`.
+**Upgrade** — click **Update** on the **Overview** page of the admin panel. To upgrade by hand, run `codiscuss panel stop` and `codiscuss local stop`, then `npm install --global --prefer-online ai_co_discuss@latest` and `codiscuss setup`.
 
 **Uninstall** — run `codiscuss local stop`, then `npm uninstall --global ai_co_discuss`. Discussion data in `~/.codiscuss` is kept.
 
@@ -36,6 +36,20 @@ codiscuss setup
 ### From the Web UI
 
 Run `codiscuss local open`, click **New Room** (新建房间), add members and pick a host. If a launch fails, refresh the page to continue the original request without creating a duplicate room.
+
+Without a project folder, the room uses the **draft space**: the service creates a folder for the room there (room name plus a short ID) and uses it as the room's project folder. Files that members create are kept there, the **Files** page can browse them, and members can be given write access. The draft space sits next to the service folder by default (`~/.codiscuss-workspace`). Images drawn in a room are sent as message attachments, and a copy is also saved under `images/` in the project folder when members can write to it or the room uses the draft space.
+
+On Windows, running `codiscuss setup` in a terminal offers **Desktop shortcut** in the install options step: it is checked by default when no shortcut exists yet, and shown as **Regenerate** and unchecked when one does (non-interactive runs don't create it). You can also run `codiscuss launcher` at any time to create or regenerate it. It creates the CoDiscuss program with shortcuts on the desktop and in the Start menu; double-click to start the service and open the site. While the service runs, a CoDiscuss icon sits in the notification area: left-click opens the **admin panel** (or run `codiscuss panel`); right-click opens CoDiscuss, restarts or exits the service. The admin panel has two pages: **Overview** shows the local service status (start, restart, stop), checks for and installs new versions (updating your room skills too), and toggles starting at Windows sign-in; **Accounts** lists accounts on the left, and **Administrator** manages your own Claude Code / Codex / Antigravity sign-ins (sign in, switch method, sign out; a Setup Token is recommended for Claude Code), API keys and installed skills (add more from the skill library). The panel only opens on this computer. The first time, turn on CoDiscuss under Settings → Personalization → Taskbar → Other system tray icons so the icon stays on the taskbar.
+
+Everything in the admin panel can also be done from the command line with `codiscuss admin` (`codiscuss admin --help` lists all commands), which suits managing this computer over SSH. `start`, `stop` (a full exit: panel and icon, sign-in entry, tunnel and the CoDiscuss service; hosted accounts' instances keep running), `restart` and `update` work without the panel running; `start` launches in the signed-in desktop session, so the taskbar icon appears as usual. Other commands go through the running panel, with the same effect as clicking in it, and only this computer's administrators can use them. Creating or deleting the Windows user of an isolated account needs administrator rights: run it in an administrator terminal or an administrator's SSH session, otherwise a confirmation pops up on this computer's desktop. If `account add` fails partway, fix the cause and run the same command again; it continues from the missing steps.
+
+To let other people use the AI on this computer through their own accounts, check **Hosting** in setup's install options (or pass `--hosting`; `--no-hosting` turns it off; the choice is remembered). The panel then gains a **Hosted accounts** page:
+- Click **New account**, enter a name, and keep the default **Isolated** (it gets its own Windows user; the computer asks once for administrator approval). The wizard installs the programs, room skills, system prompt and bundled workflows it needs, starts its site, and shows the password once.
+- Click an account to open its page: sign in to its command-line tools, set API keys, pick skills from the skill library, edit its system prompt, start or stop it, and reset its password.
+- Drop skill folders or .zip files into the **Skill library**, then choose on an account's page who gets them.
+- When CoDiscuss updates, isolated accounts' programs and skills update with it, and running sites restart.
+
+Personal use doesn't need hosting.
 
 ### Browse Project Files
 
@@ -97,6 +111,10 @@ Permissions are set per automatically started CLI member and default to read-onl
 | Start at login (Windows) | `codiscuss service autostart on` |
 
 ## Command Line
+
+CLI help and command messages follow the system locale: Chinese for locales starting with `zh`, English otherwise. Set `CODISCUSS_LANG=zh-CN` or `CODISCUSS_LANG=en` to override it (for example, `$env:CODISCUSS_LANG="en"` in PowerShell or `CODISCUSS_LANG=en codiscuss --help` in a POSIX shell). Some shared interactive controls and messages supplied by other modules still appear in Chinese. Room read/write commands intended for agents keep their existing language.
+
+Messages generated by a running admin panel use its startup environment. To change those, restart the panel from a terminal with the desired `CODISCUSS_LANG`.
 
 Agents also use `codiscuss` to read and write rooms. `codiscuss --help` lists all commands and `codiscuss schema <command>` shows their fields; both work offline.
 

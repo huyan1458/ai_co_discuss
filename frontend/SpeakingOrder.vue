@@ -1,4 +1,5 @@
 <script setup>
+import { t } from './i18n.js';
 /**
  * The room's speaking order, shared by the free-room and discussion boards: who spoke, who speaks now and who is next.
  * The owner drags (or moves with the arrow keys) the members who have not spoken; each row's content comes from the board.
@@ -15,10 +16,17 @@ const order = computed(() => room.value.speaking_order || { kind: "default", ite
 const movable_state = computed(() => order.value.kind === "default" ? "idle" : "queued");
 const can_reorder = computed(() => Boolean(view.value.access?.can_manage) && !room.value.archived && order.value.movable.length > 1);
 // Outside the default order, idle rows are members this queue or round does not include: they get no place.
-const OUTSIDE_LABELS = { queue: "不在本次依次回答中", turns: "本轮未安排" };
+const OUTSIDE_LABELS = { queue: t('不在本次依次回答中'), turns: t('本轮未安排') };
 const grip_title = computed(() => order.value.kind === "default"
-  ? "拖动设置默认发言顺序，@全体依次 按此顺序；聚焦后可用上下方向键" : "拖动调整还没发言的顺序，立即生效；聚焦后可用上下方向键");
-const STALE_ORDER = "发言顺序刚有变化，已更新为最新顺序，请重新调整";
+  ? t('拖动设置默认发言顺序，@全体依次 按此顺序；聚焦后可用上下方向键') : t('拖动调整还没发言的顺序，立即生效；聚焦后可用上下方向键'));
+const STALE_ORDER = t('发言顺序刚有变化，已更新为最新顺序，请重新调整');
+// A relay stopped at a user gate says so: the owner's next unaddressed message is their step.
+const relay_label = computed(() => {
+  const relay = order.value.sequence;
+  if (!relay) return "";
+  if (relay.loop) return relay.waiting_user ? t('循环接力 · 第 {value1} 圈 · 等你回复', { value1: relay.pass }) : t('循环接力 · 第 {value1} 圈', { value1: relay.pass });
+  return relay.waiting_user ? t('主持人安排的依次接力 · 等你回复') : t('主持人安排的依次接力');
+});
 
 const list = ref(null);
 const drag = ref(null);
@@ -66,7 +74,7 @@ async function commit(names, name, focus) {
   await nextTick();
   // The moved row is re-inserted in the list; keep the keyboard on its grip.
   if (focus && key) list.value?.querySelector(`[data-key="${CSS.escape(key)}"] .speaking-order-grip`)?.focus();
-  announcement.value = `已将 ${name} 移到第 ${rows.value.find((item) => item.key === key)?.place || names.indexOf(name) + 1} 位`;
+  announcement.value = t('已将 {value1} 移到第 {value2} 位', { value1: name, value2: rows.value.find((item) => item.key === key)?.place || names.indexOf(name) + 1 });
   saving.value = true;
   try { await act("reorder_speakers", { revision: order.value.revision, order: names }); }
   finally { saving.value = false; sent.value = null; }
@@ -136,34 +144,34 @@ function step(event, index, direction) {
   <div class="speaking-order">
     <ul ref="list" class="pb-members" :class="{ 'is-dragging': drag }">
       <!-- A host's one-after-another relay shows as a queue; a loop also says which pass it is on. -->
-      <li v-if="order.sequence" class="speaking-order-divider speaking-order-relay"><span>{{ order.sequence.loop ? `循环接力 · 第 ${order.sequence.pass} 圈` : "主持人安排的依次接力" }}</span></li>
+      <li v-if="order.sequence" class="speaking-order-divider speaking-order-relay"><span>{{ relay_label }}</span></li>
       <template v-for="(item, index) in rows" :key="item.key">
         <li v-if="item.outside" class="speaking-order-divider" aria-hidden="true"><span>{{ OUTSIDE_LABELS[order.kind] }}</span></li>
         <li class="pb-member speaking-order-row" :class="[`is-${item.state}`, drop_class(index), { 'is-movable': item.state === movable_state && can_reorder }]"
           :data-key="item.key" :data-movable="item.state === movable_state ? '' : undefined">
           <button v-if="item.state === movable_state && can_reorder" type="button" class="speaking-order-grip" :aria-disabled="saving"
-            :aria-label="`${item.name}，第 ${item.place} 位；拖动或用上下方向键调整发言顺序`" :title="grip_title"
+            :aria-label="t('{value1}，第 {value2} 位；拖动或用上下方向键调整发言顺序', { value1: item.name, value2: item.place })" :title="grip_title"
             @pointerdown="start($event, movable_index(index))" @pointermove="move" @pointerup="finish" @pointercancel="finish($event, true)" @lostpointercapture="finish($event, true)"
             @keydown.up="step($event, movable_index(index), -1)" @keydown.down="step($event, movable_index(index), 1)">
             <span class="speaking-order-number">{{ item.place }}</span><UIcon name="i-lucide-grip-vertical" class="speaking-order-handle" />
           </button>
-          <span v-else-if="item.state === 'done'" class="speaking-order-place" title="已发言" aria-label="已发言"><UIcon name="i-lucide-check" /></span>
-          <span v-else class="speaking-order-place" :title="item.step ? '与同序号的成员同时做' : item.state === 'speaking' ? '正在发言' : undefined">{{ item.place || '' }}</span>
+          <span v-else-if="item.state === 'done'" class="speaking-order-place" :title="t('已发言')" :aria-label="t('已发言')"><UIcon name="i-lucide-check" /></span>
+          <span v-else class="speaking-order-place" :title="item.step ? t('与同序号的成员同时做') : item.state === 'speaking' ? t('正在发言') : undefined">{{ item.place || '' }}</span>
           <slot :item="item" :place="item.place" />
         </li>
       </template>
       <!-- Later rounds of a plan are read-only: only this round can be reordered, and the host usually re-plans after each round. -->
       <li v-if="order.later?.length" class="speaking-order-later">
         <details>
-          <summary>后续已排 {{ order.later.length }} 轮</summary>
+          <summary>{{ t('后续已排 {value1} 轮', { value1: order.later.length }) }}</summary>
           <ol>
             <li v-for="(names, index) in order.later" :key="index">
-              <span>{{ props.round ? `第 ${props.round + index + 1} 轮` : `后续第 ${index + 1} 轮` }}</span>{{ names.map((name) => bridge.display_name(name)).join(" → ") }}
+              <span>{{ props.round ? t('第 {value1} 轮', { value1: props.round + index + 1 }) : t('后续第 {value1} 轮', { value1: index + 1 }) }}</span>{{ names.map((name) => bridge.display_name(name)).join(" → ") }}
             </li>
           </ol>
         </details>
       </li>
-      <li v-if="props.away.length" class="speaking-order-divider" aria-hidden="true"><span>已离开</span></li>
+      <li v-if="props.away.length" class="speaking-order-divider" aria-hidden="true"><span>{{ t('已离开') }}</span></li>
       <li v-for="name in props.away" :key="`away-${name}`" class="pb-member speaking-order-row is-away">
         <span class="speaking-order-place"></span>
         <slot :item="{ name, state: 'away' }" :place="0" />

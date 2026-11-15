@@ -1,4 +1,10 @@
 "use strict";
+const t = (source, params) => window.codiscuss_i18n ? window.codiscuss_i18n.t(source, params)
+  : source.replace(/\{(\w+)\}/g, (match, name) => params && name in params ? String(params[name]) : match);
+/** Show text the server sent in the page language: `payload` is its `{ template, params }`, `fallback` the Chinese. */
+const server_text = (payload, fallback) => (payload?.template ? t(payload.template, payload.params) : fallback);
+// index.html carries the Chinese tab title; it follows the page language here.
+document.title = t("共议聊天室 · AI CoDiscuss");
 
 const REFRESH_INTERVAL_MS = 60000;
 const FALLBACK_REFRESH_INTERVAL_MS = 12000;
@@ -66,7 +72,7 @@ const ROOM_RELAY_PATH = /^\/api\/(rooms|folders|revisions)(\/|\?|$)/;
 // One part is base64-encoded, encrypted and base64-encoded again (about 16/9 of its size), and the sealed request
 // must stay inside the hosted site's 512 KiB request limit (backend/worker.mjs MAX_BODY_BYTES).
 const RELAY_UPLOAD_PART_BYTES = 256 * 1024;
-const COMPUTER_UNREACHABLE = "电脑未连接：请先与电脑配对，并确认电脑开机且运行 codiscuss";
+const COMPUTER_UNREACHABLE = t('电脑未连接：请先与电脑配对，并确认电脑开机且运行 codiscuss');
 let local_connection = null;
 let computer_connecting = false;
 let relay_machine = null;
@@ -79,36 +85,42 @@ const DEFAULT_USER_LABEL = "User";
 const DEFAULT_USER_ICON = "/icons/user.svg";
 // How a manual member learns it is its turn: it is pulled by the member.
 const MANUAL_TRIGGER_INSTRUCTION = "首次复制后，可由人工或软件原生定时触发；自行提交，不必每轮复制回答。";
-const MANAGEMENT_LOGIN_HINT = "需要登录管理员账号或使用创建该房间的浏览器";
+const MANAGEMENT_LOGIN_HINT = t('需要登录管理员账号或使用创建该房间的浏览器');
 const THEMES = ["channel", "channel-light"];
 // proxy and host_proxy label answers relayed for the retired web chatbot members.
-const SOURCE_LABELS = { demo: "示例", user: "本人发言", proxy: "用户代发", cli: "CLI 发言", api: "API 发言", url: "历史 URL 发言", host_proxy: "主持人代发", goal: "Goal" };
-const TURN_LABELS = { pending: "待处理", notified: "已通知，待回答", answered: "已回答", cancelled: "已取消" };
+const SOURCE_LABELS = { demo: t('示例'), user: t('本人发言'), proxy: t('用户代发'), cli: t('CLI 发言'), api: t('API 发言'), url: t('历史 URL 发言'), host_proxy: t('主持人代发'), goal: "Goal" };
+const TURN_LABELS = { pending: t('待处理'), notified: t('已通知，待回答'), answered: t('已回答'), cancelled: t('已取消') };
 const PLATFORM_IDENTITIES = {
-  "用户": { label: "User", initials: "U", style: "user", icon: "/icons/user.svg", description: "发起与协助" },
-  Codex: { initials: "CX", style: "codex", icon: "/icons/openai.svg", api_label: "OpenAI API", description: "AI 身份" },
-  Claude: { initials: "CL", style: "claude", icon: "/icons/claude.svg", description: "AI 身份" },
+  "用户": { label: "User", initials: "U", style: "user", icon: "/icons/user.svg", description: t('发起与协助') },
+  Codex: { initials: "CX", style: "codex", icon: "/icons/openai.svg", api_label: "OpenAI API", description: t('AI 身份') },
+  Claude: { initials: "CL", style: "claude", icon: "/icons/claude.svg", description: t('AI 身份') },
   // The platform ID is Antigravity (the software); screens show its nickname Gemini.
-  Antigravity: { label: "Gemini", initials: "GM", style: "gemini", icon: "/icons/gemini.svg", description: "AI 身份" },
-  DeepSeek: { initials: "DS", style: "deepseek", icon: "/icons/deepseek.svg", description: "AI 身份" },
-  Qwen: { initials: "QW", style: "qwen", icon: "/icons/qwen.svg", description: "AI 身份" },
-  Grok: { initials: "GK", style: "grok", icon: "/icons/grok.svg", description: "AI 身份" },
-  OpenAI: { initials: "OA", style: "codex", icon: "/icons/openai.svg", description: "AI 身份" },
-  Custom: { label: "自定义 API", initials: "API", style: "custom", api_label: "自定义 API", description: "AI 身份" },
+  Antigravity: { label: "Gemini", initials: "GM", style: "gemini", icon: "/icons/gemini.svg", description: t('AI 身份') },
+  DeepSeek: { initials: "DS", style: "deepseek", icon: "/icons/deepseek.svg", description: t('AI 身份') },
+  Qwen: { initials: "QW", style: "qwen", icon: "/icons/qwen.svg", description: t('AI 身份') },
+  Grok: { initials: "GK", style: "grok", icon: "/icons/grok.svg", description: t('AI 身份') },
+  OpenAI: { initials: "OA", style: "codex", icon: "/icons/openai.svg", description: t('AI 身份') },
+  Custom: { label: t('自定义 API'), initials: "API", style: "custom", api_label: t('自定义 API'), description: t('AI 身份') },
 };
 // An instance shows its platform's nickname with its own suffix: Antigravity-2 → Gemini-2.
-const IDENTITIES = by_platform(PLATFORM_IDENTITIES, (identity, name) => ({ ...identity, label: identity.label ? identity.label + name.slice(platform_of(name).length) : name, description: "AI 实例" }));
+const IDENTITIES = by_platform(PLATFORM_IDENTITIES, (identity, name) => ({ ...identity, label: identity.label ? identity.label + name.slice(platform_of(name).length) : name, description: t('AI 实例') }));
 const state = { rooms: [], folders: [], room: null, page: 1, pages: 1, query: "", mention_only: false, host_only: false, authors: [], card_kinds: [],
   named_followup: false, create_discussion: false, create_goal: null,
   archive_view: false, directory_sort: "manual", management: null, dragged_room: null, folder_moves: new Map(), folder_version: 0,
   reply_to: null, tab: "discussion", refresh_version: 0, context_dirty: false, topic_dirty: false,
-  snapshot_id: 0, pending_submission: null, pending_room: null, toast_timer: null, editing_queued: null,
+  snapshot_id: 0, pending_submission: null, pending_room: null, toast_timer: null, queued_taken: 0,
   // When live room data stopped (page hidden, connection lost); null while it is current. Silence is judged only up to here.
   observed_until: null };
 const live_updates = { source: null, connected: false, enabled: false, timer: null, poll_timer: null,
   running: false, dirty: false, full: false, revisions: "", refreshed_at: 0 };
 state.messages = [];
 state.message_history = null;
+// Cards read with the unfiltered transcript (executions, plans, missed turns, decisions), for history older than the room view's recent ones.
+state.history_cards = null;
+// True until the first attempt to read the room list finishes, so the page shows loading instead of an empty directory.
+state.rooms_loading = true;
+// The read started by opening a room; live refreshes wait for it instead of superseding it and discarding its answer.
+state.opening = null;
 // Whether the directory shows the paired computer's rooms, and whether that computer is currently connected.
 state.remote_rooms = false;
 // The room last opened on any device, as the computer's website keeps it; "" until the room list is read.
@@ -120,6 +132,18 @@ state.remote_site = "";
 const ROOM_CACHE_LIMIT = 12;
 const room_views = new Map();
 const message_histories = new Map();
+const history_cards = new Map();
+
+/** Cards of a later transcript batch replace the same ones read before; each kind is keyed by its id. */
+function merge_history_cards(base, batch) {
+  const merged = {};
+  for (const kind of ["executions", "scheduler_decisions", "host_arrangements", "cancelled_turns"]) {
+    const items = new Map((base?.[kind] || []).map((item) => [item.key || item.id, item]));
+    for (const item of batch?.[kind] || []) items.set(item.key || item.id, item);
+    merged[kind] = [...items.values()];
+  }
+  return merged;
+}
 
 /** Keep one entry per room, dropping the least recently used beyond the limit. */
 function cache_room_entry(cache, key, value) {
@@ -130,11 +154,15 @@ function cache_room_entry(cache, key, value) {
 state.connected = false;
 state.reconnecting = false;
 state.attachment_drafts = [];
+// Composer drafts set aside by editing a queued message, newest last; each send from the composer brings one back.
+state.stashed_drafts = [];
 state.upload_status = "";
 state.sending_message = false;
 // The message being sent, shown in the transcript as soon as Send is pressed until the site answers;
 // a failed send leaves it for a failed card (failed_sends), kept until it is sent again or discarded.
 state.sending_preview = null;
+// The message being sent that the site will likely queue, shown as a row in the queue tray until the site answers.
+state.queueing_preview = null;
 // Sends that failed, each kept as a card that sends it again: [{ id, preview, room_id, draft, drafts, reply_to, submission }].
 state.failed_sends = [];
 state.attachment_preview = null;
@@ -239,21 +267,61 @@ function notify_failure(error, message) {
 // version kept it in localStorage, where any script could read it, so that copy is deleted.
 try { localStorage.removeItem(ADMIN_SESSION_KEY); } catch { /* Nothing stored. */ }
 
+// Reads started early during startup, each taken by the first request for the same path: steps that would otherwise
+// wait for one another are sent together. A relay room path holds the relay answer; any other path holds the parsed body.
+const prefetched = new Map();
+
+/** Start a read now for a request that will come shortly; an unused or failed one changes nothing. */
+function prefetch(path, read) {
+  const reading = read();
+  reading.catch(() => {});
+  prefetched.set(path, reading);
+}
+
+/** The early read of this path, once, or null. */
+function take_prefetch(path) {
+  const reading = prefetched.get(path) || null;
+  prefetched.delete(path);
+  return reading;
+}
+
 /** Request JSON from the local or remotely hosted discussion service. */
 async function request_json(path, payload, access_token) {
+  // Only backend-owned fields with explicit templates are localized; original objects and user content stay intact.
+  function localize(value) {
+    if (Array.isArray(value)) return value.map(localize);
+    if (!value || typeof value !== "object") return value;
+    const result = Object.fromEntries(Object.entries(value).map(([key, item]) => [key, key === "texts" ? item : localize(item)]));
+    for (const [field, metadata] of Object.entries(value.texts || {})) {
+      if (Object.hasOwn(value, field)) result[field] = server_text(metadata, value[field]);
+      else {
+        const parts = field.match(/[^.[\]]+/g) || [];
+        let parent = result;
+        for (const part of parts.slice(0, -1)) parent = parent?.[part];
+        const key = parts.at(-1);
+        if (parent && Object.hasOwn(parent, key)) parent[key] = server_text(metadata, parent[key]);
+      }
+    }
+    return result;
+  }
   // The room list and a room are read conditionally: unchanged, the copy already held is reused, the same object.
   const conditional = payload === undefined && ROOM_READ_PATH.test(path);
   const cached = conditional ? room_reads.get(path) : undefined;
+  // The cache keeps the localized copy, so a 304 shows the page language and still reuses the same object.
   const remember = (status, body, etag) => {
     if (status === 304 && cached) return cached.body;
-    if (conditional) etag ? cache_room_entry(room_reads, path, { etag, body }) : room_reads.delete(path);
-    return body;
+    const localized = localize(body);
+    if (conditional) etag ? cache_room_entry(room_reads, path, { etag, body: localized }) : room_reads.delete(path);
+    return localized;
   };
   if (computer_rooms_only() && ROOM_RELAY_PATH.test(path)) {
     if (!state.remote_rooms) throw Object.assign(new Error(COMPUTER_UNREACHABLE), { preflight: true });
-    const answer = await relay_room_request(path, payload, cached?.etag);
+    const answer = await (payload === undefined && take_prefetch(path) || relay_room_request(path, payload, cached?.etag));
     return remember(answer.status, answer.body, answer.etag);
   }
+  const early = payload === undefined && take_prefetch(path);
+  // An early read is this function's own answer, already localized.
+  if (early) return early;
   const options = { cache: "no-store" };
   const target_room = path.match(/^\/api\/rooms\/([^/?]+)/)?.[1];
   const token = access_token || (target_room ? localStorage.getItem(`discuss-access:${target_room}`) : null);
@@ -273,8 +341,8 @@ async function request_json(path, payload, access_token) {
   const response = await fetch(path, options);
   if (response.status === 304 && cached) return cached.body;
   const result = await response.json();
-  if (!response.ok) throw Object.assign(new Error(result.error || "请求失败，请重试"), { preflight: response.status >= 400 && response.status < 500, status: response.status });
-  return conditional ? remember(response.status, result, response.headers.get("ETag")) : result;
+  if (!response.ok) throw Object.assign(new Error(server_text(result.error_text, result.error) || t('请求失败，请重试')), { preflight: response.status >= 400 && response.status < 500, status: response.status });
+  return conditional ? remember(response.status, result, response.headers.get("ETag")) : localize(result);
 }
 
 /** The owner's public name and avatar replace the default "User" identity for every visitor. */
@@ -308,17 +376,17 @@ async function load_admin_state() {
 /** Return the first problem with an administrator form, matching the server's limits. */
 function validate_admin_form({ username, password, confirm, check_password = true }) {
   const name_length = [...String(username ?? "").trim()].length;
-  if (username !== undefined && (name_length < 1 || name_length > ADMIN_USERNAME_MAX)) return `用户名需要 1–${ADMIN_USERNAME_MAX} 个字符`;
+  if (username !== undefined && (name_length < 1 || name_length > ADMIN_USERNAME_MAX)) return t('用户名需要 1–{value1} 个字符', { value1: ADMIN_USERNAME_MAX });
   if (!check_password) return "";
   const length = [...String(password ?? "")].length;
-  if (length < ADMIN_PASSWORD_MIN || length > ADMIN_PASSWORD_MAX) return `密码需要 ${ADMIN_PASSWORD_MIN}–${ADMIN_PASSWORD_MAX} 个字符`;
-  if (confirm !== undefined && confirm !== password) return "两次输入的密码不一致";
+  if (length < ADMIN_PASSWORD_MIN || length > ADMIN_PASSWORD_MAX) return t('密码需要 {value1}–{value2} 个字符', { value1: ADMIN_PASSWORD_MIN, value2: ADMIN_PASSWORD_MAX });
+  if (confirm !== undefined && confirm !== password) return t('两次输入的密码不一致');
   return "";
 }
 
 /** Keep the Chinese server message and add a retry hint when a locked response lacks the delay. */
 function admin_error(error) {
-  if (error.status === 429 && !/\d/.test(error.message)) error.message += "，请稍后再试";
+  if (error.status === 429 && !/\d/.test(error.message)) error.message += t('，请稍后再试');
   return error;
 }
 
@@ -331,7 +399,7 @@ function accept_admin_session({ profile }) {
 
 /** Create the single administrator account and sign in with it. */
 async function register_admin({ username, password, confirm, setup_key }) {
-  const problem = validate_admin_form({ username, password, confirm }) || (String(setup_key ?? "").trim() ? "" : "请填写注册令牌");
+  const problem = validate_admin_form({ username, password, confirm }) || (String(setup_key ?? "").trim() ? "" : t('请填写注册令牌'));
   if (problem) throw new Error(problem);
   try { accept_admin_session(await request_json("/api/admin/register", { username: username.trim(), password, setup_key: setup_key.trim() })); }
   catch (error) { throw admin_error(error); }
@@ -339,7 +407,7 @@ async function register_admin({ username, password, confirm, setup_key }) {
 
 /** Sign in and keep the session in this browser. */
 async function login_admin({ username, password }) {
-  if (!String(username ?? "").trim() || !password) throw new Error("请填写用户名和密码");
+  if (!String(username ?? "").trim() || !password) throw new Error(t('请填写用户名和密码'));
   try { accept_admin_session(await request_json("/api/admin/login", { username: username.trim(), password })); }
   catch (error) { throw admin_error(error); }
 }
@@ -387,17 +455,17 @@ async function update_admin_profile(patch) {
 
 /** Shrink the chosen image into a small square data URL that fits the server limit. */
 async function admin_avatar_from_file(file) {
-  if (!file?.type?.startsWith("image/")) throw new Error("请选择图片文件");
+  if (!file?.type?.startsWith("image/")) throw new Error(t('请选择图片文件'));
   const url = URL.createObjectURL(file);
   try {
     const image = await new Promise((resolve, reject) => {
       const loaded = new Image();
       loaded.onload = () => resolve(loaded);
-      loaded.onerror = () => reject(new Error("无法读取这张图片"));
+      loaded.onerror = () => reject(new Error(t('无法读取这张图片')));
       loaded.src = url;
     });
     const side = Math.min(image.naturalWidth, image.naturalHeight);
-    if (!side) throw new Error("无法读取这张图片");
+    if (!side) throw new Error(t('无法读取这张图片'));
     const canvas = document.createElement("canvas");
     canvas.width = canvas.height = ADMIN_AVATAR_SIZE;
     const context = canvas.getContext("2d");
@@ -405,7 +473,7 @@ async function admin_avatar_from_file(file) {
     context.fillRect(0, 0, ADMIN_AVATAR_SIZE, ADMIN_AVATAR_SIZE);
     context.drawImage(image, (image.naturalWidth - side) / 2, (image.naturalHeight - side) / 2, side, side, 0, 0, ADMIN_AVATAR_SIZE, ADMIN_AVATAR_SIZE);
     const data_url = canvas.toDataURL("image/jpeg", ADMIN_AVATAR_QUALITY);
-    if (data_url.length > ADMIN_AVATAR_MAX_CHARS) throw new Error("图片过大，请换一张");
+    if (data_url.length > ADMIN_AVATAR_MAX_CHARS) throw new Error(t('图片过大，请换一张'));
     return data_url;
   } finally { URL.revokeObjectURL(url); }
 }
@@ -441,7 +509,7 @@ function set_connection(connected) {
   if (connected) { clearTimeout(reconnect_timer); reconnect_timer = null; reconnect_attempt = 0; }
   else { state.observed_until ??= Date.now(); schedule_reconnect(); }
   element("connection-dot").className = `status-dot ${connected ? "connected" : "failed"}`;
-  element("connection-status").textContent = connected ? "讨论网站已连接" : "网站连接中断，可手动刷新";
+  element("connection-status").textContent = connected ? t('讨论网站已连接') : t('网站连接中断，可手动刷新');
   publish_view();
 }
 
@@ -457,9 +525,9 @@ async function copy_text(text) {
     helper.select();
     const copied = document.execCommand("copy");
     helper.remove();
-    if (!copied) throw new Error("浏览器未允许自动复制，请手动选择内容复制");
+    if (!copied) throw new Error(t('浏览器未允许自动复制，请手动选择内容复制'));
   }
-  show_toast("已复制");
+  show_toast(t('已复制'));
 }
 
 /** Create a submission identifier even on non-secure HTTP origins. */
@@ -473,7 +541,10 @@ function new_submission_id() {
 function default_name(name) { return IDENTITIES[name]?.label || name; }
 
 /** Resolve a UI label without changing stored identity values; the open room's member labels come first. */
-function display_name(name) { return state.room?.labels?.[name] || IDENTITIES[name]?.label || name; }
+function display_name(name) {
+  const label = state.room?.labels?.[name] || IDENTITIES[name]?.label || name;
+  return label === name && name === "用户" ? t("用户") : label === name && name === "系统" ? t("系统") : label;
+}
 
 /** Render an identity avatar from a local SVG. */
 function identity_avatar(identity) {
@@ -499,11 +570,11 @@ function render_participants() {
 function render_rooms() {
   const rooms = visible_rooms();
   element("room-count").textContent = rooms.length;
-  element("archive-toggle").textContent = state.archive_view ? "返回讨论频道" : `已存档 (${state.rooms.filter((room) => room.archived).length})`;
+  element("archive-toggle").textContent = state.archive_view ? t('返回讨论频道') : t('已存档 ({value1})', { value1: state.rooms.filter((room) => room.archived).length });
   element("archive-toggle").setAttribute("aria-pressed", String(state.archive_view));
   element("room-list").innerHTML = rooms.map((room, index) =>
-    `<div class="directory-row" data-drag-room="${room.id}"><button type="button" class="directory-grip" data-drag-handle aria-label="拖动 ${escape_html(room.title)}" title="拖动排序；上下方向键移动">⠿</button><button class="room-item ${room.id === state.room?.id ? "active" : ""}" data-room="${room.id}" title="${escape_html(room.title)}"><span class="room-item-name">${escape_html(room.title)}</span><span class="room-item-number">${room.message_count}</span></button><details class="room-actions"><summary aria-label="管理 ${escape_html(room.title)}">⋯</summary><div>${room_menu_html(room, index, rooms.length)}</div></details></div>`).join("") || "<p class='local-note'>这里还没有频道。</p>";
-  if (state.creating_room) element("room-list").innerHTML += `<p class="local-note">正在创建：${escape_html(state.creating_room.title)}</p>`;
+    `<div class="directory-row" data-drag-room="${room.id}"><button type="button" class="directory-grip" data-drag-handle aria-label="${escape_html(t("拖动 {name}", { name: room.title }))}" title="${escape_html(t("拖动排序；上下方向键移动"))}">⠿</button><button class="room-item ${room.id === state.room?.id ? "active" : ""}" data-room="${room.id}" title="${escape_html(room.title)}"><span class="room-item-name">${escape_html(room.title)}</span><span class="room-item-number">${room.message_count}</span></button><details class="room-actions"><summary aria-label="${escape_html(t("管理 {name}", { name: room.title }))}">⋯</summary><div>${room_menu_html(room, index, rooms.length)}</div></details></div>`).join("") || `<p class="local-note">${escape_html(t("这里还没有频道。"))}</p>`;
+  if (state.creating_room) element("room-list").innerHTML += `<p class="local-note">${escape_html(t("正在创建：{name}", { name: state.creating_room.title }))}</p>`;
   element("new-room").disabled = state.directory_pending.has("create-room");
   element("no-room").hidden = Boolean(state.room);
   element("room-content").hidden = !state.room;
@@ -542,8 +613,8 @@ function sort_directory(value) {
 /** Provide pointer and keyboard alternatives to dragging in the classic theme. */
 function room_menu_html(room, index, count) {
   const ordering = state.directory_pending.has("room-order");
-  return [["rename", "重命名", state.directory_pending.has(`rename:${room.id}`)], ["backup", "导出对话", state.backup_pending], [room.archived ? "restore" : "archive", room.archived ? "恢复频道" : "存档频道", state.archive_changes.has(room.id)],
-    ["up", "上移", ordering || state.directory_sort === "recent" || index === 0], ["down", "下移", ordering || state.directory_sort === "recent" || index === count - 1], ["delete", "删除频道", state.directory_pending.has(`rename:${room.id}`)]]
+  return [["rename", t('重命名'), state.directory_pending.has(`rename:${room.id}`)], ["backup", t('导出对话'), state.backup_pending], [room.archived ? "restore" : "archive", room.archived ? t('恢复频道') : t('存档频道'), state.archive_changes.has(room.id)],
+    ["up", t('上移'), ordering || state.directory_sort === "recent" || index === 0], ["down", t('下移'), ordering || state.directory_sort === "recent" || index === count - 1], ["delete", t('删除频道'), state.directory_pending.has(`rename:${room.id}`)]]
     .map(([action, label, disabled]) => `<button type="button" data-manage-room="${room.id}" data-room-action="${action}" ${disabled ? "disabled" : ""}>${label}</button>`).join("");
 }
 
@@ -573,7 +644,7 @@ async function update_directory(change) {
     return saved;
   } catch (error) {
     change.rollback();
-    notify_failure(error, change.error_message?.(error) || `${change.label}失败，已恢复原状态：${error.message}`);
+    notify_failure(error, change.error_message?.(error) || t('{value1}失败，已恢复原状态：{value2}', { value1: change.label, value2: error.message }));
     throw error;
   } finally {
     state.directory_pending.delete(change.key);
@@ -611,7 +682,7 @@ async function rename_channel(id, title) {
   const room = state.rooms.find(item => item.id === id);
   if (!room || !title?.trim()) return;
   const patch = { title: title.trim() };
-  return update_directory({ key: `rename:${id}`, patch, label: `「${room.title}」重命名`,
+  return update_directory({ key: `rename:${id}`, patch, label: t('「{value1}」重命名', { value1: room.title }),
     apply: () => patch_directory_room(id, patch), rollback: () => patch_directory_room(id, { title: room.title }),
     save: () => request_json(`/api/rooms/${id}/rename`, { actor: "用户", ...patch }),
     commit: saved => patch_directory_room(id, { title: saved.title }) });
@@ -620,7 +691,7 @@ async function rename_channel(id, title) {
 /** Show the new room order before its single write completes. */
 async function reorder_channel(id, before_id) {
   const previous = state.rooms.map(room => room.id);
-  return update_directory({ key: "room-order", label: "频道排序",
+  return update_directory({ key: "room-order", label: t('频道排序'),
     apply: () => { state.rooms = move_directory_item(state.rooms, id, before_id); },
     rollback: () => { state.rooms = directory_order(state.rooms, previous); },
     save: () => request_json(`/api/rooms/${id}/move`, { actor: "用户", before_id }) });
@@ -631,8 +702,8 @@ async function delete_channel(id) {
   const room = state.rooms.find(item => item.id === id);
   if (!room) return;
   const previous = state.rooms.map(item => item.id);
-  return update_directory({ key: `delete:${id}`, label: `「${room.title}」删除`,
-    error_message: error => `「${room.title}」删除失败，已恢复原状态：${management_error_message(id, error)}`,
+  return update_directory({ key: `delete:${id}`, label: t('「{value1}」删除', { value1: room.title }),
+    error_message: error => t('「{value1}」删除失败，已恢复原状态：{value2}', { value1: room.title, value2: management_error_message(id, error) }),
     apply: () => {
       state.rooms = state.rooms.filter(item => item.id !== id);
       if (state.room?.id === id) run_action(() => select_room(visible_rooms()[0]?.id));
@@ -663,7 +734,7 @@ function archive_undo_window(id, title) {
   return new Promise(resolve => {
     let settled = false;
     const settle = keep => { if (!settled) { settled = true; resolve(keep); } };
-    document.dispatchEvent(new CustomEvent("discuss:undo", { detail: { id: `archive:${id}`, message: `已存档「${title}」`,
+    document.dispatchEvent(new CustomEvent("discuss:undo", { detail: { id: `archive:${id}`, message: t('已存档「{value1}」', { value1: title }),
       duration: ARCHIVE_UNDO_MS, view: () => execute_view_action("room", id), settle } }));
   });
 }
@@ -691,7 +762,7 @@ async function archive_channel(id, archived, { undo = false } = {}) {
     const saved = await request_json(`/api/rooms/${id}/${archived ? "archive" : "restore"}`, { actor: "用户" });
     display_channel_archive(id, { archived: Boolean(saved.archived), phase: saved.phase }, change);
   } catch (error) {
-    notify_failure(error, `「${room.title}」${archived ? "存档" : "恢复"}失败，已恢复原状态：${management_error_message(id, error)}`);
+    notify_failure(error, t('「{value1}」{value2}失败，已恢复原状态：{value3}', { value1: room.title, value2: archived ? t('存档') : t('恢复'), value3: management_error_message(id, error) }));
     display_channel_archive(id, previous, change);
     throw error;
   } finally {
@@ -733,9 +804,9 @@ async function assign_channel_folder(id, folder_id) {
   try {
     const saved = await request_json(`/api/rooms/${id}/folder`, { actor: "用户", folder_id });
     display_channel_folder(id, saved.folder_id ?? null);
-    show_toast("话题归类已更新");
+    show_toast(t('话题归类已更新'));
   } catch (error) {
-    notify_failure(error, `「${room.title}」归类失败，已恢复原状态：${error.message}`);
+    notify_failure(error, t('「{value1}」归类失败，已恢复原状态：{value2}', { value1: room.title, value2: error.message }));
     display_channel_folder(id, previous_folder);
     throw error;
   } finally {
@@ -747,7 +818,7 @@ async function assign_channel_folder(id, folder_id) {
 /** Display a provisional folder while its identifier is being assigned. */
 async function create_folder({ name, directories = [] }) {
   const folder = { id: `pending-${new_submission_id()}`, name: name.trim(), directories, pending: true };
-  return update_directory({ key: "create-folder", label: `文件夹「${folder.name}」创建`,
+  return update_directory({ key: "create-folder", label: t('文件夹「{value1}」创建', { value1: folder.name }),
     apply: () => { state.folders = [...state.folders, folder]; },
     rollback: () => { state.folders = state.folders.filter(item => item.id !== folder.id); },
     save: () => request_json("/api/folders", { name: folder.name, directories }),
@@ -759,7 +830,7 @@ async function rename_folder({ id, name, directories }) {
   const folder = state.folders.find(item => item.id === id);
   if (!folder || folder.pending || !name.trim()) return;
   const display = (value, paths) => { state.folders = state.folders.map(item => item.id === id ? { ...item, name: value, directories: paths } : item); };
-  return update_directory({ key: `folder-name:${id}`, label: `文件夹「${folder.name}」保存`,
+  return update_directory({ key: `folder-name:${id}`, label: t('文件夹「{value1}」保存', { value1: folder.name }),
     apply: () => display(name.trim(), directories), rollback: () => display(folder.name, folder.directories),
     save: () => request_json(`/api/folders/${encodeURIComponent(id)}/rename`, { name: name.trim(), directories }),
     commit: saved => display(saved.name, saved.directories) });
@@ -777,7 +848,7 @@ async function delete_folder(id) {
   members.forEach(room_id => state.folder_moves.set(room_id, null));
   state.folder_version++;
   try {
-    return await update_directory({ key: "folder-order", removed_folder: id, label: `文件夹「${folder.name}」移除`,
+    return await update_directory({ key: "folder-order", removed_folder: id, label: t('文件夹「{value1}」移除', { value1: folder.name }),
       apply: () => {
         state.folders = state.folders.filter(item => item.id !== id);
         if (position != null) {
@@ -808,7 +879,7 @@ function set_folder_directory(directory) {
 /** Include the virtual group in ordering while keeping its room assignment empty. */
 function ordered_folders() {
   const groups = state.folders.map((folder) => ({ ...folder, order_id: folder.id }));
-  groups.splice(state.uncategorized_position ?? groups.length, 0, { id: "", order_id: "__uncategorized__", name: "未归类" });
+  groups.splice(state.uncategorized_position ?? groups.length, 0, { id: "", order_id: "__uncategorized__", name: t('未归类') });
   return groups;
 }
 
@@ -832,7 +903,7 @@ async function move_folder({ id, before_id, direction }) {
   const next = move_directory_item(groups.map(folder => ({ ...folder, id: folder.order_id })), id, before_id).map(folder => folder.id);
   state.folder_order_pending = true;
   try {
-    await update_directory({ key: "folder-order", label: "文件夹排序", apply: () => reorder(next), rollback: () => reorder(previous),
+    await update_directory({ key: "folder-order", label: t('文件夹排序'), apply: () => reorder(next), rollback: () => reorder(previous),
       save: () => request_json(`/api/folders/${encodeURIComponent(id)}/move`, { before_id }) });
   } finally { state.folder_order_pending = false; publish_view(); }
 }
@@ -857,21 +928,20 @@ function render_room() {
   if (!state.room) return;
   const room = state.room;
   element("room-title").textContent = room.title;
-  element("room-subtitle").textContent = `${room.archived ? '已存档 · ' : ''}${room.message_count} 条发言`;
+  element("room-subtitle").textContent = t('{value1}{value2} 条发言', { value1: room.archived ? t('已存档 · ') : '', value2: room.message_count });
   element("message-count").textContent = room.message_count;
-  element("room-goal").textContent = room.goal || "尚未填写议题目标。";
+  element("room-goal").textContent = room.goal || t('尚未填写议题目标。');
   element("latest-id").textContent = `#${room.latest_id}`;
-  element("state-version").textContent = `整理至 #${room.state_until}`;
-  element("state-update-note").textContent = `当前记录至 #${room.latest_id}；保存后标记为本次打开的 #${state.snapshot_id}。`;
+  element("state-version").textContent = t('整理至 #{value1}', { value1: room.state_until });
+  element("state-update-note").textContent = t('当前记录至 #{value1}；保存后标记为本次打开的 #{value2}。', { value1: room.latest_id, value2: state.snapshot_id });
   if (!state.context_dirty) {
     element("state-input").value = room.state_text;
     element("brief-input").value = room.host_brief?.text || "";
     state.snapshot_id = room.latest_id;
-    element("state-update-note").textContent = `保存时标记整理至 #${state.snapshot_id}，原始发言保持不变。`;
+    element("state-update-note").textContent = t('保存时标记整理至 #{value1}，原始发言保持不变。', { value1: state.snapshot_id });
   }
   render_topic();
   render_host_brief();
-  drop_gone_queued_edit();
 }
 
 /** Rounds as labelled in the UI: counted by the round budget when the room has one, otherwise by the roster. */
@@ -882,24 +952,24 @@ function round_groups(room) {
 /** Describe the designated respondent without claiming that their app is generating. */
 function progress_speaker(room) {
   const turn = room.current_turn;
-  if (room.phase === "concluded") return "讨论已收束";
-  if (room.phase === "paused") return `已暂停${turn && ["pending", "notified"].includes(turn.status) ? ` · 原安排 ${turn.expert}` : ""}`;
-  if (turn && ["pending", "notified"].includes(turn.status)) return `等待 ${turn.expert} 回答 · ${turn_label(turn, room)}`;
-  return room.round_groups?.length || room.answered_turns || turn?.status === "answered" ? "等待主持人安排下一步" : "尚未开始发言";
+  if (room.phase === "concluded") return t('讨论已收束');
+  if (room.phase === "paused") return t('已暂停{value1}', { value1: turn && ["pending", "notified"].includes(turn.status) ? t(' · 原安排 {value1}', { value1: turn.expert }) : "" });
+  if (turn && ["pending", "notified"].includes(turn.status)) return t('等待 {value1} 回答 · {value2}', { value1: turn.expert, value2: turn_label(turn, room) });
+  return room.round_groups?.length || room.answered_turns || turn?.status === "answered" ? t('等待主持人安排下一步') : t('尚未开始发言');
 }
 
 /** Explain an empty transcript using the room's actual progression state. */
 function empty_discussion_message(room) {
   // A room opened for the first time has no transcript until the site answers; it is not an empty discussion.
-  if (state.messages_loading) return '正在读取消息…';
-  if (room.archived || room.phase === 'concluded') return '讨论已结束，尚未产生发言记录。';
-  return '写下任务并点名成员。程序唤醒由本机服务交付；手动成员需在原会话触发。';
+  if (state.messages_loading) return t('正在读取消息…');
+  if (room.archived || room.phase === 'concluded') return t('讨论已结束，尚未产生发言记录。');
+  return t('写下任务并点名成员。程序唤醒由本机服务交付；手动成员需在原会话触发。');
 }
 
 /** Keep a saved brief's evidence cutoff visible next to the live assignment status. */
 function brief_meta(room) {
   const brief = room.host_brief;
-  return brief?.text ? `${display_name(room.host)} 主持 · ${new Date(brief.updated_at).toLocaleString("zh-CN")} 更新 · 整理至 #${brief.until}` : `${display_name(room.host)} 主持 · 尚未发布简报`;
+  return brief?.text ? t('{value1} 主持 · {value2} 更新 · 整理至 #{value3}', { value1: display_name(room.host), value2: new Date(brief.updated_at).toLocaleString("zh-CN"), value3: brief.until }) : t('{value1} 主持 · 尚未发布简报', { value1: display_name(room.host) });
 }
 
 /** Render the host's own concise account, independently from the full state editor. */
@@ -907,7 +977,7 @@ function render_host_brief() {
   const room = state.room;
   element("host-brief-panel").hidden = !room;
   if (!room) return;
-  room.rendered_brief = render_room_markdown(room.host_brief?.text || "主持人尚未更新结论、共识、歧义与下一步意图。");
+  room.rendered_brief = render_room_markdown(room.host_brief?.text || t('主持人尚未更新结论、共识、歧义与下一步意图。'));
   element("progress-speaker").textContent = progress_speaker(room);
   element("host-brief-text").innerHTML = room.rendered_brief;
   element("host-brief-meta").textContent = brief_meta(room);
@@ -915,8 +985,8 @@ function render_host_brief() {
 
 /** Describe roles separately from authors and the actual submitter. */
 function message_provenance(message) {
-  const role = message.kind === "receipt" ? "运行回执" : message.kind === "moderation" ? "主持发言" : (message.author === "用户" ? "用户发言" : "专家观点");
-  const forwarding = message.submitted_by && message.submitted_by !== message.author ? ` · ${display_name(message.submitted_by)} 代发` : "";
+  const role = message.kind === "receipt" ? t('运行回执') : message.kind === "moderation" ? t('主持发言') : (message.author === "用户" ? t('用户发言') : t('专家观点'));
+  const forwarding = message.submitted_by && message.submitted_by !== message.author ? t(' · {value1} 代发', { value1: display_name(message.submitted_by) }) : "";
   return `${role}${forwarding}`;
 }
 
@@ -934,7 +1004,7 @@ function render_messages(result) {
     let shown;
     // A message shown straight from its send response is replaced by the copy the transcript reads.
     if (saved && !saved.just_sent) shown = (saved.withdrawn || "") === kind ? saved : { ...saved, withdrawn: kind };
-    else shown = { ...message, withdrawn: kind, rendered_text: render_room_markdown(message.text),
+    else shown = { ...message, withdrawn: kind, rendered_text: link_attachment_placeholders(render_room_markdown(message.text), message.attachments),
       rendered_summary: render_room_markdown(message.summary || "") };
     rendered_messages.set(message, shown);
     return shown;
@@ -942,36 +1012,49 @@ function render_messages(result) {
   // An unchanged transcript keeps its array, so views that depend on it are not recomputed.
   if (messages.length !== state.messages.length || messages.some((message, index) => message !== state.messages[index])) state.messages = messages;
   state.message_total = result.total;
+  // A message shown straight from its send response brings no cards; the ones already read stay.
+  if ("cards" in result) state.history_cards = result.cards;
   state.messages_loading = false;
   state.messages_failure = "";
   // The Vue transcript renders from state.messages; the hidden controller markup is not rebuilt on every refresh.
   state.pages = result.pages;
 }
 
+/** The read of one transcript batch after message `after`. */
+function history_batch_path(room_id, query, after) {
+  // Large batches: a long transcript loads in one round-trip, and the site counts the room's messages once, not per batch.
+  const params = new URLSearchParams({ q: query, withdrawn: "include", limit: MESSAGE_HISTORY_BATCH });
+  // The full transcript also takes the cards of each batch; a search shows no cards.
+  if (!query) params.set("cards", "1");
+  params.set("after", after);
+  return `/api/rooms/${room_id}/messages?${params}`;
+}
+
 /** Join bounded cursor batches for the interactive transcript; refresh only new records. */
 async function load_message_history(room_id, version) {
-  const params = new URLSearchParams({ q: state.query, withdrawn: "include" });
-  const key = `${room_id}?${params}`;
-  // Large batches: a long transcript loads in one round-trip, and the site counts the room's messages once, not per batch.
-  params.set("limit", MESSAGE_HISTORY_BATCH);
+  const query = state.query;
+  const key = `${room_id}?${new URLSearchParams({ q: query, withdrawn: "include" })}`;
   const messages = [...message_histories.get(key) || []];
+  let cards = history_cards.get(key) || null;
   let has_more = true;
   while (has_more) {
-    params.set("after", messages.at(-1)?.id || 0);
-    const result = await request_json(`/api/rooms/${room_id}/messages?${params}`);
+    const result = await request_json(history_batch_path(room_id, query, messages.at(-1)?.id || 0));
     if (version !== state.refresh_version) return null;
     messages.push(...result.messages);
+    if (result.cards) cards = merge_history_cards(cards, result.cards);
     has_more = result.has_more;
   }
   cache_room_entry(message_histories, key, messages);
+  if (cards) cache_room_entry(history_cards, key, cards);
   state.message_history = { key, messages };
-  return { messages, total: messages.length, page: 1, pages: 1 };
+  return { messages, cards, total: messages.length, page: 1, pages: 1 };
 }
 
 /** The unfiltered transcript cached for a room, shaped like a loaded history, or null. */
 function cached_message_history(room_id) {
-  const messages = message_histories.get(`${room_id}?${new URLSearchParams({ q: "", withdrawn: "include" })}`);
-  return messages ? { messages, total: messages.length, page: 1, pages: 1 } : null;
+  const key = `${room_id}?${new URLSearchParams({ q: "", withdrawn: "include" })}`;
+  const messages = message_histories.get(key);
+  return messages ? { messages, cards: history_cards.get(key) || null, total: messages.length, page: 1, pages: 1 } : null;
 }
 
 /** Show the room and transcript as each arrives, independently of the directory read. */
@@ -1068,12 +1151,12 @@ async function select_room(room_id) {
   if (room_id) { state.welcome = false; state.welcome_folder = null; }
   state.navigation_version++;
   state.refresh_version++;
-  state.editing_queued = null;
   const listed = state.rooms.find((room) => room.id === room_id);
   // A room opened before is shown as last read, with the directory's newer title, folder and archive state, until the site answers.
   const cached = listed && room_views.get(room_id);
   state.room = cached ? { ...cached, ...listed } : listed;
   state.sending_preview = null;
+  state.queueing_preview = null;
   state.page = 1;
   state.query = "";
   state.mention_only = false;
@@ -1087,10 +1170,13 @@ async function select_room(room_id) {
   for (const failed of state.failed_sends) release_files(failed.drafts);
   state.failed_sends = [];
   clear_attachment_drafts();
+  for (const stashed of state.stashed_drafts) release_files(stashed.drafts);
+  state.stashed_drafts = [];
   state.launch.repair = null;
   state.launch.room_models = null;
   state.messages = [];
   state.message_history = null;
+  state.history_cards = null;
   element("message-input").value = "";
   element("search-input").value = "";
   element("mention-filter").setAttribute("aria-pressed", "false");
@@ -1101,9 +1187,9 @@ async function select_room(room_id) {
   if (state.room) state.archive_view = Boolean(state.room.archived);
   else {
     element("host-brief-panel").hidden = true;
-    element("room-title").textContent = "让讨论开始";
-    element("room-subtitle").textContent = "创建一个房间，从一句话开始。";
-    element("room-goal").textContent = "进入房间后查看本次议题。";
+    element("room-title").textContent = t('让讨论开始');
+    element("room-subtitle").textContent = t('创建一个房间，从一句话开始。');
+    element("room-goal").textContent = t('进入房间后查看本次议题。');
     element("message-count").textContent = "0";
     element("latest-id").textContent = "#0";
   }
@@ -1114,9 +1200,13 @@ async function select_room(room_id) {
   if (cached) render_room();
   if (cached_history) render_messages(cached_history);
   publish_view();
-  try { await refresh_room(); }
+  const reading = state.opening = refresh_room();
+  try { await reading; }
   catch (error) { if (state.room?.id === room_id) state.messages_failure = error.message; throw error; }
-  finally { if (state.messages_loading && state.room?.id === room_id) { state.messages_loading = false; publish_view(); } }
+  finally {
+    if (state.opening === reading) state.opening = null;
+    if (state.messages_loading && state.room?.id === room_id) { state.messages_loading = false; publish_view(); }
+  }
 }
 
 /** Switch between history, manually maintained state, and participation guidance; `refresh: false` when the caller reads the room itself. */
@@ -1141,7 +1231,7 @@ function cancel_reply() {
 /** Read and validate the current composer before any upload starts. */
 function message_payload() {
   const text = element("message-input").value.trim();
-  if ([...text].length > MAX_MESSAGE_LENGTH) throw new Error(`留言最多 ${MAX_MESSAGE_LENGTH} 字，原文已保留，请调整后提交`);
+  if ([...text].length > MAX_MESSAGE_LENGTH) throw new Error(t('留言最多 {value1} 字，原文已保留，请调整后提交', { value1: MAX_MESSAGE_LENGTH }));
   // The owner always speaks as the user; naming members is the server's job.
   const members = state.room.free?.members || [];
   const payload = { author: "用户", text, reply_to: state.reply_to, kind: "chat", submitted_by: "用户" };
@@ -1185,9 +1275,9 @@ function mention_highlights() {
   return ["用户", display_name("用户"), ...names.map(name => mention_handles(name, names)[0])];
 }
 
-/** Render room text with the open room's mentions marked. */
+/** Render room text with the open room's mentions marked and `#123` message references clickable. */
 function render_room_markdown(text) {
-  return window.discuss_markdown.render_markdown(text, mention_highlights());
+  return window.discuss_markdown.render_markdown(text, mention_highlights(), { message_refs: true });
 }
 
 /**
@@ -1275,7 +1365,7 @@ function flush_create_preferences() {
   create_preferences_pending = {};
   create_preferences_saving = local_launch_request("settings", { create_preferences: patch }).catch(error => {
     create_preferences_pending = { ...patch, ...create_preferences_pending };
-    notify("error", `建房偏好未保存：${error.message}`);
+    notify("error", t('建房偏好未保存：{value1}', { value1: error.message }));
     return false;
   }).then(result => {
     create_preferences_saving = null;
@@ -1298,7 +1388,7 @@ async function refresh_create_preferences() {
     state.launch.create_preferences = { ...settings.create_preferences, ...create_preferences_pending };
     apply_create_preferences();
     publish_view();
-  } catch (error) { notify("error", `建房偏好未读取：${error.message}`); }
+  } catch (error) { notify("error", t('建房偏好未读取：{value1}', { value1: error.message })); }
 }
 
 /** Persist a member mutation before transmission and reuse its credential after an uncertain response. */
@@ -1353,7 +1443,7 @@ async function save_description_template(name, text) {
   }
   const { [platform]: _, ...rest } = state.launch.description_templates;
   try { await save_presets({ description_templates: text.trim() ? { ...rest, [platform]: text.trim() } : rest }); }
-  catch (error) { show_toast(`默认描述未保存：${error.message}`, true); }
+  catch (error) { show_toast(t('默认描述未保存：{value1}', { value1: error.message }), true); }
 }
 
 /** Move templates this browser kept into the local service once, so every browser on this computer sees them. */
@@ -1452,9 +1542,9 @@ async function save_expert_preset(name, label) {
   for (const field of ["model", "effort", "system_prompt"]) if (Object.hasOwn(profile, field) && profile[field] !== "") preset[field] = profile[field];
   try {
     await save_presets({ presets: [...state.launch.presets.filter(item => item.name !== id), preset] });
-    show_toast(`已存为预设「${preset.label || id}」`);
+    show_toast(t('已存为预设「{value1}」', { value1: preset.label || id }));
     return true;
-  } catch (error) { show_toast(`预设未保存：${error.message}`, true); return false; }
+  } catch (error) { show_toast(t('预设未保存：{value1}', { value1: error.message }), true); return false; }
 }
 
 /** Remove the preset of this name from the add row: the user's own one, and a built-in one of the same name with it. */
@@ -1464,8 +1554,8 @@ async function delete_expert_preset(name) {
   try {
     await save_presets({ presets: state.launch.presets.filter(item => item.name !== name),
       ...builtin ? { hidden_builtins: [...state.launch.hidden_builtins, name] } : {} });
-    show_toast(`已删除预设「${shown}」`);
-  } catch (error) { show_toast(`预设未删除：${error.message}`, true); }
+    show_toast(t('已删除预设「{value1}」', { value1: shown }));
+  } catch (error) { show_toast(t('预设未删除：{value1}', { value1: error.message }), true); }
 }
 
 /** The description a card currently shows: its own draft, else its platform's template. */
@@ -1484,7 +1574,7 @@ async function send_descriptions(room_id, token, descriptions) {
   const filled = Object.fromEntries(Object.entries(descriptions).filter(([, text]) => text?.trim()));
   if (!room_id || !token || !Object.keys(filled).length) return;
   try { await request_json(`/api/rooms/${room_id}/descriptions`, { descriptions: filled }, token); }
-  catch (error) { notify("warning", `成员描述未保存：${error.message}，可在发言顺序的成员菜单里重新填写。`); }
+  catch (error) { notify("warning", t('成员描述未保存：{value1}，可在发言顺序的成员菜单里重新填写。', { value1: error.message })); }
 }
 
 /** Save display labels by member name with the room credential; a failure leaves the members under their names. */
@@ -1492,14 +1582,14 @@ async function send_labels(room_id, token, labels) {
   const filled = Object.fromEntries(Object.entries(labels).filter(([, text]) => text?.trim()));
   if (!room_id || !token || !Object.keys(filled).length) return;
   try { await request_json(`/api/rooms/${room_id}/labels`, { labels: filled }, token); }
-  catch (error) { notify("warning", `成员显示名未保存：${error.message}，房间里按成员名显示。`); }
+  catch (error) { notify("warning", t('成员显示名未保存：{value1}，房间里按成员名显示。', { value1: error.message })); }
 }
 
 /** Save the new room's round limit with the room credential; a failure leaves the room on the default. */
 async function send_chain_rounds(room_id, token, max_rounds) {
   if (!room_id || !token || max_rounds === DEFAULT_CHAIN_ROUNDS) return;
   try { await request_json(`/api/rooms/${room_id}/budget`, { max_rounds }, token); }
-  catch (error) { notify("warning", `推进轮数未保存：${error.message}，房间沿用默认 ${DEFAULT_CHAIN_ROUNDS} 轮，可在房间页修改。`); }
+  catch (error) { notify("warning", t('推进轮数未保存：{value1}，房间沿用默认 {value2} 轮，可在房间页修改。', { value1: error.message, value2: DEFAULT_CHAIN_ROUNDS })); }
 }
 
 /**
@@ -1584,7 +1674,7 @@ async function change_member({ member_id, name, action, role, latest_id, quiet =
       ? await local_launch_request("room-member", { room_id, token, action: "rejoin", name, member_token: record.member.token })
       : await request_json(`/api/rooms/${room_id}/members/${member_id}`, { action: "active", token: record.member.token });
     finish_member_request(room_id, token, record, result);
-    if (!quiet && state.room?.id === room_id) notify("info", member.access === "manual" ? `${name} 已请回，凭证已更新；请用新的启动指令让它重新注册。` : `${name} 已请回，续接原会话。`);
+    if (!quiet && state.room?.id === room_id) notify("info", member.access === "manual" ? t('{value1} 已请回，凭证已更新；请用新的启动指令让它重新注册。', { value1: name }) : t('{value1} 已请回，续接原会话。', { value1: name }));
   } else {
     await request_json(`/api/rooms/${room_id}/members/${member_id}${action === "interrupt" ? "/interrupt" : ""}`,
       action === "interrupt" ? {} : { action, ...(role ? { role } : {}), ...(latest_id !== undefined ? { latest_id } : {}) });
@@ -1598,7 +1688,7 @@ async function reorder_speakers({ revision, order }) {
   try { await request_json(`/api/rooms/${room_id}/speaking-order`, { revision, order }); }
   catch (error) {
     // A conflict means someone else's change landed first; the board reloads below, so ask for the move again (same text as the board's own notice).
-    if (error.status === 409) notify("warning", "发言顺序刚有变化，已更新为最新顺序，请重新调整");
+    if (error.status === 409) notify("warning", t('发言顺序刚有变化，已更新为最新顺序，请重新调整'));
     else notify("error", error.message);
   }
   if (state.room?.id === room_id) await refresh_room();
@@ -1635,8 +1725,8 @@ async function invite_member({ name, access, project_access = "read", session_id
   if (state.room?.id === room_id) {
     // A manual member's start step lives on the board row, the composer bar and the invite dialog; no extra notice.
     const notice = access === "manual" ? ""
-        : record.options?.session_id ? `${record.member.name} 已接入原会话；它工作时请不要在原窗口继续操作。`
-        : `${record.member.name} 已加入，之后点名它即会由本机服务唤醒。`;
+        : record.options?.session_id ? t('{value1} 已接入原会话；它工作时请不要在原窗口继续操作。', { value1: record.member.name })
+        : t('{value1} 已加入，之后点名它即会由本机服务唤醒。', { value1: record.member.name });
     if (notice) notify("info", notice);
     if (refresh) await refresh_room();
   }
@@ -1644,7 +1734,7 @@ async function invite_member({ name, access, project_access = "read", session_id
 
 /** Clear only the composer that produced the saved message. */
 async function finish_message(result, room_id, drafts) {
-  show_toast(`留言已保存 · #${result.message.id}`);
+  show_toast(t('留言已保存 · #{value1}', { value1: result.message.id }));
   if (state.room?.id !== room_id || state.sending_drafts !== drafts) return;
   // The composer was emptied on send; what is in it now was typed since and stays.
   state.pending_submission = null;
@@ -1671,6 +1761,7 @@ async function finish_queued(result, room_id, drafts) {
   if (state.room?.id !== room_id || state.sending_drafts !== drafts) return;
   state.pending_submission = null;
   state.sending_preview = null;
+  state.queueing_preview = null;
   if (state.room.free) state.room = { ...state.room, free: { ...state.room.free, queued_messages: result.queue } };
   run_action(refresh_room);
 }
@@ -1686,29 +1777,66 @@ async function queue_request(payload) {
     throw error;
   }
   if (state.room?.id === room_id && state.room.free) state.room = { ...state.room, free: { ...state.room.free, queued_messages: queue } };
-  drop_gone_queued_edit();
   publish_view();
   if (state.room?.id === room_id) await refresh_room();
 }
 
-/** Put a queued message's text in the composer; sending then saves it in place. */
-function edit_queued(item) {
-  state.editing_queued = { id: item.id, draft: element("message-input").value };
-  element("message-input").value = item.text;
+/** Put text, files and the reply (`{ id, label }` or null) in the composer as they are given. */
+function fill_composer(text, drafts, reply) {
+  cancel_reply();
+  if (reply) {
+    state.reply_to = reply.id;
+    element("reply-label").textContent = reply.label;
+    element("reply-preview").hidden = false;
+  }
+  state.attachment_drafts = drafts;
+  element("message-input").value = text;
   element("message-input").dispatchEvent(new Event("input", { bubbles: true }));
+  render_attachment_drafts();
 }
 
-/** Leave queued-message editing and give back the draft that was in the composer. */
-function cancel_queued_edit() {
-  if (!state.editing_queued) return;
-  element("message-input").value = state.editing_queued.draft;
-  element("message-input").dispatchEvent(new Event("input", { bubbles: true }));
-  state.editing_queued = null;
+/**
+ * Take a queued message off the queue and put it in the composer: the owner rewrites it and sends it as a new message.
+ * A draft already in the composer is stashed and comes back once the next message leaves the composer (like Claude
+ * Code's Ctrl+S). Its files come back as already uploaded drafts; they are read before the row is removed, so a failed
+ * read leaves the message queued.
+ */
+async function edit_queued(item) {
+  const room_id = state.room.id;
+  const files = await Promise.all(item.attachments.map(async (file) => {
+    const bytes = await read_room_file(`/api/rooms/${encodeURIComponent(room_id)}/attachments/${encodeURIComponent(file.id)}/content`);
+    return { id: file.id, file: new File([bytes], file.file_name, { type: file.content_type || "" }) };
+  }));
+  await queue_request({ action: "delete", id: item.id });
+  if (state.room?.id !== room_id) return;
+  const typed = element("message-input").value;
+  if (typed.trim() || state.attachment_drafts.length) {
+    const reply = state.reply_to ? { id: state.reply_to, label: element("reply-label").textContent } : null;
+    state.stashed_drafts.push({ text: typed, drafts: state.attachment_drafts, reply });
+    notify("info", t('输入框原有草稿已暂存，这条发出后恢复'));
+  }
+  fill_composer(item.text, files.map(({ id, file }, index) => {
+    const draft = { id: new_submission_id(), file, preview_url: /^image\/(png|jpeg|gif|webp)$/.test(file.type) ? URL.createObjectURL(file) : "", uploaded: id, actor: "用户" };
+    const placeholder = draft_placeholder(draft, index + 1);
+    if (item.text.includes(placeholder)) draft.placeholder = placeholder;
+    return draft;
+  }), null);
+  state.queued_taken = (state.queued_taken || 0) + 1;
+  publish_view();
 }
 
-/** Deleting the message being edited also leaves editing, giving back the earlier draft. */
+/** Send what the composer holds; once it has left the composer, the draft stashed by editing a queued message comes back. */
+function send_from_composer(event) {
+  const sending = send_message(event);
+  if (state.stashed_drafts.length && !element("message-input").value && !state.attachment_drafts.length) {
+    const stashed = state.stashed_drafts.pop();
+    fill_composer(stashed.text, stashed.drafts, stashed.reply);
+    publish_view();
+  }
+  return sending;
+}
+
 async function delete_queued(id) {
-  if (state.editing_queued?.id === id) cancel_queued_edit();
   await queue_request({ action: "delete", id });
 }
 
@@ -1726,31 +1854,10 @@ async function send_queued(id) {
   finally { if (preview && state.sending_preview === preview) { state.sending_preview = null; publish_view(); } }
 }
 
-/**
- * The message being edited left the queue (sent or deleted elsewhere): stop editing so sending works again,
- * keeping the edited text in the composer as an ordinary draft.
- */
-function drop_gone_queued_edit() {
-  const queue = state.room?.free?.queued_messages;
-  if (!state.editing_queued || !queue || queue.items.some(item => item.id === state.editing_queued.id)) return;
-  state.editing_queued = null;
-  notify("info", "正在编辑的排队消息已发出或已删除，修改内容留在输入框");
-}
-
-/** Save the composer text into the queued message being edited. */
-async function save_queued_edit() {
-  const editing = state.editing_queued;
-  await queue_request({ action: "edit", id: editing.id, text: element("message-input").value });
-  element("message-input").value = editing.draft;
-  element("message-input").dispatchEvent(new Event("input", { bubbles: true }));
-  state.editing_queued = null;
-}
-
 /** Submit one message; reuse its identifier if a network failure requires a retry. */
 async function send_message(event) {
   event.preventDefault();
   if (!state.room || state.sending_message) return;
-  if (state.editing_queued) return save_queued_edit();
   const room_id = state.room.id, drafts = state.attachment_drafts;
   const payload = message_payload();
   let saved = false;
@@ -1769,10 +1876,14 @@ async function send_message(event) {
   const preview = { author: payload.author, text: payload.text, created_at: new Date().toISOString(), files: drafts.map(file => ({ name: file.file.name, preview_url: file.preview_url })) };
   state.sending_drafts = drafts;
   state.attachment_drafts = [];
-  // A message the site will likely queue skips the in-transcript card, which would flash before moving above the composer.
+  // A message the site will likely queue shows at once as a row in the queue tray instead of a card in the transcript,
+  // which would flash before moving above the composer. Like the site, a message naming only the host is never queued.
   const queue = state.room.free?.queued_messages;
-  const likely_queued = payload.queue && (queue?.busy || queue?.items?.length);
+  const named = new Set(payload.to || []);
+  const only_host = named.size === 1 && (state.room.free?.members || []).some(member => named.has(member.name) && member.role === "host" && member.status === "active");
+  const likely_queued = payload.queue && !only_host && (queue?.busy || queue?.items?.length);
   state.sending_preview = likely_queued ? null : preview;
+  state.queueing_preview = likely_queued ? preview : null;
   let sent;
   state.sending_done = new Promise(resolve => { sent = resolve; });
   publish_view();
@@ -1790,7 +1901,7 @@ async function send_message(event) {
   } catch (error) {
     if (state.room?.id !== room_id) throw error;
     // An unsaved message stays as a failed card in place, the one signal of this failure; the card keeps what it sends again.
-    if (saved) notify_failure(error, `留言已保存，但页面刷新失败：${error.message}`);
+    if (saved) notify_failure(error, t('留言已保存，但页面刷新失败：{value1}', { value1: error.message }));
     else {
       state.failed_sends = [...state.failed_sends, { id: new_submission_id(), preview: { ...preview, failed: error.message },
         room_id, draft, drafts, reply_to, submission: state.pending_submission }];
@@ -1804,6 +1915,7 @@ async function send_message(event) {
     if (state.sending_drafts === drafts) state.sending_drafts = null;
     sent(saved);
     state.sending_preview = null;
+    state.queueing_preview = null;
     state.upload_status = "";
     element("send-message").disabled = false;
     render_attachment_drafts();
@@ -1867,19 +1979,19 @@ function is_text_attachment(file) {
 // What a file is, by extension, so an attachment is shown as a known kind rather than a bare file: [label, icon tone].
 // Mirrors FILE_TYPES in frontend/file-preview.js, which this classic script cannot import.
 const ATTACHMENT_KINDS = [
-  [/^(docx?|rtf|odt)$/, "文档", "blue"], [/^(xlsx?|ods|csv|tsv)$/, "表格", "green"], [/^(pptx?|odp|key)$/, "演示文稿", "orange"],
-  [/^pdf$/, "PDF", "red"], [/^(mp4|m4v|webm|mov|mkv|avi|wmv|flv|ogv|mts|m2ts|3gp)$/, "视频", "purple"],
-  [/^(mp3|wav|ogg|oga|opus|m4a|aac|flac|aiff?|wma)$/, "音频", "purple"], [/^(srt|vtt|ass|ssa|lrc|sub|sbv)$/, "字幕", "purple"],
-  [/^(prproj|fcpxml|fcpbundle|kdenlive|mlt|otio|edl|aep|aepx|drp|veg|imovieproj)$/, "剪辑工程", "purple"],
-  [/^(json|jsonc|ya?ml|toml|ini|xml|env)$/, "配置数据", "gray"], [/^(md|markdown|txt|log)$/, "文本", "blue"],
-  [/^(html?|css|vue|[cm]?js|jsx|tsx?|py|sql|sh|ps1|bat)$/, "代码", "gray"], [/^(zip|rar|7z|tar|gz|tgz)$/, "压缩包", "gray"],
+  [/^(docx?|rtf|odt)$/, t('文档'), "blue"], [/^(xlsx?|ods|csv|tsv)$/, t('表格'), "green"], [/^(pptx?|odp|key)$/, t('演示文稿'), "orange"],
+  [/^pdf$/, "PDF", "red"], [/^(mp4|m4v|webm|mov|mkv|avi|wmv|flv|ogv|mts|m2ts|3gp)$/, t('视频'), "purple"],
+  [/^(mp3|wav|ogg|oga|opus|m4a|aac|flac|aiff?|wma)$/, t('音频'), "purple"], [/^(srt|vtt|ass|ssa|lrc|sub|sbv)$/, t('字幕'), "purple"],
+  [/^(prproj|fcpxml|fcpbundle|kdenlive|mlt|otio|edl|aep|aepx|drp|veg|imovieproj)$/, t('剪辑工程'), "purple"],
+  [/^(json|jsonc|ya?ml|toml|ini|xml|env)$/, t('配置数据'), "gray"], [/^(md|markdown|txt|log)$/, t('文本'), "blue"],
+  [/^(html?|css|vue|[cm]?js|jsx|tsx?|py|sql|sh|ps1|bat)$/, t('代码'), "gray"], [/^(zip|rar|7z|tar|gz|tgz)$/, t('压缩包'), "gray"],
 ];
 
 /** `[label, tone]` of a file's kind, or a plain file for an extension not listed. */
 function attachment_kind(file_name) {
   const extension = String(file_name).match(/\.([a-z0-9]{1,12})$/i)?.[1].toLowerCase() || "";
   const kind = ATTACHMENT_KINDS.find(([pattern]) => pattern.test(extension));
-  return kind ? [kind[1], kind[2]] : ["文件", "blue"];
+  return kind ? [kind[1], kind[2]] : [t('文件'), "blue"];
 }
 
 /** Render a file-shaped type badge; the extension is a label, not a preview capability. */
@@ -1891,17 +2003,74 @@ function attachment_file_icon(file_name) {
     <span>${extension}</span></span>`;
 }
 
-/** Keep original files in memory until sending; reject an invalid selection as a whole. */
-function add_attachments(files) {
+/**
+ * Keep original files in memory until sending; reject an invalid selection as a whole. Each file also puts its
+ * placeholder (`[图片 #n]` / `[文件 #n]`, n its position) into the text where it was pasted or dropped, else at the end,
+ * as Claude Code does with a pasted screenshot: the text says where each file belongs, and members read it the same way.
+ */
+function add_attachments(files, target = null) {
   // Without a room the welcome page's composer collects them for the room its first message creates.
   if (state.room?.archived) return;
   const selected = Array.from(files);
-  if (state.attachment_drafts.length + selected.length > MAX_MESSAGE_ATTACHMENTS) notify("warning", "每条消息最多 10 个附件");
-  else if (selected.some(file => file.size > MAX_ATTACHMENT_BYTES)) notify("warning", "单个附件最多 20 MiB");
-  else state.attachment_drafts.push(...selected.map(file => ({ id: new_submission_id(), file,
-    preview_url: /^image\/(png|jpeg|gif|webp)$/.test(file.type) ? URL.createObjectURL(file) : "", uploaded: null, actor: null })));
+  if (state.attachment_drafts.length + selected.length > MAX_MESSAGE_ATTACHMENTS) notify("warning", t('每条消息最多 10 个附件'));
+  else if (selected.some(file => file.size > MAX_ATTACHMENT_BYTES)) notify("warning", t('单个附件最多 20 MiB'));
+  else {
+    const added = selected.map(file => ({ id: new_submission_id(), file,
+      preview_url: /^image\/(png|jpeg|gif|webp)$/.test(file.type) ? URL.createObjectURL(file) : "", uploaded: null, actor: null }));
+    state.attachment_drafts.push(...added);
+    added.forEach(item => { item.placeholder = draft_placeholder(item, state.attachment_drafts.indexOf(item) + 1); });
+    insert_placeholders(added.map(item => item.placeholder).join(" "), target);
+  }
   render_attachment_drafts();
   publish_view();
+}
+
+/** `[图片 #n]` for an image the page previews, `[文件 #n]` for any other file. */
+function draft_placeholder(item, number) {
+  return `[${item.preview_url ? "图片" : "文件"} #${number}]`;
+}
+
+/** Put placeholders at the caret of the textarea the files came through, else at the end of the message text. */
+function insert_placeholders(text, target) {
+  const editor = target?.closest?.("textarea");
+  if (editor) {
+    const start = editor.selectionStart, end = editor.selectionEnd;
+    const lead = start > 0 && !/\s$/.test(editor.value.slice(0, start)) ? " " : "";
+    editor.setRangeText(`${lead}${text} `, start, end, "end");
+    // The textarea's own listeners (Vue's v-model, or the classic page) take the change as typing.
+    editor.dispatchEvent(new Event("input", { bubbles: true }));
+    if (editor !== element("message-input")) return;
+  }
+  const input = element("message-input");
+  if (!editor) input.value = input.value ? `${input.value.replace(/\s*$/, "")} ${text} ` : `${text} `;
+}
+
+/** Deleting a file's placeholder while typing removes that file, as in Claude Code's own prompt; true when one went. */
+function drop_unreferenced_attachments(text) {
+  const gone = state.attachment_drafts.filter(item => item.placeholder && !String(text).includes(item.placeholder));
+  if (!gone.length) return false;
+  // The composer removes a token whole; an edit it could not intercept (an input method) may leave half of one behind.
+  let cleaned = String(text);
+  for (const { placeholder } of gone) {
+    const escaped = placeholder.replace(/[[\]]/g, "\\$&");
+    // `[图片 #1` not followed by a digit (that would be `#10`), or `图片 #1]` not preceded by `[`.
+    cleaned = cleaned.replace(new RegExp(`${escaped.slice(0, -2)}(?![\\d\\]])|(?<!\\[)${escaped.slice(2)}`), "");
+  }
+  if (cleaned !== text) write_view_field("message-input", cleaned, { publish: false });
+  remove_attachment(gone.map(item => item.id));
+  return true;
+}
+
+/** Drop one file's placeholder from the text and renumber the rest, so `#n` always names the n-th file. */
+function renumber_placeholders(removed) {
+  const input = element("message-input");
+  let text = removed ? input.value.replace(new RegExp(`${removed.placeholder.replace(/[[\]]/g, "\\$&")} ?`), "") : input.value;
+  const changed = state.attachment_drafts.map((item, index) => ({ item, next: draft_placeholder(item, index + 1) }))
+    .filter(({ item, next }) => item.placeholder && item.placeholder !== next);
+  // Two passes, so `#2 → #1` cannot be taken for a `#1` that is itself about to move.
+  changed.forEach(({ item }, index) => { text = text.split(item.placeholder).join(`\u0000${index}\u0000`); });
+  changed.forEach(({ item, next }, index) => { text = text.split(`\u0000${index}\u0000`).join(next); item.placeholder = next; });
+  if (text !== input.value) write_view_field("message-input", text, { publish: false });
 }
 
 /** Release local previews when a draft is sent or its room is left. */
@@ -1911,11 +2080,15 @@ function clear_attachment_drafts() {
   render_attachment_drafts();
 }
 
-/** Remove one unsent file without disturbing the text draft. */
-function remove_attachment(id) {
-  const file = state.attachment_drafts.find(item => item.id === id);
-  if (file?.preview_url) URL.revokeObjectURL(file.preview_url);
-  state.attachment_drafts = state.attachment_drafts.filter(item => item.id !== id);
+/** Remove unsent files (one ID, or several when their placeholders were deleted from the text) and their placeholders. */
+function remove_attachment(ids) {
+  for (const id of [ids].flat()) {
+    const file = state.attachment_drafts.find(item => item.id === id);
+    if (!file) continue;
+    if (file.preview_url) URL.revokeObjectURL(file.preview_url);
+    state.attachment_drafts = state.attachment_drafts.filter(item => item !== file);
+    renumber_placeholders(file);
+  }
   render_attachment_drafts();
   publish_view();
 }
@@ -1926,7 +2099,7 @@ function render_attachment_drafts() {
   if (!container) return;
   container.innerHTML = state.attachment_drafts.map(item => `<div class="attachment-draft">${item.preview_url ? `<img src="${item.preview_url}" alt="">` : ""}
     <span>${escape_html(item.file.name)}<small>${attachment_size(item.file.size)}</small></span>
-    <button type="button" data-remove-attachment="${item.id}" aria-label="移除 ${escape_html(item.file.name)}">×</button></div>`).join("");
+    <button type="button" data-remove-attachment="${item.id}" aria-label="${escape_html(t("移除 {name}", { name: item.file.name }))}">×</button></div>`).join("");
   element("attachment-status").textContent = state.upload_status;
 }
 
@@ -1938,7 +2111,7 @@ async function upload_message_attachments(room_id, actor, drafts) {
       item.upload_submission ??= item.id;
       if (item.actor && item.actor !== actor) { item.upload_submission = new_submission_id(); item.uploaded = null; }
       item.actor = actor;
-      state.upload_status = `正在上传 ${index + 1}/${drafts.length} · ${item.file.name}`;
+      state.upload_status = t('正在上传 {value1}/{value2} · {value3}', { value1: index + 1, value2: drafts.length, value3: item.file.name });
       render_attachment_drafts();
       publish_view();
       const params = new URLSearchParams({ file_name: item.file.name, actor, submission_id: item.upload_submission });
@@ -1954,7 +2127,7 @@ async function upload_message_attachments(room_id, actor, drafts) {
 function drop_attachments(event) {
   if (!event.dataTransfer?.types.includes("Files")) return;
   event.preventDefault();
-  if (event.type === "drop") add_attachments(event.dataTransfer.files);
+  if (event.type === "drop") add_attachments(event.dataTransfer.files, event.target);
 }
 
 /** Paste screenshots without replacing normal clipboard text handling. */
@@ -1962,7 +2135,36 @@ function paste_attachments(event) {
   const files = Array.from(event.clipboardData?.files || []);
   if (!files.length) return;
   event.preventDefault();
-  add_attachments(files);
+  add_attachments(files, event.target);
+}
+
+/** What a preview button carries, so the preview opens at once instead of first asking the site about the file. */
+function attachment_preview_attributes(file) {
+  const name = escape_html(file.file_name);
+  return `data-preview-attachment="${escape_html(file.id)}" data-attachment-room="${escape_html(file.room_id)}" data-file-name="${name}" data-content-type="${escape_html(file.content_type)}" data-file-size="${Number(file.size) || 0}" data-created-at="${escape_html(file.created_at || "")}" aria-label="${escape_html(t("预览 {name}", { name: file.file_name }))}"`;
+}
+
+/** A download link's attributes; files of the computer's rooms are read through the relay. */
+function attachment_download_attributes(file) {
+  const url = `/api/rooms/${encodeURIComponent(file.room_id)}/attachments/${encodeURIComponent(file.id)}/content`;
+  return state.remote_rooms ? `href="#" data-relay-href="${url}" data-file-name="${escape_html(file.file_name)}"` : `href="${url}?download=1"`;
+}
+
+/**
+ * Turn `[图片 #n]` / `[文件 #n]` in a rendered message into a link to its n-th attachment: a preview for what the page
+ * can show, a download for the rest. Text outside the attachment count stays as written.
+ */
+function link_attachment_placeholders(html, files = []) {
+  if (!files?.length) return html;
+  return html.replace(/\[(图片|文件) #(\d{1,2})\]/g, (match, kind, number) => {
+    const file = files[Number(number) - 1];
+    if (!file) return match;
+    const previewable = file.content_type.startsWith("image/") || file.content_type === "application/pdf" || is_text_attachment(file);
+    // The stored `[图片 #n]` / `[文件 #n]` is protocol text; only the shown label follows the page language.
+    const label = escape_html(kind === "图片" ? t("[图片 #{number}]", { number }) : t("[文件 #{number}]", { number }));
+    return previewable ? `<button type="button" class="attachment-placeholder" ${attachment_preview_attributes(file)} title="${escape_html(file.file_name)}">${label}</button>`
+      : `<a class="attachment-placeholder" ${attachment_download_attributes(file)} download title="${escape_html(t("下载 {name}", { name: file.file_name }))}">${label}</a>`;
+  });
 }
 
 /** Render immutable file cards shared by messages, original-message dialogs, and themes. */
@@ -1971,11 +2173,10 @@ function attachment_markup(files = []) {
   return `<div class="message-attachments">${files.map(file => {
     const url = `/api/rooms/${encodeURIComponent(file.room_id)}/attachments/${encodeURIComponent(file.id)}/content`;
     const name = escape_html(file.file_name);
-    // The button carries what the preview needs, so it opens at once instead of first asking the site about the file.
-    const preview_attributes = `data-preview-attachment="${escape_html(file.id)}" data-attachment-room="${escape_html(file.room_id)}" data-file-name="${name}" data-content-type="${escape_html(file.content_type)}" data-file-size="${Number(file.size) || 0}" data-created-at="${escape_html(file.created_at || "")}" aria-label="预览 ${name}"`;
+    const preview_attributes = attachment_preview_attributes(file);
     // Files of the computer's rooms are not on this website: they are read through the relay once shown or clicked.
     const source = state.remote_rooms ? `data-relay-src="${url}"` : `src="${url}"`;
-    const download = state.remote_rooms ? `href="#" data-relay-href="${url}" data-file-name="${name}"` : `href="${url}?download=1"`;
+    const download = attachment_download_attributes(file);
     if (file.content_type.startsWith("image/")) return `<button type="button" class="attachment-image" ${preview_attributes}>
       <img ${source} alt="${name}" loading="lazy"></button>`;
     // Audio and video play in place with the browser's own controls; a format it cannot decode still has its download.
@@ -1985,18 +2186,18 @@ function attachment_markup(files = []) {
       const skinned = Boolean(customElements.get(`${tag}-player`));
       const media = `<${tag} ${source} ${skinned ? "" : "controls "}preload="metadata" playsinline aria-label="${name}"></${tag}>`;
       return `<div class="attachment-media attachment-${tag}">${skinned ? `<${tag}-player><${tag}-skin class="attachment-player">${media}</${tag}-skin></${tag}-player>` : media}
-        <span class="attachment-media-failed">浏览器无法播放这个文件的格式，请点下面的文件名下载后用本机软件打开。</span>
-        <a class="attachment-media-name" ${download} download title="下载 ${name}">${name}<small>${attachment_size(file.size)}</small></a></div>`;
+        <span class="attachment-media-failed">${escape_html(t("浏览器无法播放这个文件的格式，请点下面的文件名下载后用本机软件打开。"))}</span>
+        <a class="attachment-media-name" ${download} download title="${escape_html(t("下载 {name}", { name: file.file_name }))}">${name}<small>${attachment_size(file.size)}</small></a></div>`;
     }
     const content = `${attachment_file_icon(file.file_name)}<span class="attachment-name"><span title="${name}">${name}</span><small>${attachment_kind(file.file_name)[0]} · ${attachment_size(file.size)}</small></span>`;
     const previewable = file.content_type === "application/pdf" || is_text_attachment(file);
     return `<div class="attachment-file">${previewable
       ? `<button type="button" class="attachment-file-main" ${preview_attributes}>${content}</button>`
-      : `<a class="attachment-file-main" ${download} download aria-label="下载 ${name}">${content}</a>`}
-      ${previewable ? `<button type="button" class="attachment-download" ${preview_attributes} title="预览 ${name}">
+      : `<a class="attachment-file-main" ${download} download aria-label="${escape_html(t("下载 {name}", { name: file.file_name }))}">${content}</a>`}
+      ${previewable ? `<button type="button" class="attachment-download" ${preview_attributes} title="${escape_html(t("预览 {name}", { name: file.file_name }))}">
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M2 12s3.6-7 10-7 10 7 10 7-3.6 7-10 7S2 12 2 12Z"/><circle cx="12" cy="12" r="3"/></svg>
       </button>` : ""}
-      <a class="attachment-download" ${download} download aria-label="下载 ${name}" title="下载 ${name}">
+      <a class="attachment-download" ${download} download aria-label="${escape_html(t("下载 {name}", { name: file.file_name }))}" title="${escape_html(t("下载 {name}", { name: file.file_name }))}">
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 3v12m-5-5 5 5 5-5M4 15v4a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2v-4"/></svg>
       </a></div>`;
   }).join("")}</div>`;
@@ -2060,7 +2261,7 @@ async function preview_attachment(input) {
   element("attachment-image").hidden = is_pdf;
   element("attachment-canvas").hidden = true;
   element("attachment-pdf-controls").hidden = !is_pdf;
-  element("attachment-preview-status").textContent = is_pdf ? "正在读取 PDF…" : "";
+  element("attachment-preview-status").textContent = is_pdf ? t('正在读取 PDF…') : "";
   if (!element("attachment-dialog").open) element("attachment-dialog").showModal();
   if (!is_pdf) { element("attachment-image").src = file.url; return; }
   try {
@@ -2073,7 +2274,7 @@ async function preview_attachment(input) {
     preview.document = await preview.task.promise;
     if (state.attachment_preview === preview) await render_attachment_pdf();
   } catch (error) {
-    if (state.attachment_preview === preview) element("attachment-preview-status").textContent = `无法预览此 PDF：${error.message}。可下载原文件查看。`;
+    if (state.attachment_preview === preview) element("attachment-preview-status").textContent = t('无法预览此 PDF：{value1}。可下载原文件查看。', { value1: error.message });
   }
 }
 
@@ -2106,7 +2307,7 @@ async function render_attachment_pdf() {
     if (state.attachment_preview === preview && version === preview.render_version) canvas.hidden = false;
   } catch (error) {
     if (state.attachment_preview === preview && version === preview.render_version && error.name !== "RenderingCancelledException")
-      element("attachment-preview-status").textContent = `PDF 页面读取失败：${error.message}`;
+      element("attachment-preview-status").textContent = t('PDF 页面读取失败：{value1}', { value1: error.message });
   }
 }
 
@@ -2124,7 +2325,7 @@ function bind_attachment_controls() {
   });
   element("close-attachment").addEventListener("click", () => element("attachment-dialog").close());
   element("attachment-dialog").addEventListener("close", close_attachment_preview);
-  element("attachment-image").addEventListener("error", () => { element("attachment-preview-status").textContent = "图片读取失败，可下载原文件查看"; });
+  element("attachment-image").addEventListener("error", () => { element("attachment-preview-status").textContent = t('图片读取失败，可下载原文件查看'); });
   for (const [id, delta] of [["attachment-previous", -1], ["attachment-next", 1]]) element(id).addEventListener("click", () => {
     const preview = state.attachment_preview;
     if (preview?.document) { preview.page = Math.max(1, Math.min(preview.document.numPages, preview.page + delta)); render_attachment_pdf(); }
@@ -2140,12 +2341,12 @@ async function show_message(message_id) {
   const message = await request_json(`/api/rooms/${state.room.id}/messages/${message_id}`);
   element("detail-title").textContent = `#${message.id} · ${display_name(message.author)}`;
   const source = SOURCE_LABELS[message.source] || message.source;
-  const summary = message.summary ? `回答摘要 · ${display_name(message.summary_by)}\n${message.summary}\n\n完整正文\n` : "";
+  const summary = message.summary ? t('回答摘要 · {value1}\n{value2}\n\n完整正文\n', { value1: display_name(message.summary_by), value2: message.summary }) : "";
   element("detail-body").textContent = `${source} · ${message_provenance(message)} · ${new Date(message.created_at).toLocaleString("zh-CN")}\n\n${summary}${message.text}`;
   element("detail-body").insertAdjacentHTML("beforeend", attachment_markup(message.attachments));
   if (message.reply_to) {
     const link = document.createElement("button");
-    link.textContent = `↳ 查看被回复的原文 #${message.reply_to}`;
+    link.textContent = t('↳ 查看被回复的原文 #{value1}', { value1: message.reply_to });
     link.addEventListener("click", () => run_action(() => show_message(message.reply_to)));
     element("detail-body").append(link);
   }
@@ -2165,24 +2366,24 @@ function limit_rounds(limits = {}) {
   const done = limits.segment_rounds ?? limits.completed_rounds ?? 0;
   const cap = limits.round_cap ?? limits.max_rounds ?? 0;
   const total = limits.extra_rounds ? `${limits.max_rounds}+${limits.extra_rounds}` : "";
-  return { done, cap, total, text: cap ? `${done} / ${cap}${total ? `（${total}）` : ""} 轮` : `${done} 轮` };
+  return { done, cap, total, text: cap ? t('{value1} / {value2}{value3} 轮', { value1: done, value2: cap, value3: total ? `（${total}）` : "" }) : t('{value1} 轮', { value1: done }) };
 }
 
 /** Describe configured boundaries and actual progress without implying completion. */
 function limits_label(limits = {}) {
   const finished = state.room?.phase === "concluded";
-  const rounds = limits.round_cap || limits.max_rounds ? limit_rounds(limits).text : `${limits.completed_rounds || 0} 轮 · 未设轮次上限`;
-  const duration = limits.max_minutes ? `总时长 ${limits.max_minutes} 分钟` : "未设总时长";
-  const progress = finished ? "讨论已收束" : !limits.started_at ? "尚未计时" : `已用 ${Math.floor((limits.elapsed_seconds || 0) / 60)} 分钟${limits.remaining_seconds == null ? "" : ` · 剩余 ${Math.ceil(limits.remaining_seconds / 60)} 分钟`}`;
-  const status = finished ? "" : limits.reached ? "已达上限，停止新增安排" : "";
-  const action = "到限暂停";
+  const rounds = limits.round_cap || limits.max_rounds ? limit_rounds(limits).text : t('{value1} 轮 · 未设轮次上限', { value1: limits.completed_rounds || 0 });
+  const duration = limits.max_minutes ? t('总时长 {value1} 分钟', { value1: limits.max_minutes }) : t('未设总时长');
+  const progress = finished ? t('讨论已收束') : !limits.started_at ? t('尚未计时') : t('已用 {value1} 分钟{value2}', { value1: Math.floor((limits.elapsed_seconds || 0) / 60), value2: limits.remaining_seconds == null ? "" : t(' · 剩余 {value1} 分钟', { value1: Math.ceil(limits.remaining_seconds / 60) }) });
+  const status = finished ? "" : limits.reached ? t('已达上限，停止新增安排') : "";
+  const action = t('到限暂停');
   return `${rounds}；${duration}；${progress}。${action}${status ? `；${status}` : ""}。`;
 }
 
 /** Why a discussion ended, from the stop reason and the limits it ran under; anything else is the user ending it. */
 function stop_reason_label({ stop_reason, max_rounds, max_minutes } = {}) {
-  return { round_limit: `达到轮次上限（${max_rounds} 轮）`, time_limit: `达到时长上限（${max_minutes} 分钟）`,
-    goal_done: "主持人确认目标已完成" }[stop_reason] || "用户结束了讨论";
+  return { round_limit: t('达到轮次上限（{value1} 轮）', { value1: max_rounds }), time_limit: t('达到时长上限（{value1} 分钟）', { value1: max_minutes }),
+    goal_done: t('主持人确认目标已完成') }[stop_reason] || t('用户结束了讨论');
 }
 
 /** Read private member files only inside the controller, never in a presentation snapshot. */
@@ -2241,7 +2442,7 @@ function prepare_room_request(signature) {
   const saved = stored_launches().find(record => record.signature === signature);
   if (saved) return state.pending_room = { signature, id: saved.id, token: saved.input.token, members: saved.input.room?.members };
   if (state.pending_room && localStorage.getItem(LAUNCH_PENDING_PREFIX + state.pending_room.id)) {
-    throw new Error("上次启动结果尚未确认，请先继续原请求；如要放弃重试，请移除对应待办。原房间不会被删除。");
+    throw new Error(t('上次启动结果尚未确认，请先继续原请求；如要放弃重试，请移除对应待办。原房间不会被删除。'));
   }
   state.pending_room = { signature, id: new_submission_id(), token: crypto.randomUUID() };
   return state.pending_room;
@@ -2255,15 +2456,15 @@ async function submit_room(event, folder_id = null) {
   // A room needs the local service only for members it wakes or for smart scheduling.
   const launchable = state.launch.available || (!computer_rooms_only() && Boolean(state.launch.relay));
   const launching = Object.values(payload.experts).includes("cli") || (launchable && Boolean(creation_launch_options().scheduler || state.launch.workspace.cwd || state.launch.workspace.local_project));
-  if (launching && !launchable) throw new Error("本机唤醒的成员需要连接本机服务；也可改为手动接入");
+  if (launching && !launchable) throw new Error(t('本机唤醒的成员需要连接本机服务；也可改为手动接入'));
   const launch_draft = launching ? creation_launch_options() : null;
   // A discussion is only a way to push the room forward: the room is created as a free room, then opened with these limits.
   const discussion = state.create_discussion ? { goal: payload.goal.trim(), named_followup: state.named_followup,
     limits: read_limits("new-room") } : null;
-  if (discussion && !(launching && payload.host && payload.experts[payload.host] === "cli")) throw new Error("开启讨论需要一位由本机唤醒的 AI 主持人；请先添加并设为主持人");
+  if (discussion && !(launching && payload.host && payload.experts[payload.host] === "cli")) throw new Error(t('开启讨论需要一位由本机唤醒的 AI 主持人；请先添加并设为主持人'));
   const goal = state.create_goal ? { ...state.create_goal, objective: state.create_goal.objective.trim() } : null;
-  if (goal && !goal.objective) throw new Error("请填写 Goal 目标");
-  if (goal && !(launching && payload.host && payload.experts[payload.host] === "cli")) throw new Error("开启 Goal 需要一位由本机唤醒的 AI 主持人；请先添加并设为主持人");
+  if (goal && !goal.objective) throw new Error(t('请填写 Goal 目标'));
+  if (goal && !(launching && payload.host && payload.experts[payload.host] === "cli")) throw new Error(t('开启 Goal 需要一位由本机唤醒的 AI 主持人；请先添加并设为主持人'));
   // The key joins the signature only when a discussion or goal is requested, so recovered requests keep matching their stored signature.
   const signed = (current_payload, current_draft) => JSON.stringify(discussion ? { payload: current_payload, launch_draft: current_draft, discussion }
     : goal ? { payload: current_payload, launch_draft: current_draft, goal } : { payload: current_payload, launch_draft: current_draft });
@@ -2276,7 +2477,7 @@ async function submit_room(event, folder_id = null) {
   // The website tracks the capability cli; a manual expert is a local reader and writer whose delivery lives in its member record.
   const experts = Object.fromEntries(Object.entries(payload.experts || {}).map(([name, mode]) => [name, mode === "manual" ? "cli" : mode]));
   const input = { ...(launch_draft || {}), room: { ...payload, ...(payload.experts ? { experts } : {}), members: pending.members, submission_id: pending.id }, token };
-  const room = await update_directory({ key: "create-room", label: `「${payload.title}」创建`,
+  const room = await update_directory({ key: "create-room", label: t('「{value1}」创建', { value1: payload.title }),
     error_message: launching ? error => `「${payload.title}」${error.message}` : null,
     apply: () => { state.creating_room = payload; }, rollback: () => { state.creating_room = null; },
     save: async () => (await submit_local_launch(input, payload.title, !launching, signature)).room,
@@ -2327,7 +2528,7 @@ async function quick_create_room(text) {
     const folder = state.welcome_folder;
     await reset_create_form(folder);
     const name = Object.keys(IDENTITIES).find(item => item !== "用户" && LAUNCH_CLIENTS[item] && (default_launch_entry(item), launch_ready(item)));
-    if (!name) throw new Error("还没有可直接唤醒的 AI：请先配置本机 AI 的接入");
+    if (!name) throw new Error(t('还没有可直接唤醒的 AI：请先配置本机 AI 的接入'));
     write_view_expert("new-expert-modes", name, "cli");
     write_view_field("new-room-host", name, { publish: false });
     const title = text.split("\n")[0] || drafts[0].file.name;
@@ -2354,7 +2555,7 @@ async function open_discussion_after_creation(room_id, { goal, named_followup, l
     await request_json(`${path}/discussion`, { action: "start", revision: current.revision,
       ...(goal ? { goal } : {}), limits, named_followup });
   } catch (error) {
-    notify("warning", `房间已创建，但开启讨论失败：${error.message}；可在右侧成员栏重试`);
+    notify("warning", t('房间已创建，但开启讨论失败：{value1}；可在右侧成员栏重试', { value1: error.message }));
   }
 }
 
@@ -2369,7 +2570,7 @@ async function open_goal_after_creation(room_id, { objective, max_continues, max
     await request_json(path, { action: "start", revision: current.revision, objective, max_continues, max_minutes, idle_seconds });
     state.create_goal = null;
   } catch (error) {
-    notify("warning", `房间已创建，但开启 Goal 失败：${error.message}；可在右侧成员栏重试`);
+    notify("warning", t('房间已创建，但开启 Goal 失败：{value1}；可在右侧成员栏重试', { value1: error.message }));
   }
 }
 
@@ -2380,7 +2581,7 @@ function take_pairing_code() {
   state.device.pairing_code = match[1].toUpperCase();
   state.device.pairing_fp = (location.hash.match(/(?:^#|&)fp=([0-9a-f]{32})/) || [])[1] || "";
   history.replaceState(null, "", `${location.pathname}${location.search}`);
-  notify("info", "已读取配对码：打开 设置 → 账号，点“配对”");
+  notify("info", t('已读取配对码：打开 设置 → 账号，点“配对”'));
 }
 
 /** Take the code and computer fingerprint from a scanned pairing link; answers the code, or "" when it is not one. */
@@ -2410,7 +2611,7 @@ function restore_local_connection() {
     if (incoming !== null) localStorage.setItem(LOCAL_CONNECTION_KEY, JSON.stringify(connection));
     return connection;
   } catch {
-    throw new Error("本机连接链接无效或无法保存，请重新运行连接命令；尚未发送启动请求");
+    throw new Error(t('本机连接链接无效或无法保存，请重新运行连接命令；尚未发送启动请求'));
   }
 }
 
@@ -2434,10 +2635,10 @@ async function local_launch_request(action, payload) {
         ? { signal: AbortSignal.timeout(["room-models", "models", "api-check", "scheduler-check"].includes(action) ? MODEL_CATALOG_TIMEOUT_MS : LOCAL_CONNECTION_TIMEOUT_MS) } : {}) });
   } catch (error) {
     if (!local_connection) throw error;
-    throw new Error("无法连接本机服务：请在这台电脑运行 codiscuss local open，并允许浏览器访问本机网络，再重试原请求");
+    throw new Error(t('无法连接本机服务：请在这台电脑运行 codiscuss local open，并允许浏览器访问本机网络，再重试原请求'));
   }
   const result = await response.json();
-  if (!response.ok) throw Object.assign(new Error(result.error || "本机启动请求失败"), { launch: result.launch });
+  if (!response.ok) throw Object.assign(new Error(server_text(result.error_text, result.error) || t('本机启动请求失败')), { launch: result.launch });
   return result;
 }
 
@@ -2522,7 +2723,7 @@ function device_label(agent = navigator.userAgent) {
   const system = /iPhone/.test(text) ? "iPhone" : /iPad/.test(text) ? "iPad" : /Android/.test(text) ? "Android" : /Windows/.test(text) ? "Windows"
     : /Mac OS X|Macintosh/.test(text) ? "Mac" : /Linux/.test(text) ? "Linux" : "";
   const browser = /Edg\//.test(text) ? "Edge" : /Chrome\//.test(text) ? "Chrome" : /Firefox\//.test(text) ? "Firefox" : /Safari\//.test(text) ? "Safari" : "";
-  return [system, browser].filter(Boolean).join(" · ") || "未知设备";
+  return [system, browser].filter(Boolean).join(" · ") || t('未知设备');
 }
 
 // Which computer this browser paired with and that computer's key fingerprint: nothing secret, the key itself stays in IndexedDB.
@@ -2563,7 +2764,7 @@ async function device_request(action, payload = {}) {
   if (relay_machine && !state.admin.local) return relay_command(action, payload);
   if (action === "device-list") return local_launch_request("devices", {});
   if (action === "device-revoke") return local_launch_request("devices", { revoke: payload.device_id });
-  throw new Error("请在已配对的设备上操作");
+  throw new Error(t('请在已配对的设备上操作'));
 }
 
 /**
@@ -2573,18 +2774,18 @@ async function device_request(action, payload = {}) {
  */
 async function pair_this_device(code) {
   const machine = relay_machine || await load_relay_machine();
-  if (!machine?.sign_key) throw new Error("网站上还没有绑定电脑，或电脑的 codiscuss 版本过旧");
+  if (!machine?.sign_key) throw new Error(t('网站上还没有绑定电脑，或电脑的 codiscuss 版本过旧'));
   const normal = String(code || "").toUpperCase().replace(/[^0-9A-Z]/g, "");
-  if (normal.length !== 12) throw new Error("配对码是 12 位字母和数字");
+  if (normal.length !== 12) throw new Error(t('配对码是 12 位字母和数字'));
   const fingerprint = await machine_fingerprint(machine);
-  if (state.device.pairing_fp && state.device.pairing_fp !== fingerprint) throw new Error("网站给出的电脑身份与二维码不符，已停止配对；请在电脑前重新扫码");
+  if (state.device.pairing_fp && state.device.pairing_fp !== fingerprint) throw new Error(t('网站给出的电脑身份与二维码不符，已停止配对；请在电脑前重新扫码'));
   const device = await device_identity();
   const encoder = new TextEncoder();
   const key = await crypto.subtle.importKey("raw", encoder.encode(normal), { name: "HMAC", hash: "SHA-256" }, false, ["sign"]);
   const proof = bytes_to_b64url(await crypto.subtle.sign("HMAC", key, encoder.encode(`codiscuss-pair-v1\n${machine.id}\n${device.raw}`)));
   const challenge = new Uint8Array(await crypto.subtle.digest("SHA-256", encoder.encode(`codiscuss-pair-passkey\n${normal}\n${device.raw}`)));
   // WebAuthn must run on the user's tap, so everything above is ready before the dialog asks for it.
-  return passkey_prompt({ title: "配对这台设备", description: "用这台设备的面容、指纹或设备密码确认，完成与电脑的配对。之后打开网页即可使用，无需账号和密码。", confirm_label: "继续",
+  return passkey_prompt({ title: t('配对这台设备'), description: t('用这台设备的面容、指纹或设备密码确认，完成与电脑的配对。之后打开网页即可使用，无需账号和密码。'), confirm_label: t('继续'),
     run: async () => {
       // A refused passkey still asks the computer, which accepts it only when this code was made to allow no passkey.
       let refused = null;
@@ -2604,12 +2805,12 @@ async function pair_this_device(code) {
         attestation_object: bytes_to_b64url(created.response.attestationObject) };
       const answer = await pair_exchange(machine, { public_key: device.public_jwk, label: device_label(), proof, passkey });
       if (answer.status >= 400 && refused && answer.body?.need === "passkey") throw passkey_error(refused);
-      if (answer.status >= 400) throw new Error(answer.body?.error || "配对失败");
+      if (answer.status >= 400) throw new Error(server_text(answer.body?.error_text, answer.body?.error) || t('配对失败'));
       localStorage.setItem(PAIRED_KEY, JSON.stringify({ machine_id: machine.id, fingerprint }));
       Object.assign(state.device, { needs: "", pairing_code: "", pairing_fp: "" });
       state.admin.logged_in = true;
       publish_view();
-      notify(passkey ? "info" : "warning", passkey ? "这台设备已与电脑配对" : "这台设备已与电脑配对（经电脑允许不用通行密钥）：不需要每天确认，也不能续期，到期须回电脑前重新配对");
+      notify(passkey ? "info" : "warning", passkey ? t('这台设备已与电脑配对') : t('这台设备已与电脑配对（经电脑允许不用通行密钥）：不需要每天确认，也不能续期，到期须回电脑前重新配对'));
       // The owner's profile, settings and the computer's rooms load now that the computer accepts this device.
       await load_admin_state();
       await load_launch_settings();
@@ -2624,16 +2825,16 @@ async function pair_exchange(machine, payload) {
   const path = `/api/machines/${encodeURIComponent(machine.id)}/pair`;
   const response = await fetch(path, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ id, envelope, wait: PAIR_WAIT_MS }) });
   const result = await response.json();
-  if (!response.ok) throw new Error(result.error || "配对请求被网站拒绝");
+  if (!response.ok) throw new Error(server_text(result.error_text, result.error) || t('配对请求被网站拒绝'));
   if (result.status === "done") return open_relay_response(key, id, result.response);
-  if (result.status === "offline") throw new Error(`电脑「${machine.name}」不在线，请确认它开机并运行 codiscuss`);
+  if (result.status === "offline") throw new Error(t('电脑「{value1}」不在线，请确认它开机并运行 codiscuss', { value1: machine.name }));
   // Without the live relay, the request waits in the queue; its answer is sealed for this browser alone.
   for (const started = Date.now(); Date.now() - started < RELAY_COMMAND_WAIT_MS;) {
     await new Promise(resolve => setTimeout(resolve, RELAY_COMMAND_POLL_MS));
     const command = await (await fetch(`/api/machines/${encodeURIComponent(machine.id)}/commands/${id}`)).json();
     if (command.status === "done") return open_relay_response(key, id, command.response);
   }
-  throw new Error("电脑没有及时答复配对请求，请确认它开机并运行 codiscuss 后重试");
+  throw new Error(t('电脑没有及时答复配对请求，请确认它开机并运行 codiscuss 后重试'));
 }
 
 /** The page's own passkey confirmation: WebAuthn needs the user's tap, so options are fetched first and the call runs on the tap. */
@@ -2643,7 +2844,7 @@ function passkey_prompt({ title, description, confirm_label, run }) {
       state.device.prompt = null;
       publish_view();
       try { resolve(await run()); } catch (error) { reject(error); }
-    }, cancel: () => { state.device.prompt = null; publish_view(); reject(Object.assign(new Error("已取消"), { cancelled: true })); } };
+    }, cancel: () => { state.device.prompt = null; publish_view(); reject(Object.assign(new Error(t('已取消')), { cancelled: true })); } };
     publish_view();
   });
 }
@@ -2653,9 +2854,9 @@ const PASSKEY_UNAVAILABLE = new Set(["NotReadableError", "NotSupportedError", "U
 
 /** Say in plain words why the browser refused a passkey step; its own message is English and names no cause. */
 function passkey_error(error) {
-  if (error?.name === "NotAllowedError") return new Error("没有完成通行密钥确认：已取消，或这台设备上没有这个网站可用的通行密钥");
-  if (error?.name === "InvalidStateError") return new Error("这台设备已经为这个网站创建过通行密钥");
-  if (error?.name === "SecurityError") return new Error("当前网址不能使用通行密钥，请用正式网站地址打开");
+  if (error?.name === "NotAllowedError") return new Error(t('没有完成通行密钥确认：已取消，或这台设备上没有这个网站可用的通行密钥'));
+  if (error?.name === "InvalidStateError") return new Error(t('这台设备已经为这个网站创建过通行密钥'));
+  if (error?.name === "SecurityError") return new Error(t('当前网址不能使用通行密钥，请用正式网站地址打开'));
   return error;
 }
 
@@ -2670,7 +2871,7 @@ async function passkey_assertion(options) {
 
 /** Show a pairing code for a new device; only this computer's own page can, so new devices are added in front of it. */
 async function invite_device(temporary, without_passkey = false) {
-  if (!state.admin.local) throw new Error("新设备只能在电脑前添加：请在电脑本机网页打开 设置 → 账号 → 添加设备");
+  if (!state.admin.local) throw new Error(t('新设备只能在电脑前添加：请在电脑本机网页打开 设置 → 账号 → 添加设备'));
   return local_launch_request("device-pairing", { temporary, without_passkey });
 }
 
@@ -2681,7 +2882,7 @@ let unlocking = null;
 function unlock_this_device() {
   unlocking ||= (async () => {
     const options = await relay_command("passkey-challenge", { purpose: "unlock" });
-    return passkey_prompt({ title: "确认是你", description: "用面容、指纹或设备密码确认后，这台设备 24 小时内可以操作电脑上的房间。", confirm_label: "确认",
+    return passkey_prompt({ title: t('确认是你'), description: t('用面容、指纹或设备密码确认后，这台设备 24 小时内可以操作电脑上的房间。'), confirm_label: t('确认'),
       run: async () => relay_command("device-unlock", { challenge_id: options.challenge_id, assertion: await passkey_assertion(options) }) });
   })().finally(() => { unlocking = null; });
   return unlocking;
@@ -2694,12 +2895,12 @@ let renewing = null;
 function renew_this_device() {
   renewing ||= (async () => {
     const options = await relay_command("passkey-challenge", { purpose: "renew" });
-    return passkey_prompt({ title: "续期这台设备", description: "这台设备的授权已到期或快到期。用面容、指纹或设备密码确认后，再获得 30 天授权。", confirm_label: "用通行密钥确认",
+    return passkey_prompt({ title: t('续期这台设备'), description: t('这台设备的授权已到期或快到期。用面容、指纹或设备密码确认后，再获得 30 天授权。'), confirm_label: t('用通行密钥确认'),
       run: async () => {
         await relay_command("device-renew", { challenge_id: options.challenge_id, assertion: await passkey_assertion(options) });
         state.device.needs = "";
         publish_view();
-        notify("info", "已续期 30 天");
+        notify("info", t('已续期 30 天'));
       } });
   })().finally(() => { renewing = null; });
   return renewing;
@@ -2723,7 +2924,7 @@ async function meet_device_need(error) {
   }
   if (error.need === "pairing" && state.admin.devices) forget_pairing();
   if (error.need === "pairing" || error.need === "renew") {
-    if (state.device.needs !== error.need) notify("warning", error.need === "pairing" ? "这台设备还没有与电脑配对：打开 设置 → 账号，扫描或输入配对码" : "这台设备的授权已到期：打开 设置 → 账号 用通行密钥续期");
+    if (state.device.needs !== error.need) notify("warning", error.need === "pairing" ? t('这台设备还没有与电脑配对：打开 设置 → 账号，扫描或输入配对码') : t('这台设备的授权已到期：打开 设置 → 账号 用通行密钥续期'));
     state.device.needs = error.need;
     publish_view();
   }
@@ -2766,20 +2967,20 @@ async function open_relay_response(key, id, sealed) {
  */
 async function relay_exchange(action, payload, wait) {
   const machine = relay_machine;
-  if (!machine) throw new Error("没有可用的已配对电脑，请在电脑上运行 codiscuss 并连接网站");
+  if (!machine) throw new Error(t('没有可用的已配对电脑，请在电脑上运行 codiscuss 并连接网站'));
   const id = crypto.randomUUID();
   const target = computer_rooms_only() ? { target: "computer" } : {};
   const { key, envelope } = await seal_relay_request(machine, id, { action, payload, ...target });
   const result = await request_json(`/api/machines/${encodeURIComponent(machine.id)}/relay`, { id, envelope, ...(wait ? { wait } : {}) })
     .catch(error => {
       // A request given up in the network may still have reached the computer, so its outcome is unconfirmed.
-      if (error.name === "TimeoutError") throw Object.assign(new Error(`结果待确认：电脑「${machine.name}」未在限时内答复，请稍后查看房间，确认是否已生效后再重试`),
+      if (error.name === "TimeoutError") throw Object.assign(new Error(t('结果待确认：电脑「{value1}」未在限时内答复，请稍后查看房间，确认是否已生效后再重试', { value1: machine.name })),
         { unconfirmed: true, launch: { stage: "unconfirmed" } });
       throw error.status === 401 ? Object.assign(error, { need: "pairing" }) : error;
     });
   if (result.status === "done") return open_relay_response(key, id, result.response);
-  if (result.status === "offline") throw Object.assign(new Error(`电脑「${machine.name}」不在线，请确认它开机并运行 codiscuss`), { offline: true });
-  throw Object.assign(new Error(`结果待确认：电脑「${machine.name}」未在限时内答复，请稍后查看房间，确认是否已生效后再重试`),
+  if (result.status === "offline") throw Object.assign(new Error(t('电脑「{value1}」不在线，请确认它开机并运行 codiscuss', { value1: machine.name })), { offline: true });
+  throw Object.assign(new Error(t('结果待确认：电脑「{value1}」未在限时内答复，请稍后查看房间，确认是否已生效后再重试', { value1: machine.name })),
     { unconfirmed: true, launch: { stage: "unconfirmed" } });
 }
 
@@ -2794,7 +2995,7 @@ async function queued_relay_command(action, payload, limit) {
     const command = await request_json(`${path}/${id}`);
     if (command.status === "done") return open_relay_response(key, id, command.response);
   }
-  throw Object.assign(new Error(`电脑「${machine.name}」未在限时内答复，请确认它开机并运行 codiscuss 后重试`), { launch: { stage: "unconfirmed" } });
+  throw Object.assign(new Error(t('电脑「{value1}」未在限时内答复，请确认它开机并运行 codiscuss 后重试', { value1: machine.name })), { launch: { stage: "unconfirmed" } });
 }
 
 /** Run one local-service operation on the paired computer; a write confirmation the computer asks for runs it once more. */
@@ -2809,7 +3010,7 @@ async function relay_command(action, payload) {
 /** Run one local-service operation on the paired computer and answer as the local bridge would. */
 async function relay_command_once(action, payload) {
   // The folder dialog would open on the computer where nobody sees it.
-  if (action === "pick-directory") throw new Error("请直接输入电脑上的完整路径");
+  if (action === "pick-directory") throw new Error(t('请直接输入电脑上的完整路径'));
   const limit = payload === undefined ? RELAY_SETTINGS_WAIT_MS : ["room-models", "models", "api-check", "scheduler-check"].includes(action)
     ? MODEL_CATALOG_TIMEOUT_MS + RELAY_SETTINGS_WAIT_MS : RELAY_COMMAND_WAIT_MS;
   let answer;
@@ -2817,7 +3018,7 @@ async function relay_command_once(action, payload) {
   try { answer = await relay_exchange(action, payload, limit); }
   catch (error) { if (computer_rooms_only() || (error.status !== 404 && !error.offline)) throw error; }
   const { status, body } = answer ?? await queued_relay_command(action, payload, limit);
-  if (status >= 400) throw Object.assign(new Error(body.error || "本机操作失败"), { launch: body.launch, need: body.need, room_id: body.room_id });
+  if (status >= 400) throw Object.assign(new Error(server_text(body.error_text, body.error) || t('本机操作失败')), { launch: body.launch, need: body.need, room_id: body.room_id });
   return body;
 }
 
@@ -2842,7 +3043,7 @@ async function relay_room_request_once(path, payload, etag) {
       await new Promise((resolve) => setTimeout(resolve, RELAY_READ_RETRY_MS[attempt]));
     }
   }
-  if (answer.status >= 400) throw Object.assign(new Error(answer.body?.error || "请求失败，请重试"),
+  if (answer.status >= 400) throw Object.assign(new Error(server_text(answer.body?.error_text, answer.body?.error) || t('请求失败，请重试')),
     { preflight: answer.status < 500, status: answer.status, need: answer.body?.need, room_id: answer.body?.room_id });
   return answer;
 }
@@ -2853,10 +3054,10 @@ async function relay_room_bytes(path) {
   let offset = 0, total = 0, type = "";
   do {
     const answer = await relay_exchange("room-api", { method: "GET", path, offset });
-    if (answer.status >= 400) throw Object.assign(new Error(answer.body?.error || "文件读取失败"), { status: answer.status });
-    if (typeof answer.body_base64 !== "string") throw new Error("文件读取失败");
+    if (answer.status >= 400) throw Object.assign(new Error(server_text(answer.body?.error_text, answer.body?.error) || t('文件读取失败')), { status: answer.status });
+    if (typeof answer.body_base64 !== "string") throw new Error(t('文件读取失败'));
     const bytes = base64_to_bytes(answer.body_base64);
-    if (!bytes.length && offset < answer.total) throw new Error("文件读取失败");
+    if (!bytes.length && offset < answer.total) throw new Error(t('文件读取失败'));
     parts.push(bytes);
     offset += bytes.length;
     ({ total, content_type: type } = answer);
@@ -2872,7 +3073,7 @@ async function relay_upload(path, data) {
   for (let index = 0; index < total; index++) {
     const part = bytes.subarray(index * RELAY_UPLOAD_PART_BYTES, (index + 1) * RELAY_UPLOAD_PART_BYTES);
     answer = await relay_exchange("room-upload", { id, path, index, total, size: bytes.length, data: bytes_to_base64(part) });
-    if (answer.status >= 400) throw Object.assign(new Error(answer.body?.error || "附件上传失败"), { status: answer.status });
+    if (answer.status >= 400) throw Object.assign(new Error(server_text(answer.body?.error_text, answer.body?.error) || t('附件上传失败')), { status: answer.status });
   }
   return answer.body;
 }
@@ -2883,7 +3084,7 @@ async function post_room_file(path, body, token) {
   const response = await fetch(path, { method: "POST",
     headers: { "Content-Type": "application/octet-stream", ...(token ? { "X-Discussion-Token": token } : {}) }, body });
   const result = await response.json();
-  if (!response.ok) throw new Error(result.error || "附件上传失败");
+  if (!response.ok) throw new Error(server_text(result.error_text, result.error) || t('附件上传失败'));
   return result;
 }
 
@@ -2891,7 +3092,7 @@ async function post_room_file(path, body, token) {
 async function read_room_file(path) {
   if (state.remote_rooms) return new Uint8Array(await (await relay_room_bytes(path)).arrayBuffer());
   const response = await fetch(path, { cache: "no-store" });
-  if (!response.ok) throw new Error("附件读取失败");
+  if (!response.ok) throw new Error(t('附件读取失败'));
   return new Uint8Array(await response.arrayBuffer());
 }
 
@@ -2960,11 +3161,20 @@ function computer_rooms_only() {
 
 /** Show the paired computer's rooms, or an empty directory while it cannot be reached; the list opens at its first room. */
 async function show_computer_rooms(remote) {
-  if (remote) await load_remote_site();
+  if (remote) {
+    // The room list and the room likely to open are read beside the computer's address rather than after it.
+    let guess = new URLSearchParams(location.search).get("room");
+    try { guess ||= localStorage.getItem(LAST_ROOM_KEY); } catch { /* Storage may be unavailable. */ }
+    const paths = ["/api/rooms", ...guess ? [`/api/rooms/${guess}`, history_batch_path(guess, "", 0)] : []];
+    paths.forEach(path => prefetch(path, () => relay_room_request(path)));
+    try { await load_remote_site(); }
+    catch (error) { prefetched.clear(); throw error; }
+  }
   state.remote_rooms = Boolean(remote);
   // The two lists share no rooms, so nothing read from one may be shown for the other.
   room_views.clear();
   message_histories.clear();
+  history_cards.clear();
   state.remote_online = null;
   state.rooms = [];
   set_folder_directory({});
@@ -2974,7 +3184,8 @@ async function show_computer_rooms(remote) {
   live_updates.revisions = "";
   start_live_updates({ refresh: false });
   // Opening no room reads the chosen directory and then opens its first room.
-  await select_room(undefined);
+  try { await select_room(undefined); }
+  finally { prefetched.clear(); }
 }
 
 let computer_retry = null, computer_attempt = 0;
@@ -3070,11 +3281,11 @@ function refresh_launch_recoveries() {
   if (container) {
     container.hidden = !state.launch.recoveries.length;
     container.innerHTML = state.launch.recoveries.map(item => `<section><strong>${escape_html(item.title)}</strong>
-      <p>${escape_html(item.error || "启动结果尚未确认；原请求已保存在此浏览器中。")}</p><div class="topic-actions">
-      <button class="button primary" data-launch-retry="${escape_html(item.id)}">继续本次启动</button>
-      ${item.room_id ? `<button class="button secondary" data-launch-room="${escape_html(item.room_id)}">查看原房间</button>` : ""}
-      <button class="button secondary" data-launch-discard="${escape_html(item.id)}">移除待办</button></div></section>`).join("")
-      + "<p>移除待办不会删除房间或停止讨论。</p>";
+      <p>${escape_html(item.error || t('启动结果尚未确认；原请求已保存在此浏览器中。'))}</p><div class="topic-actions">
+      <button class="button primary" data-launch-retry="${escape_html(item.id)}">${escape_html(t("继续本次启动"))}</button>
+      ${item.room_id ? `<button class="button secondary" data-launch-room="${escape_html(item.room_id)}">${escape_html(t("查看原房间"))}</button>` : ""}
+      <button class="button secondary" data-launch-discard="${escape_html(item.id)}">${escape_html(t("移除待办"))}</button></div></section>`).join("")
+      + `<p>${escape_html(t("移除待办不会删除房间或停止讨论。"))}</p>`;
   }
   publish_view();
 }
@@ -3086,10 +3297,10 @@ async function submit_local_launch(input, title, direct = false, signature) {
   const previous = localStorage.getItem(key);
   const relay = !direct && !state.launch.available && !computer_rooms_only() ? state.launch.relay?.id : undefined;
   const record = previous ? JSON.parse(previous) : { id, title, input, room_id: input.room_id, direct, signature, ...(relay ? { machine_id: relay } : {}) };
-  if (previous && JSON.stringify(record.input) !== JSON.stringify(input)) throw new Error("此房间有未完成的原启动请求，请先继续该请求，不要替换配置");
+  if (previous && JSON.stringify(record.input) !== JSON.stringify(input)) throw new Error(t('此房间有未完成的原启动请求，请先继续该请求，不要替换配置'));
   record.attempt_id = crypto.randomUUID();
   try { localStorage.setItem(key, JSON.stringify(record)); }
-  catch { throw new Error("此浏览器无法保存启动请求，请启用本地存储后重试；尚未发送本次启动"); }
+  catch { throw new Error(t('此浏览器无法保存启动请求，请启用本地存储后重试；尚未发送本次启动')); }
   refresh_launch_recoveries();
   try {
     const result = record.direct ? { room: await request_json("/api/rooms", record.input.room, record.input.token), status: "created" }
@@ -3105,8 +3316,8 @@ async function submit_local_launch(input, title, direct = false, signature) {
     return result;
   } catch (error) {
     const stage = error.launch?.stage || (record.direct && error.preflight ? "not_started" : undefined);
-    const prefix = stage === "not_started" ? (previous ? "本次请求未执行，原启动结果仍待确认：" : "本次请求未执行：") : stage === "created" ? "房间已创建，启动结果待确认："
-      : stage === "started" ? "自动推进已启用，接入结果待确认：" : "启动结果尚未确认，请沿用原请求重试：";
+    const prefix = stage === "not_started" ? (previous ? t('本次请求未执行，原启动结果仍待确认：') : t('本次请求未执行：')) : stage === "created" ? t('房间已创建，启动结果待确认：')
+      : stage === "started" ? t('自动推进已启用，接入结果待确认：') : t('启动结果尚未确认，请沿用原请求重试：');
     error.message = prefix + error.message;
     const latest = localStorage.getItem(key);
     const owns_attempt = latest && JSON.parse(latest).attempt_id === record.attempt_id;
@@ -3137,7 +3348,7 @@ async function resume_launch(id) {
       element("room-dialog").close();
     }
     if (!record.direct) clear_launch_overrides(record.input);
-    notify("info", result.status === "running" ? "已核对原启动，实际执行请查看进度回执" : "已核对原房间状态；不会自动恢复已暂停或结束的讨论");
+    notify("info", result.status === "running" ? t('已核对原启动，实际执行请查看进度回执') : t('已核对原房间状态；不会自动恢复已暂停或结束的讨论'));
     if (state.pending_room?.id === id) state.pending_room = null;
     await select_room(result.room.id);
   } catch (error) { notify("error", error.message); }
@@ -3151,8 +3362,11 @@ function discard_launch(id) {
   refresh_launch_recoveries();
 }
 
-/** Load reusable client settings once; this neither registers rooms nor starts AI. */
-async function load_launch_settings() {
+/**
+ * Load reusable client settings once; this neither registers rooms nor starts AI. `relay_known` is called once the paired
+ * computer is known (or settings end), so the computer's rooms can be read beside its settings instead of after them.
+ */
+async function load_launch_settings({ relay_known = () => {} } = {}) {
   const local = state.admin.local || ["127.0.0.1", "localhost"].includes(location.hostname);
   state.launch.room_models = null;
   state.launch.model_catalogs = {};
@@ -3174,6 +3388,7 @@ async function load_launch_settings() {
       if (!relay_machine) return;
       state.launch.remote = true;
     }
+    relay_known();
     const settings = await local_launch_request("settings");
     // Keep the saved machine defaults so every new form can start from them again.
     state.launch.saved_profiles = JSON.parse(JSON.stringify(settings.participants || {}));
@@ -3181,7 +3396,7 @@ async function load_launch_settings() {
     Object.assign(state.launch, { available: true, profiles: settings.participants, projects: settings.projects || [], projects_restricted: settings.projects_restricted === true, user_home: settings.user_home || "", api_providers: settings.api_providers || {}, api_keys: settings.api_keys || {}, managed_api_keys: settings.managed_api_keys || [],
       presets: settings.presets || [], builtin_presets: settings.builtin_presets || [], hidden_builtins: settings.hidden_builtins || [], workflows: settings.workflows || [], card_platforms: settings.platforms || [], description_templates: settings.description_templates || {},
       scheduler_providers: settings.scheduler_providers || {}, scheduler_modes: settings.scheduler_modes || {}, scheduler_default_mode: settings.scheduler_default_mode || "", error: "",
-      notice: relay_machine ? `经电脑「${relay_machine.name}」执行本机操作` : local_connection ? "已连接本机服务，讨论保存在当前网站" : "" });
+      notice: relay_machine ? t('经电脑「{value1}」执行本机操作', { value1: relay_machine.name }) : local_connection ? t('已连接本机服务，讨论保存在当前网站') : "" });
     Object.values(state.launch.profiles).forEach(fill_api_key);
     move_browser_description_templates();
     apply_create_preferences();
@@ -3199,7 +3414,7 @@ async function load_launch_settings() {
     state.launch.relay = await load_relay_machine();
     if (state.launch.relay) state.launch.error = "";
   }
-  finally { refresh_launch_recoveries(); render_launch_settings(); publish_view(); }
+  finally { refresh_launch_recoveries(); render_launch_settings(); publish_view(); relay_known(); }
 }
 
 /**
@@ -3214,12 +3429,12 @@ async function load_relay_machine() {
     const record = paired_record();
     // A paired browser talks only to the computer it paired with: a website that no longer lists it must not swap in another.
     if (record?.machine_id && !machines.some(item => item.id === record.machine_id)) {
-      notify("error", "网站上找不到与这台设备配对的电脑，已停止连接；如果电脑确实换过绑定，请在电脑前重新扫码配对");
+      notify("error", t('网站上找不到与这台设备配对的电脑，已停止连接；如果电脑确实换过绑定，请在电脑前重新扫码配对'));
       return null;
     }
     const machine = machines.find(item => item.id === record?.machine_id) || machines[0] || null;
     if (machine && record?.machine_id === machine.id && record.fingerprint && record.fingerprint !== await machine_fingerprint(machine)) {
-      notify("error", "网站给出的电脑身份与配对时不符，已停止连接；请在电脑前重新扫码配对");
+      notify("error", t('网站给出的电脑身份与配对时不符，已停止连接；请在电脑前重新扫码配对'));
       return null;
     }
     return machine;
@@ -3238,8 +3453,8 @@ async function relay_launch_request(input, machine_id) {
     launch = await request_json(`/api/remote-launches/${encodeURIComponent(id)}`);
   }
   if (launch.status === "failed") throw Object.assign(new Error(launch.error), { launch: { stage: launch.result.stage, room_id: launch.result.room_id } });
-  const name = state.launch.relay?.name || "电脑";
-  if (launch.status !== "done") throw Object.assign(new Error(`${name}${launch.status === "pending" ? "尚未接手" : "仍在启动"}，请保持它开机并运行 codiscuss，稍后在待办中继续`), { launch: { stage: "unconfirmed" } });
+  const name = state.launch.relay?.name || t('电脑');
+  if (launch.status !== "done") throw Object.assign(new Error(t('{value1}{value2}，请保持它开机并运行 codiscuss，稍后在待办中继续', { value1: name, value2: launch.status === "pending" ? t('尚未接手') : t('仍在启动') })), { launch: { stage: "unconfirmed" } });
   return { room: await request_json(`/api/rooms/${launch.result.room_id}`, undefined, input.token), status: launch.result.status };
 }
 
@@ -3247,7 +3462,7 @@ async function relay_launch_request(input, machine_id) {
 async function retry_launch_connection() {
   await load_launch_settings();
   if (state.launch.available || state.launch.error) return;
-  state.launch.error = "尚未检测到本机连接，请先在运行 AI 的电脑上执行上方命令并完成网页授权。";
+  state.launch.error = t('尚未检测到本机连接，请先在运行 AI 的电脑上执行上方命令并完成网页授权。');
   publish_view();
 }
 
@@ -3287,7 +3502,7 @@ async function load_room_models() {
     }
   } catch (error) {
     // Unavailable or older bridges leave the model unknown; the failure is kept so the page can say so, and the next refresh retries.
-    Object.assign(current, { participants: null, error: error.message || "读取失败" });
+    Object.assign(current, { participants: null, error: error.message || t('读取失败') });
   } finally {
     current.loading = false;
     if (live()) publish_view();
@@ -3332,9 +3547,9 @@ async function read_room_media(room_id, path, root = 0, on_progress = () => {}) 
   const parts = [], version = answer.version;
   let offset = 0;
   for (;;) {
-    if (answer.version !== version) throw new Error("文件在读取时发生了变化，请重试");
+    if (answer.version !== version) throw new Error(t('文件在读取时发生了变化，请重试'));
     const bytes = base64_to_bytes(answer.data || "");
-    if (!bytes.length && offset < answer.total) throw new Error("文件读取失败");
+    if (!bytes.length && offset < answer.total) throw new Error(t('文件读取失败'));
     parts.push(bytes);
     offset += bytes.length;
     on_progress(offset, answer.total);
@@ -3353,10 +3568,10 @@ async function read_room_page(room_id, path, root = 0) {
   let offset = 0, answer, version = "";
   do {
     answer = await local_launch_request("room-page", { room_id, path, root, offset, token: localStorage.getItem(`discuss-access:${room_id}`) });
-    if (version && answer.version !== version) throw new Error("页面在读取时发生了变化，请重试");
+    if (version && answer.version !== version) throw new Error(t('页面在读取时发生了变化，请重试'));
     version = answer.version;
     const bytes = base64_to_bytes(answer.data || "");
-    if (!bytes.length && offset < answer.total) throw new Error("页面读取失败");
+    if (!bytes.length && offset < answer.total) throw new Error(t('页面读取失败'));
     parts.push(bytes);
     offset += bytes.length;
   } while (offset < answer.total);
@@ -3408,14 +3623,14 @@ function participant_model(name, room, saved) {
   const profile = saved?.room_id === room.id ? saved.participants?.[name] : null;
   if (!profile) return "";
   // Only an agy member without a chosen model depends on the default that is read later.
-  if (!profile.model && !profile.actual_model && profile.defaults_pending) return "读取中…";
+  if (!profile.model && !profile.actual_model && profile.defaults_pending) return t('读取中…');
   // App members choose in their own chat, so only their session log knows.
   const app = ["codex", "antigravity"].includes(profile.adapter);
-  const model = (app ? profile.actual_model : profile.model || profile.actual_model || profile.default_model) || "默认";
+  const model = (app ? profile.actual_model : profile.model || profile.actual_model || profile.default_model) || t('默认');
   // agy's default effort belongs to its default model, so any other model keeps its own default instead.
   const default_effort = profile.adapter === "antigravity_cli" && model !== profile.default_model ? "" : profile.default_effort;
-  const effort = (app ? profile.actual_effort : profile.effort || profile.actual_effort || default_effort) || "默认";
-  return model === "默认" && effort === "默认" ? "默认" : `${model} · ${effort}`;
+  const effort = (app ? profile.actual_effort : profile.effort || profile.actual_effort || default_effort) || t('默认');
+  return model === t('默认') && effort === t('默认') ? t('默认') : `${model} · ${effort}`;
 }
 
 /** A woken member's project files as 只读 / 可写; empty when the site does not decide them (App, its own agy project, a taken-over manual member, unread settings). */
@@ -3425,7 +3640,7 @@ function participant_files(name, room, saved) {
   const profile = saved?.room_id === room.id ? saved.participants?.[name] : null;
   if (!profile) return "";
   if (!ACCESS_CLIENTS.includes(profile.adapter) || profile.own_project || profile.project_access === "own") return "";
-  return ACCESS_LABELS[profile.project_access] || "只读";
+  return ACCESS_LABELS[profile.project_access] || t('只读');
 }
 
 /**
@@ -3435,19 +3650,19 @@ function participant_files(name, room, saved) {
 function participant_session_hint(name, room, saved) {
   const member = (room?.members || []).find(item => item.name === name);
   if (member?.access !== "runner" || member.session_mode !== "borrowed") return undefined;
-  if (["codex", "antigravity"].includes(member.adapter)) return "续接你已有的 App 会话：任务直接送进 App 里的这个会话，可在其中查看";
+  if (["codex", "antigravity"].includes(member.adapter)) return t('续接你已有的 App 会话：任务直接送进 App 里的这个会话，可在其中查看');
   const profile = saved?.room_id === room.id ? saved.participants?.[name] : null;
   if (member.adapter === "claude" && profile?.project_access === "own") {
-    return "续接你自己的会话：原窗口开着时任务直接送进该窗口；窗口关闭时改在后台续接，期间不要重新打开该会话";
+    return t('续接你自己的会话：原窗口开着时任务直接送进该窗口；窗口关闭时改在后台续接，期间不要重新打开该会话');
   }
-  return "续接你已有的会话；它工作时请不要在原窗口继续操作";
+  return t('续接你已有的会话；它工作时请不要在原窗口继续操作');
 }
 
 /** Label how a member answers: the registered adapter says API / App; other locally woken members are CLI. */
 function participant_access(name, room) {
   const member = (room?.members || []).find(item => item.name === name);
   const adapter = member?.adapter;
-  if (member?.access === "manual") return "手动启动";
+  if (member?.access === "manual") return t('手动启动');
   if (adapter === "api") return "API";
   if (["codex", "antigravity"].includes(adapter)) return "App";
   return "CLI";
@@ -3457,7 +3672,7 @@ function participant_access(name, room) {
 const MODEL_CLIENTS = ["codex_cli", "claude", "antigravity_cli"];
 // Mirrors the adapters with access_levels in runner/adapters/profiles.mjs; this classic script cannot import it.
 const ACCESS_CLIENTS = [...MODEL_CLIENTS, "api"];
-const MODEL_SOURCE_LABELS = { "codex-app-server": "来自 Codex CLI 模型列表", "claude-cli": "来自 Claude CLI 模型列表", "antigravity-cli": "来自 Antigravity CLI 模型列表" };
+const MODEL_SOURCE_LABELS = { "codex-app-server": t('来自 Codex CLI 模型列表'), "claude-cli": t('来自 Claude CLI 模型列表'), "antigravity-cli": t('来自 Antigravity CLI 模型列表') };
 
 /** Keep discoveries separate for each software executable, shared by its participant instances. */
 function model_catalog_key(profile) {
@@ -3491,19 +3706,19 @@ function launch_model_state(name, launch = state.launch, profile = launch.profil
     const official = Boolean(preset) && profile.base_url?.replace(/\/$/, "") === preset.base_url;
     const models = catalog?.models || (official ? preset.models.map(id => ({ id, label: id })) : []);
     return { supported: true, items: models.map(model => ({ label: model.label && model.label !== model.id ? `${model.label} · ${model.id}` : model.id, value: model.id })),
-      loading: Boolean(catalog?.loading), error: catalog?.error || "", source: catalog ? "来自 API 模型列表" : "官方推荐，可输入其他模型 ID" };
+      loading: Boolean(catalog?.loading), error: catalog?.error || "", source: catalog ? t('来自 API 模型列表') : t('官方推荐，可输入其他模型 ID') };
   }
   const catalog = launch.model_catalogs?.[model_catalog_key(profile)];
   const models = catalog?.models || [];
   const selected = models.find(model => model.id === profile.model);
   const defaults = catalog?.defaults || {};
-  const items = [{ label: defaults.model ? `软件默认（${defaults.model}）` : "软件默认模型", value: "__default__" }, ...models.map(model => ({ label: model.label || model.id, value: model.id }))];
-  if (profile.model && !selected) items.push({ label: `${profile.model}（已保存，列表未确认）`, value: profile.model, disabled: true });
+  const items = [{ label: defaults.model ? t('软件默认（{value1}）', { value1: defaults.model }) : t('软件默认模型'), value: "__default__" }, ...models.map(model => ({ label: model.label || model.id, value: model.id }))];
+  if (profile.model && !selected) items.push({ label: t('{value1}（已保存，列表未确认）', { value1: profile.model }), value: profile.model, disabled: true });
   return { supported: MODEL_CLIENTS.includes(profile.adapter), items, defaults, loading: Boolean(catalog?.loading),
     efforts: profile.adapter === "antigravity_cli" ? catalog?.efforts : selected?.efforts, source: MODEL_SOURCE_LABELS[catalog?.source] || catalog?.source || "",
-    effort_note: profile.adapter === "antigravity_cli" ? catalog?.effort_error || (catalog?.loading ? "正在读取原生思考档位…" : "默认强度由 CLI 决定。") : !selected
-      ? "选择模型后显示可用思考强度；默认值由软件决定。" : "所选模型不提供单独思考强度。",
-    error: catalog?.error || (!launch.available ? "连接本机服务后读取模型列表" : !catalog ? "尚未读取此软件的模型列表" : "") };
+    effort_note: profile.adapter === "antigravity_cli" ? catalog?.effort_error || (catalog?.loading ? t('正在读取原生思考档位…') : t('默认强度由 CLI 决定。')) : !selected
+      ? t('选择模型后显示可用思考强度；默认值由软件决定。') : t('所选模型不提供单独思考强度。'),
+    error: catalog?.error || (!launch.available ? t('连接本机服务后读取模型列表') : !catalog ? t('尚未读取此软件的模型列表') : "") };
 }
 
 /** Read model metadata only; never launch an AI task or persist discovered choices as defaults. */
@@ -3521,13 +3736,13 @@ async function load_launch_models(name, force = false, profile = state.launch.pr
   publish_view();
   try {
     const result = await local_launch_request("models", input);
-    if (result.adapter !== input.adapter) throw new Error("模型列表与所选软件不一致");
+    if (result.adapter !== input.adapter) throw new Error(t('模型列表与所选软件不一致'));
     current.models = result.models || [];
     current.source = result.source || "";
     current.efforts = result.efforts;
     current.defaults = result.defaults || {};
     current.effort_error = result.effort_error || "";
-    current.error = result.error || (!current.models.length ? "软件未返回可用模型，可使用默认模型" : "");
+    current.error = result.error || (!current.models.length ? t('软件未返回可用模型，可使用默认模型') : "");
   } catch (error) { current.error = error.message; }
   finally {
     current.loading = false;
@@ -3628,8 +3843,8 @@ function write_create_api_max_requests(value) {
 function warn_outside_members(before, after) {
   for (const [name, profile] of Object.entries(after || {})) {
     if (!profile.outside_directory || before?.[name]?.outside_directory === profile.outside_directory) continue;
-    const limit = profile.outside_enforced ? "它对房间目录只读" : "已要求它对房间目录只读，但它的软件或权限档位不受程序限制，仍可能修改";
-    notify("warning", `${display_name(name)} 在 ${profile.outside_directory} 工作，不在本房间的项目目录内：${limit}；它自己目录里的改动不参与冲突提示。`);
+    const limit = profile.outside_enforced ? t('它对房间目录只读') : t('已要求它对房间目录只读，但它的软件或权限档位不受程序限制，仍可能修改');
+    notify("warning", t('{value1} 在 {value2} 工作，不在本房间的项目目录内：{value3}；它自己目录里的改动不参与冲突提示。', { value1: display_name(name), value2: profile.outside_directory, value3: limit }));
   }
 }
 
@@ -3726,7 +3941,7 @@ async function enable_room_workflow({ id, members }) {
   const room_id = state.room.id;
   const token = localStorage.getItem(`discuss-access:${room_id}`) || "";
   await local_launch_request("room-workflow", { room_id, token, action: "enable", workflow: { id, members } });
-  notify("info", "工作流已启用，主持人下一次任务起按它组织工作");
+  notify("info", t('工作流已启用，主持人下一次任务起按它组织工作'));
   await reload_room_models();
 }
 
@@ -3738,7 +3953,7 @@ async function move_workflow_members(action) {
   const room_id = state.room.id;
   const token = localStorage.getItem(`discuss-access:${room_id}`) || "";
   await local_launch_request("room-workflow", { room_id, token, action });
-  notify("info", action === "away" ? "工作流已结束，它带来的成员已离开；打 / 选它可请回原成员" : "工作流成员已请回，接着原来的会话工作");
+  notify("info", action === "away" ? t('工作流已结束，它带来的成员已离开；打 / 选它可请回原成员') : t('工作流成员已请回，接着原来的会话工作'));
   await refresh_room();
   await reload_room_models();
 }
@@ -3751,7 +3966,7 @@ async function sync_room_workflow() {
   const room_id = state.room.id;
   const token = localStorage.getItem(`discuss-access:${room_id}`) || "";
   await local_launch_request("room-workflow", { room_id, token, action: "sync" });
-  notify("info", "工作流已刷新，成员按最新卡片补齐");
+  notify("info", t('工作流已刷新，成员按最新卡片补齐'));
   await refresh_room();
   await reload_room_models();
 }
@@ -3828,7 +4043,7 @@ async function check_scheduler(scheduler = state.launch.scheduler) {
 async function save_scheduler_api_key(api_key, provider = state.launch.scheduler.provider) {
   const scheduler = state.launch.scheduler;
   const base_url = state.launch.scheduler_providers?.[provider]?.base_url;
-  if (!base_url) throw new Error("请先选择智能调度供应商");
+  if (!base_url) throw new Error(t('请先选择智能调度供应商'));
   const result = await local_launch_request("api-key", { base_url, api_key });
   state.launch.api_keys = { ...state.launch.api_keys, [base_url]: result.api_key_ref };
   if (state.launch.scheduler === scheduler && state.launch.scheduler_providers[scheduler.provider]?.base_url === base_url) scheduler.api_key_ref = result.api_key_ref;
@@ -3841,29 +4056,29 @@ function launch_summary(name) {
   const profile = state.launch.profiles[name] || {};
   if (profile.adapter === "api") {
     const directory = profile.cwd || state.launch.workspace.cwd;
-    return { client: `API · ${profile.model || "待选择模型"}`, session: "按房间记录接续", cwd: display_path(directory) || "未指定，只读写房间消息",
-      project: "房间上下文", access: directory ? `项目${ACCESS_LABELS[launch_access(name)] || "只读"}（文件工具，无命令行）` : "无项目目录" };
+    return { client: `API · ${profile.model || t('待选择模型')}`, session: t('按房间记录接续'), cwd: display_path(directory) || t('未指定，只读写房间消息'),
+      project: t('房间上下文'), access: directory ? t('项目{value1}（文件工具，无命令行）', { value1: ACCESS_LABELS[launch_access(name)] || t('只读') }) : t('无项目目录') };
   }
-  if (!profile.adapter) return { client: "尚未选择客户端", session: "尚未配置",
-    cwd: "选择客户端后确定", project: "选择客户端后确定" };
+  if (!profile.adapter) return { client: t('尚未选择客户端'), session: t('尚未配置'),
+    cwd: t('选择客户端后确定'), project: t('选择客户端后确定') };
   const cli_directory = ["codex_cli", "claude", "antigravity_cli"].includes(profile.adapter);
   const project_name = profile.project_name || state.launch.workspace.discussion_project;
   const project_id = profile.project_id;
   const metadata_only = ["codex_cli", "claude"].includes(profile.adapter);
   const fixed_project = profile.session_id && !metadata_only;
-  const project = fixed_project ? "沿用指定会话的项目" : metadata_only
-    ? (project_name ? `${project_name}（任务说明，不切换软件项目）` : "不指定项目，按工作目录执行")
-    : profile.adapter === "codex" ? [project_name, project_id ? `ID: ${project_id}` : ""].filter(Boolean).join(" · ") || "无项目聊天"
-      : project_id || project_name || "软件默认项目";
+  const project = fixed_project ? t('沿用指定会话的项目') : metadata_only
+    ? (project_name ? t('{value1}（任务说明，不切换软件项目）', { value1: project_name }) : t('不指定项目，按工作目录执行'))
+    : profile.adapter === "codex" ? [project_name, project_id ? `ID: ${project_id}` : ""].filter(Boolean).join(" · ") || t('无项目聊天')
+      : project_id || project_name || t('软件默认项目');
   const directory = profile.cwd || state.launch.workspace.cwd;
-  const access = !cli_directory ? "按 App 权限" : !directory ? "无项目目录"
-    : `项目${ACCESS_LABELS[launch_access(name)] || "只读"}`;
-  const label = LAUNCH_CLIENTS[name]?.find(item => item.value === profile.adapter)?.label || "尚未选择客户端";
-  const choice = [profile.model, profile.effort && `${profile.effort} 档`].filter(Boolean).join(" · ");
+  const access = !cli_directory ? t('按 App 权限') : !directory ? t('无项目目录')
+    : t('项目{value1}', { value1: ACCESS_LABELS[launch_access(name)] || t('只读') });
+  const label = LAUNCH_CLIENTS[name]?.find(item => item.value === profile.adapter)?.label || t('尚未选择客户端');
+  const choice = [profile.model, profile.effort && t('{value1} 档', { value1: profile.effort })].filter(Boolean).join(" · ");
   return { client: cli_directory && choice ? `${label} · ${choice}` : label,
-    session: profile.session_id ? "复用指定会话" : "新建会话",
-    cwd: !cli_directory && profile.session_id ? "沿用指定会话的目录"
-      : display_path(directory) || (cli_directory ? "本次讨论的私有目录" : "由 App 项目确定"), project, access };
+    session: profile.session_id ? t('复用指定会话') : t('新建会话'),
+    cwd: !cli_directory && profile.session_id ? t('沿用指定会话的目录')
+      : display_path(directory) || (cli_directory ? t('本次讨论的私有目录') : t('由 App 项目确定')), project, access };
 }
 
 
@@ -3877,12 +4092,12 @@ function launch_access(name) {
 }
 
 /** Classic select options; an empty value inherits the launch-wide setting. */
-const ACCESS_LABELS = { read: "只读", write: "可写", auto: "自动", full: "完全放开" };
+const ACCESS_LABELS = { read: t('只读'), write: t('可写'), auto: t('自动'), full: t('完全放开') };
 
 // Mirrors access_options in runner/expert_prompts.mjs; agy shows 自动 disabled (no headless auto), API shows 自动 and 全放开
 // disabled (no commands), and the shared setting stays 只读 / 可写.
 function access_options(value = "", inherit = "", adapter = "") {
-  const levels = !inherit ? [["read", "只读"], ["write", "可写"]] : [["read", "只读"], ["write", "可写"], ["auto", "自动"], ["full", "全放开"]];
+  const levels = !inherit ? [["read", t('只读')], ["write", t('可写')]] : [["read", t('只读')], ["write", t('可写')], ["auto", t('自动')], ["full", t('全放开')]];
   const options = [...(inherit ? [["", inherit]] : []), ...levels];
   const disabled = key => (key === "auto" && adapter === "antigravity_cli") || (["auto", "full"].includes(key) && adapter === "api");
   return options.map(([key, label]) => `<option value="${key}" ${(value || (inherit ? "" : "read")) === key ? "selected" : ""}${disabled(key) ? " disabled" : ""}>${label}</option>`).join("");
@@ -3894,7 +4109,7 @@ function render_launch_summaries() {
     const name = node.dataset.launchSummary;
     if (!LAUNCH_CLIENTS[name]) return;
     const summary = launch_summary(name);
-    node.textContent = `${summary.session} · 工作目录：${summary.cwd}（${summary.access}） · 项目：${summary.project}`;
+    node.textContent = t('{value1} · 工作目录：{value2}（{value3}） · 项目：{value4}', { value1: summary.session, value2: summary.cwd, value3: summary.access, value4: summary.project });
   });
 }
 
@@ -3964,7 +4179,7 @@ async function save_launch_defaults() {
   try {
     await local_launch_request("settings", { participants });
     state.launch.saved_profiles = { ...state.launch.saved_profiles, ...JSON.parse(JSON.stringify(participants)) };
-    notify("info", "已保存本机软件配置，后续讨论可复用");
+    notify("info", t('已保存本机软件配置，后续讨论可复用'));
   } catch (error) { notify("error", error.message); }
   render_launch_settings();
   publish_view();
@@ -3975,7 +4190,7 @@ async function load_room_configuration() {
   const room_id = state.room.id;
   try {
     const token = localStorage.getItem(`discuss-access:${room_id}`);
-    if (!token) throw new Error('此浏览器缺少房间凭据，请使用原浏览器或原接入配置');
+    if (!token) throw new Error(t('此浏览器缺少房间凭据，请使用原浏览器或原接入配置'));
     const result = await local_launch_request('room-config', { room_id, token });
     if (state.room?.id === room_id) state.launch.repair = result;
   } catch (error) { if (state.room?.id === room_id) notify("error", error.message); }
@@ -4011,13 +4226,13 @@ async function save_room_configuration() {
   }));
   try {
     const token = localStorage.getItem(`discuss-access:${repair.room_id}`);
-    if (!token) throw new Error('此浏览器缺少房间凭据，请重新核对');
+    if (!token) throw new Error(t('此浏览器缺少房间凭据，请重新核对'));
     const result = await local_launch_request('room-config', { room_id: repair.room_id, token,
       version: repair.version, runtime_revision: repair.runtime_revision, participants });
     if (state.room?.id === repair.room_id) {
       state.launch.repair = result;
-      notify('info', result.applied ? '本场接入设置已保存，服务已采用；可在进度看板重启并核对实际发言。'
-        : '本场接入设置已保存；服务尚未确认采用，请先核对本机服务再重启。');
+      notify('info', result.applied ? t('本场接入设置已保存，服务已采用；可在进度看板重启并核对实际发言。')
+        : t('本场接入设置已保存；服务尚未确认采用，请先核对本机服务再重启。'));
       await refresh_room();
     }
   } catch (error) { if (state.room?.id === repair.room_id) notify("error", error.message); }
@@ -4030,9 +4245,9 @@ function render_launch_model_fields(name) {
   const catalog = launch_model_state(name), profile = state.launch.profiles[name] || {};
   if (!catalog.supported) return "";
   const models = catalog.items.map(item => `<option value="${escape_html(item.value)}" ${item.value === (profile.model || "__default__") ? "selected" : ""} ${item.disabled ? "disabled" : ""}>${escape_html(item.label)}</option>`).join("");
-  const efforts = [{ label: "默认强度", value: "" }, ...(catalog.efforts || []).map(value => ({ label: value, value }))];
-  const strength = catalog.efforts?.length ? `<label>思考强度<select data-launch-name="${name}" data-launch-field="effort">${efforts.map(item => `<option value="${item.value}" ${item.value === (profile.effort || "") ? "selected" : ""}>${item.label}</option>`).join("")}</select></label>` : "";
-  return `<label>模型<select data-launch-name="${name}" data-launch-field="model">${models}</select></label><p class="local-note">${escape_html(catalog.loading ? "正在读取软件模型列表…" : catalog.error || catalog.source)}</p>${strength}`;
+  const efforts = [{ label: t('默认强度'), value: "" }, ...(catalog.efforts || []).map(value => ({ label: value, value }))];
+  const strength = catalog.efforts?.length ? `<label>${escape_html(t("思考强度"))}<select data-launch-name="${name}" data-launch-field="effort">${efforts.map(item => `<option value="${item.value}" ${item.value === (profile.effort || "") ? "selected" : ""}>${item.label}</option>`).join("")}</select></label>` : "";
+  return `<label>${escape_html(t("模型"))}<select data-launch-name="${name}" data-launch-field="model">${models}</select></label><p class="local-note">${escape_html(catalog.loading ? t('正在读取软件模型列表…') : catalog.error || catalog.source)}</p>${strength}`;
 }
 
 function render_launch_settings() {
@@ -4043,21 +4258,21 @@ function render_launch_settings() {
     container.parentElement.hidden = false;
     container.innerHTML = Object.entries(LAUNCH_CLIENTS).map(([name, clients]) => {
       const profile = state.launch.profiles[name] || {};
-      const fields = profile.adapter === "antigravity" ? [["ipc_directory", "Sidecar IPC 目录"]]
-        : [["executable", "原生可执行文件路径"]];
-      if (profile.adapter === "codex") fields.push(["source_thread_id", "来源聊天 ID（新建会话时使用）"]);
-      if (profile.adapter === "claude") fields.push(["allowed_tools", "允许的工具（每行一项，可选）"]);
-      fields.push(["session_id", "复用会话 ID（仅本次，可选）"], ["cwd", "此 AI 的工作目录（可选）"], ["project_name", "此 AI 的项目（可选）"]);
-      if (["codex", "antigravity", "antigravity_cli"].includes(profile.adapter)) fields.push(["project_id", "软件中的项目 ID（可选）"]);
+      const fields = profile.adapter === "antigravity" ? [["ipc_directory", t('Sidecar IPC 目录')]]
+        : [["executable", t('原生可执行文件路径')]];
+      if (profile.adapter === "codex") fields.push(["source_thread_id", t('来源聊天 ID（新建会话时使用）')]);
+      if (profile.adapter === "claude") fields.push(["allowed_tools", t('允许的工具（每行一项，可选）')]);
+      fields.push(["session_id", t('复用会话 ID（仅本次，可选）')], ["cwd", t('此 AI 的工作目录（可选）')], ["project_name", t('此 AI 的项目（可选）')]);
+      if (["codex", "antigravity", "antigravity_cli"].includes(profile.adapter)) fields.push(["project_id", t('软件中的项目 ID（可选）')]);
       const summary = launch_summary(name);
-      const permission = launch_can_set_access(name) ? `<label>此 AI 的项目文件<select data-launch-name="${name}" data-launch-field="project_access">${access_options(profile.project_access, "沿用本次设置", profile.adapter)}</select></label>` : "";
-      return `<fieldset><legend>${name}</legend><p class="local-note" data-launch-summary="${name}">${summary.session} · 工作目录：${escape_html(summary.cwd)}（${summary.access}） · 项目：${escape_html(summary.project)}</p><label>执行客户端<select data-launch-name="${name}" data-launch-field="adapter"><option value="">选择 CLI / App</option>${clients.map(client => `<option value="${client.value}" ${profile.adapter === client.value ? "selected" : ""}>${client.label}</option>`).join("")}</select></label>${render_launch_model_fields(name)}${fields.map(([field, label]) => `<label>${label}<textarea rows="${field === "allowed_tools" ? 2 : 1}" data-launch-name="${name}" data-launch-field="${field}">${escape_html(Array.isArray(profile[field]) ? profile[field].join("\n") : profile[field] || "")}</textarea></label>`).join("")}${permission}</fieldset>`;
-    }).join("") + (Object.keys(state.launch.profiles).some(name => launch_can_set_access(name)) ? `<label>本次 CLI 项目文件<select data-launch-name="workspace" data-launch-field="project_access">${access_options(state.launch.workspace.project_access)}</select></label>` : "")
-      + `<label>本次工作目录（可选）<input data-launch-name="workspace" data-launch-field="cwd" value="${escape_html(state.launch.workspace.cwd || "")}"></label><label>本次 AI 项目（可选）<input data-launch-name="workspace" data-launch-field="discussion_project" value="${escape_html(state.launch.workspace.discussion_project || "")}"></label>`;
+      const permission = launch_can_set_access(name) ? `<label>${escape_html(t("此 AI 的项目文件"))}<select data-launch-name="${name}" data-launch-field="project_access">${access_options(profile.project_access, t('沿用本次设置'), profile.adapter)}</select></label>` : "";
+      return `<fieldset><legend>${name}</legend><p class="local-note" data-launch-summary="${name}">${escape_html(t("{session} · 工作目录：{cwd}（{access}） · 项目：{project}", { session: summary.session, cwd: summary.cwd, access: summary.access, project: summary.project }))}</p><label>${escape_html(t("执行客户端"))}<select data-launch-name="${name}" data-launch-field="adapter"><option value="">${escape_html(t("选择 CLI / App"))}</option>${clients.map(client => `<option value="${client.value}" ${profile.adapter === client.value ? "selected" : ""}>${client.label}</option>`).join("")}</select></label>${render_launch_model_fields(name)}${fields.map(([field, label]) => `<label>${label}<textarea rows="${field === "allowed_tools" ? 2 : 1}" data-launch-name="${name}" data-launch-field="${field}">${escape_html(Array.isArray(profile[field]) ? profile[field].join("\n") : profile[field] || "")}</textarea></label>`).join("")}${permission}</fieldset>`;
+    }).join("") + (Object.keys(state.launch.profiles).some(name => launch_can_set_access(name)) ? `<label>${escape_html(t("本次 CLI 项目文件"))}<select data-launch-name="workspace" data-launch-field="project_access">${access_options(state.launch.workspace.project_access)}</select></label>` : "")
+      + `<label>${escape_html(t("本次工作目录（可选）"))}<input data-launch-name="workspace" data-launch-field="cwd" value="${escape_html(state.launch.workspace.cwd || "")}"></label><label>${escape_html(t("本次 AI 项目（可选）"))}<input data-launch-name="workspace" data-launch-field="discussion_project" value="${escape_html(state.launch.workspace.discussion_project || "")}"></label>`;
   }
   for (const id of ["local-launch-notice", "new-local-launch-notice"]) {
     if (element(id)) element(id).textContent = [state.launch.error,
-      !state.launch.available && state.launch.connect_command ? `在这台电脑运行 ${state.launch.connect_command}，使用命令打开的网页完成连接。` : ""].filter(Boolean).join(" ");
+      !state.launch.available && state.launch.connect_command ? t('在这台电脑运行 {value1}，使用命令打开的网页完成连接。', { value1: state.launch.connect_command }) : ""].filter(Boolean).join(" ");
   }
   for (const id of ["local-launch-save", "new-local-launch-save"]) if (element(id)) element(id).disabled = !state.launch.available;
 }
@@ -4068,7 +4283,7 @@ async function save_context(event) {
   await request_json(`/api/rooms/${state.room.id}/state`, { actor: "用户", text: element("state-input").value, brief: element("brief-input").value, until: state.snapshot_id });
   state.context_dirty = false;
   await refresh_room();
-  show_toast("讨论状态已保存，原始记录保持不变");
+  show_toast(t('讨论状态已保存，原始记录保持不变'));
 }
 
 /** Copy a participation entrypoint without bundling any discussion context. */
@@ -4076,7 +4291,7 @@ async function copy_context() {
   const members = access_snapshot().members;
   if (members.length === 1) return copy_member_join(members[0].name);
   select_tab("overview");
-  show_toast("请在接入页选择具体成员的「参与说明」");
+  show_toast(t('请在接入页选择具体成员的「参与说明」'));
 }
 
 /** Copy a bounded background startup contract without starting any external task. */
@@ -4090,7 +4305,7 @@ async function discussion_control(room_id, action, expected_session_id = null, p
   const path = `/api/rooms/${room_id}/discussion`;
   const current = await request_json(path);
   if (expected_session_id !== null && current.session?.id !== expected_session_id) {
-    throw new Error("讨论会话已变化，请刷新后重试");
+    throw new Error(t('讨论会话已变化，请刷新后重试'));
   }
   return request_json(path, { ...payload, action, revision: current.revision });
 }
@@ -4098,21 +4313,21 @@ async function discussion_control(room_id, action, expected_session_id = null, p
 /** Pause the current discussion session. */
 async function pause_discussion() {
   const room_id = state.room.id, session_id = state.room.session?.id;
-  if (!session_id || state.room.session.status !== "active") throw new Error("当前没有可暂停的讨论");
+  if (!session_id || state.room.session.status !== "active") throw new Error(t('当前没有可暂停的讨论'));
   await discussion_control(room_id, "pause", session_id);
   if (state.room?.id !== room_id) return;
   await refresh_room();
-  show_toast("讨论已暂停");
+  show_toast(t('讨论已暂停'));
 }
 
 /** Resume the paused session after reading its current revision. */
 async function restart_discussion() {
   const room_id = state.room.id, session_id = state.room.session?.id;
-  if (!session_id || state.room.session.status !== "paused") throw new Error("讨论会话已变化，请刷新后重试");
+  if (!session_id || state.room.session.status !== "paused") throw new Error(t('讨论会话已变化，请刷新后重试'));
   await discussion_control(room_id, "resume", session_id);
   if (state.room?.id !== room_id) return;
   await refresh_room();
-  show_toast("讨论已继续，由主持人检查队列并推进");
+  show_toast(t('讨论已继续，由主持人检查队列并推进'));
 }
 
 /** Skip the selected assignment: the user posts a "skipped" answer for the expert, so the plan moves on to the next one like after any answer. */
@@ -4120,12 +4335,12 @@ async function skip_turn() {
   const room = state.room;
   const turn = room.current_turn;
   const room_id = room.id, session_id = room.session?.id;
-  if (!session_id || !turn?.id || !["open", "pending"].includes(turn.status)) throw new Error("当前没有可跳过的发言安排，请刷新后核对");
+  if (!session_id || !turn?.id || !["open", "pending"].includes(turn.status)) throw new Error(t('当前没有可跳过的发言安排，请刷新后核对'));
   if (!has_room_control(room_id)) throw new Error(MANAGEMENT_LOGIN_HINT);
   await request_json(`/api/rooms/${room_id}/turns/${turn.id}`, { actor: "用户", status: "cancelled" });
   if (state.room?.id !== room_id || state.room.session?.id !== session_id) return;
   await refresh_room();
-  show_toast("已跳过本次发言");
+  show_toast(t('已跳过本次发言'));
 }
 
 /** Turn this free room into a discussion within the given limits and start the run; the local service takes it over at its next check. */
@@ -4138,7 +4353,7 @@ async function start_room_discussion({ goal, max_rounds, max_minutes, named_foll
     ...(goal ? { goal } : {}), limits: { max_rounds, max_minutes }, named_followup });
   if (state.room?.id !== room_id) return;
   await refresh_room();
-  show_toast("讨论已开启，由主持人推进；需本机接入程序保持运行");
+  show_toast(t('讨论已开启，由主持人推进；需本机接入程序保持运行'));
 }
 
 /** Open a goal from the page with the revision just read; the host is woken right away to start on it. */
@@ -4150,7 +4365,7 @@ async function start_room_goal({ objective, max_continues = 0, max_minutes = 0, 
   await request_json(path, { action: "start", revision: current.revision, objective, max_continues, max_minutes, idle_seconds });
   if (state.room?.id !== room_id) return;
   await refresh_room();
-  show_toast("Goal 已开启，主持人会持续推进；需本机接入程序保持运行");
+  show_toast(t('Goal 已开启，主持人会持续推进；需本机接入程序保持运行'));
 }
 
 /** Change the open goal's objective or budgets. */
@@ -4160,7 +4375,7 @@ async function update_room_goal({ objective, max_continues = 0, max_minutes = 0,
   await request_json(`/api/rooms/${room_id}/goal`, { action: "update", objective, max_continues, max_minutes, idle_seconds });
   if (state.room?.id !== room_id) return;
   await refresh_room();
-  show_toast("Goal 已更新");
+  show_toast(t('Goal 已更新'));
 }
 
 /** Pause, resume or end the open goal; only the owner controls it. */
@@ -4170,17 +4385,17 @@ async function goal_control(action) {
   await request_json(`/api/rooms/${room_id}/goal`, { action });
   if (state.room?.id !== room_id) return;
   await refresh_room();
-  show_toast({ pause: "Goal 已暂停，房间空闲时不再唤醒主持人", resume: "Goal 已继续", clear: "Goal 已结束，记录保留" }[action]);
+  show_toast({ pause: t('Goal 已暂停，房间空闲时不再唤醒主持人'), resume: t('Goal 已继续'), clear: t('Goal 已结束，记录保留') }[action]);
 }
 
 /** Conclude the discussion and go on as a free room; every message and the conclusion stay. */
 async function end_room_discussion() {
   const room_id = state.room.id, session_id = state.room.session?.id;
-  if (!session_id) throw new Error("当前没有进行中的讨论");
+  if (!session_id) throw new Error(t('当前没有进行中的讨论'));
   await discussion_control(room_id, "end", session_id);
   if (state.room?.id !== room_id) return;
   await refresh_room();
-  show_toast("讨论已结束，历史记录保留");
+  show_toast(t('讨论已结束，历史记录保留'));
 }
 
 /** Download JSON through a temporary object URL without exposing its contents in the page. */
@@ -4195,26 +4410,26 @@ function download_private_json(config, filename) {
 function download_member_access(name) {
   const room = state.room, access = access_snapshot();
   const member = access.members.find(item => item.name === name);
-  if (!access.can_manage || !member?.available) throw new Error("当前浏览器没有此成员可下载的私有配置");
+  if (!access.can_manage || !member?.available) throw new Error(t('当前浏览器没有此成员可下载的私有配置'));
   download_private_json({ site: room_site(), room: room.id, member: name, token: member_credentials(room.id)[name].token }, `member-${room.id}-${name}.json`);
-  notify("info", `已下载 ${name} 的私有配置`);
+  notify("info", t('已下载 {value1} 的私有配置', { value1: name }));
 }
 
 /** Copy the same room-scoped credential as one line of text for an agent that cannot take a file. */
 async function copy_member_access_text(name) {
   const room = state.room, access = access_snapshot();
   const member = access.members.find(item => item.name === name);
-  if (!access.can_manage || !member?.available) throw new Error("当前浏览器没有此成员可复制的凭证");
+  if (!access.can_manage || !member?.available) throw new Error(t('当前浏览器没有此成员可复制的凭证'));
   await copy_text(JSON.stringify({ site: room_site(), room: room.id, member: name, token: member_credentials(room.id)[name].token }));
-  notify("info", `已复制 ${name} 的凭证文本（含 token）`);
+  notify("info", t('已复制 {value1} 的凭证文本（含 token）', { value1: name }));
 }
 
 /** Copy a member-specific entry instruction; only the launch variant carries the credential, never conversation context. */
 async function copy_member_join(name, with_credential = false) {
   const room = state.room, access = access_snapshot();
   const member = access.members.find(item => item.name === name);
-  if (!access.can_manage || !member) throw new Error("请使用房主浏览器选择本房间成员");
-  if (with_credential && (member.access !== "manual" || !member.available)) throw new Error("当前浏览器没有此成员可复制的凭证");
+  if (!access.can_manage || !member) throw new Error(t("请使用房主浏览器选择本房间成员"));
+  if (with_credential && (member.access !== "manual" || !member.available)) throw new Error(t("当前浏览器没有此成员可复制的凭证"));
   const params = new URLSearchParams({ participant: name, mode: "cli" });
   const address = `${room_site()}/r/${room.id}?${params}`;
   const skills = `请调用 discuss-participant${room.host === name ? " 和 discuss-host" : ""}。`;
@@ -4228,7 +4443,7 @@ async function copy_member_join(name, with_credential = false) {
 ${instruction}
 房间入口：${address}
 先核对最新阶段、任务和原文编号，再按房间协议参与。${credential}`);
-  if (state.room?.id === room.id) notify("info", with_credential ? `已复制 ${name} 的启动指令（含 token）` : `已复制 ${name} 的参与说明`);
+  if (state.room?.id === room.id) notify("info", with_credential ? t("已复制 {name} 的启动指令（含 token）", { name }) : t("已复制 {name} 的参与说明", { name }));
 }
 
 
@@ -4255,11 +4470,11 @@ async function interrupt_member(member_id) {
  * window or App) or never reported (an older runner). See `.dev/docs/Design_适配能力.md`.
  */
 function stop_label(execution) {
-  if (execution.stop_result === "stopped") return "已停止";
-  if (execution.stop_result === "unconfirmed") return "停止未确认";
-  if (execution.stop_result === "unstoppable") return "已作废";
-  if (!execution.capabilities?.stoppable) return "已作废";
-  return "正在停止";
+  if (execution.stop_result === "stopped") return t('已停止');
+  if (execution.stop_result === "unconfirmed") return t('停止未确认');
+  if (execution.stop_result === "unstoppable") return t('已作废');
+  if (!execution.capabilities?.stoppable) return t('已作废');
+  return t('正在停止');
 }
 
 /** What stopping some executions really did: who is stopping, who may keep generating, and whose software never said. */
@@ -4268,9 +4483,9 @@ function stop_summary(executions) {
   const stopping = executions.filter(item => item.capabilities?.stoppable === true);
   const unstoppable = executions.filter(item => item.capabilities?.stoppable === false);
   const unknown = executions.filter(item => !item.capabilities);
-  return [stopping.length ? `正在停止 ${names(stopping)}` : "",
-    unstoppable.length ? `${names(unstoppable)} 在自己的窗口或 App 里本机无法停止，可能仍在生成，之后的回答会被拒收` : "",
-    unknown.length ? `${names(unknown)} 的本次工作已作废` : ""].filter(Boolean).join("；");
+  return [stopping.length ? t('正在停止 {value1}', { value1: names(stopping) }) : "",
+    unstoppable.length ? t('{value1} 在自己的窗口或 App 里本机无法停止，可能仍在生成，之后的回答会被拒收', { value1: names(unstoppable) }) : "",
+    unknown.length ? t('{value1} 的本次工作已作废', { value1: names(unknown) }) : ""].filter(Boolean).join("；");
 }
 
 /** Stop the whole free room: running work and everything still owed end; a new message starts again. */
@@ -4337,8 +4552,8 @@ async function stop_and_rewind(room_id, message_id, refusal) {
   const text = state.messages.find(message => message.id === message_id)?.text ?? "";
   await request_json(`/api/rooms/${room_id}/rewind`, { message_id, revision: plan.revision });
   const kept = touched.filter(member => member.session === "kept").map(member => display_name(member.name));
-  if (live.length) notify("info", `已撤回；${stop_summary(live)}`
-    + `${kept.length ? `；${kept.join("、")} 的会话未回退，仍记得这条消息` : ""}；文件改动不会恢复`);
+  if (live.length) notify("info", t('已撤回；{value1}', { value1: stop_summary(live) })
+    + t('{value1}；文件改动不会恢复', { value1: kept.length ? t('；{value1} 的会话未回退，仍记得这条消息', { value1: kept.join("、") }) : "" }));
   return { text };
 }
 
@@ -4358,7 +4573,7 @@ function rewind_plan(message_id) {
 
 /** Return the room to just before a message, then send its edited text in its place through the normal composer. */
 async function rewind_and_send({ message_id, revision, text }) {
-  if (element("message-input").value.trim() || state.attachment_drafts.length) throw new Error("输入框里还有草稿，请先发送或清空后再编辑这条消息");
+  if (element("message-input").value.trim() || state.attachment_drafts.length) throw new Error(t('输入框里还有草稿，请先发送或清空后再编辑这条消息'));
   const room_id = state.room.id;
   await request_json(`/api/rooms/${room_id}/rewind`, { message_id, revision });
   if (state.room?.id !== room_id) return;
@@ -4489,7 +4704,7 @@ async function copy_fork_files(source_id, room_id, token, mapping) {
  */
 async function fork_room(message_id) {
   const source = state.room;
-  if (!has_room_control(source.id)) throw new Error("此浏览器缺少房间控制凭据，请使用创建房间的浏览器或登录管理员");
+  if (!has_room_control(source.id)) throw new Error(t('此浏览器缺少房间控制凭据，请使用创建房间的浏览器或登录管理员'));
   // Without the room credential the local service or the relay acts with this browser's administrator authority.
   const source_token = localStorage.getItem(`discuss-access:${source.id}`) || "";
   const snapshot = await request_json(`/api/rooms/${encodeURIComponent(source.id)}/backup`);
@@ -4500,13 +4715,13 @@ async function fork_room(message_id) {
   save_room_credentials({ id: result.id }, token);
   const problems = [];
   const missing = await copy_fork_files(source.id, result.id, token, result.attachments);
-  if (missing) problems.push(`${missing} 个附件未能复制`);
+  if (missing) problems.push(t('{value1} 个附件未能复制', { value1: missing }));
   if (source.folder_id) await request_json(`/api/rooms/${result.id}/folder`, { actor: "用户", folder_id: source.folder_id })
-    .catch(error => problems.push(`未放入原文件夹：${error.message}`));
+    .catch(error => problems.push(t('未放入原文件夹：{value1}', { value1: error.message })));
   const local = state.launch.available
     ? await local_launch_request("room-fork", { room_id: result.id, token, source_room_id: source.id, source_token, executions })
-      .catch(error => { problems.push(`成员会话未分叉：${error.message}`); return null; })
-    : (problems.push("未连接本机服务，本机成员会话未分叉"), null);
+      .catch(error => { problems.push(t('成员会话未分叉：{value1}', { value1: error.message })); return null; })
+    : (problems.push(t('未连接本机服务，本机成员会话未分叉')), null);
   // The directory learns of the new room before it can be opened.
   await refresh_room();
   await select_room(result.id);
@@ -4516,15 +4731,15 @@ async function fork_room(message_id) {
     // The fork's own notice below sums up who continues and who starts anew, so automatic members rejoin silently;
     // a manual member still says it must register again with its new start command.
     try { await change_member({ member_id: member.id, name: member.name, action: "rejoin", quiet: member.access === "runner" }); }
-    catch (error) { problems.push(`${member.name} 未能请回：${error.message}`); }
+    catch (error) { problems.push(t('{value1} 未能请回：{value2}', { value1: member.name, value2: error.message })); }
   }
   const fresh = (local?.members || []).filter(member => member.status === "fresh").map(member => member.name);
   const failed = (local?.members || []).filter(member => member.status === "failed").map(member => `${member.name}（${member.error}）`);
-  if (failed.length) problems.push(`未分叉、保持离开：${failed.join("、")}`);
-  const done = `已从 #${message_id} 分支出新房间，原房间不变`;
+  if (failed.length) problems.push(t('未分叉、保持离开：{value1}', { value1: failed.join("、") }));
+  const done = t('已从 #{value1} 分支出新房间，原房间不变', { value1: message_id });
   // A partial fork says both the result and the problems in one warning instead of a separate notice.
-  if (problems.length) notify("warning", `${done}，但${problems.join("；")}`);
-  else notify("info", `${done}${fresh.length ? `；${fresh.join("、")} 将以新会话开始` : ""}。`);
+  if (problems.length) notify("warning", t('{value1}，但{value2}', { value1: done, value2: problems.join("；") }));
+  else notify("info", `${done}${fresh.length ? t('；{value1} 将以新会话开始', { value1: fresh.join("、") }) : ""}。`);
   publish_view();
 }
 
@@ -4550,7 +4765,7 @@ async function load_decision_input(decision_id) {
 /** Render independently configurable expert modes without changing identity names. */
 function render_expert_inputs(container_id, experts) {
   element(container_id).innerHTML = [...new Set([...Object.keys(default_experts()), ...Object.keys(experts).filter(platform_of)])].map((name) =>
-    `<label>${name}<select data-expert="${name}" aria-label="${name} 参与方式"><option value="">不参与</option><option value="cli">本机唤醒</option><option value="manual">手动接入</option></select></label>`).join("");
+    `<label>${name}<select data-expert="${name}" aria-label="${escape_html(t("{name} 参与方式", { name: name }))}"><option value="">${escape_html(t("不参与"))}</option><option value="cli">${escape_html(t("本机唤醒"))}</option><option value="manual">${escape_html(t("手动接入"))}</option></select></label>`).join("");
   element(container_id).querySelectorAll("[data-expert]").forEach((control) => { control.value = experts[control.dataset.expert] || ""; });
 }
 
@@ -4574,16 +4789,16 @@ function render_topic() {
 
 /** Describe a pending turn by how its expert takes part. */
 function turn_label(turn, room) {
-  if (!turn) return "尚未安排";
-  if (turn.status === "pending") return room.experts[turn.expert] === "cli" ? "待处理（本地 CLI）" : "待处理";
+  if (!turn) return t('尚未安排');
+  if (turn.status === "pending") return room.experts[turn.expert] === "cli" ? t('待处理（本地 CLI）') : t('待处理');
   return TURN_LABELS[turn.status];
 }
 
 /** Explain only the action supported by the current phase and participation mode. */
 function turn_guidance(turn, room) {
-  if (["paused", "concluded"].includes(room.phase)) return "话题已暂停或收束，原安排保留。恢复阶段后再通知或录入回答。";
-  if (room.experts[turn?.expert] === "cli") return "已接入的本地专家可自行检查安排，无需逐轮通知；尚未接入时先完成启动。此状态不表示后台任务已运行，只有实际联系后才确认已通知。";
-  return "手动专家需在其原会话中触发。复制通知不表示送达，实际联系后再确认已通知。";
+  if (["paused", "concluded"].includes(room.phase)) return t('话题已暂停或收束，原安排保留。恢复阶段后再通知或录入回答。');
+  if (room.experts[turn?.expert] === "cli") return t('已接入的本地专家可自行检查安排，无需逐轮通知；尚未接入时先完成启动。此状态不表示后台任务已运行，只有实际联系后才确认已通知。');
+  return t('手动专家需在其原会话中触发。复制通知不表示送达，实际联系后再确认已通知。');
 }
 
 /** Save owner-edited topic data; the host and members change only through member management. */
@@ -4595,7 +4810,7 @@ async function save_topic(event) {
   for (const field of ["title", "goal", "focus", "user_request", "background", "boundaries"]) payload[field] = element(`topic-${field}-input`).value;
   await request_json(`/api/rooms/${room.id}/topic`, payload);
   if (state.room?.id === room.id) { state.topic_dirty = false; await refresh_room(); }
-  show_toast("话题资料已保存");
+  show_toast(t('话题资料已保存'));
 }
 
 /** Bind the topic workflow separately from existing chat controls. */
@@ -4630,7 +4845,7 @@ function bind_delegated_actions() {
     if (button.dataset.copyMessage) run_action(() => copy_text(`${room_site()}/r/${state.room.id}/messages/${button.dataset.copyMessage}`));
     if (button.dataset.reply) {
       state.reply_to = Number(button.dataset.reply);
-      element("reply-label").textContent = `正在回复 #${state.reply_to} · ${display_name(button.dataset.author)}`;
+      element("reply-label").textContent = t('正在回复 #{value1} · {value2}', { value1: state.reply_to, value2: display_name(button.dataset.author) });
       element("reply-preview").hidden = false;
       element("message-input").focus();
     }
@@ -4650,13 +4865,13 @@ async function open_room_management(id, action) {
   const room = state.rooms.find((item) => item.id === id);
   if (!room) return;
   state.management = { id, action };
-  element("manage-title").textContent = { rename: "重命名频道", archive: "存档频道", restore: "恢复频道", delete: "删除频道" }[action];
-  element("manage-description").textContent = action === "delete" ? `永久删除「${room.title}」及其 ${room.message_count} 条消息、共识和发言安排。无法撤销。` :
-    action === "archive" ? `存档「${room.title}」后移入已存档列表，保留记录并暂停未收束的讨论。` : action === "restore" ? `恢复「${room.title}」到讨论列表；讨论阶段仍保持暂停或收束。` : "修改名称不会影响记录和阅读地址。";
+  element("manage-title").textContent = { rename: t('重命名频道'), archive: t('存档频道'), restore: t('恢复频道'), delete: t('删除频道') }[action];
+  element("manage-description").textContent = action === "delete" ? t('永久删除「{value1}」及其 {value2} 条消息、共识和发言安排。无法撤销。', { value1: room.title, value2: room.message_count }) :
+    action === "archive" ? t('存档「{value1}」后移入已存档列表，保留记录并暂停未收束的讨论。', { value1: room.title }) : action === "restore" ? t('恢复「{value1}」到讨论列表；讨论阶段仍保持暂停或收束。', { value1: room.title }) : t('修改名称不会影响记录和阅读地址。');
   element("manage-input-label").hidden = action !== "rename";
   element("manage-input").value = action === "rename" ? room.title : "";
   element("manage-input").required = action === "rename";
-  element("manage-submit").textContent = action === "delete" ? "永久删除" : "确认";
+  element("manage-submit").textContent = action === "delete" ? t('永久删除') : t('确认');
   element("manage-submit").disabled = false;
   element("manage-dialog").showModal();
 }
@@ -4878,7 +5093,7 @@ function bind_controls() {
     "copy-reading-secondary": () => copy_text(`${room_site()}/r/${state.room.id}`),
     "copy-cli": () => copy_context(), "copy-background": copy_background };
   Object.entries(actions).forEach(([id, action]) => element(id).addEventListener("click", () => run_action(action)));
-  const forms = { "message-form": send_message, "room-form": submit_room, "state-form": save_context };
+  const forms = { "message-form": send_from_composer, "room-form": submit_room, "state-form": save_context };
   Object.entries(forms).forEach(([id, action]) => element(id).addEventListener("submit", (event) => run_action(() => action(event))));
   element("search-form").addEventListener("submit", (event) => {
     event.preventDefault(); state.query = element("search-input").value.trim(); state.page = 1; run_action(refresh_room);
@@ -4891,7 +5106,7 @@ function bind_controls() {
     element("mention-filter").setAttribute("aria-pressed", String(state.mention_only)); run_action(refresh_room);
   });
   element("author-select").addEventListener("change", () => {
-    element("mention-filter").textContent = `@ ${element("author-select").value === "用户" ? "提到我" : element("author-select").value}`;
+    element("mention-filter").textContent = `@ ${element("author-select").value === "用户" ? t('提到我') : element("author-select").value}`;
     if (state.mention_only) { state.page = 1; run_action(refresh_room); }
   });
   element("state-input").addEventListener("input", () => { state.context_dirty = true; });
@@ -4922,11 +5137,13 @@ async function flush_live_refresh() {
   live_updates.full = false;
   live_updates.running = true;
   try {
+    // A refresh started meanwhile would discard the opening read, flashing an empty room before reading it all again.
+    while (state.opening) await state.opening.catch(() => {});
     await refresh_room({ room: full });
     if (full && state.observed_until !== null) { state.observed_until = null; publish_view(); }
   } catch (error) {
     console.warn("refresh failed", error);
-    if (state.reconnecting) show_toast(`仍未连接：${error.message}`, true);
+    if (state.reconnecting) show_toast(t('仍未连接：{value1}', { value1: error.message }), true);
     set_connection(false);
   }
   finally {
@@ -5065,10 +5282,14 @@ async function initialize() {
     else if (name) write_launch_field(name, field, event.target.type === "checkbox" ? event.target.checked : event.target.value);
   });
   // Whether this website keeps rooms of its own decides how settings and rooms are read, so it is asked until it answers.
+  // A paired device will look up its computer next, so that read goes out beside the administrator state.
+  if (paired_record()) prefetch("/api/machines", () => request_json("/api/machines"));
   for (let attempt = 0; await load_admin_state(), !state.admin.loaded; attempt++) {
+    // The early read went out while the website could not be reached, so a fresh one is made later.
+    prefetched.delete("/api/machines");
     await new Promise(resolve => setTimeout(resolve, RECONNECT_DELAYS_MS[Math.min(attempt, RECONNECT_DELAYS_MS.length - 1)]));
   }
-  const launch_settings = load_launch_settings();
+  const relay_ready = new Promise(resolve => load_launch_settings({ relay_known: resolve }));
   document.addEventListener("click", download_relay_file, true);
   document.addEventListener("error", mark_failed_media, true);
   new MutationObserver((records) => { if (state.remote_rooms) show_relay_images(records); }).observe(document.body, { childList: true, subtree: true });
@@ -5083,7 +5304,8 @@ async function initialize() {
     if (button?.dataset.launchRoom) run_action(() => select_room(button.dataset.launchRoom));
   });
   if (computer_rooms_only()) {
-    await launch_settings;
+    // The settings read through the computer goes on meanwhile; the rooms need only the computer found.
+    await relay_ready;
     // The computer's rooms appear only through connecting, which keeps trying by itself, so nothing here can hide them.
     await connect_computer_rooms({ reload: false });
   }
@@ -5098,6 +5320,9 @@ async function initialize() {
     }
     set_connection(true);
   } catch (error) { set_connection(false); show_toast(error.message, true); }
+  state.rooms_loading = false;
+  prefetched.clear();
+  publish_view();
   start_live_updates();
   document.addEventListener("visibilitychange", () => {
     if (document.hidden) stop_live_updates();
@@ -5123,15 +5348,15 @@ function view_snapshot() {
   const experts = Object.fromEntries(["new-expert-modes"].map((id) =>
     [id, element(id) ? read_expert_inputs(id) : {}]));
   return { room_source: { computer: computer_rooms_only(), signed_in: state.admin.logged_in, remote: state.remote_rooms, online: state.remote_online },
-    room_site: room_site(), rooms: ordered_rooms(), folders: state.folders, folder_groups: ordered_folders(), room: state.room, archive_view: state.archive_view, directory_sort: state.directory_sort, messages: state.messages, total: state.message_total,
+    room_site: room_site(), rooms: ordered_rooms(), folders: state.folders, folder_groups: ordered_folders(), room: state.room, archive_view: state.archive_view, directory_sort: state.directory_sort, messages: state.messages, history_cards: state.history_cards, total: state.message_total,
     archive_pending: [...state.archive_changes.keys()], import_progress: structuredClone(state.import_progress),
     directory_pending: [...state.directory_pending.keys()], folder_pending: [...state.folder_moves.keys()], creating_room: state.creating_room,
-    connected: state.connected, reconnecting: state.reconnecting, observed_until: state.observed_until, backup_pending: Boolean(state.backup_pending), page: state.page, pages: state.pages, query: state.query,
-    attachment_drafts: state.attachment_drafts.map(item => ({ id: item.id, file_name: item.file.name, size: item.file.size, preview_url: item.preview_url })),
-    upload_status: state.upload_status, sending_message: state.sending_message, sending_preview: state.sending_preview,
+    connected: state.connected, reconnecting: state.reconnecting, rooms_loading: state.rooms_loading, observed_until: state.observed_until, backup_pending: Boolean(state.backup_pending), page: state.page, pages: state.pages, query: state.query,
+    attachment_drafts: state.attachment_drafts.map(item => ({ id: item.id, file_name: item.file.name, size: item.file.size, preview_url: item.preview_url, placeholder: item.placeholder || "" })),
+    upload_status: state.upload_status, sending_message: state.sending_message, sending_preview: state.sending_preview, queueing_preview: state.queueing_preview,
     failed_sends: state.failed_sends.map((failed) => ({ id: failed.id, ...failed.preview })),
     mention_only: state.mention_only, host_only: state.host_only, authors: state.authors, card_kinds: state.card_kinds,
-    source_filter: state.mention_only || state.host_only || state.authors.length > 0 || state.card_kinds.length > 0, messages_loading: Boolean(state.messages_loading), messages_failure: state.messages_failure || "", reply_to: state.reply_to, editing_queued: state.editing_queued?.id ?? null,
+    source_filter: state.mention_only || state.host_only || state.authors.length > 0 || state.card_kinds.length > 0, messages_loading: Boolean(state.messages_loading), messages_failure: state.messages_failure || "", reply_to: state.reply_to, queued_taken: state.queued_taken,
     access: access_snapshot(), admin: admin_snapshot(),
     device: { id: state.device.id, needs: state.device.needs, pairing_code: state.device.pairing_code,
       prompt: state.device.prompt ? { title: state.device.prompt.title, description: state.device.prompt.description, confirm_label: state.device.prompt.confirm_label } : null },
@@ -5162,7 +5387,7 @@ function expert_control(container_id, name) {
   const container = element(container_id);
   let control = container?.querySelector(`[data-expert="${CSS.escape(name)}"]`);
   if (!control && container && platform_of(name)) {
-    container.insertAdjacentHTML("beforeend", `<label>${escape_html(name)}<select data-expert="${escape_html(name)}" aria-label="${escape_html(name)} 参与方式"><option value="">不参与</option><option value="cli">本地 CLI · 读写</option><option value="manual">手动接入</option></select></label>`);
+    container.insertAdjacentHTML("beforeend", `<label>${escape_html(name)}<select data-expert="${escape_html(name)}" aria-label="${escape_html(t("{name} 参与方式", { name: name }))}"><option value="">${escape_html(t("不参与"))}</option><option value="cli">${escape_html(t("本地 CLI · 读写"))}</option><option value="manual">${escape_html(t("手动接入"))}</option></select></label>`);
     control = container.querySelector(`[data-expert="${CSS.escape(name)}"]`);
   }
   return control;
@@ -5191,7 +5416,7 @@ function write_view_expert(container_id, name, value) {
 /** Select a quoted message for both renderers without changing its text. */
 function set_view_reply(message) {
   state.reply_to = message.id;
-  element("reply-label").textContent = `正在回复 #${message.id} · ${display_name(message.author)}`;
+  element("reply-label").textContent = t('正在回复 #{value1} · {value2}', { value1: message.id, value2: display_name(message.author) });
   element("reply-preview").hidden = false;
 }
 
@@ -5233,7 +5458,7 @@ async function backup_room(room_id = state.room?.id) {
   if (!room_id || state.backup_pending) return;
   state.backup_pending = true;
   element("backup-room").disabled = true;
-  element("backup-room").textContent = "正在备份…";
+  element("backup-room").textContent = t('正在备份…');
   publish_view();
   try {
     const snapshot = await request_json(`/api/rooms/${encodeURIComponent(room_id)}/backup`);
@@ -5242,11 +5467,11 @@ async function backup_room(room_id = state.room?.id) {
     await window.discuss_backup.download_room_backup(snapshot, read_room_file);
     const task_messages = new Set((snapshot.tables.task_message_sources || []).map(row => row.message_id));
     const message_count = snapshot.tables.messages.filter(message => !task_messages.has(message.id)).length;
-    show_toast(`已生成备份（${message_count} 条消息），请查看浏览器下载。`);
+    show_toast(t('已生成备份（{value1} 条消息），请查看浏览器下载。', { value1: message_count }));
   } finally {
     state.backup_pending = false;
     element("backup-room").disabled = !state.room;
-    element("backup-room").textContent = "备份当前讨论";
+    element("backup-room").textContent = t('备份当前讨论');
     publish_view();
   }
 }
@@ -5264,9 +5489,9 @@ async function backup_rooms({ ids, name }) {
       snapshots.push({ ...snapshot, source_url: `${room_site()}/r/${encodeURIComponent(id)}` });
     }
     await window.discuss_backup.download_rooms_backup(snapshots, name, read_room_file);
-    notify("info", `已生成 ${snapshots.length} 个频道的备份，请查看浏览器下载。`);
+    notify("info", t('已生成 {value1} 个频道的备份，请查看浏览器下载。', { value1: snapshots.length }));
   } catch (error) {
-    notify("error", `导出失败，未生成备份：${error.message}`);
+    notify("error", t('导出失败，未生成备份：{value1}', { value1: error.message }));
   } finally {
     state.backup_pending = false;
     publish_view();
@@ -5280,7 +5505,7 @@ async function attach_local_members(snapshot, room_id) {
   try {
     const result = await local_launch_request("room-profiles", { room_id, token });
     if (result.local_members) snapshot.local_members = result.local_members;
-  } catch (error) { throw new Error(`读取本机成员会话失败，未生成备份：${error.message}`); }
+  } catch (error) { throw new Error(t('读取本机成员会话失败，未生成备份：{value1}', { value1: error.message })); }
 }
 
 /** The website copy of a backup: keep local data private and apply each adapter's restore policy. */
@@ -5295,13 +5520,13 @@ function import_body(snapshot) {
 
 /** Register an imported room's exported members on this machine; returns one short line per member and any room-wide problem. */
 async function restore_local_members(room, token, local_members) {
-  if (!state.launch.available) return { members: [], problem: "未连接本机服务，成员会话未恢复" };
+  if (!state.launch.available) return { members: [], problem: t('未连接本机服务，成员会话未恢复') };
   try {
     const result = await local_launch_request("room-restore", { room_id: room.id, token, local_members });
     return { members: result.members.map(member => ({ name: member.name, failed: member.status === "failed",
-      text: member.status === "failed" ? `未恢复：${member.error}` : member.status === "resumed" ? "请回后接续原会话" : "已改为手动接入，请回后在原窗口重新注册",
+      text: member.status === "failed" ? t('未恢复：{value1}', { value1: member.error }) : member.status === "resumed" ? t('请回后接续原会话') : t('已改为手动接入，请回后在原窗口重新注册'),
       resume: member.resume || null })) };
-  } catch (error) { return { members: [], problem: `成员会话未恢复：${error.message}` }; }
+  } catch (error) { return { members: [], problem: t('成员会话未恢复：{value1}', { value1: error.message }) }; }
 }
 
 /** Upload one imported room's original files to the new attachment IDs; returns how many were missing. */
@@ -5310,7 +5535,7 @@ async function upload_imported_files(room_id, token, mapping, files) {
   for (const [old_id, new_id] of Object.entries(mapping)) {
     const data = files.get(old_id);
     try {
-      if (!data) throw new Error("备份中没有该文件");
+      if (!data) throw new Error(t('备份中没有该文件'));
       await post_room_file(`/api/rooms/${encodeURIComponent(room_id)}/attachments/${encodeURIComponent(new_id)}/import`, data, token);
     } catch { missing++; }
   }
@@ -5339,9 +5564,9 @@ async function import_rooms({ files, folder_id = null }) {
           if (result.skipped) { item.status = "skipped"; continue; }
           save_room_credentials({ id: result.id }, token);
           const missing = await upload_imported_files(result.id, token, result.attachments, originals);
-          if (missing) item.problems.push(`${missing} 个附件原文件缺失，消息中的这些附件无法打开`);
+          if (missing) item.problems.push(t('{value1} 个附件原文件缺失，消息中的这些附件无法打开', { value1: missing }));
           if (folder_id) await request_json(`/api/rooms/${result.id}/folder`, { actor: "用户", folder_id })
-            .catch(error => item.problems.push(`未放入文件夹：${error.message}`));
+            .catch(error => item.problems.push(t('未放入文件夹：{value1}', { value1: error.message })));
           if (snapshot.local_members) {
             const { members, problem } = await restore_local_members(result, token, snapshot.local_members);
             item.members = members;
@@ -5366,7 +5591,7 @@ async function execute_view_action(name, value) {
   const event = { preventDefault() {} };
   const actions = { refresh: refresh_room, room: select_room, tab: select_tab,
     archives: toggle_archives, backup: backup_room, backup_rooms, import_rooms, manage_channel, move_channel, create_folder, move_folder, rename_folder, delete_folder, sort_directory,
-    send: () => send_message(event), discard_sending, retry_sending, choose_attachments: () => element("attachment-input").click(), remove_attachment, preview_attachment,
+    send: () => send_from_composer(event), discard_sending, retry_sending, choose_attachments: () => element("attachment-input").click(), remove_attachment, preview_attachment,
     create: (folder_id) => submit_room(event, folder_id), quick_create: quick_create_room, welcome: open_welcome,
     save_context: () => save_context(event), save_topic: () => save_topic(event),
     filter: filter_view, reply: set_view_reply, cancel_reply, skip_turn,
@@ -5378,8 +5603,8 @@ async function execute_view_action(name, value) {
     adopt_recommendation, rate_decision,
     queue_send: send_queued, queue_delete: delete_queued,
     queue_reorder: ids => queue_request({ action: "reorder", ids }), queue_resume: () => queue_request({ action: "resume" }),
-    queue_toggle: enabled => queue_request({ action: "queueing", enabled }), queue_edit: edit_queued, queue_cancel_edit: cancel_queued_edit,
-    busy: () => { throw new Error("上一个操作仍在处理中，请稍候；长时间无响应请刷新页面"); },
+    queue_toggle: enabled => queue_request({ action: "queueing", enabled }), queue_edit: edit_queued,
+    busy: () => { throw new Error(t('上一个操作仍在处理中，请稍候；长时间无响应请刷新页面')); },
     copy_reading: () => copy_text(`${room_site()}/r/${state.room.id}`), copy: copy_text };
   try {
     await actions[name](value);
@@ -5400,7 +5625,7 @@ window.discuss_view = { snapshot: view_snapshot, write_field: write_view_field, 
   write_launch: write_launch_field, default_launch_entry, description_template, save_description_template, description_draft, write_description_draft, describe_member, set_chain_rounds, continue_chain, expert_presets, apply_expert_preset, unique_instance, member_label, default_name, label_draft, write_label_draft, preset_identity, save_expert_preset, delete_expert_preset, write_room_connection, write_room_adapter, launch_clients: LAUNCH_CLIENTS,
   launch_model_state, load_launch_models, write_launch_model, save_launch_api_key, create_launch_project, display_path, write_scheduler, save_scheduler_api_key, check_scheduler, write_named_followup, write_create_discussion, write_create_goal, write_create_chain_rounds, check_launch_api, launch_summary, launch_can_set_access, pick_launch_directory, browse_local_directory, list_remote_directories, save_launch_projects, restore_launch_profile, reset_create_form, empty_discussion_message,
   start_drag: start_directory_drag, reconnect: reconnect_live_updates, stop_label, local_request: local_launch_request,
-  attachment_markup, attachment_size, attachment_file_icon, drop_attachments, paste_attachments, set_text_preview: (open) => { state.text_preview = open; }, set_image_viewer: (open) => { state.image_viewer = open; }, attachment_url,
+  attachment_markup, attachment_size, attachment_file_icon, drop_attachments, paste_attachments, drop_unreferenced_attachments, set_text_preview: (open) => { state.text_preview = open; }, set_image_viewer: (open) => { state.image_viewer = open; }, attachment_url,
   write_expert: write_view_expert, add_instance: add_view_instance, add_preset: add_preset_instance, platform_of, execute: execute_view_action, theme: change_view_theme,
   reload_workflows, workflow_preset, write_create_host_workflows, write_create_api_max_requests, write_create_image_generation, set_room_api_max_requests, set_room_image_generation, set_room_scheduler, set_room_extra_directories, set_room_project_directory,
   admin: { register: register_admin, login: login_admin, logout: logout_admin,

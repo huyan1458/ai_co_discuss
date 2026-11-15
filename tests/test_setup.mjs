@@ -12,11 +12,41 @@ import { get_workflow, preview_workflow } from '../runner/workflows.mjs';
 import { agy_rule } from '../runner/adapters/antigravity_cli.mjs';
 import { detect_clients, detect_python, remove_legacy_agy_rules } from '../runner/discussion_setup.mjs';
 import { current_pi, install_pi, PI_VERSION, pi_outdated } from '../runner/pi_runtime.mjs';
+import { resolve_locale, t } from '../runner/i18n.mjs';
 
 // Setup installs Pi from npm unless one is given; tests never download it.
 process.env.CODISCUSS_PI_CLI ??= 'pi-not-needed-in-this-test';
+process.env.CODISCUSS_LANG = 'zh-CN';
 
 const CLI = fileURLToPath(new URL('../runner/codiscuss.mjs', import.meta.url));
+
+test('human-facing CLI help honors the language override without changing command arguments', () => {
+  assert.equal(resolve_locale({}, 'zh-TW'), 'zh-CN');
+  assert.equal(resolve_locale({}, 'fr-FR'), 'en');
+  assert.equal(resolve_locale({ CODISCUSS_LANG: 'en' }, 'zh-CN'), 'en');
+  assert.equal(resolve_locale({ CODISCUSS_LANG: 'zh-CN' }, 'en-US'), 'zh-CN');
+  assert.equal(resolve_locale({ CODISCUSS_LANG: 'invalid' }, 'en-US'), 'en');
+  assert.equal(t('缺少的词条 {name}', { name: 'demo' }), '缺少的词条 demo');
+  const language_home = mkdtempSync(join(tmpdir(), 'cli-language-'));
+  let invalid;
+  try {
+    invalid = spawnSync(process.execPath, [CLI, 'setup', '--yes', '--clients', 'none', '--no-start', '--port', '0'], {
+      env: { ...process.env, CODISCUSS_LANG: 'en', DISCUSS_SERVICE_HOME: language_home }, encoding: 'utf8', timeout: 10000,
+    });
+  } finally { rmSync(language_home, { recursive: true, force: true }); }
+  assert.equal(invalid.status, 1);
+  assert.match(invalid.stderr, /Port must be an integer from 1 to 65535/);
+  for (const command of [[], ['service'], ['local'], ['setup'], ['panel'], ['admin'], ['token']]) {
+    for (const language of ['zh-CN', 'en']) {
+      const result = spawnSync(process.execPath, [CLI, ...command, '--help'], {
+        env: { ...process.env, CODISCUSS_LANG: language }, encoding: 'utf8', timeout: 10000,
+      });
+      assert.equal(result.status, 0, result.stderr);
+      assert.match(result.stdout, language === 'en' ? /Usage: codiscuss/ : /用法：codiscuss/);
+      assert.match(result.stdout, command.length ? new RegExp(`codiscuss ${command[0]}`) : /install \/ setup/);
+    }
+  }
+});
 
 /** Provide --version fixtures without invoking installed AI clients. */
 function fixture_cli(directory, name) {

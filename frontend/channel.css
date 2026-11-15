@@ -141,7 +141,9 @@ html[data-theme^="channel"] .channel-menu.channel-directory-menu { min-width: 15
 .channel-room-select > [class*="icon"] { flex-shrink: 0; width: 17px; height: 17px; color: #808998; }
 /* Pinned to the row's right edge so swapping time ↔ actions on hover does not move it. */
 .channel-room-row:has(.channel-room-running) { padding-right: 20px; }
-.channel-room-running { position: absolute; right: 8px; top: 50%; width: 7px; height: 7px; margin-top: -3.5px; border-radius: 50%; background: #22c55e; box-shadow: 0 0 6px #22c55e99; }
+.channel-room-running { position: absolute; right: 8px; top: 50%; width: 7px; height: 7px; margin-top: -3.5px; border-radius: 50%; background: #22c55e; box-shadow: 0 0 6px #22c55e99; animation: channel-room-breathe 2s ease-in-out infinite; }
+@keyframes channel-room-breathe { 50% { opacity: .35; box-shadow: 0 0 2px #22c55e33; } }
+@media (prefers-reduced-motion: reduce) { .channel-room-running { animation: none; } }
 .channel-room-select > span:not([class*="icon"]) { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; flex: 1; }
 .channel-directory-count, .channel-room-time { flex-shrink: 0; margin-left: auto; padding-left: 6px; color: var(--ui-text-dimmed); font-size: var(--channel-nav-meta); font-weight: 400; font-variant-numeric: tabular-nums; }.channel-room-actions, .channel-folder-actions { display: flex; align-items: center; justify-content: flex-end; min-width: 48px; opacity: 0; pointer-events: none; }
 :is(.channel-directory-actions, .channel-room-actions, .channel-folder-actions) button { display: grid; place-items: center; width: 24px; height: 26px; padding: 5px; border-radius: 4px; color: color-mix(in srgb, var(--ui-text-muted) 75%, transparent); background: transparent; box-shadow: none; }
@@ -580,6 +582,10 @@ html[data-theme^="channel"] .channel-composer:is(:focus, :focus-within, :has(:fo
 /* The textarea stays on top for typing and selection; the mirror behind it repeats the text with mentions colored. */
 .channel-editor-mirror { position: absolute; inset: 0; overflow: hidden; white-space: pre-wrap; overflow-wrap: break-word; pointer-events: none; scrollbar-gutter: stable; }
 .channel-composer .channel-editor-mirror .channel-mention { padding: 0; background: none; }
+/* A file's [图片 #n] in the editor reads as one tag: the same colour as an @mention with a background; box-shadow gives
+   it room without padding, which would push the painted text off the textarea's own. */
+.channel-composer .channel-editor-mirror .channel-attachment-token { --token-fill: color-mix(in srgb, currentColor 18%, transparent);
+  background: var(--token-fill); border-radius: 3px; box-shadow: 0 0 0 2px var(--token-fill); }
 .channel-composer.has-mentions textarea.channel-editor { position: relative; z-index: 1; color: transparent !important; caret-color: var(--ui-text-highlighted); scrollbar-gutter: stable; }
 .channel-composer-footer { display: flex; flex-wrap: wrap; align-items: center; justify-content: flex-start !important; padding: 4px 10px 10px !important; gap: 4px !important; }
 .channel-composer-footer > .channel-round-button { flex-shrink: 0; }
@@ -932,7 +938,9 @@ html[data-theme^="channel"] .advanced-fields { border-color: #414957; }
   .channel-tabs [data-slot="list"] { width: max-content; min-width: 100%; }
   .channel-tabs [data-slot="trigger"] { flex: 1 0 auto; height: 36px; padding: 0 10px; }
   .channel-host-brief { padding: 8px 16px; }
-  .channel-brief-heading { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 8px; }
+  .channel-brief-heading { gap: 8px; }
+  .channel-brief-heading .channel-brief-update + .channel-brief-update { margin-left: 0; }
+  .channel-brief-text { max-height: 30vh; }
   .channel-brief-content { padding: 4px 0 6px 20px; }
   .channel-brief-footer { flex-direction: column; gap: 2px; }
   .channel-brief-footer small { margin-left: 0; }
@@ -1266,6 +1274,15 @@ html[data-motion="off"] *, html[data-motion="off"] *::before, html[data-motion="
 :root[data-effects="reduced"] * { -webkit-backdrop-filter: none !important; backdrop-filter: none !important; }
 :root[data-theme^="channel"] :is(.channel-search-input input, .channel-surface-button:not(:hover), .pb-action:not(:hover)) { border-color: var(--channel-edge-control); }
 :root[data-theme^="channel"] :is(.channel-search-input input, .channel-surface-button, .pb-action:not(:disabled)) { box-shadow: var(--channel-shadow-control); }
+/* Discussion and Goal run controls carry their intent as a tint (pause amber, continue green, edit accent, end red) with a hairline edge and top highlight instead of a heavy neutral outline. */
+.pb-action[data-tone="warning"] { --pb-tone: var(--ui-warning); }
+.pb-action[data-tone="success"] { --pb-tone: var(--ui-success); }
+.pb-action[data-tone="accent"] { --pb-tone: var(--channel-accent); }
+.pb-action[data-tone="info"] { --pb-tone: var(--ui-info); }
+.pb-action[data-tone="danger"] { --pb-tone: var(--ui-error); }
+:root[data-theme^="channel"] .pb-action[data-tone] { border-color: color-mix(in srgb, var(--pb-tone) 26%, transparent); background: linear-gradient(180deg, color-mix(in srgb, var(--pb-tone) 18%, transparent), color-mix(in srgb, var(--pb-tone) 9%, transparent)); color: color-mix(in srgb, var(--pb-tone) 82%, var(--ui-text-highlighted)); font-weight: 500; box-shadow: inset 0 1px 0 color-mix(in srgb, #fff 9%, transparent), 0 1px 2px #0000001f; }
+:root[data-theme^="channel"] .pb-action[data-tone]:hover:not(:disabled) { border-color: color-mix(in srgb, var(--pb-tone) 42%, transparent); background: linear-gradient(180deg, color-mix(in srgb, var(--pb-tone) 28%, transparent), color-mix(in srgb, var(--pb-tone) 16%, transparent)); color: color-mix(in srgb, var(--pb-tone) 90%, var(--ui-text-highlighted)); }
+:root[data-theme^="channel"] .pb-action[data-tone]:disabled { box-shadow: none; }
 :root[data-theme^="channel"] :is(.channel-message:not(:hover), .channel-composer, .turn-panel, .summary-form) { border-color: var(--channel-edge-panel); }
 :root[data-theme^="channel"] :is(.channel-message, .turn-panel, .summary-form) { box-shadow: var(--channel-shadow-panel); }
 :root[data-theme^="channel"] .channel-message.channel-topic-card { box-shadow: inset 3px 0 0 var(--channel-accent), var(--channel-shadow-panel); }
@@ -1321,6 +1338,9 @@ html[data-motion="off"] *, html[data-motion="off"] *::before, html[data-motion="
 /* Indented by the icon and its gap, so the details line up with the card title text. */
 .channel-schedule-detail { flex-basis: 100%; display: flex; flex-direction: column; gap: 4px; margin-top: 6px; padding-top: 6px; padding-left: 21px; border-top: 1px dashed var(--ui-border); color: var(--ui-text-muted); overflow-wrap: anywhere; }
 .channel-schedule-detail p { display: flex; flex-direction: column; gap: 1px; margin: 0; }
+/* A quiet timed check: the host's answer stays one line until opened. */
+.channel-checkin-line { display: block; overflow: hidden; white-space: nowrap; text-overflow: ellipsis; }
+.channel-schedule-detail p.channel-checkin-answer { display: block; color: var(--ui-text); white-space: pre-wrap; }
 /* The odds lead the row; the model that judged and the input toggle sit quietly at its right end. */
 .channel-schedule-detail .channel-schedule-meta { display: flex; align-items: flex-start; gap: 12px; color: var(--ui-text-dimmed); }
 .channel-schedule-odds-list { display: flex; flex: 1; flex-direction: column; gap: 4px; min-width: 0; padding-top: 2px; }
@@ -1500,3 +1520,11 @@ html[data-motion="off"] *, html[data-motion="off"] *::before, html[data-motion="
 /* 执行 channel: switch between the execution waterfall and the room event log. */
 .timeline-switch { display: flex; gap: 4px; margin-bottom: 8px; }
 html[data-theme^="channel"] .content-page > .timeline-switch { max-width: 1280px; }
+
+/* `[图片 #n]` in a message links to its n-th attachment, as a pasted screenshot is named in Claude Code's prompt. */
+.attachment-placeholder { display: inline; padding: 0 4px; border: 0; border-radius: 4px; font: inherit; color: var(--ui-primary);
+  background: color-mix(in srgb, var(--ui-primary) 12%, transparent); text-decoration: none; cursor: pointer; }
+.attachment-placeholder:hover { background: color-mix(in srgb, var(--ui-primary) 22%, transparent); }
+/* `#123` in a message opens message 123's original text, like the card's own `#id`. */
+.message-ref { display: inline; padding: 0; border: 0; background: none; font: inherit; color: var(--ui-primary); cursor: pointer; }
+.message-ref:hover { text-decoration: underline; }

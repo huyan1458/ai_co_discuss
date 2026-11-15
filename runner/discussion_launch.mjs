@@ -54,7 +54,7 @@ function free_instance(name, taken) {
 
 /** Supported local clients of an instance's platform. */
 function clients_of(name) { return platform_adapters(platform_of(name)); }
-const PROFILE_FIELDS = ['adapter', 'executable', 'model', 'effort', 'source_thread_id', 'ipc_directory', 'allowed_tools', 'cwd', 'project_name', 'project_id', 'base_url', 'api_protocol', 'api_key_ref', 'system_prompt'];
+const PROFILE_FIELDS = ['adapter', 'executable', 'model', 'effort', 'source_thread_id', 'ipc_directory', 'allowed_tools', 'cwd', 'project_name', 'project_id', 'base_url', 'api_protocol', 'api_key_ref', 'system_prompt', 'image_input'];
 // Saved before drawing became the room's switch; read as absent.
 const LEGACY_PROFILE_FIELDS = ['image_model'];
 const MAX_MINUTES = 1440;
@@ -737,6 +737,7 @@ function validate_profile(name, profile, binding = false) {
     // The model is passed as one CLI argument, so it must not look like a flag or contain spaces.
     if (key === 'model' && value && !/^[A-Za-z0-9][A-Za-z0-9._:/@[\]-]*$/.test(value)) throw new Error(`${name}.${key} 只能是模型名称，例如 gpt-6-astra、opus 或 gemini-4-argon-high`);
     if (key === 'system_prompt' && value.length > MAX_EXPERT_PROMPT) throw new Error(`${name} 的专属提示词最多 ${MAX_EXPERT_PROMPT} 字`);
+    if (key === 'image_input' && !['', 'image'].includes(value)) throw new Error(`${name}.image_input 只能为空或 image`);
   }
   const facts = adapter_profile(profile.adapter);
   if (facts?.kind === 'api') validate_api_profile(profile);

@@ -35,42 +35,42 @@ function remove(id) {
 </script>
 
 <template>
-  <nav class="workflow-parts" :class="{ 'is-compact': compact, 'is-open': open }" aria-label="主线与子工作流">
+  <nav class="workflow-parts" :class="{ 'is-compact': compact, 'is-open': open }" :aria-label="t('主线与子工作流')">
     <div class="workflow-parts-head">
-      <button v-if="scope && !open" type="button" class="workflow-parts-back" aria-label="回到主线" title="回到主线" @click="pick('')">
+      <button v-if="scope && !open" type="button" class="workflow-parts-back" :aria-label="t('回到主线')" :title="t('回到主线')" @click="pick('')">
         <UIcon name="i-lucide-arrow-left" class="workflow-parts-icon" />
       </button>
       <button type="button" class="workflow-parts-toggle" :aria-expanded="open" @click="open = !open">
         <UIcon :name="scope ? 'i-lucide-git-branch' : 'i-lucide-network'" class="workflow-parts-icon" />
-        <span class="workflow-parts-where">{{ open ? '主线与子工作流' : scope ? (subs.find((sub) => sub.id === scope)?.label || scope) : '主线' }}</span>
-        <small v-if="!open && !scope && subs.length">{{ subs.length }} 个子工作流</small>
+        <span class="workflow-parts-where">{{ open ? t('主线与子工作流') : scope ? (subs.find((sub) => sub.id === scope)?.label || scope) : t('主线') }}</span>
+        <small v-if="!open && !scope && subs.length">{{ t('{value1} 个子工作流', { value1: subs.length }) }}</small>
         <UIcon name="i-lucide-chevron-down" class="workflow-parts-icon workflow-parts-chevron" />
       </button>
     </div>
     <ul v-if="open" class="workflow-parts-list">
       <li>
         <button type="button" class="workflow-parts-item" :aria-current="!scope ? 'page' : undefined" @click="pick('')">
-          <UIcon name="i-lucide-network" class="workflow-parts-icon" /><span>主线</span><small>{{ draft.agents.length }} 位</small>
+          <UIcon name="i-lucide-network" class="workflow-parts-icon" /><span>{{ t('主线') }}</span><small>{{ t('{value1} 位', { value1: draft.agents.length }) }}</small>
         </button>
       </li>
       <li v-for="sub in subs" :key="sub.id" class="workflow-parts-row">
         <template v-if="confirming === sub.id">
-          <span class="workflow-parts-confirm">删除「{{ sub.label || sub.id }}」？保存后生效</span>
-          <UButton label="删除" size="xs" color="error" variant="soft" @click="remove(sub.id)" />
-          <UButton label="取消" size="xs" color="neutral" variant="ghost" @click="confirming = ''" />
+          <span class="workflow-parts-confirm">{{ t('删除「{value1}」？保存后生效', { value1: sub.label || sub.id }) }}</span>
+          <UButton :label="t('删除')" size="xs" color="error" variant="soft" @click="remove(sub.id)" />
+          <UButton :label="t('取消')" size="xs" color="neutral" variant="ghost" @click="confirming = ''" />
         </template>
         <template v-else>
           <button type="button" class="workflow-parts-item is-sub" :aria-current="scope === sub.id ? 'page' : undefined" :title="sub.description || sub.label" @click="pick(sub.id)">
-            <UIcon name="i-lucide-git-branch" class="workflow-parts-icon" /><span>{{ sub.label || sub.id }}</span><small>{{ member_count(sub) }} 位</small>
+            <UIcon name="i-lucide-git-branch" class="workflow-parts-icon" /><span>{{ sub.label || sub.id }}</span><small>{{ t('{value1} 位', { value1: member_count(sub) }) }}</small>
           </button>
-          <button type="button" class="workflow-parts-remove" :aria-label="`删除子工作流 ${sub.label || sub.id}`" title="删除子工作流" @click="confirming = sub.id">
+          <button type="button" class="workflow-parts-remove" :aria-label="t('删除子工作流 {value1}', { value1: sub.label || sub.id })" :title="t('删除子工作流')" @click="confirming = sub.id">
             <UIcon name="i-lucide-trash-2" class="workflow-parts-icon" />
           </button>
         </template>
       </li>
       <li>
-        <button type="button" class="workflow-parts-item is-add" title="主线之外按需用的一套做法：自己的 SKILL.md、成员卡片和画布" @click="library.add_sub()">
-          <UIcon name="i-lucide-plus" class="workflow-parts-icon" /><span>新建子工作流</span>
+        <button type="button" class="workflow-parts-item is-add" :title="t('主线之外按需用的一套做法：自己的 SKILL.md、成员卡片和画布')" @click="library.add_sub()">
+          <UIcon name="i-lucide-plus" class="workflow-parts-icon" /><span>{{ t('新建子工作流') }}</span>
         </button>
       </li>
     </ul>

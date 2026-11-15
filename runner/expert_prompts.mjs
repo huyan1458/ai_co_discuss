@@ -122,14 +122,15 @@ export const READ_RULE = '读含中文的文件用 rg --encoding utf-8 . 文件�
  * `extra_directories` are the room's other project directories this member works with, each read-only or writable.
  */
 export function free_task_text({ name, discussion, discussion_request, profile, cli, messages, read_after, task_path, access_file = '', read_rule = '',
-  extra_directories = [] }) {
+  extra_directories = [], attachments = [] }) {
+  const files = attachments_text(attachments, cli);
   const scope = discussion ? `讨论进行中，用户直接向你提问（${messages}）：只回答这个提问，不改变讨论安排和进度。` : '';
   const commands = runs_commands(profile, extra_directories) ? '' : `命令只用 subcommands 列出的 ${cli} 子命令。`;
   const extras = extra_directories.length ? 'extra_directories 是本房间的其他项目目录，access 为 read 的只读、不修改。' : '';
   const instructions = `${software_rules(profile, cli, extra_directories)}${scope}${project_rule(profile, '按请求', extra_directories)}${extras}${commands}草稿写在 draft_directory。`;
   if (discussion_request) {
     const role = discussion_request.purpose === 'discuss_host' ? '主持任务' : '发言请求';
-    const prompt = `你（${name}）收到了讨论中的${role}。先读任务文件 ${task_path}，按其中列出的技能处理本次请求并保存结果。${read_rule}`;
+    const prompt = `你（${name}）收到了讨论中的${role}。先读任务文件 ${task_path}，按其中列出的技能处理本次请求并保存结果。${read_rule}${files}`;
     return { instructions, prompt };
   }
   // A greeting deserves a quick answer, and reading the skills first costs it one or two model rounds.
@@ -137,6 +138,20 @@ export function free_task_text({ name, discussion, discussion_request, profile, 
   // A one-line answer goes inline: a draft file guards long or quoted text and retries, which a greeting does not need.
   // The credential already names the room, the member and this execution, so the commands carry only what changes.
   const quick = `问候、致谢等简单消息可跳过技能：${cli} message list --after ${read_after}${access} 看原文，${cli} message post --body "回答"${access} 回复（正文含引号时先写草稿再用 --body-file）。`;
-  const prompt = `用户在${discussion ? '讨论中的' : ''}房间点名了你（${name}），对应消息 ${messages}。${quick}其他请求先读任务文件 ${task_path}，按其中列出的技能处理并提交一次回答。${read_rule}`;
+  // A message with files is never a mere greeting: the quick path would skip them (2026-11-14, #3143).
+  const prompt = files
+    ? `用户在${discussion ? '讨论中的' : ''}房间点名了你（${name}），对应消息 ${messages}。先读任务文件 ${task_path}，按其中列出的技能处理并提交一次回答。${read_rule}${files}`
+    : `用户在${discussion ? '讨论中的' : ''}房间点名了你（${name}），对应消息 ${messages}。${quick}其他请求先读任务文件 ${task_path}，按其中列出的技能处理并提交一次回答。${read_rule}`;
   return { instructions, prompt };
+}
+
+/**
+ * The files of the messages that woke this task, one line each as `[图片 #n]` in the message text names them, with the
+ * local copy the runner saved; a file it could not fetch points to `attachment download`. Empty when there are none.
+ */
+export function attachments_text(attachments, cli) {
+  if (!attachments.length) return '';
+  const lines = attachments.map(item => `#${item.message_id} ${item.placeholder} ${item.file_name}：${item.path
+    ? `本机副本 ${item.path}` : `未能取到本机副本（${item.error || '未知原因'}），用 ${cli} attachment download 下载`}`);
+  return `\n\n消息附件（消息正文里的 [图片 #n] / [文件 #n] 指对应附件；已能直接看到的图片不必再打开，其余用你的工具读取本机副本，读不了时如实说明）：\n${lines.join('\n')}`;
 }

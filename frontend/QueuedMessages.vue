@@ -1,4 +1,5 @@
 <script setup>
+import { t } from './i18n.js';
 import { computed, inject, onBeforeUnmount, reactive, ref, watch } from "vue";
 
 /**
@@ -36,7 +37,7 @@ function summary(item) {
   const text = item.text.replace(/\s+/g, " ").trim();
   if (text) return text;
   const images = item.attachments.filter((file) => file.content_type?.startsWith("image/")).length;
-  return images === item.attachments.length ? `${images} 张图片` : `${item.attachments.length} 个附件`;
+  return images === item.attachments.length ? t('{value1} 张图片', { value1: images }) : t('{value1} 个附件', { value1: item.attachments.length });
 }
 
 /** The row's first image, if it carries one. */
@@ -59,8 +60,8 @@ async function send_now(item) {
 
 function menu(item) {
   return [[
-    { label: "编辑消息", icon: "i-lucide-pencil", onSelect: () => act("queue_edit", item) },
-    { label: props.queue.queueing ? "关闭排队" : "开启排队", icon: "i-lucide-list-end", onSelect: () => act("queue_toggle", !props.queue.queueing) },
+    { label: t('编辑消息'), icon: "i-lucide-pencil", onSelect: () => act("queue_edit", item) },
+    { label: props.queue.queueing ? t('关闭排队') : t('开启排队'), icon: "i-lucide-list-end", onSelect: () => act("queue_toggle", !props.queue.queueing) },
   ]];
 }
 
@@ -157,17 +158,17 @@ onBeforeUnmount(release);
 </script>
 
 <template>
-  <div v-if="items.length" ref="list" class="queued-messages" :class="{ 'is-dragging': drag }" role="list" aria-label="排队消息">
+  <div v-if="items.length || view.queueing_preview" ref="list" class="queued-messages" :class="{ 'is-dragging': drag }" role="list" :aria-label="t('排队消息')">
     <div v-if="queue.paused" class="queued-row queued-paused-row">
       <UIcon name="i-lucide-pause" class="queued-leading" />
-      <span class="queued-text">已暂停排队：你停止了运行</span>
-      <UButton label="继续" icon="i-lucide-play" size="xs" color="neutral" variant="ghost" :disabled="!!pending" @click="act('queue_resume')" />
+      <span class="queued-text">{{ t('已暂停排队：你停止了运行') }}</span>
+      <UButton :label="t('继续')" icon="i-lucide-play" size="xs" color="neutral" variant="ghost" :disabled="!!pending" @click="act('queue_resume')" />
     </div>
     <TransitionGroup name="queued">
       <div v-for="(item, index) in items" :key="item.id" role="listitem" :data-queued-id="item.id" class="queued-row"
-        :class="{ 'is-dimmed': view.editing_queued === item.id || sending === item.id, 'is-lifted': drag?.id === item.id, 'is-failed': item.failure, 'is-reorderable': reorderable }"
+        :class="{ 'is-dimmed': sending === item.id, 'is-lifted': drag?.id === item.id, 'is-failed': item.failure, 'is-reorderable': reorderable }"
         :style="shift(item)" @pointerdown="press_row(item, $event)" @contextmenu="drag && $event.preventDefault()">
-        <UTooltip :disabled="!reorderable || !!drag" :text="'拖动调整顺序（手机上长按）'" :delay-duration="PREVIEW_DELAY_MS">
+        <UTooltip :disabled="!reorderable || !!drag" :text="t('拖动调整顺序（手机上长按）')" :delay-duration="PREVIEW_DELAY_MS">
           <span class="queued-leading" aria-hidden="true">
             <UIcon v-if="sending === item.id" name="i-lucide-loader-circle" class="animate-spin" />
             <UIcon v-else-if="item.failure" name="i-lucide-triangle-alert" class="queued-warning" />
@@ -175,27 +176,33 @@ onBeforeUnmount(release);
           </span>
         </UTooltip>
         <template v-if="image_of(item)">
-          <img v-if="thumbnails[image_of(item).id]" :src="thumbnails[image_of(item).id]" alt="图片附件" class="queued-thumbnail" draggable="false" @error="thumbnails[image_of(item).id] = ''">
-          <span v-else class="queued-thumbnail queued-thumbnail-icon" aria-label="图片附件"><UIcon name="i-lucide-image" /></span>
+          <img v-if="thumbnails[image_of(item).id]" :src="thumbnails[image_of(item).id]" :alt="t('图片附件')" class="queued-thumbnail" draggable="false" @error="thumbnails[image_of(item).id] = ''">
+          <span v-else class="queued-thumbnail queued-thumbnail-icon" :aria-label="t('图片附件')"><UIcon name="i-lucide-image" /></span>
         </template>
         <UTooltip :disabled="!!drag" :delay-duration="PREVIEW_DELAY_MS" :ui="{ content: 'queued-tooltip queued-preview' }">
-          <span class="queued-text" tabindex="0" :aria-label="`排队消息 ${index + 1}：${summary(item).slice(0, 80)}`">{{ summary(item) }}</span>
+          <span class="queued-text" tabindex="0" :aria-label="t('排队消息 {value1}：{value2}', { value1: index + 1, value2: summary(item).slice(0, 80) })">{{ summary(item) }}</span>
           <template #content>
-            <p v-if="item.failure" class="queued-failure">未能发出：{{ item.failure }}<br><span class="queued-tooltip-remedy">重试、编辑或删除后队列继续</span></p>
+            <p v-if="item.failure" class="queued-failure">{{ t('未能发出：{value1}', { value1: item.failure }) }}<br><span class="queued-tooltip-remedy">{{ t('重试、编辑或删除后队列继续') }}</span></p>
             <div class="queued-preview-body">{{ item.text || summary(item) }}</div>
           </template>
         </UTooltip>
         <span class="queued-actions">
-          <UTooltip :text="item.failure ? '再次尝试发送这条排队消息' : '立即发出；接收者正忙时先打断它这一轮，再处理这条（无法打断的成员继续排队）'" :ui="{ content: 'queued-tooltip' }">
-            <UButton :label="item.failure ? '重试' : '立即发送'" :icon="item.failure ? 'i-lucide-rotate-ccw' : 'i-lucide-corner-down-right'" size="xs" color="neutral" variant="ghost" class="queued-action"
+          <UTooltip :text="item.failure ? t('再次尝试发送这条排队消息') : t('立即发出；接收者正忙时先打断它这一轮，再处理这条（无法打断的成员继续排队）')" :ui="{ content: 'queued-tooltip' }">
+            <UButton :label="item.failure ? t('重试') : t('立即发送')" :icon="item.failure ? 'i-lucide-rotate-ccw' : 'i-lucide-corner-down-right'" size="xs" color="neutral" variant="ghost" class="queued-action"
               :disabled="!!pending || sending !== null" @click.stop="send_now(item)" />
           </UTooltip>
-          <UButton icon="i-lucide-trash-2" size="xs" color="neutral" variant="ghost" class="queued-action" aria-label="删除排队消息" :disabled="sending === item.id || !!pending" @click.stop="act('queue_delete', item.id)" />
+          <UButton icon="i-lucide-trash-2" size="xs" color="neutral" variant="ghost" class="queued-action" :aria-label="t('删除排队消息')" :disabled="sending === item.id || !!pending" @click.stop="act('queue_delete', item.id)" />
           <!-- Focus goes to the composer for 编辑消息, not back to this button. -->
           <UDropdownMenu :items="menu(item)" :content="{ align: 'end', sideOffset: 4, onCloseAutoFocus: (event) => event.preventDefault() }" :ui="{ content: 'channel-menu' }">
-            <UButton icon="i-lucide-ellipsis" size="xs" color="neutral" variant="ghost" class="queued-action" aria-label="排队消息操作" :disabled="sending === item.id" />
+            <UButton icon="i-lucide-ellipsis" size="xs" color="neutral" variant="ghost" class="queued-action" :aria-label="t('排队消息操作')" :disabled="sending === item.id" />
           </UDropdownMenu>
         </span>
+      </div>
+      <!-- The message just sent, shown at once while the site queues it; the queued row replaces it when the site answers. -->
+      <div v-if="view.queueing_preview" key="queueing" role="listitem" class="queued-row is-dimmed">
+        <span class="queued-leading" aria-hidden="true"><UIcon name="i-lucide-loader-circle" class="animate-spin" /></span>
+        <span class="queued-text">{{ view.queueing_preview.text.replace(/\s+/g, " ").trim() || t('{value1} 个附件', { value1: view.queueing_preview.files.length }) }}</span>
+        <span class="queued-actions queued-sending-status" role="status">{{ t('发送中…') }}</span>
       </div>
     </TransitionGroup>
   </div>
@@ -224,6 +231,7 @@ onBeforeUnmount(release);
 .queued-actions { display: flex; flex-shrink: 0; align-items: center; gap: 0; }
 .queued-action { color: var(--ui-text-dimmed); }
 .queued-action:hover:not(:disabled) { color: var(--ui-text-highlighted); }
+.queued-sending-status { padding: 0 8px; font-size: 12px; color: var(--ui-text-dimmed); }
 .queued-paused-row { cursor: default; }
 .queued-paused-row .queued-text { color: var(--ui-text-muted); }
 .queued-move { transition: transform .16s ease; }

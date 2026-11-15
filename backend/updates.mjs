@@ -11,6 +11,9 @@ const ENTRY_PART_BYTES = 512 * 1024;
 const OFFLINE_PAGE = '<!doctype html><html lang="zh-CN"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>暂时无法访问</title></head>'
   + '<body style="font-family:system-ui,sans-serif;max-width:32rem;margin:15vh auto;padding:0 1.5rem;color:#374151"><h1 style="font-size:1.3rem">这台电脑当前不在线</h1>'
   + '<p>为你开通服务的电脑没有连上线上站点（可能关机或断网）。请稍后再试，或联系为你开通的服务商。</p></body></html>';
+const OFFLINE_PAGE_EN = '<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Temporarily unavailable</title></head>'
+  + '<body style="font-family:system-ui,sans-serif;max-width:32rem;margin:15vh auto;padding:0 1.5rem;color:#374151"><h1 style="font-size:1.3rem">This computer is offline</h1>'
+  + '<p>The computer hosting your service is not connected to the online site. It may be turned off or disconnected from the network. Try again later or contact your service provider.</p></body></html>';
 
 const to_base64 = bytes => { let text = ""; for (let index = 0; index < bytes.length; index += 0x8000) text += String.fromCharCode(...bytes.subarray(index, index + 0x8000)); return btoa(text); };
 const from_base64 = text => Uint8Array.from(atob(text), char => char.charCodeAt(0));
@@ -94,7 +97,8 @@ export class MachineRelay {
    */
   async entry(request) {
     const machine = this.machine();
-    if (!machine) return new Response(OFFLINE_PAGE, { status: 503, headers: { "Content-Type": "text/html; charset=utf-8", "Cache-Control": "no-store" } });
+    if (!machine) return new Response(/^zh\b/i.test(request.headers.get("Accept-Language") || "zh") ? OFFLINE_PAGE : OFFLINE_PAGE_EN,
+      { status: 503, headers: { "Content-Type": "text/html; charset=utf-8", "Cache-Control": "no-store", Vary: "Accept-Language" } });
     let meta;
     try { meta = JSON.parse(decodeURIComponent(request.headers.get("X-Entry-Request") || "")); } catch { return new Response(null, { status: 400 }); }
     const body = request.body ? new Uint8Array(await request.arrayBuffer()) : new Uint8Array(0);

@@ -9,6 +9,7 @@ import PreviewLoading from "./PreviewLoading.vue";
 import Papa from "papaparse";
 import { gunzip } from "fflate";
 import { add_excerpt as put_excerpt, crumbs_of, document_kind_of, excerpt_mark_place, excerpt_range, file_preview, file_size, file_type, hold_selection, inline_markdown_images, media_of, modified_time, subtitle_cues, text_kind_of, text_offset } from "./file-preview.js";
+import { t } from './i18n.js';
 
 // The file preview window: several files open as tabs; it folds into a floating button that keeps every tab, its mode
 // and scroll position, so the user can go to the messages or another room and come back. Mounted once for the workspace,
@@ -44,7 +45,7 @@ function change_font_scale(steps) {
   try { localStorage.setItem(FONT_SCALE_KEY, String(font_scale.value)); } catch { /* Keep it for this visit only. */ }
 }
 
-const name_of = (path) => path.split("/").pop() || "文件预览";
+const name_of = (path) => path.split("/").pop() || t('文件预览');
 const tab = computed(() => tabs.value.find(item => item.id === active_id.value) || null);
 const active_path = computed(() => tab.value?.path || "");
 // How a message names the open file: relative in the main project directory, in full in another one.
@@ -52,7 +53,7 @@ const reference_path = computed(() => !tab.value?.root ? active_path.value
   : `${tab.value.directory.replace(/[\\/]+$/, "")}/${active_path.value}`);
 const preview = computed(() => tab.value?.data || null);
 const source = computed({ get: () => Boolean(tab.value?.source), set: (value) => { if (tab.value) tab.value.source = value; } });
-const preview_crumbs = computed(() => tab.value?.attachment ? [{ name: "消息附件", path: "" }, { name: active_path.value, path: active_path.value }]
+const preview_crumbs = computed(() => tab.value?.attachment ? [{ name: t('消息附件'), path: "" }, { name: active_path.value, path: active_path.value }]
   : crumbs_of(tab.value?.directory || "", active_path.value));
 const preview_name = computed(() => name_of(active_path.value));
 const preview_type = computed(() => file_type(preview_name.value));
@@ -103,11 +104,11 @@ const can_open_html = computed(() => format.value === "html" && can_render.value
 const html_notice = computed(() => {
   if (!["markdown", "html"].includes(format.value) || media_kind.value || !tab.value || tab.value.loading) return "";
   if (format.value === "markdown" && tab.value.attachment) return "";
-  if (tab.value.attachment) return "附件没有所在目录，相对路径引用的样式、脚本与图片不会载入";
-  if (tab.value.page_error) return format.value === "markdown" ? `引用的图片未能载入（${tab.value.page_error}）` : `引用的文件未能载入（${tab.value.page_error}），只显示 HTML 本身`;
+  if (tab.value.attachment) return t('附件没有所在目录，相对路径引用的样式、脚本与图片不会载入');
+  if (tab.value.page_error) return format.value === "markdown" ? t('引用的图片未能载入（{value1}）', { value1: tab.value.page_error }) : t('引用的文件未能载入（{value1}），只显示 HTML 本身', { value1: tab.value.page_error });
   const { missing = [], skipped = [] } = tab.value.page || {};
-  const parts = [missing.length ? `${missing.length} 个不存在或在项目目录外` : "", skipped.length ? `${skipped.length} 个超出 8 MiB 上限` : ""].filter(Boolean);
-  return parts.length ? `引用的文件有 ${parts.join("、")}，未载入：${[...missing, ...skipped].join("、")}` : "";
+  const parts = [missing.length ? t('{value1} 个不存在或在项目目录外', { value1: missing.length }) : "", skipped.length ? t('{value1} 个超出 8 MiB 上限', { value1: skipped.length }) : ""].filter(Boolean);
+  return parts.length ? t('引用的文件有 {value1}，未载入：{value2}', { value1: parts.join("、"), value2: [...missing, ...skipped].join("、") }) : "";
 });
 
 /** Show the HTML file in a new tab: a page of ours holding only the sandboxed file, so it never runs as this site. */
@@ -164,18 +165,18 @@ const file_menu = computed(() => {
   const keep_open = (action) => (event) => { event.preventDefault(); action(); };
   const groups = [];
   if (can_scale.value) groups.push([
-    { label: "缩小字号", icon: "i-lucide-a-arrow-down", disabled: font_scale.value <= FONT_SCALE_MIN, onSelect: keep_open(() => change_font_scale(-1)) },
-    { label: "放大字号", icon: "i-lucide-a-arrow-up", disabled: font_scale.value >= FONT_SCALE_MAX, onSelect: keep_open(() => change_font_scale(1)) },
-    { label: `恢复默认字号（当前 ${Math.round(font_scale.value * 100)}%）`, icon: "i-lucide-rotate-ccw", disabled: font_scale.value === 1, onSelect: keep_open(() => change_font_scale(0)) },
+    { label: t('缩小字号'), icon: "i-lucide-a-arrow-down", disabled: font_scale.value <= FONT_SCALE_MIN, onSelect: keep_open(() => change_font_scale(-1)) },
+    { label: t('放大字号'), icon: "i-lucide-a-arrow-up", disabled: font_scale.value >= FONT_SCALE_MAX, onSelect: keep_open(() => change_font_scale(1)) },
+    { label: t('恢复默认字号（当前 {value1}%）', { value1: Math.round(font_scale.value * 100) }), icon: "i-lucide-rotate-ccw", disabled: font_scale.value === 1, onSelect: keep_open(() => change_font_scale(0)) },
   ]);
   const rest = [];
-  if (showing_source.value) rest.push({ label: wrap.value ? "关闭自动换行" : "自动换行", icon: "i-lucide-wrap-text", onSelect: () => { wrap.value = !wrap.value; } });
-  if (can_read.value) rest.push(reader.state.reading ? { label: "停止朗读", icon: "i-lucide-square", onSelect: () => reader.stop() } : { label: "朗读", icon: "i-lucide-volume-2", onSelect: () => read_file() });
-  if (can_open_html.value) rest.push({ label: "在新标签页打开", icon: "i-lucide-external-link", onSelect: () => open_html_tab() });
-  if (can_render.value) rest.push(source.value ? { label: "预览", icon: "i-lucide-eye", onSelect: () => { source.value = false; } } : { label: "源码", icon: "i-lucide-code-xml", onSelect: () => { source.value = true; } });
+  if (showing_source.value) rest.push({ label: wrap.value ? t('关闭自动换行') : t('自动换行'), icon: "i-lucide-wrap-text", onSelect: () => { wrap.value = !wrap.value; } });
+  if (can_read.value) rest.push(reader.state.reading ? { label: t('停止朗读'), icon: "i-lucide-square", onSelect: () => reader.stop() } : { label: t('朗读'), icon: "i-lucide-volume-2", onSelect: () => read_file() });
+  if (can_open_html.value) rest.push({ label: t('在新标签页打开'), icon: "i-lucide-external-link", onSelect: () => open_html_tab() });
+  if (can_render.value) rest.push(source.value ? { label: t('预览'), icon: "i-lucide-eye", onSelect: () => { source.value = false; } } : { label: t('源码'), icon: "i-lucide-code-xml", onSelect: () => { source.value = true; } });
   if (rest.length) groups.push(rest);
   // Kept out of the head so it is not mistaken for the active tab's own close button.
-  if (tabs.value.length > 1) groups.push([{ label: "关闭全部文件", icon: "i-lucide-x", onSelect: () => close_all() }]);
+  if (tabs.value.length > 1) groups.push([{ label: t('关闭全部文件'), icon: "i-lucide-x", onSelect: () => close_all() }]);
   return groups;
 });
 
@@ -190,7 +191,7 @@ const ATTACHMENT_TEXT_LIMIT = 2 * 1024 * 1024;
 /** Read a message attachment's bytes as text, in the shape of the room-files answer. */
 async function read_attachment(attachment) {
   const response = await fetch(attachment.url);
-  if (!response.ok) throw new Error(`附件读取失败（${response.status}）`);
+  if (!response.ok) throw new Error(t('附件读取失败（{value1}）', { value1: response.status }));
   const blob = await response.blob();
   const truncated = blob.size > ATTACHMENT_TEXT_LIMIT;
   const text = new TextDecoder("utf-8").decode(await (truncated ? blob.slice(0, ATTACHMENT_TEXT_LIMIT) : blob).arrayBuffer());
@@ -249,14 +250,14 @@ async function load_media(item, request) {
 async function unpack_project(item, request) {
   try {
     const response = await fetch(item.media.url);
-    if (!response.ok) throw new Error(`文件读取失败（${response.status}）`);
+    if (!response.ok) throw new Error(t('文件读取失败（{value1}）', { value1: response.status }));
     const compressed = new Uint8Array(await response.arrayBuffer());
     const bytes = await new Promise((resolve, reject) => gunzip(compressed, (error, data) => error ? reject(error) : resolve(data)));
     const truncated = bytes.length > ATTACHMENT_TEXT_LIMIT;
     const text = new TextDecoder("utf-8").decode(truncated ? bytes.subarray(0, ATTACHMENT_TEXT_LIMIT) : bytes);
     if (item.request === request) item.data = { ...item.data, text, truncated, limit: ATTACHMENT_TEXT_LIMIT, encoding: "utf-8", reason: "" };
   } catch (error) {
-    if (item.request === request) item.data = { ...item.data, text: null, reason: `Premiere 工程无法解压：${error.message}` };
+    if (item.request === request) item.data = { ...item.data, text: null, reason: t('Premiere 工程无法解压：{value1}', { value1: error.message }) };
   }
 }
 
@@ -797,112 +798,113 @@ onBeforeUnmount(() => {
     <template #content>
      <div ref="frame" class="project-editor-frame" @touchstart.passive="pull_start" @touchmove="pull_move" @touchend="pull_end" @touchcancel="pull_end">
       <div class="project-editor-head">
-        <div class="project-editor-tablist" role="tablist" aria-label="已打开的文件">
+        <div class="project-editor-tablist" role="tablist" :aria-label="t('已打开的文件')">
           <div v-for="item in tabs" :key="item.id" class="project-editor-tab" :class="{ 'is-active': item.id === active_id }" :title="item.path">
             <button type="button" role="tab" class="project-editor-tab-name" :aria-selected="item.id === active_id" @click="activate(item.id)">
               <UIcon :name="file_type(name_of(item.path))[1]" class="project-file-icon" :class="file_type(name_of(item.path))[2]" /><span>{{ name_of(item.path) }}</span>
             </button>
-            <button type="button" class="project-editor-tab-close" :aria-label="`关闭 ${name_of(item.path)}`" title="关闭" @click="close_tab(item.id)"><UIcon name="i-lucide-x" /></button>
+            <button type="button" class="project-editor-tab-close" :aria-label="t('关闭 {value1}', { value1: name_of(item.path) })" :title="t('关闭')" @click="close_tab(item.id)"><UIcon name="i-lucide-x" /></button>
           </div>
         </div>
         <div v-if="!narrow" class="project-editor-file-actions">
-          <div v-if="can_scale" class="project-editor-font" role="group" aria-label="字号">
-            <button type="button" title="缩小字号" aria-label="缩小字号" :disabled="font_scale <= FONT_SCALE_MIN" @click="change_font_scale(-1)"><UIcon name="i-lucide-a-arrow-down" /></button>
-            <button type="button" class="project-editor-font-value" title="恢复默认字号" aria-label="恢复默认字号" @click="change_font_scale(0)">{{ Math.round(font_scale * 100) }}%</button>
-            <button type="button" title="放大字号" aria-label="放大字号" :disabled="font_scale >= FONT_SCALE_MAX" @click="change_font_scale(1)"><UIcon name="i-lucide-a-arrow-up" /></button>
+          <div v-if="can_scale" class="project-editor-font" role="group" :aria-label="t('字号')">
+            <button type="button" :title="t('缩小字号')" :aria-label="t('缩小字号')" :disabled="font_scale <= FONT_SCALE_MIN" @click="change_font_scale(-1)"><UIcon name="i-lucide-a-arrow-down" /></button>
+            <button type="button" class="project-editor-font-value" :title="t('恢复默认字号')" :aria-label="t('恢复默认字号')" @click="change_font_scale(0)">{{ Math.round(font_scale * 100) }}%</button>
+            <button type="button" :title="t('放大字号')" :aria-label="t('放大字号')" :disabled="font_scale >= FONT_SCALE_MAX" @click="change_font_scale(1)"><UIcon name="i-lucide-a-arrow-up" /></button>
           </div>
           <UButton v-if="showing_source" icon="i-lucide-wrap-text" color="neutral" :variant="wrap ? 'soft' : 'ghost'" size="sm" :aria-pressed="wrap"
-            :title="wrap ? '关闭自动换行' : '自动换行'" aria-label="自动换行" @click="wrap = !wrap" />
+            :title="wrap ? t('关闭自动换行') : t('自动换行')" :aria-label="t('自动换行')" @click="wrap = !wrap" />
           <UButton v-if="can_read" :icon="reader.state.reading ? 'i-lucide-square' : 'i-lucide-volume-2'" color="neutral" variant="ghost" size="sm"
-            :title="reader.state.reading ? '停止朗读' : '朗读'" :aria-label="reader.state.reading ? '停止朗读' : '从头朗读此文件'" @click="reader.state.reading ? reader.stop() : read_file()" />
-          <UButton v-if="can_open_html" icon="i-lucide-external-link" color="neutral" variant="ghost" size="sm" title="在新标签页打开" aria-label="在新标签页打开" @click="open_html_tab" />
-          <div v-if="can_render" class="project-editor-modes" role="group" aria-label="显示方式">
-            <button type="button" :aria-pressed="!source" title="预览" @click="source = false"><UIcon name="i-lucide-eye" class="project-mode-icon" /><span>预览</span></button>
-            <button type="button" :aria-pressed="source" title="源码" @click="source = true"><UIcon name="i-lucide-code-xml" class="project-mode-icon" /><span>源码</span></button>
+            :title="reader.state.reading ? t('停止朗读') : t('朗读')" :aria-label="reader.state.reading ? t('停止朗读') : t('从头朗读此文件')" @click="reader.state.reading ? reader.stop() : read_file()" />
+          <UButton v-if="can_open_html" icon="i-lucide-external-link" color="neutral" variant="ghost" size="sm" :title="t('在新标签页打开')" :aria-label="t('在新标签页打开')" @click="open_html_tab" />
+          <div v-if="can_render" class="project-editor-modes" role="group" :aria-label="t('显示方式')">
+            <button type="button" :aria-pressed="!source" :title="t('预览')" @click="source = false"><UIcon name="i-lucide-eye" class="project-mode-icon" /><span>{{ t('预览') }}</span></button>
+            <button type="button" :aria-pressed="source" :title="t('源码')" @click="source = true"><UIcon name="i-lucide-code-xml" class="project-mode-icon" /><span>{{ t('源码') }}</span></button>
           </div>
         </div>
         <div class="project-editor-window-actions">
-          <UDropdownMenu v-if="narrow && file_menu.length" :items="file_menu" :content="{ align: 'end', sideOffset: 4 }" :ui="{ content: 'channel-menu' }"><UButton icon="i-lucide-ellipsis" color="neutral" variant="ghost" size="sm" aria-label="文件操作" title="字号、朗读、显示方式" /></UDropdownMenu>
-          <UButton :icon="narrow ? 'i-lucide-chevron-down' : 'i-lucide-minus'" color="neutral" variant="ghost" size="sm" title="收起为悬浮窗（手机上也可下拉收起）" aria-label="收起预览" @click="fold" />
-          <UButton v-if="!narrow" icon="i-lucide-x" color="neutral" variant="ghost" size="sm" :title="tabs.length > 1 ? '关闭全部文件' : '关闭预览'" :aria-label="tabs.length > 1 ? '关闭全部文件' : '关闭预览'" @click="close_all" />
+          <UDropdownMenu v-if="narrow && file_menu.length" :items="file_menu" :content="{ align: 'end', sideOffset: 4 }" :ui="{ content: 'channel-menu' }"><UButton icon="i-lucide-ellipsis" color="neutral" variant="ghost" size="sm" :aria-label="t('文件操作')" :title="t('字号、朗读、显示方式')" /></UDropdownMenu>
+          <UButton :icon="narrow ? 'i-lucide-chevron-down' : 'i-lucide-minus'" color="neutral" variant="ghost" size="sm" :title="t('收起为悬浮窗（手机上也可下拉收起）')" :aria-label="t('收起预览')" @click="fold" />
+          <UButton v-if="!narrow" icon="i-lucide-x" color="neutral" variant="ghost" size="sm" :title="tabs.length > 1 ? t('关闭全部文件') : t('关闭预览')" :aria-label="tabs.length > 1 ? t('关闭全部文件') : t('关闭预览')" @click="close_all" />
         </div>
-        <nav ref="crumbs_nav" class="project-editor-breadcrumbs" aria-label="文件位置">
+        <nav ref="crumbs_nav" class="project-editor-breadcrumbs" :aria-label="t('文件位置')">
           <template v-for="(part, index) in preview_crumbs" :key="part.path">
             <UIcon v-if="index" name="i-lucide-chevron-right" class="project-crumb-separator" />
             <span v-if="index < preview_crumbs.length - 1 && tab?.attachment">{{ part.name }}</span>
-            <button v-else-if="index < preview_crumbs.length - 1" type="button" title="在列表中打开此文件夹" @click="reveal_folder(part.path)">{{ part.name }}</button>
+            <button v-else-if="index < preview_crumbs.length - 1" type="button" :title="t('在列表中打开此文件夹')" @click="reveal_folder(part.path)">{{ part.name }}</button>
             <span v-else class="project-crumb-file"><UIcon :name="preview_type[1]" class="project-file-icon" :class="preview_type[2]" />{{ part.name }}</span>
           </template>
         </nav>
       </div>
-      <p v-if="preview?.truncated && !(format === 'html' && tab?.page && !source) && !(media_kind && !source) && !office_kind" class="project-editor-banner"><UIcon name="i-lucide-info" />文件较大，仅显示前 {{ file_size(preview.limit) }}（共 {{ file_size(preview.size) }}）<template v-if="format === 'html'">，HTML 不渲染不完整的内容</template></p>
+      <p v-if="preview?.truncated && !(format === 'html' && tab?.page && !source) && !(media_kind && !source) && !office_kind" class="project-editor-banner"><UIcon name="i-lucide-info" />{{ t('文件较大，仅显示前 {value1}（共 {value2}）', { value1: file_size(preview.limit), value2: file_size(preview.size) }) }}<template v-if="format === 'html'">{{ t('，HTML 不渲染不完整的内容') }}</template></p>
       <p v-else-if="html_notice && !source" class="project-editor-banner" :title="html_notice"><UIcon name="i-lucide-info" /><span class="project-editor-banner-text">{{ html_notice }}</span></p>
 
       <div ref="editor_body" class="project-editor-body" :style="{ '--file-font-scale': font_scale }">
-        <PreviewLoading v-if="tab?.loading && !preview" :label="tab?.attachment && !tab.attachment.url ? '正在读取附件…' : '正在读取文件…'" />
-        <div v-else-if="tab?.error && !preview" class="project-editor-state"><UIcon name="i-lucide-circle-alert" /><p>{{ tab.error }}</p><UButton label="重试" color="neutral" variant="outline" size="sm" @click="load(tab)" /></div>
+        <PreviewLoading v-if="tab?.loading && !preview" :label="tab?.attachment &amp;&amp; !tab.attachment.url ? t('正在读取附件…') : t('正在读取文件…')" />
+        <div v-else-if="tab?.error && !preview" class="project-editor-state"><UIcon name="i-lucide-circle-alert" /><p>{{ tab.error }}</p><UButton :label="t('重试')" color="neutral" variant="outline" class="pb-action" size="sm" @click="load(tab)" /></div>
         <template v-else-if="media_kind && !source">
-          <div v-if="tab.media_error" class="project-editor-state"><UIcon name="i-lucide-circle-alert" /><p>{{ tab.media_error }}</p><UButton label="重试" color="neutral" variant="outline" size="sm" @click="load(tab)" /></div>
+          <div v-if="tab.media_error" class="project-editor-state"><UIcon name="i-lucide-circle-alert" /><p>{{ tab.media_error }}</p><UButton :label="t('重试')" color="neutral" variant="outline" class="pb-action" size="sm" @click="load(tab)" /></div>
           <MediaViewer v-else-if="tab.media" :kind="media_kind" :url="tab.media.url" :name="preview_name" />
-          <PreviewLoading v-else :label="tab.media_progress ? `正在经电脑读取… ${Math.round(tab.media_progress * 100)}%` : '正在打开…'" :progress="tab.media_progress || 0" />
+          <PreviewLoading v-else :label="tab.media_progress ? t('正在经电脑读取… {value1}%', { value1: Math.round(tab.media_progress * 100) }) : t('正在打开…')" :progress="tab.media_progress || 0" />
         </template>
         <template v-else-if="office_kind">
-          <div v-if="tab.media_error" class="project-editor-state"><UIcon name="i-lucide-circle-alert" /><p>{{ tab.media_error }}</p><UButton label="重试" color="neutral" variant="outline" size="sm" @click="load(tab)" /></div>
+          <div v-if="tab.media_error" class="project-editor-state"><UIcon name="i-lucide-circle-alert" /><p>{{ tab.media_error }}</p><UButton :label="t('重试')" color="neutral" variant="outline" class="pb-action" size="sm" @click="load(tab)" /></div>
           <OfficeViewer v-else-if="tab.media" :kind="office_kind" :url="tab.media.url" :scale="font_scale" />
-          <PreviewLoading v-else :label="tab.media_progress ? `正在经电脑读取… ${Math.round(tab.media_progress * 100)}%` : '正在打开…'" :progress="tab.media_progress || 0" />
+          <PreviewLoading v-else :label="tab.media_progress ? t('正在经电脑读取… {value1}%', { value1: Math.round(tab.media_progress * 100) }) : t('正在打开…')" :progress="tab.media_progress || 0" />
         </template>
-        <div v-else-if="preview?.text === null" class="project-editor-state"><UIcon :name="preview_type[1]" /><p>{{ preview.reason || '这个格式只能下载后用本机软件打开' }}</p></div>
-        <div v-else-if="showing_source && wrap" ref="code_scroll" class="project-code is-wrapped" tabindex="0" @scroll.passive="schedule_offer" aria-label="文件内容" :style="{ '--digits': String(line_count).length }">
+        <div v-else-if="preview?.text === null" class="project-editor-state"><UIcon :name="preview_type[1]" /><p>{{ preview.reason || t('这个格式只能下载后用本机软件打开') }}</p></div>
+        <div v-else-if="showing_source && wrap" ref="code_scroll" class="project-code is-wrapped" tabindex="0" @scroll.passive="schedule_offer" :aria-label="t('文件内容')" :style="{ '--digits': String(line_count).length }">
           <div v-for="(line, index) in lines" :key="index" class="project-code-row" :data-line="index + 1"><span class="project-code-number" aria-hidden="true">{{ index + 1 }}</span><span class="project-code-line">{{ line }}</span></div>
         </div>
-        <div v-else-if="showing_source" ref="code_scroll" v-keep-reading class="project-code" tabindex="0" @scroll.passive="schedule_offer" aria-label="文件内容">
+        <div v-else-if="showing_source" ref="code_scroll" v-keep-reading class="project-code" tabindex="0" @scroll.passive="schedule_offer" :aria-label="t('文件内容')">
           <pre class="project-code-gutter" aria-hidden="true">{{ gutter }}</pre>
           <pre class="project-code-text"><code ref="code_text">{{ preview.text }}</code></pre>
         </div>
-        <div v-else-if="preview && format === 'table'" class="project-table-scroll" tabindex="0" aria-label="表格内容">
-          <p v-if="table.cut" class="project-table-note">只显示前 {{ table.rows.length }} 行，完整内容见源码。</p>
+        <div v-else-if="preview && format === 'table'" class="project-table-scroll" tabindex="0" :aria-label="t('表格内容')">
+          <p v-if="table.cut" class="project-table-note">{{ t('只显示前 {value1} 行，完整内容见源码。', { value1: table.rows.length }) }}</p>
           <table class="project-table"><tbody>
             <tr v-for="(row, index) in table.rows" :key="index" :class="{ 'is-head': index === 0 }"><td class="project-table-number">{{ index + 1 }}</td><td v-for="(cell, column) in row" :key="column">{{ cell }}</td></tr>
           </tbody></table>
         </div>
-        <div v-else-if="preview && format === 'subtitle'" class="project-table-scroll" tabindex="0" aria-label="字幕时间轴">
-          <p v-if="!cues.length" class="project-table-note">没有识别出字幕条目，请切换到源码查看。</p>
-          <table v-else class="project-table is-subtitle"><thead><tr><th>#</th><th>开始</th><th>结束</th><th>内容</th></tr></thead><tbody>
+        <div v-else-if="preview && format === 'subtitle'" class="project-table-scroll" tabindex="0" :aria-label="t('字幕时间轴')">
+          <p v-if="!cues.length" class="project-table-note">{{ t('没有识别出字幕条目，请切换到源码查看。') }}</p>
+          <table v-else class="project-table is-subtitle"><thead><tr><th>#</th><th>{{ t('开始') }}</th><th>{{ t('结束') }}</th><th>{{ t('内容') }}</th></tr></thead><tbody>
             <tr v-for="(cue, index) in cues" :key="index"><td class="project-table-number">{{ index + 1 }}</td><td>{{ cue.start }}</td><td>{{ cue.end }}</td><td class="is-text">{{ cue.text }}</td></tr>
           </tbody></table>
         </div>
-        <PreviewLoading v-else-if="preview && format === 'html' && tab?.loading && !tab.page" label="正在载入页面引用的文件…" />
-        <iframe v-else-if="preview && format === 'html'" ref="html_frame" class="project-html-preview" :sandbox="HTML_SANDBOX" referrerpolicy="no-referrer" :srcdoc="html_preview" title="HTML 文件预览"></iframe>
+        <PreviewLoading v-else-if="preview && format === 'html' && tab?.loading && !tab.page" :label="t('正在载入页面引用的文件…')" />
+        <iframe v-else-if="preview && format === 'html'" ref="html_frame" class="project-html-preview" :sandbox="HTML_SANDBOX" referrerpolicy="no-referrer" :srcdoc="html_preview" :title="t('HTML 文件预览')"></iframe>
         <div v-else-if="preview" ref="markdown_scroll" v-keep-reading class="project-markdown-scroll" tabindex="0" @scroll.passive="schedule_offer"
           @wheel.passive="stop_following" @touchmove.passive="stop_following" @keydown="stop_following" @pointerdown="stop_following"><div ref="markdown_body" class="markdown-body project-markdown-preview" v-html="rendered"></div>
-          <button v-for="mark in file_marks" :key="mark.id" type="button" class="excerpt-mark" :style="{ left: `${mark.left}px`, top: `${mark.top}px` }" :title="`摘录 ${mark.number}：点击修改批注`" :aria-label="`修改摘录 ${mark.number} 的批注`" @click="open_mark(mark.id)">{{ mark.number }}</button></div>
+          <button v-for="mark in file_marks" :key="mark.id" type="button" class="excerpt-mark" :style="{ left: `${mark.left}px`, top: `${mark.top}px` }" :title="t('摘录 {value1}：点击修改批注', { value1: mark.number })" :aria-label="t('修改摘录 {value1} 的批注', { value1: mark.number })" @click="open_mark(mark.id)">{{ mark.number }}</button></div>
         <ExcerptEditCard v-if="mark_editing" :key="mark_editing.excerpt.id" class="file-selection-offer file-comment" :comment="mark_editing.excerpt.comment" :style="{ left: `${mark_editing.left}px`, top: `${mark_editing.top}px` }"
           @save="save_mark" @cancel="close_mark" @remove="remove_mark" />
 
         <div v-if="offer && !offer.touch" class="file-selection-offer file-offer-marks" :style="{ left: `${offer.left}px`, top: `${offer.top}px` }">
-          <button type="button" class="channel-listen-mark" title="把选中的文字作为摘录添加到对话" @mousedown.prevent @click="start_comment"><UIcon name="i-lucide-message-square-quote" />添加到对话</button>
-          <button v-if="can_read" type="button" class="channel-listen-mark" title="从选中处开始朗读" aria-label="从选中处开始朗读" @mousedown.prevent @click="listen_from_selection"><UIcon name="i-lucide-headphones" />朗读</button>
+          <button type="button" class="channel-listen-mark" :title="t('把选中的文字作为摘录添加到对话')" @mousedown.prevent @click="start_comment"><UIcon name="i-lucide-message-square-quote" />{{ t('添加到对话') }}</button>
+          <button v-if="can_read" type="button" class="channel-listen-mark" :title="t('从选中处开始朗读')" :aria-label="t('从选中处开始朗读')" @mousedown.prevent @click="listen_from_selection"><UIcon name="i-lucide-headphones" />{{ t('听当前') }}</button>
         </div>
         <form v-if="commenting" class="file-selection-offer selection-comment file-comment" :class="{ 'is-docked': commenting.touch }"
           :style="commenting.touch ? {} : { left: `${commenting.left}px`, top: `${commenting.top}px` }" @submit.prevent="add_excerpt">
-          <textarea ref="comment_input" v-model="comment" rows="1" placeholder="添加批注（可选）" aria-label="摘录的批注（可选）" enterkeyhint="send" @keydown="comment_keydown"></textarea>
-          <button type="button" class="selection-comment-cancel" aria-label="取消添加" title="取消" @click="cancel_comment"><UIcon name="i-lucide-x" /></button>
-          <button type="submit" class="selection-comment-send" aria-label="添加到对话" title="添加到对话（Enter）"><UIcon name="i-lucide-arrow-up" /></button>
+          <textarea ref="comment_input" v-model="comment" rows="1" :placeholder="t('添加批注（可选）')" :aria-label="t('摘录的批注（可选）')" enterkeyhint="send" @keydown="comment_keydown"></textarea>
+          <button type="button" class="selection-comment-cancel" :aria-label="t('取消添加')" :title="t('取消')" @click="cancel_comment"><UIcon name="i-lucide-x" /></button>
+          <button type="submit" class="selection-comment-send" :aria-label="t('添加到对话')" :title="t('添加到对话（Enter）')"><UIcon name="i-lucide-arrow-up" /></button>
         </form>
         <div v-if="(offer?.touch && !commenting) || reader.state.message_id" class="file-listen-dock">
-          <button v-if="offer?.touch" type="button" class="channel-listen-pill file-selection-offer" @mousedown.prevent @click="start_comment"><UIcon name="i-lucide-message-square-quote" />添加到对话</button>
-          <button v-if="offer?.touch && can_read" type="button" class="channel-listen-pill file-selection-offer" aria-label="从选中处开始朗读" @mousedown.prevent @click="listen_from_selection"><UIcon name="i-lucide-headphones" />听当前</button>
-          <button v-if="reader.state.message_id" type="button" class="channel-listen-pill" :class="{ 'is-on': reader.state.following }" :aria-pressed="reader.state.following"
-            :title="reader.state.following ? '手动滚动即取消跟随' : '页面跟随朗读位置滚动'" @click="reader.state.following ? (reader.state.following = false) : reader.follow()"><UIcon name="i-lucide-locate-fixed" />{{ reader.state.following ? '跟随中' : '跟随' }}</button>
-          <button v-if="reader.state.reading" type="button" class="channel-listen-pill" aria-label="退出朗读" @click="reader.stop()"><UIcon name="i-lucide-square" />退出</button>
+          <button v-if="offer?.touch" type="button" class="channel-listen-pill file-selection-offer" @mousedown.prevent @click="start_comment"><UIcon name="i-lucide-message-square-quote" />{{ t('添加到对话') }}</button>
+          <button v-if="offer?.touch && can_read" type="button" class="channel-listen-pill file-selection-offer" :aria-label="t('从选中处开始朗读')" @mousedown.prevent @click="listen_from_selection"><UIcon name="i-lucide-headphones" />{{ t('听当前') }}</button>
+          <span v-if="reader.state.message_id && reader.state.loading" class="channel-listen-pill" role="status"><UIcon name="i-lucide-loader-circle" class="animate-spin" />{{ t('加载中') }}</span>
+          <button v-else-if="reader.state.message_id" type="button" class="channel-listen-pill" :class="{ 'is-on': reader.state.following }" :aria-pressed="reader.state.following"
+            :title="reader.state.following ? t('手动滚动即取消跟随') : t('页面跟随朗读位置滚动')" @click="reader.state.following ? (reader.state.following = false) : reader.follow()"><UIcon name="i-lucide-locate-fixed" />{{ reader.state.following ? t('跟随中') : t('跟随') }}</button>
+          <button v-if="reader.state.reading" type="button" class="channel-listen-pill" :aria-label="t('停止朗读')" @click="reader.stop()"><UIcon name="i-lucide-square" />{{ t('停止') }}</button>
         </div>
       </div>
 
       <footer class="project-editor-status">
-        <span v-if="preview" class="project-editor-modified" :title="preview.modified_at">修改于 {{ modified_time(preview.modified_at) }}</span>
+        <span v-if="preview" class="project-editor-modified" :title="preview.modified_at">{{ t('修改于 {value1}', { value1: modified_time(preview.modified_at) }) }}</span>
         <span class="project-editor-status-spacer"></span>
         <template v-if="preview?.text != null">
-          <span>{{ line_count }} 行</span><span class="project-editor-encoding">{{ encoding_label }}</span>
+          <span>{{ t('{value1} 行', { value1: line_count }) }}</span><span class="project-editor-encoding">{{ encoding_label }}</span>
         </template>
         <span v-if="preview">{{ file_size(preview.size) }}</span>
         <span>{{ preview_type[0] }}</span>
@@ -915,11 +917,11 @@ onBeforeUnmount(() => {
   <Teleport to="body">
     <div v-if="tabs.length && !open" class="file-float" :class="{ 'is-right': float_side === 'right' && !float_drag_place, 'is-dragging': float_drag_place }" :style="float_style"
       @pointerdown="float_press" @pointermove="float_move" @pointerup="float_release" @pointercancel="float_release" @click.capture="float_click">
-      <button type="button" class="file-float-open" :title="tabs.length > 1 ? `回到文件预览（${tabs.length} 个文件）` : `回到文件预览：${preview_name}`" @click="unfold">
+      <button type="button" class="file-float-open" :title="tabs.length > 1 ? t('回到文件预览（{value1} 个文件）', { value1: tabs.length }) : t('回到文件预览：{value1}', { value1: preview_name })" @click="unfold">
         <UIcon :name="preview_type[1]" class="project-file-icon" :class="preview_type[2]" /><span class="file-float-name">{{ preview_name }}</span>
         <span v-if="tabs.length > 1" class="file-float-count">{{ tabs.length }}</span>
       </button>
-      <button type="button" class="file-float-close" aria-label="关闭全部文件预览" title="关闭" @click="close_all"><UIcon name="i-lucide-x" /></button>
+      <button type="button" class="file-float-close" :aria-label="t('关闭全部文件预览')" :title="t('关闭')" @click="close_all"><UIcon name="i-lucide-x" /></button>
     </div>
   </Teleport>
 </template>

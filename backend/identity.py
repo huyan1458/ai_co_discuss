@@ -6,6 +6,8 @@ own session, model and thinking effort. Platform names alone keep their historic
 
 import re
 
+from .texts import Text, text_payload
+
 USER = "用户"
 AI_PLATFORMS = ("Codex", "Claude", "Antigravity", "DeepSeek", "Qwen", "Grok", "OpenAI", "Custom")
 PARTICIPANTS = [USER, *AI_PLATFORMS]
@@ -38,3 +40,10 @@ def default_label(name):
     platform = platform_of(name)
     nickname = PLATFORM_NICKNAMES.get(platform)
     return nickname + name[len(platform):] if nickname else name
+
+
+def default_label_text(name, label):
+    """Return display metadata only for the unchanged Custom platform nickname."""
+    if platform_of(name) == "Custom" and label == default_label(name):
+        return text_payload(Text("自定义 API{suffix}", suffix=name[len("Custom"):]))
+    return None

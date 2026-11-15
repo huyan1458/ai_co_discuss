@@ -11,6 +11,7 @@ import time
 
 from .free_room import ACTIVE, add_interjection
 from .runtime import begin_write, require_owner
+from .texts import Text, incoming_text, load_texts, save_text
 
 MAX_CHAT_LENGTH = 4000
 MAX_REPLY_LENGTH = 20000
@@ -27,23 +28,33 @@ def chat_member(connection, room_id, member_id):
     """The active member the runner wakes; a manual member is reached only in its own window."""
     member = connection.execute("SELECT * FROM room_members WHERE room_id=? AND id=? AND status='active'", (room_id, member_id)).fetchone()
     if not member:
-        raise LookupError("成员不存在或已离开")
+        raise LookupError(Text('成员不存在或已离开'))
     if member["access"] != "runner":
-        raise FileExistsError("这位成员是手动接入的，只能在它自己的窗口里对话")
+        raise FileExistsError(Text('这位成员是手动接入的，只能在它自己的窗口里对话'))
     return member
 
 
 def public_chat(connection, row):
     """One chat line as the page shows it; a line passed in as an interjection shows how that went."""
     chat = {key: row[key] for key in ("id", "member_id", "text", "status", "reply", "reason", "execution_id", "created_at", "updated_at")}
+    chat["texts"] = load_texts(connection, "private_chat", row["id"])
     if row["status"] == "interjected":
-        interjection = connection.execute("""SELECT i.status,i.reason,e.status AS execution_status FROM execution_interjections i
+        interjection = connection.execute("""SELECT i.id AS interjection_id,i.status,i.reason,e.status AS execution_status FROM execution_interjections i
             JOIN member_executions e ON e.id=i.execution_id WHERE i.room_id=? AND i.submission_id=?""",
                                           (row["room_id"], INTERJECTION_PREFIX + row["submission_id"])).fetchone()
         if interjection:
             ended = interjection["status"] == "pending" and interjection["execution_status"] not in ACTIVE
             chat["interjection"] = "failed" if ended else interjection["status"]
-            chat["reason"] = "送达前那次执行已结束" if ended else interjection["reason"]
+            if ended:
+                reason = Text("送达前那次执行已结束")
+                chat["reason"] = str(reason)
+                chat["texts"]["reason"] = {"template": reason.template, "params": reason.params}
+            else:
+                chat["reason"] = interjection["reason"]
+                reason_text = load_texts(connection, "execution", row["execution_id"]).get(
+                    f"interjection_reason:{interjection['interjection_id']}")
+                if reason_text:
+                    chat["texts"]["reason"] = reason_text
     return chat
 
 
@@ -59,13 +70,13 @@ def member_chat(connection, room_id, member_id, token, payload=None):
     member = chat_member(connection, room_id, member_id)
     text, submission_id = payload.get("text"), payload.get("submission_id")
     if not isinstance(text, str) or not 0 < len(text.strip()) <= MAX_CHAT_LENGTH:
-        raise ValueError(f"私聊内容须为 1–{MAX_CHAT_LENGTH} 字")
+        raise ValueError(Text('私聊内容须为 1–{value1} 字', value1=MAX_CHAT_LENGTH))
     if not isinstance(submission_id, str) or not 0 < len(submission_id) <= 100:
-        raise ValueError("私聊须带 submission_id；重试沿用原编号")
+        raise ValueError(Text('私聊须带 submission_id；重试沿用原编号'))
     earlier = connection.execute("SELECT * FROM private_chats WHERE room_id=? AND submission_id=?", (room_id, submission_id)).fetchone()
     if earlier:
         if earlier["member_id"] != member_id or earlier["text"] != text:
-            raise FileExistsError("submission_id 已用于另一句私聊")
+            raise FileExistsError(Text('submission_id 已用于另一句私聊'))
         return public_chat(connection, earlier)
     now = int(time.time())
     # A room execution that takes interjections (mid-turn, or by a pause and resume) hears it now; one that cannot
@@ -88,20 +99,22 @@ def chat_action(connection, room_id, chat_id, token, payload):
     begin_write(connection)
     action = payload.get("action")
     if action not in TRANSITIONS:
-        raise ValueError(f"action 须为 {'、'.join(TRANSITIONS)}")
+        raise ValueError(Text('action 须为 {value1}', value1='、'.join(TRANSITIONS)))
     row = connection.execute("SELECT * FROM private_chats WHERE room_id=? AND id=?", (room_id, chat_id)).fetchone()
     if not row:
-        raise LookupError("私聊不存在")
+        raise LookupError(Text('私聊不存在'))
     allowed, target = TRANSITIONS[action]
     if row["status"] == target:
         return public_chat(connection, row)
     if row["status"] not in (allowed if isinstance(allowed, tuple) else (allowed,)):
-        raise FileExistsError(f"这句私聊当前为 {row['status']}，不能 {action}")
-    reply, reason = payload.get("text", ""), payload.get("reason", "")
+        raise FileExistsError(Text('这句私聊当前为 {value1}，不能 {value2}', value1=row['status'], value2=action))
+    reply = payload.get("text", "")
+    reason = incoming_text(payload.get("reason", ""), payload.get("reason_text"))
     if not isinstance(reply, str) or len(reply) > MAX_REPLY_LENGTH or not isinstance(reason, str) or len(reason) > MAX_REASON_LENGTH:
-        raise ValueError(f"text 最多 {MAX_REPLY_LENGTH} 字，reason 最多 {MAX_REASON_LENGTH} 字")
+        raise ValueError(Text('text 最多 {value1} 字，reason 最多 {value2} 字', value1=MAX_REPLY_LENGTH, value2=MAX_REASON_LENGTH))
     connection.execute("UPDATE private_chats SET status=?,reply=?,reason=?,updated_at=? WHERE id=?",
                        (target, reply if action == "reply" else row["reply"], reason, int(time.time()), chat_id))
+    save_text(connection, "private_chat", chat_id, "reason", reason)
     return public_chat(connection, connection.execute("SELECT * FROM private_chats WHERE id=?", (chat_id,)).fetchone())
 
 

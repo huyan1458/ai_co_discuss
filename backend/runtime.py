@@ -5,6 +5,7 @@ import secrets
 import time
 from collections import Counter
 from fractions import Fraction
+from .texts import Text
 
 LEASE_SECONDS = 120
 # Never leaves this process; a client cannot guess it to pose as a stored hash.
@@ -42,15 +43,14 @@ def save_segments(connection, source, room_id, execution_id, anchor, finished, p
     """
     now = int(time.time())
     if finished and finished + SEGMENT_GRACE_SECONDS < now:
-        raise FileExistsError("执行已结束较久，不再接收阶段记录")
+        raise FileExistsError(Text('执行已结束较久，不再接收阶段记录'))
     segments = payload.get("segments", [])
     if (not isinstance(segments, list) or len(segments) > MAX_SEGMENTS_PER_REPORT or (not segments and not optional) or any(
             not isinstance(item, dict) or type(item.get("seq")) is not int or not 1 <= item["seq"] <= MAX_EXECUTION_SEGMENTS
             or item.get("phase") not in SEGMENT_PHASES or not isinstance(item.get("tool", ""), str)
             or len(item.get("tool", "")) > MAX_SEGMENT_TOOL or type(item.get("start_ms")) is not int
             or type(item.get("end_ms")) is not int for item in segments)):
-        raise ValueError(f"segments 须为 1–{MAX_SEGMENTS_PER_REPORT} 段 {{seq: 1–{MAX_EXECUTION_SEGMENTS}, "
-                         f"phase: {'、'.join(SEGMENT_PHASES)}, tool: 最多 {MAX_SEGMENT_TOOL} 字, start_ms, end_ms}}")
+        raise ValueError(Text('segments 须为 1–{value1} 段 {{seq: 1–{value2}, phase: {value3}, tool: 最多 {value4} 字, start_ms, end_ms}}', value1=MAX_SEGMENTS_PER_REPORT, value2=MAX_EXECUTION_SEGMENTS, value3='、'.join(SEGMENT_PHASES), value4=MAX_SEGMENT_TOOL))
     limit = max(0, (finished or now) - anchor + 1) * 1000
     rows = []
     for item in segments:
@@ -70,12 +70,12 @@ def begin_write(connection):
 def limit_values(payload, current=None):
     """Validate bounded discussion settings; zero means no round/time preset."""
     if not isinstance(payload, dict) or set(payload) - set(LIMIT_DEFAULTS):
-        raise ValueError("limits 仅接受讨论上限配置字段")
+        raise ValueError(Text('limits 仅接受讨论上限配置字段'))
     result = {key: (current or {}).get(key, value) for key, value in LIMIT_DEFAULTS.items()}
     result.update({key: value for key, value in payload.items() if key in LIMIT_DEFAULTS})
     for key, minimum, maximum in (("max_rounds", 0, 100), ("max_minutes", 0, 1440), ("execution_minutes", 0, 60)):
         if type(result[key]) is not int or not minimum <= result[key] <= maximum:
-            raise ValueError(f"{key} 须为 {minimum}–{maximum} 的整数")
+            raise ValueError(Text('{value1} 须为 {value2}–{value3} 的整数', value1=key, value2=minimum, value3=maximum))
     return result
 
 
@@ -124,17 +124,22 @@ def session_limits_view(connection, room_id):
 
 
 def _session_answer_rounds(connection, session_id, base=0):
-    """Count answer volume across rounds, adding the host only to rounds where the host is scheduled."""
+    """Count answered rounds, adding the host only to rounds where the host is scheduled.
+
+    Each member counts once per round and a round counts at most once, so a member leaving
+    later shrinks the current roster without inflating rounds that were already answered.
+    """
     from .session_room import _expert_denominator
 
-    rounds = Counter(row[0] for row in connection.execute("""SELECT round FROM session_requests
+    rows = connection.execute("""SELECT round,member_id FROM session_requests
         WHERE session_id=? AND purpose='discuss' AND status='answered' ORDER BY id LIMIT -1 OFFSET ?""",
-        (session_id, base)))
+        (session_id, base)).fetchall()
+    rounds = Counter(round_number for round_number, _ in {(row[0], row[1]) for row in rows})
     progress = Fraction(0)
     for round_number, answered in rounds.items():
         denominator = _expert_denominator(connection, session_id, round_number)
         if denominator:
-            progress += Fraction(answered, denominator)
+            progress += min(Fraction(1), Fraction(answered, denominator))
     return int(progress)
 
 
@@ -159,5 +164,5 @@ def require_owner(connection, room_id, token):
     row = connection.execute("SELECT * FROM room_modes WHERE room_id=? AND control_hash=?",
                              (room_id, hashed)).fetchone() if hashed else None
     if not row:
-        raise PermissionError("需要本房间的控制凭据；没有凭据只能阅读")
+        raise PermissionError(Text('需要本房间的控制凭据；没有凭据只能阅读'))
     return row

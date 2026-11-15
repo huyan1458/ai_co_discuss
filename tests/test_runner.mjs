@@ -1,4 +1,14 @@
 import assert from 'node:assert/strict';
+import { room_text, room_payload } from '../runner/room_text.mjs';
+
+test('room-owned reasons carry source templates while replies and truncated text retain original content', () => {
+  const reason = room_text('投递失败：{detail}', { detail: 'external error 原文' });
+  assert.equal(reason, '投递失败：external error 原文');
+  assert.deepEqual(room_payload({ action: 'fail', reason }), { action: 'fail', reason,
+    reason_text: { template: '投递失败：{detail}', params: { detail: 'external error 原文' } } });
+  assert.deepEqual(room_payload({ text: reason }), { text: reason });
+  assert.deepEqual(room_payload({ reason: reason.slice(0, 4) }), { reason: reason.slice(0, 4) });
+});
 import { mkdtempSync, mkdirSync, writeFileSync, appendFileSync, readdirSync, rmSync, existsSync, readFileSync, utimesSync } from 'node:fs';
 import { spawn, spawnSync } from 'node:child_process';
 import { createHash, randomUUID } from 'node:crypto';
@@ -13,16 +23,17 @@ import { fileURLToPath, pathToFileURL } from 'node:url';
 import { setTimeout as delay } from 'node:timers/promises';
 import { listen_local } from './local_port.mjs';
 import { DiscussionStore, load_config, service_drafts, validate_config } from '../runner/discussion_runner.mjs';
-import { cwd_key, edited_changes, free_task_files, FreeRoomRunner, member_extra_directories, review_capability_version, workspace_snapshot } from '../runner/free_runner.mjs';
+import { cwd_key, edited_changes, free_task_files, FreeRoomRunner, request_attachments, member_extra_directories, review_capability_version, workspace_snapshot } from '../runner/free_runner.mjs';
 import { SessionDriver } from '../runner/session_driver.mjs';
 
 import { EXPERT_PROMPT_PRESETS, expert_prompt, free_task_text, software_rules } from '../runner/expert_prompts.mjs';
 import { participant_tools, system_prompt } from '../runner/adapters/api.mjs';
+import { pi_provider } from '../runner/adapters/api_pi.mjs';
 import { glob_regex, open_project, run_file_tool } from '../runner/adapters/api_files.mjs';
 import { DiscussionService, migrate_platform_ids, migrate_service_home, persisted_env, read_registry, register_room, remove_room_files, service_pid, service_ready, start_service, sweep_service_home, unregister_room } from '../runner/discussion_service.mjs';
 import { restore_room, room_profiles } from '../runner/discussion_launch.mjs';
 import { adapter_of, deliver_task, execution_details } from '../runner/adapters/index.mjs';
-import { adopted_fork, claude_api_error, claude_permissions, claude_exit_error, claude_inbox_ready, claude_rule_path, standalone_claude_env, watch_window_turn } from '../runner/adapters/claude.mjs';
+import { adopted_fork, claude_api_error, claude_input, claude_permissions, claude_exit_error, claude_inbox_ready, claude_rule_path, standalone_claude_env, watch_window_turn } from '../runner/adapters/claude.mjs';
 import { codex_permissions } from '../runner/adapters/codex_cli.mjs';
 import { agy_rule, prepare_agy_project, remove_agy_projects, sweep_legacy_agy_projects } from '../runner/adapters/antigravity_cli.mjs';
 import { kill_process_tree, run_program, TASK_SUBCOMMANDS } from '../runner/adapters/common.mjs';
@@ -33,6 +44,9 @@ const activity_phase = (adapter, event) => adapter_of(adapter).events.phase(even
 import { save_api_key, saved_api_keys } from '../runner/discussion_api.mjs';
 import { certainty, decide, decide_interjection, decide_next_speaker, decide_round, ROUTE_CONFIDENCE, ROUTE_WIDE_CONFIDENCE, route_free_message, scheduler_thresholds, scheduler_answers, scheduler_check, scheduler_request, SCHEDULER_PROVIDERS, scheduler_state, validate_scheduler } from '../runner/scheduler.mjs';
 import { site_fetch } from '../runner/entry_client.mjs';
+
+// Assertions read Chinese CLI output; the run must not depend on this computer's system locale.
+process.env.CODISCUSS_LANG = 'zh-CN';
 
 /** Every room configuration keeps one member credential per woken participant. */
 const with_members = config => ({ ...config, members: Object.fromEntries(Object.keys(config.participants).map(name => [name, { token: 'm'.repeat(32) }])) });
@@ -209,6 +223,44 @@ function session_task(config, { role = 'host', ...options } = {}, binding = {}) 
   return free_task_files(config, { name: 'Codex', role }, { id: 1, read_until: 0, requests: [request] }, binding,
     { session: { id: 3, status: 'active', phase: 'initial' }, process_access: false, ...options });
 }
+
+test('woken messages bring their attachments: local copies by placeholder, images only to software that takes them', async t => {
+  const image = Buffer.from('89504e470d0a1a0a', 'hex'), sha = data => createHash('sha256').update(data).digest('hex');
+  const files = [{ id: 'a'.repeat(32), file_name: 'shot.png', content_type: 'image/png', size: image.length, sha256: sha(image) },
+    { id: 'b'.repeat(32), file_name: 'notes.pdf', content_type: 'application/pdf', size: 3, sha256: sha('bad') }];
+  const server = createServer((request, response) => {
+    const url = new URL(request.url, 'http://local');
+    if (url.pathname.endsWith('/attachments')) return response.end(JSON.stringify({ attachments: url.searchParams.get('message_id') === '9' ? files : [] }));
+    response.end(url.pathname.includes('a'.repeat(32)) ? image : Buffer.from('pdf'));
+  });
+  await listen_local(server);
+  t.after(() => server.close());
+  const { config } = task_fixture(t);
+  config.site = `http://127.0.0.1:${server.address().port}`;
+  // An API member's model reads images only when the owner says so on its card.
+  config.participants = { Claude: { adapter: 'claude' }, Agy: { adapter: 'antigravity_cli' },
+    Vision: { adapter: 'api', model: 'm', api_protocol: 'chat', image_input: 'image' }, Text: { adapter: 'api', model: 'm', api_protocol: 'chat' } };
+  config.members = Object.fromEntries(Object.keys(config.participants).map(name => [name, { token: name[0].repeat(32) }]));
+  const execution = { id: 4, read_until: 0, requests: [{ id: 1, message_id: 9, purpose: 'ask' }] };
+  const attachments = await request_attachments(config, execution);
+  assert.deepEqual(attachments.map(item => [item.placeholder, Boolean(item.path), Boolean(item.error)]), [['[图片 #1]', true, false], ['[文件 #2]', false, true]]);
+  assert.deepEqual(readFileSync(attachments[0].path), image);
+  const task = name => free_task_files(config, { name }, execution, {}, { attachments });
+  const claude = task('Claude'), agy = task('Agy');
+  assert.match(claude.prompt, /#9 \[图片 #1\] shot\.png：本机副本 .+shot\.png/);
+  assert.match(claude.prompt, /#9 \[文件 #2\] notes\.pdf：未能取到本机副本.+attachment download/);
+  assert.doesNotMatch(claude.prompt, /简单消息可跳过技能/);
+  assert.deepEqual(claude.images.map(item => item.path), [attachments[0].path]);
+  assert.deepEqual(agy.images, []);
+  assert.equal(task('Vision').images.length, 1);
+  assert.deepEqual(task('Text').images, []);
+  assert.deepEqual(pi_provider(config.participants.Vision, 'https://api.test/v1').models[0].input, ['text', 'image']);
+  assert.deepEqual(pi_provider(config.participants.Text, 'https://api.test/v1').models[0].input, ['text']);
+  const content = JSON.parse(claude_input('看图', claude.images)).message.content;
+  assert.deepEqual(content.map(block => block.type), ['text', 'image']);
+  assert.equal(content[1].source.data, image.toString('base64'));
+  assert.equal(JSON.parse(claude_input('看图', [{ ...claude.images[0], size: 4_000_000 }])).message.content.length, 1);
+});
 
 test('API profiles need a bound key and no software, and take only the access their file tools enforce', t => {
   const home = mkdtempSync(join(tmpdir(), 'api-config-'));
@@ -623,8 +675,9 @@ test('an execution inherited from a stopped or crashed runner retries once its s
     assert.equal(Boolean(f.executions.get(id).retry), gone);
     if (!gone) continue;
     assert.match(f.executions.get(id).retry.reason, /接入程序重启或异常退出/);
+    f.executions.get(id).retry.reason = 'Restarted; wording may change with the interface language';
     f.executions.get(id).retry.retry_at = 1;
-    // Another restart during the wait: the site's retry record still marks the redelivery as a continuation.
+    // Another restart during the wait: the durable reason code, independent of display text, marks a continuation.
     await new FreeRoomRunner(f.config, f.store, deliver).tick();
     assert.equal(prompts.length, 2); assert.equal(f.executions.size, 1, 'the retry keeps the one execution card');
     // The session still holds the work so far: the redelivery asks to continue, with the original task after the notice.
@@ -1748,6 +1801,12 @@ test('a resident free room isolates member context changes and only blocks Codex
   assert.equal(restarted_worker.state.error, '', 'a service restart does not reject the stored free-room context');
   assert.ok(restarted_worker.runner.context_errors.has('Codex'), 'the changed member remains isolated after restart');
 
+  // A new member that takes over a removed member's name starts clean: the old session is neither resumed nor blocking.
+  restarted_worker.runner.forget_member('Codex');
+  await service.tick();
+  assert.ok(!restarted_worker.runner.context_errors.has('Codex'));
+  assert.equal(restarted_worker.runner.store.binding('Codex').session_id, undefined);
+
   f.room.session = { id: 1, status: 'active' };
   config.participants.Codex.adapter = 'codex_cli';
   writeFileSync(path, JSON.stringify(config));
@@ -2136,6 +2195,11 @@ for (const [answer, posted] of [[{ choice: 'wait', probabilities: { wait: 0.9, c
     assert.equal(f.state.decisions.length, 1);
     assert.equal(f.state.decisions[0].after_message_id, 11);
     assert.equal(f.state.decisions[0].context.scene, 'goal');
+    if (answer.choice === 'wait' && posted === 'continue') {
+      assert.deepEqual(f.state.decisions[0].label_text, {
+        template: '倾向等用户回复，把握不足，唤醒主持人', params: {},
+      }, 'the uncertain wake-up uses its own whole template, without replacing a substring');
+    }
   });
 }
 

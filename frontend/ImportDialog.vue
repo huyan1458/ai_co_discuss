@@ -4,29 +4,30 @@
  * member whose session was restored on this machine. It cannot be closed until the import ends.
  */
 import { computed, inject } from "vue";
+import { t } from './i18n.js';
 
 const open = defineModel("open", { type: Boolean, default: false });
 const { view } = inject("discussion");
 const progress = computed(() => view.value.import_progress || { done: false, rooms: [], errors: [] });
 const STATUS = {
-  importing: { icon: "i-lucide-loader-circle", label: "导入中" },
-  imported: { icon: "i-lucide-check", label: "已导入" },
-  skipped: { icon: "i-lucide-minus", label: "已存在，跳过" },
-  failed: { icon: "i-lucide-x", label: "导入失败" },
+  importing: { icon: "i-lucide-loader-circle", label: t('导入中') },
+  imported: { icon: "i-lucide-check", label: t('已导入') },
+  skipped: { icon: "i-lucide-minus", label: t('已存在，跳过') },
+  failed: { icon: "i-lucide-x", label: t('导入失败') },
 };
 const description = computed(() => {
-  if (!progress.value.done) return "正在导入，请保持页面打开";
+  if (!progress.value.done) return t('正在导入，请保持页面打开');
   const count = (status) => progress.value.rooms.filter((room) => room.status === status).length;
   const failed = count("failed") + progress.value.errors.length;
-  return [`已导入 ${count("imported")} 个房间`, count("skipped") && `跳过 ${count("skipped")} 个`, failed && `失败 ${failed} 项`].filter(Boolean).join("，");
+  return [t('已导入 {value1} 个房间', { value1: count("imported") }), count("skipped") && t('跳过 {value1} 个', { value1: count("skipped") }), failed && t('失败 {value1} 项', { value1: failed })].filter(Boolean).join("，");
 });
 </script>
 
 <template>
-  <UModal :content="{ onInteractOutside: (event) => event.preventDefault() }" v-model:open="open" title="导入房间" :description="description" :dismissible="progress.done" :close="progress.done"
+  <UModal :content="{ onInteractOutside: (event) => event.preventDefault() }" v-model:open="open" :title="t('导入房间')" :description="description" :dismissible="progress.done" :close="progress.done"
     :ui="{ content: 'glass-panel studio-modal channel-folder-modal channel-import-modal', body: 'dialog-body' }">
     <template #body>
-      <p v-if="!progress.done && !progress.rooms.length" class="channel-import-reading">正在读取备份文件…</p>
+      <p v-if="!progress.done && !progress.rooms.length" class="channel-import-reading">{{ t('正在读取备份文件…') }}</p>
       <ul class="channel-import-list" aria-live="polite">
         <li v-for="(room, index) in progress.rooms" :key="index" class="channel-import-room" :class="`is-${room.status}`">
           <div class="channel-import-head">
@@ -38,7 +39,7 @@ const description = computed(() => {
           <ul v-if="room.members.length" class="channel-import-members">
             <li v-for="member in room.members" :key="member.name" :class="{ 'is-failed': member.failed }">
               <span>{{ member.name }}</span>{{ member.text }}
-              <code v-if="member.resume" :title="`没有开着的原窗口时，在 ${member.resume.cwd} 运行`">{{ member.resume.command }}</code>
+              <code v-if="member.resume" :title="t('没有开着的原窗口时，在 {value1} 运行', { value1: member.resume.cwd })">{{ member.resume.command }}</code>
             </li>
           </ul>
           <p v-for="problem in room.problems" :key="problem" class="channel-import-error">{{ problem }}</p>
@@ -46,7 +47,7 @@ const description = computed(() => {
       </ul>
       <p v-for="error in progress.errors" :key="error" role="alert" class="channel-import-error is-file">{{ error }}</p>
       <div class="dialog-actions">
-        <UButton label="完成" class="channel-primary-button" :disabled="!progress.done" @click="open = false" />
+        <UButton :label="t('完成')" class="channel-primary-button" :disabled="!progress.done" @click="open = false" />
       </div>
     </template>
   </UModal>

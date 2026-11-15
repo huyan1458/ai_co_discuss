@@ -33,14 +33,14 @@ async function submit() {
 </script>
 
 <template>
-  <UModal :content="{ onInteractOutside: (event) => event.preventDefault() }" v-model:open="open" :title="edit ? '编辑 Goal' : continuing ? '继续 Goal' : '开启 Goal'"
-    :description="edit ? '修改目标或上限，下一次唤醒主持人时生效。' : continuing ? '沿用上次的目标和上限重新开启，可先修改；记录全部保留。' : '主持人持续推进这个目标：房间空闲时自动接着做，直到完成、卡住或你结束。'" :ui="{ content: 'glass-panel studio-modal', body: 'dialog-body' }">
+  <UModal :content="{ onInteractOutside: (event) => event.preventDefault() }" v-model:open="open" :title="edit ? t('编辑 Goal') : continuing ? t('继续 Goal') : t('开启 Goal')"
+    :description="edit ? t('修改目标或上限，下一次唤醒主持人时生效。') : continuing ? t('沿用上次的目标和上限重新开启，可先修改；记录全部保留。') : t('主持人持续推进这个目标：房间空闲时自动接着做，直到完成、卡住或你结束。')" :ui="{ content: 'glass-panel studio-modal', body: 'dialog-body' }">
     <template #body>
-      <form class="start-goal" aria-label="Goal 设置" @submit.prevent="submit">
+      <form class="start-goal" :aria-label="t('Goal 设置')" @submit.prevent="submit">
         <GoalConfig ref="config" v-model:objective="objective" v-model:continues="continues" v-model:minutes="minutes" v-model:idle="idle" />
         <div class="start-goal-footer">
-          <UButton label="取消" color="neutral" variant="ghost" @click="open = false" />
-          <UButton type="submit" :icon="edit ? 'i-lucide-check' : 'i-lucide-target'" :label="edit ? '保存' : '开始 Goal'" class="channel-primary-button"
+          <UButton :label="t('取消')" color="neutral" variant="ghost" @click="open = false" />
+          <UButton type="submit" :icon="edit ? 'i-lucide-check' : 'i-lucide-target'" :label="edit ? t('保存') : t('开始 Goal')" class="channel-primary-button"
             :loading="pending === action" :disabled="Boolean(pending) || !objective.trim() || !view.access?.can_manage" />
         </div>
       </form>

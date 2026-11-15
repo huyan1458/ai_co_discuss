@@ -159,6 +159,22 @@ Deploy the Worker before Pages; in the other order the Pages deployment fails be
 
 Older versions also had the live-update object `DiscussionUpdates` (binding `UPDATES`), now removed: if your private configuration binds `UPDATES`, remove it and redeploy Pages before deploying the relay Worker, or Pages loses its binding when the Worker deletes that object.
 
+### Entry for Hosted Accounts (Optional)
+
+If you use hosting and want hosted accounts' users to sign in from outside without your own domain, also deploy the entry Worker (after the relay, since it uses the relay's Durable Object):
+
+```sh
+npx wrangler deploy --config deploy/entry.wrangler.jsonc
+```
+
+It gets its own `workers.dev` address (such as `https://codiscuss-entry.<account-subdomain>.workers.dev`), on a different origin from the online site, so hosted accounts' pages can't reach your paired devices' keys. Put this address in the `vars` of your private configuration and redeploy Pages; the online site then hands it to hosted computers that connect:
+
+```json
+"vars": { "ENTRY_URL": "https://codiscuss-entry.<account-subdomain>.workers.dev" }
+```
+
+To connect a hosted computer: in the admin panel of your computer (the one that deployed the online site), go to **Overview → Hosting → Sign-in entry**, choose **Online relay**, expand **Generate connect code**, fill in the deployment config path and site address, and generate it (wrangler must be signed in; the code is single-use, and generating a new one voids unused ones). Send the code to the hosted computer and paste it into the same window there, then click **Connect and switch**: it binds the site, gets the entry address, starts the needed services and switches over. The link the panel shows carries the computer's ID (`?m=…`); send it to the users. Their requests reach this computer's sign-in entry through the entry Worker and the relay, while sign-in, sessions and entry protection all stay on the computer. Cloudflare can see this traffic (as with a tunnel on your own domain), and every page request counts against the free Workers quota.
+
 ## Troubleshooting
 
 - **`no such table`** — the connected database has no schema yet; check which database your configuration points to.

@@ -5,6 +5,7 @@
  * the latest; or, while broadcasting, announce new replies by their summary along with short room narration.
  */
 import { reactive } from "vue";
+import { t } from './i18n.js';
 
 // Code is skipped; the rest is read as plain text (links and tables by their words).
 const SKIP_SELECTOR = "pre, svg, script, style, button, .katex-mathml";
@@ -328,7 +329,7 @@ export function use_read_aloud({ bridge, container, prepare = async () => {}, me
   function toggle_pause() {
     if (!state.message_id || !element) return;
     if (element.paused) element.play().catch(() => {});
-    else { element.pause(); bridge.notify("info", "已暂停 · 点击高亮文字继续"); }
+    else { element.pause(); bridge.notify("info", t('已暂停 · 点击高亮文字继续')); }
   }
 
   /** A tap on the highlighted sentence pauses or resumes; selecting text does not. */
@@ -360,8 +361,8 @@ export function use_read_aloud({ bridge, container, prepare = async () => {}, me
     if (!("mediaSession" in navigator) || typeof MediaMetadata !== "function") return;
     // Another reader may have taken the lock-screen controls since; whatever plays now answers them.
     bind_media_session();
-    const heading = plan.heading || (plan.id > 0 ? `${bridge.display_name(author(plan.id))} · #${plan.id}` : "共议 · 播报");
-    navigator.mediaSession.metadata = new MediaMetadata({ title: heading, artist: "共议 · 朗读", album: title() });
+    const heading = plan.heading || (plan.id > 0 ? `${bridge.display_name(author(plan.id))} · #${plan.id}` : t('共议 · 播报'));
+    navigator.mediaSession.metadata = new MediaMetadata({ title: heading, artist: t('共议 · 朗读'), album: title() });
     navigator.mediaSession.playbackState = "playing";
   }
 
@@ -484,7 +485,7 @@ export function use_read_aloud({ bridge, container, prepare = async () => {}, me
   function drop_waiting() {
     for (const job of waiting.splice(0)) {
       memory.delete(job.key);
-      job.reject(new Error("朗读已停止"));
+      job.reject(new Error(t('朗读已停止')));
     }
   }
 
@@ -517,7 +518,7 @@ export function use_read_aloud({ bridge, container, prepare = async () => {}, me
       ending = () => done();
       const follow = () => { sync(); frame = requestAnimationFrame(follow); };
       audio.onended = () => done();
-      audio.onerror = () => done(new Error("音频无法播放"));
+      audio.onerror = () => done(new Error(t('音频无法播放')));
       switching = true;
       audio.src = url;
       audio.play().then(() => { switching = false; follow(); }, (error) => { switching = false; done(error); });
@@ -542,7 +543,7 @@ export function use_read_aloud({ bridge, container, prepare = async () => {}, me
     const message = message_of(id);
     if (!message) return null;
     const name = bridge.display_name(message.author);
-    const prefix = message.kind === "moderation" ? `主持人 ${name}：` : `${name}：`;
+    const prefix = message.kind === "moderation" ? t('主持人 {value1}：', { value1: name }) : `${name}：`;
     const speaker = await voice_for(message.author);
     const summary = summary_of(id), body = body_of(id);
     let sentences = summary ? split_sentences(collect_text(summary)) : body ? split_sentences(collect_text(body)) : [];
@@ -554,7 +555,7 @@ export function use_read_aloud({ bridge, container, prepare = async () => {}, me
         first.push(sentence);
         if (sentence.paragraph_end && readable_length(first.map((item) => item.text).join("")) >= BRIEF_MIN_FIRST) break;
       }
-      sentences = [...first, spoken(`全文约 ${Math.round(length / 100) * 100 || length} 字，点开查看。`)];
+      sentences = [...first, spoken(t('全文约 {value1} 字，点开查看。', { value1: Math.round(length / 100) * 100 || length }))];
     }
     if (!sentences.length) return null;
     return { id, chunks: chunks_of(sentences, prefix), speaker, pending: [] };
@@ -597,6 +598,8 @@ export function use_read_aloud({ bridge, container, prepare = async () => {}, me
       state.loading = false;
       if (token !== run) return false;
       if (heard && waited > HEARD_WAIT_SECONDS) lead_after_wait(waited);
+      // Pausing has no button of its own, so each reading on request says how as its first audio starts.
+      if (!heard && state.reading) bridge.notify("info", t('点击高亮文字可暂停或继续'));
       heard = true;
       await play(chunks[index], audio, (left) => {
         let next = index + 1;
@@ -656,7 +659,7 @@ export function use_read_aloud({ bridge, container, prepare = async () => {}, me
     const replies = queue.filter((item) => item.message_id);
     if (replies.length > BACKLOG_LIMIT) {
       const kept = new Set(replies.slice(-BACKLOG_LIMIT));
-      queue = [{ text: `有 ${replies.length} 条新回复，播最新 ${BACKLOG_LIMIT} 条。` }, ...queue.filter((item) => !item.message_id || kept.has(item))];
+      queue = [{ text: t('有 {value1} 条新回复，播最新 {value2} 条。', { value1: replies.length, value2: BACKLOG_LIMIT }) }, ...queue.filter((item) => !item.message_id || kept.has(item))];
     }
     drain();
   }
@@ -678,7 +681,7 @@ export function use_read_aloud({ bridge, container, prepare = async () => {}, me
         state.message_id = 0;
       }
     } catch (error) {
-      if (token === run) bridge.notify("error", `播报失败：${error.message}`);
+      if (token === run) bridge.notify("error", t('播报失败：{value1}', { value1: error.message }));
     } finally {
       draining = false;
       if (token === run) { state.message_id = 0; highlight(null); }
@@ -702,7 +705,8 @@ export function use_read_aloud({ bridge, container, prepare = async () => {}, me
     // One context for the whole pass, so the service carries tone across paragraphs and messages.
     const section_id = crypto.randomUUID();
     const prefix_of = (id) => `${bridge.display_name(author(id))}：`;
-    Object.assign(state, { message_id, reading: true, following: false });
+    // Loading from the click until a paragraph's audio arrives: planning and the first synthesis can take seconds.
+    Object.assign(state, { message_id, loading: true, reading: true, following: false });
     try {
       // The author is named even from a selection at the very start, so those requests match a plain reading's.
       let plan = await plan_message(message_id, from, prefix_of(message_id));
@@ -729,7 +733,7 @@ export function use_read_aloud({ bridge, container, prepare = async () => {}, me
         plan = next ? (ready?.id === next ? ready : await plan_message(next, 0, prefix_of(next))) : null;
       }
     } catch (error) {
-      if (token === run) bridge.notify("error", `朗读失败：${error.message}`);
+      if (token === run) bridge.notify("error", t('朗读失败：{value1}', { value1: error.message }));
     }
     if (token === run) stop();
   }
@@ -746,7 +750,7 @@ export function use_read_aloud({ bridge, container, prepare = async () => {}, me
     heard = false;
     unlock();
     claim();
-    Object.assign(state, { message_id: DOCUMENT_ID, reading: true, following: false });
+    Object.assign(state, { message_id: DOCUMENT_ID, loading: true, reading: true, following: false });
     try {
       const flat = collect_text(root);
       const base = skip_readable(flat.text, skip);
@@ -755,7 +759,7 @@ export function use_read_aloud({ bridge, container, prepare = async () => {}, me
       document_plan = plan;
       if (token === run) { show_on_lock_screen(plan); await read_plan(plan, token, crypto.randomUUID(), () => {}); }
     } catch (error) {
-      if (token === run) bridge.notify("error", `朗读失败：${error.message}`);
+      if (token === run) bridge.notify("error", t('朗读失败：{value1}', { value1: error.message }));
     }
     if (token === run) stop();
   }

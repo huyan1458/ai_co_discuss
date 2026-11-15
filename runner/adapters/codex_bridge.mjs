@@ -3,7 +3,8 @@
  * its event handling while the owner can interject mid-turn (`turn/steer`), which `codex exec` cannot take.
  *
  * usage: node codex_bridge.mjs <codex executable> [codex app-server options...]
- * stdin: first line `{prompt, thread_id?, cwd, model?, effort?, full?}`; every later line `{steer: text}`.
+ * stdin: first line `{prompt, thread_id?, cwd, model?, effort?, full?, images?}` (`images`: local image paths sent with
+ * the prompt); every later line `{steer: text}`.
  * stdout: `thread.started`, `turn.started`, `item.started|completed`, `turn.completed|failed`, `error` events in the
  * shape `codex exec --json` prints. The process exits when the turn ends; exit 1 with the reason on stderr otherwise.
  * One process per execution: an app-server keeps the thread it loaded as its writer until it exits.
@@ -115,7 +116,9 @@ async function start(task) {
     : await request('thread/start', { cwd: task.cwd, ...access });
   thread_id = opened.thread.id;
   emit({ type: 'thread.started', thread_id });
-  const started = await request('turn/start', { threadId: thread_id, input: [{ type: 'text', text: task.prompt }],
+  // The task's images go in as `localImage` inputs after the text, as a screenshot attached in Codex itself does.
+  const images = (Array.isArray(task.images) ? task.images : []).map(path => ({ type: 'localImage', path }));
+  const started = await request('turn/start', { threadId: thread_id, input: [{ type: 'text', text: task.prompt }, ...images],
     ...(task.model ? { model: task.model } : {}), ...(task.effort ? { effort: task.effort } : {}) });
   turn_id = started.turn.id;
   for (const text of queued_steers.splice(0)) await steer(text);

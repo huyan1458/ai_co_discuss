@@ -78,6 +78,13 @@ class AdminTests(unittest.TestCase):
         self.assertNotIn("token", result, "the page never sees the login token")
         return self.cookie
 
+    def test_error_text_retains_chinese_and_parameters(self):
+        """Validation errors preserve the legacy string and carry a translatable template."""
+        status, result = self.request("/api/admin/register", {"username": "x" * 31, "password": PASSWORD, "setup_key": SETUP_KEY})
+        self.assertEqual(status, 400)
+        self.assertEqual(result["error"], "用户名需为 1–30 个字符")
+        self.assertEqual(result["error_text"], {"template": "用户名需为 1–{value1} 个字符", "params": {"value1": 30}})
+
     def login(self, password=PASSWORD):
         status, result = self.request("/api/admin/login", {"username": "老板", "password": password})
         self.assertEqual(status, 200, result)

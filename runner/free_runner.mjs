@@ -1,19 +1,21 @@
 /** Free-room delivery: one live execution per member, carrying all of that member's open requests. */
 import { spawnSync } from 'node:child_process';
 import { createHash, randomUUID } from 'node:crypto';
-import { appendFileSync, existsSync, mkdirSync, readFileSync, statSync } from 'node:fs';
+import { appendFileSync, existsSync, mkdirSync, readdirSync, readFileSync, rmSync, statSync, writeFileSync } from 'node:fs';
 import { basename, join, resolve } from 'node:path';
-import { adapter_of, BRANCHABLE_ADAPTERS, branch_session, capabilities_of, cleanup_room, deliver_task, delivery_receipt, session_exists, stored_delivery } from './adapters/index.mjs';
-import { api, overlapping_directories, read_rule } from './discussion_runner.mjs';
+import { adapter_of, BRANCHABLE_ADAPTERS, branch_session, capabilities_of, cleanup_room, deliver_task, delivery_receipt, session_exists, stored_delivery, takes_images } from './adapters/index.mjs';
+import { api as raw_api, overlapping_directories, read_rule } from './discussion_runner.mjs';
 import { SegmentLog } from './execution_progress.mjs';
 import { free_task_text, TASK_SUBCOMMANDS, with_expert_prompt } from './expert_prompts.mjs';
-import { entry_access } from './entry_client.mjs';
+import { entry_access, site_fetch } from './entry_client.mjs';
 import { atomic_json } from './files.mjs';
 import { image_settings } from './image_service.mjs';
 import { outside_directory, room_directories } from './project_files.mjs';
 import { SessionDriver } from './session_driver.mjs';
 import { effective_profile, load_room_workflow, workflow_in_use, workflow_task_field } from './workflows.mjs';
 import { DEFAULT_SCHEDULER_MODE, GOAL_PROMPT_VERSION, decide_goal_wake, decide_sequence_checkpoint, REVIEW_CONFIDENCE, REVIEW_PROMPT_VERSION, SEQUENCE_CONFIDENCE, SEQUENCE_PROMPT_VERSION, ROUTE_CONFIDENCE, ROUTE_CONTEXT_MESSAGES, decide_review_completion, route_free_message, route_prompt_version, scheduler_thresholds, some_members } from './scheduler.mjs';
+import { room_text, room_payload } from './room_text.mjs';
+const api = (config, path, payload, ...options) => raw_api(config, path, room_payload(payload), ...options);
 
 const PACKAGE_VERSION = JSON.parse(readFileSync(new URL('../package.json', import.meta.url), 'utf8')).version;
 const RENEW_MS = 30_000;
@@ -39,12 +41,18 @@ const RETRY_DELAY_SECONDS = 60;
 // The cause is gone once the restarted runner is back, so its retry needs no long wait.
 const RESTART_RETRY_DELAY_SECONDS = 5;
 // The retry reason the site keeps for an execution a runner restart cut off; its redelivery asks to continue.
-const RESTART_REASON = '本机接入程序重启或异常退出，这次执行的软件进程已结束，未提交回答';
+const RESTART_REASON = room_text("本机接入程序重启或异常退出，这次执行的软件进程已结束，未提交回答");
+const RESTART_REASON_CODE = 'runner_restarted';
 const MAX_RETRY_REASON = 500;
 const LIVE = ['reserving', 'delivering', 'sidecar_pending', 'running', 'retry_wait'];
 // The longest private chat reply the site keeps.
 const CHAT_REPLY_LIMIT = 20000;
 const MAX_HASHED_BYTES = 5 * 1024 * 1024;
+// Attachments of the messages that woke an execution are fetched before delivery; one slow file fails alone.
+const ATTACHMENT_TIMEOUT_MS = 60_000;
+const MAX_MESSAGE_FILES = 10;
+// The image types the site accepts that a model reads as an image; other files go to the member by path only.
+const IMAGE_TYPES = new Set(['image/png', 'image/jpeg', 'image/gif', 'image/webp']);
 const GIT_TIMEOUT_MS = 15_000;
 
 /** Fingerprint configurations whose adapter can enforce project read-only access; no local paths leave this function. */
@@ -137,8 +145,53 @@ function extra_change(directory, path) {
 }
 
 /** Write a non-secret task and a member-only credential file for one execution. */
+/** `[图片 #n]` / `[文件 #n]`: how a message's n-th attachment is named in its text and in the task, as on the page. */
+export function attachment_placeholder(file, number) {
+  return `[${IMAGE_TYPES.has(file.content_type) ? '图片' : '文件'} #${number}]`;
+}
+
+/**
+ * Download the attachments of the messages that woke this execution into its own folder, checked against their SHA-256,
+ * so the member reads local copies and software that takes images gets them with the task. A file that cannot be fetched
+ * keeps an empty path and its reason; the member can still fetch it with `attachment download`.
+ *
+ * @returns {Promise<Array<{message_id: number, number: number, placeholder: string, file_name: string,
+ *   content_type: string, size: number, id: string, path: string, error?: string}>>}
+ */
+export async function request_attachments(config, execution) {
+  const message_ids = [...new Set((execution.requests || []).map(item => item.message_id).filter(Number.isInteger))];
+  const result = [];
+  for (const message_id of message_ids) {
+    let files = [];
+    try { files = (await api(config, `/attachments?message_id=${message_id}`)).attachments || []; }
+    catch { continue; }
+    for (const [index, file] of files.slice(0, MAX_MESSAGE_FILES).entries()) {
+      const entry = { message_id, number: index + 1, placeholder: attachment_placeholder(file, index + 1), file_name: file.file_name,
+        content_type: file.content_type, size: file.size, id: file.id, path: '' };
+      try { entry.path = await save_attachment(config, execution.id, message_id, entry, file.sha256); }
+      catch (error) { entry.error = error.message; }
+      result.push(entry);
+    }
+  }
+  return result;
+}
+
+async function save_attachment(config, execution_id, message_id, entry, sha256) {
+  const response = await site_fetch(`${config.site}/api/rooms/${config.room}/attachments/${entry.id}/content`, {
+    redirect: 'error', signal: AbortSignal.timeout(ATTACHMENT_TIMEOUT_MS), headers: { 'X-Discussion-Token': config.token } });
+  if (!response.ok) throw new Error(`HTTP ${response.status}`);
+  const data = Buffer.from(await response.arrayBuffer());
+  if (createHash('sha256').update(data).digest('hex') !== sha256) throw new Error('下载内容与 SHA-256 不符');
+  const folder = join(config.directory, `free-${execution_id}-files`);
+  mkdirSync(folder, { recursive: true });
+  const safe_name = basename(entry.file_name).replace(/[<>:"/\\|?*\x00-\x1f]/g, '_').slice(-120) || 'file';
+  const path = join(folder, `${message_id}-${entry.number}-${safe_name}`);
+  writeFileSync(path, data, { mode: 0o600 });
+  return path;
+}
+
 export function free_task_files(config, member, execution, binding, { session = null, suggestions = [], reviews = [], stopped = [], process_access = true,
-  workflow = null, room_members = [], goal = null } = {}) {
+  workflow = null, room_members = [], goal = null, attachments = [] } = {}) {
   const id = `free-${execution.id}`;
   const draft_directory = config.draft_directory || `${config.directory}-drafts`;
   mkdirSync(draft_directory, { recursive: true });
@@ -162,7 +215,11 @@ export function free_task_files(config, member, execution, binding, { session = 
   const { instructions, prompt } = free_task_text({ name: member.label || member.name, role: member.role, discussion: direct_question,
     discussion_request, profile, cli,
     room: config.room, messages, read_after: execution.read_until, execution_id: execution.id, task_path,
-    access_file: bound_access ? '' : access_path, read_rule: read_rule(profile.adapter), inbox, extra_directories });
+    access_file: bound_access ? '' : access_path, read_rule: read_rule(profile.adapter), inbox, extra_directories, attachments });
+  // Software that declares it takes images gets them with the prompt, like a screenshot pasted into its own window.
+  const images = takes_images(profile) && !inbox
+    ? attachments.filter(item => item.path && IMAGE_TYPES.has(item.content_type)).map(item => ({ path: item.path, content_type: item.content_type, size: item.size }))
+    : [];
   const skills = discussion_request || direct_question
     ? ['discuss-participant/SKILL.md', 'discuss-session/SKILL.md',
       ...member.role === 'host' ? ['discuss-host/SKILL.md', 'discuss-session/references/host.md'] : [],
@@ -181,6 +238,7 @@ export function free_task_files(config, member, execution, binding, { session = 
   const image = config.image_generation && image_settings(config.api_home).configured ? image_settings(config.api_home) : null;
   atomic_json(task_path, { site: config.site, room: config.room, mode: 'free', member: member.name,
     execution_id: execution.id, requests, request_messages: execution.requests.map(item => item.message_id),
+    ...(attachments.length ? { attachments } : {}),
     request_purposes: execution.requests.map(item => item.purpose || 'ask'),
     ...(discussion_request ? { discussion_request } : {}),
     ...(session ? { session: { id: session.id, status: session.status, phase: session.phase,
@@ -201,7 +259,7 @@ export function free_task_files(config, member, execution, binding, { session = 
     cli, subcommands: TASK_SUBCOMMANDS,
     ...(bound_access ? { access_env: 'DISCUSS_ACCESS_FILE' } : { access_file: access_path }), instructions });
   return { id, participant: member.name, directory: config.directory, draft_directory, extra_directories, ...(goal_field ? { goal: goal_field } : {}),
-    skill_directories: [skills_directory, ...(host_workflow ? [host_workflow.directory] : [])], access_path, prompt: with_expert_prompt(prompt, profile), inbox,
+    skill_directories: [skills_directory, ...(host_workflow ? [host_workflow.directory] : [])], access_path, prompt: with_expert_prompt(prompt, profile), inbox, images,
     profile, ...(workflow_field ? { workflow: { ...workflow_field, skill: host_workflow.skill, ...api_sub_workflows(workflow_field, host_workflow) } } : {}) };
 }
 
@@ -344,6 +402,16 @@ export class FreeRoomRunner {
     return next;
   }
   /**
+   * Drop what this machine kept under a member name (its session binding, context and delivery record), for a new
+   * member that took over the name of a removed one: the old conversation must neither be resumed nor block it.
+   */
+  forget_member(name) {
+    this.store.db.prepare('DELETE FROM metadata WHERE key=?').run(`member-context:${name}`);
+    this.store.db.prepare('DELETE FROM bindings WHERE participant=?').run(name);
+    this.store.db.prepare('DELETE FROM free_deliveries WHERE member=?').run(name);
+    this.context_errors.delete(name);
+  }
+  /**
    * Take a changed configuration while running: new members are added, but a member whose
    * project, cwd or bound session changed is blocked instead of silently reusing its conversation.
    */
@@ -379,7 +447,7 @@ export class FreeRoomRunner {
       room = await api(this.config, '');
     }
     catch (error) {
-      if (error.message === 'HTTP 404: 房间不存在') cleanup_room(this.config.directory);
+      if ((error.status || Number(/^HTTP (\d{3})\b/.exec(error.message)?.[1])) === 404) cleanup_room(this.config.directory);
       throw error;
     }
     if (!inbox.archived) await this.sync_review_capabilities(inbox);
@@ -410,6 +478,7 @@ export class FreeRoomRunner {
       if (LIVE.includes(row.status) && !present.has(row.member)) { this.stop_member(row.member); this.save(row.member, { status: 'idle' }); }
     }
     await this.report_finished(active);
+    this.sweep_attachments();
     await this.deliver_interjections(inbox.executions);
     const pending_stops = await this.report_stops(active);
     // Start in the room's speaking order: execution ids follow it, and the website lays out working cards by them.
@@ -475,7 +544,7 @@ export class FreeRoomRunner {
       const pending = this.mark_routing(request.message_id, true).then(judge)
         .catch(error => {
           this.save_suggestion(request, { action: 'host', actual_action: 'host', applied: false,
-            model_judgment: false, reason: `没有模型判断：${error.message}` });
+            model_judgment: false, reason: room_text("没有模型判断：{value1}", { value1: error.message }) });
           this.store.db.prepare('INSERT OR REPLACE INTO metadata VALUES (?,?)').run(key, JSON.stringify({ done: true }));
           this.log(`${scene === 'review' ? '评审交接' : '循环检查点'} #${request.message_id} 交给主持人：${error.message}`);
         }).finally(() => { this.routing.delete(request.id); return this.mark_routing(request.message_id, false); });
@@ -496,7 +565,7 @@ export class FreeRoomRunner {
     }
     const { decision } = job;
     this.save_suggestion(request, { action: decision.action, actual_action: 'unverified', applied: false,
-      model_judgment: Boolean(decision.detail), reason: '自动评审交接结果尚未核验' });
+      model_judgment: Boolean(decision.detail), reason: room_text("自动评审交接结果尚未核验") });
     const outcome = decision.action === 'review' ? await this.apply_review(host, request, job)
       : { applied: false, actual_action: 'host', reason: decision.label };
     const label = outcome.applied ? decision.label : outcome.reason;
@@ -525,7 +594,7 @@ export class FreeRoomRunner {
       try {
         await api({ ...this.config, token: this.config.members[host.name].token }, '/sequences/continue', { actor: host.name, request_id: request.id });
         outcome = { applied: true, actual_action: 'continue' };
-      } catch (error) { outcome = { applied: false, actual_action: 'host', reason: `未自动开始下一圈：${error.message}` }; }
+      } catch (error) { outcome = { applied: false, actual_action: 'host', reason: room_text("未自动开始下一圈：{value1}", { value1: error.message }) }; }
     }
     const label = outcome.applied ? decision.label : outcome.reason;
     // The decision sits under the answer it read: the last one of the pass.
@@ -537,7 +606,7 @@ export class FreeRoomRunner {
   }
   /** Advance only the judged revision; inspect an uncertain write using its persisted submission id. */
   async apply_review(host, request, job) {
-    if (job.profiles !== JSON.stringify(this.config.participants)) return { applied: false, actual_action: 'host', reason: '本机成员配置已变化，未自动交评审' };
+    if (job.profiles !== JSON.stringify(this.config.participants)) return { applied: false, actual_action: 'host', reason: room_text("本机成员配置已变化，未自动交评审") };
     try {
       await api({ ...this.config, token: this.config.members[host.name].token }, '/reviews/advance', {
         actor: host.name, batch_id: request.review.batch_id, revision: job.revision, submission_id: job.submission_id,
@@ -547,8 +616,8 @@ export class FreeRoomRunner {
       try {
         const state = await api(this.config, `/reviews/${request.review.batch_id}/ready`);
         if (state.plan.advance_submission === job.submission_id) return { applied: true, actual_action: 'review' };
-        return { applied: false, actual_action: 'host', reason: `未自动交评审：${error.message}` };
-      } catch { return { applied: false, actual_action: 'unverified', reason: `评审交接写入结果未核验：${error.message}` }; }
+        return { applied: false, actual_action: 'host', reason: room_text("未自动交评审：{value1}", { value1: error.message }) };
+      } catch { return { applied: false, actual_action: 'unverified', reason: room_text("评审交接写入结果未核验：{value1}", { value1: error.message }) }; }
     }
   }
   /**
@@ -660,7 +729,7 @@ export class FreeRoomRunner {
         .then(() => this.recommend(request, room, everyone))
         .catch(error => {
           if (!this.saved_suggestion(request.id)) this.save_suggestion(request, { action: 'host', actual_action: 'host',
-            applied: false, model_judgment: false, reason: `没有模型判断：${error.message}` });
+            applied: false, model_judgment: false, reason: room_text("没有模型判断：{value1}", { value1: error.message }) });
           this.log(`智能调度 #${request.message_id} 未给出推荐：${error.message}`);
         })
         .finally(() => { this.routing.delete(request.id); return this.mark_routing(request.message_id, false); });
@@ -744,7 +813,7 @@ export class FreeRoomRunner {
     const decision = await route_free_message(this.config.api_home, this.config.scheduler,
       { title: room.title, goal: room.goal, context: page.messages, message, host, members }, this.fetch);
     this.save_suggestion(request, { action: decision.action, actual_action: 'unverified', applied: false,
-      model_judgment: true, reason: '判断已产生，自动动作结果尚未核验' });
+      model_judgment: true, reason: room_text("判断已产生，自动动作结果尚未核验") });
     this.log(`智能调度 #${message.id}：${decision.action}${decision.member ? ` ${decision.member}` : ''}（选择 ${decision.choice ?? '-'}，置信度 ${decision.confidence ?? '-'}）`);
     if (decision.action === 'host') return this.record_route(request, decision, route_host_label(decision, host.name, members), false);
     if (decision.action !== 'member') {
@@ -752,7 +821,7 @@ export class FreeRoomRunner {
       const applied = await api(this.config, `/recommendations/${message.id}`, { action: decision.action, ...(decision.members ? { members: decision.members } : {}) })
         .then(() => true, error => { this.log(`智能调度 #${message.id} 未能改派：${error.message}`); return false; });
       const names = described.map(member => member.name).join('、');
-      const label = decision.action === 'all' ? `请全体各自回应（${names}）` : decision.action === 'sequential' ? '请全体按发言顺序依次回应' : decision.action === 'some' ? `请 ${decision.members.join('、')} 各自回应` : '无需回应，未唤醒任何成员';
+      const label = decision.action === 'all' ? room_text('请全体各自回应（{names}）', { names }) : decision.action === 'sequential' ? room_text('请全体按发言顺序依次回应') : decision.action === 'some' ? room_text('请 {names} 各自回应', { names: decision.members.join('、') }) : room_text('无需回应，未唤醒任何成员');
       return this.record_route(request, decision, applied ? label : `${label}（未生效，仍由主持人处理）`, applied);
     }
     try {
@@ -805,7 +874,7 @@ export class FreeRoomRunner {
       try { await this.check_review_delivery(member, review_request); }
       catch (error) { return this.reject_review(member, execution, error.message); }
     }
-    if (!adapter) return this.fail(member.name, execution.id, `未配置 ${member.name} 的本机接入`);
+    if (!adapter) return this.fail(member.name, execution.id, room_text("未配置 {value1} 的本机接入", { value1: member.name }));
     if (this.context_errors.has(member.name)) return this.fail(member.name, execution.id, this.context_errors.get(member.name));
     const directory = capabilities_of(adapter.adapter).project ? adapter.cwd ?? this.config.cwd : undefined;
     // A read-only member's software cannot write the project, so files changing meanwhile were written by someone else.
@@ -842,19 +911,21 @@ export class FreeRoomRunner {
       // An unreadable workflow leaves members on their room settings; it is logged once per error, not every execution.
       if (workflow?.error && this.workflow_error !== workflow.error) this.log(`工作流 ${workflow.id} 不可用：${workflow.error}`);
       this.workflow_error = workflow?.error || '';
+      const attachments = await request_attachments(this.config, execution);
       const task = free_task_files(this.config, member, execution, binding, {
         session, suggestions: scheduler_suggestions, reviews: review_handoffs, stopped, workflow, room_members: this.room?.members,
-        goal: this.room?.goal_state?.goal || null,
+        goal: this.room?.goal_state?.goal || null, attachments,
       });
       invoked = true;
       this.segments.start(execution.id);
       if (warning) this.note(execution.id, warning);
-      const result = await this.deliver(review_request ? structuredClone(task.profile) : task.profile, binding, { ...task, ...(resume ? { prompt: resume } : preface ? { prompt: preface + task.prompt } : {}), room_title: this.room_title,
+      const result = await this.deliver(review_request ? structuredClone(task.profile) : task.profile, binding, { ...task, ...(resume ? { prompt: resume, images: [] } : preface ? { prompt: preface + task.prompt } : {}), room_title: this.room_title,
         ...(review_request ? { before_model_start: () => this.check_review_delivery(member, review_request) } : {}),
         api_context: { site: this.config.site, room: this.config.room, token: this.config.members[member.name].token,
           home: this.config.api_home, mode: 'free', role: member.role || 'member', execution_id: execution.id,
           cwd: directory, project_access: adapter.project_access, extra_directories: task.extra_directories,
           requests: execution.requests, read_after: execution.read_until, session, discussion_request: session_request,
+          ...(attachments.length ? { attachments: attachments.map(({ path, error, ...item }) => item) } : {}),
           scheduler_suggestions, review_handoffs, ...(task.workflow ? { workflow: task.workflow } : {}),
           // Commands the enabled workflow registers; software with its own command line ignores them.
           ...(workflow?.commands?.length ? { commands: { directory: workflow.directory, list: workflow.commands } } : {}),
@@ -902,9 +973,9 @@ export class FreeRoomRunner {
       if (adapter.project_access === 'own') return this.retry_or_fail(member.name, execution, `投递失败：${error.message}`);
       const attempts = (this.row(member.name)?.attempts || 0) + 1;
       if ((invoked && error.delivery_status !== 'not_sent') || attempts >= MAX_DELIVERY_ATTEMPTS) {
-        return this.fail(member.name, execution.id, `投递失败：${error.message}`);
+        return this.fail(member.name, execution.id, room_text("投递失败：{value1}", { value1: error.message }));
       }
-      await api(this.config, `/executions/${execution.id}`, { action: 'release', reason: `确认未送达：${error.message}` });
+      await api(this.config, `/executions/${execution.id}`, { action: 'release', reason: room_text("确认未送达：{value1}", { value1: error.message }) });
       this.save(member.name, { status: 'idle', attempts, error: error.message });
     }
   }
@@ -932,7 +1003,7 @@ export class FreeRoomRunner {
         const state = await api(this.config, `/reviews/${batch_id}/ready`);
         reviews.push({ batch_id, request_id: request.id, ready: state.ready, reason: state.reason,
           reviewer: state.plan.reviewer_name, scope: state.plan.scope });
-      } catch (error) { reviews.push({ batch_id, request_id: request.id, ready: false, reason: `无法读取评审推进状态：${error.message}` }); }
+      } catch (error) { reviews.push({ batch_id, request_id: request.id, ready: false, reason: room_text("无法读取评审推进状态：{value1}", { value1: error.message }) }); }
     }
     return reviews;
   }
@@ -976,17 +1047,19 @@ export class FreeRoomRunner {
     }
     if (row.status === 'retry_wait') {
       const retry = execution.retry;
-      if (retry?.stopped) return this.fail(member.name, execution.id, `${retry.reason}（已停止自动重试）`);
+      if (retry?.stopped) return this.fail(member.name, execution.id, room_text("{value1}（已停止自动重试）", { value1: retry.reason }));
       if (retry?.retry_at && Date.now() >= retry.retry_at * 1000) {
         await api(this.config, `/executions/${execution.id}`, { action: 'retry_start' });
         this.save(member.name, { status: 'delivering' });
         // Read from the site's retry record, so a second restart during the wait still delivers it as a continuation.
-        const preface = retry?.reason === RESTART_REASON ? restart_notice(execution.id) : '';
+        const reason_code = this.store.db.prepare('SELECT value FROM metadata WHERE key=?').get(`retry-reason:${execution.id}`)?.value;
+        this.store.db.prepare('DELETE FROM metadata WHERE key=?').run(`retry-reason:${execution.id}`);
+        const preface = reason_code === RESTART_REASON_CODE ? restart_notice(execution.id) : '';
         return this.invoke(member, await api(this.config, `/executions/${execution.id}`), { preface });
       }
     }
     // A restart between persisting and invoking cannot prove non-delivery, so it never resends.
-    if (row.status === 'delivering') return this.fail(member.name, execution.id, '上次投递结果不明，未自动重发；请核对原会话后重新发送');
+    if (row.status === 'delivering') return this.fail(member.name, execution.id, room_text("上次投递结果不明，未自动重发；请核对原会话后重新发送"));
     if (execution.paused_at) {
       // A paused turn ending is not a failure: the execution waits, renewed, for the owner's words.
       if (await this.hold_paused(member, row, execution)) return;
@@ -1003,9 +1076,7 @@ export class FreeRoomRunner {
         if (['dispatched', 'started'].includes(latest.status) && !denial && await this.capture_reply(member.name, execution.id)) {
           return this.save(member.name, { status: 'idle' });
         }
-        if (['dispatched', 'started'].includes(latest.status)) return this.fail(member.name, execution.id, denial
-          ? `${member.name} ${denial}，未提交本次回答`
-          : `${member.name} 会话已结束，但未提交本次回答；请核对原会话确认是否已有内容`);
+        if (['dispatched', 'started'].includes(latest.status)) return this.fail(member.name, execution.id, denial ? room_text("{value1} {value2}，未提交本次回答", { value1: member.name, value2: denial }) : room_text("{value1} 会话已结束，但未提交本次回答；请核对原会话确认是否已有内容", { value1: member.name }));
         return this.save(member.name, { status: 'idle' });
       }
     }
@@ -1243,11 +1314,13 @@ export class FreeRoomRunner {
     const not_started = this.not_started.delete(execution.id);
     if (this.not_retryable.delete(execution.id)) return this.fail(name, execution.id, reason);
     if (!restarted && this.config.participants[name]?.project_access !== 'own' && !not_started) return this.fail(name, execution.id, reason);
-    if (attempt > MAX_DELIVERY_RETRIES) return this.fail(name, execution.id, `${reason}（已自动重试 ${MAX_DELIVERY_RETRIES} 次）`);
+    if (attempt > MAX_DELIVERY_RETRIES) return this.fail(name, execution.id, room_text("{value1}（已自动重试 {value2} 次）", { value1: reason, value2: MAX_DELIVERY_RETRIES }));
     this.stop_member(name);
     this.exited.delete(execution.id);
     this.replies.delete(execution.id);
     this.denied.delete(execution.id);
+    this.store.db.prepare('INSERT INTO metadata VALUES (?,?) ON CONFLICT(key) DO UPDATE SET value=excluded.value')
+      .run(`retry-reason:${execution.id}`, restarted ? RESTART_REASON_CODE : 'delivery_failed');
     await api(this.config, `/executions/${execution.id}`, { action: 'retry_wait', attempt,
       retry_at: Math.floor(Date.now() / 1000) + (restarted ? RESTART_RETRY_DELAY_SECONDS : RETRY_DELAY_SECONDS), reason: reason.slice(0, MAX_RETRY_REASON) });
     this.save(name, { status: 'retry_wait', error: '' });
@@ -1273,6 +1346,15 @@ export class FreeRoomRunner {
    * Hand the owner's pending interjections to the software running each execution, in order, through the steer handle
    * its delivery returned; report each as delivered or failed. A handle is dropped once its execution is no longer live.
    */
+  /** Remove the attachment copies of executions that are no longer live; a live one may still be reading them. */
+  sweep_attachments() {
+    let names;
+    try { names = readdirSync(this.config.directory).filter(name => /^free-\d+-files$/.test(name)); } catch { return; }
+    if (!names.length) return;
+    const live = new Set(this.store.db.prepare('SELECT * FROM free_deliveries').all()
+      .filter(row => LIVE.includes(row.status)).map(row => `free-${row.execution_id}-files`));
+    for (const name of names) if (!live.has(name)) rmSync(join(this.config.directory, name), { recursive: true, force: true });
+  }
   async deliver_interjections(executions) {
     const live = new Set(executions.map(item => item.id));
     for (const id of this.steers.keys()) if (!live.has(id)) this.steers.delete(id);
@@ -1284,9 +1366,9 @@ export class FreeRoomRunner {
         let report = this.interjecting.get(interjection.id);
         if (!report) {
           const steer = this.steers.get(execution.id);
-          report = { status: 'failed', reason: '本次投递不支持执行中插话' };
+          report = { status: 'failed', reason: room_text("本次投递不支持执行中插话") };
           if (steer) {
-            try { report = await steer(interjection.text) ? { status: 'delivered' } : { status: 'failed', reason: '它已结束本轮，插话未送达' }; }
+            try { report = await steer(interjection.text) ? { status: 'delivered' } : { status: 'failed', reason: room_text("它已结束本轮，插话未送达") }; }
             catch (error) { report = { status: 'failed', reason: String(error.message).slice(0, 400) }; }
           }
           this.interjecting.set(interjection.id, report);
@@ -1310,7 +1392,7 @@ export class FreeRoomRunner {
         continue;
       }
       for (const chat of chats) {
-        if (chat.status === 'running' && chat.id !== live?.id) await this.chat_report(chat.id, { action: 'fail', reason: '本机服务重启，这轮私聊已中断' });
+        if (chat.status === 'running' && chat.id !== live?.id) await this.chat_report(chat.id, { action: 'fail', reason: room_text("本机服务重启，这轮私聊已中断") });
         else if (chat.status === 'pending' && live?.steer && !live.steered.has(chat.id)) {
           live.steered.add(chat.id);
           if (await live.steer(chat.text)) await this.chat_report(chat.id, { action: 'steered' });
@@ -1327,7 +1409,7 @@ export class FreeRoomRunner {
     const binding = this.store.binding(member.name) || {};
     const adapter = profile && adapter_of(profile.adapter);
     if (!adapter || !capabilities_of(profile.adapter).chat || (!adapter.chat && adapter.into_window?.(profile, binding))) {
-      return this.chat_report(chat.id, { action: 'fail', reason: '这位成员的接入方式看不到它的输出，暂不支持私聊窗；可在它自己的窗口里对话' });
+      return this.chat_report(chat.id, { action: 'fail', reason: room_text("这位成员的接入方式看不到它的输出，暂不支持私聊窗；可在它自己的窗口里对话") });
     }
     if (!await this.chat_report(chat.id, { action: 'start' })) return;
     const turn = { id: chat.id, child: null, steer: null, steered: new Set() };
@@ -1356,7 +1438,7 @@ export class FreeRoomRunner {
       this.chat_turns.delete(member.name);
       const reply = notes.at(-1);
       await this.chat_report(chat.id, !error && reply ? { action: 'reply', text: reply.slice(0, CHAT_REPLY_LIMIT) }
-        : { action: 'fail', reason: String(error || '它没有给出文字回复').slice(0, 400) });
+        : { action: 'fail', reason: String(error || room_text('它没有给出文字回复')).slice(0, 400) });
     });
   }
   /** Tell the site how one chat line went; false when the site refused it (the owner already stopped it). */

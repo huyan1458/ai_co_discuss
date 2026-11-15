@@ -1,13 +1,14 @@
+import { t } from './i18n.js';
 /**
  * Layout for the execution timeline page, from the website's timeline read: rows nested by who dispatched whom, each
  * execution's stages in epoch milliseconds, and a time axis on which long idle stretches fold into labelled bands.
  * Pure functions, so the page and the tests share them.
  */
 
-export const PHASE_LABELS = { thinking: "思考", command: "命令", tool: "工具", editing: "编辑", writing: "撰写" };
+export const PHASE_LABELS = { thinking: t('思考'), command: t('命令'), tool: t('工具'), editing: t('编辑'), writing: t('撰写') };
 /** Bars are colored by member and shaded by kind, as in a trace: the model's own turns dark, its tool work light. */
 export const PHASE_KINDS = { thinking: "model", writing: "model", command: "tool", tool: "tool", editing: "tool" };
-export const STATE_LABELS = { running: "进行中", done: "完成", failed: "失败", cancelled: "已撤销" };
+export const STATE_LABELS = { running: t('进行中'), done: t('完成'), failed: t('失败'), cancelled: t('已撤销') };
 /** Idle stretches longer than this fold into a band; each band takes this share of the axis. */
 export const FOLD_GAP_MS = 5 * 60_000;
 export const FOLD_SHARE = 0.03;
@@ -98,31 +99,31 @@ const LINE_PHASES = 3;
  */
 export function row_status(row, now_ms) {
   const { item } = row;
-  if (item.source === "user") return { tone: "done", text: row.end > row.start ? `阅读与思考 ${format_duration(row.end - row.start)}` : "发出消息" };
-  if (item.state === "failed") return { tone: "failed", text: `失败：${item.reason || "执行失败"}` };
-  if (item.state === "cancelled") return { tone: "muted", text: "已撤销" };
+  if (item.source === "user") return { tone: "done", text: row.end > row.start ? t('阅读与思考 {value1}', { value1: format_duration(row.end - row.start) }) : t('发出消息') };
+  if (item.state === "failed") return { tone: "failed", text: t('失败：{value1}', { value1: item.reason || t('执行失败') }) };
+  if (item.state === "cancelled") return { tone: "muted", text: t('已撤销') };
   if (item.state === "done") {
     const { wait, work, phases } = row_breakdown(row);
     const parts = phases.filter((part) => part.ms >= LINE_MIN_MS).slice(0, LINE_PHASES).map((part) => `${PHASE_LABELS[part.phase]} ${format_duration(part.ms)}`);
-    if (!parts.length) parts.push(`执行 ${format_duration(work)}${row.segments.length ? "" : "（无阶段明细）"}`);
-    if (wait >= LINE_MIN_WAIT_MS) parts.push(`等待 ${format_duration(wait)}`);
+    if (!parts.length) parts.push(t('执行 {value1}{value2}', { value1: format_duration(work), value2: row.segments.length ? "" : t('（无阶段明细）') }));
+    if (wait >= LINE_MIN_WAIT_MS) parts.push(t('等待 {value1}', { value1: format_duration(wait) }));
     return { tone: "done", text: parts.join(" · ") };
   }
-  if (!item.dispatched_at) return { tone: "muted", text: `排队中 · 已 ${format_duration(now_ms - row.queue[0])}` };
+  if (!item.dispatched_at) return { tone: "muted", text: t('排队中 · 已 {value1}', { value1: format_duration(now_ms - row.queue[0]) }) };
   const dispatched = item.dispatched_at * 1000;
   const last_segment = item.segments.at(-1);
   const last_output = Math.max(item.activity_at ? item.activity_at * 1000 : 0,
     last_segment ? dispatched + last_segment.end_ms : 0, ...(item.notes || []).map((at) => at * 1000));
-  if (!last_output) return { tone: "live", text: "处理中 · 这种接入方式不上报进度" };
+  if (!last_output) return { tone: "live", text: t('处理中 · 这种接入方式不上报进度') };
   const silent = Math.max(0, now_ms - last_output);
-  const phase = last_segment ? `${PHASE_LABELS[last_segment.phase]}${last_segment.tool ? ` ${last_segment.tool}` : ""}中` : "处理中";
+  const phase = last_segment ? t('{value1}{value2}中', { value1: PHASE_LABELS[last_segment.phase], value2: last_segment.tool ? ` ${last_segment.tool}` : "" }) : t('处理中');
   if (silent >= STALL_MS) {
     // A long command prints nothing while it runs; that is not a stall.
-    if (last_segment?.phase === "command") return { tone: "warn", text: `${phase} · 命令已运行 ${format_duration(silent)}` };
-    if (last_segment?.phase === "thinking" && silent < THINKING_STALL_MS) return { tone: "live", text: `${phase} · 已 ${format_duration(silent)} 无中间输出` };
-    return { tone: "warn", text: `可能卡住 · 已 ${format_duration(silent)} 无输出` };
+    if (last_segment?.phase === "command") return { tone: "warn", text: t('{value1} · 命令已运行 {value2}', { value1: phase, value2: format_duration(silent) }) };
+    if (last_segment?.phase === "thinking" && silent < THINKING_STALL_MS) return { tone: "live", text: t('{value1} · 已 {value2} 无中间输出', { value1: phase, value2: format_duration(silent) }) };
+    return { tone: "warn", text: t('可能卡住 · 已 {value1} 无输出', { value1: format_duration(silent) }) };
   }
-  return { tone: "live", text: `${phase} · 距上次输出 ${format_duration(silent)}` };
+  return { tone: "live", text: t('{value1} · 距上次输出 {value2}', { value1: phase, value2: format_duration(silent) }) };
 }
 
 /**
@@ -132,7 +133,7 @@ export function row_status(row, now_ms) {
 export function execution_log(row, texts) {
   const entries = [
     ...row.segments.map((segment) => ({ at: segment.start, kind: "phase", phase: segment.phase, tool: segment.tool, duration: segment.end - segment.start, live: segment.live })),
-    ...row.notes.map((note) => ({ at: note.at, kind: "note", text: texts?.[note.index] ?? (texts ? "（未能读取）" : "读取中…") })),
+    ...row.notes.map((note) => ({ at: note.at, kind: "note", text: texts?.[note.index] ?? (texts ? t('（未能读取）') : t('读取中…')) })),
   ];
   return entries.sort((a, b) => a.at - b.at || (a.kind === "note") - (b.kind === "note"));
 }
@@ -555,20 +556,20 @@ export function timeline_summary(rows) {
 
 // ---- Room event log: the website's append-only record of room state changes (GET /api/rooms/:id/events). ----
 
-export const REQUEST_STATUS = { pending: "待投递", delivering: "投递中", completed: "已完成", cancelled: "已取消", failed: "失败" };
-export const EXECUTION_STATUS = { dispatched: "已派出", started: "已开始", completed: "已完成", cancelled: "已作废", failed: "失败" };
-export const PURPOSES = { route: "接收", ask: "派活", handoff: "交还主持人", notice: "程序通知主持人", keep_working: "主持人接着工作" };
-const CREATORS = { user: "用户", host: "主持人", system: "程序" };
-const CANCEL_REASONS = { user_stop: "用户停止", member_away: "成员暂离", member_removed: "成员移除", rerouted: "改派", no_reply: "未回复", archived: "房间归档" };
-const MEMBER_STATUS = { active: "在场", away: "暂离", removed: "移除" };
-const ROLES = { host: "主持人", member: "成员" };
+export const REQUEST_STATUS = { pending: t('待投递'), delivering: t('投递中'), completed: t('已完成'), cancelled: t('已取消'), failed: t('失败') };
+export const EXECUTION_STATUS = { dispatched: t('已派出'), started: t('已开始'), completed: t('已完成'), cancelled: t('已作废'), failed: t('失败') };
+export const PURPOSES = { route: t('接收'), ask: t('派活'), handoff: t('交还主持人'), notice: t('程序通知主持人'), keep_working: t('主持人接着工作') };
+const CREATORS = { user: t('用户'), host: t('主持人'), system: t('程序') };
+const CANCEL_REASONS = { user_stop: t('用户停止'), member_away: t('成员暂离'), member_removed: t('成员移除'), rerouted: t('改派'), no_reply: t('未回复'), archived: t('房间归档') };
+const MEMBER_STATUS = { active: t('在场'), away: t('暂离'), removed: t('移除') };
+const ROLES = { host: t('主持人'), member: t('成员') };
 /** The event's group, which colors its tag: message, request, execution, flow (batch, queue, chain), scheduler, room. */
-export const EVENT_GROUPS = { api: "输入", message: "消息", request: "请求", execution: "执行", batch: "流转", queue: "流转", chain: "流转",
-  scheduler: "调度", member: "房间", discussion: "房间", room: "房间" };
+export const EVENT_GROUPS = { api: t('输入'), message: t('消息'), request: t('请求'), execution: t('执行'), batch: t('流转'), queue: t('流转'), chain: t('流转'),
+  scheduler: t('调度'), member: t('房间'), discussion: t('房间'), room: t('房间') };
 const OPEN_EXECUTIONS = new Set(["dispatched", "started"]);
 const OPEN_REQUESTS = new Set(["pending", "delivering"]);
 // Who sent a write, from the first product of its User-Agent.
-const API_CLIENTS = [["Mozilla", "网页"], ["node", "本机服务"], ["AI-CoDiscuss-CLI", "CLI"], ["Python", "脚本"]];
+const API_CLIENTS = [["Mozilla", t('网页')], ["node", t('本机服务')], ["AI-CoDiscuss-CLI", "CLI"], ["Python", t('脚本')]];
 const PATH_ENTITIES = { executions: "execution", requests: "request", messages: "message" };
 
 /** A write's logged payload: the server stores it as JSON text, cut when long. */
@@ -589,12 +590,12 @@ export function event_entities(event) {
 /** One line for a write request: who, through what, which endpoint and action, its text, and the rejection if any. */
 function api_text(event) {
   const data = event.data, payload = api_payload(data);
-  const actor = data.actor === "owner" ? "房主" : data.actor?.startsWith("member:") ? data.actor.slice(7) : data.actor === "none" ? "无凭据" : "未知凭据";
-  const client = API_CLIENTS.find(([prefix]) => (data.client || "").startsWith(prefix))?.[1] || data.client || "未知客户端";
+  const actor = data.actor === "owner" ? t('房主') : data.actor?.startsWith("member:") ? data.actor.slice(7) : data.actor === "none" ? t('无凭据') : t('未知凭据');
+  const client = API_CLIENTS.find(([prefix]) => (data.client || "").startsWith(prefix))?.[1] || data.client || t('未知客户端');
   const action = payload.action ? ` ${payload.action}` : "";
   const text = typeof payload.text === "string" ? `：${payload.text}` : "";
-  const outcome = event.kind === "api.rejected" ? ` → 被拒 ${data.status}：${data.error}` : "";
-  return `${actor}（${client}${data.bridged ? "·中转" : ""}）POST ${data.path}${action}${outcome}${text}`;
+  const outcome = event.kind === "api.rejected" ? t(' → 被拒 {value1}：{value2}', { value1: data.status, value2: data.error }) : "";
+  return `${actor}（${client}${data.bridged ? t('·中转') : ""}）POST ${data.path}${action}${outcome}${text}`;
 }
 
 /** One line in plain words for an event; `name` turns a member id into a display name. */
@@ -604,29 +605,29 @@ export function event_text(event, name) {
   switch (event.kind) {
     case "api.write":
     case "api.rejected": return api_text(event);
-    case "message.posted": return `${data.author} 发言 #${data.message_id}${data.reply_to ? `（回复 #${data.reply_to}）` : ""}：${data.text}`;
-    case "message.withdrawn": return `#${data.message_id} ${data.kind === "rewound" ? "被回退" : "被撤回"}`;
-    case "room.rewound": return `回退到 #${data.message_id}`;
-    case "member.joined": return `${who} 加入（${status(ROLES, data.role)} · ${data.adapter || "未知软件"}）`;
+    case "message.posted": return t('{value1} 发言 #{value2}{value3}：{value4}', { value1: data.author, value2: data.message_id, value3: data.reply_to ? t('（回复 #{value1}）', { value1: data.reply_to }) : "", value4: data.text });
+    case "message.withdrawn": return `#${data.message_id} ${data.kind === "rewound" ? t('被回退') : t('被撤回')}`;
+    case "room.rewound": return t('回退到 #{value1}', { value1: data.message_id });
+    case "member.joined": return t('{value1} 加入（{value2} · {value3}）', { value1: who, value2: status(ROLES, data.role), value3: data.adapter || t('未知软件') });
     case "member.changed": return `${who}：${data.from_role !== data.role ? `${status(ROLES, data.from_role)} → ${status(ROLES, data.role)}` : `${status(MEMBER_STATUS, data.from_status)} → ${status(MEMBER_STATUS, data.status)}`}`;
-    case "request.created": return `请求 R${data.request_id} → ${who} · ${status(PURPOSES, data.purpose)} · 挂在 #${data.message_id} · 由${status(CREATORS, data.created_by)}创建${data.batch_id ? ` · 批次 #${data.batch_id}` : ""}`;
-    case "request.changed": return `请求 R${data.request_id}（${who}）${data.from_status !== data.status ? `${status(REQUEST_STATUS, data.from_status)} → ${status(REQUEST_STATUS, data.status)}` : "更新"}${data.execution_id ? ` · 执行 E${data.execution_id}` : ""}${data.answer_id ? ` · 回答 #${data.answer_id}` : ""}`;
-    case "request.cancel_reason": return `请求 R${data.request_id}（${who}）取消原因：${status(CANCEL_REASONS, data.reason)}`;
-    case "execution.created": return `执行 E${data.execution_id}（${who}）${status(EXECUTION_STATUS, data.status)}`;
-    case "execution.changed": return `执行 E${data.execution_id}（${who}）${status(EXECUTION_STATUS, data.from_status)} → ${status(EXECUTION_STATUS, data.status)}${data.result ? `：${data.result}` : ""}`;
-    case "execution.retry": return data.stopped ? `执行 E${data.execution_id} 停止自动重试` : `执行 E${data.execution_id} 第 ${data.attempt} 次重试${data.reason ? `：${data.reason}` : ""}`;
-    case "execution.late_answer": return `执行 E${data.execution_id} 作废后迟到的回答：${data.text}`;
-    case "batch.opened": return `批次 #${data.batch_id} 开启（${name(data.host_id)} 派出，链 #${data.chain_id}）`;
-    case "batch.settled": return `批次 #${data.batch_id} 已收齐`;
-    case "batch.handoff": return `批次 #${data.batch_id} 交还主持人`;
-    case "queue.added": return `${who} 排队等候 #${data.message_id}`;
-    case "queue.removed": return `${who} 出队 #${data.message_id}`;
-    case "chain.held": return `任务链 #${data.chain_id} 到限暂停，等用户决定`;
-    case "chain.released": return `任务链 #${data.chain_id} 解除暂停`;
-    case "scheduler.decided": return `智能调度（${data.kind === "round" ? "轮次" : "插话"}）在 #${data.after_message_id} 后选择「${data.label}」${data.confidence != null ? ` · 置信 ${Number(data.confidence).toFixed(2)}` : ""}${data.applied ? " · 已采用" : ""}`;
-    case "scheduler.applied": return `智能调度选择「${data.label}」${data.applied ? "已采用" : "撤销采用"}`;
-    case "discussion.created": return `讨论 #${data.session_id} 创建：${data.goal}`;
-    case "discussion.changed": return `讨论 #${data.session_id}：${data.from_status} → ${data.status}`;
+    case "request.created": return t('请求 R{value1} → {value2} · {value3} · 挂在 #{value4} · 由{value5}创建{value6}', { value1: data.request_id, value2: who, value3: status(PURPOSES, data.purpose), value4: data.message_id, value5: status(CREATORS, data.created_by), value6: data.batch_id ? t(' · 批次 #{value1}', { value1: data.batch_id }) : "" });
+    case "request.changed": return t('请求 R{value1}（{value2}）{value3}{value4}{value5}', { value1: data.request_id, value2: who, value3: data.from_status !== data.status ? `${status(REQUEST_STATUS, data.from_status)} → ${status(REQUEST_STATUS, data.status)}` : t('更新'), value4: data.execution_id ? t(' · 执行 E{value1}', { value1: data.execution_id }) : "", value5: data.answer_id ? t(' · 回答 #{value1}', { value1: data.answer_id }) : "" });
+    case "request.cancel_reason": return t('请求 R{value1}（{value2}）取消原因：{value3}', { value1: data.request_id, value2: who, value3: status(CANCEL_REASONS, data.reason) });
+    case "execution.created": return t('执行 E{value1}（{value2}）{value3}', { value1: data.execution_id, value2: who, value3: status(EXECUTION_STATUS, data.status) });
+    case "execution.changed": return t('执行 E{value1}（{value2}）{value3} → {value4}{value5}', { value1: data.execution_id, value2: who, value3: status(EXECUTION_STATUS, data.from_status), value4: status(EXECUTION_STATUS, data.status), value5: data.result ? `：${data.result}` : "" });
+    case "execution.retry": return data.stopped ? t('执行 E{value1} 停止自动重试', { value1: data.execution_id }) : t('执行 E{value1} 第 {value2} 次重试{value3}', { value1: data.execution_id, value2: data.attempt, value3: data.reason ? `：${data.reason}` : "" });
+    case "execution.late_answer": return t('执行 E{value1} 作废后迟到的回答：{value2}', { value1: data.execution_id, value2: data.text });
+    case "batch.opened": return t('批次 #{value1} 开启（{value2} 派出，链 #{value3}）', { value1: data.batch_id, value2: name(data.host_id), value3: data.chain_id });
+    case "batch.settled": return t('批次 #{value1} 已收齐', { value1: data.batch_id });
+    case "batch.handoff": return t('批次 #{value1} 交还主持人', { value1: data.batch_id });
+    case "queue.added": return t('{value1} 排队等候 #{value2}', { value1: who, value2: data.message_id });
+    case "queue.removed": return t('{value1} 出队 #{value2}', { value1: who, value2: data.message_id });
+    case "chain.held": return t('任务链 #{value1} 到限暂停，等用户决定', { value1: data.chain_id });
+    case "chain.released": return t('任务链 #{value1} 解除暂停', { value1: data.chain_id });
+    case "scheduler.decided": return t('智能调度（{value1}）在 #{value2} 后选择「{value3}」{value4}{value5}', { value1: data.kind === "round" ? t('轮次') : t('插话'), value2: data.after_message_id, value3: data.label, value4: data.confidence != null ? t(' · 置信 {value1}', { value1: Number(data.confidence).toFixed(2) }) : "", value5: data.applied ? t(' · 已采用') : "" });
+    case "scheduler.applied": return t('智能调度选择「{value1}」{value2}', { value1: data.label, value2: data.applied ? t('已采用') : t('撤销采用') });
+    case "discussion.created": return t('讨论 #{value1} 创建：{value2}', { value1: data.session_id, value2: data.goal });
+    case "discussion.changed": return t('讨论 #{value1}：{value2} → {value3}', { value1: data.session_id, value2: data.from_status, value3: data.status });
     default: return JSON.stringify(data);
   }
 }

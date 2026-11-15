@@ -11,6 +11,7 @@ import json
 import time
 
 from .runtime import begin_write, require_owner
+from .texts import Text, load_texts, save_text
 
 QUEUED_FIELDS = ("author", "text", "reply_to", "kind", "submitted_by", "to", "sequential", "order", "attachment_ids", "submission_id")
 QUEUE_ACTIONS = ("send", "edit", "delete", "reorder", "resume", "queueing")
@@ -39,7 +40,7 @@ def queue_view(connection, room_id):
         files = [dict(item) for item in connection.execute(
             "SELECT id,file_name,content_type FROM attachments WHERE room_id=? AND id IN (SELECT value FROM json_each(?))",
             (room_id, json.dumps(payload.get("attachment_ids", []))))]
-        items.append({"id": row["id"], "text": payload.get("text", ""), "attachments": files, "failure": row["failure"],
+        items.append({"id": row["id"], "text": payload.get("text", ""), "attachments": files, "failure": row["failure"], "texts": load_texts(connection, "queued_message", row["id"]),
                       "created_at": row["created_at"]})
     paused = connection.execute("SELECT 1 FROM queued_message_pauses WHERE room_id=?", (room_id,)).fetchone() is not None
     return {"items": items, "paused": paused and bool(items), "busy": room_busy(connection, room_id),
@@ -70,7 +71,7 @@ def enqueue(connection, room_id, payload):
                                   (room_id, stored["submission_id"])).fetchone()
     if previous:
         if json.loads(previous["payload"]) != stored:
-            raise FileExistsError("这个提交编号已被另一条内容使用，请为新发言生成新编号")
+            raise FileExistsError(Text('这个提交编号已被另一条内容使用，请为新发言生成新编号'))
         return {"queued": previous["id"], "duplicate": True}
     position = connection.execute("SELECT COALESCE(MAX(position),0)+1 FROM queued_messages WHERE room_id=?", (room_id,)).fetchone()[0]
     if position == 1:
@@ -93,7 +94,9 @@ def post_item(connection, room_id, row, post):
     except QUEUE_ERRORS as error:
         connection.execute("ROLLBACK TO queued_post")
         connection.execute("RELEASE queued_post")
-        connection.execute("UPDATE queued_messages SET failure=? WHERE id=?", (str(error)[:500] or "发送失败", row["id"]))
+        failure = Text("发送失败：{reason}", reason=str(error)[:500])
+        connection.execute("UPDATE queued_messages SET failure=? WHERE id=?", (str(failure)[:500], row["id"]))
+        save_text(connection, "queued_message", row["id"], "failure", failure)
         return None
     connection.execute("RELEASE queued_post")
     connection.execute("DELETE FROM queued_messages WHERE id=?", (row["id"],))
@@ -124,7 +127,7 @@ def queued_row(connection, room_id, item_id):
     """One queued message of this room."""
     row = connection.execute("SELECT * FROM queued_messages WHERE room_id=? AND id=?", (room_id, item_id)).fetchone()
     if row is None:
-        raise LookupError("这条排队消息已发出或已删除")
+        raise LookupError(Text('这条排队消息已发出或已删除'))
     return row
 
 
@@ -140,7 +143,7 @@ def reorder(connection, room_id, ids):
     """Put the queue in the given order; the list must name exactly the messages still queued."""
     current = [row[0] for row in connection.execute("SELECT id FROM queued_messages WHERE room_id=? ORDER BY position,id", (room_id,))]
     if not isinstance(ids, list) or sorted(ids) != sorted(current):
-        raise FileExistsError("排队消息已变化，请刷新后再调整顺序")
+        raise FileExistsError(Text('排队消息已变化，请刷新后再调整顺序'))
     for position, item_id in enumerate(ids, 1):
         connection.execute("UPDATE queued_messages SET position=? WHERE id=?", (position, item_id))
 
@@ -156,7 +159,7 @@ def queue_action(connection, room_id, token, payload, post, check, interrupt):
     begin_write(connection)
     action = payload.get("action")
     if action not in QUEUE_ACTIONS:
-        raise ValueError(f"action 须为 {'、'.join(QUEUE_ACTIONS)} 之一")
+        raise ValueError(Text('action 须为 {value1} 之一', value1='、'.join(QUEUE_ACTIONS)))
     if action == "send":
         row = queued_row(connection, room_id, payload.get("id"))
         connection.execute("UPDATE queued_messages SET failure='' WHERE id=?", (row["id"],))
@@ -175,7 +178,7 @@ def queue_action(connection, room_id, token, payload, post, check, interrupt):
         connection.execute("DELETE FROM queued_message_pauses WHERE room_id=?", (room_id,))
     else:
         if not isinstance(payload.get("enabled"), bool):
-            raise ValueError("enabled 须为 true 或 false")
+            raise ValueError(Text('enabled 须为 true 或 false'))
         connection.execute("INSERT INTO composer_settings (id,queueing) VALUES (1,?) ON CONFLICT(id) DO UPDATE SET queueing=excluded.queueing",
                            (int(payload["enabled"]),))
     drain(connection, room_id, post)

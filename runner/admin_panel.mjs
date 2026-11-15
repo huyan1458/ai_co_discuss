@@ -35,6 +35,7 @@ import { autostart_enabled, launcher_path, set_autostart } from './launcher.mjs'
 import { show_tray } from './tray.mjs';
 import { OPERATOR_EVENTS_FILE } from './account_space.mjs';
 import { can_notify, send_notice } from './weixin.mjs';
+import { t } from './i18n.mjs';
 
 const ROOT = dirname(dirname(fileURLToPath(import.meta.url)));
 const WEB = join(ROOT, 'web');
@@ -79,16 +80,16 @@ const PROBE_TIMEOUT_MS = 1500;
 // How long a restarted instance may take to answer again, and how often it is asked.
 const INSTANCE_READY_MS = 30_000;
 const INSTANCE_POLL_MS = 500;
-const STATIC_FILES = { '/': 'admin.html', '/admin.html': 'admin.html', '/admin.js': 'admin.js', '/admin.css': 'admin.css', '/mark.svg': 'mark.svg' };
+const STATIC_FILES = { '/': 'admin.html', '/admin.html': 'admin.html', '/admin.js': 'admin.js', '/admin.css': 'admin.css', '/i18n.js': 'i18n.js', '/mark.svg': 'mark.svg' };
 const TYPES = { '.html': 'text/html; charset=utf-8', '.js': 'text/javascript; charset=utf-8', '.css': 'text/css; charset=utf-8',
   '.svg': 'image/svg+xml', '.png': 'image/png' };
-const HELP = `用法：codiscuss panel [run|start|open|stop] [--port ${DEFAULT_PORT}]
+const HELP = t(`用法：codiscuss panel [run|start|open|stop] [--port {value1}]
 
   run    在前台运行管理面板与任务栏图标
   start  在后台启动（已在运行则不重复启动）
   open   打开管理面板（未运行时先启动）
   stop   停止管理面板与任务栏图标
-`;
+`, { value1: DEFAULT_PORT });
 
 // ---- This computer's service ----
 
@@ -113,8 +114,8 @@ async function fetch_outside(url, timeout_ms) {
     } catch (error) {
       const timed_out = error.name === 'TimeoutError';
       if (attempt < OUTSIDE_ATTEMPTS) continue;
-      const why = timed_out ? `${timeout_ms / 1000} 秒内没有响应` : `连接被断开（${error.cause?.code || error.message}）`;
-      throw new Error(`连不上 ${new URL(url).host}：${why}，请检查这台电脑的网络或代理后重试`);
+      if (timed_out) throw panel_error('连不上 {host}：{seconds} 秒内没有响应，请检查这台电脑的网络或代理后重试', { host: new URL(url).host, seconds: timeout_ms / 1000 });
+      throw panel_error('连不上 {host}：连接被断开（{reason}），请检查这台电脑的网络或代理后重试', { host: new URL(url).host, reason: error.cause?.code || error.message });
     }
   }
 }
@@ -123,7 +124,7 @@ async function fetch_outside(url, timeout_ms) {
 async function latest_version(force = false) {
   if (!force && latest.version && Date.now() - latest.at < LATEST_TTL_MS) return latest.version;
   const response = await fetch_outside(LATEST_URL, OUTSIDE_TIMEOUT_MS);
-  if (!response.ok) throw new Error(`查询新版本失败（HTTP ${response.status}）`);
+  if (!response.ok) throw panel_error('查询新版本失败（HTTP {value1}）', { value1: response.status });
   latest = { at: Date.now(), version: String((await response.json()).version || '') };
   return latest.version;
 }
@@ -144,21 +145,39 @@ function run_command(command, args) {
     child.stdout.on('data', chunk => { output = (output + chunk).slice(-4000); });
     child.stderr.on('data', chunk => { output = (output + chunk).slice(-4000); });
     child.on('error', fail);
-    child.on('exit', code => code === 0 ? done() : fail(Object.assign(new Error(`${command} ${args.join(' ')} 失败（退出码 ${code}）：${output.trim().split(/\r?\n/).slice(-3).join(' ')}`), { code })));
+    child.on('exit', code => code === 0 ? done() : fail(Object.assign(panel_error('{value1} {value2} 失败（退出码 {value3}）：{value4}', { value1: command, value2: args.join(' '), value3: code, value4: output.trim().split(/\r?\n/).slice(-3).join(' ') }), { code })));
   });
 }
 
 function update_job(data) {
-  try { return JSON.parse(readFileSync(join(data, UPDATE_JOB_FILE), 'utf8')); } catch { return null; }
+  try {
+    const job = JSON.parse(readFileSync(join(data, UPDATE_JOB_FILE), 'utf8'));
+    job.steps = (job.steps || []).map(step => {
+      if (typeof step !== 'string') return step;
+      // Older jobs and the standalone updater write strings; normalize at this read boundary only.
+      const failed = /失败/.test(step);
+      const text = step.startsWith('安装失败：') ? t('安装失败：{reason}', { reason: step.slice(5) })
+        : step.startsWith('已安装 v') ? t('已安装 v{version}', { version: step.slice(5) }) : step;
+      return { text, failed };
+    });
+    return job;
+  } catch { return null; }
 }
 
 function write_update_job(data, job) {
   writeFileSync(join(data, UPDATE_JOB_FILE), JSON.stringify(job), { mode: 0o600 });
 }
 
-/** A step of an update, recorded as done or as failed with its reason; the steps after it still run. */
-async function update_step(steps, done, work) {
-  try { await work(); steps.push(done); } catch (error) { steps.push(`${done.replace(/^已/, '')}失败：${error.message}`); }
+/**
+ * Record an update step with an explicit result; later steps still run after failure.
+ * @param {object[]} steps Destination update log.
+ * @param {string} done Description of the completed operation.
+ * @param {Function} work Operation to await.
+ * @returns {Promise<void>}
+ */
+export async function update_step(steps, done, work) {
+  try { await work(); steps.push({ text: done, failed: false }); }
+  catch (error) { steps.push({ text: t('{step}失败：{reason}', { step: done.replace(/^已/, ''), reason: error.message }), failed: true }); }
 }
 
 /**
@@ -169,15 +188,15 @@ async function update_step(steps, done, work) {
  */
 async function begin_update(data, version, hand_over) {
   const current = update_job(data);
-  if (current && current.status !== 'done' && Date.now() - current.started_at < UPDATE_STALE_MS) throw new Error('正在更新，请稍候');
+  if (current && current.status !== 'done' && Date.now() - current.started_at < UPDATE_STALE_MS) throw panel_error('正在更新，请稍候');
   const running = hosting_enabled(data) ? (await list_accounts(data)).filter(account => account.running) : [];
   const job = { version, status: 'stopping', steps: [], restart: running.map(account => account.name), started_at: Date.now() };
   write_update_job(data, job);
   (async () => {
-    await update_step(job.steps, '已停止本机服务', () => run_owner_service(data, 'stop'));
+    await update_step(job.steps, t('已停止本机服务'), () => run_owner_service(data, 'stop'));
     // The entry runs the package's code too: stopped here, the installed panel starts it again on the new version.
-    if (hosting_enabled(data) && (await entry_status(data)).running) await update_step(job.steps, '已停止登录入口', () => stop_entry(data));
-    for (const account of running) if (!account.os_user) await update_step(job.steps, `已停止 ${account.name} 的实例`, () => run_instance(data, account.name, 'stop'));
+    if (hosting_enabled(data) && (await entry_status(data)).running) await update_step(job.steps, t('已停止登录入口'), () => stop_entry(data));
+    for (const account of running) if (!account.os_user) await update_step(job.steps, t('已停止 {value1} 的实例', { value1: account.name }), () => run_instance(data, account.name, 'stop'));
     const updater = join(data, 'update', 'panel_updater.mjs');
     mkdirSync(dirname(updater), { recursive: true });
     copyFileSync(join(ROOT, 'runner', 'panel_updater.mjs'), updater);
@@ -185,7 +204,7 @@ async function begin_update(data, version, hand_over) {
     hand_over(updater);
   })().catch(error => {
     // Nothing was installed: what was stopped starts again on finish_update's path.
-    write_update_job(data, { ...job, status: 'install_failed', steps: [...job.steps, `更新失败：${error.message}`] });
+    write_update_job(data, { ...job, status: 'install_failed', steps: [...job.steps, { text: t('更新失败：{reason}', { reason: error.message }), failed: true }] });
     finish_update(data).catch(() => {});
   });
   return { version, status: 'stopping' };
@@ -201,28 +220,28 @@ async function finish_update(data) {
   if (!['installed', 'install_failed'].includes(job?.status)) return;
   const installed = job.status === 'installed', steps = [...job.steps];
   write_update_job(data, { ...job, status: 'finishing' });
-  if (installed) await update_step(steps, '已更新本机技能', () => run_command(process.execPath, [installed_script('codiscuss.mjs'), 'setup', '--yes', '--no-start', '--json']).catch(error => {
+  if (installed) await update_step(steps, t('已更新本机技能'), () => run_command(process.execPath, [installed_script('codiscuss.mjs'), 'setup', '--yes', '--no-start', '--json']).catch(error => {
     // Setup exits 2 when it finished with items to look at (an edited skill is kept, for one); that still counts.
     if (error.code !== 2) throw error;
   }));
-  await update_step(steps, '已启动本机服务', () => run_owner_service(data, 'start'));
+  await update_step(steps, t('已启动本机服务'), () => run_owner_service(data, 'start'));
   // The panel itself starts an entry left on (run_panel); the report says once it serves again.
-  if (hosting_enabled(data) && entry_settings(data).running) await update_step(steps, '已重新启动登录入口', async () => {
+  if (hosting_enabled(data) && entry_settings(data).running) await update_step(steps, t('已重新启动登录入口'), async () => {
     for (let waited = 0; waited < ENTRY_BACK_MS; waited += 500) { if ((await entry_status(data)).running) return; await new Promise(done => setTimeout(done, 500)); }
-    throw new Error('入口没有重新启动，在“概览”页“托管”下点“启动”看原因');
+    throw panel_error('入口没有重新启动，在“概览”页“托管”下点“启动”看原因');
   });
   if (hosting_enabled(data)) {
     const accounts = await list_accounts(data);
     // Isolated instances run from the shared copy: they stop before it is replaced, or files in use stay old.
     for (const account of accounts) {
-      if (account.os_user && (job.restart || []).includes(account.name)) await update_step(steps, `已停止 ${account.name} 的实例`, () => run_instance(data, account.name, 'stop'));
+      if (account.os_user && (job.restart || []).includes(account.name)) await update_step(steps, t('已停止 {value1} 的实例', { value1: account.name }), () => run_instance(data, account.name, 'stop'));
     }
-    if (installed) await update_step(steps, '已同步隔离账号的程序副本', () => { const result = install_runtime(data); if (result.warnings.length) throw new Error(result.warnings.join('；')); });
+    if (installed) await update_step(steps, t('已同步隔离账号的程序副本'), () => { const result = install_runtime(data); if (result.warnings.length) throw new Error(result.warnings.join('；')); });
     for (const account of accounts) {
-      if (installed && account.os_user) await update_step(steps, `已更新 ${account.name} 的技能`, () => prepare_account(data, account.name));
+      if (installed && account.os_user) await update_step(steps, t('已更新 {value1} 的技能', { value1: account.name }), () => prepare_account(data, account.name));
       // Reported restarted only once it serves again as the account is set (start_verified). Instances run from the
       // package were stopped before the install; those running from the shared copy were stopped above.
-      if ((job.restart || []).includes(account.name)) await update_step(steps, `已重启 ${account.name} 的实例`, () => start_verified(data, account.name));
+      if ((job.restart || []).includes(account.name)) await update_step(steps, t('已重启 {value1} 的实例', { value1: account.name }), () => start_verified(data, account.name));
     }
   }
   write_update_job(data, { ...job, status: 'done', ok: installed, steps });
@@ -241,7 +260,7 @@ function instance_home(data, name) {
   for (const folder of [path, join(path, 'api-keys')]) {
     let link = false;
     try { link = lstatSync(folder).isSymbolicLink(); } catch { link = false; }
-    if (link) throw new Error(`${name} 的服务目录里有指向别处的链接（${folder}），已停止操作`);
+    if (link) throw panel_error('{value1} 的服务目录里有指向别处的链接（{value2}），已停止操作', { value1: name, value2: folder });
   }
   return path;
 }
@@ -313,12 +332,12 @@ async function instance_stopped(port, { state = instance_state, wait_ms = INSTAN
 /** Start an account's instance and wait until it serves as the account is set; a start that does not get there fails. */
 async function start_verified(data, name, { start = run_instance, conforms = instance_conforms, wait_ms = INSTANCE_READY_MS } = {}) {
   const account = read_accounts(data)[name];
-  if (!account) throw new Error(`账号不存在：${name}`);
+  if (!account) throw panel_error('账号不存在：{value1}', { value1: name });
   await start(data, name, 'start');
   const key = account.protected === true ? instance_key(data, name) : '';
-  if (account.protected === true && !key) throw new Error('这个账号开启了入口保护，但入口读不到它的密钥');
+  if (account.protected === true && !key) throw panel_error('这个账号开启了入口保护，但入口读不到它的密钥');
   if (!await instance_ready(account.port, key, { conforms, wait_ms })) {
-    throw new Error(account.protected === true ? '实例没有按入口保护启动起来（启动失败，或密钥对不上）' : '实例没有启动起来');
+    throw (account.protected === true ? panel_error('实例没有按入口保护启动起来（启动失败，或密钥对不上）') : panel_error('实例没有启动起来'));
   }
 }
 
@@ -373,12 +392,12 @@ function install_runtime(data) {
  */
 function account_env(data, name, action, request = {}, folders = {}) {
   const { env_script } = shared_paths();
-  if (!existsSync(env_script)) throw new Error('还没有安装隔离账号的程序副本，请先在“概览 → 托管 → 程序副本”中同步');
+  if (!existsSync(env_script)) throw panel_error('还没有安装隔离账号的程序副本，请先在“概览 → 托管 → 程序副本”中同步');
   const text = run_as_user(data, name, `& ${ps_quote(process.execPath)} ${ps_quote(env_script)} ${action} $Job`,
     { files: { 'request.json': JSON.stringify(request) }, folders, timeout: 120_000 });
   const line = text.split(/\r?\n/).reverse().find(item => item.trim().startsWith('{'));
-  const result = line ? JSON.parse(line) : { error: text.trim().slice(0, 300) || '没有读到结果' };
-  if (result.error) throw new Error(result.error);
+  const result = line ? JSON.parse(line) : text.trim() ? { error: text.trim().slice(0, 300) } : error_body(panel_error('没有读到结果'));
+  if (result.error) throw Object.assign(new Error(result.error), { error_text: result.error_text });
   return result;
 }
 
@@ -400,7 +419,7 @@ function prepare_account(data, name) {
 function library_folders(data, install) {
   const library = library_root(data), folders = {};
   for (const skill of install) {
-    if (!existsSync(join(library, String(skill), 'SKILL.md'))) throw new Error(`技能库里没有 ${skill}`);
+    if (!existsSync(join(library, String(skill), 'SKILL.md'))) throw panel_error('技能库里没有 {value1}', { value1: skill });
     folders[join('skills', String(skill))] = join(library, String(skill));
   }
   return folders;
@@ -417,15 +436,15 @@ function account_skills(data, name, { install = [], remove = [] } = {}) {
  * touched (no 'init' or 'prompt' here).
  */
 function owner_env(action, request = {}, folders = {}) {
-  if (!['status', 'skills'].includes(action)) throw new Error(`未知操作：${action}`);
+  if (!['status', 'skills'].includes(action)) throw panel_error('未知操作：{value1}', { value1: action });
   const job = mkdtempSync(join(tmpdir(), 'codiscuss-env-'));
   try {
     writeFileSync(join(job, 'request.json'), JSON.stringify(request));
     for (const [target, source] of Object.entries(folders)) cpSync(source, join(job, target), { recursive: true });
     const result = spawnSync(process.execPath, [join(ROOT, 'runner', 'account_env.mjs'), action, job], { encoding: 'utf8', windowsHide: true, timeout: OWNER_ENV_TIMEOUT_MS });
     const line = String(result.stdout || '').split(/\r?\n/).reverse().find(item => item.trim().startsWith('{'));
-    const parsed = line ? JSON.parse(line) : { error: String(result.stderr || '').trim().slice(0, 300) || '没有读到结果' };
-    if (parsed.error) throw new Error(parsed.error);
+    const parsed = line ? JSON.parse(line) : result.stderr?.trim() ? { error: result.stderr.trim().slice(0, 300) } : error_body(panel_error('没有读到结果'));
+    if (parsed.error) throw Object.assign(new Error(parsed.error), { error_text: parsed.error_text });
     return parsed;
   } finally { rmSync(job, { recursive: true, force: true }); }
 }
@@ -461,10 +480,10 @@ export function owner_prompts(home = homedir()) {
  */
 export function save_owner_prompt(key, text, original, home = homedir()) {
   const entry = OWNER_PROMPTS.find(([name]) => name === key);
-  if (!entry) throw new Error(`未知程序：${key}`);
+  if (!entry) throw panel_error('未知程序：{value1}', { value1: key });
   const path = join(home, ...entry[2]);
   const current = existsSync(path) ? readFileSync(path, 'utf8') : '';
-  if (current !== String(original ?? '')) throw Object.assign(new Error('文件已在别处被修改，请重新读取后再编辑'), { status: 409 });
+  if (current !== String(original ?? '')) throw Object.assign(panel_error('文件已在别处被修改，请重新读取后再编辑'), { status: 409 });
   mkdirSync(dirname(path), { recursive: true });
   writeFileSync(path, String(text ?? ''));
   return owner_prompts(home);
@@ -496,16 +515,16 @@ const ps_quote = text => `'${String(text).replaceAll("'", "''")}'`;
 export async function protect_account(data, name, on, { place = place_instance_key, state = instance_state, conforms = instance_conforms,
   restart = run_instance, wait_ms = INSTANCE_READY_MS } = {}) {
   const account = read_accounts(data)[name];
-  if (!account) throw new Error(`账号不存在：${name}`);
-  if (on && process.platform !== 'win32' && place === place_instance_key) throw new Error('入口保护目前只支持 Windows');
+  if (!account) throw panel_error('账号不存在：{value1}', { value1: name });
+  if (on && process.platform !== 'win32' && place === place_instance_key) throw panel_error('入口保护目前只支持 Windows');
   // Whether the instance runs must be known, not guessed: a port that neither answers nor refuses stops everything.
   const before = await state(account.port);
-  if (before === 'unknown') throw new Error('无法确认实例是否在运行（端口没有回应），入口保护没有改动');
+  if (before === 'unknown') throw panel_error('无法确认实例是否在运行（端口没有回应），入口保护没有改动');
   // A running instance is stopped first and must be seen gone (its port refusing connections) before anything changes,
   // so the account is never marked one way while an instance of the other kind keeps serving.
   if (before === 'up') {
     await restart(data, name, 'stop');
-    if (!await instance_stopped(account.port, { state, wait_ms })) throw new Error('实例没有停下来，入口保护没有改动');
+    if (!await instance_stopped(account.port, { state, wait_ms })) throw panel_error('实例没有停下来，入口保护没有改动');
   }
   if (on) {
     const key = randomBytes(32).toString('hex');
@@ -520,18 +539,18 @@ export async function protect_account(data, name, on, { place = place_instance_k
 /** Start or stop an account's instance: as its Windows user from the shared copy when it has one, otherwise as the owner. */
 function run_instance(data, name, command) {
   const account = read_accounts(data)[name];
-  if (!account) throw new Error(`账号不存在：${name}`);
+  if (!account) throw panel_error('账号不存在：{value1}', { value1: name });
   const service = instance_home(data, name);
   // A protected instance starts knowing its key file; it then serves only callers that prove the key.
   const key_file = account.protected === true ? instance_key_file(name) : '';
   // An account without its own Windows user runs as the owner and could read everything the owner can; it is not let
   // run while people outside can reach the entry.
   if (command === 'start' && process.platform === 'win32' && !read_os_users(data)[name] && entry_settings(data).mode !== 'local') {
-    throw new Error(`外网访问已开启，${name} 未隔离（以你的身份运行），不能启动：请先隔离该账号，或把登录入口的访问方式改为“仅这台电脑”`);
+    throw panel_error('外网访问已开启，{value1} 未隔离（以你的身份运行），不能启动：请先隔离该账号，或把登录入口的访问方式改为“仅这台电脑”', { value1: name });
   }
   if (command === 'start' && read_os_users(data)[name]) {
     const { local_script } = shared_paths();
-    if (!existsSync(local_script)) throw new Error('还没有安装隔离账号的程序副本，请先在“概览 → 托管 → 程序副本”中同步');
+    if (!existsSync(local_script)) throw panel_error('还没有安装隔离账号的程序副本，请先在“概览 → 托管 → 程序副本”中同步');
     // Whatever was set up first, the instance starts on the shared copies its Windows user can run.
     use_shared_programs(data, name);
     return start_instance_as_user(data, name, service, local_script, process.execPath, { key_file });
@@ -543,7 +562,8 @@ function run_instance(data, name, command) {
     env: { ...environment, DISCUSS_SERVICE_HOME: service, ...(key_file ? { DISCUSS_ENTRY_KEY_FILE: key_file } : {}) } });
   return new Promise((done, fail) => {
     child.on('error', fail);
-    child.on('exit', code => code === 0 ? done() : fail(new Error(`实例${command === 'start' ? '启动' : '停止'}失败（退出码 ${code}）`)));
+    child.on('exit', code => code === 0 ? done() : fail(command === 'start'
+      ? panel_error('实例启动失败（退出码 {code}）', { code }) : panel_error('实例停止失败（退出码 {code}）', { code })));
   });
 }
 
@@ -561,7 +581,7 @@ export function key_use(base_url) {
   const match = list => list.find(item => [item.key_base_url, item.legacy_key_base_url].some(url => url && url.replace(/\/+$/, '') === root));
   const speak = match(TTS_PROVIDERS), listen = match(STT_PROVIDERS), provider = speak || listen;
   if (!provider) return null;
-  return { label: provider.local ? '本机语音服务' : provider.label, uses: [speak && '语音朗读', listen && '语音识别'].filter(Boolean), local: Boolean(provider.local) };
+  return { label: provider.local ? t('本机语音服务') : provider.label, uses: [speak && t('语音朗读'), listen && t('语音识别')].filter(Boolean), local: Boolean(provider.local) };
 }
 
 export function list_keys(service) {
@@ -578,11 +598,22 @@ export function list_keys(service) {
 }
 
 function remove_key(service, ref) {
-  if (!/^[a-f0-9-]{36}$/i.test(ref)) throw new Error('密钥编号无效');
+  if (!/^[a-f0-9-]{36}$/i.test(ref)) throw panel_error('密钥编号无效');
   rmSync(join(service, 'api-keys', `${ref}.json`), { force: true });
 }
 
 // ---- HTTP ----
+
+/** Keep CLI errors localized while carrying the Chinese template to the browser. */
+function panel_error(template, params = {}) {
+  return Object.assign(new Error(t(template, params)), { error_text: { template, params } });
+}
+
+/** Preserve the legacy Chinese error and let the page choose its own language. */
+function error_body(error) {
+  const error_text = error.error_text || { template: error.message, params: {} };
+  return { error: error_text.template.replace(/\{(\w+)\}/g, (match, name) => Object.hasOwn(error_text.params, name) ? String(error_text.params[name]) : match), error_text };
+}
 
 function send_json(response, status, value) {
   response.writeHead(status, { 'Content-Type': 'application/json; charset=utf-8', 'Cache-Control': 'no-store' });
@@ -592,8 +623,8 @@ function send_json(response, status, value) {
 function read_body(request, limit = BODY_LIMIT) {
   return new Promise((done, fail) => {
     let size = 0; const chunks = [];
-    request.on('data', chunk => { size += chunk.length; if (size > limit) { fail(new Error(limit > BODY_LIMIT ? '技能太大（上限 40 MB）' : '请求过大')); request.destroy(); } else chunks.push(chunk); });
-    request.on('end', () => { try { done(chunks.length ? JSON.parse(Buffer.concat(chunks).toString('utf8')) : {}); } catch { fail(new Error('请求不是 JSON')); } });
+    request.on('data', chunk => { size += chunk.length; if (size > limit) { fail((limit > BODY_LIMIT ? panel_error('技能太大（上限 40 MB）') : panel_error('请求过大'))); request.destroy(); } else chunks.push(chunk); });
+    request.on('end', () => { try { done(chunks.length ? JSON.parse(Buffer.concat(chunks).toString('utf8')) : {}); } catch { fail(panel_error('请求不是 JSON')); } });
     request.on('error', fail);
   });
 }
@@ -621,7 +652,7 @@ export function create_panel({ data, key, port, ops = {}, sessions = new Set() }
   async function api(method, path, body) {
     const parts = path.split('/').filter(Boolean).slice(1);
     const [section, name, action, extra] = parts;
-    const account = () => { if (!read_accounts(data)[name]) throw new Error(`账号不存在：${name}`); return name; };
+    const account = () => { if (!read_accounts(data)[name]) throw panel_error('账号不存在：{value1}', { value1: name }); return name; };
     const hosting = hosting_enabled(data);
     if (method === 'GET' && section === 'state') {
       const windows = process.platform === 'win32';
@@ -653,12 +684,12 @@ export function create_panel({ data, key, port, ops = {}, sessions = new Set() }
     }
     if (section === 'logins') {
       const target = name === '_' ? '' : name;
-      if (target && (!hosting || !read_accounts(data)[target])) throw new Error(target && !hosting ? '托管管理未打开' : `账号不存在：${target}`);
+      if (target && (!hosting || !read_accounts(data)[target])) throw (target && !hosting ? panel_error('托管管理未打开') : panel_error('账号不存在：{value1}', { value1: target }));
       if (method === 'GET' && !action) return op.login_status(data, target);
       if (method === 'POST' && extra === 'apply') return op.apply_login(data, target, action, body);
       if (method === 'POST' && extra === 'logout') return op.logout(data, target, action);
       if (method === 'POST' && extra === 'start') return op.start_login(data, target, action, body.method);
-      throw new Error('接口不存在');
+      throw panel_error('接口不存在');
     }
     // The owner as an account: its skills (from its own folder, library skills installed or removed) and API keys.
     if (section === 'owner') {
@@ -672,7 +703,7 @@ export function create_panel({ data, key, port, ops = {}, sessions = new Set() }
       if (method === 'GET' && name === 'keys') return op.list_keys(data);
       if (method === 'POST' && name === 'keys' && action === 'remove') { op.remove_key(data, String(body.ref || '')); return { ok: true }; }
       if (method === 'POST' && name === 'keys') return op.save_api_key(data, { base_url: body.base_url, api_key: body.api_key });
-      throw new Error('接口不存在');
+      throw panel_error('接口不存在');
     }
     // The skill library is the owner's, for the owner and the hosted accounts alike.
     if (section === 'skill-library') {
@@ -681,7 +712,7 @@ export function create_panel({ data, key, port, ops = {}, sessions = new Set() }
       if (method === 'POST' && action === 'remove') { remove_library_skill(data, name); return { ok: true }; }
     }
     // Hosting: only once the owner turned it on in setup.
-    if (!hosting) throw new Error('托管管理未打开：运行 codiscuss setup 勾选“托管管理（管理面板）”');
+    if (!hosting) throw panel_error('托管管理未打开：运行 codiscuss setup 勾选“托管管理（管理面板）”');
     if (method === 'POST' && section === 'clis' && name === 'install') return op.install_runtime(data);
     // The account entry customers sign in at: started and stopped here, and started again with the panel if it was left on.
     if (method === 'POST' && section === 'entry' && (name === 'start' || name === 'stop')) {
@@ -710,7 +741,7 @@ export function create_panel({ data, key, port, ops = {}, sessions = new Set() }
       if (method === 'GET') return { text: hosted_prompt(data) };
       if (method === 'POST') { save_hosted_prompt(data, body.text); return { ok: true }; }
     }
-    if (section !== 'accounts') throw new Error('接口不存在');
+    if (section !== 'accounts') throw panel_error('接口不存在');
     if (method === 'POST' && !name) return op.add_account(data, String(body.name || '').trim());
     account();
     if (method === 'POST' && action === 'password') return { password: op.reset_password(data, name) };
@@ -739,16 +770,16 @@ export function create_panel({ data, key, port, ops = {}, sessions = new Set() }
     if (method === 'GET' && action === 'keys') return op.list_keys(service);
     if (method === 'POST' && action === 'keys' && extra === 'remove') { op.remove_key(service, String(body.ref || '')); return { ok: true }; }
     if (method === 'POST' && action === 'keys') return op.save_api_key(service, { base_url: body.base_url, api_key: body.api_key, managed: true });
-    throw new Error('接口不存在');
+    throw panel_error('接口不存在');
   }
 
   const server = http.createServer(async (request, response) => {
     try {
       const url = new URL(request.url, 'http://127.0.0.1');
       // Only a page this browser opened from this address; anything else (another site, a renamed host) is refused.
-      if (!hosts.has(String(request.headers.host || ''))) return send_json(response, 403, { error: '只接受本机访问' });
+      if (!hosts.has(String(request.headers.host || ''))) return send_json(response, 403, error_body(panel_error('只接受本机访问')));
       if (url.pathname === '/enter') {
-        if (url.searchParams.get('key') !== key) return send_json(response, 403, { error: '钥匙无效，请从任务栏图标打开管理面板' });
+        if (url.searchParams.get('key') !== key) return send_json(response, 403, error_body(panel_error('钥匙无效，请从任务栏图标打开管理面板')));
         const session = randomBytes(24).toString('hex');
         sessions.add(session);
         const page = /^[a-z]+$/.test(url.searchParams.get('page') || '') ? `#${url.searchParams.get('page')}` : '';
@@ -757,28 +788,31 @@ export function create_panel({ data, key, port, ops = {}, sessions = new Set() }
       }
       const signed_in = sessions.has(cookie(request, SESSION_COOKIE));
       if (url.pathname.startsWith('/api/')) {
-        if (!signed_in) return send_json(response, 401, { error: '请从任务栏图标重新打开管理面板' });
+        if (!signed_in) return send_json(response, 401, error_body(panel_error('请从任务栏图标重新打开管理面板')));
         const origin = request.headers.origin;
         if (request.method !== 'GET' && (!origin || !hosts.has(origin.replace(/^http:\/\//, '')) || request.headers['x-codiscuss-panel'] !== '1')) {
-          return send_json(response, 403, { error: '拒绝跨站请求' });
+          return send_json(response, 403, error_body(panel_error('拒绝跨站请求')));
         }
         // A dropped skill arrives whole (its files in base64), so that one request may be large.
         const body = request.method === 'POST' ? await read_body(request, url.pathname === '/api/skill-library' ? UPLOAD_LIMIT : BODY_LIMIT) : {};
         return send_json(response, 200, await api(request.method, url.pathname, body));
       }
       const name = STATIC_FILES[url.pathname] || (url.pathname.startsWith('/icons/') && /^\/icons\/[\w.-]+$/.test(url.pathname) ? url.pathname.slice(1) : '');
-      if (!name) return send_json(response, 404, { error: '页面不存在' });
+      if (!name) return send_json(response, 404, error_body(panel_error('页面不存在')));
       if (name === 'admin.html' && !signed_in) {
         response.writeHead(401, { 'Content-Type': 'text/html; charset=utf-8' });
-        return response.end('<!doctype html><meta charset="utf-8"><title>共议管理面板</title><p style="font:15px system-ui;padding:40px">请从任务栏的共议图标打开管理面板。</p>');
+        const chinese = /^zh\b/i.test(request.headers['accept-language'] || 'zh');
+        return response.end(chinese
+          ? '<!doctype html><html lang="zh-CN"><meta charset="utf-8"><title>共议管理面板</title><p style="font:15px system-ui;padding:40px">请从任务栏的共议图标打开管理面板。</p></html>'
+          : '<!doctype html><html lang="en"><meta charset="utf-8"><title>CoDiscuss admin panel</title><p style="font:15px system-ui;padding:40px">Open the admin panel from the CoDiscuss taskbar icon.</p></html>');
       }
       const file = join(WEB, name);
-      if (!existsSync(file)) return send_json(response, 404, { error: '页面尚未构建，请运行 npm run build' });
+      if (!existsSync(file)) return send_json(response, 404, error_body(panel_error('页面尚未构建，请运行 npm run build')));
       response.writeHead(200, { 'Content-Type': TYPES[extname(file)] || 'application/octet-stream', 'Cache-Control': 'no-store' });
       response.end(readFileSync(file));
     } catch (error) {
       if (response.headersSent) response.destroy();
-      else send_json(response, error.status || 400, { error: error.message });
+      else send_json(response, error.status || 400, error_body(error));
     }
   });
   // The same operations without HTTP, for `codiscuss admin` run elevated (the steps that need administrator rights).
@@ -810,10 +844,10 @@ async function relay_status(relay_url, machine) {
 
 /** What stands between people outside and this computer over the relay, in the order to look at it; '' when nothing. */
 function relay_problem(relay, entry_running, service_running) {
-  if (!relay.reachable) return '入口地址连不上：检查网络与代理是否放行 *.workers.dev';
-  if (!service_running) return '本机服务没有在运行，电脑连不上线上站点：在上面“本机”里启动共议服务';
-  if (!relay.online) return '电脑还没连上线上站点：本机服务刚启动时稍等几秒；持续如此，可能这台电脑绑定的站点与入口不属于同一个 Cloudflare 账号，重新用接入码接入';
-  if (!entry_running) return '登录入口没有在运行：点上面的“启动”';
+  if (!relay.reachable) return t('入口地址连不上：检查网络与代理是否放行 *.workers.dev');
+  if (!service_running) return t('本机服务没有在运行，电脑连不上线上站点：在上面“本机”里启动共议服务');
+  if (!relay.online) return t('电脑还没连上线上站点：本机服务刚启动时稍等几秒；持续如此，可能这台电脑绑定的站点与入口不属于同一个 Cloudflare 账号，重新用接入码接入');
+  if (!entry_running) return t('登录入口没有在运行：点上面的“启动”');
   return '';
 }
 
@@ -838,16 +872,16 @@ async function set_entry_mode(data, mode) {
   const settings = entry_settings(data);
   if (mode === 'relay') {
     const bound = bound_site(data);
-    if (!bound) throw new Error('这台电脑还没有接入线上站点：先用接入码接入');
+    if (!bound) throw panel_error('这台电脑还没有接入线上站点：先用接入码接入');
     // Bound without an access code (`codiscuss local connect`): the site it is bound to gives the entry address.
     if (!settings.relay_url) await set_relay_url(data, await site_entry_url(bound.site));
   }
-  if (mode === 'tunnel' && !settings.tunnel) throw new Error('还没有设好 Cloudflare 隧道：先点“设置”填写你的域名');
+  if (mode === 'tunnel' && !settings.tunnel) throw panel_error('还没有设好 Cloudflare 隧道：先点“设置”填写你的域名');
   if (mode !== 'local' && process.platform === 'win32') {
     const users = read_os_users(data), accounts = read_accounts(data);
     const exposed = [];
     for (const [name, account] of Object.entries(accounts)) if (!users[name] && await instance_running(account.port)) exposed.push(name);
-    if (exposed.length) throw new Error(`未隔离的账号正在运行（${exposed.join('、')}），它们以你的身份运行，改用线上中转或自有域名前请先停止或隔离`);
+    if (exposed.length) throw panel_error('未隔离的账号正在运行（{value1}），它们以你的身份运行，改用线上中转或自有域名前请先停止或隔离', { value1: exposed.join('、') });
   }
   save_entry_settings(data, { mode });
   if (mode !== 'local' && !(await entry_status(data)).running) { await start_entry(data); save_entry_settings(data, { running: true }); }
@@ -880,9 +914,9 @@ function wrangler_folder(config) {
 function make_access_code(data, { config, site }) {
   const saved = deploy_settings(data);
   const path = resolve(String(config || saved.config || '').trim() || '.');
-  if (!existsSync(path) || !/\.jsonc?$/.test(path)) throw new Error('找不到线上站点的部署配置：填写源码仓库里 .wrangler\\deploy\\wrangler.jsonc 的完整路径');
+  if (!existsSync(path) || !/\.jsonc?$/.test(path)) throw panel_error('找不到线上站点的部署配置：填写源码仓库里 .wrangler\\deploy\\wrangler.jsonc 的完整路径');
   let origin;
-  try { origin = new URL(String(site || saved.site || bound_site(data)?.site || '').trim()).origin; } catch { throw new Error('站点地址格式不对，例如 https://xxx.pages.dev'); }
+  try { origin = new URL(String(site || saved.site || bound_site(data)?.site || '').trim()).origin; } catch { throw panel_error('站点地址格式不对，例如 https://xxx.pages.dev'); }
   return new Promise((done, fail) => {
     const child = spawn(process.execPath, [installed_script('codiscuss.mjs'), 'token', '--config', path], { cwd: wrangler_folder(path), windowsHide: true, stdio: ['ignore', 'pipe', 'pipe'] });
     let output = '', errors = '';
@@ -891,7 +925,7 @@ function make_access_code(data, { config, site }) {
     child.on('error', fail);
     child.on('exit', code => {
       const token = output.match(/^([0-9a-f]{32,})$/m)?.[1];
-      if (code !== 0 || !token) return fail(new Error(errors.trim().split(/\r?\n/).pop() || '没有生成绑定令牌'));
+      if (code !== 0 || !token) return fail(errors.trim() ? new Error(errors.trim().split(/\r?\n/).pop()) : panel_error('没有生成绑定令牌'));
       write_settings(join(data, DEPLOY_FILE), { config: path, site: origin });
       done({ code: `${origin}/${BIND_MARK}${token}`, site: origin });
     });
@@ -905,16 +939,16 @@ function make_access_code(data, { config, site }) {
 async function join_relay(data, text) {
   const value = String(text || '').trim();
   const at = value.indexOf(BIND_MARK);
-  if (at < 0) throw new Error('接入码不对：应是部署线上站点的电脑上生成的一整串，形如 https://xxx.pages.dev/#codiscuss-bind=…');
+  if (at < 0) throw panel_error('接入码不对：应是部署线上站点的电脑上生成的一整串，形如 https://xxx.pages.dev/#codiscuss-bind=…');
   const site = new URL(value.slice(0, at)).origin, token = value.slice(at + BIND_MARK.length);
   const steps = [];
-  if (bound_site(data)?.site === site) steps.push(`已接入 ${site}`);
-  else { await connect_site(data, site, token); steps.push(`已接入 ${site}`); }
+  if (bound_site(data)?.site === site) steps.push(t('已接入 {value1}', { value1: site }));
+  else { await connect_site(data, site, token); steps.push(t('已接入 {value1}', { value1: site })); }
   const entry_url = await site_entry_url(site);
   await set_relay_url(data, entry_url);
-  steps.push(`入口地址 ${entry_url}`);
+  steps.push(t('入口地址 {value1}', { value1: entry_url }));
   const overview = await set_entry_mode(data, 'relay');
-  steps.push('已切换到线上中转');
+  steps.push(t('已切换到线上中转'));
   return { steps, entry: overview };
 }
 
@@ -922,7 +956,7 @@ async function join_relay(data, text) {
 async function site_entry_url(site) {
   const answer = await fetch_outside(`${site}/api/entry`, OUTSIDE_TIMEOUT_MS);
   const given = await answer.json().catch(() => ({}));
-  if (!given.entry_url) throw new Error(`${site} 没有提供入口地址：请部署线上站点的人在部署配置里设置 ENTRY_URL 并重新发布`);
+  if (!given.entry_url) throw panel_error('{value1} 没有提供入口地址：请部署线上站点的人在部署配置里设置 ENTRY_URL 并重新发布', { value1: site });
   return given.entry_url;
 }
 
@@ -930,7 +964,7 @@ async function site_entry_url(site) {
 async function set_relay_url(data, url) {
   const origin = String(url || '').trim().replace(/\/+$/, '');
   const checked = await relay_status(origin, bound_site(data)?.machine);
-  if (!checked.reachable) throw new Error(`${origin} 不是共议的入口 Worker，或现在连不上`);
+  if (!checked.reachable) throw panel_error('{value1} 不是共议的入口 Worker，或现在连不上', { value1: origin });
   save_entry_settings(data, { relay_url: origin });
   return entry_overview(data);
 }
@@ -944,7 +978,7 @@ function connect_site(data, site, setup_key) {
     child.stdout.on('data', chunk => { output += chunk; });
     child.stderr.on('data', chunk => { errors += chunk; });
     child.on('error', fail);
-    child.on('exit', code => (code === 0 ? done(bound_site(data)) : fail(new Error(errors.trim().split(/\r?\n/).pop() || `绑定失败（退出码 ${code}）`))));
+    child.on('exit', code => (code === 0 ? done(bound_site(data)) : fail(errors.trim() ? new Error(errors.trim().split(/\r?\n/).pop()) : panel_error('绑定失败（退出码 {value1}）', { value1: code }))));
   });
 }
 
@@ -1021,7 +1055,8 @@ export async function relay_operator_events(data, send = send_notice, ready = ca
     // The outbox is in the account's own folder: a link anywhere on its path (the file, or a folder above it that the
     // account replaced with a junction) is not followed, so only a file really inside that folder is read.
     try { read = existsSync(path) && same_path(realpathSync.native(path), path) ? outbox_failures(path, marks[name] || {}) : null; }
-    catch (error) { process.stderr.write(`托管账号 ${name} 的失败记录读不了：${error.message}\n`); continue; }
+    catch (error) { process.stderr.write(t(`托管账号 {value1} 的失败记录读不了：{value2}
+`, { value1: name, value2: error.message })); continue; }
     if (!read || (read.mark.offset === marks[name]?.offset && read.mark.head === marks[name]?.head)) continue;
     const { events, mark } = read;
     if (events.length) {
@@ -1029,9 +1064,9 @@ export async function relay_operator_events(data, send = send_notice, ready = ca
       let result = null;
       try {
         // Keyed by the last failure it reports, so a later notice is never mistaken for an earlier one.
-        result = await send(data, { key: `operator-${name}-${events.at(-1).id}`, room: { title: `托管账号 ${name}` },
-          paragraphs: [`${events.length} 次执行失败${events.length > RELAY_LISTED ? `，最近 ${RELAY_LISTED} 次` : ''}：`, ...listed,
-            '客户那边看到的是失败卡片和重试按钮；登录失效、额度用完这类问题要你在管理面板处理。'] });
+        result = await send(data, { key: `operator-${name}-${events.at(-1).id}`, room: { title: t('托管账号 {value1}', { value1: name }) },
+          paragraphs: [t('{value1} 次执行失败{value2}：', { value1: events.length, value2: events.length > RELAY_LISTED ? t('，最近 {value1} 次', { value1: RELAY_LISTED }) : '' }), ...listed,
+            t('客户那边看到的是失败卡片和重试按钮；登录失效、额度用完这类问题要你在管理面板处理。')] });
       } catch { result = null; }
       // Not sent (no reply context yet, or a network error): read again next time.
       if (!['sent', 'duplicate'].includes(result?.status)) continue;
@@ -1063,7 +1098,7 @@ function open_browser(url) {
 }
 
 // The panel page's <title>; its own window carries it, which is how an open window is found again.
-const WINDOW_TITLE = '共议 · 管理面板';
+const WINDOW_TITLE = t('共议 · 管理面板');
 const WINDOW_SIZE = '1180,860';
 const EDGE_PATHS = [join(process.env['ProgramFiles(x86)'] || 'C:\\Program Files (x86)', 'Microsoft', 'Edge', 'Application', 'msedge.exe'),
   join(process.env.ProgramFiles || 'C:\\Program Files', 'Microsoft', 'Edge', 'Application', 'msedge.exe')];
@@ -1125,7 +1160,7 @@ function run_owner_service(data, command) {
   const child = spawn(process.execPath, [installed_script('discussion_local.mjs'), command], { stdio: 'ignore', windowsHide: true, env: { ...process.env, DISCUSS_SERVICE_HOME: data } });
   return new Promise((done, fail) => {
     child.on('error', fail);
-    child.on('exit', code => code === 0 ? done() : fail(new Error(`codiscuss local ${command} 失败（退出码 ${code}）`)));
+    child.on('exit', code => code === 0 ? done() : fail(panel_error('codiscuss local {value1} 失败（退出码 {value2}）', { value1: command, value2: code })));
   });
 }
 
@@ -1137,7 +1172,7 @@ export function hosting_enabled(data) {
 /** Run the server and the icon until the icon's "close service" entry or `panel stop`. */
 function run_panel(data, port) {
   const running = read_state(data);
-  if (running && running.pid !== process.pid && alive(running.pid)) throw new Error(`管理面板已在运行：http://127.0.0.1:${running.port}`);
+  if (running && running.pid !== process.pid && alive(running.pid)) throw panel_error('管理面板已在运行：http://127.0.0.1:{value1}', { value1: running.port });
   // Out of the package folder (the 共议 launcher starts here from it), with everything this starts, the panel window
   // included: Windows will not let npm replace a folder that is any process's working directory.
   process.chdir(data);
@@ -1158,10 +1193,12 @@ function run_panel(data, port) {
   };
   const server = create_panel({ data, key: state.key, port, ops: { hand_over }, sessions });
   // An entry left on starts again with the panel (only the entry: the accounts' instances are separate).
-  if (hosting_enabled(data) && entry_settings(data).running) start_entry(data).catch(error => process.stderr.write(`入口没有启动：${error.message}\n`));
+  if (hosting_enabled(data) && entry_settings(data).running) start_entry(data).catch(error => process.stderr.write(t(`入口没有启动：{value1}
+`, { value1: error.message })));
   // The entry's outside address runs on its own; the panel keeps it as set now and every minute (restarted if it stopped
   // or its settings changed, stopped when the entry is off).
-  const keep = () => keep_tunnel(data).catch(error => process.stderr.write(`隧道：${error.message}\n`));
+  const keep = () => keep_tunnel(data).catch(error => process.stderr.write(t(`隧道：{value1}
+`, { value1: error.message })));
   keep();
   const keeper = setInterval(keep, TUNNEL_CHECK_MS);
   // Hosted accounts' failures reach the owner's Weixin; one pass at a time.
@@ -1169,29 +1206,32 @@ function run_panel(data, port) {
   const relay = setInterval(() => {
     if (relaying) return;
     relaying = true;
-    relay_operator_events(data).catch(error => process.stderr.write(`失败通知未转发：${error.message}\n`)).finally(() => { relaying = false; });
+    relay_operator_events(data).catch(error => process.stderr.write(t(`失败通知未转发：{value1}
+`, { value1: error.message }))).finally(() => { relaying = false; });
   }, RELAY_MS);
   server.listen(port, '127.0.0.1', () => {
     writeFileSync(state_path(data), JSON.stringify(state), { mode: 0o600 });
-    process.stdout.write(`管理面板已启动：http://127.0.0.1:${port}\n`);
-    finish_update(data).catch(error => process.stderr.write(`更新收尾失败：${error.message}\n`));
+    process.stdout.write(t(`管理面板已启动：http://127.0.0.1:{value1}
+`, { value1: port }));
+    finish_update(data).catch(error => process.stderr.write(t(`更新收尾失败：{value1}
+`, { value1: error.message })));
   });
   // The icon that ships with the package, the same on every computer.
   const icon = join(ROOT, 'web', 'codiscuss.ico');
-  const tray = show_tray({ title: '共议', icon_path: existsSync(icon) ? icon : '', window_title: WINDOW_TITLE,
+  const tray = show_tray({ title: t('共议'), icon_path: existsSync(icon) ? icon : '', window_title: WINDOW_TITLE,
     host: join(data, 'launcher', '共议.exe'), on_action: action => {
     if (action === 'open') open_panel_window(data, panel_url(state), false);
     if (action === 'site') open_browser(signed_site_url(site_url(data), data));
     // Restarting and closing take seconds and show nothing of their own, so the icon says what is happening.
     if (action === 'restart') {
-      tray.notify('busy', '正在重启共议服务…');
+      tray.notify('busy', t('正在重启共议服务…'));
       run_owner_service(data, 'stop').then(() => run_owner_service(data, 'start'))
-        .then(() => tray.notify('done', '共议服务已重启'), error => tray.notify('error', `重启失败：${error.message}。可在命令行运行 codiscuss local open`));
+        .then(() => tray.notify('done', t('共议服务已重启')), error => tray.notify('error', t('重启失败：{value1}。可在命令行运行 codiscuss local open', { value1: error.message })));
     }
     if (action === 'stop') {
-      tray.notify('busy', '正在关闭共议服务…');
+      tray.notify('busy', t('正在关闭共议服务…'));
       run_owner_service(data, 'stop')
-        .then(() => tray.notify('done', '共议服务已关闭'), error => tray.notify('error', `关闭失败：${error.message}`))
+        .then(() => tray.notify('done', t('共议服务已关闭')), error => tray.notify('error', t('关闭失败：{value1}', { value1: error.message })))
         // The note goes with the icon, so it stays a moment before the icon closes.
         .finally(() => setTimeout(shutdown, 2500));
     }
@@ -1229,7 +1269,7 @@ async function start_panel(data, port) {
     const state = read_state(data);
     if (state?.pid === child.pid) return state;
   }
-  throw new Error(`管理面板没有启动，可运行 codiscuss panel run 查看原因（日志 ${log}）`);
+  throw panel_error('管理面板没有启动，可运行 codiscuss panel run 查看原因（日志 {value1}）', { value1: log });
 }
 
 export async function panel_main(args) {
@@ -1238,11 +1278,12 @@ export async function panel_main(args) {
   if (values.help) return process.stdout.write(HELP);
   const data = data_home(values.data), port = Number(values.port || DEFAULT_PORT);
   if (command === 'run') return run_panel(data, port);
-  if (command === 'start') { const state = await start_panel(data, port); return process.stdout.write(`管理面板：http://127.0.0.1:${state.port}\n`); }
+  if (command === 'start') { const state = await start_panel(data, port); return process.stdout.write(t(`管理面板：http://127.0.0.1:{value1}
+`, { value1: state.port })); }
   if (command === 'open') {
     const state = await start_panel(data, port);
     // An icon from 0.4.28 or 0.4.29 may run without a panel; it is replaced by one that has it.
-    if (!state.port) throw new Error('正在运行的任务栏图标来自旧版本：运行 codiscuss panel stop 后再运行 codiscuss panel open');
+    if (!state.port) throw panel_error('正在运行的任务栏图标来自旧版本：运行 codiscuss panel stop 后再运行 codiscuss panel open');
     open_panel_window(data, panel_url(state));
     return;
   }
@@ -1250,7 +1291,8 @@ export async function panel_main(args) {
     const state = read_state(data);
     if (state && alive(state.pid)) process.kill(state.pid);
     rmSync(state_path(data), { force: true });
-    return process.stdout.write('管理面板已停止\n');
+    return process.stdout.write(t(`管理面板已停止
+`));
   }
   throw new Error(HELP);
 }

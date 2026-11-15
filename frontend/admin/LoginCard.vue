@@ -6,6 +6,7 @@
 import { inject, onMounted, ref, watch } from "vue";
 import { call } from "./api.js";
 import LoginDialog from "./LoginDialog.vue";
+import { t } from '../i18n.js';
 
 const props = defineProps({ target: { type: String, required: true }, who: { type: String, required: true } });
 const emit = defineEmits(["status"]);
@@ -16,8 +17,8 @@ const CLIS = [
   { key: "codex", label: "Codex", icon: "/icons/openai.svg" },
   { key: "agy", label: "Antigravity", icon: "/icons/gemini.svg" },
 ];
-const METHOD_LABELS = { setup_token: "Setup Token", subscription: "Claude 账号", api_key: "API 密钥", api_key_helper: "密钥脚本", third_party: "第三方 API",
-  chatgpt: "ChatGPT 账号", access_token: "访问令牌", google: "Google 账号" };
+const METHOD_LABELS = { setup_token: "Setup Token", subscription: t('Claude 账号'), api_key: t('API 密钥'), api_key_helper: t('密钥脚本'), third_party: t('第三方 API'),
+  chatgpt: t('ChatGPT 账号'), access_token: t('访问令牌'), google: t('Google 账号') };
 
 const status = ref(null), checking = ref(false), dialog = ref({ open: false, cli: null });
 
@@ -35,16 +36,16 @@ defineExpose({ check });
 
 const row = (cli) => status.value?.[cli.key] || null;
 function describe(item) {
-  if (!item) return checking.value ? "检查中…" : "—";
-  if (!item.installed) return "这台电脑上没有安装";
-  if (!item.signed_in) return item.error ? `无法读取：${item.error}` : "未登录";
+  if (!item) return checking.value ? t('检查中…') : "—";
+  if (!item.installed) return t('这台电脑上没有安装');
+  if (!item.signed_in) return item.error ? t('无法读取：{value1}', { value1: item.error }) : t('未登录');
   return `${METHOD_LABELS[item.method] || item.method}${item.detail ? ` · ${item.detail}` : ""}`;
 }
 
 function open(cli) { dialog.value = { open: true, cli }; }
 function finished(message, level = "info") { notify(level, message); if (level !== "error") check(); }
 async function sign_out(cli) {
-  try { await call(`logins/${props.target}/${cli.key}/logout`, {}); notify("info", `${cli.label} 已退出登录`); check(); }
+  try { await call(`logins/${props.target}/${cli.key}/logout`, {}); notify("info", t('{value1} 已退出登录', { value1: cli.label })); check(); }
   catch (failure) { notify("error", failure.message); }
 }
 </script>
@@ -52,8 +53,8 @@ async function sign_out(cli) {
 <template>
   <div class="login-card">
     <div class="login-head">
-      <span>命令行登录</span>
-      <button type="button" class="panel-icon-button" :class="{ 'is-spinning': checking }" :disabled="checking" title="重新检查" aria-label="重新检查登录状态" @click="check"><UIcon name="i-lucide-refresh-cw" /></button>
+      <span>{{ t('命令行登录') }}</span>
+      <button type="button" class="panel-icon-button" :class="{ 'is-spinning': checking }" :disabled="checking" :title="t('重新检查')" :aria-label="t('重新检查登录状态')" @click="check"><UIcon name="i-lucide-refresh-cw" /></button>
     </div>
     <p v-if="status?.error" class="panel-note is-amber"><UIcon name="i-lucide-circle-alert" />{{ status.error }}</p>
     <div v-for="cli in CLIS" v-else :key="cli.key" class="login-row">
@@ -64,10 +65,10 @@ async function sign_out(cli) {
           <UIcon v-if="row(cli)?.signed_in" name="i-lucide-circle-check" /><UIcon v-else-if="row(cli)?.installed" name="i-lucide-circle-dashed" />{{ describe(row(cli)) }}</small>
       </div>
       <template v-if="row(cli)?.signed_in">
-        <button type="button" class="panel-button is-outline is-small" @click="open(cli)"><UIcon name="i-lucide-arrow-left-right" />切换方式</button>
-        <button type="button" class="panel-button is-plain is-small" @click="sign_out(cli)">退出</button>
+        <button type="button" class="panel-button is-outline is-small" @click="open(cli)"><UIcon name="i-lucide-arrow-left-right" />{{ t('切换方式') }}</button>
+        <button type="button" class="panel-button is-plain is-small" @click="sign_out(cli)">{{ t('退出') }}</button>
       </template>
-      <button v-else type="button" class="panel-button is-primary is-small" :disabled="!row(cli)?.installed" @click="open(cli)"><UIcon name="i-lucide-log-in" />登录</button>
+      <button v-else type="button" class="panel-button is-primary is-small" :disabled="!row(cli)?.installed" @click="open(cli)"><UIcon name="i-lucide-log-in" />{{ t('登录') }}</button>
     </div>
   </div>
   <LoginDialog v-model:open="dialog.open" :target="target" :who="who" :cli="dialog.cli" :methods="dialog.cli ? state.login_methods?.[dialog.cli.key] || [] : []" @done="finished" />

@@ -10,6 +10,7 @@
 import { computed, inject, onMounted, ref, watch } from "vue";
 import { call } from "./api.js";
 import SkillLibrary from "./SkillLibrary.vue";
+import { t } from '../i18n.js';
 
 const props = defineProps({ account: { type: String, required: true } });
 const { reload, notify, refreshed } = inject("panel");
@@ -34,9 +35,9 @@ watch(() => props.account, load);
 const library_names = computed(() => new Set(library.value.map((skill) => skill.name)));
 /** Where an installed skill came from, and whether it can be removed here (room skills stay; the owner's own too). */
 function source(skill) {
-  if (skill.discussion) return { label: "共议内置", tag: "is-blue", removable: false };
-  if (library_names.value.has(skill.name)) return { label: "技能库", tag: "is-green", removable: true };
-  return { label: owner.value ? "手动安装" : "账号自行安装", tag: "is-gray", removable: !owner.value };
+  if (skill.discussion) return { label: t('共议内置'), tag: "is-blue", removable: false };
+  if (library_names.value.has(skill.name)) return { label: t('技能库'), tag: "is-green", removable: true };
+  return { label: owner.value ? t('手动安装') : t('账号自行安装'), tag: "is-gray", removable: !owner.value };
 }
 const installed = computed(() => [...(env.value?.skills || [])].sort((left, right) => Number(right.discussion) - Number(left.discussion) || left.name.localeCompare(right.name)));
 const installed_names = computed(() => new Set(installed.value.map((skill) => skill.name)));
@@ -52,7 +53,7 @@ const layout_ok = computed(() => env.value?.layout && Object.values(env.value.la
 
 async function init() {
   busy.value = "init";
-  try { await call(`${base.value}/init`, {}); notify("info", "AI 环境已初始化"); await load(); reload(); }
+  try { await call(`${base.value}/init`, {}); notify("info", t('AI 环境已初始化')); await load(); reload(); }
   catch (failure) { notify("error", failure.message); }
   finally { busy.value = ""; }
 }
@@ -62,7 +63,7 @@ async function change(name, install) {
   busy.value = name;
   try {
     await call(`${base.value}/skills`, install ? { install: [name], remove: [] } : { install: [], remove: [name] });
-    notify("info", `${install ? "已安装" : "已移除"} ${name}`);
+    notify("info", `${install ? t('已安装') : t('已移除')} ${name}`);
     await load();
   } catch (failure) { notify("error", failure.message); }
   finally { busy.value = ""; }
@@ -70,7 +71,7 @@ async function change(name, install) {
 
 async function save_prompt() {
   busy.value = "prompt";
-  try { await call(`${base.value}/prompt`, { text: prompt.value }); notify("info", "系统提示词已保存，三家同时生效"); await load(); }
+  try { await call(`${base.value}/prompt`, { text: prompt.value }); notify("info", t('系统提示词已保存，三家同时生效')); await load(); }
   catch (failure) { notify("error", failure.message); }
   finally { busy.value = ""; }
 }
@@ -81,62 +82,62 @@ function close_library() { library_open.value = false; load(); }
 <template>
   <div class="env">
     <div class="env-head">
-      <span>技能 <small>{{ owner ? "~\\.agents\\skills，由 Claude Code、Codex、Antigravity 共用" : "由 Claude Code、Codex、Antigravity 共用" }}</small></span>
+      <span>{{ t('技能') }} <small>{{ owner ? t('~\\.agents\\skills，由 Claude Code、Codex、Antigravity 共用') : t('由 Claude Code、Codex、Antigravity 共用') }}</small></span>
       <span class="env-tools">
-        <button type="button" class="panel-button is-outline is-small" @click="library_open = true"><UIcon name="i-lucide-library" />管理技能库</button>
-        <button type="button" class="panel-icon-button" :class="{ 'is-spinning': loading }" :disabled="loading" title="重新读取" aria-label="重新读取" @click="load"><UIcon name="i-lucide-refresh-cw" /></button>
+        <button type="button" class="panel-button is-outline is-small" @click="library_open = true"><UIcon name="i-lucide-library" />{{ t('管理技能库') }}</button>
+        <button type="button" class="panel-icon-button" :class="{ 'is-spinning': loading }" :disabled="loading" :title="t('重新读取')" :aria-label="t('重新读取')" @click="load"><UIcon name="i-lucide-refresh-cw" /></button>
       </span>
     </div>
 
     <p v-if="env?.error" class="panel-note is-amber"><UIcon name="i-lucide-circle-alert" />{{ env.error }}</p>
-    <p v-else-if="!env" class="env-line">读取中…</p>
+    <p v-else-if="!env" class="env-line">{{ t('读取中…') }}</p>
     <template v-else>
       <div v-if="!owner" class="env-line">
         <UIcon :name="layout_ok ? 'i-lucide-circle-check' : 'i-lucide-circle-dashed'" :class="layout_ok ? 'is-ok' : 'is-warn'" />
-        <div class="env-text"><strong>{{ layout_ok ? "AI 环境已初始化" : "AI 环境未初始化" }}</strong>
-          <small>{{ layout_ok ? "已安装共议内置技能、系统提示词与随包工作流" : "初始化将安装共议内置技能、系统提示词与随包工作流" }}</small></div>
+        <div class="env-text"><strong>{{ layout_ok ? t('AI 环境已初始化') : t('AI 环境未初始化') }}</strong>
+          <small>{{ layout_ok ? t('已安装共议内置技能、系统提示词与随包工作流') : t('初始化将安装共议内置技能、系统提示词与随包工作流') }}</small></div>
         <button type="button" class="panel-button is-small" :class="layout_ok ? 'is-outline' : 'is-primary'" :disabled="Boolean(busy)" @click="init">
-          <UIcon :name="busy === 'init' ? 'i-lucide-loader' : 'i-lucide-wand-sparkles'" :class="{ 'animate-spin': busy === 'init' }" />{{ layout_ok ? "重新初始化" : "初始化" }}</button>
+          <UIcon :name="busy === 'init' ? 'i-lucide-loader' : 'i-lucide-wand-sparkles'" :class="{ 'animate-spin': busy === 'init' }" />{{ layout_ok ? t('重新初始化') : t('初始化') }}</button>
       </div>
 
       <div class="env-block">
         <button type="button" class="env-toggle" :disabled="!installed.length" @click="installed_open = !installed_open">
-          <strong>已安装（{{ installed.length }}）</strong><small>{{ installed.length ? summary : "暂无已安装技能" }}</small>
+          <strong>{{ t('已安装（{value1}）', { value1: installed.length }) }}</strong><small>{{ installed.length ? summary : t('暂无已安装技能') }}</small>
           <UIcon v-if="installed.length" :name="installed_open ? 'i-lucide-chevron-up' : 'i-lucide-chevron-down'" /></button>
         <div v-for="skill in installed_open ? installed : []" :key="skill.name" class="env-skill">
-          <span><b>{{ skill.name }}</b><em :class="source(skill).tag">{{ source(skill).label }}</em><small :title="skill.description">{{ skill.description || "（SKILL.md 没写描述）" }}</small></span>
+          <span><b>{{ skill.name }}</b><em :class="source(skill).tag">{{ source(skill).label }}</em><small :title="skill.description">{{ skill.description || t('（SKILL.md 没写描述）') }}</small></span>
           <button v-if="source(skill).removable" type="button" class="panel-button is-plain is-small" :disabled="Boolean(busy)" @click="change(skill.name, false)">
-            <UIcon v-if="busy === skill.name" name="i-lucide-loader" class="animate-spin" />移除</button>
+            <UIcon v-if="busy === skill.name" name="i-lucide-loader" class="animate-spin" />{{ t('移除') }}</button>
         </div>
       </div>
 
       <div class="env-block">
-        <strong>可从技能库安装</strong>
-        <p v-if="!library.length" class="env-empty">技能库为空。请先通过“管理技能库”导入技能。</p>
-        <p v-else-if="!available.length" class="env-empty">技能库中的技能均已安装。</p>
+        <strong>{{ t('可从技能库安装') }}</strong>
+        <p v-if="!library.length" class="env-empty">{{ t('技能库为空。请先通过“管理技能库”导入技能。') }}</p>
+        <p v-else-if="!available.length" class="env-empty">{{ t('技能库中的技能均已安装。') }}</p>
         <div v-for="skill in available" :key="skill.name" class="env-skill">
-          <span><b>{{ skill.name }}</b><small :title="skill.description">{{ skill.description || "（SKILL.md 没写描述）" }}</small></span>
+          <span><b>{{ skill.name }}</b><small :title="skill.description">{{ skill.description || t('（SKILL.md 没写描述）') }}</small></span>
           <button type="button" class="panel-button is-outline is-small" :disabled="Boolean(busy)" @click="change(skill.name, true)">
-            <UIcon :name="busy === skill.name ? 'i-lucide-loader' : 'i-lucide-plus'" :class="{ 'animate-spin': busy === skill.name }" />安装</button>
+            <UIcon :name="busy === skill.name ? 'i-lucide-loader' : 'i-lucide-plus'" :class="{ 'animate-spin': busy === skill.name }" />{{ t('安装') }}</button>
         </div>
       </div>
 
       <div v-if="!owner" class="env-block">
         <button type="button" class="env-toggle" @click="prompt_open = !prompt_open">
-          <strong>系统提示词</strong><small>三家共用一份（~\.codex\AGENTS.md，另两份是它的硬链接）</small>
+          <strong>{{ t('系统提示词') }}</strong><small>{{ t('三家共用一份（~\\.codex\\AGENTS.md，另两份是它的硬链接）') }}</small>
           <UIcon :name="prompt_open ? 'i-lucide-chevron-up' : 'i-lucide-chevron-down'" /></button>
         <template v-if="prompt_open">
           <textarea v-model="prompt" class="panel-input env-prompt" spellcheck="false" />
           <div class="env-actions">
             <button type="button" class="panel-button is-primary is-small" :disabled="prompt === env.prompt || Boolean(busy)" @click="save_prompt">
-              <UIcon v-if="busy === 'prompt'" name="i-lucide-loader" class="animate-spin" />保存</button>
+              <UIcon v-if="busy === 'prompt'" name="i-lucide-loader" class="animate-spin" />{{ t('保存') }}</button>
           </div>
         </template>
       </div>
     </template>
   </div>
 
-  <UModal :open="library_open" title="技能库" description="集中存放导入的技能，可在各账号的技能分区中安装。" :ui="{ content: 'max-w-3xl' }" @update:open="(open) => !open && close_library()">
+  <UModal :open="library_open" :title="t('技能库')" :description="t('集中存放导入的技能，可在各账号的技能分区中安装。')" :ui="{ content: 'max-w-3xl' }" @update:open="(open) => !open && close_library()">
     <template #body><SkillLibrary /></template>
   </UModal>
 </template>

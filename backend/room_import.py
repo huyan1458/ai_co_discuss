@@ -7,11 +7,13 @@ restored.
 """
 
 import hashlib
+import json
 import re
 import sqlite3
 import uuid
 
 from .runtime import begin_write, require_owner, token_hash
+from .texts import Text, incoming_text
 
 BACKUP_FORMAT = "ai-codiscuss-room-backup"
 ROOM_ID_PATTERN = re.compile(r"^[A-Za-z0-9_-]{1,64}$")
@@ -22,25 +24,26 @@ SESSION_TABLES = ("discussion_sessions", "discussion_conclusions", "session_requ
                     "session_state", "session_limits", "session_round_budgets", "session_options", "session_pauses")
 # Tables whose integer IDs are renumbered, with the backup table that holds their rows.
 RENUMBERED = {"messages": "messages", "room_members": "room_members", "member_requests": "member_requests",
-              "discussion_sessions": "discussion_sessions", "session_requests": "session_requests"}
+              "discussion_sessions": "discussion_sessions", "session_requests": "session_requests",
+              "scheduler_decisions": "scheduler_decisions"}
 
 
 def backup_tables(backup):
     """Validate the backup envelope and return its tables and the single room row."""
     if (not isinstance(backup, dict) or backup.get("format") != BACKUP_FORMAT
             or backup.get("version") != 2):
-        raise ValueError("不是可导入的房间备份（需要 ai-codiscuss-room-backup 第 2 版）")
+        raise ValueError(Text('不是可导入的房间备份（需要 ai-codiscuss-room-backup 第 2 版）'))
     tables = backup.get("tables")
     if not isinstance(tables, dict) or not isinstance(tables.get("rooms"), list) or len(tables["rooms"]) != 1:
-        raise ValueError("备份须恰好包含一个房间")
+        raise ValueError(Text('备份须恰好包含一个房间'))
     if any(name not in tables for name in SESSION_TABLES):
-        raise ValueError("第 2 版备份缺少讨论会话历史表，拒绝静默丢弃新字段")
+        raise ValueError(Text('第 2 版备份缺少讨论会话历史表，拒绝静默丢弃新字段'))
     for name, rows in tables.items():
         if not isinstance(rows, list) or any(not isinstance(row, dict) for row in rows):
-            raise ValueError(f"备份表 {name} 格式无效")
+            raise ValueError(Text('备份表 {value1} 格式无效', value1=name))
     room = tables["rooms"][0]
     if not isinstance(room.get("id"), str) or not ROOM_ID_PATTERN.match(room["id"]):
-        raise ValueError("备份中的房间编号无效")
+        raise ValueError(Text('备份中的房间编号无效'))
     return tables, room
 
 
@@ -120,15 +123,15 @@ def settings_statements(tables, room, maps):
         statements.append(("INSERT INTO room_briefs (room_id,text,until,updated_at) VALUES (?,?,?,?)",
                            (room_id, remap_text(row["text"], messages), remap_until(row["until"], messages), row["updated_at"])))
     for row in tables.get("scheduler_decisions", []):
-        statements.append(("""INSERT INTO scheduler_decisions (room_id,after_message_id,kind,label,confidence,applied,provider,created_at)
-                       VALUES (?,?,?,?,?,?,?,?)""", (room_id, messages.get(row["after_message_id"], 0), row["kind"], row["label"],
+        statements.append(("""INSERT INTO scheduler_decisions (id,room_id,after_message_id,kind,label,confidence,applied,provider,created_at)
+                       VALUES (?,?,?,?,?,?,?,?,?)""", (maps["scheduler_decisions"][row["id"]], room_id, messages.get(row["after_message_id"], 0), row["kind"], row["label"],
                                                      row.get("confidence"), row["applied"], row["provider"], row["created_at"])))
         if row.get("feedback"):
-            statements.append(("""INSERT INTO scheduler_feedback (decision_id,rating,should_be,note,created_at) VALUES (last_insert_rowid(),?,?,?,?)""",
-                               (row["feedback"], row.get("should_be", ""), row.get("note", ""), row["created_at"])))
+            statements.append(("""INSERT INTO scheduler_feedback (decision_id,rating,should_be,note,created_at) VALUES (?,?,?,?,?)""",
+                               (maps["scheduler_decisions"][row["id"]], row["feedback"], row.get("should_be", ""), row.get("note", ""), row["created_at"])))
         if row.get("context"):
-            statements.append(("INSERT INTO scheduler_decision_context (decision_id,context) SELECT id,? FROM scheduler_decisions WHERE room_id=? ORDER BY id DESC LIMIT 1",
-                               (row["context"], room_id)))
+            statements.append(("INSERT INTO scheduler_decision_context (decision_id,context) VALUES (?,?)",
+                               (maps["scheduler_decisions"][row["id"]], row["context"])))
     return statements
 
 
@@ -226,11 +229,46 @@ def session_statements(tables, room_id, maps):
 
 def import_statements(tables, room, maps, control_hash):
     """Build the ordered writes that recreate one backup; the D1 adapter builds the same sequence."""
-    return [*room_statements(tables, room, maps, control_hash), *member_statements(tables, room["id"], maps),
+    statements = [*room_statements(tables, room, maps, control_hash), *member_statements(tables, room["id"], maps),
             *history_statements(tables, room["id"], maps), *settings_statements(tables, room, maps),
             *record_statements(tables, room["id"], maps),
             *session_statements(tables, room["id"], maps),
             ]
+    owner_ids = {"room": {room["id"]: room["id"]}, "message": maps["messages"],
+                 "member": maps["room_members"], "request": maps["member_requests"],
+                 "session": maps["discussion_sessions"], "session_request": maps["session_requests"],
+                 "decision": maps["scheduler_decisions"], "scheduler_decision": maps["scheduler_decisions"]}
+    source_fields = {"room": {row["id"]: {"title": row.get("title"), "goal": row.get("goal"),
+                                           "state_text": row.get("state_text")}
+                               for row in tables.get("rooms", [])},
+                     "message": {row["id"]: {"text": row.get("text")} for row in tables.get("messages", [])},
+                     "session_request": {row["id"]: {"question": row.get("question")} for row in tables.get("session_requests", [])},
+                     "decision": {row["id"]: {"label": row.get("label")} for row in tables.get("scheduler_decisions", [])},
+                     "scheduler_decision": {row["id"]: {"label": row.get("label")} for row in tables.get("scheduler_decisions", [])}}
+    for row in tables.get("stored_texts", []):
+        owner_id = owner_ids.get(row["owner"], {}).get(row["owner_id"])
+        if owner_id is not None:
+            source_value = source_fields.get(row["owner"], {}).get(row["owner_id"], {}).get(row["field"])
+            if source_value is None:
+                raise ValueError(Text("备份中的翻译文本没有对应原文"))
+            try:
+                params = json.loads(row["params"])
+                incoming_text(source_value, {"template": row["template"], "params": params})
+            except (ValueError, TypeError, json.JSONDecodeError) as error:
+                raise ValueError(Text("备份中的翻译文本与原文不一致")) from error
+            template = row["template"]
+            if (row["owner"], row["field"]) in (("message", "text"), ("session_request", "question")):
+                template = remap_text(template, maps["messages"])
+                params = {key: remap_text(value, maps["messages"]) if isinstance(value, str) else value
+                          for key, value in params.items()}
+                for key in re.findall(r"#\{([A-Za-z_][A-Za-z0-9_]*)\}", template):
+                    value = params[key]
+                    if str(value).isdigit() and int(value) in maps["messages"]:
+                        mapped = maps["messages"][int(value)]
+                        params[key] = str(mapped) if isinstance(value, str) else mapped
+            statements.append(("INSERT INTO stored_texts(owner,owner_id,field,template,params) VALUES(?,?,?,?,?)",
+                               (row["owner"], owner_id, row["field"], template, json.dumps(params, ensure_ascii=False))))
+    return statements
 
 
 def import_room(connection, backup, control_token):
@@ -246,7 +284,7 @@ def import_room(connection, backup, control_token):
     """
     control_hash = token_hash(control_token)
     if not control_hash:
-        raise ValueError("导入须提供 32–256 字符的房间控制凭据")
+        raise ValueError(Text('导入须提供 32–256 字符的房间控制凭据'))
     tables, room = backup_tables(backup)
     begin_write(connection)
     if connection.execute("SELECT 1 FROM rooms WHERE id=?", (room["id"],)).fetchone():
@@ -257,7 +295,7 @@ def import_room(connection, backup, control_token):
         for sql, params in import_statements(tables, room, maps, control_hash):
             connection.execute(sql, params)
     except (KeyError, sqlite3.Error) as error:
-        raise ValueError(f"备份内容不完整或与本站数据冲突，未导入：{error}") from error
+        raise ValueError(Text('备份内容不完整或与本站数据冲突，未导入：{value1}', value1=error)) from error
     return {"id": room["id"], "title": room["title"], "imported": True,
             "attachments": maps["attachments"]}
 
@@ -267,7 +305,7 @@ def imported_attachment(connection, room_id, attachment_id, token, data):
     require_owner(connection, room_id, token)
     row = connection.execute("SELECT * FROM attachments WHERE room_id=? AND id=?", (room_id, attachment_id)).fetchone()
     if row is None:
-        raise LookupError("附件不存在")
+        raise LookupError(Text('附件不存在'))
     if len(data) != row["size"] or hashlib.sha256(data).hexdigest() != row["sha256"]:
-        raise ValueError("附件内容与备份记录不一致")
+        raise ValueError(Text('附件内容与备份记录不一致'))
     return dict(row)

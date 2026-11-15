@@ -28,10 +28,10 @@ function commit(event) {
 
 <template>
   <span class="number-stepper" role="group" :aria-label="label">
-    <button type="button" class="number-stepper-step" :aria-label="`减少 ${step}`" :disabled="disabled || modelValue <= min" @click="set(modelValue - step)"><UIcon name="i-lucide-minus" /></button>
+    <button type="button" class="number-stepper-step" :aria-label="t('减少 {step}', { step })" :disabled="disabled || modelValue <= min" @click="set(modelValue - step)"><UIcon name="i-lucide-minus" /></button>
     <input class="number-stepper-value" type="text" inputmode="numeric" pattern="[0-9]*" :maxlength="String(max).length" :aria-label="label" :value="modelValue" :disabled="disabled"
       :style="{ width: `${String(max).length + 1.5}ch` }" @focus="$event.target.select()" @change="commit" @keydown.enter.prevent="$event.target.blur()" />
-    <button type="button" class="number-stepper-step" :aria-label="`增加 ${step}`" :disabled="disabled || modelValue >= max" @click="set(modelValue + step)"><UIcon name="i-lucide-plus" /></button>
+    <button type="button" class="number-stepper-step" :aria-label="t('增加 {step}', { step })" :disabled="disabled || modelValue >= max" @click="set(modelValue + step)"><UIcon name="i-lucide-plus" /></button>
   </span>
 </template>
 

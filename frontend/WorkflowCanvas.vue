@@ -18,8 +18,10 @@ import "@vue-flow/controls/dist/style.css";
 import "@vue-flow/minimap/dist/style.css";
 import ExpertCard from "./ExpertCard.vue";
 import RosterAdd from "./RosterAdd.vue";
-import { access_label } from "../runner/expert_prompts.mjs";
+import { access_label as source_access_label } from "../runner/expert_prompts.mjs";
 import { MAX_EDGE_LABEL, MAX_HOST_LABEL, empty_flow, flow_shape } from "../runner/workflow_flow.mjs";
+import { t } from './i18n.js';
+const access_label = level => ({ read: t('只读'), write: t('可写'), auto: t('自动'), full: t('全放开'), own: t('自行决定') }[level] || source_access_label(level));
 
 const flow = defineModel("flow", { type: Object, default: null });
 // Clicking SKILL.md in the "派活以 SKILL.md 为准" hint opens it.
@@ -196,9 +198,9 @@ const drop = ref(null);
 const add_anchor = ref(null);
 const platforms = Object.keys(bridge.identities).filter((name) => name !== "用户");
 const roster_items = computed(() => [...platforms.map((name) => ({ value: name, name: bridge.display_name(name), ...bridge.identities[name],
-  title: `添加一张 ${bridge.display_name(name)} 卡片`, aria_label: `添加 ${name} 卡片` })),
+  title: t('添加一张 {value1} 卡片', { value1: bridge.display_name(name) }), aria_label: t('添加 {value1} 卡片', { value1: name }) })),
   ...bridge.expert_presets().map((preset, index) => ({ value: PRESET_PREFIX + preset.name, name: preset.label || preset.name,
-    ...bridge.identities[bridge.platform_of(preset.name)], separated: index === 0, title: preset.description || "专家预设", aria_label: `按预设 ${preset.label || preset.name} 添加卡片` }))]);
+    ...bridge.identities[bridge.platform_of(preset.name)], separated: index === 0, title: preset.description || t('专家预设'), aria_label: t('按预设 {value1} 添加卡片', { value1: preset.label || preset.name }) }))]);
 
 /** The first free card ID from a base: writer, writer2 … or role1, role2 … */
 function next_card(base) {
@@ -239,7 +241,7 @@ async function cards_from_room() {
     const card = next_card(item.card.toLowerCase().slice(0, 14));
     agents.value = [...agents.value, { ...item, card, name: `${bridge.platform_of(item.name)}-${card}` }];
   }
-  bridge.notify("info", `已带入 ${result.cards.length} 张卡片；请确认提示词里没有本机路径或密钥`);
+  bridge.notify("info", t('已带入 {value1} 张卡片；请确认提示词里没有本机路径或密钥', { value1: result.cards.length }));
 }
 
 /** Open the add menu at the toolbar button. */
@@ -649,22 +651,22 @@ function drag_stop() { dragging = false; layered.value = true; stored.value = li
       :is-valid-connection="valid_connection" elevate-nodes-on-select @connect="connect" @connect-start="connect_start" @connect-end="connect_end"
       @node-drag-start="drag_start" @node-drag-stop="drag_stop" @pane-ready="ready" @nodes-initialized="fit_once" @move-start="view_moved" @move-end="view_settled" @node-double-click="node_double_click">
       <template #node-start>
-        <UTooltip text="从右侧圆点拖线连到成员，示意谁先接手；拖到空白处可直接添加">
+        <UTooltip :text="t('从右侧圆点拖线连到成员，示意谁先接手；拖到空白处可直接添加')">
           <div class="workflow-pill is-start">
-            <UIcon name="i-lucide-play" class="workflow-icon" /><span>开始</span>
+            <UIcon name="i-lucide-play" class="workflow-icon" /><span>{{ t('开始') }}</span>
             <Handle type="source" :position="Position.Right" class="workflow-handle" :class="{ 'is-calling': !edges.some((edge) => edge.source === 'start') }" />
           </div>
         </UTooltip>
       </template>
       <template #node-host="node">
-        <UTooltip text="主持人：示意这里交回主持人判断；选中后可写上做什么">
+        <UTooltip :text="t('主持人：示意这里交回主持人判断；选中后可写上做什么')">
           <div class="workflow-host" :class="{ 'is-selected': node.selected }">
             <Handle type="target" :position="Position.Left" class="workflow-handle" />
-            <UIcon name="i-lucide-crown" class="workflow-host-icon" /><strong>主持人</strong>
-            <input v-if="node.selected" :value="node.data.label" class="workflow-note-input workflow-host-input nodrag" :maxlength="MAX_HOST_LABEL" placeholder="做什么"
-              aria-label="主持人在这里做什么" @input="set_note('nodes', node.id, $event.target.value)" @keydown.enter="$event.target.blur()" />
+            <UIcon name="i-lucide-crown" class="workflow-host-icon" /><strong>{{ t('主持人') }}</strong>
+            <input v-if="node.selected" :value="node.data.label" class="workflow-note-input workflow-host-input nodrag" :maxlength="MAX_HOST_LABEL" :placeholder="t('做什么')"
+              :aria-label="t('主持人在这里做什么')" @input="set_note('nodes', node.id, $event.target.value)" @keydown.enter="$event.target.blur()" />
             <p v-else-if="node.data.label" class="workflow-host-note">{{ node.data.label }}</p>
-            <button type="button" class="workflow-pill-close nodrag" aria-label="删除主持人节点" @click.stop="remove_node(node.id)"><UIcon name="i-lucide-x" class="workflow-icon" /></button>
+            <button type="button" class="workflow-pill-close nodrag" :aria-label="t('删除主持人节点')" @click.stop="remove_node(node.id)"><UIcon name="i-lucide-x" class="workflow-icon" /></button>
             <Handle type="source" :position="Position.Right" class="workflow-handle" />
           </div>
         </UTooltip>
@@ -672,18 +674,18 @@ function drag_stop() { dragging = false; layered.value = true; stored.value = li
       <template #node-sub="node">
         <div v-if="sub_of(node.data.sub)" class="workflow-sub" :class="{ 'is-selected': node.selected }" :title="sub_of(node.data.sub).description || undefined">
           <Handle type="target" :position="Position.Left" class="workflow-handle" />
-          <span class="workflow-sub-kind"><UIcon name="i-lucide-git-branch" class="workflow-icon" />子工作流</span>
+          <span class="workflow-sub-kind"><UIcon name="i-lucide-git-branch" class="workflow-icon" />{{ t('子工作流') }}</span>
           <strong>{{ sub_of(node.data.sub).label || node.data.sub }}</strong>
-          <small>{{ sub_of(node.data.sub).agents.length }} 位成员</small>
-          <button type="button" class="workflow-sub-enter nodrag" title="进入这个子工作流（也可双击）" @click.stop="open_sub(node.data.sub)">进入<UIcon name="i-lucide-arrow-right" class="workflow-icon" /></button>
-          <button type="button" class="workflow-pill-close nodrag" aria-label="从画布移除子工作流节点" @click.stop="remove_node(node.id)"><UIcon name="i-lucide-x" class="workflow-icon" /></button>
+          <small>{{ t('{value1} 位成员', { value1: sub_of(node.data.sub).agents.length }) }}</small>
+          <button type="button" class="workflow-sub-enter nodrag" :title="t('进入这个子工作流（也可双击）')" @click.stop="open_sub(node.data.sub)">{{ t('进入') }}<UIcon name="i-lucide-arrow-right" class="workflow-icon" /></button>
+          <button type="button" class="workflow-pill-close nodrag" :aria-label="t('从画布移除子工作流节点')" @click.stop="remove_node(node.id)"><UIcon name="i-lucide-x" class="workflow-icon" /></button>
           <Handle type="source" :position="Position.Right" class="workflow-handle" />
         </div>
       </template>
       <template #node-card="node">
         <div v-if="agent_of(node.data.card)" class="workflow-card" :class="{ 'is-selected': node.selected }">
           <Handle type="target" :position="Position.Left" class="workflow-handle" />
-          <div class="workflow-card-grip" title="按住拖动">
+          <div class="workflow-card-grip" :title="t('按住拖动')">
             <UIcon name="i-lucide-grip-horizontal" class="workflow-icon" />
           </div>
           <div class="workflow-card-body nodrag" :class="{ nopan: !TOUCH }">
@@ -691,8 +693,7 @@ function drag_stop() { dragging = false; layered.value = true; stored.value = li
               :access_locked="Boolean(agent_of(node.data.card).requested_access && agent_of(node.data.card).project_access === 'read')"
               @update:preset="(value) => set_agent(node.data.card, value)" @remove="remove_card(node.data.card)" />
             <label v-if="agent_of(node.data.card).requested_access" class="workflow-card-grant">
-              <input type="checkbox" :checked="agent_of(node.data.card).project_access !== 'read'" @change="grant(agent_of(node.data.card), $event.target.checked)" />
-              允许「{{ access_label(agent_of(node.data.card).requested_access) }}」</label>
+              <input type="checkbox" :checked="agent_of(node.data.card).project_access !== 'read'" @change="grant(agent_of(node.data.card), $event.target.checked)" /> {{ t('允许「{value1}」', { value1: access_label(agent_of(node.data.card).requested_access) }) }}</label>
           </div>
           <Handle type="source" :position="Position.Right" class="workflow-handle" />
         </div>
@@ -704,9 +705,9 @@ function drag_stop() { dragging = false; layered.value = true; stored.value = li
           <div v-if="edge.selected || edge.data?.label" class="workflow-edge-note nodrag nopan" :class="{ 'is-loop': shape.loops.has(edge.id), 'is-selected': edge.selected }"
             :style="{ transform: `translate(-50%, -50%) translate(${edge_path(edge)[1]}px, ${edge_path(edge)[2]}px)` }">
             <template v-if="edge.selected">
-              <input :value="edge.data?.label" class="workflow-note-input" :maxlength="MAX_EDGE_LABEL" placeholder="说明，如“返工”" aria-label="这条连线的说明"
+              <input :value="edge.data?.label" class="workflow-note-input" :maxlength="MAX_EDGE_LABEL" :placeholder="t('说明，如“返工”')" :aria-label="t('这条连线的说明')"
                 :style="{ width: `${Math.max(6, (edge.data?.label || '').length + 1)}em` }" @input="set_note('edges', edge.id, $event.target.value)" @keydown.enter="$event.target.blur()" />
-              <button type="button" class="workflow-edge-delete" aria-label="删除这条连线" @click="remove_edge(edge.id)"><UIcon name="i-lucide-x" class="workflow-icon" /></button>
+              <button type="button" class="workflow-edge-delete" :aria-label="t('删除这条连线')" @click="remove_edge(edge.id)"><UIcon name="i-lucide-x" class="workflow-icon" /></button>
             </template>
             <span v-else>{{ edge.data.label }}</span>
           </div>
@@ -716,44 +717,44 @@ function drag_stop() { dragging = false; layered.value = true; stored.value = li
       <Controls :show-interactive="false" position="top-right" class="workflow-canvas-controls" />
       <MiniMap v-if="!props.compact" pannable zoomable position="bottom-right" class="workflow-canvas-minimap" :width="168" :height="104" :node-border-radius="8" />
       <Panel position="top-left" class="workflow-canvas-toolbar">
-        <UTooltip text="添加成员（也可从圆点拖线到空白处）"><UButton icon="i-lucide-user-plus" :label="icons_only ? undefined : '成员'" aria-label="添加成员" :size="tool_size" color="neutral" variant="ghost" @click="open_add" /></UTooltip>
-        <UTooltip text="主持人节点：示意交回主持人判断的地方"><UButton icon="i-lucide-crown" :label="icons_only ? undefined : '主持人'" aria-label="添加主持人节点" :size="tool_size" color="neutral" variant="ghost" @click="add_host" /></UTooltip>
-        <UTooltip v-if="props.subs" text="子工作流节点：示意这里转去某个子工作流"><UButton icon="i-lucide-git-branch" :label="icons_only ? undefined : '子工作流'" aria-label="添加子工作流节点" :size="tool_size" color="neutral" variant="ghost" @click="open_add" /></UTooltip>
+        <UTooltip :text="t('添加成员（也可从圆点拖线到空白处）')"><UButton icon="i-lucide-user-plus" :label="icons_only ? undefined : t('成员')" :aria-label="t('添加成员')" :size="tool_size" color="neutral" variant="ghost" @click="open_add" /></UTooltip>
+        <UTooltip :text="t('主持人节点：示意交回主持人判断的地方')"><UButton icon="i-lucide-crown" :label="icons_only ? undefined : t('主持人')" :aria-label="t('添加主持人节点')" :size="tool_size" color="neutral" variant="ghost" @click="add_host" /></UTooltip>
+        <UTooltip v-if="props.subs" :text="t('子工作流节点：示意这里转去某个子工作流')"><UButton icon="i-lucide-git-branch" :label="icons_only ? undefined : t('子工作流')" :aria-label="t('添加子工作流节点')" :size="tool_size" color="neutral" variant="ghost" @click="open_add" /></UTooltip>
         <span class="workflow-canvas-divider" />
-        <UTooltip text="撤销 (Ctrl+Z)"><UButton icon="i-lucide-undo-2" :size="tool_size" color="neutral" variant="ghost" aria-label="撤销" :disabled="!past.length" @click="undo" /></UTooltip>
-        <UTooltip text="重做 (Ctrl+Shift+Z)"><UButton icon="i-lucide-redo-2" :size="tool_size" color="neutral" variant="ghost" aria-label="重做" :disabled="!future.length" @click="redo" /></UTooltip>
-        <UTooltip text="自动整理"><UButton icon="i-lucide-wand-sparkles" :size="tool_size" color="neutral" variant="ghost" aria-label="自动整理" @click="arrange" /></UTooltip>
+        <UTooltip :text="t('撤销 (Ctrl+Z)')"><UButton icon="i-lucide-undo-2" :size="tool_size" color="neutral" variant="ghost" :aria-label="t('撤销')" :disabled="!past.length" @click="undo" /></UTooltip>
+        <UTooltip :text="t('重做 (Ctrl+Shift+Z)')"><UButton icon="i-lucide-redo-2" :size="tool_size" color="neutral" variant="ghost" :aria-label="t('重做')" :disabled="!future.length" @click="redo" /></UTooltip>
+        <UTooltip :text="t('自动整理')"><UButton icon="i-lucide-wand-sparkles" :size="tool_size" color="neutral" variant="ghost" :aria-label="t('自动整理')" @click="arrange" /></UTooltip>
         <template v-if="$slots.actions"><span class="workflow-canvas-divider" /><slot name="actions" :icons-only="icons_only" /></template>
       </Panel>
       <Panel v-if="!props.compact" position="bottom-left" class="workflow-canvas-status">
-        <UIcon name="i-lucide-info" class="workflow-icon" /><span>连线只作示意，派活以</span>
-        <button type="button" class="workflow-canvas-skill" @click="emit('open-skill')">SKILL.md</button><span>为准</span>
+        <UIcon name="i-lucide-info" class="workflow-icon" /><span>{{ t('连线只作示意，派活以') }}</span>
+        <button type="button" class="workflow-canvas-skill" @click="emit('open-skill')">SKILL.md</button><span>{{ t('为准') }}</span>
       </Panel>
     </VueFlow>
     <UPopover :open="adding" :reference="add_anchor" :content="{ side: 'bottom', align: 'start', sideOffset: 8, collisionPadding: 12 }"
       :ui="{ content: 'workflow-canvas-add' }" @update:open="(value) => { adding = value; }">
       <template #content>
         <div class="workflow-canvas-add-body">
-          <RosterAdd label="添加成员卡片" :items="roster_items" @add="add_card" />
+          <RosterAdd :label="t('添加成员卡片')" :items="roster_items" @add="add_card" />
           <div v-if="agents.length" class="workflow-canvas-add-again">
-            <span>已有成员再放一次</span>
+            <span>{{ t('已有成员再放一次') }}</span>
             <UButton v-for="agent in agents" :key="agent.card" :label="label_of(agent.card)" icon="i-lucide-copy-plus" size="xs" color="neutral" variant="soft"
-              :title="`在画布上再放一个「${label_of(agent.card)}」：同一张卡片，示意它在流程里出场两次`" @click="place_again(agent.card)" />
+              :title="t('在画布上再放一个「{value1}」：同一张卡片，示意它在流程里出场两次', { value1: label_of(agent.card) })" @click="place_again(agent.card)" />
           </div>
           <div v-if="shared?.length" class="workflow-canvas-add-again">
-            <span>主线的成员</span>
+            <span>{{ t('主线的成员') }}</span>
             <UButton v-for="agent in shared" :key="agent.card" :label="label_of(agent.card)" icon="i-lucide-user-round-plus" size="xs" color="neutral" variant="soft"
-              :title="`把主线的「${label_of(agent.card)}」放进这个子工作流：同一张卡片，示意它在这里参与`" @click="place_again(agent.card)" />
+              :title="t('把主线的「{value1}」放进这个子工作流：同一张卡片，示意它在这里参与', { value1: label_of(agent.card) })" @click="place_again(agent.card)" />
           </div>
           <div v-if="props.subs" class="workflow-canvas-add-again">
-            <span>子工作流</span>
+            <span>{{ t('子工作流') }}</span>
             <UButton v-for="sub in props.subs" :key="sub.id" :label="sub.label || sub.id" icon="i-lucide-git-branch" size="xs" color="neutral" variant="soft"
-              :title="sub.description || '示意这里转去这个子工作流'" @click="add_sub_node(sub.id)" />
-            <UButton label="新建子工作流" icon="i-lucide-plus" size="xs" color="neutral" variant="soft" title="新建一个子工作流，放在这里，再进入它写 SKILL.md" @click="new_sub" />
+              :title="sub.description || t('示意这里转去这个子工作流')" @click="add_sub_node(sub.id)" />
+            <UButton :label="t('新建子工作流')" icon="i-lucide-plus" size="xs" color="neutral" variant="soft" :title="t('新建一个子工作流，放在这里，再进入它写 SKILL.md')" @click="new_sub" />
           </div>
           <div class="workflow-canvas-add-more">
-            <UButton v-if="drop" icon="i-lucide-crown" label="主持人" size="xs" color="neutral" variant="soft" @click="add_host" />
-            <UButton v-if="view.room?.id && !drop" icon="i-lucide-users" label="当前房间的成员" size="xs" color="neutral" variant="soft" @click="cards_from_room" />
+            <UButton v-if="drop" icon="i-lucide-crown" :label="t('主持人')" size="xs" color="neutral" variant="soft" @click="add_host" />
+            <UButton v-if="view.room?.id && !drop" icon="i-lucide-users" :label="t('当前房间的成员')" size="xs" color="neutral" variant="soft" @click="cards_from_room" />
           </div>
         </div>
       </template>

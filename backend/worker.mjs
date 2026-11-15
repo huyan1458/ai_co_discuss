@@ -6,9 +6,10 @@
 const MAX_BODY_BYTES = 512 * 1024;
 
 class HttpError extends Error {
-  constructor(status, message) {
-    super(message);
+  constructor(status, template, params = {}) {
+    super(template.replace(/\{(\w+)\}/g, (match, name) => Object.hasOwn(params, name) ? String(params[name]) : match));
     this.status = status;
+    this.error_text = { template, params };
   }
 }
 
@@ -239,7 +240,7 @@ async function pair_machine(database, payload, now, setup_key) {
   const name = typeof payload.name === "string" ? payload.name.trim() : "";
   const hashed = await machine_token_digest(token);
   if (typeof id !== "string" || !/^[0-9a-f]{32}$/.test(id) || !hashed) throw new HttpError(400, "电脑编号或凭据无效");
-  if (name.length < 1 || name.length > MACHINE_NAME_MAX) throw new HttpError(400, `电脑名称需为 1–${MACHINE_NAME_MAX} 个字符`);
+  if (name.length < 1 || name.length > MACHINE_NAME_MAX) throw new HttpError(400, "电脑名称需为 1–{max} 个字符", { max: MACHINE_NAME_MAX });
   await database.batch([
     database.prepare("INSERT INTO local_machines (id,name,token_hash,created_at) VALUES (?,?,?,?) ON CONFLICT(id) DO UPDATE SET name=excluded.name, token_hash=excluded.token_hash")
       .bind(id, name, hashed, now),
@@ -258,7 +259,7 @@ async function require_machine(database, machine_id, token) {
 
 /** Project names and ids only; directories never leave the computer. */
 function valid_projects(value) {
-  if (!Array.isArray(value) || value.length > REMOTE_PROJECTS_MAX) throw new HttpError(400, `项目列表须为不超过 ${REMOTE_PROJECTS_MAX} 项的列表`);
+  if (!Array.isArray(value) || value.length > REMOTE_PROJECTS_MAX) throw new HttpError(400, "项目列表须为不超过 {max} 项的列表", { max: REMOTE_PROJECTS_MAX });
   return value.map(item => {
     const { id, name } = item && typeof item === "object" ? item : {};
     if (typeof id !== "string" || !/^[0-9a-f]{8,32}$/.test(id) || typeof name !== "string" || name.length < 1 || name.length > REMOTE_PROJECT_NAME_MAX) throw new HttpError(400, "项目须包含有效编号与名称");
@@ -511,7 +512,8 @@ async function fetch_request(request, env) {
     return await handle_api(env.DB, request, parts, env.ADMIN_SETUP_KEY, env.RELAY ?? null);
   } catch (error) {
     const status = error instanceof HttpError ? error.status : 500;
-    return respond({ error: status === 500 ? "服务器内部错误" : error.message }, status);
+    const failure = status === 500 ? new HttpError(500, "服务器内部错误") : error;
+    return respond({ error: failure.message, error_text: failure.error_text }, status);
   }
 }
 

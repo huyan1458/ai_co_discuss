@@ -60,8 +60,8 @@ function save() {
         </div>
         <div class="member-text-footer">
           <div><slot name="extra" /></div>
-          <UButton label="取消" color="neutral" variant="ghost" @click="open = false" />
-          <UButton v-if="!readonly" type="submit" label="保存" class="channel-primary-button" :loading="saving" :disabled="!changed" />
+          <UButton :label="t('取消')" color="neutral" variant="ghost" @click="open = false" />
+          <UButton v-if="!readonly" type="submit" :label="t('保存')" class="channel-primary-button" :loading="saving" :disabled="!changed" />
         </div>
       </form>
     </template>

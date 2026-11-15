@@ -3,6 +3,7 @@ import { homedir } from 'node:os';
 import { sep } from 'node:path';
 import { emitKeypressEvents } from 'node:readline';
 import { createInterface } from 'node:readline/promises';
+import { t } from './i18n.mjs';
 
 const PATH_WIDTH = 56;
 const SPIN_FRAMES = ['◒', '◐', '◓', '◑'];
@@ -154,19 +155,19 @@ export function checkbox_prompt(message, items, input = process.stdin, output = 
   };
   const draw = lines => { drawn = redraw(output, lines, drawn); };
   const active = () => [`${tone.cyan('◆')}  ${message}`, ...rows.map((item, index) => checkbox_row(item, index === cursor, checked[index])),
-    `${tone.gray('└')}  ${tone.dim('↑↓ 移动 · 空格 勾选 · 回车 确认')}`];
+    `${tone.gray('└')}  ${tone.dim(t('↑↓ 移动 · 空格 勾选 · 回车 确认'))}`];
   return new Promise((done, fail) => {
     const finish = error => {
       input.off('keypress', on_key);
       input.setRawMode(false);
       input.pause();
-      const chosen = items.filter((_, index) => checked[index]).map(item => item.label).join('、') || '不接入软件，只配置网站';
-      draw(error ? [`${tone.red('■')}  ${message}`, `${bar()}  ${tone.dim('已取消')}`] : [`${tone.green('◇')}  ${message}`, `${bar()}  ${tone.dim(chosen)}`, bar()]);
+      const chosen = items.filter((_, index) => checked[index]).map(item => item.label).join('、') || t('不接入软件，只配置网站');
+      draw(error ? [`${tone.red('■')}  ${message}`, `${bar()}  ${tone.dim(t('已取消'))}`] : [`${tone.green('◇')}  ${message}`, `${bar()}  ${tone.dim(chosen)}`, bar()]);
       output.write('\x1b[?25h');
       if (error) fail(error); else done(checked);
     };
     const on_key = (_text, key = {}) => {
-      if (key.ctrl && key.name === 'c') return finish(new Error('已取消安装选择'));
+      if (key.ctrl && key.name === 'c') return finish(new Error(t('已取消安装选择')));
       if (key.name === 'up' || key.name === 'k') move(-1);
       else if (key.name === 'down' || key.name === 'j') move(1);
       else if (key.name === 'space' && !items[cursor]?.disabled) checked[cursor] = !checked[cursor];
@@ -219,27 +220,27 @@ export function tree_prompt(message, groups, input = process.stdin, output = pro
   };
   const overview = () => [`${tone.cyan('◆')}  ${message}`, bar(),
     ...groups.map((group, index) => `${bar()}  ${pad(group.label, width)}  ${tone.dim(`${count(index)} / ${checked[index].length}`)}`),
-    bar(), `${bar()}  ${tone.dim('▸ 修改安装配置（→ 展开）')}`, `${tone.gray('└')}  ${tone.dim('回车 继续 · Ctrl+C 退出')}`];
+    bar(), `${bar()}  ${tone.dim(t('▸ 修改安装配置（→ 展开）'))}`, `${tone.gray('└')}  ${tone.dim(t('回车 继续 · Ctrl+C 退出'))}`];
   const editor = () => {
     const list = rows(), focus = list[cursor];
     const detail = focus.item === undefined ? groups[focus.group].description : groups[focus.group].items[focus.item].description;
     return [`${tone.cyan('◆')}  ${message}`, bar(), ...list.map((row, index) => row_text(row, index === cursor)), bar(),
-      `${bar()}  ${tone.dim(detail)}`, `${bar()}  ${tone.cyan(`${enabled()} / ${total} 项启用 · 仅本次生效`)}`, bar(),
-      `${bar()}  ${tone.dim('↑↓ 移动 · 空格 开关 · → 展开 · ← 收起 / 返回概览')}`, `${tone.gray('└')}  ${tone.dim('回车 继续 · Ctrl+C 退出')}`];
+      `${bar()}  ${tone.dim(detail)}`, `${bar()}  ${tone.cyan(t('{value1} / {value2} 项启用 · 仅本次生效', { value1: enabled(), value2: total }))}`, bar(),
+      `${bar()}  ${tone.dim(t('↑↓ 移动 · 空格 开关 · → 展开 · ← 收起 / 返回概览'))}`, `${tone.gray('└')}  ${tone.dim(t('回车 继续 · Ctrl+C 退出'))}`];
   };
   return new Promise((done, fail) => {
     const finish = error => {
       input.off('keypress', on_key);
       input.setRawMode(false);
       input.pause();
-      const summary = groups.map((group, index) => `${group.label}：${group.items.filter((_, item) => checked[index][item]).map(item => item.label).join('、') || '不安装'}`);
-      draw(error ? [`${tone.red('■')}  ${message}`, `${bar()}  ${tone.dim('已取消')}`]
+      const summary = groups.map((group, index) => `${group.label}：${group.items.filter((_, item) => checked[index][item]).map(item => item.label).join('、') || t('不安装')}`);
+      draw(error ? [`${tone.red('■')}  ${message}`, `${bar()}  ${tone.dim(t('已取消'))}`]
         : [`${tone.green('◇')}  ${message}`, ...summary.map(line => `${bar()}  ${tone.dim(line)}`), bar()]);
       output.write('\x1b[?25h');
       if (error) fail(error); else done(checked);
     };
     const on_key = (_text, key = {}) => {
-      if (key.ctrl && key.name === 'c') return finish(new Error('已取消安装配置'));
+      if (key.ctrl && key.name === 'c') return finish(new Error(t('已取消安装配置')));
       if (key.name === 'return' || key.name === 'enter') return finish();
       if (!editing) {
         if (key.name === 'right') editing = true;

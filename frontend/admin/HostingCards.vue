@@ -9,19 +9,20 @@ import { computed, inject, ref } from "vue";
 import { call, entry_address } from "./api.js";
 import RelayDialog from "./RelayDialog.vue";
 import TunnelDialog from "./TunnelDialog.vue";
+import { t } from '../i18n.js';
 
 const { state, reload, notify } = inject("panel");
 const installing = ref(false);
 const runtime = computed(() => state.value.clis || {});
-const PARTS = [["claude", "Claude Code"], ["codex", "Codex"], ["agy", "Antigravity"], ["app", "共议"], ["python", "Python"]];
+const PARTS = [["claude", "Claude Code"], ["codex", "Codex"], ["agy", "Antigravity"], ["app", t('共议')], ["python", "Python"]];
 const runtime_ready = computed(() => PARTS.every(([key]) => runtime.value[key]));
 const runtime_stale = computed(() => runtime.value.app && runtime.value.app_version && runtime.value.app_version !== state.value.version);
 const entry = computed(() => state.value.entry || { running: false, port: 0, public_url: "", mode: "local", relay: {} });
 const entry_busy = ref(""), tunnel_open = ref(false), relay_open = ref(false);
 const MODES = [
-  { key: "local", icon: "i-lucide-monitor", label: "仅这台电脑", note: "登录入口只在这台电脑上能打开，适合先自己试用。同一局域网的其他设备也打不开。" },
-  { key: "relay", icon: "i-lucide-cloud", label: "线上中转", note: "不需要域名：经共议线上站点中转到这台电脑，手机和外地的电脑都能打开。需要先用接入码接入线上站点。" },
-  { key: "tunnel", icon: "i-lucide-globe", label: "自有域名", note: "用你托管在 Cloudflare 的域名，经 Cloudflare 隧道连到这台电脑。需要有自己的域名。" },
+  { key: "local", icon: "i-lucide-monitor", label: t('仅这台电脑'), note: t('登录入口只在这台电脑上能打开，适合先自己试用。同一局域网的其他设备也打不开。') },
+  { key: "relay", icon: "i-lucide-cloud", label: t('线上中转'), note: t('不需要域名：经共议线上站点中转到这台电脑，手机和外地的电脑都能打开。需要先用接入码接入线上站点。') },
+  { key: "tunnel", icon: "i-lucide-globe", label: t('自有域名'), note: t('用你托管在 Cloudflare 的域名，经 Cloudflare 隧道连到这台电脑。需要有自己的域名。') },
 ];
 const current = computed(() => MODES.find((item) => item.key === entry.value.mode) || MODES[0]);
 // The relay needs this computer bound to an online site (its entry address is fetched on switching); the tunnel, its setup.
@@ -29,20 +30,20 @@ const prepared = (mode) => mode === "local" || (mode === "relay" ? Boolean(entry
 // The tunnel as cloudflared reports it: connected to Cloudflare, running but not (yet) connected, or not running.
 const tunnel_state = computed(() => {
   const tunnel = entry.value.tunnel;
-  if (tunnel?.connected) return { label: "已连接", tag: "is-green", hint: "" };
-  if (tunnel?.running) return { label: "连接中", tag: "is-amber", hint: "cloudflared 已运行但还没连上 Cloudflare：刚启动时稍等片刻；持续如此请检查网络与代理是否放行 *.cloudflare.com、*.argotunnel.com，日志在数据目录 tunnel.log" };
-  return { label: "未运行", tag: "is-amber", hint: entry.value.running ? "管理面板每分钟会自动拉起一次；持续如此请查看数据目录 tunnel.log" : "登录入口启动后隧道随之启动" };
+  if (tunnel?.connected) return { label: t('已连接'), tag: "is-green", hint: "" };
+  if (tunnel?.running) return { label: t('连接中'), tag: "is-amber", hint: t('cloudflared 已运行但还没连上 Cloudflare：刚启动时稍等片刻；持续如此请检查网络与代理是否放行 *.cloudflare.com、*.argotunnel.com，日志在数据目录 tunnel.log') };
+  return { label: t('未运行'), tag: "is-amber", hint: entry.value.running ? t('管理面板每分钟会自动拉起一次；持续如此请查看数据目录 tunnel.log') : t('登录入口启动后隧道随之启动') };
 });
 // The relay as this computer sees it: usable from outside, or the first thing in the way and what to do (from the panel).
 const relay_state = computed(() => {
   const problem = entry.value.relay?.problem || "";
-  return problem ? { label: "暂时打不开", tag: "is-amber", hint: problem } : { label: "可以访问", tag: "is-green", hint: "" };
+  return problem ? { label: t('暂时打不开'), tag: "is-amber", hint: problem } : { label: t('可以访问'), tag: "is-green", hint: "" };
 });
 // What the row of a way shows under its explanation: its address and state once prepared.
 function detail(mode) {
   if (mode === "local") return { text: `http://127.0.0.1:${entry.value.port}` };
   if (mode === "relay" && prepared("relay")) {
-    return entry.value.relay?.link ? { text: entry.value.relay.link, state: entry.value.mode === "relay" ? relay_state.value : null } : { text: `已接入 ${entry.value.relay.site}，改用时取得入口地址` };
+    return entry.value.relay?.link ? { text: entry.value.relay.link, state: entry.value.mode === "relay" ? relay_state.value : null } : { text: t('已接入 {value1}，改用时取得入口地址', { value1: entry.value.relay.site }) };
   }
   if (mode === "tunnel" && prepared("tunnel")) return { text: entry.value.public_url, state: entry.value.mode === "tunnel" ? tunnel_state.value : null };
   return null;
@@ -63,7 +64,7 @@ async function entry_act(action, body = {}, message = "") {
 function use(mode) {
   if (entry_busy.value || mode === entry.value.mode) return;
   if (!prepared(mode)) return configure(mode);
-  entry_act("mode", { mode }, `登录入口已改为${MODES.find((item) => item.key === mode).label}`);
+  entry_act("mode", { mode }, t('登录入口已改为{value1}', { value1: MODES.find((item) => item.key === mode).label }));
 }
 
 function configure(mode) {
@@ -71,15 +72,15 @@ function configure(mode) {
 }
 
 async function copy(text) {
-  try { await navigator.clipboard.writeText(text); notify("info", "已复制"); } catch { notify("error", "复制失败，请手动选中复制"); }
+  try { await navigator.clipboard.writeText(text); notify("info", t('已复制')); } catch { notify("error", t('复制失败，请手动选中复制')); }
 }
 
 async function install() {
   installing.value = true;
   try {
     const result = await call("clis/install", {});
-    const problems = [...(result.missing || []).map((item) => `没有找到 ${item}`), ...(result.warnings || [])];
-    notify(problems.length ? "warning" : "info", problems.length ? problems.join("；") : "程序副本已同步");
+    const problems = [...(result.missing || []).map((item) => t('没有找到 {value1}', { value1: item })), ...(result.warnings || [])];
+    notify(problems.length ? "warning" : "info", problems.length ? problems.join("；") : t('程序副本已同步'));
     await reload();
   } catch (failure) { notify("error", failure.message); }
   finally { installing.value = false; }
@@ -87,43 +88,42 @@ async function install() {
 </script>
 
 <template>
-  <h3 class="panel-section-title"><UIcon name="i-lucide-users" />托管</h3>
-  <p class="panel-guide">托管账号的使用者打开登录入口，用账号名和密码进入各自的工作台。账号在“账号”页创建和管理。</p>
+  <h3 class="panel-section-title"><UIcon name="i-lucide-users" />{{ t('托管') }}</h3>
+  <p class="panel-guide">{{ t('托管账号的使用者打开登录入口，用账号名和密码进入各自的工作台。账号在“账号”页创建和管理。') }}</p>
   <div class="panel-rows">
     <div class="panel-row">
       <div class="panel-tile"><UIcon name="i-lucide-door-open" /></div>
       <div class="panel-main">
-        <div class="panel-title">登录入口
-          <span class="panel-tag" :class="entry.running ? 'is-green' : 'is-gray'">{{ entry.running ? "运行中" : "已停止" }}</span>
+        <div class="panel-title">{{ t('登录入口') }} <span class="panel-tag" :class="entry.running ? 'is-green' : 'is-gray'">{{ entry.running ? t('运行中') : t('已停止') }}</span>
           <span class="panel-tag is-blue">{{ current.label }}</span></div>
-        <span class="panel-sub">把这个地址发给使用者：<a class="panel-link" :href="entry_address(entry)" target="_blank" rel="noopener">{{ entry_address(entry) }}</a></span>
+        <span class="panel-sub">{{ t('把这个地址发给使用者：') }}<a class="panel-link" :href="entry_address(entry)" target="_blank" rel="noopener">{{ entry_address(entry) }}</a></span>
       </div>
       <div class="panel-side">
-        <button type="button" class="panel-button is-plain is-small" @click="copy(entry_address(entry))"><UIcon name="i-lucide-copy" />复制地址</button>
-        <button v-if="!entry.running" type="button" class="panel-button is-primary is-small" :disabled="Boolean(entry_busy)" @click="entry_act('start', {}, '登录入口已启动')">
-          <UIcon :name="entry_busy === 'start' ? 'i-lucide-loader' : 'i-lucide-play'" :class="{ 'animate-spin': entry_busy === 'start' }" />启动</button>
-        <button v-else type="button" class="panel-button is-plain is-small is-danger" :disabled="Boolean(entry_busy)" @click="entry_act('stop', {}, '登录入口已停止')">
-          <UIcon :name="entry_busy === 'stop' ? 'i-lucide-loader' : 'i-lucide-square'" :class="{ 'animate-spin': entry_busy === 'stop' }" />停止</button>
+        <button type="button" class="panel-button is-plain is-small" @click="copy(entry_address(entry))"><UIcon name="i-lucide-copy" />{{ t('复制地址') }}</button>
+        <button v-if="!entry.running" type="button" class="panel-button is-primary is-small" :disabled="Boolean(entry_busy)" @click="entry_act('start', {}, t('登录入口已启动'))">
+          <UIcon :name="entry_busy === 'start' ? 'i-lucide-loader' : 'i-lucide-play'" :class="{ 'animate-spin': entry_busy === 'start' }" />{{ t('启动') }}</button>
+        <button v-else type="button" class="panel-button is-plain is-small is-danger" :disabled="Boolean(entry_busy)" @click="entry_act('stop', {}, t('登录入口已停止'))">
+          <UIcon :name="entry_busy === 'stop' ? 'i-lucide-loader' : 'i-lucide-square'" :class="{ 'animate-spin': entry_busy === 'stop' }" />{{ t('停止') }}</button>
       </div>
     </div>
     <div class="entry-ways">
-      <p class="entry-ways-title">访问方式<small>使用者从哪里打开登录入口。三种都可以先配置好，同一时间使用其中一种。</small></p>
+      <p class="entry-ways-title">{{ t('访问方式') }}<small>{{ t('使用者从哪里打开登录入口。三种都可以先配置好，同一时间使用其中一种。') }}</small></p>
       <div v-for="item in MODES" :key="item.key" class="entry-way" :class="{ 'is-active': entry.mode === item.key }">
         <UIcon :name="item.icon" class="entry-way-icon" />
         <div class="entry-way-main">
           <div class="entry-way-title">{{ item.label }}
-            <span v-if="entry.mode === item.key" class="panel-tag is-blue"><UIcon name="i-lucide-check" />使用中</span>
-            <span v-else-if="!prepared(item.key)" class="panel-tag is-gray">未配置</span></div>
+            <span v-if="entry.mode === item.key" class="panel-tag is-blue"><UIcon name="i-lucide-check" />{{ t('使用中') }}</span>
+            <span v-else-if="!prepared(item.key)" class="panel-tag is-gray">{{ t('未配置') }}</span></div>
           <span class="entry-way-note">{{ item.note }}</span>
           <span v-if="detail(item.key)" class="entry-way-value">{{ detail(item.key).text }}
             <span v-if="detail(item.key).state" class="panel-tag" :class="detail(item.key).state.tag" :title="detail(item.key).state.hint">{{ detail(item.key).state.label }}</span></span>
           <small v-if="detail(item.key)?.state?.hint" class="entry-way-hint">{{ detail(item.key).state.hint }}</small>
         </div>
         <div class="panel-side">
-          <button v-if="item.key !== 'local' && prepared(item.key)" type="button" class="panel-button is-plain is-small" @click="configure(item.key)"><UIcon name="i-lucide-pencil" />修改</button>
-          <button v-if="!prepared(item.key)" type="button" class="panel-button is-plain is-small" @click="configure(item.key)"><UIcon name="i-lucide-settings-2" />配置</button>
+          <button v-if="item.key !== 'local' && prepared(item.key)" type="button" class="panel-button is-plain is-small" @click="configure(item.key)"><UIcon name="i-lucide-pencil" />{{ t('修改') }}</button>
+          <button v-if="!prepared(item.key)" type="button" class="panel-button is-plain is-small" @click="configure(item.key)"><UIcon name="i-lucide-settings-2" />{{ t('配置') }}</button>
           <button v-else-if="entry.mode !== item.key" type="button" class="panel-button is-primary is-small" :disabled="Boolean(entry_busy)" @click="use(item.key)">
-            <UIcon :name="entry_busy === 'mode' ? 'i-lucide-loader' : 'i-lucide-arrow-right-left'" :class="{ 'animate-spin': entry_busy === 'mode' }" />改用</button>
+            <UIcon :name="entry_busy === 'mode' ? 'i-lucide-loader' : 'i-lucide-arrow-right-left'" :class="{ 'animate-spin': entry_busy === 'mode' }" />{{ t('改用') }}</button>
         </div>
       </div>
     </div>
@@ -133,16 +133,15 @@ async function install() {
     <div class="panel-row">
       <div class="panel-tile"><UIcon name="i-lucide-hard-drive-download" /></div>
       <div class="panel-main">
-        <div class="panel-title">程序副本
-          <span v-if="!runtime.app" class="panel-tag is-gray">未安装</span>
-          <span v-else-if="runtime_stale" class="panel-tag is-amber">v{{ runtime.app_version }}，落后于本机 v{{ state.version }}</span>
-          <span v-else-if="!runtime_ready" class="panel-tag is-amber">缺少 {{ PARTS.filter(([key]) => !runtime[key]).map(([, label]) => label).join("、") }}</span>
-          <span v-else class="panel-tag is-green"><UIcon name="i-lucide-check" />已同步</span></div>
-        <span class="panel-sub">隔离账号读不到你的个人目录，从 C:\ProgramData\CoDiscuss 里的这份副本运行。升级 Claude Code 等程序后点同步；更新共议时会自动同步。</span>
+        <div class="panel-title">{{ t('程序副本') }} <span v-if="!runtime.app" class="panel-tag is-gray">{{ t('未安装') }}</span>
+          <span v-else-if="runtime_stale" class="panel-tag is-amber">{{ t('v{value1}，落后于本机 v{value2}', { value1: runtime.app_version, value2: state.version }) }}</span>
+          <span v-else-if="!runtime_ready" class="panel-tag is-amber">{{ t('缺少 {value1}', { value1: PARTS.filter(([key]) => !runtime[key]).map(([, label]) => label).join("、") }) }}</span>
+          <span v-else class="panel-tag is-green"><UIcon name="i-lucide-check" />{{ t('已同步') }}</span></div>
+        <span class="panel-sub">{{ t('隔离账号读不到你的个人目录，从 C:\\ProgramData\\CoDiscuss 里的这份副本运行。升级 Claude Code 等程序后点同步；更新共议时会自动同步。') }}</span>
       </div>
       <div class="panel-side">
         <button type="button" class="panel-button is-small" :class="runtime_ready && !runtime_stale ? 'is-plain' : 'is-primary'" :disabled="installing" @click="install">
-          <UIcon :name="installing ? 'i-lucide-loader' : 'i-lucide-refresh-cw'" :class="{ 'animate-spin': installing }" />{{ runtime.app ? "同步" : "安装" }}</button>
+          <UIcon :name="installing ? 'i-lucide-loader' : 'i-lucide-refresh-cw'" :class="{ 'animate-spin': installing }" />{{ runtime.app ? t('同步') : t('安装') }}</button>
       </div>
     </div>
   </div>

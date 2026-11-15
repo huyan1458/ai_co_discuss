@@ -1,11 +1,12 @@
 <script>
+import { t } from "./i18n.js";
 // What the first wheel counts by default: a discussion's rounds.
-const ROUND_COUNT = { label: "轮次上限", unit: "轮", noun: "轮次", group: "讨论轮次和时长" };
+const ROUND_COUNT = { label: t("轮次上限"), unit: t("轮"), noun: t("轮次"), group: t("讨论轮次和时长") };
 
 /** Format a minute count as hours and remaining minutes for the form and its summary. */
 export function format_duration(minutes) {
   const hours = Math.floor(minutes / 60), remainder = minutes % 60;
-  return [hours && `${hours} 小时`, remainder && `${remainder} 分钟`].filter(Boolean).join(" ") || "0 分钟";
+  return [hours && t('{count} 小时', { count: hours }), remainder && t('{count} 分钟', { count: remainder })].filter(Boolean).join(" ") || t("0 分钟");
 }
 </script>
 
@@ -36,19 +37,19 @@ const WALL_FREQUENCY = 8;
 const TAP_DISTANCE = 4;
 const fields = reactive([
   { key: "rounds", label: count_text.label, selected: 3, unlimited: false, open: false },
-  { key: "minutes", label: "时长上限", selected: 60, unlimited: false, open: false },
+  { key: "minutes", label: t("时长上限"), selected: 60, unlimited: false, open: false },
 ]);
 const wheels = reactive([
   { key: "rounds", field: "rounds", label: count_text.label, unit: count_text.unit, min: 1, max: 100, initial: 3 },
-  { key: "hours", field: "minutes", label: "小时", unit: "小时", min: 0, max: 24, initial: 1 },
-  { key: "minutes", field: "minutes", label: "分钟", unit: "分钟", min: 0, max: 59, initial: 0 },
+  { key: "hours", field: "minutes", label: t("小时"), unit: t("小时"), min: 0, max: 24, initial: 1 },
+  { key: "minutes", field: "minutes", label: t("分钟"), unit: t("分钟"), min: 0, max: 59, initial: 0 },
 ].map((wheel) => ({ ...wheel, x: wheel.initial, v: 0, selected: wheel.initial,
   editing: false, draft: String(wheel.initial), target: null, hand: null, pointer: null })));
 let frame_id = 0, previous_time = 0;
 const clamp = (next, max, min = 0) => Math.min(max, Math.max(min, next));
 const nearest = (wheel) => clamp(Math.round(wheel.x), wheel.max, wheel.min);
 const shown = computed(() => props.append ? fields.slice(0, 1) : fields);
-const field_label = (field) => props.append ? "追加轮数" : field.label;
+const field_label = (field) => props.append ? t("追加轮数") : field.label;
 const field_wheels = (field) => wheels.filter((wheel) => wheel.field === field.key);
 const wheel_field = (wheel) => fields.find((field) => field.key === wheel.field);
 const field_text = (field) => field.key === "rounds" ? `${field.selected} ${count_text.unit}` : format_duration(field.selected);
@@ -303,32 +304,32 @@ defineExpose({ settle });
 </script>
 
 <template>
-  <div class="limit-picker" :class="{ 'is-append': append }" role="group" :aria-label="append ? '追加轮数' : count.group">
+  <div class="limit-picker" :class="{ 'is-append': append }" role="group" :aria-label="append ? t('追加轮数') : count.group">
     <div v-for="field in shown" :key="field.key" class="limit-field">
       <div class="limit-field-heading">
         <label :for="`limit-trigger-${field.key}`">{{ field_label(field) }}</label>
         <button v-if="!append" type="button" class="limit-unlimited" :aria-pressed="field.unlimited"
-          :aria-label="`不限${field.key === 'rounds' ? count.noun : '时长'}`" @click="set_unlimited(field, !field.unlimited)">
-          <UIcon name="i-lucide-infinity" aria-hidden="true" /><span>不限</span>
+          :aria-label="t('不限{unit}', { unit: field.key === 'rounds' ? count.noun : t('时长') })" @click="set_unlimited(field, !field.unlimited)">
+          <UIcon name="i-lucide-infinity" aria-hidden="true" /><span>{{ t("不限") }}</span>
         </button>
       </div>
       <UPopover :open="field.open" :content="{ align: field.key === 'rounds' ? 'start' : 'end', sideOffset: 6, collisionPadding: 12 }"
         :ui="{ content: `limit-popover-content ${field.key === 'minutes' ? 'limit-duration-content' : ''}` }" @update:open="set_open(field, $event)">
         <button :id="`limit-trigger-${field.key}`" type="button" class="limit-trigger" :disabled="field.unlimited"
-          :aria-label="`${field.label}：${field.unlimited ? '不限' : field_text(field)}`">
-          <span v-if="field.unlimited">不限{{ field.key === "rounds" ? count.noun : "时长" }}</span>
+          :aria-label="`${field.label}：${field.unlimited ? t('不限') : field_text(field)}`">
+          <span v-if="field.unlimited">{{ t('不限{unit}', { unit: field.key === 'rounds' ? count.noun : t('时长') }) }}</span>
           <span v-else class="limit-trigger-value"><span v-for="part in field_text(field).match(/\d+ \S+/g)" :key="part">{{ part }}</span></span>
           <UIcon name="i-lucide-chevrons-up-down" />
         </button>
         <template #content>
           <div class="limit-editor">
-            <div class="limit-editor-heading"><span>{{ field.label }}</span><button type="button" class="limit-close" :aria-label="`关闭${field.label}选择`" @click="set_open(field, false)"><UIcon name="i-lucide-x" /></button></div>
+            <div class="limit-editor-heading"><span>{{ field.label }}</span><button type="button" class="limit-close" :aria-label="t('关闭{label}选择', { label: field.label })" @click="set_open(field, false)"><UIcon name="i-lucide-x" /></button></div>
             <div class="limit-columns">
             <div v-for="wheel in field_wheels(field)" :key="wheel.key" class="limit-track" :class="{ 'is-editing': wheel.editing }"
                 @keydown="keydown(wheel, $event)" @wheel.prevent="scroll(wheel, $event)"
                 @pointerdown="grab(wheel, $event)" @pointermove="drag(wheel, $event)"
                 @pointerup="release(wheel, $event)" @pointercancel="release(wheel, $event)" @lostpointercapture="release(wheel, $event)">
-              <div class="limit-wheel" role="spinbutton" tabindex="0" :aria-label="`滚轮选择${wheel.label}`"
+              <div class="limit-wheel" role="spinbutton" tabindex="0" :aria-label="t('滚轮选择{label}', { label: wheel.label })"
                 :aria-valuemin="wheel.min" :aria-valuemax="wheel.max" :aria-valuenow="wheel.selected" :aria-valuetext="`${wheel.selected} ${wheel.unit}`">
                 <div class="limit-selection" aria-hidden="true"></div>
                 <div class="limit-wheel-rows" aria-hidden="true">
@@ -337,7 +338,7 @@ defineExpose({ settle });
               </div>
               <div class="limit-exact-value">
                 <input type="number" inputmode="numeric" :min="wheel.min" :max="wheel.max" step="1" :value="wheel.draft"
-                  :aria-label="`输入${wheel.label}（${wheel.unit}）`" @focus="begin_edit(wheel, $event)" @input="wheel.draft = $event.target.value"
+                  :aria-label="t('输入{label}（{unit}）', { label: wheel.label, unit: wheel.unit })" @focus="begin_edit(wheel, $event)" @input="wheel.draft = $event.target.value"
                   @blur="finish_edit(wheel)" @keydown.enter.stop.prevent="finish_edit(wheel); set_open(field, false)">
                 <span aria-hidden="true">{{ wheel.unit }}</span>
               </div>

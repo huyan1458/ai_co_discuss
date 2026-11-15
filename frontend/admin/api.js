@@ -1,4 +1,5 @@
 /** Calls to the management panel's own API; the server accepts them only from this page with its session. */
+import { t } from "../i18n.js";
 
 /**
  * Send one request and return its JSON.
@@ -11,7 +12,8 @@ export async function call(path, body) {
   const response = await fetch(`/api/${path}`, body === undefined ? { credentials: "same-origin" }
     : { method: "POST", credentials: "same-origin", headers: { "Content-Type": "application/json", "X-CoDiscuss-Panel": "1" }, body: JSON.stringify(body) });
   const data = await response.json().catch(() => ({}));
-  if (!response.ok) throw new Error(data.error || `请求失败（${response.status}）`);
+  if (!response.ok) throw Object.assign(new Error((data.error_text?.template ? t(data.error_text.template, data.error_text.params) : data.error)
+    || t('请求失败（{value1}）', { value1: response.status })), { status: response.status });
   return data;
 }
 
@@ -26,7 +28,7 @@ export function provider_icon(key) {
 /** The preset whose address a saved key belongs to, so the key list can show its name and icon. */
 export function provider_of(providers, base_url) {
   const found = Object.entries(providers).find(([key, provider]) => key !== "OpenAI" && provider.base_url && provider.base_url === base_url);
-  return found ? { key: found[0], ...found[1] } : { key: "Custom", label: "自定义接口" };
+  return found ? { key: found[0], ...found[1] } : { key: "Custom", label: t('自定义接口') };
 }
 
 /** The address a hosted account's person opens: the entry's public address, else its address on this computer. */

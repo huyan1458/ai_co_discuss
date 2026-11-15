@@ -6,6 +6,7 @@
  */
 import { computed, inject, onMounted, ref, watch } from "vue";
 import { call } from "./api.js";
+import { t } from '../i18n.js';
 
 const props = defineProps({ account: { type: String, required: true } });
 const { notify, refreshed } = inject("panel");
@@ -24,7 +25,7 @@ watch(() => props.account, load);
 
 async function install() {
   installing.value = true;
-  try { result.value = await call(`${base.value}/install`, {}); notify("info", "随包工作流已补齐"); }
+  try { result.value = await call(`${base.value}/install`, {}); notify("info", t('随包工作流已补齐')); }
   catch (failure) { notify("error", failure.message); }
   finally { installing.value = false; }
 }
@@ -33,27 +34,27 @@ async function install() {
 <template>
   <div class="flows">
     <div class="flows-head">
-      <span>工作流 <small>房间中可启用的多人分工流程；编辑、停用在共议网站侧栏的“工作流”中进行</small></span>
-      <button type="button" class="panel-icon-button" :class="{ 'is-spinning': loading }" :disabled="loading" title="重新读取" aria-label="重新读取" @click="load"><UIcon name="i-lucide-refresh-cw" /></button>
+      <span>{{ t('工作流') }} <small>{{ t('房间中可启用的多人分工流程；编辑、停用在共议网站侧栏的“工作流”中进行') }}</small></span>
+      <button type="button" class="panel-icon-button" :class="{ 'is-spinning': loading }" :disabled="loading" :title="t('重新读取')" :aria-label="t('重新读取')" @click="load"><UIcon name="i-lucide-refresh-cw" /></button>
     </div>
     <p v-if="result?.error" class="panel-note is-amber"><UIcon name="i-lucide-circle-alert" />{{ result.error }}</p>
-    <p v-else-if="!result" class="flows-empty">读取中…</p>
+    <p v-else-if="!result" class="flows-empty">{{ t('读取中…') }}</p>
     <template v-else>
-      <p v-if="!result.workflows.length" class="flows-empty">暂无工作流。</p>
+      <p v-if="!result.workflows.length" class="flows-empty">{{ t('暂无工作流。') }}</p>
       <div v-for="flow in result.workflows" :key="flow.id" class="flows-row">
         <UIcon name="i-lucide-workflow" class="flows-icon" />
         <div class="flows-text">
           <strong>{{ flow.label }}
-            <span class="panel-tag is-gray">{{ flow.cards }} 个角色</span>
-            <span v-if="flow.disabled" class="panel-tag is-gray">已停用</span>
-            <span v-if="flow.error" class="panel-tag is-amber">无法读取</span></strong>
+            <span class="panel-tag is-gray">{{ t('{value1} 个角色', { value1: flow.cards }) }}</span>
+            <span v-if="flow.disabled" class="panel-tag is-gray">{{ t('已停用') }}</span>
+            <span v-if="flow.error" class="panel-tag is-amber">{{ t('无法读取') }}</span></strong>
           <small :title="flow.error || flow.description">{{ flow.error || flow.description || flow.id }}</small>
         </div>
       </div>
       <div v-if="result.missing.length" class="flows-missing">
-        <span>缺少随包工作流：{{ result.missing.join("、") }}</span>
+        <span>{{ t('缺少随包工作流：{value1}', { value1: result.missing.join("、") }) }}</span>
         <button type="button" class="panel-button is-outline is-small" :disabled="installing" @click="install">
-          <UIcon :name="installing ? 'i-lucide-loader' : 'i-lucide-download'" :class="{ 'animate-spin': installing }" />补齐</button>
+          <UIcon :name="installing ? 'i-lucide-loader' : 'i-lucide-download'" :class="{ 'animate-spin': installing }" />{{ t('补齐') }}</button>
       </div>
     </template>
   </div>

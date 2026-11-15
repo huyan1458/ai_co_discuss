@@ -36,16 +36,16 @@ function toggle() {
 
 <template>
   <div class="channel-answer-summary channel-execution-notes">
-    <small>过程说明</small>
+    <small>{{ t("过程说明") }}</small>
     <div class="channel-message-text">
       <ol v-if="live || open" :class="{ 'is-live': live }">
         <li v-for="note in notes || []" :key="note.seq">{{ note.text }}</li>
       </ol>
-      <div v-if="open && loading" class="grid gap-2 py-2" role="status" aria-label="正在读取过程说明"><USkeleton class="h-4 w-full" /><USkeleton class="h-4 w-2/3" /></div>
-      <p v-else-if="open && failure" class="fine-print" role="status">{{ failure }}<UButton label="重试" color="neutral" variant="link" size="xs" @click="read" /></p>
-      <UButton v-if="!live" :label="open ? '收起' : `${count} 段`" :trailing-icon="open ? 'i-lucide-chevron-up' : 'i-lucide-chevron-down'"
+      <div v-if="open && loading" class="grid gap-2 py-2" role="status" :aria-label="t('正在读取过程说明')"><USkeleton class="h-4 w-full" /><USkeleton class="h-4 w-2/3" /></div>
+      <p v-else-if="open && failure" class="fine-print" role="status">{{ failure }}<UButton :label="t('重试')" color="neutral" variant="link" size="xs" @click="read" /></p>
+      <UButton v-if="!live" :label="open ? t('收起') : t('{count} 段', { count })" :trailing-icon="open ? 'i-lucide-chevron-up' : 'i-lucide-chevron-down'"
         variant="link" color="neutral" size="xs" class="channel-answer-toggle" :class="{ 'is-folded': !open }" :aria-expanded="open"
-        :aria-label="open ? '收起过程说明' : `展开 ${count} 段过程说明`" @click="toggle" />
+        :aria-label="open ? t('收起过程说明') : t('展开 {count} 段过程说明', { count })" @click="toggle" />
     </div>
   </div>
 </template>

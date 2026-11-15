@@ -12,9 +12,23 @@ const PLATFORM_SKILLS = ["workflow-creator"];
 const SKILL_PATTERN = new RegExp(`(^|[\\s(（，,。；;：:])(\\$(?:${PLATFORM_SKILLS.join("|")}))(?![\\w-])`, "gu");
 const SKILL_ICON = '<svg viewBox="0 0 24 24" width="13" height="13" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M21 8 12 3 3 8v8l9 5 9-5z"/><path d="m3 8 9 5 9-5M12 13v8"/></svg>';
 
-// Work on text tokens so mentions and skill references never alter code, URLs, or generated math.
+// `#123` in room text names message 123; the page opens it on a delegated click on [data-message-ref].
+// The lookbehind keeps escaped entities (`&#39;`) and words like `abc#1` plain.
+const MESSAGE_REF_PATTERN = /(?<![\w&#])#(\d{1,9})(?![\w-])/gu;
+
+/** Whether a text token sits inside a Markdown link, where a nested button would break the link. */
+function inside_link(tokens, index) {
+  for (let cursor = index - 1; cursor >= 0; cursor -= 1) {
+    if (tokens[cursor].type === "link_close") return false;
+    if (tokens[cursor].type === "link_open") return true;
+  }
+  return false;
+}
+
+// Work on text tokens so mentions, skill and message references never alter code, URLs, or generated math.
 markdown.renderer.rules.text = (tokens, index, options, environment) => {
-  const html = markdown.utils.escapeHtml(tokens[index].content).replace(SKILL_PATTERN, `$1<span class="skill-ref">${SKILL_ICON}$2</span>`);
+  let html = markdown.utils.escapeHtml(tokens[index].content).replace(SKILL_PATTERN, `$1<span class="skill-ref">${SKILL_ICON}$2</span>`);
+  if (environment?.message_refs && !inside_link(tokens, index)) html = html.replace(MESSAGE_REF_PATTERN, '<button type="button" class="message-ref" data-message-ref="$1">#$1</button>');
   return environment?.mention ? html.replace(environment.mention, '$1<span class="mention">$2</span>') : html;
 };
 markdown.renderer.rules.link_open = (tokens, index, options, environment, renderer) => {
@@ -47,10 +61,11 @@ markdown.renderer.rules.fence = (...args) => `<div class="markdown-code"><button
  * `mentions` are the names @ calls members by (their display names); any other @text, such as a member ID, stays plain.
  * The boundaries match the page's own @ parsing, so only what names a member looks like a mention.
  * With `source_lines`, block elements get `data-source-lines="first-last"` (a file preview quotes selections by line).
+ * With `message_refs`, `#123` outside code and links becomes a button carrying `data-message-ref="123"`.
  */
-export function render_markdown(text, mentions = [], { source_lines = false } = {}) {
+export function render_markdown(text, mentions = [], { source_lines = false, message_refs = false } = {}) {
   const handles = [...new Set(mentions.filter(Boolean))].sort((left, right) => right.length - left.length)
     .map(handle => markdown.utils.escapeHtml(handle).replace(/[.*+?^${}()|[\]\\]/g, "\\$&"));
   const mention = handles.length ? new RegExp(`(^|[\\s(（，,。；;：:])(@(?:${handles.join("|")}))(?![\\w-])`, "gu") : null;
-  return markdown.render(text, { mention, source_lines });
+  return markdown.render(text, { mention, source_lines, message_refs });
 }

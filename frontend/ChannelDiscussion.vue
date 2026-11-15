@@ -19,9 +19,11 @@ import { format_voice_time, use_voice_input, use_voice_press } from "./voice-inp
 import ExcerptEditCard from "./ExcerptEditCard.vue";
 import { add_excerpt, excerpt_mark_place, excerpt_range, excerpt_source, excerpts_markdown, file_preview, hold_selection, text_offset } from "./file-preview.js";
 import { keep_reading_position } from "./scroll-anchor.js";
+import { guard_token_edit, snap_caret, step_over_token, token_mirror } from "./attachment-tokens.js";
 import MemoBlock from "./memo-block.js";
 import UTooltip from "@nuxt/ui/components/Tooltip.vue";
 import { motion, useSpring, useTransform } from "motion-v";
+import { locale, t } from './i18n.js';
 
 const emit = defineEmits(["detail", "edit"]);
 let topic_card = null;
@@ -61,7 +63,14 @@ const reader = use_read_aloud({ bridge, container: () => transcript.value,
   } });
 // Voice broadcast announces new replies and room events while on; the switch sits beside the microphone.
 const broadcast = use_broadcast({ view, bridge, reader });
-const speech_ready = ref(false);
+// Whether speech was set up when last read in this browser, so the broadcast switch is in place before the read returns.
+const SPEECH_READY_KEY = "ai-codiscuss-speech-ready";
+const speech_ready = ref((() => { try { return localStorage.getItem(SPEECH_READY_KEY) === "1"; } catch { return false; } })());
+/** Show the broadcast switch as the latest read says and remember it for the next visit. */
+function set_speech_ready(ready) {
+  speech_ready.value = ready;
+  try { localStorage.setItem(SPEECH_READY_KEY, ready ? "1" : "0"); } catch { /* Shown only after the read next time. */ }
+}
 // Voice input inserts recognized text where the caret was in the composer.
 const voice = use_voice_input({ bridge, on_text: (spoken) => {
   const area = prompt.value?.textareaRef, value = text.value || "";
@@ -222,7 +231,7 @@ onMounted(() => {
   transcript.value?.addEventListener("scroll", place_quote, { passive: true });
   window.addEventListener("resize", place_marks);
   watch(() => room.value?.id, () => { reader.stop(); voice.cancel(); cancel_quote(); });
-  speech_configured().then((ready) => { speech_ready.value = ready; });
+  speech_configured().then(set_speech_ready);
 });
 onBeforeUnmount(() => { document.removeEventListener("selectionchange", schedule_listen); document.removeEventListener("pointerdown", press); document.removeEventListener("pointerup", release); document.removeEventListener("pointercancel", release); window.removeEventListener("resize", place_marks); window.clearTimeout(listen_timer); narrow_query.removeEventListener("change", track_narrow); reader.stop(); voice.cancel(); hold_selection(null); });
 const MESSAGE_PREVIEW_LENGTH = 160;
@@ -342,12 +351,25 @@ const queue_hint = computed(() => {
   const member = speaking_member.value;
   if (!speaking_turn.value || !member) return "";
   const name = bridge.display_name(member.name);
-  if (is_manual_member(member)) return member.registered_at ? `${name} 是手动启动，轮到它时需到其 AI 会话触发；不接入可在进度看板点「跳过」本次发言` : "";
-  return text.value.trim() ? `新消息会在 ${name} 回复后交给主持人；可在进度看板点「跳过」本次发言` : "";
+  if (is_manual_member(member)) return member.registered_at ? t('{value1} 是手动启动，轮到它时需到其 AI 会话触发；不接入可在进度看板点「跳过」本次发言', { value1: name }) : "";
+  return text.value.trim() ? t('新消息会在 {value1} 回复后交给主持人；可在进度看板点「跳过」本次发言', { value1: name }) : "";
 });
 const free = computed(() => !["active", "paused"].includes(room.value?.session?.status));
+/**
+ * The room view lists only recent executions, plans, missed turns and decisions; older ones come with the transcript
+ * (`view.history_cards`). Cards read from both: the room view's copy wins, being the newer one.
+ */
+function with_history(kind, recent) {
+  const items = new Map((view.value.history_cards?.[kind] || []).map((item) => [item.key || item.id, item]));
+  for (const item of recent || []) items.set(item.key || item.id, item);
+  return [...items.values()];
+}
+const all_executions = computed(() => with_history("executions", room.value.free?.executions));
+const all_decisions = computed(() => with_history("scheduler_decisions", room.value.scheduler_decisions));
+const all_arrangements = computed(() => with_history("host_arrangements", room.value.host_arrangements));
+const all_cancelled_turns = computed(() => with_history("cancelled_turns", room.value.cancelled_turns));
 /** What the runner last saw a member's software doing; unknown phases keep the generic text. Declared before `free_busy`, which an immediate watch reads during setup. */
-const ACTIVITY_LABELS = { thinking: "思考中", command: "正在运行命令", tool: "正在调用工具", editing: "正在修改文件", writing: "正在撰写回答" };
+const ACTIVITY_LABELS = { thinking: t('思考中'), command: t('正在运行命令'), tool: t('正在调用工具'), editing: t('正在修改文件'), writing: t('正在撰写回答') };
 /** All room work uses member executions; queued requests stay in the side panel. */
 const free_busy = computed(() => {
   if (room.value.archived) return [];
@@ -360,12 +382,12 @@ const free_busy = computed(() => {
       const retry = execution.retry?.retry_at && !execution.retry.stopped ? execution.retry : null;
       const attempt = !retry && !execution.retry?.stopped ? execution.retry?.attempt || 0 : 0;
       return [{ id: `free-${execution.id}`, author: member.name, member_id: member.id, retry, attempt,
-        text: execution.stale ? "执行失联：网站已不再接受本次回答，软件停止未确认" : retry ? "投递未成功，等待自动重试"
-          : execution.paused_at ? "已在私聊中暂停，等你补充后接着做" : ACTIVITY_LABELS[execution.activity] || "正在处理",
+        text: execution.stale ? t('执行失联：网站已不再接受本次回答，软件停止未确认') : retry ? t('投递未成功，等待自动重试')
+          : execution.paused_at ? t('已在私聊中暂停，等你补充后接着做') : ACTIVITY_LABELS[execution.activity] || t('正在处理'),
         paused: Boolean(execution.paused_at), working: !execution.stale && !retry, created_at: execution.created_at, adapter: member.adapter, capabilities: execution.capabilities,
         activity: execution.activity, activity_at: execution.activity_at, notes: execution.notes || 0, steps: execution.steps || 0,
-        execution_id: execution.id, request_message_id: reports.get(execution.id)?.request_message_id, anchor_message_id: reports.get(execution.id)?.anchor_message_id,
-        dispatched_after: reports.get(execution.id)?.dispatched_after, background: Boolean(reports.get(execution.id)?.background),
+        execution_id: execution.id, request_message_id: reports.get(execution.id)?.request_message_id, layout_after: reports.get(execution.id)?.layout_after,
+        layout_at: reports.get(execution.id)?.layout_at ?? execution.created_at, background: Boolean(reports.get(execution.id)?.background),
         discussion_request: reports.get(execution.id)?.requests?.find((request) => request.discussion_session_id) }];
     }
     return [];
@@ -396,7 +418,7 @@ async function load_late_answer(execution_id, event) {
     if (room.value.id !== room_id) return;
     late_answers.value.delete(execution_id);
     event.target.open = false;
-    bridge.notify("error", `未采纳的回答读取失败：${error.message}`);
+    bridge.notify("error", t('未采纳的回答读取失败：{value1}', { value1: error.message }));
   }
 }
 /** Notes read so far for a working item's execution. */
@@ -408,7 +430,7 @@ async function load_notes(execution_id) {
   try {
     const { notes } = await bridge.request(`/api/rooms/${room_id}/executions/${execution_id}/notes`);
     if (room.value.id === room_id) execution_notes.value = new Map(execution_notes.value).set(execution_id, notes);
-  } catch (error) { return error.message || "过程说明读取失败"; }
+  } catch (error) { return error.message || t('过程说明读取失败'); }
 }
 /** Execution ids whose working notes are unfolded; folded by default to the latest note. */
 const open_working_notes = ref(new Set());
@@ -424,7 +446,7 @@ watch(() => free_busy.value.map((item) => `${item.execution_id}:${item.notes}`).
 }, { immediate: true });
 /** The execution that delivered an answer, when the room still lists it. */
 function answer_execution(message) {
-  return (room.value.free?.executions || []).find((item) => item.answer_id === message.id);
+  return all_executions.value.find((item) => item.answer_id === message.id);
 }
 /**
  * The working card's one status line: the phase while output keeps coming, a warning only after a long silence.
@@ -437,33 +459,36 @@ function working_status(message) {
   // Paused from the private chat: its software is stopped on purpose, so the silence is no hang.
   if (message.paused) return { text: message.text, live: false };
   if (!message.working || !shows_progress(message) || silent < STALL_SECONDS) return { text: message.text, live: message.working };
-  if (message.activity === "command") return { text: `命令已运行 ${format_elapsed(silent)}`, live: true };
+  if (message.activity === "command") return { text: t('命令已运行 {value1}', { value1: format_elapsed(silent) }), live: true };
   // Deep reasoning reports nothing until it ends; only a much longer silence there suggests a hang.
-  if (message.activity === "thinking" && silent < THINKING_STALL_SECONDS) return { text: `思考中，已 ${format_elapsed(silent)}无中间输出`, live: true };
-  return { text: `已 ${format_elapsed(silent)}无输出，可能卡住`, live: false, warning: true };
+  if (message.activity === "thinking" && silent < THINKING_STALL_SECONDS) return { text: t('思考中，已 {value1}无中间输出', { value1: format_elapsed(silent) }), live: true };
+  return { text: t('已 {value1}无输出，可能卡住', { value1: format_elapsed(silent) }), live: false, warning: true };
 }
+// A relay stopped at a user gate takes the owner's next unaddressed message as the owner's step.
+const relay_waits_owner = computed(() => free.value && Boolean(room.value?.speaking_order?.sequence?.waiting_user));
 /** Says in the note line who the draft will reach: the @mentioned members, else the host. */
 const recipient_hint = computed(() => {
   const named_group = (aliases) => aliases.some((alias) => MENTION_PATTERN(alias).test(draft_prose.value));
-  if (free.value && named_group(SEQUENTIAL_ALIASES)) return `依次发给 ${in_turn(free_members.value).map((member) => bridge.display_name(member.name)).join(" → ")}，前一位结束后下一位开始`;
-  if (free.value && named_group(ALL_ALIASES)) return `发给 ${free_members.value.map((member) => bridge.display_name(member.name)).join("、")}`;
+  if (free.value && named_group(SEQUENTIAL_ALIASES)) return t('依次发给 {value1}，前一位结束后下一位开始', { value1: in_turn(free_members.value).map((member) => bridge.display_name(member.name)).join(" → ") });
+  if (free.value && named_group(ALL_ALIASES)) return t('发给 {value1}', { value1: free_members.value.map((member) => bridge.display_name(member.name)).join("、") });
   const named = free_members.value.filter((member) => MENTION_PATTERN(member.name).test(draft_prose.value));
-  if (named.length) return free.value ? `${named.length > 1 ? "同时" : ""}发给 ${named.map((member) => bridge.display_name(member.name)).join("、")}`
-    : `直接提问 ${named.map((member) => bridge.display_name(member.name)).join("、")}，不计讨论轮次；同一成员完成当前执行后回答`;
-  if (free_members.value.length === 1) return `发给 ${bridge.display_name(free_members.value[0].name)}`;
-  return free_host.value ? `发给主持人 ${bridge.display_name(free_host.value.name)}；@ 其他成员让它们发言` : "未 @ 任何成员：只作留言，不会唤醒 AI";
+  if (named.length) return free.value ? t('{value1}发给 {value2}', { value1: named.length > 1 ? t('同时') : "", value2: named.map((member) => bridge.display_name(member.name)).join("、") })
+    : t('直接提问 {value1}，不计讨论轮次；同一成员完成当前执行后回答', { value1: named.map((member) => bridge.display_name(member.name)).join("、") });
+  if (free_members.value.length === 1) return t('发给 {value1}', { value1: bridge.display_name(free_members.value[0].name) });
+  if (relay_waits_owner.value && free_host.value) return t('接力在等你：这条作为你这一棒交给下一位；要找主持人请 @{value1}', { value1: bridge.display_name(free_host.value.name) });
+  return free_host.value ? t('发给主持人 {value1}；@ 其他成员让它们发言', { value1: bridge.display_name(free_host.value.name) }) : t('未 @ 任何成员：只作留言，不会唤醒 AI');
 });
 /** Project files picked after @: their @path stays in the draft, and they also show as cards and go out as a trailing line of paths (code-quoted, so they never wake a member). */
 const file_refs = ref([]);
 watch(() => room.value?.id, () => { file_refs.value = []; file_preview.excerpts = []; });
 const file_refs_line = () => file_refs.value.length
-  ? `引用文件：${file_refs.value.map((ref) => `\`${ref.path}${ref.kind === "directory" ? "/" : ""}\``).join("、")}` : "";
+  ? t('引用文件：{value1}', { value1: file_refs.value.map((ref) => `\`${ref.path}${ref.kind === "directory" ? "/" : ""}\``).join("、") }) : "";
 // Passages quoted from the file preview ("添加到对话") wait as cards and go out after the text, each as a quote with its comment.
 const excerpts = computed(() => file_preview.excerpts);
 const has_draft = computed(() => Boolean(text.value.trim() || view.value.attachment_drafts.length || file_refs.value.length || excerpts.value.length));
 watch(() => file_preview.focus_composer, () => nextTick(() => prompt.value?.textareaRef?.focus()));
-// Editing a queued message puts its text in the composer; the caret goes to its end so typing continues it.
-watch(() => view.value.editing_queued, (id) => id && nextTick(() => {
+// Editing a queued message takes it off the queue into the composer; the caret goes to its end so typing continues it.
+watch(() => view.value.queued_taken, (count) => count && nextTick(() => {
   const area = prompt.value?.textareaRef;
   area?.focus();
   area?.setSelectionRange(area.value.length, area.value.length);
@@ -493,10 +518,10 @@ function stop_state(execution) {
   const label = bridge.stop_label(execution);
   const name = bridge.display_name(execution.member);
   // A late answer shows the member did finish the turn; it stays out of the transcript and AI reads.
-  if (execution.late_answer) return { label, note: `${name} 之后仍交来了回答，未采纳：不进入记录，其他 AI 读不到。` };
-  if (execution.stop_result === "unconfirmed") return { label, note: "本机尚未确认进程结束，可能仍在生成；网站不再接受本次回答。" };
-  if (execution.stop_result === "unstoppable" || capabilities(execution)?.stoppable === false) return { label, note: `${name} 在自己的窗口或 App 里，本机无法停止，可能仍在生成；网站不再接受本次回答。` };
-  return { label, note: label === "正在停止" ? "等待本机服务结束进程。" : "" };
+  if (execution.late_answer) return { label, note: t('{value1} 之后仍交来了回答，未采纳：不进入记录，其他 AI 读不到。', { value1: name }) };
+  if (execution.stop_result === "unconfirmed") return { label, note: t('本机尚未确认进程结束，可能仍在生成；网站不再接受本次回答。') };
+  if (execution.stop_result === "unstoppable" || capabilities(execution)?.stoppable === false) return { label, note: t('{value1} 在自己的窗口或 App 里，本机无法停止，可能仍在生成；网站不再接受本次回答。', { value1: name }) };
+  return { label, note: label === t('正在停止') ? t('等待本机服务结束进程。') : "" };
 }
 // The runner retries a delivery that did not take this many times (runner/free_runner.mjs MAX_DELIVERY_RETRIES).
 const MAX_DELIVERY_RETRIES = 3;
@@ -504,8 +529,8 @@ const MAX_DELIVERY_RETRIES = 3;
 const STALL_SECONDS = 180;
 /** Thinking emits no events until it ends (gpt xhigh was seen silent for 4 min), so it warns only after this long. */
 const THINKING_STALL_SECONDS = 600;
-const FREE_REQUEST_LABELS = { pending: ["待投递", "neutral"], delivering: ["处理中", "info"], completed: ["已回复", "success"],
-  cancelled: ["已取消", "neutral"], failed: ["失败", "error"] };
+const FREE_REQUEST_LABELS = { pending: [t('待投递'), "neutral"], delivering: [t('处理中'), "info"], completed: [t('已回复'), "success"],
+  cancelled: [t('已取消'), "neutral"], failed: [t('失败'), "error"] };
 /** Each user message in a free room shows what happened to its request for every named member. */
 const request_badges = stable_computed(() => {
   const badges = new Map();
@@ -517,7 +542,7 @@ const request_badges = stable_computed(() => {
     // A request voided after reaching the software reads as its stop really went; one never delivered was only cancelled.
     const voided = request.status === "cancelled" && executions.get(request.execution_id)?.capabilities ? executions.get(request.execution_id) : null;
     const [label, color] = voided ? [stop_state(voided).label, "neutral"] : FREE_REQUEST_LABELS[request.status];
-    const title = request.status === "failed" ? failures.get(request.execution_id) || "执行失败" : "";
+    const title = request.status === "failed" ? failures.get(request.execution_id) || t('执行失败') : "";
     badges.set(request.message_id, [...(badges.get(request.message_id) || []),
       { key: request.id, label: `${bridge.display_name(request.member)} · ${label}`, color, title }]);
   }
@@ -526,16 +551,15 @@ const request_badges = stable_computed(() => {
 /** Attach each terminal execution to its answer, or to the original request when it has no answer. */
 const execution_reports = stable_computed(() => {
   const reports = new Map();
-  const source = room.value.free;
-  if (!source) return reports;
-  for (const execution of source.executions || []) {
+  if (!room.value.free) return reports;
+  for (const execution of all_executions.value) {
     if (!["completed", "failed", "cancelled"].includes(execution.status)) continue;
     // A clean completion adds nothing to the message header; only failures, observed file changes and refused operations earn a card.
     if (execution.status === "completed" && !execution.changes?.length && !execution.denials?.length) continue;
     // A failed free-room execution keeps its own card in the slot it worked in, and so does a delivered one that was voided.
     if (execution.status === "failed" || (execution.status === "cancelled" && execution.capabilities)) continue;
     const message_id = execution.answer_id || execution.request_message_id;
-    const report = { ...execution, label: execution.status === "cancelled" ? bridge.stop_label(execution) : { completed: "已完成", failed: "失败" }[execution.status] };
+    const report = { ...execution, label: execution.status === "cancelled" ? bridge.stop_label(execution) : { completed: t('已完成'), failed: t('失败') }[execution.status] };
     reports.set(message_id, [...(reports.get(message_id) || []), report]);
   }
   return reports;
@@ -571,17 +595,17 @@ onBeforeUnmount(() => window.clearInterval(recommendation_timer));
 /** A scheduler call's milliseconds: sub-second calls stay in milliseconds, longer ones use the shared format; missing timing stays empty. */
 function format_ms(ms) {
   if (ms == null) return "";
-  return ms < 1000 ? `${ms}毫秒` : ms < 10_000 ? `${(ms / 1000).toFixed(1)}秒` : format_elapsed(Math.round(ms / 1000));
+  return ms < 1000 ? t('{value1}毫秒', { value1: ms }) : ms < 10_000 ? t('{value1}秒', { value1: (ms / 1000).toFixed(1) }) : format_elapsed(Math.round(ms / 1000));
 }
 /** In a discussion, each smart-scheduling decision shows under the message it followed. */
 const scheduler_decisions = stable_computed(() => {
   const rows = new Map();
-  for (const item of room.value.scheduler_decisions || []) {
+  for (const item of all_decisions.value) {
     // A skip asked the model nothing (no confidence, nothing applied, no question), so there is no decision to show.
     if (item.confidence === null && !item.applied && !item.detail?.length) continue;
     rows.set(item.after_message_id, [...(rows.get(item.after_message_id) || []),
       { ...item, provider_label: SCHEDULER_LABELS[item.provider] || item.provider, duration: format_ms(item.detail?.[0]?.duration_ms),
-        title: `${SCHEDULER_LABELS[item.provider] || item.provider}${item.confidence === null ? "" : `，置信度 ${Number(item.confidence).toFixed(2)}`}` }]);
+        title: `${SCHEDULER_LABELS[item.provider] || item.provider}${item.confidence === null ? "" : t('，置信度 {value1}', { value1: Number(item.confidence).toFixed(2) })}` }]);
   }
   return rows;
 });
@@ -591,7 +615,7 @@ const routing_messages = stable_computed(() => new Set(room.value.scheduler_rout
 const host_arrangements = stable_computed(() => {
   const rows = new Map();
   if (view.value.query) return rows;
-  for (const item of room.value.host_arrangements || []) {
+  for (const item of all_arrangements.value) {
     rows.set(item.after_message_id, [...(rows.get(item.after_message_id) || []),
       { ...item, label: item.turns.map((turn) => bridge.display_name(turn.expert)).join(" → ") }]);
   }
@@ -604,9 +628,9 @@ function adopt(message_id, mode) {
 /** Format recorded seconds consistently; missing timing is never estimated. */
 function format_elapsed(seconds) {
   if (seconds == null) return "—";
-  if (seconds < 60) return `${seconds}秒`;
-  if (seconds < 3600) return `${Math.floor(seconds / 60)}分${String(seconds % 60).padStart(2, "0")}秒`;
-  return `${Math.floor(seconds / 3600)}小时${Math.floor((seconds % 3600) / 60)}分${String(seconds % 60).padStart(2, "0")}秒`;
+  if (seconds < 60) return t('{value1}秒', { value1: seconds });
+  if (seconds < 3600) return t('{value1}分{value2}秒', { value1: Math.floor(seconds / 60), value2: String(seconds % 60).padStart(2, "0") });
+  return t('{value1}小时{value2}分{value3}秒', { value1: Math.floor(seconds / 3600), value2: Math.floor((seconds % 3600) / 60), value3: String(seconds % 60).padStart(2, "0") });
 }
 /** The host's arrangement time: from the answer it followed to the moment the plan was saved. */
 function arrangement_seconds(plan, anchor) {
@@ -617,17 +641,19 @@ function arrangement_seconds(plan, anchor) {
 function message_elapsed(message) {
   if (message.elapsed_seconds != null) return message.elapsed_seconds;
   // Read every execution, not the reports: a clean completion earns no report card but still has its time.
-  const execution = (room.value.free?.executions || []).find((item) => item.answer_id === message.id);
+  const execution = all_executions.value.find((item) => item.answer_id === message.id);
   return execution?.created_at && execution.finished_at ? Math.max(0, execution.finished_at - execution.created_at) : null;
 }
 const date_formatter = new Intl.DateTimeFormat("zh-CN", { month: "long", day: "numeric", weekday: "long" });
 
 const blank = (match) => " ".repeat(match.length);
-const escape_html = (value) => value.replace(/[&<>"]/g, (char) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" })[char]);
-/** Paint the @mentions that will wake a member behind the transparent editor text; code and quotes do not count. */
-const mention_mirror = computed(() => {
-  const value = text.value;
-  if (!mention_pool.value.length || !value.includes("@")) return "";
+/**
+ * Paint the @mentions that will wake a member, and the files' [图片 #n] tags, behind the transparent editor text; code
+ * and quotes do not count as mentions.
+ */
+const mention_mirror = computed(() => token_mirror(text.value, view.value.attachment_drafts, mention_spans(text.value)));
+function mention_spans(value) {
+  if (!mention_pool.value.length || !value.includes("@")) return [];
   // Masking keeps every offset, so matches in the masked copy point at the same characters of the draft.
   const masked = value.replace(/```[\s\S]*?```/g, blank).replace(/`[^`\n]*`/g, blank).replace(/^>.*$/gm, blank);
   const names = free_members.value.map((member) => member.name);
@@ -639,16 +665,8 @@ const mention_mirror = computed(() => {
     const span = [match.index + match[1].length, match.index + match[0].length];
     if (!taken.some(([start, end]) => span[0] < end && start < span[1])) taken.push(span);
   }
-  const ranges = taken.sort((a, b) => a[0] - b[0]);
-  if (!ranges.length) return "";
-  let html = "", cursor = 0;
-  for (const [start, end] of ranges) {
-    html += `${escape_html(value.slice(cursor, start))}<span class="channel-mention">${escape_html(value.slice(start, end))}</span>`;
-    cursor = end;
-  }
-  // The trailing space keeps a final empty line, which the textarea also shows.
-  return `${html}${escape_html(value.slice(cursor))} `;
-});
+  return taken.map(([start, end]) => [start, end, "channel-mention"]);
+}
 const mirror = ref(null);
 /** Keep the painted copy at the editor's scroll position. */
 function sync_mirror() {
@@ -766,7 +784,7 @@ const mention_files = computed(() => {
 /** The file group's heading names where its entries come from: the project root, a search, or the folder being browsed. */
 const mention_files_group = computed(() => {
   const folder = mention_folder.value;
-  return !folder ? "" : folder.search ? "项目文件 · 搜索结果" : folder.path ? `项目文件 · ${folder.path}/` : "项目文件";
+  return !folder ? "" : folder.search ? t('项目文件 · 搜索结果') : folder.path ? t('项目文件 · {value1}/', { value1: folder.path }) : t('项目文件');
 });
 const mention_files_loading = computed(() => !!mention_folder.value && mention_results.value[mention_folder.value.key] === null);
 /** Inside a folder, its first option references the folder itself; the others browse or pick its entries. */
@@ -783,15 +801,15 @@ const room_models = computed(() => view.value.launch?.room_models?.room_id === r
 const room_workflow = computed(() => room_models.value ? active_workflow(room_models.value.workflow, room.value?.free?.members) : null);
 const can_pick_workflow = computed(() => free.value && !room.value?.archived && view.value.access?.can_manage && (view.value.launch.available || view.value.launch.remote));
 const workflow_blocked = computed(() => !free_members.value.some((member) => member.role === "host" && member.access === "runner")
-  ? "需要一位由本机唤醒的 AI 主持人"
-  : !room_models.value?.host_workflows ? "需先在电脑上的“成员与设置 → 协作设置”打开“主持人完整权限”" : "");
+  ? t('需要一位由本机唤醒的 AI 主持人')
+  : !room_models.value?.host_workflows ? t('需先在电脑上的“成员与设置 → 协作设置”打开“主持人完整权限”') : "");
 const workflow_options = computed(() => {
   const query = mention_context.value?.query.toLocaleLowerCase() || "";
   // A workflow that cannot run here stays listed with its reason, but cannot be picked.
   return (view.value.launch.workflows || []).filter((item) => !item.disabled && `${item.id} ${item.label} ${item.description || ""}`.toLocaleLowerCase().includes(query))
     .map((item) => {
       const problem = workflow_problem(item);
-      return { key: `workflow:${item.id}`, workflow: item, group: "工作流", enabled: room_workflow.value?.id === item.id, broken: Boolean(problem), disabled: problem || workflow_blocked.value };
+      return { key: `workflow:${item.id}`, workflow: item, group: t('工作流'), enabled: room_workflow.value?.id === item.id, broken: Boolean(problem), disabled: problem || workflow_blocked.value };
     });
 });
 /**
@@ -799,8 +817,8 @@ const workflow_options = computed(() => {
  * wording of its own: what to do is the user's to write. It brings no member.
  */
 const PLATFORM_SKILL_COMMANDS = [
-  { id: "workflow-creator", label: "新建 / 修改工作流", search: "workflow creator 新建 创建 修改 工作流",
-    description: "请主持人按 workflow-creator 技能写工作流", prompt: "$workflow-creator " },
+  { id: "workflow-creator", label: t('新建 / 修改工作流'), search: "workflow creator 新建 创建 修改 工作流",
+    description: t('请主持人按 workflow-creator 技能写工作流'), prompt: "$workflow-creator " },
 ];
 const can_call_skill = computed(() => free.value && !room.value?.archived && free_members.value.some((member) => member.role === "host"));
 /**
@@ -814,29 +832,29 @@ const mode_options = computed(() => {
   const goal = ["active", "paused"].includes(room.value?.goal_state?.goal?.status) ? room.value.goal_state.goal : null;
   const session = ["active", "paused"].includes(room.value?.session?.status) ? room.value.session : null;
   const host_ready = free_members.value.some((member) => member.role === "host" && member.access === "runner");
-  const blocked = !host_ready ? "需要一位由本机唤醒的 AI 主持人" : "";
+  const blocked = !host_ready ? t('需要一位由本机唤醒的 AI 主持人') : "";
   const items = goal ? [
-    goal.status === "active" ? { command: "/goal pause", label: "暂停 Goal", description: "房间空闲时不再唤醒主持人" }
-      : { command: "/goal resume", label: "继续 Goal", description: "继续推进，房间空闲时唤醒主持人" },
-    { command: "/goal edit ", label: "修改 Goal 目标", description: "在后面写新的目标" },
-    { command: "/goal clear", label: "结束 Goal", description: "主持人不再自动推进，记录保留" },
+    goal.status === "active" ? { command: "/goal pause", label: t('暂停 Goal'), description: t('房间空闲时不再唤醒主持人') }
+      : { command: "/goal resume", label: t('继续 Goal'), description: t('继续推进，房间空闲时唤醒主持人') },
+    { command: "/goal edit ", label: t('修改 Goal 目标'), description: t('在后面写新的目标') },
+    { command: "/goal clear", label: t('结束 Goal'), description: t('主持人不再自动推进，记录保留') },
   ] : session ? [
-    session.status === "active" ? { command: "/discuss pause", label: "暂停讨论", description: "停止讨论中的执行，继续后由主持人重新安排" }
-      : { command: "/discuss resume", label: "继续讨论", description: "由主持人检查队列并继续" },
-    { command: "/discuss stop", label: "结束讨论", description: "记录与结论保留" },
+    session.status === "active" ? { command: "/discuss pause", label: t('暂停讨论'), description: t('停止讨论中的执行，继续后由主持人重新安排') }
+      : { command: "/discuss resume", label: t('继续讨论'), description: t('由主持人检查队列并继续') },
+    { command: "/discuss stop", label: t('结束讨论'), description: t('记录与结论保留') },
   ] : [
-    { command: "/goal ", label: "Goal", description: blocked || "设定目标，主持人持续推进；房间空闲时自动接着做", disabled: blocked },
-    { command: "/discuss ", label: "讨论", description: blocked || "主持人安排成员轮流发言，到上限或结束时停止", disabled: blocked },
+    { command: "/goal ", label: "Goal", description: blocked || t('设定目标，主持人持续推进；房间空闲时自动接着做'), disabled: blocked },
+    { command: "/discuss ", label: t('讨论'), description: blocked || t('主持人安排成员轮流发言，到上限或结束时停止'), disabled: blocked },
   ];
   const query = mention_context.value?.query.toLocaleLowerCase() || "";
   return items.filter((item) => `${item.command} ${item.label} goal discuss 目标 讨论`.toLocaleLowerCase().includes(query))
-    .map((item) => ({ key: `mode:${item.command}`, mode: item, group: "模式" }));
+    .map((item) => ({ key: `mode:${item.command}`, mode: item, group: t('模式') }));
 });
 const skill_options = computed(() => {
   if (!can_call_skill.value) return [];
   const query = mention_context.value?.query.toLocaleLowerCase() || "";
   return PLATFORM_SKILL_COMMANDS.filter((item) => `${item.id} ${item.label} ${item.search}`.toLocaleLowerCase().includes(query))
-    .map((item) => ({ key: `skill:${item.id}`, skill: item, group: "平台技能" }));
+    .map((item) => ({ key: `skill:${item.id}`, skill: item, group: t('平台技能') }));
 });
 /** The sub-workflows of the workflow in use; like a platform skill, picking one only prefills a request to the host. */
 const sub_workflow_options = computed(() => {
@@ -844,7 +862,7 @@ const sub_workflow_options = computed(() => {
   if (!can_call_skill.value || !workflow?.sub_workflows?.length) return [];
   const query = mention_context.value?.query.toLocaleLowerCase() || "";
   return workflow.sub_workflows.filter((item) => `${item.id} ${item.label} ${item.description || ""}`.toLocaleLowerCase().includes(query))
-    .map((item) => ({ key: `sub-workflow:${item.id}`, group: `工作流「${workflow.label}」的子工作流`,
+    .map((item) => ({ key: `sub-workflow:${item.id}`, group: t('工作流「{value1}」的子工作流', { value1: workflow.label }),
       skill: { ...item, prompt: `用工作流「${workflow.label}」的子工作流「${item.label}」（${item.id}）：` } }));
 });
 const member_skill_catalog = ref({});
@@ -855,7 +873,7 @@ watch([() => room.value?.id, skill_member], async ([room_id, name], [previous_ro
   if (room_id !== previous_room) member_skill_catalog.value = {};
   if (!name || member_skill_catalog.value[name]?.available) return;
   if (!view.value.access?.can_manage || !(view.value.launch.available || view.value.launch.remote)) {
-    member_skill_catalog.value = { ...member_skill_catalog.value, [name]: { available: false, reason: "连接成员所在电脑后可读取技能" } };
+    member_skill_catalog.value = { ...member_skill_catalog.value, [name]: { available: false, reason: t('连接成员所在电脑后可读取技能') } };
     return;
   }
   member_skill_catalog.value = { ...member_skill_catalog.value, [name]: null };
@@ -864,7 +882,7 @@ watch([() => room.value?.id, skill_member], async ([room_id, name], [previous_ro
     if (version === skill_read_version) member_skill_catalog.value = { ...member_skill_catalog.value, [name]: catalog };
   } catch (error) {
     if (version !== skill_read_version) return;
-    member_skill_catalog.value = { ...member_skill_catalog.value, [name]: { available: false, reason: "技能列表未载入，重新输入 / 可重试" } };
+    member_skill_catalog.value = { ...member_skill_catalog.value, [name]: { available: false, reason: t('技能列表未载入，重新输入 / 可重试') } };
     bridge.notify("error", error.message);
   }
 });
@@ -873,15 +891,18 @@ const member_skill_options = computed(() => {
   const query = mention_context.value?.query.toLocaleLowerCase() || "";
   return (member_skill_catalog.value[skill_member.value]?.skills || [])
     .filter(skill => `${skill.id} ${skill.label} ${skill.description}`.toLocaleLowerCase().includes(query))
-    .map(skill => ({ key: `member-skill:${skill.id}`, skill, group: `${bridge.display_name(skill_member.value)} 的技能` }));
+    .map(skill => ({ key: `member-skill:${skill.id}`, skill, group: t('{value1} 的技能', { value1: bridge.display_name(skill_member.value) }) }));
 });
-const member_skills_empty = computed(() => member_skill_catalog.value[skill_member.value]?.reason || "没有匹配的本机技能");
+const member_skills_empty = computed(() => member_skill_catalog.value[skill_member.value]?.reason || t('没有匹配的本机技能'));
 const mention_options = computed(() => skill_member.value ? member_skill_options.value : mention_context.value?.command ? [...mode_options.value, ...(can_pick_workflow.value ? workflow_options.value : []), ...sub_workflow_options.value, ...skill_options.value] : [
-  ...mention_members.value.map((name) => ({ key: `member:${name}`, name, group: "成员" })),
+  ...mention_members.value.map((name) => ({ key: `member:${name}`, name, group: t('成员') })),
   ...mention_folder_self.value.map((option) => ({ ...option, group: mention_files_group.value })),
   ...mention_files.value.map((entry) => ({ key: `file:${entry.path}`, entry, group: mention_files_group.value })),
 ]);
-const mention_heading = computed(() => skill_member.value ? `${bridge.display_name(skill_member.value)} 的本机技能` : mention_context.value?.command ? "选择模式、工作流或技能" : project_directory.value ? "选择成员或文件" : "选择成员");
+/** A "/" whose typed text matches nothing is ordinary prose (e.g. "/task-ledger，后续…"), so the menu steps aside. */
+const mention_open = computed(() => !!mention_context.value && !(mention_context.value.command && mention_context.value.query
+  && !mention_options.value.length && !member_skills_loading.value));
+const mention_heading = computed(() => skill_member.value ? t('{value1} 的本机技能', { value1: bridge.display_name(skill_member.value) }) : mention_context.value?.command ? t('选择模式、工作流或技能') : project_directory.value ? t('选择成员或文件') : t('选择成员'));
 /** Until the user moves the selection, a bare @ selects the host, who takes unaddressed messages; otherwise the first. */
 const mention_default = computed(() => {
   const host = !mention_context.value?.query && !mention_context.value?.command && free_members.value.find((member) => member.role === "host");
@@ -985,7 +1006,7 @@ async function select_mention(option) {
  */
 async function pick_workflow(option, start, end) {
   mention_context.value = null;
-  if (option.enabled) return bridge.notify("info", `本房间已启用工作流「${option.workflow.label}」`);
+  if (option.enabled) return bridge.notify("info", t('本房间已启用工作流「{value1}」', { value1: option.workflow.label }));
   if (option.disabled) return bridge.notify("warning", option.disabled);
   await replace_draft(start, replace_end(end, " "), `启用工作流「${option.workflow.label}」（${option.workflow.id}），`);
   mention_context.value = null;
@@ -1010,7 +1031,7 @@ async function pick_skill(option, start, end) {
 
 /** Keep suggestion keys local to the editor; modified Enter is left to the editor. */
 function mention_keydown(event) {
-  if (event.target !== prompt.value?.textareaRef || !mention_context.value || event.isComposing || event.keyCode === 229) return;
+  if (event.target !== prompt.value?.textareaRef || !mention_open.value || event.isComposing || event.keyCode === 229) return;
   if (event.ctrlKey || event.metaKey || event.altKey || event.shiftKey) return;
   if (event.key === "Escape") mention_context.value = null;
   else if (["ArrowDown", "ArrowUp"].includes(event.key) && mention_options.value.length) {
@@ -1199,16 +1220,23 @@ const end_anchor = stable_computed(() => {
 });
 /** Notices waking the host after its own failure, by message id: the wake-up takes the failed card's place, not a new card. */
 const failure_wakes = computed(() => new Map((room.value.free?.failure_wakes || []).map((wake) => [wake.message_id, wake.execution_id])));
+/** Timed checks the host answered without dispatching, by notice id → answer: the answer folds into the check's line. */
+const quiet_checkins = computed(() => {
+  if (view.value.query || view.value.source_filter) return new Map();
+  const answers = new Map(view.value.messages.map((message) => [message.id, message]));
+  return new Map((room.value.free?.quiet_checkins || []).map((check) => [check.message_id, answers.get(check.answer_id)]).filter(([, answer]) => answer));
+});
+const folded_checkin_answers = computed(() => new Set([...quiet_checkins.value.values()].map((answer) => answer.id)));
 /** Failed free-room executions, shaped like working cards so a failure stays where its work was shown. */
 const free_failures = computed(() => {
   if (view.value.query) return [];
   const names = new Map((room.value.free?.members || []).map((member) => [member.id, member.name]));
   // A host failure whose wake-up has started is shown by that wake-up's card in the same place.
-  const followed = new Set((room.value.free?.executions || []).map((execution) => failure_wakes.value.get(execution.request_message_id)).filter(Boolean));
-  return (room.value.free?.executions || []).filter((execution) => execution.status === "failed" && !followed.has(execution.id))
-    .map((execution) => ({ id: `failed-${execution.id}`, author: execution.member || names.get(execution.member_id) || "成员", slot_card: true, created_at: execution.created_at,
-      execution_id: execution.id, request_message_id: execution.request_message_id, anchor_message_id: execution.anchor_message_id,
-      dispatched_after: execution.dispatched_after, discussion_request: execution.requests?.find((request) => request.discussion_session_id),
+  const followed = new Set(all_executions.value.map((execution) => failure_wakes.value.get(execution.request_message_id)).filter(Boolean));
+  return all_executions.value.filter((execution) => execution.status === "failed" && !followed.has(execution.id))
+    .map((execution) => ({ id: `failed-${execution.id}`, author: execution.member || names.get(execution.member_id) || t('成员'), slot_card: true, created_at: execution.created_at,
+      execution_id: execution.id, request_message_id: execution.request_message_id, layout_after: execution.layout_after,
+      layout_at: execution.layout_at, discussion_request: execution.requests?.find((request) => request.discussion_session_id),
       failure: { ...execution, elapsed_seconds: execution.finished_at ? Math.max(0, execution.finished_at - execution.created_at) : null } }))
     .concat(undeliverable_requests());
 });
@@ -1217,7 +1245,7 @@ function undeliverable_requests() {
   const blocked = new Map((room.value.free?.members || []).filter((member) => member.adopt_error).map((member) => [member.id, member]));
   return (room.value.free?.requests || []).filter((request) => request.status === "pending" && blocked.has(request.member_id))
     .map((request) => ({ id: `undeliverable-${request.id}`, author: blocked.get(request.member_id).name, slot_card: true, undeliverable: true,
-      created_at: request.created_at, request_message_id: request.message_id,
+      created_at: request.created_at, request_message_id: request.message_id, layout_after: request.layout_after, layout_at: request.created_at,
       failure: { role: blocked.get(request.member_id).role, result: blocked.get(request.member_id).adopt_error } }));
 }
 const expanded_rewinds = ref(new Set());
@@ -1240,80 +1268,64 @@ function toggle_rewound(id) {
 }
 
 /**
- * A free-room card keeps the place it first appeared in: each execution takes a slot under the message that asked for it,
- * in execution order, and its answer replaces the working card in that slot. Work whose request is not shown stays at the end.
- * A handoff to the host is the exception: the site names the answer that completed its batch as `anchor_message_id`
- * (it differs from `request_message_id`, the dispatch message), and the handoff follows the whole batch, so it goes under
- * the last top-level message up to that answer, never into the batch's nested slots: what the user asked meanwhile, and
- * its answer, then stay above it instead of below a card that looks stuck in the middle.
- * Likewise a relay step dispatched from an answer nested under an older top-level message, after the user posted
- * meanwhile (`dispatched_after`, the latest message when it was dispatched, lies past that group), goes under the last
- * top-level message at dispatch instead of back up into the old nesting, where it would appear far above the reader.
+ * One rule places every card, whatever its kind (working, failed, stopped, answer, arrangement, missed turn): it shows
+ * under the top-level message at or before `layout_after`, the room's latest message when its request was made, and
+ * cards under the same message follow the order their work started (`layout_at`). Both are fixed when the request is
+ * made, so a card keeps its place once shown, and nothing nests under another card: an older nesting would pull later
+ * work up above what the user posted meanwhile. Kinds differ only in how a card looks.
  */
 /** Slot card id → id of the message it shows under; filled with the layout, read when locating a filtered card. */
 const layout_anchors = new Map();
 const free_layout = computed(() => {
   const messages = view.value.messages.filter((message) => !rewound_runs.value.hidden.has(message.id)
-    && !(message.source === "notice" && failure_wakes.value.has(message.id)));
-  // Work on a taken-back message is no longer shown under it; a failure there is dropped like any other unshown one.
-  const shown = new Set(messages.filter((message) => !message.withdrawn).map((message) => message.id));
+    && !(message.source === "notice" && failure_wakes.value.has(message.id)) && !folded_checkin_answers.value.has(message.id));
+  // Work on a taken-back message is no longer shown; a failure there is dropped too.
+  const taken_back = new Set(view.value.messages.filter((message) => message.withdrawn).map((message) => message.id));
   const slots = new Map();
-  const executions = new Map((room.value.free?.executions || []).map((execution) => [execution.id, execution]));
-  // Shown top-level messages in id order, filled while the messages are placed; a handoff resolves to the last one up to its answer.
+  const executions = new Map(all_executions.value.map((execution) => [execution.id, execution]));
+  // Top-level messages in id order, filled while the messages are placed.
   const root_ids = [];
-  const root_at = (id) => root_ids.findLast((root) => root <= id) ?? id;
-  // The top-level message each placed card ends up under, so a relay step can tell whether the user posted since.
-  const group_of = new Map();
   const place = (item) => {
     if ((!item.execution_id && !item.cancelled_turn && !item.arrangement && !item.undeliverable) || item.withdrawn) return false;
-    const request = item.discussion_request || executions.get(item.execution_id)?.requests?.find((value) => value.discussion_session_id);
-    const own = item.anchor_message_id ?? item.request_message_id;
-    let free_anchor = own !== item.request_message_id ? root_at(own) : own;
-    const latest_root = item.dispatched_after ? root_at(item.dispatched_after) : null;
-    if (latest_root && free_anchor === own && (group_of.get(own) ?? own) < latest_root && shown.has(latest_root)) free_anchor = latest_root;
-    const anchor = item.arrangement?.after_message_id ?? item.cancelled_turn?.after_message_id ?? (request ? request.after_message_id : free_anchor);
-    if (!((request || item.cancelled_turn || item.arrangement) && anchor === 0) && !shown.has(anchor)) return false;
+    if (taken_back.has(item.request_message_id)) return false;
+    const after = item.arrangement?.after_message_id ?? item.cancelled_turn?.after_message_id ?? item.layout_after;
+    if (after == null) return false;
+    // Before the first loaded message, the card shows once that part of the history is loaded.
+    const anchor = after === 0 ? 0 : root_ids.findLast((root) => root <= after);
+    if (anchor === undefined) return false;
     slots.set(anchor, [...(slots.get(anchor) || []), item]);
-    group_of.set(item.id, group_of.get(anchor) ?? anchor);
     return true;
   };
   const roots = messages.filter((message) => {
     if (place(message)) return false;
-    if (shown.has(message.id)) root_ids.push(message.id);
+    root_ids.push(message.id);
     return true;
   });
-  // A failure whose request is no longer shown is dropped rather than piled at the end.
   free_failures.value.forEach(place);
   if (!view.value.query) {
-    for (const plan of room.value.host_arrangements || []) place({ id: plan.key || `plan-${plan.id}`, slot_card: true,
-      arrangement: plan, created_at: new Date(plan.created_at).getTime() / 1000 });
-    for (const turn of room.value.cancelled_turns || []) place({ id: `cancelled-${turn.key || turn.id}`, author: turn.expert,
-      slot_card: true, cancelled_turn: turn, execution_id: turn.execution_id, created_at: new Date(turn.created_at).getTime() / 1000 });
-    const missed = new Set((room.value.cancelled_turns || []).map((turn) => turn.execution_id));
+    for (const plan of all_arrangements.value) place({ id: plan.key || `plan-${plan.id}`, slot_card: true,
+      arrangement: plan, layout_at: new Date(plan.created_at).getTime() / 1000 });
+    for (const turn of all_cancelled_turns.value) place({ id: `cancelled-${turn.key || turn.id}`, author: turn.expert,
+      slot_card: true, cancelled_turn: turn, execution_id: turn.execution_id,
+      layout_at: turn.layout_at ?? new Date(turn.created_at).getTime() / 1000 });
+    const missed = new Set(all_cancelled_turns.value.map((turn) => turn.execution_id));
     for (const execution of executions.values()) {
       if (execution.status !== "cancelled" || execution.answer_id || missed.has(execution.id)) continue;
       // Work that reached the member's software keeps a card where it worked once voided; work never delivered leaves none.
       const request = execution.requests?.find((item) => item.discussion_session_id);
       if (request || execution.capabilities) place({ id: `stopped-${execution.id}`, author: execution.member,
-        slot_card: true, cancelled_execution: execution, execution_id: execution.id, created_at: execution.created_at,
-        request_message_id: execution.request_message_id, anchor_message_id: execution.anchor_message_id,
-        dispatched_after: execution.dispatched_after, discussion_request: request });
+        slot_card: true, cancelled_execution: execution, execution_id: execution.id, request_message_id: execution.request_message_id,
+        layout_after: execution.layout_after, layout_at: execution.layout_at, discussion_request: request });
     }
   }
   const tail = free_working.value.map((item) => ({ ...item, slot_card: true })).filter((item) => !place(item));
-  const slot_time = (item) => executions.get(item.execution_id)?.created_at
-    ?? (typeof item.created_at === "number" ? item.created_at : new Date(item.created_at).getTime() / 1000);
-  const by_start = (left, right) => (slot_time(left) - slot_time(right)) || ((left.execution_id || 0) - (right.execution_id || 0));
+  const by_start = (left, right) => ((left.layout_at ?? 0) - (right.layout_at ?? 0)) || ((left.execution_id || 0) - (right.execution_id || 0));
   const ordered = [];
   layout_anchors.clear();
-  // Each card remembers the message it hangs under, so a filtered card can lead back to its place in the full transcript.
-  const visit = (item, anchor = null) => {
-    ordered.push(item);
-    if (anchor !== null) layout_anchors.set(item.id, anchor);
-    for (const child of (slots.get(item.id) || []).sort(by_start)) visit(child, item.slot_card ? anchor : item.id);
-  };
-  (slots.get(0) || []).sort(by_start).forEach((item) => visit(item));
-  roots.forEach((item) => visit(item));
+  // Each card remembers the message it shows under, so a filtered card can lead back to its place in the full transcript.
+  const visit = (cards, anchor) => cards.sort(by_start).forEach((item) => { ordered.push(item); layout_anchors.set(item.id, anchor); });
+  visit(slots.get(0) || [], 0);
+  roots.forEach((item) => { ordered.push(item); visit(slots.get(item.id) || [], item.id); });
   return [...ordered, ...tail];
 });
 /** Id of the top-level message at or before `index`, where a shown range can start without splitting a slot; 0 shows all. */
@@ -1443,9 +1455,9 @@ const navigation_groups = computed(() => {
     const number = round?.number || 0;
     const key = round?.key || "ungrouped";
     if (groups.at(-1)?.key !== key) {
-      const label = number ? `第 ${number} 轮` : "未分组";
-      const progress = round ? `${round.opinions ?? round.speakers.length}/${round.participants ?? Object.keys(room.value.experts).length} 人已发言` : "尚无参与专家的观点";
-      groups.push({ key, number, label, description: `${label} · ${round?.completed ? '已完成' : progress}`, messages: [] });
+      const label = number ? t('第 {value1} 轮', { value1: number }) : t('未分组');
+      const progress = round ? t('{value1}/{value2} 人已发言', { value1: round.opinions ?? round.speakers.length, value2: round.participants ?? Object.keys(room.value.experts).length }) : t('尚无参与专家的观点');
+      groups.push({ key, number, label, description: `${label} · ${round?.completed ? t('已完成') : progress}`, messages: [] });
     }
     groups.at(-1).messages.push(message);
   }
@@ -1464,7 +1476,7 @@ const navigation_sections = computed(() => {
     entries: [
       { key: `round-${group.messages[0].id}`, round: true, number: group.number, message: group.messages[0], label: group.description, index: index++ },
       ...group.messages.map((message) => ({ key: `message-${message.id}`, round: false, message,
-        label: `${group.label} · ${bridge.display_name(message.author)} 的发言 #${message.id}`, index: index++ })),
+        label: t('{value1} · {value2} 的发言 #{value3}', { value1: group.label, value2: bridge.display_name(message.author), value3: message.id }), index: index++ })),
     ],
   }));
 });
@@ -1916,6 +1928,13 @@ function release_transcript() {
   held_scroll = null;
 }
 
+/** A deleted tag removes its file; renumbering the rest rewrites the text, so the caret is put back where it was. */
+function drop_unreferenced(event) {
+  const area = event.target instanceof HTMLTextAreaElement ? event.target : null, caret = area?.selectionStart;
+  if (bridge.drop_unreferenced_attachments(text.value) && area) nextTick(() => area.setSelectionRange(Math.min(caret, area.value.length), Math.min(caret, area.value.length)));
+}
+
+
 /** Re-fits the editor rows when its width changes; Nuxt UI only measures on mount and on input, so a draft measured while the column was narrow stays too tall. */
 function fit_editor() {
   const editor = prompt.value?.textareaRef;
@@ -2005,13 +2024,13 @@ async function allow_and_resend(report) {
 /** Reuse the existing original-record actions in the message overflow menu; where retract and edit take the toolbar, reply moves here. */
 function message_actions(message) {
   return [[
-    ...(can_take_back(message) || has_private_chat(message) ? [{ label: "回复", icon: "i-lucide-corner-up-left", onSelect: () => reply_to(message) }] : []),
+    ...(can_take_back(message) || has_private_chat(message) ? [{ label: t('回复'), icon: "i-lucide-corner-up-left", onSelect: () => reply_to(message) }] : []),
     ...(narrow.value && message.kind !== "receipt" && editing.value.id !== message.id ? [reader.state.message_id === message.id
-      ? { label: "停止朗读", icon: "i-lucide-square", onSelect: () => reader.stop() }
-      : { label: "朗读", icon: "i-lucide-volume-2", onSelect: () => reader.start(message.id) }] : []),
-    { label: "复制原文链接", icon: "i-lucide-link", onSelect: () => copy_message(message) },
-    { label: "查看原文", icon: "i-lucide-expand", onSelect: () => emit("detail", message.id) },
-    ...(can_branch(message) && message.author !== "用户" ? [{ label: "从这里分支", icon: "i-lucide-git-branch", onSelect: () => act("fork_room", message.id) }] : []),
+      ? { label: t('停止朗读'), icon: "i-lucide-square", onSelect: () => reader.stop() }
+      : { label: t('朗读'), icon: "i-lucide-volume-2", onSelect: () => reader.start(message.id) }] : []),
+    { label: t('复制原文链接'), icon: "i-lucide-link", onSelect: () => copy_message(message) },
+    { label: t('查看原文'), icon: "i-lucide-expand", onSelect: () => emit("detail", message.id) },
+    ...(can_branch(message) && message.author !== "用户" ? [{ label: t('从这里分支'), icon: "i-lucide-git-branch", onSelect: () => act("fork_room", message.id) }] : []),
   ]];
 }
 
@@ -2113,14 +2132,19 @@ async function submit_edit() {
 /** What the rewind does, in one line: how much it takes back and whose session goes back; members left as they were need no mention. */
 function rewind_summary(plan) {
   const names = (session) => plan.members.filter((member) => member.session === session).map((member) => bridge.display_name(member.name)).join("、");
-  return [`将回退 ${plan.messages} 条记录（含这条），进行中的工作会停止`,
-    names("cut") && `${names("cut")} 的会话退回到这条消息之前`,
-    names("kept") && `${names("kept")} 的会话在其自己的窗口中，无法由本机回退`,
-    "成员已改动的文件不会撤销"].filter(Boolean).join("；") + "。";
+  return [t('将回退 {value1} 条记录（含这条），进行中的工作会停止', { value1: plan.messages }),
+    names("cut") && t('{value1} 的会话退回到这条消息之前', { value1: names("cut") }),
+    names("kept") && t('{value1} 的会话在其自己的窗口中，无法由本机回退', { value1: names("kept") }),
+    t('成员已改动的文件不会撤销')].filter(Boolean).join("；") + "。";
 }
 
 /** Select the shared reply target and focus the library's chat editor. */
 async function reply_to(message) { await act("reply", message); prompt.value?.textareaRef?.focus(); }
+/** A `#123` written in a card's text opens message 123's original text, as the card's own `#id` does. */
+function open_message_ref(event) {
+  const reference = event.target.closest("[data-message-ref]");
+  if (reference) emit("detail", Number(reference.dataset.messageRef));
+}
 
 /** Send the shared draft through the established idempotent controller. */
 async function send() {
@@ -2180,9 +2204,9 @@ function copy_message(message) { act("copy", `${view.value.room_site}/r/${room.v
 </script>
 
 <template>
-  <section class="channel-conversation" role="tabpanel" aria-label="消息">
-    <div v-if="view.query || view.source_filter" class="channel-filter-summary"><span>{{ [view.query && `“${view.query}”`, [view.host_only && '主持人', ...view.authors.map((name) => bridge.display_name(name)), view.mention_only && `@${bridge.display_name('用户')}`, view.card_kinds.length && `${view.card_kinds.length} 类卡片`].filter(Boolean).join('、')].filter(Boolean).join(' · ') }} · {{ view.messages_loading ? '正在筛选…' : `${view.source_filter ? transcript_messages.length : view.total} 条结果` }}</span><UButton label="清除筛选" size="xs" variant="link" color="neutral" @click="search = ''; act('filter', { query: '', mention: false, host: false, authors: [], kinds: [] })" /></div>
-    <nav v-if="view.messages.length" ref="message_map" class="channel-message-map" :style="{ '--nav-entry-height': `${NAV_ENTRY_HEIGHT}px` }" aria-label="发言快速导航" @wheel.stop.passive="browse_navigation" @pointerleave="close_preview" @focusout="close_preview" @keydown.esc.stop="close_preview" @contextmenu="navigation_context_menu" @pointerdown="start_scrub" @pointermove="move_scrub" @pointerup="end_scrub" @pointercancel="end_scrub">
+  <section class="channel-conversation" role="tabpanel" :aria-label="t('消息')">
+    <div v-if="view.query || view.source_filter" class="channel-filter-summary"><span>{{ [view.query && `“${view.query}”`, [view.host_only && t('主持人'), ...view.authors.map((name) => bridge.display_name(name)), view.mention_only && `@${bridge.display_name('用户')}`, view.card_kinds.length && t('{value1} 类卡片', { value1: view.card_kinds.length })].filter(Boolean).join('、')].filter(Boolean).join(' · ') }} · {{ view.messages_loading ? t('正在筛选…') : t('{value1} 条结果', { value1: view.source_filter ? transcript_messages.length : view.total }) }}</span><UButton :label="t('清除筛选')" size="xs" variant="link" color="neutral" @click="search = ''; act('filter', { query: '', mention: false, host: false, authors: [], kinds: [] })" /></div>
+    <nav v-if="view.messages.length" ref="message_map" class="channel-message-map" :style="{ '--nav-entry-height': `${NAV_ENTRY_HEIGHT}px` }" :aria-label="t('发言快速导航')" @wheel.stop.passive="browse_navigation" @pointerleave="close_preview" @focusout="close_preview" @keydown.esc.stop="close_preview" @contextmenu="navigation_context_menu" @pointerdown="start_scrub" @pointermove="move_scrub" @pointerup="end_scrub" @pointercancel="end_scrub">
       <div class="channel-map-track">
         <div v-for="section in navigation_sections" :key="section.entries[0].key"v-memo="[section, preview_open, active_round === section.number ? active_message : null, section_preview_position(section)]" class="channel-map-round" :style="{ '--round-message-count': section.count }">
           <!-- A free room is one long section, so each tick keeps its own memo: moving the reading position or the hover redraws only the ticks it reaches. -->
@@ -2201,22 +2225,22 @@ function copy_message(message) { act("copy", `${view.value.room_site}/r/${room.v
             <UAvatar :src="bridge.identities[preview.author]?.icon" :text="bridge.identities[preview.author]?.initials || '?'" :alt="bridge.display_name(preview.author)" size="sm" class="channel-avatar" :class="bridge.identities[preview.author]?.style" />
             <strong>{{ bridge.display_name(preview.author) }}</strong><span>#{{ preview.id }}</span>
           </div>
-          <div class="channel-nav-preview-meta">{{ preview_round }} · {{ bridge.sources[preview.source] }} · {{ bridge.format_time(preview.created_at) }}<span v-if="preview.kind === 'moderation'"> · 主持人</span><span v-else-if="preview.kind === 'receipt'"> · 运行回执</span></div>
+          <div class="channel-nav-preview-meta">{{ preview_round }} · {{ bridge.sources[preview.source] }} · {{ bridge.format_time(preview.created_at) }}<span v-if="preview.kind === 'moderation'"> {{ t('· 主持人') }}</span><span v-else-if="preview.kind === 'receipt'"> {{ t('· 运行回执') }}</span></div>
           <div class="channel-nav-preview-text markdown-body" v-html="preview.summary ? preview.rendered_summary : preview.rendered_text"></div>
         </div>
       </motion.div>
     </Teleport>
     <div v-if="listen_here && !listen_here.touch" class="channel-offer-marks" :style="{ left: `${listen_here.left}px`, top: `${listen_here.top}px` }">
-      <button type="button" class="channel-listen-mark" title="把选中的文字作为摘录添加到对话" @mousedown.prevent @click="start_quote"><UIcon name="i-lucide-message-square-quote" />添加到对话</button>
-      <button v-if="listen_here.speech" type="button" class="channel-listen-mark" title="从选中处开始朗读" aria-label="从选中处开始朗读" @mousedown.prevent @click="listen_from_selection"><UIcon name="i-lucide-headphones" />朗读</button>
+      <button type="button" class="channel-listen-mark" :title="t('把选中的文字作为摘录添加到对话')" @mousedown.prevent @click="start_quote"><UIcon name="i-lucide-message-square-quote" />{{ t('添加到对话') }}</button>
+      <button v-if="listen_here.speech" type="button" class="channel-listen-mark" :title="t('从选中处开始朗读')" :aria-label="t('从选中处开始朗读')" @mousedown.prevent @click="listen_from_selection"><UIcon name="i-lucide-headphones" />{{ t('听当前') }}</button>
     </div>
     <form v-if="quoting" class="selection-comment" :class="{ 'is-docked': quoting.touch }" :style="quoting.touch ? {} : { left: `${quoting.left}px`, top: `${quoting.top}px` }" @submit.prevent="submit_quote">
-      <textarea ref="quote_input" v-model="quote_comment" rows="1" placeholder="添加批注（可选）" aria-label="摘录的批注（可选）" enterkeyhint="send" @keydown="quote_keydown"></textarea>
-      <button type="button" class="selection-comment-cancel" aria-label="取消添加" title="取消" @click="cancel_quote"><UIcon name="i-lucide-x" /></button>
-      <button type="submit" class="selection-comment-send" aria-label="添加到对话" title="添加到对话（Enter）"><UIcon name="i-lucide-arrow-up" /></button>
+      <textarea ref="quote_input" v-model="quote_comment" rows="1" :placeholder="t('添加批注（可选）')" :aria-label="t('摘录的批注（可选）')" enterkeyhint="send" @keydown="quote_keydown"></textarea>
+      <button type="button" class="selection-comment-cancel" :aria-label="t('取消添加')" :title="t('取消')" @click="cancel_quote"><UIcon name="i-lucide-x" /></button>
+      <button type="submit" class="selection-comment-send" :aria-label="t('添加到对话')" :title="t('添加到对话（Enter）')"><UIcon name="i-lucide-arrow-up" /></button>
     </form>
     <ExcerptEditCard v-if="mark_editing" :key="mark_editing.excerpt.id" :comment="mark_editing.excerpt.comment" :style="{ left: `${mark_editing.left}px`, top: `${mark_editing.top}px` }" @save="save_mark" @cancel="close_mark" @remove="remove_mark" />
-    <div ref="transcript" v-memo="[message_groups, view.messages_loading, view.messages_failure, view.sending_preview, view.failed_sends, message_round_labels, free, room.session, can_manage, expanded_answers.size, reader.state.message_id, room.title, view.query, view.source_filter, view.authors, view.card_kinds, topic_anchor, end_anchor, request_badges, execution_reports, recommendations, adopting, scheduler_decisions, host_arrangements, pending, execution_notes, open_working_notes, editing, rewound_runs, retracting_id, armed_cards.size, menu_open_id, stopping_member, free_now, allowing, allow_errors, late_answers, has_draft, view.sending_message, routing_messages, speaking_turn, room.free]" class="channel-transcript" aria-label="聊天记录" @scroll="schedule_track_scroll" @wheel.passive="resume_tracking($event); stop_following($event)" @touchstart.passive="resume_tracking" @touchmove.passive="stop_following" @touchend.passive="end_touch" @touchcancel.passive="end_touch" @pointerdown="stop_following" @keydown="resume_tracking($event); stop_following($event)">
+    <div ref="transcript" v-memo="[message_groups, view.messages_loading, view.messages_failure, view.sending_preview, view.failed_sends, message_round_labels, free, room.session, can_manage, expanded_answers.size, reader.state.message_id, room.title, view.query, view.source_filter, view.authors, view.card_kinds, topic_anchor, end_anchor, request_badges, execution_reports, recommendations, adopting, scheduler_decisions, host_arrangements, pending, execution_notes, open_working_notes, editing, rewound_runs, retracting_id, armed_cards.size, menu_open_id, stopping_member, free_now, allowing, allow_errors, late_answers, has_draft, view.sending_message, routing_messages, speaking_turn, room.free]" class="channel-transcript" :aria-label="t('聊天记录')" @click="open_message_ref" @scroll="schedule_track_scroll" @wheel.passive="resume_tracking($event); stop_following($event)" @touchstart.passive="resume_tracking" @touchmove.passive="stop_following" @touchend.passive="end_touch" @touchcancel.passive="end_touch" @pointerdown="stop_following" @keydown="resume_tracking($event); stop_following($event)">
       <div v-if="!view.query && !view.source_filter && !topic_anchor && render_start === 0" class="channel-message-group channel-topic-group"><TopicCard :ref="(card) => topic_card = card" @edit="emit('edit')" /></div>
       <div v-for="group in message_groups" :key="group.key" class="channel-message-group">
         <USeparator :label="group.label" class="channel-date-divider" />
@@ -2224,28 +2248,34 @@ function copy_message(message) { act("copy", `${view.value.room_site}/r/${room.v
         <DiscussionEndCard v-if="message.id === end_anchor && !view.query && !view.source_filter" />
         <TopicCard v-if="message.id === topic_anchor && !view.query && !view.source_filter" :ref="(card) => topic_card = card" @edit="emit('edit')" />
         <!-- A free-room working card holds the slot its answer will take. -->
-        <ScheduleCard v-if="message.arrangement" icon="i-lucide-list-ordered" plain title="主持人创建的发言安排" label="主持人安排" toggle-label="展开或收起各专家的任务">
-          <template #text>主持人安排：{{ host_arrangements.get(message.arrangement.after_message_id)?.find((plan) => plan.id === message.arrangement.id)?.label }}<small v-if="message.arrangement.after_message_id">耗时 {{ format_elapsed(arrangement_seconds(message.arrangement, view.messages.find((item) => item.id === message.arrangement.after_message_id))) }}</small></template>
+        <ScheduleCard v-if="message.arrangement" icon="i-lucide-list-ordered" plain :title="t('主持人创建的发言安排')" :label="t('主持人安排')" :toggle-label="t('展开或收起各专家的任务')">
+          <template #text>{{ t('主持人安排：{value1}', { value1: host_arrangements.get(message.arrangement.after_message_id)?.find((plan) => plan.id === message.arrangement.id)?.label }) }}<small v-if="message.arrangement.after_message_id">{{ t('耗时 {value1}', { value1: format_elapsed(arrangement_seconds(message.arrangement, view.messages.find((item) => item.id === message.arrangement.after_message_id))) }) }}</small></template>
           <p v-for="turn in message.arrangement.turns" :key="`${message.id}-${turn.expert}-${turn.question}`"><span>{{ bridge.display_name(turn.expert) }}：{{ turn.question }}</span></p>
         </ScheduleCard>
         <GoalNoticeCard v-else-if="message.source === 'goal'" :message="message" />
-        <ScheduleCard v-else-if="message.source === 'notice'" icon="i-lucide-bell" plain :expandable="false" label="程序通知主持人">
+        <ScheduleCard v-else-if="message.source === 'notice' && quiet_checkins.has(message.id)" icon="i-lucide-bell" plain :label="t('定时检查')" :toggle-label="t('展开或收起主持人的检查回复')">
+          <template #text><span class="channel-checkin-line">{{ t('定时检查 · {value1}：{value2}', { value1: bridge.display_name(quiet_checkins.get(message.id).author), value2: quiet_checkins.get(message.id).text.replace(/^定时检查[：:]\s*/, '') }) }}</span></template>
+          <p>{{ message.text }}</p>
+          <p class="channel-checkin-answer">{{ quiet_checkins.get(message.id).text }}</p>
+        </ScheduleCard>
+        <ScheduleCard v-else-if="message.source === 'notice'" icon="i-lucide-bell" plain fold :label="t('程序通知主持人')">
           <template #text>{{ message.text }}</template>
+          <p class="channel-checkin-answer">{{ message.text }}</p>
         </ScheduleCard>
         <UChatMessage v-else-if="message.cancelled_turn || message.cancelled_execution" :id="message.id" :data-author="bridge.identities[message.author]?.style" role="assistant" :parts="[]" side="left" variant="naked" color="neutral" class="channel-message" :ui="{ header: 'channel-message-header', container: 'channel-message-container', body: 'channel-message-body' }">
           <template #body>
             <div class="channel-message-byline">
               <UAvatar :src="bridge.identities[message.author]?.icon" :text="bridge.identities[message.author]?.initials || '?'" :alt="bridge.display_name(message.author)" size="md" class="channel-avatar" :class="bridge.identities[message.author]?.style" />
               <div class="channel-message-meta"><div class="channel-message-author"><strong>{{ bridge.display_name(message.author) }}</strong></div></div>
-              <span v-if="message.cancelled_turn" class="channel-message-provenance channel-message-elapsed">已错过 · 安排 #{{ message.cancelled_turn.display_id || message.cancelled_turn.id }}</span>
-              <span v-else class="channel-message-provenance channel-message-elapsed">{{ stop_state(message.cancelled_execution).label }} · 执行 #{{ message.execution_id }}</span>
+              <span v-if="message.cancelled_turn" class="channel-message-provenance channel-message-elapsed">{{ t('已错过 · 安排 #{value1}', { value1: message.cancelled_turn.display_id || message.cancelled_turn.id }) }}</span>
+              <span v-else class="channel-message-provenance channel-message-elapsed">{{ t('{value1} · 执行 #{value2}', { value1: stop_state(message.cancelled_execution).label, value2: message.execution_id }) }}</span>
             </div>
-            <div class="channel-message-text" role="status">{{ message.cancelled_turn ? '本次发言已被跳过或取消，未回答。' : message.cancelled_execution.result || '本次执行已作废，未回答。' }}</div>
-            <template v-for="execution in [message.cancelled_execution || (room.free?.executions || []).find((item) => item.id === message.execution_id)].filter((item) => item && stop_state(item).note)" :key="execution.id">
+            <div class="channel-message-text" role="status">{{ message.cancelled_turn ? t('本次发言已被跳过或取消，未回答。') : message.cancelled_execution.result || t('本次执行已作废，未回答。') }}</div>
+            <template v-for="execution in [message.cancelled_execution || all_executions.find((item) => item.id === message.execution_id)].filter((item) => item && stop_state(item).note)" :key="execution.id">
               <p class="channel-message-text channel-stop-note">{{ stop_state(execution).note }}</p>
               <details v-if="execution.late_answer && view.access?.can_manage" class="channel-receipt" @toggle="load_late_answer(execution.id, $event)">
-                <summary :aria-label="`查看 ${bridge.display_name(execution.member)} 未采纳的回答`">未采纳的回答</summary>
-                <div class="channel-message-text channel-late-answer">{{ late_answers.get(execution.id)?.text ?? '正在读取…' }}</div>
+                <summary :aria-label="t('查看 {value1} 未采纳的回答', { value1: bridge.display_name(execution.member) })">{{ t('未采纳的回答') }}</summary>
+                <div class="channel-message-text channel-late-answer">{{ late_answers.get(execution.id)?.text ?? t('正在读取…') }}</div>
               </details>
             </template>
           </template>
@@ -2256,17 +2286,17 @@ function copy_message(message) { act("copy", `${view.value.room_site}/r/${room.v
           <div class="channel-working-head">
             <UAvatar :src="bridge.identities[message.author]?.icon" :text="bridge.identities[message.author]?.initials || '?'" :alt="bridge.display_name(message.author)" size="2xs" class="channel-avatar" :class="bridge.identities[message.author]?.style" />
             <strong class="channel-working-name">{{ bridge.display_name(message.author) }}</strong>
-            <UTooltip v-if="message.background" text="后台进行：主持人没有等它，接着在做别的"><UIcon name="i-lucide-split" class="channel-working-background" role="img" aria-label="后台进行：主持人没有等它" /></UTooltip>
-            <small class="channel-working-elapsed">{{ message.waiting ? `手动启动${message.created_at ? ` · 已等 ${format_elapsed(Math.max(0, free_now - message.created_at))}` : ''}` : `已用 ${format_elapsed(Math.max(0, free_now - message.created_at))}` }}{{ message.steps ? ` · 已执行 ${message.steps} 步` : '' }}{{ message.attempt ? ` · 第 ${message.attempt}/${MAX_DELIVERY_RETRIES} 次重试` : '' }}</small>
-            <UTooltip v-if="view.access?.can_manage && shows_progress(message) && message.execution_id" text="私聊：查看它正在做什么"><UButton icon="i-lucide-message-square" class="channel-private-chat-key channel-corner-key" size="xs" variant="ghost" color="neutral" :aria-label="`私聊 ${bridge.display_name(message.author)}：查看本次执行过程`" @click="open_private_chat(act, message.author, message.execution_id)" /></UTooltip>
+            <UTooltip v-if="message.background" :text="t('后台进行：主持人没有等它，接着在做别的')"><UIcon name="i-lucide-split" class="channel-working-background" role="img" :aria-label="t('后台进行：主持人没有等它')" /></UTooltip>
+            <small class="channel-working-elapsed">{{ message.waiting ? t('手动启动{value1}', { value1: message.created_at ? t(' · 已等 {value1}', { value1: format_elapsed(Math.max(0, free_now - message.created_at)) }) : '' }) : t('已用 {value1}', { value1: format_elapsed(Math.max(0, free_now - message.created_at)) }) }}{{ message.steps ? t(' · 已执行 {value1} 步', { value1: message.steps }) : '' }}{{ message.attempt ? t(' · 第 {value1}/{value2} 次重试', { value1: message.attempt, value2: MAX_DELIVERY_RETRIES }) : '' }}</small>
+            <UTooltip v-if="view.access?.can_manage && shows_progress(message) && message.execution_id" :text="t('私聊：查看它正在做什么')"><UButton icon="i-lucide-message-square" class="channel-private-chat-key channel-corner-key" size="xs" variant="ghost" color="neutral" :aria-label="t('私聊 {value1}：查看本次执行过程', { value1: bridge.display_name(message.author) })" @click="open_private_chat(act, message.author, message.execution_id)" /></UTooltip>
           <span v-if="view.access?.can_manage" class="channel-working-actions">
               <!-- In a discussion, stopping the current speaker skips the turn so the next one speaks. -->
               <template v-if="speaking_turn?.expert === message.author && message.discussion_request">
-                <UTooltip text="暂停讨论"><UButton icon="i-lucide-pause" size="xs" variant="ghost" color="neutral" :aria-label="`暂停讨论，停止 ${bridge.display_name(message.author)} 本次发言`" :disabled="!!pending" :loading="pending === 'pause_discussion'" @click="act('pause_discussion')" /></UTooltip>
-                <UTooltip text="停止本次发言，轮到下一位"><UButton variant="solid" color="neutral" class="channel-stop-button" :aria-label="`停止 ${bridge.display_name(message.author)} 本次发言，轮到下一位`" :disabled="!!pending" :loading="pending === 'skip_turn'"
+                <UTooltip :text="t('暂停讨论')"><UButton icon="i-lucide-pause" size="xs" variant="ghost" color="neutral" :aria-label="t('暂停讨论，停止 {value1} 本次发言', { value1: bridge.display_name(message.author) })" :disabled="!!pending" :loading="pending === 'pause_discussion'" @click="act('pause_discussion')" /></UTooltip>
+                <UTooltip :text="t('停止本次发言，轮到下一位')"><UButton variant="solid" color="neutral" class="channel-stop-button" :aria-label="t('停止 {value1} 本次发言，轮到下一位', { value1: bridge.display_name(message.author) })" :disabled="!!pending" :loading="pending === 'skip_turn'"
                   @click="act('skip_turn')"><span class="channel-stop-square" /></UButton></UTooltip>
               </template>
-              <UTooltip v-else text="停止"><UButton variant="solid" color="neutral" class="channel-stop-button" :aria-label="`停止 ${bridge.display_name(message.author)} 本次执行`" :disabled="!!pending"
+              <UTooltip v-else :text="t('停止')"><UButton variant="solid" color="neutral" class="channel-stop-button" :aria-label="t('停止 {value1} 本次执行', { value1: bridge.display_name(message.author) })" :disabled="!!pending"
                 :loading="pending === 'change_member' && stopping_member === message.member_id" @click="stop_member(message)"><span class="channel-stop-square" /></UButton></UTooltip>
           </span>
           </div>
@@ -2274,11 +2304,11 @@ function copy_message(message) { act("copy", `${view.value.room_site}/r/${room.v
                head-row key above takes the right end and the stop key moves to the bottom-right corner. -->
           <template v-if="view.access?.can_manage && shows_progress(message) && message.execution_id">
             <div class="channel-message-actions"><div class="channel-message-stack"><div class="channel-message-toolbar channel-message-corner">
-              <UTooltip text="私聊：查看它正在做什么"><UButton icon="i-lucide-message-square" class="channel-private-chat-key" size="xs" variant="ghost" color="neutral" :aria-label="`私聊 ${bridge.display_name(message.author)}：查看本次执行过程`" @click="open_private_chat(act, message.author, message.execution_id)" /></UTooltip>
+              <UTooltip :text="t('私聊：查看它正在做什么')"><UButton icon="i-lucide-message-square" class="channel-private-chat-key" size="xs" variant="ghost" color="neutral" :aria-label="t('私聊 {value1}：查看本次执行过程', { value1: bridge.display_name(message.author) })" @click="open_private_chat(act, message.author, message.execution_id)" /></UTooltip>
             </div></div></div>
           </template>
           <div class="channel-working-main">
-            <span v-for="status in [working_status(message)]" :key="message.id" class="channel-working-status" :class="{ 'channel-working-warning': status.warning }" role="status" :title="shows_progress(message) ? (message.waiting ? message.text : status.text) : '此接入方式看不到进度，可在原窗口查看'">
+            <span v-for="status in [working_status(message)]" :key="message.id" class="channel-working-status" :class="{ 'channel-working-warning': status.warning }" role="status" :title="shows_progress(message) ? (message.waiting ? message.text : status.text) : t('此接入方式看不到进度，可在原窗口查看')">
               <span v-if="message.waiting">{{ message.text }}</span>
               <WorkingText v-else-if="status.live" :text="status.text" :seed="message.author" :beat="message.activity_at" :silent="free_now - (message.activity_at || message.created_at)" dots :muted="!shows_progress(message)" />
               <span v-else>{{ status.text }}</span>
@@ -2288,7 +2318,7 @@ function copy_message(message) { act("copy", `${view.value.room_site}/r/${room.v
             <template v-if="open_working_notes.has(message.execution_id)"><p v-for="note in notes.slice(0, -1)" :key="note.seq">{{ note.text }}</p></template>
             <p class="channel-working-latest" @click="notes.length === 1 || open_working_notes.has(message.execution_id) || toggle_working_notes(message.execution_id)">
               <span class="channel-working-latest-text">{{ notes.at(-1).text }}</span>
-              <button v-if="notes.length > 1" type="button" class="channel-working-count" :aria-expanded="open_working_notes.has(message.execution_id)" :aria-label="open_working_notes.has(message.execution_id) ? '收起过程说明' : `展开全部 ${notes.length} 段过程说明`" @click.stop="toggle_working_notes(message.execution_id)">{{ notes.length }} 段<UIcon name="i-lucide-chevron-down" /></button>
+              <button v-if="notes.length > 1" type="button" class="channel-working-count" :aria-expanded="open_working_notes.has(message.execution_id)" :aria-label="open_working_notes.has(message.execution_id) ? t('收起过程说明') : t('展开全部 {value1} 段过程说明', { value1: notes.length })" @click.stop="toggle_working_notes(message.execution_id)">{{ t('{value1} 段', { value1: notes.length }) }}<UIcon name="i-lucide-chevron-down" /></button>
             </p>
           </div>
         </div>
@@ -2299,11 +2329,11 @@ function copy_message(message) { act("copy", `${view.value.room_site}/r/${room.v
               <UAvatar :src="bridge.identities[message.author]?.icon" :text="bridge.identities[message.author]?.initials || '?'" :alt="bridge.display_name(message.author)" size="md" class="channel-avatar" :class="bridge.identities[message.author]?.style" />
               <div class="channel-message-meta">
                 <div class="channel-message-author"><strong>{{ bridge.display_name(message.author) }}</strong></div>
-                <div class="channel-message-provenance"><template v-if="message.created_at"><time :title="new Date(message.created_at * 1000).toLocaleString('zh-CN')">{{ bridge.format_time(message.created_at * 1000) }}</time> · </template>{{ message.waiting ? `手动启动${message.created_at ? ` · 已等 ${format_elapsed(Math.max(0, free_now - message.created_at))}` : ''}` : `已用 ${format_elapsed(Math.max(0, free_now - message.created_at))}` }}</div>
+                <div class="channel-message-provenance"><template v-if="message.created_at"><time :title="new Date(message.created_at * 1000).toLocaleString(locale)">{{ bridge.format_time(message.created_at * 1000) }}</time> · </template>{{ message.waiting ? t('手动启动{value1}', { value1: message.created_at ? t(' · 已等 {value1}', { value1: format_elapsed(Math.max(0, free_now - message.created_at)) }) : '' }) : t('已用 {value1}', { value1: format_elapsed(Math.max(0, free_now - message.created_at)) }) }}</div>
               </div>
             </div>
             <div class="channel-working-row">
-              <div v-for="status in [working_status(message)]" :key="message.id" class="channel-message-text" :class="{ 'channel-working-warning': status.warning }" role="status" :aria-label="`${bridge.display_name(message.author)} ${status.text}`" :title="shows_progress(message) ? undefined : '此接入方式看不到进度，可在原窗口查看'">
+              <div v-for="status in [working_status(message)]" :key="message.id" class="channel-message-text" :class="{ 'channel-working-warning': status.warning }" role="status" :aria-label="`${bridge.display_name(message.author)} ${status.text}`" :title="shows_progress(message) ? undefined : t('此接入方式看不到进度，可在原窗口查看')">
                 <span v-if="message.waiting">{{ message.text }}</span>
                 <WorkingText v-else-if="status.live" :text="status.text" :seed="message.author" :beat="message.activity_at" :silent="free_now - (message.activity_at || message.created_at)" dots :muted="!shows_progress(message)" />
                 <span v-else>{{ status.text }}</span>
@@ -2312,11 +2342,11 @@ function copy_message(message) { act("copy", `${view.value.room_site}/r/${room.v
             <template v-if="message.retry">
               <p class="channel-message-text channel-failure-reason is-warning">{{ message.retry.reason }}</p>
               <div class="channel-failure-actions">
-                <span class="channel-message-provenance">{{ message.retry.retry_at > free_now ? `${message.retry.retry_at - free_now} 秒后自动重试` : '正在重试' }}（第 {{ message.retry.attempt }}/{{ MAX_DELIVERY_RETRIES }} 次）</span>
+                <span class="channel-message-provenance">{{ t('{value1}（第 {value2}/{value3} 次）', { value1: message.retry.retry_at > free_now ? t('{value1} 秒后自动重试', { value1: message.retry.retry_at - free_now }) : t('正在重试'), value2: message.retry.attempt, value3: MAX_DELIVERY_RETRIES }) }}</span>
                 <template v-if="view.access?.can_manage">
-                  <UButton label="立即重试" icon="i-lucide-rotate-ccw" size="sm" variant="soft" color="primary" :aria-label="`立即重新投递给 ${bridge.display_name(message.author)}`" :disabled="!!pending"
+                  <UButton :label="t('立即重试')" icon="i-lucide-rotate-ccw" size="sm" variant="soft" color="primary" :aria-label="t('立即重新投递给 {value1}', { value1: bridge.display_name(message.author) })" :disabled="!!pending"
                     @click="act('retry_delivery', { execution_id: message.execution_id, action: 'retry_now' })" />
-                  <UButton label="停止" icon="i-lucide-circle-stop" size="sm" variant="soft" color="error" :aria-label="`停止自动重试 ${bridge.display_name(message.author)} 的投递`" :disabled="!!pending"
+                  <UButton :label="t('停止')" icon="i-lucide-circle-stop" size="sm" variant="soft" color="error" :aria-label="t('停止自动重试 {value1} 的投递', { value1: bridge.display_name(message.author) })" :disabled="!!pending"
                     @click="act('retry_delivery', { execution_id: message.execution_id, action: 'retry_stop' })" />
                 </template>
               </div>
@@ -2325,20 +2355,20 @@ function copy_message(message) { act("copy", `${view.value.room_site}/r/${room.v
             <ExecutionNotes v-if="execution_notes.get(message.execution_id)?.length" live :notes="execution_notes.get(message.execution_id)" />
           </template>
         </UChatMessage>
-        <section v-else-if="message.failure" :id="message.id" class="channel-message channel-failed-execution" :data-author="bridge.identities[message.author]?.style" :aria-label="`${bridge.display_name(message.author)} ${message.undeliverable ? '无法投递' : '执行失败'}`">
+        <section v-else-if="message.failure" :id="message.id" class="channel-message channel-failed-execution" :data-author="bridge.identities[message.author]?.style" :aria-label="`${bridge.display_name(message.author)} ${message.undeliverable ? t('无法投递') : t('执行失败')}`">
           <div class="channel-message-byline">
             <UAvatar :src="bridge.identities[message.author]?.icon" :text="bridge.identities[message.author]?.initials || '?'" :alt="bridge.display_name(message.author)" size="md" class="channel-avatar" :class="bridge.identities[message.author]?.style" />
             <div class="channel-message-meta">
-              <div class="channel-message-author"><strong>{{ bridge.display_name(message.author) }}</strong><span v-if="message.failure.role === 'host'" class="channel-message-round">主持工作</span><UBadge :label="message.undeliverable ? '无法投递' : '执行失败'" color="error" variant="soft" size="xs" /></div>
-              <div v-for="at in [message.slot_card ? message.created_at * 1000 : message.created_at]" :key="message.id" class="channel-message-provenance"><time :title="new Date(at).toLocaleString('zh-CN')">{{ bridge.format_time(at) }}</time><span v-if="message.failure.id">执行 #{{ message.failure.id }}</span></div>
+              <div class="channel-message-author"><strong>{{ bridge.display_name(message.author) }}</strong><span v-if="message.failure.role === 'host'" class="channel-message-round">{{ t('主持工作') }}</span><UBadge :label="message.undeliverable ? t('无法投递') : t('执行失败')" color="error" variant="soft" size="xs" /></div>
+              <div v-for="at in [message.slot_card ? message.created_at * 1000 : message.created_at]" :key="message.id" class="channel-message-provenance"><time :title="new Date(at).toLocaleString(locale)">{{ bridge.format_time(at) }}</time><span v-if="message.failure.id">{{ t('执行 #{value1}', { value1: message.failure.id }) }}</span></div>
             </div>
-            <span v-if="message.failure.elapsed_seconds != null" class="channel-message-provenance channel-message-elapsed">耗时 {{ format_elapsed(message.failure.elapsed_seconds) }}</span>
+            <span v-if="message.failure.elapsed_seconds != null" class="channel-message-provenance channel-message-elapsed">{{ t('耗时 {value1}', { value1: format_elapsed(message.failure.elapsed_seconds) }) }}</span>
           </div>
           <!-- Same row as the working card it replaced: retry takes the stop button's place. -->
           <div class="channel-working-row">
-            <p class="channel-message-text channel-failure-reason">{{ message.failure.result || '执行失败，未提供原因' }}</p>
+            <p class="channel-message-text channel-failure-reason">{{ message.failure.result || t('执行失败，未提供原因') }}</p>
             <div v-if="can_retry(message.failure)" class="channel-working-actions">
-              <UTooltip text="重试"><UButton icon="i-lucide-rotate-cw" variant="solid" color="neutral" class="channel-stop-button channel-retry-button" :aria-label="`把执行 #${message.failure.id} 的请求重新派给 ${bridge.display_name(message.author)}`"
+              <UTooltip :text="t('重试')"><UButton icon="i-lucide-rotate-cw" variant="solid" color="neutral" class="channel-stop-button channel-retry-button" :aria-label="t('把执行 #{value1} 的请求重新派给 {value2}', { value1: message.failure.id, value2: bridge.display_name(message.author) })"
                 :disabled="!!pending" :loading="pending === 'retry_delivery'" @click="act('retry_delivery', { execution_id: message.failure.id, action: 'retry' })" /></UTooltip>
             </div>
           </div>
@@ -2348,15 +2378,15 @@ function copy_message(message) { act("copy", `${view.value.room_site}/r/${room.v
         </section>
         <div v-else-if="message.withdrawn" :id="String(message.id)" :data-message-id="message.id" class="channel-withdrawn" :data-author="bridge.identities[message.author]?.style">
           <UIcon :name="message.withdrawn === 'retracted' ? 'i-lucide-undo-2' : 'i-lucide-history'" class="channel-withdrawn-icon" />
-          <span v-if="message.withdrawn === 'retracted'">{{ bridge.display_name(message.author) }} 撤回了一条消息</span>
+          <span v-if="message.withdrawn === 'retracted'">{{ t('{value1} 撤回了一条消息', { value1: bridge.display_name(message.author) }) }}</span>
           <template v-else-if="rewound_runs.runs.has(message.id) && !expanded_rewinds.has(message.id)">
-            <span>已回退 {{ rewound_runs.runs.get(message.id) }} 条记录</span>
-            <UButton label="展开" size="xs" variant="link" color="neutral" :aria-label="`展开从 #${message.id} 起已回退的记录`" @click="toggle_rewound(message.id)" />
+            <span>{{ t('已回退 {value1} 条记录', { value1: rewound_runs.runs.get(message.id) }) }}</span>
+            <UButton :label="t('展开')" size="xs" variant="link" color="neutral" :aria-label="t('展开从 #{value1} 起已回退的记录', { value1: message.id })" @click="toggle_rewound(message.id)" />
           </template>
           <template v-else>
             <strong>{{ bridge.display_name(message.author) }}</strong><span class="channel-withdrawn-text">{{ message.text }}</span>
-            <UButton :label="`#${message.id}`" size="xs" variant="link" color="neutral" :aria-label="`查看已回退的原文 #${message.id}`" @click="emit('detail', message.id)" />
-            <UButton v-if="rewound_runs.runs.has(message.id)" label="收起" size="xs" variant="link" color="neutral" :aria-label="`收起从 #${message.id} 起已回退的记录`" @click="toggle_rewound(message.id)" />
+            <UButton :label="`#${message.id}`" size="xs" variant="link" color="neutral" :aria-label="t('查看已回退的原文 #{value1}', { value1: message.id })" @click="emit('detail', message.id)" />
+            <UButton v-if="rewound_runs.runs.has(message.id)" :label="t('收起')" size="xs" variant="link" color="neutral" :aria-label="t('收起从 #{value1} 起已回退的记录', { value1: message.id })" @click="toggle_rewound(message.id)" />
           </template>
         </div>
         <template v-else>
@@ -2368,76 +2398,76 @@ function copy_message(message) { act("copy", `${view.value.room_site}/r/${room.v
             <div class="channel-message-byline">
               <UAvatar :src="bridge.identities[message.author]?.icon" :text="bridge.identities[message.author]?.initials || '?'" :alt="bridge.display_name(message.author)" size="md" class="channel-avatar" :class="bridge.identities[message.author]?.style" />
               <div class="channel-message-meta">
-                <div class="channel-message-author"><strong>{{ bridge.display_name(message.author) }}</strong><span class="channel-message-round">{{ card.round_label }}</span><UBadge size="xs" color="neutral" variant="soft" class="channel-source">{{ bridge.sources[message.source] }}</UBadge><UBadge v-if="message.kind === 'moderation'" size="xs" color="neutral" variant="soft" class="channel-source">主持人</UBadge><UBadge v-if="message.kind === 'receipt'" size="xs" color="neutral" variant="soft" class="channel-source">运行回执</UBadge><UBadge v-if="message.proactive" size="xs" color="neutral" variant="soft" class="channel-source" title="成员在自己的窗口里应用户要求主动发言，不是在回答房间的请求">主动发言</UBadge><UBadge v-if="card.waits" size="xs" color="warning" variant="soft" class="channel-source" :title="card.speaking_expert ? `${bridge.display_name(card.speaking_expert)} 说完后交给主持人处理` : '等待主持人处理'">待主持人处理</UBadge><UBadge v-for="badge in card.badges" :key="badge.key" size="xs" :color="badge.color" variant="soft" class="channel-source" :title="badge.title">{{ badge.label }}</UBadge></div>
-                <div class="channel-message-provenance"><time :title="new Date(message.created_at).toLocaleString('zh-CN')">{{ bridge.format_time(message.created_at) }}</time><UButton :label="`#${message.id}`" color="neutral" variant="link" size="xs" :aria-label="`查看原文 #${message.id}`" class="channel-message-id" @click="emit('detail', message.id)" /><span v-if="message.submitted_by && message.submitted_by !== message.author && !(message.source === 'proxy' && message.submitted_by === '用户')">{{ bridge.display_name(message.submitted_by) }} 代发</span><span v-if="message.source === 'auto'" title="成员结束时没有提交回答，本机服务把它最后一段回复收录为本次回答">自动收录</span></div>
+                <div class="channel-message-author"><strong>{{ bridge.display_name(message.author) }}</strong><span class="channel-message-round">{{ card.round_label }}</span><UBadge size="xs" color="neutral" variant="soft" class="channel-source">{{ bridge.sources[message.source] }}</UBadge><UBadge v-if="message.kind === 'moderation'" size="xs" color="neutral" variant="soft" class="channel-source">{{ t('主持人') }}</UBadge><UBadge v-if="message.kind === 'receipt'" size="xs" color="neutral" variant="soft" class="channel-source">{{ t('运行回执') }}</UBadge><UBadge v-if="message.proactive" size="xs" color="neutral" variant="soft" class="channel-source" :title="t('成员在自己的窗口里应用户要求主动发言，不是在回答房间的请求')">{{ t('主动发言') }}</UBadge><UBadge v-if="card.waits" size="xs" color="warning" variant="soft" class="channel-source" :title="card.speaking_expert ? t('{value1} 说完后交给主持人处理', { value1: bridge.display_name(card.speaking_expert) }) : t('等待主持人处理')">{{ t('待主持人处理') }}</UBadge><UBadge v-for="badge in card.badges" :key="badge.key" size="xs" :color="badge.color" variant="soft" class="channel-source" :title="badge.title">{{ badge.label }}</UBadge></div>
+                <div class="channel-message-provenance"><time :title="new Date(message.created_at).toLocaleString(locale)">{{ bridge.format_time(message.created_at) }}</time><UButton :label="`#${message.id}`" color="neutral" variant="link" size="xs" :aria-label="t('查看原文 #{value1}', { value1: message.id })" class="channel-message-id" @click="emit('detail', message.id)" /><span v-if="message.submitted_by && message.submitted_by !== message.author && !(message.source === 'proxy' && message.submitted_by === '用户')">{{ t('{value1} 代发', { value1: bridge.display_name(message.submitted_by) }) }}</span><span v-if="message.source === 'auto'" :title="t('成员结束时没有提交回答，本机服务把它最后一段回复收录为本次回答')">{{ t('自动收录') }}</span></div>
               </div>
-              <span v-if="card.elapsed !== null" class="channel-message-provenance channel-message-elapsed">耗时 {{ format_elapsed(card.elapsed) }}</span>
+              <span v-if="card.elapsed !== null" class="channel-message-provenance channel-message-elapsed">{{ t('耗时 {value1}', { value1: format_elapsed(card.elapsed) }) }}</span>
             </div>
-            <UButton v-if="message.reply_to" :label="`回复 #${message.reply_to}`" icon="i-lucide-corner-up-left" variant="link" color="neutral" size="xs" class="channel-message-reference" :aria-label="`回复 #${message.reply_to} 查看原文`" @click="emit('detail', message.reply_to)" />
+            <UButton v-if="message.reply_to" :label="t('回复 #{value1}', { value1: message.reply_to })" icon="i-lucide-corner-up-left" variant="link" color="neutral" size="xs" class="channel-message-reference" :aria-label="t('回复 #{value1} 查看原文', { value1: message.reply_to })" @click="emit('detail', message.reply_to)" />
             <details v-if="message.kind === 'receipt'" class="channel-receipt">
-              <summary :aria-label="`查看运行回执 #${message.id}`">运行回执详情</summary>
+              <summary :aria-label="t('查看运行回执 #{value1}', { value1: message.id })">{{ t('运行回执详情') }}</summary>
               <div class="channel-message-text markdown-body" v-html="message.rendered_text"></div>
             </details>
-            <form v-else-if="card.editing" class="channel-edit" :aria-label="`编辑消息 #${message.id}`" @submit.prevent="submit_edit">
-              <textarea v-model="editing.text" rows="3" :maxlength="bridge.max_message_length" aria-label="编辑后的消息" @keydown.esc.prevent="cancel_edit" @keydown.enter.ctrl.prevent="submit_edit" @keydown.enter.meta.prevent="submit_edit"></textarea>
-              <p class="channel-edit-note" :class="{ 'is-error': card.editing_error }" role="status">{{ card.editing_error || (card.editing_plan ? rewind_summary(card.editing_plan) : '正在读取回退范围…') }}</p>
+            <form v-else-if="card.editing" class="channel-edit" :aria-label="t('编辑消息 #{value1}', { value1: message.id })" @submit.prevent="submit_edit">
+              <textarea v-model="editing.text" rows="3" :maxlength="bridge.max_message_length" :aria-label="t('编辑后的消息')" @keydown.esc.prevent="cancel_edit" @keydown.enter.ctrl.prevent="submit_edit" @keydown.enter.meta.prevent="submit_edit"></textarea>
+              <p class="channel-edit-note" :class="{ 'is-error': card.editing_error }" role="status">{{ card.editing_error || (card.editing_plan ? rewind_summary(card.editing_plan) : t('正在读取回退范围…')) }}</p>
               <div class="channel-edit-actions">
-                <UButton label="取消" size="xs" variant="ghost" color="neutral" @click="cancel_edit" />
-                <UButton type="submit" label="回退并发送" size="xs" color="primary" :disabled="!card.editing_plan || (!!card.editing_pending && card.editing_pending !== 'rewind_and_send')" :loading="card.editing_pending === 'rewind_and_send'" />
+                <UButton :label="t('取消')" size="xs" variant="ghost" color="neutral" @click="cancel_edit" />
+                <UButton type="submit" :label="t('回退并发送')" size="xs" color="primary" :disabled="!card.editing_plan || (!!card.editing_pending && card.editing_pending !== 'rewind_and_send')" :loading="card.editing_pending === 'rewind_and_send'" />
               </div>
             </form>
             <div v-else class="channel-answer">
               <div :id="`channel-answer-${message.id}`" class="channel-message-text markdown-body" v-html="card.expanded ? message.rendered_text : card.preview.html"></div>
-              <button v-for="mark in card.marks" :key="mark.id" type="button" class="excerpt-mark" :style="{ left: `${mark.left}px`, top: `${mark.top}px` }" :title="`摘录 ${mark.number}：点击修改批注`" :aria-label="`修改摘录 ${mark.number} 的批注`" @click="open_mark(mark.id)">{{ mark.number }}</button>
-              <UButton v-if="card.preview.truncated" :label="card.expanded ? '收起' : '展开全文'" :trailing-icon="card.expanded ? 'i-lucide-chevron-up' : 'i-lucide-chevron-down'" variant="link" color="neutral" size="xs" class="channel-answer-toggle" :aria-label="`${card.expanded ? '收起回答' : '展开完整回答'} #${message.id}`" :aria-expanded="card.expanded" :aria-controls="`channel-answer-${message.id}`" @click="toggle_answer(message, $event)" />
+              <button v-for="mark in card.marks" :key="mark.id" type="button" class="excerpt-mark" :style="{ left: `${mark.left}px`, top: `${mark.top}px` }" :title="t('摘录 {value1}：点击修改批注', { value1: mark.number })" :aria-label="t('修改摘录 {value1} 的批注', { value1: mark.number })" @click="open_mark(mark.id)">{{ mark.number }}</button>
+              <UButton v-if="card.preview.truncated" :label="card.expanded ? t('收起') : t('展开全文')" :trailing-icon="card.expanded ? 'i-lucide-chevron-up' : 'i-lucide-chevron-down'" variant="link" color="neutral" size="xs" class="channel-answer-toggle" :aria-label="`${card.expanded ? t('收起回答') : t('展开完整回答')} #${message.id}`" :aria-expanded="card.expanded" :aria-controls="`channel-answer-${message.id}`" @click="toggle_answer(message, $event)" />
             </div>
-            <div v-if="message.summary" class="channel-answer-summary"><small>回答摘要<span v-if="message.summary_by && message.summary_by !== message.author"> · {{ bridge.display_name(message.summary_by) }} 整理</span></small><div class="channel-message-text markdown-body" v-html="message.rendered_summary"></div></div>
+            <div v-if="message.summary" class="channel-answer-summary"><small>{{ t('回答摘要') }}<span v-if="message.summary_by && message.summary_by !== message.author"> {{ t('· {value1} 整理', { value1: bridge.display_name(message.summary_by) }) }}</span></small><div class="channel-message-text markdown-body" v-html="message.rendered_summary"></div></div>
             <ExecutionNotes v-if="card.notes_count" :count="card.notes_count" :notes="card.notes" :load="() => load_notes(card.execution_id)" />
             <div v-if="message.attachments?.length" v-html="bridge.attachment_markup(message.attachments)"></div>
-            <div v-if="card.recommendation" class="channel-recommendation" :class="`is-${card.recommendation.status}`" aria-label="智能调度推荐" aria-live="polite">
+            <div v-if="card.recommendation" class="channel-recommendation" :class="`is-${card.recommendation.status}`" :aria-label="t('智能调度推荐')" aria-live="polite">
               <template v-for="item in [card.recommendation]" :key="item.message_id">
                 <UIcon name="i-lucide-zap" class="channel-recommendation-icon" />
-                <span v-if="item.status === 'open'">智能调度建议让 <strong>{{ bridge.display_name(item.member) }}</strong> 回答<small :title="`${item.label}，置信度 ${Number(item.confidence).toFixed(2)}`">置信度 {{ Number(item.confidence).toFixed(2) }} · {{ item.remaining }} 秒</small></span>
-                <span v-else-if="item.status === 'waiting'">智能调度：主持人答完后请 {{ bridge.display_name(item.member) }} 回答</span>
-                <span v-else>智能调度：{{ item.mode === 'interrupt' ? `已打断主持人，改由 ${bridge.display_name(item.member)} 回答` : `已请 ${bridge.display_name(item.member)} 回答` }}</span>
+                <span v-if="item.status === 'open'">{{ t('智能调度建议让') }} <strong>{{ bridge.display_name(item.member) }}</strong> {{ t('回答') }}<small :title="t('{value1}，置信度 {value2}', { value1: item.label, value2: Number(item.confidence).toFixed(2) })">{{ t('置信度 {value1} · {value2} 秒', { value1: Number(item.confidence).toFixed(2), value2: item.remaining }) }}</small></span>
+                <span v-else-if="item.status === 'waiting'">{{ t('智能调度：主持人答完后请 {value1} 回答', { value1: bridge.display_name(item.member) }) }}</span>
+                <span v-else>{{ t('智能调度：{value1}', { value1: item.mode === 'interrupt' ? t('已打断主持人，改由 {value1} 回答', { value1: bridge.display_name(item.member) }) : t('已请 {value1} 回答', { value1: bridge.display_name(item.member) }) }) }}</span>
                 <template v-if="item.can_adopt">
-                  <UButton v-if="!card.adopting" label="采纳" icon="i-lucide-check" size="xs" variant="soft" color="primary" :aria-label="`采纳建议，请 ${item.member} 回答 #${item.message_id}`" @click="item.host_busy ? adopting = item.message_id : adopt(item.message_id, 'after')" />
+                  <UButton v-if="!card.adopting" :label="t('采纳')" icon="i-lucide-check" size="xs" variant="soft" color="primary" :aria-label="t('采纳建议，请 {value1} 回答 #{value2}', { value1: item.member, value2: item.message_id })" @click="item.host_busy ? adopting = item.message_id : adopt(item.message_id, 'after')" />
                   <template v-else>
-                    <UButton :label="`打断主持人，改由 ${bridge.display_name(item.member)} 回答`" size="xs" variant="soft" color="warning" @click="adopt(item.message_id, 'interrupt')" />
-                    <UButton :label="`主持人答完后再请 ${bridge.display_name(item.member)}`" size="xs" variant="soft" color="neutral" @click="adopt(item.message_id, 'after')" />
-                    <UButton icon="i-lucide-x" aria-label="取消采纳" size="xs" variant="ghost" color="neutral" @click="adopting = 0" />
+                    <UButton :label="t('打断主持人，改由 {value1} 回答', { value1: bridge.display_name(item.member) })" size="xs" variant="soft" color="warning" @click="adopt(item.message_id, 'interrupt')" />
+                    <UButton :label="t('主持人答完后再请 {value1}', { value1: bridge.display_name(item.member) })" size="xs" variant="soft" color="neutral" @click="adopt(item.message_id, 'after')" />
+                    <UButton icon="i-lucide-x" :aria-label="t('取消采纳')" size="xs" variant="ghost" color="neutral" @click="adopting = 0" />
                   </template>
                 </template>
               </template>
             </div>
-            <section v-for="{ report, allowable, failed } in card.report_rows" :key="report.id" class="channel-execution-report" :aria-label="`执行报告 #${report.id}`">
-              <div><strong>执行 #{{ report.id }} · {{ report.label }}</strong></div>
-              <p v-if="report.changes?.length">文件变化：{{ report.changes.join('、') }}</p>
+            <section v-for="{ report, allowable, failed } in card.report_rows" :key="report.id" class="channel-execution-report" :aria-label="t('执行报告 #{value1}', { value1: report.id })">
+              <div><strong>{{ t('执行 #{value1} · {value2}', { value1: report.id, value2: report.label }) }}</strong></div>
+              <p v-if="report.changes?.length">{{ t('文件变化：{value1}', { value1: report.changes.join('、') }) }}</p>
               <p v-if="report.status !== 'completed' && report.result">{{ report.result }}</p>
               <ExecutionDenials v-if="report.denials?.length" :denials="report.denials" :allowable="allowable"
                 :busy="card.allowing === report.id" :error="card.allow_errors?.[report.id]" @allow="allow_and_resend(report)" />
-              <UButton v-if="failed" label="重发" icon="i-lucide-rotate-ccw" size="xs" variant="soft" color="neutral" :aria-label="`把执行 #${report.id} 的原消息填回输入框重发`" @click="resend_failed(report)" />
+              <UButton v-if="failed" :label="t('重发')" icon="i-lucide-rotate-ccw" size="xs" variant="soft" color="neutral" :aria-label="t('把执行 #{value1} 的原消息填回输入框重发', { value1: report.id })" @click="resend_failed(report)" />
             </section>
           </template>
           <template #header><div class="channel-message-actions"><div class="channel-message-stack"><div class="channel-message-toolbar">
             <!-- Private chat joins the toolbar group at the end opposite "…": the bottom of the column with a mouse, the left end on touch screens. -->
-            <component v-if="card.private_chat" :is="card.armed ? UTooltip : BareSlot" disable-hoverable-content :ui="KEY_TIP_UI" text="私聊：查看这次执行的过程"><UButton icon="i-lucide-message-square" class="channel-private-chat-key" size="xs" color="neutral" variant="ghost" :aria-label="`查看 #${message.id} 的执行过程`" @click="open_private_chat(act, message.author, card.execution_id)" /></component>
-            <component :is="card.armed ? UTooltip : BareSlot" disable-hoverable-content :ui="KEY_TIP_UI" v-if="!card.private_chat && !card.can_take_back" text="回复"><UButton icon="i-lucide-corner-up-left" size="xs" color="neutral" variant="ghost" :aria-label="`回复 #${message.id}`" @click="reply_to(message)" /></component>
-            <component :is="card.armed ? UTooltip : BareSlot" disable-hoverable-content :ui="KEY_TIP_UI" v-if="card.can_retract && !card.editing" text="撤回"><UButton icon="i-lucide-undo-2" size="xs" color="neutral" variant="ghost" :aria-label="`撤回 #${message.id}`" @click="retract(message.id)" :loading="card.retracting" /></component>
-            <component :is="card.armed ? UTooltip : BareSlot" disable-hoverable-content :ui="KEY_TIP_UI" v-if="card.can_take_back && !card.editing" text="编辑"><UButton icon="i-lucide-pencil" size="xs" color="neutral" variant="ghost" :aria-label="`编辑 #${message.id}，回退到它之前重新发送`" @click="start_edit(message)" /></component>
-            <component :is="card.armed ? UTooltip : BareSlot" disable-hoverable-content :ui="KEY_TIP_UI" v-if="!card.narrow && message.kind !== 'receipt' && !card.editing" :text="card.reading ? '停止朗读' : '朗读'"><UButton :icon="card.reading ? 'i-lucide-square' : 'i-lucide-volume-2'" size="xs" color="neutral" variant="ghost" :aria-label="card.reading ? '停止朗读' : `从 #${message.id} 开始朗读`" @click="card.reading ? reader.stop() : reader.start(message.id)" /></component>
-            <UDropdownMenu v-if="card.armed" :open="card.menu_open" :items="card.actions" :content="{ align: 'end', sideOffset: 5 }" :ui="{ content: 'channel-menu' }" @update:open="(open) => menu_open_id = open ? message.id : 0"><UButton icon="i-lucide-ellipsis" size="xs" color="neutral" variant="ghost" :aria-label="`消息 #${message.id} 的更多操作`" /></UDropdownMenu>
-            <UButton v-else icon="i-lucide-ellipsis" size="xs" color="neutral" variant="ghost" :aria-label="`消息 #${message.id} 的更多操作`" aria-haspopup="menu" @click="open_card_menu(message.id)" />
+            <component v-if="card.private_chat" :is="card.armed ? UTooltip : BareSlot" disable-hoverable-content :ui="KEY_TIP_UI" :text="t('私聊：查看这次执行的过程')"><UButton icon="i-lucide-message-square" class="channel-private-chat-key" size="xs" color="neutral" variant="ghost" :aria-label="t('查看 #{value1} 的执行过程', { value1: message.id })" @click="open_private_chat(act, message.author, card.execution_id)" /></component>
+            <component :is="card.armed ? UTooltip : BareSlot" disable-hoverable-content :ui="KEY_TIP_UI" v-if="!card.private_chat && !card.can_take_back" :text="t('回复')"><UButton icon="i-lucide-corner-up-left" size="xs" color="neutral" variant="ghost" :aria-label="t('回复 #{value1}', { value1: message.id })" @click="reply_to(message)" /></component>
+            <component :is="card.armed ? UTooltip : BareSlot" disable-hoverable-content :ui="KEY_TIP_UI" v-if="card.can_retract && !card.editing" :text="t('撤回')"><UButton icon="i-lucide-undo-2" size="xs" color="neutral" variant="ghost" :aria-label="t('撤回 #{value1}', { value1: message.id })" @click="retract(message.id)" :loading="card.retracting" /></component>
+            <component :is="card.armed ? UTooltip : BareSlot" disable-hoverable-content :ui="KEY_TIP_UI" v-if="card.can_take_back && !card.editing" :text="t('编辑')"><UButton icon="i-lucide-pencil" size="xs" color="neutral" variant="ghost" :aria-label="t('编辑 #{value1}，回退到它之前重新发送', { value1: message.id })" @click="start_edit(message)" /></component>
+            <component :is="card.armed ? UTooltip : BareSlot" disable-hoverable-content :ui="KEY_TIP_UI" v-if="!card.narrow && message.kind !== 'receipt' && !card.editing" :text="card.reading ? t('停止朗读') : t('朗读')"><UButton :icon="card.reading ? 'i-lucide-square' : 'i-lucide-volume-2'" size="xs" color="neutral" variant="ghost" :aria-label="card.reading ? t('停止朗读') : t('从 #{value1} 开始朗读', { value1: message.id })" @click="card.reading ? reader.stop() : reader.start(message.id)" /></component>
+            <UDropdownMenu v-if="card.armed" :open="card.menu_open" :items="card.actions" :content="{ align: 'end', sideOffset: 5 }" :ui="{ content: 'channel-menu' }" @update:open="(open) => menu_open_id = open ? message.id : 0"><UButton icon="i-lucide-ellipsis" size="xs" color="neutral" variant="ghost" :aria-label="t('消息 #{value1} 的更多操作', { value1: message.id })" /></UDropdownMenu>
+            <UButton v-else icon="i-lucide-ellipsis" size="xs" color="neutral" variant="ghost" :aria-label="t('消息 #{value1} 的更多操作', { value1: message.id })" aria-haspopup="menu" @click="open_card_menu(message.id)" />
           </div></div></div></template>
         </UChatMessage>
         </MemoBlock>
         </template>
         <!-- A decision stands between the card that ended the round and the next speaker. -->
-        <ScheduleCard v-if="routing_messages.has(message.id) && !scheduler_decisions.get(message.id)?.length" icon="i-lucide-zap" skipped label="智能调度分析中" :expandable="false">
-          <template #text><WorkingText text="智能调度：正在分析" seed="智能调度" dots /></template>
+        <ScheduleCard v-if="routing_messages.has(message.id) && !scheduler_decisions.get(message.id)?.length" icon="i-lucide-zap" skipped :label="t('智能调度分析中')" :expandable="false">
+          <template #text><WorkingText :text="t('智能调度：正在分析')" :seed="t('智能调度')" dots /></template>
         </ScheduleCard>
         <SchedulerDecision v-for="decision in scheduler_decisions.get(message.id) || []" :key="`decision-${decision.id}`" :decision="decision" :free="free" />
-        <div v-if="view.source_filter" class="channel-locate"><UButton label="在原文中定位" icon="i-lucide-locate" size="xs" color="neutral" variant="link" @click="locate(message)" /></div>
+        <div v-if="view.source_filter" class="channel-locate"><UButton :label="t('在原文中定位')" icon="i-lucide-locate" size="xs" color="neutral" variant="link" @click="locate(message)" /></div>
         </template>
         </template>
       </div>
@@ -2449,7 +2479,7 @@ function copy_message(message) { act("copy", `${view.value.room_site}/r/${room.v
             <div class="channel-message-byline">
               <UAvatar :src="bridge.identities[card.author]?.icon" :text="bridge.identities[card.author]?.initials || '?'" :alt="bridge.display_name(card.author)" size="md" class="channel-avatar" :class="bridge.identities[card.author]?.style" />
               <div class="channel-message-meta">
-                <div class="channel-message-author"><strong>{{ bridge.display_name(card.author) }}</strong><UBadge label="发送失败" color="error" variant="soft" size="xs" /></div>
+                <div class="channel-message-author"><strong>{{ bridge.display_name(card.author) }}</strong><UBadge :label="t('发送失败')" color="error" variant="soft" size="xs" /></div>
                 <div class="channel-message-provenance"><time>{{ bridge.format_time(card.created_at) }}</time></div>
               </div>
             </div>
@@ -2457,11 +2487,11 @@ function copy_message(message) { act("copy", `${view.value.room_site}/r/${room.v
             <div v-if="card.files.some((file) => file.preview_url)" class="message-attachments">
               <span v-for="file in card.files.filter((item) => item.preview_url)" :key="file.preview_url" class="attachment-image"><img :src="file.preview_url" :alt="file.name"></span>
             </div>
-            <div v-if="card.files.some((file) => !file.preview_url)" class="channel-message-provenance">附件：{{ card.files.filter((file) => !file.preview_url).map((file) => file.name).join('、') }}</div>
+            <div v-if="card.files.some((file) => !file.preview_url)" class="channel-message-provenance">{{ t('附件：{value1}', { value1: card.files.filter((file) => !file.preview_url).map((file) => file.name).join('、') }) }}</div>
             <p class="channel-message-text channel-failure-reason" role="alert">{{ card.failed }}</p>
             <div class="channel-failure-actions">
-              <UButton label="重新发送" icon="i-lucide-rotate-ccw" size="sm" variant="soft" color="primary" aria-label="重新发送这条消息" :disabled="view.sending_message" @click="act('retry_sending', card.id)" />
-              <UButton label="放弃" icon="i-lucide-x" size="sm" variant="soft" color="neutral" aria-label="放弃发送，移除这张卡片" @click="act('discard_sending', card.id)" />
+              <UButton :label="t('重新发送')" icon="i-lucide-rotate-ccw" size="sm" variant="soft" color="primary" :aria-label="t('重新发送这条消息')" :disabled="view.sending_message" @click="act('retry_sending', card.id)" />
+              <UButton :label="t('放弃')" icon="i-lucide-x" size="sm" variant="soft" color="neutral" :aria-label="t('放弃发送，移除这张卡片')" @click="act('discard_sending', card.id)" />
             </div>
           </template>
         </UChatMessage>
@@ -2475,7 +2505,7 @@ function copy_message(message) { act("copy", `${view.value.room_site}/r/${room.v
               <UAvatar :src="bridge.identities[view.sending_preview.author]?.icon" :text="bridge.identities[view.sending_preview.author]?.initials || '?'" :alt="bridge.display_name(view.sending_preview.author)" size="md" class="channel-avatar" :class="bridge.identities[view.sending_preview.author]?.style" />
               <div class="channel-message-meta">
                 <div class="channel-message-author"><strong>{{ bridge.display_name(view.sending_preview.author) }}</strong></div>
-                <div class="channel-message-provenance"><time>{{ bridge.format_time(view.sending_preview.created_at) }}</time><span class="channel-sending-status" role="status">发送中…</span></div>
+                <div class="channel-message-provenance"><time>{{ bridge.format_time(view.sending_preview.created_at) }}</time><span class="channel-sending-status" role="status">{{ t('发送中…') }}</span></div>
               </div>
             </div>
             <div class="channel-answer"><div class="channel-message-text markdown-body" v-html="sending_html"></div></div>
@@ -2483,7 +2513,7 @@ function copy_message(message) { act("copy", `${view.value.room_site}/r/${room.v
             <div v-if="view.sending_preview.files.some((file) => file.preview_url)" class="message-attachments">
               <span v-for="file in view.sending_preview.files.filter((item) => item.preview_url)" :key="file.preview_url" class="attachment-image"><img :src="file.preview_url" :alt="file.name"></span>
             </div>
-            <div v-if="view.sending_preview.files.some((file) => !file.preview_url)" class="channel-message-provenance">附件：{{ view.sending_preview.files.filter((file) => !file.preview_url).map((file) => file.name).join('、') }}</div>
+            <div v-if="view.sending_preview.files.some((file) => !file.preview_url)" class="channel-message-provenance">{{ t('附件：{value1}', { value1: view.sending_preview.files.filter((file) => !file.preview_url).map((file) => file.name).join('、') }) }}</div>
           </template>
         </UChatMessage>
       </motion.div>
@@ -2491,21 +2521,22 @@ function copy_message(message) { act("copy", `${view.value.room_site}/r/${room.v
         <TopicCard v-if="topic_anchor === 'end'" :ref="(card) => topic_card = card" @edit="emit('edit')" />
         <DiscussionEndCard v-if="end_anchor === 'end'" />
       </div>
-      <div v-if="view.messages_loading && !transcript_messages.length" class="channel-message-group grid gap-6 py-6" role="status" aria-label="正在读取消息"><div v-for="row in 3" :key="row" class="grid gap-3"><USkeleton class="h-5 w-28" /><USkeleton class="h-4 w-full" /><USkeleton class="h-4 w-2/3" /></div></div>
-      <div v-else-if="view.messages_failure" class="channel-empty" role="status"><p>{{ view.messages_failure }}</p><UButton label="重新读取消息" icon="i-lucide-refresh-cw" color="neutral" variant="soft" @click="act('refresh')" /></div>
-      <div v-else-if="!transcript_messages.length && !free_working.length" class="channel-empty"><UIcon :name="view.query || view.source_filter ? 'i-lucide-search' : 'i-lucide-hash'" /><h2>{{ view.query || view.source_filter ? '没有找到消息' : room.title }}</h2><p>{{ view.query || view.source_filter ? '试试其他关键词，或清除筛选。' : bridge.empty_discussion_message(room) }}</p></div>
+      <div v-if="view.messages_loading && !transcript_messages.length" class="channel-message-group grid gap-6 py-6" role="status" :aria-label="t('正在读取消息')"><div v-for="row in 3" :key="row" class="grid gap-3"><USkeleton class="h-5 w-28" /><USkeleton class="h-4 w-full" /><USkeleton class="h-4 w-2/3" /></div></div>
+      <div v-else-if="view.messages_failure" class="channel-empty" role="status"><p>{{ view.messages_failure }}</p><UButton :label="t('重新读取消息')" icon="i-lucide-refresh-cw" color="neutral" variant="soft" @click="act('refresh')" /></div>
+      <div v-else-if="!transcript_messages.length && !free_working.length" class="channel-empty"><UIcon :name="view.query || view.source_filter ? 'i-lucide-search' : 'i-lucide-hash'" /><h2>{{ view.query || view.source_filter ? t('没有找到消息') : room.title }}</h2><p>{{ view.query || view.source_filter ? t('试试其他关键词，或清除筛选。') : bridge.empty_discussion_message(room) }}</p></div>
     </div>
     <div v-if="(transcript_messages.length && !follow_tail) || listen_here?.touch || reader.state.message_id" class="channel-latest-dock">
-      <button v-if="listen_here?.touch" type="button" class="channel-listen-pill" @mousedown.prevent @click="start_quote"><UIcon name="i-lucide-message-square-quote" />添加到对话</button>
-      <button v-if="listen_here?.touch && listen_here.speech" type="button" class="channel-listen-pill" aria-label="从选中处开始朗读" @mousedown.prevent @click="listen_from_selection"><UIcon name="i-lucide-headphones" />听当前</button>
-      <button v-if="reader.state.message_id" type="button" class="channel-listen-pill" :class="{ 'is-on': reader.state.following }" :aria-pressed="reader.state.following" :title="reader.state.following ? '手动滚动即取消跟随' : '页面跟随朗读位置滚动'" @click="reader.state.following ? (reader.state.following = false) : reader.follow()"><UIcon name="i-lucide-locate-fixed" />{{ reader.state.following ? '跟随中' : '跟随' }}</button>
-      <button v-if="reader.state.reading" type="button" class="channel-listen-pill" aria-label="退出朗读" @click="reader.stop()"><UIcon name="i-lucide-square" />退出</button>
-      <UButton v-if="transcript_messages.length && !follow_tail" icon="i-lucide-arrow-down" color="neutral" variant="outline" aria-label="回到最新消息" class="channel-latest-button" @click="return_to_latest" />
+      <button v-if="listen_here?.touch" type="button" class="channel-listen-pill" @mousedown.prevent @click="start_quote"><UIcon name="i-lucide-message-square-quote" />{{ t('添加到对话') }}</button>
+      <button v-if="listen_here?.touch && listen_here.speech" type="button" class="channel-listen-pill" :aria-label="t('从选中处开始朗读')" @mousedown.prevent @click="listen_from_selection"><UIcon name="i-lucide-headphones" />{{ t('听当前') }}</button>
+      <span v-if="reader.state.message_id && reader.state.loading" class="channel-listen-pill" role="status"><UIcon name="i-lucide-loader-circle" class="animate-spin" />{{ t('加载中') }}</span>
+      <button v-else-if="reader.state.message_id" type="button" class="channel-listen-pill" :class="{ 'is-on': reader.state.following }" :aria-pressed="reader.state.following" :title="reader.state.following ? t('手动滚动即取消跟随') : t('页面跟随朗读位置滚动')" @click="reader.state.following ? (reader.state.following = false) : reader.follow()"><UIcon name="i-lucide-locate-fixed" />{{ reader.state.following ? t('跟随中') : t('跟随') }}</button>
+      <button v-if="reader.state.reading" type="button" class="channel-listen-pill" :aria-label="t('停止朗读')" @click="reader.stop()"><UIcon name="i-lucide-square" />{{ t('停止') }}</button>
+      <UButton v-if="transcript_messages.length && !follow_tail" icon="i-lucide-arrow-down" color="neutral" variant="outline" :aria-label="t('回到最新消息')" class="channel-latest-button" @click="return_to_latest" />
     </div>
-    <div class="channel-composer-dock"><div class="channel-composer-column" @dragover="bridge.drop_attachments" @drop="bridge.drop_attachments" @paste="bridge.paste_attachments" @keydown.capture="mention_keydown($event); attachment_shortcut($event)" @input.capture="hold_transcript" @input="release_transcript(); update_mention($event)" @click="update_mention" @keyup="update_mention" @select="update_mention" @compositionstart="mention_composition" @compositionupdate="mention_composition" @compositionend="mention_composition" @scroll.capture="sync_mirror">
-      <UPopover :open="!!mention_context" :reference="mention_anchor" :content="{ side: 'top', align: 'start', sideOffset: 8, onOpenAutoFocus: keep_mention_focus, onCloseAutoFocus: keep_mention_focus }" :ui="{ content: 'channel-select-menu channel-mention-menu' }" @update:open="!$event && (mention_context = null)">
+    <div class="channel-composer-dock"><div class="channel-composer-column" @dragover="bridge.drop_attachments" @drop="bridge.drop_attachments" @paste="bridge.paste_attachments" @keydown.capture="mention_keydown($event); attachment_shortcut($event); step_over_token($event, view.attachment_drafts)" @beforeinput="guard_token_edit($event, view.attachment_drafts)" @input.capture="hold_transcript" @input="release_transcript(); update_mention($event); drop_unreferenced($event)" @click="update_mention($event); snap_caret($event, view.attachment_drafts)" @keyup="update_mention($event); snap_caret($event, view.attachment_drafts)" @select="update_mention" @compositionstart="mention_composition" @compositionupdate="mention_composition" @compositionend="mention_composition" @scroll.capture="sync_mirror">
+      <UPopover :open="mention_open" :reference="mention_anchor" :content="{ side: 'top', align: 'start', sideOffset: 8, onOpenAutoFocus: keep_mention_focus, onCloseAutoFocus: keep_mention_focus }" :ui="{ content: 'channel-select-menu channel-mention-menu' }" @update:open="!$event && (mention_context = null)">
         <template #content>
-          <div class="channel-mention-heading"><span>{{ mention_heading }}</span><small>↑↓ 选择 · Enter 确认</small></div>
+          <div class="channel-mention-heading"><span>{{ mention_heading }}</span><small>{{ t('↑↓ 选择 · Enter 确认') }}</small></div>
           <div id="channel-mention-list" ref="mention_list" role="listbox" :aria-label="mention_heading" class="channel-mention-list">
             <template v-for="(option, index) in mention_options" :key="option.key">
             <p v-if="index === 0 || option.group !== mention_options[index - 1].group" role="presentation" class="channel-mention-group">{{ option.group }}</p>
@@ -2519,7 +2550,7 @@ function copy_message(message) { act("copy", `${view.value.room_site}/r/${room.v
                 <UIcon :name="option.broken ? 'i-lucide-triangle-alert' : 'i-lucide-network'" class="channel-mention-file-icon" :class="{ 'channel-mention-broken': option.broken }" />
                 <span :class="{ 'channel-mention-disabled': option.disabled && !option.enabled }">{{ option.workflow.label }}</span>
                 <small class="channel-mention-brief" :class="{ 'channel-mention-broken': option.broken }" :title="!option.enabled && option.disabled || option.workflow.description">{{ !option.enabled && option.disabled || option.workflow.description }}</small>
-                <b v-if="option.enabled" class="channel-mention-tag">已启用</b>
+                <b v-if="option.enabled" class="channel-mention-tag">{{ t('已启用') }}</b>
               </template>
               <template v-else-if="option.skill">
                 <UIcon name="i-lucide-sparkles" class="channel-mention-file-icon" />
@@ -2528,7 +2559,7 @@ function copy_message(message) { act("copy", `${view.value.room_site}/r/${room.v
               </template>
               <template v-else-if="option.entry">
                 <UIcon :name="option.self ? 'i-lucide-folder-check' : option.entry.kind === 'directory' ? 'i-lucide-folder' : 'i-lucide-file-text'" class="channel-mention-file-icon" />
-                <span :title="option.entry.path">{{ option.self ? '引用此文件夹' : `${option.entry.name}${option.entry.kind === 'directory' ? '/' : ''}` }}</span>
+                <span :title="option.entry.path">{{ option.self ? t('引用此文件夹') : `${option.entry.name}${option.entry.kind === 'directory' ? '/' : ''}` }}</span>
                 <small v-if="mention_folder?.search" :title="option.entry.path">{{ option.entry.path.split('/').slice(0, -1).join('/') }}</small>
                 <UIcon v-if="option.entry.kind === 'directory' && !option.self" name="i-lucide-chevron-right" class="channel-mention-file-icon channel-mention-drill" />
               </template>
@@ -2539,38 +2570,38 @@ function copy_message(message) { act("copy", `${view.value.room_site}/r/${room.v
               </template>
             </button>
             </template>
-            <p v-if="member_skills_loading" class="channel-mention-empty">正在读取本机技能…</p>
+            <p v-if="member_skills_loading" class="channel-mention-empty">{{ t('正在读取本机技能…') }}</p>
             <p v-else-if="skill_member && !mention_options.length" class="channel-mention-empty">{{ member_skills_empty }}</p>
-            <p v-else-if="mention_files_loading" class="channel-mention-empty">正在读取项目目录…</p>
-            <p v-else-if="!mention_options.length" class="channel-mention-empty">{{ mention_context?.command ? '没有匹配的工作流或技能' : project_directory ? '没有匹配的成员或文件' : '没有匹配的成员' }}</p>
+            <p v-else-if="mention_files_loading" class="channel-mention-empty">{{ t('正在读取项目目录…') }}</p>
+            <p v-else-if="!mention_options.length" class="channel-mention-empty">{{ mention_context?.command ? t('没有匹配的工作流或技能') : project_directory ? t('没有匹配的成员或文件') : t('没有匹配的成员') }}</p>
           </div>
         </template>
       </UPopover>
       <QueuedMessages v-if="room.free?.queued_messages" :queue="room.free.queued_messages" :room-id="room.id" />
-      <UChatPrompt ref="prompt" v-model="text" :submit-on-enter="ENTER_SENDS" :enterkeyhint="ENTER_SENDS ? 'send' : 'enter'" :autofocus="false" :rows="1" :maxrows="EDITOR_MAX_ROWS" :placeholder="`发消息到 # ${room.title}`" aria-label="留言正文" role="combobox" aria-autocomplete="list" aria-haspopup="listbox" :aria-expanded="!!mention_context" :aria-controls="mention_context ? 'channel-mention-list' : undefined" :aria-activedescendant="mention_context && mention_active ? `channel-mention-${mention_options.indexOf(mention_active)}` : undefined" variant="outline" color="neutral" class="channel-composer" :class="{ 'has-mentions': mention_mirror }" :ui="{ header: 'channel-composer-header', base: 'channel-editor', footer: 'channel-composer-footer' }" @submit="send">
+      <UChatPrompt ref="prompt" v-model="text" :submit-on-enter="ENTER_SENDS" :enterkeyhint="ENTER_SENDS ? 'send' : 'enter'" :autofocus="false" :rows="1" :maxrows="EDITOR_MAX_ROWS" :placeholder="relay_waits_owner ? t('接力在等你回复…') : t('发消息到 # {value1}', { value1: room.title })" :aria-label="t('留言正文')" role="combobox" aria-autocomplete="list" aria-haspopup="listbox" :aria-expanded="!!mention_context" :aria-controls="mention_context ? 'channel-mention-list' : undefined" :aria-activedescendant="mention_context && mention_active ? `channel-mention-${mention_options.indexOf(mention_active)}` : undefined" variant="outline" color="neutral" class="channel-composer" :class="{ 'has-mentions': mention_mirror }" :ui="{ header: 'channel-composer-header', base: 'channel-editor', footer: 'channel-composer-footer' }" @submit="send">
         <template #header>
           <div v-if="view.attachment_drafts.length || file_refs.length || excerpts.length" class="attachment-drafts">
             <UPopover v-if="excerpts.length" :content="{ side: 'top', align: 'start' }" @update:open="editing_excerpt = 0">
-              <div class="excerpt-chip" role="button" tabindex="0" title="查看摘录、修改批注">
-                <UIcon name="i-lucide-message-square-quote" /><span>{{ excerpts.length }} 条摘录</span>
-                <button type="button" class="excerpt-chip-clear" aria-label="移除全部摘录" title="移除全部摘录" :disabled="view.sending_message" @click.stop="file_preview.excerpts = []"><UIcon name="i-lucide-x" /></button>
+              <div class="excerpt-chip" role="button" tabindex="0" :title="t('查看摘录、修改批注')">
+                <UIcon name="i-lucide-message-square-quote" /><span>{{ t('{value1} 条摘录', { value1: excerpts.length }) }}</span>
+                <button type="button" class="excerpt-chip-clear" :aria-label="t('移除全部摘录')" :title="t('移除全部摘录')" :disabled="view.sending_message" @click.stop="file_preview.excerpts = []"><UIcon name="i-lucide-x" /></button>
               </div>
               <template #content>
-                <ol class="excerpt-list" aria-label="摘录">
+                <ol class="excerpt-list" :aria-label="t('摘录')">
                   <li v-for="(excerpt, index) in excerpts" :key="excerpt.id">
                     <span class="excerpt-number">{{ index + 1 }}.</span>
                     <div class="excerpt-item">
-                      <small>选中文字 · {{ excerpt_source(excerpt) }}</small>
+                      <small>{{ t('选中文字 · {value1}', { value1: excerpt_source(excerpt) }) }}</small>
                       <p class="excerpt-text">{{ excerpt.text }}</p>
                       <template v-if="editing_excerpt === excerpt.id">
-                        <small>批注</small>
-                        <UTextarea v-model="excerpt.comment" :rows="2" autoresize autofocus placeholder="添加批注（可选）" aria-label="摘录的批注" class="w-full" />
+                        <small>{{ t('批注') }}</small>
+                        <UTextarea v-model="excerpt.comment" :rows="2" autoresize autofocus :placeholder="t('添加批注（可选）')" :aria-label="t('摘录的批注')" class="w-full" />
                       </template>
-                      <template v-else-if="excerpt.comment"><small>批注</small><p class="excerpt-comment">{{ excerpt.comment }}</p></template>
+                      <template v-else-if="excerpt.comment"><small>{{ t('批注') }}</small><p class="excerpt-comment">{{ excerpt.comment }}</p></template>
                     </div>
                     <div class="excerpt-actions">
-                      <button type="button" :aria-label="`修改摘录 ${index + 1} 的批注`" title="修改批注" @click="editing_excerpt = editing_excerpt === excerpt.id ? 0 : excerpt.id"><UIcon name="i-lucide-pencil" /></button>
-                      <button type="button" :aria-label="`移除摘录 ${index + 1}`" title="移除" :disabled="view.sending_message" @click="remove_excerpt(excerpt)"><UIcon name="i-lucide-trash-2" /></button>
+                      <button type="button" :aria-label="t('修改摘录 {value1} 的批注', { value1: index + 1 })" :title="t('修改批注')" @click="editing_excerpt = editing_excerpt === excerpt.id ? 0 : excerpt.id"><UIcon name="i-lucide-pencil" /></button>
+                      <button type="button" :aria-label="t('移除摘录 {value1}', { value1: index + 1 })" :title="t('移除')" :disabled="view.sending_message" @click="remove_excerpt(excerpt)"><UIcon name="i-lucide-trash-2" /></button>
                     </div>
                   </li>
                 </ol>
@@ -2579,8 +2610,8 @@ function copy_message(message) { act("copy", `${view.value.room_site}/r/${room.v
             <div v-for="ref_item in file_refs" :key="`ref:${ref_item.path}`" class="attachment-draft-file attachment-draft-ref" :title="ref_item.path">
               <span v-if="ref_item.kind === 'file'" v-html="bridge.attachment_file_icon(ref_item.name)"></span>
               <UIcon v-else name="i-lucide-folder" class="attachment-ref-folder" />
-              <span class="attachment-name"><span>{{ ref_item.name }}</span><small>{{ ref_item.kind === 'directory' ? '项目文件夹' : '项目文件' }} · {{ ref_item.path }}</small></span>
-              <button type="button" class="attachment-remove" :aria-label="`移除 ${ref_item.path}`" :disabled="view.sending_message" @click="file_refs = file_refs.filter((item) => item !== ref_item)"><UIcon name="i-lucide-x" /></button>
+              <span class="attachment-name"><span>{{ ref_item.name }}</span><small>{{ ref_item.kind === 'directory' ? t('项目文件夹') : t('项目文件') }} · {{ ref_item.path }}</small></span>
+              <button type="button" class="attachment-remove" :aria-label="t('移除 {value1}', { value1: ref_item.path })" :disabled="view.sending_message" @click="file_refs = file_refs.filter((item) => item !== ref_item)"><UIcon name="i-lucide-x" /></button>
             </div>
             <div v-for="file in view.attachment_drafts" :key="file.id" :class="file.preview_url ? 'attachment-draft-image' : 'attachment-draft-file'">
               <img v-if="file.preview_url" :src="file.preview_url" :alt="file.file_name" :title="file.file_name">
@@ -2588,34 +2619,33 @@ function copy_message(message) { act("copy", `${view.value.room_site}/r/${room.v
                 <span v-html="bridge.attachment_file_icon(file.file_name)"></span>
                 <span class="attachment-name"><span :title="file.file_name">{{ file.file_name }}</span><small>{{ bridge.attachment_size(file.size) }}</small></span>
               </template>
-              <button type="button" class="attachment-remove" :aria-label="`移除 ${file.file_name}`" @click="act('remove_attachment', file.id)"><UIcon name="i-lucide-x" /></button>
+              <button type="button" class="attachment-remove" :aria-label="t('移除 {value1}', { value1: file.file_name })" @click="act('remove_attachment', file.id)"><UIcon name="i-lucide-x" /></button>
             </div>
           </div>
-          <div v-for="unregistered_member in unregistered_members" :key="unregistered_member.name" class="channel-reply-draft channel-queue-hint"><UIcon name="i-lucide-user-round-x" /><span>{{ bridge.display_name(unregistered_member.name) }} 待注册：在其会话中粘贴启动指令</span><UButton v-if="view.access?.can_manage" :icon="launch_copied === unregistered_member.name ? 'i-lucide-check' : 'i-lucide-copy'" :label="launch_copied === unregistered_member.name ? '已复制' : '复制启动指令'" aria-live="polite" size="xs" color="neutral" variant="ghost" class="channel-launch-copy" @click="copy_launch(unregistered_member.name)" /></div>
-          <div v-if="queue_hint" class="channel-reply-draft channel-queue-hint"><UIcon name="i-lucide-clock" /><span>{{ queue_hint }}</span><UButton v-if="is_manual_member(speaking_member) && view.access?.can_manage" :icon="launch_copied === speaking_member.name ? 'i-lucide-check' : 'i-lucide-copy'" :label="launch_copied === speaking_member.name ? '已复制' : '复制启动指令'" aria-live="polite" size="xs" color="neutral" variant="ghost" class="channel-launch-copy" @click="copy_launch(speaking_member.name)" /></div>
-          <div v-if="view.editing_queued" class="channel-reply-draft"><UIcon name="i-lucide-pencil" /><span>编辑排队消息：发送即保存修改，仍按原位置排队</span><UButton icon="i-lucide-x" color="neutral" variant="ghost" size="xs" aria-label="取消编辑排队消息" @click="act('queue_cancel_edit')" /></div>
-          <div v-if="view.reply_to" class="channel-reply-draft"><UIcon name="i-lucide-corner-up-left" /><span>{{ `回复 #${view.reply_to}` }}</span><UButton icon="i-lucide-x" color="neutral" variant="ghost" size="xs" aria-label="取消回复" @click="act('cancel_reply')" /></div>
+          <div v-for="unregistered_member in unregistered_members" :key="unregistered_member.name" class="channel-reply-draft channel-queue-hint"><UIcon name="i-lucide-user-round-x" /><span>{{ t('{value1} 待注册：在其会话中粘贴启动指令', { value1: bridge.display_name(unregistered_member.name) }) }}</span><UButton v-if="view.access?.can_manage" :icon="launch_copied === unregistered_member.name ? 'i-lucide-check' : 'i-lucide-copy'" :label="launch_copied === unregistered_member.name ? t('已复制') : t('复制启动指令')" aria-live="polite" size="xs" color="neutral" variant="ghost" class="channel-launch-copy" @click="copy_launch(unregistered_member.name)" /></div>
+          <div v-if="queue_hint" class="channel-reply-draft channel-queue-hint"><UIcon name="i-lucide-clock" /><span>{{ queue_hint }}</span><UButton v-if="is_manual_member(speaking_member) && view.access?.can_manage" :icon="launch_copied === speaking_member.name ? 'i-lucide-check' : 'i-lucide-copy'" :label="launch_copied === speaking_member.name ? t('已复制') : t('复制启动指令')" aria-live="polite" size="xs" color="neutral" variant="ghost" class="channel-launch-copy" @click="copy_launch(speaking_member.name)" /></div>
+          <div v-if="view.reply_to" class="channel-reply-draft"><UIcon name="i-lucide-corner-up-left" /><span>{{ t('回复 #{value1}', { value1: view.reply_to }) }}</span><UButton icon="i-lucide-x" color="neutral" variant="ghost" size="xs" :aria-label="t('取消回复')" @click="act('cancel_reply')" /></div>
         </template>
         <div v-if="mention_mirror" ref="mirror" class="channel-editor channel-editor-mirror" aria-hidden="true" v-html="mention_mirror"></div>
         <template #footer>
           <!-- Voice input takes over the whole footer: discard on the left, live levels in the middle, finish where send was. -->
           <template v-if="voice.state.status">
-            <UTooltip :text="ENTER_SENDS ? '取消 · Esc' : '取消'"><UButton type="button" icon="i-lucide-x" color="neutral" variant="ghost" size="sm" class="channel-voice-button" aria-label="取消语音输入" @click="voice.cancel()" /></UTooltip>
-            <span class="channel-voice-levels" :class="{ 'is-discarding': voice_hold.discard }" role="status" :aria-label="voice.state.status === 'recording' ? `正在录音 ${format_voice_time(voice.state.seconds)}` : '正在识别'">
-              <template v-if="voice.state.status === 'recording'"><span class="channel-voice-bars"><i v-for="(level, index) in voice.state.levels" :key="index" :style="{ transform: `scaleY(${0.15 + level * 0.85})` }" /></span><small>{{ format_voice_time(voice.state.seconds) }}</small><small v-if="voice_hold.by" class="channel-voice-hint">{{ voice_hold.discard ? '松开取消' : voice_hold.by === 'touch' ? '松开转文字 · 上滑取消' : '松开空格转文字' }}</small></template>
-              <small v-else>{{ voice.state.status === 'starting' ? '正在打开麦克风…' : '正在识别…' }}</small>
+            <UTooltip :text="ENTER_SENDS ? t('取消 · Esc') : t('取消')"><UButton type="button" icon="i-lucide-x" color="neutral" variant="ghost" size="sm" class="channel-voice-button" :aria-label="t('取消语音输入')" @click="voice.cancel()" /></UTooltip>
+            <span class="channel-voice-levels" :class="{ 'is-discarding': voice_hold.discard }" role="status" :aria-label="voice.state.status === 'recording' ? t('正在录音 {value1}', { value1: format_voice_time(voice.state.seconds) }) : t('正在识别')">
+              <template v-if="voice.state.status === 'recording'"><span class="channel-voice-bars"><i v-for="(level, index) in voice.state.levels" :key="index" :style="{ transform: `scaleY(${0.15 + level * 0.85})` }" /></span><small>{{ format_voice_time(voice.state.seconds) }}</small><small v-if="voice_hold.by" class="channel-voice-hint">{{ voice_hold.discard ? t('松开取消') : voice_hold.by === 'touch' ? t('松开转文字 · 上滑取消') : t('松开空格转文字') }}</small></template>
+              <small v-else>{{ voice.state.status === 'starting' ? t('正在打开麦克风…') : t('正在识别…') }}</small>
             </span>
-            <UTooltip :text="ENTER_SENDS ? '完成，转成文字 · Enter' : '完成，转成文字'"><UButton type="button" icon="i-lucide-check" color="neutral" size="sm" class="channel-primary-button channel-round-button" aria-label="结束录音并转成文字" :loading="voice.state.status !== 'recording'" @click="voice.toggle()" /></UTooltip>
+            <UTooltip :text="ENTER_SENDS ? t('完成，转成文字 · Enter') : t('完成，转成文字')"><UButton type="button" icon="i-lucide-check" color="neutral" size="sm" class="channel-primary-button channel-round-button" :aria-label="t('结束录音并转成文字')" :loading="voice.state.status !== 'recording'" @click="voice.toggle()" /></UTooltip>
           </template>
           <template v-else>
-            <UButton type="button" icon="i-lucide-paperclip" aria-label="添加附件" title="图片、PDF 或其他文件 · 每个最多 20 MiB" color="neutral" variant="ghost" size="sm" @click="act('choose_attachments')" />
-            <UTooltip v-if="speech_ready" :text="broadcast.on.value ? '关闭语音播报' : '语音播报：新回复自动朗读摘要'"><UButton type="button" icon="i-lucide-radio" color="neutral" variant="ghost" size="sm" class="channel-voice-button channel-broadcast-button" :class="{ 'is-on': broadcast.on.value }" :aria-pressed="broadcast.on.value" :aria-label="broadcast.on.value ? '关闭语音播报' : '开启语音播报'" @click="broadcast.toggle()" /></UTooltip>
-            <UTooltip :text="ENTER_SENDS ? '语音输入 · 也可按住空格说话' : '按住说话，或轻点开始'"><UButton type="button" icon="i-lucide-mic" color="neutral" variant="ghost" size="sm" class="channel-voice-button channel-voice-mic" aria-label="语音输入" :disabled="view.sending_message" @pointerdown="voice_press.pointerdown" @click="voice_press.click" @contextmenu.prevent /></UTooltip>
-            <UButton type="button" icon="i-lucide-arrow-up" color="neutral" size="sm" class="channel-primary-button channel-round-button channel-send" aria-label="发送" title="发送 · Enter" :disabled="!has_draft" @click="send" />
+            <UButton type="button" icon="i-lucide-paperclip" :aria-label="t('添加附件')" :title="t('图片、PDF 或其他文件 · 每个最多 20 MiB')" color="neutral" variant="ghost" size="sm" @click="act('choose_attachments')" />
+            <UTooltip v-if="speech_ready" :text="broadcast.on.value ? t('关闭语音播报') : t('语音播报：新回复自动朗读摘要')"><UButton type="button" icon="i-lucide-radio" color="neutral" variant="ghost" size="sm" class="channel-voice-button channel-broadcast-button" :class="{ 'is-on': broadcast.on.value }" :aria-pressed="broadcast.on.value" :aria-label="broadcast.on.value ? t('关闭语音播报') : t('开启语音播报')" @click="broadcast.toggle()" /></UTooltip>
+            <UTooltip :text="ENTER_SENDS ? t('语音输入 · 也可按住空格说话') : t('按住说话，或轻点开始')"><UButton type="button" icon="i-lucide-mic" color="neutral" variant="ghost" size="sm" class="channel-voice-button channel-voice-mic" :aria-label="t('语音输入')" :disabled="view.sending_message" @pointerdown="voice_press.pointerdown" @click="voice_press.click" @contextmenu.prevent /></UTooltip>
+            <UButton type="button" icon="i-lucide-arrow-up" color="neutral" size="sm" class="channel-primary-button channel-round-button channel-send" :aria-label="t('发送')" :title="t('发送 · Enter')" :disabled="!has_draft" @click="send" />
           </template>
         </template>
       </UChatPrompt>
-      <div class="channel-composer-note"><span>{{ recipient_hint }}</span><span class="channel-draft-length"><span v-if="text_length" :class="{ 'is-near-limit': near_length_limit }">{{ text_length }} / {{ bridge.max_message_length }}<span class="channel-note-divider">·</span></span><span class="channel-key-hint"><kbd>Enter</kbd> 发送<span class="channel-note-divider">·</span><kbd>Shift</kbd>+<kbd>Enter</kbd> 换行</span></span></div>
+      <div class="channel-composer-note"><span>{{ recipient_hint }}</span><span class="channel-draft-length"><span v-if="text_length" :class="{ 'is-near-limit': near_length_limit }">{{ text_length }} / {{ bridge.max_message_length }}<span class="channel-note-divider">·</span></span><span class="channel-key-hint"><kbd>Enter</kbd> {{ t('发送') }}<span class="channel-note-divider">·</span><kbd>Shift</kbd>+<kbd>Enter</kbd> {{ t('换行') }}</span></span></div>
     </div></div>
   </section>
 </template>

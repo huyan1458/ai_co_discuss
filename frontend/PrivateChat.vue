@@ -1,4 +1,5 @@
 <script setup>
+import { t, locale } from './i18n.js';
 /**
  * Private chat, shown as a terminal session with one room member, laid out as the CLIs print it: `>` for what the owner
  * said (in the room or here), `●` for the member's remarks and each tool step, `⎿` under a step for its first output
@@ -54,9 +55,9 @@ const members = computed(() => {
 const member = computed(() => members.value.find((item) => item.name === private_chat.member) || members.value[0] || null);
 const name = computed(() => member.value?.name || "");
 /** Why this member cannot take a private line here, or "" when it can. */
-const unsupported = computed(() => !member.value ? "房间里还没有 AI 成员"
-  : member.value.access !== "runner" ? "这位成员是手动接入的，请在它自己的窗口里对话"
-    : !adapter_capabilities(member.value.adapter).chat ? "这位成员的接入方式看不到它的输出，暂不支持私聊窗" : "");
+const unsupported = computed(() => !member.value ? t('房间里还没有 AI 成员')
+  : member.value.access !== "runner" ? t('这位成员是手动接入的，请在它自己的窗口里对话')
+    : !adapter_capabilities(member.value.adapter).chat ? t('这位成员的接入方式看不到它的输出，暂不支持私聊窗') : "");
 
 const chats = ref([]);
 const details = ref(new Map());
@@ -125,15 +126,15 @@ const running_item = computed(() => [...items.value].reverse().find((item) => ru
 // A room task the owner paused here: its software stopped, the task itself goes on with the owner's next line.
 const paused = computed(() => Boolean(running_item.value?.execution?.paused_at));
 // Esc pauses a room task (its turn in the room goes on) and stops a private chat line.
-const stop_label = computed(() => running_item.value?.execution ? "暂停" : "打断");
+const stop_label = computed(() => running_item.value?.execution ? t('暂停') : t('打断'));
 const status_line = computed(() => {
   const item = running_item.value;
-  if (!item) return `${bridge.display_name(name.value)} · 空闲`;
-  if (item.chat?.status === "pending") return `等 ${bridge.display_name(name.value)} 空闲后处理${ENTER_SENDS ? "（esc 撤回）" : ""}`;
-  if (paused.value) return "已暂停，发一句补充后它接着做这次任务";
+  if (!item) return t('{value1} · 空闲', { value1: bridge.display_name(name.value) });
+  if (item.chat?.status === "pending") return t('等 {value1} 空闲后处理{value2}', { value1: bridge.display_name(name.value), value2: ENTER_SENDS ? t('（esc 撤回）') : "" });
+  if (paused.value) return t('已暂停，发一句补充后它接着做这次任务');
   const started = item.chat ? item.chat.updated_at : item.execution.created_at;
   const phase = item.execution && member.value?.execution?.id === item.execution.id && member.value.execution.activity
-    ? `${PHASE_LABELS[member.value.execution.activity] || "处理"}中` : "处理中";
+    ? t('{value1}中', { value1: PHASE_LABELS[member.value.execution.activity] || t('处理') }) : t('处理中');
   return `${phase}…（${elapsed(now.value - started)}${ENTER_SENDS ? ` · esc ${stop_label.value}` : ""}）`;
 });
 
@@ -167,7 +168,7 @@ async function refresh() {
       }
       error.value = "";
     } catch (failure) {
-      if (current === serial) error.value = failure.message || "未能读取私聊";
+      if (current === serial) error.value = failure.message || t('未能读取私聊');
     } finally {
       if (current === serial) loading.value = false;
     }
@@ -209,7 +210,7 @@ async function read_steps(item, room_id, current) {
     });
   } catch (failure) {
     if (current !== serial) return;
-    when_still(() => { errors.value = new Map(errors.value).set(item.key, { message: failure.message || "未能读取过程", at: Date.now() / 1000 }); });
+    when_still(() => { errors.value = new Map(errors.value).set(item.key, { message: failure.message || t('未能读取过程'), at: Date.now() / 1000 }); });
   }
 }
 /**
@@ -260,7 +261,7 @@ function room_text(id) {
 }
 /** What the owner said to start a turn: a chat line, or the room message the task answered. */
 function prompt_of(item) {
-  return item.chat ? item.chat.text : room_text(item.execution.request_message_id) || (item.execution.request_message_id ? `（房间消息 #${item.execution.request_message_id}）` : "");
+  return item.chat ? item.chat.text : room_text(item.execution.request_message_id) || (item.execution.request_message_id ? t('（房间消息 #{value1}）', { value1: item.execution.request_message_id }) : "");
 }
 /** The member's final words for a turn: the chat reply, or its answer in the room. */
 function reply_of(item) {
@@ -282,9 +283,9 @@ function turn_meta(item) {
   const sent = to_date(item.at);
   const replied = item.chat ? (item.chat.reply ? to_date(item.chat.updated_at) : null)
     : to_date(view.value.messages?.find((message) => message.id === item.execution.answer_id)?.created_at);
-  return { source: item.chat ? "私聊" : `房间任务 #${item.execution.id}`,
-    sent: sent ? short_time(sent) : "", sent_title: sent ? sent.toLocaleString("zh-CN") : "",
-    replied: replied ? short_time(replied) : "", replied_title: replied ? replied.toLocaleString("zh-CN") : "" };
+  return { source: item.chat ? t('私聊') : t('房间任务 #{value1}', { value1: item.execution.id }),
+    sent: sent ? short_time(sent) : "", sent_title: sent ? sent.toLocaleString(locale) : "",
+    replied: replied ? short_time(replied) : "", replied_title: replied ? replied.toLocaleString(locale) : "" };
 }
 /** A turn's steps, without a remark that repeats its final reply. */
 function steps_of(item) {
@@ -307,7 +308,7 @@ function step_time(entry) {
   const pad = (part) => String(part).padStart(2, "0");
   const seconds = entry.ended_at ? Math.max(0, (new Date(entry.ended_at) - started) / 1000) : null;
   const took = seconds == null ? "" : seconds < 60 ? `${seconds < 10 ? seconds.toFixed(1) : Math.round(seconds)}s` : elapsed(seconds);
-  return { clock: `${pad(started.getHours())}:${pad(started.getMinutes())}:${pad(started.getSeconds())}`, title: started.toLocaleString("zh-CN"),
+  return { clock: `${pad(started.getHours())}:${pad(started.getMinutes())}:${pad(started.getSeconds())}`, title: started.toLocaleString(locale),
     took, slow: seconds != null && seconds >= SLOW_STEP_S };
 }
 /** A diff line's tint: added or removed, as the CLI colours an edit. */
@@ -331,12 +332,12 @@ function open_step(item, entry) {
 /** What happened to a chat line, when it is not simply answered. */
 function chat_note(chat) {
   if (chat.status === "interjected") {
-    const state = { pending: "待送达", delivered: "已送达", failed: "未送达" }[chat.interjection] || "已发出";
-    return `作为插话进入房间任务 #${chat.execution_id}：${state}${chat.reason ? `，${chat.reason}` : ""}`;
+    const state = { pending: t('待送达'), delivered: t('已送达'), failed: t('未送达') }[chat.interjection] || t('已发出');
+    return t('作为插话进入房间任务 #{value1}：{value2}{value3}', { value1: chat.execution_id, value2: state, value3: chat.reason ? `，${chat.reason}` : "" });
   }
-  if (chat.status === "pending") return "排队中，等它空闲后处理";
-  if (chat.status === "stopped") return "已撤回";
-  if (chat.status === "failed") return chat.reason || "未完成";
+  if (chat.status === "pending") return t('排队中，等它空闲后处理');
+  if (chat.status === "stopped") return t('已撤回');
+  if (chat.status === "failed") return chat.reason || t('未完成');
   return "";
 }
 
@@ -478,7 +479,7 @@ async function send() {
     to_bottom();
     await refresh();
   } catch (failure) {
-    error.value = failure.message || "未能发出";
+    error.value = failure.message || t('未能发出');
   } finally { sending.value = false; }
 }
 /** Enter sends with a keyboard, except while an input method is still composing (choosing Chinese characters). */
@@ -496,13 +497,13 @@ async function interrupt() {
   if (!item || paused.value) return;
   try {
     if (item.chat) await bridge.stop_member_chat(room.value.id, item.chat.id);
-    else if (!item.execution.capabilities?.resume) throw new Error("这位成员的接入方式不能暂停后接着做；要结束这次任务请用消息卡片上的停止");
+    else if (!item.execution.capabilities?.resume) throw new Error(t('这位成员的接入方式不能暂停后接着做；要结束这次任务请用消息卡片上的停止'));
     else {
       await bridge.pause_execution(room.value.id, item.execution.id);
       await act("refresh");
     }
     await refresh();
-  } catch (failure) { error.value = failure.message || `未能${stop_label.value}`; }
+  } catch (failure) { error.value = failure.message || t('未能{value1}', { value1: stop_label.value }); }
 }
 /** ↑/↓ walk earlier lines when the caret is on the first or last line, as a shell does. */
 function recall(event, step) {
@@ -519,9 +520,9 @@ function recall(event, step) {
 </script>
 
 <template>
-  <div class="term" role="tabpanel" aria-label="私聊">
+  <div class="term" role="tabpanel" :aria-label="t('私聊')">
     <div class="term-tabs-bar">
-    <nav class="term-tabs" aria-label="成员">
+    <nav class="term-tabs" :aria-label="t('成员')">
       <button v-for="item in members" :key="item.id" type="button" class="term-tab" :class="{ 'is-current': item.name === name }"
         :aria-current="item.name === name" @click="private_chat.member = item.name; private_chat.execution_id = null">
         <span class="term-dot" :class="{ 'is-busy': ACTIVE.includes(item.execution?.status) }" />{{ bridge.display_name(item.name) }}
@@ -533,20 +534,20 @@ function recall(event, step) {
       @touchstart.passive="set_touching(true)" @touchend="set_touching(false)" @touchcancel="set_touching(false)">
       <div ref="content" class="term-content">
       <div v-if="member" class="term-welcome">
-        <div><span class="term-accent">✻</span> 和 <b>{{ bridge.display_name(name) }}</b> 私聊</div>
-        <div class="term-dim">用它在房间里的同一个会话回答，记录只有你看得到</div>
+        <div><span class="term-accent">✻</span> {{ t('和') }} <b>{{ bridge.display_name(name) }}</b> {{ t('私聊') }}</div>
+        <div class="term-dim">{{ t('用它在房间里的同一个会话回答，记录只有你看得到') }}</div>
       </div>
-      <p v-else class="term-dim">房间里还没有 AI 成员</p>
-      <div v-if="loading && !shown_items.length" class="grid gap-4 py-4" role="status" aria-label="正在读取私聊"><USkeleton v-for="row in 4" :key="row" class="h-4" :class="row % 2 ? 'w-2/3' : 'w-full'" /></div>
+      <p v-else class="term-dim">{{ t('房间里还没有 AI 成员') }}</p>
+      <div v-if="loading && !shown_items.length" class="grid gap-4 py-4" role="status" :aria-label="t('正在读取私聊')"><USkeleton v-for="row in 4" :key="row" class="h-4" :class="row % 2 ? 'w-2/3' : 'w-full'" /></div>
       <section v-for="item in shown_items" :key="item.key" class="term-turn" :class="{ 'is-target': target === item.key }" :data-key="item.key"
         v-memo="[item.at, item.prompt, item.reply, running(item), item.chat && chat_note(item.chat), details.get(item.key), errors.get(item.key), open_output, target === item.key]">
         <div v-for="meta in [turn_meta(item)]" :key="'meta'" class="term-meta">
           <time :title="meta.sent_title">{{ meta.sent }}</time><span>{{ meta.source }}</span>
-          <span v-if="meta.replied" class="term-meta-end">回复于 <time :title="meta.replied_title">{{ meta.replied }}</time></span>
+          <span v-if="meta.replied" class="term-meta-end">{{ t('回复于') }} <time :title="meta.replied_title">{{ meta.replied }}</time></span>
         </div>
         <div v-if="item.prompt" class="term-prompt"><span class="term-body">{{ item.prompt }}</span></div>
-        <div v-if="errors.get(item.key) && !details.has(item.key)" class="term-sub term-warn"><span class="term-corner">⎿</span><span class="term-body">未能读取过程：{{ errors.get(item.key).message }}</span></div>
-        <div v-else-if="!details.has(item.key)" class="term-sub" role="status"><span class="term-corner">⎿</span><USkeleton class="h-4 w-2/3" /><span class="sr-only">正在读取过程…</span></div>
+        <div v-if="errors.get(item.key) && !details.has(item.key)" class="term-sub term-warn"><span class="term-corner">⎿</span><span class="term-body">{{ t('未能读取过程：{value1}', { value1: errors.get(item.key).message }) }}</span></div>
+        <div v-else-if="!details.has(item.key)" class="term-sub" role="status"><span class="term-corner">⎿</span><USkeleton class="h-4 w-2/3" /><span class="sr-only">{{ t('正在读取过程…') }}</span></div>
         <template v-for="(entry, index) in steps_of(item)" :key="entry.id ?? index">
           <div v-if="entry.kind === 'message'" class="term-line term-msg"><span class="term-bullet">●</span><span class="term-body">{{ entry.body }}</span></div>
           <div v-else-if="entry.kind === 'interjection'" class="term-prompt term-msg"><span class="term-body">{{ entry.body }}</span></div>
@@ -559,7 +560,7 @@ function recall(event, step) {
           <div v-else class="term-block">
             <div class="term-line term-step"><span class="term-bullet" :class="`is-${entry.state || 'done'}`">●</span><span v-for="step in [step_line(entry)]" :key="'step'" class="term-body"><b class="term-tool">{{ step.tool }}</b><span v-if="step.subject" class="term-subject">({{ step.subject }})</span></span><span v-for="time in [step_time(entry)]" :key="'time'" class="term-when"><template v-if="time"><time class="term-clock" :title="time.title">{{ time.clock }}</time><span v-if="time.took" class="term-took" :class="{ 'is-slow': time.slow }">{{ time.took }}</span></template></span></div>
             <div v-if="entry.body" v-for="output in [output_of(item, entry)]" :key="'out'" class="term-sub" :class="{ 'term-error': entry.state === 'failed' }">
-              <span class="term-corner">⎿</span><span class="term-body"><span v-for="(line, at) in output.lines" :key="at" class="term-out" :class="line.tone">{{ line.text || " " }}</span><button v-if="output.hidden" type="button" class="term-more" @click="open_step(item, entry)">… +{{ output.hidden }} 行（点击展开）</button></span>
+              <span class="term-corner">⎿</span><span class="term-body"><span v-for="(line, at) in output.lines" :key="at" class="term-out" :class="line.tone">{{ line.text || " " }}</span><button v-if="output.hidden" type="button" class="term-more" @click="open_step(item, entry)">{{ t('… +{value1} 行（点击展开）', { value1: output.hidden }) }}</button></span>
             </div>
           </div>
         </template>
@@ -568,24 +569,24 @@ function recall(event, step) {
       </section>
       </div>
     </div>
-    <button v-if="unread || away" type="button" class="term-unread" @click="to_bottom">{{ unread ? "↓ 新输出" : "↓ 回到底部" }}</button>
+    <button v-if="unread || away" type="button" class="term-unread" @click="to_bottom">{{ unread ? t('↓ 新输出') : t('↓ 回到底部') }}</button>
     </div>
     <div class="term-status" :class="{ 'is-running': running_item && !paused }" role="status">
       <span v-if="running_item && !paused" class="term-spin">{{ SPINNER[frame] }}</span><span>{{ status_line }}</span>
     </div>
     <div class="term-input">
       <span class="term-caret" aria-hidden="true">&gt;</span>
-      <textarea v-model="draft" rows="1" :enterkeyhint="ENTER_SENDS ? 'send' : 'enter'" :disabled="Boolean(unsupported) || sending" :placeholder="unsupported ? '暂不可用' : paused ? '补充后它接着做…' : running_item ? '插话引导它…' : '输入消息…'"
-        aria-label="私聊输入" maxlength="4000" @keydown.enter.exact="on_enter" @keydown.esc.prevent="interrupt"
+      <textarea v-model="draft" rows="1" :enterkeyhint="ENTER_SENDS ? 'send' : 'enter'" :disabled="Boolean(unsupported) || sending" :placeholder="unsupported ? t('暂不可用') : paused ? t('补充后它接着做…') : running_item ? t('插话引导它…') : t('输入消息…')"
+        :aria-label="t('私聊输入')" maxlength="4000" @keydown.enter.exact="on_enter" @keydown.esc.prevent="interrupt"
         @keydown.up="recall($event, -1)" @keydown.down="recall($event, 1)" />
       <!-- Touch keyboards have no Esc and often no Enter that sends, so both keys also have buttons. -->
       <button v-if="running_item && !paused" type="button" class="term-button is-stop" :aria-label="stop_label" :title="`${stop_label}（Esc）`" @click="interrupt"><span class="term-stop-square" /></button>
-      <button type="button" class="term-button" aria-label="发送" :title="ENTER_SENDS ? '发送（Enter）' : '发送'" :disabled="!draft.trim() || sending || Boolean(unsupported)" @click="send">↑</button>
+      <button type="button" class="term-button" :aria-label="t('发送')" :title="ENTER_SENDS ? t('发送（Enter）') : t('发送')" :disabled="!draft.trim() || sending || Boolean(unsupported)" @click="send">↑</button>
     </div>
     <div class="term-hint">
       <span v-if="error" class="term-warn">{{ error }}</span>
       <span v-else-if="unsupported" class="term-warn">{{ unsupported }}</span>
-      <span v-else-if="ENTER_SENDS">enter 发送 · shift+enter 换行 · ↑↓ 历史{{ running_item && !paused ? ` · esc ${stop_label}` : "" }}</span>
+      <span v-else-if="ENTER_SENDS">{{ t('enter 发送 · shift+enter 换行 · ↑↓ 历史{value1}', { value1: running_item && !paused ? ` · esc ${stop_label}` : "" }) }}</span>
     </div>
   </div>
 </template>

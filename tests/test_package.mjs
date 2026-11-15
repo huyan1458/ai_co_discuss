@@ -10,6 +10,7 @@ import test from 'node:test';
 
 // Setup installs Pi from npm unless one is given; tests never download it.
 process.env.CODISCUSS_PI_CLI ??= 'pi-not-needed-in-this-test';
+process.env.CODISCUSS_LANG = 'zh-CN';
 
 const ROOT = fileURLToPath(new URL('../', import.meta.url));
 const NPM = process.env.npm_execpath || join(dirname(process.execPath), process.platform === 'win32'
@@ -166,7 +167,7 @@ test('npm tarball installs outside the checkout and launches both entries with p
     const tarball = JSON.parse(packed.stdout)[0];
     const files = tarball.files.map(item => item.path);
     for (const required of ['server.py', 'backend/server.py', 'backend/runtime.py', 'backend/schema.sql', 'backend/migrations/drop_legacy_discussion.sql', 'web/modern.js',
-      'runner/discuss.py', 'runner/discussion_setup.mjs', '.agents/skills/discuss-host/references/manual.md',
+      'runner/discuss.py', 'runner/discussion_setup.mjs', 'runner/i18n.mjs', 'runner/i18n_en.mjs', '.agents/skills/discuss-host/references/manual.md',
       '.agents/skills/discuss-host/references/launch.md',
       '.agents/skills/discuss-report/assets/Discussion_Report_Template.md']) assert(files.includes(required), required);
     assert(!files.some(path => /(^|\/)(data|node_modules|__pycache__|\.wrangler|\.dev|tests|frontend)(\/|$)|\.sqlite3$|\.pyc$/.test(path)));

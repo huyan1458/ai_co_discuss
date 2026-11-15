@@ -14,6 +14,7 @@ import { SKILLS, install_skills, install_workflows, remove_legacy_skills, shippe
 import { ask, checkbox_prompt, intro, outro, pad, short_path, spinner, step, styled, text_width, tone, tree_prompt } from './discussion_tui.mjs';
 import { launcher_installed } from './launcher.mjs';
 import { ask_hosting, configure_hosting, finish_hosting, hosting_requested } from './hosting_setup.mjs';
+import { t } from './i18n.mjs';
 export { checkbox_prompt } from './discussion_tui.mjs';
 
 const ROOT = fileURLToPath(new URL('../', import.meta.url));
@@ -39,7 +40,7 @@ const OPTIONS = { yes: { type: 'boolean' }, clients: { type: 'string' }, python:
   port: { type: 'string' }, prefix: { type: 'string' }, 'skills-home': { type: 'string' },
   'no-start': { type: 'boolean' }, hosting: { type: 'boolean' }, 'no-hosting': { type: 'boolean' }, 'no-open': { type: 'boolean' }, workflows: { type: 'boolean' }, json: { type: 'boolean' }, help: { type: 'boolean', short: 'h' },
   'public-host': { type: 'string' }, 'tunnel-name': { type: 'string' }, 'entry-port': { type: 'string' } };
-const HELP = `用法：codiscuss install [选项] / codiscuss setup [选项]
+const HELP = t(`用法：codiscuss install [选项] / codiscuss setup [选项]
 install 将当前 npm 包安装为持久命令，再运行 setup；setup 配置已有安装。
   --yes                     使用已检测且支持自动接入的软件，冲突保留并报告
   --clients codex,claude,antigravity,cursor  选择 CLI；none 只配置网站
@@ -61,7 +62,7 @@ Antigravity（显示名 Gemini）使用 agy；Grok 使用 Cursor CLI（agent / c
 Cursor 当前只安装技能，可手动参与；全自动接入尚未提供。已有软件设置保留。
 显式软件路径可更新已支持的 CLI 配置。安装不会开始讨论。
 中文摘要写入 stderr；输出被重定向或加 --json 时结果 JSON 写入 stdout；退出码 0=完成，2=配置待处理，1=失败。
-`;
+`);
 
 /** Read local settings stored outside the npm installation. */
 export function local_settings(home = service_home()) {
@@ -71,13 +72,13 @@ export function local_settings(home = service_home()) {
 
 /** Validate prerequisites before installing a package or changing configuration. */
 function setup_environment(options) {
-  if (Number(process.versions.node.split('.')[0]) < MIN_NODE_MAJOR) throw new Error('需要 Node.js 24+，请升级后重试。');
+  if (Number(process.versions.node.split('.')[0]) < MIN_NODE_MAJOR) throw new Error(t('需要 Node.js 24+，请升级后重试。'));
   const home = service_home();
   assert_shared_home(home);
   const previous = local_settings(home);
   const python = detect_python(options.python || previous.python);
   const port = Number(options.port || previous.port || DEFAULT_PORT);
-  if (!Number.isInteger(port) || port < 1 || port > 65535) throw new Error('端口必须为 1–65535 的整数');
+  if (!Number.isInteger(port) || port < 1 || port > 65535) throw new Error(t('端口必须为 1–65535 的整数'));
   return { home, previous, python, port };
 }
 
@@ -85,7 +86,7 @@ function setup_environment(options) {
 function environment_line(python, port) {
   const probe = spawnSync(python, ['-c', 'import sys; print(".".join(map(str, sys.version_info[:3])))'],
     { encoding: 'utf8', windowsHide: true, timeout: PROBE_TIMEOUT });
-  return `Node ${process.version.slice(1)} · Python ${probe.stdout?.trim() || short_path(python)} · 端口 ${port}`;
+  return t('Node {value1} · Python {value2} · 端口 {value3}', { value1: process.version.slice(1), value2: probe.stdout?.trim() || short_path(python), value3: port });
 }
 
 /** Find executable PATH entries, explicitly allowing Cursor's Windows .cmd launcher. */
@@ -133,7 +134,7 @@ export function detect_python(explicit = '') {
       if (found.version[0] === 3 && found.version[1] >= 10 && isAbsolute(found.path)) return found.path;
     } catch { /* Try the next installed Python. */ }
   }
-  throw new Error('未找到 Python 3.10+；安装后重试，或用 --python 指定可执行文件。');
+  throw new Error(t('未找到 Python 3.10+；安装后重试，或用 --python 指定可执行文件。'));
 }
 
 /** Probe the fixed --version argument; Cursor's Windows launcher runs through a fixed PowerShell command. */
@@ -156,7 +157,7 @@ export function detect_clients(options = {}, search_path = process.env.PATH || '
       : client.commands.map(command => path_program(command, search_path, allow_cmd)).find(Boolean)
         || (key === 'codex' && process.platform === 'win32' ? codex_binary(search_path) : '');
     const probe = executable ? probe_cli(executable, allow_cmd) : null;
-    if (options[key] && probe?.status !== 0) throw new Error(`${client.name} 路径无法运行：${executable}`);
+    if (options[key] && probe?.status !== 0) throw new Error(t('{value1} 路径无法运行：{value2}', { value1: client.name, value2: executable }));
     return { key, ...client, executable: probe?.status === 0 ? executable : '' };
   });
 }
@@ -165,12 +166,12 @@ export function detect_clients(options = {}, search_path = process.env.PATH || '
 async function selected_clients(options, detected) {
   let choice = options.clients;
   if (choice === undefined && !options.yes) {
-    if (!process.stdin.isTTY) throw new Error('非交互终端请使用 --yes 或 --clients；只配置网站可用 --clients none。');
-    const items = detected.map(item => ({ label: item.name, hint: item.executable ? short_path(item.executable) : '未检测到 CLI',
+    if (!process.stdin.isTTY) throw new Error(t('非交互终端请使用 --yes 或 --clients；只配置网站可用 --clients none。'));
+    const items = detected.map(item => ({ label: item.name, hint: item.executable ? short_path(item.executable) : t('未检测到 CLI'),
       checked: Boolean(item.executable && item.adapter), disabled: !item.executable }));
-    const checked = await checkbox_prompt('选择要接入的软件', items);
+    const checked = await checkbox_prompt(t('选择要接入的软件'), items);
     choice = detected.filter((_, index) => checked[index]).map(item => item.key).join(',') || 'none';
-  } else if (!styled) for (const item of detected) process.stderr.write(`${item.name}：${item.executable || '未检测到 CLI'}\n`);
+  } else if (!styled) for (const item of detected) process.stderr.write(`${item.name}：${item.executable || t('未检测到 CLI')}\n`);
   return requested_clients(choice, detected);
 }
 
@@ -196,19 +197,19 @@ async function install_choices(options, home, previous) {
   if (options.yes || !process.stdin.isTTY || typeof process.stdin.setRawMode !== 'function' || (!offer_workflows && !windows)) return defaults;
   const installed = windows && launcher_installed(home);
   const groups = [];
-  if (offer_workflows) groups.push({ key: 'workflows', label: '随包工作流',
-    description: '把安装包自带的工作流装进本机工作流库；已有同名的覆盖为最新版，原来那份先备份到服务目录 backups/workflows/',
+  if (offer_workflows) groups.push({ key: 'workflows', label: t('随包工作流'),
+    description: t('把安装包自带的工作流装进本机工作流库；已有同名的覆盖为最新版，原来那份先备份到服务目录 backups/workflows/'),
     items: shipped.map(item => ({ label: item.label, hint: item.name, description: item.description, checked: false })) });
-  if (windows) groups.push({ key: 'launcher', label: '桌面快捷方式',
-    description: '在桌面与开始菜单放一个“共议”，双击启动网站与讨论服务；以后也可运行 codiscuss launcher 生成',
+  if (windows) groups.push({ key: 'launcher', label: t('桌面快捷方式'),
+    description: t('在桌面与开始菜单放一个“共议”，双击启动网站与讨论服务；以后也可运行 codiscuss launcher 生成'),
     items: [installed
-      ? { label: '重新生成“共议”快捷方式', hint: 'launcher', description: '已经有了；Node 或共议的安装位置变了、双击打不开时再勾选', checked: false }
-      : { label: '创建“共议”快捷方式', hint: 'launcher', description: '用本机自带的 C# 编译器生成 共议.exe，不下载任何东西', checked: true }] });
-  if (offer_hosting) groups.push({ key: 'hosting', label: '托管管理',
-    description: '给别人开账号用这台电脑上的 AI 时才需要；一般自用不用勾。勾选会记住，下次 setup 可取消',
-    items: [{ label: '托管管理', hint: 'hosting', description: '管理面板里多出用户、命令行登录、API 密钥三页：给托管账号开户、建 Windows 用户、登录与分配密钥',
+      ? { label: t('重新生成“共议”快捷方式'), hint: 'launcher', description: t('已经有了；Node 或共议的安装位置变了、双击打不开时再勾选'), checked: false }
+      : { label: t('创建“共议”快捷方式'), hint: 'launcher', description: t('用本机自带的 C# 编译器生成 共议.exe，不下载任何东西'), checked: true }] });
+  if (offer_hosting) groups.push({ key: 'hosting', label: t('托管管理'),
+    description: t('给别人开账号用这台电脑上的 AI 时才需要；一般自用不用勾。勾选会记住，下次 setup 可取消'),
+    items: [{ label: t('托管管理'), hint: 'hosting', description: t('管理面板里多出用户、命令行登录、API 密钥三页：给托管账号开户、建 Windows 用户、登录与分配密钥'),
       checked: defaults.hosting }] });
-  const picked = await tree_prompt('安装配置', groups);
+  const picked = await tree_prompt(t('安装配置'), groups);
   const chosen = key => picked[groups.findIndex(group => group.key === key)];
   return {
     workflows: offer_workflows ? shipped.filter((_, index) => chosen('workflows')[index]).map(item => item.name) : defaults.workflows,
@@ -241,8 +242,8 @@ function requested_clients(choice, detected) {
   const keys = !choice ? available.filter(item => item.adapter).map(item => item.key)
     : choice === 'none' ? [] : choice.split(',').map(item => item.trim());
   for (const key of keys) {
-    if (!CLIENTS[key]) throw new Error(`不支持的软件：${key}`);
-    if (!available.some(item => item.key === key)) throw new Error(`${key} 未检测到，请安装其 CLI 或提供路径。`);
+    if (!CLIENTS[key]) throw new Error(t('不支持的软件：{value1}', { value1: key }));
+    if (!available.some(item => item.key === key)) throw new Error(t('{value1} 未检测到，请安装其 CLI 或提供路径。', { value1: key }));
   }
   return detected.filter(item => keys.includes(item.key));
 }
@@ -264,13 +265,15 @@ async function choose_profile(client, current, options) {
   const differs = current && (current.adapter !== client.adapter || !same_executable(current.executable, client.executable));
   let update = Boolean(options[client.key]), acknowledged = false;
   if (differs && !update && !options.yes && process.stdin.isTTY) {
-    const choice = await ask(`${client.name} 已有配置：${current.adapter || '未设置类型'} / ${current.executable || '未设置路径'}\n检测到 CLI：${client.executable}\n保留已有配置或更新为此 CLI？`, '[保留/更新，默认保留]');
+    const choice = await ask(t(`{value1} 已有配置：{value2} / {value3}
+检测到 CLI：{value4}
+保留已有配置或更新为此 CLI？`, { value1: client.name, value2: current.adapter || t('未设置类型'), value3: current.executable || t('未设置路径'), value4: client.executable }), t('[保留/更新，默认保留]'));
     update = ['更新', 'update', 'u'].includes(choice.trim().toLowerCase());
     acknowledged = !choice.trim() || ['保留', 'keep', 'k'].includes(choice.trim().toLowerCase());
   }
   if (differs && !update) return { client: client.name, status: acknowledged ? 'retained' : 'pending',
     effective: { adapter: current.adapter, executable: current.executable }, detected,
-    action: `如需更新，运行 codiscuss setup --clients ${client.key} --${client.key} "${client.executable}"；交互 setup 也可确认保留。` };
+    action: t('如需更新，运行 codiscuss setup --clients {value1} --{value2} "{value3}"；交互 setup 也可确认保留。', { value1: client.key, value2: client.key, value3: client.executable }) };
   return { client: client.name, status: 'configured', effective: detected };
 }
 
@@ -369,33 +372,33 @@ export function check_command(search_path = persistent_search_path()) {
   const prefix = basename(dirname(package_root)) === 'node_modules' ? dirname(dirname(package_root)) : '';
   const directory = prefix ? (process.platform === 'win32' ? prefix : join(dirname(prefix), 'bin')) : '';
   if (!executable) return { status: 'missing', directory,
-    action: directory ? `将 ${directory} 加入 PATH，重新打开终端后运行 codiscuss setup。`
-      : '尚未找到持久命令，请先运行 install，再重新打开终端运行 codiscuss setup。' };
+    action: directory ? t('将 {value1} 加入 PATH，重新打开终端后运行 codiscuss setup。', { value1: directory })
+      : t('尚未找到持久命令，请先运行 install，再重新打开终端运行 codiscuss setup。') };
   const target = process.platform === 'win32' ? join(dirname(executable), 'node_modules', 'ai_co_discuss', 'runner', 'codiscuss.mjs') : executable;
   const shim_matches = process.platform !== 'win32' || (/\.cmd$/i.test(executable)
     && readFileSync(executable, 'utf8').replaceAll('\\', '/').includes('node_modules/ai_co_discuss/runner/codiscuss.mjs'));
   if (!shim_matches || !same_executable(target, cli)) return { status: 'shadowed', path: executable, directory,
-    action: `PATH 中的 ${executable} 未指向本次安装；${directory ? `将 ${directory} 放在旧入口之前` : '先运行 install 安装本版本'}，再运行 setup。` };
+    action: t('PATH 中的 {value1} 未指向本次安装；{value2}，再运行 setup。', { value1: executable, value2: directory ? t('将 {value1} 放在旧入口之前', { value1: directory }) : t('先运行 install 安装本版本') }) };
   const probe = process.platform === 'win32'
     ? spawnSync('powershell.exe', ['-NoProfile', '-NonInteractive', '-Command', '& $env:DISCUSS_COMMAND_PATH --help; exit $LASTEXITCODE'],
       { encoding: 'utf8', windowsHide: true, timeout: PROBE_TIMEOUT, env: { ...process.env, PATH: search_path, DISCUSS_COMMAND_PATH: executable } })
     : spawnSync(executable, ['--help'], { encoding: 'utf8', timeout: PROBE_TIMEOUT, env: { ...process.env, PATH: search_path } });
   return probe.status === 0 ? { status: 'ready', path: executable }
-    : { status: 'failed', path: executable, action: `命令无法运行：${executable}；请在终端运行此入口的 --help 检查 Node 和执行权限，再运行 setup。` };
+    : { status: 'failed', path: executable, action: t('命令无法运行：{value1}；请在终端运行此入口的 --help 检查 Node 和执行权限，再运行 setup。', { value1: executable }) };
 }
 
 /** Collect only unresolved setup work, keeping actual AI execution a separate validation. */
 function setup_issues(result) {
   const issues = result.profiles.filter(profile => profile.status === 'pending')
-    .map(profile => `${profile.client} 保留了与检测结果不同的配置。${profile.action}`);
+    .map(profile => t('{value1} 保留了与检测结果不同的配置。{value2}', { value1: profile.client, value2: profile.action }));
   for (const group of result.skills) for (const skill of group.results) {
-    if (skill.status === 'conflict') issues.push(`${group.client} 技能冲突，已保留 ${skill.path}；请核对并移走需替换的旧副本，再运行 setup。`);
+    if (skill.status === 'conflict') issues.push(t('{value1} 技能冲突，已保留 {value2}；请核对并移走需替换的旧副本，再运行 setup。', { value1: group.client, value2: skill.path }));
   }
   for (const group of result.skills) for (const skill of group.legacy) {
-    if (skill.status === 'kept') issues.push(`${group.client} 旧技能目录中的副本有改动，已保留 ${skill.path}；软件会同时加载新旧两份，请核对后删除。`);
+    if (skill.status === 'kept') issues.push(t('{value1} 旧技能目录中的副本有改动，已保留 {value2}；软件会同时加载新旧两份，请核对后删除。', { value1: group.client, value2: skill.path }));
   }
   for (const permission of result.permissions) {
-    if (permission.status === 'invalid') issues.push(`${permission.client} 设置文件无法解析，未能移除旧版全局放行规则：${permission.path}；修复后重新运行 setup，否则全自动讨论会拒绝交付给 agy。`);
+    if (permission.status === 'invalid') issues.push(t('{value1} 设置文件无法解析，未能移除旧版全局放行规则：{value2}；修复后重新运行 setup，否则全自动讨论会拒绝交付给 agy。', { value1: permission.client, value2: permission.path }));
   }
   if (result.command.status !== 'ready') issues.push(result.command.action);
   return issues;
@@ -404,21 +407,22 @@ function setup_issues(result) {
 /** Ask before restarting a running website; non-interactive runs never stop it and report the pending restart instead. */
 async function confirm_restart(reason, options) {
   if (options.yes || !process.stdin.isTTY) return false;
-  const choice = await ask(`${reason}\n重启后生效。重启会暂停进行中的讨论；进行中的执行会中断，随后在原会话里自动续跑。现在重启？`, '[Y/N，默认 Y]');
+  const choice = await ask(t(`{value1}
+重启后生效。重启会暂停进行中的讨论；进行中的执行会中断，随后在原会话里自动续跑。现在重启？`, { value1: reason }), t('[Y/N，默认 Y]'));
   return !choice.trim() || ['重启', 'restart', 'r', 'y', 'yes'].includes(choice.trim().toLowerCase());
 }
 
 /** Configure Python, selected clients and skills, returning partial results on startup failure. */
 async function setup(options) {
-  intro('配置 AI CoDiscuss', PACKAGE.version, PACKAGE.description);
+  intro(t('配置 AI CoDiscuss'), PACKAGE.version, PACKAGE.description);
   const { home, previous, python, port } = setup_environment(options);
-  if (styled && !process.env.CODISCUSS_TUI_NESTED) step('运行环境就绪', [environment_line(python, port)]);
-  const scan = spinner('检测已安装的 AI 软件');
+  if (styled && !process.env.CODISCUSS_TUI_NESTED) step(t('运行环境就绪'), [environment_line(python, port)]);
+  const scan = spinner(t('检测已安装的 AI 软件'));
   const detected = detect_clients(options);
   const width = Math.max(...detected.map(item => text_width(item.name)));
   const listed = options.clients !== undefined || options.yes
-    ? detected.map(item => `${pad(item.name, width)}  ${tone.dim(item.executable ? short_path(item.executable) : '未检测到 CLI')}`) : [];
-  scan.done(`检测到 ${detected.filter(item => item.executable).length} 个可接入的 CLI`, listed);
+    ? detected.map(item => `${pad(item.name, width)}  ${tone.dim(item.executable ? short_path(item.executable) : t('未检测到 CLI'))}`) : [];
+  scan.done(t('检测到 {value1} 个可接入的 CLI', { value1: detected.filter(item => item.executable).length }), listed);
   const selected = await selected_clients(options, detected);
   const choices = await install_choices(options, home, previous);
   const workflow_names = choices.workflows;
@@ -428,25 +432,25 @@ async function setup(options) {
   // The panel reads hosting on each request, so a change shows on its next refresh.
   const { hosting: _previous_hosting, ...rest } = kept;
   atomic_json(join(home, 'local-settings.json'), { ...rest, python, port, ...(choices.hosting ? { hosting: true } : {}) });
-  step('已写入软件配置与技能', configured.skills.map(group => `${pad(group.client, width)}  ${tone.dim(short_path(dirname(group.results[0].path)))}`));
+  step(t('已写入软件配置与技能'), configured.skills.map(group => `${pad(group.client, width)}  ${tone.dim(short_path(dirname(group.results[0].path)))}`));
   // Shipped workflows are installed only when asked for each time, so a copy the user or a host edited is never replaced unasked.
   const workflows = workflow_names.length ? install_workflows(home, workflow_names) : [];
   // Model API members run in Pi, which codiscuss installs itself, at the release this version pins.
   let pi = null, pi_error = '';
   // A given Pi (CODISCUSS_PI_CLI, as in tests) is used as it is.
   if (!process.env.CODISCUSS_PI_CLI) {
-    const pi_step = spinner('安装 Pi（模型 API 成员的运行框架）');
+    const pi_step = spinner(t('安装 Pi（模型 API 成员的运行框架）'));
     try {
       pi = await (await import('./pi_runtime.mjs')).install_pi(home);
-      pi_step.done(`Pi ${pi.version}${pi.updated ? ' 已安装' : ' 已就绪'}`);
-    } catch (error) { pi_error = error.message; pi_step.fail(`Pi 安装失败：${error.message}`); }
+      pi_step.done(`Pi ${pi.version}${pi.updated ? t(' 已安装') : t(' 已就绪')}`);
+    } catch (error) { pi_error = error.message; pi_step.fail(t('Pi 安装失败：{value1}', { value1: error.message })); }
   }
   let launcher = null, launcher_error = '';
   if (choices.launcher) {
-    const work = spinner('生成“共议”程序与桌面快捷方式');
+    const work = spinner(t('生成“共议”程序与桌面快捷方式'));
     try {
       launcher = await install_launcher_in_worker(home);
-      work.done('“共议”快捷方式已就绪', [tone.dim(short_path(launcher.shortcuts[0]))]);
+      work.done(t('“共议”快捷方式已就绪'), [tone.dim(short_path(launcher.shortcuts[0]))]);
     } catch (error) { launcher_error = error.message; work.fail(error.message); }
   }
   // Hosting asked for: the entry, its optional outside address and starting with Windows, before the service starts.
@@ -458,48 +462,48 @@ async function setup(options) {
     await ask_hosting(home, options, { ask, show });
     // No spinner: installing cloudflared and signing in to Cloudflare print and wait for the owner.
     hosting = await configure_hosting(home, options, { say: line => process.stderr.write(`${line}\n`) });
-    step(hosting.issues.length ? '登录入口已设置，有待处理项' : '登录入口已设置', [...hosting.lines, ...hosting.issues]);
+    step(hosting.issues.length ? t('登录入口已设置，有待处理项') : t('登录入口已设置'), [...hosting.lines, ...hosting.issues]);
   }
   const result = { home, python, clients: selected.map(item => item.name), ...configured, workflows, ...(choices.hosting ? { hosting: true } : {}),
     command: check_command(), ai_verified: false, ...(pi ? { pi: pi.version } : {}), ...(launcher ? { launcher: launcher.shortcuts[0] } : {}),
     ...(hosting ? { hosting_setup: hosting.lines } : {}) };
   result.issues = [...setup_issues(result), ...(hosting?.issues || [])];
-  if (pi_error) result.issues.push(`Pi 安装失败（${pi_error}）；模型 API 成员首次执行时会再试，或检查网络与 npm 后重新运行 setup。`);
-  if (launcher_error) result.issues.push(`未能创建“共议”快捷方式（${launcher_error}）；可稍后运行 codiscuss launcher 重试。`);
+  if (pi_error) result.issues.push(t('Pi 安装失败（{value1}）；模型 API 成员首次执行时会再试，或检查网络与 npm 后重新运行 setup。', { value1: pi_error }));
+  if (launcher_error) result.issues.push(t('未能创建“共议”快捷方式（{value1}）；可稍后运行 codiscuss launcher 重试。', { value1: launcher_error }));
   result.configured = result.issues.length === 0;
   result.status = result.configured ? 'configured' : 'needs_attention';
   if (!options['no-start']) {
     const { local_main, restart_reason } = await import('./discussion_local.mjs');
     const reason = restart_reason(home);
     if (reason && !await confirm_restart(reason, options)) {
-      result.issues.push(`${reason}；重启后才生效。重启会暂停进行中的讨论，进行中的执行会中断并在原会话里自动续跑。确认后运行 codiscuss local stop，再运行 codiscuss local open。`);
+      result.issues.push(t('{value1}；重启后才生效。重启会暂停进行中的讨论，进行中的执行会中断并在原会话里自动续跑。确认后运行 codiscuss local stop，再运行 codiscuss local open。', { value1: reason }));
       result.configured = false;
       result.status = 'needs_attention';
       return result;
     }
-    const launch = spinner(reason ? '重启本机网站与讨论服务' : '启动本机网站与讨论服务');
+    const launch = spinner(reason ? t('重启本机网站与讨论服务') : t('启动本机网站与讨论服务'));
     try {
       if (reason) await local_main(['stop'], () => {});
       result.local = await local_main([options['no-open'] ? 'start' : 'open'], () => {});
-      launch.done('网站与讨论服务已在后台运行', [`${tone.cyan(result.local.url)}${options['no-open'] ? tone.dim('  未打开浏览器，可直接访问此地址') : tone.dim('  已在浏览器打开')}`]);
+      launch.done(t('网站与讨论服务已在后台运行'), [`${tone.cyan(result.local.url)}${options['no-open'] ? tone.dim(t('  未打开浏览器，可直接访问此地址')) : tone.dim(t('  已在浏览器打开'))}`]);
       if (result.configured) result.status = 'ready';
       if (hosting_setup) {
-        const check = spinner('重启管理面板并检查登录入口（外网检查最多 2 分钟）');
+        const check = spinner(t('重启管理面板并检查登录入口（外网检查最多 2 分钟）'));
         const checked = await finish_hosting(home);
-        check.done(checked.issues.length ? '登录入口检查未全部通过' : '登录入口检查通过', [...checked.lines, ...checked.issues]);
+        check.done(checked.issues.length ? t('登录入口检查未全部通过') : t('登录入口检查通过'), [...checked.lines, ...checked.issues]);
         result.hosting_setup.push(...checked.lines);
         if (checked.issues.length) { result.issues.push(...checked.issues); result.configured = false; result.status = 'needs_attention'; }
       }
     } catch (error) {
       launch.fail(error.message);
       result.status = 'start_failed';
-      result.issues.push(`本机启动失败：${error.message}；配置已保存，修复后重新运行 setup。`);
+      result.issues.push(t('本机启动失败：{value1}；配置已保存，修复后重新运行 setup。', { value1: error.message }));
     }
   }
   return result;
 }
 
-const WORKFLOW_STATUS = { installed: '已安装', updated: '已覆盖为最新版，原来的备份在', unchanged: '已是最新' };
+const WORKFLOW_STATUS = { installed: t('已安装'), updated: t('已覆盖为最新版，原来的备份在'), unchanged: t('已是最新') };
 
 /** One line naming each shipped workflow and what setup did with it. */
 function workflow_summary(workflows) {
@@ -509,61 +513,61 @@ function workflow_summary(workflows) {
 /** Print a concise human receipt while keeping stdout machine-readable. */
 function report_setup(result, options = {}) {
   if (styled) return report_styled(result, options);
-  const labels = { ready: '安装配置完成，网站与讨论服务已就绪', configured: '配置完成，本次未启动网站',
-    needs_attention: '配置待处理', start_failed: '本机启动失败' };
+  const labels = { ready: t('安装配置完成，网站与讨论服务已就绪'), configured: t('配置完成，本次未启动网站'),
+    needs_attention: t('配置待处理'), start_failed: t('本机启动失败') };
   const lines = [labels[result.status]];
   for (const profile of result.profiles) lines.push(profile.status === 'manual'
-    ? `${profile.client}：仅安装技能，可手动参与，尚不支持全自动接入。`
-    : `${profile.client}：${profile.status === 'configured' ? 'CLI 已配置' : '沿用已有配置'}（${profile.effective.adapter} / ${profile.effective.executable || '未设置路径'}）`);
+    ? t('{value1}：仅安装技能，可手动参与，尚不支持全自动接入。', { value1: profile.client })
+    : `${profile.client}：${profile.status === 'configured' ? t('CLI 已配置') : t('沿用已有配置')}（${profile.effective.adapter} / ${profile.effective.executable || t('未设置路径')}）`);
   for (const permission of result.permissions) {
-    if (permission.status === 'removed') lines.push(`${permission.client}：已移除旧版全局放行规则（${permission.path}）`);
+    if (permission.status === 'removed') lines.push(t('{value1}：已移除旧版全局放行规则（{value2}）', { value1: permission.client, value2: permission.path }));
   }
-  for (const group of result.skills) lines.push(`${group.client} Skill：${group.results.filter(skill => skill.status !== 'conflict').length}/${group.results.length} 份文件就绪，目录 ${dirname(group.results[0].path)}`);
-  if (result.workflows.length) lines.push(`内置工作流：${workflow_summary(result.workflows)}`);
-  if (result.launcher) lines.push(`快捷方式：${result.launcher}（双击启动共议）`);
-  if (result.hosting) lines.push('托管管理：已打开，在管理面板中可用');
-  for (const line of result.hosting_setup || []) lines.push(`托管：${line}`);
-  if (result.command.path) lines.push(`持久命令：${result.command.path}（${result.command.status}）`);
+  for (const group of result.skills) lines.push(t('{value1} Skill：{value2}/{value3} 份文件就绪，目录 {value4}', { value1: group.client, value2: group.results.filter(skill => skill.status !== 'conflict').length, value3: group.results.length, value4: dirname(group.results[0].path) }));
+  if (result.workflows.length) lines.push(t('内置工作流：{value1}', { value1: workflow_summary(result.workflows) }));
+  if (result.launcher) lines.push(t('快捷方式：{value1}（双击启动共议）', { value1: result.launcher }));
+  if (result.hosting) lines.push(t('托管管理：已打开，在管理面板中可用'));
+  for (const line of result.hosting_setup || []) lines.push(t('托管：{value1}', { value1: line }));
+  if (result.command.path) lines.push(t('持久命令：{value1}（{value2}）', { value1: result.command.path, value2: result.command.status }));
   if (result.local?.running) {
-    lines.push(`本机网站：${result.local.url}${options['no-open'] ? '' : '（已在浏览器打开）'}`,
-      '网站与讨论服务在后台运行，关闭此终端不影响；查看状态 codiscuss local status，停止 codiscuss local stop；电脑重启后运行 codiscuss local open 重新启动并打开浏览器（codiscuss local start 不打开浏览器）；codiscuss service restart 重启讨论服务（使新环境变量生效）'
-      + (process.platform === 'win32' ? '；codiscuss service autostart on 登录时自动启动。' : '。'));
+    lines.push(t('本机网站：{value1}{value2}', { value1: result.local.url, value2: options['no-open'] ? '' : t('（已在浏览器打开）') }),
+      t('网站与讨论服务在后台运行，关闭此终端不影响；查看状态 codiscuss local status，停止 codiscuss local stop；电脑重启后运行 codiscuss local open 重新启动并打开浏览器（codiscuss local start 不打开浏览器）；codiscuss service restart 重启讨论服务（使新环境变量生效）')
+      + (process.platform === 'win32' ? t('；codiscuss service autostart on 登录时自动启动。') : '。'));
   }
-  lines.push(...result.issues, '真实 AI 执行尚未验证；可从网页创建讨论，或在新会话调用 Skill。');
-  if (result.skills.length) lines.push('若新会话未发现技能，请让 AI 读取上述目录内的 discuss-host/SKILL.md 和 discuss-participant/SKILL.md。');
+  lines.push(...result.issues, t('真实 AI 执行尚未验证；可从网页创建讨论，或在新会话调用 Skill。'));
+  if (result.skills.length) lines.push(t('若新会话未发现技能，请让 AI 读取上述目录内的 discuss-host/SKILL.md 和 discuss-participant/SKILL.md。'));
   process.stderr.write(`${lines.join('\n')}\n`);
 }
 
 /** Close the styled installer with aligned results, open issues and the commands to manage the site. */
 function report_styled(result, options) {
-  const titles = { ready: ['安装完成', tone.green('◆')], configured: ['配置完成，本次未启动网站', tone.green('◆')],
-    needs_attention: ['配置完成，仍有待处理项', tone.yellow('▲')], start_failed: ['本机启动失败', tone.red('■')] };
+  const titles = { ready: [t('安装完成'), tone.green('◆')], configured: [t('配置完成，本次未启动网站'), tone.green('◆')],
+    needs_attention: [t('配置完成，仍有待处理项'), tone.yellow('▲')], start_failed: [t('本机启动失败'), tone.red('■')] };
   const [title, mark] = titles[result.status];
   const rows = [];
-  if (result.local?.running) rows.push(['网站', tone.cyan(result.local.url), options['no-open'] ? '' : '已在浏览器打开']);
-  for (const profile of result.profiles) rows.push(profile.status === 'manual' ? [profile.client, '仅安装技能，可手动参与', '尚不支持全自动接入']
-    : [profile.client, `${profile.status === 'configured' ? 'CLI 已配置' : '沿用已有配置'} · ${profile.effective.adapter}`, short_path(profile.effective.executable) || '未设置路径']);
+  if (result.local?.running) rows.push([t('网站'), tone.cyan(result.local.url), options['no-open'] ? '' : t('已在浏览器打开')]);
+  for (const profile of result.profiles) rows.push(profile.status === 'manual' ? [profile.client, t('仅安装技能，可手动参与'), t('尚不支持全自动接入')]
+    : [profile.client, `${profile.status === 'configured' ? t('CLI 已配置') : t('沿用已有配置')} · ${profile.effective.adapter}`, short_path(profile.effective.executable) || t('未设置路径')]);
   for (const permission of result.permissions) {
-    if (permission.status === 'removed') rows.push([permission.client, '已移除旧版全局放行规则', short_path(permission.path)]);
+    if (permission.status === 'removed') rows.push([permission.client, t('已移除旧版全局放行规则'), short_path(permission.path)]);
   }
-  if (result.skills.length) rows.push(['技能', result.skills.map(group => `${group.client} ${group.results.filter(skill => skill.status !== 'conflict').length}/${group.results.length}`).join(' · '), 'discuss-host · discuss-participant · discuss-goal · discuss-session · discuss-report · workflow-creator · local-tts-setup · local-stt-setup']);
-  if (result.workflows.length) rows.push(['工作流', workflow_summary(result.workflows), '']);
-  if (result.launcher) rows.push(['快捷方式', '双击“共议”启动', short_path(result.launcher)]);
-  if (result.hosting) rows.push(['托管管理', '已打开', '在管理面板中可用']);
-  for (const line of result.hosting_setup || []) rows.push(['托管', line, '']);
-  if (result.command.path) rows.push(['命令', `codiscuss ${tone.dim(`(${result.command.status})`)}`, short_path(result.command.path)]);
+  if (result.skills.length) rows.push([t('技能'), result.skills.map(group => `${group.client} ${group.results.filter(skill => skill.status !== 'conflict').length}/${group.results.length}`).join(' · '), 'discuss-host · discuss-participant · discuss-goal · discuss-session · discuss-report · workflow-creator · local-tts-setup · local-stt-setup']);
+  if (result.workflows.length) rows.push([t('工作流'), workflow_summary(result.workflows), '']);
+  if (result.launcher) rows.push([t('快捷方式'), t('双击“共议”启动'), short_path(result.launcher)]);
+  if (result.hosting) rows.push([t('托管管理'), t('已打开'), t('在管理面板中可用')]);
+  for (const line of result.hosting_setup || []) rows.push([t('托管'), line, '']);
+  if (result.command.path) rows.push([t('命令'), `codiscuss ${tone.dim(`(${result.command.status})`)}`, short_path(result.command.path)]);
   const notes = result.issues.map(issue => tone.yellow(`▲ ${issue}`));
   if (result.local?.running) {
-    const commands = [['codiscuss local status', '查看状态'], ['codiscuss local stop', '停止'], ['codiscuss local open', '启动并打开浏览器（重启电脑后用）'],
-      ['codiscuss local start', '启动但不打开浏览器'],
-      ['codiscuss service restart', '重启讨论服务（使新环境变量生效）']];
-    if (process.platform === 'win32') commands.push(['codiscuss service autostart on', '登录时自动启动']);
+    const commands = [['codiscuss local status', t('查看状态')], ['codiscuss local stop', t('停止')], ['codiscuss local open', t('启动并打开浏览器（重启电脑后用）')],
+      ['codiscuss local start', t('启动但不打开浏览器')],
+      ['codiscuss service restart', t('重启讨论服务（使新环境变量生效）')]];
+    if (process.platform === 'win32') commands.push(['codiscuss service autostart on', t('登录时自动启动')]);
     const width = Math.max(...commands.map(([command]) => command.length)) + 2;
-    notes.push(tone.dim('网站与讨论服务在后台运行，关闭此终端不影响'),
+    notes.push(tone.dim(t('网站与讨论服务在后台运行，关闭此终端不影响')),
       ...commands.map(([command, label]) => `${tone.cyan(command.padEnd(width))}${tone.dim(label)}`));
   }
-  const closing = result.local?.running ? `在网页新建讨论，或在 AI 会话里调用 ${tone.cyan('discuss-host')} ${tone.dim('· 真实 AI 执行尚未验证')}`
-    : `运行 ${tone.cyan('codiscuss local open')} 启动网站`;
+  const closing = result.local?.running ? t('在网页新建讨论，或在 AI 会话里调用 {value1} {value2}', { value1: tone.cyan('discuss-host'), value2: tone.dim(t('· 真实 AI 执行尚未验证')) })
+    : t('运行 {value1} 启动网站', { value1: tone.cyan('codiscuss local open') });
   outro(title, rows, notes, closing, mark);
 }
 
@@ -574,7 +578,7 @@ function npm_entry() {
   const executable = path_program('npm');
   if (executable) candidates.push(realpathSync(executable));
   const entry = candidates.find(path => path && /\.(?:c?js|mjs)$/.test(path) && existsSync(path));
-  if (!entry) throw new Error('未找到 npm；请安装带 npm 的 Node.js 24+ 后重试。');
+  if (!entry) throw new Error(t('未找到 npm；请安装带 npm 的 Node.js 24+ 后重试。'));
   return entry;
 }
 
@@ -586,20 +590,20 @@ function npm_run(entry, args) {
     child.stdout.on('data', data => { stdout += data; });
     child.stderr.on('data', data => { stderr += data; });
     child.on('error', fail);
-    child.on('close', code => (code === 0 ? done(stdout.trim()) : fail(new Error(stderr || 'npm 执行失败'))));
+    child.on('close', code => (code === 0 ? done(stdout.trim()) : fail(new Error(stderr || t('npm 执行失败')))));
   });
 }
 
 /** Install a real package copy, never a symlink into a disposable npx cache. */
 async function install(args, options) {
-  intro('安装 AI CoDiscuss', PACKAGE.version, PACKAGE.description);
+  intro(t('安装 AI CoDiscuss'), PACKAGE.version, PACKAGE.description);
   const { python, port } = setup_environment(options);
   requested_clients(options.clients, detect_clients(options));
-  if (styled) step('运行环境就绪', [environment_line(python, port)]);
+  if (styled) step(t('运行环境就绪'), [environment_line(python, port)]);
   const entry = npm_entry();
   const temporary = mkdtempSync(join(tmpdir(), 'codiscuss-install-'));
   const prefix = options.prefix ? ['--prefix', resolve(options.prefix)] : [];
-  const progress = spinner('安装 codiscuss 命令');
+  const progress = spinner(t('安装 codiscuss 命令'));
   try {
     const packed = JSON.parse(await npm_run(entry, ['pack', ROOT, '--ignore-scripts', '--json', '--pack-destination', temporary]));
     await npm_run(entry, ['install', '--global', ...prefix, '--omit=dev', '--ignore-scripts', '--no-audit', '--no-fund', join(temporary, packed[0].filename)]);
@@ -608,8 +612,9 @@ async function install(args, options) {
     const global_root = process.platform === 'win32' ? join(install_prefix, 'node_modules') : join(install_prefix, 'lib', 'node_modules');
     const installed = join(global_root, 'ai_co_discuss', 'runner', 'codiscuss.mjs');
     const directory = process.platform === 'win32' ? install_prefix : join(install_prefix, 'bin');
-    progress.done('已安装 codiscuss 命令', [tone.dim(short_path(directory))]);
-    if (!styled) process.stderr.write(`命令目录：${directory}\n`);
+    progress.done(t('已安装 codiscuss 命令'), [tone.dim(short_path(directory))]);
+    if (!styled) process.stderr.write(t(`命令目录：{value1}
+`, { value1: directory }));
     const result = spawnSync(process.execPath, [installed, 'setup', ...args], { stdio: 'inherit', windowsHide: true,
       env: { ...process.env, PATH: persistent_search_path(), CODISCUSS_TUI_NESTED: '1' } });
     process.exitCode = result.status ?? 1;

@@ -26,6 +26,8 @@ const CHAT_TURN_MS = 30 * 60_000;
 // Error kinds Claude Code records that a retry a minute later meets again: a used-up plan limit, a lost login.
 const LASTING_ERRORS = ['rate_limit', 'authentication_failed'];
 const EDIT_TOOL_NAMES = /^(Edit|MultiEdit|Write|NotebookEdit)$/;
+// The Messages API refuses an image whose base64 form passes 5 MB, failing the whole turn; larger ones go by path only.
+const MAX_INLINE_IMAGE_BYTES = 3_750_000;
 // Claude Code logs side queries (titles, compaction, subagents) too; only these sources are the member's own turns.
 const CLAUDE_MAIN_SOURCES = ['sdk', 'repl_main_thread'];
 // A background process can be stopped and streams its progress; a turn in the member's own window does neither.
@@ -578,9 +580,15 @@ function task_notifications(entry) {
     .filter(item => item.id);
 }
 
-/** One user message as a stream-json input line. */
-function claude_input(text) {
-  return `${JSON.stringify({ type: 'user', message: { role: 'user', content: [{ type: 'text', text }] } })}\n`;
+/**
+ * One user message as a stream-json input line, with the task's images as base64 image blocks after the text, the way a
+ * screenshot pasted into Claude Code reaches the model (measured on 2.1.325, 2026-11-14). An image the API would refuse
+ * for size stays out, so it never fails the turn; its local copy is still named in the text.
+ */
+export function claude_input(text, images = []) {
+  const blocks = images.filter(image => image.size <= MAX_INLINE_IMAGE_BYTES).map(image => ({ type: 'image',
+    source: { type: 'base64', media_type: image.content_type, data: readFileSync(image.path).toString('base64') } }));
+  return `${JSON.stringify({ type: 'user', message: { role: 'user', content: [{ type: 'text', text }, ...blocks] } })}\n`;
 }
 
 function process_alive(pid) {
@@ -641,7 +649,7 @@ async function deliver(config, binding, task, spawn_process = spawn) {
     child.once('spawn', () => { spawned = true; resolve_spawn(); });
     child.once('error', error => spawned ? task.on_failure(error.message) : reject(not_sent(error)));
   });
-  child.stdin.write(claude_input(task.prompt));
+  child.stdin.write(claude_input(task.prompt, task.images));
   // A failed spawn creates no session; only a successfully started process can be resumed.
   task.on_binding(session_id);
   // An interjection reaches the turn at its next tool call; text written in one go without tools waits for the next turn.

@@ -8,6 +8,7 @@ import re
 
 from . import goal_room
 from .free_room import insert_request, require_member
+from .texts import Text
 from .runtime import begin_write
 from .session_room import (conclude_session_by_host, control_session, current_session, session_conclusion_view, session_room)
 
@@ -33,18 +34,18 @@ def check_discuss_command(connection, room_id, command, argument):
     session = current_session(connection, room_id, active_only=True)
     if command == "start":
         if session:
-            raise FileExistsError("讨论已在进行；可用 /discuss pause、/discuss resume 或 /discuss stop")
+            raise FileExistsError(Text("讨论已在进行；可用 /discuss pause、/discuss resume 或 /discuss stop"))
         if goal_room.open_goal(connection, room_id):
-            raise FileExistsError("Goal 进行中；结束 Goal 后才能开启讨论")
+            raise FileExistsError(Text("Goal 进行中；结束 Goal 后才能开启讨论"))
         goal_room.goal_host(connection, room_id)
         if len(argument) > MAX_DISCUSSION_GOAL_LENGTH:
-            raise ValueError(f"讨论目标最多 {MAX_DISCUSSION_GOAL_LENGTH} 字")
+            raise ValueError(Text("讨论目标最多 {max_discussion_goal_length} 字", max_discussion_goal_length=MAX_DISCUSSION_GOAL_LENGTH))
     elif not session:
-        raise FileExistsError("房间没有进行中的讨论")
+        raise FileExistsError(Text("房间没有进行中的讨论"))
     elif command == "pause" and session["status"] != "active":
-        raise FileExistsError("讨论已经暂停")
+        raise FileExistsError(Text("讨论已经暂停"))
     elif command == "resume" and session["status"] != "paused":
-        raise FileExistsError("讨论当前没有暂停")
+        raise FileExistsError(Text("讨论当前没有暂停"))
 
 
 def check_mode_command(connection, room_id, payload):
@@ -54,7 +55,7 @@ def check_mode_command(connection, room_id, payload):
         return None
     mode, command, argument = parsed
     if payload.get("to"):
-        raise ValueError(f"/{mode} 命令不能同时 @ 成员")
+        raise ValueError(Text("/{mode} 命令不能同时 @ 成员", mode=mode))
     if mode == "goal":
         goal_room.check_goal_command(connection, room_id, command, argument)
     else:
@@ -92,14 +93,14 @@ def finish_mode(connection, room_id, token, payload):
     """The host completes whichever mode is open, with the revision `GET mode` returned."""
     action = payload.get("action")
     if action != "done":
-        raise ValueError("action 须为 done；宣告 Goal 卡住用 goal block")
+        raise ValueError(Text("action 须为 done；宣告 Goal 卡住用 goal block"))
     begin_write(connection)
     mode = mode_view(connection, room_id)
     if mode["mode"] == "goal":
         return goal_room.finish_goal(connection, room_id, token, payload, "complete")
     if mode["mode"] == "discussion":
         if require_member(connection, room_id, token)["role"] != "host":
-            raise PermissionError("只有主持人能宣告讨论完成")
+            raise PermissionError(Text("只有主持人能宣告讨论完成"))
         conclude_session_by_host(connection, room_id, {"conclusion": payload.get("revision")})
         return mode_view(connection, room_id)
-    raise FileExistsError("房间没有进行中的 Goal 或讨论")
+    raise FileExistsError(Text("房间没有进行中的 Goal 或讨论"))

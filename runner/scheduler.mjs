@@ -1,5 +1,6 @@
 /** Optional smart scheduling: typed decisions from TypeSafe Jev or OpenAI Decisions, never generated text. */
 import { api_status_message, read_saved_api_key } from './discussion_api.mjs';
+import { room_text } from './room_text.mjs';
 
 /** Each provider keeps its official root; the key saved for that root is the only credential used. */
 export const SCHEDULER_PROVIDERS = {
@@ -160,8 +161,9 @@ function round_progress(spoken, waiting) {
 }
 
 /** Say which option the provider leaned to when it was not sure enough, so the transcript shows how close it was. */
-function unsure_label(lean) {
-  return lean ? `倾向${lean}，把握不足，交给主持人` : '拿不准，交给主持人';
+function unsure_label(lean, action = 'host') {
+  if (action === 'wake') return lean ? room_text('倾向等用户回复，把握不足，唤醒主持人') : room_text('拿不准，唤醒主持人');
+  return lean ? room_text('倾向{lean}，把握不足，交给主持人', { lean }) : room_text('拿不准，交给主持人');
 }
 
 /** Shorten a message so recent context stays small; the decision never needs whole answers. */
@@ -315,10 +317,10 @@ export async function decide_interjection(home, scheduler, { title, goal, user_r
   const choice = answers.handling?.choice;
   const confidence = certainty(answers.handling);
   const sure = confidence !== null && confidence >= scheduler_thresholds(scheduler.mode || DEFAULT_SCHEDULER_MODE).member;
-  if (sure && choice === NOTE_CHOICE) return { action: 'note', confidence, ...judged, label: '仅补充信息，按原计划继续' };
-  if (sure && experts.includes(choice)) return { action: 'ask', expert: choice, confidence, ...judged, label: `先请 ${choice} 回应这条留言` };
+  if (sure && choice === NOTE_CHOICE) return { action: 'note', confidence, ...judged, label: room_text("仅补充信息，按原计划继续") };
+  if (sure && experts.includes(choice)) return { action: 'ask', expert: choice, confidence, ...judged, label: room_text("先请 {value1} 回应这条留言", { value1: choice }) };
   const lean = choice === NOTE_CHOICE ? '按原计划继续' : experts.includes(choice) ? `请 ${choice} 回应` : choice === HOST_CHOICE ? '由主持人处理' : '';
-  return { action: 'host', confidence, ...judged, label: choice === HOST_CHOICE && sure ? '这条留言需要主持人处理' : unsure_label(lean) };
+  return { action: 'host', confidence, ...judged, label: choice === HOST_CHOICE && sure ? room_text("这条留言需要主持人处理") : unsure_label(lean) };
 }
 
 /** Scene 7 wording version; it is the same in both modes, like the @everyone and review questions. */
@@ -348,27 +350,27 @@ export async function decide_goal_wake(home, scheduler, { title, objective, cont
   const confidence = certainty(answers.wake);
   const wait = choice === GOAL_WAIT && confidence !== null && confidence >= ROUTE_CONFIDENCE;
   return { action: wait ? 'wait' : 'continue', choice, confidence, ...judged_of(state, questions, answers),
-    label: wait ? 'Goal：房间在等用户回复，不唤醒主持人' : choice === GOAL_CONTINUE ? 'Goal：唤醒主持人接着推进' : unsure_label('等用户回复').replace('交给主持人', '唤醒主持人') };
+    label: wait ? room_text("Goal：房间在等用户回复，不唤醒主持人") : choice === GOAL_CONTINUE ? room_text("Goal：唤醒主持人接着推进") : unsure_label('等用户回复', 'wake') };
 }
 
 /** Judge only whether full delivery evidence satisfies the already-authorized review handoff. */
 export async function decide_review_completion(home, scheduler, ready, fetch_impl) {
   const fallback = reason => ({ action: 'host', confidence: null, label: reason });
-  if (!ready.ready) return fallback(ready.reason || '评审推进条件未满足，交给主持人');
+  if (!ready.ready) return fallback(ready.reason || room_text("评审推进条件未满足，交给主持人"));
   if (!ready.original?.text?.trim() || !ready.deliveries?.length
-    || ready.deliveries.some(item => item.status !== 'completed' || !item.answer?.trim())) return fallback('缺少完整交付原文，交给主持人');
+    || ready.deliveries.some(item => item.status !== 'completed' || !item.answer?.trim())) return fallback(room_text("缺少完整交付原文，交给主持人"));
   const questions = [{ type: 'choice', name: 'completion',
     instructions: '主持人已指定下一步只读评审者和范围。根据原委派、每位实现者的完整交付原文与执行报告，判断本批是否已经完成所要求的交付、可以进入既定评审。只判断交付完成度，不判断代码正确性，不选择评审者，不改变计划。', choices: [
       { value: 'review', description: '按既定计划交评审：原委派要求的交付和明确要求的验证均已完成，没有仍待实现、阻塞或需要澄清的任务；代码是否正确由评审者判断' },
       { value: HOST_CHOICE, description: '交给主持人：交付仅部分完成、明确要求的验证尚未完成或失败、有阻塞或待澄清事项，或原文不足以确认已完成；笼统声称完成不能覆盖具体的未完成事项' }] }];
   const state = JSON.stringify({ original: ready.original, deliveries: ready.deliveries,
     authorized_review: { reviewer: ready.plan.reviewer_name, scope: ready.plan.scope } });
-  if (JSON.stringify({ state, questions }).length > MAX_REVIEW_INPUT) return fallback('完整评审判断输入超过 60000 字符，交给主持人');
+  if (JSON.stringify({ state, questions }).length > MAX_REVIEW_INPUT) return fallback(room_text("完整评审判断输入超过 60000 字符，交给主持人"));
   const answers = await decide(home, scheduler, state, questions, fetch_impl);
   const confidence = certainty(answers.completion), choice = answers.completion?.choice ?? null;
   const advance = choice === 'review' && confidence !== null && confidence >= REVIEW_CONFIDENCE;
   return { action: advance ? 'review' : 'host', choice, confidence, ...judged_of(state, questions, answers),
-    label: advance ? '交付已完成，按既定计划交只读评审' : '交付完成度不足或把握不足，交给主持人' };
+    label: advance ? room_text("交付已完成，按既定计划交只读评审") : room_text("交付完成度不足或把握不足，交给主持人") };
 }
 
 /**
@@ -381,9 +383,9 @@ export async function decide_sequence_checkpoint(home, scheduler, sequence, fetc
   const last_step = answers_of_pass.at(-1)?.step;
   // The last step may be a group working at once: all of its answers carry the pass's conclusion.
   const lasts = last_step === undefined ? answers_of_pass.slice(-1) : answers_of_pass.filter(item => item.step === last_step);
-  if (sequence.status !== 'checkpoint' || !['pending', 'delivering'].includes(sequence.handoff_status)) return fallback('检查点已处理或循环已结束，交给主持人');
-  if (!sequence.origin?.text?.trim() || !lasts.length || lasts.some(item => !item.text?.trim())) return fallback('缺少主持人安排或本圈回答原文，交给主持人');
-  if (typeof sequence.remaining_rounds === 'number' && sequence.remaining_rounds < 1) return fallback('任务链剩余轮数不足，交给主持人');
+  if (sequence.status !== 'checkpoint' || !['pending', 'delivering'].includes(sequence.handoff_status)) return fallback(room_text("检查点已处理或循环已结束，交给主持人"));
+  if (!sequence.origin?.text?.trim() || !lasts.length || lasts.some(item => !item.text?.trim())) return fallback(room_text("缺少主持人安排或本圈回答原文，交给主持人"));
+  if (typeof sequence.remaining_rounds === 'number' && sequence.remaining_rounds < 1) return fallback(room_text("任务链剩余轮数不足，交给主持人"));
   const step_name = step => Array.isArray(step) ? `${step.join('、')}（同时）` : step;
   const first = [sequence.order.find(Boolean)].flat().join('、');
   const last = { member: lasts.map(item => item.member).join('、') };
@@ -396,12 +398,12 @@ export async function decide_sequence_checkpoint(home, scheduler, sequence, fetc
         : `交给主持人：${last.member} 认可当前结果，或只剩可以不采纳的建议；需要主持人或用户裁定取舍；成员之间有分歧；回答没有明确结论` }] }];
   const state = JSON.stringify({ arrangement: sequence.origin, order: sequence.order, pass: sequence.pass,
     answers: answers_of_pass.map(({ member, text }) => ({ member, text })) });
-  if (JSON.stringify({ state, questions }).length > MAX_REVIEW_INPUT) return fallback('本圈回答原文超过 60000 字符，交给主持人');
+  if (JSON.stringify({ state, questions }).length > MAX_REVIEW_INPUT) return fallback(room_text("本圈回答原文超过 60000 字符，交给主持人"));
   const answers = await decide(home, scheduler, state, questions, fetch_impl);
   const confidence = certainty(answers.checkpoint), choice = answers.checkpoint?.choice ?? null;
   const advance = choice === 'continue' && confidence !== null && confidence >= SEQUENCE_CONFIDENCE;
   return { action: advance ? 'continue' : 'host', choice, confidence, ...judged_of(state, questions, answers),
-    label: advance ? `${last.member} 要求返工，按安排开始第 ${sequence.pass + 1} 圈` : choice === 'continue' ? unsure_label('再走一圈') : '本圈已有结论，交给主持人验收' };
+    label: advance ? room_text("{value1} 要求返工，按安排开始第 {value2} 圈", { value1: last.member, value2: sequence.pass + 1 }) : choice === 'continue' ? unsure_label('再走一圈') : room_text("本圈已有结论，交给主持人验收") };
 }
 
 /**
@@ -428,8 +430,8 @@ export async function decide_next_speaker(home, scheduler, { title, goal, user_r
   const choice = answers.speaker?.choice;
   const confidence = certainty(answers.speaker);
   const sure = confidence !== null && confidence >= scheduler_thresholds(scheduler.mode || DEFAULT_SCHEDULER_MODE).member;
-  if (sure && candidates.includes(choice)) return { action: 'next', expert: choice, confidence, ...judged, label: `本轮继续，请 ${choice} 接着发言` };
-  return { action: 'host', confidence, ...judged, label: choice === HOST_CHOICE && sure ? '没有明确该谁发言，交给主持人安排' : unsure_label(candidates.includes(choice) ? `请 ${choice} 发言` : choice === HOST_CHOICE ? '交给主持人' : '') };
+  if (sure && candidates.includes(choice)) return { action: 'next', expert: choice, confidence, ...judged, label: room_text("本轮继续，请 {value1} 接着发言", { value1: choice }) };
+  return { action: 'host', confidence, ...judged, label: choice === HOST_CHOICE && sure ? room_text("没有明确该谁发言，交给主持人安排") : unsure_label(candidates.includes(choice) ? `请 ${choice} 发言` : choice === HOST_CHOICE ? '交给主持人' : '') };
 }
 
 /**
@@ -438,7 +440,7 @@ export async function decide_next_speaker(home, scheduler, { title, goal, user_r
  */
 export async function decide_round(home, scheduler, { title, goal, user_request, context, host, experts, last_speaker, ...extra }, fetch_impl) {
   const candidates = experts.filter(name => name !== last_speaker);
-  if (!candidates.length) return { action: 'host', confidence: null, label: '没有可选的下一轮首位，交给主持人' };
+  if (!candidates.length) return { action: 'host', confidence: null, label: room_text("没有可选的下一轮首位，交给主持人") };
   // Telling repetition or drift needs at least the last two rounds side by side.
   const guided = (scheduler.mode || DEFAULT_SCHEDULER_MODE) !== 'stable';
   const recent = context.slice(-ROUTE_CONTEXT_MESSAGES).map(excerpt);
@@ -465,12 +467,12 @@ export async function decide_round(home, scheduler, { title, goal, user_request,
   const limits = scheduler_thresholds(scheduler.mode || DEFAULT_SCHEDULER_MODE);
   if (choice !== 'continue' || confidence === null || confidence < limits.wide) {
     const sure = confidence !== null && confidence >= (choice === 'continue' ? limits.wide : limits.member);
-    return { action: 'host', confidence, ...judged, label: choice === HOST_CHOICE && sure ? '建议收束或调整方向，交给主持人' : unsure_label(choice === 'continue' ? '继续下一轮' : choice === HOST_CHOICE ? '收束或调整方向' : '') };
+    return { action: 'host', confidence, ...judged, label: choice === HOST_CHOICE && sure ? room_text("建议收束或调整方向，交给主持人") : unsure_label(choice === 'continue' ? '继续下一轮' : choice === HOST_CHOICE ? '收束或调整方向' : '') };
   }
   const first = answers.first?.choice;
   const first_confidence = certainty(answers.first);
   if (!candidates.includes(first) || first_confidence === null || first_confidence < limits.member) {
-    return { action: 'host', confidence: first_confidence, ...judged, label: '下一轮首位没有明确依据或把握不足，交给主持人安排' };
+    return { action: 'host', confidence: first_confidence, ...judged, label: room_text("下一轮首位没有明确依据或把握不足，交给主持人安排") };
   }
-  return { action: 'continue', first, confidence, ...judged, label: `继续下一轮，先请 ${first} 发言` };
+  return { action: 'continue', first, confidence, ...judged, label: room_text("继续下一轮，先请 {value1} 发言", { value1: first }) };
 }

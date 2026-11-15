@@ -6,6 +6,7 @@
  */
 import { computed, inject, ref } from "vue";
 import { call, entry_address } from "./api.js";
+import { t } from '../i18n.js';
 
 const emit = defineEmits(["cancel", "done"]);
 const { state, reload, notify } = inject("panel");
@@ -14,15 +15,15 @@ const steps = ref([]), running = ref(false), password = ref("");
 const valid = computed(() => /^[a-z0-9][a-z0-9_-]{1,16}$/.test(name.value.trim()));
 
 function plan() {
-  const list = [{ key: "account", label: "创建账号与文件夹" }];
+  const list = [{ key: "account", label: t('创建账号与文件夹') }];
   if (isolate.value) {
-    list.push({ key: "os-user", label: "创建独立的 Windows 用户", note: "电脑会弹出一次管理员确认，请点“是”" });
+    list.push({ key: "os-user", label: t('创建独立的 Windows 用户'), note: t('电脑会弹出一次管理员确认，请点“是”') });
     // The shared programs are copied once; later accounts reuse them.
-    if (!state.value.clis?.app || !state.value.clis?.python) list.push({ key: "runtime", label: "安装隔离账号的程序副本（命令行程序、共议、Python）" });
+    if (!state.value.clis?.app || !state.value.clis?.python) list.push({ key: "runtime", label: t('安装隔离账号的程序副本（命令行程序、共议、Python）') });
   }
-  list.push({ key: "env/init", label: isolate.value ? "初始化 AI 环境（共议内置技能、系统提示词、随包工作流）" : "安装随包工作流" });
-  if (state.value.platform === "win32") list.push({ key: "protect", label: "开启入口保护（只接受经入口和它自己的 AI 的访问）" });
-  if (start.value) list.push({ key: "start", label: "启动实例" });
+  list.push({ key: "env/init", label: isolate.value ? t('初始化 AI 环境（共议内置技能、系统提示词、随包工作流）') : t('安装随包工作流') });
+  if (state.value.platform === "win32") list.push({ key: "protect", label: t('开启入口保护（只接受经入口和它自己的 AI 的访问）') });
+  if (start.value) list.push({ key: "start", label: t('启动实例') });
   return list.map((item) => ({ ...item, status: "pending", error: "" }));
 }
 
@@ -45,29 +46,28 @@ async function go() {
   }
   running.value = false;
   await reload();
-  notify("info", `账号 ${account} 已建好`);
+  notify("info", t('账号 {value1} 已建好', { value1: account }));
 }
 
 const finished = computed(() => steps.value.length && steps.value.every((step) => step.status === "done"));
-async function copy(text) { try { await navigator.clipboard.writeText(text); notify("info", "已复制"); } catch { notify("error", "复制失败，请手动选中复制"); } }
+async function copy(text) { try { await navigator.clipboard.writeText(text); notify("info", t('已复制')); } catch { notify("error", t('复制失败，请手动选中复制')); } }
 const ICONS = { pending: "i-lucide-circle", running: "i-lucide-loader", done: "i-lucide-circle-check", failed: "i-lucide-circle-x" };
 </script>
 
 <template>
   <section>
     <div class="panel-form-head">
-      <h2>新建托管账号</h2>
+      <h2>{{ t('新建托管账号') }}</h2>
     </div>
 
     <form v-if="!steps.length" class="panel-form" @submit.prevent="valid && go()">
-      <label class="panel-field">账号名
-        <input v-model="name" class="panel-input" placeholder="例如 zhang" autocomplete="off" spellcheck="false" maxlength="17" autofocus />
-        <small>2–17 位小写字母、数字、下划线或短横线，对方用它登录。会建立文件夹 ~\.codiscuss-账号名，里面是它的项目、草稿和数据。</small>
+      <label class="panel-field">{{ t('账号名') }} <input v-model="name" class="panel-input" :placeholder="t('例如 zhang')" autocomplete="off" spellcheck="false" maxlength="17" autofocus />
+        <small>{{ t('2–17 位小写字母、数字、下划线或短横线，对方用它登录。会建立文件夹 ~\\.codiscuss-账号名，里面是它的项目、草稿和数据。') }}</small>
       </label>
       <label v-if="state.platform === 'win32'" class="new-check"><input v-model="isolate" type="checkbox" />
-        <span><strong>隔离（推荐）</strong><small>给它建一个独立的 Windows 用户：它的 AI 读不到你的个人文件，命令行登录和技能也和你分开。</small></span></label>
+        <span><strong>{{ t('隔离（推荐）') }}</strong><small>{{ t('给它建一个独立的 Windows 用户：它的 AI 读不到你的个人文件，命令行登录和技能也和你分开。') }}</small></span></label>
       <label class="new-check"><input v-model="start" type="checkbox" />
-        <span><strong>建好后启动它的网站</strong><small>之后也可以在账号页启动或停止。</small></span></label>
+        <span><strong>{{ t('建好后启动它的网站') }}</strong><small>{{ t('之后也可以在账号页启动或停止。') }}</small></span></label>
     </form>
 
     <div v-else class="panel-form">
@@ -81,21 +81,21 @@ const ICONS = { pending: "i-lucide-circle", running: "i-lucide-loader", done: "i
       </ol>
       <!-- The password exists from the first step on and is shown at once, so a later failed step cannot lose it. -->
       <template v-if="password">
-        <p v-if="finished" class="panel-note"><UIcon name="i-lucide-circle-check" style="color: #16a34a" />账号已创建。请将入口地址、账号名与下方密码交给使用者（密码仅显示一次）；随后在账号页{{ isolate ? "登录命令行、" : "" }}配置 API 密钥。</p>
-        <p v-else class="panel-note"><UIcon name="i-lucide-key-round" />账号的登录密码如下，仅显示一次，请先复制保存。</p>
+        <p v-if="finished" class="panel-note"><UIcon name="i-lucide-circle-check" style="color: #16a34a" />{{ t('账号已创建。请将入口地址、账号名与下方密码交给使用者（密码仅显示一次）；随后在账号页{value1}配置 API 密钥。', { value1: isolate ? t('登录命令行、') : "" }) }}</p>
+        <p v-else class="panel-note"><UIcon name="i-lucide-key-round" />{{ t('账号的登录密码如下，仅显示一次，请先复制保存。') }}</p>
         <div class="panel-secret"><span>{{ entry_address(state.entry) }} · {{ name.trim() }} · {{ password }}</span>
-          <button type="button" class="panel-icon-button" aria-label="复制地址、账号和密码" @click="copy(`地址 ${entry_address(state.entry)}，账号 ${name.trim()}，密码 ${password}`)"><UIcon name="i-lucide-copy" /></button></div>
-        <p v-if="!state.entry?.address" class="panel-note is-amber"><UIcon name="i-lucide-triangle-alert" />登录入口的访问方式是“仅这台电脑”，这个地址在其他设备上打不开。请在“概览 → 登录入口 → 访问方式”里配置线上中转或自有域名。</p>
+          <button type="button" class="panel-icon-button" :aria-label="t('复制地址、账号和密码')" @click="copy(t('地址 {value1}，账号 {value2}，密码 {value3}', { value1: entry_address(state.entry), value2: name.trim(), value3: password }))"><UIcon name="i-lucide-copy" /></button></div>
+        <p v-if="!state.entry?.address" class="panel-note is-amber"><UIcon name="i-lucide-triangle-alert" />{{ t('登录入口的访问方式是“仅这台电脑”，这个地址在其他设备上打不开。请在“概览 → 登录入口 → 访问方式”里配置线上中转或自有域名。') }}</p>
       </template>
     </div>
 
     <div class="panel-form-foot">
       <template v-if="!steps.length">
-        <button type="button" class="panel-button is-plain" @click="emit('cancel')">取消</button>
-        <button type="button" class="panel-button is-primary" :disabled="!valid" @click="go"><UIcon name="i-lucide-plus" />创建</button>
+        <button type="button" class="panel-button is-plain" @click="emit('cancel')">{{ t('取消') }}</button>
+        <button type="button" class="panel-button is-primary" :disabled="!valid" @click="go"><UIcon name="i-lucide-plus" />{{ t('创建') }}</button>
       </template>
-      <button v-else-if="finished" type="button" class="panel-button is-primary" @click="emit('done', name.trim())">{{ isolate ? "下一步：登录命令行" : "前往账号页" }}<UIcon name="i-lucide-arrow-right" /></button>
-      <button v-else-if="!running" type="button" class="panel-button is-primary" @click="go"><UIcon name="i-lucide-rotate-cw" />从失败的一步重试</button>
+      <button v-else-if="finished" type="button" class="panel-button is-primary" @click="emit('done', name.trim())">{{ isolate ? t('下一步：登录命令行') : t('前往账号页') }}<UIcon name="i-lucide-arrow-right" /></button>
+      <button v-else-if="!running" type="button" class="panel-button is-primary" @click="go"><UIcon name="i-lucide-rotate-cw" />{{ t('从失败的一步重试') }}</button>
     </div>
   </section>
 </template>

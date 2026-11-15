@@ -12,6 +12,7 @@ import { copyFileSync, existsSync, mkdirSync, readFileSync, rmSync, writeFileSyn
 import { homedir, tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { t } from './i18n.mjs';
 
 const RUNNER = dirname(fileURLToPath(import.meta.url));
 const ROOT = dirname(RUNNER);
@@ -46,7 +47,7 @@ using System.Runtime.InteropServices;
 using System.Text;
 using System.Windows.Forms;
 
-[assembly: AssemblyTitle("共议")]
+[assembly: AssemblyTitle(${text(t("共议"))})]
 [assembly: AssemblyProduct("AI CoDiscuss")]
 
 static class Launcher {
@@ -59,7 +60,7 @@ static class Launcher {
   static void Main(string[] args) {
     if (args.Length >= 5 && args[0] == "--tray") { Tray.Run(int.Parse(args[1]), args[2], args[3], args[4]); return; }
     if (!File.Exists(Node) || !File.Exists(LocalScript)) {
-      MessageBox.Show("找不到 Node.js 或共议程序。请在命令行运行 codiscuss launcher 重新生成启动器。", "共议", MessageBoxButtons.OK, MessageBoxIcon.Warning);
+      MessageBox.Show(${text(t("找不到 Node.js 或共议程序。请在命令行运行 codiscuss launcher 重新生成启动器。"))}, ${text(t("共议"))}, MessageBoxButtons.OK, MessageBoxIcon.Warning);
       return;
     }
     // "--start" (the login autostart shortcut) starts quietly; a double click also opens the site.
@@ -97,7 +98,7 @@ static class Tray {
   [DllImport("user32.dll")] static extern bool SetProcessDpiAwarenessContext(IntPtr context);
 
   // Menu entries in order; an empty label is a separator. Without a panel ("-" for its window title) the first is left out.
-  static readonly string[] Labels = { "打开管理面板", "打开共议", "", "重启服务", "关闭服务" };
+  static readonly string[] Labels = { ${text(t("打开管理面板"))}, ${text(t("打开共议"))}, "", ${text(t("重启服务"))}, ${text(t("关闭服务"))} };
   static ContextMenuStrip menu;
   static bool has_panel;
 
@@ -150,11 +151,11 @@ static class Tray {
   }
 
   static void Choose(string label) {
-    if (label == "打开管理面板") OpenPanel();
-    if (label == "打开共议") Say("site");
-    if (label == "重启服务") Say("restart");
+    if (label == ${text(t("打开管理面板"))}) OpenPanel();
+    if (label == ${text(t("打开共议"))}) Say("site");
+    if (label == ${text(t("重启服务"))}) Say("restart");
     // Closing everything asks first: a stray click must not take the owner's site and rooms down.
-    if (label == "关闭服务" && Confirm.Ask("关闭共议服务？", "本机网站、讨论服务与管理面板都会停止。" + Environment.NewLine + "托管用户的实例不受影响。", "关闭服务", "取消")) Say("stop");
+    if (label == ${text(t("关闭服务"))} && Confirm.Ask(${text(t("关闭共议服务？"))}, ${text(t("本机网站、讨论服务与管理面板都会停止。"))} + Environment.NewLine + ${text(t("托管用户的实例不受影响。"))}, ${text(t("关闭服务"))}, ${text(t("取消"))})) Say("stop");
   }
 
   public static void Run(int owner, string icon_path, string title, string window_title) {
@@ -163,7 +164,7 @@ static class Tray {
     // Sharp text on scaled screens: per-monitor awareness where Windows has it, system awareness otherwise.
     try { if (!SetProcessDpiAwarenessContext((IntPtr)(-4))) SetProcessDPIAware(); } catch { SetProcessDPIAware(); }
     List<string> labels = new List<string>(Labels);
-    if (!has_panel) labels.Remove("打开管理面板");
+    if (!has_panel) labels.Remove(${text(t("打开管理面板"))});
     menu = TrayMenu.Build(labels.ToArray(), Choose);
     NotifyIcon icon = new NotifyIcon();
     try {
@@ -323,7 +324,7 @@ static class Confirm {
     using (Form form = new Sheet()) {
       float scale; using (Graphics probe = Graphics.FromHwnd(IntPtr.Zero)) scale = probe.DpiX / 96f;
       Func<int, int> px = value => (int)Math.Round(value * scale);
-      form.Text = "共议";
+      form.Text = ${text(t("共议"))};
       form.FormBorderStyle = FormBorderStyle.None;
       form.ShowInTaskbar = false; form.TopMost = true;
       form.StartPosition = FormStartPosition.CenterScreen;
@@ -469,10 +470,10 @@ function installed_script(name) {
 function write_shortcut(folder, exe, icon, args = '') {
   const script = "$d=[Environment]::GetFolderPath($env:SC_FOLDER); $p=Join-Path $d $env:SC_NAME;"
     + " $s=(New-Object -ComObject WScript.Shell).CreateShortcut($p); $s.TargetPath=$env:SC_TARGET; $s.Arguments=$env:SC_ARGS; $s.WorkingDirectory=$env:SC_CWD;"
-    + " if ($env:SC_ICON) { $s.IconLocation=$env:SC_ICON }; $s.Description='启动共议'; $s.Save(); Write-Output $p";
+    + t(' if ($env:SC_ICON) { $s.IconLocation=$env:SC_ICON }; $s.Description=\'启动共议\'; $s.Save(); Write-Output $p');
   const result = spawnSync('powershell.exe', ['-NoProfile', '-NonInteractive', '-Command', `[Console]::OutputEncoding=[Text.Encoding]::UTF8; ${script}`],
     { encoding: 'utf8', windowsHide: true, env: { ...process.env, SC_FOLDER: folder, SC_NAME: SHORTCUT_NAME, SC_TARGET: exe, SC_ARGS: args, SC_CWD: dirname(exe), SC_ICON: icon || '' } });
-  if (result.status !== 0) throw new Error(`创建快捷方式失败：${result.stderr}`);
+  if (result.status !== 0) throw new Error(t('创建快捷方式失败：{value1}', { value1: result.stderr }));
   return result.stdout.trim();
 }
 
@@ -496,7 +497,7 @@ export function autostart_enabled() {
 export function set_autostart(on, home = join(homedir(), '.codiscuss')) {
   if (!on) { const path = startup_shortcut(); if (path) rmSync(path, { force: true }); return false; }
   const exe = launcher_path(home);
-  if (!existsSync(exe)) throw new Error('还没有“共议”程序：先在 codiscuss setup 里勾选创建桌面快捷方式，或运行 codiscuss launcher');
+  if (!existsSync(exe)) throw new Error(t('还没有“共议”程序：先在 codiscuss setup 里勾选创建桌面快捷方式，或运行 codiscuss launcher'));
   const icon = join(home, 'launcher', 'codiscuss.ico');
   write_shortcut('Startup', exe, existsSync(icon) ? icon : '', '--start');
   return true;
@@ -522,8 +523,8 @@ export function launcher_installed(home = join(homedir(), '.codiscuss')) {
  *   { exe, icon, shortcuts }.
  */
 export function install_launcher(home = join(homedir(), '.codiscuss')) {
-  if (process.platform !== 'win32') throw new Error('启动器仅支持 Windows');
-  if (!existsSync(CSC)) throw new Error(`找不到 .NET Framework 自带的 C# 编译器：${CSC}`);
+  if (process.platform !== 'win32') throw new Error(t('启动器仅支持 Windows'));
+  if (!existsSync(CSC)) throw new Error(t('找不到 .NET Framework 自带的 C# 编译器：{value1}', { value1: CSC }));
   const folder = join(home, 'launcher');
   mkdirSync(folder, { recursive: true });
   const icon = existsSync(PACKAGED_ICON) ? join(folder, 'codiscuss.ico') : null;
@@ -533,12 +534,17 @@ export function install_launcher(home = join(homedir(), '.codiscuss')) {
     panel_script: installed_script('admin_panel.mjs'), home })}`, 'utf8');
   const result = spawnSync(CSC, ['/nologo', '/target:winexe', '/codepage:65001', '/optimize+', '/r:System.Windows.Forms.dll', '/r:System.Drawing.dll',
     `/out:${exe}`, ...(icon ? [`/win32icon:${icon}`] : []), source], { encoding: 'utf8', windowsHide: true });
-  if (result.status !== 0) throw new Error(`编译启动器失败：${(result.stdout || result.stderr).trim()}`);
+  if (result.status !== 0) throw new Error(t('编译启动器失败：{value1}', { value1: (result.stdout || result.stderr).trim() }));
   const shortcuts = ['Desktop', 'Programs'].map(place => write_shortcut(place, exe, icon));
   return { exe, icon, shortcuts };
 }
 
 export function launcher_main() {
   const { exe, icon, shortcuts } = install_launcher();
-  process.stdout.write(`已生成启动器：${exe}\n${icon ? '' : '（安装包里缺少图标，启动器使用默认图标）\n'}快捷方式：\n${shortcuts.map(path => `  ${path}`).join('\n')}\n双击即可启动共议。\n`);
+  process.stdout.write(t(`已生成启动器：{value1}
+{value2}快捷方式：
+{value3}
+双击即可启动共议。
+`, { value1: exe, value2: icon ? '' : t(`（安装包里缺少图标，启动器使用默认图标）
+`), value3: shortcuts.map(path => `  ${path}`).join('\n') }));
 }

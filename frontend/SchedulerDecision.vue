@@ -1,4 +1,5 @@
 <script setup>
+import { t } from './i18n.js';
 /**
  * One smart-scheduling decision with its odds, the model's input and the correction form.
  * It owns the input panel and the form, so opening them or typing never re-renders the message list.
@@ -12,13 +13,13 @@ const props = defineProps({
   free: Boolean,
 });
 const { view, bridge, act } = inject("discussion");
-const DECISION_OPTIONS = { __host__: "交给主持人", __note__: "仅补充信息", continue: "继续下一轮", __all__: "全体各自回应", __all_seq__: "全体依次回应", __none__: "无需回应" };
+const DECISION_OPTIONS = { __host__: t('交给主持人'), __note__: t('仅补充信息'), continue: t('继续下一轮'), __all__: t('全体各自回应'), __all_seq__: t('全体依次回应'), __none__: t('无需回应') };
 // "Only these few" choices carry the names after a prefix, as the scheduler writes them.
 const SOME_PREFIX = "__some__:";
 // The select needs a non-empty value for "not specified"; it is saved as an empty answer.
 const UNSET_CORRECTION = "__unset__";
 const option_name = (name) => DECISION_OPTIONS[name]
-  || (String(name).startsWith(SOME_PREFIX) ? `${String(name).slice(SOME_PREFIX.length).split("、").map(bridge.display_name).join("、")} 各自回应` : bridge.display_name(name));
+  || (String(name).startsWith(SOME_PREFIX) ? t('{value1} 各自回应', { value1: String(name).slice(SOME_PREFIX.length).split("、").map(bridge.display_name).join("、") }) : bridge.display_name(name));
 
 /** Every option of one question with its probability, most likely first, so a close call is visible at a glance. */
 function decision_odds(item) {
@@ -41,7 +42,7 @@ async function toggle_input() {
   try { input.value = { open: true, loading: false, loaded: true, data: summarize_input(await bridge.load_decision_input(props.decision.id)) }; }
   catch (failure) {
     input.value = { open: false, loading: false, loaded: false, data: null };
-    bridge.notify("error", `读取完整输入失败：${failure.message}`);
+    bridge.notify("error", t('读取完整输入失败：{value1}', { value1: failure.message }));
   }
 }
 /** Message numbers as a short list: consecutive numbers collapse into a range. */
@@ -62,6 +63,7 @@ function summarize_input(saved) {
   if (!state?.state) return null;
   const blocks = String(state.state).split("\n\n");
   const lines = blocks[0].split("\n");
+  // These prefixes belong to saved model input, which stays Chinese in every interface language.
   const start = lines.findIndex((line) => line.startsWith("房间："));
   const message_block = blocks.find((block) => /^(近期消息|本轮及最近发言)/.test(block)) || "";
   const pending_block = blocks.find((block) => block.startsWith("待处理的用户消息")) || "";
@@ -70,7 +72,7 @@ function summarize_input(saved) {
   return {
     background: (start > 0 ? lines.slice(0, start) : []).join("\n"),
     facts: (start >= 0 ? lines.slice(start) : lines).join("\n"),
-    messages: recent.length ? `${recent.length} 条：${message_span(recent)}` : "无",
+    messages: recent.length ? t('{value1} 条：{value2}', { value1: recent.length, value2: message_span(recent) }) : t('无'),
     pending: message_span(ids(pending_block)),
     questions: (state.questions || []).map((question) => ({ instructions: question.instructions,
       choices: (question.choices || []).map((choice) => ({ name: option_name(choice.value), description: choice.description })) })),
@@ -98,48 +100,48 @@ function save_correction() {
   act("rate_decision", { decision_id: props.decision.id, rating: "bad", should_be, note });
 }
 /** Who could have answered: every member present, plus the host; a free room's routing can also pick everyone or no one. */
-const correction_options = computed(() => [{ label: "未指定", value: UNSET_CORRECTION }, ...(view.value.room.members || []).filter((member) => member.status === "active")
+const correction_options = computed(() => [{ label: t('未指定'), value: UNSET_CORRECTION }, ...(view.value.room.members || []).filter((member) => member.status === "active")
   .map((member) => ({ label: bridge.display_name(member.name), value: member.name })),
   ...(props.free ? ["__all__", "__all_seq__", "__none__"].map((value) => ({ label: DECISION_OPTIONS[value], value })) : [])]);
 </script>
 
 <template>
-  <ScheduleCard icon="i-lucide-zap" :skipped="free ? true : !decision.applied" :title="decision.title" label="智能调度决策" toggle-label="展开或收起判断详情" :expandable="Boolean(decision.detail?.length)">
-    <template #text>智能调度：{{ decision.label }}<small v-if="decision.confidence !== null">置信度 {{ Number(decision.confidence).toFixed(2) }}</small><small v-if="decision.duration">耗时 {{ decision.duration }}</small></template>
+  <ScheduleCard icon="i-lucide-zap" :skipped="free ? true : !decision.applied" :title="decision.title" :label="t('智能调度决策')" :toggle-label="t('展开或收起判断详情')" :expandable="Boolean(decision.detail?.length)">
+    <template #text>{{ t('智能调度：{value1}', { value1: decision.label }) }}<small v-if="decision.confidence !== null">{{ t('置信度 {value1}', { value1: Number(decision.confidence).toFixed(2) }) }}</small><small v-if="decision.duration">{{ t('耗时 {value1}', { value1: decision.duration }) }}</small></template>
     <template #actions>
-      <button v-if="view.access?.can_manage" type="button" class="channel-schedule-rate" :class="{ 'is-on': feedback === 'good' }" :aria-pressed="feedback === 'good'" aria-label="这次调度判断得好" title="判断得好" @click="rate('good')"><UIcon name="i-lucide-thumbs-up" /></button>
-      <button v-if="view.access?.can_manage" type="button" class="channel-schedule-rate" :class="{ 'is-on': feedback === 'bad' }" :aria-pressed="feedback === 'bad'" aria-label="这次调度判断得不好" title="判断得不好" @click="rate('bad')"><UIcon name="i-lucide-thumbs-down" /></button>
+      <button v-if="view.access?.can_manage" type="button" class="channel-schedule-rate" :class="{ 'is-on': feedback === 'good' }" :aria-pressed="feedback === 'good'" :aria-label="t('这次调度判断得好')" :title="t('判断得好')" @click="rate('good')"><UIcon name="i-lucide-thumbs-up" /></button>
+      <button v-if="view.access?.can_manage" type="button" class="channel-schedule-rate" :class="{ 'is-on': feedback === 'bad' }" :aria-pressed="feedback === 'bad'" :aria-label="t('这次调度判断得不好')" :title="t('判断得不好')" @click="rate('bad')"><UIcon name="i-lucide-thumbs-down" /></button>
     </template>
     <div class="channel-schedule-meta">
       <div class="channel-schedule-odds-list">
         <p v-for="(item, index) in decision.detail" :key="index" class="channel-schedule-odds">
-          <b v-if="decision.detail.length > 1">第 {{ index + 1 }} 题</b>
+          <b v-if="decision.detail.length > 1">{{ t('第 {value1} 题', { value1: index + 1 }) }}</b>
           <span v-for="option in decision_odds(item)" :key="option.value" :class="{ 'is-chosen': option.value === item.choice }">{{ option.name }}<small v-if="option.probability !== undefined">{{ Number(option.probability).toFixed(2) }}</small></span>
         </p>
       </div>
       <span class="channel-schedule-model">{{ [decision.provider_label, model].filter(Boolean).join(" · ") }}</span>
-      <UButton :label="input.open ? '收起输入' : '模型输入'" :trailing-icon="input.open ? 'i-lucide-chevron-up' : 'i-lucide-chevron-down'"
+      <UButton :label="input.open ? t('收起输入') : t('模型输入')" :trailing-icon="input.open ? 'i-lucide-chevron-up' : 'i-lucide-chevron-down'"
         :loading="input.loading" variant="link" color="neutral" size="xs" class="channel-schedule-input-toggle"
-        :aria-expanded="input.open" :aria-label="input.open ? '收起模型看到的完整输入' : '查看模型看到的完整输入'" @click="toggle_input" />
+        :aria-expanded="input.open" :aria-label="input.open ? t('收起模型看到的完整输入') : t('查看模型看到的完整输入')" @click="toggle_input" />
     </div>
-    <p v-if="input.open && input.data === null" class="channel-schedule-input is-empty">这条判断没有保存输入。</p>
+    <p v-if="input.open && input.data === null" class="channel-schedule-input is-empty">{{ t('这条判断没有保存输入。') }}</p>
     <div v-else-if="input.open" class="channel-schedule-input">
-      <p v-if="input.data.background"><b>固定背景</b><span :title="input.data.background">{{ input.data.background }}</span></p>
-      <p><b>房间与成员</b><span :title="input.data.facts">{{ input.data.facts }}</span></p>
-      <p><b>对话上下文</b><span>近期消息 {{ input.data.messages }}<template v-if="input.data.pending">；待处理 {{ input.data.pending }}</template></span></p>
+      <p v-if="input.data.background"><b>{{ t('固定背景') }}</b><span :title="input.data.background">{{ input.data.background }}</span></p>
+      <p><b>{{ t('房间与成员') }}</b><span :title="input.data.facts">{{ input.data.facts }}</span></p>
+      <p><b>{{ t('对话上下文') }}</b><span>{{ t('近期消息 {value1}', { value1: input.data.messages }) }}<template v-if="input.data.pending">{{ t('；待处理 {value1}', { value1: input.data.pending }) }}</template></span></p>
       <template v-for="(question, index) in input.data.questions" :key="index">
-        <p><b>问题{{ input.data.questions.length > 1 ? ` ${index + 1}` : "" }}</b><span :title="question.instructions">{{ question.instructions }}</span></p>
+        <p><b>{{ t('问题{value1}', { value1: input.data.questions.length > 1 ? ` ${index + 1}` : "" }) }}</b><span :title="question.instructions">{{ question.instructions }}</span></p>
         <p v-for="choice in question.choices" :key="choice.name" class="is-choice"><b>{{ choice.name }}</b><span :title="choice.description">{{ choice.description }}</span></p>
       </template>
     </div>
   </ScheduleCard>
   <form v-if="correcting && feedback === 'bad'" class="channel-schedule-correction" @submit.prevent="save_correction">
-    <label>应该由谁回答<USelect :model-value="correcting.should_be || UNSET_CORRECTION" :items="correction_options" aria-label="应该由谁回答" size="xs" class="channel-schedule-correction-select"
+    <label>{{ t('应该由谁回答') }}<USelect :model-value="correcting.should_be || UNSET_CORRECTION" :items="correction_options" :aria-label="t('应该由谁回答')" size="xs" class="channel-schedule-correction-select"
       @update:model-value="correcting.should_be = $event === UNSET_CORRECTION ? '' : $event" /></label>
-    <UInput v-model="correcting.note" maxlength="200" placeholder="想说的话（可选）" aria-label="对这次调度判断想说的话" size="xs" class="channel-schedule-correction-note" />
+    <UInput v-model="correcting.note" maxlength="200" :placeholder="t('想说的话（可选）')" :aria-label="t('对这次调度判断想说的话')" size="xs" class="channel-schedule-correction-note" />
     <span class="channel-schedule-correction-actions">
-      <UButton type="submit" label="保存" size="xs" variant="soft" color="primary" />
-      <UButton label="关闭" size="xs" variant="ghost" color="neutral" @click="correcting = null" />
+      <UButton type="submit" :label="t('保存')" size="xs" variant="soft" color="primary" />
+      <UButton :label="t('关闭')" size="xs" variant="ghost" color="neutral" @click="correcting = null" />
     </span>
   </form>
 </template>

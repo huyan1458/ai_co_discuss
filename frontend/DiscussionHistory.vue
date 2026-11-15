@@ -1,14 +1,15 @@
 <script setup>
+import { t, locale } from './i18n.js';
 /** The room's timeline: each discussion with the conclusion it ended with, and the free collaboration between them. */
 import { computed, inject, ref } from "vue";
 
 defineEmits(["detail"]);
 const { view, bridge } = inject("discussion");
-const STATUS = { active: { label: "进行中", color: "primary" }, paused: { label: "已暂停", color: "neutral" }, concluded: { label: "已结束", color: "neutral" } };
+const STATUS = { active: { label: t('进行中'), color: "primary" }, paused: { label: t('已暂停'), color: "neutral" }, concluded: { label: t('已结束'), color: "neutral" } };
 const room = computed(() => view.value.room);
 const opened = ref(new Set());
 const render = (text) => bridge.render_room_markdown(text);
-const when = (value) => value ? new Date(value).toLocaleString("zh-CN", { month: "numeric", day: "numeric", hour: "2-digit", minute: "2-digit", hour12: false }) : "";
+const when = (value) => value ? new Date(value).toLocaleString(locale, { month: "numeric", day: "numeric", hour: "2-digit", minute: "2-digit", hour12: false }) : "";
 
 /** Discussions with the free stretches around them, newest first; counts come from the room's own messages. */
 const segments = computed(() => {
@@ -31,7 +32,7 @@ function conclusion(discussion) {
   if (discussion.status !== "concluded") return null;
   if (discussion.state === null) return { missing: true };
   if (discussion.state === room.value.state_text && discussion.brief === (room.value.host_brief?.text || "") && (discussion.state || discussion.brief)) return { current: true };
-  return { label: "结论", brief: discussion.brief, state: discussion.state, until: discussion.state_until };
+  return { label: t('结论'), brief: discussion.brief, state: discussion.state, until: discussion.state_until };
 }
 
 function toggle(id) {
@@ -42,27 +43,27 @@ function toggle(id) {
 </script>
 
 <template>
-  <section class="merged-section discussion-history" aria-label="讨论记录">
-    <div class="page-heading"><div><h2>讨论记录</h2><p>每场讨论及其结束时的结论，最新的在上；讨论之外的消息按段汇总。</p></div></div>
-    <p v-if="!room.discussions?.length" class="fine-print">还没有开启过讨论。</p>
+  <section class="merged-section discussion-history" :aria-label="t('讨论记录')">
+    <div class="page-heading"><div><h2>{{ t('讨论记录') }}</h2><p>{{ t('每场讨论及其结束时的结论，最新的在上；讨论之外的消息按段汇总。') }}</p></div></div>
+    <p v-if="!room.discussions?.length" class="fine-print">{{ t('还没有开启过讨论。') }}</p>
     <ol class="history-timeline">
       <li v-for="item in segments" :key="item.key" :class="`is-${item.kind}`">
         <span class="history-dot" aria-hidden="true"></span>
-        <p v-if="item.kind === 'free'" class="history-free">讨论之外 · {{ item.count }} 条消息</p>
+        <p v-if="item.kind === 'free'" class="history-free">{{ t('讨论之外 · {value1} 条消息', { value1: item.count }) }}</p>
         <article v-else class="history-discussion">
           <header>
-            <h3><small>讨论 {{ item.number }}</small>{{ item.goal || '未填写目标' }}</h3>
+            <h3><small>{{ t('讨论 {value1}', { value1: item.number }) }}</small>{{ item.goal || t('未填写目标') }}</h3>
             <UBadge :color="STATUS[item.status]?.color || 'neutral'" variant="subtle" size="sm">{{ STATUS[item.status]?.label || item.status }}</UBadge>
           </header>
-          <p class="history-meta">{{ when(item.created_at) }} 开始 · {{ item.count }} 条消息<template v-if="item.status === 'concluded' && item.state !== null"> · {{ bridge.stop_reason_label(item) }}</template><template v-if="item.concluded_at"> · {{ when(item.concluded_at) }} 结束</template></p>
-          <p v-if="item.result?.current" class="fine-print">结论即上方的当前共识。</p>
-          <p v-else-if="item.result?.missing" class="fine-print">这场讨论结束于结论快照功能之前，没有保存当时的结论。</p>
+          <p class="history-meta">{{ t('{value1} 开始 · {value2} 条消息', { value1: when(item.created_at), value2: item.count }) }}<template v-if="item.status === 'concluded' && item.state !== null"> · {{ bridge.stop_reason_label(item) }}</template><template v-if="item.concluded_at"> {{ t('· {value1} 结束', { value1: when(item.concluded_at) }) }}</template></p>
+          <p v-if="item.result?.current" class="fine-print">{{ t('结论即上方的当前共识。') }}</p>
+          <p v-else-if="item.result?.missing" class="fine-print">{{ t('这场讨论结束于结论快照功能之前，没有保存当时的结论。') }}</p>
           <div v-else-if="item.result" class="history-conclusion">
-            <small>{{ item.result.label }}<button v-if="item.result.until" type="button" class="subtle-link" @click="$emit('detail', item.result.until)">整理至 #{{ item.result.until }}</button></small>
+            <small>{{ item.result.label }}<button v-if="item.result.until" type="button" class="subtle-link" @click="$emit('detail', item.result.until)">{{ t('整理至 #{value1}', { value1: item.result.until }) }}</button></small>
             <div v-if="item.result.brief" class="markdown-body" v-html="render(item.result.brief)"></div>
-            <p v-else-if="!item.result.state" class="fine-print">主持人没有留下简报或共识。</p>
+            <p v-else-if="!item.result.state" class="fine-print">{{ t('主持人没有留下简报或共识。') }}</p>
             <template v-if="item.result.state">
-              <button type="button" class="history-toggle" :aria-expanded="opened.has(item.id)" @click="toggle(item.id)">详细共识与进度<UIcon :name="opened.has(item.id) ? 'i-lucide-chevron-up' : 'i-lucide-chevron-down'" /></button>
+              <button type="button" class="history-toggle" :aria-expanded="opened.has(item.id)" @click="toggle(item.id)">{{ t('详细共识与进度') }}<UIcon :name="opened.has(item.id) ? 'i-lucide-chevron-up' : 'i-lucide-chevron-down'" /></button>
               <div v-if="opened.has(item.id)" class="markdown-body history-state" v-html="render(item.result.state)"></div>
             </template>
           </div>

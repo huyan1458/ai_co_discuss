@@ -24,13 +24,13 @@ watch(() => props.modelValue, (value) => { if (value !== UNLIMITED) finite.value
       <span v-if="title" class="limit-field-title">{{ title }}</span>
       <span class="limit-field-controls">
         <template v-if="modelValue !== UNLIMITED">
-          <NumberStepper :model-value="modelValue" :max="MAX_CHAIN_ROUNDS" label="主持人连续派活轮数" :disabled="disabled" @update:model-value="emit('update:modelValue', $event)" />
-          <span>轮</span>
+          <NumberStepper :model-value="modelValue" :max="MAX_CHAIN_ROUNDS" :label="t('主持人连续派活轮数')" :disabled="disabled" @update:model-value="emit('update:modelValue', $event)" />
+          <span>{{ t("轮") }}</span>
         </template>
-        <UCheckbox :model-value="modelValue === UNLIMITED" :disabled="disabled" label="不限" aria-label="主持人连续派活轮数不限" :ui="{ root: 'items-center' }" @update:model-value="emit('update:modelValue', $event ? UNLIMITED : finite)" />
+        <UCheckbox :model-value="modelValue === UNLIMITED" :disabled="disabled" :label="t('不限')" :aria-label="t('主持人连续派活轮数不限')" :ui="{ root: 'items-center' }" @update:model-value="emit('update:modelValue', $event ? UNLIMITED : finite)" />
       </span>
     </span>
-    <small class="limit-field-help">收到你一条消息后，主持人最多派几轮活就停下等你；派活 → 成员回答 → 交回汇总算一轮。<template v-if="modelValue === UNLIMITED">不限时只能用“全部停止”打断。</template></small>
+    <small class="limit-field-help">{{ t("收到你一条消息后，主持人最多派几轮活就停下等你；派活 → 成员回答 → 交回汇总算一轮。") }}<template v-if="modelValue === UNLIMITED">{{ t("不限时只能用“全部停止”打断。") }}</template></small>
   </span>
 </template>
 

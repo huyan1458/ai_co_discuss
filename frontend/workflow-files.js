@@ -17,12 +17,12 @@ function zip_entries(bytes) {
   for (let at = bytes.length - ZIP_END_SIZE; at >= Math.max(0, bytes.length - ZIP_END_SIZE - ZIP_COMMENT_MAX); at--) {
     if (view.getUint32(at, true) === ZIP_END) { end = at; break; }
   }
-  if (end < 0) throw new Error("不是有效的 zip 文件");
+  if (end < 0) throw new Error(t('不是有效的 zip 文件'));
   const count = view.getUint16(end + 10, true);
   let offset = view.getUint32(end + 16, true);
   const entries = [];
   for (let index = 0; index < count; index++) {
-    if (offset + 46 > bytes.length || view.getUint32(offset, true) !== ZIP_ENTRY) throw new Error("zip 文件目录损坏或使用了不支持的 zip64 格式");
+    if (offset + 46 > bytes.length || view.getUint32(offset, true) !== ZIP_ENTRY) throw new Error(t('zip 文件目录损坏或使用了不支持的 zip64 格式'));
     const flags = view.getUint16(offset + 8, true), method = view.getUint16(offset + 10, true);
     const compressed = view.getUint32(offset + 20, true), size = view.getUint32(offset + 24, true);
     const name_length = view.getUint16(offset + 28, true), extra = view.getUint16(offset + 30, true), comment = view.getUint16(offset + 32, true);
@@ -31,11 +31,11 @@ function zip_entries(bytes) {
     offset += 46 + name_length + extra + comment;
     if (path.endsWith("/")) continue;
     entries.push({ path, size, read: async () => {
-      if (flags & 1) throw new Error(`${path} 已加密，无法读取`);
+      if (flags & 1) throw new Error(t('{value1} 已加密，无法读取', { value1: path }));
       const start = local + 30 + view.getUint16(local + 26, true) + view.getUint16(local + 28, true);
       const data = bytes.subarray(start, start + compressed);
       if (method === 0) return data;
-      if (method !== 8) throw new Error(`${path} 的压缩方式不支持`);
+      if (method !== 8) throw new Error(t('{value1} 的压缩方式不支持', { value1: path }));
       return new Uint8Array(await new Response(new Blob([data]).stream().pipeThrough(new DecompressionStream("deflate-raw"))).arrayBuffer());
     } });
   }
@@ -46,14 +46,14 @@ function zip_entries(bytes) {
 async function collect(entries) {
   const skills = entries.filter((entry) => SKILL.test(entry.path) && !entry.path.startsWith("__MACOSX/"))
     .sort((left, right) => left.path.split("/").length - right.path.split("/").length);
-  if (!skills.length) throw new Error("没有找到 SKILL.md");
+  if (!skills.length) throw new Error(t('没有找到 SKILL.md'));
   const prefix = skills[0].path.slice(0, -"SKILL.md".length);
   const files = {};
   for (const entry of entries) {
     if (!entry.path.startsWith(prefix)) continue;
     const path = entry.path.slice(prefix.length);
     if (entry.size > MAX_FILE_BYTES) {
-      if (path === "SKILL.md") throw new Error(`${path} 超过 1 MB`);
+      if (path === "SKILL.md") throw new Error(t('{value1} 超过 1 MB', { value1: path }));
       files[path] = null;
       continue;
     }

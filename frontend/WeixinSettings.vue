@@ -6,6 +6,7 @@
  */
 import { computed, inject, onBeforeUnmount, onMounted, ref } from "vue";
 import { renderSVG } from "uqr";
+import { t } from './i18n.js';
 
 const { bridge } = inject("discussion");
 const status = ref(null), unavailable = ref(""), busy = ref(""), open = ref(false);
@@ -13,8 +14,8 @@ const status = ref(null), unavailable = ref(""), busy = ref(""), open = ref(fals
 const qr = ref("");
 let polling = false;
 
-const summary = computed(() => unavailable.value ? "需连接本机服务" : !status.value ? "读取中…"
-  : !status.value.bound ? "未绑定" : status.value.context_ready ? "已绑定" : "已绑定 · 待你发一条消息");
+const summary = computed(() => unavailable.value ? t('需连接本机服务') : !status.value ? t('读取中…')
+  : !status.value.bound ? t('未绑定') : status.value.context_ready ? t('已绑定') : t('已绑定 · 待你发一条消息'));
 
 async function run(action) {
   return bridge.local_request("weixin", { action });
@@ -35,8 +36,8 @@ async function bind() {
     polling = true;
     while (polling) {
       const result = await run("complete");
-      if (result.status === "connected") { status.value = result; bridge.notify("info", "微信已绑定；请在微信里给机器人发一条消息，之后就能收到通知"); break; }
-      if (result.status !== "waiting") { bridge.notify("warning", result.status === "expired" ? "二维码已过期，请重新绑定" : `微信未完成绑定（${result.status}）`); break; }
+      if (result.status === "connected") { status.value = result; bridge.notify("info", t('微信已绑定；请在微信里给机器人发一条消息，之后就能收到通知')); break; }
+      if (result.status !== "waiting") { bridge.notify("warning", result.status === "expired" ? t('二维码已过期，请重新绑定') : t('微信未完成绑定（{value1}）', { value1: result.status })); break; }
     }
   } catch (error) { bridge.notify("error", error.message); }
   finally { polling = false; qr.value = ""; busy.value = ""; }
@@ -54,26 +55,26 @@ async function act(action, message) {
   <section class="channel-reading-setting">
     <UCollapsible v-model:open="open">
       <button type="button" class="weixin-header" :aria-expanded="open">
-        <h3>微信通知</h3><small>Goal 等你确认时</small><span :class="{ 'is-ready': status?.context_ready }">{{ summary }}</span><UIcon :name="open ? 'i-lucide-chevron-up' : 'i-lucide-chevron-down'" />
+        <h3>{{ t('微信通知') }}</h3><small>{{ t('Goal 等你确认时') }}</small><span :class="{ 'is-ready': status?.context_ready }">{{ summary }}</span><UIcon :name="open ? 'i-lucide-chevron-up' : 'i-lucide-chevron-down'" />
       </button>
       <template #content>
         <div class="weixin-settings">
-          <p v-if="unavailable" class="fine-print">微信通知由这台电脑的本机服务收发，需要连接本机服务或已配对电脑：{{ unavailable }}</p>
+          <p v-if="unavailable" class="fine-print">{{ t('微信通知由这台电脑的本机服务收发，需要连接本机服务或已配对电脑：{value1}', { value1: unavailable }) }}</p>
           <template v-else-if="status">
-            <p class="fine-print">主持人声明 Goal 待你确认后，5 分钟内你没在房间回复，就发到微信；直接回复微信消息即作为你的发言发回该房间，引用某条通知回复则发回那条通知的房间。只转发文字，登录凭据只存这台电脑。</p>
+            <p class="fine-print">{{ t('主持人声明 Goal 待你确认后，5 分钟内你没在房间回复，就发到微信；直接回复微信消息即作为你的发言发回该房间，引用某条通知回复则发回那条通知的房间。只转发文字，登录凭据只存这台电脑。') }}</p>
             <template v-if="qr">
               <!-- eslint-disable-next-line vue/no-v-html -- an SVG this page rendered from the service's QR content -->
-              <div class="weixin-qr" aria-label="微信绑定二维码" v-html="qr" />
-              <p class="fine-print">用微信扫码并在手机上确认。</p>
+              <div class="weixin-qr" :aria-label="t('微信绑定二维码')" v-html="qr" />
+              <p class="fine-print">{{ t('用微信扫码并在手机上确认。') }}</p>
             </template>
-            <p v-else-if="status.bound && !status.context_ready" class="fine-print weixin-warning">请先在微信里给机器人发一条任意消息：微信要求先收到你的消息，才能给你发通知。</p>
-            <p v-if="status.last_error" class="fine-print weixin-warning">上次失败：{{ status.last_error }}</p>
+            <p v-else-if="status.bound && !status.context_ready" class="fine-print weixin-warning">{{ t('请先在微信里给机器人发一条任意消息：微信要求先收到你的消息，才能给你发通知。') }}</p>
+            <p v-if="status.last_error" class="fine-print weixin-warning">{{ t('上次失败：{value1}', { value1: status.last_error }) }}</p>
             <div class="weixin-actions">
-              <UButton v-if="!status.bound" label="扫码绑定" icon="i-lucide-qr-code" size="sm" :loading="busy === 'bind'" :disabled="Boolean(busy)" @click="bind" />
+              <UButton v-if="!status.bound" :label="t('扫码绑定')" icon="i-lucide-qr-code" size="sm" :loading="busy === 'bind'" :disabled="Boolean(busy)" @click="bind" />
               <template v-else>
-                <UButton label="发送测试" icon="i-lucide-send" size="sm" color="neutral" variant="outline" :loading="busy === 'test'" :disabled="Boolean(busy)" @click="act('test', '测试通知已发出')" />
-                <UButton label="刷新状态" icon="i-lucide-refresh-cw" size="sm" color="neutral" variant="ghost" :loading="busy === 'status'" :disabled="Boolean(busy)" @click="act('status')" />
-                <UButton label="解除绑定" size="sm" color="neutral" variant="ghost" :loading="busy === 'unbind'" :disabled="Boolean(busy)" @click="act('unbind', '已解除微信绑定')" />
+                <UButton :label="t('发送测试')" icon="i-lucide-send" size="sm" color="neutral" variant="outline" class="pb-action" :loading="busy === 'test'" :disabled="Boolean(busy)" @click="act('test', t('测试通知已发出'))" />
+                <UButton :label="t('刷新状态')" icon="i-lucide-refresh-cw" size="sm" color="neutral" variant="ghost" :loading="busy === 'status'" :disabled="Boolean(busy)" @click="act('status')" />
+                <UButton :label="t('解除绑定')" size="sm" color="neutral" variant="ghost" :loading="busy === 'unbind'" :disabled="Boolean(busy)" @click="act('unbind', t('已解除微信绑定'))" />
               </template>
             </div>
           </template>

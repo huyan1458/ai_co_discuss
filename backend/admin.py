@@ -10,6 +10,7 @@ import secrets
 import time
 
 from .runtime import begin_write
+from .texts import Text
 
 PBKDF2_ITERATIONS = 100000
 # A login ends after a week unused or a month in all; same rules as worker.mjs.
@@ -69,21 +70,21 @@ def valid_username(value):
     """Return a trimmed username, or raise when it is empty or too long."""
     name = value.strip() if isinstance(value, str) else ""
     if not 1 <= len(name) <= USERNAME_MAX:
-        raise ValueError(f"用户名需为 1–{USERNAME_MAX} 个字符")
+        raise ValueError(Text('用户名需为 1–{value1} 个字符', value1=USERNAME_MAX))
     return name
 
 
 def valid_password(value):
     """Return a password within the accepted length."""
     if not isinstance(value, str) or not PASSWORD_MIN <= len(value) <= PASSWORD_MAX:
-        raise ValueError(f"密码需为 {PASSWORD_MIN}–{PASSWORD_MAX} 个字符")
+        raise ValueError(Text('密码需为 {value1}–{value2} 个字符', value1=PASSWORD_MIN, value2=PASSWORD_MAX))
     return value
 
 
 def valid_avatar(value):
     """Accept an empty default or a bounded image data URL."""
     if not isinstance(value, str) or len(value) > AVATAR_MAX or (value and not value.startswith("data:image/")):
-        raise ValueError("头像需为不超过 60000 字符的图片数据")
+        raise ValueError(Text('头像需为不超过 60000 字符的图片数据'))
     return value
 
 
@@ -115,7 +116,7 @@ def session_valid(connection, token):
 def require_session(connection, token):
     """Require a valid administrator session."""
     if not session_valid(connection, token):
-        raise AdminError("需要登录管理员账号", 401)
+        raise AdminError(Text('需要登录管理员账号'), 401)
 
 
 def admin_status(connection, token, setup_available, local=False):
@@ -148,7 +149,7 @@ def register_admin(connection, payload, setup_key, now, label=""):
     """Create the administrator when the install token matches; only the first call succeeds."""
     begin_write(connection)
     if admin_row(connection):
-        raise AdminError("管理员账号已存在", 409)
+        raise AdminError(Text('管理员账号已存在'), 409)
     username = valid_username(payload.get("username"))
     password = valid_password(payload.get("password"))
     supplied = payload.get("setup_key")
@@ -157,7 +158,7 @@ def register_admin(connection, payload, setup_key, now, label=""):
     if not isinstance(supplied, str) or not (
             same_secret(supplied.strip(), setup_key)
             or setup and hmac.compare_digest(hashlib.sha256(supplied.strip().encode()).hexdigest(), setup["token_hash"])):
-        raise AdminError("安装令牌不正确", 403)
+        raise AdminError(Text('安装令牌不正确'), 403)
     connection.execute("INSERT INTO site_admin (id,username,password_hash,created_at) VALUES (1,?,?,?)",
                        (username, hash_password(password), now))
     connection.execute("DELETE FROM admin_setup")
@@ -170,7 +171,7 @@ def check_password(connection, row, password, source, now):
     every = connection.execute("SELECT * FROM admin_attempts WHERE source='*'").fetchone()
     for limit in (attempts, every):
         if limit and limit["locked_until"] > now:
-            raise AdminError(f"尝试次数过多，请 {limit['locked_until'] - now} 秒后再试", 429)
+            raise AdminError(Text('尝试次数过多，请 {value1} 秒后再试', value1=limit['locked_until'] - now), 429)
     if isinstance(password, str) and verify_password(password, row["password_hash"]):
         connection.execute("DELETE FROM admin_attempts WHERE source=?", (source,))
         return
@@ -183,7 +184,7 @@ def check_password(connection, row, password, source, now):
                        (0 if total >= GLOBAL_FAILURES else total, now + GLOBAL_WINDOW if total >= GLOBAL_FAILURES else 0,
                         now if total == 1 else every["updated_at"]))
     connection.commit()
-    raise AdminError("用户名或密码错误", 401)
+    raise AdminError(Text('用户名或密码错误'), 401)
 
 
 def login_admin(connection, payload, now, source="unknown", label=""):
@@ -192,7 +193,7 @@ def login_admin(connection, payload, now, source="unknown", label=""):
     row = admin_row(connection)
     username, password = payload.get("username"), payload.get("password")
     if not row or not isinstance(username, str) or not isinstance(password, str):
-        raise AdminError("用户名或密码错误", 401)
+        raise AdminError(Text('用户名或密码错误'), 401)
     # The username is checked after the lock so a wrong name and a wrong password are indistinguishable.
     check_password(connection, row, password if username.strip().lower() == row["username"].lower() else None, source, now)
     return {"token": open_session(connection, now, label), "profile": profile_of(row)}
@@ -202,7 +203,7 @@ def list_sessions(connection, token, now):
     """List live logins with their browser label; the id is a hash prefix, useless for signing in."""
     current = live_session(connection, token, now)
     if not current:
-        raise AdminError("需要登录管理员账号", 401)
+        raise AdminError(Text('需要登录管理员账号'), 401)
     rows = connection.execute("SELECT * FROM admin_logins WHERE last_seen>=? AND created_at>=? ORDER BY last_seen DESC",
                               (now - SESSION_IDLE_SECONDS, now - SESSION_MAX_SECONDS)).fetchall()
     return {"sessions": [{"id": row["token_hash"][:16], "label": row["label"], "created_at": row["created_at"], "last_seen": row["last_seen"],
@@ -213,13 +214,13 @@ def revoke_sessions(connection, token, payload, now):
     """End one other login by id, or every login but this one."""
     current = live_session(connection, token, now)
     if not current:
-        raise AdminError("需要登录管理员账号", 401)
+        raise AdminError(Text('需要登录管理员账号'), 401)
     if payload.get("others") is True:
         connection.execute("DELETE FROM admin_logins WHERE token_hash<>?", (current["token_hash"],))
         return {"ok": True}
     target = payload.get("id")
     if not isinstance(target, str) or len(target) != 16 or any(char not in "0123456789abcdef" for char in target):
-        raise ValueError("须提供要退出的登录 id，或 others: true")
+        raise ValueError(Text('须提供要退出的登录 id，或 others: true'))
     connection.execute("DELETE FROM admin_logins WHERE substr(token_hash,1,16)=? AND token_hash<>?", (target, current["token_hash"]))
     return {"ok": True}
 
@@ -229,7 +230,7 @@ def change_password(connection, token, payload, now, source="unknown"):
     begin_write(connection)
     current = live_session(connection, token, now)
     if not current:
-        raise AdminError("需要登录管理员账号", 401)
+        raise AdminError(Text('需要登录管理员账号'), 401)
     password = valid_password(payload.get("password"))
     check_password(connection, admin_row(connection), payload.get("current_password"), source, now)
     connection.execute("UPDATE site_admin SET password_hash=? WHERE id=1", (hash_password(password),))

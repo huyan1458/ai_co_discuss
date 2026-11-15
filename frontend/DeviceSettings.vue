@@ -5,6 +5,7 @@ import { computed, inject, onMounted, onUnmounted, ref, watch } from "vue";
 import { renderSVG } from "uqr";
 import jsQR from "jsqr";
 import ConfirmDialog from "./ConfirmDialog.vue";
+import { locale, t } from './i18n.js';
 
 const { view, bridge } = inject("discussion");
 const local = computed(() => view.value.admin.local);
@@ -87,7 +88,7 @@ async function scan() {
   } catch {
     if (version !== scan_version) return;
     stop_scan();
-    bridge.notify("error", "无法打开相机：请允许本网站使用相机，或用系统相机扫码");
+    bridge.notify("error", t('无法打开相机：请允许本网站使用相机，或用系统相机扫码'));
     return;
   }
   await new Promise(requestAnimationFrame);
@@ -142,7 +143,7 @@ function watch_invite(known) {
       if (result.devices.length > known) {
         invite.value = null;
         clearInterval(invite_timer);
-        bridge.notify("info", "新设备已配对");
+        bridge.notify("info", t('新设备已配对'));
       }
     } catch { /* The next tick tries again; the code expires on its own. */ }
   }, INVITE_POLL_MS);
@@ -154,26 +155,26 @@ function ask_unbind(item) {
   unbinding_open.value = true;
 }
 const unbind_items = computed(() => unbinding.value?.current
-  ? ["这台设备会立即退出，要再用须回到电脑前重新扫码配对。", "已经在运行的工作和已改动的文件不会撤回。"]
-  : ["该设备会立即无法访问房间，要再用须在电脑前重新扫码配对。", "已经在运行的工作和已改动的文件不会撤回。"]);
+  ? [t('这台设备会立即退出，要再用须回到电脑前重新扫码配对。'), t('已经在运行的工作和已改动的文件不会撤回。')]
+  : [t('该设备会立即无法访问房间，要再用须在电脑前重新扫码配对。'), t('已经在运行的工作和已改动的文件不会撤回。')]);
 
 /** Revoke a device on the computer; the website drops it with the next signed device list, which is sent at once. */
 async function revoke(item) {
-  const done = await run("revoke", () => bridge.device.request("device-revoke", { device_id: item.id }), item.current ? "这台设备已解绑" : "该设备已解绑");
+  const done = await run("revoke", () => bridge.device.request("device-revoke", { device_id: item.id }), item.current ? t('这台设备已解绑') : t('该设备已解绑'));
   if (done && item.current) bridge.device.forget();
   else if (done) await load();
 }
 
 
 // What the computer recorded about other devices: trust changes and remote writes, never their content.
-const AUDIT_EVENTS = { "device.paired": "配对了新设备", "device.revoked": "解绑了设备", "device.renewed": "设备续期", "pairing.started": "生成了配对码", "device.unlocked": "确认解锁",
-  "passkey.registered": "创建了通行密钥", "write.granted": "开启远程可写", "write.revoked": "撤销远程可写" };
-const device_name = (id) => !id ? "电脑本机" : devices.value?.find((item) => item.id === id)?.label || `已解绑的设备（${id.slice(0, 6)}）`;
+const AUDIT_EVENTS = { "device.paired": t('配对了新设备'), "device.revoked": t('解绑了设备'), "device.renewed": t('设备续期'), "pairing.started": t('生成了配对码'), "device.unlocked": t('确认解锁'),
+  "passkey.registered": t('创建了通行密钥'), "write.granted": t('开启远程可写'), "write.revoked": t('撤销远程可写') };
+const device_name = (id) => !id ? t('电脑本机') : devices.value?.find((item) => item.id === id)?.label || t('已解绑的设备（{value1}）', { value1: id.slice(0, 6) });
 /** One record line; `with_device` names the device for lists that mix several (revoked devices). */
 function audit_text(entry, with_device) {
   const prefix = with_device ? `${device_name(entry.device)} ` : "";
-  if (entry.event === "command") return `${prefix}远程执行 ${entry.action}${entry.route ? ` ${entry.route}` : ""}${entry.status >= 400 ? "（被拒绝）" : ""}`;
-  const paired = entry.event === "device.paired" && entry.temporary ? "（临时）" : "";
+  if (entry.event === "command") return t('{value1}远程执行 {value2}{value3}{value4}', { value1: prefix, value2: entry.action, value3: entry.route ? ` ${entry.route}` : "", value4: entry.status >= 400 ? t('（被拒绝）') : "" });
+  const paired = entry.event === "device.paired" && entry.temporary ? t('（临时）') : "";
   return `${prefix}${AUDIT_EVENTS[entry.event] || entry.event}${paired}${entry.room ? ` · ${room_title(entry.room)}` : ""}`;
 }
 // Generating a code changes nothing by itself; the list shows only what changed trust or reached the computer.
@@ -183,81 +184,80 @@ const device_audit = (id) => shown_audit.value.filter((entry) => entry.device ==
 const revoked_audit = computed(() => shown_audit.value.filter((entry) => !devices.value?.some((item) => item.id === entry.device)));
 const toggle_audit = (key) => { audit_open.value = audit_open.value === key ? "" : key; };
 const room_title = (room_id) => view.value.rooms?.find((room) => room.id === room_id)?.title || room_id;
-const date = (time) => new Date(time).toLocaleString("zh-CN", { month: "numeric", day: "numeric", hour: "2-digit", minute: "2-digit" });
+const date = (time) => new Date(time).toLocaleString(locale, { month: "numeric", day: "numeric", hour: "2-digit", minute: "2-digit" });
 </script>
 
 <template>
   <section v-if="local || remote || needs_pairing || device.needs" class="device-settings" aria-labelledby="device-heading">
-    <h4 id="device-heading">已配对的设备</h4>
-    <p v-if="!needs_pairing" class="fine-print">新设备须在电脑前扫码配对。</p>
+    <h4 id="device-heading">{{ t('已配对的设备') }}</h4>
+    <p v-if="!needs_pairing" class="fine-print">{{ t('新设备须在电脑前扫码配对。') }}</p>
 
-    <form v-if="needs_pairing" class="dialog-form device-pair" aria-label="配对这台设备" @submit.prevent="pair">
-      <p class="fine-print">扫描电脑本机网页 设置 → 添加设备 的二维码，或输入配对码。</p>
+    <form v-if="needs_pairing" class="dialog-form device-pair" :aria-label="t('配对这台设备')" @submit.prevent="pair">
+      <p class="fine-print">{{ t('扫描电脑本机网页 设置 → 添加设备 的二维码，或输入配对码。') }}</p>
       <div class="device-pair-row">
-        <UInput v-model="code" placeholder="XXXX-XXXX-XXXX" autocomplete="off" :maxlength="16" class="w-full" aria-label="配对码" />
-        <UButton icon="i-lucide-scan-line" color="neutral" variant="outline" aria-label="扫码" title="扫码" :disabled="Boolean(busy) || scanning" :loading="scanning && !camera_ready" @click="scan" />
+        <UInput v-model="code" placeholder="XXXX-XXXX-XXXX" autocomplete="off" :maxlength="16" class="w-full" :aria-label="t('配对码')" />
+        <UButton icon="i-lucide-scan-line" color="neutral" variant="outline" class="pb-action" :aria-label="t('扫码')" :title="t('扫码')" :disabled="Boolean(busy) || scanning" :loading="scanning && !camera_ready" @click="scan" />
       </div>
       <div v-if="scanning" class="device-scan">
-        <p v-if="!camera_ready" class="fine-print" role="status">正在打开相机…</p>
-        <video ref="video" muted playsinline aria-label="相机画面" />
-        <UButton label="取消" color="neutral" variant="soft" size="xs" @click="stop_scan" />
+        <p v-if="!camera_ready" class="fine-print" role="status">{{ t('正在打开相机…') }}</p>
+        <video ref="video" muted playsinline :aria-label="t('相机画面')" />
+        <UButton :label="t('取消')" color="neutral" variant="soft" size="xs" @click="stop_scan" />
       </div>
-      <div class="account-actions"><UButton type="submit" label="配对" class="channel-primary-button" :loading="busy === 'pair'" :disabled="Boolean(busy) || !code.trim()" /></div>
+      <div class="account-actions"><UButton type="submit" :label="t('配对')" class="channel-primary-button" :loading="busy === 'pair'" :disabled="Boolean(busy) || !code.trim()" /></div>
     </form>
 
-    <p v-else-if="device.needs === 'renew'" class="account-message is-error" role="status">
-      这台设备的授权已到期。<UButton label="用通行密钥续期" color="neutral" variant="soft" size="xs" :loading="busy === 'renew'" :disabled="Boolean(busy)" @click="run('renew', async () => { await bridge.device.renew(); await load(); })" />
+    <p v-else-if="device.needs === 'renew'" class="account-message is-error" role="status"> {{ t('这台设备的授权已到期。') }}<UButton :label="t('用通行密钥续期')" color="neutral" variant="soft" size="xs" :loading="busy === 'renew'" :disabled="Boolean(busy)" @click="run('renew', async () => { await bridge.device.renew(); await load(); })" />
     </p>
     <template v-else>
       <div class="device-actions">
-        <UButton v-if="remote && renew_due" label="续期这台设备" color="neutral" variant="soft" size="sm" :loading="busy === 'renew'" :disabled="Boolean(busy)" @click="run('renew', async () => { await bridge.device.renew(); await load(); })" />
-        <UButton v-if="local" label="添加设备" icon="i-lucide-qr-code" color="neutral" variant="outline" size="sm" :loading="busy === 'invite'" :disabled="Boolean(busy)" @click="add_device" />
-        <UCheckbox v-if="local" v-model="without_passkey" label="允许不用通行密钥" />
-        <UCheckbox v-if="local" v-model="temporary" label="临时设备（只授权 1 天）" />
+        <UButton v-if="remote && renew_due" :label="t('续期这台设备')" color="neutral" variant="soft" size="sm" :loading="busy === 'renew'" :disabled="Boolean(busy)" @click="run('renew', async () => { await bridge.device.renew(); await load(); })" />
+        <UButton v-if="local" :label="t('添加设备')" icon="i-lucide-qr-code" color="neutral" variant="outline" class="pb-action" size="sm" :loading="busy === 'invite'" :disabled="Boolean(busy)" @click="add_device" />
+        <UCheckbox v-if="local" v-model="without_passkey" :label="t('允许不用通行密钥')" />
+        <UCheckbox v-if="local" v-model="temporary" :label="t('临时设备（只授权 1 天）')" />
       </div>
       <div v-if="invite" class="device-invite" role="status">
         <!-- eslint-disable-next-line vue/no-v-html -- an SVG this page rendered from the computer's own link -->
-        <div v-if="invite.svg" class="device-qr" :class="{ 'device-expired': invite.expired }" aria-label="配对二维码" v-html="invite.svg" />
+        <div v-if="invite.svg" class="device-qr" :class="{ 'device-expired': invite.expired }" :aria-label="t('配对二维码')" v-html="invite.svg" />
         <div>
-          <p>用新设备的相机扫描二维码；没有摄像头就在新设备打开网站，输入配对码：</p>
+          <p>{{ t('用新设备的相机扫描二维码；没有摄像头就在新设备打开网站，输入配对码：') }}</p>
           <p class="device-code" :class="{ 'device-expired': invite.expired }">{{ invite.code }}</p>
-          <p v-if="invite.expired" class="fine-print device-expired-note">已过期，不能再用。</p>
-          <p v-else class="fine-print">{{ date(invite.expires_at) }} 前有效（2 分钟），只能用一次{{ invite.temporary ? "；临时设备只授权 1 天" : "" }}{{ invite.without_passkey ? "；允许不用通行密钥" : "" }}。</p>
-          <UButton label="重新生成" icon="i-lucide-refresh-cw" color="neutral" variant="outline" size="xs" :loading="busy === 'invite'" :disabled="Boolean(busy)" @click="add_device" />
+          <p v-if="invite.expired" class="fine-print device-expired-note">{{ t('已过期，不能再用。') }}</p>
+          <p v-else class="fine-print">{{ t('{value1} 前有效（2 分钟），只能用一次{value2}{value3}。', { value1: date(invite.expires_at), value2: invite.temporary ? t('；临时设备只授权 1 天') : "", value3: invite.without_passkey ? t('；允许不用通行密钥') : "" }) }}</p>
+          <UButton :label="t('重新生成')" icon="i-lucide-refresh-cw" color="neutral" variant="outline" class="pb-action" size="xs" :loading="busy === 'invite'" :disabled="Boolean(busy)" @click="add_device" />
         </div>
       </div>
       <ul v-if="devices" class="account-device-list">
         <li v-for="item in devices" :key="item.id">
           <div class="device-row">
             <span>
-              <strong>{{ item.label }}<template v-if="item.current"> · 当前设备</template><template v-if="item.temporary"> · 临时</template></strong>
-              <small>{{ item.expires_at > Date.now() ? `授权至 ${date(item.expires_at)}` : "授权已到期" }}{{ item.passkeys ? "" : " · 未创建通行密钥" }}</small>
+              <strong>{{ item.label }}<template v-if="item.current"> {{ t('· 当前设备') }}</template><template v-if="item.temporary"> {{ t('· 临时') }}</template></strong>
+              <small>{{ item.expires_at > Date.now() ? t('授权至 {value1}', { value1: date(item.expires_at) }) : t('授权已到期') }}{{ item.passkeys ? "" : t(' · 未创建通行密钥') }}</small>
             </span>
-            <UButton v-if="device_audit(item.id).length" icon="i-lucide-history" :color="audit_open === item.id ? 'primary' : 'neutral'" variant="ghost" size="xs" aria-label="使用记录" title="使用记录" :aria-expanded="audit_open === item.id" @click="toggle_audit(item.id)" />
-            <UButton icon="i-lucide-unlink" color="error" variant="ghost" size="xs" aria-label="解绑" :title="item.current ? '解绑这台设备' : '解绑'" :disabled="Boolean(busy)" @click="ask_unbind(item)" />
+            <UButton v-if="device_audit(item.id).length" icon="i-lucide-history" :color="audit_open === item.id ? 'primary' : 'neutral'" variant="ghost" size="xs" :aria-label="t('使用记录')" :title="t('使用记录')" :aria-expanded="audit_open === item.id" @click="toggle_audit(item.id)" />
+            <UButton icon="i-lucide-unlink" color="error" variant="ghost" size="xs" :aria-label="t('解绑')" :title="item.current ? t('解绑这台设备') : t('解绑')" :disabled="Boolean(busy)" @click="ask_unbind(item)" />
           </div>
           <div v-if="audit_open === item.id" class="device-audit">
-            <ul :aria-label="`${item.label} 的记录`">
+            <ul :aria-label="t('{value1} 的记录', { value1: item.label })">
               <li v-for="(entry, index) in device_audit(item.id)" :key="index"><small>{{ date(entry.at) }}</small> {{ audit_text(entry, false) }}</li>
             </ul>
-            <p class="fine-print">记录由电脑保存。看到不是你做的操作，立即解绑这台设备。</p>
+            <p class="fine-print">{{ t('记录由电脑保存。看到不是你做的操作，立即解绑这台设备。') }}</p>
           </div>
         </li>
-        <li v-if="!devices.length" class="device-empty">还没有配对的设备</li>
+        <li v-if="!devices.length" class="device-empty">{{ t('还没有配对的设备') }}</li>
         <li v-if="revoked_audit.length" class="device-revoked">
           <div class="device-row">
-            <span><small>已解绑设备的记录</small></span>
-            <UButton icon="i-lucide-history" :color="audit_open === 'revoked' ? 'primary' : 'neutral'" variant="ghost" size="xs" aria-label="使用记录" title="使用记录" :aria-expanded="audit_open === 'revoked'" @click="toggle_audit('revoked')" />
+            <span><small>{{ t('已解绑设备的记录') }}</small></span>
+            <UButton icon="i-lucide-history" :color="audit_open === 'revoked' ? 'primary' : 'neutral'" variant="ghost" size="xs" :aria-label="t('使用记录')" :title="t('使用记录')" :aria-expanded="audit_open === 'revoked'" @click="toggle_audit('revoked')" />
           </div>
           <div v-if="audit_open === 'revoked'" class="device-audit">
-            <ul aria-label="已解绑设备的记录">
+            <ul :aria-label="t('已解绑设备的记录')">
               <li v-for="(entry, index) in revoked_audit" :key="index"><small>{{ date(entry.at) }}</small> {{ audit_text(entry, true) }}</li>
             </ul>
           </div>
         </li>
       </ul>
-      <ConfirmDialog v-model:open="unbinding_open" :title="unbinding?.current ? '解绑这台设备' : `解绑「${unbinding?.label || ''}」`" :items="unbind_items"
-        confirm-label="解绑" danger @confirm="revoke(unbinding)" />
+      <ConfirmDialog v-model:open="unbinding_open" :title="unbinding?.current ? t('解绑这台设备') : t('解绑「{value1}」', { value1: unbinding?.label || '' })" :items="unbind_items"
+        :confirm-label="t('解绑')" danger @confirm="revoke(unbinding)" />
     </template>
   </section>
 </template>

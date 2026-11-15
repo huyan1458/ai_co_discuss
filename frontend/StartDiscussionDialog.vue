@@ -32,14 +32,14 @@ async function submit() {
 </script>
 
 <template>
-  <UModal :content="{ onInteractOutside: (event) => event.preventDefault() }" v-model:open="open" title="开启讨论" description="主持人安排成员轮流发言；到上限或结束时停止，记录全部保留。" :ui="{ content: 'glass-panel studio-modal', body: 'dialog-body' }">
+  <UModal :content="{ onInteractOutside: (event) => event.preventDefault() }" v-model:open="open" :title="t('开启讨论')" :description="t('主持人安排成员轮流发言；到上限或结束时停止，记录全部保留。')" :ui="{ content: 'glass-panel studio-modal', body: 'dialog-body' }">
     <template #body>
-      <form class="start-discussion" aria-label="开启讨论" @submit.prevent="submit">
-        <UFormField label="讨论目标" description="写下问题、背景和顾虑，主持人据此推进；可留空，沿用房间目标。"><UTextarea v-model="goal" :maxlength="1000" :rows="4" autoresize :maxrows="10" placeholder="例如：我们在 A、B 两个方案之间犹豫，主要顾虑是成本和上线时间……" class="w-full" /></UFormField>
+      <form class="start-discussion" :aria-label="t('开启讨论')" @submit.prevent="submit">
+        <UFormField :label="t('讨论目标')" :description="t('写下问题、背景和顾虑，主持人据此推进；可留空，沿用房间目标。')"><UTextarea v-model="goal" :maxlength="1000" :rows="4" autoresize :maxrows="10" :placeholder="t('例如：我们在 A、B 两个方案之间犹豫，主要顾虑是成本和上线时间……')" class="w-full" /></UFormField>
         <DiscussionLimits ref="limits" v-model:rounds="rounds" v-model:minutes="minutes" v-model:named_followup="named_followup" />
         <div class="start-discussion-footer">
-          <UButton label="取消" color="neutral" variant="ghost" @click="open = false" />
-          <UButton type="submit" icon="i-lucide-play" label="开始讨论" class="channel-primary-button" :loading="pending === 'start_room_discussion'" :disabled="Boolean(pending) || !view.access?.can_manage" />
+          <UButton :label="t('取消')" color="neutral" variant="ghost" @click="open = false" />
+          <UButton type="submit" icon="i-lucide-play" :label="t('开始讨论')" class="channel-primary-button" :loading="pending === 'start_room_discussion'" :disabled="Boolean(pending) || !view.access?.can_manage" />
         </div>
       </form>
     </template>

@@ -6,6 +6,7 @@
  */
 import { computed, inject, nextTick, ref, watch } from "vue";
 import RosterAdd from "./RosterAdd.vue";
+import { t } from './i18n.js';
 
 const props = defineProps({ free: { type: Boolean, default: false }, blocker: { type: String, default: "" },
   room: { type: Boolean, default: false }, compact: { type: Boolean, default: false }, disabled: { type: Boolean, default: false } });
@@ -48,7 +49,7 @@ const add_row = ref(null);
 const add_items = computed(() => providers.value.map(({ value, label }) => {
   const selected = active.value && scheduler.value.provider === value;
   return { value, name: label, initials: label.slice(0, 2), ...PROVIDER_ICONS[value], disabled: Boolean(props.blocker), selected,
-    title: selected ? "当前决策模型" : active.value ? `替换为 ${label}` : label, aria_label: active.value && !selected ? `替换决策模型为 ${label}` : `添加决策模型 ${label}` };
+    title: selected ? t('当前决策模型') : active.value ? t('替换为 {value1}', { value1: label }) : label, aria_label: active.value && !selected ? t('替换决策模型为 {value1}', { value1: label }) : t('添加决策模型 {value1}', { value1: label }) };
 }));
 const api_key = ref(""), key_visible = ref(false), saving = ref(false);
 // The card shows a summary; its settings stay behind "设置" like the participant cards. A compact row shows only the back.
@@ -101,11 +102,11 @@ async function toggle(enabled) {
   if (enabled && status.value.tone !== "ready") open_settings();
 }
 // The compact row's one line: provider, model and judging style, or what is still missing; off, the providers to pick from.
-const summary = computed(() => !active.value ? ["未开启", providers.value.map((item) => item.label).join("、")].filter(Boolean).join(" · 可用 ")
+const summary = computed(() => !active.value ? [t('未开启'), providers.value.map((item) => item.label).join("、")].filter(Boolean).join(t(' · 可用 '))
   : status.value.tone !== "ready" ? `${provider_label.value} · ${status.value.text}`
   : [provider_label.value, scheduler.value.model, view.value.launch.scheduler_modes?.[mode.value]].filter(Boolean).join(" · "));
-const provider_label = computed(() => providers.value.find((item) => item.value === scheduler.value.provider)?.label || "未选择");
-const status = computed(() => !scheduler.value.model ? { tone: "warn", text: "未选模型" } : !scheduler.value.api_key_ref ? { tone: "warn", text: "缺少密钥" } : { tone: "ready", text: "已配置" });
+const provider_label = computed(() => providers.value.find((item) => item.value === scheduler.value.provider)?.label || t('未选择'));
+const status = computed(() => !scheduler.value.model ? { tone: "warn", text: t('未选模型') } : !scheduler.value.api_key_ref ? { tone: "warn", text: t('缺少密钥') } : { tone: "ready", text: t('已配置') });
 // A key saved earlier is never sent back to the page, so only a masked mark stands in for it.
 const SAVED_MARK = "••••••••••••";
 // A key entered for one provider does not belong to another.
@@ -119,16 +120,16 @@ watch(() => scheduler.value.enabled, (enabled) => { if (!enabled) editing.value 
 /** Send one tiny question through the local service so the configuration is proven before the room relies on it. */
 async function check_config() {
   check.value = { state: "loading" };
-  try { await bridge.check_scheduler(scheduler.value); check.value = { state: "ok" }; bridge.notify("info", "检查通过：决策模型已响应"); }
+  try { await bridge.check_scheduler(scheduler.value); check.value = { state: "ok" }; bridge.notify("info", t('检查通过：决策模型已响应')); }
   catch (failure) { check.value = { state: "error" }; bridge.notify("error", failure.message); }
 }
 // How the routing question is worded: the experimental guided wording is the default while it is being refined.
 const modes = computed(() => Object.entries(view.value.launch.scheduler_modes || {}).map(([value, label]) => ({ value, label })));
 const mode = computed(() => scheduler.value.mode || view.value.launch.scheduler_default_mode || "");
-const MODE_HINTS = { guided: "试验：说明目的与依据，由模型权衡；正在打磨，可能判错", stable: "稳定：按固定顺序逐条核对，已通过回归评测" };
+const MODE_HINTS = { guided: t('试验：说明目的与依据，由模型权衡；正在打磨，可能判错'), stable: t('稳定：按固定顺序逐条核对，已通过回归评测') };
 const description = computed(() => props.free
-  ? "接入决策模型，推荐更适合回答的成员，由你一键采纳。"
-  : "接入决策模型，自动安排插话回应与下一轮发言。");
+  ? t('接入决策模型，推荐更适合回答的成员，由你一键采纳。')
+  : t('接入决策模型，自动安排插话回应与下一轮发言。'));
 
 /** Persist the entered key once input is committed (blur or Enter). */
 async function save_key() {
@@ -146,61 +147,61 @@ async function save_key() {
 <template>
   <div class="scheduler-settings" :class="{ 'is-compact': compact }">
     <div v-if="compact" class="scheduler-row">
-      <UCheckbox :model-value="active" :disabled="disabled || Boolean(blocker)" label="开启" aria-label="本房间开启智能调度" @update:model-value="toggle" />
+      <UCheckbox :model-value="active" :disabled="disabled || Boolean(blocker)" :label="t('开启')" :aria-label="t('本房间开启智能调度')" @update:model-value="toggle" />
       <span class="scheduler-summary" :class="active && `is-${status.tone}`" :title="summary"><i v-if="active" aria-hidden="true" />{{ summary }}</span>
-      <UButton v-if="active && !disabled" :icon="editing ? 'i-lucide-chevron-up' : 'i-lucide-settings-2'" :label="editing ? '收起' : '设置'" size="xs" color="neutral" variant="ghost"
-        :aria-expanded="editing" aria-label="设置本房间的决策模型" @click="editing ? close_settings() : open_settings()" />
+      <UButton v-if="active && !disabled" :icon="editing ? 'i-lucide-chevron-up' : 'i-lucide-settings-2'" :label="editing ? t('收起') : t('设置')" size="xs" color="neutral" variant="ghost"
+        :aria-expanded="editing" :aria-label="t('设置本房间的决策模型')" @click="editing ? close_settings() : open_settings()" />
     </div>
     <div v-else>
-      <p class="scheduler-title">智能调度<UBadge size="xs" variant="soft" class="scheduler-badge">决策模型</UBadge><small>可选</small></p>
+      <p class="scheduler-title">{{ t('智能调度') }}<UBadge size="xs" variant="soft" class="scheduler-badge">{{ t('决策模型') }}</UBadge><small>{{ t('可选') }}</small></p>
       <p class="scheduler-description">{{ blocker ? `${description}（${blocker}）` : description }}</p>
     </div>
-    <RosterAdd v-if="!compact || editing" ref="add_row" label="添加决策模型" :items="add_items" @add="add_provider" />
-    <p v-if="!active && !compact" class="scheduler-empty">未添加决策模型。只能放一个，点其他供应商会替换。</p>
+    <RosterAdd v-if="!compact || editing" ref="add_row" :label="t('添加决策模型')" :items="add_items" @add="add_provider" />
+    <p v-if="!active && !compact" class="scheduler-empty">{{ t('未添加决策模型。只能放一个，点其他供应商会替换。') }}</p>
     <div v-else-if="active && (!compact || editing)" class="scheduler-cards">
     <div class="scheduler-slot">
     <div class="scheduler-card" :class="{ 'is-editing': editing }">
       <template v-if="!editing">
-        <button type="button" class="scheduler-open" aria-label="设置智能调度的决策模型" title="点击设置" @click="open_settings">
+        <button type="button" class="scheduler-open" :aria-label="t('设置智能调度的决策模型')" :title="t('点击设置')" @click="open_settings">
           <span class="scheduler-identity">
             <UAvatar :src="PROVIDER_ICONS[scheduler.provider]?.icon" :text="provider_label.slice(0, 2)" :alt="provider_label" size="sm" class="channel-avatar scheduler-avatar" :class="PROVIDER_ICONS[scheduler.provider]?.style" />
             <strong>{{ provider_label }}</strong>
           </span>
           <dl class="scheduler-facts">
-            <div><dt>状态</dt><dd :class="`is-${status.tone}`"><i aria-hidden="true" />{{ status.text }}</dd></div>
-            <div><dt>模型</dt><dd :title="scheduler.model">{{ scheduler.model || "未选择" }}</dd></div>
+            <div><dt>{{ t('状态') }}</dt><dd :class="`is-${status.tone}`"><i aria-hidden="true" />{{ status.text }}</dd></div>
+            <div><dt>{{ t('模型') }}</dt><dd :title="scheduler.model">{{ scheduler.model || t('未选择') }}</dd></div>
           </dl>
-          <span class="scheduler-flip"><UIcon name="i-lucide-settings-2" />设置</span>
+          <span class="scheduler-flip"><UIcon name="i-lucide-settings-2" />{{ t('设置') }}</span>
         </button>
-        <span class="scheduler-tools"><button type="button" :aria-label="`移出决策模型 ${provider_label}`" title="移出" @click="remove_provider"><UIcon name="i-lucide-x" /></button></span>
+        <span class="scheduler-tools"><button type="button" :aria-label="t('移出决策模型 {value1}', { value1: provider_label })" :title="t('移出')" @click="remove_provider"><UIcon name="i-lucide-x" /></button></span>
       </template>
       <template v-else>
         <div class="scheduler-back">
-          <div class="scheduler-heading"><strong>{{ provider_label }}<span>设置</span></strong>
-            <UButton icon="i-lucide-zap" aria-label="检查智能调度配置" title="检查配置：向决策模型发送一道极短的是非题，核对供应商、模型与密钥" size="xs" variant="ghost"
+          <div class="scheduler-heading"><strong>{{ provider_label }}<span>{{ t('设置') }}</span></strong>
+            <UButton icon="i-lucide-zap" :aria-label="t('检查智能调度配置')" :title="t('检查配置：向决策模型发送一道极短的是非题，核对供应商、模型与密钥')" size="xs" variant="ghost"
               :color="check.state === 'ok' ? 'success' : check.state === 'error' ? 'error' : 'neutral'" :loading="check.state === 'loading'"
               :disabled="!scheduler.api_key_ref || !scheduler.model || !view.launch.available" @click="check_config" />
           </div>
-          <div class="scheduler-field"><span>模型</span><UInputMenu mode="autocomplete" ignore-filter :model-value="scheduler.model || ''" :items="models" value-key="value" aria-label="智能调度模型" placeholder="模型 ID" size="xs" class="w-full" @update:model-value="write({ model: $event })" /></div>
-          <div class="scheduler-field"><span>密钥</span>
+          <div class="scheduler-field"><span>{{ t('模型') }}</span><UInputMenu mode="autocomplete" ignore-filter :model-value="scheduler.model || ''" :items="models" value-key="value" :aria-label="t('智能调度模型')" :placeholder="t('模型 ID')" size="xs" class="w-full" @update:model-value="write({ model: $event })" /></div>
+          <div class="scheduler-field"><span>{{ t('密钥') }}</span>
             <!-- A text field masked by CSS keeps browsers from offering to generate or save a password. -->
-            <UInput v-model="api_key" type="text" autocomplete="off" spellcheck="false" data-1p-ignore data-lpignore="true" :placeholder="scheduler.api_key_ref ? SAVED_MARK : '填写所选供应商的 API Key'" :title="scheduler.api_key_ref && !api_key ? '已保存；本机不回传密钥，输入新 Key 可更换' : undefined" aria-label="智能调度 API Key" size="xs" class="w-full" :loading="saving" :ui="{ base: key_visible ? '' : 'scheduler-key-masked', trailing: 'pe-0.5' }" @change="save_key">
-              <template #trailing><UButton :icon="key_visible ? 'i-lucide-eye' : 'i-lucide-eye-off'" :disabled="!api_key" :aria-label="key_visible ? '隐藏密钥' : '显示密钥'" :aria-pressed="key_visible" size="xs" color="neutral" variant="link" @click="key_visible = !key_visible" /></template>
+            <UInput v-model="api_key" type="text" autocomplete="off" spellcheck="false" data-1p-ignore data-lpignore="true" :placeholder="scheduler.api_key_ref ? SAVED_MARK : t('填写所选供应商的 API Key')" :title="scheduler.api_key_ref &amp;&amp; !api_key ? t('已保存；本机不回传密钥，输入新 Key 可更换') : undefined" :aria-label="t('智能调度 API Key')" size="xs" class="w-full" :loading="saving" :ui="{ base: key_visible ? '' : 'scheduler-key-masked', trailing: 'pe-0.5' }" @change="save_key">
+              <template #trailing><UButton :icon="key_visible ? 'i-lucide-eye' : 'i-lucide-eye-off'" :disabled="!api_key" :aria-label="key_visible ? t('隐藏密钥') : t('显示密钥')" :aria-pressed="key_visible" size="xs" color="neutral" variant="link" @click="key_visible = !key_visible" /></template>
             </UInput>
           </div>
-          <p class="scheduler-note">决策模型只做选择、不生成文本，只按输入计费。判断时会把房间标题和最近 10～20 条消息发给所选供应商；密钥只存本机。</p>
+          <p class="scheduler-note">{{ t('决策模型只做选择、不生成文本，只按输入计费。判断时会把房间标题和最近 10～20 条消息发给所选供应商；密钥只存本机。') }}</p>
         </div>
         <span class="scheduler-flip-actions">
-          <button type="button" class="scheduler-flip is-cancel" aria-label="放弃决策模型的修改" @click="cancel_settings">取消</button>
-          <button type="button" class="scheduler-flip is-done" aria-label="完成并返回决策模型卡片" @click="close_settings"><UIcon name="i-lucide-check" />完成</button>
+          <button type="button" class="scheduler-flip is-cancel" :aria-label="t('放弃决策模型的修改')" @click="cancel_settings">{{ t('取消') }}</button>
+          <button type="button" class="scheduler-flip is-done" :aria-label="t('完成并返回决策模型卡片')" @click="close_settings"><UIcon name="i-lucide-check" />{{ t('完成') }}</button>
         </span>
       </template>
     </div>
     </div>
     </div>
     <div v-if="active && free && modes.length > 1 && (!compact || editing)" class="scheduler-mode">
-      <span>判断方式</span>
-      <div class="expert-card-modes" role="radiogroup" aria-label="智能调度判断方式">
+      <span>{{ t('判断方式') }}</span>
+      <div class="expert-card-modes" role="radiogroup" :aria-label="t('智能调度判断方式')">
         <button v-for="option in modes" :key="option.value" type="button" role="radio" :title="MODE_HINTS[option.value]"
           :aria-checked="mode === option.value" @click="write({ mode: option.value })">{{ option.label }}</button>
       </div>

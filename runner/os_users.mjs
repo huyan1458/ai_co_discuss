@@ -463,12 +463,50 @@ function owner_sid({ run = run_powershell } = {}) {
 }
 
 /**
+ * PowerShell defining `[CoDiscussLsa]::Grant(sid, right)`, which gives a user a logon right. The instance task logs its
+ * user on as a batch job, which Windows (Pro) allows only Administrators, Backup Operators and Performance Log Users by
+ * default: without the right the task never runs (event 4625, logon type 4; seen 2026-11-14 on the hosting test
+ * computer), and Register-ScheduledTask does not grant it.
+ */
+const BATCH_LOGON_SCRIPT = `if (-not ('CoDiscussLsa' -as [type])) { Add-Type -TypeDefinition @'
+using System;
+using System.ComponentModel;
+using System.Runtime.InteropServices;
+using System.Security.Principal;
+public static class CoDiscussLsa {
+  [StructLayout(LayoutKind.Sequential)] struct LsaString { public ushort Length; public ushort MaximumLength; public IntPtr Buffer; }
+  [StructLayout(LayoutKind.Sequential)] struct LsaAttributes { public int Length; public IntPtr RootDirectory; public IntPtr ObjectName; public int Attributes; public IntPtr SecurityDescriptor; public IntPtr SecurityQualityOfService; }
+  [DllImport("advapi32.dll")] static extern uint LsaOpenPolicy(IntPtr system, ref LsaAttributes attributes, int access, out IntPtr policy);
+  [DllImport("advapi32.dll")] static extern uint LsaAddAccountRights(IntPtr policy, byte[] sid, LsaString[] rights, int count);
+  [DllImport("advapi32.dll")] static extern uint LsaClose(IntPtr policy);
+  [DllImport("advapi32.dll")] static extern int LsaNtStatusToWinError(uint status);
+  const int POLICY_CREATE_ACCOUNT = 0x10, POLICY_LOOKUP_NAMES = 0x800;
+  public static void Grant(string sid, string right) {
+    var attributes = new LsaAttributes();
+    IntPtr policy;
+    uint status = LsaOpenPolicy(IntPtr.Zero, ref attributes, POLICY_CREATE_ACCOUNT | POLICY_LOOKUP_NAMES, out policy);
+    if (status != 0) throw new Win32Exception(LsaNtStatusToWinError(status));
+    var text = new LsaString { Buffer = Marshal.StringToHGlobalUni(right), Length = (ushort)(right.Length * 2), MaximumLength = (ushort)((right.Length + 1) * 2) };
+    try {
+      var id = new SecurityIdentifier(sid);
+      var bytes = new byte[id.BinaryLength];
+      id.GetBinaryForm(bytes, 0);
+      status = LsaAddAccountRights(policy, bytes, new[] { text }, 1);
+      if (status != 0) throw new Win32Exception(LsaNtStatusToWinError(status));
+    } finally { Marshal.FreeHGlobal(text.Buffer); LsaClose(policy); }
+  }
+}
+'@ }`;
+
+/**
  * PowerShell, run elevated, that (re)registers the account's instance task as `user` with the SecureString in
  * `password_variable`, and lets the owner (`sid`) start it without elevation.
  */
 function register_task_script(account, user, password_variable, sid) {
   const script = join(SHARED_ROOT, 'keys', account, START_SCRIPT);
-  return `$action = New-ScheduledTaskAction -Execute ${quote(POWERSHELL)} -Argument ${quote(`-NoProfile -NonInteractive -ExecutionPolicy Bypass -WindowStyle Hidden -File "${script}"`)}
+  return `${BATCH_LOGON_SCRIPT}
+[CoDiscussLsa]::Grant((New-Object Security.Principal.NTAccount(${quote(user)})).Translate([Security.Principal.SecurityIdentifier]).Value, 'SeBatchLogonRight')
+$action = New-ScheduledTaskAction -Execute ${quote(POWERSHELL)} -Argument ${quote(`-NoProfile -NonInteractive -ExecutionPolicy Bypass -WindowStyle Hidden -File "${script}"`)}
 $trigger = New-ScheduledTaskTrigger -AtStartup
 $settings = New-ScheduledTaskSettingsSet -ExecutionTimeLimit ([TimeSpan]::Zero) -RestartCount 3 -RestartInterval (New-TimeSpan -Minutes 1) -MultipleInstances IgnoreNew -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries -StartWhenAvailable
 $plain = [Runtime.InteropServices.Marshal]::PtrToStringBSTR([Runtime.InteropServices.Marshal]::SecureStringToBSTR(${password_variable}))

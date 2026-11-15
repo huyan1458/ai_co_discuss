@@ -1,3 +1,4 @@
+import { t } from './i18n.js';
 /**
  * What an owner can do with one free-room member. The rail's member menu is the quick entry and the room overview
  * lays the same actions out in full, so both read them from here instead of keeping two lists.
@@ -22,14 +23,14 @@ export function member_actions(member, { view, act, describe }) {
   const change = (label, icon, action, extra = {}) => ({ label, icon,
     disabled: locked, onSelect: () => act("change_member", { member_id: member.id, name: member.name, action, ...extra }) });
   return [[
-    ...(member.access === "manual" ? [{ label: "复制启动指令（含凭证）", icon: "i-lucide-rocket", disabled: locked || !available, onSelect: () => act("copy_member_launch", member.name) }] : []),
-    { label: "名称与描述", icon: "i-lucide-user-pen", disabled: locked, onSelect: () => describe(member.name) },
-    { label: "复制参与说明", icon: "i-lucide-copy", disabled: locked, onSelect: () => act("copy_member_join", member.name) },
-    { label: "下载私有配置", icon: "i-lucide-download", disabled: locked || !available, onSelect: () => act("download_member_access", member.name) },
-    ...(member.access === "manual" ? [{ label: "复制凭证文本", icon: "i-lucide-key-round", disabled: locked || !available, onSelect: () => act("copy_member_access_text", member.name) }] : []),
+    ...(member.access === "manual" ? [{ label: t('复制启动指令（含凭证）'), icon: "i-lucide-rocket", disabled: locked || !available, onSelect: () => act("copy_member_launch", member.name) }] : []),
+    { label: t('名称与描述'), icon: "i-lucide-user-pen", disabled: locked, onSelect: () => describe(member.name) },
+    { label: t('复制参与说明'), icon: "i-lucide-copy", disabled: locked, onSelect: () => act("copy_member_join", member.name) },
+    { label: t('下载私有配置'), icon: "i-lucide-download", disabled: locked || !available, onSelect: () => act("download_member_access", member.name) },
+    ...(member.access === "manual" ? [{ label: t('复制凭证文本'), icon: "i-lucide-key-round", disabled: locked || !available, onSelect: () => act("copy_member_access_text", member.name) }] : []),
   ], [
-    ...(busy(member) ? [{ ...change("停止", "i-lucide-circle-stop", "interrupt"), color: "error" }] : []),
-    ...(member.status === "active" && member.role !== "host" ? [change("设为主持人", "i-lucide-crown", "role", { role: "host" })] : []),
-    ...(current_host ? [] : [member.status === "active" ? change("离开", "i-lucide-log-out", "away") : { ...change("请回", "i-lucide-log-in", "rejoin"), disabled: locked || (member.access === "runner" && !view.launch.available) }]),
-  ], ...(current_host ? [] : [[{ ...change("移除", "i-lucide-trash-2", "remove"), color: "error" }]])];
+    ...(busy(member) ? [{ ...change(t('停止'), "i-lucide-circle-stop", "interrupt"), color: "error" }] : []),
+    ...(member.status === "active" && member.role !== "host" ? [change(t('设为主持人'), "i-lucide-crown", "role", { role: "host" })] : []),
+    ...(current_host ? [] : [member.status === "active" ? change(t('离开'), "i-lucide-log-out", "away") : { ...change(t('请回'), "i-lucide-log-in", "rejoin"), disabled: locked || (member.access === "runner" && !view.launch.available) }]),
+  ], ...(current_host ? [] : [[{ ...change(t('移除'), "i-lucide-trash-2", "remove"), color: "error" }]])];
 }

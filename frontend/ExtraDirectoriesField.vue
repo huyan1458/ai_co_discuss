@@ -24,15 +24,14 @@ const add = () => emit("update:modelValue", [...props.modelValue, ""]);
   <div class="extra-directories">
     <template v-if="editable">
       <div v-for="(path, index) in props.modelValue" :key="index" class="extra-directory">
-        <ProjectDirectoryField :model-value="path" compact placeholder="另一个项目目录的完整路径" :disabled="props.disabled" @update:model-value="write(index, $event)" />
-        <UButton icon="i-lucide-x" color="neutral" variant="ghost" size="xs" :aria-label="`移除项目目录 ${path}`" :disabled="props.disabled" @click="remove(index)" />
+        <ProjectDirectoryField :model-value="path" compact :placeholder="t('另一个项目目录的完整路径')" :disabled="props.disabled" @update:model-value="write(index, $event)" />
+        <UButton icon="i-lucide-x" color="neutral" variant="ghost" size="xs" :aria-label="t('移除项目目录 {value1}', { value1: path })" :disabled="props.disabled" @click="remove(index)" />
       </div>
     </template>
     <code v-for="path in editable ? [] : props.modelValue" :key="path" class="extra-directory-path">{{ path }}</code>
     <button v-if="editable && props.modelValue.length < MAX_DIRECTORIES" type="button" class="extra-directory-add" :disabled="props.disabled" @click="add">
-      <UIcon name="i-lucide-plus" />添加其他项目目录
-    </button>
-    <p v-if="!editable" class="extra-directory-note">其他项目目录须在电脑上或已连接电脑的网页中设置。</p>
+      <UIcon name="i-lucide-plus" />{{ t('添加其他项目目录') }} </button>
+    <p v-if="!editable" class="extra-directory-note">{{ t('其他项目目录须在电脑上或已连接电脑的网页中设置。') }}</p>
   </div>
 </template>
 

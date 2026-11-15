@@ -2,7 +2,8 @@
 import { computed, onBeforeUnmount, provide, ref } from "vue";
 import { MotionConfig } from "motion-v";
 import { useToast } from "@nuxt/ui/composables";
-import { zh_cn } from "@nuxt/ui/locale";
+import { en, zh_cn } from "@nuxt/ui/locale";
+import { locale } from "./i18n.js";
 import { use_discussion } from "./use-discussion.js";
 import ChannelWorkspace from "./ChannelWorkspace.vue";
 import ConfirmDialog from "./ConfirmDialog.vue";
@@ -78,7 +79,7 @@ function confirm_passkey() {
 </script>
 
 <template>
-  <UApp :locale="zh_cn" :tooltip="{ delayDuration: 300 }" :toaster="{ position: 'bottom-right', max: 5 }">
+  <UApp :locale="locale === 'en' ? en : zh_cn" :tooltip="{ delayDuration: 300 }" :toaster="{ position: 'bottom-right', max: 5 }">
     <MotionConfig :reduced-motion="MOTION_ENABLED ? 'never' : 'always'">
       <ChannelWorkspace />
       <ConfirmDialog v-if="passkey_prompt" v-model:open="passkey_open" :title="passkey_prompt.title" :description="passkey_prompt.description"
@@ -86,9 +87,9 @@ function confirm_passkey() {
       <TransitionGroup tag="div" name="undo-notice" class="undo-notices" aria-live="polite">
         <div v-for="notice in undo_notices" :key="notice.id" class="undo-notice" role="status">
           <UIcon name="i-lucide-archive" class="undo-notice-icon" /><span class="undo-notice-text" :title="notice.message">{{ notice.message }}</span>
-          <UButton label="查看" size="xs" color="neutral" variant="soft" @click="notice.view()" />
-          <UButton label="撤销" size="xs" color="neutral" variant="solid" @click="close_undo(notice.id, false)" />
-          <UButton icon="i-lucide-x" size="xs" color="neutral" variant="ghost" aria-label="关闭提示" @click="close_undo(notice.id, true)" />
+          <UButton :label="t('查看')" size="xs" color="neutral" variant="soft" @click="notice.view()" />
+          <UButton :label="t('撤销')" size="xs" color="neutral" variant="solid" @click="close_undo(notice.id, false)" />
+          <UButton icon="i-lucide-x" size="xs" color="neutral" variant="ghost" :aria-label="t('关闭提示')" @click="close_undo(notice.id, true)" />
           <i class="undo-notice-countdown" :style="{ animationDuration: `${notice.duration}ms` }" aria-hidden="true"></i>
         </div>
       </TransitionGroup>

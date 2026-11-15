@@ -1,4 +1,5 @@
 <script setup>
+import { t } from './i18n.js';
 /**
  * Edit one member's display name and description: what it is good at and what work suits it. The smart scheduler and
  * the AI host read the description when dividing work; the display name only changes what screens show, the member ID
@@ -35,13 +36,13 @@ watch(open, (value) => {
 }, { immediate: true });
 const trimmed = computed(() => draft.value.trim());
 const source = computed(() => shown.value.template && trimmed.value !== shown.value.template
-  ? { tag: `${shown.value.platform} 的默认描述`, text: shown.value.template, action: "填入" } : null);
+  ? { tag: t('{value1} 的默认描述', { value1: shown.value.platform }), text: shown.value.template, action: t('填入') } : null);
 // Saving an empty or already-default text as the default changes nothing.
 const can_template = computed(() => Boolean(shown.value.platform && trimmed.value && trimmed.value !== shown.value.template));
 const label_changed = computed(() => label_draft.value.trim() !== shown.value.label);
 const changed = computed(() => trimmed.value !== shown.value.text || label_changed.value || as_template.value && can_template.value);
-const note = computed(() => as_template.value && can_template.value ? `之后添加 ${shown.value.platform} 时自动填入这段描述`
-  : trimmed.value ? "标签或一段话都行，Ctrl + Enter 保存" : "留空表示不提供描述");
+const note = computed(() => as_template.value && can_template.value ? t('之后添加 {value1} 时自动填入这段描述', { value1: shown.value.platform })
+  : trimmed.value ? t('标签或一段话都行，Ctrl + Enter 保存') : t('留空表示不提供描述'));
 watch(can_template, (value) => { if (!value) as_template.value = false; });
 
 function save() {
@@ -50,17 +51,17 @@ function save() {
 </script>
 
 <template>
-  <MemberTextDialog v-model:open="open" v-model:draft="draft" :title="`${shown.label || shown.default} 的名称与描述`"
-    description="名称只改显示的名字，成员 ID 不变。描述写擅长什么、适合分到什么工作，智能调度和 AI 主持人分派时参考，房间所有成员都能看到。"
-    :label="`${shown.name} 的描述`" placeholder="例如：擅长前端和交互细节，适合出方案、做评审；大段重构交给别人" :max="MAX_DESCRIPTION"
+  <MemberTextDialog v-model:open="open" v-model:draft="draft" :title="t('{value1} 的名称与描述', { value1: shown.label || shown.default })"
+    :description="t('名称只改显示的名字，成员 ID 不变。描述写擅长什么、适合分到什么工作，智能调度和 AI 主持人分派时参考，房间所有成员都能看到。')"
+    :label="t('{value1} 的描述', { value1: shown.name })" :placeholder="t('例如：擅长前端和交互细节，适合出方案、做评审；大段重构交给别人')" :max="MAX_DESCRIPTION"
     :note="note" :source="source" :changed="changed" :saving="saving" @save="save">
     <template #lead>
-      <label class="member-label-field"><span>显示名称</span>
-        <UInput v-model="label_draft" :maxlength="MAX_LABEL" :placeholder="`留空显示 ${shown.default}`" :aria-label="`${shown.name} 的显示名称`" class="w-full" />
+      <label class="member-label-field"><span>{{ t('显示名称') }}</span>
+        <UInput v-model="label_draft" :maxlength="MAX_LABEL" :placeholder="t('留空显示 {value1}', { value1: shown.default })" :aria-label="t('{value1} 的显示名称', { value1: shown.name })" class="w-full" />
       </label>
     </template>
     <template #extra>
-      <UCheckbox v-if="can_template" v-model="as_template" :label="`存为 ${shown.platform} 的默认描述`" />
+      <UCheckbox v-if="can_template" v-model="as_template" :label="t('存为 {value1} 的默认描述', { value1: shown.platform })" />
     </template>
   </MemberTextDialog>
 </template>

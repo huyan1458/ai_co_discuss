@@ -3,6 +3,7 @@
  * the excerpts quoted from project files for the next message.
  */
 import { reactive } from "vue";
+import { locale, t } from './i18n.js';
 
 /**
  * `open(path, directory, root)` is set by the preview while it is mounted (`root` is the index of the room's project
@@ -28,7 +29,7 @@ export function add_excerpt(excerpt) {
 /** Where an excerpt came from, as the composer's list shows it. */
 export function excerpt_source(excerpt) {
   if (excerpt.message_id) return `${excerpt.name} #${excerpt.message_id}`;
-  const lines = excerpt_lines(excerpt);
+  const lines = !excerpt.start ? "" : excerpt.start === excerpt.end ? t('第 {value1} 行', { value1: excerpt.start }) : t('第 {value1}–{value2} 行', { value1: excerpt.start, value2: excerpt.end });
   return lines ? `${excerpt.path} · ${lines}` : excerpt.path;
 }
 
@@ -116,27 +117,27 @@ const FILE_TYPES = {
   sh: ["Shell", "i-lucide-file-terminal", "is-green"], ps1: ["PowerShell", "i-lucide-file-terminal", "is-blue"], bat: ["Batch", "i-lucide-file-terminal", "is-green"],
   json: ["JSON", "i-lucide-file-json", "is-yellow"], jsonc: ["JSON", "i-lucide-file-json", "is-yellow"],
   yaml: ["YAML", "i-lucide-file-cog", "is-purple"], yml: ["YAML", "i-lucide-file-cog", "is-purple"], toml: ["TOML", "i-lucide-file-cog", "is-purple"],
-  png: ["图片", "i-lucide-file-image", "is-purple"], jpg: ["图片", "i-lucide-file-image", "is-purple"], jpeg: ["图片", "i-lucide-file-image", "is-purple"],
-  gif: ["图片", "i-lucide-file-image", "is-purple"], webp: ["图片", "i-lucide-file-image", "is-purple"], svg: ["SVG", "i-lucide-file-image", "is-orange"],
-  zip: ["压缩包", "i-lucide-file-archive", "is-muted"], pdf: ["PDF", "i-lucide-file-text", "is-red"], txt: ["纯文本", "i-lucide-file-text", "is-muted"],
-  csv: ["CSV 表格", "i-lucide-sheet", "is-green"], tsv: ["TSV 表格", "i-lucide-sheet", "is-green"], xml: ["XML", "i-lucide-file-code", "is-orange"],
-  ini: ["INI", "i-lucide-file-cog", "is-purple"], log: ["日志", "i-lucide-file-text", "is-muted"],
-  docx: ["Word 文档", "i-lucide-file-text", "is-blue"], doc: ["Word 文档（旧版）", "i-lucide-file-text", "is-blue"],
-  xlsx: ["Excel 表格", "i-lucide-sheet", "is-green"], xls: ["Excel 表格（旧版）", "i-lucide-sheet", "is-green"], ods: ["ODS 表格", "i-lucide-sheet", "is-green"],
-  pptx: ["PowerPoint 演示", "i-lucide-presentation", "is-orange"], ppt: ["PowerPoint 演示（旧版）", "i-lucide-presentation", "is-orange"],
-  mp4: ["视频", "i-lucide-file-play", "is-purple"], m4v: ["视频", "i-lucide-file-play", "is-purple"], webm: ["视频", "i-lucide-file-play", "is-purple"],
-  mov: ["视频", "i-lucide-file-play", "is-purple"], mkv: ["视频", "i-lucide-file-play", "is-purple"], avi: ["视频", "i-lucide-file-play", "is-purple"],
-  ogv: ["视频", "i-lucide-file-play", "is-purple"], mp3: ["音频", "i-lucide-file-audio", "is-purple"], wav: ["音频", "i-lucide-file-audio", "is-purple"],
-  ogg: ["音频", "i-lucide-file-audio", "is-purple"], oga: ["音频", "i-lucide-file-audio", "is-purple"], opus: ["音频", "i-lucide-file-audio", "is-purple"],
-  m4a: ["音频", "i-lucide-file-audio", "is-purple"], aac: ["音频", "i-lucide-file-audio", "is-purple"], flac: ["音频", "i-lucide-file-audio", "is-purple"],
-  avif: ["图片", "i-lucide-file-image", "is-purple"], bmp: ["图片", "i-lucide-file-image", "is-purple"], ico: ["图标", "i-lucide-file-image", "is-purple"],
-  srt: ["字幕", "i-lucide-captions", "is-purple"], vtt: ["字幕", "i-lucide-captions", "is-purple"], ass: ["字幕", "i-lucide-captions", "is-purple"],
-  ssa: ["字幕", "i-lucide-captions", "is-purple"], lrc: ["歌词字幕", "i-lucide-captions", "is-purple"],
-  prproj: ["Premiere 工程", "i-lucide-clapperboard", "is-purple"], fcpxml: ["Final Cut 工程", "i-lucide-clapperboard", "is-purple"],
-  kdenlive: ["Kdenlive 工程", "i-lucide-clapperboard", "is-purple"], mlt: ["MLT 工程", "i-lucide-clapperboard", "is-purple"],
-  otio: ["OpenTimelineIO 工程", "i-lucide-clapperboard", "is-purple"], edl: ["EDL 剪辑表", "i-lucide-clapperboard", "is-purple"],
-  aep: ["After Effects 工程", "i-lucide-clapperboard", "is-purple"], drp: ["DaVinci 工程", "i-lucide-clapperboard", "is-purple"],
-  veg: ["Vegas 工程", "i-lucide-clapperboard", "is-purple"],
+  png: [t('图片'), "i-lucide-file-image", "is-purple"], jpg: [t('图片'), "i-lucide-file-image", "is-purple"], jpeg: [t('图片'), "i-lucide-file-image", "is-purple"],
+  gif: [t('图片'), "i-lucide-file-image", "is-purple"], webp: [t('图片'), "i-lucide-file-image", "is-purple"], svg: ["SVG", "i-lucide-file-image", "is-orange"],
+  zip: [t('压缩包'), "i-lucide-file-archive", "is-muted"], pdf: ["PDF", "i-lucide-file-text", "is-red"], txt: [t('纯文本'), "i-lucide-file-text", "is-muted"],
+  csv: [t('CSV 表格'), "i-lucide-sheet", "is-green"], tsv: [t('TSV 表格'), "i-lucide-sheet", "is-green"], xml: ["XML", "i-lucide-file-code", "is-orange"],
+  ini: ["INI", "i-lucide-file-cog", "is-purple"], log: [t('日志'), "i-lucide-file-text", "is-muted"],
+  docx: [t('Word 文档'), "i-lucide-file-text", "is-blue"], doc: [t('Word 文档（旧版）'), "i-lucide-file-text", "is-blue"],
+  xlsx: [t('Excel 表格'), "i-lucide-sheet", "is-green"], xls: [t('Excel 表格（旧版）'), "i-lucide-sheet", "is-green"], ods: [t('ODS 表格'), "i-lucide-sheet", "is-green"],
+  pptx: [t('PowerPoint 演示'), "i-lucide-presentation", "is-orange"], ppt: [t('PowerPoint 演示（旧版）'), "i-lucide-presentation", "is-orange"],
+  mp4: [t('视频'), "i-lucide-file-play", "is-purple"], m4v: [t('视频'), "i-lucide-file-play", "is-purple"], webm: [t('视频'), "i-lucide-file-play", "is-purple"],
+  mov: [t('视频'), "i-lucide-file-play", "is-purple"], mkv: [t('视频'), "i-lucide-file-play", "is-purple"], avi: [t('视频'), "i-lucide-file-play", "is-purple"],
+  ogv: [t('视频'), "i-lucide-file-play", "is-purple"], mp3: [t('音频'), "i-lucide-file-audio", "is-purple"], wav: [t('音频'), "i-lucide-file-audio", "is-purple"],
+  ogg: [t('音频'), "i-lucide-file-audio", "is-purple"], oga: [t('音频'), "i-lucide-file-audio", "is-purple"], opus: [t('音频'), "i-lucide-file-audio", "is-purple"],
+  m4a: [t('音频'), "i-lucide-file-audio", "is-purple"], aac: [t('音频'), "i-lucide-file-audio", "is-purple"], flac: [t('音频'), "i-lucide-file-audio", "is-purple"],
+  avif: [t('图片'), "i-lucide-file-image", "is-purple"], bmp: [t('图片'), "i-lucide-file-image", "is-purple"], ico: [t('图标'), "i-lucide-file-image", "is-purple"],
+  srt: [t('字幕'), "i-lucide-captions", "is-purple"], vtt: [t('字幕'), "i-lucide-captions", "is-purple"], ass: [t('字幕'), "i-lucide-captions", "is-purple"],
+  ssa: [t('字幕'), "i-lucide-captions", "is-purple"], lrc: [t('歌词字幕'), "i-lucide-captions", "is-purple"],
+  prproj: [t('Premiere 工程'), "i-lucide-clapperboard", "is-purple"], fcpxml: [t('Final Cut 工程'), "i-lucide-clapperboard", "is-purple"],
+  kdenlive: [t('Kdenlive 工程'), "i-lucide-clapperboard", "is-purple"], mlt: [t('MLT 工程'), "i-lucide-clapperboard", "is-purple"],
+  otio: [t('OpenTimelineIO 工程'), "i-lucide-clapperboard", "is-purple"], edl: [t('EDL 剪辑表'), "i-lucide-clapperboard", "is-purple"],
+  aep: [t('After Effects 工程'), "i-lucide-clapperboard", "is-purple"], drp: [t('DaVinci 工程'), "i-lucide-clapperboard", "is-purple"],
+  veg: [t('Vegas 工程'), "i-lucide-clapperboard", "is-purple"],
 };
 
 // What the preview shows in its viewer or players, by extension; mirrors MEDIA_TYPES in runner/project_files.mjs.
@@ -175,7 +176,7 @@ export function document_kind_of(name) {
 /** Look up the display type of a file by its extension. */
 export function file_type(name) {
   const extension = /\.([^.\\/]+)$/.exec(name)?.[1]?.toLowerCase();
-  return FILE_TYPES[extension] || ["纯文本", "i-lucide-file", "is-muted"];
+  return FILE_TYPES[extension] || [t('纯文本'), "i-lucide-file", "is-muted"];
 }
 
 /**
@@ -207,7 +208,7 @@ export function inline_markdown_images(html, images, base) {
 
 /** Split a project-relative path into clickable crumbs, rooted at the project folder's own name. */
 export function crumbs_of(directory, path) {
-  const root = directory.split(/[\\/]/).filter(Boolean).pop() || "项目目录";
+  const root = directory.split(/[\\/]/).filter(Boolean).pop() || t('项目目录');
   const parts = path.split("/").filter(Boolean);
   return [{ name: root, path: "" }, ...parts.map((name, index) => ({ name, path: parts.slice(0, index + 1).join("/") }))];
 }
@@ -222,7 +223,7 @@ export function file_size(size) {
 
 /** Format a file's local modification time for the directory and the preview status bar. */
 export function modified_time(value) {
-  return value ? new Date(value).toLocaleString("zh-CN", { hour12: false, year: "numeric", month: "2-digit", day: "2-digit", hour: "2-digit", minute: "2-digit" }) : "";
+  return value ? new Date(value).toLocaleString(locale, { hour12: false, year: "numeric", month: "2-digit", day: "2-digit", hour: "2-digit", minute: "2-digit" }) : "";
 }
 
 /** "第 41 行" or "第 41–42 行"; empty when the lines are unknown. */

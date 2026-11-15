@@ -5,6 +5,7 @@
 import { computed, effectScope, inject, nextTick, ref, watch } from "vue";
 import { workflow_files_from_folder, workflow_files_from_zip } from "./workflow-files.js";
 import { flow_in_use } from "../runner/workflow_flow.mjs";
+import { t } from './i18n.js';
 
 const COMMANDS_FILE = "commands.json";
 const NEW_SKILL = "写下主持人怎么组织这个工作流：每一步找哪位成员、交回什么、怎么验收。";
@@ -17,10 +18,10 @@ let library = null;
  * this computer has not set up (their members could not join). A paused workflow is the user's choice, not a fault.
  */
 export function workflow_problem(item) {
-  if (item.error) return `无法读取：${item.error}`;
+  if (item.error) return t('无法读取：{value1}', { value1: item.error });
   if (!item.unavailable?.length) return "";
   const cards = item.unavailable.map((card) => `${card.label}（${card.platform}）`).join("、");
-  return `本机未配置这些卡片的软件：${cards}。可在工作流页的“专家配置”里换用本机已有的软件`;
+  return t('本机未配置这些卡片的软件：{value1}。可在工作流页的“专家配置”里换用本机已有的软件', { value1: cards });
 }
 
 /** The shared library, created on first use with the injected discussion context. */
@@ -128,7 +129,7 @@ function create_library({ view, bridge, act }) {
     if (cached) show(JSON.parse(cached), id);
     else { draft.value = null; saved_id.value = id || ""; }
     if (!id || workflows.value.find((item) => item.id === id)?.error) { draft.value = null; return; }
-    if (!cached) loading.value = "正在读取工作流…";
+    if (!cached) loading.value = t('正在读取工作流…');
     retry_read = () => open_saved(id);
     try {
       const value = await read_saved(id);
@@ -190,9 +191,9 @@ function create_library({ view, bridge, act }) {
     (now, before) => { if (available.value && before !== undefined) bridge.reload_workflows().catch(() => {}); });
 
   const add_items = [[
-    { label: "新建", icon: "i-lucide-plus", onSelect: () => guard(() => edit_draft({ label: "未命名工作流", description: "", skill: NEW_SKILL, agents: [] })) },
-    { label: "导入 zip", icon: "i-lucide-file-archive", onSelect: () => guard(() => inputs.zip?.click()) },
-    { label: "导入文件夹", icon: "i-lucide-folder-input", onSelect: () => guard(() => inputs.folder?.click()) },
+    { label: t('新建'), icon: "i-lucide-plus", onSelect: () => guard(() => edit_draft({ label: t('未命名工作流'), description: "", skill: NEW_SKILL, agents: [] })) },
+    { label: t('导入 zip'), icon: "i-lucide-file-archive", onSelect: () => guard(() => inputs.zip?.click()) },
+    { label: t('导入文件夹'), icon: "i-lucide-folder-input", onSelect: () => guard(() => inputs.folder?.click()) },
   ]];
 
   /** Read the opened files, let the local service check them, and put the result on the canvas; nothing is saved yet. */
@@ -200,14 +201,14 @@ function create_library({ view, bridge, act }) {
     const version = ++read_version;
     draft.value = null;
     saved_id.value = "";
-    loading.value = "正在导入工作流…";
+    loading.value = t('正在导入工作流…');
     failure.value = "";
     retry_read = () => import_files(read);
     page_open.value = true;
     try {
       const value = await bridge.local_request("workflows", { action: "preview", files: await read() });
       if (version !== read_version) return;
-      if (value.ignored?.length) bridge.notify("warning", `已忽略不支持的文件：${value.ignored.join("、")}`);
+      if (value.ignored?.length) bridge.notify("warning", t('已忽略不支持的文件：{value1}', { value1: value.ignored.join("、") }));
       edit_draft(value);
     } catch (error) { if (version === read_version) failure.value = error.message; }
     finally { if (version === read_version) loading.value = ""; }
@@ -246,11 +247,11 @@ function create_library({ view, bridge, act }) {
    * It is shown at once unless `open` is false (the main canvas places its node first, then enters it).
    */
   function add_sub(open = true) {
-    if (subs.value.length >= MAX_SUB_WORKFLOWS) { bridge.notify("warning", `子工作流最多 ${MAX_SUB_WORKFLOWS} 个`); return ""; }
+    if (subs.value.length >= MAX_SUB_WORKFLOWS) { bridge.notify("warning", t('子工作流最多 {value1} 个', { value1: MAX_SUB_WORKFLOWS })); return ""; }
     const taken = new Set(subs.value.map((sub) => sub.id));
     let number = subs.value.length + 1;
     while (taken.has(`part-${number}`)) number++;
-    draft.value.sub_workflows = [...subs.value, { id: `part-${number}`, label: `子工作流 ${number}`, description: "", skill: NEW_SUB_SKILL, agents: [], flow: null }];
+    draft.value.sub_workflows = [...subs.value, { id: `part-${number}`, label: t('子工作流 {value1}', { value1: number }), description: "", skill: NEW_SUB_SKILL, agents: [], flow: null }];
     if (open) enter_sub(`part-${number}`, true);
     return `part-${number}`;
   }
@@ -264,9 +265,9 @@ function create_library({ view, bridge, act }) {
   /** Save the workflow as files; the local service checks every field. A saved one keeps its folder's other files. */
   async function save() {
     if (busy.value || !draft.value) return;
-    if (!draft.value.label.trim() || !draft.value.skill.trim()) { open_scope(""); skill_request.value++; bridge.notify("warning", "请填写名称和 SKILL.md 正文"); return; }
+    if (!draft.value.label.trim() || !draft.value.skill.trim()) { open_scope(""); skill_request.value++; bridge.notify("warning", t('请填写名称和 SKILL.md 正文')); return; }
     const unfinished = subs.value.find((sub) => !sub.label.trim() || !sub.description.trim() || !sub.skill.trim());
-    if (unfinished) { open_scope(unfinished.id); skill_request.value++; bridge.notify("warning", "请填写子工作流的名称、一句话描述和 SKILL.md 正文"); return; }
+    if (unfinished) { open_scope(unfinished.id); skill_request.value++; bridge.notify("warning", t('请填写子工作流的名称、一句话描述和 SKILL.md 正文')); return; }
     const { resources, ...edited } = payload(draft.value);
     // An import keeps its commands file only when the user allowed it; the rest of its files come along either way.
     const kept = resources && !commands_allowed.value ? Object.fromEntries(Object.entries(resources).filter(([path]) => path !== COMMANDS_FILE)) : resources;
@@ -274,7 +275,7 @@ function create_library({ view, bridge, act }) {
     busy.value = true;
     try {
       const result = await bridge.local_request("workflows", { action: "save", workflow: saved_id.value ? edited : { ...edited, resources: kept } });
-      bridge.notify("info", `已保存「${result.label || result.id}」`);
+      bridge.notify("info", t('已保存「{value1}」', { value1: result.label || result.id }));
       read_cache.set(result.id, JSON.stringify(result));
       if (draft.value === saving) {
         if (JSON.stringify(payload(saving)) === saved_snapshot) show(result, result.id);
@@ -293,7 +294,7 @@ function create_library({ view, bridge, act }) {
     pending_items.value.add(id);
     try {
       await bridge.local_request("workflows", { action: "delete", id });
-      bridge.notify("info", `已删除「${label}」`);
+      bridge.notify("info", t('已删除「{value1}」', { value1: label }));
       read_cache.delete(id);
       if (id === saved_id.value) { read_version++; draft.value = null; saved_id.value = ""; loading.value = ""; }
       await bridge.reload_workflows();
@@ -305,11 +306,11 @@ function create_library({ view, bridge, act }) {
   /** An entry's "…" menu. */
   function item_menu(item) {
     return [[
-      { label: "重命名", icon: "i-lucide-pencil", disabled: Boolean(item.error), onSelect: () => start_rename(item) },
-      { label: item.disabled ? "启用" : "停用", icon: item.disabled ? "i-lucide-circle-play" : "i-lucide-circle-pause", onSelect: () => set_disabled(item, !item.disabled) },
-      { label: "复制文件夹路径", icon: "i-lucide-folder", disabled: !item.directory, onSelect: () => act("copy", item.directory) },
+      { label: t('重命名'), icon: "i-lucide-pencil", disabled: Boolean(item.error), onSelect: () => start_rename(item) },
+      { label: item.disabled ? t('启用') : t('停用'), icon: item.disabled ? "i-lucide-circle-play" : "i-lucide-circle-pause", onSelect: () => set_disabled(item, !item.disabled) },
+      { label: t('复制文件夹路径'), icon: "i-lucide-folder", disabled: !item.directory, onSelect: () => act("copy", item.directory) },
     ], [
-      { label: "删除", icon: "i-lucide-trash-2", color: "error", onSelect: () => { deleting.value = item.id; } },
+      { label: t('删除'), icon: "i-lucide-trash-2", color: "error", onSelect: () => { deleting.value = item.id; } },
     ]];
   }
 
@@ -344,7 +345,7 @@ function create_library({ view, bridge, act }) {
     pending_items.value.add(item.id);
     try {
       await bridge.local_request("workflows", { action: disabled ? "disable" : "enable", id: item.id });
-      bridge.notify("info", disabled ? `已停用「${item.label}」：房间里不能再启用它，已启用的房间改用房间里的设置` : `已启用「${item.label}」`);
+      bridge.notify("info", disabled ? t('已停用「{value1}」：房间里不能再启用它，已启用的房间改用房间里的设置', { value1: item.label }) : t('已启用「{value1}」', { value1: item.label }));
       await bridge.reload_workflows();
     } catch (error) { bridge.notify("error", error.message); }
     finally { pending_items.value.delete(item.id); }

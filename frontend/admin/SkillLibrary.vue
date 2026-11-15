@@ -6,6 +6,7 @@
  */
 import { inject, onMounted, ref, watch } from "vue";
 import { call } from "./api.js";
+import { t } from '../i18n.js';
 
 const { state, notify, refreshed } = inject("panel");
 const skills = ref([]), over = ref(false), importing = ref(""), removing = ref(null);
@@ -40,7 +41,7 @@ async function read_folder(entry, prefix = "") {
 
 async function upload(label, body) {
   importing.value = label;
-  try { const skill = await call("skill-library", body); notify("info", `已加入技能库：${skill.name}`); await load(); }
+  try { const skill = await call("skill-library", body); notify("info", t('已加入技能库：{value1}', { value1: skill.name })); await load(); }
   catch (failure) { notify("error", `${label}：${failure.message}`); }
   finally { importing.value = ""; }
 }
@@ -51,7 +52,7 @@ async function dropped(event) {
   for (const entry of entries) {
     if (entry.isDirectory) await upload(entry.name, { name: entry.name, files: await read_folder(entry) });
     else if (/\.zip$/i.test(entry.name)) { const file = await new Promise((done, fail) => entry.file(done, fail)); await upload(entry.name, { zip: base64(await file.arrayBuffer()) }); }
-    else notify("warning", `${entry.name} 不是文件夹或 .zip，已跳过`);
+    else notify("warning", t('{value1} 不是文件夹或 .zip，已跳过', { value1: entry.name }));
   }
 }
 
@@ -72,7 +73,7 @@ async function picked_folder(event) {
 async function remove() {
   const name = removing.value;
   removing.value = null;
-  try { await call(`skill-library/${name}/remove`, {}); notify("info", `已从技能库删除 ${name}`); await load(); }
+  try { await call(`skill-library/${name}/remove`, {}); notify("info", t('已从技能库删除 {value1}', { value1: name })); await load(); }
   catch (failure) { notify("error", failure.message); }
 }
 
@@ -84,7 +85,7 @@ async function open_prompt() {
 }
 async function save_prompt() {
   prompt.value.saving = true;
-  try { await call("hosted-prompt", { text: prompt.value.text }); prompt.value.saved = prompt.value.text; notify("info", "默认系统提示词已保存，之后初始化的账号会用它"); }
+  try { await call("hosted-prompt", { text: prompt.value.text }); prompt.value.saved = prompt.value.text; notify("info", t('默认系统提示词已保存，之后初始化的账号会用它')); }
   catch (failure) { notify("error", failure.message); }
   finally { prompt.value.saving = false; }
 }
@@ -95,34 +96,32 @@ const size = (bytes) => (bytes > 1048576 ? `${(bytes / 1048576).toFixed(1)} MB` 
   <div class="library">
     <div class="library-drop" :class="{ 'is-over': over }" @dragover.prevent="over = true" @dragleave="over = false" @drop.prevent="dropped">
       <UIcon :name="importing ? 'i-lucide-loader' : 'i-lucide-folder-down'" :class="{ 'animate-spin': importing }" />
-      <strong>{{ importing ? `正在导入 ${importing}…` : "把技能文件夹或 .zip 拖到这里" }}</strong>
-      <small>技能文件夹里要有 SKILL.md。也可以
-        <label class="library-pick">选择 .zip<input type="file" accept=".zip" multiple hidden @change="picked_zip" /></label> 或
-        <label class="library-pick">选择文件夹<input type="file" webkitdirectory hidden @change="picked_folder" /></label></small>
+      <strong>{{ importing ? t('正在导入 {value1}…', { value1: importing }) : t('把技能文件夹或 .zip 拖到这里') }}</strong>
+      <small>{{ t('技能文件夹里要有 SKILL.md。也可以') }} <label class="library-pick">{{ t('选择 .zip') }}<input type="file" accept=".zip" multiple hidden @change="picked_zip" /></label> {{ t('或') }} <label class="library-pick">{{ t('选择文件夹') }}<input type="file" webkitdirectory hidden @change="picked_folder" /></label></small>
     </div>
-    <p v-if="!skills.length" class="library-empty">技能库还是空的。导入后，到各账号的“技能”里安装。</p>
+    <p v-if="!skills.length" class="library-empty">{{ t('技能库还是空的。导入后，到各账号的“技能”里安装。') }}</p>
     <div v-for="skill in skills" :key="skill.name" class="library-row">
       <UIcon name="i-lucide-sparkle" class="library-icon" />
-      <div class="library-text"><strong>{{ skill.name }}</strong><small>{{ skill.description || "（SKILL.md 没写描述）" }} · {{ skill.files }} 个文件 · {{ size(skill.size) }}</small></div>
-      <button type="button" class="panel-icon-button" title="从技能库删除" aria-label="从技能库删除" @click="removing = skill.name"><UIcon name="i-lucide-trash-2" /></button>
+      <div class="library-text"><strong>{{ skill.name }}</strong><small>{{ t('{value1} · {value2} 个文件 · {value3}', { value1: skill.description || t('（SKILL.md 没写描述）'), value2: skill.files, value3: size(skill.size) }) }}</small></div>
+      <button type="button" class="panel-icon-button" :title="t('从技能库删除')" :aria-label="t('从技能库删除')" @click="removing = skill.name"><UIcon name="i-lucide-trash-2" /></button>
     </div>
     <div v-if="state.hosting" class="library-prompt">
       <button type="button" class="library-toggle" @click="open_prompt">
-        <strong>新账号的默认系统提示词</strong><small>初始化 AI 环境时，账号还没有系统提示词就用这一份；不会用你自己的</small>
+        <strong>{{ t('新账号的默认系统提示词') }}</strong><small>{{ t('初始化 AI 环境时，账号还没有系统提示词就用这一份；不会用你自己的') }}</small>
         <UIcon :name="prompt.open ? 'i-lucide-chevron-up' : 'i-lucide-chevron-down'" /></button>
       <template v-if="prompt.open">
         <textarea v-model="prompt.text" class="panel-input library-area" spellcheck="false" />
-        <div class="library-actions"><button type="button" class="panel-button is-primary is-small" :disabled="prompt.text === prompt.saved || prompt.saving" @click="save_prompt">保存</button></div>
+        <div class="library-actions"><button type="button" class="panel-button is-primary is-small" :disabled="prompt.text === prompt.saved || prompt.saving" @click="save_prompt">{{ t('保存') }}</button></div>
       </template>
     </div>
   </div>
 
-  <UModal :open="Boolean(removing)" title="从技能库删除" @update:open="(open) => !open && (removing = null)">
+  <UModal :open="Boolean(removing)" :title="t('从技能库删除')" @update:open="(open) => !open && (removing = null)">
     <template #body>
-      <p style="margin: 0; color: #4b5563; font-size: 14px; line-height: 1.7">从技能库删除 {{ removing }}。已经装给账号的副本不受影响，需要时在账号页移除。</p>
+      <p style="margin: 0; color: #4b5563; font-size: 14px; line-height: 1.7">{{ t('从技能库删除 {value1}。已经装给账号的副本不受影响，需要时在账号页移除。', { value1: removing }) }}</p>
       <div class="panel-form-foot">
-        <button type="button" class="panel-button is-plain" @click="removing = null">取消</button>
-        <button type="button" class="panel-button is-primary" style="background: #dc2626" @click="remove">删除</button>
+        <button type="button" class="panel-button is-plain" @click="removing = null">{{ t('取消') }}</button>
+        <button type="button" class="panel-button is-primary" style="background: #dc2626" @click="remove">{{ t('删除') }}</button>
       </div>
     </template>
   </UModal>

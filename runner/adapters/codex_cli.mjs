@@ -109,7 +109,7 @@ function invocation(config, binding, task) {
   const permissions = codex_permissions(config, task);
   const full = config.project_access === 'full';
   const input = `${JSON.stringify({ prompt: task.prompt, thread_id: binding.session_id || '', cwd: launch_directory(config, task),
-    model: config.model || '', effort: config.effort || '', full })}\n`;
+    model: config.model || '', effort: config.effort || '', full, ...(task.images?.length ? { images: task.images.map(image => image.path) } : {}) })}\n`;
   return { executable: process.execPath, args: [CODEX_BRIDGE, config.executable, ...(full ? [] : permissions.args)], input,
     steer: text => `${JSON.stringify({ steer: text })}\n`,
     ...(permissions.name ? { check: spawn_process => check_codex_permissions(config, task, permissions, spawn_process) } : {}) };

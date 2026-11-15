@@ -345,3 +345,15 @@ class BrowserLinkTest(ProtectedInstance):
         self.assertEqual(self.get(self.link(at=int(time.time()) - 3600))[0], 403, "stale")
         self.assertEqual(self.get(self.link(key=secrets.token_hex(32)))[0], 403, "signed with another key")
         self.assertEqual(self.get("/_instance/open?at=1&sig=x")[0], 403)
+
+    def test_expired_link_text_uses_the_requested_language(self):
+        """Expired opening links remain plain text and localize their fixed explanation."""
+        for language, expected in (("zh-CN", "链接已失效"), ("en-US", "link")):
+            with self.subTest(language=language):
+                sock = self.connect()
+                send(sock, "/_instance/open?at=1&sig=x", {
+                    "Host": f"127.0.0.1:{self.port}", "Accept-Language": language})
+                status, headers, body = read_response(sock)
+                self.assertEqual(status, 403)
+                self.assertIn("text/plain", headers["content-type"])
+                self.assertIn(expected, body.decode("utf-8").lower())

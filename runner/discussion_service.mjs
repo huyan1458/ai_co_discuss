@@ -358,6 +358,8 @@ class RoomWorker {
       try {
         const { adopt_member_profile } = await import('./discussion_launch.mjs');
         const member_token = `${randomUUID()}${randomUUID()}`;
+        // A removed member's name stays in the local configuration; a manual member invited under it again is another member.
+        if (member.name in this.config.participants) this.runner.forget_member?.(member.name);
         const adapter = adopt_member_profile(this.home, this.path, member.name, member.reported_session, member.reported_client, member_token);
         await api(this.config, `/members/${member.id}`, { action: 'adopt', adapter, session_id: member.reported_session, token: member_token });
         this.log(`${this.config.room}: ${member.name} 已转为本机托管`);

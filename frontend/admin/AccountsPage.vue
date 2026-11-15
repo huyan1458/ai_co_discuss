@@ -8,6 +8,7 @@ import { computed, inject, ref } from "vue";
 import AccountDetail from "./AccountDetail.vue";
 import NewAccount from "./NewAccount.vue";
 import OwnerDetail from "./OwnerDetail.vue";
+import { t } from '../i18n.js';
 
 const OWNER = "", NEW = "\u0000new";
 const { state } = inject("panel");
@@ -20,42 +21,42 @@ const current = computed(() => (chosen.value === NEW || state.value.accounts.som
 /** The list's "⋯" for one account: open that account and hand the operation to its detail page. */
 function menu(account) {
   const pick = (action) => () => { chosen.value = account.name; request.value = { name: account.name, action }; };
-  return [[account.disabled ? { label: "启用账号", icon: "i-lucide-user-check", onSelect: pick("enable") }
-    : { label: "停用账号", icon: "i-lucide-user-x", onSelect: pick("disable") }],
-  [{ label: "删除账号", icon: "i-lucide-trash-2", color: "error", onSelect: pick("remove") }]];
+  return [[account.disabled ? { label: t('启用账号'), icon: "i-lucide-user-check", onSelect: pick("enable") }
+    : { label: t('停用账号'), icon: "i-lucide-user-x", onSelect: pick("disable") }],
+  [{ label: t('删除账号'), icon: "i-lucide-trash-2", color: "error", onSelect: pick("remove") }]];
 }
 
 /** What an account still lacks, in the order to fix it. */
 function todo(account) {
-  if (!account.os_user) return "未隔离";
-  if (!account.skills) return "AI 环境未初始化";
-  if (!account.protected) return "入口保护未开启";
+  if (!account.os_user) return t('未隔离');
+  if (!account.skills) return t('AI 环境未初始化');
+  if (!account.protected) return t('入口保护未开启');
   return "";
 }
 </script>
 
 <template>
   <div class="accounts">
-    <nav class="accounts-side" aria-label="账号">
+    <nav class="accounts-side" :aria-label="t('账号')">
       <button type="button" class="accounts-item" :class="{ 'is-active': current === OWNER }" @click="chosen = OWNER">
         <span class="accounts-avatar is-owner"><UIcon name="i-lucide-user-cog" /></span>
-        <span class="accounts-text"><strong>管理员</strong><small>本机账号</small></span>
+        <span class="accounts-text"><strong>{{ t('管理员') }}</strong><small>{{ t('本机账号') }}</small></span>
       </button>
       <template v-if="state.hosting">
-        <div class="accounts-group">托管账号</div>
+        <div class="accounts-group">{{ t('托管账号') }}</div>
         <div v-for="account in state.accounts" :key="account.name" class="accounts-row">
           <button type="button" class="accounts-item" :class="{ 'is-active': current === account.name }" @click="chosen = account.name">
-            <span class="accounts-avatar">{{ account.name.slice(0, 1).toUpperCase() }}<i :class="account.running ? 'is-on' : 'is-off'" :title="account.running ? '运行中' : '已停止'" /></span>
+            <span class="accounts-avatar">{{ account.name.slice(0, 1).toUpperCase() }}<i :class="account.running ? 'is-on' : 'is-off'" :title="account.running ? t('运行中') : t('已停止')" /></span>
             <span class="accounts-text"><strong>{{ account.name }}</strong>
-              <small :class="{ 'is-warn': todo(account) || account.disabled }">{{ account.disabled ? "已停用" : todo(account) ? `待处理：${todo(account)}` : "已隔离" }}</small></span>
+              <small :class="{ 'is-warn': todo(account) || account.disabled }">{{ account.disabled ? t('已停用') : todo(account) ? t('待处理：{value1}', { value1: todo(account) }) : t('已隔离') }}</small></span>
           </button>
           <UDropdownMenu :items="menu(account)" :content="{ align: 'start', side: 'right' }">
-            <button type="button" class="accounts-more" title="更多操作" aria-label="更多操作"><UIcon name="i-lucide-ellipsis" /></button>
+            <button type="button" class="accounts-more" :title="t('更多操作')" :aria-label="t('更多操作')"><UIcon name="i-lucide-ellipsis" /></button>
           </UDropdownMenu>
         </div>
-        <p v-if="!state.accounts.length" class="accounts-empty">暂无托管账号。创建后，对方可通过登录入口使用本机的 AI。</p>
+        <p v-if="!state.accounts.length" class="accounts-empty">{{ t('暂无托管账号。创建后，对方可通过登录入口使用本机的 AI。') }}</p>
         <button type="button" class="accounts-item is-new" :class="{ 'is-active': current === NEW }" @click="chosen = NEW">
-          <span class="accounts-avatar"><UIcon name="i-lucide-plus" /></span><span class="accounts-text"><strong>新建账号</strong></span>
+          <span class="accounts-avatar"><UIcon name="i-lucide-plus" /></span><span class="accounts-text"><strong>{{ t('新建账号') }}</strong></span>
         </button>
       </template>
     </nav>

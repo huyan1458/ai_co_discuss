@@ -6,6 +6,7 @@ import Viewer from "viewerjs";
 import { h, render } from "vue";
 import PreviewLoading from "./PreviewLoading.vue";
 import "viewerjs/dist/viewer.css";
+import { t } from './i18n.js';
 
 // Zoom, original size, fit, rotate and flip; no gallery navigation for a single image.
 export const IMAGE_TOOLBAR = { zoomIn: 1, zoomOut: 1, oneToOne: 1, reset: 1, rotateLeft: 1, rotateRight: 1, flipHorizontal: 1, flipVertical: 1 };
@@ -33,12 +34,12 @@ export function open_image_viewer({ url, file_name = "" }, load_url = () => Prom
   function failed(error) {
     if (closed) return;
     render(h("div", { style: "align-self:center;text-align:center;color:var(--ui-text)" }, [
-      h("p", error.message || "图片读取失败"),
-      h("button", { type: "button", style: "pointer-events:auto;text-decoration:underline", onClick: load }, "重新读取图片"),
+      h("p", error.message || t('图片读取失败')),
+      h("button", { type: "button", style: "pointer-events:auto;text-decoration:underline", onClick: load }, t('重新读取图片')),
     ]), cover);
   }
   async function load() {
-    render(h(PreviewLoading, { label: "正在载入图片…" }), cover);
+    render(h(PreviewLoading, { label: t('正在载入图片…') }), cover);
     try {
       const address = await load_url();
       if (closed) return;
@@ -46,7 +47,7 @@ export function open_image_viewer({ url, file_name = "" }, load_url = () => Prom
       loaded_url = image.src;
       viewer.update();
       viewer.view(0);
-      viewer.image?.addEventListener("error", () => failed(new Error("图片读取失败")), { once: true });
+      viewer.image?.addEventListener("error", () => failed(new Error(t('图片读取失败'))), { once: true });
     } catch (error) { failed(error); }
   }
   viewer.show();

@@ -6,6 +6,7 @@
  */
 import { inject, onMounted, ref, watch } from "vue";
 import { call } from "./api.js";
+import { t } from '../i18n.js';
 
 const { notify, refreshed } = inject("panel");
 const groups = ref(null), loading = ref(false), open = ref(""), drafts = ref({}), saving = ref("");
@@ -29,7 +30,7 @@ async function save(group) {
   saving.value = group.key;
   try {
     groups.value = await call("owner/prompts", { key: group.key, text: drafts.value[group.key], original: group.text });
-    notify("info", `${names(group)} 的系统提示词已保存`);
+    notify("info", t('{value1} 的系统提示词已保存', { value1: names(group) }));
   } catch (failure) { notify("error", failure.message); await load(); }
   finally { saving.value = ""; }
 }
@@ -38,25 +39,25 @@ async function save(group) {
 <template>
   <div class="prompt">
     <div class="prompt-head">
-      <span>系统提示词 <small>各程序每次启动时读取的全局指令</small></span>
-      <button type="button" class="panel-icon-button" :class="{ 'is-spinning': loading }" :disabled="loading" title="重新读取" aria-label="重新读取" @click="load"><UIcon name="i-lucide-refresh-cw" /></button>
+      <span>{{ t('系统提示词') }} <small>{{ t('各程序每次启动时读取的全局指令') }}</small></span>
+      <button type="button" class="panel-icon-button" :class="{ 'is-spinning': loading }" :disabled="loading" :title="t('重新读取')" :aria-label="t('重新读取')" @click="load"><UIcon name="i-lucide-refresh-cw" /></button>
     </div>
     <p v-if="groups?.error" class="panel-note is-amber"><UIcon name="i-lucide-circle-alert" />{{ groups.error }}</p>
-    <p v-else-if="!groups" class="prompt-empty">读取中…</p>
+    <p v-else-if="!groups" class="prompt-empty">{{ t('读取中…') }}</p>
     <div v-for="group in groups || []" v-else :key="group.key" class="prompt-group">
       <button type="button" class="prompt-toggle" @click="open = open === group.key ? '' : group.key">
         <span class="prompt-title"><strong>{{ names(group) }}</strong>
-          <span v-if="group.programs.length > 1" class="panel-tag is-blue">共用一份</span>
-          <span v-if="!group.exists" class="panel-tag is-gray">未创建</span>
+          <span v-if="group.programs.length > 1" class="panel-tag is-blue">{{ t('共用一份') }}</span>
+          <span v-if="!group.exists" class="panel-tag is-gray">{{ t('未创建') }}</span>
           <small>{{ group.programs.map((program) => program.path).join("；") }}</small></span>
         <UIcon :name="open === group.key ? 'i-lucide-chevron-up' : 'i-lucide-chevron-down'" />
       </button>
       <template v-if="open === group.key">
-        <textarea v-model="drafts[group.key]" class="panel-input prompt-area" spellcheck="false" :placeholder="group.exists ? '' : '保存后创建该文件'" />
+        <textarea v-model="drafts[group.key]" class="panel-input prompt-area" spellcheck="false" :placeholder="group.exists ? '' : t('保存后创建该文件')" />
         <div class="prompt-actions">
-          <button type="button" class="panel-button is-plain is-small" :disabled="drafts[group.key] === group.text" @click="drafts[group.key] = group.text">撤销修改</button>
+          <button type="button" class="panel-button is-plain is-small" :disabled="drafts[group.key] === group.text" @click="drafts[group.key] = group.text">{{ t('撤销修改') }}</button>
           <button type="button" class="panel-button is-primary is-small" :disabled="drafts[group.key] === group.text || Boolean(saving)" @click="save(group)">
-            <UIcon v-if="saving === group.key" name="i-lucide-loader" class="animate-spin" />保存</button>
+            <UIcon v-if="saving === group.key" name="i-lucide-loader" class="animate-spin" />{{ t('保存') }}</button>
         </div>
       </template>
     </div>

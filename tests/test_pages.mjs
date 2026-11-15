@@ -12,6 +12,7 @@ import vm from "node:vm";
 import { build_pages } from "../scripts/build_pages.mjs";
 import worker from "../backend/worker.mjs";
 import { MachineRelay } from "../backend/updates.mjs";
+import { t as translate } from "../frontend/i18n.js";
 
 const PROJECT_ROOT = dirname(dirname(fileURLToPath(import.meta.url)));
 
@@ -218,6 +219,7 @@ test('a page pairs at the computer with a passkey, then runs operations on it en
   };
   page_code = vm.runInNewContext([`const MODEL_CATALOG_TIMEOUT_MS = 35000;`, constants, source.slice(start, end), '({ relay_command, pair_this_device, device_credential })'].join('\n'),
     { crypto, TextEncoder, TextDecoder, btoa, atob, setTimeout, Uint8Array, JSON, Date, Object, Error, Promise, Math, request_json, relay_machine: machine,
+      t: translate, server_text: (payload, fallback) => payload?.template ? translate(payload.template, payload.params) : fallback,
       fetch: (url, options) => worker.fetch(new Request(new URL(url, 'https://discussion.test'), options), f.env), URL,
       localStorage: { getItem: key => storage.get(key) ?? null, setItem: (key, value) => storage.set(key, String(value)), removeItem: key => storage.delete(key) },
       location: { hostname: 'discussion.test' },
@@ -462,6 +464,33 @@ test('hosted accounts reach the computer\'s sign-in entry over the relay only wh
   } finally {
     server.close();
     await rm(home, { recursive: true, force: true });
+  }
+});
+
+test('Worker errors retain Chinese text and translation metadata without leaking internal failures', async () => {
+  const missing = await worker.fetch(new Request('https://site.example/api/missing'), {});
+  assert.equal(missing.status, 404);
+  assert.deepEqual(await missing.json(), { error: '地址不存在', error_text: { template: '地址不存在', params: {} } });
+  const broken = await worker.fetch(new Request('https://site.example/api/machines'), { DB: { prepare() { throw new Error('private database details'); } } });
+  assert.equal(broken.status, 500);
+  assert.deepEqual(await broken.json(), { error: '服务器内部错误', error_text: { template: '服务器内部错误', params: {} } });
+  const { default: entry_worker } = await import('../backend/entry_worker.mjs');
+  const invalid = await entry_worker.fetch(new Request('https://entry.example/_codiscuss/status?machine=invalid'), {});
+  assert.equal(invalid.status, 400);
+  assert.deepEqual(await invalid.json(), { error: '电脑编号无效', error_text: { template: '电脑编号无效', params: {} } });
+});
+
+test('entry error pages and offline relay pages follow the browser language', async () => {
+  const { default: entry_worker } = await import('../backend/entry_worker.mjs');
+  const relay = new MachineRelay(relay_context().ctx);
+  const env = { RELAY: { idFromName: name => name, get: () => ({ fetch: (url, init) => relay.fetch(new Request(url, init)) }) } };
+  for (const [language, missing_text, offline_text] of [['en-US,en;q=0.9', 'Incomplete link', 'This computer is offline'], ['zh-CN,zh;q=0.9', '链接不完整', '这台电脑当前不在线']]) {
+    const missing = await entry_worker.fetch(new Request('https://entry.example/', { headers: { 'Accept-Language': language } }), env);
+    assert.equal(missing.status, 404);
+    assert.ok((await missing.text()).includes(missing_text));
+    const offline = await entry_worker.fetch(new Request('https://entry.example/', { headers: { 'Accept-Language': language, Cookie: `codiscuss_machine=${'a'.repeat(32)}` } }), env);
+    assert.equal(offline.status, 503);
+    assert.ok((await offline.text()).includes(offline_text));
   }
 });
 

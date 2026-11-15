@@ -82,6 +82,12 @@ export default defineConfig(({ mode }) => mode === "markdown" ? {
     outDir: "web", emptyOutDir: false,
     lib: { entry: "frontend/backup.mjs", name: "discuss_backup", formats: ["iife"], fileName: () => "backup.js" },
   },
+} : mode === "i18n" ? {
+  // A classic script every page loads first, so web/app.js and the Vue bundles share one copy of the dictionaries.
+  build: {
+    outDir: "web", emptyOutDir: false,
+    lib: { entry: "frontend/i18n-runtime.js", name: "codiscuss_i18n", formats: ["iife"], fileName: () => "i18n.js" },
+  },
 } : {
   // The npm package version, shown under the brand; the release script publishes the site and the package together.
   define: { "process.env.NODE_ENV": JSON.stringify("production"),

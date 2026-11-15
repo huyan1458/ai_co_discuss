@@ -18,7 +18,7 @@ import { forget_sent_images, image_tools, is_image_tool, MAX_MESSAGE_ATTACHMENTS
 import { events as pi_events, pi_delivery, session as pi_session } from './api_pi.mjs';
 import { ensure_pi } from '../pi_runtime.mjs';
 import { execution_marker, not_sent } from './common.mjs';
-import { DEFAULT_API_MAX_REQUESTS } from './profiles.mjs';
+import { DEFAULT_API_MAX_REQUESTS, takes_images } from './profiles.mjs';
 import { room_image } from '../image_service.mjs';
 import { site_fetch as entry_fetch } from '../entry_client.mjs';
 
@@ -251,9 +251,11 @@ function skill_text(name, file = 'SKILL.md') {
 }
 
 /** What this member can do with project files, in its environment notes. */
-function project_text(project, commands) {
-  const attachments = '消息附件只显示名称、大小与 ID，内容读不到';
-  if (!project) return `- 本地文件和消息附件（只显示名称、大小与 ID）的内容你都读不到：以其他成员贴出的为准，不凭文件名猜测；回答涉及时说明你没有读取，缺信息就写明缺什么。`;
+function project_text(project, commands, image_input = false) {
+  // A model the owner marked as reading images gets the woken messages' images with the task, as task.attachments lists.
+  const seen = image_input ? '唤醒你的消息里的图片（task.attachments 中的 [图片 #n]）已随任务附上，可以直接看；其余' : '';
+  const attachments = `${seen}消息附件只显示名称、大小与 ID，内容读不到`;
+  if (!project) return `- ${seen}本地文件和消息附件（只显示名称、大小与 ID）的内容你都读不到：以其他成员贴出的为准，不凭文件名猜测；回答涉及时说明你没有读取，缺信息就写明缺什么。`;
   const tools = project.writable ? 'read、glob、grep、write、edit' : 'read、glob、grep';
   const extras = project.roots.slice(1).map(item => `${item.root}（${item.writable ? '可读写' : '只读'}）`).join('、');
   const runnable = command_tools(commands, project).length > 0;
@@ -293,7 +295,7 @@ export function system_prompt(context) {
 - 只能使用提供的${context.project ? '房间工具和项目文件工具' : '房间工具'}，没有${command_tools(context.commands, context.project).length ? '通用' : ''}命令行、浏览器、附件下载或其他软件。接入程序负责执行认领、续租和凭据管理；你的房间写入工具都绑定本次执行，不要重试结果不明的写入。
 - 命令与工具对应：room view → read_room；message list / view → read_messages / read_message；message post --kind chat → submit_chat。${host ? 'state decision → read_decision（按任务的决策编号读取完整判断）。' : ''}${discussion && host
     ? '主持讨论工具还包括 state set → save_state；room update → update_topic；turn create --plan-file → arrange_turns；turn continue → continue_plan；turn roster → read_roster，读后 turn ask → ask_interjection；取消安排 → cancel_turn；room limits --done → finish_discussion / declare_done。' : ''}${host ? ' 派活用 to，派出的工作结束后都会交回你；房间空闲后要接着推进时填 continue；message post --sequential / --loop / --with / --checkpoint / --repeat / --detach → submit_chat 的 sequential / loop / parallel / gates / detach；sequence view → read_sequence；sequence continue → continue_sequence。' : ''}${goal_host(context) ? ' goal view → read_goal；goal start → start_goal；goal done / block → finish_goal；goal state → set_goal_state。' : ''}
-${project_text(context.project, context.commands)}${context.image ? `
+${project_text(context.project, context.commands, context.image_input)}${context.image ? `
 - 可用 generate_image 按文字生成图片（含 GIF 动图、SVG 矢量图），edit_image 按消息里的图片附件 ID${context.project ? '或项目内图片' : ''}修改、合成图片，图片模型为 ${context.image.model}。生成的图片存为本次执行的附件，submit_chat 时自动随回答发出（每条最多 ${MAX_MESSAGE_ATTACHMENTS} 张，可用 attachments 选择）；task.unsent_images 列出你之前的执行生成后没能发出的图片（那次执行失败了），与本次任务相关时用 attachments 附上，不必重画。${context.project?.writable ? '图片要插进项目文档（如 Markdown）时，用 save_path 存进项目，文档里按相对路径引用。' : ''}你看不到图片内容：回答里说明画了什么、用了哪些参数，不描述没看到的细节，需要人看图确认时请用户或能看图的成员确认。每次调用都计费，不为试探反复生成；被拒或报错时按返回原因调整后再试。` : ''}
 - ${max_requests(context) ? `本次执行最多 ${max_requests(context)} 次模型请求，每轮都计入；` : ''}互不依赖的读取或修改（如同一文件的多处 edit）在同一轮一次调用多个工具，减少模型请求次数。
 - 必须通过写入工具保存真实结果，普通文本输出不会保存。确实无法继续时不调用写入工具直接结束，本次执行会暂停等待用户。
@@ -364,11 +366,14 @@ async function task_prompt(context) {
       id: context.workflow.id, label: context.workflow.label, members: context.workflow.members } } : {}),
     ...(context.scheduler_suggestions?.length ? { scheduler_suggestions: context.scheduler_suggestions } : {}),
     ...(context.review_handoffs?.length ? { review_handoffs: context.review_handoffs } : {}),
+    ...(context.attachments?.length ? { attachments: context.attachments } : {}),
     ...(context.unsent_images?.length ? { unsent_images: context.unsent_images } : {}) } })}\n\n（执行标记 ${execution_marker(context.execution_id)}，无需处理）`;
 }
 
+// The largest image sent inline: the strictest provider (Anthropic) refuses one whose base64 form passes 5 MB.
+const MAX_INLINE_IMAGE_BYTES = 3_750_000;
 // The member's profile fields the extension needs; the key travels only in the Pi process's environment.
-const PROFILE_FIELDS = ['adapter', 'base_url', 'api_protocol', 'model', 'effort'];
+const PROFILE_FIELDS = ['adapter', 'base_url', 'api_protocol', 'model', 'effort', 'image_input'];
 
 /** Rebuild an execution's tool context inside the Pi process from the setup the runner wrote. */
 export function extension_context(setup, key) {
@@ -384,7 +389,7 @@ export function extension_context(setup, key) {
  * system prompt (too long for a Windows command line). A failure before Pi starts is reported as not sent.
  */
 export async function api_delivery(profile, binding, task, spawn_process) {
-  let key, prompt, context, cli;
+  let key, prompt, context, cli, images;
   try {
     key = read_api_key(task.api_context.home, profile);
     cli = await ensure_pi(task.api_context.home);
@@ -393,7 +398,10 @@ export async function api_delivery(profile, binding, task, spawn_process) {
       // The service home holds API keys and the task directory holds room credentials; neither is a project file.
       project: open_project(task.api_context, [task.api_context.home, task.directory]) };
     if (context.image) context.unsent_images = unsent_images(context);
+    context.image_input = takes_images(profile);
     prompt = await task_prompt(context);
+    images = (task.images || []).filter(image => image.size <= MAX_INLINE_IMAGE_BYTES)
+      .map(image => ({ type: 'image', data: readFileSync(image.path).toString('base64'), mimeType: image.content_type }));
   } catch (error) {
     const message = String(error.message || error);
     throw not_sent(new Error(key ? message.replaceAll(key, '[已隐藏]') : message));
@@ -408,7 +416,7 @@ export async function api_delivery(profile, binding, task, spawn_process) {
   // Without a command line, every file it writes goes through the write tools, so its edit list is complete; a registered
   // command that changes files writes without telling, so then the list is left untracked.
   if (context.project && !runs_write_commands(context.commands, context.project)) task.on_edits?.([]);
-  return pi_delivery({ cli, profile, key, binding, task, context_file, system_file, prompt, max_requests: max_requests(context),
+  return pi_delivery({ cli, profile, key, binding, task, context_file, system_file, prompt, images, max_requests: max_requests(context),
     project_root: context.project?.root || '', service_home: task.api_context.home, ...(spawn_process ? { spawn_process } : {}) });
 }
 

@@ -13,6 +13,7 @@ import RosterAdd from "./RosterAdd.vue";
 import SchedulerSettings from "./SchedulerSettings.vue";
 import ImageService from "./ImageService.vue";
 import HostWorkflowSwitch from "./HostWorkflowSwitch.vue";
+import { t } from "./i18n.js";
 
 const props = defineProps({ targetFolder: { type: Object, default: null } });
 const emit = defineEmits(["submit", "cancel"]);
@@ -67,7 +68,7 @@ const room_ready = computed(() => selected_names.value.length > 0 && woken_names
 const scheduling = computed(() => view.value.launch.available);
 const scheduler_active = computed(() => scheduling.value && Boolean(view.value.launch.scheduler?.enabled));
 // Always shown; when it cannot run yet, say what is missing instead of hiding it.
-const scheduling_blocker = computed(() => !view.value.launch.available ? "连接本机服务后可开启" : "");
+const scheduling_blocker = computed(() => !view.value.launch.available ? t("连接本机服务后可开启") : "");
 const scheduler_unready = computed(() => {
   const scheduler = view.value.launch.scheduler || {};
   return scheduling.value && scheduler.enabled && !(scheduler.provider && scheduler.model && scheduler.api_key_ref);
@@ -77,14 +78,14 @@ const needs_connection = computed(() => automatic.value && !launchable.value);
 let connection_timer = 0;
 /** Why the create button is disabled, in the order the user can fix it. */
 const blocker = computed(() => {
-  if (discussing.value && selected.value[host.value] !== "cli") return "开启讨论需要先添加一位由本机唤醒的主持人";
-  if (goal.value && selected.value[host.value] !== "cli") return "开启 Goal 需要先添加一位由本机唤醒的主持人";
-  if (goal.value && !goal.value.objective.trim()) return "填写 Goal 目标";
-  if (needs_connection.value) return "先连接本机服务，或把成员改为手动启动";
-  if (driven.value && !launchable.value) return "先连接本机服务";
+  if (discussing.value && selected.value[host.value] !== "cli") return t("开启讨论需要先添加一位由本机唤醒的主持人");
+  if (goal.value && selected.value[host.value] !== "cli") return t("开启 Goal 需要先添加一位由本机唤醒的主持人");
+  if (goal.value && !goal.value.objective.trim()) return t("填写 Goal 目标");
+  if (needs_connection.value) return t("先连接本机服务，或把成员改为手动启动");
+  if (driven.value && !launchable.value) return t("先连接本机服务");
   const unready = woken_names.value.filter((name) => !launch_ready(name));
-  if (unready.length && relay.value) return `在电脑「${relay.value.name}」上配置 ${unready.join("、")}`;
-  return unready.length ? `补齐 ${unready.join("、")} 的接入配置` : scheduler_unready.value ? "补齐决策模型配置，或移出决策模型" : "";
+  if (unready.length && relay.value) return t("在电脑「{computer}」上配置 {names}", { computer: relay.value.name, names: unready.join(t("、")) });
+  return unready.length ? t("补齐 {names} 的接入配置", { names: unready.join(t("、")) }) : scheduler_unready.value ? t("补齐决策模型配置，或移出决策模型") : "";
 });
 const submit_disabled = computed(() => !room_ready.value || Boolean(blocker.value) || scheduler_unready.value || pending.value === "create");
 
@@ -100,11 +101,11 @@ onMounted(() => {
 onBeforeUnmount(() => window.clearInterval(connection_timer));
 
 // After creation the room may stay free, open a discussion or open a goal: one choice, since they exclude each other.
-const DRIVE_OPTIONS = [{ value: "free", label: "不开启" }, { value: "discussion", label: "开启讨论" }, { value: "goal", label: "开启 Goal" }];
+const DRIVE_OPTIONS = [{ value: "free", label: t("不开启") }, { value: "discussion", label: t("开启讨论") }, { value: "goal", label: t("开启 Goal") }];
 const DRIVE_HINTS = {
-  free: "成员被点名时工作，做完就停下等你。讨论和 Goal 都可以建房后再开启。",
-  discussion: "主持人安排成员轮流发言，到上限或结束时停止。",
-  goal: "主持人持续推进一个目标，房间空闲时自动接着做，直到完成、卡住或你结束。",
+  free: t("成员被点名时工作，做完就停下等你。讨论和 Goal 都可以建房后再开启。"),
+  discussion: t("主持人安排成员轮流发言，到上限或结束时停止。"),
+  goal: t("主持人持续推进一个目标，房间空闲时自动接着做，直到完成、卡住或你结束。"),
 };
 const drive = computed(() => discussing.value ? "discussion" : goal.value ? "goal" : "free");
 
@@ -130,23 +131,23 @@ function set_expert_mode(name, mode) {
 
 /** Explain delivery separately from whether the launcher has software configured. */
 function expert_status(name) {
-  if (relay.value) return launch_ready(name) ? { text: `由电脑「${relay.value.name}」唤醒`, tone: "ready" } : { text: "电脑上尚未配置此软件", tone: "warn" };
+  if (relay.value) return launch_ready(name) ? { text: t("由电脑「{computer}」唤醒", { computer: relay.value.name }), tone: "ready" } : { text: t("电脑上尚未配置此软件"), tone: "warn" };
   const api = view.value.launch.profiles[name]?.adapter === "api";
-  return launch_ready(name) ? { text: api ? "已配置 API" : "已配置本机软件", tone: "ready" } : { text: api ? "待补齐 API 配置" : "待补齐接入配置", tone: "warn" };
+  return launch_ready(name) ? { text: api ? t("已配置 API") : t("已配置本机软件"), tone: "ready" } : { text: api ? t("待补齐 API 配置") : t("待补齐接入配置"), tone: "warn" };
 }
 
 /** Describe a platform before adding an independent instance. */
 function library_description(name) {
-  if (instance_count(name)) return `已加入 ${instance_count(name)} 位 · 可继续添加`;
-  return has_local(name) ? "API / 本地 App / CLI / 手动启动" : "API / 手动启动";
+  if (instance_count(name)) return t("已加入 {count} 位 · 可继续添加", { count: instance_count(name) });
+  return has_local(name) ? t("API / 本地 App / CLI / 手动启动") : t("API / 手动启动");
 }
 
 // Presets follow the platforms, after a divider; each adds a named instance already set up for its job.
 const PRESET_PREFIX = "preset:";
 const library_items = computed(() => [...experts.map((name) => ({ value: name, name: bridge.default_name(name), ...bridge.identities[name],
-  disabled: !bridge.launch_clients[name], title: library_description(name), aria_label: `添加 ${name} 实例` })),
+  disabled: !bridge.launch_clients[name], title: library_description(name), aria_label: t("添加 {name} 实例", { name }) })),
   ...view.value && bridge.expert_presets().map((preset, index) => ({ value: PRESET_PREFIX + preset.name, name: preset.label || preset.name, ...bridge.identities[bridge.platform_of(preset.name)],
-    separated: index === 0, title: preset.description || "专家预设", aria_label: `添加预设 ${preset.label || preset.name}`, removable: true }))]);
+    separated: index === 0, title: preset.description || t("专家预设"), aria_label: t("添加预设 {name}", { name: preset.label || preset.name }), removable: true }))]);
 
 /** Admit one library role, woken by the local service until its card says otherwise; a preset adds its own named instance. */
 function add_expert(name) {
@@ -179,12 +180,12 @@ function submit() {
 
 const summary = computed(() => {
   const names = Object.keys(selected.value);
-  const parts = ["协作房间", names.length ? `${names.length} 位 AI` : "暂无成员", host.value ? `${bridge.member_label(host.value)} 主持` : "暂无主持人"];
+  const parts = [t("协作房间"), names.length ? t("{count} 位 AI", { count: names.length }) : t("暂无成员"), host.value ? t("{name} 主持", { name: bridge.member_label(host.value) }) : t("暂无主持人")];
   if (discussing.value) {
     const rounds = value("limit-max_rounds"), minutes = value("limit-max_minutes");
-    parts.push("开启讨论", [rounds && Number(rounds) ? `${rounds} 轮` : "不限轮次", minutes && Number(minutes) ? format_duration(Number(minutes)) : "不限时长"].join(" / "));
+    parts.push(t("开启讨论"), [rounds && Number(rounds) ? t("{count} 轮", { count: rounds }) : t("不限轮次"), minutes && Number(minutes) ? format_duration(Number(minutes)) : t("不限时长")].join(" / "));
   }
-  if (goal.value) parts.push("开启 Goal");
+  if (goal.value) parts.push(t("开启 Goal"));
   return parts.join(" · ");
 });
 </script>
@@ -193,14 +194,14 @@ const summary = computed(() => {
   <div class="create-discussion">
     <form id="create-discussion-form" v-keep-reading class="create-scroll dialog-form" @submit.prevent="submit">
       <div v-if="needs_connection" class="create-connect" role="status">
-        <p><UIcon name="i-lucide-plug-zap" />本机服务未连接，连接后才能唤醒本机 AI。在运行 AI 的电脑上执行下面的命令并完成网页授权，连上后自动检测。</p>
-        <div class="create-connect-command"><code>{{ view.launch.connect_command }}</code><UButton icon="i-lucide-copy" aria-label="复制本机连接命令" variant="ghost" color="neutral" @click="act('copy', view.launch.connect_command)" /></div>
+        <p><UIcon name="i-lucide-plug-zap" />{{ t("本机服务未连接，连接后才能唤醒本机 AI。在运行 AI 的电脑上执行下面的命令并完成网页授权，连上后自动检测。") }}</p>
+        <div class="create-connect-command"><code>{{ view.launch.connect_command }}</code><UButton icon="i-lucide-copy" :aria-label="t('复制本机连接命令')" variant="ghost" color="neutral" @click="act('copy', view.launch.connect_command)" /></div>
       </div>
       <p v-if="targetFolder?.id" class="channel-create-location"><UIcon name="i-lucide-folder" />{{ targetFolder.name }}</p>
       <section class="create-section">
-        <h3><span>1</span>这次做什么</h3>
-        <UFormField label="话题名称" required><UInput :model-value="value('title')" :maxlength="80" required autofocus size="lg" placeholder="这次要一起做什么？" class="w-full" @update:model-value="write('title', $event)" /></UFormField>
-        <UFormField label="项目目录（可选）" :description="view.launch.available ? '本机唤醒的成员在此目录读写文件；不选则使用草稿空间，为这个房间单独建一个文件夹。' : relay ? `由电脑「${relay.name}」唤醒的成员在所选项目中读写文件；不选则各用软件默认目录。` : '连接本机服务后可指定：本机唤醒的成员将在此目录读写文件。'">
+        <h3><span>1</span>{{ t("这次做什么") }}</h3>
+        <UFormField :label="t('话题名称')" required><UInput :model-value="value('title')" :maxlength="80" required autofocus size="lg" :placeholder="t('这次要一起做什么？')" class="w-full" @update:model-value="write('title', $event)" /></UFormField>
+        <UFormField :label="t('项目目录（可选）')" :description="view.launch.available ? t('本机唤醒的成员在此目录读写文件；不选则使用草稿空间，为这个房间单独建一个文件夹。') : relay ? t('由电脑「{computer}」唤醒的成员在所选项目中读写文件；不选则各用软件默认目录。', { computer: relay.name }) : t('连接本机服务后可指定：本机唤醒的成员将在此目录读写文件。')">
           <ProjectDirectoryField :disabled="!launchable" />
           <!-- Rarely needed, so only a link under the main directory until the first extra one is added. -->
           <ExtraDirectoriesField v-if="view.launch.available && view.launch.workspace.cwd" class="create-extra-directories" :model-value="view.launch.workspace.extra_directories || []"
@@ -209,34 +210,34 @@ const summary = computed(() => {
       </section>
 
       <section class="create-section">
-        <h3><span>2</span>谁来参与</h3>
-        <RosterAdd ref="library" label="添加 AI" :items="library_items" @add="add_expert" @remove="(value) => bridge.delete_expert_preset(value.slice(PRESET_PREFIX.length))" />
-        <div v-if="selected_names.length" class="create-experts" role="group" aria-label="参与的 AI">
+        <h3><span>2</span>{{ t("谁来参与") }}</h3>
+        <RosterAdd ref="library" :label="t('添加 AI')" :items="library_items" @add="add_expert" @remove="(value) => bridge.delete_expert_preset(value.slice(PRESET_PREFIX.length))" />
+        <div v-if="selected_names.length" class="create-experts" role="group" :aria-label="t('参与的 AI')">
           <ExpertCard v-for="name in selected_names" :key="name" :name="name" :mode="selected[name]" :choices="access_choices(name)"
             :status="expert_status(name)" :host="host === name" :hostable="host_options.includes(name)" hosting
             @host="write('host', name)" @remove="remove_expert(name)" @mode="set_expert_mode(name, $event)" />
         </div>
-        <p v-else class="create-experts-empty">请至少添加一位成员。同一平台可添加多位，各自独立会话。</p>
+        <p v-else class="create-experts-empty">{{ t("请至少添加一位成员。同一平台可添加多位，各自独立会话。") }}</p>
         <div v-if="selected_names.length" class="fine-print create-hint create-host-hint">
           <UIcon name="i-lucide-crown" />
-          <span>{{ host_options.length ? '点卡片上的皇冠指定主持人：没 @ 任何人的消息由它分配；其他成员只在被你或主持人点名时发言。' : '需要一位本地 AI 做主持人，没 @ 的消息才有人接。' }}</span>
+          <span>{{ host_options.length ? t('点卡片上的皇冠指定主持人：没 @ 任何人的消息由它分配；其他成员只在被你或主持人点名时发言。') : t('需要一位本地 AI 做主持人，没 @ 的消息才有人接。') }}</span>
         </div>
         <SchedulerSettings :free="true" :blocker="scheduling_blocker" />
         <ImageService v-if="view.launch.available || view.launch.remote" :enabled="view.create_image_generation" @update:enabled="bridge.write_create_image_generation" />
       </section>
 
       <section class="create-section">
-        <h3><span>3</span>协作方式（可选）</h3>
+        <h3><span>3</span>{{ t("协作方式（可选）") }}</h3>
         <HostWorkflowSwitch v-if="view.launch.available || view.launch.remote" :model-value="Boolean(view.create_host_workflows)" @update:model-value="bridge.write_create_host_workflows($event)" />
         <div class="create-drive">
-          <span>创建后</span>
-          <div class="expert-card-modes" role="radiogroup" aria-label="创建后的推进方式">
+          <span>{{ t("创建后") }}</span>
+          <div class="expert-card-modes" role="radiogroup" :aria-label="t('创建后的推进方式')">
             <button v-for="option in DRIVE_OPTIONS" :key="option.value" type="button" role="radio" :aria-checked="drive === option.value" @click="choose_drive(option.value)">{{ option.label }}</button>
           </div>
         </div>
         <p class="fine-print create-drive-hint">{{ DRIVE_HINTS[drive] }}</p>
         <template v-if="discussing">
-          <UFormField label="讨论目标" description="写下问题、背景和顾虑，主持人据此推进。"><UTextarea :model-value="value('goal')" :maxlength="1000" :rows="4" autoresize :maxrows="10" placeholder="例如：我们在 A、B 两个方案之间犹豫，主要顾虑是成本和上线时间……" class="w-full" @update:model-value="write('goal', $event)" /></UFormField>
+          <UFormField :label="t('讨论目标')" :description="t('写下问题、背景和顾虑，主持人据此推进。')"><UTextarea :model-value="value('goal')" :maxlength="1000" :rows="4" autoresize :maxrows="10" :placeholder="t('例如：我们在 A、B 两个方案之间犹豫，主要顾虑是成本和上线时间……')" class="w-full" @update:model-value="write('goal', $event)" /></UFormField>
           <DiscussionLimits ref="limit_picker" :rounds="Number(value('limit-max_rounds'))" :minutes="Number(value('limit-max_minutes'))" :named_followup="Boolean(view.named_followup)"
             @update:rounds="write('limit-max_rounds', String($event))" @update:minutes="write('limit-max_minutes', String($event))" @update:named_followup="bridge.write_named_followup($event)" />
         </template>
@@ -245,17 +246,17 @@ const summary = computed(() => {
       </section>
 
       <details class="create-advanced" :open="Boolean(view.launch.create_preferences?.advanced_open)" @toggle="bridge.write_create_preferences({ advanced_open: $event.target.open })">
-        <summary><UIcon name="i-lucide-chevron-right" class="create-advanced-icon" />高级设置<small>派活 {{ view.create_chain_rounds ? `${view.create_chain_rounds} 轮` : "不限" }}{{ view.launch.available || view.launch.remote ? ` · API ${view.create_api_max_requests ? `${view.create_api_max_requests} 次` : "不限"}` : "" }}</small></summary>
-        <ChainRoundsField title="连续派活上限" :model-value="view.create_chain_rounds" @update:model-value="bridge.write_create_chain_rounds($event)" />
-        <ApiRequestsField v-if="view.launch.available || view.launch.remote" title="API 请求上限" class="create-advanced-field" :model-value="view.create_api_max_requests" @update:model-value="bridge.write_create_api_max_requests($event)" />
-        <p class="create-advanced-note">建房后可在房间页修改。</p>
+        <summary><UIcon name="i-lucide-chevron-right" class="create-advanced-icon" />{{ t("高级设置") }}<small>{{ t("派活 {value}", { value: view.create_chain_rounds ? t("{count} 轮", { count: view.create_chain_rounds }) : t("不限") }) }}{{ view.launch.available || view.launch.remote ? " · " + t("API {value}", { value: view.create_api_max_requests ? t("{count} 次", { count: view.create_api_max_requests }) : t("不限") }) : "" }}</small></summary>
+        <ChainRoundsField :title="t('连续派活上限')" :model-value="view.create_chain_rounds" @update:model-value="bridge.write_create_chain_rounds($event)" />
+        <ApiRequestsField v-if="view.launch.available || view.launch.remote" :title="t('API 请求上限')" class="create-advanced-field" :model-value="view.create_api_max_requests" @update:model-value="bridge.write_create_api_max_requests($event)" />
+        <p class="create-advanced-note">{{ t("建房后可在房间页修改。") }}</p>
       </details>
     </form>
     <footer class="create-footer">
       <div class="create-footer-row">
-        <span class="create-summary" :class="{ 'is-blocked': blocker }" :title="blocker || summary" role="status"><UIcon v-if="blocker" name="i-lucide-circle-alert" />{{ blocker ? `还差：${blocker}` : selected_names.length || driven ? summary : "" }}</span>
-        <UButton label="取消" color="neutral" variant="ghost" @click="emit('cancel')" />
-        <UButton type="submit" form="create-discussion-form" class="channel-primary-button" :icon="launching ? 'i-lucide-play' : 'i-lucide-plus'" :label="discussing ? '创建并开启讨论' : goal ? '创建并开启 Goal' : automatic ? '创建并连接' : '创建协作房间'" :disabled="submit_disabled" :loading="pending === 'create'" />
+        <span class="create-summary" :class="{ 'is-blocked': blocker }" :title="blocker || summary" role="status"><UIcon v-if="blocker" name="i-lucide-circle-alert" />{{ blocker ? t("还差：{reason}", { reason: blocker }) : selected_names.length || driven ? summary : "" }}</span>
+        <UButton :label="t('取消')" color="neutral" variant="ghost" @click="emit('cancel')" />
+        <UButton type="submit" form="create-discussion-form" class="channel-primary-button" :icon="launching ? 'i-lucide-play' : 'i-lucide-plus'" :label="discussing ? t('创建并开启讨论') : goal ? t('创建并开启 Goal') : automatic ? t('创建并连接') : t('创建协作房间')" :disabled="submit_disabled" :loading="pending === 'create'" />
       </div>
     </footer>
   </div>

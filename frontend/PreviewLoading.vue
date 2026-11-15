@@ -1,10 +1,11 @@
 <script setup>
+import { t } from './i18n.js';
 /**
  * What the file preview shows while a file is read or rendered: a page-shaped placeholder with a soft shimmer, so the
  * window appears at once and the wait reads as progress. `progress` (0–1) adds a bar when the share read is known.
  * Motion follows the site's one switch (`MOTION_ENABLED` in App.vue), never the system's reduced-motion setting.
  */
-defineProps({ label: { type: String, default: "正在打开…" }, progress: { type: Number, default: 0 } });
+defineProps({ label: { type: String, default: t('正在打开…') }, progress: { type: Number, default: 0 } });
 </script>
 
 <template>

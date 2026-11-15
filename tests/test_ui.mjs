@@ -8,6 +8,14 @@ import { member_actions } from "../frontend/member-actions.js";
 import { access_label, access_options, EXPERT_PROMPT_PRESETS } from "../runner/expert_prompts.mjs";
 import { adapter_profile } from "../runner/adapters/profiles.mjs";
 import { format_duration, snapshot_at, timeline_axis, timeline_rows, timeline_segments, timeline_summary } from "../frontend/timeline-model.js";
+import { t } from "../frontend/i18n.js";
+
+// Sliced component code calls t() for interface text; every sandbox gets the translator (Chinese here).
+const create_context = vm.createContext;
+vm.createContext = (sandbox = {}, ...rest) => {
+  if (!("t" in sandbox)) sandbox.t = t;
+  return create_context(sandbox, ...rest);
+};
 
 const source = readFileSync(new URL("../web/app.js", import.meta.url), "utf8").replace(/\nrestore_theme\(\);[\s\S]*$/, "");
 const discussion_source = readFileSync(new URL("../frontend/ChannelDiscussion.vue", import.meta.url), "utf8");
@@ -71,9 +79,11 @@ function mention_fixture() {
   const room = ref({ id: "test", host: "用户", experts: { Codex: "cli", Claude: "cli" } });
   const free = ref(true);
   const free_members = ref([{ name: "Codex" }, { name: "Claude-review" }]);
+  const controller = theme_fixture();
+  controller.context.test_state.room = room.value;
   const editor = { value: "", selectionStart: 0, selectionEnd: 0, focus() {}, setSelectionRange(start, end) { this.selectionStart = start; this.selectionEnd = end; } };
   const context = vm.createContext({ computed, ref, watch, nextTick, text, room, free, free_members, ENTER_SENDS: true,
-    view: ref({ tab: "messages" }), prompt: ref({ textareaRef: editor }), bridge: { display_name: name => name },
+    view: ref({ tab: "messages" }), prompt: ref({ textareaRef: editor }), bridge: controller.context.window.discuss_view,
     // No browser editing command here: replacing a draft falls back to writing the text directly.
     document: { execCommand: () => false } });
   const start = discussion_source.indexOf("const mention_context =");
@@ -304,7 +314,7 @@ test("attachment retries retain files and reuse both upload and message receipts
   await context.retry_sending(state.failed_sends[0].id);
   assert.equal(uploads.length, 1);
   assert.equal(posts[1][1].submission_id, first_id);
-  assert.equal(posts[1][1].text, "", "files-only messages are submitted");
+  assert.equal(posts[1][1].text, "[图片 #1]", "a files-only message carries the placeholder the file put in the text");
   assert.deepEqual(Array.from(state.messages, message => message.id), [1], "the saved message shows before the room is read again");
   assert.equal(state.sending_preview, null, "the retry replaces the failed card with the saved message");
   assert.equal(state.failed_sends.length, 0);
@@ -603,7 +613,7 @@ function picker_fixture(initial = {}, reduced_motion = false) {
     window: { matchMedia: () => ({ matches: reduced_motion, addEventListener() {}, removeEventListener() {} }) },
   });
   const component = readFileSync(new URL("../frontend/LimitPicker.vue", import.meta.url), "utf8");
-  const formatter = component.match(/<script>([\s\S]*?)<\/script>/)[1].replace("export function", "function");
+  const formatter = component.match(/<script>([\s\S]*?)<\/script>/)[1].replace(/^import .*;$/gm, "").replace("export function", "function");
   const picker_source = component.match(/<script setup>([\s\S]*?)<\/script>/)[1].replace(/^import .*;$/gm, "");
   vm.runInContext(`${formatter}\n${picker_source}\nglobalThis.test_wheels = wheels; globalThis.test_fields = fields;`, context);
   mounts.forEach((callback) => callback());
@@ -848,7 +858,7 @@ test("failed cards survive fresh snapshots and stay beside their request without
   const f = free_card_fixture({ messages: [
     { id: 1, author: "用户", text: "请独立分析", created_at: 1000 },
     { id: 2, author: "用户", text: "后续消息", created_at: 1001 },
-  ], executions: [{ id: 9, member_id: 8, member: "Claude", role: "member", status: "failed", request_message_id: 900,
+  ], executions: [{ id: 9, member_id: 8, member: "Claude", role: "member", status: "failed", request_message_id: 900, layout_after: 1, layout_at: 1002,
     created_at: 1002, finished_at: 1012, result: "工具调用失败", requests: [request] }] });
   const start = discussion_source.indexOf("function request_message(report)");
   const end = discussion_source.indexOf("/** Put the original text back", start);
@@ -1256,7 +1266,7 @@ function execution_member(id, name = "Codex", status = "dispatched", extra = {})
 }
 
 test("free execution cards show live member work and hide inactive executions", async () => {
-  const member = execution_member(9), execution = { id: 9, member_id: 9, member: "Codex", status: "dispatched", request_message_id: 1, created_at: 1000 };
+  const member = execution_member(9), execution = { id: 9, member_id: 9, member: "Codex", status: "dispatched", request_message_id: 1, layout_after: 1, created_at: 1000 };
   const f = free_card_fixture({ messages: [{ id: 1, author: "用户", created_at: 1000 }], members: [member], executions: [execution] });
   assert.deepEqual(f.cards.working.value.map(item => [item.id, item.author, item.text, item.working]), [["free-9", "Codex", "正在处理", true]]);
   assert.deepEqual([...f.state.layout.value].map(item => item.id), [1, "free-9"]);

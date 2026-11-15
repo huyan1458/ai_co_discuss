@@ -1,6 +1,7 @@
 <script setup>
 import { computed, inject, onBeforeUnmount, onMounted, ref, watch } from "vue";
 import { crumbs_of, file_preview, file_size, file_type, folder_listings, modified_time, shown_folders } from "./file-preview.js";
+import { t } from './i18n.js';
 
 // The room's project directories, the main one first; with more than one, a switch above the list picks which is shown.
 const props = defineProps({ directories: { type: Array, required: true } });
@@ -65,7 +66,7 @@ async function read_directory(path = "", append = false) {
     listing.value = { ...result, entries: append ? [...listing.value.entries, ...result.entries] : result.entries };
     folder_listings.set(cache_key(path), listing.value);
   } catch (error) {
-    if (request === directory_request) bridge.notify("error", `读取目录失败，${error.message}`);
+    if (request === directory_request) bridge.notify("error", t('读取目录失败，{value1}', { value1: error.message }));
   } finally { if (request === directory_request) loading.value = false; }
 }
 </script>
@@ -73,17 +74,17 @@ async function read_directory(path = "", append = false) {
 <template>
   <section class="project-files">
     <header class="project-files-heading">
-      <div><h2>项目文件</h2><p>{{ bridge.display_path(directory) }}</p></div>
-      <UButton icon="i-lucide-refresh-cw" color="neutral" variant="ghost" size="sm" aria-label="刷新" title="刷新" :loading="loading" @click="read_directory(current_path)" />
+      <div><h2>{{ t('项目文件') }}</h2><p>{{ bridge.display_path(directory) }}</p></div>
+      <UButton icon="i-lucide-refresh-cw" color="neutral" variant="ghost" size="sm" :aria-label="t('刷新')" :title="t('刷新')" :loading="loading" @click="read_directory(current_path)" />
     </header>
 
-    <div v-if="directories.length > 1" class="project-roots" role="tablist" aria-label="项目目录">
+    <div v-if="directories.length > 1" class="project-roots" role="tablist" :aria-label="t('项目目录')">
       <button v-for="(path, index) in directories" :key="path" type="button" role="tab" :aria-selected="index === root" :title="path" @click="switch_root(index)">
         <UIcon :name="index ? 'i-lucide-folder' : 'i-lucide-folder-root'" />{{ folder_name(path) }}
       </button>
     </div>
     <div class="project-explorer" :aria-busy="loading">
-      <nav class="project-explorer-path" aria-label="文件路径">
+      <nav class="project-explorer-path" :aria-label="t('文件路径')">
         <template v-for="(part, index) in breadcrumbs" :key="part.path">
           <UIcon v-if="index" name="i-lucide-chevron-right" class="project-crumb-separator" />
           <button type="button" :disabled="index === breadcrumbs.length - 1" :aria-current="index === breadcrumbs.length - 1 ? 'location' : undefined" @click="read_directory(part.path)">
@@ -91,24 +92,24 @@ async function read_directory(path = "", append = false) {
           </button>
         </template>
       </nav>
-      <div class="project-files-columns" aria-hidden="true"><span>名称</span><span>大小</span><span>修改时间</span></div>
+      <div class="project-files-columns" aria-hidden="true"><span>{{ t('名称') }}</span><span>{{ t('大小') }}</span><span>{{ t('修改时间') }}</span></div>
       <!-- Rows change only with the listing; the room's directories arrive as a new array on every view publish. -->
       <div v-memo="[listing, loading, directory, root]" class="project-files-rows">
         <button v-for="entry in listing?.entries || []" :key="entry.path" type="button" class="project-file-row" :class="{ 'is-hidden': entry.name.startsWith('.') }"
-          :disabled="entry.kind === 'unavailable'" :title="entry.kind === 'unavailable' ? `${entry.name}（无法读取或指向项目外）` : entry.name"
+          :disabled="entry.kind === 'unavailable'" :title="entry.kind === 'unavailable' ? t('{value1}（无法读取或指向项目外）', { value1: entry.name }) : entry.name"
           @click="entry.kind === 'directory' ? read_directory(entry.path) : file_preview.open?.(entry.path, directory, root, entry)">
           <span class="project-file-name"><UIcon :name="entry_icon(entry)[0]" class="project-file-icon" :class="entry_icon(entry)[1]" /><span>{{ entry.name }}</span></span>
           <span class="project-file-size">{{ file_size(entry.size) }}</span><time :datetime="entry.modified_at">{{ modified_time(entry.modified_at) }}</time>
         </button>
-        <div v-if="!listing && loading" role="status" aria-label="正在读取项目目录">
+        <div v-if="!listing && loading" role="status" :aria-label="t('正在读取项目目录')">
           <div v-for="row in 6" :key="row" class="project-file-row" aria-hidden="true"><span class="project-file-name"><USkeleton class="h-4 w-4 shrink-0" /><USkeleton class="h-4 w-2/3" /></span><USkeleton class="h-3 w-12 justify-self-end" /><USkeleton class="h-3 w-24 project-file-date" /></div>
         </div>
-        <p v-else-if="!listing" class="project-files-empty"><UButton label="重新读取目录" icon="i-lucide-refresh-cw" color="neutral" variant="ghost" @click="read_directory(current_path)" /></p>
-        <p v-else-if="!listing.entries.length" class="project-files-empty"><UIcon name="i-lucide-folder-open" />此文件夹为空</p>
+        <p v-else-if="!listing" class="project-files-empty"><UButton :label="t('重新读取目录')" icon="i-lucide-refresh-cw" color="neutral" variant="ghost" @click="read_directory(current_path)" /></p>
+        <p v-else-if="!listing.entries.length" class="project-files-empty"><UIcon name="i-lucide-folder-open" />{{ t('此文件夹为空') }}</p>
       </div>
       <footer v-if="listing" class="project-files-footer">
-        <span>{{ listing.total }} 项<template v-if="listing.next_offset !== null">，已显示 {{ listing.entries.length }} 项</template></span>
-        <UButton v-if="listing.next_offset !== null" label="加载更多" color="neutral" variant="ghost" size="xs" :loading="loading" :disabled="loading" @click="read_directory(listing.path, true)" />
+        <span>{{ t('{value1} 项', { value1: listing.total }) }}<template v-if="listing.next_offset !== null">{{ t('，已显示 {value1} 项', { value1: listing.entries.length }) }}</template></span>
+        <UButton v-if="listing.next_offset !== null" :label="t('加载更多')" color="neutral" variant="ghost" size="xs" :loading="loading" :disabled="loading" @click="read_directory(listing.path, true)" />
       </footer>
     </div>
   </section>

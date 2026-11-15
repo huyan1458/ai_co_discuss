@@ -1,11 +1,12 @@
 <script setup>
+import { t } from "./i18n.js";
 /** The page's own confirmation: the same look on every device, unlike the browser's confirm(). */
 defineProps({
   title: { type: String, required: true },
   description: { type: String, default: "" },
   // What the action changes, one line each, so the user knows before confirming.
   items: { type: Array, default: () => [] },
-  confirmLabel: { type: String, default: "确认" },
+  confirmLabel: { type: String, default: t("确认") },
   danger: Boolean,
 });
 const open = defineModel("open", { type: Boolean, default: false });
@@ -25,7 +26,7 @@ function confirm() {
         <li v-for="item in items" :key="item">{{ item }}</li>
       </ul>
       <div class="dialog-actions">
-        <UButton label="取消" color="neutral" variant="ghost" @click="open = false" />
+        <UButton :label="t('取消')" color="neutral" variant="ghost" @click="open = false" />
         <UButton :label="confirmLabel" :color="danger ? 'error' : 'primary'" @click="confirm" />
       </div>
     </template>

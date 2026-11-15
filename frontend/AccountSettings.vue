@@ -1,6 +1,7 @@
 <script setup>
 import { computed, inject, onMounted, reactive, ref, watch } from "vue";
 import DeviceSettings from "./DeviceSettings.vue";
+import { locale, t } from './i18n.js';
 
 const { view, bridge } = inject("discussion");
 const account = computed(() => view.value.admin);
@@ -43,13 +44,13 @@ function submit_auth() {
   const registering = state_key.value === "register";
   if (registering && register_blocked.value) return;
   return run(registering ? "register" : "login", () => registering ? bridge.admin.register({ ...auth_form }) : bridge.admin.login({ ...auth_form }),
-    registering ? "管理员账号已创建，并已登录。" : "已登录。");
+    registering ? t('管理员账号已创建，并已登录。') : t('已登录。'));
 }
 
 /** Save only the name when it changed. */
 function save_name() {
   if (!name_changed.value) return;
-  return run("name", () => bridge.admin.update_profile({ username: display_name.value }), "名称已更新。");
+  return run("name", () => bridge.admin.update_profile({ username: display_name.value }), t('名称已更新。'));
 }
 
 /** Upload a picked image after it is resized to a small square. */
@@ -57,17 +58,17 @@ async function choose_avatar(event) {
   const file = event.target.files?.[0];
   event.target.value = "";
   if (!file) return;
-  await run("avatar", async () => bridge.admin.update_profile({ avatar: await bridge.admin.avatar_from_file(file) }), "头像已更新。");
+  await run("avatar", async () => bridge.admin.update_profile({ avatar: await bridge.admin.avatar_from_file(file) }), t('头像已更新。'));
 }
 
 /** Return to the default fingerprint avatar. */
 function reset_avatar() {
-  return run("avatar", () => bridge.admin.update_profile({ avatar: "" }), "已恢复默认头像。");
+  return run("avatar", () => bridge.admin.update_profile({ avatar: "" }), t('已恢复默认头像。'));
 }
 
 /** Leave this browser. */
 async function sign_out() {
-  await run("logout", () => bridge.admin.logout(), "已退出登录。");
+  await run("logout", () => bridge.admin.logout(), t('已退出登录。'));
 }
 
 // ---- Logins on other devices, and the password: an online site only; the local site has no account. ----
@@ -86,12 +87,12 @@ async function end_sessions(target, message) {
 const device_label = (agent) => bridge.device.label(agent);
 
 function seen(seconds) {
-  return new Date(seconds * 1000).toLocaleString("zh-CN", { month: "numeric", day: "numeric", hour: "2-digit", minute: "2-digit" });
+  return new Date(seconds * 1000).toLocaleString(locale, { month: "numeric", day: "numeric", hour: "2-digit", minute: "2-digit" });
 }
 
 const password_form = reactive({ current_password: "", password: "", confirm: "" });
 async function save_password() {
-  if (await run("password", () => bridge.admin.change_password({ ...password_form }), "密码已更改，其他设备已退出登录。")) {
+  if (await run("password", () => bridge.admin.change_password({ ...password_form }), t('密码已更改，其他设备已退出登录。'))) {
     Object.assign(password_form, { current_password: "", password: "", confirm: "" });
     if (sessions.value) await load_sessions();
   }
@@ -100,81 +101,81 @@ async function save_password() {
 
 <template>
   <section class="account-settings" aria-labelledby="account-heading">
-    <h3 id="account-heading">账号</h3>
-    <p v-if="state_key === 'loading'" class="fine-print" role="status">正在读取账号状态…</p>
+    <h3 id="account-heading">{{ t('账号') }}</h3>
+    <p v-if="state_key === 'loading'" class="fine-print" role="status">{{ t('正在读取账号状态…') }}</p>
     <DeviceSettings v-else-if="state_key === 'unpaired'" />
 
-    <form v-else-if="state_key === 'register' || state_key === 'login'" class="dialog-form account-form" :aria-label="state_key === 'register' ? '设置管理员账号' : '登录管理员账号'" @submit.prevent="submit_auth">
+    <form v-else-if="state_key === 'register' || state_key === 'login'" class="dialog-form account-form" :aria-label="state_key === 'register' ? t('设置管理员账号') : t('登录管理员账号')" @submit.prevent="submit_auth">
       <p class="fine-print account-intro">
-        <template v-if="state_key === 'register'">设置站点管理员账号：名称和头像对所有访客可见，登录后可在没有房间凭据的浏览器中存档、恢复、删除房间。</template>
-        <template v-else>登录后可管理房间；未登录时仍可阅读并使用本浏览器创建的房间。</template>
+        <template v-if="state_key === 'register'">{{ t('设置站点管理员账号：名称和头像对所有访客可见，登录后可在没有房间凭据的浏览器中存档、恢复、删除房间。') }}</template>
+        <template v-else>{{ t('登录后可管理房间；未登录时仍可阅读并使用本浏览器创建的房间。') }}</template>
       </p>
-      <UFormField label="用户名" :description="state_key === 'register' ? '1–30 个字符，也是公开显示的名称' : undefined" required>
-        <UInput v-model="auth_form.username" autocomplete="username" :maxlength="30" required class="w-full" aria-label="用户名" />
+      <UFormField :label="t('用户名')" :description="state_key === 'register' ? t('1–30 个字符，也是公开显示的名称') : undefined" required>
+        <UInput v-model="auth_form.username" autocomplete="username" :maxlength="30" required class="w-full" :aria-label="t('用户名')" />
       </UFormField>
-      <UFormField label="密码" :description="state_key === 'register' ? '8–128 个字符' : undefined" required>
-        <UInput v-model="auth_form.password" type="password" :autocomplete="state_key === 'register' ? 'new-password' : 'current-password'" :maxlength="128" required class="w-full" aria-label="密码" />
+      <UFormField :label="t('密码')" :description="state_key === 'register' ? t('8–128 个字符') : undefined" required>
+        <UInput v-model="auth_form.password" type="password" :autocomplete="state_key === 'register' ? 'new-password' : 'current-password'" :maxlength="128" required class="w-full" :aria-label="t('密码')" />
       </UFormField>
       <template v-if="state_key === 'register'">
-        <UFormField label="确认密码" required>
-          <UInput v-model="auth_form.confirm" type="password" autocomplete="new-password" :maxlength="128" required class="w-full" aria-label="确认密码" />
+        <UFormField :label="t('确认密码')" required>
+          <UInput v-model="auth_form.confirm" type="password" autocomplete="new-password" :maxlength="128" required class="w-full" :aria-label="t('确认密码')" />
         </UFormField>
-        <UFormField label="注册令牌" required>
-          <UInput v-model="auth_form.setup_key" type="password" autocomplete="off" required :disabled="register_blocked" class="w-full" aria-label="注册令牌" />
+        <UFormField :label="t('注册令牌')" required>
+          <UInput v-model="auth_form.setup_key" type="password" autocomplete="off" required :disabled="register_blocked" class="w-full" :aria-label="t('注册令牌')" />
         </UFormField>
-        <p v-if="register_blocked" class="account-message is-error" role="status">尚无可用的注册令牌。请在部署网站的电脑上运行 <code>codiscuss token</code>，再刷新本页；本地版也可设置环境变量 DISCUSS_ADMIN_SETUP_KEY 后重启。</p>
-        <p v-else class="fine-print">首个注册者需要令牌，防止他人抢注：在部署网站的电脑上运行 <code>codiscuss token</code> 获取（一次性）；本地版也可用服务端启动日志里的安装令牌。密码只由你自己保管，本机不保存。忘记密码：本地版运行 <code>python server.py --reset-admin</code> 后重新注册；Cloudflare 版需清空管理员表（见部署文档）。</p>
+        <p v-if="register_blocked" class="account-message is-error" role="status">{{ t('尚无可用的注册令牌。请在部署网站的电脑上运行') }} <code>codiscuss token</code>{{ t('，再刷新本页；本地版也可设置环境变量 DISCUSS_ADMIN_SETUP_KEY 后重启。') }}</p>
+        <p v-else class="fine-print">{{ t('首个注册者需要令牌，防止他人抢注：在部署网站的电脑上运行') }} <code>codiscuss token</code> {{ t('获取（一次性）；本地版也可用服务端启动日志里的安装令牌。密码只由你自己保管，本机不保存。忘记密码：本地版运行') }} <code>python server.py --reset-admin</code> {{ t('后重新注册；Cloudflare 版需清空管理员表（见部署文档）。') }}</p>
       </template>
-      <p v-else class="fine-print">忘记密码：本地版运行 <code>python server.py --reset-admin</code> 后重新注册；Cloudflare 版需清空管理员表（见部署文档）。</p>
+      <p v-else class="fine-print">{{ t('忘记密码：本地版运行') }} <code>python server.py --reset-admin</code> {{ t('后重新注册；Cloudflare 版需清空管理员表（见部署文档）。') }}</p>
       <div class="account-actions">
-        <UButton type="submit" class="channel-primary-button" :label="state_key === 'register' ? '创建并登录' : '登录'" :loading="busy === 'register' || busy === 'login'" :disabled="Boolean(busy) || register_blocked" />
+        <UButton type="submit" class="channel-primary-button" :label="state_key === 'register' ? t('创建并登录') : t('登录')" :loading="busy === 'register' || busy === 'login'" :disabled="Boolean(busy) || register_blocked" />
       </div>
     </form>
 
     <div v-else class="account-profile">
       <div class="account-identity">
-        <UAvatar :src="bridge.identities['用户'].icon" :alt="`${bridge.display_name('用户')} 的头像`" size="lg" class="channel-avatar user account-avatar" />
+        <UAvatar :src="bridge.identities[t('用户')].icon" :alt="t('{value1} 的头像', { value1: bridge.display_name(t('用户')) })" size="lg" class="channel-avatar user account-avatar" />
         <div class="account-avatar-actions">
           <input ref="avatar_input" type="file" accept="image/*" class="account-file" tabindex="-1" aria-hidden="true" @change="choose_avatar">
-          <UButton label="更换头像" icon="i-lucide-image-up" color="neutral" variant="outline" size="sm" :loading="busy === 'avatar'" :disabled="Boolean(busy)" @click="avatar_input.click()" />
-          <UButton label="恢复默认头像" color="neutral" variant="ghost" size="sm" :disabled="Boolean(busy) || !profile?.avatar" @click="reset_avatar" />
+          <UButton :label="t('更换头像')" icon="i-lucide-image-up" color="neutral" variant="outline" class="pb-action" size="sm" :loading="busy === 'avatar'" :disabled="Boolean(busy)" @click="avatar_input.click()" />
+          <UButton :label="t('恢复默认头像')" color="neutral" variant="ghost" size="sm" :disabled="Boolean(busy) || !profile?.avatar" @click="reset_avatar" />
         </div>
       </div>
-      <form class="dialog-form account-form" aria-label="显示名称" @submit.prevent="save_name">
-        <UFormField label="显示名称" description="即用户名，对所有访客可见"><div class="account-name-row"><UInput v-model="display_name" autocomplete="username" :maxlength="30" required class="w-full" aria-label="显示名称" /><UButton type="submit" label="保存名称" color="neutral" variant="soft" :loading="busy === 'name'" :disabled="Boolean(busy) || !name_changed || !display_name.trim()" /></div></UFormField>
+      <form class="dialog-form account-form" :aria-label="t('显示名称')" @submit.prevent="save_name">
+        <UFormField :label="t('显示名称')" :description="t('即用户名，对所有访客可见')"><div class="account-name-row"><UInput v-model="display_name" autocomplete="username" :maxlength="30" required class="w-full" :aria-label="t('显示名称')" /><UButton type="submit" :label="t('保存名称')" color="neutral" variant="soft" :loading="busy === 'name'" :disabled="Boolean(busy) || !name_changed || !display_name.trim()" /></div></UFormField>
       </form>
 
       <!-- A hosted account signs in at the entry, not with paired devices: it signs out there, and its password is reset by
            whoever opened the account. -->
       <section v-if="view.launch.projects_restricted && via_entry" class="account-devices" aria-labelledby="account-entry-heading">
-        <h4 id="account-entry-heading">登录</h4>
-        <p class="fine-print">你用开通时拿到的账号名和密码登录。忘记密码或想换密码，请联系为你开通服务的人重设；重设后所有设备上的登录都会失效。</p>
-        <form method="post" action="/_entry/logout"><UButton type="submit" label="退出登录" icon="i-lucide-log-out" color="neutral" variant="outline" size="sm" /></form>
+        <h4 id="account-entry-heading">{{ t('登录') }}</h4>
+        <p class="fine-print">{{ t('你用开通时拿到的账号名和密码登录。忘记密码或想换密码，请联系为你开通服务的人重设；重设后所有设备上的登录都会失效。') }}</p>
+        <form method="post" action="/_entry/logout"><UButton type="submit" :label="t('退出登录')" icon="i-lucide-log-out" color="neutral" variant="outline" class="pb-action" size="sm" /></form>
       </section>
       <DeviceSettings v-else-if="!view.launch.projects_restricted" />
       <template v-if="!account.local && !account.devices">
         <section class="account-devices" aria-labelledby="account-devices-heading">
-          <h4 id="account-devices-heading">网站登录</h4>
-          <p class="fine-print">登录一周不用或满一个月会自动失效。看到不认识的登录时，退出它并更改密码。没有配对的设备即使登录了网站，也操作不了电脑。</p>
-          <UButton v-if="!sessions" label="查看网站登录" color="neutral" variant="soft" size="sm" :loading="busy === 'sessions'" :disabled="Boolean(busy)" @click="load_sessions" />
+          <h4 id="account-devices-heading">{{ t('网站登录') }}</h4>
+          <p class="fine-print">{{ t('登录一周不用或满一个月会自动失效。看到不认识的登录时，退出它并更改密码。没有配对的设备即使登录了网站，也操作不了电脑。') }}</p>
+          <UButton v-if="!sessions" :label="t('查看网站登录')" color="neutral" variant="soft" size="sm" :loading="busy === 'sessions'" :disabled="Boolean(busy)" @click="load_sessions" />
           <template v-else>
             <ul class="account-device-list">
               <li v-for="item in sessions" :key="item.id">
-                <span><strong>{{ device_label(item.label) }}</strong><small>{{ item.current ? "当前设备" : `最近使用 ${seen(item.last_seen)}` }}</small></span>
-                <UButton v-if="!item.current" label="退出" color="neutral" variant="ghost" size="xs" :disabled="Boolean(busy)" @click="end_sessions({ id: item.id }, '该设备已退出登录。')" />
+                <span><strong>{{ device_label(item.label) }}</strong><small>{{ item.current ? t('当前设备') : t('最近使用 {value1}', { value1: seen(item.last_seen) }) }}</small></span>
+                <UButton v-if="!item.current" :label="t('退出')" color="neutral" variant="ghost" size="xs" :disabled="Boolean(busy)" @click="end_sessions({ id: item.id }, t('该设备已退出登录。'))" />
               </li>
             </ul>
-            <UButton v-if="sessions.length > 1" label="退出其他所有设备" color="neutral" variant="outline" size="sm" :loading="busy === 'revoke'" :disabled="Boolean(busy)" @click="end_sessions({ others: true }, '其他设备已全部退出登录。')" />
+            <UButton v-if="sessions.length > 1" :label="t('退出其他所有设备')" color="neutral" variant="outline" class="pb-action" size="sm" :loading="busy === 'revoke'" :disabled="Boolean(busy)" @click="end_sessions({ others: true }, t('其他设备已全部退出登录。'))" />
           </template>
         </section>
-        <form class="dialog-form account-form" aria-label="更改密码" @submit.prevent="save_password">
-          <h4>更改密码</h4>
-          <UFormField label="当前密码" required><UInput v-model="password_form.current_password" type="password" autocomplete="current-password" :maxlength="128" required class="w-full" aria-label="当前密码" /></UFormField>
-          <UFormField label="新密码" description="8–128 个字符；更改后其他设备都会退出登录" required><UInput v-model="password_form.password" type="password" autocomplete="new-password" :maxlength="128" required class="w-full" aria-label="新密码" /></UFormField>
-          <UFormField label="确认新密码" required><UInput v-model="password_form.confirm" type="password" autocomplete="new-password" :maxlength="128" required class="w-full" aria-label="确认新密码" /></UFormField>
-          <div class="account-actions"><UButton type="submit" label="更改密码" color="neutral" variant="soft" :loading="busy === 'password'" :disabled="Boolean(busy) || !password_form.current_password || !password_form.password" /></div>
+        <form class="dialog-form account-form" :aria-label="t('更改密码')" @submit.prevent="save_password">
+          <h4>{{ t('更改密码') }}</h4>
+          <UFormField :label="t('当前密码')" required><UInput v-model="password_form.current_password" type="password" autocomplete="current-password" :maxlength="128" required class="w-full" :aria-label="t('当前密码')" /></UFormField>
+          <UFormField :label="t('新密码')" :description="t('8–128 个字符；更改后其他设备都会退出登录')" required><UInput v-model="password_form.password" type="password" autocomplete="new-password" :maxlength="128" required class="w-full" :aria-label="t('新密码')" /></UFormField>
+          <UFormField :label="t('确认新密码')" required><UInput v-model="password_form.confirm" type="password" autocomplete="new-password" :maxlength="128" required class="w-full" :aria-label="t('确认新密码')" /></UFormField>
+          <div class="account-actions"><UButton type="submit" :label="t('更改密码')" color="neutral" variant="soft" :loading="busy === 'password'" :disabled="Boolean(busy) || !password_form.current_password || !password_form.password" /></div>
         </form>
-        <div class="account-signout account-actions"><UButton label="退出登录" icon="i-lucide-log-out" color="neutral" variant="outline" size="sm" :loading="busy === 'logout'" :disabled="Boolean(busy)" @click="sign_out" /></div>
+        <div class="account-signout account-actions"><UButton :label="t('退出登录')" icon="i-lucide-log-out" color="neutral" variant="outline" class="pb-action" size="sm" :loading="busy === 'logout'" :disabled="Boolean(busy)" @click="sign_out" /></div>
       </template>
     </div>
   </section>

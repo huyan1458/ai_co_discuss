@@ -5,6 +5,7 @@ import json
 import time
 
 from .free_room import insert_request, record_cancel_reasons, require_member
+from .texts import Text, save_text
 from .runtime import begin_write, require_owner
 
 OPEN_STATUSES = ("active", "paused")
@@ -12,8 +13,6 @@ MAX_OBJECTIVE_LENGTH = 2000
 MAX_NOTE_LENGTH = 1000
 MAX_CONTINUES = 1000
 MAX_MINUTES = 7 * 24 * 60
-# The same wake-up failing this many times in a row stops the goal instead of retrying forever.
-FAILED_CONTINUATIONS = 3
 GOAL_AUTHOR = "系统"
 # How long the room stays idle before the host is woken while the goal is being worked on; the owner sets it per room.
 DEFAULT_IDLE_SECONDS = 120
@@ -23,8 +22,12 @@ MAX_IDLE_SECONDS = 1800
 PHASES = ("doing", "waiting", "pending")
 PHASE_DEFAULT_MINUTES = {"waiting": 30, "pending": 60}
 MAX_PHASE_MINUTES = 24 * 60
-END_LABELS = {"complete": "Goal 已完成", "blocked": "Goal 已停止：卡住", "budget_limited": "Goal 预算已用完：请主持人收尾，总结进展、剩余工作和下一步",
-              "cleared": "Goal 已结束"}
+END_LABELS = {"complete": Text("Goal 已完成"), "blocked": Text("Goal 已停止：卡住"),
+              "budget_limited": Text("Goal 预算已用完：请主持人收尾，总结进展、剩余工作和下一步"),
+              "cleared": Text("Goal 已结束")}
+END_TEMPLATES = {"complete": Text("Goal 已完成：{note}"), "blocked": Text("Goal 已停止：卡住：{note}"),
+                 "budget_limited": Text("Goal 预算已用完：请主持人收尾，总结进展、剩余工作和下一步：{note}"),
+                 "cleared": Text("Goal 已结束：{note}")}
 
 
 def open_goal(connection, room_id):
@@ -39,23 +42,23 @@ def goal_host(connection, room_id):
     row = connection.execute("SELECT * FROM room_members WHERE room_id=? AND role='host' AND status='active' AND access='runner'",
                              (room_id,)).fetchone()
     if not row:
-        raise ValueError("Goal 需要一位由本机唤醒的 AI 主持人")
+        raise ValueError(Text("Goal 需要一位由本机唤醒的 AI 主持人"))
     return dict(row)
 
 
 def check_exclusive(connection, room_id):
     """Goal and discussion never run at the same time."""
     if connection.execute("SELECT 1 FROM discussion_sessions WHERE room_id=? AND status IN ('active','paused')", (room_id,)).fetchone():
-        raise FileExistsError("讨论进行中；结束讨论后才能开启 Goal")
+        raise FileExistsError(Text("讨论进行中；结束讨论后才能开启 Goal"))
     if open_goal(connection, room_id):
-        raise FileExistsError("Goal 已在进行；可用 /goal pause、/goal resume、/goal clear 或 /goal edit 新目标")
+        raise FileExistsError(Text("Goal 已在进行；可用 /goal pause、/goal resume、/goal clear 或 /goal edit 新目标"))
 
 
 def clean_objective(value):
     """An objective is required, single text of bounded length."""
     objective = str(value or "").strip()
     if not objective or len(objective) > MAX_OBJECTIVE_LENGTH:
-        raise ValueError(f"Goal 目标须为 1–{MAX_OBJECTIVE_LENGTH} 字")
+        raise ValueError(Text("Goal 目标须为 1–{max_objective_length} 字", max_objective_length=MAX_OBJECTIVE_LENGTH))
     return objective
 
 
@@ -65,11 +68,11 @@ def clean_budget(payload, current=None):
     for field, limit in (("max_continues", MAX_CONTINUES), ("max_minutes", MAX_MINUTES)):
         value = payload.get(field, (current or {}).get(field, 0))
         if type(value) is not int or not 0 <= value <= limit:
-            raise ValueError(f"{field} 须为 0–{limit} 的整数，0 表示不限")
+            raise ValueError(Text("{field} 须为 0–{limit} 的整数，0 表示不限", field=field, limit=limit))
         result[field] = value
     value = payload.get("idle_seconds", (current or {}).get("idle_seconds", DEFAULT_IDLE_SECONDS))
     if type(value) is not int or not MIN_IDLE_SECONDS <= value <= MAX_IDLE_SECONDS:
-        raise ValueError(f"idle_seconds 须为 {MIN_IDLE_SECONDS}–{MAX_IDLE_SECONDS} 的整数（秒）")
+        raise ValueError(Text("idle_seconds 须为 {min_idle_seconds}–{max_idle_seconds} 的整数（秒）", min_idle_seconds=MIN_IDLE_SECONDS, max_idle_seconds=MAX_IDLE_SECONDS))
     result["idle_seconds"] = value
     return result
 
@@ -88,10 +91,11 @@ def elapsed_seconds(goal, now=None):
     return max(0, end - goal["started_at"] - paused)
 
 
-def continuation_statuses(connection, goal_id, limit=FAILED_CONTINUATIONS):
-    """Statuses of the goal's latest wake-up requests, newest first."""
-    return [row[0] for row in connection.execute("""SELECT r.status FROM goal_continuations c JOIN member_requests r ON r.id=c.request_id
-        WHERE c.goal_id=? ORDER BY c.id DESC LIMIT ?""", (goal_id, limit))]
+def failed_continuation(connection, goal_id):
+    """The goal's latest wake-up request with its failure reason when it failed, else None."""
+    row = connection.execute("""SELECT r.id,r.status,COALESCE(e.result,'') FROM goal_continuations c JOIN member_requests r ON r.id=c.request_id
+        LEFT JOIN member_executions e ON e.id=r.execution_id WHERE c.goal_id=? ORDER BY c.id DESC LIMIT 1""", (goal_id,)).fetchone()
+    return {"request_id": row[0], "reason": row[2]} if row and row[1] == "failed" else None
 
 
 def room_idle(connection, room_id, goal):
@@ -113,8 +117,8 @@ def room_idle(connection, room_id, goal):
     if goal["phase"] != "doing":
         # The host said it is waiting on background work or on the user: only its fallback deadline wakes it.
         return bool(goal["phase_until"]) and int(time.time()) >= goal["phase_until"]
-    # A wake-up that failed did no work, so the next idle moment may try again until the failure limit stops the goal.
-    return bool(goal["armed"]) or continuation_statuses(connection, goal["id"], 1) == ["failed"]
+    # A failed wake-up makes the next idle moment due, which pauses the goal instead of waking the host again.
+    return bool(goal["armed"]) or failed_continuation(connection, goal["id"]) is not None
 
 
 def goal_revision(connection, room_id, goal):
@@ -143,9 +147,17 @@ def goal_view(connection, room_id):
 def require_revision(connection, room_id, payload, action):
     """State-dependent writes carry the revision read from GET goal."""
     if payload.get("revision") is None:
-        raise ValueError(f"{action}前须先读取 Goal 状态（GET goal）并带上 revision")
+        messages = {
+            "开启 Goal": Text("开启 Goal前须先读取 Goal 状态（GET goal）并带上 revision"),
+            "Goal 续跑": Text("Goal 续跑前须先读取 Goal 状态（GET goal）并带上 revision"),
+            "声明 Goal 状态": Text("声明 Goal 状态前须先读取 Goal 状态（GET goal）并带上 revision"),
+            "Goal 等待用户": Text("Goal 等待用户前须先读取 Goal 状态（GET goal）并带上 revision"),
+            "宣告 Goal 完成": Text("宣告 Goal 完成前须先读取 Goal 状态（GET goal）并带上 revision"),
+            "宣告 Goal 卡住": Text("宣告 Goal 卡住前须先读取 Goal 状态（GET goal）并带上 revision"),
+        }
+        raise ValueError(messages.get(action, Text("{action}前须先读取 Goal 状态（GET goal）并带上 revision", action=action)))
     if str(payload["revision"]) != goal_view(connection, room_id)["revision"]:
-        raise FileExistsError("Goal 或房间状态已变化，请重新读取后再提交")
+        raise FileExistsError(Text("Goal 或房间状态已变化，请重新读取后再提交"))
 
 
 def system_message(connection, room_id, text, key):
@@ -153,6 +165,7 @@ def system_message(connection, room_id, text, key):
     created_at = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
     cursor = connection.execute("INSERT INTO messages(room_id,author,text,source,submission_id,created_at) VALUES(?,?,?,?,?,?)",
                                 (room_id, GOAL_AUTHOR, text, "goal", key, created_at))
+    save_text(connection, "message", cursor.lastrowid, "text", text)
     connection.execute("INSERT INTO message_details (message_id,kind,submitted_by) VALUES (?,?,?)", (cursor.lastrowid, "goal", GOAL_AUTHOR))
     return cursor.lastrowid
 
@@ -171,7 +184,7 @@ def create_goal(connection, room_id, objective, budget, start_request_id=None):
     if start_request_id is not None:
         message_id = connection.execute("SELECT message_id FROM member_requests WHERE id=?", (start_request_id,)).fetchone()[0]
     else:
-        message_id = system_message(connection, room_id, f"Goal 已开启：{objective}", f"goal-{goal_id}-start")
+        message_id = system_message(connection, room_id, Text("Goal 已开启：{objective}", objective=objective), f"goal-{goal_id}-start")
     connection.execute("UPDATE room_goals SET started_message_id=? WHERE id=?", (message_id, goal_id))
     return goal_id
 
@@ -183,7 +196,7 @@ def end_goal(connection, goal, status, note=""):
     """
     now = int(time.time())
     paused = max(0, now - goal["paused_at"]) if goal["paused_at"] else 0
-    label = END_LABELS[status] + (f"：{note}" if note else "")
+    label = Text(END_TEMPLATES[status].template, note=note) if note else END_LABELS[status]
     message_id = system_message(connection, goal["room_id"], label, f"goal-{goal['id']}-end")
     connection.execute("""UPDATE room_goals SET status=?,ended_at=?,end_note=?,ended_message_id=?,paused_at=0,paused_seconds=paused_seconds+?
         WHERE id=?""", (status, now, note, message_id, paused, goal["id"]))
@@ -200,13 +213,13 @@ def check_goal_command(connection, room_id, command, argument):
         check_exclusive(connection, room_id)
         goal_host(connection, room_id)
         if len(argument) > MAX_OBJECTIVE_LENGTH:
-            raise ValueError(f"Goal 目标最多 {MAX_OBJECTIVE_LENGTH} 字")
+            raise ValueError(Text("Goal 目标最多 {max_objective_length} 字", max_objective_length=MAX_OBJECTIVE_LENGTH))
     elif not goal:
-        raise FileExistsError("房间没有进行中的 Goal")
+        raise FileExistsError(Text("房间没有进行中的 Goal"))
     elif command == "pause" and goal["status"] != "active":
-        raise FileExistsError("Goal 已经暂停")
+        raise FileExistsError(Text("Goal 已经暂停"))
     elif command == "resume" and goal["status"] != "paused":
-        raise FileExistsError("Goal 当前没有暂停")
+        raise FileExistsError(Text("Goal 当前没有暂停"))
     elif command == "edit":
         clean_objective(argument)
 
@@ -229,17 +242,17 @@ def control_goal(connection, goal, action):
     now = int(time.time())
     if action == "pause":
         if goal["status"] != "active":
-            raise FileExistsError("Goal 已经暂停")
+            raise FileExistsError(Text("Goal 已经暂停"))
         connection.execute("UPDATE room_goals SET status='paused',paused_at=? WHERE id=?", (now, goal["id"]))
     elif action == "resume":
         if goal["status"] != "paused":
-            raise FileExistsError("Goal 当前没有暂停")
+            raise FileExistsError(Text("Goal 当前没有暂停"))
         connection.execute("""UPDATE room_goals SET status='active',armed=1,paused_seconds=paused_seconds+MAX(0,?-paused_at),paused_at=0
             WHERE id=?""", (now, goal["id"]))
     elif action == "clear":
         end_goal(connection, goal, "cleared", "用户结束")
     else:
-        raise ValueError("action 须为 start、continue、wait、state、done、block、pause、resume、clear 或 update")
+        raise ValueError(Text("action 须为 start、continue、wait、state、done、block、pause、resume、clear 或 update"))
 
 
 def update_goal(connection, goal, payload):
@@ -258,14 +271,14 @@ def start_goal(connection, room_id, token, payload):
     if request_id is not None:
         member = require_member(connection, room_id, token)
         if member["role"] != "host":
-            raise PermissionError("只有主持人能补全并开启 Goal")
+            raise PermissionError(Text("只有主持人能补全并开启 Goal"))
         existing = connection.execute("SELECT id FROM room_goals WHERE start_request_id=?", (request_id,)).fetchone()
         if existing:
             return {**goal_view(connection, room_id), "duplicate": True}
         request = connection.execute("SELECT * FROM member_requests WHERE room_id=? AND id=?", (room_id, request_id)).fetchone()
         if (not request or request["purpose"] != "goal_start" or request["member_id"] != member["id"]
                 or request["status"] not in ("pending", "delivering")):
-            raise FileExistsError("Goal 启动请求不存在、不属于你或已处理；只有用户的 /goal 命令能开启 Goal")
+            raise FileExistsError(Text("Goal 启动请求不存在、不属于你或已处理；只有用户的 /goal 命令能开启 Goal"))
         budget = clean_budget({}, last_idle_seconds(connection, room_id))
     else:
         require_owner(connection, room_id, token)
@@ -292,10 +305,15 @@ def continue_goal(connection, room_id, token, payload):
     require_revision(connection, room_id, payload, "Goal 续跑")
     goal = open_goal(connection, room_id)
     if not goal or not room_idle(connection, room_id, goal):
-        raise FileExistsError("Goal 当前不需要续跑")
+        raise FileExistsError(Text("Goal 当前不需要续跑"))
     host = goal_host(connection, room_id)
-    if continuation_statuses(connection, goal["id"]) == ["failed"] * FAILED_CONTINUATIONS:
-        end_goal(connection, goal, "blocked", f"连续 {FAILED_CONTINUATIONS} 次续跑执行失败")
+    failed = None if goal["armed"] else failed_continuation(connection, goal["id"])
+    if failed:
+        # Failures such as a spent usage quota repeat on every retry: pause until the owner resumes (which arms the goal).
+        notice = (Text("Goal 已暂停：主持人执行失败：{reason}。处理后点“继续”恢复。", reason=failed["reason"]) if failed["reason"]
+                  else Text("Goal 已暂停：主持人执行失败。处理后点“继续”恢复。"))
+        system_message(connection, room_id, notice, f"goal-{goal['id']}-paused-{failed['request_id']}")
+        connection.execute("UPDATE room_goals SET status='paused',paused_at=? WHERE id=?", (int(time.time()), goal["id"]))
         return goal_view(connection, room_id)
     over = (goal["max_continues"] and goal["continues"] >= goal["max_continues"]
             or goal["max_minutes"] and elapsed_seconds(goal) >= goal["max_minutes"] * 60)
@@ -305,7 +323,7 @@ def continue_goal(connection, room_id, token, payload):
         end_goal(connection, goal, "budget_limited", "")
         message_id = connection.execute("SELECT ended_message_id FROM room_goals WHERE id=?", (goal["id"],)).fetchone()[0]
     else:
-        message_id = system_message(connection, room_id, f"Goal 续跑 #{number}：{continue_reason(goal)}",
+        message_id = system_message(connection, room_id, continue_reason(goal, number),
                                     f"goal-{goal['id']}-continue-{number}")
     insert_request(connection, room_id, host["id"], message_id, message_id, "goal_continue", "user")
     request_id = connection.execute("SELECT id FROM member_requests WHERE message_id=? AND member_id=?", (message_id, host["id"])).fetchone()[0]
@@ -318,15 +336,14 @@ def continue_goal(connection, room_id, token, payload):
     return goal_view(connection, room_id)
 
 
-def continue_reason(goal):
+def continue_reason(goal, number):
     """Why the host is woken, so it can tell a plain idle room from an expired wait."""
     minutes = max(1, (goal["phase_until"] - goal["phase_since"]) // 60) if goal["phase_until"] else 0
     if goal["phase"] == "waiting":
-        return f"等待已超过 {minutes} 分钟，请主持人检查后台工作是否完成，完成就接着推进，未完成可再次声明等待。"
+        return Text("Goal 续跑 #{number}：等待已超过 {minutes} 分钟，请主持人检查后台工作是否完成，完成就接着推进，未完成可再次声明等待。", number=number, minutes=minutes)
     if goal["phase"] == "pending":
-        return (f"用户 {minutes} 分钟未回复，请主持人评估这项决定能否不等用户自行做出：能就说明依据后继续推进；"
-                "不能就再次声明待确认，此后一直等到用户回复。")
-    return "房间已空闲，请主持人继续推进目标。"
+        return Text("Goal 续跑 #{number}：用户 {minutes} 分钟未回复，请主持人评估这项决定能否不等用户自行做出：能就说明依据后继续推进；不能就再次声明待确认，此后一直等到用户回复。", number=number, minutes=minutes)
+    return Text("Goal 续跑 #{number}：房间已空闲，请主持人继续推进目标。", number=number)
 
 
 def set_goal_phase(connection, room_id, token, payload):
@@ -334,20 +351,20 @@ def set_goal_phase(connection, room_id, token, payload):
     begin_write(connection)
     member = require_member(connection, room_id, token)
     if member["role"] != "host":
-        raise PermissionError("只有主持人能声明 Goal 状态")
+        raise PermissionError(Text("只有主持人能声明 Goal 状态"))
     require_revision(connection, room_id, payload, "声明 Goal 状态")
     goal = open_goal(connection, room_id)
     if not goal or goal["status"] != "active":
-        raise FileExistsError("房间没有推进中的 Goal")
+        raise FileExistsError(Text("房间没有推进中的 Goal"))
     phase = payload.get("state")
     if phase not in PHASES:
-        raise ValueError("state 须为 doing、waiting 或 pending；完成与卡住用 goal done / goal block")
+        raise ValueError(Text("state 须为 doing、waiting 或 pending；完成与卡住用 goal done / goal block"))
     note = str(payload.get("note") or "").strip()
     if len(note) > MAX_NOTE_LENGTH:
-        raise ValueError(f"说明最多 {MAX_NOTE_LENGTH} 字")
+        raise ValueError(Text("说明最多 {max_note_length} 字", max_note_length=MAX_NOTE_LENGTH))
     minutes = payload.get("minutes", PHASE_DEFAULT_MINUTES.get(phase, 0))
     if phase != "doing" and (type(minutes) is not int or not 1 <= minutes <= MAX_PHASE_MINUTES):
-        raise ValueError(f"minutes 须为 1–{MAX_PHASE_MINUTES} 的整数")
+        raise ValueError(Text("minutes 须为 1–{max_phase_minutes} 的整数", max_phase_minutes=MAX_PHASE_MINUTES))
     now = int(time.time())
     # After its one fallback the pending goal waits for the user with no further deadline.
     until = 0 if phase == "doing" or phase == "pending" and goal["pending_fallback"] else now + minutes * 60
@@ -368,7 +385,7 @@ def wait_goal(connection, room_id, token, payload):
     require_revision(connection, room_id, payload, "Goal 等待用户")
     goal = open_goal(connection, room_id)
     if not goal or goal["phase"] != "doing" or not goal["armed"] or not room_idle(connection, room_id, goal):
-        raise FileExistsError("Goal 当前不在等待唤醒")
+        raise FileExistsError(Text("Goal 当前不在等待唤醒"))
     now = int(time.time())
     until = 0 if goal["pending_fallback"] else now + PHASE_DEFAULT_MINUTES["pending"] * 60
     connection.execute("""UPDATE room_goals SET armed=0,phase='pending',phase_note='',phase_since=?,phase_until=? WHERE id=?""",
@@ -381,19 +398,19 @@ def finish_goal(connection, room_id, token, payload, status):
     begin_write(connection)
     member = require_member(connection, room_id, token)
     if member["role"] != "host":
-        raise PermissionError("只有主持人能宣告 Goal 完成或卡住")
+        raise PermissionError(Text("只有主持人能宣告 Goal 完成或卡住"))
     require_revision(connection, room_id, payload, "宣告 Goal 完成" if status == "complete" else "宣告 Goal 卡住")
     goal = open_goal(connection, room_id)
     if not goal:
-        raise FileExistsError("房间没有进行中的 Goal")
+        raise FileExistsError(Text("房间没有进行中的 Goal"))
     note = str(payload.get("note") or "").strip()
     if len(note) > MAX_NOTE_LENGTH or status == "blocked" and not note:
-        raise ValueError(f"说明须为 {'1' if status == 'blocked' else '0'}–{MAX_NOTE_LENGTH} 字；宣告卡住须写明阻碍")
+        raise ValueError(Text("说明须为 {value1}–{max_note_length} 字；宣告卡住须写明阻碍", value1='1' if status == 'blocked' else '0', max_note_length=MAX_NOTE_LENGTH))
     if status == "complete":
         others = [row[0] for row in connection.execute("""SELECT DISTINCT m.name FROM member_requests r JOIN room_members m ON m.id=r.member_id
             WHERE r.room_id=? AND r.status IN ('pending','delivering') AND r.member_id<>? ORDER BY m.name""", (room_id, member["id"]))]
         if others:
-            raise ValueError(f"仍有成员的请求未结束：{'、'.join(others)}；等它们完成或取消后再宣告完成")
+            raise ValueError(Text("仍有成员的请求未结束：{value1}；等它们完成或取消后再宣告完成", value1='、'.join(others)))
     end_goal(connection, goal, status, note)
     return goal_view(connection, room_id)
 
@@ -415,7 +432,7 @@ def goal_action(connection, room_id, token, payload):
     begin_write(connection)
     goal = open_goal(connection, room_id)
     if not goal:
-        raise FileExistsError("房间没有进行中的 Goal")
+        raise FileExistsError(Text("房间没有进行中的 Goal"))
     if action == "update":
         update_goal(connection, goal, payload)
     else:

@@ -102,22 +102,22 @@ function start_resize(event) {
 </script>
 
 <template>
-  <section class="workflow-library" :class="{ 'has-skill': show_skill, 'is-stacked': stacked }" aria-label="工作流"
+  <section class="workflow-library" :class="{ 'has-skill': show_skill, 'is-stacked': stacked }" :aria-label="t('工作流')"
     :style="{ '--workflow-skill-width': `${skill_width}px` }">
-    <div v-if="stacked && (draft || loading)" class="workflow-tabs-view"><div class="workflow-tabs-segment" role="tablist" aria-label="画布或工作流说明">
-      <button type="button" role="tab" :aria-selected="pane === 'canvas'" title="画布：成员卡片与示意连线" @click="pane = 'canvas'"><UIcon name="i-lucide-network" class="workflow-library-icon" />画布</button>
-      <button type="button" role="tab" :aria-selected="pane === 'skill'" title="工作流：主持人照着派活的 SKILL.md" @click="pane = 'skill'"><UIcon :name="scope ? 'i-lucide-git-branch' : 'i-lucide-file-text'" class="workflow-library-icon" />{{ scope ? '子工作流' : '工作流' }}</button>
+    <div v-if="stacked && (draft || loading)" class="workflow-tabs-view"><div class="workflow-tabs-segment" role="tablist" :aria-label="t('画布或工作流说明')">
+      <button type="button" role="tab" :aria-selected="pane === 'canvas'" :title="t('画布：成员卡片与示意连线')" @click="pane = 'canvas'"><UIcon name="i-lucide-network" class="workflow-library-icon" />{{ t('画布') }}</button>
+      <button type="button" role="tab" :aria-selected="pane === 'skill'" :title="t('工作流：主持人照着派活的 SKILL.md')" @click="pane = 'skill'"><UIcon :name="scope ? 'i-lucide-git-branch' : 'i-lucide-file-text'" class="workflow-library-icon" />{{ scope ? t('子工作流') : t('工作流') }}</button>
     </div></div>
     <div v-show="!stacked || pane === 'canvas' || (!draft && !loading)" class="workflow-library-stage">
       <WorkflowCanvas v-if="draft" ref="canvas" :key="canvas_key" v-model:flow="current.flow" v-model:agents="current.agents" :reserved="reserved" :compact="stacked"
         :shared="scope ? draft.agents : null" :subs="scope ? null : subs" :new-sub="() => library.add_sub(false)"
         @update:shared="(value) => { draft.agents = value; }" @open-sub="library.enter_sub" @open-skill="show_skill_text">
         <template #actions="{ iconsOnly }">
-          <UTooltip :text="experts_missing ? '专家配置：有卡片的软件本机未配置' : '专家配置：每张卡片的软件、模型、强度与项目权限'"><span class="workflow-library-save">
-            <UButton :icon="experts_missing ? 'i-lucide-triangle-alert' : 'i-lucide-sliders-horizontal'" :label="iconsOnly ? undefined : '专家配置'" aria-label="专家配置" size="sm" :color="experts_missing ? 'warning' : 'neutral'" variant="ghost" @click="experts_open = true" /></span></UTooltip>
-          <UTooltip v-if="!skill_open && !stacked" text="展开 SKILL.md：主持人照它派活"><UButton icon="i-lucide-panel-right-open" :label="iconsOnly ? undefined : 'SKILL.md'" aria-label="展开 SKILL.md" size="sm" color="neutral" variant="ghost" @click="set_skill_open(true)" /></UTooltip>
-          <UTooltip :text="dirty ? '保存（Ctrl+S）：有未保存的修改' : '没有未保存的修改'"><span class="workflow-library-save">
-            <UButton icon="i-lucide-save" :label="iconsOnly ? undefined : '保存'" aria-label="保存" :size="stacked ? 'xs' : 'sm'" class="channel-primary-button" :disabled="!dirty" :loading="busy" @click="library.save()" />
+          <UTooltip :text="experts_missing ? t('专家配置：有卡片的软件本机未配置') : t('专家配置：每张卡片的软件、模型、强度与项目权限')"><span class="workflow-library-save">
+            <UButton :icon="experts_missing ? 'i-lucide-triangle-alert' : 'i-lucide-sliders-horizontal'" :label="iconsOnly ? undefined : t('专家配置')" :aria-label="t('专家配置')" size="sm" :color="experts_missing ? 'warning' : 'neutral'" variant="ghost" @click="experts_open = true" /></span></UTooltip>
+          <UTooltip v-if="!skill_open && !stacked" :text="t('展开 SKILL.md：主持人照它派活')"><UButton icon="i-lucide-panel-right-open" :label="iconsOnly ? undefined : 'SKILL.md'" :aria-label="t('展开 SKILL.md')" size="sm" color="neutral" variant="ghost" @click="set_skill_open(true)" /></UTooltip>
+          <UTooltip :text="dirty ? t('保存（Ctrl+S）：有未保存的修改') : t('没有未保存的修改')"><span class="workflow-library-save">
+            <UButton icon="i-lucide-save" :label="iconsOnly ? undefined : t('保存')" :aria-label="t('保存')" :size="stacked ? 'xs' : 'sm'" class="channel-primary-button" :disabled="!dirty" :loading="busy" @click="library.save()" />
             <i v-if="dirty" class="workflow-library-dirty" /></span></UTooltip>
         </template>
       </WorkflowCanvas>
@@ -128,17 +128,17 @@ function start_resize(event) {
         <div class="workflow-library-loading" role="status"><UIcon name="i-lucide-loader-circle" class="animate-spin" /><span>{{ loading }}</span></div>
       </template>
       <div v-else class="workflow-library-empty">
-        <template v-if="!available"><UIcon name="i-lucide-monitor-off" /><p>连接本机服务后管理工作流</p></template>
+        <template v-if="!available"><UIcon name="i-lucide-monitor-off" /><p>{{ t('连接本机服务后管理工作流') }}</p></template>
         <template v-else-if="broken"><UIcon name="i-lucide-triangle-alert" /><p>{{ broken }}</p></template>
-        <template v-else-if="failure"><UIcon name="i-lucide-triangle-alert" /><p>{{ failure }}</p><UButton label="重试" icon="i-lucide-refresh-cw" color="neutral" variant="soft" @click="library.retry()" /></template>
+        <template v-else-if="failure"><UIcon name="i-lucide-triangle-alert" /><p>{{ failure }}</p><UButton :label="t('重试')" icon="i-lucide-refresh-cw" color="neutral" variant="soft" @click="library.retry()" /></template>
         <template v-else>
           <UIcon name="i-lucide-network" />
-          <UDropdownMenu :items="add_items" :ui="{ content: 'channel-menu' }"><UButton icon="i-lucide-plus" label="新建工作流" color="neutral" variant="soft" /></UDropdownMenu>
+          <UDropdownMenu :items="add_items" :ui="{ content: 'channel-menu' }"><UButton icon="i-lucide-plus" :label="t('新建工作流')" color="neutral" variant="soft" /></UDropdownMenu>
         </template>
       </div>
     </div>
     <template v-if="show_skill">
-      <div v-if="!stacked" class="workflow-library-resize" role="separator" aria-orientation="vertical" aria-label="调整 SKILL.md 面板宽度" tabindex="0" title="拖动调整宽度，双击还原"
+      <div v-if="!stacked" class="workflow-library-resize" role="separator" aria-orientation="vertical" :aria-label="t('调整 SKILL.md 面板宽度')" tabindex="0" :title="t('拖动调整宽度，双击还原')"
         :aria-valuenow="skill_width" :aria-valuemin="SKILL_WIDTH.min" :aria-valuemax="SKILL_WIDTH.max" @pointerdown.prevent="start_resize"
         @dblclick="set_width(SKILL_WIDTH.initial)" @keydown.left.prevent="set_width(skill_width + SKILL_WIDTH.step)"
         @keydown.right.prevent="set_width(skill_width - SKILL_WIDTH.step)" />

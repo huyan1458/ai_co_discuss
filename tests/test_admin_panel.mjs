@@ -8,10 +8,25 @@ import { after, test } from 'node:test';
 
 import { add_account, instance_home, read_accounts, stop_entry } from '../gateway/gateway.mjs';
 import { managed_api_keys, save_api_key } from '../runner/discussion_api.mjs';
-import { create_panel, instance_conforms, instance_state, list_keys, protect_account, relay_operator_events } from '../runner/admin_panel.mjs';
+import { create_panel, instance_conforms, instance_state, list_keys, protect_account, relay_operator_events, update_step } from '../runner/admin_panel.mjs';
 import { instance_key_file, os_user_name, place_instance_key, secure_folder, secure_shared_root } from '../runner/os_users.mjs';
 import { tray_script } from '../runner/tray.mjs';
 import { admin_cli } from '../runner/admin_cli.mjs';
+
+process.env.CODISCUSS_LANG = 'zh-CN';
+
+test('update steps report success independently of words in their message', async () => {
+  const steps = [];
+  await update_step(steps, '失败记录已清理', async () => {});
+  assert.deepEqual(steps, [{ text: '失败记录已清理', failed: false }]);
+});
+
+test('update steps report failures even when the reason contains no Chinese', async () => {
+  const steps = [];
+  await update_step(steps, 'Restart service', async () => { throw new Error('connection refused'); });
+  assert.equal(steps[0].failed, true);
+  assert.match(steps[0].text, /connection refused/);
+});
 
 const KEY = 'owner-key';
 const folders = [];
@@ -26,6 +41,21 @@ function fixture() {
   const ops = { list_accounts: async () => [{ name: 'demo' }], shared_cli_state: () => ({}), service_overview: () => ({ running: true }), autostart_enabled: () => false };
   return { data, ops };
 }
+
+test('update progress normalizes old updater records and preserves structured failure flags', async () => {
+  const { data, ops } = fixture();
+  const { request } = await serve(data, ops);
+  const cookie = (await request('/enter?key=owner-key')).headers.get('set-cookie').split(';')[0];
+  writeFileSync(join(data, 'panel-update.json'), JSON.stringify({ status: 'install_failed', steps: [
+    '已安装 v1.0.0', '安装失败：network', { text: 'Failed logs removed', failed: false }, { text: 'Network unavailable', failed: true },
+  ] }));
+  const response = await request('/api/update/progress', { cookie });
+  assert.equal(response.status, 200);
+  assert.deepEqual((await response.json()).steps, [
+    { text: '已安装 v1.0.0', failed: false }, { text: '安装失败：network', failed: true },
+    { text: 'Failed logs removed', failed: false }, { text: 'Network unavailable', failed: true },
+  ]);
+});
 
 /** Serve the panel on a free port and return a request helper bound to its address. */
 async function serve(data, ops) {
@@ -68,6 +98,35 @@ test('the panel opens only with the owner key, only for its own address, and ref
   assert.deepEqual([plain.hosting, plain.accounts], [false, []]);
   assert.equal((await request('/api/accounts', { cookie, body: { name: 'third' } })).status, 400);
   assert.equal((await request('/api/accounts/demo/keys', { cookie })).status, 400);
+});
+
+test('panel errors carry Chinese templates and parameters independently of the CLI language', async () => {
+  const { data, ops } = fixture();
+  const { request } = await serve(data, ops);
+  const previous_language = process.env.CODISCUSS_LANG;
+  process.env.CODISCUSS_LANG = 'en';
+  try {
+    const denied = await request('/api/state');
+    assert.equal(denied.status, 401);
+    assert.deepEqual(await denied.json(), { error: '请从任务栏图标重新打开管理面板', error_text: { template: '请从任务栏图标重新打开管理面板', params: {} } });
+    const cookie = (await request('/enter?key=owner-key')).headers.get('set-cookie').split(';')[0];
+    const missing = await request('/api/accounts/missing/start', { cookie, body: {} });
+    assert.equal(missing.status, 400);
+    assert.deepEqual(await missing.json(), { error: '账号不存在：missing', error_text: { template: '账号不存在：{value1}', params: { value1: 'missing' } } });
+  } finally { process.env.CODISCUSS_LANG = previous_language; }
+});
+
+test('the panel API client translates structured errors and preserves legacy errors and HTTP status', async () => {
+  const original_fetch = globalThis.fetch, original_i18n = globalThis.codiscuss_i18n;
+  const english = JSON.parse(readFileSync(new URL('../frontend/locales/en/backend_worker.json', import.meta.url), 'utf8'));
+  globalThis.codiscuss_i18n = { t: (template, params = {}) => (english[template] || template).replace(/\{(\w+)\}/g, (match, name) => Object.hasOwn(params, name) ? String(params[name]) : match) };
+  try {
+    const { call } = await import('../frontend/admin/api.js');
+    globalThis.fetch = async () => Response.json({ error: '账号不存在：demo', error_text: { template: '账号不存在：{value1}', params: { value1: 'demo' } } }, { status: 400 });
+    await assert.rejects(call('accounts/demo/start', {}), error => error.message === 'Account not found: demo' && error.status === 400);
+    globalThis.fetch = async () => Response.json({ error: 'legacy error' }, { status: 409 });
+    await assert.rejects(call('old-server'), error => error.message === 'legacy error' && error.status === 409);
+  } finally { globalThis.fetch = original_fetch; globalThis.codiscuss_i18n = original_i18n; }
 });
 
 test('a key the owner gives an account is marked as provided and never returned in full', async () => {

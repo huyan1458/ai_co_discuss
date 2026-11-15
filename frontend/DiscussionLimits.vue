@@ -1,4 +1,5 @@
 <script setup>
+import { t } from "./i18n.js";
 /** The discussion limits shared by every form that sets them: rounds and total time, and what happens at the limit. */
 import { computed, ref } from "vue";
 import LimitPicker, { format_duration } from "./LimitPicker.vue";
@@ -14,9 +15,11 @@ const emit = defineEmits(["update:rounds", "update:minutes", "update:named_follo
 const picker = ref(null);
 
 const rule = computed(() => {
-  const limits = [props.rounds && `${props.rounds} 轮`, props.minutes && format_duration(props.minutes)].filter(Boolean);
-  if (!limits.length) return "不设轮次和时长上限。";
-  return `最多 ${limits.join(" 或 ")}，${limits.length === 2 ? "先到则" : "到限后"}结束讨论。`;
+  const limits = [props.rounds && t('{count} 轮', { count: props.rounds }), props.minutes && format_duration(props.minutes)].filter(Boolean);
+  if (!limits.length) return t("不设轮次和时长上限。");
+  return limits.length === 2
+    ? t('最多 {first} 或 {second}，先到则结束讨论。', { first: limits[0], second: limits[1] })
+    : t('最多 {limit}，到限后结束讨论。', { limit: limits[0] });
 });
 
 /** Commit the wheels' visible values before the owning form submits. */
@@ -27,8 +30,8 @@ defineExpose({ settle });
 <template>
   <fieldset class="discussion-limits" :disabled="disabled">
     <LimitPicker ref="picker" :rounds="rounds" :minutes="minutes" @update:rounds="emit('update:rounds', $event)" @update:minutes="emit('update:minutes', $event)" />
-    <p class="fine-print">一轮指每位专家各完成一次观点；开启后计时，暂停期间不计时。</p>
-    <UCheckbox v-if="named_followup !== undefined" :model-value="named_followup" label="点名追问" description="开启后，主持人每轮逐位点名追问；关闭时专家按统一问题互相回应。轮间由主持人衔接，开启智能调度后可由程序代办。" @update:model-value="emit('update:named_followup', $event)" />
+    <p class="fine-print">{{ t("一轮指每位专家各完成一次观点；开启后计时，暂停期间不计时。") }}</p>
+    <UCheckbox v-if="named_followup !== undefined" :model-value="named_followup" :label="t('点名追问')" :description="t('开启后，主持人每轮逐位点名追问；关闭时专家按统一问题互相回应。轮间由主持人衔接，开启智能调度后可由程序代办。')" @update:model-value="emit('update:named_followup', $event)" />
     <slot />
     <p class="discussion-limits-rule" aria-live="polite"><UIcon name="i-lucide-flag" />{{ rule }}</p>
   </fieldset>

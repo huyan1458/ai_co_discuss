@@ -16,9 +16,10 @@ const continuing = ref(false);
 </script>
 
 <template>
-  <ScheduleCard :icon="icon" plain :expandable="false" label="Goal">
+  <ScheduleCard :icon="icon" plain fold label="Goal">
     <template #text>{{ message.text }}</template>
-    <template v-if="continuable" #actions><UButton icon="i-lucide-rotate-ccw" label="继续 Goal" size="xs" color="neutral" variant="ghost" title="沿用这个目标重新开启 Goal，需本机接入程序在运行"
+    <p class="channel-checkin-answer">{{ message.text }}</p>
+    <template v-if="continuable" #actions><UButton icon="i-lucide-rotate-ccw" :label="t('继续 Goal')" size="xs" color="neutral" variant="ghost" :title="t('沿用这个目标重新开启 Goal，需本机接入程序在运行')"
       :disabled="!view.access?.can_manage || room.archived || Boolean(pending)" @click="continuing = true" /></template>
   </ScheduleCard>
   <StartGoalDialog v-if="continuable" v-model:open="continuing" continuing :initial="goal" />

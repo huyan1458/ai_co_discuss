@@ -9,6 +9,7 @@
  * A turn already named by the host's latest announced message is not repeated.
  */
 import { ref, watch } from "vue";
+import { t } from "./i18n.js";
 
 // A host message naming the next speaker makes the turn line redundant within this time.
 const HOST_NAMED_MS = 60000;
@@ -67,15 +68,15 @@ export function use_broadcast({ view, bridge, reader }) {
     const lines = [];
     const members = new Map((room().free?.members || []).map((member) => [member.id, member.name]));
     for (const execution of room().free?.executions || []) {
-      const who = name(execution.member || members.get(execution.member_id) || "成员");
+      const who = name(execution.member || members.get(execution.member_id) || t("成员"));
       const refused = Boolean(execution.denials?.length) && !seen.refused.has(execution.id);
       if (execution.status === "failed" && !seen.failed.has(execution.id)) {
         seen.failed.add(execution.id);
         if (refused) seen.refused.add(execution.id);
-        lines.push({ text: refused ? `${who} 执行失败，有操作被拒绝，等你允许。` : `${who} 执行失败。` });
+        lines.push({ text: refused ? t("{name} 执行失败，有操作被拒绝，等你允许。", { name: who }) : t("{name} 执行失败。", { name: who }) });
       } else if (refused) {
         seen.refused.add(execution.id);
-        lines.push({ text: `${who} 有操作被拒绝，等你允许。` });
+        lines.push({ text: t("{name} 有操作被拒绝，等你允许。", { name: who }) });
       }
     }
     return lines;
@@ -87,18 +88,18 @@ export function use_broadcast({ view, bridge, reader }) {
     let listed = "";
     if (round && round !== seen.round) {
       const order = (room().speaking_order?.items || []).filter((item) => item.state !== "idle").map((item) => name(item.name));
-      lines.push({ text: `第 ${round} 轮开始${order.length ? `，依次是 ${order.join("、")}` : ""}。` });
+      lines.push({ text: order.length ? t("第 {round} 轮开始，依次是 {names}。", { round, names: order.join(t("、")) }) : t("第 {round} 轮开始。", { round }) });
       listed = order[0] || "";
     }
     if (next && next !== seen.speaker) {
       const shown = name(next);
       const named = Date.now() - host_said.at < HOST_NAMED_MS && (host_said.text.includes(shown) || host_said.text.includes(next));
-      if (shown !== listed && !named) lines.push({ text: `轮到 ${shown}。` });
+      if (shown !== listed && !named) lines.push({ text: t("轮到 {name}。", { name: shown }) });
     }
     seen.round = round || seen.round;
     seen.speaker = next;
     const concluded = room().session?.status === "concluded";
-    if (concluded && !seen.concluded) lines.push({ text: `讨论已结束：${bridge.stop_reason_label(room().limits || {})}。` });
+    if (concluded && !seen.concluded) lines.push({ text: t("讨论已结束：{reason}。", { reason: bridge.stop_reason_label(room().discussions?.at(-1) || {}) }) });
     seen.concluded = concluded;
     return lines;
   }

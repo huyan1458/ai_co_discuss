@@ -23,6 +23,7 @@ flowchart LR
 - **Read, then write, enforced by the server** — writes that depend on the room's overall state (such as scheduling a full round or wrapping up) must carry the revision obtained when reading. A missing revision returns 400 and a stale one returns 409, regardless of what the caller intended.
 - **The site record is the source of truth** — a session ID, a process exit or a delivery receipt does not mean a task is done, and tasks with uncertain delivery are never resent automatically.
 - **One execution flow** — discussion turns and ordinary room requests share requests, executions, leases, failure retries and progress reports. A discussion session only controls its goal, speaker order, phase and limits.
+- **The interface responds first** — opening or switching shows the target area at once while its content loads in the background, with loading placeholders while waiting and a retry on failure. Room details and messages arrive separately, and spreadsheet parsing runs in a background Worker.
 
 ## Components
 

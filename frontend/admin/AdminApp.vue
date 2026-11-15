@@ -7,15 +7,16 @@
  */
 import { computed, onMounted, provide, ref } from "vue";
 import { useToast } from "@nuxt/ui/composables";
-import { zh_cn } from "@nuxt/ui/locale";
+import { en, zh_cn } from "@nuxt/ui/locale";
+import { locale, t } from "../i18n.js";
 import { call } from "./api.js";
 import OverviewPage from "./OverviewPage.vue";
 import AccountsPage from "./AccountsPage.vue";
 
 // Served beside the page by the panel server, not bundled.
 const MARK = "/mark.svg";
-const OVERVIEW = { key: "overview", label: "概览", icon: "i-lucide-layout-dashboard" };
-const ACCOUNTS = { key: "accounts", label: "账号", icon: "i-lucide-users" };
+const OVERVIEW = { key: "overview", label: t('概览'), icon: "i-lucide-layout-dashboard" };
+const ACCOUNTS = { key: "accounts", label: t('账号'), icon: "i-lucide-users" };
 const state = ref({ hosting: false, service: {}, accounts: [], clis: {}, providers: {}, platform: "" });
 const pages = [OVERVIEW, ACCOUNTS];
 // The address keeps the page, so a reload or a link from the taskbar lands on the same one.
@@ -47,7 +48,7 @@ async function refresh_all() {
   refreshed.value += 1;
   const [ok] = await Promise.all([reload(), new Promise((done) => setTimeout(done, 500))]);
   refreshing.value = false;
-  if (ok) notify("info", "已刷新");
+  if (ok) notify("info", t('已刷新'));
 }
 
 provide("panel", { state, reload, notify, refreshed });
@@ -59,17 +60,17 @@ onMounted(() => document.addEventListener("toast.viewportPause", (event) => even
 </script>
 
 <template>
-  <UApp :locale="zh_cn" :scroll-body="false" :toaster="{ position: 'bottom-right', max: 4 }">
+  <UApp :locale="locale === 'en' ? en : zh_cn" :scroll-body="false" :toaster="{ position: 'bottom-right', max: 4 }">
     <div class="panel">
       <header class="panel-head">
-        <div class="panel-brand"><img class="panel-mark" :src="MARK" alt="" /><h1>共议</h1><small>管理面板</small></div>
-        <nav class="panel-tabs" aria-label="管理页面">
+        <div class="panel-brand"><img class="panel-mark" :src="MARK" alt="" /><h1>{{ t('共议') }}</h1><small>{{ t('管理面板') }}</small></div>
+        <nav class="panel-tabs" :aria-label="t('管理页面')">
           <button v-for="item in pages" :key="item.key" type="button" class="panel-tab" :class="{ 'is-active': page === item.key }" :aria-current="page === item.key ? 'page' : undefined" @click="choose(item.key)">
             <UIcon :name="item.icon" />{{ item.label }}
           </button>
         </nav>
         <div class="panel-tools">
-          <button type="button" class="panel-tool" :class="{ 'is-spinning': refreshing }" :disabled="refreshing" title="刷新全部：服务、登录状态、账号与版本" aria-label="刷新全部" @click="refresh_all"><UIcon name="i-lucide-refresh-cw" /></button>
+          <button type="button" class="panel-tool" :class="{ 'is-spinning': refreshing }" :disabled="refreshing" :title="t('刷新全部：服务、登录状态、账号与版本')" :aria-label="t('刷新全部')" @click="refresh_all"><UIcon name="i-lucide-refresh-cw" /></button>
         </div>
       </header>
       <OverviewPage v-if="page === 'overview'" />

@@ -9,11 +9,12 @@
  */
 import { nextTick, onBeforeUnmount, ref, watch } from "vue";
 import PreviewLoading from "./PreviewLoading.vue";
+import { t } from './i18n.js';
 
 // `scale` is the preview's size step for Word and Excel (1 = Word fitted to the width, Excel at its normal size).
 const props = defineProps({ kind: { type: String, required: true }, url: { type: String, required: true }, scale: { type: Number, default: 1 } });
 const MODULES = { docx: "/office/docx.js", sheet: "/office/xlsx.js", slides: "/office/pptx.js", pdf: "/pdfjs/pdf.min.mjs" };
-const LABELS = { docx: "正在排版 Word 文档…", sheet: "正在读取表格…", slides: "正在绘制幻灯片…", pdf: "正在打开 PDF…" };
+const LABELS = { docx: t('正在排版 Word 文档…'), sheet: t('正在读取表格…'), slides: t('正在绘制幻灯片…'), pdf: t('正在打开 PDF…') };
 // The Word frame may be reached from this page to lay the document out, but runs no scripts of its own.
 const DOCX_FRAME = '<!doctype html><html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width"></head><body></body></html>';
 // Added after docx-preview has laid the document out, since it empties the style container it is given.
@@ -34,7 +35,7 @@ let sheet_worker = null, cancel_sheet = null;
 /** The file's bytes, for the renderers that take them rather than a URL. */
 async function file_bytes() {
   const response = await fetch(props.url);
-  if (!response.ok) throw new Error(`文件读取失败（${response.status}）`);
+  if (!response.ok) throw new Error(t('文件读取失败（{value1}）', { value1: response.status }));
   return response.arrayBuffer();
 }
 
@@ -42,9 +43,9 @@ async function file_bytes() {
 function read_sheets() {
   const worker = sheet_worker = new Worker(MODULES.sheet, { type: "module" });
   const result = new Promise((resolve, reject) => {
-    cancel_sheet = () => reject(new Error("已关闭表格"));
+    cancel_sheet = () => reject(new Error(t('已关闭表格')));
     worker.onmessage = ({ data }) => data.error ? reject(new Error(data.error)) : resolve(data.sheets);
-    worker.onerror = (event) => reject(new Error(event.message || "表格解析失败"));
+    worker.onerror = (event) => reject(new Error(event.message || t('表格解析失败')));
     file_bytes().then((data) => worker.postMessage(data, [data])).catch(reject);
   });
   return result.finally(() => {
@@ -181,20 +182,20 @@ onBeforeUnmount(() => { version++; release(); });
 
 <template>
   <div class="office-viewer">
-    <iframe v-if="kind === 'docx'" ref="docx_frame" class="office-viewer-frame" sandbox="allow-same-origin" referrerpolicy="no-referrer" :srcdoc="DOCX_FRAME" title="Word 文档预览" @load="frame_loaded = true"></iframe>
+    <iframe v-if="kind === 'docx'" ref="docx_frame" class="office-viewer-frame" sandbox="allow-same-origin" referrerpolicy="no-referrer" :srcdoc="DOCX_FRAME" :title="t('Word 文档预览')" @load="frame_loaded = true"></iframe>
     <template v-else-if="kind === 'sheet'">
-      <nav v-if="sheets.length > 1" class="office-viewer-sheets" aria-label="工作表">
+      <nav v-if="sheets.length > 1" class="office-viewer-sheets" :aria-label="t('工作表')">
         <button v-for="(item, index) in sheets" :key="item.name" type="button" :aria-pressed="sheet === index" @click="sheet !== index && (state = 'loading', sheet = index)">{{ item.name }}</button>
       </nav>
-      <p v-if="sheets[sheet]?.cut" class="office-viewer-note">只显示前 5000 行；完整内容请下载后查看。表格只显示数值与合并单元格，不含样式与图表。</p>
-      <iframe v-if="sheets.length" ref="sheet_frame" :key="sheet" class="office-viewer-frame" sandbox="allow-same-origin" referrerpolicy="no-referrer" :srcdoc="SHEET_STYLE + (sheets[sheet]?.html || '')" title="表格预览" @load="scale_sheet(); state = 'ready'"></iframe>
+      <p v-if="sheets[sheet]?.cut" class="office-viewer-note">{{ t('只显示前 5000 行；完整内容请下载后查看。表格只显示数值与合并单元格，不含样式与图表。') }}</p>
+      <iframe v-if="sheets.length" ref="sheet_frame" :key="sheet" class="office-viewer-frame" sandbox="allow-same-origin" referrerpolicy="no-referrer" :srcdoc="SHEET_STYLE + (sheets[sheet]?.html || '')" :title="t('表格预览')" @load="scale_sheet(); state = 'ready'"></iframe>
     </template>
-    <div v-else-if="kind === 'pdf'" ref="pdf_host" class="office-viewer-pages" tabindex="0" aria-label="PDF 页面"></div>
+    <div v-else-if="kind === 'pdf'" ref="pdf_host" class="office-viewer-pages" tabindex="0" :aria-label="t('PDF 页面')"></div>
     <div v-else ref="slides_host" class="office-viewer-slides"></div>
     <Transition name="office-viewer-fade">
       <PreviewLoading v-if="state === 'loading'" class="office-viewer-cover" :label="LABELS[kind]" />
     </Transition>
-    <div v-if="state === 'failed'" class="office-viewer-cover office-viewer-failed"><UIcon name="i-lucide-circle-alert" /><p>无法预览这个文件：{{ error }}。可能是加密、损坏，或旧版 .doc / .ppt 格式；请下载后用本机软件打开。</p><UButton label="重试" icon="i-lucide-refresh-cw" color="neutral" variant="soft" @click="render" /></div>
+    <div v-if="state === 'failed'" class="office-viewer-cover office-viewer-failed"><UIcon name="i-lucide-circle-alert" /><p>{{ t('无法预览这个文件：{value1}。可能是加密、损坏，或旧版 .doc / .ppt 格式；请下载后用本机软件打开。', { value1: error }) }}</p><UButton :label="t('重试')" icon="i-lucide-refresh-cw" color="neutral" variant="soft" @click="render" /></div>
   </div>
 </template>
 

@@ -18,6 +18,7 @@ from urllib.parse import parse_qs, urlencode, urlsplit
 from urllib.request import Request, urlopen
 
 from backend.server import DiscussionServer, connect_db, create_room, init_database, require_room
+from backend.texts import Text, incoming_text, load_texts, save_text
 
 
 # shutdown() waits for the server loop to notice; the default 0.5 s poll made every test end half a second late.
@@ -44,6 +45,270 @@ class DiscussionTests(unittest.TestCase):
             self.thread.start()
             self.base = f"http://127.0.0.1:{self.server.server_port}"
         self.room = self.request("/api/rooms", {"title": "测试议题", "goal": "保持完整记录"})[1]
+
+    def test_reading_pages_and_retired_publish_follow_accept_language(self):
+        """Fixed reader labels localize while an author's original message stays intact."""
+        original = "用户原文保持中文 Original text"
+        message = self.post(original, "language-reader")[1]["message"]
+        for language, label, error in (("zh-CN", "职责", "URL 发布入口"), ("en-US", "Role", "URL publishing")):
+            for suffix, status, expected in ((f"messages/{message['id']}", 200, label), ("publish", 410, error)):
+                with self.subTest(language=language, route=suffix):
+                    request = Request(f"{self.base}/r/{self.room['id']}/{suffix}", headers={
+                        "Accept-Language": language, "X-Discussion-Token": self.owner})
+                    try:
+                        response = urlopen(request, timeout=5)
+                    except HTTPError as failure:
+                        response = failure
+                    with response:
+                        self.assertEqual(response.status, status)
+                        self.assertIn("text/plain", response.headers["Content-Type"])
+                        body = response.read().decode("utf-8")
+                    self.assertIn(expected, body)
+                    if status == 200:
+                        self.assertIn(original, body)
+        self.assertIn("职责", self.request(f"/r/{self.room['id']}/messages/{message['id']}")[1])
+        for language, expected in (("zh-CN", "房间不存在"), ("en-US", "Room not found")):
+            with self.subTest(language=language, route="missing room"), self.assertRaises(HTTPError) as caught:
+                urlopen(Request(f"{self.base}/r/missing-room", headers={"Accept-Language": language}), timeout=5)
+            with caught.exception as response:
+                self.assertEqual(response.status, 404)
+                self.assertEqual(response.read().decode("utf-8"), expected)
+
+    def test_seed_templates_and_custom_default_labels_preserve_originals(self):
+        """Only marked sample content and an unchanged default nickname receive display templates."""
+        from backend.identity import default_label, default_label_text
+        from backend.server import read_text, list_rooms
+        database = Path(self.directory.name) / "seed-translations.sqlite3"
+        init_database(database)
+        with closing(connect_db(database)) as connection, connection:
+            room = require_room(connection, "welcome")
+            self.assertEqual(room["title"], "AI 留言板 · 设计讨论")
+            self.assertEqual(list_rooms(connection)["rooms"][0]["texts"], room["texts"])
+            for field in ("title", "goal", "state_text"):
+                payload = room["texts"][field]
+                self.assertNotEqual(read_text(Text(payload["template"], **payload["params"]), "en"), room[field])
+            messages = connection.execute("SELECT id,text FROM messages WHERE room_id='welcome' ORDER BY id").fetchall()
+            self.assertEqual(len(messages), 6)
+            for message in messages:
+                payload = load_texts(connection, "message", message["id"])["text"]
+                self.assertEqual(str(Text(payload["template"], **payload["params"])), message["text"])
+                self.assertNotEqual(read_text(Text(payload["template"], **payload["params"]), "en"), message["text"])
+            connection.execute("UPDATE rooms SET title='用户重新命名' WHERE id='welcome'")
+            self.assertNotIn("title", require_room(connection, "welcome")["texts"])
+            connection.execute("DELETE FROM stored_texts")
+            self.assertEqual(require_room(connection, "welcome")["texts"], {})
+        self.assertEqual(default_label("Custom-2"), "自定义 API-2")
+        payload = default_label_text("Custom-2", "自定义 API-2")
+        self.assertEqual(read_text(Text(payload["template"], **payload["params"]), "en"), "Custom API-2")
+        self.assertIsNone(default_label_text("Custom-2", "我的助手"))
+
+    def test_hidden_execution_fields_also_hide_their_templates(self):
+        """Display metadata must not reveal fields removed by an independent-reader boundary."""
+        from backend.server import _hide_execution_after_boundary
+        execution = {"request_message_id": 20, "result": "secret", "texts": {
+            "result": {"template": "{value}", "params": {"value": "secret"}}},
+            "requests": [{"discussion_session_id": 1, "source_question": "question", "texts": {
+                "source_question": {"template": "question", "params": {}}}}]}
+        _hide_execution_after_boundary(execution, 10)
+        self.assertEqual(execution["result"], "")
+        self.assertEqual(execution["texts"], {})
+        self.assertEqual(execution["requests"][0]["source_question"], "")
+        self.assertEqual(execution["requests"][0]["texts"], {})
+
+    def test_incoming_text_rejects_invalid_metadata(self):
+        invalid = (("x", {"template": "{x.__class__}", "params": {"x": "x"}}),
+                   ("nan", {"template": "{x}", "params": {"x": float("nan")}}),
+                   ("bad", {"template": "{x}", "params": {"x": "ok"}}))
+        for value, payload in invalid:
+            with self.subTest(payload=payload), self.assertRaises(ValueError):
+                incoming_text(value, payload)
+
+    def test_text_schema_upgrades_legacy_database(self):
+        with tempfile.TemporaryDirectory() as directory:
+            database = Path(directory) / "legacy.sqlite3"
+            with closing(sqlite3.connect(database)) as connection:
+                connection.execute("CREATE TABLE legacy_marker(id INTEGER PRIMARY KEY)")
+            init_database(database, seed=False)
+            connection = connect_db(database)
+            try:
+                save_text(connection, "room", 1, "notice", Text("通知 {name}", name="Codex"))
+                self.assertEqual(load_texts(connection, "room", 1),
+                                 {"notice": {"template": "通知 {name}", "params": {"name": "Codex"}}})
+                save_text(connection, "room", 1, "notice", "普通文本")
+                self.assertEqual(load_texts(connection, "room", 1), {})
+            finally:
+                connection.close()
+
+    def test_stored_text_import_remaps_message_and_keeps_room_isolation(self):
+        self.configure_host(start=False)
+        original = self.post("消息 3", "stored-template")[1]["message"]
+        with closing(connect_db(self.database)) as connection, connection:
+            save_text(connection, "message", original["id"], "text", Text("消息 {count}", count=3))
+            save_text(connection, "message", 987654, "text", Text("另一房间私密内容"))
+            save_text(connection, "execution", 987654, "result", Text("不随备份导出的执行模板"))
+            save_text(connection, "queued_message", 987654, "payload", Text("不随备份导出的排队模板"))
+            save_text(connection, "private_chat", 987654, "reply", Text("不随备份导出的私聊模板"))
+        backup = self.request(f"/api/rooms/{self.room['id']}/backup")[1]
+        self.assertEqual({row["owner"] for row in backup["tables"]["stored_texts"]}, {"message"})
+        imported = json.loads(json.dumps(backup).replace(self.room["id"], "textimport"))
+        status, result = self.request("/api/rooms/import", imported)
+        self.assertEqual(status, 201, result)
+        imported_message = self.request("/api/rooms/textimport/messages")[1]["messages"][0]
+        with closing(connect_db(self.database)) as connection:
+            self.assertEqual(load_texts(connection, "message", imported_message["id"]),
+                             {"text": {"template": "消息 {count}", "params": {"count": 3}}})
+            self.assertEqual(load_texts(connection, "message", 987654)["text"]["template"], "另一房间私密内容")
+
+    def test_runner_text_metadata_http_storage_and_rejection_are_atomic(self):
+        """Runner templates persist on their records, and invalid templates leave no partial writes."""
+        base = f"/api/rooms/{self.room['id']}"
+        decision_payload = {"kind": "round", "label": "Assigned to Codex", "label_text": {
+            "template": "Assigned to {name}", "params": {"name": "Codex"}}, "confidence": 0.8,
+            "applied": True, "provider": "jev"}
+        status, decision = self.request(base + "/scheduler-decisions", decision_payload)
+        self.assertEqual(status, 200, decision)
+        decision_id = decision["id"]
+        self.assertEqual(decision["texts"]["label"], decision_payload["label_text"])
+        self.assertEqual(self.request(base + f"/scheduler-decisions/{decision_id}")[1]["texts"]["label"],
+                         decision_payload["label_text"])
+        backup = self.request(base + "/backup")[1]
+        backup = json.loads(json.dumps(backup).replace(self.room["id"], "decisionimport"))
+        status, imported = self.request("/api/rooms/import", backup)
+        self.assertEqual(status, 201, imported)
+        imported_decision = self.request("/api/rooms/decisionimport")[1]["scheduler_decisions"][0]
+        self.assertNotEqual(imported_decision["id"], decision_id)
+        self.assertEqual(imported_decision["texts"]["label"], decision_payload["label_text"])
+        invalid_decision = {**decision_payload, "label_text": {"template": "Assigned to {name}", "params": {"name": "Claude"}}}
+        self.assertEqual(self.request(base + "/scheduler-decisions", invalid_decision)[0], 400)
+
+        with closing(connect_db(self.database)) as connection:
+            member_id = connection.execute("SELECT id FROM room_members WHERE room_id=? AND name='Codex'", (self.room["id"],)).fetchone()[0]
+        chat_url = base + f"/members/{member_id}/chat"
+        status, chat = self.request(chat_url, {"text": "Question", "submission_id": "translated-chat-1"})
+        self.assertEqual(status, 200, chat)
+        reason_text = {"template": "Runner {state}", "params": {"state": "stopped"}}
+        status, answered = self.request(base + f"/chats/{chat['id']}", {
+            "action": "fail", "reason": "Runner stopped", "reason_text": reason_text})
+        self.assertEqual(status, 200, answered)
+        self.assertEqual(answered["texts"]["reason"], reason_text)
+        status, pending = self.request(chat_url, {"text": "Second", "submission_id": "translated-chat-2"})
+        self.assertEqual(status, 200, pending)
+        self.assertEqual(self.request(base + f"/chats/{pending['id']}", {
+            "action": "fail", "reason": "Runner stopped", "reason_text": {
+                "template": "Runner {state}", "params": {"state": "working"}}})[0], 400)
+
+        machine_id, machine_token, launch_id = uuid.uuid4().hex, uuid.uuid4().hex * 2, "launch-" + uuid.uuid4().hex
+        with closing(connect_db(self.database)) as connection, connection:
+            now = int(time.time())
+            connection.execute("INSERT INTO local_machines(id,name,token_hash,created_at) VALUES(?,?,?,?)",
+                               (machine_id, "test machine", hashlib.sha256(machine_token.encode()).hexdigest(), now))
+            connection.execute("INSERT INTO remote_launches(id,machine_id,created_at,updated_at) VALUES(?,?,?,?)",
+                               (launch_id, machine_id, now, now))
+
+        def machine_launch(payload, target_launch=launch_id):
+            request = Request(self.base + f"/api/machines/{machine_id}/launches/{target_launch}",
+                              data=json.dumps(payload).encode(), method="POST",
+                              headers={"Content-Type": "application/json", "X-Machine-Token": machine_token})
+            try:
+                response = urlopen(request, timeout=5)
+            except HTTPError as error:
+                response = error
+            with response:
+                return response.status, json.loads(response.read().decode())
+
+        launch_error_text = {"template": "Launch {stage} failed", "params": {"stage": "creation"}}
+        status, failed = machine_launch({"action": "fail", "error": "Launch creation failed", "error_text": launch_error_text})
+        self.assertEqual(status, 200, failed)
+        self.assertEqual(failed["texts"]["error"], launch_error_text)
+        with closing(connect_db(self.database)) as connection:
+            stored = connection.execute("SELECT status,error FROM remote_launches WHERE id=?", (launch_id,)).fetchone()
+            self.assertEqual(tuple(stored), ("failed", "Launch creation failed"))
+
+        bad_launch_id = "launch-" + uuid.uuid4().hex
+        with closing(connect_db(self.database)) as connection, connection:
+            connection.execute("INSERT INTO remote_launches(id,machine_id,created_at,updated_at) VALUES(?,?,?,?)",
+                               (bad_launch_id, machine_id, now, now))
+        request = Request(self.base + f"/api/machines/{machine_id}/launches/{bad_launch_id}",
+                          data=json.dumps({"action": "fail", "error": "Launch creation failed",
+                              "error_text": {"template": "Launch {stage} failed", "params": {"stage": "other"}}}).encode(),
+                          method="POST", headers={"Content-Type": "application/json", "X-Machine-Token": machine_token})
+        try:
+            response = urlopen(request, timeout=5)
+        except HTTPError as error:
+            response = error
+        with response:
+            self.assertEqual(response.status, 400)
+        with closing(connect_db(self.database)) as connection:
+            row = connection.execute("SELECT status,error FROM remote_launches WHERE id=?", (bad_launch_id,)).fetchone()
+            self.assertEqual(tuple(row), ("pending", ""))
+            self.assertEqual(load_texts(connection, "launch", connection.execute(
+                "SELECT rowid FROM remote_launches WHERE id=?", (bad_launch_id,)).fetchone()[0]), {})
+
+        long_launch_id = "launch-" + uuid.uuid4().hex
+        with closing(connect_db(self.database)) as connection, connection:
+            connection.execute("INSERT INTO remote_launches(id,machine_id,created_at,updated_at) VALUES(?,?,?,?)",
+                               (long_launch_id, machine_id, now, now))
+        long_error = "x" * 2001
+        status, _ = machine_launch({"action": "fail", "error": long_error,
+                                   "error_text": {"template": "{message}", "params": {"message": long_error}}}, long_launch_id)
+        self.assertEqual(status, 200)
+        with closing(connect_db(self.database)) as connection:
+            row = connection.execute("SELECT error FROM remote_launches WHERE id=?", (long_launch_id,)).fetchone()
+            self.assertEqual(len(row["error"]), 2000)
+            owner_id = connection.execute("SELECT rowid FROM remote_launches WHERE id=?", (long_launch_id,)).fetchone()[0]
+            self.assertEqual(load_texts(connection, "launch", owner_id), {})
+
+        with closing(connect_db(self.database)) as connection:
+            self.assertEqual(connection.execute("SELECT COUNT(*) FROM scheduler_decisions WHERE room_id=?", (self.room["id"],)).fetchone()[0], 1)
+            self.assertEqual(connection.execute("SELECT COUNT(*) FROM private_chats WHERE room_id=? AND status='pending'", (self.room["id"],)).fetchone()[0], 1)
+            untouched_chat = connection.execute("SELECT id,reason FROM private_chats WHERE submission_id='translated-chat-2'").fetchone()
+            self.assertEqual(untouched_chat["reason"], "")
+            self.assertEqual(load_texts(connection, "private_chat", untouched_chat["id"]), {})
+
+    def test_interjected_private_chat_reads_execution_reason_template(self):
+        """A failed runner interjection supplies its saved execution template to the private-chat card."""
+        base = f"/api/rooms/{self.room['id']}"
+        with closing(connect_db(self.database)) as connection, connection:
+            member_id = connection.execute("SELECT id FROM room_members WHERE room_id=? AND name='Codex'",
+                                           (self.room["id"],)).fetchone()[0]
+            now = int(time.time())
+            cursor = connection.execute("INSERT INTO member_executions(room_id,member_id,client_id,status,created_at) VALUES(?,?,?,'started',?)",
+                                        (self.room["id"], member_id, uuid.uuid4().hex, now))
+            execution_id = cursor.lastrowid
+            connection.execute("INSERT INTO execution_capabilities(execution_id,room_id,stoppable,progress,steer,resume) VALUES(?,?,1,1,1,0)",
+                               (execution_id, self.room["id"]))
+        chat_url = base + f"/members/{member_id}/chat"
+        status, chat = self.request(chat_url, {"text": "Interrupt the current task", "submission_id": "interjected-chat"})
+        self.assertEqual(status, 200, chat)
+        self.assertEqual(chat["status"], "interjected")
+        with closing(connect_db(self.database)) as connection:
+            interjection_id = connection.execute("SELECT id FROM execution_interjections WHERE submission_id=?",
+                                                 ("chat-interjected-chat",)).fetchone()[0]
+        reason_text = {"template": "Runner {state}", "params": {"state": "could not deliver"}}
+        status, _ = self.request(base + f"/executions/{execution_id}", {
+            "action": "interjection", "interjection_id": interjection_id, "status": "failed",
+            "reason": "Runner could not deliver", "reason_text": reason_text})
+        self.assertEqual(status, 200)
+        chats = self.request(chat_url)[1]["chats"]
+        saved = next(item for item in chats if item["id"] == chat["id"])
+        self.assertEqual(saved["reason"], "Runner could not deliver")
+        self.assertEqual(saved["texts"]["reason"], reason_text)
+
+    def test_event_redaction_and_truncation_templates_never_capture_secret_values(self):
+        """Audit templates use the redacted preview, and nested secret values never enter template parameters."""
+        secret = "private-token-" + uuid.uuid4().hex
+        status, _ = self.request(f"/api/rooms/{self.room['id']}/state", {
+            "text": "", "brief": "", "until": 0, "extra": {"api_key": secret},
+            "chunks": ["x" * 2001 for _ in range(6)]})
+        self.assertEqual(status, 200)
+        events = self.request(f"/api/rooms/{self.room['id']}/events")[1]["events"]
+        event = next(item for item in events if item["kind"] == "api.write" and item["data"].get("path") == "/state")
+        self.assertIn("payload.extra.api_key", event["texts"])
+        self.assertEqual(event["texts"]["payload.extra.api_key"], {"template": "[已隐去]", "params": {}})
+        self.assertIn("payload.chunks[0]", event["texts"])
+        self.assertIn("payload", event["texts"])
+        self.assertNotIn(secret, json.dumps(event["texts"], ensure_ascii=False))
+        self.assertNotIn(secret, event["data"]["payload"])
 
     def tearDown(self):
         """Release the server and all temporary files."""
@@ -408,7 +673,7 @@ class DiscussionTests(unittest.TestCase):
                                       "room_briefs", "room_user_requests", "topic_settings", "discussion_limits", "member_labels", "member_descriptions", "messages", "message_withdrawals", "message_details", "message_summaries", "message_timings", "attachments", "room_modes", "room_members", "member_requests", "member_suggestions", "member_recommendations",
                                       "scheduler_decisions", "review_plans",
                                       "discussion_sessions", "discussion_conclusions", "session_requests",
-                                      "task_message_sources", "session_state", "session_limits",
+                                      "task_message_sources", "session_state", "session_limits", "stored_texts",
                                       "session_round_budgets", "session_options", "session_pauses"})
         self.assertEqual([row["id"] for row in tables["messages"]], [row["id"] for row in originals] + [answer["id"]])
         for original, row in zip(originals + [answer], tables["messages"]):
@@ -516,6 +781,9 @@ class DiscussionTests(unittest.TestCase):
             connection.execute("UPDATE task_message_sources SET cause_message_id=?,cause_request_id=? WHERE session_request_id=?",
                                (before["id"], host_request, plan["id"]))
             connection.execute("UPDATE session_requests SET read_until=? WHERE id=?", (before["id"], plan["id"]))
+            question = Text("请回应 #{message_id} 的问题", message_id=before["id"])
+            connection.execute("UPDATE session_requests SET question=? WHERE id=?", (question, plan["id"]))
+            save_text(connection, "session_request", plan["id"], "question", question)
             connection.execute("UPDATE session_state SET read_until=?,held_since=? WHERE session_id=?",
                                (before["id"], before["id"], active_session["id"]))
             connection.execute("UPDATE session_limits SET max_rounds=3,max_minutes=9,execution_minutes=4,started_at=1700000000,stop_reason='limit-test' WHERE session_id=?",
@@ -558,6 +826,9 @@ class DiscussionTests(unittest.TestCase):
                                                 (active["id"], plan["submission_id"])).fetchone()
             self.assertEqual(imported_plan["status"], "cancelled", dict(imported_plan))
             self.assertNotEqual(imported_plan["id"], plan["id"])
+            question_text = load_texts(connection, "session_request", imported_plan["id"])["question"]
+            self.assertEqual(question_text["template"].format(**question_text["params"]), imported_plan["question"])
+            self.assertNotEqual(question_text["params"]["message_id"], before["id"])
             self.assertNotEqual(imported_plan["member_request_id"], plan["member_request_id"])
             imported_request = connection.execute("SELECT * FROM member_requests WHERE id=?",
                                                     (imported_plan["member_request_id"],)).fetchone()

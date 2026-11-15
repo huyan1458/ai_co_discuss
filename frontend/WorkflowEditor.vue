@@ -41,37 +41,37 @@ watch([source, () => workflow.value.skill], () => nextTick(fit_source));
 </script>
 
 <template>
-  <aside class="workflow-skill" :class="{ 'is-compact': compact }" aria-label="工作流（SKILL.md）">
+  <aside class="workflow-skill" :class="{ 'is-compact': compact }" :aria-label="t('工作流（SKILL.md）')">
     <header class="workflow-skill-head">
-      <h3><UIcon :name="sub ? 'i-lucide-git-branch' : 'i-lucide-file-text'" class="workflow-skill-icon" />{{ sub ? '子工作流' : '工作流' }}<small>SKILL.md · {{ sub ? '主持人按需照它做' : '主持人照它派活' }}</small></h3>
-      <UButton :icon="editing ? 'i-lucide-eye' : 'i-lucide-pencil'" :label="editing ? '预览' : '编辑'" size="xs" color="neutral" variant="soft"
+      <h3><UIcon :name="sub ? 'i-lucide-git-branch' : 'i-lucide-file-text'" class="workflow-skill-icon" />{{ sub ? t('子工作流') : t('工作流') }}<small>SKILL.md · {{ sub ? t('主持人按需照它做') : t('主持人照它派活') }}</small></h3>
+      <UButton :icon="editing ? 'i-lucide-eye' : 'i-lucide-pencil'" :label="editing ? t('预览') : t('编辑')" size="xs" color="neutral" variant="soft"
         @click="editing ? (editing = false) : edit()" />
-      <UTooltip v-if="!compact" text="收起 SKILL.md"><UButton icon="i-lucide-panel-right-close" size="xs" color="neutral" variant="ghost" aria-label="收起 SKILL.md" @click="emit('collapse')" /></UTooltip>
+      <UTooltip v-if="!compact" :text="t('收起 SKILL.md')"><UButton icon="i-lucide-panel-right-close" size="xs" color="neutral" variant="ghost" :aria-label="t('收起 SKILL.md')" @click="emit('collapse')" /></UTooltip>
     </header>
     <div class="workflow-skill-body">
       <label v-if="sub" class="workflow-skill-description">
-        <span>名称</span>
-        <input v-model="workflow.label" :maxlength="32" placeholder="子工作流的名称" />
+        <span>{{ t('名称') }}</span>
+        <input v-model="workflow.label" :maxlength="32" :placeholder="t('子工作流的名称')" />
       </label>
       <label class="workflow-skill-description">
-        <span>一句话描述 <small>主持人凭它判断何时使用</small></span>
-        <input v-model="workflow.description" :maxlength="500" :placeholder="sub ? '做什么、什么时候用（必填）' : '做什么、什么时候用'" />
+        <span>{{ t('一句话描述') }} <small>{{ t('主持人凭它判断何时使用') }}</small></span>
+        <input v-model="workflow.description" :maxlength="500" :placeholder="sub ? t('做什么、什么时候用（必填）') : t('做什么、什么时候用')" />
       </label>
-      <textarea v-if="editing" ref="source" v-model="workflow.skill" :maxlength="MAX_SKILL" class="workflow-skill-source" spellcheck="false" aria-label="SKILL.md 正文" />
+      <textarea v-if="editing" ref="source" v-model="workflow.skill" :maxlength="MAX_SKILL" class="workflow-skill-source" spellcheck="false" :aria-label="t('SKILL.md 正文')" />
       <div v-else-if="workflow.skill?.trim()" class="workflow-skill-preview markdown-body" v-html="rendered" @dblclick="edit"></div>
-      <button v-else type="button" class="workflow-skill-empty" @click="edit"><UIcon name="i-lucide-pencil" class="workflow-skill-icon" />写下主持人怎么组织这个{{ sub ? '子工作流' : '工作流' }}</button>
+      <button v-else type="button" class="workflow-skill-empty" @click="edit"><UIcon name="i-lucide-pencil" class="workflow-skill-icon" />{{ t('写下主持人怎么组织这个{value1}', { value1: sub ? t('子工作流') : t('工作流') }) }}</button>
     </div>
     <p v-if="editing" class="workflow-skill-count">{{ (workflow.skill || '').length }} / {{ MAX_SKILL }}</p>
     <details v-if="commands.length" class="workflow-skill-commands" :open="!saved">
-      <summary><UIcon name="i-lucide-terminal" class="workflow-skill-icon" />API 成员可运行的命令（{{ commands.length }}）</summary>
+      <summary><UIcon name="i-lucide-terminal" class="workflow-skill-icon" />{{ t('API 成员可运行的命令（{value1}）', { value1: commands.length }) }}</summary>
       <ul>
         <li v-for="command in commands" :key="command.id" :title="command.description"><strong>{{ command.id }}</strong>
-          <UBadge :label="command.access === 'read' ? '只读' : '会改文件'" size="sm" variant="soft" :color="command.access === 'read' ? 'neutral' : 'warning'" />
+          <UBadge :label="command.access === 'read' ? t('只读') : t('会改文件')" size="sm" variant="soft" :color="command.access === 'read' ? 'neutral' : 'warning'" />
           <code>{{ command.run.join(' ') }}</code></li>
       </ul>
-      <label v-if="!saved" class="workflow-skill-grant"><input v-model="commands_allowed" type="checkbox" />允许这些命令在本机运行</label>
+      <label v-if="!saved" class="workflow-skill-grant"><input v-model="commands_allowed" type="checkbox" />{{ t('允许这些命令在本机运行') }}</label>
     </details>
-    <p v-if="replaced" class="workflow-skill-warn"><UIcon name="i-lucide-triangle-alert" class="workflow-skill-icon" />保存会覆盖库里的「{{ replaced.label }}」</p>
+    <p v-if="replaced" class="workflow-skill-warn"><UIcon name="i-lucide-triangle-alert" class="workflow-skill-icon" />{{ t('保存会覆盖库里的「{value1}」', { value1: replaced.label }) }}</p>
   </aside>
 </template>
 

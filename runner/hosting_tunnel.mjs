@@ -18,6 +18,7 @@ import { join, resolve } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 
 import { save_entry_settings } from '../gateway/gateway.mjs';
+import { t } from './i18n.mjs';
 
 const TUNNEL_HOME = join(homedir(), '.cloudflared');
 // Where winget puts it; a process started before the install does not see the new PATH yet.
@@ -40,13 +41,13 @@ const TO_STDERR = ['inherit', 2, 2];
 /** The host name as typed, checked: a plain name such as ai.example.com (no scheme or path). */
 export function tunnel_host(text) {
   const host = String(text || '').trim().toLowerCase().replace(/^https?:\/\//, '').replace(/\/+$/, '');
-  if (!HOST_PATTERN.test(host)) throw new Error(`外网域名无效：${text}（应为 ai.example.com 这样的域名，且已托管在 Cloudflare）`);
+  if (!HOST_PATTERN.test(host)) throw new Error(t('外网域名无效：{value1}（应为 ai.example.com 这样的域名，且已托管在 Cloudflare）', { value1: text }));
   return host;
 }
 
 export function tunnel_name(text = DEFAULT_TUNNEL_NAME) {
   const name = String(text || DEFAULT_TUNNEL_NAME).trim();
-  if (!NAME_PATTERN.test(name)) throw new Error(`隧道名无效：${text}（小写字母、数字、下划线或短横线）`);
+  if (!NAME_PATTERN.test(name)) throw new Error(t('隧道名无效：{value1}（小写字母、数字、下划线或短横线）', { value1: text }));
   return name;
 }
 
@@ -63,9 +64,9 @@ export function install_cloudflared(shown = true) {
   if (present) return present;
   const winget = spawnSync('winget', ['install', '--id', 'Cloudflare.cloudflared', '-e', '--accept-source-agreements', '--accept-package-agreements'],
     { stdio: shown ? TO_STDERR : 'ignore', windowsHide: true });
-  if (winget.error) throw new Error('没有 winget：请先从 Microsoft Store 安装“应用安装程序”，或自行安装 cloudflared 后再试');
+  if (winget.error) throw new Error(t('没有 winget：请先从 Microsoft Store 安装“应用安装程序”，或自行安装 cloudflared 后再试'));
   const path = cloudflared_path();
-  if (!path) throw new Error(`cloudflared 没有装上（winget 退出码 ${winget.status}）`);
+  if (!path) throw new Error(t('cloudflared 没有装上（winget 退出码 {value1}）', { value1: winget.status }));
   return path;
 }
 
@@ -85,13 +86,13 @@ function login_in_browser(cloudflared, { shown, on_url }) {
     child.stdout.on('data', read);
     child.stderr.on('data', read);
     child.on('error', fail);
-    child.on('exit', code => (code === 0 ? done() : fail(new Error(`Cloudflare 授权没有完成（退出码 ${code}），重新开始即可再试`))));
+    child.on('exit', code => (code === 0 ? done() : fail(new Error(t('Cloudflare 授权没有完成（退出码 {value1}），重新开始即可再试', { value1: code })))));
   });
 }
 
 function run(cloudflared, args, shown = false) {
   const result = spawnSync(cloudflared, args, { encoding: 'utf8', windowsHide: !shown, stdio: shown ? TO_STDERR : 'pipe' });
-  if (result.status !== 0) throw new Error(`cloudflared ${args.join(' ')} 失败：${String(result.stderr || '').trim().split(/\r?\n/).pop() || `退出码 ${result.status}`}`);
+  if (result.status !== 0) throw new Error(t('cloudflared {value1} 失败：{value2}', { value1: args.join(' '), value2: String(result.stderr || '').trim().split(/\r?\n/).pop() || t('退出码 {value1}', { value1: result.status }) }));
   return String(result.stdout || '');
 }
 
@@ -112,26 +113,26 @@ function find_tunnel(cloudflared, name) {
  */
 export async function prepare_tunnel({ host, name = DEFAULT_TUNNEL_NAME, interactive = true, shown = true, say = () => {}, progress = () => {}, on_url = () => {} }) {
   host = tunnel_host(host); name = tunnel_name(name);
-  progress('安装 cloudflared');
+  progress(t('安装 cloudflared'));
   const cloudflared = install_cloudflared(shown);
   if (!existsSync(join(TUNNEL_HOME, 'cert.pem'))) {
-    if (!interactive) throw new Error('还没有授权 Cloudflare：在管理面板“概览”页设置外网地址，或在终端运行 codiscuss setup --hosting，在浏览器里完成授权');
-    progress('等待 Cloudflare 授权');
-    say(`即将打开浏览器：登录 Cloudflare，选择 ${host.split('.').slice(-2).join('.')} 并点 Authorize，完成后回到这里`);
+    if (!interactive) throw new Error(t('还没有授权 Cloudflare：在管理面板“概览”页设置外网地址，或在终端运行 codiscuss setup --hosting，在浏览器里完成授权'));
+    progress(t('等待 Cloudflare 授权'));
+    say(t('即将打开浏览器：登录 Cloudflare，选择 {value1} 并点 Authorize，完成后回到这里', { value1: host.split('.').slice(-2).join('.') }));
     await login_in_browser(cloudflared, { shown, on_url });
-    if (!existsSync(join(TUNNEL_HOME, 'cert.pem'))) throw new Error('Cloudflare 授权没有完成，重新开始即可再试');
+    if (!existsSync(join(TUNNEL_HOME, 'cert.pem'))) throw new Error(t('Cloudflare 授权没有完成，重新开始即可再试'));
   }
-  progress('建立隧道');
+  progress(t('建立隧道'));
   let tunnel = find_tunnel(cloudflared, name);
   if (!tunnel) { run(cloudflared, ['tunnel', 'create', name]); tunnel = find_tunnel(cloudflared, name); }
-  if (!tunnel) throw new Error(`隧道 ${name} 建了却读不到，重新运行即可`);
+  if (!tunnel) throw new Error(t('隧道 {value1} 建了却读不到，重新运行即可', { value1: name }));
   const credentials = join(TUNNEL_HOME, `${tunnel.id}.json`);
-  if (!existsSync(credentials)) throw new Error(`找不到隧道凭据 ${credentials}：这条隧道可能建在别的电脑上，换一个 --tunnel-name 重新运行`);
-  progress('添加域名记录');
+  if (!existsSync(credentials)) throw new Error(t('找不到隧道凭据 {value1}：这条隧道可能建在别的电脑上，换一个 --tunnel-name 重新运行', { value1: credentials }));
+  progress(t('添加域名记录'));
   try { run(cloudflared, ['tunnel', 'route', 'dns', name, host]); }
   catch (error) {
     // An existing record that already points at this tunnel is fine; any other is reported by the final check.
-    say(`没有新建 ${host} 的域名记录（${error.message}）；若它已指向这条隧道可忽略`);
+    say(t('没有新建 {value1} 的域名记录（{value2}）；若它已指向这条隧道可忽略', { value1: host, value2: error.message }));
   }
   return { name, host, id: tunnel.id, credentials };
 }
@@ -175,7 +176,7 @@ export function stop_tunnel(data) {
 export async function ensure_tunnel(data, tunnel, port, want = true) {
   if (!tunnel || !want) { const had = read_state(data); stop_tunnel(data); return had ? 'stopped' : 'none'; }
   const cloudflared = cloudflared_path();
-  if (!cloudflared) throw new Error('没有找到 cloudflared，重新运行 codiscuss setup --hosting --public-host 域名');
+  if (!cloudflared) throw new Error(t('没有找到 cloudflared，重新运行 codiscuss setup --hosting --public-host 域名'));
   const config = tunnel_config(tunnel, port), path = config_path(data);
   const changed = !existsSync(path) || readFileSync(path, 'utf8') !== config;
   const state = read_state(data), running = Boolean(state?.pid && alive(state.pid));
@@ -245,12 +246,12 @@ export function tunnel_setup_state(data) {
 export function start_tunnel_setup(data, host, name) {
   host = tunnel_host(host); name = tunnel_name(name);
   const current = tunnel_setup_state(data);
-  if (current.status === 'running' && current.pid && alive(current.pid)) throw new Error('外网地址正在设置中，请等它完成');
+  if (current.status === 'running' && current.pid && alive(current.pid)) throw new Error(t('外网地址正在设置中，请等它完成'));
   mkdirSync(data, { recursive: true });
   const log = openSync(join(data, LOG_FILE), 'a');
   const child = spawn(process.execPath, [fileURLToPath(import.meta.url), 'prepare', data, host, name], { cwd: data, stdio: ['ignore', log, log], windowsHide: true });
   closeSync(log);
-  const state = { status: 'running', step: '准备', url: '', note: '', error: '', host, pid: child.pid, started_at: Date.now() };
+  const state = { status: 'running', step: t('准备'), url: '', note: '', error: '', host, pid: child.pid, started_at: Date.now() };
   writeFileSync(join(data, SETUP_FILE), JSON.stringify(state));
   return state;
 }
@@ -262,7 +263,7 @@ async function prepare_job(data, host, name) {
   const save = change => writeFileSync(path, JSON.stringify(Object.assign(state, change)));
   try {
     const tunnel = await prepare_tunnel({ host, name, shown: false, progress: step => save({ step }), on_url: url => save({ url }), say: note => save({ note }) });
-    save({ step: '启动隧道', url: '' });
+    save({ step: t('启动隧道'), url: '' });
     const settings = save_entry_settings(data, { public_url: `https://${tunnel.host}`, tunnel, mode: 'tunnel' });
     remove_legacy_tunnel_start();
     await ensure_tunnel(data, tunnel, settings.port, settings.running);

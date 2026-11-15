@@ -6,6 +6,7 @@
  */
 import { computed, inject, ref } from "vue";
 import ConfirmDialog from "./ConfirmDialog.vue";
+import { t } from './i18n.js';
 
 // `dismissible` (the right column) adds a close button that only hides the row where it is shown, and leaves out the
 // action that sends the members away: ending a workflow is rare, so it stays on the room settings page.
@@ -32,9 +33,9 @@ const out_of_sync = computed(() => {
 const names = computed(() => present.value.map((member) => bridge.display_name(member.name)).join("、"));
 const confirming = ref(false);
 const items = computed(() => [
-  ...(present.value.length ? [`${names.value} 设为离开：未处理的请求取消，正在进行的工作停止；各自的会话保留。`] : []),
-  "工作流随之结束：主持人留在房间，下一次任务起按普通协作工作。",
-  "之后在输入框打 / 选它，可请回原成员，接着原来的会话。消息记录和项目文件不受影响。",
+  ...(present.value.length ? [t('{value1} 设为离开：未处理的请求取消，正在进行的工作停止；各自的会话保留。', { value1: names.value })] : []),
+  t('工作流随之结束：主持人留在房间，下一次任务起按普通协作工作。'),
+  t('之后在输入框打 / 选它，可请回原成员，接着原来的会话。消息记录和项目文件不受影响。'),
 ]);
 </script>
 
@@ -43,15 +44,15 @@ const items = computed(() => [
     <div class="workflow-control-row">
       <UIcon name="i-lucide-network" class="workflow-control-icon" />
       <span class="workflow-control-name" :title="workflow.label">{{ workflow.label }}</span>
-      <span class="workflow-control-state"><span class="workflow-control-dot"></span>{{ workflow.available ? '进行中' : '不可用' }}</span>
-      <button v-if="can_manage && out_of_sync" type="button" class="workflow-control-action" :disabled="Boolean(pending)" title="刷新：按工作流库里的最新版本补齐成员：新增的卡片加入、离开的请回，已删卡片的成员转为普通成员" aria-label="刷新工作流" @click="act('sync_room_workflow')"><UIcon name="i-lucide-refresh-cw" class="workflow-control-action-icon" :class="{ 'animate-spin': pending === 'sync_room_workflow' }" /></button>
-      <button v-if="can_manage && !dismissible" type="button" class="workflow-control-action" :disabled="Boolean(pending)" :title="present.length ? '请离成员：请离工作流带来的成员并结束工作流，会话保留' : '结束工作流'" :aria-label="present.length ? '请离成员' : '结束工作流'" @click="confirming = true"><UIcon :name="present.length ? 'i-lucide-user-minus' : 'i-lucide-square'" class="workflow-control-action-icon" /></button>
-      <button v-if="dismissible" type="button" class="workflow-control-close" title="收起此区，工作流照常进行；“成员与设置”里仍可请离成员" aria-label="收起工作流区" @click="$emit('dismiss')"><UIcon name="i-lucide-x" class="workflow-control-close-icon" /></button>
+      <span class="workflow-control-state"><span class="workflow-control-dot"></span>{{ workflow.available ? t('进行中') : t('不可用') }}</span>
+      <button v-if="can_manage && out_of_sync" type="button" class="workflow-control-action" :disabled="Boolean(pending)" :title="t('刷新：按工作流库里的最新版本补齐成员：新增的卡片加入、离开的请回，已删卡片的成员转为普通成员')" :aria-label="t('刷新工作流')" @click="act('sync_room_workflow')"><UIcon name="i-lucide-refresh-cw" class="workflow-control-action-icon" :class="{ 'animate-spin': pending === 'sync_room_workflow' }" /></button>
+      <button v-if="can_manage && !dismissible" type="button" class="workflow-control-action" :disabled="Boolean(pending)" :title="present.length ? t('请离成员：请离工作流带来的成员并结束工作流，会话保留') : t('结束工作流')" :aria-label="present.length ? t('请离成员') : t('结束工作流')" @click="confirming = true"><UIcon :name="present.length ? 'i-lucide-user-minus' : 'i-lucide-square'" class="workflow-control-action-icon" /></button>
+      <button v-if="dismissible" type="button" class="workflow-control-close" :title="t('收起此区，工作流照常进行；“成员与设置”里仍可请离成员')" :aria-label="t('收起工作流区')" @click="$emit('dismiss')"><UIcon name="i-lucide-x" class="workflow-control-close-icon" /></button>
     </div>
-    <p v-if="!workflow.available" class="workflow-control-note is-warning">无法读取工作流，成员沿用房间里的提示词。</p>
+    <p v-if="!workflow.available" class="workflow-control-note is-warning">{{ t('无法读取工作流，成员沿用房间里的提示词。') }}</p>
     <p v-else-if="names" class="workflow-control-note">{{ present.map((member) => bridge.display_name(member.name)).join(' · ') }}</p>
-    <ConfirmDialog v-model:open="confirming" :title="`结束工作流「${workflow.label}」`" :description="present.length ? '请离它带来的成员，暂停这套做法。' : '本房间暂停这套做法。'" :items="items"
-      :confirm-label="present.length ? '请离并结束' : '结束'" @confirm="act('move_workflow_members', 'away')" />
+    <ConfirmDialog v-model:open="confirming" :title="t('结束工作流「{value1}」', { value1: workflow.label })" :description="present.length ? t('请离它带来的成员，暂停这套做法。') : t('本房间暂停这套做法。')" :items="items"
+      :confirm-label="present.length ? t('请离并结束') : t('结束')" @confirm="act('move_workflow_members', 'away')" />
   </div>
 </template>
 

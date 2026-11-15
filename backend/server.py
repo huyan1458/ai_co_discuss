@@ -17,6 +17,7 @@ import subprocess
 import threading
 import time
 import uuid
+from functools import lru_cache
 from contextlib import closing
 from datetime import datetime, timedelta, timezone
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
@@ -25,6 +26,7 @@ from urllib.parse import parse_qs, quote, urlsplit
 
 from .entry_guard import (BROWSER_COOKIE_SECONDS, HELLO_PATH, OPEN_PATH, PUBLIC_PATHS, EntryPolicy, answer_hello, browser_admitted,
                           browser_cookie_name, open_link_key, proof, request_proven)
+from .texts import Text, error_body, incoming_text, load_texts, save_text, text_payload
 from .admin import (AdminError, admin_status, change_password, list_sessions, login_admin, logout_admin, register_admin,
                     revoke_sessions, session_valid, update_profile)
 from .remote_launch import (COMMAND_WAIT_MAX, claim_machine_commands, finish_machine_command, list_machines, machine_command_status,
@@ -32,17 +34,17 @@ from .remote_launch import (COMMAND_WAIT_MAX, claim_machine_commands, finish_mac
                             submit_remote_launch)
 from .free_room import (add_member, after_free_message, after_proactive, authorize_free_write, check_answer, execution_action, free_view,
                         inbox, interrupt_for_message, interrupt_member, member_action, member_capability, member_values, migrate_free_tables, reserve_execution,
-                        save_room_access, view_execution)
+                        save_room_access, view_execution, recent_executions, MAX_MESSAGE_ID)
 from .free_room import convert_suggestion, message_suggestions, save_suggestions, sync_participants
 from .free_room import adopt_recommendation, recommend_member, register_member, require_member
 from .private_chat import chat_action, member_chat
 from .free_room import describe_members, execution_notes, label_members, set_host_checkin, withdraw_dispatch, member_descriptions, member_display_names, member_labels, reorder_speakers, resolve_member_fields, set_chain_rounds, speaking_order, stop_room, stop_room_work
-from .free_room import (ADAPTER_VALUE, ANCHOR_SQL, DISPATCHED_AFTER_SQL, continue_chain, execution_timeline, group_route_plan, retract_message, rewind_plan, rewind_room,
+from .free_room import (ADAPTER_VALUE, LAYOUT_AFTER_SQL, LAYOUT_AT_SQL, continue_chain, execution_timeline, group_route_plan, retract_message, rewind_plan, rewind_room,
                         room_event_log, withdrawals)
 from .free_room import review_capability, review_roster, checked_review_plan, save_review_plan, check_review_retry
 from .free_room import review_ready, advance_review, late_answer
 from .free_room import checked_sequence, continue_sequence, sequence_view
-from .identity import MAX_ROOM_AGENTS, PARTICIPANTS, is_ai, is_participant
+from .identity import MAX_ROOM_AGENTS, PARTICIPANTS, default_label_text, is_ai, is_participant
 from .message_queue import drain as drain_queue, enqueue, queue_action, queue_view, should_queue
 from .room_import import import_room, imported_attachment
 from .runtime import (begin_write, limit_values, owner_proxy_token, require_owner, token_hash,
@@ -98,6 +100,7 @@ ASSETS = {"/": ("index.html", "text/html"),
           "/modern.css": ("modern.css", "text/css"),
           "/markdown.js": ("markdown.js", "text/javascript"),
           "/backup.js": ("backup.js", "text/javascript"),
+          "/i18n.js": ("i18n.js", "text/javascript"),
           "/markdown.css": ("markdown.css", "text/css"),
           "/icons/LICENSE.txt": ("icons/LICENSE.txt", "text/plain")}
 # Serve bundled images without maintaining a second list of brand names.
@@ -192,14 +195,14 @@ MESSAGE_QUERY = """SELECT messages.*, COALESCE(details.kind,'opinion') AS kind,
 COALESCE(details.submitted_by, CASE WHEN messages.source IN ('cli','api','url','user')
 THEN messages.author ELSE '用户' END) AS submitted_by,
 COALESCE(summaries.text,'') AS summary, COALESCE(summaries.author,'') AS summary_by, timing.elapsed_seconds,
-answered.execution_id, answered.request_message_id, answered.anchor_message_id, answered.dispatched_after, COALESCE(withdrawn.kind,'') AS withdrawn,
+answered.execution_id, answered.request_message_id, answered.layout_after, answered.layout_at, COALESCE(withdrawn.kind,'') AS withdrawn,
 EXISTS(SELECT 1 FROM proactive_messages p WHERE p.message_id=messages.id) AS proactive
 FROM messages LEFT JOIN message_details AS details ON details.message_id=messages.id
 LEFT JOIN message_withdrawals AS withdrawn ON withdrawn.message_id=messages.id
 LEFT JOIN message_summaries AS summaries ON summaries.message_id=messages.id
 LEFT JOIN message_timings AS timing ON timing.message_id=messages.id
 LEFT JOIN (SELECT r.answer_id, MIN(r.execution_id) AS execution_id, MIN(r.message_id) AS request_message_id,
-  MIN(""" + ANCHOR_SQL + """) AS anchor_message_id, MIN(""" + DISPATCHED_AFTER_SQL + """) AS dispatched_after
+  MIN(""" + LAYOUT_AFTER_SQL + """) AS layout_after, MIN(""" + LAYOUT_AT_SQL + """) AS layout_at
   FROM member_requests r WHERE r.answer_id IS NOT NULL AND r.execution_id IS NOT NULL GROUP BY r.answer_id) AS answered
   ON answered.answer_id=messages.id"""
 # Messages the owner took back leave AI reads; the page asks for them with withdrawn=include to keep them in place.
@@ -220,8 +223,18 @@ def room_backup(connection, room_id):
     queries = {**ROOM_BACKUP_QUERIES, **FREE_BACKUP_QUERIES}
     tables = {table: [dict(row) for row in connection.execute(query, (room_id,))]
               for table, query in queries.items()}
+    tables["stored_texts"] = [dict(row) for row in connection.execute(
+        """SELECT st.* FROM stored_texts st WHERE
+           (st.owner='message' AND st.owner_id IN (SELECT id FROM messages WHERE room_id=?)) OR
+           (st.owner IN ('decision','scheduler_decision') AND st.owner_id IN (SELECT id FROM scheduler_decisions WHERE room_id=?)) OR
+           (st.owner='member' AND st.owner_id IN (SELECT id FROM room_members WHERE room_id=?)) OR
+           (st.owner='request' AND st.owner_id IN (SELECT id FROM member_requests WHERE room_id=?)) OR
+           (st.owner='session' AND st.owner_id IN (SELECT id FROM discussion_sessions WHERE room_id=?)) OR
+           (st.owner='session_request' AND st.owner_id IN (SELECT id FROM session_requests WHERE session_id IN (SELECT id FROM discussion_sessions WHERE room_id=?))) OR
+           (st.owner='room' AND st.owner_id=?)""",
+        (room_id, room_id, room_id, room_id, room_id, room_id, room_id))]
     if not tables["rooms"]:
-        raise LookupError("房间不存在")
+        raise LookupError(Text('房间不存在'))
     return {"format": "ai-codiscuss-room-backup", "version": 2,
             "exported_at": utc_now(), "tables": tables}
 
@@ -239,14 +252,16 @@ def room_read_view(connection, room, token=""):
     room = copy.deepcopy(room)
     if room.get("state_until", 0) > boundary:
         room["state_text"] = ""
+        room.get("texts", {}).pop("state_text", None)
     brief = room.get("host_brief")
     if brief and brief.get("until", 0) > boundary:
         room["host_brief"] = None
     free = room.get("free") or {}
     for request in free.get("requests", []):
-        _hide_after_boundary(request, boundary, ("message_id", "answer_id", "source_message_id", "after_message_id"))
+        _hide_after_boundary(request, boundary, ("message_id", "answer_id", "source_message_id", "after_message_id", "layout_after"))
         if request.get("discussion_session_id") and request.get("source_question"):
             request["source_question"] = ""
+            request.get("texts", {}).pop("source_question", None)
     for execution in free.get("executions", []):
         _hide_execution_after_boundary(execution, boundary)
     executions_by_id = {execution.get("id"): execution for execution in free.get("executions", [])}
@@ -286,13 +301,16 @@ def _hide_execution_after_boundary(execution, boundary):
     if hidden_request:
         execution["request_message_id"] = None
         execution["result"] = ""
-    for field in ("anchor_message_id", "dispatched_after"):
+    if not execution.get("result"):
+        execution.get("texts", {}).pop("result", None)
+    for field in ("layout_after",):
         if isinstance(execution.get(field), int) and execution[field] > boundary:
             execution[field] = None
     for request in execution.get("requests", []):
-        _hide_after_boundary(request, boundary, ("message_id", "answer_id", "source_message_id", "after_message_id"))
+        _hide_after_boundary(request, boundary, ("message_id", "answer_id", "source_message_id", "after_message_id", "layout_after"))
         if request.get("discussion_session_id") and request.get("source_question"):
             request["source_question"] = ""
+            request.get("texts", {}).pop("source_question", None)
 
 
 def utc_now():
@@ -315,25 +333,31 @@ def connect_db(database):
 
 def seed_demo(connection):
     """Insert clearly labeled sample content into a newly initialized database."""
+    title = Text("AI 留言板 · 设计讨论")
+    goal = Text("让不同 AI 共享讨论信息，控制每轮上下文，并保留可检索的完整历史。")
     connection.execute("INSERT INTO rooms (id,title,goal,created_at) VALUES (?,?,?,?)",
-                       ("welcome", "AI 留言板 · 设计讨论", "让不同 AI 共享讨论信息，控制每轮上下文，并保留可检索的完整历史。", utc_now()))
+                       ("welcome", title, goal, utc_now()))
+    save_text(connection, "room", "welcome", "title", title)
+    save_text(connection, "room", "welcome", "goal", goal)
     # A sample room without an owner credential: it can be read, never written.
     connection.execute("INSERT INTO room_modes (room_id,mode,control_hash) VALUES ('welcome','free','')")
     samples = [
-        ("用户", "我们先验证一个简单场景：不同 AI 能否通过同一个房间阅读、检索和留言？\n首轮只讨论信息如何流转，不接入真实模型。", None),
-        ("Codex", "建议把完整历史保留下来，每轮先给目标、当前状态和需要回应的消息。\n@Claude 如果摘要遗漏了重要条件，参与者如何核对？", 1),
-        ("Claude", "每条结论都应引用原始消息编号。AI 可以主动读取原文，也能按关键词检索。\n摘要由主持人维护，未解决的分歧不能写成共识。", 2),
-        ("Antigravity", "每位成员在自己的会话里工作，按需读取房间，不一次加载全部历史。\n@DeepSeek 请检查阅读入口和原文引用是否清楚。", 1),
-        ("DeepSeek", "回答由成员自己提交，保留作者和引用关系，便于其他参与者继续讨论。", 4),
-        ("Qwen", "需要更多上下文时，我可以按编号或关键词检索，例如读取 #2 的完整原文。", 2),
+        ("用户", Text("我们先验证一个简单场景：不同 AI 能否通过同一个房间阅读、检索和留言？\n首轮只讨论信息如何流转，不接入真实模型。"), None),
+        ("Codex", Text("建议把完整历史保留下来，每轮先给目标、当前状态和需要回应的消息。\n@Claude 如果摘要遗漏了重要条件，参与者如何核对？"), 1),
+        ("Claude", Text("每条结论都应引用原始消息编号。AI 可以主动读取原文，也能按关键词检索。\n摘要由主持人维护，未解决的分歧不能写成共识。"), 2),
+        ("Antigravity", Text("每位成员在自己的会话里工作，按需读取房间，不一次加载全部历史。\n@DeepSeek 请检查阅读入口和原文引用是否清楚。"), 1),
+        ("DeepSeek", Text("回答由成员自己提交，保留作者和引用关系，便于其他参与者继续讨论。"), 4),
+        ("Qwen", Text("需要更多上下文时，我可以按编号或关键词检索，例如读取 #{message_id} 的完整原文。", message_id=2), 2),
     ]
     base_time = datetime.now(timezone.utc) - timedelta(minutes=len(samples) * 3)
     for index, (author, text, reply_to) in enumerate(samples):
         created_at = (base_time + timedelta(minutes=index * 3)).isoformat(timespec="seconds")
-        connection.execute("INSERT INTO messages (room_id,author,text,reply_to,source,submission_id,created_at) VALUES (?,?,?,?,?,?,?)",
+        cursor = connection.execute("INSERT INTO messages (room_id,author,text,reply_to,source,submission_id,created_at) VALUES (?,?,?,?,?,?,?)",
                            ("welcome", author, text, reply_to, "demo", f"demo-{index}", created_at))
-    summary = "已达成共识\n• 完整历史只追加，支持按编号查阅和关键词检索。〔#2、#3〕\n• 成员按需读取房间，回答由成员自己提交。〔#4、#5〕\n\n待验证\n• 阅读入口和原文引用是否清楚。〔#4〕\n• 检索是否足以找回所需上下文。〔#6〕"
+        save_text(connection, "message", cursor.lastrowid, "text", text)
+    summary = Text("已达成共识\n• 完整历史只追加，支持按编号查阅和关键词检索。〔#{first}、#{second}〕\n• 成员按需读取房间，回答由成员自己提交。〔#{third}、#{fourth}〕\n\n待验证\n• 阅读入口和原文引用是否清楚。〔#{third}〕\n• 检索是否足以找回所需上下文。〔#{fifth}〕", first=2, second=3, third=4, fourth=5, fifth=6)
     connection.execute("UPDATE rooms SET state_text=?,state_until=6 WHERE id='welcome'", (summary,))
+    save_text(connection, "room", "welcome", "state_text", summary)
 
 
 GOAL_PHASE_COLUMNS = (("idle_seconds", "INTEGER NOT NULL DEFAULT 120"),
@@ -388,19 +412,26 @@ def init_database(database, seed=True):
             seed_demo(connection)
 
 
+def room_display_texts(connection, room):
+    """Expose seed templates only while their original fields remain unchanged."""
+    return {field: payload for field, payload in load_texts(connection, "room", room["id"]).items()
+            if field in room and str(Text(payload["template"], **payload["params"])) == room[field]}
+
+
 def require_room(connection, room_id):
     """Return a room and its current message count, or raise a lookup error."""
     row = connection.execute("""SELECT rooms.*,
         COALESCE(stats.message_count,0) AS message_count,COALESCE(stats.latest_id,0) AS latest_id
         FROM rooms LEFT JOIN room_message_stats stats ON stats.room_id=rooms.id WHERE rooms.id=? GROUP BY rooms.id""", (room_id,)).fetchone()
     if row is None:
-        raise LookupError("房间不存在")
+        raise LookupError(Text('房间不存在'))
     if enforce_session_limits(connection, room_id):
         connection.commit()
         row = connection.execute("""SELECT rooms.*,
             COALESCE(stats.message_count,0) AS message_count,COALESCE(stats.latest_id,0) AS latest_id
             FROM rooms LEFT JOIN room_message_stats stats ON stats.room_id=rooms.id WHERE rooms.id=? GROUP BY rooms.id""", (room_id,)).fetchone()
     room = dict(row)
+    room["texts"] = room_display_texts(connection, room)
     room["archived"] = bool(connection.execute("SELECT archived FROM room_directory WHERE room_id=?", (room_id,)).fetchone()[0])
     room["folder_id"] = connection.execute("SELECT folder_id FROM room_folder_assignments WHERE room_id=?", (room_id,)).fetchone()[0]
     settings = connection.execute("SELECT host,background,boundaries,experts,focus FROM topic_settings WHERE room_id=?",
@@ -431,12 +462,7 @@ def require_room(connection, room_id):
     option = connection.execute("SELECT named_followup FROM session_options WHERE session_id=?", (session["id"],)).fetchone() if session else None
     # Before any discussion the host keeps its named follow-ups.
     room["named_followup"] = bool(option[0]) if option else True
-    room["scheduler_decisions"] = [dict(row) for row in connection.execute(
-        f"{DECISION_SELECT} WHERE d.room_id=? ORDER BY d.id DESC LIMIT ?", (room_id, RECENT_DECISIONS))][::-1]
-    details = {row[0]: json.loads(row[1]) for row in connection.execute(
-        "SELECT decision_id,detail FROM scheduler_decision_details WHERE decision_id IN (SELECT id FROM scheduler_decisions WHERE room_id=? ORDER BY id DESC LIMIT ?)", (room_id, RECENT_DECISIONS))}
-    for decision in room["scheduler_decisions"]:
-        decision["detail"] = details.get(decision["id"])
+    room["scheduler_decisions"] = scheduler_decisions(connection, room_id)
     room["scheduler_routing"] = [row[0] for row in connection.execute(
         "SELECT message_id FROM scheduler_routing WHERE room_id=? AND created_at>? ORDER BY message_id", (room_id, int(time.time()) - ROUTING_VISIBLE_SECONDS))]
     room["host_arrangements"] = host_arrangements(connection, room_id, room["scheduler_decisions"])
@@ -445,6 +471,14 @@ def require_room(connection, room_id):
     room["goal_state"] = goal_view(connection, room_id)
     room["descriptions"] = member_descriptions(connection, room_id)
     room["labels"] = member_labels(connection, room_id)
+    for member in room["members"]:
+        label_text = default_label_text(member["name"], member["label"])
+        if label_text:
+            member["texts"] = {"label": label_text}
+    for name, label in room["labels"].items():
+        label_text = default_label_text(name, label)
+        if label_text:
+            room["texts"][f"labels.{name}"] = label_text
     room["withdrawals"] = withdrawals(connection, room_id)
     room["speaking_order"] = speaking_order(connection, room)
     return room
@@ -481,16 +515,52 @@ def discussion_progress(connection, room):
     return progress
 
 
-def host_arrangements(connection, room_id, decisions):
-    """Each plan the host created in the room's discussions, anchored where its task appeared.
+def span_end(span):
+    """The inclusive upper message id of a `history_cards` span; None means no end."""
+    return MAX_MESSAGE_ID if span[1] is None else span[1]
+
+
+def scheduler_decisions(connection, room_id, span=None):
+    """The room's recent smart-scheduling decisions with their detail, oldest first; `span` as in `history_cards`."""
+    if span:
+        rows = connection.execute(f"{DECISION_SELECT} WHERE d.room_id=? AND d.after_message_id>? AND d.after_message_id<=? ORDER BY d.id",
+                                  (room_id, span[0], span_end(span)))
+    else:
+        rows = connection.execute(f"{DECISION_SELECT} WHERE d.room_id=? ORDER BY d.id DESC LIMIT ?", (room_id, RECENT_DECISIONS))
+    decisions = sorted((dict(row) for row in rows), key=lambda item: item["id"])
+    details = {row[0]: json.loads(row[1]) for row in connection.execute(
+        "SELECT decision_id,detail FROM scheduler_decision_details WHERE decision_id IN (SELECT value FROM json_each(?))",
+        (json.dumps([item["id"] for item in decisions]),))}
+    for decision in decisions:
+        decision["detail"] = details.get(decision["id"])
+        decision["texts"] = load_texts(connection, "decision", decision["id"])
+    return decisions
+
+
+def history_cards(connection, room_id, span):
+    """The cards placed after messages in `span` (low, high]; high None runs to the end.
+
+    The room view carries only the recent executions, plans, missed turns and decisions; the transcript reads the rest
+    with each batch of messages, so older cards stay where they were instead of disappearing.
+    """
+    decisions = scheduler_decisions(connection, room_id, span)
+    return {"executions": recent_executions(connection, room_id, span), "scheduler_decisions": decisions,
+            "host_arrangements": host_arrangements(connection, room_id, decisions, span),
+            "cancelled_turns": cancelled_turns(connection, room_id, span)}
+
+
+def host_arrangements(connection, room_id, decisions, span=None):
+    """Each plan the host created in the room's discussions, anchored where its task appeared; `span` as in `history_cards`.
 
     Invitations are not plans, and a plan the smart scheduler applied is already shown by its own decision.
     """
     plans = session_host_arrangements(connection, room_id)
+    if span:
+        plans = [plan for plan in plans if span[0] < plan["after_message_id"] <= span_end(span)]
     applied = {item["after_message_id"] for item in decisions if item["applied"]}
     plans = [plan for plan in plans if plan["after_message_id"] not in applied]
     plans.sort(key=lambda plan: (plan["created_at"], plan["after_message_id"], str(plan["id"])))
-    return plans[-RECENT_DECISIONS:]
+    return plans if span else plans[-RECENT_DECISIONS:]
 
 
 def visible_anchor_before(connection, room_id, message_id):
@@ -540,10 +610,11 @@ def arrangement_anchors(connection, room_id, plans):
     return {row["id"]: row["anchor"] for row in rows}
 
 
-def cancelled_turns(connection, room_id):
-    """Discussion assignments that ended without an answer, anchored where their task appeared."""
+def cancelled_turns(connection, room_id, span=None):
+    """Discussion assignments that ended without an answer, anchored where their task appeared; `span` as in `history_cards`."""
     result = []
-    for row in connection.execute("""SELECT q.id,q.session_id,q.question,q.status,q.created_at,m.name AS expert,r.execution_id,
+    query = """SELECT q.id,q.session_id,q.question,q.status,q.created_at,m.name AS expert,r.execution_id,
+        (SELECT e.created_at FROM member_executions e WHERE e.id=r.execution_id) AS layout_at,
         'session-'||q.session_id||'-request-'||q.id AS key,
         (SELECT COALESCE(MAX(a.id),0) FROM messages a WHERE a.room_id=? AND a.id<r.message_id
             AND NOT EXISTS(SELECT 1 FROM internal_task_messages t WHERE t.message_id=a.id)) AS after_message_id
@@ -551,11 +622,15 @@ def cancelled_turns(connection, room_id):
         JOIN member_requests r ON r.id=q.member_request_id
         WHERE q.session_id IN (SELECT id FROM discussion_sessions WHERE room_id=?) AND q.purpose='discuss'
           AND q.status IN ('cancelled','skipped') AND q.member_request_id IS NOT NULL AND r.answer_id IS NULL
-          AND NOT EXISTS(SELECT 1 FROM member_executions e WHERE e.id=r.execution_id AND e.status='failed')
-        ORDER BY q.created_at DESC,after_message_id DESC,key DESC LIMIT ?""", (room_id, room_id, RECENT_DECISIONS)):
+          AND NOT EXISTS(SELECT 1 FROM member_executions e WHERE e.id=r.execution_id AND e.status='failed')"""
+    order = "ORDER BY created_at DESC,after_message_id DESC,key DESC"
+    rows = (connection.execute(f"SELECT * FROM ({query}) WHERE after_message_id>? AND after_message_id<=? {order}",
+                               (room_id, room_id, span[0], span_end(span))) if span
+            else connection.execute(f"SELECT * FROM ({query}) {order} LIMIT ?", (room_id, room_id, RECENT_DECISIONS)))
+    for row in rows:
         result.append({"id": row["key"], "key": row["key"], "display_id": row["id"],
             "expert": row["expert"], "question": row["question"], "status": row["status"],
-            "execution_id": row["execution_id"],
+            "execution_id": row["execution_id"], "layout_at": row["layout_at"],
             "after_message_id": row["after_message_id"],
             "created_at": row["created_at"]})
     return result[::-1]
@@ -598,7 +673,7 @@ def merge_round_groups(connection, room_id):
 
 def pending_label(room, expert):
     """Describe a speaker's open request by how the member takes part, without claiming its app is generating."""
-    return "待处理（本地 CLI）" if room["experts"].get(expert) == "cli" else "待处理"
+    return Text("待处理（本地 CLI）") if room["experts"].get(expert) == "cli" else Text("待处理")
 
 
 def topic_context(background, user_request=None):
@@ -624,15 +699,15 @@ def topic_values(payload, current=None):
         value = str(payload.get(field, result.get(field, "")))
         result[field] = value if field == "user_request" else value.strip()
         if len(result[field]) > limit or (field == "title" and not result[field]):
-            raise ValueError(f"{field} 内容为空或超过 {limit} 字")
+            raise ValueError(Text('{value1} 内容为空或超过 {value2} 字', value1=field, value2=limit))
     result["host"] = payload.get("host", result["host"])
     result["experts"] = payload.get("experts", result["experts"])
     experts = result["experts"]
     if (not isinstance(experts, dict) or len(experts) > MAX_ROOM_AGENTS
             or any(not is_ai(name) or mode != "cli" for name, mode in experts.items())):
-        raise ValueError("专家需为有效 AI 身份，参与方式为 cli")
+        raise ValueError(Text('专家需为有效 AI 身份，参与方式为 cli'))
     if result["host"] != "用户" and experts.get(result["host"]) != "cli":
-        raise ValueError("AI 主持人必须是可读可写的本地 CLI 参与者")
+        raise ValueError(Text('AI 主持人必须是可读可写的本地 CLI 参与者'))
     return result
 
 
@@ -656,7 +731,7 @@ def save_room_limits(connection, room_id, limits):
 def require_host(room, payload):
     """Check the declared operator; this is a workflow rule, not authentication."""
     if payload.get("actor") not in (room["host"], "用户"):
-        raise ValueError("请使用当前主持人或用户身份管理话题")
+        raise ValueError(Text('请使用当前主持人或用户身份管理话题'))
 
 
 def update_topic(connection, room_id, payload):
@@ -665,15 +740,15 @@ def update_topic(connection, room_id, payload):
     room = require_room(connection, room_id)
     require_host(room, payload)
     if "phase" in payload:
-        raise ValueError("房间的讨论阶段由 discussion 会话控制")
+        raise ValueError(Text('房间的讨论阶段由 discussion 会话控制'))
     if room["archived"]:
-        raise ValueError("房间已存档；恢复后才能修改话题资料")
+        raise ValueError(Text('房间已存档；恢复后才能修改话题资料'))
     settings = topic_values(payload, room)
     if settings["host"] != room["host"] or settings["experts"] != room["experts"] or payload.get("members"):
-        raise ValueError("主持人与成员请通过成员管理操作调整")
+        raise ValueError(Text('主持人与成员请通过成员管理操作调整'))
     if "limits" in payload:
         if current_session(connection, room_id, active_only=True):
-            raise ValueError("新讨论的上限请通过 limits 接口修改")
+            raise ValueError(Text('新讨论的上限请通过 limits 接口修改'))
         save_room_limits(connection, room_id, limit_values(payload["limits"], room["limits"]))
     connection.execute("UPDATE rooms SET title=?,goal=? WHERE id=?", (settings["title"], settings["goal"], room_id))
     connection.execute("UPDATE topic_settings SET background=?,boundaries=?,focus=? WHERE room_id=?",
@@ -687,7 +762,7 @@ def submission_value(value):
     """Validate a replay identifier for writes or exact result lookup."""
     identifier = str(value or "").strip()
     if not re.fullmatch(r"[A-Za-z0-9_-]{8,100}", identifier):
-        raise ValueError("submission_id 必须是 8–100 位字母、数字、下划线或连字符")
+        raise ValueError(Text('submission_id 必须是 8–100 位字母、数字、下划线或连字符'))
     return identifier
 
 
@@ -718,7 +793,7 @@ def room_progress(connection, room_id):
             FROM member_executions e WHERE e.room_id=rooms.id AND e.status IN ('dispatched','started')) AS executions
         FROM rooms LEFT JOIN room_revisions v ON v.room_id=rooms.id WHERE rooms.id=?""", (room_id,)).fetchone()
     if row is None:
-        raise LookupError("房间不存在")
+        raise LookupError(Text('房间不存在'))
     now = int(time.time())
     return {"revision": row["revision"], "executions": [
         {**execution, "stale": execution["lease_until"] <= now} for execution in json.loads(row["executions"])]}
@@ -739,7 +814,7 @@ def list_rooms(connection, params=None):
     directory = {row["room_id"]: dict(row) for row in connection.execute("SELECT * FROM room_directory")}
     assignments = {row["room_id"]: row["folder_id"] for row in connection.execute("SELECT room_id,folder_id FROM room_folder_assignments")}
     rooms = [{**dict(row), "archived": bool(directory[row["id"]]["archived"]), "running": bool(row["running"]),
-              "folder_id": assignments[row["id"]]} for row in rows]
+              "folder_id": assignments[row["id"]], "texts": room_display_texts(connection, dict(row))} for row in rows]
     return {"rooms": sorted(rooms, key=lambda room: directory[room["id"]]["position"]),
             **folder_directory(connection)}
 
@@ -755,7 +830,7 @@ def remember_last_room(connection, payload):
     """Remember the room the manager opened, so the next visit from any device reopens it."""
     room_id = payload.get("room_id")
     if not isinstance(room_id, str) or not connection.execute("SELECT 1 FROM rooms WHERE id=?", (room_id,)).fetchone():
-        raise LookupError("房间不存在")
+        raise LookupError(Text('房间不存在'))
     connection.execute("INSERT INTO site_preferences (key,value) VALUES ('last_room',?) "
                        "ON CONFLICT(key) DO UPDATE SET value=excluded.value", (room_id,))
     return {"last_room": room_id}
@@ -785,14 +860,14 @@ def folder_directories_value(payload):
     """
     directories = payload.get("directories", [])
     if not isinstance(directories, list) or len(directories) > MAX_FOLDER_DIRECTORIES:
-        raise ValueError(f"项目路径须为最多 {MAX_FOLDER_DIRECTORIES} 项的列表")
+        raise ValueError(Text('项目路径须为最多 {value1} 项的列表', value1=MAX_FOLDER_DIRECTORIES))
     paths = []
     for item in directories:
         path = item.strip() if isinstance(item, str) else ""
         if not path or len(path) > MAX_DIRECTORY_PATH or not ABSOLUTE_PATH_PATTERN.match(path):
-            raise ValueError("项目路径须为完整的绝对路径")
+            raise ValueError(Text('项目路径须为完整的绝对路径'))
         if same_path_key(path) in [same_path_key(known) for known in paths]:
-            raise ValueError(f"项目路径重复：{path}")
+            raise ValueError(Text('项目路径重复：{value1}', value1=path))
         paths.append(path)
     return paths
 
@@ -801,10 +876,10 @@ def folder_name_value(payload):
     """Validate a shared folder name for creation and renaming."""
     raw_name = payload.get("name")
     if not isinstance(raw_name, str):
-        raise ValueError("文件夹名称必须是文本")
+        raise ValueError(Text('文件夹名称必须是文本'))
     name = raw_name.strip()
     if not name or len(name) > 40:
-        raise ValueError("文件夹名称须为 1–40 个字符")
+        raise ValueError(Text('文件夹名称须为 1–40 个字符'))
     return name
 
 
@@ -817,7 +892,7 @@ def rename_folder(connection, folder_id, payload):
         changes["directories"] = json.dumps(folder_directories_value(payload), ensure_ascii=False)
     assignments = ",".join(f"{column}=?" for column in changes)
     if connection.execute(f"UPDATE topic_folders SET {assignments} WHERE id=?", (*changes.values(), folder_id)).rowcount == 0:
-        raise LookupError("文件夹不存在")
+        raise LookupError(Text('文件夹不存在'))
     return folder_record(connection.execute("SELECT id,name,position,directories FROM topic_folders WHERE id=?", (folder_id,)).fetchone())
 
 
@@ -827,7 +902,7 @@ def delete_folder(connection, folder_id):
     directory = folder_directory(connection)
     identifiers = [folder["id"] for folder in directory["folders"]]
     if folder_id not in identifiers:
-        raise LookupError("文件夹不存在")
+        raise LookupError(Text('文件夹不存在'))
     position = directory["uncategorized_position"]
     if position is not None:
         position -= int(identifiers.index(folder_id) < position)
@@ -856,12 +931,12 @@ def move_folder(connection, folder_id, payload):
     folders.insert(min(position, len(folders)) if position is not None else len(folders), {"id": UNCATEGORIZED_FOLDER_ID})
     moving = next((folder for folder in folders if folder["id"] == folder_id), None)
     if moving is None:
-        raise LookupError("文件夹不存在")
+        raise LookupError(Text('文件夹不存在'))
     remaining = [folder for folder in folders if folder["id"] != folder_id]
     before = payload.get("before_id")
     identifiers = [folder["id"] for folder in remaining]
     if before is not None and before not in identifiers:
-        raise ValueError("目标文件夹不存在或与当前文件夹相同")
+        raise ValueError(Text('目标文件夹不存在或与当前文件夹相同'))
     remaining.insert(identifiers.index(before) if before is not None else len(remaining), moving)
     uncategorized_position = next(index for index, folder in enumerate(remaining) if folder["id"] == UNCATEGORIZED_FOLDER_ID)
     ordered = [folder for folder in remaining if folder["id"] != UNCATEGORIZED_FOLDER_ID]
@@ -885,21 +960,21 @@ def manage_room(connection, room_id, action, payload):
         rooms = [item["id"] for item in list_rooms(connection)["rooms"] if item["id"] != room_id]
         before = payload.get("before_id")
         if before is not None and before not in rooms:
-            raise ValueError("目标房间不存在或与当前房间相同")
+            raise ValueError(Text('目标房间不存在或与当前房间相同'))
         rooms.insert(rooms.index(before) if before else len(rooms), room_id)
         connection.executemany("UPDATE room_directory SET position=? WHERE room_id=?", enumerate(rooms, 1))
     elif action == "folder":
         folder_id = payload.get("folder_id")
         if folder_id is not None and not isinstance(folder_id, str):
-            raise ValueError("文件夹编号格式无效")
+            raise ValueError(Text('文件夹编号格式无效'))
         if folder_id is not None and connection.execute("SELECT 1 FROM topic_folders WHERE id=?", (folder_id,)).fetchone() is None:
-            raise ValueError("文件夹不存在")
+            raise ValueError(Text('文件夹不存在'))
         connection.execute("UPDATE room_folder_assignments SET folder_id=? WHERE room_id=?", (folder_id, room_id))
     elif action == "rename":
         # The title is display-only, so renaming never touches phase, turns or members.
         title = str(payload.get("title", "")).strip()
         if not title or len(title) > 80:
-            raise ValueError("title 内容为空或超过 80 字")
+            raise ValueError(Text('title 内容为空或超过 80 字'))
         connection.execute("UPDATE rooms SET title=? WHERE id=?", (title, room_id))
     elif action in ("archive", "restore"):
         if action == "archive":
@@ -915,11 +990,11 @@ def manage_room(connection, room_id, action, payload):
         connection.execute("UPDATE room_directory SET archived=? WHERE room_id=?", (int(action == "archive"), room_id))
     elif action == "delete":
         if payload.get("confirm_title") != room["title"]:
-            raise ValueError("请输入完整房间名称确认删除")
+            raise ValueError(Text('请输入完整房间名称确认删除'))
         delete_room_records(connection, room_id)
         return {"deleted": True, "id": room_id}
     else:
-        raise LookupError("地址不存在")
+        raise LookupError(Text('地址不存在'))
     return require_room(connection, room_id)
 
 
@@ -950,14 +1025,26 @@ def delete_room_records(connection, room_id):
     connection.execute("DELETE FROM rooms WHERE id=?", (room_id,))
 
 
-def redact_payload(value):
-    """Copy a request payload for the event log: credentials replaced, long strings cut with their full length noted."""
+def redact_payload(value, texts=None, path="payload"):
+    """Copy an audit payload with secrets hidden and templates collected for hidden or shortened strings."""
+    texts = texts if texts is not None else {}
     if isinstance(value, dict):
-        return {key: "[已隐去]" if API_LOG_SECRET.search(str(key)) else redact_payload(item) for key, item in value.items()}
+        result = {}
+        for key, item in value.items():
+            field = f"{path}.{key}"
+            if API_LOG_SECRET.search(str(key)):
+                hidden = Text("[已隐去]")
+                result[key] = str(hidden)
+                texts[field] = hidden
+            else:
+                result[key] = redact_payload(item, texts, field)
+        return result
     if isinstance(value, list):
-        return [redact_payload(item) for item in value]
+        return [redact_payload(item, texts, f"{path}[{index}]") for index, item in enumerate(value)]
     if isinstance(value, str) and len(value) > API_LOG_TEXT:
-        return f"{value[:API_LOG_TEXT]}…（共 {len(value)} 字）"
+        shortened = Text("{preview}…（共 {length} 字）", preview=value[:API_LOG_TEXT], length=len(value))
+        texts[path] = shortened
+        return str(shortened)
     return value
 
 
@@ -985,11 +1072,22 @@ def record_api_event(database, record):
             data["actor"] = api_actor(connection, record["room_id"], record["token"])
             if record.get("error"):
                 data["error"] = record["error"]
-            payload = json.dumps(redact_payload(record["payload"]), ensure_ascii=False)
-            data["payload"] = payload if len(payload) <= API_LOG_PAYLOAD else f"{payload[:API_LOG_PAYLOAD]}…（共 {len(payload)} 字）"
-            connection.execute("""INSERT INTO room_events (room_id,at,kind,data) SELECT ?,?,?,? WHERE EXISTS (SELECT 1 FROM rooms WHERE id=?)""",
+            if record.get("error_text"):
+                data.setdefault("texts", {})["error"] = record["error_text"]
+            redacted_texts = {}
+            redacted_payload = redact_payload(record["payload"], redacted_texts)
+            data.setdefault("texts", {}).update({field: text_payload(value) for field, value in redacted_texts.items()})
+            payload = json.dumps(redacted_payload, ensure_ascii=False)
+            if len(payload) <= API_LOG_PAYLOAD:
+                data["payload"] = payload
+            else:
+                data["payload"] = str(Text("{preview}…（共 {length} 字）", preview=payload[:API_LOG_PAYLOAD], length=len(payload)))
+                data.setdefault("texts", {})["payload"] = {"template": "{preview}…（共 {length} 字）", "params": {"preview": payload[:API_LOG_PAYLOAD], "length": len(payload)}}
+            cursor = connection.execute("""INSERT INTO room_events (room_id,at,kind,data) SELECT ?,?,?,? WHERE EXISTS (SELECT 1 FROM rooms WHERE id=?)""",
                                (record["room_id"], record["at"], "api.write" if record["status"] < 400 else "api.rejected",
                                 json.dumps(data, ensure_ascii=False), record["room_id"]))
+            for field, text in data.get("texts", {}).items():
+                save_text(connection, "room_event", cursor.lastrowid, field, Text(text["template"], **text["params"]))
     except Exception:
         logging.exception("Recording a room write in the event log failed")
 
@@ -1008,17 +1106,17 @@ def creation_request(settings, limits):
 def create_room(connection, payload, control_token=""):
     """Create a credential-protected collaboration room, binding retries to the original credentials."""
     if payload.get("mode", "free") != "free":
-        raise ValueError("房间模式只能为 free")
+        raise ValueError(Text('房间模式只能为 free'))
     members = member_values(payload.get("members"))
     payload = {**payload, "experts": {member["name"]: "cli" for member in members}}
     settings = topic_values(payload)
     limits = limit_values(payload["limits"]) if "limits" in payload else None
     if not token_hash(control_token):
-        raise ValueError("建房须提供房主控制凭据")
+        raise ValueError(Text('建房须提供房主控制凭据'))
     identifier = submission_value(payload["submission_id"]) if "submission_id" in payload else None
     folder_id = payload.get("folder_id")
     if folder_id is not None and not isinstance(folder_id, str):
-        raise ValueError("文件夹编号必须是文本或 null")
+        raise ValueError(Text('文件夹编号必须是文本或 null'))
     request_text = creation_request(settings, limits)
     request_text += ":access:" + token_hash(control_token) + ":" + json.dumps(
         [[member["name"], member["adapter"], member["access"], "",
@@ -1030,10 +1128,10 @@ def create_room(connection, payload, control_token=""):
         previous = connection.execute("SELECT * FROM room_creations WHERE submission_id=?", (identifier,)).fetchone()
         if previous:
             if previous["request_text"] != request_text:
-                raise FileExistsError("该建房提交编号已被其他内容使用")
+                raise FileExistsError(Text('该建房提交编号已被其他内容使用'))
             return {**require_room(connection, previous["room_id"]), "duplicate": True, "submission_id": identifier}
     if folder_id is not None and connection.execute("SELECT 1 FROM topic_folders WHERE id=?", (folder_id,)).fetchone() is None:
-        raise ValueError("文件夹不存在")
+        raise ValueError(Text('文件夹不存在'))
     room_id = uuid.uuid4().hex[:12]
     connection.execute("INSERT INTO rooms (id,title,goal,created_at) VALUES (?,?,?,?)", (room_id, settings["title"], settings["goal"], utc_now()))
     connection.execute("UPDATE room_folder_assignments SET folder_id=? WHERE room_id=?", (folder_id, room_id))
@@ -1053,9 +1151,9 @@ def message_values(payload):
     text = str(payload.get("text", "")).strip()
     submission_id = submission_value(payload.get("submission_id"))
     if not is_participant(author):
-        raise ValueError("请选择有效的发言者")
+        raise ValueError(Text('请选择有效的发言者'))
     if (not text and not attachment_ids(payload)) or len(text) > MAX_TEXT_LENGTH:
-        raise ValueError(f"发言需包含正文或附件，正文最多 {MAX_TEXT_LENGTH} 字")
+        raise ValueError(Text('发言需包含正文或附件，正文最多 {value1} 字', value1=MAX_TEXT_LENGTH))
     reply_to = payload.get("reply_to")
     return author, text, submission_id, int(reply_to) if reply_to else None
 
@@ -1066,7 +1164,7 @@ def attachment_ids(payload):
     if (not isinstance(identifiers, list) or len(identifiers) > MAX_MESSAGE_ATTACHMENTS
             or any(not isinstance(item, str) or not re.fullmatch(r"[a-f0-9]{32}", item) for item in identifiers)
             or len(set(identifiers)) != len(identifiers)):
-        raise ValueError(f"附件编号无效；每条消息最多 {MAX_MESSAGE_ATTACHMENTS} 个，不能重复")
+        raise ValueError(Text('附件编号无效；每条消息最多 {value1} 个，不能重复', value1=MAX_MESSAGE_ATTACHMENTS))
     return identifiers
 
 
@@ -1076,9 +1174,9 @@ def attachment_metadata(params):
     actor = params.get("actor")
     if (not isinstance(name, str) or not name.strip() or len(name) > MAX_FILENAME_LENGTH
             or name in (".", "..") or re.search(r"[/\\\x00-\x1f\x7f]", name)):
-        raise ValueError(f"文件名需为 1–{MAX_FILENAME_LENGTH} 字，不能包含路径或控制字符")
+        raise ValueError(Text('文件名需为 1–{value1} 字，不能包含路径或控制字符', value1=MAX_FILENAME_LENGTH))
     if not is_participant(actor):
-        raise ValueError("上传附件须声明有效的 actor")
+        raise ValueError(Text('上传附件须声明有效的 actor'))
     return {"file_name": name, "actor": actor, "submission_id": submission_value(params.get("submission_id"))}
 
 
@@ -1144,6 +1242,7 @@ def message_with_attachments(connection, row):
     if message["withdrawn"] == "retracted":
         # The owner retracted it before anyone handled it: only the page that retracted it keeps the text.
         return {**message, "text": "", "summary": "", "suggestions": [], "attachments": []}
+    message["texts"] = load_texts(connection, "message", message["id"])
     message["suggestions"] = message_suggestions(connection, message["id"])
     message["attachments"] = [attachment_view(item) for item in connection.execute(
         "SELECT * FROM attachments WHERE message_id=? ORDER BY position,id", (message["id"],))]
@@ -1174,7 +1273,7 @@ def get_attachment(connection, room_id, identifier):
     """Resolve a file only within the explicitly selected room."""
     row = connection.execute("SELECT * FROM attachments WHERE room_id=? AND id=?", (room_id, identifier)).fetchone()
     if not row:
-        raise LookupError("附件不存在")
+        raise LookupError(Text('附件不存在'))
     return attachment_view(row)
 
 
@@ -1194,7 +1293,7 @@ def store_attachment(connection, database, room_id, metadata, data):
                                   (room_id, metadata["submission_id"])).fetchone()
     if previous:
         if any(previous[key] != value for key, value in expected.items()):
-            raise FileExistsError("这个附件提交编号已被其他文件使用")
+            raise FileExistsError(Text('这个附件提交编号已被其他文件使用'))
         return {"attachment": attachment_view(previous), "duplicate": True}
     record = {"id": uuid.uuid4().hex, "room_id": room_id, **expected, "created_at": utc_now()}
     path = attachment_path(database, record)
@@ -1217,24 +1316,24 @@ def check_message_attachments(connection, room_id, actor, identifiers):
     for identifier in identifiers:
         attachment = get_attachment(connection, room_id, identifier)
         if attachment["actor"] != actor or attachment["message_id"] is not None:
-            raise FileExistsError("附件已用于其他消息，或不属于本次实际提交者")
+            raise FileExistsError(Text('附件已用于其他消息，或不属于本次实际提交者'))
 
 
 def message_summary(payload, message):
     """Preserve a supplied summary and distinguish its writer from the answer's author."""
     summary = str(payload.get("summary", "")).strip()
     if len(summary) > MAX_SUMMARY_LENGTH:
-        raise ValueError(f"回答摘要最多 {MAX_SUMMARY_LENGTH} 字")
+        raise ValueError(Text('回答摘要最多 {value1} 字', value1=MAX_SUMMARY_LENGTH))
     summary_by = payload.get("summary_by", message["submitted_by"]) if summary else ""
     if summary and (message["kind"] not in ("opinion", "chat") or summary_by not in (message["author"], message["submitted_by"])):
-        raise ValueError("摘要仅用于观点，撰写者须为原作者或实际提交者")
+        raise ValueError(Text('摘要仅用于观点，撰写者须为原作者或实际提交者'))
     return {"summary": summary, "summary_by": summary_by}
 
 
 def check_message_references(connection, room_id, message):
     """Keep replies within their declared topic."""
     if message["reply_to"] and not connection.execute("SELECT id FROM messages WHERE room_id=? AND id=?", (room_id, message["reply_to"])).fetchone():
-        raise ValueError("回复的消息不在当前房间中")
+        raise ValueError(Text('回复的消息不在当前房间中'))
 
 
 CAPTURE_REFUSED_FIELDS = ("to", "handoff", "continue", "sequential", "loop", "parallel", "gates", "detach", "need_rounds",
@@ -1244,24 +1343,24 @@ CAPTURE_REFUSED_FIELDS = ("to", "handoff", "continue", "sequential", "loop", "pa
 def check_captured_reply(payload):
     """A reply the local service captured after the software ended unsubmitted: it answers its execution and nothing more."""
     if type(payload.get("execution_id")) is not int or any(payload.get(field) for field in CAPTURE_REFUSED_FIELDS):
-        raise ValueError("自动收录的回答只能关联本次执行 execution_id，不能派活、续跑、引用或带附件")
+        raise ValueError(Text('自动收录的回答只能关联本次执行 execution_id，不能派活、续跑、引用或带附件'))
 
 
 def append_free_message(connection, room, payload, actor):
     """Append a free-room message: the owner's creates requests, a member's completes its execution."""
     if payload.get("kind") == "moderation":
         if any(payload.get(field) for field in ("next_review", "review_scope", "review_roster", "sequential", "loop", "parallel", "gates", "detach", "need_rounds", "keep_working")):
-            raise ValueError("主持说明不能声明评审授权、依次接力或申请轮数；请在派活时提交")
+            raise ValueError(Text('主持说明不能声明评审授权、依次接力或申请轮数；请在派活时提交'))
         return append_free_moderation(connection, room, payload, actor)
     if payload.get("kind") not in (None, "chat"):
-        raise ValueError("房间请求与讨论的回答都使用 kind=chat，并以 execution_id 或 request_ids 关联请求")
+        raise ValueError(Text('房间请求与讨论的回答都使用 kind=chat，并以 execution_id 或 request_ids 关联请求'))
     resolve_member_fields(connection, room["id"], payload)
     if payload.get("turn_id") is not None and current_session(connection, room["id"], active_only=True):
-        raise ValueError("新讨论使用 kind=chat，并以 execution_id 或 request_ids 关联请求")
+        raise ValueError(Text('新讨论使用 kind=chat，并以 execution_id 或 request_ids 关联请求'))
     author, text, submission_id, reply_to = message_values(payload)
     room_id = room["id"]
     if actor == "用户" and (author != "用户" or payload.get("submitted_by", "用户") != "用户"):
-        raise PermissionError("房间控制凭据只能以用户身份发言")
+        raise PermissionError(Text('房间控制凭据只能以用户身份发言'))
     submitted_by = author
     source = payload.get("source") if payload.get("source") in ("api", "auto") else "cli"
     expected = {"author": author, "text": text, "reply_to": reply_to, "kind": "chat", "submitted_by": submitted_by,
@@ -1275,11 +1374,11 @@ def append_free_message(connection, room, payload, actor):
         previous = message_with_attachments(connection, previous)
         if (any(previous[key] != expected[key] for key in ("author", "text", "reply_to", "kind", "submitted_by", "summary", "summary_by"))
                 or [item["id"] for item in previous["attachments"]] != identifiers):
-            raise FileExistsError("这个提交编号已被另一条内容使用，请为新发言生成新编号")
+            raise FileExistsError(Text('这个提交编号已被另一条内容使用，请为新发言生成新编号'))
         check_review_retry(connection, room_id, previous["id"], payload)
         return {"message": previous, "duplicate": True}
     if room["archived"]:
-        raise ValueError("房间已存档；恢复后才能继续协作")
+        raise ValueError(Text('房间已存档；恢复后才能继续协作'))
     check_message_references(connection, room_id, expected)
     check_message_attachments(connection, room_id, submitted_by, identifiers)
     # `/goal` and `/discuss` are commands: checked before saving, never queued, and not routed to members.
@@ -1319,28 +1418,28 @@ def append_free_moderation(connection, room, payload, actor):
     """Save a host note against its live host task without answering or routing it."""
     author, text, submission_id, reply_to = message_values(payload)
     if author != room["host"] or payload.get("submitted_by", author) != author:
-        raise ValueError("主持说明须保留当前主持人署名")
+        raise ValueError(Text('主持说明须保留当前主持人署名'))
     if not isinstance(actor, dict) or actor.get("role") != "host" or actor.get("name") != room["host"]:
-        raise PermissionError("主持说明只能由当前主持成员提交")
+        raise PermissionError(Text('主持说明只能由当前主持成员提交'))
     if payload.get("to") or payload.get("handoff") or payload.get("turn_id") is not None:
-        raise ValueError("主持说明不能派活或关联发言轮次")
+        raise ValueError(Text('主持说明不能派活或关联发言轮次'))
     if actor["access"] == "manual":
         ids = payload.get("request_ids")
         if payload.get("execution_id") is not None or not isinstance(ids, list) or not ids:
-            raise ValueError("手动主持说明须关联有效的主持请求 request_ids")
+            raise ValueError(Text('手动主持说明须关联有效的主持请求 request_ids'))
         check_answer(connection, room["id"], actor, payload)
         rows = connection.execute("SELECT purpose FROM member_requests WHERE room_id=? AND id IN (%s)" % ",".join("?" for _ in ids),
                                   (room["id"], *ids)).fetchall()
         if len(rows) != len(set(ids)) or any(row["purpose"] != "discuss_host" for row in rows):
-            raise ValueError("主持说明只能关联当前有效的主持请求")
+            raise ValueError(Text('主持说明只能关联当前有效的主持请求'))
     else:
         if payload.get("request_ids"):
-            raise ValueError("自动主持说明须关联执行编号 execution_id")
+            raise ValueError(Text('自动主持说明须关联执行编号 execution_id'))
         execution = check_answer(connection, room["id"], actor, payload)
         purposes = [row[0] for row in connection.execute(
             "SELECT purpose FROM member_requests WHERE execution_id=? AND status='delivering'", (execution["id"],))]
         if not purposes or any(purpose != "discuss_host" for purpose in purposes):
-            raise ValueError("主持说明只能关联当前有效的主持执行")
+            raise ValueError(Text('主持说明只能关联当前有效的主持执行'))
     expected = {"author": author, "text": text, "reply_to": reply_to, "kind": "moderation",
                 "submitted_by": author, "source": payload.get("source") if payload.get("source") in ("cli", "api") else "cli"}
     expected.update(message_summary(payload, expected))
@@ -1349,7 +1448,7 @@ def append_free_moderation(connection, room, payload, actor):
     if previous:
         previous = message_with_attachments(connection, previous)
         if any(previous[key] != expected[key] for key in ("author", "text", "reply_to", "kind", "submitted_by", "summary", "summary_by")) or [item["id"] for item in previous["attachments"]] != identifiers:
-            raise FileExistsError("这个提交编号已被另一条内容使用，请为新发言生成新编号")
+            raise FileExistsError(Text('这个提交编号已被另一条内容使用，请为新发言生成新编号'))
         return {"message": previous, "duplicate": True}
     check_message_references(connection, room["id"], expected)
     check_message_attachments(connection, room["id"], author, identifiers)
@@ -1412,11 +1511,11 @@ def rate_scheduler_decision(connection, room_id, decision_id, token, payload):
     require_owner(connection, room_id, token)
     rating, should_be, note = payload.get("rating"), payload.get("should_be", ""), payload.get("note", "")
     if rating not in ("good", "bad", None):
-        raise ValueError("rating 须为 good、bad 或 null")
+        raise ValueError(Text('rating 须为 good、bad 或 null'))
     if not isinstance(should_be, str) or not isinstance(note, str) or len(should_be) > MAX_DECISION_MEMBER or len(note.strip()) > MAX_DECISION_NOTE:
-        raise ValueError(f"should_be 须为成员名，note 不超过 {MAX_DECISION_NOTE} 字")
+        raise ValueError(Text('should_be 须为成员名，note 不超过 {value1} 字', value1=MAX_DECISION_NOTE))
     if not connection.execute("SELECT 1 FROM scheduler_decisions WHERE id=? AND room_id=?", (decision_id, room_id)).fetchone():
-        raise LookupError("没有这条智能调度决策")
+        raise LookupError(Text('没有这条智能调度决策'))
     if rating is None:
         connection.execute("DELETE FROM scheduler_feedback WHERE decision_id=?", (decision_id,))
     else:
@@ -1457,7 +1556,7 @@ def mark_scheduler_routing(connection, room_id, token, payload):
     require_owner(connection, room_id, token)
     message_id, active = payload.get("message_id"), payload.get("active")
     if type(message_id) is not int or message_id <= 0 or type(active) is not bool:
-        raise ValueError("须提供正整数 message_id 与布尔 active")
+        raise ValueError(Text('须提供正整数 message_id 与布尔 active'))
     if active:
         connection.execute("INSERT OR REPLACE INTO scheduler_routing (room_id,message_id,created_at) VALUES (?,?,?)", (room_id, message_id, int(time.time())))
     else:
@@ -1469,50 +1568,54 @@ def record_scheduler_decision(connection, room_id, token, payload):
     """The local service records one smart-scheduling decision, with the owner credential, so the transcript shows what it did and how sure it was."""
     begin_write(connection)
     require_owner(connection, room_id, token)
-    kind, label, confidence = payload.get("kind"), payload.get("label"), payload.get("confidence")
+    kind, label, confidence = payload.get("kind"), incoming_text(payload.get("label"), payload.get("label_text")), payload.get("confidence")
     after = payload.get("after_message_id", 0)
     if kind not in ("interjection", "round") or not isinstance(label, str) or not 0 < len(label.strip()) <= MAX_DECISION_LABEL:
-        raise ValueError(f"决策记录须有 kind（interjection/round）与 1–{MAX_DECISION_LABEL} 字的 label")
+        raise ValueError(Text('决策记录须有 kind（interjection/round）与 1–{value1} 字的 label', value1=MAX_DECISION_LABEL))
     if confidence is not None and (type(confidence) not in (int, float) or not 0 <= confidence <= 1):
-        raise ValueError("confidence 须为 0–1 或 null")
+        raise ValueError(Text('confidence 须为 0–1 或 null'))
     if payload.get("provider") not in SCHEDULER_PROVIDERS or type(payload.get("applied")) is not bool or type(after) is not int or after < 0:
-        raise ValueError("须提供供应商 provider、是否执行 applied 与非负的 after_message_id")
+        raise ValueError(Text('须提供供应商 provider、是否执行 applied 与非负的 after_message_id'))
     cursor = connection.execute("""INSERT INTO scheduler_decisions (room_id,after_message_id,kind,label,confidence,applied,provider,created_at)
         VALUES (?,?,?,?,?,?,?,?)""", (room_id, after, kind, label.strip(), confidence, int(payload["applied"]), payload["provider"], utc_now()))
+    save_text(connection, "decision", cursor.lastrowid, "label", label)
     context = payload.get("context")
     if context is not None:
         text = json.dumps(context, ensure_ascii=False)
         if not isinstance(context, dict) or len(text) > MAX_DECISION_CONTEXT:
-            raise ValueError(f"context 须为不超过 {MAX_DECISION_CONTEXT} 字的对象")
+            raise ValueError(Text('context 须为不超过 {value1} 字的对象', value1=MAX_DECISION_CONTEXT))
         connection.execute("INSERT INTO scheduler_decision_context (decision_id,context) VALUES (?,?)", (cursor.lastrowid, text))
     detail = payload.get("detail")
     if detail is not None:
         text = json.dumps(detail, ensure_ascii=False)
         if not isinstance(detail, list) or len(detail) > 4 or len(text) > MAX_DECISION_DETAIL:
-            raise ValueError(f"detail 须为最多 4 项、不超过 {MAX_DECISION_DETAIL} 字的列表")
+            raise ValueError(Text('detail 须为最多 4 项、不超过 {value1} 字的列表', value1=MAX_DECISION_DETAIL))
         connection.execute("INSERT INTO scheduler_decision_details (decision_id,detail) VALUES (?,?)", (cursor.lastrowid, text))
     model_input = payload.get("input")
     if model_input is not None:
         text = json.dumps(model_input, ensure_ascii=False)
         if not isinstance(model_input, dict) or len(text) > MAX_DECISION_INPUT:
-            raise ValueError(f"input 须为不超过 {MAX_DECISION_INPUT} 字的对象")
+            raise ValueError(Text('input 须为不超过 {value1} 字的对象', value1=MAX_DECISION_INPUT))
         connection.execute("INSERT INTO scheduler_decision_inputs (decision_id,input) VALUES (?,?)", (cursor.lastrowid, text))
-    return dict(connection.execute("SELECT * FROM scheduler_decisions WHERE id=?", (cursor.lastrowid,)).fetchone())
+    result = dict(connection.execute("SELECT * FROM scheduler_decisions WHERE id=?", (cursor.lastrowid,)).fetchone())
+    result["texts"] = load_texts(connection, "decision", cursor.lastrowid)
+    return result
 
 
 def scheduler_decision_view(connection, room_id, decision_id, token):
     """Read one room-bound decision and its full evidence, outside the recent-room window."""
     if session_read_boundary(connection, room_id, token) is not None:
-        raise PermissionError("独立观点阶段不能读取智能调度判断")
+        raise PermissionError(Text('独立观点阶段不能读取智能调度判断'))
     row = connection.execute(f"{DECISION_SELECT} WHERE d.room_id=? AND d.id=?", (room_id, decision_id)).fetchone()
     if not row:
-        raise LookupError("决策记录不存在")
+        raise LookupError(Text('决策记录不存在'))
     result = dict(row)
     for field, table in (("detail", "scheduler_decision_details"), ("input", "scheduler_decision_inputs")):
         value = connection.execute(f"SELECT {field} FROM {table} WHERE decision_id=?", (decision_id,)).fetchone()
         result[field] = json.loads(value[0]) if value else None
     if result.get("context"):
         result["context"] = json.loads(result["context"])
+    result["texts"] = load_texts(connection, "decision", decision_id)
     return result
 
 
@@ -1535,7 +1638,7 @@ def message_filters(room_id, params):
         values.append(f"@{mention}")
     if "kind" in params:
         if params["kind"] not in ("opinion", "moderation", "receipt", "chat"):
-            raise ValueError("发言职责无效")
+            raise ValueError(Text('发言职责无效'))
         clauses.append("COALESCE(details.kind,'opinion')=?")
         values.append(params["kind"])
     if params.get("host") == "1":
@@ -1548,7 +1651,7 @@ def message_filters(room_id, params):
     if "after" in params:
         after = int(params["after"])
         if after < 0 or int(params.get("page", 1)) != 1:
-            raise ValueError("after 需为非负消息编号，不能与翻页同时使用")
+            raise ValueError(Text('after 需为非负消息编号，不能与翻页同时使用'))
         clauses.append("messages.id>?")
         values.append(after)
     if params.get("withdrawn") != INCLUDE_WITHDRAWN:
@@ -1573,6 +1676,10 @@ def query_messages(connection, room_id, params, token=""):
               "pages": max(1, (total + size - 1) // size)}
     if "after" in params:
         result.update(next_after=messages[-1]["id"] if messages else int(params["after"]), has_more=len(rows) > size)
+        # The unfiltered transcript also takes the cards of its batch, for history older than the room view's recent cards.
+        unfiltered = not any(params.get(name) for name in ("q", "author", "mention", "kind", "host", "submission_id"))
+        if params.get("cards") == "1" and cutoff is None and unfiltered and params.get("withdrawn") == INCLUDE_WITHDRAWN:
+            result["cards"] = history_cards(connection, room_id, (int(params["after"]), result["next_after"] if result["has_more"] else None))
     return result
 
 
@@ -1586,7 +1693,7 @@ def get_message(connection, room_id, message_id, params=None, token=""):
         values.append(cutoff)
     row = connection.execute(f"{MESSAGE_QUERY} WHERE {where} AND messages.id=?", [*values, message_id]).fetchone()
     if row is None:
-        raise LookupError("消息不存在")
+        raise LookupError(Text('消息不存在'))
     return message_with_attachments(connection, row)
 
 
@@ -1595,15 +1702,15 @@ def update_state(connection, room_id, payload):
     text = str(payload.get("text", "")).strip()
     brief = str(payload.get("brief", "")).strip()
     if len(text) > MAX_STATE_LENGTH or len(brief) > MAX_BRIEF_LENGTH:
-        raise ValueError(f"讨论状态最多 {MAX_STATE_LENGTH} 字，主持简报最多 {MAX_BRIEF_LENGTH} 字")
+        raise ValueError(Text('讨论状态最多 {value1} 字，主持简报最多 {value2} 字', value1=MAX_STATE_LENGTH, value2=MAX_BRIEF_LENGTH))
     room = require_room(connection, room_id)
     require_host(room, {"actor": payload.get("actor", "用户")})
     until = int(payload.get("until", room["latest_id"]))
     if until < 0 or until > room["latest_id"]:
-        raise ValueError("讨论状态的截止编号无效")
+        raise ValueError(Text('讨论状态的截止编号无效'))
     saved_brief = connection.execute("SELECT until FROM room_briefs WHERE room_id=?", (room_id,)).fetchone()
     if "brief" in payload and saved_brief and until < saved_brief["until"]:
-        raise ValueError(f"简报已整理至 #{saved_brief['until']}，截止编号不能回退；请先读取最新状态")
+        raise ValueError(Text('简报已整理至 #{value1}，截止编号不能回退；请先读取最新状态', value1=saved_brief['until']))
     connection.execute("UPDATE rooms SET state_text=?,state_until=? WHERE id=?", (text, until, room_id))
     if "brief" in payload:
         connection.execute("""INSERT INTO room_briefs (room_id,text,until,updated_at) VALUES (?,?,?,?)
@@ -1617,99 +1724,215 @@ def update_state(connection, room_id, payload):
     return require_room(connection, room_id)
 
 
-def state_reading_text(room):
+@lru_cache(maxsize=1)
+def english_reading_dictionary():
+    """Load the English strings used by the plain-text room reader."""
+    directory = ROOT / "frontend" / "locales" / "en"
+    dictionary = {}
+    for path in sorted(directory.rglob("*.json")):
+        values = json.loads(path.read_text(encoding="utf-8"))
+        if isinstance(values, dict):
+            dictionary.update(values)
+    return dictionary
+
+
+def read_text(value, language):
+    """Render a fixed `Text` template in the requested language; leave arbitrary source text unchanged."""
+    if not isinstance(value, Text):
+        return str(value)
+    template = value.template
+    if reading_language(language) == "en":
+        template = english_reading_dictionary().get(template, template)
+    return template.format(**value.params) if value.params else template
+
+
+def reading_field(record, field, language):
+    """Translate a record field only when it carries validated stored template metadata."""
+    value = record.get(field)
+    payload = record.get("texts", {}).get(field)
+    if not payload:
+        return value
+    template = Text(payload["template"], **payload["params"])
+    if str(template) != str(value):
+        return value
+    return read_text(template, language)
+
+
+def reading_identity(value, language):
+    """Translate only fixed default identities, leaving member names intact."""
+    labels = {"用户": Text("用户"), "系统": Text("系统"), "系统任务": Text("系统任务")}
+    return read_text(labels.get(value, value), language)
+
+
+def reading_language(header):
+    """Choose English or Chinese from Accept-Language preferences, defaulting to Chinese."""
+    preferences = []
+    for order, item in enumerate(str(header or "").split(",")):
+        parts = item.strip().split(";")
+        tag = parts[0].strip().lower()
+        quality = 1.0
+        for parameter in parts[1:]:
+            name, separator, value = parameter.strip().partition("=")
+            if separator and name.strip().lower() == "q":
+                try:
+                    quality = float(value)
+                except ValueError:
+                    quality = 0
+        if quality > 0:
+            preferences.append((-quality, order, tag))
+    for _, _, tag in sorted(preferences):
+        if tag.startswith("en"):
+            return "en"
+        if tag.startswith("zh"):
+            return "zh"
+    return "zh"
+
+
+READING_PHASES = {"initial": Text("独立观点"), "discussing": Text("深入讨论"),
+                  "paused": Text("已暂停"), "concluded": Text("已收束")}
+READING_REQUEST_STATUSES = {"queued": Text("排队中"), "answered": Text("已回答"),
+                            "cancelled": Text("已取消"), "skipped": Text("未开始即取消"),
+                            "failed": Text("回答失败")}
+
+
+def state_reading_text(room, language="zh"):
     """Read the host's brief explicitly without adding it to independent-entry overviews."""
     brief = room.get("host_brief")
-    overview = f"主持简报（整理至 #{brief['until']}，{brief['updated_at']}）\n{brief['text']}" if brief and brief["text"] else "主持简报：尚未更新"
-    return f"{overview}\n\n主持人维护的状态（整理至 #{room['state_until']}）\n\n{room['state_text'] or '尚未整理'}"
+    overview = (read_text(Text("主持简报（整理至 #{until}，{updated_at}）\n{text}", until=brief["until"],
+                               updated_at=brief["updated_at"], text=brief["text"]), language)
+                if brief and brief["text"] else read_text(Text("主持简报：尚未更新"), language))
+    state_value = reading_field(room, "state_text", language)
+    state = state_value or read_text(Text("尚未整理"), language)
+    return f"{overview}\n\n{read_text(Text('主持人维护的状态（整理至 #{until}）', until=room['state_until']), language)}\n\n{state}"
 
 
-def message_text(message):
+def message_text(message, language="zh"):
     """Render an original message with its provenance and reply reference."""
-    reply = f" · 回复 #{message['reply_to']}" if message["reply_to"] else ""
-    role = {"moderation": "主持发言", "receipt": "运行回执", "chat": "协作消息"}.get(message.get("kind"), "专家观点")
-    summary = f"\n回答摘要（{message['summary_by']}）：\n{message['summary']}\n\n完整正文：\n" if message.get("summary") else "\n"
-    attachments = "".join(f"\n附件：{item['file_name']}（{item['size']} 字节；ID: {item['id']}）\n{item['download_url']}"
+    reply = read_text(Text(" · 回复 #{reply_to}", reply_to=message["reply_to"]), language) if message["reply_to"] else ""
+    role = read_text({"moderation": Text("主持发言"), "receipt": Text("运行回执"), "chat": Text("协作消息")}.get(
+        message.get("kind"), Text("专家观点")), language)
+    summary = (read_text(Text("\n回答摘要（{summary_by}）：\n{summary}\n\n完整正文：\n",
+                              summary_by=reading_identity(message["summary_by"], language),
+                              summary=reading_field(message, "summary", language)), language)
+               if message.get("summary") else "\n")
+    attachments = "".join(read_text(Text("\n附件：{file_name}（{size} 字节；ID: {id}）\n{download_url}", **item), language)
                           for item in message.get("attachments", []))
-    return f"#{message['id']} · {message['author']} · {message['created_at']}{reply}\n职责：{role}；来源：{message['source']}；提交者：{message.get('submitted_by', '用户')}{summary}{message['text']}{attachments}"
+    return read_text(Text("#{id} · {author} · {created_at}{reply}\n职责：{role}；来源：{source}；提交者：{submitted_by}{summary}{text}{attachments}",
+                          id=message["id"], author=reading_identity(message["author"], language), created_at=message["created_at"], reply=reply,
+                          role=role, source=message["source"], submitted_by=reading_identity(message.get("submitted_by", "用户"), language),
+                          summary=summary, text=reading_field(message, "text", language), attachments=attachments), language)
 
 
-def room_text(connection, room_id, params):
+def room_text(connection, room_id, params, language="zh"):
     """Expose only an overview; readers choose which supporting pages to open."""
     room = require_room(connection, room_id)
     base = f"/r/{room_id}"
-    content = [f"# {room['title']}", f"目标：{room['goal']}",
-               f"主持人：{room['host']}；阶段：{PHASES[room['phase']]}；当前焦点：{room['focus'] or '尚未填写'}",
-               f"当前记录截止 #{room['latest_id']}；共 {room['message_count']} 条；已完成 {room['completed_rounds']} 轮讨论（所有参与专家各发言一次）。"]
+    phase = read_text(READING_PHASES.get(room["phase"], PHASES.get(room["phase"], room["phase"])), language)
+    focus = room["focus"] or read_text(Text("尚未填写"), language)
+    title = reading_field(room, "title", language)
+    goal = reading_field(room, "goal", language)
+    content = [f"# {title}", read_text(Text("目标：{goal}", goal=goal), language),
+               read_text(Text("主持人：{host}；阶段：{phase}；当前焦点：{focus}", host=reading_identity(room["host"], language), phase=phase, focus=focus), language),
+               read_text(Text("当前记录截止 #{latest_id}；共 {message_count} 条；已完成 {completed_rounds} 轮讨论（所有参与专家各发言一次）。",
+                              latest_id=room["latest_id"], message_count=room["message_count"],
+                              completed_rounds=room["completed_rounds"]), language)]
     limits = room["limits"]
-    content.append(f"讨论上限：{limits['max_rounds'] or '不限'} 轮；总时长 {limits['max_minutes'] or '不限'} 分钟；到限后讨论结束，房间照常协作。到限：{limits['reached']}。")
+    unlimited = read_text(Text("不限"), language)
+    content.append(read_text(Text("讨论上限：{max_rounds} 轮；总时长 {max_minutes} 分钟；到限后讨论结束，房间照常协作。到限：{reached}。",
+                                 max_rounds=limits["max_rounds"] or unlimited,
+                                 max_minutes=limits["max_minutes"] or unlimited, reached=limits["reached"]), language))
     participant = params.get("participant", params.get("for"))
-    members = "；".join(f"{item['name']}（已读至 #{item['read_until']}，待投递 {item['pending']}）" for item in room["free"]["members"])
+    members = "；".join(read_text(Text("{name}（已读至 #{read_until}，待投递 {pending}）", name=item["name"],
+                                        read_until=item["read_until"], pending=item["pending"]), language)
+                       for item in room["free"]["members"])
     if current_session(connection, room_id, active_only=True):
         current = room.get("current_turn")
-        assignment = f"当前安排 #{current['id']}：{current['expert']}" if current else "当前没有专家安排"
-        content.append(f"讨论会话处于{PHASES[room['phase']]}；{assignment}。其余成员安排按队列执行。成员：{members or '无'}。专家回答须关联本次执行或手动请求，已结束的执行或失效请求不能改作普通发言。")
+        assignment = (read_text(Text("当前安排 #{id}：{expert}", id=current["id"], expert=current["expert"]), language)
+                      if current else read_text(Text("当前没有专家安排"), language))
+        content.append(read_text(Text("讨论会话处于{phase}；{assignment}。其余成员安排按队列执行。成员：{members}。专家回答须关联本次执行或手动请求，已结束的执行或失效请求不能改作普通发言。",
+                                     phase=phase, assignment=assignment, members=members or read_text(Text("无"), language)), language))
     else:
-        content.append(f"房间（未开讨论）：无发言权、安排与轮次。成员：{members or '无'}。用户的消息点名成员后生成请求；成员回答须带本次执行编号，执行结束、被打断或过期后的回答会被拒绝，不能改作普通发言；只被本机服务判失败、未被重试的执行仍收下回答。")
-    content.extend(["", "## 按需展开", f"背景、边界与参与专家：{base}/brief",
-                    f"共识与分歧（整理至 #{room['state_until']}）：{base}/state",
-                    "## 读取与检索", f"完整历史（分页）：{base}/messages?page=1",
-                    f"单条原文：{base}/messages/消息编号", f"检索：{base}/search?q=关键词&page=1",
-                    f"按作者检索：{base}/search?author=Claude", f"发言安排历史：{base}/turns?page=1"])
+        content.append(read_text(Text("房间（未开讨论）：无发言权、安排与轮次。成员：{members}。用户的消息点名成员后生成请求；成员回答须带本次执行编号，执行结束、被打断或过期后的回答会被拒绝，不能改作普通发言；只被本机服务判失败、未被重试的执行仍收下回答。",
+                                     members=members or read_text(Text("无"), language)), language))
+    content.extend(["", read_text(Text("## 按需展开"), language),
+                    read_text(Text("背景、边界与参与专家：{url}", url=f"{base}/brief"), language),
+                    read_text(Text("共识与分歧（整理至 #{until}）：{url}", until=room["state_until"], url=f"{base}/state"), language),
+                    read_text(Text("## 读取与检索"), language),
+                    read_text(Text("完整历史（分页）：{url}", url=f"{base}/messages?page=1"), language),
+                    read_text(Text("单条原文：{url}", url=f"{base}/messages/消息编号"), language),
+                    read_text(Text("检索：{url}", url=f"{base}/search?q=关键词&page=1"), language),
+                    read_text(Text("按作者检索：{url}", url=f"{base}/search?author=Claude"), language),
+                    read_text(Text("发言安排历史：{url}", url=f"{base}/turns?page=1"), language)])
     if participant:
-        content.append(f"与 @{participant} 相关的观点：{base}/search?mention={participant}&page=1")
-    content.extend(participation_text())
+        content.append(read_text(Text("与 @{participant} 相关的观点：{url}", participant=participant,
+                                      url=f"{base}/search?mention={participant}&page=1"), language))
+    content.extend(participation_text(language))
     return "\n\n".join(content)
 
 
-def participation_text():
+def participation_text(language="zh"):
     """Readers are local AIs; they follow the skills rather than a guide embedded here."""
-    return ["", "## 本地 AI", "本地 AI 请调用 discuss-participant（主持人另调用 discuss-host），用 codiscuss 命令读写；"
-            "字段与写入规则以 codiscuss room protocol 为准，不直接调用网站接口。",
-            "主持人可以兼任专家；作者、职责与来源尚未认证。"]
+    return ["", read_text(Text("## 本地 AI"), language),
+            read_text(Text("本地 AI 请调用 discuss-participant（主持人另调用 discuss-host），用 codiscuss 命令读写；字段与写入规则以 codiscuss room protocol 为准，不直接调用网站接口。"), language),
+            read_text(Text("主持人可以兼任专家；作者、职责与来源尚未认证。"), language)]
 
 
-def brief_text(room):
+def brief_text(room, language="zh"):
     """Render the detailed brief only when explicitly requested."""
     experts = "\n".join(f"- {name}" for name in room["experts"])
-    return f"# {room['title']} · 话题资料\n\n目标：{room['goal']}\n\n用户原文：\n{room['user_request'] or '未填写'}\n\n背景：\n{room['background'] or '未填写'}\n\n边界：\n{room['boundaries'] or '未填写'}\n\n主持人：{room['host']}（可兼任专家）\n\n参与专家：\n{experts}"
+    missing = read_text(Text("未填写"), language)
+    return read_text(Text("# {title} · 话题资料\n\n目标：{goal}\n\n用户原文：\n{user_request}\n\n背景：\n{background}\n\n边界：\n{boundaries}\n\n主持人：{host}（可兼任专家）\n\n参与专家：\n{experts}",
+                          title=reading_field(room, "title", language), goal=reading_field(room, "goal", language), user_request=room["user_request"] or missing,
+                          background=room["background"] or missing, boundaries=room["boundaries"] or missing,
+                          host=reading_identity(room["host"], language), experts=experts), language)
 
 
-def turn_text(turn, room):
+def turn_text(turn, room, language="zh"):
     """Render a discussion assignment without embedding discussion context."""
     room_id = room["id"]
     answer_id = turn.get("answer_id")
-    answer = f"\n回答原文：/r/{room_id}/messages/{answer_id}" if answer_id else ""
-    label = turn.get("status_label") or (pending_label(room, turn["expert"]) if turn["status"] == "open"
-                                         else REQUEST_STATUSES.get(turn["status"], turn["status"]))
-    association = f"关联请求：{turn.get('member_request_id') or '尚未派发'}"
-    return f"安排 #{turn['id']} · {turn['expert']} · {label}\n待回应问题：{turn['question']}\n话题入口：/r/{room_id}?participant={turn['expert']}\n{association}{answer}\n本地成员凭自己的请求或执行保存完整回答，较长回答可附摘要。"
+    answer = (read_text(Text("\n回答原文：{url}", url=f"/r/{room_id}/messages/{answer_id}"), language)
+              if answer_id else "")
+    status_label = turn.get("status_label")
+    if turn["status"] == "open" or status_label == "open":
+        label = read_text(pending_label(room, turn["expert"]), language)
+    elif isinstance(status_label, Text):
+        label = read_text(status_label, language)
+    elif status_label in READING_REQUEST_STATUSES:
+        label = read_text(READING_REQUEST_STATUSES[status_label], language)
+    elif status_label:
+        label = turn["status_label"]
+    else:
+        label = read_text(READING_REQUEST_STATUSES.get(turn["status"], Text(REQUEST_STATUSES.get(turn["status"], turn["status"]))), language)
+    association_id = turn.get("member_request_id") or read_text(Text("尚未派发"), language)
+    return read_text(Text("安排 #{id} · {expert} · {label}\n待回应问题：{question}\n话题入口：{url}\n关联请求：{association}{answer}\n本地成员凭自己的请求或执行保存完整回答，较长回答可附摘要。",
+                          id=turn["id"], expert=turn["expert"], label=label, question=turn["question"],
+                          url=f"/r/{room_id}?participant={turn['expert']}", association=association_id, answer=answer), language)
 
 
-def protocol_text(room):
+def protocol_text(room, language="zh"):
     """Describe the unified request/execution protocol separately from discussion material."""
-    base = f"/api/rooms/{room['id']}"
     paragraphs = [
-        "# 协作房间参与协议",
-        "当前主持人：HOST。房间是底座，讨论与 Goal 是房间内临时开启的模式；房间请求与讨论请求共用成员执行。",
-        "先用 room view 读取成员、职责、free.requests、session 与阶段，再按需读取原文。任务中的 purpose=discuss 表示讨论发言，discuss_host 表示主持任务，ask 表示直接提问；内部任务来源不是普通发言。",
-        "用户管理和讨论开关使用房主凭据；本地成员使用本人的 --access-file，不借用其他身份。凭据私下交付，不公开 token。API 参与者遵循相同请求与执行约束，source=api；本地 CLI 使用 source=cli。",
-        "runner 成员等待本机接入程序交付任务，用 execution view 核对本次执行和请求，再以 message post --as 本人 --kind chat --execution 本次编号 --access-file FILE 回答。执行失效后保留草稿，不能去掉编号改作普通发言；认领、续租与后续投递由接入程序处理。",
-        "manual 本地成员首次用 member register 注册，会话 ID 由 CLI 自动取得；回答用 --request 请求编号，不编造执行编号。讨论不使用原生定时；原会话不能托管时由用户触发。",
-        "房间里的 host 可用 --to 点名成员，route 表示未点名的用户请求，handoff 表示派出任务已结束；链上 AI 派活受房间预算限制。--to 多位并加 --sequential 时按点名顺序依次接力，每棒一轮，最后交回主持人；--with 成员 与紧挨在前的 --to 同一棒同时做，这一组全部结束才交下一棒；--detach 成员 与这次派活同时开工但不等它（失败时通知主持人）；--keep-working 派活后自己不结束这一轮、接着工作：这条回答收为派活卡，后续工作另起一张卡，做完照常回答（同一执行凭据即可），派出的工作结束时以通知交回；不能与 --continue、--sequential、--next-review 同用；再加 --loop 则交回为检查点，用 sequence continue --request 交接请求编号 开始下一圈，不继续即直接验收。普通成员的 --to 或正文 @ 只保存回应建议，不直接唤醒；不点名自己、不扩大授权。",
-        "讨论中的用户 @ 直接提问独立排队，不计讨论轮次、不与讨论发言合并。initial 阶段先独立判断；服务端按讨论请求的 read_until 限制读取。直接提问和主持任务不继承该阅读限制。",
-        "主持安排前先 turn roster 读取在场专家、waiting、unregistered 和 revision，再 turn create --roster revision；单项和多项都要带凭据，多项计划须覆盖本轮 waiting。继续排队同样先读 roster，再 turn continue --roster revision。状态或新消息变化后旧凭据被拒绝，重新读取再判断；每个回答保存后由程序推进下一项。",
-        "局部追问先 turn roster 读取 host_requests 的请求与原消息编号，再 turn ask --request ID --expert NAME --roster revision --submission-id UUID；普通提问不计轮次、不改讨论队列，可问已发言者和主持人，只结束指定请求。",
-        "计划或收束成功即完成本次主持执行，无需再提交回答回执。主持说明使用 kind=moderation，不替代专家回答，也不会完成主持执行；主持人作为专家发言须回答自己的 discuss 请求。",
-        "讨论状态读取 GET BASE/discussion；房主先读取 revision，再 POST 同路径提交 start、pause、resume 或 end。CLI 对应 run view/start/pause/resume/stop。开启可携带 submission_id，原编号与原内容重试返回原会话，已结束的会话不会因重试恢复。",
-        "room limits 返回轮次、时长和进度；到限立即结束讨论，不再唤醒主持人总结。暂停不计时，并作废讨论请求和执行；恢复生成新任务，旧执行不得继续写。",
-        "原会话送达失败可等待 60 秒后自动重试，最多 3 次；重试用尽只失败该请求，并交回主持人判断跳过、重排或暂停，不自动暂停整场。结果不明的写入不作为新提交重发。",
-        "保存 state 与主持简报时，until 只覆盖实际已读原文。主动收束前先保存有依据的总结与状态，再 room conclusion 获取 blockers 和 revision，无阻碍后用 room limits --done --conclusion revision；有未处理内容或状态变化时拒绝收束。",
-        "message list --after 按 next_after/has_more 增量读取；message view 核对原文；历史可筛选 opinion/moderation/chat。内部任务不出现在普通消息列表、搜索和统计中，也没有普通发言的撤回或编辑入口。",
-        "附件用 attachment upload/download，最多 10 个、单个 20 MiB；自动成员在完成执行前上传。回答正文最多 32000 个 Unicode 字符，摘要最多 1000 字，较长回答才附摘要，完整原文不截断。",
-        "每次新内容使用新 submission_id，同次重试沿用编号、原文、凭据和执行/请求关联。按 submission_id 查询持久结果；读取失败不表示未写入，不能换身份或编号绕过拒绝。"
+        Text("# 协作房间参与协议"),
+        Text("当前主持人：{host}。房间是底座，讨论与 Goal 是房间内临时开启的模式；房间请求与讨论请求共用成员执行。", host=reading_identity(room["host"], language)),
+        Text("先用 room view 读取成员、职责、free.requests、session 与阶段，再按需读取原文。任务中的 purpose=discuss 表示讨论发言，discuss_host 表示主持任务，ask 表示直接提问；内部任务来源不是普通发言。"),
+        Text("用户管理和讨论开关使用房主凭据；本地成员使用本人的 --access-file，不借用其他身份。凭据私下交付，不公开 token。API 参与者遵循相同请求与执行约束，source=api；本地 CLI 使用 source=cli。"),
+        Text("runner 成员等待本机接入程序交付任务，用 execution view 核对本次执行和请求，再以 message post --as 本人 --kind chat --execution 本次编号 --access-file FILE 回答。执行失效后保留草稿，不能去掉编号改作普通发言；认领、续租与后续投递由接入程序处理。"),
+        Text("manual 本地成员首次用 member register 注册，会话 ID 由 CLI 自动取得；回答用 --request 请求编号，不编造执行编号。讨论不使用原生定时；原会话不能托管时由用户触发。"),
+        Text("房间里的 host 可用 --to 点名成员，route 表示未点名的用户请求，handoff 表示派出任务已结束；链上 AI 派活受房间预算限制。--to 多位并加 --sequential 时按点名顺序依次接力，每棒一轮，最后交回主持人；--with 成员与紧挨在前的 --to 同一棒同时做，这一组全部结束才交下一棒；--detach 成员与这次派活同时开工但不等它（失败时通知主持人）；--keep-working 派活后自己不结束这一轮、接着工作：这条回答收为派活卡，后续工作另起一张卡，做完照常回答（同一执行凭据即可），派出的工作结束时以通知交回；不能与 --continue、--sequential、--next-review 同用；再加 --loop 则交回为检查点，用 sequence continue --request 交接请求编号开始下一圈，不继续即直接验收。普通成员的 --to 或正文 @ 只保存回应建议，不直接唤醒；不点名自己、不扩大授权。"),
+        Text("讨论中的用户 @ 直接提问独立排队，不计讨论轮次、不与讨论发言合并。initial 阶段先独立判断；服务端按讨论请求的 read_until 限制读取。直接提问和主持任务不继承该阅读限制。"),
+        Text("主持安排前先 turn roster 读取在场专家、waiting、unregistered 和 revision，再 turn create --roster revision；单项和多项都要带凭据，多项计划须覆盖本轮 waiting。继续排队同样先读 roster，再 turn continue --roster revision。状态或新消息变化后旧凭据被拒绝，重新读取再判断；每个回答保存后由程序推进下一项。"),
+        Text("局部追问先 turn roster 读取 host_requests 的请求与原消息编号，再 turn ask --request ID --expert NAME --roster revision --submission-id UUID；普通提问不计轮次、不改讨论队列，可问已发言者和主持人，只结束指定请求。"),
+        Text("计划或收束成功即完成本次主持执行，无需再提交回答回执。主持说明使用 kind=moderation，不替代专家回答，也不会完成主持执行；主持人作为专家发言须回答自己的 discuss 请求。"),
+        Text("讨论状态读取 GET {base}/discussion；房主先读取 revision，再 POST 同路径提交 start、pause、resume 或 end。CLI 对应 run view/start/pause/resume/stop。开启可携带 submission_id，原编号与原内容重试返回原会话，已结束的会话不会因重试恢复。", base=f"/api/rooms/{room['id']}"),
+        Text("room limits 返回轮次、时长和进度；到限立即结束讨论，不再唤醒主持人总结。暂停不计时，并作废讨论请求和执行；恢复生成新任务，旧执行不得继续写。"),
+        Text("原会话送达失败可等待 60 秒后自动重试，最多 3 次；重试用尽只失败该请求，并交回主持人判断跳过、重排或暂停，不自动暂停整场。结果不明的写入不作为新提交重发。"),
+        Text("保存 state 与主持简报时，until 只覆盖实际已读原文。主动收束前先保存有依据的总结与状态，再 room conclusion 获取 blockers 和 revision，无阻碍后用 room limits --done --conclusion revision；有未处理内容或状态变化时拒绝收束。"),
+        Text("message list --after 按 next_after/has_more 增量读取；message view 核对原文；历史可筛选 opinion/moderation/chat。内部任务不出现在普通消息列表、搜索和统计中，也没有普通发言的撤回或编辑入口。"),
+        Text("附件用 attachment upload/download，最多 10 个、单个 20 MiB；自动成员在完成执行前上传。回答正文最多 32000 个 Unicode 字符，摘要最多 1000 字，较长回答才附摘要，完整原文不截断。"),
+        Text("每次新内容使用新 submission_id，同次重试沿用编号、原文、凭据和执行/请求关联。按 submission_id 查询持久结果；读取失败不表示未写入，不能换身份或编号绕过拒绝。")
 ]
-    return "\n\n".join(paragraphs).replace("HOST", room["host"]).replace("BASE", base)
+    return "\n\n".join(read_text(paragraph, language) for paragraph in paragraphs)
 
 
 def update_frame(rooms):
@@ -1741,7 +1964,7 @@ class DiscussionServer(ThreadingHTTPServer):
         self.update_log = collections.deque(maxlen=UPDATE_LOG_SIZE)
         self.updates_closed = False
         if local_launch and (address[0] != "127.0.0.1" or hub):
-            raise ValueError("本机启动入口须绑定 127.0.0.1")
+            raise ValueError(Text('本机启动入口须绑定 127.0.0.1'))
         self.local_launch = local_launch
         # Project media the local page may play: ticket -> (path, size, mtime_ns, content_type, name, expires).
         self.media_tickets = {}
@@ -1796,6 +2019,8 @@ class DiscussionHandler(BaseHTTPRequestHandler):
 
     def respond(self, body, status=200, content_type="application/json"):
         """Send a UTF-8 response that browsers and proxies must not cache."""
+        if isinstance(body, dict) and isinstance(body.get("error"), Text):
+            body = {**body, **error_body(body["error"])}
         parts = urlsplit(self.path).path.strip("/").split("/")
         action = (getattr(self, "payload_cache", None) or {}).get("action")
         # Timeline segments are read by the timeline page on its own schedule, so they wake no other page.
@@ -1812,7 +2037,8 @@ class DiscussionHandler(BaseHTTPRequestHandler):
                                "client": self.headers.get("User-Agent", "").split(" ")[0][:60], "bridged": bool(getattr(self, "bridged", False)),
                                "token": self.headers.get("X-Discussion-Token", ""),
                                "payload": getattr(self, "payload_cache", None) or getattr(self, "request_params", {}),
-                               "error": body.get("error", "") if status >= 400 and isinstance(body, dict) else ""}
+                               "error": body.get("error", "") if status >= 400 and isinstance(body, dict) else "",
+                               "error_text": body.get("error_text") if status >= 400 and isinstance(body, dict) else None}
         if content_type == "application/json":
             body = json.dumps(body, ensure_ascii=False)
         data = body.encode("utf-8") if isinstance(body, str) else body
@@ -1860,10 +2086,10 @@ class DiscussionHandler(BaseHTTPRequestHandler):
             return self.payload_cache
         length = int(self.headers.get("Content-Length", "0"))
         if not 0 < length <= limit:
-            raise ValueError("请求内容为空或过大")
+            raise ValueError(Text('请求内容为空或过大'))
         payload = json.loads(self.rfile.read(length))
         if not isinstance(payload, dict):
-            raise ValueError("请求必须是 JSON 对象")
+            raise ValueError(Text('请求必须是 JSON 对象'))
         self.payload_cache = payload
         return payload
 
@@ -1908,8 +2134,8 @@ class DiscussionHandler(BaseHTTPRequestHandler):
             return False
         self.close_connection = True
         # Sent directly, not through respond(): a refused caller leaves nothing in any room's event log.
-        message = "这个工作台只接受经入口的访问；本机管理员请从任务栏图标或桌面“共议”打开"
-        self.send_payload(403, "application/json", json.dumps({"error": message}, ensure_ascii=False).encode("utf-8"))
+        message = Text("这个工作台只接受经入口的访问；本机管理员请从任务栏图标或桌面“共议”打开")
+        self.send_payload(403, "application/json", json.dumps(error_body(message), ensure_ascii=False).encode("utf-8"))
         return True
 
     def open_browser_session(self, policy, parsed):
@@ -1918,7 +2144,9 @@ class DiscussionHandler(BaseHTTPRequestHandler):
         key = open_link_key(policy, params.get("at"), params.get("sig"), int(time.time()))
         self.close_connection = True
         if not key:
-            self.send_payload(403, "text/plain", "链接已失效，请从任务栏图标或桌面“共议”重新打开。".encode("utf-8"))
+            language = reading_language(self.headers.get("Accept-Language"))
+            message = read_text(Text("链接已失效，请从任务栏图标或桌面“共议”重新打开。"), language)
+            self.send_payload(403, "text/plain", message.encode("utf-8"))
             return True
         self.send_response(302)
         cookie = f"{browser_cookie_name(self.server.server_port)}={proof(key, 'browser', 'site')}"
@@ -1958,21 +2186,26 @@ class DiscussionHandler(BaseHTTPRequestHandler):
                     return self.handle_text(connection, parts, params)
                 return self.handle_api(connection, parts, params, method)
         except AdminError as error:
-            return self.respond({"error": str(error)}, error.status)
+            return self.respond(error_body(error), error.status)
         except PermissionError as error:
-            return self.respond({"error": str(error)}, 403)
+            return self.respond(error_body(error), 403)
         except (ValueError, TypeError) as error:
-            return self.respond(str(error) if text_mode else {"error": str(error)}, 400,
+            return self.respond(self.plain_error(error) if text_mode else error_body(error), 400,
                                 "text/plain" if text_mode else "application/json")
         except LookupError as error:
-            return self.respond(str(error) if text_mode else {"error": str(error)}, 404,
+            return self.respond(self.plain_error(error) if text_mode else error_body(error), 404,
                                 "text/plain" if text_mode else "application/json")
         except FileExistsError as error:
-            return self.respond(str(error) if text_mode else {"error": str(error)}, 409,
+            return self.respond(self.plain_error(error) if text_mode else error_body(error), 409,
                                 "text/plain" if text_mode else "application/json")
         except Exception:
             logging.exception("Request failed")
-            return self.respond({"error": "服务器内部错误"}, 500)
+            return self.respond(error_body(Text("服务器内部错误")), 500)
+
+    def plain_error(self, error):
+        """Render a `/r` reading error in the reader's Accept-Language; untemplated errors stay as raised."""
+        value = error.args[0] if len(error.args) == 1 and isinstance(error.args[0], Text) else str(error)
+        return read_text(value, self.headers.get("Accept-Language", ""))
 
     def do_GET(self):
         """Handle read-only GET requests."""
@@ -2021,22 +2254,22 @@ class DiscussionHandler(BaseHTTPRequestHandler):
         """Handle preflight only for explicitly connected websites on the local bridge."""
         if urlsplit(self.path).path.startswith("/api/local/"):
             return self.dispatch("OPTIONS")
-        return self.respond({"error": "地址不存在"}, 404)
+        return self.respond({"error": Text('地址不存在')}, 404)
 
     def local_request_site(self, method):
         """Authenticate a local page or a site-bound browser connection before reading configuration."""
         if not self.server.local_launch:
-            raise LookupError("本机启动未启用，请使用 python server.py --local-launch")
+            raise LookupError(Text('本机启动未启用，请使用 python server.py --local-launch'))
         allowed_hosts = {f"127.0.0.1:{self.server.server_port}", f"localhost:{self.server.server_port}"}
         host = self.headers.get("Host", "")
         origin = self.headers.get("Origin")
         if self.client_address[0] != "127.0.0.1" or host not in allowed_hosts:
-            raise PermissionError("本机启动只接受本机同源请求")
+            raise PermissionError(Text('本机启动只接受本机同源请求'))
         if origin and origin != f"http://{host}":
             return self.connected_request_site(origin, method)
         if (method == "OPTIONS" or self.headers.get("X-CoDiscuss-Local") != "1"
                 or self.headers.get("Sec-Fetch-Site", "same-origin") not in ("same-origin", "none")):
-            raise PermissionError("本机启动只接受本机同源请求")
+            raise PermissionError(Text('本机启动只接受本机同源请求'))
         return f"http://{host}"
 
     def connected_request_site(self, origin, method):
@@ -2047,22 +2280,22 @@ class DiscussionHandler(BaseHTTPRequestHandler):
         # A website the runner relays for reaches this computer only through paired, signed and unlocked devices; a
         # browser credential kept from before would skip all of that.
         if connection.get("bridge_hash"):
-            raise PermissionError("此网站经已配对设备的中转访问这台电脑，不再接受本机连接；请在设置 → 账号中配对这台设备")
+            raise PermissionError(Text('此网站经已配对设备的中转访问这台电脑，不再接受本机连接；请在设置 → 账号中配对这台设备'))
         expected = connection.get("token_hash")
         if not isinstance(expected, str) or not expected:
-            raise PermissionError("此网站尚未连接本机；请运行 codiscuss local connect 站点地址")
+            raise PermissionError(Text('此网站尚未连接本机；请运行 codiscuss local connect 站点地址'))
         self.bridge_origin = origin
         if method == "OPTIONS":
             headers = {value.strip().lower() for value in self.headers.get("Access-Control-Request-Headers", "").split(",")}
             allowed = {"content-type", "x-codiscuss-local", "x-codiscuss-connection"}
             if (self.headers.get("Access-Control-Request-Method") not in ("GET", "POST")
                     or not {"x-codiscuss-local", "x-codiscuss-connection"}.issubset(headers) or headers - allowed):
-                raise PermissionError("连接请求不受支持")
+                raise PermissionError(Text('连接请求不受支持'))
             return origin
         credential = self.headers.get("X-CoDiscuss-Connection", "")
         if (self.headers.get("X-CoDiscuss-Local") != "1" or not re.fullmatch(r"[a-f0-9]{64}", credential)
                 or not hmac.compare_digest(token_hash(credential), expected)):
-            raise PermissionError("本机连接已失效，请重新运行 codiscuss local connect 站点地址")
+            raise PermissionError(Text('本机连接已失效，请重新运行 codiscuss local connect 站点地址'))
         return origin
 
     def handle_local_launch(self, parts, method):
@@ -2101,7 +2334,7 @@ class DiscussionHandler(BaseHTTPRequestHandler):
         elif route in (["device-pairing"], ["devices"]) and method == "POST":
             # Which devices this computer trusts is decided at its own screen; a connected website's page cannot.
             if self.bridge_origin:
-                raise PermissionError("设备配对与撤销只能在这台电脑的本机网页上操作，或在已配对的设备上操作")
+                raise PermissionError(Text('设备配对与撤销只能在这台电脑的本机网页上操作，或在已配对的设备上操作'))
             command = route[0]
         elif route == ["projects"] and method == "POST":
             command = "projects"
@@ -2112,11 +2345,11 @@ class DiscussionHandler(BaseHTTPRequestHandler):
         elif route == ["machine-link"] and method == "POST":
             command = "machine-link"
         else:
-            raise LookupError("本机入口不存在")
+            raise LookupError(Text('本机入口不存在'))
         payload = None
         if method == "POST":
             if self.headers.get_content_type() != "application/json":
-                raise ValueError("本机操作须使用 application/json")
+                raise ValueError(Text('本机操作须使用 application/json'))
             payload = self.read_payload()
             if command in ("start", "room-config", "room-models", "room-skills", "room-files", "room-page", "room-media", "execution-details", "room-member", "room-member-access", "room-member-allow", "room-member-adapter", "room-member-model", "room-profiles", "room-restore", "room-fork", "room-workflow", "room-settings", "workflows"):
                 payload.pop("access_file", None)
@@ -2166,14 +2399,14 @@ class DiscussionHandler(BaseHTTPRequestHandler):
         with self.server.media_lock:
             item = self.server.media_tickets.get(ticket)
         if not item or item[5] <= time.time():
-            raise LookupError("播放地址已过期，请重新打开文件")
+            raise LookupError(Text('播放地址已过期，请重新打开文件'))
         path, size, mtime_ns, content_type, name, _ = item
         try:
             info = path.stat()
         except OSError:
-            raise LookupError("文件已不存在") from None
+            raise LookupError(Text('文件已不存在')) from None
         if (info.st_size, info.st_mtime_ns) != (size, mtime_ns):
-            raise FileExistsError("文件已变化，请重新打开")
+            raise FileExistsError(Text('文件已变化，请重新打开'))
         self.send_file(path, content_type, name, "inline")
 
     def save_local_room_configuration(self, command, payload):
@@ -2186,7 +2419,7 @@ class DiscussionHandler(BaseHTTPRequestHandler):
             revision = payload.get("session_revision", payload.get("runtime_revision"))
             if (room["archived"] or not discussion["session"] or discussion["session"]["status"] != "paused"
                     or discussion["revision"] != revision):
-                raise FileExistsError("房间状态已变化，请暂停后重新读取本场配置")
+                raise FileExistsError(Text('房间状态已变化，请暂停后重新读取本场配置'))
             return self.run_local_command(command, payload, configuration_locked=True)
 
     def run_local_command(self, command, payload, configuration_locked=False, remote=False):
@@ -2210,11 +2443,11 @@ class DiscussionHandler(BaseHTTPRequestHandler):
                                     capture_output=True, encoding="utf-8", timeout=DIRECTORY_PICKER_TIMEOUT if command == "pick-directory" else LOCAL_LAUNCH_TIMEOUT,
                                     creationflags=subprocess.CREATE_NO_WINDOW if os.name == "nt" else 0)
         except FileNotFoundError as error:
-            raise ValueError("本机启动需要 Node.js 24+，请安装并加入 PATH") from error
+            raise ValueError(Text('本机启动需要 Node.js 24+，请安装并加入 PATH')) from error
         except subprocess.TimeoutExpired as error:
             if command == "pick-directory":
-                raise ValueError("目录选择窗口已超时，请重试或直接输入完整路径") from error
-            raise ValueError("启动结果未确认，请核对房间状态后沿用原配置重试") from error
+                raise ValueError(Text('目录选择窗口已超时，请重试或直接输入完整路径')) from error
+            raise ValueError(Text('启动结果未确认，请核对房间状态后沿用原配置重试')) from error
         if result.returncode:
             try:
                 failure = json.loads(result.stderr.strip())
@@ -2244,7 +2477,7 @@ class DiscussionHandler(BaseHTTPRequestHandler):
         if self.entry_member_request():
             require_owner(connection, room_id, token)
         elif self.server.entry_policy.enabled and not self.local_visitor():
-            raise PermissionError("需要本房间的控制凭据")
+            raise PermissionError(Text('需要本房间的控制凭据'))
 
     def local_visitor(self):
         """Whether this request may act as the loopback-only site's implicit administrator.
@@ -2281,9 +2514,9 @@ class DiscussionHandler(BaseHTTPRequestHandler):
         expected = settings.get("sites", {}).get(self.headers.get("X-CoDiscuss-Bridge-Site", ""), {}).get("bridge_hash")
         if (not self.server.local_site or self.client_address[0] != "127.0.0.1" or not isinstance(expected, str)
                 or not re.fullmatch(r"[a-f0-9]{64}", credential) or not hmac.compare_digest(token_hash(credential), expected)):
-            raise PermissionError("本机中转凭据无效，请在电脑上重新连接网站")
+            raise PermissionError(Text('本机中转凭据无效，请在电脑上重新连接网站'))
         if parts[:1] != ["api"] or parts[1:2] not in (["rooms"], ["folders"], ["revisions"]):
-            raise PermissionError("本机中转不允许访问该地址")
+            raise PermissionError(Text('本机中转不允许访问该地址'))
         return True
 
     def admin_as_owner(self, connection, room_id):
@@ -2306,10 +2539,10 @@ class DiscussionHandler(BaseHTTPRequestHandler):
         if parts == ["api", "admin", "sessions"] and method == "GET" and not self.server.local_site:
             return self.respond(list_sessions(connection, token, now))
         if len(parts) != 3 or method != "POST":
-            raise LookupError("地址不存在")
+            raise LookupError(Text('地址不存在'))
         payload = self.read_payload()
         if self.server.local_site and parts[2] != "profile":
-            raise ValueError("本地站点无需管理员账号")
+            raise ValueError(Text('本地站点无需管理员账号'))
         # The remote entry sits behind Cloudflare Tunnel, which names the client; without it every attempt shares one address.
         source = self.headers.get("CF-Connecting-IP") or self.client_address[0]
         label = self.headers.get("User-Agent", "")
@@ -2320,7 +2553,7 @@ class DiscussionHandler(BaseHTTPRequestHandler):
                    "password": lambda: change_password(connection, token, payload, now, source),
                    "profile": lambda: update_profile(connection, token, payload, self.server.local_site)}
         if parts[2] not in actions:
-            raise LookupError("地址不存在")
+            raise LookupError(Text('地址不存在'))
         result = actions[parts[2]]()
         connection.commit()
         # A new login goes into an HttpOnly cookie only, so page scripts never see the token; logging out clears it.
@@ -2347,14 +2580,14 @@ class DiscussionHandler(BaseHTTPRequestHandler):
             connection.commit()
             return self.respond(result)
         if not self.admin_session(connection):
-            raise AdminError("需要登录管理员账号", 401)
+            raise AdminError(Text('需要登录管理员账号'), 401)
         if parts[1] == "machines" and parts[3:4] == ["commands"]:
             if len(parts) == 4 and method == "POST":
                 result = submit_machine_command(connection, parts[2], self.read_payload(), now)
             elif len(parts) == 5 and method == "GET":
                 result = machine_command_status(connection, parts[2], parts[4])
             else:
-                raise LookupError("地址不存在")
+                raise LookupError(Text('地址不存在'))
             connection.commit()
             return self.respond(result)
         if parts == ["api", "machines"] and method == "GET":
@@ -2366,7 +2599,7 @@ class DiscussionHandler(BaseHTTPRequestHandler):
         elif len(parts) == 3 and parts[1] == "remote-launches" and method == "GET":
             return self.respond(remote_launch_status(connection, parts[2]))
         else:
-            raise LookupError("地址不存在")
+            raise LookupError(Text('地址不存在'))
         connection.commit()
         return self.respond(result)
 
@@ -2389,7 +2622,7 @@ class DiscussionHandler(BaseHTTPRequestHandler):
             return self.handle_admin_api(connection, parts, method)
         if parts == ["api", "scheduler-feedback"] and method == "GET":
             if not self.admin_session(connection):
-                raise AdminError("需要登录管理员账号", 401)
+                raise AdminError(Text('需要登录管理员账号'), 401)
             return self.respond(list_feedback_cases(connection, int(params.get("after", 0))))
         if parts[1:2] in (["machines"], ["remote-launches"]):
             return self.handle_remote_launch_api(connection, parts, method)
@@ -2404,7 +2637,7 @@ class DiscussionHandler(BaseHTTPRequestHandler):
         if parts == ["api", "rooms", "last"] and method == "POST":
             # Only the manager (this computer's page, a relayed device or a signed-in administrator) moves it.
             if not (self.bridged or self.admin_session(connection)):
-                raise PermissionError("需要管理员身份")
+                raise PermissionError(Text('需要管理员身份'))
             result = remember_last_room(connection, self.read_payload())
             connection.commit()
             return self.respond(result)
@@ -2435,7 +2668,7 @@ class DiscussionHandler(BaseHTTPRequestHandler):
             connection.commit()
             return self.respond(result)
         if len(parts) < 3 or parts[:2] != ["api", "rooms"]:
-            raise LookupError("地址不存在")
+            raise LookupError(Text('地址不存在'))
         room_id = parts[2]
         if parts[3:] == ["progress"] and method == "GET":
             return self.respond(room_progress(connection, room_id))
@@ -2453,7 +2686,7 @@ class DiscussionHandler(BaseHTTPRequestHandler):
                 drain_room_queue(connection, room_id)
                 connection.commit()
                 return self.respond(result)
-            raise LookupError("地址不存在")
+            raise LookupError(Text('地址不存在'))
         if parts[3:] == ["mode"]:
             if method == "GET":
                 return self.respond(mode_view(connection, room_id))
@@ -2461,7 +2694,7 @@ class DiscussionHandler(BaseHTTPRequestHandler):
                 result = finish_mode(connection, room_id, token, self.read_payload())
                 connection.commit()
                 return self.respond(result)
-            raise LookupError("地址不存在")
+            raise LookupError(Text('地址不存在'))
         if parts[3:] == ["goal"]:
             if method == "GET":
                 return self.respond(goal_view(connection, room_id))
@@ -2469,7 +2702,7 @@ class DiscussionHandler(BaseHTTPRequestHandler):
                 result = goal_action(connection, room_id, token, self.read_payload())
                 connection.commit()
                 return self.respond(result)
-            raise LookupError("地址不存在")
+            raise LookupError(Text('地址不存在'))
         if parts[3:] == ["descriptions"] and method == "POST":
             result = describe_members(connection, room_id, token, self.read_payload())
             connection.commit()
@@ -2577,7 +2810,7 @@ class DiscussionHandler(BaseHTTPRequestHandler):
             self.require_entry_owner(connection, room_id, token)
         if parts[3:] == ["backup"] and method == "GET":
             if session_read_boundary(connection, room_id, token) is not None:
-                raise PermissionError("独立观点阶段需房主凭据导出")
+                raise PermissionError(Text('独立观点阶段需房主凭据导出'))
             return self.respond(room_backup(connection, room_id))
         if len(parts) == 4 and parts[3] in ("move", "folder", "rename", "archive", "restore", "delete") and method == "POST":
             files = connection.execute("SELECT id FROM attachments WHERE room_id=?", (room_id,)).fetchall() if parts[3] == "delete" else []
@@ -2595,7 +2828,7 @@ class DiscussionHandler(BaseHTTPRequestHandler):
             require_room(connection, room_id)
             conclusion = session_conclusion_view(connection, room_id)
             if conclusion is None:
-                raise FileExistsError("房间没有进行中的讨论会话")
+                raise FileExistsError(Text('房间没有进行中的讨论会话'))
             return self.respond(conclusion)
         if parts[3:] == ["limits"]:
             if method == "GET":
@@ -2607,23 +2840,23 @@ class DiscussionHandler(BaseHTTPRequestHandler):
                 return self.respond(require_room(connection, room_id)["limits"])
             payload = self.read_payload()
             if not current_session(connection, room_id, active_only=True):
-                raise FileExistsError("房间没有进行中的讨论会话")
+                raise FileExistsError(Text('房间没有进行中的讨论会话'))
             if payload.get("action") == "check":
                 actor = payload.get("actor", "用户")
                 if actor == "用户":
                     require_owner(connection, room_id, token)
                 elif require_member(connection, room_id, token, actor)["role"] != "host":
-                    raise PermissionError("只有房主或当前 AI 主持人可以检查讨论上限")
+                    raise PermissionError(Text('只有房主或当前 AI 主持人可以检查讨论上限'))
                 enforce_session_limits(connection, room_id)
                 result = require_room(connection, room_id)
             elif payload.get("action") == "done":
                 actor = payload.get("actor")
                 if not actor or require_member(connection, room_id, token, actor)["role"] != "host":
-                    raise PermissionError("主持人收束讨论须使用当前 AI 主持人的成员凭据")
+                    raise PermissionError(Text('主持人收束讨论须使用当前 AI 主持人的成员凭据'))
                 conclude_session_by_host(connection, room_id, payload)
                 result = require_room(connection, room_id)
             elif payload.get("action") == "reopen":
-                raise ValueError("新讨论会话请通过 discussion 接口重新开启")
+                raise ValueError(Text('新讨论会话请通过 discussion 接口重新开启'))
             else:
                 result = update_session_limits(connection, room_id, token, payload)
             connection.commit()
@@ -2644,11 +2877,11 @@ class DiscussionHandler(BaseHTTPRequestHandler):
             if actor == "用户":
                 require_owner(connection, room_id, token)
             elif require_member(connection, room_id, token, actor)["role"] != "host":
-                raise PermissionError("只有房主或当前 AI 主持人可以更新状态")
+                raise PermissionError(Text('只有房主或当前 AI 主持人可以更新状态'))
             result = update_state(connection, room_id, payload)
             connection.commit()
             return self.respond(result)
-        raise LookupError("地址不存在")
+        raise LookupError(Text('地址不存在'))
 
     def handle_attachments(self, connection, parts, params, method):
         """Handle bounded upload, discovery, metadata, and binary download."""
@@ -2660,14 +2893,14 @@ class DiscussionHandler(BaseHTTPRequestHandler):
             token = self.headers.get("X-Discussion-Token", "")
             actor = authorize_free_write(connection, room_id, token, "attachments", {"author": metadata["actor"]})
             if (actor == "用户") != (metadata["actor"] == "用户"):
-                raise PermissionError("附件上传者须与凭据身份一致")
+                raise PermissionError(Text('附件上传者须与凭据身份一致'))
             require_room(connection, room_id)
             length = int(self.headers.get("Content-Length", "-1"))
             if not 0 <= length <= MAX_ATTACHMENT_BYTES:
-                return self.respond({"error": "单个附件最多 20 MiB，须提供 Content-Length"}, 413)
+                return self.respond({"error": Text('单个附件最多 20 MiB，须提供 Content-Length')}, 413)
             data = self.rfile.read(length)
             if len(data) != length:
-                raise ValueError("附件内容不完整")
+                raise ValueError(Text('附件内容不完整'))
             result = store_attachment(connection, self.server.database, room_id, metadata, data)
             return self.respond(result, 200 if result["duplicate"] else 201)
         if method == "POST" and len(parts) == 6 and parts[5] == "import":
@@ -2678,13 +2911,13 @@ class DiscussionHandler(BaseHTTPRequestHandler):
                 return self.respond(attachment)
             if parts[5] == "content":
                 return self.respond_attachment(attachment, params.get("download") == "1")
-        raise LookupError("地址不存在")
+        raise LookupError(Text('地址不存在'))
 
     def import_attachment(self, connection, room_id, attachment_id):
         """Store the original bytes of an attachment recorded by an import; an existing file is kept."""
         length = int(self.headers.get("Content-Length", "-1"))
         if not 0 <= length <= MAX_ATTACHMENT_BYTES:
-            return self.respond({"error": "单个附件最多 20 MiB，须提供 Content-Length"}, 413)
+            return self.respond({"error": Text('单个附件最多 20 MiB，须提供 Content-Length')}, 413)
         data = self.rfile.read(length)
         attachment = imported_attachment(connection, room_id, attachment_id, self.headers.get("X-Discussion-Token", ""), data)
         path = attachment_path(self.server.database, attachment)
@@ -2697,7 +2930,7 @@ class DiscussionHandler(BaseHTTPRequestHandler):
         """Serve stored bytes with a safe disposition, never as executable HTML."""
         path = attachment_path(self.server.database, attachment)
         if not path.is_file():
-            raise LookupError("附件原文件缺失")
+            raise LookupError(Text('附件原文件缺失'))
         disposition = "attachment" if download or attachment["content_type"] == "application/octet-stream" else "inline"
         self.send_file(path, attachment["content_type"], attachment["file_name"], disposition, {"X-Content-SHA256": attachment["sha256"]})
 
@@ -2756,7 +2989,7 @@ class DiscussionHandler(BaseHTTPRequestHandler):
         elif len(parts) == 5 and parts[3] == "scheduler-decisions" and method == "POST":
             result = rate_scheduler_decision(connection, room_id, int(parts[4]), token, self.read_payload())
         else:
-            raise LookupError("地址不存在")
+            raise LookupError(Text('地址不存在'))
         connection.commit()
         return self.respond(result)
 
@@ -2803,7 +3036,7 @@ class DiscussionHandler(BaseHTTPRequestHandler):
         elif parts[3:] == ["host-checkin"] and method == "POST":
             result = set_host_checkin(connection, room_id, token, self.read_payload())
         else:
-            raise LookupError("地址不存在")
+            raise LookupError(Text('地址不存在'))
         drain_room_queue(connection, room_id)
         connection.commit()
         return self.respond(result)
@@ -2820,16 +3053,16 @@ class DiscussionHandler(BaseHTTPRequestHandler):
             if actor == "用户":
                 require_owner(connection, room_id, token)
             elif require_member(connection, room_id, token, actor)["role"] != "host":
-                raise PermissionError("只有房主或当前 AI 主持人可以修改话题资料")
+                raise PermissionError(Text('只有房主或当前 AI 主持人可以修改话题资料'))
             result = update_topic(connection, room_id, payload)
             connection.commit()
             return self.respond(result)
-        raise LookupError("地址不存在")
+        raise LookupError(Text('地址不存在'))
 
     def handle_session_turn_api(self, connection, room_id, parts, params, method):
         """Read and write the plans of the room's discussion through the turns URL family."""
         if method == "POST" and not current_session(connection, room_id):
-            raise ValueError("房间没有讨论会话；请先开启讨论")
+            raise ValueError(Text('房间没有讨论会话；请先开启讨论'))
         if parts[3:] == ["turns"]:
             if method == "GET":
                 require_room(connection, room_id)
@@ -2837,7 +3070,7 @@ class DiscussionHandler(BaseHTTPRequestHandler):
             payload = self.read_payload()
             host = require_member(connection, room_id, self.headers.get("X-Discussion-Token", ""), payload.get("actor"))
             if host["role"] != "host":
-                raise PermissionError("只有当前 AI 主持人可以安排讨论发言")
+                raise PermissionError(Text('只有当前 AI 主持人可以安排讨论发言'))
             result = create_plan(connection, room_id, resolve_member_fields(connection, room_id, payload), require_room(connection, room_id))
             connection.commit()
             return self.respond(result, 200 if result["duplicate"] else 201)
@@ -2848,7 +3081,7 @@ class DiscussionHandler(BaseHTTPRequestHandler):
             begin_write(connection)
             host = require_member(connection, room_id, self.headers.get("X-Discussion-Token", ""), payload.get("actor"))
             if host["role"] != "host":
-                raise PermissionError("只有当前 AI 主持人可以转交讨论追问")
+                raise PermissionError(Text('只有当前 AI 主持人可以转交讨论追问'))
             result = ask_interjection(connection, room_id, resolve_member_fields(connection, room_id, payload), require_room(connection, room_id))
             connection.commit()
             return self.respond(result, 200 if result["duplicate"] else 201)
@@ -2856,7 +3089,7 @@ class DiscussionHandler(BaseHTTPRequestHandler):
             payload = self.read_payload()
             host = require_member(connection, room_id, self.headers.get("X-Discussion-Token", ""), payload.get("actor"))
             if host["role"] != "host":
-                raise PermissionError("只有当前 AI 主持人可以继续讨论安排")
+                raise PermissionError(Text('只有当前 AI 主持人可以继续讨论安排'))
             result = continue_plan(connection, room_id, payload, require_room(connection, room_id))
             connection.commit()
             return self.respond(result)
@@ -2870,44 +3103,48 @@ class DiscussionHandler(BaseHTTPRequestHandler):
             except PermissionError:
                 host = require_member(connection, room_id, token, payload.get("actor"))
                 if host["role"] != "host":
-                    raise PermissionError("只有房主或 AI 主持人可以取消安排")
+                    raise PermissionError(Text('只有房主或 AI 主持人可以取消安排'))
             if payload.get("status") != "cancelled":
-                raise ValueError("新讨论安排只支持专用取消操作")
+                raise ValueError(Text('新讨论安排只支持专用取消操作'))
             result = cancel_plan(connection, room_id, parts[4], payload)
             connection.commit()
             return self.respond(result)
-        raise LookupError("地址不存在")
+        raise LookupError(Text('地址不存在'))
 
     def handle_text(self, connection, parts, params):
         """Expose read-only history and search without JavaScript or MCP."""
         if len(parts) < 2:
-            raise LookupError("请指定房间")
+            raise LookupError(Text('请指定房间'))
         room_id = parts[1]
+        language = reading_language(self.headers.get("Accept-Language", ""))
         token = self.headers.get("X-Discussion-Token", "")
         if len(parts) == 2:
-            body = room_text(connection, room_id, params)
+            body = room_text(connection, room_id, params, language)
         elif parts[2:] in (["brief"], ["state"], ["protocol"]):
             room = room_read_view(connection, require_room(connection, room_id), self.headers.get("X-Discussion-Token", ""))
-            body = brief_text(room) if parts[2] == "brief" else protocol_text(room)
+            body = brief_text(room, language) if parts[2] == "brief" else protocol_text(room, language)
             if parts[2] == "state":
-                body = state_reading_text(room)
+                body = state_reading_text(room, language)
         elif parts[2:] == ["turns"]:
             result = query_session_requests(connection, room_id, params)
             room = require_room(connection, room_id)
-            body = f"第 {result['page']} / {result['pages']} 页，共 {result['total']} 项。\n\n" + "\n\n".join(turn_text(turn, room) for turn in result["turns"])
+            paging = read_text(Text("第 {page} / {pages} 页，共 {total} 项。", page=result["page"], pages=result["pages"], total=result["total"]), language)
+            body = f"{paging}\n\n" + "\n\n".join(turn_text(turn, room, language) for turn in result["turns"])
         elif len(parts) == 4 and parts[2] == "turns":
-            body = turn_text(get_session_request(connection, room_id, parts[3]), require_room(connection, room_id))
+            body = turn_text(get_session_request(connection, room_id, parts[3]), require_room(connection, room_id), language)
         elif parts[2:] in (["messages"], ["search"]):
             result = query_messages(connection, room_id, params, token)
-            items = [message_text(message) for message in result["messages"]]
-            next_page = f"第 {result['page']} / {result['pages']} 页，共 {result['total']} 条。翻页：保留查询条件，修改 page 参数。"
-            body = next_page + "\n\n" + "\n\n---\n\n".join(items or ["没有匹配的消息。"])
+            items = [message_text(message, language) for message in result["messages"]]
+            next_page = read_text(Text("第 {page} / {pages} 页，共 {total} 条。翻页：保留查询条件，修改 page 参数。",
+                                       page=result["page"], pages=result["pages"], total=result["total"]), language)
+            no_messages = read_text(Text("没有匹配的消息。"), language)
+            body = next_page + "\n\n" + "\n\n---\n\n".join(items or [no_messages])
         elif len(parts) == 4 and parts[2] == "messages":
-            body = message_text(get_message(connection, room_id, int(parts[3]), params, token))
+            body = message_text(get_message(connection, room_id, int(parts[3]), params, token), language)
         elif parts[2:] == ["publish"]:
-            return self.respond("URL 发布入口已停用；本地 CLI AI 请使用 POST 留言接口。", 410, "text/plain")
+            return self.respond(read_text(Text("URL 发布入口已停用；本地 CLI AI 请使用 POST 留言接口。"), language), 410, "text/plain")
         else:
-            raise LookupError("地址不存在")
+            raise LookupError(Text('地址不存在'))
         return self.respond(body, content_type="text/plain")
 
 

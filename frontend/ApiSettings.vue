@@ -1,6 +1,7 @@
 <script setup>
 /** An entered key stays only in this component's memory; the local private store returns just an opaque reference. */
 import { computed, inject, ref, watch } from "vue";
+import { t } from "./i18n.js";
 
 const props = defineProps({ name: { type: String, required: true } });
 const { view, bridge } = inject("discussion");
@@ -31,19 +32,22 @@ async function save_key() {
 <template>
   <!-- Label-beside-field rows keep the API back within the same card height as every other face. -->
   <div class="api-settings">
-    <label class="api-field" title="Base URL"><span>地址</span><UInput :model-value="profile.base_url || ''" :aria-label="`${name} Base URL`" placeholder="Base URL" class="w-full" size="xs" @update:model-value="write('base_url', $event)" /></label>
-    <div class="api-field" title="OpenRouter 等兼容服务可选 Chat Completions，并填写该服务的完整模型 ID。"><span>协议</span><USelect :model-value="profile.api_protocol || ''" :items="protocols" :aria-label="`${name} API 请求协议`" class="w-full" size="xs" @update:model-value="write('api_protocol', $event)" /></div>
-    <div v-if="provided" class="api-field"><span>密钥</span><span class="api-provided"><UIcon name="i-lucide-shield-check" />管理员已提供</span></div>
-    <div v-else class="api-field"><span>密钥</span>
+    <label class="api-field" title="Base URL"><span>{{ t("地址") }}</span><UInput :model-value="profile.base_url || ''" :aria-label="`${name} Base URL`" placeholder="Base URL" class="w-full" size="xs" @update:model-value="write('base_url', $event)" /></label>
+    <div class="api-field" :title="t('OpenRouter 等兼容服务可选 Chat Completions，并填写该服务的完整模型 ID。')"><span>{{ t("协议") }}</span><USelect :model-value="profile.api_protocol || ''" :items="protocols" :aria-label="t('{name} API 请求协议', { name })" class="w-full" size="xs" @update:model-value="write('api_protocol', $event)" /></div>
+    <div v-if="provided" class="api-field"><span>{{ t("密钥") }}</span><span class="api-provided"><UIcon name="i-lucide-shield-check" />{{ t("管理员已提供") }}</span></div>
+    <div v-else class="api-field"><span>{{ t("密钥") }}</span>
       <!-- A text field masked by CSS keeps browsers from offering to generate or save a password. -->
-      <UInput v-model="api_key" type="text" autocomplete="off" spellcheck="false" data-1p-ignore data-lpignore="true" :placeholder="profile.api_key_ref ? SAVED_MARK : '填写 API Key'" :title="profile.api_key_ref && !api_key ? '已保存；本机不回传密钥，输入新 Key 可更换' : undefined" :aria-label="`${name} API Key`" size="xs" class="w-full" :loading="saving" :ui="{ base: key_visible ? '' : 'api-key-masked', trailing: 'pe-0.5' }" @change="save_key">
-        <template #trailing><UButton :icon="key_visible ? 'i-lucide-eye' : 'i-lucide-eye-off'" :disabled="!api_key" :aria-label="key_visible ? '隐藏密钥' : '显示密钥'" :aria-pressed="key_visible" size="xs" color="neutral" variant="link" @click="key_visible = !key_visible" /></template>
+      <UInput v-model="api_key" type="text" autocomplete="off" spellcheck="false" data-1p-ignore data-lpignore="true" :placeholder="profile.api_key_ref ? SAVED_MARK : t('填写 API Key')" :title="profile.api_key_ref && !api_key ? t('已保存；本机不回传密钥，输入新 Key 可更换') : undefined" :aria-label="`${name} API Key`" size="xs" class="w-full" :loading="saving" :ui="{ base: key_visible ? '' : 'api-key-masked', trailing: 'pe-0.5' }" @change="save_key">
+        <template #trailing><UButton :icon="key_visible ? 'i-lucide-eye' : 'i-lucide-eye-off'" :disabled="!api_key" :aria-label="key_visible ? t('隐藏密钥') : t('显示密钥')" :aria-pressed="key_visible" size="xs" color="neutral" variant="link" @click="key_visible = !key_visible" /></template>
       </UInput>
     </div>
-    <div class="api-field"><span>模型</span>
-      <div class="api-inline"><UInputMenu mode="autocomplete" ignore-filter :model-value="profile.model || ''" :items="models.items" value-key="value" :aria-label="`${name} API 模型 ID`" placeholder="推荐模型或完整 ID" class="w-full min-w-0" size="xs" @update:model-value="write('model', $event)" />
-        <UButton icon="i-lucide-refresh-cw" :aria-label="`读取 ${name} 的模型列表`" title="读取模型列表" size="xs" color="neutral" variant="ghost" :loading="models.loading" :disabled="!profile.api_key_ref" @click="bridge.load_launch_models(name, true)" /></div>
+    <div class="api-field"><span>{{ t("模型") }}</span>
+      <div class="api-inline"><UInputMenu mode="autocomplete" ignore-filter :model-value="profile.model || ''" :items="models.items" value-key="value" :aria-label="t('{name} API 模型 ID', { name })" :placeholder="t('推荐模型或完整 ID')" class="w-full min-w-0" size="xs" @update:model-value="write('model', $event)" />
+        <UButton icon="i-lucide-refresh-cw" :aria-label="t('读取 {name} 的模型列表', { name })" :title="t('读取模型列表')" size="xs" color="neutral" variant="ghost" :loading="models.loading" :disabled="!profile.api_key_ref" @click="bridge.load_launch_models(name, true)" /></div>
     </div>
+    <!-- Whether the model reads images is the owner's to say: the same protocol serves models with and without vision. -->
+    <label class="api-field" :title="t('打开后，点名它的消息里的图片会随任务直接发给模型；模型不支持看图时请求会出错')"><span>{{ t("看图") }}</span>
+      <span class="api-inline"><USwitch :model-value="profile.image_input === 'image'" :aria-label="t('{name} 的模型能看图', { name })" size="xs" @update:model-value="write('image_input', $event ? 'image' : '')" /><small class="api-hint">{{ t("模型能看图时打开") }}</small></span></label>
     <p v-if="models.error" role="alert">{{ models.error }}</p>
   </div>
 </template>
@@ -54,6 +58,7 @@ async function save_key() {
 .api-inline { display: flex; gap: 4px; min-width: 0; }
 .api-inline > button { flex-shrink: 0; }
 .api-settings :deep(.api-key-masked) { -webkit-text-security: disc; }
+.api-hint { color: var(--ui-text-muted); font-size: 10px; align-self: center; }
 .api-provided { display: inline-flex; align-items: center; gap: 5px; min-height: 24px; color: var(--ui-text-muted); }
 .api-provided > [class*="icon"] { width: 13px; height: 13px; color: var(--ui-success, #3ec486); }
 .api-settings p { margin: 0; color: var(--ui-text-muted); font-size: 10px; line-height: 1.5; overflow-wrap: anywhere; }

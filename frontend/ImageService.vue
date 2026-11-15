@@ -8,6 +8,7 @@
  */
 import { computed, inject, nextTick, onMounted, reactive, ref } from "vue";
 import RosterAdd from "./RosterAdd.vue";
+import { t } from './i18n.js';
 
 const props = defineProps({ enabled: { type: Boolean, default: false }, disabled: { type: Boolean, default: false }, compact: { type: Boolean, default: false } });
 const emit = defineEmits(["update:enabled"]);
@@ -18,9 +19,9 @@ const unavailable = ref("");
 const add_row = ref(null);
 const add_items = computed(() => [{ value: "openai", name: LABEL, initials: "OI", icon: "/icons/openai.svg", style: "codex",
   disabled: props.disabled || Boolean(unavailable.value), selected: props.enabled,
-  title: unavailable.value ? `需连接本机服务：${unavailable.value}` : props.enabled ? "已添加" : LABEL, aria_label: `添加生图服务 ${LABEL}` }]);
+  title: unavailable.value ? t('需连接本机服务：{value1}', { value1: unavailable.value }) : props.enabled ? t('已添加') : LABEL, aria_label: t('添加生图服务 {value1}', { value1: LABEL }) }]);
 const models = computed(() => settings.catalog.map((value) => ({ value, label: value })));
-const status = computed(() => !settings.model ? { tone: "warn", text: "未选模型" } : !settings.api_key_ref ? { tone: "warn", text: "缺少密钥" } : { tone: "ready", text: "已配置" });
+const status = computed(() => !settings.model ? { tone: "warn", text: t('未选模型') } : !settings.api_key_ref ? { tone: "warn", text: t('缺少密钥') } : { tone: "ready", text: t('已配置') });
 const SAVED_MARK = "••••••••••••";
 const editing = ref(false), api_key = ref(""), key_visible = ref(false), saving = ref(false), address = ref("");
 let opened_with = null;
@@ -82,7 +83,7 @@ function toggle(enabled) {
   if (!enabled) editing.value = false;
 }
 // The compact row's one line: the model, or what this computer's service still lacks.
-const summary = computed(() => !props.enabled ? (unavailable.value ? "未开启 · 需连接本机服务" : `未开启 · 可用 ${LABEL}`) : status.value.tone !== "ready" ? `${LABEL} · ${status.value.text}` : `${LABEL} · ${settings.model}`);
+const summary = computed(() => !props.enabled ? (unavailable.value ? t('未开启 · 需连接本机服务') : t('未开启 · 可用 {value1}', { value1: LABEL })) : status.value.tone !== "ready" ? `${LABEL} · ${status.value.text}` : `${LABEL} · ${settings.model}`);
 function remove() {
   editing.value = false;
   emit("update:enabled", false);
@@ -93,51 +94,51 @@ function remove() {
 <template>
   <div class="image-service" :class="{ 'is-compact': compact }">
     <div v-if="compact" class="image-row">
-      <UCheckbox :model-value="enabled" :disabled="disabled || Boolean(unavailable)" label="开启" aria-label="本房间开启生图"
-        :title="unavailable ? `需连接本机服务：${unavailable}` : undefined" @update:model-value="toggle" />
+      <UCheckbox :model-value="enabled" :disabled="disabled || Boolean(unavailable)" :label="t('开启')" :aria-label="t('本房间开启生图')"
+        :title="unavailable ? t('需连接本机服务：{value1}', { value1: unavailable }) : undefined" @update:model-value="toggle" />
       <span class="image-summary" :class="enabled && `is-${status.tone}`" :title="summary"><i v-if="enabled" aria-hidden="true" />{{ summary }}</span>
-      <UButton v-if="enabled && !disabled && !unavailable" :icon="editing ? 'i-lucide-chevron-up' : 'i-lucide-settings-2'" :label="editing ? '收起' : '设置'" size="xs" color="neutral" variant="ghost"
-        :aria-expanded="editing" aria-label="设置生图服务" @click="editing ? editing = false : open_settings()" />
+      <UButton v-if="enabled && !disabled && !unavailable" :icon="editing ? 'i-lucide-chevron-up' : 'i-lucide-settings-2'" :label="editing ? t('收起') : t('设置')" size="xs" color="neutral" variant="ghost"
+        :aria-expanded="editing" :aria-label="t('设置生图服务')" @click="editing ? editing = false : open_settings()" />
     </div>
     <div v-else>
-      <p class="image-title">生图<UBadge size="xs" variant="soft" class="image-badge">图片模型</UBadge><small>可选</small></p>
-      <p class="image-description">接入图片模型，房间里的成员都能按需出图、改图，图片随回答发出；按张计费。</p>
+      <p class="image-title">{{ t('生图') }}<UBadge size="xs" variant="soft" class="image-badge">{{ t('图片模型') }}</UBadge><small>{{ t('可选') }}</small></p>
+      <p class="image-description">{{ t('接入图片模型，房间里的成员都能按需出图、改图，图片随回答发出；按张计费。') }}</p>
     </div>
-    <RosterAdd v-if="!compact" ref="add_row" label="添加生图服务" :items="add_items" @add="add" />
-    <p v-if="!enabled && !compact" class="image-empty">未添加。房间里的成员不能画图。</p>
+    <RosterAdd v-if="!compact" ref="add_row" :label="t('添加生图服务')" :items="add_items" @add="add" />
+    <p v-if="!enabled && !compact" class="image-empty">{{ t('未添加。房间里的成员不能画图。') }}</p>
     <div v-else-if="enabled && (!compact || editing)" class="image-cards">
       <div class="image-slot">
         <div class="image-card" :class="{ 'is-editing': editing }">
           <template v-if="!editing">
-            <button type="button" class="image-open" aria-label="设置生图服务" title="点击设置" :disabled="disabled" @click="open_settings">
+            <button type="button" class="image-open" :aria-label="t('设置生图服务')" :title="t('点击设置')" :disabled="disabled" @click="open_settings">
               <span class="image-identity">
                 <UAvatar src="/icons/openai.svg" text="OI" :alt="LABEL" size="sm" class="channel-avatar image-avatar codex" />
                 <strong>{{ LABEL }}</strong>
               </span>
               <dl class="image-facts">
-                <div><dt>状态</dt><dd :class="`is-${status.tone}`"><i aria-hidden="true" />{{ status.text }}</dd></div>
-                <div><dt>模型</dt><dd :title="settings.model">{{ settings.model || "未选择" }}</dd></div>
+                <div><dt>{{ t('状态') }}</dt><dd :class="`is-${status.tone}`"><i aria-hidden="true" />{{ status.text }}</dd></div>
+                <div><dt>{{ t('模型') }}</dt><dd :title="settings.model">{{ settings.model || t('未选择') }}</dd></div>
               </dl>
-              <span class="image-flip"><UIcon name="i-lucide-settings-2" />设置</span>
+              <span class="image-flip"><UIcon name="i-lucide-settings-2" />{{ t('设置') }}</span>
             </button>
-            <span v-if="!disabled" class="image-tools"><button type="button" :aria-label="`移出生图服务 ${LABEL}`" title="移出" @click="remove"><UIcon name="i-lucide-x" /></button></span>
+            <span v-if="!disabled" class="image-tools"><button type="button" :aria-label="t('移出生图服务 {value1}', { value1: LABEL })" :title="t('移出')" @click="remove"><UIcon name="i-lucide-x" /></button></span>
           </template>
           <template v-else>
             <div class="image-back">
-              <div class="image-heading"><strong>{{ LABEL }}<span>设置</span></strong></div>
-              <div class="image-field"><span>地址</span><UInput v-model="address" aria-label="图片接口 Base URL" placeholder="https://api.openai.com/v1" size="xs" class="w-full" @change="set_address" /></div>
-              <div class="image-field"><span>密钥</span>
+              <div class="image-heading"><strong>{{ LABEL }}<span>{{ t('设置') }}</span></strong></div>
+              <div class="image-field"><span>{{ t('地址') }}</span><UInput v-model="address" :aria-label="t('图片接口 Base URL')" placeholder="https://api.openai.com/v1" size="xs" class="w-full" @change="set_address" /></div>
+              <div class="image-field"><span>{{ t('密钥') }}</span>
                 <!-- A text field masked by CSS keeps browsers from offering to generate or save a password. -->
-                <UInput v-model="api_key" type="text" autocomplete="off" spellcheck="false" data-1p-ignore data-lpignore="true" :placeholder="settings.api_key_ref ? SAVED_MARK : '填写图片接口的 API Key'" :title="settings.api_key_ref && !api_key ? '已保存；本机不回传密钥，输入新 Key 可更换' : undefined" aria-label="生图 API Key" size="xs" class="w-full" :loading="saving" :ui="{ base: key_visible ? '' : 'image-key-masked', trailing: 'pe-0.5' }" @change="save_key">
-                  <template #trailing><UButton :icon="key_visible ? 'i-lucide-eye' : 'i-lucide-eye-off'" :disabled="!api_key" :aria-label="key_visible ? '隐藏密钥' : '显示密钥'" :aria-pressed="key_visible" size="xs" color="neutral" variant="link" @click="key_visible = !key_visible" /></template>
+                <UInput v-model="api_key" type="text" autocomplete="off" spellcheck="false" data-1p-ignore data-lpignore="true" :placeholder="settings.api_key_ref ? SAVED_MARK : t('填写图片接口的 API Key')" :title="settings.api_key_ref &amp;&amp; !api_key ? t('已保存；本机不回传密钥，输入新 Key 可更换') : undefined" :aria-label="t('生图 API Key')" size="xs" class="w-full" :loading="saving" :ui="{ base: key_visible ? '' : 'image-key-masked', trailing: 'pe-0.5' }" @change="save_key">
+                  <template #trailing><UButton :icon="key_visible ? 'i-lucide-eye' : 'i-lucide-eye-off'" :disabled="!api_key" :aria-label="key_visible ? t('隐藏密钥') : t('显示密钥')" :aria-pressed="key_visible" size="xs" color="neutral" variant="link" @click="key_visible = !key_visible" /></template>
                 </UInput>
               </div>
-              <div class="image-field"><span>模型</span><UInputMenu mode="autocomplete" ignore-filter :model-value="settings.model" :items="models" value-key="value" aria-label="图片模型 ID" placeholder="选择或填写图片模型" size="xs" class="w-full min-w-0" @update:model-value="set_model" /></div>
-              <p class="image-note">地址、密钥和模型存在这台电脑，所有房间共用；每张图按所配账号计费。</p>
+              <div class="image-field"><span>{{ t('模型') }}</span><UInputMenu mode="autocomplete" ignore-filter :model-value="settings.model" :items="models" value-key="value" :aria-label="t('图片模型 ID')" :placeholder="t('选择或填写图片模型')" size="xs" class="w-full min-w-0" @update:model-value="set_model" /></div>
+              <p class="image-note">{{ t('地址、密钥和模型存在这台电脑，所有房间共用；每张图按所配账号计费。') }}</p>
             </div>
             <span class="image-flip-actions">
-              <button type="button" class="image-flip is-cancel" aria-label="放弃生图服务的修改" @click="cancel_settings">取消</button>
-              <button type="button" class="image-flip is-done" aria-label="完成并返回生图服务卡片" @click="editing = false"><UIcon name="i-lucide-check" />完成</button>
+              <button type="button" class="image-flip is-cancel" :aria-label="t('放弃生图服务的修改')" @click="cancel_settings">{{ t('取消') }}</button>
+              <button type="button" class="image-flip is-done" :aria-label="t('完成并返回生图服务卡片')" @click="editing = false"><UIcon name="i-lucide-check" />{{ t('完成') }}</button>
             </span>
           </template>
         </div>

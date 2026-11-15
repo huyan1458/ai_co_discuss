@@ -8,6 +8,7 @@ import { computed, inject, watch } from "vue";
 import { adapter_profile } from "../runner/adapters/profiles.mjs";
 import { access_options } from "../runner/expert_prompts.mjs";
 import { use_workflow_library } from "./workflow-library.js";
+import { t } from './i18n.js';
 
 const open = defineModel("open", { type: Boolean, default: false });
 const { view, bridge } = inject("discussion");
@@ -17,7 +18,7 @@ const DEFAULT_MODEL = "__default__";
 
 // The platforms cards may name on this computer; none listed means the list is not known (no local service).
 const ready = computed(() => view.value.launch.card_platforms || []);
-const parts = computed(() => !draft.value ? [] : [{ key: "", label: "主线", part: draft.value },
+const parts = computed(() => !draft.value ? [] : [{ key: "", label: t('主线'), part: draft.value },
   ...subs.value.map((sub) => ({ key: sub.id, label: sub.label || sub.id, part: sub }))].filter((item) => item.part.agents.length));
 
 /** The card's platform, from its member name `platform-card`. */
@@ -32,7 +33,7 @@ function missing(agent) { return ready.value.length > 0 && !ready.value.includes
 
 function platform_items(agent) {
   const names = [...new Set([...ready.value, platform(agent)])];
-  return names.map((name) => ({ label: `${bridge.default_name(name)}${ready.value.includes(name) ? "" : "（本机未配置）"}`, value: name, disabled: !ready.value.includes(name) }));
+  return names.map((name) => ({ label: `${bridge.default_name(name)}${ready.value.includes(name) ? "" : t('（本机未配置）')}`, value: name, disabled: !ready.value.includes(name) }));
 }
 
 /** A software without a model list (a model API) takes a typed model ID. */
@@ -42,11 +43,11 @@ function models(agent) { return bridge.launch_model_state(agent.name, view.value
 
 function effort_items(agent) {
   const levels = models(agent).efforts || adapter_profile(profile(agent).adapter)?.efforts;
-  return levels?.length ? [{ label: "默认", value: "" }, ...levels.map((level) => ({ label: EFFORT_LABELS[level] || level, value: level }))] : null;
+  return levels?.length ? [{ label: t('默认'), value: "" }, ...levels.map((level) => ({ label: EFFORT_LABELS[level] || level, value: level }))] : null;
 }
 
 function access_items(agent) {
-  return access_options(profile(agent).adapter).map((option) => ({ label: option.label, value: option.value, disabled: option.disabled }));
+  return access_options(profile(agent).adapter).map((option) => ({ label: { read: t('只读'), write: t('可写'), auto: t('自动'), full: t('全放开') }[option.value] || option.label, value: option.value, disabled: option.disabled }));
 }
 
 /** Replace the card in its part, so the canvas and the unsaved-changes check see the change. */
@@ -74,37 +75,37 @@ watch([open, () => parts.value.flatMap((item) => item.part.agents.map((agent) =>
 </script>
 
 <template>
-  <UModal v-model:open="open" title="专家配置" description="每张卡片用哪个软件、模型、强度与项目权限；改完点工作流页的“保存”写入。"
+  <UModal v-model:open="open" :title="t('专家配置')" :description="t('每张卡片用哪个软件、模型、强度与项目权限；改完点工作流页的“保存”写入。')"
     :ui="{ content: 'glass-panel studio-modal sm:max-w-4xl', body: 'dialog-body' }">
     <template #body>
-      <p v-if="!view.launch.available" class="workflow-experts-note">连接本机服务后才能读取模型列表与本机已配置的软件。</p>
+      <p v-if="!view.launch.available" class="workflow-experts-note">{{ t('连接本机服务后才能读取模型列表与本机已配置的软件。') }}</p>
       <section v-for="item in parts" :key="item.key" class="workflow-experts-part">
         <h4><UIcon :name="item.key ? 'i-lucide-git-branch' : 'i-lucide-network'" />{{ item.label }}</h4>
-        <div class="workflow-experts-table" role="table" :aria-label="`${item.label}的专家配置`">
-          <div class="workflow-experts-row is-head" role="row"><span role="columnheader">卡片</span><span role="columnheader">软件</span><span role="columnheader">模型</span><span role="columnheader">强度</span><span role="columnheader">项目</span></div>
+        <div class="workflow-experts-table" role="table" :aria-label="t('{value1}的专家配置', { value1: item.label })">
+          <div class="workflow-experts-row is-head" role="row"><span role="columnheader">{{ t('卡片') }}</span><span role="columnheader">{{ t('软件') }}</span><span role="columnheader">{{ t('模型') }}</span><span role="columnheader">{{ t('强度') }}</span><span role="columnheader">{{ t('项目') }}</span></div>
           <div v-for="agent in item.part.agents" :key="agent.card" class="workflow-experts-row" :class="{ 'is-missing': missing(agent) }" role="row">
             <span role="cell" class="workflow-experts-card"><strong>{{ agent.label || agent.card }}</strong><small>{{ agent.name }}</small>
-              <em v-if="missing(agent)"><UIcon name="i-lucide-triangle-alert" />本机未配置 {{ bridge.default_name(platform(agent)) }}</em></span>
-            <span role="cell"><USelect :model-value="platform(agent)" :items="platform_items(agent)" size="xs" class="w-full" :aria-label="`${agent.label || agent.card} 的软件`"
+              <em v-if="missing(agent)"><UIcon name="i-lucide-triangle-alert" />{{ t('本机未配置 {value1}', { value1: bridge.default_name(platform(agent)) }) }}</em></span>
+            <span role="cell"><USelect :model-value="platform(agent)" :items="platform_items(agent)" size="xs" class="w-full" :aria-label="t('{value1} 的软件', { value1: agent.label || agent.card })"
               @update:model-value="change_platform(item.part, agent, $event)" /></span>
             <span role="cell">
-              <UInput v-if="typed_model(agent)" :model-value="agent.model || ''" placeholder="默认模型" size="xs" class="w-full" :aria-label="`${agent.label || agent.card} 的模型`"
+              <UInput v-if="typed_model(agent)" :model-value="agent.model || ''" :placeholder="t('默认模型')" size="xs" class="w-full" :aria-label="t('{value1} 的模型', { value1: agent.label || agent.card })"
                 @update:model-value="change_model(item.part, agent, $event)" />
               <USelect v-else :model-value="agent.model || DEFAULT_MODEL" :items="models(agent).items" :loading="models(agent).loading" :title="models(agent).error || models(agent).source"
-                size="xs" class="w-full" :aria-label="`${agent.label || agent.card} 的模型`" @update:model-value="change_model(item.part, agent, $event)" />
+                size="xs" class="w-full" :aria-label="t('{value1} 的模型', { value1: agent.label || agent.card })" @update:model-value="change_model(item.part, agent, $event)" />
             </span>
             <span role="cell">
-              <USelect v-if="effort_items(agent)" :model-value="agent.effort || ''" :items="effort_items(agent)" size="xs" class="w-full" :aria-label="`${agent.label || agent.card} 的强度`"
+              <USelect v-if="effort_items(agent)" :model-value="agent.effort || ''" :items="effort_items(agent)" size="xs" class="w-full" :aria-label="t('{value1} 的强度', { value1: agent.label || agent.card })"
                 @update:model-value="update(item.part, agent.card, { effort: $event })" />
               <small v-else class="workflow-experts-none">—</small>
             </span>
-            <span role="cell"><USelect :model-value="agent.project_access || 'read'" :items="access_items(agent)" size="xs" class="w-full" :aria-label="`${agent.label || agent.card} 的项目权限`"
-              :disabled="Boolean(agent.requested_access && agent.project_access === 'read')" :title="agent.requested_access ? '导入的卡片先在画布上授予它要求的权限' : undefined"
+            <span role="cell"><USelect :model-value="agent.project_access || 'read'" :items="access_items(agent)" size="xs" class="w-full" :aria-label="t('{value1} 的项目权限', { value1: agent.label || agent.card })"
+              :disabled="Boolean(agent.requested_access && agent.project_access === 'read')" :title="agent.requested_access ? t('导入的卡片先在画布上授予它要求的权限') : undefined"
               @update:model-value="update(item.part, agent.card, { project_access: $event })" /></span>
           </div>
         </div>
       </section>
-      <p v-if="!parts.length" class="workflow-experts-note">这个工作流还没有成员卡片。</p>
+      <p v-if="!parts.length" class="workflow-experts-note">{{ t('这个工作流还没有成员卡片。') }}</p>
     </template>
   </UModal>
 </template>

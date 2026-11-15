@@ -1,4 +1,5 @@
 <script setup>
+import { t } from './i18n.js';
 /** The "添加" row of brand chips shared by members and the decision model; each chip emits its value. */
 import { computed, ref } from "vue";
 
@@ -14,8 +15,8 @@ const managing = ref(false);
 /** Platforms and presets each get a labelled row, so wrapped chips line up under the first chip instead of the label. */
 const groups = computed(() => {
   const split = props.items.findIndex((item) => item.separated);
-  if (split < 0) return [{ label: "添加", items: props.items }];
-  return [{ label: "添加", items: props.items.slice(0, split) }, { label: "预设", items: props.items.slice(split) }].filter((group) => group.items.length);
+  if (split < 0) return [{ label: t('添加'), items: props.items }];
+  return [{ label: t('添加'), items: props.items.slice(0, split) }, { label: t('预设'), items: props.items.slice(split) }].filter((group) => group.items.length);
 });
 /** Return keyboard focus to the first chip that can still be added. */
 function focus_first() {
@@ -33,9 +34,9 @@ defineExpose({ focus_first });
           <button type="button" class="roster-add-main" :disabled="item.disabled" :title="item.title" :aria-label="item.aria_label" :aria-pressed="item.selected === undefined ? undefined : item.selected" @click="emit('add', item.value)">
             <UAvatar :src="item.icon" :text="item.initials" :alt="item.name" size="3xs" class="channel-avatar" :class="item.style" /><span class="roster-add-name">{{ item.name }}</span><UIcon :name="item.selected ? 'i-lucide-check' : 'i-lucide-plus'" class="roster-add-mark" />
           </button>
-          <button v-if="managing && item.removable" type="button" class="roster-add-remove" :title="`删除预设「${item.name}」`" :aria-label="`删除预设 ${item.name}`" @click="emit('remove', item.value)"><UIcon name="i-lucide-x" /></button>
+          <button v-if="managing && item.removable" type="button" class="roster-add-remove" :title="t('删除预设「{value1}」', { value1: item.name })" :aria-label="t('删除预设 {value1}', { value1: item.name })" @click="emit('remove', item.value)"><UIcon name="i-lucide-x" /></button>
         </span>
-        <button v-if="group.items.some((item) => item.removable)" type="button" class="roster-add-manage" :aria-pressed="managing" @click="managing = !managing">{{ managing ? '完成' : '管理' }}</button>
+        <button v-if="group.items.some((item) => item.removable)" type="button" class="roster-add-manage" :aria-pressed="managing" @click="managing = !managing">{{ managing ? t('完成') : t('管理') }}</button>
       </div>
     </template>
   </div>

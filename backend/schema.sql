@@ -389,6 +389,24 @@ CREATE INDEX IF NOT EXISTS member_requests_execution ON member_requests(executio
 CREATE INDEX IF NOT EXISTS member_requests_room ON member_requests(room_id);
 CREATE INDEX IF NOT EXISTS member_requests_room_status ON member_requests(room_id,status);
 CREATE INDEX IF NOT EXISTS member_requests_batch ON member_requests(batch_id,status);
+-- Where a request's cards sit on the page: the room's latest message when the request was made. The page shows every
+-- card (working, failed, stopped, answer) under the top-level message at or before it, ordered by when its work started,
+-- whatever kind of request it is. Kept at creation so later messages never move it. Rows made before this table get the
+-- latest message no newer than the request (and before its answer).
+CREATE TABLE IF NOT EXISTS request_layout (
+    request_id INTEGER PRIMARY KEY REFERENCES member_requests(id) ON DELETE CASCADE,
+    after_message_id INTEGER NOT NULL
+);
+CREATE TRIGGER IF NOT EXISTS request_layout_insert AFTER INSERT ON member_requests
+BEGIN
+    INSERT OR IGNORE INTO request_layout (request_id,after_message_id)
+    VALUES (NEW.id, COALESCE((SELECT MAX(id) FROM messages WHERE room_id=NEW.room_id), NEW.message_id));
+END;
+INSERT OR IGNORE INTO request_layout (request_id,after_message_id)
+SELECT r.id, COALESCE((SELECT m.id FROM messages m WHERE m.room_id=r.room_id AND m.id>=r.message_id
+    AND m.id<COALESCE(r.answer_id,9223372036854775807) AND CAST(strftime('%s',m.created_at) AS INTEGER)<=r.created_at
+    ORDER BY m.id DESC LIMIT 1), r.message_id)
+FROM member_requests r WHERE NOT EXISTS (SELECT 1 FROM request_layout l WHERE l.request_id=r.id);
 -- Web chatbots are no longer members: earlier ones are removed and their open requests cancelled; their messages keep
 -- the author name. member_manual_sources stays only to recognise those earlier members.
 UPDATE member_requests SET status='cancelled' WHERE status IN ('pending','delivering') AND member_id IN (
@@ -1528,6 +1546,14 @@ CREATE TABLE IF NOT EXISTS room_events (
     at INTEGER NOT NULL,
     kind TEXT NOT NULL,
     data TEXT NOT NULL DEFAULT '{}'
+);
+CREATE TABLE IF NOT EXISTS stored_texts (
+    owner TEXT NOT NULL,
+    owner_id INTEGER NOT NULL,
+    field TEXT NOT NULL,
+    template TEXT NOT NULL,
+    params TEXT NOT NULL DEFAULT '{}',
+    PRIMARY KEY (owner, owner_id, field)
 );
 CREATE INDEX IF NOT EXISTS room_events_room ON room_events(room_id,id);
 DROP TRIGGER IF EXISTS event_message_posted;

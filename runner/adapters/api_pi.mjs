@@ -19,7 +19,7 @@ import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { marked, prompt_text, tree_killable } from './common.mjs';
 import { WRITE_TOOLS } from './api_files.mjs';
-import { adapter_profile } from './profiles.mjs';
+import { adapter_profile, takes_images } from './profiles.mjs';
 
 // The provider our extension registers; the model ID is passed to Pi unchanged.
 export const PI_PROVIDER = 'codiscuss';
@@ -60,7 +60,7 @@ export function pi_provider(profile, base_url) {
   const url = profile.api_protocol === 'anthropic' ? base_url.replace(/\/v1$/, '') : base_url;
   // Pi drops the thinking level for a model not marked as reasoning, so only a chosen effort marks it.
   return { name: 'CoDiscuss', baseUrl: url, apiKey: '$CODISCUSS_PI_KEY', api, models: [{ id: profile.model, name: profile.model,
-    reasoning: Boolean(pi_thinking(profile)), input: ['text'], cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 }, contextWindow: CONTEXT_WINDOW,
+    reasoning: Boolean(pi_thinking(profile)), input: takes_images(profile) ? ['text', 'image'] : ['text'], cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 }, contextWindow: CONTEXT_WINDOW,
     maxTokens: MAX_OUTPUT_TOKENS }] };
 }
 
@@ -164,11 +164,11 @@ function on_records(stream, handle) {
  * Start one execution in Pi and follow it until the answer is saved, the process ends or the owner stops it.
  *
  * @param {object} run `cli` (the Pi CLI script), `profile`, `key`, `binding`, `task`, `context_file` (what the extension reads), `system_file`,
- *   `prompt`, `max_requests` (0 for no limit), `project_root` (where relative edit paths resolve, or ''),
+ *   `prompt`, `images` (Pi `ImageContent` sent with the prompt), `max_requests` (0 for no limit), `project_root` (where relative edit paths resolve, or ''),
  *   `service_home` (the service directory, whose `pi` folder holds Pi's config and sessions), `spawn_process`.
  * @returns {{status: string, session_id: string, capabilities: object, steer: function}}
  */
-export function pi_delivery({ cli, profile, key, binding, task, context_file, system_file, prompt, max_requests, project_root, service_home, spawn_process = spawn }) {
+export function pi_delivery({ cli, profile, key, binding, task, context_file, system_file, prompt, images = [], max_requests, project_root, service_home, spawn_process = spawn }) {
   const dirs = pi_home(service_home);
   for (const path of Object.values(dirs)) mkdirSync(path, { recursive: true });
   const existing = session_file(dirs.sessions, binding.session_id);
@@ -191,7 +191,7 @@ export function pi_delivery({ cli, profile, key, binding, task, context_file, sy
     try { task.on_output?.(log_path, redact(text)); } catch { /* The room's directory is gone. */ }
   };
   const state = { running: true, terminal: false, stopped: false, failure: '', reminded: false, used_tools: false,
-    turns: 0, last_text: '', last_error: '', diagnostic: '', tools: new Map() };
+    turns: 0, last_text: '', last_error: '', compaction_error: '', diagnostic: '', tools: new Map() };
   const handle = new EventEmitter();
   const send = value => { if (child.stdin.writable) child.stdin.write(`${JSON.stringify(value)}\n`); };
   const finish = () => {
@@ -245,11 +245,21 @@ export function pi_delivery({ cli, profile, key, binding, task, context_file, sy
       const text = (event.message.content || []).filter(part => part?.type === 'text').map(part => part.text || '').join('').trim();
       if (text) { state.last_text = text; task.on_note?.(text); }
       state.last_error = event.message.stopReason === 'error' ? String(event.message.errorMessage || '模型请求失败') : '';
+    } else if (event.type === 'compaction_end' && event.errorMessage && !state.compaction_error) {
+      // Pi asks the same model for the summary under the same output cap, and the rolling summary grows with every
+      // compaction; once one fails, every later request only grows the context until the cap leaves 1 output token.
+      // The next execution starts a new session instead of reopening this one.
+      state.compaction_error = String(event.errorMessage);
+      task.on_binding?.('');
     } else if (event.type === 'agent_settled') settled(event);
   }
   function settled(event) {
     if (event.aborted || state.terminal || state.failure) return finish();
     if (state.last_error) { fail(`模型请求失败：${state.last_error}`); return finish(); }
+    if (state.compaction_error) {
+      fail(`会话上下文已满且自动压缩失败（${state.compaction_error}），下次执行将改用新会话；可直接重试`);
+      return finish();
+    }
     // Some models answer in plain text mid-run; one reminder avoids pausing on a recoverable slip.
     if (!state.reminded) {
       state.reminded = true;
@@ -277,7 +287,7 @@ export function pi_delivery({ cli, profile, key, binding, task, context_file, sy
   });
   task.on_binding?.(session_id);
   task.on_process?.(handle);
-  send({ type: 'prompt', message: prompt });
+  send({ type: 'prompt', message: prompt, ...(images.length ? { images } : {}) });
   const steer = text => {
     if (!state.running || state.terminal) return false;
     send({ type: 'steer', message: `用户插话：${text}` });

@@ -13,6 +13,7 @@ import { connection_site } from '../runner/discussion_local.mjs';
 
 // Setup installs Pi from npm unless one is given; tests never download it.
 process.env.CODISCUSS_PI_CLI ??= 'pi-not-needed-in-this-test';
+process.env.CODISCUSS_LANG = 'zh-CN';
 
 const CLI = fileURLToPath(new URL('../runner/codiscuss.mjs', import.meta.url));
 

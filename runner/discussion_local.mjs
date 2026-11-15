@@ -15,6 +15,7 @@ import { detect_python, local_settings } from './discussion_setup.mjs';
 import { unlink_machine } from './remote_launch.mjs';
 import { tone } from './discussion_tui.mjs';
 import { set_owner_protection, signed_site_url, site_fetch } from './entry_client.mjs';
+import { t } from './i18n.mjs';
 
 const SCRIPT = fileURLToPath(import.meta.url);
 const SERVER = fileURLToPath(new URL('../server.py', import.meta.url));
@@ -25,7 +26,7 @@ const POLL_MS = 200;
 // A service that exited without `service stop` (e.g. an old one adopted during an upgrade) is restarted at most this often.
 const SERVICE_REVIVE_MS = 10_000;
 const CONNECTION_TOKEN_BYTES = 32;
-const LOCAL_HELP = `用法：codiscuss local open|start|status|stop [--json]
+const LOCAL_HELP = t(`用法：codiscuss local open|start|status|stop [--json]
       codiscuss local connect SITE [--setup-key KEY] [--no-open]
       codiscuss local disconnect SITE
 
@@ -35,14 +36,14 @@ connect 把这台电脑绑定到线上网站（只用于外出时中转，网站
 disconnect 撤销该站点的新启动权限（含其他设备经网站转来的启动）；已运行的讨论须另行暂停。
 数据保留在服务目录中；重新 connect 会替换该站点的旧连接。
 结果摘要写入终端；输出被重定向或加 --json 时 JSON 写入 stdout。
-`;
+`);
 
 /** Accept an explicit secure website origin; loopback HTTP is available for local deployments. */
 export function connection_site(value) {
   const url = new URL(value);
   const local_http = url.protocol === 'http:' && ['127.0.0.1', 'localhost'].includes(url.hostname);
   if ((url.protocol !== 'https:' && !local_http) || url.username || url.password || url.pathname !== '/' || url.search || url.hash) {
-    throw new Error('连接站点须为 HTTPS 根地址；本机测试可使用 http://127.0.0.1:端口');
+    throw new Error(t('连接站点须为 HTTPS 根地址；本机测试可使用 http://127.0.0.1:端口'));
   }
   return url.origin;
 }
@@ -88,13 +89,13 @@ async function bind_machine(home, origin, setup_key) {
   let key = setup_key;
   if (!key) {
     try { key = (await import('./admin_account.mjs')).create_admin_token().token; }
-    catch (error) { throw new Error(`需要绑定令牌：请在部署网站的电脑上运行 codiscuss token，再执行 codiscuss local connect ${origin} --setup-key 令牌（${error.message}）`); }
+    catch (error) { throw new Error(t('需要绑定令牌：请在部署网站的电脑上运行 codiscuss token，再执行 codiscuss local connect {value1} --setup-key 令牌（{value2}）', { value1: origin, value2: error.message })); }
   }
   const link = machine_link(home, origin);
   const response = await fetch(`${origin}/api/machines`, { method: 'POST', redirect: 'error', signal: AbortSignal.timeout(15000),
     headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ ...link, setup_key: key }) });
   const result = await response.json().catch(() => ({}));
-  if (!response.ok) throw new Error(result.error || `绑定失败：HTTP ${response.status}`);
+  if (!response.ok) throw new Error(result.error || t('绑定失败：HTTP {value1}', { value1: response.status }));
   // From now on this website reaches the local one only as the relay's bridge, never with a browser connection credential.
   (await import('./relay_channel.mjs')).bridge_token(home, origin);
   await sync_remote_launches(home);
@@ -117,14 +118,14 @@ export function local_status(home = service_home()) {
 async function wait_website(child, progress, url) {
   for (let waited = 0; waited < START_WAIT_MS; waited += POLL_MS) {
     if (progress.error) throw progress.error;
-    if (child.exitCode !== null || child.signalCode) throw new Error('本机网站启动失败，请查看 local/website.log（可能端口已占用）');
+    if (child.exitCode !== null || child.signalCode) throw new Error(t('本机网站启动失败，请查看 local/website.log（可能端口已占用）'));
     if (progress.ready) {
       const response = await site_fetch(`${url}/api/health`, { signal: AbortSignal.timeout(2000) });
       if (response.ok && (await response.json()).ok) return;
     }
     await sleep(POLL_MS);
   }
-  throw new Error('本机网站未在 15 秒内就绪，请查看 local/website.log');
+  throw new Error(t('本机网站未在 15 秒内就绪，请查看 local/website.log'));
 }
 
 /** Launch the website using the configured Python and explicit package-external database. */
@@ -260,7 +261,7 @@ async function start_local(home) {
   const current = local_status(home);
   const settings = local_settings(home);
   if (current.website_running && current.url !== `http://127.0.0.1:${settings.port || 8765}`) {
-    throw new Error('网站端口配置已改变；请先 codiscuss local stop，再 codiscuss local open。');
+    throw new Error(t('网站端口配置已改变；请先 codiscuss local stop，再 codiscuss local open。'));
   }
   if (current.running) return current;
   const directory = join(home, 'local');
@@ -283,7 +284,7 @@ async function start_local(home) {
     if (status.error && (!spawned_pid || JSON.parse(readFileSync(join(directory, 'status.json'), 'utf8')).pid === spawned_pid)) throw new Error(status.error);
     await sleep(POLL_MS);
   }
-  throw new Error(`本机启动未完成，请查看 ${join(directory, 'supervisor.log')}`);
+  throw new Error(t('本机启动未完成，请查看 {value1}', { value1: join(directory, 'supervisor.log') }));
 }
 
 /** Explain why a running website must restart before this installation's version or port takes effect. */
@@ -292,13 +293,13 @@ export function restart_reason(home = service_home()) {
   if (!current.website_running) return null;
   const settings = local_settings(home);
   const url = `http://127.0.0.1:${settings.port || 8765}`;
-  if (current.url !== url) return `本机网站正在 ${current.url} 运行，端口配置已改为 ${url}`;
+  if (current.url !== url) return t('本机网站正在 {value1} 运行，端口配置已改为 {value2}', { value1: current.url, value2: url });
   // A website started with the retired remote entry is restarted without it.
-  if (current.remote_port) return '本机网站仍开着已停用的远程入口';
+  if (current.remote_port) return t('本机网站仍开着已停用的远程入口');
   if (owner_instance(home, settings) && Boolean(current.protected) !== (settings.hosting === true)) {
-    return settings.hosting === true ? '托管已开启，本机网站需要以受保护方式重启' : '托管已关闭，本机网站需要取消保护后重启';
+    return settings.hosting === true ? t('托管已开启，本机网站需要以受保护方式重启') : t('托管已关闭，本机网站需要取消保护后重启');
   }
-  if (current.version !== VERSION) return `本机网站正在运行${current.version ? `版本 ${current.version}` : '未记录版本的旧程序'}，当前安装为 ${VERSION}`;
+  if (current.version !== VERSION) return t('本机网站正在运行{value1}，当前安装为 {value2}', { value1: current.version ? t('版本 {value1}', { value1: current.version }) : t('未记录版本的旧程序'), value2: VERSION });
   return null;
 }
 
@@ -307,7 +308,7 @@ async function stop_local(home) {
   if (local_status(home).pid) {
     atomic_json(join(home, 'local', 'stop.request'), { requested_at: Date.now() });
     for (let waited = 0; waited < STOP_WAIT_MS && local_status(home).pid; waited += POLL_MS) await sleep(POLL_MS);
-    if (local_status(home).pid) throw new Error('本机服务尚未停止，请查看 local/supervisor.log');
+    if (local_status(home).pid) throw new Error(t('本机服务尚未停止，请查看 local/supervisor.log'));
   }
   if (service_pid(home)) await service_main(['stop'], () => {});
   return local_status(home);
@@ -318,7 +319,8 @@ function open_site(url) {
   const [command, args] = process.platform === 'win32' ? ['rundll32', ['url.dll,FileProtocolHandler', url]]
     : [process.platform === 'darwin' ? 'open' : 'xdg-open', [url]];
   const child = spawn(command, args, { detached: true, windowsHide: true, stdio: 'ignore' });
-  child.on('error', error => process.stderr.write(`无法打开浏览器：${error.message}；请访问 ${url}\n`));
+  child.on('error', error => process.stderr.write(t(`无法打开浏览器：{value1}；请访问 {value2}
+`, { value1: error.message, value2: url })));
   child.unref();
 }
 
@@ -326,17 +328,17 @@ function open_site(url) {
 /** Print a readable result for people; machine output stays on stdout only when redirected or with --json. */
 function local_summary(command, result, opened) {
   const site = tone.cyan(result.url || result.local_url || '');
-  const background = tone.dim('网站与讨论服务在后台运行，关闭此终端不影响；停止运行 codiscuss local stop');
+  const background = tone.dim(t('网站与讨论服务在后台运行，关闭此终端不影响；停止运行 codiscuss local stop'));
   const lines = {
-    open: [`本机网站已就绪：${site}${opened ? '（已在浏览器打开）' : ''}`, background],
-    start: [`本机网站已就绪：${site}（未打开浏览器，可直接访问此地址）`, background],
-    status: result.running ? [`本机网站运行中：${site}`]
-      : result.website_running ? [`本机网站运行中：${site}，但讨论服务未运行；运行 codiscuss local open 恢复`]
-        : ['本机网站未运行；运行 codiscuss local open 启动'],
-    stop: ['本机网站与讨论服务已停止；数据已保留，运行 codiscuss local open 重新启动'],
-    connect: [`已连接 ${result.connected}；本机网站 ${tone.cyan(result.local_url || '')}`,
-      opened ? '已在浏览器打开连接链接，请在该页面完成接入；连接链接不要转发' : `请在浏览器打开连接链接完成接入，链接不要转发：${result.url}`],
-    disconnect: [`已撤销 ${result.disconnected} 的本机启动权限；正在运行的讨论需在进度看板暂停`],
+    open: [t('本机网站已就绪：{value1}{value2}', { value1: site, value2: opened ? t('（已在浏览器打开）') : '' }), background],
+    start: [t('本机网站已就绪：{value1}（未打开浏览器，可直接访问此地址）', { value1: site }), background],
+    status: result.running ? [t('本机网站运行中：{value1}', { value1: site })]
+      : result.website_running ? [t('本机网站运行中：{value1}，但讨论服务未运行；运行 codiscuss local open 恢复', { value1: site })]
+        : [t('本机网站未运行；运行 codiscuss local open 启动')],
+    stop: [t('本机网站与讨论服务已停止；数据已保留，运行 codiscuss local open 重新启动')],
+    connect: [t('已连接 {value1}；本机网站 {value2}', { value1: result.connected, value2: tone.cyan(result.local_url || '') }),
+      opened ? t('已在浏览器打开连接链接，请在该页面完成接入；连接链接不要转发') : t('请在浏览器打开连接链接完成接入，链接不要转发：{value1}', { value1: result.url })],
+    disconnect: [t('已撤销 {value1} 的本机启动权限；正在运行的讨论需在进度看板暂停', { value1: result.disconnected })],
   }[command];
   process.stderr.write(`${lines.join('\n')}\n`);
 }

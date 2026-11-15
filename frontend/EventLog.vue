@@ -1,4 +1,5 @@
 <script setup>
+import { t } from './i18n.js';
 /**
  * The room event log: a simplified trajectory. The website writes every room state change (messages, requests and the
  * message each hangs under, executions, batches, queue, scheduler choices) to an append-only log; this page lists it in
@@ -47,7 +48,7 @@ async function load(mode = "reset") {
     events.value = mode === "reset" ? result.events : [...list, ...result.events].sort(by_time);
     error.value = "";
   } catch (failure) {
-    if (version === read_version) error.value = `读取事件记录失败：${failure.message}`;
+    if (version === read_version) error.value = t('读取事件记录失败：{value1}', { value1: failure.message });
   } finally {
     if (version === read_version) reading.value = false;
   }
@@ -56,11 +57,11 @@ watch(room_id, () => { events.value = []; selected.value = null; filter.value = 
 // Every room change shows in the room view, so read what is new then instead of polling.
 watch(() => view.value.room, (room, previous) => { if (room?.id && room.id === previous?.id && events.value.length) load("newer"); });
 
-const name = (id) => (id && members.value[String(id)] ? bridge.display_name(members.value[String(id)]) : id ? `成员 ${id}` : "");
+const name = (id) => (id && members.value[String(id)] ? bridge.display_name(members.value[String(id)]) : id ? t('成员 {value1}', { value1: id }) : "");
 const clock = (ms) => new Date(ms).toLocaleTimeString("zh-CN", { hour12: false }) + `.${String(ms % 1000).padStart(3, "0")}`;
 const entity_label = (key) => {
   const [kind, id] = key.split(":");
-  return kind === "request" ? `请求 R${id}` : kind === "execution" ? `执行 E${id}` : `#${id}`;
+  return kind === "request" ? t('请求 R{value1}', { value1: id }) : kind === "execution" ? t('执行 E{value1}', { value1: id }) : `#${id}`;
 };
 
 const user_message = (event) => event?.kind === "message.posted" && event.data.source === "user";
@@ -104,21 +105,21 @@ function on_key(event) {
 </script>
 
 <template>
-  <section class="merged-section event-log" aria-label="事件记录" @keydown="on_key">
-    <div class="page-heading"><div><h2>事件记录</h2><p>网站如实记下的用户与程序的每次写入（含被拒的）及其引起的状态变化，按发生顺序排列；点一行看原始记录、此刻仍未结束的请求与执行，以及同一对象的其他记录。AI 可用 <code>codiscuss room events</code> 读取同一份记录。</p></div></div>
-    <div v-if="reading && !events.length" class="grid gap-3 py-4" role="status" aria-label="正在读取事件记录"><USkeleton v-for="row in 8" :key="row" class="h-5" :class="row % 3 ? 'w-full' : 'w-2/3'" /></div>
-    <p v-else-if="error" role="alert" class="fine-print ev-error">{{ error }}<UButton label="重试" color="neutral" variant="link" size="xs" :loading="reading" @click="load()" /></p>
-    <p v-else-if="!events.length" class="fine-print">还没有事件记录。此功能上线前的历史没有记录。</p>
+  <section class="merged-section event-log" :aria-label="t('事件记录')" @keydown="on_key">
+    <div class="page-heading"><div><h2>{{ t('事件记录') }}</h2><p>{{ t('网站如实记下的用户与程序的每次写入（含被拒的）及其引起的状态变化，按发生顺序排列；点一行看原始记录、此刻仍未结束的请求与执行，以及同一对象的其他记录。AI 可用') }} <code>codiscuss room events</code> {{ t('读取同一份记录。') }}</p></div></div>
+    <div v-if="reading && !events.length" class="grid gap-3 py-4" role="status" :aria-label="t('正在读取事件记录')"><USkeleton v-for="row in 8" :key="row" class="h-5" :class="row % 3 ? 'w-full' : 'w-2/3'" /></div>
+    <p v-else-if="error" role="alert" class="fine-print ev-error">{{ error }}<UButton :label="t('重试')" color="neutral" variant="link" size="xs" :loading="reading" @click="load()" /></p>
+    <p v-else-if="!events.length" class="fine-print">{{ t('还没有事件记录。此功能上线前的历史没有记录。') }}</p>
     <div v-if="events.length" class="ev" :class="{ 'has-inspector': selected_event }">
       <div class="ev-ledger">
         <header class="ev-head">
-          <span class="ev-title">{{ rows.length }} 条记录</span>
-          <button v-if="filter" type="button" class="ev-chip is-active" @click="filter = ''">只看 {{ entity_label(filter) }} ✕</button>
-          <UButton v-if="more && !filter" label="加载更早" color="neutral" variant="link" size="xs" :loading="reading" @click="load('older')" />
+          <span class="ev-title">{{ t('{value1} 条记录', { value1: rows.length }) }}</span>
+          <button v-if="filter" type="button" class="ev-chip is-active" @click="filter = ''">{{ t('只看 {value1} ✕', { value1: entity_label(filter) }) }}</button>
+          <UButton v-if="more && !filter" :label="t('加载更早')" color="neutral" variant="link" size="xs" :loading="reading" @click="load('older')" />
         </header>
-        <ol class="ev-rows" role="listbox" aria-label="事件">
+        <ol class="ev-rows" role="listbox" :aria-label="t('事件')">
           <template v-for="row in rows" :key="row.event.id">
-            <li v-if="row.boundary" class="ev-turn" aria-hidden="true">第 {{ row.turn }} 轮</li>
+            <li v-if="row.boundary" class="ev-turn" aria-hidden="true">{{ t('第 {value1} 轮', { value1: row.turn }) }}</li>
             <li role="option" tabindex="0" class="ev-row" :class="[`is-${row.group}`, { 'is-rejected': row.event.kind === 'api.rejected', 'is-selected': row.event.id === selected, 'is-after': selected_event && row.index > selected_index }]"
               :aria-selected="row.event.id === selected" @click="select(row)" @keydown.enter="select(row)">
               <time class="ev-time">{{ clock(row.event.at) }}</time>
@@ -128,38 +129,38 @@ function on_key(event) {
           </template>
         </ol>
       </div>
-      <aside v-if="selected_event" class="ev-inspector" aria-label="记录详情">
+      <aside v-if="selected_event" class="ev-inspector" :aria-label="t('记录详情')">
         <header class="ev-head">
           <span class="ev-title">{{ clock(selected_event.at) }} · {{ selected_event.kind }}</span>
           <span class="ev-actions">
-            <button type="button" class="ev-icon" aria-label="上一条" @click="step(-1)">↑</button>
-            <button type="button" class="ev-icon" aria-label="下一条" @click="step(1)">↓</button>
-            <button type="button" class="ev-icon" aria-label="关闭" @click="selected = null">✕</button>
+            <button type="button" class="ev-icon" :aria-label="t('上一条')" @click="step(-1)">↑</button>
+            <button type="button" class="ev-icon" :aria-label="t('下一条')" @click="step(1)">↓</button>
+            <button type="button" class="ev-icon" :aria-label="t('关闭')" @click="selected = null">✕</button>
           </span>
         </header>
         <div v-keep-reading class="ev-body">
           <p class="ev-line">{{ event_text(selected_event, name) }}</p>
           <div class="ev-chips">
             <template v-for="key in event_entities(selected_event)" :key="key">
-              <button type="button" class="ev-chip" :class="{ 'is-active': filter === key }" @click="filter = filter === key ? '' : key">只看 {{ entity_label(key) }}</button>
-              <button v-if="key.startsWith('message:')" type="button" class="subtle-link" @click="emit('detail', Number(key.split(':')[1]))">查看 {{ entity_label(key) }}</button>
+              <button type="button" class="ev-chip" :class="{ 'is-active': filter === key }" @click="filter = filter === key ? '' : key">{{ t('只看 {value1}', { value1: entity_label(key) }) }}</button>
+              <button v-if="key.startsWith('message:')" type="button" class="subtle-link" @click="emit('detail', Number(key.split(':')[1]))">{{ t('查看 {value1}', { value1: entity_label(key) }) }}</button>
             </template>
           </div>
-          <h3>此刻未结束的</h3>
+          <h3>{{ t('此刻未结束的') }}</h3>
           <ul class="ev-state">
-            <li v-for="item in snapshot.requests" :key="`r${item.request_id}`">请求 R{{ item.request_id }} → {{ name(item.member_id) }} · {{ PURPOSES[item.purpose] || item.purpose }} · 挂在 #{{ item.message_id }} · {{ REQUEST_STATUS[item.status] || item.status }}<template v-if="item.execution_id"> · 执行 E{{ item.execution_id }}</template></li>
-            <li v-for="item in snapshot.executions" :key="`e${item.execution_id}`">执行 E{{ item.execution_id }} · {{ name(item.member_id) }} · {{ EXECUTION_STATUS[item.status] || item.status }} · 已过 {{ Math.round((selected_event.at - item.at) / 1000) }} 秒</li>
-            <li v-for="item in snapshot.queue" :key="`q${item.queue_id}`">{{ name(item.member_id) }} 排队等候 #{{ item.message_id }}</li>
-            <li v-for="item in snapshot.chains" :key="`c${item.chain_id}`">任务链 #{{ item.chain_id }} 到限暂停</li>
-            <li v-if="!snapshot.requests.length && !snapshot.executions.length && !snapshot.queue.length && !snapshot.chains.length" class="fine-print">无（只计已加载的记录）</li>
+            <li v-for="item in snapshot.requests" :key="`r${item.request_id}`">{{ t('请求 R{value1} → {value2} · {value3} · 挂在 #{value4} · {value5}', { value1: item.request_id, value2: name(item.member_id), value3: PURPOSES[item.purpose] || item.purpose, value4: item.message_id, value5: REQUEST_STATUS[item.status] || item.status }) }}<template v-if="item.execution_id"> {{ t('· 执行 E{value1}', { value1: item.execution_id }) }}</template></li>
+            <li v-for="item in snapshot.executions" :key="`e${item.execution_id}`">{{ t('执行 E{value1} · {value2} · {value3} · 已过 {value4} 秒', { value1: item.execution_id, value2: name(item.member_id), value3: EXECUTION_STATUS[item.status] || item.status, value4: Math.round((selected_event.at - item.at) / 1000) }) }}</li>
+            <li v-for="item in snapshot.queue" :key="`q${item.queue_id}`">{{ t('{value1} 排队等候 #{value2}', { value1: name(item.member_id), value2: item.message_id }) }}</li>
+            <li v-for="item in snapshot.chains" :key="`c${item.chain_id}`">{{ t('任务链 #{value1} 到限暂停', { value1: item.chain_id }) }}</li>
+            <li v-if="!snapshot.requests.length && !snapshot.executions.length && !snapshot.queue.length && !snapshot.chains.length" class="fine-print">{{ t('无（只计已加载的记录）') }}</li>
           </ul>
           <template v-if="related.length">
-            <h3>同一对象的其他记录</h3>
+            <h3>{{ t('同一对象的其他记录') }}</h3>
             <ul class="ev-related">
               <li v-for="row in related" :key="row.event.id"><button type="button" class="ev-link" @click="selected = row.event.id"><time class="ev-time">{{ clock(row.event.at) }}</time> {{ row.text }}</button></li>
             </ul>
           </template>
-          <h3>原始记录</h3>
+          <h3>{{ t('原始记录') }}</h3>
           <pre class="ev-raw">{{ JSON.stringify({ id: selected_event.id, kind: selected_event.kind, at: selected_event.at, data: selected_event.data }, null, 2) }}</pre>
         </div>
       </aside>

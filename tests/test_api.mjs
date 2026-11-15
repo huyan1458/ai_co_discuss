@@ -1,16 +1,19 @@
 import assert from 'node:assert/strict';
 import { spawn } from 'node:child_process';
 import { randomUUID } from 'node:crypto';
+import { EventEmitter } from 'node:events';
 import { mkdirSync, mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from 'node:fs';
 import { createServer } from 'node:http';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import { PassThrough } from 'node:stream';
 import { test } from 'node:test';
 import { setTimeout as delay } from 'node:timers/promises';
 import { fileURLToPath } from 'node:url';
 import { listen_local } from './local_port.mjs';
 import { API_PROVIDERS, api_base_url, api_check, api_generate, api_history, api_models, api_request, api_response, api_tool_results, read_api_key, save_api_key } from '../runner/discussion_api.mjs';
 import { participant_tools, system_prompt } from '../runner/adapters/api.mjs';
+import { pi_delivery } from '../runner/adapters/api_pi.mjs';
 import { deliver_task, execution_details } from '../runner/adapters/index.mjs';
 import { draw_image, launch_discussion, room_settings, validate_preset } from '../runner/discussion_launch.mjs';
 import { save_image_settings } from '../runner/image_service.mjs';
@@ -300,6 +303,27 @@ test('free-room API replies bind to their reserved execution and complete the re
   assert.equal(messages.find(message => message.author === 'Grok').source, 'api');
   // The member's thinking effort reaches the provider as the protocol's own reasoning parameter.
   assert.equal(mock.calls[0].body.reasoning?.effort, 'medium');
+});
+
+test('an API member whose card says its model reads images gets the woken message image with its task', async t => {
+  const f = await site_fixture(t);
+  const pixel = Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNk+M9QDwADhgGAWjR9awAAAABJRU5ErkJggg==', 'base64');
+  const mock = await model_fixture(t, call => tool_reply(call, 'submit_chat', { text: '看到了图。', summary: '已看图。' }));
+  const participants = { Grok: { ...profiles(f.home, mock.base_url).Grok, image_input: 'image' } };
+  const started = await launch_discussion(f.home, { site: f.site, entry: 'web', participants,
+    room: { title: '看图', mode: 'free', host: '用户', members: ['Grok'], submission_id: randomUUID() } }, { start_service: async () => ({ running: true }) });
+  const config = load_config(started.config_path), store = new DiscussionStore(config.directory), runner = new FreeRoomRunner(config, store);
+  f.cleanup.push(() => { runner.stop_children(); store.close(); });
+  const params = new URLSearchParams({ file_name: 'shot.png', actor: '用户', submission_id: randomUUID() });
+  const upload = await (await fetch(`${config.site}/api/rooms/${config.room}/attachments?${params}`, { method: 'POST', body: pixel,
+    headers: { 'X-Discussion-Token': config.token, 'Content-Type': 'application/octet-stream' } })).json();
+  await api(config, '/messages', { author: '用户', text: '[图片 #1] 这是什么？', source: 'user', kind: 'chat', to: ['Grok'],
+    attachment_ids: [upload.attachment.id], submission_id: randomUUID() });
+  await until(async () => (await api(config, '/messages')).messages.some(message => message.author === 'Grok'), () => runner.tick());
+  // The image reaches the provider as an image part, and the task names it by the placeholder in the message.
+  const first = JSON.stringify(mock.calls[0].body);
+  assert.ok(first.includes(pixel.toString('base64')));
+  assert.equal(room_prompt(mock.calls[0]).task.attachments[0].placeholder, '[图片 #1]');
 });
 
 test('in a room with drawing on, an API member generates and edits images with the image service and answers with them attached, and a CLI member draws with its credential', async t => {
@@ -798,4 +822,23 @@ test('an API member answers a private chat in text with the earlier lines as its
     assert.ok(!sent.includes('submit_chat'), `${name} answers in text, without room writes`);
   }
   assert.equal(execution_details('api', JSON.stringify({ type: 'codiscuss.entry', entry: { id: 'x', kind: 'tool', title: 'read_room', state: 'done' } })).entries[0].title, 'read_room');
+});
+
+test('a Pi session whose automatic compaction fails reports why and leaves the next execution a new session', async t => {
+  const home = mkdtempSync(join(tmpdir(), 'codiscuss-pi-compact-'));
+  t.after(() => rmSync(home, { recursive: true, force: true }));
+  const child = Object.assign(new EventEmitter(), { stdin: new PassThrough(), stdout: new PassThrough(), stderr: new PassThrough() });
+  child.kill = () => child.emit('close', null);
+  child.stdin.on('finish', () => setImmediate(() => child.emit('close', 0)));
+  const bindings = []; let ended;
+  const done = new Promise(resolve => { ended = resolve; });
+  pi_delivery({ cli: 'pi.js', profile: { model: 'm', api_protocol: 'chat' }, key: 'k', binding: { session_id: 'old' },
+    task: { id: 'free-1', directory: home, on_binding: id => bindings.push(id), on_failure: ended },
+    context_file: '', system_file: '', prompt: 'go', service_home: home, spawn_process: () => child });
+  for (const event of [{ type: 'compaction_start', reason: 'overflow' },
+    { type: 'compaction_end', reason: 'overflow', aborted: false, errorMessage: 'Context overflow recovery failed: Summarization failed' },
+    { type: 'agent_settled', aborted: false }]) child.stdout.write(`${JSON.stringify(event)}\n`);
+  const reason = await done;
+  assert.match(reason, /自动压缩失败.*Summarization failed.*新会话/);
+  assert.equal(bindings.at(-1), '', 'the next execution does not reopen the session that cannot be compacted');
 });

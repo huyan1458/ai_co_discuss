@@ -1,7 +1,9 @@
 /** Smart scheduling and limit checks for a discussion hosted inside a free room. */
 import { readFileSync } from 'node:fs';
-import { api, peer_round_question } from './discussion_runner.mjs';
+import { api as raw_api, peer_round_question } from './discussion_runner.mjs';
 import { DEFAULT_SCHEDULER_MODE, ROUTE_CONTEXT_MESSAGES, scheduler_thresholds, decide_interjection, decide_next_speaker, decide_round, discussion_prompt_version } from './scheduler.mjs';
+import { room_text, room_payload } from './room_text.mjs';
+const api = (config, path, payload, ...options) => raw_api(config, path, room_payload(payload), ...options);
 
 const PACKAGE_VERSION = JSON.parse(readFileSync(new URL('../package.json', import.meta.url), 'utf8')).version;
 /** How many of the latest plans describe "the host's recent arrangement" to the scheduler. */
@@ -65,7 +67,7 @@ export class SessionDriver {
       if (!plan) return false;
       const suggestion = { request_id: request.id, message_id: request.source_message_id || plan.after_message_id || latest_id,
         action: plan.action, actual_action: 'unverified', applied: false, model_judgment: Boolean(plan.detail),
-        reason: plan.label || '没有模型判断，交给主持人' };
+        reason: plan.label || room_text("没有模型判断，交给主持人") };
       this.save_suggestion(request.id, suggestion);
 
       if (!['schedule', 'continue', 'ask'].includes(plan.action)) {
@@ -95,8 +97,8 @@ export class SessionDriver {
         this.log(`智能调度 #${request.id}：${plan.label}`);
         return true;
       } catch (error) {
-        const record = await this.record_decision({ ...plan, label: `${plan.label}；自动安排失败，交回主持人` }, false, suggestion.message_id);
-        this.save_suggestion(request.id, { ...suggestion, actual_action: 'host', reason: `${plan.label}；未自动生效：${error.message}`,
+        const record = await this.record_decision({ ...plan, label: room_text("{value1}；自动安排失败，交回主持人", { value1: plan.label }) }, false, suggestion.message_id);
+        this.save_suggestion(request.id, { ...suggestion, actual_action: 'host', reason: room_text("{value1}；未自动生效：{value2}", { value1: plan.label, value2: error.message }),
           ...(record?.id ? { decision_id: record.id } : {}) });
         this.log(`智能调度安排 #${request.id} 失败：${error.message}`);
         return false;
@@ -128,7 +130,7 @@ export class SessionDriver {
     catch (error) {
       this.log(`讨论智能调度 #${request.id} 失败，交回主持人：${error.message}`);
       return { action: 'host', kind: request.cause_kind === 'user_message' ? 'interjection' : 'round',
-        label: `没有模型判断：${error.message}` };
+        label: room_text("没有模型判断：{value1}", { value1: error.message }) };
     }
   }
 
@@ -171,7 +173,7 @@ export class SessionDriver {
     if (result.action === 'note') {
       // Continuing needs a plan to continue; with nothing open or queued the discussion would stall without the host.
       if (turns.some(turn => ['open', 'queued'].includes(turn.status))) return { ...result, action: 'continue', kind: 'interjection', after_message_id: message.id };
-      return { ...result, action: 'host', kind: 'interjection', after_message_id: message.id, label: '仅补充信息，但当前没有进行中的安排，交给主持人' };
+      return { ...result, action: 'host', kind: 'interjection', after_message_id: message.id, label: room_text("仅补充信息，但当前没有进行中的安排，交给主持人") };
     }
     if (result.action !== 'ask' || !experts.includes(result.expert)) {
       return { ...result, action: 'host', kind: 'interjection', after_message_id: message.id };

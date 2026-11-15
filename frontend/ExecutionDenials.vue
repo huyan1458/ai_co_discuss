@@ -17,13 +17,13 @@ const emit = defineEmits(["allow"]);
 
 <template>
   <div class="channel-answer-summary channel-execution-denials">
-    <small>被拒操作</small>
+    <small>{{ t("被拒操作") }}</small>
     <div class="channel-message-text">
       <ul>
         <li v-for="item in denials" :key="item.detail"><code>{{ item.tool }}</code> {{ item.detail }}</li>
       </ul>
-      <UButton v-if="allowable" label="允许并重发" icon="i-lucide-shield-check" size="xs" variant="soft" color="neutral" :loading="busy"
-        title="把这些操作加入该成员的放行规则（下次执行起生效），并把原消息填回输入框" @click="emit('allow')" />
+      <UButton v-if="allowable" :label="t('允许并重发')" icon="i-lucide-shield-check" size="xs" variant="soft" color="neutral" :loading="busy"
+        :title="t('把这些操作加入该成员的放行规则（下次执行起生效），并把原消息填回输入框')" @click="emit('allow')" />
       <p v-if="error" class="channel-failure-error" role="alert">{{ error }}</p>
     </div>
   </div>

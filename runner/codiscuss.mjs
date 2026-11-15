@@ -9,8 +9,9 @@ import { main as service_main, read_registry, run_service, service_home, service
 import { launch_main } from './discussion_launch.mjs';
 import { local_settings, setup_main } from './discussion_setup.mjs';
 import { local_main } from './discussion_local.mjs';
+import { t } from './i18n.mjs';
 
-const HELP = `AI CoDiscuss CLI
+const HELP = t(`AI CoDiscuss CLI
 
 用法：codiscuss [命令] [选项]
 
@@ -40,8 +41,8 @@ const HELP = `AI CoDiscuss CLI
 
 网站操作使用 --site、DISCUSS_URL 或 --access-file 中的站点，并需要 Python 3.10+。
 原有 start、status、stop、add 等服务命令继续兼容。
-`;
-const SERVICE_HELP = `AI CoDiscuss 讨论服务
+`);
+const SERVICE_HELP = t(`AI CoDiscuss 讨论服务
 
 用法：codiscuss service [命令] [选项]
 
@@ -61,8 +62,8 @@ const SERVICE_HELP = `AI CoDiscuss 讨论服务
   -h, --help            显示帮助
 
 登记或启动服务不会自动开始讨论，仍需在网页明确启动。
-`;
-const STATUS_LABELS = { running: '运行中', paused: '已暂停', idle: '等待启动', error: '异常' };
+`);
+const STATUS_LABELS = { running: t('运行中'), paused: t('已暂停'), idle: t('等待启动'), error: t('异常') };
 const SERVICE_COMMANDS = new Set(['start', 'status', 'stop', 'add', 'remove', 'list', 'open', 'shortcut', 'autostart']);
 const WEBSITE_CLIENT = fileURLToPath(new URL('./discuss.py', import.meta.url));
 
@@ -72,7 +73,7 @@ function website_cli(args) {
   const result = spawnSync(executable, ['-X', 'utf8', WEBSITE_CLIENT, ...args], {
     stdio: 'inherit', windowsHide: true, env: { ...process.env, DISCUSS_CLI_NAME: 'codiscuss' },
   });
-  if (result.error) throw new Error(`网站操作需要 Python 3.10+，无法启动 ${executable}：${result.error.message}`);
+  if (result.error) throw new Error(t('网站操作需要 Python 3.10+，无法启动 {value1}：{value2}', { value1: executable, value2: result.error.message }));
   process.exitCode = result.status ?? (result.signal === 'SIGINT' ? 130 : 1);
 }
 
@@ -80,18 +81,18 @@ function website_cli(args) {
 function print_result(result) {
   const lines = [];
   if (typeof result.running === 'boolean') {
-    lines.push(result.running ? `讨论服务${result.ready === false ? '尚未确认就绪' : '运行中'}（PID ${result.pid}）` : '讨论服务未运行');
+    lines.push(result.running ? t('讨论服务{value1}（PID {value2}）', { value1: result.ready === false ? t('尚未确认就绪') : t('运行中'), value2: result.pid }) : t('讨论服务未运行'));
   }
-  if (result.home) lines.push(`服务目录：${result.home}`);
-  if (result.configs) lines.push(`已登记 ${result.configs.length} 个房间`, ...result.configs);
+  if (result.home) lines.push(t('服务目录：{value1}', { value1: result.home }));
+  if (result.configs) lines.push(t('已登记 {value1} 个房间', { value1: result.configs.length }), ...result.configs);
   for (const room of result.rooms || []) {
     lines.push(`${room.site || ''}/${room.room || room.config}：${STATUS_LABELS[room.status] || room.status}${room.error ? `；${room.error}` : ''}`);
   }
-  if (result.added) lines.push(`已登记房间：${result.site}/${result.added}`);
-  if (result.removed) lines.push(`已移除：${result.removed}`);
-  if (result.shortcut) lines.push(`已创建快捷方式：${result.shortcut}`);
-  if (result.autostart) lines.push(`已开启登录自启：${result.autostart}`);
-  if (result.opened) lines.push(...result.opened.map(site => `已打开：${site}`));
+  if (result.added) lines.push(t('已登记房间：{value1}/{value2}', { value1: result.site, value2: result.added }));
+  if (result.removed) lines.push(t('已移除：{value1}', { value1: result.removed }));
+  if (result.shortcut) lines.push(t('已创建快捷方式：{value1}', { value1: result.shortcut }));
+  if (result.autostart) lines.push(t('已开启登录自启：{value1}', { value1: result.autostart }));
+  if (result.opened) lines.push(...result.opened.map(site => t('已打开：{value1}', { value1: site })));
   process.stdout.write(`${lines.join('\n')}\n`);
 }
 
@@ -106,8 +107,13 @@ async function service_cli(args) {
     const home = service_home();
     if (service_pid(home)) return service_main(['status'], print_result);
     const count = read_registry(home).length;
-    process.stdout.write(`AI CoDiscuss 讨论服务\n服务目录：${home}\n已登记 ${count} 个房间\nCtrl+C 停止服务\n`);
-    if (!count) process.stdout.write('尚未登记房间；可在另一终端运行 codiscuss service add --config FILE。\n');
+    process.stdout.write(t(`AI CoDiscuss 讨论服务
+服务目录：{value1}
+已登记 {value2} 个房间
+Ctrl+C 停止服务
+`, { value1: home, value2: count }));
+    if (!count) process.stdout.write(t(`尚未登记房间；可在另一终端运行 codiscuss service add --config FILE。
+`));
     return run_service(home, line => process.stdout.write(`${line}\n`));
   }
   const forwarded = [...positionals];

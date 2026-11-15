@@ -4,6 +4,7 @@
  */
 import { nextTick, onBeforeUnmount, onMounted, reactive } from "vue";
 import { ENTER_SENDS } from "./enter-sends.js";
+import { t } from './i18n.js';
 
 const TARGET_RATE = 16000;
 // Six seconds per part keeps each relayed request (base64, then sealed and base64 again) under the 512 KiB body limit.
@@ -81,7 +82,7 @@ export function use_voice_input({ bridge, on_text }) {
   }
 
   async function begin() {
-    if (!navigator.mediaDevices?.getUserMedia) throw new Error("此浏览器不支持录音；本机网页请用 127.0.0.1 打开，线上网页须为 HTTPS");
+    if (!navigator.mediaDevices?.getUserMedia) throw new Error(t('此浏览器不支持录音；本机网页请用 127.0.0.1 打开，线上网页须为 HTTPS'));
     // Created inside the press so phones let it run.
     context ??= new AudioContext();
     context.resume().catch(() => {});
@@ -92,7 +93,7 @@ export function use_voice_input({ bridge, on_text }) {
     catch (error) {
       if (starting === token) state.status = "";
       if (token.cancelled) return;
-      throw new Error(error.name === "NotAllowedError" ? "没有麦克风权限，请在浏览器设置中允许本站使用麦克风" : `无法打开麦克风：${error.message}`);
+      throw new Error(error.name === "NotAllowedError" ? t('没有麦克风权限，请在浏览器设置中允许本站使用麦克风') : t('无法打开麦克风：{value1}', { value1: error.message }));
     }
     finally { if (starting === token) starting = null; }
     // Cancelled while the browser was still opening the microphone.
@@ -118,9 +119,9 @@ export function use_voice_input({ bridge, on_text }) {
       const { text } = await send(recording, take_pending(recording), true);
       if (session !== recording) return;
       if (text) on_text(text);
-      else bridge.notify("warning", "没有识别到说话内容");
+      else bridge.notify("warning", t('没有识别到说话内容'));
     } catch (error) {
-      if (session === recording) bridge.notify("error", `语音输入失败：${error.message}`);
+      if (session === recording) bridge.notify("error", t('语音输入失败：{value1}', { value1: error.message }));
     } finally {
       if (session === recording) { session = null; state.status = ""; }
     }

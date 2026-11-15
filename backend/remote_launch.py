@@ -18,6 +18,7 @@ import re
 
 from .admin import AdminError
 from .runtime import begin_write
+from .texts import Text, incoming_text, load_texts, save_text
 
 MACHINE_ONLINE_SECONDS = 30
 # Heartbeats refresh seen_at at most this often (well inside the online window) so frequent polls do not each write a row.
@@ -57,10 +58,11 @@ def machine_view(row, now):
             "seen_at": row["seen_at"], "online": now - row["seen_at"] <= MACHINE_ONLINE_SECONDS}
 
 
-def launch_view(row):
+def launch_view(connection, row):
     """Report a relayed launch without its request, which carries the room's credentials."""
+    owner_id = connection.execute("SELECT rowid FROM remote_launches WHERE id=?", (row["id"],)).fetchone()[0]
     return {"id": row["id"], "machine_id": row["machine_id"], "status": row["status"],
-            "result": json.loads(row["result"]), "error": row["error"]}
+            "result": json.loads(row["result"]), "error": row["error"], "texts": load_texts(connection, "launch", owner_id)}
 
 
 def list_machines(connection, now):
@@ -74,9 +76,9 @@ def pair_machine(connection, payload, now):
     machine_id, token = payload.get("id"), payload.get("token")
     name = payload.get("name").strip() if isinstance(payload.get("name"), str) else ""
     if not isinstance(machine_id, str) or not MACHINE_ID.fullmatch(machine_id) or not token_digest(token):
-        raise ValueError("电脑编号或凭据无效")
+        raise ValueError(Text('电脑编号或凭据无效'))
     if not 1 <= len(name) <= MACHINE_NAME_MAX:
-        raise ValueError(f"电脑名称需为 1–{MACHINE_NAME_MAX} 个字符")
+        raise ValueError(Text('电脑名称需为 1–{value1} 个字符', value1=MACHINE_NAME_MAX))
     begin_write(connection)
     connection.execute("INSERT INTO local_machines (id,name,token_hash,created_at) VALUES (?,?,?,?) "
                        "ON CONFLICT(id) DO UPDATE SET name=excluded.name, token_hash=excluded.token_hash",
@@ -89,19 +91,19 @@ def require_machine(connection, machine_id, token):
     row = connection.execute("SELECT * FROM local_machines WHERE id=?", (machine_id,)).fetchone()
     hashed = token_digest(token)
     if not row or not hashed or not hmac.compare_digest(row["token_hash"], hashed):
-        raise AdminError("电脑凭据无效，请在这台电脑上重新连接网站", 401)
+        raise AdminError(Text('电脑凭据无效，请在这台电脑上重新连接网站'), 401)
     return row
 
 
 def valid_projects(value):
     """Project names and ids only; directories never leave the computer."""
     if not isinstance(value, list) or len(value) > PROJECTS_MAX:
-        raise ValueError(f"项目列表须为不超过 {PROJECTS_MAX} 项的列表")
+        raise ValueError(Text('项目列表须为不超过 {value1} 项的列表', value1=PROJECTS_MAX))
     projects = []
     for item in value:
         project_id, name = (item.get("id"), item.get("name")) if isinstance(item, dict) else (None, None)
         if not isinstance(project_id, str) or not PROJECT_ID.fullmatch(project_id) or not isinstance(name, str) or not 1 <= len(name) <= PROJECT_NAME_MAX:
-            raise ValueError("项目须包含有效编号与名称")
+            raise ValueError(Text('项目须包含有效编号与名称'))
         projects.append({"id": project_id, "name": name})
     return projects
 
@@ -111,7 +113,7 @@ def valid_clients(value):
     if not isinstance(value, dict) or len(value) > CLIENTS_MAX or any(
             not isinstance(key, str) or not isinstance(item, str) or not 0 < len(key) <= CLIENT_FIELD_MAX or not 0 < len(item) <= CLIENT_FIELD_MAX
             for key, item in value.items()):
-        raise ValueError("软件配置须为平台到客户端类型的对象")
+        raise ValueError(Text('软件配置须为平台到客户端类型的对象'))
     return value
 
 
@@ -119,7 +121,7 @@ def valid_public_key(value):
     """An ECDH P-256 public key as JWK coordinates; anything else is rejected."""
     if (not isinstance(value, dict) or value.get("kty") != "EC" or value.get("crv") != "P-256"
             or not all(isinstance(value.get(axis), str) and BASE64URL_COORDINATE.fullmatch(value[axis]) for axis in ("x", "y"))):
-        raise ValueError("电脑公钥须为 P-256 JWK")
+        raise ValueError(Text('电脑公钥须为 P-256 JWK'))
     return {"kty": "EC", "crv": "P-256", "x": value["x"], "y": value["y"]}
 
 
@@ -127,7 +129,7 @@ def valid_envelope(value, with_key):
     """Ciphertext and IV, plus the sender's ephemeral key on requests; the site never reads the content."""
     if (not isinstance(value, dict) or not isinstance(value.get("iv"), str) or not IV_BASE64.fullmatch(value["iv"])
             or not isinstance(value.get("data"), str) or not 0 < len(value["data"]) <= ENVELOPE_DATA_MAX or not BASE64.fullmatch(value["data"])):
-        raise ValueError("加密命令格式无效")
+        raise ValueError(Text('加密命令格式无效'))
     return {"iv": value["iv"], "data": value["data"], **({"key": valid_public_key(value.get("key"))} if with_key else {})}
 
 
@@ -157,78 +159,85 @@ def machine_launch_action(connection, machine_id, launch_id, token, payload, now
     begin_write(connection)
     row = connection.execute("SELECT * FROM remote_launches WHERE id=? AND machine_id=?", (launch_id, machine_id)).fetchone()
     if not row:
-        raise LookupError("启动请求不存在")
+        raise LookupError(Text('启动请求不存在'))
     action = payload.get("action")
     if action not in ("claim", "finish", "fail"):
-        raise ValueError("action 须为 claim、finish 或 fail")
+        raise ValueError(Text('action 须为 claim、finish 或 fail'))
     if row["status"] not in ("pending", "claimed"):
-        raise FileExistsError("启动请求已结束")
+        raise FileExistsError(Text('启动请求已结束'))
     if action == "claim":
         connection.execute("UPDATE remote_launches SET status='claimed', updated_at=? WHERE id=?", (now, launch_id))
     elif action == "finish":
         room_id = payload.get("room_id")
         if not isinstance(room_id, str) or not room_id:
-            raise ValueError("完成启动须提供 room_id")
+            raise ValueError(Text('完成启动须提供 room_id'))
         result = {"room_id": room_id, "status": str(payload.get("status") or "")}
         connection.execute("UPDATE remote_launches SET status='done', request='{}', result=?, error='', updated_at=? WHERE id=?",
                            (json.dumps(result), now, launch_id))
+        owner_id = connection.execute("SELECT rowid FROM remote_launches WHERE id=?", (launch_id,)).fetchone()[0]
+        save_text(connection, "launch", owner_id, "error", "")
     else:
         stage = payload.get("stage") if payload.get("stage") in LAUNCH_STAGES else "unconfirmed"
         result = {"stage": stage, **({"room_id": payload["room_id"]} if isinstance(payload.get("room_id"), str) else {})}
+        error = incoming_text(payload.get("error") or Text("启动失败"), payload.get("error_text"))
         connection.execute("UPDATE remote_launches SET status='failed', request='{}', result=?, error=?, updated_at=? WHERE id=?",
-                           (json.dumps(result), str(payload.get("error") or "启动失败")[:ERROR_MAX], now, launch_id))
-    return launch_view(connection.execute("SELECT * FROM remote_launches WHERE id=?", (launch_id,)).fetchone())
+                           (json.dumps(result), str(error)[:ERROR_MAX], now, launch_id))
+        owner_id = connection.execute("SELECT rowid FROM remote_launches WHERE id=?", (launch_id,)).fetchone()[0]
+        save_text(connection, "launch", owner_id, "error", error if len(str(error)) <= ERROR_MAX else "")
+    return launch_view(connection, connection.execute("SELECT * FROM remote_launches WHERE id=?", (launch_id,)).fetchone())
 
 
 def submit_remote_launch(connection, payload, now):
     """Queue a room creation for the paired computer; resubmitting the same id replays only a failed launch."""
     launch_id, machine_id, request = payload.get("id"), payload.get("machine_id"), payload.get("request")
     if not isinstance(launch_id, str) or not LAUNCH_ID.fullmatch(launch_id):
-        raise ValueError("启动编号无效")
+        raise ValueError(Text('启动编号无效'))
     if not isinstance(request, dict) or not isinstance(request.get("room"), dict) or request["room"].get("submission_id") != launch_id:
-        raise ValueError("远程启动只用于新建房间，room.submission_id 须与启动编号一致")
+        raise ValueError(Text('远程启动只用于新建房间，room.submission_id 须与启动编号一致'))
     if request.get("cwd") or request.get("access_file"):
-        raise ValueError("远程启动只能选择电脑上已配置的项目，不能指定路径")
+        raise ValueError(Text('远程启动只能选择电脑上已配置的项目，不能指定路径'))
     begin_write(connection)
     machine = connection.execute("SELECT * FROM local_machines WHERE id=?", (machine_id,)).fetchone()
     if not machine:
-        raise LookupError("这台电脑尚未连接网站")
+        raise LookupError(Text('这台电脑尚未连接网站'))
     project_id = request.get("local_project")
     if project_id and project_id not in {project["id"] for project in json.loads(machine["projects"])}:
-        raise FileExistsError("所选项目已在电脑上移除或更改，请重新选择")
+        raise FileExistsError(Text('所选项目已在电脑上移除或更改，请重新选择'))
     row = connection.execute("SELECT * FROM remote_launches WHERE id=?", (launch_id,)).fetchone()
     if row and row["machine_id"] != machine_id:
-        raise FileExistsError("启动编号已用于另一台电脑")
+        raise FileExistsError(Text('启动编号已用于另一台电脑'))
     if not row:
         connection.execute("INSERT INTO remote_launches (id,machine_id,request,created_at,updated_at) VALUES (?,?,?,?,?)",
                            (launch_id, machine_id, json.dumps(request, ensure_ascii=False), now, now))
     elif row["status"] == "failed":
         connection.execute("UPDATE remote_launches SET status='pending', request=?, result='{}', error='', updated_at=? WHERE id=?",
                            (json.dumps(request, ensure_ascii=False), now, launch_id))
-    return launch_view(connection.execute("SELECT * FROM remote_launches WHERE id=?", (launch_id,)).fetchone())
+        owner_id = connection.execute("SELECT rowid FROM remote_launches WHERE id=?", (launch_id,)).fetchone()[0]
+        save_text(connection, "launch", owner_id, "error", "")
+    return launch_view(connection, connection.execute("SELECT * FROM remote_launches WHERE id=?", (launch_id,)).fetchone())
 
 
 def remote_launch_status(connection, launch_id):
     """Read a relayed launch's progress."""
     row = connection.execute("SELECT * FROM remote_launches WHERE id=?", (launch_id,)).fetchone()
     if not row:
-        raise LookupError("启动请求不存在")
-    return launch_view(row)
+        raise LookupError(Text('启动请求不存在'))
+    return launch_view(connection, row)
 
 
 def submit_machine_command(connection, machine_id, payload, now):
     """Queue one encrypted local-service operation for the paired computer."""
     command_id = payload.get("id")
     if not isinstance(command_id, str) or not COMMAND_ID.fullmatch(command_id):
-        raise ValueError("命令编号无效")
+        raise ValueError(Text('命令编号无效'))
     envelope = valid_envelope(payload.get("envelope"), with_key=True)
     begin_write(connection)
     if not connection.execute("SELECT 1 FROM local_machines WHERE id=?", (machine_id,)).fetchone():
-        raise LookupError("这台电脑尚未连接网站")
+        raise LookupError(Text('这台电脑尚未连接网站'))
     if not connection.execute("SELECT 1 FROM machine_keys WHERE machine_id=?", (machine_id,)).fetchone():
-        raise FileExistsError("这台电脑的 codiscuss 版本过旧，请更新后重试")
+        raise FileExistsError(Text('这台电脑的 codiscuss 版本过旧，请更新后重试'))
     if connection.execute("SELECT 1 FROM machine_commands WHERE id=?", (command_id,)).fetchone():
-        raise FileExistsError("命令编号已使用")
+        raise FileExistsError(Text('命令编号已使用'))
     connection.execute("INSERT INTO machine_commands (id,machine_id,request,created_at,updated_at) VALUES (?,?,?,?,?)",
                        (command_id, machine_id, json.dumps(envelope), now, now))
     return {"id": command_id, "status": "pending"}
@@ -238,7 +247,7 @@ def machine_command_status(connection, machine_id, command_id):
     """Report a command's progress; a finished command hands over its response once and is deleted."""
     row = connection.execute("SELECT * FROM machine_commands WHERE id=? AND machine_id=?", (command_id, machine_id)).fetchone()
     if not row:
-        raise LookupError("命令不存在或已过期")
+        raise LookupError(Text('命令不存在或已过期'))
     if row["status"] != "done":
         return {"id": command_id, "status": row["status"]}
     begin_write(connection)
@@ -266,8 +275,8 @@ def finish_machine_command(connection, machine_id, command_id, token, payload, n
     begin_write(connection)
     row = connection.execute("SELECT status FROM machine_commands WHERE id=? AND machine_id=?", (command_id, machine_id)).fetchone()
     if not row:
-        raise LookupError("命令不存在或已过期")
+        raise LookupError(Text('命令不存在或已过期'))
     if row["status"] != "claimed":
-        raise FileExistsError("命令已结束")
+        raise FileExistsError(Text('命令已结束'))
     connection.execute("UPDATE machine_commands SET status='done', response=?, updated_at=? WHERE id=?", (json.dumps(envelope), now, command_id))
     return {"id": command_id, "status": "done"}

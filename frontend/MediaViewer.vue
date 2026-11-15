@@ -45,8 +45,8 @@ onBeforeUnmount(() => viewer?.destroy());
 
 <template>
   <div :key="attempt" class="media-viewer" :class="`is-${kind}`">
-    <p v-if="failed" class="media-viewer-error">{{ kind === 'image' ? '图片读取失败，请重试或下载后打开。' : '浏览器无法播放这个文件的格式（例如 AVI、WMV 或特殊编码的 MOV），请下载后用本机软件打开。' }}<UButton label="重试" color="neutral" variant="link" size="xs" @click="retry" /></p>
-    <Transition name="media-ready"><PreviewLoading v-if="loading && !failed" class="media-viewer-loading" :label="kind === 'image' ? '正在载入图片…' : '正在载入媒体…'" /></Transition>
+    <p v-if="failed" class="media-viewer-error">{{ kind === 'image' ? t('图片读取失败，请重试或下载后打开。') : t('浏览器无法播放这个文件的格式（例如 AVI、WMV 或特殊编码的 MOV），请下载后用本机软件打开。') }}<UButton :label="t('重试')" color="neutral" variant="link" size="xs" @click="retry" /></p>
+    <Transition name="media-ready"><PreviewLoading v-if="loading && !failed" class="media-viewer-loading" :label="kind === 'image' ? t('正在载入图片…') : t('正在载入媒体…')" /></Transition>
     <div v-if="kind === 'image'" class="media-viewer-image"><img ref="image" :src="url" :alt="name" @error="failed = true"></div>
     <div v-else-if="failed" class="media-viewer-player"></div>
     <div v-else-if="kind === 'video'" class="media-viewer-player">

@@ -6,6 +6,7 @@ import tempfile
 import threading
 import time
 import unittest
+from unittest import mock
 import uuid
 from contextlib import closing
 from pathlib import Path
@@ -910,6 +911,30 @@ class MultiMemberTests(FreeRoomTests):
         self.assertEqual(status, 201, second_round)
         self.assertEqual([second_round["turn"]["round"], second_round["queued"][0]["round"]], [2, 2])
 
+    def test_member_leaving_mid_round_does_not_end_the_discussion_early(self):
+        """A finished round stays one round after the roster shrinks, so an away expert never trips the round limit."""
+        tokens = {"Antigravity": uuid.uuid4().hex, "DeepSeek": uuid.uuid4().hex}
+        for name, token in tokens.items():
+            self.request(f"{self.path}/members", {"name": name, "token": token}, self.owner)
+        tokens["Claude"] = self.member
+        discussion = f"{self.path}/discussion"
+        current = self.request(discussion)[1]
+        self.assertEqual(self.request(discussion, {"action": "start", "goal": "讨论目标", "revision": current["revision"],
+                                                   "limits": {"max_rounds": 2}}, self.owner)[0], 200)
+        roster = None
+        for round_names in (["Claude", "Antigravity", "DeepSeek"], ["Claude"]):
+            status, plan = self.arrange_session([{"expert": name, "question": "发言"} for name in round_names], roster)
+            self.assertEqual(status, 201, plan)
+            for name in round_names:
+                execution = self.reserve_for(name)[1]
+                self.assertEqual(self.answer(execution["id"], token=tokens[name], author=name)[0], 201)
+            roster = self.session_roster()
+
+        self.request(f"{self.path}/members/{self.member_id('Antigravity')}", {"action": "away"}, self.owner)
+
+        session = self.request(discussion)[1]["session"]
+        self.assertEqual((session or {}).get("status"), "active", "离开一位专家后讨论被判到限结束")
+
     def test_initial_session_execution_reads_no_messages_when_cutoff_is_zero(self):
         """An initial independent opinion has a real empty read boundary and cannot read later user text."""
         self.request(f"{self.path}/members", {"name": "Antigravity", "token": uuid.uuid4().hex}, self.owner)
@@ -1414,6 +1439,10 @@ class HostTests(HostRoomTests):
         self.request(self.path + "/inbox", token=self.owner)
         self.assertIn(("Claude", "notice", "pending"), self.requests())
         self.work("Claude")
+        # Answered without dispatching, the check folds its answer into the notice's line on the page.
+        free = self.request(self.path)[1]["free"]
+        notice_id = next(item["message_id"] for item in free["requests"] if item["purpose"] == "notice")
+        self.assertEqual([item["message_id"] for item in free["quiet_checkins"]], [notice_id])
         self.work("Codex")
         self.work("Claude")
         due()
@@ -1554,7 +1583,8 @@ class HostTests(HostRoomTests):
         free = self.request(self.path)[1]["free"]
         reports = {item["id"]: item for item in free["executions"]}
         # The wake-up sits where the failed execution was, so the page shows it in that card's place.
-        self.assertEqual(reports[notice["id"]]["anchor_message_id"], reports[first["id"]]["request_message_id"])
+        self.assertEqual([reports[notice["id"]][key] for key in ("layout_after", "layout_at")],
+                         [reports[first["id"]][key] for key in ("layout_after", "layout_at")])
         self.assertIn({"message_id": reports[notice["id"]]["request_message_id"], "execution_id": first["id"]}, free["failure_wakes"])
         status, refused = self.request(f"{self.path}/messages", {"author": "Claude", "text": "补交", "source": "cli",
                                                                   "submission_id": uuid.uuid4().hex, "execution_id": first["id"]}, self.member)
@@ -1732,6 +1762,19 @@ class HostTests(HostRoomTests):
         self.assertEqual(self.request(url, {"action": "retry"}, self.owner)[0], 200)
         self.work("Antigravity")
         self.assertEqual(self.requests()[-1], ("Codex", "ask", "pending"))
+
+    def test_a_retried_relay_step_that_fails_again_tells_the_host_again(self):
+        """Each failure of a retried step is a new notice, so a relay does not stop silently after the first retry."""
+        FreeRoomTests.say(self, "接力重试再失败")
+        self.work("Claude", to=["Antigravity", "Codex"], sequential=True)
+        for _ in range(2):
+            failing = self.reserve_for("Antigravity")[1]
+            url = f"{self.path}/executions/{failing['id']}"
+            self.request(url, {"action": "fail", "reason": "连接被重置"}, self.owner)
+            self.work("Claude")
+            self.request(url, {"action": "retry"}, self.owner)
+        messages = self.request(f"{self.path}/messages?after=0")[1]["messages"]
+        self.assertEqual(sum("棒失败" in message["text"] for message in messages), 2)
 
     def test_loop_checkpoint_runs_the_next_pass_only_when_continued(self):
         """A loop hands back at a checkpoint; continuing starts the next pass on the last answer, otherwise the host just accepts."""
@@ -2065,12 +2108,28 @@ class HostTests(HostRoomTests):
         returned = max(item[0] for item in FreeRoomTests.messages(self))
         handoff = self.reserve_for("Claude")[1]
         report = next(item for item in self.request(self.path)[1]["free"]["executions"] if item["id"] == handoff["id"])
-        self.assertEqual((report["request_message_id"], report["anchor_message_id"]), (dispatch, returned))
+        self.assertEqual((report["request_message_id"], report["layout_after"]), (dispatch, returned))
         status, saved = self.request(f"{self.path}/messages", {"author": "Claude", "text": "汇总", "source": "cli",
                                                                "submission_id": uuid.uuid4().hex, "execution_id": handoff["id"]}, self.tokens["Claude"])
         self.assertEqual(status, 201, saved)
         answer = next(item for item in self.request(f"{self.path}/messages?after=0&withdrawn=include")[1]["messages"] if item["id"] == saved["message"]["id"])
-        self.assertEqual(answer["anchor_message_id"], returned)
+        self.assertEqual(answer["layout_after"], returned)
+
+    def test_transcript_batches_carry_cards_older_than_the_room_view(self):
+        """A failed card stays once the room view no longer lists its execution: the transcript read brings it."""
+        FreeRoomTests.say(self, "第一件事", to=["Codex"])
+        failed = self.reserve_for("Codex")[1]
+        self.request(f"{self.path}/executions/{failed['id']}", {"action": "fail", "reason": "CLI 退出"}, self.owner)
+        with mock.patch("backend.free_room.RECENT_EXECUTIONS", 0):
+            self.assertEqual(self.request(self.path)[1]["free"]["executions"], [])
+            read = lambda query, after=0: self.request(f"{self.path}/messages?after={after}&withdrawn=include&limit=1{query}")[1]
+            cards, batch = [], {"next_after": 0, "has_more": True}
+            while batch["has_more"]:
+                batch = read("&cards=1", batch["next_after"])
+                cards += [item["id"] for item in batch["cards"]["executions"]]
+            self.assertEqual(cards.count(failed["id"]), 1, "each card comes with exactly one batch")
+            self.assertNotIn("cards", read(""), "cards only on request")
+            self.assertNotIn("cards", read("&cards=1&q=%E7%AC%AC%E4%B8%80"), "a search shows no cards")
 
     def test_handoff_needs_a_host_dispatch(self):
         """handoff is true only beside the host's to; a member or a host naming no one is refused."""
@@ -2167,6 +2226,30 @@ class GoalTests(HostRoomTests):
         self.assertEqual(self.requests()[-1], ("Claude", "goal_continue", "pending"))
         return view
 
+    def test_goal_and_runner_text_metadata_round_trip(self):
+        """Generated notices and validated runner metadata preserve templates through their owning reads."""
+        self.open_from_page()
+        messages = self.request(f"{self.path}/messages?after=0")[1]["messages"]
+        started = next(message for message in messages if message["text"].startswith("Goal 已开启："))
+        self.assertEqual(started["texts"]["text"], {
+            "template": "Goal 已开启：{objective}", "params": {"objective": "修完登录页并通过复核"}})
+
+        execution = self.reserve_for("Claude")[1]
+        progress = {"template": "已完成 {count} 项", "params": {"count": 3}}
+        self.assertEqual(self.request(f"{self.path}/executions/{execution['id']}", {
+            "action": "renew", "notes": [{"seq": 1, "text": "已完成 3 项", "text_text": progress}]}, self.owner)[0], 200)
+        notes = self.request(f"{self.path}/executions/{execution['id']}/notes", token=self.owner)[1]["notes"]
+        self.assertEqual(notes[0]["texts"]["text"], progress)
+
+        reason = {"template": "连接异常：{cause}", "params": {"cause": "被重置"}}
+        invalid = self.request(f"{self.path}/executions/{execution['id']}", {
+            "action": "fail", "reason": "连接异常：被重置", "reason_text": {"template": "不匹配", "params": {}}}, self.owner)
+        self.assertEqual(invalid[0], 400)
+        failed = self.request(f"{self.path}/executions/{execution['id']}", {
+            "action": "fail", "reason": "连接异常：被重置", "reason_text": reason}, self.owner)
+        self.assertEqual(failed[0], 200, failed[1])
+        self.assertEqual(failed[1]["texts"]["result"], reason)
+
     def test_only_the_owner_command_opens_a_goal_and_the_host_fills_it_in(self):
         """`/goal` asks the host to fill in the objective; nobody else can open one, and declining leaves no goal."""
         command = FreeRoomTests.say(self, "/goal")[1]["message"]["id"]
@@ -2203,6 +2286,23 @@ class GoalTests(HostRoomTests):
         self.assertEqual(self.goal_write("continue")[0], 409)
         self.work("Claude")
         self.assertFalse(self.goal()["goal"]["idle"])
+
+    def test_retrying_a_failed_execution_lets_the_idle_room_wake_the_host_again(self):
+        """A retry hands work out again: when it fails once more, the idle room wakes the host instead of stalling."""
+        self.open_from_page()
+        self.work("Claude", to=["Codex"])
+        failing = self.reserve_for("Codex")[1]
+        self.request(f"{self.path}/executions/{failing['id']}", {"action": "fail", "reason": "连接被重置"}, self.owner)
+        self.work("Claude")
+        self.assertEqual(self.goal_write("continue")[0], 200)
+        self.work("Claude")
+        self.assertFalse(self.goal()["goal"]["idle"], "the wake-up did no new work")
+        self.assertEqual(self.request(f"{self.path}/executions/{failing['id']}", {"action": "retry"}, self.owner)[0], 200)
+        again = self.reserve_for("Codex")[1]
+        self.request(f"{self.path}/executions/{again['id']}", {"action": "fail", "reason": "连接被重置"}, self.owner)
+        if any(item[0] == "Claude" and item[2] == "pending" for item in self.requests()):
+            self.work("Claude")  # the failed batch handed back to the host
+        self.assertTrue(self.goal()["goal"]["idle"])
 
     def test_waiting_for_the_user_stands_down_until_new_work(self):
         """The runner's model may judge an idle room as waiting for the user: it needs the revision and an armed goal."""
@@ -2272,17 +2372,26 @@ class GoalTests(HostRoomTests):
         self.assertEqual((status, view["goal"]["status"]), (200, "complete"), view)
         self.assertEqual(self.messages()[-1][1], "Goal 已完成：测试全部通过")
 
-    def test_repeated_failures_and_budget_end_the_goal(self):
-        """Three failed wake-ups in a row block the goal; a spent budget gets one wrap-up request and ends it."""
+    def test_failed_wake_up_pauses_and_budget_ends_the_goal(self):
+        """A failed wake-up pauses the goal instead of waking the host again; resuming wakes it once more.
+
+        A spent budget gets one wrap-up request and ends the goal.
+        """
         self.open_from_page()
-        for _ in range(3):
-            execution = self.reserve_for("Claude")[1]
-            self.assertEqual(self.request(f"{self.path}/executions/{execution['id']}", {"action": "fail", "reason": "模型不可用"}, self.owner)[0], 200)
-            if self.goal()["goal"]["status"] == "active" and len([r for r in self.requests() if r[1] == "goal_continue"]) < 3:
-                self.assertEqual(self.goal_write("continue")[0], 200)
+        execution = self.reserve_for("Claude")[1]
+        self.assertEqual(self.request(f"{self.path}/executions/{execution['id']}", {"action": "fail", "reason": "用量已达上限"}, self.owner)[0], 200)
+        self.assertTrue(self.goal()["goal"]["idle"])
+        wake_ups = len(self.requests())
         status, view = self.goal_write("continue")
-        self.assertEqual((status, view["goal"]["status"]), (200, "blocked"), view)
-        self.assertEqual(FreeRoomTests.say(self, "/goal 再来一次")[0], 201)  # a blocked goal is over; a new one may start
+        self.assertEqual((status, view["goal"]["status"]), (200, "paused"), view)
+        self.assertEqual(len(self.requests()), wake_ups, "no new wake-up while the host keeps failing")
+        self.assertEqual(self.messages()[-1][1], "Goal 已暂停：主持人执行失败：用量已达上限。处理后点“继续”恢复。")
+        self.assertEqual(self.goal_write("resume")[0], 200)
+        status, view = self.goal_write("continue")
+        self.assertEqual((status, view["goal"]["status"], view["goal"]["continues"]), (200, "active", 1), view)
+        self.assertEqual(self.requests()[-1], ("Claude", "goal_continue", "pending"))
+        self.assertEqual(self.goal_write("clear")[0], 200)
+        self.assertEqual(FreeRoomTests.say(self, "/goal 再来一次")[0], 201)  # an ended goal is over; a new one may start
         request_id = self.request(self.path)[1]["free"]["requests"][-1]["id"]
         execution = self.reserve_for("Claude")[1]
         self.request(f"{self.path}/goal", {"action": "start", "request_id": request_id, "objective": "再来一次"}, self.tokens["Claude"])

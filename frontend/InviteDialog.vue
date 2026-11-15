@@ -3,8 +3,9 @@
 import { computed, inject, onBeforeUnmount, ref, watch } from "vue";
 import ExpertCard from "./ExpertCard.vue";
 import RosterAdd from "./RosterAdd.vue";
+import { t } from "./i18n.js";
 
-const props = defineProps({ description: { type: String, default: "新成员由程序按本机软件配置启动，或由你手动启动。" }, workflowId: { type: String, default: "" } });
+const props = defineProps({ description: { type: String, default: () => t("新成员由程序按本机软件配置启动，或由你手动启动。") }, workflowId: { type: String, default: "" } });
 const inviting = defineModel("open", { type: Boolean, default: false });
 const { view, bridge, act, pending } = inject("discussion");
 const room = computed(() => view.value.room);
@@ -49,7 +50,7 @@ function invite_status(name) {
   const api = profile.adapter === "api";
   const ready = api ? Boolean(profile.base_url && profile.api_protocol && profile.api_key_ref && profile.model)
     : Boolean(profile.adapter && (profile.adapter === "antigravity" ? profile.ipc_directory : profile.executable));
-  return ready ? { text: api ? "已配置 API" : "已配置本机软件", tone: "ready" } : { text: api ? "待补齐 API 配置" : "待补齐接入配置", tone: "warn" };
+  return ready ? { text: api ? t("已配置 API") : t("已配置本机软件"), tone: "ready" } : { text: api ? t("待补齐 API 配置") : t("待补齐接入配置"), tone: "warn" };
 }
 // Woken picks need the local service and a runnable entry; manual ones need neither.
 const invite_blocked = computed(() => submitting.value || (!invite_picks.value.length && !invite_workflow.value?.existing.length && !Object.keys(invite_workflow.value?.members || {}).length)
@@ -83,9 +84,9 @@ function add_invite(name) {
 // The same add row as the create form: platforms first, presets on their own row.
 const PRESET_PREFIX = "preset:";
 const library_items = computed(() => [...invite_choices.value.map((name) => ({ value: name, name: bridge.default_name(name), ...bridge.identities[name],
-  title: invite_count(name) ? `已在场 ${invite_count(name)} 位 · 将添加新实例` : "", aria_label: `添加 ${name} 实例` })),
+  title: invite_count(name) ? t("已在场 {count} 位 · 将添加新实例", { count: invite_count(name) }) : "", aria_label: t("添加 {name} 实例", { name }) })),
   ...invite_presets.value.map((preset, index) => ({ value: PRESET_PREFIX + preset.name, name: preset.label || preset.name, ...bridge.identities[bridge.platform_of(preset.name)],
-    separated: index === 0, title: preset.description || "专家预设", aria_label: `添加预设 ${preset.label || preset.name}`, removable: true }))]);
+    separated: index === 0, title: preset.description || t("专家预设"), aria_label: t("添加预设 {name}", { name: preset.label || preset.name }), removable: true }))]);
 
 /** Add the platform or preset a chip names. */
 function add_library_item(value) {
@@ -178,43 +179,43 @@ async function refresh_after(invited_any) {
 </script>
 
 <template>
-  <UModal :content="{ onInteractOutside: (event) => event.preventDefault() }" v-model:open="inviting" title="邀请成员" :description="description" :ui="{ content: 'glass-panel studio-modal pb-invite-modal', body: 'dialog-body' }">
+  <UModal :content="{ onInteractOutside: (event) => event.preventDefault() }" v-model:open="inviting" :title="t('邀请成员')" :description="description" :ui="{ content: 'glass-panel studio-modal pb-invite-modal', body: 'dialog-body' }">
     <template #body>
-      <div v-if="loading" class="pb-invite-cards" role="status" aria-label="正在读取工作流成员"><USkeleton v-for="card in 2" :key="card" class="pb-invite-skeleton w-full" /></div>
-      <div v-else-if="failure" class="pb-invite" role="status"><p>{{ failure }}</p><UButton label="重试" icon="i-lucide-refresh-cw" color="neutral" variant="soft" @click="choose_workflow(workflowId)" /></div>
-      <div v-else-if="invited_manual.length && !invite_picks.length" class="pb-invite" aria-label="启动手动成员">
-        <p class="pb-invite-lead">{{ invited_manual.length > 1 ? `${invited_manual.length} 位手动成员已加入` : '手动成员已加入' }}，把启动指令交给各自的 AI 会话，注册后才算到场。</p>
+      <div v-if="loading" class="pb-invite-cards" role="status" :aria-label="t('正在读取工作流成员')"><USkeleton v-for="card in 2" :key="card" class="pb-invite-skeleton w-full" /></div>
+      <div v-else-if="failure" class="pb-invite" role="status"><p>{{ failure }}</p><UButton :label="t('重试')" icon="i-lucide-refresh-cw" color="neutral" variant="soft" @click="choose_workflow(workflowId)" /></div>
+      <div v-else-if="invited_manual.length && !invite_picks.length" class="pb-invite" :aria-label="t('启动手动成员')">
+        <p class="pb-invite-lead">{{ invited_manual.length > 1 ? t('{count} 位手动成员已加入，把启动指令交给各自的 AI 会话，注册后才算到场。', { count: invited_manual.length }) : t('手动成员已加入，把启动指令交给各自的 AI 会话，注册后才算到场。') }}</p>
         <ul class="pb-invite-launches">
           <li v-for="name in invited_manual" :key="name">
             <UAvatar :src="bridge.identities[bridge.platform_of(name)]?.icon" :text="bridge.identities[bridge.platform_of(name)]?.initials" :alt="name" size="xs" class="channel-avatar" :class="bridge.identities[bridge.platform_of(name)]?.style" />
             <strong>{{ bridge.display_name(name) }}</strong>
-            <small :class="{ 'is-registered': record(name)?.registered_at }">{{ record(name)?.registered_at ? '已注册' : '待注册' }}</small>
-            <UButton :icon="launch_copied === name ? 'i-lucide-check' : 'i-lucide-rocket'" :label="launch_copied === name ? '已复制' : '复制启动指令'" size="sm" :color="launch_copied === name ? 'success' : 'primary'" variant="soft" class="pb-launch-button" :loading="pending === 'copy_member_launch'" :disabled="Boolean(pending)" @click="copy_launch(name)" />
+            <small :class="{ 'is-registered': record(name)?.registered_at }">{{ record(name)?.registered_at ? t('已注册') : t('待注册') }}</small>
+            <UButton :icon="launch_copied === name ? 'i-lucide-check' : 'i-lucide-rocket'" :label="launch_copied === name ? t('已复制') : t('复制启动指令')" size="sm" :color="launch_copied === name ? 'success' : 'primary'" variant="soft" class="pb-launch-button" :loading="pending === 'copy_member_launch'" :disabled="Boolean(pending)" @click="copy_launch(name)" />
           </li>
         </ul>
-        <p class="fine-print">指令含该成员的凭证，只交给对应的会话；关闭后仍可在参与者列表中复制。</p>
-        <div class="pb-invite-footer"><UButton label="完成" class="channel-primary-button" @click="inviting = false" /></div>
+        <p class="fine-print">{{ t("指令含该成员的凭证，只交给对应的会话；关闭后仍可在参与者列表中复制。") }}</p>
+        <div class="pb-invite-footer"><UButton :label="t('完成')" class="channel-primary-button" @click="inviting = false" /></div>
       </div>
-      <form v-else class="pb-invite" aria-label="邀请专家" @submit.prevent="invite">
+      <form v-else class="pb-invite" :aria-label="t('邀请专家')" @submit.prevent="invite">
         <!-- A workflow invitation only confirms the workflow's own cards; the platform and preset rows belong to ordinary invitations. -->
         <template v-if="!invite_workflow">
-          <RosterAdd label="选择 AI（可多选）" :items="library_items" @add="add_library_item" @remove="(value) => bridge.delete_expert_preset(value.slice(PRESET_PREFIX.length))" />
+          <RosterAdd :label="t('选择 AI（可多选）')" :items="library_items" @add="add_library_item" @remove="(value) => bridge.delete_expert_preset(value.slice(PRESET_PREFIX.length))" />
         </template>
-        <p v-for="member in invite_workflow?.existing || []" :key="member.card" class="fine-print">{{ bridge.display_name(member.name) }}：{{ record(member.name)?.status === 'away' ? '确认后请回，保留原会话' : '已在场，沿用原成员' }}</p>
+        <p v-for="member in invite_workflow?.existing || []" :key="member.card" class="fine-print">{{ bridge.display_name(member.name) }}{{ t('：') }}{{ record(member.name)?.status === 'away' ? t('确认后请回，保留原会话') : t('已在场，沿用原成员') }}</p>
         <div v-if="invite_picks.length" class="pb-invite-cards">
           <div v-for="pick in invite_picks" :key="pick.id" class="pb-invite-pick">
             <ExpertCard :name="pick.name" :mode="pick.mode" :choices="pick.card ? ['cli'] : ['cli', 'manual']" :status="invite_status(pick.name)" :workflow="pick.card ? invite_workflow?.label || '' : ''" @mode="pick.mode = $event" @remove="invite_picks = invite_picks.filter((item) => item !== pick)" />
-            <p v-if="pick_instances.get(pick) !== pick.name" class="fine-print">同一 AI 已有实例，将以 {{ pick_instances.get(pick) }} 加入，使用独立会话。</p>
+            <p v-if="pick_instances.get(pick) !== pick.name" class="fine-print">{{ t("同一 AI 已有实例，将以 {name} 加入，使用独立会话。", { name: pick_instances.get(pick) }) }}</p>
           </div>
         </div>
         <!-- Always rendered once cards exist, so switching a card's mode never changes the dialog height. -->
-        <p v-if="invite_picks.length" class="fine-print" :class="{ 'pb-invite-reserved': !(invite_picks.some((pick) => pick.mode === 'manual') && invite_picks.some((pick) => pick.mode !== 'manual')) }" :aria-hidden="!(invite_picks.some((pick) => pick.mode === 'manual') && invite_picks.some((pick) => pick.mode !== 'manual'))">手动启动的成员排在程序启动的成员之后加入队列。</p>
-        <p v-else-if="submitting" class="pb-invite-empty">正在加入成员…</p>
-        <p v-else-if="!invite_workflow" class="pb-invite-empty">选择一位或多位 AI（同一 AI 可重复添加），点卡片翻面设置软件、模型与项目权限。</p>
-        <p v-if="invite_picks.some((pick) => pick.mode === 'cli') && !view.launch.available" role="alert" class="fine-print">邀请需要本机服务，请在运行 AI 的电脑打开本机网站。</p>
+        <p v-if="invite_picks.length" class="fine-print" :class="{ 'pb-invite-reserved': !(invite_picks.some((pick) => pick.mode === 'manual') && invite_picks.some((pick) => pick.mode !== 'manual')) }" :aria-hidden="!(invite_picks.some((pick) => pick.mode === 'manual') && invite_picks.some((pick) => pick.mode !== 'manual'))">{{ t("手动启动的成员排在程序启动的成员之后加入队列。") }}</p>
+        <p v-else-if="submitting" class="pb-invite-empty">{{ t("正在加入成员…") }}</p>
+        <p v-else-if="!invite_workflow" class="pb-invite-empty">{{ t("选择一位或多位 AI（同一 AI 可重复添加），点卡片翻面设置软件、模型与项目权限。") }}</p>
+        <p v-if="invite_picks.some((pick) => pick.mode === 'cli') && !view.launch.available" role="alert" class="fine-print">{{ t("邀请需要本机服务，请在运行 AI 的电脑打开本机网站。") }}</p>
         <div class="pb-invite-footer">
-          <UButton label="取消" color="neutral" variant="ghost" :disabled="submitting" @click="inviting = false" />
-          <UButton type="submit" icon="i-lucide-user-plus" :label="invite_workflow ? '确认成员并启用工作流' : invite_picks.length > 1 ? `邀请 ${invite_picks.length} 位` : '邀请'" class="channel-primary-button" :disabled="invite_blocked" :loading="submitting" />
+          <UButton :label="t('取消')" color="neutral" variant="ghost" :disabled="submitting" @click="inviting = false" />
+          <UButton type="submit" icon="i-lucide-user-plus" :label="invite_workflow ? t('确认成员并启用工作流') : invite_picks.length > 1 ? t('邀请 {count} 位', { count: invite_picks.length }) : t('邀请')" class="channel-primary-button" :disabled="invite_blocked" :loading="submitting" />
         </div>
       </form>
     </template>

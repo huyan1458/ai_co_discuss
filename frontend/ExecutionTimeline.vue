@@ -1,4 +1,5 @@
 <script setup>
+import { t, locale } from './i18n.js';
 /**
  * The execution timeline: the room's run monitor. It answers what the message page cannot, since that page is linear
  * and says what was said: where each run's time went, who waited on whom, what held a round up, and whether running
@@ -101,7 +102,7 @@ async function load(full = false) {
     if (!after) last_full = Date.now();
     error.value = "";
   } catch (failure) {
-    if (version === read_version) error.value = `读取执行记录失败：${failure.message}`;
+    if (version === read_version) error.value = t('读取执行记录失败：{value1}', { value1: failure.message });
   } finally {
     if (version === read_version) {
       reading.value = false;
@@ -219,14 +220,14 @@ const shown = computed(() => {
 });
 const earlier_count = computed(() => timeline.value && !overview.value
   ? timeline.value.executions.length - shown.value.executions.filter((item) => item.source !== "user").length : 0);
-const when = (ms) => new Date(ms).toLocaleString("zh-CN", { month: "numeric", day: "numeric", hour: "2-digit", minute: "2-digit", hour12: false });
+const when = (ms) => new Date(ms).toLocaleString(locale, { month: "numeric", day: "numeric", hour: "2-digit", minute: "2-digit", hour12: false });
 const tasks = computed(() => overview.value ? task_overview(segments.value) : []);
 // The site returns only the latest executions, so the first task may have begun before them.
 const truncated = computed(() => Boolean(timeline.value && timeline.value.executions.length >= timeline.value.execution_limit));
 const partial = (task) => !task.opened && truncated.value;
 /** A task is named by the message that opened it; a short one ("全部同意", "继续") also shows the answer it got. */
 const SHORT_TASK_CHARS = 10;
-const task_title = (text) => text || "（没有记录起因）";
+const task_title = (text) => text || t('（没有记录起因）');
 const task_note = (text, result) => [...(text || "")].length < SHORT_TASK_CHARS ? result || "" : "";
 /** Where each task begins on the timeline: before its first top-level row in view. */
 const segment_heads = computed(() => {
@@ -292,7 +293,7 @@ const now_x = computed(() => {
   return x === null || x < 0 || x > 1 ? null : x;
 });
 const auto_speed = computed(() => Math.max(1, bounds.value.duration / REPLAY_TARGET_MS));
-const speed_items = computed(() => [{ label: `自动 · ${Math.round(auto_speed.value)}×`, value: 0 }, ...REPLAY_SPEEDS.map((speed) => ({ label: `${speed}×`, value: speed }))]);
+const speed_items = computed(() => [{ label: t('自动 · {value1}×', { value1: Math.round(auto_speed.value) }), value: 0 }, ...REPLAY_SPEEDS.map((speed) => ({ label: `${speed}×`, value: speed }))]);
 const replay_speed = computed(() => replay.speed || auto_speed.value);
 const can_replay = computed(() => !overview.value && !base_live.value && bounds.value.duration > 0);
 
@@ -382,7 +383,7 @@ const name = (member) => bridge.display_name(member);
  *  came down to. Each part carries a tone, so a stall or a failure stands out within the line. */
 const headline = computed(() => {
   if (overview.value) {
-    return [{ text: `${tasks.value.length} 个任务 · ${timeline.value?.executions.length || 0} 次执行` }, { text: "点开任务看要求、过程与结果" }];
+    return [{ text: t('{value1} 个任务 · {value2} 次执行', { value1: tasks.value.length, value2: timeline.value?.executions.length || 0 }) }, { text: t('点开任务看要求、过程与结果') }];
   }
   const { running: live, members, wait, failed, stalled, total, keys } = digest.value;
   const parts = [];
@@ -391,15 +392,15 @@ const headline = computed(() => {
   if (!compact.value && live.length) {
     const row = live.find((item) => keys.has(item.key)) || live[0];
     const state = status(row);
-    parts.push({ text: `${name(row.item.member)} 已运行 ${format_duration(status_time.value - row.start)}` }, { text: state.text, tone: state.tone });
-    if (live.length > 1) parts.push({ text: `另 ${live.length - 1} 个进行中` });
+    parts.push({ text: t('{value1} 已运行 {value2}', { value1: name(row.item.member), value2: format_duration(status_time.value - row.start) }) }, { text: state.text, tone: state.tone });
+    if (live.length > 1) parts.push({ text: t('另 {value1} 个进行中', { value1: live.length - 1 }) });
   } else if (!compact.value) {
-    parts.push({ text: `最近一次任务${live.length ? "已进行" : "用时"} ${format_duration(total)}` });
+    parts.push({ text: t('最近一次任务{value1} {value2}', { value1: live.length ? t('已进行') : t('用时'), value2: format_duration(total) }) });
     if (members.length > 1) parts.push({ text: members.slice(0, 2).map((part) => `${name(part.member)} ${format_duration(part.ms)}`).join("、") });
   }
-  if (wait >= WAIT_WARN_MS || (!live.length && wait >= 60_000)) parts.push({ text: `等待 ${format_duration(wait)}`, tone: wait >= WAIT_WARN_MS ? "warn" : "" });
-  if (stalled && !compact.value && !(live.length === 1 && stalled === 1)) parts.push({ text: `可能卡住 ${stalled}`, tone: "warn" });
-  if (failed) parts.push({ text: `这 ${all_rows.value.length} 次里失败 ${failed} 次`, tone: "failed" });
+  if (wait >= WAIT_WARN_MS || (!live.length && wait >= 60_000)) parts.push({ text: t('等待 {value1}', { value1: format_duration(wait) }), tone: wait >= WAIT_WARN_MS ? "warn" : "" });
+  if (stalled && !compact.value && !(live.length === 1 && stalled === 1)) parts.push({ text: t('可能卡住 {value1}', { value1: stalled }), tone: "warn" });
+  if (failed) parts.push({ text: t('这 {value1} 次里失败 {value2} 次', { value1: all_rows.value.length, value2: failed }), tone: "failed" });
   return parts;
 });
 
@@ -494,8 +495,8 @@ function place(row, start, end, gap = false) {
   const width = Math.max(0, to - from) * 100;
   return { left: `${from * 100}%`, width: gap ? `max(2px, calc(${width}% - 1px))` : `${width}%` };
 }
-const queue_piece = (row) => ({ label: "排队", start: row.queue[0], end: row.queue[1], text: "从请求发出到投递给成员" });
-const wake_piece = (row) => ({ label: row.wake_approx ? "唤醒（约）" : "唤醒", start: row.wake[0], end: row.wake[1], text: "从投递到成员开始工作" });
+const queue_piece = (row) => ({ label: t('排队'), start: row.queue[0], end: row.queue[1], text: t('从请求发出到投递给成员') });
+const wake_piece = (row) => ({ label: row.wake_approx ? t('唤醒（约）') : t('唤醒'), start: row.wake[0], end: row.wake[1], text: t('从投递到成员开始工作') });
 const segment_piece = (segment) => ({ label: `${PHASE_LABELS[segment.phase]}${segment.tool ? ` · ${segment.tool}` : ""}`, start: segment.start, end: segment.end, live: segment.live });
 const note_piece = (note) => ({ note, start: note.at, end: note.at });
 /** Each member keeps one hue on every mark that is theirs, on the timeline and the task overview alike, so a glance says who
@@ -511,17 +512,17 @@ const member_tone = computed(() => {
 
 /** The marks after a name: only what tells rows apart. */
 function role_marks(row) {
-  if (is_user_row(row)) return row.item.aside ? ["插话"] : [];
-  return row.item.role === "host" ? ["主持"] : [];
+  if (is_user_row(row)) return row.item.aside ? [t('插话')] : [];
+  return row.item.role === "host" ? [t('主持')] : [];
 }
-const role_label = (row) => is_user_row(row) ? (row.item.aside ? "用户 · 插话" : "用户") : row.item.role === "host" ? "协作 · 主持" : "协作";
+const role_label = (row) => is_user_row(row) ? (row.item.aside ? t('用户 · 插话') : t('用户')) : row.item.role === "host" ? t('协作 · 主持') : t('协作');
 const status = (row) => row_status(row, status_time.value);
 
 function row_label(row) {
   const { wait } = row_breakdown(row);
-  const parts = [name(row.item.member), role_label(row), STATE_LABELS[row.item.state], `用时 ${format_duration(row.end - row.start)}`, `等待 ${format_duration(wait)}`];
-  if (!row.segments.length && row.work) parts.push("无阶段明细");
-  if (row.notes.length) parts.push(`${row.notes.length} 段过程说明`);
+  const parts = [name(row.item.member), role_label(row), STATE_LABELS[row.item.state], t('用时 {value1}', { value1: format_duration(row.end - row.start) }), t('等待 {value1}', { value1: format_duration(wait) })];
+  if (!row.segments.length && row.work) parts.push(t('无阶段明细'));
+  if (row.notes.length) parts.push(t('{value1} 段过程说明', { value1: row.notes.length }));
   return parts.join("，");
 }
 
@@ -535,18 +536,18 @@ async function note_texts_for(row) {
   } catch { /* The card says the notes could not be read. */ }
 }
 
-const clock = (ms) => new Date(ms).toLocaleTimeString("zh-CN", { hour: "2-digit", minute: "2-digit", second: "2-digit", hour12: false });
-const short_clock = (ms) => new Date(ms).toLocaleTimeString("zh-CN", { hour: "2-digit", minute: "2-digit", hour12: false });
-const tick_label = (tick) => new Date(tick.at).toLocaleTimeString("zh-CN", { hour: "2-digit", minute: "2-digit", ...(tick.seconds ? { second: "2-digit" } : {}), hour12: false });
+const clock = (ms) => new Date(ms).toLocaleTimeString(locale, { hour: "2-digit", minute: "2-digit", second: "2-digit", hour12: false });
+const short_clock = (ms) => new Date(ms).toLocaleTimeString(locale, { hour: "2-digit", minute: "2-digit", hour12: false });
+const tick_label = (tick) => new Date(tick.at).toLocaleTimeString(locale, { hour: "2-digit", minute: "2-digit", ...(tick.seconds ? { second: "2-digit" } : {}), hour12: false });
 
 const piece_id = (row, piece) => `${row.key}:${piece.note ? "note" : piece.label}:${piece.start}`;
-const work_piece = (row) => ({ label: is_user_row(row) ? (row.work[1] > row.work[0] ? "阅读与思考" : "发出消息") : row.segments.length ? "执行" : "执行 · 无阶段明细", start: row.work[0], end: row.work[1], live: row.item.state === "running" });
+const work_piece = (row) => ({ label: is_user_row(row) ? (row.work[1] > row.work[0] ? t('阅读与思考') : t('发出消息')) : row.segments.length ? t('执行') : t('执行 · 无阶段明细'), start: row.work[0], end: row.work[1], live: row.item.state === "running" });
 
 const selected_title = computed(() => {
   const piece = selected.value?.piece;
   if (!piece) return "";
-  if (piece.note) return `过程说明 · ${clock(piece.note.at)}`;
-  return `${piece.label} · ${format_duration(piece.end - piece.start)}${piece.live ? " · 进行中" : ""}`;
+  if (piece.note) return t('过程说明 · {value1}', { value1: clock(piece.note.at) });
+  return `${piece.label} · ${format_duration(piece.end - piece.start)}${piece.live ? t(' · 进行中') : ""}`;
 });
 /** The opened execution's time, part by part, for the detail's distribution bar and its legend: waiting, each phase, and
  *  the work no phase report covers. Shares are of the whole execution. */
@@ -557,9 +558,9 @@ const opened_parts = computed(() => {
   const total = Math.max(1, row.end - row.start);
   const reported = phases.reduce((sum, part) => sum + part.ms, 0);
   const parts = [
-    ...(wait > 0 ? [{ key: "wait", kind: "wait", label: "等待", ms: wait }] : []),
+    ...(wait > 0 ? [{ key: "wait", kind: "wait", label: t('等待'), ms: wait }] : []),
     ...phases.map((part) => ({ key: part.phase, kind: PHASE_KINDS[part.phase], label: PHASE_LABELS[part.phase], ms: part.ms })),
-    ...(work - reported > 0 ? [{ key: "other", kind: "other", label: row.segments.length ? "未上报" : "执行", ms: work - reported }] : []),
+    ...(work - reported > 0 ? [{ key: "other", kind: "other", label: row.segments.length ? t('未上报') : t('执行'), ms: work - reported }] : []),
   ];
   return parts.map((part) => ({ ...part, share: part.ms / total }));
 });
@@ -569,108 +570,108 @@ watch(opened, () => { opened_task_open.value = false; });
 const selected_notes = computed(() => {
   if (!selected.value || !opened_row.value) return [];
   const texts = note_texts.value.get(opened_row.value.item.id);
-  return selected.value.related.notes.map((note) => ({ at: note.at, text: texts?.[note.index] ?? (texts ? "（未能读取）" : "读取中…") }));
+  return selected.value.related.notes.map((note) => ({ at: note.at, text: texts?.[note.index] ?? (texts ? t('（未能读取）') : t('读取中…')) }));
 });
 </script>
 
 <template>
-  <section ref="section_element" class="merged-section execution-timeline" aria-label="执行时间线">
-    <div v-if="!compact" class="page-heading"><div><h2>执行时间线</h2><p>每次执行的时间花在哪、谁在等谁；点名字看详情。</p></div></div>
-    <div v-if="reading && !timeline" class="grid gap-4 py-4" role="status" aria-label="正在读取执行时间线"><div v-for="row in 6" :key="row" class="flex items-center gap-6"><USkeleton class="h-5 w-24 shrink-0" /><USkeleton class="h-6" :class="row % 2 ? 'w-2/3' : 'w-1/3'" /></div></div>
-    <p v-else-if="error" role="alert" class="fine-print wf-error">{{ error }}<UButton label="重试" color="neutral" variant="link" size="xs" :loading="reading" @click="load(true)" /></p>
-    <p v-if="timeline && !timeline.executions.length" class="fine-print">还没有执行记录。</p>
+  <section ref="section_element" class="merged-section execution-timeline" :aria-label="t('执行时间线')">
+    <div v-if="!compact" class="page-heading"><div><h2>{{ t('执行时间线') }}</h2><p>{{ t('每次执行的时间花在哪、谁在等谁；点名字看详情。') }}</p></div></div>
+    <div v-if="reading && !timeline" class="grid gap-4 py-4" role="status" :aria-label="t('正在读取执行时间线')"><div v-for="row in 6" :key="row" class="flex items-center gap-6"><USkeleton class="h-5 w-24 shrink-0" /><USkeleton class="h-6" :class="row % 2 ? 'w-2/3' : 'w-1/3'" /></div></div>
+    <p v-else-if="error" role="alert" class="fine-print wf-error">{{ error }}<UButton :label="t('重试')" color="neutral" variant="link" size="xs" :loading="reading" @click="load(true)" /></p>
+    <p v-if="timeline && !timeline.executions.length" class="fine-print">{{ t('还没有执行记录。') }}</p>
     <div v-if="timeline?.executions.length" ref="wf_element" class="wf" :class="{ 'is-compact': compact }"
       :style="{ '--wf-depth-px': `${compact ? COMPACT_DEPTH_PX : DEPTH_PX}px` }">
       <header class="wf-head">
         <div class="wf-head-line">
-          <span class="wf-modes" role="tablist" aria-label="查看方式">
-            <button type="button" role="tab" :aria-selected="!overview" :class="{ 'is-active': !overview }" @click="view_mode = 'timeline'">时间线</button>
-            <button type="button" role="tab" :aria-selected="overview" :class="{ 'is-active': overview }" @click="view_mode = 'tasks'">任务概览</button>
+          <span class="wf-modes" role="tablist" :aria-label="t('查看方式')">
+            <button type="button" role="tab" :aria-selected="!overview" :class="{ 'is-active': !overview }" @click="view_mode = 'timeline'">{{ t('时间线') }}</button>
+            <button type="button" role="tab" :aria-selected="overview" :class="{ 'is-active': overview }" @click="view_mode = 'tasks'">{{ t('任务概览') }}</button>
           </span>
-          <span v-if="replaying" class="wf-state is-replay">回放中 · {{ clock(view_time) }}</span>
-          <span v-else-if="!overview" class="wf-state" :class="{ 'is-live': digest.running.length }">{{ digest.running.length ? `${digest.running.length} 个进行中` : '均已结束' }}</span>
+          <span v-if="replaying" class="wf-state is-replay">{{ t('回放中 · {value1}', { value1: clock(view_time) }) }}</span>
+          <span v-else-if="!overview" class="wf-state" :class="{ 'is-live': digest.running.length }">{{ digest.running.length ? t('{value1} 个进行中', { value1: digest.running.length }) : t('均已结束') }}</span>
         </div>
         <p v-if="headline.length" class="wf-headline"><span v-for="(part, index) in headline" :key="index" :class="part.tone && `is-${part.tone}`">{{ part.text }}</span></p>
       </header>
 
-      <section v-if="attention.length" class="wf-now" aria-label="需要关注">
+      <section v-if="attention.length" class="wf-now" :aria-label="t('需要关注')">
         <button v-for="row in attention" :key="row.key" type="button" class="wf-now-card"
           :class="[`is-${row.item.state}`, { 'is-stalled': row.item.state === 'running' && card_status(row).tone === 'warn' }]" @click="focus_row(row)">
           <span class="wf-now-line"><i v-if="row.item.state === 'running'" class="wf-spinner" aria-hidden="true"></i>
             <UAvatar :src="bridge.identities[row.item.member]?.icon" :text="bridge.identities[row.item.member]?.initials" :alt="row.item.member" size="2xs" class="channel-avatar wf-avatar" :class="bridge.identities[row.item.member]?.style" />
             <strong>{{ name(row.item.member) }}</strong><em v-for="mark in role_marks(row)" :key="mark" class="wf-pill is-role">{{ mark }}</em>
-            <span class="wf-now-time">{{ row.item.state === 'running' ? `已运行 ${format_duration(live_time - row.start)}` : `${format_duration(Math.max(0, status_time - row.end))} 前失败` }}</span></span>
+            <span class="wf-now-time">{{ row.item.state === 'running' ? t('已运行 {value1}', { value1: format_duration(live_time - row.start) }) : t('{value1} 前失败', { value1: format_duration(Math.max(0, status_time - row.end)) }) }}</span></span>
           <span class="wf-now-status wf-status" :class="`is-${card_status(row).tone}`">{{ card_status(row).text }}</span>
           <span v-if="row.item.state === 'running' && row.item.last_note" class="wf-now-note">{{ row.item.last_note }}</span>
         </button>
       </section>
 
-      <p v-if="earlier_count" class="wf-earlier">显示最近 {{ shown.executions.length }} 次执行<button type="button" class="wf-text-button" @click="window_count += WINDOW_STEP">显示更早的 {{ Math.min(WINDOW_STEP, earlier_count) }} 次</button></p>
-      <ol v-if="overview" class="wf-runs" aria-label="任务概览">
+      <p v-if="earlier_count" class="wf-earlier">{{ t('显示最近 {value1} 次执行', { value1: shown.executions.length }) }}<button type="button" class="wf-text-button" @click="window_count += WINDOW_STEP">{{ t('显示更早的 {value1} 次', { value1: Math.min(WINDOW_STEP, earlier_count) }) }}</button></p>
+      <ol v-if="overview" class="wf-runs" :aria-label="t('任务概览')">
         <li v-for="task in tasks" :key="task.key" :class="{ 'is-open': opened_tasks.has(task.key) }">
           <button type="button" class="wf-run" :aria-expanded="opened_tasks.has(task.key)" @click="toggle_task(task.key)">
             <span class="wf-run-line"><UIcon name="i-lucide-chevron-right" class="wf-run-caret" /><time>{{ when(task.start) }}</time><strong>{{ task_title(task.task) }}</strong>
-              <span class="wf-run-meta">{{ task.count }} 次 · 用时 {{ format_duration(task.end - task.start) }}</span>
-              <em v-if="task.running" class="wf-pill is-live">进行中</em><em v-else-if="task.failed" class="wf-pill is-failed">有失败</em></span>
+              <span class="wf-run-meta">{{ t('{value1} 次 · 用时 {value2}', { value1: task.count, value2: format_duration(task.end - task.start) }) }}</span>
+              <em v-if="task.running" class="wf-pill is-live">{{ t('进行中') }}</em><em v-else-if="task.failed" class="wf-pill is-failed">{{ t('有失败') }}</em></span>
             <span v-if="task.interjections.length || partial(task)" class="wf-run-note">
-              <template v-if="task.interjections.length">插话 {{ task.interjections.length }} 条</template><template v-if="task.interjections.length && partial(task)"> · </template><template v-if="partial(task)">更早部分未加载</template></span>
+              <template v-if="task.interjections.length">{{ t('插话 {value1} 条', { value1: task.interjections.length }) }}</template><template v-if="task.interjections.length && partial(task)"> · </template><template v-if="partial(task)">{{ t('更早部分未加载') }}</template></span>
           </button>
           <div v-if="opened_tasks.has(task.key)" class="wf-run-body">
             <section>
-              <h4>要求</h4>
+              <h4>{{ t('要求') }}</h4>
               <p class="wf-run-text">{{ task_title(task.task) }}</p>
               <ol v-if="task.interjections.length" class="wf-segment-asides">
                 <li v-for="aside in task.interjections" :key="aside.key"><time>{{ short_clock(aside.at) }}</time><span class="wf-run-aside">{{ aside.task }}</span></li>
               </ol>
             </section>
             <section>
-              <h4>过程<small>{{ task.steps.length }} 次执行</small></h4>
+              <h4>{{ t('过程') }}<small>{{ t('{value1} 次执行', { value1: task.steps.length }) }}</small></h4>
               <ol class="wf-run-steps">
                 <li v-for="step in task.steps.slice(0, TASK_STEPS_SHOWN)" :key="step.key">
                   <span class="wf-run-step-line"><i class="wf-run-dot" :data-tone="member_tone.get(step.member)"></i><strong>{{ name(step.member) }}</strong>
-                    <em v-if="step.role === 'host'" class="wf-pill is-role">主持</em>
+                    <em v-if="step.role === 'host'" class="wf-pill is-role">{{ t('主持') }}</em>
                     <span class="wf-run-step-state" :class="`is-${step.state}`">{{ STATE_LABELS[step.state] }}</span>
                     <span class="wf-run-meta">{{ format_duration(step.ms) }}</span></span>
                   <span v-if="step_note(task, step)" class="wf-run-step-note" :class="{ 'is-failed': step.state === 'failed' }">{{ step_note(task, step) }}</span>
                 </li>
               </ol>
-              <p v-if="task.steps.length > TASK_STEPS_SHOWN" class="wf-run-more">另 {{ task.steps.length - TASK_STEPS_SHOWN }} 次执行，在时间线中查看</p>
+              <p v-if="task.steps.length > TASK_STEPS_SHOWN" class="wf-run-more">{{ t('另 {value1} 次执行，在时间线中查看', { value1: task.steps.length - TASK_STEPS_SHOWN }) }}</p>
             </section>
             <section>
-              <h4>结果<small v-if="task.changes">改动 {{ task.changes }} 个文件</small></h4>
+              <h4>{{ t('结果') }}<small v-if="task.changes">{{ t('改动 {value1} 个文件', { value1: task.changes }) }}</small></h4>
               <p v-if="task.outcome" class="wf-run-text"><strong>{{ name(task.outcome.member) }}：</strong>{{ task.outcome.text }}</p>
-              <p v-else class="wf-run-text is-muted">{{ task.running ? '仍在进行，还没有结果' : '没有记录到回答' }}</p>
+              <p v-else class="wf-run-text is-muted">{{ task.running ? t('仍在进行，还没有结果') : t('没有记录到回答') }}</p>
             </section>
-            <button type="button" class="wf-text-button wf-run-jump" @click="open_task(task)"><UIcon name="i-lucide-arrow-right" />在时间线中查看</button>
+            <button type="button" class="wf-text-button wf-run-jump" @click="open_task(task)"><UIcon name="i-lucide-arrow-right" />{{ t('在时间线中查看') }}</button>
           </div>
         </li>
       </ol>
 
       <div v-else class="wf-grid" :class="{ 'is-zoomed': zoomed, 'is-panning': pan }" role="list"
         @wheel="on_wheel" @mousedown="stop_autoscroll" @pointerdown="on_pan_start" @pointermove="on_pan_move" @pointerup="on_pan_end" @pointercancel="on_pan_end" @dblclick="reset_on_dblclick">
-        <div v-if="!compact" class="wf-axis-label" title="Ctrl + 滚轮缩放；放大后按住中键或拖动时间轴平移，双击时间线还原">
-            <span class="wf-axis-count">执行 · {{ rows.length }}/{{ all_rows.length }}</span>
-            <span v-if="zoomed" class="wf-zoom" title="当前放大倍数">{{ (1 / zoom.span).toFixed(1) }}×<button type="button" class="wf-zoom-reset"
-              :title="`${base_live ? '重置跟随' : '重置'}（双击时间线也可还原）`" :aria-label="base_live ? '重置跟随' : '重置'" @click="zoom = WHOLE">
+        <div v-if="!compact" class="wf-axis-label" :title="t('Ctrl + 滚轮缩放；放大后按住中键或拖动时间轴平移，双击时间线还原')">
+            <span class="wf-axis-count">{{ t('执行 · {value1}/{value2}', { value1: rows.length, value2: all_rows.length }) }}</span>
+            <span v-if="zoomed" class="wf-zoom" :title="t('当前放大倍数')">{{ (1 / zoom.span).toFixed(1) }}×<button type="button" class="wf-zoom-reset"
+              :title="t('{value1}（双击时间线也可还原）', { value1: base_live ? t('重置跟随') : t('重置') })" :aria-label="base_live ? t('重置跟随') : t('重置')" @click="zoom = WHOLE">
               <UIcon name="i-lucide-locate-fixed" /></button></span>
             <span v-if="parents.length" class="wf-branch">
-              <button type="button" class="wf-text-button" @click="collapsed = new Set()">展开</button>
-              <button type="button" class="wf-text-button" @click="collapsed = new Set(parents)">收起</button>
+              <button type="button" class="wf-text-button" @click="collapsed = new Set()">{{ t('展开') }}</button>
+              <button type="button" class="wf-text-button" @click="collapsed = new Set(parents)">{{ t('收起') }}</button>
             </span>
           </div>
           <div ref="axis_element" class="wf-axis" aria-hidden="true">
             <span v-for="tick in shown_ticks" :key="tick.at" class="wf-tick" :style="{ left: `${tick.x * 100}%` }">{{ tick_label(tick) }}</span>
             <span v-for="fold in shown_folds" :key="`fold-${fold.start}`" class="wf-fold-label"
-              :style="{ left: `${(fold.from + fold.width / 2) * 100}%` }" :title="`${clock(fold.start)} – ${clock(fold.end)} 没有执行，已折叠`">⋯ {{ format_duration(fold.end - fold.start) }}</span>
+              :style="{ left: `${(fold.from + fold.width / 2) * 100}%` }" :title="t('{value1} – {value2} 没有执行，已折叠', { value1: clock(fold.start), value2: clock(fold.end) })">⋯ {{ format_duration(fold.end - fold.start) }}</span>
             <span v-if="now_x !== null" class="wf-cursor-head" :style="{ left: `${now_x * 100}%` }"></span>
           </div>
-          <span v-if="!compact" class="wf-axis-end">用时</span>
+          <span v-if="!compact" class="wf-axis-end">{{ t('用时') }}</span>
         <template v-for="row in rows" :key="row.key">
         <div v-for="segment in (segment_heads.has(row.key) ? [segment_heads.get(row.key)] : [])" :key="segment.key" class="wf-segment">
           <span class="wf-segment-line"><time>{{ when(segment_start(segment)) }}</time><strong>{{ task_title(segment.opener.task) }}</strong>
             <button v-if="segment.interjections.length" type="button" class="wf-text-button" :aria-expanded="shown_interjections.has(segment.key)"
-              @click="toggle_interjections(segment.key)">插话 {{ segment.interjections.length }} 条</button>
-            <small v-if="partial(segment)">更早部分未加载</small></span>
+              @click="toggle_interjections(segment.key)">{{ t('插话 {value1} 条', { value1: segment.interjections.length }) }}</button>
+            <small v-if="partial(segment)">{{ t('更早部分未加载') }}</small></span>
           <span v-if="task_note(segment.opener.task, segment.opener.result)" class="wf-segment-note">{{ task_note(segment.opener.task, segment.opener.result) }}</span>
           <ol v-if="shown_interjections.has(segment.key)" class="wf-segment-asides">
             <li v-for="aside in segment.interjections" :key="aside.key"><time>{{ short_clock(aside.at) }}</time>{{ aside.task }}</li>
@@ -681,13 +682,13 @@ const selected_notes = computed(() => {
           <div class="wf-label" :data-row="row.key" :style="{ '--depth': row.depth }">
             <span v-if="row.depth" class="wf-guides" aria-hidden="true"></span>
             <button v-if="row.has_children" type="button" class="wf-toggle" :class="{ 'is-open': !collapsed.has(row.key) }" :aria-expanded="!collapsed.has(row.key)"
-              :aria-label="`${collapsed.has(row.key) ? '展开' : '收起'} ${name(row.item.member)} 派出的执行`" @click="toggle(row.key)">
+              :aria-label="t('{value1} {value2} 派出的执行', { value1: collapsed.has(row.key) ? t('展开') : t('收起'), value2: name(row.item.member) })" @click="toggle(row.key)">
               <UIcon name="i-lucide-chevron-right" />
             </button>
             <span v-else class="wf-toggle-space"></span>
             <UAvatar :src="bridge.identities[row.item.member]?.icon" :text="bridge.identities[row.item.member]?.initials" :alt="row.item.member" size="2xs" class="channel-avatar wf-avatar" :class="bridge.identities[row.item.member]?.style" />
             <button type="button" class="wf-names" :aria-expanded="opened === row.key" @click="open_row(row, $event)" @mouseenter="hover_open(row, $event)" @mouseleave="hover_leave">
-              <span class="wf-name-line"><i v-if="row.item.state === 'running'" class="wf-spinner" aria-hidden="true"></i><time v-if="compact" class="wf-clock">{{ short_clock(row.start) }}</time><strong>{{ name(row.item.member) }}</strong><em v-for="mark in role_marks(row)" :key="mark" class="wf-pill is-role">{{ mark }}</em><em v-if="interjected.has(row.key)" class="wf-pill is-aside">插话</em><em v-if="digest.slowest?.row === row.key" class="wf-pill is-slowest">最慢</em>
+              <span class="wf-name-line"><i v-if="row.item.state === 'running'" class="wf-spinner" aria-hidden="true"></i><time v-if="compact" class="wf-clock">{{ short_clock(row.start) }}</time><strong>{{ name(row.item.member) }}</strong><em v-for="mark in role_marks(row)" :key="mark" class="wf-pill is-role">{{ mark }}</em><em v-if="interjected.has(row.key)" class="wf-pill is-aside">{{ t('插话') }}</em><em v-if="digest.slowest?.row === row.key" class="wf-pill is-slowest">{{ t('最慢') }}</em>
                 <span v-if="compact" class="wf-name-end">{{ format_duration(row.end - row.start) }}<small v-if="row.item.state !== 'done'" :class="`is-${row.item.state}`">{{ STATE_LABELS[row.item.state] }}</small></span></span>
               <span v-if="!compact" class="wf-status" :class="`is-${status(row).tone}`">{{ status(row).text }}</span>
             </button>
@@ -711,31 +712,31 @@ const selected_notes = computed(() => {
                 :style="place(row, segment.seen, segment.end)" @click="open_row(row, $event, segment_piece(segment))" @mouseenter="hover_open(row, $event, segment_piece(segment))" @mouseleave="hover_leave"></i>
             </template>
             <button v-for="note in row.notes" :key="`note-${note.index}`" type="button" class="wf-note" :style="{ left: `${span_of(row, note.at, note.at)[0] * 100}%` }"
-              :aria-label="`${name(row.item.member)} 的第 ${note.index + 1} 段过程说明，${clock(note.at)}`"
+              :aria-label="t('{value1} 的第 {value2} 段过程说明，{value3}', { value1: name(row.item.member), value2: note.index + 1, value3: clock(note.at) })"
               @click="open_row(row, $event, note_piece(note))" @mouseenter="hover_open(row, $event, note_piece(note))" @mouseleave="hover_leave"></button>
           </div></div>
-          <span v-if="!compact" class="wf-end">{{ format_duration(row.end - row.start) }}<small v-if="row.item.state !== 'done'" :class="`is-${row.item.state}`">{{ STATE_LABELS[row.item.state] }}</small><small v-if="row.truncated">明细已截断</small></span>
+          <span v-if="!compact" class="wf-end">{{ format_duration(row.end - row.start) }}<small v-if="row.item.state !== 'done'" :class="`is-${row.item.state}`">{{ STATE_LABELS[row.item.state] }}</small><small v-if="row.truncated">{{ t('明细已截断') }}</small></span>
           <span v-else-if="row.item.state === 'running' || row.item.state === 'failed'" class="wf-row-status wf-status" :class="`is-${status(row).tone}`">{{ status(row).text }}</span>
-          <div v-if="opened === row.key && (compact || detail_anchor)" class="wf-detail" role="dialog" @mouseenter="hover_keep" @mouseleave="hover_leave" :aria-label="is_user_row(row) ? `${name(row.item.member)} 的这条消息` : `${name(row.item.member)} 的这次执行`"
+          <div v-if="opened === row.key && (compact || detail_anchor)" class="wf-detail" role="dialog" @mouseenter="hover_keep" @mouseleave="hover_leave" :aria-label="is_user_row(row) ? t('{value1} 的这条消息', { value1: name(row.item.member) }) : t('{value1} 的这次执行', { value1: name(row.item.member) })"
             :style="compact ? undefined : { top: `${detail_anchor.top}px`, left: `${detail_anchor.left}px` }">
             <header class="wf-detail-head">
               <UAvatar :src="bridge.identities[row.item.member]?.icon" :text="bridge.identities[row.item.member]?.initials" :alt="row.item.member" size="sm" class="channel-avatar wf-avatar" :class="bridge.identities[row.item.member]?.style" />
               <div class="wf-detail-title">
                 <span class="wf-detail-name"><strong>{{ name(row.item.member) }}</strong><em class="wf-pill wf-state-pill" :class="`is-${row.item.state}`">{{ STATE_LABELS[row.item.state] }}</em></span>
-                <small>{{ role_label(row) }} · {{ clock(row.start) }} 起</small>
+                <small>{{ t('{value1} · {value2} 起', { value1: role_label(row), value2: clock(row.start) }) }}</small>
               </div>
               <span class="wf-detail-total">{{ format_duration(row.end - row.start) }}</span>
-              <button type="button" class="wf-card-close" aria-label="关闭" @click="opened = ''"><UIcon name="i-lucide-x" /></button></header>
+              <button type="button" class="wf-card-close" :aria-label="t('关闭')" @click="opened = ''"><UIcon name="i-lucide-x" /></button></header>
             <section v-if="selected" class="wf-detail-piece">
               <strong>{{ selected_title }}</strong>
-              <small>{{ clock(selected.piece.start) }}<template v-if="selected.piece.end > selected.piece.start"> – {{ selected.piece.live ? '现在' : clock(selected.piece.end) }}</template><template v-if="selected.piece.text"> · {{ selected.piece.text }}</template></small>
+              <small>{{ clock(selected.piece.start) }}<template v-if="selected.piece.end > selected.piece.start"> – {{ selected.piece.live ? t('现在') : clock(selected.piece.end) }}</template><template v-if="selected.piece.text"> · {{ selected.piece.text }}</template></small>
               <template v-if="selected_notes.length">
-                <small class="wf-detail-piece-label">{{ selected.related.earlier ? '此前的过程说明' : '这段时间的过程说明' }}</small>
+                <small class="wf-detail-piece-label">{{ selected.related.earlier ? t('此前的过程说明') : t('这段时间的过程说明') }}</small>
                 <ol><li v-for="note in selected_notes" :key="note.at + note.text"><time>{{ clock(note.at) }}</time>{{ note.text }}</li></ol>
               </template>
             </section>
             <p v-if="row.item.state !== 'done'" class="wf-detail-status wf-status" :class="`is-${status(row).tone}`">{{ status(row).text }}</p>
-            <section v-if="opened_parts.length" class="wf-detail-block" aria-label="时间分布">
+            <section v-if="opened_parts.length" class="wf-detail-block" :aria-label="t('时间分布')">
               <span class="wf-dist" :data-tone="member_tone.get(row.item.member)">
                 <i v-for="part in opened_parts" :key="part.key" :class="`is-${part.kind}`" :style="{ flexGrow: part.ms }"></i></span>
               <ul class="wf-dist-key" :data-tone="member_tone.get(row.item.member)">
@@ -744,28 +745,28 @@ const selected_notes = computed(() => {
               </ul>
             </section>
             <section v-if="row.item.task" class="wf-detail-block">
-              <h4>任务<button v-if="row.item.task_id" type="button" class="wf-detail-link" @click="emit('detail', row.item.task_id)">#{{ row.item.task_id }}<UIcon name="i-lucide-arrow-up-right" /></button></h4>
+              <h4>{{ t('任务') }}<button v-if="row.item.task_id" type="button" class="wf-detail-link" @click="emit('detail', row.item.task_id)">#{{ row.item.task_id }}<UIcon name="i-lucide-arrow-up-right" /></button></h4>
               <p class="wf-detail-task" :class="{ 'is-open': opened_task_open }">{{ row.item.task }}</p>
-              <button v-if="row.item.task.length > 80" type="button" class="wf-text-button wf-detail-more" @click="opened_task_open = !opened_task_open">{{ opened_task_open ? '收起' : '展开全文' }}</button>
+              <button v-if="row.item.task.length > 80" type="button" class="wf-text-button wf-detail-more" @click="opened_task_open = !opened_task_open">{{ opened_task_open ? t('收起') : t('展开全文') }}</button>
             </section>
             <div v-if="row.item.answer_id || row.item.changes" class="wf-detail-actions">
-              <button v-if="row.item.answer_id" type="button" class="wf-detail-chip is-link" @click="emit('detail', row.item.answer_id)"><UIcon name="i-lucide-message-square-text" />查看回答 #{{ row.item.answer_id }}</button>
-              <span v-if="row.item.changes" class="wf-detail-chip"><UIcon name="i-lucide-file-diff" />改动 {{ row.item.changes }} 个文件</span>
+              <button v-if="row.item.answer_id" type="button" class="wf-detail-chip is-link" @click="emit('detail', row.item.answer_id)"><UIcon name="i-lucide-message-square-text" />{{ t('查看回答 #{value1}', { value1: row.item.answer_id }) }}</button>
+              <span v-if="row.item.changes" class="wf-detail-chip"><UIcon name="i-lucide-file-diff" />{{ t('改动 {value1} 个文件', { value1: row.item.changes }) }}</span>
             </div>
             <section v-if="!is_user_row(row)" class="wf-detail-block">
-              <h4>过程<small v-if="opened_log.length">{{ opened_log.length }} 条</small></h4>
-              <ol v-if="opened_log.length" class="wf-log" aria-label="过程" :data-tone="member_tone.get(row.item.member)">
+              <h4>{{ t('过程') }}<small v-if="opened_log.length">{{ t('{value1} 条', { value1: opened_log.length }) }}</small></h4>
+              <ol v-if="opened_log.length" class="wf-log" :aria-label="t('过程')" :data-tone="member_tone.get(row.item.member)">
                 <li v-for="entry in opened_log" :key="`${entry.kind}-${entry.at}-${entry.phase || ''}`" :class="[`log-${entry.kind}`, entry.kind === 'phase' && `kind-${PHASE_KINDS[entry.phase]}`, { 'is-live': entry.live }]">
                   <i class="wf-log-dot" aria-hidden="true"></i>
                   <template v-if="entry.kind === 'phase'">
                     <span class="wf-log-phase"><b>{{ PHASE_LABELS[entry.phase] }}</b><span v-if="entry.tool" class="wf-log-tool">{{ entry.tool }}</span></span>
-                    <span class="wf-log-dur">{{ entry.live ? '进行中' : format_duration(entry.duration) }}</span>
+                    <span class="wf-log-dur">{{ entry.live ? t('进行中') : format_duration(entry.duration) }}</span>
                     <time>{{ clock(entry.at) }}</time>
                   </template>
                   <template v-else><p class="wf-log-note">{{ entry.text }}</p><time>{{ clock(entry.at) }}</time></template>
                 </li>
               </ol>
-              <p v-else class="fine-print">这次执行没有阶段明细或过程说明。</p>
+              <p v-else class="fine-print">{{ t('这次执行没有阶段明细或过程说明。') }}</p>
             </section>
           </div>
         </div>
@@ -773,23 +774,23 @@ const selected_notes = computed(() => {
       </div>
 
       <footer v-if="!overview" class="wf-foot">
-        <span class="wf-key"><i class="wf-swatch is-queue"></i>排队<i class="wf-swatch is-wake"></i>唤醒<i class="wf-swatch is-model"></i>模型<i class="wf-swatch is-tool"></i>工具</span>
-        <span v-if="member_tone.size > 1">颜色区分成员，深浅区分模型与工具</span>
-        <span v-if="axis.folds.length && !compact"><i class="wf-swatch is-fold" aria-hidden="true"></i>已折叠 {{ axis.folds.length }} 段超过 {{ FOLD_GAP_MS / 60000 }} 分钟的空闲</span>
-        <span v-if="timeline.executions.length >= timeline.execution_limit">只列出最近 {{ timeline.execution_limit }} 次讨论执行与 {{ timeline.execution_limit }} 次协作执行</span>
-        <button v-if="can_replay && !show_player" type="button" class="wf-text-button wf-replay-open" @click="show_player = true"><UIcon name="i-lucide-play" />回放最近这次任务</button>
+        <span class="wf-key"><i class="wf-swatch is-queue"></i>{{ t('排队') }}<i class="wf-swatch is-wake"></i>{{ t('唤醒') }}<i class="wf-swatch is-model"></i>{{ t('模型') }}<i class="wf-swatch is-tool"></i>{{ t('工具') }}</span>
+        <span v-if="member_tone.size > 1">{{ t('颜色区分成员，深浅区分模型与工具') }}</span>
+        <span v-if="axis.folds.length && !compact"><i class="wf-swatch is-fold" aria-hidden="true"></i>{{ t('已折叠 {value1} 段超过 {value2} 分钟的空闲', { value1: axis.folds.length, value2: FOLD_GAP_MS / 60000 }) }}</span>
+        <span v-if="timeline.executions.length >= timeline.execution_limit">{{ t('只列出最近 {value1} 次讨论执行与 {value2} 次协作执行', { value1: timeline.execution_limit, value2: timeline.execution_limit }) }}</span>
+        <button v-if="can_replay && !show_player" type="button" class="wf-text-button wf-replay-open" @click="show_player = true"><UIcon name="i-lucide-play" />{{ t('回放最近这次任务') }}</button>
       </footer>
       <div v-if="can_replay && show_player" class="wf-player">
-        <button type="button" class="wf-player-button" :aria-label="replay.playing ? '暂停回放' : '回放最近这次任务'" @click="replay.playing ? pause() : play()">
+        <button type="button" class="wf-player-button" :aria-label="replay.playing ? t('暂停回放') : t('回放最近这次任务')" @click="replay.playing ? pause() : play()">
           <UIcon :name="replay.playing ? 'i-lucide-pause' : 'i-lucide-play'" />
         </button>
-        <button type="button" class="wf-player-button" aria-label="从头回放" :disabled="!replaying" @click="restart"><UIcon name="i-lucide-rotate-ccw" /></button>
-        <USelect v-model="replay.speed" :items="speed_items" variant="none" aria-label="回放速度" class="wf-speed"
+        <button type="button" class="wf-player-button" :aria-label="t('从头回放')" :disabled="!replaying" @click="restart"><UIcon name="i-lucide-rotate-ccw" /></button>
+        <USelect v-model="replay.speed" :items="speed_items" variant="none" :aria-label="t('回放速度')" class="wf-speed"
           :content="{ side: 'top', align: 'start', sideOffset: 4 }" :ui="{ content: 'channel-select-menu wf-speed-menu', trailing: 'static shrink-0 p-0', trailingIcon: 'wf-select-icon' }" />
         <input type="range" class="wf-scrub" min="0" :max="bounds.duration" step="100" :value="replaying ? replay.position : bounds.duration"
-          aria-label="回放位置" @input="scrub" />
+          :aria-label="t('回放位置')" @input="scrub" />
         <span class="wf-player-time">{{ format_duration(replaying ? replay.position : bounds.duration) }} / {{ format_duration(bounds.duration) }}</span>
-        <button type="button" class="wf-player-button" aria-label="关闭回放" @click="close_player"><UIcon name="i-lucide-x" /></button>
+        <button type="button" class="wf-player-button" :aria-label="t('关闭回放')" @click="close_player"><UIcon name="i-lucide-x" /></button>
       </div>
     </div>
   </section>
