@@ -93,11 +93,25 @@ function redraw(output, lines, drawn) {
   return lines.reduce((sum, line) => sum + Math.max(1, Math.ceil(text_width(line) / columns)), 0);
 }
 
-/** Animate a step while asynchronous work runs; synchronous work simply shows the first frame. */
+/** Cut text to a display width, ending in … when shortened. */
+function fit(text, width) {
+  if (text_width(text) <= width) return text;
+  let kept = '';
+  for (const char of text) { if (text_width(`${kept}${char}`) > width - 1) break; kept += char; }
+  return `${kept}…`;
+}
+
+/** Items of a short list in the interface language (、 in Chinese, a comma in English). */
+export const list_text = items => items.join(t('、'));
+
+/**
+ * Animate a step while asynchronous work runs; synchronous work simply shows the first frame. The line is kept to one
+ * terminal row: `\r` returns only to the start of the last row, so a wrapped line would leave a copy at every frame.
+ */
 export function spinner(title) {
   if (!styled) return { done: () => {}, fail: () => {} };
   let frame = 0;
-  const render = () => write(`\r\x1b[2K${tone.cyan(SPIN_FRAMES[frame++ % SPIN_FRAMES.length])}  ${title}${tone.dim('…')}`);
+  const render = () => write(`\r\x1b[2K${tone.cyan(SPIN_FRAMES[frame++ % SPIN_FRAMES.length])}  ${fit(title, (process.stderr.columns || 80) - 5)}${tone.dim('…')}`);
   render();
   const timer = setInterval(render, SPIN_MS);
   const clear = () => { clearInterval(timer); write('\r\x1b[2K'); };
@@ -161,7 +175,7 @@ export function checkbox_prompt(message, items, input = process.stdin, output = 
       input.off('keypress', on_key);
       input.setRawMode(false);
       input.pause();
-      const chosen = items.filter((_, index) => checked[index]).map(item => item.label).join('、') || t('不接入软件，只配置网站');
+      const chosen = list_text(items.filter((_, index) => checked[index]).map(item => item.label)) || t('不接入软件，只配置网站');
       draw(error ? [`${tone.red('■')}  ${message}`, `${bar()}  ${tone.dim(t('已取消'))}`] : [`${tone.green('◇')}  ${message}`, `${bar()}  ${tone.dim(chosen)}`, bar()]);
       output.write('\x1b[?25h');
       if (error) fail(error); else done(checked);
@@ -233,7 +247,7 @@ export function tree_prompt(message, groups, input = process.stdin, output = pro
       input.off('keypress', on_key);
       input.setRawMode(false);
       input.pause();
-      const summary = groups.map((group, index) => `${group.label}：${group.items.filter((_, item) => checked[index][item]).map(item => item.label).join('、') || t('不安装')}`);
+      const summary = groups.map((group, index) => t('{value1}：{value2}', { value1: group.label, value2: list_text(group.items.filter((_, item) => checked[index][item]).map(item => item.label)) || t('不安装') }));
       draw(error ? [`${tone.red('■')}  ${message}`, `${bar()}  ${tone.dim(t('已取消'))}`]
         : [`${tone.green('◇')}  ${message}`, ...summary.map(line => `${bar()}  ${tone.dim(line)}`), bar()]);
       output.write('\x1b[?25h');

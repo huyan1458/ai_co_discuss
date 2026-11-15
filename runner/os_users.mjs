@@ -264,8 +264,13 @@ export function run_as_user(data, account, script, { files = {}, folders = {}, v
   writeFileSync(job, `\ufeff[Console]::OutputEncoding = [Text.Encoding]::UTF8\n$Job = ${quote(folder)}\n$Out = ${quote(join(folder, 'out'))}\n${script}\n`, 'utf8');
   const command = visible ? `-NoProfile -ExecutionPolicy Bypass -NoExit -File ${quote(job)}`
     : `-NoProfile -ExecutionPolicy Bypass -Command & ${quote(job)} *> ${quote(output)}`;
+  // Start-Process -Credential hands the new process this PowerShell's standard output and error, which are the pipes the
+  // caller's spawnSync reads to their end: a process left running would hold this start (and the panel's whole event
+  // loop) until its timeout (seen 2026-11-15: a sign-in froze the panel and its taskbar icon for two minutes). Not waiting,
+  // they go to files in the job folder instead, which only the owner writes.
+  const detach = wait ? '' : `-RedirectStandardOutput ${quote(join(folder, 'start-out.txt'))} -RedirectStandardError ${quote(join(folder, 'start-error.txt'))}`;
   const start = `$credential = New-Object System.Management.Automation.PSCredential(${quote(record.user)}, ${secure_secret(record.secret)})
-$process = Start-Process ${POWERSHELL} -Credential $credential -LoadUserProfile -WorkingDirectory ${quote(folder)} -PassThru ${visible ? '' : '-WindowStyle Hidden'} -ArgumentList ${quote(command)}
+$process = Start-Process ${POWERSHELL} -Credential $credential -LoadUserProfile -WorkingDirectory ${quote(folder)} -PassThru ${visible ? '' : '-WindowStyle Hidden'} ${detach} -ArgumentList ${quote(command)}
 ${wait ? `if (-not $process.WaitForExit(${timeout})) { $process.Kill(); throw '运行超时' }` : ''}
 $process.Id`;
   try {

@@ -405,5 +405,8 @@ export default {
   "问题 #{id} 已交给主持人处理，这条回复没有作答；需要补充请在房间里说。": "Question #{id} is with the host; this reply answered nothing. To add something, say it in the room.",
   "问题 #{id} 已更新到第 {version} 版（例如主持人给了推荐），这条回复没有作答；新版本会另发通知。": "Question #{id} is now at version {version} (for example the host recommended an answer); this reply answered nothing. The new version will be sent to you.",
   "已按 {picked}回答问题 #{id}。": "Answered question #{id} with {picked}.",
-  "已把你的回复交给主持人判断（问题 #{id}），它会代为选择或在房间里追问。": "Your reply went to the host (question #{id}); it will choose for you or ask in the room."
+  "已把你的回复交给主持人判断（问题 #{id}），它会代为选择或在房间里追问。": "Your reply went to the host (question #{id}); it will choose for you or ask in the room.",
+  "、": ", ",
+  "{value1}：{value2}": "{value1}: {value2}",
+  "让不同 AI 在各自软件中协作的共享讨论空间": "A shared discussion space where different AIs work together, each in its own app"
 };

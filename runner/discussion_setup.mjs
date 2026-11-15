@@ -414,7 +414,7 @@ async function confirm_restart(reason, options) {
 
 /** Configure Python, selected clients and skills, returning partial results on startup failure. */
 async function setup(options) {
-  intro(t('配置 AI CoDiscuss'), PACKAGE.version, PACKAGE.description);
+  intro(t('配置 AI CoDiscuss'), PACKAGE.version, t('让不同 AI 在各自软件中协作的共享讨论空间'));
   const { home, previous, python, port } = setup_environment(options);
   if (styled && !process.env.CODISCUSS_TUI_NESTED) step(t('运行环境就绪'), [environment_line(python, port)]);
   const scan = spinner(t('检测已安装的 AI 软件'));

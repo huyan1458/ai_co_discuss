@@ -8,7 +8,7 @@
  * after moving them.
  */
 import { spawnSync } from 'node:child_process';
-import { copyFileSync, existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { copyFileSync, existsSync, mkdirSync, readdirSync, readFileSync, renameSync, rmSync, writeFileSync } from 'node:fs';
 import { homedir, tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -277,11 +277,21 @@ static class TrayMenu {
     return strip;
   }
 
+  // An invisible window that never has a taskbar button. Making the menu itself the foreground window gave it one: an
+  // ownerless top-level window there gets a taskbar button (seen 2026-11-15 on both computers).
+  static Form anchor;
+
   public static void Show(ContextMenuStrip strip, Point at) {
+    if (anchor == null) {
+      anchor = new Form();
+      anchor.ShowInTaskbar = false; anchor.FormBorderStyle = FormBorderStyle.None; anchor.StartPosition = FormStartPosition.Manual;
+      anchor.Location = new Point(-32000, -32000); anchor.Size = new Size(1, 1); anchor.Opacity = 0;
+      anchor.Show();
+    }
+    // A menu closes on an outside click only when this program is in the foreground.
+    SetForegroundWindow(anchor.Handle);
     // Opened downward from one menu-height above the pointer, so it sits up and to the right of it.
     strip.Show(new Point(at.X, at.Y - strip.Height), ToolStripDropDownDirection.BelowRight);
-    // A menu closes on an outside click only when this program is in the foreground.
-    SetForegroundWindow(strip.Handle);
   }
 }
 
@@ -579,6 +589,20 @@ export function launcher_installed(home = join(homedir(), '.codiscuss')) {
 }
 
 /**
+ * Put a new exe in place of one that may be running. Windows lets a running exe be renamed but not overwritten or
+ * deleted, so it is moved aside (its icon keeps working until it is restarted) and removed on a later run.
+ */
+function replace_running(draft, exe) {
+  const folder = dirname(exe);
+  // An old one still running (its icon not restarted yet) stays until a later run.
+  for (const name of readdirSync(folder)) if (name.endsWith('.old')) try { rmSync(join(folder, name), { force: true }); } catch { /* still running */ }
+  if (existsSync(exe)) {
+    try { rmSync(exe); } catch { renameSync(exe, join(folder, `launcher-${Date.now()}.old`)); }
+  }
+  renameSync(draft, exe);
+}
+
+/**
  * Build 共议.exe and its shortcuts.
  *
  * Returns:
@@ -594,9 +618,12 @@ export function install_launcher(home = join(homedir(), '.codiscuss')) {
   const source = join(folder, 'launcher.cs'), exe = launcher_path(home);
   writeFileSync(source, `\ufeff${launcher_source({ node: process.execPath, local_script: installed_script('discussion_local.mjs'),
     panel_script: installed_script('admin_panel.mjs'), home })}`, 'utf8');
+  // Compiled beside it first: the running exe (it hosts the taskbar icon) cannot be overwritten (CS0016, seen 2026-11-15).
+  const draft = join(folder, 'launcher.new.exe');
   const result = spawnSync(CSC, ['/nologo', '/target:winexe', '/codepage:65001', '/optimize+', '/r:System.Windows.Forms.dll', '/r:System.Drawing.dll',
-    `/out:${exe}`, ...(icon ? [`/win32icon:${icon}`] : []), source], { encoding: 'utf8', windowsHide: true });
+    `/out:${draft}`, ...(icon ? [`/win32icon:${icon}`] : []), source], { encoding: 'utf8', windowsHide: true });
   if (result.status !== 0) throw new Error(t('编译启动器失败：{value1}', { value1: (result.stdout || result.stderr).trim() }));
+  replace_running(draft, exe);
   const shortcuts = ['Desktop', 'Programs'].map(place => write_shortcut(place, exe, icon));
   return { exe, icon, shortcuts };
 }
