@@ -1071,7 +1071,9 @@ async function refresh_room_content(room_id, version, versions) {
   const history_read = state.tab === "discussion" ? load_message_history(room_id, version).then((result) => {
     if (current() && result) { render_messages(result); publish_view(); }
   }) : null;
-  if (history_read && !state.messages.length) { state.messages_loading = true; publish_view(); }
+  // Only a transcript not yet read shows the loading state; re-reading an empty room keeps its empty view.
+  const history_key = `${room_id}?${new URLSearchParams({ q: state.query, withdrawn: "include" })}`;
+  if (history_read && !state.messages.length && state.message_history?.key !== history_key) { state.messages_loading = true; publish_view(); }
   try {
     await Promise.all([room_read, history_read]);
   } catch (error) {

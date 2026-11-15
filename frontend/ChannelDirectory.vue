@@ -5,7 +5,6 @@ import MemoBlock from "./memo-block.js";
 import { use_workflow_library } from "./workflow-library.js";
 import { t } from "./i18n.js";
 
-const EXPANDED_KEY = "ai-codiscuss-folders-expanded";
 const emit = defineEmits(["select", "manage", "create", "create-folder", "manage-folder", "delete-folder", "archive-folder", "archives"]);
 const { view, bridge, act, pending } = inject("discussion");
 // While the workflow page fills the middle, no room row is shown as the open one.
@@ -98,13 +97,12 @@ function folder_head(folder, index) {
   return head;
 }
 const rooms_open = ref(true);
-// Folders start collapsed; only the ones the user opened are remembered. Moving to a room in a closed folder opens it
-// for this page load only, so a refresh shows the folders exactly as the user left them.
-const expanded = ref(read_expanded());
+// Each page load opens only the shown room's folder; folders the user opens stay open until the page is reloaded.
+const expanded = ref(new Set());
 const revealed = ref("");
-watch(() => view.value.room?.id, (room_id, previous_id) => {
-  if (previous_id) revealed.value = view.value.room?.folder_id || "";
-});
+watch(() => [view.value.room?.id, view.value.room?.folder_id], () => {
+  revealed.value = view.value.room?.folder_id || "";
+}, { immediate: true });
 /** Whether one folder's rooms are shown; the unfiled group is always shown. */
 function folder_open(id) { return !id || expanded.value.has(id) || revealed.value === id; }
 
@@ -131,20 +129,13 @@ function folder_export(folder) {
     onSelect: () => act("backup_rooms", { ids, name: folder.name || t("未分组") }) };
 }
 
-/** Restore the folder IDs the user expanded when local storage is available. */
-function read_expanded() {
-  try { return new Set(JSON.parse(localStorage.getItem(EXPANDED_KEY) || "[]")); }
-  catch { return new Set(); }
-}
-
-/** Toggle one folder and remember the user's choice. */
+/** Toggle one folder for this page load. */
 function toggle_folder(id) {
   const open = folder_open(id);
   const next = new Set(expanded.value);
   if (open) next.delete(id); else next.add(id);
   if (open && revealed.value === id) revealed.value = "";
   expanded.value = next;
-  try { localStorage.setItem(EXPANDED_KEY, JSON.stringify([...next])); } catch { /* Keep the current view. */ }
 }
 
 /** Keep actions targeted to the clicked channel without changing the open draft. */

@@ -1,7 +1,7 @@
 /** Room workflows: the library on disk, pasted drafts, and what a room's host and members receive. */
 import assert from 'node:assert/strict';
 import { spawnSync } from 'node:child_process';
-import { mkdtempSync, mkdirSync, readFileSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdtempSync, mkdirSync, readFileSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 import { test } from 'node:test';
@@ -9,7 +9,12 @@ import { participant_tools, system_prompt } from '../runner/adapters/api.mjs';
 import { run_command } from '../runner/adapters/api_commands.mjs';
 import { open_project } from '../runner/adapters/api_files.mjs';
 import { validate_preset } from '../runner/discussion_launch.mjs';
-import { free_task_files } from '../runner/free_runner.mjs';
+import { free_task_files, member_folders } from '../runner/free_runner.mjs';
+
+/** A task file, which sits in its member's own runtime folder. */
+function runtime_file(directory, name) {
+  return member_folders(directory).map(folder => join(folder, name)).find(path => existsSync(path)) || join(directory, name);
+}
 import { assert_workflow_enabled, delete_workflow, get_workflow, list_workflows, load_room_workflow, parse_workflow_draft, preview_workflow, rename_workflow, save_workflow, set_workflow_disabled, workflow_in_use } from '../runner/workflows.mjs';
 
 const NOVEL = {
@@ -181,7 +186,7 @@ function room_fixture(t) {
 test('the host is told of the workflow to read on demand and its present members; a member gets its card prompt as it is now', t => {
   const { home, config, task } = room_fixture(t);
   const host = task('Claude', 'host');
-  const host_file = JSON.parse(readFileSync(join(config.directory, 'free-1.task.json'), 'utf8'));
+  const host_file = JSON.parse(readFileSync(runtime_file(config.directory, 'free-1.task.json'), 'utf8'));
   // Like a skill, SKILL.md is not read on every task: the host opens it when a request fits, and again only when it changed.
   assert.ok(!host_file.skills.some(path => path.includes('workflows')));
   assert.ok(host_file.workflow.skill_path.endsWith(join('workflows', 'novel-serial', 'SKILL.md')));
@@ -193,7 +198,7 @@ test('the host is told of the workflow to read on demand and its present members
   const revision = host_file.workflow.revision;
   assert.deepEqual(host.skill_directories.slice(1), [join(home, 'workflows', 'novel-serial')]);
   const writer = task('Antigravity-writer', 'member');
-  const writer_file = JSON.parse(readFileSync(join(config.directory, 'free-2.task.json'), 'utf8'));
+  const writer_file = JSON.parse(readFileSync(runtime_file(config.directory, 'free-2.task.json'), 'utf8'));
   assert.equal(writer_file.workflow, undefined);
   assert.ok(!writer_file.skills.some(path => path.includes('workflows')));
   assert.match(writer.prompt, /克制、具体。/);
@@ -202,10 +207,10 @@ test('the host is told of the workflow to read on demand and its present members
   save_workflow(home, { ...NOVEL, agents: [{ ...NOVEL.agents[0], system_prompt: '改后的提示词', project_access: 'full' }] }, validate_preset);
   const updated = task('Antigravity-writer', 'member');
   task('Claude', 'host');
-  assert.equal(JSON.parse(readFileSync(join(config.directory, 'free-1.task.json'), 'utf8')).workflow.revision, revision, 'a card edit leaves the host reading as it was');
+  assert.equal(JSON.parse(readFileSync(runtime_file(config.directory, 'free-1.task.json'), 'utf8')).workflow.revision, revision, 'a card edit leaves the host reading as it was');
   save_workflow(home, { ...NOVEL, skill: '新的做法' }, validate_preset);
   task('Claude', 'host');
-  assert.notEqual(JSON.parse(readFileSync(join(config.directory, 'free-1.task.json'), 'utf8')).workflow.revision, revision);
+  assert.notEqual(JSON.parse(readFileSync(runtime_file(config.directory, 'free-1.task.json'), 'utf8')).workflow.revision, revision);
   save_workflow(home, { ...NOVEL, agents: [{ ...NOVEL.agents[0], system_prompt: '改后的提示词', project_access: 'full' }] }, validate_preset);
   assert.match(updated.prompt, /改后的提示词/);
   assert.equal(updated.profile.project_access, 'write', 'editing a card never widens the room member permission');
@@ -302,7 +307,7 @@ test('sub-workflows live in workflows/<id>/ as workflows of their own: their car
   const task = name => free_task_files(run_config, { name, role: name === 'Claude' ? 'host' : 'member' }, { id: 1, read_until: 0,
     requests: [{ id: 1, message_id: 9, purpose: 'route' }] }, {}, { workflow, room_members });
   const host = task('Claude');
-  const field = JSON.parse(readFileSync(join(directory, 'free-1.task.json'), 'utf8')).workflow;
+  const field = JSON.parse(readFileSync(runtime_file(directory, 'free-1.task.json'), 'utf8')).workflow;
   assert.deepEqual(field.missing.map(card => card.card), ['science']);
   assert.equal(field.members.find(member => member.card === 'hero').sub_workflow, 'rehearsal');
   const part = field.sub_workflows.find(sub => sub.id === 'rehearsal');
@@ -384,7 +389,7 @@ test('a workflow keeps its canvas in flow.json as an illustration: any arrows ar
   assert.deepEqual(get_workflow(home, 'novel-serial').flow, flow);
   task('Claude', 'host');
   // The host works from SKILL.md alone.
-  assert.equal(JSON.parse(readFileSync(join(config.directory, 'free-1.task.json'), 'utf8')).workflow.flow, undefined);
+  assert.equal(JSON.parse(readFileSync(runtime_file(config.directory, 'free-1.task.json'), 'utf8')).workflow.flow, undefined);
   save_workflow(home, { ...NOVEL, flow: null }, validate_preset);
   assert.equal(get_workflow(home, 'novel-serial').flow, undefined);
 });
