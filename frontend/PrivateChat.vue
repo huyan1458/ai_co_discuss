@@ -127,6 +127,9 @@ const running_item = computed(() => [...items.value].reverse().find((item) => ru
 const paused = computed(() => Boolean(running_item.value?.execution?.paused_at));
 // Esc pauses a room task (its turn in the room goes on) and stops a private chat line.
 const stop_label = computed(() => running_item.value?.execution ? t('暂停') : t('打断'));
+// A room task whose software cannot pause and resume has nothing to pause here: no button, and Esc says why.
+const can_interrupt = computed(() => Boolean(running_item.value && !paused.value
+  && (running_item.value.chat || running_item.value.execution?.capabilities?.resume)));
 const status_line = computed(() => {
   const item = running_item.value;
   if (!item) return t('{value1} · 空闲', { value1: bridge.display_name(name.value) });
@@ -479,7 +482,7 @@ async function send() {
     to_bottom();
     await refresh();
   } catch (failure) {
-    error.value = failure.message || t('未能发出');
+    bridge.notify("error", failure.message || t('未能发出'));
   } finally { sending.value = false; }
 }
 /** Enter sends with a keyboard, except while an input method is still composing (choosing Chinese characters). */
@@ -495,15 +498,18 @@ function on_enter(event) {
 async function interrupt() {
   const item = running_item.value;
   if (!item || paused.value) return;
+  if (!can_interrupt.value) {
+    bridge.notify("warning", t('这位成员的接入方式不能暂停后接着做；要结束这次任务请用消息卡片上的停止'));
+    return;
+  }
   try {
     if (item.chat) await bridge.stop_member_chat(room.value.id, item.chat.id);
-    else if (!item.execution.capabilities?.resume) throw new Error(t('这位成员的接入方式不能暂停后接着做；要结束这次任务请用消息卡片上的停止'));
     else {
       await bridge.pause_execution(room.value.id, item.execution.id);
       await act("refresh");
     }
     await refresh();
-  } catch (failure) { error.value = failure.message || t('未能{value1}', { value1: stop_label.value }); }
+  } catch (failure) { bridge.notify("error", failure.message || t('未能{value1}', { value1: stop_label.value })); }
 }
 /** ↑/↓ walk earlier lines when the caret is on the first or last line, as a shell does. */
 function recall(event, step) {
@@ -580,13 +586,13 @@ function recall(event, step) {
         :aria-label="t('私聊输入')" maxlength="4000" @keydown.enter.exact="on_enter" @keydown.esc.prevent="interrupt"
         @keydown.up="recall($event, -1)" @keydown.down="recall($event, 1)" />
       <!-- Touch keyboards have no Esc and often no Enter that sends, so both keys also have buttons. -->
-      <button v-if="running_item && !paused" type="button" class="term-button is-stop" :aria-label="stop_label" :title="`${stop_label}（Esc）`" @click="interrupt"><span class="term-stop-square" /></button>
+      <button v-if="can_interrupt" type="button" class="term-button is-stop" :aria-label="stop_label" :title="`${stop_label}（Esc）`" @click="interrupt"><span class="term-stop-square" /></button>
       <button type="button" class="term-button" :aria-label="t('发送')" :title="ENTER_SENDS ? t('发送（Enter）') : t('发送')" :disabled="!draft.trim() || sending || Boolean(unsupported)" @click="send">↑</button>
     </div>
     <div class="term-hint">
       <span v-if="error" class="term-warn">{{ error }}</span>
       <span v-else-if="unsupported" class="term-warn">{{ unsupported }}</span>
-      <span v-else-if="ENTER_SENDS">{{ t('enter 发送 · shift+enter 换行 · ↑↓ 历史{value1}', { value1: running_item && !paused ? ` · esc ${stop_label}` : "" }) }}</span>
+      <span v-else-if="ENTER_SENDS">{{ t('enter 发送 · shift+enter 换行 · ↑↓ 历史{value1}', { value1: can_interrupt ? ` · esc ${stop_label}` : "" }) }}</span>
     </div>
   </div>
 </template>

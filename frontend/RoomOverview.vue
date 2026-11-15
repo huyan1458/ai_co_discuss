@@ -418,6 +418,10 @@ const created = computed(() => room.value.created_at ? new Date(room.value.creat
 </template>
 
 <style scoped>
+/* Nothing on this page may widen it past the screen: every grid and flex item can shrink (a long name, model or path
+   is cut with an ellipsis inside its own box), and anything still too wide is clipped instead of scrolling sideways. */
+.room-overview { min-width: 0; overflow-x: clip; }
+.room-overview :is(.member-card, .member-card-facts > div, .member-card-facts dd, .overview-settings > div) { min-width: 0; }
 .overview-section { margin-bottom: 28px; }
 .overview-section h3 { margin: 0 0 10px; font-size: 14px; font-weight: 600; color: var(--ui-text-highlighted); }
 /* One card per member: who it is, three aligned facts, then its actions in a footer. */
@@ -430,8 +434,8 @@ const created = computed(() => room.value.created_at ? new Date(room.value.creat
 .member-card-grip { position: absolute; left: 2px; top: 22px; width: 14px; color: var(--ui-text-dimmed); cursor: grab; opacity: 0; transition: opacity .12s; }
 .member-card:hover .member-card-grip { opacity: 1; }
 .member-card-name { display: grid; flex: 1; min-width: 0; }
-.member-card-name strong { display: flex; align-items: center; gap: 5px; min-width: 0; white-space: nowrap; color: var(--ui-text-highlighted); font-size: 14px; font-weight: 600; }
-.member-card-name strong .iconify { color: var(--ui-warning, #e5b54a); }
+.member-card-name strong { display: block; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--ui-text-highlighted); font-size: 14px; font-weight: 600; }
+.member-card-name strong .iconify { margin-left: 5px; vertical-align: -2px; color: var(--ui-warning, #e5b54a); }
 .member-card-name small { overflow: hidden; color: var(--ui-text-muted); font-size: 12px; text-overflow: ellipsis; white-space: nowrap; }
 .member-card-facts { display: grid; grid-template-columns: 120px minmax(0, 1fr) 210px; gap: 16px; margin: 0; padding: 12px 16px 14px 60px; font-size: 13px; }
 .member-card-facts dt { margin-bottom: 4px; color: var(--ui-text-muted); font-size: 12px; }
@@ -442,7 +446,8 @@ const created = computed(() => room.value.created_at ? new Date(room.value.creat
 .overview-model > button { padding: 2px; color: var(--ui-text-muted); }
 .overview-model > button :deep(svg), .overview-model > button :deep(.iconify) { width: 12px; height: 12px; }
 .overview-model-form { display: flex; flex-direction: column; gap: 12px; }
-.overview-model-form label { display: grid; gap: 6px; color: var(--ui-text-muted); font-size: 12px; }
+/* minmax(0, 1fr): a long saved model name is cut inside the select instead of widening the dialog past the screen. */
+.overview-model-form label { display: grid; grid-template-columns: minmax(0, 1fr); gap: 6px; color: var(--ui-text-muted); font-size: 12px; }
 .overview-model-form p { margin: 0; font-size: 12px; }
 .overview-model-actions { display: flex; justify-content: flex-end; gap: 8px; }
 .overview-muted { color: var(--ui-text-muted); }
@@ -487,7 +492,9 @@ const created = computed(() => room.value.created_at ? new Date(room.value.creat
 .overview-settings dt { flex: none; width: 112px; color: var(--ui-text-muted); font-size: 12px; }
 .overview-settings dd { flex: 1; min-width: 0; margin: 0; color: var(--ui-text); overflow-wrap: anywhere; }
 @media (max-width: 720px) {
-  .member-card-facts { grid-template-columns: 1fr 1fr; padding-left: 16px; }
+  /* minmax(0, …): a long model name is cut with an ellipsis instead of widening the card past the screen. */
+  .member-card-facts { grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); padding-left: 16px; }
+  .member-card-facts > div { min-width: 0; }
   .member-card-facts > div:nth-child(3) { grid-column: 1 / -1; }
   /* A phone gives each setting the full width: its name sits above the value instead of a 112px column beside it. */
   .overview-settings > div { flex-direction: column; align-items: stretch; gap: 6px; padding: 12px 14px; }

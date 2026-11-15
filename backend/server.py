@@ -507,6 +507,8 @@ def require_room(connection, room_id):
     room["texts"] = room_display_texts(connection, room)
     room["archived"] = bool(connection.execute("SELECT archived FROM room_directory WHERE room_id=?", (room_id,)).fetchone()[0])
     room["folder_id"] = connection.execute("SELECT folder_id FROM room_folder_assignments WHERE room_id=?", (room_id,)).fetchone()[0]
+    # The number the next sent file takes, so the composer shows `[图片 #n]` as it will be saved.
+    room["next_attachment_number"] = attachment_number_before(connection, room_id, None)
     settings = connection.execute("SELECT host,background,boundaries,experts,focus FROM topic_settings WHERE room_id=?",
                                   (room_id,)).fetchone()
     room.update(dict(settings) if settings else topic_defaults())
@@ -1318,6 +1320,51 @@ def attachment_view(row):
     return result
 
 
+ATTACHMENT_PLACEHOLDER = re.compile(r"\[(图片|文件) #(\d{1,4})\]")
+
+
+def attachment_number_before(connection, room_id, message_id):
+    """The room-wide number of the first file of message `message_id` (of the next file sent when None).
+
+    Files are numbered across the whole room in message order, as Claude Code numbers pasted images across a
+    conversation, so `[图片 #n]` names one file wherever it is quoted."""
+    if message_id is None:
+        query, params = "SELECT COUNT(*) FROM attachments WHERE room_id=? AND message_id IS NOT NULL", (room_id,)
+    else:
+        query, params = "SELECT COUNT(*) FROM attachments WHERE room_id=? AND message_id IS NOT NULL AND message_id<?", (room_id, message_id)
+    return connection.execute(query, params).fetchone()[0] + 1
+
+
+def renumber_placeholders(text, payload, count, start):
+    """Turn the sender's `[图片 #n]` numbering into the numbers the files took.
+
+    The sender numbered its `count` files from `attachment_start` (the page shows the room's next number; a CLI
+    member, which sends none, numbers them from 1 within its message); placeholders outside that range are left."""
+    assumed = payload.get("attachment_start")
+    assumed = assumed if isinstance(assumed, int) and not isinstance(assumed, bool) and assumed >= 1 else 1
+    if not count or assumed == start:
+        return text
+    def shift(match):
+        number = int(match.group(2))
+        return f"[{match.group(1)} #{number - assumed + start}]" if assumed <= number < assumed + count else match.group(0)
+    return ATTACHMENT_PLACEHOLDER.sub(shift, text)
+
+
+def link_message_attachments(connection, room_id, message_id, identifiers, text, payload):
+    """Link the files to their new message and renumber its placeholders room-wide."""
+    for position, identifier in enumerate(identifiers):
+        connection.execute("UPDATE attachments SET message_id=?,position=? WHERE id=?", (message_id, position, identifier))
+    numbered = renumber_placeholders(text, payload, len(identifiers), attachment_number_before(connection, room_id, message_id))
+    if numbered != text:
+        connection.execute("UPDATE messages SET text=? WHERE id=?", (numbered, message_id))
+
+
+def renumbered_expected(expected, payload, previous):
+    """A retried submission's fields as they were saved: its placeholders renumbered from the files' first number."""
+    files = previous["attachments"]
+    return {**expected, "text": renumber_placeholders(expected["text"], payload, len(files), files[0]["number"])} if files else expected
+
+
 def message_with_attachments(connection, row):
     """Attach the published file list to an original message."""
     message = dict(row)
@@ -1326,8 +1373,9 @@ def message_with_attachments(connection, row):
         return {**message, "text": "", "summary": "", "suggestions": [], "attachments": []}
     message["texts"] = load_texts(connection, "message", message["id"])
     message["suggestions"] = message_suggestions(connection, message["id"])
-    message["attachments"] = [attachment_view(item) for item in connection.execute(
-        "SELECT * FROM attachments WHERE message_id=? ORDER BY position,id", (message["id"],))]
+    files = connection.execute("SELECT * FROM attachments WHERE message_id=? ORDER BY position,id", (message["id"],)).fetchall()
+    first = attachment_number_before(connection, message["room_id"], message["id"]) if files else 0
+    message["attachments"] = [{**attachment_view(item), "number": first + index} for index, item in enumerate(files)]
     return message
 
 
@@ -1364,7 +1412,8 @@ def query_attachments(connection, room_id, params, token=""):
     total = connection.execute(f"SELECT COUNT(*) FROM attachments WHERE {where}", values).fetchone()[0]
     rows = connection.execute(f"SELECT * FROM attachments WHERE {where} ORDER BY created_at,id LIMIT ? OFFSET ?",
                               [*values, PAGE_SIZE, (page - 1) * PAGE_SIZE])
-    return {"attachments": [attachment_view(row) for row in rows], "page": page, "total": total,
+    return {"attachments": [{**attachment_view(row), **({"number": attachment_number_before(connection, room_id, row["message_id"]) + row["position"]}
+                                                         if row["message_id"] is not None else {})} for row in rows], "page": page, "total": total,
             "pages": max(1, (total + PAGE_SIZE - 1) // PAGE_SIZE)}
 
 
@@ -1475,7 +1524,7 @@ def append_free_message(connection, room, payload, actor):
     previous = connection.execute(f"{MESSAGE_QUERY} WHERE room_id=? AND submission_id=?", (room_id, submission_id)).fetchone()
     if previous:
         previous = message_with_attachments(connection, previous)
-        if (any(previous[key] != expected[key] for key in ("author", "text", "reply_to", "kind", "submitted_by", "summary", "summary_by"))
+        if (any(previous[key] != renumbered_expected(expected, payload, previous)[key] for key in ("author", "text", "reply_to", "kind", "submitted_by", "summary", "summary_by"))
                 or [item["id"] for item in previous["attachments"]] != identifiers):
             raise FileExistsError(Text('这个提交编号已被另一条内容使用，请为新发言生成新编号'))
         check_review_retry(connection, room_id, previous["id"], payload)
@@ -1498,8 +1547,7 @@ def append_free_message(connection, room, payload, actor):
                        (cursor.lastrowid, "chat", submitted_by))
     connection.execute("INSERT INTO message_summaries (message_id,text,author) VALUES (?,?,?)",
                        (cursor.lastrowid, expected["summary"], expected["summary_by"]))
-    for position, identifier in enumerate(identifiers):
-        connection.execute("UPDATE attachments SET message_id=?,position=? WHERE id=?", (cursor.lastrowid, position, identifier))
+    link_message_attachments(connection, room_id, cursor.lastrowid, identifiers, text, payload)
     # A captured reply keeps its text, but its mentions wake nobody: only a submitted answer may ask for a host.
     if expected["source"] != "auto":
         save_suggestions(connection, room_id, cursor.lastrowid, actor, payload)
@@ -1550,7 +1598,7 @@ def append_free_moderation(connection, room, payload, actor):
     previous = connection.execute(f"{MESSAGE_QUERY} WHERE room_id=? AND submission_id=?", (room["id"], submission_id)).fetchone()
     if previous:
         previous = message_with_attachments(connection, previous)
-        if any(previous[key] != expected[key] for key in ("author", "text", "reply_to", "kind", "submitted_by", "summary", "summary_by")) or [item["id"] for item in previous["attachments"]] != identifiers:
+        if any(previous[key] != renumbered_expected(expected, payload, previous)[key] for key in ("author", "text", "reply_to", "kind", "submitted_by", "summary", "summary_by")) or [item["id"] for item in previous["attachments"]] != identifiers:
             raise FileExistsError(Text('这个提交编号已被另一条内容使用，请为新发言生成新编号'))
         return {"message": previous, "duplicate": True}
     check_message_references(connection, room["id"], expected)
@@ -1561,8 +1609,7 @@ def append_free_moderation(connection, room, payload, actor):
                        (cursor.lastrowid, "moderation", author))
     connection.execute("INSERT INTO message_summaries (message_id,text,author) VALUES (?,?,?)",
                        (cursor.lastrowid, "", ""))
-    for position, identifier in enumerate(identifiers):
-        connection.execute("UPDATE attachments SET message_id=?,position=? WHERE id=?", (cursor.lastrowid, position, identifier))
+    link_message_attachments(connection, room["id"], cursor.lastrowid, identifiers, text, payload)
     saved_message = connection.execute(f"{MESSAGE_QUERY} WHERE messages.id=?", (cursor.lastrowid,)).fetchone()
     return {"message": message_with_attachments(connection, saved_message), "duplicate": False}
 

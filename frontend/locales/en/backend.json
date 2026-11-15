@@ -176,7 +176,7 @@
   "排队消息已变化，请刷新后再调整顺序": "Queued messages changed; refresh before reordering",
   "action 须为 {value1} 之一": "action must be one of {value1}",
   "enabled 须为 true 或 false": "enabled must be true or false",
-  "/{mode} 命令不能同时 @ 成员": "The /{mode} command cannot also @ members",
+  "/{mode} 命令只能 @ 主持人；要请其他成员参与，开启后由主持人安排": "The /{mode} command can only @ the host; to involve other members, let the host arrange it once it starts",
   "Goal 启动请求不存在、不属于你或已处理；只有用户的 /goal 命令能开启 Goal": "The Goal start request does not exist, belongs to someone else, or has been handled. Only the user's /goal command can start Goal",
   "Goal 已在进行；可用 /goal pause、/goal resume、/goal clear 或 /goal edit 新目标": "Goal is already running. Use /goal pause, /goal resume, /goal clear, or /goal edit with a new objective",
   "Goal 已经暂停": "Goal is already paused",

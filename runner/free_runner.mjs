@@ -179,7 +179,8 @@ function extra_change(directory, path) {
 }
 
 /** Write a non-secret task and a member-only credential file for one execution. */
-/** `[图片 #n]` / `[文件 #n]`: how a message's n-th attachment is named in its text and in the task, as on the page. */
+/** `[图片 #n]` / `[文件 #n]`: how an attachment is named in its message's text and in the task, as on the page; n is its
+ * room-wide number from the site (files are numbered across the room), else its place in the message for an older site. */
 export function attachment_placeholder(file, number) {
   return `[${IMAGE_TYPES.has(file.content_type) ? '图片' : '文件'} #${number}]`;
 }
@@ -200,7 +201,8 @@ export async function request_attachments(config, execution, member_directory = 
     try { files = (await api(config, `/attachments?message_id=${message_id}`)).attachments || []; }
     catch { continue; }
     for (const [index, file] of files.slice(0, MAX_MESSAGE_FILES).entries()) {
-      const entry = { message_id, number: index + 1, placeholder: attachment_placeholder(file, index + 1), file_name: file.file_name,
+      const number = Number.isInteger(file.number) ? file.number : index + 1;
+      const entry = { message_id, number, placeholder: attachment_placeholder(file, number), file_name: file.file_name,
         content_type: file.content_type, size: file.size, id: file.id, path: '' };
       try { entry.path = await save_attachment(config, member_directory, execution.id, message_id, entry, file.sha256); }
       catch (error) { entry.error = error.message; }

@@ -2674,7 +2674,9 @@ class GoalTests(HostRoomTests):
 
     def test_only_the_owner_command_opens_a_goal_and_the_host_fills_it_in(self):
         """`/goal` asks the host to fill in the objective; nobody else can open one, and declining leaves no goal."""
-        command = FreeRoomTests.say(self, "/goal")[1]["message"]["id"]
+        # Naming anyone but the host is refused (it would wake nobody); naming the host is the same as naming no one.
+        self.assertEqual(FreeRoomTests.say(self, "/goal @Codex 修", to=["Codex"])[0], 400)
+        command = FreeRoomTests.say(self, "/goal", to=["Claude"])[1]["message"]["id"]
         self.assertEqual(self.requests(), [("Claude", "goal_start", "pending")])
         request_id = self.request(self.path)[1]["free"]["requests"][-1]["id"]
         self.assertEqual(self.request(f"{self.path}/goal", {"action": "start", "request_id": request_id, "objective": "x"}, self.codex)[0], 403)

@@ -13,7 +13,7 @@ import time
 from .runtime import begin_write, require_owner
 from .texts import Text, load_texts, save_text
 
-QUEUED_FIELDS = ("author", "text", "reply_to", "kind", "submitted_by", "to", "sequential", "order", "attachment_ids", "submission_id")
+QUEUED_FIELDS = ("author", "text", "reply_to", "kind", "submitted_by", "to", "sequential", "order", "attachment_ids", "attachment_start", "submission_id")
 QUEUE_ACTIONS = ("send", "edit", "delete", "reorder", "resume", "queueing")
 QUEUE_ERRORS = (ValueError, TypeError, LookupError, PermissionError, FileExistsError)
 

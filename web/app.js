@@ -1888,7 +1888,8 @@ async function send_message(event) {
   element("message-input").value = "";
   const reply_to = state.reply_to;
   cancel_reply();
-  const preview = { author: payload.author, text: payload.text, created_at: new Date().toISOString(), files: drafts.map(file => ({ name: file.file.name, preview_url: file.preview_url })) };
+  const preview = { author: payload.author, text: payload.text, created_at: new Date().toISOString(), attachment_start: draft_start(drafts) || 1,
+    files: drafts.map(file => ({ name: file.file.name, preview_url: file.preview_url })) };
   state.sending_drafts = drafts;
   state.attachment_drafts = [];
   // A message the site will likely queue shows at once as a row in the queue tray instead of a card in the transcript,
@@ -1904,6 +1905,7 @@ async function send_message(event) {
   publish_view();
   try {
     payload.attachment_ids = await upload_message_attachments(room_id, payload.submitted_by, drafts);
+    if (draft_start(drafts)) payload.attachment_start = draft_start(drafts);
     // The saved card shows these files from this browser's own copy rather than reading them back through the relay.
     for (const item of drafts) {
       const path = `/api/rooms/${encodeURIComponent(room_id)}/attachments/${encodeURIComponent(item.uploaded)}/content`;
@@ -2034,6 +2036,8 @@ function add_attachments(files, target = null) {
     const added = selected.map(file => ({ id: new_submission_id(), file,
       preview_url: /^image\/(png|jpeg|gif|webp)$/.test(file.type) ? URL.createObjectURL(file) : "", uploaded: null, actor: null }));
     state.attachment_drafts.push(...added);
+    // Files already in the draft move to the room's current numbers first, so the whole draft counts from one start.
+    renumber_placeholders(null);
     added.forEach(item => { item.placeholder = draft_placeholder(item, state.attachment_drafts.indexOf(item) + 1); });
     insert_placeholders(added.map(item => item.placeholder).join(" "), target);
   }
@@ -2050,9 +2054,24 @@ function choose_attachments(target = null) {
   element("attachment-input").click();
 }
 
-/** `[图片 #n]` for an image the page previews, `[文件 #n]` for any other file. */
-function draft_placeholder(item, number) {
-  return `[${item.preview_url ? "图片" : "文件"} #${number}]`;
+/**
+ * `[图片 #n]` for an image the page previews, `[文件 #n]` for any other file. Files are numbered across the room, as
+ * Claude Code numbers pasted images across a conversation: the `position`-th file of this draft takes the room's next
+ * number plus its place. The site moves the numbers on if another message took them first (`attachment_start`).
+ */
+function draft_placeholder(item, position) {
+  return `[${item.preview_url ? "图片" : "文件"} #${attachment_base() + position - 1}]`;
+}
+
+/** The room-wide number the first file of the draft takes; 1 before a room exists. */
+function attachment_base() {
+  return state.room?.next_attachment_number || 1;
+}
+
+/** The number the draft's first placeholder carries, which the site counts from when it saves the message. */
+function draft_start(drafts) {
+  const number = Number(/#(\d+)\]$/.exec(drafts[0]?.placeholder || "")?.[1]);
+  return Number.isInteger(number) && number > 0 ? number : undefined;
 }
 
 /** Put placeholders at the caret of the textarea the files came through, else at the end of the message text. */
@@ -2184,8 +2203,12 @@ function attachment_download_attributes(file) {
  */
 function link_attachment_placeholders(html, files = []) {
   if (!files?.length) return html;
-  return html.replace(/\[(图片|文件) #(\d{1,2})\]/g, (match, kind, number) => {
-    const file = files[Number(number) - 1];
+  // A message saved since files were numbered across the room names them by that number; an older one by its place
+  // in the message, which shows as every placeholder fitting a place while not every one fits a number.
+  const numbers = [...html.matchAll(/\[(?:图片|文件) #(\d{1,4})\]/g)].map(([, number]) => Number(number));
+  const by_number = numbers.every(number => files.some(file => file.number === number)) || !numbers.every(number => number <= files.length);
+  return html.replace(/\[(图片|文件) #(\d{1,4})\]/g, (match, kind, number) => {
+    const file = by_number ? files.find(item => item.number === Number(number)) : files[Number(number) - 1];
     if (!file) return match;
     const previewable = file.content_type.startsWith("image/") || file.content_type === "application/pdf" || is_text_attachment(file);
     // The stored `[图片 #n]` / `[文件 #n]` is protocol text; only the shown label follows the page language.

@@ -54,8 +54,10 @@ def check_mode_command(connection, room_id, payload):
     if not parsed:
         return None
     mode, command, argument = parsed
-    if payload.get("to"):
-        raise ValueError(Text("/{mode} 命令不能同时 @ 成员", mode=mode))
+    # The host runs the goal or discussion, so naming it changes nothing; naming anyone else would wake nobody.
+    host = connection.execute("SELECT name FROM room_members WHERE room_id=? AND role='host' AND status='active'", (room_id,)).fetchone()
+    if any(name != (host["name"] if host else None) for name in payload.get("to") or []):
+        raise ValueError(Text("/{mode} 命令只能 @ 主持人；要请其他成员参与，开启后由主持人安排", mode=mode))
     if mode == "goal":
         goal_room.check_goal_command(connection, room_id, command, argument)
     else:

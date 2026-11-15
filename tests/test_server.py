@@ -616,6 +616,30 @@ class DiscussionTests(unittest.TestCase):
         path.write_bytes(b"ID3" + bytes(10))
         self.assertEqual(self.attachment_request("/api/local/media/good")[0], 409)
 
+    def test_attachment_numbers_run_across_the_room(self):
+        """`[图片 #n]` names one file room-wide: a sender's own numbering is moved to the numbers its files took."""
+        base = f"/api/rooms/{self.room['id']}"
+
+        def upload(name):
+            params = urlencode({"actor": "用户", "file_name": f"{name}.png", "submission_id": f"upload-{name}"})
+            return json.loads(self.attachment_request(base + "/attachments?" + params, b"\x89PNG\r\n\x1a\n" + name.encode())[2])["attachment"]["id"]
+
+        start = self.request(base)[1]["next_attachment_number"]
+        first = {"author": "用户", "text": "看 [图片 #1]", "attachment_ids": [upload("a")], "submission_id": "numbered-1"}
+        saved = self.request(base + "/messages", first)[1]["message"]
+        self.assertEqual((saved["text"], saved["attachments"][0]["number"]), (f"看 [图片 #{start}]", start))
+        # Numbered within its own message (a CLI member), and retried with the same submission: one message, same text.
+        second = {"author": "用户", "text": "[图片 #1] 和 [图片 #2]，不是 [图片 #7]", "attachment_ids": [upload("b"), upload("c")], "submission_id": "numbered-2"}
+        saved = self.request(base + "/messages", second)[1]["message"]
+        self.assertEqual(saved["text"], f"[图片 #{start + 1}] 和 [图片 #{start + 2}]，不是 [图片 #7]")
+        self.assertEqual([item["number"] for item in saved["attachments"]], [start + 1, start + 2])
+        replay = self.request(base + "/messages", second)[1]
+        self.assertEqual((replay["duplicate"], replay["message"]["id"]), (True, saved["id"]))
+        # The page already shows the room's next number and says so: nothing to move.
+        third = {"author": "用户", "text": f"[图片 #{start + 3}]", "attachment_ids": [upload("d")], "attachment_start": start + 3, "submission_id": "numbered-3"}
+        self.assertEqual(self.request(base + "/messages", third)[1]["message"]["text"], f"[图片 #{start + 3}]")
+        self.assertEqual(self.request(base)[1]["next_attachment_number"], start + 4)
+
     def test_attachments_reject_cross_room_owner_path_and_size(self):
         """Untrusted MIME and filenames cannot create executable or cross-room file access."""
         base = f"/api/rooms/{self.room['id']}"

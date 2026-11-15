@@ -1583,7 +1583,7 @@ let rising_id = null;
 const sending_html = computed(() => {
   const preview = view.value.sending_preview;
   if (!preview) return "";
-  return bridge.render_room_markdown(preview.text).replace(/\[(图片|文件) #(\d{1,2})\]/g, (match, kind, number) => !preview.files[number - 1] ? match
+  return bridge.render_room_markdown(preview.text).replace(/\[(图片|文件) #(\d{1,2})\]/g, (match, kind, number) => !preview.files[number - preview.attachment_start] ? match
     : `<span class="attachment-placeholder">${kind === "图片" ? t("[图片 #{number}]", { number }) : t("[文件 #{number}]", { number })}</span>`);
 });
 /** Write the entrance onto the saved card that took over from the sending card. */
@@ -1960,11 +1960,17 @@ const editor_observer = new ResizeObserver(([entry]) => {
 onMounted(() => prompt.value?.textareaRef && editor_observer.observe(prompt.value.textareaRef));
 onBeforeUnmount(() => editor_observer.disconnect());
 // The composer floats over the transcript's lower edge; the transcript keeps its height clear below the last card, and
-// a taller composer (more lines, files, a reply) keeps the latest card in view while the page follows the end.
-const composer_dock = ref(null), composer_height = ref(0);
+// a taller or shorter composer (lines, files, notes cleared on send) keeps the latest card in view while the page follows
+// the end. Written straight to the element inside the observer, which runs after layout and before paint: no Vue
+// re-render of the room, and padding and scroll change in the same frame, so sending does not flash.
+const composer_dock = ref(null);
+let composer_height = -1;
 const dock_observer = new ResizeObserver(([entry]) => {
-  composer_height.value = Math.round(entry.target.offsetHeight);
-  nextTick(() => { if (follow_tail.value && transcript.value) transcript.value.scrollTop = transcript.value.scrollHeight; });
+  const height = Math.round(entry.target.offsetHeight);
+  if (height === composer_height) return;
+  composer_height = height;
+  entry.target.parentElement?.style.setProperty("--channel-composer-height", `${height}px`);
+  if (follow_tail.value && transcript.value) transcript.value.scrollTop = transcript.value.scrollHeight;
 });
 onMounted(() => composer_dock.value && dock_observer.observe(composer_dock.value));
 onBeforeUnmount(() => dock_observer.disconnect());
@@ -2220,7 +2226,7 @@ function copy_message(message) { act("copy", `${view.value.room_site}/r/${room.v
 </script>
 
 <template>
-  <section class="channel-conversation" role="tabpanel" :aria-label="t('消息')" :style="{ '--channel-composer-height': `${composer_height}px` }">
+  <section class="channel-conversation" role="tabpanel" :aria-label="t('消息')">
     <div v-if="view.query || view.source_filter" class="channel-filter-summary"><span>{{ [view.query && `“${view.query}”`, [view.host_only && t('主持人'), ...view.authors.map((name) => bridge.display_name(name)), view.mention_only && `@${bridge.display_name('用户')}`, view.card_kinds.length && t('{value1} 类卡片', { value1: view.card_kinds.length })].filter(Boolean).join('、')].filter(Boolean).join(' · ') }} · {{ view.messages_loading ? t('正在筛选…') : t('{value1} 条结果', { value1: view.source_filter ? transcript_messages.length : view.total }) }}</span><UButton :label="t('清除筛选')" size="xs" variant="link" color="neutral" @click="search = ''; act('filter', { query: '', mention: false, host: false, authors: [], kinds: [] })" /></div>
     <nav v-if="view.messages.length" ref="message_map" class="channel-message-map" :style="{ '--nav-entry-height': `${NAV_ENTRY_HEIGHT}px` }" :aria-label="t('发言快速导航')" @wheel.stop.passive="browse_navigation" @pointerleave="close_preview" @focusout="close_preview" @keydown.esc.stop="close_preview" @contextmenu="navigation_context_menu" @pointerdown="start_scrub" @pointermove="move_scrub" @pointerup="end_scrub" @pointercancel="end_scrub">
       <div class="channel-map-track">
