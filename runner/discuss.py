@@ -1263,10 +1263,48 @@ def http_error(error, plan):
         value = json.loads(body)
         message = value.get("error", body) if isinstance(value, dict) else body
     except (ValueError, UnicodeError, OSError, HTTPException):
-        message = f"HTTP {error.code}: {error.reason}"
+        value, message = None, f"HTTP {error.code}: {error.reason}"
+    if isinstance(value, dict) and value.get("code") == "adopted":
+        message = f"{message}。{proactive_hint(error.filename, plan.path, value.get('member', ''))}"
     uncertain = plan.method == "POST" and error.code >= 500
     return CliError(str(message), 1, http_status=error.code,
                     outcome="unknown" if uncertain else "rejected")
+
+
+# A taken-over member's proactive credential, written by the local service into its runtime folder (runner/free_runner.mjs).
+PROACTIVE_ACCESS_FILE = "proactive.access.json"
+
+
+def proactive_access_path(site, room, member):
+    """The proactive credential the local service wrote when it took this member's session over, or '' when none is here."""
+    home = Path(os.getenv("DISCUSS_SERVICE_HOME") or Path.home() / ".codiscuss")
+    try:
+        configs = json.loads((home / "rooms.json").read_text(encoding="utf-8")).get("configs") or []
+    except (OSError, ValueError, AttributeError):
+        return ""
+    folder = hashlib.sha256(str(member).encode("utf-8")).hexdigest()[:16]
+    for config_path in configs:
+        try:
+            config = json.loads(Path(config_path).read_text(encoding="utf-8"))
+        except (OSError, ValueError, TypeError):
+            continue
+        if not isinstance(config, dict) or str(config.get("site", "")).rstrip("/") != site or config.get("room") != room:
+            continue
+        directory = Path(config_path).parent / (config.get("data_directory") or f"discussion-{room}")
+        path = directory / "members" / folder / PROACTIVE_ACCESS_FILE
+        if path.is_file():
+            return str(path.resolve())
+    return ""
+
+
+def proactive_hint(url, path, member):
+    """Point a taken-over member at the credential it may speak proactively with, found on this machine."""
+    parts = urlsplit(url or "")
+    match = re.match(r"^/api/rooms/([^/]+)", path)
+    found = proactive_access_path(f"{parts.scheme}://{parts.netloc}", match.group(1), member) if match and member else ""
+    if found:
+        return f"主动发言请改用 --access-file {found}"
+    return "这台电脑上找不到它：确认本机服务已接管该成员（网页成员卡片显示本机托管），或在接管它的那台电脑上运行"
 
 
 def connection_refused(error):

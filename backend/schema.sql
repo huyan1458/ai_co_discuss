@@ -777,7 +777,9 @@ CREATE TABLE IF NOT EXISTS free_host_checkins (
     host_id INTEGER NOT NULL,
     chain_id INTEGER NOT NULL,
     interval_seconds INTEGER NOT NULL,
-    due_at INTEGER NOT NULL
+    due_at INTEGER NOT NULL,
+    -- The last check sent when the room went idle; cleared when work is in flight again.
+    idle_notice INTEGER NOT NULL DEFAULT 0
 );
 CREATE TABLE IF NOT EXISTS free_host_continues (
     room_id TEXT PRIMARY KEY REFERENCES rooms(id) ON DELETE CASCADE,

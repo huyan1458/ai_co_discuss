@@ -23,7 +23,7 @@ import { fileURLToPath, pathToFileURL } from 'node:url';
 import { setTimeout as delay } from 'node:timers/promises';
 import { listen_local } from './local_port.mjs';
 import { DiscussionStore, load_config, service_drafts, validate_config } from '../runner/discussion_runner.mjs';
-import { cwd_key, edited_changes, free_task_files, FreeRoomRunner, request_attachments, member_drafts, member_extra_directories, review_capability_version, room_goal, workspace_snapshot } from '../runner/free_runner.mjs';
+import { cwd_key, edited_changes, free_task_files, FreeRoomRunner, request_attachments, member_drafts, member_extra_directories, member_folders, review_capability_version, room_goal, workspace_snapshot } from '../runner/free_runner.mjs';
 import { SessionDriver } from '../runner/session_driver.mjs';
 
 import { EXPERT_PROMPT_PRESETS, expert_prompt, free_task_text, software_rules } from '../runner/expert_prompts.mjs';
@@ -207,6 +207,11 @@ test('smart scheduling maps one neutral question set to both providers and reads
   assert.match(upcoming_sent.state, /接下来按安排发言：Antigravity → Codex/);
 });
 
+/** A task or credential file of an execution, which sits in its member's own runtime folder. */
+function runtime_file(directory, name) {
+  return member_folders(directory).map(folder => join(folder, name)).find(path => existsSync(path)) || join(directory, name);
+}
+
 /** Make task files without a website or a real model. */
 function task_fixture(t) {
   const directory = mkdtempSync(join(tmpdir(), 'session-task-test-'));
@@ -227,7 +232,7 @@ function session_task(config, { role = 'host', ...options } = {}, binding = {}) 
 test('the occasional skill page is listed only when a request carries a relay or a question (coverage item 1)', () => {
   const config = { site: 'http://127.0.0.1:1', room: 'r', directory: mkdtempSync(join(tmpdir(), 'situations-')), project: resolve('.'),
     members: { Codex: { token: 'm'.repeat(32) } }, participants: { Codex: { adapter: 'codex' } } };
-  const read = task => JSON.parse(readFileSync(join(task.directory, `${task.id}.task.json`), 'utf8')).skills.map(path => path.split(sep).join('/'));
+  const read = task => JSON.parse(readFileSync(task.task_path, 'utf8')).skills.map(path => path.split(sep).join('/'));
   const plain = free_task_files(config, { name: 'Codex', role: 'member' }, { id: 1, read_until: 0, requests: [{ id: 7, message_id: 9, purpose: 'ask' }] }, {}, {});
   assert.ok(!read(plain).some(path => path.endsWith('situations.md')));
   const relay = free_task_files(config, { name: 'Codex', role: 'member' }, { id: 2, read_until: 0,
@@ -238,7 +243,7 @@ test('the occasional skill page is listed only when a request carries a relay or
 test("the host's occasional pages are listed only when the task carries what they cover", () => {
   const config = { site: 'http://127.0.0.1:1', room: 'r', directory: mkdtempSync(join(tmpdir(), 'host-pages-')), project: resolve('.'),
     members: { Host: { token: 'h'.repeat(32) } }, participants: { Host: { adapter: 'codex' } } };
-  const read = task => JSON.parse(readFileSync(join(task.directory, `${task.id}.task.json`), 'utf8')).skills.map(path => path.split(sep).join('/'));
+  const read = task => JSON.parse(readFileSync(task.task_path, 'utf8')).skills.map(path => path.split(sep).join('/'));
   const pages = ['relay.md', 'control.md', 'workflow.md', 'dev-flow.md'];
   const host = (id, request, options = {}) => read(free_task_files(config, { name: 'Host', role: 'host' },
     { id, read_until: 0, requests: [{ id, message_id: id, ...request }] }, {}, options)).filter(path => path.includes('discuss-host/references/'));
@@ -254,6 +259,29 @@ test("the host's occasional pages are listed only when the task carries what the
   assert.ok(listed(host(8, { purpose: 'handoff', outcome: [{ member: 'A', status: 'completed' }, { member: 'B', status: 'failed', reason: 'timeout' }] }), 'control.md'));
   assert.ok(listed(host(9, { purpose: 'handoff', outcome: [{ member: 'B', status: 'cancelled' }] }), 'control.md'));
   assert.ok(!listed(host(10, { purpose: 'handoff', outcome: [{ member: 'A', status: 'completed' }] }), 'control.md'));
+});
+
+test('a discussion host and a goal host get their occasional pages by what woke them', () => {
+  const config = { site: 'http://127.0.0.1:1', room: 'r', directory: mkdtempSync(join(tmpdir(), 'mode-pages-')), project: resolve('.'),
+    members: { Host: { token: 'h'.repeat(32) } }, participants: { Host: { adapter: 'codex' } } };
+  const read = task => JSON.parse(readFileSync(task.task_path, 'utf8')).skills.map(path => path.split(sep).join('/'));
+  const task = (id, request, options = {}) => read(free_task_files(config, { name: 'Host', role: 'host' },
+    { id, read_until: 0, requests: [{ id, message_id: id, ...request }] }, {}, options));
+  const pages = paths => paths.filter(path => /discuss-session\/references\/host-|discuss-goal\/references\//.test(path)).map(path => path.split('/').pop());
+  const discuss = (id, cause_kind, options) => pages(task(id, { purpose: 'discuss_host', session_request_id: id, cause_kind }, options));
+  assert.deepEqual(discuss(1, 'session_started'), ['host-opening.md']);
+  assert.deepEqual(discuss(2, 'member_change'), ['host-roster.md']);
+  assert.deepEqual(discuss(3, 'request_failed'), ['host-roster.md']);
+  assert.deepEqual(discuss(4, 'round_complete'), ['host-closing.md']);
+  assert.deepEqual(discuss(5, 'speaker_answered'), [], 'an everyday discussion task lists the default page only');
+  assert.deepEqual(discuss(6, 'user_message', { room: { limits: { reached: true } } }), ['host-closing.md'], 'a reached limit brings the wrap-up page');
+  assert.ok(task(5, { purpose: 'discuss_host', session_request_id: 5, cause_kind: 'speaker_answered' }).some(path => path.endsWith('discuss-session/references/host.md')));
+  const goal = (id, purpose, status) => pages(task(id, { purpose }, { goal: { id: 1, status, objective: 'x' } }));
+  assert.deepEqual(goal(7, 'goal_start', undefined), ['start.md']);
+  assert.deepEqual(goal(8, 'goal_continue', 'active'), [], 'an everyday goal wake lists the goal skill only');
+  assert.deepEqual(goal(9, 'goal_continue', 'budget_limited'), ['finish.md']);
+  assert.deepEqual(goal(10, 'route', 'paused'), ['finish.md']);
+  assert.deepEqual(pages(task(11, { purpose: 'route' })), [], 'a plain room request lists none of them');
 });
 
 test('woken messages bring their attachments: local copies by placeholder, images only to software that takes them', async t => {
@@ -629,7 +657,7 @@ test('a queued delivery can remain active across runner restarts without a dupli
 test('confirmed non-delivery retries the same member request with a new execution', async t => {
   const f = await fixture(t); const attempts = [];
   const deliver = async (adapter, binding, task) => {
-    const task_file = JSON.parse(readFileSync(join(task.directory, `${task.id}.task.json`), 'utf8'));
+    const task_file = JSON.parse(readFileSync(task.task_path, 'utf8'));
     attempts.push({ request_ids: task_file.requests.map(request => request.id), access: JSON.parse(readFileSync(task.access_path, 'utf8')) });
     if (attempts.length === 1) throw Object.assign(new Error('spawn unavailable'), { delivery_status: 'not_sent' });
     return { status: 'accepted' };
@@ -979,7 +1007,9 @@ async function cli_delivery_fixture(t, adapter, options = {}) {
     }
     rmSync(root, { recursive: true, force: true });
   });
-  const task = { id: 'event-1', participant: 'Antigravity', directory, draft_directory, access_path, prompt: '讨论中文 "quotes"\n$(literal); `literal`',
+  const member_directory = join(directory, 'members', 'own');
+  mkdirSync(member_directory, { recursive: true });
+  const task = { id: 'event-1', participant: 'Antigravity', directory, member_directory, draft_directory, access_path, prompt: '讨论中文 "quotes"\n$(literal); `literal`',
     skill_directories: [join(directory, 'skills')],
     on_binding: session => bindings.push(session), on_process: () => {},
     on_output: (path, chunk) => appendFileSync(path, chunk), on_failure: error => errors.push(error), on_exit: () => { exits++; }, on_denials: list => denials.push(...list) };
@@ -1028,7 +1058,8 @@ test(`${adapter} starts headlessly, binds emitted identity and preserves UTF-8 p
     assert.deepEqual(overrides.slice(3), process.platform === 'win32'
       ? [`shell_environment_policy.set.TEMP=${drafts}`, `shell_environment_policy.set.TMP=${drafts}`] : []);
     assert.match(overrides[1], /extends=":read-only"/); assert.match(overrides[1], /network=\{enabled=true\}/);
-    assert.ok(overrides[1].includes(`${JSON.stringify(f.directory.replaceAll('\\', '/'))}="read"`));
+    // The runtime directory gets no entry of its own: a "none" entry would lock other Codex members out (凭据文件隔离).
+    assert.ok(!overrides[1].includes(JSON.stringify(f.directory.replaceAll('\\', '/'))));
     assert.ok(overrides[1].includes(`${JSON.stringify(f.task.draft_directory.replaceAll('\\', '/'))}="write"`));
     assert.deepEqual(f.config_calls[0].args.slice(1), call.args.slice(2));
     assert.ok(!call.args.includes('--add-dir'));
@@ -1129,7 +1160,7 @@ test(`${adapter} persists a streamed binding and resumes it after a dispatcher r
   const args = process_fixture.calls[1].args;
   if (adapter === 'codex_cli') assert.equal(JSON.parse(process_fixture.calls[1].input).thread_id, 'actual-cli-session');
   else assert.equal(args[args.indexOf('--conversation') + 1], 'actual-cli-session');
-  assert.equal(JSON.parse(readFileSync(join(f.config.directory, 'free-2.access.json'), 'utf8')).session_id, 'actual-cli-session');
+  assert.equal(JSON.parse(readFileSync(runtime_file(f.config.directory, 'free-2.access.json'), 'utf8')).session_id, 'actual-cli-session');
   assert.equal(f.current_execution().requests[0].id, next_request.id);
   if (adapter === 'antigravity_cli') {
     const first_args = process_fixture.calls[0].args;
@@ -1359,7 +1390,9 @@ test('claude allows only codiscuss website subcommands and draft writes, then us
   assert.deepEqual(f.errors, []);
   assert.ok(!args.some(arg => arg.startsWith('--dangerously') || arg === '--permission-mode'));
   const directories = args.indexOf('--add-dir');
-  assert.deepEqual(args.slice(directories + 1, directories + 4), [f.directory, f.task.draft_directory, f.task.skill_directories[0]]);
+  // Only the member's own runtime folder is added, never the runtime directory holding every member's credential.
+  assert.deepEqual(args.slice(directories + 1, directories + 4), [f.task.member_directory, f.task.draft_directory, f.task.skill_directories[0]]);
+  assert.ok(!args.includes(f.directory));
   assert.deepEqual(args.slice(args.indexOf('--disallowedTools') + 1), [`Edit(${claude_rule_path(f.task.skill_directories[0])}/**)`]);
   assert.deepEqual(args.slice(args.indexOf('--allowedTools') + 1, args.indexOf('--disallowedTools')),
     [...['room', 'message', 'turn', 'state', 'goal', 'mode', 'review', 'sequence', 'question', 'execution', 'health', 'schema', 'launch workflow-adopt', 'launch workflow-join', 'launch workflow-leave', 'launch host-control', 'attachment', 'launch image']
@@ -1586,7 +1619,7 @@ test('tasks state whether the discussion project is read-only or writable', t =>
   const project = mkdtempSync(join(tmpdir(), 'discussion-cwd-')); t.after(() => rmSync(project, { recursive: true, force: true }));
   const config = load_config_from(f, project, 'write');
   session_task(config);
-  const read_task = () => JSON.parse(readFileSync(join(f.config.directory, 'free-1.task.json'), 'utf8'));
+  const read_task = () => JSON.parse(readFileSync(runtime_file(f.config.directory, 'free-1.task.json'), 'utf8'));
   const saved = read_task();
   assert.match(saved.instructions, /允许按请求修改.*并运行所需命令/);
   assert.equal(saved.project_access, 'write'); assert.equal(saved.cwd, project);
@@ -1622,7 +1655,7 @@ function load_config_from(f, project, project_access) {
 test('tasks direct website work to the approved codiscuss subcommands', t => {
   const f = task_fixture(t);
   const task = session_task(f.config);
-  const read_task = () => JSON.parse(readFileSync(join(f.config.directory, 'free-1.task.json'), 'utf8'));
+  const read_task = () => JSON.parse(readFileSync(runtime_file(f.config.directory, 'free-1.task.json'), 'utf8'));
   const saved = read_task();
   const cli = process.platform === 'win32' ? 'codiscuss.cmd' : 'codiscuss';
   assert.equal(saved.cli, cli); assert.deepEqual(saved.subcommands, TASK_SUBCOMMANDS);
@@ -1755,8 +1788,9 @@ test('the housekeeping sweep removes week-old files of ended executions and keep
     if (aged) utimesSync(file, old, old);
     return file;
   };
-  const ended = ['free-5.task.json', 'free-5.access.json', 'claude-free-5.log', 'event-3.task.json'].map(name => write(name, true));
-  const kept = [write('free-7.access.json', true), write('free-9.task.json', false), write('manual-Claude.access.json', true)];
+  mkdirSync(join(config.directory, 'members', 'abc'), { recursive: true });
+  const ended = ['free-5.task.json', 'free-5.access.json', 'claude-free-5.log', 'event-3.task.json', join('members', 'abc', 'free-6.access.json')].map(name => write(name, true));
+  const kept = [write('free-7.access.json', true), write('free-9.task.json', false), write('manual-Claude.access.json', true), write(join('members', 'abc', 'free-7.task.json'), true)];
   const removed = sweep_service_home(home);
   assert.equal(removed.execution_files, ended.length);
   for (const file of ended) assert.ok(!existsSync(file), `${file} is removed`);
@@ -1910,7 +1944,7 @@ test('a resident free room isolates member context changes and only blocks Codex
   assert.match(restarted_worker.state.error, /讨论运行中不能切换 Codex 接入方式/);
 });
 
-test("a manual member invited under a removed member's name is adopted clean, without the old session blocking it", async t => {
+test("a manual member invited under a removed member's name is adopted clean and can speak before any task", async t => {
   // Room 9524f49e42b5 (#3318–#3325): the removed Claude-2's context stayed under the name and failed the new Claude-2.
   const home = mkdtempSync(join(tmpdir(), 'discussion-service-reuse-'));
   const claude_home = join(home, 'claude-home'), cwd = join(home, 'project'), [old_id, new_id] = [randomUUID(), randomUUID()];
@@ -1948,6 +1982,10 @@ test("a manual member invited under a removed member's name is adopted clean, wi
   assert.deepEqual(forgotten, ['Claude-2'], 'what this machine kept for the removed member under that name is dropped first');
   assert.equal(load_config(path).participants['Claude-2'].session_id, new_id);
   assert.deepEqual(adopted.map(([url, body]) => [url, body.action, body.session_id]), [['/api/rooms/room/members/340', 'adopt', new_id]]);
+  // Its window may speak proactively at once: the service leaves it a credential beside its task ones, with no execution.
+  const proactive = JSON.parse(readFileSync(join(home, 'runtime', 'members', createHash('sha256').update('Claude-2').digest('hex').slice(0, 16), 'proactive.access.json'), 'utf8'));
+  assert.deepEqual([proactive.room, proactive.member, proactive.token, proactive.session_id, proactive.execution_id],
+    ['room', 'Claude-2', adopted[0][1].token, new_id, undefined]);
 });
 
 test('the same site and room cannot be registered twice', t => {
@@ -2704,7 +2742,7 @@ test('unnamed host handoffs survive restart without repeating a judgment and sta
   const restarted = new FreeRoomRunner(config, store, async () => ({ status: 'accepted' }), () => {},
     async () => assert.fail('persisted handoff must not ask again'));
   await restarted.tick(); await Promise.all(restarted.decisions);
-  const task = JSON.parse(readFileSync(join(config.directory, `free-${state.executions[0].id}.task.json`), 'utf8'));
+  const task = JSON.parse(readFileSync(runtime_file(config.directory, `free-${state.executions[0].id}.task.json`), 'utf8'));
   assert.deepEqual(task.scheduler_suggestions, [suggestion]);
   assert.equal(restarted.saved_suggestion(999), null);
 });
@@ -2719,7 +2757,7 @@ test('a free room delivers all open requests as one execution with the member cr
   await runner.tick();
   assert.equal(delivered.length, 1);
   assert.equal(state.executions.length, 1);
-  const task = JSON.parse(readFileSync(join(config.directory, 'free-1.task.json'), 'utf8'));
+  const task = JSON.parse(readFileSync(runtime_file(config.directory, 'free-1.task.json'), 'utf8'));
   assert.equal(task.mode, 'free');
   assert.equal(task.session.status, 'active');
   assert.deepEqual(task.request_purposes, ['ask', 'ask']);
@@ -2733,7 +2771,7 @@ test('a free room delivers all open requests as one execution with the member cr
   assert.equal(/rg --encoding utf-8/.test(delivered[0].prompt), has_rg);
   const access = JSON.parse(readFileSync(delivered[0].access_path, 'utf8'));
   assert.equal(access.token, config.members.Claude.token);
-  assert.doesNotMatch(readFileSync(delivered[0].access_path, 'utf8') + readFileSync(join(config.directory, 'free-1.task.json'), 'utf8'), /owner-credential/);
+  assert.doesNotMatch(readFileSync(delivered[0].access_path, 'utf8') + readFileSync(runtime_file(config.directory, 'free-1.task.json'), 'utf8'), /owner-credential/);
   assert.equal(store.binding('Claude').session_id, 'claude-session');
 });
 
@@ -2883,7 +2921,7 @@ test('an interrupted free execution stops only that member and is not redelivere
   assert.equal(state.executions[0].stop_result, 'stopped', 'the site learns the process really ended');
   assert.equal(state.executions.length, 1);
   // The member's next task names the stopped execution once, so its session does not carry on with that work.
-  const task = id => JSON.parse(readFileSync(join(config.directory, `free-${id}.task.json`), 'utf8'));
+  const task = id => JSON.parse(readFileSync(runtime_file(config.directory, `free-${id}.task.json`), 'utf8'));
   state.pending = [{ id: 3, message_id: 13 }];
   await runner.tick();
   assert.deepEqual(task(2).stopped_executions, [1]);
@@ -3138,7 +3176,7 @@ test('two instances of one platform keep separate sessions and credentials', asy
   assert.deepEqual(delivered, [['Claude', '', ''], ['Claude-review', 'opus', '']]);
   assert.equal(store.binding('Claude').session_id, 'session-main');
   assert.equal(store.binding('Claude-review').session_id, 'session-review');
-  assert.equal(JSON.parse(readFileSync(join(config.directory, 'free-2.access.json'), 'utf8')).token, config.members['Claude-review'].token);
+  assert.equal(JSON.parse(readFileSync(runtime_file(config.directory, 'free-2.access.json'), 'utf8')).token, config.members['Claude-review'].token);
 });
 
 test('codiscuss token writes only its hash through wrangler and no password is kept on this computer', async () => {
@@ -3278,7 +3316,7 @@ test('a host task carries the room goal so a new host or a finished Goal still k
   assert.equal(room_goal({}), null);
   const request = { id: 7, message_id: 9, purpose: 'goal_continue' };
   const write = role => free_task_files(f.config, { name: 'Codex', role }, { id: 1, read_until: 0, requests: [request] }, {}, { process_access: false, room });
-  const read = () => JSON.parse(readFileSync(join(f.config.directory, 'free-1.task.json'), 'utf8'));
+  const read = () => JSON.parse(readFileSync(runtime_file(f.config.directory, 'free-1.task.json'), 'utf8'));
   // The returned task carries it too, which is how an API host gets it in its task prompt.
   assert.equal(write('host').room_goal.first_user_message_id, 3);
   assert.equal(read().room_goal.first_user_message_id, 3);
@@ -3295,10 +3333,29 @@ test('a new host learns that its former host\'s spent quota paused the goal', t 
   assert.match(task.goal.pause_note, /Goal #4 因前任主持人 Claude 额度用尽而暂停.*--do resume/);
 });
 
+test('each member credential sits in its own runtime folder and file-tool software is granted only that folder (凭据文件隔离)', t => {
+  const f = task_fixture(t);
+  f.config.members.Claude = { token: 'c'.repeat(32) };
+  f.config.participants.Claude = { adapter: 'claude' };
+  const request = { id: 7, message_id: 9, purpose: 'ask' };
+  const codex = free_task_files(f.config, { name: 'Codex', role: 'member' }, { id: 1, read_until: 0, requests: [request] }, {}, { process_access: false });
+  const claude = free_task_files(f.config, { name: 'Claude', role: 'member' }, { id: 2, read_until: 0, requests: [request] }, {}, { process_access: false });
+  assert.notEqual(codex.member_directory, claude.member_directory);
+  for (const task of [codex, claude]) {
+    assert.equal(dirname(task.access_path), task.member_directory);
+    assert.equal(dirname(task.task_path), task.member_directory);
+  }
+  assert.deepEqual(readdirSync(f.config.directory).filter(name => name.endsWith('.access.json')), [], 'no credential in the shared runtime directory');
+  const granted = claude_permissions({ project_access: 'read' }, { ...claude, skill_directories: [] });
+  const added = granted.slice(granted.indexOf('--add-dir') + 1, granted.indexOf('--allowedTools'));
+  assert.ok(added.includes(claude.member_directory));
+  for (const path of [f.config.directory, codex.member_directory]) assert.ok(!added.some(item => resolve(path).startsWith(resolve(item))), path);
+});
+
 test('only software that captures the last words is told so in its task; the rest submit as the skill says', t => {
   const f = task_fixture(t);
   const request = { id: 7, message_id: 9, purpose: 'ask' };
-  const read = () => JSON.parse(readFileSync(join(f.config.directory, 'free-1.task.json'), 'utf8'));
+  const read = () => JSON.parse(readFileSync(runtime_file(f.config.directory, 'free-1.task.json'), 'utf8'));
   for (const [adapter, captured] of [['codex_cli', true], ['codex', false]]) {
     f.config.participants.Codex = { adapter };
     free_task_files(f.config, { name: 'Codex', role: 'member' }, { id: 1, read_until: 0, requests: [request] }, {}, { process_access: false });

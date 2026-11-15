@@ -35,9 +35,11 @@ export function codex_permissions(config, task, platform = process.platform) {
   const drafts = resolve(task.draft_directory).replaceAll('\\', '/');
   const extras = Object.fromEntries((task.extra_directories || []).map(item => [resolve(item.path).replaceAll('\\', '/'), item.access]));
   // Only this member's own drafts folder is writable, but ':root' stays readable, so its software and commands can still
-  // read other members' drafts beside it. The profile accepts "none"/"deny" entries (checked with `codex sandbox`, 0.169),
-  // but whether `codex exec` then refuses reads was not verified, so no such entry is added (必 10, review M3).
-  const filesystem = { ':root': 'read', ...extras, [resolve(task.directory).replaceAll('\\', '/')]: 'read', [drafts]: 'write' };
+  // read other members' drafts and runtime folders (credentials included). A "none" entry does refuse those reads, but
+  // Codex 0.169 on Windows writes it to disk as a lasting DENY for the CodexSandboxUsers group that every Codex sandbox
+  // shares, which then locks other Codex members out of their own folders (tested 2026-11-15, 凭据文件隔离), so none
+  // is added (必 10, review M3).
+  const filesystem = { ':root': 'read', ...extras, [drafts]: 'write' };
   const rules = Object.entries(filesystem).map(([path, access]) => `${JSON.stringify(path)}=${JSON.stringify(access)}`).join(',');
   const profile = `{extends=${JSON.stringify(base)},filesystem={${rules}},network={enabled=true}}`;
   // The Windows sandbox account cannot write the user's TEMP, so PowerShell starts in ConstrainedLanguage and Codex's

@@ -12,7 +12,7 @@ import { cleanup_room, sweep_adapters } from './adapters/index.mjs';
 import { same_session_family } from './adapters/profiles.mjs';
 import { atomic_json } from './files.mjs';
 import { DiscussionStore, acquire_lock, api, load_config, pause_if_running, service_drafts, validate_config } from './discussion_runner.mjs';
-import { FreeRoomRunner } from './free_runner.mjs';
+import { FreeRoomRunner, write_proactive_access } from './free_runner.mjs';
 import { can_notify, notice_sent, receive_replies, send_notice } from './weixin.mjs';
 import { answer_by_weixin } from './question_weixin.mjs';
 import { OPERATOR_EVENTS_FILE, account_space } from './account_space.mjs';
@@ -363,6 +363,8 @@ class RoomWorker {
         if (member.name in this.config.participants) this.runner.forget_member?.(member.name);
         const adapter = adopt_member_profile(this.home, this.path, member.name, member.reported_session, member.reported_client, member_token);
         await api(this.config, `/members/${member.id}`, { action: 'adopt', adapter, session_id: member.reported_session, token: member_token });
+        // Its window can speak proactively at once, before any task hands it a credential.
+        write_proactive_access(this.config, member.name, member_token, member.reported_session);
         this.log(`${this.config.room}: ${member.name} 已转为本机托管`);
       } catch (error) {
         this.adopt_failed.add(key);
@@ -647,10 +649,13 @@ function sweep_execution_files(directory, now) {
   // An unreadable delivery table gives no proof which executions ended, so nothing is removed.
   if (!current) return 0;
   let removed = 0;
-  for (const name of readdirSync(directory)) {
+  // Credential and task files sit in each member's runtime folder (`members/<key>`), logs in the runtime directory.
+  const members = join(directory, 'members');
+  const folders = [directory, ...(existsSync(members) ? readdirSync(members).map(name => join(members, name)) : [])];
+  for (const [folder, name] of folders.flatMap(folder => { try { return readdirSync(folder).map(name => [folder, name]); } catch { return []; } })) {
     const id = EXECUTION_FILE.exec(name)?.[1];
     if (!id || current.has(Number(id))) continue;
-    const path = join(directory, name);
+    const path = join(folder, name);
     if (now - statSync(path).mtimeMs < STALE_LAUNCH_MS) continue;
     rmSync(path, { force: true });
     removed += 1;

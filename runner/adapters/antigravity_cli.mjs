@@ -285,7 +285,8 @@ function invocation(config, binding, task, user_home) {
   const cwd = launch_directory(config, task);
   const extra = (project ? project.directories : (task.extra_directories || []).map(item => item.path))
     .filter(directory => !same_path(directory, cwd));
-  const added = unique_paths([task.directory, task.draft_directory, ...task.skill_directories,
+  // Only the member's own runtime folder: the runtime directory holds every member's credential (凭据文件隔离).
+  const added = unique_paths([task.member_directory, task.draft_directory, ...task.skill_directories,
     ...agy_skill_directories(user_home), ...extra]);
   const args = ['--output-format', 'stream-json', '--print-timeout', '0',
     ...added.flatMap(directory => ['--add-dir', directory])];

@@ -679,7 +679,7 @@ test('connected browser launches on its authorized website, resumes the same req
   const calls = [];
   const service = new DiscussionService(local.home, (current, store) => new FreeRoomRunner(current, store,
     async (profile, binding, task) => { calls.push({ participant: task.participant,
-      site: JSON.parse(readFileSync(join(current.directory, `${task.id}.task.json`), 'utf8')).site });
+      site: JSON.parse(readFileSync(task.task_path, 'utf8')).site });
       return { status: 'accepted', session_id: 'connected-host-session' }; }));
   try {
     await service.tick();
@@ -1120,7 +1120,7 @@ test('a free room launches without a run, and a user message reaches its member 
   try {
     await service.tick();
     assert.equal(delivered.length, 1);
-    const task = JSON.parse(readFileSync(join(config.directory, `${delivered[0].id}.task.json`), 'utf8'));
+    const task = JSON.parse(readFileSync(delivered[0].task_path, 'utf8'));
     const access = JSON.parse(readFileSync(delivered[0].access_path, 'utf8'));
     const answered = await request(f.site, `${path}/messages`, { author: 'Claude', text: '已改', source: 'cli',
       execution_id: task.execution_id, submission_id: randomUUID() }, { 'X-Discussion-Token': access.token });

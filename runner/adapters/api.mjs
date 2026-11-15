@@ -543,10 +543,12 @@ ${project_text(context.project, context.commands, context.image_input)}${context
     // API members cannot open a page on demand, so the occasional rules (relay, questions, images, proactive) come along.
     skill_text('discuss-participant', 'references/situations.md'),
     ...(host ? [skill_text('discuss-host'), discussion ? skill_text('discuss-session', 'references/host.md') : skill_text('discuss-host', 'references/room.md')] : []),
-    // Nor can an API host open the host's occasional pages: a room host gets them all, a discussion host the two its page links to.
+    // Nor can an API host open the host's occasional pages: a room host gets them all, a discussion host its own three
+    // (opening, roster, closing) and the two its page links to.
+    ...(host && discussion ? ['host-opening.md', 'host-roster.md', 'host-closing.md'].map(file => skill_text('discuss-session', `references/${file}`)) : []),
     ...(host ? (discussion ? ['control.md', 'workflow.md'] : ['relay.md', 'control.md', 'workflow.md', 'dev-flow.md'])
       .map(file => skill_text('discuss-host', `references/${file}`)) : []),
-    ...(goal_host(context) ? [skill_text('discuss-goal')] : []),
+    ...(goal_host(context) ? [skill_text('discuss-goal'), skill_text('discuss-goal', 'references/start.md'), skill_text('discuss-goal', 'references/finish.md')] : []),
     ...(host && context.workflow ? [workflow_text(context.workflow)] : []),
     ...(context.expert_prompt ? [`用户为你单独设置的提示（补充做法与偏好，不改变权限与技能规则）：\n${context.expert_prompt}`] : [])].join('\n\n---\n\n');
 }

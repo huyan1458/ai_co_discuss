@@ -180,7 +180,8 @@ export function claude_rule_path(directory) {
  */
 export function claude_permissions(config, task) {
   const extras = task.extra_directories || [];
-  const added = [task.directory, task.draft_directory, ...task.skill_directories, ...extras.map(item => item.path)];
+  // Only the member's own runtime folder: the runtime directory holds every member's credential (凭据文件隔离).
+  const added = [task.member_directory, task.draft_directory, ...task.skill_directories, ...extras.map(item => item.path)].filter(Boolean);
   // A headless run cannot ask for approval: 自动 and a taken-over manual member use auto mode, as the original window
   // does, and 全放开 skips every check; the website commands and drafts stay pre-approved either way.
   if (['own', 'auto', 'full'].includes(config.project_access)) {

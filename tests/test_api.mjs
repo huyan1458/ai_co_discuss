@@ -541,6 +541,14 @@ test('API participants load the shared skills and map CLI commands onto their ro
   assert.match(host, /# 讨论主持/);
   for (const page of [/# 房间控制与恢复/, /# 工作流/]) assert.match(host, page, 'an API discussion host gets the pages its discussion page links to');
   assert.doesNotMatch(host, /# 接力与问题卡/);
+  for (const page of [/# 讨论开场/, /# 名单变化与异常/, /# 到限与收束/]) {
+    assert.match(host, page, 'an API discussion host cannot open a page, so its occasional pages come inline');
+    assert.doesNotMatch(free, page);
+    assert.doesNotMatch(expert, page);
+  }
+  const goal = system_prompt({ participant: 'Grok', role: 'host', mode: 'free', goal: { id: 1, status: 'active' } });
+  for (const page of [/# Goal 模式主持（discuss-goal）/, /# 开启 Goal/, /# 结束 Goal/]) assert.match(goal, page, 'an API goal host gets the goal pages inline');
+  assert.doesNotMatch(free, /# 结束 Goal/);
   assert.match(expert, /# 房间参与（discuss-participant）/);
   assert.match(expert, /# 讨论模式（discuss-session）/);
   assert.doesNotMatch(expert, /# 回答房间请求/, 'discussion experts do not load the free-room page');

@@ -83,6 +83,25 @@ export function member_drafts(config, name) {
   return join(base, createHash('sha256').update(String(name)).digest('hex').slice(0, 16));
 }
 
+// The file name of a taken-over member's proactive credential inside its runtime folder; mirrored in runner/discuss.py.
+export const PROACTIVE_ACCESS_FILE = 'proactive.access.json';
+
+/**
+ * One member's own folder in the room's runtime directory, holding its credential and task files and the attachment
+ * copies of its tasks. Adapters grant a member's software only this folder, never the runtime directory, so software
+ * whose file reads follow that grant cannot read another member's credential (凭据文件隔离).
+ */
+export function member_runtime(config, name) {
+  const directory = join(config.directory, 'members', createHash('sha256').update(String(name)).digest('hex').slice(0, 16));
+  mkdirSync(directory, { recursive: true });
+  return directory;
+}
+
+/** The member runtime folders a room's runtime directory holds now. */
+export function member_folders(directory) {
+  try { return readdirSync(join(directory, 'members')).map(name => join(directory, 'members', name)); } catch { return []; }
+}
+
 /** Whether a process with this pid exists; signal 0 only checks, and EPERM means it exists under another user. */
 function process_alive(pid) {
   try { process.kill(pid, 0); return true; } catch (error) { return error.code === 'EPERM'; }
@@ -173,7 +192,7 @@ export function attachment_placeholder(file, number) {
  * @returns {Promise<Array<{message_id: number, number: number, placeholder: string, file_name: string,
  *   content_type: string, size: number, id: string, path: string, error?: string}>>}
  */
-export async function request_attachments(config, execution) {
+export async function request_attachments(config, execution, member_directory = config.directory) {
   const message_ids = [...new Set((execution.requests || []).map(item => item.message_id).filter(Number.isInteger))];
   const result = [];
   for (const message_id of message_ids) {
@@ -183,7 +202,7 @@ export async function request_attachments(config, execution) {
     for (const [index, file] of files.slice(0, MAX_MESSAGE_FILES).entries()) {
       const entry = { message_id, number: index + 1, placeholder: attachment_placeholder(file, index + 1), file_name: file.file_name,
         content_type: file.content_type, size: file.size, id: file.id, path: '' };
-      try { entry.path = await save_attachment(config, execution.id, message_id, entry, file.sha256); }
+      try { entry.path = await save_attachment(config, member_directory, execution.id, message_id, entry, file.sha256); }
       catch (error) { entry.error = error.message; }
       result.push(entry);
     }
@@ -191,13 +210,13 @@ export async function request_attachments(config, execution) {
   return result;
 }
 
-async function save_attachment(config, execution_id, message_id, entry, sha256) {
+async function save_attachment(config, directory, execution_id, message_id, entry, sha256) {
   const response = await site_fetch(`${config.site}/api/rooms/${config.room}/attachments/${entry.id}/content`, {
     redirect: 'error', signal: AbortSignal.timeout(ATTACHMENT_TIMEOUT_MS), headers: { 'X-Discussion-Token': config.token } });
   if (!response.ok) throw new Error(`HTTP ${response.status}`);
   const data = Buffer.from(await response.arrayBuffer());
   if (createHash('sha256').update(data).digest('hex') !== sha256) throw new Error('下载内容与 SHA-256 不符');
-  const folder = join(config.directory, `free-${execution_id}-files`);
+  const folder = join(directory, `free-${execution_id}-files`);
   mkdirSync(folder, { recursive: true });
   const safe_name = basename(entry.file_name).replace(/[<>:"/\\|?*\x00-\x1f]/g, '_').slice(-120) || 'file';
   const path = join(folder, `${message_id}-${entry.number}-${safe_name}`);
@@ -229,8 +248,9 @@ export function free_task_files(config, member, execution, binding, { session = 
   const id = `free-${execution.id}`;
   const draft_directory = member_drafts(config, member.name);
   mkdirSync(draft_directory, { recursive: true });
-  const access_path = join(config.directory, `${id}.access.json`);
-  const task_path = join(config.directory, `${id}.task.json`);
+  const member_directory = member_runtime(config, member.name);
+  const access_path = join(member_directory, `${id}.access.json`);
+  const task_path = join(member_directory, `${id}.task.json`);
   // A workflow member's prompt is read from its card for this execution; everything else stays the room's setting.
   const profile = effective_profile(config.participants[member.name], member.name, workflow);
   // The host sees the workflow only while its members are here: sending them away ends it.
@@ -263,7 +283,20 @@ export function free_task_files(config, member, execution, binding, { session = 
   // The host works a goal while it is open, and also handles the request that opens it or the wrap-up after it ends.
   const goal_task = member.role === 'host' && (['active', 'paused'].includes(goal?.status)
     || requests.some(item => ['goal_start', 'goal_continue'].includes(item.purpose)));
-  if (goal_task) skills.push('discuss-goal/SKILL.md');
+  if (goal_task) {
+    skills.push('discuss-goal/SKILL.md');
+    // Opening a goal and ending one happen once each: their pages come only with the request or status that calls for them.
+    if (requests.some(item => item.purpose === 'goal_start')) skills.push('discuss-goal/references/start.md');
+    if (['budget_limited', 'paused'].includes(goal?.status)) skills.push('discuss-goal/references/finish.md');
+  }
+  // A discussion host's occasional pages follow what woke it (`cause_kind`): the opening, a changed roster or a failed
+  // request, and the wrap-up once a round is complete or a limit is reached.
+  if (member.role === 'host' && discussion_request?.purpose === 'discuss_host') {
+    const cause = discussion_request.cause_kind;
+    if (cause === 'session_started') skills.push('discuss-session/references/host-opening.md');
+    if (['member_change', 'request_failed'].includes(cause)) skills.push('discuss-session/references/host-roster.md');
+    if (cause === 'round_complete' || room?.limits?.reached) skills.push('discuss-session/references/host-closing.md');
+  }
   const goal_of_room = member.role === 'host' ? room_goal(room) : null;
   const goal_field = goal_task && goal ? { id: goal.id, objective: goal.objective, status: goal.status, continues: goal.continues,
     max_continues: goal.max_continues, elapsed_seconds: goal.elapsed_seconds, max_minutes: goal.max_minutes,
@@ -313,7 +346,7 @@ export function free_task_files(config, member, execution, binding, { session = 
     ...(image ? { image: { model: image.model, command: `${cli} launch image --file REQUEST.json` } } : {}),
     cli, subcommands: TASK_SUBCOMMANDS,
     ...(bound_access ? { access_env: 'DISCUSS_ACCESS_FILE' } : { access_file: access_path }), instructions });
-  return { id, participant: member.name, directory: config.directory, draft_directory, extra_directories, ...(goal_field ? { goal: goal_field } : {}),
+  return { id, participant: member.name, directory: config.directory, member_directory, task_path, draft_directory, extra_directories, ...(goal_field ? { goal: goal_field } : {}),
     ...(goal_of_room ? { room_goal: goal_of_room } : {}),
     skill_directories: [skills_directory, ...(host_workflow ? [host_workflow.directory] : [])], access_path, prompt: with_expert_prompt(prompt, profile), inbox, images,
     profile, ...(workflow_field ? { workflow: { ...workflow_field, skill: host_workflow.skill, ...api_sub_workflows(workflow_field, host_workflow) } } : {}) };
@@ -364,12 +397,25 @@ export function chat_task_files(config, member, chat, binding) {
   const id = `chat-${chat.id}`;
   const draft_directory = member_drafts(config, member.name);
   mkdirSync(draft_directory, { recursive: true });
-  const access_path = join(config.directory, `${id}.access.json`);
+  const member_directory = member_runtime(config, member.name);
+  const access_path = join(member_directory, `${id}.access.json`);
   const profile = effective_profile(config.participants[member.name], member.name, null);
   atomic_json(access_path, { ...entry_access(), site: config.site, room: config.room, member: member.name, token: config.members[member.name].token,
     session_id: binding.session_id || '' });
-  return { id, participant: member.name, directory: config.directory, draft_directory, extra_directories: member_extra_directories(config, profile),
+  return { id, participant: member.name, directory: config.directory, member_directory, draft_directory, extra_directories: member_extra_directories(config, profile),
     skill_directories: [join(config.project, '.agents', 'skills')], access_path, prompt: `${CHAT_PREAMBLE}\n\n${chat.text}`, inbox: false, profile };
+}
+
+/**
+ * Write the credential a manual member taken over by this service uses for proactive messages from its own window,
+ * where no task has handed it one yet: no execution, so the room applies its proactive rules (`message post
+ * --proactive`). It sits beside the member's task credentials; `runner/discuss.py` finds it by name for the error
+ * that refuses the member's old manual credential. Returns its path.
+ */
+export function write_proactive_access(config, name, token, session_id) {
+  const path = join(member_runtime(config, name), PROACTIVE_ACCESS_FILE);
+  atomic_json(path, { ...entry_access(), site: config.site, room: config.room, member: name, token, session_id: session_id || '' });
+  return path;
 }
 
 /** What a scheduler can know about a member without a role field: its software, project access and the messages it is on. */
@@ -1014,7 +1060,7 @@ export class FreeRoomRunner {
       // An unreadable workflow leaves members on their room settings; it is logged once per error, not every execution.
       if (workflow?.error && this.workflow_error !== workflow.error) this.log(`工作流 ${workflow.id} 不可用：${workflow.error}`);
       this.workflow_error = workflow?.error || '';
-      const attachments = await request_attachments(this.config, execution);
+      const attachments = await request_attachments(this.config, execution, member_runtime(this.config, member.name));
       const model_change = this.model_change(member.name);
       const task = free_task_files(this.config, member, execution, binding, {
         session, suggestions: scheduler_suggestions, reviews: review_handoffs, stopped, workflow, room_members: this.room?.members,
@@ -1505,12 +1551,13 @@ export class FreeRoomRunner {
    */
   /** Remove the attachment copies of executions that are no longer live; a live one may still be reading them. */
   sweep_attachments() {
-    let names;
-    try { names = readdirSync(this.config.directory).filter(name => /^free-\d+-files$/.test(name)); } catch { return; }
+    // Copies sit in each member's runtime folder (older versions put them in the runtime directory itself).
+    const folders = [this.config.directory, ...member_folders(this.config.directory)];
+    const names = folders.flatMap(folder => { try { return readdirSync(folder).filter(name => /^free-\d+-files$/.test(name)).map(name => [folder, name]); } catch { return []; } });
     if (!names.length) return;
     const live = new Set(this.store.db.prepare('SELECT * FROM free_deliveries').all()
       .filter(row => LIVE.includes(row.status)).map(row => `free-${row.execution_id}-files`));
-    for (const name of names) if (!live.has(name)) rmSync(join(this.config.directory, name), { recursive: true, force: true });
+    for (const [folder, name] of names) if (!live.has(name)) rmSync(join(folder, name), { recursive: true, force: true });
   }
   /**
    * A request that queued for a member while it works is pointed out to it once, through the same channel as an

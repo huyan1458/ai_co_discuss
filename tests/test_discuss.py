@@ -604,6 +604,22 @@ class CliTests(unittest.TestCase):
         self.assertEqual(self.rejected([*arguments, "--goal", "不同建房请求"], 1)["http_status"], 409)
         self.assertEqual(self.cli("room", "list", "--submission-id", "unknown-room-request")["rooms"], [])
 
+class ProactiveAccessTests(unittest.TestCase):
+    def test_a_taken_over_member_is_pointed_at_its_proactive_credential(self):
+        """The refusal of an old manual credential names the local file the service wrote for proactive messages."""
+        with tempfile.TemporaryDirectory() as home:
+            config = Path(home, "launches", "a", "config.json")
+            folder = Path(home, "launches", "a", "runtime", "members", discuss.hashlib.sha256("Claude-2".encode()).hexdigest()[:16])
+            folder.mkdir(parents=True)
+            Path(folder, "proactive.access.json").write_text("{}", encoding="utf-8")
+            config.write_text(json.dumps({"site": "http://127.0.0.1:8765", "room": "r1", "data_directory": str(config.parent / "runtime")}), encoding="utf-8")
+            Path(home, "rooms.json").write_text(json.dumps({"configs": [str(config)]}), encoding="utf-8")
+            with patch.dict(os.environ, {"DISCUSS_SERVICE_HOME": home}):
+                hint = discuss.proactive_hint("http://127.0.0.1:8765/api/rooms/r1/messages", "/api/rooms/r1/messages", "Claude-2")
+                self.assertIn(f"--access-file {Path(folder, 'proactive.access.json').resolve()}", hint)
+                self.assertIn("找不到", discuss.proactive_hint("http://127.0.0.1:8765/api/rooms/r2/messages", "/api/rooms/r2/messages", "Claude-2"))
+
+
 class CliContractTests(unittest.TestCase):
     """Prove offline behavior, no implicit retries, and deterministic failure output."""
 

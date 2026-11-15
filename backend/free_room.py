@@ -195,7 +195,8 @@ LATER_COLUMNS = {"room_members": {"access": "TEXT NOT NULL DEFAULT 'runner'", "s
                  "free_sequences": {"gates": "TEXT NOT NULL DEFAULT '[]'"},
                  "execution_capabilities": {"steer": "INTEGER", "resume": "INTEGER"},
                  "member_capabilities": {"image_model": "TEXT NOT NULL DEFAULT ''"},
-                 "execution_failures": {"reset_at": "INTEGER NOT NULL DEFAULT 0"}}
+                 "execution_failures": {"reset_at": "INTEGER NOT NULL DEFAULT 0"},
+                 "free_host_checkins": {"idle_notice": "INTEGER NOT NULL DEFAULT 0"}}
 
 
 def migrate_free_tables(connection):
@@ -1101,12 +1102,15 @@ def require_member(connection, room_id, token, name=None):
     row = connection.execute("SELECT * FROM room_members WHERE room_id=? AND token_hash=? AND status='active'",
                              (room_id, hashed)).fetchone() if hashed else None
     if not row or (name is not None and row["name"] != name):
-        # A borrowed session handed to the local service keeps writing only through the tasks it is given; say so,
-        # since its old manual credential was replaced on purpose, not lost.
+        # A borrowed session handed to the local service writes only with credentials the service wrote for it: each
+        # task's, and one for proactive messages written when it took the session over. Say so, since the old manual
+        # credential was replaced on purpose, not lost; `code` lets the CLI point at that local file.
         claimed = connection.execute("SELECT session_mode,access FROM room_members WHERE room_id=? AND name=? AND status='active'",
                                      (room_id, name)).fetchone() if name and not row else None
         if claimed and claimed["access"] == "runner" and claimed["session_mode"] == "borrowed":
-            raise PermissionError(Text("{name} 已转为本机托管，原手动凭证已停用：请在收到的房间任务里，用任务给出的凭证回答", name=name))
+            error = PermissionError(Text("{name} 已转为本机托管，原手动凭证已停用：回答房间任务用任务给出的凭证；主动发言用本机服务接管时写给你的主动发言凭据（本机 codiscuss 会在报错里给出它的路径）", name=name))
+            error.details = {"code": "adopted", "member": name}
+            raise error
         raise PermissionError(Text("成员凭证无效、已停用或与发言身份不符"))
     return dict(row)
 
@@ -1171,6 +1175,8 @@ def authorize_free_write(connection, room_id, token, operation, payload):
     except PermissionError:
         if author in (None, "用户"):
             raise PermissionError(Text("此浏览器没有本房间的房主凭据：请用创建房间的浏览器，或登录管理员后再发言")) from None
+        # Checked again under the claimed name, so a member taken over by the local service learns which credential to use.
+        require_member(connection, room_id, token, str(author))
         raise
     if author == member["name"] and payload.get("submitted_by", author) == author:
         return member
@@ -2734,21 +2740,41 @@ def set_host_checkin(connection, room_id, token, payload):
     due_at = int(time.time()) + minutes * 60
     connection.execute("""INSERT INTO free_host_checkins (room_id,host_id,chain_id,interval_seconds,due_at) VALUES (?,?,?,?,?)
         ON CONFLICT(room_id) DO UPDATE SET host_id=excluded.host_id,chain_id=excluded.chain_id,
-        interval_seconds=excluded.interval_seconds,due_at=excluded.due_at""", (room_id, row["host_id"], row["chain_id"], minutes * 60, due_at))
+        interval_seconds=excluded.interval_seconds,due_at=excluded.due_at,idle_notice=0""", (room_id, row["host_id"], row["chain_id"], minutes * 60, due_at))
     return {"checkin": {"minutes": minutes, "due_at": due_at}}
 
 
 def fire_host_checkin(connection, room_id):
-    """Hand the host its timed check-in when due and work is still in flight; an idle room or a changed host ends it."""
+    """Hand the host its timed check-in when due and work is still in flight; a changed host ends it.
+
+    Once the room goes idle the host gets one last check, as soon as it is free, asking whether the work is done or has a
+    next step; the check ends when the room is still idle after that. `idle_notice` holds that last check's message and
+    is cleared once work is in flight again, so each idle spell gets it once.
+    """
     row = connection.execute("SELECT * FROM free_host_checkins WHERE room_id=?", (room_id,)).fetchone()
     now = int(time.time())
-    if not row or row["due_at"] > now:
+    if not row:
         return
     host = connection.execute("SELECT id FROM room_members WHERE room_id=? AND role='host' AND status='active'", (room_id,)).fetchone()
+    if not host or host["id"] != row["host_id"]:
+        connection.execute("DELETE FROM free_host_checkins WHERE room_id=?", (room_id,))
+        return
     busy = connection.execute("""SELECT 1 FROM member_requests WHERE room_id=? AND status IN ('pending','delivering') AND member_id<>?
         UNION SELECT 1 FROM free_sequences WHERE room_id=? AND status='running'""", (room_id, row["host_id"], room_id)).fetchone()
-    if not host or host["id"] != row["host_id"] or not busy:
-        connection.execute("DELETE FROM free_host_checkins WHERE room_id=?", (room_id,))
+    if not busy:
+        if connection.execute("SELECT 1 FROM member_requests WHERE member_id=? AND status IN ('pending','delivering')", (row["host_id"],)).fetchone():
+            return
+        if row["idle_notice"]:
+            connection.execute("DELETE FROM free_host_checkins WHERE room_id=?", (room_id,))
+            return
+        key = f"checkin_idle:{connection.execute('SELECT COALESCE(MAX(id),0) FROM member_requests WHERE room_id=?', (room_id,)).fetchone()[0]}"
+        wake_host(connection, room_id, row["chain_id"], Text("定时检查（最后一次）：房间已空闲，没有成员在工作。对照用户的要求确认是已经做完，还是还有下一步：有下一步就派活，定时检查继续；确实做完了就直接结束本次执行，不发消息，定时检查随之关闭。"), key)
+        notice = connection.execute("SELECT message_id FROM free_host_wakes WHERE room_id=? AND key=?", (room_id, key)).fetchone()
+        connection.execute("UPDATE free_host_checkins SET idle_notice=? WHERE room_id=?", (notice[0] if notice else -1, room_id))
+        return
+    if row["idle_notice"]:
+        connection.execute("UPDATE free_host_checkins SET idle_notice=0 WHERE room_id=?", (room_id,))
+    if row["due_at"] > now:
         return
     connection.execute("UPDATE free_host_checkins SET due_at=? WHERE room_id=?", (now + row["interval_seconds"], room_id))
     host_working = connection.execute("SELECT 1 FROM member_executions WHERE member_id=? AND status IN ('dispatched','started')",

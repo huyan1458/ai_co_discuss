@@ -1551,6 +1551,18 @@ class MultiMemberTests(FreeRoomTests):
         inbox = self.request(f"{self.path}/inbox", token=self.owner)[1]
         self.assertIn("Antigravity", [item["name"] for item in inbox["members"]])
 
+        def speak(token):
+            return self.request(f"{self.path}/messages", {"author": "Antigravity", "text": "我来开场", "source": "cli", "proactive": True,
+                                                          "submission_id": uuid.uuid4().hex}, token)
+        status, refused = speak(gemini)
+        self.assertEqual((status, refused.get("code")), (403, "adopted"), "the old manual credential still cannot write, and says so")
+        self.assertIn("主动发言凭据", refused["error"])
+        # Before any task reaches it, the taken-over member speaks with the credential the service wrote at takeover.
+        status, saved = speak(renewed)
+        self.assertEqual((status, saved["message"]["proactive"]), (201, 1), saved)
+        self.say("@Antigravity 看看", to=["Antigravity"])
+        self.assertEqual(speak(renewed)[0], 409, "a pending request is still answered first")
+
     def test_manual_member_answers_by_request_and_is_never_delivered(self):
         """A manual member is skipped by the runner and closes only its own open requests."""
         gemini = uuid.uuid4().hex
@@ -1739,7 +1751,7 @@ class HostTests(HostRoomTests):
         self.assertIn("pending", [status for member, _, status in self.requests() if member == "Antigravity"], "the relay goes on")
 
     def test_a_host_checkin_wakes_it_while_work_is_in_flight_and_ends_once_the_room_is_idle(self):
-        """The timed check-in is set during the host's own execution, fires while members work, and ends on idle."""
+        """The timed check-in is set during the host's own execution, fires while members work, and on idle checks once more."""
         FreeRoomTests.say(self, "请安排")
         execution = self.reserve_for("Claude")[1]
         self.assertEqual(self.request(f"{self.path}/host-checkin", {"minutes": 1}, self.owner)[0], 400)
@@ -1758,10 +1770,38 @@ class HostTests(HostRoomTests):
         self.assertEqual([item["message_id"] for item in free["quiet_checkins"]], [notice_id])
         self.work("Codex")
         self.work("Claude")
-        due()
+        # Idle now: one last check, at once, asking whether the work is done; the check stays until the host answers it.
         self.request(self.path + "/inbox", token=self.owner)
+        self.request(self.path + "/inbox", token=self.owner)
+        self.assertEqual(self.requests().count(("Claude", "notice", "pending")), 1)
+        self.assertEqual(len([text for _, text, _ in self.messages() if text.startswith("定时检查（最后一次）")]), 1)
+        last = self.reserve_for("Claude")[1]
+        before = len(self.messages())
+        self.assertEqual(self.request(f"{self.path}/executions/{last['id']}", {"action": "quiet"}, self.owner)[0], 200)
+        self.request(self.path + "/inbox", token=self.owner)
+        self.request(self.path + "/inbox", token=self.owner)
+        self.assertEqual(len(self.messages()), before)
         with closing(sqlite3.connect(self.database)) as connection:
             self.assertIsNone(connection.execute("SELECT 1 FROM free_host_checkins").fetchone())
+
+    def test_a_host_that_dispatches_on_the_idle_check_keeps_its_timed_check(self):
+        """Work dispatched on the last check keeps the check going, and the next idle spell gets its own last check."""
+        FreeRoomTests.say(self, "请安排")
+        execution = self.reserve_for("Claude")[1]
+        self.assertEqual(self.request(f"{self.path}/host-checkin", {"minutes": 5}, self.owner)[0], 200)
+        self.answer(execution["id"], token=self.member, to=["Codex"])
+        self.work("Codex")
+        self.work("Claude")
+        self.request(self.path + "/inbox", token=self.owner)
+        last = self.reserve_for("Claude")[1]
+        self.answer(last["id"], token=self.member, to=["Codex"])
+        self.request(self.path + "/inbox", token=self.owner)
+        with closing(sqlite3.connect(self.database)) as connection:
+            self.assertEqual(connection.execute("SELECT idle_notice FROM free_host_checkins").fetchone(), (0,))
+        self.work("Codex")
+        self.work("Claude")
+        self.request(self.path + "/inbox", token=self.owner)
+        self.assertEqual(len([text for _, text, _ in self.messages() if text.startswith("定时检查（最后一次）")]), 2)
 
     def test_a_notice_with_nothing_to_handle_ends_without_a_message(self):
         """A timed check the host has nothing to say about ends completed with no message; an ask cannot end that way."""

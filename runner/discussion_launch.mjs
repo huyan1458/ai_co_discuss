@@ -1497,7 +1497,7 @@ async function current_host_task(config, record, persist, room) {
     const task = free_task_files(config, member, execution, { session_id }, { session: discussion.session, process_access: false });
     new FreeRoomRunner(config, store).save(room.host, { client_id: record.execution_client_id, execution_id: execution.id,
       status: 'running', attempts: 0, started: Date.now(), last_renew: Date.now() });
-    record.current_task = { execution_id: execution.id, access_file: task.access_path, task_file: join(config.directory, `${task.id}.task.json`) };
+    record.current_task = { execution_id: execution.id, access_file: task.access_path, task_file: task.task_path };
     persist();
     return record.current_task;
   } finally { store.close(); }
