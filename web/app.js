@@ -1155,8 +1155,32 @@ function remember_room(room_id) {
   request_json("/api/rooms/last", { room_id }).catch(() => {});
 }
 
+// Each room keeps its unsent composer (text, files, reply) while another room is open, until this page closes.
+const room_composer_drafts = new Map();
+
+/** Keep the open room's unsent text, files and reply aside; true when there was something to keep. */
+function keep_room_composer() {
+  const room_id = state.room?.id;
+  if (!room_id) return false;
+  const text = element("message-input").value;
+  const reply = state.reply_to ? { id: state.reply_to, label: element("reply-label").textContent } : null;
+  if (!text.trim() && !state.attachment_drafts.length && !reply) { room_composer_drafts.delete(room_id); return false; }
+  room_composer_drafts.set(room_id, { text, drafts: state.attachment_drafts, reply });
+  state.attachment_drafts = [];
+  return true;
+}
+
+/** Put back what the room had in its composer when it was left. */
+function restore_room_composer(room_id) {
+  const kept = room_id && room_composer_drafts.get(room_id);
+  if (!kept) return;
+  room_composer_drafts.delete(room_id);
+  fill_composer(kept.text, kept.drafts, kept.reply);
+}
+
 async function select_room(room_id) {
   if (room_id) { state.welcome = false; state.welcome_folder = null; }
+  keep_room_composer();
   state.navigation_version++;
   state.refresh_version++;
   const listed = state.rooms.find((room) => room.id === room_id);
@@ -1189,6 +1213,7 @@ async function select_room(room_id) {
   element("search-input").value = "";
   element("mention-filter").setAttribute("aria-pressed", "false");
   cancel_reply();
+  restore_room_composer(state.room?.id);
   select_tab("discussion", { refresh: false });
   history.replaceState(null, "", state.room ? `/?room=${encodeURIComponent(room_id)}` : "/");
   if (state.room) remember_room(room_id);
