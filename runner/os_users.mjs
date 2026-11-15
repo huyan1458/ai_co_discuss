@@ -5,8 +5,11 @@
  * owner's files. The owner's management panel creates the user (one elevation prompt), runs programs as it with the
  * stored password, installs the command-line programs where every user can run them, and signs them in.
  *
- * The password is kept in the owner's service directory, encrypted with Windows DPAPI for the owner's own user, so only
- * the owner can use it. Everything here is Windows only.
+ * The password is kept in the owner's service directory, which only the owner and administrators can read, encrypted with
+ * Windows DPAPI for this computer. The computer scope, not the owner's own, because an administrator signed in over SSH
+ * with a key has no user DPAPI key (Windows answers "Access is denied"; seen 2026-11-15 on the hosting test computer),
+ * and hosted computers are managed over SSH. Passwords saved earlier with the owner's scope still work where that scope
+ * does. Everything here is Windows only.
  */
 import { spawnSync } from 'node:child_process';
 import { randomBytes } from 'node:crypto';
@@ -33,6 +36,9 @@ const JOB_ROOT = join(SHARED_ROOT, 'jobs');
 // the shared folder, so they cannot depend on it already being secure.
 const OWNER_JOB_ROOT = join(tmpdir(), 'codiscuss-owner-jobs');
 const POWERSHELL = 'powershell.exe';
+// Stored passwords encrypted for this computer start with this; older ones are the owner's DPAPI (ConvertFrom-SecureString).
+const MACHINE_SECRET = 'machine:';
+const SECRET_ENTROPY = 'AI CoDiscuss hosted account';
 const DEFAULT_TIMEOUT_MS = 120_000;
 const ELEVATED_TIMEOUT_MS = 300_000;
 
@@ -158,9 +164,16 @@ exit $process.ExitCode`;
   } finally { rmSync(job, { recursive: true, force: true }); }
 }
 
-/** The owner's DPAPI encryption of a password, usable only by the owner on this computer. */
+/** A password encrypted with DPAPI for this computer; what keeps it private is the owner-only file it is stored in. */
 function protect(password) {
-  return run_powershell(`ConvertTo-SecureString ${quote(password)} -AsPlainText -Force | ConvertFrom-SecureString`);
+  return MACHINE_SECRET + run_powershell(`Add-Type -AssemblyName System.Security
+[Convert]::ToBase64String([Security.Cryptography.ProtectedData]::Protect([Text.Encoding]::UTF8.GetBytes(${quote(password)}), [Text.Encoding]::UTF8.GetBytes(${quote(SECRET_ENTROPY)}), 'LocalMachine'))`);
+}
+
+/** A PowerShell expression giving the stored password back as a SecureString (either encryption). */
+function secure_secret(secret) {
+  if (!secret.startsWith(MACHINE_SECRET)) return `(ConvertTo-SecureString ${quote(secret)})`;
+  return `(& { Add-Type -AssemblyName System.Security; ConvertTo-SecureString ([Text.Encoding]::UTF8.GetString([Security.Cryptography.ProtectedData]::Unprotect([Convert]::FromBase64String(${quote(secret.slice(MACHINE_SECRET.length))}), [Text.Encoding]::UTF8.GetBytes(${quote(SECRET_ENTROPY)}), 'LocalMachine'))) -AsPlainText -Force })`;
 }
 
 /**
@@ -173,6 +186,8 @@ export function create_os_user(data, account, account_folder, { run = run_powers
   const user = os_user_name(account);
   if (read_os_users(data)[account]) throw new Error(`账号 ${account} 已有 Windows 用户 ${user}`);
   const password = `Cd!${randomBytes(18).toString('base64url')}`;
+  // Encrypted before anything changes, so a failure here leaves the computer as it was.
+  const secret = protect(password);
   run(`$secure = ConvertTo-SecureString ${quote(password)} -AsPlainText -Force
 if (Get-LocalUser -Name ${quote(user)} -ErrorAction SilentlyContinue) { Set-LocalUser -Name ${quote(user)} -Password $secure }
 else { New-LocalUser -Name ${quote(user)} -Password $secure -PasswordNeverExpires -UserMayNotChangePassword -Description 'AI CoDiscuss hosted account' | Out-Null }
@@ -180,7 +195,7 @@ if (-not (Get-LocalGroupMember -Group 'Users' -Member ${quote(user)} -ErrorActio
 icacls ${quote(account_folder)} /grant ${quote(`${user}:(OI)(CI)M`)} /T /C /Q | Out-Null
 ${register_task_script(account, user, '$secure', owner_sid({ run }))}
 'ok'`, { elevated: true });
-  write_os_users(data, { ...read_os_users(data), [account]: { user, secret: protect(password) } });
+  write_os_users(data, { ...read_os_users(data), [account]: { user, secret } });
   return { user };
 }
 
@@ -249,7 +264,7 @@ export function run_as_user(data, account, script, { files = {}, folders = {}, v
   writeFileSync(job, `\ufeff[Console]::OutputEncoding = [Text.Encoding]::UTF8\n$Job = ${quote(folder)}\n$Out = ${quote(join(folder, 'out'))}\n${script}\n`, 'utf8');
   const command = visible ? `-NoProfile -ExecutionPolicy Bypass -NoExit -File ${quote(job)}`
     : `-NoProfile -ExecutionPolicy Bypass -Command & ${quote(job)} *> ${quote(output)}`;
-  const start = `$credential = New-Object System.Management.Automation.PSCredential(${quote(record.user)}, (ConvertTo-SecureString ${quote(record.secret)}))
+  const start = `$credential = New-Object System.Management.Automation.PSCredential(${quote(record.user)}, ${secure_secret(record.secret)})
 $process = Start-Process ${POWERSHELL} -Credential $credential -LoadUserProfile -WorkingDirectory ${quote(folder)} -PassThru ${visible ? '' : '-WindowStyle Hidden'} -ArgumentList ${quote(command)}
 ${wait ? `if (-not $process.WaitForExit(${timeout})) { $process.Kill(); throw '运行超时' }` : ''}
 $process.Id`;
@@ -520,7 +535,7 @@ $task.SetSecurityDescriptor($task.GetSecurityDescriptor(4) + '(A;;GRGX;;;${sid})
 /** Register the instance task of an account isolated before instances ran as tasks (one elevation prompt). */
 function register_instance_task(data, account, { run = run_powershell } = {}) {
   const record = read_os_users(data)[account];
-  run(`$secure = ConvertTo-SecureString ${quote(record.secret)}
+  run(`$secure = ${secure_secret(record.secret)}
 ${register_task_script(account, record.user, '$secure', owner_sid({ run }))}
 'ok'`, { elevated: true });
 }
