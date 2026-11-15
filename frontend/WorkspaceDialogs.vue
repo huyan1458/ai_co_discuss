@@ -7,7 +7,8 @@ import ProjectDirectoryField from "./ProjectDirectoryField.vue";
 import AccountSettings from "./AccountSettings.vue";
 import SpeechSettings from "./SpeechSettings.vue";
 import WeixinSettings from "./WeixinSettings.vue";
-import { locale, locales, set_locale, t } from "./i18n.js";
+import LanguagePicker from "./LanguagePicker.vue";
+import { t } from "./i18n.js";
 
 const props = defineProps({ detailId: { type: Number, default: null }, targetRoom: { type: Object, default: null }, targetFolder: { type: Object, default: null }, readingOptions: { type: Array, default: () => [] }, effectOptions: { type: Array, default: () => [] } });
 const mode = defineModel({ type: String, default: "" });
@@ -284,10 +285,10 @@ const keep_open = (event) => event.preventDefault();
         <AccountSettings />
         <h3 class="account-appearance-heading">{{ t("外观") }}</h3>
         <div class="theme-choices"><button v-for="theme in themes" :key="theme.value" :class="{ chosen: view.theme === theme.value }" :aria-pressed="view.theme === theme.value" @click="choose_theme(theme.value)"><span class="theme-preview" :class="theme.value" aria-hidden="true"><i class="theme-preview-side"></i><i class="theme-preview-main"><b></b><b></b><b></b></i></span><span><strong>{{ theme.title }}</strong><small>{{ theme.description }}</small></span><span class="theme-check"><UIcon v-if="view.theme === theme.value" name="i-lucide-check" /></span></button></div>
-        <section class="channel-reading-setting">
+        <section class="channel-reading-setting channel-language-setting">
           <!-- Always bilingual, so someone who cannot read the current language can still find it. -->
-          <h3 id="channel-language-label">{{ t("语言 · Language") }}</h3>
-          <div class="channel-reading-options" role="group" aria-labelledby="channel-language-label"><UButton v-for="option in locales" :key="option.code" :label="option.label" color="neutral" variant="ghost" :class="{ chosen: locale === option.code }" :aria-pressed="locale === option.code" @click="set_locale(option.code)" /></div>
+          <h3>{{ t("语言 · Language") }}</h3>
+          <LanguagePicker />
         </section>
         <section class="channel-reading-setting">
           <h3 id="channel-reading-label">{{ t("对话宽度") }}</h3>

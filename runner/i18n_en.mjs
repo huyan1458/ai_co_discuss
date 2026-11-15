@@ -145,7 +145,6 @@ export default {
   "，最近 {value1} 次": "; latest {value1}",
   "{value1} 次执行失败{value2}：": "{value1} failed runs{value2}:",
   "客户那边看到的是失败卡片和重试按钮；登录失效、额度用完这类问题要你在管理面板处理。": "The user sees a failure card and Retry button. Handle issues such as expired sign-ins or exhausted quotas in the admin panel.",
-  "共议 · 管理面板": "CoDiscuss · Admin panel",
   "codiscuss local {value1} 失败（退出码 {value2}）": "codiscuss local {value1} failed (exit code {value2})",
   "管理面板已在运行：http://127.0.0.1:{value1}": "Admin panel is already running: http://127.0.0.1:{value1}",
   "入口没有启动：{value1}\n": "Entry did not start: {value1}\n",

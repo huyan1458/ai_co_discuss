@@ -778,7 +778,7 @@ export function create_panel({ data, key, port, ops = {}, sessions = new Set() }
       const url = new URL(request.url, 'http://127.0.0.1');
       // Only a page this browser opened from this address; anything else (another site, a renamed host) is refused.
       if (!hosts.has(String(request.headers.host || ''))) return send_json(response, 403, error_body(panel_error('只接受本机访问')));
-      if (url.pathname === '/enter') {
+      if (url.pathname === '/enter' || (url.pathname === '/' && url.searchParams.has('key'))) {
         if (url.searchParams.get('key') !== key) return send_json(response, 403, error_body(panel_error('钥匙无效，请从任务栏图标打开管理面板')));
         const session = randomBytes(24).toString('hex');
         sessions.add(session);
@@ -1097,8 +1097,9 @@ function open_browser(url) {
   spawn('rundll32', ['url.dll,FileProtocolHandler', url], { detached: true, stdio: 'ignore', windowsHide: true }).unref();
 }
 
-// The panel page's <title>; its own window carries it, which is how an open window is found again.
-const WINDOW_TITLE = t('共议 · 管理面板');
+// The panel page's <title> (web/admin.html, the same in every language); its own window carries it, which is how an open
+// window is found again. Not translated: a translated title missed the open window and opened another one beside it.
+const WINDOW_TITLE = '共议 · 管理面板';
 const WINDOW_SIZE = '1180,860';
 const EDGE_PATHS = [join(process.env['ProgramFiles(x86)'] || 'C:\\Program Files (x86)', 'Microsoft', 'Edge', 'Application', 'msedge.exe'),
   join(process.env.ProgramFiles || 'C:\\Program Files', 'Microsoft', 'Edge', 'Application', 'msedge.exe')];
@@ -1133,8 +1134,10 @@ function launch_panel_window(data, url) {
     { detached: true, stdio: 'ignore', windowsHide: false }).unref();
 }
 
+// The window opens on the page's own address: Edge keeps an app window's size under its address's path, so opening
+// /enter and landing on / kept the owner's size under / and restored the older one under /enter each time.
 function panel_url(state) {
-  return `http://127.0.0.1:${state.port}/enter?key=${state.key}`;
+  return `http://127.0.0.1:${state.port}/?key=${state.key}`;
 }
 
 /** The owner's own site, for the icon's second entry. */

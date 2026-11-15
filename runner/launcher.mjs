@@ -12,6 +12,7 @@ import { copyFileSync, existsSync, mkdirSync, readFileSync, rmSync, writeFileSyn
 import { homedir, tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { crc32, deflateSync, inflateSync } from 'node:zlib';
 import { t } from './i18n.mjs';
 
 const RUNNER = dirname(fileURLToPath(import.meta.url));
@@ -427,6 +428,66 @@ export function ico_from_pngs(images) {
   return Buffer.concat([header, ...images.map(image => image.png)]);
 }
 
+// At or below this size a tile corner is only a pixel or two, and its half-transparent edge shows as a dark speck on the
+// taskbar; such sizes get hard corners instead.
+const HARD_CORNER_SIZE = 40;
+
+/** Decode an 8-bit RGBA PNG (what Edge's screenshot writes) into { width, height, pixels }. */
+function decode_rgba(png) {
+  let offset = 8, width = 0, height = 0;
+  const data = [];
+  while (offset < png.length) {
+    const length = png.readUInt32BE(offset), type = png.toString('ascii', offset + 4, offset + 8), body = png.subarray(offset + 8, offset + 8 + length);
+    if (type === 'IHDR') {
+      width = body.readUInt32BE(0); height = body.readUInt32BE(4);
+      if (body[8] !== 8 || body[9] !== 6) throw new Error('icon render is not 8-bit RGBA');
+    }
+    if (type === 'IDAT') data.push(body);
+    offset += 12 + length;
+  }
+  const raw = inflateSync(Buffer.concat(data)), stride = width * 4, pixels = Buffer.alloc(height * stride);
+  let previous = Buffer.alloc(stride);
+  for (let y = 0; y < height; y++) {
+    const filter = raw[y * (stride + 1)], line = raw.subarray(y * (stride + 1) + 1, (y + 1) * (stride + 1)), row = Buffer.alloc(stride);
+    for (let x = 0; x < stride; x++) {
+      const left = x >= 4 ? row[x - 4] : 0, up = previous[x], corner = x >= 4 ? previous[x - 4] : 0;
+      let value = line[x];
+      if (filter === 1) value += left;
+      else if (filter === 2) value += up;
+      else if (filter === 3) value += (left + up) >> 1;
+      else if (filter === 4) {
+        const guess = left + up - corner, to_left = Math.abs(guess - left), to_up = Math.abs(guess - up), to_corner = Math.abs(guess - corner);
+        value += to_left <= to_up && to_left <= to_corner ? left : to_up <= to_corner ? up : corner;
+      }
+      row[x] = value & 255;
+    }
+    row.copy(pixels, y * stride);
+    previous = row;
+  }
+  return { width, height, pixels };
+}
+
+/** Encode RGBA pixels as a PNG. */
+function encode_rgba({ width, height, pixels }) {
+  const chunk = (type, body) => {
+    const head = Buffer.alloc(8); head.writeUInt32BE(body.length, 0); head.write(type, 4, 'ascii');
+    const crc = Buffer.alloc(4); crc.writeUInt32BE(crc32(Buffer.concat([Buffer.from(type, 'ascii'), body])) >>> 0, 0);
+    return Buffer.concat([head, body, crc]);
+  };
+  const header = Buffer.alloc(13);
+  header.writeUInt32BE(width, 0); header.writeUInt32BE(height, 4); header[8] = 8; header[9] = 6;
+  const stride = width * 4, raw = Buffer.alloc(height * (stride + 1));
+  for (let y = 0; y < height; y++) pixels.copy(raw, y * (stride + 1) + 1, y * stride, (y + 1) * stride);
+  return Buffer.concat([Buffer.from([137, 80, 78, 71, 13, 10, 26, 10]), chunk('IHDR', header), chunk('IDAT', deflateSync(raw)), chunk('IEND', Buffer.alloc(0))]);
+}
+
+/** Make every pixel either fully transparent or fully opaque, so a small icon's corners have no half-transparent edge. */
+export function hard_corners(png) {
+  const image = decode_rgba(png);
+  for (let index = 3; index < image.pixels.length; index += 4) image.pixels[index] = image.pixels[index] >= 128 ? 255 : 0;
+  return encode_rgba(image);
+}
+
 /** The light product mark on a white rounded tile, as the panel's window icon shows it. */
 function tile_svg() {
   return readFileSync(join(ROOT, 'web', 'mark-tile.svg'), 'utf8');
@@ -449,7 +510,8 @@ export function render_icon(folder) {
       writeFileSync(page, `<!doctype html><html><body style="margin:0;background:transparent">${svg.replace('<svg ', `<svg width="${size}" height="${size}" `)}</body></html>`);
       spawnSync(edge, ['--headless=new', '--disable-gpu', '--hide-scrollbars', `--user-data-dir=${join(work, 'profile')}`, '--default-background-color=00000000',
         `--window-size=${size},${size}`, `--screenshot=${png}`, `file:///${page.replaceAll('\\', '/')}`], { windowsHide: true, timeout: 60_000 });
-      return existsSync(png) ? { size, png: readFileSync(png) } : null;
+      if (!existsSync(png)) return null;
+      return { size, png: size <= HARD_CORNER_SIZE ? hard_corners(readFileSync(png)) : readFileSync(png) };
     });
     if (images.some(image => !image)) return null;
     const path = join(folder, 'codiscuss.ico');

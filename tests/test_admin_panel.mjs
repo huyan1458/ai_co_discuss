@@ -82,6 +82,11 @@ test('the panel opens only with the owner key, only for its own address, and ref
   const entered = await request('/enter?key=owner-key&page=keys');
   assert.equal(entered.status, 302);
   assert.equal(entered.headers.get('location'), '/#keys');
+  // The window opens on / itself, so Edge keeps and restores its size under one address.
+  assert.equal((await request('/?key=wrong')).status, 403);
+  const at_root = await request('/?key=owner-key');
+  assert.equal(at_root.status, 302);
+  assert.equal(at_root.headers.get('location'), '/');
   const cookie = entered.headers.get('set-cookie').split(';')[0];
   assert.equal((await request('/api/state', { cookie })).status, 200);
   // fetch keeps its own Host header, so a renamed host is sent with node:http.

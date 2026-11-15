@@ -12,6 +12,7 @@ import { locale, t } from "../i18n.js";
 import { call } from "./api.js";
 import OverviewPage from "./OverviewPage.vue";
 import AccountsPage from "./AccountsPage.vue";
+import LanguagePicker from "../LanguagePicker.vue";
 
 // Served beside the page by the panel server, not bundled.
 const MARK = "/mark.svg";
@@ -23,6 +24,8 @@ const pages = [OVERVIEW, ACCOUNTS];
 const chosen = ref(location.hash.slice(1) || "overview");
 const page = computed(() => (pages.some((item) => item.key === chosen.value) ? chosen.value : "overview"));
 const loading = ref(false);
+// Shown beside the name as the website shows it, so the owner sees at a glance which version this computer runs.
+const version = computed(() => state.value.service?.version || state.value.version || "");
 const toast = useToast();
 
 /** Show an operation's result in the corner. */
@@ -63,12 +66,13 @@ onMounted(() => document.addEventListener("toast.viewportPause", (event) => even
   <UApp :locale="locale === 'en' ? en : zh_cn" :scroll-body="false" :toaster="{ position: 'bottom-right', max: 4 }">
     <div class="panel">
       <header class="panel-head">
-        <div class="panel-brand"><img class="panel-mark" :src="MARK" alt="" /><h1>{{ t('共议') }}</h1><small>{{ t('管理面板') }}</small></div>
+        <div class="panel-brand"><img class="panel-mark" :src="MARK" alt="" /><h1>{{ t('共议') }}</h1><small>{{ t('管理面板') }}<template v-if="version"> · v{{ version }}</template></small></div>
         <nav class="panel-tabs" :aria-label="t('管理页面')">
           <button v-for="item in pages" :key="item.key" type="button" class="panel-tab" :class="{ 'is-active': page === item.key }" :aria-current="page === item.key ? 'page' : undefined" @click="choose(item.key)">
             <UIcon :name="item.icon" />{{ item.label }}
           </button>
         </nav>
+        <LanguagePicker />
         <div class="panel-tools">
           <button type="button" class="panel-tool" :class="{ 'is-spinning': refreshing }" :disabled="refreshing" :title="t('刷新全部：服务、登录状态、账号与版本')" :aria-label="t('刷新全部')" @click="refresh_all"><UIcon name="i-lucide-refresh-cw" /></button>
         </div>
