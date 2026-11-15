@@ -385,7 +385,7 @@ async function run_tool(context, call) {
     const page = Number.isInteger(args.page) && args.page > 0 ? args.page : 1;
     const after = Number.isInteger(args.after) && args.after >= 0 ? args.after : 0;
     if (call.name === 'read_message' && (!Number.isInteger(args.id) || args.id < 1)) return { result: { error: 'id 须为正整数' } };
-    const query = `${args.after === undefined ? `page=${page}` : `after=${after}`}&max_chars=${LIST_OUTPUT_CHARS}`;
+    const query = `${args.after === undefined ? `page=${page}` : `after=${after}`}&max_output_chars=${LIST_OUTPUT_CHARS}`;
     const part = new URLSearchParams(Object.entries({ offset: args.offset, limit: args.limit, version: args.version })
       .filter(([, value]) => value !== undefined).map(([key, value]) => [key, String(value)]));
     const path = call.name === 'read_message' ? execution_read_path(context, `/messages/${args.id}${part.size ? `?${part}` : ''}`)
@@ -419,9 +419,32 @@ async function run_tool(context, call) {
       if (answer) context.last_submission = { outcome: 'rejected', submission_id: action.body.submission_id, error: error.message };
       return { result: { error: error.message } };
     }
+    if (call.name === 'ask_question') return recover_question(context, action, error);
     if (!answer) throw error; // Never retry an uncertain write with a new submission ID.
     return recover_answer(context, action, error);
   }
+}
+
+/**
+ * A question whose creation result is unknown (#3329 item 3, REVIEW M6): look it up read-only by its submission ID.
+ * Found, it was created and the run goes on as after a normal create (a handoff ends it); not found, the model is
+ * told the outcome is unknown and that asking again with the same content reuses the same ID, so no second question
+ * can appear. The run is not ended either way.
+ */
+async function recover_question(context, action, error) {
+  const submission_id = action.body.submission_id;
+  let found = null;
+  try { found = (await room_request(context, `/questions?submission_id=${encodeURIComponent(submission_id)}`)).questions?.[0] || null; }
+  catch (lookup) { if (context.signal?.aborted) throw lookup; }
+  if (found) {
+    const receipt = { outcome: 'accepted', recovered: true, question_id: found.id, message_id: found.message_id, version: found.version,
+      status: found.status, contract: found.contract, blocking: found.blocking, submission_id };
+    if (action.terminal) context.last_submission = { outcome: 'accepted', operation: 'ask_question', question_id: found.id,
+      message_id: found.message_id, submission_id };
+    return { result: receipt, terminal: action.terminal };
+  }
+  return { result: { outcome: 'unknown', submission_id, error: String(error.message || error),
+    note: '提问结果不明，按提交编号也没查到；用完全相同的内容再调用一次 ask_question 会沿用同一编号，不会建出第二个问题' } };
 }
 
 /**

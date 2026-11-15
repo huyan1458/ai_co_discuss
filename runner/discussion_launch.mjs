@@ -2133,7 +2133,9 @@ export async function host_control(home, action, options) {
   if (!Object.hasOwn(HOST_CONTROLS, action || '')) throw new Error(`操作须为 ${Object.keys(HOST_CONTROLS).join('、')} 之一`);
   const { config, roster, labels, host } = await host_room(home, options.access_file);
   if (!config.host_workflows) throw new Error('房主没有为本房间打开“主持人完整权限”；请让用户在电脑上“成员与设置 → 协作设置”打开后再试');
-  const headers = { 'User-Agent': `AI-CoDiscuss-host:${host}` };
+  // The User-Agent names the caller in the event log; the host's own credential is what lets the site label what it
+  // does as the host's (steer, stop) by its display name, since every write here carries the owner's credential.
+  const headers = { 'User-Agent': `AI-CoDiscuss-host:${host}`, 'X-Acting-Member-Token': config.members[host].token };
   const owner = { site: config.site, room_id: config.room, token: config.token };
   const call = (path, body) => site_request(config.site, `/api/rooms/${config.room}${path}`, config.token, body, headers);
   return HOST_CONTROLS[action]({ home, config, roster, labels, host, headers, owner, call }, options);

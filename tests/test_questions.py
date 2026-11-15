@@ -72,6 +72,19 @@ class QuestionTests(base.HostRoomTests):
         self.assertEqual(self.request(self.path)[1]["speaking_order"]["sequence"]["pass"], 2, "a retried answer adds no pass")
         self.assertEqual(self.answer_question(question["id"], 1, choices={"pick": ["A"]})[0], 409, "answered once")
 
+    def test_an_answer_with_nobody_left_for_the_next_step_goes_to_the_host(self):
+        """The relay stops, and the present host is told with the answer, when no member can take the next step (P5, REVIEW M5)."""
+        execution = self.gated_relay()
+        receipt = self.ask("Codex", execution)[1]
+        self.request(f"{self.path}/members/{self.member_id('Antigravity')}", {"action": "away"}, self.owner)
+        self.request(f"{self.path}/members/{self.member_id('Codex')}", {"action": "away"}, self.owner)
+        status, answered = self.answer_question(receipt["question_id"], 1, choices={"pick": ["A"]})
+        self.assertEqual(status, 201, answered)
+        notices = [item for item in self.pending_of("Claude") if item["purpose"] == "notice"]
+        self.assertEqual(len(notices), 1, "the host is told once")
+        notice = self.request(f"{self.path}/messages/{notices[0]['message_id']}")[1]["text"]
+        self.assertIn(f"#{answered['message_id']}", notice, "with the answer's message number")
+
     def test_create_is_atomic_and_recoverable_by_submission_id(self):
         execution = self.gated_relay()
         before = len(self.request(f"{self.path}/messages?after=0")[1]["messages"])
@@ -222,10 +235,13 @@ class QuestionTests(base.HostRoomTests):
 class InterventionSourceTests(base.HostRoomTests):
     """What the host does to a member through host-control is labelled as the host's, not the owner's (应 14)."""
 
-    def as_host(self, path, payload):
-        """Write with the owner's credential the way `launch host-control` does, naming the acting host."""
-        request = Request(self.base + path, data=json.dumps(payload).encode(), headers={
-            "Content-Type": "application/json", "X-Discussion-Token": self.owner, "User-Agent": "AI-CoDiscuss-host:Claude"})
+    def as_host(self, path, payload, acting=True):
+        """Write with the owner's credential the way `launch host-control` does: the User-Agent names the host, and the
+        host's own credential (unless `acting` is False) proves it."""
+        headers = {"Content-Type": "application/json", "X-Discussion-Token": self.owner, "User-Agent": "AI-CoDiscuss-host:Claude"}
+        if acting:
+            headers["X-Acting-Member-Token"] = self.member
+        request = Request(self.base + path, data=json.dumps(payload).encode(), headers=headers)
         try:
             with urlopen(request, timeout=10) as response:
                 return response.status, json.loads(response.read())
@@ -239,15 +255,22 @@ class InterventionSourceTests(base.HostRoomTests):
         self.request(url, {"action": "delivery", "stoppable": True, "progress": True, "steer": True, "resume": False}, self.owner)
         self.assertEqual(self.as_host(url, {"action": "interject", "text": "顺便看下日志", "submission_id": uuid.uuid4().hex})[0], 200)
         self.request(url, {"action": "interject", "text": "我也补一句", "submission_id": uuid.uuid4().hex}, self.owner)
+        self.as_host(url, {"action": "interject", "text": "只写请求头", "submission_id": uuid.uuid4().hex}, acting=False)
+        self.assertEqual(self.request(f"{self.path}/labels", {"labels": {"Claude": "主持小克"}}, self.owner)[0], 200)
+        self.as_host(url, {"action": "interject", "text": "改名之后", "submission_id": uuid.uuid4().hex})
         live = next(item for item in self.request(f"{self.path}/inbox", token=self.owner)[1]["executions"] if item["id"] == execution)
-        self.assertEqual([(item["text"], item["author"]) for item in live["interjections"]], [("顺便看下日志", "Claude"), ("我也补一句", "")])
+        self.assertEqual([(item["text"], item["author"]) for item in live["interjections"]],
+                         [("顺便看下日志", "Claude"), ("我也补一句", ""), ("只写请求头", ""), ("改名之后", "主持小克")],
+                         "the host's credential, not the User-Agent, labels it, by the name the room shows")
         self.assertEqual(self.as_host(f"{self.path}/members/{self.member_id('Codex')}/interrupt", {})[0], 200)
         stopped = self.request(url, token=self.owner)[1]
-        self.assertEqual(stopped["result"], "主持人 Claude 打断")
+        self.assertEqual(stopped["result"], "主持人 主持小克 打断")
 
 
 class QueuedRequestTests(base.HostRoomTests):
     """A request that queues while its member works is listed on the execution and may be delivered by the same answer (应 2)."""
+
+    pending_of = QuestionTests.pending_of
 
     def test_one_answer_closes_the_related_queued_request(self):
         self.say("先列清单", to=["Codex"])
@@ -264,6 +287,22 @@ class QueuedRequestTests(base.HostRoomTests):
         self.assertEqual(status, 201, saved)
         self.assertEqual(len(saved["receipt"]["request_ids"]), 2, "the receipt lists both closed requests")
         self.assertNotIn(("Codex", "ask", "pending"), self.requests(), "nothing left to wake Codex again")
+
+    def test_relay_steps_and_proactive_posts_cannot_close_queued_requests(self):
+        """Only the member's own independent requests may be closed this way; a relay step is not one (REVIEW L3)."""
+        self.say("先列清单", to=["Codex"])
+        execution = self.reserve_for("Codex")[1]["id"]
+        self.say("接力", to=["Claude"])
+        self.work("Claude", to=["Codex", "Antigravity"], sequential=True)
+        step = next(item for item in self.pending_of("Codex") if item["purpose"] == "ask")
+        detail = self.request(f"{self.path}/executions/{execution}", token=self.codex)[1]
+        self.assertEqual(detail["queued_requests"], [], "a relay step is not offered")
+        refused = self.request(f"{self.path}/messages", {"author": "Codex", "text": "顺便做了", "source": "cli", "submission_id": uuid.uuid4().hex,
+                                                         "execution_id": execution, "also_request_ids": [step["id"]]}, self.codex)
+        self.assertEqual(refused[0], 409, refused)
+        proactive = self.request(f"{self.path}/messages", {"author": "Codex", "text": "主动说一句", "source": "cli", "submission_id": uuid.uuid4().hex,
+                                                           "proactive": True, "also_request_ids": [step["id"]]}, self.codex)
+        self.assertEqual(proactive[0], 400, proactive)
 
 
 class OneExitTests(base.HostRoomTests):
@@ -338,7 +377,8 @@ class DiscussionHintTests(base.FreeRoomTests):
         execution = self.reserve_for("Claude")[1]
         self.say("之后的消息")
         read = self.request(f"{self.path}/messages?execution_id={execution['id']}", token=self.member)[1]
-        self.assertEqual((read["read_scope"]["beyond"] >= 1, "note" in read["read_scope"]), (True, True), read.get("read_scope"))
+        scope = read["read_scope"]
+        self.assertEqual((scope["room_latest_id"] > scope["read_until"], "note" in scope, "beyond" in scope), (True, True, False), scope)
 
 
     def test_questions_respect_the_independent_reading_boundary(self):

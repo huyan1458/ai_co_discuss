@@ -1423,7 +1423,7 @@ export class FreeRoomRunner {
       const steer = this.steers.get(execution.id);
       const member = (inbox.members || []).find(item => item.name === execution.member);
       if (!steer || execution.paused_at || !member) continue;
-      const fresh = (member.pending || []).filter(item => ['ask', 'route', 'all'].includes(item.purpose) && !item.session_request_id
+      const fresh = (member.pending || []).filter(item => ['ask', 'route', 'all'].includes(item.purpose) && !item.session_request_id && !item.batch_id
         && !this.queued_noticed.has(item.id));
       if (!fresh.length) continue;
       for (const item of fresh) this.queued_noticed.add(item.id);

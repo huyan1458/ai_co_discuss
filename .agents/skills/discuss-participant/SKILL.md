@@ -42,7 +42,7 @@ description: "AI CoDiscuss 的通用参与技能，所有参与者（包括主�
 
 ## 阅读
 
-背景不足读 `room brief`，需要接续判断读 `state view`，核对具体论据读 `message view ROOM ID`，查找材料才用 `message list`。按争点阅读相关原文，不用摘要代替需要复核的论证，也不无目的拉取全部历史。增量读取用实际已读编号 `message list ROOM --after ID`，按 `next_after` / `has_more` 续读；找某人、某关键词或某类消息时加 `--author 显示名`、`--query 关键词或编号`、`--kind opinion|moderation|chat` 筛选，不必翻全部历史；`latest_id` 不等于已读，筛选后的游标只代表该查询范围。阶段和安排以最新服务端状态为准。
+不确定自己现在该做什么、回答是否已落库时先读 `execution status`（省略编号即本次执行）。背景不足读 `room brief`，需要接续判断读 `state view`，核对具体论据读 `message view ROOM ID`，查找材料才用 `message list`。按争点阅读相关原文，不用摘要代替需要复核的论证，也不无目的拉取全部历史。增量读取用实际已读编号 `message list ROOM --after ID`，按 `next_after` / `has_more` 续读；找某人、某关键词或某类消息时加 `--author 显示名`、`--query 关键词或编号`、`--kind opinion|moderation|chat` 筛选，不必翻全部历史；`latest_id` 不等于已读，筛选后的游标只代表该查询范围。阶段和安排以最新服务端状态为准。
 
 唤醒你的消息带附件时，任务提示末尾按正文里的 `[图片 #n]` / `[文件 #n]` 逐个列出本机副本；已直接看到的图片不必再打开，其余用当前软件的工具读取副本。其他消息的 `attachments` 提供文件名、类型、大小与编号；需要核对内容时用 `attachment view ROOM ID`、`attachment download ROOM ID --dest 明确的新文件路径`，再用当前软件的工具读取。下载或看见文件名不等于已读，无法解析时如实说明。
 

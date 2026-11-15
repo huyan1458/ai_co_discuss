@@ -142,7 +142,7 @@ class SingleMemberTests(FreeRoomTests):
         text = "长文🙂" * 1500 + "末尾"
         message_id = self.say(text)[1]["message"]["id"]
         self.say("之后的短消息")
-        page = self.request(f"{self.path}/messages?after=0&max_chars=1500", token=self.owner)[1]
+        page = self.request(f"{self.path}/messages?after=0&max_output_chars=1500", token=self.owner)[1]
         preview = page["messages"][0]
         self.assertEqual((len(page["messages"]), page["next_after"], page["has_more"], page["budget_stopped"]), (1, message_id, True, True))
         self.assertEqual((preview["text_complete"], preview["text_chars"]), (False, len(text)))
@@ -160,7 +160,11 @@ class SingleMemberTests(FreeRoomTests):
         status, changed = self.request(f"{self.path}/messages/{message_id}?offset=0&version={'0' * 64}", token=self.owner)
         self.assertEqual((status, changed["code"]), (409, "content_changed"))
         self.assertEqual(self.request(f"{self.path}/messages/{message_id}?offset={len(text) + 1}", token=self.owner)[0], 400)
-        self.assertEqual(self.request(f"{self.path}/messages?after=0&max_chars=10", token=self.owner)[0], 400)
+        self.assertEqual(self.request(f"{self.path}/messages?after=0&max_output_chars=10", token=self.owner)[0], 400)
+        # `max_chars` is the spec's text-only sub-budget, not offered: refused rather than silently ignored.
+        status, refused = self.request(f"{self.path}/messages?after=0&max_chars=1500", token=self.owner)
+        self.assertEqual(status, 400)
+        self.assertIn("max_output_chars", refused["error"])
 
     def test_execution_view_reports_its_own_delivery_and_the_receipt_proves_the_text(self):
         """Spec #3262 items 4 and 6: one compact receipt, and the execution says whether its answer was accepted."""
@@ -169,7 +173,16 @@ class SingleMemberTests(FreeRoomTests):
         path = f"{self.path}/executions/{execution['id']}"
         self.assertEqual(self.request(path, token=self.member)[1]["delivery"]["last_submission"],
                          {"outcome": "unknown", "execution_id": execution["id"], "received": False})
-        self.assertEqual(self.answer(execution["id"], "回答", kind="nonsense")[0], 400)
+        # Another execution's refusal is never read as this one's, even when its ID starts with this ID (review L1).
+        other = execution["id"] * 10
+        with closing(sqlite3.connect(self.database)) as connection, connection:
+            connection.execute("INSERT INTO room_events (room_id,at,kind,data) VALUES (?,?,?,?)", (
+                self.room["id"], int(time.time() * 1000), "api.rejected", json.dumps({
+                    "method": "POST", "path": f"/api/rooms/{self.room['id']}/messages", "status": 400, "actor": "member:Claude",
+                    "execution_id": other, "payload": json.dumps({"execution_id": other}, ensure_ascii=False)})))
+        self.assertEqual(self.request(path, token=self.member)[1]["delivery"]["last_submission"]["outcome"], "unknown")
+        # A long refused answer is still found: its execution is kept whole beside the payload the log cuts.
+        self.assertEqual(self.answer(execution["id"], "长" * 9000, kind="nonsense")[0], 400)
         rejected = self.request(path, token=self.member)[1]["delivery"]["last_submission"]
         self.assertEqual((rejected["outcome"], rejected["status"]), ("rejected", 400))
         status, saved = self.answer(execution["id"], "完整回答🙂")
@@ -399,15 +412,20 @@ class SingleMemberTests(FreeRoomTests):
         # The host handles the failure's hand-back without advancing anything.
         handled = self.reserve()[1]
         self.assertEqual([item["purpose"] for item in handled["requests"]], ["handoff"])
-        self.assertEqual(self.answer(handled["id"], text="等重试")[0], 201)
+        status, handled_answer = self.answer(handled["id"], text="等重试")
+        self.assertEqual(status, 201, handled_answer)
+        handled_requests = [item["id"] for item in self.request(f"{self.path}/executions/{handled['id']}", token=self.owner)[1]["requests"]]
         ready = f"{self.path}/reviews/{batch_id}/ready"
         self.assertFalse(self.request(ready, token=self.member)[1]["ready"])
         self.assertEqual(self.request(f"{self.path}/executions/{failing['id']}", {"action": "retry"}, self.owner)[0], 200)
         work = self.request(f"{self.path}/executions", {"member_id": implementer, "client_id": uuid.uuid4().hex}, self.owner)[1]
         self.assertEqual(self.answer(work["id"], token=implementer_token, author="Codex-impl", text="重试后完成")[0], 201)
         handoffs = [item for item in self.request(self.path)[1]["free"]["requests"]
-                    if item["message_id"] == batch_id and item["member"] == "Claude"]
-        self.assertEqual([(item["purpose"], item["status"]) for item in handoffs], [("handoff", "pending")])
+                    if item["member"] == "Claude" and item["purpose"] == "handoff"]
+        self.assertEqual([item["status"] for item in handoffs], ["completed", "pending"], "one new hand-back, the handled one kept")
+        # L2: the host's answer to the failure's hand-back keeps its request.
+        self.assertEqual([item["id"] for item in self.request(f"{self.path}/executions/{handled['id']}", token=self.owner)[1]["requests"]], handled_requests)
+        self.assertEqual(handoffs[0]["answer_id"], handled_answer["message"]["id"])
         self.reserve()
         status, facts = self.request(ready, token=self.member)
         self.assertTrue(facts["ready"], facts)
@@ -1082,6 +1100,13 @@ class MultiMemberTests(FreeRoomTests):
         listed = self.request(f"{self.path}/attachments{query}", token=self.member)[1]["attachments"]
         self.assertNotIn(file_id, [item["id"] for item in listed])
         self.assertEqual(self.request(f"{self.path}/attachments/{file_id}", token=self.owner)[0], 200)
+        # Without any credential the ways to learn the ID are bounded too (review M4); the bytes stay reachable by
+        # their unguessable ID because the owner's page shows images with a plain <img src>.
+        status, refused = self.request(f"{self.path}/attachments/{file_id}")
+        self.assertEqual((status, refused["code"]), (403, "reading_boundary"))
+        self.assertNotIn(file_id, [item["id"] for item in self.request(f"{self.path}/attachments")[1]["attachments"]])
+        with urlopen(Request(f"{self.base}{self.path}/attachments/{file_id}/content"), timeout=10) as response:
+            self.assertEqual(response.read(), b"later")
         anchor = execution["requests"][0]["message_id"]
         status, pointed = self.request(f"{self.path}/messages/{anchor}{query}", token=self.member)
         self.assertEqual((status, pointed["code"], pointed["request_id"]), (404, "internal_task_anchor", execution["requests"][0]["id"]))
@@ -1326,8 +1351,16 @@ class MultiMemberTests(FreeRoomTests):
         """应 8: a host's name inside quotation marks is quoted, not called on."""
         self.say("请 Claude 看看", to=["Claude"])
         execution = self.reserve_for("Claude")[1]
-        self.assertEqual(self.answer(execution["id"], "用户原话是“@Codex 先别动”，我照做了。")[0], 201)
+        self.assertEqual(self.answer(execution["id"], "用户原话是“@Codex 先别动”，又说\"@Codex 别急\"，我照做了。")[0], 201)
         self.assertEqual([item for item in self.request(self.path)[1]["free"]["requests"] if item["member"] == "Codex"], [])
+
+    def test_inch_marks_do_not_hide_a_real_mention_of_the_host(self):
+        """L6: unpaired ASCII quotes used as inch marks keep the mention between them."""
+        self.say("请 Claude 看看", to=["Claude"])
+        execution = self.reserve_for("Claude")[1]
+        self.assertEqual(self.answer(execution["id"], "5\" 屏放不下，@Codex 请决定是否换 6\" 屏。")[0], 201)
+        woken = [item["purpose"] for item in self.request(self.path)[1]["free"]["requests"] if item["member"] == "Codex"]
+        self.assertEqual(woken, ["notice"])
 
     def test_quota_failure_is_classified_held_and_retry_warns(self):
         """必 9: a usage-limit failure tells the host it is lasting with the reset time, holds deliveries, and retry warns."""

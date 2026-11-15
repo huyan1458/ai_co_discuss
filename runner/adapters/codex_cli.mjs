@@ -34,6 +34,9 @@ export function codex_permissions(config, task, platform = process.platform) {
     ? ':workspace' : ':read-only';
   const drafts = resolve(task.draft_directory).replaceAll('\\', '/');
   const extras = Object.fromEntries((task.extra_directories || []).map(item => [resolve(item.path).replaceAll('\\', '/'), item.access]));
+  // Only this member's own drafts folder is writable, but ':root' stays readable, so its software and commands can still
+  // read other members' drafts beside it. The profile accepts "none"/"deny" entries (checked with `codex sandbox`, 0.169),
+  // but whether `codex exec` then refuses reads was not verified, so no such entry is added (必 10, review M3).
   const filesystem = { ':root': 'read', ...extras, [resolve(task.directory).replaceAll('\\', '/')]: 'read', [drafts]: 'write' };
   const rules = Object.entries(filesystem).map(([path, access]) => `${JSON.stringify(path)}=${JSON.stringify(access)}`).join(',');
   const profile = `{extends=${JSON.stringify(base)},filesystem={${rules}},network={enabled=true}}`;

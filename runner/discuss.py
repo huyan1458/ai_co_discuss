@@ -14,6 +14,7 @@ import sys
 import tempfile
 import time
 from dataclasses import dataclass
+from datetime import datetime, timezone
 from http.client import HTTPException
 from pathlib import Path
 from urllib.error import HTTPError, URLError
@@ -505,8 +506,12 @@ def mode_commands(subcommands, registry):
 
 def execution_commands(subcommands, registry):
     """Read an execution or report its failure through its durable identifier."""
-    for action in ("view", "fail"):
-        parser = add_leaf(subcommands, registry, f"execution {action}", "读取执行或报告本次执行失败", True)
+    descriptions = {"view": "读取执行或报告本次执行失败",
+                    "status": "我现在什么状态：本次执行是否有效、要回应的请求与原题、读取范围、已读游标、本人交付是否已落库；"
+                              "是 execution view 的精简投影，不另设事实源",
+                    "fail": "读取执行或报告本次执行失败"}
+    for action in ("view", "status", "fail"):
+        parser = add_leaf(subcommands, registry, f"execution {action}", descriptions[action], True)
         parser.add_argument("id", type=positive_int, nargs="?", help="执行编号；省略时用凭据绑定的执行")
         if action == "fail":
             parser.add_argument("--reason", required=True)
@@ -780,7 +785,7 @@ def plan_message(args):
     if args.action == "list":
         params = {"page": args.page, "q": args.query, "author": args.author, "mention": args.mention,
                   "after": args.after, "kind": args.kind, "submission_id": args.submission_id,
-                  "max_chars": LIST_OUTPUT_CHARS, **read_context_params(args)}
+                  "max_output_chars": LIST_OUTPUT_CHARS, **read_context_params(args)}
         return RequestPlan(base, params={key: value for key, value in params.items() if value is not None}, view="message_list")
     actor = require_actor(args)
     if args.proactive and (args.execution or args.request or args.kind != "chat"):
@@ -1040,6 +1045,8 @@ def plan_execution(args):
     path = f"/api/rooms/{args.room}/executions/{execution_id}"
     if args.action == "view":
         return RequestPlan(path)
+    if args.action == "status":
+        return RequestPlan(path, view="execution_status")
     return RequestPlan(path, "POST", {"action": "fail", "reason": args.reason})
 
 
@@ -1348,6 +1355,8 @@ def project_result(value, plan, site):
             result["guidance"] = GUIDANCE.get(value["phase"], "按本次主持或专家职责，结合最新阶段、安排和必要原文决定下一步。")
             result["url"] = f"{site}/r/{value['id']}"
         return result
+    if plan.view == "execution_status":
+        return execution_status(value)
     if plan.view == "message_list":
         page = fit_message_page(value)
         return {**page, "messages": [inline_attachments(message) for message in page.get("messages", [])]}
@@ -1362,6 +1371,37 @@ def project_result(value, plan, site):
                    "attachments": len(message.get("attachments") or [])}
         return {**{key: item for key, item in value.items() if key != "message"}, "message": receipt}
     return value
+
+
+# What a request in `execution status` keeps: what to answer and where the boundary is, not the full record.
+STATUS_REQUEST_FIELDS = ("id", "status", "purpose", "source_question", "cause_kind", "source_message_id", "session_id",
+                         "round", "position", "sequence", "review", "question", "field_notes")
+
+
+def execution_status(detail):
+    """The member's "where am I" answer (B8, spec #3187 section 2), projected from one `execution view` read.
+
+    It names the execution and whether it can still be answered, each request still to answer with its own question
+    and reading bound, the member's read cursor and the service's word on this execution's own answer. Anything else
+    stays in `execution view`; the projection adds no fact of its own."""
+    live = detail.get("status") in ("dispatched", "started")
+    requests = []
+    for request in detail.get("requests") or []:
+        item = select_fields(request, STATUS_REQUEST_FIELDS)
+        if request.get("message_id") is not None:
+            item["anchor_id"] = request["message_id"]
+        bound = request.get("read_until")
+        item["read_scope"] = {"request_read_until": bound, "boundary_applied": bound is not None}
+        requests.append({key: value for key, value in item.items() if value not in (None, "", [], {})})
+    delivery = (detail.get("delivery") or {}).get("last_submission")
+    return {"view": "current", "as_of": datetime.now(timezone.utc).isoformat(timespec="seconds"),
+            "member": detail.get("member"),
+            "execution": {"id": detail.get("id"), "status": detail.get("status"), "can_answer": live,
+                          "result": detail.get("result") or None},
+            "requests": requests, "member_cursor": detail.get("read_until"), "read_after": detail.get("read_until"),
+            "delivery": delivery,
+            "note": ("截至本快照可继续处理；不代表之后始终可提交" if live
+                     else "本执行已结束，不能再用它提交；完整记录见 execution view")}
 
 
 def overview_free(free):
@@ -1387,7 +1427,7 @@ def inline_attachments(message):
 def fit_message_page(page):
     """Stop a page at the output budget so no agent tool cuts it silently; the cursor resumes after the last shown.
 
-    A site that applied `max_chars` itself says `remaining`; its page is already fitted, with honest previews."""
+    A site that applied `max_output_chars` itself says `remaining`; its page is already fitted, with honest previews."""
     if "remaining" in page:
         return page
     messages, used = [], 0

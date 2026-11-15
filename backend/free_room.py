@@ -342,8 +342,8 @@ def review_ready(connection, room_id, batch_id, token):
         a.text AS answer,e.id AS execution_id,e.status AS execution_status,e.result,e.changes
         FROM member_requests r JOIN room_members m ON m.id=r.member_id LEFT JOIN messages a ON a.id=r.answer_id
         LEFT JOIN member_executions e ON e.id=r.execution_id WHERE r.room_id=? AND r.batch_id=? ORDER BY r.id""", (room_id, batch_id))]
-    handoff = connection.execute("SELECT * FROM member_requests WHERE room_id=? AND message_id=? AND member_id=? AND purpose='handoff'",
-                                 (room_id, batch_id, plan["host_id"])).fetchone()
+    handoffs = review_handoffs(connection, room_id, batch_id, plan["host_id"])
+    handoff = handoffs[-1] if handoffs else None
     host = connection.execute("SELECT id FROM room_members WHERE room_id=? AND role='host' AND status='active'", (room_id,)).fetchone()
     candidate = next((member for member in roster["members"] if member["id"] == plan["reviewer_id"]), None)
     capability = connection.execute("SELECT member_revision FROM member_review_capabilities WHERE member_id=?", (plan["reviewer_id"],)).fetchone()
@@ -395,9 +395,9 @@ def advance_review(connection, room_id, token, payload):
     if saved:
         if saved["batch_id"] != batch_id:
             raise FileExistsError(Text("提交编号已用于其他评审批次"))
-        execution = connection.execute("""SELECT e.status FROM member_requests r JOIN member_executions e ON e.id=r.execution_id
-            JOIN review_plans p ON p.room_id=r.room_id AND p.batch_id=r.message_id AND p.host_id=r.member_id
-            WHERE r.room_id=? AND p.batch_id=? AND r.purpose='handoff'""", (room_id, batch_id)).fetchone()
+        plan = connection.execute("SELECT host_id FROM review_plans WHERE room_id=? AND batch_id=?", (room_id, batch_id)).fetchone()
+        handoff = next((row for row in reversed(review_handoffs(connection, room_id, batch_id, plan["host_id"])) if row["execution_id"]), None)
+        execution = connection.execute("SELECT status FROM member_executions WHERE id=?", (handoff["execution_id"],)).fetchone() if handoff else None
         return {"batch_id": batch_id, "review_batch_id": saved["review_batch_id"], "duplicate": True,
                 "execution_completed": bool(execution and execution[0] == "completed")}
     if not payload.get("revision"):
@@ -469,8 +469,10 @@ def handoff_notice(connection, room_id, batch_id, retried):
     failed = "；".join(f"{item['member']}（{item.get('reason', '')}）" for item in batch_outcome(connection, room_id, batch_id)
                       if item["status"] in ("failed", "cancelled"))
     if retried:
-        return Text("#{batch_id} 派出的工作重试后已结束，其中未完成：{failed}。请主持人接着处理。", batch_id=batch_id, failed=failed)             if failed else Text("#{batch_id} 派出的工作重试后已结束，请主持人接着处理。", batch_id=batch_id)
-    return Text("#{batch_id} 派出的工作已结束，其中未完成：{failed}。请主持人接着处理。", batch_id=batch_id, failed=failed)         if failed else Text("#{batch_id} 派出的工作已结束，请主持人接着处理。", batch_id=batch_id)
+        return Text("#{batch_id} 派出的工作重试后已结束，其中未完成：{failed}。请主持人接着处理。", batch_id=batch_id, failed=failed) \
+            if failed else Text("#{batch_id} 派出的工作重试后已结束，请主持人接着处理。", batch_id=batch_id)
+    return Text("#{batch_id} 派出的工作已结束，其中未完成：{failed}。请主持人接着处理。", batch_id=batch_id, failed=failed) \
+        if failed else Text("#{batch_id} 派出的工作已结束，请主持人接着处理。", batch_id=batch_id)
 
 
 def handoff_outcome(connection, request):
@@ -478,17 +480,18 @@ def handoff_outcome(connection, request):
     if request.get("purpose") != "handoff":
         return {}
     room_id = connection.execute("SELECT room_id FROM messages WHERE id=?", (request["message_id"],)).fetchone()
-    outcome = batch_outcome(connection, room_id[0], request["message_id"]) if room_id else []
+    batch_id = review_batch_of(connection, request["message_id"]) or request["message_id"]
+    outcome = batch_outcome(connection, room_id[0], batch_id) if room_id else []
     return {"outcome": outcome} if outcome else {}
 
 
 def review_request_context(connection, request):
     """Expose only the request's review provenance and local capability binding."""
-    plan = connection.execute("SELECT * FROM review_plans WHERE batch_id=? OR review_batch_id=?",
-                              (request["message_id"], request["message_id"])).fetchone()
+    batch = review_batch_of(connection, request["message_id"]) or request["message_id"]
+    plan = connection.execute("SELECT * FROM review_plans WHERE batch_id=? OR review_batch_id=?", (batch, batch)).fetchone()
     if not plan:
         return {}
-    phase = "handoff" if request["message_id"] == plan["batch_id"] else "review" if request["purpose"] == "ask" else "result"
+    phase = "handoff" if batch == plan["batch_id"] else "review" if request["purpose"] == "ask" else "result"
     if phase == "handoff" and request["purpose"] != "handoff":
         return {}
     review = {key: plan[key] for key in ("batch_id", "reviewer_id", "reviewer_name", "config_version", "member_revision", "scope")}
@@ -1237,6 +1240,8 @@ def check_answer(connection, room_id, member, payload):
     Only the AI host dispatches work; other members' targets remain suggestions. A proactive post is checked apart.
     """
     if payload.get("proactive") is not None:
+        if payload.get("also_request_ids") is not None:
+            raise ValueError(Text("主动发言不关联执行，不能一并交付排队请求（also_request_ids）"))
         check_proactive(connection, room_id, member, payload)
         return None
     if payload.get("to") is not None:
@@ -1369,8 +1374,9 @@ def mention_prose(text):
         if not quoted:
             lines.append(line)
     prose = re.sub(r"(`+)[\s\S]*?\1(?!`)", "", "\n".join(lines))
-    # A name inside quotation marks is quoted, not called on (V13 #3177): “@甲”、「@甲」、"@甲" do not count.
-    return re.sub(r'“[^”\n]*”|「[^」\n]*」|『[^』\n]*』|"[^"\n]*"', "", prose)
+    # A name inside quotation marks is quoted, not called on (V13 #3177): “@甲”、「@甲」、"@甲" do not count. CJK quotes
+    # come in pairs; an ASCII " also marks inches (5" 屏), so only a " that opens right on the @ counts as a quote (L6).
+    return re.sub(r'“[^”\n]*”|「[^」\n]*」|『[^』\n]*』|(?<![0-9"])"@[^"\n]*"', "", prose)
 
 
 def save_suggestions(connection, room_id, message_id, member, payload):
@@ -1740,22 +1746,42 @@ def settle_batches(connection, room_id):
 
 
 def reopen_review_handoff(connection, room_id, batch_id, host_id):
-    """Open the host's hand-back of a batch with a review still to dispatch again; returns whether it did.
+    """Hand a batch with a review still to dispatch back to its host once more; returns whether it did.
 
-    The host has one request per message, so the hand-back of a failure is the same row the review advances from. Only a
-    plan still pending reopens it, and only from a finished state: an advanced review or a hand-back already waiting
-    never yields a second one.
+    The failure's hand-back was already handled, and its row keeps the host's answer and execution as they were (L2): a
+    new hand-back goes on a notice of its own, found through `free_host_wakes` key `review:<batch>:<n>`. Only a plan
+    still pending gets one, and never while another hand-back of the batch is waiting: no review is dispatched twice.
     """
-    if not connection.execute("SELECT 1 FROM review_plans WHERE room_id=? AND batch_id=? AND status='pending' AND host_id=?",
-                              (room_id, batch_id, host_id)).fetchone():
+    plan = connection.execute("SELECT * FROM review_plans WHERE room_id=? AND batch_id=? AND status='pending' AND host_id=?",
+                              (room_id, batch_id, host_id)).fetchone()
+    if not plan:
         return False
-    row = connection.execute("""SELECT id FROM member_requests WHERE room_id=? AND message_id=? AND member_id=? AND purpose='handoff'
-        AND status IN ('completed','cancelled','failed')""", (room_id, batch_id, host_id)).fetchone()
-    if not row:
+    handoffs = review_handoffs(connection, room_id, batch_id, host_id)
+    if not handoffs or any(row["status"] in ("pending", "delivering") for row in handoffs):
         return False
-    connection.execute("UPDATE member_requests SET status='pending',execution_id=NULL,answer_id=NULL WHERE id=?", (row["id"],))
-    connection.execute("DELETE FROM request_cancel_reasons WHERE request_id=?", (row["id"],))
+    key = f"review:{batch_id}:{len(handoffs)}"
+    text = Text("#{batch_id} 派出的工作重试后已全部完成，可以推进预先指定的评审。", batch_id=batch_id)
+    message_id = connection.execute("INSERT INTO messages(room_id,author,text,source,submission_id,created_at) VALUES(?,?,?,?,?,?)",
+                                    (room_id, NOTICE_AUTHOR, text, "notice", f"notice-{key}",
+                                     time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()))).lastrowid
+    save_text(connection, "message", message_id, "text", text)
+    connection.execute("INSERT INTO message_details (message_id,kind,submitted_by) VALUES (?,?,?)", (message_id, "notice", NOTICE_AUTHOR))
+    connection.execute("INSERT INTO free_host_wakes (room_id,key,chain_id,message_id) VALUES (?,?,?,?)", (room_id, key, plan["chain_id"], message_id))
+    insert_request(connection, room_id, host_id, message_id, plan["chain_id"], "handoff", "host")
     return True
+
+
+def review_handoffs(connection, room_id, batch_id, host_id):
+    """Every hand-back of a batch to its host, oldest first: the one on the batch message, then any reopened on notices."""
+    return connection.execute("""SELECT * FROM member_requests WHERE room_id=? AND member_id=? AND purpose='handoff' AND (message_id=?
+        OR message_id IN (SELECT message_id FROM free_host_wakes WHERE room_id=? AND key LIKE ?)) ORDER BY id""",
+                              (room_id, host_id, batch_id, room_id, f"review:{batch_id}:%")).fetchall()
+
+
+def review_batch_of(connection, message_id):
+    """The implementation batch a reopened review hand-back's notice belongs to, or None."""
+    row = connection.execute("SELECT key FROM free_host_wakes WHERE message_id=? AND key LIKE 'review:%'", (message_id,)).fetchone()
+    return int(row["key"].split(":")[1]) if row else None
 
 
 def queue_in_turn(connection, room_id, message_id, member_ids):
@@ -2152,7 +2178,8 @@ def sequence_request_context(connection, request):
     order = order_names(sequence, names)
     gate = current_gate(sequence) if row["purpose"] == "handoff" and sequence["status"] == "checkpoint" else None
     phase = "step" if row["purpose"] == "ask" else "end" if not gate else "checkpoint" if gate["repeat_from"] is not None else "gate"
-    position = next((index for index, step in enumerate(steps) if row["member_id"] in step), None) if phase == "step"         else gate["after"] if gate else len(order) - 1
+    position = next((index for index, step in enumerate(steps) if row["member_id"] in step), None) if phase == "step" \
+        else gate["after"] if gate else len(order) - 1
     if position is None:
         return {}
     context = {"id": sequence["id"], "message_id": sequence["message_id"], "order": order, "loop": bool(sequence["loop"]),
@@ -2379,8 +2406,9 @@ def after_free_message(connection, room_id, message_id, actor, payload):
 def close_also_requests(connection, room_id, member, message_id, ids):
     """Requests that queued for the member while it worked, delivered by this same answer (应 2): closed with it.
 
-    Only the member's own pending requests outside a discussion, named by id (from `execution view`'s
-    `queued_requests`); anything else refuses the whole answer, so nothing is closed by guesswork.
+    Only the member's own independent pending requests (`ask`/`route`/`all` outside any host batch, so not a relay
+    step or a review, and outside a discussion), named by id (from `execution view`'s `queued_requests`); anything
+    else refuses the whole answer, so nothing is closed by guesswork and no relay or review is skipped (REVIEW L3).
     """
     if ids is None:
         return
@@ -2388,7 +2416,8 @@ def close_also_requests(connection, room_id, member, message_id, ids):
         raise ValueError(Text("also_request_ids 须为不重复的请求编号列表"))
     for request_id in ids:
         row = connection.execute("""SELECT r.* FROM member_requests r WHERE r.room_id=? AND r.id=? AND r.member_id=? AND r.status='pending'
-            AND r.purpose IN ('ask','route','all') AND NOT EXISTS (SELECT 1 FROM session_requests s WHERE s.member_request_id=r.id)""",
+            AND r.purpose IN ('ask','route','all') AND r.batch_id=0
+            AND NOT EXISTS (SELECT 1 FROM session_requests s WHERE s.member_request_id=r.id)""",
                                  (room_id, request_id, member["id"])).fetchone()
         if not row:
             raise FileExistsError(Text("请求 {request_id} 不是你排队中的普通请求，不能一并交付", request_id=request_id))
@@ -2398,7 +2427,7 @@ def close_also_requests(connection, room_id, member, message_id, ids):
 def queued_requests(connection, member_id):
     """The member's requests waiting behind its live execution: what it may also deliver in this answer."""
     return [dict(row) for row in connection.execute("""SELECT r.id,r.message_id,r.purpose,r.created_by FROM member_requests r
-        WHERE r.member_id=? AND r.status='pending' AND r.purpose IN ('ask','route','all')
+        WHERE r.member_id=? AND r.status='pending' AND r.purpose IN ('ask','route','all') AND r.batch_id=0
         AND NOT EXISTS (SELECT 1 FROM session_requests s WHERE s.member_request_id=r.id) ORDER BY r.id""", (member_id,))]
 
 
@@ -2609,7 +2638,7 @@ def inbox(connection, room_id, token):
     shown = member_display_names(connection, room_id)
     # Manual members are never delivered to; the runner only reads them so smart scheduling can route to them too.
     for row in connection.execute(f"SELECT * FROM room_members WHERE room_id=? AND status='active' AND {REGISTERED_MEMBER} ORDER BY id", (room_id,)):
-        pending = [dict(item) for item in connection.execute("""SELECT r.id,r.message_id,r.purpose,
+        pending = [dict(item) for item in connection.execute("""SELECT r.id,r.message_id,r.purpose,r.batch_id,
             sr.id AS session_request_id,sr.session_id,sr.round,sr.position,sr.read_until,sr.question AS source_question,
             t.cause_kind,t.cause_message_id AS source_message_id,t.cause_request_id,
             (SELECT action FROM group_routes WHERE message_id=r.message_id) AS group_action
@@ -2929,8 +2958,10 @@ def execution_delivery(connection, room_id, row):
     member = connection.execute("SELECT name FROM room_members WHERE id=?", (row["member_id"],)).fetchone()
     rejected = connection.execute("""SELECT id,data FROM room_events WHERE room_id=? AND kind='api.rejected' AND at>=?
         AND json_extract(data,'$.actor')=? AND json_extract(data,'$.path') LIKE '%/messages'
-        AND json_extract(data,'$.payload') LIKE ? ORDER BY id DESC LIMIT 1""",
-        (room_id, row["created_at"] * 1000, f"member:{member['name']}", f'%"execution_id": {row["id"]}%')).fetchone()
+        AND (json_extract(data,'$.execution_id')=? OR CASE WHEN json_valid(json_extract(data,'$.payload'))
+             THEN json_extract(json_extract(data,'$.payload'),'$.execution_id') END=?)
+        ORDER BY id DESC LIMIT 1""",
+        (room_id, row["created_at"] * 1000, f"member:{member['name']}", row["id"], row["id"])).fetchone()
     if rejected:
         data = json.loads(rejected["data"])
         return {"outcome": "rejected", "execution_id": row["id"], "status": data.get("status"), "error": data.get("error", ""),
@@ -3241,7 +3272,8 @@ def execution_action(connection, room_id, execution_id, token, payload):
     detail = execution_detail(connection, connection.execute("SELECT * FROM member_executions WHERE id=?", (execution_id,)).fetchone())
     if action == "retry" and quota:
         # Retrying a usage-limit failure is allowed (the owner may know the quota is back) but likely fails again before the reset.
-        warning = Text("这次执行因额度用尽失败（重置时间：{resets}）；额度重置前重试多半仍会失败，可改派其他成员。", resets=quota["resets"])             if quota["resets"] else Text("这次执行因额度用尽失败（重置时间未知）；额度重置前重试多半仍会失败，可改派其他成员。")
+        warning = Text("这次执行因额度用尽失败（重置时间：{resets}）；额度重置前重试多半仍会失败，可改派其他成员。", resets=quota["resets"]) \
+            if quota["resets"] else Text("这次执行因额度用尽失败（重置时间未知）；额度重置前重试多半仍会失败，可改派其他成员。")
         return {**detail, "warning": warning, "warning_text": text_payload(warning)}
     return {**detail, "duplicate": duplicate} if action == "stopped" else detail
 

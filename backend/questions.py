@@ -553,7 +553,13 @@ def settle_answer(connection, row, record, message_id):
     if row["sequence_id"]:
         sequence = waiting_gate(connection, room_id, row["sequence_id"])
         if not room.pass_user_gate(connection, room_id, sequence, message_id):
+            # No member left to take the next step, or the relay's host changed: the relay stops and the present host
+            # is told, with the answer, so the owner's decision is not lost (ruling #3332 P5).
             event(connection, row["id"], "relay_stopped", {})
+            room.wake_host(connection, room_id, message_id, Text(
+                "用户已回答问题 #{question_id}（消息 #{message_id}），但依次派活 #{relay} 后面没有可接手的在场成员（或主持人已更换），接力已停下。请主持人决定接下来怎么做。",
+                question_id=row["id"], message_id=message_id, relay=sequence["message_id"] if sequence else 0),
+                f"relay-stopped:{row['sequence_id']}:{row['id']}")
         return
     asker = connection.execute("SELECT id,status FROM room_members WHERE id=?", (row["asker_id"],)).fetchone()
     if asker and asker["status"] == "active":

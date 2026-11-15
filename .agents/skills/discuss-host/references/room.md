@@ -37,26 +37,14 @@
 
 ## 房间控制
 
-任务有 `host_workflows: true` 时，房主为本房间打开了“主持人完整权限”：房间里出了问题、或推进需要的控制，你自己处理，不请用户代劳。命令都是 `<cli> launch host-control 操作 … --access-file <本次任务的 access_file>`，成员用 `--member`（成员 ID 或显示名）。
+任务有 `host_workflows: true` 时，房主为本房间打开了“主持人完整权限”：房间里出了问题、或推进需要的控制，你自己处理，不请用户代劳。命令都是 `<cli> launch host-control 操作 … --access-file <本次任务的 access_file>`，各操作的参数用 `<cli> launch host-control --help` 查；成员用 `--member`（成员 ID 或显示名）。
 
-- **先诊断**：成员失败、卡住或结果异常时，先读原因再动手：`<cli> room events ROOM` 看写入与状态变化（你看不到私聊和消息正文，原文用 message 命令读），`<cli> execution view ROOM 执行编号` 看服务端详情与失败原因，`host-control details --execution 编号` 看该次执行的本机过程（命令、输出、改动）。
-- **再恢复**：
-  - 偏了方向或要补充：`steer --member 成员 --text 话` 向它进行中的执行插话；不需要打断时优先用它。
-  - 卡住或做错：`stop --member 成员` 打断（之后到的请求留到它下一次执行）；`stop-all` 停止全部执行、请求与接力（讨论进行中时用 `discussion`）。
-  - 偶发失败（网络、超时、软件崩溃）：`retry --execution 编号` 重试。
-  - 模型限流或不可用：`model --member 成员 --model M [--effort E]` 换模型（CLI 与 API 成员可改，API 成员只改强度时省略 `--model`；App 成员在 App 内设置）；Codex 等软件的 App 卡住时 `adapter --member 成员 --adapter ID` 切到同一会话的 CLI（成员空闲时才能切）。
-  - 成员无法恢复：`remove` 后 `invite` 换一位。
-  - 撤回自己派出的活（接力或循环停不下来、方向错了、用户改了主意）：`withdraw --message 派活消息编号`，接力或循环立即停下，未开始的请求取消，进行中的那一棒停止，不再交回你。
-  - 收到“执行 #N 已 X 分钟没有新输出”的系统通知时，先 `details` 判断它是在跑长任务还是卡住，再决定等待、插话、打断或重试。
-- **调整成员**：`invite --name 平台 [--access read|write] [--model M] [--effort E]` 用本机已配置的软件邀请（返回新成员名，本次执行里就能点名）；`away` / `remove` / `back --member 成员` 暂离、移除、请回；`access --member 成员 --access read|write` 调整项目权限；`label --member 成员 --label 显示名 [--description 描述]`。
-- **推进**：
-  - 发言顺序：先 `order` 读取当前顺序和 `revision`，再 `order --order 甲,乙,丙 --revision REV`，列出全部尚未发言的成员。
-  - 讨论：先 `discussion` 读取状态和 `revision`，再 `discussion --do start --goal 目标 --revision REV`（上限用房间默认值）或 `--do pause|resume|end --revision REV`。
-  - Goal：任务需要在房间空闲时持续自动推进、且目标和完成标准明确时，先 `goal` 读取状态和 `revision`，再 `goal --do start --goal 目标 --revision REV`（预算用房主默认值，你不能改）；`--do pause|resume|end` 控制。
-
-- **兜底**：派出要跑较久的活（多集、多轮接力、循环评审）时，可在本次执行中设 `checkin --minutes N`（5–120）：其他成员还在工作时，程序每 N 分钟唤醒你一次，看有没有跑偏或卡住，正常就一句话回复。成员失败、连续 10 分钟无输出另有通知，所以间隔按任务时长取、宁长勿短（每次检查都会在房间留两张卡）。房间空闲、停止全部或换主持人后自动结束，`checkin --off` 提前关闭。
-- **主动发言**：不是房间派来的任务、而是你需要主动说明或派活时（如定时检查发现问题、用户在你自己的窗口里要你发言、你自己的执行失效后结果需要补交），用参与技能“主动发言”一节的 `message post … --proactive`，不必等用户开口；主持人的主动发言可以同时 `--to` 派活或 `--continue`。你自己失败的执行也可以用 `host-control retry --execution N` 重试。
-- **你自己失败时**：程序会发一条提醒唤醒你一次（提醒本身再失败就不再唤醒，需用户处理）。先核对自己会话里的进展：已有结果就用 `--execution 原编号` 补交；没做完就接着做完再补交，或 `retry` 重试；是模型额度或模型不可用造成的，可 `host-control model --member 你自己 --model M` 换模型，下次投递起生效。最后用本次执行简短回复这条提醒。
+- **先诊断**：成员失败、卡住或结果异常时，先读原因再动手：`<cli> room events ROOM` 看写入与状态变化（看不到私聊和消息正文，原文用 message 命令读），`<cli> execution view ROOM 执行编号` 看服务端详情与失败原因，`host-control details --execution 编号` 看本机过程（命令、输出、改动）。收到“执行 #N 已 X 分钟没有新输出”的通知时，先 `details` 判断是在跑长任务还是卡住。
+- **再按原因恢复**：偏了方向或要补充用 `steer` 插话（不需要打断时优先）；卡住或做错用 `stop` 打断，全部停下用 `stop-all`（讨论进行中用 `discussion`）；偶发失败（网络、超时、软件崩溃）用 `retry`；模型限流或不可用用 `model` 换模型，App 卡住用 `adapter` 切到同一会话的 CLI；无法恢复就 `remove` 后 `invite` 换一位；自己派出的活停不下来、方向错了或用户改了主意，用 `withdraw --message 派活消息编号`（接力或循环立即停下，不再交回你）。
+- **调整成员与推进**：`invite` 只用本机已配置的软件（项目权限默认只读、最高可写，返回的新成员本次执行里就能点名），`away` / `remove` / `back`、`access`、`label` 调整成员。`order`、`discussion`、`goal` 都先不带参数读取状态和 `revision`，再带 `--revision` 提交；讨论上限与 Goal 预算用房主默认值，你不能改。Goal 只在任务需要房间空闲时持续推进、且目标和完成标准明确时开。
+- **兜底**：派出要跑较久的活（多集、多轮接力、循环评审）时，可设 `checkin --minutes N`（5–120）：其他成员还在工作时程序每 N 分钟唤醒你一次，正常就一句话回复。成员失败、连续 10 分钟无输出另有通知，所以间隔宁长勿短（每次检查在房间留两张卡）。房间空闲、停止全部或换主持人后自动结束，`checkin --off` 提前关闭。
+- **主动发言**：需要主动说明或派活时（定时检查发现问题、用户在你自己的窗口里要你发言、你自己失效的执行要补交），用参与技能“主动发言”一节的 `--proactive`，可同时 `--to` 派活或 `--continue`。
+- **你自己失败时**：程序会发一条提醒唤醒你一次（提醒本身再失败就不再唤醒，需用户处理）。先核对自己会话里的进展：已有结果就用 `--execution 原编号` 补交；没做完就接着做完再补交，或 `retry` 重试；是额度或模型不可用造成的，可 `model --member 你自己 --model M` 换模型，下次投递起生效。最后用本次执行简短回复这条提醒。
 
 `revision` 过期会被拒绝，重新读取后再提交。用户要求停下、换人或调整顺序时直接执行；你自己发现问题时先诊断再处理。每次控制都在回答里说明做了什么、为什么。以下仍由用户决定，需要时在回答里提出：对你自己的打断、改项目权限、暂离、移除或更换主持人（你自己失败的执行按上文“你自己失败时”处理），批准超出上限的轮数，项目权限高于可写或放行被拒绝的工具，改项目目录，撤回、回退用户的消息，私聊。
 
@@ -66,12 +54,12 @@
 
 ## 工作流
 
-本次任务有 `workflow` 字段时，本房间启用了用户的工作流。它像技能一样按需使用：`workflow.description` 是它的用途，请求与用途相符或用户要求按它做时才用，其他请求照常处理。要用时，本会话还没读过、或 `workflow.revision` 与上次读到的不同，才读 `workflow.skill_path`（API 主持人读系统提示中的工作流正文）；否则沿用已读内容。按它组织工作时，`workflow.members` 列出每张卡片现在由哪位成员担任、是否在场、项目权限；只点名在场的成员。`workflow.missing` 列出启用后才新增、还没有成员的卡片：本次要用到时，运行 `<cli> launch workflow-join --card 卡片ID --access-file <本次任务的 access_file>`（多张用逗号分隔），返回的 `members` 给出新成员名，本次执行里就能点名；API 主持人没有命令行，在回答里请用户在右栏点工作流的“刷新”。成员离开或被移除的角色不要自行请回，在回答里说明缺谁，不另找成员代替。工作流只带来做法和成员，不扩大你的权限。
+本次任务有 `workflow` 字段时，本房间启用了用户的工作流。它像技能一样按需使用：请求与 `workflow.description` 相符或用户要求按它做时才用，其他请求照常处理。本会话还没读过、或 `workflow.revision` 变了，才读 `workflow.skill_path`（API 主持人读系统提示中的工作流正文）。`workflow.members` 列出每张卡片由谁担任、是否在场、项目权限，只点名在场的成员；`workflow.missing` 是启用后才新增、还没有成员的卡片，要用时运行 `<cli> launch workflow-join --card 卡片ID …`（API 主持人请用户在右栏点工作流的“刷新”）。离开或被移除的角色不要自行请回或另找人代替，在回答里说明缺谁。工作流只带来做法和成员，不扩大你的权限。
 
-`workflow.sub_workflows` 列出工作流的子工作流：主线之外按需使用的一套做法（如检查、试演），各有自己的 SKILL.md 和成员卡片。请求与某个子工作流的 `description` 相符、用户点名要用它，或主线写明此处用它时才用；本会话没读过、或它的 `revision` 变了，才读它的 `skill_path`（API 主持人读系统提示中的子工作流正文）。子工作流的 `cards` 是它的角色，只在用它时加入：开工前运行 `<cli> launch workflow-join --sub 子工作流ID --access-file <本次任务的 access_file>`，返回的 `members` 给出成员名（离开的请回原会话），本次执行里就能点名；用完、不再需要这些角色时运行 `<cli> launch workflow-leave --sub 子工作流ID --access-file <本次任务的 access_file>`，把它们设为离开（会话保留，下次请回接着做）。`workflow.members` 里带 `sub_workflow` 的成员就是子工作流的角色。API 主持人没有命令行，请不进这些角色，在回答里说明缺谁。
+`workflow.sub_workflows` 是主线之外按需使用的子工作流（如检查、试演），各有 SKILL.md 和成员卡片：请求与它的 `description` 相符、用户点名或主线写明此处用它时才用，读法同上。它的角色只在用时加入：开工前 `<cli> launch workflow-join --sub 子工作流ID …`，用完 `<cli> launch workflow-leave --sub 子工作流ID …` 设为离开（会话保留）。`workflow.members` 里带 `sub_workflow` 的成员就是它的角色。这些命令的参数见 `<cli> launch workflow-join --help`；API 主持人没有命令行，请不进这些角色，在回答里说明缺谁。
 
 本次任务（本地任务文件或 API 的 `task`）没有 `workflow` 字段时，不按任何工作流做事，即使会话里读过。
 
 用户请你把本房间的做法存成工作流（或要你按某种分工新建一套流程），或消息里写了 `$workflow-creator` 时，按 [workflow-creator](../../workflow-creator/SKILL.md) 技能做；是新建还是修改已有工作流，按用户写的内容判断。任务有 `host_workflows: true` 时，房主已允许你自行保存并启用，不必等用户导入。
 
-用户请你启用工作流库里已有的工作流（如“启用工作流「连载」（`novel-serial`）”）时：任务有 `host_workflows: true` 就运行 `<cli> launch workflow-adopt --id <工作流 ID> --access-file <本次任务的 access_file>`，程序在本房间启用它、邀请缺少的卡片成员（离开的请回），返回 `members`（卡片 ID → 成员名）和 `skill_path`；本次执行要接着按它做时读 `skill_path`，下一次执行起任务里有 `workflow` 字段，按上文使用。用户只说了启用、没给具体任务时，回答说明已启用和带来了谁即可。没有该字段，或你是 API 主持人（没有命令行）时，不能启用：在回答里请用户在电脑上“成员与设置 → 协作设置”打开“主持人完整权限”后再让你启用。
+用户请你启用工作流库里已有的工作流（如“启用工作流「连载」（`novel-serial`）”）时：任务有 `host_workflows: true` 就运行 `<cli> launch workflow-adopt --id <工作流 ID> …`，程序启用它、邀请缺少的卡片成员，返回 `members` 和 `skill_path`；本次要接着按它做时读 `skill_path`，下一次执行起任务里有 `workflow` 字段。用户只说了启用时，回答说明已启用和带来了谁即可。没有该字段或你是 API 主持人时不能启用，请用户在“成员与设置 → 协作设置”打开“主持人完整权限”。

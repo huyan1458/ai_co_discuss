@@ -988,10 +988,43 @@ test('API message reads send the CLI output budget, resume long text by version 
   const definitions = participant_tools(context);
   const run = (name, args) => execute_tool(context, { name, arguments: args }, definitions);
   const page = (await run('read_messages', { after: 3 })).result;
-  assert.equal(seen[0].query.get('max_chars'), '8000');
+  assert.equal(seen[0].query.get('max_output_chars'), '8000');
   assert.deepEqual(Object.keys(page.messages[0].attachments[0]), ['id', 'file_name', 'content_type', 'size', 'sha256', 'url']);
   await run('read_message', { id: 9, offset: 10, limit: 5, version: 'e'.repeat(64) });
   assert.deepEqual(['offset', 'limit', 'version'].map(key => seen[1].query.get(key)), ['10', '5', 'e'.repeat(64)]);
   await run('read_message', { id: 9 });
   assert.equal(seen[2].query.get('offset'), null);
+});
+
+test('an API question whose creation result is unknown is looked up by its submission ID and never ends the run (REVIEW M6)', async t => {
+  const stored = new Map();
+  let drop = 2;
+  const { seen, context } = await room_stub(t, (call, _seen, response) => {
+    if (call.method === 'POST' && call.path === '/questions') {
+      const { submission_id } = call.body;
+      if (!stored.has(submission_id)) stored.set(submission_id, { id: 40 + stored.size, message_id: 300, version: 1, status: 'waiting_user', contract: 'handoff', blocking: true, submission_id });
+      if (drop-- > 0) { response.socket.destroy(); return undefined; }
+      return [200, { question_id: stored.get(submission_id).id, message_id: 300, duplicate: true }];
+    }
+    if (call.method === 'GET' && call.path === '/questions' && call.query.has('submission_id')) {
+      // The first lookup fails too, so that create stays unknown.
+      if (seen.filter(item => item.query.has('submission_id')).length === 1) return [503, { error: '暂时不可用' }];
+      return [200, { questions: [...stored.values()].filter(item => item.submission_id === call.query.get('submission_id')) }];
+    }
+    return [404, { error: '地址不存在' }];
+  });
+  const definitions = participant_tools(context);
+  const args = { contract: 'handoff', blocking: true, explanation: '候选 A/B', questions: [{ prompt: '选哪个？', options: [{ id: 'A', label: '甲' }] }] };
+  const ask = () => execute_tool(context, { name: 'ask_question', arguments: args }, definitions);
+  const unknown = await ask();
+  assert.equal(unknown.result.outcome, 'unknown');
+  assert.ok(!unknown.terminal, 'an unknown create does not end the run');
+  const recovered = await ask();
+  assert.equal(recovered.result.outcome, 'accepted');
+  assert.equal(recovered.result.recovered, true);
+  assert.equal(recovered.result.question_id, 40);
+  assert.equal(recovered.terminal, true, 'a handoff question found by its ID ends the run as a normal create would');
+  const posts = seen.filter(item => item.method === 'POST');
+  assert.equal(posts[0].body.submission_id, posts[1].body.submission_id, 'the same content keeps its submission ID');
+  assert.equal(stored.size, 1, 'the room holds one question');
 });

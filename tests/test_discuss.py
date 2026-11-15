@@ -479,6 +479,18 @@ class CliTests(unittest.TestCase):
             self.assertEqual(view["state_until"], answer["id"])
         self.assertEqual(self.cli("state", "view", self.room)["state_text"], final_state)
 
+    def test_execution_status_answers_where_am_i(self):
+        """B8 / review M7: one compact read says whether the execution is live, what to answer, and whether it landed."""
+        execution = self.reserve_execution(self.plan_speech())
+        before = self.cli("execution", "status", self.room, execution, "--as", "Codex")
+        self.assertEqual((before["view"], before["execution"]["id"], before["execution"]["can_answer"]), ("current", execution, True))
+        self.assertTrue(before["requests"] and all("read_scope" in item for item in before["requests"]))
+        self.assertEqual(before["delivery"]["outcome"], "unknown")
+        self.assertNotIn("rewound_executions", before)
+        self.cli("message", "post", self.room, "--body", "状态测试回答", "--as", "Codex", "--execution", str(execution))
+        after = self.cli("execution", "status", self.room, execution, "--as", "Codex")
+        self.assertEqual((after["execution"]["can_answer"], after["delivery"]["outcome"]), (False, "accepted"))
+
     def test_message_retry_conflict_and_exact_original(self):
         """Same identifier replays, changed content conflicts, and reads remain exact."""
         turn = self.plan_speech()
