@@ -17,7 +17,7 @@ const CALL_PATTERN = /(?<![\w.$])t\(\s*(["'`])((?:\\.|(?!\1)[^\\])*)\1/g;
 // Backend user-facing text: Text("…") in backend/*.py, shown by the page through frontend/locales/en/backend.json.
 const BACKEND_DIR = "backend";
 const BACKEND_PATTERN = /(?<![\w.])Text\(\s*(["'])((?:\\.|(?!\1)[^\\])*)\1/g;
-const BACKEND_JS_FILES = ["backend/worker.mjs", "backend/entry_worker.mjs", "runner/admin_panel.mjs", "runner/free_runner.mjs", "runner/scheduler.mjs", "runner/session_driver.mjs"];
+const BACKEND_JS_FILES = ["backend/worker.mjs", "backend/entry_worker.mjs", "runner/admin_panel.mjs", "runner/free_runner.mjs", "runner/adapters/api_pi.mjs", "runner/scheduler.mjs", "runner/session_driver.mjs"];
 const BACKEND_JS_PATTERN = /(?<![\w.])(?:new HttpError\([^,\n]+,|panel_error\(|entry_error\(|room_text\()\s*(["'`])((?:\\.|(?!\1)[^\\])*)\1/g;
 
 function source_files(dir) {

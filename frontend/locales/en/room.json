@@ -708,8 +708,6 @@
   "{value1} 在问你": "{value1} is asking you",
   "问题 #{value1} · 第 {value2} 版 · 说明见消息 #{value3}": "Question #{value1} · version {value2} · explained in message #{value3}",
   "主持人已给推荐（消息 #{value1}），请确认或另选": "The host recommended an answer (message #{value1}); confirm it or choose another",
-  "（可多选）": " (choose any)",
-  "补充说明或其他意见（可选）": "Add a note or another opinion (optional)",
   "{value1}；问题与回答按房间阅读权限公开，不要填写密钥、令牌或密码": "{value1}; questions and answers are visible to whoever can read the room, so never enter keys, tokens or passwords",
   "提交回答": "Submit answer",
   "请主持人先讨论并给推荐": "Ask the host to discuss and recommend first",
@@ -717,5 +715,12 @@
   "取消这个问题": "Cancel this question",
   "取消这个问题；绑定接力的问题取消后接力停止": "Cancel this question; cancelling a relay's question stops the relay",
   "排队中的问题": "Queued questions",
-  "#{value1} {value2}：{value3}": "#{value1} {value2}: {value3}"
+  "#{value1} {value2}：{value3}": "#{value1} {value2}: {value3}",
+  "展开答题卡": "Expand the answer card",
+  "收起答题卡": "Collapse the answer card",
+  "推荐": "Recommended",
+  "其他回答或修改意见": "Another answer or a change",
+  "填写你的回答": "Write your answer",
+  "上一题": "Previous question",
+  "下一题": "Next question"
 }

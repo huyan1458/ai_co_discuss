@@ -19,6 +19,7 @@ import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { marked, prompt_text, tree_killable } from './common.mjs';
 import { WRITE_TOOLS } from './api_files.mjs';
+import { room_text } from '../room_text.mjs';
 import { adapter_profile, takes_images } from './profiles.mjs';
 
 // The provider our extension registers; the model ID is passed to Pi unchanged.
@@ -35,6 +36,17 @@ const EXIT_GRACE_MS = 5000;
 const TOOL_HEARTBEAT_MS = 30_000;
 const DIAGNOSTIC_CHARS = 1200;
 const REPLY_EXCERPT_CHARS = 300;
+// What a tool call's progress note shows of its arguments: what it targets, never content it writes.
+const NOTE_ARGS = ['id', 'file_path', 'path', 'pattern', 'after', 'page', 'batch_id', 'request_id', 'command'];
+const NOTE_VALUE_CHARS = 80;
+
+/** One tool call as a progress note, e.g. `read_message id=3123`; names and values stay as they are, untranslated. */
+export function tool_note(name, args = {}) {
+  const shown = NOTE_ARGS.filter(key => ['string', 'number'].includes(typeof args?.[key]))
+    .map(key => `${key}=${String(args[key]).slice(0, NOTE_VALUE_CHARS)}`);
+  return [name, ...shown].join(' ');
+}
+
 export const NO_TOOL_REMINDER = '普通文本不会被保存。请调用写入工具提交真实结果；确实无法继续才不调用工具直接结束。';
 const API_CALL = { stoppable: true, progress: true };
 
@@ -190,15 +202,16 @@ export function pi_delivery({ cli, profile, key, binding, task, context_file, sy
   const log = text => {
     try { task.on_output?.(log_path, redact(text)); } catch { /* The room's directory is gone. */ }
   };
-  const state = { running: true, terminal: false, stopped: false, failure: '', reminded: false, used_tools: false,
-    turns: 0, last_text: '', last_error: '', compaction_error: '', diagnostic: '', tools: new Map() };
+  const state = { running: true, terminal: false, stopped: false, failure: '', failure_details: {}, reminded: false, used_tools: false,
+    turns: 0, last_text: '', last_error: '', last_stop: '', last_output: 0, compaction_error: '', diagnostic: '', tools: new Map() };
   const handle = new EventEmitter();
   const send = value => { if (child.stdin.writable) child.stdin.write(`${JSON.stringify(value)}\n`); };
   const finish = () => {
     child.stdin.end();
     setTimeout(() => child.kill(), EXIT_GRACE_MS).unref();
   };
-  const fail = reason => { if (!state.failure) state.failure = reason; };
+  // `details` is the adapter's classification of the failure (`failure_class`, ...), passed to `on_failure` with it.
+  const fail = (reason, details = {}) => { if (!state.failure) { state.failure = reason; state.failure_details = details; } };
   handle.kill = () => {
     state.stopped = true;
     send({ type: 'abort' });
@@ -228,6 +241,8 @@ export function pi_delivery({ cli, profile, key, binding, task, context_file, sy
       state.used_tools = true;
       state.tools.set(event.toolCallId, { name: String(event.toolName || ''), args: event.args || {} });
       task.on_activity?.(WRITE_TOOLS.includes(event.toolName) ? 'editing' : 'tool', String(event.toolName || ''));
+      // The model rarely writes between tool calls, so each call is its progress note: the tool and what it targets.
+      task.on_note?.(tool_note(String(event.toolName || ''), event.args));
     } else if (event.type === 'tool_execution_end') {
       const call = state.tools.get(event.toolCallId);
       state.tools.delete(event.toolCallId);
@@ -245,6 +260,8 @@ export function pi_delivery({ cli, profile, key, binding, task, context_file, sy
       const text = (event.message.content || []).filter(part => part?.type === 'text').map(part => part.text || '').join('').trim();
       if (text) { state.last_text = text; task.on_note?.(text); }
       state.last_error = event.message.stopReason === 'error' ? String(event.message.errorMessage || '模型请求失败') : '';
+      state.last_stop = String(event.message.stopReason || '');
+      state.last_output = Number(event.message.usage?.output) || 0;
     } else if (event.type === 'compaction_end' && event.errorMessage && !state.compaction_error) {
       // Pi asks the same model for the summary under the same output cap, and the rolling summary grows with every
       // compaction; once one fails, every later request only grows the context until the cap leaves 1 output token.
@@ -260,14 +277,22 @@ export function pi_delivery({ cli, profile, key, binding, task, context_file, sy
       fail(`会话上下文已满且自动压缩失败（${state.compaction_error}），下次执行将改用新会话；可直接重试`);
       return finish();
     }
+    const reply = state.last_text.slice(0, REPLY_EXCERPT_CHARS);
+    // The provider stopped the reply at its output cap: say so as it happened, without guessing why (V14-V16).
+    if (state.last_stop === 'length') {
+      fail(room_text('模型输出在 {tokens} 个 token 处达到输出上限后结束，未提交结果{reply}',
+        { tokens: state.last_output, reply: reply ? `：${reply}` : '' }), { failure_class: 'output_truncated' });
+      return finish();
+    }
     // Some models answer in plain text mid-run; one reminder avoids pausing on a recoverable slip.
     if (!state.reminded) {
       state.reminded = true;
       return send({ type: 'prompt', message: NO_TOOL_REMINDER });
     }
-    const reply = state.last_text.slice(0, REPLY_EXCERPT_CHARS);
-    fail(state.used_tools ? `模型未提交结果就结束了本次执行，可能在等你决定或补充${reply ? `。模型说明：${reply}` : ''}`
-      : `模型未调用房间工具保存结果，请核对模型是否支持工具调用${reply ? `（其回复：${reply}）` : ''}`);
+    // What happened, not a guess at why: the end reason and output size come from the model's last reply.
+    const facts = { tokens: state.last_output, stop: state.last_stop || 'unknown', reply: reply ? `：${reply}` : '' };
+    fail(state.used_tools ? room_text('模型结束了本次执行，没有提交结果（最后一次回复输出 {tokens} 个 token，结束原因 {stop}）{reply}', facts)
+      : room_text('模型结束了本次执行，没有调用房间工具保存结果（最后一次回复输出 {tokens} 个 token，结束原因 {stop}）{reply}', facts));
     finish();
   }
   child.stderr.setEncoding('utf8');
@@ -281,7 +306,7 @@ export function pi_delivery({ cli, profile, key, binding, task, context_file, sy
     clearInterval(heartbeat);
     state.running = false;
     if (!state.stopped && !state.terminal && !state.failure) fail(`Pi 未保存回答就退出了（退出码 ${code}）：${state.diagnostic.trim()}`);
-    if (state.failure && !state.stopped) task.on_failure?.(redact(state.failure));
+    if (state.failure && !state.stopped) task.on_failure?.(redact(state.failure), state.failure_details);
     handle.emit('close', 0);
     task.on_exit?.();
   });

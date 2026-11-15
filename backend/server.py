@@ -542,6 +542,9 @@ def require_room(connection, room_id):
     room["cancelled_turns"] = cancelled_turns(connection, room_id)
     room["free"] = free_view(connection, room_id)
     room["goal_state"] = goal_view(connection, room_id)
+    # Where the room's own task starts when no goal was set: the owner's first message (COVERAGE 3③).
+    first = connection.execute("SELECT MIN(id) FROM messages WHERE room_id=? AND author='用户'", (room_id,)).fetchone()[0]
+    room["first_user_message_id"] = first
     room["descriptions"] = member_descriptions(connection, room_id)
     room["labels"] = member_labels(connection, room_id)
     for member in room["members"]:

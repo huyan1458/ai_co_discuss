@@ -57,8 +57,26 @@ def stamp():
     return time.strftime("%Y-%m-%dT%H:%M:%S+00:00", time.gmtime())
 
 
+# The DeepSeek Harness convention for a recommended option: the label ends with "(Recommended)" (or 推荐).
+RECOMMENDED_SUFFIX = re.compile(r"\s*(?:\((?:recommended|推荐)\)|（(?:recommended|推荐)）)\s*$", re.IGNORECASE)
+MAX_HEADER = 40
+MAX_DETAIL = 1000
+MAX_DESCRIPTION = 500
+
+
+def item_field(item, name, legacy):
+    """A question item's field under its DeepSeek Harness name, or the name it had before (`prompt`, `multiple`)."""
+    return item[name] if name in item else item.get(legacy)
+
+
 def checked_items(items):
-    """Validate the question group's items: 1–5 prompts, each with options and/or free input."""
+    """Validate the question group's items, shaped as DeepSeek Harness's `ask_user_question` (docs/…/DSH提问工具对照.md).
+
+    Each item: `question` (short), optional `header` and `detail`, `options` of {label, description?, recommended?,
+    id?, anchor?}, `multiSelect`, `free_text`. Options keep stable ids (spec #3329 item 4): given, or A, B, C… by
+    position. A label ending in "(Recommended)" marks the option recommended, as in DeepSeek Harness, and loses the
+    suffix. The names used before (`prompt`, `multiple`) are still accepted.
+    """
     if not isinstance(items, list) or not 1 <= len(items) <= MAX_ITEMS:
         raise ValueError(Text("questions 须为 1–{limit} 道题的列表", limit=MAX_ITEMS))
     checked, ids = [], set()
@@ -66,33 +84,58 @@ def checked_items(items):
         if not isinstance(item, dict):
             raise ValueError(Text("questions 的每一项须为对象"))
         item_id = str(item.get("id") or f"q{index}")
-        prompt = item.get("prompt")
+        prompt = item_field(item, "question", "prompt")
         options = item.get("options") or []
-        multiple, free_text = item.get("multiple", False), item.get("free_text", True)
+        multiple, free_text = item_field(item, "multiSelect", "multiple") or False, item.get("free_text", True)
+        header, detail = item.get("header"), item.get("detail")
         if not OPTION_ID.fullmatch(item_id) or item_id in ids:
             raise ValueError(Text("题目 id 须为 1–20 位字母、数字、下划线或连字符，且不重复"))
         if not isinstance(prompt, str) or not prompt.strip() or len(prompt) > MAX_PROMPT:
             raise ValueError(Text("题干须为 1–{limit} 字的简短说明，候选正文写在说明消息里", limit=MAX_PROMPT))
         if type(multiple) is not bool or type(free_text) is not bool:
-            raise ValueError(Text("multiple 与 free_text 须为布尔值"))
+            raise ValueError(Text("multiSelect 与 free_text 须为布尔值"))
+        if header is not None and (not isinstance(header, str) or len(header) > MAX_HEADER):
+            raise ValueError(Text("header 须为最多 {limit} 字的短标签", limit=MAX_HEADER))
+        if detail is not None and (not isinstance(detail, str) or len(detail) > MAX_DETAIL):
+            raise ValueError(Text("detail 最多 {limit} 字；候选的完整说明写在说明消息里", limit=MAX_DETAIL))
         if not isinstance(options, list) or len(options) > MAX_OPTIONS or not options and not free_text:
             raise ValueError(Text("每道题须有 1–{limit} 个选项，或允许自由输入", limit=MAX_OPTIONS))
         seen, kept = set(), []
-        for option in options:
-            option_id = option.get("id") if isinstance(option, dict) else None
-            label = option.get("label") if isinstance(option, dict) else None
+        for position, option in enumerate(options):
+            option = option if isinstance(option, dict) else {}
+            option_id, label = option.get("id") or chr(ord("A") + position), option.get("label")
             if not isinstance(option_id, str) or not OPTION_ID.fullmatch(option_id) or option_id in seen:
                 raise ValueError(Text("选项 id 须为 1–20 位字母、数字、下划线或连字符，且同题内不重复"))
             if not isinstance(label, str) or not label.strip() or len(label) > MAX_LABEL:
                 raise ValueError(Text("选项标签须为 1–{limit} 字", limit=MAX_LABEL))
-            anchor = option.get("anchor")
+            anchor, description, recommended = option.get("anchor"), option.get("description"), option.get("recommended", False)
             if anchor is not None and (not isinstance(anchor, str) or len(anchor) > MAX_LABEL):
                 raise ValueError(Text("选项 anchor 须为说明消息里候选所在的小标题，最多 {limit} 字", limit=MAX_LABEL))
+            if description is not None and (not isinstance(description, str) or len(description) > MAX_DESCRIPTION):
+                raise ValueError(Text("选项 description 最多 {limit} 字", limit=MAX_DESCRIPTION))
+            if type(recommended) is not bool:
+                raise ValueError(Text("选项 recommended 须为布尔值"))
+            suffixed = RECOMMENDED_SUFFIX.search(label)
+            label = RECOMMENDED_SUFFIX.sub("", label).strip() or label.strip()
             seen.add(option_id)
-            kept.append({"id": option_id, "label": label.strip(), **({"anchor": anchor} if anchor else {})})
+            kept.append({"id": option_id, "label": label, **({"description": description.strip()} if description and description.strip() else {}),
+                         **({"recommended": True} if recommended or suffixed else {}), **({"anchor": anchor} if anchor else {})})
+        if not multiple and sum(1 for option in kept if option.get("recommended")) > 1:
+            raise ValueError(Text("单选题最多推荐一个选项"))
         ids.add(item_id)
-        checked.append({"id": item_id, "prompt": prompt.strip(), "options": kept, "multiple": multiple, "free_text": free_text})
+        # Recommended options first, as DeepSeek Harness asks the model to put them (spec #3329 item 4 allows it).
+        kept.sort(key=lambda option: not option.get("recommended"))
+        checked.append({"id": item_id, "question": prompt.strip(), **({"header": header.strip()} if header and header.strip() else {}),
+                        **({"detail": detail.strip()} if detail and detail.strip() else {}),
+                        "options": kept, "multiSelect": multiple, "free_text": free_text})
     return checked
+
+
+def stored_items(row):
+    """A question's items under the current names; rows saved before the rename used `prompt` and `multiple`."""
+    return [{**{key: value for key, value in item.items() if key not in ("prompt", "multiple")},
+             "question": item_field(item, "question", "prompt"), "multiSelect": bool(item_field(item, "multiSelect", "multiple"))}
+            for item in json.loads(row["items"])]
 
 
 def checked_refs(connection, room_id, refs, read_message, token):
@@ -328,7 +371,7 @@ def withdrawn(connection, message_id):
 def public(connection, row, detail=False):
     """A question as readers see it: items, status, version and links by message number; explanations are not copied."""
     view = {"id": row["id"], "asker": row["asker"], "status": row["status"], "version": row["version"],
-            "contract": row["contract"], "blocking": bool(row["blocking"]), "questions": json.loads(row["items"]),
+            "contract": row["contract"], "blocking": bool(row["blocking"]), "questions": stored_items(row),
             "message_id": row["message_id"], "refs": json.loads(row["refs"]),
             "recommendation_message_id": row["recommendation_message_id"] or None,
             "created_at": row["created_at"], "waiting_since": row["waiting_since"],
@@ -442,7 +485,7 @@ def checked_version(row, payload):
 
 def checked_choices(row, choices, text, required):
     """The chosen option ids per item: each must exist, a single-choice item takes one; free text where allowed."""
-    items = {item["id"]: item for item in json.loads(row["items"])}
+    items = {item["id"]: item for item in stored_items(row)}
     choices = choices or {}
     if not isinstance(choices, dict) or any(key not in items for key in choices):
         raise ValueError(Text("choices 须按题目 id 给出选项 id 列表"))
@@ -452,7 +495,7 @@ def checked_choices(row, choices, text, required):
         options = {option["id"] for option in items[key]["options"]}
         if any(option not in options for option in picked) or len(set(picked)) != len(picked):
             raise ValueError(Text("选项不存在：{item}", item=key))
-        if len(picked) > 1 and not items[key]["multiple"]:
+        if len(picked) > 1 and not items[key]["multiSelect"]:
             raise ValueError(Text("第 {item} 题是单选", item=key))
         if picked:
             checked[key] = picked
@@ -463,17 +506,64 @@ def checked_choices(row, choices, text, required):
     return checked
 
 
-def answer_text(row, action, choices, text):
+def checked_answers(row, payload, required):
+    """The owner's choices and per-question free answers.
+
+    Given as DeepSeek Harness answers, `answers: [{id, selected, custom?}]` (`selected` by option id or label;
+    `custom` a free answer to that question, which on a single-choice question stands instead of a choice), or as
+    `choices: {question id: [option ids]}`; `text` is a note on the whole answer either way. Returns
+    (choices, customs); one question left empty is skipped, but `required` wants something answered.
+    """
+    items = {item["id"]: item for item in stored_items(row)}
+    answers, customs = payload.get("answers"), {}
+    if answers is not None:
+        if not isinstance(answers, list) or any(not isinstance(entry, dict) or entry.get("id") not in items for entry in answers) \
+                or len({entry["id"] for entry in answers}) != len(answers):
+            raise ValueError(Text("answers 须为 [{id, selected, custom?}]，每道题最多一项"))
+        choices = {}
+        for entry in answers:
+            options = items[entry["id"]]["options"]
+            by_label = {option["label"]: option["id"] for option in options}
+            selected = entry.get("selected") or []
+            if not isinstance(selected, list):
+                raise ValueError(Text("answers 的 selected 须为选项列表"))
+            choices[entry["id"]] = [by_label.get(value, value) for value in selected]
+            custom = entry.get("custom")
+            if custom is not None and (not isinstance(custom, str) or len(custom) > MAX_ANSWER_TEXT):
+                raise ValueError(Text("补充说明最多 {limit} 字", limit=MAX_ANSWER_TEXT))
+            if custom and custom.strip():
+                if not items[entry["id"]]["free_text"]:
+                    raise ValueError(Text("第 {item} 题不接受自由回答", item=entry["id"]))
+                if choices[entry["id"]] and not items[entry["id"]]["multiSelect"]:
+                    raise ValueError(Text("第 {item} 题是单选：选一个选项，或填写自由回答", item=entry["id"]))
+                customs[entry["id"]] = custom.strip()
+    else:
+        choices = payload.get("choices")
+    choices = checked_choices(row, choices, payload.get("text"), False)
+    if required and not choices and not customs and not (payload.get("text") or "").strip():
+        raise ValueError(Text("请至少选择一个选项或填写回答"))
+    return choices, customs
+
+
+def answer_items(row, choices, customs):
+    """The answer in DeepSeek Harness's shape: one entry per question, in order; an empty one was skipped."""
+    return [{"id": item["id"], "selected": choices.get(item["id"], []), **({"custom": customs[item["id"]]} if item["id"] in customs else {})}
+            for item in stored_items(row)]
+
+
+def answer_text(row, action, choices, text, customs=None):
     """The owner message an answer is saved as: readable in the transcript, with the question number."""
-    items = {item["id"]: item for item in json.loads(row["items"])}
+    items = {item["id"]: item for item in stored_items(row)}
+    customs = customs or {}
     if action == "recommend":
         head = Text("请主持人先讨论并给推荐（问题 #{id}）", id=row["id"])
     elif action == "delegate":
         head = Text("交给主持人决定（问题 #{id}）", id=row["id"])
     else:
-        picked = "；".join(f"{items[key]['prompt'].rstrip('？?：:')}：" + "、".join(
-            f"{option['id']}（{option['label']}）" for option in items[key]["options"] if option["id"] in value)
-            for key, value in choices.items())
+        picked = "；".join(f"{item['question'].rstrip('？?：:')}：" + "、".join(
+            [f"{option['id']}（{option['label']}）" for option in item["options"] if option["id"] in choices.get(key, [])]
+            + ([customs[key]] if key in customs else []))
+            for key, item in items.items() if key in choices or key in customs)
         head = Text("回答问题 #{id}：{picked}", id=row["id"], picked=picked) if picked else Text("回答问题 #{id}", id=row["id"])
     return f"{head}\n\n{text.strip()}" if (text or "").strip() else str(head)
 
@@ -504,12 +594,12 @@ def answer_question(connection, room_id, question_id, token, payload):
         close(connection, row, "expired")
         raise QuestionClosed(Text("问题已过期"))
     live_check(connection, row)
-    choices = checked_choices(row, payload.get("choices"), payload.get("text"), action in ("answer", "other"))
-    text = answer_text(row, action, choices, payload.get("text"))
+    choices, customs = checked_answers(row, payload, action in ("answer", "other"))
+    text = answer_text(row, action, choices, payload.get("text"), customs)
     message_id = insert_message(connection, room_id, "用户", text, "user", submission)
     connection.execute("UPDATE room_questions SET answer_submission_id=?,request_message_id=? WHERE id=?", (submission, message_id, row["id"]))
-    record = {"action": action, "choices": choices, "text": (payload.get("text") or "").strip(), "by": "用户",
-              "version": row["version"], "at": int(time.time()), "message_id": message_id}
+    record = {"action": action, "choices": choices, "answers": answer_items(row, choices, customs), "text": (payload.get("text") or "").strip(),
+              "by": "用户", "version": row["version"], "at": int(time.time()), "message_id": message_id}
     if action in ("recommend", "delegate"):
         status = "waiting_recommendation" if action == "recommend" else "delegated"
         connection.execute("UPDATE room_questions SET status=?,pending=? WHERE id=?", (status, json.dumps(record, ensure_ascii=False), row["id"]))
@@ -621,7 +711,7 @@ def host_reply(connection, room, token, question_id, payload, append_answer, dec
     record = {"choices": choices, "message_id": message_id, "submission_id": submission, "at": int(time.time())}
     if decide:
         pending = json.loads(row["pending"] or "{}")
-        settle_answer(connection, row, {**record, "action": "decided", "by": host["name"], "version": row["version"],
+        settle_answer(connection, row, {**record, "action": "decided", "answers": answer_items(row, choices, {}), "by": host["name"], "version": row["version"],
                                         "delegation": pending.get("text", "")}, message_id)
         event(connection, row["id"], "decided", record)
     else:
@@ -678,13 +768,13 @@ def request_context(connection, request):
                              (message_id, message_id)).fetchone()
     if not row:
         return question_needed(connection, request)
-    items = json.loads(row["items"])
+    items = stored_items(row)
     context = {"id": row["id"], "version": row["version"], "asker": row["asker"], "status": row["status"],
                "questions": items, "explanation_message_id": row["message_id"],
                **({"recommendation_message_id": row["recommendation_message_id"]} if row["recommendation_message_id"] else {})}
     if row["answer_message_id"] == message_id and row["answer"]:
         answer = json.loads(row["answer"])
-        context["user_decision"] = {key: answer.get(key) for key in ("action", "choices", "text", "by", "version", "delegation") if answer.get(key) not in (None, "")}
+        context["user_decision"] = {key: answer.get(key) for key in ("action", "choices", "answers", "text", "by", "version", "delegation") if answer.get(key) not in (None, "")}
     elif row["status"] == "waiting_recommendation":
         context["task"] = "recommend"
     elif row["status"] == "delegated":

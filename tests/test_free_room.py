@@ -1346,6 +1346,43 @@ class MultiMemberTests(FreeRoomTests):
         work = self.reserve_for("Codex")[1]
         self.assertEqual(self.answer(work["id"], "已处理。", token=self.codex, author="Codex")[0], 201)
         self.assertEqual(len(host_requests()), 1)
+        # COVERAGE 5: Claude's next task says what became of its @.
+        self.say("Claude 继续", to=["Claude"])
+        following = self.reserve_for("Claude")[1]
+        self.assertEqual(following["mentions"], [{"message_id": saved["message"]["id"], "member": "Codex", "outcome": "picked_up",
+                                                  "by": woken[0]["message_id"]}])
+
+    def test_a_mention_the_host_reads_with_a_later_request_is_recorded(self):
+        """COVERAGE 5: an @ merged into the host's next request leaves an event and reads as picked up by that request."""
+        antigravity = uuid.uuid4().hex
+        self.request(f"{self.path}/members", {"name": "Antigravity", "adapter": "antigravity_cli", "token": antigravity}, self.owner)
+        self.say("请 Gemini 查资料", to=["Antigravity"])  # keeps the room busy, so the @ is not handed over at once
+        self.say("请 Claude 看看", to=["Claude"])
+        execution = self.reserve_for("Claude")[1]
+        status, saved = self.answer(execution["id"], "需要 @Codex 决定。")
+        self.assertEqual(status, 201, saved)
+        time.sleep(1.1)  # request times are in seconds; the owner's next message comes after the mention
+        self.say("Codex 先看这个", to=["Codex"])
+        busy = self.reserve_for("Antigravity")[1]
+        self.assertEqual(self.answer(busy["id"], author="Antigravity", token=antigravity)[0], 201)
+        work = self.reserve_for("Codex")[1]
+        self.assertEqual(self.answer(work["id"], "看过了。", token=self.codex, author="Codex")[0], 201)
+        events = self.request(f"{self.path}/events", token=self.owner)[1]["events"]
+        merged = [event for event in events if event["kind"] == "mention.merged"]
+        self.assertEqual([event["data"]["message_id"] for event in merged], [saved["message"]["id"]])
+        self.say("Claude 继续", to=["Claude"])
+        self.assertEqual(self.reserve_for("Claude")[1]["mentions"][0]["outcome"], "picked_up")
+        self.assertEqual(self.reserve_for("Claude")[0], 409)
+
+    def test_a_model_change_leaves_a_system_record_and_wakes_nobody(self):
+        """COVERAGE 9: the service reports a saved model change; the room shows it and no member is woken."""
+        path = f"{self.path}/members/{self.member_id('Claude')}"
+        self.assertEqual(self.request(path, {"action": "model_changed", "from": "x" * 101, "to": "b"}, self.owner)[0], 400)
+        self.assertEqual(self.request(path, {"action": "model_changed", "from": "a", "to": "b"}, self.member)[0], 403)
+        status, result = self.request(path, {"action": "model_changed", "from": "opus · high", "to": "sonnet"}, self.owner)
+        self.assertEqual(status, 200, result)
+        self.assertEqual(self.messages()[-1][1], "Claude 的模型已从 opus · high 换为 sonnet，下次执行起生效。")
+        self.assertEqual(self.request(self.path)[1]["free"]["requests"], [])
 
     def test_quoted_mention_of_the_host_wakes_nobody(self):
         """应 8: a host's name inside quotation marks is quoted, not called on."""
@@ -1385,6 +1422,28 @@ class MultiMemberTests(FreeRoomTests):
         self.assertEqual(status, 200, retried)
         self.assertIn("额度重置前重试多半仍会失败", retried["warning"])
         self.assertEqual(self.reserve_for("Claude")[0], 200, "the owner's retry lifts the hold")
+
+    def test_signed_out_and_truncated_failures_are_classified_without_a_quota_hold(self):
+        """A signed-out member asks for signing in again and retry warns; neither class holds deliveries like quota."""
+        self.say("请 Claude 看看", to=["Claude"])
+        failing = self.reserve_for("Claude")[1]
+        url = f"{self.path}/executions/{failing['id']}"
+        status, failed = self.request(url, {"action": "fail", "reason": "Antigravity CLI ERROR：Eligibility check failed: UNAUTHENTICATED (401)",
+                                            "failure_class": "auth"}, self.owner)
+        self.assertEqual(status, 200, failed)
+        self.assertEqual(failed["failure"], {"class": "auth", "lasting": True})
+        self.assertIn("重新登录", self.messages()[-1][1])
+        self.say("再问一次", to=["Claude"])
+        claude = next(item for item in self.request(f"{self.path}/inbox", token=self.owner)[1]["members"] if item["name"] == "Claude")
+        self.assertFalse(claude.get("held_until"), "only quota holds deliveries until a reset")
+        status, retried = self.request(url, {"action": "retry"}, self.owner)
+        self.assertEqual(status, 200, retried)
+        self.assertIn("重新登录该软件之前，重试仍会失败", retried["warning"])
+        truncated = self.reserve_for("Claude")[1]
+        status, failed = self.request(f"{self.path}/executions/{truncated['id']}", {"action": "fail",
+            "reason": "模型输出在 1 个 token 处达到输出上限后结束，未提交结果", "failure_class": "output_truncated"}, self.owner)
+        self.assertEqual(status, 200, failed)
+        self.assertEqual(failed["failure"], {"class": "output_truncated", "lasting": False})
 
     def test_captured_reply_mentioning_the_host_wakes_nobody(self):
         """A captured reply keeps its @host text but never asks the host, even once the room is idle."""
@@ -1569,7 +1628,6 @@ class HostTests(HostRoomTests):
         execution = self.reserve_for("Codex")[1]
         codex = self.member_id("Codex")
         self.request(f"{self.path}/members/{codex}/chat", {"text": "私下的话", "submission_id": "c-1"}, self.owner)
-        self.assertEqual(self.request(f"{self.path}/events", token=self.codex)[0], 403)
         status, log = self.request(f"{self.path}/events", token=self.member)
         self.assertEqual(status, 200, log)
         text = json.dumps(log, ensure_ascii=False)
@@ -1578,6 +1636,41 @@ class HostTests(HostRoomTests):
         self.assertIn("execution.created", [event["kind"] for event in log["events"]])
         self.assertEqual(self.request(f"{self.path}/executions/{execution['id']}", token=self.member)[0], 200)
         self.assertEqual(self.request(f"{self.path}/executions/{execution['id']}", token=self.gemini)[0], 403)
+
+    def test_a_member_reads_only_the_events_that_concern_it(self):
+        """A member sees its own work, its own writes and why others' actions changed it; nothing of another member's."""
+        FreeRoomTests.say(self, "写第一集")
+        dispatch = self.host_dispatch(to=["Codex", "Antigravity"])
+        self.request(f"{self.path}/members/{self.member_id('Codex')}/chat", {"text": "私下的话", "submission_id": "c-2"}, self.owner)
+        self.assertEqual(self.request(f"{self.path}/messages", {"author": "Codex", "text": "未绑定执行", "source": "cli",
+                                                                "submission_id": "refused-1"}, self.codex)[0], 400)
+        self.assertEqual(self.request(f"{self.path}/dispatches/{dispatch}/withdraw", {}, self.owner)[0], 200)
+        codex = self.member_id("Codex")
+        status, log = self.request(f"{self.path}/events", token=self.codex)
+        self.assertEqual(status, 200, log)
+        events = log["events"]
+        self.assertTrue(events)
+        for event in events:
+            data = event["data"]
+            self.assertTrue(data.get("member_id") in (None, codex) and data.get("actor") in (None, "member:Codex"), event)
+        kinds = [event["kind"] for event in events]
+        self.assertIn("request.created", kinds)
+        self.assertIn("api.rejected", kinds, "its own refused write")
+        self.assertTrue(any(event["kind"] == "request.cancel_reason" and event["data"]["reason"] for event in events),
+                        "the withdrawal says why its request ended")
+        text = json.dumps(log, ensure_ascii=False)
+        self.assertNotIn("私下的话", text)
+        self.assertNotIn("写第一集", text)
+        self.assertNotIn("派活", text)
+        # The host still reads all of it, including the other member's requests.
+        everything = self.request(f"{self.path}/events", token=self.member)[1]["events"]
+        self.assertTrue(any(event["data"].get("member_id") == self.member_id("Antigravity") for event in everything))
+        # In a discussion the member's reading boundary also bounds the log.
+        with mock.patch("backend.session_room.session_message_access", return_value=dispatch - 1):
+            bounded = self.request(f"{self.path}/events", token=self.codex)[1]["events"]
+        self.assertTrue(bounded)
+        self.assertFalse([event for event in bounded if event["data"].get("message_id") == dispatch])
+        self.assertEqual(self.request(f"{self.path}/events", token=uuid.uuid4().hex)[0], 403)
 
     def host_dispatch(self, **extra):
         """The host answers its route request by dispatching; returns the dispatch message id."""
@@ -1757,6 +1850,31 @@ class HostTests(HostRoomTests):
         self.work("Antigravity")
         self.assertIn("重试后已结束", self.messages()[-1][1])
         self.assertEqual(self.requests().count(("Claude", "notice", "pending")), 0, "the waiting hand-back reads it")
+
+    def test_a_host_out_of_quota_tells_the_owner_instead_of_itself(self):
+        """COVERAGE 4: the host's own usage-limit failure is a message for the owner, not a reminder that wakes the host."""
+        self.say("主持人看看")
+        failing = self.reserve_for("Claude")[1]
+        self.request(f"{self.path}/executions/{failing['id']}", {"action": "fail", "reason": "Claude 用量已达上限",
+                                                                  "failure_class": "quota", "resets": "3pm"}, self.owner)
+        notice = self.messages()[-1][1]
+        self.assertIn("额度已用尽", notice)
+        self.assertIn("设为主持人", notice)
+        self.assertNotIn(("Claude", "notice", "pending"), self.requests())
+
+    def test_a_retry_that_fails_again_is_told_to_the_host_when_others_of_the_batch_finished(self):
+        """COVERAGE 3②: retrying one failed member of a batch the others completed still hands the outcome back."""
+        FreeRoomTests.say(self, "两人并行")
+        self.work("Claude", to=["Codex", "Antigravity"])
+        self.work("Codex")
+        failing = self.reserve_for("Antigravity")[1]
+        self.request(f"{self.path}/executions/{failing['id']}", {"action": "fail", "reason": "断开"}, self.owner)
+        self.work("Claude")
+        self.assertEqual(self.request(f"{self.path}/executions/{failing['id']}", {"action": "retry"}, self.owner)[0], 200)
+        again = self.reserve_for("Antigravity")[1]
+        self.request(f"{self.path}/executions/{again['id']}", {"action": "fail", "reason": "又断开"}, self.owner)
+        self.assertIn("（又断开）", self.messages()[-1][1])
+        self.assertIn(("Claude", "notice", "pending"), self.requests())
 
     def test_a_late_answer_completes_an_execution_the_runner_failed_unless_it_was_retried(self):
         """The runner's failure was a judgement; the member's answer arriving later still completes it, once."""
@@ -2432,6 +2550,23 @@ class GoalTests(HostRoomTests):
         self.assertEqual(self.requests()[-1], ("Claude", "goal_continue", "pending"))
         return view
 
+    def test_goal_continues_after_a_retry_the_host_ran_fails_again(self):
+        """V16: a continue disarms the goal; the host's retry of a member re-arms it, so that retry failing again wakes the host."""
+        self.open_from_page()
+        self.work("Claude", to=["Codex"])
+        failing = self.reserve_for("Codex")[1]
+        self.request(f"{self.path}/executions/{failing['id']}", {"action": "fail", "reason": "断开"}, self.owner)
+        self.work("Claude")  # the host reads the failure's hand-back and does nothing else
+        self.assertEqual(self.goal_write("continue")[0], 200)
+        host = self.reserve_for("Claude")[1]
+        self.assertEqual(self.request(f"{self.path}/executions/{failing['id']}", {"action": "retry"}, self.owner)[0], 200)
+        self.assertEqual(self.answer(host["id"], "已重试 Codex")[0], 201)
+        again = self.reserve_for("Codex")[1]
+        self.request(f"{self.path}/executions/{again['id']}", {"action": "fail", "reason": "又断开"}, self.owner)
+        self.assertIn("重试后已结束，其中未完成", self.messages()[-1][1], "the host hears the retry failed")
+        self.work("Claude")
+        self.assertTrue(self.goal()["goal"]["idle"], "the goal wakes the host again instead of staying silent")
+
     def test_goal_opened_while_the_host_works_waits_for_idle(self):
         """应 17: a goal opened while the host is busy (e.g. by the host itself) adds no continue on the same second."""
         FreeRoomTests.say(self, "先做这个", to=["Claude"])
@@ -2739,6 +2874,26 @@ class MigrationTests(unittest.TestCase):
                 executions = {row[1] for row in connection.execute("PRAGMA table_info(member_executions)")}
             self.assertTrue({"access", "session_mode"} <= members)
             self.assertTrue({"changes", "cwd"} <= executions)
+
+    def test_failure_classes_widen_and_keep_recorded_quota_failures(self):
+        """A database made when only 'quota' was a failure class keeps its rows and takes 'auth' afterwards."""
+        with tempfile.TemporaryDirectory() as directory:
+            database = Path(directory) / "quota_only.db"
+            init_database(database, seed=False)
+            with closing(sqlite3.connect(database)) as connection, connection:
+                # Rebuild the table as that build created it, with one recorded failure.
+                connection.execute("PRAGMA foreign_keys=OFF")
+                connection.execute("DROP TABLE execution_failures")
+                connection.execute("""CREATE TABLE execution_failures (execution_id INTEGER PRIMARY KEY, room_id TEXT NOT NULL,
+                    failure_class TEXT NOT NULL CHECK(failure_class IN ('quota')), resets TEXT NOT NULL DEFAULT '',
+                    failed_at INTEGER NOT NULL, reset_at INTEGER NOT NULL DEFAULT 0)""")
+                connection.execute("INSERT INTO execution_failures VALUES (7,'room','quota','3pm',100,200)")
+            init_database(database, seed=False)
+            init_database(database, seed=False)
+            with closing(sqlite3.connect(database)) as connection, connection:
+                connection.execute("PRAGMA foreign_keys=OFF")
+                self.assertEqual(connection.execute("SELECT * FROM execution_failures").fetchall(), [(7, 'room', 'quota', '3pm', 100, 200)])
+                connection.execute("INSERT INTO execution_failures (execution_id,room_id,failure_class,failed_at) VALUES (8,'room','auth',1)")
 
 
 if __name__ == "__main__":

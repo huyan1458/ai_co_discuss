@@ -338,13 +338,14 @@ CREATE TABLE IF NOT EXISTS execution_denials (
 );
 -- A manual member's session refused a delivery: the runner keeps the execution and delivers again at retry_at
 -- (0 while delivering). The owner may ask for it now or stop it, and the runner then fails it. Not part of backups.
--- What the runner's adapter classified a failed execution as (only 'quota', a usage limit, so far) and the reset time
--- it reported, as the software's own text, plus `reset_at` (Unix seconds, 0 when unknown) when the adapter could compute it.
+-- What the runner's adapter classified a failed execution as ('quota' a usage limit, 'auth' signed out,
+-- 'output_truncated' the model's reply hit its output cap) and, for 'quota', the reset time it reported, as the
+-- software's own text, plus `reset_at` (Unix seconds, 0 when unknown) when the adapter could compute it.
 -- An unclassified failure has no row. Retrying the execution removes it.
 CREATE TABLE IF NOT EXISTS execution_failures (
     execution_id INTEGER PRIMARY KEY REFERENCES member_executions(id) ON DELETE CASCADE,
     room_id TEXT NOT NULL REFERENCES rooms(id) ON DELETE CASCADE,
-    failure_class TEXT NOT NULL CHECK(failure_class IN ('quota')),
+    failure_class TEXT NOT NULL CHECK(failure_class IN ('quota','auth','output_truncated')),
     resets TEXT NOT NULL DEFAULT '',
     failed_at INTEGER NOT NULL,
     reset_at INTEGER NOT NULL DEFAULT 0

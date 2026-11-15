@@ -620,6 +620,23 @@ class CliContractTests(unittest.TestCase):
             plan = discuss.RequestPlan("/api/rooms/r1", view=view)
             self.assertEqual(discuss.project_result(value, plan, "http://x")["field_notes"], notes)
 
+    def test_message_post_help_shows_a_member_only_what_it_can_use(self):
+        """B6 / coverage item 7: plain --help folds the host's dispatch options; --help-host and schema keep them."""
+        member = subprocess.run([sys.executable, str(ROOT / "runner" / "discuss.py"), "message", "post", "--help"],
+                                capture_output=True, text=True, encoding="utf-8", timeout=20)
+        host = subprocess.run([sys.executable, str(ROOT / "runner" / "discuss.py"), "message", "post", "--help-host"],
+                              capture_output=True, text=True, encoding="utf-8", timeout=20)
+        self.assertEqual((member.returncode, host.returncode), (0, 0))
+        for option in ("--sequential", "--next-review", "--keep-working", "--with"):
+            self.assertNotIn(option, member.stdout)
+            self.assertIn(option, host.stdout)
+        self.assertIn("--help-host", member.stdout)
+        self.assertIn("--body-file", member.stdout)
+        args, registry = self.parse(["schema", "message", "post"])
+        fields = {item["flags"][0]: item for item in discuss.run(args, registry)["data"]["arguments"] if item["flags"]}
+        self.assertEqual((fields["--sequential"]["role"], "role" in fields["--to"]), ("host", False))
+        self.assertTrue(fields["--sequential"]["help"])
+
     def test_help_and_schema_work_without_network(self):
         """Schema is generated from real flags, including required operator and body alternatives."""
         args, registry = self.parse(["schema", "message", "post"])

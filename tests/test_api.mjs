@@ -954,12 +954,13 @@ test('API read tools hand failures back to the model, read text attachments with
   await assert.rejects(execute_tool(host, { name: 'save_state', arguments: { text: 'x', brief: 'y', until: 1 } }, participant_tools(host)));
 });
 
-test('only the host gets the event log and the proactive post', () => {
+test('every member gets the event log, only the host the proactive post', () => {
   const host = participant_tools({ role: 'host' });
   const member = participant_tools({ role: 'member' });
   assert.ok(host.find(item => item.name === 'submit_chat').parameters.properties.proactive);
   assert.ok(!member.find(item => item.name === 'submit_chat').parameters.properties.proactive);
-  assert.ok(host.some(item => item.name === 'read_events') && !member.some(item => item.name === 'read_events'));
+  // Every member reads the event log; the service gives one that is not the host only the events that concern it.
+  assert.ok(host.some(item => item.name === 'read_events') && member.find(item => item.name === 'read_events').description.includes('只含与你有关的事件'));
   assert.ok(['read_execution', 'read_attachment', 'read_goal'].every(name => member.some(item => item.name === name)));
 });
 
@@ -1027,4 +1028,25 @@ test('an API question whose creation result is unknown is looked up by its submi
   const posts = seen.filter(item => item.method === 'POST');
   assert.equal(posts[0].body.submission_id, posts[1].body.submission_id, 'the same content keeps its submission ID');
   assert.equal(stored.size, 1, 'the room holds one question');
+});
+
+test('an API execution reports each tool call as a progress note, and a reply cut at the output cap fails as output_truncated', async t => {
+  const f = await site_fixture(t);
+  // The first execution reads a message, then the provider cuts every reply at its output cap (finish_reason length).
+  const mock = await model_fixture(t, (call, calls) => (calls.length === 1 ? tool_reply(call, 'read_message', { id: 1 })
+    : { choices: [{ finish_reason: 'length', message: { role: 'assistant', content: 'Now' } }] }));
+  const participants = { DeepSeek: profiles(f.home, mock.base_url).DeepSeek };
+  const started = await launch_discussion(f.home, { site: f.site, entry: 'web', participants,
+    room: { title: '截断', mode: 'free', host: '用户', members: ['DeepSeek'], submission_id: randomUUID() } }, { start_service: async () => ({ running: true }) });
+  const config = load_config(started.config_path), store = new DiscussionStore(config.directory), runner = new FreeRoomRunner(config, store);
+  f.cleanup.push(() => { runner.stop_children(); store.close(); });
+  await api(config, '/messages', { author: '用户', text: '请处理。', source: 'user', kind: 'chat', to: ['DeepSeek'], submission_id: randomUUID() });
+  const execution = async () => (await api(config, '')).free.executions.at(-1);
+  await until(async () => (await execution())?.status === 'failed', () => runner.tick());
+  const failed = await api(config, `/executions/${(await execution()).id}`);
+  assert.match(failed.result, /模型输出在 1 个 token 处达到输出上限后结束，未提交结果/);
+  assert.doesNotMatch(failed.result, /等你决定|是否支持工具调用/);
+  assert.deepEqual(failed.failure, { class: 'output_truncated', lasting: false });
+  const notes = (await api(config, `/executions/${failed.id}/notes`)).notes.map(item => item.text);
+  assert.ok(notes.includes('read_message id=1'), JSON.stringify(notes));
 });

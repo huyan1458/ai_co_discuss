@@ -627,7 +627,10 @@ def create_plan(connection, room_id, payload, room):
     entries = _number_plan_entries(connection, session["id"], plan, roster)
     if len(plan) > 1:
         first_round_names = {item[1] for item in entries if item[3] == roster["round"]}
-        missing = [name for name in roster["waiting"] if name not in first_round_names]
+        # The expert speaking now has its turn this round already; re-planning the rest must not demand it again (R5).
+        speaking = {row[0] for row in connection.execute("""SELECT m.name FROM session_requests sr JOIN room_members m ON m.id=sr.member_id
+            WHERE sr.session_id=? AND sr.purpose='discuss' AND sr.round=? AND sr.status='open'""", (session["id"], roster["round"]))}
+        missing = [name for name in roster["waiting"] if name not in first_round_names and name not in speaking]
         if missing:
             raise ValueError(Text("整轮安排缺少本轮尚未发言的专家：{value1}", value1='、'.join(missing)))
     read_until = _discussion_read_cutoff(connection, session["id"])

@@ -54,7 +54,7 @@ description: "AI CoDiscuss 的 Goal 模式主持技能，仅主持人调用，�
 
 ## 结束
 
-- **完成**：先对照实际状态核验（成员交付原文、测试结果、文件），确认没有剩余必需工作；再 `goal view` 取 revision，然后 `goal done ROOM --revision REV --note-file 草稿`，在说明里写核验依据（`mode view` / `mode done` 效果相同）。还有成员在处理时会被拒绝。不能因为做了很久或预算将尽就宣告完成。
+- **完成**：先对照实际状态核验（成员交付原文、测试结果、文件），确认没有剩余必需工作；再 `goal view` 取 revision，然后 `goal done ROOM --revision REV --note-file 草稿`，在说明里写核验依据（`mode view` / `mode done` 效果相同）。还有成员在处理时会被拒绝。不能因为做了很久或预算将尽就宣告完成。Goal 完成不等于房间任务完成：宣告后对照任务里的 `room_goal`（房间目标、原始需求或首条用户消息），还有剩余就照常推进或告诉用户还差什么。
 - **卡住**：同一个阻碍连续 3 次唤醒都无法解决，且没有用户输入或外部变化就推进不了时，用 `goal block ROOM --revision REV --note-file 草稿` 写明阻碍。第一次遇到阻碍时不宣告；只是需要用户决定时声明待确认，不宣告卡住。
 - **预算用完**：任务里 `goal.status` 为 `budget_limited` 时，只做收尾：总结已完成的部分、剩余工作与阻碍，给用户明确的下一步，不再派新活。
 - 暂停、恢复、结束由用户控制；只有任务有 `host_workflows: true`（主持人完整权限）时你才能用 `host-control goal` 操作，见 [请求与派活](../discuss-host/references/room.md)“房间控制”。

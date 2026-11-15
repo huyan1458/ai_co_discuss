@@ -148,7 +148,7 @@ workflow-leave 主持人用完子工作流后，把 --sub 子工作流卡片的�
 host-control 主持人代房主控制房间，须房主已为本房间打开“主持人完整权限”，凭据同上；成员用 --member（成员 ID 或显示名），除 retry、model、label 外不能是主持人自己：
   诊断：details --execution N 读取该执行的本机过程日志（服务端详情与事件记录用 execution / room events 读取）；
   恢复：stop --member 打断；stop-all 停止全部执行、请求与接力；steer --member --text 话 [--submission-id ID] 向它进行中的执行插话；
-        retry --execution N 重试失败的执行（含你自己的）；model --member [--model M] [--effort E] 改 CLI 或 API 成员的模型与强度（空值恢复默认；API 成员不填模型则保留原模型）；
+        retry --execution N 重试失败的执行（含你自己的）；model --member [--model M] [--effort E] 改 CLI 或 API 成员的模型与强度（空值恢复默认；API 成员不填模型则保留原模型；换后房间留一条系统记录，成员下次任务带 model_change）；model --member M --list 列出该成员软件的可用模型；
         adapter --member --adapter ID 在同一软件的 App 与 CLI 间切换；access --member --access read|write 调整项目权限；
   成员：invite --name 平台 [--access read|write] [--model M] [--effort E] 用本机已配置的软件邀请，项目权限默认只读、最高可写，离开中的同名成员改为请回；
         away / remove / back --member 暂离、移除、请回（暂离与移除会取消仍在等它的请求，返回 cancelled_pending 条数）；label --member [--label 显示名] [--description 描述]；
@@ -1113,8 +1113,27 @@ export async function room_member_model(home, raw) {
     const updated = { ...config, participants: { ...config.participants, [name]: next } };
     validate_config(updated, dirname(path));
     atomic_json(path, updated);
-    return { room_id: input.room_id, member: name, model: next.model || '', effort };
+    const label = item => [item.model || '默认', item.effort].filter(Boolean).join(' · ');
+    const recorded = label(profile) === label(next) ? null : await record_model_change(input, name, label(profile), label(next));
+    return { room_id: input.room_id, member: name, model: next.model || '', effort, ...(recorded ? { notice_id: recorded } : {}) };
   } finally { release(); }
+}
+
+/**
+ * Leave the room a system record of a model change (COVERAGE 9); the change is already saved, so a failed record only
+ * leaves it unrecorded and is said in the log, never undone.
+ */
+async function record_model_change(input, name, from, to) {
+  try {
+    const room = await site_request(input.site, `/api/rooms/${input.room_id}`, input.token);
+    const member = (room.free?.members || room.members || []).find(item => item.name === name);
+    if (!member) return null;
+    return (await site_request(input.site, `/api/rooms/${input.room_id}/members/${member.id}`, input.token,
+      { action: 'model_changed', from, to })).message_id || null;
+  } catch (error) {
+    console.error(`换模型已保存，但房间记录未写入：${error.message}`);
+    return null;
+  }
 }
 
 const MAX_ALLOWED_TOOLS = 50;
@@ -1985,6 +2004,16 @@ function host_invite_profile(home, name, { access, model, effort }) {
   return { ...api, project_access, ...(model ? { model } : {}), ...(effort ? { effort } : {}) };
 }
 
+/** The models a member's software offers, read from the installed software (cached), for `model --member M --list`. */
+async function host_model_list(ctx, o) {
+  const name = host_target(ctx, o.member, { self: true }).name;
+  const profile = ctx.config.participants?.[name];
+  if (!profile) throw new Error(`${name} 不由本机唤醒，模型由它自己的会话决定`);
+  const result = await cached_software_models(ctx.home, profile);
+  return { member: name, adapter: profile.adapter, current: profile.model || '', models: (result.models || []).map(item => item.id),
+    ...(result.error ? { error: result.error } : {}) };
+}
+
 /** The positive execution number a host passes with --execution. */
 function execution_number(value) {
   const id = Number(value);
@@ -2098,7 +2127,8 @@ const HOST_CONTROLS = {
     return member_change('remove', target, ctx.call(`/members/${target.id}`, { action: 'remove' }), ctx.labels);
   },
   back: (ctx, o) => room_member(ctx.home, { ...ctx.owner, action: 'rejoin', name: host_target(ctx, o.member).name }, false, ctx.headers),
-  model: (ctx, o) => room_member_model(ctx.home, { ...ctx.owner, name: host_target(ctx, o.member, { self: true }).name, model: o.model || '', effort: o.effort || '' }),
+  model: (ctx, o) => o.list ? host_model_list(ctx, o)
+    : room_member_model(ctx.home, { ...ctx.owner, name: host_target(ctx, o.member, { self: true }).name, model: o.model || '', effort: o.effort || '' }),
   access: (ctx, o) => {
     if (!HOST_CARD_ACCESS.includes(o.access)) throw new Error('主持人只能把成员的项目权限设为 read 或 write');
     return room_member_access(ctx.home, { ...ctx.owner, name: host_target(ctx, o.member).name, project_access: o.access });
@@ -2246,7 +2276,7 @@ export async function launch_main(args = process.argv.slice(2), input_text) {
     member: { type: 'string' }, order: { type: 'string' }, revision: { type: 'string' }, name: { type: 'string' }, access: { type: 'string' },
     model: { type: 'string' }, effort: { type: 'string' }, do: { type: 'string' }, execution: { type: 'string' }, text: { type: 'string' },
     goal: { type: 'string' }, label: { type: 'string' }, description: { type: 'string' }, adapter: { type: 'string' }, 'submission-id': { type: 'string' },
-    message: { type: 'string' }, minutes: { type: 'string' }, off: { type: 'boolean' },
+    message: { type: 'string' }, minutes: { type: 'string' }, off: { type: 'boolean' }, list: { type: 'boolean' },
   } });
   if (values.help || !positionals.length) return process.stdout.write(command_help(positionals[0]));
   if (positionals[0] === 'workflow-adopt') {
@@ -2257,7 +2287,7 @@ export async function launch_main(args = process.argv.slice(2), input_text) {
   if (positionals[0] === 'host-control') {
     const { member, order, revision, name, access, model, effort, execution, text, goal, label, description, adapter } = values;
     const result = await host_control(service_home(), positionals[1], { member, order, revision, name, access, model, effort, execution, text, goal,
-      label, description, adapter, message: values.message, minutes: values.minutes, off: values.off, do: values.do, submission_id: values['submission-id'], access_file: values['access-file'] || process.env.DISCUSS_ACCESS_FILE });
+      label, description, adapter, message: values.message, minutes: values.minutes, off: values.off, list: values.list, do: values.do, submission_id: values['submission-id'], access_file: values['access-file'] || process.env.DISCUSS_ACCESS_FILE });
     return process.stdout.write(`${JSON.stringify(result)}
 `);
   }

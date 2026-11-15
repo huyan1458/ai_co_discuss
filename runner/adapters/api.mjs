@@ -93,9 +93,13 @@ export function participant_tools(context) {
     tool('ask_question', '向用户提问，一次保存问题组与说明消息。blocking: true 时 contract 必须为 handoff：explanation 就是本次请求的交付（写明已完成部分、各候选完整说明、需要用户提供什么），保存后本次执行结束，用户回答后以新请求交回你（接力则交下一棒）；blocking: false 时 contract 为 supplement：只补充说明，执行继续，之后照常 submit_chat。题干与选项标签只写简短说明，候选正文写在 explanation 里，选项 anchor 填候选所在小标题；refs 只填依据的消息编号',
       { contract: { type: 'string', enum: ['handoff', 'supplement'] }, blocking: { type: 'boolean' }, explanation: { ...TEXT, maxLength: 32000 },
         summary: { ...TEXT, maxLength: 1000 }, refs: { type: 'array', items: NUMBER, maxItems: 20 },
-        questions: { type: 'array', minItems: 1, maxItems: 5, items: { type: 'object', properties: { id: TEXT, prompt: { ...TEXT, maxLength: 500 },
-          options: { type: 'array', maxItems: 8, items: { type: 'object', properties: { id: TEXT, label: { ...TEXT, maxLength: 200 }, anchor: TEXT }, required: ['id', 'label'] } },
-          multiple: { type: 'boolean' }, free_text: { type: 'boolean' } }, required: ['prompt'] } },
+        // Item and option fields as DeepSeek Harness's ask_user_question names them (.dev/plans/Agent参与体验整改/DSH提问工具对照.md).
+        questions: { type: 'array', minItems: 1, maxItems: 5, items: { type: 'object', properties: { id: TEXT, question: { ...TEXT, maxLength: 500 },
+          header: { ...TEXT, maxLength: 40, description: '短标签，如“确认”“基调”' }, detail: { ...TEXT, maxLength: 1000, description: '题目的补充说明；候选全文写在 explanation' },
+          options: { type: 'array', maxItems: 8, items: { type: 'object', properties: { label: { ...TEXT, maxLength: 200 },
+            description: { ...TEXT, maxLength: 500 }, recommended: { type: 'boolean', description: '推荐项放在首位并设为 true（或标签末尾写 (Recommended)）' },
+            id: TEXT, anchor: TEXT }, required: ['label'] } },
+          multiSelect: { type: 'boolean' }, free_text: { type: 'boolean', description: '是否允许用户自由填写，默认允许' } }, required: ['id', 'question'] } },
         ...(context.role === 'host' ? { gate: { type: 'object', properties: { sequence_id: NUMBER, revision: TEXT }, required: ['sequence_id', 'revision'],
           description: '只用于补题：任务里 question_needed 给出的 sequence_id 与 revision' } } : {}) },
       ['contract', 'blocking', 'explanation', 'questions']));
@@ -104,7 +108,7 @@ export function participant_tools(context) {
       { id: NUMBER, text: { ...TEXT, maxLength: 32000 }, choices: { type: 'object', description: '推荐的选项：{题目 id: [选项 id]}' } }, ['id', 'text']),
     tool('decide_question', '只用于 question.task 为 decide 的请求（用户交给你决定）：在用户交托的范围内作出决定并写明理由，视为该问题的回答；保存后本次执行结束；程序自取最新 version',
       { id: NUMBER, text: { ...TEXT, maxLength: 32000 }, choices: { type: 'object', description: '决定的选项：{题目 id: [选项 id]}' } }, ['id', 'text', 'choices']));
-  if (context.role === 'host') tools.push(tool('read_events', `读取房间事件记录：每次写入（谁、经哪个接口、载荷、结果或拒绝原因）及其引起的状态变化，用于排查成员没被唤醒、操作被拒、状态卡住；不填参数读最近一页，before 读该编号之前的一页，after 读该编号之后的；每次最多 ${MODEL_EVENTS} 条`,
+  tools.push(tool('read_events', `读取房间事件记录：每次写入（谁、经哪个接口、载荷、结果或拒绝原因）及其引起的状态变化，用于排查成员没被唤醒、操作被拒、状态卡住；${context.role === 'host' ? '主持人读到全部事件' : '只含与你有关的事件（你的请求、执行与写入含被拒的，你的消息引起的请求，他人操作造成的取消原因），不含他人正文与私聊'}；不填参数读最近一页，before 读该编号之前的一页，after 读该编号之后的；每次最多 ${MODEL_EVENTS} 条`,
     { after: { type: 'integer', minimum: 0 }, before: { type: 'integer', minimum: 0 } }));
   if (context.role === 'host') tools.push(tool('read_decision', '按任务中的决策编号读取原判断；先读问题原文，再自行判断，未自动生效的建议不代表已执行', { id: NUMBER }, ['id']));
   if (context.role === 'host') tools.push(tool('read_review_roster', '先读取只读评审候选，再用 submit_chat 的 next_review 和 review_scope 声明实现后的评审；不可指定本批实现者，程序自取最新 revision'));
@@ -517,7 +521,7 @@ export function system_prompt(context) {
   const environment = `你是 AI CoDiscuss 房间中的 ${context.participant}，职责为 ${context.role}（${discussion ? '房间开启的讨论中的执行' : '房间请求'}）。使用中文。
 下文是本项目的参与技能${host ? '与主持技能' : ''}，与本地软件参与者使用同一份。你经本机接入程序以 API 参与，环境差异如下，与技能冲突时以本段为准：
 - 只能使用提供的${context.project ? '房间工具和项目文件工具' : '房间工具'}，没有${command_tools(context.commands, context.project).length ? '通用' : ''}命令行、浏览器或其他软件。接入程序负责执行认领、续租和凭据管理；你的房间写入工具都绑定本次执行。submit_chat 结果不明（outcome: unknown）时用完全相同的内容再调用一次：提交编号不变，不会产生第二条；其他结果不明的写入不要重试。
-- 命令与工具对应：room view → read_room；message list / view → read_messages / read_message；execution view → read_execution；attachment view / download → read_attachment；goal view → read_goal；message post --kind chat → submit_chat。${host ? 'room events → read_events；state decision → read_decision（按任务的决策编号读取完整判断）；message post --proactive → submit_chat 的 proactive。' : ''}${discussion && host
+- 命令与工具对应：room view → read_room；message list / view → read_messages / read_message；execution view → read_execution；attachment view / download → read_attachment；goal view → read_goal；room events → read_events；message post --kind chat → submit_chat。${host ? 'state decision → read_decision（按任务的决策编号读取完整判断）；message post --proactive → submit_chat 的 proactive。' : ''}${discussion && host
     ? '主持讨论工具还包括 state set → save_state；room update → update_topic；turn create --plan-file → arrange_turns；turn continue → continue_plan；turn roster → read_roster，读后 turn ask → ask_interjection；取消安排 → cancel_turn；room limits --done → finish_discussion / declare_done。' : ''}${host ? ' 派活用 to，派出的工作结束后都会交回你；房间空闲后要接着推进时填 continue；message post --sequential / --loop / --with / --checkpoint / --repeat / --detach → submit_chat 的 sequential / loop / parallel / gates / detach；sequence view → read_sequence；sequence continue → continue_sequence。' : ''}${goal_host(context) ? ' goal start → start_goal；goal done / block → finish_goal；goal state → set_goal_state。' : ''}
 ${project_text(context.project, context.commands, context.image_input)}${context.image ? `
 - 可用 generate_image 按文字生成图片（含 GIF 动图、SVG 矢量图），edit_image 按消息里的图片附件 ID${context.project ? '或项目内图片' : ''}修改、合成图片，图片模型为 ${context.image.model}。生成的图片存为本次执行的附件，submit_chat 时自动随回答发出（每条最多 ${MAX_MESSAGE_ATTACHMENTS} 张，可用 attachments 选择）；task.unsent_images 列出你之前的执行生成后没能发出的图片（那次执行失败了），与本次任务相关时用 attachments 附上，不必重画。${context.project?.writable ? '图片要插进项目文档（如 Markdown）时，用 save_path 存进项目，文档里按相对路径引用。' : ''}你看不到图片内容：回答里说明画了什么、用了哪些参数，不描述没看到的细节，需要人看图确认时请用户或能看图的成员确认。每次调用都计费，不为试探反复生成；被拒或报错时按返回原因调整后再试。` : ''}
@@ -527,6 +531,8 @@ ${project_text(context.project, context.commands, context.image_input)}${context
   // The discussion's rules live in their own skill: the experts' part, then the host's.
   return [environment, skill_text('discuss-participant'),
     discussion ? skill_text('discuss-session') : skill_text('discuss-participant', 'references/room.md'),
+    // API members cannot open a page on demand, so the occasional rules (relay, questions, images, proactive) come along.
+    skill_text('discuss-participant', 'references/situations.md'),
     ...(host ? [skill_text('discuss-host'), discussion ? skill_text('discuss-session', 'references/host.md') : skill_text('discuss-host', 'references/room.md')] : []),
     // A workflow applies only to requests that fit it, so the development flow stays for the rest.
     ...(host && !discussion ? [skill_text('discuss-host', 'references/dev-flow.md')] : []),

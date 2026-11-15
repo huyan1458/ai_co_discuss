@@ -265,6 +265,36 @@ def add_topic(parser, create=False):
     parser.add_argument("--execution-minutes", type=non_negative_int, default=argparse.SUPPRESS, help=argparse.SUPPRESS)
 
 
+# `message post` options only the host may use: plain `--help` folds them so a member sees what it can use (B6);
+# `--help-host` and `schema` still show all of them.
+HOST_POST_OPTIONS = ("--handoff", "--no-handoff", "--keep-working", "--continue", "--sequential", "--loop", "--checkpoint",
+                     "--repeat", "--wait-user", "--detach", "--with", "--need-rounds", "--rounds-reason", "--next-review",
+                     "--review-scope", "--review-roster")
+
+
+class HostHelp(argparse.Action):
+    """Print the command's help with the host-only options unfolded, then exit."""
+
+    def __init__(self, option_strings, dest=argparse.SUPPRESS, default=argparse.SUPPRESS, help=None):
+        super().__init__(option_strings, dest=dest, default=default, nargs=0, help=help)
+
+    def __call__(self, parser, namespace, values, option_string=None):
+        for action in parser._actions:
+            if hasattr(action, "host_help"):
+                action.help = action.host_help
+        parser.print_help()
+        parser.exit()
+
+
+def fold_host_options(parser):
+    """Hide the host-only options from plain `--help`, keeping their text for `--help-host` and `schema`."""
+    for action in parser._actions:
+        if set(action.option_strings) & set(HOST_POST_OPTIONS):
+            action.host_help = action.help
+            action.help = argparse.SUPPRESS
+    parser.add_argument("--help-host", action=HostHelp, help="另列主持人才能用的派活参数（接力、循环、检查点、评审、续跑、申请轮数等）")
+
+
 def add_leaf(subcommands, registry, name, description, needs_room=False):
     """Register one discoverable command and its common options."""
     parser = subcommands.add_parser(name.split()[-1], help=description, description=description,
@@ -289,7 +319,7 @@ def room_commands(subcommands, registry):
         elif action in ("view", "brief"):
             parser.add_argument("--request", type=positive_int, help="手动成员：按自己的有效请求限制可读原文")
     events = add_leaf(subcommands, registry, "room events",
-                      "房主或当前主持人读取房间事件记录（主持人看不到私聊与消息正文）：用户与程序的每次写入（含被拒的）及其引起的状态变化，按发生顺序，用于排查问题；默认最新 500 条", True)
+                      "读取房间事件记录：房主与当前主持人读全部（主持人看不到私聊与消息正文），其他成员只读与本人有关的事件；用户与程序的每次写入（含被拒的）及其引起的状态变化，按发生顺序，用于排查问题；默认最新 500 条", True)
     paging = events.add_mutually_exclusive_group()
     paging.add_argument("--after", type=non_negative_int, help="只读此事件编号之后的记录")
     paging.add_argument("--before", type=non_negative_int, help="读此事件编号之前的一页；按返回的 more 继续向前")
@@ -377,6 +407,7 @@ def message_commands(subcommands, registry):
     post.add_argument("--reply-to", type=positive_int, help="被引用的原文编号")
     post.add_argument("--submission-id", type=submission_id,
                       help="每次新提交的唯一编号；重试必须沿用同编号和正文。省略时按房间、身份、关联与内容自动生成，同一份草稿重试得到同一编号")
+    fold_host_options(post)
 
 
 def attachment_commands(subcommands, registry):
@@ -556,7 +587,7 @@ def question_commands(subcommands, registry):
     ask = add_leaf(subcommands, registry, "question ask",
                    "向用户提问：一次提交保存问题组与说明消息。contract=handoff（blocking=true）时说明消息即本次请求的交付并结束执行，任务等用户回答；"
                    "contract=supplement（blocking=false）只补充说明，执行继续、照常回答。身份、执行编号与提交编号由凭据和内容补齐", True)
-    ask.add_argument("--file", required=True, help='UTF-8 JSON 草稿：{"contract","blocking","explanation","questions":[{"id","prompt","options":[{"id","label","anchor?"}],"multiple?","free_text?"}],"refs?","gate?":{"sequence_id","revision"}}；- 从标准输入读取')
+    ask.add_argument("--file", required=True, help='UTF-8 JSON 草稿：{"contract","blocking","explanation","questions":[{"id","question","header?","detail?","options":[{"label","description?","recommended?","id?","anchor?"}],"multiSelect?","free_text?"}],"refs?","gate?":{"sequence_id","revision"}}；推荐项放首位或标签末尾写 (Recommended)；- 从标准输入读取')
     ask.add_argument("--submission-id", type=submission_id, help="提问唯一编号；省略时按内容生成，同一草稿重试得到同一问题")
     answer = add_leaf(subcommands, registry, "question answer", "房主作答：先 question view 取 version；也可请主持人推荐或交给主持人决定", True)
     reply = add_leaf(subcommands, registry, "question recommend", "主持人给出推荐：问题升为新版本、仍等用户确认；先 question view 取 version", True)
@@ -567,9 +598,11 @@ def question_commands(subcommands, registry):
         parser.add_argument("--version", type=positive_int, required=True, help="question view 返回的 version；问题更新后须重新读取")
     for parser in (answer, reply, decide):
         parser.add_argument("--choice", action="append", default=[], metavar="ITEM=OPTION",
-                            help="题目 id=选项 id；多选题重复给出；可重复")
+                            help="题目 id=选项 id（或选项标签）；多选题重复给出；可重复")
         add_text(parser, "text", required=parser is not answer)
         parser.add_argument("--submission-id", type=submission_id, help="唯一编号；省略时按内容生成，同样内容重试得到同一结果")
+    answer.add_argument("--custom", action="append", default=[], metavar="ITEM=TEXT",
+                        help="某道题的自由回答（单选题与 --choice 二选一）；可重复")
     answer.add_argument("--action", dest="answer_action", choices=("answer", "other", "recommend", "delegate"), default="answer",
                         help="answer 选项作答；other 其他或修改意见；recommend 请主持人先讨论并给推荐；delegate 交给主持人决定")
 
@@ -1115,6 +1148,14 @@ def plan_question(args):
             body["text"] = text
     if args.action == "answer":
         body["action"] = args.answer_action
+        if args.custom:
+            # Per-question free answers go as DeepSeek Harness answers: [{id, selected, custom}].
+            customs = {item: text for item, _, text in (value.partition("=") for value in args.custom)}
+            if any(not item or not text for item, text in customs.items()):
+                raise CliError("--custom 须写成 题目id=回答")
+            choices = body.pop("choices")
+            body["answers"] = [{"id": item, "selected": choices.get(item, []), **({"custom": customs[item]} if item in customs else {})}
+                               for item in dict.fromkeys([*choices, *customs])]
     if args.action in ("recommend", "decide"):
         body["actor"] = require_actor(args)
         execution_id = bound_execution(args)
@@ -1457,8 +1498,12 @@ def command_schema(args, registry):
     for action in parser._actions:
         if action.dest == "help":
             continue
+        if action.dest == argparse.SUPPRESS:
+            continue
         item = {"name": action.dest, "flags": action.option_strings,
-                "required": action.required, "help": action.help}
+                "required": action.required, "help": getattr(action, "host_help", action.help)}
+        if hasattr(action, "host_help"):
+            item["role"] = "host"
         if action.dest == "actor" and name in ("room create", "room update", "message post",
                                                "turn create", "turn cancel", "state set", "attachment upload", "review advance",
                                                "sequence continue"):

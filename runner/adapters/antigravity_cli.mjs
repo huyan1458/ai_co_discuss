@@ -537,14 +537,19 @@ export function sweep_legacy_agy_projects(service_home, user_home = homedir()) {
   return removed;
 }
 
+// Signed out or the account switched (room #3203: "Eligibility check failed: UNAUTHENTICATED (401)"; the sign-in prompt
+// timing out headless, "authentication failed or timed out"): only signing agy in again on this computer helps.
+const AGY_SIGNED_OUT = /\bUNAUTHENTICATED\b|\bauthentication (?:failed|required|timed out)\b/i;
+
 /**
  * How a failed agy turn is classified for the room (adapter contract `on_failure(reason, {failure_class, resets,
- * reset_at})`, as Claude's): an exhausted account quota is `quota`. agy says when it resets as a duration from now
+ * reset_at})`, as Claude's): a signed-out account is `auth`, an exhausted account quota `quota`. agy says when it resets as a duration from now
  * ("Individual quota reached. … Resets in 141h35m10s.", 1.5.x, room #3327): `reset_at` is now plus that duration in
  * Unix seconds, and `resets` the same moment as a local time, since the failure is shown long after. Anything else
  * stays unclassified.
  */
 export function agy_failure_class(reason, now = new Date()) {
+  if (AGY_SIGNED_OUT.test(String(reason))) return { failure_class: 'auth' };
   if (!/\bquota reached\b/i.test(String(reason))) return {};
   const match = /\bResets in\s+(?:(\d+)h)?\s*(?:(\d+)m)?\s*(?:(\d+)s)?/i.exec(reason);
   const seconds = match ? (Number(match[1] || 0) * 3600) + (Number(match[2] || 0) * 60) + Number(match[3] || 0) : 0;

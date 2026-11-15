@@ -137,7 +137,8 @@ export function free_task_text({ name, discussion, discussion_request, profile, 
   const access = access_file ? ` --access-file ${access_file}` : '';
   // A one-line answer goes inline: a draft file guards long or quoted text and retries, which a greeting does not need.
   // The credential already names the room, the member and this execution, so the commands carry only what changes.
-  const quick = `问候、致谢等简单消息可跳过技能：${cli} message list --after ${read_after}${access} 看原文，${cli} message post --body "回答"${access} 回复（正文含引号时先写草稿再用 --body-file）。`;
+  // The message numbers are already known, so the original is one `message view` away instead of a list (#3129).
+  const quick = `问候、致谢等简单消息可跳过技能：${cli} message view 上面的消息编号${access} 看原文，${cli} message post --body "回答"${access} 回复（正文含引号时先写草稿再用 --body-file）。`;
   const opening = `${wake_opening(requests, name, discussion)}，对应消息 ${messages}。`;
   // A message with files is never a mere greeting: the quick path would skip them (2026-11-14, #3143); nor is a
   // hand-back, notice, Goal or host assignment, so the shortcut only goes with a user's own message (#3145 四.5).
@@ -161,13 +162,15 @@ const WAKE_SOURCES = {
   goal_continue: name => `Goal 续跑：主持人（${name}）继续推进当前目标`,
   discuss_start: name => `用户请求开启讨论，交给主持人（${name}）`,
   host_ask: name => `主持人给你（${name}）安排了一项请求`,
+  detach: name => `主持人派你（${name}）在后台独立完成一项工作：不等你交回，做完照常提交，失败时程序会告诉主持人`,
   system_ask: name => `系统给你（${name}）安排了一项请求`,
 };
 
 function request_source(request) {
   const purpose = request.purpose || 'ask';
   if (WAKE_SOURCES[purpose]) return purpose;
-  if (request.created_by === 'host') return 'host_ask';
+  // A member sent along with `--detach` has no batch to hand back to: it works on its own in the background.
+  if (request.created_by === 'host') return request.batch_id === 0 ? 'detach' : 'host_ask';
   if (request.created_by === 'system') return 'system_ask';
   return 'user';
 }

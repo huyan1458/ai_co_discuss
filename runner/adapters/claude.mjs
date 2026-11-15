@@ -98,9 +98,11 @@ export function claude_api_error(entry) {
 
 /**
  * How a failure is classified for the room (adapter contract `on_failure(reason, {failure_class, resets})`): a usage
- * limit is `quota`, with the reset time as Claude wrote it when it said; anything else stays unclassified.
+ * limit is `quota`, with the reset time as Claude wrote it when it said; Claude's own `authentication_failed` category is
+ * `auth` (signed out: only signing in again helps); anything else stays unclassified.
  */
 export function claude_failure_class(error) {
+  if (error.kind === 'authentication_failed') return { failure_class: 'auth' };
   if (error.kind !== 'rate_limit') return {};
   const limit = /\bresets (.+?)\s*$/i.exec(error.text);
   const reset_at = limit ? clock_reset_at(limit[1]) : 0;

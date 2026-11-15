@@ -64,8 +64,8 @@ class QuestionTests(base.HostRoomTests):
         self.assertEqual(step["message_id"], result["message_id"], "the next step reads the owner's answer")
         self.assertEqual(step["sequence"]["previous"]["kind"], "user", "the step can tell the user spoke before it")
         self.assertEqual(self.request(f"{self.path}/sequences/{step['sequence']['id']}", token=self.gemini)[0], 200, "members read the relay")
-        self.assertEqual(step["question"]["user_decision"], {"action": "answer", "choices": {"pick": ["B"]}, "text": "就它",
-                                                             "by": "用户", "version": 1})
+        self.assertEqual(step["question"]["user_decision"], {"action": "answer", "choices": {"pick": ["B"]}, "answers": [{"id": "pick", "selected": ["B"]}],
+                                                             "text": "就它", "by": "用户", "version": 1})
         again = self.request(f"{self.path}/questions/{question['id']}/answer",
                              {"version": 1, "submission_id": submission, "choices": {"pick": ["B"]}, "text": "就它"}, self.owner)
         self.assertEqual((again[0], again[1]["duplicate"]), (200, True))
@@ -111,6 +111,29 @@ class QuestionTests(base.HostRoomTests):
         self.assertIn(("Codex", "ask", "delivering"), self.requests())
         first = self.request(f"{self.path}/messages?after=0")[1]["messages"][0]["id"]
         self.assertEqual(self.ask("Codex", execution, refs=[first])[0], 201)
+
+    def test_questions_take_deepseek_harness_shapes(self):
+        """Items as DeepSeek Harness writes them: question/header/detail/multiSelect, options by label with a
+        "(Recommended)" suffix and no id; answers as [{id, selected, custom}] (docs: DSH提问工具对照.md)."""
+        self.say("帮我挑方案", to=["Codex"])
+        status, receipt = self.ask("Codex", self.reserve_for("Codex")[1]["id"], questions=[
+            {"id": "tone", "question": "用哪种基调？", "header": "基调", "detail": "影响开场三段",
+             "options": [{"label": "温情"}, {"label": "悬疑 (Recommended)", "description": "节奏最快"}]},
+            {"id": "extras", "question": "加哪些元素？", "multiSelect": True, "options": [{"label": "配乐"}, {"label": "地图"}]}])
+        self.assertEqual(status, 201, receipt)
+        items = self.request(f"{self.path}/questions/{receipt['question_id']}", token=self.owner)[1]["questions"]
+        self.assertEqual(items[0]["options"][0], {"id": "B", "label": "悬疑", "description": "节奏最快", "recommended": True},
+                         "the suffix becomes a flag, the recommended option comes first, ids follow position")
+        self.assertEqual((items[0]["header"], items[0]["detail"], items[1]["multiSelect"]), ("基调", "影响开场三段", True))
+        bad = self.answer_question(receipt["question_id"], 1, answers=[{"id": "tone", "selected": ["悬疑"], "custom": "都不要"}])
+        self.assertEqual(bad[0], 400, "a single-choice question takes a choice or a free answer, not both")
+        status, answered = self.answer_question(receipt["question_id"], 1, answers=[
+            {"id": "tone", "selected": [], "custom": "轻喜剧"}, {"id": "extras", "selected": ["配乐", "B"]}])
+        self.assertEqual(status, 201, answered)
+        back = next(item for item in self.pending_of("Codex") if item["message_id"] == answered["message_id"])
+        self.assertEqual(back["question"]["user_decision"]["answers"],
+                         [{"id": "tone", "selected": [], "custom": "轻喜剧"}, {"id": "extras", "selected": ["A", "B"]}])
+        self.assertIn("轻喜剧", self.request(f"{self.path}/messages/{answered['message_id']}")[1]["text"])
 
     def test_contract_must_match_blocking(self):
         execution = self.gated_relay()
@@ -410,6 +433,19 @@ class DiscussionHintTests(base.FreeRoomTests):
         self.assertEqual((kept[0]["refs"], kept[0]["answer_message_id"], kept[0]["events"], sorted(kept[0]["field_notes"])),
                          ([3], None, [], ["answer", "events", "refs"]))
         self.assertEqual(questions.bounded(views, None), views)
+
+
+    def test_a_whole_round_plan_does_not_count_the_speaker_now_as_not_yet_spoken(self):
+        """Re-planning the rest of a round while one expert is speaking does not demand that expert again (R5)."""
+        for name in ("Antigravity", "Antigravity-2"):
+            self.request(f"{self.path}/members", {"name": name, "token": uuid.uuid4().hex}, self.owner)
+        self.start_session()
+        status, plan = self.arrange_session([{"expert": "Claude", "question": "甲"}, {"expert": "Antigravity", "question": "乙"},
+                                             {"expert": "Antigravity-2", "question": "丙"}])
+        self.assertEqual(status, 201, plan)
+        self.request(f"{self.path}/members/{self.member_id('Antigravity')}", {"action": "away"}, self.owner)
+        status, replanned = self.arrange_session([{"expert": "Antigravity-2", "question": "丙"}, {"expert": "Claude", "question": "下一轮追问"}])
+        self.assertEqual(status, 201, replanned)
 
 
 if __name__ == "__main__":

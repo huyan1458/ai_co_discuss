@@ -165,6 +165,7 @@ MAX_QUOTA_HOLD_SECONDS = 8 * 86400
 # How much of a message that @-ed the host its notice quotes.
 MENTION_GIST = 120
 MAX_RESETS_TEXT = 100
+MODEL_TEXT_LIMIT = 100
 # What a rewind does to a runner member's session, as its adapter reports.
 REWIND_EFFECTS = ("cut", "fresh", "kept")
 # The reported capabilities and stop result read alongside an execution aliased `e`.
@@ -205,6 +206,21 @@ def migrate_free_tables(connection):
             if name not in present:
                 connection.execute(f"ALTER TABLE {table} ADD COLUMN {name} {definition}")
     migrate_stop_results(connection)
+    migrate_failure_classes(connection)
+
+
+def migrate_failure_classes(connection):
+    """Let development databases created when only 'quota' was a failure class also keep 'auth' and 'output_truncated'."""
+    row = connection.execute("SELECT sql FROM sqlite_master WHERE name='execution_failures'").fetchone()
+    if not row or "'auth'" in row[0]:
+        return
+    connection.execute("DROP TABLE IF EXISTS execution_failures_next")  # left over if a previous run stopped mid-migration
+    definition = row[0].replace("execution_failures", "execution_failures_next", 1)
+    connection.execute(definition.replace("IN ('quota')", "IN ('quota','auth','output_truncated')"))
+    columns = ",".join(item[1] for item in connection.execute("PRAGMA table_info(execution_failures)"))
+    connection.execute(f"INSERT INTO execution_failures_next ({columns}) SELECT {columns} FROM execution_failures")
+    connection.execute("DROP TABLE execution_failures")
+    connection.execute("ALTER TABLE execution_failures_next RENAME TO execution_failures")
 
 
 def migrate_stop_results(connection):
@@ -589,14 +605,21 @@ def held_until(connection, member_id):
 
 def quota_failure(connection, execution_id):
     """The usage-limit classification the runner's adapter gave this failed execution, or None."""
-    row = connection.execute("SELECT failure_class,resets,failed_at,reset_at FROM execution_failures WHERE execution_id=?", (execution_id,)).fetchone()
+    row = connection.execute("""SELECT failure_class,resets,failed_at,reset_at FROM execution_failures
+        WHERE execution_id=? AND failure_class='quota'""", (execution_id,)).fetchone()
     return dict(row) if row else None
+
+
+def failure_class_of(connection, execution_id):
+    """The class the runner's adapter gave this failed execution (`quota`, `auth`, `output_truncated`), or ''."""
+    row = connection.execute("SELECT failure_class FROM execution_failures WHERE execution_id=?", (execution_id,)).fetchone()
+    return row["failure_class"] if row else ""
 
 
 def quota_held_until(connection, member_id):
     """Until when a member out of quota waits: its latest execution failed on a usage limit and was not retried; else 0."""
     row = connection.execute("""SELECT f.failed_at,f.reset_at FROM execution_failures f
-        WHERE f.execution_id=(SELECT MAX(id) FROM member_executions WHERE member_id=?)""", (member_id,)).fetchone()
+        WHERE f.failure_class='quota' AND f.execution_id=(SELECT MAX(id) FROM member_executions WHERE member_id=?)""", (member_id,)).fetchone()
     until = (row["reset_at"] or row["failed_at"] + QUOTA_HOLD_SECONDS) if row else 0
     return until if until > int(time.time()) else 0
 
@@ -790,7 +813,8 @@ def execution_timeline(connection, room_id, after=0):
 
 
 def room_event_log(connection, room_id, token, after=0, before=0):
-    """Read the room's append-only event log written by the schema triggers; the owner or the present host.
+    """Read the room's append-only event log written by the schema triggers: all of it for the owner or the present host,
+    and for any other member only what concerns it (`member_events`, user-confirmed 2026-11-15).
 
     Args:
         after: return events with a larger id (live follow), oldest first.
@@ -802,7 +826,10 @@ def room_event_log(connection, room_id, token, after=0, before=0):
         A write request (`api.*`) is stored after it finishes, so its id follows the changes it caused; its `at` is
         when it arrived, and ordering by `at` puts the input before its effects.
     """
-    host = require_owner_or_host(connection, room_id, token)
+    try:
+        host, reader = require_owner_or_host(connection, room_id, token), None
+    except PermissionError:
+        host, reader = None, require_member(connection, room_id, token)
     after, before = max(0, int(after)), max(0, int(before))
     if after:
         rows = connection.execute("SELECT id,at,kind,data FROM room_events WHERE room_id=? AND id>? ORDER BY id LIMIT ?",
@@ -821,8 +848,47 @@ def room_event_log(connection, room_id, token, after=0, before=0):
         event["texts"] = stored or event["data"].get("texts", {})
     if host:
         events = [host_event(event) for event in events if not host_hidden_event(event)]
+    if reader:
+        events = member_events(connection, room_id, token, reader, events)
     return {"events": events, "members": members, "more": more, "first_id": first_id,
             "last_id": max((row["id"] for row in rows), default=after)}
+
+
+# Events about one member: its own row, requests, queue places and executions.
+MEMBER_EVENT_KINDS = ("member.joined", "member.changed", "request.created", "request.changed", "request.cancel_reason",
+                      "queue.added", "queue.removed", "execution.created", "execution.changed")
+
+
+def member_events(connection, room_id, token, member, events):
+    """The events a member that is not the host may read: what concerns it, never another member's text or private chat.
+
+    Kept: its own requests, queue places, executions (with retries and late answers) and membership; its own writes,
+    accepted or refused; its own messages and what became of them, including the requests others got on them (an @
+    it wrote that went to the host); and changes others caused to its work, with their reason (a request cancelled
+    when its dispatch was withdrawn). Left out: room-wide records (batches, chains, scheduling, discussions, goals,
+    rewinds), other members' writes, and anything pointing past its reading boundary in a discussion.
+    """
+    executions = {row[0] for row in connection.execute("SELECT id FROM member_executions WHERE member_id=?", (member["id"],))}
+    messages = {row[0] for row in connection.execute("SELECT id FROM messages WHERE room_id=? AND author=?", (room_id, member["name"]))}
+    cutoff = discussion.session_message_access(connection, room_id, {}, token)
+    kept = []
+    for event in events:
+        data, kind = event["data"], event["kind"]
+        own = (kind in MEMBER_EVENT_KINDS and data.get("member_id") == member["id"]
+               or kind in ("execution.retry", "execution.late_answer") and data.get("execution_id") in executions
+               or kind in ("message.posted", "message.withdrawn") and data.get("message_id") in messages
+               or kind in ("request.created", "request.changed") and data.get("message_id") in messages
+               or kind.startswith("api.") and data.get("actor") == f"member:{member['name']}" and "/chat" not in str(data.get("path", "")))
+        beyond = cutoff is not None and any(isinstance(data.get(field), int) and data[field] > cutoff
+                                            for field in ("message_id", "answer_id", "reply_to"))
+        if not own or beyond:
+            continue
+        if data.get("member_id") not in (None, member["id"]):
+            # Another member's request on its message: the outcome and the ids, nothing of that member's work.
+            data = {key: data[key] for key in ("request_id", "message_id", "purpose", "status", "created_by") if key in data}
+            event = {**event, "data": data, "texts": {}}
+        kept.append(event)
+    return kept
 
 
 def host_hidden_event(event):
@@ -1569,6 +1635,8 @@ def wake_after_failure(connection, execution_id, requests, reason):
                     resets=quota["resets"], **facts)
     elif quota:
         text = Text("{name} 额度已用尽，处理 {messages} 的执行失败（执行 #{execution_id}）：{reason}。重置时间未知，它暂时长期不可用，程序暂停给它投递；请主持人改派其他成员或告知用户，不要重试。", **facts)
+    elif failure_class_of(connection, execution_id) == "auth":
+        text = Text("{name} 的登录已失效，处理 {messages} 的执行失败（执行 #{execution_id}）：{reason}。需要用户在本机重新登录该软件后才能再用它；程序不自动重试，请主持人改派其他成员或告知用户。", **facts)
     else:
         text = Text("{name} 处理 {messages} 的执行失败（执行 #{execution_id}）：{reason}。请主持人决定重试、改派还是告知用户。",
              name=name, messages=messages, execution_id=execution_id, reason=str(reason)[:200])
@@ -1588,9 +1656,37 @@ def wake_after_own_failure(connection, host, execution_id, requests, reason):
                           (host["room_id"], *[item["message_id"] for item in requests])).fetchone():
         return
     messages = "、".join(f"#{item['message_id']}" for item in requests)
+    if quota_failure(connection, execution_id):
+        # A host out of quota cannot act on a reminder to retry itself: the owner is told instead, with the way out.
+        tell_owner(connection, host["room_id"], host_quota_text(connection, host, execution_id, messages), f"host_failed:{execution_id}",
+                   max(item["chain_id"] for item in requests))
+        return
     wake_host(connection, host["room_id"], max(item["chain_id"] for item in requests),
               Text("主持人处理 {messages} 的执行失败（执行 #{execution_id}）：{reason}。主持人请核对自己的会话：已有结果就用 --execution {execution_id} 补交原回答，未做完就接着做完再这样补交（或 host-control retry --execution {execution_id} 重试），做不了时告知用户；最后用本次执行简短回复这条提醒。",
                    messages=messages, execution_id=execution_id, reason=str(reason)[:200]), f"host_failed:{execution_id}")
+
+
+def host_quota_text(connection, host, execution_id, messages):
+    """What the owner reads when the host itself ran out of quota: the reset when known, and how to carry on."""
+    quota = quota_failure(connection, execution_id)
+    name = member_display_names(connection, host["room_id"]).get(host["name"], host["name"])
+    if quota["resets"]:
+        return Text("主持人 {name} 额度已用尽，处理 {messages} 的执行 #{execution_id} 失败，重置时间：{resets}。房间暂停推进：可等重置后重试这次执行，或在另一位成员卡片上点“设为主持人”换人。",
+                    name=name, messages=messages, execution_id=execution_id, resets=quota["resets"])
+    return Text("主持人 {name} 额度已用尽，处理 {messages} 的执行 #{execution_id} 失败，重置时间未知。房间暂停推进：可等额度恢复后重试这次执行，或在另一位成员卡片上点“设为主持人”换人。",
+                name=name, messages=messages, execution_id=execution_id)
+
+
+def tell_owner(connection, room_id, text, key, chain_id):
+    """A visible system message for the owner alone: no member is woken, and a key already used writes nothing."""
+    if connection.execute("SELECT 1 FROM free_host_wakes WHERE room_id=? AND key=?", (room_id, key)).fetchone():
+        return
+    message_id = connection.execute("INSERT INTO messages(room_id,author,text,source,submission_id,created_at) VALUES(?,?,?,?,?,?)",
+                                    (room_id, NOTICE_AUTHOR, text, "notice", f"notice-{key}",
+                                     time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()))).lastrowid
+    save_text(connection, "message", message_id, "text", text)
+    connection.execute("INSERT INTO message_details (message_id,kind,submitted_by) VALUES (?,?,?)", (message_id, "notice", NOTICE_AUTHOR))
+    connection.execute("INSERT INTO free_host_wakes (room_id,key,chain_id,message_id) VALUES (?,?,?,?)", (room_id, key, chain_id, message_id))
 
 
 def remember_continue(connection, room_id, host, message_id, chain_id, payload):
@@ -1629,6 +1725,38 @@ def mention_gist(connection, message_id):
     return text if len(text) <= MENTION_GIST else text[:MENTION_GIST] + "…"
 
 
+def mention_outcomes(connection, member_id, execution_id):
+    """What became of the @s in this member's previous answer, for its next task (COVERAGE 5).
+
+    `quoted`: an ordinary member was named, which only quotes; `waiting`: the host is reminded once the room is idle;
+    `queued`: a reminder (#`notice_id`) waits for the host; `picked_up`: the host took it up with request message #`by`.
+    """
+    previous = connection.execute("SELECT MAX(id) FROM member_executions WHERE member_id=? AND id<?", (member_id, execution_id)).fetchone()[0]
+    answer = connection.execute("SELECT MAX(answer_id) FROM member_requests WHERE execution_id=?", (previous,)).fetchone()[0] if previous else None
+    if not answer:
+        return []
+    outcomes = []
+    for row in connection.execute("""SELECT s.member_id,m.name,m.role FROM member_suggestions s JOIN room_members m ON m.id=s.member_id
+        WHERE s.message_id=? ORDER BY s.member_id""", (answer,)).fetchall():
+        entry = {"message_id": answer, "member": row["name"]}
+        wake = connection.execute("SELECT message_id FROM free_host_wakes WHERE key=?", (f"mention:{answer}",)).fetchone()
+        if row["role"] != "host":
+            entry["outcome"] = "quoted"
+        elif not wake:
+            entry["outcome"] = "waiting"
+        elif wake["message_id"] == answer:
+            later = connection.execute("""SELECT r.message_id FROM member_requests r JOIN messages m ON m.id=? WHERE r.member_id=?
+                AND r.created_at>=CAST(strftime('%s',m.created_at) AS INTEGER) ORDER BY r.id LIMIT 1""", (answer, row["member_id"])).fetchone()
+            entry.update(outcome="picked_up", by=later["message_id"] if later else None)
+        else:
+            notice = connection.execute("SELECT status FROM member_requests WHERE message_id=? AND member_id=?",
+                                        (wake["message_id"], row["member_id"])).fetchone()
+            entry.update(outcome="picked_up" if notice and notice["status"] == "completed" else "queued",
+                         **({"by": wake["message_id"]} if notice and notice["status"] == "completed" else {"notice_id": wake["message_id"]}))
+        outcomes.append(entry)
+    return outcomes
+
+
 def wake_for_mentions(connection, room_id):
     """A member's @ of the host wakes it at low priority: only once nothing else is open in the room.
 
@@ -1647,10 +1775,15 @@ def wake_for_mentions(connection, room_id):
             SELECT 1 FROM free_host_wakes w WHERE w.room_id=m.room_id AND w.key='mention:'||s.message_id)
         ORDER BY s.message_id""", (room_id, host["id"])).fetchall():
         key = f"mention:{row['message_id']}"
-        if connection.execute("""SELECT 1 FROM member_requests WHERE member_id=? AND created_at>=CAST(strftime('%s',?) AS INTEGER)""",
-                              (host["id"], row["created_at"])).fetchone():
+        later = connection.execute("""SELECT id,message_id FROM member_requests WHERE member_id=? AND created_at>=CAST(strftime('%s',?) AS INTEGER)
+            ORDER BY id LIMIT 1""", (host["id"], row["created_at"])).fetchone()
+        if later:
             connection.execute("INSERT INTO free_host_wakes (room_id,key,chain_id,message_id) VALUES (?,?,?,?)",
                                (room_id, key, row["chain_id"], row["message_id"]))
+            # Not woken on its own: the host reads it with a later request. Recorded so the skip can be traced (COVERAGE 5).
+            connection.execute("""INSERT INTO room_events (room_id,at,kind,data) VALUES (?,?,'mention.merged',?)""",
+                               (room_id, int(time.time() * 1000), json.dumps({"message_id": row["message_id"], "author": row["author"],
+                                                                               "request_id": later["id"], "request_message_id": later["message_id"]})))
             continue
         name = member_display_names(connection, room_id).get(row["author"], row["author"])
         wake_host(connection, room_id, row["chain_id"], Text("{name} 在 #{message_id} 中 @ 了主持人：{gist}。请查看原文并处理。", name=name,
@@ -2922,7 +3055,7 @@ def reserve_execution(connection, room_id, token, payload):
 def execution_detail(connection, row):
     """Describe one execution with the requests it carries and the member's read cursor."""
     member = connection.execute("SELECT * FROM room_members WHERE id=?", (row["member_id"],)).fetchone()
-    requests = [dict(item) for item in connection.execute("""SELECT r.id,r.message_id,r.status,r.purpose,
+    requests = [dict(item) for item in connection.execute("""SELECT r.id,r.message_id,r.status,r.purpose,r.created_by,r.batch_id,
         sr.id AS session_request_id,sr.session_id,sr.round,sr.position,sr.read_until,sr.question AS source_question,
         t.cause_kind,t.cause_message_id AS source_message_id,t.cause_request_id
         FROM member_requests r LEFT JOIN session_requests sr ON sr.member_request_id=r.id
@@ -2933,11 +3066,14 @@ def execution_detail(connection, row):
     detail = public_execution(row)
     detail["texts"] = execution_texts(connection, row["id"])
     quota = quota_failure(connection, row["id"])
+    failure = failure_class_of(connection, row["id"])
+    mentions = mention_outcomes(connection, member["id"], row["id"])
     return {**detail, "member": member["name"], "read_until": member["read_until"], "requests": requests,
+            **({"mentions": mentions} if mentions else {}),
             **({"queued_requests": queued_requests(connection, member["id"])} if row["status"] in ACTIVE else {}),
             "rewound_executions": member_rewinds(connection, member["id"]), "retry": execution_retry(connection, row["id"]),
             **({"failure": {"class": "quota", "resets": quota["resets"] or None, "reset_at": quota["reset_at"] or None,
-                            "lasting": True}} if quota else {})}
+                            "lasting": True}} if quota else {"failure": {"class": failure, "lasting": failure == "auth"}} if failure else {})}
 
 
 def execution_delivery(connection, room_id, row):
@@ -3195,6 +3331,7 @@ def execution_action(connection, room_id, execution_id, token, payload):
         record_interjection_result(connection, room_id, execution_id, payload, now)
     elif action == "retry":
         quota = quota_failure(connection, execution_id)
+        signed_out = failure_class_of(connection, execution_id) == "auth"
         retry_failed(connection, room_id, row)
         connection.execute("DELETE FROM execution_failures WHERE execution_id=?", (execution_id,))
     elif row["status"] not in ACTIVE:
@@ -3275,16 +3412,24 @@ def execution_action(connection, room_id, execution_id, token, payload):
         warning = Text("这次执行因额度用尽失败（重置时间：{resets}）；额度重置前重试多半仍会失败，可改派其他成员。", resets=quota["resets"]) \
             if quota["resets"] else Text("这次执行因额度用尽失败（重置时间未知）；额度重置前重试多半仍会失败，可改派其他成员。")
         return {**detail, "warning": warning, "warning_text": text_payload(warning)}
+    if action == "retry" and signed_out:
+        warning = Text("这次执行因登录失效失败；用户在本机重新登录该软件之前，重试仍会失败。")
+        return {**detail, "warning": warning, "warning_text": text_payload(warning)}
     return {**detail, "duplicate": duplicate} if action == "stopped" else detail
 
 
 def record_failure_class(connection, room_id, execution_id, payload):
-    """Keep the runner's classification of a failure; only `quota` is known, anything else stays unclassified."""
+    """Keep the runner's classification of a failure: `quota` (with when it resets), `auth` (signed out) or
+    `output_truncated` (the model's reply hit its output cap); anything else stays unclassified."""
     if payload.get("failure_class") is None:
         return
     reset_at = payload.get("reset_at", 0)
+    if payload["failure_class"] in ("auth", "output_truncated"):
+        connection.execute("""INSERT OR REPLACE INTO execution_failures (execution_id,room_id,failure_class,resets,failed_at,reset_at)
+            VALUES (?,?,?,?,?,0)""", (execution_id, room_id, payload["failure_class"], "", int(time.time())))
+        return
     if payload["failure_class"] != "quota" or not isinstance(payload.get("resets", ""), str) or type(reset_at) is not int:
-        raise ValueError(Text("failure_class 只能为 quota，resets 须为文字，reset_at 须为整数秒"))
+        raise ValueError(Text("failure_class 只能为 quota、auth 或 output_truncated，resets 须为文字，reset_at 须为整数秒"))
     now = int(time.time())
     # A reset already past or implausibly far is the adapter misreading the text: hold for the fixed time instead.
     reset_at = reset_at if now < reset_at <= now + MAX_QUOTA_HOLD_SECONDS else 0
@@ -3347,6 +3492,10 @@ def reopen_batches(connection, room_id, requests):
     """Reopen what a failure closed for these requests: the batch, an all-failed chain, a relay stopped at that step."""
     for request in requests:
         batch_id, chain_id = request["batch_id"], request["chain_id"]
+        # The batch settles again however the retry ends, so its outcome reaches the host even when other members of it
+        # had already finished (COVERAGE 3②: a retry that failed again used to tell nobody).
+        if batch_id:
+            connection.execute("UPDATE free_batches SET settled=0 WHERE room_id=? AND batch_id=?", (room_id, batch_id))
         # A relay step stopped by one failed member of its group resumes too: the others' answers wait for this one.
         # So does a batch whose review still waits: its hand-back must open again once the retried member delivers.
         if batch_id and (not connection.execute(
@@ -3355,7 +3504,6 @@ def reopen_batches(connection, room_id, requests):
                                       (room_id, batch_id)).fetchone()
                 or connection.execute("SELECT 1 FROM review_plans WHERE room_id=? AND batch_id=? AND status='pending'",
                                       (room_id, batch_id)).fetchone()):
-            connection.execute("UPDATE free_batches SET settled=0 WHERE room_id=? AND batch_id=?", (room_id, batch_id))
             connection.execute("DELETE FROM free_chains WHERE room_id=? AND chain_id=? AND reason='all_failed'", (room_id, chain_id))
             connection.execute("UPDATE free_sequences SET status='running' WHERE room_id=? AND batch_id=? AND status='stopped'",
                                (room_id, batch_id))
@@ -3587,6 +3735,25 @@ def adopt_manual_member(connection, room_id, member, payload):
         connection.execute("UPDATE room_members SET token_hash=? WHERE id=?", (token_hash(payload["token"]), member["id"]))
 
 
+def record_model_change(connection, room_id, member, payload):
+    """Leave a visible system record that the owner (or the host for it) changed a member's model; nobody is woken.
+
+    The model lives in the local service's configuration, so the service reports the change here once it is saved
+    (COVERAGE 9): readers of the room see which model wrote what, and the member's next task names the change too.
+    """
+    before, after = payload.get("from"), payload.get("to")
+    if not all(isinstance(value, str) and 0 < len(value.strip()) <= MODEL_TEXT_LIMIT for value in (before, after)):
+        raise ValueError(Text("from 与 to 须为 1–100 字的模型说明"))
+    name = member_display_names(connection, room_id).get(member["name"], member["name"])
+    text = Text("{name} 的模型已从 {before} 换为 {after}，下次执行起生效。", name=name, before=before.strip(), after=after.strip())
+    message_id = connection.execute("INSERT INTO messages(room_id,author,text,source,submission_id,created_at) VALUES(?,?,?,?,?,?)",
+                                    (room_id, NOTICE_AUTHOR, text, "notice", f"model-{member['id']}-{uuid.uuid4().hex}",
+                                     time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()))).lastrowid
+    save_text(connection, "message", message_id, "text", text)
+    connection.execute("INSERT INTO message_details (message_id,kind,submitted_by) VALUES (?,?,?)", (message_id, "notice", NOTICE_AUTHOR))
+    return message_id
+
+
 def record_adopt_failure(connection, room_id, member, payload):
     """Keep why the local service could not take over the reported session, so the page says why requests stay undelivered."""
     reason = payload.get("reason")
@@ -3645,6 +3812,8 @@ def member_action(connection, room_id, member_id, token, payload):
     elif action == "adopt_failed":
         record_adopt_failure(connection, room_id, member, payload)
         return free_view(connection, room_id)
+    elif action == "model_changed":
+        return {"message_id": record_model_change(connection, room_id, member, payload)}
     elif action == "role":
         role = payload.get("role")
         if role not in ("host", "member"):
@@ -3664,7 +3833,7 @@ def member_action(connection, room_id, member_id, token, payload):
         if role == "host":
             pin_host(connection, room_id, old_host["id"] if old_host else None)
     else:
-        raise ValueError(Text("action 须为 away、active、remove、role、adopt 或 adopt_failed"))
+        raise ValueError(Text("action 须为 away、active、remove、role、adopt、adopt_failed 或 model_changed"))
     settle_batches(connection, room_id)
     sync_participants(connection, room_id)
     hand_over_routes(connection, room_id, routed, member_id if action in ("away", "remove") else None)

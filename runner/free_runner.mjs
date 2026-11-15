@@ -41,6 +41,8 @@ const RETRY_DELAY_SECONDS = 60;
 // The cause is gone once the restarted runner is back, so its retry needs no long wait.
 const RESTART_RETRY_DELAY_SECONDS = 5;
 // The retry reason the site keeps for an execution a runner restart cut off; its redelivery asks to continue.
+// The failure classes an adapter may report (adapter contract `on_failure(reason, {failure_class, ...})`).
+const FAILURE_CLASSES = ['quota', 'auth', 'output_truncated'];
 const RESTART_REASON = room_text("本机接入程序重启或异常退出，这次执行的软件进程已结束，未提交回答");
 const RESTART_REASON_CODE = 'runner_restarted';
 const MAX_RETRY_REASON = 500;
@@ -54,6 +56,8 @@ const MAX_MESSAGE_FILES = 10;
 // The image types the site accepts that a model reads as an image; other files go to the member by path only.
 const IMAGE_TYPES = new Set(['image/png', 'image/jpeg', 'image/gif', 'image/webp']);
 const GIT_TIMEOUT_MS = 15_000;
+// How much of the room's goal or original request a host task quotes; the rest is read from the room.
+const ROOM_GOAL_CHARS = 500;
 
 /** Fingerprint configurations whose adapter can enforce project read-only access; no local paths leave this function. */
 export function review_capability_version(profile, member, config) {
@@ -199,8 +203,27 @@ async function save_attachment(config, execution_id, message_id, entry, sha256) 
   return path;
 }
 
+/**
+ * The room's overall task for the host, so a host taken over mid-way or one whose Goal just finished still knows what the
+ * room is for (COVERAGE 3③): the owner's goal, the original request, and the owner's first message to read when neither
+ * says it. Null when the room view has none of them.
+ */
+/** How a member's configured model and effort read in a change notice: "默认" stands for the software's own choice. */
+export function model_label(profile) {
+  return [profile.model || '默认', profile.effort].filter(Boolean).join(' · ');
+}
+
+export function room_goal(room) {
+  if (!room) return null;
+  const text = value => String(value || '').trim().slice(0, ROOM_GOAL_CHARS) || null;
+  const goal = text(room.goal), request = text(room.user_request), first = room.first_user_message_id || null;
+  if (!goal && !request && !first) return null;
+  return { goal, user_request: request, first_user_message_id: first,
+    note: '这是整个房间的任务；一次 Goal 或讨论结束不等于它完成。Goal 完成后对照这里判断还剩什么，没有目标文字时读首条用户消息。' };
+}
+
 export function free_task_files(config, member, execution, binding, { session = null, suggestions = [], reviews = [], stopped = [], process_access = true,
-  workflow = null, room_members = [], goal = null, attachments = [] } = {}) {
+  workflow = null, room_members = [], goal = null, attachments = [], room = null, model_change = null } = {}) {
   const id = `free-${execution.id}`;
   const draft_directory = member_drafts(config, member.name);
   mkdirSync(draft_directory, { recursive: true });
@@ -245,6 +268,8 @@ export function free_task_files(config, member, execution, binding, { session = 
   const skills_directory = join(config.project, '.agents', 'skills');
   const workflow_field = host_workflow ? workflow_task_field(host_workflow, room_members, config.participants) : null;
   const image = config.image_generation && image_settings(config.api_home).configured ? image_settings(config.api_home) : null;
+  // Relay, question and image rules are read only when the task carries them, keeping the everyday path short.
+  if (image || requests.some(item => item.sequence || item.question || item.question_needed)) skills.push('discuss-participant/references/situations.md');
   atomic_json(task_path, { site: config.site, room: config.room, mode: 'free', member: member.name,
     execution_id: execution.id, requests, request_messages: execution.requests.map(item => item.message_id),
     ...(attachments.length ? { attachments } : {}),
@@ -255,6 +280,10 @@ export function free_task_files(config, member, execution, binding, { session = 
     ...(suggestions.length ? { scheduler_suggestions: suggestions } : {}),
     ...(reviews.length ? { review_handoffs: reviews } : {}),
     ...(goal_field ? { goal: goal_field } : {}),
+    ...(member.role === 'host' && room_goal(room) ? { room_goal: room_goal(room) } : {}),
+    ...(model_change ? { model_change: { ...model_change, note: `你的模型已从 ${model_change.from} 换为 ${model_change.to}；不要按之前的自述判断自己用的是哪个模型。` } } : {}),
+    // What became of the @s in this member's previous answer: quoted, waiting, queued for the host or picked up.
+    ...(execution.mentions?.length ? { mentions: execution.mentions } : {}),
     ...(stopped.length ? { stopped_executions: stopped } : {}),
     role: member.role || 'member',
     // Said on every task from the adapter's declaration, so a member knows whether its last words can become the answer.
@@ -941,9 +970,10 @@ export class FreeRoomRunner {
       if (workflow?.error && this.workflow_error !== workflow.error) this.log(`工作流 ${workflow.id} 不可用：${workflow.error}`);
       this.workflow_error = workflow?.error || '';
       const attachments = await request_attachments(this.config, execution);
+      const model_change = this.model_change(member.name);
       const task = free_task_files(this.config, member, execution, binding, {
         session, suggestions: scheduler_suggestions, reviews: review_handoffs, stopped, workflow, room_members: this.room?.members,
-        goal: this.room?.goal_state?.goal || null, attachments,
+        goal: this.room?.goal_state?.goal || null, attachments, room: this.room, model_change,
       });
       invoked = true;
       this.segments.start(execution.id);
@@ -980,8 +1010,9 @@ export class FreeRoomRunner {
           if (!current()) return;
           if (not_started) this.not_started.add(live());
           if (!retryable) this.not_retryable.add(live());
-          // The adapter's classification (only `quota` so far) goes to the site with the failure, which holds the member.
-          if (failure_class === 'quota') this.failure_classes.set(live(), { failure_class, ...(resets ? { resets: String(resets) } : {}),
+          // The adapter's classification goes to the site with the failure: `quota` holds the member until it resets,
+          // `auth` asks for signing in again, `output_truncated` states where the model's reply was cut.
+          if (FAILURE_CLASSES.includes(failure_class)) this.failure_classes.set(live(), { failure_class, ...(resets ? { resets: String(resets) } : {}),
             ...(Number.isSafeInteger(reset_at) && reset_at > 0 ? { reset_at } : {}) });
           try { if (this.row(member.name)?.execution_id === live()) this.save(member.name, { error }); } catch { /* Store may already be closed at shutdown. */ }
         },
@@ -1380,6 +1411,17 @@ export class FreeRoomRunner {
     await api(this.config, `/executions/${execution.id}`, { action: 'retry_wait', attempt,
       retry_at: Math.floor(Date.now() / 1000) + (restarted ? RESTART_RETRY_DELAY_SECONDS : RETRY_DELAY_SECONDS), reason: reason.slice(0, MAX_RETRY_REASON) });
     this.save(name, { status: 'retry_wait', error: '' });
+  }
+  /**
+   * The model and effort this member is delivered with now against its previous delivery, as `{from, to}` when they
+   * changed (COVERAGE 9), else null; the current one is remembered for the next delivery.
+   */
+  model_change(name) {
+    const profile = this.config.participants[name] || {};
+    const current = model_label(profile), key = `delivered-model:${name}`;
+    const previous = this.store.db.prepare('SELECT value FROM metadata WHERE key=?').get(key)?.value;
+    this.store.db.prepare('INSERT INTO metadata VALUES (?,?) ON CONFLICT(key) DO UPDATE SET value=excluded.value').run(key, current);
+    return previous !== undefined && previous !== current ? { from: previous, to: current } : null;
   }
   /** Record the cause on the website, then stop this member's own processes. */
   async fail(name, execution_id, reason) {

@@ -14,7 +14,7 @@ import { spawn, spawnSync } from 'node:child_process';
 import { createHash, randomUUID } from 'node:crypto';
 import { EventEmitter, once } from 'node:events';
 import { tmpdir } from 'node:os';
-import { dirname, join, relative, resolve } from 'node:path';
+import { dirname, join, relative, resolve, sep } from 'node:path';
 import { createServer } from 'node:http';
 import { createServer as createNetServer } from 'node:net';
 import { test } from 'node:test';
@@ -23,7 +23,7 @@ import { fileURLToPath, pathToFileURL } from 'node:url';
 import { setTimeout as delay } from 'node:timers/promises';
 import { listen_local } from './local_port.mjs';
 import { DiscussionStore, load_config, service_drafts, validate_config } from '../runner/discussion_runner.mjs';
-import { cwd_key, edited_changes, free_task_files, FreeRoomRunner, request_attachments, member_drafts, member_extra_directories, review_capability_version, workspace_snapshot } from '../runner/free_runner.mjs';
+import { cwd_key, edited_changes, free_task_files, FreeRoomRunner, request_attachments, member_drafts, member_extra_directories, review_capability_version, room_goal, workspace_snapshot } from '../runner/free_runner.mjs';
 import { SessionDriver } from '../runner/session_driver.mjs';
 
 import { EXPERT_PROMPT_PRESETS, expert_prompt, free_task_text, software_rules } from '../runner/expert_prompts.mjs';
@@ -224,6 +224,17 @@ function session_task(config, { role = 'host', ...options } = {}, binding = {}) 
     { session: { id: 3, status: 'active', phase: 'initial' }, process_access: false, ...options });
 }
 
+test('the occasional skill page is listed only when a request carries a relay or a question (coverage item 1)', () => {
+  const config = { site: 'http://127.0.0.1:1', room: 'r', directory: mkdtempSync(join(tmpdir(), 'situations-')), project: resolve('.'),
+    members: { Codex: { token: 'm'.repeat(32) } }, participants: { Codex: { adapter: 'codex' } } };
+  const read = task => JSON.parse(readFileSync(join(task.directory, `${task.id}.task.json`), 'utf8')).skills.map(path => path.split(sep).join('/'));
+  const plain = free_task_files(config, { name: 'Codex', role: 'member' }, { id: 1, read_until: 0, requests: [{ id: 7, message_id: 9, purpose: 'ask' }] }, {}, {});
+  assert.ok(!read(plain).some(path => path.endsWith('situations.md')));
+  const relay = free_task_files(config, { name: 'Codex', role: 'member' }, { id: 2, read_until: 0,
+    requests: [{ id: 8, message_id: 10, purpose: 'ask', sequence: { id: 3, step: 2, steps: 3 } }] }, {}, {});
+  assert.ok(read(relay).some(path => path.endsWith('discuss-participant/references/situations.md')));
+});
+
 test('woken messages bring their attachments: local copies by placeholder, images only to software that takes them', async t => {
   const image = Buffer.from('89504e470d0a1a0a', 'hex'), sha = data => createHash('sha256').update(data).digest('hex');
   const files = [{ id: 'a'.repeat(32), file_name: 'shot.png', content_type: 'image/png', size: image.length, sha256: sha(image) },
@@ -294,8 +305,8 @@ test('API file tools stay inside the project, refuse secrets and private files, 
   writeFileSync(join(root, 'outside.txt'), 'outside');
   const tools = files => participant_tools({ role: 'member', project: files }).map(item => item.name);
   const reader = open_project({ cwd: project, project_access: 'read' }, [service]);
-  assert.deepEqual(tools(null), ['read_room', 'read_messages', 'read_message', 'read_execution', 'read_attachment', 'read_goal', 'read_question', 'ask_question', 'submit_chat']);
-  assert.deepEqual(tools(reader), ['read_room', 'read_messages', 'read_message', 'read_execution', 'read_attachment', 'read_goal', 'read', 'glob', 'grep', 'read_question', 'ask_question', 'submit_chat']);
+  assert.deepEqual(tools(null), ['read_room', 'read_messages', 'read_message', 'read_execution', 'read_attachment', 'read_goal', 'read_question', 'ask_question', 'read_events', 'submit_chat']);
+  assert.deepEqual(tools(reader), ['read_room', 'read_messages', 'read_message', 'read_execution', 'read_attachment', 'read_goal', 'read', 'glob', 'grep', 'read_question', 'ask_question', 'read_events', 'submit_chat']);
   assert.match(system_prompt({ participant: 'DeepSeek', role: 'member', project: reader }), /可用 read、glob、grep 工具只读本房间的项目目录/);
 
   // The read envelope and footers follow DeepSeek Harness.
@@ -310,7 +321,7 @@ test('API file tools stay inside the project, refuse secrets and private files, 
   assert.equal(run_file_tool(reader, 'grep', { pattern: 'TOKEN' }), 'No matches found');
 
   const writer = open_project({ cwd: project, project_access: 'write' }, [service]);
-  assert.deepEqual(tools(writer).slice(-5), ['write', 'edit', 'read_question', 'ask_question', 'submit_chat']);
+  assert.deepEqual(tools(writer).slice(-6), ['write', 'edit', 'read_question', 'ask_question', 'read_events', 'submit_chat']);
   assert.match(system_prompt({ participant: 'DeepSeek', role: 'member', project: writer }), /草稿文件与 --body-file 不适用：回答正文直接放进 submit_chat/);
   const edit = { file_path: 'notes.md', old_string: 'one', new_string: 'first' };
   assert.match(run_file_tool(writer, 'edit', edit).error, /has not been read/);
@@ -738,8 +749,13 @@ test(`${adapter} spawn failure can retry without binding an uncreated session`, 
 const AGY_NOT_STARTED = {
   network: ['Error: Eligibility check failed: Post "https://daily-cloudcode-pa.googleapis.com/v1internal:loadCodeAssist": EOF',
     'Eligibility check failed: Post "https://daily-cloudcode-pa.googleapis.com/v1internal:loadCodeAssist": EOF'],
+};
+// agy signed out: the 1.4.12 sign-in prompt timing out headless (room 27395c25b03d, #318), and after the account was
+// switched (room 9524f49e42b5, #3203). Signing in again is the only cure, so these are `auth`, never restarted or retried.
+const AGY_SIGNED_OUT = {
   sign_in: ['Authentication required. Please visit the URL to log in:\nWaiting for authentication (timeout 60s)...\nError: authentication timed out.',
     'authentication failed or timed out'],
+  unauthenticated: ['', 'Eligibility check failed: UNAUTHENTICATED (401)'],
 };
 const agy_not_started = error => ({ event: 'result', result: { conversation_id: '', status: 'ERROR', response: '', error,
   duration_seconds: 0, num_turns: 0, finished_reason: 'error' } });
@@ -780,6 +796,32 @@ test(`agy that fails before any turn (${cause}) retries the same execution, then
   assert.equal(f.current_execution().status, 'failed');
   assert.ok(f.current_execution().result.includes(error), f.current_execution().result);
   assert.match(f.current_execution().result, /已自动重试 3 次/);
+});
+}
+
+test("Claude's own error categories classify a usage limit as quota and a sign-in failure as auth", async () => {
+  const { claude_failure_class } = await import('../runner/adapters/claude.mjs');
+  assert.deepEqual(claude_failure_class({ kind: 'authentication_failed', text: 'Invalid API key · Please run /login' }), { failure_class: 'auth' });
+  assert.equal(claude_failure_class({ kind: 'rate_limit', text: "You've hit your 5-hour limit · resets 3pm" }).failure_class, 'quota');
+  assert.deepEqual(claude_failure_class({ kind: 'server_error', text: 'Overloaded' }), {});
+});
+
+for (const [cause, [stderr, error]] of Object.entries(AGY_SIGNED_OUT)) {
+test(`agy that is signed out (${cause}) fails once as auth, without a restart or a retry`, async t => {
+  const f = await fixture(t);
+  f.config.participants.Codex = { adapter: 'antigravity_cli', executable: process.execPath };
+  const process_fixture = fake_cli([agy_not_started(error)], { stderr, exit_code: 1 });
+  const reported = [];
+  const deliver = (config, binding, task) => {
+    const on_failure = task.on_failure;
+    task.on_failure = (reason, details) => { reported.push(details); return on_failure(reason, details); };
+    return deliver_task(config, binding, task, process_fixture.spawn_process, join(f.config.directory, 'user'));
+  };
+  await agy_not_started_attempt(f, new FreeRoomRunner(f.config, f.store, deliver), process_fixture, 1);
+  assert.equal(f.current_execution().status, 'failed');
+  assert.equal(f.current_execution().retry, null);
+  assert.ok(f.current_execution().result.includes(error), f.current_execution().result);
+  assert.deepEqual(reported, [{ not_started: false, retryable: false, failure_class: 'auth' }]);
 });
 }
 
@@ -3130,4 +3172,41 @@ test('a usage-limit reset written as a clock time becomes the next such instant 
   assert.equal(clock_reset_at('2:30pm (America/Los_Angeles)', now) * 1000, Date.parse('2026-11-15T22:30:00Z'));
   assert.equal(clock_reset_at('1pm (Asia/Shanghai)', now) * 1000, Date.parse('2026-11-16T05:00:00Z'), 'a time already past is tomorrow');
   for (const text of ['Nov 16', '13pm', '', '3pm (Not/AZone)']) assert.equal(clock_reset_at(text, now), 0, text);
+});
+
+test('a host task carries the room goal so a new host or a finished Goal still knows what the room is for', t => {
+  const f = task_fixture(t);
+  const room = { goal: '', user_request: '把登录页改完并上线', first_user_message_id: 3 };
+  assert.deepEqual({ ...room_goal(room), note: undefined }, { goal: null, user_request: '把登录页改完并上线', first_user_message_id: 3, note: undefined });
+  assert.equal(room_goal({}), null);
+  const request = { id: 7, message_id: 9, purpose: 'goal_continue' };
+  const write = role => free_task_files(f.config, { name: 'Codex', role }, { id: 1, read_until: 0, requests: [request] }, {}, { process_access: false, room });
+  const read = () => JSON.parse(readFileSync(join(f.config.directory, 'free-1.task.json'), 'utf8'));
+  write('host');
+  assert.equal(read().room_goal.first_user_message_id, 3);
+  assert.match(read().room_goal.note, /Goal 或讨论结束不等于它完成/);
+  write('member');
+  assert.equal(read().room_goal, undefined, 'only the host gets it');
+});
+
+test('a member whose model changed since its last delivery is told so in its next task, once', t => {
+  const directory = mkdtempSync(join(tmpdir(), 'model-change-'));
+  const store = new DiscussionStore(directory); t.after(() => { store.close(); rmSync(directory, { recursive: true, force: true }); });
+  const runner = { config: { participants: { Codex: { adapter: 'codex_cli', model: 'gpt-5', effort: 'high' } } }, store };
+  const change = () => FreeRoomRunner.prototype.model_change.call(runner, 'Codex');
+  assert.equal(change(), null, 'the first delivery has nothing to compare with');
+  runner.config.participants.Codex = { adapter: 'codex_cli', effort: 'low' };
+  assert.deepEqual(change(), { from: 'gpt-5 · high', to: '默认 · low' });
+  assert.equal(change(), null);
+});
+
+test('the wake-up opening says who asked: user, host, detached work, hand-back or notice', async () => {
+  const { free_task_text } = await import('../runner/expert_prompts.mjs');
+  const base = { name: 'Codex', profile: { adapter: 'claude', project_access: 'read' }, cli: 'codiscuss', messages: '#5', read_after: 4, task_path: 't.json' };
+  const opening = requests => free_task_text({ ...base, requests }).prompt;
+  assert.match(opening([{ purpose: 'ask', created_by: 'user' }]), /^用户在房间点名了你.*message view 上面的消息编号/);
+  assert.match(opening([{ purpose: 'ask', created_by: 'host', batch_id: 5 }]), /^主持人给你（Codex）安排了一项请求/);
+  assert.match(opening([{ purpose: 'ask', created_by: 'host', batch_id: 0 }]), /^主持人派你（Codex）在后台独立完成/);
+  assert.match(opening([{ purpose: 'handoff', created_by: 'host' }]), /^你（Codex）派出的工作已交回/);
+  for (const purpose of ['handoff', 'notice', 'goal_continue']) assert.doesNotMatch(opening([{ purpose }]), /点名了你|简单消息可跳过技能/);
 });
