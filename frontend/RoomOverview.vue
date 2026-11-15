@@ -489,6 +489,9 @@ const created = computed(() => room.value.created_at ? new Date(room.value.creat
 @media (max-width: 720px) {
   .member-card-facts { grid-template-columns: 1fr 1fr; padding-left: 16px; }
   .member-card-facts > div:nth-child(3) { grid-column: 1 / -1; }
+  /* A phone gives each setting the full width: its name sits above the value instead of a 112px column beside it. */
+  .overview-settings > div { flex-direction: column; align-items: stretch; gap: 6px; padding: 12px 14px; }
+  .overview-settings dt { width: auto; }
   /* The name needs the head row's width on a phone, so 设为主持人 keeps only its crown. */
   .member-card-head { gap: 8px; }
   .member-card-host :deep([data-slot="label"]) { display: none; }

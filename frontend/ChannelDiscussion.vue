@@ -1579,7 +1579,13 @@ const send_entry = useSpring(1, SEND_SPRING);
 const send_y = useTransform(send_entry, [0, 1], [SEND_RISE, 0]);
 let rising_id = null;
 // Rendered like a saved message, so the card keeps its height when the saved copy replaces it.
-const sending_html = computed(() => view.value.sending_preview ? bridge.render_room_markdown(view.value.sending_preview.text) : "");
+// Each file's `[图片 #n]` / `[文件 #n]` is tinted whole, as the saved card will link it once the files are uploaded.
+const sending_html = computed(() => {
+  const preview = view.value.sending_preview;
+  if (!preview) return "";
+  return bridge.render_room_markdown(preview.text).replace(/\[(图片|文件) #(\d{1,2})\]/g, (match, kind, number) => !preview.files[number - 1] ? match
+    : `<span class="attachment-placeholder">${kind === "图片" ? t("[图片 #{number}]", { number }) : t("[文件 #{number}]", { number })}</span>`);
+});
 /** Write the entrance onto the saved card that took over from the sending card. */
 function paint_rising(value) {
   const card = rising_id && transcript.value?.querySelector(`[data-message-id="${rising_id}"]`);
@@ -1953,6 +1959,15 @@ const editor_observer = new ResizeObserver(([entry]) => {
 });
 onMounted(() => prompt.value?.textareaRef && editor_observer.observe(prompt.value.textareaRef));
 onBeforeUnmount(() => editor_observer.disconnect());
+// The composer floats over the transcript's lower edge; the transcript keeps its height clear below the last card, and
+// a taller composer (more lines, files, a reply) keeps the latest card in view while the page follows the end.
+const composer_dock = ref(null), composer_height = ref(0);
+const dock_observer = new ResizeObserver(([entry]) => {
+  composer_height.value = Math.round(entry.target.offsetHeight);
+  nextTick(() => { if (follow_tail.value && transcript.value) transcript.value.scrollTop = transcript.value.scrollHeight; });
+});
+onMounted(() => composer_dock.value && dock_observer.observe(composer_dock.value));
+onBeforeUnmount(() => dock_observer.disconnect());
 onBeforeUnmount(stop_scrub);
 
 const COPY_FEEDBACK_MS = 2000;
@@ -2205,7 +2220,7 @@ function copy_message(message) { act("copy", `${view.value.room_site}/r/${room.v
 </script>
 
 <template>
-  <section class="channel-conversation" role="tabpanel" :aria-label="t('消息')">
+  <section class="channel-conversation" role="tabpanel" :aria-label="t('消息')" :style="{ '--channel-composer-height': `${composer_height}px` }">
     <div v-if="view.query || view.source_filter" class="channel-filter-summary"><span>{{ [view.query && `“${view.query}”`, [view.host_only && t('主持人'), ...view.authors.map((name) => bridge.display_name(name)), view.mention_only && `@${bridge.display_name('用户')}`, view.card_kinds.length && t('{value1} 类卡片', { value1: view.card_kinds.length })].filter(Boolean).join('、')].filter(Boolean).join(' · ') }} · {{ view.messages_loading ? t('正在筛选…') : t('{value1} 条结果', { value1: view.source_filter ? transcript_messages.length : view.total }) }}</span><UButton :label="t('清除筛选')" size="xs" variant="link" color="neutral" @click="search = ''; act('filter', { query: '', mention: false, host: false, authors: [], kinds: [] })" /></div>
     <nav v-if="view.messages.length" ref="message_map" class="channel-message-map" :style="{ '--nav-entry-height': `${NAV_ENTRY_HEIGHT}px` }" :aria-label="t('发言快速导航')" @wheel.stop.passive="browse_navigation" @pointerleave="close_preview" @focusout="close_preview" @keydown.esc.stop="close_preview" @contextmenu="navigation_context_menu" @pointerdown="start_scrub" @pointermove="move_scrub" @pointerup="end_scrub" @pointercancel="end_scrub">
       <div class="channel-map-track">
@@ -2232,11 +2247,11 @@ function copy_message(message) { act("copy", `${view.value.room_site}/r/${room.v
       </motion.div>
     </Teleport>
     <div v-if="listen_here && !listen_here.touch" class="channel-offer-marks" :style="{ left: `${listen_here.left}px`, top: `${listen_here.top}px` }">
-      <button type="button" class="channel-listen-mark" :title="t('把选中的文字作为摘录添加到对话')" @mousedown.prevent @click="start_quote"><UIcon name="i-lucide-message-square-quote" />{{ t('添加到对话') }}</button>
+      <button type="button" class="channel-listen-mark" :title="t('把选中的文字作为注释添加到对话')" @mousedown.prevent @click="start_quote"><UIcon name="i-lucide-message-square-quote" />{{ t('添加到对话') }}</button>
       <button v-if="listen_here.speech" type="button" class="channel-listen-mark" :title="t('从选中处开始朗读')" :aria-label="t('从选中处开始朗读')" @mousedown.prevent @click="listen_from_selection"><UIcon name="i-lucide-headphones" />{{ t('听当前') }}</button>
     </div>
     <form v-if="quoting" class="selection-comment" :class="{ 'is-docked': quoting.touch }" :style="quoting.touch ? {} : { left: `${quoting.left}px`, top: `${quoting.top}px` }" @submit.prevent="submit_quote">
-      <textarea ref="quote_input" v-model="quote_comment" rows="1" :placeholder="t('添加批注（可选）')" :aria-label="t('摘录的批注（可选）')" enterkeyhint="send" @keydown="quote_keydown"></textarea>
+      <textarea ref="quote_input" v-model="quote_comment" rows="1" :placeholder="t('添加批注（可选）')" :aria-label="t('注释的批注（可选）')" enterkeyhint="send" @keydown="quote_keydown"></textarea>
       <button type="button" class="selection-comment-cancel" :aria-label="t('取消添加')" :title="t('取消')" @click="cancel_quote"><UIcon name="i-lucide-x" /></button>
       <button type="submit" class="selection-comment-send" :aria-label="t('添加到对话')" :title="t('添加到对话（Enter）')"><UIcon name="i-lucide-arrow-up" /></button>
     </form>
@@ -2419,7 +2434,7 @@ function copy_message(message) { act("copy", `${view.value.room_site}/r/${room.v
             </form>
             <div v-else class="channel-answer">
               <div :id="`channel-answer-${message.id}`" class="channel-message-text markdown-body" v-html="card.expanded ? message.rendered_text : card.preview.html"></div>
-              <button v-for="mark in card.marks" :key="mark.id" type="button" class="excerpt-mark" :style="{ left: `${mark.left}px`, top: `${mark.top}px` }" :title="t('摘录 {value1}：点击修改批注', { value1: mark.number })" :aria-label="t('修改摘录 {value1} 的批注', { value1: mark.number })" @click="open_mark(mark.id)">{{ mark.number }}</button>
+              <button v-for="mark in card.marks" :key="mark.id" type="button" class="excerpt-mark" :style="{ left: `${mark.left}px`, top: `${mark.top}px` }" :title="t('注释 {value1}：点击修改批注', { value1: mark.number })" :aria-label="t('修改注释 {value1} 的批注', { value1: mark.number })" @click="open_mark(mark.id)">{{ mark.number }}</button>
               <UButton v-if="card.preview.truncated" :label="card.expanded ? t('收起') : t('展开全文')" :trailing-icon="card.expanded ? 'i-lucide-chevron-up' : 'i-lucide-chevron-down'" variant="link" color="neutral" size="xs" class="channel-answer-toggle" :aria-label="`${card.expanded ? t('收起回答') : t('展开完整回答')} #${message.id}`" :aria-expanded="card.expanded" :aria-controls="`channel-answer-${message.id}`" @click="toggle_answer(message, $event)" />
             </div>
             <div v-if="message.summary" class="channel-answer-summary"><small>{{ t('回答摘要') }}<span v-if="message.summary_by && message.summary_by !== message.author"> {{ t('· {value1} 整理', { value1: bridge.display_name(message.summary_by) }) }}</span></small><div class="channel-message-text markdown-body" v-html="message.rendered_summary"></div></div>
@@ -2524,8 +2539,10 @@ function copy_message(message) { act("copy", `${view.value.room_site}/r/${room.v
       </div>
       <div v-if="view.messages_loading && !transcript_messages.length" class="channel-message-group grid gap-6 py-6" role="status" :aria-label="t('正在读取消息')"><div v-for="row in 3" :key="row" class="grid gap-3"><USkeleton class="h-5 w-28" /><USkeleton class="h-4 w-full" /><USkeleton class="h-4 w-2/3" /></div></div>
       <div v-else-if="view.messages_failure" class="channel-empty" role="status"><p>{{ view.messages_failure }}</p><UButton :label="t('重新读取消息')" icon="i-lucide-refresh-cw" color="neutral" variant="soft" @click="act('refresh')" /></div>
-      <div v-else-if="!transcript_messages.length && !free_working.length" class="channel-empty"><UIcon :name="view.query || view.source_filter ? 'i-lucide-search' : 'i-lucide-hash'" /><h2>{{ view.query || view.source_filter ? t('没有找到消息') : room.title }}</h2><p>{{ view.query || view.source_filter ? t('试试其他关键词，或清除筛选。') : bridge.empty_discussion_message(room) }}</p></div>
+      <div v-else-if="!transcript_messages.length && !free_working.length && !view.sending_preview && !view.failed_sends.length" class="channel-empty"><UIcon :name="view.query || view.source_filter ? 'i-lucide-search' : 'i-lucide-hash'" /><h2>{{ view.query || view.source_filter ? t('没有找到消息') : room.title }}</h2><p>{{ view.query || view.source_filter ? t('试试其他关键词，或清除筛选。') : bridge.empty_discussion_message(room) }}</p></div>
     </div>
+    <!-- Back from the background: the opening load covers the old cards until the room is read again (state.resuming). -->
+    <div v-if="view.resuming" class="channel-resume-loading" role="status" :aria-label="t('正在读取消息')"><div class="channel-message-group grid gap-6 py-6"><div v-for="row in 3" :key="row" class="grid gap-3"><USkeleton class="h-5 w-28" /><USkeleton class="h-4 w-full" /><USkeleton class="h-4 w-2/3" /></div></div></div>
     <div v-if="(transcript_messages.length && !follow_tail) || listen_here?.touch || reader.state.message_id" class="channel-latest-dock">
       <button v-if="listen_here?.touch" type="button" class="channel-listen-pill" @mousedown.prevent @click="start_quote"><UIcon name="i-lucide-message-square-quote" />{{ t('添加到对话') }}</button>
       <button v-if="listen_here?.touch && listen_here.speech" type="button" class="channel-listen-pill" :aria-label="t('从选中处开始朗读')" @mousedown.prevent @click="listen_from_selection"><UIcon name="i-lucide-headphones" />{{ t('听当前') }}</button>
@@ -2534,7 +2551,7 @@ function copy_message(message) { act("copy", `${view.value.room_site}/r/${room.v
       <button v-if="reader.state.reading" type="button" class="channel-listen-pill" :aria-label="t('停止朗读')" @click="reader.stop()"><UIcon name="i-lucide-square" />{{ t('停止') }}</button>
       <UButton v-if="transcript_messages.length && !follow_tail" icon="i-lucide-arrow-down" color="neutral" variant="outline" :aria-label="t('回到最新消息')" class="channel-latest-button" @click="return_to_latest" />
     </div>
-    <div class="channel-composer-dock"><div class="channel-composer-column" @dragover="bridge.drop_attachments" @drop="bridge.drop_attachments" @paste="bridge.paste_attachments" @keydown.capture="mention_keydown($event); attachment_shortcut($event); step_over_token($event, view.attachment_drafts)" @beforeinput="guard_token_edit($event, view.attachment_drafts)" @input.capture="hold_transcript" @input="release_transcript(); update_mention($event); drop_unreferenced($event)" @click="update_mention($event); snap_caret($event, view.attachment_drafts)" @keyup="update_mention($event); snap_caret($event, view.attachment_drafts)" @select="update_mention" @compositionstart="mention_composition" @compositionupdate="mention_composition" @compositionend="mention_composition" @scroll.capture="sync_mirror">
+    <div ref="composer_dock" class="channel-composer-dock"><div class="channel-composer-column" @dragover="bridge.drop_attachments" @drop="bridge.drop_attachments" @paste="bridge.paste_attachments" @keydown.capture="mention_keydown($event); attachment_shortcut($event); step_over_token($event, view.attachment_drafts)" @beforeinput="guard_token_edit($event, view.attachment_drafts)" @input.capture="hold_transcript" @input="release_transcript(); update_mention($event); drop_unreferenced($event)" @click="update_mention($event); snap_caret($event, view.attachment_drafts)" @keyup="update_mention($event); snap_caret($event, view.attachment_drafts)" @select="update_mention" @compositionstart="mention_composition" @compositionupdate="mention_composition" @compositionend="mention_composition" @scroll.capture="sync_mirror">
       <UPopover :open="mention_open" :reference="mention_anchor" :content="{ side: 'top', align: 'start', sideOffset: 8, onOpenAutoFocus: keep_mention_focus, onCloseAutoFocus: keep_mention_focus }" :ui="{ content: 'channel-select-menu channel-mention-menu' }" @update:open="!$event && (mention_context = null)">
         <template #content>
           <div class="channel-mention-heading"><span>{{ mention_heading }}</span><small>{{ t('↑↓ 选择 · Enter 确认') }}</small></div>
@@ -2584,12 +2601,12 @@ function copy_message(message) { act("copy", `${view.value.room_site}/r/${room.v
         <template #header>
           <div v-if="view.attachment_drafts.length || file_refs.length || excerpts.length" class="attachment-drafts">
             <UPopover v-if="excerpts.length" :content="{ side: 'top', align: 'start' }" @update:open="editing_excerpt = 0">
-              <div class="excerpt-chip" role="button" tabindex="0" :title="t('查看摘录、修改批注')">
-                <UIcon name="i-lucide-message-square-quote" /><span>{{ t('{value1} 条摘录', { value1: excerpts.length }) }}</span>
-                <button type="button" class="excerpt-chip-clear" :aria-label="t('移除全部摘录')" :title="t('移除全部摘录')" :disabled="view.sending_message" @click.stop="file_preview.excerpts = []"><UIcon name="i-lucide-x" /></button>
+              <div class="excerpt-chip" role="button" tabindex="0" :title="t('查看注释、修改批注')">
+                <UIcon name="i-lucide-message-square-quote" /><span>{{ t('{value1} 条注释', { value1: excerpts.length }) }}</span>
+                <button type="button" class="excerpt-chip-clear" :aria-label="t('移除全部注释')" :title="t('移除全部注释')" :disabled="view.sending_message" @click.stop="file_preview.excerpts = []"><UIcon name="i-lucide-x" /></button>
               </div>
               <template #content>
-                <ol class="excerpt-list" :aria-label="t('摘录')">
+                <ol class="excerpt-list" :aria-label="t('注释')">
                   <li v-for="(excerpt, index) in excerpts" :key="excerpt.id">
                     <span class="excerpt-number">{{ index + 1 }}.</span>
                     <div class="excerpt-item">
@@ -2597,13 +2614,13 @@ function copy_message(message) { act("copy", `${view.value.room_site}/r/${room.v
                       <p class="excerpt-text">{{ excerpt.text }}</p>
                       <template v-if="editing_excerpt === excerpt.id">
                         <small>{{ t('批注') }}</small>
-                        <UTextarea v-model="excerpt.comment" :rows="2" autoresize autofocus :placeholder="t('添加批注（可选）')" :aria-label="t('摘录的批注')" class="w-full" />
+                        <UTextarea v-model="excerpt.comment" :rows="2" autoresize autofocus :placeholder="t('添加批注（可选）')" :aria-label="t('注释的批注')" class="w-full" />
                       </template>
                       <template v-else-if="excerpt.comment"><small>{{ t('批注') }}</small><p class="excerpt-comment">{{ excerpt.comment }}</p></template>
                     </div>
                     <div class="excerpt-actions">
-                      <button type="button" :aria-label="t('修改摘录 {value1} 的批注', { value1: index + 1 })" :title="t('修改批注')" @click="editing_excerpt = editing_excerpt === excerpt.id ? 0 : excerpt.id"><UIcon name="i-lucide-pencil" /></button>
-                      <button type="button" :aria-label="t('移除摘录 {value1}', { value1: index + 1 })" :title="t('移除')" :disabled="view.sending_message" @click="remove_excerpt(excerpt)"><UIcon name="i-lucide-trash-2" /></button>
+                      <button type="button" :aria-label="t('修改注释 {value1} 的批注', { value1: index + 1 })" :title="t('修改批注')" @click="editing_excerpt = editing_excerpt === excerpt.id ? 0 : excerpt.id"><UIcon name="i-lucide-pencil" /></button>
+                      <button type="button" :aria-label="t('移除注释 {value1}', { value1: index + 1 })" :title="t('移除')" :disabled="view.sending_message" @click="remove_excerpt(excerpt)"><UIcon name="i-lucide-trash-2" /></button>
                     </div>
                   </li>
                 </ol>
@@ -2640,7 +2657,7 @@ function copy_message(message) { act("copy", `${view.value.room_site}/r/${room.v
             <UTooltip :text="ENTER_SENDS ? t('完成，转成文字 · Enter') : t('完成，转成文字')"><UButton type="button" icon="i-lucide-check" color="neutral" size="sm" class="channel-primary-button channel-round-button" :aria-label="t('结束录音并转成文字')" :loading="voice.state.status !== 'recording'" @click="voice.toggle()" /></UTooltip>
           </template>
           <template v-else>
-            <UButton type="button" icon="i-lucide-paperclip" :aria-label="t('添加附件')" :title="t('图片、PDF 或其他文件 · 每个最多 20 MiB')" color="neutral" variant="ghost" size="sm" @click="act('choose_attachments')" />
+            <UButton type="button" icon="i-lucide-paperclip" :aria-label="t('添加附件')" :title="t('图片、PDF 或其他文件 · 每个最多 20 MiB')" color="neutral" variant="ghost" size="sm" @click="act('choose_attachments', prompt?.textareaRef)" />
             <UTooltip v-if="speech_ready" :text="broadcast.on.value ? t('关闭语音播报') : t('语音播报：新回复自动朗读摘要')"><UButton type="button" icon="i-lucide-radio" color="neutral" variant="ghost" size="sm" class="channel-voice-button channel-broadcast-button" :class="{ 'is-on': broadcast.on.value }" :aria-pressed="broadcast.on.value" :aria-label="broadcast.on.value ? t('关闭语音播报') : t('开启语音播报')" @click="broadcast.toggle()" /></UTooltip>
             <UTooltip :text="ENTER_SENDS ? t('语音输入 · 也可按住空格说话') : t('按住说话，或轻点开始')"><UButton type="button" icon="i-lucide-mic" color="neutral" variant="ghost" size="sm" class="channel-voice-button channel-voice-mic" :aria-label="t('语音输入')" :disabled="view.sending_message" @pointerdown="voice_press.pointerdown" @click="voice_press.click" @contextmenu.prevent /></UTooltip>
             <UButton type="button" icon="i-lucide-arrow-up" color="neutral" size="sm" class="channel-primary-button channel-round-button channel-send" :aria-label="t('发送')" :title="t('发送 · Enter')" :disabled="!has_draft" @click="send" />

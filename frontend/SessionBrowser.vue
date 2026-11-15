@@ -205,6 +205,6 @@ watch(query, () => { clearTimeout(search_timer); if (open.value) search_timer = 
 .session-browser-messages article p { margin: 0; color: var(--ui-text-toned); font-size: 12px; line-height: 1.6; white-space: pre-wrap; overflow-wrap: anywhere; }
 .session-browser-footer { grid-column: 1 / -1; display: flex; justify-content: flex-end; gap: 8px; }
 @media (max-width: 720px) {
-  .session-browser { grid-template-columns: minmax(0, 1fr); grid-template-rows: minmax(0, 2fr) minmax(0, 3fr) auto; height: calc(100dvh - 200px); }
+  .session-browser { grid-template-columns: minmax(0, 1fr); grid-template-rows: minmax(0, 3fr) minmax(0, 2fr) auto; height: 100%; min-height: 0; }
 }
 </style>

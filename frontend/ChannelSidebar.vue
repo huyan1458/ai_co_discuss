@@ -70,7 +70,7 @@ const account_status = computed(() => {
           <button v-else type="button" class="channel-room-select" :title="workflow_problem(item) || item.description" :aria-current="page_open && saved_id === item.id ? 'page' : undefined"
             @click="open_workflow(item.id)" @dblclick="!item.error && !pending_items.has(item.id) && library.start_rename(item)">
             <UIcon :name="pending_items.has(item.id) ? 'i-lucide-loader-circle' : workflow_problem(item) ? 'i-lucide-triangle-alert' : item.disabled ? 'i-lucide-circle-pause' : 'i-lucide-network'" :class="{ 'animate-spin': pending_items.has(item.id) }" /><span>{{ item.label }}</span>
-            <small class="channel-room-time">{{ item.error ? t('无法读取') : item.disabled ? t('已停用') : item.unavailable?.length ? t('{count} 张卡片不可用', { count: item.unavailable.length }) : t('{count} 位成员', { count: item.cards }) }}</small></button>
+            <small v-if="item.error || item.disabled || item.unavailable?.length" class="channel-room-time">{{ item.error ? t('无法读取') : item.disabled ? t('已停用') : t('{count} 张卡片不可用', { count: item.unavailable.length }) }}</small></button>
           <div v-if="available && renaming !== item.id" class="channel-room-actions">
             <UDropdownMenu :disabled="pending_items.has(item.id)" :items="library.item_menu(item)" :content="{ align: 'start', side: 'bottom', sideOffset: 6 }" :ui="{ content: 'channel-menu channel-topic-menu' }"><UButton icon="i-lucide-ellipsis" :disabled="pending_items.has(item.id)" :aria-label="t('「{name}」的更多操作', { name: item.label })" :title="t('更多操作')" size="xs" color="neutral" variant="ghost" /></UDropdownMenu>
           </div>

@@ -876,17 +876,17 @@ onBeforeUnmount(() => {
         <iframe v-else-if="preview && format === 'html'" ref="html_frame" class="project-html-preview" :sandbox="HTML_SANDBOX" referrerpolicy="no-referrer" :srcdoc="html_preview" :title="t('HTML 文件预览')"></iframe>
         <div v-else-if="preview" ref="markdown_scroll" v-keep-reading class="project-markdown-scroll" tabindex="0" @scroll.passive="schedule_offer"
           @wheel.passive="stop_following" @touchmove.passive="stop_following" @keydown="stop_following" @pointerdown="stop_following"><div ref="markdown_body" class="markdown-body project-markdown-preview" v-html="rendered"></div>
-          <button v-for="mark in file_marks" :key="mark.id" type="button" class="excerpt-mark" :style="{ left: `${mark.left}px`, top: `${mark.top}px` }" :title="t('摘录 {value1}：点击修改批注', { value1: mark.number })" :aria-label="t('修改摘录 {value1} 的批注', { value1: mark.number })" @click="open_mark(mark.id)">{{ mark.number }}</button></div>
+          <button v-for="mark in file_marks" :key="mark.id" type="button" class="excerpt-mark" :style="{ left: `${mark.left}px`, top: `${mark.top}px` }" :title="t('注释 {value1}：点击修改批注', { value1: mark.number })" :aria-label="t('修改注释 {value1} 的批注', { value1: mark.number })" @click="open_mark(mark.id)">{{ mark.number }}</button></div>
         <ExcerptEditCard v-if="mark_editing" :key="mark_editing.excerpt.id" class="file-selection-offer file-comment" :comment="mark_editing.excerpt.comment" :style="{ left: `${mark_editing.left}px`, top: `${mark_editing.top}px` }"
           @save="save_mark" @cancel="close_mark" @remove="remove_mark" />
 
         <div v-if="offer && !offer.touch" class="file-selection-offer file-offer-marks" :style="{ left: `${offer.left}px`, top: `${offer.top}px` }">
-          <button type="button" class="channel-listen-mark" :title="t('把选中的文字作为摘录添加到对话')" @mousedown.prevent @click="start_comment"><UIcon name="i-lucide-message-square-quote" />{{ t('添加到对话') }}</button>
+          <button type="button" class="channel-listen-mark" :title="t('把选中的文字作为注释添加到对话')" @mousedown.prevent @click="start_comment"><UIcon name="i-lucide-message-square-quote" />{{ t('添加到对话') }}</button>
           <button v-if="can_read" type="button" class="channel-listen-mark" :title="t('从选中处开始朗读')" :aria-label="t('从选中处开始朗读')" @mousedown.prevent @click="listen_from_selection"><UIcon name="i-lucide-headphones" />{{ t('听当前') }}</button>
         </div>
         <form v-if="commenting" class="file-selection-offer selection-comment file-comment" :class="{ 'is-docked': commenting.touch }"
           :style="commenting.touch ? {} : { left: `${commenting.left}px`, top: `${commenting.top}px` }" @submit.prevent="add_excerpt">
-          <textarea ref="comment_input" v-model="comment" rows="1" :placeholder="t('添加批注（可选）')" :aria-label="t('摘录的批注（可选）')" enterkeyhint="send" @keydown="comment_keydown"></textarea>
+          <textarea ref="comment_input" v-model="comment" rows="1" :placeholder="t('添加批注（可选）')" :aria-label="t('注释的批注（可选）')" enterkeyhint="send" @keydown="comment_keydown"></textarea>
           <button type="button" class="selection-comment-cancel" :aria-label="t('取消添加')" :title="t('取消')" @click="cancel_comment"><UIcon name="i-lucide-x" /></button>
           <button type="submit" class="selection-comment-send" :aria-label="t('添加到对话')" :title="t('添加到对话（Enter）')"><UIcon name="i-lucide-arrow-up" /></button>
         </form>

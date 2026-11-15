@@ -15,6 +15,10 @@ const SAFETY_REFRESH_MS = 5 * 60 * 1000;
 const WORKING_STATUSES = ["dispatched", "started"];
 const UPDATE_BATCH_MS = 100;
 const UPDATE_DRAG_RETRY_MS = 500;
+// A page back from the background after this long shows the opening load until its first full read, instead of old
+// cards that then change all at once; the cap keeps the cards from staying hidden behind a read that never ends.
+const RESUME_LOADING_AFTER_MS = 10000;
+const RESUME_LOADING_MAX_MS = 15000;
 const TOAST_DURATION_MS = 3500;
 // How long an archived room can be taken back before the archive is saved.
 const ARCHIVE_UNDO_MS = 4000;
@@ -110,7 +114,9 @@ const state = { rooms: [], folders: [], room: null, page: 1, pages: 1, query: ""
   reply_to: null, tab: "discussion", refresh_version: 0, context_dirty: false, topic_dirty: false,
   snapshot_id: 0, pending_submission: null, pending_room: null, toast_timer: null, queued_taken: 0,
   // When live room data stopped (page hidden, connection lost); null while it is current. Silence is judged only up to here.
-  observed_until: null };
+  observed_until: null,
+  // Back from the background: the transcript shows the opening load until the next full read finishes.
+  resuming: false };
 const live_updates = { source: null, connected: false, enabled: false, timer: null, poll_timer: null,
   running: false, dirty: false, full: false, revisions: "", refreshed_at: 0 };
 state.messages = [];
@@ -2014,7 +2020,8 @@ function attachment_file_icon(file_name) {
 
 /**
  * Keep original files in memory until sending; reject an invalid selection as a whole. Each file also puts its
- * placeholder (`[图片 #n]` / `[文件 #n]`, n its position) into the text where it was pasted or dropped, else at the end,
+ * placeholder (`[图片 #n]` / `[文件 #n]`, n its position) into the text where it was pasted or dropped, or at the caret the
+ * file picker was opened from, else at the end,
  * as Claude Code does with a pasted screenshot: the text says where each file belongs, and members read it the same way.
  */
 function add_attachments(files, target = null) {
@@ -2034,6 +2041,15 @@ function add_attachments(files, target = null) {
   publish_view();
 }
 
+// The composer's textarea the file picker was opened from: its files' placeholders go where its caret was.
+let attachment_target = null;
+
+/** Open the file picker; `target` is the textarea whose caret takes the chosen files' placeholders. */
+function choose_attachments(target = null) {
+  attachment_target = target;
+  element("attachment-input").click();
+}
+
 /** `[图片 #n]` for an image the page previews, `[文件 #n]` for any other file. */
 function draft_placeholder(item, number) {
   return `[${item.preview_url ? "图片" : "文件"} #${number}]`;
@@ -2051,7 +2067,10 @@ function insert_placeholders(text, target) {
     if (editor !== element("message-input")) return;
   }
   const input = element("message-input");
-  if (!editor) input.value = input.value ? `${input.value.replace(/\s*$/, "")} ${text} ` : `${text} `;
+  if (editor) return;
+  // Trailing spaces give way to the separating space; a trailing line break is the user's own and stays.
+  const base = input.value.replace(/[ \t]+$/, "");
+  input.value = `${base}${base && !base.endsWith("\n") ? " " : ""}${text} `;
 }
 
 /** Deleting a file's placeholder while typing removes that file, as in Claude Code's own prompt; true when one went. */
@@ -2323,7 +2342,7 @@ async function render_attachment_pdf() {
 /** Bind the shared picker, paste/drop handlers, and accessible preview dialog once. */
 function bind_attachment_controls() {
   element("choose-attachments").addEventListener("click", () => element("attachment-input").click());
-  element("attachment-input").addEventListener("change", event => { add_attachments(event.target.files); event.target.value = ""; });
+  element("attachment-input").addEventListener("change", event => { add_attachments(event.target.files, attachment_target); attachment_target = null; event.target.value = ""; });
   for (const event of ["dragover", "drop"]) element("message-form").addEventListener(event, drop_attachments);
   element("message-input").addEventListener("paste", paste_attachments);
   document.addEventListener("click", event => {
@@ -3057,12 +3076,26 @@ async function relay_room_request_once(path, payload, etag) {
   return answer;
 }
 
+/**
+ * Read one part of a room file through the relay, asked again after a dropped or timed-out exchange as other reads
+ * are: a large image takes several parts, and one lost frame would otherwise leave it failed until the page reloads.
+ */
+async function relay_file_part(path, offset) {
+  for (let attempt = 0; ; attempt += 1) {
+    try { return await relay_exchange("room-api", { method: "GET", path, offset }); }
+    catch (error) {
+      if (attempt >= RELAY_READ_RETRY_MS.length) throw error;
+      await new Promise((resolve) => setTimeout(resolve, RELAY_READ_RETRY_MS[attempt]));
+    }
+  }
+}
+
 /** Read a whole file of the computer's rooms through the relay; larger files come in several parts. */
 async function relay_room_bytes(path) {
   const parts = [];
   let offset = 0, total = 0, type = "";
   do {
-    const answer = await relay_exchange("room-api", { method: "GET", path, offset });
+    const answer = await relay_file_part(path, offset);
     if (answer.status >= 400) throw Object.assign(new Error(server_text(answer.body?.error_text, answer.body?.error) || t('文件读取失败')), { status: answer.status });
     if (typeof answer.body_base64 !== "string") throw new Error(t('文件读取失败'));
     const bytes = base64_to_bytes(answer.body_base64);
@@ -5154,7 +5187,9 @@ async function flush_live_refresh() {
     while (state.opening) await state.opening.catch(() => {});
     await refresh_room({ room: full });
     if (full && state.observed_until !== null) { state.observed_until = null; publish_view(); }
+    if (full) end_resuming();
   } catch (error) {
+    end_resuming();
     console.warn("refresh failed", error);
     if (state.reconnecting) show_toast(t('仍未连接：{value1}', { value1: error.message }), true);
     set_connection(false);
@@ -5278,6 +5313,24 @@ function stop_live_updates() {
   live_updates.poll_timer = null;
 }
 
+let resuming_timer = null;
+/** After a long stay in the background, show the opening load instead of old cards until the room is read again. */
+function begin_resuming() {
+  if (!state.room || state.observed_until === null || Date.now() - state.observed_until < RESUME_LOADING_AFTER_MS) return;
+  state.resuming = true;
+  clearTimeout(resuming_timer);
+  resuming_timer = setTimeout(end_resuming, RESUME_LOADING_MAX_MS);
+  publish_view();
+}
+
+/** Show the cards again: the room has been read, the read failed, or it took too long. */
+function end_resuming() {
+  clearTimeout(resuming_timer);
+  if (!state.resuming) return;
+  state.resuming = false;
+  publish_view();
+}
+
 /** Initialize forms and the shared discussion controller. */
 async function initialize() {
   render_identities();
@@ -5339,7 +5392,7 @@ async function initialize() {
   start_live_updates();
   document.addEventListener("visibilitychange", () => {
     if (document.hidden) stop_live_updates();
-    else { start_live_updates(); load_admin_state(); }
+    else { begin_resuming(); start_live_updates(); load_admin_state(); }
   });
   window.addEventListener("pagehide", stop_live_updates);
   // The network coming back (a phone leaving a lift, a laptop waking) reconnects at once.
@@ -5364,7 +5417,7 @@ function view_snapshot() {
     room_site: room_site(), rooms: ordered_rooms(), folders: state.folders, folder_groups: ordered_folders(), room: state.room, archive_view: state.archive_view, directory_sort: state.directory_sort, messages: state.messages, history_cards: state.history_cards, total: state.message_total,
     archive_pending: [...state.archive_changes.keys()], import_progress: structuredClone(state.import_progress),
     directory_pending: [...state.directory_pending.keys()], folder_pending: [...state.folder_moves.keys()], creating_room: state.creating_room,
-    connected: state.connected, reconnecting: state.reconnecting, rooms_loading: state.rooms_loading, observed_until: state.observed_until, backup_pending: Boolean(state.backup_pending), page: state.page, pages: state.pages, query: state.query,
+    connected: state.connected, reconnecting: state.reconnecting, rooms_loading: state.rooms_loading, observed_until: state.observed_until, resuming: state.resuming, backup_pending: Boolean(state.backup_pending), page: state.page, pages: state.pages, query: state.query,
     attachment_drafts: state.attachment_drafts.map(item => ({ id: item.id, file_name: item.file.name, size: item.file.size, preview_url: item.preview_url, placeholder: item.placeholder || "" })),
     upload_status: state.upload_status, sending_message: state.sending_message, sending_preview: state.sending_preview, queueing_preview: state.queueing_preview,
     failed_sends: state.failed_sends.map((failed) => ({ id: failed.id, ...failed.preview })),
@@ -5604,7 +5657,7 @@ async function execute_view_action(name, value) {
   const event = { preventDefault() {} };
   const actions = { refresh: refresh_room, room: select_room, tab: select_tab,
     archives: toggle_archives, backup: backup_room, backup_rooms, import_rooms, manage_channel, move_channel, create_folder, move_folder, rename_folder, delete_folder, sort_directory,
-    send: () => send_from_composer(event), discard_sending, retry_sending, choose_attachments: () => element("attachment-input").click(), remove_attachment, preview_attachment,
+    send: () => send_from_composer(event), discard_sending, retry_sending, choose_attachments, remove_attachment, preview_attachment,
     create: (folder_id) => submit_room(event, folder_id), quick_create: quick_create_room, welcome: open_welcome,
     save_context: () => save_context(event), save_topic: () => save_topic(event),
     filter: filter_view, reply: set_view_reply, cancel_reply, skip_turn,

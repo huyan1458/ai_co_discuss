@@ -179,7 +179,7 @@ onBeforeUnmount(stop_preview);
           <template v-else-if="loaded">
             <h4>{{ t('朗读') }}</h4>
             <div class="speech-row"><span>{{ t('服务') }}</span>
-              <div class="speech-rates" role="group" :aria-label="t('朗读语音服务')"><UButton v-for="item in settings.catalog" :key="item.id" :label="item.label" color="neutral" variant="ghost" size="xs" :class="{ chosen: settings.provider === item.id }" :aria-pressed="settings.provider === item.id" @click="choose(item.id)" /></div>
+              <div class="speech-rates speech-providers" role="group" :aria-label="t('朗读语音服务')"><UButton v-for="item in settings.catalog" :key="item.id" :label="item.label" color="neutral" variant="ghost" size="xs" :class="{ chosen: settings.provider === item.id }" :aria-pressed="settings.provider === item.id" @click="choose(item.id)" /></div>
             </div>
             <p class="fine-print speech-note" :title="service.note">{{ service.note }} · <a :href="service.console_url" target="_blank" rel="noopener">{{ t('控制台') }}</a></p>
             <div class="speech-row"><span>{{ t('密钥') }}</span>
@@ -229,7 +229,7 @@ onBeforeUnmount(stop_preview);
             </div>
             <h4>{{ t('语音输入') }}</h4>
             <div class="speech-row"><span>{{ t('服务') }}</span>
-              <div class="speech-rates" role="group" :aria-label="t('语音输入服务')"><UButton v-for="item in settings.stt_catalog" :key="item.id" :label="item.label" color="neutral" variant="ghost" size="xs" :class="{ chosen: settings.stt_provider === item.id }" :aria-pressed="settings.stt_provider === item.id" @click="choose_input(item.id)" /></div>
+              <div class="speech-rates speech-providers" role="group" :aria-label="t('语音输入服务')"><UButton v-for="item in settings.stt_catalog" :key="item.id" :label="item.label" color="neutral" variant="ghost" size="xs" :class="{ chosen: settings.stt_provider === item.id }" :aria-pressed="settings.stt_provider === item.id" @click="choose_input(item.id)" /></div>
             </div>
             <p class="fine-print speech-note" :title="stt_service.note">{{ stt_service.note }}</p>
             <div class="speech-row"><span>{{ t('密钥') }}</span>
@@ -275,6 +275,13 @@ onBeforeUnmount(stop_preview);
 .speech-rates { display: flex; flex-wrap: wrap; gap: 2px; padding: 2px; border-radius: 8px; background: var(--ui-bg-elevated); width: fit-content; }
 .speech-rates button { min-width: 44px; justify-content: center; color: var(--ui-text-muted); }
 .speech-rates button.chosen { background: var(--ui-bg-accented); color: var(--ui-text-highlighted); }
+/* A phone gives the service choice its own line under its name, so all services sit in one even row instead of wrapping. */
+@media (max-width: 480px) {
+  .speech-row:has(> .speech-providers) { grid-template-columns: minmax(0, 1fr); gap: 6px; }
+  .speech-providers { flex-wrap: nowrap; width: 100%; }
+  .speech-providers button { flex: 1 1 auto; min-width: 0; padding-inline: 4px; }
+  .speech-row:has(> .speech-providers) + .speech-note { padding-left: 0; }
+}
 .speech-process { align-items: center; min-height: 32px; }
 .speech-process-state { min-width: 0; flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .speech-process-state.running { color: var(--ui-success); }

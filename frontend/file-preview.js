@@ -241,7 +241,7 @@ export function excerpts_markdown(excerpts) {
     const quote = excerpt.text.split("\n").map(line => line.trim() ? `> ${line}` : ">").join("\n");
     const lines = excerpt_lines(excerpt);
     const source = excerpt.message_id ? `${excerpt.name} 的消息 #${excerpt.message_id}` : `\`${excerpt.path}\``;
-    return [`摘录 ${index + 1}：${source}${lines ? ` ${lines}` : ""}`, quote, excerpt.comment ? `批注：${excerpt.comment}` : ""]
+    return [`注释 ${index + 1}：${source}${lines ? ` ${lines}` : ""}`, quote, excerpt.comment ? `批注：${excerpt.comment}` : ""]
       .filter(Boolean).join("\n\n");
   }).join("\n\n");
 }

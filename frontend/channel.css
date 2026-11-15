@@ -198,7 +198,10 @@ html[data-theme^="channel"] .channel-menu.channel-directory-menu { min-width: 15
 .channel-body-discussion .channel-transcript { padding-top: calc(var(--channel-topbar-height, 0px) + 16px); }
 /* The transcript's lower edge fades into the composer. A mask on the scroller itself repaints all of its content every
    scroll frame (measured ~14x more frame time on long rooms), so a fixed gradient over the same grid cell draws the fade. */
-.channel-conversation::after { content: ""; grid-column: 2; grid-row: 2; align-self: end; height: 18px; pointer-events: none; background: linear-gradient(transparent, var(--channel-fade-bg, var(--ui-bg))); }
+/* The composer floats over the transcript's lower edge: the transcript runs under it, padded by the composer's height,
+   and only the strip below the composer fades out, so cards scroll on right up to the composer's top edge. */
+.channel-conversation .channel-transcript { grid-row: 2 / 4; padding-bottom: calc(var(--channel-composer-height, 0px) + 28px); }
+.channel-conversation .channel-composer-dock { position: relative; z-index: 4; background: linear-gradient(transparent 55%, var(--channel-fade-bg, var(--ui-bg)) 85%); }
 .channel-body-discussion :is(.channel-filter-summary, .channel-message-map) { margin-top: var(--channel-topbar-height, 0px); }
 /* A filter summary already sits below the bar, so the transcript under it needs no extra offset. */
 .channel-body-discussion .channel-conversation:has(.channel-filter-summary) .channel-transcript { --channel-topbar-height: 0px; }
@@ -547,6 +550,7 @@ html[data-theme^="channel"] .channel-message.channel-topic-card { color: var(--u
 .channel-empty h2 { color: #f1f3f7; font-size: 23px; font-weight: 650; }
 .channel-empty p { color: #a9b1c0; font-size: 14px; margin: 9px 0 22px; }
 .channel-files-unset { min-height: 100%; display: flex; align-items: center; justify-content: center; color: var(--ui-text-muted); font-size: 14px; }
+.channel-resume-loading { grid-column: 2; grid-row: 2; z-index: 3; min-height: 0; overflow: hidden; padding-top: calc(var(--channel-topbar-height, 0px) + 16px); background: var(--channel-fade-bg, var(--ui-bg)); }
 .channel-latest-dock { grid-column: 2; grid-row: 2; align-self: end; justify-self: center; z-index: 3; display: flex; align-items: center; gap: 8px; padding-bottom: 12px; pointer-events: none; }
 /* "Listen from here": a pill matching the back-to-latest button; beside it on touch, under the selection with a pointer. */
 .channel-listen-pill { display: inline-flex; align-items: center; gap: 6px; height: 32px; padding: 0 14px 0 11px; border: 1px solid #ffffff24; border-radius: 999px; background: #292b30; color: #e8eaee; font-size: 13px; font-weight: 500; white-space: nowrap; box-shadow: 0 2px 8px #0004; pointer-events: auto; }
@@ -783,6 +787,11 @@ html[data-theme^="channel"] .channel-folder-modal input { height: 40px; font-siz
 html[data-theme^="channel"] .studio-modal.channel-create-modal { width: calc(100vw - 32px); max-width: 920px; }
 html[data-theme^="channel"] .studio-modal.pb-invite-modal { width: calc(100vw - 32px); max-width: 920px; }
 html[data-theme^="channel"] .studio-modal.session-browser-modal { width: calc(100vw - 32px); max-width: 920px; }
+@media (max-width: 720px) {
+  html[data-theme^="channel"] .studio-modal.session-browser-modal { width: calc(100vw - 24px); height: calc(100dvh - 32px); }
+  html[data-theme^="channel"] .session-browser-modal [data-slot="header"] { padding: 16px 18px 12px; }
+  html[data-theme^="channel"] .studio-modal.session-browser-modal .dialog-body { flex: 1; min-height: 0; max-height: none; padding: 12px 14px 14px; overflow: hidden; }
+}
 html[data-theme^="channel"] .studio-modal.workflow-editor-modal { width: calc(100vw - 32px); max-width: 920px; }
 html[data-theme^="channel"] .studio-modal.workflow-viewer-modal { width: calc(100vw - 32px); max-width: 760px; }
 html[data-theme^="channel"] .studio-modal.channel-consensus-modal { width: calc(100vw - 32px); max-width: 860px; }
@@ -1306,7 +1315,7 @@ html[data-motion="off"] *, html[data-motion="off"] *::before, html[data-motion="
 .channel-recommendation:not(.is-open) { border-color: var(--ui-border-muted); background: transparent; color: var(--ui-text-muted); }
 /* A smart-scheduling decision is its own slim card between two speakers, aligned with the message cards. */
 .channel-schedule-card { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; margin: -6px 16px 20px; padding: 8px 14px; border: 1px dashed color-mix(in srgb, var(--channel-accent) 45%, transparent); border-radius: 10px; background: color-mix(in srgb, var(--channel-accent) 6%, transparent); color: var(--ui-text-toned); font-size: 12px; }
-.channel-schedule-card small { margin-left: 8px; color: var(--ui-text-dimmed); font-variant-numeric: tabular-nums; }
+.channel-schedule-card small { margin-left: 8px; color: var(--ui-text-dimmed); font-variant-numeric: tabular-nums; white-space: nowrap; }
 .channel-schedule-icon { flex-shrink: 0; width: 13px; height: 13px; color: var(--channel-accent); }
 .channel-schedule-text { flex: 1; min-width: 0; }
 .channel-schedule-toggle { display: grid; place-items: center; width: 20px; height: 20px; padding: 0; border: 0; border-radius: 4px; background: transparent; color: var(--ui-text-dimmed); cursor: pointer; }
@@ -1375,6 +1384,9 @@ html[data-motion="off"] *, html[data-motion="off"] *::before, html[data-motion="
 /* Side margins switch with the message cards' own breakpoint, so the edges stay lined up. */
 @media (max-width: 700px) {
   .channel-schedule-card { margin: -4px 8px 14px; }
+  /* On a phone the figures (置信度, 耗时) start their own line under the decision instead of wrapping mid-phrase. */
+  .channel-schedule-text > small:first-of-type { margin-left: 0; }
+  .channel-schedule-text > small:first-of-type::before { content: "\A"; white-space: pre; }
   .channel-schedule-correction { margin: -10px 8px 14px; }
 }
 @media (max-width: 767px) {
@@ -1484,8 +1496,9 @@ html[data-motion="off"] *, html[data-motion="off"] *::before, html[data-motion="
 .account-message { margin: 0; font-size: 12px; line-height: 1.6; color: var(--ui-text-muted); overflow-wrap: anywhere; }
 .account-message.is-error { color: #f05252; }
 .account-profile { display: flex; flex-direction: column; gap: 16px; }
-.account-identity { display: flex; align-items: center; gap: 14px; flex-wrap: wrap; }
-.account-avatar { width: 56px; height: 56px; }
+.account-identity { display: flex; align-items: flex-start; gap: 14px; }
+.account-identity-fields { display: flex; flex: 1; flex-direction: column; gap: 8px; min-width: 0; }
+.account-avatar { flex-shrink: 0; width: 56px; height: 56px; }
 .account-avatar img { object-fit: cover; }
 .account-avatar-actions { display: flex; flex-wrap: wrap; gap: 8px; }
 .account-file { position: absolute; width: 1px; height: 1px; overflow: hidden; opacity: 0; pointer-events: none; }

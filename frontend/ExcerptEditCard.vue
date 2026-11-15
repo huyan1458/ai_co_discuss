@@ -18,9 +18,9 @@ function keydown(event) {
 
 <template>
   <form class="excerpt-edit-card" @submit.prevent="emit('save', draft.trim())">
-    <textarea ref="input" v-model="draft" rows="2" :placeholder="t('添加批注（可选）')" :aria-label="t('摘录的批注')" @keydown="keydown"></textarea>
+    <textarea ref="input" v-model="draft" rows="2" :placeholder="t('添加批注（可选）')" :aria-label="t('注释的批注')" @keydown="keydown"></textarea>
     <div class="excerpt-edit-actions">
-      <button type="button" class="excerpt-edit-remove" :aria-label="t('移除这条摘录')" :title="t('移除摘录')" @click="emit('remove')"><UIcon name="i-lucide-trash-2" /></button>
+      <button type="button" class="excerpt-edit-remove" :aria-label="t('移除这条注释')" :title="t('移除注释')" @click="emit('remove')"><UIcon name="i-lucide-trash-2" /></button>
       <button type="button" class="excerpt-edit-cancel" @click="emit('cancel')">{{ t("取消") }}</button>
       <button type="submit" class="excerpt-edit-save">{{ t("保存") }}</button>
     </div>

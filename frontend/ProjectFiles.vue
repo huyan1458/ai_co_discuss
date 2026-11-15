@@ -16,6 +16,9 @@ const current_path = ref(shown?.directory === directory.value ? shown.path : "")
 const listing = ref(null);
 const loading = ref(false);
 let directory_request = 0;
+// Subfolders read ahead after a folder is shown, so opening one is instant; a few at a time, as each waits on the relay.
+const PREFETCH_LIMIT = 40, PREFETCH_PARALLEL = 3;
+let prefetch_run = 0;
 const cache_key = (path) => `${room_id}
 ${directory.value}
 ${path}`;
@@ -49,12 +52,14 @@ function take_reveal() {
 }
 watch(() => file_preview.reveal_path, take_reveal);
 onMounted(() => { if (!take_reveal()) read_directory(current_path.value); });
-onBeforeUnmount(() => { directory_request++; });
+onBeforeUnmount(() => { directory_request++; prefetch_run++; });
 
 /** Show one folder at once (from the cache when it has been opened before) and read it again; a failed refresh keeps what is shown. */
 async function read_directory(path = "", append = false) {
   const request = ++directory_request;
   if (!append) {
+    // The folder asked for now goes ahead of any read-ahead still waiting on the relay.
+    prefetch_run++;
     current_path.value = path;
     shown_folders.set(room_id, { directory: directory.value, path });
     listing.value = folder_listings.get(cache_key(path)) || null;
@@ -65,9 +70,27 @@ async function read_directory(path = "", append = false) {
     if (request !== directory_request) return;
     listing.value = { ...result, entries: append ? [...listing.value.entries, ...result.entries] : result.entries };
     folder_listings.set(cache_key(path), listing.value);
+    if (!append) prefetch_subfolders(result.entries);
   } catch (error) {
     if (request === directory_request) bridge.notify("error", t('读取目录失败，{value1}', { value1: error.message }));
   } finally { if (request === directory_request) loading.value = false; }
+}
+
+/** Read the not yet cached subfolders of the shown folder into the cache; a newer folder, root or leaving the page stops it. */
+async function prefetch_subfolders(entries) {
+  const run = ++prefetch_run, index = root.value;
+  const queue = entries.filter((entry) => entry.kind === "directory" && !entry.name.startsWith(".") && !folder_listings.get(cache_key(entry.path)))
+    .slice(0, PREFETCH_LIMIT).map((entry) => ({ path: entry.path, key: cache_key(entry.path) }));
+  async function worker() {
+    while (queue.length && run === prefetch_run) {
+      const { path, key } = queue.shift();
+      try {
+        const result = await bridge.read_room_files(room_id, path, 0, "", index);
+        if (run === prefetch_run && !folder_listings.get(key)) folder_listings.set(key, result);
+      } catch { /* Read again when the folder is opened. */ }
+    }
+  }
+  await Promise.all(Array.from({ length: PREFETCH_PARALLEL }, worker));
 }
 </script>
 

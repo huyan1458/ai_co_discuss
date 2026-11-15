@@ -13,8 +13,9 @@ const SKILL_PATTERN = new RegExp(`(^|[\\s(（，,。；;：:])(\\$(?:${PLATFORM_
 const SKILL_ICON = '<svg viewBox="0 0 24 24" width="13" height="13" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M21 8 12 3 3 8v8l9 5 9-5z"/><path d="m3 8 9 5 9-5M12 13v8"/></svg>';
 
 // `#123` in room text names message 123; the page opens it on a delegated click on [data-message-ref].
-// The lookbehind keeps escaped entities (`&#39;`) and words like `abc#1` plain.
-const MESSAGE_REF_PATTERN = /(?<![\w&#])#(\d{1,9})(?![\w-])/gu;
+// The lookbehind keeps escaped entities (`&#39;`) and words like `abc#1` plain, and leaves the number of an attachment
+// placeholder (`[图片 #1]` / `[文件 #1]`) to the page, which links the whole placeholder to its file.
+const MESSAGE_REF_PATTERN = /(?<![\w&#])(?<!\[(?:图片|文件) )#(\d{1,9})(?![\w-])/gu;
 
 /** Whether a text token sits inside a Markdown link, where a nested button would break the link. */
 function inside_link(tokens, index) {
