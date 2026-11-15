@@ -22,6 +22,8 @@
  *   `restore_manual`: a restored room keeps it manual, never taken over (a background resume would fork the session
  *   away from its original window).
  *   `resume_command(session_id)`: a command the owner can copy to reopen a restored manual conversation.
+ *   `browse_sessions`: its stored conversations can be listed and previewed on this machine, so the owner picks the one a
+ *   new member resumes from a browsing window instead of typing its ID.
  * - `defaults_by_query`: its default model is read by running it (seconds), so a quick read leaves it for later.
  * - `capabilities`: `delivery` `{stoppable, progress}` of a usual delivery (each delivery reports its own); `rewind`: `cut`
  *   (the runner cuts the session), `fresh` (context rebuilt each time) or `kept` (cannot be cut here); `project` (works in
@@ -74,7 +76,7 @@ export const ADAPTER_PROFILES = {
     efforts: ['low', 'medium', 'high', 'xhigh', 'max', 'ultra'], models: true, access_levels: ALL_ACCESS, per_tool_allow: false,
     access_hints: { read: '只读沙箱', write: '项目可写的沙箱，命令在沙箱内运行、可联网',
       auto: '沙箱外的操作由模型申请提权，Codex 自动审核代替人工批准', full: '无沙箱、无审批（--dangerously-bypass-approvals-and-sandbox）' },
-    client: 'codex', adopt: 'session', host_existing: true, session_family: 'codex',
+    client: 'codex', adopt: 'session', host_existing: true, session_family: 'codex', browse_sessions: true,
     capabilities: { delivery: PROCESS, rewind: 'cut', project: true, access_env: true, enforces_read_only: true, limits_directories: true, ripgrep: true, chat: true, resume: true, images: true, capture: FINAL_REMARK,
       // Codex CLI 0.163 records a command's output in its session about 0.1 s after reporting it done (2026-11-15).
       close_grace_ms: 1500 },
@@ -82,7 +84,7 @@ export const ADAPTER_PROFILES = {
   codex: {
     platform: 'Codex', label: 'Codex App', kind: 'app', location: 'executable', fields: ['source_thread_id', 'project_id', 'project_name'],
     efforts: null, models: false, access_levels: null, per_tool_allow: false,
-    client: 'codex', adopt: 'session', host_existing: true, session_family: 'codex',
+    client: 'codex', adopt: 'session', host_existing: true, session_family: 'codex', browse_sessions: true,
     capabilities: { delivery: IN_APP, rewind: 'cut', project: true, chat: true, capture: false },
   },
   claude: {
@@ -90,7 +92,7 @@ export const ADAPTER_PROFILES = {
     efforts: ['low', 'medium', 'high', 'xhigh', 'max'], models: true, access_levels: ALL_ACCESS, per_tool_allow: true,
     access_hints: { read: '只放行网站命令与草稿，不改项目文件、不跑其他命令', write: '可改项目文件，Bash / PowerShell 命令全部放行（无沙箱）',
       auto: 'Claude auto 模式：由分类器判断，实测项目外写入和联网都会放行', full: 'bypassPermissions：跳过全部权限检查' },
-    client: 'claude', adopt: 'own_cwd', host_existing: true, restore_manual: true,
+    client: 'claude', adopt: 'own_cwd', host_existing: true, restore_manual: true, browse_sessions: true,
     resume_command: session_id => `claude --resume ${session_id}`,
     // Claude Code runs commands through bash on Windows too, where the npm shim works without .cmd.
     windows_command: 'codiscuss',

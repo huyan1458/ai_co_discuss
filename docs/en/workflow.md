@@ -88,7 +88,12 @@ It acts only when confident, and otherwise hands over to the host. Every decisio
 
 From the member panel you can:
 
-- **Invite** members. Codex and Claude can join with an existing session ID, bringing that session's context. Experts invited during a discussion join the end of the current round.
+- **Invite** members. A member card offers three ways to start:
+  - **Automatic start**: this computer starts a new, empty session.
+  - **History** (Claude Code, Codex): opens a window listing that software's past sessions by time, like `claude -r` or Codex's `/resume`. Search it, show this project's sessions or all of them, and preview the latest messages of the selected one. The program then resumes the picked session in the background, so it joins with the context it already has. While it is working, do not keep using it in its original window.
+  - **Manual start**: run the start instruction in a conversation you already have open; room tasks are then delivered into that window where possible.
+
+  Experts invited during a discussion join the end of the current round.
 - **Pause, recall or remove** members without pausing the discussion.
 - **Change the host** with the crown icon. Changing the host during a discussion pauses it.
 - **Reorder speakers** by dragging pending members in the speaking-order list.

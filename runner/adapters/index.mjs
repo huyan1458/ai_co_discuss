@@ -7,7 +7,8 @@
  *   - `deliver(config, binding, task, spawn_process, user_home)` → `{session_id, status, capabilities, steer?}`, where
  *     `capabilities` `{stoppable, progress}` says what this one delivery can do, and `steer(text)` (when the running
  *     software can take an interjection without ending its turn) passes one in, resolving false once the turn is over;
- *   - `session`: `{path, exists, branch, settings}` for the software's own session store, or null;
+ *   - `session`: `{path, exists, branch, settings}` for the software's own session store, or null; with `list(options)`
+ *     and `preview(session_id, options)` when its stored conversations can be browsed (see `software_sessions`);
  *   - `models`: `{list, effort?, defaults}` read from the installed software, or null when it is chosen inside the App;
  *   - optional `skills(profile, options)` lists installed skills `{id, label, description, prompt}` without a model turn;
  *   - optional `chat(config, binding, task, spawn_process, user_home)` for a private chat turn whose software a usual
@@ -164,6 +165,29 @@ export function session_settings(adapter_id, session_id, options = {}) {
   if (typeof session_id !== 'string' || !SESSION_PATTERN.test(session_id)) return none;
   try { return adapter_of(adapter_id)?.session?.settings(session_id, options) || none; }
   catch { return none; }
+}
+
+/**
+ * One page of the conversations a software keeps on this machine, newest first, for the owner to pick one a member
+ * resumes: `{available, sessions: [{id, title, cwd, updated_at, size}], next_offset}`. Options: `cwd` (one directory's
+ * only), `query` (title, directory or ID contains it), `offset` (a previous page's `next_offset`), `accept(cwd)` (what
+ * the asker may see). `available` is false for software whose conversations this machine cannot list
+ * (its profile has no `browse_sessions`). No AI turn is started.
+ */
+export function software_sessions(adapter_id, options = {}) {
+  const list = adapter_of(adapter_id)?.session?.list;
+  return list ? { available: true, ...list(options) } : { available: false, sessions: [], next_offset: null };
+}
+
+/**
+ * The end of one stored conversation: `{id, title, cwd, updated_at, size, messages: [{role, text, at, cut?}], truncated}`,
+ * with the software's injected context left out. Throws when the software cannot be browsed or holds no such conversation.
+ */
+export function session_preview(adapter_id, session_id, options = {}) {
+  const adapter = adapter_of(adapter_id);
+  if (!adapter?.session?.preview) throw new Error(`${adapter?.label || adapter_id} 的历史会话不能在这里浏览`);
+  if (typeof session_id !== 'string' || !SESSION_PATTERN.test(session_id)) throw new Error('会话 ID 格式不正确');
+  return adapter.session.preview(session_id, options);
 }
 
 /** Public model metadata only; failures leave the original-software default available to the UI. */

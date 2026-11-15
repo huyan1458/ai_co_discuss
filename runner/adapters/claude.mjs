@@ -11,8 +11,9 @@ import { connect } from 'node:net';
 import { homedir } from 'node:os';
 import { dirname, join, resolve } from 'node:path';
 import { runs_commands } from '../expert_prompts.mjs';
-import { bind_access, DENIAL_FIELD, EDIT_TOOLS, launch_directory, log_entries, marked, MAX_DENIALS, model_entry, json_line,
-  clock_reset_at, newest_record, not_sent, project_directory, prompt_text, query_catalog, TASK_SUBCOMMANDS, tree_killable, watch_events } from './common.mjs';
+import { bind_access, DENIAL_FIELD, EDIT_TOOLS, edge_entries, launch_directory, log_entries, marked, MAX_DENIALS, model_entry, json_line,
+  clock_reset_at, newest_record, not_sent, page_sessions, preview_messages, project_directory, prompt_text, prompt_title, query_catalog,
+  same_path, TASK_SUBCOMMANDS, tree_killable, typed_prompt, watch_events } from './common.mjs';
 
 // A message posted to an open Claude window that has not started by then is reported, not failed.
 const INBOX_CHECK_MS = 90_000;
@@ -694,6 +695,69 @@ function session_cwd(session_id, { env = process.env, home = homedir() } = {}) {
   return readFileSync(file, 'utf8').split('\n').map(line => { try { return JSON.parse(line).cwd; } catch { return undefined; } }).find(Boolean) || '';
 }
 
+/** One log entry as a conversation message; tool results, side chains and what Claude Code itself injected are left out. */
+function session_message(entry) {
+  if (!['user', 'assistant'].includes(entry.type) || entry.isSidechain || entry.isMeta || entry.isCompactSummary) return null;
+  const content = entry.message?.content;
+  const text = entry.type === 'user' ? typed_prompt(prompt_text(content))
+    : Array.isArray(content) ? content.filter(part => part?.type === 'text').map(part => part.text || '').join('\n').trim() : '';
+  return text ? { role: entry.type, text, at: entry.timestamp || '' } : null;
+}
+
+/** Every session log on this machine, newest first; with `cwd`, those of that directory's project folder when it has one. */
+function session_logs(cwd, env, home) {
+  const projects = join(env.CLAUDE_CONFIG_DIR || join(home, '.claude'), 'projects');
+  if (!existsSync(projects)) return { files: [], narrowed: false };
+  // Claude names a project folder after its directory with every other character as '-' (2.1.325).
+  const own = cwd ? resolve(cwd).replace(/[^A-Za-z0-9]/g, '-').toLowerCase() : '';
+  const folders = readdirSync(projects);
+  const narrowed = Boolean(own) && folders.some(folder => folder.toLowerCase() === own);
+  const files = [];
+  for (const folder of narrowed ? folders.filter(name => name.toLowerCase() === own) : folders) {
+    let names;
+    try { names = readdirSync(join(projects, folder)); } catch { continue; }
+    for (const name of names) {
+      if (!name.endsWith('.jsonl')) continue;
+      const file = join(projects, folder, name);
+      try { const info = statSync(file); files.push({ file, id: name.slice(0, -6), updated_at: info.mtime.toISOString(), size: info.size }); }
+      catch { /* Removed while listing. */ }
+    }
+  }
+  return { files: files.sort((left, right) => right.updated_at.localeCompare(left.updated_at)), narrowed };
+}
+
+/** What a browsing window shows of one session: the title the owner or Claude gave it, else the start of its first prompt. */
+function describe_session({ file, id, updated_at, size }) {
+  const { head, tail } = edge_entries(file);
+  const cwd = head.find(entry => typeof entry.cwd === 'string' && entry.cwd)?.cwd || '';
+  // Claude resumes a session only in the directory it recorded, so one without it cannot join.
+  if (!cwd) return null;
+  const title = tail.findLast(entry => entry.type === 'custom-title' && entry.customTitle)?.customTitle
+    || tail.findLast(entry => entry.type === 'ai-title' && entry.aiTitle)?.aiTitle
+    || prompt_title(head.map(session_message).find(message => message?.role === 'user')?.text);
+  return { id, title: String(title || ''), cwd, updated_at, size };
+}
+
+/**
+ * One page of the sessions Claude Code keeps on this machine, newest first, as `claude --resume` lists them
+ * (titles and log layout read on 2.1.325; not an official interface). `cwd` keeps one directory's sessions.
+ */
+function list_sessions({ cwd = '', env = process.env, home = homedir(), ...page } = {}) {
+  const { files, narrowed } = session_logs(cwd, env, home);
+  const accept = found => (!cwd || narrowed || same_path(found, cwd)) && (!page.accept || page.accept(found));
+  return page_sessions(files, describe_session, { ...page, accept });
+}
+
+/** The last messages of one session, for the owner to recognise it before a member resumes it. */
+function preview_session(session_id, { env = process.env, home = homedir() } = {}) {
+  const file = session_path(session_id, env, home);
+  if (!file) throw new Error(`本机找不到 Claude 会话 ${session_id}`);
+  const info = statSync(file);
+  const described = describe_session({ file, id: session_id, updated_at: info.mtime.toISOString(), size: info.size });
+  if (!described) throw new Error(`Claude 会话 ${session_id} 没有记录原工作目录，无法续接`);
+  return { ...described, ...preview_messages(file, session_message) };
+}
+
 /** Fork on the next turn at the last answer before the first marked prompt; a cut before any answer starts anew. */
 function branch(profile, session_id, markers, { always, env, home }) {
   const file = session_path(session_id, env, home);
@@ -761,7 +825,8 @@ export const claude = {
   id: 'claude', catalog_source: 'claude-cli',
   into_window: claude_inbox_ready,
   deliver, chat, events,
-  session: { path: session_path, exists: session_exists, owns: session_exists, cwd: session_cwd, branch, settings: session_settings },
+  session: { path: session_path, exists: session_exists, owns: session_exists, cwd: session_cwd, branch, settings: session_settings,
+    list: list_sessions, preview: preview_session },
   models: { list: models, defaults },
   skills,
 };

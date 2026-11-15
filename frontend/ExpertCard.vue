@@ -1,3 +1,8 @@
+<script>
+// Titles of the conversations picked on this page, by ID, so a card drawn again names its conversation instead of showing the ID.
+const session_titles = new Map();
+</script>
+
 <script setup>
 import { t } from './i18n.js';
 /** Show one participant instance and its actual software configuration boundary. */
@@ -7,7 +12,8 @@ import EffortSlider from "./EffortSlider.vue";
 import ApiSettings from "./ApiSettings.vue";
 import MemberDescriptionDialog from "./MemberDescriptionDialog.vue";
 import MemberTextDialog from "./MemberTextDialog.vue";
-import { adapter_profile } from "../runner/adapters/profiles.mjs";
+import SessionBrowser from "./SessionBrowser.vue";
+import { adapter_profile, same_session_family } from "../runner/adapters/profiles.mjs";
 import { EXPERT_PROMPT_HEADING, EXPERT_PROMPT_PRESETS, MAX_EXPERT_PROMPT, READ_RULE, access_label, access_options, free_task_text } from "../runner/expert_prompts.mjs";
 
 const props = defineProps({
@@ -20,7 +26,8 @@ const props = defineProps({
   hostable: Boolean,
   // True where the form picks a host, so the card states whether this one may host.
   hosting: Boolean,
-  // An existing conversation to resume; null where the form offers no such choice (the invite dialog does).
+  // The project directory whose conversations the history window lists first; the form's own directory when not given.
+  directory: { type: String, default: "" },
   // The workflow this card came from: its prompt is read from the workflow at each execution, so here it is read-only.
   workflow: { type: String, default: "" },
   // Imported presets start read-only until the user grants the requested level on that card.
@@ -49,7 +56,9 @@ const restricted = computed(() => view.value.launch.projects_restricted === true
 const offered = computed(() => props.choices.filter((option) => option !== "manual" || !restricted.value && entry_items.value.some((item) => item.value !== "api")));
 const automatic = computed(() => props.mode === "cli");
 // Short labels for the front control; the 启动 row spells out what each one means.
-const ACCESS_LABELS = { cli: t('程序启动'), manual: t('手动启动') };
+const HISTORY = "history";
+const ACCESS_LABELS = { cli: t('程序启动'), manual: t('手动启动'), [HISTORY]: t('历史会话') };
+const MODE_TITLES = { cli: t('由程序新建一个空白会话'), manual: t('把启动指令交给你已打开的 AI 会话'), [HISTORY]: t('浏览这个软件的历史会话，选一个由程序续接') };
 const api_mode = computed(() => !preset.value && automatic.value && profile.value.adapter === "api");
 const api_check = ref({ state: "" });
 // A previous check result no longer applies once any checked field changes.
@@ -74,6 +83,34 @@ const MANUAL_NOTES = {
 };
 const manual_note = computed(() => MANUAL_NOTES[bridge.platform_of(props.name)] || "");
 const resuming = computed(() => Boolean(profile.value.session_id));
+// A card woken by the local service may instead resume a conversation its software already holds, picked from a
+// browsing window: offered where the card's entry (else another entry of its platform) can list its conversations.
+const browsing = ref(false);
+const browse_adapter = computed(() => {
+  const own = relay_client.value || profile.value.adapter;
+  if (adapter_profile(own)?.browse_sessions) return own;
+  return relay_client.value ? "" : entry_items.value.find((item) => adapter_profile(item.value)?.browse_sessions)?.value || "";
+});
+const mode_options = computed(() => {
+  const reachable = view.value.launch.available || Boolean(view.value.launch.relay);
+  if (!offered.value.includes("cli") || props.workflow || preset.value || !browse_adapter.value || !reachable) return offered.value;
+  return ["cli", HISTORY, ...offered.value.filter((option) => option !== "cli")];
+});
+const current_mode = computed(() => props.mode === "cli" && resuming.value ? HISTORY : props.mode);
+const browse_directory = computed(() => props.directory || profile.value.cwd || view.value.launch.workspace?.cwd || "");
+const session_label = computed(() => session_titles.get(profile.value.session_id) || profile.value.session_id || "");
+
+/** Bind the picked conversation: the card is woken by the local service, through the entry that listed it. */
+function resume_session(session) {
+  session_titles.set(session.id, session.title);
+  if (props.mode !== "cli") emit("mode", "cli");
+  if (!relay_client.value && profile.value.adapter !== browse_adapter.value) bridge.write_launch(props.name, "adapter", browse_adapter.value);
+  bridge.write_launch(props.name, "session_id", session.id);
+}
+// A conversation belongs to the software that holds it: another entry keeps it only when both share one session store.
+watch(() => profile.value.adapter, (next, previous) => {
+  if (previous && next && next !== previous && resuming.value && !same_session_family(next, previous)) bridge.write_launch(props.name, "session_id", null);
+});
 // Software paths and models typed here belong to this browser's computer, so a relayed member keeps the paired computer's settings.
 // A workflow card does not turn over: its software, model, strength and access are set together in the workflow's
 // 专家配置, and its description and prompt from the front.
@@ -121,6 +158,7 @@ const facts = computed(() => preset.value ? [
 ] : [
   ...automatic.value ? [{ label: t('状态'), value: props.status.text, tone: props.status.tone }] : [],
   { label: t('启动'), value: launch_fact.value },
+  ...automatic.value && resuming.value ? [{ label: t('会话'), value: session_label.value }] : [],
   ...automatic.value ? [{ label: t('软件'), value: entry_label.value }] : [],
   ...configurable.value ? [{ label: t('模型'), value: profile.value.model || models.value.defaults?.model || t('软件默认模型') }] : [],
   ...configurable.value && (profile.value.adapter !== "api" || profile.value.effort) ? [{ label: t('强度'), value: effort_label.value }] : [],
@@ -325,6 +363,9 @@ function reset_model() {
 
 /** Switch this card's delivery; every dialog showing the card shares this one rule. */
 function choose_mode(option) {
+  // The history window binds a conversation only when one is picked; closing it leaves the card as it was.
+  if (option === HISTORY) { browsing.value = true; return; }
+  if (resuming.value) bridge.write_launch(props.name, "session_id", null);
   if (option === "cli") bridge.default_launch_entry(props.name);
   // A manual card carries no description, not even a preset's; the room's member menu can add one later.
   if (option === "manual") bridge.write_description_draft(props.name, "");
@@ -336,7 +377,7 @@ function choose_capability(event) {
   const keys = { ArrowLeft: -1, ArrowUp: -1, ArrowRight: 1, ArrowDown: 1 };
   if (!(event.key in keys) && !["Home", "End"].includes(event.key)) return;
   event.preventDefault();
-  const options = offered.value, index = options.indexOf(props.mode);
+  const options = mode_options.value, index = options.indexOf(current_mode.value);
   const next = event.key === "Home" ? options[0] : event.key === "End" ? options.at(-1) : options[(index + keys[event.key] + options.length) % options.length];
   choose_mode(next);
   event.currentTarget.querySelector(`[data-mode="${next}"]`)?.focus();
@@ -355,7 +396,7 @@ const FLOATING_SELECTOR = "[role='listbox'], [role='menu'], [data-reka-popper-co
 
 /** Clicking anywhere outside the open back keeps its edits and returns to the front. */
 function close_on_outside(event) {
-  if (prompt_open.value || describing.value || naming.value || card.value?.contains(event.target) || event.target.closest?.(FLOATING_SELECTOR)) return;
+  if (prompt_open.value || describing.value || naming.value || browsing.value || card.value?.contains(event.target) || event.target.closest?.(FLOATING_SELECTOR)) return;
   flip(false);
 }
 watch(back, (open) => {
@@ -376,7 +417,7 @@ onBeforeUnmount(() => { document.removeEventListener("pointerdown", close_on_out
     :data-identity="bridge.identities[name]?.style" :data-face="visible_back ? 'back' : 'front'" tabindex="-1" @keydown.esc="escape">
     <motion.div class="expert-card-turn" :style="{ rotateY: angle }">
       <div class="expert-card-face expert-card-front" :inert="visible_back" :aria-hidden="visible_back">
-        <component :is="can_flip ? 'button' : 'div'" ref="front_button" :type="can_flip ? 'button' : undefined" class="expert-card-open" :class="{ 'is-static': !can_flip, 'has-modes': offered.length > 1 }"
+        <component :is="can_flip ? 'button' : 'div'" ref="front_button" :type="can_flip ? 'button' : undefined" class="expert-card-open" :class="{ 'is-static': !can_flip, 'has-modes': mode_options.length > 1 }"
           :aria-label="can_flip ? card_label : undefined" :title="can_flip ? t('点击翻面设置') : undefined" @click="flip(true)">
           <span class="expert-card-identity">
             <UAvatar :src="bridge.identities[name]?.icon" :text="bridge.identities[name]?.initials" :alt="name" size="sm" class="channel-avatar expert-card-avatar" :class="bridge.identities[name]?.style" />
@@ -395,11 +436,12 @@ onBeforeUnmount(() => { document.removeEventListener("pointerdown", close_on_out
             <p>{{ t('会话自行注册后才算到场。') }}</p>
             <p v-if="manual_note">{{ manual_note }}</p>
           </div>
-          <span v-if="can_flip" class="expert-card-flip"><UIcon name="i-lucide-settings-2" />{{ t('设置') }}</span>
+          <!-- Three start choices leave room for the icon only; the card's own tooltip still says what a click does. -->
+          <span v-if="can_flip" class="expert-card-flip"><UIcon name="i-lucide-settings-2" />{{ mode_options.length > 2 ? '' : t('设置') }}</span>
         </component>
-        <div v-if="offered.length > 1" class="expert-card-modes expert-card-front-modes" role="radiogroup" :aria-label="t('{value1} 启动方式', { value1: name })" @keydown="choose_capability">
-          <button v-for="option in offered" :key="option" type="button"
-            role="radio" :aria-checked="mode === option" :tabindex="mode === option ? 0 : -1" :data-mode="option" @click="choose_mode(option)">{{ ACCESS_LABELS[option] }}</button>
+        <div v-if="mode_options.length > 1" class="expert-card-modes expert-card-front-modes" :class="{ 'is-dense': mode_options.length > 2 }" role="radiogroup" :aria-label="t('{value1} 启动方式', { value1: name })" @keydown="choose_capability">
+          <button v-for="option in mode_options" :key="option" type="button" :title="MODE_TITLES[option]"
+            role="radio" :aria-checked="current_mode === option" :tabindex="current_mode === option ? 0 : -1" :data-mode="option" @click="choose_mode(option)">{{ ACCESS_LABELS[option] }}</button>
         </div>
         <span class="expert-card-tools">
           <!-- A card with a back keeps the description beside the prompt there; one without a back has only the front. A manual card has none, as its settings live in the user's own session. -->
@@ -455,6 +497,7 @@ onBeforeUnmount(() => { document.removeEventListener("pointerdown", close_on_out
         </span>
       </div>
     </motion.div>
+    <SessionBrowser v-if="browse_adapter" v-model:open="browsing" :name="name" :adapter="browse_adapter" :directory="browse_directory" :selected="profile.session_id || ''" @pick="resume_session" />
     <MemberDescriptionDialog v-model:open="describing" :name="name" :platform="preset ? '' : bridge.default_name(bridge.platform_of(name))" :default_label="bridge.default_name(name)" :text="description" :label="preset ? preset.label || '' : bridge.label_draft(name)" :template="preset ? '' : bridge.description_template(name)" @save="save_description" />
     <MemberTextDialog v-model:open="prompt_open" v-model:draft="prompt_draft" :title="t('{value1} 的专属提示词', { value1: name })"
       :description="workflow ? t('来自工作流「{value1}」，每次执行时按工作流里的这张卡片发送；请在“工作流”一行点“编辑”修改，修改会作用于所有启用它的房间。', { value1: workflow }) : t('只发给这位专家，补充它的做法与偏好；不改变权限和技能规则。')" :label="t('{value1} 的专属提示词', { value1: name })"
@@ -494,6 +537,7 @@ onBeforeUnmount(() => { document.removeEventListener("pointerdown", close_on_out
 .expert-card-open.has-modes { padding-bottom: 8px; }
 .expert-card-front-modes { flex-shrink: 0; width: fit-content; margin: 0 0 10px 12px; }
 .expert-card-front-modes button { flex: none; padding: 0 8px; white-space: nowrap; }
+.expert-card-front-modes.is-dense button { padding: 0 6px; }
 .expert-card-identity { display: flex; align-items: center; gap: 8px; min-width: 0; min-height: 26px; padding-right: 76px; }
 .expert-card-avatar { flex-shrink: 0; width: 26px; height: 26px; font-size: 10px; }
 .expert-card-names { display: grid; min-width: 0; }

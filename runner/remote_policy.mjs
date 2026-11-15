@@ -65,6 +65,11 @@ export function remote_directory(path, { roots, home }) {
   return real;
 }
 
+/** Whether another device may see what was made in a folder: it still exists here, inside a saved project. */
+export function remote_allows(path, options) {
+  try { remote_directory(path, options); return true; } catch { return false; }
+}
+
 /** Visit every value under `value`, calling `visit(key, item)` for each object property. */
 function walk(value, visit) {
   if (Array.isArray(value)) return value.forEach(item => walk(item, visit));

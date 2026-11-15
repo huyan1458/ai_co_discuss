@@ -155,6 +155,84 @@ export function newest_record(file, marker, pick) {
   return null;
 }
 
+// Browsing stored conversations reads only the two ends of each log: where it was made and its first prompt are at the
+// start, its latest title at the end.
+const SESSION_EDGE_BYTES = 256 * 1024;
+// A preview shows the end of a conversation: its last messages, read from this much of the log, each cut to a readable length.
+const PREVIEW_TAIL_BYTES = 2 * 1024 * 1024;
+const PREVIEW_MESSAGES = 40;
+const PREVIEW_TEXT_LIMIT = 2000;
+const SESSION_TITLE_LIMIT = 120;
+export const SESSION_PAGE_SIZE = 30;
+// One listing request describes at most this many logs, so a search with few matches still answers quickly.
+const SESSION_SCAN_LIMIT = 600;
+
+/** JSON entries of one byte range of a log; a line cut at either end of the range fails to parse and is skipped. */
+function range_entries(fd, position, length) {
+  const buffer = Buffer.alloc(length);
+  readSync(fd, buffer, 0, length, position);
+  return buffer.toString('utf8').split('\n').flatMap(line => { try { return [JSON.parse(line)]; } catch { return []; } });
+}
+
+/** The entries at the start and at the end of a session log (the same list for a short log), without reading its middle. */
+export function edge_entries(file, bytes = SESSION_EDGE_BYTES) {
+  const fd = openSync(file, 'r');
+  try {
+    const size = fstatSync(fd).size;
+    if (size <= bytes * 2) { const all = range_entries(fd, 0, size); return { head: all, tail: all }; }
+    return { head: range_entries(fd, 0, bytes), tail: range_entries(fd, size - bytes, bytes) };
+  } finally { closeSync(fd); }
+}
+
+/** A prompt as its author typed it: without the software's injected reminders; '' when the software wrote all of it. */
+export function typed_prompt(text) {
+  const plain = String(text || '').replace(/<system-reminder>[\s\S]*?<\/system-reminder>/g, '').trim();
+  return /^<[A-Za-z_-]+>/.test(plain) ? '' : plain;
+}
+
+/** One line naming a conversation that has no title of its own: the start of its first prompt. */
+export function prompt_title(text) {
+  const line = String(text || '').replace(/\s+/g, ' ').trim();
+  return line.length > SESSION_TITLE_LIMIT ? `${line.slice(0, SESSION_TITLE_LIMIT)}…` : line;
+}
+
+/**
+ * One page of stored conversations for a browsing window. `files` are the logs newest first (`{file, id, updated_at,
+ * size}`); `describe(file)` reads one into `{id, title, cwd, updated_at, size}`, or null for a log that is not a
+ * conversation the owner can resume. `query` keeps those whose title, directory or ID contains it; `accept(cwd)` keeps
+ * those the asker may see. Returns `{sessions, next_offset}`; `next_offset` is null once every log was looked at.
+ */
+export function page_sessions(files, describe, { query = '', offset = 0, limit = SESSION_PAGE_SIZE, accept = null } = {}) {
+  const needle = String(query).trim().toLowerCase();
+  const sessions = [];
+  let index = offset;
+  for (let scanned = 0; index < files.length && sessions.length < limit && scanned < SESSION_SCAN_LIMIT; index++, scanned++) {
+    let found = null;
+    try { found = describe(files[index]); } catch { /* A log being written or in another shape is not listed. */ }
+    if (!found || (accept && !accept(found.cwd))) continue;
+    if (needle && ![found.title, found.cwd, found.id].some(text => String(text || '').toLowerCase().includes(needle))) continue;
+    sessions.push(found);
+  }
+  return { sessions, next_offset: index < files.length ? index : null };
+}
+
+/**
+ * The end of a conversation for a preview: `message(entry)` turns one log entry into `{role: 'user'|'assistant', text,
+ * at}` or null. Returns the last messages, each cut to a readable length; `truncated` says earlier ones were left out.
+ */
+export function preview_messages(file, message) {
+  const fd = openSync(file, 'r');
+  let entries, partial;
+  try {
+    const size = fstatSync(fd).size, length = Math.min(size, PREVIEW_TAIL_BYTES);
+    partial = length < size;
+    entries = range_entries(fd, size - length, length);
+  } finally { closeSync(fd); }
+  const messages = entries.map(message).filter(Boolean);
+  return { truncated: partial || messages.length > PREVIEW_MESSAGES, messages: messages.slice(-PREVIEW_MESSAGES).map(item => item.text.length > PREVIEW_TEXT_LIMIT
+    ? { ...item, text: item.text.slice(0, PREVIEW_TEXT_LIMIT), cut: true } : item) };
+}
+
 const QUERY_TIMEOUT_MS = 30000;
 const MAX_OUTPUT_BYTES = 1024 * 1024;
 export const MODEL_PATTERN = /^[A-Za-z0-9][A-Za-z0-9._:/@[\]-]*$/;

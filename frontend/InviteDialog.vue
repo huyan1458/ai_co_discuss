@@ -152,6 +152,7 @@ async function submit_invitation() {
     const instance = instances.get(pick);
     const invited = await act("invite_member", { name: pick.name, access: manual ? "manual" : "runner",
       project_access: profile.project_access || view.value.launch.workspace?.project_access || "read",
+      ...(!manual && profile.session_id ? { session_id: profile.session_id } : {}),
       ...(pick.card && !manual ? { card: pick.card, workflow_members: workflow.members } : {}), refresh: false });
     // Admission may already be durable when a later label/description update fails. Do not invite it twice on retry.
     if (!invited) {
@@ -160,6 +161,8 @@ async function submit_invitation() {
     }
     // A manual member only starts when its launch instruction reaches the user's own AI session, so the dialog stays for that step.
     if (manual) manual_names.push(instance);
+    // A resumed conversation now belongs to this member; the platform's next card starts a new one.
+    if (profile.session_id) bridge.write_launch(pick.name, "session_id", null);
     invite_picks.value = invite_picks.value.filter((item) => item !== pick);
   }
   invited_manual.value = [...invited_manual.value, ...manual_names];
@@ -204,7 +207,7 @@ async function refresh_after(invited_any) {
         <p v-for="member in invite_workflow?.existing || []" :key="member.card" class="fine-print">{{ bridge.display_name(member.name) }}{{ t('：') }}{{ record(member.name)?.status === 'away' ? t('确认后请回，保留原会话') : t('已在场，沿用原成员') }}</p>
         <div v-if="invite_picks.length" class="pb-invite-cards">
           <div v-for="pick in invite_picks" :key="pick.id" class="pb-invite-pick">
-            <ExpertCard :name="pick.name" :mode="pick.mode" :choices="pick.card ? ['cli'] : ['cli', 'manual']" :status="invite_status(pick.name)" :workflow="pick.card ? invite_workflow?.label || '' : ''" @mode="pick.mode = $event" @remove="invite_picks = invite_picks.filter((item) => item !== pick)" />
+            <ExpertCard :name="pick.name" :mode="pick.mode" :choices="pick.card ? ['cli'] : ['cli', 'manual']" :status="invite_status(pick.name)" :directory="view.launch.room_models?.project_directory || ''" :workflow="pick.card ? invite_workflow?.label || '' : ''" @mode="pick.mode = $event" @remove="invite_picks = invite_picks.filter((item) => item !== pick)" />
             <p v-if="pick_instances.get(pick) !== pick.name" class="fine-print">{{ t("同一 AI 已有实例，将以 {name} 加入，使用独立会话。", { name: pick_instances.get(pick) }) }}</p>
           </div>
         </div>

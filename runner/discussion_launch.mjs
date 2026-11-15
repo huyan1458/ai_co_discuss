@@ -12,10 +12,10 @@ import { parseArgs } from 'node:util';
 import { account_projects, account_space, create_account_project, draft_folder } from './account_space.mjs';
 import { atomic_json } from './files.mjs';
 import { bundle_project_markdown, bundle_project_page, outside_directory, project_media, read_only_enforced, read_project_files, room_directories, search_project_roots } from './project_files.mjs';
-import { guard_remote_request, list_remote_directories } from './remote_policy.mjs';
+import { guard_remote_request, list_remote_directories, remote_allows, remote_roots } from './remote_policy.mjs';
 import { list_devices, machine_fingerprint, revoke_device, start_pairing } from './device_auth.mjs';
 import { setup_sidecar } from './adapters/antigravity_app.mjs';
-import { adapter_of, adoption_adapter, BRANCHABLE_ADAPTERS, branch_session, execution_details, session_settings, software_defaults, software_defaults_stamp, software_effort, software_models, software_skills } from './adapters/index.mjs';
+import { adapter_of, adoption_adapter, BRANCHABLE_ADAPTERS, branch_session, execution_details, session_preview, session_settings, software_defaults, software_defaults_stamp, software_effort, software_models, software_sessions, software_skills } from './adapters/index.mjs';
 import { ADAPTER_IDS, ADAPTER_PROFILES, adapter_profile, DEFAULT_API_MAX_REQUESTS, MAX_API_MAX_REQUESTS, platform_adapters, same_session_family } from './adapters/profiles.mjs';
 import { API_PROVIDERS, api_check, api_models, managed_api_keys, save_api_key, saved_api_keys, validate_api_profile } from './discussion_api.mjs';
 import { DEFAULT_SCHEDULER_MODE, SCHEDULER_MODES, SCHEDULER_PROVIDERS, scheduler_check } from './scheduler.mjs';
@@ -73,6 +73,7 @@ const HELP = `用法：codiscuss launch settings [--file FILE]
       codiscuss launch room-media --file FILE
       codiscuss launch execution-details --file FILE
       codiscuss launch models --file FILE
+      codiscuss launch sessions --file FILE
       codiscuss launch api-key --file FILE
       codiscuss launch api-check --file FILE
       codiscuss launch scheduler-check --file FILE
@@ -116,6 +117,7 @@ room-page 只读项目目录里的一个 HTML 文件（path，可选 root），�
 room-media 核对项目目录里的一个图片、视频或音频文件（path，可选 root）可读：本机网站凭它登记一个 10 分钟有效的播放地址，按 Range 直接读盘，网页拿不到文件路径；其他设备经中转时分段返回 base64 的 data（按 offset 续读并核对 version），最多 64 MB。
 execution-details 只读房间某次执行的过程细节（中间说明、命令与输出、搜索、改动、工具调用），由本机日志还原，须提供 site、room_id、token、execution_id；细节只留在本机，不写入网站。
 models 按 adapter、executable 或 API profile 读取模型目录，不启动讨论或生成回答。
+sessions 浏览某个软件（adapter）保存在这台电脑上的历史会话，供挑选新成员要续接的会话，不启动 AI：action 为 list（默认；可选 cwd 只看该目录的会话、query 按标题 / 目录 / 会话 ID 筛选、offset 续读下一页，返回 sessions 与 next_offset）或 preview（须带 session_id，返回该会话末尾的对话）；软件不支持浏览时 available 为 false。其他设备只能看到常用项目目录内的会话。
 api-key 将 base_url、api_key 保存于本机私有目录，只返回 api_key_ref。
 api-check 用 API profile 向模型发送一次极短请求，核对地址、密钥、协议与模型是否可用。
 scheduler-check 用智能调度配置（provider、model、api_key_ref）向决策模型发送一道是非题，核对供应商、模型与密钥是否可用。
@@ -402,6 +404,27 @@ export async function room_models(home, raw, { read_defaults = profile => cached
     api_max_requests: config.api_max_requests ?? DEFAULT_API_MAX_REQUESTS,
     // Whether members may draw here, and whether this computer has an image service to draw with.
     image_generation: Boolean(config.image_generation), image_configured: image_settings(home).configured };
+}
+
+/**
+ * Browse the conversations a software keeps on this computer, so the owner picks the one a new member resumes instead
+ * of typing its ID. `action: 'list'` (the default) returns one page, newest first: `{adapter, available, sessions:
+ * [{id, title, cwd, updated_at, size}], next_offset}`, narrowed by `cwd` (one directory's only) and `query`, continued
+ * by `offset`; `action: 'preview'` returns the end of the conversation `session_id`. `accept(cwd)`, given for a
+ * request without the computer owner's standing, limits both to conversations made in folders it may use. No AI turn starts.
+ */
+export function browse_sessions(raw, { accept = null, list = software_sessions, preview = session_preview } = {}) {
+  const input = raw && typeof raw === 'object' ? raw : {};
+  if (!adapter_of(input.adapter)) throw new Error(`适配器只能为 ${ADAPTER_IDS.join('/')}`);
+  if (input.action === 'preview') {
+    const result = preview(input.adapter, input.session_id);
+    if (accept && !accept(result.cwd)) throw new Error('电脑未允许其他设备查看这个目录里的会话；请在电脑上把该目录加入常用项目');
+    return { adapter: input.adapter, ...result };
+  }
+  if (input.action !== undefined && input.action !== 'list') throw new Error('action 只能为 list 或 preview');
+  for (const field of ['cwd', 'query']) if (input[field] !== undefined && typeof input[field] !== 'string') throw new Error(`${field} 须为文本`);
+  if (input.offset !== undefined && (!Number.isSafeInteger(input.offset) || input.offset < 0)) throw new Error('会话分页位置无效');
+  return { adapter: input.adapter, ...list(input.adapter, { cwd: input.cwd || '', query: input.query || '', offset: input.offset || 0, ...(accept ? { accept } : {}) }) };
 }
 
 /** Read one member's installed skills for the room owner, using only this computer's saved software and directory. */
@@ -2358,6 +2381,11 @@ export async function launch_main(args = process.argv.slice(2), input_text) {
     const saved = Object.values(launch_settings(home).participants).find(profile => profile.adapter === input.adapter);
     result = await cached_software_models(home, { adapter: input.adapter, executable: input.executable || saved?.executable,
       ...(input.model ? { model: input.model } : {}) }, { refresh: input.refresh === true });
+  }
+  else if (positionals[0] === 'sessions' && input) {
+    // Another device, or an ordinary account, sees only conversations made inside the folders it may use.
+    const grant = values.remote || restricted ? { roots: remote_roots(granted_projects(home)), home } : null;
+    result = browse_sessions(input, grant ? { accept: cwd => remote_allows(cwd, grant) } : {});
   }
   else if (positionals[0] === 'room-member' && input) result = await room_member(home, input);
   else if (positionals[0] === 'room-member-access' && input) result = await room_member_access(home, input);

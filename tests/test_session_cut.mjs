@@ -1,13 +1,14 @@
 /** Branch member sessions before taken-back executions, from each software's own session format; originals stay intact. */
 import assert from 'node:assert/strict';
 import { EventEmitter } from 'node:events';
-import { mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, utimesSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { PassThrough } from 'node:stream';
 import { test } from 'node:test';
 import { DatabaseSync } from 'node:sqlite';
-import { branch_session, execution_marker, session_exists } from '../runner/adapters/index.mjs';
+import { branch_session, execution_marker, session_exists, session_preview, software_sessions } from '../runner/adapters/index.mjs';
+import { browse_sessions } from '../runner/discussion_launch.mjs';
 
 const SESSION = '11111111-2222-3333-4444-555555555555';
 const prompt = id => `请先读取任务文件：D:/runs/${execution_marker(id)}，完成后提交。`;
@@ -136,4 +137,63 @@ test('a model API member copies its Pi session up to the first taken-back prompt
   // A forked room copies the whole session; one bound before Pi ran API members has no session here and starts anew.
   assert.deepEqual(copy_of((await branch_session(profile, SESSION, [], { home, always: true })).session_id).length, 6);
   assert.deepEqual(await branch_session(profile, 'api-0000', [], { home, always: true }), { session_id: '' });
+});
+
+test('stored conversations are listed newest first with their titles and previewed without injected context', t => {
+  const home = home_fixture(t), options = { home, env: {} };
+  const project = join(home, 'project'), elsewhere = join(home, 'elsewhere');
+  const claude = join(home, '.claude', 'projects', 'D--p');
+  mkdirSync(claude, { recursive: true });
+  const titled = '22222222-2222-3333-4444-555555555555';
+  writeFileSync(join(claude, `${SESSION}.jsonl`), lines([
+    { type: 'user', cwd: elsewhere, message: { content: '<system-reminder>injected</system-reminder>compare the two layouts' } },
+    { type: 'assistant', message: { content: [{ type: 'text', text: 'The second one.' }] } },
+  ]));
+  writeFileSync(join(claude, `${titled}.jsonl`), lines([
+    { type: 'user', cwd: project, timestamp: '2026-11-15T00:00:00.000Z', message: { content: 'first prompt' } },
+    { type: 'user', isMeta: true, message: { content: 'meta' } },
+    { type: 'user', message: { content: [{ type: 'tool_result', content: 'output' }] } },
+    { type: 'assistant', message: { content: [{ type: 'tool_use', name: 'Read' }, { type: 'text', text: 'done' }] } },
+    { type: 'ai-title', aiTitle: 'machine title' }, { type: 'custom-title', customTitle: 'owner title' },
+  ]));
+  utimesSync(join(claude, `${SESSION}.jsonl`), new Date(1000), new Date(1000));
+  const listed = software_sessions('claude', options);
+  assert.equal(listed.available, true);
+  assert.deepEqual(listed.sessions.map(session => [session.id, session.title, session.cwd]),
+    [[titled, 'owner title', project], [SESSION, 'compare the two layouts', elsewhere]]);
+  assert.equal(listed.next_offset, null);
+  assert.deepEqual(software_sessions('claude', { ...options, query: 'LAYOUTS' }).sessions.map(session => session.id), [SESSION]);
+  assert.deepEqual(software_sessions('claude', { ...options, cwd: project }).sessions.map(session => session.id), [titled]);
+  assert.deepEqual(software_sessions('claude', { ...options, limit: 1 }).next_offset, 1);
+  const preview = session_preview('claude', titled, options);
+  assert.deepEqual(preview.messages.map(message => [message.role, message.text]), [['user', 'first prompt'], ['assistant', 'done']]);
+  assert.equal(preview.cwd, project);
+  assert.throws(() => session_preview('claude', '33333333-2222-3333-4444-555555555555', options), /找不到 Claude 会话/);
+
+  const threads = join(home, '.codex', 'sessions', '2026', '11', '15');
+  mkdirSync(threads, { recursive: true });
+  const thread = '01a1de46-e39a-73f2-874e-b38731e8465c', review = '01a1de46-e39a-73f2-874e-b38731e84000';
+  const message = (role, text) => ({ type: 'response_item', payload: { type: 'message', role, content: [{ type: role === 'user' ? 'input_text' : 'output_text', text }] } });
+  writeFileSync(join(threads, `rollout-2026-11-15T00-00-00-${thread}.jsonl`), lines([
+    { type: 'session_meta', payload: { id: thread, cwd: project, thread_source: 'user' } },
+    message('user', '# AGENTS.md instructions for the project'), message('user', '<environment_context>shell</environment_context>'),
+    message('user', 'say hello'), message('assistant', 'Hello.'),
+  ]));
+  writeFileSync(join(threads, `rollout-2026-11-15T00-00-01-${review}.jsonl`), lines([{ type: 'session_meta', payload: { id: review, cwd: project, thread_source: 'guardian_review' } }]));
+  writeFileSync(join(home, '.codex', 'session_index.jsonl'), lines([{ id: thread, thread_name: 'old name' }, { id: thread, thread_name: 'Respond to greeting' }]));
+  for (const adapter of ['codex_cli', 'codex']) {
+    assert.deepEqual(software_sessions(adapter, options).sessions.map(session => [session.id, session.title]), [[thread, 'Respond to greeting']], adapter);
+  }
+  assert.deepEqual(session_preview('codex_cli', thread, options).messages.map(item => item.text), ['say hello', 'Hello.']);
+  assert.deepEqual(software_sessions('antigravity_cli', options), { available: false, sessions: [], next_offset: null });
+
+  // A request without the computer owner's standing sees only conversations made in folders it may use.
+  const list = (adapter, extra) => software_sessions(adapter, { ...options, ...extra });
+  const preview_of = (adapter, id) => session_preview(adapter, id, options);
+  const accept = cwd => cwd === project;
+  assert.deepEqual(browse_sessions({ adapter: 'claude' }, { accept, list }).sessions.map(session => session.id), [titled]);
+  assert.equal(browse_sessions({ adapter: 'claude', action: 'preview', session_id: titled }, { accept, preview: preview_of }).title, 'owner title');
+  assert.throws(() => browse_sessions({ adapter: 'claude', action: 'preview', session_id: SESSION }, { accept, preview: preview_of }), /未允许/);
+  assert.throws(() => browse_sessions({ adapter: 'unknown' }), /适配器/);
+  assert.throws(() => browse_sessions({ adapter: 'claude', offset: -1 }), /分页/);
 });

@@ -5,15 +5,15 @@
  */
 import { spawn } from 'node:child_process';
 import { randomUUID } from 'node:crypto';
-import { existsSync, readFileSync, readdirSync } from 'node:fs';
+import { existsSync, readFileSync, readdirSync, statSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { join, resolve } from 'node:path';
 import { createInterface } from 'node:readline';
 import { fileURLToPath } from 'node:url';
 import { cli_delivery } from './cli.mjs';
 import { daemon_chat, daemon_link } from './codex_daemon.mjs';
-import { CALL_TIMEOUT_MS, launch_directory, log_entries, marked, model_entry, json_line, newest_record, not_sent,
-  project_directory, prompt_text, query_catalog } from './common.mjs';
+import { CALL_TIMEOUT_MS, edge_entries, launch_directory, log_entries, marked, model_entry, json_line, newest_record, not_sent,
+  page_sessions, preview_messages, project_directory, prompt_text, prompt_title, query_catalog, same_path, typed_prompt } from './common.mjs';
 
 /** Codex exec may linger after its final event; the finished turn is already saved, so stop it to free the session. */
 const CLI_EXIT_GRACE_MS = 1500;
@@ -193,6 +193,64 @@ export function session_path(session_id, env = process.env, home = homedir()) {
   return found ? join(sessions, found) : '';
 }
 
+/** One rollout entry as a conversation message; the instructions and context Codex puts in as user messages are left out. */
+function thread_message(entry) {
+  const payload = entry.payload || {};
+  if (entry.type !== 'response_item' || payload.type !== 'message' || !['user', 'assistant'].includes(payload.role)) return null;
+  const parts = Array.isArray(payload.content) ? payload.content : [];
+  const raw = parts.filter(part => ['input_text', 'output_text', 'text'].includes(part?.type)).map(part => part.text || '').join('\n').trim();
+  const text = payload.role === 'assistant' ? raw : raw.startsWith('# AGENTS.md instructions') ? '' : typed_prompt(raw);
+  return text ? { role: payload.role, text, at: entry.timestamp || '' } : null;
+}
+
+/** The names Codex gave its threads, from its index (`session_index.jsonl`; a later line replaces an earlier one). */
+function thread_names(root) {
+  const names = new Map();
+  const index = join(root, 'session_index.jsonl');
+  if (!existsSync(index)) return names;
+  for (const entry of log_entries(index)) if (entry.id && entry.thread_name) names.set(entry.id, entry.thread_name);
+  return names;
+}
+
+/** What a browsing window shows of one thread; null for a thread Codex started itself (a subagent, a review). */
+function describe_thread({ file, updated_at, size }, names) {
+  const { head } = edge_entries(file);
+  const meta = head.find(entry => entry.type === 'session_meta')?.payload;
+  if (!meta?.id || (meta.thread_source && meta.thread_source !== 'user')) return null;
+  const title = names.get(meta.id) || prompt_title(head.map(thread_message).find(message => message?.role === 'user')?.text);
+  return { id: meta.id, title: String(title || ''), cwd: String(meta.cwd || ''), updated_at, size };
+}
+
+/**
+ * One page of the threads Codex keeps on this machine, newest first, as its `/resume` lists them (rollout and index
+ * layout read on 0.164; not an official interface; archived threads are not listed). `cwd` keeps one directory's threads.
+ * Shared by the App adapter.
+ */
+export function list_sessions({ cwd = '', env = process.env, home = homedir(), ...page } = {}) {
+  const root = env.CODEX_HOME || join(home, '.codex'), sessions = join(root, 'sessions');
+  if (!existsSync(sessions)) return { sessions: [], next_offset: null };
+  const files = [];
+  for (const path of readdirSync(sessions, { recursive: true }).map(String)) {
+    if (!/rollout-.*\.jsonl$/.test(path)) continue;
+    try { const info = statSync(join(sessions, path)); files.push({ file: join(sessions, path), updated_at: info.mtime.toISOString(), size: info.size }); }
+    catch { /* Removed while listing. */ }
+  }
+  files.sort((left, right) => right.updated_at.localeCompare(left.updated_at));
+  const names = thread_names(root);
+  const accept = found => (!cwd || same_path(found, cwd)) && (!page.accept || page.accept(found));
+  return page_sessions(files, file => describe_thread(file, names), { ...page, accept });
+}
+
+/** The last messages of one thread, for the owner to recognise it before a member resumes it. Shared by the App adapter. */
+export function preview_session(session_id, { env = process.env, home = homedir() } = {}) {
+  const file = session_path(session_id, env, home);
+  if (!file) throw new Error(`本机找不到 Codex 会话 ${session_id}`);
+  const info = statSync(file);
+  const described = describe_thread({ file, updated_at: info.mtime.toISOString(), size: info.size }, thread_names(env.CODEX_HOME || join(home, '.codex')));
+  if (!described) throw new Error(`Codex 会话 ${session_id} 不是可续接的对话`);
+  return { ...described, ...preview_messages(file, thread_message) };
+}
+
 /** Codex turns in order, and the index of the first turn whose user prompt carries a marker (-1 when none does). */
 function codex_turns(file, markers) {
   const turns = [];
@@ -362,7 +420,7 @@ export const codex_cli = {
   invocation, lifecycle, exit_error, events,
   on_stderr: remember_writer_conflict,
   session: { path: session_path, exists: session_exists, owns: (id, options) => session_exists(id, options) && !desktop_thread(id, options),
-    branch, settings: session_settings },
+    branch, settings: session_settings, list: list_sessions, preview: preview_session },
   models: { list: models, defaults },
   skills: codex_skills,
 };
