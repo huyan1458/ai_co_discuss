@@ -535,9 +535,12 @@ test('API participants load the shared skills and map CLI commands onto their ro
   assert.match(free, /# 开发协作/, 'an API free-room host cannot open references, so it gets the development reference inline');
   assert.doesNotMatch(expert, /# 开发协作/);
   assert.match(free, /# 请求与派活/);
-  assert.doesNotMatch(free, /## 自动主持流程|# 讨论模式（discuss-session）/, 'a free-room host gets the host core and free-room pages, not the discussion pages');
-  assert.match(host, /## 自动主持流程/);
+  for (const page of [/# 接力与问题卡/, /# 房间控制与恢复/, /# 工作流/]) assert.match(free, page, 'an API room host gets every occasional host page inline');
+  assert.doesNotMatch(free, /## 每次主持任务|# 讨论模式（discuss-session）/, 'a free-room host gets the host core and free-room pages, not the discussion pages');
+  assert.match(host, /## 每次主持任务/);
   assert.match(host, /# 讨论主持/);
+  for (const page of [/# 房间控制与恢复/, /# 工作流/]) assert.match(host, page, 'an API discussion host gets the pages its discussion page links to');
+  assert.doesNotMatch(host, /# 接力与问题卡/);
   assert.match(expert, /# 房间参与（discuss-participant）/);
   assert.match(expert, /# 讨论模式（discuss-session）/);
   assert.doesNotMatch(expert, /# 回答房间请求/, 'discussion experts do not load the free-room page');

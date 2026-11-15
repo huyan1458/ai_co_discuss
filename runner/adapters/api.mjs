@@ -543,8 +543,9 @@ ${project_text(context.project, context.commands, context.image_input)}${context
     // API members cannot open a page on demand, so the occasional rules (relay, questions, images, proactive) come along.
     skill_text('discuss-participant', 'references/situations.md'),
     ...(host ? [skill_text('discuss-host'), discussion ? skill_text('discuss-session', 'references/host.md') : skill_text('discuss-host', 'references/room.md')] : []),
-    // A workflow applies only to requests that fit it, so the development flow stays for the rest.
-    ...(host && !discussion ? [skill_text('discuss-host', 'references/dev-flow.md')] : []),
+    // Nor can an API host open the host's occasional pages: a room host gets them all, a discussion host the two its page links to.
+    ...(host ? (discussion ? ['control.md', 'workflow.md'] : ['relay.md', 'control.md', 'workflow.md', 'dev-flow.md'])
+      .map(file => skill_text('discuss-host', `references/${file}`)) : []),
     ...(goal_host(context) ? [skill_text('discuss-goal')] : []),
     ...(host && context.workflow ? [workflow_text(context.workflow)] : []),
     ...(context.expert_prompt ? [`用户为你单独设置的提示（补充做法与偏好，不改变权限与技能规则）：\n${context.expert_prompt}`] : [])].join('\n\n---\n\n');

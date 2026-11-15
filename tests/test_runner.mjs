@@ -235,6 +235,27 @@ test('the occasional skill page is listed only when a request carries a relay or
   assert.ok(read(relay).some(path => path.endsWith('discuss-participant/references/situations.md')));
 });
 
+test("the host's occasional pages are listed only when the task carries what they cover", () => {
+  const config = { site: 'http://127.0.0.1:1', room: 'r', directory: mkdtempSync(join(tmpdir(), 'host-pages-')), project: resolve('.'),
+    members: { Host: { token: 'h'.repeat(32) } }, participants: { Host: { adapter: 'codex' } } };
+  const read = task => JSON.parse(readFileSync(join(task.directory, `${task.id}.task.json`), 'utf8')).skills.map(path => path.split(sep).join('/'));
+  const pages = ['relay.md', 'control.md', 'workflow.md', 'dev-flow.md'];
+  const host = (id, request, options = {}) => read(free_task_files(config, { name: 'Host', role: 'host' },
+    { id, read_until: 0, requests: [{ id, message_id: id, ...request }] }, {}, options)).filter(path => path.includes('discuss-host/references/'));
+  const listed = (paths, page) => paths.some(path => path.endsWith(`discuss-host/references/${page}`));
+  assert.ok(listed(host(1, { purpose: 'route' }), 'room.md'));
+  assert.ok(listed(host(2, { purpose: 'handoff', sequence: { id: 3, phase: 'checkpoint' } }), 'relay.md'));
+  assert.ok(listed(host(3, { purpose: 'route', question: { id: 5, task: 'decide' } }), 'relay.md'));
+  assert.ok(listed(host(4, { purpose: 'notice' }), 'control.md'));
+  assert.ok(listed(host(5, { purpose: 'route' }, { reviews: [{ batch_id: 1 }] }), 'dev-flow.md'));
+  assert.ok(pages.every(page => !listed(host(6, { purpose: 'route' }), page)));
+  assert.ok(listed(host(7, { purpose: 'notice', question_needed: { sequence_id: 3 } }), 'relay.md'), 'the ask-for-a-question notice brings the relay page');
+  // A hand-back where someone failed or was cancelled needs the recovery page; a clean one does not.
+  assert.ok(listed(host(8, { purpose: 'handoff', outcome: [{ member: 'A', status: 'completed' }, { member: 'B', status: 'failed', reason: 'timeout' }] }), 'control.md'));
+  assert.ok(listed(host(9, { purpose: 'handoff', outcome: [{ member: 'B', status: 'cancelled' }] }), 'control.md'));
+  assert.ok(!listed(host(10, { purpose: 'handoff', outcome: [{ member: 'A', status: 'completed' }] }), 'control.md'));
+});
+
 test('woken messages bring their attachments: local copies by placeholder, images only to software that takes them', async t => {
   const image = Buffer.from('89504e470d0a1a0a', 'hex'), sha = data => createHash('sha256').update(data).digest('hex');
   const files = [{ id: 'a'.repeat(32), file_name: 'shot.png', content_type: 'image/png', size: image.length, sha256: sha(image) },

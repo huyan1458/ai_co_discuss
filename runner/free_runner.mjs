@@ -275,6 +275,16 @@ export function free_task_files(config, member, execution, binding, { session = 
   const image = config.image_generation && image_settings(config.api_home).configured ? image_settings(config.api_home) : null;
   // Relay, question and image rules are read only when the task carries them, keeping the everyday path short.
   if (image || requests.some(item => item.sequence || item.question || item.question_needed)) skills.push('discuss-participant/references/situations.md');
+  // The host's occasional pages likewise: relays and question cards, room control on a notice, the workflow, pre-set reviews.
+  if (member.role === 'host') {
+    if (requests.some(item => item.sequence || item.question?.task || item.question_needed)) skills.push('discuss-host/references/relay.md');
+    // A notice, or a hand-back where someone failed or was cancelled, is what calls for diagnosing and recovering.
+    if (requests.some(item => item.purpose === 'notice' || (item.outcome || []).some(entry => ['failed', 'cancelled'].includes(entry.status)))) {
+      skills.push('discuss-host/references/control.md');
+    }
+    if (workflow_field) skills.push('discuss-host/references/workflow.md');
+    if (reviews.length) skills.push('discuss-host/references/dev-flow.md');
+  }
   atomic_json(task_path, { site: config.site, room: config.room, mode: 'free', member: member.name,
     execution_id: execution.id, requests, request_messages: execution.requests.map(item => item.message_id),
     ...(attachments.length ? { attachments } : {}),

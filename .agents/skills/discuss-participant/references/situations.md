@@ -8,7 +8,7 @@
 
 ## 向用户提问
 
-需要用户拍板、程序也要等这个回答时，用提问对象，不要在回答里写一句“请用户选择”然后停下：`question ask --file 草稿.json`（API 用 `ask_question`），身份、执行编号与提交编号由凭据和内容补齐。草稿写 `contract`、`blocking`、`explanation`、`questions`（每题 `id`、`question` 简短题干、可选 `header` 短标签与 `detail` 补充说明、`options` 的 `label`/`description`/`anchor`、`multiSelect`、`free_text`；推荐项放首位并写 `"recommended": true`，与 DeepSeek Harness 的写法相同，标签末尾写 `(Recommended)` 也认），可选 `refs`（只填依据的消息编号）。
+何时用提问、何时直接在回答里问，见 [回答房间请求](room.md)“需要用户决定时”。提问：`question ask --file 草稿.json`（API 用 `ask_question`），身份、执行编号与提交编号由凭据和内容补齐。草稿写 `contract`、`blocking`、`explanation`、`questions`（每题 `id`、`question` 简短题干、可选 `header` 短标签与 `detail` 补充说明、`options` 的 `label`/`description`/`anchor`、`multiSelect`、`free_text`；推荐项放首位并写 `"recommended": true`，与 DeepSeek Harness 的写法相同，标签末尾写 `(Recommended)` 也认），可选 `refs`（只填依据的消息编号）。
 - **阻塞**（`"contract": "handoff", "blocking": true`）：原请求必须有用户输入才能完成时用。`explanation` 就是本次请求的交付，写明已完成的部分、各候选的完整说明（放在小标题下，`anchor` 填小标题）和需要用户提供什么；保存后本次执行结束、不能再补交，用户回答后以新请求交回你，任务里 `question.user_decision` 是用户的结构化答案。
 - **非阻塞**（`"contract": "supplement", "blocking": false`）：顺带问一句、不影响完成时用；执行继续，之后照常回答，答案稍后以新请求交回你。
 - 讨论模式里普通专家默认不发阻塞提问：写明信息缺口和假设并完成观点；确实缺少不可替代的信息时说明阻塞，由主持人调整安排。
