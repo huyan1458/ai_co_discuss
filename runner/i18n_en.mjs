@@ -392,5 +392,19 @@ export default {
   "本机网站、讨论服务与管理面板都会停止。": "The local site, discussion service and admin panel will stop.",
   "托管用户的实例不受影响。": "Hosted instances are unaffected.",
   "取消": "Cancel",
-  "npm {args} 失败（退出码 {code}）：{output}": "npm {args} failed (exit code {code}): {output}"
+  "npm {args} 失败（退出码 {code}）：{output}": "npm {args} failed (exit code {code}): {output}",
+  "（推荐）": " (recommended)",
+  "问题 #{id}：{asker} 在等你回答": "Question #{id}: {asker} is waiting for your answer",
+  "第 {number} 题：{question}": "Question {number}: {question}",
+  "（可多选）": "(choose any)",
+  "直接回复你的回答，会交给主持人理解后代为作答。": "Reply with your answer; the host will read it and answer for you.",
+  "按题目顺序逐题回复编号即可，用空格分隔（如“1 2”）；其他文字会交给主持人理解后代为选择。": "Reply with one option number per question, in order, separated by spaces (such as \"1 2\"); anything else goes to the host, who will read it and choose for you.",
+  "回复编号即可；其他文字会交给主持人理解后代为选择。": "Reply with the option number; anything else goes to the host, who will read it and choose for you.",
+  "问题 #{id} 已经回答过了，这条回复没有作答。": "Question #{id} was already answered; this reply answered nothing.",
+  "问题 #{id} 已取消，这条回复没有作答。": "Question #{id} was cancelled; this reply answered nothing.",
+  "问题 #{id} 已过期，这条回复没有作答。": "Question #{id} has expired; this reply answered nothing.",
+  "问题 #{id} 已交给主持人处理，这条回复没有作答；需要补充请在房间里说。": "Question #{id} is with the host; this reply answered nothing. To add something, say it in the room.",
+  "问题 #{id} 已更新到第 {version} 版（例如主持人给了推荐），这条回复没有作答；新版本会另发通知。": "Question #{id} is now at version {version} (for example the host recommended an answer); this reply answered nothing. The new version will be sent to you.",
+  "已按 {picked}回答问题 #{id}。": "Answered question #{id} with {picked}.",
+  "已把你的回复交给主持人判断（问题 #{id}），它会代为选择或在房间里追问。": "Your reply went to the host (question #{id}); it will choose for you or ask in the room."
 };

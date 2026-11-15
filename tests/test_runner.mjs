@@ -2316,6 +2316,30 @@ test('a pending goal without the host note (set by the decision model) quotes th
   assert.deepEqual(sent[0].paragraphs.slice(0, 2), ['房间在等你回复。最近一条是 Codex 说：', '前四项已修复。要不要继续修后四项，请你决定。']);
 });
 
+test('a blocking question left waiting reaches Weixin once per version, outside a goal too, without waking the host', async t => {
+  const f = await free_fixture(t);
+  f.state.pending = [];
+  const now = Math.floor(Date.now() / 1000);
+  const question = { id: 12, version: 1, status: 'waiting_user', blocking: true, asker: 'Codex', waiting_since: now,
+    questions: [{ id: 'draft', question: '用哪一稿？', multiSelect: false, free_text: true, options: [{ id: 'B', label: 'B 稿', recommended: true }, { id: 'A', label: 'A 稿' }] }] };
+  f.state.room.free = { ...(f.state.room.free || {}), questions: [question, { ...question, id: 13, blocking: false }] };
+  const sent = [];
+  const runner = new FreeRoomRunner(f.config, f.store, async () => ({ status: 'accepted' }));
+  runner.notifier = { ready: () => true, sent: key => sent.some(item => item.key === key), send: async notice => { sent.push(notice); return { status: 'sent', number: sent.length }; } };
+  await runner.tick();
+  assert.equal(sent.length, 0, 'not before the owner has had a while');
+  assert.equal(runner.idle(), false, 'the service keeps ticking until the notice is due');
+  f.state.room.free.questions[0] = { ...question, waiting_since: now - 301 };
+  await runner.tick();
+  await runner.tick();
+  assert.equal(sent.length, 1, 'once per question and version; a non-blocking question is not sent');
+  assert.deepEqual([sent[0].question, sent[0].paragraphs[2]], [{ id: 12, version: 1 }, '1. B 稿（推荐）']);
+  f.state.room.free.questions[0] = { ...question, version: 2, waiting_since: now - 301 };
+  await runner.tick();
+  assert.deepEqual(sent.map(item => item.question.version), [1, 2], 'a recommendation makes a new version, told again');
+  assert.equal(f.state.goal_posts?.length || 0, 0, 'the host is not woken');
+});
+
 function scheduler_fetch(answers) {
   return async () => ({ ok: true, json: async () => ({ answers }) });
 }

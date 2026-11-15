@@ -265,7 +265,7 @@ export function unbind(home) {
  * `paragraphs` are shown separated by blank lines. Returns `sent`, `duplicate`, `unbound` or `no_context` (the owner
  * has not messaged the bot since binding).
  */
-export async function send_notice(home, { key, room = null, paragraphs }, client_options = {}) {
+export async function send_notice(home, { key, room = null, paragraphs, question = null }, client_options = {}) {
   const account = weixin_account(home);
   if (!account) return { status: 'unbound' };
   const state = read_state(home);
@@ -286,8 +286,9 @@ export async function send_notice(home, { key, room = null, paragraphs }, client
     throw error;
   }
   const latest = read_state(home);
+  // A question's notice also names the question and version, so a reply to it can answer that question.
   latest.notices = [...latest.notices, { number, key: key || '', site: room?.site || '', room: room?.room || '', sent_at: Date.now(),
-    server_ids, text: body }].slice(-RECENT_NOTICES);
+    server_ids, text: body, ...(question ? { question_id: question.id, version: question.version } : {}) }].slice(-RECENT_NOTICES);
   write_json(state_path(home), { ...latest, next_notice: number + 1, last_error: '' });
   return { status: 'sent', number };
 }
@@ -358,7 +359,10 @@ async function answer(home, account, client, item, on_reply, log) {
   else if (!target) reply = '已收到。还没有房间给你发过通知，这条回复没有可发往的房间。';
   else if (!target.room) reply = '已收到。这条通知不对应任何房间，回复不会转发；要回复某个房间，请引用那个房间的通知。';
   else {
-    try { reply = await on_reply({ site: target.site, room: target.room, text: item.text }); }
+    try {
+      reply = await on_reply({ site: target.site, room: target.room, text: item.text,
+        ...(target.question_id ? { question_id: target.question_id, version: target.version } : {}) });
+    }
     catch (error) { reply = `未能发到房间：${error.message}`; log(`微信回复未能发到房间 ${target.room}：${error.message}`); }
   }
   if (!reply || !state.context_token) return;
@@ -385,7 +389,7 @@ export async function weixin_command(home, input = {}) {
   if (action === 'unbind') return unbind(home);
   if (action === 'test') {
     const result = await send_notice(home, { room: { title: '测试' }, paragraphs: ['这是一条测试通知。',
-      '房间里的 Goal 等你确认时，会像这样发到微信。直接回复通知，就会作为你的发言发回那个房间。'] });
+      '房间里的 Goal 等你确认、或成员的问题等你回答时，会像这样发到微信。直接回复通知，就会作为你的发言发回那个房间；回复问题通知时写选项编号即可作答。'] });
     if (result.status === 'no_context') throw new Error('还收不到你的消息：请先在微信里给机器人发一条消息，再点发送测试');
     if (result.status === 'unbound') throw new Error('尚未绑定微信');
     return { ...result, ...weixin_status(home) };

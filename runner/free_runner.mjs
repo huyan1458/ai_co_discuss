@@ -15,6 +15,7 @@ import { SessionDriver } from './session_driver.mjs';
 import { effective_profile, load_room_workflow, workflow_in_use, workflow_task_field } from './workflows.mjs';
 import { DEFAULT_SCHEDULER_MODE, GOAL_PROMPT_VERSION, decide_goal_wake, decide_sequence_checkpoint, REVIEW_CONFIDENCE, REVIEW_PROMPT_VERSION, SEQUENCE_CONFIDENCE, SEQUENCE_PROMPT_VERSION, ROUTE_CONFIDENCE, ROUTE_CONTEXT_MESSAGES, decide_review_completion, route_free_message, route_prompt_version, scheduler_thresholds, some_members } from './scheduler.mjs';
 import { room_text, room_payload } from './room_text.mjs';
+import { question_notice } from './question_weixin.mjs';
 const api = (config, path, payload, ...options) => raw_api(config, path, room_payload(payload), ...options);
 
 const PACKAGE_VERSION = JSON.parse(readFileSync(new URL('../package.json', import.meta.url), 'utf8')).version;
@@ -30,6 +31,7 @@ const MAX_CAPTURED_REPLY = 32000;
 // Fallback when the room's goal does not carry its own idle wait (older website).
 export const GOAL_IDLE_MS = 120_000;
 // A goal waiting on the owner reaches their Weixin only after this long: right after the question they may be typing.
+// How long the owner is left waiting (a goal's pending phase, a blocking question) before Weixin tells them.
 export const PENDING_NOTICE_MS = 5 * 60_000;
 // A failed Weixin notice is tried again after this long instead of on every tick.
 const NOTICE_RETRY_MS = 60_000;
@@ -519,6 +521,7 @@ export class FreeRoomRunner {
     if (!inbox.archived) this.arrange_groups(inbox);
     this.room_title = room.title;
     this.room = room;
+    if (!inbox.archived) await this.notify_questions(room);
     if (!inbox.archived) await this.continue_goal(room);
     this.inbox = inbox;
     const active = new Map(inbox.executions.map(item => [item.id, item]));
@@ -689,6 +692,8 @@ export class FreeRoomRunner {
     if (this.room?.goal_state?.goal?.idle) return false;
     const notice = this.pending_notice(this.room);
     if (notice && this.notifier.ready() && !this.notifier.sent(notice.key)) return false;
+    // A blocking question waiting on the owner needs ticks too, so its Weixin notice goes out on time.
+    if (this.notifier?.ready() && this.question_notices(this.room).some(item => !this.notifier.sent(item.key))) return false;
     if (this.room?.session?.status === 'active' || inbox.executions.length || inbox.members.some(member => member.pending.length)) return false;
     return !this.store.db.prepare('SELECT status FROM free_deliveries').all().some(row => LIVE.includes(row.status));
   }
@@ -746,6 +751,34 @@ export class FreeRoomRunner {
     } catch (error) {
       this.notice_failed_at = Date.now();
       this.log(`Goal 待确认微信通知失败：${error.message}`);
+    }
+  }
+  /**
+   * The Weixin notices blocking questions call for: one per question and version that waits on the owner (a host's
+   * recommendation makes a new version, which is told again), due once it has waited `PENDING_NOTICE_MS`.
+   */
+  question_notices(room) {
+    if (!this.notifier) return [];
+    return (room?.free?.questions || []).filter(question => question.blocking && question.status === 'waiting_user')
+      .map(question => ({ key: `${this.config.site}/${this.config.room}/question-${question.id}-v${question.version}`,
+        due: question.waiting_since * 1000 + PENDING_NOTICE_MS, question }));
+  }
+  /** Tell the owner on Weixin about a blocking question left waiting; a reply of its option numbers answers it. */
+  async notify_questions(room) {
+    if (Date.now() - (this.notice_failed_at ?? 0) < NOTICE_RETRY_MS || !this.notifier?.ready()) return;
+    const labels = Object.fromEntries((room.members || room.free?.members || []).map(member => [member.name, member.label || member.name]));
+    for (const notice of this.question_notices(room)) {
+      if (Date.now() < notice.due || this.notifier.sent(notice.key)) continue;
+      const { question } = notice;
+      try {
+        const result = await this.notifier.send({ key: notice.key, room: { site: this.config.site, room: this.config.room, title: room.title },
+          question: { id: question.id, version: question.version }, paragraphs: question_notice(question, labels[question.asker] || question.asker) });
+        if (result.status === 'sent') this.log(`问题 #${question.id} 第 ${question.version} 版已发微信通知 #${result.number}`);
+      } catch (error) {
+        this.notice_failed_at = Date.now();
+        this.log(`问题 #${question.id} 微信通知失败：${error.message}`);
+        return;
+      }
     }
   }
   /** The room's latest message from a person or member, for a pending goal nobody wrote a note for. */

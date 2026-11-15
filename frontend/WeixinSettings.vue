@@ -61,7 +61,7 @@ async function act(action, message) {
         <div class="weixin-settings">
           <p v-if="unavailable" class="fine-print">{{ t('微信通知由这台电脑的本机服务收发，需要连接本机服务或已配对电脑：{value1}', { value1: unavailable }) }}</p>
           <template v-else-if="status">
-            <p class="fine-print">{{ t('主持人声明 Goal 待你确认后，5 分钟内你没在房间回复，就发到微信；直接回复微信消息即作为你的发言发回该房间，引用某条通知回复则发回那条通知的房间。只转发文字，登录凭据只存这台电脑。') }}</p>
+            <p class="fine-print">{{ t('主持人声明 Goal 待你确认后，5 分钟内你没在房间回复，就发到微信；直接回复微信消息即作为你的发言发回该房间，引用某条通知回复则发回那条通知的房间。成员向你提的问题等你 5 分钟未答也会发来，回复选项编号即直接作答，其他文字交给主持人代为选择。只转发文字，登录凭据只存这台电脑。') }}</p>
             <template v-if="qr">
               <!-- eslint-disable-next-line vue/no-v-html -- an SVG this page rendered from the service's QR content -->
               <div class="weixin-qr" :aria-label="t('微信绑定二维码')" v-html="qr" />

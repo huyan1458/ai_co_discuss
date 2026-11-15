@@ -284,7 +284,6 @@
   "微信通知": "WeChat notifications",
   "Goal 等你确认时": "When a Goal needs your confirmation",
   "微信通知由这台电脑的本机服务收发，需要连接本机服务或已配对电脑：{value1}": "WeChat notifications are sent and received by this computer's local service. Connect to the local service or a paired computer: {value1}",
-  "主持人声明 Goal 待你确认后，5 分钟内你没在房间回复，就发到微信；直接回复微信消息即作为你的发言发回该房间，引用某条通知回复则发回那条通知的房间。只转发文字，登录凭据只存这台电脑。": "If you do not reply in the room within 5 minutes after the host marks a Goal as awaiting your confirmation, a notification is sent to WeChat. Reply in WeChat to post your message in that room; quoting a notification sends it to that notification's room. Only text is forwarded. Login credentials stay on this computer.",
   "微信绑定二维码": "WeChat linking QR code",
   "用微信扫码并在手机上确认。": "Scan with WeChat and confirm on your phone.",
   "请先在微信里给机器人发一条任意消息：微信要求先收到你的消息，才能给你发通知。": "Send any message to the bot in WeChat first. WeChat requires a message from you before the bot can notify you.",
@@ -659,5 +658,6 @@
   "全放开": "Full access",
   "自行决定": "Its own choice",
   "第 {value1} 行": "Line {value1}",
-  "第 {value1}–{value2} 行": "Lines {value1}–{value2}"
+  "第 {value1}–{value2} 行": "Lines {value1}–{value2}",
+  "主持人声明 Goal 待你确认后，5 分钟内你没在房间回复，就发到微信；直接回复微信消息即作为你的发言发回该房间，引用某条通知回复则发回那条通知的房间。成员向你提的问题等你 5 分钟未答也会发来，回复选项编号即直接作答，其他文字交给主持人代为选择。只转发文字，登录凭据只存这台电脑。": "If you do not reply in the room within 5 minutes after the host marks a Goal as awaiting your confirmation, a notification is sent to Weixin. Reply in Weixin to post your message in that room; quoting a notification sends it to that notification's room. A question a member asks you is also sent once it has waited 5 minutes: reply with an option number to answer it directly, or anything else for the host to choose for you. Only text is forwarded. Login credentials stay on this computer."
 }

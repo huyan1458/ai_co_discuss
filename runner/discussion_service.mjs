@@ -14,6 +14,7 @@ import { atomic_json } from './files.mjs';
 import { DiscussionStore, acquire_lock, api, load_config, pause_if_running, service_drafts, validate_config } from './discussion_runner.mjs';
 import { FreeRoomRunner } from './free_runner.mjs';
 import { can_notify, notice_sent, receive_replies, send_notice } from './weixin.mjs';
+import { answer_by_weixin } from './question_weixin.mjs';
 import { OPERATOR_EVENTS_FILE, account_space } from './account_space.mjs';
 import { install_pi, pi_outdated } from './pi_runtime.mjs';
 import { site_fetch } from './entry_client.mjs';
@@ -576,9 +577,15 @@ export class DiscussionService {
   }
   /** Pause running rooms and release every lock and child process, once their current ticks finish. */
   /** Post the owner's Weixin reply to the room it answers, as the owner, and check that room at once. */
-  async weixin_reply({ site, room, text }) {
+  async weixin_reply({ site, room, text, question_id, version }) {
     const worker = [...this.workers.values()].find(item => item.config?.site === site && item.config?.room === room);
     if (!worker) throw new Error('这台电脑已不再接入该房间');
+    // A reply to a question's notice answers that question (or leaves it to the host), never a plain message.
+    if (question_id) {
+      const confirmation = await answer_by_weixin((path, payload) => api(worker.config, path, payload), { question_id, version, text });
+      worker.wake();
+      return confirmation;
+    }
     await api(worker.config, '/messages', { author: '用户', text, submission_id: randomUUID() });
     worker.wake();
     return `已发到房间「${worker.runner?.room_title || room}」`;

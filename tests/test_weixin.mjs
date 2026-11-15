@@ -80,3 +80,15 @@ test('a reply to a notice without a room, quoted or not, goes to no room rather 
   assert.equal(posted.length, 0, 'neither reply becomes the owner\'s message in the older room');
   assert.match(sent.at(-1), /不对应任何房间/);
 });
+
+test('a question notice keeps its question and version, and a reply to it carries them; a goal notice carries none', async t => {
+  const { home, fetch, receive } = fixture(t);
+  const posted = [];
+  const on_reply = async target => { posted.push(target); return '好'; };
+  await receive(on_reply, [owner_text('你好')]);
+  await send_notice(home, { key: 'site/room-a/question-12-v2', room: room('room-a', '开场'), question: { id: 12, version: 2 }, paragraphs: ['问题 #12'] }, { fetch });
+  await receive(on_reply, [owner_text('1')]);
+  await send_notice(home, { key: 'site/room-a/goal-1-pending-100', room: room('room-a', '开场'), paragraphs: ['主持人在等你确认：'] }, { fetch });
+  await receive(on_reply, [owner_text('继续')]);
+  assert.deepEqual(posted.map(item => [item.text, item.question_id, item.version]), [['1', 12, 2], ['继续', undefined, undefined]]);
+});
