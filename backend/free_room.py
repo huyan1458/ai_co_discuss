@@ -1662,7 +1662,7 @@ def wake_after_own_failure(connection, host, execution_id, requests, reason):
                    max(item["chain_id"] for item in requests))
         return
     wake_host(connection, host["room_id"], max(item["chain_id"] for item in requests),
-              Text("主持人处理 {messages} 的执行失败（执行 #{execution_id}）：{reason}。主持人请核对自己的会话：已有结果就用 --execution {execution_id} 补交原回答，未做完就接着做完再这样补交（或 host-control retry --execution {execution_id} 重试），做不了时告知用户；最后用本次执行简短回复这条提醒。",
+              Text("主持人处理 {messages} 的执行失败（执行 #{execution_id}）：{reason}。主持人请核对自己的会话：已有结果就用 --execution {execution_id} 补交原回答，未做完就接着做完再这样补交（或 host-control retry --execution {execution_id} 重试），做不了时告知用户；这条提醒本身不用回复，没有需要处理的就直接结束本次执行，不发消息。",
                    messages=messages, execution_id=execution_id, reason=str(reason)[:200]), f"host_failed:{execution_id}")
 
 
@@ -2754,7 +2754,7 @@ def fire_host_checkin(connection, room_id):
     host_working = connection.execute("SELECT 1 FROM member_executions WHERE member_id=? AND status IN ('dispatched','started')",
                                       (row["host_id"],)).fetchone()
     if not host_working:
-        wake_host(connection, room_id, row["chain_id"], Text("定时检查：房间里还有进行中的工作。读一下 room view 与各成员的执行进展，确认没有卡住、跑偏或失败未处理；一切正常就简短说明并结束本次执行。"), f"checkin:{row['due_at']}")
+        wake_host(connection, room_id, row["chain_id"], Text("定时检查：房间里还有进行中的工作。读一下 room view 与各成员的执行进展，确认没有卡住、跑偏或失败未处理；没有需要处理的就直接结束本次执行，不发消息。"), f"checkin:{row['due_at']}")
 
 
 def inbox(connection, room_id, token):
@@ -3400,6 +3400,14 @@ def execution_action(connection, room_id, execution_id, token, payload):
         record_failure_class(connection, room_id, execution_id, payload)
         finish_execution(connection, execution_id, "failed", reason, "failed")
         settle_batches(connection, room_id)
+    elif action == "quiet":
+        # A program notice (failure reminder, timed check, hand-back) with nothing to handle ends without a message.
+        purposes = {item[0] for item in connection.execute(
+            "SELECT purpose FROM member_requests WHERE execution_id=? AND status='delivering'", (execution_id,))}
+        if purposes != {"notice"}:
+            raise ValueError(Text("只有只带程序通知的执行可以不回答就结束"))
+        finish_execution(connection, execution_id, "completed", Text("没有需要处理的事，未发消息"), "completed")
+        settle_batches(connection, room_id)
     elif action == "release":
         # Only for proven non-delivery: the requests return to the queue unchanged.
         reason = incoming_text(payload.get("reason") or "未送达", payload.get("reason_text"))
@@ -3703,6 +3711,30 @@ def add_member(connection, room_id, token, payload, now):
     return free_view(connection, room_id)
 
 
+def list_dropped_work(connection, room_id, member):
+    """A member back from away: tell the host which questions its leaving cancelled, without dispatching them again.
+
+    Only the trailing run of requests cancelled by that leave counts; the host decides whether they still matter, since
+    the work may have moved on meanwhile.
+    """
+    if member["role"] == "host":
+        return
+    dropped = []
+    for row in connection.execute("""SELECT r.id,r.message_id,r.chain_id,r.purpose,c.reason FROM member_requests r
+            LEFT JOIN request_cancel_reasons c ON c.request_id=r.id WHERE r.member_id=? ORDER BY r.id DESC""", (member["id"],)):
+        if row["reason"] != "member_away":
+            break
+        if row["purpose"] == "ask":
+            dropped.append(row)
+    if not dropped:
+        return
+    name = member_display_names(connection, room_id).get(member["name"], member["name"])
+    messages = "、".join(f"#{row['message_id']}" for row in reversed(dropped))
+    wake_host(connection, room_id, max(row["chain_id"] for row in dropped),
+              Text("{name} 已请回。它离开时取消了发给它的请求（消息 {messages}），程序没有自动补派；还需要的话重新点名派给它。",
+                   name=name, messages=messages), f"rejoined:{member['id']}:{dropped[0]['id']}")
+
+
 def queue_invited_expert(connection, room_id, name, now):
     """Queue a new expert at the tail of an existing live plan, without changing the current speaker or hold.
 
@@ -3802,6 +3834,7 @@ def member_action(connection, room_id, member_id, token, payload):
             raise ValueError(Text("只有离开的成员可以请回，且须提供新的成员凭证"))
         require_fresh_member_token(connection, room_id, payload.get("token"))
         connection.execute("UPDATE room_members SET status='active',token_hash=? WHERE id=?", (hashed, member_id))
+        list_dropped_work(connection, room_id, member)
         if discussion.current_session(connection, room_id, active_only=True):
             discussion.session_member_change(connection, room_id, member, action)
         else:

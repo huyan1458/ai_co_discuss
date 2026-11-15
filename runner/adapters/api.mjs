@@ -74,7 +74,7 @@ export function participant_tools(context) {
     tool('read_message', '读取指定原文；服务端按本次请求限制讨论中的可见范围。长正文用 offset（从第几个字符起）与 limit 续读，带上前一段返回的 text_sha256 作 version：正文已变化时报错，须从头重读、不与旧片段拼接',
       { id: NUMBER, offset: { type: 'integer', minimum: 0 }, limit: NUMBER, version: VERSION }, ['id']),
     tool('read_execution', '读取一次执行的状态、结果与交付状态（delivery.last_submission 的 outcome：accepted 已接受 / rejected 被拒 / unknown 不明）；不填 id 读本次执行，主持人可读任意成员的执行', { id: NUMBER }),
-    tool('read_attachment', `按附件 ID 读取：返回名称、大小、类型与所属消息；UTF-8 文本附件同时返回正文，长的用 offset（从第几个字符起）与 limit（默认 ${ATTACHMENT_CHARS}，最多 ${MAX_ATTACHMENT_CHARS}）续读；图片、PDF、音视频等读不到正文时返回 readable: false 与原因`,
+    tool('read_attachment', `按附件 ID 读取：返回名称、大小、类型与所属消息；UTF-8 文本附件同时返回正文，长的用 offset（从第几个字符起）与 limit（默认 ${ATTACHMENT_CHARS}，最多 ${MAX_ATTACHMENT_CHARS}）续读；${context.image_input ? '图片随结果附上，可以直接看；' : ''}其余读不到内容的（${context.image_input ? '' : '图片、'}PDF、音视频等）返回 readable: false 与原因`,
       { id: TEXT, offset: { type: 'integer', minimum: 0 }, limit: { type: 'integer', minimum: 1, maximum: MAX_ATTACHMENT_CHARS } }, ['id']),
     tool('read_goal', '读取 Goal 的目标、状态、续跑次数、用时与是否空闲'),
     ...file_tools(context.project), ...command_tools(context.commands, context.project), ...image_tools(context.image)];
@@ -243,9 +243,15 @@ async function read_attachment(context, args) {
   if (meta.message_id) await room_request(context, execution_read_path(context, `/messages/${meta.message_id}`));
   const type = String(meta.content_type || '');
   const text_like = type === 'application/octet-stream' || type === 'image/svg+xml' || type.startsWith('text/');
+  // A model that takes images sees one read on demand through the same image input as the woken messages' (#3165).
+  if (context.image_input && VIEWABLE_IMAGES.has(type)) {
+    if (meta.size > MAX_INLINE_IMAGE_BYTES) return { ...view, readable: false, reason: `图片超过 ${MAX_INLINE_IMAGE_BYTES / 1_000_000} MB，读不到` };
+    const data = await room_bytes(context, `/attachments/${args.id}/content`, MAX_INLINE_IMAGE_BYTES);
+    return { ...view, readable: true, image: '图片已随本次工具结果附上', images: [{ type: 'image', data: data.toString('base64'), mimeType: type }] };
+  }
   if (!text_like) {
     const reason = type.startsWith('image/')
-      ? (context.image_input ? '图片只随唤醒你的消息附上（task.attachments），不能按需读取' : '你的模型未开启看图，图片内容读不到')
+      ? (context.image_input ? '只能看 PNG、JPEG、GIF、WebP 图片，这种格式读不到' : '你的模型未开启看图，图片内容读不到')
       : `${type || '该类型'} 的内容读不到（只能读 UTF-8 文本附件）`;
     return { ...view, readable: false, reason };
   }
@@ -379,7 +385,10 @@ async function run_tool(context, call) {
     return { result: await room_request(context, `/executions/${id}`) };
   }
   if (call.name === 'read_events') return { result: await read_events(context, args) };
-  if (call.name === 'read_attachment') return { result: await read_attachment(context, args) };
+  if (call.name === 'read_attachment') {
+    const { images, ...result } = await read_attachment(context, args);
+    return { result, ...(images ? { images } : {}) };
+  }
   if (call.name === 'finish_goal' || call.name === 'set_goal_state') args.goal_revision = (await room_request(context, '/goal')).revision;
   if (call.name === 'read_decision') {
     if (!Number.isInteger(args.id) || args.id < 1) return { result: { error: 'id 须为正整数' } };
@@ -482,7 +491,7 @@ function skill_text(name, file = 'SKILL.md') {
 function project_text(project, commands, image_input = false) {
   // A model the owner marked as reading images gets the woken messages' images with the task, as task.attachments lists.
   const seen = image_input ? '唤醒你的消息里的图片（task.attachments 中的 [图片 #n]）已随任务附上，可以直接看；其余' : '';
-  const attachments = `${seen}消息附件用 read_attachment 按 ID 读取：UTF-8 文本能读到正文，图片、PDF 等返回 readable: false 时内容读不到`;
+  const attachments = `${seen}消息附件用 read_attachment 按 ID 读取：UTF-8 文本能读到正文${image_input ? '，图片随结果附上' : ''}，返回 readable: false 时内容读不到`;
   if (!project) return `- 本地文件你读不到；${attachments}。读不到的以其他成员贴出的为准，不凭文件名猜测；回答涉及时说明你没有读取，缺信息就写明缺什么。`;
   const tools = project.writable ? 'read、glob、grep、write、edit' : 'read、glob、grep';
   const extras = project.roots.slice(1).map(item => `${item.root}（${item.writable ? '可读写' : '只读'}）`).join('、');
@@ -597,11 +606,15 @@ async function task_prompt(context) {
     ...(context.scheduler_suggestions?.length ? { scheduler_suggestions: context.scheduler_suggestions } : {}),
     ...(context.review_handoffs?.length ? { review_handoffs: context.review_handoffs } : {}),
     ...(context.attachments?.length ? { attachments: context.attachments } : {}),
+    // What the whole room is for, so a host taking over or finishing a goal does not mistake a step for the end (#3339).
+    ...(context.role === 'host' && context.room_goal ? { room_goal: context.room_goal } : {}),
     ...(context.unsent_images?.length ? { unsent_images: context.unsent_images } : {}) } })}\n\n（执行标记 ${execution_marker(context.execution_id)}，无需处理）`;
 }
 
 // The largest image sent inline: the strictest provider (Anthropic) refuses one whose base64 form passes 5 MB.
 const MAX_INLINE_IMAGE_BYTES = 3_750_000;
+// The image types models take inline, as the woken messages' images are chosen (free_runner.mjs).
+const VIEWABLE_IMAGES = new Set(['image/png', 'image/jpeg', 'image/gif', 'image/webp']);
 // The member's profile fields the extension needs; the key travels only in the Pi process's environment.
 const PROFILE_FIELDS = ['adapter', 'base_url', 'api_protocol', 'model', 'effort', 'image_input'];
 

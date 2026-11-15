@@ -146,7 +146,22 @@ def goal_view(connection, room_id):
         goal["elapsed_seconds"] = elapsed_seconds(goal)
         goal["idle"] = room_idle(connection, room_id, goal)
         goal["waiting_questions"] = waiting_on_user(connection, room_id)
+        if goal["status"] == "paused":
+            previous = quota_paused_by(connection, room_id, goal["id"])
+            if previous:
+                goal["quota_paused_by"] = previous
     return {"goal": goal, "revision": goal_revision(connection, room_id, open_row)}
+
+
+def quota_paused_by(connection, room_id, goal_id):
+    """The former host whose spent quota failed the goal's latest wake-up, once another member hosts; else None."""
+    row = connection.execute("""SELECT m.name,r.status,f.failure_class FROM goal_continuations c JOIN member_requests r ON r.id=c.request_id
+        JOIN room_members m ON m.id=r.member_id LEFT JOIN execution_failures f ON f.execution_id=r.execution_id
+        WHERE c.goal_id=? ORDER BY c.id DESC LIMIT 1""", (goal_id,)).fetchone()
+    if not row or row["status"] != "failed" or row["failure_class"] != "quota":
+        return None
+    host = connection.execute("SELECT name FROM room_members WHERE room_id=? AND role='host' AND status='active'", (room_id,)).fetchone()
+    return row["name"] if host and host["name"] != row["name"] else None
 
 
 def require_revision(connection, room_id, payload, action):

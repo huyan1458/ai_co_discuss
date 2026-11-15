@@ -1473,6 +1473,21 @@ class MultiMemberTests(FreeRoomTests):
         self.assertEqual(self.request(f"{self.path}/messages", {**late, "submission_id": uuid.uuid4().hex}, renewed)[0], 409)
         self.assertEqual(self.answer(claude["id"])[0], 201)
 
+    def test_a_member_back_from_away_has_its_dropped_questions_listed_to_the_host(self):
+        """Coming back does not re-dispatch what leaving cancelled; the host is told which messages, once."""
+        asked = self.say("给 Codex", to=["Codex"])[1]["message"]["id"]
+        codex_id = self.member_id("Codex")
+        back = lambda: self.request(f"{self.path}/members/{codex_id}", {"action": "active", "token": uuid.uuid4().hex}, self.owner)[0]
+        self.request(f"{self.path}/members/{codex_id}", {"action": "away"}, self.owner)
+        self.assertEqual(back(), 200)
+        notices = [text for _, text, _ in self.messages() if "已请回" in text]
+        self.assertEqual(len(notices), 1)
+        self.assertIn(f"#{asked}", notices[0])
+        self.assertNotIn(("Codex", "pending"), [(item["member"], item["status"]) for item in self.request(self.path)[1]["free"]["requests"]])
+        self.request(f"{self.path}/members/{codex_id}", {"action": "away"}, self.owner)
+        self.assertEqual(back(), 200)
+        self.assertEqual(len([text for _, text, _ in self.messages() if "已请回" in text]), 1, "the same dropped questions are listed once")
+
     def test_removed_host_hands_unnamed_message_to_the_new_host(self):
         """An unnamed message waiting on the host must still reach its successor, and the cancelled request says why."""
         message = FreeRoomTests.say(self, "没点名的问题")[1]["message"]
@@ -1747,6 +1762,24 @@ class HostTests(HostRoomTests):
         self.request(self.path + "/inbox", token=self.owner)
         with closing(sqlite3.connect(self.database)) as connection:
             self.assertIsNone(connection.execute("SELECT 1 FROM free_host_checkins").fetchone())
+
+    def test_a_notice_with_nothing_to_handle_ends_without_a_message(self):
+        """A timed check the host has nothing to say about ends completed with no message; an ask cannot end that way."""
+        FreeRoomTests.say(self, "请安排")
+        execution = self.reserve_for("Claude")[1]
+        self.assertEqual(self.request(f"{self.path}/host-checkin", {"minutes": 5}, self.owner)[0], 200)
+        self.request(f"{self.path}/messages", {"author": "Claude", "text": "派活", "source": "cli", "submission_id": uuid.uuid4().hex,
+                                               "execution_id": execution["id"], "to": ["Codex"]}, self.member)
+        asked = self.reserve_for("Codex")[1]
+        self.assertEqual(self.request(f"{self.path}/executions/{asked['id']}", {"action": "quiet"}, self.owner)[0], 400)
+        self.database_value("UPDATE free_host_checkins SET due_at=unixepoch()-1")
+        self.request(self.path + "/inbox", token=self.owner)
+        check = self.reserve_for("Claude")[1]
+        before = len(self.request(f"{self.path}/messages", token=self.owner)[1]["messages"])
+        status, ended = self.request(f"{self.path}/executions/{check['id']}", {"action": "quiet"}, self.owner)
+        self.assertEqual((status, ended["status"]), (200, "completed"))
+        self.assertEqual(len(self.request(f"{self.path}/messages", token=self.owner)[1]["messages"]), before)
+        self.assertIn(("Claude", "notice", "completed"), self.requests())
 
     def database_value(self, sql):
         """Run one statement on the test database, e.g. to move a timer."""
@@ -2720,6 +2753,17 @@ class GoalTests(HostRoomTests):
         status, view = self.goal_write("done", token=self.tokens["Claude"], note="测试全部通过")
         self.assertEqual((status, view["goal"]["status"]), (200, "complete"), view)
         self.assertEqual(self.messages()[-1][1], "Goal 已完成：测试全部通过")
+
+    def test_a_goal_paused_by_the_former_hosts_quota_names_it_to_the_new_host(self):
+        """A goal paused because its host ran out of quota tells the next host who paused it, so it resumes, not restarts."""
+        self.open_from_page()
+        execution = self.reserve_for("Claude")[1]
+        self.request(f"{self.path}/executions/{execution['id']}", {"action": "fail", "reason": "额度用尽", "failure_class": "quota"}, self.owner)
+        self.assertEqual(self.goal_write("continue")[1]["goal"]["status"], "paused")
+        self.assertNotIn("quota_paused_by", self.goal()["goal"])  # the same host knows its own failure
+        codex = next(item["id"] for item in self.request(self.path)[1]["free"]["members"] if item["name"] == "Codex")
+        self.assertEqual(self.request(f"{self.path}/members/{codex}", {"action": "role", "role": "host"}, self.owner)[0], 200)
+        self.assertEqual(self.goal()["goal"]["quota_paused_by"], "Claude")
 
     def test_failed_wake_up_pauses_and_budget_ends_the_goal(self):
         """A failed wake-up pauses the goal instead of waking the host again; resuming wakes it once more.

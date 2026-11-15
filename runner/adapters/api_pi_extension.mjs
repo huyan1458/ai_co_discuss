@@ -37,7 +37,8 @@ export default function codiscuss_room(pi) {
         try {
           const outcome = await execute_tool(context, { name: definition.name, arguments: params }, definitions);
           const terminal = Boolean(outcome.terminal);
-          return { content: [{ type: 'text', text: redact(result_text(outcome.result)) }], details: { codiscuss: { terminal } },
+          // An image read on demand goes with the result, through the same image input as the task's images.
+          return { content: [{ type: 'text', text: redact(result_text(outcome.result)) }, ...(outcome.images || [])], details: { codiscuss: { terminal } },
             isError: Boolean(outcome.result?.error), terminate: terminal };
         } catch (error) {
           if (signal?.aborted) throw error;

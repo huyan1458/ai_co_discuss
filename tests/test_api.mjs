@@ -308,7 +308,11 @@ test('free-room API replies bind to their reserved execution and complete the re
 test('an API member whose card says its model reads images gets the woken message image with its task', async t => {
   const f = await site_fixture(t);
   const pixel = Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNk+M9QDwADhgGAWjR9awAAAABJRU5ErkJggg==', 'base64');
-  const mock = await model_fixture(t, call => tool_reply(call, 'submit_chat', { text: '看到了图。', summary: '已看图。' }));
+  let step = 0;
+  // It also reads the same image on demand, which comes back through the same image input (#3165).
+  const mock = await model_fixture(t, call => (step++ === 0
+    ? tool_reply(call, 'read_attachment', { id: room_prompt(call).task.attachments[0].id })
+    : tool_reply(call, 'submit_chat', { text: '看到了图。', summary: '已看图。' })));
   const participants = { Grok: { ...profiles(f.home, mock.base_url).Grok, image_input: 'image' } };
   const started = await launch_discussion(f.home, { site: f.site, entry: 'web', participants,
     room: { title: '看图', mode: 'free', host: '用户', members: ['Grok'], submission_id: randomUUID() } }, { start_service: async () => ({ running: true }) });
@@ -324,6 +328,9 @@ test('an API member whose card says its model reads images gets the woken messag
   const first = JSON.stringify(mock.calls[0].body);
   assert.ok(first.includes(pixel.toString('base64')));
   assert.equal(room_prompt(mock.calls[0]).task.attachments[0].placeholder, '[图片 #1]');
+  const after_read = JSON.stringify(mock.calls[1].body);
+  assert.equal(after_read.split(pixel.toString('base64')).length - 1, 2, 'the image read on demand reaches the provider again');
+  assert.match(after_read, /图片已随本次工具结果附上/);
 });
 
 test('in a room with drawing on, an API member generates and edits images with the image service and answers with them attached, and a CLI member draws with its credential', async t => {
@@ -925,7 +932,8 @@ test('API read tools hand failures back to the model, read text attachments with
   const files = { ['a'.repeat(32)]: { message_id: 9, content_type: 'application/octet-stream', size: Buffer.byteLength(text) },
     ['b'.repeat(32)]: { message_id: 9, content_type: 'application/pdf', size: 10 },
     ['c'.repeat(32)]: { message_id: 12, content_type: 'application/octet-stream', size: 3 },
-    ['d'.repeat(32)]: { message_id: 9, content_type: 'application/octet-stream', size: 4 } };
+    ['d'.repeat(32)]: { message_id: 9, content_type: 'application/octet-stream', size: 4 },
+    ['e'.repeat(32)]: { message_id: 9, content_type: 'image/png', size: Buffer.byteLength(text) } };
   const { context } = await room_stub(t, call => {
     if (call.path === '/messages/5') return [404, { error: '消息不存在' }];
     if (call.path === '/messages/9') return [200, { id: 9 }];
@@ -946,6 +954,14 @@ test('API read tools hand failures back to the model, read text attachments with
   assert.equal(slice.text, [...text].slice(5, 8).join(''));
   assert.equal(slice.remaining, [...text].length - 8);
   assert.equal((await run('read_attachment', { id: 'b'.repeat(32) })).result.readable, false);
+  // An image is seen only by a model that takes images, as an image part beside the result, never inside its text.
+  const image = await run('read_attachment', { id: 'e'.repeat(32) });
+  assert.equal(image.result.readable, false);
+  assert.match(image.result.reason, /未开启看图/);
+  const seen = await execute_tool({ ...context, image_input: true }, { name: 'read_attachment', arguments: { id: 'e'.repeat(32) } }, definitions);
+  assert.equal(seen.result.readable, true);
+  assert.equal(seen.result.images, undefined);
+  assert.deepEqual(seen.images, [{ type: 'image', data: Buffer.from(text).toString('base64'), mimeType: 'image/png' }]);
   assert.equal((await run('read_attachment', { id: 'd'.repeat(32) })).result.readable, false);
   // An attachment of a message outside the reading boundary is refused like the message itself.
   assert.match((await run('read_attachment', { id: 'c'.repeat(32) })).result.error, /HTTP 403/);

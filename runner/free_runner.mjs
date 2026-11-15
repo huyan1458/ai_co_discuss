@@ -264,9 +264,12 @@ export function free_task_files(config, member, execution, binding, { session = 
   const goal_task = member.role === 'host' && (['active', 'paused'].includes(goal?.status)
     || requests.some(item => ['goal_start', 'goal_continue'].includes(item.purpose)));
   if (goal_task) skills.push('discuss-goal/SKILL.md');
+  const goal_of_room = member.role === 'host' ? room_goal(room) : null;
   const goal_field = goal_task && goal ? { id: goal.id, objective: goal.objective, status: goal.status, continues: goal.continues,
     max_continues: goal.max_continues, elapsed_seconds: goal.elapsed_seconds, max_minutes: goal.max_minutes,
-    phase: goal.phase ?? 'doing', ...(goal.phase_note ? { phase_note: goal.phase_note } : {}) } : null;
+    phase: goal.phase ?? 'doing', ...(goal.phase_note ? { phase_note: goal.phase_note } : {}),
+    // Handed over with the host seat: a goal its former host's spent quota paused waits for a resume, not a new start.
+    ...(goal.status === 'paused' && goal.quota_paused_by ? { pause_note: `Goal #${goal.id} 因前任主持人 ${goal.quota_paused_by} 额度用尽而暂停；有主持人完整权限时可用 host-control goal --do resume 恢复，否则请用户恢复` } : {}) } : null;
   const skills_directory = join(config.project, '.agents', 'skills');
   const workflow_field = host_workflow ? workflow_task_field(host_workflow, room_members, config.participants) : null;
   const image = config.image_generation && image_settings(config.api_home).configured ? image_settings(config.api_home) : null;
@@ -282,16 +285,14 @@ export function free_task_files(config, member, execution, binding, { session = 
     ...(suggestions.length ? { scheduler_suggestions: suggestions } : {}),
     ...(reviews.length ? { review_handoffs: reviews } : {}),
     ...(goal_field ? { goal: goal_field } : {}),
-    ...(member.role === 'host' && room_goal(room) ? { room_goal: room_goal(room) } : {}),
+    ...(goal_of_room ? { room_goal: goal_of_room } : {}),
     ...(model_change ? { model_change: { ...model_change, note: `你的模型已从 ${model_change.from} 换为 ${model_change.to}；不要按之前的自述判断自己用的是哪个模型。` } } : {}),
     // What became of the @s in this member's previous answer: quoted, waiting, queued for the host or picked up.
     ...(execution.mentions?.length ? { mentions: execution.mentions } : {}),
     ...(stopped.length ? { stopped_executions: stopped } : {}),
     role: member.role || 'member',
-    // Said on every task from the adapter's declaration, so a member knows whether its last words can become the answer.
-    answer_capture: adapter?.capabilities.capture
-      ? '软件正常结束、本次执行既没有已接受的回答也没有被拒的提交时，程序把你最后一段文字收为本次回答（标为自动收录，不派活、不唤醒成员）；已提交或提交被拒时不收录'
-      : '不收录：只有你提交的回答会保存，结束时的文字不会成为回答',
+    // Only where the adapter declares capture: without it, only a submitted answer is saved, as the skill already says.
+    ...(adapter?.capabilities.capture ? { answer_capture: '正常结束且本次没有提交时，你最后一段文字收为本次回答（标自动收录，不派活）；已提交或被拒则不收录' } : {}),
     read_after: execution.read_until, cwd: profile.cwd || null, project_access: profile.project_access, draft_directory,
     ...(extra_directories.length ? { extra_directories } : {}),
     skills: skills.map(file => join(config.project, '.agents/skills', file)),
@@ -303,6 +304,7 @@ export function free_task_files(config, member, execution, binding, { session = 
     cli, subcommands: TASK_SUBCOMMANDS,
     ...(bound_access ? { access_env: 'DISCUSS_ACCESS_FILE' } : { access_file: access_path }), instructions });
   return { id, participant: member.name, directory: config.directory, draft_directory, extra_directories, ...(goal_field ? { goal: goal_field } : {}),
+    ...(goal_of_room ? { room_goal: goal_of_room } : {}),
     skill_directories: [skills_directory, ...(host_workflow ? [host_workflow.directory] : [])], access_path, prompt: with_expert_prompt(prompt, profile), inbox, images,
     profile, ...(workflow_field ? { workflow: { ...workflow_field, skill: host_workflow.skill, ...api_sub_workflows(workflow_field, host_workflow) } } : {}) };
 }
@@ -1023,7 +1025,7 @@ export class FreeRoomRunner {
           ...(workflow?.commands?.length ? { commands: { directory: workflow.directory, list: workflow.commands } } : {}),
           ...(Number.isInteger(this.config.api_max_requests) ? { max_requests: this.config.api_max_requests } : {}),
           ...(this.config.image_generation ? { image_generation: true } : {}),
-          ...(task.goal ? { goal: task.goal } : {}) },
+          ...(task.goal ? { goal: task.goal } : {}), ...(task.room_goal ? { room_goal: task.room_goal } : {}) },
         on_binding: session => this.store.bind(member.name, session),
         on_process: child => this.track(member.name, child, live()),
         on_output: (path, chunk) => { appendFileSync(path, chunk, { mode: 0o600 }); this.touch(live()); this.segments.mark(live()); },
@@ -1187,6 +1189,9 @@ export class FreeRoomRunner {
       if (this.exited.has(execution.id)) {
         const latest = await api(this.config, `/executions/${execution.id}`);
         const denial = this.exited.get(execution.id);
+        // Program notices alone (failure reminder, timed check) need no reply: with nothing to handle the turn just ends.
+        if (['dispatched', 'started'].includes(latest.status) && !denial && latest.requests?.length
+          && latest.requests.every(item => item.purpose === 'notice')) return this.end_quiet(member.name, execution.id);
         if (['dispatched', 'started'].includes(latest.status) && !denial && await this.capture_reply(member.name, execution.id, latest)) {
           return this.save(member.name, { status: 'idle' });
         }
@@ -1457,6 +1462,15 @@ export class FreeRoomRunner {
     return previous !== undefined && previous !== current ? { from: previous, to: current } : null;
   }
   /** Record the cause on the website, then stop this member's own processes. */
+  /** End an execution that carried only program notices and left no answer: completed, no message posted. */
+  async end_quiet(name, execution_id) {
+    this.activity.delete(execution_id);
+    this.replies.delete(execution_id);
+    await this.report_segments(execution_id, true);
+    try { await api(this.config, `/executions/${execution_id}`, { action: 'quiet' }); }
+    catch (error) { if (!/HTTP 409/.test(error.message)) throw error; }
+    this.save(name, { status: 'idle', error: '' });
+  }
   async fail(name, execution_id, reason) {
     this.activity.delete(execution_id);
     this.not_started.delete(execution_id);

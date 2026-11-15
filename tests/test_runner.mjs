@@ -31,7 +31,7 @@ import { participant_tools, system_prompt } from '../runner/adapters/api.mjs';
 import { pi_provider } from '../runner/adapters/api_pi.mjs';
 import { glob_regex, open_project, run_file_tool } from '../runner/adapters/api_files.mjs';
 import { DiscussionService, migrate_platform_ids, migrate_service_home, persisted_env, read_registry, register_room, remove_room_files, service_pid, service_ready, start_service, sweep_service_home, unregister_room } from '../runner/discussion_service.mjs';
-import { restore_room, room_profiles } from '../runner/discussion_launch.mjs';
+import { restore_room, room_profiles, save_launch_settings } from '../runner/discussion_launch.mjs';
 import { adapter_of, deliver_task, execution_details } from '../runner/adapters/index.mjs';
 import { adopted_fork, claude_api_error, claude_input, claude_permissions, claude_exit_error, claude_inbox_ready, claude_rule_path, standalone_claude_env, watch_window_turn } from '../runner/adapters/claude.mjs';
 import { codex_permissions } from '../runner/adapters/codex_cli.mjs';
@@ -1889,6 +1889,46 @@ test('a resident free room isolates member context changes and only blocks Codex
   assert.match(restarted_worker.state.error, /讨论运行中不能切换 Codex 接入方式/);
 });
 
+test("a manual member invited under a removed member's name is adopted clean, without the old session blocking it", async t => {
+  // Room 9524f49e42b5 (#3318–#3325): the removed Claude-2's context stayed under the name and failed the new Claude-2.
+  const home = mkdtempSync(join(tmpdir(), 'discussion-service-reuse-'));
+  const claude_home = join(home, 'claude-home'), cwd = join(home, 'project'), [old_id, new_id] = [randomUUID(), randomUUID()];
+  mkdirSync(join(claude_home, 'projects', 'encoded'), { recursive: true });
+  mkdirSync(cwd, { recursive: true });
+  writeFileSync(join(claude_home, 'projects', 'encoded', `${new_id}.jsonl`), `${JSON.stringify({ type: 'user', cwd })}
+`);
+  const adopted = [];
+  const server = createServer((request, response) => {
+    let body = '';
+    request.on('data', chunk => { body += chunk; });
+    request.on('end', () => {
+      if (request.method === 'POST') adopted.push([request.url, JSON.parse(body)]);
+      response.setHeader('Content-Type', 'application/json');
+      response.end('{"ok":true}');
+    });
+  });
+  await listen_local(server);
+  save_launch_settings(home, { participants: { Claude: { adapter: 'claude', executable: process.execPath } } });
+  const path = join(home, 'config.json');
+  writeFileSync(path, JSON.stringify(with_members({ site: `http://127.0.0.1:${server.address().port}`, room: 'room', token: 'x'.repeat(32),
+    mode: 'free', cwd, data_directory: join(home, 'runtime'),
+    participants: { 'Claude-2': { adapter: 'claude', executable: process.execPath, cwd, session_id: old_id } } })));
+  register_room(home, path);
+  const forgotten = [];
+  const room = { free: { members: [{ id: 340, name: 'Claude-2', access: 'manual', status: 'active', registered_at: 1, reported_session: new_id, reported_client: 'claude' }] } };
+  const service = new DiscussionService(home, () => ({ room, stop_children() {}, tick: async () => 'idle', forget_member: name => forgotten.push(name) }));
+  const previous = process.env.CLAUDE_CONFIG_DIR;
+  process.env.CLAUDE_CONFIG_DIR = claude_home;
+  t.after(async () => {
+    if (previous === undefined) delete process.env.CLAUDE_CONFIG_DIR; else process.env.CLAUDE_CONFIG_DIR = previous;
+    await service.close(); await new Promise(done => server.close(done)); rmSync(home, { recursive: true, force: true });
+  });
+  await service.tick();
+  assert.deepEqual(forgotten, ['Claude-2'], 'what this machine kept for the removed member under that name is dropped first');
+  assert.equal(load_config(path).participants['Claude-2'].session_id, new_id);
+  assert.deepEqual(adopted.map(([url, body]) => [url, body.action, body.session_id]), [['/api/rooms/room/members/340', 'adopt', new_id]]);
+});
+
 test('the same site and room cannot be registered twice', t => {
   const home = mkdtempSync(join(tmpdir(), 'discussion-service-'));
   t.after(() => rmSync(home, { recursive: true, force: true }));
@@ -2153,6 +2193,7 @@ async function free_fixture(t) {
           cause_kind: 'request_failed', source_message_id: failed_request.message_id }];
       }
       if (body?.action === 'release') { execution.status = 'cancelled'; state.pending = execution.requests; }
+      if (body?.action === 'quiet') execution.status = 'completed';
       if (body?.action === 'report') state.reports[execution.id] = body.changes;
       if (body?.action === 'delivery') execution.capabilities = { stoppable: body.stoppable, progress: body.progress };
       // Like the site, only a voided execution takes a stop result.
@@ -2730,6 +2771,17 @@ test('a free member that exits without answering fails only its own execution', 
   assert.match(state.executions[0].result, /会话已结束，但未提交本次回答.*请核对原会话/);
 });
 
+test('a turn that carried only program notices ends quietly instead of failing', async t => {
+  const { state, store, config } = await free_fixture(t);
+  state.pending = [{ id: 1, message_id: 11, purpose: 'notice' }];
+  const runner = new FreeRoomRunner(config, store, async (adapter, binding, task) => { setImmediate(() => task.on_exit()); return { status: 'accepted' }; });
+  await runner.tick();
+  await runner.tick();
+  assert.equal(state.executions[0].status, 'completed');
+  assert.ok(state.calls.includes('POST /executions/1 quiet'));
+  assert.equal(state.calls.includes('POST /executions/1 fail'), false);
+});
+
 test('a member whose operations were refused is not captured, even when its session ends plainly', async t => {
   const { state, store, config } = await free_fixture(t);
   const runner = new FreeRoomRunner(config, store, async (adapter, binding, task) => {
@@ -3206,11 +3258,31 @@ test('a host task carries the room goal so a new host or a finished Goal still k
   const request = { id: 7, message_id: 9, purpose: 'goal_continue' };
   const write = role => free_task_files(f.config, { name: 'Codex', role }, { id: 1, read_until: 0, requests: [request] }, {}, { process_access: false, room });
   const read = () => JSON.parse(readFileSync(join(f.config.directory, 'free-1.task.json'), 'utf8'));
-  write('host');
+  // The returned task carries it too, which is how an API host gets it in its task prompt.
+  assert.equal(write('host').room_goal.first_user_message_id, 3);
   assert.equal(read().room_goal.first_user_message_id, 3);
   assert.match(read().room_goal.note, /Goal 或讨论结束不等于它完成/);
   write('member');
   assert.equal(read().room_goal, undefined, 'only the host gets it');
+});
+
+test('a new host learns that its former host\'s spent quota paused the goal', t => {
+  const f = task_fixture(t);
+  const goal = { id: 4, status: 'paused', objective: '上线', quota_paused_by: 'Claude' };
+  const task = free_task_files(f.config, { name: 'Codex', role: 'host' }, { id: 1, read_until: 0, requests: [{ id: 7, message_id: 9, purpose: 'route' }] }, {},
+    { process_access: false, goal });
+  assert.match(task.goal.pause_note, /Goal #4 因前任主持人 Claude 额度用尽而暂停.*--do resume/);
+});
+
+test('only software that captures the last words is told so in its task; the rest submit as the skill says', t => {
+  const f = task_fixture(t);
+  const request = { id: 7, message_id: 9, purpose: 'ask' };
+  const read = () => JSON.parse(readFileSync(join(f.config.directory, 'free-1.task.json'), 'utf8'));
+  for (const [adapter, captured] of [['codex_cli', true], ['codex', false]]) {
+    f.config.participants.Codex = { adapter };
+    free_task_files(f.config, { name: 'Codex', role: 'member' }, { id: 1, read_until: 0, requests: [request] }, {}, { process_access: false });
+    assert.equal('answer_capture' in read(), captured, adapter);
+  }
 });
 
 test('a member whose model changed since its last delivery is told so in its next task, once', t => {
