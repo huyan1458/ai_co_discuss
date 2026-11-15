@@ -290,7 +290,7 @@ export function pi_delivery({ cli, profile, key, binding, task, context_file, sy
   send({ type: 'prompt', message: prompt, ...(images.length ? { images } : {}) });
   const steer = text => {
     if (!state.running || state.terminal) return false;
-    send({ type: 'steer', message: `用户插话：${text}` });
+    send({ type: 'steer', message: text });
     return true;
   };
   return { status: 'accepted', session_id, capabilities: API_CALL, steer };

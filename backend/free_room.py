@@ -158,6 +158,13 @@ EXECUTION_FIELDS = ("id", "member_id", "status", "session_id", "lease_until", "c
 STOP_RESULTS = ("stopped", "unstoppable", "unconfirmed")
 # How long a member voided where the runner could not stop it gets no new delivery unless its late answer shows the turn ended.
 HOLD_SECONDS = 600
+# A member whose last execution failed on a usage limit gets no new delivery until the reset the adapter computed, or for
+# this long when it could not; retrying the execution lifts it. A reset further away than the cap is not trusted.
+QUOTA_HOLD_SECONDS = 3600
+MAX_QUOTA_HOLD_SECONDS = 8 * 86400
+# How much of a message that @-ed the host its notice quotes.
+MENTION_GIST = 120
+MAX_RESETS_TEXT = 100
 # What a rewind does to a runner member's session, as its adapter reports.
 REWIND_EFFECTS = ("cut", "fresh", "kept")
 # The reported capabilities and stop result read alongside an execution aliased `e`.
@@ -186,7 +193,8 @@ LATER_COLUMNS = {"room_members": {"access": "TEXT NOT NULL DEFAULT 'runner'", "s
                  "free_chain_holds": {"asked_rounds": "INTEGER NOT NULL DEFAULT 0", "asked_reason": "TEXT NOT NULL DEFAULT ''"},
                  "free_sequences": {"gates": "TEXT NOT NULL DEFAULT '[]'"},
                  "execution_capabilities": {"steer": "INTEGER", "resume": "INTEGER"},
-                 "member_capabilities": {"image_model": "TEXT NOT NULL DEFAULT ''"}}
+                 "member_capabilities": {"image_model": "TEXT NOT NULL DEFAULT ''"},
+                 "execution_failures": {"reset_at": "INTEGER NOT NULL DEFAULT 0"}}
 
 
 def migrate_free_tables(connection):
@@ -443,6 +451,37 @@ def member_value(member):
             "access": access, "session_mode": session_mode}
 
 
+def batch_outcome(connection, room_id, batch_id):
+    """How each member of a dispatch ended: display name, request status, execution, and a failure's reason and class."""
+    names = member_display_names(connection, room_id)
+    rows = connection.execute("""SELECT m.name,r.status,r.execution_id,e.status AS execution_status,e.result,f.failure_class,f.resets
+        FROM member_requests r JOIN room_members m ON m.id=r.member_id LEFT JOIN member_executions e ON e.id=r.execution_id
+        LEFT JOIN execution_failures f ON f.execution_id=r.execution_id
+        WHERE r.room_id=? AND r.batch_id=? ORDER BY r.id""", (room_id, batch_id)).fetchall()
+    return [{"member": names.get(row["name"], row["name"]), "status": row["status"], "execution_id": row["execution_id"],
+             **({"reason": str(row["result"] or "")[:200]} if row["status"] in ("failed", "cancelled") else {}),
+             **({"failure_class": row["failure_class"], "resets": row["resets"] or None} if row["failure_class"] else {})}
+            for row in rows]
+
+
+def handoff_notice(connection, room_id, batch_id, retried):
+    """The notice a hand-back reaches a still-working host with: who did not finish and their own reasons, when any."""
+    failed = "；".join(f"{item['member']}（{item.get('reason', '')}）" for item in batch_outcome(connection, room_id, batch_id)
+                      if item["status"] in ("failed", "cancelled"))
+    if retried:
+        return Text("#{batch_id} 派出的工作重试后已结束，其中未完成：{failed}。请主持人接着处理。", batch_id=batch_id, failed=failed)             if failed else Text("#{batch_id} 派出的工作重试后已结束，请主持人接着处理。", batch_id=batch_id)
+    return Text("#{batch_id} 派出的工作已结束，其中未完成：{failed}。请主持人接着处理。", batch_id=batch_id, failed=failed)         if failed else Text("#{batch_id} 派出的工作已结束，请主持人接着处理。", batch_id=batch_id)
+
+
+def handoff_outcome(connection, request):
+    """A host hand-back carries each dispatched member's outcome, failures with their reasons."""
+    if request.get("purpose") != "handoff":
+        return {}
+    room_id = connection.execute("SELECT room_id FROM messages WHERE id=?", (request["message_id"],)).fetchone()
+    outcome = batch_outcome(connection, room_id[0], request["message_id"]) if room_id else []
+    return {"outcome": outcome} if outcome else {}
+
+
 def review_request_context(connection, request):
     """Expose only the request's review provenance and local capability binding."""
     plan = connection.execute("SELECT * FROM review_plans WHERE batch_id=? OR review_batch_id=?",
@@ -541,6 +580,21 @@ def held_until(connection, member_id):
           AND c.stop_result<>'stopped' AND (c.stoppable=0 OR c.stop_result IN ('unstoppable','unconfirmed'))
           AND NOT EXISTS(SELECT 1 FROM late_answers l WHERE l.execution_id=e.id)""", (member_id,)).fetchone()
     until = row["finished_at"] + HOLD_SECONDS if row else 0
+    until = max(until, quota_held_until(connection, member_id))
+    return until if until > int(time.time()) else 0
+
+
+def quota_failure(connection, execution_id):
+    """The usage-limit classification the runner's adapter gave this failed execution, or None."""
+    row = connection.execute("SELECT failure_class,resets,failed_at,reset_at FROM execution_failures WHERE execution_id=?", (execution_id,)).fetchone()
+    return dict(row) if row else None
+
+
+def quota_held_until(connection, member_id):
+    """Until when a member out of quota waits: its latest execution failed on a usage limit and was not retried; else 0."""
+    row = connection.execute("""SELECT f.failed_at,f.reset_at FROM execution_failures f
+        WHERE f.execution_id=(SELECT MAX(id) FROM member_executions WHERE member_id=?)""", (member_id,)).fetchone()
+    until = (row["reset_at"] or row["failed_at"] + QUOTA_HOLD_SECONDS) if row else 0
     return until if until > int(time.time()) else 0
 
 
@@ -969,7 +1023,7 @@ def free_view(connection, room_id):
             "members": members, "requests": requests[::-1], "executions": recent_executions(connection, room_id),
             "conflicts": possible_conflicts(connection, room_id, names), "halted_chains": chains, "max_rounds": max_rounds,
             "chain_rounds": progress, "recommendations": recent_recommendations(connection, room_id, now)[::-1],
-            "queued_messages": queue_view(connection, room_id)}
+            "queued_messages": queue_view(connection, room_id), "questions": questions.room_questions_view(connection, room_id)}
 
 
 def require_member(connection, room_id, token, name=None):
@@ -1314,7 +1368,9 @@ def mention_prose(text):
             quoted = False
         if not quoted:
             lines.append(line)
-    return re.sub(r"(`+)[\s\S]*?\1(?!`)", "", "\n".join(lines))
+    prose = re.sub(r"(`+)[\s\S]*?\1(?!`)", "", "\n".join(lines))
+    # A name inside quotation marks is quoted, not called on (V13 #3177): “@甲”、「@甲」、"@甲" do not count.
+    return re.sub(r'“[^”\n]*”|「[^」\n]*」|『[^』\n]*』|"[^"\n]*"', "", prose)
 
 
 def save_suggestions(connection, room_id, message_id, member, payload):
@@ -1500,10 +1556,17 @@ def wake_after_failure(connection, execution_id, requests, reason):
         return
     name = member_display_names(connection, member["room_id"]).get(member["name"], member["name"])
     messages = "、".join(f"#{item['message_id']}" for item in requests)
-    wake_host(connection, member["room_id"], max(item["chain_id"] for item in requests),
-              Text("{name} 处理 {messages} 的执行失败（执行 #{execution_id}）：{reason}。请主持人决定重试、改派还是告知用户。",
-                   name=name, messages=messages, execution_id=execution_id, reason=str(reason)[:200]),
-              f"failed:{execution_id}")
+    quota = quota_failure(connection, execution_id)
+    facts = {"name": name, "messages": messages, "execution_id": execution_id, "reason": str(reason)[:200]}
+    if quota and quota["resets"]:
+        text = Text("{name} 额度已用尽，处理 {messages} 的执行失败（执行 #{execution_id}）：{reason}。重置时间：{resets}；在此之前它长期不可用，程序暂停给它投递；请主持人改派其他成员或告知用户，不要重试。",
+                    resets=quota["resets"], **facts)
+    elif quota:
+        text = Text("{name} 额度已用尽，处理 {messages} 的执行失败（执行 #{execution_id}）：{reason}。重置时间未知，它暂时长期不可用，程序暂停给它投递；请主持人改派其他成员或告知用户，不要重试。", **facts)
+    else:
+        text = Text("{name} 处理 {messages} 的执行失败（执行 #{execution_id}）：{reason}。请主持人决定重试、改派还是告知用户。",
+             name=name, messages=messages, execution_id=execution_id, reason=str(reason)[:200])
+    wake_host(connection, member["room_id"], max(item["chain_id"] for item in requests), text, f"failed:{execution_id}")
 
 
 def wake_after_own_failure(connection, host, execution_id, requests, reason):
@@ -1551,6 +1614,15 @@ def resume_host(connection, room_id):
     wake_host(connection, room_id, row["chain_id"], Text("主持人续跑（接 #{message_id}）：{reason}", message_id=row["message_id"], reason=row["reason"]), f"continue:{row['message_id']}")
 
 
+def mention_gist(connection, message_id):
+    """What a message that @-ed the host is about: its author's summary, else its first prose line, kept short."""
+    row = connection.execute("""SELECT m.text,s.text AS summary FROM messages m LEFT JOIN message_summaries s ON s.message_id=m.id
+        WHERE m.id=?""", (message_id,)).fetchone()
+    text = (row["summary"] if row and row["summary"] else next((line.strip() for line in mention_prose(row["text"] if row else "").splitlines()
+                                                               if line.strip()), "")) or ""
+    return text if len(text) <= MENTION_GIST else text[:MENTION_GIST] + "…"
+
+
 def wake_for_mentions(connection, room_id):
     """A member's @ of the host wakes it at low priority: only once nothing else is open in the room.
 
@@ -1575,7 +1647,8 @@ def wake_for_mentions(connection, room_id):
                                (room_id, key, row["chain_id"], row["message_id"]))
             continue
         name = member_display_names(connection, room_id).get(row["author"], row["author"])
-        wake_host(connection, room_id, row["chain_id"], Text("{name} 在 #{message_id} 中 @ 了主持人，请查看并处理。", name=name, message_id=row["message_id"]), key)
+        wake_host(connection, room_id, row["chain_id"], Text("{name} 在 #{message_id} 中 @ 了主持人：{gist}。请查看原文并处理。", name=name,
+                                                             message_id=row["message_id"], gist=mention_gist(connection, row["message_id"])), key)
 
 
 def dispatch(connection, room_id, host, message_id, names, chain_id, handoff=False, direct=False, plan=None, detach=None):
@@ -1650,16 +1723,39 @@ def settle_batches(connection, room_id):
         elif own["purpose"] == "keep_working":
             # The host went on working after this dispatch, on a request of its own on the same message: the hand-back
             # reaches it as a notice, delivered once that work ends.
-            wake_host(connection, room_id, batch["chain_id"], Text("#{batch_id} 派出的工作已结束，请主持人接着处理。", batch_id=batch["batch_id"]),
+            wake_host(connection, room_id, batch["chain_id"], handoff_notice(connection, room_id, batch["batch_id"], False),
                       f"handoff:{batch['batch_id']}")
+        elif "failed" not in statuses and reopen_review_handoff(connection, room_id, batch["batch_id"], host["id"]):
+            # A preauthorized review waits on this hand-back: the failure's hand-back was handled, so it opens once more
+            # now that every delivery succeeded, and the host can advance the review from it (K22).
+            continue
         else:
             # The batch already came back once (it had failed) and the owner retried it: its new answers reach the host as a notice.
             retried = connection.execute("SELECT MAX(id) FROM member_requests WHERE room_id=? AND batch_id=?", (room_id, batch["batch_id"])).fetchone()[0]
-            wake_host(connection, room_id, batch["chain_id"], Text("#{batch_id} 派出的工作重试后已结束，请主持人接着处理。", batch_id=batch["batch_id"]),
+            wake_host(connection, room_id, batch["chain_id"], handoff_notice(connection, room_id, batch["batch_id"], True),
                       f"retried:{batch['batch_id']}:{retried}")
     advance_queues(connection, room_id)
     resume_host(connection, room_id)
     wake_for_mentions(connection, room_id)
+
+
+def reopen_review_handoff(connection, room_id, batch_id, host_id):
+    """Open the host's hand-back of a batch with a review still to dispatch again; returns whether it did.
+
+    The host has one request per message, so the hand-back of a failure is the same row the review advances from. Only a
+    plan still pending reopens it, and only from a finished state: an advanced review or a hand-back already waiting
+    never yields a second one.
+    """
+    if not connection.execute("SELECT 1 FROM review_plans WHERE room_id=? AND batch_id=? AND status='pending' AND host_id=?",
+                              (room_id, batch_id, host_id)).fetchone():
+        return False
+    row = connection.execute("""SELECT id FROM member_requests WHERE room_id=? AND message_id=? AND member_id=? AND purpose='handoff'
+        AND status IN ('completed','cancelled','failed')""", (room_id, batch_id, host_id)).fetchone()
+    if not row:
+        return False
+    connection.execute("UPDATE member_requests SET status='pending',execution_id=NULL,answer_id=NULL WHERE id=?", (row["id"],))
+    connection.execute("DELETE FROM request_cancel_reasons WHERE request_id=?", (row["id"],))
+    return True
 
 
 def queue_in_turn(connection, room_id, message_id, member_ids):
@@ -1683,6 +1779,10 @@ def advance_queues(connection, room_id):
         WHERE q.id IN (SELECT MIN(id) FROM free_queue_waiting WHERE room_id=? GROUP BY message_id)
         AND NOT EXISTS(SELECT 1 FROM member_requests r WHERE r.message_id=q.message_id AND r.status IN ('pending','delivering'))""",
                        (int(time.time()), room_id))
+
+
+# The longest note a host may give a relay's next pass when it continues it from a checkpoint.
+MAX_SEQUENCE_NOTE = 4000
 
 
 def checked_sequence(actor, payload):
@@ -1879,9 +1979,11 @@ def advance_sequence(connection, room_id, sequence, host, completed, failed=Fals
         sequence_step(connection, room_id, sequence, host, position, sequence["pass"], answer_id)
         return
     if gate and gate.get("user"):
-        # Waiting for the owner: a checkpoint without a hand-back request. Their next unaddressed message carries it on.
+        # Waiting for the owner: a checkpoint without a hand-back request. Only the answer to the question bound to it
+        # carries it on (backend/questions.py); without one the host is asked once to supply it.
         connection.execute("UPDATE free_sequences SET status='checkpoint',answer_id=?,handoff_request=0,position=? WHERE id=?",
                            (answer_id, gate["after"], sequence["id"]))
+        questions.gate_reached(connection, room_id, sequence)
         return
     insert_request(connection, room_id, host["id"], sequence["batch_id"], sequence["chain_id"], "handoff", "host")
     request_id = connection.execute("SELECT last_insert_rowid()").fetchone()[0]
@@ -1891,12 +1993,15 @@ def advance_sequence(connection, room_id, sequence, host, completed, failed=Fals
 
 
 def sequence_view(connection, room_id, sequence_id, token):
-    """The loop's plan and this pass's answers in full, for the host or the owner deciding at a checkpoint; it dispatches nothing."""
+    """The loop's plan and this pass's answers in full; it dispatches nothing.
+
+    The owner and the host read it to decide at a checkpoint; any member may read it to place its own step (the answers
+    are room messages it could read anyway).
+    """
     try:
         require_owner(connection, room_id, token)
     except PermissionError:
-        if require_member(connection, room_id, token)["role"] != "host":
-            raise PermissionError(Text("只有房主或当前主持人可读取依次接力"))
+        require_member(connection, room_id, token)
     row = connection.execute("SELECT * FROM free_sequences WHERE room_id=? AND id=?", (room_id, sequence_id)).fetchone()
     if not row:
         raise LookupError(Text("依次接力不存在"))
@@ -1929,7 +2034,8 @@ def gate_view(sequence):
     if not gate:
         return None
     return {"after": gate["after"] + 1, "repeat_from": None if gate["repeat_from"] is None else gate["repeat_from"] + 1,
-            "can_proceed": gate["after"] < len(relay_steps(sequence)) - 1, **({"user": True} if gate.get("user") else {})}
+            "can_proceed": gate["after"] < len(relay_steps(sequence)) - 1, "revision": questions.gate_revision(sequence),
+            **({"user": True} if gate.get("user") else {})}
 
 
 def order_names(sequence, names):
@@ -1953,6 +2059,9 @@ def continue_sequence(connection, room_id, token, payload):
     proceed = payload.get("proceed", False)
     if type(proceed) is not bool:
         raise ValueError(Text("proceed 须为布尔值"))
+    note = payload.get("note")
+    if note is not None and (not isinstance(note, str) or not note.strip() or len(note) > MAX_SEQUENCE_NOTE):
+        raise ValueError(Text("note 须为 1–{limit} 字的说明", limit=MAX_SEQUENCE_NOTE))
     sequence = connection.execute("SELECT * FROM free_sequences WHERE room_id=? AND handoff_request=?", (room_id, request_id)).fetchone()
     if not sequence or sequence["status"] == "done" or not sequence_gates(sequence):
         raise LookupError(Text("该请求不是依次接力的检查点"))
@@ -1974,20 +2083,33 @@ def continue_sequence(connection, room_id, token, payload):
     completed = finish_review_handoff(connection, request, "sequence_continued")
     # Another pass counts on; going on past a gate starts the next stretch at its first pass. Either costs one round.
     pass_number = sequence["pass"] + 1 if repeat else 1
-    sequence_step(connection, room_id, sequence, host, position, pass_number, sequence["answer_id"], new_round=True)
+    # The host's note for this pass (an exemption, what to fix) is what the next step reads first; the answer it
+    # follows stays at `sequence.answer_id`, so no new relay (and no second count) is needed to say it (W4, W8, W11).
+    start = questions.insert_message(connection, room_id, host["name"], note, "cli", f"sequence-note-{request_id}") if note else sequence["answer_id"]
+    sequence_step(connection, room_id, sequence, host, position, pass_number, start, new_round=True)
     return {"sequence_id": sequence["id"], "pass": pass_number, "proceeded": not repeat, "duplicate": False, "execution_completed": completed}
 
 
 def resume_user_gate(connection, room_id, message_id, payload):
-    """Carry on the relay waiting at a user gate with the owner's unaddressed message; True when it did.
+    """Plain chat no longer carries a relay past a user gate (spec #3329 item 5): only the answer to its question does.
 
-    The message becomes the next step's message, so that member reads it first, and starts a new chain like any owner
-    message: the step costs a round of it. A gate with `repeat_from` runs its stretch again, one without goes on. A relay
-    whose host changed, or whose remaining members all left, stops, and the message is routed as usual.
+    A gate still waiting without a question (one reached before questions existed) gets the host asked once to supply
+    one; the owner's message is routed as usual. Always False.
     """
-    if payload.get("to") is not None:
-        return False
     sequence = connection.execute("SELECT * FROM free_sequences WHERE room_id=? AND status='checkpoint' AND handoff_request=0 ORDER BY id DESC", (room_id,)).fetchone()
+    if sequence:
+        questions.gate_reached(connection, room_id, sequence)
+    return False
+
+
+def pass_user_gate(connection, room_id, sequence, message_id):
+    """Carry on the relay waiting at a user gate with the answer to its question; True when it did.
+
+    The answer message becomes the next step's message, so that member reads it first, and starts a new chain like any
+    owner message: the step costs a round of it. A gate with `repeat_from` runs its stretch again (the pass counts up
+    once), one without goes on with the pass back at 1. A relay whose host changed, or whose remaining members all left,
+    stops.
+    """
     if not sequence:
         return False
     host = connection.execute("SELECT * FROM room_members WHERE id=? AND status='active' AND role='host'", (sequence["host_id"],)).fetchone()
@@ -2004,8 +2126,15 @@ def resume_user_gate(connection, room_id, message_id, payload):
 
 
 def sequence_request_context(connection, request):
-    """Where a request sits in a host's one-after-another dispatch: a step, the hand-back after the last one, or a loop's checkpoint."""
-    row = connection.execute("SELECT room_id,member_id,batch_id,purpose FROM member_requests WHERE id=?", (request["id"],)).fetchone()
+    """Where a request sits in a host's one-after-another dispatch: a step, the hand-back after the last one, or a loop's checkpoint.
+
+    Members are named as the room shows them, steps count from 1, and every field is always there (null when it does
+    not apply yet), so readers on any channel read it the same way: `step` of `steps`; `after_this` says what follows
+    this step (`next_step`, `user_gate`, `host_checkpoint` or `host`), `next` who takes it when that is a step;
+    `previous` is the message this step reads first and who wrote it (the owner after a user gate); `answer_id` is the
+    answer the relay last stopped on, null before its first stop.
+    """
+    row = connection.execute("SELECT room_id,member_id,batch_id,purpose,message_id FROM member_requests WHERE id=?", (request["id"],)).fetchone()
     if not row:
         return {}
     if row["purpose"] == "handoff":
@@ -2016,21 +2145,51 @@ def sequence_request_context(connection, request):
         return {}
     if not sequence:
         return {}
-    names = {item["id"]: item["name"] for item in connection.execute("SELECT id,name FROM room_members WHERE room_id=?", (row["room_id"],))}
+    labels = member_display_names(connection, row["room_id"])
+    names = {item["id"]: labels.get(item["name"], item["name"]) for item in connection.execute(
+        "SELECT id,name FROM room_members WHERE room_id=?", (row["room_id"],))}
     steps = relay_steps(sequence)
     order = order_names(sequence, names)
     gate = current_gate(sequence) if row["purpose"] == "handoff" and sequence["status"] == "checkpoint" else None
     phase = "step" if row["purpose"] == "ask" else "end" if not gate else "checkpoint" if gate["repeat_from"] is not None else "gate"
-    position = next((index for index, step in enumerate(steps) if row["member_id"] in step), None) if phase == "step" \
-        else gate["after"] if gate else len(order) - 1
+    position = next((index for index, step in enumerate(steps) if row["member_id"] in step), None) if phase == "step"         else gate["after"] if gate else len(order) - 1
     if position is None:
         return {}
-    following = order[position + 1] if phase == "step" and position + 1 < len(order) else None
-    together = [names.get(item) for item in steps[position] if item != row["member_id"]] if phase == "step" else []
-    return {"sequence": {"id": sequence["id"], "message_id": sequence["message_id"], "order": order, "loop": bool(sequence["loop"]),
-                         "pass": sequence["pass"], "position": position, "phase": phase, "next": following,
-                         **({"together": together} if together else {}), "answer_id": sequence["answer_id"] or None,
-                         **({"gate": gate_view(sequence)} if gate else {})}}
+    context = {"id": sequence["id"], "message_id": sequence["message_id"], "order": order, "loop": bool(sequence["loop"]),
+               "pass": sequence["pass"], "step": position + 1, "steps": len(order), "phase": phase,
+               "next": None, "after_this": None, "answer_id": sequence["answer_id"] or None}
+    if phase == "step":
+        after = next((item for item in sequence_gates(sequence) if item["after"] == position), None)
+        context["after_this"] = ("user_gate" if after and after.get("user") else "host_checkpoint" if after
+                                 else "next_step" if position + 1 < len(order) else "host")
+        if context["after_this"] == "next_step":
+            context["next"] = order[position + 1]
+        together = [names.get(item) for item in steps[position] if item != row["member_id"]]
+        if together:
+            context["together"] = together
+        author = connection.execute("SELECT author FROM messages WHERE id=?", (row["message_id"],)).fetchone()
+        author = author[0] if author else ""
+        host = connection.execute("SELECT name FROM room_members WHERE id=?", (sequence["host_id"],)).fetchone()
+        context["previous"] = {"message_id": row["message_id"],
+                               "kind": "user" if author == "用户" else "host" if host and author == host[0] else "member",
+                               "author": labels.get(author, author)}
+    if phase == "step" and sequence["pass"] > 1:
+        # What the pass before said, by message number, so a step on a later pass need not rely on its own memory (W10).
+        context["previous_pass"] = {"pass": sequence["pass"] - 1, "answer_ids": pass_answers(connection, sequence, sequence["pass"] - 1)}
+    if gate:
+        context["gate"] = gate_view(sequence)
+    # A relay step carries no discussion question: point at the arrangement it follows instead of leaving it empty.
+    source = Text("依次接力第 {step}/{steps} 棒：按主持人 #{message_id} 的安排完成你这一棒", step=position + 1, steps=len(order),
+                  message_id=sequence["message_id"]) if phase == "step" else ""
+    return {"sequence": context, **({"source_question": source} if source else {})}
+
+
+def pass_answers(connection, sequence, pass_number):
+    """The answers given on one pass of a relay, in step order."""
+    batches = [entry[2] for entry in json.loads(sequence["steps"]) if entry[0] == pass_number]
+    return [row[0] for batch in batches for row in connection.execute(
+        "SELECT answer_id FROM member_requests WHERE room_id=? AND batch_id=? AND purpose='ask' AND answer_id IS NOT NULL ORDER BY id",
+        (sequence["room_id"], batch))]
 
 
 def default_order(connection, room_id, members):
@@ -2202,6 +2361,7 @@ def after_free_message(connection, room_id, message_id, actor, payload):
                            (now, f"message:{message_id}", execution_id))
         connection.execute("UPDATE member_requests SET status='completed',answer_id=? WHERE execution_id=? AND status='delivering'",
                            (message_id, execution_id))
+    close_also_requests(connection, room_id, actor, message_id, payload.get("also_request_ids"))
     connection.execute("UPDATE room_members SET read_until=MAX(read_until,?) WHERE id=?", (message_id, actor["id"]))
     if actor["role"] == "host" and payload.get("to") and payload.get("sequential") is True:
         start_sequence(connection, room_id, actor, message_id, payload["to"], chain_id, payload.get("loop") is True, need_plan(payload),
@@ -2214,6 +2374,32 @@ def after_free_message(connection, room_id, message_id, actor, payload):
     if actor["role"] == "host":
         remember_continue(connection, room_id, actor, message_id, chain_id, payload)
     settle_batches(connection, room_id)
+
+
+def close_also_requests(connection, room_id, member, message_id, ids):
+    """Requests that queued for the member while it worked, delivered by this same answer (应 2): closed with it.
+
+    Only the member's own pending requests outside a discussion, named by id (from `execution view`'s
+    `queued_requests`); anything else refuses the whole answer, so nothing is closed by guesswork.
+    """
+    if ids is None:
+        return
+    if not isinstance(ids, list) or not ids or any(type(item) is not int for item in ids) or len(set(ids)) != len(ids):
+        raise ValueError(Text("also_request_ids 须为不重复的请求编号列表"))
+    for request_id in ids:
+        row = connection.execute("""SELECT r.* FROM member_requests r WHERE r.room_id=? AND r.id=? AND r.member_id=? AND r.status='pending'
+            AND r.purpose IN ('ask','route','all') AND NOT EXISTS (SELECT 1 FROM session_requests s WHERE s.member_request_id=r.id)""",
+                                 (room_id, request_id, member["id"])).fetchone()
+        if not row:
+            raise FileExistsError(Text("请求 {request_id} 不是你排队中的普通请求，不能一并交付", request_id=request_id))
+        connection.execute("UPDATE member_requests SET status='completed',answer_id=? WHERE id=?", (message_id, request_id))
+
+
+def queued_requests(connection, member_id):
+    """The member's requests waiting behind its live execution: what it may also deliver in this answer."""
+    return [dict(row) for row in connection.execute("""SELECT r.id,r.message_id,r.purpose,r.created_by FROM member_requests r
+        WHERE r.member_id=? AND r.status='pending' AND r.purpose IN ('ask','route','all')
+        AND NOT EXISTS (SELECT 1 FROM session_requests s WHERE s.member_request_id=r.id) ORDER BY r.id""", (member_id,))]
 
 
 def expire_executions(connection, room_id):
@@ -2316,6 +2502,7 @@ def stop_room(connection, room_id, token):
     connection.execute("DELETE FROM free_queue WHERE room_id=?", (room_id,))
     pause_queue(connection, room_id)
     stop_room_work(connection, room_id, Text("用户停止全部"), "user_stop")
+    questions.cancel_open(connection, room_id)
     return free_view(connection, room_id)
 
 
@@ -2439,7 +2626,8 @@ def inbox(connection, room_id, token):
         # Private chat lines the runner still has to run in this member's session (backend/private_chat.py).
         member_view["chats"] = [dict(item) for item in connection.execute(
             "SELECT id,text,status FROM private_chats WHERE member_id=? AND status IN ('pending','running') ORDER BY id", (row["id"],))]
-        pending = [{**request, **review_request_context(connection, request), **sequence_request_context(connection, request)} for request in pending]
+        pending = [{**request, **review_request_context(connection, request), **sequence_request_context(connection, request), **handoff_outcome(connection, request),
+                    **questions.request_context(connection, request)} for request in pending]
         (members if row["access"] == "runner" else observers).append({**member_view, "pending": pending})
     # Pending interjections ride along so the runner hands them to the running software at its next check.
     # `continues`: the answered execution whose software turn this one carries on (keep_working); the runner moves it over.
@@ -2447,7 +2635,9 @@ def inbox(connection, room_id, token):
                    "continues": (connection.execute("SELECT execution_id FROM execution_continuations WHERE next_id=?",
                                                     (row["id"],)).fetchone() or [None])[0],
                    "interjections": [dict(item) for item in connection.execute(
-                       "SELECT id,text FROM execution_interjections WHERE execution_id=? AND status='pending' ORDER BY id", (row["id"],))]}
+                       """SELECT i.id,i.text,COALESCE(a.author,'') AS author FROM execution_interjections i
+                       LEFT JOIN interjection_authors a ON a.interjection_id=i.id WHERE i.execution_id=? AND i.status='pending' ORDER BY i.id""",
+                       (row["id"],))]}
                   for row in connection.execute(
         """SELECT member_executions.*,room_members.name FROM member_executions JOIN room_members ON room_members.id=member_id
         WHERE member_executions.room_id=? AND member_executions.status IN ('dispatched','started') ORDER BY member_executions.id""", (room_id,))]
@@ -2674,6 +2864,8 @@ def reserve_execution(connection, room_id, token, payload):
     if connection.execute("SELECT 1 FROM member_executions WHERE member_id=? AND status IN ('dispatched','started')",
                           (member["id"],)).fetchone():
         raise FileExistsError(Text("该成员已有进行中的执行；同一会话不并发续接"))
+    if quota_held_until(connection, member["id"]):
+        raise FileExistsError(Text("该成员额度已用尽，暂停投递；等额度重置后重试它失败的执行，或改派其他成员"))
     if held_until(connection, member["id"]):
         raise FileExistsError(Text("该成员上一轮已作废但本机无法停止，可能仍在处理；等它结束或等待时限到后再投递"))
     # A group request waits for the runner to choose how everyone answers; it is never delivered itself.
@@ -2707,12 +2899,43 @@ def execution_detail(connection, row):
         FROM member_requests r LEFT JOIN session_requests sr ON sr.member_request_id=r.id
         LEFT JOIN task_message_sources t ON t.session_request_id=sr.id
         WHERE r.execution_id=? ORDER BY r.id""", (row["id"],))]
-    requests = [{**request, **review_request_context(connection, request), **sequence_request_context(connection, request),
-                 "texts": request_texts(connection, request["id"], request.get("session_request_id"))} for request in requests]
+    requests = [{**request, **review_request_context(connection, request), **sequence_request_context(connection, request), **handoff_outcome(connection, request),
+                 **questions.request_context(connection, request), "texts": request_texts(connection, request["id"], request.get("session_request_id"))} for request in requests]
     detail = public_execution(row)
     detail["texts"] = execution_texts(connection, row["id"])
+    quota = quota_failure(connection, row["id"])
     return {**detail, "member": member["name"], "read_until": member["read_until"], "requests": requests,
-            "rewound_executions": member_rewinds(connection, member["id"]), "retry": execution_retry(connection, row["id"])}
+            **({"queued_requests": queued_requests(connection, member["id"])} if row["status"] in ACTIVE else {}),
+            "rewound_executions": member_rewinds(connection, member["id"]), "retry": execution_retry(connection, row["id"]),
+            **({"failure": {"class": "quota", "resets": quota["resets"] or None, "reset_at": quota["reset_at"] or None,
+                            "lasting": True}} if quota else {})}
+
+
+def execution_delivery(connection, room_id, row):
+    """What the service knows of this execution's own answer, in the four states of spec #3262 item 6.
+
+    `accepted` and `rejected` are the service's facts; the service can never confirm that nothing was sent, so with no
+    accepted answer and no recorded rejection it says `unknown` with `received: false` (only the sender may say
+    `not_sent`). It never exports the text, the private journal or credentials."""
+    answer = connection.execute("""SELECT m.id,m.text,m.submission_id FROM member_requests r JOIN messages m ON m.id=r.answer_id
+        WHERE r.execution_id=? ORDER BY r.id DESC LIMIT 1""", (row["id"],)).fetchone()
+    if not answer and str(row["result"] or "").startswith("message:"):
+        answer = connection.execute("SELECT id,text,submission_id FROM messages WHERE room_id=? AND id=?",
+                                    (room_id, int(str(row["result"]).split(":", 1)[1]))).fetchone()
+    if answer:
+        text = answer["text"] or ""
+        return {"outcome": "accepted", "message_id": answer["id"], "submission_id": answer["submission_id"],
+                "execution_id": row["id"], "text_chars": len(text), "text_sha256": hashlib.sha256(text.encode("utf-8")).hexdigest()}
+    member = connection.execute("SELECT name FROM room_members WHERE id=?", (row["member_id"],)).fetchone()
+    rejected = connection.execute("""SELECT id,data FROM room_events WHERE room_id=? AND kind='api.rejected' AND at>=?
+        AND json_extract(data,'$.actor')=? AND json_extract(data,'$.path') LIKE '%/messages'
+        AND json_extract(data,'$.payload') LIKE ? ORDER BY id DESC LIMIT 1""",
+        (room_id, row["created_at"] * 1000, f"member:{member['name']}", f'%"execution_id": {row["id"]}%')).fetchone()
+    if rejected:
+        data = json.loads(rejected["data"])
+        return {"outcome": "rejected", "execution_id": row["id"], "status": data.get("status"), "error": data.get("error", ""),
+                "event_id": rejected["id"]}
+    return {"outcome": "unknown", "execution_id": row["id"], "received": False}
 
 
 def view_execution(connection, room_id, execution_id, token):
@@ -2726,7 +2949,7 @@ def view_execution(connection, room_id, execution_id, token):
         member = require_member(connection, room_id, token)
         if member["id"] != row["member_id"] and member["role"] != "host":
             raise
-    return execution_detail(connection, row)
+    return {**execution_detail(connection, row), "delivery": {"last_submission": execution_delivery(connection, room_id, row)}}
 
 
 def changed_files(payload):
@@ -2824,6 +3047,9 @@ def add_interjection(connection, room_id, row, payload, now):
         raise FileExistsError(Text("一次执行最多插话 {max_interjections} 条", max_interjections=MAX_INTERJECTIONS))
     cursor = connection.execute("""INSERT INTO execution_interjections (execution_id,room_id,submission_id,text,created_at,updated_at)
         VALUES (?,?,?,?,?,?)""", (row["id"], room_id, submission_id, text, now, now))
+    if payload.get("by_host"):
+        # The host interjected through host-control: the member is told it was the host, not the owner.
+        connection.execute("INSERT INTO interjection_authors (interjection_id,author) VALUES (?,?)", (cursor.lastrowid, payload["by_host"]))
     # Software that cannot take it mid-turn hears it by a pause: the runner stops the turn and resumes with it.
     if not capability["steer"] and not row["paused_at"]:
         connection.execute("UPDATE member_executions SET paused_at=? WHERE id=?", (now, row["id"]))
@@ -2937,7 +3163,9 @@ def execution_action(connection, room_id, execution_id, token, payload):
         # The runner's report on one interjection: it reached the software, or why it could not; a repeated report changes nothing.
         record_interjection_result(connection, room_id, execution_id, payload, now)
     elif action == "retry":
+        quota = quota_failure(connection, execution_id)
         retry_failed(connection, room_id, row)
+        connection.execute("DELETE FROM execution_failures WHERE execution_id=?", (execution_id,))
     elif row["status"] not in ACTIVE:
         raise FileExistsError(Text("执行已结束"))
     elif action == "renew":
@@ -3001,6 +3229,7 @@ def execution_action(connection, room_id, execution_id, token, payload):
         settle_batches(connection, room_id)
     elif action == "fail":
         reason = incoming_text(payload.get("reason") or "执行失败", payload.get("reason_text"))
+        record_failure_class(connection, room_id, execution_id, payload)
         finish_execution(connection, execution_id, "failed", reason, "failed")
         settle_batches(connection, room_id)
     elif action == "release":
@@ -3010,7 +3239,25 @@ def execution_action(connection, room_id, execution_id, token, payload):
     else:
         raise ValueError(Text("action 须为 renew、fail、release、report、segments、interject、interjection、retry_wait、retry_start、retry_now、retry_stop 或 retry"))
     detail = execution_detail(connection, connection.execute("SELECT * FROM member_executions WHERE id=?", (execution_id,)).fetchone())
+    if action == "retry" and quota:
+        # Retrying a usage-limit failure is allowed (the owner may know the quota is back) but likely fails again before the reset.
+        warning = Text("这次执行因额度用尽失败（重置时间：{resets}）；额度重置前重试多半仍会失败，可改派其他成员。", resets=quota["resets"])             if quota["resets"] else Text("这次执行因额度用尽失败（重置时间未知）；额度重置前重试多半仍会失败，可改派其他成员。")
+        return {**detail, "warning": warning, "warning_text": text_payload(warning)}
     return {**detail, "duplicate": duplicate} if action == "stopped" else detail
+
+
+def record_failure_class(connection, room_id, execution_id, payload):
+    """Keep the runner's classification of a failure; only `quota` is known, anything else stays unclassified."""
+    if payload.get("failure_class") is None:
+        return
+    reset_at = payload.get("reset_at", 0)
+    if payload["failure_class"] != "quota" or not isinstance(payload.get("resets", ""), str) or type(reset_at) is not int:
+        raise ValueError(Text("failure_class 只能为 quota，resets 须为文字，reset_at 须为整数秒"))
+    now = int(time.time())
+    # A reset already past or implausibly far is the adapter misreading the text: hold for the fixed time instead.
+    reset_at = reset_at if now < reset_at <= now + MAX_QUOTA_HOLD_SECONDS else 0
+    connection.execute("""INSERT OR REPLACE INTO execution_failures (execution_id,room_id,failure_class,resets,failed_at,reset_at)
+        VALUES (?,?,?,?,?,?)""", (execution_id, room_id, "quota", payload.get("resets", "")[:MAX_RESETS_TEXT], now, reset_at))
 
 
 def retry_failed(connection, room_id, execution):
@@ -3069,9 +3316,12 @@ def reopen_batches(connection, room_id, requests):
     for request in requests:
         batch_id, chain_id = request["batch_id"], request["chain_id"]
         # A relay step stopped by one failed member of its group resumes too: the others' answers wait for this one.
+        # So does a batch whose review still waits: its hand-back must open again once the retried member delivers.
         if batch_id and (not connection.execute(
                 "SELECT 1 FROM member_requests WHERE room_id=? AND batch_id=? AND status='completed'", (room_id, batch_id)).fetchone()
                 or connection.execute("SELECT 1 FROM free_sequences WHERE room_id=? AND batch_id=? AND status='stopped'",
+                                      (room_id, batch_id)).fetchone()
+                or connection.execute("SELECT 1 FROM review_plans WHERE room_id=? AND batch_id=? AND status='pending'",
                                       (room_id, batch_id)).fetchone()):
             connection.execute("UPDATE free_batches SET settled=0 WHERE room_id=? AND batch_id=?", (room_id, batch_id))
             connection.execute("DELETE FROM free_chains WHERE room_id=? AND chain_id=? AND reason='all_failed'", (room_id, chain_id))
@@ -3089,11 +3339,15 @@ def owned_member(connection, room_id, member_id, token):
     return member
 
 
-def interrupt_member(connection, room_id, member_id, token):
-    """Owner stop: void the live execution; requests that arrived meanwhile stay queued for the member's next turn."""
+def interrupt_member(connection, room_id, member_id, token, by_host=""):
+    """Owner stop: void the live execution; requests that arrived meanwhile stay queued for the member's next turn.
+
+    `by_host` names the host when it stopped the member through host-control, so the result says who did it.
+    """
     owned_member(connection, room_id, member_id, token)
     pause_queue(connection, room_id)
-    stop_member_work(connection, member_id, Text("用户打断"), "user_stop", keep_pending=True)
+    reason = Text("主持人 {host} 打断", host=by_host) if by_host else Text("用户打断")
+    stop_member_work(connection, member_id, reason, "user_stop", keep_pending=True)
     settle_batches(connection, room_id)
     return free_view(connection, room_id)
 
@@ -3387,3 +3641,4 @@ def member_action(connection, room_id, member_id, token, payload):
 
 # Imported last: session_room imports helpers from this module, so both load in either order.
 from . import session_room as discussion  # noqa: E402
+from . import questions  # noqa: E402

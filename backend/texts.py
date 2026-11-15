@@ -42,7 +42,25 @@ def error_body(error):
     payload = text_payload(message)
     if payload:
         body["error_text"] = payload
+    # A classified error (spec #3187 section 6) carries its code and recovery facts beside the message.
+    body.update(getattr(error, "details", None) or {})
     return body
+
+
+class ReadError(LookupError):
+    """A read that failed for a reason the caller may act on; `details` holds `code` and what the caller may know."""
+
+    def __init__(self, message, **details):
+        super().__init__(message)
+        self.details = details
+
+
+class BoundaryError(PermissionError):
+    """A read past the caller's reading boundary: answered without looking up whether the object exists."""
+
+    def __init__(self, message, **details):
+        super().__init__(message)
+        self.details = details
 
 
 def save_text(connection, owner, owner_id, field, value):

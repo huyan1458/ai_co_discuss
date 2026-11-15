@@ -17,7 +17,7 @@ description: "AI CoDiscuss 的讨论模式技能，房间开启讨论后由参�
 
 ### 自动任务
 
-任务文件给出房间、成员、`execution_id`、`discussion_request`、`session.phase`、读取边界及凭据方式。首次处理时先运行 `execution view ROOM 执行编号 --access-file FILE` 核验执行仍有效，再读 `room view ROOM` 核对请求、阶段与房间状态。任务过期、请求已取消或讨论已暂停/结束时保留草稿并停止。
+任务文件给出房间、成员、`execution_id`、`discussion_request`、`session.phase`、读取边界及凭据方式。首次处理时先运行 `execution view`（省略编号即本次执行）核验执行仍有效，再读 `room view ROOM` 核对请求、阶段与房间状态。任务过期、请求已取消或讨论已暂停/结束时保留草稿并停止。
 
 仅当 `discussion_request.purpose` 是 `discuss` 且这是自己的当前请求时作答；`discuss_host` 由主持技能处理。`session.phase` 与任务中 `read_until` 是读取边界，房间视图用于确认当前状态，不以旧任务文字覆盖服务端状态。
 
@@ -31,18 +31,6 @@ description: "AI CoDiscuss 的讨论模式技能，房间开启讨论后由参�
 
 读取须沿用自己的凭据和本次执行或请求关联；匿名入口同样受初始读取边界限制，不可去掉凭据或改用备份、执行结果、过程说明绕过。直接提问使用它自己的有效请求或执行读取，不借用讨论请求。
 
-自动任务用本次执行编号保存一次完整回答，例如：
-
-```sh
-codiscuss message post ROOM --as 本人 --kind chat --execution 执行编号 --body-file draft.md --access-file FILE
-```
-
-手动成员用自己的成员凭据和服务端给出的请求编号：
-
-```sh
-codiscuss message post ROOM --as 本人 --kind chat --request 请求编号 --body-file draft.md --access-file FILE
-```
-
-需要摘要时写在正文草稿开头（`---`、`summary: 摘要`、`---` 三行），或用 `--summary` / `--summary-file`。成功提交后当前请求即完成；不要再补一条普通 chat 或状态回执。
+自动任务用 `message post --body-file draft.md` 保存一次完整回答（凭据已绑定执行，其余参数由 CLI 补齐）；手动成员另加 `ROOM --as 本人 --request 请求编号 --access-file FILE`。草稿与摘要写法见参与技能。成功提交后当前请求即完成。
 
 任务执行失败时，用 `execution fail ROOM 执行编号 --reason 原因 --access-file FILE` 失败本次执行并保留草稿。该操作只处理当前请求，不自动暂停整场讨论；主持人会收到专家请求失败并判断后续安排。不要改用其他成员、请求编号或身份绕过拒绝。

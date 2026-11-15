@@ -354,6 +354,9 @@ const created = computed(() => room.value.created_at ? new Date(room.value.creat
             </dd></div>
             <div v-if="saved?.participants?.[member.name]?.outside_directory" class="overview-outside" :title="bridge.display_path(saved.participants[member.name].outside_directory)">
               <UIcon name="i-lucide-triangle-alert" /><span>{{ t('在 {path} 工作，房间目录{access}', { path: bridge.display_path(saved.participants[member.name].outside_directory), access: saved.participants[member.name].outside_enforced ? t('只读') : t('只读（仅任务要求，程序拦不住）') }) }}</span></div>
+            <!-- A host that keeps failing stalls the room; the owner is told how to hand the role to someone else (应 18). -->
+            <div v-if="free && member.role === 'host' && live(member).execution?.status === 'failed'" class="overview-outside" role="status">
+              <UIcon name="i-lucide-triangle-alert" /><span>{{ t('主持人最近一次执行失败：{reason}。若它长期不可用（如额度用尽），在另一位成员卡片右上角点“设为主持人”换人。', { reason: live(member).execution.result || t('原因未知') }) }}</span></div>
           </dl>
           <footer class="member-card-actions" :aria-label="t('{name} 的操作', { name: member.name })">
             <div><UButton v-for="item in actions(member).taking_part" :key="item.label" :icon="item.icon" :label="item.label" size="xs" variant="ghost" color="neutral" :disabled="item.disabled" @click="item.onSelect()" /></div>

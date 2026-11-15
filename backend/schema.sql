@@ -338,6 +338,17 @@ CREATE TABLE IF NOT EXISTS execution_denials (
 );
 -- A manual member's session refused a delivery: the runner keeps the execution and delivers again at retry_at
 -- (0 while delivering). The owner may ask for it now or stop it, and the runner then fails it. Not part of backups.
+-- What the runner's adapter classified a failed execution as (only 'quota', a usage limit, so far) and the reset time
+-- it reported, as the software's own text, plus `reset_at` (Unix seconds, 0 when unknown) when the adapter could compute it.
+-- An unclassified failure has no row. Retrying the execution removes it.
+CREATE TABLE IF NOT EXISTS execution_failures (
+    execution_id INTEGER PRIMARY KEY REFERENCES member_executions(id) ON DELETE CASCADE,
+    room_id TEXT NOT NULL REFERENCES rooms(id) ON DELETE CASCADE,
+    failure_class TEXT NOT NULL CHECK(failure_class IN ('quota')),
+    resets TEXT NOT NULL DEFAULT '',
+    failed_at INTEGER NOT NULL,
+    reset_at INTEGER NOT NULL DEFAULT 0
+);
 CREATE TABLE IF NOT EXISTS execution_retries (
     execution_id INTEGER PRIMARY KEY REFERENCES member_executions(id) ON DELETE CASCADE,
     room_id TEXT NOT NULL REFERENCES rooms(id) ON DELETE CASCADE,
@@ -1771,3 +1782,56 @@ BEGIN
             'idle_seconds',NEW.idle_seconds,'phase',NEW.phase,'from_phase',OLD.phase,'phase_until',NEW.phase_until,
             'phase_note',CASE WHEN OLD.phase IS NOT NEW.phase THEN substr(NEW.phase_note,1,200) END));
 END;
+-- Questions a member asks the owner (backend/questions.py, spec #3329): one group of items with its explanation message,
+-- the requests it was asked from, and, for a relay's user gate, the gate it carries on. `version` binds every write;
+-- `answer` is the structured record the owner's answer message was written from. `pending` keeps the owner's request
+-- for a recommendation or a decision until the host replies.
+CREATE TABLE IF NOT EXISTS room_questions (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    room_id TEXT NOT NULL REFERENCES rooms(id) ON DELETE CASCADE,
+    asker_id INTEGER NOT NULL,
+    asker TEXT NOT NULL,
+    execution_id INTEGER NOT NULL DEFAULT 0,
+    request_ids TEXT NOT NULL DEFAULT '[]',
+    contract TEXT NOT NULL CHECK(contract IN ('handoff','supplement')),
+    blocking INTEGER NOT NULL,
+    items TEXT NOT NULL,
+    refs TEXT NOT NULL DEFAULT '[]',
+    message_id INTEGER NOT NULL DEFAULT 0,
+    version INTEGER NOT NULL DEFAULT 1,
+    status TEXT NOT NULL CHECK(status IN ('waiting_user','waiting_recommendation','delegated','answered','cancelled','expired')),
+    sequence_id INTEGER NOT NULL DEFAULT 0,
+    gate_pass INTEGER NOT NULL DEFAULT 0,
+    gate_after INTEGER NOT NULL DEFAULT -1,
+    recommendation_message_id INTEGER NOT NULL DEFAULT 0,
+    recommendation TEXT NOT NULL DEFAULT '',
+    pending TEXT NOT NULL DEFAULT '',
+    request_message_id INTEGER NOT NULL DEFAULT 0,
+    answer TEXT NOT NULL DEFAULT '',
+    answer_message_id INTEGER NOT NULL DEFAULT 0,
+    answer_submission_id TEXT NOT NULL DEFAULT '',
+    submission_id TEXT NOT NULL,
+    fingerprint TEXT NOT NULL,
+    created_at INTEGER NOT NULL,
+    waiting_since INTEGER NOT NULL,
+    answered_at INTEGER NOT NULL DEFAULT 0,
+    expires_at INTEGER NOT NULL DEFAULT 0,
+    UNIQUE(room_id, submission_id)
+);
+CREATE INDEX IF NOT EXISTS room_questions_open ON room_questions(room_id,status,waiting_since);
+CREATE INDEX IF NOT EXISTS room_questions_answer ON room_questions(answer_message_id);
+CREATE INDEX IF NOT EXISTS room_questions_request ON room_questions(request_message_id);
+CREATE TABLE IF NOT EXISTS question_events (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    question_id INTEGER NOT NULL REFERENCES room_questions(id) ON DELETE CASCADE,
+    kind TEXT NOT NULL,
+    detail TEXT NOT NULL DEFAULT '{}',
+    created_at INTEGER NOT NULL
+);
+CREATE INDEX IF NOT EXISTS question_events_question ON question_events(question_id,id);
+-- Who interjected when it was not the owner: the host acting through host-control (its display name). Kept apart so the
+-- interjection table needs no new column; the runner labels the text it hands the member accordingly.
+CREATE TABLE IF NOT EXISTS interjection_authors (
+    interjection_id INTEGER PRIMARY KEY REFERENCES execution_interjections(id) ON DELETE CASCADE,
+    author TEXT NOT NULL
+);

@@ -211,6 +211,17 @@ class CliTests(unittest.TestCase):
         self.assertIn("平台名-后缀", str(self.rejected(["message", "post", room["id"], "--as", "Claudex", "--body", "x",
                                                     "--submission-id", str(uuid.uuid4()), "--dry-run"])))
 
+    def test_execution_number_alone_and_credential_bound_fields_in_schema(self):
+        """`execution fail 7` reads 7 as the execution, not a room (C1); schema says which fields a credential fills (B5)."""
+        access = Path(self.directory.name) / "bound.access.json"
+        access.write_text(json.dumps({"site": self.base, "room": "abcdef123456", "token": "t" * 32}), encoding="utf-8")
+        preview = self.cli("execution", "fail", "7", "--reason", "x", "--access-file", str(access), "--dry-run")
+        self.assertTrue(str(preview).count("/api/rooms/abcdef123456/executions/7") == 1, preview)
+        fields = {item["name"]: item for item in self.cli("schema", "message", "post")["arguments"]}
+        self.assertEqual((fields["actor"]["required"], fields["actor"]["required_unless_credential"]), (False, True))
+        self.assertEqual((fields["room"]["required_unless_credential"], fields["execution"]["credential_field"]), (True, "execution_id"))
+        self.assertTrue(fields["submission_id"]["generated_when_omitted"])
+
     def test_manual_member_registers_through_the_cli_with_its_own_credential(self):
         """`member register` needs the member's credential file; automatic members are refused."""
         if self.external:
@@ -477,7 +488,7 @@ class CliTests(unittest.TestCase):
         first = self.cli(*args)
         repeated = self.cli(*args)
         self.assertTrue(repeated["duplicate"])
-        self.assertEqual(first["message"], repeated["message"])
+        self.assertEqual({**first["message"], "duplicate": True}, repeated["message"])
         original = self.cli("message", "view", self.room, first["message"]["id"])
         self.assertEqual(original["text"], "@Antigravity 成本 &= #1\n原文")
         found = self.cli("message", "list", self.room, "--submission-id", "retry-original")
@@ -589,13 +600,23 @@ class CliContractTests(unittest.TestCase):
         parser, registry = discuss.build_parser()
         return parser.parse_args(arguments), registry
 
+    def test_room_and_state_reads_keep_the_reason_a_field_was_withheld(self):
+        """必 4: `field_notes` from the service survives the CLI projection, so hidden is not shown as empty."""
+        notes = {"state_text": {"reason": "reading_boundary", "request_read_until": 3}}
+        value = {"id": "r1", "phase": "initial", "state_text": "", "state_until": 9, "field_notes": notes}
+        for view in ("overview", "state"):
+            plan = discuss.RequestPlan("/api/rooms/r1", view=view)
+            self.assertEqual(discuss.project_result(value, plan, "http://x")["field_notes"], notes)
+
     def test_help_and_schema_work_without_network(self):
         """Schema is generated from real flags, including required operator and body alternatives."""
         args, registry = self.parse(["schema", "message", "post"])
         with patch.object(discuss, "build_opener") as opener:
             schema = discuss.run(args, registry)["data"]
         opener.assert_not_called()
-        self.assertTrue(next(item for item in schema["arguments"] if item["name"] == "actor")["required"])
+        # `--as` is required only without a bound credential, and schema says exactly that.
+        actor = next(item for item in schema["arguments"] if item["name"] == "actor")
+        self.assertEqual((actor["required"], actor["required_unless_credential"]), (False, True))
         self.assertEqual(schema["exclusive_groups"][0]["one_of"], ["body", "body_file"])
         args, _ = self.parse(["message", "group-plan", "room", "12"])
         plan = discuss.plan_message(args)

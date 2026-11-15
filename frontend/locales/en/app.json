@@ -207,6 +207,7 @@
   "页面读取失败": "Failed to read page",
   "读取中…": "Loading…",
   "默认": "Default",
+  "{shown}（设置为 {model}）": "{shown} (set to {model})",
   "只读": "read-only",
   "续接你已有的 App 会话：任务直接送进 App 里的这个会话，可在其中查看": "Resume your existing App session. Tasks go directly to that session and can be viewed there.",
   "续接你自己的会话：原窗口开着时任务直接送进该窗口；窗口关闭时改在后台续接，期间不要重新打开该会话": "Resume your own session. Tasks go to the original window while it is open, or resume in the background when closed. Avoid reopening it during background work.",

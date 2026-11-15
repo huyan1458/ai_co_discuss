@@ -5,6 +5,7 @@ import json
 import time
 
 from .free_room import insert_request, record_cancel_reasons, require_member
+from .questions import waiting_on_user
 from .texts import Text, save_text
 from .runtime import begin_write, require_owner
 
@@ -110,6 +111,9 @@ def room_idle(connection, room_id, goal):
         OR EXISTS(SELECT 1 FROM queued_messages WHERE room_id=?1)""", (room_id,)).fetchone()[0]
     if busy:
         return False
+    if waiting_on_user(connection, room_id):
+        # Every remaining path waits on the owner's answer to a question: waking the host again would only idle.
+        return False
     last = connection.execute("""SELECT author FROM messages m WHERE room_id=? AND NOT EXISTS(
         SELECT 1 FROM internal_task_messages t WHERE t.message_id=m.id) ORDER BY id DESC LIMIT 1""", (room_id,)).fetchone()
     if last and last[0] == "用户":
@@ -141,6 +145,7 @@ def goal_view(connection, room_id):
     if goal:
         goal["elapsed_seconds"] = elapsed_seconds(goal)
         goal["idle"] = room_idle(connection, room_id, goal)
+        goal["waiting_questions"] = waiting_on_user(connection, room_id)
     return {"goal": goal, "revision": goal_revision(connection, room_id, open_row)}
 
 
@@ -263,6 +268,12 @@ def update_goal(connection, goal, payload):
                        (objective, budget["max_continues"], budget["max_minutes"], budget["idle_seconds"], goal["id"]))
 
 
+def host_busy(connection, host_id):
+    """Whether the host has a request waiting or being worked on."""
+    return bool(connection.execute("SELECT 1 FROM member_requests WHERE member_id=? AND status IN ('pending','delivering')",
+                                   (host_id,)).fetchone())
+
+
 def start_goal(connection, room_id, token, payload):
     """Open a goal: the host completing a `/goal` start request, or the owner from the page with the revision it read."""
     begin_write(connection)
@@ -287,8 +298,10 @@ def start_goal(connection, room_id, token, payload):
     check_exclusive(connection, room_id)
     host = goal_host(connection, room_id)
     goal_id = create_goal(connection, room_id, objective, budget, request_id)
-    if request_id is None:
+    if request_id is None and not host_busy(connection, host["id"]):
         # Started from the page, nobody is working on it yet: hand it to the host right away instead of waiting for idle.
+        # A host that is working (it may have opened the goal itself) is not handed an empty continue on the same
+        # second: the goal stays armed and continues once the room goes idle.
         message_id = connection.execute("SELECT started_message_id FROM room_goals WHERE id=?", (goal_id,)).fetchone()[0]
         insert_request(connection, room_id, host["id"], message_id, message_id, "goal_continue", "user")
         request = connection.execute("SELECT id FROM member_requests WHERE message_id=? AND member_id=?", (message_id, host["id"])).fetchone()[0]

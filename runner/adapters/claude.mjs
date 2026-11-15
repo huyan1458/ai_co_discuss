@@ -12,7 +12,7 @@ import { homedir } from 'node:os';
 import { dirname, join, resolve } from 'node:path';
 import { runs_commands } from '../expert_prompts.mjs';
 import { bind_access, DENIAL_FIELD, EDIT_TOOLS, launch_directory, log_entries, marked, MAX_DENIALS, model_entry, json_line,
-  newest_record, not_sent, project_directory, prompt_text, query_catalog, TASK_SUBCOMMANDS, tree_killable, watch_events } from './common.mjs';
+  clock_reset_at, newest_record, not_sent, project_directory, prompt_text, query_catalog, TASK_SUBCOMMANDS, tree_killable, watch_events } from './common.mjs';
 
 // A message posted to an open Claude window that has not started by then is reported, not failed.
 const INBOX_CHECK_MS = 90_000;
@@ -94,6 +94,17 @@ export function claude_api_error(entry) {
   const text = prompt_text(entry.message?.content).trim();
   const kind = String(entry.error || '');
   return { kind, text: text || String(entry.api_error || kind || '未知错误'), lasting: LASTING_ERRORS.includes(kind) };
+}
+
+/**
+ * How a failure is classified for the room (adapter contract `on_failure(reason, {failure_class, resets})`): a usage
+ * limit is `quota`, with the reset time as Claude wrote it when it said; anything else stays unclassified.
+ */
+export function claude_failure_class(error) {
+  if (error.kind !== 'rate_limit') return {};
+  const limit = /\bresets (.+?)\s*$/i.exec(error.text);
+  const reset_at = limit ? clock_reset_at(limit[1]) : 0;
+  return { failure_class: 'quota', ...(limit ? { resets: limit[1] } : {}), ...(reset_at ? { reset_at } : {}) };
 }
 
 /** How a Claude API error reads on the failed card: a usage limit keeps only which limit and when it resets. */
@@ -442,7 +453,7 @@ export function watch_window_turn({ file, offset, pid, marker, session_id = '', 
     if (done) return;
     done = true;
     clearInterval(timer); clearInterval(stop_timer);
-    if (error) task.on_failure?.(claude_error_reason(error), { retryable: !error.lasting });
+    if (error) task.on_failure?.(claude_error_reason(error), { retryable: !error.lasting, ...claude_failure_class(error) });
     else if (reason) task.on_failure?.(reason);
     else if (ended) task.on_exit?.(ended);
     else task.on_exit?.();
@@ -640,7 +651,7 @@ async function deliver(config, binding, task, spawn_process = spawn) {
     if (denials.length) task.on_denials?.(denials);
     const error = claude_exit_error(code, output);
     const api_error = error ? output.split(/\r?\n/).map(json_line).map(claude_api_error).filter(Boolean).at(-1) : null;
-    if (api_error) task.on_failure(claude_error_reason(api_error), { retryable: !api_error.lasting });
+    if (api_error) task.on_failure(claude_error_reason(api_error), { retryable: !api_error.lasting, ...claude_failure_class(api_error) });
     else if (error) task.on_failure(error);
     else task.on_exit?.();
   });

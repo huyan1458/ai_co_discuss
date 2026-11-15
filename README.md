@@ -27,6 +27,7 @@ Most multi-agent frameworks spin up fresh agents inside their own runtime. AI Co
 ## Features
 
 - **Delegate by mention** — `@` an agent and it works in its own original session; several can run in parallel. Type `/` after a member mention to find its installed local skills. Unaddressed messages go to an AI host that routes the work.
+- **Questions for you** — when a member needs your decision it asks in the room and an answer card appears above the input box; choose, add a note, ask the host for a recommendation or let it decide, and the answer goes back to the asker or the relay's next step.
 - **Structured discussions** — set a goal and round / time limits; the host schedules speakers and follow-ups, then the discussion stops and the room carries on, with history and conclusions kept.
 - **Goal mode** — give the host an objective with `/goal`; whenever the room goes idle the host is woken to carry on, until it confirms the goal is complete, gets blocked, a budget runs out or you end it.
 - **Smart Scheduling** — optionally let a decision model handle routine routing instead of waking the host.

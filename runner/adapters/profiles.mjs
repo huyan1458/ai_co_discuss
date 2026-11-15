@@ -33,7 +33,9 @@
  *   only read stays read-only even while it may write elsewhere and run commands: a sandbox or file tools, not rules
  *   that a command could bypass); `chat` (the owner's private chat runs as a turn of its own session and its reply is
  *   read from the software's output); `resume` (a stopped turn can go on in the same session, so the owner may pause
- *   a room execution from the private chat without ending it; not yet measured on real software).
+ *   a room execution from the private chat without ending it; not yet measured on real software); `close_grace_ms` (after a
+ *   normal completion its process is left this long to record the receipt it got before it is stopped; measured per
+ *   software, absent means it is stopped at once).
  * - `session_family`: profiles sharing one session store; switching among them keeps the conversation.
  * - `windows_command`: how its shell names the codiscuss CLI on Windows.
  * - `task_rules(cli, {runs_commands})`: fixed task text this software needs, added by the runner so no member prompt drops it.
@@ -62,6 +64,9 @@ export const DEFAULT_API_MAX_REQUESTS = 300;
 export const MAX_API_MAX_REQUESTS = 1000;
 const PROCESS = { stoppable: true, progress: true };
 const IN_APP = { stoppable: false, progress: false };
+// `capture`: what the runner saves as the answer (`source: auto`) when the software ends normally while the service has no
+// answer for the execution and no refused submit from it; false when the delivery never captures (spec #3262 items 3, 7).
+const FINAL_REMARK = 'final_remark';
 
 export const ADAPTER_PROFILES = {
   codex_cli: {
@@ -70,13 +75,15 @@ export const ADAPTER_PROFILES = {
     access_hints: { read: '只读沙箱', write: '项目可写的沙箱，命令在沙箱内运行、可联网',
       auto: '沙箱外的操作由模型申请提权，Codex 自动审核代替人工批准', full: '无沙箱、无审批（--dangerously-bypass-approvals-and-sandbox）' },
     client: 'codex', adopt: 'session', host_existing: true, session_family: 'codex',
-    capabilities: { delivery: PROCESS, rewind: 'cut', project: true, access_env: true, enforces_read_only: true, limits_directories: true, ripgrep: true, chat: true, resume: true, images: true },
+    capabilities: { delivery: PROCESS, rewind: 'cut', project: true, access_env: true, enforces_read_only: true, limits_directories: true, ripgrep: true, chat: true, resume: true, images: true, capture: FINAL_REMARK,
+      // Codex CLI 0.163 records a command's output in its session about 0.1 s after reporting it done (2026-11-15).
+      close_grace_ms: 1500 },
   },
   codex: {
     platform: 'Codex', label: 'Codex App', kind: 'app', location: 'executable', fields: ['source_thread_id', 'project_id', 'project_name'],
     efforts: null, models: false, access_levels: null, per_tool_allow: false,
     client: 'codex', adopt: 'session', host_existing: true, session_family: 'codex',
-    capabilities: { delivery: IN_APP, rewind: 'cut', project: true, chat: true },
+    capabilities: { delivery: IN_APP, rewind: 'cut', project: true, chat: true, capture: false },
   },
   claude: {
     platform: 'Claude', label: 'Claude Code', kind: 'cli', location: 'executable', fields: ['allowed_tools'],
@@ -87,7 +94,7 @@ export const ADAPTER_PROFILES = {
     resume_command: session_id => `claude --resume ${session_id}`,
     // Claude Code runs commands through bash on Windows too, where the npm shim works without .cmd.
     windows_command: 'codiscuss',
-    capabilities: { delivery: PROCESS, rewind: 'cut', project: true, access_env: true, chat: true, resume: true, images: true },
+    capabilities: { delivery: PROCESS, rewind: 'cut', project: true, access_env: true, chat: true, resume: true, images: true, capture: FINAL_REMARK },
   },
   antigravity_cli: {
     platform: 'Antigravity', label: 'Antigravity CLI', kind: 'cli', location: 'executable', fields: ['project_id', 'project_name'],
@@ -99,18 +106,18 @@ export const ADAPTER_PROFILES = {
     unsupported_hints: { auto: 'agy 只在交互窗口提供自动模式，后台运行（-p）不支持' },
     // Only a conversation this tool created gets its session rules; an existing one keeps its own project and permissions.
     client: 'antigravity', adopt: 'session', host_existing: false, own_project_when_bound: true,
-    capabilities: { delivery: PROCESS, rewind: 'cut', project: true, access_env: true, chat: true },
+    capabilities: { delivery: PROCESS, rewind: 'cut', project: true, access_env: true, chat: true, capture: FINAL_REMARK },
     // A read-only agy session allows only codiscuss commands and headless agy ends the turn on a denied one; agy streams no
     // thinking text, so without a word at each turning point the page cannot show how far it got.
     task_rules: (cli, { runs_commands }) => (runs_commands ? ''
-      : `无人值守下 run_command 只能运行 ${cli} 的 subcommands 子命令，其他命令会被自动拒绝并使会话直接结束；列目录、搜索或读取文件用 list_dir、find_by_name、grep_search、view_file。`)
+      : `无人值守下 run_command 只能运行 ${cli} 的 subcommands 子命令，其他命令会被自动拒绝并使会话直接结束；列目录、搜索或读取文件用你环境自带的文件工具，不要经 run_command。`)
       + '多步任务中，在关键转折处用一句话写出进展再继续：agy 不输出思考过程，网页只能靠这些话显示你做到哪一步。',
   },
   antigravity: {
     platform: 'Antigravity', label: 'Antigravity App', kind: 'app', location: 'ipc_directory', fields: ['project_id', 'project_name'],
     efforts: null, models: false, access_levels: null, per_tool_allow: false,
     client: 'antigravity', adopt: 'session', host_existing: true,
-    capabilities: { delivery: IN_APP, rewind: 'kept', project: true, chat: true },
+    capabilities: { delivery: IN_APP, rewind: 'kept', project: true, chat: true, capture: false },
   },
   api: {
     platform: '', label: '模型 API', kind: 'api', location: '', fields: ['base_url', 'api_protocol', 'api_key_ref', 'image_input'],
@@ -122,7 +129,8 @@ export const ADAPTER_PROFILES = {
     unsupported_hints: { auto: 'API 成员没有通用命令行，没有需要软件审批的操作', full: 'API 成员没有通用命令行，没有需要软件审批的操作' },
     // Runs in the Pi harness (api_pi.mjs), which keeps a session the runner cuts like a CLI's.
     // Whether a model reads images depends on the model, not the protocol: the owner says so on the card (`image_input`).
-    capabilities: { delivery: PROCESS, rewind: 'cut', project: true, file_tools: true, limits_directories: true, chat: true, images: 'configured' },
+    // Its answer is only what submit_chat saves (an unknown result is recovered by the same submission), never its last text.
+    capabilities: { delivery: PROCESS, rewind: 'cut', project: true, file_tools: true, limits_directories: true, chat: true, images: 'configured', capture: false },
   },
 };
 
@@ -157,5 +165,5 @@ export function takes_images(profile) {
 
 /** What an adapter can do; an unknown adapter can do nothing. */
 export function adapter_capabilities(id) {
-  return ADAPTER_PROFILES[id]?.capabilities || { delivery: IN_APP, rewind: 'kept', project: false };
+  return ADAPTER_PROFILES[id]?.capabilities || { delivery: IN_APP, rewind: 'kept', project: false, capture: false };
 }

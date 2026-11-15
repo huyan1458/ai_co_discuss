@@ -21,7 +21,6 @@
   "{value1}发给 {value2}": "Send {value1}to {value2}",
   "直接提问 {value1}，不计讨论轮次；同一成员完成当前执行后回答": "Ask {value1} directly, outside discussion rounds; each answers after their current run",
   "发给主持人 {value1}；@ 其他成员让它们发言": "Send to host {value1}; @ other members to ask them to speak",
-  "接力在等你：这条作为你这一棒交给下一位；要找主持人请 @{value1}": "The relay is waiting for you: this message is your step and goes to the next member; @{value1} to reach the host instead",
   "未 @ 任何成员：只作留言，不会唤醒 AI": "No member mentioned: saves a message without waking AI",
   "引用文件：{value1}": "File references: {value1}",
   "{value1} 之后仍交来了回答，未采纳：不进入记录，其他 AI 读不到。": "{value1} later submitted a reply, which was not accepted. It is excluded from the record and hidden from other AI members.",
@@ -250,7 +249,6 @@
   "没有匹配的成员或文件": "No matching members or files",
   "没有匹配的成员": "No matching members",
   "发消息到 # {value1}": "Message # {value1}",
-  "接力在等你回复…": "The relay is waiting for your reply…",
   "留言正文": "Message text",
   "查看摘录、修改批注": "View excerpts and edit annotations",
   "{value1} 条摘录": "{value1} excerpts",
@@ -290,5 +288,7 @@
   "语音输入": "Voice input",
   "发送": "Send",
   "发送 · Enter": "Send · Enter",
-  "换行": "new line"
+  "换行": "new line",
+  "接力在等你回答上方的问题卡；这条消息只发给主持人 {value1}": "The relay is waiting for your answer on the question card above; this message goes only to the host {value1}",
+  "接力在等你回答问题卡…": "The relay is waiting for your answer on the question card…"
 }

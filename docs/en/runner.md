@@ -88,7 +88,7 @@ Choose **OpenAI** in the member picker, flip its card, enter your official OpenA
 
 Choose **自定义 API** (Custom API) for another service, then enter its base URL, API key and full model ID. It defaults to Chat Completions and also supports Responses, Anthropic Messages and Gemini generateContent. Use the name and description button on the card's back to set a display name; add the slot again to configure multiple independent members. Official presets for Anthropic, Google Gemini, DeepSeek, Alibaba Cloud Model Studio (Qwen) and xAI (Grok) remain available.
 
-API members can act as experts or hosts. They have room tools only and no access to local files. Keys stay on your machine, and calls are billed to your account.
+API members can act as experts or hosts. When the room has a project folder, they can read and search its files through file tools the runner provides; with writable project access they can also create and edit files, but they have no command line and cannot run tests or builds. Secret files such as `.env` and private keys, the `.git` folder and the local service folder are never available, and whatever they read is sent to the model provider you configured. Keys stay on your machine, and calls are billed to your account. To let an API member see images, turn on image input in its card's API settings (only when the model supports it, otherwise requests fail); without it the member cannot see image content. API members can always read UTF-8 text attachments on demand; PDFs and other files are not readable for them, and their answers say so.
 
 ## Smart Scheduling
 
@@ -96,7 +96,7 @@ Choose a provider and enter a key under **Smart Scheduling** (智能调度) when
 
 ## Permissions
 
-Permissions are set per automatically started CLI member and default to read-only. The four levels are read-only, writable, automatic approval, and unrestricted; unsupported levels are disabled (`agy` does not support automatic approval in the background). Read-only pre-approves room-related `codiscuss` commands and answer drafts; writable allows project edits and commands. Automatic approval delegates decisions to the tool, while unrestricted skips permission prompts. Hover over a level for its exact scope. Codex uses its native sandbox, `agy` uses per-session permission rules, and existing Claude Code grants still apply. Manually started members keep their session's own permissions.
+Permissions are set per automatically started CLI member and default to read-only. The four levels are read-only, writable, automatic approval, and unrestricted; unsupported levels are disabled (`agy` does not support automatic approval in the background). Read-only pre-approves room-related `codiscuss` commands and answer drafts; writable allows project edits and commands. Automatic approval delegates decisions to the tool, while unrestricted skips permission prompts. Hover over a level for its exact scope. Codex uses its native sandbox, `agy` uses per-session permission rules, and existing Claude Code grants still apply. Manually started members keep their session's own permissions. When the owner turns on full host control for a room, the host can invite members using software already configured on this computer: project access defaults to read-only and is at most writable, and inviting a member who is away brings it back under its original name.
 
 ## Local Service
 

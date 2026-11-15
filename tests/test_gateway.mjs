@@ -448,8 +448,9 @@ test('room reads, uploads and an API member\'s room tools go through the handsha
     () => room_api(home, 'https://paired.example', { method: 'POST', path: '/api/rooms/secret-room/messages', body: { text: '客户的正文' }, token: 'room-token-secret' }),
     () => room_upload(home, 'https://paired.example', { id: 'upload-0000000000000001', path: '/api/rooms/secret-room/attachments', index: 0, total: 1,
       size: Buffer.byteLength('附件内容'), data: Buffer.from('附件内容').toString('base64') }),
-    () => execute_tool({ site, room: 'secret-room', token: 'room-token-secret', signal: new AbortController().signal, role: 'host', goal: { objective: 'x' } },
-      { name: 'read_goal', arguments: '{}' }, [{ name: 'read_goal' }]),
+    // A failed read reaches the model as the tool's error (K20) rather than ending the run.
+    async () => { const { result } = await execute_tool({ site, room: 'secret-room', token: 'room-token-secret', signal: new AbortController().signal, role: 'host', goal: { objective: 'x' } },
+      { name: 'read_goal', arguments: '{}' }, [{ name: 'read_goal' }]); if (result.error) throw new Error(result.error); },
   ];
   for (const attempt of attempts) await assert.rejects(attempt());
   assert.equal(seen.length, attempts.length, 'each call reached the handshake');

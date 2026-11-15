@@ -12,7 +12,7 @@ import { setTimeout as delay } from 'node:timers/promises';
 import { fileURLToPath } from 'node:url';
 import { listen_local } from './local_port.mjs';
 import { API_PROVIDERS, api_base_url, api_check, api_generate, api_history, api_models, api_request, api_response, api_tool_results, read_api_key, save_api_key } from '../runner/discussion_api.mjs';
-import { participant_tools, system_prompt } from '../runner/adapters/api.mjs';
+import { execute_tool, participant_tools, system_prompt } from '../runner/adapters/api.mjs';
 import { pi_delivery } from '../runner/adapters/api_pi.mjs';
 import { deliver_task, execution_details } from '../runner/adapters/index.mjs';
 import { draw_image, launch_discussion, room_settings, validate_preset } from '../runner/discussion_launch.mjs';
@@ -521,7 +521,7 @@ test('API participants load the shared skills and map CLI commands onto their ro
   assert.match(host, /turn create --plan-file → arrange_turns/);
   assert.doesNotMatch(expert, /# 讨论主持/);
   assert.doesNotMatch(expert, /arrange_turns/, 'experts are not told about host tools');
-  for (const prompt of [host, expert, free]) assert.match(prompt, /内容你都读不到：以其他成员贴出的为准，不凭文件名猜测/);
+  for (const prompt of [host, expert, free]) assert.match(prompt, /消息附件用 read_attachment 按 ID 读取.*读不到的以其他成员贴出的为准，不凭文件名猜测/);
   assert.match(free, /message post --kind chat → submit_chat/);
   assert.match(free, /派活用 to，派出的工作结束后都会交回你；房间空闲后要接着推进时填 continue/);
   assert.match(host, /turn roster → read_roster，读后 turn ask → ask_interjection/);
@@ -841,4 +841,157 @@ test('a Pi session whose automatic compaction fails reports why and leaves the n
   const reason = await done;
   assert.match(reason, /自动压缩失败.*Summarization failed.*新会话/);
   assert.equal(bindings.at(-1), '', 'the next execution does not reopen the session that cannot be compacted');
+});
+
+test('an API member whose read hits a missing message gets the error as the tool result and still answers (K20)', async t => {
+  const f = await site_fixture(t);
+  const mock = await model_fixture(t, (call, calls) => (calls.length === 1
+    ? tool_reply(call, 'read_message', { id: 99999 }) : tool_reply(call, 'submit_chat', { text: '编号 99999 不存在，按已读内容回答。' })));
+  const participants = { Grok: profiles(f.home, mock.base_url).Grok };
+  const started = await launch_discussion(f.home, { site: f.site, entry: 'web', participants,
+    room: { title: '读取 404', mode: 'free', host: '用户', members: ['Grok'], submission_id: randomUUID() } }, { start_service: async () => ({ running: true }) });
+  const config = load_config(started.config_path), store = new DiscussionStore(config.directory), runner = new FreeRoomRunner(config, store);
+  f.cleanup.push(() => { runner.stop_children(); store.close(); });
+  await api(config, '/messages', { author: '用户', text: '请核对编号。', source: 'user', kind: 'chat', to: ['Grok'], submission_id: randomUUID() });
+  await until(async () => (await api(config, '/messages')).messages.some(message => message.author === 'Grok'), () => runner.tick());
+  assert.match(JSON.stringify(mock.calls[1].body), /HTTP 404/);
+  assert.equal((await api(config, '')).free.requests.at(-1).status, 'completed');
+});
+
+/** A stand-in room site for execute_tool: it records requests and answers by the handler the test gives. */
+async function room_stub(t, handle) {
+  const seen = [];
+  const server = createServer(async (request, response) => {
+    let text = ''; for await (const chunk of request) text += chunk;
+    const url = new URL(request.url, 'http://stub');
+    const call = { method: request.method, path: url.pathname.replace(/^\/api\/rooms\/room-1/, ''), query: url.searchParams, body: text ? JSON.parse(text) : undefined };
+    seen.push(call);
+    const reply = await handle(call, seen, response);
+    if (reply === undefined) return;
+    const [status, body] = reply;
+    response.writeHead(status, { 'Content-Type': Buffer.isBuffer(body) ? 'application/octet-stream' : 'application/json' });
+    response.end(Buffer.isBuffer(body) ? body : JSON.stringify(body));
+  });
+  await listen_local(server);
+  t.after(async () => { server.closeAllConnections(); await new Promise(resolve => server.close(resolve)); });
+  const directory = mkdtempSync(join(tmpdir(), 'codiscuss-tool-'));
+  t.after(() => rmSync(directory, { recursive: true, force: true }));
+  const context = { site: `http://127.0.0.1:${server.address().port}`, room: 'room-1', token: 'member-token', signal: new AbortController().signal,
+    role: 'member', participant: 'Grok', execution_id: 7, directory, task_id: 'free-7' };
+  return { seen, context };
+}
+
+test('an API answer keeps one submission ID: an unknown result is looked up, and the same content again is the same submission (5b)', async t => {
+  const stored = new Map();
+  let drop = 2;
+  const { seen, context } = await room_stub(t, (call, _seen, response) => {
+    if (call.method === 'POST' && call.path === '/messages') {
+      const { submission_id } = call.body;
+      const duplicate = stored.has(submission_id);
+      if (!duplicate) stored.set(submission_id, { id: 100 + stored.size, text: call.body.text, submission_id });
+      // The first two answers land but their responses are lost.
+      if (drop-- > 0) { response.socket.destroy(); return undefined; }
+      const message = stored.get(submission_id);
+      return [200, { message, duplicate, receipt: { duplicate, id: message.id, submission_id } }];
+    }
+    if (call.method === 'GET' && call.path === '/messages' && call.query.has('submission_id')) {
+      // The first lookup fails as well, so that answer stays unknown.
+      if (seen.filter(item => item.query.has('submission_id')).length === 1) return [503, { error: '暂时不可用' }];
+      return [200, { messages: [...stored.values()].filter(item => item.submission_id === call.query.get('submission_id')) }];
+    }
+    return [404, { error: '地址不存在' }];
+  });
+  const definitions = participant_tools(context);
+  const submit = text => execute_tool(context, { name: 'submit_chat', arguments: { text } }, definitions);
+  const unknown = await submit('结论 A');
+  assert.equal(unknown.result.outcome, 'unknown');
+  assert.ok(!unknown.terminal, 'an unknown answer does not end the run');
+  const recovered = await submit('结论 A');
+  assert.equal(recovered.result.outcome, 'accepted');
+  assert.equal(recovered.result.recovered, true);
+  assert.equal(recovered.terminal, true);
+  const posts = seen.filter(item => item.method === 'POST');
+  assert.equal(posts[0].body.submission_id, posts[1].body.submission_id, 'the same content keeps its submission ID');
+  assert.equal(stored.size, 1, 'the room holds one message');
+  const again = await submit('结论 A');
+  assert.equal(again.result.duplicate, true);
+  const other = await submit('结论 B');
+  assert.notEqual(seen.filter(item => item.method === 'POST').at(-1).body.submission_id, posts[0].body.submission_id);
+  assert.equal(other.result.duplicate, false);
+});
+
+test('API read tools hand failures back to the model, read text attachments within the reading boundary and say what they cannot read', async t => {
+  const text = '原始返回：第一行\n第二行';
+  const files = { ['a'.repeat(32)]: { message_id: 9, content_type: 'application/octet-stream', size: Buffer.byteLength(text) },
+    ['b'.repeat(32)]: { message_id: 9, content_type: 'application/pdf', size: 10 },
+    ['c'.repeat(32)]: { message_id: 12, content_type: 'application/octet-stream', size: 3 },
+    ['d'.repeat(32)]: { message_id: 9, content_type: 'application/octet-stream', size: 4 } };
+  const { context } = await room_stub(t, call => {
+    if (call.path === '/messages/5') return [404, { error: '消息不存在' }];
+    if (call.path === '/messages/9') return [200, { id: 9 }];
+    if (call.path === '/messages/12') return [403, { error: '超出本次可读范围' }];
+    const [, id, content] = call.path.match(/^\/attachments\/(\w+)(\/content)?$/) || [];
+    if (!files[id]) return [404, { error: '附件不存在' }];
+    if (!content) return [200, { id, file_name: `${id.slice(0, 1)}.txt`, ...files[id] }];
+    return [200, id.startsWith('d') ? Buffer.from([0xff, 0xfe, 0, 1]) : Buffer.from(text)];
+  });
+  const definitions = participant_tools(context);
+  const run = (name, args) => execute_tool(context, { name, arguments: args }, definitions);
+  assert.match((await run('read_message', { id: 5 })).result.error, /HTTP 404/);
+  const read = (await run('read_attachment', { id: 'a'.repeat(32) })).result;
+  assert.equal(read.readable, true);
+  assert.equal(read.text, text);
+  assert.equal(read.complete, true);
+  const slice = (await run('read_attachment', { id: 'a'.repeat(32), offset: 5, limit: 3 })).result;
+  assert.equal(slice.text, [...text].slice(5, 8).join(''));
+  assert.equal(slice.remaining, [...text].length - 8);
+  assert.equal((await run('read_attachment', { id: 'b'.repeat(32) })).result.readable, false);
+  assert.equal((await run('read_attachment', { id: 'd'.repeat(32) })).result.readable, false);
+  // An attachment of a message outside the reading boundary is refused like the message itself.
+  assert.match((await run('read_attachment', { id: 'c'.repeat(32) })).result.error, /HTTP 403/);
+  // A write that is not an answer and whose result is unknown still ends the run.
+  const host = { ...context, role: 'host', discussion_request: { purpose: 'discuss_host' } };
+  await assert.rejects(execute_tool(host, { name: 'save_state', arguments: { text: 'x', brief: 'y', until: 1 } }, participant_tools(host)));
+});
+
+test('only the host gets the event log and the proactive post', () => {
+  const host = participant_tools({ role: 'host' });
+  const member = participant_tools({ role: 'member' });
+  assert.ok(host.find(item => item.name === 'submit_chat').parameters.properties.proactive);
+  assert.ok(!member.find(item => item.name === 'submit_chat').parameters.properties.proactive);
+  assert.ok(host.some(item => item.name === 'read_events') && !member.some(item => item.name === 'read_events'));
+  assert.ok(['read_execution', 'read_attachment', 'read_goal'].every(name => member.some(item => item.name === name)));
+});
+
+test('the runner captures a last remark only where the adapter declares capture and the service has no answer or refused submit (6)', async t => {
+  const { seen, context } = await room_stub(t, () => [200, { message: { id: 1 } }]);
+  const runner = { replies: new Map(), denied: new Set(), log() {},
+    config: { site: context.site, room: 'room-1', participants: { Cli: { adapter: 'claude' }, Api: { adapter: 'api' } },
+      members: { Cli: { token: 'a' }, Api: { token: 'b' } } } };
+  const capture = (name, id, outcome) => {
+    runner.replies.set(id, '最后一段话');
+    return FreeRoomRunner.prototype.capture_reply.call(runner, name, id, { delivery: { last_submission: { outcome } } });
+  };
+  assert.equal(await capture('Api', 1, 'unknown'), false, 'a model API member is never captured');
+  assert.equal(await capture('Cli', 2, 'rejected'), false, 'a refused submit is reported, not replaced');
+  assert.equal(await capture('Cli', 3, 'accepted'), false);
+  assert.equal(seen.length, 0);
+  assert.equal(await capture('Cli', 4, 'unknown'), true);
+  assert.equal(seen[0].body.source, 'auto');
+});
+
+test('API message reads send the CLI output budget, resume long text by version and trim attachments as the CLI does', async t => {
+  const attachment = { id: 'a'.repeat(32), file_name: 'x.txt', content_type: 'text/plain', size: 3, sha256: 'f'.repeat(64), url: '/u', room_id: 'room-1', message_id: 9, submission_id: 's' };
+  const { seen, context } = await room_stub(t, call => (call.path === '/messages'
+    ? [200, { messages: [{ id: 9, text: 'x', attachments: [attachment] }], remaining: 0 }]
+    : [200, { id: 9, text: 'x', attachments: [attachment] }]));
+  const definitions = participant_tools(context);
+  const run = (name, args) => execute_tool(context, { name, arguments: args }, definitions);
+  const page = (await run('read_messages', { after: 3 })).result;
+  assert.equal(seen[0].query.get('max_chars'), '8000');
+  assert.deepEqual(Object.keys(page.messages[0].attachments[0]), ['id', 'file_name', 'content_type', 'size', 'sha256', 'url']);
+  await run('read_message', { id: 9, offset: 10, limit: 5, version: 'e'.repeat(64) });
+  assert.deepEqual(['offset', 'limit', 'version'].map(key => seen[1].query.get(key)), ['10', '5', 'e'.repeat(64)]);
+  await run('read_message', { id: 9 });
+  assert.equal(seen[2].query.get('offset'), null);
 });

@@ -26,7 +26,7 @@ from urllib.parse import parse_qs, quote, urlsplit
 
 from .entry_guard import (BROWSER_COOKIE_SECONDS, HELLO_PATH, OPEN_PATH, PUBLIC_PATHS, EntryPolicy, answer_hello, browser_admitted,
                           browser_cookie_name, open_link_key, proof, request_proven)
-from .texts import Text, error_body, incoming_text, load_texts, save_text, text_payload
+from .texts import BoundaryError, ReadError, Text, error_body, incoming_text, load_texts, save_text, text_payload
 from .admin import (AdminError, admin_status, change_password, list_sessions, login_admin, logout_admin, register_admin,
                     revoke_sessions, session_valid, update_profile)
 from .remote_launch import (COMMAND_WAIT_MAX, claim_machine_commands, finish_machine_command, list_machines, machine_command_status,
@@ -38,12 +38,13 @@ from .free_room import (add_member, after_free_message, after_proactive, authori
 from .free_room import convert_suggestion, message_suggestions, save_suggestions, sync_participants
 from .free_room import adopt_recommendation, recommend_member, register_member, require_member
 from .private_chat import chat_action, member_chat
-from .free_room import describe_members, execution_notes, label_members, set_host_checkin, withdraw_dispatch, member_descriptions, member_display_names, member_labels, reorder_speakers, resolve_member_fields, set_chain_rounds, speaking_order, stop_room, stop_room_work
+from .free_room import describe_members, execution_notes, label_members, set_host_checkin, withdraw_dispatch, member_descriptions, member_display_names, member_handles, member_labels, reorder_speakers, resolve_member_fields, set_chain_rounds, speaking_order, stop_room, stop_room_work
 from .free_room import (ADAPTER_VALUE, LAYOUT_AFTER_SQL, LAYOUT_AT_SQL, continue_chain, execution_timeline, group_route_plan, retract_message, rewind_plan, rewind_room,
                         room_event_log, withdrawals)
 from .free_room import review_capability, review_roster, checked_review_plan, save_review_plan, check_review_retry
 from .free_room import review_ready, advance_review, late_answer
 from .free_room import checked_sequence, continue_sequence, sequence_view
+from . import questions
 from .identity import MAX_ROOM_AGENTS, PARTICIPANTS, default_label_text, is_ai, is_participant
 from .message_queue import drain as drain_queue, enqueue, queue_action, queue_view, should_queue
 from .room_import import import_room, imported_attachment
@@ -89,6 +90,11 @@ MAX_SUMMARY_LENGTH = 1000
 PAGE_SIZE = 20
 # A reader may ask for larger pages (`limit`) so a long transcript loads in one request instead of many.
 MAX_PAGE_SIZE = 200
+# A reader's overall output budget (`max_chars`), in code points of compact JSON: the floor still fits one message's
+# metadata and a useful preview; numbers a preview's fields may still grow by are kept in reserve.
+MIN_OUTPUT_CHARS = 1000
+MAX_OUTPUT_CHARS = 200000
+PREVIEW_NUMBER_CHARS = 80
 UNCATEGORIZED_FOLDER_ID = "__uncategorized__"
 # A folder's project paths: one main directory plus MAX_EXTRA_DIRECTORIES (runner/discussion_runner.mjs) others.
 MAX_FOLDER_DIRECTORIES = 9
@@ -244,24 +250,43 @@ def session_read_boundary(connection, room_id, token=""):
     return session_message_access(connection, room_id, {}, token)
 
 
+def boundary_note(boundary):
+    """Why a field is empty although it has a value: it lies past the reader's boundary (spec #3187 section 5)."""
+    return {"reason": "reading_boundary", "request_read_until": boundary}
+
+
 def room_read_view(connection, room, token=""):
-    """Hide post-cutoff state and execution references from readers in the initial-opinion phase."""
+    """Hide post-cutoff state and execution references from readers in the initial-opinion phase.
+
+    What is hidden is named in `field_notes` with its reason, so a hidden value is never mistaken for an empty one;
+    `state_until` is how far the notes cover, not a reading permission, and stays. The reader's own request keeps its
+    question: hiding one's own task would leave nothing to answer."""
+    room = member_limits(connection, hide_queued_questions(connection, room, token), token)
     boundary = session_read_boundary(connection, room["id"], token)
     if boundary is None:
         return room
     room = copy.deepcopy(room)
+    notes = {}
     if room.get("state_until", 0) > boundary:
         room["state_text"] = ""
         room.get("texts", {}).pop("state_text", None)
+        notes["state_text"] = boundary_note(boundary)
     brief = room.get("host_brief")
     if brief and brief.get("until", 0) > boundary:
         room["host_brief"] = None
+        notes["host_brief"] = boundary_note(boundary)
+    if notes:
+        room["field_notes"] = notes
+    try:
+        reader = require_member(connection, room["id"], token)["name"] if token else None
+    except PermissionError:
+        reader = None
     free = room.get("free") or {}
+    if free.get("questions"):
+        free["questions"] = questions.bounded(free["questions"], boundary)
     for request in free.get("requests", []):
         _hide_after_boundary(request, boundary, ("message_id", "answer_id", "source_message_id", "after_message_id", "layout_after"))
-        if request.get("discussion_session_id") and request.get("source_question"):
-            request["source_question"] = ""
-            request.get("texts", {}).pop("source_question", None)
+        _hide_question(request, boundary, reader)
     for execution in free.get("executions", []):
         _hide_execution_after_boundary(execution, boundary)
     executions_by_id = {execution.get("id"): execution for execution in free.get("executions", [])}
@@ -271,6 +296,45 @@ def room_read_view(connection, room, token=""):
         sanitized = executions_by_id.get(execution.get("id"))
         if sanitized:
             execution["result"] = sanitized.get("result", execution.get("result", ""))
+    return room
+
+
+def hide_queued_questions(connection, room, token):
+    """A discussion member reads its own queued question, not the questions later speakers will get (D2).
+
+    The owner and the host see the whole plan; any other member sees who is queued, with the others' questions
+    replaced by a note saying they are someone else's."""
+    queued = room.get("queued_turns") or []
+    if not queued or not token:
+        return room
+    try:
+        reader = require_member(connection, room["id"], token)
+    except PermissionError:
+        return room
+    if reader["role"] == "host":
+        return room
+    hidden = [{**turn, "question": "", "field_notes": {"question": Text('其他专家的题目，轮到其发言前不公开')}}
+              if turn.get("expert") != reader["name"] else turn for turn in queued]
+    return {**room, "queued_turns": hidden}
+
+
+def member_limits(connection, room, token):
+    """One exit per fact for a member that is not the host (可 1, ruling #402 C): of the discussion limits it keeps
+    whether one was reached and why; the task chain's budget is read from `free.chain_rounds` alone.
+
+    The owner and the host keep the full limits, which they set and plan by."""
+    if not token or not isinstance(room.get("limits"), dict):
+        return room
+    try:
+        reader = require_member(connection, room["id"], token)
+    except PermissionError:
+        return room
+    if reader["role"] == "host":
+        return room
+    limits = room["limits"]
+    room = {**room, "limits": {"reached": limits.get("reached", False), "stop_reason": limits.get("stop_reason", "")}}
+    if isinstance(room.get("free"), dict):
+        room["free"] = {key: value for key, value in room["free"].items() if key != "max_rounds"}
     return room
 
 
@@ -308,9 +372,18 @@ def _hide_execution_after_boundary(execution, boundary):
             execution[field] = None
     for request in execution.get("requests", []):
         _hide_after_boundary(request, boundary, ("message_id", "answer_id", "source_message_id", "after_message_id", "layout_after"))
-        if request.get("discussion_session_id") and request.get("source_question"):
-            request["source_question"] = ""
-            request.get("texts", {}).pop("source_question", None)
+        _hide_question(request, boundary, None)
+
+
+def _hide_question(request, boundary, reader):
+    """Hide another member's discussion question from an initial reader, saying so; the reader's own stays."""
+    if not (request.get("discussion_session_id") and request.get("source_question")):
+        return
+    if reader and request.get("member") == reader:
+        return
+    request["source_question"] = ""
+    request.get("texts", {}).pop("source_question", None)
+    request.setdefault("field_notes", {})["source_question"] = boundary_note(boundary)
 
 
 def utc_now():
@@ -1002,6 +1075,8 @@ def delete_room_records(connection, room_id):
     """Remove a room's dependent records in the caller's transaction."""
     connection.execute("DELETE FROM task_message_sources WHERE session_id IN (SELECT id FROM discussion_sessions WHERE room_id=?)", (room_id,))
     connection.execute("DELETE FROM goal_continuations WHERE room_id=?", (room_id,))
+    connection.execute("DELETE FROM question_events WHERE question_id IN (SELECT id FROM room_questions WHERE room_id=?)", (room_id,))
+    connection.execute("DELETE FROM room_questions WHERE room_id=?", (room_id,))
     connection.execute("DELETE FROM room_goals WHERE room_id=?", (room_id,))
     connection.execute("DELETE FROM discussion_sessions WHERE room_id=?", (room_id,))
     for table in ("member_recommendations", "free_queue", "queued_messages", "queued_message_pauses", "speaking_orders", "member_requests", "member_descriptions", "member_labels", "execution_notes", "execution_segments", "execution_capabilities", "late_answers", "member_executions", "member_capabilities", "member_sessions", "member_adopt_failures", "member_registrations", "room_members", "room_modes", "free_batches", "free_chains", "free_handoffs", "free_round_limits", "free_chain_holds", "free_relay_steps",
@@ -1249,10 +1324,24 @@ def message_with_attachments(connection, row):
     return message
 
 
-def query_attachments(connection, room_id, params):
-    """List published files, or recover one upload by its exact submission ID."""
+def attachment_cutoff(connection, room_id, params, token):
+    """The reading boundary a credentialed member reads attachments under, as for messages (必 2); None when unbounded.
+
+    Only member reads are bounded here: an anonymous page read keeps its earlier behaviour."""
+    if not token and not params.get("execution_id") and not params.get("request_id"):
+        return None
+    return session_message_access(connection, room_id, params, token)
+
+
+def query_attachments(connection, room_id, params, token=""):
+    """List published files, or recover one upload by its exact submission ID; files of messages past the
+    caller's reading boundary are left out."""
     require_room(connection, room_id)
     where, values = "room_id=?", [room_id]
+    cutoff = attachment_cutoff(connection, room_id, params, token)
+    if cutoff is not None:
+        where += " AND (message_id IS NULL OR message_id<=?)"
+        values.append(cutoff)
     if "submission_id" in params:
         where += " AND submission_id=?"
         values.append(submission_value(params["submission_id"]))
@@ -1269,11 +1358,15 @@ def query_attachments(connection, room_id, params):
             "pages": max(1, (total + PAGE_SIZE - 1) // PAGE_SIZE)}
 
 
-def get_attachment(connection, room_id, identifier):
-    """Resolve a file only within the explicitly selected room."""
+def get_attachment(connection, room_id, identifier, params=None, token=""):
+    """Resolve a file only within the explicitly selected room, and within the caller's reading boundary."""
     row = connection.execute("SELECT * FROM attachments WHERE room_id=? AND id=?", (room_id, identifier)).fetchone()
     if not row:
         raise LookupError(Text('附件不存在'))
+    cutoff = attachment_cutoff(connection, room_id, params or {}, token)
+    if cutoff is not None and row["message_id"] is not None and row["message_id"] > cutoff:
+        raise BoundaryError(Text('该附件所在的消息超出本请求读取上界 #{until}', until=cutoff),
+                            code="reading_boundary", read_scope={"request_read_until": cutoff, "boundary_applied": True})
     return attachment_view(row)
 
 
@@ -1482,6 +1575,39 @@ def answers_direct_question(payload):
     return type(payload.get("execution_id")) is int or bool(payload.get("request_ids"))
 
 
+# The User-Agent prefix `launch host-control` sends, followed by the acting host's name.
+HOST_AGENT_PREFIX = "AI-CoDiscuss-host:"
+
+# How much of a summary a receipt keeps; the full summary stays one `message view` away.
+RECEIPT_SUMMARY_CHARS = 200
+
+
+def message_receipt(connection, room_id, result):
+    """The one compact receipt CLI and API both show after a message write (spec #3262 item 4).
+
+    `text_chars` counts Unicode code points of the stored text and `text_sha256` hashes its UTF-8 bytes, both after the
+    summary front matter was split off; `request_ids` lists every request this message answered, and `completed` says
+    whether it closed any request (a proactive message or a moderation note closes none)."""
+    message = result.get("message")
+    if not isinstance(message, dict):
+        return None
+    text = message.get("text") or ""
+    requests = [row[0] for row in connection.execute(
+        "SELECT id FROM member_requests WHERE room_id=? AND answer_id=? ORDER BY id", (room_id, message["id"]))]
+    summary = message.get("summary") or ""
+    receipt = {"duplicate": bool(result.get("duplicate")), "id": message["id"], "author": message["author"],
+               "author_label": member_display_names(connection, room_id).get(message["author"], message["author"]),
+               "kind": message.get("kind"), "execution_id": message.get("execution_id"), "request_ids": requests,
+               "reply_to": message.get("reply_to"), "submission_id": message.get("submission_id"),
+               "created_at": message.get("created_at"), "summary": summary[:RECEIPT_SUMMARY_CHARS],
+               "text_chars": len(text), "text_sha256": hashlib.sha256(text.encode("utf-8")).hexdigest(),
+               "attachments": len(message.get("attachments") or []), "proactive": bool(message.get("proactive")),
+               "completed": bool(requests)}
+    if len(summary) > RECEIPT_SUMMARY_CHARS:
+        receipt["summary_truncated"] = True
+    return {key: value for key, value in receipt.items() if value not in (None, "")}
+
+
 def append_message(connection, room_id, payload, actor):
     """Atomically append an attributed message for the owner or one member, as authorized by `actor`."""
     message_values(payload)
@@ -1665,17 +1791,38 @@ def query_messages(connection, room_id, params, token=""):
     page = max(1, int(params.get("page", 1)))
     size = min(MAX_PAGE_SIZE, max(1, int(params.get("limit", PAGE_SIZE))))
     cutoff = session_message_access(connection, room_id, params, token)
+    if params.get("author"):
+        # A member is named as the room shows it (display name) or by its ID; both find the same messages.
+        params = {**params, "author": member_handles(connection, room_id).get(str(params["author"]).strip(), params["author"])}
     where, values = message_filters(room_id, params)
     if cutoff is not None:
         where += " AND messages.id<=?"
         values.append(cutoff)
     total = connection.execute(f"SELECT COUNT(*) FROM ({MESSAGE_QUERY} WHERE {where})", values).fetchone()[0]
     rows = connection.execute(f"{MESSAGE_QUERY} WHERE {where} ORDER BY messages.id LIMIT ? OFFSET ?", [*values, size + 1, (page - 1) * size]).fetchall()
-    messages = [message_with_attachments(connection, row) for row in rows[:size]]
+    shown = member_display_names(connection, room_id)
+    messages = [{**message, "author_label": shown.get(message["author"], message["author"])}
+                for message in (message_with_attachments(connection, row) for row in rows[:size])]
+    has_more = len(rows) > size
+    budget_stopped = False
+    if params.get("max_chars") not in (None, ""):
+        fitted = fit_messages(messages, output_budget(params["max_chars"]))
+        budget_stopped, has_more = len(fitted) < len(messages) or fitted[-1:] != messages[-1:], has_more or len(fitted) < len(messages)
+        messages = fitted
+    # `total`/`pages` count what matches the filters, cursor and reading boundary, so they shrink as `after` advances;
+    # `remaining` is how many of those still come after this page.
     result = {"messages": messages, "page": page, "total": total,
-              "pages": max(1, (total + size - 1) // size)}
-    if "after" in params:
-        result.update(next_after=messages[-1]["id"] if messages else int(params["after"]), has_more=len(rows) > size)
+              "pages": max(1, (total + size - 1) // size), "remaining": max(0, total - (page - 1) * size - len(messages))}
+    if budget_stopped:
+        result["budget_stopped"] = True
+    if cutoff is not None:
+        # Messages past this request's reading boundary are left out: say how many, so this is not taken for the latest (D3).
+        beyond = connection.execute("SELECT COUNT(*) FROM messages WHERE room_id=? AND id>?", (room_id, cutoff)).fetchone()[0]
+        result["read_scope"] = {"read_until": cutoff, "beyond": beyond,
+                                **({"note": Text('本请求只能读到 #{until}；其后还有 {count} 条不在读取范围内，独立观点阶段结束后才能读', until=cutoff, count=beyond)} if beyond else {})}
+    if "after" in params or budget_stopped:
+        after = int(params.get("after", 0))
+        result.update(next_after=messages[-1]["id"] if messages else after, has_more=has_more)
         # The unfiltered transcript also takes the cards of its batch, for history older than the room view's recent cards.
         unfiltered = not any(params.get(name) for name in ("q", "author", "mention", "kind", "host", "submission_id"))
         if params.get("cards") == "1" and cutoff is None and unfiltered and params.get("withdrawn") == INCLUDE_WITHDRAWN:
@@ -1683,18 +1830,114 @@ def query_messages(connection, room_id, params, token=""):
     return result
 
 
+def output_budget(value):
+    """A reader's overall output budget, in Unicode code points of the compact JSON it gets back (spec #3220 R3)."""
+    try:
+        budget = int(value)
+    except (TypeError, ValueError):
+        raise ValueError(Text('max_chars 须为 {low}–{high} 的整数', low=MIN_OUTPUT_CHARS, high=MAX_OUTPUT_CHARS)) from None
+    if not MIN_OUTPUT_CHARS <= budget <= MAX_OUTPUT_CHARS:
+        raise ValueError(Text('max_chars 须为 {low}–{high} 的整数', low=MIN_OUTPUT_CHARS, high=MAX_OUTPUT_CHARS))
+    return budget
+
+
+def compact_chars(value):
+    """Size of a value as the budget counts it: code points of its compact JSON."""
+    return len(json.dumps(value, ensure_ascii=False, separators=(",", ":")))
+
+
+def fit_messages(messages, budget):
+    """Keep whole messages while they fit the budget; a first message too long to fit becomes an honest preview."""
+    kept, used = [], 0
+    for message in messages:
+        size = compact_chars(message)
+        if used + size <= budget:
+            kept.append(message)
+            used += size
+            continue
+        if not kept:
+            room = budget - compact_chars(slice_message_text({**message, "text": ""}, 0, 0)) - PREVIEW_NUMBER_CHARS
+            if room <= 0:
+                error = ValueError(Text('max_chars 太小，放不下一条消息的必要信息；请调大后重试'))
+                error.details = {"code": "budget_too_small", "min_chars": budget - room + 1}
+                raise error
+            # Escapes make a code point cost more than one in JSON; shrink until the preview really fits.
+            while room > 0 and compact_chars(slice_message_text(message, 0, room)) > budget:
+                room = room * 9 // 10
+            kept.append(slice_message_text(message, 0, max(1, room)))
+        break
+    return kept
+
+
+def slice_message_text(message, offset, limit):
+    """Return part of a message's text with what tells a reader whether it has it all and where to go on (spec #3187 4.5-4.6).
+
+    Offsets and lengths count Unicode code points from 0; `text_sha256` names the text version the offsets belong to."""
+    text = message.get("text") or ""
+    if offset > len(text):
+        raise ValueError(Text('offset 超出正文长度 {chars}', chars=len(text)))
+    piece = text[offset:] if limit is None else text[offset:offset + limit]
+    end = offset + len(piece)
+    message = {**message, "text": piece, "text_chars": len(text), "text_offset": offset,
+               "text_complete": offset == 0 and end == len(text), "next_offset": end if end < len(text) else None,
+               "text_sha256": hashlib.sha256(text.encode("utf-8")).hexdigest()}
+    message.get("texts", {}).pop("text", None)
+    return message
+
+
+def read_message_part(message, params):
+    """Apply `offset`/`limit` (and an expected `version`) to a single message read; without them the message is whole."""
+    if not any(params.get(name) not in (None, "") for name in ("offset", "limit", "version")):
+        return message
+    try:
+        offset = int(params.get("offset") or 0)
+        limit = int(params["limit"]) if params.get("limit") not in (None, "") else None
+    except ValueError:
+        raise ValueError(Text('offset 与 limit 须为非负整数')) from None
+    if offset < 0 or (limit is not None and limit < 1):
+        raise ValueError(Text('offset 与 limit 须为非负整数'))
+    version = hashlib.sha256((message.get("text") or "").encode("utf-8")).hexdigest()
+    if params.get("version") and params["version"] != version:
+        error = FileExistsError(Text('正文已变化，请从头重读，不要与先前读到的片段拼接'))
+        error.details = {"code": "content_changed", "text_sha256": version}
+        raise error
+    return slice_message_text(message, offset, limit)
+
+
 def get_message(connection, room_id, message_id, params=None, token=""):
-    """Read an exact message, constrained to the specified room."""
+    """Read an exact message, constrained to the specified room.
+
+    A message the caller cannot read says why only where the caller may know it (spec #3187 sections 5 and 6): past
+    its own reading boundary (`reading_boundary`, without looking up whether that ID exists), or the internal task
+    anchor of one of its own requests (`internal_task_anchor`, pointing at where the task's text is). Anything else
+    stays the generic `not_available`, so no error can be used to probe hidden messages."""
     params = params or {}
     cutoff = session_message_access(connection, room_id, params, token)
+    # The caller's own task anchor is named first: it lies past an initial boundary by construction.
+    anchor = own_task_anchor(connection, room_id, message_id, params)
+    if anchor:
+        raise ReadError(Text('#{id} 是你本次请求的内部任务锚点，不是房间消息；题目见任务的当前请求或 execution view', id=message_id),
+                        code="internal_task_anchor", requested_message_id=message_id, **anchor)
+    if cutoff is not None and message_id > cutoff:
+        raise BoundaryError(Text('该编号超出本请求读取上界 #{until}；未查询该编号是否存在', until=cutoff),
+                            code="reading_boundary", requested_message_id=message_id,
+                            read_scope={"request_read_until": cutoff, "boundary_applied": True})
     where, values = message_filters(room_id, params)
-    if cutoff is not None:
-        where += " AND messages.id<=?"
-        values.append(cutoff)
     row = connection.execute(f"{MESSAGE_QUERY} WHERE {where} AND messages.id=?", [*values, message_id]).fetchone()
     if row is None:
-        raise LookupError(Text('消息不存在'))
+        raise ReadError(Text('消息不存在'), code="not_available", requested_message_id=message_id)
     return message_with_attachments(connection, row)
+
+
+def own_task_anchor(connection, room_id, message_id, params):
+    """The request of the caller's own execution that an internal task message anchors, if it is one."""
+    execution_id = params.get("execution_id")
+    if not str(execution_id or "").isdigit():
+        return None
+    row = connection.execute("""SELECT r.id FROM member_requests r
+        JOIN internal_task_messages task ON task.message_id=r.message_id
+        WHERE r.room_id=? AND r.execution_id=? AND r.message_id=?""", (room_id, int(execution_id), message_id)).fetchone()
+    return {"request_id": row["id"], "execution_id": int(execution_id)} if row else None
 
 
 def update_state(connection, room_id, payload):
@@ -2737,6 +2980,8 @@ class DiscussionHandler(BaseHTTPRequestHandler):
                         execution["answer_id"] = None
                         execution["result"] = ""
             return self.respond(timeline)
+        if parts[3:4] == ["questions"]:
+            return self.handle_questions(connection, parts, params, method, token)
         if parts[3:] == ["events"] and method == "GET":
             return self.respond(room_event_log(connection, room_id, token, params.get("after", 0), params.get("before", 0)))
         if parts[3:] == ["register"] and method == "POST":
@@ -2748,6 +2993,9 @@ class DiscussionHandler(BaseHTTPRequestHandler):
                 return self.respond(require_room(connection, room_id)["speaking_order"])
             payload = self.read_payload()
             begin_write(connection)
+            if isinstance(payload.get("order"), list):
+                handles = member_handles(connection, room_id)
+                payload["order"] = [handles.get(item.strip(), item) if isinstance(item, str) else item for item in payload["order"]]
             reorder_speakers(connection, require_room(connection, room_id), token, payload)
             result = require_room(connection, room_id)
             connection.commit()
@@ -2866,11 +3114,16 @@ class DiscussionHandler(BaseHTTPRequestHandler):
                 return self.respond(query_messages(connection, room_id, params, token))
             payload = self.read_payload()
             result = append_message(connection, room_id, payload, free_actor)
+            receipt = message_receipt(connection, room_id, result)
+            if receipt:
+                result["receipt"] = receipt
             drain_room_queue(connection, room_id)
             connection.commit()
             return self.respond(result, 200 if result["duplicate"] else 201)
         if len(parts) == 5 and parts[3] == "messages" and method == "GET":
-            return self.respond(get_message(connection, room_id, int(parts[4]), params, token))
+            message = get_message(connection, room_id, int(parts[4]), params, token)
+            message["author_label"] = member_display_names(connection, room_id).get(message["author"], message["author"])
+            return self.respond(read_message_part(message, params))
         if parts[3:] == ["state"] and method == "POST":
             payload = self.read_payload()
             actor = payload.get("actor", "用户")
@@ -2888,7 +3141,7 @@ class DiscussionHandler(BaseHTTPRequestHandler):
         room_id = parts[2]
         if len(parts) == 4:
             if method == "GET":
-                return self.respond(query_attachments(connection, room_id, params))
+                return self.respond(query_attachments(connection, room_id, params, self.headers.get("X-Discussion-Token", "")))
             metadata = attachment_metadata(params)
             token = self.headers.get("X-Discussion-Token", "")
             actor = authorize_free_write(connection, room_id, token, "attachments", {"author": metadata["actor"]})
@@ -2906,7 +3159,7 @@ class DiscussionHandler(BaseHTTPRequestHandler):
         if method == "POST" and len(parts) == 6 and parts[5] == "import":
             return self.import_attachment(connection, room_id, parts[4])
         if method == "GET" and len(parts) in (5, 6):
-            attachment = get_attachment(connection, room_id, parts[4])
+            attachment = get_attachment(connection, room_id, parts[4], params, self.headers.get("X-Discussion-Token", ""))
             if len(parts) == 5:
                 return self.respond(attachment)
             if parts[5] == "content":
@@ -2993,6 +3246,49 @@ class DiscussionHandler(BaseHTTPRequestHandler):
         connection.commit()
         return self.respond(result)
 
+    def acting_host(self):
+        """The host acting through `launch host-control` (it writes with the owner's credential and names itself in the
+        User-Agent), so what it does to a member is labelled as the host's, not the owner's; '' otherwise. A label only:
+        the credential, not this header, decides whether the write is allowed."""
+        agent = self.headers.get("User-Agent", "")
+        return agent[len(HOST_AGENT_PREFIX):].split(" ")[0][:80] if agent.startswith(HOST_AGENT_PREFIX) else ""
+
+    def handle_questions(self, connection, parts, params, method, token):
+        """Questions to the owner (backend/questions.py): read first, then write with the version read."""
+        room_id = parts[2]
+        if len(parts) == 4 and method == "GET":
+            return self.respond(questions.list_questions(connection, room_id, token, params, session_message_access(connection, room_id, params, token)))
+        if len(parts) == 5 and parts[4].isdigit() and method == "GET":
+            return self.respond(questions.view_question(connection, room_id, int(parts[4]), token, session_message_access(connection, room_id, params, token)))
+        if method != "POST":
+            raise LookupError(Text('地址不存在'))
+        payload = self.read_payload()
+        try:
+            result = self.question_write(connection, parts, room_id, token, payload)
+        except questions.QuestionClosed:
+            # The question was ended on the way to refusing the write: keep that, then report the refusal.
+            connection.commit()
+            raise
+        drain_room_queue(connection, room_id)
+        connection.commit()
+        return self.respond(result, 200 if result.get("duplicate") else 201)
+
+    def question_write(self, connection, parts, room_id, token, payload):
+        """Route one question write; the caller commits."""
+        if len(parts) == 4:
+            result = questions.ask_question(connection, require_room(connection, room_id), token, payload,
+                                            append_free_message, get_message)
+        elif len(parts) == 6 and parts[4].isdigit() and parts[5] == "answer":
+            result = questions.answer_question(connection, room_id, int(parts[4]), token, payload)
+        elif len(parts) == 6 and parts[4].isdigit() and parts[5] in ("recommend", "decide"):
+            result = questions.host_reply(connection, require_room(connection, room_id), token, int(parts[4]), payload,
+                                          append_free_message, parts[5] == "decide")
+        elif len(parts) == 6 and parts[4].isdigit() and parts[5] == "cancel":
+            result = questions.cancel_question(connection, room_id, int(parts[4]), token, payload)
+        else:
+            raise LookupError(Text('地址不存在'))
+        return result
+
     def handle_free_api(self, connection, parts, method):
         """Runner inbox, per-member executions and the owner's interrupt for free rooms."""
         room_id = parts[2]
@@ -3016,13 +3312,13 @@ class DiscussionHandler(BaseHTTPRequestHandler):
         elif len(parts) == 5 and parts[3] == "executions":
             execution_id = int(parts[4])
             result = (view_execution(connection, room_id, execution_id, token) if method == "GET"
-                      else execution_action(connection, room_id, execution_id, token, self.read_payload()))
+                      else execution_action(connection, room_id, execution_id, token, {**self.read_payload(), "by_host": self.acting_host()}))
         elif parts[3:] == ["members"] and method == "POST":
             result = add_member(connection, room_id, token, self.read_payload(), utc_now())
         elif len(parts) == 5 and parts[3] == "members" and method == "POST":
             result = member_action(connection, room_id, int(parts[4]), token, self.read_payload())
         elif len(parts) == 6 and parts[3] == "members" and parts[5] == "interrupt" and method == "POST":
-            result = interrupt_member(connection, room_id, int(parts[4]), token)
+            result = interrupt_member(connection, room_id, int(parts[4]), token, self.acting_host())
         elif len(parts) == 6 and parts[3] == "members" and parts[5] == "chat" and method in ("GET", "POST"):
             result = member_chat(connection, room_id, int(parts[4]), token, self.read_payload() if method == "POST" else None)
         elif len(parts) == 5 and parts[3] == "chats" and method == "POST":

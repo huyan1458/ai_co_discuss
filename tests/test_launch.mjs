@@ -860,7 +860,8 @@ test('conversation entry reserves the host request for the real current session 
   const config = load_config(result.config_path);
   const access = JSON.parse(readFileSync(result.current_task.access_file, 'utf8'));
   const task = JSON.parse(readFileSync(result.current_task.task_file, 'utf8'));
-  assert.equal(task.draft_directory, config.draft_directory);
+  // 必 10: the member drafts in its own folder inside the room's.
+  assert.equal(dirname(task.draft_directory), config.draft_directory);
   assert.ok(task.draft_directory.startsWith(join(f.home, 'drafts')));
   assert.ok(!task.draft_directory.startsWith(config.directory));
   assert.equal(access.session_id, 'current-real-session');
@@ -1277,9 +1278,10 @@ test('with full host control granted, only the host stops, invites at most writi
   await request(f.site, '/api/local/room-workflow', { room_id: config.room, action: 'host', allowed: true }, { 'X-CoDiscuss-Local': '1' });
   await assert.rejects(host_control(f.home, 'stop-all', { access_file: access('Other', randomUUID() + randomUUID()) }), /只有本房间的主持人/);
   await assert.rejects(host_control(f.home, 'invite', { access_file: host_access, name: 'Claude', access: 'full' }), /read 或 write/);
+  // 可 2: a host-invited member reads only unless the host asks for writing, and the answer says which.
   const invited = await host_control(f.home, 'invite', { access_file: host_access, name: 'Claude' });
-  assert.equal(invited.project_access, 'write');
-  assert.equal(load_config(launched.config_path).participants[invited.member].project_access, 'write');
+  assert.equal(invited.project_access, 'read');
+  assert.equal(load_config(launched.config_path).participants[invited.member].project_access, 'read');
   await assert.rejects(host_control(f.home, 'remove', { access_file: host_access, member: 'Codex' }), /不能对自己/);
   await assert.rejects(host_control(f.home, 'stop', { access_file: host_access, member: 'Codex' }), /不能对自己/);
   await host_control(f.home, 'model', { access_file: host_access, member: 'Codex', model: 'gpt-5' });
@@ -1289,7 +1291,12 @@ test('with full host control granted, only the host stops, invites at most writi
   assert.equal((await api(config, '')).labels[invited.member], '评审');
   await assert.rejects(host_control(f.home, 'steer', { access_file: host_access, member: '评审', text: '先看第 3 节' }), /没有进行中的执行/);
   await host_control(f.home, 'stop-all', { access_file: host_access });
-  await host_control(f.home, 'remove', { access_file: host_access, member: invited.member });
+  // Inviting a member that is only away brings it back under its own name instead of adding a renamed one.
+  await host_control(f.home, 'away', { access_file: host_access, member: '评审' });
+  assert.deepEqual(await host_control(f.home, 'invite', { access_file: host_access, name: '评审' }), { member: invited.member, rejoined: true });
+  // Named as the room shows it; the answer is what changed, not the whole room view.
+  const removed = await host_control(f.home, 'remove', { access_file: host_access, member: '评审' });
+  assert.deepEqual({ ...removed, execution: undefined }, { ok: true, action: 'remove', member: invited.member, label: '评审', status: 'removed', pending: 0, cancelled_pending: 0, execution: undefined });
   assert.ok(!(await api(config, '')).free.members.some(member => member.name === invited.member && member.status === 'active'));
 });
 

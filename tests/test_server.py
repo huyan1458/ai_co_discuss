@@ -114,6 +114,12 @@ class DiscussionTests(unittest.TestCase):
         self.assertEqual(execution["texts"], {})
         self.assertEqual(execution["requests"][0]["source_question"], "")
         self.assertEqual(execution["requests"][0]["texts"], {})
+        self.assertEqual(execution["requests"][0]["field_notes"]["source_question"]["reason"], "reading_boundary")
+        # The reader's own question stays: hiding one's own task would leave nothing to answer.
+        from backend.server import _hide_question
+        own = {"discussion_session_id": 1, "member": "Claude", "source_question": "my question"}
+        _hide_question(own, 10, "Claude")
+        self.assertEqual(own["source_question"], "my question")
 
     def test_incoming_text_rejects_invalid_metadata(self):
         invalid = (("x", {"template": "{x.__class__}", "params": {"x": "x"}}),

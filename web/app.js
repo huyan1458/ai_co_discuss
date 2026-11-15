@@ -1781,6 +1781,13 @@ async function queue_request(payload) {
   if (state.room?.id === room_id) await refresh_room();
 }
 
+/** Answer or cancel one question (`operation`: answer | cancel) with the version the card shows; the room refreshes either way. */
+async function question_request({ id, operation, body }) {
+  const room_id = state.room.id;
+  try { await request_json(`/api/rooms/${room_id}/questions/${id}/${operation}`, body); }
+  finally { if (state.room?.id === room_id) await refresh_room().catch(() => {}); }
+}
+
 /** Put text, files and the reply (`{ id, label }` or null) in the composer as they are given. */
 function fill_composer(text, drafts, reply) {
   cancel_reply();
@@ -3626,11 +3633,15 @@ function participant_model(name, room, saved) {
   if (!profile.model && !profile.actual_model && profile.defaults_pending) return t('读取中…');
   // App members choose in their own chat, so only their session log knows.
   const app = ["codex", "antigravity"].includes(profile.adapter);
-  const model = (app ? profile.actual_model : profile.model || profile.actual_model || profile.default_model) || t('默认');
+  // What the session last actually ran with comes first, so a member that says or is set to another model cannot mislead;
+  // a different setting (it applies from the next run, or the software ignored it) is named beside it.
+  const model = (app ? profile.actual_model : profile.actual_model || profile.model || profile.default_model) || t('默认');
   // agy's default effort belongs to its default model, so any other model keeps its own default instead.
   const default_effort = profile.adapter === "antigravity_cli" && model !== profile.default_model ? "" : profile.default_effort;
-  const effort = (app ? profile.actual_effort : profile.effort || profile.actual_effort || default_effort) || t('默认');
-  return model === t('默认') && effort === t('默认') ? t('默认') : `${model} · ${effort}`;
+  const effort = (app ? profile.actual_effort : profile.actual_effort || profile.effort || default_effort) || t('默认');
+  const shown = model === t('默认') && effort === t('默认') ? t('默认') : `${model} · ${effort}`;
+  return !app && profile.actual_model && profile.model && profile.model !== profile.actual_model
+    ? t('{shown}（设置为 {model}）', { shown, model: profile.model }) : shown;
 }
 
 /** A woken member's project files as 只读 / 可写; empty when the site does not decide them (App, its own agy project, a taken-over manual member, unread settings). */
@@ -5601,7 +5612,7 @@ async function execute_view_action(name, value) {
     load_room_configuration, save_room_configuration, interrupt_member, retry_delivery, retract_message, retract_latest, stop_room, stop_host_checkin, rewind_and_send, fork_room, change_member, reorder_speakers, invite_member,
     enable_room_workflow, move_workflow_members, sync_room_workflow, set_room_host_workflows,
     adopt_recommendation, rate_decision,
-    queue_send: send_queued, queue_delete: delete_queued,
+    queue_send: send_queued, queue_delete: delete_queued, question_answer: question_request,
     queue_reorder: ids => queue_request({ action: "reorder", ids }), queue_resume: () => queue_request({ action: "resume" }),
     queue_toggle: enabled => queue_request({ action: "queueing", enabled }), queue_edit: edit_queued,
     busy: () => { throw new Error(t('上一个操作仍在处理中，请稍候；长时间无响应请刷新页面')); },

@@ -537,13 +537,37 @@ export function sweep_legacy_agy_projects(service_home, user_home = homedir()) {
   return removed;
 }
 
+/**
+ * How a failed agy turn is classified for the room (adapter contract `on_failure(reason, {failure_class, resets,
+ * reset_at})`, as Claude's): an exhausted account quota is `quota`. agy says when it resets as a duration from now
+ * ("Individual quota reached. … Resets in 141h35m10s.", 1.5.x, room #3327): `reset_at` is now plus that duration in
+ * Unix seconds, and `resets` the same moment as a local time, since the failure is shown long after. Anything else
+ * stays unclassified.
+ */
+export function agy_failure_class(reason, now = new Date()) {
+  if (!/\bquota reached\b/i.test(String(reason))) return {};
+  const match = /\bResets in\s+(?:(\d+)h)?\s*(?:(\d+)m)?\s*(?:(\d+)s)?/i.exec(reason);
+  const seconds = match ? (Number(match[1] || 0) * 3600) + (Number(match[2] || 0) * 60) + Number(match[3] || 0) : 0;
+  if (!seconds) return { failure_class: 'quota' };
+  const at = new Date(now.getTime() + seconds * 1000);
+  return { failure_class: 'quota', resets: local_time(at), reset_at: Math.floor(at.getTime() / 1000) };
+}
+
+/** `YYYY-MM-DD HH:MM (UTC+hh:mm)` in this computer's time zone. */
+function local_time(date) {
+  const pad = value => String(value).padStart(2, '0');
+  const offset = -date.getTimezoneOffset();
+  const zone = `UTC${offset >= 0 ? '+' : '-'}${pad(Math.floor(Math.abs(offset) / 60))}:${pad(Math.abs(offset) % 60)}`;
+  return `${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad(date.getDate())} ${pad(date.getHours())}:${pad(date.getMinutes())} (${zone})`;
+}
+
 /** agy's behaviour; its static facts are in profiles.mjs. */
 export const antigravity_cli = {
   id: 'antigravity_cli', catalog_source: 'antigravity-cli',
   // A deleted room's session records and any legacy private agy projects are removed with it.
   cleanup: remove_agy_projects, sweep: sweep_legacy_agy_projects,
   deliver,
-  invocation, lifecycle, events,
+  invocation, lifecycle, events, failure_class: agy_failure_class,
   session: { path: session_path, exists: session_exists, owns: session_exists, branch, settings: session_settings },
   models: { list: models, effort, defaults, defaults_stamp },
   skills: agy_skills,

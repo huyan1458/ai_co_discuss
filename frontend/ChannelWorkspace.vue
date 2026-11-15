@@ -191,7 +191,7 @@ onMounted(() => { workflow_library.inputs.zip = workflow_zip.value; workflow_lib
 const MERGED_TABS = { context: "discussion", history: "discussion", access: "overview", workflows: "discussion" };
 const free_room = computed(() => !["active", "paused"].includes(room.value?.session?.status));
 watch(() => MERGED_TABS[view.value.tab], (merged) => { if (merged) act("tab", merged); }, { immediate: true });
-// A room shows the brief bar only while a discussion is running or paused; past briefs stay in the consensus dialog.
+// A room shows the brief bar only while a discussion is running or paused; afterwards the rail opens the consensus dialog.
 const show_brief = computed(() => !!room.value && (!free_room.value || ["active", "paused"].includes(room.value.session?.status)));
 const consensus_open = ref(false);
 const editing_context = ref(false);
@@ -499,7 +499,7 @@ function resize_nav_by_key(event) {
     </UModal>
     <div v-if="show_rail" class="channel-rail-resizer" role="separator" tabindex="0" :aria-label="t('调整右侧栏宽度')" aria-orientation="vertical" aria-controls="channel-member-rail" :aria-valuemin="RAIL_MIN" :aria-valuemax="RAIL_MAX" :aria-valuenow="rail_width" :aria-valuetext="t('{count} 像素', { count: rail_width })" :title="t('拖动调整右侧栏宽度，也可使用左右方向键')" @pointerdown="start_rail_resize" @pointermove="resize_rail" @pointerup="finish_rail_resize" @pointercancel="finish_rail_resize" @lostpointercapture="finish_rail_resize" @keydown="resize_rail_by_key"></div>
     <aside v-if="show_rail" id="channel-member-rail" v-keep-reading class="channel-member-rail" :aria-label="t('当前焦点与讨论进度')">
-      <section class="channel-rail-board"><FreeBoard v-if="room" />
+      <section class="channel-rail-board"><FreeBoard v-if="room" @history="open_consensus()" />
         <div v-else class="progress-board is-docked"><header class="pb-header"><strong>{{ t("讨论进度") }}</strong></header><p class="channel-rail-empty">{{ t("暂无房间，新建讨论后在这里查看进度与参与者。") }}</p></div></section>
     </aside>
 
@@ -507,7 +507,7 @@ function resize_nav_by_key(event) {
       <template #content><ChannelSidebar :tabs="tabs" @select="choose_room" @manage="manage_room" @create="create_channel" @create-folder="create_folder" @manage-folder="edit_folder" @delete-folder="remove_folder" @archive-folder="archive_folder" @archives="open_archives" @workflows="open_workflows" @tab="choose_tab" @settings="nav_open = false; modal = 'settings'" /></template>
     </USlideover>
     <USlideover v-if="room" v-model:open="info_open" side="right" :title="t('讨论进度')" :description="room.title" :ui="{ overlay: 'channel-drawer-overlay', content: 'progress-drawer', body: 'progress-drawer-body' }">
-      <template #body><FreeBoard /></template>
+      <template #body><FreeBoard @history="info_open = false; open_consensus()" /></template>
     </USlideover>
     <WorkspaceDialogs v-model="modal" v-model:reading-width="reading_width" v-model:effects="effects" :reading-options="width_options" :effect-options="EFFECT_OPTIONS" :detail-id="detail_id" :target-room="managed_room" :target-folder="target_folder" />
   </div>

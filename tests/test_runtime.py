@@ -126,6 +126,25 @@ class RuntimeTests(unittest.TestCase):
         self.assertEqual(self.request(f"{self.path}/executions/{execution['id']}", token=self.owner)[1], before_execution)
         self.assertEqual(before_view["session"]["id"], session["id"])
 
+    def test_execution_failures_without_reset_at_gain_it_on_startup(self):
+        """A database from before `reset_at` keeps its quota rows and can record a reset time after startup."""
+        if not hasattr(self, "database"):
+            self.skipTest("旧库迁移需要隔离 SQLite")
+        from backend.free_room import quota_failure, record_failure_class
+        with closing(sqlite3.connect(self.database)) as connection, connection:
+            connection.executescript("""DROP TABLE execution_failures;
+                CREATE TABLE execution_failures (execution_id INTEGER PRIMARY KEY, room_id TEXT NOT NULL,
+                    failure_class TEXT NOT NULL CHECK(failure_class IN ('quota')), resets TEXT NOT NULL DEFAULT '',
+                    failed_at INTEGER NOT NULL);
+                INSERT INTO execution_failures VALUES (1,'old','quota','3pm',1);""")
+        init_database(self.database, seed=False)
+        with closing(sqlite3.connect(self.database)) as connection, connection:
+            connection.row_factory = sqlite3.Row
+            self.assertEqual(quota_failure(connection, 1)["reset_at"], 0)
+            reset_at = int(time.time()) + 3600
+            record_failure_class(connection, "old", 2, {"failure_class": "quota", "resets": "5pm", "reset_at": reset_at})
+            self.assertEqual(quota_failure(connection, 2)["reset_at"], reset_at)
+
     def add_legacy_records(self):
         """Add retired foreign keys and a session with no request-model state to the private database."""
         if not hasattr(self, "database"):

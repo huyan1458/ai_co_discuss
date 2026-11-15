@@ -211,3 +211,41 @@ export function query_catalog(profile, args, reader, options = {}) {
     receive.start();
   });
 }
+
+/**
+ * The Unix second of the next time a usage limit resets, from a clock time as a software writes it ("3pm",
+ * "2:30pm (America/Los_Angeles)", "15:00"), in its named time zone or this computer's; 0 when the text is not such a
+ * time. For the `reset_at` of a `quota` failure (`on_failure(reason, {failure_class, resets, reset_at})`), so the room
+ * holds the member until then instead of a fixed while.
+ */
+export function clock_reset_at(text, now = Date.now()) {
+  const match = /^\s*(\d{1,2})(?::(\d{2}))?\s*(am|pm)?\s*(?:\(([A-Za-z_]+(?:\/[A-Za-z_+-]+)*)\))?\s*$/i.exec(String(text || ''));
+  if (!match) return 0;
+  let hour = Number(match[1]);
+  const minute = Number(match[2] || 0), half = match[3]?.toLowerCase();
+  if (half ? hour < 1 || hour > 12 : hour > 23) return 0;
+  if (half) hour = hour % 12 + (half === 'pm' ? 12 : 0);
+  const zone = match[4] || Intl.DateTimeFormat().resolvedOptions().timeZone;
+  let parts;
+  try { parts = zone_parts(now, zone); } catch { return 0; }
+  for (const day of [0, 1]) {
+    const wall = Date.UTC(parts.year, parts.month - 1, parts.day + day, hour, minute);
+    // The zone's offset at that wall time, read back from the zone itself (daylight saving included).
+    const guess = wall - zone_offset(wall, zone);
+    const at = wall - zone_offset(guess, zone);
+    if (at > now) return Math.floor(at / 1000);
+  }
+  return 0;
+}
+
+function zone_parts(instant, zone) {
+  const values = Object.fromEntries(new Intl.DateTimeFormat('en-US', { timeZone: zone, hourCycle: 'h23', year: 'numeric', month: 'numeric',
+    day: 'numeric', hour: 'numeric', minute: 'numeric', second: 'numeric' }).formatToParts(instant).map(part => [part.type, Number(part.value)]));
+  return { year: values.year, month: values.month, day: values.day, hour: values.hour, minute: values.minute, second: values.second };
+}
+
+/** Milliseconds the zone's wall clock is ahead of UTC at this instant. */
+function zone_offset(instant, zone) {
+  const parts = zone_parts(instant, zone);
+  return Date.UTC(parts.year, parts.month - 1, parts.day, parts.hour, parts.minute, parts.second) - Math.floor(instant / 1000) * 1000;
+}

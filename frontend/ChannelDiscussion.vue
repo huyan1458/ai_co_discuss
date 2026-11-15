@@ -9,6 +9,7 @@ import ExecutionDenials from "./ExecutionDenials.vue";
 import ExecutionNotes from "./ExecutionNotes.vue";
 import WorkingText from "./WorkingText.vue";
 import QueuedMessages from "./QueuedMessages.vue";
+import QuestionCard from "./QuestionCard.vue";
 import { active_workflow } from "./workflow-state.js";
 import { workflow_problem } from "./workflow-library.js";
 import { open_private_chat } from "./private-chat.js";
@@ -475,7 +476,7 @@ const recipient_hint = computed(() => {
   if (named.length) return free.value ? t('{value1}发给 {value2}', { value1: named.length > 1 ? t('同时') : "", value2: named.map((member) => bridge.display_name(member.name)).join("、") })
     : t('直接提问 {value1}，不计讨论轮次；同一成员完成当前执行后回答', { value1: named.map((member) => bridge.display_name(member.name)).join("、") });
   if (free_members.value.length === 1) return t('发给 {value1}', { value1: bridge.display_name(free_members.value[0].name) });
-  if (relay_waits_owner.value && free_host.value) return t('接力在等你：这条作为你这一棒交给下一位；要找主持人请 @{value1}', { value1: bridge.display_name(free_host.value.name) });
+  if (relay_waits_owner.value && free_host.value) return t('接力在等你回答上方的问题卡；这条消息只发给主持人 {value1}', { value1: bridge.display_name(free_host.value.name) });
   return free_host.value ? t('发给主持人 {value1}；@ 其他成员让它们发言', { value1: bridge.display_name(free_host.value.name) }) : t('未 @ 任何成员：只作留言，不会唤醒 AI');
 });
 /** Project files picked after @: their @path stays in the draft, and they also show as cards and go out as a trailing line of paths (code-quoted, so they never wake a member). */
@@ -2577,8 +2578,9 @@ function copy_message(message) { act("copy", `${view.value.room_site}/r/${room.v
           </div>
         </template>
       </UPopover>
+      <QuestionCard v-if="room.free?.questions?.length" :questions="room.free.questions" />
       <QueuedMessages v-if="room.free?.queued_messages" :queue="room.free.queued_messages" :room-id="room.id" />
-      <UChatPrompt ref="prompt" v-model="text" :submit-on-enter="ENTER_SENDS" :enterkeyhint="ENTER_SENDS ? 'send' : 'enter'" :autofocus="false" :rows="1" :maxrows="EDITOR_MAX_ROWS" :placeholder="relay_waits_owner ? t('接力在等你回复…') : t('发消息到 # {value1}', { value1: room.title })" :aria-label="t('留言正文')" role="combobox" aria-autocomplete="list" aria-haspopup="listbox" :aria-expanded="!!mention_context" :aria-controls="mention_context ? 'channel-mention-list' : undefined" :aria-activedescendant="mention_context && mention_active ? `channel-mention-${mention_options.indexOf(mention_active)}` : undefined" variant="outline" color="neutral" class="channel-composer" :class="{ 'has-mentions': mention_mirror }" :ui="{ header: 'channel-composer-header', base: 'channel-editor', footer: 'channel-composer-footer' }" @submit="send">
+      <UChatPrompt ref="prompt" v-model="text" :submit-on-enter="ENTER_SENDS" :enterkeyhint="ENTER_SENDS ? 'send' : 'enter'" :autofocus="false" :rows="1" :maxrows="EDITOR_MAX_ROWS" :placeholder="relay_waits_owner ? t('接力在等你回答问题卡…') : t('发消息到 # {value1}', { value1: room.title })" :aria-label="t('留言正文')" role="combobox" aria-autocomplete="list" aria-haspopup="listbox" :aria-expanded="!!mention_context" :aria-controls="mention_context ? 'channel-mention-list' : undefined" :aria-activedescendant="mention_context && mention_active ? `channel-mention-${mention_options.indexOf(mention_active)}` : undefined" variant="outline" color="neutral" class="channel-composer" :class="{ 'has-mentions': mention_mirror }" :ui="{ header: 'channel-composer-header', base: 'channel-editor', footer: 'channel-composer-footer' }" @submit="send">
         <template #header>
           <div v-if="view.attachment_drafts.length || file_refs.length || excerpts.length" class="attachment-drafts">
             <UPopover v-if="excerpts.length" :content="{ side: 'top', align: 'start' }" @update:open="editing_excerpt = 0">

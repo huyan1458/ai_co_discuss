@@ -14,7 +14,7 @@ import { spawn, spawnSync } from 'node:child_process';
 import { createHash, randomUUID } from 'node:crypto';
 import { EventEmitter, once } from 'node:events';
 import { tmpdir } from 'node:os';
-import { join, relative, resolve } from 'node:path';
+import { dirname, join, relative, resolve } from 'node:path';
 import { createServer } from 'node:http';
 import { createServer as createNetServer } from 'node:net';
 import { test } from 'node:test';
@@ -23,7 +23,7 @@ import { fileURLToPath, pathToFileURL } from 'node:url';
 import { setTimeout as delay } from 'node:timers/promises';
 import { listen_local } from './local_port.mjs';
 import { DiscussionStore, load_config, service_drafts, validate_config } from '../runner/discussion_runner.mjs';
-import { cwd_key, edited_changes, free_task_files, FreeRoomRunner, request_attachments, member_extra_directories, review_capability_version, workspace_snapshot } from '../runner/free_runner.mjs';
+import { cwd_key, edited_changes, free_task_files, FreeRoomRunner, request_attachments, member_drafts, member_extra_directories, review_capability_version, workspace_snapshot } from '../runner/free_runner.mjs';
 import { SessionDriver } from '../runner/session_driver.mjs';
 
 import { EXPERT_PROMPT_PRESETS, expert_prompt, free_task_text, software_rules } from '../runner/expert_prompts.mjs';
@@ -294,8 +294,8 @@ test('API file tools stay inside the project, refuse secrets and private files, 
   writeFileSync(join(root, 'outside.txt'), 'outside');
   const tools = files => participant_tools({ role: 'member', project: files }).map(item => item.name);
   const reader = open_project({ cwd: project, project_access: 'read' }, [service]);
-  assert.deepEqual(tools(null), ['read_room', 'read_messages', 'read_message', 'submit_chat']);
-  assert.deepEqual(tools(reader), ['read_room', 'read_messages', 'read_message', 'read', 'glob', 'grep', 'submit_chat']);
+  assert.deepEqual(tools(null), ['read_room', 'read_messages', 'read_message', 'read_execution', 'read_attachment', 'read_goal', 'read_question', 'ask_question', 'submit_chat']);
+  assert.deepEqual(tools(reader), ['read_room', 'read_messages', 'read_message', 'read_execution', 'read_attachment', 'read_goal', 'read', 'glob', 'grep', 'read_question', 'ask_question', 'submit_chat']);
   assert.match(system_prompt({ participant: 'DeepSeek', role: 'member', project: reader }), /可用 read、glob、grep 工具只读本房间的项目目录/);
 
   // The read envelope and footers follow DeepSeek Harness.
@@ -310,7 +310,7 @@ test('API file tools stay inside the project, refuse secrets and private files, 
   assert.equal(run_file_tool(reader, 'grep', { pattern: 'TOKEN' }), 'No matches found');
 
   const writer = open_project({ cwd: project, project_access: 'write' }, [service]);
-  assert.deepEqual(tools(writer).slice(-3), ['write', 'edit', 'submit_chat']);
+  assert.deepEqual(tools(writer).slice(-5), ['write', 'edit', 'read_question', 'ask_question', 'submit_chat']);
   assert.match(system_prompt({ participant: 'DeepSeek', role: 'member', project: writer }), /草稿文件与 --body-file 不适用：回答正文直接放进 submit_chat/);
   const edit = { file_path: 'notes.md', old_string: 'one', new_string: 'first' };
   assert.match(run_file_tool(writer, 'edit', edit).error, /has not been read/);
@@ -794,6 +794,36 @@ test('agy that fails after its conversation started is not delivered again', asy
   assert.equal(f.current_execution().retry, null);
 });
 
+test('agy whose account quota is exhausted fails as quota with its reset time, without a restart or a retry (必 9)', async t => {
+  const f = await fixture(t);
+  f.config.participants.Codex = { adapter: 'antigravity_cli', executable: process.execPath };
+  // Room #3327, agy 1.5.x: the quota failure comes before any conversation, which otherwise means "start it again".
+  const quota = 'Individual quota reached. Please upgrade your subscription to increase your limits. Resets in 141h35m10s.';
+  const process_fixture = fake_cli([agy_not_started(quota)], { exit_code: 1 });
+  const reported = [];
+  const deliver = (config, binding, task) => {
+    const on_failure = task.on_failure;
+    task.on_failure = (reason, details) => { reported.push({ reason, details }); return on_failure(reason, details); };
+    return deliver_task(config, binding, task, process_fixture.spawn_process, join(f.config.directory, 'user'));
+  };
+  const before = Date.now();
+  await agy_not_started_attempt(f, new FreeRoomRunner(f.config, f.store, deliver), process_fixture, 1);
+  assert.equal(f.current_execution().status, 'failed');
+  assert.equal(f.current_execution().retry, null);
+  const { details } = reported[0];
+  assert.equal(details.failure_class, 'quota');
+  assert.equal(details.retryable, false);
+  assert.equal(details.not_started, false);
+  // The duration becomes the moment it ends, in this computer's local time.
+  const duration = (141 * 3600) + (35 * 60) + 10;
+  // `reset_at` is when the reported failure was classified plus the duration, in Unix seconds.
+  assert.ok(details.reset_at >= Math.floor(before / 1000) + duration && details.reset_at <= Math.floor(Date.now() / 1000) + duration, String(details.reset_at));
+  const resets = new Date(before + duration * 1000);
+  const pad = value => String(value).padStart(2, '0');
+  assert.ok(details.resets.startsWith(`${resets.getFullYear()}-${pad(resets.getMonth() + 1)}-${pad(resets.getDate())} `), details.resets);
+  assert.match(details.resets, /^\d{4}-\d\d-\d\d \d\d:\d\d \(UTC[+-]\d\d:\d\d\)$/);
+});
+
 // agy's headless eligibility check fails the whole run on one dropped connection while its interactive window carries on.
 test('agy whose eligibility check drops a connection is restarted at once and runs the turn without a runner retry', async t => {
   const f = await fixture(t);
@@ -1269,7 +1299,7 @@ test('claude allows only codiscuss website subcommands and draft writes, then us
   assert.deepEqual(args.slice(directories + 1, directories + 4), [f.directory, f.task.draft_directory, f.task.skill_directories[0]]);
   assert.deepEqual(args.slice(args.indexOf('--disallowedTools') + 1), [`Edit(${claude_rule_path(f.task.skill_directories[0])}/**)`]);
   assert.deepEqual(args.slice(args.indexOf('--allowedTools') + 1, args.indexOf('--disallowedTools')),
-    [...['room', 'message', 'turn', 'state', 'goal', 'mode', 'review', 'sequence', 'execution', 'health', 'schema', 'launch workflow-adopt', 'launch workflow-join', 'launch workflow-leave', 'launch host-control', 'attachment', 'launch image']
+    [...['room', 'message', 'turn', 'state', 'goal', 'mode', 'review', 'sequence', 'question', 'execution', 'health', 'schema', 'launch workflow-adopt', 'launch workflow-join', 'launch workflow-leave', 'launch host-control', 'attachment', 'launch image']
       .flatMap(command => [`Bash(codiscuss ${command} *)`, `PowerShell(codiscuss ${command} *)`]),
     `Edit(${claude_rule_path(f.task.draft_directory)}/**)`, 'Read(//d/materials/**)']);
   assert.ok(!args.includes(`Edit(${claude_rule_path(f.directory)}/**)`));
@@ -1497,7 +1527,10 @@ test('tasks state whether the discussion project is read-only or writable', t =>
   const saved = read_task();
   assert.match(saved.instructions, /允许按请求修改.*并运行所需命令/);
   assert.equal(saved.project_access, 'write'); assert.equal(saved.cwd, project);
-  assert.equal(saved.draft_directory, f.config.directory + '-drafts');
+  // 必 10: each member drafts in its own folder inside the room's, never in another member's.
+  assert.equal(saved.draft_directory, member_drafts(f.config, 'Codex'));
+  assert.equal(dirname(saved.draft_directory), f.config.directory + '-drafts');
+  assert.notEqual(member_drafts(f.config, 'Claude'), saved.draft_directory);
   assert.ok(existsSync(saved.draft_directory));
   session_task(load_config_from(f, project));
   assert.match(read_task().instructions, /只读，不修改.*命令只用 subcommands/);
@@ -2686,7 +2719,7 @@ test("an expert prompt is only the member's own text, and the API file rule is f
   assert.equal(expert_prompt({ adapter: 'api', system_prompt: '  只读不写  ' }), '只读不写');
   // An API expert's own prompt cannot drop the rule about local files.
   const api = system_prompt({ participant: 'DeepSeek', role: 'member', mode: 'free', expert_prompt: '只读不写' });
-  assert.match(api, /本地文件和消息附件.*内容你都读不到：以其他成员贴出的为准，不凭文件名猜测.*缺信息就写明缺什么/);
+  assert.match(api, /本地文件你读不到；消息附件用 read_attachment 按 ID 读取.*读不到的以其他成员贴出的为准，不凭文件名猜测.*缺信息就写明缺什么/);
 });
 
 test('the agy command limit comes from the runner, so clearing the expert prompt cannot drop it', () => {
@@ -3065,4 +3098,36 @@ test('an Antigravity Sidecar quits once a newer one takes its directory or the A
   const orphan = await ready_pid(orphaned);
   await once(parent, 'exit');
   assert.equal(await gone(orphan), true, 'the orphaned Sidecar stops');
+});
+
+test('a normally completed execution leaves the software its declared close window; any other end stops it at once', async t => {
+  const statuses = { 7: 'completed', 8: 'cancelled' };
+  const server = createServer((request, response) => {
+    response.setHeader('Content-Type', 'application/json');
+    response.end(JSON.stringify({ status: statuses[request.url.split('/').pop()] }));
+  });
+  await listen_local(server);
+  t.after(() => server.close());
+  const runner = Object.assign(Object.create(FreeRoomRunner.prototype), { closed_at: new Map(), members: new Map(),
+    config: { site: `http://127.0.0.1:${server.address().port}`, room: 'room', token: 't'.repeat(64),
+      participants: { Codex: { adapter: 'codex_cli' }, Claude: { adapter: 'claude' } } } });
+  const live = name => runner.members.set(name, new Set([{ kill() {} }]));
+  live('Codex');
+  assert.equal(await runner.closing({ name: 'Codex' }, { execution_id: 7 }), true, 'completed: the receipt may still be recorded');
+  runner.closed_at.set(7, Date.now() - 1);
+  assert.equal(await runner.closing({ name: 'Codex' }, { execution_id: 7 }), false, 'the window is bounded');
+  assert.equal(await runner.closing({ name: 'Codex' }, { execution_id: 8 }), false, 'a stopped execution is not waited on');
+  live('Claude');
+  assert.equal(await runner.closing({ name: 'Claude' }, { execution_id: 7 }), false, 'no declared window, no wait');
+  runner.members.set('Codex', new Set());
+  assert.equal(await runner.closing({ name: 'Codex' }, { execution_id: 9 }), false, 'software that already exited is not waited on');
+});
+
+test('a usage-limit reset written as a clock time becomes the next such instant in its zone', async () => {
+  const { clock_reset_at } = await import('../runner/adapters/common.mjs');
+  const now = Date.parse('2026-11-15T06:00:00Z');
+  assert.equal(clock_reset_at('3pm (Asia/Shanghai)', now) * 1000, Date.parse('2026-11-15T07:00:00Z'));
+  assert.equal(clock_reset_at('2:30pm (America/Los_Angeles)', now) * 1000, Date.parse('2026-11-15T22:30:00Z'));
+  assert.equal(clock_reset_at('1pm (Asia/Shanghai)', now) * 1000, Date.parse('2026-11-16T05:00:00Z'), 'a time already past is tomorrow');
+  for (const text of ['Nov 16', '13pm', '', '3pm (Not/AZone)']) assert.equal(clock_reset_at(text, now), 0, text);
 });

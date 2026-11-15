@@ -76,7 +76,7 @@ export function access_label(level) { return level === 'own' ? '自行决定' : 
  * Subcommands an automatic task may run; service, run, api, setup and the rest of launch stay unapproved.
  * `launch workflow-adopt`, `launch workflow-join`, `launch workflow-leave` and `launch host-control` check themselves that the caller is the room's host (adopt and host-control also need the owner's grant).
  */
-export const TASK_SUBCOMMANDS = ['room', 'message', 'turn', 'state', 'goal', 'mode', 'review', 'sequence', 'execution', 'health', 'schema', 'launch workflow-adopt', 'launch workflow-join', 'launch workflow-leave', 'launch host-control', 'attachment', 'launch image'];
+export const TASK_SUBCOMMANDS = ['room', 'message', 'turn', 'state', 'goal', 'mode', 'review', 'sequence', 'question', 'execution', 'health', 'schema', 'launch workflow-adopt', 'launch workflow-join', 'launch workflow-leave', 'launch host-control', 'attachment', 'launch image'];
 
 /**
  * Whether a member may run commands beyond the codiscuss subcommands: every level but 只读, and 可写 only with a project
@@ -122,7 +122,7 @@ export const READ_RULE = '读含中文的文件用 rg --encoding utf-8 . 文件�
  * `extra_directories` are the room's other project directories this member works with, each read-only or writable.
  */
 export function free_task_text({ name, discussion, discussion_request, profile, cli, messages, read_after, task_path, access_file = '', read_rule = '',
-  extra_directories = [], attachments = [] }) {
+  extra_directories = [], attachments = [], requests = [] }) {
   const files = attachments_text(attachments, cli);
   const scope = discussion ? `讨论进行中，用户直接向你提问（${messages}）：只回答这个提问，不改变讨论安排和进度。` : '';
   const commands = runs_commands(profile, extra_directories) ? '' : `命令只用 subcommands 列出的 ${cli} 子命令。`;
@@ -138,11 +138,50 @@ export function free_task_text({ name, discussion, discussion_request, profile, 
   // A one-line answer goes inline: a draft file guards long or quoted text and retries, which a greeting does not need.
   // The credential already names the room, the member and this execution, so the commands carry only what changes.
   const quick = `问候、致谢等简单消息可跳过技能：${cli} message list --after ${read_after}${access} 看原文，${cli} message post --body "回答"${access} 回复（正文含引号时先写草稿再用 --body-file）。`;
-  // A message with files is never a mere greeting: the quick path would skip them (2026-11-14, #3143).
-  const prompt = files
-    ? `用户在${discussion ? '讨论中的' : ''}房间点名了你（${name}），对应消息 ${messages}。先读任务文件 ${task_path}，按其中列出的技能处理并提交一次回答。${read_rule}${files}`
-    : `用户在${discussion ? '讨论中的' : ''}房间点名了你（${name}），对应消息 ${messages}。${quick}其他请求先读任务文件 ${task_path}，按其中列出的技能处理并提交一次回答。${read_rule}`;
+  const opening = `${wake_opening(requests, name, discussion)}，对应消息 ${messages}。`;
+  // A message with files is never a mere greeting: the quick path would skip them (2026-11-14, #3143); nor is a
+  // hand-back, notice, Goal or host assignment, so the shortcut only goes with a user's own message (#3145 四.5).
+  const prompt = files || !from_user(requests)
+    ? `${opening}先读任务文件 ${task_path}，按其中列出的技能处理并提交一次回答。${read_rule}${files}`
+    : `${opening}${quick}其他请求先读任务文件 ${task_path}，按其中列出的技能处理并提交一次回答。${read_rule}`;
   return { instructions, prompt };
+}
+
+/**
+ * What woke the member, one phrase per request source (purpose and who created it), so a hand-back or a notice is not
+ * announced as the user naming the member. `requests` are this execution's requests; none (the prompt preview) reads
+ * as a user's message. Requests from several sources are listed together.
+ */
+const WAKE_SOURCES = {
+  route: name => `用户在房间发了未点名的消息，交给主持人（${name}）处理`,
+  notice: name => `系统给主持人（${name}）发来一条通知`,
+  handoff: name => `你（${name}）派出的工作已交回，等你处理`,
+  keep_working: name => `你（${name}）此前派活后选择继续工作，现在接着完成`,
+  goal_start: name => `用户开启了 Goal，交给主持人（${name}）`,
+  goal_continue: name => `Goal 续跑：主持人（${name}）继续推进当前目标`,
+  discuss_start: name => `用户请求开启讨论，交给主持人（${name}）`,
+  host_ask: name => `主持人给你（${name}）安排了一项请求`,
+  system_ask: name => `系统给你（${name}）安排了一项请求`,
+};
+
+function request_source(request) {
+  const purpose = request.purpose || 'ask';
+  if (WAKE_SOURCES[purpose]) return purpose;
+  if (request.created_by === 'host') return 'host_ask';
+  if (request.created_by === 'system') return 'system_ask';
+  return 'user';
+}
+
+/** Whether every request comes from the user's own message, the only case a greeting shortcut fits. */
+function from_user(requests) {
+  return requests.every(item => request_source(item) === 'user');
+}
+
+export function wake_opening(requests = [], name = '', discussion = false) {
+  const user = `用户在${discussion ? '讨论中的' : ''}房间点名了你（${name}）`;
+  const sources = [...new Set((requests.length ? requests : [{}]).map(request_source))];
+  const phrases = sources.map(source => source === 'user' ? user : WAKE_SOURCES[source](name));
+  return phrases.length === 1 ? phrases[0] : `你（${name}）有 ${requests.length} 项请求：${phrases.join('；')}`;
 }
 
 /**

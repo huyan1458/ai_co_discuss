@@ -150,8 +150,8 @@ host-control 主持人代房主控制房间，须房主已为本房间打开“�
   恢复：stop --member 打断；stop-all 停止全部执行、请求与接力；steer --member --text 话 [--submission-id ID] 向它进行中的执行插话；
         retry --execution N 重试失败的执行（含你自己的）；model --member [--model M] [--effort E] 改 CLI 或 API 成员的模型与强度（空值恢复默认；API 成员不填模型则保留原模型）；
         adapter --member --adapter ID 在同一软件的 App 与 CLI 间切换；access --member --access read|write 调整项目权限；
-  成员：invite --name 平台 [--access read|write] [--model M] [--effort E] 用本机已配置的软件邀请，项目权限最高可写；
-        away / remove / back --member 暂离、移除、请回；label --member [--label 显示名] [--description 描述]；
+  成员：invite --name 平台 [--access read|write] [--model M] [--effort E] 用本机已配置的软件邀请，项目权限默认只读、最高可写，离开中的同名成员改为请回；
+        away / remove / back --member 暂离、移除、请回（暂离与移除会取消仍在等它的请求，返回 cancelled_pending 条数）；label --member [--label 显示名] [--description 描述]；
   撤回：withdraw --message N 撤回自己的一次派活：接力或循环停下，未开始的请求取消，进行中的停止，不再交回；
   兜底：checkin --minutes N 房间有进行中的工作时每 N 分钟（5–120）给你发一次定时检查，房间空闲、停止全部或换主持人后自动结束；checkin --off 关闭；
   推进：order 读取发言顺序，order --order 甲,乙 --revision REV 调整尚未发言的部分；
@@ -1786,7 +1786,9 @@ async function host_room(home, access_file) {
   const room = await api(config, '');
   const roster = room.free?.members || [];
   if (!host || !roster.some(member => member.name === host && member.role === 'host' && member.status === 'active')) throw new Error('只有本房间的主持人能运行此命令');
-  return { path, config, roster, labels: room.labels || {}, host };
+  // How the room shows each member (the owner's label, else its platform nickname), so the host names them as it sees them.
+  const labels = { ...Object.fromEntries((room.members || []).map(member => [member.name, member.label])), ...room.labels };
+  return { path, config, roster, labels, host };
 }
 
 const IMAGE_ACTIONS = { generate: 'generate_image', edit: 'edit_image' };
@@ -1978,8 +1980,8 @@ function host_invite_profile(home, name, { access, model, effort }) {
     throw new Error(`本机没有配置 ${name} 的软件或 API Key；只能邀请本机已配置的平台：${ready.join('、')}`);
   }
   const api = card_api_profile(home, platform_of(name));
-  const saved = launch_settings(home).participants[platform_of(name)]?.project_access;
-  const project_access = access || (HOST_CARD_ACCESS.includes(saved) ? saved : 'write');
+  // Read-only unless the host asks for more: a host-invited member's access is the host's choice, said in the result.
+  const project_access = access || 'read';
   return { ...api, project_access, ...(model ? { model } : {}), ...(effort ? { effort } : {}) };
 }
 
@@ -2037,11 +2039,18 @@ async function host_label(ctx, { member: wanted, label, description }) {
 /** Invite a member from this computer's configured software, project access at most write. */
 async function host_invite(ctx, options) {
   if (!options.name) throw new Error('须用 --name 指定要邀请的平台（如 Claude、Codex）');
+  // Inviting a member that is only away brings it back under its own name and settings instead of adding a new one.
+  const away = ctx.roster.find(member => member.status === 'away' && (member.name === options.name || ctx.labels[member.name] === options.name));
+  if (away) {
+    await room_member(ctx.home, { ...ctx.owner, action: 'rejoin', name: away.name }, false, ctx.headers);
+    return { member: away.name, rejoined: true };
+  }
   const taken = new Set(ctx.roster.map(member => member.name));
   const name = taken.has(options.name) ? free_instance(options.name, taken) : options.name;
   const profile = host_invite_profile(ctx.home, name, options);
   const joined = await room_member(ctx.home, { ...ctx.owner, action: 'add', name, participants: { [name]: profile } }, false, ctx.headers);
-  return { member: joined.member, project_access: profile.project_access };
+  return { member: joined.member, project_access: profile.project_access,
+    ...(joined.member !== options.name ? { renamed_from: options.name } : {}) };
 }
 
 /** Read the speaking order, or change its not-yet-spoken part with the revision just read; display names are accepted. */
@@ -2053,16 +2062,41 @@ function host_order(ctx, { order, revision }) {
   return ctx.call('/speaking-order', { revision, order: names });
 }
 
+/**
+ * What a member control changed, in place of the whole room view the site answers with (sending a member away used to
+ * print about 160 KB): the member, its status now, its latest execution and how many requests still wait for it.
+ */
+async function member_change(action, target, request, labels) {
+  const view = await request;
+  const after = (view?.members || []).find(item => item.id === target.id);
+  const execution = after?.execution;
+  return { ok: true, action, member: target.name, label: labels[target.name] || target.name, status: after ? after.status : 'removed',
+    ...(execution?.id ? { execution: { id: execution.id, status: execution.status,
+      ...(execution.stop_result ? { stop_result: execution.stop_result } : {}) } } : {}),
+    pending: after?.pending ?? 0,
+    // A member sent away or removed drops every request still waiting for it; say how many, so nothing vanishes unseen (可 2).
+    ...(['away', 'remove'].includes(action) ? { cancelled_pending: Math.max(0, (target.pending || 0) - (after?.pending ?? 0)) } : {}) };
+}
+
 const HOST_CONTROLS = {
-  stop: (ctx, o) => ctx.call(`/members/${host_target(ctx, o.member).id}/interrupt`, {}),
+  stop: (ctx, o) => {
+    const target = host_target(ctx, o.member);
+    return member_change('stop', target, ctx.call(`/members/${target.id}/interrupt`, {}), ctx.labels);
+  },
   'stop-all': ctx => ctx.call('/stop', {}),
   steer: host_steer,
   retry: (ctx, o) => ctx.call(`/executions/${execution_number(o.execution)}`, { action: 'retry' }),
   details: (ctx, o) => execution_details_command(ctx.home, { ...ctx.owner, execution_id: execution_number(o.execution) }),
   order: host_order,
   invite: host_invite,
-  away: (ctx, o) => ctx.call(`/members/${host_target(ctx, o.member).id}`, { action: 'away' }),
-  remove: (ctx, o) => ctx.call(`/members/${host_target(ctx, o.member).id}`, { action: 'remove' }),
+  away: (ctx, o) => {
+    const target = host_target(ctx, o.member);
+    return member_change('away', target, ctx.call(`/members/${target.id}`, { action: 'away' }), ctx.labels);
+  },
+  remove: (ctx, o) => {
+    const target = host_target(ctx, o.member);
+    return member_change('remove', target, ctx.call(`/members/${target.id}`, { action: 'remove' }), ctx.labels);
+  },
   back: (ctx, o) => room_member(ctx.home, { ...ctx.owner, action: 'rejoin', name: host_target(ctx, o.member).name }, false, ctx.headers),
   model: (ctx, o) => room_member_model(ctx.home, { ...ctx.owner, name: host_target(ctx, o.member, { self: true }).name, model: o.model || '', effort: o.effort || '' }),
   access: (ctx, o) => {
@@ -2185,6 +2219,22 @@ function keep_saved_locations(home, participants) {
   }));
 }
 
+/**
+ * `launch ACTION --help` prints that action's own entry (its paragraph and indented lines) so `host-control --help`
+ * does not answer with the whole launch usage (K16); an action without an entry, or none, gets the full text.
+ */
+export function command_help(action) {
+  if (!action) return HELP;
+  const lines = HELP.split('\n');
+  const start = lines.findIndex(line => line.startsWith(`${action} `));
+  if (start < 0) return HELP;
+  const usage = lines.filter(line => line.includes(`codiscuss launch ${action} `) || line.endsWith(`codiscuss launch ${action}`))
+    .map(line => line.replace(/^用法：/, '').trim());
+  let end = start + 1;
+  while (end < lines.length && /^\s/.test(lines[end])) end += 1;
+  return [...usage.map(line => `用法：${line}`), ...lines.slice(start, end), ''].join('\n');
+}
+
 /** CLI and local HTTP bridge use the same commands and configuration validation. */
 export async function launch_main(args = process.argv.slice(2), input_text) {
   const { values, positionals } = parseArgs({ args, allowPositionals: true, options: {
@@ -2196,7 +2246,7 @@ export async function launch_main(args = process.argv.slice(2), input_text) {
     goal: { type: 'string' }, label: { type: 'string' }, description: { type: 'string' }, adapter: { type: 'string' }, 'submission-id': { type: 'string' },
     message: { type: 'string' }, minutes: { type: 'string' }, off: { type: 'boolean' },
   } });
-  if (values.help || !positionals.length) return process.stdout.write(HELP);
+  if (values.help || !positionals.length) return process.stdout.write(command_help(positionals[0]));
   if (positionals[0] === 'workflow-adopt') {
     const home = service_home();
     const result = await adopt_workflow(home, { draft_file: values.draft, workflow_id: values.id, access_file: values['access-file'] || process.env.DISCUSS_ACCESS_FILE });

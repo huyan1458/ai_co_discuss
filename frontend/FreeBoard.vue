@@ -23,6 +23,9 @@ const free = computed(() => room.value.free || {});
 const discussion = computed(() => ["active", "paused"].includes(room.value.session?.status));
 // The open goal, if any; an ended one only leaves its end notice in the transcript.
 const goal = computed(() => ["active", "paused"].includes(room.value.goal_state?.goal?.status) ? room.value.goal_state.goal : null);
+// Outside a discussion the brief bar is hidden, so past briefs, consensus and discussions open from here.
+const has_history = computed(() => !discussion.value && !!(room.value.host_brief?.text || room.value.state_text || room.value.discussions?.length));
+const emit = defineEmits(["history"]);
 // The rail is narrow: about four lines of objective show before it folds.
 const GOAL_PREVIEW_LENGTH = 60;
 const goal_usage = computed(() => {
@@ -320,6 +323,7 @@ watch(() => room.value.id, () => { starting.value = false; });
       </div>
       <p v-if="!can_start" class="pb-free-note">{{ t('开启讨论或 Goal 需要一位由本机唤醒的 AI 主持人。') }}</p>
     </section>
+    <section v-if="has_history" class="pb-actions pb-history-actions" :aria-label="t('共识与讨论记录')"><UButton icon="i-lucide-history" :label="t('共识与讨论记录')" size="sm" color="neutral" variant="outline" class="pb-action pb-action-block" @click="emit('history')" /></section>
   <StartDiscussionDialog v-model:open="starting" />
   <StartGoalDialog v-model:open="goal_dialog" :edit="Boolean(goal)" :initial="goal" />
   <InviteDialog v-model:open="inviting" :workflow-id="invite_workflow_id" :description="t('新成员加入后不打断其他成员；点卡片翻面可设置软件、模型、项目权限和要续接的已有会话。')" />

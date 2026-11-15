@@ -38,11 +38,15 @@ PARTICIPANTS = ("用户", "Codex", "Claude", "Antigravity", "DeepSeek", "Qwen", 
 # A platform is a type; `Claude-review` is a second Claude instance with its own session. Mirrors backend/identity.py.
 INSTANCE_PATTERN = re.compile(r"(Codex|Claude|Antigravity|DeepSeek|Qwen|Grok|OpenAI|Custom)(?:-[0-9A-Za-z_]{1,16})?")
 KINDS = ("opinion", "moderation", "chat")
+# Room IDs are the first 12 hex characters of a UUID (backend/server.py create_room).
+ROOM_ID_LENGTH = 12
 OVERVIEW_FIELDS = ("id", "title", "goal", "host", "phase", "focus", "message_count",
                    "latest_id", "state_until", "current_turn", "queued_turns", "held_since", "limits", "completed_rounds", "answered_turns", "duplicate", "submission_id",
-                   "mode", "members", "free", "descriptions", "experts")
+                   "mode", "members", "free", "descriptions", "experts", "field_notes")
 # Agent tools cut long command output (Claude Code past 30000 characters, Codex CLI past 10000 tokens), so a page stays inside both.
 LIST_OUTPUT_CHARS = 8000
+# An attachment shown inside its message: identity, type, size, content hash and where to read it.
+ATTACHMENT_FIELDS = ("id", "file_name", "content_type", "size", "sha256", "url")
 # The room view keeps live work and a short recent trail; `execution view` reads any one execution in full.
 RECENT_EXECUTIONS = 10
 EXECUTION_FIELDS = ("id", "member", "status", "result", "answer_id", "request_message_id", "changes", "late_answer")
@@ -57,6 +61,8 @@ ROOM_LIST_FIELDS = ("id", "title", "goal", "message_count", "latest_id", "create
 # A posted message echoes only what proves where it landed; the full text stays one `message view` away.
 RECEIPT_FIELDS = ("id", "author", "kind", "execution_id", "request_message_id", "reply_to", "submission_id",
                   "created_at", "summary", "proactive")
+# Arguments a task credential binds; `schema` reports them as required only when no bound credential is used.
+CREDENTIAL_FIELDS = {"room": "room", "actor": "member", "execution": "execution_id"}
 EXIT_CODES = {"0": "成功", "1": "HTTP/API 错误", "2": "参数或输入错误",
               "3": "网络失败或响应无法确认", "130": "被中断，写入结果需核对"}
 
@@ -301,12 +307,13 @@ def room_commands(subcommands, registry):
 
 def message_commands(subcommands, registry):
     """Register bounded search, exact reads, and attributed message writes."""
-    listing = add_leaf(subcommands, registry, "message list", "检索原文：每次最多 20 条且不超过约 8000 字符，未列完时按 next_after 用 --after 续读", True)
+    listing = add_leaf(subcommands, registry, "message list", "检索原文：每次最多 20 条且不超过约 8000 字符（含元数据），未列完时按 next_after 用 --after 续读；remaining 是本次之后还剩的匹配条数；"
+                    "过长的单条只给开头并标 text_complete=false，用 message view 编号 --offset 续读全文", True)
     paging = listing.add_mutually_exclusive_group()
     paging.add_argument("--page", type=positive_int, default=1)
     paging.add_argument("--after", type=non_negative_int, help="只读此消息编号之后的内容；按 next_after 续读")
     listing.add_argument("--query", help="关键词或消息编号")
-    listing.add_argument("--author", type=participant)
+    listing.add_argument("--author", type=member_handle, help="只列该成员的消息（显示名或成员 ID）")
     listing.add_argument("--mention", type=participant)
     listing.add_argument("--kind", choices=KINDS, help="筛选观点、主持说明或协作消息")
     listing.add_argument("--submission-id", type=submission_id, help="按提交编号精确查询结果")
@@ -314,6 +321,9 @@ def message_commands(subcommands, registry):
     view = add_leaf(subcommands, registry, "message view", "读取一条精确原文与来源", True)
     view.add_argument("id", type=positive_int, help="消息编号")
     view.add_argument("--request", type=positive_int, help="手动成员：按自己的有效请求限制可读原文")
+    view.add_argument("--offset", type=non_negative_int, help="从正文第几个字符读起（Unicode 码点，从 0 起）；按上次返回的 next_offset 续读")
+    view.add_argument("--limit", type=positive_int, help="本次最多读多少个字符；与 --offset 一起分段读长正文")
+    view.add_argument("--version", help="续读时带上第一段返回的 text_sha256；正文已变则报 content_changed，须从头重读")
     group = add_leaf(subcommands, registry, "message group-plan", "房主读取全体请求、成员、顺序与 revision；安排全体前先读，提交时携带该 revision", True)
     group.add_argument("id", type=positive_int, help="全体请求的原消息编号")
     post = add_leaf(subcommands, registry, "message post",
@@ -347,8 +357,10 @@ def message_commands(subcommands, registry):
     post.add_argument("--repeat", type=repeat_gate, action="append", default=[], metavar="MEMBER=START",
                       help="与 --sequential 同用：MEMBER 所在那一棒结束后为循环检查点，sequence continue 从 START 所在那一棒再来一圈，加 --proceed 往下一棒走；START 不能早于前一个检查点；可重复")
     post.add_argument("--wait-user", type=user_gate, action="append", default=[], metavar="MEMBER[=START]",
-                      help="与 --sequential 同用：MEMBER 所在那一棒结束后等用户发言，不交回你；用户下一条未点名的消息接着往下一棒走，"
-                           "写了 =START 则从 START 所在那一棒再来一圈（最后一棒之后须写 START），该消息交给下一棒先读；可重复")
+                      help="与 --sequential 同用：MEMBER 所在那一棒结束后等用户回答问题，不交回你；MEMBER 用 question ask（contract=handoff）交候选并出题，"
+                           "用户回答该问题后接着往下一棒走，写了 =START 则从 START 所在那一棒再来一圈（最后一棒之后须写 START），答案交给下一棒先读；普通聊天不推进；可重复")
+    post.add_argument("--also-request", dest="also_requests", type=positive_int, action="append", default=[], metavar="REQUEST",
+                      help="执行中又排队给你的普通请求（execution view 的 queued_requests）与本次任务相关、这条回答已一并交付时，用它同时关闭；可重复")
     post.add_argument("--detach", type=member_handle, action="append", default=[], metavar="MEMBER",
                       help="自由房间主持人：与 --to 同用，点名一位与这次派活同时开工、但不等它的成员（不计入交回或下一棒的等待）；它失败时程序通知你；可重复")
     post.add_argument("--with", dest="to", type=member_handle, action=JoinPreviousStep, metavar="MEMBER",
@@ -409,7 +421,7 @@ def turn_commands(subcommands, registry):
                                 help="新安排唯一编号；重试沿用同编号和内容。省略时按命令与内容自动生成，同样内容重试得到同一编号")
         if action == "reorder":
             parser.add_argument("--revision", required=True, help="turn order 返回的 revision；顺序变化后需重新获取")
-            parser.add_argument("--member", action="append", type=ai_name, required=True,
+            parser.add_argument("--member", action="append", type=member_handle, required=True,
                                 help="按新顺序重复指定，须恰好包含 turn order 中 movable 的全部成员")
         if action == "ask":
             parser.add_argument("--request", type=positive_int, required=True, help="turn roster 中 host_requests 的请求编号")
@@ -520,11 +532,41 @@ def review_commands(subcommands, registry):
 
 def sequence_commands(subcommands, registry):
     """Read a host's one-after-another relay and run a loop's next pass from its checkpoint."""
-    view = add_leaf(subcommands, registry, "sequence view", "房主或主持人读取依次接力的顺序、当前圈与本圈各棒原文；此读取不派发任务", True)
+    view = add_leaf(subcommands, registry, "sequence view", "读取依次接力的顺序、当前圈与本圈各棒原文（房主、主持人与成员均可读）；此读取不派发任务", True)
     view.add_argument("id", type=positive_int, help="依次接力编号（任务文件 requests[].sequence.id）")
     advance = add_leaf(subcommands, registry, "sequence continue", "主持人在检查点让接力继续：循环检查点再来一圈（加 --proceed 往下一棒），普通检查点往下一棒；只结束这条检查点交接，不继续则直接回答即结束接力", True)
     advance.add_argument("--request", type=positive_int, required=True, help="检查点交接请求编号（purpose=handoff 且 sequence.phase 为 checkpoint 或 gate）")
     advance.add_argument("--proceed", action="store_true", help="循环检查点不再来一圈，往下一棒走；最后一棒之后没有下一棒")
+    add_text(advance, "note")
+    advance.description += "；--note 或 --note-file 给下一棒的说明（要改什么、豁免哪条卡片规定），下一棒先读它，上一棒回答仍在 sequence.answer_id"
+
+
+def question_commands(subcommands, registry):
+    """Questions to the owner: list or read first, then ask, answer, recommend, decide or cancel with the version read."""
+    listing = add_leaf(subcommands, registry, "question list", "读取房间待答问题（按呈现顺序，current 为当前答题卡）；成员另得自己最近一次提问 last_ask", True)
+    listing.add_argument("--all", action="store_true", help="含已回答、取消、过期的问题")
+    listing.add_argument("--submission-id", type=submission_id, help="按提问提交编号查找；结果不明时用它确认是否已建成")
+    view = add_leaf(subcommands, registry, "question view", "读取一个问题的题目、选项、状态、version 与历史；作答、推荐、决定、取消前先读", True)
+    view.add_argument("id", type=positive_int, help="问题编号")
+    ask = add_leaf(subcommands, registry, "question ask",
+                   "向用户提问：一次提交保存问题组与说明消息。contract=handoff（blocking=true）时说明消息即本次请求的交付并结束执行，任务等用户回答；"
+                   "contract=supplement（blocking=false）只补充说明，执行继续、照常回答。身份、执行编号与提交编号由凭据和内容补齐", True)
+    ask.add_argument("--file", required=True, help='UTF-8 JSON 草稿：{"contract","blocking","explanation","questions":[{"id","prompt","options":[{"id","label","anchor?"}],"multiple?","free_text?"}],"refs?","gate?":{"sequence_id","revision"}}；- 从标准输入读取')
+    ask.add_argument("--submission-id", type=submission_id, help="提问唯一编号；省略时按内容生成，同一草稿重试得到同一问题")
+    answer = add_leaf(subcommands, registry, "question answer", "房主作答：先 question view 取 version；也可请主持人推荐或交给主持人决定", True)
+    reply = add_leaf(subcommands, registry, "question recommend", "主持人给出推荐：问题升为新版本、仍等用户确认；先 question view 取 version", True)
+    decide = add_leaf(subcommands, registry, "question decide", "主持人对用户交托的问题作出决定，视为该问题的回答；先 question view 取 version", True)
+    cancel = add_leaf(subcommands, registry, "question cancel", "房主或提问者取消待答问题；绑定接力检查点的问题取消后接力停止", True)
+    for parser in (answer, reply, decide, cancel):
+        parser.add_argument("id", type=positive_int, help="问题编号")
+        parser.add_argument("--version", type=positive_int, required=True, help="question view 返回的 version；问题更新后须重新读取")
+    for parser in (answer, reply, decide):
+        parser.add_argument("--choice", action="append", default=[], metavar="ITEM=OPTION",
+                            help="题目 id=选项 id；多选题重复给出；可重复")
+        add_text(parser, "text", required=parser is not answer)
+        parser.add_argument("--submission-id", type=submission_id, help="唯一编号；省略时按内容生成，同样内容重试得到同一结果")
+    answer.add_argument("--action", dest="answer_action", choices=("answer", "other", "recommend", "delegate"), default="answer",
+                        help="answer 选项作答；other 其他或修改意见；recommend 请主持人先讨论并给推荐；delegate 交给主持人决定")
 
 
 def build_parser(prog="discuss"):
@@ -539,7 +581,7 @@ def build_parser(prog="discuss"):
                            ("attachment", attachment_commands),
                            ("turn", turn_commands), ("state", state_commands),
                            ("run", run_commands), ("goal", goal_commands), ("mode", mode_commands), ("execution", execution_commands), ("member", member_commands), ("review", review_commands),
-                           ("sequence", sequence_commands)):
+                           ("sequence", sequence_commands), ("question", question_commands)):
         group = subcommands.add_parser(name, help=f"{name} 操作", allow_abbrev=False)
         add_common(group)
         register(group.add_subparsers(dest="action", required=True), registry)
@@ -645,6 +687,10 @@ def bound_execution(args):
 
 def bind_room(args):
     """Fill an omitted room from the credential; a credential for another room is still rejected before sending."""
+    # `execution view 1885`: a lone short number is the execution, not a room (room IDs are 12 characters).
+    if (getattr(args, "resource", None) == "execution" and getattr(args, "id", None) is None
+            and args.room and args.room.isdigit() and len(args.room) < ROOM_ID_LENGTH):
+        args.id, args.room = int(args.room), None
     if hasattr(args, "room") and args.room is None:
         args.room = load_access(args).get("room") or None
         if not args.room:
@@ -728,11 +774,13 @@ def plan_message(args):
     if args.action == "group-plan":
         return RequestPlan(f"/api/rooms/{args.room}/recommendations/{args.id}")
     if args.action == "view":
-        return RequestPlan(f"{base}/{args.id}", params=read_context_params(args))
+        part = {"offset": args.offset, "limit": args.limit, "version": args.version}
+        return RequestPlan(f"{base}/{args.id}", params={**read_context_params(args), **{key: value for key, value in part.items() if value is not None}},
+                           view="message")
     if args.action == "list":
         params = {"page": args.page, "q": args.query, "author": args.author, "mention": args.mention,
                   "after": args.after, "kind": args.kind, "submission_id": args.submission_id,
-                  **read_context_params(args)}
+                  "max_chars": LIST_OUTPUT_CHARS, **read_context_params(args)}
         return RequestPlan(base, params={key: value for key, value in params.items() if value is not None}, view="message_list")
     actor = require_actor(args)
     if args.proactive and (args.execution or args.request or args.kind != "chat"):
@@ -785,6 +833,8 @@ def plan_message(args):
         if not args.to:
             raise CliError("--detach 须与 --to 一起使用")
         payload["detach"] = args.detach
+    if getattr(args, "also_requests", None):
+        payload["also_request_ids"] = args.also_requests
     joined = getattr(args, "joined_steps", [])
     if joined and not args.sequential:
         raise CliError("--with 须与 --sequential 一起使用")
@@ -1016,8 +1066,54 @@ def plan_sequence(args):
     """Read a relay, or continue a loop bound to its one checkpoint request."""
     if args.action == "view":
         return RequestPlan(f"/api/rooms/{args.room}/sequences/{args.id}")
+    note = text_field(args, "note")
     return RequestPlan(f"/api/rooms/{args.room}/sequences/continue", "POST", {"actor": require_actor(args), "request_id": args.request,
-                                                                               **({"proceed": True} if args.proceed else {})})
+                                                                               **({"proceed": True} if args.proceed else {}),
+                                                                               **({"note": note} if note else {})})
+
+
+def question_choices(values):
+    """`--choice item=option` pairs as {item: [options]}."""
+    choices = {}
+    for value in values:
+        item, separator, option = value.partition("=")
+        if not separator or not item or not option:
+            raise CliError("--choice 须写成 题目id=选项id")
+        choices.setdefault(item, []).append(option)
+    return choices
+
+
+def plan_question(args):
+    """Read questions, or write one bound to the version read (asks are bound to the credential's execution)."""
+    base = f"/api/rooms/{args.room}/questions"
+    if args.action == "list":
+        params = {"submission_id": args.submission_id} if args.submission_id else {"status": "all"} if args.all else None
+        return RequestPlan(base, params=params)
+    if args.action == "view":
+        return RequestPlan(f"{base}/{args.id}")
+    if args.action == "ask":
+        draft = read_object(args.file)
+        body = {**draft, "actor": require_actor(args), "submission_id": args.submission_id}
+        if "request_ids" not in draft:
+            execution_id = bound_execution(args)
+            if not execution_id:
+                raise CliError("提问须使用绑定了执行的任务凭据；手动接入成员在 JSON 里写 request_ids")
+            body["execution_id"] = execution_id
+        return RequestPlan(base, "POST", body)
+    body = {"version": args.version}
+    if args.action != "cancel":
+        body.update(choices=question_choices(args.choice), submission_id=args.submission_id)
+        text = text_field(args, "text")
+        if text is not None:
+            body["text"] = text
+    if args.action == "answer":
+        body["action"] = args.answer_action
+    if args.action in ("recommend", "decide"):
+        body["actor"] = require_actor(args)
+        execution_id = bound_execution(args)
+        if execution_id:
+            body["execution_id"] = execution_id
+    return RequestPlan(f"{base}/{args.id}/{args.action}", "POST", body)
 
 
 def build_plan(args):
@@ -1029,7 +1125,7 @@ def build_plan(args):
     handlers = {"room": plan_room, "message": plan_message, "turn": plan_turn,
                 "attachment": plan_attachment,
                 "state": plan_state, "api": plan_api,
-                "run": plan_run, "goal": plan_goal, "mode": plan_mode, "execution": plan_execution, "member": plan_member, "review": plan_review, "sequence": plan_sequence}
+                "run": plan_run, "goal": plan_goal, "mode": plan_mode, "execution": plan_execution, "member": plan_member, "review": plan_review, "sequence": plan_sequence, "question": plan_question}
     bind_room(args)
     plan = RequestPlan("/api/health") if args.resource == "health" else handlers[args.resource](args)
     fill_submission_id(args, plan)
@@ -1239,8 +1335,13 @@ def project_result(value, plan, site):
         return {"rooms": [select_fields(room, ROOM_LIST_FIELDS) for room in value["rooms"]]}
     if plan.view in ("overview", "brief", "state"):
         fields = {"overview": OVERVIEW_FIELDS, "brief": BRIEF_FIELDS,
-                  "state": ("id", "state_text", "state_until", "host_brief", "answered_turns")}[plan.view]
+                  "state": ("id", "state_text", "state_until", "host_brief", "answered_turns", "field_notes")}[plan.view]
         result = select_fields(value, fields)
+        members = (value.get("free") or {}).get("members")
+        if "experts" in result and isinstance(members, list):
+            # The stored map says "cli" for everyone (a legacy field); readers get how each member really takes part.
+            result["experts"] = {member["name"]: member.get("adapter") or member.get("access") for member in members
+                                 if isinstance(member, dict) and member.get("name")}
         if plan.view == "overview":
             if isinstance(result.get("free"), dict):
                 result["free"] = overview_free(result["free"])
@@ -1248,7 +1349,13 @@ def project_result(value, plan, site):
             result["url"] = f"{site}/r/{value['id']}"
         return result
     if plan.view == "message_list":
-        return fit_message_page(value)
+        page = fit_message_page(value)
+        return {**page, "messages": [inline_attachments(message) for message in page.get("messages", [])]}
+    if plan.view == "message":
+        return inline_attachments(value)
+    if plan.view == "message_receipt" and isinstance(value.get("receipt"), dict):
+        # The service's own receipt, the same one API members get (spec #3262 item 4).
+        return {**{key: item for key, item in value.items() if key not in ("message", "receipt")}, "message": value["receipt"]}
     if plan.view == "message_receipt" and isinstance(value.get("message"), dict):
         message = value["message"]
         receipt = {**select_fields(message, RECEIPT_FIELDS), "text_chars": len(message.get("text") or ""),
@@ -1270,8 +1377,19 @@ def overview_free(free):
     return result
 
 
+def inline_attachments(message):
+    """A message's attachments without what the message already says (room, message, upload bookkeeping)."""
+    if not isinstance(message, dict) or not message.get("attachments"):
+        return message
+    return {**message, "attachments": [select_fields(item, ATTACHMENT_FIELDS) for item in message["attachments"]]}
+
+
 def fit_message_page(page):
-    """Stop a page at the output budget so no agent tool cuts it silently; the cursor resumes after the last shown."""
+    """Stop a page at the output budget so no agent tool cuts it silently; the cursor resumes after the last shown.
+
+    A site that applied `max_chars` itself says `remaining`; its page is already fitted, with honest previews."""
+    if "remaining" in page:
+        return page
     messages, used = [], 0
     for message in page.get("messages", []):
         used += len(json.dumps(message, ensure_ascii=False, indent=2))
@@ -1305,6 +1423,14 @@ def command_schema(args, registry):
                                                "turn create", "turn cancel", "state set", "attachment upload", "review advance",
                                                "sequence continue"):
             item["required"] = True
+        # Fields a bound task credential fills in are required only without one (B5, K2): say so instead of
+        # declaring them plainly required or plainly optional.
+        bound = CREDENTIAL_FIELDS.get(action.dest)
+        if bound and (action.dest != "execution" or name == "message post"):
+            item.update(required=False, required_unless_credential=bool(item["required"] or action.dest == "room"),
+                        credential_field=bound)
+        if action.dest == "submission_id" and name == "message post":
+            item["generated_when_omitted"] = True
         if action.choices is not None:
             item["choices"] = list(action.choices)
         if action.default not in (argparse.SUPPRESS, None):

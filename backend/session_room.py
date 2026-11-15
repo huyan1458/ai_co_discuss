@@ -5,7 +5,7 @@ import json
 import re
 import time
 
-from .free_room import active_members, finish_execution, require_member, require_owner
+from .free_room import active_members, finish_execution, member_display_names, require_member, require_owner, wake_host
 from .texts import Text, load_texts, save_text, text_payload
 from .runtime import begin_write, enforce_session_limits, limit_values, room_limits_view, token_hash
 
@@ -360,7 +360,16 @@ def _conclude_session(connection, session, reason):
          brief["text"] if brief and brief["until"] > started else "", state["state_text"] if state["state_until"] > started else "",
          state["state_until"] if state["state_until"] > started else 0,
          time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime(now))))
+    if reason in LIMIT_TEXTS:
+        # Nobody is scheduled once a discussion hits its limit, so the host is woken once to wrap up or decide what's next.
+        wake_host(connection, room_id, started or latest, LIMIT_TEXTS[reason](session_id), f"discussion_end:{session_id}")
     return session_room(connection, room_id)
+
+
+LIMIT_TEXTS = {
+    "round_limit": lambda session_id: Text("讨论 {session_id} 已到轮数上限并结束。请主持人决定：总结结论、告知用户，或请用户批准后再开一次讨论。", session_id=session_id),
+    "time_limit": lambda session_id: Text("讨论 {session_id} 已到时长上限并结束。请主持人决定：总结结论、告知用户，或请用户批准后再开一次讨论。", session_id=session_id),
+}
 
 
 def discussion_action(connection, room_id, token, payload, room):
@@ -523,9 +532,11 @@ def _session_roster(connection, session_id):
         FROM room_members m LEFT JOIN member_registrations r ON r.member_id=m.id
         WHERE m.room_id=? AND m.status='active' ORDER BY m.id""", (session["room_id"],))]
     experts = []
+    shown = member_display_names(connection, session["room_id"])
     for member in members:
         registered = member["access"] != "manual" or member["registration_hash"] == member["token_hash"]
-        experts.append({"id": member["id"],"name":member["name"],"host":member["role"] == "host", "mode":member["access"],
+        experts.append({"id": member["id"],"name":member["name"],"label":shown.get(member["name"], member["name"]),
+                        "host":member["role"] == "host", "mode":member["access"],
                         "spoken":member["id"] in answered, "registered":registered})
     experts.sort(key=lambda item: (item["host"], next(member["id"] for member in members if member["name"]==item["name"])))
     waiting = [item["name"] for item in experts if not item["host"] and not item["spoken"] and item["registered"]]
@@ -548,7 +559,14 @@ def roster_view(connection, room_id):
     session = current_session(connection, room_id)
     if not session:
         raise FileExistsError(Text("房间没有进行中的讨论会话"))
-    return {**_session_roster(connection, session["id"]),"session_id":session["id"]}
+    roster = {**_session_roster(connection, session["id"]),"session_id":session["id"]}
+    read_until = _discussion_read_cutoff(connection, session["id"])
+    if read_until is not None:
+        # Said before the host writes questions (D1): an instruction to read past the boundary cannot be followed.
+        roster["reading"] = {"phase": "initial", "read_until": read_until, "note": Text(
+            "独立观点阶段：本轮专家只能读到 #{until} 及之前的消息；题干里“先读最新回答”之类读取之后内容的要求无法执行，请把需要的材料写进题干或改到交叉讨论阶段",
+            until=read_until)}
+    return roster
 
 
 def query_session_requests(connection, room_id, params=None):
@@ -846,6 +864,21 @@ def fail_session_request(connection, request_id, reason):
     connection.execute("UPDATE session_state SET revision=revision+1 WHERE session_id=?", (row["session_id"],))
 
 
+def _live_continuation(connection, execution_id):
+    """The live execution a completed one continues in after the host's keep_working, or None."""
+    seen = set()
+    while execution_id and execution_id not in seen:
+        seen.add(execution_id)
+        link = connection.execute("SELECT next_id FROM execution_continuations WHERE execution_id=?", (execution_id,)).fetchone()
+        if not link:
+            return None
+        row = connection.execute("SELECT id,member_id,status,lease_until FROM member_executions WHERE id=?", (link[0],)).fetchone()
+        if row and row["status"] in ("dispatched", "started"):
+            return row
+        execution_id = row["id"] if row and row["status"] == "completed" else None
+    return None
+
+
 def session_message_access(connection, room_id, params, token=""):
     """Resolve a member's read boundary while validating any request or execution binding."""
     execution_id = _optional_identifier(params, "execution_id")
@@ -867,6 +900,12 @@ def session_message_access(connection, room_id, params, token=""):
                                        (room_id, execution_id)).fetchone()
         if not execution or execution["member_id"] != member["id"]:
             raise PermissionError(Text("执行编号不属于该成员"))
+        if execution["status"] == "completed":
+            # A host that dispatched with keep_working goes on in the execution its answer moved onto (K21); its
+            # credential still names the answered one, as answers already follow the same link.
+            live = _live_continuation(connection, execution_id)
+            if live:
+                execution, execution_id = live, live["id"]
         if execution["status"] not in ("dispatched", "started") or execution["lease_until"] <= int(time.time()):
             raise FileExistsError(Text("执行已结束或过期，不能继续读取其上下文"))
         rows = connection.execute("""SELECT sr.* FROM member_requests r JOIN session_requests sr

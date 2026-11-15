@@ -60,12 +60,21 @@ export function review_capability_version(profile, member, config) {
   if (!profile || profile.project_access !== 'read' || member.access !== 'runner' || member.session_mode !== 'new'
     || !capabilities_of(profile.adapter).enforces_read_only || profile.adapter !== member.adapter
     || !profile.cwd || profile.allowed_tools?.length) return '';
-  const project = cwd_key(profile.cwd), drafts = cwd_key(config.draft_directory || `${config.directory}-drafts`);
+  const project = cwd_key(profile.cwd), drafts = cwd_key(member_drafts(config, member.name));
   if (drafts === project || drafts.startsWith(`${project}/`)) return '';
   const facts = [1, profile.adapter, profile.executable || '', cwd_key(profile.cwd), cwd_key(profile.workdir),
     profile.project_id || '', profile.project_name || '', profile.session_id || '', drafts,
     cwd_key(config.directory)];
   return createHash('sha256').update(JSON.stringify(facts)).digest('hex');
+}
+
+/**
+ * One member's own drafts folder inside the room's: unsubmitted answers of different members never share a folder, and
+ * the folder the member's software is allowed to edit (and, for file tools, to read) is only its own (必 10).
+ */
+export function member_drafts(config, name) {
+  const base = config.draft_directory || `${config.directory}-drafts`;
+  return join(base, createHash('sha256').update(String(name)).digest('hex').slice(0, 16));
 }
 
 /** Whether a process with this pid exists; signal 0 only checks, and EPERM means it exists under another user. */
@@ -193,7 +202,7 @@ async function save_attachment(config, execution_id, message_id, entry, sha256) 
 export function free_task_files(config, member, execution, binding, { session = null, suggestions = [], reviews = [], stopped = [], process_access = true,
   workflow = null, room_members = [], goal = null, attachments = [] } = {}) {
   const id = `free-${execution.id}`;
-  const draft_directory = config.draft_directory || `${config.directory}-drafts`;
+  const draft_directory = member_drafts(config, member.name);
   mkdirSync(draft_directory, { recursive: true });
   const access_path = join(config.directory, `${id}.access.json`);
   const task_path = join(config.directory, `${id}.task.json`);
@@ -215,7 +224,7 @@ export function free_task_files(config, member, execution, binding, { session = 
   const { instructions, prompt } = free_task_text({ name: member.label || member.name, role: member.role, discussion: direct_question,
     discussion_request, profile, cli,
     room: config.room, messages, read_after: execution.read_until, execution_id: execution.id, task_path,
-    access_file: bound_access ? '' : access_path, read_rule: read_rule(profile.adapter), inbox, extra_directories, attachments });
+    access_file: bound_access ? '' : access_path, read_rule: read_rule(profile.adapter), inbox, extra_directories, attachments, requests });
   // Software that declares it takes images gets them with the prompt, like a screenshot pasted into its own window.
   const images = takes_images(profile) && !inbox
     ? attachments.filter(item => item.path && IMAGE_TYPES.has(item.content_type)).map(item => ({ path: item.path, content_type: item.content_type, size: item.size }))
@@ -248,6 +257,10 @@ export function free_task_files(config, member, execution, binding, { session = 
     ...(goal_field ? { goal: goal_field } : {}),
     ...(stopped.length ? { stopped_executions: stopped } : {}),
     role: member.role || 'member',
+    // Said on every task from the adapter's declaration, so a member knows whether its last words can become the answer.
+    answer_capture: adapter?.capabilities.capture
+      ? '软件正常结束、本次执行既没有已接受的回答也没有被拒的提交时，程序把你最后一段文字收为本次回答（标为自动收录，不派活、不唤醒成员）；已提交或提交被拒时不收录'
+      : '不收录：只有你提交的回答会保存，结束时的文字不会成为回答',
     read_after: execution.read_until, cwd: profile.cwd || null, project_access: profile.project_access, draft_directory,
     ...(extra_directories.length ? { extra_directories } : {}),
     skills: skills.map(file => join(config.project, '.agents/skills', file)),
@@ -275,8 +288,16 @@ function api_sub_workflows(field, workflow) {
  * session, steered by what the owner added. The task file and credentials are written again as at its first delivery.
  */
 export function resume_prompt(execution_id, texts) {
-  return `房主在私聊窗口暂停了你正在做的这次房间任务（执行 #${execution_id}，仍在进行，没有结束），并补充了下面的话。`
+  return `你正在做的这次房间任务（执行 #${execution_id}，仍在进行，没有结束）被暂停，插入了下面的话（每条开头注明是用户还是主持人说的）。`
     + `按补充调整后接着完成原任务，已经做完的部分不必重做；完成后照常用 codiscuss 提交这次执行的回答。\n\n${texts.join('\n\n')}`;
+}
+
+/**
+ * What a member hears of one interjection: who said it, then the words. The host's (sent through host-control) is
+ * marked as the host's, so the member does not take it for the owner's; adapters pass the text on unchanged.
+ */
+export function interjection_text(item) {
+  return item.author ? `主持人 ${item.author} 插话：${item.text}` : `用户插话：${item.text}`;
 }
 
 /**
@@ -298,7 +319,7 @@ const CHAT_PREAMBLE = '房主在私聊窗口直接对你说（不在房间消息
  */
 export function chat_task_files(config, member, chat, binding) {
   const id = `chat-${chat.id}`;
-  const draft_directory = config.draft_directory || `${config.directory}-drafts`;
+  const draft_directory = member_drafts(config, member.name);
   mkdirSync(draft_directory, { recursive: true });
   const access_path = join(config.directory, `${id}.access.json`);
   const profile = effective_profile(config.participants[member.name], member.name, null);
@@ -358,6 +379,8 @@ export class FreeRoomRunner {
     // Per live execution, how to pass an interjection to its running software; and interjections already handed over.
     this.steers = new Map();
     this.interjecting = new Map();
+    // Queued requests already pointed out to the member running beside them (queued_notice), by request id.
+    this.queued_noticed = new Set();
     // Per member, the private chat turn running in its session.
     this.chat_turns = new Map();
     this.members = new Map();
@@ -377,9 +400,12 @@ export class FreeRoomRunner {
     this.not_started = new Set();
     // Executions whose software failed in a way a retry meets again (a used-up limit, a lost login), as its adapter reported.
     this.not_retryable = new Set();
+    this.failure_classes = new Map();
     this.snapshots = new Map();
     // Execution id -> { phase, at, sent_phase, sent_at }: what the member's software last showed it doing.
     this.activity = new Map();
+    // Execution id -> until when its completed software may still record its receipt (0: stop it now), see `closing`.
+    this.closed_at = new Map();
     this.segments = new SegmentLog();
     // Execution id -> the execution its software turn moved onto when its host dispatched with keep_working.
     this.continued = new Map();
@@ -480,6 +506,7 @@ export class FreeRoomRunner {
     await this.report_finished(active);
     this.sweep_attachments();
     await this.deliver_interjections(inbox.executions);
+    await this.notice_queued(inbox);
     const pending_stops = await this.report_stops(active);
     // Start in the room's speaking order: execution ids follow it, and the website lays out working cards by them.
     const rank = (room.speaking_order?.items || []).map(item => item.name);
@@ -899,7 +926,9 @@ export class FreeRoomRunner {
       // A resumed execution's session was already cut at its first delivery.
       const warning = resume ? '' : await this.cut_rewound(member.name, adapter, binding, execution);
       const session_request = execution.requests?.find(item => item.session_request_id && ['discuss', 'discuss_host'].includes(item.purpose));
-      const session = this.room?.session ? { ...this.room.session } : null;
+      // The room view keeps the discussion's phase beside its session; the task carries both together, and an ended
+      // discussion not at all, so a member is not steered by a session that no longer runs (F5).
+      const session = ['active', 'paused'].includes(this.room?.session?.status) ? { ...this.room.session, phase: this.room.phase } : null;
       const scheduler_suggestions = !this.config.scheduler || member.role !== 'host' ? []
         : session_request?.purpose === 'discuss_host' ? this.session_driver.take_suggestions(session_request.id)
           : execution.requests.map(request => this.saved_suggestion(request.id)).filter(Boolean);
@@ -947,10 +976,13 @@ export class FreeRoomRunner {
           if (snapshot && !paths.length) snapshot.edited ||= new Set();
         },
         // A stopped process may report after the next execution started; only its own execution takes the result.
-        on_failure: (error, { not_started = false, retryable = true } = {}) => {
+        on_failure: (error, { not_started = false, retryable = true, failure_class = '', resets = '', reset_at = 0 } = {}) => {
           if (!current()) return;
           if (not_started) this.not_started.add(live());
           if (!retryable) this.not_retryable.add(live());
+          // The adapter's classification (only `quota` so far) goes to the site with the failure, which holds the member.
+          if (failure_class === 'quota') this.failure_classes.set(live(), { failure_class, ...(resets ? { resets: String(resets) } : {}),
+            ...(Number.isSafeInteger(reset_at) && reset_at > 0 ? { reset_at } : {}) });
           try { if (this.row(member.name)?.execution_id === live()) this.save(member.name, { error }); } catch { /* Store may already be closed at shutdown. */ }
         },
         on_exit: denial => { if (current()) this.exited.set(live(), denial || ''); },
@@ -1027,6 +1059,23 @@ export class FreeRoomRunner {
       return '';
     } catch (error) { return `会话未能回退（${error.message}），本次沿用原会话，它可能仍记得已回退的内容`; }
   }
+  /**
+   * After an execution completed normally, its software may run on for the close window its adapter declares, so the
+   * receipt of the answer it just submitted is recorded in its own session before it is stopped (spec #3262 item 8:
+   * Codex CLI was stopped about 0.1 s before recording one, 必 5a). Any other end (stopped, failed, withdrawn) stops it at
+   * once, and so does an adapter that declares no window. True while the window is open; the member stays busy meanwhile.
+   */
+  async closing(member, row) {
+    if (!this.members.get(member.name)?.size) { this.closed_at.delete(row.execution_id); return false; }
+    if (!this.closed_at.has(row.execution_id)) {
+      const grace = capabilities_of(this.config.participants[member.name]?.adapter).close_grace_ms || 0;
+      const ended = grace ? await api(this.config, `/executions/${row.execution_id}`).catch(() => null) : null;
+      this.closed_at.set(row.execution_id, ended?.status === 'completed' ? Date.now() + grace : 0);
+    }
+    if (Date.now() < this.closed_at.get(row.execution_id)) return true;
+    this.closed_at.delete(row.execution_id);
+    return false;
+  }
   /** Follow the website's verdict; stop only this member's processes when its execution ends. */
   async reconcile(member, row, active) {
     if (row.status === 'reserving') return this.reserve(member, row);
@@ -1039,6 +1088,7 @@ export class FreeRoomRunner {
     }
     const execution = active.get(row.execution_id);
     if (!execution) {
+      if (await this.closing(member, row)) return;
       this.forget_owner(row.execution_id);
       this.activity.delete(row.execution_id);
       await this.report_segments(row.execution_id, true);
@@ -1073,7 +1123,7 @@ export class FreeRoomRunner {
       if (this.exited.has(execution.id)) {
         const latest = await api(this.config, `/executions/${execution.id}`);
         const denial = this.exited.get(execution.id);
-        if (['dispatched', 'started'].includes(latest.status) && !denial && await this.capture_reply(member.name, execution.id)) {
+        if (['dispatched', 'started'].includes(latest.status) && !denial && await this.capture_reply(member.name, execution.id, latest)) {
           return this.save(member.name, { status: 'idle' });
         }
         if (['dispatched', 'started'].includes(latest.status)) return this.fail(member.name, execution.id, denial ? room_text("{value1} {value2}，未提交本次回答", { value1: member.name, value2: denial }) : room_text("{value1} 会话已结束，但未提交本次回答；请核对原会话确认是否已有内容", { value1: member.name }));
@@ -1108,6 +1158,7 @@ export class FreeRoomRunner {
       if (map.has(old)) { map.set(id, map.get(old)); map.delete(old); }
     }
     for (const set of [this.denied, this.not_started, this.not_retryable]) if (set.delete(old)) set.add(id);
+    if (this.failure_classes.has(old)) { this.failure_classes.set(id, this.failure_classes.get(old)); this.failure_classes.delete(old); }
     const snapshot = this.snapshots.get(old);
     if (snapshot) this.snapshots.set(id, { member: snapshot.member, directory: snapshot.directory,
       before: snapshot.before ? workspace_snapshot(snapshot.directory) : null,
@@ -1141,7 +1192,7 @@ export class FreeRoomRunner {
     if (processes?.size || !execution.interjections?.length) return false;
     this.save(member.name, { status: 'delivering', error: '' });
     await api(this.config, `/executions/${execution.id}`, { action: 'resume' });
-    await this.invoke(member, execution, { resume: resume_prompt(execution.id, execution.interjections.map(item => item.text)) });
+    await this.invoke(member, execution, { resume: resume_prompt(execution.id, execution.interjections.map(interjection_text)) });
     if (this.row(member.name)?.status !== 'running') return true;
     for (const interjection of execution.interjections) {
       this.interjecting.set(interjection.id, { status: 'delivered' });
@@ -1268,13 +1319,18 @@ export class FreeRoomRunner {
   }
   /**
    * The software ended normally without submitting: save its last remark as this execution's answer, marked as
-   * captured (`source: auto`), under the member's own credential. It dispatches nothing. Returns false when there is
-   * no usable remark or the website refused it, so the caller reports the missing answer as before.
+   * captured (`source: auto`), under the member's own credential. It dispatches nothing. Only a delivery whose adapter
+   * declares `capture` is captured, and only while the service holds no answer and no refused submit for the execution
+   * (`latest.delivery.last_submission`, spec #3262 item 7): a submit that went wrong is reported, never replaced by other
+   * text. Returns false when there is no usable remark or the website refused it, so the caller reports the missing
+   * answer as before.
    */
-  async capture_reply(name, execution_id) {
+  async capture_reply(name, execution_id, latest = {}) {
     const text = this.replies.get(execution_id)?.trim() || '';
     this.replies.delete(execution_id);
     if (this.denied.delete(execution_id)) return false;
+    if (!capabilities_of(this.config.participants?.[name]?.adapter).capture) return false;
+    if (['accepted', 'rejected'].includes(latest.delivery?.last_submission?.outcome)) return false;
     const token = this.config.members?.[name]?.token;
     if (!text || text === '(pass)' || text.length > MAX_CAPTURED_REPLY || !token) return false;
     try {
@@ -1330,9 +1386,11 @@ export class FreeRoomRunner {
     this.activity.delete(execution_id);
     this.not_started.delete(execution_id);
     this.not_retryable.delete(execution_id);
+    const failure_class = this.failure_classes.get(execution_id) || {};
+    this.failure_classes.delete(execution_id);
     await this.report_segments(execution_id, true);
     let recorded = true;
-    try { await api(this.config, `/executions/${execution_id}`, { action: 'fail', reason }); }
+    try { await api(this.config, `/executions/${execution_id}`, { action: 'fail', reason, ...failure_class }); }
     catch (error) { if (!/HTTP 409/.test(error.message)) throw error; recorded = false; }
     if (recorded && this.on_failed) {
       try { this.on_failed({ member: name, execution_id, reason, room: this.config.room, title: this.room_title || '' }); }
@@ -1355,6 +1413,25 @@ export class FreeRoomRunner {
       .filter(row => LIVE.includes(row.status)).map(row => `free-${row.execution_id}-files`));
     for (const name of names) if (!live.has(name)) rmSync(join(this.config.directory, name), { recursive: true, force: true });
   }
+  /**
+   * A request that queued for a member while it works is pointed out to it once, through the same channel as an
+   * interjection, so it may deliver both in one answer (应 2); software that cannot take it mid-turn is not told, and
+   * the request simply follows when this turn ends.
+   */
+  async notice_queued(inbox) {
+    for (const execution of inbox.executions || []) {
+      const steer = this.steers.get(execution.id);
+      const member = (inbox.members || []).find(item => item.name === execution.member);
+      if (!steer || execution.paused_at || !member) continue;
+      const fresh = (member.pending || []).filter(item => ['ask', 'route', 'all'].includes(item.purpose) && !item.session_request_id
+        && !this.queued_noticed.has(item.id));
+      if (!fresh.length) continue;
+      for (const item of fresh) this.queued_noticed.add(item.id);
+      const listed = fresh.map(item => `#${item.id}（消息 #${item.message_id}）`).join('、');
+      await Promise.resolve(steer(`房间提示：又有请求 ${listed} 在排队等你。和本次任务相关、能一并处理的，可在本次回答里一起交付`
+        + `（CLI 加 --also-request 请求编号，API 填 also_request_ids）；不相关的不用管，本次答完后会再交给你。`)).catch(() => {});
+    }
+  }
   async deliver_interjections(executions) {
     const live = new Set(executions.map(item => item.id));
     for (const id of this.steers.keys()) if (!live.has(id)) this.steers.delete(id);
@@ -1368,7 +1445,7 @@ export class FreeRoomRunner {
           const steer = this.steers.get(execution.id);
           report = { status: 'failed', reason: room_text("本次投递不支持执行中插话") };
           if (steer) {
-            try { report = await steer(interjection.text) ? { status: 'delivered' } : { status: 'failed', reason: room_text("它已结束本轮，插话未送达") }; }
+            try { report = await steer(interjection_text(interjection)) ? { status: 'delivered' } : { status: 'failed', reason: room_text("它已结束本轮，插话未送达") }; }
             catch (error) { report = { status: 'failed', reason: String(error.message).slice(0, 400) }; }
           }
           this.interjecting.set(interjection.id, report);
@@ -1395,7 +1472,7 @@ export class FreeRoomRunner {
         if (chat.status === 'running' && chat.id !== live?.id) await this.chat_report(chat.id, { action: 'fail', reason: room_text("本机服务重启，这轮私聊已中断") });
         else if (chat.status === 'pending' && live?.steer && !live.steered.has(chat.id)) {
           live.steered.add(chat.id);
-          if (await live.steer(chat.text)) await this.chat_report(chat.id, { action: 'steered' });
+          if (await live.steer(interjection_text({ text: chat.text }))) await this.chat_report(chat.id, { action: 'steered' });
         }
       }
       const next = chats.find(chat => chat.status === 'pending' && !live?.steered.has(chat.id));
