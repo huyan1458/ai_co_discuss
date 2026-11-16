@@ -81,11 +81,15 @@ export const TASK_SUBCOMMANDS = ['room', 'message', 'turn', 'state', 'goal', 'mo
 /**
  * The task text for a member woken on this computer for a room on another computer (an external member): the project
  * lives over there and is read only through `repo`; a locked-down run (`lockdown`) may run only codiscuss subcommands and
- * write only in `draft_directory`. `access_file` is the run's external access file.
+ * write only in `draft_directory`. `access_file` is the run's external access file. `directories` are what the other
+ * side opens now (`[{root, name}]`), empty when it opens no project (only discussion).
  */
-export function external_task_text({ name, messages, requests = [], cli, access_file, task_path, lockdown, draft_directory }) {
+export function external_task_text({ name, messages, requests = [], cli, access_file, task_path, lockdown, draft_directory, directories = [] }) {
   const access = ` --access-file ${access_file}`;
-  const reading = `项目在对方电脑上，本机没有它的文件：先用 ${cli} repo ls${access} 看开放目录，再用 ${cli} repo ls 目录 --root 序号${access}、${cli} repo read 文件 --root 序号${access}、${cli} repo grep 关键词 --root 序号${access} 只读查看；读不到的（范围外、敏感文件、配额用尽）如实说明，不猜测内容。`;
+  const opened = directories.map(item => `${item.root} ${item.name}`).join('、');
+  const reading = directories.length
+    ? `项目在对方电脑上，本机没有它的文件；对方开放的目录（序号 名称）：${opened}。用 ${cli} repo ls 目录 --root 序号${access}、${cli} repo read 文件 --root 序号${access}、${cli} repo grep 关键词 --root 序号${access} 只读查看；读不到的（范围外、敏感文件、配额用尽）如实说明，不猜测内容。`
+    : '对方这次只请你参与讨论，没有开放项目文件，不要用 repo 读取；需要看代码时在回答里说明。';
   const limits = lockdown ? `本次只能运行 ${cli} 子命令，只能在 ${draft_directory} 写草稿，不能读写其他本机文件或联网。` : '';
   const instructions = `你作为外部成员参加另一台电脑上的房间，只读对方开放的项目，不修改任何文件。命令只用 subcommands 列出的 ${cli} 子命令。${limits}${reading}`;
   const prompt = `${wake_opening(requests, name)}（来自另一台电脑上的房间），对应消息 ${messages}。${instructions}`

@@ -45,7 +45,7 @@ async function verify(jwk, signature, text) {
 function fake_b() {
   const ecdh = jwk_pair(), sign = jwk_pair();
   const state = { online: true, registered: {}, pending: [], open: new Set(), declines: [], executions: [], claims: 0, answers: [], leaves: 0, posts: 0,
-    calls: [], next_execution: 100, ended: '' };
+    calls: [], next_execution: 100, ended: '', me: { name: 'Claude-ext', scope: 'read', expires_at: 1763203600, directories: [{ root: 0, name: 'app' }] } };
   const api = (method, path, body) => {
     state.calls.push(`${method} ${path}`);
     if (state.ended) return { status: 403, body: { error: '外部成员已结束', code: 'external_ended', reason: state.ended } };
@@ -70,9 +70,12 @@ function fake_b() {
       return { status: 200, body: { id: Number(execution[1]) } };
     }
     if (path === MEMBER_API.answer(ROOM)) { state.answers.push(body); state.open.delete(body.execution_id); return { status: 201, body: { id: 77 } }; }
-    if (path === MEMBER_API.view(ROOM)) return { status: 200, body: { room: { id: ROOM }, me: { name: 'Claude-ext' } } };
+    if (path === MEMBER_API.view(ROOM)) return { status: 200, body: { room: { id: ROOM }, me: state.me } };
+    const one = path.match(new RegExp(`^${MEMBER_API.messages(ROOM)}/(\\d+)$`));
+    if (one) return { status: 200, body: { message: { id: Number(one[1]), author: '用户', text: `请求正文 ${one[1]} ` + 'x'.repeat(5000) } } };
     if (path === `${MEMBER_API.messages(ROOM)}?mention=Claude-ext`) return { status: 200, body: { messages: [{ id: 40, author: '用户', text: '@Claude-ext 看看' }, { id: 44, author: '用户', text: '再看' }] } };
-    if (path === `${MEMBER_API.messages(ROOM)}?author=Claude-ext`) return { status: 200, body: { messages: [{ id: 42, author: 'Claude-ext', text: '方案' }, { id: 40, author: '用户', text: '@Claude-ext 看看' }] } };
+    if (path === `${MEMBER_API.messages(ROOM)}?author=Claude-ext`) return { status: 200, body: { messages: [{ id: 42, author: 'Claude-ext', text: '方案' }, { id: 40, author: '用户', text: '@Claude-ext 看看' },
+      ...state.answers.map((answer, index) => ({ id: 200 + index, author: 'Claude-ext', text: answer.text, execution_id: answer.execution_id }))] } };
     if (path.startsWith(`/api/external/rooms/${ROOM}/messages`)) return { status: 200, body: { ok: true, path } };
     return { status: 403, body: { error: 'external_route_forbidden' } };
   };
@@ -151,7 +154,18 @@ async function joined(t, b, extra = {}) {
 }
 
 const deps = (b, delivery, more = {}) => ({ fetcher: b.fetcher, deliver: delivery.deliver, software: { executable: 'C:/fake/claude.exe' }, ...more });
-const settle = () => new Promise(done => setTimeout(done, 80));
+/**
+ * Wait until `check()` holds: a run's end is reported in the background (its adapter callback), so the test waits for the
+ * state that report leaves rather than for a fixed time. Fails after `limit` ms.
+ */
+async function wait_for(check, limit = 5000) {
+  for (const started = Date.now(); !check();) {
+    if (Date.now() - started > limit) throw new Error('等待的状态没有出现');
+    await new Promise(done => setTimeout(done, 10));
+  }
+}
+const ended = (home, id, execution_id) => () => read_store(home).records[id].history.some(item => item.execution_id === execution_id && item.outcome !== 'woken');
+const reported = (b, action) => () => b.state.executions.some(item => item.action === action);
 
 test('joining keeps the key and credential out of the record and every command output', async t => {
   const b = fake_b();
@@ -211,7 +225,6 @@ test('default trust waits for consent; approving lets the service wake a locked-
   const task = JSON.parse(readFileSync(run.task.task_path, 'utf8'));
   assert.ok(task.subcommands.includes('repo'));
   assert.match(run.task.prompt, /repo read 文件 --root/);
-  await settle();
   assert.deepEqual(b.state.executions.map(item => item.action), ['delivery']);
   assert.equal(read_store(home).records[record.id].running.execution_id, 100);
 });
@@ -223,12 +236,11 @@ test('a running execution is renewed, and ending without an answer fails it ther
   b.state.pending = [{ id: 1, message_id: 10 }];
   const start = Date.now();
   await poll_record(home, record.id, deps(b, delivery, { now: () => start }));
-  await settle();
   assert.equal((await poll_record(home, record.id, deps(b, delivery, { now: () => start + 1000 }))).renewed, undefined);
   assert.equal((await poll_record(home, record.id, deps(b, delivery, { now: () => start + RENEW_MS + 1 }))).renewed, true);
   assert.ok(b.state.executions.some(item => item.action === 'renew'));
   delivery.runs[0].task.on_exit();
-  await settle();
+  await wait_for(reported(b, 'fail'));
   const failed = b.state.executions.find(item => item.action === 'fail');
   assert.match(failed.reason, /未提交本次回答|without submitting/);
   const after = read_store(home).records[record.id];
@@ -241,7 +253,7 @@ test('a running execution is renewed, and ending without an answer fails it ther
     body: { author: 'Claude-ext', text: '方案如下', execution_id: 101, submission_id: 'sub-1', kind: 'chat', to: ['Codex'] } }, { fetcher: b.fetcher });
   assert.deepEqual(b.state.answers, [{ text: '方案如下', execution_id: 101, submission_id: 'sub-1' }]);
   delivery.runs[1].task.on_exit();
-  await settle();
+  await wait_for(ended(home, record.id, 101));
   assert.equal(b.state.executions.filter(item => item.action === 'fail').length, 1);
 });
 
@@ -269,7 +281,7 @@ test('full borrowing wakes directly within its limits, then falls back to asking
   assert.equal((await poll_record(home, record.id, deps(b, delivery))).execution_id, 100);
   assert.equal(delivery.runs[0].task.tool_lockdown, true);
   delivery.runs[0].task.on_failure(new Error('模型额度用尽'));
-  await settle();
+  await wait_for(reported(b, 'fail'));
   assert.equal(b.state.executions.at(-1).reason, '模型额度用尽');
   b.state.pending = [{ id: 11, message_id: 51 }];
   assert.ok((await poll_record(home, record.id, deps(b, delivery))).approval, 'limit used up: ask the owner');
@@ -348,8 +360,13 @@ test('leaving tells the inviting computer and drops the key here', async t => {
 
 test('the external task text points the AI at repo and its own access file', () => {
   assert.ok(TASK_SUBCOMMANDS.includes('repo'));
-  const { prompt } = external_task_text({ name: 'Claude-ext', messages: '#40', cli: 'codiscuss', access_file: '/x/a.json', task_path: '/x/t.json', lockdown: true, draft_directory: '/x/drafts' });
+  const { prompt } = external_task_text({ name: 'Claude-ext', messages: '#40', cli: 'codiscuss', access_file: '/x/a.json', task_path: '/x/t.json', lockdown: true,
+    draft_directory: '/x/drafts', directories: [{ root: 0, name: 'app' }] });
   assert.match(prompt, /codiscuss repo grep 关键词 --root 序号 --access-file \/x\/a\.json/);
+  assert.match(prompt, /0 app/);
+  const discuss = external_task_text({ name: 'Claude-ext', messages: '#40', cli: 'codiscuss', access_file: '/x/a.json', task_path: '/x/t.json', lockdown: true, draft_directory: '/x/drafts' });
+  assert.doesNotMatch(discuss.prompt, /repo read/);
+  assert.match(discuss.prompt, /没有开放项目文件/);
   assert.match(prompt, /只能在 \/x\/drafts 写草稿/);
 });
 
@@ -484,4 +501,74 @@ test('a model API member joins and runs with its saved endpoint and an external 
   assert.ok(!('token' in context));
   const read = await repo_command(context.home, 'read', { root: 0, path: 'a.js' }, context.external_access, { fetcher: b.fetcher });
   assert.equal(read.text, 'hello');
+});
+
+test('a run that answered but ended with an error counts as answered, not failed', async t => {
+  const b = fake_b(), delivery = fake_deliver();
+  const { home, record } = await joined(t, b);
+  await invited_command(home, 'invited-trust', { id: record.id, trust: 'trusted' });
+  b.state.pending = [{ id: 40, message_id: 120 }];
+  await poll_record(home, record.id, deps(b, delivery));
+  await proxy_request(home, { access: { transport: 'external', record: record.id, room: ROOM }, method: 'POST', path: `/api/rooms/${ROOM}/messages`,
+    body: { text: '已答', execution_id: 100, submission_id: 'sub-9' } }, { fetcher: b.fetcher });
+  delivery.runs[0].task.on_failure(new Error('进程退出码 1'));
+  await wait_for(ended(home, record.id, 100));
+  assert.ok(!b.state.executions.some(item => item.action === 'fail'));
+  const last = read_store(home).records[record.id].history.at(-1);
+  assert.deepEqual([last.outcome, last.execution_id, last.reason], ['answered', 100, '进程退出码 1']);
+});
+
+test('errors shown on the page carry a template and a stable code', async t => {
+  const b = fake_b();
+  const { home, record } = await joined(t, b);
+  await assert.rejects(invited_command(home, 'invited-trust', { id: record.id, trust: 'full' }), error =>
+    error.code === 'invalid_trust' && error.error_text.template === '信任等级只能是 default、borrow 或 trusted');
+  await assert.rejects(invited_command(home, 'invited-approve', { id: 'missing' }), error =>
+    error.code === 'record_not_found' && error.error_text.params.id === 'missing');
+  b.state.online = false;
+  await assert.rejects(invited_command(home, 'invited-leave', { id: record.id }, { fetcher: b.fetcher }).then(() => { throw new Error('left'); }), /left/);
+  const { contact } = (await invited_command(home, 'invited-list')).records[0];
+  assert.equal(contact.state, 'offline');
+  assert.equal(contact.code, 'offline');
+  assert.match(contact.error_text.template, /对方电脑不在线/);
+});
+
+test('the record and the AI follow what the inviting room grants now', async t => {
+  const b = fake_b(), delivery = fake_deliver();
+  const { home, record } = await joined(t, b);
+  await invited_command(home, 'invited-trust', { id: record.id, trust: 'trusted' });
+  b.state.me = { name: 'Claude-ext', scope: 'discuss', expires_at: 1763900000, directories: [] };
+  await poll_record(home, record.id, deps(b, delivery));
+  const shown = (await invited_command(home, 'invited-list')).records[0];
+  assert.deepEqual([shown.open_level, shown.expires_at, shown.directories], ['discuss', 1763900000000, []]);
+  b.state.me = { name: 'Claude-ext', scope: 'read', expires_at: 1764000000, directories: [{ root: 0, name: 'app' }, { root: 1, name: 'lib' }] };
+  b.state.pending = [{ id: 50, message_id: 130 }];
+  await poll_record(home, record.id, deps(b, delivery));
+  const [run] = delivery.runs;
+  assert.match(run.task.prompt, /0 app、1 lib/);
+  const task = JSON.parse(readFileSync(run.task.task_path, 'utf8'));
+  assert.deepEqual(task.directories, [{ root: 0, name: 'app' }, { root: 1, name: 'lib' }]);
+  assert.equal(read_store(home).records[record.id].expires_at, 1764000000000);
+});
+
+test('the kept history still shows request and answer texts once the inviting room cannot be read', async t => {
+  const b = fake_b(), delivery = fake_deliver();
+  const { home, record } = await joined(t, b);
+  await invited_command(home, 'invited-trust', { id: record.id, trust: 'trusted' });
+  b.state.pending = [{ id: 60, message_id: 140 }];
+  await poll_record(home, record.id, deps(b, delivery));
+  await proxy_request(home, { access: { transport: 'external', record: record.id, room: ROOM }, method: 'POST', path: `/api/rooms/${ROOM}/messages`,
+    body: { text: '回答正文', execution_id: 100, submission_id: 'sub-60' } }, { fetcher: b.fetcher });
+  delivery.runs[0].task.on_exit();
+  await wait_for(ended(home, record.id, 100));
+  b.state.online = false;
+  const view = await invited_command(home, 'invited-room', { id: record.id }, { fetcher: b.fetcher });
+  assert.equal(view.room, null);
+  assert.ok(view.error);
+  const request = view.messages.find(item => item.id === 140);
+  assert.ok(request.text.startsWith('请求正文 140'));
+  assert.equal(request.text.length, 4000);
+  const answer = view.messages.find(item => item.execution_id === 100);
+  assert.deepEqual([answer.author, answer.text, answer.kept], ['Claude-ext', '回答正文', true]);
+  assert.ok(view.messages.every((item, index, list) => index === 0 || list[index - 1].id < item.id));
 });

@@ -195,11 +195,15 @@ test('worst-case results fit the 512 KiB relay envelope after JSON escaping and 
   const envelope = (value) => Math.ceil(Buffer.byteLength(JSON.stringify(value)) / 3) * 4;
   const read = await repo_read(root, 'quotes.txt');
   assert.ok(envelope(read) < RELAY_ENVELOPE_BYTES, `read ${envelope(read)}`);
-  const grep = await repo_grep(root, 'needle', { max_results: 500 });
+  // Loaded CI machines can exceed the 3 s default; the limits under test here are results and bytes, not time.
+  const slow_ok = { time_limit_ms: 30000 };
+  const grep = await repo_grep(root, 'needle', { max_results: 500, ...slow_ok });
   assert.equal(grep.truncated, true);
   assert.ok(['bytes', 'results'].includes(grep.truncated_by));
   assert.ok(envelope(grep) < RELAY_ENVELOPE_BYTES, `grep ${envelope(grep)}`);
-  const few = await repo_grep(root, 'needle', { max_results: 3 });
+  const timed_out = await repo_grep(root, 'needle', { time_limit_ms: 0 });
+  assert.deepEqual([timed_out.ok, timed_out.matches.length, timed_out.truncated, timed_out.truncated_by], [true, 0, true, 'time']);
+  const few = await repo_grep(root, 'needle', { max_results: 3, ...slow_ok });
   assert.equal(few.matches.length, 3);
   assert.equal(few.truncated_by, 'results');
   assert.ok(few.matches.every((match) => match.text.length <= 400));

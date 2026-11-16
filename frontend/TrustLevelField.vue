@@ -10,18 +10,21 @@ import { t } from "./i18n.js";
 
 // { trust, max_wakes, hours }
 const value = defineModel({ type: Object, required: true });
+// D6a: 信任设备 lifts the AI's limits for good, so only this computer's own page may choose it.
+const props = defineProps({ trusted_locked: Boolean });
 const set = (changes) => { value.value = { ...value.value, ...changes }; };
 const MAX_WAKES = 1000;
 // Each instance its own radio group: the join dialog and the rail may both be open.
 const group = useId();
+const locked = (option) => props.trusted_locked && option.value === "trusted";
 </script>
 
 <template>
   <fieldset class="trust-level">
     <legend>{{ t("信任等级") }}</legend>
-    <label v-for="option in TRUST_LEVELS" :key="option.value" class="trust-option" :class="{ 'is-selected': value.trust === option.value }">
-      <input type="radio" :name="group" :value="option.value" :checked="value.trust === option.value" @change="set({ trust: option.value })" />
-      <span><b>{{ option.label }}</b><small>{{ option.description }}</small></span>
+    <label v-for="option in TRUST_LEVELS" :key="option.value" class="trust-option" :class="{ 'is-selected': value.trust === option.value, 'is-disabled': locked(option) }">
+      <input type="radio" :name="group" :value="option.value" :aria-label="option.label" :checked="value.trust === option.value" :disabled="locked(option)" @change="set({ trust: option.value })" />
+      <span><b>{{ option.label }}</b><small>{{ locked(option) ? t("只能在这台电脑本机设置") : option.description }}</small></span>
     </label>
     <div v-if="value.trust === 'borrow'" class="trust-limits">
       <span>{{ t("最多唤醒") }}</span>
@@ -40,6 +43,7 @@ const group = useId();
 .trust-level legend { margin-bottom: 4px; color: var(--ui-text-toned); font-size: 12px; }
 .trust-option { display: flex; gap: 8px; padding: 8px; border: 1px solid var(--ui-border-muted); border-radius: 8px; cursor: pointer; font-size: 12px; }
 .trust-option.is-selected { border-color: var(--channel-accent); }
+.trust-option.is-disabled { opacity: .5; cursor: not-allowed; }
 .trust-option span { display: flex; flex-direction: column; gap: 2px; }
 .trust-option small { color: var(--ui-text-muted); }
 .trust-limits { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; font-size: 12px; color: var(--ui-text-toned); }

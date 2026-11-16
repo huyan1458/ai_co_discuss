@@ -4,7 +4,7 @@
  * reading (file, bytes, allowed or refused), and revoke, extend or downgrade to discussion only. The record is this
  * computer's own audit, not anything the other side reports.
  */
-import { computed, inject, ref, watch } from "vue";
+import { computed, inject, ref, useId, watch } from "vue";
 import ConfirmDialog from "./ConfirmDialog.vue";
 import { DURATIONS, LEVEL_SHORT, extended_until, external_of, remaining_label, room_operations, time_ms } from "./external-members.js";
 import { t } from "./i18n.js";
@@ -14,7 +14,11 @@ const open = defineModel("open", { type: Boolean, default: false });
 const { view, bridge, act } = inject("discussion");
 const operations = room_operations(bridge);
 const room = computed(() => view.value.room);
-const info = computed(() => external_of(props.member));
+// The member as this dialog last read it (`GET …/external-members/{id}`), else as the rail passed it: after 延长 or
+// 降为只讨论 the dialog reads again, so its header and buttons follow at once.
+const info = computed(() => detail.value ? { level: detail.value.scope === "read" ? "read" : "discuss", expires_at: time_ms(detail.value.expires_at),
+  directories: (detail.value.directories || []).map((path) => String(path).split(/[\\/]/).filter(Boolean).pop() || path),
+  computer: detail.value.machine_label || "", ended: detail.value.status === "removed" } : external_of(props.member));
 const reads = ref([]), detail = ref(null), loading = ref(false), failure = ref("");
 const busy = ref(""), extend_to = ref("1h"), confirming = ref(false);
 
@@ -40,70 +44,108 @@ async function change(action, extra, success) {
     if (action === "revoke") await operations.revoke(room.value.id, props.member.id);
     else await operations.update(room.value.id, props.member.id, extra);
     bridge.notify("info", success);
-    await act("refresh");
+    await Promise.all([act("refresh"), action === "revoke" ? null : load()]);
     if (action === "revoke") open.value = false;
   } catch (error) { bridge.notify("error", error.message); }
   finally { busy.value = ""; }
 }
 const revoke_items = [t("立即生效：之后的请求与读取一律被拒，未完成的执行作废。"), t("已经读出去的内容收不回，会留在对方 AI 的会话里。")];
 const date = (value) => bridge.format_time(time_ms(value));
-const size = (bytes) => bytes >= 1024 ? t("{count} KiB", { count: Math.round(bytes / 1024) }) : t("{count} 字节", { count: bytes || 0 });
+// Ties the extend control to its visible label.
+const uid = useId();
+// Binary units, the same in both languages: whole numbers from 10 up, one decimal below (4 MiB, 1.5 KiB, 306 B).
+const BYTE_UNITS = ["B", "KiB", "MiB", "GiB"];
+function size(bytes) {
+  let value = Number(bytes) || 0, unit = 0;
+  while (value >= 1024 && unit < BYTE_UNITS.length - 1) { value /= 1024; unit += 1; }
+  const shown = unit === 0 || value >= 10 ? Math.round(value) : Math.round(value * 10) / 10;
+  return `${shown} ${BYTE_UNITS[unit]}`;
+}
 </script>
 
 <template>
   <UModal v-model:open="open" :title="t('外部成员 · {name}', { name: member ? bridge.display_name(member.name) : '' })"
-    :description="info ? [info.computer, LEVEL_SHORT[info.level], remaining_label(info.expires_at)].filter(Boolean).join(' · ') : ''" :ui="{ content: 'glass-panel studio-modal', body: 'dialog-body' }">
+    :description="info ? [info.computer, LEVEL_SHORT[info.level], info.ended ? t('已结束') : remaining_label(info.expires_at)].filter(Boolean).join(' · ') : ''" :ui="{ content: 'glass-panel studio-modal', body: 'dialog-body' }">
     <template #body>
       <div v-if="info" class="external-member">
-        <p v-if="info.directories.length" class="fine-print">{{ t("开放目录：{list}", { list: info.directories.map((path) => path.split(/[\\/]/).filter(Boolean).pop()).join("、") }) }}</p>
-        <p v-if="detail?.usage" class="fine-print">{{ t("已读 {used} / {limit}，本小时 {hour} / {hour_limit}；被拒 {denied} 次", { used: size(detail.usage.total_bytes), limit: size(detail.quota?.total_bytes), hour: size(detail.usage.hour_bytes), hour_limit: size(detail.quota?.hourly_bytes), denied: detail.usage.denied || 0 }) }}</p>
-        <section class="external-actions" :aria-label="t('调整')">
-          <div class="external-extend">
-            <span>{{ t("延长") }}</span>
-            <div class="external-durations" role="radiogroup" :aria-label="t('延长')">
-              <button v-for="option in DURATIONS" :key="option.value" type="button" role="radio" :aria-checked="extend_to === option.value" :class="{ 'is-selected': extend_to === option.value }" @click="extend_to = option.value">{{ option.label }}</button>
+        <!-- What is open now, laid out like an expert card's facts: a label column and a value column. -->
+        <dl class="external-member-facts">
+          <div><dt>{{ t("能做什么") }}</dt><dd>{{ LEVEL_SHORT[info.level] }}</dd></div>
+          <div v-if="info.level === 'read'"><dt>{{ t("开放目录") }}</dt><dd :title="info.directories.join('、')">{{ info.directories.join("、") || "—" }}</dd></div>
+          <div><dt>{{ t("剩余时间") }}</dt><dd>{{ info.ended ? t("已结束") : remaining_label(info.expires_at) || "—" }}</dd></div>
+          <div v-if="detail?.usage"><dt>{{ t("用量") }}</dt><dd>{{ t("{used} / {limit} · 本小时 {hour} / {hour_limit} · 被拒 {denied} 次", { used: size(detail.usage.total_bytes), limit: size(detail.quota?.total_bytes), hour: size(detail.usage.hour_bytes), hour_limit: size(detail.quota?.hourly_bytes), denied: detail.usage.denied || 0 }) }}</dd></div>
+        </dl>
+        <section v-if="!info.ended" class="external-member-actions" :aria-label="t('调整')">
+          <div class="external-member-extend">
+            <span :id="`${uid}-extend`" class="external-member-label">{{ t("延长") }}</span>
+            <div class="expert-card-modes" role="radiogroup" :aria-labelledby="`${uid}-extend`">
+              <button v-for="option in DURATIONS" :key="option.value" type="button" role="radio" :aria-checked="extend_to === option.value" @click="extend_to = option.value">{{ option.label }}</button>
             </div>
-            <UButton :label="t('延长')" size="xs" color="neutral" variant="outline" :loading="busy === 'extend'" :disabled="Boolean(busy) || info.ended" @click="change('extend', { expires_at: extended_until(info.expires_at, extend_to) }, t('已延长'))" />
+            <UButton :label="t('延长')" icon="i-lucide-clock-plus" size="xs" color="neutral" variant="outline" class="pb-action" :loading="busy === 'extend'" :disabled="Boolean(busy)" @click="change('extend', { expires_at: extended_until(info.expires_at, extend_to) }, t('已延长'))" />
           </div>
-          <div class="external-buttons">
-            <UButton v-if="info.level === 'read'" :label="t('降为只讨论')" icon="i-lucide-eye-off" size="xs" color="neutral" variant="outline" :loading="busy === 'downgrade'" :disabled="Boolean(busy) || info.ended" @click="change('downgrade', { scope: 'discuss' }, t('已降为只讨论，之后不能再读项目文件'))" />
-            <UButton :label="t('撤销')" icon="i-lucide-ban" size="xs" color="error" variant="soft" :disabled="Boolean(busy) || info.ended" @click="confirming = true" />
+          <div class="external-member-buttons">
+            <UButton v-if="info.level === 'read'" :label="t('降为只讨论')" icon="i-lucide-eye-off" size="xs" color="neutral" variant="outline" class="pb-action" :loading="busy === 'downgrade'" :disabled="Boolean(busy)" @click="change('downgrade', { scope: 'discuss' }, t('已降为只讨论，之后不能再读项目文件'))" />
+            <UButton :label="t('撤销授权')" icon="i-lucide-ban" size="xs" color="error" variant="soft" :disabled="Boolean(busy)" @click="confirming = true" />
           </div>
         </section>
-        <section :aria-label="t('读取记录')">
+        <p v-else class="external-member-ended" role="status"><UIcon name="i-lucide-circle-slash" />{{ t("这位外部成员已结束，不能再调整；需要时重新邀请。") }}</p>
+        <section class="external-member-reads" :aria-label="t('读取记录')">
           <h4>{{ t("读取记录") }}</h4>
-          <div v-if="loading" role="status"><USkeleton v-for="row in 3" :key="row" class="external-skeleton" /></div>
-          <p v-else-if="failure" class="fine-print" role="alert">{{ failure }} <UButton :label="t('重试')" size="xs" color="neutral" variant="link" @click="load" /></p>
-          <p v-else-if="!reads.length" class="fine-print">{{ t("还没有读取记录") }}</p>
-          <ul v-else class="external-reads">
+          <div v-if="loading && !reads.length" role="status" :aria-label="t('正在读取读取记录')"><USkeleton v-for="row in 3" :key="row" class="external-member-skeleton" /></div>
+          <p v-else-if="failure" class="external-member-error" role="alert"><UIcon name="i-lucide-circle-alert" /><span>{{ failure }}</span><UButton :label="t('重试')" icon="i-lucide-refresh-cw" size="xs" color="neutral" variant="ghost" @click="load" /></p>
+          <p v-else-if="!reads.length" class="external-member-empty">{{ t("还没有读取记录") }}</p>
+          <ul v-else class="external-member-list">
             <li v-for="(entry, index) in reads" :key="entry.id || index" :class="{ 'is-denied': !entry.allowed }">
-              <small>{{ date(entry.at) }}</small>
-              <span class="external-read-path" :title="[entry.directory, entry.path].filter(Boolean).join(' › ')">{{ entry.op ? `${entry.op} ` : "" }}{{ entry.path || "." }}</span>
-              <span>{{ entry.allowed ? size(entry.bytes) : t("拒绝：{reason}", { reason: entry.reason || t("超出范围") }) }}</span>
+              <span class="external-member-time">{{ date(entry.at) }}</span>
+              <span class="external-member-op">{{ entry.op || "read" }}</span>
+              <span class="external-member-path" :title="[entry.directory, entry.path].filter(Boolean).join(' › ')">{{ entry.path || "." }}</span>
+              <span class="external-member-result"><UIcon v-if="!entry.allowed" name="i-lucide-ban" aria-hidden="true" />{{ entry.allowed ? size(entry.bytes) : t("拒绝：{reason}", { reason: entry.reason || t("超出范围") }) }}</span>
             </li>
           </ul>
-          <p class="fine-print">{{ t("记录由这台电脑保存，不采用对方上报的内容。") }}</p>
+          <p class="external-member-note">{{ t("记录由这台电脑保存，不采用对方上报的内容。") }}</p>
         </section>
       </div>
-      <ConfirmDialog v-model:open="confirming" :title="t('撤销外部成员')" :items="revoke_items" :confirm-label="t('撤销')" danger @confirm="change('revoke', {}, t('已撤销，对方之后的请求都会被拒绝'))" />
+      <ConfirmDialog v-model:open="confirming" :title="t('撤销外部成员')" :items="revoke_items" :confirm-label="t('撤销授权')" danger @confirm="change('revoke', {}, t('已撤销，对方之后的请求都会被拒绝'))" />
     </template>
   </UModal>
 </template>
 
 <style scoped>
-.external-member { display: flex; flex-direction: column; gap: 12px; }
-.external-member .fine-print { margin: 0; }
-.external-member h4 { margin: 0 0 6px; color: var(--ui-text-highlighted); font-size: 13px; font-weight: 600; }
-.external-actions { display: flex; flex-direction: column; gap: 8px; }
-.external-extend, .external-buttons { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; font-size: 12px; }
-.external-durations { display: flex; gap: 3px; padding: 3px; border-radius: 6px; background: var(--ui-bg-muted); }
-.external-durations button { min-width: 56px; min-height: 26px; border-radius: 4px; font-size: 12px; color: var(--ui-text-muted); }
-.external-durations button.is-selected { color: var(--ui-text-highlighted); background: var(--ui-bg-elevated); box-shadow: var(--channel-shadow-control); }
-.external-skeleton { height: 18px; margin-bottom: 4px; }
-.external-reads { display: flex; flex-direction: column; gap: 2px; max-height: 280px; margin: 0 0 6px; padding: 0; overflow-y: auto; list-style: none; font-size: 12px; }
-.external-reads li { display: grid; grid-template-columns: auto minmax(0, 1fr) auto; gap: 8px; }
-.external-reads small { color: var(--ui-text-muted); }
-.external-read-path { overflow: hidden; font-family: ui-monospace, SFMono-Regular, Consolas, monospace; white-space: nowrap; text-overflow: ellipsis; }
-.external-reads li.is-denied { color: var(--ui-error); }
-@media (pointer: coarse) { .external-durations button { min-height: 36px; } }
+.external-member { display: flex; flex-direction: column; gap: 14px; }
+/* Facts as on an expert card's front: a dimmed label column and toned values, 12px in a dialog. */
+.external-member-facts { display: grid; gap: 4px; margin: 0; font-size: 12px; }
+.external-member-facts > div { display: grid; grid-template-columns: 7em minmax(0, 1fr); gap: 8px; }
+.external-member-facts dt { color: var(--ui-text-dimmed); white-space: nowrap; }
+.external-member-facts dd { margin: 0; color: var(--ui-text-toned); overflow-wrap: anywhere; }
+.external-member-actions { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 10px; padding: 10px 0; border-block: 1px solid var(--ui-border-muted); }
+.external-member-extend, .external-member-buttons { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; }
+.external-member-label { color: var(--ui-text-dimmed); font-size: 11px; }
+.external-member-extend .expert-card-modes button { padding: 0 8px; white-space: nowrap; }
+.external-member-ended { display: flex; align-items: center; gap: 6px; margin: 0; padding: 8px 10px; border: 1px dashed var(--ui-border); border-radius: 8px; color: var(--ui-text-toned); font-size: 12px; }
+.external-member-ended > span { flex-shrink: 0; width: 14px; height: 14px; color: var(--ui-text-dimmed); }
+.external-member-reads h4 { margin: 0 0 8px; color: var(--ui-text-highlighted); font-size: 13px; font-weight: 600; }
+.external-member-skeleton { height: 22px; margin-bottom: 4px; }
+/* Empty and error states match the invite dialog's dashed box and the device records' inline retry. */
+.external-member-empty { margin: 0 0 8px; padding: 18px 12px; border: 1px dashed var(--ui-border); border-radius: 8px; text-align: center; color: var(--ui-text-muted); font-size: 12px; }
+.external-member-error { display: flex; align-items: center; gap: 6px; margin: 0 0 8px; color: var(--ui-error); font-size: 12px; }
+.external-member-error > span:first-child { flex-shrink: 0; width: 14px; height: 14px; }
+.external-member-error > span:nth-child(2) { flex: 1; min-width: 0; overflow-wrap: anywhere; }
+.external-member-list { display: flex; flex-direction: column; max-height: 300px; margin: 0 0 8px; padding: 0; overflow-y: auto; list-style: none; border: 1px solid var(--ui-border-muted); border-radius: 8px; scrollbar-width: thin; }
+.external-member-list li { display: grid; grid-template-columns: auto auto minmax(0, 1fr) auto; align-items: center; gap: 10px; min-height: 30px; padding: 4px 10px; font-size: 12px; }
+.external-member-list li + li { border-top: 1px solid var(--ui-border-muted); }
+.external-member-time { color: var(--ui-text-muted); font-size: 11px; font-variant-numeric: tabular-nums; white-space: nowrap; }
+.external-member-op { padding: 0 5px; border-radius: 4px; background: var(--ui-bg-muted); color: var(--ui-text-muted); font-family: ui-monospace, SFMono-Regular, Consolas, monospace; font-size: 10px; line-height: 16px; }
+.external-member-path { overflow: hidden; color: var(--ui-text-toned); font-family: ui-monospace, SFMono-Regular, Consolas, monospace; white-space: nowrap; text-overflow: ellipsis; }
+.external-member-result { display: inline-flex; align-items: center; gap: 4px; color: var(--ui-text-muted); font-variant-numeric: tabular-nums; white-space: nowrap; }
+.external-member-result > span { width: 12px; height: 12px; }
+.external-member-list li.is-denied .external-member-path, .external-member-list li.is-denied .external-member-result { color: var(--ui-error); }
+.external-member-note { margin: 0; color: var(--ui-text-dimmed); font-size: 11px; }
+@media (pointer: coarse) { .external-member-extend .expert-card-modes button { min-height: 32px; } }
+/* Phones: each read takes two lines (time and operation, then path and result) instead of squeezing four columns. */
+@media (max-width: 480px) {
+  .external-member-facts > div { grid-template-columns: 5.5em minmax(0, 1fr); }
+  .external-member-list li { grid-template-columns: auto minmax(0, 1fr); row-gap: 2px; }
+  .external-member-path, .external-member-result { grid-column: 1 / -1; }
+  .external-member-result { white-space: normal; }
+}
 </style>

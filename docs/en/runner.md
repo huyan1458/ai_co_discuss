@@ -75,10 +75,44 @@ It binds this computer to the site with a one-time token: generated automaticall
 
 **Pairing** — each phone, tablet or other computer pairs once, in front of this computer; no account or password. On the local page open Settings → Account → Paired devices and choose "Add device" to show a QR code and a 12-character code (valid 2 minutes, single use). Scan the QR code with the new device, or enter the code in the hosted site's settings, then confirm with the device's own face, fingerprint or PIN, which also creates its passkey. The browser keeps a non-exportable device key; the website accepts only devices in the list the computer signs. Devices can be revoked from the computer or another paired device; clearing browser data removes the key and the device must pair again.
 
-Once paired, the "协作房间" directory lists the rooms on the computer, the same as on the computer itself: send messages and attachments, manage members, export backups, with live updates. Conversations stay on the computer; the website only passes encrypted content. Project paths and keys never leave the computer.
+Once paired, the "协作房间" directory lists the rooms on the computer, the same as on the computer itself: send messages and attachments, manage members, export backups, with live updates, and issue [external member](#external-members-borrowing-an-ai-from-another-computer) invites. Conversations stay on the computer; the website only passes encrypted content. Project paths and keys never leave the computer.
 
 - Nothing is listed while the computer is off or codiscuss is not running; the directory heading says the computer is not connected or offline, and the page connects on its own once the computer is back.
 - When the computer does not answer in time, the page reports the result as unconfirmed and never resends on its own; check the room before retrying.
+
+### External Members: Borrowing an AI from Another Computer
+
+Invite an AI on another computer into your room: it reads only the project files you open to it and answers in the room, while it keeps running on its own computer. Below, "your computer" holds the room and the project, and "the other computer" sends the AI; it works the same between two of your own computers.
+
+**Before you start**: both computers install CoDiscuss and run the local service; your computer is [connected to a hosted site](#from-a-hosted-site) with the relay deployed, and the other side reaches your room through that site's encrypted relay. While your computer is off or codiscuss is not running, the other side gets nothing.
+
+**Invite (your computer)**:
+1. In the right panel's "Invite members" dialog, choose "Another computer" at the end of the add row, then pick what it may do (discussion only, or discussion + read-only project), which project folders to open (only folders this room already has), and how long it stays (1 hour, today or 3 days).
+2. Choose "Create invitation" and send the link, QR code or pairing code. An invite works once within 10 minutes and can be revoked from the list below it. Paired phones and tablets can issue invites too.
+3. Whoever redeems it becomes a member right away; **there is no approval step**. A notice in the lower right says someone joined by invite; if it was not your invite, choose "Revoke" in its member menu at once.
+4. `@` it in the room; its answers appear in the conversation as usual. "Read log and access" in the member menu lists every file it read (recorded by your computer) and lets you extend, downgrade to discussion only, or revoke; revoking takes effect immediately.
+
+**Join (the other computer)**:
+1. Open the link and choose "Join with CoDiscuss on this computer" to go to the local page; or choose "+" under "Invited rooms" in the left panel and paste the link or pairing code; or run `codiscuss join <link or code> --adapter TOOL`. A pairing code also needs the inviting site's address.
+2. Pick the AI, model and effort, and a trust level:
+
+| Trust level | When named | Local AI |
+| --- | --- | --- |
+| Default | Woken only after you approve in the right panel each time; declining, or 15 minutes without an answer, shows "Not accepted by the other side" in the room | Limited to CoDiscuss commands, running in an empty temporary folder |
+| Full loan | Woken directly, within a wake count and time limit (20 wakes and 1 day by default); once used up it goes back to asking each time | Same as above |
+| Trusted computer | Woken directly, no limits; later invites from that computer are accepted at this level | Unrestricted: local files and network tools available |
+
+You can change the level and limits later in the invited room's right panel, or pause or leave; `codiscuss invited` offers the same commands. Trusted computer can be set only on the other computer itself; a paired phone or tablet can choose only Default or Full loan. The local service does the waking, so keep codiscuss running.
+
+**Supported tools**: Default and Full loan need a tool that can be limited to CoDiscuss commands. Claude Code (background runs) supports it, tested on version 2.1.325 (other versions not individually checked), and so do model APIs, backed by unit tests; Codex and Antigravity do not support it and can serve only at the Trusted computer level; desktop apps cannot join as external members.
+
+**What it can read**: files Git tracks in the opened folders (including uncommitted changes, skipping files in `.gitignore`); in a folder without Git, every file except generated folders such as `node_modules`. `.env`-style files, private keys and certificates, credential files, `.git`, and `data/` at the root of an opened folder are never opened; links pointing outside the folder are refused. It can only read: no writing files or running commands, and no private chats, other rooms or local paths. Each read returns at most 128 KiB; by default 4 MiB per hour, 64 MiB in total and 600 reads per hour.
+
+**Keep in mind**:
+- What it reads cannot be taken back: it stays in the other AI's session and reaches the other side's model provider; revoking only stops later reads.
+- If someone else uses an invite first within its 10 minutes, they become a member, and only revoking after the notice fixes it. Send invites only to people you trust.
+- A pairing code carries no key fingerprint for your computer, so the other side cannot check it reached you; prefer the link or QR code.
+- At Trusted computer the other AI is unrestricted, and content in your room may lead it to read files on that computer; use it only between your own computers.
 
 ## API Access
 

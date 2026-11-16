@@ -55,6 +55,8 @@ codiscuss setup
 
 启动链路的故障回归位于 `tests/test_launch.mjs`：`node --test --test-name-pattern "process death" tests/test_launch.mjs` 会在独立启动进程的持久化、HTTP 已接受、任务文件和登记等 14 个边界强制退出，再由新进程恢复。断言来自实际网站事件、登记表、SQLite 完整性及交付次数，覆盖暂停后重试不恢复运行；测试不会启动模型。临时目录和网站在测试结束后清理。
 
+外部成员（另一台电脑上的 AI）的端到端用例 `node --test tests/test_external_e2e.mjs` 在一台电脑上模拟 A、B 两台电脑（需要 Python 与 git，只用系统临时目录），线上站点用替身，不能证明真实 Worker 的放行与真实 AI 软件的收窄效果；浏览器验收可运行常驻演示 `node tests/external_demo.mjs`（B 在 8830、A 在 8831，Ctrl+C 结束并清理临时目录），它不是测试用例。
+
 修改就绪语义时同时验证 `tests/test_runner.mjs` 的 `readiness receipt` 与并发启动用例，以及 `tests/test_local.mjs` 的网站复用和服务归属。UI 失败验收须核对表单、原提交编号及实际状态，不能只截图成功页或只统计通过数量。测试不能证明真实客户端的登录、工具权限和模型执行；这些需要独立实机验收记录。
 
 CI 在 Windows / Ubuntu 上分别检查 Python 3.10 与 3.14，使用 Node.js 24 执行干净安装、构建和测试。`package.json` 对 `fontless` 的间接 `esbuild` 固定为已修复的 0.28.2；上游解除旧版本约束后再移除此覆盖，避免无关依赖整体升级。

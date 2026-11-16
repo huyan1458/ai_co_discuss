@@ -526,8 +526,8 @@ function resize_nav_by_key(event) {
     <USlideover v-model:open="nav_open" side="left" :title="t('房间导航')" :ui="{ overlay: 'channel-drawer-overlay', content: 'channel-navigation-drawer' }">
       <template #content><ChannelSidebar :tabs="tabs" @select="choose_room" @manage="manage_room" @create="create_channel" @create-folder="create_folder" @manage-folder="edit_folder" @delete-folder="remove_folder" @archive-folder="archive_folder" @archives="open_archives" @workflows="open_workflows" @invited="open_invited" @tab="choose_tab" @settings="nav_open = false; modal = 'settings'" /></template>
     </USlideover>
-    <USlideover v-if="room || invited_page" v-model:open="info_open" side="right" :title="invited_page ? t('被邀请的房间') : t('讨论进度')" :description="invited_page ? invited_record?.room_title || '' : room.title" :ui="{ overlay: 'channel-drawer-overlay', content: 'progress-drawer', body: 'progress-drawer-body' }">
-      <template #body><InvitedRoomRail v-if="invited_page" /><FreeBoard v-else @history="info_open = false; open_consensus()" /></template>
+    <USlideover v-if="room || invited_page" v-model:open="info_open" side="right" :title="invited_page ? t('被邀请的房间') : t('讨论进度')" :description="invited_page ? [invited_record?.room_title, invited_record?.machine_name].filter(Boolean).join(' · ') : room.title" :ui="{ overlay: 'channel-drawer-overlay', content: 'progress-drawer', body: 'progress-drawer-body' }">
+      <template #body><InvitedRoomRail v-if="invited_page" drawer /><FreeBoard v-else @history="info_open = false; open_consensus()" /></template>
     </USlideover>
     <JoinInvitedDialog />
     <WorkspaceDialogs v-model="modal" v-model:reading-width="reading_width" v-model:effects="effects" :reading-options="width_options" :effect-options="EFFECT_OPTIONS" :detail-id="detail_id" :target-room="managed_room" :target-folder="target_folder" />

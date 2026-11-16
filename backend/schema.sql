@@ -350,8 +350,8 @@ CREATE TABLE IF NOT EXISTS execution_failures (
     failed_at INTEGER NOT NULL,
     reset_at INTEGER NOT NULL DEFAULT 0
 );
--- The requests a failed execution carried before the owner retried it: the failed card keeps its place under their
--- message, and the retry's card follows it there. Not part of backups.
+-- The requests an execution carried before they moved to another: a failed one the owner retried, or a turn the owner
+-- interrupted by sending a message at once. Its card keeps its place under their message. Not part of backups.
 CREATE TABLE IF NOT EXISTS retried_requests (
     execution_id INTEGER NOT NULL REFERENCES member_executions(id) ON DELETE CASCADE,
     request_id INTEGER NOT NULL REFERENCES member_requests(id) ON DELETE CASCADE,

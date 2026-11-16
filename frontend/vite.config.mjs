@@ -58,13 +58,30 @@ function join_page() {
       .map((name) => JSON.parse(readFileSync(new URL(`./locales/en/${name}`, import.meta.url), "utf8"))));
     const used = Object.fromEntries([...script.matchAll(JOIN_KEY_PATTERN)].map((match) => JSON.parse(`"${match[1]}"`))
       .filter((key) => english[key]).map((key) => [key, english[key]]));
-    const style = "body{margin:0;background:#121416;color:#e6e8ea;font:15px/1.6 system-ui,-apple-system,'Segoe UI',sans-serif}"
-      + "@media (prefers-color-scheme:light){body{background:#fff;color:#1b1d1f}}"
-      + "#join-root{max-width:560px;margin:0 auto;padding:40px 16px}h1{font-size:22px;line-height:1.35;margin:0 0 20px}"
-      + "dl{display:grid;grid-template-columns:auto 1fr;gap:6px 14px;margin:0 0 20px}dt{opacity:.65}dd{margin:0;overflow-wrap:anywhere}"
-      + ".note{margin:0 0 8px}.fine{margin:8px 0 0;font-size:13px;opacity:.65}.actions{display:flex;flex-wrap:wrap;gap:10px;margin:20px 0 8px}"
-      + ".actions a,.actions button{display:inline-flex;align-items:center;min-height:40px;padding:0 16px;border-radius:8px;font:inherit;text-decoration:none;cursor:pointer}"
-      + ".primary{background:#10b981;color:#fff;border:0}.secondary{background:transparent;color:inherit;border:1px solid currentColor}";
+    // Colors follow the site's channel theme (frontend/channel.css): dark by default, light from the system or the
+    // site's saved theme (join-page.js sets data-theme).
+    const dark = "--bg:#232428;--card:#2b2d31;--text:#d8dce3;--strong:#f2f3f5;--muted:#a6adb7;--border:#42454d;"
+      + "--primary:#5865f2;--primary-hover:#6874fa;--ghost-hover:#ffffff0f;--warning:#e5a50a;color-scheme:dark";
+    const light = "--bg:#f6f6f6;--card:#fff;--text:#242424;--strong:#171717;--muted:#666;--border:#dedede;"
+      + "--primary:#0969da;--primary-hover:#075bbd;--ghost-hover:#0000000a;--warning:#9a6700;color-scheme:light";
+    const style = `:root{${dark}}:root[data-theme=light]{${light}}`
+      + `@media (prefers-color-scheme:light){:root:not([data-theme]){${light}}}`
+      + "body{margin:0;background:var(--bg);color:var(--text);font:14px/1.6 -apple-system,BlinkMacSystemFont,'Segoe UI','PingFang SC','Microsoft YaHei',sans-serif;-webkit-font-smoothing:antialiased}"
+      + "#join-root{box-sizing:border-box;max-width:600px;margin:0 auto;padding:48px 16px}"
+      + ".brand{display:flex;align-items:baseline;gap:8px;margin:0 0 16px;padding:0 4px}.brand img{align-self:center;width:24px;height:24px;border-radius:6px}.brand strong{color:var(--strong);font-size:16px}.brand span{color:var(--muted);font-size:12px}"
+      + ".card{padding:28px;border:1px solid var(--border);border-radius:12px;background:var(--card)}"
+      + "h1{margin:0 0 20px;color:var(--strong);font-size:20px;line-height:1.4;font-weight:600}.empty h1{margin-bottom:8px}.empty p{margin:0}"
+      + "dl{display:grid;grid-template-columns:auto 1fr;gap:8px 16px;margin:0 0 20px}dt{color:var(--muted)}dd{margin:0;color:var(--strong);overflow-wrap:anywhere}"
+      + ".warning{margin:0 0 16px;color:var(--warning);font-weight:600}"
+      + ".notes{margin:0;padding-left:18px;display:grid;gap:4px}"
+      + ".fine{margin:12px 0 0;color:var(--muted);font-size:12px}.actions{display:flex;flex-wrap:wrap;gap:10px;margin:24px 0 4px}"
+      + ".button{box-sizing:border-box;display:inline-flex;align-items:center;justify-content:center;min-height:36px;padding:0 16px;border-radius:6px;font:inherit;font-weight:600;text-decoration:none;cursor:pointer;transition:background .12s}"
+      + ".primary{border:1px solid transparent;background:var(--primary);color:#fff}.primary:hover{background:var(--primary-hover)}"
+      + ".secondary{border:1px solid var(--border);background:transparent;color:var(--text)}.secondary:hover{background:var(--ghost-hover)}"
+      + ".button:focus-visible{outline:2px solid var(--primary);outline-offset:2px}"
+      + "@media (max-width:480px){#join-root{padding:24px 12px}.card{padding:20px}dl{grid-template-columns:1fr;gap:2px}dd{margin-bottom:8px}.actions .button{flex:1 1 100%}}";
+    // The site's own icon (the data URI in web/index.html), reused as the favicon and the brand mark.
+    const icon = (readFileSync("web/index.html", "utf8").match(/<link rel="icon" href="(data:image\/svg\+xml;base64,[A-Za-z0-9+/=]+)">/) || [])[1] || "";
     // "<" is escaped inside the inline script so no dictionary text can close it.
     const dictionary = JSON.stringify(used).replaceAll("<", `${String.fromCharCode(92)}u003c`);
     const html = `<!doctype html>
@@ -75,11 +92,13 @@ function join_page() {
 <meta name="robots" content="noindex">
 <meta name="referrer" content="no-referrer">
 <title>AI CoDiscuss</title>
+${icon ? `<link rel="icon" href="${icon}">` : ""}
 <style>${style}</style>
 </head>
 <body>
 <main id="join-root"></main>
 <script>const JOIN_DICTIONARY = ${dictionary};
+const JOIN_ICON = ${JSON.stringify(icon)};
 ${script}</script>
 </body>
 </html>

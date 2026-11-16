@@ -71,7 +71,8 @@ html[data-theme^="channel"] .channel-panel-toggle { flex-shrink: 0; }
 .channel-brand-text { display: flex; flex-direction: column; min-width: 0; line-height: 1.2; }
 .channel-workspace-heading strong { color: #f2f3f5; font-size: var(--channel-nav-brand); font-weight: 650; letter-spacing: .06em; white-space: nowrap; }
 .channel-brand-text > span { color: #808792; font-size: var(--channel-nav-meta); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.channel-sidebar-content { flex: 1; min-height: 0; overflow-y: auto; padding: 15px 8px; }
+/* The scrollbar's room is kept even when the list fits, so expanding or collapsing a folder never changes the width. */
+.channel-sidebar-content { flex: 1; min-height: 0; overflow-y: auto; scrollbar-gutter: stable; padding: 15px 8px; }
 .channel-directory-heading { display: flex; align-items: center; justify-content: space-between; min-height: 34px; padding: 0 8px; color: #969da8; font-size: var(--channel-nav-text); font-weight: 600; }
 .channel-directory-heading > span { display: flex; align-items: center; gap: 5px; }
 .channel-section-toggle { display: flex; align-items: center; gap: 5px; padding: 4px 0; color: inherit; cursor: pointer; }
@@ -433,7 +434,7 @@ html[data-theme^="channel"] .channel-nav-preview { position: fixed; top: 0; z-in
 html[data-theme^="channel"] .channel-nav-preview-text :is(h1, h2, h3, h4, h5, h6) { font-size: 13px; margin-block: 0 5px; }
 html[data-theme^="channel"] .channel-nav-preview-text p { margin-bottom: 6px; }
 .channel-transcript { grid-column: 2; grid-row: 2; min-width: 0; min-height: 0; overflow-y: auto; overscroll-behavior: contain; scrollbar-gutter: stable both-edges; padding: 16px 0 28px; }
-/* Without scroll anchoring, the sub-pixel pad that keeps each earlier slice's shift a whole pixel (preload_slice). */
+/* The sub-pixel pad that keeps each earlier slice's shift a whole pixel (preload_slice). */
 .channel-transcript::before { content: ""; display: block; height: var(--preload-pad, 0px); }
 .channel-message-group { width: 100%; max-width: var(--channel-reading-width); margin: 0 auto; }
 /* Cards off screen skip layout and paint: on slow devices laying out a long room stalled the earlier-card preload.

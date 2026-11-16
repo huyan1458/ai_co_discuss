@@ -304,6 +304,11 @@ const preview_index = computed(() => preview_open.value ? navigation_entries.val
 const prompt = ref(null);
 const follow_tail = ref(true);
 const FOLLOW_TAIL_THRESHOLD = 70;
+// A room just opened keeps following its end this long while cards settle, unless the reader scrolls by hand: estimated
+// heights turning into measured ones make the browser shift the page by itself, and that scroll used to count as the
+// reader leaving the end (2026-11-16: first opening a room stopped 70–358px short, with "回到最新" shown).
+const ROOM_SETTLE_MS = 8000;
+let settle_until = performance.now() + ROOM_SETTLE_MS, moved_by_hand = false;
 // Cards mounted when a room opens, a few screens' worth; earlier ones follow in slices (see render_floor).
 const RENDER_BATCH = 15;
 // Within this distance (px) of the top, earlier cards are rendered on every frame instead of when idle.
@@ -549,7 +554,8 @@ const request_badges = stable_computed(() => {
     const voided = request.status === "cancelled" && executions.get(request.execution_id)?.capabilities ? executions.get(request.execution_id) : null;
     // An external member's computer turned the request down or let it wait out: the other side did not agree.
     const [label, color] = declined(request) ? [t('对方未同意'), "warning"] : voided ? [stop_state(voided).label, "neutral"] : FREE_REQUEST_LABELS[request.status];
-    const title = request.status === "failed" ? failures.get(request.execution_id) || t('执行失败') : "";
+    const title = declined(request) ? (request.external_outcome === "timeout" ? t('对方电脑在时限内没有确认唤醒') : t('对方电脑拒绝了这次唤醒'))
+      : request.status === "failed" ? failures.get(request.execution_id) || t('执行失败') : "";
     badges.set(request.message_id, [...(badges.get(request.message_id) || []),
       { key: request.id, label: `${bridge.display_name(request.member)} · ${label}`, color, title }]);
   }
@@ -1392,7 +1398,7 @@ let written_top = null;
 // the main thread's older offset, so the page jumps back. Touch scrolling holds even the slices the reader waits on.
 let touch_active = false;
 let touch_scroll = false;
-// Without scroll anchoring: the sub-pixel pad (px, 0 to 1) above the cards that keeps each slice's shift whole.
+// The sub-pixel pad (px, 0 to 1) above the cards that keeps each slice's shift whole.
 let preload_pad = 0;
 /** Whether the reader is waiting on earlier cards: near the top, or heading for one not rendered. */
 function preload_urgent(element) {
@@ -1428,22 +1434,31 @@ async function preload_slice() {
   if ((!urgent || touch_scroll) && (glide.isAnimating() || touch_active || performance.now() - last_scroll_at < SCROLL_SETTLE_MS)) return schedule_preload();
   preload_busy = true;
   const started = performance.now();
-  const from_bottom = element.scrollHeight - element.scrollTop;
-  const anchor = SCROLL_ANCHORING ? null : message_nodes(element)[0];
-  // Measured in content coordinates, so a scroll made meanwhile (the composer growing keeps the end in view) is kept.
-  const anchor_top = anchor && anchor.getBoundingClientRect().top + element.scrollTop;
+  const top_before = element.scrollTop;
+  const from_bottom = element.scrollHeight - top_before;
+  const anchor = message_nodes(element)[0];
+  // Measured from the top of the content, so it holds a fraction of a pixel exactly and no scroll made meanwhile (the
+  // composer growing keeps the end in view) counts as a shift.
+  const content_top = (node) => node.getBoundingClientRect().top - element.firstElementChild.getBoundingClientRect().top;
+  const anchor_top = anchor && content_top(anchor);
   render_floor.value = floor_before(transcript_messages.value, render_start.value - preload_size);
   await nextTick();
-  // Browsers with scroll anchoring have already kept the place; the others are corrected before the frame paints.
   if (anchor?.isConnected) {
-    // The cards moved down by `shift`, a fraction of a pixel included; the pad takes the fraction so scrollTop follows exactly.
-    const shift = anchor.getBoundingClientRect().top + element.scrollTop - anchor_top;
-    const pad = (((preload_pad - shift) % 1) + 1) % 1;
+    // The cards moved down by `shift`, a fraction of a pixel included. The pad takes the fraction so the scroll position
+    // follows by whole screen pixels: a fractional follow rounds each card on screen differently and the text wobbled
+    // by 1px. Scroll anchoring follows in screen pixels (a fraction of a CSS pixel when zoomed); WebKit scrolls by CSS pixels.
+    const unit = SCROLL_ANCHORING ? 1 / window.devicePixelRatio : 1;
+    const shift = content_top(anchor) - anchor_top;
+    const pad = (((preload_pad - shift) % unit) + unit) % unit;
     element.style.setProperty("--preload-pad", `${pad}px`);
-    written_top = Math.round(element.scrollTop + shift + pad - preload_pad);
+    // With scroll anchoring the browser follows by itself; the others are corrected before the frame paints.
+    written_top = Math.round((SCROLL_ANCHORING ? top_before : element.scrollTop) + shift + pad - preload_pad);
     preload_pad = pad;
-  } else written_top = element.scrollHeight - from_bottom;
-  if (element.scrollTop !== written_top) element.scrollTop = written_top;
+    if (!SCROLL_ANCHORING && element.scrollTop !== written_top) element.scrollTop = written_top;
+  } else {
+    written_top = element.scrollHeight - from_bottom;
+    if (element.scrollTop !== written_top) element.scrollTop = written_top;
+  }
   const spent = performance.now() - started;
   const budget = not_rendered(pending_jump) ? PRELOAD_JUMP_BUDGET_MS : urgent ? PRELOAD_URGENT_BUDGET_MS : PRELOAD_BUDGET_MS;
   preload_size = Math.max(1, Math.min(PRELOAD_MAX_SLICE, Math.round(preload_size * budget / Math.max(spent, 1))));
@@ -1540,7 +1555,12 @@ function track_scroll() {
   // After a resize the cards have rewrapped; until the reading position is restored this scrollTop is not the reader's.
   if (reading_position?.stale()) return;
   schedule_preload(preload_urgent(element));
-  follow_tail.value = element.scrollHeight - element.scrollTop - element.clientHeight < FOLLOW_TAIL_THRESHOLD;
+  const near_end = element.scrollHeight - element.scrollTop - element.clientHeight < FOLLOW_TAIL_THRESHOLD;
+  if (!near_end && follow_tail.value && !moved_by_hand && performance.now() < settle_until && jump_target.value == null && !pending_jump) {
+    element.scrollTop = element.scrollHeight - element.clientHeight;
+    return;
+  }
+  follow_tail.value = near_end;
   const bounds = element.getBoundingClientRect();
   const top = reading_top(element);
   const messages = message_nodes(element);
@@ -1646,6 +1666,8 @@ watch([() => view.value.room?.id, () => view.value.query, () => view.value.sourc
   follow_tail.value = true;
   render_floor.value = null;
   pending_jump = preload_wanted = null;
+  settle_until = performance.now() + ROOM_SETTLE_MS;
+  moved_by_hand = false;
 });
 watch(() => view.value.tab, (tab) => {
   reset_preview();
@@ -1693,6 +1715,7 @@ function jump_to(id) {
 
 /** Any manual scroll (wheel, touch drag, scroll keys, scrollbar) turns read-aloud following off; only its button turns it back on. */
 function stop_following(event) {
+  if (event.type !== "keydown" || ["ArrowUp", "ArrowDown", "PageUp", "PageDown", "Home", "End", " "].includes(event.key)) moved_by_hand = true;
   if (!reader.state.following) return;
   if (event.type === "keydown" && !["ArrowUp", "ArrowDown", "PageUp", "PageDown", "Home", "End", " "].includes(event.key)) return;
   if (event.type === "pointerdown" && event.target !== event.currentTarget) return;
@@ -1701,6 +1724,7 @@ function stop_following(event) {
 
 /** Manual scrolling resumes tracking the message at the viewport's upper edge; it also takes over from a glide. */
 function resume_tracking(event) {
+  if (event.type !== "keydown" || ["ArrowUp", "ArrowDown", "PageUp", "PageDown", "Home", "End", " "].includes(event.key)) moved_by_hand = true;
   glide.stop();
   touch_scroll = touch_active = event.type === "touchstart";
   // Scrolling by hand drops a jump still waiting for its card.
@@ -2005,6 +2029,26 @@ const dock_observer = new ResizeObserver(([entry]) => {
   if (follow_tail.value && transcript.value) transcript.value.scrollTop = transcript.value.scrollHeight;
 });
 onMounted(() => composer_dock.value && dock_observer.observe(composer_dock.value));
+// Cards that fill in after the messages (run reports, scheduler cards, process notes, a card measured once it nears the
+// screen) make the transcript taller without changing the messages, so a room just opened ended short of its end
+// (2026-11-16: 70–357px measured on first opening a room). While following the end, any growth of a message group
+// lands there again; a finger on the transcript or a send glide keeps its own course.
+const growth_observer = new ResizeObserver(() => {
+  const element = transcript.value;
+  if (!follow_tail.value || !element || touch_active || glide.isAnimating()) return;
+  const bottom = element.scrollHeight - element.clientHeight;
+  if (Math.abs(element.scrollTop - bottom) > 1) element.scrollTop = bottom;
+});
+const group_observer = new MutationObserver(() => {
+  growth_observer.disconnect();
+  for (const group of transcript.value?.children || []) growth_observer.observe(group);
+});
+onMounted(() => {
+  if (!transcript.value) return;
+  for (const group of transcript.value.children) growth_observer.observe(group);
+  group_observer.observe(transcript.value, { childList: true });
+});
+onBeforeUnmount(() => { group_observer.disconnect(); growth_observer.disconnect(); });
 // `?scrolldebug` on the address: an on-screen log of every change to the transcript's scroll position, telling the page's
 // own writes (with where they came from) from the browser's, with the heights involved. For movement that only a real
 // phone shows; nothing is installed without the parameter.

@@ -41,9 +41,16 @@ export const INVITE_COMMANDS = new Set(['room-invite', 'room-invites', 'room-inv
 const QUERY = /^(\?[A-Za-z0-9_.~%=&,:+-]*)?$/;
 const SUB_PATH = /^[A-Za-z0-9_.~-]+(\/[A-Za-z0-9_.~-]+)*$/;
 
-/** A refusal in the relay's HTTP shape. */
+/** A shown text with the template and parameters a page translates by its own language (the backend's `error_text`). */
+const text_of = (template, params = {}) => ({ error: t(template, params), error_text: { template, params } });
+
+/** A refusal in the relay's HTTP shape, carrying `error_text` and, where a caller acts on it, a stable `code`. */
 class GatewayError extends Error {
-  constructor(status, message, reason) { super(message); this.status = status; this.reason = reason; }
+  constructor(status, template, params = {}, code = '') {
+    super(t(template, params));
+    this.status = status; this.error_text = { template, params };
+    if (code) this.code = code;
+  }
 }
 
 /** Wait briefly for the registry lock, then run `task` on the registry with expired invites dropped, and save it. */
@@ -53,7 +60,7 @@ function with_registry(home, task) {
     try { writeFileSync(path, String(process.pid), { flag: 'wx' }); break; } catch (error) {
       if (error.code !== 'EEXIST') throw error;
       try { if (Date.now() - statSync(path).mtimeMs > LOCK_STALE_MS) { rmSync(path, { force: true }); continue; } } catch { continue; }
-      if (Date.now() > deadline) throw new Error(t('外部成员登记表正被占用，请稍后重试'));
+      if (Date.now() > deadline) throw new GatewayError(400, '外部成员登记表正被占用，请稍后重试');
       Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 20);
     }
   }
@@ -124,17 +131,28 @@ export function local_room(home, room_id) {
   return null;
 }
 
-/** The room, if `token` is its owner credential kept here. */
-function owned_room(home, room_id, token) {
+/**
+ * The room, if `token` is its owner credential: the one kept here, or one the local website accepts for the owner. The
+ * website's own page sends none and the website stands in for the owner with a credential only that process can check
+ * (`owner_proxy_token` in backend/runtime.py), so it is asked on an owner-only route, as a request that earns nothing
+ * from coming from this computer.
+ */
+async function owned_room(home, room_id, token, fetcher) {
   const room = typeof room_id === 'string' && room_id ? local_room(home, room_id) : null;
-  if (!room || typeof token !== 'string' || !same(room.token, token)) throw new Error(t('需要本房间的控制凭据，且房间须在这台电脑上'));
+  const refused = new GatewayError(400, '需要本房间的控制凭据，且房间须在这台电脑上', {}, 'owner_required');
+  if (!room || typeof token !== 'string' || !token || token.length > 512) throw refused;
+  if (same(room.token, token)) return room;
+  const check = await local_call(room, 'GET', `/api/rooms/${encodeURIComponent(room_id)}/external-members`, { token, strict: true, fetcher }).catch(() => null);
+  if (check?.status !== 200) throw refused;
   return room;
 }
 
 /** One request to the local website; `external` marks it as an external member's own, so loopback earns it nothing. */
-async function local_call(room, method, path, { token, body, external = false, etag, fetcher = site_fetch } = {}) {
+async function local_call(room, method, path, { token, body, external = false, strict = false, etag, fetcher = site_fetch } = {}) {
   const headers = { 'X-Discussion-Token': token };
-  if (external) Object.assign(headers, { 'X-CoDiscuss-External': '1', Origin: 'null', 'Sec-Fetch-Site': 'cross-site' });
+  // Not the website's own page: a loopback request is then never taken for its implicit administrator.
+  if (external || strict) Object.assign(headers, { Origin: 'null', 'Sec-Fetch-Site': 'cross-site' });
+  if (external) headers['X-CoDiscuss-External'] = '1';
   if (body !== undefined) headers['Content-Type'] = 'application/json';
   if (etag) headers['If-None-Match'] = etag;
   const response = await fetcher(`${room.site}${path}`, { method, headers, redirect: 'error',
@@ -162,7 +180,8 @@ async function invite_site(home, site_url) {
   const { keyed_links } = await import('./remote_launch.mjs');
   const sites = Object.entries(keyed_links(home).sites);
   const found = site_url ? sites.find(([origin]) => origin === site_url) : sites.length === 1 ? sites[0] : null;
-  if (!found) throw new Error(sites.length ? t('这台电脑绑定了多个线上网站，请指定邀请使用的网站') : t('这台电脑还没有绑定线上网站，请先运行 codiscuss local connect 网站地址'));
+  if (!found) throw sites.length ? new GatewayError(400, '这台电脑绑定了多个线上网站，请指定邀请使用的网站', {}, 'site_required')
+    : new GatewayError(400, '这台电脑还没有绑定线上网站，请先运行 codiscuss local connect 网站地址', {}, 'site_missing');
   return { site: found[0], link: found[1] };
 }
 
@@ -170,18 +189,18 @@ async function invite_site(home, site_url) {
  * Issue an invite for one room: a 12-character code valid ten minutes, kept here only as its hash, and the link that
  * carries it with this computer's key fingerprint. The code and link are returned this once.
  */
-export async function create_invite(home, { room_id, token, level = 'read', folders, duration = '1h', site_url, by = 'computer' }) {
-  const room = owned_room(home, room_id, token);
-  if (!LEVELS.has(level)) throw new Error(t('开放等级须为 discuss 或 read'));
-  if (!DURATIONS.has(duration)) throw new Error(t('有效期须为 1h、today 或 3d'));
+export async function create_invite(home, { room_id, token, level = 'read', folders, duration = '1h', site_url, by = 'computer' }, { fetcher } = {}) {
+  const room = await owned_room(home, room_id, token, fetcher);
+  if (!LEVELS.has(level)) throw new GatewayError(400, '开放等级须为 discuss 或 read');
+  if (!DURATIONS.has(duration)) throw new GatewayError(400, '有效期须为 1h、today 或 3d');
   const chosen = level === 'discuss' ? [] : folders === undefined ? [0] : folders;
   if (!Array.isArray(chosen) || (level === 'read' && !chosen.length) || chosen.some(index => !Number.isSafeInteger(index) || index < 0 || index >= room.directories.length)
       || new Set(chosen).size !== chosen.length) {
-    throw new Error(t('开放目录须为本房间项目目录的序号'));
+    throw new GatewayError(400, '开放目录须为本房间项目目录的序号');
   }
   const { site, link } = await invite_site(home, site_url);
   let room_name = '';
-  try { const view = await local_call(room, 'GET', `/api/rooms/${encodeURIComponent(room_id)}`, { token }); room_name = String(view.body?.title ?? view.body?.room?.title ?? '').slice(0, 80); } catch { /* The name is only shown. */ }
+  try { const view = await local_call(room, 'GET', `/api/rooms/${encodeURIComponent(room_id)}`, { token, fetcher }); room_name = String(view.body?.title ?? view.body?.room?.title ?? '').slice(0, 80); } catch { /* The name is only shown. */ }
   const code = Array.from(randomBytes(CODE_LENGTH), byte => CODE_ALPHABET[byte & 31]).join('');
   const fingerprint = machine_fingerprint(link);
   const invite = with_registry(home, (registry, now) => {
@@ -196,16 +215,16 @@ export async function create_invite(home, { room_id, token, level = 'read', fold
 }
 
 /** The room's invites still waiting, without their codes. */
-export function list_invites(home, { room_id, token }) {
-  owned_room(home, room_id, token);
+export async function list_invites(home, { room_id, token }, { fetcher } = {}) {
+  await owned_room(home, room_id, token, fetcher);
   return with_registry(home, registry => ({ invites: Object.entries(registry.invites).filter(([, invite]) => invite.room_id === room_id)
     .map(([invite_id, { level, folders, duration, created_at, expires_at, by }]) => ({ invite_id, room_id, level, folders, duration, created_at, expires_at, by }))
     .sort((left, right) => right.created_at - left.created_at) }));
 }
 
 /** Withdraw one waiting invite of the room. */
-export function revoke_invite(home, { room_id, token, invite_id }) {
-  owned_room(home, room_id, token);
+export async function revoke_invite(home, { room_id, token, invite_id }, { fetcher } = {}) {
+  await owned_room(home, room_id, token, fetcher);
   const revoked = with_registry(home, registry => {
     if (registry.invites[invite_id]?.room_id !== room_id) return false;
     delete registry.invites[invite_id];
@@ -220,7 +239,7 @@ export async function invite_command(home, command, input, { device } = {}) {
   if (command === 'room-invite') return create_invite(home, { ...input, by: device || 'computer' });
   if (command === 'room-invites') return list_invites(home, input);
   if (command === 'room-invite-revoke') return revoke_invite(home, input);
-  throw new Error(t('未知的邀请操作'));
+  throw new GatewayError(400, '未知的邀请操作');
 }
 
 /** External members' keys for the signed list of one website (the one their invite named), or of every website. */
@@ -256,7 +275,7 @@ function take_invite(home, machine_id, public_key, proof) {
     for (const [id, invite] of Object.entries(registry.invites)) if (++invite.failures >= INVITE_ATTEMPTS) delete registry.invites[id];
     return null;
   });
-  if (!taken) throw new GatewayError(400, t('邀请码不对或已过期，请让对方重新生成邀请'));
+  if (!taken) throw new GatewayError(400, '邀请码不对或已过期，请让对方重新生成邀请', {}, 'invite_invalid');
   return taken;
 }
 
@@ -273,25 +292,25 @@ function external_name(platform, taken) {
 async function redeem(home, ctx, id, sealed, request) {
   const { public_key, proof, label, platform, adapter } = request.payload || {};
   let external_id;
-  try { external_id = device_id_of(public_key); } catch { throw new GatewayError(400, t('外部成员公钥须为 P-256')); }
-  if (!await verify_signature(public_key, sealed.signature, `${id}\n${sealed.body}`)) throw new GatewayError(400, t('外部成员签名无效'));
-  if (typeof platform !== 'string' || !/^[A-Za-z]{2,20}$/.test(platform)) throw new GatewayError(400, t('请说明派来的是哪个 AI'));
-  if (read_registry(home).externals[external_id]) throw new GatewayError(409, t('这把密钥已经加入过房间，请为新的邀请生成新密钥'));
+  try { external_id = device_id_of(public_key); } catch { throw new GatewayError(400, '外部成员公钥须为 P-256'); }
+  if (!await verify_signature(public_key, sealed.signature, `${id}\n${sealed.body}`)) throw new GatewayError(400, '外部成员签名无效', {}, 'bad_signature');
+  if (typeof platform !== 'string' || !/^[A-Za-z]{2,20}$/.test(platform)) throw new GatewayError(400, '请说明派来的是哪个 AI');
+  if (read_registry(home).externals[external_id]) throw new GatewayError(409, '这把密钥已经加入过房间，请为新的邀请生成新密钥', {}, 'key_used');
   const invite = take_invite(home, ctx.machine_id, public_key, proof);
   const room = local_room(home, invite.room_id);
-  if (!room) throw new GatewayError(404, t('邀请对应的房间已不在这台电脑上'));
+  if (!room) throw new GatewayError(404, '邀请对应的房间已不在这台电脑上');
   const directories = invite.folders.map(index => room.directories[index]);
-  if (directories.some(directory => !directory)) throw new GatewayError(409, t('邀请开放的项目目录已不在房间里，请重新邀请'));
+  if (directories.some(directory => !directory)) throw new GatewayError(409, '邀请开放的项目目录已不在房间里，请重新邀请');
   const base = `/api/rooms/${encodeURIComponent(room.id)}`;
   const listed = await local_call(room, 'GET', `${base}/external-members`, { token: room.token, fetcher: ctx.fetcher });
-  if (listed.status !== 200) return { status: listed.status, body: listed.body ?? { error: t('读取房间成员失败') } };
+  if (listed.status !== 200) return { status: listed.status, body: listed.body ?? text_of('读取房间成员失败') };
   const view = await local_call(room, 'GET', base, { token: room.token, fetcher: ctx.fetcher });
   const taken = new Set([...(view.body?.free?.members ?? []), ...(listed.body.members ?? [])].map(member => member?.name).filter(Boolean));
   const token = randomBytes(32).toString('hex'), clean_label = String(label || '').replace(/[\u0000-\u001f]/g, ' ').trim().slice(0, LABEL_LIMIT);
   const created = await local_call(room, 'POST', `${base}/external-members`, { token: room.token, fetcher: ctx.fetcher, body: {
     revision: listed.body.revision, name: external_name(platform, taken), adapter: String(adapter || '').slice(0, 40), token,
     machine: `ext:${external_id}`, machine_label: clean_label, scope: invite.level, directories, expires_at: membership_end(invite.duration, Date.now()) } });
-  if (![200, 201].includes(created.status)) return { status: created.status, body: created.body ?? { error: t('建立外部成员失败') } };
+  if (![200, 201].includes(created.status)) return { status: created.status, body: created.body ?? text_of('建立外部成员失败') };
   const member = created.body.member;
   with_registry(home, (registry, now) => {
     registry.externals[external_id] = { public_key: { kty: 'EC', crv: 'P-256', x: public_key.x, y: public_key.y }, room_id: room.id, member_id: member.member_id,
@@ -311,17 +330,17 @@ async function redeem(home, ctx, id, sealed, request) {
 async function open_external(home, id, sealed, machine_id) {
   const request = JSON.parse(sealed.body);
   const entry = read_registry(home).externals[sealed.external_id];
-  if (!entry || !(entry.key_expires_at > Date.now())) throw new GatewayError(403, t('这位外部成员未登记或已移除'));
-  if (!await verify_signature(entry.public_key, sealed.signature, `${id}\n${sealed.body}`)) throw new GatewayError(403, t('外部成员签名无效'));
-  if (request.machine !== machine_id) throw new GatewayError(403, t('这条请求是发给另一台电脑的'));
-  if (request.room !== entry.room_id) throw new GatewayError(403, t('外部成员只能访问自己加入的房间'));
-  if (!EXTERNAL_SIGNED_ACTIONS.has(request.action)) throw new GatewayError(403, t('该操作不对外部成员开放'));
+  if (!entry || !(entry.key_expires_at > Date.now())) throw new GatewayError(403, '这位外部成员未登记或已移除', {}, 'external_ended');
+  if (!await verify_signature(entry.public_key, sealed.signature, `${id}\n${sealed.body}`)) throw new GatewayError(403, '外部成员签名无效', {}, 'bad_signature');
+  if (request.machine !== machine_id) throw new GatewayError(403, '这条请求是发给另一台电脑的', {}, 'wrong_machine');
+  if (request.room !== entry.room_id) throw new GatewayError(403, '外部成员只能访问自己加入的房间', {}, 'wrong_room');
+  if (!EXTERNAL_SIGNED_ACTIONS.has(request.action)) throw new GatewayError(403, '该操作不对外部成员开放', {}, 'action_forbidden');
   return { request, entry };
 }
 
 /** The member credential must be the one this key was given, so a leaked credential is useless without the key. */
 function check_token(entry, token) {
-  if (typeof token !== 'string' || !same(sha256(token), entry.token_hash)) throw new GatewayError(403, t('成员凭据与外部成员不符'));
+  if (typeof token !== 'string' || !same(sha256(token), entry.token_hash)) throw new GatewayError(403, '成员凭据与外部成员不符', {}, 'credential_mismatch');
 }
 
 /** Keep a key in use on the website's list: extend it when it nears its end. */
@@ -342,13 +361,13 @@ async function external_api(home, ctx, external_id, entry, room, payload) {
   const rest = typeof path === 'string' && path.startsWith(prefix) ? path.slice(prefix.length) : null;
   const [sub, query = ''] = rest === null ? [] : rest.split(/(?=\?)/);
   if (!['GET', 'POST'].includes(method) || rest === null || path.includes('..') || !SUB_PATH.test(sub || '') || !QUERY.test(query)) {
-    throw new GatewayError(400, t('外部成员请求地址无效'));
+    throw new GatewayError(400, '外部成员请求地址无效', {}, 'bad_path');
   }
   check_token(entry, token);
   const answer = await local_call(room, method, path, { token, external: true, fetcher: ctx.fetcher, body: method === 'POST' ? (body ?? {}) : undefined,
     etag: method === 'GET' && typeof etag === 'string' && /^"[0-9a-f]{1,64}"$/.test(etag) ? etag : undefined });
   if (answer.status === 304) return { status: 304, etag: answer.etag };
-  if (!answer.json) return { status: 415, body: { error: t('外部成员只能读取 JSON 回答') } };
+  if (!answer.json) return { status: 415, body: text_of('外部成员只能读取 JSON 回答') };
   if (answer.status === 403 && answer.body?.code === 'external_ended') await drop_external(home, ctx, external_id, answer.body?.reason || 'ended');
   else if (answer.status < 400) await keep_key(home, ctx, external_id);
   return { status: answer.status, body: answer.body, ...(answer.etag ? { etag: answer.etag } : {}) };
@@ -373,28 +392,29 @@ function engine_call(directory, { op, path, query, offset, limit, max_bytes, max
  */
 async function external_repo(home, ctx, external_id, entry, room, payload) {
   const { op, token, root } = payload || {};
-  if (!['ls', 'read', 'grep'].includes(op)) throw new GatewayError(400, t('读取操作须为 ls、read 或 grep'));
+  if (!['ls', 'read', 'grep'].includes(op)) throw new GatewayError(400, '读取操作须为 ls、read 或 grep');
   check_token(entry, token);
   const member_path = `/api/rooms/${encodeURIComponent(room.id)}/external-members/${encodeURIComponent(entry.member_id)}`;
   const grant = await local_call(room, 'GET', member_path, { token: room.token, fetcher: ctx.fetcher });
-  if (grant.status !== 200) return { status: grant.status >= 500 ? 503 : grant.status, body: { error: t('无法确认读取授权'), reason: 'grant_unavailable' } };
+  if (grant.status !== 200) return { status: grant.status >= 500 ? 503 : grant.status, body: { ...text_of('无法确认读取授权'), code: 'grant_unavailable', reason: 'grant_unavailable' } };
   const member = grant.body?.member ?? grant.body;
   if (member?.status !== 'active') {
     await drop_external(home, ctx, external_id, member?.end_reason || 'ended');
-    return { status: 403, body: { error: t('外部成员资格已结束'), reason: 'external_ended' } };
+    return { status: 403, body: { ...text_of('外部成员资格已结束'), code: 'external_ended', reason: 'external_ended' } };
   }
-  if (member.scope !== 'read' || !Array.isArray(member.directories)) return { status: 403, body: { error: t('这位外部成员只能讨论，不能读取项目'), reason: 'not_readable' } };
+  if (member.scope !== 'read' || !Array.isArray(member.directories)) return { status: 403, body: { ...text_of('这位外部成员只能讨论，不能读取项目'), code: 'not_readable', reason: 'not_readable' } };
   if (op === 'ls' && root === undefined) return { status: 200, body: { directories: member.directories.map((directory, index) => ({ root: index, name: basename(directory) })) } };
   const directory = Number.isSafeInteger(root) ? member.directories[root] : undefined;
-  if (!directory || !in_room(room, directory)) return { status: 403, body: { error: t('这个目录没有对你开放'), reason: 'bad_root' } };
+  if (!directory || !in_room(room, directory)) return { status: 403, body: { ...text_of('这个目录没有对你开放'), code: 'bad_root', reason: 'bad_root' } };
   const result = await engine_call(directory, payload);
   const record = await local_call(room, 'POST', `${member_path}/reads`, { token: room.token, fetcher: ctx.fetcher, body: { op, root,
     path: String(result.path ?? payload.path ?? ''), bytes: result.ok ? result.bytes || 0 : 0, outcome: result.ok ? 'ok' : 'denied', reason: result.ok ? '' : result.reason } })
     .catch(() => ({ status: 503, body: null }));
-  if (!result.ok) return { status: 403, body: { error: t('读取被拒绝（{reason}）', { reason: result.reason }), reason: result.reason } };
+  if (!result.ok) return { status: 403, body: { ...text_of('读取被拒绝（{reason}）', { reason: result.reason }), code: 'engine_denied', reason: result.reason } };
   if (record.status !== 200 || record.body?.allowed !== true || record.body?.recorded !== true) {
     return { status: record.status === 200 ? 403 : record.status >= 500 ? 503 : record.status,
-      body: { error: record.body?.allowed === false ? t('读取超出配额或不被允许（{reason}）', { reason: record.body.code || '' }) : t('读取记录写入失败，未返回内容'),
+      body: { ...(record.body?.allowed === false ? text_of('读取超出配额或不被允许（{reason}）', { reason: record.body.code || '' }) : text_of('读取记录写入失败，未返回内容')),
+        code: record.body?.code || 'audit_failed',
         reason: record.body?.code || 'audit_failed' } };
   }
   await keep_key(home, ctx, external_id);
@@ -428,11 +448,11 @@ export function is_external_request(sealed) {
 export async function answer_external(home, ctx, id, sealed) {
   let request = {}, response;
   try {
-    if (sealed.device_id) throw new GatewayError(400, t('请求同时带有设备与外部成员签名'));
+    if (sealed.device_id) throw new GatewayError(400, '请求同时带有设备与外部成员签名');
     if (sealed.external_id === undefined) {
       request = JSON.parse(sealed.body);
-      if (request.action !== 'external-redeem') throw new GatewayError(403, t('该操作不对外部成员开放'));
-      if (request.machine !== ctx.machine_id) throw new GatewayError(403, t('这条请求是发给另一台电脑的'));
+      if (request.action !== 'external-redeem') throw new GatewayError(403, '该操作不对外部成员开放', {}, 'action_forbidden');
+      if (request.machine !== ctx.machine_id) throw new GatewayError(403, '这条请求是发给另一台电脑的', {}, 'wrong_machine');
       claim_relayed_command(home, id, request.sent_at);
       response = await redeem(home, ctx, id, sealed, request);
     } else {
@@ -440,12 +460,13 @@ export async function answer_external(home, ctx, id, sealed) {
       request = opened.request;
       claim_relayed_command(home, id, request.sent_at);
       const room = local_room(home, opened.entry.room_id);
-      if (!room) throw new GatewayError(404, t('房间已不在这台电脑上'));
+      if (!room) throw new GatewayError(404, '房间已不在这台电脑上');
       const handler = { 'external-api': external_api, 'external-repo': external_repo, 'external-leave': external_leave }[request.action];
       response = await handler(home, ctx, sealed.external_id, opened.entry, room, request.payload);
     }
   } catch (error) {
-    response = { status: error instanceof GatewayError ? error.status : 400, body: { error: error.message, ...(error.reason ? { reason: error.reason } : {}) } };
+    response = { status: error instanceof GatewayError ? error.status : 400,
+      body: { error: error.message, ...(error.error_text ? { error_text: error.error_text } : {}), ...(error.code ? { code: error.code } : {}) } };
   }
   audit(home, { event: 'external', action: typeof request.action === 'string' ? request.action.slice(0, 40) : '',
     route: typeof request.payload?.path === 'string' ? request.payload.path.split('?')[0].slice(0, 200) : '',

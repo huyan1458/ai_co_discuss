@@ -29,6 +29,11 @@ export const BORROW_DEFAULTS = { max_wakes: 20, hours: 24 };
 const MAX_WAKES_LIMIT = 1000;
 const MAX_HOURS = 720;
 const HISTORY_LIMIT = 50;
+// What this computer keeps of each request its AI received and each answer it gave, so the history still reads after the
+// inviting room can no longer be reached.
+const TEXT_LIMIT = 4000;
+// How often a pass also reads the member's current grant (`/view`) when nothing is woken; a wake and the room view always read it.
+const VIEW_REFRESH_MS = 60000;
 const HOUR_MS = 3600000;
 // The website gives up on a relayed request after 9 seconds; ask for an answer within that.
 const RELAY_WAIT_MS = 8000;
@@ -75,6 +80,23 @@ let secret_codec = process.platform === 'win32' ? DPAPI_CODEC : PLAIN_CODEC;
 /** Tests replace the Windows sealing, which starts PowerShell, with the plain file form. */
 export function use_plain_secrets() { secret_codec = PLAIN_CODEC; }
 
+/**
+ * An error the page can show in its own language: the Chinese template and its parameters (`error_text`, as the
+ * website's errors carry) and a stable `code`, beside the message in this command line's language.
+ */
+function failure(code, template, params, extra = {}) {
+  return Object.assign(new Error(t(template, params)), { code, error_text: { template, params: params || {} }, ...extra });
+}
+
+/** An error refused by the other side, keeping its own text, template and code when it gave them. */
+function remote_failure(body, code, template, params, extra = {}) {
+  if (!body?.error) return failure(code, template, params, extra);
+  return Object.assign(new Error(body.error), { code: body.code || code, ...(body.error_text ? { error_text: body.error_text } : {}), ...extra });
+}
+
+/** What a failure leaves for the page beside its message. */
+const failure_fields = error => ({ ...(error?.code && typeof error.code === 'string' ? { code: error.code } : {}), ...(error?.error_text ? { error_text: error.error_text } : {}) });
+
 // ---- Store ----
 
 function external_home(home) {
@@ -110,7 +132,7 @@ function with_store(home, task) {
     try { writeFileSync(lock, String(process.pid), { flag: 'wx' }); break; } catch (error) {
       if (error.code !== 'EEXIST') throw error;
       try { if (Date.now() - statSync(lock).mtimeMs > LOCK_STALE_MS) { rmSync(lock, { force: true }); continue; } } catch { continue; }
-      if (Date.now() > deadline) throw new Error(t('被邀请记录正被占用，请稍后重试'));
+      if (Date.now() > deadline) throw failure('store_busy', '被邀请记录正被占用，请稍后重试');
       Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 20);
     }
   }
@@ -135,7 +157,7 @@ export function record_view(record, store) {
 
 function find_record(store, id) {
   const record = store.records[String(id || '')];
-  if (!record) throw new Error(t('没有这条被邀请记录：{id}', { id }));
+  if (!record) throw failure('record_not_found', '没有这条被邀请记录：{id}', { id });
   return record;
 }
 
@@ -151,7 +173,7 @@ function change_record(home, id, change) {
 
 function clean_site(value) {
   const url = new URL(String(value || ''));
-  if (!['http:', 'https:'].includes(url.protocol) || url.username || url.password) throw new Error(t('站点地址无效'));
+  if (!['http:', 'https:'].includes(url.protocol) || url.username || url.password) throw failure('invalid_site', '站点地址无效');
   return url.origin;
 }
 
@@ -160,7 +182,7 @@ function invite_fields(fragment) {
     const value = JSON.parse(Buffer.from(fragment.replace(/^#/, ''), 'base64url').toString('utf8'));
     if (value && typeof value === 'object') return value;
   } catch { /* Not an invitation payload. */ }
-  throw new Error(t('邀请链接无效，请向对方重新索取'));
+  throw failure('invalid_link', '邀请链接无效，请向对方重新索取');
 }
 
 /**
@@ -177,12 +199,12 @@ export function parse_invite(invite, { site = '', machine = '' } = {}) {
     fields.site ||= url.origin;
   } else fields = { code: text, site, machine };
   const code = String(fields.code || '').toUpperCase().replace(/[^0-9A-Z]/g, '');
-  if (!CODE_PATTERN.test(code)) throw new Error(t('配对码格式不对：应为 12 位字母数字'));
-  if (!fields.site) throw new Error(t('配对码须同时给出对方的线上站点（--site）'));
+  if (!CODE_PATTERN.test(code)) throw failure('invalid_code', '配对码格式不对：应为 12 位字母数字');
+  if (!fields.site) throw failure('site_required', '配对码须同时给出对方的线上站点（--site）');
   const machine_id = String(fields.machine || machine || '');
-  if (machine_id && !HEX32.test(machine_id)) throw new Error(t('电脑编号格式不对'));
+  if (machine_id && !HEX32.test(machine_id)) throw failure('invalid_machine', '电脑编号格式不对');
   const fingerprint = String(fields.fp || '');
-  if (fingerprint && !HEX32.test(fingerprint)) throw new Error(t('邀请链接里的电脑指纹无效'));
+  if (fingerprint && !HEX32.test(fingerprint)) throw failure('invalid_fingerprint', '邀请链接里的电脑指纹无效');
   return { site: clean_site(fields.site), machine: machine_id, fingerprint, code, room_name: String(fields.room_name || ''),
     machine_name: String(fields.machine_name || ''), level: ['read', 'discuss'].includes(fields.level) ? fields.level : '', expires_at: Number(fields.expires_at) || null };
 }
@@ -212,12 +234,12 @@ export function invite_proof(code, machine, jwk) {
 export async function machine_keys(site, machine, { fetcher = fetch } = {}) {
   let response;
   try { response = await fetcher(`${site}/api/machines`, { signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS) }); }
-  catch (error) { throw Object.assign(new Error(t('连不上对方的线上站点 {site}：{reason}', { site, reason: error.message })), { offline: true }); }
+  catch (error) { throw Object.assign(failure('site_unreachable', '连不上对方的线上站点 {site}：{reason}', { site, reason: error.message }), { offline: true }); }
   const body = await response.json().catch(() => ({}));
   const list = (Array.isArray(body) ? body : body.machines || []).filter(item => item?.public_key && item?.sign_key);
-  if (!machine && list.length > 1) throw new Error(t('对方站点连着多台电脑，请用 --machine 指定电脑编号：{ids}', { ids: list.map(item => `${item.id}（${item.name || ''}）`).join('、') }));
+  if (!machine && list.length > 1) throw failure('machine_required', '对方站点连着多台电脑，请用 --machine 指定电脑编号：{ids}', { ids: list.map(item => `${item.id}（${item.name || ''}）`).join('、') });
   const found = machine ? list.find(item => item.id === machine) : list[0];
-  if (!found) throw new Error(t('对方站点上找不到这台电脑，或它还没有连接中转'));
+  if (!found) throw failure('machine_not_found', '对方站点上找不到这台电脑，或它还没有连接中转');
   return { id: found.id, public_key: found.public_key, sign_key: found.sign_key, name: String(found.name || ''), fingerprint: fingerprint_of(found.public_key, found.sign_key) };
 }
 
@@ -274,13 +296,13 @@ export async function relay_send(target, identity, action, payload, { fetcher = 
     response = await fetcher(`${target.site}${route}`, { method: 'POST', headers, body: JSON.stringify({ id, envelope, wait }),
       signal: AbortSignal.timeout(wait + REQUEST_TIMEOUT_MS) });
   } catch (error) {
-    if (error.name === 'TimeoutError' || error.name === 'AbortError') throw Object.assign(new Error(t('对方电脑未在限时内答复，结果待确认')), { unconfirmed: true });
-    throw Object.assign(new Error(t('连不上对方的线上站点 {site}：{reason}', { site: target.site, reason: error.message })), { offline: true });
+    if (error.name === 'TimeoutError' || error.name === 'AbortError') throw Object.assign(failure('unconfirmed', '对方电脑未在限时内答复，结果待确认'), { unconfirmed: true });
+    throw Object.assign(failure('site_unreachable', '连不上对方的线上站点 {site}：{reason}', { site: target.site, reason: error.message }), { offline: true });
   }
   const result = await response.json().catch(() => ({}));
-  if (!response.ok) throw Object.assign(new Error(result.error || t('对方站点拒绝了请求（HTTP {status}）', { status: response.status })), { status: response.status });
-  if (result.status === 'offline') throw Object.assign(new Error(t('对方电脑不在线：它可能关机或没有运行 codiscuss')), { offline: true });
-  if (result.status !== 'done') throw Object.assign(new Error(t('对方电脑未在限时内答复，结果待确认')), { unconfirmed: true });
+  if (!response.ok) throw remote_failure(result, 'site_refused', '对方站点拒绝了请求（HTTP {status}）', { status: response.status }, { status: response.status });
+  if (result.status === 'offline') throw Object.assign(failure('offline', '对方电脑不在线：它可能关机或没有运行 codiscuss'), { offline: true });
+  if (result.status !== 'done') throw Object.assign(failure('unconfirmed', '对方电脑未在限时内答复，结果待确认'), { unconfirmed: true });
   const sealed = result.response;
   const opened = Buffer.from(await subtle.decrypt({ name: 'AES-GCM', iv: Buffer.from(sealed.iv, 'base64'), additionalData: encoder.encode(`${id}:response`) },
     key, Buffer.from(sealed.data, 'base64')));
@@ -288,12 +310,12 @@ export async function relay_send(target, identity, action, payload, { fetcher = 
 }
 
 /** Record how the last exchange went, so a computer that is off reads as offline and an ended membership as ended. */
-function note_contact(home, id, state, error = '', ended = '') {
+function note_contact(home, id, state, error = null, ended = '') {
   try {
     with_store(home, (store, secrets, now) => {
       const record = store.records[id];
       if (!record) return;
-      record.contact = { at: now, state, error: String(error).slice(0, 300) };
+      record.contact = { at: now, state, error: String(error?.message || '').slice(0, 300), ...failure_fields(error) };
       if (ended && record.status === 'active') { record.status = 'ended'; record.end_reason = ended; remember(record, { outcome: 'ended', reason: ended }, now); }
     });
   } catch { /* A busy store only delays the status line. */ }
@@ -303,24 +325,24 @@ function note_contact(home, id, state, error = '', ended = '') {
 async function record_send(home, id, action, payload, deps = {}) {
   const record = find_record(read_store(home), id);
   const secret = read_secrets(home)[id];
-  if (!secret) throw new Error(t('这条被邀请记录已没有密钥，请重新加入'));
+  if (!secret) throw failure('key_missing', '这条被邀请记录已没有密钥，请重新加入');
   let answer;
   try {
     answer = await relay_send({ site: record.site, machine: record.machine, machine_key: record.machine_key },
       { key_id: record.key_id, private_key: secret.private_key, room: record.room }, action, { ...payload, token: secret.token }, deps);
   } catch (error) {
-    note_contact(home, id, error.offline ? 'offline' : 'error', error.message);
+    note_contact(home, id, error.offline ? 'offline' : 'error', error);
     throw error;
   }
   // Revoked, expired or left there: the inviting room is the judge (子Task1 CONTRACT §0).
-  note_contact(home, id, 'online', '', answer.status === 403 && answer.body?.code === 'external_ended' ? answer.body.reason || 'revoked' : '');
+  note_contact(home, id, 'online', null, answer.status === 403 && answer.body?.code === 'external_ended' ? answer.body.reason || 'revoked' : '');
   return answer;
 }
 
 /** One member-scope request to the inviting room (`external-api`); a refusal throws with its status and reason. */
 export async function member_api(home, id, method, path, body, deps = {}) {
   const answer = await record_send(home, id, 'external-api', { method, path, ...(body === undefined ? {} : { body }) }, deps);
-  if (answer.status >= 400) throw Object.assign(new Error(answer.body?.error || t('对方拒绝了请求（HTTP {status}）', { status: answer.status })), { status: answer.status, body: answer.body });
+  if (answer.status >= 400) throw remote_failure(answer.body, 'remote_refused', '对方拒绝了请求（HTTP {status}）', { status: answer.status }, { status: answer.status, body: answer.body });
   return answer.body;
 }
 
@@ -331,7 +353,7 @@ function check_ai(input) {
   const profile = adapter_profile(adapter);
   // The AI reaches the other room only through this computer's codiscuss (a CLI) or this module (the model API's room
   // and repo tools); App windows do neither.
-  if (!['cli', 'api'].includes(profile?.kind)) throw new Error(t('外部成员只能派命令行软件（如 Claude Code）或模型 API'));
+  if (!['cli', 'api'].includes(profile?.kind)) throw failure('ai_unsupported', '外部成员只能派命令行软件（如 Claude Code）或模型 API');
   return { adapter, model: String(input.model || ''), effort: String(input.effort || '') };
 }
 
@@ -341,17 +363,17 @@ export async function join_invite(home, input, deps = {}) {
   const ai = check_ai(input);
   const keys = await machine_keys(invite.site, invite.machine, deps);
   if (invite.fingerprint && invite.fingerprint !== keys.fingerprint) {
-    throw new Error(t('这不是邀请你的那台电脑：指纹不符，已停止加入。请向对方确认链接'));
+    throw failure('fingerprint_mismatch', '这不是邀请你的那台电脑：指纹不符，已停止加入。请向对方确认链接');
   }
   const pair = key_pair(), key_id = key_id_of(pair.public_key);
   const answer = await relay_send({ site: invite.site, machine: keys.id, machine_key: keys.public_key }, { key_id, private_key: pair.private_key }, 'external-redeem',
     { public_key: pair.public_key, proof: invite_proof(invite.code, keys.id, pair.public_key), label: String(input.label || hostname()).slice(0, 80),
       // The model API has no platform name of its own; the inviting room names it as a custom AI.
       platform: adapter_profile(ai.adapter).platform || 'Custom', adapter: ai.adapter }, deps);
-  if (answer.status >= 400) throw new Error(answer.body?.error || t('邀请无效或已过期'));
+  if (answer.status >= 400) throw remote_failure(answer.body, 'invite_invalid', '邀请无效或已过期');
   const joined = answer.body || {};
   if (!ROOM_ID.test(joined.room?.id || '') || typeof joined.member?.name !== 'string' || typeof joined.token !== 'string') {
-    throw new Error(t('对方返回的加入结果不完整'));
+    throw failure('join_incomplete', '对方返回的加入结果不完整');
   }
   return with_store(home, (store, secrets, now) => {
     const id = randomBytes(8).toString('hex');
@@ -372,13 +394,13 @@ export async function join_invite(home, input, deps = {}) {
 
 function bounded(value, max, label) {
   const number = Number(value);
-  if (!Number.isInteger(number) || number < 1 || number > max) throw new Error(t('{label} 须为 1–{max} 的整数', { label, max }));
+  if (!Number.isInteger(number) || number < 1 || number > max) throw failure('invalid_number', '{label} 须为 1–{max} 的整数', { label, max });
   return number;
 }
 
 /** Set the trust of the record's computer and, for 完全借用, the record's own limits (counted afresh from now). */
 export function set_trust(home, { id, trust, max_wakes, hours, until }) {
-  if (!TRUST_LEVELS.includes(trust)) throw new Error(t('信任等级只能是 default、borrow 或 trusted'));
+  if (!TRUST_LEVELS.includes(trust)) throw failure('invalid_trust', '信任等级只能是 default、borrow 或 trusted');
   return change_record(home, id, (record, now, store) => {
     const machine = store.machines[record.machine_fingerprint] ||= { machine: record.machine, site: record.site };
     Object.assign(machine, { trust, updated_at: now });
@@ -386,7 +408,7 @@ export function set_trust(home, { id, trust, max_wakes, hours, until }) {
       const limit = max_wakes === undefined ? record.limits?.max_wakes ?? BORROW_DEFAULTS.max_wakes : bounded(max_wakes, MAX_WAKES_LIMIT, 'max_wakes');
       const end = until !== undefined ? Number(until) : hours !== undefined ? now + bounded(hours, MAX_HOURS, 'hours') * HOUR_MS
         : record.limits?.until > now ? record.limits.until : now + BORROW_DEFAULTS.hours * HOUR_MS;
-      if (!Number.isFinite(end) || end <= now) throw new Error(t('借用期限须晚于现在'));
+      if (!Number.isFinite(end) || end <= now) throw failure('invalid_deadline', '借用期限须晚于现在');
       record.limits = { max_wakes: limit, until: end, used: 0 };
     }
     return { record: record_view(record, store) };
@@ -414,7 +436,7 @@ async function decline(home, id, request_ids, reason, deps) {
 function settle_approval(home, id, approval, outcome) {
   return change_record(home, id, (record, now) => {
     const item = (record.approvals || []).find(entry => entry.id === approval && entry.status === 'waiting');
-    if (!item) throw new Error(t('这条待确认请求不存在或已处理'));
+    if (!item) throw failure('approval_not_found', '这条待确认请求不存在或已处理');
     item.status = outcome;
     if (outcome === 'refused') remember(record, { request_ids: item.request_ids, message_ids: item.message_ids, outcome }, now);
     return item;
@@ -454,22 +476,53 @@ export async function leave(home, { id }, deps = {}) {
   });
 }
 
+/** Keep the record in line with what the inviting room grants now (`/view` `me`): level, deadline and opened directories. */
+function apply_grant(home, id, me, now = Date.now()) {
+  if (!me || typeof me !== 'object') return;
+  change_record(home, id, record => {
+    if (['read', 'discuss'].includes(me.scope)) record.open_level = me.scope;
+    if (Number(me.expires_at)) record.expires_at = Number(me.expires_at) * 1000;
+    if (Array.isArray(me.directories)) record.directories = me.directories.map(({ root, name }) => ({ root, name }));
+    record.grant_checked_at = now;
+  });
+}
+
+async function refresh_grant(home, id, deps) {
+  const record = find_record(read_store(home), id);
+  const view = await member_api(home, id, 'GET', MEMBER_API.view(record.room), undefined, deps);
+  apply_grant(home, id, view?.me, deps.now?.() ?? Date.now());
+  return view;
+}
+
+const clip = text => String(text ?? '').slice(0, TEXT_LIMIT);
+
+/** The requests and answers this computer kept, as messages, for when the inviting room cannot be read. */
+function kept_messages(record) {
+  const messages = new Map();
+  for (const entry of record.history || []) {
+    for (const item of entry.request_texts || []) messages.set(item.id, { ...item, kept: true });
+    if (entry.answer) messages.set(entry.answer.id, { ...entry.answer, execution_id: entry.execution_id, kept: true });
+  }
+  return [...messages.values()].sort((a, b) => a.id - b.id);
+}
+
 /** The record with what the inviting room shows this member, when it can be reached. */
 export async function room_view(home, { id }, deps = {}) {
   const record = find_record(read_store(home), id);
-  let room = null, error = '';
+  let room = null, problem = null;
   let messages = [];
   try {
-    room = await member_api(home, id, 'GET', MEMBER_API.view(record.room), undefined, deps);
+    room = await refresh_grant(home, id, deps);
     // What the page shows in the middle: requests naming this AI and this AI's own answers, oldest first.
     const query = field => `${MEMBER_API.messages(record.room)}?${new URLSearchParams({ [field]: record.member })}`;
     const pages = await Promise.all(['mention', 'author'].map(field => member_api(home, id, 'GET', query(field), undefined, deps)));
     const unique = new Map(pages.flatMap(page => page.messages || []).map(message => [message.id, message]));
     messages = [...unique.values()].sort((a, b) => a.id - b.id);
-  } catch (failure) { error = failure.message; }
+  } catch (error) { problem = error; messages = kept_messages(record); }
   const store = read_store(home);
   // Also under `room`, where the page (子Task6) looks for them.
-  return { record: record_view(store.records[id], store), room: room ? { ...room, messages } : null, messages, ...(error ? { error } : {}) };
+  return { record: record_view(store.records[id], store), room: room ? { ...room, messages } : null, messages,
+    ...(problem ? { error: problem.message, ...failure_fields(problem) } : {}) };
 }
 
 /**
@@ -491,7 +544,7 @@ export async function invited_command(home, action, input = {}, deps = {}) {
   if (action === 'invited-refuse') return refuse_approval(home, input, deps);
   if (action === 'invited-leave') return leave(home, input, deps);
   if (action === 'invited-room') return room_view(home, input, deps);
-  throw new Error(t('未知的被邀请记录操作：{action}', { action }));
+  throw failure('unknown_action', '未知的被邀请记录操作：{action}', { action });
 }
 
 export const INVITED_ACTIONS = new Set(['invited-list', 'invited-join', 'invited-trust', 'invited-ai', 'invited-pause', 'invited-approve',
@@ -524,26 +577,35 @@ function software_profile(home, ai) {
 export async function wake(home, id, request_ids, deps = {}, { only = false } = {}) {
   const store = read_store(home), record = find_record(store, id);
   const lockdown = record_view(record, store).lockdown;
-  const refuse = async (reason, text) => {
-    change_record(home, id, (current, now) => remember(current, { request_ids, outcome: reason, reason: text }, now));
+  const refuse = async (reason, template, params) => {
+    change_record(home, id, (current, now) => remember(current, { request_ids, outcome: reason, reason: t(template, params), reason_text: { template, params } }, now));
     await decline(home, id, request_ids, reason, deps);
     return null;
   };
   const support = lockdown_support(record.ai.adapter);
   if (lockdown && !support.supported) {
-    return refuse('lockdown_unsupported', t('该软件不能收窄到只用 codiscuss 命令，只能在“信任设备”等级下服务：{reason}', { reason: support.reason }));
+    return refuse('lockdown_unsupported', '该软件不能收窄到只用 codiscuss 命令，只能在“信任设备”等级下服务：{reason}', { reason: support.reason });
   }
   const software = deps.software ?? software_profile(home, record.ai);
-  if (!software) return refuse('ai_unavailable', t('这台电脑还没有配置 {adapter}', { adapter: adapter_profile(record.ai.adapter)?.label || record.ai.adapter }));
+  if (!software) return refuse('ai_unavailable', '这台电脑还没有配置 {adapter}', { adapter: adapter_profile(record.ai.adapter)?.label || record.ai.adapter });
+  // The AI is told what the other side opens now, not what it opened at joining.
+  await refresh_grant(home, id, deps).catch(error => deps.log?.(error.message));
   let execution;
   try {
     const claimed = await member_api(home, id, 'POST', MEMBER_API.claim(record.room), { client_id: `ext-${record.id}-${randomBytes(6).toString('hex')}`, ...(only ? { request_ids } : {}) }, deps);
     execution = claimed.execution || claimed;
   } catch (error) {
-    change_record(home, id, (current, now) => remember(current, { request_ids, outcome: 'failed', reason: error.message }, now));
+    change_record(home, id, (current, now) => remember(current, { request_ids, outcome: 'failed', reason: error.message, ...failure_fields(error) }, now));
     return null;
   }
   const claimed_ids = (execution.requests || []).map(item => item.id);
+  // The request texts are kept here (CONTRACT §1.1 history), so the history still reads once that room cannot be.
+  const request_texts = [];
+  for (const message_id of new Set((execution.requests || []).map(item => item.message_id).filter(Number.isInteger))) {
+    const read = await member_api(home, id, 'GET', `${MEMBER_API.messages(record.room)}/${message_id}`, undefined, deps).catch(() => null);
+    const message = read?.message || read;
+    if (message?.id === message_id) request_texts.push({ id: message_id, author: String(message.author || ''), text: clip(message.text) });
+  }
   change_record(home, id, (current, now) => {
     current.wakes = (current.wakes || 0) + 1;
     current.last_wake_at = now;
@@ -551,9 +613,9 @@ export async function wake(home, id, request_ids, deps = {}, { only = false } = 
     current.running = { execution_id: execution.id, started_at: now, last_renew: deps.now?.() ?? now };
     // Approvals whose requests this execution took are settled by it.
     current.approvals = (current.approvals || []).filter(item => item.status === 'waiting' && !item.request_ids.every(request => claimed_ids.includes(request)));
-    remember(current, { request_ids: claimed_ids, message_ids: (execution.requests || []).map(item => item.message_id), outcome: 'woken', execution_id: execution.id }, now);
+    remember(current, { request_ids: claimed_ids, message_ids: (execution.requests || []).map(item => item.message_id), outcome: 'woken', execution_id: execution.id, request_texts }, now);
   });
-  await deliver_external(home, record, execution, { lockdown, software }, deps);
+  await deliver_external(home, find_record(read_store(home), id), execution, { lockdown, software }, deps);
   return execution.id;
 }
 
@@ -586,11 +648,12 @@ async function start_run(home, record, execution, { lockdown, software, end }, d
   const cli = process.platform === 'win32' ? adapter?.windows_command || 'codiscuss.cmd' : 'codiscuss';
   const requests = execution.requests || [];
   const messages = requests.map(item => `#${item.message_id}`).join('、');
-  const { instructions, prompt } = external_task_text({ name: record.member, messages, requests, cli, access_file: access_path, task_path, lockdown, draft_directory: drafts });
+  const directories = record.open_level === 'read' ? record.directories || [] : [];
+  const { instructions, prompt } = external_task_text({ name: record.member, messages, requests, cli, access_file: access_path, task_path, lockdown, draft_directory: drafts, directories });
   const skills_directory = join(PACKAGE_ROOT, '.agents', 'skills');
   atomic_json(task_path, { site: record.site, room: record.room, mode: 'free', member: record.member, external: true,
     execution_id: execution.id, requests, request_messages: requests.map(item => item.message_id), read_after: execution.read_until ?? null,
-    role: 'member', cwd: null, project_access: 'read', draft_directory: drafts, directories: record.directories || [],
+    role: 'member', cwd: null, project_access: 'read', draft_directory: drafts, open_level: record.open_level, directories,
     skills: ['discuss-participant/SKILL.md', 'discuss-participant/references/room.md'].map(file => join(skills_directory, file)),
     cli, subcommands: TASK_SUBCOMMANDS, access_file: access_path, tool_lockdown: lockdown, instructions });
   const profile = { adapter: record.ai.adapter, ...software, model: record.ai.model || software.model || '', effort: record.ai.effort, cwd: workdir, project_access: 'read' };
@@ -622,22 +685,27 @@ function bind_session(home, id, session_id) {
 }
 
 /**
- * A run ended: free the record and, when the inviting room still holds the execution open (no answer arrived), fail it
- * there with the reason, as the room runner does. Whether an answer arrived is decided there (red line 4).
+ * A run ended: free the record, then ask the inviting room how it went there, since only it knows whether an answer bound
+ * to this execution arrived (red line 4). Answered → recorded as answered, even when the process ended with an error (kept
+ * as a note); still open there → failed, and the room is told why, as the room runner does; closed there without an
+ * answer (cancelled, retracted) → ended.
  */
 async function finish(home, id, execution_id, reason, deps) {
-  change_record(home, id, (record, now) => {
-    if (record.running?.execution_id === execution_id) record.running = null;
-    remember(record, { execution_id, outcome: reason ? 'failed' : 'ended', ...(reason ? { reason } : {}) }, now);
-  });
+  change_record(home, id, record => { if (record.running?.execution_id === execution_id) record.running = null; });
   const record = read_store(home).records[id];
-  let open = true;
-  if (!reason) {
-    const inbox = await member_api(home, id, 'GET', MEMBER_API.inbox(record.room), undefined, deps).catch(() => null);
-    open = !inbox || (inbox.executions || []).some(item => item.id === execution_id);
-  }
-  if (!open) return;
+  const answers = await member_api(home, id, 'GET', `${MEMBER_API.messages(record.room)}?${new URLSearchParams({ author: record.member })}`, undefined, deps)
+    .catch(() => null);
+  const answer = (answers?.messages || []).find(message => message.execution_id === execution_id);
+  const answered = Boolean(answer);
+  const inbox = answered ? null : await member_api(home, id, 'GET', MEMBER_API.inbox(record.room), undefined, deps).catch(() => null);
+  // Unknown (the other computer not reachable) counts as open, so the failure is reported once it can be.
+  const open = !answered && (!inbox || (inbox.executions || []).some(item => item.id === execution_id));
+  const outcome = answered ? 'answered' : open ? 'failed' : 'ended';
   const text = reason || t('{member} 会话已结束，但未提交本次回答', { member: record.member });
+  change_record(home, id, (current, now) => remember(current, { execution_id, outcome,
+    ...(answer ? { answer: { id: answer.id, author: String(answer.author || record.member), text: clip(answer.text) } } : {}),
+    ...(reason ? { reason } : open ? { reason: text, reason_text: { template: '{member} 会话已结束，但未提交本次回答', params: { member: record.member } } } : {}) }, now));
+  if (!open) return;
   try { await member_api(home, id, 'POST', MEMBER_API.execution(record.room, execution_id), { action: 'fail', reason: text.slice(0, 400) }, deps); }
   catch (error) { if (error.status !== 409) deps.log?.(t('未能向对方上报执行 #{execution} 的结束：{reason}', { execution: execution_id, reason: error.message })); }
 }
@@ -672,6 +740,8 @@ export async function poll_record(home, id, deps = {}) {
   }
   if (record.paused) return { skipped: true };
   const inbox = await member_api(home, id, 'GET', MEMBER_API.inbox(record.room), undefined, deps);
+  if (Number(inbox.member?.expires_at)) change_record(home, id, current => { current.expires_at = Number(inbox.member.expires_at) * 1000; });
+  if (!(now - (record.grant_checked_at || 0) < VIEW_REFRESH_MS)) await refresh_grant(home, id, deps);
   const pending = (inbox.pending || []).filter(item => Number.isInteger(item.id));
   const pending_ids = new Set(pending.map(item => item.id));
   // An approved request that is gone there (cancelled meanwhile) needs nothing more.
@@ -713,7 +783,7 @@ export function start_external_client(home, { log = () => {}, signal, deps = {} 
 
 function external_access(access) {
   if (access?.transport !== 'external' || !RECORD_ID.test(String(access.record || ''))) {
-    throw new Error(t('只有经另一台电脑加入的成员才能这样访问；请用任务给出的 --access-file'));
+    throw failure('not_external', '只有经另一台电脑加入的成员才能这样访问；请用任务给出的 --access-file');
   }
   return access;
 }
@@ -762,12 +832,12 @@ const REPO_REASONS = {
 /** `codiscuss repo ls|read|grep`: read the other computer's opened project through its relay (子Task2 CONTRACT §4.3). */
 export async function repo_command(home, op, options, access, deps = {}) {
   external_access(access);
-  if (!['ls', 'read', 'grep'].includes(op)) throw new Error(t('用法：codiscuss repo ls [目录] | read 文件 | grep 关键词'));
+  if (!['ls', 'read', 'grep'].includes(op)) throw failure('repo_usage', '用法：codiscuss repo ls [目录] | read 文件 | grep 关键词');
   const answer = await record_send(home, access.record, 'external-repo', { op, ...options }, deps);
   const body = answer.body || {};
   if (answer.status >= 400 || body.ok === false) {
     const reason = body.reason || '';
-    throw Object.assign(new Error(REPO_REASONS[reason] ? t(REPO_REASONS[reason]) : body.error || t('读取被拒绝')), { reason });
+    throw REPO_REASONS[reason] ? failure(`repo_${reason}`, REPO_REASONS[reason], undefined, { reason }) : remote_failure(body, 'repo_refused', '读取被拒绝', undefined, { reason });
   }
   return body;
 }
@@ -782,8 +852,8 @@ const LAUNCH_FILE_FLAGS = new Set(['--file', '--draft', '--dir']);
  */
 export function lockdown_launch_guard(args, env = process.env) {
   if (env.CODISCUSS_TOOL_LOCKDOWN !== '1') return;
-  if (args[0] === 'image') throw new Error(t('本次运行已收窄，不能使用 launch image（它会读取本机文件）'));
-  if (args.includes('--stdin')) throw new Error(t('本次运行已收窄，不能从标准输入读取；请先把内容写进草稿目录，再用文件参数传入'));
+  if (args[0] === 'image') throw failure('lockdown_image', '本次运行已收窄，不能使用 launch image（它会读取本机文件）');
+  if (args.includes('--stdin')) throw failure('lockdown_stdin', '本次运行已收窄，不能从标准输入读取；请先把内容写进草稿目录，再用文件参数传入');
   const real = path => { try { return realpathSync(path); } catch { return resolve(path); } };
   const folder = env.CODISCUSS_LOCKDOWN_DIRECTORY ? real(env.CODISCUSS_LOCKDOWN_DIRECTORY) : '';
   args.forEach((arg, index) => {
@@ -792,7 +862,7 @@ export function lockdown_launch_guard(args, env = process.env) {
     const value = inline ?? args[index + 1] ?? '';
     const target = value === '-' ? '' : real(value);
     const inside = folder && target && (target === folder || target.startsWith(`${folder}${sep}`));
-    if (!inside) throw new Error(t('本次运行已收窄，只能读取草稿目录 {folder} 里的文件', { folder: folder || '-' }));
+    if (!inside) throw failure('lockdown_path', '本次运行已收窄，只能读取草稿目录 {folder} 里的文件', { folder: folder || '-' });
   });
 }
 

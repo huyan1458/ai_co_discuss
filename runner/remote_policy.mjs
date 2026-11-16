@@ -7,6 +7,7 @@ import { existsSync, opendirSync, readFileSync, realpathSync, statSync } from 'n
 import { dirname, isAbsolute, join, relative } from 'node:path';
 
 import { atomic_json } from './files.mjs';
+import { t } from './i18n.mjs';
 
 const DIRECTORY_PAGE_SIZE = 200;
 // Stop reading a huge folder after this many entries; the listing says it was cut short.
@@ -104,6 +105,12 @@ export function guard_remote_request(command, input, { projects, participants, h
   });
   // Joining a room on another computer from afar contacts only a public HTTPS site, never this computer's own network.
   if (command === 'invited-join') remote_invite_site(input);
+  // 信任设备 lifts this computer's guard on the invited AI for good, so, like 全放开 as a default, it is set only here
+  // (DESIGN D6a); going back to 默认 or 完全借用 is allowed from afar.
+  if (['invited-trust', 'invited-join'].includes(command) && input.trust === 'trusted') {
+    const template = '“信任设备”只能在这台电脑上设置；其他设备可以改回“默认”或“完全借用”';
+    throw Object.assign(new Error(t(template)), { error_text: { template, params: {} }, code: 'trusted_local_only' });
+  }
   // A saved project only widens what other devices reach, so a new or moved one must already lie inside the old ones.
   if (command === 'projects' && Array.isArray(input.projects)) {
     const existing = new Map((projects || []).map(project => [project.id, project.path]));

@@ -49,3 +49,8 @@ export function set_locale(code) {
 export const locales = SUPPORTED_LOCALES;
 
 if (typeof document !== "undefined") document.documentElement.lang = locale;
+
+// The address fragment as the page loaded, before web/app.js rewrites the address when it opens a room: an invitation
+// handed over as #join=… is read from here by the workspace (external-members.js take_join_fragment). Only a join
+// fragment is kept, and the workspace deletes it once read.
+if (typeof location !== "undefined" && /(?:^#|&)join=/.test(location.hash || "")) globalThis.codiscuss_initial_hash = location.hash;

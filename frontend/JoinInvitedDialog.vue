@@ -64,13 +64,14 @@ async function submit() {
         </UFormField>
         <p v-if="text.trim() && !is_link" class="fine-print">{{ t("配对码不含对方电脑的公钥指纹，无法核对连到的是不是对方；能用链接或扫码时优先用。") }}</p>
         <RosterAdd :label="t('派哪个 AI')" :items="items" @add="choose" />
+        <p v-if="!platforms.length && invited.available.value" class="fine-print" role="note">{{ t("这台电脑还没有可派出的 AI 软件，请先在设置里配置。") }}</p>
         <template v-if="platform">
           <UFormField :label="t('模型')">
             <USelect v-model="model" :items="model_items" class="w-full" :loading="models?.loading" :placeholder="t('软件默认模型')" />
           </UFormField>
           <EffortSlider v-if="effort_items.length > 1" v-model="effort" :items="effort_items" :label="t('强度')" />
         </template>
-        <TrustLevelField v-model="trust" />
+        <TrustLevelField v-model="trust" :trusted_locked="!invited.trust_local.value" />
         <p v-if="lockdown" class="fine-print join-invited-warning" role="note">{{ t("这个软件不能限制为只用共议命令（{reason}），只能在“信任设备”等级下服务；其他等级下被点名时不会启动。", { reason: lockdown }) }}</p>
         <p v-if="!invited.available.value" class="fine-print" role="alert">{{ t("加入需要本机服务，请在运行 AI 的电脑打开本机网站。") }}</p>
         <div class="join-invited-footer">

@@ -106,6 +106,10 @@ watch(() => [room.value.id, free.value.conflicts], ([room_id, conflicts]) => ann
 const unregistered = (member) => member.access === "manual" && member.status === "active" && !member.registered_at;
 function member_tone(member) {
   if (member.status === "away") return "neutral";
+  // An external member that ended or expired is inert; one whose computer refused the last request needs a look.
+  const external = external_of(member);
+  if (external && (external.ended || (external.expires_at && external.expires_at <= clock.value))) return "neutral";
+  if (external_declined.value.has(member.id) && !busy(member)) return "warning";
   if (unregistered(member)) return "warning";
   if (member.execution?.stale || (member.pending && member.adopt_error)) return "error";
   if (member.held_until) return "warning";
@@ -138,7 +142,8 @@ function member_status(member, state) {
  * API, manual and web members also say how they take part; one that can make images names its image model too. The crown already marks the host.
  */
 function member_tag(member) {
-  if (external_of(member)) return external_tag(member, clock.value);
+  // An external member's tag sits on its own line below (member_setup): beside a name like "DeepSeek-ext" it would be cut.
+  if (external_of(member)) return "";
   if (member.access !== "runner") return ACCESS_LABELS[member.access];
   return [member.adapter === "api" ? "API" : "", member_model(member)].filter(Boolean).join(" · ");
 }
@@ -150,7 +155,8 @@ function member_model(member) {
 
 /** Session and project files of a woken member, e.g. "借用会话 · 可写"; web members only read. */
 function member_setup(member) {
-  if (external_of(member)) return "";
+  // The line below the name wraps, so "外部 · 只读文件 · 剩 56 分" stays whole at the rail's default 280px.
+  if (external_of(member)) return external_tag(member, clock.value);
   const session = member.access === "runner" ? (member.session_mode === "borrowed" ? t('借用会话') : t('独立会话')) : "";
   return [session, bridge.participant_files(member.name, room.value, view.value.launch.room_models)].filter(Boolean).join(" · ");
 }
@@ -341,7 +347,7 @@ watch(() => room.value.id, () => { starting.value = false; });
             <div class="pb-member-body">
               <div class="pb-member-name" :title="room.descriptions?.[member.name] || undefined">{{ bridge.display_name(member.name) }}<span v-if="bridge.display_name(member.name) !== member.name" class="member-id">{{ member.name }}</span><UIcon v-if="member.role === 'host'" name="i-lucide-crown" :title="t('主持人')" /><small :title="member_tag(member) || undefined">{{ member_tag(member) }}</small></div>
               <small v-if="in_workflow(member.name)" class="pb-workflow-member" :title="t('来自工作流「{value1}」', { value1: workflow.label })">{{ t('工作流') }}</small>
-              <div v-if="member_setup(member)" class="pb-member-model" :title="bridge.participant_session_hint(member.name, room, view.launch.room_models)">{{ member_setup(member) }}</div>
+              <div v-if="member_setup(member)" class="pb-member-model" :title="external_of(member) ? external_tag(member, clock, { full: true }) : bridge.participant_session_hint(member.name, room, view.launch.room_models)">{{ member_setup(member) }}</div>
               <div class="pb-member-status" :class="`is-${member_tone(member)}`"><span class="pb-dot"></span><span class="pb-member-status-text" :title="member.execution?.status === 'failed' ? member.execution.result : member.held_until ? member_status(member, item.state) : undefined">{{ member_status(member, item.state) }}</span></div>
             </div>
             <UDropdownMenu :items="member_menu(member)" :content="{ align: 'end' }" :ui="{ content: 'channel-menu' }"><UButton icon="i-lucide-ellipsis" color="neutral" variant="ghost" size="xs" class="pb-member-more" :aria-label="t('{value1} 的更多操作', { value1: member.name })" /></UDropdownMenu>
@@ -371,7 +377,7 @@ watch(() => room.value.id, () => { starting.value = false; });
 <style scoped>
 .pb-member.is-away { opacity: .6; }
 /* A member from another computer: a dashed ring marks it apart from this computer's own AIs. */
-.channel-avatar.is-external { outline: 1px dashed var(--ui-text-muted); outline-offset: 2px; }
+.channel-avatar.is-external { outline: 1px dashed var(--ui-text-dimmed); outline-offset: 1px; }
 .pb-goal-status { display: flex; align-items: center; gap: 6px; font-size: 12px; }
 .pb-goal-status.is-paused { color: var(--ui-text-muted); }
 /* The two start buttons share one row; the note on why they are disabled sits below them. */

@@ -941,7 +941,8 @@ def recent_executions(connection, room_id, span=None):
         (SELECT MAX(answer_id) FROM member_requests WHERE execution_id=e.id) AS answer_id,
         (SELECT MIN(message_id) FROM member_requests WHERE execution_id=e.id
             OR id IN (SELECT request_id FROM retried_requests WHERE execution_id=e.id)) AS request_message_id,
-        (SELECT MIN({LAYOUT_AFTER_SQL}) FROM member_requests r WHERE r.execution_id=e.id
+        -- Work on several requests started after the latest of them, so its card shows under the last message it answers.
+        (SELECT MAX({LAYOUT_AFTER_SQL}) FROM member_requests r WHERE r.execution_id=e.id
             OR r.id IN (SELECT request_id FROM retried_requests WHERE execution_id=e.id)) AS layout_after,
         EXISTS(SELECT 1 FROM retried_requests WHERE execution_id=e.id) AS retried,
         (SELECT MIN({LAYOUT_AT_SQL}) FROM member_requests r WHERE r.execution_id=e.id) AS layout_at,
@@ -2669,6 +2670,10 @@ def stop_member_work(connection, member_id, reason, cancel_reason, keep_pending=
     """
     for row in connection.execute("SELECT id FROM member_executions WHERE member_id=? AND status IN ('dispatched','started')",
                                   (member_id,)).fetchall():
+        # The interrupted turn's card stays under the message it was answering, marked stopped, after its requests move on.
+        if requeue:
+            connection.execute("INSERT OR IGNORE INTO retried_requests (execution_id,request_id) SELECT ?,id FROM member_requests WHERE execution_id=?",
+                               (row["id"], row["id"]))
         finish_execution(connection, row["id"], "cancelled", reason, "pending" if requeue else "cancelled", "" if requeue else cancel_reason)
     if not keep_pending:
         record_cancel_reasons(connection, "member_id=? AND status='pending'", (member_id,), cancel_reason)

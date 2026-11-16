@@ -9,7 +9,7 @@ import { access_label, access_options, EXPERT_PROMPT_PRESETS } from "../runner/e
 import { adapter_profile } from "../runner/adapters/profiles.mjs";
 import { format_duration, snapshot_at, timeline_axis, timeline_rows, timeline_segments, timeline_summary } from "../frontend/timeline-model.js";
 import { t } from "../frontend/i18n.js";
-import { declined, external_of, external_tag, extended_until, remaining_label } from "../frontend/external-members.js";
+import { declined, external_of, external_tag, extended_until, invited_items, remaining_label, take_join_fragment } from "../frontend/external-members.js";
 
 // Sliced component code calls t() for interface text; every sandbox gets the translator (Chinese here).
 const create_context = vm.createContext;
@@ -1773,7 +1773,8 @@ test("external members read the room view's external field, and only declined or
   const member = { id: 7, name: "Claude-ext", access: "external", status: "active",
     external: { scope: "read", expires_at: Math.floor(now / 1000) + 2 * 3600 + 60, machine_label: "A 的笔记本", directories: [{ root: 0, name: "app" }] } };
   assert.deepEqual(external_of(member), { level: "read", expires_at: (Math.floor(now / 1000) + 2 * 3600 + 60) * 1000, directories: ["app"], computer: "A 的笔记本", ended: false });
-  assert.equal(external_tag(member, now), "外部 · 只读项目 · 剩余 2 小时");
+  assert.equal(external_tag(member, now), "外部 · 只读文件 · 剩 2 小时", "short enough for the rail at 1440 wide");
+  assert.equal(external_tag(member, now, { full: true }), "外部 · 只读项目 · 剩余 2 小时", "the full wording for its hover text");
   assert.equal(external_tag({ ...member, status: "removed" }, now), "外部 · 已结束");
   assert.equal(external_of({ id: 1, name: "Codex", access: "runner" }), null, "an ordinary member is not external");
   assert.equal(remaining_label(now - 1, now), "已到期");
@@ -1790,8 +1791,8 @@ test("an external member's menu offers its read log and revoking, never credenti
   const opened = [];
   const groups = member_actions(member, { view: { access: { can_manage: true }, launch: {} }, act: () => {}, describe: () => {}, external: (target, focus) => opened.push(focus || "open") });
   const labels = groups.flat().map((item) => item.label);
-  assert.deepEqual(labels, ["读取记录与权限", "名称与描述", "撤销"]);
-  groups.flat().find((item) => item.label === "撤销").onSelect();
+  assert.deepEqual(labels, ["读取记录与权限", "名称与描述", "撤销授权"]);
+  groups.flat().find((item) => item.label === "撤销授权").onSelect();
   groups.flat()[0].onSelect();
   assert.deepEqual(opened, ["revoke", "open"]);
 });
@@ -1823,4 +1824,64 @@ test("the join page reads the invitation from the fragment and hands the whole l
   assert.doesNotMatch(texts, /ABCD1234EFGH/, "the code itself is not shown on the page");
   const join = nodes.find((node) => node.tag === "a");
   assert.equal(join.attributes.href, `http://127.0.0.1:8765/#join=${encodeURIComponent(href)}`);
+});
+
+// A's middle page (子Task4 CONTRACT §1.1 records, `invited-room` messages): one card per run, the AI's answer under the
+// request it answers, and an ended record keeps its history.
+test("an invited room shows each run once, with this AI's answer under its request, and keeps the history after it ended", () => {
+  const record = { member: "Claude-ext", status: "ended", end_reason: "revoked", approvals: [], running: null, history: [
+    { at: 1000, request_ids: [1], message_ids: [1], outcome: "woken", execution_id: 5 },
+    { at: 2000, execution_id: 5, outcome: "failed", reason: "进程退出码 1" },
+    { at: 3000, request_ids: [3], message_ids: [3], outcome: "refused" },
+    { at: 4000, outcome: "ended", reason: "revoked" },
+  ] };
+  const messages = [{ id: 1, author: "用户", text: "看看 README" }, { id: 2, author: "Claude-ext", text: "读完了", request_message_id: 1 },
+    { id: 3, author: "用户", text: "再看看" }];
+  const items = invited_items(record, messages);
+  assert.deepEqual(items.map((item) => [item.key, item.outcome, item.answers.map((answer) => answer.id)]),
+    [["end", "ended", []], ["h0", "refused", []], ["e5", "answered", [2]]]);
+  assert.equal(items[0].reason, "已结束：被对方撤销");
+  assert.equal(items[2].reason, "", "an answer that arrived settles the request whatever the exit code said");
+  assert.deepEqual(items[2].requests.map((message) => message.id), [1]);
+});
+
+// V17: web/app.js rewrites the address to /?room=… when it opens the last room, before the workspace mounts; the
+// invitation handed over as #join=… must still open the join dialog, once.
+test("an invitation handed over in the fragment survives the page opening a room first, and is taken only once", () => {
+  const link = "https://b.pages.dev/join#eyJ2IjoxfQ";
+  const saved = { location: globalThis.location, history: globalThis.history };
+  const rewrites = [];
+  globalThis.location = { hash: "", pathname: "/", search: "?room=r1" };
+  globalThis.history = { replaceState: (state, title, url) => rewrites.push(url) };
+  globalThis.codiscuss_initial_hash = `#join=${encodeURIComponent(link)}`;
+  try {
+    assert.equal(take_join_fragment(), link, "read from the address as the page loaded");
+    assert.equal(take_join_fragment(), "", "a second mount does not ask again");
+    assert.deepEqual(rewrites, [], "an address already rewritten is left alone");
+    globalThis.location = { hash: `#join=${encodeURIComponent(link)}&x=1`, pathname: "/", search: "" };
+    assert.equal(take_join_fragment(), link, "without the early copy the live fragment still works");
+    assert.deepEqual(rewrites, ["/#x=1"], "and the join part leaves the address");
+  } finally { Object.assign(globalThis, saved); }
+});
+
+// V18: after leaving, the other room cannot be read; `invited-room` returns the texts this computer kept (子Task4
+// `kept_messages`: `request_texts` and `answer` of history entries, at the top level with `kept: true`). An answered run
+// shows them, never its process note, and says so when none were kept.
+test("an answered run shows kept texts, never its process note, and says when the texts cannot be read", () => {
+  const base = { member: "Claude-ext", status: "left", approvals: [], running: null };
+  const lost = invited_items({ ...base, history: [{ at: 1, execution_id: 9, message_ids: [4], outcome: "woken" },
+    { at: 2, execution_id: 9, outcome: "answered", reason: "进程退出码 1：C:\Users\a\run.log" }] }, []);
+  const run = lost.find((item) => item.key === "e9");
+  assert.equal(run.outcome, "answered");
+  assert.equal(run.reason, "");
+  assert.equal(run.missing_text, true);
+  // Reopening a left record: the reply as `invited-room` gives it while the other room is unreachable.
+  const reopened = { record: { ...base, history: [{ at: 1, execution_id: 9, message_ids: [4], outcome: "woken" },
+    { at: 2, execution_id: 9, outcome: "answered", reason: "进程退出码 1",
+      request_texts: [{ id: 4, author: "用户", text: "问题" }], answer: { id: 5, author: "Claude-ext", text: "回答" } }] },
+    room: null, messages: [{ id: 4, author: "用户", text: "问题", kept: true }, { id: 5, author: "Claude-ext", text: "回答", execution_id: 9, kept: true }],
+    error: "对方电脑不在线" };
+  const kept = invited_items(reopened.record, reopened.messages);
+  const item = kept.find((entry) => entry.key === "e9");
+  assert.deepEqual([item.requests.map((message) => message.text), item.answers.map((message) => message.text), item.missing_text], [["问题"], ["回答"], false]);
 });

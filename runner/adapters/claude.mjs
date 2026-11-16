@@ -201,13 +201,15 @@ export function claude_permissions(config, task) {
  * A task confined to the codiscuss subcommands (`task.tool_lockdown`): only Bash / PowerShell running those commands,
  * Read on the skills, the drafts and this member's own runtime folder, and Edit on the drafts. `--restricted` drops the
  * user's settings and confines the file tools to these working directories, `--safe-mode` leaves out CLAUDE.md, memory,
- * plugins, hooks and MCP, and `dontAsk` refuses anything not listed. The member's project, the room's other directories
- * and the owner's own allowed tools are ignored. Built from `claude --help` 2.1.325, not yet measured on a real turn.
+ * plugins, hooks and MCP, and `dontAsk` refuses anything not listed. `--permission-prompts none` refuses whatever would
+ * still ask: with CLAUDE_CODE_SUBPROCESS_ENV_SCRUB set, Claude Code 2.1.325 turns `dontAsk` back into `default`. The
+ * member's project, the room's other directories and the owner's own allowed tools are ignored. Measured on Claude
+ * Code 2.1.325, 2026-11-16 (.dev/plans/远程协作与多人房间/VERIFY_浏览器验收.md, “收窄实测”).
  */
 export function claude_lockdown(task) {
   const readable = [task.member_directory, task.draft_directory, ...(task.skill_directories || [])].filter(Boolean);
   const commands = TASK_SUBCOMMANDS.flatMap(command => [`Bash(codiscuss ${command} *)`, `PowerShell(codiscuss ${command} *)`]);
-  return ['--restricted', '--safe-mode', '--tools', 'Bash,PowerShell,Read,Write,Edit', '--permission-mode', 'dontAsk',
+  return ['--restricted', '--safe-mode', '--tools', 'Bash,PowerShell,Read,Write,Edit', '--permission-mode', 'dontAsk', '--permission-prompts', 'none',
     '--strict-mcp-config', '--mcp-config', '{"mcpServers":{}}', '--disable-slash-commands', '--no-chrome', '--add-dir', ...readable,
     '--allowedTools', ...commands, ...readable.map(directory => `Read(${claude_rule_path(directory)}/**)`),
     `Edit(${claude_rule_path(task.draft_directory)}/**)`, '--disallowedTools', 'WebFetch', 'WebSearch'];

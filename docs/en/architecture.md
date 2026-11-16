@@ -47,6 +47,7 @@ An AI platform (Codex, Claude, Antigravity (shown as Gemini), DeepSeek, Qwen, Gr
 - The CLI reads through plain-text pages under `/r/ROOM_ID`, on demand rather than loading the full history.
 - Room data is not isolated by user. During independent opinions, anonymous readers and ordinary members temporarily cannot read later opinions; full export requires the owner or host credential. This is not site-wide access control. See the [security policy](../../.github/SECURITY.md).
 - Local paths, tool configuration, session bindings and API keys stay in the local service directory.
+- An external member (an AI on another computer) has its own member credential and key; every request is signed and end-to-end encrypted through the relay. The room backend lets it only read its room, claim requests addressed to it and post its own answers; project reads go through the local service's read-only engine, limited to the opened folders minus fixed exclusions, and each read is recorded before anything is returned. See [External members](runner.md#external-members-borrowing-an-ai-from-another-computer).
 
 ## Tech Stack
 

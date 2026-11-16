@@ -213,7 +213,7 @@ LEFT JOIN message_withdrawals AS withdrawn ON withdrawn.message_id=messages.id
 LEFT JOIN message_summaries AS summaries ON summaries.message_id=messages.id
 LEFT JOIN message_timings AS timing ON timing.message_id=messages.id
 LEFT JOIN (SELECT r.answer_id, MIN(r.execution_id) AS execution_id, MIN(r.message_id) AS request_message_id,
-  MIN(""" + LAYOUT_AFTER_SQL + """) AS layout_after, MIN(""" + LAYOUT_AT_SQL + """) AS layout_at
+  MAX(""" + LAYOUT_AFTER_SQL + """) AS layout_after, MIN(""" + LAYOUT_AT_SQL + """) AS layout_at
   FROM member_requests r WHERE r.answer_id IS NOT NULL AND r.execution_id IS NOT NULL GROUP BY r.answer_id) AS answered
   ON answered.answer_id=messages.id"""
 # Messages the owner took back leave AI reads; the page asks for them with withdrawn=include to keep them in place.

@@ -2437,8 +2437,10 @@ if (process.argv[1] && pathToFileURL(resolve(process.argv[1])).href === import.m
   launch_main(args.filter(arg => arg !== '--stdin'), stdin).catch(error => {
     // A request that needs the page to do something first (pair, renew, confirm writing) says so in a field it can read.
     const need = error.need ? { need: error.need, ...(error.room_id ? { room_id: error.room_id } : {}) } : {};
+    // An error the page shows in its own language carries its template and a stable code (runner/external_client.mjs).
+    if (error.error_text) Object.assign(need, { error_text: error.error_text, ...(typeof error.code === 'string' ? { code: error.code } : {}) });
     const failure = args.includes('--browser') ? JSON.stringify({ error: error.message, ...need, launch: error.launch || { stage: 'not_started' } })
-      : error.need ? JSON.stringify({ error: error.message, ...need }) : error.message;
+      : error.need || error.error_text ? JSON.stringify({ error: error.message, ...need }) : error.message;
     process.stderr.write(`${failure}\n`); process.exitCode = 1;
   });
 }

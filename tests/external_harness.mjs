@@ -39,11 +39,11 @@ export function python_command() {
  * that service directory at it so runner code (relay, gateway) reaches this site; `local_launch` lets its own pages run
  * local commands, as `codiscuss local` does. Resolves to `{ port, url, logs }`.
  */
-export async function start_python_site(t, home, extra_env = {}, { port = 0, local_launch = false } = {}) {
+export async function start_python_site(t, home, extra_env = {}, { port: requested_port = 0, local_launch = false } = {}) {
   const database = join(home, 'site.sqlite3');
   const script = "import sys; from backend.server import DiscussionServer,init_database; init_database(sys.argv[1],seed=False); "
     + "server=DiscussionServer(('127.0.0.1',int(sys.argv[2])),sys.argv[1],local_launch=sys.argv[3]=='1'); print(server.server_port,flush=True); server.serve_forever()";
-  const child = spawn(python_command(), ['-u', '-c', script, database, String(port), local_launch ? '1' : '0'], { cwd: ROOT, windowsHide: true, stdio: ['ignore', 'pipe', 'pipe'],
+  const child = spawn(python_command(), ['-u', '-c', script, database, String(requested_port), local_launch ? '1' : '0'], { cwd: ROOT, windowsHide: true, stdio: ['ignore', 'pipe', 'pipe'],
     env: { ...process.env, DISCUSS_SERVICE_HOME: home, PYTHONDONTWRITEBYTECODE: '1', ...extra_env } });
   const logs = [];
   child.stderr.on('data', chunk => logs.push(String(chunk)));

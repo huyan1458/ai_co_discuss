@@ -8,8 +8,9 @@
  * Contracts: room routes 子Task1 CONTRACT §1–2, invitations 子Task2 CONTRACT §2.2, invited records 子Task4 CONTRACT §1–2.
  */
 import { computed, effectScope, inject, ref, watch } from "vue";
-import { t } from "./i18n.js";
+import { locale, t } from "./i18n.js";
 import { lockdown_support } from "../runner/adapters/profiles.mjs";
+import runner_english from "../runner/i18n_en.mjs";
 
 // Local service operations (runner), in one table so a renamed operation changes here only.
 export const OPERATIONS = {
@@ -116,11 +117,30 @@ export function external_of(member) {
 }
 
 /** The rail's quiet line for an external member: "外部 · 只读项目 · 剩余 2 小时". */
-export function external_tag(member, now = Date.now()) {
+// The rail's line is narrow: the tiniest level names and time left ("剩 59 分" / "59m"), the full wording on hover.
+const LEVEL_TINY = { discuss: t("仅讨论"), read: t("只读文件") };
+
+/** "剩 59 分" / "59m" and the like; "已到期" once past, "" without an end. */
+export function remaining_short(expires_at, now = Date.now()) {
+  const end = time_ms(expires_at);
+  if (!end) return "";
+  const left = end - now;
+  if (left <= 0) return t("已到期");
+  if (left >= DAY_MS) return t("剩 {count} 天", { count: Math.floor(left / DAY_MS) });
+  if (left >= HOUR_MS) return t("剩 {count} 小时", { count: Math.floor(left / HOUR_MS) });
+  return t("剩 {count} 分", { count: Math.max(1, Math.ceil(left / MINUTE_MS)) });
+}
+
+/**
+ * The rail's quiet line for an external member: short ("外部 · 只读文件 · 剩 2 小时") to fit beside the name, or with
+ * `full` the wording for its hover text ("外部 · 只读项目 · 剩余 2 小时").
+ */
+export function external_tag(member, now = Date.now(), { full = false } = {}) {
   const info = external_of(member);
   if (!info) return "";
   if (info.ended) return t("外部 · 已结束");
-  return [t("外部"), LEVEL_SHORT[info.level], remaining_label(info.expires_at, now)].filter(Boolean).join(" · ");
+  return full ? [t("外部"), LEVEL_SHORT[info.level], remaining_label(info.expires_at, now)].filter(Boolean).join(" · ")
+    : [t("外部"), LEVEL_TINY[info.level], remaining_short(info.expires_at, now)].filter(Boolean).join(" · ");
 }
 
 /** Whether the invited computer turned a request down or let it time out (`external_outcome` on the request). */
@@ -167,8 +187,93 @@ export function use_invited_rooms() {
   return invited;
 }
 
-/** The records still in use: left or revoked ones drop out of the sidebar. */
-const listed = (record) => !record.status || record.status === "active";
+/** Why a record is no longer active (`status: ended` with `end_reason`, or `status: left`), in the page language. */
+export const END_REASONS = { revoked: t("被对方撤销"), expired: t("已到期"), left: t("你已退出") };
+/** "" for an active record, else "已结束：被对方撤销" and the like. */
+export function end_label(record) {
+  if (!record || !record.status || record.status === "active") return "";
+  const reason = record.status === "left" ? "left" : record.end_reason;
+  return t("已结束：{reason}", { reason: END_REASONS[reason] || reason || t("原因未知") });
+}
+
+/**
+ * Text the local service (runner) wrote in Chinese, in the page language: its own English dictionary
+ * (runner/i18n_en.mjs) by exact text, or by template with the parameters taken back out of the text. Text it does not
+ * know stays as written. A reply with `error_text` is localized by the shared controller before it gets here.
+ */
+let runner_templates = null;
+/** A runner `{ template, params }` (`error_text`, `reason_text`) in the page language, else `runner_text(fallback)`. */
+export function runner_message(localized, fallback = "") {
+  if (!localized?.template) return runner_text(fallback);
+  const source = locale === "zh-CN" ? localized.template : runner_english[localized.template] || localized.template;
+  return source.replace(/\{(\w+)\}/g, (match, name) => (name in (localized.params || {}) ? runner_text(String(localized.params[name])) : match));
+}
+export function runner_text(text) {
+  if (!text || locale === "zh-CN") return text || "";
+  if (runner_english[text]) return runner_english[text];
+  runner_templates ||= Object.entries(runner_english).filter(([source]) => /\{\w+\}/.test(source)).map(([source, english]) => {
+    const names = [];
+    const pattern = source.replace(/[.*+?^$()|[\]\\]/g, "\\$&").replace(/\\?\{(\w+)\\?\}|\{(\w+)\}/g, (match, escaped, plain) => { names.push(escaped || plain); return "(.+?)"; });
+    return { pattern: new RegExp(`^${pattern}$`, "s"), names, english };
+  });
+  for (const { pattern, names, english } of runner_templates) {
+    const found = text.match(pattern);
+    if (found) return english.replace(/\{(\w+)\}/g, (match, name) => (names.includes(name) ? runner_text(found[names.indexOf(name) + 1]) : match));
+  }
+  return text;
+}
+
+/**
+ * The middle page's items for one invited record: requests waiting for you, then each run (its history entries merged
+ * by execution: woken, then ended or failed) and each refusal, newest first, and finally how the membership ended. An
+ * answer this AI gave (`author` is the record's member) is placed under the request it answers (`request_message_id`),
+ * and a request with an answer reads as answered whatever the run's exit said.
+ *
+ * @param {object} record An `invited-list` record.
+ * @param {object[]} messages The top-level `messages` of `invited-room`: requests naming this AI and its own answers,
+ *   read from the other room, or, when it cannot be reached, the texts this computer kept (`kept: true`).
+ * @returns {object[]} `{ key, at, outcome, message_ids, requests, answers, reason }`; outcome is one of waiting,
+ *   running, answered, finished, failed, refused, timeout, limit, lockdown_unsupported, ai_unavailable, ended.
+ */
+export function invited_items(record, messages = []) {
+  if (!record) return [];
+  const by_id = new Map(messages.map((message) => [message.id, message]));
+  const answers = messages.filter((message) => message.author === record.member);
+  const answered = new Set();
+  const item = (key, at, outcome, message_ids = [], extra = {}) => {
+    const ids = [...new Set(message_ids)];
+    const replies = answers.filter((message) => ids.includes(message.request_message_id) || (extra.execution_id && message.execution_id === extra.execution_id));
+    replies.forEach((message) => answered.add(message.id));
+    const final = replies.length && outcome !== "waiting" ? "answered" : outcome;
+    const requests = ids.map((id) => by_id.get(id)).filter(Boolean);
+    return { key, at, outcome: final, message_ids: ids, requests, answers: replies, reason: "", reason_text: null, ...extra,
+      // An answer settles the request: the process's note after it (an exit code, local paths) is not shown as content.
+      ...(final === "answered" ? { reason: "", reason_text: null } : {}),
+      // Answered, yet neither text can be read any more: the page says where they are instead.
+      missing_text: final === "answered" && !replies.length && !requests.length };
+  };
+  const runs = new Map(), others = [];
+  for (const entry of record.history || []) {
+    if (entry.execution_id) {
+      const run = runs.get(entry.execution_id) || { at: entry.at, message_ids: [], outcome: "running", reason: "", reason_text: null };
+      run.message_ids.push(...(entry.message_ids || []));
+      if (entry.outcome !== "woken") Object.assign(run, { outcome: entry.outcome === "ended" ? "finished" : entry.outcome, reason: entry.reason || "", reason_text: entry.reason_text || null });
+      runs.set(entry.execution_id, run);
+    } else if (!["ended", "left"].includes(entry.outcome)) others.push(entry);
+  }
+  const running = record.running?.execution_id;
+  const history = [
+    ...[...runs].map(([id, run]) => item(`e${id}`, run.at, id === running ? "running" : run.outcome, run.message_ids, { execution_id: id, reason: run.reason, reason_text: run.reason_text })),
+    ...others.map((entry, index) => item(`h${index}`, entry.at, entry.outcome, entry.message_ids, { reason: entry.reason || "", reason_text: entry.reason_text || null })),
+  ].sort((a, b) => time_ms(b.at) - time_ms(a.at));
+  const waiting = (record.approvals || []).map((approval) => item(`a${approval.id}`, approval.received_at, "waiting", approval.message_ids, { by: approval.created_by }));
+  // Answers no run accounts for (an older run, or one this computer did not record) still show, each on its own.
+  const loose = answers.filter((message) => !answered.has(message.id))
+    .map((message) => item(`m${message.id}`, message.created_at, "answered", message.request_message_id ? [message.request_message_id] : []));
+  const ended = end_label(record) ? [{ key: "end", at: (record.history || []).findLast?.((entry) => ["ended", "left"].includes(entry.outcome))?.at || 0,
+    outcome: "ended", message_ids: [], requests: [], answers: [], reason: end_label(record) }] : [];
+  return [...ended, ...waiting, ...[...history, ...loose].sort((a, b) => time_ms(b.at) - time_ms(a.at))];
+}
 
 function create_invited({ view, bridge }) {
   const available = computed(() => Boolean(view.value.launch.available || view.value.launch.remote));
@@ -178,6 +283,11 @@ function create_invited({ view, bridge }) {
   const selected = computed(() => records.value.find((record) => record.id === selected_id.value) || null);
   // The join dialog, with a link or code handed over by the online explanation page.
   const joining = ref(false), join_text = ref("");
+  // What the other room says about this member now (`invited-room` → `room.me`), by record: its scope and end follow
+  // the owner's later changes, which the record learns only on its next pull.
+  const room_me = ref({});
+  // D6a: 信任设备 is set only on this computer's own page; through the relay or from an online page it stays greyed.
+  const trust_local = computed(() => Boolean(view.value.admin?.local) || ["127.0.0.1", "localhost", "[::1]"].includes(location.hostname));
   const busy = ref("");
   const announced = new Set();
   let timer = 0;
@@ -187,7 +297,8 @@ function create_invited({ view, bridge }) {
     if (!available.value) return;
     try {
       const result = await bridge.local_request(OPERATIONS.invited_list, {});
-      records.value = (result.records || []).filter(listed);
+      // Ended and left records stay: their history and why they ended remain readable.
+      records.value = result.records || [];
       failure.value = "";
       for (const record of records.value) {
         for (const approval of record.approvals || []) {
@@ -197,7 +308,7 @@ function create_invited({ view, bridge }) {
           if (loaded.value) bridge.notify("warning", t("「{room}」点名了你的 AI，等你同意", { room: record.room_title || record.room || "" }));
         }
       }
-    } catch (error) { failure.value = error.message; }
+    } catch (error) { failure.value = runner_text(error.message); }
     finally { loaded.value = true; }
   }
   watch(available, (ready) => {
@@ -217,7 +328,7 @@ function create_invited({ view, bridge }) {
       await load();
       return result || {};
     } catch (error) {
-      bridge.notify("error", error.message);
+      bridge.notify("error", runner_text(error.message));
       return null;
     } finally { busy.value = ""; }
   }
@@ -250,7 +361,7 @@ function create_invited({ view, bridge }) {
   /** Open the join dialog, optionally filled with a link or code. */
   function start_join(text = "") { join_text.value = text; joining.value = true; }
 
-  return { available, records, loaded, failure, page_open, selected_id, selected, joining, join_text, busy,
+  return { available, records, loaded, failure, page_open, selected_id, selected, joining, join_text, busy, room_me, trust_local,
     load, open, close, join, set_trust, set_paused, approve, refuse, leave, read_room, start_join };
 }
 
@@ -259,11 +370,16 @@ function create_invited({ view, bridge }) {
  * from the address so a reload does not ask again.
  */
 export function take_join_fragment() {
+  // web/app.js opens the last room on load and rewrites the address (`/?room=…`) before this workspace mounts, so the
+  // fragment as the page first loaded is kept by i18n-runtime.js, the first script every page runs.
+  const initial = globalThis.codiscuss_initial_hash;
+  delete globalThis.codiscuss_initial_hash;
+  const value = new URLSearchParams((initial || "").slice(1)).get("join") || new URLSearchParams((location.hash || "").slice(1)).get("join");
   const fragment = new URLSearchParams((location.hash || "").slice(1));
-  const value = fragment.get("join");
-  if (!value) return "";
-  fragment.delete("join");
-  const rest = fragment.toString();
-  history.replaceState(null, "", `${location.pathname}${location.search}${rest ? `#${rest}` : ""}`);
-  return value;
+  if (fragment.has("join")) {
+    fragment.delete("join");
+    const rest = fragment.toString();
+    history.replaceState(null, "", `${location.pathname}${location.search}${rest ? `#${rest}` : ""}`);
+  }
+  return value || "";
 }

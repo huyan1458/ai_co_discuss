@@ -20,6 +20,7 @@ const GREP_QUERY_MAX_LENGTH = 256;
 const GREP_FILE_MAX_BYTES = 2 * 1024 * 1024;
 const GREP_SCAN_MAX_BYTES = 32 * 1024 * 1024;
 const GREP_TIME_LIMIT_MS = 3000;
+const GREP_TIME_LIMIT_MAX_MS = 30000;
 const GREP_LINE_MAX_CHARS = 400;
 const WALK_MAX_FILES = 200000;
 const GIT_TIMEOUT_MS = 15000;
@@ -306,10 +307,11 @@ async function grep_text(scope, file) {
 }
 
 /** Literal (non-regex) search over in-scope text files, bounded by results, bytes and time. */
-export async function repo_grep(root, query, { path = '', case_sensitive = false, max_results = GREP_DEFAULT_RESULTS, max_bytes = REPO_RESULT_MAX_BYTES } = {}) {
+export async function repo_grep(root, query, { path = '', case_sensitive = false, max_results = GREP_DEFAULT_RESULTS, max_bytes = REPO_RESULT_MAX_BYTES, time_limit_ms = GREP_TIME_LIMIT_MS } = {}) {
   if (typeof query !== 'string' || !query || query.length > GREP_QUERY_MAX_LENGTH || /[\r\n]/.test(query)) return reject('invalid_query');
   const result_limit = natural_int(max_results, GREP_DEFAULT_RESULTS), byte_limit = natural_int(max_bytes, REPO_RESULT_MAX_BYTES);
-  if (result_limit === null || byte_limit === null || result_limit < 1 || byte_limit < 1) return reject('invalid_argument');
+  const time_limit = natural_int(time_limit_ms, GREP_TIME_LIMIT_MS);
+  if (result_limit === null || byte_limit === null || time_limit === null || result_limit < 1 || byte_limit < 1) return reject('invalid_argument');
   const prepared = await prepare(root, path);
   if (!prepared.ok) return prepared;
   const { scope, path: base } = prepared;
@@ -322,11 +324,11 @@ export async function repo_grep(root, query, { path = '', case_sensitive = false
   const candidates = listed ? [base] : scope.files.filter((file) => !base || file.startsWith(`${base}/`));
   const needle = case_sensitive ? query : query.toLowerCase();
   const results = Math.min(result_limit, GREP_MAX_RESULTS), budget = Math.min(byte_limit, REPO_RESULT_MAX_BYTES);
-  const deadline = Date.now() + GREP_TIME_LIMIT_MS;
+  const deadline = Date.now() + Math.min(time_limit, GREP_TIME_LIMIT_MAX_MS);
   const matches = [];
   let used = 2, files_scanned = 0, files_skipped = 0, scanned_bytes = 0, truncated_by = null;
   scan: for (const file of candidates) {
-    if (Date.now() > deadline) { truncated_by = 'time'; break; }
+    if (Date.now() >= deadline) { truncated_by = 'time'; break; }
     if (scanned_bytes >= GREP_SCAN_MAX_BYTES) { truncated_by = 'scan_bytes'; break; }
     const { skipped, text, size } = await grep_text(scope, file);
     if (skipped) files_skipped += 1;

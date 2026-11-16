@@ -48,5 +48,5 @@ function external_actions(member, { view, act, describe, external }) {
   ], [
     ...(busy(member) ? [{ label: t('停止'), icon: "i-lucide-circle-stop", color: "error", disabled: locked,
       onSelect: () => act("change_member", { member_id: member.id, name: member.name, action: "interrupt" }) }] : []),
-  ], [{ label: t('撤销'), icon: "i-lucide-ban", color: "error", disabled: locked || external_of(member).ended, onSelect: () => external?.(member, "revoke") }]].filter((group) => group.length);
+  ], [{ label: t('撤销授权'), icon: "i-lucide-ban", color: "error", disabled: locked || external_of(member).ended, onSelect: () => external?.(member, "revoke") }]].filter((group) => group.length);
 }

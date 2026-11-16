@@ -68,6 +68,8 @@ test('confined Claude runs only the codiscuss subcommands and reads only its ski
   for (const flag of ['--restricted', '--safe-mode', '--strict-mcp-config', '--disable-slash-commands', '--no-chrome']) assert.ok(args.includes(flag), flag);
   assert.equal(args[args.indexOf('--tools') + 1], 'Bash,PowerShell,Read,Write,Edit');
   assert.equal(args[args.indexOf('--permission-mode') + 1], 'dontAsk');
+  // CLAUDE_CODE_SUBPROCESS_ENV_SCRUB turns dontAsk back into default (2.1.325), so nothing may be left to ask.
+  assert.equal(args[args.indexOf('--permission-prompts') + 1], 'none');
   assert.equal(args[args.indexOf('--mcp-config') + 1], '{"mcpServers":{}}');
   const allowed = args.slice(args.indexOf('--allowedTools') + 1, args.indexOf('--disallowedTools'));
   assert.deepEqual(allowed.filter(rule => /^(Bash|PowerShell)/.test(rule)),

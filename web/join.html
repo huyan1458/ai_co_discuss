@@ -6,27 +6,31 @@
 <meta name="robots" content="noindex">
 <meta name="referrer" content="no-referrer">
 <title>AI CoDiscuss</title>
-<style>body{margin:0;background:#121416;color:#e6e8ea;font:15px/1.6 system-ui,-apple-system,'Segoe UI',sans-serif}@media (prefers-color-scheme:light){body{background:#fff;color:#1b1d1f}}#join-root{max-width:560px;margin:0 auto;padding:40px 16px}h1{font-size:22px;line-height:1.35;margin:0 0 20px}dl{display:grid;grid-template-columns:auto 1fr;gap:6px 14px;margin:0 0 20px}dt{opacity:.65}dd{margin:0;overflow-wrap:anywhere}.note{margin:0 0 8px}.fine{margin:8px 0 0;font-size:13px;opacity:.65}.actions{display:flex;flex-wrap:wrap;gap:10px;margin:20px 0 8px}.actions a,.actions button{display:inline-flex;align-items:center;min-height:40px;padding:0 16px;border-radius:8px;font:inherit;text-decoration:none;cursor:pointer}.primary{background:#10b981;color:#fff;border:0}.secondary{background:transparent;color:inherit;border:1px solid currentColor}</style>
+<link rel="icon" href="data:image/svg+xml;base64,PHN2ZyB4bWxucz0iaHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmciIHZpZXdCb3g9IjAgMCAxMDAgMTAwIj48cmVjdCB3aWR0aD0iMTAwIiBoZWlnaHQ9IjEwMCIgcng9IjIyIiBmaWxsPSIjMTUxOTFhIi8+PGcgdHJhbnNmb3JtPSJ0cmFuc2xhdGUoMTQgMTQpIHNjYWxlKC43MikiPjxkZWZzPjxsaW5lYXJHcmFkaWVudCBpZD0iZjAiIGdyYWRpZW50VW5pdHM9InVzZXJTcGFjZU9uVXNlIiB4MT0iNC41IiB5MT0iNjQiIHgyPSI5NS41IiB5Mj0iNjQiPjxzdG9wIG9mZnNldD0iMC4wJSIgc3RvcC1jb2xvcj0iI2U5ZWJlZCIvPjxzdG9wIG9mZnNldD0iNi4zJSIgc3RvcC1jb2xvcj0iI2UyZTVlNyIvPjxzdG9wIG9mZnNldD0iMTIuNSUiIHN0b3AtY29sb3I9IiNkY2RlZTEiLz48c3RvcCBvZmZzZXQ9IjE4LjglIiBzdG9wLWNvbG9yPSIjZDVkOGRiIi8+PHN0b3Agb2Zmc2V0PSIyNS4wJSIgc3RvcC1jb2xvcj0iI2NlZDJkNSIvPjxzdG9wIG9mZnNldD0iMzEuMyUiIHN0b3AtY29sb3I9IiNjOGNiY2YiLz48c3RvcCBvZmZzZXQ9IjM3LjUlIiBzdG9wLWNvbG9yPSIjYzFjNWNhIi8+PHN0b3Agb2Zmc2V0PSI0My44JSIgc3RvcC1jb2xvcj0iI2JhYmZjNCIvPjxzdG9wIG9mZnNldD0iNTAuMCUiIHN0b3AtY29sb3I9IiNiNGI5YmUiLz48c3RvcCBvZmZzZXQ9IjU2LjMlIiBzdG9wLWNvbG9yPSIjYTlhZWIzIi8+PHN0b3Agb2Zmc2V0PSI2Mi41JSIgc3RvcC1jb2xvcj0iIzllYTNhOSIvPjxzdG9wIG9mZnNldD0iNjguOCUiIHN0b3AtY29sb3I9IiM5Mzk5OWYiLz48c3RvcCBvZmZzZXQ9Ijc1LjAlIiBzdG9wLWNvbG9yPSIjODg4ZTk1Ii8+PHN0b3Agb2Zmc2V0PSI4MS4zJSIgc3RvcC1jb2xvcj0iIzdlODQ4YSIvPjxzdG9wIG9mZnNldD0iODcuNSUiIHN0b3AtY29sb3I9IiM3MzdhODAiLz48c3RvcCBvZmZzZXQ9IjkzLjglIiBzdG9wLWNvbG9yPSIjNjk3MDc3Ii8+PHN0b3Agb2Zmc2V0PSIxMDAuMCUiIHN0b3AtY29sb3I9IiM1ZjY2NmQiLz48L2xpbmVhckdyYWRpZW50PjxsaW5lYXJHcmFkaWVudCBpZD0iZjEiIGdyYWRpZW50VW5pdHM9InVzZXJTcGFjZU9uVXNlIiB4MT0iOC41IiB5MT0iMzYiIHgyPSI5MS41IiB5Mj0iMzYiPjxzdG9wIG9mZnNldD0iMC4wJSIgc3RvcC1jb2xvcj0iIzNmODZmZiIvPjxzdG9wIG9mZnNldD0iNi4zJSIgc3RvcC1jb2xvcj0iIzU1ODhmZiIvPjxzdG9wIG9mZnNldD0iMTIuNSUiIHN0b3AtY29sb3I9IiM2ODg5ZmYiLz48c3RvcCBvZmZzZXQ9IjE4LjglIiBzdG9wLWNvbG9yPSIjNzg4YWZmIi8+PHN0b3Agb2Zmc2V0PSIyNS4wJSIgc3RvcC1jb2xvcj0iIzg3OGJmZiIvPjxzdG9wIG9mZnNldD0iMzEuMyUiIHN0b3AtY29sb3I9IiM5NThjZmYiLz48c3RvcCBvZmZzZXQ9IjM3LjUlIiBzdG9wLWNvbG9yPSIjYTc4YWVmIi8+PHN0b3Agb2Zmc2V0PSI0My44JSIgc3RvcC1jb2xvcj0iI2I5ODZkNyIvPjxzdG9wIG9mZnNldD0iNTAuMCUiIHN0b3AtY29sb3I9IiNjYTgwYmYiLz48c3RvcCBvZmZzZXQ9IjU2LjMlIiBzdG9wLWNvbG9yPSIjZGE3OGE2Ii8+PHN0b3Agb2Zmc2V0PSI2Mi41JSIgc3RvcC1jb2xvcj0iI2VhNmU4YyIvPjxzdG9wIG9mZnNldD0iNjguOCUiIHN0b3AtY29sb3I9IiNmNTZkNzgiLz48c3RvcCBvZmZzZXQ9Ijc1LjAlIiBzdG9wLWNvbG9yPSIjZjc3ZjcyIi8+PHN0b3Agb2Zmc2V0PSI4MS4zJSIgc3RvcC1jb2xvcj0iI2Y4OTA2YiIvPjxzdG9wIG9mZnNldD0iODcuNSUiIHN0b3AtY29sb3I9IiNmOWExNjMiLz48c3RvcCBvZmZzZXQ9IjkzLjglIiBzdG9wLWNvbG9yPSIjZmFiMDU4Ii8+PHN0b3Agb2Zmc2V0PSIxMDAuMCUiIHN0b3AtY29sb3I9IiNmYWMwNGEiLz48L2xpbmVhckdyYWRpZW50PjxsaW5lYXJHcmFkaWVudCBpZD0iZjIiIGdyYWRpZW50VW5pdHM9InVzZXJTcGFjZU9uVXNlIiB4MT0iMjguMDIxIiB5MT0iOTUuNDM1IiB4Mj0iMzkuOTc4IiB5Mj0iNC41NjQiPjxzdG9wIG9mZnNldD0iMC4wJSIgc3RvcC1jb2xvcj0iI2QwNmE0OSIvPjxzdG9wIG9mZnNldD0iNi4zJSIgc3RvcC1jb2xvcj0iI2QzNmY0ZiIvPjxzdG9wIG9mZnNldD0iMTIuNSUiIHN0b3AtY29sb3I9IiNkNjc0NTYiLz48c3RvcCBvZmZzZXQ9IjE4LjglIiBzdG9wLWNvbG9yPSIjZDk3YTVjIi8+PHN0b3Agb2Zmc2V0PSIyNS4wJSIgc3RvcC1jb2xvcj0iI2RjN2Y2MiIvPjxzdG9wIG9mZnNldD0iMzEuMyUiIHN0b3AtY29sb3I9IiNkZjg0NjgiLz48c3RvcCBvZmZzZXQ9IjM3LjUlIiBzdG9wLWNvbG9yPSIjZTI4OTZlIi8+PHN0b3Agb2Zmc2V0PSI0My44JSIgc3RvcC1jb2xvcj0iI2U1OGU3NCIvPjxzdG9wIG9mZnNldD0iNTAuMCUiIHN0b3AtY29sb3I9IiNlODkzN2EiLz48c3RvcCBvZmZzZXQ9IjU2LjMlIiBzdG9wLWNvbG9yPSIjZWI5ZDg1Ii8+PHN0b3Agb2Zmc2V0PSI2Mi41JSIgc3RvcC1jb2xvcj0iI2VlYTY4ZiIvPjxzdG9wIG9mZnNldD0iNjguOCUiIHN0b3AtY29sb3I9IiNmMWIwOWEiLz48c3RvcCBvZmZzZXQ9Ijc1LjAlIiBzdG9wLWNvbG9yPSIjZjRiYWE0Ii8+PHN0b3Agb2Zmc2V0PSI4MS4zJSIgc3RvcC1jb2xvcj0iI2Y2YzNhZiIvPjxzdG9wIG9mZnNldD0iODcuNSUiIHN0b3AtY29sb3I9IiNmOWNkYjkiLz48c3RvcCBvZmZzZXQ9IjkzLjglIiBzdG9wLWNvbG9yPSIjZmJkNmM0Ii8+PHN0b3Agb2Zmc2V0PSIxMDAuMCUiIHN0b3AtY29sb3I9IiNmZGUwY2YiLz48L2xpbmVhckdyYWRpZW50PjxsaW5lYXJHcmFkaWVudCBpZD0iZjMiIGdyYWRpZW50VW5pdHM9InVzZXJTcGFjZU9uVXNlIiB4MT0iNzEuOTc4IiB5MT0iOTUuNDM1IiB4Mj0iNjAuMDIxIiB5Mj0iNC41NjQiPjxzdG9wIG9mZnNldD0iMC4wJSIgc3RvcC1jb2xvcj0iIzRhNWNmZiIvPjxzdG9wIG9mZnNldD0iNi4zJSIgc3RvcC1jb2xvcj0iIzUwNjJmZiIvPjxzdG9wIG9mZnNldD0iMTIuNSUiIHN0b3AtY29sb3I9IiM1NzY4ZmYiLz48c3RvcCBvZmZzZXQ9IjE4LjglIiBzdG9wLWNvbG9yPSIjNWQ2ZGZmIi8+PHN0b3Agb2Zmc2V0PSIyNS4wJSIgc3RvcC1jb2xvcj0iIzY0NzJmZiIvPjxzdG9wIG9mZnNldD0iMzEuMyUiIHN0b3AtY29sb3I9IiM2Yjc3ZmYiLz48c3RvcCBvZmZzZXQ9IjM3LjUlIiBzdG9wLWNvbG9yPSIjNzE3Y2ZmIi8+PHN0b3Agb2Zmc2V0PSI0My44JSIgc3RvcC1jb2xvcj0iIzc4ODFmZiIvPjxzdG9wIG9mZnNldD0iNTAuMCUiIHN0b3AtY29sb3I9IiM3Zjg2ZmYiLz48c3RvcCBvZmZzZXQ9IjU2LjMlIiBzdG9wLWNvbG9yPSIjODk5MGZmIi8+PHN0b3Agb2Zmc2V0PSI2Mi41JSIgc3RvcC1jb2xvcj0iIzkzOTlmZiIvPjxzdG9wIG9mZnNldD0iNjguOCUiIHN0b3AtY29sb3I9IiM5ZGEyZmYiLz48c3RvcCBvZmZzZXQ9Ijc1LjAlIiBzdG9wLWNvbG9yPSIjYThhYmZmIi8+PHN0b3Agb2Zmc2V0PSI4MS4zJSIgc3RvcC1jb2xvcj0iI2IzYjRmZiIvPjxzdG9wIG9mZnNldD0iODcuNSUiIHN0b3AtY29sb3I9IiNiZWJkZmYiLz48c3RvcCBvZmZzZXQ9IjkzLjglIiBzdG9wLWNvbG9yPSIjYzljNWZmIi8+PHN0b3Agb2Zmc2V0PSIxMDAuMCUiIHN0b3AtY29sb3I9IiNkNGNlZmYiLz48L2xpbmVhckdyYWRpZW50PjxjbGlwUGF0aCBpZD0iZjQiPjxwb2x5Z29uIHBvaW50cz0iMTYsNDYuNSA4NCw0Ni41IDg0LDI1LjUgMTYsMjUuNSIvPjwvY2xpcFBhdGg+PGNsaXBQYXRoIGlkPSJmNSI+PHBvbHlnb24gcG9pbnRzPSIxNiw0OC41IDg0LDQ4LjUgODQsMjMuNSAxNiwyMy41Ii8+PC9jbGlwUGF0aD48Y2xpcFBhdGggaWQ9ImY2Ij48cG9seWdvbiBwb2ludHM9IjgxLjQxMCw4Ni42MzAgNzEuNDEwLDEwLjYzMCA1MC41ODksMTMuMzY5IDYwLjU4OSw4OS4zNjkiLz48L2NsaXBQYXRoPjxjbGlwUGF0aCBpZD0iZjciPjxwb2x5Z29uIHBvaW50cz0iODMuMzkzLDg2LjM2OSA3My4zOTMsMTAuMzY5IDQ4LjYwNiwxMy42MzAgNTguNjA2LDg5LjYzMCIvPjwvY2xpcFBhdGg+PGNsaXBQYXRoIGlkPSJmOCI+PHBvbHlnb24gcG9pbnRzPSIxMiw3NC41IDg4LDc0LjUgODgsNTMuNSAxMiw1My41Ii8+PC9jbGlwUGF0aD48Y2xpcFBhdGggaWQ9ImY5Ij48cG9seWdvbiBwb2ludHM9IjEyLDc2LjUgODgsNzYuNSA4OCw1MS41IDEyLDUxLjUiLz48L2NsaXBQYXRoPjxjbGlwUGF0aCBpZD0iZjEwIj48cG9seWdvbiBwb2ludHM9IjM5LjQxMCw4OS4zNjkgNDkuNDEwLDEzLjM2OSAyOC41ODksMTAuNjMwIDE4LjU4OSw4Ni42MzAiLz48L2NsaXBQYXRoPjxjbGlwUGF0aCBpZD0iZjExIj48cG9seWdvbiBwb2ludHM9IjQxLjM5Myw4OS42MzAgNTEuMzkzLDEzLjYzMCAyNi42MDYsMTAuMzY5IDE2LjYwNiw4Ni4zNjkiLz48L2NsaXBQYXRoPjwvZGVmcz48bGluZSB4MT0iMTIiIHkxPSI2NCIgeDI9Ijg4IiB5Mj0iNjQiIHN0cm9rZT0idXJsKCNmMCkiIHN0cm9rZS13aWR0aD0iMTUiIHN0cm9rZS1saW5lY2FwPSJyb3VuZCIvPjxsaW5lIHgxPSIxNiIgeTE9IjM2IiB4Mj0iODQiIHkyPSIzNiIgc3Ryb2tlPSJ1cmwoI2YxKSIgc3Ryb2tlLXdpZHRoPSIxNSIgc3Ryb2tlLWxpbmVjYXA9InJvdW5kIi8+PGxpbmUgeDE9IjI5IiB5MT0iODgiIHgyPSIzOSIgeTI9IjEyIiBzdHJva2U9InVybCgjZjIpIiBzdHJva2Utd2lkdGg9IjE1IiBzdHJva2UtbGluZWNhcD0icm91bmQiLz48bGluZSB4MT0iNzEiIHkxPSI4OCIgeDI9IjYxIiB5Mj0iMTIiIHN0cm9rZT0idXJsKCNmMykiIHN0cm9rZS13aWR0aD0iMTUiIHN0cm9rZS1saW5lY2FwPSJyb3VuZCIvPjxnIGNsaXAtcGF0aD0idXJsKCNmNCkiPjxsaW5lIHgxPSIyOSIgeTE9Ijg4IiB4Mj0iMzkiIHkyPSIxMiIgc3Ryb2tlPSIjMTUxOTFhIiBzdHJva2Utd2lkdGg9IjIxIiBzdHJva2UtbGluZWNhcD0icm91bmQiLz48L2c+PGcgY2xpcC1wYXRoPSJ1cmwoI2Y1KSI+PGxpbmUgeDE9IjI5IiB5MT0iODgiIHgyPSIzOSIgeTI9IjEyIiBzdHJva2U9InVybCgjZjIpIiBzdHJva2Utd2lkdGg9IjE1IiBzdHJva2UtbGluZWNhcD0icm91bmQiLz48L2c+PGcgY2xpcC1wYXRoPSJ1cmwoI2Y2KSI+PGxpbmUgeDE9IjE2IiB5MT0iMzYiIHgyPSI4NCIgeTI9IjM2IiBzdHJva2U9IiMxNTE5MWEiIHN0cm9rZS13aWR0aD0iMjEiIHN0cm9rZS1saW5lY2FwPSJyb3VuZCIvPjwvZz48ZyBjbGlwLXBhdGg9InVybCgjZjcpIj48bGluZSB4MT0iMTYiIHkxPSIzNiIgeDI9Ijg0IiB5Mj0iMzYiIHN0cm9rZT0idXJsKCNmMSkiIHN0cm9rZS13aWR0aD0iMTUiIHN0cm9rZS1saW5lY2FwPSJyb3VuZCIvPjwvZz48ZyBjbGlwLXBhdGg9InVybCgjZjgpIj48bGluZSB4MT0iNzEiIHkxPSI4OCIgeDI9IjYxIiB5Mj0iMTIiIHN0cm9rZT0iIzE1MTkxYSIgc3Ryb2tlLXdpZHRoPSIyMSIgc3Ryb2tlLWxpbmVjYXA9InJvdW5kIi8+PC9nPjxnIGNsaXAtcGF0aD0idXJsKCNmOSkiPjxsaW5lIHgxPSI3MSIgeTE9Ijg4IiB4Mj0iNjEiIHkyPSIxMiIgc3Ryb2tlPSJ1cmwoI2YzKSIgc3Ryb2tlLXdpZHRoPSIxNSIgc3Ryb2tlLWxpbmVjYXA9InJvdW5kIi8+PC9nPjxnIGNsaXAtcGF0aD0idXJsKCNmMTApIj48bGluZSB4MT0iMTIiIHkxPSI2NCIgeDI9Ijg4IiB5Mj0iNjQiIHN0cm9rZT0iIzE1MTkxYSIgc3Ryb2tlLXdpZHRoPSIyMSIgc3Ryb2tlLWxpbmVjYXA9InJvdW5kIi8+PC9nPjxnIGNsaXAtcGF0aD0idXJsKCNmMTEpIj48bGluZSB4MT0iMTIiIHkxPSI2NCIgeDI9Ijg4IiB5Mj0iNjQiIHN0cm9rZT0idXJsKCNmMCkiIHN0cm9rZS13aWR0aD0iMTUiIHN0cm9rZS1saW5lY2FwPSJyb3VuZCIvPjwvZz48L2c+PC9zdmc+">
+<style>:root{--bg:#232428;--card:#2b2d31;--text:#d8dce3;--strong:#f2f3f5;--muted:#a6adb7;--border:#42454d;--primary:#5865f2;--primary-hover:#6874fa;--ghost-hover:#ffffff0f;--warning:#e5a50a;color-scheme:dark}:root[data-theme=light]{--bg:#f6f6f6;--card:#fff;--text:#242424;--strong:#171717;--muted:#666;--border:#dedede;--primary:#0969da;--primary-hover:#075bbd;--ghost-hover:#0000000a;--warning:#9a6700;color-scheme:light}@media (prefers-color-scheme:light){:root:not([data-theme]){--bg:#f6f6f6;--card:#fff;--text:#242424;--strong:#171717;--muted:#666;--border:#dedede;--primary:#0969da;--primary-hover:#075bbd;--ghost-hover:#0000000a;--warning:#9a6700;color-scheme:light}}body{margin:0;background:var(--bg);color:var(--text);font:14px/1.6 -apple-system,BlinkMacSystemFont,'Segoe UI','PingFang SC','Microsoft YaHei',sans-serif;-webkit-font-smoothing:antialiased}#join-root{box-sizing:border-box;max-width:600px;margin:0 auto;padding:48px 16px}.brand{display:flex;align-items:baseline;gap:8px;margin:0 0 16px;padding:0 4px}.brand img{align-self:center;width:24px;height:24px;border-radius:6px}.brand strong{color:var(--strong);font-size:16px}.brand span{color:var(--muted);font-size:12px}.card{padding:28px;border:1px solid var(--border);border-radius:12px;background:var(--card)}h1{margin:0 0 20px;color:var(--strong);font-size:20px;line-height:1.4;font-weight:600}.empty h1{margin-bottom:8px}.empty p{margin:0}dl{display:grid;grid-template-columns:auto 1fr;gap:8px 16px;margin:0 0 20px}dt{color:var(--muted)}dd{margin:0;color:var(--strong);overflow-wrap:anywhere}.warning{margin:0 0 16px;color:var(--warning);font-weight:600}.notes{margin:0;padding-left:18px;display:grid;gap:4px}.fine{margin:12px 0 0;color:var(--muted);font-size:12px}.actions{display:flex;flex-wrap:wrap;gap:10px;margin:24px 0 4px}.button{box-sizing:border-box;display:inline-flex;align-items:center;justify-content:center;min-height:36px;padding:0 16px;border-radius:6px;font:inherit;font-weight:600;text-decoration:none;cursor:pointer;transition:background .12s}.primary{border:1px solid transparent;background:var(--primary);color:#fff}.primary:hover{background:var(--primary-hover)}.secondary{border:1px solid var(--border);background:transparent;color:var(--text)}.secondary:hover{background:var(--ghost-hover)}.button:focus-visible{outline:2px solid var(--primary);outline-offset:2px}@media (max-width:480px){#join-root{padding:24px 12px}.card{padding:20px}dl{grid-template-columns:1fr;gap:2px}dd{margin-bottom:8px}.actions .button{flex:1 1 100%}}</style>
 </head>
 <body>
 <main id="join-root"></main>
-<script>const JOIN_DICTIONARY = {"只讨论：只看点名给它的请求并回答":"Discussion only: sees only the requests that name it and answers them","讨论 + 只读项目：另可读对方开放的目录，不能写入或执行":"Discussion + read-only project: can also read the opened directories; cannot write or run anything","加入共议房间 · AI CoDiscuss":"Join a CoDiscuss room · AI CoDiscuss","没有邀请内容":"No invitation here","请打开对方发来的完整链接，或在自己的共议里输入配对码。":"Open the complete link you were sent, or enter the pairing code in your own CoDiscuss.","邀请人的电脑":"Inviting computer","房间":"Room","开放":"Opens","链接须在此前兑换":"Redeem the link before","复制邀请链接":"Copy invitation link","已复制":"Copied","复制失败，请手动复制地址栏":"Copy failed; copy the address bar manually","你被邀请让自己的 AI 加入一个共议房间":"You are invited to bring your own AI into a CoDiscuss room","你的 AI 在你自己的电脑上运行，用你自己的账号与额度；对方点名后，默认先问你同意才唤醒。":"Your AI runs on your own computer with your own account and quota; by default you are asked before it starts each time it is named.","对方开放的项目内容会经你的 AI 发送给它的模型服务商。":"Project content they open reaches your AI's model provider.","用本机共议加入":"Join with CoDiscuss on this computer","按钮打开这台电脑上的共议（需已安装并运行 codiscuss）。也可以复制链接，在共议左栏“被邀请的房间”里粘贴，或运行 codiscuss join。":"The button opens CoDiscuss on this computer (codiscuss must be installed and running). You can also copy the link and paste it under \"Invited rooms\" in the left sidebar, or run codiscuss join.","邀请内容只在地址的 # 之后，浏览器不会把它发给网站。":"The invitation lives only after the # in the address; browsers never send it to the website."};
+<script>const JOIN_DICTIONARY = {"只讨论：只看点名给它的请求并回答":"Discussion only: sees only the requests that name it and answers them","讨论 + 只读项目：另可读对方开放的目录，不能写入或执行":"Discussion + read-only project: can also read the opened directories; cannot write or run anything","共议":"CoDiscuss","邀请人的电脑":"Inviting computer","房间":"Room","开放":"Opens","链接须在此前兑换":"Redeem the link before","复制邀请链接":"Copy invitation link","已复制":"Copied","复制失败，请手动复制地址栏":"Copy failed; copy the address bar manually","你被邀请让自己的 AI 加入一个共议房间":"You are invited to bring your own AI into a CoDiscuss room","这个链接已过期，请让对方重新生成邀请。":"This link has expired. Ask them to create a new invitation.","你的 AI 在你自己的电脑上运行，用你自己的账号与额度；对方点名后，默认先问你同意才唤醒。":"Your AI runs on your own computer with your own account and quota; by default you are asked before it starts each time it is named.","对方开放的项目内容会经你的 AI 发送给它的模型服务商。":"Project content they open reaches your AI's model provider.","用本机共议加入":"Join with CoDiscuss on this computer","按钮打开这台电脑上的共议（需已安装并运行 codiscuss）。也可以复制链接，在共议左栏“被邀请的房间”里粘贴，或运行 codiscuss join。":"The button opens CoDiscuss on this computer (codiscuss must be installed and running). You can also copy the link and paste it under \"Invited rooms\" in the left sidebar, or run codiscuss join.","邀请内容只在地址的 # 之后，浏览器不会把它发给网站。":"The invitation lives only after the # in the address; browsers never send it to the website.","加入共议房间 · AI CoDiscuss":"Join a CoDiscuss room · AI CoDiscuss","没有邀请内容":"No invitation here","请打开对方发来的完整链接，或在自己的共议里输入配对码。":"Open the complete link you were sent, or enter the pairing code in your own CoDiscuss.","无法读取这个邀请链接":"This invitation link can't be read","链接可能被截断或改动过。请让对方重新复制完整链接发给你。":"The link may have been cut off or changed. Ask them to copy the complete link and send it again.","也可以在自己共议左栏“被邀请的房间”里输入对方给的配对码。":"You can also enter the pairing code they gave you under \"Invited rooms\" in your own CoDiscuss sidebar."};
+const JOIN_ICON = "data:image/svg+xml;base64,PHN2ZyB4bWxucz0iaHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmciIHZpZXdCb3g9IjAgMCAxMDAgMTAwIj48cmVjdCB3aWR0aD0iMTAwIiBoZWlnaHQ9IjEwMCIgcng9IjIyIiBmaWxsPSIjMTUxOTFhIi8+PGcgdHJhbnNmb3JtPSJ0cmFuc2xhdGUoMTQgMTQpIHNjYWxlKC43MikiPjxkZWZzPjxsaW5lYXJHcmFkaWVudCBpZD0iZjAiIGdyYWRpZW50VW5pdHM9InVzZXJTcGFjZU9uVXNlIiB4MT0iNC41IiB5MT0iNjQiIHgyPSI5NS41IiB5Mj0iNjQiPjxzdG9wIG9mZnNldD0iMC4wJSIgc3RvcC1jb2xvcj0iI2U5ZWJlZCIvPjxzdG9wIG9mZnNldD0iNi4zJSIgc3RvcC1jb2xvcj0iI2UyZTVlNyIvPjxzdG9wIG9mZnNldD0iMTIuNSUiIHN0b3AtY29sb3I9IiNkY2RlZTEiLz48c3RvcCBvZmZzZXQ9IjE4LjglIiBzdG9wLWNvbG9yPSIjZDVkOGRiIi8+PHN0b3Agb2Zmc2V0PSIyNS4wJSIgc3RvcC1jb2xvcj0iI2NlZDJkNSIvPjxzdG9wIG9mZnNldD0iMzEuMyUiIHN0b3AtY29sb3I9IiNjOGNiY2YiLz48c3RvcCBvZmZzZXQ9IjM3LjUlIiBzdG9wLWNvbG9yPSIjYzFjNWNhIi8+PHN0b3Agb2Zmc2V0PSI0My44JSIgc3RvcC1jb2xvcj0iI2JhYmZjNCIvPjxzdG9wIG9mZnNldD0iNTAuMCUiIHN0b3AtY29sb3I9IiNiNGI5YmUiLz48c3RvcCBvZmZzZXQ9IjU2LjMlIiBzdG9wLWNvbG9yPSIjYTlhZWIzIi8+PHN0b3Agb2Zmc2V0PSI2Mi41JSIgc3RvcC1jb2xvcj0iIzllYTNhOSIvPjxzdG9wIG9mZnNldD0iNjguOCUiIHN0b3AtY29sb3I9IiM5Mzk5OWYiLz48c3RvcCBvZmZzZXQ9Ijc1LjAlIiBzdG9wLWNvbG9yPSIjODg4ZTk1Ii8+PHN0b3Agb2Zmc2V0PSI4MS4zJSIgc3RvcC1jb2xvcj0iIzdlODQ4YSIvPjxzdG9wIG9mZnNldD0iODcuNSUiIHN0b3AtY29sb3I9IiM3MzdhODAiLz48c3RvcCBvZmZzZXQ9IjkzLjglIiBzdG9wLWNvbG9yPSIjNjk3MDc3Ii8+PHN0b3Agb2Zmc2V0PSIxMDAuMCUiIHN0b3AtY29sb3I9IiM1ZjY2NmQiLz48L2xpbmVhckdyYWRpZW50PjxsaW5lYXJHcmFkaWVudCBpZD0iZjEiIGdyYWRpZW50VW5pdHM9InVzZXJTcGFjZU9uVXNlIiB4MT0iOC41IiB5MT0iMzYiIHgyPSI5MS41IiB5Mj0iMzYiPjxzdG9wIG9mZnNldD0iMC4wJSIgc3RvcC1jb2xvcj0iIzNmODZmZiIvPjxzdG9wIG9mZnNldD0iNi4zJSIgc3RvcC1jb2xvcj0iIzU1ODhmZiIvPjxzdG9wIG9mZnNldD0iMTIuNSUiIHN0b3AtY29sb3I9IiM2ODg5ZmYiLz48c3RvcCBvZmZzZXQ9IjE4LjglIiBzdG9wLWNvbG9yPSIjNzg4YWZmIi8+PHN0b3Agb2Zmc2V0PSIyNS4wJSIgc3RvcC1jb2xvcj0iIzg3OGJmZiIvPjxzdG9wIG9mZnNldD0iMzEuMyUiIHN0b3AtY29sb3I9IiM5NThjZmYiLz48c3RvcCBvZmZzZXQ9IjM3LjUlIiBzdG9wLWNvbG9yPSIjYTc4YWVmIi8+PHN0b3Agb2Zmc2V0PSI0My44JSIgc3RvcC1jb2xvcj0iI2I5ODZkNyIvPjxzdG9wIG9mZnNldD0iNTAuMCUiIHN0b3AtY29sb3I9IiNjYTgwYmYiLz48c3RvcCBvZmZzZXQ9IjU2LjMlIiBzdG9wLWNvbG9yPSIjZGE3OGE2Ii8+PHN0b3Agb2Zmc2V0PSI2Mi41JSIgc3RvcC1jb2xvcj0iI2VhNmU4YyIvPjxzdG9wIG9mZnNldD0iNjguOCUiIHN0b3AtY29sb3I9IiNmNTZkNzgiLz48c3RvcCBvZmZzZXQ9Ijc1LjAlIiBzdG9wLWNvbG9yPSIjZjc3ZjcyIi8+PHN0b3Agb2Zmc2V0PSI4MS4zJSIgc3RvcC1jb2xvcj0iI2Y4OTA2YiIvPjxzdG9wIG9mZnNldD0iODcuNSUiIHN0b3AtY29sb3I9IiNmOWExNjMiLz48c3RvcCBvZmZzZXQ9IjkzLjglIiBzdG9wLWNvbG9yPSIjZmFiMDU4Ii8+PHN0b3Agb2Zmc2V0PSIxMDAuMCUiIHN0b3AtY29sb3I9IiNmYWMwNGEiLz48L2xpbmVhckdyYWRpZW50PjxsaW5lYXJHcmFkaWVudCBpZD0iZjIiIGdyYWRpZW50VW5pdHM9InVzZXJTcGFjZU9uVXNlIiB4MT0iMjguMDIxIiB5MT0iOTUuNDM1IiB4Mj0iMzkuOTc4IiB5Mj0iNC41NjQiPjxzdG9wIG9mZnNldD0iMC4wJSIgc3RvcC1jb2xvcj0iI2QwNmE0OSIvPjxzdG9wIG9mZnNldD0iNi4zJSIgc3RvcC1jb2xvcj0iI2QzNmY0ZiIvPjxzdG9wIG9mZnNldD0iMTIuNSUiIHN0b3AtY29sb3I9IiNkNjc0NTYiLz48c3RvcCBvZmZzZXQ9IjE4LjglIiBzdG9wLWNvbG9yPSIjZDk3YTVjIi8+PHN0b3Agb2Zmc2V0PSIyNS4wJSIgc3RvcC1jb2xvcj0iI2RjN2Y2MiIvPjxzdG9wIG9mZnNldD0iMzEuMyUiIHN0b3AtY29sb3I9IiNkZjg0NjgiLz48c3RvcCBvZmZzZXQ9IjM3LjUlIiBzdG9wLWNvbG9yPSIjZTI4OTZlIi8+PHN0b3Agb2Zmc2V0PSI0My44JSIgc3RvcC1jb2xvcj0iI2U1OGU3NCIvPjxzdG9wIG9mZnNldD0iNTAuMCUiIHN0b3AtY29sb3I9IiNlODkzN2EiLz48c3RvcCBvZmZzZXQ9IjU2LjMlIiBzdG9wLWNvbG9yPSIjZWI5ZDg1Ii8+PHN0b3Agb2Zmc2V0PSI2Mi41JSIgc3RvcC1jb2xvcj0iI2VlYTY4ZiIvPjxzdG9wIG9mZnNldD0iNjguOCUiIHN0b3AtY29sb3I9IiNmMWIwOWEiLz48c3RvcCBvZmZzZXQ9Ijc1LjAlIiBzdG9wLWNvbG9yPSIjZjRiYWE0Ii8+PHN0b3Agb2Zmc2V0PSI4MS4zJSIgc3RvcC1jb2xvcj0iI2Y2YzNhZiIvPjxzdG9wIG9mZnNldD0iODcuNSUiIHN0b3AtY29sb3I9IiNmOWNkYjkiLz48c3RvcCBvZmZzZXQ9IjkzLjglIiBzdG9wLWNvbG9yPSIjZmJkNmM0Ii8+PHN0b3Agb2Zmc2V0PSIxMDAuMCUiIHN0b3AtY29sb3I9IiNmZGUwY2YiLz48L2xpbmVhckdyYWRpZW50PjxsaW5lYXJHcmFkaWVudCBpZD0iZjMiIGdyYWRpZW50VW5pdHM9InVzZXJTcGFjZU9uVXNlIiB4MT0iNzEuOTc4IiB5MT0iOTUuNDM1IiB4Mj0iNjAuMDIxIiB5Mj0iNC41NjQiPjxzdG9wIG9mZnNldD0iMC4wJSIgc3RvcC1jb2xvcj0iIzRhNWNmZiIvPjxzdG9wIG9mZnNldD0iNi4zJSIgc3RvcC1jb2xvcj0iIzUwNjJmZiIvPjxzdG9wIG9mZnNldD0iMTIuNSUiIHN0b3AtY29sb3I9IiM1NzY4ZmYiLz48c3RvcCBvZmZzZXQ9IjE4LjglIiBzdG9wLWNvbG9yPSIjNWQ2ZGZmIi8+PHN0b3Agb2Zmc2V0PSIyNS4wJSIgc3RvcC1jb2xvcj0iIzY0NzJmZiIvPjxzdG9wIG9mZnNldD0iMzEuMyUiIHN0b3AtY29sb3I9IiM2Yjc3ZmYiLz48c3RvcCBvZmZzZXQ9IjM3LjUlIiBzdG9wLWNvbG9yPSIjNzE3Y2ZmIi8+PHN0b3Agb2Zmc2V0PSI0My44JSIgc3RvcC1jb2xvcj0iIzc4ODFmZiIvPjxzdG9wIG9mZnNldD0iNTAuMCUiIHN0b3AtY29sb3I9IiM3Zjg2ZmYiLz48c3RvcCBvZmZzZXQ9IjU2LjMlIiBzdG9wLWNvbG9yPSIjODk5MGZmIi8+PHN0b3Agb2Zmc2V0PSI2Mi41JSIgc3RvcC1jb2xvcj0iIzkzOTlmZiIvPjxzdG9wIG9mZnNldD0iNjguOCUiIHN0b3AtY29sb3I9IiM5ZGEyZmYiLz48c3RvcCBvZmZzZXQ9Ijc1LjAlIiBzdG9wLWNvbG9yPSIjYThhYmZmIi8+PHN0b3Agb2Zmc2V0PSI4MS4zJSIgc3RvcC1jb2xvcj0iI2IzYjRmZiIvPjxzdG9wIG9mZnNldD0iODcuNSUiIHN0b3AtY29sb3I9IiNiZWJkZmYiLz48c3RvcCBvZmZzZXQ9IjkzLjglIiBzdG9wLWNvbG9yPSIjYzljNWZmIi8+PHN0b3Agb2Zmc2V0PSIxMDAuMCUiIHN0b3AtY29sb3I9IiNkNGNlZmYiLz48L2xpbmVhckdyYWRpZW50PjxjbGlwUGF0aCBpZD0iZjQiPjxwb2x5Z29uIHBvaW50cz0iMTYsNDYuNSA4NCw0Ni41IDg0LDI1LjUgMTYsMjUuNSIvPjwvY2xpcFBhdGg+PGNsaXBQYXRoIGlkPSJmNSI+PHBvbHlnb24gcG9pbnRzPSIxNiw0OC41IDg0LDQ4LjUgODQsMjMuNSAxNiwyMy41Ii8+PC9jbGlwUGF0aD48Y2xpcFBhdGggaWQ9ImY2Ij48cG9seWdvbiBwb2ludHM9IjgxLjQxMCw4Ni42MzAgNzEuNDEwLDEwLjYzMCA1MC41ODksMTMuMzY5IDYwLjU4OSw4OS4zNjkiLz48L2NsaXBQYXRoPjxjbGlwUGF0aCBpZD0iZjciPjxwb2x5Z29uIHBvaW50cz0iODMuMzkzLDg2LjM2OSA3My4zOTMsMTAuMzY5IDQ4LjYwNiwxMy42MzAgNTguNjA2LDg5LjYzMCIvPjwvY2xpcFBhdGg+PGNsaXBQYXRoIGlkPSJmOCI+PHBvbHlnb24gcG9pbnRzPSIxMiw3NC41IDg4LDc0LjUgODgsNTMuNSAxMiw1My41Ii8+PC9jbGlwUGF0aD48Y2xpcFBhdGggaWQ9ImY5Ij48cG9seWdvbiBwb2ludHM9IjEyLDc2LjUgODgsNzYuNSA4OCw1MS41IDEyLDUxLjUiLz48L2NsaXBQYXRoPjxjbGlwUGF0aCBpZD0iZjEwIj48cG9seWdvbiBwb2ludHM9IjM5LjQxMCw4OS4zNjkgNDkuNDEwLDEzLjM2OSAyOC41ODksMTAuNjMwIDE4LjU4OSw4Ni42MzAiLz48L2NsaXBQYXRoPjxjbGlwUGF0aCBpZD0iZjExIj48cG9seWdvbiBwb2ludHM9IjQxLjM5Myw4OS42MzAgNTEuMzkzLDEzLjYzMCAyNi42MDYsMTAuMzY5IDE2LjYwNiw4Ni4zNjkiLz48L2NsaXBQYXRoPjwvZGVmcz48bGluZSB4MT0iMTIiIHkxPSI2NCIgeDI9Ijg4IiB5Mj0iNjQiIHN0cm9rZT0idXJsKCNmMCkiIHN0cm9rZS13aWR0aD0iMTUiIHN0cm9rZS1saW5lY2FwPSJyb3VuZCIvPjxsaW5lIHgxPSIxNiIgeTE9IjM2IiB4Mj0iODQiIHkyPSIzNiIgc3Ryb2tlPSJ1cmwoI2YxKSIgc3Ryb2tlLXdpZHRoPSIxNSIgc3Ryb2tlLWxpbmVjYXA9InJvdW5kIi8+PGxpbmUgeDE9IjI5IiB5MT0iODgiIHgyPSIzOSIgeTI9IjEyIiBzdHJva2U9InVybCgjZjIpIiBzdHJva2Utd2lkdGg9IjE1IiBzdHJva2UtbGluZWNhcD0icm91bmQiLz48bGluZSB4MT0iNzEiIHkxPSI4OCIgeDI9IjYxIiB5Mj0iMTIiIHN0cm9rZT0idXJsKCNmMykiIHN0cm9rZS13aWR0aD0iMTUiIHN0cm9rZS1saW5lY2FwPSJyb3VuZCIvPjxnIGNsaXAtcGF0aD0idXJsKCNmNCkiPjxsaW5lIHgxPSIyOSIgeTE9Ijg4IiB4Mj0iMzkiIHkyPSIxMiIgc3Ryb2tlPSIjMTUxOTFhIiBzdHJva2Utd2lkdGg9IjIxIiBzdHJva2UtbGluZWNhcD0icm91bmQiLz48L2c+PGcgY2xpcC1wYXRoPSJ1cmwoI2Y1KSI+PGxpbmUgeDE9IjI5IiB5MT0iODgiIHgyPSIzOSIgeTI9IjEyIiBzdHJva2U9InVybCgjZjIpIiBzdHJva2Utd2lkdGg9IjE1IiBzdHJva2UtbGluZWNhcD0icm91bmQiLz48L2c+PGcgY2xpcC1wYXRoPSJ1cmwoI2Y2KSI+PGxpbmUgeDE9IjE2IiB5MT0iMzYiIHgyPSI4NCIgeTI9IjM2IiBzdHJva2U9IiMxNTE5MWEiIHN0cm9rZS13aWR0aD0iMjEiIHN0cm9rZS1saW5lY2FwPSJyb3VuZCIvPjwvZz48ZyBjbGlwLXBhdGg9InVybCgjZjcpIj48bGluZSB4MT0iMTYiIHkxPSIzNiIgeDI9Ijg0IiB5Mj0iMzYiIHN0cm9rZT0idXJsKCNmMSkiIHN0cm9rZS13aWR0aD0iMTUiIHN0cm9rZS1saW5lY2FwPSJyb3VuZCIvPjwvZz48ZyBjbGlwLXBhdGg9InVybCgjZjgpIj48bGluZSB4MT0iNzEiIHkxPSI4OCIgeDI9IjYxIiB5Mj0iMTIiIHN0cm9rZT0iIzE1MTkxYSIgc3Ryb2tlLXdpZHRoPSIyMSIgc3Ryb2tlLWxpbmVjYXA9InJvdW5kIi8+PC9nPjxnIGNsaXAtcGF0aD0idXJsKCNmOSkiPjxsaW5lIHgxPSI3MSIgeTE9Ijg4IiB4Mj0iNjEiIHkyPSIxMiIgc3Ryb2tlPSJ1cmwoI2YzKSIgc3Ryb2tlLXdpZHRoPSIxNSIgc3Ryb2tlLWxpbmVjYXA9InJvdW5kIi8+PC9nPjxnIGNsaXAtcGF0aD0idXJsKCNmMTApIj48bGluZSB4MT0iMTIiIHkxPSI2NCIgeDI9Ijg4IiB5Mj0iNjQiIHN0cm9rZT0iIzE1MTkxYSIgc3Ryb2tlLXdpZHRoPSIyMSIgc3Ryb2tlLWxpbmVjYXA9InJvdW5kIi8+PC9nPjxnIGNsaXAtcGF0aD0idXJsKCNmMTEpIj48bGluZSB4MT0iMTIiIHkxPSI2NCIgeDI9Ijg4IiB5Mj0iNjQiIHN0cm9rZT0idXJsKCNmMCkiIHN0cm9rZS13aWR0aD0iMTUiIHN0cm9rZS1saW5lY2FwPSJyb3VuZCIvPjwvZz48L2c+PC9zdmc+";
 /**
  * The online site's explanation page for an invitation link, `/join#<payload>`. The payload stays in the URL fragment,
  * which browsers never send to the server: this page reads it locally and shows only who invites, to which room, what
- * is opened and until when (never a path), then hands the whole link to this computer's own CoDiscuss.
+ * is opened and until when (never a path or the code), then hands the whole link to this computer's own CoDiscuss.
  *
  * Built into web/join.html as one self-contained file (vite.config.mjs, join_page()), so it needs no other asset of
- * the site; JOIN_DICTIONARY is filled in at build time with the English entries this file uses.
+ * the site; JOIN_DICTIONARY (the English entries this file uses) and JOIN_ICON (the site icon) are filled in at build time.
  */
-/* global JOIN_DICTIONARY */
+/* global JOIN_DICTIONARY, JOIN_ICON */
 (function () {
   const LOCAL_SITE = "http://127.0.0.1:8765";
   const STORAGE_KEY = "codiscuss.locale";
+  // The site's own theme choice (web/app.js THEME_STORAGE_KEY); without one the page follows the system.
+  const THEME_KEY = "ai-codiscuss-theme";
+  const saved = (key) => { try { return localStorage.getItem(key) || ""; } catch { return ""; } };
   const english = (() => {
-    let saved = "";
-    try { saved = localStorage.getItem(STORAGE_KEY) || ""; } catch { /* storage blocked */ }
-    if (saved) return saved === "en";
+    const locale = saved(STORAGE_KEY);
+    if (locale) return locale === "en";
     return !/^zh\b/i.test((navigator.languages && navigator.languages[0]) || navigator.language || "");
   })();
   const dictionary = english && typeof JOIN_DICTIONARY === "object" ? JOIN_DICTIONARY : {};
@@ -35,20 +39,23 @@
     return params ? text.replace(/\{(\w+)\}/g, (match, name) => (name in params ? String(params[name]) : match)) : text;
   }
   document.documentElement.lang = english ? "en" : "zh-CN";
+  const theme = saved(THEME_KEY);
+  if (theme) document.documentElement.dataset.theme = theme.endsWith("-light") ? "light" : "dark";
 
-  /** The invitation the fragment carries: base64url JSON; anything else is kept only as the link to hand over. */
+  /** The invitation the fragment carries: base64url JSON; null without a fragment, {} when it cannot be read. */
   function read_payload() {
-    const raw = decodeURIComponent((location.hash || "").replace(/^#(join=)?/, ""));
+    const raw = (location.hash || "").replace(/^#(join=)?/, "");
     if (!raw) return null;
     try {
-      const text = atob(raw.replace(/-/g, "+").replace(/_/g, "/"));
+      const text = atob(decodeURIComponent(raw).replace(/-/g, "+").replace(/_/g, "/"));
       const bytes = Uint8Array.from(text, (character) => character.charCodeAt(0));
-      return JSON.parse(new TextDecoder().decode(bytes));
+      const value = JSON.parse(new TextDecoder().decode(bytes));
+      return value && typeof value === "object" ? value : {};
     } catch { return {}; }
   }
+  const to_ms = (value) => (typeof value === "number" ? (value < 1e12 ? value * 1000 : value) : Date.parse(value));
   const time = (value) => {
-    if (!value) return "";
-    const ms = typeof value === "number" ? (value < 1e12 ? value * 1000 : value) : Date.parse(value);
+    const ms = value ? to_ms(value) : NaN;
     return Number.isNaN(ms) ? "" : new Date(ms).toLocaleString(english ? "en" : "zh-CN", { hour12: false });
   };
   const LEVELS = { discuss: t("只讨论：只看点名给它的请求并回答"), read: t("讨论 + 只读项目：另可读对方开放的目录，不能写入或执行") };
@@ -64,15 +71,21 @@
     return node;
   }
 
-  function render() {
-    document.title = t("加入共议房间 · AI CoDiscuss");
-    const root = document.getElementById("join-root");
-    root.replaceChildren();
-    const payload = read_payload();
-    if (!payload) {
-      root.append(element("h1", { text: t("没有邀请内容") }), element("p", { text: t("请打开对方发来的完整链接，或在自己的共议里输入配对码。") }));
-      return;
-    }
+  const brand = () => element("header", { class: "brand" }, [
+    typeof JOIN_ICON === "string" && JOIN_ICON ? element("img", { src: JOIN_ICON, alt: "" }) : null,
+    element("strong", { text: t("共议") }), element("span", { text: "AI CoDiscuss" }),
+  ]);
+
+  /** No invitation to show: a missing fragment and one that cannot be read share one layout, with what to do next. */
+  function empty_state(title, detail, fine) {
+    return element("section", { class: "card empty", role: "status" }, [
+      element("h1", { text: title }),
+      element("p", { text: detail }),
+      fine ? element("p", { class: "fine", text: fine }) : null,
+    ]);
+  }
+
+  function invitation(payload) {
     // Payload fields: 子Task2 CONTRACT §2.1 (`expires_at` is when the link stops working, not the membership).
     const facts = [
       [t("邀请人的电脑"), payload.machine_name || ""],
@@ -80,23 +93,42 @@
       [t("开放"), LEVELS[payload.level] || ""],
       [t("链接须在此前兑换"), time(payload.expires_at)],
     ].filter(([, value]) => value);
+    const expired = payload.expires_at && to_ms(payload.expires_at) <= Date.now();
     const link = location.href;
-    const copy_button = element("button", { type: "button", class: "secondary", text: t("复制邀请链接"), onclick: async () => {
+    const copy_button = element("button", { type: "button", class: "button secondary", text: t("复制邀请链接"), onclick: async () => {
       try { await navigator.clipboard.writeText(link); copy_button.textContent = t("已复制"); }
       catch { copy_button.textContent = t("复制失败，请手动复制地址栏"); }
     } });
-    root.append(
+    return element("section", { class: "card" }, [
       element("h1", { text: t("你被邀请让自己的 AI 加入一个共议房间") }),
       element("dl", {}, facts.flatMap(([label, value]) => [element("dt", { text: label }), element("dd", { text: value })])),
-      element("p", { class: "note", text: t("你的 AI 在你自己的电脑上运行，用你自己的账号与额度；对方点名后，默认先问你同意才唤醒。") }),
-      element("p", { class: "note", text: t("对方开放的项目内容会经你的 AI 发送给它的模型服务商。") }),
+      expired ? element("p", { class: "warning", role: "status", text: t("这个链接已过期，请让对方重新生成邀请。") }) : null,
+      element("ul", { class: "notes" }, [
+        element("li", { text: t("你的 AI 在你自己的电脑上运行，用你自己的账号与额度；对方点名后，默认先问你同意才唤醒。") }),
+        element("li", { text: t("对方开放的项目内容会经你的 AI 发送给它的模型服务商。") }),
+      ]),
       element("div", { class: "actions" }, [
-        element("a", { class: "primary", href: `${LOCAL_SITE}/#join=${encodeURIComponent(link)}`, text: t("用本机共议加入") }),
+        element("a", { class: "button primary", href: `${LOCAL_SITE}/#join=${encodeURIComponent(link)}`, text: t("用本机共议加入") }),
         copy_button,
       ]),
       element("p", { class: "fine", text: t("按钮打开这台电脑上的共议（需已安装并运行 codiscuss）。也可以复制链接，在共议左栏“被邀请的房间”里粘贴，或运行 codiscuss join。") }),
       element("p", { class: "fine", text: t("邀请内容只在地址的 # 之后，浏览器不会把它发给网站。") }),
-    );
+    ]);
+  }
+
+  function render() {
+    document.title = t("加入共议房间 · AI CoDiscuss");
+    const root = document.getElementById("join-root");
+    root.replaceChildren();
+    const payload = read_payload();
+    // A link without the code or the computer cannot be redeemed, so it is shown as unreadable rather than as an invitation.
+    const body = !payload
+      ? empty_state(t("没有邀请内容"), t("请打开对方发来的完整链接，或在自己的共议里输入配对码。"))
+      : !payload.code || !payload.machine
+        ? empty_state(t("无法读取这个邀请链接"), t("链接可能被截断或改动过。请让对方重新复制完整链接发给你。"),
+          t("也可以在自己共议左栏“被邀请的房间”里输入对方给的配对码。"))
+        : invitation(payload);
+    root.append(brand(), body);
   }
   render();
   window.addEventListener("hashchange", render);

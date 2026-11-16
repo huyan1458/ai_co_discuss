@@ -118,7 +118,8 @@ async function joined(t) {
 
 test('invites are issued only with the room owner credential, kept as a hash, listed without the code and revocable', async t => {
   const { home, link } = computer(t);
-  await assert.rejects(create_invite(home, { room_id: ROOM, token: 'x'.repeat(48) }), /控制凭据/);
+  await assert.rejects(create_invite(home, { room_id: ROOM, token: 'x'.repeat(48) }),
+    error => error.code === 'owner_required' && error.error_text.template === '需要本房间的控制凭据，且房间须在这台电脑上');
   await assert.rejects(create_invite(home, { room_id: ROOM, token: OWNER, folders: [3] }), /项目目录的序号/);
   const invite = await create_invite(home, { room_id: ROOM, token: OWNER, level: 'read', duration: 'today' });
   assert.match(invite.code, /^[0-9A-Z]{4}-[0-9A-Z]{4}-[0-9A-Z]{4}$/);
@@ -131,11 +132,11 @@ test('invites are issued only with the room owner credential, kept as a hash, li
   assert.ok(!JSON.stringify(payload).includes('project'), 'the link carries no local path');
   const stored = readFileSync(join(home, 'external.json'), 'utf8');
   assert.ok(!stored.includes(invite.code.replaceAll('-', '')), 'only the code hash is kept');
-  const listed = list_invites(home, { room_id: ROOM, token: OWNER }).invites;
+  const listed = (await list_invites(home, { room_id: ROOM, token: OWNER })).invites;
   assert.deepEqual(listed.map(item => item.invite_id), [invite.invite_id]);
   assert.ok(!JSON.stringify(listed).includes(invite.code.replaceAll('-', '')));
-  assert.deepEqual(revoke_invite(home, { room_id: ROOM, token: OWNER, invite_id: invite.invite_id }), { ok: true, revoked: true });
-  assert.equal(list_invites(home, { room_id: ROOM, token: OWNER }).invites.length, 0);
+  assert.deepEqual(await revoke_invite(home, { room_id: ROOM, token: OWNER, invite_id: invite.invite_id }), { ok: true, revoked: true });
+  assert.equal((await list_invites(home, { room_id: ROOM, token: OWNER })).invites.length, 0);
 });
 
 test('redeeming proves the code and the key once; B adds the member with the owner credential and publishes the key', async t => {
@@ -226,7 +227,8 @@ test('external-api forwards only the member\'s own room routes with its own cred
   env.website.state.ended = true;
   assert.equal((await env.send('external-api', { path: `/api/external/rooms/${ROOM}/view`, token: env.token })).body.code, 'external_ended');
   assert.deepEqual(external_entries(env.home), [], 'the key leaves the signed list');
-  assert.match((await env.send('external-api', { path: `/api/external/rooms/${ROOM}/view`, token: env.token })).body.error, /未登记或已移除/);
+  const gone = (await env.send('external-api', { path: `/api/external/rooms/${ROOM}/view`, token: env.token })).body;
+  assert.deepEqual([gone.code, gone.error_text], ['external_ended', { template: '这位外部成员未登记或已移除', params: {} }], 'A can tell the membership ended, and a page can translate it');
 });
 
 test('a replayed request is not run twice', async t => {
@@ -350,4 +352,37 @@ test('a paired device manages this computer\'s invited rooms as the computer doe
     { invite: 'ABCD-EFGH-JKMN', site: 'https://192.168.1.20' }, { invite: 'ABCD-EFGH-JKMN', site: 'https://[::1]' }, { invite: 'ABCD-EFGH-JKMN' }]) {
     assert.throws(() => policy(input), /公网 HTTPS/, JSON.stringify(input));
   }
+});
+
+test('the local website\'s own page issues and lists invites without a credential, through the owner stand-in it adds', async t => {
+  const { start_python_site, create_room, site_json } = await import('./external_harness.mjs');
+  const env = computer(t);
+  const site = await start_python_site(t, env.home, {}, { local_launch: true });
+  const room = await create_room(site.url);
+  writeFileSync(env.config, JSON.stringify({ room: room.room.id, site: site.url, token: room.owner, cwd: env.project, extra_directories: [] }));
+  // What the page sends: same-origin, marked local, no room credential; the website stands in for the owner.
+  const local = (command, body) => site_json(site.url, `/api/local/${command}`, { body, headers: { 'X-CoDiscuss-Local': '1' } });
+  const issued = await local('room-invite', { room_id: room.room.id, level: 'read', duration: '1h' });
+  assert.equal(issued.status, 200, JSON.stringify(issued.body));
+  assert.match(issued.body.code, /^[0-9A-Z]{4}-[0-9A-Z]{4}-[0-9A-Z]{4}$/);
+  const listed = await local('room-invites', { room_id: room.room.id });
+  assert.deepEqual(listed.body.invites.map(item => item.invite_id), [issued.body.invite_id]);
+  assert.deepEqual((await local('room-invite-revoke', { room_id: room.room.id, invite_id: issued.body.invite_id })).body, { ok: true, revoked: true });
+  // A credential the website does not accept for the owner is still refused, with a code and a translatable template.
+  const forged = await local('room-invites', { room_id: room.room.id, token: 'f'.repeat(64) });
+  assert.deepEqual([forged.status, forged.body.code, forged.body.error_text?.template], [400, 'owner_required', '需要本房间的控制凭据，且房间须在这台电脑上']);
+});
+
+test('only this computer may make an inviting computer a trusted device; going back to default or borrowing works from afar', () => {
+  const home = mkdtempSync(join(tmpdir(), 'codiscuss-trust-'));
+  try {
+    const policy = (command, input) => guard_remote_request(command, input, { projects: [], participants: {}, home });
+    for (const [command, input] of [['invited-trust', { id: 'record-1', trust: 'trusted' }], ['invited-join', { invite: 'https://b.pages.dev/join#x', adapter: 'claude', trust: 'trusted' }]]) {
+      assert.throws(() => policy(command, input), error => error.code === 'trusted_local_only'
+        && error.error_text.template === '“信任设备”只能在这台电脑上设置；其他设备可以改回“默认”或“完全借用”', command);
+    }
+    assert.doesNotThrow(() => policy('invited-trust', { id: 'record-1', trust: 'default' }));
+    assert.doesNotThrow(() => policy('invited-trust', { id: 'record-1', trust: 'borrow', max_wakes: 5, hours: 2 }));
+    assert.doesNotThrow(() => policy('invited-join', { invite: 'https://b.pages.dev/join#x', adapter: 'claude' }));
+  } finally { rmSync(home, { recursive: true, force: true }); }
 });

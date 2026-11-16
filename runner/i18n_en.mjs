@@ -513,5 +513,6 @@ export default {
   "本次运行已收窄，不能从标准输入读取；请先把内容写进草稿目录，再用文件参数传入": "This run is restricted and cannot read standard input; write the content in the draft folder and pass its path",
   "本次运行已收窄，只能读取草稿目录 {folder} 里的文件": "This run is restricted and can read files only in its draft folder {folder}",
   "外部成员只能派命令行软件（如 Claude Code）或模型 API": "An external member must be command-line software (such as Claude Code) or a model API",
-  "这台电脑还没有配置 {adapter}": "This computer has not configured {adapter}"
+  "这台电脑还没有配置 {adapter}": "This computer has not configured {adapter}",
+  "“信任设备”只能在这台电脑上设置；其他设备可以改回“默认”或“完全借用”": "“Trusted device” can only be set on this computer. Other devices can switch back to “Default” or “Full borrowing”"
 };

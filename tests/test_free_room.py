@@ -715,6 +715,11 @@ class SingleMemberTests(FreeRoomTests):
         delivered = self.reserve()[1]
         # The interrupted turn's own message goes out again with the one sent now: neither is left unanswered.
         self.assertEqual([request["message_id"] for request in delivered["requests"]], [self.messages()[0][0], self.messages()[-1][0]])
+        # The interrupted card stays under the first message; the new turn's card shows under the message sent now.
+        first, now = self.messages()[0][0], self.messages()[-1][0]
+        cards = {item["id"]: item for item in self.request(self.path)[1]["free"]["executions"]}
+        self.assertEqual((cards[running["id"]]["status"], cards[running["id"]]["layout_after"]), ("cancelled", first))
+        self.assertEqual(cards[delivered["id"]]["layout_after"], now)
 
     def test_failure_affects_only_its_requests_and_release_requeues(self):
         """A failed execution keeps the room usable; a proven non-delivery returns requests to the queue."""
