@@ -749,5 +749,6 @@
   "在左侧选择一个会话查看预览。": "Select a session on the left to preview it.",
   "接入此会话": "Resume this session",
   "额度已用尽，预计 {value1} 恢复；给它发新消息会立即再试": "Out of quota, expected back at {value1}; a new message to it is tried at once",
-  "保存（Enter）": "Save (Enter)"
+  "保存（Enter）": "Save (Enter)",
+  "已重试，新的执行接在下方": "Retried; the new run follows below"
 }

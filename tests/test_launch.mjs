@@ -812,8 +812,6 @@ test('missing software, current identity or invalid limits fail before creating 
   const agy_room = { ...f.input.room, host: 'Antigravity', experts: { Antigravity: 'cli', Claude: 'cli' } };
   await assert.rejects(launch_discussion(f.home, { ...f.input, room: agy_room, entry: 'conversation', current_session_id: 'agy-chat',
     participants: { ...f.input.participants, Antigravity: agy } }, f.options), /Antigravity CLI 不能绑定已有会话/);
-  await assert.rejects(launch_discussion(f.home, { ...f.input, room: agy_room,
-    participants: { ...f.input.participants, Antigravity: { ...agy, session_id: 'known-session' } } }, f.options), /Antigravity CLI 不能绑定已有会话/);
   assert.equal((await request(f.site, '/api/rooms')).body.rooms.length, 0);
   assert.equal(f.starts.length, 0);
 });

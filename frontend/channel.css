@@ -491,6 +491,8 @@ html[data-theme^="channel"] .channel-message.channel-topic-card { color: var(--u
 /* Error/warning text gets its own box so a failure never reads like an answer; same left-bar tint as .access-failure. */
 .channel-message-text.channel-failure-reason { --failure-tone: var(--ui-error); margin: 0; padding: 1px 0 1px 12px; border-left: 2px solid color-mix(in srgb, var(--failure-tone) 60%, transparent); color: #b3bdcc; font-size: 14px; line-height: 1.65; white-space: pre-wrap; }
 .channel-message-text.channel-failure-reason.is-warning { --failure-tone: var(--ui-warning); }
+.channel-retried-note { display: flex; align-items: center; gap: 6px; margin-top: 8px; }
+.channel-retried-note > [class*="icon"] { width: 13px; height: 13px; }
 /* Stopped, voided or skipped work: a dashed, see-through card with a stop mark, so it never reads as an answer. */
 .channel-message.is-voided { border-style: dashed; border-color: var(--ui-border-accented, #ffffff24); background: transparent; }
 .channel-message-text.channel-stop-reason { display: flex; align-items: center; gap: 8px; margin: 0; padding: 1px 0 1px 12px; border-left: 2px solid var(--ui-border-accented, #ffffff24); color: var(--ui-text-muted); font-size: 14px; line-height: 1.65; }

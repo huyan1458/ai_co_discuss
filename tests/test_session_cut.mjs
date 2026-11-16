@@ -4,6 +4,7 @@ import { EventEmitter } from 'node:events';
 import { mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, utimesSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import { pathToFileURL } from 'node:url';
 import { PassThrough } from 'node:stream';
 import { test } from 'node:test';
 import { DatabaseSync } from 'node:sqlite';
@@ -185,7 +186,34 @@ test('stored conversations are listed newest first with their titles and preview
     assert.deepEqual(software_sessions(adapter, options).sessions.map(session => [session.id, session.title]), [[thread, 'Respond to greeting']], adapter);
   }
   assert.deepEqual(session_preview('codex_cli', thread, options).messages.map(item => item.text), ['say hello', 'Hello.']);
-  assert.deepEqual(software_sessions('antigravity_cli', options), { available: false, sessions: [], next_offset: null });
+
+  // agy: titles and folders from its own index, prompts and replies from the conversation's protobuf steps.
+  const agy = join(home, '.gemini', 'antigravity-cli'), conversation = '7acccfdf-7685-4e43-81a0-ff89f4caab17', room_made = 'a0713e60-0f23-4746-aeb9-ca591552a8cf';
+  mkdirSync(join(agy, 'conversations'), { recursive: true });
+  const varint = value => { const bytes = []; do { bytes.push((value & 127) | (value > 127 ? 128 : 0)); value = Math.floor(value / 128); } while (value); return bytes; };
+  const field = (number, value) => typeof value === 'number' ? Buffer.from([...varint(number * 8), ...varint(value)])
+    : (body => Buffer.concat([Buffer.from([...varint(number * 8 + 2), ...varint(body.length)]), body]))(Buffer.isBuffer(value) ? value : Buffer.from(value));
+  const index = new DatabaseSync(join(agy, 'conversation_summaries.db'));
+  index.exec(`CREATE TABLE conversation_summaries (conversation_id text, title text, preview text, workspace_uris text, app_data_dir text,
+    project_id text, agent_name text DEFAULT '', parent_conversation_id text DEFAULT '', nesting_depth integer DEFAULT 0)`);
+  const summary = index.prepare('INSERT INTO conversation_summaries (conversation_id,title,preview,workspace_uris,app_data_dir,project_id) VALUES (?,?,?,?,?,?)');
+  summary.run(conversation, '', 'compare the agy layouts', JSON.stringify([pathToFileURL(project).href]), 'antigravity-cli', 'default-cli-project');
+  summary.run(room_made, '', 'room task', JSON.stringify([pathToFileURL(project).href]), 'antigravity-cli', 'outside-of-project');
+  index.close();
+  for (const id of [conversation, room_made]) {
+    const db = new DatabaseSync(join(agy, 'conversations', `${id}.db`));
+    db.exec('CREATE TABLE steps (idx integer PRIMARY KEY, step_type integer, step_payload blob)');
+    const step = db.prepare('INSERT INTO steps VALUES (?,?,?)');
+    step.run(0, 14, Buffer.concat([field(5, field(1, field(1, 1794787200))), field(19, field(2, 'say hello'))]));
+    step.run(1, 17, Buffer.alloc(0));
+    step.run(2, 15, field(20, field(1, 'Hello.')));
+    db.close();
+  }
+  assert.deepEqual(software_sessions('antigravity_cli', options).sessions.map(session => [session.id, session.title, session.cwd]),
+    [[conversation, 'compare the agy layouts', project]]);
+  assert.deepEqual(session_preview('antigravity_cli', conversation, options).messages.map(item => [item.role, item.text, item.at]),
+    [['user', 'say hello', '2026-11-16T00:00:00.000Z'], ['assistant', 'Hello.', '']]);
+  assert.throws(() => session_preview('antigravity_cli', room_made, options), /找不到可续接的 agy 会话/);
 
   // A request without the computer owner's standing sees only conversations made in folders it may use.
   const list = (adapter, extra) => software_sessions(adapter, { ...options, ...extra });

@@ -4,20 +4,22 @@
  * Sessions are conversation databases, branched by copying them (not an official interface; tested on agy 1.4.9).
  */
 import { createHash, randomUUID } from 'node:crypto';
-import { closeSync, copyFileSync, existsSync, mkdirSync, openSync, readFileSync, readdirSync, readSync, rmSync } from 'node:fs';
+import { closeSync, copyFileSync, existsSync, mkdirSync, openSync, readFileSync, readdirSync, readSync, rmSync, statSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { dirname, isAbsolute, join, relative, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { DatabaseSync } from 'node:sqlite';
 import { atomic_json } from '../files.mjs';
 import { cli_delivery } from './cli.mjs';
-import { DENIAL_FIELD, EDIT_TOOLS, json_line, launch_directory, MAX_DENIALS, model_entry, MODEL_PATTERN, not_sent, project_directory,
-  query_catalog, read_json, same_path, TASK_SUBCOMMANDS } from './common.mjs';
+import { DENIAL_FIELD, EDIT_TOOLS, json_line, launch_directory, MAX_DENIALS, model_entry, MODEL_PATTERN, not_sent, page_sessions, project_directory,
+  prompt_title, query_catalog, read_json, same_path, TASK_SUBCOMMANDS, trim_preview } from './common.mjs';
 
 // agy stores its generation settings as protobuf; field 28 (tag bytes 0xe2 0x01) holds the model actually used.
 const AGY_MODEL_TAG = [0xe2, 0x01];
 const AGY_OUTSIDE_PROJECT = 'outside-of-project';
 const SKILL_HEADER_BYTES = 64 * 1024;
+// A preview reads at most this many prompt and reply steps from the end of a conversation.
+const PREVIEW_STEP_LIMIT = 200;
 
 /**
  * One operation a headless agy run refused, from the failed tool step, with the project grant that would allow it.
@@ -388,6 +390,89 @@ export function session_exists(session_id, { env = process.env, home = homedir()
   return Boolean(session_id && session_path(session_id, env, home));
 }
 
+/** Each field of one protobuf message as `[field, value]`: a number for a varint, bytes for a length-delimited value. */
+function* proto_fields(bytes) {
+  let at = 0;
+  const varint = () => {
+    let value = 0, scale = 1, byte;
+    do { byte = bytes[at++]; value += (byte & 127) * scale; scale *= 128; } while (byte & 128 && at < bytes.length);
+    return value;
+  };
+  while (at < bytes.length) {
+    const key = varint(), wire = key % 8, field = Math.floor(key / 8);
+    if (wire === 0) yield [field, varint()];
+    else if (wire === 1) at += 8;
+    else if (wire === 5) at += 4;
+    else if (wire === 2) { const length = varint(); yield [field, bytes.subarray(at, at + length)]; at += length; }
+    else return;
+  }
+}
+
+/** The first value at a field path through nested protobuf messages, or null. */
+function proto_value(bytes, ...path) {
+  let value = bytes;
+  for (const wanted of path) {
+    if (!(value instanceof Uint8Array)) return null;
+    let found = null;
+    for (const [field, item] of proto_fields(value)) if (field === wanted) { found = item; break; }
+    if (found === null) return null;
+    value = found;
+  }
+  return value;
+}
+
+/**
+ * The conversations the owner started in agy, from agy's own index (`conversation_summaries.db`, read on agy 1.5.9; not an
+ * official interface): only top-level CLI ones whose database is still here. Those this tool made for room members sit in
+ * the hidden `outside-of-project` and are left out: their directories are not recorded, and resumed they would lose
+ * the room rules they were made with.
+ */
+function agy_conversations(home) {
+  const root = join(home, '.gemini', 'antigravity-cli');
+  const index = join(root, 'conversation_summaries.db');
+  if (!existsSync(index)) return [];
+  const db = new DatabaseSync(index, { readOnly: true });
+  let rows;
+  try {
+    rows = db.prepare(`SELECT conversation_id id, title, preview, workspace_uris workspaces FROM conversation_summaries
+      WHERE app_data_dir='antigravity-cli' AND nesting_depth=0 AND parent_conversation_id='' AND agent_name='' AND project_id!=?`).all(AGY_OUTSIDE_PROJECT);
+  } finally { db.close(); }
+  const conversations = [];
+  for (const row of rows) {
+    const file = join(root, 'conversations', `${row.id}.db`);
+    let info, cwd = '';
+    try { info = statSync(file); } catch { continue; }
+    // agy lists the conversation's folders in name order without marking where it started; the first stands for it.
+    try { cwd = fileURLToPath(JSON.parse(row.workspaces)[0] || ''); } catch { /* No folder recorded. */ }
+    conversations.push({ file, id: row.id, title: prompt_title(row.title || row.preview), cwd, updated_at: info.mtime.toISOString(), size: info.size });
+  }
+  return conversations.sort((left, right) => right.updated_at.localeCompare(left.updated_at));
+}
+
+/** One page of the owner's agy conversations, newest first; `cwd` keeps one directory's. */
+function list_sessions({ cwd = '', env = process.env, home = homedir(), ...page } = {}) {
+  const accept = found => (!cwd || same_path(found, cwd)) && (!page.accept || page.accept(found));
+  return page_sessions(agy_conversations(home), ({ file, ...conversation }) => conversation, { ...page, accept });
+}
+
+/** The last prompts and replies of one agy conversation: user input steps (type 14) and agent replies (type 15). */
+function preview_session(session_id, { env = process.env, home = homedir() } = {}) {
+  const found = agy_conversations(home).find(conversation => conversation.id === session_id);
+  if (!found) throw new Error(`本机找不到可续接的 agy 会话 ${session_id}`);
+  const db = new DatabaseSync(found.file, { readOnly: true });
+  let rows;
+  try { rows = db.prepare('SELECT step_type,step_payload FROM steps WHERE step_type IN (14,15) ORDER BY idx DESC LIMIT ?').all(PREVIEW_STEP_LIMIT); }
+  finally { db.close(); }
+  const messages = rows.reverse().map(({ step_type, step_payload }) => {
+    const payload = Buffer.from(step_payload || []);
+    const text = Buffer.from(proto_value(payload, ...(step_type === 14 ? [19, 2] : [20, 1])) || []).toString('utf8').trim();
+    const seconds = proto_value(payload, 5, 1, 1);
+    return text ? { role: step_type === 14 ? 'user' : 'assistant', text, at: typeof seconds === 'number' ? new Date(seconds * 1000).toISOString() : '' } : null;
+  }).filter(Boolean);
+  const { file, ...described } = found;
+  return { ...described, ...trim_preview(messages, rows.length === PREVIEW_STEP_LIMIT) };
+}
+
 /** Copy the conversation database under a new ID, without the steps from the first marked one on. */
 function branch(profile, session_id, markers, { always, home }) {
   const file = session_path(session_id, process.env, home);
@@ -574,7 +659,8 @@ export const antigravity_cli = {
   cleanup: remove_agy_projects, sweep: sweep_legacy_agy_projects,
   deliver,
   invocation, lifecycle, events, failure_class: agy_failure_class,
-  session: { path: session_path, exists: session_exists, owns: session_exists, branch, settings: session_settings },
+  session: { path: session_path, exists: session_exists, owns: session_exists, branch, settings: session_settings,
+    list: list_sessions, preview: preview_session },
   models: { list: models, effort, defaults, defaults_stamp },
   skills: agy_skills,
 };

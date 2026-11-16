@@ -899,8 +899,11 @@ export function participant_profile(name, defaults, input, current_host) {
   const cwd = profile.cwd || input.cwd;
   if (cwd && (!existsSync(cwd) || !statSync(cwd).isDirectory())) throw new Error(`${name}：工作目录不存在或不是文件夹，请核对本次目录配置`);
   if (input.entry === 'conversation' && current_host) profile.session_id = input.current_session_id;
-  // A new agy conversation always gets this tool's discussion project; only a manual agy expert the owner chose to host (input.adopt) keeps its own.
-  if (!facts?.host_existing && profile.session_id && !input.adopt) throw new Error(`${name}：${facts?.label || profile.adapter} 不能绑定已有会话或从当前对话主持全自动讨论；请从网页或其他软件发起，它会由讨论服务新建会话`);
+  // A new agy conversation always gets this tool's discussion project; a manual agy expert the owner chose to host
+  // (input.adopt) or a stored conversation the owner picked keeps its own. Hosting from the very conversation that is
+  // running stays refused: its open window would overwrite the turns run from outside.
+  const picked = facts?.browse_sessions && !(input.entry === 'conversation' && current_host);
+  if (!facts?.host_existing && profile.session_id && !input.adopt && !picked) throw new Error(`${name}：${facts?.label || profile.adapter} 不能绑定已有会话或从当前对话主持全自动讨论；请从网页或其他软件发起，它会由讨论服务新建会话`);
   return profile;
 }
 

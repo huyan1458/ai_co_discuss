@@ -90,7 +90,7 @@ From the member panel you can:
 
 - **Invite** members. A member card offers three ways to start:
   - **Automatic start**: this computer starts a new, empty session.
-  - **History** (Claude Code, Codex): opens a window listing that software's past sessions by time, like `claude -r` or Codex's `/resume`. Search it, show this project's sessions or all of them, and preview the latest messages of the selected one. The program then resumes the picked session in the background, so it joins with the context it already has. While it is working, do not keep using it in its original window.
+  - **History** (Claude Code, Codex, Antigravity CLI): opens a window listing that software's past sessions by time, like `claude -r` or Codex's `/resume`. Search it, show this project's sessions or all of them, and preview the latest messages of the selected one. The program then resumes the picked session in the background, so it joins with the context it already has. While it is working, do not keep using it in its original window. An Antigravity CLI session keeps its own project and agy permissions; the room's project access does not apply to it.
   - **Manual start**: run the start instruction in a conversation you already have open; room tasks are then delivered into that window where possible.
 
   Experts invited during a discussion join the end of the current round.

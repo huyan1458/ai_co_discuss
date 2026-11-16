@@ -575,7 +575,7 @@ function recall(event, step) {
           </div>
           <div v-else-if="entry.kind === 'error'" class="term-line term-error"><span class="term-bullet">●</span><span class="term-body">{{ entry.body || entry.title }}</span></div>
           <div v-else class="term-block">
-            <div class="term-line term-step"><span class="term-bullet" :class="`is-${entry.state || 'done'}`">●</span><span v-for="step in [step_line(entry)]" :key="'step'" class="term-body"><b class="term-tool">{{ step.tool }}</b><span v-if="step.subject" class="term-subject">({{ step.subject }})</span></span><span v-for="time in [step_time(entry)]" :key="'time'" class="term-when"><template v-if="time"><time class="term-clock" :title="time.title">{{ time.clock }}</time><span v-if="time.took" class="term-took" :class="{ 'is-slow': time.slow }">{{ time.took }}</span></template></span></div>
+            <div class="term-line term-step"><span class="term-bullet" :class="`is-${entry.state || 'done'}`">●</span><span v-for="step in [step_line(entry)]" :key="'step'" class="term-body"><b class="term-tool">{{ step.tool }}</b><span v-if="step.subject" class="term-subject">({{ step.subject }})</span></span><span v-for="time in [step_time(entry)]" :key="'time'" class="term-when"><template v-if="time"><span v-if="time.took" class="term-took" :class="{ 'is-slow': time.slow }">{{ time.took }}</span><time class="term-clock" :title="time.title">{{ time.clock }}</time></template></span></div>
             <div v-if="entry.body" v-for="output in [output_of(item, entry)]" :key="'out'" class="term-sub" :class="{ 'term-error': entry.state === 'failed' }">
               <span class="term-corner">⎿</span><span class="term-body"><span v-for="(line, at) in output.lines" :key="at" class="term-out" :class="line.tone">{{ line.text || " " }}</span><button v-if="output.hidden" type="button" class="term-more" @click="open_step(item, entry)">{{ t('… +{value1} 行（点击展开）', { value1: output.hidden }) }}</button></span>
             </div>
@@ -675,7 +675,8 @@ function recall(event, step) {
 .term-sub { padding-left: 2ch; }
 /* A step's time takes no room from the text, so showing it never rewraps the line. Where the screen has room right of
    the column (has-aside) it sits there: a slow step's duration always, faintly; its clock time and a quick step's
-   duration while the pointer is over the step. Turns stretch their box into that room (and draw their top rule as
+   duration while the pointer is over the step, the duration first so hovering adds the clock after it instead of
+   pushing the duration aside. Turns stretch their box into that room (and draw their top rule as
    before), since content-visibility clips what overflows them. On a narrower screen (phone, tablet) everything shows
    only while the step is hovered or tapped, laid over the right end of its line on the page background. */
 .term-step { position: relative; }
@@ -684,7 +685,7 @@ function recall(event, step) {
 .term-when > * { display: none; }
 .term-block:hover .term-when { background: linear-gradient(to right, transparent, var(--term-bg) 2ch); }
 .term-block:hover .term-when > * { display: inline; }
-.term-block:hover .term-clock + .term-took::before { content: " · "; }
+.term-block:hover .term-took + .term-clock::before { content: " · "; }
 .has-aside { --term-aside: 150px; }
 .has-aside .term-turn { margin-right: calc(-1 * var(--term-aside)); padding-right: var(--term-aside); }
 .has-aside .term-turn + .term-turn { border-top-color: transparent;

@@ -228,7 +228,11 @@ export function preview_messages(file, message) {
     partial = length < size;
     entries = range_entries(fd, size - length, length);
   } finally { closeSync(fd); }
-  const messages = entries.map(message).filter(Boolean);
+  return trim_preview(entries.map(message).filter(Boolean), partial);
+}
+
+/** The last preview messages, each cut to a readable length; `partial` says earlier ones were not read at all. */
+export function trim_preview(messages, partial = false) {
   return { truncated: partial || messages.length > PREVIEW_MESSAGES, messages: messages.slice(-PREVIEW_MESSAGES).map(item => item.text.length > PREVIEW_TEXT_LIMIT
     ? { ...item, text: item.text.slice(0, PREVIEW_TEXT_LIMIT), cut: true } : item) };
 }

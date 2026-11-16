@@ -23,7 +23,8 @@
  *   away from its original window).
  *   `resume_command(session_id)`: a command the owner can copy to reopen a restored manual conversation.
  *   `browse_sessions`: its stored conversations can be listed and previewed on this machine, so the owner picks the one a
- *   new member resumes from a browsing window instead of typing its ID.
+ *   new member resumes from a browsing window instead of typing its ID; a picked conversation may be bound even without
+ *   `host_existing`.
  * - `defaults_by_query`: its default model is read by running it (seconds), so a quick read leaves it for later.
  * - `capabilities`: `delivery` `{stoppable, progress}` of a usual delivery (each delivery reports its own); `rewind`: `cut`
  *   (the runner cuts the session), `fresh` (context rebuilt each time) or `kept` (cannot be cut here); `project` (works in
@@ -107,7 +108,7 @@ export const ADAPTER_PROFILES = {
       full: '跳过全部权限确认（--dangerously-skip-permissions），并放开沙箱外命令与 MCP 工具' },
     unsupported_hints: { auto: 'agy 只在交互窗口提供自动模式，后台运行（-p）不支持' },
     // Only a conversation this tool created gets its session rules; an existing one keeps its own project and permissions.
-    client: 'antigravity', adopt: 'session', host_existing: false, own_project_when_bound: true,
+    client: 'antigravity', adopt: 'session', host_existing: false, own_project_when_bound: true, browse_sessions: true,
     capabilities: { delivery: PROCESS, rewind: 'cut', project: true, access_env: true, chat: true, capture: FINAL_REMARK },
     // A read-only agy session allows only codiscuss commands and headless agy ends the turn on a denied one; agy streams no
     // thinking text, so without a word at each turning point the page cannot show how far it got.

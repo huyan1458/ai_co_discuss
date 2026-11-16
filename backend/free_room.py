@@ -937,8 +937,11 @@ def recent_executions(connection, room_id, span=None):
     query = f"""SELECT e.*,m.name AS member,
         (SELECT json_group_array(id) FROM member_requests WHERE execution_id=e.id) AS request_ids,
         (SELECT MAX(answer_id) FROM member_requests WHERE execution_id=e.id) AS answer_id,
-        (SELECT MIN(message_id) FROM member_requests WHERE execution_id=e.id) AS request_message_id,
-        (SELECT MIN({LAYOUT_AFTER_SQL}) FROM member_requests r WHERE r.execution_id=e.id) AS layout_after,
+        (SELECT MIN(message_id) FROM member_requests WHERE execution_id=e.id
+            OR id IN (SELECT request_id FROM retried_requests WHERE execution_id=e.id)) AS request_message_id,
+        (SELECT MIN({LAYOUT_AFTER_SQL}) FROM member_requests r WHERE r.execution_id=e.id
+            OR r.id IN (SELECT request_id FROM retried_requests WHERE execution_id=e.id)) AS layout_after,
+        EXISTS(SELECT 1 FROM retried_requests WHERE execution_id=e.id) AS retried,
         (SELECT MIN({LAYOUT_AT_SQL}) FROM member_requests r WHERE r.execution_id=e.id) AS layout_at,
         (SELECT COUNT(*) FROM execution_notes WHERE execution_id=e.id) AS note_count,
         (SELECT denials FROM execution_denials WHERE execution_id=e.id) AS denials,{CAPABILITY_COLUMNS},
@@ -963,6 +966,7 @@ def recent_executions(connection, room_id, span=None):
             "notes": row["note_count"], "denials": json.loads(row["denials"] or "[]"),
             "capabilities": reported_capabilities(row), "stop_result": row["stop_result"] or "",
             "late_answer": json.loads(row["late_answer"]) if row["late_answer"] else None, "background": bool(row["background"]),
+            "retried": bool(row["retried"]),
             "interjections": execution_interjections(connection, row["id"], row["status"]),
             "retry": execution_retry(connection, row["id"])})
     return executions
@@ -3496,6 +3500,8 @@ def retry_failed(connection, room_id, execution):
         raise FileExistsError(Text("这次执行没有可重试的请求：已重试过，或是讨论发言（由主持人重新安排）"))
     if not connection.execute("SELECT 1 FROM room_members WHERE id=? AND status='active'", (execution["member_id"],)).fetchone():
         raise FileExistsError(Text("该成员已离开或暂离，无法重试"))
+    connection.executemany("INSERT OR IGNORE INTO retried_requests (execution_id,request_id) VALUES (?,?)",
+                           [(execution["id"], request["id"]) for request in requests])
     connection.execute(f"UPDATE member_requests SET status='pending',execution_id=NULL WHERE id IN ({','.join('?' * len(requests))})",
                        [request["id"] for request in requests])
     reopen_batches(connection, room_id, requests)

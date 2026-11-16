@@ -2740,8 +2740,14 @@ class GoalTests(HostRoomTests):
         self.assertEqual(self.goal_write("continue")[0], 200)
         self.work("Claude")
         self.assertFalse(self.goal()["goal"]["idle"], "the wake-up did no new work")
+        before = next(item for item in self.request(self.path)[1]["free"]["executions"] if item["id"] == failing["id"])
         self.assertEqual(self.request(f"{self.path}/executions/{failing['id']}", {"action": "retry"}, self.owner)[0], 200)
         again = self.reserve_for("Codex")[1]
+        # The retried failure keeps its place and is marked retried; the retry's card sits under the same message.
+        executions = {item["id"]: item for item in self.request(self.path)[1]["free"]["executions"]}
+        self.assertEqual((executions[failing["id"]]["layout_after"], executions[failing["id"]]["request_message_id"], executions[failing["id"]]["retried"]),
+                         (before["layout_after"], before["request_message_id"], True))
+        self.assertEqual(executions[again["id"]]["layout_after"], before["layout_after"])
         self.request(f"{self.path}/executions/{again['id']}", {"action": "fail", "reason": "连接被重置"}, self.owner)
         if any(item[0] == "Claude" and item[2] == "pending" for item in self.requests()):
             self.work("Claude")  # the failed batch handed back to the host

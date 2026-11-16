@@ -613,7 +613,24 @@ const scheduler_decisions = stable_computed(() => {
   return rows;
 });
 /** Messages the local service is still analysing; the card gives way once the decision is recorded. */
-const routing_messages = stable_computed(() => new Set(room.value.scheduler_routing || []));
+const routing_messages = stable_computed(() => new Set([...(room.value.scheduler_routing || []), ...pending_routing.value]));
+// A message the room's scheduler will judge shows its "analysing" card the moment it is sent, under the sending card and
+// then under the saved one, instead of once the local service has picked it up; the decision then takes its place, and a
+// card nothing answers within ROUTING_PREVIEW_MS folds away. A queued message shows it once it is really sent.
+const ROUTING_PREVIEW_MS = 30000;
+const pending_routing = ref(new Set());
+/** Whether the scheduler judges this text: on for the room, several members, nobody @named and not a command. */
+function routes_by_scheduler(text) {
+  if (!free.value || !view.value.launch?.room_models?.scheduler || free_members.value.length < 2 || /^\s*\//.test(text || "")) return false;
+  const prose = String(text || "").replace(/```[\s\S]*?```/g, "").replace(/`[^`\n]*`/g, "").replace(/^>.*$/gm, "");
+  return ![...ALL_ALIASES, ...SEQUENTIAL_ALIASES, ...free_members.value.map((member) => member.name)].some((name) => MENTION_PATTERN(name).test(prose));
+}
+const sending_routes = computed(() => Boolean(view.value.sending_preview) && routes_by_scheduler(view.value.sending_preview.text));
+watch(() => view.value.sending_preview?.saved_id, (id) => {
+  if (!id || !sending_routes.value) return;
+  pending_routing.value = new Set([...pending_routing.value, id]);
+  setTimeout(() => { const next = new Set(pending_routing.value); next.delete(id); pending_routing.value = next; }, ROUTING_PREVIEW_MS);
+});
 /** The host's own plans stand beside the decisions, under the message they followed. */
 const host_arrangements = stable_computed(() => {
   const rows = new Map();
@@ -2397,6 +2414,8 @@ function copy_message(message) { act("copy", `${view.value.room_site}/r/${room.v
           <!-- Same row as the working card it replaced: retry takes the stop button's place. -->
           <div class="channel-working-row">
             <p class="channel-message-text channel-failure-reason">{{ message.failure.result || t('执行失败，未提供原因') }}</p>
+            <!-- A retried failure stays in place; the retry's own card follows it under the same message. -->
+            <p v-if="message.failure.retried" class="channel-message-provenance channel-retried-note"><UIcon name="i-lucide-corner-down-right" />{{ t('已重试，新的执行接在下方') }}</p>
             <div v-if="can_retry(message.failure)" class="channel-working-actions">
               <UTooltip :text="t('重试')"><UButton icon="i-lucide-rotate-cw" variant="solid" color="neutral" class="channel-stop-button channel-retry-button" :aria-label="t('把执行 #{value1} 的请求重新派给 {value2}', { value1: message.failure.id, value2: bridge.display_name(message.author) })"
                 :disabled="!!pending" :loading="pending === 'retry_delivery'" @click="act('retry_delivery', { execution_id: message.failure.id, action: 'retry' })" /></UTooltip>
@@ -2546,6 +2565,9 @@ function copy_message(message) { act("copy", `${view.value.room_site}/r/${room.v
             <div v-if="view.sending_preview.files.some((file) => !file.preview_url)" class="channel-message-provenance">{{ t('附件：{value1}', { value1: view.sending_preview.files.filter((file) => !file.preview_url).map((file) => file.name).join('、') }) }}</div>
           </template>
         </UChatMessage>
+        <ScheduleCard v-if="sending_routes" icon="i-lucide-zap" skipped :label="t('智能调度分析中')" :expandable="false">
+          <template #text><WorkingText :text="t('智能调度：正在分析')" :seed="t('智能调度')" dots /></template>
+        </ScheduleCard>
       </motion.div>
       <div v-if="(topic_anchor === 'end' || end_anchor === 'end') && !view.query && !view.source_filter" class="channel-message-group">
         <TopicCard v-if="topic_anchor === 'end'" :ref="(card) => topic_card = card" @edit="emit('edit')" />
