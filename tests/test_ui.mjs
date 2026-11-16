@@ -282,7 +282,7 @@ function attachment_fixture() {
   element("author-select").value = "用户";
   const state = { room: { id: "one", host: "Codex" }, attachment_drafts: [], failed_sends: [], messages: [], message_total: 0 };
   let identifier = 0, fail = true;
-  const context = vm.createContext({ state, element, MAX_MESSAGE_LENGTH: 30000, MAX_SUMMARY_LENGTH: 1000,
+  const context = vm.createContext({ state, element, SEND_RETRY_MS: [2000, 5000, 10000], setTimeout: (callback) => callback(), MAX_MESSAGE_LENGTH: 30000, MAX_SUMMARY_LENGTH: 1000,
     MAX_MESSAGE_ATTACHMENTS: 10, MAX_ATTACHMENT_BYTES: 20 * 1024 * 1024, URLSearchParams,
     new_submission_id: () => String(++identifier), escape_html: text => text, relay_files: new Map(),
     URL: { createObjectURL: () => "blob:test", revokeObjectURL: url => revoked.push(url) },
@@ -294,12 +294,13 @@ function attachment_fixture() {
     fetch: async (url, options) => { uploads.push([url, options]); return { ok: true, json: async () => ({ attachment: { id: "a".repeat(32) } }) }; },
     request_json: async (url, payload) => {
       posts.push([url, payload]);
-      if (fail) throw new Error("连接中断");
+      if (typeof fail === "number" && fail-- > 0) throw new TypeError("Failed to fetch");
+      if (fail === true) throw new Error("连接中断");
       return { message: { id: 1 } };
     } });
   vm.runInContext(source.slice(source.indexOf("function message_payload("), source.indexOf("/** Render immutable file cards")), context);
   vm.runInContext(source.slice(source.indexOf("async function post_room_file("), source.indexOf("/** Read the bytes of a room file")), context);
-  return { context, state, element, posts, uploads, revoked, notified, succeed() { fail = false; } };
+  return { context, state, element, posts, uploads, revoked, notified, succeed() { fail = false; }, drop(times) { fail = times; } };
 }
 
 test("attachment retries retain files and reuse both upload and message receipts", async () => {
@@ -321,6 +322,22 @@ test("attachment retries retain files and reuse both upload and message receipts
   assert.equal(state.failed_sends.length, 0);
   assert.equal(state.attachment_drafts.length, 0);
   assert.deepEqual(fixture.revoked, ["blob:test"]);
+});
+
+test("a send the network drops goes again by itself with the same submission before it becomes a failed card", async () => {
+  const fixture = attachment_fixture(), { context, state, uploads, posts } = fixture;
+  fixture.drop(2);
+  context.add_attachments([{ name: "截图.png", size: 10, type: "image/png" }]);
+  await context.send_message({ preventDefault() {} });
+  assert.equal(posts.length, 3);
+  assert.equal(new Set(posts.map(([, payload]) => payload.submission_id)).size, 1, "every attempt is the same submission");
+  assert.equal(uploads.length, 1, "a file already uploaded is not sent again");
+  assert.equal(state.failed_sends.length, 0);
+  fixture.drop(9);
+  fixture.element("message-input").value = "再发一条";
+  await assert.rejects(context.send_message({ preventDefault() {} }), /Failed to fetch/);
+  assert.equal(posts.length, 3 + 4, "three retries, then it stops");
+  assert.equal(state.failed_sends.length, 1, "only then does it stay as a failed card");
 });
 
 /** The page's stop wording, read from what each execution's adapter reported. */

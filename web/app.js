@@ -53,6 +53,9 @@ const LOCAL_CONNECTION_TIMEOUT_MS = 15000;
 const RELAY_WAIT_MS = 45000;
 // A relayed read that goes unanswered or finds the computer briefly away is asked again after these pauses; reads change nothing.
 const RELAY_READ_RETRY_MS = [1000, 3000];
+// A message that failed for the network is sent again by itself after these pauses, with the same submission (and each
+// file with its own), so one that did reach the site is not saved twice; only then does it become a failed card.
+const SEND_RETRY_MS = [2000, 5000, 10000];
 // After the connection drops, the page reconnects by itself after these pauses, the last one repeating until it is back.
 const RECONNECT_DELAYS_MS = [2000, 4000, 8000, 15000, 30000];
 const RELAY_POLL_MS = 1500;
@@ -1950,7 +1953,7 @@ async function send_message(event) {
   let sent;
   state.sending_done = new Promise(resolve => { sent = resolve; });
   publish_view();
-  try {
+  const deliver = async () => {
     payload.attachment_ids = await upload_message_attachments(room_id, payload.submitted_by, drafts);
     if (draft_start(drafts)) payload.attachment_start = draft_start(drafts);
     // The saved card shows these files from this browser's own copy rather than reading them back through the relay.
@@ -1958,7 +1961,22 @@ async function send_message(event) {
       const path = `/api/rooms/${encodeURIComponent(room_id)}/attachments/${encodeURIComponent(item.uploaded)}/content`;
       if (!relay_files.has(path)) relay_files.set(path, Promise.resolve(URL.createObjectURL(item.file)));
     }
-    const result = await request_json(`/api/rooms/${room_id}/messages`, payload);
+    return request_json(`/api/rooms/${room_id}/messages`, payload);
+  };
+  try {
+    let result;
+    for (let attempt = 0; ; attempt += 1) {
+      try { result = await deliver(); break; }
+      catch (error) {
+        // Only a failure of the network is tried again (unconfirmed, the computer briefly away, a dropped or timed-out
+        // request); a refusal by the site would be refused again.
+        const network = error.unconfirmed || error.offline || ["TypeError", "AbortError", "TimeoutError"].includes(error.name);
+        if (!network || attempt >= SEND_RETRY_MS.length || state.room?.id !== room_id) throw error;
+        if (state.sending_preview) state.sending_preview = { ...state.sending_preview, retrying: attempt + 1 };
+        publish_view();
+        await new Promise((resolve) => setTimeout(resolve, SEND_RETRY_MS[attempt]));
+      }
+    }
     saved = true;
     if (result.queued) await finish_queued(result, room_id, drafts);
     else await finish_message(result, room_id, drafts);

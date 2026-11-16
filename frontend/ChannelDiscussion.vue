@@ -2645,7 +2645,7 @@ function copy_message(message) { act("copy", `${view.value.room_site}/r/${room.v
               <UAvatar :src="bridge.identities[view.sending_preview.author]?.icon" :text="bridge.identities[view.sending_preview.author]?.initials || '?'" :alt="bridge.display_name(view.sending_preview.author)" size="md" class="channel-avatar" :class="bridge.identities[view.sending_preview.author]?.style" />
               <div class="channel-message-meta">
                 <div class="channel-message-author"><strong>{{ bridge.display_name(view.sending_preview.author) }}</strong></div>
-                <div class="channel-message-provenance"><time>{{ bridge.format_time(view.sending_preview.created_at) }}</time><span class="channel-sending-status" role="status">{{ view.sending_preview.saved_id ? `#${view.sending_preview.saved_id}` : t('发送中…') }}</span></div>
+                <div class="channel-message-provenance"><time>{{ bridge.format_time(view.sending_preview.created_at) }}</time><span class="channel-sending-status" role="status">{{ view.sending_preview.saved_id ? `#${view.sending_preview.saved_id}` : view.sending_preview.retrying ? t('网络不稳，第 {value1} 次重试…', { value1: view.sending_preview.retrying }) : t('发送中…') }}</span></div>
               </div>
             </div>
             <div class="channel-answer"><div class="channel-message-text markdown-body" v-html="sending_html"></div></div>

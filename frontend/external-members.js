@@ -38,7 +38,7 @@ export const ROUTES = {
 /** What B opens to an external member (`scope` in the room backend, `level` in invitations). */
 export const LEVELS = [
   { value: "discuss", label: t("只讨论"), description: t("只看房间里点名给它的请求并回答，不读项目文件") },
-  { value: "read", label: t("讨论 + 只读项目"), description: t("另可列目录、读文件、搜索所选目录；不能写入或执行") },
+  { value: "read", label: t("可读项目"), description: t("另可列目录、读文件、搜索所选目录；不能写入或执行") },
 ];
 /** The short form for the rail and the records list. */
 export const LEVEL_SHORT = { discuss: t("只讨论"), read: t("只读项目") };

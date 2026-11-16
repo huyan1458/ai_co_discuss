@@ -5,7 +5,7 @@ import { computed, ref } from "vue";
 
 const props = defineProps({
   label: { type: String, required: true },
-  // Each item: { value, name, icon, lucide, initials, style, title, aria_label, disabled, selected, separated, removable }; separated starts a second row (the presets); selected marks the chip filling a single slot; removable lets the row's 管理 mode show a delete button that emits remove.
+  // Each item: { value, name, icon, lucide, initials, style, title, aria_label, disabled, selected, separated, removable, row, toggle }; separated starts a second row (the presets); row puts the item on its own row under that label, after the others; selected marks the chip filling a single slot; toggle shows an open/closed chevron instead of + (the chip opens a panel, it adds no card); removable lets the row's 管理 mode show a delete button that emits remove.
   items: { type: Array, required: true },
 });
 const emit = defineEmits(["add", "remove"]);
@@ -14,9 +14,14 @@ const row = ref(null);
 const managing = ref(false);
 /** Platforms and presets each get a labelled row, so wrapped chips line up under the first chip instead of the label. */
 const groups = computed(() => {
-  const split = props.items.findIndex((item) => item.separated);
-  if (split < 0) return [{ label: t('添加'), items: props.items }];
-  return [{ label: t('添加'), items: props.items.slice(0, split) }, { label: t('预设'), items: props.items.slice(split) }].filter((group) => group.items.length);
+  const listed = props.items.filter((item) => !item.row);
+  const split = listed.findIndex((item) => item.separated);
+  const rows = split < 0 ? [{ label: t('添加'), items: listed }] : [{ label: t('添加'), items: listed.slice(0, split) }, { label: t('预设'), items: listed.slice(split) }];
+  for (const item of props.items.filter((entry) => entry.row)) {
+    const row = rows.find((group) => group.label === item.row);
+    if (row) row.items.push(item); else rows.push({ label: item.row, items: [item] });
+  }
+  return rows.filter((group) => group.items.length);
 });
 /** Return keyboard focus to the first chip that can still be added. */
 function focus_first() {
@@ -32,7 +37,7 @@ defineExpose({ focus_first });
       <div class="roster-add-chips">
         <span v-for="item in group.items" :key="item.value" class="roster-add-chip" :class="{ 'is-selected': item.selected, 'is-disabled': item.disabled, 'is-removable': managing && item.removable }">
           <button type="button" class="roster-add-main" :disabled="item.disabled" :title="item.title" :aria-label="item.aria_label" :aria-pressed="item.selected === undefined ? undefined : item.selected" @click="emit('add', item.value)">
-            <UAvatar :src="item.icon" :icon="item.lucide" :text="item.initials" :alt="item.name" size="3xs" class="channel-avatar" :class="item.style" /><span class="roster-add-name">{{ item.name }}</span><UIcon :name="item.selected ? 'i-lucide-check' : 'i-lucide-plus'" class="roster-add-mark" />
+            <UAvatar :src="item.icon" :icon="item.lucide" :text="item.initials" :alt="item.name" size="3xs" class="channel-avatar" :class="item.style" /><span class="roster-add-name">{{ item.name }}</span><UIcon :name="item.toggle ? (item.selected ? 'i-lucide-chevron-up' : 'i-lucide-chevron-down') : item.selected ? 'i-lucide-check' : 'i-lucide-plus'" class="roster-add-mark" />
           </button>
           <button v-if="managing && item.removable" type="button" class="roster-add-remove" :title="t('删除预设「{value1}」', { value1: item.name })" :aria-label="t('删除预设 {value1}', { value1: item.name })" @click="emit('remove', item.value)"><UIcon name="i-lucide-x" /></button>
         </span>

@@ -87,7 +87,7 @@ const uid = useId();
        the dialog: the form and the generated link with its QR code do not fit a square. -->
   <section class="external-invite" :aria-label="t('邀请另一台电脑上的 AI')">
     <header class="external-invite-identity">
-      <span class="external-invite-avatar" aria-hidden="true"><UIcon name="i-lucide-monitor-smartphone" /></span>
+      <span class="external-invite-avatar channel-avatar external" aria-hidden="true"><UIcon name="i-lucide-laptop-minimal" /></span>
       <span class="external-invite-names"><strong>{{ t("另一台电脑") }}</strong><small>{{ t("对方用自己电脑上的 AI 加入，只读本房间开放的内容") }}</small></span>
       <span class="external-invite-tools">
         <button type="button" :aria-label="t('移除这张卡片')" :title="t('移除这张卡片')" @click="emit('remove')"><UIcon name="i-lucide-x" /></button>
@@ -105,7 +105,7 @@ const uid = useId();
         <span :id="`${uid}-folders`" class="external-invite-label">{{ t("开放目录") }}</span>
         <p v-if="!room_directories.length" class="external-invite-empty">{{ t("本房间还没有项目目录，只能选“只讨论”。") }}</p>
         <div v-else class="external-invite-folders">
-          <UCheckbox v-for="path in room_directories" :key="path" :title="path" :model-value="directories.includes(path)" :label="leaf(path)" size="sm"
+          <UCheckbox v-for="path in room_directories" :key="path" :title="path" :model-value="directories.includes(path)" :label="leaf(path)" size="xs"
             @update:model-value="(on) => directories = on ? [...directories, path] : directories.filter((item) => item !== path)" />
         </div>
         <p class="external-invite-hint">{{ t("只读：已跟踪与未忽略的文件，固定排除 .env、密钥、凭据、data/ 与 .git。") }}</p>
@@ -179,7 +179,8 @@ const uid = useId();
 .external-invite-footer { display: flex; flex-wrap: wrap; align-items: flex-end; justify-content: flex-end; gap: 8px 12px; padding-top: 10px; border-top: 1px solid var(--ui-border-muted); }
 .external-invite-warning { display: flex; flex: 1 1 260px; gap: 6px; margin: 0; color: var(--ui-warning, #e0a33a); font-size: 11px; line-height: 1.5; }
 .external-invite-warning.is-error { color: var(--ui-error); }
-.external-invite-warning > span { flex-shrink: 0; width: 13px; height: 13px; margin-top: 2px; }
+/* The icon centred on the first 16.5px line, at the size the other 11px rows use. */
+.external-invite-warning > :first-child { flex: none; width: 13px; height: 13px; margin-top: 2px; }
 .external-invite-generate { flex-shrink: 0; }
 .external-invite-result { display: flex; flex-wrap: wrap; align-items: flex-start; gap: 12px; padding-top: 10px; border-top: 1px solid var(--ui-border-muted); }
 .external-invite-result-body { display: flex; flex: 1; flex-direction: column; gap: 6px; min-width: 200px; }
@@ -197,6 +198,8 @@ const uid = useId();
 /* Touch screens: segments, tools and rows take a fingertip. */
 @media (pointer: coarse) {
   .external-invite-field .expert-card-modes button { min-height: 32px; }
+  /* The bigger target keeps its icon on the content's right edge. */
+  .external-invite-tools { margin: -7px -11px -7px 0; }
   .external-invite-tools > button { width: 36px; height: 36px; }
   .external-invite-pending li { min-height: 40px; }
 }
@@ -205,6 +208,8 @@ const uid = useId();
   .external-invite-result { flex-direction: column; align-items: stretch; }
   .external-invite-qr { align-self: center; width: 180px; height: 180px; }
   .external-invite-field .expert-card-modes { max-width: none; }
+  /* The subtitle wraps instead of cutting off what the member may read. */
+  .external-invite-names small { white-space: normal; }
   .external-invite-generate { width: 100%; justify-content: center; }
 }
 </style>

@@ -86,15 +86,16 @@ function add_invite(name) {
   invite_picks.value = [...invite_picks.value, { id: ++invite_pick_seq, name, mode: "cli" }];
 }
 
-// The same add row as the create form: platforms first, presets on their own row.
+// The same add row as the create form: platforms first, presets and the other computer on their own rows.
 const PRESET_PREFIX = "preset:";
 const library_items = computed(() => [...invite_choices.value.map((name) => ({ value: name, name: bridge.default_name(name), ...bridge.identities[name],
   title: invite_count(name) ? t("已在场 {count} 位 · 将添加新实例", { count: invite_count(name) }) : "", aria_label: t("添加 {name} 实例", { name }) })),
   ...invite_presets.value.map((preset, index) => ({ value: PRESET_PREFIX + preset.name, name: preset.label || preset.name, ...bridge.identities[bridge.platform_of(preset.name)],
     separated: index === 0, title: preset.description || t("专家预设"), aria_label: t("添加预设 {name}", { name: preset.label || preset.name }), removable: true })),
-  // Kept with the platforms, ahead of the presets row.
-].toSpliced(invite_choices.value.length, 0, { value: EXTERNAL_CHIP, name: t("另一台电脑"), lucide: "i-lucide-monitor-smartphone", selected: external_open.value,
-  title: t("邀请另一台电脑上的 AI 只读本房间项目"), aria_label: t("邀请另一台电脑上的 AI") }));
+  // Its own row: it opens the invitation panel instead of adding a card.
+  { value: EXTERNAL_CHIP, name: t("另一台电脑"), lucide: "i-lucide-laptop-minimal", style: "external", selected: external_open.value, row: t("外部"), toggle: true,
+    title: t("邀请另一台电脑上的 AI 只读本房间项目"), aria_label: t("邀请另一台电脑上的 AI") },
+]);
 
 /** Add the platform or preset a chip names. */
 function add_library_item(value) {
