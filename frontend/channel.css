@@ -491,6 +491,10 @@ html[data-theme^="channel"] .channel-message.channel-topic-card { color: var(--u
 /* Error/warning text gets its own box so a failure never reads like an answer; same left-bar tint as .access-failure. */
 .channel-message-text.channel-failure-reason { --failure-tone: var(--ui-error); margin: 0; padding: 1px 0 1px 12px; border-left: 2px solid color-mix(in srgb, var(--failure-tone) 60%, transparent); color: #b3bdcc; font-size: 14px; line-height: 1.65; white-space: pre-wrap; }
 .channel-message-text.channel-failure-reason.is-warning { --failure-tone: var(--ui-warning); }
+/* Stopped, voided or skipped work: a dashed, see-through card with a stop mark, so it never reads as an answer. */
+.channel-message.is-voided { border-style: dashed; border-color: var(--ui-border-accented, #ffffff24); background: transparent; }
+.channel-message-text.channel-stop-reason { display: flex; align-items: center; gap: 8px; margin: 0; padding: 1px 0 1px 12px; border-left: 2px solid var(--ui-border-accented, #ffffff24); color: var(--ui-text-muted); font-size: 14px; line-height: 1.65; }
+.channel-stop-reason > [class*="icon"] { flex-shrink: 0; width: 15px; height: 15px; color: var(--ui-text-dimmed); }
 .channel-stop-note { font-size: 14px; color: #b3bdcc; }
 .channel-late-answer { white-space: pre-wrap; font-size: 14px; color: #b3bdcc; }
 .channel-failure-actions { display: flex; flex-wrap: wrap; align-items: center; gap: 10px; margin-top: 16px; }
@@ -550,7 +554,10 @@ html[data-theme^="channel"] .channel-message.channel-topic-card { color: var(--u
 .channel-empty h2 { color: #f1f3f7; font-size: 23px; font-weight: 650; }
 .channel-empty p { color: #a9b1c0; font-size: 14px; margin: 9px 0 22px; }
 .channel-files-unset { min-height: 100%; display: flex; align-items: center; justify-content: center; color: var(--ui-text-muted); font-size: 14px; }
-.channel-resume-loading { grid-column: 2; grid-row: 2; z-index: 3; min-height: 0; overflow: hidden; padding-top: calc(var(--channel-topbar-height, 0px) + 16px); background: var(--channel-fade-bg, var(--ui-bg)); }
+/* The placeholder rows line up with the card text, and the cover spans the transcript down under the composer, so no
+   old card shows past its edges. */
+.channel-loading-skeleton { padding-inline: 38px; }
+.channel-resume-loading { grid-column: 2; grid-row: 2 / 4; z-index: 3; min-height: 0; overflow: hidden; scrollbar-gutter: stable both-edges; padding-top: calc(var(--channel-topbar-height, 0px) + 16px); background: var(--channel-fade-bg, var(--ui-bg)); }
 .channel-latest-dock { grid-column: 2; grid-row: 2; align-self: end; justify-self: center; z-index: 3; display: flex; align-items: center; gap: 8px; padding-bottom: 12px; pointer-events: none; }
 /* "Listen from here": a pill matching the back-to-latest button; beside it on touch, under the selection with a pointer. */
 .channel-listen-pill { display: inline-flex; align-items: center; gap: 6px; height: 32px; padding: 0 14px 0 11px; border: 1px solid #ffffff24; border-radius: 999px; background: #292b30; color: #e8eaee; font-size: 13px; font-weight: 500; white-space: nowrap; box-shadow: 0 2px 8px #0004; pointer-events: auto; }
@@ -693,18 +700,10 @@ html[data-theme^="channel"] .channel-round-button:active:not(:disabled) { transf
   background: var(--ui-primary); color: #fff; font-size: 11px; font-weight: 700; line-height: 1; cursor: pointer; user-select: none; }
 .excerpt-mark:hover { filter: brightness(1.1); }
 /* Re-editing an excerpt from its mark: comment, then remove · cancel · save. */
-.excerpt-edit-card { position: fixed; z-index: 40; display: flex; flex-direction: column; gap: 8px; width: 300px; padding: 12px 12px 10px; border: 1px solid var(--ui-border-accented);
-  border-radius: 14px; background: var(--ui-bg-elevated); box-shadow: 0 8px 24px #0006; }
-.excerpt-edit-card textarea { width: 100%; min-height: 40px; max-height: 160px; resize: none; border: 0; outline: none; background: transparent; color: var(--ui-text); font-size: 13px; line-height: 1.5; field-sizing: content; }
-.excerpt-edit-card textarea::placeholder { color: var(--ui-text-dimmed); }
-.excerpt-edit-actions { display: flex; align-items: center; gap: 6px; }
-.excerpt-edit-remove { display: grid; place-items: center; width: 28px; height: 28px; margin-right: auto; border-radius: 6px; color: var(--ui-text-muted); }
-.excerpt-edit-remove:hover { background: var(--ui-bg-accented); color: var(--ui-error); }
-.excerpt-edit-remove > span { width: 16px; height: 16px; }
-.excerpt-edit-cancel, .excerpt-edit-save { height: 28px; padding: 0 12px; border-radius: 999px; font-size: 12.5px; font-weight: 600; }
-.excerpt-edit-cancel { border: 1px solid var(--ui-border-accented); color: var(--ui-text); }
-.excerpt-edit-cancel:hover { background: var(--ui-bg-accented); }
-.excerpt-edit-save { background: var(--ui-text-highlighted); color: var(--ui-bg); }
+/* Re-editing a note uses the adding pill: beside its passage it floats (ExcerptEditCard), in the notes list it sits inline. */
+.selection-comment.is-inline { position: static; z-index: auto; width: 100%; margin-top: 6px; box-shadow: none; }
+.selection-comment-remove { color: var(--ui-text-muted); }
+.selection-comment-remove:hover { background: var(--ui-bg-accented); color: var(--ui-error); }
 .channel-mention-group { margin: 0; padding: 8px 10px 4px; color: var(--ui-text-dimmed); font-size: 11px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .channel-mention-group:not(:first-child) { margin-top: 4px; border-top: 1px solid var(--ui-border); padding-top: 10px; }
 .channel-mention-option .channel-mention-drill { margin-left: auto; }
@@ -965,6 +964,7 @@ html[data-theme^="channel"] .advanced-fields { border-color: #414957; }
   .channel-transcript { padding-top: 2px; }
   .channel-date-divider { padding: 12px 16px; }
   .channel-message { margin: 0 8px 14px !important; padding: 14px 15px 16px !important; }
+  .channel-loading-skeleton { padding-inline: 23px; }
   /* Phone byline: a two-line block beside a centered avatar — name and badges on the first line, then time, #
      and elapsed packed on one line. Flex wrap rather than a grid: a name row spanning grid columns widened the
      time column in iOS Safari and pushed the elapsed time to the middle of the card. */

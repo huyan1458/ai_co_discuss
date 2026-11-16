@@ -198,13 +198,14 @@ onBeforeUnmount(release);
           </UDropdownMenu>
         </span>
       </div>
-      <!-- The message just sent, shown at once while the site queues it; the queued row replaces it when the site answers. -->
-      <div v-if="view.queueing_preview" key="queueing" role="listitem" class="queued-row is-dimmed">
-        <span class="queued-leading" aria-hidden="true"><UIcon name="i-lucide-loader-circle" class="animate-spin" /></span>
-        <span class="queued-text">{{ view.queueing_preview.text.replace(/\s+/g, " ").trim() || t('{value1} 个附件', { value1: view.queueing_preview.files.length }) }}</span>
-        <span class="queued-actions queued-sending-status" role="status">{{ t('发送中…') }}</span>
-      </div>
     </TransitionGroup>
+    <!-- The message just sent, shown at once while the site queues it. The queued row takes its place in the same render,
+         so neither animates: a row fading in beside one fading out showed the message twice and made the tray jump. -->
+    <div v-if="view.queueing_preview" role="listitem" class="queued-row is-dimmed">
+      <span class="queued-leading" aria-hidden="true"><UIcon name="i-lucide-loader-circle" class="animate-spin" /></span>
+      <span class="queued-text">{{ view.queueing_preview.text.replace(/\s+/g, " ").trim() || t('{value1} 个附件', { value1: view.queueing_preview.files.length }) }}</span>
+      <span class="queued-actions queued-sending-status" role="status">{{ t('发送中…') }}</span>
+    </div>
   </div>
 </template>
 
@@ -235,9 +236,10 @@ onBeforeUnmount(release);
 .queued-paused-row { cursor: default; }
 .queued-paused-row .queued-text { color: var(--ui-text-muted); }
 .queued-move { transition: transform .16s ease; }
-.queued-enter-active, .queued-leave-active { overflow: hidden; transition: max-height .18s, opacity .18s; }
-.queued-enter-from, .queued-leave-to { max-height: 0; opacity: 0; }
-.queued-enter-to, .queued-leave-from { max-height: 40px; opacity: 1; }
+/* Rows appear at once (a new one takes the sending row's place) and fold away when they leave. */
+.queued-leave-active { overflow: hidden; transition: max-height .18s, opacity .18s; }
+.queued-leave-to { max-height: 0; opacity: 0; }
+.queued-leave-from { max-height: 40px; opacity: 1; }
 :global(.queued-tooltip) { max-width: 360px; text-align: center; white-space: normal; line-height: 1.4; }
 :global(.queued-tooltip-remedy) { opacity: .65; }
 :global(.queued-preview) { text-align: left; }

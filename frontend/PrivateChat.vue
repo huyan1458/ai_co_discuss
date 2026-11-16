@@ -167,6 +167,9 @@ async function refresh() {
       if (!unsupported.value || chats.value.length) {
         const next = (await bridge.read_member_chat(room_id, target.id)).chats;
         if (current !== serial) return;
+        // A line still on its way to the site stays on screen through a poll that does not hold it yet.
+        const unsent = chats.value.filter((chat) => chat.status === "sending" && !chat.saved);
+        if (unsent.length) next.push(...unsent);
         if (JSON.stringify(next) !== JSON.stringify(chats.value)) chats.value = next;
       }
       error.value = "";
@@ -338,6 +341,7 @@ function chat_note(chat) {
     const state = { pending: t('待送达'), delivered: t('已送达'), failed: t('未送达') }[chat.interjection] || t('已发出');
     return t('作为插话进入房间任务 #{value1}：{value2}{value3}', { value1: chat.execution_id, value2: state, value3: chat.reason ? `，${chat.reason}` : "" });
   }
+  if (chat.status === "sending") return t('发送中…');
   if (chat.status === "pending") return t('排队中，等它空闲后处理');
   if (chat.status === "stopped") return t('已撤回');
   if (chat.status === "failed") return chat.reason || t('未完成');
@@ -473,15 +477,22 @@ async function send() {
   if (!text || sending.value || unsupported.value) return;
   submission_id ||= crypto.randomUUID();
   sending.value = true;
+  // The line shows at once, marked as sending, and the field is free again: the screen answers the tap, not the relay.
+  // The next read replaces it with the saved line; a failed send takes it back out and returns the text to the field.
+  const local = { id: `sending-${submission_id}`, text, status: "sending", created_at: Date.now() / 1000, updated_at: Date.now() / 1000 };
+  chats.value = [...chats.value, local];
+  draft.value = "";
+  history.push(text);
+  history_index = -1;
+  to_bottom();
   try {
     await bridge.send_member_chat(room.value.id, member.value.id, text, submission_id);
-    history.push(text);
-    history_index = -1;
-    draft.value = "";
+    local.saved = true;
     submission_id = "";
-    to_bottom();
     await refresh();
   } catch (failure) {
+    chats.value = chats.value.filter((chat) => chat !== local);
+    if (!draft.value) draft.value = text;
     bridge.notify("error", failure.message || t('未能发出'));
   } finally { sending.value = false; }
 }

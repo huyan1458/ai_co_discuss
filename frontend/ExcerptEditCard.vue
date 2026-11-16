@@ -1,9 +1,10 @@
 <script setup>
 import { onMounted, ref } from "vue";
 
-// Re-edits one excerpt beside its passage, opened from its number mark: change the comment, remove the excerpt, or
-// leave it as it was. Placed by the parent (a fixed or absolute `style`).
-const props = defineProps({ comment: { type: String, default: "" } });
+// Re-edits one note's comment in the same pill as adding one (the selection comment box): Enter or ↑ saves, Esc or ×
+// leaves it as it was. Beside a passage it floats where the parent places it (a fixed `style`) and offers removal;
+// `inline` puts it in the flow, as in the notes list, whose rows have their own remove button.
+const props = defineProps({ comment: { type: String, default: "" }, inline: Boolean, removable: { type: Boolean, default: true } });
 const emit = defineEmits(["save", "cancel", "remove"]);
 const draft = ref(props.comment);
 const input = ref(null);
@@ -17,12 +18,10 @@ function keydown(event) {
 </script>
 
 <template>
-  <form class="excerpt-edit-card" @submit.prevent="emit('save', draft.trim())">
-    <textarea ref="input" v-model="draft" rows="2" :placeholder="t('添加批注（可选）')" :aria-label="t('注释的批注')" @keydown="keydown"></textarea>
-    <div class="excerpt-edit-actions">
-      <button type="button" class="excerpt-edit-remove" :aria-label="t('移除这条注释')" :title="t('移除注释')" @click="emit('remove')"><UIcon name="i-lucide-trash-2" /></button>
-      <button type="button" class="excerpt-edit-cancel" @click="emit('cancel')">{{ t("取消") }}</button>
-      <button type="submit" class="excerpt-edit-save">{{ t("保存") }}</button>
-    </div>
+  <form class="selection-comment excerpt-edit" :class="{ 'is-inline': inline }" @submit.prevent="emit('save', draft.trim())">
+    <textarea ref="input" v-model="draft" rows="1" :placeholder="t('添加批注（可选）')" :aria-label="t('注释的批注')" enterkeyhint="done" @keydown="keydown"></textarea>
+    <button v-if="removable" type="button" class="selection-comment-remove" :aria-label="t('移除这条注释')" :title="t('移除注释')" @click="emit('remove')"><UIcon name="i-lucide-trash-2" /></button>
+    <button type="button" class="selection-comment-cancel" :aria-label="t('取消')" :title="t('取消')" @click="emit('cancel')"><UIcon name="i-lucide-x" /></button>
+    <button type="submit" class="selection-comment-send" :aria-label="t('保存')" :title="t('保存（Enter）')"><UIcon name="i-lucide-check" /></button>
   </form>
 </template>

@@ -534,7 +534,7 @@
   "用户取消讨论安排": "The user cancelled the discussion plan.",
   "评审未投递：{reason}": "Review was not delivered: {reason}",
   "专家 {name} 的讨论请求失败：{reason}。请决定跳过、重排或暂停。": "The discussion request for expert {name} failed: {reason}. Decide whether to skip, reorder, or pause.",
-  "用户立即发送": "The user sent a message immediately.",
+  "已打断：你立即发送了新消息，它会连同这条一起处理": "Interrupted: you sent a new message right away; it takes this one up again together with it",
   "成员已离开": "The member left.",
   "成员已移除": "The member was removed.",
   "主持人已更换": "The host changed.",

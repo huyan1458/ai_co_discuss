@@ -117,7 +117,7 @@ function schedule_listen() {
   if (!pointer_down) listen_timer = window.setTimeout(track_selection, LISTEN_SETTLE_MS);
 }
 // Pressing the offer or the comment box must not hide it before its click lands; pressing elsewhere drops the comment box.
-const on_offer = (event) => Boolean(event.target.closest?.(".channel-listen-mark, .channel-listen-pill, .selection-comment, .excerpt-mark, .excerpt-edit-card"));
+const on_offer = (event) => Boolean(event.target.closest?.(".channel-listen-mark, .channel-listen-pill, .selection-comment, .excerpt-mark, .excerpt-edit"));
 const press = (event) => { if (on_offer(event)) return; pointer_down = true; if (quoting.value) cancel_quote(); if (mark_editing.value) close_mark(); };
 const release = (event) => { if (on_offer(event)) return; pointer_down = false; schedule_listen(); };
 /** Fixed place `{ left, top }` for a box of this size above the range's start, or below its end when there is no room. */
@@ -515,6 +515,8 @@ const shows_progress = (item) => capabilities(item)?.progress !== false;
  * A voided execution as it really went: stopped once the runner ended its process; still stopping until it reports;
  * voided only, when it works in a window or App the runner cannot stop (`.dev/docs/Design_适配能力.md`).
  */
+/** A stop's recorded reason as the card says it; records made before the wording changed keep their old text. */
+const stop_reason_text = (result) => result === "用户立即发送" ? t("已打断：你立即发送了新消息，它会连同这条一起处理") : result;
 function stop_state(execution) {
   const label = bridge.stop_label(execution);
   const name = bridge.display_name(execution.member);
@@ -1610,7 +1612,9 @@ watch(() => view.value.messages, (messages) => {
   rising_id = sent.id;
   paint_rising(send_entry.get());
 }, { flush: "post" });
-watch([() => view.value.room?.id, () => view.value.query, () => view.value.source_filter, () => view.value.authors, () => view.value.card_kinds], () => {
+// Filters compare by content: sending resets them to fresh empty lists, which is no change, and treating it as one put the
+// transcript back to its newest cards and refilled it, so the page collapsed and jumped after every send.
+watch([() => view.value.room?.id, () => view.value.query, () => view.value.source_filter, () => (view.value.authors || []).join(","), () => (view.value.card_kinds || []).join(",")], () => {
   jump_target.value = null;
   active_message.value = null;
   reset_preview();
@@ -1964,9 +1968,12 @@ onBeforeUnmount(() => editor_observer.disconnect());
 // the end. Written straight to the element inside the observer, which runs after layout and before paint: no Vue
 // re-render of the room, and padding and scroll change in the same frame, so sending does not flash.
 const composer_dock = ref(null);
+// The room kept below the last card goes by whole steps: a composer a pixel or two taller or shorter (font rounding, a
+// hint line, the browser's toolbars on a phone) changes nothing, where an exact copy moved the cards with every pixel.
+const COMPOSER_ROOM_STEP = 24;
 let composer_height = -1;
 const dock_observer = new ResizeObserver(([entry]) => {
-  const height = Math.round(entry.target.offsetHeight);
+  const height = Math.ceil(entry.target.offsetHeight / COMPOSER_ROOM_STEP) * COMPOSER_ROOM_STEP;
   if (height === composer_height) return;
   composer_height = height;
   entry.target.parentElement?.style.setProperty("--channel-composer-height", `${height}px`);
@@ -2284,7 +2291,7 @@ function copy_message(message) { act("copy", `${view.value.room_site}/r/${room.v
           <template #text>{{ message.text }}</template>
           <p class="channel-checkin-answer">{{ message.text }}</p>
         </ScheduleCard>
-        <UChatMessage v-else-if="message.cancelled_turn || message.cancelled_execution" :id="message.id" :data-author="bridge.identities[message.author]?.style" role="assistant" :parts="[]" side="left" variant="naked" color="neutral" class="channel-message" :ui="{ header: 'channel-message-header', container: 'channel-message-container', body: 'channel-message-body' }">
+        <UChatMessage v-else-if="message.cancelled_turn || message.cancelled_execution" :id="message.id" :data-author="bridge.identities[message.author]?.style" role="assistant" :parts="[]" side="left" variant="naked" color="neutral" class="channel-message is-voided" :ui="{ header: 'channel-message-header', container: 'channel-message-container', body: 'channel-message-body' }">
           <template #body>
             <div class="channel-message-byline">
               <UAvatar :src="bridge.identities[message.author]?.icon" :text="bridge.identities[message.author]?.initials || '?'" :alt="bridge.display_name(message.author)" size="md" class="channel-avatar" :class="bridge.identities[message.author]?.style" />
@@ -2292,7 +2299,8 @@ function copy_message(message) { act("copy", `${view.value.room_site}/r/${room.v
               <span v-if="message.cancelled_turn" class="channel-message-provenance channel-message-elapsed">{{ t('已错过 · 安排 #{value1}', { value1: message.cancelled_turn.display_id || message.cancelled_turn.id }) }}</span>
               <span v-else class="channel-message-provenance channel-message-elapsed">{{ t('{value1} · 执行 #{value2}', { value1: stop_state(message.cancelled_execution).label, value2: message.execution_id }) }}</span>
             </div>
-            <div class="channel-message-text" role="status">{{ message.cancelled_turn ? t('本次发言已被跳过或取消，未回答。') : message.cancelled_execution.result || t('本次执行已作废，未回答。') }}</div>
+            <!-- Stopped or skipped work reads apart from answers: a dashed card and a stop mark beside the reason. -->
+            <div class="channel-message-text channel-stop-reason" role="status"><UIcon :name="message.cancelled_turn ? 'i-lucide-skip-forward' : 'i-lucide-circle-stop'" /><span>{{ message.cancelled_turn ? t('本次发言已被跳过或取消，未回答。') : stop_reason_text(message.cancelled_execution.result) || t('本次执行已作废，未回答。') }}</span></div>
             <template v-for="execution in [message.cancelled_execution || all_executions.find((item) => item.id === message.execution_id)].filter((item) => item && stop_state(item).note)" :key="execution.id">
               <p class="channel-message-text channel-stop-note">{{ stop_state(execution).note }}</p>
               <details v-if="execution.late_answer && view.access?.can_manage" class="channel-receipt" @toggle="load_late_answer(execution.id, $event)">
@@ -2527,7 +2535,7 @@ function copy_message(message) { act("copy", `${view.value.room_site}/r/${room.v
               <UAvatar :src="bridge.identities[view.sending_preview.author]?.icon" :text="bridge.identities[view.sending_preview.author]?.initials || '?'" :alt="bridge.display_name(view.sending_preview.author)" size="md" class="channel-avatar" :class="bridge.identities[view.sending_preview.author]?.style" />
               <div class="channel-message-meta">
                 <div class="channel-message-author"><strong>{{ bridge.display_name(view.sending_preview.author) }}</strong></div>
-                <div class="channel-message-provenance"><time>{{ bridge.format_time(view.sending_preview.created_at) }}</time><span class="channel-sending-status" role="status">{{ t('发送中…') }}</span></div>
+                <div class="channel-message-provenance"><time>{{ bridge.format_time(view.sending_preview.created_at) }}</time><span class="channel-sending-status" role="status">{{ view.sending_preview.saved_id ? `#${view.sending_preview.saved_id}` : t('发送中…') }}</span></div>
               </div>
             </div>
             <div class="channel-answer"><div class="channel-message-text markdown-body" v-html="sending_html"></div></div>
@@ -2543,12 +2551,12 @@ function copy_message(message) { act("copy", `${view.value.room_site}/r/${room.v
         <TopicCard v-if="topic_anchor === 'end'" :ref="(card) => topic_card = card" @edit="emit('edit')" />
         <DiscussionEndCard v-if="end_anchor === 'end'" />
       </div>
-      <div v-if="view.messages_loading && !transcript_messages.length" class="channel-message-group grid gap-6 py-6" role="status" :aria-label="t('正在读取消息')"><div v-for="row in 3" :key="row" class="grid gap-3"><USkeleton class="h-5 w-28" /><USkeleton class="h-4 w-full" /><USkeleton class="h-4 w-2/3" /></div></div>
+      <div v-if="view.messages_loading && !transcript_messages.length" class="channel-message-group channel-loading-skeleton grid gap-6 py-6" role="status" :aria-label="t('正在读取消息')"><div v-for="row in 3" :key="row" class="grid gap-3"><USkeleton class="h-5 w-28" /><USkeleton class="h-4 w-full" /><USkeleton class="h-4 w-2/3" /></div></div>
       <div v-else-if="view.messages_failure" class="channel-empty" role="status"><p>{{ view.messages_failure }}</p><UButton :label="t('重新读取消息')" icon="i-lucide-refresh-cw" color="neutral" variant="soft" @click="act('refresh')" /></div>
       <div v-else-if="!transcript_messages.length && !free_working.length && !view.sending_preview && !view.failed_sends.length" class="channel-empty"><UIcon :name="view.query || view.source_filter ? 'i-lucide-search' : 'i-lucide-hash'" /><h2>{{ view.query || view.source_filter ? t('没有找到消息') : room.title }}</h2><p>{{ view.query || view.source_filter ? t('试试其他关键词，或清除筛选。') : bridge.empty_discussion_message(room) }}</p></div>
     </div>
     <!-- Back from the background: the opening load covers the old cards until the room is read again (state.resuming). -->
-    <div v-if="view.resuming" class="channel-resume-loading" role="status" :aria-label="t('正在读取消息')"><div class="channel-message-group grid gap-6 py-6"><div v-for="row in 3" :key="row" class="grid gap-3"><USkeleton class="h-5 w-28" /><USkeleton class="h-4 w-full" /><USkeleton class="h-4 w-2/3" /></div></div></div>
+    <div v-if="view.resuming" class="channel-resume-loading" role="status" :aria-label="t('正在读取消息')"><div class="channel-message-group channel-loading-skeleton grid gap-6 py-6"><div v-for="row in 3" :key="row" class="grid gap-3"><USkeleton class="h-5 w-28" /><USkeleton class="h-4 w-full" /><USkeleton class="h-4 w-2/3" /></div></div></div>
     <div v-if="(transcript_messages.length && !follow_tail) || listen_here?.touch || reader.state.message_id" class="channel-latest-dock">
       <button v-if="listen_here?.touch" type="button" class="channel-listen-pill" @mousedown.prevent @click="start_quote"><UIcon name="i-lucide-message-square-quote" />{{ t('添加到对话') }}</button>
       <button v-if="listen_here?.touch && listen_here.speech" type="button" class="channel-listen-pill" :aria-label="t('从选中处开始朗读')" @mousedown.prevent @click="listen_from_selection"><UIcon name="i-lucide-headphones" />{{ t('听当前') }}</button>
@@ -2618,10 +2626,8 @@ function copy_message(message) { act("copy", `${view.value.room_site}/r/${room.v
                     <div class="excerpt-item">
                       <small>{{ t('选中文字 · {value1}', { value1: excerpt_source(excerpt) }) }}</small>
                       <p class="excerpt-text">{{ excerpt.text }}</p>
-                      <template v-if="editing_excerpt === excerpt.id">
-                        <small>{{ t('批注') }}</small>
-                        <UTextarea v-model="excerpt.comment" :rows="2" autoresize autofocus :placeholder="t('添加批注（可选）')" :aria-label="t('注释的批注')" class="w-full" />
-                      </template>
+                      <ExcerptEditCard v-if="editing_excerpt === excerpt.id" inline :removable="false" :comment="excerpt.comment"
+                        @save="(comment) => { excerpt.comment = comment; editing_excerpt = 0; }" @cancel="editing_excerpt = 0" />
                       <template v-else-if="excerpt.comment"><small>{{ t('批注') }}</small><p class="excerpt-comment">{{ excerpt.comment }}</p></template>
                     </div>
                     <div class="excerpt-actions">

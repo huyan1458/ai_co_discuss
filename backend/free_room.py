@@ -618,9 +618,15 @@ def failure_class_of(connection, execution_id):
 
 
 def quota_held_until(connection, member_id):
-    """Until when a member out of quota waits: its latest execution failed on a usage limit and was not retried; else 0."""
+    """Until when a member out of quota waits: its latest execution failed on a usage limit and was not retried; else 0.
+
+    A new request the owner or the host gives it afterwards ends the wait and is tried at once: the reset time is only
+    the software's estimate (extra usage, another plan, another account signed in or an earlier reset lift it sooner),
+    and work nobody picks up is worse than one more quick failure, which holds the member again."""
     row = connection.execute("""SELECT f.failed_at,f.reset_at FROM execution_failures f
-        WHERE f.failure_class='quota' AND f.execution_id=(SELECT MAX(id) FROM member_executions WHERE member_id=?)""", (member_id,)).fetchone()
+        WHERE f.failure_class='quota' AND f.execution_id=(SELECT MAX(id) FROM member_executions WHERE member_id=?)
+          AND NOT EXISTS(SELECT 1 FROM member_requests r WHERE r.member_id=? AND r.status='pending' AND r.created_by IN ('user','host')
+                         AND r.created_at>=f.failed_at)""", (member_id, member_id)).fetchone()
     until = (row["reset_at"] or row["failed_at"] + QUOTA_HOLD_SECONDS) if row else 0
     return until if until > int(time.time()) else 0
 
@@ -1062,6 +1068,7 @@ def free_view(connection, room_id):
         member["pending"] = connection.execute("SELECT COUNT(*) FROM member_requests WHERE member_id=? AND status='pending'",
                                                (row["id"],)).fetchone()[0]
         member["held_until"] = held_until(connection, row["id"])
+        member["quota_until"] = quota_held_until(connection, row["id"])
         members.append(member)
     names = {row["id"]: row["name"] for row in connection.execute("SELECT id,name FROM room_members WHERE room_id=?", (room_id,))}
     requests = [{**dict(row), "member": names.get(row["member_id"], ""),
@@ -2643,15 +2650,17 @@ def hand_over_routes(connection, room_id, routes, departed_id):
             VALUES (?,?,?,?,?,'user',?)""", (room_id, host["id"], message_id, message_id, purpose, int(time.time())))
 
 
-def stop_member_work(connection, member_id, reason, cancel_reason, keep_pending=False):
+def stop_member_work(connection, member_id, reason, cancel_reason, keep_pending=False, requeue=False):
     """Void a member's live execution and, unless `keep_pending`, every open request, so nothing restarts by itself.
 
     The owner's stop keeps the requests that arrived while the member worked: like interrupting a turn, the member then
-    goes on to the messages sent after it, while a member that leaves drops them all.
+    goes on to the messages sent after it, while a member that leaves drops them all. With `requeue` (the owner sending
+    a message at once) the interrupted turn's own requests go back to pending too, so the next delivery carries them with
+    the new message and nothing the owner asked is left unanswered.
     """
     for row in connection.execute("SELECT id FROM member_executions WHERE member_id=? AND status IN ('dispatched','started')",
                                   (member_id,)).fetchall():
-        finish_execution(connection, row["id"], "cancelled", reason, "cancelled", cancel_reason)
+        finish_execution(connection, row["id"], "cancelled", reason, "pending" if requeue else "cancelled", "" if requeue else cancel_reason)
     if not keep_pending:
         record_cancel_reasons(connection, "member_id=? AND status='pending'", (member_id,), cancel_reason)
         connection.execute("UPDATE member_requests SET status='cancelled' WHERE member_id=? AND status='pending'", (member_id,))
@@ -2808,6 +2817,7 @@ def inbox(connection, room_id, token):
         member_view["label"] = shown.get(row["name"], row["name"])
         member_view["review_capability"] = review_capability(connection, room_id, row["id"], token)
         member_view["held_until"] = held_until(connection, row["id"])
+        member_view["quota_until"] = quota_held_until(connection, row["id"])
         # The runner compares this with its adapter's effect and reports a change.
         reported = connection.execute("SELECT rewind,image_model FROM member_capabilities WHERE member_id=?", (row["id"],)).fetchone()
         member_view["rewind"], member_view["image_model"] = (reported[0], reported[1]) if reported else ("", "")
@@ -3584,7 +3594,7 @@ def interrupt_for_message(connection, room_id, message_id):
     if blocked:
         raise FileExistsError(Text("{value1} 正在执行且无法打断，这条消息继续排队，等它答完后发送", value1='、'.join(blocked)))
     for row in busy:
-        stop_member_work(connection, row["member_id"], Text("用户立即发送"), "user_stop", keep_pending=True)
+        stop_member_work(connection, row["member_id"], Text("已打断：你立即发送了新消息，它会连同这条一起处理"), "user_stop", keep_pending=True, requeue=True)
     if busy:
         settle_batches(connection, room_id)
 

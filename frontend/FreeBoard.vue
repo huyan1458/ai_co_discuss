@@ -117,6 +117,8 @@ function member_status(member, state) {
   if (unregistered(member)) return t('待注册');
   const execution = member.execution;
   if (execution && LIVE.includes(execution.status)) return execution.stale ? t('执行失联，停止未确认') : t('正在处理');
+  // Out of quota: nothing is delivered until the reset, except that the owner's next message to it is tried at once.
+  if (member.quota_until) return t('额度已用尽，预计 {value1} 恢复；给它发新消息会立即再试', { value1: new Date(member.quota_until * 1000).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" }) });
   // Voided in a window or App the runner cannot stop: that turn may still run, so new messages wait for it.
   if (member.held_until) return t('{value1}，等待结束确认或迟到回答；{value2}最晚 {value3} 送达', { value1: execution?.stop_result === "unconfirmed" ? t('上一轮停止未确认') : t('上一轮已作废，可能仍在生成'), value2: member.pending ? t('{value1} 条新消息', { value1: member.pending }) : t('新消息'), value3: bridge.format_time(member.held_until * 1000) });
   if (member.pending && member.adopt_error) return t('无法投递 {value1} 条', { value1: member.pending });

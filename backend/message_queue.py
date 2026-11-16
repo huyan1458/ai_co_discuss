@@ -25,8 +25,13 @@ def queueing_enabled(connection):
 
 
 def room_busy(connection, room_id):
-    """A member still has an open request, a one-after-another turn waits, or a discussion runs."""
-    return connection.execute("""SELECT 1 FROM member_requests WHERE room_id=? AND status IN ('pending','delivering')
+    """A member still has an open request, a one-after-another turn waits, or a discussion runs.
+
+    Work the host left running in the background (sent without a handoff, or kept working beside it, as in
+    free_room.BACKGROUND_SQL) does not hold the owner's messages: the room goes on without waiting for it."""
+    return connection.execute("""SELECT 1 FROM member_requests r WHERE r.room_id=? AND r.status IN ('pending','delivering')
+          AND NOT (r.purpose='ask' AND r.created_by='host' AND (r.batch_id=0 OR EXISTS(
+            SELECT 1 FROM member_requests k WHERE k.message_id=r.message_id AND k.purpose='keep_working')))
         UNION ALL SELECT 1 FROM free_queue_waiting WHERE room_id=?
         UNION ALL SELECT 1 FROM discussion_sessions WHERE room_id=? AND status='active' LIMIT 1""",
                               (room_id, room_id, room_id)).fetchone() is not None

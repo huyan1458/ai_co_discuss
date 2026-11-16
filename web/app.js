@@ -1071,7 +1071,10 @@ async function refresh_room_content(room_id, version, versions) {
     cache_room_entry(room_views, room_id, room);
     state.room = merge_room_folder(room, versions.folder, versions.archive, versions.directory);
     render_room();
-    publish_view();
+    // With a transcript already shown, the new room state waits for the new transcript and both show in one snapshot:
+    // the room's requests and working cards laid out against the old messages, then again against the new ones, made
+    // the page collapse and refill for a moment after every send. A room opened for the first time shows at once.
+    if (!history_read || !state.messages.length) publish_view();
     load_room_models();
   });
   const history_read = state.tab === "discussion" ? load_message_history(room_id, version).then((result) => {
@@ -1082,6 +1085,7 @@ async function refresh_room_content(room_id, version, versions) {
   if (history_read && !state.messages.length && state.message_history?.key !== history_key) { state.messages_loading = true; publish_view(); }
   try {
     await Promise.all([room_read, history_read]);
+    if (current()) publish_view();
   } catch (error) {
     if (current()) { state.messages_loading = false; state.messages_failure = error.message; publish_view(); }
     throw error;
@@ -1779,14 +1783,21 @@ async function finish_message(result, room_id, drafts) {
   element("search-input").value = "";
   element("mention-filter").setAttribute("aria-pressed", "false");
   state.page = 1;
-  state.sending_preview = null;
-  // Show the saved message at once; the room, its requests and other new messages follow from a background refresh,
-  // so the composer does not wait for further round-trips on a slow connection.
-  if (!state.messages.some(message => message.id === result.message.id)) {
-    render_messages({ messages: [...state.messages, { ...result.message, just_sent: true }], total: state.message_total + 1, page: 1, pages: 1 });
-  }
-  element("messages").scrollTop = element("messages").scrollHeight;
-  run_action(refresh_room);
+  // The sending card stays, now showing the saved number, until the room is read again: the saved card then takes its
+  // place in the same render as the room's other changes (its request, the host's working card). Swapping it in first
+  // and the rest a moment later laid the transcript out twice, and on a phone the page jumped and flashed in between.
+  const saved_id = result.message.id;
+  if (state.sending_preview) state.sending_preview = { ...state.sending_preview, saved_id };
+  publish_view();
+  refresh_room().catch(() => {}).finally(() => {
+    if (state.sending_preview?.saved_id !== saved_id) return;
+    release_files(state.sending_preview.release || []);
+    state.sending_preview = null;
+    if (state.room?.id === room_id && !state.messages.some(message => message.id === saved_id)) {
+      render_messages({ messages: [...state.messages, { ...result.message, just_sent: true }], total: state.message_total + 1, page: 1, pages: 1 });
+    }
+    publish_view();
+  });
 }
 
 /** A message the site queued: clear the composer; it waits above the composer until the room is idle. */
@@ -1924,7 +1935,8 @@ async function send_message(event) {
   const only_host = named.size === 1 && (state.room.free?.members || []).some(member => named.has(member.name) && member.role === "host" && member.status === "active");
   const likely_queued = payload.queue && !only_host && (queue?.busy || queue?.items?.length);
   state.sending_preview = likely_queued ? null : preview;
-  state.queueing_preview = likely_queued ? preview : null;
+  // The rows already queued, so the first snapshot listing a new one swaps it in for this row (see publish_view).
+  state.queueing_preview = likely_queued ? { ...preview, queued_ids: (queue.items || []).map(item => item.id) } : null;
   let sent;
   state.sending_done = new Promise(resolve => { sent = resolve; });
   publish_view();
@@ -1952,11 +1964,14 @@ async function send_message(event) {
     throw error;
   } finally {
     state.sending_message = false;
+    // A saved message's card stays until the saved card replaces it (finish_message), and keeps its file previews till then.
+    const kept = saved && state.sending_preview?.saved_id ? state.sending_preview : null;
+    if (kept) kept.release = drafts;
     // Previews of files not kept by a failed card are no longer shown anywhere.
-    if (!state.failed_sends.some((failed) => failed.drafts === drafts)) release_files(drafts);
+    else if (!state.failed_sends.some((failed) => failed.drafts === drafts)) release_files(drafts);
     if (state.sending_drafts === drafts) state.sending_drafts = null;
     sent(saved);
-    state.sending_preview = null;
+    if (!kept) state.sending_preview = null;
     state.queueing_preview = null;
     state.upload_status = "";
     element("send-message").disabled = false;
@@ -5450,6 +5465,15 @@ async function initialize() {
 
 /** Publish a presentation snapshot shared by the legacy and Vue renderers. */
 function publish_view() {
+  // A sent message's card gives way in the same snapshot that first holds the saved message.
+  if (state.sending_preview?.saved_id && state.messages.some(message => message.id === state.sending_preview.saved_id)) {
+    release_files(state.sending_preview.release || []);
+    state.sending_preview = null;
+  }
+  // Likewise a queued message's row gives way in the first snapshot listing it in the queue: a room refresh started by
+  // a live update can bring it before the site's answer to the send, and both rows showed until that answer came.
+  const queueing = state.queueing_preview;
+  if (queueing && state.room?.free?.queued_messages?.items?.some(item => !queueing.queued_ids.includes(item.id))) state.queueing_preview = null;
   document.dispatchEvent(new CustomEvent("discuss:view"));
 }
 

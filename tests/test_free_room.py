@@ -713,7 +713,8 @@ class SingleMemberTests(FreeRoomTests):
         self.assertEqual(self.request(f"{self.path}/queue", {"action": "send", "id": queued_id}, self.owner)[0], 200)
         self.assertEqual(self.answer(running["id"], "迟到的回答")[0], 409)
         delivered = self.reserve()[1]
-        self.assertEqual([request["message_id"] for request in delivered["requests"]], [self.messages()[-1][0]])
+        # The interrupted turn's own message goes out again with the one sent now: neither is left unanswered.
+        self.assertEqual([request["message_id"] for request in delivered["requests"]], [self.messages()[0][0], self.messages()[-1][0]])
 
     def test_failure_affects_only_its_requests_and_release_requeues(self):
         """A failed execution keeps the room usable; a proven non-delivery returns requests to the queue."""
@@ -1414,11 +1415,16 @@ class MultiMemberTests(FreeRoomTests):
         notice = self.messages()[-1][1]
         self.assertIn("额度已用尽", notice)
         self.assertIn("重置时间：3pm", notice)
-        self.say("再问一次", to=["Claude"])
         claude = next(item for item in self.request(f"{self.path}/inbox", token=self.owner)[1]["members"] if item["name"] == "Claude")
-        self.assertEqual(claude["held_until"], reset_at, "no more deliveries until the reset, not a fixed hour")
-        self.assertEqual(self.reserve_for("Claude")[0], 409)
-        status, retried = self.request(url, {"action": "retry"}, self.owner)
+        self.assertEqual((claude["held_until"], claude["quota_until"]), (reset_at, reset_at), "held until the reset, not a fixed hour")
+        # The owner's new message is tried at once (2026-11-16: a message nobody answers is worse than one more failure).
+        self.say("再问一次", to=["Claude"])
+        again = self.reserve_for("Claude")
+        self.assertEqual(again[0], 200, again)
+        self.request(f"{self.path}/executions/{again[1]['id']}", {"action": "fail", "reason": "仍然超限",
+                                                                   "failure_class": "quota", "resets": "3pm", "reset_at": reset_at}, self.owner)
+        self.assertEqual(self.reserve_for("Claude")[0], 409, "a second usage-limit failure holds it again")
+        status, retried = self.request(f"{self.path}/executions/{again[1]['id']}", {"action": "retry"}, self.owner)
         self.assertEqual(status, 200, retried)
         self.assertIn("额度重置前重试多半仍会失败", retried["warning"])
         self.assertEqual(self.reserve_for("Claude")[0], 200, "the owner's retry lifts the hold")
@@ -1749,6 +1755,19 @@ class HostTests(HostRoomTests):
                                                                    "submission_id": uuid.uuid4().hex, "execution_id": execution["id"]}, self.tokens[name])
             self.assertEqual(status, 201, saved)
         self.assertIn("pending", [status for member, _, status in self.requests() if member == "Antigravity"], "the relay goes on")
+
+    def test_background_work_does_not_hold_the_owners_messages(self):
+        """2026-11-16: a member the host left working in the background does not queue the owner's next message."""
+        FreeRoomTests.say(self, "Antigravity 写，Codex 在后台记账")
+        self.host_dispatch(to=["Antigravity"], detach=["Codex"])
+        self.reserve_for("Codex")
+        status, held = FreeRoomTests.say(self, "先等等", queue=True)
+        self.assertTrue(held.get("queued"), "work that hands back is still waited for")
+        self.request(f"{self.path}/queue", {"action": "delete", "id": held["queue"]["items"][0]["id"]}, self.owner)
+        self.work("Antigravity")
+        self.work("Claude")
+        status, sent = FreeRoomTests.say(self, "写下一集", queue=True)
+        self.assertEqual((status, "queued" in sent), (201, False), sent)
 
     def test_a_host_checkin_wakes_it_while_work_is_in_flight_and_ends_once_the_room_is_idle(self):
         """The timed check-in is set during the host's own execution, fires while members work, and on idle checks once more."""
