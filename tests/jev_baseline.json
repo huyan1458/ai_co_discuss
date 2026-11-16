@@ -1954,6 +1954,80 @@
       ]
     },
     {
+      "id": "Q36",
+      "scene": "route",
+      "note": "主持人刚给写手换了模型并汇报结果，用户要固定这个模型：是改成员配置，写手改不了自己的设置，来自真实 👎",
+      "expect": "__host__",
+      "choice": "Writer",
+      "acted": "__host__",
+      "runs": 3,
+      "confidence": 0.59,
+      "expected_probability": 0.36,
+      "probabilities": {
+        "Critic": 0,
+        "Writer": 0.64,
+        "__host__": 0.36,
+        "__all__": 0,
+        "__none__": 0
+      },
+      "duration_ms": 328,
+      "status": "WEAK",
+      "expected_range": [
+        0.33,
+        0.41
+      ]
+    },
+    {
+      "id": "Q37",
+      "scene": "route",
+      "note": "接着主持人的汇报质疑这项工作，并要主持人去和某位专家商量：提到专家不等于对他说，来自真实 👎",
+      "expect": "__host__",
+      "choice": "Screenwriter",
+      "acted": "Screenwriter",
+      "runs": 3,
+      "confidence": 0.83,
+      "expected_probability": 0.16,
+      "probabilities": {
+        "Critic": 0,
+        "Screenwriter": 0.84,
+        "Writer": 0,
+        "__host__": 0.16,
+        "__all__": 0,
+        "__none__": 0
+      },
+      "duration_ms": 351,
+      "status": "FAIL",
+      "expected_range": [
+        0.13,
+        0.18
+      ]
+    },
+    {
+      "id": "Q38",
+      "scene": "route",
+      "note": "主持人采纳编剧的方案改完并汇报，用户对结果提出方向性意见：是对主持人说，不因方案出自编剧就交给编剧，来自真实 👎",
+      "expect": "__host__",
+      "choice": "__host__",
+      "acted": "__host__",
+      "runs": 3,
+      "confidence": 0.46,
+      "expected_probability": 0.47,
+      "probabilities": {
+        "Critic": 0.28,
+        "Screenwriter": 0.07,
+        "Writer": 0.18,
+        "__host__": 0.47,
+        "__all__": 0,
+        "__none__": 0
+      },
+      "duration_ms": 359,
+      "status": "PASS",
+      "expected_range": [
+        0.44,
+        0.5
+      ]
+    },
+    {
       "id": "I1",
       "scene": "interjection",
       "note": "旁注补充约束",
