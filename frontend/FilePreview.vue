@@ -693,7 +693,8 @@ function open_mark(excerpt_id) {
   const range = excerpt && excerpt_range(markdown_body.value, excerpt.from, excerpt.to);
   if (!range) return;
   hold_selection(range);
-  mark_editing.value = { excerpt, ...place_by(range, MARK_CARD_WIDTH, MARK_CARD_HEIGHT) };
+  // Docked at the bottom on touch screens, as adding a note is.
+  mark_editing.value = { excerpt, touch: window.matchMedia("(pointer: coarse)").matches, ...place_by(range, MARK_CARD_WIDTH, MARK_CARD_HEIGHT) };
 }
 function close_mark() {
   mark_editing.value = null;
@@ -884,7 +885,7 @@ onBeforeUnmount(() => {
         <div v-else-if="preview" ref="markdown_scroll" v-keep-reading class="project-markdown-scroll" tabindex="0" @scroll.passive="schedule_offer"
           @wheel.passive="stop_following" @touchmove.passive="stop_following" @keydown="stop_following" @pointerdown="stop_following"><div ref="markdown_body" class="markdown-body project-markdown-preview" v-html="rendered"></div>
           <button v-for="mark in file_marks" :key="mark.id" type="button" class="excerpt-mark" :style="{ left: `${mark.left}px`, top: `${mark.top}px` }" :title="t('注释 {value1}：点击修改批注', { value1: mark.number })" :aria-label="t('修改注释 {value1} 的批注', { value1: mark.number })" @click="open_mark(mark.id)">{{ mark.number }}</button></div>
-        <ExcerptEditCard v-if="mark_editing" :key="mark_editing.excerpt.id" class="file-selection-offer file-comment" :comment="mark_editing.excerpt.comment" :style="{ left: `${mark_editing.left}px`, top: `${mark_editing.top}px` }"
+        <ExcerptEditCard v-if="mark_editing" :key="mark_editing.excerpt.id" class="file-selection-offer file-comment" :class="{ 'is-docked': mark_editing.touch }" :comment="mark_editing.excerpt.comment" :style="mark_editing.touch ? {} : { left: `${mark_editing.left}px`, top: `${mark_editing.top}px` }"
           @save="save_mark" @cancel="close_mark" @remove="remove_mark" />
 
         <div v-if="offer && !offer.touch" class="file-selection-offer file-offer-marks" :style="{ left: `${offer.left}px`, top: `${offer.top}px` }">
@@ -1052,6 +1053,12 @@ onBeforeUnmount(() => {
   .file-float-name { display: none; }
   .file-float-close { display: none; }
   .file-float { padding-right: 10px; }
+}
+/* A phone on its side is wide but short: the window fills the screen as in portrait instead of floating with margins
+   around it (user 2026-11-16: "横屏区域本来就很小"); the sides keep clear of the notch. */
+@media (pointer: coarse) and (max-height: 500px) {
+  :global(.project-editor) { width: 100vw; height: 100dvh; }
+  .project-editor-frame { border: 0; border-radius: 0; box-shadow: none; padding-inline: env(safe-area-inset-left) env(safe-area-inset-right); }
 }
 /* Tablets keep the one-row head, with touch-sized buttons. */
 @media (min-width: 641px) and (pointer: coarse) {

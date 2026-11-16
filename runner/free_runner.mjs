@@ -3,7 +3,7 @@ import { spawnSync } from 'node:child_process';
 import { createHash, randomUUID } from 'node:crypto';
 import { appendFileSync, existsSync, mkdirSync, readdirSync, readFileSync, rmSync, statSync, writeFileSync } from 'node:fs';
 import { basename, join, resolve } from 'node:path';
-import { adapter_of, BRANCHABLE_ADAPTERS, branch_session, capabilities_of, cleanup_room, deliver_task, delivery_receipt, session_exists, stored_delivery, takes_images } from './adapters/index.mjs';
+import { adapter_of, BRANCHABLE_ADAPTERS, branch_session, capabilities_of, cleanup_room, deliver_task, delivery_receipt, recover_turn, session_exists, stored_delivery, takes_images } from './adapters/index.mjs';
 import { api as raw_api, overlapping_directories, read_rule } from './discussion_runner.mjs';
 import { SegmentLog } from './execution_progress.mjs';
 import { capture_base, file_diffs } from './file_diff.mjs';
@@ -41,12 +41,10 @@ const NOTICE_EXCERPT = 300;
 // A manual member's session that refuses a delivery is retried in the same execution, after a wait the owner can cut short.
 const MAX_DELIVERY_RETRIES = 3;
 const RETRY_DELAY_SECONDS = 60;
-// The cause is gone once the restarted runner is back, so its retry needs no long wait.
-const RESTART_RETRY_DELAY_SECONDS = 5;
-// The retry reason the site keeps for an execution a runner restart cut off; its redelivery asks to continue.
 // The failure classes an adapter may report (adapter contract `on_failure(reason, {failure_class, ...})`).
-const FAILURE_CLASSES = ['quota', 'auth', 'output_truncated'];
-const RESTART_REASON = room_text("本机接入程序重启或异常退出，这次执行的软件进程已结束，未提交回答");
+const FAILURE_CLASSES = ['quota', 'auth', 'output_truncated', 'compaction_failed', 'policy_blocked'];
+const RESTART_REASON = room_text("重启后无法确认上次执行结果");
+// Recognize older versions' pending restart retries so upgrading cannot redeliver them.
 const RESTART_REASON_CODE = 'runner_restarted';
 const MAX_RETRY_REASON = 500;
 const LIVE = ['reserving', 'delivering', 'sidecar_pending', 'running', 'retry_wait'];
@@ -377,16 +375,6 @@ export function resume_prompt(execution_id, texts) {
  */
 export function interjection_text(item) {
   return item.author ? `主持人 ${item.author} 插话：${item.text}` : `用户插话：${item.text}`;
-}
-
-/**
- * The preface of a task delivered again after the runner restarted mid-execution: the member's session usually still
- * holds the work done so far, so it continues instead of starting over. The original task follows, for a session that
- * never received it.
- */
-export function restart_notice(execution_id) {
-  return `本机接入程序重启或异常退出，中断了你正在做的这次房间任务（执行 #${execution_id}，仍在进行，没有结束）。`
-    + '如果本会话里已经开始了它，接着完成，已经做完的部分不必重做；完成后照常用 codiscuss 提交这次执行的回答。原任务如下。\n\n';
 }
 
 // The fixed opening of a private chat turn: where the words come from and how to answer them; the owner's text follows.
@@ -1017,7 +1005,7 @@ export class FreeRoomRunner {
     await this.invoke(member, execution);
   }
   /** Hand the execution to the member's software; only proven non-delivery is released for retry. */
-  async invoke(member, execution, { resume = '', preface = '' } = {}) {
+  async invoke(member, execution, { resume = '' } = {}) {
     const adapter = this.config.participants[member.name];
     const review_request = execution.requests?.find(request => request.review?.phase === 'review');
     if (review_request) {
@@ -1072,10 +1060,11 @@ export class FreeRoomRunner {
         session, suggestions: scheduler_suggestions, reviews: review_handoffs, stopped, workflow, room_members: this.room?.members,
         goal: this.room?.goal_state?.goal || null, attachments, room: this.room, model_change,
       });
+      this.store.db.prepare('DELETE FROM metadata WHERE key IN (?,?)').run(`recovery:${execution.id}`, `recovery-denied:${execution.id}`);
       invoked = true;
       this.segments.start(execution.id);
       if (warning) this.note(execution.id, warning);
-      const result = await this.deliver(review_request ? structuredClone(task.profile) : task.profile, binding, { ...task, ...(resume ? { prompt: resume, images: [] } : preface ? { prompt: preface + task.prompt } : {}), room_title: this.room_title,
+      const result = await this.deliver(review_request ? structuredClone(task.profile) : task.profile, binding, { ...task, ...(resume ? { prompt: resume, images: [] } : {}), room_title: this.room_title,
         ...(review_request ? { before_model_start: () => this.check_review_delivery(member, review_request) } : {}),
         api_context: { site: this.config.site, room: this.config.room, token: this.config.members[member.name].token,
           home: this.config.api_home, mode: 'free', role: member.role || 'member', execution_id: execution.id,
@@ -1088,6 +1077,10 @@ export class FreeRoomRunner {
           ...(Number.isInteger(this.config.api_max_requests) ? { max_requests: this.config.api_max_requests } : {}),
           ...(this.config.image_generation ? { image_generation: true } : {}),
           ...(task.goal ? { goal: task.goal } : {}), ...(task.room_goal ? { room_goal: task.room_goal } : {}) },
+        on_recovery: record => {
+          if (current()) this.store.db.prepare('INSERT OR REPLACE INTO metadata VALUES (?,?)')
+            .run(`recovery:${live()}`, JSON.stringify({ adapter: task.profile.adapter, record }));
+        },
         on_binding: session => this.store.bind(member.name, session),
         on_process: child => this.track(member.name, child, live()),
         on_output: (path, chunk) => { appendFileSync(path, chunk, { mode: 0o600 }); this.touch(live()); this.segments.mark(live()); },
@@ -1113,11 +1106,18 @@ export class FreeRoomRunner {
             ...(Number.isSafeInteger(reset_at) && reset_at > 0 ? { reset_at } : {}) });
           try { if (this.row(member.name)?.execution_id === live()) this.save(member.name, { error }); } catch { /* Store may already be closed at shutdown. */ }
         },
-        on_exit: denial => { if (current()) this.exited.set(live(), denial || ''); },
+        on_exit: denial => {
+          if (!current()) return;
+          this.exited.set(live(), denial || '');
+          if (denial) this.store.db.prepare('INSERT OR REPLACE INTO metadata VALUES (?,?)').run(`recovery-denied:${live()}`, '1');
+        },
         // Shown beside the answer or failure so the owner can allow them; a lost report only hides the list.
         on_denials: denials => {
           // A refused operation means the turn may be unfinished: its last remark is never captured as the answer.
-          if (denials?.length && current()) this.denied.add(live());
+          if (denials?.length && current()) {
+            this.denied.add(live());
+            this.store.db.prepare('INSERT OR REPLACE INTO metadata VALUES (?,?)').run(`recovery-denied:${live()}`, '1');
+          }
           api(this.config, `/executions/${live()}`, { action: 'denials', denials }).catch(() => {});
         },
       });
@@ -1224,16 +1224,15 @@ export class FreeRoomRunner {
       return this.save(member.name, { status: 'idle', error: '' });
     }
     if (row.status === 'retry_wait') {
+      const reason_code = this.store.db.prepare('SELECT value FROM metadata WHERE key=?').get(`retry-reason:${execution.id}`)?.value;
+      if (reason_code === RESTART_REASON_CODE) return this.recover_orphan(member, row, execution);
       const retry = execution.retry;
       if (retry?.stopped) return this.fail(member.name, execution.id, room_text("{value1}（已停止自动重试）", { value1: retry.reason }));
       if (retry?.retry_at && Date.now() >= retry.retry_at * 1000) {
         await api(this.config, `/executions/${execution.id}`, { action: 'retry_start' });
         this.save(member.name, { status: 'delivering' });
-        // Read from the site's retry record, so a second restart during the wait still delivers it as a continuation.
-        const reason_code = this.store.db.prepare('SELECT value FROM metadata WHERE key=?').get(`retry-reason:${execution.id}`)?.value;
         this.store.db.prepare('DELETE FROM metadata WHERE key=?').run(`retry-reason:${execution.id}`);
-        const preface = reason_code === RESTART_REASON_CODE ? restart_notice(execution.id) : '';
-        return this.invoke(member, await api(this.config, `/executions/${execution.id}`), { preface });
+        return this.invoke(member, await api(this.config, `/executions/${execution.id}`));
       }
     }
     // A restart between persisting and invoking cannot prove non-delivery, so it never resends.
@@ -1242,10 +1241,9 @@ export class FreeRoomRunner {
       // A paused turn ending is not a failure: the execution waits, renewed, for the owner's words.
       if (await this.hold_paused(member, row, execution)) return;
     } else {
-      // Inherited from a runner that stopped or crashed: once its software processes are gone, no answer can come, so the
-      // same execution is delivered again after the retry wait instead of handing the failure to the host.
+      // A dead inherited process is never redelivered: reconcile its exact recorded turn first.
       if (row.status === 'running' && this.orphan(execution.id)?.alive === false) {
-        return this.retry_or_fail(member.name, execution, RESTART_REASON, { restarted: true });
+        return this.recover_orphan(member, row, execution);
       }
       if (row.error) return this.retry_or_fail(member.name, execution, row.error);
       if (this.exited.has(execution.id)) {
@@ -1496,25 +1494,47 @@ export class FreeRoomRunner {
       catch (error) { if (!/HTTP (404|409)/.test(error.message)) throw error; }
     }
   }
-  /**
-   * A manual member's session refused the delivery, or the software failed before any turn ran: keep the execution and
-   * deliver again after a wait shown on the website, up to MAX_DELIVERY_RETRIES times; so is an execution whose software
-   * ended with the previous runner process (`restarted`). Anything else, or the last attempt, fails as before.
-   */
-  async retry_or_fail(name, execution, reason, { restarted = false } = {}) {
+  /** Check the website before reading local evidence; recovery never invokes software or schedules a retry. */
+  async recover_orphan(member, row, execution) {
+    const latest = await api(this.config, `/executions/${execution.id}`);
+    if (!['dispatched', 'started'].includes(latest.status)) {
+      this.forget_owner(execution.id);
+      return this.save(member.name, { status: 'idle', error: '' });
+    }
+    const submitted = ['accepted', 'rejected'].includes(latest.delivery?.last_submission?.outcome);
+    if (submitted) return this.fail(member.name, execution.id, room_text("{value1} 会话已结束，但未提交本次回答；请核对原会话确认是否已有内容", { value1: member.name }));
+    let saved;
+    try { saved = JSON.parse(this.store.db.prepare('SELECT value FROM metadata WHERE key=?').get(`recovery:${execution.id}`)?.value || 'null'); }
+    catch { /* Invalid or old local records cannot identify a turn. */ }
+    const result = !row.error && saved?.adapter === this.config.participants[member.name]?.adapter
+      ? await recover_turn(saved.adapter, saved.record) : { status: 'unknown' };
+    if (result.status === 'completed' && result.exact) {
+      this.replies.set(execution.id, result.text || '');
+      if (result.denied
+        || this.store.db.prepare('SELECT value FROM metadata WHERE key=?').get(`recovery-denied:${execution.id}`)) this.denied.add(execution.id);
+      if (await this.capture_reply(member.name, execution.id, latest)) {
+        this.forget_owner(execution.id);
+        return this.save(member.name, { status: 'idle', error: '' });
+      }
+      return this.fail(member.name, execution.id, room_text("{value1} 会话已结束，但未提交本次回答；请核对原会话确认是否已有内容", { value1: member.name }));
+    }
+    return this.fail(member.name, execution.id, RESTART_REASON);
+  }
+  /** Retry only deliveries known not to have started, or a manual member's refused delivery. */
+  async retry_or_fail(name, execution, reason) {
     const attempt = (execution.retry?.attempt || 0) + 1;
     const not_started = this.not_started.delete(execution.id);
     if (this.not_retryable.delete(execution.id)) return this.fail(name, execution.id, reason);
-    if (!restarted && this.config.participants[name]?.project_access !== 'own' && !not_started) return this.fail(name, execution.id, reason);
+    if (this.config.participants[name]?.project_access !== 'own' && !not_started) return this.fail(name, execution.id, reason);
     if (attempt > MAX_DELIVERY_RETRIES) return this.fail(name, execution.id, room_text("{value1}（已自动重试 {value2} 次）", { value1: reason, value2: MAX_DELIVERY_RETRIES }));
     this.stop_member(name);
     this.exited.delete(execution.id);
     this.replies.delete(execution.id);
     this.denied.delete(execution.id);
     this.store.db.prepare('INSERT INTO metadata VALUES (?,?) ON CONFLICT(key) DO UPDATE SET value=excluded.value')
-      .run(`retry-reason:${execution.id}`, restarted ? RESTART_REASON_CODE : 'delivery_failed');
+      .run(`retry-reason:${execution.id}`, 'delivery_failed');
     await api(this.config, `/executions/${execution.id}`, { action: 'retry_wait', attempt,
-      retry_at: Math.floor(Date.now() / 1000) + (restarted ? RESTART_RETRY_DELAY_SECONDS : RETRY_DELAY_SECONDS), reason: reason.slice(0, MAX_RETRY_REASON) });
+      retry_at: Math.floor(Date.now() / 1000) + RETRY_DELAY_SECONDS, reason: reason.slice(0, MAX_RETRY_REASON) });
     this.save(name, { status: 'retry_wait', error: '' });
   }
   /**

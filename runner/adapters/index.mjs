@@ -17,6 +17,8 @@
  *     at the end (`on_exit(reason)` when the turn ended unfinished but should not be retried, such as an interrupted or
  *     closed window or a refused operation: the runner then neither captures the last remark nor retries), `on_process(handle)` with `kill()` when it can stop (`handle.stop_on_shutdown = false` when only the owner's stop may
  *     run it, not the runner's shutdown), `on_output(path, line)` for its process log;
+ *   - optional `recover_turn(record)` reads a delivery recorded by `task.on_recovery(record)` and returns
+ *     `{status: 'completed'|'interrupted'|'failed'|'unknown', exact, text?, denied?}` without invoking software;
  *   - optional `receipt(config, id)` for deliveries confirmed later (`status: 'sidecar_pending'`),
  *     `into_window(profile, binding)` (this delivery goes into the member's own open window), `cleanup(directory)`
  *     (remove what a deleted room left in the software) and `sweep(service_home, user_home)` (back up and remove retired
@@ -47,6 +49,13 @@ const SESSION_PATTERN = /^[0-9A-Za-z_-]{8,128}$/;
 
 /** The descriptor of a configured adapter, or null for a value this version does not support. */
 export function adapter_of(id) { return ADAPTERS[id] || null; }
+
+/** Read one recorded delivery's outcome without starting software; missing or unreadable evidence is unknown. */
+export async function recover_turn(adapter_id, record) {
+  try {
+    return await adapter_of(adapter_id)?.recover_turn?.(record) || { status: 'unknown', exact: false };
+  } catch { return { status: 'unknown', exact: false }; }
+}
 
 /**
  * Which adapter holds an existing conversation of the software a manual member registered with (`client`): the one

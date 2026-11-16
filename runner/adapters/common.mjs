@@ -6,10 +6,18 @@ import { tmpdir } from 'node:os';
 import { createInterface } from 'node:readline';
 import { TASK_SUBCOMMANDS } from '../expert_prompts.mjs';
 import { atomic_json } from '../files.mjs';
+import { t } from '../i18n.mjs';
 
 // The room defines which website subcommands a task may run; adapters turn them into each software's permission rules.
 export { TASK_SUBCOMMANDS };
 export const CALL_TIMEOUT_MS = 30_000;
+export const CLI_MAX_RUN_MS = 2 * 60 * 60_000;
+/** The shared headless process limit, including the operator's override. */
+export function cli_max_run_ms() { return Number(process.env.CODISCUSS_CLI_MAX_MS) || CLI_MAX_RUN_MS; }
+/** Explain the total runtime limit in the CLI's selected language. */
+export function cli_timeout_reason(milliseconds) {
+  return t('CLI 运行超过 {seconds} 秒仍未结束，已终止', { seconds: Math.round(milliseconds / 1000) });
+}
 /** Tool names that edit files, across the softwares' event streams. */
 export const EDIT_TOOLS = /^(Edit|MultiEdit|Write|NotebookEdit|write_file|write_to_file|replace_file_content|multi_replace_file_content)$/;
 /** A refused operation's detail and rule are cut to this length; a run reports at most this many. */

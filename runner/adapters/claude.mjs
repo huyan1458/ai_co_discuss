@@ -11,7 +11,7 @@ import { connect } from 'node:net';
 import { homedir } from 'node:os';
 import { dirname, join, resolve } from 'node:path';
 import { runs_commands } from '../expert_prompts.mjs';
-import { bind_access, DENIAL_FIELD, EDIT_TOOLS, edge_entries, launch_directory, log_entries, marked, MAX_DENIALS, model_entry, json_line,
+import { bind_access, cli_max_run_ms, cli_timeout_reason, DENIAL_FIELD, EDIT_TOOLS, edge_entries, launch_directory, log_entries, marked, MAX_DENIALS, model_entry, json_line,
   clock_reset_at, newest_record, not_sent, page_sessions, preview_messages, project_directory, prompt_text, prompt_title, query_catalog,
   same_path, TASK_SUBCOMMANDS, tree_killable, typed_prompt, watch_events } from './common.mjs';
 
@@ -27,6 +27,17 @@ const CHAT_TURN_MS = 30 * 60_000;
 // Error kinds Claude Code records that a retry a minute later meets again: a used-up plan limit, a lost login.
 const LASTING_ERRORS = ['rate_limit', 'authentication_failed'];
 const EDIT_TOOL_NAMES = /^(Edit|MultiEdit|Write|NotebookEdit)$/;
+const SHELL_TOOL_NAMES = /^(Bash|PowerShell)$/;
+// A shell command that may write files: a redirect into a file, an in-place edit, a script writing, a copy, move or
+// delete. Only such a command claims the paths it names; reading commands (cat, grep, git diff) claim none.
+const SHELL_WRITES = /(?<![=\-<>])>{1,2}(?!=)\s*(?!&|\/dev\/null|\$null|nul\b)|\bsed\s+-i|\.write\w*\(|write_text|writeFileSync|\b(?:Set|Add)-Content\b|\bOut-File\b|\btee\b|\b(?:mv|cp|rm)\s|\b(?:Move|Copy|Remove|Rename)-Item\b|\bgit\s+(?:checkout|restore|apply|mv|rm)\b/i;
+
+/** The paths a file-writing shell command names (with a folder or an extension), so files it wrote count as the agent's own. */
+function shell_written_paths(command) {
+  const text = String(command || '');
+  if (!SHELL_WRITES.test(text)) return [];
+  return text.split(/[\s'"`;|&<>(),=]+/).filter(token => /[\\/]/.test(token) && /\.[\w-]+$/.test(token));
+}
 // The Messages API refuses an image whose base64 form passes 5 MB, failing the whole turn; larger ones go by path only.
 const MAX_INLINE_IMAGE_BYTES = 3_750_000;
 // Claude Code logs side queries (titles, compaction, subagents) too; only these sources are the member's own turns.
@@ -256,8 +267,11 @@ const events = {
   },
   edits(event) {
     if (event.type !== 'assistant') return [];
-    return (event.message?.content || []).filter(block => block.type === 'tool_use' && EDIT_TOOL_NAMES.test(block.name))
-      .map(block => String(block.input?.file_path || block.input?.notebook_path || '')).filter(Boolean);
+    // Edit tools name their file; a shell command that writes is taken to have written the paths it names (Claude often
+    // edits by script), else its own files would read as someone else's on the card (user 2026-11-17).
+    return (event.message?.content || []).filter(block => block.type === 'tool_use')
+      .flatMap(block => EDIT_TOOL_NAMES.test(block.name) ? [String(block.input?.file_path || block.input?.notebook_path || '')]
+        : SHELL_TOOL_NAMES.test(block.name) ? shell_written_paths(block.input?.command) : []).filter(Boolean);
   },
   detail: claude_detail,
 };
@@ -667,8 +681,18 @@ async function deliver(config, binding, task, spawn_process = spawn) {
   } catch (error) { throw not_sent(error); }
   tree_killable(child);
   let spawned = false;
+  const max_run_ms = cli_max_run_ms();
+  let timed_out = false;
+  const limit_timer = setTimeout(() => {
+    timed_out = true;
+    child.kill();
+    task.on_failure(cli_timeout_reason(max_run_ms), { retryable: false });
+  }, max_run_ms);
+  child.once('error', () => clearTimeout(limit_timer));
   const log_path = resolve(task.directory, `claude-${task.id}.log`);
   let output = '';
+  task.on_recovery?.({ kind: 'claude_process', session_id, log_path,
+    offset: existsSync(log_path) ? statSync(log_path).size : 0 });
   let partial_line = '';
   child.stdout.on('data', chunk => {
     output += chunk;
@@ -682,7 +706,8 @@ async function deliver(config, binding, task, spawn_process = spawn) {
   child.stderr.on('data', chunk => task.on_output(log_path, chunk));
   watch_events(claude, child.stdout, task);
   child.once('close', code => {
-    if (!spawned) return;
+    clearTimeout(limit_timer);
+    if (!spawned || timed_out) return;
     const denials = claude_denials(output);
     if (denials.length) task.on_denials?.(denials);
     const error = claude_exit_error(code, output);
@@ -853,8 +878,28 @@ function skills(profile, options = {}) {
   }), { ...options, cwd: profile.cwd || homedir(), catalog_label: '技能' });
 }
 
+/** Read only this background delivery's log slice, requiring its own successful result and matching session. */
+function recover_turn(record) {
+  const unknown = { status: 'unknown', exact: false };
+  if (record?.kind !== 'claude_process' || !record.session_id || !record.log_path
+    || !Number.isSafeInteger(record.offset) || record.offset < 0) return unknown;
+  const bytes = readFileSync(record.log_path);
+  if (bytes.length <= record.offset) return unknown;
+  const output = bytes.subarray(record.offset).toString('utf8');
+  const entries = output.trim().split(/\r?\n/).map(json_line).filter(Boolean);
+  const results = entries.filter(entry => entry.type === 'result');
+  const result = results[0];
+  if (results.length !== 1 || entries.at(-1) !== result || result.session_id !== record.session_id
+    || entries.some(entry => entry.session_id && entry.session_id !== record.session_id)) return unknown;
+  if (result.is_error === true) return { status: 'failed', exact: true };
+  if (result.is_error !== false || result.subtype !== 'success') return unknown;
+  return { status: 'completed', exact: true, text: entries.map(events.note).filter(Boolean).at(-1) || '',
+    denied: claude_denials(JSON.stringify(result)).length > 0 };
+}
+
 /** Claude Code's behaviour; its static facts are in profiles.mjs. */
 export const claude = {
+  recover_turn,
   id: 'claude', catalog_source: 'claude-cli',
   into_window: claude_inbox_ready,
   deliver, chat, events,

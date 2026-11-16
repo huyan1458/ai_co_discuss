@@ -2245,6 +2245,9 @@ async function upload_message_attachments(room_id, actor, drafts) {
       item.uploaded = result.attachment.id;
     }
     identifiers.push(item.uploaded);
+    // The sending card shows each file as uploading until it is in; the card's status says what is left.
+    const preview = state.sending_drafts === drafts && state.sending_preview?.files?.[index];
+    if (preview && !preview.uploaded) { preview.uploaded = true; state.sending_preview = { ...state.sending_preview, files: [...state.sending_preview.files] }; publish_view(); }
   }
   return identifiers;
 }
@@ -3285,10 +3288,30 @@ function watch_relay_media(media) {
   relay_media_observer.observe(box);
 }
 
+// WebKit (every iPhone browser) has no scroll anchoring: an image above the screen growing from its spinner box to its
+// own height pushed everything shown down, and images arriving one after another over a slow relay made the transcript
+// glide on by itself (2026-11-16, iPhone). There the position is kept by hand when such an image has loaded.
+const NATIVE_SCROLL_ANCHORING = typeof CSS !== "undefined" && CSS.supports?.("overflow-anchor", "auto");
+
 /** Give one relayed image or media element its file; one that cannot be read keeps its name. */
 function load_relay_media(media) {
   if (!media.isConnected || media.getAttribute("src")) return;
-  relay_file_url(media.dataset.relaySrc).then(url => { media.src = url; }).catch(() => { media.dataset.relayFailed = "1"; });
+  relay_file_url(media.dataset.relaySrc).then(url => {
+    const scroller = !NATIVE_SCROLL_ANCHORING && media.closest(".channel-transcript");
+    if (scroller) {
+      const box = relay_media_box(media), before = box.getBoundingClientRect().height;
+      const keep = () => {
+        if (!box.isConnected) return;
+        // Only a box that was wholly above the top of the shown area (judged by its bottom before it grew) moves what
+        // the reader sees.
+        const rect = box.getBoundingClientRect(), grown = rect.height - before;
+        if (grown && rect.bottom - grown <= scroller.getBoundingClientRect().top) scroller.scrollTop += grown;
+      };
+      media.addEventListener("load", keep, { once: true });
+      media.addEventListener("loadedmetadata", keep, { once: true });
+    }
+    media.src = url;
+  }).catch(() => { media.dataset.relayFailed = "1"; });
 }
 
 /** Show images of the computer's rooms as they appear; one that cannot be read keeps its name. */

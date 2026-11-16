@@ -178,7 +178,8 @@ function open_mark(excerpt_id) {
   const range = excerpt && excerpt_range(document.getElementById(`channel-answer-${excerpt.message_id}`), excerpt.from, excerpt.to);
   if (!range) return;
   hold_selection(range);
-  mark_editing.value = { excerpt, range, ...place_by(range, MARK_CARD_WIDTH, MARK_CARD_HEIGHT) };
+  // Docked above the composer on touch screens, as adding a note is: one control for writing a note either way.
+  mark_editing.value = { excerpt, range, touch: window.matchMedia("(pointer: coarse)").matches, ...place_by(range, MARK_CARD_WIDTH, MARK_CARD_HEIGHT) };
 }
 function close_mark() {
   mark_editing.value = null;
@@ -1630,6 +1631,12 @@ const send_y = useTransform(send_entry, [0, 1], [SEND_RISE, 0]);
 let rising_id = null;
 // Rendered like a saved message, so the card keeps its height when the saved copy replaces it.
 // Each file's `[图片 #n]` / `[文件 #n]` is tinted whole, as the saved card will link it once the files are uploaded.
+/** While the sending card's files upload: how many are in of how many; null once they all are (or there are none). */
+const sending_uploads = computed(() => {
+  const files = view.value.sending_preview?.files || [];
+  const done = files.filter((file) => file.uploaded).length;
+  return files.length && done < files.length ? { done, total: files.length } : null;
+});
 const sending_html = computed(() => {
   const preview = view.value.sending_preview;
   if (!preview) return "";
@@ -2128,6 +2135,16 @@ function failed_request_message(report) {
 function can_retry(report) {
   return Boolean(view.value.access?.can_manage && report.requests?.length && !report.requests.some((request) => request.discussion_session_id));
 }
+/** Explain the next action for classified failures; the original reason remains visible. */
+function failure_advice(report) {
+  return ({
+    quota: t('额度已用尽，请等待重置或改派其他成员。'),
+    auth: t('登录已失效，请在本机重新登录后再试。'),
+    output_truncated: t('输出达到上限，请缩短要求的输出或拆分任务。'),
+    compaction_failed: t('上下文压缩失败，请缩短输入或拆分任务后再试。'),
+    policy_blocked: t('安全策略拒绝，请核对请求内容与服务许可要求，不要原样重试。'),
+  })[report.failure_class] || '';
+}
 /** Put the original text back in the input for the user to send again; a named request keeps its @member. */
 function resend_failed(report) {
   const original = request_message(report);
@@ -2381,7 +2398,7 @@ function copy_message(message) { act("copy", `${view.value.room_site}/r/${room.v
       <button type="button" class="selection-comment-cancel" :aria-label="t('取消添加')" :title="t('取消')" @click="cancel_quote"><UIcon name="i-lucide-x" /></button>
       <button type="submit" class="selection-comment-send" :aria-label="t('添加到对话')" :title="t('添加到对话（Enter）')"><UIcon name="i-lucide-arrow-up" /></button>
     </form>
-    <ExcerptEditCard v-if="mark_editing" :key="mark_editing.excerpt.id" :comment="mark_editing.excerpt.comment" :style="{ left: `${mark_editing.left}px`, top: `${mark_editing.top}px` }" @save="save_mark" @cancel="close_mark" @remove="remove_mark" />
+    <ExcerptEditCard v-if="mark_editing" :key="mark_editing.excerpt.id" :class="{ 'is-docked': mark_editing.touch }" :comment="mark_editing.excerpt.comment" :style="mark_editing.touch ? {} : { left: `${mark_editing.left}px`, top: `${mark_editing.top}px` }" @save="save_mark" @cancel="close_mark" @remove="remove_mark" />
     <div ref="transcript" v-memo="[message_groups, view.messages_loading, view.messages_failure, view.sending_preview, view.failed_sends, message_round_labels, free, room.session, can_manage, expanded_answers.size, reader.state.message_id, room.title, view.query, view.source_filter, view.authors, view.card_kinds, topic_anchor, end_anchor, request_badges, execution_reports, recommendations, adopting, scheduler_decisions, host_arrangements, pending, execution_notes, open_working_notes, editing, rewound_runs, retracting_id, armed_cards.size, menu_open_id, stopping_member, free_now, allowing, allow_errors, late_answers, has_draft, view.sending_message, routing_messages, speaking_turn, room.free]" class="channel-transcript" :aria-label="t('聊天记录')" @click="open_message_ref" @scroll="schedule_track_scroll" @wheel.passive="resume_tracking($event); stop_following($event)" @touchstart.passive="resume_tracking" @touchmove.passive="stop_following" @touchend.passive="end_touch" @touchcancel.passive="end_touch" @pointerdown="stop_following" @keydown="resume_tracking($event); stop_following($event)">
       <div v-if="!view.query && !view.source_filter && !topic_anchor && render_start === 0" class="channel-message-group channel-topic-group"><TopicCard :ref="(card) => topic_card = card" @edit="emit('edit')" /></div>
       <div v-for="group in message_groups" :key="group.key" class="channel-message-group">
@@ -2517,6 +2534,7 @@ function copy_message(message) { act("copy", `${view.value.room_site}/r/${room.v
                 :disabled="!!pending" :loading="pending === 'retry_delivery'" @click="act('retry_delivery', { execution_id: message.failure.id, action: 'retry' })" /></UTooltip>
             </div>
           </div>
+          <p v-if="failure_advice(message.failure)" class="channel-message-text">{{ failure_advice(message.failure) }}</p>
           <ExecutionNotes v-if="message.failure.notes" :count="message.failure.notes" :notes="execution_notes.get(message.failure.id)" :load="() => load_notes(message.failure.id)" />
           <ExecutionDenials v-if="message.failure.denials?.length" :denials="message.failure.denials" :allowable="Boolean(denial_allowance(message.failure))"
             :busy="allowing === message.failure.id" :error="allow_errors[message.failure.id]" @allow="allow_and_resend(message.failure)" />
@@ -2650,13 +2668,13 @@ function copy_message(message) { act("copy", `${view.value.room_site}/r/${room.v
               <UAvatar :src="bridge.identities[view.sending_preview.author]?.icon" :text="bridge.identities[view.sending_preview.author]?.initials || '?'" :alt="bridge.display_name(view.sending_preview.author)" size="md" class="channel-avatar" :class="bridge.identities[view.sending_preview.author]?.style" />
               <div class="channel-message-meta">
                 <div class="channel-message-author"><strong>{{ bridge.display_name(view.sending_preview.author) }}</strong></div>
-                <div class="channel-message-provenance"><time>{{ bridge.format_time(view.sending_preview.created_at) }}</time><span class="channel-sending-status" role="status">{{ view.sending_preview.saved_id ? `#${view.sending_preview.saved_id}` : view.sending_preview.retrying ? t('网络不稳，第 {value1} 次重试…', { value1: view.sending_preview.retrying }) : t('发送中…') }}</span></div>
+                <div class="channel-message-provenance"><time>{{ bridge.format_time(view.sending_preview.created_at) }}</time><span class="channel-sending-status" role="status">{{ view.sending_preview.saved_id ? `#${view.sending_preview.saved_id}` : view.sending_preview.retrying ? t('网络不稳，第 {value1} 次重试…', { value1: view.sending_preview.retrying }) : sending_uploads ? t('正在上传附件 {value1}/{value2}…', { value1: sending_uploads.done, value2: sending_uploads.total }) : t('发送中…') }}</span></div>
               </div>
             </div>
             <div class="channel-answer"><div class="channel-message-text markdown-body" v-html="sending_html"></div></div>
             <!-- The files show at once from this browser's own copy while they upload. -->
             <div v-if="view.sending_preview.files.some((file) => file.preview_url)" class="message-attachments">
-              <span v-for="file in view.sending_preview.files.filter((item) => item.preview_url)" :key="file.preview_url" class="attachment-image"><img :src="file.preview_url" :alt="file.name"></span>
+              <span v-for="file in view.sending_preview.files.filter((item) => item.preview_url)" :key="file.preview_url" class="attachment-image" :class="{ 'is-uploading': !file.uploaded && !view.sending_preview.saved_id }"><img :src="file.preview_url" :alt="file.name"><UIcon v-if="!file.uploaded && !view.sending_preview.saved_id" name="i-lucide-loader-circle" class="attachment-uploading" :aria-label="t('正在上传')" /></span>
             </div>
             <div v-if="view.sending_preview.files.some((file) => !file.preview_url)" class="channel-message-provenance">{{ t('附件：{value1}', { value1: view.sending_preview.files.filter((file) => !file.preview_url).map((file) => file.name).join('、') }) }}</div>
           </template>
@@ -2734,7 +2752,7 @@ function copy_message(message) { act("copy", `${view.value.room_site}/r/${room.v
         <template #header>
           <div v-if="view.attachment_drafts.length || file_refs.length || excerpts.length" class="attachment-drafts">
             <UPopover v-if="excerpts.length" :content="{ side: 'top', align: 'start' }" @update:open="editing_excerpt = 0">
-              <div class="excerpt-chip" role="button" tabindex="0" :title="t('查看注释、修改批注')">
+              <div class="excerpt-chip" role="button" tabindex="0" :data-stack="excerpts.length > 1 ? Math.min(excerpts.length, 3) : undefined" :title="t('查看注释、修改批注')">
                 <UIcon name="i-lucide-message-square-quote" /><span>{{ t('{value1} 条注释', { value1: excerpts.length }) }}</span>
                 <button type="button" class="excerpt-chip-clear" :aria-label="t('移除全部注释')" :title="t('移除全部注释')" :disabled="view.sending_message" @click.stop="file_preview.excerpts = []"><UIcon name="i-lucide-x" /></button>
               </div>
@@ -2822,4 +2840,5 @@ function copy_message(message) { act("copy", `${view.value.room_site}/r/${room.v
 /* In the one-line strip the stop key shrinks to the row. */
 .channel-working-strip .channel-stop-button { width: 24px; height: 24px; }
 .channel-working-strip .channel-stop-square { width: 8px; height: 8px; }
+@media (pointer: coarse) { .channel-working-strip .channel-stop-button { width: 28px; height: 28px; } }
 </style>

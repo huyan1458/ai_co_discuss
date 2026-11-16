@@ -1,3 +1,13 @@
+<script>
+import { ref as module_ref } from "vue";
+// The folders open in this page load, kept outside the component: a phone's sidebar is a drawer mounted anew each time
+// it opens, and keeping them inside it forgot them on every close (user 2026-11-16). A reload starts afresh with only
+// the shown room's folder open (user 2026-11-15).
+const open_folders = module_ref(new Set());
+// The room whose folder was last opened for it, so mounting the drawer again is not taken for opening that room.
+let revealed_for = "";
+</script>
+
 <script setup>
 import { computed, inject, ref, watch } from "vue";
 import ImportDialog from "./ImportDialog.vue";
@@ -97,14 +107,20 @@ function folder_head(folder, index) {
   return head;
 }
 const rooms_open = ref(true);
-// Each page load opens only the shown room's folder; folders the user opens stay open until the page is reloaded.
-const expanded = ref(new Set());
-const revealed = ref("");
-watch(() => [view.value.room?.id, view.value.room?.folder_id], () => {
-  revealed.value = view.value.room?.folder_id || "";
+// Folders stay as the user left them. Opening a room whose folder is closed opens that folder once; nothing is ever
+// closed for the user. The key is a string, so the many view updates that leave the room as it was change nothing:
+// a list compared each time looked new on every poll and reopened a folder the user had just closed.
+const expanded = open_folders;
+watch(() => `${view.value.room?.id || ""}
+${view.value.room?.folder_id || ""}`, (key) => {
+  const folder = view.value.room?.folder_id;
+  if (!folder || key === revealed_for) return;
+  revealed_for = key;
+  if (expanded.value.has(folder)) return;
+  expanded.value = new Set([...expanded.value, folder]);
 }, { immediate: true });
 /** Whether one folder's rooms are shown; the unfiled group is always shown. */
-function folder_open(id) { return !id || expanded.value.has(id) || revealed.value === id; }
+function folder_open(id) { return !id || expanded.value.has(id); }
 
 /** Keep folder editing and keyboard-equivalent movement on the folder's own menu. */
 function folder_actions(folder, index) {
@@ -129,12 +145,10 @@ function folder_export(folder) {
     onSelect: () => act("backup_rooms", { ids, name: folder.name || t("未分组") }) };
 }
 
-/** Toggle one folder for this page load. */
+/** Open or close one folder for this page load. */
 function toggle_folder(id) {
-  const open = folder_open(id);
   const next = new Set(expanded.value);
-  if (open) next.delete(id); else next.add(id);
-  if (open && revealed.value === id) revealed.value = "";
+  if (folder_open(id)) next.delete(id); else next.add(id);
   expanded.value = next;
 }
 
@@ -194,7 +208,7 @@ function actions(room, index, folder_id, folder_room_count) {
       <UContextMenu :items="row.items" :ui="{ content: 'channel-menu channel-topic-menu' }">
         <div class="channel-room-row" :class="{ active: row.active }" :data-drag-room="room.id">
           <button class="channel-room-grip" data-drag-handle :aria-label="t('拖动 {name}', { name: room.title })" :title="t('拖动排序；上下方向键移动')" :disabled="row.busy" @pointerdown="bridge.start_drag($event)" @keydown.up.prevent="act('move_channel', { id: room.id, direction: -1, folder_id: room.folder_id || null })" @keydown.down.prevent="act('move_channel', { id: room.id, direction: 1, folder_id: room.folder_id || null })"><UIcon name="i-lucide-grip-vertical" /></button>
-          <button class="channel-room-select" data-drag-title :title="row.title" :aria-label="room.title" :aria-current="row.active ? 'page' : undefined" @pointerdown="!pending && bridge.start_drag($event)" @click="emit('select', room.id)"><span>{{ room.title }}</span><small class="channel-room-time" aria-hidden="true">{{ row.time }}</small><i v-if="row.running" class="channel-room-running" :title="t('正在执行')" /></button>
+          <button class="channel-room-select" data-drag-title :title="row.title" :aria-label="room.title" :aria-current="row.active ? 'page' : undefined" @pointerdown="!pending && bridge.start_drag($event)" @click="emit('select', room.id)"><span>{{ room.title }}</span><i v-if="row.running" class="channel-room-running" :title="t('正在执行')" /><small v-else class="channel-room-time" aria-hidden="true">{{ row.time }}</small></button>
           <div class="channel-room-actions">
             <UTooltip :text="room.archived ? t('恢复房间') : t('存档房间')" :ui="{ content: 'channel-topic-tooltip' }">
               <UButton :icon="room.archived ? 'i-lucide-archive-restore' : 'i-lucide-archive'" :aria-label="room.archived ? t('恢复 {name}', { name: room.title }) : t('存档 {name}', { name: room.title })" size="xs" color="neutral" variant="ghost" :disabled="row.busy || row.archiving" @click="emit('manage', { room, action: room.archived ? 'restore' : 'archive' })" />

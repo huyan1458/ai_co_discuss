@@ -1456,6 +1456,24 @@ class MultiMemberTests(FreeRoomTests):
         self.assertEqual(status, 200, failed)
         self.assertEqual(failed["failure"], {"class": "output_truncated", "lasting": False})
 
+    def test_compaction_and_policy_failures_are_visible_without_quota_holds(self):
+        """The room exposes actionable classes, not a reset timer or an automatic retry."""
+        for kind, advice in (("compaction_failed", "缩短输入或拆分任务"), ("policy_blocked", "不要原样重试")):
+            with self.subTest(kind=kind):
+                self.say("请 Claude 处理", to=["Claude"])
+                execution = self.reserve_for("Claude")[1]
+                status, failed = self.request(f"{self.path}/executions/{execution['id']}", {
+                    "action": "fail", "reason": "structured failure", "failure_class": kind}, self.owner)
+                self.assertEqual(status, 200, failed)
+                self.assertEqual(failed["failure"], {"class": kind, "lasting": False})
+                self.assertFalse(failed.get("retry"))
+                self.assertIn(advice, self.messages()[-1][1])
+                view = self.request(self.path)[1]
+                card = next(item for item in view["free"]["executions"] if item["id"] == execution["id"])
+                self.assertEqual(card["failure_class"], kind)
+                member = next(item for item in self.request(f"{self.path}/inbox", token=self.owner)[1]["members"] if item["name"] == "Claude")
+                self.assertFalse(member.get("held_until"))
+
     def test_captured_reply_mentioning_the_host_wakes_nobody(self):
         """A captured reply keeps its @host text but never asks the host, even once the room is idle."""
         self.say("请 Claude 看看", to=["Claude"])
@@ -3008,24 +3026,29 @@ class MigrationTests(unittest.TestCase):
             self.assertTrue({"changes", "cwd"} <= executions)
 
     def test_failure_classes_widen_and_keep_recorded_quota_failures(self):
-        """A database made when only 'quota' was a failure class keeps its rows and takes 'auth' afterwards."""
-        with tempfile.TemporaryDirectory() as directory:
-            database = Path(directory) / "quota_only.db"
-            init_database(database, seed=False)
-            with closing(sqlite3.connect(database)) as connection, connection:
-                # Rebuild the table as that build created it, with one recorded failure.
-                connection.execute("PRAGMA foreign_keys=OFF")
-                connection.execute("DROP TABLE execution_failures")
-                connection.execute("""CREATE TABLE execution_failures (execution_id INTEGER PRIMARY KEY, room_id TEXT NOT NULL,
-                    failure_class TEXT NOT NULL CHECK(failure_class IN ('quota')), resets TEXT NOT NULL DEFAULT '',
-                    failed_at INTEGER NOT NULL, reset_at INTEGER NOT NULL DEFAULT 0)""")
-                connection.execute("INSERT INTO execution_failures VALUES (7,'room','quota','3pm',100,200)")
-            init_database(database, seed=False)
-            init_database(database, seed=False)
-            with closing(sqlite3.connect(database)) as connection, connection:
-                connection.execute("PRAGMA foreign_keys=OFF")
-                self.assertEqual(connection.execute("SELECT * FROM execution_failures").fetchall(), [(7, 'room', 'quota', '3pm', 100, 200)])
-                connection.execute("INSERT INTO execution_failures (execution_id,room_id,failure_class,failed_at) VALUES (8,'room','auth',1)")
+        """Both old constraints retain every row, accept new classes, and still reject unknown ones."""
+        for legacy in ("'quota'", "'quota','auth','output_truncated'"):
+            with self.subTest(legacy=legacy), tempfile.TemporaryDirectory() as directory:
+                database = Path(directory) / "quota_only.db"
+                init_database(database, seed=False)
+                with closing(sqlite3.connect(database)) as connection, connection:
+                    # Rebuild the table as that build created it, with one recorded failure.
+                    connection.execute("PRAGMA foreign_keys=OFF")
+                    connection.execute("DROP TABLE execution_failures")
+                    connection.execute(f"""CREATE TABLE execution_failures (execution_id INTEGER PRIMARY KEY, room_id TEXT NOT NULL,
+                        failure_class TEXT NOT NULL CHECK(failure_class IN ({legacy})), resets TEXT NOT NULL DEFAULT '',
+                        failed_at INTEGER NOT NULL, reset_at INTEGER NOT NULL DEFAULT 0)""")
+                    connection.execute("INSERT INTO execution_failures VALUES (7,'room','quota','3pm',100,200)")
+                init_database(database, seed=False)
+                init_database(database, seed=False)
+                with closing(sqlite3.connect(database)) as connection, connection:
+                    connection.execute("PRAGMA foreign_keys=OFF")
+                    self.assertEqual(connection.execute("SELECT * FROM execution_failures").fetchall(), [(7, 'room', 'quota', '3pm', 100, 200)])
+                    connection.execute("INSERT INTO execution_failures (execution_id,room_id,failure_class,failed_at) VALUES (8,'room','auth',1)")
+                    for execution_id, kind in enumerate(("compaction_failed", "policy_blocked"), 9):
+                        connection.execute("INSERT INTO execution_failures (execution_id,room_id,failure_class,failed_at) VALUES (?,'room',?,1)", (execution_id, kind))
+                    with self.assertRaises(sqlite3.IntegrityError):
+                        connection.execute("INSERT INTO execution_failures (execution_id,room_id,failure_class,failed_at) VALUES (11,'room','unknown',1)")
 
 
 if __name__ == "__main__":

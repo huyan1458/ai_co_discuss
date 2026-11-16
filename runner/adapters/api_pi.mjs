@@ -272,11 +272,12 @@ export function pi_delivery({ cli, profile, key, binding, task, context_file, sy
   }
   function settled(event) {
     if (event.aborted || state.terminal || state.failure) return finish();
-    if (state.last_error) { fail(`模型请求失败：${state.last_error}`); return finish(); }
     if (state.compaction_error) {
-      fail(`会话上下文已满且自动压缩失败（${state.compaction_error}），下次执行将改用新会话；可直接重试`);
+      fail(room_text('会话上下文压缩失败（{reason}），下次执行将改用新会话；请缩短输入或拆分任务后重试',
+        { reason: state.compaction_error }), { failure_class: 'compaction_failed', retryable: false });
       return finish();
     }
+    if (state.last_error) { fail(`模型请求失败：${state.last_error}`); return finish(); }
     const reply = state.last_text.slice(0, REPLY_EXCERPT_CHARS);
     // The provider stopped the reply at its output cap: say so as it happened, without guessing why (V14-V16).
     if (state.last_stop === 'length') {

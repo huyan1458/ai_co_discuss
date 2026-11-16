@@ -172,6 +172,13 @@ export function extended_until(expires_at, duration, now = Date.now()) {
  * INVITE_AFTER_CREATION_MS takes it; a failed creation leaves it to expire.
  */
 export const invite_after_creation = shallowRef(null);
+
+/** An external expert card's choices as the seat request: reading needs a directory, else it is for discussing; directories go by their place in `paths` (main first), never as paths. */
+export function seat_options(draft, paths) {
+  const level = draft.level === "read" && !draft.directories?.length ? "discuss" : draft.level;
+  const folders = (draft.directories || []).map((path) => paths.indexOf(path)).filter((index) => index >= 0);
+  return { level, duration: draft.duration, ...(level === "read" ? { folders } : {}) };
+}
 export const INVITE_AFTER_CREATION_MS = 120000;
 
 export function room_operations(bridge) {

@@ -14,7 +14,7 @@ import WorkflowLibrary from "./WorkflowLibrary.vue";
 import InvitedRoomPage from "./InvitedRoomPage.vue";
 import InvitedRoomRail from "./InvitedRoomRail.vue";
 import JoinInvitedDialog from "./JoinInvitedDialog.vue";
-import { room_operations, INVITE_AFTER_CREATION_MS, invite_after_creation, take_join_fragment, use_invited_rooms } from "./external-members.js";
+import { room_operations, INVITE_AFTER_CREATION_MS, invite_after_creation, seat_options, take_join_fragment, use_invited_rooms } from "./external-members.js";
 import ConfirmDialog from "./ConfirmDialog.vue";
 import { use_workflow_library } from "./workflow-library.js";
 import PrivateChat from "./PrivateChat.vue";
@@ -25,18 +25,17 @@ import { locale, t } from "./i18n.js";
 
 const { view, bridge, field, act, pending } = inject("discussion");
 const room = computed(() => view.value.room);
-// The invitation the new-room panel asked for: the room it created opens with the same card, generating it by itself.
+// The external experts the new-room panel asked for: the room it created adds their seats by itself.
 watch(() => [room.value?.id, view.value.launch.room_models], async ([id, models]) => {
   const waiting = invite_after_creation.value;
   if (!id || !waiting) return;
   if (Date.now() - waiting.at > INVITE_AFTER_CREATION_MS) { invite_after_creation.value = null; return; }
   if (waiting.known.includes(id)) return;
-  if (waiting.options.level === "read" && (models?.room_id !== id || models.loading || !models.project_directory)) return;
+  if (waiting.drafts.some((draft) => draft.level === "read") && (models?.room_id !== id || models.loading || !models.project_directory)) return;
   invite_after_creation.value = null;
   const paths = [models?.project_directory, ...(models?.extra_directories || [])];
   try {
-    await room_operations(bridge).create_invite(id, { ...waiting.options,
-      folders: (waiting.options.directories || []).map(path => paths.indexOf(path)).filter(index => index >= 0) });
+    for (const draft of waiting.drafts) await room_operations(bridge).create_invite(id, seat_options(draft, paths));
     await act("refresh");
   } catch (error) { bridge.notify("error", error.message); }
 });

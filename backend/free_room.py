@@ -232,13 +232,15 @@ def migrate_free_tables(connection):
 
 
 def migrate_failure_classes(connection):
-    """Let development databases created when only 'quota' was a failure class also keep 'auth' and 'output_truncated'."""
+    """Widen older failure constraints while preserving recorded failures and reset times."""
     row = connection.execute("SELECT sql FROM sqlite_master WHERE name='execution_failures'").fetchone()
-    if not row or "'auth'" in row[0]:
+    if not row or all(f"'{kind}'" in row[0] for kind in ("compaction_failed", "policy_blocked")):
         return
     connection.execute("DROP TABLE IF EXISTS execution_failures_next")  # left over if a previous run stopped mid-migration
     definition = row[0].replace("execution_failures", "execution_failures_next", 1)
-    connection.execute(definition.replace("IN ('quota')", "IN ('quota','auth','output_truncated')"))
+    definition = re.sub(r"CHECK\s*\(failure_class\s+IN\s*\([^)]*\)\)",
+                        "CHECK(failure_class IN ('quota','auth','output_truncated','compaction_failed','policy_blocked'))", definition)
+    connection.execute(definition)
     columns = ",".join(item[1] for item in connection.execute("PRAGMA table_info(execution_failures)"))
     connection.execute(f"INSERT INTO execution_failures_next ({columns}) SELECT {columns} FROM execution_failures")
     connection.execute("DROP TABLE execution_failures")
@@ -633,7 +635,7 @@ def quota_failure(connection, execution_id):
 
 
 def failure_class_of(connection, execution_id):
-    """The class the runner's adapter gave this failed execution (`quota`, `auth`, `output_truncated`), or ''."""
+    """The supported class the runner's adapter gave this failed execution, or ''."""
     row = connection.execute("SELECT failure_class FROM execution_failures WHERE execution_id=?", (execution_id,)).fetchone()
     return row["failure_class"] if row else ""
 
@@ -967,6 +969,7 @@ def recent_executions(connection, room_id, span=None):
         (SELECT MIN({LAYOUT_AT_SQL}) FROM member_requests r WHERE r.execution_id=e.id) AS layout_at,
         (SELECT COUNT(*) FROM execution_notes WHERE execution_id=e.id) AS note_count,
         (SELECT denials FROM execution_denials WHERE execution_id=e.id) AS denials,{CAPABILITY_COLUMNS},
+        (SELECT failure_class FROM execution_failures WHERE execution_id=e.id) AS failure_class,
         (SELECT json_object('created_at',created_at) FROM late_answers WHERE execution_id=e.id) AS late_answer,
         {BACKGROUND_SQL} AS background
         FROM member_executions e JOIN room_members m ON m.id=e.member_id WHERE e.room_id=?"""
@@ -986,7 +989,7 @@ def recent_executions(connection, room_id, span=None):
             "edited": json.loads(row["edited"]) if row["edited"] else None, "diff_stats": diff_stats(row["diffs"]),
             "answer_id": row["answer_id"], "request_message_id": row["request_message_id"],
             "layout_after": row["layout_after"], "layout_at": row["layout_at"] or row["created_at"], "requests": requests,
-            "notes": row["note_count"], "denials": json.loads(row["denials"] or "[]"),
+            "notes": row["note_count"], "denials": json.loads(row["denials"] or "[]"), "failure_class": row["failure_class"] or "",
             "capabilities": reported_capabilities(row), "stop_result": row["stop_result"] or "",
             "late_answer": json.loads(row["late_answer"]) if row["late_answer"] else None, "background": bool(row["background"]),
             "retried": bool(row["retried"]),
@@ -1682,6 +1685,10 @@ def wake_after_failure(connection, execution_id, requests, reason):
         text = Text("{name} 额度已用尽，处理 {messages} 的执行失败（执行 #{execution_id}）：{reason}。重置时间未知，它暂时长期不可用，程序暂停给它投递；请主持人改派其他成员或告知用户，不要重试。", **facts)
     elif failure_class_of(connection, execution_id) == "auth":
         text = Text("{name} 的登录已失效，处理 {messages} 的执行失败（执行 #{execution_id}）：{reason}。需要用户在本机重新登录该软件后才能再用它；程序不自动重试，请主持人改派其他成员或告知用户。", **facts)
+    elif failure_class_of(connection, execution_id) == "compaction_failed":
+        text = Text("{name} 的上下文压缩失败，处理 {messages} 的执行失败（执行 #{execution_id}）：{reason}。请缩短输入或拆分任务后再决定是否重试；程序不自动重试。", **facts)
+    elif failure_class_of(connection, execution_id) == "policy_blocked":
+        text = Text("{name} 因安全策略拒绝，处理 {messages} 的执行失败（执行 #{execution_id}）：{reason}。请核对请求内容与服务许可要求，不要原样重试；程序不自动重试。", **facts)
     else:
         text = Text("{name} 处理 {messages} 的执行失败（执行 #{execution_id}）：{reason}。请主持人决定重试、改派还是告知用户。",
              name=name, messages=messages, execution_id=execution_id, reason=str(reason)[:200])
@@ -3591,17 +3598,16 @@ def execution_action(connection, room_id, execution_id, token, payload, member=N
 
 
 def record_failure_class(connection, room_id, execution_id, payload):
-    """Keep the runner's classification of a failure: `quota` (with when it resets), `auth` (signed out) or
-    `output_truncated` (the model's reply hit its output cap); anything else stays unclassified."""
+    """Keep an explicitly supported adapter failure class; only quota carries reset times."""
     if payload.get("failure_class") is None:
         return
     reset_at = payload.get("reset_at", 0)
-    if payload["failure_class"] in ("auth", "output_truncated"):
+    if payload["failure_class"] in ("auth", "output_truncated", "compaction_failed", "policy_blocked"):
         connection.execute("""INSERT OR REPLACE INTO execution_failures (execution_id,room_id,failure_class,resets,failed_at,reset_at)
             VALUES (?,?,?,?,?,0)""", (execution_id, room_id, payload["failure_class"], "", int(time.time())))
         return
     if payload["failure_class"] != "quota" or not isinstance(payload.get("resets", ""), str) or type(reset_at) is not int:
-        raise ValueError(Text("failure_class 只能为 quota、auth 或 output_truncated，resets 须为文字，reset_at 须为整数秒"))
+        raise ValueError(Text("failure_class 只能为 quota、auth、output_truncated、compaction_failed 或 policy_blocked，resets 须为文字，reset_at 须为整数秒"))
     now = int(time.time())
     # A reset already past or implausibly far is the adapter misreading the text: hold for the fixed time instead.
     reset_at = reset_at if now < reset_at <= now + MAX_QUOTA_HOLD_SECONDS else 0

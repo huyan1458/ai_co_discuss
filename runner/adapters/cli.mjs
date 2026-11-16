@@ -7,12 +7,10 @@
  */
 import { resolve } from 'node:path';
 import { createInterface } from 'node:readline';
-import { bind_access, launch_directory, not_sent, report_edits, track_edits, tree_killable } from './common.mjs';
+import { bind_access, cli_max_run_ms, cli_timeout_reason, launch_directory, not_sent, report_edits, track_edits, tree_killable } from './common.mjs';
 import { adapter_capabilities } from './profiles.mjs';
 
 const CLI_DIAGNOSTIC_CHARS = 1000;
-// A hung CLI keeps its lease renewed forever when the room sets no execution limit, so cap every process.
-const CLI_MAX_RUN_MS = 2 * 60 * 60_000;
 // Immediate restarts of a CLI that failed before any turn ran, before the runner's slower retry takes over.
 const CLI_START_RETRIES = 2;
 
@@ -53,9 +51,9 @@ function monitor_cli(adapter, child, binding, task, restart) {
   const log_path = resolve(task.directory, `${adapter.id}-${task.id}.log`);
   state.log_path = log_path;
   const lines = createInterface({ input: child.stdout, crlfDelay: Infinity });
-  const max_run_ms = Number(process.env.CODISCUSS_CLI_MAX_MS) || CLI_MAX_RUN_MS;
+  const max_run_ms = cli_max_run_ms();
   track_edits(adapter, task);
-  state.limit_timer = setTimeout(() => { state.error = `CLI 运行超过 ${Math.round(max_run_ms / 1000)} 秒仍未结束，已终止`; child.kill(); }, max_run_ms);
+  state.limit_timer = setTimeout(() => { state.error = cli_timeout_reason(max_run_ms); child.kill(); }, max_run_ms);
   child.stdout.on('data', chunk => task.on_output(log_path, chunk));
   child.stderr.setEncoding('utf8');
   child.stderr.on('data', chunk => {
@@ -85,7 +83,7 @@ function monitor_cli(adapter, child, binding, task, restart) {
     if (state.denials.length) task.on_denials?.(state.denials);
     const error = cli_exit_error(adapter, state, code, signal);
     // The adapter's classification of the failure (`quota` with when it resets); a lasting one is never started again.
-    const failure = error ? adapter.failure_class?.(error) || {} : {};
+    const failure = error ? adapter.failure_class?.(error, state) || {} : {};
     if (error && state.not_started && !state.stopped && !failure.failure_class && restart?.()) return;
     // `not_started`: the adapter saw the CLI fail before any turn ran, so the runner may deliver the same task again.
     if (error) task.on_failure(error, { not_started: Boolean(state.not_started) && !failure.failure_class,

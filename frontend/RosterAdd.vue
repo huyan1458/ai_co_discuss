@@ -5,7 +5,7 @@ import { computed, ref } from "vue";
 
 const props = defineProps({
   label: { type: String, required: true },
-  // Each item: { value, name, icon, lucide, initials, style, title, aria_label, disabled, selected, separated, removable, row, toggle }; separated starts a second row (the presets); row puts the item on its own row under that label, after the others; selected marks the chip filling a single slot; toggle shows an open/closed chevron instead of + (the chip opens a panel, it adds no card); removable lets the row's 管理 mode show a delete button that emits remove.
+  // Each item: { value, name, icon, lucide, initials, style, title, aria_label, disabled, selected, separated, removable, row }; separated starts a second row (the presets); row puts the item on its own row under that label, after the others; selected marks the chip filling a single slot; removable lets the row's 管理 mode show a delete button that emits remove.
   items: { type: Array, required: true },
 });
 const emit = defineEmits(["add", "remove"]);
@@ -37,7 +37,7 @@ defineExpose({ focus_first });
       <div class="roster-add-chips">
         <span v-for="item in group.items" :key="item.value" class="roster-add-chip" :class="{ 'is-selected': item.selected, 'is-disabled': item.disabled, 'is-removable': managing && item.removable }">
           <button type="button" class="roster-add-main" :disabled="item.disabled" :title="item.title" :aria-label="item.aria_label" :aria-pressed="item.selected === undefined ? undefined : item.selected" @click="emit('add', item.value)">
-            <UAvatar :src="item.icon" :icon="item.lucide" :text="item.initials" :alt="item.name" size="3xs" class="channel-avatar" :class="item.style" /><span class="roster-add-name">{{ item.name }}</span><UIcon :name="item.toggle ? (item.selected ? 'i-lucide-chevron-up' : 'i-lucide-chevron-down') : item.selected ? 'i-lucide-check' : 'i-lucide-plus'" class="roster-add-mark" />
+            <UAvatar :src="item.icon" :icon="item.lucide" :text="item.initials" :alt="item.name" size="3xs" class="channel-avatar" :class="item.style" /><span class="roster-add-name">{{ item.name }}</span><UIcon :name="item.selected ? 'i-lucide-check' : 'i-lucide-plus'" class="roster-add-mark" />
           </button>
           <button v-if="managing && item.removable" type="button" class="roster-add-remove" :title="t('删除预设「{value1}」', { value1: item.name })" :aria-label="t('删除预设 {value1}', { value1: item.name })" @click="emit('remove', item.value)"><UIcon name="i-lucide-x" /></button>
         </span>

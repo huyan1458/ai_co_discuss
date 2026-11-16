@@ -658,7 +658,7 @@ export const antigravity_cli = {
   // A deleted room's session records and any legacy private agy projects are removed with it.
   cleanup: remove_agy_projects, sweep: sweep_legacy_agy_projects,
   deliver,
-  invocation, lifecycle, events, failure_class: agy_failure_class,
+  invocation, lifecycle, events, failure_class: reason => agy_failure_class(reason),
   session: { path: session_path, exists: session_exists, owns: session_exists, branch, settings: session_settings,
     list: list_sessions, preview: preview_session },
   models: { list: models, effort, defaults, defaults_stamp },

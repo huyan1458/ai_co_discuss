@@ -851,13 +851,14 @@ test('a Pi session whose automatic compaction fails reports why and leaves the n
   const bindings = []; let ended;
   const done = new Promise(resolve => { ended = resolve; });
   pi_delivery({ cli: 'pi.js', profile: { model: 'm', api_protocol: 'chat' }, key: 'k', binding: { session_id: 'old' },
-    task: { id: 'free-1', directory: home, on_binding: id => bindings.push(id), on_failure: ended },
+    task: { id: 'free-1', directory: home, on_binding: id => bindings.push(id), on_failure: (reason, details) => ended({ reason, details }) },
     context_file: '', system_file: '', prompt: 'go', service_home: home, spawn_process: () => child });
   for (const event of [{ type: 'compaction_start', reason: 'overflow' },
     { type: 'compaction_end', reason: 'overflow', aborted: false, errorMessage: 'Context overflow recovery failed: Summarization failed' },
     { type: 'agent_settled', aborted: false }]) child.stdout.write(`${JSON.stringify(event)}\n`);
-  const reason = await done;
-  assert.match(reason, /自动压缩失败.*Summarization failed.*新会话/);
+  const { reason, details } = await done;
+  assert.match(reason, /上下文压缩失败.*Summarization failed.*新会话/);
+  assert.deepEqual(details, { failure_class: 'compaction_failed', retryable: false });
   assert.equal(bindings.at(-1), '', 'the next execution does not reopen the session that cannot be compacted');
 });
 

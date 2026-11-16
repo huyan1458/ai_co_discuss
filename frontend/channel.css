@@ -143,8 +143,9 @@ html[data-theme^="channel"] .channel-menu.channel-directory-menu { min-width: 15
 .channel-room-row.active .channel-room-select, .channel-folder-row.active .channel-folder-heading { color: var(--ui-text-highlighted); font-weight: 600; }
 .channel-room-select > [class*="icon"] { flex-shrink: 0; width: 17px; height: 17px; color: #808998; }
 /* Pinned to the row's right edge so swapping time ↔ actions on hover does not move it. */
-.channel-room-row:has(.channel-room-running) { padding-right: 20px; }
-.channel-room-running { position: absolute; right: 8px; top: 50%; width: 7px; height: 7px; margin-top: -3.5px; border-radius: 50%; background: #22c55e; box-shadow: 0 0 6px #22c55e99; animation: channel-room-breathe 2s ease-in-out infinite; }
+/* A room at work shows the dot in its time's place: the name keeps its width and the actions stay lined up across rows,
+   and "just now" says nothing a working room's dot does not. */
+.channel-room-running { flex-shrink: 0; width: 7px; height: 7px; margin: 0 4px 0 auto; border-radius: 50%; background: #22c55e; box-shadow: 0 0 6px #22c55e99; animation: channel-room-breathe 2s ease-in-out infinite; }
 @keyframes channel-room-breathe { 50% { opacity: .35; box-shadow: 0 0 2px #22c55e33; } }
 @media (prefers-reduced-motion: reduce) { .channel-room-running { animation: none; } }
 .channel-room-select > span:not([class*="icon"]) { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; flex: 1; }
@@ -494,6 +495,12 @@ html[data-theme^="channel"] .channel-message.channel-topic-card { color: var(--u
 /* Error/warning text gets its own box so a failure never reads like an answer; same left-bar tint as .access-failure. */
 .channel-message-text.channel-failure-reason { --failure-tone: var(--ui-error); margin: 0; padding: 1px 0 1px 12px; border-left: 2px solid color-mix(in srgb, var(--failure-tone) 60%, transparent); color: #b3bdcc; font-size: 14px; line-height: 1.65; white-space: pre-wrap; }
 .channel-message-text.channel-failure-reason.is-warning { --failure-tone: var(--ui-warning); }
+/* A file still uploading on the sending card: dimmed, with a spinner over it. */
+.attachment-image.is-uploading { position: relative; }
+.attachment-image.is-uploading img { opacity: .45; }
+.attachment-uploading { position: absolute; inset: 0; width: 26px; height: 26px; margin: auto; color: #fff; animation: attachment-spin 1s linear infinite; filter: drop-shadow(0 1px 2px #0008); }
+@keyframes attachment-spin { to { transform: rotate(360deg); } }
+@media (prefers-reduced-motion: reduce) { .attachment-uploading { animation: none; } }
 .channel-retried-note { display: flex; align-items: center; gap: 6px; margin-top: 8px; }
 .channel-retried-note > [class*="icon"] { width: 13px; height: 13px; }
 /* Stopped, voided or skipped work: a dashed, see-through card with a stop mark, so it never reads as an answer. */
@@ -586,7 +593,7 @@ html[data-theme^="channel"] .channel-message.channel-topic-card { color: var(--u
 /* The dock reserves the transcript's scrollbar gutters and the column repeats the message margins, so composer and card edges line up. */
 .channel-composer-dock { grid-column: 2; grid-row: 3; min-width: 0; overflow: hidden; scrollbar-gutter: stable both-edges; padding: 8px 0 12px; }
 .channel-composer-column { max-width: var(--channel-reading-width); margin: 0 auto; padding: 0 16px; }
-.channel-composer { background: #383a40 !important; border-radius: 12px !important; border: 1px solid #ffffff0b; box-shadow: 0 1px 3px #0002 !important; padding: 0 !important; gap: 0 !important; overflow: hidden; transition: border-color .15s, box-shadow .15s; }
+.channel-composer { --composer-surface: #383a40; background: #383a40 !important; border-radius: 12px !important; border: 1px solid #ffffff0b; box-shadow: 0 1px 3px #0002 !important; padding: 0 !important; gap: 0 !important; overflow: hidden; transition: border-color .15s, box-shadow .15s; }
 /* The queued-message tray tucks under the composer's top edge. */
 .queued-messages + .channel-composer { position: relative; z-index: 1; }
 html[data-theme^="channel"] .channel-composer, html[data-theme^="channel"] .channel-composer :focus { --tw-ring-shadow: 0 0 #0000 !important; --tw-inset-ring-color: transparent !important; }
@@ -669,7 +676,16 @@ html[data-theme^="channel"] .channel-round-button:active:not(:disabled) { transf
 .attachment-draft-ref .attachment-name small { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .attachment-ref-folder { flex-shrink: 0; width: 28px; height: 28px; color: var(--ui-text-muted); }
 /* Excerpts wait in the composer as one small chip; it opens the numbered list, where comments are edited or excerpts removed. */
-.excerpt-chip { display: inline-flex; align-items: center; gap: 6px; height: 30px; padding: 0 4px 0 10px; border: 1px solid var(--ui-border-accented); border-radius: 8px; color: var(--ui-text-highlighted); font-size: 12.5px; font-weight: 600; cursor: pointer; }
+.excerpt-chip { position: relative; display: inline-flex; align-items: center; gap: 6px; height: 30px; padding: 0 4px 0 10px; border: 1px solid var(--ui-border-accented); border-radius: 8px; background: var(--composer-surface, var(--ui-bg)); color: var(--ui-text-highlighted); font-size: 12.5px; font-weight: 600; cursor: pointer; }
+/* The cards behind the chip are painted in its row's stacking context, under the chip's own surface. */
+.attachment-drafts:has(> * .excerpt-chip[data-stack], > .excerpt-chip[data-stack]) { isolation: isolate; }
+/* Several excerpts fan out behind the chip like a small hand of cards, one card behind it per extra excerpt (at most
+   two): a hint of how many are waiting, without spreading far (user 2026-11-16). The cards share the chip's edge and
+   the composer's surface, so only their tilted edges show. */
+.excerpt-chip[data-stack]::before, .excerpt-chip[data-stack="3"]::after { content: ""; position: absolute; inset: -1px; z-index: -1; border: inherit; border-radius: inherit;
+  background: var(--composer-surface, var(--ui-bg)); transform-origin: 50% 100%; pointer-events: none; }
+.excerpt-chip[data-stack]::before { transform: translate(-3px, -1px) rotate(-3.5deg); opacity: .8; }
+.excerpt-chip[data-stack="3"]::after { transform: translate(3px, -2px) rotate(3.5deg); opacity: .6; }
 .excerpt-chip > [class*="icon"] { width: 14px; height: 14px; color: var(--ui-text-muted); }
 /* Removing every excerpt (and its marks) shows on hover; touch screens always show it. */
 .excerpt-chip-clear { display: grid; place-items: center; width: 20px; height: 20px; border-radius: 50%; background: var(--ui-text-highlighted); color: var(--ui-bg); opacity: 0; }
@@ -1142,7 +1158,7 @@ html[data-motion="off"] *, html[data-motion="off"] *::before, html[data-motion="
   .channel-answer .markdown-body :is(pre, .markdown-copy) { background: #f6f6f6; }
   .channel-answer .markdown-body :is(th, td) { border-color: var(--ui-border); }
   .channel-answer .markdown-body th { background: #f6f6f6; }
-  .channel-composer { background: #fff !important; border-color: #c9c9c9; box-shadow: none !important; }
+  .channel-composer { --composer-surface: #fff; background: #fff !important; border-color: #c9c9c9; box-shadow: none !important; }
   .channel-composer-footer > button[aria-label="添加附件"]:hover:not(:disabled) { background: var(--channel-ghost-hover); }
   .channel-key-hint kbd { border-color: #0000001f; }
   .channel-draft-length .is-near-limit { color: #9a6700; }
@@ -1453,21 +1469,25 @@ html[data-motion="off"] *, html[data-motion="off"] *::before, html[data-motion="
 /* The square speech bubble reads heavier than the other line icons at the same size, so the private-chat icon is drawn a little smaller. */
 .channel-corner-key [class*="icon"], .channel-message-toolbar .channel-private-chat-key [class*="icon"] { width: 14px; height: 14px; }
 .channel-tabs [id$="-trigger-private"] [data-slot="leadingIcon"], .is-private-icon { scale: .86; }
-/* Working strip: stop on the head row's right end. On touch screens private chat takes that end and the stop keys
-   move to the status row's right end, with or without notes below (user 2026-11-08). The status row starts below
-   the 10px padding, the 24px head row and its 4px gap; the 28px stop key centres on its 24px line. */
+/* Working strip: stop on the head row's right end. On touch screens private chat takes that end and the stop key
+   moves to the status row's right end, with or without notes below (user 2026-11-08, kept 2026-11-17). Both keys are
+   28px and share one column; the stop key is placed from the head row's real height (the avatar's, 32px on phones),
+   so it centres on the status line's first 24px instead of riding above it (user 2026-11-17). */
 .channel-working-head > .channel-working-actions { margin-left: auto; }
 .channel-working-strip .channel-corner-key { flex-shrink: 0; margin-left: auto; width: 24px; height: 24px; padding: 4px; }
-.channel-working-head > .channel-corner-key + .channel-working-actions { position: absolute; top: 36px; right: 10px; }
+.channel-working-head > .channel-corner-key + .channel-working-actions { position: absolute; top: calc(10px + max(var(--working-avatar), 24px) + 4px + 12px); right: 10px; transform: translateY(-50%); }
 .channel-working-strip:has(.channel-corner-key) .channel-working-main { padding-right: 36px; }
 .channel-working-strip:has(.channel-corner-key + .channel-working-actions > :nth-child(2)) .channel-working-main { padding-right: 68px; }
+@media (pointer: coarse) {
+  .channel-working-strip .channel-corner-key { width: 28px; height: 28px; padding: 6px; }
+}
 @media (max-width: 700px) {
   .channel-corner-key [class*="icon"], .channel-message-toolbar .channel-private-chat-key [class*="icon"] { width: 12px; height: 12px; }
 }
 /* Placed after the base rules above so the mouse layout overrides them. */
 @media (min-width: 701px) and (hover: hover) and (pointer: fine) {
   .channel-working-strip .channel-corner-key { display: none; }
-  .channel-working-head > .channel-corner-key + .channel-working-actions { position: static; margin-left: auto; }
+  .channel-working-head > .channel-corner-key + .channel-working-actions { position: static; margin-left: auto; transform: none; }
   .channel-working-strip:has(.channel-corner-key) .channel-working-main { padding-right: 0; }
   .channel-working-strip:has(.channel-corner-key + .channel-working-actions > :nth-child(2)) .channel-working-main { padding-right: 0; }
   .channel-working-strip > .channel-message-actions { inset-block: 6px; }
@@ -1482,7 +1502,7 @@ html[data-motion="off"] *, html[data-motion="off"] *::before, html[data-motion="
   .channel-message-stack::after { content: ""; flex: 1 0 0; }
 }
 /* Dark composer matches the message cards (#313338, lit top rim) as one surface with its footer; the mention panel keeps the frosted float style. */
-:root[data-theme="channel"] .channel-composer { background: #313338 !important; }
+:root[data-theme="channel"] .channel-composer { --composer-surface: #313338; background: #313338 !important; }
 :root[data-theme="channel"] .channel-mention-heading { border-bottom: 1px solid #ffffff0d; }
 :root[data-theme="channel"] .channel-mention-option[aria-selected="true"] { background: #ffffff0f; box-shadow: inset 0 1px #ffffff0a; }
 

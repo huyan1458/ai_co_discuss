@@ -345,7 +345,7 @@ CREATE TABLE IF NOT EXISTS execution_denials (
 CREATE TABLE IF NOT EXISTS execution_failures (
     execution_id INTEGER PRIMARY KEY REFERENCES member_executions(id) ON DELETE CASCADE,
     room_id TEXT NOT NULL REFERENCES rooms(id) ON DELETE CASCADE,
-    failure_class TEXT NOT NULL CHECK(failure_class IN ('quota','auth','output_truncated')),
+    failure_class TEXT NOT NULL CHECK(failure_class IN ('quota','auth','output_truncated','compaction_failed','policy_blocked')),
     resets TEXT NOT NULL DEFAULT '',
     failed_at INTEGER NOT NULL,
     reset_at INTEGER NOT NULL DEFAULT 0

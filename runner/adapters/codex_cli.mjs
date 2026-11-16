@@ -128,10 +128,21 @@ function remember_writer_conflict(state, diagnostic) {
 /** Consume only documented lifecycle events, not text produced by agent tools. */
 function lifecycle(state, event, task, bind) {
   if (event.type === 'thread.started') bind(event.thread_id);
+  if (event.type === 'codiscuss.turn') task.on_recovery?.({ kind: 'codex_turn',
+    thread_id: event.thread_id, turn_id: event.turn_id, rollout_path: event.rollout_path });
   if (event.type === 'turn.completed') { state.completed = true; state.finish_timer = setTimeout(() => { state.finished = true; task.on_trace?.('kill_after_completed'); state.child.kill(); }, CLI_EXIT_GRACE_MS); }
-  if (event.type === 'turn.failed') state.error = event.error?.message || 'Codex CLI 执行失败';
-  if (event.type === 'error') state.diagnostic = event.message || 'Codex CLI 返回错误';
+  if (event.type === 'turn.failed') { state.error = event.error?.message || 'Codex CLI 执行失败'; state.failure_info = event.error; }
+  if (event.type === 'error') { state.diagnostic = event.message || 'Codex CLI 返回错误'; if (!state.error) state.failure_info = event; }
   remember_writer_conflict(state, state.error || state.diagnostic);
+}
+
+/** Classify only software-provided codes; text, unknown codes and conflicting fields stay unclassified. */
+function failure_class(error, state = {}) {
+  const info = state.failure_info || {};
+  const classes = { usage_limit_exceeded: 'quota', usageLimitExceeded: 'quota', cyber_policy: 'policy_blocked' };
+  const values = [info.codex_error_info, info.codexErrorInfo].filter(value => value !== undefined);
+  const kinds = values.map(value => typeof value === 'string' && Object.hasOwn(classes, value) ? classes[value] : undefined);
+  return kinds.length && kinds.every(kind => kind && kind === kinds[0]) ? { failure_class: kinds[0] } : {};
 }
 
 /** A thread another process writes to cannot be resumed here; retrying does not release it. */
@@ -414,8 +425,35 @@ async function chat(config, binding, task, spawn_process, user_home) {
   return daemon_chat(link, binding.session_id, task);
 }
 
+/** Recover only the recorded root turn in its thread; other turns and incomplete evidence cannot supply an answer. */
+function recover_turn(record) {
+  const unknown = { status: 'unknown', exact: false };
+  if (record?.kind !== 'codex_turn' || !record.thread_id || !record.turn_id) return unknown;
+  const file = record.rollout_path || session_path(record.thread_id);
+  if (!file) return unknown;
+  const entries = readFileSync(file, 'utf8').trim().split(/\r?\n/).map(line => JSON.parse(line));
+  const meta = entries.find(entry => entry.type === 'session_meta')?.payload;
+  if (meta?.id !== record.thread_id || typeof meta.source === 'object') return unknown;
+  const turns = entries.filter(entry => entry.type === 'event_msg' && entry.payload?.turn_id === record.turn_id).map(entry => entry.payload);
+  const starts = turns.filter(event => event.type === 'task_started');
+  const ends = turns.filter(event => ['task_complete', 'turn_aborted'].includes(event.type));
+  if (starts.length !== 1 || ends.length !== 1) return unknown;
+  if ([starts[0], ends[0]].some(event => event.root_turn_id !== record.turn_id || event.parent_turn_id)) return unknown;
+  if (turns.indexOf(ends[0]) < turns.indexOf(starts[0])) return unknown;
+  if (ends[0].type === 'turn_aborted') return { status: 'interrupted', exact: true };
+  if (ends[0].error != null) {
+    const error = ends[0].error;
+    return typeof error === 'object' && !Array.isArray(error)
+      && (typeof error.message === 'string' || typeof error.codex_error_info === 'string' || typeof error.codexErrorInfo === 'string')
+      ? { status: 'failed', exact: true } : unknown;
+  }
+  if (ends[0].last_agent_message != null && typeof ends[0].last_agent_message !== 'string') return unknown;
+  return { status: 'completed', exact: true, text: ends[0].last_agent_message || '' };
+}
+
 /** Codex CLI's behaviour; its static facts are in profiles.mjs. */
 export const codex_cli = {
+  recover_turn, failure_class,
   id: 'codex_cli', catalog_source: 'codex-app-server',
   deliver: (config, binding, task, spawn_process, user_home) => cli_delivery(codex_cli, config, binding, task, spawn_process, user_home),
   chat,

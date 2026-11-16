@@ -30,6 +30,8 @@
   "已退出该房间": "Left the room",
   "邀请外部专家": "Invite an external expert",
   "外部专家": "External expert",
+  "可读：{dirs}": "Reads: {dirs}",
+  "目录": "Folders",
   "移除这张卡片": "Remove this card",
   "能做什么": "What it may do",
   "开放目录": "Open directories",

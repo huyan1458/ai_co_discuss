@@ -11,6 +11,7 @@
  */
 import { spawn } from 'node:child_process';
 import { createInterface } from 'node:readline';
+import { tree_killable } from './common.mjs';
 
 /**
  * The under-development `context_management` feature lets the model call `new_context`, which drops the history without a
@@ -28,6 +29,7 @@ let finished = false;
 const queued_steers = [];
 
 const server = spawn(executable, ['app-server', ...CONTEXT_OVERRIDES, ...server_args], { windowsHide: true, shell: false, stdio: ['pipe', 'pipe', 'pipe'] });
+tree_killable(server);
 server.stderr.pipe(process.stderr);
 server.once('error', error => fail(error.message));
 server.once('close', code => { if (!finished) fail(`Codex app-server 意外退出（${code}）`); });
@@ -70,6 +72,13 @@ function exec_item(item) {
   return null;
 }
 
+/** Forward only bounded software error-code fields, never arbitrary provider error metadata. */
+function error_details(error = {}) {
+  if (!error || typeof error !== 'object') return {};
+  return Object.fromEntries(['codex_error_info', 'codexErrorInfo'].filter(key => typeof error[key] === 'string'
+    && error[key].length <= 128).map(key => [key, error[key]]));
+}
+
 /** Translate one server notification; the turn's end ends this process. */
 function notification({ method, params = {} }) {
   if (params.threadId && params.threadId !== thread_id) return;
@@ -77,11 +86,11 @@ function notification({ method, params = {} }) {
   else if (method === 'item/started' || method === 'item/completed') {
     const item = exec_item(params.item || {});
     if (item) emit({ type: method === 'item/started' ? 'item.started' : 'item.completed', item });
-  } else if (method === 'error') emit({ type: 'error', message: params.error?.message || params.message || 'Codex 返回错误' });
+  } else if (method === 'error') emit({ type: 'error', message: params.error?.message || params.message || 'Codex 返回错误', ...error_details(params.error) });
   else if (method === 'turn/completed') {
     const turn = params.turn || {};
     if (turn.status === 'completed') emit({ type: 'turn.completed', usage: params.usage || {} });
-    else emit({ type: 'turn.failed', error: { message: turn.error?.message || (turn.status === 'interrupted' ? '本轮已中断' : 'Codex 本轮失败') } });
+    else emit({ type: 'turn.failed', error: { message: turn.error?.message || (turn.status === 'interrupted' ? '本轮已中断' : 'Codex 本轮失败'), ...error_details(turn.error) } });
     finished = true;
     server.kill();
     process.stdout.write('', () => process.exit(0));
@@ -121,6 +130,7 @@ async function start(task) {
   const started = await request('turn/start', { threadId: thread_id, input: [{ type: 'text', text: task.prompt }, ...images],
     ...(task.model ? { model: task.model } : {}), ...(task.effort ? { effort: task.effort } : {}) });
   turn_id = started.turn.id;
+  emit({ type: 'codiscuss.turn', thread_id, turn_id, rollout_path: opened.thread.path || '' });
   for (const text of queued_steers.splice(0)) await steer(text);
 }
 

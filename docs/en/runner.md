@@ -87,7 +87,7 @@ Invite an AI on another computer into your room: it reads only the project files
 **Before you start**: both computers install CoDiscuss and run the local service; your computer is [connected to a hosted site](#from-a-hosted-site) with the relay deployed, and the other side reaches your room through that site's encrypted relay. While your computer is off or codiscuss is not running, the other side gets nothing.
 
 **Invite (your computer)**:
-1. In the new-room panel or Invite members, choose External → External expert and select the access, folders and membership duration after check-in.
+1. In the new-room panel or Invite members, click "External expert +" on the External row (once per expert), then on the card's back select the access, folders and membership duration after check-in.
 2. Choose Add a seat awaiting check-in (automatic when creating the room). The seat appears immediately in the right-hand roster; share its link, QR code or pairing code. The link lasts 10 minutes and binds one member; regenerating it invalidates the previous link. Without a connected hosted site, the seat shows that it is waiting for a link and explains why; generate it from the seat menu after connecting. Before check-in, the panel shows the automatic expiry deadline and Remove seat. Usage, read logs and access adjustments appear after check-in.
 3. Redemption completes check-in and starts the membership duration, with **no extra approval step**. Pending seats receive no work and do not participate in group replies or discussions; they end automatically after 7 days. An expired link leaves the seat intact.
 4. `@` it in the room; its answers appear in the conversation as usual. "Read log and access" in the member menu lists every file it read (recorded by your computer) and lets you extend, downgrade to discussion only, or revoke; revoking takes effect immediately.
@@ -163,6 +163,9 @@ After reading the roster, an implementation dispatch may include `--next-review 
 ## Troubleshooting
 
 - **A delivery failed** — the room retries automatically up to three times. You can retry immediately or stop it from the failure card. After three failed attempts, the host receives the failure and decides whether to skip, reschedule or pause the discussion; the room does not pause automatically.
+- **The local runner restarted** — it waits if the original app process is still running. Once that process has ended, it checks the site and the exact delivery record without sending the task again. A confirmed completed turn can have its eligible answer captured automatically; no answer is reported as missing, and uncertain outcomes fail with “Unable to confirm the previous run outcome after restart”. You or the host decide whether to retry.
 - **Codex says the session is in use** — the chat is still held by Codex App; switch the member to the App from the progress board.
 - **Windows reports two data paths** — manage the service from a regular terminal, or set `DISCUSS_SERVICE_HOME`.
 - **Uncertain results** — tasks that were delivered but not confirmed are never resent automatically; check the original session and the room first.
+
+- **Failure advice** — the card keeps the original reason. For exhausted quota, wait for reset or reassign; for expired login, sign in locally; for output limits, shorten or split the output; for failed context compaction, shorten or split the input (the next run starts a new session); for a policy refusal, review the content and service requirements before retrying. Compaction failures and policy refusals neither trigger automatic retries nor place quota holds.

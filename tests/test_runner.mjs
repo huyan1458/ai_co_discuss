@@ -718,31 +718,21 @@ test('a restart at the software invocation boundary fails for review instead of 
   assert.equal(sent, 1); assert.equal(f.executions.get(id).status, 'failed');
 });
 
-test('an execution inherited from a stopped or crashed runner retries once its software is gone, and waits while it runs', async t => {
+test('a restarted runner fails unknown dead turns without redelivery, and waits for live processes', async t => {
   const exited = spawnSync(process.execPath, ['-e', '']).pid;
   for (const [pid, gone] of [[undefined, true], [exited, true], [process.pid, false]]) {
-    const f = await fixture(t); const prompts = [];
+    const f = await fixture(t); let sent = 0;
     const deliver = async (adapter, binding, task) => {
-      prompts.push(task.prompt); task.on_process(Object.assign(new EventEmitter(), { pid, kill() {} }));
+      sent++; task.on_process(Object.assign(new EventEmitter(), { pid, kill() {} }));
       return { status: 'accepted' };
     };
     await new FreeRoomRunner(f.config, f.store, deliver).tick();
     const id = f.current_execution().id;
-    // No stop_children(): a crash leaves no mark, so the next runner must judge by the recorded processes alone.
-    const restarted = new FreeRoomRunner(f.config, f.store, deliver);
-    await restarted.tick();
-    assert.equal(prompts.length, 1); assert.equal(f.executions.get(id).status, 'dispatched');
-    assert.equal(Boolean(f.executions.get(id).retry), gone);
-    if (!gone) continue;
-    assert.match(f.executions.get(id).retry.reason, /接入程序重启或异常退出/);
-    f.executions.get(id).retry.reason = 'Restarted; wording may change with the interface language';
-    f.executions.get(id).retry.retry_at = 1;
-    // Another restart during the wait: the durable reason code, independent of display text, marks a continuation.
     await new FreeRoomRunner(f.config, f.store, deliver).tick();
-    assert.equal(prompts.length, 2); assert.equal(f.executions.size, 1, 'the retry keeps the one execution card');
-    // The session still holds the work so far: the redelivery asks to continue, with the original task after the notice.
-    assert.match(prompts[1], new RegExp(`^本机接入程序重启或异常退出.*执行 #${id}.*不必重做`));
-    assert.ok(prompts[1].endsWith(prompts[0]), 'the original task follows the restart notice unchanged');
+    assert.equal(sent, 1);
+    assert.equal(f.executions.get(id).status, gone ? 'failed' : 'dispatched');
+    assert.equal(Boolean(f.executions.get(id).retry), false);
+    if (gone) assert.match(f.executions.get(id).result, /重启后无法确认上次执行结果/);
   }
 });
 
@@ -998,7 +988,7 @@ async function cli_delivery_fixture(t, adapter, options = {}) {
   mkdirSync(draft_directory);
   const access_path = join(directory, 'access.json');
   writeFileSync(access_path, JSON.stringify({ token: 'test-only', session_id: '' }));
-  const bindings = []; const errors = []; const denials = []; let exits = 0;
+  const bindings = []; const errors = []; const failure_options = []; const denials = []; let exits = 0;
   const process_fixture = fake_cli(options.events || cli_events(adapter), options);
   t.after(async () => {
     for (const call of [...process_fixture.calls, ...process_fixture.config_calls]) {
@@ -1012,12 +1002,35 @@ async function cli_delivery_fixture(t, adapter, options = {}) {
   const task = { id: 'event-1', participant: 'Antigravity', directory, member_directory, draft_directory, access_path, prompt: '讨论中文 "quotes"\n$(literal); `literal`',
     skill_directories: [join(directory, 'skills')],
     on_binding: session => bindings.push(session), on_process: () => {},
-    on_output: (path, chunk) => appendFileSync(path, chunk), on_failure: error => errors.push(error), on_exit: () => { exits++; }, on_denials: list => denials.push(...list) };
+    on_output: (path, chunk) => appendFileSync(path, chunk), on_failure: (error, options) => { errors.push(error); failure_options.push(options); }, on_exit: () => { exits++; }, on_denials: list => denials.push(...list) };
   const config = { adapter, executable: process.execPath, ...options.config };
   const result = await deliver_task(config, options.binding || {}, task, process_fixture.spawn_process, user_home);
   await process_fixture.calls[0].closed;
-  return { directory, user_home, config, access_path, task, result, bindings, errors, denials, exits, ...process_fixture };
+  return { directory, user_home, config, access_path, task, result, bindings, errors, failure_options, denials, exits, ...process_fixture };
 }
+
+test('Codex classifies software error codes without interpreting prose or retrying the delivery', async t => {
+  for (const [info, expected] of [
+    [{ codex_error_info: 'usage_limit_exceeded' }, 'quota'],
+    [{ codexErrorInfo: 'usageLimitExceeded' }, 'quota'],
+    [{ codex_error_info: 'cyber_policy' }, 'policy_blocked'],
+    [{ codexErrorInfo: 'cyber_policy' }, 'policy_blocked'],
+    [{ codex_error_info: 'new_policy' }, undefined],
+    [{ codex_error_info: 'constructor' }, undefined],
+    [{ codex_error_info: 'cyber_policy', codexErrorInfo: 'usageLimitExceeded' }, undefined],
+    [{}, undefined],
+  ]) {
+    const f = await cli_delivery_fixture(t, 'codex_cli', { events: [
+      { type: 'thread.started', thread_id: 'actual-cli-session' },
+      { type: 'turn.failed', error: { message: 'You have hit your usage limit', ...info } },
+      { type: 'error', message: 'Later diagnostic must not replace the failed turn code' },
+    ] });
+    assert.equal(f.calls.length, 1);
+    assert.equal(f.errors.length, 1);
+    assert.equal(f.failure_options[0].failure_class, expected);
+    if (expected) assert.equal(f.failure_options[0].retryable, false);
+  }
+});
 
 for (const source of ['stderr', 'event']) {
 test(`codex_cli explains an active writer from ${source} without replacing the original session`, async t => {
@@ -1404,6 +1417,19 @@ test('claude allows only codiscuss website subcommands and draft writes, then us
   assert.equal(JSON.parse(f.calls[0].input).message.content[0].text, f.task.prompt);
   assert.equal(typeof f.result.steer, 'function');
   if (process.platform === 'win32') assert.equal(claude_rule_path('C:\\Data\\room'), '//c/Data/room');
+});
+
+test('claude background runtime limit ends a hung process without retrying or capturing success', async t => {
+  const previous = process.env.CODISCUSS_CLI_MAX_MS;
+  process.env.CODISCUSS_CLI_MAX_MS = '100';
+  t.after(() => { if (previous === undefined) delete process.env.CODISCUSS_CLI_MAX_MS; else process.env.CODISCUSS_CLI_MAX_MS = previous; });
+  const f = await cli_delivery_fixture(t, 'claude', { events: [], linger: true });
+  assert.equal(f.calls.length, 1);
+  assert.equal(f.errors.length, 1);
+  assert.match(f.errors[0], /CLI/);
+  assert.deepEqual(f.failure_options, [{ retryable: false }]);
+  assert.equal(f.exits, 0);
+  assert.ok(f.calls[0].child.exitCode !== null || f.calls[0].child.signalCode !== null);
 });
 
 test('a stopped process tree is ended with taskkill on Windows and falls back to the plain kill otherwise', () => {
@@ -2817,6 +2843,12 @@ test('edit tool events name the files an agent wrote, so concurrent snapshots ar
   const changes = ['剧本/库存.yaml', '剧本/成长.yaml', '剧本/第06集.md'];
   assert.deepEqual(edited_changes(changes, adapter_of('claude').events.edits(claude_event), 'win32'), ['剧本/库存.yaml']);
   assert.deepEqual(edited_changes(changes, adapter_of('codex_cli').events.edits(codex_event), 'linux'), ['剧本/成长.yaml']);
+  // A writing shell command claims the paths it names; a reading one claims none.
+  const shell = command => ({ type: 'assistant', message: { content: [{ type: 'tool_use', name: 'Bash', input: { command } }] } });
+  const script = "python - <<'EOF'\np='剧本/第06集.md'\nopen(p,'w').write(s)\nEOF";
+  assert.deepEqual(edited_changes(changes, adapter_of('claude').events.edits(shell(script)), 'win32'), ['剧本/第06集.md']);
+  assert.deepEqual(edited_changes(changes, adapter_of('claude').events.edits(shell('sed -i s/a/b/ 剧本/库存.yaml')), 'win32'), ['剧本/库存.yaml']);
+  assert.deepEqual(adapter_of('claude').events.edits(shell('grep -n x 剧本/库存.yaml 2>&1 | head')), []);
 });
 
 test('a free member that exits without answering fails only its own execution', async t => {
@@ -3382,4 +3414,59 @@ test('the wake-up opening says who asked: user, host, detached work, hand-back o
   assert.match(opening([{ purpose: 'ask', created_by: 'host', batch_id: 0 }]), /^主持人派你（Codex）在后台独立完成/);
   assert.match(opening([{ purpose: 'handoff', created_by: 'host' }]), /^你（Codex）派出的工作已交回/);
   for (const purpose of ['handoff', 'notice', 'goal_continue']) assert.doesNotMatch(opening([{ purpose }]), /点名了你|简单消息可跳过技能/);
+});
+
+
+test('restart recovery captures only the exact completed delivery and never redelivers', async t => {
+  for (const scenario of ['codex', 'failed-turn', 'unknown-error', 'old-turn', 'child-turn', 'conflict', 'claude', 'wrong-session', 'denied', 'empty', 'answered', 'rejected', 'legacy-retry']) {
+    const f = await free_fixture(t); let sent = 0;
+    const is_codex = ['codex', 'failed-turn', 'unknown-error', 'old-turn', 'child-turn', 'conflict', 'empty'].includes(scenario);
+    f.config.participants.Claude.adapter = is_codex ? 'codex_cli' : 'claude';
+    const path = join(f.config.directory, 'recovery.log');
+    const turn_id = scenario === 'old-turn' ? 'previous-turn' : 'current-turn';
+    const root_turn_id = scenario === 'child-turn' ? 'parent-turn' : turn_id;
+    const codex = [{ type: 'session_meta', payload: { id: 'thread-id', source: 'cli' } },
+      { type: 'event_msg', payload: { type: 'task_started', turn_id, root_turn_id } },
+      { type: 'event_msg', payload: { type: 'task_complete', turn_id, root_turn_id, last_agent_message: scenario === 'empty' ? '' : 'Recovered answer' } }];
+    if (scenario === 'conflict') codex.push({ type: 'event_msg', payload: { type: 'turn_aborted', turn_id, root_turn_id } });
+    if (scenario === 'old-turn') codex.push({ type: 'event_msg', payload: { type: 'task_started', turn_id: 'current-turn', root_turn_id: 'current-turn' } });
+    // Trimmed real task_complete.error shape (2026-11-13), with a synthetic residual final remark to forbid capture.
+    if (scenario === 'failed-turn') codex[2].payload.error = { message: 'This content was flagged for possible cybersecurity risk.', codex_error_info: 'cyber_policy' };
+    if (scenario === 'unknown-error') codex[2].payload.error = ['unrecognized future format'];
+    const claude = [{ type: 'system', subtype: 'init', session_id: 'session-id' },
+      { type: 'assistant', session_id: 'session-id', message: { content: [{ type: 'text', text: 'Recovered answer' }] } },
+      { type: 'result', session_id: scenario === 'wrong-session' ? 'other-session' : 'session-id', is_error: false, subtype: 'success',
+        permission_denials: scenario === 'denied' ? [{ tool_name: 'Bash', tool_input: { command: 'denied-command' } }] : [] }];
+    const prefix = is_codex ? '' : JSON.stringify({ type: 'result', session_id: 'old-session', subtype: 'success', is_error: false }) + '\n';
+    writeFileSync(path, prefix + (is_codex ? codex : claude).map(JSON.stringify).join('\n') + '\n');
+    const record = is_codex ? { kind: 'codex_turn', thread_id: 'thread-id', turn_id: 'current-turn', rollout_path: path }
+      : { kind: 'claude_process', session_id: 'session-id', log_path: path, offset: Buffer.byteLength(prefix) };
+    const deliver = async (adapter, binding, task) => {
+      sent++; task.on_recovery(record);
+      task.on_process(Object.assign(new EventEmitter(), { kill() {} }));
+      return { status: 'accepted' };
+    };
+    await new FreeRoomRunner(f.config, f.store, deliver).tick();
+    const execution = f.state.executions[0];
+    if (scenario === 'answered') execution.status = 'completed';
+    if (scenario === 'rejected') execution.delivery = { last_submission: { outcome: 'rejected' } };
+    if (scenario === 'legacy-retry') {
+      f.store.db.prepare("UPDATE free_deliveries SET status='retry_wait' WHERE member='Claude'").run();
+      f.store.db.prepare('INSERT OR REPLACE INTO metadata VALUES (?,?)').run(`retry-reason:${execution.id}`, 'runner_restarted');
+      f.store.db.prepare('DELETE FROM metadata WHERE key=?').run(`recovery:${execution.id}`);
+      execution.retry = { attempt: 1, retry_at: 1 };
+    }
+    await new FreeRoomRunner(f.config, f.store, deliver).tick();
+    const captured = ['codex', 'claude'].includes(scenario);
+    assert.equal(sent, 1, scenario);
+    assert.equal(f.state.posts?.length || 0, captured ? 1 : 0, scenario);
+    assert.equal(execution.status, captured || scenario === 'answered' ? 'completed' : 'failed', scenario);
+    assert.equal(f.state.calls.some(call => call.endsWith(' retry_start')), false, scenario);
+    if (captured) {
+      assert.equal(f.state.posts[0].body.text, 'Recovered answer');
+      assert.equal(f.state.posts[0].body.submission_id, `auto-capture-${execution.id}`);
+    }
+    if (['failed-turn', 'unknown-error', 'old-turn', 'child-turn', 'conflict', 'wrong-session', 'legacy-retry'].includes(scenario)) assert.match(execution.result, /重启后无法确认上次执行结果/, scenario);
+    if (['empty', 'denied'].includes(scenario)) assert.match(execution.result, /会话已结束，但未提交本次回答/, scenario);
+  }
 });

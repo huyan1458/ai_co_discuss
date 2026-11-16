@@ -1,5 +1,6 @@
 /** English CLI strings. */
 export default {
+  "CLI 运行超过 {seconds} 秒仍未结束，已终止": "CLI exceeded the runtime limit of {seconds} seconds and was terminated",
   "room-invite 创建待签到席位并签发邀请；提供 member_id 时重发该席位链接，旧链接失效。须提供 room_id、token，可选 level（discuss/read）、folders、duration（1h/today/3d）、site_url；程序先读名单 revision 再建席位。链接有效 10 分钟，未签到席位 7 天结束；未绑定线上站点时只建立席位。": "room-invite reserves a seat and issues an invitation; member_id regenerates that seat's link and invalidates the old one. Requires room_id and token; optional level (discuss/read), folders, duration (1h/today/3d), site_url. The runner reads the roster revision before creating a seat. Links last 10 minutes; unclaimed seats end after 7 days. Without a connected hosted site, only the seat is created.",
   "连不上 {host}：{seconds} 秒内没有响应，请检查这台电脑的网络或代理后重试": "Cannot connect to {host}: no response within {seconds} seconds. Check this computer's network or proxy and try again",
   "连不上 {host}：连接被断开（{reason}），请检查这台电脑的网络或代理后重试": "Cannot connect to {host}: the connection was closed ({reason}). Check this computer's network or proxy and try again",

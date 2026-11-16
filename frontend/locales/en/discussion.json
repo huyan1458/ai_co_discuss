@@ -1,4 +1,9 @@
 {
+  "额度已用尽，请等待重置或改派其他成员。": "Usage limit reached. Wait for it to reset or assign another member.",
+  "登录已失效，请在本机重新登录后再试。": "Sign-in has expired. Sign in again on this computer before retrying.",
+  "输出达到上限，请缩短要求的输出或拆分任务。": "Output limit reached. Request a shorter answer or split the task.",
+  "上下文压缩失败，请缩短输入或拆分任务后再试。": "Context compaction failed. Shorten the input or split the task before retrying.",
+  "安全策略拒绝，请核对请求内容与服务许可要求，不要原样重试。": "Blocked by a safety policy. Review the request and service access requirements; do not retry it unchanged.",
   "{value1} 是手动启动，轮到它时需到其 AI 会话触发；不接入可在进度看板点「跳过」本次发言": "{value1} is manually started. Trigger its turn in its AI session, or click Skip on the progress board.",
   "新消息会在 {value1} 回复后交给主持人；可在进度看板点「跳过」本次发言": "New messages go to the host after {value1} replies. Click Skip on the progress board to skip this turn.",
   "思考中": "Thinking",

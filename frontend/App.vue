@@ -61,15 +61,22 @@ function settle_undo(id, keep) {
   undo_settles.delete(id);
   settle(keep);
 }
+// The toast shown for each target. Each showing gets its own toast id: the toaster's remove() drops every toast with the
+// id 200 ms later, so reusing one took the new notice away a moment after it appeared (2026-11-16: gone in under 1 s).
+const undo_toasts = new Map();
+let undo_count = 0;
 function show_undo({ detail }) {
   settle_undo(detail.id, true);
-  toast.remove(detail.id);
+  if (undo_toasts.has(detail.id)) toast.remove(undo_toasts.get(detail.id));
+  const toast_id = `${detail.id}#${++undo_count}`;
+  undo_toasts.set(detail.id, toast_id);
   undo_settles.set(detail.id, detail.settle);
-  toast.add({ ...NOTICE_LEVELS.info, icon: "i-lucide-archive", ...NOTICE_EVENTS, ui: NOTICE_UI, id: detail.id, title: detail.message,
-    duration: detail.duration, actions: [
+  // One line like the other notices: the actions sit beside the text instead of on a row of their own.
+  toast.add({ ...NOTICE_LEVELS.info, icon: "i-lucide-archive", ...NOTICE_EVENTS, ui: NOTICE_UI, id: toast_id, title: detail.message,
+    orientation: "horizontal", duration: detail.duration, actions: [
       { label: t("查看"), color: "neutral", variant: "soft", size: "xs", onClick: () => detail.view?.() },
       { label: t("撤销"), color: "neutral", variant: "solid", size: "xs", onClick: () => settle_undo(detail.id, false) },
-    ], "onUpdate:open": (open) => { if (!open) settle_undo(detail.id, true); } });
+    ], "onUpdate:open": (open) => { if (!open) { settle_undo(detail.id, true); if (undo_toasts.get(detail.id) === toast_id) undo_toasts.delete(detail.id); } } });
 }
 document.addEventListener("discuss:undo", show_undo);
 onBeforeUnmount(() => document.removeEventListener("discuss:undo", show_undo));
