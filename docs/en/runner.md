@@ -87,9 +87,9 @@ Invite an AI on another computer into your room: it reads only the project files
 **Before you start**: both computers install CoDiscuss and run the local service; your computer is [connected to a hosted site](#from-a-hosted-site) with the relay deployed, and the other side reaches your room through that site's encrypted relay. While your computer is off or codiscuss is not running, the other side gets nothing.
 
 **Invite (your computer)**:
-1. In the right panel's "Invite members" dialog, choose "Another computer" on the "External" row, then pick what it may do (discussion only, or can read project), which project folders to open (only folders this room already has), and how long it stays (1 hour, today or 3 days).
-2. Choose "Create invitation" and send the link, QR code or pairing code. An invite works once within 10 minutes and can be revoked from the list below it. Paired phones and tablets can issue invites too.
-3. Whoever redeems it becomes a member right away; **there is no approval step**. A notice in the lower right says someone joined by invite; if it was not your invite, choose "Revoke" in its member menu at once.
+1. In the new-room panel or Invite members, choose External → Another computer and select the access, folders and membership duration after check-in.
+2. Choose Add a seat awaiting check-in (automatic when creating the room). The seat appears immediately in the right-hand roster; share its link, QR code or pairing code. The link lasts 10 minutes and binds one member; regenerating it invalidates the previous link. Without a connected hosted site, the seat shows that it is waiting for a link and explains why; generate it from the seat menu after connecting. Before check-in, the panel shows the automatic expiry deadline and Remove seat. Usage, read logs and access adjustments appear after check-in.
+3. Redemption completes check-in and starts the membership duration, with **no extra approval step**. Pending seats receive no work and do not participate in group replies or discussions; they end automatically after 7 days. An expired link leaves the seat intact.
 4. `@` it in the room; its answers appear in the conversation as usual. "Read log and access" in the member menu lists every file it read (recorded by your computer) and lets you extend, downgrade to discussion only, or revoke; revoking takes effect immediately.
 
 **Join (the other computer)**:

@@ -5,6 +5,7 @@
  * computer's own audit, not anything the other side reports.
  */
 import { computed, inject, ref, useId, watch } from "vue";
+import ExternalInviteCard from "./ExternalInviteCard.vue";
 import ConfirmDialog from "./ConfirmDialog.vue";
 import { DURATIONS, LEVEL_SHORT, extended_until, external_of, remaining_label, room_operations, time_ms } from "./external-members.js";
 import { t } from "./i18n.js";
@@ -18,7 +19,7 @@ const room = computed(() => view.value.room);
 // 降为只讨论 the dialog reads again, so its header and buttons follow at once.
 const info = computed(() => detail.value ? { level: detail.value.scope === "read" ? "read" : "discuss", expires_at: time_ms(detail.value.expires_at),
   directories: (detail.value.directories || []).map((path) => String(path).split(/[\\/]/).filter(Boolean).pop() || path),
-  computer: detail.value.machine_label || "", ended: detail.value.status === "removed" } : external_of(props.member));
+  computer: detail.value.machine_label || "", pending: detail.value.claimed_at === 0, ended: detail.value.status === "removed" } : external_of(props.member));
 const reads = ref([]), detail = ref(null), loading = ref(false), failure = ref("");
 const busy = ref(""), extend_to = ref("1h"), confirming = ref(false);
 
@@ -27,7 +28,8 @@ async function load() {
   loading.value = true;
   failure.value = "";
   try {
-    const [record, result] = await Promise.all([operations.member(room.value.id, props.member.id), operations.reads(room.value.id, props.member.id)]);
+    const record = await operations.member(room.value.id, props.member.id);
+    const result = record.claimed_at === 0 ? { reads: [] } : await operations.reads(room.value.id, props.member.id);
     detail.value = record;
     // Newest first: the latest reads are what the owner checks.
     reads.value = [...(result.reads || [])].reverse();
@@ -49,6 +51,7 @@ async function change(action, extra, success) {
   } catch (error) { bridge.notify("error", error.message); }
   finally { busy.value = ""; }
 }
+const pending_expiry = computed(() => t("{count} 天内未签到自动结束", { count: Math.max(0, Math.ceil(((info.value?.expires_at || 0) - Date.now()) / 86400000)) }));
 const revoke_items = [t("立即生效：之后的请求与读取一律被拒，未完成的执行作废。"), t("已经读出去的内容收不回，会留在对方 AI 的会话里。")];
 const date = (value) => bridge.format_time(time_ms(value));
 // Ties the extend control to its visible label.
@@ -65,18 +68,19 @@ function size(bytes) {
 
 <template>
   <UModal v-model:open="open" :title="t('外部成员 · {name}', { name: member ? bridge.display_name(member.name) : '' })"
-    :description="info ? [info.computer, LEVEL_SHORT[info.level], info.ended ? t('已结束') : remaining_label(info.expires_at)].filter(Boolean).join(' · ') : ''" :ui="{ content: 'glass-panel studio-modal', body: 'dialog-body' }">
+    :description="info ? [info.computer, LEVEL_SHORT[info.level], info.ended ? t('已结束') : info.pending ? [t('待签到'), pending_expiry].join(' · ') : remaining_label(info.expires_at)].filter(Boolean).join(' · ') : ''" :ui="{ content: 'glass-panel studio-modal', body: 'dialog-body' }">
     <template #body>
+      <ExternalInviteCard v-if="detail?.claimed_at === 0 && !info?.ended" :key="member.id" :member-id="member.id" :settings="{ level: detail.scope, duration: detail.duration, directories: detail.directories, invite_version: detail.invite_version }" />
       <div v-if="info" class="external-member">
         <!-- What is open now, laid out like an expert card's facts: a label column and a value column. -->
         <dl class="external-member-facts">
           <div><dt>{{ t("能做什么") }}</dt><dd>{{ LEVEL_SHORT[info.level] }}</dd></div>
           <div v-if="info.level === 'read'"><dt>{{ t("开放目录") }}</dt><dd :title="info.directories.join('、')">{{ info.directories.join("、") || "—" }}</dd></div>
-          <div><dt>{{ t("剩余时间") }}</dt><dd>{{ info.ended ? t("已结束") : remaining_label(info.expires_at) || "—" }}</dd></div>
-          <div v-if="detail?.usage"><dt>{{ t("用量") }}</dt><dd>{{ t("{used} / {limit} · 本小时 {hour} / {hour_limit} · 被拒 {denied} 次", { used: size(detail.usage.total_bytes), limit: size(detail.quota?.total_bytes), hour: size(detail.usage.hour_bytes), hour_limit: size(detail.quota?.hourly_bytes), denied: detail.usage.denied || 0 }) }}</dd></div>
+          <div v-if="!info.pending"><dt>{{ t("剩余时间") }}</dt><dd>{{ info.ended ? t("已结束") : remaining_label(info.expires_at) || "—" }}</dd></div>
+          <div v-if="!info.pending && detail?.usage"><dt>{{ t("用量") }}</dt><dd>{{ t("{used} / {limit} · 本小时 {hour} / {hour_limit} · 被拒 {denied} 次", { used: size(detail.usage.total_bytes), limit: size(detail.quota?.total_bytes), hour: size(detail.usage.hour_bytes), hour_limit: size(detail.quota?.hourly_bytes), denied: detail.usage.denied || 0 }) }}</dd></div>
         </dl>
         <section v-if="!info.ended" class="external-member-actions" :aria-label="t('调整')">
-          <div class="external-member-extend">
+          <div v-if="detail?.claimed_at" class="external-member-extend">
             <span :id="`${uid}-extend`" class="external-member-label">{{ t("延长") }}</span>
             <div class="expert-card-modes" role="radiogroup" :aria-labelledby="`${uid}-extend`">
               <button v-for="option in DURATIONS" :key="option.value" type="button" role="radio" :aria-checked="extend_to === option.value" @click="extend_to = option.value">{{ option.label }}</button>
@@ -84,12 +88,12 @@ function size(bytes) {
             <UButton :label="t('延长')" icon="i-lucide-clock-plus" size="xs" color="neutral" variant="outline" class="pb-action" :loading="busy === 'extend'" :disabled="Boolean(busy)" @click="change('extend', { expires_at: extended_until(info.expires_at, extend_to) }, t('已延长'))" />
           </div>
           <div class="external-member-buttons">
-            <UButton v-if="info.level === 'read'" :label="t('降为只讨论')" icon="i-lucide-eye-off" size="xs" color="neutral" variant="outline" class="pb-action" :loading="busy === 'downgrade'" :disabled="Boolean(busy)" @click="change('downgrade', { scope: 'discuss' }, t('已降为只讨论，之后不能再读项目文件'))" />
-            <UButton :label="t('撤销授权')" icon="i-lucide-ban" size="xs" color="error" variant="soft" :disabled="Boolean(busy)" @click="confirming = true" />
+            <UButton v-if="!info.pending && info.level === 'read'" :label="t('降为只讨论')" icon="i-lucide-eye-off" size="xs" color="neutral" variant="outline" class="pb-action" :loading="busy === 'downgrade'" :disabled="Boolean(busy)" @click="change('downgrade', { scope: 'discuss' }, t('已降为只讨论，之后不能再读项目文件'))" />
+            <UButton :label="info.pending ? t('移除席位') : t('撤销授权')" icon="i-lucide-ban" size="xs" color="error" variant="soft" :disabled="Boolean(busy)" @click="confirming = true" />
           </div>
         </section>
         <p v-else class="external-member-ended" role="status"><UIcon name="i-lucide-circle-slash" />{{ t("这位外部成员已结束，不能再调整；需要时重新邀请。") }}</p>
-        <section class="external-member-reads" :aria-label="t('读取记录')">
+        <section v-if="!info.pending" class="external-member-reads" :aria-label="t('读取记录')">
           <h4>{{ t("读取记录") }}</h4>
           <div v-if="loading && !reads.length" role="status" :aria-label="t('正在读取读取记录')"><USkeleton v-for="row in 3" :key="row" class="external-member-skeleton" /></div>
           <p v-else-if="failure" class="external-member-error" role="alert"><UIcon name="i-lucide-circle-alert" /><span>{{ failure }}</span><UButton :label="t('重试')" icon="i-lucide-refresh-cw" size="xs" color="neutral" variant="ghost" @click="load" /></p>
@@ -105,7 +109,7 @@ function size(bytes) {
           <p class="external-member-note">{{ t("记录由这台电脑保存，不采用对方上报的内容。") }}</p>
         </section>
       </div>
-      <ConfirmDialog v-model:open="confirming" :title="t('撤销外部成员')" :items="revoke_items" :confirm-label="t('撤销授权')" danger @confirm="change('revoke', {}, t('已撤销，对方之后的请求都会被拒绝'))" />
+      <ConfirmDialog v-model:open="confirming" :title="info?.pending ? t('移除席位') : t('撤销外部成员')" :items="info?.pending ? [] : revoke_items" :confirm-label="info?.pending ? t('移除席位') : t('撤销授权')" danger @confirm="change('revoke', {}, info?.pending ? t('席位已移除') : t('已撤销，对方之后的请求都会被拒绝'))" />
     </template>
   </UModal>
 </template>

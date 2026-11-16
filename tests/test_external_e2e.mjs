@@ -193,13 +193,19 @@ test('protocol: invites are single use and revocable; a revoked or expired membe
   // A used code does not work again, and a revoked invite never works.
   const first = await invite(b);
   assert.equal((await redeem(b, first.code)).status, 200);
-  assert.equal((await redeem(b, first.code)).status, 400, 'an invite is used once');
+  assert.equal((await redeem(b, first.code)).status, 409, 'a different key cannot take a claimed seat');
   const second = await invite(b);
   const file = join(b.home, 'revoke-invite.json');
   writeFileSync(file, JSON.stringify({ room_id: b.room.room.id, token: b.room.owner, invite_id: second.invite_id }));
   const revoked_invite = await run_codiscuss(b.home, ['launch', 'room-invite-revoke', '--file', file]);
   assert.equal(revoked_invite.status, 0, revoked_invite.stderr);
   assert.equal((await redeem(b, second.code)).status, 400, 'a revoked invite is refused');
+  const old = await invite(b);
+  const fresh = await invite(b, { member_id: old.member_id });
+  assert.equal(fresh.member_id, old.member_id);
+  assert.equal((await redeem(b, old.code)).status, 400, 'regeneration invalidates the old link');
+  await site_json(b.site.url, `${b.room.path}/external-members/${fresh.member_id}`, { token: b.room.owner, body: { action: 'revoke' } });
+  assert.equal((await redeem(b, fresh.code)).status, 409, 'removal prevents redemption');
 
   const revoked = await joined(b), expired = await joined(b);
   for (const a of [revoked, expired]) assert.equal((await member_api(b, a, 'GET', '/view')).status, 200);

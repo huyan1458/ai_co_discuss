@@ -43,7 +43,7 @@ from .free_room import describe_members, execution_notes, label_members, set_hos
 from .free_room import (ADAPTER_VALUE, LAYOUT_AFTER_SQL, LAYOUT_AT_SQL, continue_chain, execution_timeline, group_route_plan, retract_message, rewind_plan, rewind_room,
                         room_event_log, withdrawals)
 from .free_room import review_capability, review_roster, checked_review_plan, save_review_plan, check_review_retry
-from .free_room import review_ready, advance_review, late_answer
+from .free_room import review_ready, advance_review, late_answer, execution_diffs
 from .free_room import checked_sequence, continue_sequence, sequence_view
 from . import questions
 from .identity import MAX_ROOM_AGENTS, PARTICIPANTS, default_label_text, is_ai, is_participant
@@ -548,6 +548,10 @@ def require_room(connection, room_id):
     room["host_arrangements"] = host_arrangements(connection, room_id, room["scheduler_decisions"])
     room["cancelled_turns"] = cancelled_turns(connection, room_id)
     room["free"] = free_view(connection, room_id)
+    external_fields = {member["id"]: member.get("external") for member in room["free"]["members"] if member["access"] == "external"}
+    for member in room["members"]:
+        if member["id"] in external_fields:
+            member["external"] = external_fields[member["id"]]
     room["goal_state"] = goal_view(connection, room_id)
     # Where the room's own task starts when no goal was set: the owner's first message (COVERAGE 3③).
     first = connection.execute("SELECT MIN(id) FROM messages WHERE room_id=? AND author='用户'", (room_id,)).fetchone()[0]
@@ -739,10 +743,9 @@ def merge_round_groups(connection, room_id):
         group["host_scheduled"] = group["host_scheduled"] or row["role"] == "host"
     if not by_round:
         return []
-    active_experts = connection.execute("""SELECT COUNT(*) FROM room_members m
-        WHERE m.room_id=? AND m.status='active' AND m.role<>'host'
-        AND (m.access<>'manual' OR EXISTS(SELECT 1 FROM member_registrations reg
-            WHERE reg.member_id=m.id AND reg.token_hash=m.token_hash))""", (room_id,)).fetchone()[0]
+    from .free_room import REGISTERED_MEMBER
+    active_experts = connection.execute(f"""SELECT COUNT(*) FROM room_members
+        WHERE room_id=? AND status='active' AND role<>'host' AND {REGISTERED_MEMBER}""", (room_id,)).fetchone()[0]
     previous_answers = {}
     result = []
     for (session_id, number), group in sorted(by_round.items()):
@@ -3421,6 +3424,8 @@ class DiscussionHandler(BaseHTTPRequestHandler):
             result = adopt_recommendation(connection, room_id, token, int(parts[4]), self.read_payload())
         elif len(parts) == 6 and parts[3] == "executions" and parts[5] == "notes" and method == "GET":
             result = execution_notes(connection, room_id, int(parts[4]), token)
+        elif len(parts) == 6 and parts[3] == "executions" and parts[5] == "diff" and method == "GET":
+            result = execution_diffs(connection, room_id, int(parts[4]), token)
         elif len(parts) == 6 and parts[3] == "executions" and parts[5] == "late-answer" and method == "GET":
             result = late_answer(connection, room_id, int(parts[4]), token)
         elif len(parts) == 5 and parts[3] == "executions":

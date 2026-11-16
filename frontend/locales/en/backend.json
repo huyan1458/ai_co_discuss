@@ -809,5 +809,6 @@
   "该目录未对外部成员开放": "This directory is not open to the external member",
   "读取总量已达上限": "The total read volume limit has been reached",
   "配额 {key} 须为 1–{limit} 的整数": "Quota {key} must be an integer from 1 to {limit}",
-  "需要本房间外部成员的凭证": "This room's external member credential is required"
+  "需要本房间外部成员的凭证": "This room's external member credential is required",
+  "diffs 须为最多 {max_changed_files} 项的列表": "diffs must be a list of at most {max_changed_files} items"
 }

@@ -235,7 +235,7 @@ CREATE TABLE IF NOT EXISTS room_members (
     session_mode TEXT NOT NULL DEFAULT 'new'
 );
 CREATE UNIQUE INDEX IF NOT EXISTS member_name ON room_members(room_id,name) WHERE status<>'removed';
-CREATE UNIQUE INDEX IF NOT EXISTS member_credential ON room_members(room_id,token_hash);
+CREATE UNIQUE INDEX IF NOT EXISTS member_credential ON room_members(room_id,token_hash) WHERE token_hash<>'';
 
 -- Local service attestation, never a permission grant. Re-imported rooms require a fresh attestation.
 CREATE TABLE IF NOT EXISTS member_review_capabilities (
@@ -556,6 +556,9 @@ CREATE TABLE IF NOT EXISTS external_members (
     room_id TEXT NOT NULL REFERENCES rooms(id) ON DELETE CASCADE,
     token_hash TEXT NOT NULL,
     machine TEXT NOT NULL,
+    claimed_at INTEGER NOT NULL DEFAULT 0,
+    invite_version INTEGER NOT NULL DEFAULT 0,
+    invite_duration TEXT NOT NULL DEFAULT '1h',
     machine_label TEXT NOT NULL DEFAULT '',
     scope TEXT NOT NULL CHECK(scope IN ('discuss','read')),
     directories TEXT NOT NULL DEFAULT '[]',

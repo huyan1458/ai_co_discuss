@@ -1,4 +1,5 @@
 <script setup>
+import { awaiting_member } from "./external-members.js";
 /**
  * Everything about who is in the room and how it is set up, laid out in full: the rail's member menu is only the quick
  * entry to the same actions, so nothing here hides behind a menu.
@@ -25,7 +26,7 @@ import { t } from "./i18n.js";
 const { view, bridge, act } = inject("discussion");
 const ACCESS_LABELS = { manual: t("手动接入") };
 const STATUS_LABELS = { active: t("在场"), away: t("暂离") };
-const unregistered = (member) => member.access === "manual" && !member.registered_at;
+const unregistered = awaiting_member;
 // CLIs and API members this tool grants project access per run; App members are left to their own settings.
 const ACCESS_CLIENTS = ["codex_cli", "claude", "antigravity_cli", "api"];
 const CODEX_OPTIONS = [{ value: "codex_cli", label: "CLI" }, { value: "codex", label: "App" }];
@@ -147,6 +148,7 @@ const in_workflow = (name) => Boolean(workflow.value?.enabled && Object.values(w
  * collaboration can switch between its App and CLI here.
  */
 function access(member) {
+  if (member.access === "external") return { text: "" };
   if (ACCESS_LABELS[member.access]) return { text: ACCESS_LABELS[member.access] };
   const adapter = saved.value?.participants?.[member.name]?.adapter;
   if (!["codex", "codex_cli"].includes(adapter)) return { text: adapter ? ADAPTER_LABELS[adapter] || "CLI" : bridge.participant_access(member.name, room.value) };
@@ -335,7 +337,7 @@ const created = computed(() => room.value.created_at ? new Date(room.value.creat
             <span v-if="member.role === 'host'" class="member-card-host is-current" :title="t('主持人')"><UIcon name="i-lucide-crown" /><span data-slot="label">{{ t('主持人') }}</span></span>
             <UButton v-else-if="actions(member).host" class="member-card-host" :title="actions(member).host.label" :icon="actions(member).host.icon" :label="actions(member).host.label" size="xs" variant="ghost" color="neutral" :disabled="actions(member).host.disabled" @click="actions(member).host.onSelect()" />
             <UBadge v-if="in_workflow(member.name)" color="neutral" variant="outline" size="sm" :title="t('来自工作流「{name}」，提示词按工作流卡片发送', { name: workflow.label })">{{ t("工作流") }}</UBadge>
-            <UBadge :color="unregistered(member) ? 'warning' : member.status === 'active' ? 'success' : 'neutral'" variant="subtle" size="sm">{{ unregistered(member) ? t('待注册') : STATUS_LABELS[member.status] || member.status }}</UBadge>
+            <UBadge :color="unregistered(member) ? 'warning' : member.status === 'active' ? 'success' : 'neutral'" variant="subtle" size="sm">{{ unregistered(member) ? (member.access === 'external' ? t('待签到') : t('待注册')) : STATUS_LABELS[member.status] || member.status }}</UBadge>
           </header>
           <dl class="member-card-facts">
             <div><dt>{{ t("接入") }}</dt><dd>

@@ -32,6 +32,7 @@ import { FreeRoomRunner, free_task_files } from './free_runner.mjs';
 import { assert_workflow_enabled, bind_room_workflow, delete_workflow, get_workflow, list_workflows, load_room_workflow, parse_workflow_draft, preview_workflow, rename_workflow, save_workflow, set_workflow_disabled, workflow_cards, workflow_directory, WORKFLOW_ID_PATTERN } from './workflows.mjs';
 import { assert_shared_home, CONNECTION_FIELDS, configuration_snapshot, read_registry, registered_identity, register_room, service_home, service_pid, start_service } from './discussion_service.mjs';
 import { site_fetch } from './entry_client.mjs';
+import { t } from './i18n.mjs';
 
 // A platform is a type; `Claude-review` is another Claude instance with its own session, model and effort. An ID is
 // English letters, digits and underscores only; a Chinese name is a display label.
@@ -133,7 +134,7 @@ pick-directory 在本机弹出系统目录选择窗口，返回所选路径；�
 browse-directory 列出常用项目及其中的子文件夹（只含文件夹名，分页），供其他设备选择目录；path 为空时列出常用项目。
 device-pairing 在本机生成 12 位设备配对码（2 分钟有效，可选 temporary 临时设备、without_passkey 允许这次配对不用通行密钥、site 指定已绑定的网站），扫码链接带本机密钥指纹；只能在这台电脑上执行，新设备只能在电脑前添加。
 devices 列出已配对设备；提供 revoke（设备 id）撤销设备。
-room-invite 为本机房间签发一次性外部成员邀请（10 分钟内兑换一次）；须提供 room_id、token，可选 level（discuss/read）、folders（项目目录序号）、duration（1h/today/3d）、site_url；返回配对码与链接，只显示这一次。
+${t("room-invite 创建待签到席位并签发邀请；提供 member_id 时重发该席位链接，旧链接失效。须提供 room_id、token，可选 level（discuss/read）、folders、duration（1h/today/3d）、site_url；程序先读名单 revision 再建席位。链接有效 10 分钟，未签到席位 7 天结束；未绑定线上站点时只建立席位。")}
 room-invites 列出房间未兑换的邀请（不含配对码）；须提供 room_id、token。
 room-invite-revoke 撤销一条未兑换的邀请；须提供 room_id、token、invite_id。
 projects 读取本机已配置的项目（名称与绝对路径）；提供 JSON（projects 列表）时整体替换保存。

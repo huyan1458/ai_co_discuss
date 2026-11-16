@@ -1598,6 +1598,22 @@ class MultiMemberTests(FreeRoomTests):
         states = {item["member"]: item["status"] for item in self.request(self.path)[1]["free"]["requests"]}
         self.assertEqual(states, {"Antigravity": "completed", "Claude": "pending"})
 
+    def test_file_diffs_show_counts_with_the_room_and_patches_to_the_owner(self):
+        """The card lists each file's line counts from the room read; its patch (project content) only the owner reads."""
+        self.say("改首页", to=["Claude"])
+        execution = self.reserve_for("Claude")[1]
+        diffs = [{"path": "index.html", "added": 2, "removed": 1, "patch": "@@ -1,1 +1,2 @@\n-a\n+b\n+c", "truncated": False},
+                 {"path": "logo.png", "skipped": "binary"}, {"path": "elsewhere.txt", "added": 1, "removed": 0, "patch": "+x"}]
+        status, saved = self.request(f"{self.path}/executions/{execution['id']}",
+                                     {"action": "report", "changes": ["index.html", "logo.png"], "diffs": diffs}, self.owner)
+        self.assertEqual(status, 200, saved)
+        report = next(item for item in self.request(self.path)[1]["free"]["executions"] if item["id"] == execution["id"])
+        self.assertEqual(report["diff_stats"], [{"path": "index.html", "added": 2, "removed": 1, "truncated": False},
+                                                {"path": "logo.png", "skipped": "binary"}], "a path outside the changes is dropped")
+        path = f"{self.path}/executions/{execution['id']}/diff"
+        self.assertEqual(self.request(path, token=self.member)[0], 403)
+        self.assertEqual(self.request(path, token=self.owner)[1]["diffs"][0]["patch"], diffs[0]["patch"])
+
     def test_changes_without_edited_files_are_not_reported_as_conflicts(self):
         """Overlapping snapshots alone cannot tell who wrote a file, so they are not flagged; the report is recorded once."""
         self.say("改首页", to=["Claude", "Codex"])

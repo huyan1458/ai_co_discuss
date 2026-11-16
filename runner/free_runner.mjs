@@ -6,6 +6,7 @@ import { basename, join, resolve } from 'node:path';
 import { adapter_of, BRANCHABLE_ADAPTERS, branch_session, capabilities_of, cleanup_room, deliver_task, delivery_receipt, session_exists, stored_delivery, takes_images } from './adapters/index.mjs';
 import { api as raw_api, overlapping_directories, read_rule } from './discussion_runner.mjs';
 import { SegmentLog } from './execution_progress.mjs';
+import { capture_base, file_diffs } from './file_diff.mjs';
 import { free_task_text, TASK_SUBCOMMANDS, with_expert_prompt } from './expert_prompts.mjs';
 import { entry_access, site_fetch } from './entry_client.mjs';
 import { atomic_json } from './files.mjs';
@@ -1032,7 +1033,10 @@ export class FreeRoomRunner {
     const extras = member_extra_directories(this.config, adapter).filter(item => item.access === 'write')
       .map(item => ({ directory: item.path, before: workspace_snapshot(item.path) })).filter(item => item.before);
     // A resumed execution keeps the snapshot of its first delivery, so changes made before the pause are reported too.
-    if ((before || extras.length) && !this.snapshots.has(execution.id)) this.snapshots.set(execution.id, { member: member.name, directory, before, extras });
+    if ((before || extras.length) && !this.snapshots.has(execution.id)) {
+      // The text of files already changed, so the card's line counts cover only what this execution did to them.
+      this.snapshots.set(execution.id, { member: member.name, directory, before, extras, base: capture_base(directory, before) });
+    }
     const generation = (this.generations.get(execution.id) || 0) + 1;
     this.generations.set(execution.id, generation);
     // The turn's events follow it when a keep_working dispatch moves it onto a new execution.
@@ -1287,8 +1291,9 @@ export class FreeRoomRunner {
     for (const set of [this.denied, this.not_started, this.not_retryable]) if (set.delete(old)) set.add(id);
     if (this.failure_classes.has(old)) { this.failure_classes.set(id, this.failure_classes.get(old)); this.failure_classes.delete(old); }
     const snapshot = this.snapshots.get(old);
+    const moved_before = snapshot?.before ? workspace_snapshot(snapshot.directory) : null;
     if (snapshot) this.snapshots.set(id, { member: snapshot.member, directory: snapshot.directory,
-      before: snapshot.before ? workspace_snapshot(snapshot.directory) : null,
+      before: moved_before, base: capture_base(snapshot.directory, moved_before),
       extras: (snapshot.extras || []).map(item => ({ directory: item.directory, before: workspace_snapshot(item.directory) })),
       ...(snapshot.edited ? { edited: new Set() } : {}) });
     for (const prefix of ['owner', 'delivery']) {
@@ -1480,10 +1485,14 @@ export class FreeRoomRunner {
         const current = workspace_snapshot(item.directory);
         return current ? changed_between(item.before, current).map(path => extra_change(item.directory, path)) : [];
       });
-      const changes = [...(after ? changed_between(snapshot.before, after) : []), ...extra].slice(0, 200);
+      const own = after ? changed_between(snapshot.before, after) : [];
+      const changes = [...own, ...extra].slice(0, 200);
       // `edited` is sent only when the adapter tracked edits; without it the site cannot tell who wrote a shared file.
       const edited = snapshot.edited ? { edited: edited_changes(changes, snapshot.edited) } : {};
-      try { await api(this.config, `/executions/${execution_id}`, { action: 'report', changes, ...edited }); }
+      // Line counts and patches of the files in the member's own working tree, for the card's "edited N files".
+      let diffs = [];
+      try { diffs = file_diffs(snapshot.directory, own.slice(0, 200), snapshot.base); } catch { /* The card then lists names only. */ }
+      try { await api(this.config, `/executions/${execution_id}`, { action: 'report', changes, ...edited, ...(diffs.length ? { diffs } : {}) }); }
       catch (error) { if (!/HTTP (404|409)/.test(error.message)) throw error; }
     }
   }

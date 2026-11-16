@@ -1,45 +1,41 @@
 <script setup>
 /**
  * The invite dialog's card for an AI on another computer: what it may do, which of this room's directories it reads,
- * how long it stays; "生成邀请" shows a link, QR code and pairing code to send yourself. Pending invitations are
- * listed under it and can be revoked.
+ * how long it stays. A reserved seat shows its current link, QR code and pairing code, or why a link is unavailable.
+ * The new-room panel uses the same card before the room exists (`draft`: choices over the panel's directories).
  */
 import { computed, inject, onUnmounted, ref, useId, watch } from "vue";
 import { renderSVG } from "uqr";
-import { DURATIONS, LEVELS, LEVEL_SHORT, external_of, remaining_label, room_operations, runner_text, time_ms } from "./external-members.js";
+import { seat_invites, DURATIONS, LEVELS, room_operations, runner_message, runner_text, time_ms } from "./external-members.js";
 import { t } from "./i18n.js";
 
 const emit = defineEmits(["remove"]);
-const { view, bridge } = inject("discussion");
+// Create-panel mode: the choices `{ level, duration, directories }`, over `paths` (the panel's project directories).
+const draft = defineModel("draft", { type: Object, default: null });
+const props = defineProps({ settings: { type: Object, default: null }, memberId: { type: Number, default: 0 }, paths: { type: Array, default: () => [] }, start: { type: Object, default: null } });
+const drafting = computed(() => draft.value !== null);
+const { view, bridge, act } = inject("discussion");
 const operations = room_operations(bridge);
 const room = computed(() => view.value.room);
-const level = ref("read"), duration = ref("1h");
+const level = ref(props.settings?.level || props.start?.level || draft.value?.level || "read"), duration = ref(props.settings?.duration || props.start?.duration || draft.value?.duration || "1h");
 // Only directories this room already has; the main one is chosen by default.
 const room_directories = computed(() => {
+  if (drafting.value) return props.paths.filter(Boolean);
   const models = view.value.launch.room_models;
   if (models?.room_id !== room.value?.id || !models.project_directory) return [];
   return [models.project_directory, ...(models.extra_directories || [])];
 });
-const directories = ref([]);
-watch(room_directories, (list) => { directories.value = directories.value.filter((item) => list.includes(item)); if (!directories.value.length && list.length) directories.value = [list[0]]; }, { immediate: true });
+const directories = ref([...(props.settings?.directories || props.start?.directories || draft.value?.directories || [])]);
+// The room's directories may still be loading: an empty list keeps the choice, so a card opened with one keeps it.
+watch(room_directories, (list) => { if (!list.length) return; directories.value = directories.value.filter((item) => list.includes(item)); if (!directories.value.length && list.length) directories.value = [list[0]]; }, { immediate: true });
 const needs_directory = computed(() => level.value === "read" && !directories.value.length);
-const busy = ref(""), invite = ref(null), invites = ref([]);
+const seat_id = ref(props.memberId);
+const busy = ref(""), invite = ref(null);
 const COPY_FEEDBACK_MS = 2000;
 const copied = ref("");
 let copy_timer = 0;
 
-/** Read the room's invitations not yet redeemed. */
-async function load_invites() {
-  if (!room.value) return;
-  try { invites.value = (await operations.list_invites(room.value.id)).invites || []; }
-  catch { /* The list stays as it was; generating or revoking shows its own error. */ }
-}
-watch(() => room.value?.id, () => { invite.value = null; load_invites(); }, { immediate: true });
-// A redeemed invitation leaves the list the moment its member appears (when the rail announces the join).
-watch(() => (room.value?.free?.members || []).filter((member) => external_of(member)).map((member) => member.id).join(), (now, before) => {
-  if (before !== undefined && now !== before) load_invites();
-});
-
+watch(() => room.value?.id, () => { invite.value = seat_invites.get(`${room.value?.id}:${seat_id.value}`) || null; if (invite.value?.url) invite.value.svg = renderSVG(invite.value.url, { border: 1 }); }, { immediate: true });
 async function run(name, operation) {
   if (busy.value) return;
   busy.value = name;
@@ -48,24 +44,25 @@ async function run(name, operation) {
   finally { busy.value = ""; }
 }
 
+watch([level, duration, directories], () => { if (drafting.value) draft.value = { level: level.value, duration: duration.value, directories: [...directories.value] }; }, { immediate: true });
+// Opened for a room just created: generate as soon as its directories are known (at once when it reads none).
+let started = false;
+watch(room_directories, () => {
+  if (!props.start || started || (level.value === "read" && !room_directories.value.length)) return;
+  started = true;
+  generate();
+}, { immediate: true, flush: "post" });
+
 /** Ask this computer to sign an invitation; the dialog shows it until the user closes or generates another. */
 function generate() {
   return run("create", async () => {
     // Directories go by their place in the room's list (main first), never as paths.
     const folders = directories.value.map((path) => room_directories.value.indexOf(path)).filter((index) => index >= 0);
-    const result = await operations.create_invite(room.value.id, { level: level.value, duration: duration.value,
+    const result = await operations.create_invite(room.value.id, { member_id: seat_id.value || undefined, level: level.value, duration: duration.value,
       ...(level.value === "read" ? { folders } : {}) });
+    seat_id.value = result.member_id;
+    await act("refresh");
     invite.value = { ...result, svg: result.url ? renderSVG(result.url, { border: 1 }) : "" };
-    await load_invites();
-  });
-}
-
-function revoke(item) {
-  return run(`revoke:${item.invite_id}`, async () => {
-    await operations.revoke_invite(room.value.id, item.invite_id);
-    if (invite.value?.invite_id === item.invite_id) invite.value = null;
-    bridge.notify("info", t("邀请已撤销"));
-    await load_invites();
   });
 }
 
@@ -89,11 +86,12 @@ const uid = useId();
     <header class="external-invite-identity">
       <span class="external-invite-avatar channel-avatar external" aria-hidden="true"><UIcon name="i-lucide-laptop-minimal" /></span>
       <span class="external-invite-names"><strong>{{ t("另一台电脑") }}</strong><small>{{ t("对方用自己电脑上的 AI 加入，只读本房间开放的内容") }}</small></span>
-      <span class="external-invite-tools">
+      <span v-if="!memberId" class="external-invite-tools">
         <button type="button" :aria-label="t('移除这张卡片')" :title="t('移除这张卡片')" @click="emit('remove')"><UIcon name="i-lucide-x" /></button>
       </span>
     </header>
     <template v-if="!invite">
+      <template v-if="!seat_id">
       <div class="external-invite-field">
         <span :id="`${uid}-level`" class="external-invite-label">{{ t("能做什么") }}</span>
         <div class="expert-card-modes" role="radiogroup" :aria-labelledby="`${uid}-level`">
@@ -103,7 +101,7 @@ const uid = useId();
       </div>
       <div v-if="level === 'read'" class="external-invite-field" role="group" :aria-labelledby="`${uid}-folders`">
         <span :id="`${uid}-folders`" class="external-invite-label">{{ t("开放目录") }}</span>
-        <p v-if="!room_directories.length" class="external-invite-empty">{{ t("本房间还没有项目目录，只能选“只讨论”。") }}</p>
+        <p v-if="!room_directories.length" class="external-invite-empty">{{ drafting ? t("还没有选项目目录，只能选“只讨论”。") : t("本房间还没有项目目录，只能选“只讨论”。") }}</p>
         <div v-else class="external-invite-folders">
           <UCheckbox v-for="path in room_directories" :key="path" :title="path" :model-value="directories.includes(path)" :label="leaf(path)" size="xs"
             @update:model-value="(on) => directories = on ? [...directories, path] : directories.filter((item) => item !== path)" />
@@ -116,36 +114,31 @@ const uid = useId();
           <button v-for="option in DURATIONS" :key="option.value" type="button" role="radio" :aria-checked="duration === option.value" @click="duration = option.value">{{ option.label }}</button>
         </div>
       </div>
+      </template>
+      <p v-if="seat_id" class="external-invite-hint">{{ t("待生成链接") }} · {{ t("链接只在生成时显示；请重新生成。未绑定线上网站时，需先在设置中绑定。") }}</p>
       <footer class="external-invite-footer">
         <p class="external-invite-warning" role="note"><UIcon name="i-lucide-triangle-alert" />{{ level === 'read' ? t("项目内容会经对方的 AI 发送给其模型服务商；读出去的内容收不回，撤销只阻止以后的读取。") : t("房间里发给它的内容会经对方的 AI 发送给其模型服务商。") }}</p>
         <p v-if="!view.launch.available && !view.launch.remote" class="external-invite-warning is-error" role="alert"><UIcon name="i-lucide-plug-zap" />{{ t("生成邀请需要本机服务，请在这台电脑打开本机网站。") }}</p>
-        <UButton icon="i-lucide-link" :label="t('生成邀请')" size="sm" class="channel-primary-button external-invite-generate" :loading="busy === 'create'" :disabled="Boolean(busy) || needs_directory || !view.launch.available && !view.launch.remote" @click="generate" />
+        <p v-if="drafting" class="external-invite-hint">{{ t("创建房间后添加待签到席位并生成邀请链接，再发给对方。") }}</p>
+        <UButton v-else icon="i-lucide-link" :label="seat_id ? (settings?.invite_version ? t('重新生成链接') : t('生成链接')) : t('添加待签到席位')" size="sm" class="channel-primary-button external-invite-generate" :loading="busy === 'create'" :disabled="Boolean(busy) || (!seat_id && needs_directory) || !view.launch.available && !view.launch.remote" @click="generate" />
       </footer>
     </template>
     <div v-else class="external-invite-result" role="status" aria-live="polite">
       <!-- eslint-disable-next-line vue/no-v-html -- an SVG this page rendered from the computer's own link -->
       <div v-if="invite.svg" class="external-invite-qr" role="img" :aria-label="t('邀请二维码')" v-html="invite.svg" />
       <div class="external-invite-result-body">
-        <p>{{ t("把链接或二维码发给对方；对方也可以在自己的共议里输入配对码：") }}</p>
-        <p class="external-invite-code">{{ invite.code }}</p>
+        <p v-if="invite.pending">{{ t("待生成链接") }}</p>
+        <p v-if="invite.pending && invite.reason" class="external-invite-hint">{{ runner_message(invite.reason_text, invite.reason) }}</p>
+        <p v-else>{{ t("把链接或二维码发给对方；对方也可以在自己的共议里输入配对码：") }}</p>
+        <p v-if="invite.url" class="external-invite-code">{{ invite.code }}</p>
         <div class="external-invite-copy">
-          <UButton :icon="copied === 'url' ? 'i-lucide-check' : 'i-lucide-copy'" :label="copied === 'url' ? t('已复制') : t('复制链接')" size="xs" :color="copied === 'url' ? 'success' : 'neutral'" variant="outline" @click="copy('url', invite.url)" />
-          <UButton :icon="copied === 'code' ? 'i-lucide-check' : 'i-lucide-copy'" :label="copied === 'code' ? t('已复制') : t('复制配对码')" size="xs" :color="copied === 'code' ? 'success' : 'neutral'" variant="outline" @click="copy('code', invite.code)" />
-          <UButton :label="t('再生成一个')" icon="i-lucide-refresh-cw" size="xs" color="neutral" variant="ghost" @click="invite = null" />
+          <UButton v-if="invite.url" :icon="copied === 'url' ? 'i-lucide-check' : 'i-lucide-copy'" :label="copied === 'url' ? t('已复制') : t('复制链接')" size="xs" :color="copied === 'url' ? 'success' : 'neutral'" variant="outline" @click="copy('url', invite.url)" />
+          <UButton v-if="invite.url" :icon="copied === 'code' ? 'i-lucide-check' : 'i-lucide-copy'" :label="copied === 'code' ? t('已复制') : t('复制配对码')" size="xs" :color="copied === 'code' ? 'success' : 'neutral'" variant="outline" @click="copy('code', invite.code)" />
+          <UButton :label="invite.url || settings?.invite_version ? t('重新生成链接') : t('生成链接')" icon="i-lucide-refresh-cw" size="xs" color="neutral" variant="ghost" @click="generate" />
         </div>
-        <p class="external-invite-hint">{{ t("{time} 前兑换有效，只能用一次。对方兑换后直接成为成员，你会收到提示，可随时撤销。", { time: date(invite.expires_at) }) }}</p>
-        <p class="external-invite-hint">{{ t("配对码不含这台电脑的公钥指纹，优先发链接或二维码。") }}</p>
+        <p v-if="invite.url" class="external-invite-hint">{{ t("{time} 前兑换有效，只能用一次。对方兑换后完成签到，你会收到提示，可随时撤销。", { time: date(invite.expires_at) }) }}</p>
+        <p v-if="invite.url" class="external-invite-hint">{{ t("配对码不含这台电脑的公钥指纹，优先发链接或二维码。") }}</p>
       </div>
-    </div>
-    <div v-if="invites.length" class="external-invite-pending">
-      <span class="external-invite-label">{{ t("待兑换的邀请") }}</span>
-      <ul>
-        <li v-for="item in invites" :key="item.invite_id">
-          <UIcon name="i-lucide-ticket" aria-hidden="true" />
-          <span>{{ t("{level} · 成员 {duration} · {left}内兑换", { level: LEVEL_SHORT[item.level] || item.level, duration: DURATIONS.find((option) => option.value === item.duration)?.label || item.duration, left: remaining_label(item.expires_at) }) }}</span>
-          <UButton :label="t('撤销邀请')" size="xs" color="error" variant="ghost" :loading="busy === `revoke:${item.invite_id}`" :disabled="Boolean(busy)" @click="revoke(item)" />
-        </li>
-      </ul>
     </div>
   </section>
 </template>

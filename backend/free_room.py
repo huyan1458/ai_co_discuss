@@ -189,6 +189,7 @@ def reported_capabilities(row):
 # Columns added after the first free-room tables; Python databases created by that build gain them here.
 LATER_COLUMNS = {"room_members": {"access": "TEXT NOT NULL DEFAULT 'runner'", "session_mode": "TEXT NOT NULL DEFAULT 'new'"},
                  "member_executions": {"changes": "TEXT NOT NULL DEFAULT ''", "edited": "TEXT NOT NULL DEFAULT ''", "cwd": "TEXT NOT NULL DEFAULT ''",
+                                       "diffs": "TEXT NOT NULL DEFAULT ''",
                                        "activity": "TEXT NOT NULL DEFAULT ''", "activity_at": "INTEGER NOT NULL DEFAULT 0",
                                        "paused_at": "INTEGER NOT NULL DEFAULT 0"},
                  "member_requests": {"chain_id": "INTEGER NOT NULL DEFAULT 0", "batch_id": "INTEGER NOT NULL DEFAULT 0",
@@ -208,6 +209,24 @@ def migrate_free_tables(connection):
         for name, definition in columns.items():
             if name not in present:
                 connection.execute(f"ALTER TABLE {table} ADD COLUMN {name} {definition}")
+    present = {row[1] for row in connection.execute("PRAGMA table_info(external_members)")}
+    claimed = next((row for row in connection.execute("PRAGMA table_info(external_members)") if row[1] == "claimed_at"), None)
+    if claimed and str(claimed[4]) == "1":
+        values = list(connection.execute("SELECT claimed_at,member_id FROM external_members"))
+        connection.execute("ALTER TABLE external_members DROP COLUMN claimed_at")
+        connection.execute("ALTER TABLE external_members ADD COLUMN claimed_at INTEGER NOT NULL DEFAULT 0")
+        connection.executemany("UPDATE external_members SET claimed_at=? WHERE member_id=?", values)
+    for name, default in (("claimed_at", 0), ("invite_version", 0)):
+        if name not in present:
+            connection.execute(f"ALTER TABLE external_members ADD COLUMN {name} INTEGER NOT NULL DEFAULT {default}")
+            if name == "claimed_at":
+                connection.execute("UPDATE external_members SET claimed_at=1")
+    if "invite_duration" not in present:
+        connection.execute("ALTER TABLE external_members ADD COLUMN invite_duration TEXT NOT NULL DEFAULT '1h'")
+    index = connection.execute("SELECT sql FROM sqlite_master WHERE name='member_credential'").fetchone()
+    if index and "WHERE" not in index[0].upper():
+        connection.execute("DROP INDEX member_credential")
+        connection.execute("CREATE UNIQUE INDEX member_credential ON room_members(room_id,token_hash) WHERE token_hash<>''")
     migrate_stop_results(connection)
     migrate_failure_classes(connection)
 
@@ -964,6 +983,7 @@ def recent_executions(connection, room_id, span=None):
             requests.append(request_data)
         executions.append({**public_execution(row), "texts": execution_texts(connection, row["id"]), "member": row["member"], "cwd": row["cwd"], "changes": json.loads(row["changes"] or "[]"),
             "changes_recorded": bool(row["changes"]), "request_ids": json.loads(row["request_ids"]),
+            "edited": json.loads(row["edited"]) if row["edited"] else None, "diff_stats": diff_stats(row["diffs"]),
             "answer_id": row["answer_id"], "request_message_id": row["request_message_id"],
             "layout_after": row["layout_after"], "layout_at": row["layout_at"] or row["created_at"], "requests": requests,
             "notes": row["note_count"], "denials": json.loads(row["denials"] or "[]"),
@@ -1034,7 +1054,9 @@ def possible_conflicts(connection, room_id, names):
 
 # An invited manual member that has not registered counts as absent: it receives no request and is never a target.
 REGISTERED_MEMBER = """(room_members.access<>'manual' OR EXISTS(SELECT 1 FROM member_registrations r
-    WHERE r.member_id=room_members.id AND r.token_hash=room_members.token_hash))"""
+    WHERE r.member_id=room_members.id AND r.token_hash=room_members.token_hash))
+    AND (room_members.access<>'external' OR EXISTS(SELECT 1 FROM external_members x
+    WHERE x.member_id=room_members.id AND x.claimed_at>0 AND x.ended_at=0 AND room_members.token_hash<>''))"""
 
 # One snapshot for group routing; the Worker uses the same SQL inside its atomic write assertion.
 GROUP_STATE_SQL = f"""SELECT json_object(
@@ -1203,7 +1225,7 @@ def authorize_free_write(connection, room_id, token, operation, payload):
 def active_members(connection, room_id, registered_only=True):
     """Map active member names to their rows; unregistered manual members are left out unless a discussion start needs them pending."""
     return {row["name"]: row for row in connection.execute(
-        f"SELECT * FROM room_members WHERE room_id=? AND status='active' AND ({REGISTERED_MEMBER} OR ?=0)", (room_id, int(registered_only)))}
+        f"SELECT * FROM room_members WHERE room_id=? AND status='active' AND ({REGISTERED_MEMBER} OR (?=0 AND access<>'external'))", (room_id, int(registered_only)))}
 
 
 def named_members(active, names, exclude=None):
@@ -2390,6 +2412,7 @@ def speaking_order(connection, room):
     speakers; a plan reaching into later rounds lists them apart in `later` (one name list per round), read-only. The
     revision changes with any of it.
     """
+    # The display includes reserved seats; dispatch uses active_members separately.
     active = [member for member in room["members"] if member["status"] == "active"]
     by_id = {member["id"]: member for member in active}
     ordered = [member["name"] for member in default_order(connection, room["id"], active)]
@@ -3220,6 +3243,53 @@ def changed_files(payload):
     return sorted(set(files))
 
 
+MAX_DIFF_PATCH_CHARS = 64 * 1024
+MAX_DIFFS_CHARS = 512 * 1024
+
+
+def file_diffs(payload, changes):
+    """The runner's line counts and patches of the changed files, kept within `changes`; '' when none were sent.
+
+    Each item is `{path, added, removed, patch, truncated, created?, deleted?}`, or `{path, skipped}` for a large or binary
+    file. Oversized patches are dropped (the counts stay) rather than refusing the whole report."""
+    items = payload.get("diffs")
+    if items is None:
+        return ""
+    if not isinstance(items, list) or len(items) > MAX_CHANGED_FILES:
+        raise ValueError(Text("diffs 须为最多 {max_changed_files} 项的列表", max_changed_files=MAX_CHANGED_FILES))
+    known, kept, total = set(changes), [], 0
+    for item in items:
+        if not isinstance(item, dict) or item.get("path") not in known:
+            continue
+        if item.get("skipped") in ("large", "binary"):
+            kept.append({"path": item["path"], "skipped": item["skipped"]})
+            continue
+        added, removed, patch = item.get("added"), item.get("removed"), item.get("patch", "")
+        if not all(isinstance(value, int) and not isinstance(value, bool) and value >= 0 for value in (added, removed)) or not isinstance(patch, str):
+            continue
+        truncated = bool(item.get("truncated"))
+        if len(patch) > MAX_DIFF_PATCH_CHARS or total + len(patch) > MAX_DIFFS_CHARS:
+            patch, truncated = "", True
+        total += len(patch)
+        kept.append({"path": item["path"], "added": added, "removed": removed, "patch": patch, "truncated": truncated,
+                     **{flag: True for flag in ("created", "deleted") if item.get(flag) is True}})
+    return json.dumps(kept, ensure_ascii=False)
+
+
+def diff_stats(stored):
+    """The stored diffs without their patches: what every room read carries; the patches are read on demand."""
+    return [{key: value for key, value in item.items() if key != "patch"} for item in json.loads(stored)] if stored else []
+
+
+def execution_diffs(connection, room_id, execution_id, token):
+    """One execution's file patches for its card, for the room owner (they hold project file content)."""
+    require_owner(connection, room_id, token)
+    row = connection.execute("SELECT diffs FROM member_executions WHERE room_id=? AND id=?", (room_id, execution_id)).fetchone()
+    if not row:
+        raise LookupError(Text("执行不存在"))
+    return {"execution_id": execution_id, "diffs": json.loads(row["diffs"]) if row["diffs"] else []}
+
+
 def edited_files(payload, changes):
     """The reported files the member's own edit tools wrote, kept within `changes`; '' when the runner could not tell."""
     if "edited" not in payload:
@@ -3383,8 +3453,8 @@ def execution_action(connection, room_id, execution_id, token, payload, member=N
         if row["changes"]:
             raise FileExistsError(Text("本次执行的改动已记录"))
         changes = changed_files(payload)
-        connection.execute("UPDATE member_executions SET changes=?,edited=? WHERE id=?",
-                           (json.dumps(changes, ensure_ascii=False), edited_files(payload, changes), execution_id))
+        connection.execute("UPDATE member_executions SET changes=?,edited=?,diffs=? WHERE id=?",
+                           (json.dumps(changes, ensure_ascii=False), edited_files(payload, changes), file_diffs(payload, changes), execution_id))
     elif action == "denials":
         # Like file changes, read from the software's output once its process ends; recorded once.
         saved = connection.execute("INSERT OR IGNORE INTO execution_denials (execution_id,room_id,denials) VALUES (?,?,?)",
@@ -3837,7 +3907,7 @@ def queue_invited_expert(connection, room_id, name, now):
     A manual expert is queued only once it has registered (the invite alone does not), and only once per invitation.
     """
     member = connection.execute("SELECT * FROM room_members WHERE room_id=? AND name=? AND status='active'", (room_id, name)).fetchone()
-    if not member or (member["adapter"] == "manual" and not registered_at(connection, member)):
+    if not member or name not in active_members(connection, room_id):
         return
     session = discussion.current_session(connection, room_id)
     if session and session["status"] != "concluded":

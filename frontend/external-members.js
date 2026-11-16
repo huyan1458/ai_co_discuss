@@ -7,7 +7,7 @@
  *
  * Contracts: room routes 子Task1 CONTRACT §1–2, invitations 子Task2 CONTRACT §2.2, invited records 子Task4 CONTRACT §1–2.
  */
-import { computed, effectScope, inject, ref, watch } from "vue";
+import { computed, effectScope, inject, ref, shallowRef, watch } from "vue";
 import { locale, t } from "./i18n.js";
 import { lockdown_support } from "../runner/adapters/profiles.mjs";
 import runner_english from "../runner/i18n_en.mjs";
@@ -104,6 +104,10 @@ export function remaining_label(expires_at, now = Date.now()) {
  * The external part of a room member (`free.members[]` with `access: "external"` and its `external` field), or null
  * for an ordinary member. Directories are only their last names here: the room view carries no paths.
  */
+/** Shared arrival gate for manual sessions and reserved external seats. */
+export const awaiting_member = (member) => member?.status === "active" &&
+  (member.access === "manual" ? !member.registered_at : member.access === "external" && member.external?.claimed_at === 0);
+export const seat_invites = new Map();
 export function external_of(member) {
   if (!member || (member.access !== "external" && !member.external)) return null;
   const details = member.external || {};
@@ -112,6 +116,7 @@ export function external_of(member) {
     expires_at: time_ms(details.expires_at),
     directories: (details.directories || []).map((item) => (typeof item === "string" ? item : item.name)),
     computer: details.machine_label || "",
+    pending: details.claimed_at === 0,
     ended: member.status === "removed",
   };
 }
@@ -138,6 +143,7 @@ export function remaining_short(expires_at, now = Date.now()) {
 export function external_tag(member, now = Date.now(), { full = false } = {}) {
   const info = external_of(member);
   if (!info) return "";
+  if (info.pending) return t("另一台电脑 · 待签到");
   if (info.ended) return t("外部 · 已结束");
   return full ? [t("外部"), LEVEL_SHORT[info.level], remaining_label(info.expires_at, now)].filter(Boolean).join(" · ")
     : [t("外部"), LEVEL_TINY[info.level], remaining_short(info.expires_at, now)].filter(Boolean).join(" · ");
@@ -160,6 +166,14 @@ export function extended_until(expires_at, duration, now = Date.now()) {
 }
 
 /** B's operations on its invitations and external members. */
+/**
+ * An invitation the new-room panel asked for, waiting for the room it creates: `{ options, known, at }`, where `options`
+ * are the card's choices and `known` the rooms that existed when it was submitted. The first new room opened within
+ * INVITE_AFTER_CREATION_MS takes it; a failed creation leaves it to expire.
+ */
+export const invite_after_creation = shallowRef(null);
+export const INVITE_AFTER_CREATION_MS = 120000;
+
 export function room_operations(bridge) {
   // The room's owner credential when this browser holds one; without it the local website acts as the computer's owner.
   const owner = (room_id) => {
@@ -167,7 +181,11 @@ export function room_operations(bridge) {
   };
   const with_token = (room_id, payload) => ({ room_id, ...(owner(room_id) ? { token: owner(room_id) } : {}), ...payload });
   return {
-    create_invite: (room_id, options) => bridge.local_request(OPERATIONS.invite_create, with_token(room_id, options)),
+    create_invite: async (room_id, options) => {
+      const result = await bridge.local_request(OPERATIONS.invite_create, with_token(room_id, options));
+      seat_invites.set(`${room_id}:${result.member_id}`, result);
+      return result;
+    },
     list_invites: (room_id) => bridge.local_request(OPERATIONS.invite_list, with_token(room_id, {})),
     revoke_invite: (room_id, invite_id) => bridge.local_request(OPERATIONS.invite_revoke, with_token(room_id, { invite_id })),
     member: (room_id, member_id) => bridge.request(ROUTES.member(room_id, member_id), undefined, owner(room_id) || undefined),

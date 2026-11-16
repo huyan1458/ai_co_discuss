@@ -44,6 +44,8 @@ def default_label(name):
 
 def default_label_text(name, label):
     """Return display metadata only for the unchanged Custom platform nickname."""
+    if name.startswith("Custom-ext") and label == "另一台电脑" + name.removeprefix("Custom-ext"):
+        return text_payload(Text("另一台电脑{suffix}", suffix=name.removeprefix("Custom-ext")))
     if platform_of(name) == "Custom" and label == default_label(name):
         return text_payload(Text("自定义 API{suffix}", suffix=name[len("Custom"):]))
     return None

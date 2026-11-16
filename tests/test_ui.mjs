@@ -501,6 +501,7 @@ function create_form_fixture() {
       view.value.experts[id][`${name}-${number}`] = mode;
     } };
   const context = vm.createContext({ computed, ref, nextTick, defineProps: () => ({}), defineEmits: () => event => submissions.push(event),
+    invite_after_creation: ref(null),
     inject: () => ({ view, bridge, pending, act: () => {} }), onMounted: callback => callback(), onBeforeUnmount: () => {},
     window: { setInterval: () => 0, clearInterval: () => {} }, document: { hidden: false },
     watch: (...args) => { const stop = watch(...args); cleanups.push(stop); return stop; } });
@@ -1789,7 +1790,7 @@ test("external members read the room view's external field, and only declined or
   const now = Date.parse("2026-11-16T10:00:00");
   const member = { id: 7, name: "Claude-ext", access: "external", status: "active",
     external: { scope: "read", expires_at: Math.floor(now / 1000) + 2 * 3600 + 60, machine_label: "A 的笔记本", directories: [{ root: 0, name: "app" }] } };
-  assert.deepEqual(external_of(member), { level: "read", expires_at: (Math.floor(now / 1000) + 2 * 3600 + 60) * 1000, directories: ["app"], computer: "A 的笔记本", ended: false });
+  assert.deepEqual(external_of(member), { level: "read", expires_at: (Math.floor(now / 1000) + 2 * 3600 + 60) * 1000, directories: ["app"], computer: "A 的笔记本", pending: false, ended: false });
   assert.equal(external_tag(member, now), "外部 · 只读文件 · 剩 2 小时", "short enough for the rail at 1440 wide");
   assert.equal(external_tag(member, now, { full: true }), "外部 · 只读项目 · 剩余 2 小时", "the full wording for its hover text");
   assert.equal(external_tag({ ...member, status: "removed" }, now), "外部 · 已结束");

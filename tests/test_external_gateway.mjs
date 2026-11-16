@@ -51,11 +51,12 @@ function local_website(project) {
     if (pathname === `/api/rooms/${ROOM}` && owner) return Response.json({ title: '代码求助', free: { members: [{ name: 'Codex' }, { name: 'Claude-ext' }] } });
     if (pathname === `/api/rooms/${ROOM}/external-members` && owner && options.method === 'GET') return Response.json({ revision: 'rev-1', members: [] });
     if (pathname === `/api/rooms/${ROOM}/external-members` && owner) {
-      state.member_token = body.token;
+      state.name = body.name;
       return Response.json({ member: { member_id: 7, name: body.name, expires_at: body.expires_at }, revision: 'rev-2' }, { status: 201 });
     }
     if (pathname === `/api/rooms/${ROOM}/external-members/7` && owner) {
-      return Response.json({ member_id: 7, status: state.ended ? 'removed' : 'active', end_reason: state.ended ? 'revoked' : '', scope: state.scope, directories: state.directories });
+      if (body?.token) state.member_token = body.token;
+      return Response.json({ member_id: 7, name: state.name, invite_version: 1, duration: '1h', expires_at: body?.expires_at, status: state.ended ? 'removed' : 'active', end_reason: state.ended ? 'revoked' : '', scope: state.scope, directories: state.directories });
     }
     if (pathname === `/api/rooms/${ROOM}/external-members/7/reads` && owner) {
       return Response.json({ allowed: state.audit.allowed, recorded: state.audit.recorded, code: state.audit.allowed ? 'ok' : 'quota_hour_bytes' }, { status: state.audit.status });
@@ -107,7 +108,7 @@ async function deliver(env, { shared, frame }, options = {}) {
 async function joined(t) {
   const env = computer(t);
   env.website = local_website(env.project);
-  const { code } = await create_invite(env.home, { room_id: ROOM, token: OWNER, level: 'read', duration: '1h' });
+  const { code } = await create_invite(env.home, { room_id: ROOM, token: OWNER, level: 'read', duration: '1h' }, { fetcher: env.website.fetcher });
   env.member = await invitee(env.link);
   const answer = await deliver(env, await env.member.redeem(next_id(), code));
   assert.equal(answer.status, 200, answer.body.error);
@@ -117,11 +118,12 @@ async function joined(t) {
 }
 
 test('invites are issued only with the room owner credential, kept as a hash, listed without the code and revocable', async t => {
-  const { home, link } = computer(t);
+  const { home, link, project } = computer(t);
+  const website_mock = local_website(project);
   await assert.rejects(create_invite(home, { room_id: ROOM, token: 'x'.repeat(48) }),
     error => error.code === 'owner_required' && error.error_text.template === '需要本房间的控制凭据，且房间须在这台电脑上');
   await assert.rejects(create_invite(home, { room_id: ROOM, token: OWNER, folders: [3] }), /项目目录的序号/);
-  const invite = await create_invite(home, { room_id: ROOM, token: OWNER, level: 'read', duration: 'today' });
+  const invite = await create_invite(home, { room_id: ROOM, token: OWNER, level: 'read', duration: 'today' }, { fetcher: website_mock.fetcher });
   assert.match(invite.code, /^[0-9A-Z]{4}-[0-9A-Z]{4}-[0-9A-Z]{4}$/);
   assert.ok(invite.expires_at - Date.now() <= 10 * 60000 && invite.expires_at - Date.now() > 9 * 60000, 'ten minutes to redeem');
   const [base, fragment] = invite.url.split('#');
@@ -142,7 +144,7 @@ test('invites are issued only with the room owner credential, kept as a hash, li
 test('redeeming proves the code and the key once; B adds the member with the owner credential and publishes the key', async t => {
   const env = computer(t);
   env.website = local_website(env.project);
-  const { code } = await create_invite(env.home, { room_id: ROOM, token: OWNER });
+  const { code } = await create_invite(env.home, { room_id: ROOM, token: OWNER }, { fetcher: env.website.fetcher });
   const member = await invitee(env.link), thief = await invitee(env.link);
   // A request signed with another key than the one it registers proves nothing.
   const forged = await member.redeem(next_id(), code, { public_key: thief.key.public_key });
@@ -150,27 +152,58 @@ test('redeeming proves the code and the key once; B adds the member with the own
   const answer = await deliver(env, await member.redeem(next_id(), code));
   assert.equal(answer.status, 200, answer.body.error);
   assert.equal(answer.body.external_id, member.key.id);
-  assert.deepEqual(answer.body.member, { id: 7, name: 'Claude-ext2' }, 'the first free <platform>-ext name');
+  assert.deepEqual(answer.body.member, { id: 7, name: 'Custom-ext' }, 'the first free <platform>-ext name');
   assert.equal(answer.body.machine.fingerprint, machine_fingerprint(env.link));
   assert.deepEqual(answer.body.directories, [{ root: 0, name: 'project' }], 'folder names only, no paths');
   const created = env.website.calls.find(call => call.method === 'POST' && call.path === `/api/rooms/${ROOM}/external-members`);
   assert.equal(created.headers['X-Discussion-Token'], OWNER);
-  assert.deepEqual({ revision: created.body.revision, scope: created.body.scope, directories: created.body.directories, machine: created.body.machine, token: created.body.token },
-    { revision: 'rev-1', scope: 'read', directories: [env.project], machine: `ext:${member.key.id}`, token: answer.body.token });
+  assert.equal(created.body.pending, true);
+  assert.equal(created.body.revision, 'rev-1');
   assert.ok(!readFileSync(join(env.home, 'external.json'), 'utf8').includes(answer.body.token), 'only the member credential hash is kept');
   // The invite is used up, and the key is published with the signed list.
-  assert.match((await deliver(env, await thief.redeem(next_id(), code))).body.error, /邀请码不对或已过期/);
+  assert.equal((await deliver(env, await thief.redeem(next_id(), code))).status, 409);
+  const retry = await deliver(env, await member.redeem(next_id(), code));
+  assert.equal(retry.body.token, answer.body.token);
   const list = JSON.parse((await signed_device_list(env.home, env.link, Date.now(), external_entries(env.home))).body).devices;
   assert.deepEqual(list.map(({ id, kind, room }) => ({ id, kind, room })), [{ id: member.key.id, kind: 'external', room: ROOM }]);
 });
 
-test('five wrong proofs use every waiting invite up', async t => {
+test('interrupted activation resumes with the same key while another key cannot claim the seat', async t => {
   const env = computer(t);
   env.website = local_website(env.project);
-  const { code } = await create_invite(env.home, { room_id: ROOM, token: OWNER });
+  const invite = await create_invite(env.home, { room_id: ROOM, token: OWNER }, { fetcher: env.website.fetcher });
+  const member = await invitee(env.link), other = await invitee(env.link);
+  const fetcher = env.website.fetcher;
+  let interrupted = false;
+  env.website.fetcher = async (url, options) => {
+    if (!interrupted && options.body && JSON.parse(options.body).action === 'activate') {
+      interrupted = true;
+      return Response.json({ error: 'interrupted' }, { status: 503 });
+    }
+    return fetcher(url, options);
+  };
+  const results = await Promise.all([
+    deliver(env, await member.redeem(next_id(), invite.code)),
+    deliver(env, await other.redeem(next_id(), invite.code)),
+  ]);
+  assert.deepEqual(results.map(result => result.status).sort(), [409, 503]);
+  const winner = results[0].status === 503 ? member : other;
+  const retried = await deliver(env, await winner.redeem(next_id(), invite.code));
+  assert.equal(retried.status, 200);
+  const again = await deliver(env, await winner.redeem(next_id(), invite.code));
+  assert.equal(again.body.token, retried.body.token);
+  assert.deepEqual(again.body.member, retried.body.member);
+});
+
+test('five wrong proofs cool down only the attempting key', async t => {
+  const env = computer(t);
+  env.website = local_website(env.project);
+  const { code } = await create_invite(env.home, { room_id: ROOM, token: OWNER }, { fetcher: env.website.fetcher });
   const member = await invitee(env.link);
   for (let attempt = 0; attempt < 5; attempt++) assert.equal((await deliver(env, await member.redeem(next_id(), 'AAAAAAAAAAAA'))).status, 400);
-  assert.match((await deliver(env, await member.redeem(next_id(), code))).body.error, /邀请码不对或已过期/);
+  assert.equal((await deliver(env, await member.redeem(next_id(), code))).status, 429);
+  const other = await invitee(env.link);
+  assert.equal((await deliver(env, await other.redeem(next_id(), code))).status, 200);
 });
 
 test('an external signer reaches only the external actions, never the device actions, the local entrypoint or the owner credential', async t => {

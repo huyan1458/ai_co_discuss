@@ -71,6 +71,80 @@ class ExternalMemberTests(FreeRoomTests):
 
 
 class OwnerGrantTests(ExternalMemberTests):
+    def test_pending_seat_binding_is_versioned_and_activation_is_required(self):
+        seat = self.create(pending=True)
+        path = f"{self.owner_path}/{seat['member_id']}"
+        self.assertEqual(seat["claimed_at"], 0)
+        self.assertEqual(self.ext("view")[0], 403)
+        first = self.request(path, {"action": "invite"}, self.owner)[1]
+        second = self.request(path, {"action": "invite"}, self.owner)[1]
+        binding = {"action": "bind", "invite_version": first["invite_version"], "token": self.external,
+                   "machine": "ext:test", "expires_at": int(time.time()) + 3600}
+        self.assertEqual(self.request(path, binding, self.owner)[0], 409)
+        binding["invite_version"] = second["invite_version"]
+        self.assertEqual(self.request(path, binding, self.owner)[0], 200)
+        self.assertEqual(self.request(path, binding, self.owner)[0], 200)
+        self.assertEqual(self.ext("view")[0], 403)
+        self.assertEqual(self.request(path, {**binding, "machine": "ext:other"}, self.owner)[0], 409)
+        self.assertEqual(self.request(path, {**binding, "action": "activate"}, self.owner)[0], 200)
+        self.assertEqual(self.ext("view")[0], 200)
+        self.assertEqual(self.request(path, {**binding, "action": "activate"}, self.owner)[0], 200)
+        self.request(path, {"action": "revoke"}, self.owner)
+        self.assertEqual(self.request(path, binding, self.owner)[0], 409)
+
+    def test_pending_seats_are_excluded_from_dispatch_and_expire_in_seven_days(self):
+        from backend.free_room import active_members, recipients
+        ready = self.create()
+        pending = self.create(pending=True, name="Custom-ext")
+        self.create(pending=True, name="Custom-ext2")
+        view = self.request(self.path, token=self.owner)[1]
+        self.assertIn("Custom-ext", [item["name"] for item in view["speaking_order"]["items"]])
+        with closing(self.db()) as connection, connection:
+            self.assertIn(EXTERNAL, active_members(connection, self.room_id))
+            self.assertNotIn("Custom-ext", active_members(connection, self.room_id, registered_only=False))
+            with self.assertRaises(ValueError):
+                recipients(connection, self.room_id, {"to": ["Custom-ext"]})
+        for action in ("all", "sequential"):
+            message = self.say("test routing")[1]["message"]["id"]
+            plan = self.request(f"{self.path}/recommendations/{message}", token=self.owner)[1]
+            self.assertNotIn("Custom-ext", json.dumps(plan))
+            status, body = self.request(f"{self.path}/recommendations/{message}", {"action": action}, self.owner)
+            self.assertEqual(status, 200, body)
+        self.assertEqual(self.request(f"{self.path}/members/{pending['member_id']}", {"action": "role", "role": "host"}, self.owner)[0], 400)
+        current = self.request(f"{self.path}/discussion")[1]
+        status, body = self.request(f"{self.path}/discussion", {"action": "start", "goal": "seat eligibility", "revision": current["revision"]}, self.owner)
+        self.assertEqual(status, 200, body)
+        with closing(self.db()) as connection, connection:
+            from backend.session_room import roster_view
+            roster = roster_view(connection, self.room_id)
+            self.assertNotIn("Custom-ext", json.dumps(roster))
+            from backend.server import merge_round_groups
+            from backend.private_chat import chat_member
+            with self.assertRaises(FileExistsError):
+                chat_member(connection, self.room_id, pending["member_id"])
+            request = connection.execute("SELECT id,message_id FROM member_requests WHERE member_id=? ORDER BY id DESC LIMIT 1", (ready["member_id"],)).fetchone()
+            connection.execute("UPDATE member_requests SET answer_id=message_id,status='completed' WHERE id=?", (request["id"],))
+            session_id = connection.execute("SELECT MAX(id) FROM discussion_sessions WHERE room_id=?", (self.room_id,)).fetchone()[0]
+            connection.execute("""INSERT INTO session_requests(session_id,round,member_id,purpose,member_request_id,submission_id,created_at)
+                VALUES (?,1,?,'discuss',?,'seat-round-check','now')""", (session_id, ready["member_id"], request["id"]))
+            groups = merge_round_groups(connection, self.room_id)
+            self.assertEqual(groups[0]["speakers"], [EXTERNAL])
+            self.assertTrue(groups[0]["completed"])
+            connection.execute("UPDATE external_members SET created_at=? WHERE member_id=?", (int(time.time()) - 7 * 86400 - 1, pending["member_id"]))
+        expired = self.request(f"{self.owner_path}/{pending['member_id']}", token=self.owner)[1]
+        self.assertEqual((expired["status"], expired["end_reason"]), ("removed", "expired"))
+
+    def test_old_external_rows_migrate_as_claimed(self):
+        from backend.server import init_database
+        member = self.create()
+        with closing(self.db()) as connection, connection:
+            for column in ("claimed_at", "invite_version", "invite_duration"):
+                connection.execute(f"ALTER TABLE external_members DROP COLUMN {column}")
+        init_database(self.database, seed=False)
+        row = self.request(f"{self.owner_path}/{member['member_id']}", token=self.owner)[1]
+        self.assertGreater(row["claimed_at"], 0)
+        self.assertEqual(self.ext("view")[0], 200)
+
     def test_create_requires_fresh_revision_and_is_idempotent(self):
         payload = {"name": EXTERNAL, "adapter": "claude", "token": self.external, "machine": "fp:test", "scope": "read",
                    "directories": ["D:/work/app"], "expires_at": int(time.time()) + 3600}

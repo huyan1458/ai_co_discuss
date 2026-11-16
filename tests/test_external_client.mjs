@@ -183,6 +183,26 @@ test('joining keeps the key and credential out of the record and every command o
   assert.ok(readFileSync(join(home, 'external', 'secrets.json'), 'utf8').includes(TOKEN));
 });
 
+test('joining after a lost response reuses the persisted signing key and record', async t => {
+  const b = fake_b(), home = home_dir(t);
+  const input = { invite: link(b.fingerprint), adapter: 'claude' };
+  let dropped = false;
+  const fetcher = async (url, init) => {
+    const result = await b.fetcher(url, init);
+    if (!dropped && new URL(url).pathname.endsWith('/pair')) {
+      dropped = true;
+      throw new Error('lost reply');
+    }
+    return result;
+  };
+  await assert.rejects(invited_command(home, 'invited-join', input, { fetcher }));
+  const retry = await invited_command(home, 'invited-join', input, { fetcher });
+  const again = await invited_command(home, 'invited-join', input, { fetcher });
+  assert.equal(retry.record.id, again.record.id);
+  assert.equal(Object.keys(b.state.registered).length, 1);
+  assert.equal(Object.keys(read_store(home).records).length, 1);
+});
+
 test('a link whose fingerprint does not match is refused before anything is sent', async t => {
   const b = fake_b(), home = home_dir(t);
   await assert.rejects(invited_command(home, 'invited-join', { invite: link('c'.repeat(32)), adapter: 'claude' }, { fetcher: b.fetcher }), /指纹不符|fingerprint/);

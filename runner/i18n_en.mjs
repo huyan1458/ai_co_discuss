@@ -1,5 +1,6 @@
 /** English CLI strings. */
 export default {
+  "room-invite 创建待签到席位并签发邀请；提供 member_id 时重发该席位链接，旧链接失效。须提供 room_id、token，可选 level（discuss/read）、folders、duration（1h/today/3d）、site_url；程序先读名单 revision 再建席位。链接有效 10 分钟，未签到席位 7 天结束；未绑定线上站点时只建立席位。": "room-invite reserves a seat and issues an invitation; member_id regenerates that seat's link and invalidates the old one. Requires room_id and token; optional level (discuss/read), folders, duration (1h/today/3d), site_url. The runner reads the roster revision before creating a seat. Links last 10 minutes; unclaimed seats end after 7 days. Without a connected hosted site, only the seat is created.",
   "连不上 {host}：{seconds} 秒内没有响应，请检查这台电脑的网络或代理后重试": "Cannot connect to {host}: no response within {seconds} seconds. Check this computer's network or proxy and try again",
   "连不上 {host}：连接被断开（{reason}），请检查这台电脑的网络或代理后重试": "Cannot connect to {host}: the connection was closed ({reason}). Check this computer's network or proxy and try again",
   "实例启动失败（退出码 {code}）": "Instance failed to start (exit code {code})",
@@ -499,6 +500,9 @@ export default {
   "邀请对应的房间已不在这台电脑上": "The invited room is no longer on this computer",
   "邀请开放的项目目录已不在房间里，请重新邀请": "A project folder opened by the invite is no longer in the room. Send a new invite",
   "邀请码不对或已过期，请让对方重新生成邀请": "The invite code is wrong or has expired. Ask for a new invite",
+  "邀请已更新，请重新生成链接": "The invitation has changed. Generate a new link",
+  "尝试次数过多，请十分钟后重试": "Too many attempts. Try again in ten minutes",
+  "席位已被认领，请让房主重新生成邀请": "This seat has already been claimed. Ask the owner to generate a new invitation",
   "需要本房间的控制凭据，且房间须在这台电脑上": "This needs the room's control credential, and the room must be on this computer",
   "邀请链接无效，请向对方重新索取": "The invitation link is invalid; ask the other side for a new one",
   "电脑编号格式不对": "Invalid computer id",

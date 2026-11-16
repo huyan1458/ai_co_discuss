@@ -1,4 +1,5 @@
 <script setup>
+import { awaiting_member } from "./external-members.js";
 import { t } from './i18n.js';
 /** Right-rail board of a free room, laid out like the discussion progress board. */
 import { computed, inject, onBeforeUnmount, ref, watch } from "vue";
@@ -103,7 +104,7 @@ function announce_conflicts(room_id, conflicts) {
 watch(() => [room.value.id, free.value.conflicts], ([room_id, conflicts]) => announce_conflicts(room_id, conflicts), { immediate: true });
 
 /** Status dot colour, matching the discussion progress board. */
-const unregistered = (member) => member.access === "manual" && member.status === "active" && !member.registered_at;
+const unregistered = awaiting_member;
 function member_tone(member) {
   if (member.status === "away") return "neutral";
   // An external member that ended or expired is inert; one whose computer refused the last request needs a look.
@@ -122,7 +123,7 @@ function member_status(member, state) {
   if (external_of(member)?.ended) return t('已结束：不能再领取请求或读取文件');
   if (external_of(member) && external_of(member).expires_at && external_of(member).expires_at <= clock.value) return t('已到期：不能再领取请求或读取文件');
   if (member.status === "away") return t('已离开：不会被唤醒，可请回');
-  if (unregistered(member)) return t('待注册');
+  if (unregistered(member)) return member.access === 'external' ? t('待签到') : t('待注册');
   const execution = member.execution;
   if (execution && LIVE.includes(execution.status)) return execution.stale ? t('执行失联，停止未确认') : t('正在处理');
   // Out of quota: nothing is delivered until the reset, except that the owner's next message to it is tried at once.
@@ -156,6 +157,7 @@ function member_model(member) {
 /** Session and project files of a woken member, e.g. "借用会话 · 可写"; web members only read. */
 function member_setup(member) {
   // The line below the name wraps, so "外部 · 只读文件 · 剩 56 分" stays whole at the rail's default 280px.
+  if (external_of(member)?.pending) return "";
   if (external_of(member)) return external_tag(member, clock.value);
   const session = member.access === "runner" ? (member.session_mode === "borrowed" ? t('借用会话') : t('独立会话')) : "";
   return [session, bridge.participant_files(member.name, room.value, view.value.launch.room_models)].filter(Boolean).join(" · ");
@@ -257,11 +259,11 @@ const external_declined = computed(() => {
 const known_external = new Map();
 watch(() => [room.value.id, free.value.members], ([room_id, members]) => {
   if (!room_id || !Array.isArray(members)) return;
-  const ids = members.filter((member) => external_of(member)).map((member) => member.id);
+  const ids = members.filter((member) => external_of(member) && !awaiting_member(member)).map((member) => member.id);
   const seen = known_external.get(room_id);
   known_external.set(room_id, new Set(ids));
   if (!seen) return;
-  for (const member of members.filter((item) => external_of(item) && !seen.has(item.id)))
+  for (const member of members.filter((item) => external_of(item) && !awaiting_member(item) && !seen.has(item.id)))
     bridge.notify("warning", t('{name} 经邀请加入了房间（外部 · {level}）；不是你邀请的就在成员菜单里撤销', { name: bridge.display_name(member.name), level: external_tag(member) }));
 }, { immediate: true });
 // The member whose description is open for editing; the scheduler and the host read it from the room.
@@ -345,7 +347,7 @@ watch(() => room.value.id, () => { starting.value = false; });
           <MemoBlock v-for="member in [member_named(item.name)].filter(Boolean)" :key="member.id" :deps="[member_row_key(member, item.state)]">
             <UAvatar :src="bridge.identities[member.name]?.icon" :text="bridge.identities[member.name]?.initials" :alt="member.name" size="xs" class="channel-avatar" :class="[bridge.identities[member.name]?.style, { 'is-external': external_of(member) }]" />
             <div class="pb-member-body">
-              <div class="pb-member-name" :title="room.descriptions?.[member.name] || undefined">{{ bridge.display_name(member.name) }}<span v-if="bridge.display_name(member.name) !== member.name" class="member-id">{{ member.name }}</span><UIcon v-if="member.role === 'host'" name="i-lucide-crown" :title="t('主持人')" /><small :title="member_tag(member) || undefined">{{ member_tag(member) }}</small></div>
+              <div class="pb-member-name" :title="room.descriptions?.[member.name] || undefined">{{ bridge.display_name(member.name) }}<span v-if="!external_of(member) && bridge.display_name(member.name) !== member.name" class="member-id">{{ member.name }}</span><UIcon v-if="member.role === 'host'" name="i-lucide-crown" :title="t('主持人')" /><small :title="member_tag(member) || undefined">{{ member_tag(member) }}</small></div>
               <small v-if="in_workflow(member.name)" class="pb-workflow-member" :title="t('来自工作流「{value1}」', { value1: workflow.label })">{{ t('工作流') }}</small>
               <div v-if="member_setup(member)" class="pb-member-model" :title="external_of(member) ? external_tag(member, clock, { full: true }) : bridge.participant_session_hint(member.name, room, view.launch.room_models)">{{ member_setup(member) }}</div>
               <div class="pb-member-status" :class="`is-${member_tone(member)}`"><span class="pb-dot"></span><span class="pb-member-status-text" :title="member.execution?.status === 'failed' ? member.execution.result : member.held_until ? member_status(member, item.state) : undefined">{{ member_status(member, item.state) }}</span></div>

@@ -24,6 +24,7 @@ const DAY_MS = 86400000;
 const HOUR_MS = 3600000;
 export const INVITE_MS = 10 * 60000;
 const INVITE_ATTEMPTS = 5;
+const GLOBAL_INVITE_ATTEMPTS = 1000;
 // The website lets an external key through this long after it joined; a key in use is extended when this close to the end.
 const KEY_DAYS = 30;
 const KEY_REFRESH_DAYS = 7;
@@ -70,6 +71,7 @@ function with_registry(home, task) {
     const now = Date.now();
     for (const [key, invite] of Object.entries(registry.invites)) if (invite.expires_at <= now) delete registry.invites[key];
     for (const [key, entry] of Object.entries(registry.externals)) if (entry.key_expires_at <= now) delete registry.externals[key];
+    for (const [key, entry] of Object.entries(registry.redemptions || {})) if (entry.member_expires_at * 1000 <= now) delete registry.redemptions[key];
     // Saved even when the task refuses: a used invite or a counted failure must not come back.
     try { return task(registry, now); } finally { atomic_json(file, registry); }
   } finally { rmSync(path, { force: true }); }
@@ -189,8 +191,15 @@ async function invite_site(home, site_url) {
  * Issue an invite for one room: a 12-character code valid ten minutes, kept here only as its hash, and the link that
  * carries it with this computer's key fingerprint. The code and link are returned this once.
  */
-export async function create_invite(home, { room_id, token, level = 'read', folders, duration = '1h', site_url, by = 'computer' }, { fetcher } = {}) {
+export async function create_invite(home, { room_id, token, level = 'read', folders, duration = '1h', site_url, member_id, by = 'computer' }, { fetcher } = {}) {
   const room = await owned_room(home, room_id, token, fetcher);
+  if (member_id) {
+    const current = await local_call(room, 'GET', `/api/rooms/${encodeURIComponent(room_id)}/external-members/${member_id}`, { token, fetcher });
+    if (current.status !== 200) throw new GatewayError(current.status, current.body?.error || '外部成员不存在');
+    level = current.body.scope;
+    duration = current.body.duration;
+    folders = current.body.directories.map(path => room.directories.indexOf(path));
+  }
   if (!LEVELS.has(level)) throw new GatewayError(400, '开放等级须为 discuss 或 read');
   if (!DURATIONS.has(duration)) throw new GatewayError(400, '有效期须为 1h、today 或 3d');
   const chosen = level === 'discuss' ? [] : folders === undefined ? [0] : folders;
@@ -198,15 +207,41 @@ export async function create_invite(home, { room_id, token, level = 'read', fold
       || new Set(chosen).size !== chosen.length) {
     throw new GatewayError(400, '开放目录须为本房间项目目录的序号');
   }
-  const { site, link } = await invite_site(home, site_url);
+  const base = `/api/rooms/${encodeURIComponent(room_id)}/external-members`;
+  const call = async (method, path, body) => {
+    const result = await local_call(room, method, path, { token, body, fetcher });
+    if (result.status >= 400) throw new GatewayError(result.status, result.body?.error || '外部成员不存在');
+    return result.body;
+  };
+  if (!member_id) {
+    const listed = await call('GET', base);
+    const view = await call('GET', `/api/rooms/${encodeURIComponent(room_id)}`);
+    const taken = new Set([...(view.free?.members || []), ...(listed.members || [])].map(member => member.name));
+    const created = await call('POST', base, { pending: true, revision: listed.revision,
+      name: external_name('Custom', taken), scope: level, duration, directories: chosen.map(index => room.directories[index]) });
+    member_id = created.member.member_id;
+  }
+  let site, link;
+  try { ({ site, link } = await invite_site(home, site_url)); }
+  catch (error) {
+    if (!['site_missing', 'site_required'].includes(error.code)) throw error;
+    return { room_id, member_id, pending: true, reason: error.message, reason_text: error.error_text };
+  }
+  const seat = await call('POST', `${base}/${member_id}`, { action: 'invite' });
   let room_name = '';
   try { const view = await local_call(room, 'GET', `/api/rooms/${encodeURIComponent(room_id)}`, { token, fetcher }); room_name = String(view.body?.title ?? view.body?.room?.title ?? '').slice(0, 80); } catch { /* The name is only shown. */ }
   const code = Array.from(randomBytes(CODE_LENGTH), byte => CODE_ALPHABET[byte & 31]).join('');
   const fingerprint = machine_fingerprint(link);
   const invite = with_registry(home, (registry, now) => {
     const invite_id = randomBytes(8).toString('hex');
-    registry.invites[invite_id] = { code_hash: invite_code_hash(code), room_id, level, folders: chosen, duration, site, by, created_at: now, expires_at: now + INVITE_MS, failures: 0 };
-    return { invite_id, expires_at: now + INVITE_MS };
+    if ([...Object.values(registry.invites), ...Object.values(registry.redemptions || {})].some(previous => previous.room_id === room_id && previous.member_id === member_id && previous.invite_version > seat.invite_version)) {
+      throw new GatewayError(409, '邀请已更新，请重新生成链接');
+    }
+    for (const [key, previous] of Object.entries(registry.invites)) {
+      if (previous.room_id === room_id && previous.member_id === member_id) delete registry.invites[key];
+    }
+    registry.invites[invite_id] = { member_id, invite_version: seat.invite_version, code_hash: invite_code_hash(code), room_id, level, folders: chosen, duration, site, by, created_at: now, expires_at: now + INVITE_MS, failures: 0 };
+    return { invite_id, member_id, expires_at: now + INVITE_MS };
   });
   audit(home, { event: 'invite.created', room: room_id, invite: invite.invite_id, level, by });
   const payload = { v: 1, site, machine: link.id, machine_name: link.name, fp: fingerprint, code, room_name, level, expires_at: invite.expires_at };
@@ -251,9 +286,10 @@ export function external_entries(home, site) {
 /** Forget an external member's key, so the website stops letting it through. */
 async function drop_external(home, ctx, external_id, reason) {
   const dropped = with_registry(home, registry => {
-    if (!registry.externals[external_id]) return false;
+    const existed = Boolean(registry.externals[external_id]);
     delete registry.externals[external_id];
-    return true;
+    for (const [id, entry] of Object.entries(registry.redemptions || {})) if (entry.external_id === external_id) delete registry.redemptions[id];
+    return existed;
   });
   if (dropped) {
     audit(home, { event: reason === 'left' ? 'external.left' : 'external.dropped', external: external_id, reason });
@@ -261,18 +297,39 @@ async function drop_external(home, ctx, external_id, reason) {
   }
 }
 
-/** Take the invite whose code proves this key, counting a wrong proof against every waiting invite. */
+/** Take a proven invite; failed guesses cool down the signer without consuming any invitation. */
 function take_invite(home, machine_id, public_key, proof) {
-  const taken = with_registry(home, registry => {
+  const taken = with_registry(home, (registry, now) => {
     const supplied = Buffer.from(String(proof || ''));
-    for (const [id, invite] of Object.entries(registry.invites)) {
+    registry.redemptions ||= {};
+    const external_id = device_id_of(public_key);
+    if (!registry.guesses || registry.guesses.until <= now) registry.guesses = { count: 0, until: now + INVITE_MS };
+    if (registry.guesses.count >= GLOBAL_INVITE_ATTEMPTS) throw new GatewayError(429, '尝试次数过多，请十分钟后重试');
+    registry.guesses.count++;
+    registry.attempts ||= {};
+    for (const [key, entry] of Object.entries(registry.attempts)) if (entry.until <= now) delete registry.attempts[key];
+    const attempt = registry.attempts[external_id] ||= { count: 0, until: now + INVITE_MS };
+    if (attempt.count >= INVITE_ATTEMPTS) throw new GatewayError(429, '尝试次数过多，请十分钟后重试');
+    for (const [id, invite] of Object.entries(registry.redemptions)) {
       const expected = Buffer.from(proof_from_hash(invite.code_hash, machine_id, public_key));
       if (expected.length === supplied.length && timingSafeEqual(expected, supplied)) {
-        delete registry.invites[id];
+        if (invite.external_id !== external_id) throw new GatewayError(409, '席位已被认领，请让房主重新生成邀请', {}, 'seat_claimed');
         return { invite_id: id, ...invite };
       }
     }
-    for (const [id, invite] of Object.entries(registry.invites)) if (++invite.failures >= INVITE_ATTEMPTS) delete registry.invites[id];
+    for (const [id, invite] of Object.entries(registry.invites)) {
+      const expected = Buffer.from(proof_from_hash(invite.code_hash, machine_id, public_key));
+      if (expected.length === supplied.length && timingSafeEqual(expected, supplied)) {
+        if (registry.externals[external_id]) {
+          throw new GatewayError(409, '这把密钥已经加入过房间，请为新的邀请生成新密钥', {}, 'key_used');
+        }
+        registry.redemptions[id] = { ...invite, external_id,
+          member_expires_at: membership_end(invite.duration, Date.now()) };
+        delete registry.invites[id];
+        return { invite_id: id, ...registry.redemptions[id] };
+      }
+    }
+    attempt.count++;
     return null;
   });
   if (!taken) throw new GatewayError(400, '邀请码不对或已过期，请让对方重新生成邀请', {}, 'invite_invalid');
@@ -295,27 +352,34 @@ async function redeem(home, ctx, id, sealed, request) {
   try { external_id = device_id_of(public_key); } catch { throw new GatewayError(400, '外部成员公钥须为 P-256'); }
   if (!await verify_signature(public_key, sealed.signature, `${id}\n${sealed.body}`)) throw new GatewayError(400, '外部成员签名无效', {}, 'bad_signature');
   if (typeof platform !== 'string' || !/^[A-Za-z]{2,20}$/.test(platform)) throw new GatewayError(400, '请说明派来的是哪个 AI');
-  if (read_registry(home).externals[external_id]) throw new GatewayError(409, '这把密钥已经加入过房间，请为新的邀请生成新密钥', {}, 'key_used');
+  const previous = read_registry(home).externals[external_id];
+  if (previous) {
+    const previous_room = local_room(home, previous.room_id);
+    const status = await local_call(previous_room, 'GET', `/api/rooms/${encodeURIComponent(previous.room_id)}/external-members/${previous.member_id}`, { token: previous_room.token, fetcher: ctx.fetcher });
+    if (status.status === 404 || status.body?.status === 'removed') await drop_external(home, ctx, external_id, 'ended');
+  }
   const invite = take_invite(home, ctx.machine_id, public_key, proof);
   const room = local_room(home, invite.room_id);
   if (!room) throw new GatewayError(404, '邀请对应的房间已不在这台电脑上');
   const directories = invite.folders.map(index => room.directories[index]);
   if (directories.some(directory => !directory)) throw new GatewayError(409, '邀请开放的项目目录已不在房间里，请重新邀请');
   const base = `/api/rooms/${encodeURIComponent(room.id)}`;
-  const listed = await local_call(room, 'GET', `${base}/external-members`, { token: room.token, fetcher: ctx.fetcher });
-  if (listed.status !== 200) return { status: listed.status, body: listed.body ?? text_of('读取房间成员失败') };
   const view = await local_call(room, 'GET', base, { token: room.token, fetcher: ctx.fetcher });
-  const taken = new Set([...(view.body?.free?.members ?? []), ...(listed.body.members ?? [])].map(member => member?.name).filter(Boolean));
-  const token = randomBytes(32).toString('hex'), clean_label = String(label || '').replace(/[\u0000-\u001f]/g, ' ').trim().slice(0, LABEL_LIMIT);
-  const created = await local_call(room, 'POST', `${base}/external-members`, { token: room.token, fetcher: ctx.fetcher, body: {
-    revision: listed.body.revision, name: external_name(platform, taken), adapter: String(adapter || '').slice(0, 40), token,
-    machine: `ext:${external_id}`, machine_label: clean_label, scope: invite.level, directories, expires_at: membership_end(invite.duration, Date.now()) } });
-  if (![200, 201].includes(created.status)) return { status: created.status, body: created.body ?? text_of('建立外部成员失败') };
-  const member = created.body.member;
+  const token = createHmac('sha256', invite.code_hash).update(`seat-token-v1:${invite.invite_id}:${external_id}`).digest('hex');
+  const clean_label = String(label || '').replace(/[\u0000-\u001f]/g, ' ').trim().slice(0, LABEL_LIMIT);
+  const binding = { invite_version: invite.invite_version, token, machine: `ext:${external_id}`,
+    machine_label: clean_label, adapter: String(adapter || '').slice(0, 40), expires_at: invite.member_expires_at };
+  const seat_path = `${base}/external-members/${invite.member_id}`;
+  const created = await local_call(room, 'POST', seat_path, { token: room.token, fetcher: ctx.fetcher,
+    body: { action: 'bind', ...binding } });
+  if (created.status !== 200) return { status: created.status, body: created.body };
+  const member = created.body;
   with_registry(home, (registry, now) => {
     registry.externals[external_id] = { public_key: { kty: 'EC', crv: 'P-256', x: public_key.x, y: public_key.y }, room_id: room.id, member_id: member.member_id,
       member_name: member.name, token_hash: sha256(token), label: clean_label, site: invite.site, created_at: now, key_expires_at: now + KEY_DAYS * DAY_MS };
   });
+  const activated = await local_call(room, 'POST', seat_path, { token: room.token, fetcher: ctx.fetcher, body: { action: 'activate', ...binding } });
+  if (activated.status !== 200) return { status: activated.status, body: activated.body };
   audit(home, { event: 'external.joined', room: room.id, external: external_id, member: member.name, invite: invite.invite_id });
   await ctx.on_change?.();
   return { status: 200, body: { external_id, site: invite.site, machine: { id: ctx.machine_id, name: ctx.link?.name ?? '', fingerprint: ctx.link ? machine_fingerprint(ctx.link) : '' },

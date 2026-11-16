@@ -43,10 +43,10 @@ export function member_actions(member, { view, act, describe, external }) {
 function external_actions(member, { view, act, describe, external }) {
   const locked = !view.access?.can_manage;
   return [[
-    { label: t('读取记录与权限'), icon: "i-lucide-shield-check", disabled: locked, onSelect: () => external?.(member) },
+    { label: external_of(member).pending ? t('邀请链接') : t('读取记录与权限'), icon: "i-lucide-shield-check", disabled: locked, onSelect: () => external?.(member) },
     { label: t('名称与描述'), icon: "i-lucide-user-pen", disabled: locked, onSelect: () => describe(member.name) },
   ], [
     ...(busy(member) ? [{ label: t('停止'), icon: "i-lucide-circle-stop", color: "error", disabled: locked,
       onSelect: () => act("change_member", { member_id: member.id, name: member.name, action: "interrupt" }) }] : []),
-  ], [{ label: t('撤销授权'), icon: "i-lucide-ban", color: "error", disabled: locked || external_of(member).ended, onSelect: () => external?.(member, "revoke") }]].filter((group) => group.length);
+  ], [{ label: external_of(member).pending ? t('移除席位') : t('撤销授权'), icon: "i-lucide-ban", color: "error", disabled: locked || external_of(member).ended, onSelect: () => external?.(member, "revoke") }]].filter((group) => group.length);
 }

@@ -365,7 +365,18 @@ export async function join_invite(home, input, deps = {}) {
   if (invite.fingerprint && invite.fingerprint !== keys.fingerprint) {
     throw failure('fingerprint_mismatch', '这不是邀请你的那台电脑：指纹不符，已停止加入。请向对方确认链接');
   }
-  const pair = key_pair(), key_id = key_id_of(pair.public_key);
+  const attempt_key = `join:${createHash('sha256').update(`${invite.site}:${keys.id}:${invite.code}`).digest('hex')}`;
+  const attempt = with_store(home, (store, secrets) => {
+    const values = secrets.get();
+    if (!values[attempt_key]) {
+      values[attempt_key] = { pair: key_pair(), id: randomBytes(8).toString('hex') };
+      secrets.changed = true;
+    }
+    return values[attempt_key];
+  });
+  const existing = read_store(home);
+  if (existing.records[attempt.id] && read_secrets(home)[attempt.id]?.token) return { record: record_view(existing.records[attempt.id], existing) };
+  const pair = attempt.pair, key_id = key_id_of(pair.public_key);
   const answer = await relay_send({ site: invite.site, machine: keys.id, machine_key: keys.public_key }, { key_id, private_key: pair.private_key }, 'external-redeem',
     { public_key: pair.public_key, proof: invite_proof(invite.code, keys.id, pair.public_key), label: String(input.label || hostname()).slice(0, 80),
       // The model API has no platform name of its own; the inviting room names it as a custom AI.
@@ -376,7 +387,7 @@ export async function join_invite(home, input, deps = {}) {
     throw failure('join_incomplete', '对方返回的加入结果不完整');
   }
   return with_store(home, (store, secrets, now) => {
-    const id = randomBytes(8).toString('hex');
+    const id = attempt.id;
     const name = joined.machine?.name || keys.name || invite.machine_name;
     const machine = store.machines[keys.fingerprint] ||= { trust: 'default' };
     Object.assign(machine, { machine: keys.id, site: invite.site, machine_name: name, updated_at: now });
@@ -471,6 +482,9 @@ export async function leave(home, { id }, deps = {}) {
     Object.assign(record, { status: 'left', approvals: [], paused: true });
     remember(record, { outcome: 'left', remote }, now);
     delete secrets.get()[id];
+    for (const [key, value] of Object.entries(secrets.get())) {
+      if (key.startsWith('join:') && value.id === id) delete secrets.get()[key];
+    }
     secrets.changed = true;
     return { record: record_view(record, store), remote };
   });

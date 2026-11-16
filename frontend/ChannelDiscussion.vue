@@ -18,6 +18,7 @@ import { use_read_aloud } from "./read-aloud.js";
 import { use_broadcast } from "./broadcast.js";
 import { format_voice_time, use_voice_input, use_voice_press } from "./voice-input.js";
 import ExcerptEditCard from "./ExcerptEditCard.vue";
+import ExecutionChanges from "./ExecutionChanges.vue";
 import { add_excerpt, excerpt_mark_place, excerpt_range, excerpt_source, excerpts_markdown, file_preview, hold_selection, text_offset } from "./file-preview.js";
 import { keep_reading_position } from "./scroll-anchor.js";
 import { guard_token_edit, snap_caret, step_over_token, token_mirror } from "./attachment-tokens.js";
@@ -25,8 +26,10 @@ import MemoBlock from "./memo-block.js";
 import UTooltip from "@nuxt/ui/components/Tooltip.vue";
 import { motion, useSpring, useTransform } from "motion-v";
 import { locale, t } from './i18n.js';
-import { declined } from "./external-members.js";
+import ExternalMemberDialog from "./ExternalMemberDialog.vue";
+import { declined, awaiting_member } from "./external-members.js";
 
+const pending_seat = ref(null), pending_seat_open = ref(false);
 const emit = defineEmits(["detail", "edit"]);
 let topic_card = null;
 const { view, bridge, field, act, pending } = inject("discussion");
@@ -355,7 +358,7 @@ const is_manual_member = (member) => member?.access === "manual" && member.statu
 const speaking_member = computed(() => (room.value.members || []).find((member) => member.name === speaking_turn.value?.expert));
 // Invited manual experts that have not registered yet; each keeps its own notice until it does.
 const unregistered_members = computed(() => room.value?.archived ? []
-  : (room.value?.members || []).filter((member) => is_manual_member(member) && !member.registered_at));
+  : (room.value?.members || []).filter(awaiting_member));
 const queue_hint = computed(() => {
   const member = speaking_member.value;
   if (!speaking_turn.value || !member) return "";
@@ -507,7 +510,7 @@ function remove_excerpt(excerpt) { file_preview.excerpts = file_preview.excerpts
 // The excerpt whose comment is being edited in the composer's excerpt list.
 const editing_excerpt = ref(0);
 /** Active members a free-room message can name; chips appear only when there is a choice. */
-const free_members = computed(() => (room.value.free?.members || []).filter((member) => member.status === "active" && (member.access !== "manual" || member.registered_at)));
+const free_members = computed(() => (room.value.free?.members || []).filter((member) => member.status === "active" && !awaiting_member(member)));
 const free_host = computed(() => free_members.value.find((member) => member.role === "host"));
 /** In a discussion, an @mention of an active member is a direct question: it wakes that member outside turns, rounds and limits. */
 const mention_pool = computed(() => [...(mention_all.value ? [...ALL_ALIASES, ...SEQUENTIAL_ALIASES].map((name) => ({ name })) : []), ...free_members.value]);
@@ -2341,6 +2344,7 @@ function copy_message(message) { act("copy", `${view.value.room_site}/r/${room.v
 </script>
 
 <template>
+  <ExternalMemberDialog v-model:open="pending_seat_open" :member="pending_seat" />
   <section class="channel-conversation" role="tabpanel" :aria-label="t('消息')">
     <div v-if="view.query || view.source_filter" class="channel-filter-summary"><span>{{ [view.query && `“${view.query}”`, [view.host_only && t('主持人'), ...view.authors.map((name) => bridge.display_name(name)), view.mention_only && `@${bridge.display_name('用户')}`, view.card_kinds.length && t('{value1} 类卡片', { value1: view.card_kinds.length })].filter(Boolean).join('、')].filter(Boolean).join(' · ') }} · {{ view.messages_loading ? t('正在筛选…') : t('{value1} 条结果', { value1: view.source_filter ? transcript_messages.length : view.total }) }}</span><UButton :label="t('清除筛选')" size="xs" variant="link" color="neutral" @click="search = ''; act('filter', { query: '', mention: false, host: false, authors: [], kinds: [] })" /></div>
     <nav v-if="view.messages.length" ref="message_map" class="channel-message-map" :style="{ '--nav-entry-height': `${NAV_ENTRY_HEIGHT}px` }" :aria-label="t('发言快速导航')" @wheel.stop.passive="browse_navigation" @pointerleave="close_preview" @focusout="close_preview" @keydown.esc.stop="close_preview" @contextmenu="navigation_context_menu" @pointerdown="start_scrub" @pointermove="move_scrub" @pointerup="end_scrub" @pointercancel="end_scrub">
@@ -2582,7 +2586,7 @@ function copy_message(message) { act("copy", `${view.value.room_site}/r/${room.v
             </div>
             <section v-for="{ report, allowable, failed } in card.report_rows" :key="report.id" class="channel-execution-report" :aria-label="t('执行报告 #{value1}', { value1: report.id })">
               <div><strong>{{ t('执行 #{value1} · {value2}', { value1: report.id, value2: report.label }) }}</strong></div>
-              <p v-if="report.changes?.length">{{ t('文件变化：{value1}', { value1: report.changes.join('、') }) }}</p>
+              <ExecutionChanges v-if="report.changes?.length" :report="report" :room-id="room.id" />
               <p v-if="report.status !== 'completed' && report.result">{{ report.result }}</p>
               <ExecutionDenials v-if="report.denials?.length" :denials="report.denials" :allowable="allowable"
                 :busy="card.allowing === report.id" :error="card.allow_errors?.[report.id]" @allow="allow_and_resend(report)" />
@@ -2767,7 +2771,7 @@ function copy_message(message) { act("copy", `${view.value.room_site}/r/${room.v
               <button type="button" class="attachment-remove" :aria-label="t('移除 {value1}', { value1: file.file_name })" @click="act('remove_attachment', file.id)"><UIcon name="i-lucide-x" /></button>
             </div>
           </div>
-          <div v-for="unregistered_member in unregistered_members" :key="unregistered_member.name" class="channel-reply-draft channel-queue-hint"><UIcon name="i-lucide-user-round-x" /><span>{{ t('{value1} 待注册：在其会话中粘贴启动指令', { value1: bridge.display_name(unregistered_member.name) }) }}</span><UButton v-if="view.access?.can_manage" :icon="launch_copied === unregistered_member.name ? 'i-lucide-check' : 'i-lucide-copy'" :label="launch_copied === unregistered_member.name ? t('已复制') : t('复制启动指令')" aria-live="polite" size="xs" color="neutral" variant="ghost" class="channel-launch-copy" @click="copy_launch(unregistered_member.name)" /></div>
+          <div v-for="unregistered_member in unregistered_members" :key="unregistered_member.name" class="channel-reply-draft channel-queue-hint"><UIcon name="i-lucide-user-round-x" /><span>{{ unregistered_member.access === 'external' ? t('另一台电脑 · 待签到') : t('{value1} 待注册：在其会话中粘贴启动指令', { value1: bridge.display_name(unregistered_member.name) }) }}</span><UButton v-if="view.access?.can_manage && unregistered_member.access === 'external'" :label="t('邀请链接')" size="xs" color="neutral" variant="ghost" @click="pending_seat = unregistered_member; pending_seat_open = true" /><UButton v-if="view.access?.can_manage && unregistered_member.access !== 'external'" :icon="launch_copied === unregistered_member.name ? 'i-lucide-check' : 'i-lucide-copy'" :label="launch_copied === unregistered_member.name ? t('已复制') : t('复制启动指令')" aria-live="polite" size="xs" color="neutral" variant="ghost" class="channel-launch-copy" @click="copy_launch(unregistered_member.name)" /></div>
           <div v-if="queue_hint" class="channel-reply-draft channel-queue-hint"><UIcon name="i-lucide-clock" /><span>{{ queue_hint }}</span><UButton v-if="is_manual_member(speaking_member) && view.access?.can_manage" :icon="launch_copied === speaking_member.name ? 'i-lucide-check' : 'i-lucide-copy'" :label="launch_copied === speaking_member.name ? t('已复制') : t('复制启动指令')" aria-live="polite" size="xs" color="neutral" variant="ghost" class="channel-launch-copy" @click="copy_launch(speaking_member.name)" /></div>
           <div v-if="view.reply_to" class="channel-reply-draft"><UIcon name="i-lucide-corner-up-left" /><span>{{ t('回复 #{value1}', { value1: view.reply_to }) }}</span><UButton icon="i-lucide-x" color="neutral" variant="ghost" size="xs" :aria-label="t('取消回复')" @click="act('cancel_reply')" /></div>
         </template>

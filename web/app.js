@@ -17,7 +17,9 @@ const UPDATE_BATCH_MS = 100;
 const UPDATE_DRAG_RETRY_MS = 500;
 // A page back from the background after this long shows the opening load until its first full read, instead of old
 // cards that then change all at once; the cap keeps the cards from staying hidden behind a read that never ends.
-const RESUME_LOADING_AFTER_MS = 10000;
+// A look at another window (under five minutes) or a read that is back within a second shows no load at all.
+const RESUME_LOADING_AFTER_MS = 5 * 60000;
+const RESUME_LOADING_SHOW_MS = 1000;
 const RESUME_LOADING_MAX_MS = 15000;
 const TOAST_DURATION_MS = 3500;
 // How long an archived room can be taken back before the archive is saved.
@@ -120,7 +122,15 @@ const PLATFORM_IDENTITIES = {
   Custom: { label: t('自定义 API'), initials: "API", style: "custom", api_label: t('自定义 API'), description: t('AI 身份') },
 };
 // An instance shows its platform's nickname with its own suffix: Antigravity-2 → Gemini-2.
-const IDENTITIES = by_platform(PLATFORM_IDENTITIES, (identity, name) => ({ ...identity, label: identity.label ? identity.label + name.slice(platform_of(name).length) : name, description: t('AI 实例') }));
+const EXTERNAL_ICON = 'data:image/svg+xml,' + encodeURIComponent('<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="#a5a8b3" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="4" y="3" width="16" height="12" rx="2"/><path d="M2 19h20"/></svg>');
+const IDENTITIES = by_platform(PLATFORM_IDENTITIES, (identity, name) => external_identity(name)
+  ? { label: t('另一台电脑'), icon: EXTERNAL_ICON, style: 'external', description: t('另一台电脑') }
+  : ({ ...identity, label: identity.label ? identity.label + name.slice(platform_of(name).length) : name, description: t('AI 实例') }));
+
+/** Reserved external names also retain their identity when shown in historical records. */
+function external_identity(name) {
+  return /^Custom-ext[0-9]*$/.test(name) || state.room?.members?.some(member => member.name === name && member.access === 'external');
+}
 const state = { rooms: [], folders: [], room: null, page: 1, pages: 1, query: "", mention_only: false, host_only: false, authors: [], card_kinds: [],
   named_followup: false, create_discussion: false, create_goal: null,
   archive_view: false, directory_sort: "manual", management: null, dragged_room: null, folder_moves: new Map(), folder_version: 0,
@@ -1285,7 +1295,8 @@ function message_payload() {
   // The owner always speaks as the user; naming members is the server's job.
   const members = state.room.free?.members || [];
   const payload = { author: "用户", text, reply_to: state.reply_to, kind: "chat", submitted_by: "用户" };
-  const active = members.filter(member => member.status === "active" && (member.access !== "manual" || member.registered_at)).map(member => member.name);
+  const active = members.filter(member => member.status === "active" && (member.access !== "manual" || member.registered_at)
+    && (member.access !== "external" || member.external?.claimed_at !== 0)).map(member => member.name);
   // Members are named by the nickname shown on screen (or their name); the request carries the member name.
   const named_here = mentioned_members(text, active);
   const mentioned_member = name => named_here.has(name);
@@ -3833,6 +3844,7 @@ function participant_session_hint(name, room, saved) {
 /** Label how a member answers: the registered adapter says API / App; other locally woken members are CLI. */
 function participant_access(name, room) {
   const member = (room?.members || []).find(item => item.name === name);
+  if (member?.access === "external" || /^Custom-ext[0-9]*$/.test(name)) return "";
   const adapter = member?.adapter;
   if (member?.access === "manual") return t('手动启动');
   if (adapter === "api") return "API";
@@ -5441,16 +5453,25 @@ function stop_live_updates() {
 
 let resuming_timer = null;
 /** After a long stay in the background, show the opening load instead of old cards until the room is read again. */
+let resuming_show_timer = null, resuming_awaited = false;
 function begin_resuming() {
   if (!state.room || state.observed_until === null || Date.now() - state.observed_until < RESUME_LOADING_AFTER_MS) return;
-  state.resuming = true;
+  resuming_awaited = true;
+  clearTimeout(resuming_show_timer);
   clearTimeout(resuming_timer);
-  resuming_timer = setTimeout(end_resuming, RESUME_LOADING_MAX_MS);
-  publish_view();
+  // Shown only if the read is still out after RESUME_LOADING_SHOW_MS: a fast read swaps the cards with no load in between.
+  resuming_show_timer = setTimeout(() => {
+    if (!resuming_awaited) return;
+    state.resuming = true;
+    resuming_timer = setTimeout(end_resuming, RESUME_LOADING_MAX_MS);
+    publish_view();
+  }, RESUME_LOADING_SHOW_MS);
 }
 
 /** Show the cards again: the room has been read, the read failed, or it took too long. */
 function end_resuming() {
+  resuming_awaited = false;
+  clearTimeout(resuming_show_timer);
   clearTimeout(resuming_timer);
   if (!state.resuming) return;
   state.resuming = false;

@@ -13,6 +13,8 @@ import RosterAdd from "./RosterAdd.vue";
 import SchedulerSettings from "./SchedulerSettings.vue";
 import ImageService from "./ImageService.vue";
 import HostWorkflowSwitch from "./HostWorkflowSwitch.vue";
+import ExternalInviteCard from "./ExternalInviteCard.vue";
+import { invite_after_creation } from "./external-members.js";
 import { t } from "./i18n.js";
 
 const props = defineProps({ targetFolder: { type: Object, default: null } });
@@ -144,13 +146,21 @@ function library_description(name) {
 
 // Presets follow the platforms, after a divider; each adds a named instance already set up for its job.
 const PRESET_PREFIX = "preset:";
+// An AI on another computer joins like a manual member: its card here holds the invitation's choices, and the room
+// generates the invitation once it exists. The same chip and card as the invite dialog.
+const EXTERNAL_CHIP = "external:computer";
+const external_draft = ref(null);
+const panel_directories = computed(() => [view.value.launch.workspace?.cwd, ...(view.value.launch.workspace?.extra_directories || [])].filter(Boolean));
 const library_items = computed(() => [...experts.map((name) => ({ value: name, name: bridge.default_name(name), ...bridge.identities[name],
   disabled: !bridge.launch_clients[name], title: library_description(name), aria_label: t("添加 {name} 实例", { name }) })),
   ...view.value && bridge.expert_presets().map((preset, index) => ({ value: PRESET_PREFIX + preset.name, name: preset.label || preset.name, ...bridge.identities[bridge.platform_of(preset.name)],
-    separated: index === 0, title: preset.description || t("专家预设"), aria_label: t("添加预设 {name}", { name: preset.label || preset.name }), removable: true }))]);
+    separated: index === 0, title: preset.description || t("专家预设"), aria_label: t("添加预设 {name}", { name: preset.label || preset.name }), removable: true })),
+  ...view.value.launch.available || view.value.launch.remote ? [{ value: EXTERNAL_CHIP, name: t("另一台电脑"), lucide: "i-lucide-laptop-minimal", style: "external", selected: Boolean(external_draft.value),
+    row: t("外部"), toggle: true, title: t("邀请另一台电脑上的 AI 只读本房间项目"), aria_label: t("邀请另一台电脑上的 AI") }] : []]);
 
 /** Admit one library role, woken by the local service until its card says otherwise; a preset adds its own named instance. */
 function add_expert(name) {
+  if (name === EXTERNAL_CHIP) { external_draft.value = external_draft.value ? null : {}; return; }
   if (name.startsWith(PRESET_PREFIX)) {
     const preset = bridge.expert_presets().find((item) => item.name === name.slice(PRESET_PREFIX.length));
     if (preset) bridge.add_preset(EXPERT_CONTAINER, preset, "cli");
@@ -175,12 +185,17 @@ function submit() {
   if (submit_disabled.value) return;
   limit_picker.value?.settle();
   goal_config.value?.settle();
+  // The room this submission creates generates the invitation when it opens (ChannelWorkspace).
+  // Reading needs a directory: without one picked here the invitation can only be for discussing.
+  const external = external_draft.value?.level ? { ...external_draft.value, ...(external_draft.value.level === "read" && !external_draft.value.directories?.length ? { level: "discuss" } : {}) } : null;
+  invite_after_creation.value = external ? { options: external, known: (view.value.rooms || []).map((item) => item.id), at: Date.now() } : null;
   emit("submit");
 }
 
 const summary = computed(() => {
   const names = Object.keys(selected.value);
   const parts = [t("协作房间"), names.length ? t("{count} 位 AI", { count: names.length }) : t("暂无成员"), host.value ? t("{name} 主持", { name: bridge.member_label(host.value) }) : t("暂无主持人")];
+  if (external_draft.value) parts.splice(2, 0, t("{count} 台另一台电脑待签到", { count: 1 }));
   if (discussing.value) {
     const rounds = value("limit-max_rounds"), minutes = value("limit-max_minutes");
     parts.push(t("开启讨论"), [rounds && Number(rounds) ? t("{count} 轮", { count: rounds }) : t("不限轮次"), minutes && Number(minutes) ? format_duration(Number(minutes)) : t("不限时长")].join(" / "));
@@ -218,6 +233,7 @@ const summary = computed(() => {
             @host="write('host', name)" @remove="remove_expert(name)" @mode="set_expert_mode(name, $event)" />
         </div>
         <p v-else class="create-experts-empty">{{ t("请至少添加一位成员。同一平台可添加多位，各自独立会话。") }}</p>
+        <ExternalInviteCard v-if="external_draft" v-model:draft="external_draft" :paths="panel_directories" class="create-external" @remove="external_draft = null" />
         <div v-if="selected_names.length" class="fine-print create-hint create-host-hint">
           <UIcon name="i-lucide-crown" />
           <span>{{ host_options.length ? t('点卡片上的皇冠指定主持人：没 @ 任何人的消息由它分配；其他成员只在被你或主持人点名时发言。') : t('需要一位本地 AI 做主持人，没 @ 的消息才有人接。') }}</span>

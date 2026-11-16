@@ -534,6 +534,8 @@ def _session_roster(connection, session_id):
     experts = []
     shown = member_display_names(connection, session["room_id"])
     for member in members:
+        if member["access"] == "external" and member["name"] not in active_members(connection, session["room_id"]):
+            continue
         registered = member["access"] != "manual" or member["registration_hash"] == member["token_hash"]
         experts.append({"id": member["id"],"name":member["name"],"label":shown.get(member["name"], member["name"]),
                         "host":member["role"] == "host", "mode":member["access"],
@@ -672,7 +674,7 @@ def _validate_plan_members(connection, room_id, plan):
         member = connection.execute("""SELECT * FROM room_members m
             WHERE m.room_id=? AND m.name=? AND m.status='active'""",
                                     (room_id, name)).fetchone()
-        if not member:
+        if not member or (member["access"] == "external" and name not in active_members(connection, room_id)):
             raise ValueError(Text("安排对象 {name} 不是在场专家", name=name))
         if member["access"] == "manual" and not connection.execute(
                 "SELECT 1 FROM member_registrations WHERE member_id=? AND token_hash=?",
@@ -827,9 +829,9 @@ def _advance_initial_phase(connection, session_id):
 def _expert_denominator(connection, session_id, round_number=None):
     """Count registered active experts, plus the host only if that round explicitly schedules them."""
     room_id = connection.execute("SELECT room_id FROM discussion_sessions WHERE id=?", (session_id,)).fetchone()[0]
-    count = connection.execute("""SELECT COUNT(*) FROM room_members m LEFT JOIN member_registrations r ON r.member_id=m.id
-        WHERE m.room_id=? AND m.status='active' AND m.role<>'host'
-        AND (m.access<>'manual' OR r.token_hash=m.token_hash)""", (room_id,)).fetchone()[0]
+    from .free_room import REGISTERED_MEMBER
+    count = connection.execute(f"""SELECT COUNT(*) FROM room_members
+        WHERE room_id=? AND status='active' AND role<>'host' AND {REGISTERED_MEMBER}""", (room_id,)).fetchone()[0]
     host_sql = "SELECT 1 FROM session_requests WHERE session_id=? AND purpose='discuss' AND member_id IN (SELECT id FROM room_members WHERE room_id=? AND role='host')"
     values = [session_id, room_id]
     if round_number is not None:
