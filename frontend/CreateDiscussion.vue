@@ -155,8 +155,8 @@ const library_items = computed(() => [...experts.map((name) => ({ value: name, n
   disabled: !bridge.launch_clients[name], title: library_description(name), aria_label: t("添加 {name} 实例", { name }) })),
   ...view.value && bridge.expert_presets().map((preset, index) => ({ value: PRESET_PREFIX + preset.name, name: preset.label || preset.name, ...bridge.identities[bridge.platform_of(preset.name)],
     separated: index === 0, title: preset.description || t("专家预设"), aria_label: t("添加预设 {name}", { name: preset.label || preset.name }), removable: true })),
-  ...view.value.launch.available || view.value.launch.remote ? [{ value: EXTERNAL_CHIP, name: t("另一台电脑"), lucide: "i-lucide-laptop-minimal", style: "external", selected: Boolean(external_draft.value),
-    row: t("外部"), toggle: true, title: t("邀请另一台电脑上的 AI 只读本房间项目"), aria_label: t("邀请另一台电脑上的 AI") }] : []]);
+  ...view.value.launch.available || view.value.launch.remote ? [{ value: EXTERNAL_CHIP, name: t("外部专家"), lucide: "i-lucide-laptop-minimal", style: "external", selected: Boolean(external_draft.value),
+    row: t("外部"), toggle: true, title: t("对方电脑上的 AI，只读本房间开放的内容"), aria_label: t("邀请外部专家") }] : []]);
 
 /** Admit one library role, woken by the local service until its card says otherwise; a preset adds its own named instance. */
 function add_expert(name) {
@@ -195,7 +195,7 @@ function submit() {
 const summary = computed(() => {
   const names = Object.keys(selected.value);
   const parts = [t("协作房间"), names.length ? t("{count} 位 AI", { count: names.length }) : t("暂无成员"), host.value ? t("{name} 主持", { name: bridge.member_label(host.value) }) : t("暂无主持人")];
-  if (external_draft.value) parts.splice(2, 0, t("{count} 台另一台电脑待签到", { count: 1 }));
+  if (external_draft.value) parts.splice(2, 0, t("{count} 位外部专家待签到", { count: 1 }));
   if (discussing.value) {
     const rounds = value("limit-max_rounds"), minutes = value("limit-max_minutes");
     parts.push(t("开启讨论"), [rounds && Number(rounds) ? t("{count} 轮", { count: rounds }) : t("不限轮次"), minutes && Number(minutes) ? format_duration(Number(minutes)) : t("不限时长")].join(" / "));
@@ -227,13 +227,13 @@ const summary = computed(() => {
       <section class="create-section">
         <h3><span>2</span>{{ t("谁来参与") }}</h3>
         <RosterAdd ref="library" :label="t('添加 AI')" :items="library_items" @add="add_expert" @remove="(value) => bridge.delete_expert_preset(value.slice(PRESET_PREFIX.length))" />
-        <div v-if="selected_names.length" class="create-experts" role="group" :aria-label="t('参与的 AI')">
+        <div v-if="selected_names.length || external_draft" class="create-experts" role="group" :aria-label="t('参与的 AI')">
           <ExpertCard v-for="name in selected_names" :key="name" :name="name" :mode="selected[name]" :choices="access_choices(name)"
             :status="expert_status(name)" :host="host === name" :hostable="host_options.includes(name)" hosting
             @host="write('host', name)" @remove="remove_expert(name)" @mode="set_expert_mode(name, $event)" />
+          <ExternalInviteCard v-if="external_draft" v-model:draft="external_draft" :paths="panel_directories" @remove="external_draft = null" />
         </div>
         <p v-else class="create-experts-empty">{{ t("请至少添加一位成员。同一平台可添加多位，各自独立会话。") }}</p>
-        <ExternalInviteCard v-if="external_draft" v-model:draft="external_draft" :paths="panel_directories" class="create-external" @remove="external_draft = null" />
         <div v-if="selected_names.length" class="fine-print create-hint create-host-hint">
           <UIcon name="i-lucide-crown" />
           <span>{{ host_options.length ? t('点卡片上的皇冠指定主持人：没 @ 任何人的消息由它分配；其他成员只在被你或主持人点名时发言。') : t('需要一位本地 AI 做主持人，没 @ 的消息才有人接。') }}</span>

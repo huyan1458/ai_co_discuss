@@ -143,7 +143,7 @@ export function remaining_short(expires_at, now = Date.now()) {
 export function external_tag(member, now = Date.now(), { full = false } = {}) {
   const info = external_of(member);
   if (!info) return "";
-  if (info.pending) return t("另一台电脑 · 待签到");
+  if (info.pending) return t("外部专家 · 待签到");
   if (info.ended) return t("外部 · 已结束");
   return full ? [t("外部"), LEVEL_SHORT[info.level], remaining_label(info.expires_at, now)].filter(Boolean).join(" · ")
     : [t("外部"), LEVEL_TINY[info.level], remaining_short(info.expires_at, now)].filter(Boolean).join(" · ");

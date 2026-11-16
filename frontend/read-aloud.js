@@ -63,6 +63,8 @@ const MEMORY_LIMIT = 60;
 const RETRY_WINDOW_MS = 30000;
 // The audio formats the services answer in; anything else is MP3.
 const AUDIO_TYPES = { m4a: "audio/mp4", aac: "audio/aac" };
+// After a resize or a turn of the phone, the highlight is drawn again this long after, when the text has settled.
+const ROTATION_SETTLE_MS = [300, 800];
 const RETRY_DELAY_MS = 2000;
 const transient = (error) => error?.offline === true || error instanceof TypeError;
 // A broadcast reply without a summary is read whole up to this length; a longer one gives its first paragraph (at least
@@ -785,7 +787,19 @@ export function use_read_aloud({ bridge, container, prepare = async () => {}, me
   const redraw_visible = () => { if (document.visibilityState === "visible") refresh(); };
   let watched = null;
   const layout_watch = typeof ResizeObserver === "function" ? new ResizeObserver(redraw) : null;
-  window.addEventListener("resize", redraw);
+  // Turning a phone lays the text out again after the resize has been reported (iOS Safari also resizes text for the
+  // new width), so the boxes are drawn again once the layout has settled; they had stayed on another sentence
+  // (2026-11-16, iPhone: portrait → landscape → portrait while reading a file).
+  let settle_timers = [];
+  const redraw_settled = () => {
+    redraw();
+    for (const timer of settle_timers) window.clearTimeout(timer);
+    requestAnimationFrame(redraw);
+    settle_timers = ROTATION_SETTLE_MS.map((delay) => window.setTimeout(refresh, delay));
+  };
+  window.addEventListener("resize", redraw_settled);
+  window.addEventListener("orientationchange", redraw_settled);
+  window.visualViewport?.addEventListener("resize", redraw_settled);
   window.addEventListener("pageshow", redraw);
   document.addEventListener("visibilitychange", redraw_visible);
 
@@ -793,7 +807,10 @@ export function use_read_aloud({ bridge, container, prepare = async () => {}, me
   function dispose() {
     stop_reading();
     readers.delete(api);
-    window.removeEventListener("resize", redraw);
+    window.removeEventListener("resize", redraw_settled);
+    window.removeEventListener("orientationchange", redraw_settled);
+    window.visualViewport?.removeEventListener("resize", redraw_settled);
+    for (const timer of settle_timers) window.clearTimeout(timer);
     window.removeEventListener("pageshow", redraw);
     document.removeEventListener("visibilitychange", redraw_visible);
     layout_watch?.disconnect();

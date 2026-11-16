@@ -124,7 +124,7 @@ const PLATFORM_IDENTITIES = {
 // An instance shows its platform's nickname with its own suffix: Antigravity-2 → Gemini-2.
 const EXTERNAL_ICON = 'data:image/svg+xml,' + encodeURIComponent('<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="#a5a8b3" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="4" y="3" width="16" height="12" rx="2"/><path d="M2 19h20"/></svg>');
 const IDENTITIES = by_platform(PLATFORM_IDENTITIES, (identity, name) => external_identity(name)
-  ? { label: t('另一台电脑'), icon: EXTERNAL_ICON, style: 'external', description: t('另一台电脑') }
+  ? { label: t('外部专家'), icon: EXTERNAL_ICON, style: 'external', description: t('外部专家') }
   : ({ ...identity, label: identity.label ? identity.label + name.slice(platform_of(name).length) : name, description: t('AI 实例') }));
 
 /** Reserved external names also retain their identity when shown in historical records. */
@@ -3264,13 +3264,26 @@ function relay_file_url(path, { urgent = false } = {}) {
 }
 
 /** Read a relayed image or media file once it nears the screen. */
+// The box around a relayed image is watched, not the image: an image waiting for its file is hidden (display: none,
+// markdown.css) behind a spinner, and a hidden element never intersects, so watching it left the image unread forever
+// (2026-11-16, iPhone: a message's own screenshots kept spinning).
+const relay_media_boxes = new WeakMap();
+const relay_media_box = (media) => media.closest(".attachment-image, .attachment-media") || media;
 const relay_media_observer = typeof IntersectionObserver === "function" ? new IntersectionObserver((entries) => {
   for (const entry of entries) {
     if (!entry.isIntersecting) continue;
     relay_media_observer.unobserve(entry.target);
-    load_relay_media(entry.target);
+    for (const media of relay_media_boxes.get(entry.target) || []) load_relay_media(media);
+    relay_media_boxes.delete(entry.target);
   }
 }, { rootMargin: RELAY_MEDIA_MARGIN }) : null;
+
+/** Watch the visible box of one relayed image or media element until it nears the screen. */
+function watch_relay_media(media) {
+  const box = relay_media_box(media);
+  relay_media_boxes.set(box, [...(relay_media_boxes.get(box) || []), media]);
+  relay_media_observer.observe(box);
+}
 
 /** Give one relayed image or media element its file; one that cannot be read keeps its name. */
 function load_relay_media(media) {
@@ -3286,12 +3299,16 @@ function show_relay_images(records) {
     // A node taken off the page before it neared the screen is no longer watched.
     if (relay_media_observer) for (const node of record.removedNodes) {
       if (node.nodeType !== Node.ELEMENT_NODE) continue;
-      for (const image of node.matches("[data-relay-src]") ? [node] : node.querySelectorAll("[data-relay-src]")) relay_media_observer.unobserve(image);
+      for (const image of node.matches("[data-relay-src]") ? [node] : node.querySelectorAll("[data-relay-src]")) {
+        const box = relay_media_box(image);
+        relay_media_observer.unobserve(box);
+        relay_media_boxes.delete(box);
+      }
     }
     for (const node of record.addedNodes) {
       if (node.nodeType !== Node.ELEMENT_NODE || !node.isConnected) continue;
       for (const image of node.matches(selector) ? [node] : node.querySelectorAll(selector)) {
-        if (relay_media_observer) relay_media_observer.observe(image);
+        if (relay_media_observer) watch_relay_media(image);
         else load_relay_media(image);
       }
     }

@@ -41,6 +41,8 @@ html[data-theme="channel-light"] .markdown-body {
 .markdown-body a { color: var(--markdown-link); text-decoration: underline; text-underline-offset: 3px; }
 .markdown-body code { font-family: ui-monospace, Consolas, monospace; font-size: .88em; background: var(--markdown-code, var(--markdown-panel)); border-radius: 4px; padding: .15em .35em; }
 .markdown-body pre { max-width: 100%; overflow-x: auto; margin: .8em 0 1em; padding: 14px 16px; border: 1px solid var(--markdown-line); border-radius: 6px; background: var(--markdown-panel); line-height: 1.6; white-space: pre; overflow-wrap: normal; }
+.markdown-body pre.markdown-front-matter { margin: 0 0 1.2em; padding: 10px 14px; border: 0; background: color-mix(in srgb, var(--markdown-line) 45%, transparent);
+  color: var(--ui-text-muted, #8a93a3); font-family: inherit; font-size: 12px; line-height: 1.65; white-space: pre-wrap; overflow-wrap: anywhere; }
 .markdown-body pre code { padding: 0; border: 0; border-radius: 0; background: none; white-space: inherit; }
 .markdown-body .markdown-table { max-width: 100%; overflow-x: auto; margin: 1em 0; }
 .markdown-body table { width: max-content; min-width: 50%; border-collapse: collapse; font-size: .93em; }

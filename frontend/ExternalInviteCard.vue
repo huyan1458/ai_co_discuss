@@ -10,7 +10,7 @@ import { seat_invites, DURATIONS, LEVELS, room_operations, runner_message, runne
 import { t } from "./i18n.js";
 
 const emit = defineEmits(["remove"]);
-// Create-panel mode: the choices `{ level, duration, directories }`, over `paths` (the panel's project directories).
+// Draft mode (new-room panel, invite dialog): the choices `{ level, duration, directories }`, over `paths` (the panel's project directories).
 const draft = defineModel("draft", { type: Object, default: null });
 const props = defineProps({ settings: { type: Object, default: null }, memberId: { type: Number, default: 0 }, paths: { type: Array, default: () => [] }, start: { type: Object, default: null } });
 const drafting = computed(() => draft.value !== null);
@@ -77,15 +77,39 @@ const date = (value) => bridge.format_time(time_ms(value));
 const leaf = (path) => path.split(/[\\/]/).filter(Boolean).pop() || path;
 // Ties each segmented control to its visible label.
 const uid = useId();
+// Create-panel mode is a square card among the members' cards: choices summed up on the front, edited on the back.
+const editing = ref(false);
+const shown_level = computed(() => needs_directory.value ? "discuss" : level.value);
+const facts = computed(() => [
+  { label: t("能做什么"), value: LEVELS.find((option) => option.value === shown_level.value)?.label },
+  ...shown_level.value === "read" ? [{ label: t("开放目录"), value: directories.value.map(leaf).join("、") }] : [],
+  { label: t("有效期"), value: DURATIONS.find((option) => option.value === duration.value)?.label },
+]);
 </script>
 
 <template>
   <!-- Framed like an expert card's face (border, radius, surface, identity row, tools at the top right), but as wide as
        the dialog: the form and the generated link with its QR code do not fit a square. -->
-  <section class="external-invite" :aria-label="t('邀请另一台电脑上的 AI')">
+  <!-- Create panel: the front of a member card (ExpertCard.vue), the same size and place; 设置 turns to the form below. -->
+  <section v-if="drafting && !editing" class="external-card" :aria-label="t('邀请外部专家')">
+    <button type="button" class="external-card-open" :title="t('点击翻面设置')" @click="editing = true">
+      <span class="external-invite-identity">
+        <span class="external-invite-avatar channel-avatar external" aria-hidden="true"><UIcon name="i-lucide-laptop-minimal" /></span>
+        <span class="external-invite-names"><strong>{{ t("外部专家") }}</strong><small :title="t('对方电脑上的 AI，只读本房间开放的内容')">{{ t("对方电脑上的 AI，只读本房间开放的内容") }}</small></span>
+      </span>
+      <dl class="external-card-facts">
+        <div v-for="fact in facts" :key="fact.label"><dt>{{ fact.label }}</dt><dd :title="fact.value">{{ fact.value }}</dd></div>
+      </dl>
+      <span class="external-card-flip"><UIcon name="i-lucide-settings-2" />{{ t("设置") }}</span>
+    </button>
+    <span class="external-invite-tools external-card-tools">
+      <button type="button" :aria-label="t('移除这张卡片')" :title="t('移除这张卡片')" @click="emit('remove')"><UIcon name="i-lucide-x" /></button>
+    </span>
+  </section>
+  <section v-else class="external-invite" :class="{ 'is-card': drafting }" :aria-label="t('邀请外部专家')">
     <header class="external-invite-identity">
       <span class="external-invite-avatar channel-avatar external" aria-hidden="true"><UIcon name="i-lucide-laptop-minimal" /></span>
-      <span class="external-invite-names"><strong>{{ t("另一台电脑") }}</strong><small>{{ t("对方用自己电脑上的 AI 加入，只读本房间开放的内容") }}</small></span>
+      <span class="external-invite-names"><strong>{{ t("外部专家") }}</strong><small>{{ t("对方电脑上的 AI，只读本房间开放的内容") }}</small></span>
       <span v-if="!memberId" class="external-invite-tools">
         <button type="button" :aria-label="t('移除这张卡片')" :title="t('移除这张卡片')" @click="emit('remove')"><UIcon name="i-lucide-x" /></button>
       </span>
@@ -119,7 +143,7 @@ const uid = useId();
       <footer class="external-invite-footer">
         <p class="external-invite-warning" role="note"><UIcon name="i-lucide-triangle-alert" />{{ level === 'read' ? t("项目内容会经对方的 AI 发送给其模型服务商；读出去的内容收不回，撤销只阻止以后的读取。") : t("房间里发给它的内容会经对方的 AI 发送给其模型服务商。") }}</p>
         <p v-if="!view.launch.available && !view.launch.remote" class="external-invite-warning is-error" role="alert"><UIcon name="i-lucide-plug-zap" />{{ t("生成邀请需要本机服务，请在这台电脑打开本机网站。") }}</p>
-        <p v-if="drafting" class="external-invite-hint">{{ t("创建房间后添加待签到席位并生成邀请链接，再发给对方。") }}</p>
+        <button v-if="drafting" type="button" class="external-card-flip is-done" @click="editing = false"><UIcon name="i-lucide-check" />{{ t("完成") }}</button>
         <UButton v-else icon="i-lucide-link" :label="seat_id ? (settings?.invite_version ? t('重新生成链接') : t('生成链接')) : t('添加待签到席位')" size="sm" class="channel-primary-button external-invite-generate" :loading="busy === 'create'" :disabled="Boolean(busy) || (!seat_id && needs_directory) || !view.launch.available && !view.launch.remote" @click="generate" />
       </footer>
     </template>
@@ -159,6 +183,25 @@ const uid = useId();
 .external-invite-tools > button { display: grid; place-items: center; width: 24px; height: 24px; border-radius: 5px; color: var(--ui-text-dimmed); }
 .external-invite-tools > button > span { width: 13px; height: 13px; }
 .external-invite-tools > button:hover { background: var(--ui-bg-accented); color: var(--ui-text-highlighted); }
+/* Create panel: square like a member card (ExpertCard.vue .expert-card-turn is as tall as it is wide). */
+.external-card, .external-invite.is-card { aspect-ratio: 1; }
+.external-invite.is-card { overflow-y: auto; scrollbar-width: thin; }
+.external-card { position: relative; display: flex; min-width: 0; border: 1px solid var(--channel-edge-control, var(--ui-border)); border-radius: 8px;
+  background: color-mix(in srgb, var(--ui-bg-elevated) 45%, var(--ui-bg)); box-shadow: var(--channel-shadow-control); }
+.external-card:hover { border-color: var(--ui-border-accented); }
+.external-card-open { display: flex; flex: 1; flex-direction: column; gap: 10px; min-width: 0; padding: 12px 12px 48px; border-radius: inherit; text-align: left; }
+.external-card-open .external-invite-identity { padding-right: 28px; }
+.external-card-tools { position: absolute; top: 10px; right: 12px; margin: 0; }
+.external-card-facts { display: grid; gap: 4px; width: 100%; margin: 0; padding-top: 10px; border-top: 1px solid var(--ui-border-muted); font-size: 11px; }
+.external-card-facts > div { display: grid; grid-template-columns: 5em minmax(0, 1fr); gap: 8px; }
+.external-card-facts dt { color: var(--ui-text-dimmed); white-space: nowrap; }
+.external-card-facts dd { margin: 0; overflow: hidden; color: var(--ui-text-toned); white-space: nowrap; text-overflow: ellipsis; }
+/* The way to the settings and back, drawn like the member card's 设置 / 完成. */
+.external-card-flip { display: inline-flex; align-items: center; gap: 5px; height: 28px; padding: 0 9px; border-radius: 5px; background: var(--ui-bg-muted); color: var(--ui-text-muted); font-size: 11px; }
+.external-card-open > .external-card-flip { position: absolute; bottom: 10px; left: 12px; }
+.external-card-open:hover > .external-card-flip, .external-card-flip.is-done:hover { color: var(--ui-text-highlighted); }
+.external-card-flip > span { width: 13px; height: 13px; }
+.external-card-flip.is-done { flex-shrink: 0; }
 /* Fields read like the card's back: a small dimmed label, the control, a one-line hint. */
 .external-invite-field { display: flex; flex-direction: column; gap: 6px; min-width: 0; }
 .external-invite-label { color: var(--ui-text-dimmed); font-size: 11px; }

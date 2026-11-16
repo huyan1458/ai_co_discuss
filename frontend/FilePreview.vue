@@ -180,9 +180,13 @@ const file_menu = computed(() => {
   return groups;
 });
 
-/** Check whether this computer has a speech key, so the read-aloud entries show only when they can work. */
+/**
+ * Check whether this computer has a speech key, so the read-aloud entries show only when they can work. A failed read
+ * (the relay dropping a request on a poor network) keeps what was known: it used to hide 朗读 and 听当前 until the file
+ * was opened again (2026-11-16, iPhone: gone after switching to the source and back).
+ */
 function check_speech() {
-  speech_settings().then((settings) => { speech_ready.value = Boolean(settings.api_key_ref); }, () => { speech_ready.value = false; });
+  speech_settings().then((settings) => { speech_ready.value = Boolean(settings.api_key_ref); }, () => {});
 }
 
 // A message attachment is read up to this size, like a project file.
@@ -757,6 +761,8 @@ function stop_following(event) {
 watch([open, active_id, source, rendered], () => { offer.value = null; cancel_comment(); close_mark(); });
 watch([open, active_id, source, rendered, font_scale, () => file_preview.excerpts.map((excerpt) => excerpt.id).join()], () => nextTick(place_file_marks), { flush: "post" });
 watch([active_id, source, rendered], () => { if (reader.state.message_id) reader.stop(); });
+// Back on a readable preview without a confirmed speech key (an earlier read failed): ask again.
+watch([active_id, source], () => { if (!speech_ready.value && !source.value && format.value === "markdown") check_speech(); });
 // Unfolded, the text is laid out anew; the reading's highlight moves onto it.
 watch(markdown_body, (root) => { if (root) { reader.rebind_document(root); nextTick(place_file_marks); } });
 onMounted(() => {

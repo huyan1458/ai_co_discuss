@@ -38,6 +38,26 @@ markdown.renderer.rules.link_open = (tokens, index, options, environment, render
   return renderer.renderToken(tokens, index, options);
 };
 // On request, block elements carry the 1-based source lines they come from, so a selection can be quoted by line.
+// A file's leading YAML front matter (`---` … `---` on the first lines) is metadata, not text: shown as a small muted
+// block, as Typora and other editors do, instead of a rule and a large setext heading. Only at the very top of a file.
+markdown.block.ruler.before("hr", "front_matter", (state, start, end, silent) => {
+  if (start !== 0 || state.blkIndent !== 0 || state.src.slice(state.bMarks[0], state.eMarks[0]).trim() !== "---") return false;
+  let line = 1;
+  while (line < end && state.src.slice(state.bMarks[line] + state.tShift[line], state.eMarks[line]).trim() !== "---") line++;
+  if (line >= end || line === 1) return false;
+  if (silent) return true;
+  const token = state.push("front_matter", "div", 0);
+  token.block = true;
+  token.map = [0, line + 1];
+  token.content = state.getLines(1, line, 0, false).replace(/\n$/, "");
+  state.line = line + 1;
+  return true;
+});
+markdown.renderer.rules.front_matter = (tokens, index) => {
+  const token = tokens[index];
+  const lines = token.attrGet("data-source-lines");
+  return `<pre class="markdown-front-matter"${lines ? ` data-source-lines="${lines}"` : ""}>${markdown.utils.escapeHtml(token.content)}</pre>\n`;
+};
 markdown.core.ruler.push("source_lines", (state) => {
   if (!state.env?.source_lines) return;
   for (const token of state.tokens) {
