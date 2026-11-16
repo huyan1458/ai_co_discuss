@@ -38,6 +38,7 @@ from .free_room import (add_member, after_free_message, after_proactive, authori
 from .free_room import convert_suggestion, message_suggestions, save_suggestions, sync_participants
 from .free_room import adopt_recommendation, recommend_member, register_member, require_member
 from .private_chat import chat_action, member_chat
+from .external_members import external_api, guard_route as guard_external_route, is_external_path, owner_api as external_owner_api
 from .free_room import describe_members, execution_notes, label_members, set_host_checkin, withdraw_dispatch, member_descriptions, member_display_names, member_handles, member_labels, reorder_speakers, resolve_member_fields, set_chain_rounds, speaking_order, stop_room, stop_room_work
 from .free_room import (ADAPTER_VALUE, LAYOUT_AFTER_SQL, LAYOUT_AT_SQL, continue_chain, execution_timeline, group_route_plan, retract_message, rewind_plan, rewind_room,
                         room_event_log, withdrawals)
@@ -75,6 +76,10 @@ LOCAL_LAUNCH_TIMEOUT = 60
 MACHINE_COMMAND_POLL_SECONDS = 0.5
 # Ordering and filing a channel only rearrange the shared directory, like folder edits, so they need no room credential.
 DIRECTORY_OPERATIONS = ("move", "folder")
+# Local entry commands for external members: the owner's invites (room credential) and this computer's invited records.
+INVITE_COMMANDS = ("room-invite", "room-invites", "room-invite-revoke")
+INVITED_COMMANDS = ("invited-list", "invited-join", "invited-trust", "invited-ai", "invited-pause", "invited-approve", "invited-refuse",
+                    "invited-leave", "invited-room")
 ADMIN_OPERATIONS = ("rename", "archive", "restore", "delete")
 DIRECTORY_PICKER_TIMEOUT = 600  # the folder dialog waits for the person at the computer
 # Files are streamed to players in pieces of this size.
@@ -2475,6 +2480,13 @@ class DiscussionHandler(BaseHTTPRequestHandler):
         try:
             if self.entry_refused(method, parsed):
                 return None
+            try:
+                guard_external_route(lambda: connect_db(self.server.database), self.headers, parts)
+            except PermissionError:
+                # Read the unread body first, or the refusal can reach the gateway as a reset connection.
+                self.rfile.read(min(int(self.headers.get("Content-Length") or 0), MAX_BODY_BYTES))
+                self.close_connection = True
+                raise
             self.bridged = self.relay_bridge(parts)
             if parts[:3] == ["api", "local", "media"] and len(parts) == 4 and method == "GET":
                 return self.serve_media_ticket(parts[3])
@@ -2488,6 +2500,8 @@ class DiscussionHandler(BaseHTTPRequestHandler):
             if method == "GET" and parsed.path == "/robots.txt":
                 return self.respond("User-agent: *\nAllow: /\n", content_type="text/plain")
             with closing(connect_db(self.server.database)) as connection, connection:
+                if is_external_path(parts):
+                    return self.handle_external_api(connection, parts, params, method)
                 if text_mode and method == "GET":
                     return self.handle_text(connection, parts, params)
                 return self.handle_api(connection, parts, params, method)
@@ -2609,7 +2623,7 @@ class DiscussionHandler(BaseHTTPRequestHandler):
         site = self.local_request_site(method)
         route = parts[2:]
         if method == "OPTIONS" and route in (["settings"], ["launch"], ["room-models"], ["room-skills"], ["room-files"], ["room-page"], ["room-media"], ["execution-details"], ["room-member"], ["room-member-access"], ["room-member-allow"], ["room-member-adapter"], ["room-member-model"], ["room-profiles"], ["room-restore"], ["room-fork"], ["models"], ["sessions"], ["api-key"], ["api-check"],
-                                             ["scheduler-check"], ["image-settings"], ["tts-settings"], ["tts"], ["tts-release"], ["local-speech"], ["stt"], ["weixin"], ["pick-directory"], ["browse-directory"], ["projects"], ["presets"], ["workflows"], ["room-workflow"], ["room-settings"], ["machine-link"], ["device-pairing"], ["devices"]):
+                                             ["scheduler-check"], ["image-settings"], ["tts-settings"], ["tts"], ["tts-release"], ["local-speech"], ["stt"], ["weixin"], ["pick-directory"], ["browse-directory"], ["projects"], ["presets"], ["workflows"], ["room-workflow"], ["room-settings"], ["machine-link"], ["device-pairing"], ["devices"]) or (method == "OPTIONS" and len(route) == 1 and route[0] in INVITE_COMMANDS + INVITED_COMMANDS):
             return self.respond({"ok": True})
         if route == ["settings"] and method in ("GET", "POST"):
             command = "settings"
@@ -2652,6 +2666,10 @@ class DiscussionHandler(BaseHTTPRequestHandler):
             command = route[0]
         elif route == ["machine-link"] and method == "POST":
             command = "machine-link"
+        elif len(route) == 1 and route[0] in INVITE_COMMANDS + INVITED_COMMANDS and method == "POST":
+            # Invites for members on other computers (runner/external_gateway.mjs) and the rooms this computer was invited to
+            # (runner/external_client.mjs); the latter are this computer's own records and need no room credential.
+            command = route[0]
         else:
             raise LookupError(Text('本机入口不存在'))
         payload = None
@@ -2667,6 +2685,10 @@ class DiscussionHandler(BaseHTTPRequestHandler):
                     self.admin_as_owner(connection, payload.get("room_id", ""))
                     payload["token"] = self.headers.get("X-Discussion-Token", "")
             # A fork from a browser without the source room's credential acts as its owner, as the commands above do.
+            if command in INVITE_COMMANDS and not payload.get("token") and not self.bridge_origin:
+                with closing(connect_db(self.server.database)) as connection:
+                    self.admin_as_owner(connection, payload.get("room_id", ""))
+                    payload["token"] = self.headers.get("X-Discussion-Token", "")
             if command == "room-fork" and not payload.get("source_token") and not self.bridge_origin:
                 with closing(connect_db(self.server.database)) as connection:
                     self.admin_as_owner(connection, payload.get("source_room_id", ""))
@@ -2986,6 +3008,10 @@ class DiscussionHandler(BaseHTTPRequestHandler):
             record_reported_session(connection, room_id, token, {"session_id": self.headers.get("X-Discussion-Session"),
                                                                  "session_client": self.headers.get("X-Discussion-Session-Client")})
             connection.commit()
+        if parts[3:4] == ["external-members"]:
+            result, status = external_owner_api(connection, room_id, parts[4:], params, method, token, self.read_payload)
+            connection.commit()
+            return self.respond(result, status)
         if parts[3:] == ["discussion"]:
             if method == "GET":
                 return self.respond(session_room(connection, room_id))
@@ -3363,6 +3389,19 @@ class DiscussionHandler(BaseHTTPRequestHandler):
         else:
             raise LookupError(Text('地址不存在'))
         return result
+
+    def handle_external_api(self, connection, parts, params, method):
+        """Member-scope routes for an external member (backend/external_members.py); its only way into the room."""
+        def answer(connection, room_id, payload, member):
+            result = append_message(connection, room_id, payload, member)
+            receipt = message_receipt(connection, room_id, result)
+            return {**result, "receipt": receipt} if receipt else result
+        hooks = {"messages": query_messages, "message": get_message, "answer": answer}
+        result, status = external_api(connection, parts, params, method, self.headers.get("X-Discussion-Token", ""),
+                                      self.read_payload, hooks)
+        drain_room_queue(connection, parts[3])
+        connection.commit()
+        return self.respond(result, status)
 
     def handle_free_api(self, connection, parts, method):
         """Runner inbox, per-member executions and the owner's interrupt for free rooms."""

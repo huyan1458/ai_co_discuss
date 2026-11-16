@@ -126,9 +126,11 @@ function admin_avatar(value) {
  * `<computer>.<device>.<seconds>.<signature>`, the signature covering method, path and time with the device's own
  * non-exportable key. There are no accounts or passwords here; the computer alone decides which devices count.
  * `renewing` also accepts an expired device until the `renew_until` the computer signed for it: used only for a single
- * relayed request, which the computer itself limits to renewal.
+ * relayed request, which the computer itself limits to renewal. The list also holds external members' keys
+ * (`kind: 'external'`, AIs on other computers invited into one room): they count only where `external` is set, which
+ * is the relayed POST alone, so everywhere else such a signer is treated as unpaired.
  */
-async function device_identity(database, credential, method, path, { renewing = false } = {}) {
+async function device_identity(database, credential, method, path, { renewing = false, external = false } = {}) {
   const [machine_id, device_id, time, signature] = String(credential || "").split(".");
   if (!/^[0-9a-f]{32}$/.test(machine_id || "") || !/^[0-9a-f]{32}$/.test(device_id || "") || !/^\d{10}$/.test(time || "") || !signature) return null;
   if (Math.abs(now_seconds() - Number(time)) > DEVICE_CLOCK_SECONDS) return null;
@@ -136,17 +138,19 @@ async function device_identity(database, credential, method, path, { renewing = 
     .bind(machine_id).first();
   if (!row) return null;
   const algorithm = { name: "ECDSA", namedCurve: "P-256" }, hash = { name: "ECDSA", hash: "SHA-256" };
-  let expires_at;
+  let expires_at, kind;
   try {
     const signer = await crypto.subtle.importKey("jwk", JSON.parse(row.sign_key), algorithm, false, ["verify"]);
     if (!await crypto.subtle.verify(hash, signer, b64url_bytes(row.signature), new TextEncoder().encode(row.body))) return null;
     const device = JSON.parse(row.body).devices.find(item => item.id === device_id);
-    if (!device || (device.expires_at <= Date.now() && !(renewing && device.renew_until > Date.now()))) return null;
+    if (!device || (device.kind === "external" && !external)) return null;
+    if (device.expires_at <= Date.now() && !(renewing && device.kind !== "external" && device.renew_until > Date.now())) return null;
     const key = await crypto.subtle.importKey("jwk", { kty: "EC", crv: "P-256", x: device.x, y: device.y }, algorithm, false, ["verify"]);
     if (!await crypto.subtle.verify(hash, key, b64url_bytes(signature), new TextEncoder().encode(`${method}\n${path}\n${time}`))) return null;
     expires_at = device.expires_at;
+    kind = device.kind === "external" ? "external" : "device";
   } catch { return null; }
-  return { machine_id, device_id, expires_at };
+  return { machine_id, device_id, expires_at, kind };
 }
 
 /** Require a paired device's signed request (`X-CoDiscuss-Device`). */
@@ -315,7 +319,7 @@ async function machine_sync(database, machine_id, token, payload, now, relay = n
     // A new list closes the live sockets of devices it no longer holds; unchanged heartbeats do not wake the relay.
     if (relay && stored.meta?.changes) {
       await relay.get(relay.idFromName(machine_id)).fetch("https://relay.internal/", { method: "POST", headers: { "Content-Type": "application/json", "X-Relay-Role": "devices" },
-        body: JSON.stringify({ devices: list.devices.map(item => ({ id: item.id, expires_at: item.expires_at })) }) }).catch(() => {});
+        body: JSON.stringify({ devices: list.devices.filter(item => item.kind !== "external").map(item => ({ id: item.id, expires_at: item.expires_at })) }) }).catch(() => {});
     }
   }
   // Unchanged heartbeats write nothing until seen_at is due for a refresh.
@@ -427,7 +431,8 @@ async function handle_relay(env, request, machine_id) {
   }
   if (request.method !== "POST") throw new HttpError(404, "地址不存在");
   // An expired device that may still renew reaches the computer one request at a time; the computer lets only renewal through.
-  const identity = await require_device(database, request, { renewing: true });
+  // An external member listed by the computer reaches it this way only; the computer answers it with the external actions alone.
+  const identity = await require_device(database, request, { renewing: true, external: true });
   if (identity.machine_id !== machine_id) throw new HttpError(403, "这台设备配对的是另一台电脑");
   await require_paired_machine(database, machine_id);
   return forward_relay(relay, await read_payload(request));

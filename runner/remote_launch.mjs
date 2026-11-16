@@ -15,6 +15,7 @@ import { saved_api_keys } from './discussion_api.mjs';
 import { launch_projects, launch_settings } from './discussion_launch.mjs';
 import { claim_relayed_command } from './remote_policy.mjs';
 import { audit, DEVICE_ACTIONS, device_command, open_signed_request, signed_device_list } from './device_auth.mjs';
+import { answer_external, external_entries, is_external_request } from './external_gateway.mjs';
 
 const MACHINE_TOKEN_BYTES = 32;
 const MACHINE_NAME_MAX = 60;
@@ -28,10 +29,14 @@ const COMMAND_TIMEOUT_MS = 60000;
 const RELAY_CIPHER_INFO = 'codiscuss-relay-v1';
 const LAUNCH_SCRIPT = fileURLToPath(new URL('./discussion_launch.mjs', import.meta.url));
 // What a connected browser may ask the local bridge for, minus the folder dialog nobody would see and pairing itself.
-const RELAYED_ACTIONS = new Set(['settings', 'launch', 'room-models', 'room-member', 'room-member-access', 'room-member-allow', 'room-member-adapter',
-  'room-member-model', 'room-profiles', 'room-skills', 'room-files', 'room-page', 'room-media', 'execution-details', 'room-restore', 'room-fork', 'models', 'sessions', 'api-key', 'api-check', 'scheduler-check', 'image-settings', 'tts-settings', 'tts', 'tts-release', 'local-speech', 'stt', 'weixin', 'projects', 'presets', 'workflows', 'room-workflow', 'room-settings', 'browse-directory']);
+export const RELAYED_ACTIONS = new Set(['settings', 'launch', 'room-models', 'room-member', 'room-member-access', 'room-member-allow', 'room-member-adapter',
+  'room-member-model', 'room-profiles', 'room-skills', 'room-files', 'room-page', 'room-media', 'execution-details', 'room-restore', 'room-fork', 'models', 'sessions', 'api-key', 'api-check', 'scheduler-check', 'image-settings', 'tts-settings', 'tts', 'tts-release', 'local-speech', 'stt', 'weixin', 'projects', 'presets', 'workflows', 'room-workflow', 'room-settings', 'browse-directory', 'room-invite', 'room-invites', 'room-invite-revoke',
+  // Rooms on other computers this one was invited to (runner/external_client.mjs): its paired devices manage them as here.
+  'invited-list', 'invited-join', 'invited-trust', 'invited-ai', 'invited-pause', 'invited-approve', 'invited-refuse', 'invited-leave', 'invited-room']);
 export const ROOM_ACTIONS = new Set(['launch', 'room-models', 'room-member', 'room-member-access', 'room-member-allow', 'room-member-adapter',
-  'room-member-model', 'room-profiles', 'room-skills', 'room-files', 'room-page', 'room-media', 'execution-details', 'room-restore', 'room-fork', 'room-workflow', 'room-settings', 'workflows']);
+  'room-member-model', 'room-profiles', 'room-skills', 'room-files', 'room-page', 'room-media', 'execution-details', 'room-restore', 'room-fork', 'room-workflow', 'room-settings', 'workflows',
+  // Invites to members on other computers: paired devices issue them as this computer does (PLAN §4.2 item 1).
+  'room-invite', 'room-invites', 'room-invite-revoke']);
 
 // On Windows the file holding this computer's private keys and tokens is sealed with DPAPI for the signed-in user, so a
 // copy of the file alone is useless elsewhere; other systems rely on the file's 0600 mode.
@@ -159,7 +164,7 @@ export async function sync_remote_launches(home, { log = () => {} } = {}) {
     let launches;
     // The device list is signed here, so the website can check devices against it but never add one itself.
     try { ({ launches } = await machine_request(site, link, '/sync', { projects, clients, public_key: link.public_key, sign_key: link.sign_public_key,
-      devices: await signed_device_list(home, link) })); }
+      devices: await signed_device_list(home, link, Date.now(), external_entries(home, site)) })); }
     catch (error) { log(`${site}: 同步电脑状态失败：${error.message}`); continue; }
     if (launches?.length) log(`${site}: 网站返回了 ${launches.length} 个旧格式启动任务，已忽略；远程启动须由已配对设备签名`);
   }
@@ -233,11 +238,15 @@ async function answer_command(home, site, link, { id, envelope }, run, log) {
   } catch { return log(`${site}: 远程命令 ${id} 无法解密，已忽略`); }
   let response;
   try {
-    const { request, device_id } = await open_signed_request(home, id, sealed, link.id);
-    claim_relayed_command(home, id, request.sent_at);
-    response = DEVICE_ACTIONS.has(request.action) ? await device_command(home, { site, machine_id: link.id, device_id, on_change: () => sync_remote_launches(home) }, request.action, request.payload)
-      : await run({ ...relayed_command(site, request.action, request.payload), device: device_id });
-    if (!DEVICE_ACTIONS.has(request.action)) audit(home, { event: 'command', action: request.action, route: '', device: device_id, status: response.status });
+    // An external member may only redeem an invite this way; external_gateway.mjs answers it and nothing else runs.
+    if (is_external_request(sealed)) ({ response } = await answer_external(home, { machine_id: link.id, link, on_change: () => sync_remote_launches(home) }, id, sealed));
+    else {
+      const { request, device_id } = await open_signed_request(home, id, sealed, link.id);
+      claim_relayed_command(home, id, request.sent_at);
+      response = DEVICE_ACTIONS.has(request.action) ? await device_command(home, { site, machine_id: link.id, device_id, on_change: () => sync_remote_launches(home) }, request.action, request.payload)
+        : await run({ ...relayed_command(site, request.action, request.payload), device: device_id });
+      if (!DEVICE_ACTIONS.has(request.action)) audit(home, { event: 'command', action: request.action, route: '', device: device_id, status: response.status });
+    }
   }
   catch (error) { response = { status: 400, body: { error: error.message, ...(error.need ? { need: error.need } : {}) } }; }
   try { await machine_request(site, link, `/commands/${encodeURIComponent(id)}`, { envelope: await seal(key, response, `${id}:response`) }); }

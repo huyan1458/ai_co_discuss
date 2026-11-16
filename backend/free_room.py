@@ -116,6 +116,8 @@ MAX_DENIALS = 20
 MAX_DENIAL_FIELD = 300
 # A manual member's delivery is retried at most this often before the execution fails.
 MAX_RETRIES = 3
+# Requests one external member may claim by number at once (backend/external_members.py).
+MAX_CLAIM_REQUESTS = 100
 MAX_RETRY_REASON = 500
 # One interjection the owner adds to a running execution, and how many one execution keeps.
 MAX_INTERJECTION_LENGTH = 2000
@@ -144,7 +146,7 @@ MAX_CONTINUE_REASON = 300
 # A host that left gives up the role; the first active runner member (else manual) then takes it.
 RELEASE_HOST = "UPDATE room_members SET role='member' WHERE room_id=? AND role='host' AND status<>'active'"
 ASSIGN_HOST = """UPDATE room_members SET role='host' WHERE id=(SELECT id FROM room_members WHERE room_id=? AND status='active'
-    ORDER BY access='runner' DESC, id LIMIT 1)
+    AND access<>'external' ORDER BY access='runner' DESC, id LIMIT 1)
     AND NOT EXISTS (SELECT 1 FROM room_members WHERE room_id=? AND role='host' AND status='active')"""
 TERMINAL = ("completed", "cancelled", "failed")
 # A queued member has been asked once its request for that message exists.
@@ -1073,6 +1075,8 @@ def free_view(connection, room_id):
                                                (row["id"],)).fetchone()[0]
         member["held_until"] = held_until(connection, row["id"])
         member["quota_until"] = quota_held_until(connection, row["id"])
+        if row["access"] == "external":
+            member["external"] = external_members.room_view_field(connection, row["id"])
         members.append(member)
     names = {row["id"]: row["name"] for row in connection.execute("SELECT id,name FROM room_members WHERE room_id=?", (room_id,))}
     requests = [{**dict(row), "member": names.get(row["member_id"], ""),
@@ -1080,6 +1084,7 @@ def free_view(connection, room_id):
                  } for row in connection.execute(
         """SELECT id,member_id,message_id,status,execution_id,answer_id,chain_id,batch_id,purpose,created_by,created_at,
         (SELECT reason FROM request_cancel_reasons c WHERE c.request_id=member_requests.id) AS cancel_reason,
+        (SELECT outcome FROM external_declines x WHERE x.request_id=member_requests.id) AS external_outcome,
         (SELECT after_message_id FROM request_layout l WHERE l.request_id=member_requests.id) AS layout_after FROM member_requests
         WHERE room_id=? ORDER BY id DESC LIMIT ?""", (room_id, RECENT_REQUESTS))]
     chains = [dict(row) for row in connection.execute(
@@ -2801,6 +2806,7 @@ def inbox(connection, room_id, token):
     require_owner(connection, room_id, token)
     begin_write(connection)
     enforce_session_limits(connection, room_id)
+    external_members.expire_room(connection, room_id)
     expire_executions(connection, room_id)
     notice_stalled_executions(connection, room_id)
     fire_host_checkin(connection, room_id)
@@ -2810,13 +2816,6 @@ def inbox(connection, room_id, token):
     shown = member_display_names(connection, room_id)
     # Manual members are never delivered to; the runner only reads them so smart scheduling can route to them too.
     for row in connection.execute(f"SELECT * FROM room_members WHERE room_id=? AND status='active' AND {REGISTERED_MEMBER} ORDER BY id", (room_id,)):
-        pending = [dict(item) for item in connection.execute("""SELECT r.id,r.message_id,r.purpose,r.batch_id,
-            sr.id AS session_request_id,sr.session_id,sr.round,sr.position,sr.read_until,sr.question AS source_question,
-            t.cause_kind,t.cause_message_id AS source_message_id,t.cause_request_id,
-            (SELECT action FROM group_routes WHERE message_id=r.message_id) AS group_action
-            FROM member_requests r LEFT JOIN session_requests sr ON sr.member_request_id=r.id
-            LEFT JOIN task_message_sources t ON t.session_request_id=sr.id
-            WHERE r.member_id=? AND r.status='pending' ORDER BY r.id""", (row["id"],))]
         member_view = {key: row[key] for key in MEMBER_FIELDS}
         member_view["label"] = shown.get(row["name"], row["name"])
         member_view["review_capability"] = review_capability(connection, room_id, row["id"], token)
@@ -2828,8 +2827,7 @@ def inbox(connection, room_id, token):
         # Private chat lines the runner still has to run in this member's session (backend/private_chat.py).
         member_view["chats"] = [dict(item) for item in connection.execute(
             "SELECT id,text,status FROM private_chats WHERE member_id=? AND status IN ('pending','running') ORDER BY id", (row["id"],))]
-        pending = [{**request, **review_request_context(connection, request), **sequence_request_context(connection, request), **handoff_outcome(connection, request),
-                    **questions.request_context(connection, request)} for request in pending]
+        pending = pending_requests(connection, row["id"])
         (members if row["access"] == "runner" else observers).append({**member_view, "pending": pending})
     # Pending interjections ride along so the runner hands them to the running software at its next check.
     # `continues`: the answered execution whose software turn this one carries on (keep_working); the runner moves it over.
@@ -2844,6 +2842,19 @@ def inbox(connection, room_id, token):
         """SELECT member_executions.*,room_members.name FROM member_executions JOIN room_members ON room_members.id=member_id
         WHERE member_executions.room_id=? AND member_executions.status IN ('dispatched','started') ORDER BY member_executions.id""", (room_id,))]
     return {"room_id": room_id, "archived": bool(archived), "members": members, "observers": observers, "executions": executions}
+
+
+def pending_requests(connection, member_id):
+    """A member's pending requests with the context its software needs: discussion turn, review, relay, hand-back, question."""
+    pending = [dict(item) for item in connection.execute("""SELECT r.id,r.message_id,r.purpose,r.batch_id,
+        sr.id AS session_request_id,sr.session_id,sr.round,sr.position,sr.read_until,sr.question AS source_question,
+        t.cause_kind,t.cause_message_id AS source_message_id,t.cause_request_id,
+        (SELECT action FROM group_routes WHERE message_id=r.message_id) AS group_action
+        FROM member_requests r LEFT JOIN session_requests sr ON sr.member_request_id=r.id
+        LEFT JOIN task_message_sources t ON t.session_request_id=sr.id
+        WHERE r.member_id=? AND r.status='pending' ORDER BY r.id""", (member_id,))]
+    return [{**request, **review_request_context(connection, request), **sequence_request_context(connection, request), **handoff_outcome(connection, request),
+             **questions.request_context(connection, request)} for request in pending]
 
 
 def host_route_request(connection, message_id):
@@ -3063,6 +3074,33 @@ def reserve_execution(connection, room_id, token, payload):
                                 (room_id, payload.get("member_id"))).fetchone()
     if not member:
         raise LookupError(Text("成员不存在、已离开或为手动接入"))
+    return open_execution(connection, room_id, member, payload)
+
+
+def claim_execution(connection, room_id, member, payload):
+    """An external member claims its own open requests as one execution; a retried client_id returns the same one."""
+    begin_write(connection)
+    client_id = str(payload.get("client_id", ""))
+    if not 8 <= len(client_id) <= 100:
+        raise ValueError(Text("client_id 须为 8–100 字符的本地投递编号"))
+    previous = connection.execute("SELECT * FROM member_executions WHERE room_id=? AND client_id=?", (room_id, client_id)).fetchone()
+    if previous:
+        if previous["member_id"] != member["id"]:
+            raise FileExistsError(Text("client_id 已被使用"))
+        return execution_detail(connection, previous)
+    request_ids = payload.get("request_ids")
+    if request_ids is not None and (not isinstance(request_ids, list) or not 0 < len(request_ids) <= MAX_CLAIM_REQUESTS
+                                    or any(type(item) is not int for item in request_ids) or len(set(request_ids)) != len(request_ids)):
+        raise ValueError(Text("request_ids 须为 1–{limit} 个不重复的请求编号", limit=MAX_CLAIM_REQUESTS))
+    expire_executions(connection, room_id)
+    if connection.execute("SELECT archived FROM room_directory WHERE room_id=?", (room_id,)).fetchone()[0]:
+        raise FileExistsError(Text("房间已存档，不再投递"))
+    return open_execution(connection, room_id, member, payload, request_ids)
+
+
+def open_execution(connection, room_id, member, payload, request_ids=None):
+    """Open one execution over a checked member's pending requests, or only over `request_ids` among them."""
+    client_id = str(payload.get("client_id", ""))
     if connection.execute("SELECT 1 FROM member_executions WHERE member_id=? AND status IN ('dispatched','started')",
                           (member["id"],)).fetchone():
         raise FileExistsError(Text("该成员已有进行中的执行；同一会话不并发续接"))
@@ -3073,6 +3111,12 @@ def reserve_execution(connection, room_id, token, payload):
     # A group request waits for the runner to choose how everyone answers; it is never delivered itself.
     pending = connection.execute("""SELECT id,purpose,EXISTS(SELECT 1 FROM review_plans WHERE review_batch_id=member_requests.message_id AND reviewer_id=member_requests.member_id) AS review FROM member_requests
         WHERE member_id=? AND status='pending' AND purpose<>'group' ORDER BY id""", (member["id"],)).fetchall()
+    if request_ids is not None:
+        # An external member's computer agreed to these requests only; the others stay pending for its owner to decide.
+        missing = sorted(set(request_ids) - {row["id"] for row in pending})
+        if missing:
+            raise FileExistsError(Text("请求 {request_id} 不属于本成员或已处理", request_id=missing[0]))
+        pending = [row for row in pending if row["id"] in request_ids]
     session_purpose = next((row["purpose"] for row in pending if row["purpose"] == "discuss"), None)
     if not pending:
         raise FileExistsError(Text("该成员没有待投递的请求"))
@@ -3084,6 +3128,9 @@ def reserve_execution(connection, room_id, token, payload):
     else:
         request_filter = "purpose<>'group' AND NOT EXISTS(SELECT 1 FROM review_plans WHERE review_batch_id=member_requests.message_id AND reviewer_id=member_requests.member_id)"
         request_values = ()
+    if request_ids is not None:
+        request_filter += f" AND id IN ({','.join('?' * len(request_ids))})"
+        request_values = (*request_values, *request_ids)
     now = int(time.time())
     cursor = connection.execute("""INSERT INTO member_executions (room_id,member_id,client_id,lease_until,created_at,cwd)
         VALUES (?,?,?,?,?,?)""", (room_id, member["id"], client_id, now + LEASE_SECONDS, now, str(payload.get("cwd") or "")[:MAX_PATH_LENGTH]))
@@ -3303,13 +3350,15 @@ def execution_interjections(connection, execution_id, execution_status):
     return items
 
 
-def execution_action(connection, room_id, execution_id, token, payload):
+def execution_action(connection, room_id, execution_id, token, payload, member=None):
     """Runner-side lifecycle: renew, fail, release undelivered work, report how the software was reached, whether a voided one stopped, or observed file changes."""
     begin_write(connection)
     action = payload.get("action")
     duplicate = False
-    member = None
-    if action == "fail":
+    if member:
+        # An external member already authenticated by backend/external_members.py, acting on its own execution.
+        pass
+    elif action == "fail":
         try:
             require_owner(connection, room_id, token)
         except PermissionError:
@@ -3322,7 +3371,7 @@ def execution_action(connection, room_id, execution_id, token, payload):
     if not row:
         raise LookupError(Text("执行不存在"))
     if member and member["id"] != row["member_id"]:
-        raise PermissionError(Text("只能报告自己执行的失败"))
+        raise PermissionError(Text("只能报告自己执行的失败") if action == "fail" else Text("执行编号不属于本成员"))
     now = int(time.time())
     if action == "report":
         # Observed after the process ends, so the execution may already be complete; recorded once.
@@ -3857,6 +3906,8 @@ def member_action(connection, room_id, member_id, token, payload):
     """
     member = owned_member(connection, room_id, member_id, token)
     action = payload.get("action")
+    if member["access"] == "external" and action in ("role", "active", "adopt"):
+        raise ValueError(Text("外部成员不能担任主持人或被请回；需要时重新邀请"))
     routed = []
     if action in ("away", "remove"):
         if member["role"] == "host":
@@ -3918,3 +3969,4 @@ def member_action(connection, room_id, member_id, token, payload):
 # Imported last: session_room imports helpers from this module, so both load in either order.
 from . import session_room as discussion  # noqa: E402
 from . import questions  # noqa: E402
+from . import external_members  # noqa: E402

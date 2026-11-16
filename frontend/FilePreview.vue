@@ -89,7 +89,7 @@ const send=()=>{const s=getSelection(),r=s&&s.rangeCount&&!s.isCollapsed?s.getRa
 post(r?s.toString():"",r?[...r.getClientRects()].filter(b=>b.width).slice(0,50).map(b=>[b.left,b.top,b.right,b.bottom]):[]);};
 const later=()=>{clearTimeout(timer);post("",[]);if(!down)timer=setTimeout(send,${OFFER_SETTLE_MS});};
 document.addEventListener("selectionchange",later);addEventListener("scroll",later,{passive:true});
-addEventListener("pointerdown",()=>{down=true;},true);addEventListener("pointerup",()=>{down=false;later();},true);addEventListener("pointercancel",()=>{down=false;later();},true);
+addEventListener("pointerdown",e=>{down=e.pointerType!=="touch";},true);addEventListener("pointerup",()=>{down=false;later();},true);addEventListener("pointercancel",()=>{down=false;later();},true);
 addEventListener("message",e=>{if(e.source===parent&&e.data&&e.data.codiscuss_clear){const s=getSelection();if(s)s.removeAllRanges();}});})();<\/script>`;
 // What goes before the file: after its doctype, so a page that declares one is not shown in quirks mode.
 function html_document(text, extra = "") {
@@ -565,7 +565,8 @@ function schedule_offer() {
 }
 // Pressing the offer or the comment box must not hide it before its click lands.
 const on_offer = (event) => Boolean(event.target.closest?.(".file-selection-offer"));
-const press = (event) => { if (on_offer(event) || event.target.closest?.(".excerpt-mark")) return; pointer_down = true; if (mark_editing.value) close_mark(); };
+// Only a mouse or pen holds the offer until release; iOS sends no release after a long-press selection (see ChannelDiscussion).
+const press = (event) => { if (on_offer(event) || event.target.closest?.(".excerpt-mark")) return; pointer_down = event.pointerType !== "touch"; if (mark_editing.value) close_mark(); };
 const release = (event) => { if (on_offer(event)) return; pointer_down = false; schedule_offer(); };
 
 /** The source lines a selection covers, from the first and last text it really includes; zero when unknown. */

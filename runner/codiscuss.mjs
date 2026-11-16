@@ -34,6 +34,9 @@ const HELP = t(`AI CoDiscuss CLI
   health                检查网站健康状态
   schema [COMMAND]      离线查看命令与参数
   api PATH              访问尚未封装的网站接口
+  join LINK|CODE        用本机 AI 加入另一台电脑上的房间（外部成员）
+  invited COMMAND       查看被邀请的房间，调整信任等级、同意或拒绝唤醒、退出
+  repo COMMAND          外部成员只读查看对方电脑开放的项目
 
   codiscuss service --help
   codiscuss room --help
@@ -71,7 +74,7 @@ const WEBSITE_CLIENT = fileURLToPath(new URL('./discuss.py', import.meta.url));
 function website_cli(args) {
   const executable = local_settings().python || (process.platform === 'win32' ? 'python' : 'python3');
   const result = spawnSync(executable, ['-X', 'utf8', WEBSITE_CLIENT, ...args], {
-    stdio: 'inherit', windowsHide: true, env: { ...process.env, DISCUSS_CLI_NAME: 'codiscuss' },
+    stdio: 'inherit', windowsHide: true, env: { ...process.env, DISCUSS_CLI_NAME: 'codiscuss', CODISCUSS_NODE: process.execPath },
   });
   if (result.error) throw new Error(t('网站操作需要 Python 3.10+，无法启动 {value1}：{value2}', { value1: executable, value2: result.error.message }));
   process.exitCode = result.status ?? (result.signal === 'SIGINT' ? 130 : 1);
@@ -126,13 +129,19 @@ async function main(args = process.argv.slice(2)) {
   const [command] = args;
   if (['--help', '-h', 'help'].includes(command)) return process.stdout.write(HELP);
   if (command === 'service') return service_cli(args.slice(1));
-  if (command === 'launch') return launch_main(args.slice(1));
+  if (command === 'launch') {
+    // A restricted run (子Task5 CONTRACT §5) may not read local files through launch commands.
+    (await import('./external_client.mjs')).lockdown_launch_guard(args.slice(1));
+    return launch_main(args.slice(1));
+  }
   if (['install', 'setup'].includes(command)) return setup_main(command, args.slice(1));
   if (command === 'local') return local_main(args.slice(1));
   if (command === 'token') return admin_main(args.slice(1));
   if (command === 'panel') return (await import('./admin_panel.mjs')).panel_main(args.slice(1));
   if (command === 'admin') return (await import('./admin_cli.mjs')).admin_cli(args.slice(1));
   if (command === 'launcher') return (await import('./launcher.mjs')).launcher_main();
+  // Rooms on other computers this one was invited to, and the AI's entry to them (runner/external_client.mjs).
+  if (['join', 'invited', 'repo', 'external-proxy'].includes(command)) return (await import('./external_client.mjs')).external_main(command, args.slice(1));
   if (!command || (command === 'run' && args.length === 1)) return service_cli([]);
   if (SERVICE_COMMANDS.has(command) || command === '--json') return service_cli(args);
   return website_cli(args);

@@ -1,5 +1,5 @@
-import { readFileSync } from "node:fs";
-import { cp, mkdir, readdir } from "node:fs/promises";
+import { readdirSync, readFileSync } from "node:fs";
+import { cp, mkdir, readdir, writeFile } from "node:fs/promises";
 
 import { defineConfig } from "vite";
 import vue from "@vitejs/plugin-vue";
@@ -42,6 +42,49 @@ function katex_assets() {
     for (const name of await readdir("node_modules/katex/dist/fonts")) {
       if (name.endsWith(".woff2")) await cp(`node_modules/katex/dist/fonts/${name}`, `web/katex/fonts/${name}`);
     }
+  } };
+}
+
+const JOIN_KEY_PATTERN = /(?<![\w.$])t\(\s*"((?:\\.|[^"\\])*)"/g;
+
+/**
+ * The online site's invitation page, /join (Pages serves web/join.html there): one self-contained file with its
+ * script, styles and the English entries it uses inlined, so it never pairs with a stale cached asset.
+ */
+function join_page() {
+  return { name: "join-page", async closeBundle() {
+    const script = readFileSync(new URL("./join-page.js", import.meta.url), "utf8");
+    const english = Object.assign({}, ...readdirSync(new URL("./locales/en/", import.meta.url)).filter((name) => name.endsWith(".json"))
+      .map((name) => JSON.parse(readFileSync(new URL(`./locales/en/${name}`, import.meta.url), "utf8"))));
+    const used = Object.fromEntries([...script.matchAll(JOIN_KEY_PATTERN)].map((match) => JSON.parse(`"${match[1]}"`))
+      .filter((key) => english[key]).map((key) => [key, english[key]]));
+    const style = "body{margin:0;background:#121416;color:#e6e8ea;font:15px/1.6 system-ui,-apple-system,'Segoe UI',sans-serif}"
+      + "@media (prefers-color-scheme:light){body{background:#fff;color:#1b1d1f}}"
+      + "#join-root{max-width:560px;margin:0 auto;padding:40px 16px}h1{font-size:22px;line-height:1.35;margin:0 0 20px}"
+      + "dl{display:grid;grid-template-columns:auto 1fr;gap:6px 14px;margin:0 0 20px}dt{opacity:.65}dd{margin:0;overflow-wrap:anywhere}"
+      + ".note{margin:0 0 8px}.fine{margin:8px 0 0;font-size:13px;opacity:.65}.actions{display:flex;flex-wrap:wrap;gap:10px;margin:20px 0 8px}"
+      + ".actions a,.actions button{display:inline-flex;align-items:center;min-height:40px;padding:0 16px;border-radius:8px;font:inherit;text-decoration:none;cursor:pointer}"
+      + ".primary{background:#10b981;color:#fff;border:0}.secondary{background:transparent;color:inherit;border:1px solid currentColor}";
+    // "<" is escaped inside the inline script so no dictionary text can close it.
+    const dictionary = JSON.stringify(used).replaceAll("<", `${String.fromCharCode(92)}u003c`);
+    const html = `<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<meta name="robots" content="noindex">
+<meta name="referrer" content="no-referrer">
+<title>AI CoDiscuss</title>
+<style>${style}</style>
+</head>
+<body>
+<main id="join-root"></main>
+<script>const JOIN_DICTIONARY = ${dictionary};
+${script}</script>
+</body>
+</html>
+`;
+    await writeFile("web/join.html", html);
   } };
 }
 
@@ -93,7 +136,7 @@ export default defineConfig(({ mode }) => mode === "markdown" ? {
   define: { "process.env.NODE_ENV": JSON.stringify("production"),
     __APP_VERSION__: JSON.stringify(JSON.parse(readFileSync(new URL("../package.json", import.meta.url), "utf8")).version) },
   // The Video.js players are custom elements, which Vue leaves to the browser.
-  plugins: [videojs_single_locale(), vue({ template: { compilerOptions: { isCustomElement: (tag) => VIDEOJS_ELEMENTS.has(tag) } } }), ui({
+  plugins: [join_page(), videojs_single_locale(), vue({ template: { compilerOptions: { isCustomElement: (tag) => VIDEOJS_ELEMENTS.has(tag) } } }), ui({
     colorMode: false,
     router: false,
     dts: false,

@@ -436,8 +436,9 @@ onBeforeUnmount(() => { document.removeEventListener("pointerdown", close_on_out
             <p>{{ t('会话自行注册后才算到场。') }}</p>
             <p v-if="manual_note">{{ manual_note }}</p>
           </div>
-          <!-- Three start choices leave room for the icon only; the card's own tooltip still says what a click does. -->
-          <span v-if="can_flip" class="expert-card-flip"><UIcon name="i-lucide-settings-2" />{{ mode_options.length > 2 ? '' : t('设置') }}</span>
+          <!-- Drawn like the start switch beside it and level with it, so the way to the settings is seen at a glance; beside
+               three start choices its word shows only where the card leaves room (styles below), the card's tooltip says it. -->
+          <span v-if="can_flip" class="expert-card-flip is-open" :class="{ 'is-tight': mode_options.length > 2 }"><UIcon name="i-lucide-settings-2" /><span class="expert-card-flip-label">{{ t('设置') }}</span></span>
         </component>
         <div v-if="mode_options.length > 1" class="expert-card-modes expert-card-front-modes" :class="{ 'is-dense': mode_options.length > 2 }" role="radiogroup" :aria-label="t('{value1} 启动方式', { value1: name })" @keydown="choose_capability">
           <button v-for="option in mode_options" :key="option" type="button" :title="MODE_TITLES[option]"
@@ -532,7 +533,7 @@ onBeforeUnmount(() => { document.removeEventListener("pointerdown", close_on_out
 .expert-card-back { position: relative; display: flex; flex-direction: column; gap: 4px; padding: 10px 12px 8px; transform: rotateY(180deg); }
 .expert-card-back-body { display: flex; flex: 1; flex-direction: column; gap: 8px; min-height: 0; padding: 2px; overflow-y: auto; scrollbar-width: thin; }
 .expert-card:hover .expert-card-face { border-color: var(--ui-border-accented); }
-.expert-card-open { display: flex; flex: 1; flex-direction: column; gap: 10px; width: 100%; min-width: 0; padding: 12px 12px 30px; text-align: left; border-radius: inherit; outline: none; }
+.expert-card-open { display: flex; flex: 1; flex-direction: column; gap: 10px; width: 100%; min-width: 0; padding: 12px 12px 48px; text-align: left; border-radius: inherit; outline: none; }
 .expert-card-open.is-static { cursor: default; padding-bottom: 12px; }
 .expert-card-open.has-modes { padding-bottom: 8px; }
 .expert-card-front-modes { flex-shrink: 0; width: fit-content; margin: 0 0 10px 12px; }
@@ -558,12 +559,22 @@ onBeforeUnmount(() => { document.removeEventListener("pointerdown", close_on_out
 .expert-card-facts dt { color: var(--ui-text-dimmed); white-space: nowrap; }
 .expert-card-facts dd { overflow: hidden; margin: 0; color: var(--ui-text-toned); white-space: nowrap; text-overflow: ellipsis; }
 .expert-card-flip { position: absolute; right: 8px; bottom: 8px; display: inline-flex; align-items: center; gap: 4px; min-height: 22px; padding: 2px 6px; border-radius: 4px; color: var(--ui-text-dimmed); font-size: 11px; }
-.expert-card-flip > span { width: 12px; height: 12px; }
+.expert-card-flip > span:not(.expert-card-flip-label) { width: 12px; height: 12px; }
 .expert-card-open:hover .expert-card-flip, .expert-card-flip.is-done { color: var(--channel-accent); }
 .expert-card-flip.is-done:hover, .expert-card-flip.is-cancel:hover { background: var(--ui-bg-accented); }
 .expert-card-flip-actions { display: flex; flex-shrink: 0; justify-content: flex-end; gap: 2px; margin-right: -4px; }
 .expert-card-flip-actions > .expert-card-flip { position: static; }
 .expert-card-flip.is-cancel:hover { color: var(--ui-text-highlighted); }
+/* The front's settings button has the start switch's height and fill (.expert-card-modes) and sits on its line. */
+.expert-card-flip.is-open { right: 12px; bottom: 10px; min-height: 28px; padding: 0 10px; border-radius: 5px; background: var(--ui-bg-muted); color: var(--ui-text-toned); font-weight: 500; }
+.expert-card-flip.is-open > span:not(.expert-card-flip-label) { color: var(--channel-accent); }
+.expert-card-flip.is-open.is-tight { padding: 0 8px; }
+/* Three start choices take 180px in Chinese and 218px in English: the word fits beside them only on a Chinese card at
+   least 270px wide (measured 2026-11-16 at 1440 × 900); otherwise the same button shows its icon alone. */
+:lang(en) .expert-card-flip.is-open.is-tight > .expert-card-flip-label { display: none; }
+:lang(en) .expert-card-front-modes.is-dense button { padding: 0 4px; }
+@container (max-width: 269px) { .expert-card-flip.is-open.is-tight > .expert-card-flip-label { display: none; } }
+.expert-card-open:hover .expert-card-flip.is-open { background: var(--ui-bg-accented); color: var(--ui-text-highlighted); }
 .expert-card-tools { position: absolute; top: 9px; right: 8px; display: flex; gap: 2px; }
 .expert-card-tools > button { display: grid; place-items: center; width: 24px; height: 24px; border-radius: 5px; color: var(--ui-text-dimmed); }
 .expert-card-tools > button > span { width: 13px; height: 13px; }

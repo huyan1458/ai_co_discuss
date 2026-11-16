@@ -97,7 +97,7 @@ function read_registry(home) {
 }
 
 /** The uncompressed P-256 point of a JWK, which names the device. */
-function raw_point(jwk) {
+export function raw_point(jwk) {
   if (jwk?.kty !== 'EC' || jwk.crv !== 'P-256') throw new Error('设备公钥须为 P-256');
   const x = from_b64url(jwk.x), y = from_b64url(jwk.y);
   if (x.length !== 32 || y.length !== 32) throw new Error('设备公钥格式无效');
@@ -205,6 +205,8 @@ export function pair_device(home, machine_id, site, { public_key, label, proof, 
  */
 export async function open_signed_request(home, id, sealed, machine_id) {
   if (typeof sealed?.body !== 'string') throw new Error('请更新网页后重试：这台电脑只接受已配对设备签名的请求');
+  // External members are answered by external_gateway.mjs alone; their keys never count as a device here.
+  if (sealed.external_id !== undefined) throw new Error('外部成员的请求不能当作设备请求处理');
   const request = JSON.parse(sealed.body);
   if (!sealed.device_id) {
     if (!UNSIGNED_ACTIONS.has(request.action)) throw Object.assign(new Error('这台设备还没有与电脑配对'), { need: 'pairing' });
@@ -234,13 +236,15 @@ export async function open_signed_request(home, id, sealed, machine_id) {
 /**
  * The device list this computer signs for the website: each device's public key, expiry and, for a device that may renew
  * itself, how long after expiry it may still reach this computer to do so. The website checks requests against it and
- * cannot add a device of its own.
+ * cannot add a device of its own. `externals` are external members' keys (`kind: 'external'`, from external_gateway.mjs),
+ * which the website lets through for relayed requests only.
  */
-export async function signed_device_list(home, link, now = Date.now()) {
+export async function signed_device_list(home, link, now = Date.now(), externals = []) {
   const { devices } = read_registry(home);
-  const body = JSON.stringify({ machine: link.id, issued_at: now, devices: Object.entries(devices)
+  const body = JSON.stringify({ machine: link.id, issued_at: now, devices: [...Object.entries(devices)
     .map(([id, device]) => ({ id, x: device.public_key.x, y: device.public_key.y, expires_at: device.expires_at,
-      ...(renewable(device) ? { renew_until: device.expires_at + RENEW_GRACE_DAYS * DAY_MS } : {}) })) });
+      ...(renewable(device) ? { renew_until: device.expires_at + RENEW_GRACE_DAYS * DAY_MS } : {}) })),
+    ...externals.map(({ id, x, y, room, expires_at }) => ({ id, x, y, kind: 'external', room, expires_at }))] });
   const key = await crypto.subtle.importKey('jwk', link.sign_private_key, { name: 'ECDSA', namedCurve: 'P-256' }, false, ['sign']);
   const signature = await crypto.subtle.sign({ name: 'ECDSA', hash: 'SHA-256' }, key, new TextEncoder().encode(body));
   return { body, signature: b64url(new Uint8Array(signature)) };

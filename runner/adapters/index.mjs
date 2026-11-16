@@ -35,11 +35,11 @@ import { api } from './api.mjs';
 import { claude } from './claude.mjs';
 import { codex } from './codex_app.mjs';
 import { codex_cli } from './codex_cli.mjs';
-import { execution_marker, MODEL_PATTERN } from './common.mjs';
-import { adapter_capabilities, adapter_profile, ADAPTER_IDS, takes_images } from './profiles.mjs';
+import { execution_marker, MODEL_PATTERN, not_sent } from './common.mjs';
+import { adapter_capabilities, adapter_profile, ADAPTER_IDS, lockdown_support, takes_images } from './profiles.mjs';
 
 export { execution_marker };
-export { adapter_capabilities as capabilities_of, takes_images };
+export { adapter_capabilities as capabilities_of, lockdown_support, takes_images };
 
 export const ADAPTERS = Object.fromEntries([codex_cli, codex, claude, antigravity_cli, antigravity, api]
   .map(behaviour => [behaviour.id, { ...adapter_profile(behaviour.id), ...behaviour }]));
@@ -76,10 +76,18 @@ export function sweep_adapters(service_home, user_home) {
   return Object.values(ADAPTERS).reduce((count, adapter) => count + (adapter.sweep?.(service_home, user_home) || 0), 0);
 }
 
-/** Deliver one task through its member's adapter; only allowlisted adapters run. */
+/**
+ * Deliver one task through its member's adapter; only allowlisted adapters run. A task with `tool_lockdown: true` runs
+ * only where the software can be confined to the codiscuss subcommands; elsewhere nothing starts and the error carries
+ * `code: 'tool_lockdown_unsupported'`.
+ */
 export async function deliver_task(config, binding, task, spawn_process = spawn, user_home = homedir()) {
   const adapter = adapter_of(config.adapter);
   if (!adapter) throw new Error('不支持的软件适配器');
+  if (task.tool_lockdown) {
+    const { supported, reason } = lockdown_support(config.adapter, config);
+    if (!supported) throw not_sent(Object.assign(new Error(`${adapter.label} 不能收窄到只运行 codiscuss 命令：${reason}`), { code: 'tool_lockdown_unsupported' }));
+  }
   // A private chat turn (`task.chat`) goes through the adapter's own `chat` when it has one, else as a usual delivery.
   if (task.chat && adapter.chat) return adapter.chat(config, binding, task, spawn_process, user_home);
   return adapter.deliver(config, binding, task, spawn_process, user_home);

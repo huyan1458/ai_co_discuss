@@ -112,6 +112,20 @@ test('the website gets a device list signed by the computer, and a change is sen
   const list = JSON.parse(body);
   assert.deepEqual(list.devices.map(item => [item.id, item.x]), [[device.id, device.public_key.x]]);
   assert.ok(!body.includes('passkey') && !body.includes('label'), 'only keys and expiry leave the computer');
+  // External members' keys join the same signed list, marked so the website lets them through for relayed requests only.
+  const external = { id: 'e'.repeat(32), x: 'X'.repeat(43), y: 'Y'.repeat(43), room: 'room1', expires_at: Date.now() + 1000 };
+  const merged = JSON.parse((await signed_device_list(home, link, Date.now(), [external])).body).devices;
+  assert.deepEqual(merged.at(-1), { ...external, kind: 'external' });
+  assert.equal(merged.filter(item => item.kind === 'external').length, 1, 'devices stay unmarked');
+});
+
+test('a request carrying an external member\'s key is never opened as a device request, even beside a device signature', async t => {
+  const home = home_dir(t);
+  const device = await paired_device(home);
+  const sealed = await device.seal('ext-1', { action: 'settings' });
+  await assert.rejects(open_signed_request(home, 'ext-1', { ...sealed, external_id: device.id }), /外部成员/);
+  const { device_id, ...unsigned } = sealed;
+  await assert.rejects(open_signed_request(home, 'ext-2', { ...unsigned, external_id: device.id }), /外部成员/);
 });
 
 test('only a paired device\'s signed request is opened; an unpaired browser may only pair', async t => {

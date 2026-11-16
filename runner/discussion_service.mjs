@@ -756,6 +756,8 @@ export async function run_service(home, output = () => {}) {
     const { start_relay_channels } = await import('./relay_channel.mjs');
     if ((await import('./admin_account.mjs')).remove_legacy_admin_accounts(home)) log_line('已删除旧版本明文保存的管理员密码文件 admin-accounts.json');
     channels = start_relay_channels(home, { log: log_line, signal: relay_stop.signal });
+    // Rooms on other computers this one was invited to: pull the requests named for its AI (runner/external_client.mjs).
+    (await import('./external_client.mjs')).start_external_client(home, { log: log_line, signal: relay_stop.signal });
     // The owner's Weixin replies come back here and go to the room their notice came from.
     receiving = receive_replies(home, { on_reply: reply => service.weixin_reply(reply), log: log_line, signal: relay_stop.signal })
       .catch(error => log_line(`微信收件停止：${error.message}`));

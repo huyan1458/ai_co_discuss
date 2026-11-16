@@ -17,6 +17,7 @@ import { local_settings } from './discussion_setup.mjs';
 import { machine_links, relay_cipher, save_machine_links, relayed_command, ROOM_ACTIONS, run_launch_command, sync_remote_launches, unseal } from './remote_launch.mjs';
 import { claim_relayed_command } from './remote_policy.mjs';
 import { audit, DEVICE_ACTIONS, device_command, open_signed_request } from './device_auth.mjs';
+import { answer_external, INVITE_COMMANDS, is_external_request } from './external_gateway.mjs';
 import { site_fetch } from './entry_client.mjs';
 import { entry_settings } from '../gateway/gateway.mjs';
 
@@ -177,6 +178,8 @@ export function computer_command(home, site, action, payload) {
   const room = rooms.get(input.room_id);
   if (input.room_id && !input.token) input.token = room?.token ?? '';
   if (input.source_room_id && !input.source_token) input.source_token = rooms.get(input.source_room_id)?.token ?? '';
+  // An invite made from a paired device sends the invitee to the website that device uses.
+  if (INVITE_COMMANDS.has(action) && !input.site_url) input.site_url = site;
   return relayed_command(room?.site ?? local_origin(home), action, input);
 }
 
@@ -199,6 +202,16 @@ export async function answer_request(home, site, link, frame, { run = run_launch
   const key = await relay_cipher(link.private_key, envelope.key);
   const sealed = await unseal(key, envelope, id);
   let response, request = {};
+  // An external member's request (or an invite being redeemed) goes to the external gateway alone: it never reaches the
+  // device actions, the local entrypoint or the bridge, and never gains this computer's owner credential.
+  if (is_external_request(sealed)) {
+    ({ request, response } = await answer_external(home, { machine_id: link.id, link, fetcher, on_change: () => sync_remote_launches(home) }, id, sealed));
+    report?.({ action: request.action, route: '', status: response.status });
+    const answer = { type: 'response', id, envelope: await seal_compressed(key, response, `${id}:response`) };
+    if (JSON.stringify(answer).length <= FRAME_MAX_BYTES) return answer;
+    return { type: 'response', id, oversized: true,
+      envelope: await seal_compressed(key, { status: 413, body: { error: '回应超过中转单帧上限，未能送出' } }, `${id}:response`) };
+  }
   try {
     // Only a paired device's signed request runs; an unpaired browser may only prove a pairing code.
     const opened = await open_signed_request(home, id, sealed, link.id);

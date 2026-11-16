@@ -1,7 +1,7 @@
 <script setup>
 import { t } from './i18n.js';
 /** Right-rail board of a free room, laid out like the discussion progress board. */
-import { computed, inject, ref, watch } from "vue";
+import { computed, inject, onBeforeUnmount, ref, watch } from "vue";
 import InviteDialog from "./InviteDialog.vue";
 import WorkflowControl from "./WorkflowControl.vue";
 import { active_workflow } from "./workflow-state.js";
@@ -13,6 +13,8 @@ import SpeakingOrder from "./SpeakingOrder.vue";
 import MemberDescriptionDialog from "./MemberDescriptionDialog.vue";
 import { busy, member_actions } from "./member-actions.js";
 import MemoBlock from "./memo-block.js";
+import ExternalMemberDialog from "./ExternalMemberDialog.vue";
+import { declined, external_of, external_tag } from "./external-members.js";
 
 const { view, bridge, act, pending } = inject("discussion");
 const LIVE = ["dispatched", "started"];
@@ -113,6 +115,8 @@ function member_tone(member) {
 
 /** One line per member: live execution, queued requests, its place in a one-after-another queue, or the last outcome. */
 function member_status(member, state) {
+  if (external_of(member)?.ended) return t('已结束：不能再领取请求或读取文件');
+  if (external_of(member) && external_of(member).expires_at && external_of(member).expires_at <= clock.value) return t('已到期：不能再领取请求或读取文件');
   if (member.status === "away") return t('已离开：不会被唤醒，可请回');
   if (unregistered(member)) return t('待注册');
   const execution = member.execution;
@@ -123,6 +127,7 @@ function member_status(member, state) {
   if (member.held_until) return t('{value1}，等待结束确认或迟到回答；{value2}最晚 {value3} 送达', { value1: execution?.stop_result === "unconfirmed" ? t('上一轮停止未确认') : t('上一轮已作废，可能仍在生成'), value2: member.pending ? t('{value1} 条新消息', { value1: member.pending }) : t('新消息'), value3: bridge.format_time(member.held_until * 1000) });
   if (member.pending && member.adopt_error) return t('无法投递 {value1} 条', { value1: member.pending });
   if (member.pending) return t('待投递 {value1} 条', { value1: member.pending });
+  if (external_declined.value.has(member.id)) return t('对方未同意');
   if (state === "queued") return discussion.value ? t('本轮排队') : t('等待依次发言');
   if (execution?.status === "failed") return t('执行失败');
   return !execution && member.access === "manual" ? t('已注册') : t('空闲');
@@ -133,6 +138,7 @@ function member_status(member, state) {
  * API, manual and web members also say how they take part; one that can make images names its image model too. The crown already marks the host.
  */
 function member_tag(member) {
+  if (external_of(member)) return external_tag(member, clock.value);
   if (member.access !== "runner") return ACCESS_LABELS[member.access];
   return [member.adapter === "api" ? "API" : "", member_model(member)].filter(Boolean).join(" · ");
 }
@@ -144,6 +150,7 @@ function member_model(member) {
 
 /** Session and project files of a woken member, e.g. "借用会话 · 可写"; web members only read. */
 function member_setup(member) {
+  if (external_of(member)) return "";
   const session = member.access === "runner" ? (member.session_mode === "borrowed" ? t('借用会话') : t('独立会话')) : "";
   return [session, bridge.participant_files(member.name, room.value, view.value.launch.room_models)].filter(Boolean).join(" · ");
 }
@@ -216,16 +223,41 @@ function member_row_key(member, state) {
   const identity = bridge.identities[member.name];
   return JSON.stringify([member, state, discussion.value, member_tag(member), member_setup(member), member_model(member),
     bridge.participant_session_hint(member.name, room.value, view.value.launch.room_models), bridge.display_name(member.name),
-    room.value.descriptions?.[member.name], in_workflow(member.name) && workflow.value.label, identity?.icon, identity?.initials, identity?.style,
+    room.value.descriptions?.[member.name], external_declined.value.has(member.id), external_of(member) && Math.floor(clock.value / CLOCK_TICK_MS), in_workflow(member.name) && workflow.value.label, identity?.icon, identity?.initials, identity?.style,
     view.value.access, room.value.session?.status, view.value.launch.available]);
 }
 
 /** The rail's quick entry to a member's actions; the room overview lays the same list out in full. */
 function member_menu(member) {
-  return member_actions(member, { view: view.value, act, describe: (name) => { describing.value = name; } });
+  return member_actions(member, { view: view.value, act, describe: (name) => { describing.value = name; },
+    external: (target, focus = "") => { external_member.value = target; external_focus.value = focus; external_open.value = true; } });
 }
 
 const inviting = ref(false);
+// The external member whose dialog is open, and whether it opened on revoking.
+const external_member = ref(null), external_focus = ref(""), external_open = ref(false);
+// Remaining times count down on the rail; a minute is fine-grained enough for "剩余 N 分钟".
+const CLOCK_TICK_MS = 30_000;
+const clock = ref(Date.now());
+const clock_timer = setInterval(() => { clock.value = Date.now(); }, CLOCK_TICK_MS);
+onBeforeUnmount(() => clearInterval(clock_timer));
+/** External members whose latest request their computer turned down or let time out. */
+const external_declined = computed(() => {
+  const latest = new Map();
+  for (const request of free.value.requests || []) latest.set(request.member_id, request);
+  return new Set([...latest].filter(([, request]) => declined(request)).map(([id]) => id));
+});
+// Someone redeeming an invitation becomes a member at once, with no approval step: say so, so the owner can revoke.
+const known_external = new Map();
+watch(() => [room.value.id, free.value.members], ([room_id, members]) => {
+  if (!room_id || !Array.isArray(members)) return;
+  const ids = members.filter((member) => external_of(member)).map((member) => member.id);
+  const seen = known_external.get(room_id);
+  known_external.set(room_id, new Set(ids));
+  if (!seen) return;
+  for (const member of members.filter((item) => external_of(item) && !seen.has(item.id)))
+    bridge.notify("warning", t('{name} 经邀请加入了房间（外部 · {level}）；不是你邀请的就在成员菜单里撤销', { name: bridge.display_name(member.name), level: external_tag(member) }));
+}, { immediate: true });
 // The member whose description is open for editing; the scheduler and the host read it from the room.
 const describing = ref(""), describing_saving = ref(false);
 watch(() => room.value.id, () => { inviting.value = false; describing.value = ""; });
@@ -305,7 +337,7 @@ watch(() => room.value.id, () => { starting.value = false; });
       <SpeakingOrder :away="away_names" :round="current_round">
         <template #default="{ item }">
           <MemoBlock v-for="member in [member_named(item.name)].filter(Boolean)" :key="member.id" :deps="[member_row_key(member, item.state)]">
-            <UAvatar :src="bridge.identities[member.name]?.icon" :text="bridge.identities[member.name]?.initials" :alt="member.name" size="xs" class="channel-avatar" :class="bridge.identities[member.name]?.style" />
+            <UAvatar :src="bridge.identities[member.name]?.icon" :text="bridge.identities[member.name]?.initials" :alt="member.name" size="xs" class="channel-avatar" :class="[bridge.identities[member.name]?.style, { 'is-external': external_of(member) }]" />
             <div class="pb-member-body">
               <div class="pb-member-name" :title="room.descriptions?.[member.name] || undefined">{{ bridge.display_name(member.name) }}<span v-if="bridge.display_name(member.name) !== member.name" class="member-id">{{ member.name }}</span><UIcon v-if="member.role === 'host'" name="i-lucide-crown" :title="t('主持人')" /><small :title="member_tag(member) || undefined">{{ member_tag(member) }}</small></div>
               <small v-if="in_workflow(member.name)" class="pb-workflow-member" :title="t('来自工作流「{value1}」', { value1: workflow.label })">{{ t('工作流') }}</small>
@@ -329,6 +361,7 @@ watch(() => room.value.id, () => { starting.value = false; });
   <StartDiscussionDialog v-model:open="starting" />
   <StartGoalDialog v-model:open="goal_dialog" :edit="Boolean(goal)" :initial="goal" />
   <InviteDialog v-model:open="inviting" :workflow-id="invite_workflow_id" :description="t('新成员加入后不打断其他成员；点卡片翻面可设置软件、模型、项目权限和要续接的已有会话。')" />
+  <ExternalMemberDialog v-model:open="external_open" :member="external_member" :focus="external_focus" />
   <MemberDescriptionDialog :open="Boolean(describing)" :name="describing || ' '" :platform="describing ? bridge.default_name(bridge.platform_of(describing)) : ''" :default_label="describing ? bridge.default_name(describing) : ''"
     :text="room.descriptions?.[describing] || ''" :label="room.labels?.[describing] || ''" :template="describing ? bridge.description_template(describing) : ''" :saving="describing_saving"
     @update:open="(open) => { if (!open) describing = ''; }" @save="save_description" />
@@ -337,6 +370,8 @@ watch(() => room.value.id, () => { starting.value = false; });
 
 <style scoped>
 .pb-member.is-away { opacity: .6; }
+/* A member from another computer: a dashed ring marks it apart from this computer's own AIs. */
+.channel-avatar.is-external { outline: 1px dashed var(--ui-text-muted); outline-offset: 2px; }
 .pb-goal-status { display: flex; align-items: center; gap: 6px; font-size: 12px; }
 .pb-goal-status.is-paused { color: var(--ui-text-muted); }
 /* The two start buttons share one row; the note on why they are disabled sits below them. */

@@ -38,7 +38,10 @@
  *   read from the software's output); `resume` (a stopped turn can go on in the same session, so the owner may pause
  *   a room execution from the private chat without ending it; not yet measured on real software); `close_grace_ms` (after a
  *   normal completion its process is left this long to record the receipt it got before it is stopped; measured per
- *   software, absent means it is stopped at once).
+ *   software, absent means it is stopped at once). `tool_lockdown`: a task with `tool_lockdown: true` can be confined
+ *   to the codiscuss subcommands, with no other local file access, no web and no MCP (see `lockdown_support`; not yet
+ *   measured on real software, 2026-11-15).
+ * - `lockdown_hint`: why it cannot be confined, shown when a confined task is refused.
  * - `session_family`: profiles sharing one session store; switching among them keeps the conversation.
  * - `windows_command`: how its shell names the codiscuss CLI on Windows.
  * - `task_rules(cli, {runs_commands})`: fixed task text this software needs, added by the runner so no member prompt drops it.
@@ -78,7 +81,9 @@ export const ADAPTER_PROFILES = {
     access_hints: { read: '只读沙箱', write: '项目可写的沙箱，命令在沙箱内运行、可联网',
       auto: '沙箱外的操作由模型申请提权，Codex 自动审核代替人工批准', full: '无沙箱、无审批（--dangerously-bypass-approvals-and-sandbox）' },
     client: 'codex', adopt: 'session', host_existing: true, session_family: 'codex', browse_sessions: true,
+    lockdown_hint: '沙箱只读档仍可读整个磁盘、运行任意只读命令，无法只放行 codiscuss 命令',
     capabilities: { delivery: PROCESS, rewind: 'cut', project: true, access_env: true, enforces_read_only: true, limits_directories: true, ripgrep: true, chat: true, resume: true, images: true, capture: FINAL_REMARK,
+      tool_lockdown: false,
       // Codex CLI 0.163 records a command's output in its session about 0.1 s after reporting it done (2026-11-15).
       close_grace_ms: 1500 },
   },
@@ -86,7 +91,8 @@ export const ADAPTER_PROFILES = {
     platform: 'Codex', label: 'Codex App', kind: 'app', location: 'executable', fields: ['source_thread_id', 'project_id', 'project_name'],
     efforts: null, models: false, access_levels: null, per_tool_allow: false,
     client: 'codex', adopt: 'session', host_existing: true, session_family: 'codex', browse_sessions: true,
-    capabilities: { delivery: IN_APP, rewind: 'cut', project: true, chat: true, capture: false },
+    lockdown_hint: '权限由 App 决定，接入程序无法逐次收窄',
+    capabilities: { delivery: IN_APP, rewind: 'cut', project: true, chat: true, capture: false, tool_lockdown: false },
   },
   claude: {
     platform: 'Claude', label: 'Claude Code', kind: 'cli', location: 'executable', fields: ['allowed_tools'],
@@ -97,7 +103,8 @@ export const ADAPTER_PROFILES = {
     resume_command: session_id => `claude --resume ${session_id}`,
     // Claude Code runs commands through bash on Windows too, where the npm shim works without .cmd.
     windows_command: 'codiscuss',
-    capabilities: { delivery: PROCESS, rewind: 'cut', project: true, access_env: true, chat: true, resume: true, images: true, capture: FINAL_REMARK },
+    // Confined by --restricted --safe-mode --tools and dontAsk (claude_lockdown); a taken-over manual member keeps its own window.
+    capabilities: { delivery: PROCESS, rewind: 'cut', project: true, access_env: true, chat: true, resume: true, images: true, capture: FINAL_REMARK, tool_lockdown: true },
   },
   antigravity_cli: {
     platform: 'Antigravity', label: 'Antigravity CLI', kind: 'cli', location: 'executable', fields: ['project_id', 'project_name'],
@@ -109,7 +116,8 @@ export const ADAPTER_PROFILES = {
     unsupported_hints: { auto: 'agy 只在交互窗口提供自动模式，后台运行（-p）不支持' },
     // Only a conversation this tool created gets its session rules; an existing one keeps its own project and permissions.
     client: 'antigravity', adopt: 'session', host_existing: false, own_project_when_bound: true, browse_sessions: true,
-    capabilities: { delivery: PROCESS, rewind: 'cut', project: true, access_env: true, chat: true, capture: FINAL_REMARK },
+    lockdown_hint: '文件读取、网页读取与搜索工具是否全部受权限规则约束尚未核实，无法保证只放行 codiscuss 命令',
+    capabilities: { delivery: PROCESS, rewind: 'cut', project: true, access_env: true, chat: true, capture: FINAL_REMARK, tool_lockdown: false },
     // A read-only agy session allows only codiscuss commands and headless agy ends the turn on a denied one; agy streams no
     // thinking text, so without a word at each turning point the page cannot show how far it got.
     task_rules: (cli, { runs_commands }) => (runs_commands ? ''
@@ -120,7 +128,8 @@ export const ADAPTER_PROFILES = {
     platform: 'Antigravity', label: 'Antigravity App', kind: 'app', location: 'ipc_directory', fields: ['project_id', 'project_name'],
     efforts: null, models: false, access_levels: null, per_tool_allow: false,
     client: 'antigravity', adopt: 'session', host_existing: true,
-    capabilities: { delivery: IN_APP, rewind: 'kept', project: true, chat: true, capture: false },
+    lockdown_hint: '权限由 App 决定，接入程序无法逐次收窄',
+    capabilities: { delivery: IN_APP, rewind: 'kept', project: true, chat: true, capture: false, tool_lockdown: false },
   },
   api: {
     platform: '', label: '模型 API', kind: 'api', location: '', fields: ['base_url', 'api_protocol', 'api_key_ref', 'image_input'],
@@ -133,7 +142,8 @@ export const ADAPTER_PROFILES = {
     // Runs in the Pi harness (api_pi.mjs), which keeps a session the runner cuts like a CLI's.
     // Whether a model reads images depends on the model, not the protocol: the owner says so on the card (`image_input`).
     // Its answer is only what submit_chat saves (an unknown result is recovered by the same submission), never its last text.
-    capabilities: { delivery: PROCESS, rewind: 'cut', project: true, file_tools: true, limits_directories: true, chat: true, images: 'configured', capture: false },
+    // Confined, it keeps only the room tools: no project file tools, registered commands or image tools (api_lockdown).
+    capabilities: { delivery: PROCESS, rewind: 'cut', project: true, file_tools: true, limits_directories: true, chat: true, images: 'configured', capture: false, tool_lockdown: true },
   },
 };
 
@@ -164,6 +174,18 @@ export function platform_adapters(platform) {
 export function takes_images(profile) {
   const images = ADAPTER_PROFILES[profile?.adapter]?.capabilities.images;
   return images === true || (images === 'configured' && profile.image_input === 'image');
+}
+
+/**
+ * Whether a task confined to the codiscuss subcommands (`tool_lockdown`) can run on a member: `{supported, reason}`.
+ * A taken-over manual member keeps its own session's permissions and window, so it cannot be confined either.
+ */
+export function lockdown_support(id, config = {}) {
+  const profile = ADAPTER_PROFILES[id];
+  if (!profile) return { supported: false, reason: '不支持的软件适配器' };
+  if (!profile.capabilities.tool_lockdown) return { supported: false, reason: profile.lockdown_hint || '' };
+  if (config.project_access === 'own') return { supported: false, reason: '托管的已有会话沿用它自己的权限，无法收窄' };
+  return { supported: true, reason: '' };
 }
 
 /** What an adapter can do; an unknown adapter can do nothing. */

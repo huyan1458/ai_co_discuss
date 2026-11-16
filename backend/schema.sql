@@ -548,6 +548,52 @@ CREATE TABLE IF NOT EXISTS request_cancel_reasons (
     request_id INTEGER PRIMARY KEY REFERENCES member_requests(id) ON DELETE CASCADE,
     reason TEXT NOT NULL CHECK(reason IN ('user_stop','member_away','member_removed','rerouted','no_reply','archived'))
 );
+-- External members (backend/external_members.py): a room_members row with access='external' runs on another computer and
+-- reaches this room only through the runner's gateway. Its grant, expiry and quota live here; `token_hash` repeats the
+-- member's credential hash so every route can refuse that credential outside the member-scope routes. Ended members stay.
+CREATE TABLE IF NOT EXISTS external_members (
+    member_id INTEGER PRIMARY KEY REFERENCES room_members(id) ON DELETE CASCADE,
+    room_id TEXT NOT NULL REFERENCES rooms(id) ON DELETE CASCADE,
+    token_hash TEXT NOT NULL,
+    machine TEXT NOT NULL,
+    machine_label TEXT NOT NULL DEFAULT '',
+    scope TEXT NOT NULL CHECK(scope IN ('discuss','read')),
+    directories TEXT NOT NULL DEFAULT '[]',
+    expires_at INTEGER NOT NULL,
+    hourly_bytes INTEGER NOT NULL,
+    total_bytes INTEGER NOT NULL,
+    hourly_reads INTEGER NOT NULL,
+    created_at INTEGER NOT NULL,
+    updated_at INTEGER NOT NULL,
+    ended_at INTEGER NOT NULL DEFAULT 0,
+    end_reason TEXT NOT NULL DEFAULT '' CHECK(end_reason IN ('','revoked','expired','left'))
+);
+CREATE INDEX IF NOT EXISTS external_member_credential ON external_members(token_hash);
+-- Every read an external member asked for, allowed or not; quota counts come from here, so they survive restarts.
+-- `at` is epoch milliseconds; `directory` is the opened directory's path at the time, shown to the owner only.
+CREATE TABLE IF NOT EXISTS external_reads (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    member_id INTEGER NOT NULL REFERENCES room_members(id) ON DELETE CASCADE,
+    room_id TEXT NOT NULL REFERENCES rooms(id) ON DELETE CASCADE,
+    at INTEGER NOT NULL,
+    op TEXT NOT NULL CHECK(op IN ('ls','read','grep')),
+    root INTEGER NOT NULL,
+    directory TEXT NOT NULL,
+    path TEXT NOT NULL,
+    bytes INTEGER NOT NULL,
+    allowed INTEGER NOT NULL,
+    code TEXT NOT NULL,
+    reason TEXT NOT NULL DEFAULT ''
+);
+CREATE INDEX IF NOT EXISTS external_reads_member ON external_reads(member_id,at);
+-- A request the external member's computer declined or let time out; it is cancelled with reason 'no_reply' and the
+-- page shows it as not agreed to.
+CREATE TABLE IF NOT EXISTS external_declines (
+    request_id INTEGER PRIMARY KEY REFERENCES member_requests(id) ON DELETE CASCADE,
+    member_id INTEGER NOT NULL REFERENCES room_members(id) ON DELETE CASCADE,
+    outcome TEXT NOT NULL CHECK(outcome IN ('declined','timeout')),
+    at INTEGER NOT NULL
+);
 -- Messages the owner took back: a retracted one no member began to handle, or the history a rewind returned to before.
 -- AI readers no longer see them; the page keeps each in place. No room column, so it never clashes with messages.room_id in joins.
 CREATE TABLE IF NOT EXISTS message_withdrawals (

@@ -18,6 +18,8 @@ const COMMANDS_FILE = 'relay-commands.json';
 const SOFTWARE_FIELDS = ['executable', 'ipc_directory'];
 // Actions that repair this computer's own software setup: never from another device.
 const LOCAL_ONLY_ACTIONS = new Set(['room-config']);
+// A private, loopback or link-local host: another device may not make this computer contact one by joining an invite.
+const PRIVATE_HOST = /^(localhost|.*\.localhost|127\.|10\.|0\.|169\.254\.|192\.168\.|172\.(1[6-9]|2\d|3[01])\.|\[(::1?|f[cd][0-9a-f]*:.*|fe80:.*)\]$)/i;
 // Commands that put a member to work in a room with the access they name.
 const WRITE_COMMANDS = new Set(['start', 'room-member', 'room-member-access', 'room-restore', 'room-fork']);
 
@@ -100,12 +102,24 @@ export function guard_remote_request(command, input, { projects, participants, h
     // `own` comes only from taking over a session on this computer; it may write, so another device cannot claim it.
     else if (key === 'project_access' && value === 'own') throw new Error('沿用原会话权限（own）只能在电脑上接管会话时产生');
   });
+  // Joining a room on another computer from afar contacts only a public HTTPS site, never this computer's own network.
+  if (command === 'invited-join') remote_invite_site(input);
   // A saved project only widens what other devices reach, so a new or moved one must already lie inside the old ones.
   if (command === 'projects' && Array.isArray(input.projects)) {
     const existing = new Map((projects || []).map(project => [project.id, project.path]));
     for (const project of input.projects) {
       if (existing.get(project?.id) !== project?.path) remote_directory(project?.path, { roots, home });
     }
+  }
+}
+
+/** The site an invite joined from another device names (link origin, else `site`): public HTTPS only. */
+function remote_invite_site({ invite, site }) {
+  const text = String(invite || '').trim();
+  let url;
+  try { url = new URL(/^https?:\/\//i.test(text) ? text : String(site || '')); } catch { url = null; }
+  if (!url || url.protocol !== 'https:' || url.username || url.password || PRIVATE_HOST.test(url.hostname)) {
+    throw new Error('其他设备只能加入公网 HTTPS 线上站点发来的邀请');
   }
 }
 

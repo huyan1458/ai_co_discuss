@@ -1395,8 +1395,7 @@ test('claude allows only codiscuss website subcommands and draft writes, then us
   assert.ok(!args.includes(f.directory));
   assert.deepEqual(args.slice(args.indexOf('--disallowedTools') + 1), [`Edit(${claude_rule_path(f.task.skill_directories[0])}/**)`]);
   assert.deepEqual(args.slice(args.indexOf('--allowedTools') + 1, args.indexOf('--disallowedTools')),
-    [...['room', 'message', 'turn', 'state', 'goal', 'mode', 'review', 'sequence', 'question', 'execution', 'health', 'schema', 'launch workflow-adopt', 'launch workflow-join', 'launch workflow-leave', 'launch host-control', 'attachment', 'launch image']
-      .flatMap(command => [`Bash(codiscuss ${command} *)`, `PowerShell(codiscuss ${command} *)`]),
+    [...TASK_SUBCOMMANDS.flatMap(command => [`Bash(codiscuss ${command} *)`, `PowerShell(codiscuss ${command} *)`]),
     `Edit(${claude_rule_path(f.task.draft_directory)}/**)`, 'Read(//d/materials/**)']);
   assert.ok(!args.includes(`Edit(${claude_rule_path(f.directory)}/**)`));
   assert.ok(!args.some(arg => /(Bash|PowerShell)\(codiscuss (service|launch (?!(workflow-(adopt|join|leave)|host-control|image) )|run|api|setup|install|local)/.test(arg)));

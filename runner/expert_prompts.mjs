@@ -76,7 +76,23 @@ export function access_label(level) { return level === 'own' ? '自行决定' : 
  * Subcommands an automatic task may run; service, run, api, setup and the rest of launch stay unapproved.
  * `launch workflow-adopt`, `launch workflow-join`, `launch workflow-leave` and `launch host-control` check themselves that the caller is the room's host (adopt and host-control also need the owner's grant).
  */
-export const TASK_SUBCOMMANDS = ['room', 'message', 'turn', 'state', 'goal', 'mode', 'review', 'sequence', 'question', 'execution', 'health', 'schema', 'launch workflow-adopt', 'launch workflow-join', 'launch workflow-leave', 'launch host-control', 'attachment', 'launch image'];
+export const TASK_SUBCOMMANDS = ['room', 'message', 'turn', 'state', 'goal', 'mode', 'review', 'sequence', 'question', 'execution', 'health', 'schema', 'launch workflow-adopt', 'launch workflow-join', 'launch workflow-leave', 'launch host-control', 'attachment', 'launch image', 'repo'];
+
+/**
+ * The task text for a member woken on this computer for a room on another computer (an external member): the project
+ * lives over there and is read only through `repo`; a locked-down run (`lockdown`) may run only codiscuss subcommands and
+ * write only in `draft_directory`. `access_file` is the run's external access file.
+ */
+export function external_task_text({ name, messages, requests = [], cli, access_file, task_path, lockdown, draft_directory }) {
+  const access = ` --access-file ${access_file}`;
+  const reading = `项目在对方电脑上，本机没有它的文件：先用 ${cli} repo ls${access} 看开放目录，再用 ${cli} repo ls 目录 --root 序号${access}、${cli} repo read 文件 --root 序号${access}、${cli} repo grep 关键词 --root 序号${access} 只读查看；读不到的（范围外、敏感文件、配额用尽）如实说明，不猜测内容。`;
+  const limits = lockdown ? `本次只能运行 ${cli} 子命令，只能在 ${draft_directory} 写草稿，不能读写其他本机文件或联网。` : '';
+  const instructions = `你作为外部成员参加另一台电脑上的房间，只读对方开放的项目，不修改任何文件。命令只用 subcommands 列出的 ${cli} 子命令。${limits}${reading}`;
+  const prompt = `${wake_opening(requests, name)}（来自另一台电脑上的房间），对应消息 ${messages}。${instructions}`
+    + `用 ${cli} message view 消息编号${access} 看原文，${cli} room read${access} 看房间概况。`
+    + `做完用 ${cli} message post --body-file 草稿${access} 提交一次回答（简短回答可用 --body "回答"）。先读任务文件 ${task_path} 与其中列出的技能。`;
+  return { instructions, prompt };
+}
 
 /**
  * Whether a member may run commands beyond the codiscuss subcommands: every level but 只读, and 可写 only with a project

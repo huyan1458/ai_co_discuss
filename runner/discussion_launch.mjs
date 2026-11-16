@@ -133,6 +133,9 @@ pick-directory 在本机弹出系统目录选择窗口，返回所选路径；�
 browse-directory 列出常用项目及其中的子文件夹（只含文件夹名，分页），供其他设备选择目录；path 为空时列出常用项目。
 device-pairing 在本机生成 12 位设备配对码（2 分钟有效，可选 temporary 临时设备、without_passkey 允许这次配对不用通行密钥、site 指定已绑定的网站），扫码链接带本机密钥指纹；只能在这台电脑上执行，新设备只能在电脑前添加。
 devices 列出已配对设备；提供 revoke（设备 id）撤销设备。
+room-invite 为本机房间签发一次性外部成员邀请（10 分钟内兑换一次）；须提供 room_id、token，可选 level（discuss/read）、folders（项目目录序号）、duration（1h/today/3d）、site_url；返回配对码与链接，只显示这一次。
+room-invites 列出房间未兑换的邀请（不含配对码）；须提供 room_id、token。
+room-invite-revoke 撤销一条未兑换的邀请；须提供 room_id、token、invite_id。
 projects 读取本机已配置的项目（名称与绝对路径）；提供 JSON（projects 列表）时整体替换保存。
 presets 读取本机的专家预设（含未删除的内置预设）与各平台默认描述；提供 JSON（presets 列表、description_templates 和/或 hidden_builtins 已删除的内置预设名）时替换对应部分。
 machine-link 返回本机连接指定 site 的电脑编号、名称与凭据，供已登录管理员的网页完成配对；不存在时创建。
@@ -2414,10 +2417,16 @@ export async function launch_main(args = process.argv.slice(2), input_text) {
     if (input?.revoke) await (await import('./remote_launch.mjs')).sync_remote_launches(home).catch(() => {});
   }
   else if (positionals[0] === 'machine-link' && input) result = (await import('./remote_launch.mjs')).machine_link(home, input.site);
+  // Invites for members on other computers, from this computer or a paired device (external_gateway.mjs).
+  else if (['room-invite', 'room-invites', 'room-invite-revoke'].includes(positionals[0]) && input) {
+    result = await (await import('./external_gateway.mjs')).invite_command(home, positionals[0], input, { device: values.remote ? values.device : undefined });
+  }
   else if (positionals[0] === 'start' && input) {
     result = await launch_discussion(home, input, { dry_run: values['dry-run'], browser_request: values.browser });
   }
   else if (positionals[0] === 'room-config' && input) result = await room_configuration(home, input, { local_guard: values['configuration-locked'] });
+  // Rooms on other computers this one was invited to (runner/external_client.mjs, CONTRACT of 子Task4).
+  else if (positionals[0].startsWith('invited-')) result = await (await import('./external_client.mjs')).invited_command(home, positionals[0], input || {});
   else throw new Error(HELP);
   process.stdout.write(`${JSON.stringify(result)}\n`);
 }

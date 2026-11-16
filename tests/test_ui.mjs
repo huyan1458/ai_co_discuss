@@ -9,6 +9,7 @@ import { access_label, access_options, EXPERT_PROMPT_PRESETS } from "../runner/e
 import { adapter_profile } from "../runner/adapters/profiles.mjs";
 import { format_duration, snapshot_at, timeline_axis, timeline_rows, timeline_segments, timeline_summary } from "../frontend/timeline-model.js";
 import { t } from "../frontend/i18n.js";
+import { declined, external_of, external_tag, extended_until, remaining_label } from "../frontend/external-members.js";
 
 // Sliced component code calls t() for interface text; every sandbox gets the translator (Chinese here).
 const create_context = vm.createContext;
@@ -1763,4 +1764,63 @@ test("@ names a member by its on-screen nickname or its member name, longest fir
   state.room = { labels: { Codex: "Gemini" } };
   assert.equal(named("@Gemini 你在吗"), "", "a nickname two members share names neither");
   assert.equal(named("@Codex @Antigravity"), "Antigravity,Codex");
+});
+
+// External members (子Task1 CONTRACT §1): the rail reads `free.members[].external`; requests the invited computer turned
+// down carry `external_outcome`.
+test("external members read the room view's external field, and only declined or timed-out requests show as not accepted", () => {
+  const now = Date.parse("2026-11-16T10:00:00");
+  const member = { id: 7, name: "Claude-ext", access: "external", status: "active",
+    external: { scope: "read", expires_at: Math.floor(now / 1000) + 2 * 3600 + 60, machine_label: "A 的笔记本", directories: [{ root: 0, name: "app" }] } };
+  assert.deepEqual(external_of(member), { level: "read", expires_at: (Math.floor(now / 1000) + 2 * 3600 + 60) * 1000, directories: ["app"], computer: "A 的笔记本", ended: false });
+  assert.equal(external_tag(member, now), "外部 · 只读项目 · 剩余 2 小时");
+  assert.equal(external_tag({ ...member, status: "removed" }, now), "外部 · 已结束");
+  assert.equal(external_of({ id: 1, name: "Codex", access: "runner" }), null, "an ordinary member is not external");
+  assert.equal(remaining_label(now - 1, now), "已到期");
+  assert.ok(declined({ status: "cancelled", cancel_reason: "no_reply", external_outcome: "declined" }));
+  assert.ok(declined({ status: "cancelled", cancel_reason: "no_reply", external_outcome: "timeout" }));
+  assert.ok(!declined({ status: "cancelled", cancel_reason: "no_reply" }), "an ordinary unanswered request is not the other side's refusal");
+  // 延长 counts from the later of now and the current end, in seconds as the room backend takes it.
+  assert.equal(extended_until(now / 1000 + 600, "1h", now), Math.floor(now / 1000) + 600 + 3600);
+  assert.equal(extended_until(now / 1000 - 600, "3d", now), Math.floor(now / 1000) + 3 * 86400);
+});
+
+test("an external member's menu offers its read log and revoking, never credentials, launch or hosting", () => {
+  const member = { id: 7, name: "Claude-ext", access: "external", status: "active", external: { scope: "read", expires_at: 0 } };
+  const opened = [];
+  const groups = member_actions(member, { view: { access: { can_manage: true }, launch: {} }, act: () => {}, describe: () => {}, external: (target, focus) => opened.push(focus || "open") });
+  const labels = groups.flat().map((item) => item.label);
+  assert.deepEqual(labels, ["读取记录与权限", "名称与描述", "撤销"]);
+  groups.flat().find((item) => item.label === "撤销").onSelect();
+  groups.flat()[0].onSelect();
+  assert.deepEqual(opened, ["revoke", "open"]);
+});
+
+// The online explanation page (子Task2 CONTRACT §2.1): the payload stays in the fragment, the page shows no path, and
+// joining hands the whole link to this computer's own site in a fragment too.
+test("the join page reads the invitation from the fragment and hands the whole link to the local site", () => {
+  const html = readFileSync(new URL("../web/join.html", import.meta.url), "utf8");
+  const script = html.split("<script>")[1].split("</script>")[0];
+  const payload = { v: 1, site: "https://b.pages.dev", machine: "a".repeat(32), machine_name: "B-PC", fp: "b".repeat(32), code: "ABCD1234EFGH", room_name: "评审室", level: "read", expires_at: Date.now() + 600000 };
+  const encoded = Buffer.from(JSON.stringify(payload)).toString("base64url");
+  const nodes = [];
+  const make = (tag) => {
+    const node = { tag, attributes: {}, children: [], textContent: "", listeners: {},
+      setAttribute(key, value) { this.attributes[key] = value; }, addEventListener(type, handler) { this.listeners[type] = handler; },
+      append(...items) { this.children.push(...items); }, replaceChildren() { this.children = []; } };
+    nodes.push(node);
+    return node;
+  };
+  const root = make("main");
+  const href = `https://b.pages.dev/join#${encoded}`;
+  const context = vm.createContext({ location: { hash: `#${encoded}`, href }, navigator: { languages: ["zh-CN"], language: "zh-CN" },
+    localStorage: { getItem: () => "" }, atob: (text) => Buffer.from(text, "base64").toString("binary"), TextDecoder,
+    document: { documentElement: {}, title: "", getElementById: () => root, createElement: make }, window: { addEventListener() {} } });
+  vm.runInContext(script, context);
+  const texts = nodes.map((node) => node.textContent).join("\n");
+  assert.match(texts, /B-PC/);
+  assert.match(texts, /评审室/);
+  assert.doesNotMatch(texts, /ABCD1234EFGH/, "the code itself is not shown on the page");
+  const join = nodes.find((node) => node.tag === "a");
+  assert.equal(join.attributes.href, `http://127.0.0.1:8765/#join=${encodeURIComponent(href)}`);
 });

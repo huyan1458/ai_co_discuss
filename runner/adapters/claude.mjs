@@ -198,6 +198,35 @@ export function claude_permissions(config, task) {
 }
 
 /**
+ * A task confined to the codiscuss subcommands (`task.tool_lockdown`): only Bash / PowerShell running those commands,
+ * Read on the skills, the drafts and this member's own runtime folder, and Edit on the drafts. `--restricted` drops the
+ * user's settings and confines the file tools to these working directories, `--safe-mode` leaves out CLAUDE.md, memory,
+ * plugins, hooks and MCP, and `dontAsk` refuses anything not listed. The member's project, the room's other directories
+ * and the owner's own allowed tools are ignored. Built from `claude --help` 2.1.325, not yet measured on a real turn.
+ */
+export function claude_lockdown(task) {
+  const readable = [task.member_directory, task.draft_directory, ...(task.skill_directories || [])].filter(Boolean);
+  const commands = TASK_SUBCOMMANDS.flatMap(command => [`Bash(codiscuss ${command} *)`, `PowerShell(codiscuss ${command} *)`]);
+  return ['--restricted', '--safe-mode', '--tools', 'Bash,PowerShell,Read,Write,Edit', '--permission-mode', 'dontAsk',
+    '--strict-mcp-config', '--mcp-config', '{"mcpServers":{}}', '--disable-slash-commands', '--no-chrome', '--add-dir', ...readable,
+    '--allowedTools', ...commands, ...readable.map(directory => `Read(${claude_rule_path(directory)}/**)`),
+    `Edit(${claude_rule_path(task.draft_directory)}/**)`, '--disallowedTools', 'WebFetch', 'WebSearch'];
+}
+
+/**
+ * The environment of a confined Claude process. `--restricted` ignores the user's settings, so their `env` (such as a
+ * third-party provider's base URL) is passed in directly; the codiscuss CLI is told it runs confined and where its draft
+ * files may be, and Claude is asked to keep its own credentials out of the commands it runs.
+ */
+export function claude_lockdown_env(task, env = process.env, home = homedir()) {
+  let settings = {};
+  try { settings = JSON.parse(readFileSync(join(env.CLAUDE_CONFIG_DIR || join(home, '.claude'), 'settings.json'), 'utf8')).env || {}; }
+  catch { /* No readable user settings. */ }
+  const own = Object.fromEntries(Object.entries(settings).filter(([, value]) => typeof value === 'string'));
+  return { ...own, CODISCUSS_TOOL_LOCKDOWN: '1', CODISCUSS_LOCKDOWN_DIRECTORY: task.draft_directory, CLAUDE_CODE_SUBPROCESS_ENV_SCRUB: '1' };
+}
+
+/**
  * Skill folders (the shared skills and an enabled workflow) are read, never edited, and so are the room's project
  * directories this member may only read. This stops Claude's own edit tools only; a command the member may run can
  * still write there, and Windows has no native sandbox to prevent it.
@@ -625,12 +654,13 @@ async function deliver(config, binding, task, spawn_process = spawn) {
     : [binding.session_id ? '--resume' : '--session-id', session_id];
   // The prompt goes in as the first stdin message and stdin stays open, so an interjection can follow while the turn runs.
   const args = ['-p', '--input-format', 'stream-json', '--output-format', 'stream-json', '--verbose', ...fork,
-    ...(config.model ? ['--model', config.model] : []), ...(config.effort ? ['--effort', config.effort] : []), ...claude_permissions(config, task)];
+    ...(config.model ? ['--model', config.model] : []), ...(config.effort ? ['--effort', config.effort] : []),
+    ...(task.tool_lockdown ? claude_lockdown(task) : claude_permissions(config, task))];
   let child;
   try {
     child = spawn_process(config.executable, args, {
-      cwd: launch_directory(config, task), windowsHide: true, shell: false, stdio: ['pipe', 'pipe', 'pipe'],
-      env: { ...standalone_claude_env(), DISCUSS_ACCESS_FILE: task.access_path },
+      cwd: task.tool_lockdown ? task.draft_directory : launch_directory(config, task), windowsHide: true, shell: false, stdio: ['pipe', 'pipe', 'pipe'],
+      env: { ...standalone_claude_env(), ...(task.tool_lockdown ? claude_lockdown_env(task) : {}), DISCUSS_ACCESS_FILE: task.access_path },
     });
   } catch (error) { throw not_sent(error); }
   tree_killable(child);

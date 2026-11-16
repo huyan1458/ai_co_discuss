@@ -25,6 +25,7 @@ import MemoBlock from "./memo-block.js";
 import UTooltip from "@nuxt/ui/components/Tooltip.vue";
 import { motion, useSpring, useTransform } from "motion-v";
 import { locale, t } from './i18n.js';
+import { declined } from "./external-members.js";
 
 const emit = defineEmits(["detail", "edit"]);
 let topic_card = null;
@@ -118,7 +119,9 @@ function schedule_listen() {
 }
 // Pressing the offer or the comment box must not hide it before its click lands; pressing elsewhere drops the comment box.
 const on_offer = (event) => Boolean(event.target.closest?.(".channel-listen-mark, .channel-listen-pill, .selection-comment, .excerpt-mark, .excerpt-edit"));
-const press = (event) => { if (on_offer(event)) return; pointer_down = true; if (quoting.value) cancel_quote(); if (mark_editing.value) close_mark(); };
+// Only a mouse or pen holds the offer until release: iOS sends no pointerup or pointercancel after a long-press selection
+// or a handle drag, so a touch press would hold it until the next touch; touch selections rely on the settle delay alone.
+const press = (event) => { if (on_offer(event)) return; pointer_down = event.pointerType !== "touch"; if (quoting.value) cancel_quote(); if (mark_editing.value) close_mark(); };
 const release = (event) => { if (on_offer(event)) return; pointer_down = false; schedule_listen(); };
 /** Fixed place `{ left, top }` for a box of this size above the range's start, or below its end when there is no room. */
 function place_by(range, width, height) {
@@ -544,7 +547,8 @@ const request_badges = stable_computed(() => {
   for (const request of source.requests || []) {
     // A request voided after reaching the software reads as its stop really went; one never delivered was only cancelled.
     const voided = request.status === "cancelled" && executions.get(request.execution_id)?.capabilities ? executions.get(request.execution_id) : null;
-    const [label, color] = voided ? [stop_state(voided).label, "neutral"] : FREE_REQUEST_LABELS[request.status];
+    // An external member's computer turned the request down or let it wait out: the other side did not agree.
+    const [label, color] = declined(request) ? [t('对方未同意'), "warning"] : voided ? [stop_state(voided).label, "neutral"] : FREE_REQUEST_LABELS[request.status];
     const title = request.status === "failed" ? failures.get(request.execution_id) || t('执行失败') : "";
     badges.set(request.message_id, [...(badges.get(request.message_id) || []),
       { key: request.id, label: `${bridge.display_name(request.member)} · ${label}`, color, title }]);

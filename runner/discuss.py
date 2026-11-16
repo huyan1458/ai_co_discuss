@@ -10,6 +10,7 @@ import math
 import os
 import re
 import secrets
+import subprocess
 import sys
 import tempfile
 import time
@@ -1672,6 +1673,77 @@ def access_headers(args, site, path):
     return headers
 
 
+EXTERNAL_PROXY_MARGIN = 30
+
+
+LOCKDOWN_STDIN_ERROR = ("本次运行已收窄，不能从标准输入读取；请先把内容写进草稿目录，再用文件参数传入 / "
+                        "This run is restricted and cannot read standard input; write the content in the draft folder and pass its path")
+
+
+def check_lockdown_files(args):
+    """In a restricted run, file arguments may name only its draft folder, and never standard input.
+
+    The signal is ``CODISCUSS_TOOL_LOCKDOWN=1`` with ``CODISCUSS_LOCKDOWN_DIRECTORY`` set by the adapter, or the
+    ``tool_lockdown`` / ``draft_directory`` fields the local service writes into an external task's access file, where
+    the AI cannot write (子Task5 CONTRACT §5). Otherwise a file argument could carry this computer's files into a room.
+    """
+    # Only an access file that already exists is an input here: `room create` names one it is about to write.
+    path = getattr(args, "access_file", None) or os.getenv("DISCUSS_ACCESS_FILE", "").strip()
+    access = {}
+    if path and path != "-" and Path(path).is_file():
+        try:
+            access = read_object(path)
+        except CliError:
+            access = {}
+    if os.getenv("CODISCUSS_TOOL_LOCKDOWN") != "1" and not access.get("tool_lockdown"):
+        return
+    folder = os.getenv("CODISCUSS_LOCKDOWN_DIRECTORY") or access.get("draft_directory") or ""
+    root = Path(folder).resolve() if folder else None
+    for name, value in vars(args).items():
+        if not isinstance(value, str) or not (name.endswith("_file") or name in ("file", "input")):
+            continue
+        if value == "-":
+            raise CliError(LOCKDOWN_STDIN_ERROR, 2)
+        if name == "access_file":
+            continue
+        target = Path(value).resolve()
+        if root is None or (target != root and root not in target.parents):
+            raise CliError(f"本次运行已收窄，只能读取草稿目录 {folder or '（未指定）'} 里的文件 / "
+                           f"This run is restricted and can read files only in its draft folder {folder or '(not set)'}", 2)
+
+
+def external_send(plan, access, timeout):
+    """Send a room request of an external task through this computer's own entry (runner/external_client.mjs).
+
+    The task's access file names only the invitation record; the member credential and the signing key stay with the
+    local service, which signs, encrypts and relays the request to the inviting computer.
+    """
+    if plan.upload_file is not None or plan.download_file:
+        raise CliError("外部成员暂不支持附件上传与下载", 2)
+    path = plan.path + ("?" + urlencode(plan.params) if plan.params else "")
+    request = {"access": {"transport": "external", "record": access.get("record"), "room": access.get("room")},
+               "method": plan.method, "path": path, "body": plan.body}
+    command = [os.getenv("CODISCUSS_NODE") or "node", str(Path(__file__).with_name("codiscuss.mjs")), "external-proxy"]
+    try:
+        completed = subprocess.run(command, input=json.dumps(request, ensure_ascii=False), capture_output=True, text=True,
+                                   encoding="utf-8", timeout=timeout + EXTERNAL_PROXY_MARGIN, check=False)
+        answer = json.loads(completed.stdout.strip().splitlines()[-1])
+        status, body = int(answer["status"]), answer.get("body")
+    except (OSError, subprocess.SubprocessError, ValueError, IndexError, KeyError, TypeError) as error:
+        raise CliError(f"本机外部成员入口不可用: {error}", 3,
+                       outcome="unknown" if plan.method == "POST" else "unavailable") from error
+    if status >= 400:
+        message = body.get("error") if isinstance(body, dict) else None
+        uncertain = plan.method == "POST" and status >= 500
+        raise CliError(str(message or f"HTTP {status}"), 1 if status < 500 else 3, http_status=status,
+                       outcome="unknown" if uncertain else ("unavailable" if status >= 500 else "rejected"))
+    if plan.path.startswith("/r/") and plan.method == "GET" and isinstance(body, str):
+        return body
+    if not isinstance(body, dict):
+        raise CliError("响应不是预期的 UTF-8 / JSON 内容", 3, outcome="unknown" if plan.method == "POST" else "unavailable")
+    return body
+
+
 def preview_body(value):
     """Keep private capability material out of offline request previews."""
     if isinstance(value, dict):
@@ -1686,6 +1758,8 @@ def run(args, registry):
     """Execute a parsed command, with schema and previews remaining offline."""
     if args.resource == "schema":
         return {"ok": True, "data": command_schema(args, registry)}
+    # Before any file is read: a restricted run reads only its draft folder.
+    check_lockdown_files(args)
     plan = build_plan(args)
     site = resolve_site(args)
     timeout = getattr(args, "timeout", DEFAULT_TIMEOUT)
@@ -1706,9 +1780,14 @@ def run(args, registry):
         key_file = load_access(args).get("entry_key_file")
         if isinstance(key_file, str) and key_file and not os.getenv(ENTRY_KEY_VARIABLE):
             os.environ[ENTRY_KEY_VARIABLE] = key_file
-        headers = access_headers(args, site, plan.path)
-        value = send_request(plan, url, timeout, headers) if headers else send_request(plan, url, timeout)
-        result = project_result(value, plan, site)
+        access = load_access(args)
+        if access.get("transport") == "external":
+            # The member-scope routes answer in their own shape (子Task1 CONTRACT §3); it is passed on as is.
+            result = external_send(plan, access, timeout)
+        else:
+            headers = access_headers(args, site, plan.path)
+            value = send_request(plan, url, timeout, headers) if headers else send_request(plan, url, timeout)
+            result = project_result(value, plan, site)
         if getattr(args, "operation", "") == "room create":
             result.update(finish_creation_access(args, site, plan, value))
     except CliError as error:

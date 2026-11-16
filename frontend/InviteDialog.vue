@@ -2,6 +2,7 @@
 /** Invite dialog shared by the discussion board and the free-room board: pick AIs, set up each card, then invite them one by one. */
 import { computed, inject, onBeforeUnmount, ref, watch } from "vue";
 import ExpertCard from "./ExpertCard.vue";
+import ExternalInviteCard from "./ExternalInviteCard.vue";
 import RosterAdd from "./RosterAdd.vue";
 import { t } from "./i18n.js";
 
@@ -24,6 +25,9 @@ async function copy_launch(name) {
 // Everyone picked for one invitation, one card per platform: [{ name, mode }].
 const invite_picks = ref([]);
 let invite_pick_seq = 0;
+// The card for an AI on another computer: at most one, generating its own invitation apart from the 邀请 button.
+const external_open = ref(false);
+const EXTERNAL_CHIP = "external:computer";
 // Instance names of just-invited manual members; the dialog then shows their start step.
 const invited_manual = ref([]);
 // Board errors from earlier actions stay out of the dialog until this invite is submitted.
@@ -69,6 +73,7 @@ watch(inviting, async (open) => {
   if (!open) return;
   invite_workflow.value = null;
   invite_picks.value = [];
+  external_open.value = false;
   invite_tried.value = false;
   invited_manual.value = [];
   if (props.workflowId) await choose_workflow(props.workflowId);
@@ -86,10 +91,14 @@ const PRESET_PREFIX = "preset:";
 const library_items = computed(() => [...invite_choices.value.map((name) => ({ value: name, name: bridge.default_name(name), ...bridge.identities[name],
   title: invite_count(name) ? t("已在场 {count} 位 · 将添加新实例", { count: invite_count(name) }) : "", aria_label: t("添加 {name} 实例", { name }) })),
   ...invite_presets.value.map((preset, index) => ({ value: PRESET_PREFIX + preset.name, name: preset.label || preset.name, ...bridge.identities[bridge.platform_of(preset.name)],
-    separated: index === 0, title: preset.description || t("专家预设"), aria_label: t("添加预设 {name}", { name: preset.label || preset.name }), removable: true }))]);
+    separated: index === 0, title: preset.description || t("专家预设"), aria_label: t("添加预设 {name}", { name: preset.label || preset.name }), removable: true })),
+  // Kept with the platforms, ahead of the presets row.
+].toSpliced(invite_choices.value.length, 0, { value: EXTERNAL_CHIP, name: t("另一台电脑"), lucide: "i-lucide-monitor-smartphone", selected: external_open.value,
+  title: t("邀请另一台电脑上的 AI 只读本房间项目"), aria_label: t("邀请另一台电脑上的 AI") }));
 
 /** Add the platform or preset a chip names. */
 function add_library_item(value) {
+  if (value === EXTERNAL_CHIP) { external_open.value = !external_open.value; return; }
   if (!value.startsWith(PRESET_PREFIX)) return add_invite(value);
   const preset = invite_presets.value.find((item) => item.name === value.slice(PRESET_PREFIX.length));
   if (preset) add_invite_preset(preset);
@@ -205,6 +214,7 @@ async function refresh_after(invited_any) {
           <RosterAdd :label="t('选择 AI（可多选）')" :items="library_items" @add="add_library_item" @remove="(value) => bridge.delete_expert_preset(value.slice(PRESET_PREFIX.length))" />
         </template>
         <p v-for="member in invite_workflow?.existing || []" :key="member.card" class="fine-print">{{ bridge.display_name(member.name) }}{{ t('：') }}{{ record(member.name)?.status === 'away' ? t('确认后请回，保留原会话') : t('已在场，沿用原成员') }}</p>
+        <ExternalInviteCard v-if="external_open && !invite_workflow" @remove="external_open = false" />
         <div v-if="invite_picks.length" class="pb-invite-cards">
           <div v-for="pick in invite_picks" :key="pick.id" class="pb-invite-pick">
             <ExpertCard :name="pick.name" :mode="pick.mode" :choices="pick.card ? ['cli'] : ['cli', 'manual']" :status="invite_status(pick.name)" :directory="view.launch.room_models?.project_directory || ''" :workflow="pick.card ? invite_workflow?.label || '' : ''" @mode="pick.mode = $event" @remove="invite_picks = invite_picks.filter((item) => item !== pick)" />
@@ -214,7 +224,7 @@ async function refresh_after(invited_any) {
         <!-- Always rendered once cards exist, so switching a card's mode never changes the dialog height. -->
         <p v-if="invite_picks.length" class="fine-print" :class="{ 'pb-invite-reserved': !(invite_picks.some((pick) => pick.mode === 'manual') && invite_picks.some((pick) => pick.mode !== 'manual')) }" :aria-hidden="!(invite_picks.some((pick) => pick.mode === 'manual') && invite_picks.some((pick) => pick.mode !== 'manual'))">{{ t("手动启动的成员排在程序启动的成员之后加入队列。") }}</p>
         <p v-else-if="submitting" class="pb-invite-empty">{{ t("正在加入成员…") }}</p>
-        <p v-else-if="!invite_workflow" class="pb-invite-empty">{{ t("选择一位或多位 AI（同一 AI 可重复添加），点卡片翻面设置软件、模型与项目权限。") }}</p>
+        <p v-else-if="!invite_workflow && !external_open" class="pb-invite-empty">{{ t("选择一位或多位 AI（同一 AI 可重复添加），点卡片翻面设置软件、模型与项目权限。") }}</p>
         <p v-if="invite_picks.some((pick) => pick.mode === 'cli') && !view.launch.available" role="alert" class="fine-print">{{ t("邀请需要本机服务，请在运行 AI 的电脑打开本机网站。") }}</p>
         <div class="pb-invite-footer">
           <UButton :label="t('取消')" color="neutral" variant="ghost" :disabled="submitting" @click="inviting = false" />

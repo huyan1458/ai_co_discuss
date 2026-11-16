@@ -1,12 +1,13 @@
 <script setup>
 import { computed, inject, ref } from "vue";
 import ChannelDirectory from "./ChannelDirectory.vue";
+import InvitedRooms from "./InvitedRooms.vue";
 import { use_workflow_library, workflow_problem } from "./workflow-library.js";
 import { t } from "./i18n.js";
 
 /** The room sidebar, shared by the docked desktop column and the tablet and phone drawer. */
 const props = defineProps({ tabs: { type: Array, required: true } });
-const emit = defineEmits(["select", "manage", "create", "create-folder", "manage-folder", "delete-folder", "archive-folder", "archives", "workflows", "tab", "settings"]);
+const emit = defineEmits(["select", "manage", "create", "create-folder", "manage-folder", "delete-folder", "archive-folder", "archives", "workflows", "invited", "tab", "settings"]);
 const { view, bridge, field } = inject("discussion");
 const author = field("author-select");
 const tools_open = ref(true);
@@ -51,6 +52,8 @@ const account_status = computed(() => {
     </header>
     <div v-keep-reading class="channel-sidebar-content">
       <ChannelDirectory @select="emit('select', $event)" @manage="emit('manage', $event)" @create="emit('create', $event)" @create-folder="emit('create-folder')" @manage-folder="emit('manage-folder', $event)" @delete-folder="emit('delete-folder', $event)" @archive-folder="emit('archive-folder', $event)" @archives="emit('archives')" />
+      <!-- Rooms on other computers this computer's AIs were invited to: their own section, opened in the middle like a room. -->
+      <InvitedRooms @open="emit('invited', $event)" />
       <div class="channel-directory-heading channel-tools-heading"><button type="button" class="channel-section-toggle" :aria-expanded="tools_open" @click="tools_open = !tools_open"><UIcon :name="tools_open ? 'i-lucide-chevron-down' : 'i-lucide-chevron-right'" />{{ t("频道工具") }}</button></div>
       <UNavigationMenu v-if="tools_open" :items="view_links" orientation="vertical" color="neutral" variant="pill" class="channel-directory channel-view-links" :aria-label="t('房间视图')" :ui="{ link: 'channel-link', linkLabel: 'channel-link-label', linkLeadingIcon: 'channel-link-icon' }" />
       <!-- The workflow library belongs to this computer, not a room: its own section beside 协作房间 and 频道工具; a row opens the workflow page in the middle. -->

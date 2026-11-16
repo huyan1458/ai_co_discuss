@@ -40,7 +40,12 @@ const EXECUTION_FIELDS = ['id', 'member', 'status', 'result', 'answer_id', 'requ
 const TERMINAL_STATUSES = ['completed', 'cancelled', 'failed'];
 // Tools that only read: their failures go back to the model instead of ending the execution (K20).
 const READ_TOOLS = new Set(['read_question', 'read_room', 'read_roster', 'read_review_roster', 'read_review_ready', 'read_sequence', 'read_goal',
-  'read_decision', 'read_messages', 'read_message', 'read_execution', 'read_events', 'read_attachment']);
+  'read_decision', 'read_messages', 'read_message', 'read_execution', 'read_events', 'read_attachment', 'repo_list', 'repo_read', 'repo_grep']);
+// An external task's read-only tools for the inviting computer's opened project, as `codiscuss repo ls / read / grep`.
+const REPO_OPS = { repo_list: ['ls', ['root', 'path', 'offset', 'limit']], repo_read: ['read', ['root', 'path', 'offset', 'max_bytes']],
+  repo_grep: ['grep', ['root', 'query', 'path', 'case_sensitive', 'max_results']] };
+// What an external member's relay passes (子Task4 CONTRACT §5): the room's view, its messages and its own answer.
+const EXTERNAL_TOOLS = new Set(['read_room', 'read_messages', 'read_message', 'submit_chat', ...Object.keys(REPO_OPS)]);
 // The room's event log pages 500 events (about 230 KB); the model gets the newest of them and pages back with `before`.
 const MODEL_EVENTS = 100;
 // A text attachment is read whole up to this size and handed out in slices of at most MAX_ATTACHMENT_CHARS characters.
@@ -67,8 +72,13 @@ function tool(name, description, properties = {}, required = []) {
   return { name, description, parameters: { type: 'object', properties, required, additionalProperties: false } };
 }
 
-/** Expose only tools belonging to this task's role. */
+/** Expose only tools belonging to this task's role; an external task gets only what its relay passes. */
 export function participant_tools(context) {
+  const tools = role_tools(context);
+  return context.external_access ? tools.filter(item => EXTERNAL_TOOLS.has(item.name)) : tools;
+}
+
+function role_tools(context) {
   const tools = [tool('read_room', '读取本房间最新目标、安排、限制和状态'),
     tool('read_messages', '读取原文；服务端按本次请求限制讨论中的可见范围。after（只读该编号之后的）与 page（按页）二选一，给了 after 则忽略 page。每次输出有上限，remaining 大于 0 时还有没读到的，放不下的长正文只给预览（text_complete: false），用 read_message 按 next_offset 续读', { page: NUMBER, after: { type: 'integer', minimum: 0 } }),
     tool('read_message', '读取指定原文；服务端按本次请求限制讨论中的可见范围。长正文用 offset（从第几个字符起）与 limit 续读，带上前一段返回的 text_sha256 作 version：正文已变化时报错，须从头重读、不与旧片段拼接',
@@ -77,7 +87,7 @@ export function participant_tools(context) {
     tool('read_attachment', `按附件 ID 读取：返回名称、大小、类型与所属消息；UTF-8 文本附件同时返回正文，长的用 offset（从第几个字符起）与 limit（默认 ${ATTACHMENT_CHARS}，最多 ${MAX_ATTACHMENT_CHARS}）续读；${context.image_input ? '图片随结果附上，可以直接看；' : ''}其余读不到内容的（${context.image_input ? '' : '图片、'}PDF、音视频等）返回 readable: false 与原因`,
       { id: TEXT, offset: { type: 'integer', minimum: 0 }, limit: { type: 'integer', minimum: 1, maximum: MAX_ATTACHMENT_CHARS } }, ['id']),
     tool('read_goal', '读取 Goal 的目标、状态、续跑次数、用时与是否空闲'),
-    ...file_tools(context.project), ...command_tools(context.commands, context.project), ...image_tools(context.image)];
+    ...repo_tools(context), ...file_tools(context.project), ...command_tools(context.commands, context.project), ...image_tools(context.image)];
   const answer = { text: { ...TEXT, maxLength: 32000 }, summary: { ...TEXT, maxLength: 1000 }, reply_to: NUMBER,
     also_request_ids: { type: 'array', items: NUMBER, maxItems: 20, description: '执行中又排队给你、这条回答已一并交付的普通请求编号（read_execution 的 queued_requests），同时关闭；不相关的不要填' },
     ...(context.image ? { attachments: { type: 'array', maxItems: MAX_MESSAGE_ATTACHMENTS, items: TEXT,
@@ -147,15 +157,52 @@ export function participant_tools(context) {
     tool('declare_done', '目标已完成时使用：程序结束讨论，房间照常协作；先保存结论和状态')];
 }
 
+/**
+ * The read-only tools for the project on the computer that invited this member, offered only on an external task
+ * (`external_access`, the task's external access file): parameters and results are those of `codiscuss repo`.
+ */
+function repo_tools(context) {
+  if (!context.external_access) return [];
+  const root = { type: 'integer', minimum: 0, description: '开放目录序号，由不带参数的 repo_list 列出' };
+  const path = { ...TEXT, description: '相对开放目录的路径' };
+  const start = { type: 'integer', minimum: 0 };
+  return [tool('repo_list', '列出邀请你的那台电脑开放的项目：不带参数列出开放目录及其序号 root；带 root 列出该目录下（或 path 子目录下）的文件与子目录，每页 limit 条（默认 200，最多 1000），offset 翻页',
+    { root, path, offset: start, limit: { type: 'integer', minimum: 1, maximum: 1000 } }),
+  tool('repo_read', '读取对方开放目录中的一个文本文件：一次最多 max_bytes 字节（默认与上限 131072），长文件用 offset（字节）续读；敏感文件、范围外与二进制文件会被拒绝并给出原因',
+    { root, path, offset: start, max_bytes: { type: 'integer', minimum: 1, maximum: 131072 } }, ['root', 'path']),
+  tool('repo_grep', '在对方开放目录中按字面搜索（不是正则），返回匹配的文件、行号与行文；path 限定子目录或文件，max_results 默认 100、最多 500',
+    { root, query: { ...TEXT, minLength: 1, maxLength: 256 }, path, case_sensitive: { type: 'boolean' }, max_results: { type: 'integer', minimum: 1, maximum: 500 } }, ['root', 'query'])];
+}
+
+/** Run one repo tool through the A-side relay entry (子Task4 `repo_command`); a refusal goes back to the model with its reason. */
+async function run_repo_tool(context, name, args) {
+  const [op, fields] = REPO_OPS[name];
+  const options = Object.fromEntries(fields.filter(field => args[field] !== undefined).map(field => [field, args[field]]));
+  const repo_command = context.repo_command || (await import('../external_client.mjs')).repo_command;
+  try { return await repo_command(context.home, op, options, context.external_access); }
+  catch (error) { return { error: String(error.message || error), ...(error.reason ? { reason: error.reason } : {}) }; }
+}
+
 /** A free-collaboration host working a goal, opening one, or wrapping one up. */
 function goal_host(context) {
   return context.role === 'host' && context.discussion_request?.purpose !== 'discuss_host'
     && (Boolean(context.goal) || (context.requests || []).some(item => ['goal_start', 'goal_continue'].includes(item.purpose)));
 }
 
-/** Restrict site requests to this room and keep credentials outside model context. */
+/**
+ * Restrict site requests to this room and keep credentials outside model context. An external task has no credential
+ * here: its requests go through the A-side relay entry (子Task4 `proxy_request`), which signs them and maps the path.
+ */
 async function room_request(context, path, body) {
   context.signal.throwIfAborted();
+  if (context.external_access) {
+    const proxy_request = context.proxy_request || (await import('../external_client.mjs')).proxy_request;
+    const access = context.external_access;
+    const { status, body: data = {} } = await proxy_request(context.home, { access, method: body === undefined ? 'GET' : 'POST',
+      path: `/api/rooms/${access.room}${path}`, ...(body === undefined ? {} : { body }) });
+    if (status >= 400) throw new Error(`房间 HTTP ${status}: ${data?.error || '请求失败'}`);
+    return data;
+  }
   const response = await entry_fetch(`${context.site}/api/rooms/${context.room}${path}`, {
     method: body === undefined ? 'GET' : 'POST', redirect: 'error',
     headers: { 'Content-Type': 'application/json', 'X-Discussion-Token': context.token },
@@ -357,6 +404,7 @@ async function run_tool(context, call) {
   }
   if (is_command_tool(call.name)) return { result: await run_command(context.project, context.commands, args, context.signal) };
   if (is_image_tool(call.name)) return { result: await run_image_tool(context, call.name, args) };
+  if (Object.hasOwn(REPO_OPS, call.name)) return { result: await run_repo_tool(context, call.name, args) };
   if (call.name === 'submit_chat' && context.image) {
     const generated = context.generated_attachments;
     const allowed = [...generated, ...(context.unsent_images || []).map(item => item.attachment_id)];
@@ -532,7 +580,8 @@ export function system_prompt(context) {
 - 只能使用提供的${context.project ? '房间工具和项目文件工具' : '房间工具'}，没有${command_tools(context.commands, context.project).length ? '通用' : ''}命令行、浏览器或其他软件。接入程序负责执行认领、续租和凭据管理；你的房间写入工具都绑定本次执行。submit_chat 结果不明（outcome: unknown）时用完全相同的内容再调用一次：提交编号不变，不会产生第二条；其他结果不明的写入不要重试。
 - 命令与工具对应：room view → read_room；message list / view → read_messages / read_message；execution view → read_execution；attachment view / download → read_attachment；goal view → read_goal；room events → read_events；message post --kind chat → submit_chat。${host ? 'state decision → read_decision（按任务的决策编号读取完整判断）；message post --proactive → submit_chat 的 proactive。' : ''}${discussion && host
     ? '主持讨论工具还包括 state set → save_state；room update → update_topic；turn create --plan-file → arrange_turns；turn continue → continue_plan；turn roster → read_roster，读后 turn ask → ask_interjection；取消安排 → cancel_turn；room limits --done → finish_discussion / declare_done。' : ''}${host ? ' 派活用 to，派出的工作结束后都会交回你；房间空闲后要接着推进时填 continue；message post --sequential / --loop / --with / --checkpoint / --repeat / --detach → submit_chat 的 sequential / loop / parallel / gates / detach；sequence view → read_sequence；sequence continue → continue_sequence。' : ''}${goal_host(context) ? ' goal start → start_goal；goal done / block → finish_goal；goal state → set_goal_state。' : ''}
-${project_text(context.project, context.commands, context.image_input)}${context.image ? `
+${project_text(context.project, context.commands, context.image_input)}${context.external_access ? `
+- 你是经另一台电脑加入的外部成员：只有 read_room、read_messages、read_message、submit_chat 与 repo 工具，读不到附件、事件记录，也不能提问。本房间的项目在邀请你的那台电脑上：用 repo_list / repo_read / repo_grep 只读查看对方开放的目录（对应 codiscuss repo ls / read / grep），先用不带参数的 repo_list 取得目录序号 root。` : ''}${context.image ? `
 - 可用 generate_image 按文字生成图片（含 GIF 动图、SVG 矢量图），edit_image 按消息里的图片附件 ID${context.project ? '或项目内图片' : ''}修改、合成图片，图片模型为 ${context.image.model}。生成的图片存为本次执行的附件，submit_chat 时自动随回答发出（每条最多 ${MAX_MESSAGE_ATTACHMENTS} 张，可用 attachments 选择）；task.unsent_images 列出你之前的执行生成后没能发出的图片（那次执行失败了），与本次任务相关时用 attachments 附上，不必重画。${context.project?.writable ? '图片要插进项目文档（如 Markdown）时，用 save_path 存进项目，文档里按相对路径引用。' : ''}你看不到图片内容：回答里说明画了什么、用了哪些参数，不描述没看到的细节，需要人看图确认时请用户或能看图的成员确认。每次调用都计费，不为试探反复生成；被拒或报错时按返回原因调整后再试。` : ''}
 - ${max_requests(context) ? `本次执行最多 ${max_requests(context)} 次模型请求，每轮都计入；` : ''}互不依赖的读取或修改（如同一文件的多处 edit）在同一轮一次调用多个工具，减少模型请求次数。
 - 必须通过写入工具保存真实结果，普通文本输出不会保存。确实无法继续时不调用写入工具直接结束，本次执行会暂停等待用户。
@@ -738,11 +787,21 @@ async function api_chat(profile, binding, task) {
   return { status: 'accepted', session_id: binding.session_id || '', capabilities: API_CALL, steer };
 }
 
+/**
+ * A task confined to the codiscuss subcommands (`task.tool_lockdown`) keeps only the room tools, which reach the site
+ * bound to this execution: no project file tools, no registered commands and no image tools. Pi's own tools are off anyway.
+ */
+export function api_lockdown(task) {
+  if (!task.tool_lockdown) return task;
+  const { cwd, workdir, extra_directories, commands, image_generation, ...room } = task.api_context || {};
+  return { ...task, api_context: { ...room, project_access: 'read' } };
+}
+
 /** The model API's behaviour; its static facts are in profiles.mjs. */
 export const api = {
   id: 'api',
-  deliver: api_delivery,
-  chat: api_chat,
+  deliver: (profile, binding, task, spawn_process) => api_delivery(profile, binding, api_lockdown(task), spawn_process),
+  chat: (profile, binding, task) => api_chat(profile, binding, api_lockdown(task)),
   session: pi_session,
   events: pi_events,
   models: null,
