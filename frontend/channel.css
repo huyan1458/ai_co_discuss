@@ -1327,6 +1327,9 @@ html[data-motion="off"] *, html[data-motion="off"] *::before, html[data-motion="
 .channel-schedule-correction-note { flex: 1; min-width: 160px; }
 .channel-schedule-correction-actions { display: inline-flex; gap: 4px; }
 @media (min-width: 701px) { .channel-schedule-correction { margin-right: var(--message-inset-end); } }
+/* The correction opens as the lower half of its decision card: one box, the card's bottom edge giving way to it. */
+.channel-schedule-card:has(+ .channel-schedule-correction) { margin-bottom: 0 !important; border-bottom-style: none; border-bottom-left-radius: 0; border-bottom-right-radius: 0; }
+.channel-schedule-card:has(+ .channel-schedule-correction) + .channel-schedule-correction { margin-top: 0 !important; padding-top: 4px; border-top-style: none; border-top-left-radius: 0; border-top-right-radius: 0; }
 /* A retracted or rewound message keeps its place as one quiet line; a rewound run folds into its first line. */
 .channel-withdrawn { display: flex; align-items: center; gap: 8px; min-width: 0; margin: 0 16px 16px; padding: 6px 14px; border: 1px dashed var(--ui-border); border-radius: 8px; color: var(--ui-text-muted); font-size: 12px; }
 .channel-withdrawn-icon { flex: none; width: 14px; height: 14px; color: var(--ui-text-dimmed); }
@@ -1403,8 +1406,9 @@ html[data-motion="off"] *, html[data-motion="off"] *::before, html[data-motion="
   /* The correction sits flush under its card with the same side margins, one control per row so the edges line up:
      who, then the note at full width, then the buttons at the right. */
   .channel-schedule-correction { padding: 8px 10px; }
-  .channel-schedule-correction label { flex-basis: 100%; }
-  .channel-schedule-correction-select { flex: 1; min-width: 0; }
+  /* The question sits above its choice, so the choice takes the whole width like the note under it. */
+  .channel-schedule-correction label { flex-basis: 100%; flex-direction: column; align-items: stretch; gap: 4px; }
+  .channel-schedule-correction-select { width: 100%; min-width: 0; }
   .channel-schedule-correction-note { flex-basis: 100%; min-width: 0; }
   .channel-schedule-correction-actions { margin-left: auto; }
 }

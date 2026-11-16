@@ -6,6 +6,9 @@ import { keep_reading } from "./scroll-anchor.js";
 import "./theme.css";
 import "./channel.css";
 
+// `?scrolldebug` turns on the transcript's scroll log for this tab; read now, before opening a room rewrites the address.
+try { if (new URLSearchParams(location.search).has("scrolldebug")) sessionStorage.setItem("scrolldebug", "1"); } catch { /* Storage may be unavailable. */ }
+
 /** Mount the channel workspace once over the shared discussion controller. */
 function mount_workspace() {
   createApp(App).use(ui).use(i18n_plugin).directive("keep-reading", keep_reading).mount("#modern-root");

@@ -1711,6 +1711,17 @@ test('the relay channel reaches only local room routes, as the bridge, and answe
     'a request sealed under another id is not run');
   assert.equal(calls.length, 2);
 
+  // An answer over the website's 1 MiB frame would close the connection for every request; only that request fails.
+  const huge = 'relay-request-0000000003';
+  const big = await seal(key, await device.seal(huge, { action: 'room-api', payload: { method: 'GET', path: '/api/rooms/abc123/messages' } }), huge);
+  const noise = (await import('node:crypto')).randomBytes(900 * 1024).toString('base64');
+  const oversized = await answer_request(home, 'https://site.test', link, { id: huge, envelope: { ...big, key: { kty, crv, x, y } } },
+    { fetcher: async () => Response.json({ noise }) });
+  assert.ok(JSON.stringify(oversized).length < 1024 * 1024);
+  const refused = await crypto.subtle.decrypt({ name: 'AES-GCM', iv: Buffer.from(oversized.envelope.iv, 'base64'), additionalData: new TextEncoder().encode(`${huge}:response`) },
+    key, Buffer.from(oversized.envelope.data, 'base64'));
+  assert.equal(JSON.parse(gunzipSync(Buffer.from(refused)).toString()).status, 413);
+
   // A read the device already holds goes out conditionally; the ETag comes back, and an unchanged read is a bare 304.
   const etag = `"${'b'.repeat(32)}"`;
   const tagged = async (url, options) => { calls.push({ url, options }); return options.headers['If-None-Match'] === etag

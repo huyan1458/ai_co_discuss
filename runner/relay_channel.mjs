@@ -33,6 +33,13 @@ const EVENT_RETRY_MS = 3000;
 const SLOW_REQUEST_MS = 3000;
 // A WebSocket frame on the website is at most 1 MiB; leave room for the envelope around the ciphertext.
 const RESPONSE_MAX_BYTES = 700 * 1024;
+// The website closes the whole connection on a frame over 1 MiB, failing every request on it; a larger answer is
+// replaced by an error so only that request fails.
+const FRAME_MAX_BYTES = 1024 * 1024 - 1024;
+// Diagnostics: answers left unsent beyond this are written to the service log, at most once a minute; a connection
+// filled with large answers (images) holds back every other answer and the heartbeat behind them.
+const BACKLOG_LOG_BYTES = 4 * 1024 * 1024;
+const BACKLOG_LOG_MS = 60000;
 const ROOM_API_PATH = /^\/api\/(rooms|folders|revisions)(\/[A-Za-z0-9_.~-]+)*(\?[A-Za-z0-9_.~%=&,:+-]*)?$/;
 // Attachment uploads arrive in parts and are sent to the local website whole, as one browser upload would be.
 const UPLOAD_PATH = /^\/api\/rooms\/[A-Za-z0-9_-]+\/attachments(\/[A-Za-z0-9_-]+\/import)?(\?[A-Za-z0-9_.~%=&,:+-]*)?$/;
@@ -212,7 +219,11 @@ export async function answer_request(home, site, link, frame, { run = run_launch
   }
   // Only what kind of request it was and how it ended: never its content or query.
   report?.({ action: request.action, route: typeof request.payload?.path === 'string' ? request.payload.path.split('?')[0] : '', status: response.status });
-  return { type: 'response', id, envelope: await seal_compressed(key, response, `${id}:response`) };
+  const answer = { type: 'response', id, envelope: await seal_compressed(key, response, `${id}:response`) };
+  if (JSON.stringify(answer).length <= FRAME_MAX_BYTES) return answer;
+  report?.({ action: request.action, route: typeof request.payload?.path === 'string' ? request.payload.path.split('?')[0] : '', status: 413 });
+  return { type: 'response', id, oversized: true,
+    envelope: await seal_compressed(key, { status: 413, body: { error: '回应超过中转单帧上限，未能送出' } }, `${id}:response`) };
 }
 
 /** Pass the local website's change notices to the devices while the relay is connected. */
@@ -327,7 +338,7 @@ async function hold_channel(home, site, { connected, log, signal }) {
       };
       // Only a pong proves both directions work: requests can keep arriving while this computer's answers are stuck.
       // A website that never answers pings is not judged by them.
-      let opened = false, awaiting_pong = false, pong_seen = false;
+      let opened = false, awaiting_pong = false, pong_seen = false, backlog_logged = 0;
       socket.addEventListener('open', () => {
         opened = true;
         connected.add(site);
@@ -363,8 +374,15 @@ async function hold_channel(home, site, { connected, log, signal }) {
           const answer = await answer_request(home, site, link, frame, { report: value => { kind = value; } });
           const answered = Date.now();
           const open = socket.readyState === WebSocket.OPEN;
-          if (open) socket.send(JSON.stringify(answer));
+          const { oversized, ...frame_out } = answer;
+          if (open) socket.send(JSON.stringify(frame_out));
           const label = `${kind.action}${kind.route ? ` ${kind.route}` : ''} → ${kind.status}`;
+          if (oversized) log(`${site}: 中转回应超过单帧上限，已改为报错：${label}`);
+          const backlog = socket.bufferedAmount || 0;
+          if (open && backlog > BACKLOG_LOG_BYTES && answered - backlog_logged > BACKLOG_LOG_MS) {
+            backlog_logged = answered;
+            log(`${site}: 中转发送积压 ${(backlog / 1048576).toFixed(1)} MB（最近：${label}）`);
+          }
           if (!open) log(`${site}: 中转回应未送出（连接已断开）：${label}，处理 ${answered - received} ms`);
           else if (answered - received > SLOW_REQUEST_MS) log(`${site}: 中转请求较慢：${label}，处理 ${answered - received} ms`);
         } catch (error) { log(`${site}: 中转请求 ${frame.id} 无法处理（${Date.now() - received} ms）：${error.message}`); }

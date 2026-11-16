@@ -76,12 +76,22 @@ const ROOM_RELAY_PATH = /^\/api\/(rooms|folders|revisions)(\/|\?|$)/;
 // One part is base64-encoded, encrypted and base64-encoded again (about 16/9 of its size), and the sealed request
 // must stay inside the hosted site's 512 KiB request limit (backend/worker.mjs MAX_BODY_BYTES).
 const RELAY_UPLOAD_PART_BYTES = 256 * 1024;
+// Files of the computer's rooms come back in frames of about 1 MB over the one relay connection that also carries every
+// room read: only this many are read at once, so a room full of images cannot hold back its messages until they time out
+// (2026-11-16: opening a room with 51 screenshots read 46 MB at once; message reads and sends timed out, and the retried
+// parts were sent again).
+const RELAY_FILE_CONCURRENCY = 2;
+// Images and media of the computer's rooms are read once they come this near the screen, not all when a room opens.
+const RELAY_MEDIA_MARGIN = "1000px 0px";
 const COMPUTER_UNREACHABLE = t('电脑未连接：请先与电脑配对，并确认电脑开机且运行 codiscuss');
 let local_connection = null;
 let computer_connecting = false;
 let relay_machine = null;
 // Object URLs of files read from the computer's rooms, by their room route.
 const relay_files = new Map();
+// Relay file reads waiting for a free slot, and how many are running (RELAY_FILE_CONCURRENCY).
+const relay_file_queue = [];
+let relay_file_running = 0;
 // The room list and room views last read, with their ETags, by route; an unchanged read is answered 304 and reuses them.
 const ROOM_READ_PATH = /^\/api\/rooms(\/[^/?]+)?$/;
 const room_reads = new Map();
@@ -2310,7 +2320,7 @@ function close_attachment_preview() {
  */
 async function attachment_url(file) {
   const path = `/api/rooms/${encodeURIComponent(file.room_id)}/attachments/${encodeURIComponent(file.id)}/content`;
-  return state.remote_rooms ? relay_file_url(path) : path;
+  return state.remote_rooms ? relay_file_url(path, { urgent: true }) : path;
 }
 
 async function preview_attachment(input) {
@@ -3064,8 +3074,9 @@ async function relay_exchange(action, payload, wait) {
   const { key, envelope } = await seal_relay_request(machine, id, { action, payload, ...target });
   const result = await request_json(`/api/machines/${encodeURIComponent(machine.id)}/relay`, { id, envelope, ...(wait ? { wait } : {}) })
     .catch(error => {
-      // A request given up in the network may still have reached the computer, so its outcome is unconfirmed.
-      if (error.name === "TimeoutError") throw Object.assign(new Error(t('结果待确认：电脑「{value1}」未在限时内答复，请稍后查看房间，确认是否已生效后再重试', { value1: machine.name })),
+      // A request given up in the network may still have reached the computer, so its outcome is unconfirmed. Safari
+      // reports the timeout as a plain AbortError ("Fetch is aborted"); the timeout is this request's only abort.
+      if (error.name === "TimeoutError" || error.name === "AbortError") throw Object.assign(new Error(t('结果待确认：电脑「{value1}」未在限时内答复，请稍后查看房间，确认是否已生效后再重试', { value1: machine.name })),
         { unconfirmed: true, launch: { stage: "unconfirmed" } });
       throw error.status === 401 ? Object.assign(error, { need: "pairing" }) : error;
     });
@@ -3201,13 +3212,41 @@ async function read_room_file(path) {
   return new Uint8Array(await response.arrayBuffer());
 }
 
+/** Run one relay file read when a slot is free; a file the user opened (`urgent`) goes ahead of images on the page. */
+function queue_relay_file(read, urgent) {
+  return new Promise((resolve, reject) => {
+    const job = () => {
+      relay_file_running += 1;
+      read().then(resolve, reject).finally(() => { relay_file_running -= 1; relay_file_queue.shift()?.(); });
+    };
+    if (relay_file_running < RELAY_FILE_CONCURRENCY) job();
+    else if (urgent) relay_file_queue.unshift(job);
+    else relay_file_queue.push(job);
+  });
+}
+
 /** Read one file of the computer's rooms through the relay once, and keep it as an object URL for this page. */
-function relay_file_url(path) {
+function relay_file_url(path, { urgent = false } = {}) {
   if (!relay_files.has(path)) {
-    relay_files.set(path, relay_room_bytes(path).then(blob => URL.createObjectURL(blob))
+    relay_files.set(path, queue_relay_file(() => relay_room_bytes(path), urgent).then(blob => URL.createObjectURL(blob))
       .catch(error => { relay_files.delete(path); throw error; }));
   }
   return relay_files.get(path);
+}
+
+/** Read a relayed image or media file once it nears the screen. */
+const relay_media_observer = typeof IntersectionObserver === "function" ? new IntersectionObserver((entries) => {
+  for (const entry of entries) {
+    if (!entry.isIntersecting) continue;
+    relay_media_observer.unobserve(entry.target);
+    load_relay_media(entry.target);
+  }
+}, { rootMargin: RELAY_MEDIA_MARGIN }) : null;
+
+/** Give one relayed image or media element its file; one that cannot be read keeps its name. */
+function load_relay_media(media) {
+  if (!media.isConnected || media.getAttribute("src")) return;
+  relay_file_url(media.dataset.relaySrc).then(url => { media.src = url; }).catch(() => { media.dataset.relayFailed = "1"; });
 }
 
 /** Show images of the computer's rooms as they appear; one that cannot be read keeps its name. */
@@ -3215,10 +3254,16 @@ function relay_file_url(path) {
 function show_relay_images(records) {
   const selector = ":is(img, video, audio)[data-relay-src]:not([src]):not([data-relay-failed])";
   for (const record of records) {
+    // A node taken off the page before it neared the screen is no longer watched.
+    if (relay_media_observer) for (const node of record.removedNodes) {
+      if (node.nodeType !== Node.ELEMENT_NODE) continue;
+      for (const image of node.matches("[data-relay-src]") ? [node] : node.querySelectorAll("[data-relay-src]")) relay_media_observer.unobserve(image);
+    }
     for (const node of record.addedNodes) {
       if (node.nodeType !== Node.ELEMENT_NODE || !node.isConnected) continue;
       for (const image of node.matches(selector) ? [node] : node.querySelectorAll(selector)) {
-        relay_file_url(image.dataset.relaySrc).then(url => { image.src = url; }).catch(() => { image.dataset.relayFailed = "1"; });
+        if (relay_media_observer) relay_media_observer.observe(image);
+        else load_relay_media(image);
       }
     }
   }

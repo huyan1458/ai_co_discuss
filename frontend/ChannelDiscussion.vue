@@ -1396,6 +1396,10 @@ function preload_urgent(element) {
 }
 /** Queue the next slice: on the next frame when urgent, otherwise when the page is idle. */
 function schedule_preload(urgent = false) {
+  // Without scroll anchoring (WebKit, so every iPhone) each slice above has to be offset by hand in whole pixels plus a
+  // sub-pixel pad, and slices every few hundred milliseconds made the cards on screen creep for seconds after a long
+  // room opened. There earlier cards render only when the reader nears them or jumps to one, not while idle.
+  if (!SCROLL_ANCHORING && !urgent) return;
   if (!render_start.value || (preload_timer && (preload_timer.urgent || !urgent))) return;
   preload_timer?.cancel();
   const run = () => { preload_timer = null; preload_slice(); };
@@ -1997,6 +2001,45 @@ const dock_observer = new ResizeObserver(([entry]) => {
   if (follow_tail.value && transcript.value) transcript.value.scrollTop = transcript.value.scrollHeight;
 });
 onMounted(() => composer_dock.value && dock_observer.observe(composer_dock.value));
+// `?scrolldebug` on the address: an on-screen log of every change to the transcript's scroll position, telling the page's
+// own writes (with where they came from) from the browser's, with the heights involved. For movement that only a real
+// phone shows; nothing is installed without the parameter.
+onMounted(() => {
+  let enabled = false;
+  try { enabled = sessionStorage.getItem("scrolldebug") === "1"; } catch { /* Storage may be unavailable. */ }
+  if (!enabled || !transcript.value) return;
+  const element = transcript.value, lines = [];
+  const panel = Object.assign(document.createElement("pre"), { title: "scrolldebug" });
+  Object.assign(panel.style, { position: "fixed", left: "0", right: "0", top: "0", maxHeight: "38vh", overflow: "auto", zIndex: "9999", margin: "0",
+    padding: "4px 6px", font: "10px/1.35 ui-monospace,monospace", color: "#7f7", background: "rgba(0,0,0,.82)", whiteSpace: "pre-wrap", userSelect: "text" });
+  const state = () => `h=${element.scrollHeight} c=${element.clientHeight} vv=${window.visualViewport?.height.toFixed(1)} ih=${window.innerHeight} pad=${getComputedStyle(element.parentElement).getPropertyValue("--channel-composer-height")} pre=${getComputedStyle(element).getPropertyValue("--preload-pad") || 0}`;
+  const log = (text) => {
+    lines.push(`${(performance.now() / 1000).toFixed(2)} ${text}`);
+    if (lines.length > 120) lines.shift();
+    panel.textContent = lines.join("\n");
+  };
+  const native = Object.getOwnPropertyDescriptor(Element.prototype, "scrollTop");
+  const origin = () => (new Error().stack || "").split("\n").slice(3, 6).map((line) => line.trim().replace(/^at\s+/, "").slice(0, 48)).join(" < ");
+  Object.defineProperty(element, "scrollTop", { configurable: true, get() { return native.get.call(this); }, set(value) {
+    const before = native.get.call(this);
+    native.set.call(this, value);
+    const after = native.get.call(this);
+    if (Math.abs(after - before) >= 0.5) { written = after; log(`SET ${before.toFixed(1)}→${after.toFixed(1)} ${state()} by ${origin()}`); }
+  } });
+  for (const name of ["scrollBy", "scrollTo"]) {
+    const call = element[name].bind(element);
+    element[name] = (...args) => { log(`${name.toUpperCase()} ${JSON.stringify(args).slice(0, 60)} by ${origin()}`); return call(...args); };
+  }
+  let last = element.scrollTop, written = null;
+  element.addEventListener("scroll", () => {
+    const now = element.scrollTop;
+    if (Math.abs(now - last) >= 0.5 && now !== written) log(`scroll ${last.toFixed(1)}→${now.toFixed(1)} ${state()}`);
+    last = now; written = null;
+  }, { passive: true });
+  new ResizeObserver(() => log(`resize ${state()}`)).observe(element);
+  log(`start ${state()} ua=${navigator.userAgent.slice(0, 60)}`);
+  document.body.append(panel);
+});
 onBeforeUnmount(() => dock_observer.disconnect());
 onBeforeUnmount(stop_scrub);
 
@@ -2579,7 +2622,8 @@ function copy_message(message) { act("copy", `${view.value.room_site}/r/${room.v
     </div>
     <!-- Back from the background: the opening load covers the old cards until the room is read again (state.resuming). -->
     <div v-if="view.resuming" class="channel-resume-loading" role="status" :aria-label="t('正在读取消息')"><div class="channel-message-group channel-loading-skeleton grid gap-6 py-6"><div v-for="row in 3" :key="row" class="grid gap-3"><USkeleton class="h-5 w-28" /><USkeleton class="h-4 w-full" /><USkeleton class="h-4 w-2/3" /></div></div></div>
-    <div v-if="(transcript_messages.length && !follow_tail) || listen_here?.touch || reader.state.message_id" class="channel-latest-dock">
+    <!-- The opening load (state.resuming) covers the cards, so nothing to jump to or quote shows over it. -->
+    <div v-if="!view.resuming && ((transcript_messages.length && !follow_tail) || listen_here?.touch || reader.state.message_id)" class="channel-latest-dock">
       <button v-if="listen_here?.touch" type="button" class="channel-listen-pill" @mousedown.prevent @click="start_quote"><UIcon name="i-lucide-message-square-quote" />{{ t('添加到对话') }}</button>
       <button v-if="listen_here?.touch && listen_here.speech" type="button" class="channel-listen-pill" :aria-label="t('从选中处开始朗读')" @mousedown.prevent @click="listen_from_selection"><UIcon name="i-lucide-headphones" />{{ t('听当前') }}</button>
       <span v-if="reader.state.message_id && reader.state.loading" class="channel-listen-pill" role="status"><UIcon name="i-lucide-loader-circle" class="animate-spin" />{{ t('加载中') }}</span>

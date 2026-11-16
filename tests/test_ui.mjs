@@ -1730,6 +1730,26 @@ test("relayed reads are asked again after a lost answer, writes never; a dropped
   assert.equal(timers.at(-1).delay, 2000, "a success resets the back-off");
 });
 
+test("relayed room files are read two at a time, a file the user opens first, and each only once", async () => {
+  const f = update_fixture(), started = [], finish = new Map();
+  f.context.URL = { createObjectURL: (blob) => `blob:${blob}` };
+  f.context.relay_room_bytes = (path) => { started.push(path); return new Promise((resolve) => finish.set(path, () => resolve(path))); };
+  const reads = ["a", "b", "c", "d"].map((name) => f.context.relay_file_url(`/files/${name}`));
+  const opened = f.context.relay_file_url("/files/opened", { urgent: true });
+  assert.equal(started.join(), "/files/a,/files/b", "a room full of images does not read them all at once");
+  f.context.relay_file_url("/files/a");
+  finish.get("/files/a")();
+  await reads[0];
+  await new Promise((resolve) => setImmediate(resolve));
+  assert.equal(started.join(), "/files/a,/files/b,/files/opened", "the file the user opened goes ahead of the waiting images");
+  for (const path of ["/files/b", "/files/opened"]) finish.get(path)();
+  await opened;
+  await new Promise((resolve) => setImmediate(resolve));
+  for (const path of ["/files/c", "/files/d"]) finish.get(path)();
+  assert.equal(JSON.stringify(await Promise.all(reads)), JSON.stringify(["a", "b", "c", "d"].map((name) => `blob:/files/${name}`)));
+  assert.equal(started.length, 5, "a file already read is not read again");
+});
+
 test("@ names a member by its on-screen nickname or its member name, longest first, never by an ambiguous nickname", () => {
   const f = theme_fixture(), state = f.context.test_state;
   const names = ["Claude", "Claude-1", "Antigravity", "Codex"];
