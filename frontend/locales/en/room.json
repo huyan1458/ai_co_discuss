@@ -755,6 +755,7 @@
   "已修改 {count} 个文件": "Edited {count} files",
   "二进制文件": "Binary file",
   "未记录差异": "No line diff",
+  "关闭预览": "Close preview",
   "文件超过 1 MB，只记录了改动，没有保存逐行差异": "Over 1 MB: the change is recorded, its line diff is not",
   "正在读取改动…": "Reading changes…",
   "读取改动失败：{value1}": "Could not read changes: {value1}",

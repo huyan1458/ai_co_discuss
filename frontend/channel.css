@@ -173,7 +173,8 @@ html[data-theme^="channel"] .channel-menu.channel-directory-menu { min-width: 15
   .channel-room-actions, .channel-folder-actions { display: none; min-width: 0; }
   .channel-room-row:is(:hover, :has(:focus-visible), [data-state="open"]) .channel-room-actions, .channel-room-row:has([aria-expanded="true"]) .channel-room-actions,
   .channel-folder-row:is(:hover, :has(:focus-visible)) .channel-folder-actions, .channel-folder-row:has([data-state="open"]) .channel-folder-actions { display: flex; }
-  .channel-room-row:is(:hover, :has(:focus-visible), [data-state="open"]) .channel-room-time, .channel-room-row:has([aria-expanded="true"]) .channel-room-time,
+  /* The working dot stands in the time's place, so it gives way to the actions the same way. */
+  .channel-room-row:is(:hover, :has(:focus-visible), [data-state="open"]) :is(.channel-room-time, .channel-room-running), .channel-room-row:has([aria-expanded="true"]) :is(.channel-room-time, .channel-room-running),
   .channel-folder-row:is(:hover, :has(:focus-visible)) .channel-directory-count, .channel-folder-row:has([data-state="open"]) .channel-directory-count { display: none; }
 }
 .channel-folder-rooms { padding-left: 24px; }
