@@ -19,7 +19,17 @@ export function cli_timeout_reason(milliseconds) {
   return t('CLI 运行超过 {seconds} 秒仍未结束，已终止', { seconds: Math.round(milliseconds / 1000) });
 }
 /** Tool names that edit files, across the softwares' event streams. */
-export const EDIT_TOOLS = /^(Edit|MultiEdit|Write|NotebookEdit|write_file|write_to_file|replace_file_content|multi_replace_file_content)$/;
+// A shell command that may write files: a redirect into a file, an in-place edit, a script writing, a copy, move or
+// delete. Only such a command claims the paths it names; reading commands (cat, grep, git diff) claim none.
+const SHELL_WRITES = /(?<![=\-<>])>{1,2}(?!=)\s*(?!&|\/dev\/null|\$null|nul\b)|\bsed\s+-i|\.write\w*\(|write_text|writeFileSync|\b(?:Set|Add)-Content\b|\bOut-File\b|\btee\b|\b(?:mv|cp|rm)\s|\b(?:Move|Copy|Remove|Rename)-Item\b|\bgit\s+(?:checkout|restore|apply|mv|rm)\b/i;
+
+/** The paths a file-writing shell command names (with a folder or an extension), so files it wrote count as the agent's own. */
+export function shell_written_paths(command) {
+  const text = String(command || '');
+  if (!SHELL_WRITES.test(text)) return [];
+  return text.split(/[\s'"`;|&<>(),=]+/).filter(token => /[\\/]/.test(token) && /\.[\w-]+$/.test(token));
+}
+export const EDIT_TOOLS = /^(Edit|MultiEdit|Write|NotebookEdit|write_file|edit_file|write_to_file|replace_file_content|multi_replace_file_content)$/;
 /** A refused operation's detail and rule are cut to this length; a run reports at most this many. */
 export const DENIAL_FIELD = 300;
 export const MAX_DENIALS = 20;

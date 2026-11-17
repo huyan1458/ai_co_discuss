@@ -5,7 +5,7 @@
 - 新消息从任务的已读起点之后读起（`message list ROOM --after ID`），后面的消息可以修正前面的，以用户最新的要求为准。`request_messages` 可能指向已读起点之前的原回答，需要时 `message view ROOM ID` 补读。
 - 完成后用 `message post --body-file 草稿.md` 提交一次回答。手动接入的成员没有执行编号：从 `room view` 的 `free.requests` 找到自己的待处理请求，用 `--request 请求编号` 关闭。
 - 工作中收到“又有请求 #N 在排队等你”时，`execution view` 的 `queued_requests` 列出它们；这次回答能一并交付的，提交时加 `--also-request N`（API 填 `also_request_ids`）一起关闭，其余答完会再交给你。
-- 你在工作中途写的简短文字说明，本机接入程序会显示在网页的处理中卡片上，让用户知道进展；它不代替最终回答。
+- 多步的工作，在关键转折处用请求者的语言写一两句进展：这些中途文字会显示在网页的处理中卡片上，用户靠它知道你在做什么。不复述工具输出或操作步骤，不代替最终回答。
 - 请求带 `sequence`、`question` 或 `question_needed`，任务有 `image`，或用户在你自己的窗口里要你发言时，另读 [按需场景](situations.md)。
 
 ## 需要用户决定时

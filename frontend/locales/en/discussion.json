@@ -295,5 +295,6 @@
   "发送 · Enter": "Send · Enter",
   "换行": "new line",
   "接力在等你回答上方的问题卡；这条消息只发给主持人 {value1}": "The relay is waiting for your answer on the question card above; this message goes only to the host {value1}",
-  "接力在等你回答问题卡…": "The relay is waiting for your answer on the question card…"
+  "接力在等你回答问题卡…": "The relay is waiting for your answer on the question card…",
+  "修改注释 {value1} · {value2}": "Editing note {value1} · {value2}"
 }

@@ -2,7 +2,8 @@
  * Pi extension loaded into the `pi --mode rpc` process of one model API execution (api_pi.mjs starts it). It registers
  * the member's provider and exactly the tools the old in-runner loop offered: room tools bound to this execution,
  * project file tools, registered commands and image tools (api.mjs, api_files.mjs, api_commands.mjs, api_images.mjs).
- * Pi's built-in tools are off, so the model has no shell and every path still goes through our checks.
+ * A writable member also has Pi's own read, bash, edit and write in place of our file tools and registered commands;
+ * otherwise Pi's built-in tools are off, so the model has no shell and every path still goes through our checks.
  *
  * Input: `CODISCUSS_PI_CONTEXT` names the execution's private context file; `CODISCUSS_PI_KEY` holds the API key, which
  * the model never sees. Output to the runner: each tool result's `details.codiscuss` says whether it saved the answer

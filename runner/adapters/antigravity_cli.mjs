@@ -12,7 +12,7 @@ import { DatabaseSync } from 'node:sqlite';
 import { atomic_json } from '../files.mjs';
 import { cli_delivery } from './cli.mjs';
 import { DENIAL_FIELD, EDIT_TOOLS, json_line, launch_directory, MAX_DENIALS, model_entry, MODEL_PATTERN, not_sent, page_sessions, project_directory,
-  prompt_title, query_catalog, read_json, same_path, TASK_SUBCOMMANDS, trim_preview } from './common.mjs';
+  prompt_title, query_catalog, read_json, same_path, shell_written_paths, TASK_SUBCOMMANDS, trim_preview } from './common.mjs';
 
 // agy stores its generation settings as protobuf; field 28 (tag bytes 0xe2 0x01) holds the model actually used.
 const AGY_MODEL_TAG = [0xe2, 0x01];
@@ -355,6 +355,17 @@ const events = {
     const text = responses.get(step.step_index).trim();
     responses.delete(step.step_index);
     return text;
+  },
+  // A finished file tool names its file (agy 1.5.x: write_file / edit_file with `Path`); a command that writes claims the
+  // paths it names, as for Claude. Without this the card could not tell agy's own edits from others' (user 2026-11-17).
+  edits(event) {
+    const step = event.step_update;
+    if (step?.step_type !== 'tool' || step.state !== 'DONE') return [];
+    const parameters = step.tool_info?.parameters || {};
+    if (step.tool_name === 'run_command') return shell_written_paths(parameters.CommandLine);
+    if (!EDIT_TOOLS.test(step.tool_name || '')) return [];
+    const path = parameters.Path ?? parameters.AbsolutePath ?? parameters.TargetFile;
+    return typeof path === 'string' && path ? [path] : [];
   },
   detail: agy_detail,
 };

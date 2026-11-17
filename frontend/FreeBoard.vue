@@ -115,7 +115,7 @@ function member_tone(member) {
   if (member.execution?.stale || (member.pending && member.adopt_error)) return "error";
   if (member.held_until) return "warning";
   if (busy(member)) return member.pending && !LIVE.includes(member.execution?.status) ? "warning" : "primary";
-  return member.execution?.status === "failed" ? "error" : "success";
+  return member.execution?.status === "failed" ? "error" : "neutral";
 }
 
 /** One line per member: live execution, queued requests, its place in a one-after-another queue, or the last outcome. */
@@ -189,7 +189,7 @@ const status = computed(() => {
     detail: t('达到连续派活上限；主持人的下一次派活已暂存，继续即发出。发新消息则重新开始') };
   if (halted) return { tone: "warning", title: t('任务链已停'), detail: t('派出的成员都失败了；发新消息即重新开始') };
   if (!(free.value.members || []).length) return { tone: "neutral", title: t('暂无成员'), detail: t('在下方邀请 AI 加入') };
-  return { tone: "success", title: t('空闲'), detail: host.value
+  return { tone: "neutral", title: t('空闲'), detail: host.value
     ? t('消息默认交给 {value1}；@ 其他成员让它们发言', { value1: bridge.display_name(host.value.name) }) : t('没有主持人：消息只作留言') };
 });
 

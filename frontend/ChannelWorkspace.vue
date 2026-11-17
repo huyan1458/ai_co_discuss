@@ -100,7 +100,7 @@ const work_status = computed(() => {
   if (room.value && !room.value.free && room.value.running) return { tone: "primary", text: t("执行中"), members: [], title: t("执行中") };
   const working = (room.value?.free?.members || []).filter(busy);
   const state = (member) => member.execution?.stale ? t("执行失联") : LIVE_EXECUTION.includes(member.execution?.status) ? t("执行中") : t("待投递");
-  if (!working.length) return { tone: "success", text: t("空闲"), members: [], title: t("空闲") };
+  if (!working.length) return { tone: "neutral", text: t("空闲"), members: [], title: t("空闲") };
   const tone = working.some((member) => member.execution?.stale) ? "error" : "primary";
   const text = working.length === 1 ? `${bridge.display_name(working[0].name)} ${state(working[0])}` : t("{count} 位执行中", { count: working.length });
   return { tone, text, members: working.slice(0, STATUS_AVATARS), title: working.map((member) => `${bridge.display_name(member.name)} ${state(member)}`).join("\n") };

@@ -137,8 +137,8 @@ export const ADAPTER_PROFILES = {
     // so only the three levels every protocol takes are offered. A chat endpoint without a reasoning parameter ignores it.
     efforts: ['low', 'medium', 'high'], models: false, access_levels: ['read', 'write'], per_tool_allow: false, adopt: '', host_existing: false,
     access_hints: { read: '用接入程序的文件工具读取、搜索项目文件，可运行工作流登记的只读命令',
-      write: '还可新建、覆盖、局部编辑项目文件，可运行工作流登记的全部命令；没有通用命令行' },
-    unsupported_hints: { auto: 'API 成员没有通用命令行，没有需要软件审批的操作', full: 'API 成员没有通用命令行，没有需要软件审批的操作' },
+      write: '用 Pi 自带的读写、编辑与命令行在项目里工作，和本地 CLI 可写一致；Pi 没有审批，可写即可直接运行命令' },
+    unsupported_hints: { auto: 'Pi 没有需要软件审批的操作，可写即可直接运行命令', full: 'Pi 没有需要软件审批的操作，可写即可直接运行命令' },
     // Runs in the Pi harness (api_pi.mjs), which keeps a session the runner cuts like a CLI's.
     // Whether a model reads images depends on the model, not the protocol: the owner says so on the card (`image_input`).
     // Its answer is only what submit_chat saves (an unknown result is recovered by the same submission), never its last text.

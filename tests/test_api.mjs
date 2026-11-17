@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict';
-import { spawn } from 'node:child_process';
+import { spawn, spawnSync } from 'node:child_process';
 import { randomUUID } from 'node:crypto';
 import { EventEmitter } from 'node:events';
 import { mkdirSync, mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from 'node:fs';
@@ -1077,4 +1077,43 @@ test('an API execution reports each tool call as a progress note, and a reply cu
   assert.deepEqual(failed.failure, { class: 'output_truncated', lasting: false });
   const notes = (await api(config, `/executions/${failed.id}/notes`)).notes.map(item => item.text);
   assert.ok(notes.includes('read_message id=1'), JSON.stringify(notes));
+});
+
+test('a reply cut at the output cap is followed by a reminder in the same session, and the execution can still answer', async t => {
+  const f = await site_fixture(t);
+  // The first reply spends the whole cap (as DeepSeek did thinking); after the reminder the model submits.
+  const mock = await model_fixture(t, (call, calls) => (calls.length === 1
+    ? { choices: [{ finish_reason: 'length', message: { role: 'assistant', content: '' } }] }
+    : tool_reply(call, 'submit_chat', { text: '完成' })));
+  const participants = { DeepSeek: profiles(f.home, mock.base_url).DeepSeek };
+  const started = await launch_discussion(f.home, { site: f.site, entry: 'web', participants,
+    room: { title: '截断后恢复', mode: 'free', host: '用户', members: ['DeepSeek'], submission_id: randomUUID() } }, { start_service: async () => ({ running: true }) });
+  const config = load_config(started.config_path), store = new DiscussionStore(config.directory), runner = new FreeRoomRunner(config, store);
+  f.cleanup.push(() => { runner.stop_children(); store.close(); });
+  await api(config, '/messages', { author: '用户', text: '请处理。', source: 'user', kind: 'chat', to: ['DeepSeek'], submission_id: randomUUID() });
+  await until(async () => (await api(config, '')).free.requests.every(item => item.status === 'completed'), () => runner.tick());
+  assert.ok(mock.calls.some(call => JSON.stringify(call.body).includes('超过单次输出上限被截断')), 'the reminder reaches the model');
+});
+
+test('a writable API member works with Pi\'s own bash, and the file its command writes counts as its change', async t => {
+  const f = await site_fixture(t);
+  const project = mkdtempSync(join(tmpdir(), 'codiscuss-pi-shell-'));
+  // Execution changes are read from git status, so the project is a repository.
+  spawnSync('git', ['init', '-q', project]);
+  t.after(() => rmSync(project, { recursive: true, force: true }));
+  const mock = await model_fixture(t, (call, calls) => (calls.length === 1
+    ? tool_reply(call, 'bash', { command: 'mkdir -p out && echo hi > out/note.txt' }) : tool_reply(call, 'submit_chat', { text: '已写入' })));
+  const participants = { DeepSeek: { ...profiles(f.home, mock.base_url).DeepSeek, project_access: 'write', cwd: project } };
+  const started = await launch_discussion(f.home, { site: f.site, entry: 'web', participants,
+    room: { title: 'Pi 命令行', mode: 'free', host: '用户', members: ['DeepSeek'], submission_id: randomUUID() } }, { start_service: async () => ({ running: true }) });
+  const config = load_config(started.config_path), store = new DiscussionStore(config.directory), runner = new FreeRoomRunner(config, store);
+  f.cleanup.push(() => { runner.stop_children(); store.close(); });
+  await api(config, '/messages', { author: '用户', text: '写个文件。', source: 'user', kind: 'chat', to: ['DeepSeek'], submission_id: randomUUID() });
+  await until(async () => (await api(config, '')).free.executions.some(item => item.changes.length), () => runner.tick());
+  const names = mock.calls[0].body.tools.map(item => item.function?.name);
+  assert.ok(names.includes('bash') && !names.includes('glob'), 'Pi\'s own tools replace the confined file tools');
+  assert.equal(readFileSync(join(project, 'out', 'note.txt'), 'utf8').trim(), 'hi');
+  // Changes are recorded when the process ends, after the answer was saved.
+  const execution = (await api(config, '')).free.executions.find(item => item.member === 'DeepSeek');
+  assert.deepEqual(execution.changes, ['out/note.txt']);
 });

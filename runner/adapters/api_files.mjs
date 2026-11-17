@@ -1,5 +1,6 @@
 /**
- * Project file tools of a model API member: read, glob and grep, and at 可写 also write and edit.
+ * Project file tools of a model API member: read, glob, grep and a read-only git (diff, log, show, status), and at 可写
+ * also write and edit.
  *
  * Ported from the read / write / edit (packages/fs/tool-fs) and glob / grep (packages/fs/tool-fs-search) tools of
  * DeepSeek Harness, https://github.com/deepseek-ai/deepseek-harness at ce7073d, MIT License, Copyright (c) 2026 DeepSeek:
@@ -25,11 +26,21 @@ const GREP_MAX_MATCHES = 250;
 const GREP_MAX_LINE_LENGTH = 2000;
 const MAX_WALK_ENTRIES = 100_000;
 const GIT_TIMEOUT_MS = 15_000;
+// The git tool: only commands that read, only options that neither write a file (--output), run a program (external
+// diff, textconv, a pager) nor reach outside the repository (--no-index); a revision never names a file (`HEAD:.env`).
+const GIT_COMMANDS = ['diff', 'log', 'show', 'status'];
+const GIT_OPTION = /^-(?:-(?:stat|numstat|shortstat|name-only|name-status|cached|staged|patch|oneline|graph|decorate|abbrev-commit|follow|reverse|no-merges|merges|word-diff|ignore-all-space|ignore-space-change|summary|short|porcelain|branch|untracked-files(?:=(?:no|normal|all))?|stat=\d+(?:,\d+)?|unified=\d+|max-count=\d+|skip=\d+|since=[^=\s]+|until=[^=\s]+|after=[^=\s]+|before=[^=\s]+|author=.+|grep=.+|format=[\w%:.,\-<>()\[\] ]*|pretty=(?:oneline|short|medium|full|fuller)|date=(?:short|iso|relative|local))|[pswnU]\d*|[MC])$/;
+const GIT_REVISION = /^[\w./~^@{}\-]+(?:\.\.\.?[\w./~^@{}\-]+)?$/;
+// Secret files stay out of every diff and log, as the read tool refuses them.
+const GIT_SECRET_EXCLUDES = [':(exclude,glob)**/.env', ':(exclude,glob)**/.env.*', ':(exclude,glob)**/*.pem', ':(exclude,glob)**/*.key',
+  ':(exclude,glob)**/*.p12', ':(exclude,glob)**/*.pfx', ':(exclude,glob)**/*.jks', ':(exclude,glob)**/*.keystore',
+  ':(exclude,glob)**/id_rsa*', ':(exclude,glob)**/id_dsa*', ':(exclude,glob)**/id_ecdsa*', ':(exclude,glob)**/id_ed25519*',
+  ':(exclude,glob)**/.npmrc', ':(exclude,glob)**/.pypirc', ':(exclude,glob)**/.netrc'];
 const VCS_DIRECTORIES = ['.git', '.svn', '.hg', '.bzr', '.jj', '.sl'];
 // Their content would reach the model provider and could be posted into the room, which has no read isolation.
 const SECRET_NAMES = [/^\.env(\..+)?$/i, /\.(pem|key|p12|pfx|jks|keystore)$/i, /^id_(rsa|dsa|ecdsa|ed25519)/i, /^\.(npmrc|pypirc|netrc)$/i];
 const SECRET_EXAMPLES = /^\.env\.(example|sample|template)$/i;
-const READ_TOOLS = ['read', 'glob', 'grep'];
+const READ_TOOLS = ['read', 'glob', 'grep', 'git'];
 export const WRITE_TOOLS = ['write', 'edit'];
 const TEXT = { type: 'string' };
 const NUMBER = { type: 'integer', minimum: 1 };
@@ -57,6 +68,15 @@ const DEFINITIONS = {
     path: { ...TEXT, description: 'File or directory to search. Defaults to the project directory; a relative path resolves against it, an absolute one may name another listed project directory.' },
     include: { ...TEXT, description: 'One glob filter for which files to search (e.g. "*.ts", "*.{js,jsx}"). Not a list; negation is not supported.' },
   }, ['pattern']),
+  git: tool('git', 'Run a read-only git command in a project directory: diff, log, show or status. '
+    + 'Use it to see what changed (e.g. diff, diff --stat HEAD~1, log --oneline -n 10, show HEAD --stat). '
+    + `Output is cut at ${READ_MAX_BYTES} bytes; narrow it with paths or --stat.`, {
+    command: { type: 'string', enum: GIT_COMMANDS, description: 'The git subcommand.' },
+    args: { type: 'array', items: TEXT, description: 'Options and revisions, e.g. ["--stat", "HEAD~1"]. '
+      + 'Options that write files, run external programs or read outside the project are refused.' },
+    paths: { type: 'array', items: TEXT, description: 'Limit to these paths, relative to the directory.' },
+    directory: { ...TEXT, description: 'Directory to run in. Defaults to the project directory; an absolute path may name another listed project directory.' },
+  }, ['command']),
   write: tool('write', 'Create or fully replace a UTF-8 text file.', {
     file_path: { ...TEXT, description: 'Path to write, relative to the project directory, or absolute inside another listed project directory. Provide `file_path` before `content` in the arguments.' },
     content: { ...TEXT, description: 'Full UTF-8 text content to write.' },
@@ -395,7 +415,29 @@ export function write_new_project_file(project, requested, data) {
   return file;
 }
 
-const RUNNERS = { read, glob, grep, write, edit };
+/** A read-only git command in one project directory; its paths stay inside the project and away from protected files. */
+function git(project, args) {
+  if (!GIT_COMMANDS.includes(args.command)) throw new Error(`command must be one of ${GIT_COMMANDS.join(', ')}`);
+  const options = args.args ?? [], paths = args.paths ?? [];
+  if (!Array.isArray(options) || !Array.isArray(paths) || [...options, ...paths].some(item => typeof item !== 'string')) throw new Error('args and paths must be arrays of strings');
+  for (const option of options) {
+    if (option.startsWith('-') ? !GIT_OPTION.test(option) : !GIT_REVISION.test(option)) throw new Error(`"${option}" is not allowed in the git tool`);
+  }
+  const base = directory_target(project, args.directory);
+  const scoped = paths.map(path => relative(base.path, target(project, resolve(base.path, path), false).path) || '.');
+  const command = ['-C', base.path, '--no-pager', '-c', 'core.quotepath=false', '-c', 'color.ui=never', args.command,
+    ...(args.command === 'status' ? [] : ['--no-ext-diff', '--no-textconv']), ...options, '--', ...(scoped.length ? scoped : ['.']), ...GIT_SECRET_EXCLUDES];
+  const result = spawnSync('git', command, { encoding: 'utf8', windowsHide: true, timeout: GIT_TIMEOUT_MS, maxBuffer: 16 * 1024 * 1024,
+    env: { ...process.env, GIT_PAGER: 'cat', GIT_EXTERNAL_DIFF: '', GIT_TERMINAL_PROMPT: '0' } });
+  if (result.error) throw new Error(`git failed: ${result.error.message}`);
+  if (result.status !== 0) throw new Error(`git ${args.command} failed: ${(result.stderr || '').trim().slice(0, 500)}`);
+  const output = result.stdout || '(no output)';
+  const bytes = Buffer.byteLength(output);
+  if (bytes <= READ_MAX_BYTES) return output;
+  return `${Buffer.from(output).subarray(0, READ_MAX_BYTES).toString('utf8')}\n\n(Output cut at ${READ_MAX_BYTES} of ${bytes} bytes. Narrow it with paths or --stat.)`;
+}
+
+const RUNNERS = { read, glob, grep, git, write, edit };
 
 /** Whether a tool name is one of the file tools. */
 export function is_file_tool(name) {

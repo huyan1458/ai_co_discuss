@@ -760,8 +760,6 @@
   "正在读取改动…": "Reading changes…",
   "读取改动失败：{value1}": "Could not read changes: {value1}",
   "改动较长，只显示前面一部分": "Long change; only the first part is shown",
-  "其他来源 {count} 个文件": "{count} files from other sources",
-  "同一时间被改动、但不是这位成员的编辑工具写的文件，可能来自其他窗口、成员或构建": "Files changed at the same time but not written by this member's edit tools; they may come from another window, member or a build",
   "正在上传附件 {value1}/{value2}…": "Uploading attachments {value1}/{value2}…",
   "正在上传": "Uploading",
   "{value1} 已停止": "{value1} stopped",

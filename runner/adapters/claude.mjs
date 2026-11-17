@@ -13,7 +13,7 @@ import { dirname, join, resolve } from 'node:path';
 import { runs_commands } from '../expert_prompts.mjs';
 import { bind_access, cli_max_run_ms, cli_timeout_reason, DENIAL_FIELD, EDIT_TOOLS, edge_entries, launch_directory, log_entries, marked, MAX_DENIALS, model_entry, json_line,
   clock_reset_at, newest_record, not_sent, page_sessions, preview_messages, project_directory, prompt_text, prompt_title, query_catalog,
-  same_path, TASK_SUBCOMMANDS, tree_killable, typed_prompt, watch_events } from './common.mjs';
+  same_path, TASK_SUBCOMMANDS, tree_killable, typed_prompt, watch_events, shell_written_paths } from './common.mjs';
 
 // A message posted to an open Claude window that has not started by then is reported, not failed.
 const INBOX_CHECK_MS = 90_000;
@@ -28,16 +28,6 @@ const CHAT_TURN_MS = 30 * 60_000;
 const LASTING_ERRORS = ['rate_limit', 'authentication_failed'];
 const EDIT_TOOL_NAMES = /^(Edit|MultiEdit|Write|NotebookEdit)$/;
 const SHELL_TOOL_NAMES = /^(Bash|PowerShell)$/;
-// A shell command that may write files: a redirect into a file, an in-place edit, a script writing, a copy, move or
-// delete. Only such a command claims the paths it names; reading commands (cat, grep, git diff) claim none.
-const SHELL_WRITES = /(?<![=\-<>])>{1,2}(?!=)\s*(?!&|\/dev\/null|\$null|nul\b)|\bsed\s+-i|\.write\w*\(|write_text|writeFileSync|\b(?:Set|Add)-Content\b|\bOut-File\b|\btee\b|\b(?:mv|cp|rm)\s|\b(?:Move|Copy|Remove|Rename)-Item\b|\bgit\s+(?:checkout|restore|apply|mv|rm)\b/i;
-
-/** The paths a file-writing shell command names (with a folder or an extension), so files it wrote count as the agent's own. */
-function shell_written_paths(command) {
-  const text = String(command || '');
-  if (!SHELL_WRITES.test(text)) return [];
-  return text.split(/[\s'"`;|&<>(),=]+/).filter(token => /[\\/]/.test(token) && /\.[\w-]+$/.test(token));
-}
 // The Messages API refuses an image whose base64 form passes 5 MB, failing the whole turn; larger ones go by path only.
 const MAX_INLINE_IMAGE_BYTES = 3_750_000;
 // Claude Code logs side queries (titles, compaction, subagents) too; only these sources are the member's own turns.

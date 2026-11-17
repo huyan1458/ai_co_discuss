@@ -87,7 +87,8 @@ function role_tools(context) {
     tool('read_attachment', `按附件 ID 读取：返回名称、大小、类型与所属消息；UTF-8 文本附件同时返回正文，长的用 offset（从第几个字符起）与 limit（默认 ${ATTACHMENT_CHARS}，最多 ${MAX_ATTACHMENT_CHARS}）续读；${context.image_input ? '图片随结果附上，可以直接看；' : ''}其余读不到内容的（${context.image_input ? '' : '图片、'}PDF、音视频等）返回 readable: false 与原因`,
       { id: TEXT, offset: { type: 'integer', minimum: 0 }, limit: { type: 'integer', minimum: 1, maximum: MAX_ATTACHMENT_CHARS } }, ['id']),
     tool('read_goal', '读取 Goal 的目标、状态、续跑次数、用时与是否空闲'),
-    ...repo_tools(context), ...file_tools(context.project), ...command_tools(context.commands, context.project), ...image_tools(context.image)];
+    // With Pi's own tools (a writable member) its read/edit/write/bash replace our file tools and registered commands.
+    ...repo_tools(context), ...(context.native_shell ? [] : [...file_tools(context.project), ...command_tools(context.commands, context.project)]), ...image_tools(context.image)];
   const answer = { text: { ...TEXT, maxLength: 32000 }, summary: { ...TEXT, maxLength: 1000 }, reply_to: NUMBER,
     also_request_ids: { type: 'array', items: NUMBER, maxItems: 20, description: '执行中又排队给你、这条回答已一并交付的普通请求编号（read_execution 的 queued_requests），同时关闭；不相关的不要填' },
     ...(context.image ? { attachments: { type: 'array', maxItems: MAX_MESSAGE_ATTACHMENTS, items: TEXT,
@@ -536,17 +537,22 @@ function skill_text(name, file = 'SKILL.md') {
 }
 
 /** What this member can do with project files, in its environment notes. */
-function project_text(project, commands, image_input = false) {
+function project_text(project, commands, image_input = false, native_shell = false) {
   // A model the owner marked as reading images gets the woken messages' images with the task, as task.attachments lists.
   const seen = image_input ? '唤醒你的消息里的图片（task.attachments 中的 [图片 #n]）已随任务附上，可以直接看；其余' : '';
   const attachments = `${seen}消息附件用 read_attachment 按 ID 读取：UTF-8 文本能读到正文${image_input ? '，图片随结果附上' : ''}，返回 readable: false 时内容读不到`;
   if (!project) return `- 本地文件你读不到；${attachments}。读不到的以其他成员贴出的为准，不凭文件名猜测；回答涉及时说明你没有读取，缺信息就写明缺什么。`;
-  const tools = project.writable ? 'read、glob、grep、write、edit' : 'read、glob、grep';
+  if (native_shell) {
+    const others = project.roots.slice(1).map(item => item.root).join('、');
+    return `- 你在项目目录 ${project.root} 中工作，可用 read、bash、edit、write 工具读写文件、运行命令（测试、构建、git 等），和本地 CLI 成员一样；修改已有文件前先 read，局部修改优先用 edit。${others ? `本房间另有项目目录：${others}。` : ''}技能里的草稿文件与 --body-file 不适用：回答正文直接放进 submit_chat，不要写草稿文件。
+- ${attachments}；读不到的以其他成员贴出的为准，不凭文件名猜测；回答涉及时说明你没有读取，缺信息就写明缺什么。`;
+  }
+  const tools = project.writable ? 'read、glob、grep、git、write、edit' : 'read、glob、grep、git';
   const extras = project.roots.slice(1).map(item => `${item.root}（${item.writable ? '可读写' : '只读'}）`).join('、');
   const runnable = command_tools(commands, project).length > 0;
   const no_shell = runnable ? '没有通用命令行，只能用 run_command 运行工作流登记的命令（工具说明里列出），其他测试或构建不能运行，需要验证时在回答里说明，交给能运行命令的成员。'
     : '没有命令行，不能运行测试或构建，需要验证时在回答里说明，交给能运行命令的成员。';
-  return `- 可用 ${tools} 工具${project.writable ? '读写' : '只读'}本房间的项目目录，路径相对项目目录，不能越出；密钥文件、版本库元数据和接入程序的私有文件会被拒绝。${project.writable
+  return `- 可用 ${tools} 工具${project.writable ? '读写' : '只读'}本房间的项目目录，路径相对项目目录，不能越出；密钥文件、版本库元数据和接入程序的私有文件会被拒绝；git 只能运行 diff、log、show、status 查看改动与历史。${project.writable
     ? `修改已有文件前先 read，局部修改优先用 edit；${no_shell}技能里的草稿文件与 --body-file 不适用：回答正文直接放进 submit_chat，不要用 write 写草稿。`
     : `项目只读，不能修改文件。${runnable ? '可用 run_command 运行工作流登记的只读命令（工具说明里列出）。' : ''}`}${extras ? `
 - 本房间另有项目目录，用绝对路径访问：${extras}。` : ''}
@@ -577,10 +583,10 @@ export function system_prompt(context) {
   const discussion = Boolean(context.discussion_request);
   const environment = `你是 AI CoDiscuss 房间中的 ${context.participant}，职责为 ${context.role}（${discussion ? '房间开启的讨论中的执行' : '房间请求'}）。使用中文。
 下文是本项目的参与技能${host ? '与主持技能' : ''}，与本地软件参与者使用同一份。你经本机接入程序以 API 参与，环境差异如下，与技能冲突时以本段为准：
-- 只能使用提供的${context.project ? '房间工具和项目文件工具' : '房间工具'}，没有${command_tools(context.commands, context.project).length ? '通用' : ''}命令行、浏览器或其他软件。接入程序负责执行认领、续租和凭据管理；你的房间写入工具都绑定本次执行。submit_chat 结果不明（outcome: unknown）时用完全相同的内容再调用一次：提交编号不变，不会产生第二条；其他结果不明的写入不要重试。
+- ${context.native_shell ? '房间操作只用提供的房间工具：bash 里没有本次执行的凭据，不要运行 codiscuss 或 python runner/discuss.py 读写房间。' : `只能使用提供的${context.project ? '房间工具和项目文件工具' : '房间工具'}，没有${command_tools(context.commands, context.project).length ? '通用' : ''}命令行、浏览器或其他软件。`}接入程序负责执行认领、续租和凭据管理；你的房间写入工具都绑定本次执行。submit_chat 结果不明（outcome: unknown）时用完全相同的内容再调用一次：提交编号不变，不会产生第二条；其他结果不明的写入不要重试。
 - 命令与工具对应：room view → read_room；message list / view → read_messages / read_message；execution view → read_execution；attachment view / download → read_attachment；goal view → read_goal；room events → read_events；message post --kind chat → submit_chat。${host ? 'state decision → read_decision（按任务的决策编号读取完整判断）；message post --proactive → submit_chat 的 proactive。' : ''}${discussion && host
     ? '主持讨论工具还包括 state set → save_state；room update → update_topic；turn create --plan-file → arrange_turns；turn continue → continue_plan；turn roster → read_roster，读后 turn ask → ask_interjection；取消安排 → cancel_turn；room limits --done → finish_discussion / declare_done。' : ''}${host ? ' 派活用 to，派出的工作结束后都会交回你；房间空闲后要接着推进时填 continue；message post --sequential / --loop / --with / --checkpoint / --repeat / --detach → submit_chat 的 sequential / loop / parallel / gates / detach；sequence view → read_sequence；sequence continue → continue_sequence。' : ''}${goal_host(context) ? ' goal start → start_goal；goal done / block → finish_goal；goal state → set_goal_state。' : ''}
-${project_text(context.project, context.commands, context.image_input)}${context.external_access ? `
+${project_text(context.project, context.commands, context.image_input, context.native_shell)}${context.external_access ? `
 - 你是经另一台电脑加入的外部成员：只有 read_room、read_messages、read_message、submit_chat 与 repo 工具，读不到附件、事件记录，也不能提问。本房间的项目在邀请你的那台电脑上：用 repo_list / repo_read / repo_grep 只读查看对方开放的目录（对应 codiscuss repo ls / read / grep），先用不带参数的 repo_list 取得目录序号 root。` : ''}${context.image ? `
 - 可用 generate_image 按文字生成图片（含 GIF 动图、SVG 矢量图），edit_image 按消息里的图片附件 ID${context.project ? '或项目内图片' : ''}修改、合成图片，图片模型为 ${context.image.model}。生成的图片存为本次执行的附件，submit_chat 时自动随回答发出（每条最多 ${MAX_MESSAGE_ATTACHMENTS} 张，可用 attachments 选择）；task.unsent_images 列出你之前的执行生成后没能发出的图片（那次执行失败了），与本次任务相关时用 attachments 附上，不必重画。${context.project?.writable ? '图片要插进项目文档（如 Markdown）时，用 save_path 存进项目，文档里按相对路径引用。' : ''}你看不到图片内容：回答里说明画了什么、用了哪些参数，不描述没看到的细节，需要人看图确认时请用户或能看图的成员确认。每次调用都计费，不为试探反复生成；被拒或报错时按返回原因调整后再试。` : ''}
 - ${max_requests(context) ? `本次执行最多 ${max_requests(context)} 次模型请求，每轮都计入；` : ''}互不依赖的读取或修改（如同一文件的多处 edit）在同一轮一次调用多个工具，减少模型请求次数。
@@ -694,6 +700,7 @@ export async function api_delivery(profile, binding, task, spawn_process) {
       project: open_project(task.api_context, [task.api_context.home, task.directory]) };
     if (context.image) context.unsent_images = unsent_images(context);
     context.image_input = takes_images(profile);
+    context.native_shell = Boolean(context.project?.writable);
     prompt = await task_prompt(context);
     images = (task.images || []).filter(image => image.size <= MAX_INLINE_IMAGE_BYTES)
       .map(image => ({ type: 'image', data: readFileSync(image.path).toString('base64'), mimeType: image.content_type }));
@@ -702,7 +709,7 @@ export async function api_delivery(profile, binding, task, spawn_process) {
     throw not_sent(new Error(key ? message.replaceAll(key, '[已隐藏]') : message));
   }
   const setup = { ...task.api_context, participant: task.participant, directory: task.directory, task_id: task.id,
-    expert_prompt: context.expert_prompt, base_url: api_base_url(profile.base_url),
+    native_shell: context.native_shell, expert_prompt: context.expert_prompt, base_url: api_base_url(profile.base_url),
     profile: Object.fromEntries(PROFILE_FIELDS.filter(field => profile[field] !== undefined).map(field => [field, profile[field]])) };
   const context_file = join(task.directory, `${task.id}-pi-context.json`);
   const system_file = join(task.directory, `${task.id}-pi-system.md`);
@@ -710,9 +717,11 @@ export async function api_delivery(profile, binding, task, spawn_process) {
   writeFileSync(system_file, system_prompt(context), { mode: 0o600 });
   // Without a command line, every file it writes goes through the write tools, so its edit list is complete; a registered
   // command that changes files writes without telling, so then the list is left untracked.
-  if (context.project && !runs_write_commands(context.commands, context.project)) task.on_edits?.([]);
+  // Pi's own tools (a writable member) are tracked as Claude's are: its write/edit by path and bash by the paths a writing
+  // command names.
+  if (context.project && (context.native_shell || !runs_write_commands(context.commands, context.project))) task.on_edits?.([]);
   return pi_delivery({ cli, profile, key, binding, task, context_file, system_file, prompt, images, max_requests: max_requests(context),
-    project_root: context.project?.root || '', service_home: task.api_context.home, ...(spawn_process ? { spawn_process } : {}) });
+    project_root: context.project?.root || '', native_shell: context.native_shell, service_home: task.api_context.home, ...(spawn_process ? { spawn_process } : {}) });
 }
 
 // The call is the runner's own, so it can be aborted and its tool steps are seen.

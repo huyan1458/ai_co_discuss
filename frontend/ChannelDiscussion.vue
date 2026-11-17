@@ -169,7 +169,7 @@ async function start_quote() {
 /** Keep the comment box (or a mark's edit card) beside its passage while the transcript scrolls. */
 function place_quote() {
   if (quoting.value && !quoting.value.touch) Object.assign(quoting.value, place_by(quoting.value.range, QUOTE_COMMENT_WIDTH, QUOTE_COMMENT_HEIGHT));
-  if (mark_editing.value) Object.assign(mark_editing.value, place_by(mark_editing.value.range, MARK_CARD_WIDTH, MARK_CARD_HEIGHT));
+  if (mark_editing.value?.range) Object.assign(mark_editing.value, place_by(mark_editing.value.range, MARK_CARD_WIDTH, MARK_CARD_HEIGHT));
 }
 /** Open a quoted passage's edit card from its number mark, highlighting the passage again. */
 function open_mark(excerpt_id) {
@@ -180,6 +180,22 @@ function open_mark(excerpt_id) {
   hold_selection(range);
   // Docked above the composer on touch screens, as adding a note is: one control for writing a note either way.
   mark_editing.value = { excerpt, range, touch: window.matchMedia("(pointer: coarse)").matches, ...place_by(range, MARK_CARD_WIDTH, MARK_CARD_HEIGHT) };
+}
+// The notes list in the composer: open or closed, so editing one note on a phone can close it.
+const excerpt_list_open = ref(false);
+/**
+ * Edit a listed note. On a phone it is edited in the same bar at the bottom as a note being added (user 2026-11-17:
+ * a different box inside the list made the same action look like two), so the list closes first; elsewhere in the row.
+ */
+function edit_listed_excerpt(excerpt) {
+  if (!window.matchMedia("(pointer: coarse)").matches) { editing_excerpt.value = editing_excerpt.value === excerpt.id ? 0 : excerpt.id; return; }
+  excerpt_list_open.value = false;
+  cancel_quote();
+  mark_editing.value = { excerpt, range: null, touch: true };
+}
+/** The docked edit box's line naming its note: its number and the start of the quoted text. */
+function mark_context(excerpt) {
+  return t('修改注释 {value1} · {value2}', { value1: file_preview.excerpts.indexOf(excerpt) + 1, value2: excerpt.text.replace(/\s+/g, " ").trim() });
 }
 function close_mark() {
   mark_editing.value = null;
@@ -2236,7 +2252,7 @@ onMounted(() => composer_dock.value && dock_observer.observe(composer_dock.value
 // (2026-11-17 recording); both run once they stop (release_reader). A send glide keeps its own course.
 const growth_observer = new ResizeObserver(() => {
   const element = transcript.value;
-  if (!element || glide.isAnimating()) return;
+  if (!element || glide.isAnimating() || toggle_hold) return;
   if (!follow_tail.value) { keep_reading(); return; }
   if (reader_busy()) { follow_pending = true; arm_settle(); return; }
   const bottom = element.scrollHeight - element.clientHeight;
@@ -2491,6 +2507,36 @@ function rewind_summary(plan) {
 /** Select the shared reply target and focus the library's chat editor. */
 async function reply_to(message) { await act("reply", message); prompt.value?.textareaRef?.focus(); }
 /** A `#123` written in a card's text opens message 123's original text, as the card's own `#id` does. */
+// How long after a fold control is pressed its card is held in place: long enough for the content to render and any
+// open/close transition to finish.
+const TOGGLE_HOLD_MS = 700;
+let toggle_hold = null;
+/**
+ * Pressing a fold control (anything with aria-expanded) changes only what lies below it: the card holding the control
+ * keeps its place on screen, so the room grows or shrinks downward. Without this, following the end of the room
+ * scrolled to the new bottom and the card above the control moved up instead (user 2026-11-17). The answer's own
+ * "展开全文" keeps its own handling (toggle_answer).
+ */
+function keep_toggle_place(event) {
+  const control = event.target.closest?.("[aria-expanded]");
+  const element = transcript.value;
+  if (!control || !element?.contains(control) || control.classList.contains("channel-answer-toggle")) return;
+  const card = control.closest("[data-message-id], .channel-message, .channel-schedule-card") || control;
+  const top = card.getBoundingClientRect().top;
+  follow_tail.value = false;
+  const until = performance.now() + TOGGLE_HOLD_MS;
+  const hold = toggle_hold = { card };
+  const step = () => {
+    if (toggle_hold !== hold) return;
+    if (!card.isConnected) { toggle_hold = null; return; }
+    const drift = card.getBoundingClientRect().top - top;
+    if (Math.abs(drift) >= 0.5) write_scroll(element, element.scrollTop + drift);
+    if (performance.now() < until) requestAnimationFrame(step);
+    else { toggle_hold = null; track_scroll(); }
+  };
+  requestAnimationFrame(step);
+}
+
 function open_message_ref(event) {
   const reference = event.target.closest("[data-message-ref]");
   if (reference) emit("detail", Number(reference.dataset.messageRef));
@@ -2591,8 +2637,8 @@ function copy_message(message) { act("copy", `${view.value.room_site}/r/${room.v
       <button type="button" class="selection-comment-cancel" :aria-label="t('取消添加')" :title="t('取消')" @click="cancel_quote"><UIcon name="i-lucide-x" /></button>
       <button type="submit" class="selection-comment-send" :aria-label="t('添加到对话')" :title="t('添加到对话（Enter）')"><UIcon name="i-lucide-arrow-up" /></button>
     </form>
-    <ExcerptEditCard v-if="mark_editing" :key="mark_editing.excerpt.id" :class="{ 'is-docked': mark_editing.touch }" :comment="mark_editing.excerpt.comment" :style="mark_editing.touch ? {} : { left: `${mark_editing.left}px`, top: `${mark_editing.top}px` }" @save="save_mark" @cancel="close_mark" @remove="remove_mark" />
-    <div ref="transcript" v-memo="transcript_memo([message_groups,view.messages_loading, view.messages_failure, view.sending_preview, view.failed_sends, message_round_labels, free, room.session, can_manage, expanded_answers.size, reader.state.message_id, room.title, view.query, view.source_filter, view.authors, view.card_kinds, topic_anchor, end_anchor, request_badges, execution_reports, recommendations, adopting, scheduler_decisions, host_arrangements, pending, execution_notes, open_working_notes, editing, rewound_runs, retracting_id, armed_cards.size, menu_open_id, stopping_member, free_now, allowing, allow_errors, late_answers, has_draft, view.sending_message, routing_messages, speaking_turn, room.free])" class="channel-transcript" :aria-label="t('聊天记录')" @click="open_message_ref" @scroll="schedule_track_scroll" @wheel.passive="resume_tracking($event); stop_following($event)" @touchstart.passive="resume_tracking" @touchmove.passive="stop_following" @touchend.passive="end_touch" @touchcancel.passive="end_touch" @pointerdown="stop_following" @keydown="resume_tracking($event); stop_following($event)">
+    <ExcerptEditCard v-if="mark_editing" :key="mark_editing.excerpt.id" :class="{ 'is-docked': mark_editing.touch }" :comment="mark_editing.excerpt.comment" :context="mark_editing.touch ? mark_context(mark_editing.excerpt) : ''" :style="mark_editing.touch ? {} : { left: `${mark_editing.left}px`, top: `${mark_editing.top}px` }" @save="save_mark" @cancel="close_mark" @remove="remove_mark" />
+    <div ref="transcript" v-memo="transcript_memo([message_groups,view.messages_loading, view.messages_failure, view.sending_preview, view.failed_sends, message_round_labels, free, room.session, can_manage, expanded_answers.size, reader.state.message_id, room.title, view.query, view.source_filter, view.authors, view.card_kinds, topic_anchor, end_anchor, request_badges, execution_reports, recommendations, adopting, scheduler_decisions, host_arrangements, pending, execution_notes, open_working_notes, editing, rewound_runs, retracting_id, armed_cards.size, menu_open_id, stopping_member, free_now, allowing, allow_errors, late_answers, has_draft, view.sending_message, routing_messages, speaking_turn, room.free])" class="channel-transcript" :aria-label="t('聊天记录')" @click.capture="keep_toggle_place" @click="open_message_ref" @scroll="schedule_track_scroll" @wheel.passive="resume_tracking($event); stop_following($event)" @touchstart.passive="resume_tracking" @touchmove.passive="stop_following" @touchend.passive="end_touch" @touchcancel.passive="end_touch" @pointerdown="stop_following" @keydown="resume_tracking($event); stop_following($event)">
       <div v-if="!view.query && !view.source_filter && !topic_anchor && render_start === 0" class="channel-message-group channel-topic-group"><TopicCard :ref="(card) => topic_card = card" @edit="emit('edit')" /></div>
       <div v-for="group in message_groups" :key="group.key" class="channel-message-group">
         <USeparator :label="group.label" class="channel-date-divider" />
@@ -2718,13 +2764,14 @@ function copy_message(message) { act("copy", `${view.value.room_site}/r/${room.v
           <!-- Same row as the working card it replaced: retry takes the stop button's place. -->
           <div class="channel-working-row">
             <p class="channel-message-text channel-failure-reason">{{ message.failure.result || t('执行失败，未提供原因') }}</p>
-            <!-- A retried failure stays in place; the retry's own card follows it under the same message. -->
-            <p v-if="message.failure.retried" class="channel-message-provenance channel-retried-note"><UIcon name="i-lucide-corner-down-right" />{{ t('已重试，新的执行接在下方') }}</p>
             <div v-if="can_retry(message.failure)" class="channel-working-actions">
               <UTooltip :text="t('重试')"><UButton icon="i-lucide-rotate-cw" variant="solid" color="neutral" class="channel-stop-button channel-retry-button" :aria-label="t('把执行 #{value1} 的请求重新派给 {value2}', { value1: message.failure.id, value2: bridge.display_name(message.author) })"
                 :disabled="!!pending" :loading="pending === 'retry_delivery'" @click="act('retry_delivery', { execution_id: message.failure.id, action: 'retry' })" /></UTooltip>
             </div>
           </div>
+          <!-- A retried failure stays in place; the retry's own card follows it under the same message. The note sits under
+               the reason, full width, so a long reason is not squeezed into half the card beside it. -->
+          <p v-if="message.failure.retried" class="channel-message-provenance channel-retried-note"><UIcon name="i-lucide-corner-down-right" />{{ t('已重试，新的执行接在下方') }}</p>
           <p v-if="failure_advice(message.failure)" class="channel-message-text">{{ failure_advice(message.failure) }}</p>
           <ExecutionNotes v-if="message.failure.notes" :count="message.failure.notes" :notes="execution_notes.get(message.failure.id)" :load="() => load_notes(message.failure.id)" />
           <ExecutionDenials v-if="message.failure.denials?.length" :denials="message.failure.denials" :allowable="Boolean(denial_allowance(message.failure))"
@@ -2943,7 +2990,7 @@ function copy_message(message) { act("copy", `${view.value.room_site}/r/${room.v
       <UChatPrompt ref="prompt" v-model="text" :submit-on-enter="ENTER_SENDS" :enterkeyhint="ENTER_SENDS ? 'send' : 'enter'" :autofocus="false" :rows="1" :maxrows="EDITOR_MAX_ROWS" :placeholder="relay_waits_owner ? t('接力在等你回答问题卡…') : t('发消息到 # {value1}', { value1: room.title })" :aria-label="t('留言正文')" role="combobox" aria-autocomplete="list" aria-haspopup="listbox" :aria-expanded="!!mention_context" :aria-controls="mention_context ? 'channel-mention-list' : undefined" :aria-activedescendant="mention_context && mention_active ? `channel-mention-${mention_options.indexOf(mention_active)}` : undefined" variant="outline" color="neutral" class="channel-composer" :class="{ 'has-mentions': mention_mirror }" :ui="{ header: 'channel-composer-header', base: 'channel-editor', footer: 'channel-composer-footer' }" @submit="send">
         <template #header>
           <div v-if="view.attachment_drafts.length || file_refs.length || excerpts.length" class="attachment-drafts">
-            <UPopover v-if="excerpts.length" :content="{ side: 'top', align: 'start' }" @update:open="editing_excerpt = 0">
+            <UPopover v-if="excerpts.length" v-model:open="excerpt_list_open" :content="{ side: 'top', align: 'start' }" @update:open="editing_excerpt = 0">
               <div class="excerpt-chip" role="button" tabindex="0" :data-stack="excerpts.length > 1 ? Math.min(excerpts.length, 3) : undefined" :title="t('查看注释、修改批注')">
                 <UIcon name="i-lucide-message-square-quote" /><span>{{ t('{value1} 条注释', { value1: excerpts.length }) }}</span>
                 <button type="button" class="excerpt-chip-clear" :aria-label="t('移除全部注释')" :title="t('移除全部注释')" :disabled="view.sending_message" @click.stop="file_preview.excerpts = []"><UIcon name="i-lucide-x" /></button>
@@ -2960,7 +3007,7 @@ function copy_message(message) { act("copy", `${view.value.room_site}/r/${room.v
                       <template v-else-if="excerpt.comment"><small>{{ t('批注') }}</small><p class="excerpt-comment">{{ excerpt.comment }}</p></template>
                     </div>
                     <div class="excerpt-actions">
-                      <button type="button" :aria-label="t('修改注释 {value1} 的批注', { value1: index + 1 })" :title="t('修改批注')" @click="editing_excerpt = editing_excerpt === excerpt.id ? 0 : excerpt.id"><UIcon name="i-lucide-pencil" /></button>
+                      <button type="button" :aria-label="t('修改注释 {value1} 的批注', { value1: index + 1 })" :title="t('修改批注')" @click="edit_listed_excerpt(excerpt)"><UIcon name="i-lucide-pencil" /></button>
                       <button type="button" :aria-label="t('移除注释 {value1}', { value1: index + 1 })" :title="t('移除')" :disabled="view.sending_message" @click="remove_excerpt(excerpt)"><UIcon name="i-lucide-trash-2" /></button>
                     </div>
                   </li>

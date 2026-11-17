@@ -333,8 +333,8 @@ test('API profiles need a bound key and no software, and take only the access th
   assert.equal(config.participants.Grok.project_access, 'write');
   assert.equal(config.participants.Grok.cwd, home);
   assert.equal(config.participants.Grok.executable, undefined);
-  // Without a command line there is nothing for a software to approve, so 自动 and 全放开 are refused.
-  assert.throws(() => validate_config({ ...input, participants: { Grok: { ...input.participants.Grok, project_access: 'full' } } }, home), /没有通用命令行/);
+  // Pi has no approvals: 可写 already runs commands, so 自动 and 全放开 are refused.
+  assert.throws(() => validate_config({ ...input, participants: { Grok: { ...input.participants.Grok, project_access: 'full' } } }, home), /没有需要软件审批的操作/);
   assert.throws(() => validate_config({ ...input, participants: { Grok: { ...input.participants.Grok, base_url: 'https://api.x.ai/v1' } } }, home), /重新填写/);
   assert.deepEqual(saved_api_keys(home), { [base_url]: key.api_key_ref });
 });
@@ -355,8 +355,8 @@ test('API file tools stay inside the project, refuse secrets and private files, 
   const tools = files => participant_tools({ role: 'member', project: files }).map(item => item.name);
   const reader = open_project({ cwd: project, project_access: 'read' }, [service]);
   assert.deepEqual(tools(null), ['read_room', 'read_messages', 'read_message', 'read_execution', 'read_attachment', 'read_goal', 'read_question', 'ask_question', 'read_events', 'submit_chat']);
-  assert.deepEqual(tools(reader), ['read_room', 'read_messages', 'read_message', 'read_execution', 'read_attachment', 'read_goal', 'read', 'glob', 'grep', 'read_question', 'ask_question', 'read_events', 'submit_chat']);
-  assert.match(system_prompt({ participant: 'DeepSeek', role: 'member', project: reader }), /可用 read、glob、grep 工具只读本房间的项目目录/);
+  assert.deepEqual(tools(reader), ['read_room', 'read_messages', 'read_message', 'read_execution', 'read_attachment', 'read_goal', 'read', 'glob', 'grep', 'git', 'read_question', 'ask_question', 'read_events', 'submit_chat']);
+  assert.match(system_prompt({ participant: 'DeepSeek', role: 'member', project: reader }), /可用 read、glob、grep、git 工具只读本房间的项目目录/);
 
   // The read envelope and footers follow DeepSeek Harness.
   assert.equal(run_file_tool(reader, 'read', { file_path: 'notes.md', offset: 2, limit: 1 }),
@@ -368,6 +368,12 @@ test('API file tools stay inside the project, refuse secrets and private files, 
   assert.equal(run_file_tool(reader, 'glob', { pattern: '*' }).split('\n').sort().join('\n'), 'notes.md\nsrc/app.js');
   assert.equal(run_file_tool(reader, 'grep', { pattern: 'answer|secret', include: '*.{js,json}' }), 'Found 1 match\n\nsrc/app.js\nLine 1: const answer = 42;');
   assert.equal(run_file_tool(reader, 'grep', { pattern: 'TOKEN' }), 'No matches found');
+  // git reads history and changes; options that write, run programs or name a file through a revision are refused.
+  for (const args of [['--output=leak.txt'], ['--ext-diff'], ['--no-index'], ['HEAD:.env'], ['-c', 'x']]) {
+    assert.ok(run_file_tool(reader, 'git', { command: 'diff', args }).error, args.join(' '));
+  }
+  assert.ok(run_file_tool(reader, 'git', { command: 'push' }).error);
+  assert.ok(run_file_tool(reader, 'git', { command: 'diff', paths: ['../outside.txt'] }).error);
 
   const writer = open_project({ cwd: project, project_access: 'write' }, [service]);
   assert.deepEqual(tools(writer).slice(-6), ['write', 'edit', 'read_question', 'ask_question', 'read_events', 'submit_chat']);
@@ -2849,6 +2855,13 @@ test('edit tool events name the files an agent wrote, so concurrent snapshots ar
   assert.deepEqual(edited_changes(changes, adapter_of('claude').events.edits(shell(script)), 'win32'), ['剧本/第06集.md']);
   assert.deepEqual(edited_changes(changes, adapter_of('claude').events.edits(shell('sed -i s/a/b/ 剧本/库存.yaml')), 'win32'), ['剧本/库存.yaml']);
   assert.deepEqual(adapter_of('claude').events.edits(shell('grep -n x 剧本/库存.yaml 2>&1 | head')), []);
+  // agy 1.5.x: a finished write_file / edit_file names its Path; a running or failed one, or a read, claims nothing.
+  const agy = (tool_name, parameters, state = 'DONE') => ({ event: 'step_update', step_update: { step_type: 'tool', state, tool_name, tool_info: { parameters } } });
+  const agy_edits = adapter_of('antigravity_cli').events.edits;
+  assert.deepEqual(edited_changes(changes, agy_edits(agy('edit_file', { Path: String.raw`D:\proj\剧本\库存.yaml` })), 'win32'), ['剧本/库存.yaml']);
+  assert.deepEqual(agy_edits(agy('write_file', { Path: String.raw`D:\proj\剧本\第06集.md` }, 'ACTIVE')), []);
+  assert.deepEqual(agy_edits(agy('read_file', { Path: String.raw`D:\proj\剧本\第06集.md` })), []);
+  assert.deepEqual(edited_changes(changes, agy_edits(agy('run_command', { CommandLine: 'sed -i s/a/b/ 剧本/成长.yaml' })), 'win32'), ['剧本/成长.yaml']);
 });
 
 test('a free member that exits without answering fails only its own execution', async t => {

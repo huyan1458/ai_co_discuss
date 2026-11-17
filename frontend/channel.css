@@ -147,7 +147,7 @@ html[data-theme^="channel"] .channel-menu.channel-directory-menu { min-width: 15
    and "just now" says nothing a working room's dot does not. */
 .channel-room-running { flex-shrink: 0; width: 7px; height: 7px; margin: 0 4px 0 auto; border-radius: 50%; background: #22c55e; box-shadow: 0 0 6px #22c55e99; animation: channel-room-breathe 2s ease-in-out infinite; }
 @keyframes channel-room-breathe { 50% { opacity: .35; box-shadow: 0 0 2px #22c55e33; } }
-@media (prefers-reduced-motion: reduce) { .channel-room-running { animation: none; } }
+@media (prefers-reduced-motion: reduce) { .channel-room-running, .is-primary > .pb-dot, .is-primary .pb-status-line .pb-dot { animation: none; } }
 .channel-room-select > span:not([class*="icon"]) { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; flex: 1; }
 .channel-directory-count, .channel-room-time { flex-shrink: 0; margin-left: auto; padding-left: 6px; color: var(--ui-text-dimmed); font-size: var(--channel-nav-meta); font-weight: 400; font-variant-numeric: tabular-nums; }.channel-room-actions, .channel-folder-actions { display: flex; align-items: center; justify-content: flex-end; min-width: 48px; opacity: 0; pointer-events: none; }
 :is(.channel-directory-actions, .channel-room-actions, .channel-folder-actions) button { display: grid; place-items: center; width: 24px; height: 26px; padding: 5px; border-radius: 4px; color: color-mix(in srgb, var(--ui-text-muted) 75%, transparent); background: transparent; box-shadow: none; }
@@ -270,7 +270,8 @@ html[data-theme^="channel"] .channel-menu.channel-directory-menu { min-width: 15
 .pb-header strong { color: var(--ui-text-highlighted); font-size: 14px; font-weight: 600; }
 .pb-mode { margin-left: auto; color: var(--ui-text-dimmed); font-size: 12px; }
 .pb-dot { width: 8px; height: 8px; flex-shrink: 0; border-radius: 50%; background: var(--ui-text-dimmed); }
-.is-primary > .pb-dot, .is-primary .pb-status-line .pb-dot { background: var(--channel-accent); }
+/* Working uses the room list's breathing green; idle stays grey so green always means "working". */
+.is-primary > .pb-dot, .is-primary .pb-status-line .pb-dot { background: #22c55e; box-shadow: 0 0 6px #22c55e99; animation: channel-room-breathe 2s ease-in-out infinite; }
 .is-success > .pb-dot { background: #3fb950; }
 .is-warning > .pb-dot, .is-warning .pb-status-line .pb-dot { background: #e5a50a; }
 .is-error > .pb-dot, .is-error .pb-status-line .pb-dot { background: #f05252; }
@@ -731,6 +732,9 @@ html[data-theme^="channel"] .channel-round-button:active:not(:disabled) { transf
 .excerpt-mark:hover { filter: brightness(1.1); }
 /* Re-editing an excerpt from its mark: comment, then remove · cancel · save. */
 /* Re-editing a note uses the adding pill: beside its passage it floats (ExcerptEditCard), in the notes list it sits inline. */
+/* Docked away from its passage, the box says which note it edits in one dim line above the comment. */
+.selection-comment.has-context { flex-wrap: wrap; row-gap: 2px; padding-top: 7px; border-radius: 16px; }
+.excerpt-edit-context { flex-basis: 100%; min-width: 0; overflow: hidden; color: var(--ui-text-dimmed); font-size: 11px; line-height: 16px; text-overflow: ellipsis; white-space: nowrap; }
 .selection-comment.is-inline { position: static; z-index: auto; width: 100%; margin-top: 6px; box-shadow: none; }
 .selection-comment-remove { color: var(--ui-text-muted); }
 .selection-comment-remove:hover { background: var(--ui-bg-accented); color: var(--ui-error); }

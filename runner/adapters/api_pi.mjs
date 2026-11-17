@@ -17,7 +17,7 @@ import { existsSync, mkdirSync, readdirSync, readFileSync, writeFileSync } from 
 import { homedir } from 'node:os';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { marked, prompt_text, tree_killable } from './common.mjs';
+import { marked, prompt_text, shell_written_paths, tree_killable } from './common.mjs';
 import { WRITE_TOOLS } from './api_files.mjs';
 import { room_text } from '../room_text.mjs';
 import { adapter_profile, takes_images } from './profiles.mjs';
@@ -27,8 +27,10 @@ export const PI_PROVIDER = 'codiscuss';
 const EXTENSION = fileURLToPath(new URL('./api_pi_extension.mjs', import.meta.url));
 // Our wire protocols and the Pi API that speaks each one.
 const PI_APIS = { responses: 'openai-responses', chat: 'openai-completions', anthropic: 'anthropic-messages', gemini: 'google-generative-ai' };
-// Output cap sent with each request: protocols that need an explicit one used this before, and some models reject more.
-const MAX_OUTPUT_TOKENS = 8192;
+// Output cap sent with each request. Reasoning counts toward it: at 8192 DeepSeek flash spent the whole cap thinking
+// and never reached its tool call (2026-11-17). 32768 leaves room to think and still answer; DeepSeek accepts up to
+// 393216, and the other protocols' current models take at least this much.
+const MAX_OUTPUT_TOKENS = 32768;
 const CONTEXT_WINDOW = 128_000;
 const STOP_GRACE_MS = 3000;
 const EXIT_GRACE_MS = 5000;
@@ -47,6 +49,10 @@ export function tool_note(name, args = {}) {
   return [name, ...shown].join(' ');
 }
 
+// A reply cut at the output cap (often all of it spent thinking) is not the end: the model is asked, in the same
+// session, to stop deliberating and submit; only after this many cuts in one execution does it fail.
+export const OUTPUT_CUT_REMINDER = '上一次回复超过单次输出上限被截断，没有完成任何操作。请不要再长篇推理，直接调用工具完成剩下的步骤并提交结果；内容很长时分段写入。';
+const MAX_OUTPUT_CUTS = 2;
 export const NO_TOOL_REMINDER = '普通文本不会被保存。请调用写入工具提交真实结果；确实无法继续才不调用工具直接结束。';
 const API_CALL = { stoppable: true, progress: true };
 
@@ -180,12 +186,15 @@ function on_records(stream, handle) {
  *   `service_home` (the service directory, whose `pi` folder holds Pi's config and sessions), `spawn_process`.
  * @returns {{status: string, session_id: string, capabilities: object, steer: function}}
  */
-export function pi_delivery({ cli, profile, key, binding, task, context_file, system_file, prompt, images = [], max_requests, project_root, service_home, spawn_process = spawn }) {
+export function pi_delivery({ cli, profile, key, binding, task, context_file, system_file, prompt, images = [], max_requests, project_root, native_shell = false, service_home, spawn_process = spawn }) {
   const dirs = pi_home(service_home);
   for (const path of Object.values(dirs)) mkdirSync(path, { recursive: true });
   const existing = session_file(dirs.sessions, binding.session_id);
   const session_id = existing ? binding.session_id : randomUUID();
-  const args = [cli, '--mode', 'rpc', '--no-builtin-tools', '--no-context-files', '--no-skills', '--no-prompt-templates',
+  // A writable member works as Claude Code or Codex do: Pi's own read, bash, edit and write in the project (user
+  // 2026-11-17: Pi is a coding agent like them, do not treat it differently). Read-only keeps our confined file tools:
+  // Pi has no sandbox, so its bash could not be held to reading.
+  const args = [cli, '--mode', 'rpc', ...(native_shell ? [] : ['--no-builtin-tools']), '--no-context-files', '--no-skills', '--no-prompt-templates',
     '--no-themes', '--no-mcp', '--no-approve', '-e', EXTENSION, '--session-dir', dirs.sessions,
     ...(existing ? ['--session', existing] : ['--session-id', session_id]),
     '--provider', PI_PROVIDER, '--model', profile.model, ...(pi_thinking(profile) ? ['--thinking', pi_thinking(profile)] : []),
@@ -202,7 +211,7 @@ export function pi_delivery({ cli, profile, key, binding, task, context_file, sy
   const log = text => {
     try { task.on_output?.(log_path, redact(text)); } catch { /* The room's directory is gone. */ }
   };
-  const state = { running: true, terminal: false, stopped: false, failure: '', failure_details: {}, reminded: false, used_tools: false,
+  const state = { running: true, terminal: false, stopped: false, failure: '', failure_details: {}, reminded: false, cuts: 0, used_tools: false,
     turns: 0, last_text: '', last_error: '', last_stop: '', last_output: 0, compaction_error: '', diagnostic: '', tools: new Map() };
   const handle = new EventEmitter();
   const send = value => { if (child.stdin.writable) child.stdin.write(`${JSON.stringify(value)}\n`); };
@@ -253,8 +262,12 @@ export function pi_delivery({ cli, profile, key, binding, task, context_file, sy
         // An interjection still queued would make the model answer again after its answer was saved.
         send({ type: 'clear_queue' });
       }
-      if (call && WRITE_TOOLS.includes(call.name) && !event.isError && typeof call.args.file_path === 'string' && project_root) {
-        task.on_edits?.([resolve(project_root, call.args.file_path)]);
+      // Our write tools name `file_path`, Pi's own `path`; a bash command that writes claims the paths it names, as for Claude.
+      const path = call?.args?.file_path ?? call?.args?.path;
+      if (call && WRITE_TOOLS.includes(call.name) && !event.isError && typeof path === 'string' && project_root) task.on_edits?.([resolve(project_root, path)]);
+      if (call?.name === 'bash' && project_root) {
+        const written = shell_written_paths(call.args?.command).map(item => resolve(project_root, item));
+        if (written.length) task.on_edits?.(written);
       }
     } else if (event.type === 'message_end' && event.message?.role === 'assistant') {
       const text = (event.message.content || []).filter(part => part?.type === 'text').map(part => part.text || '').join('').trim();
@@ -280,6 +293,11 @@ export function pi_delivery({ cli, profile, key, binding, task, context_file, sy
     if (state.last_error) { fail(`模型请求失败：${state.last_error}`); return finish(); }
     const reply = state.last_text.slice(0, REPLY_EXCERPT_CHARS);
     // The provider stopped the reply at its output cap: say so as it happened, without guessing why (V14-V16).
+    if (state.last_stop === 'length' && state.cuts < MAX_OUTPUT_CUTS) {
+      state.cuts += 1;
+      task.on_note?.(room_text('回复在 {tokens} 个 token 处达到输出上限被截断，已提醒模型直接提交（第 {count} 次）', { tokens: state.last_output, count: state.cuts }));
+      return send({ type: 'prompt', message: OUTPUT_CUT_REMINDER });
+    }
     if (state.last_stop === 'length') {
       fail(room_text('模型输出在 {tokens} 个 token 处达到输出上限后结束，未提交结果{reply}',
         { tokens: state.last_output, reply: reply ? `：${reply}` : '' }), { failure_class: 'output_truncated' });

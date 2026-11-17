@@ -2,8 +2,9 @@
 /**
  * The files one execution changed, as "edited N files +a -b": a row per file with its added and removed lines. With a
  * mouse, pointing at a row previews its patch in a floating panel and a click keeps that panel open; on touch screens a
- * tap opens the patch inside the list (user 2026-11-17). Patches are read from the site on first use, owner only. Files the member's own edit tools did not
- * write (another window or member working in the same folder) stand apart in one muted line.
+ * tap opens the patch inside the list (user 2026-11-17). Patches are read from the site on first use, owner only. Only files the member's own edit tools wrote
+ * are listed: files changed meanwhile by anyone else, or by a software that cannot tell its own edits, are not shown
+ * (user 2026-11-17: who changed it shows it; an unknown source shows nothing).
  */
 import { computed, inject, onBeforeUnmount, ref } from "vue";
 import { t } from "./i18n.js";
@@ -27,19 +28,16 @@ const props = defineProps({
 const { bridge } = inject("discussion");
 
 const stats = computed(() => new Map((props.report.diff_stats || []).map((item) => [item.path, item])));
-// With the member's own edits known, files it did not write are someone else's work in the same folder.
-const edited = computed(() => props.report.edited ? new Set(props.report.edited) : null);
-const others = computed(() => edited.value ? (props.report.changes || []).filter((path) => !edited.value.has(path)) : []);
-const files = computed(() => (props.report.changes || []).filter((path) => !edited.value || edited.value.has(path))
+const edited = computed(() => new Set(props.report.edited || []));
+const files = computed(() => (props.report.changes || []).filter((path) => edited.value.has(path))
   .map((path) => ({ path, stat: stats.value.get(path) })));
 const totals = computed(() => files.value.reduce((sum, file) => ({ added: sum.added + (file.stat?.added || 0), removed: sum.removed + (file.stat?.removed || 0) }), { added: 0, removed: 0 }));
 const counted = computed(() => files.value.some((file) => Number.isInteger(file.stat?.added)));
 
 const open = ref(new Set());
 // A long list starts folded to its header row; the header opens and closes it (user 2026-11-17: 14 files filled the
-// screen with no way to fold them). Files others changed meanwhile stay folded to one row inside the same box.
+// screen with no way to fold them).
 const list_open = ref(files.value.length <= FOLDED_ABOVE);
-const others_open = ref(false);
 const patches = ref(null), loading = ref(false), failure = ref("");
 /** The patches of the whole execution, read once on first use. */
 async function load_patches() {
@@ -146,7 +144,7 @@ function patch_lines(patch) {
 </script>
 
 <template>
-  <div class="execution-changes">
+  <div v-if="files.length" class="execution-changes">
     <div class="execution-changes-box">
     <button v-if="files.length" type="button" class="execution-changes-head" :aria-expanded="list_open" @click="list_open = !list_open">
       <span class="execution-changes-title">{{ t('已修改 {count} 个文件', { count: files.length }) }}</span>
@@ -181,15 +179,6 @@ function patch_lines(patch) {
         </Teleport>
       </li>
     </ul>
-    <template v-if="others.length">
-      <button type="button" class="execution-changes-head execution-changes-others" :aria-expanded="others_open" :title="t('同一时间被改动、但不是这位成员的编辑工具写的文件，可能来自其他窗口、成员或构建')" @click="others_open = !others_open">
-        <span class="execution-changes-title">{{ t('其他来源 {count} 个文件', { count: others.length }) }}</span>
-        <UIcon name="i-lucide-chevron-down" class="execution-changes-chevron" />
-      </button>
-      <ul v-if="others_open" class="execution-changes-list execution-changes-others-list">
-        <li v-for="path in others" :key="path" class="execution-changes-path" :title="path"><span class="execution-changes-folder">{{ folder(path) }}</span>{{ name(path) }}</li>
-      </ul>
-    </template>
     </div>
   </div>
 </template>
@@ -207,8 +196,6 @@ function patch_lines(patch) {
 .execution-changes-head:hover { background: var(--ui-bg-elevated); }
 .execution-changes-title { flex: 1; min-width: 0; }
 .execution-changes-head[aria-expanded="true"] .execution-changes-chevron { transform: rotate(180deg); }
-.execution-changes-others { background: none; color: var(--ui-text-dimmed); }
-.execution-changes-others-list > li { padding: 1px 6px; direction: ltr; }
 .execution-changes-list { width: 100%; margin: 0; padding: 0; list-style: none; }
 .execution-changes-list > li { min-width: 0; }
 .execution-changes-row { display: flex; align-items: center; gap: 10px; width: 100%; min-width: 0; min-height: 28px; padding: 3px 6px; border-radius: 4px; text-align: left; cursor: pointer; }
@@ -242,9 +229,5 @@ function patch_lines(patch) {
 .execution-changes-preview-head .execution-changes-path { direction: ltr; }
 .execution-changes-close { display: inline-flex; padding: 3px; border-radius: 4px; color: var(--ui-text-dimmed); cursor: pointer; }
 .execution-changes-close:hover { color: var(--ui-text-highlighted); background: var(--ui-bg-accented); }
-.execution-changes-others { margin-top: 6px; color: var(--ui-text-dimmed); font-size: 11px; }
-.execution-changes-others button { display: inline-flex; align-items: center; gap: 4px; padding: 0; color: inherit; cursor: pointer; }
-.execution-changes-others button[aria-expanded="true"] .execution-changes-chevron { transform: rotate(180deg); }
-.execution-changes-others p { margin: 2px 0 0; }
 @media (pointer: coarse) { .execution-changes-row, .execution-changes-head { min-height: 30px; } }
 </style>

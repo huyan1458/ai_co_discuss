@@ -559,6 +559,7 @@
   "{name} 的登录已失效，处理 {messages} 的执行失败（执行 #{execution_id}）：{reason}。需要用户在本机重新登录该软件后才能再用它；程序不自动重试，请主持人改派其他成员或告知用户。": "{name} is signed out; its execution for {messages} failed (execution #{execution_id}): {reason}. It can work again only after the user signs that software in again on this computer; it is not retried automatically. Host: reassign the work to another member or tell the user.",
   "这次执行因登录失效失败；用户在本机重新登录该软件之前，重试仍会失败。": "This execution failed because the member is signed out; retrying will keep failing until the user signs that software in again on this computer.",
   "模型输出在 {tokens} 个 token 处达到输出上限后结束，未提交结果{reply}": "The model's output stopped at its output limit after {tokens} tokens, without submitting a result{reply}",
+  "回复在 {tokens} 个 token 处达到输出上限被截断，已提醒模型直接提交（第 {count} 次）": "Reply cut off at the output limit of {tokens} tokens; asked the model to submit directly (attempt {count})",
   "模型结束了本次执行，没有提交结果（最后一次回复输出 {tokens} 个 token，结束原因 {stop}）{reply}": "The model ended this execution without submitting a result (its last reply output {tokens} tokens, stop reason {stop}){reply}",
   "模型结束了本次执行，没有调用房间工具保存结果（最后一次回复输出 {tokens} 个 token，结束原因 {stop}）{reply}": "The model ended this execution without calling a room tool to save a result (its last reply output {tokens} tokens, stop reason {stop}){reply}",
   "讨论 {session_id} 已到轮数上限并结束。请主持人决定：总结结论、告知用户，或请用户批准后再开一次讨论。": "Discussion {session_id} reached its round limit and ended. The host should decide: summarize the conclusions, tell the user, or ask the user to approve another discussion.",
