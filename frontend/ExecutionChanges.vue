@@ -7,6 +7,9 @@
 import { computed, inject, ref } from "vue";
 import { t } from "./i18n.js";
 
+// More files than this and the list starts folded.
+const FOLDED_ABOVE = 5;
+
 const props = defineProps({
   /** The execution report: `changes`, `edited` (null when the software could not tell), `diff_stats`, `id`. */
   report: { type: Object, required: true },
@@ -24,7 +27,9 @@ const totals = computed(() => files.value.reduce((sum, file) => ({ added: sum.ad
 const counted = computed(() => files.value.some((file) => Number.isInteger(file.stat?.added)));
 
 const open = ref(new Set());
-// Files others changed meanwhile stay folded to one count line; the names are there for whoever asks.
+// A long list starts folded to its header row; the header opens and closes it (user 2026-11-17: 14 files filled the
+// screen with no way to fold them). Files others changed meanwhile stay folded to one row inside the same box.
+const list_open = ref(files.value.length <= FOLDED_ABOVE);
 const others_open = ref(false);
 const patches = ref(null), loading = ref(false), failure = ref("");
 /** Open or close one file; the patches of the whole execution are read once, on the first open. */
@@ -65,16 +70,17 @@ function patch_lines(patch) {
 
 <template>
   <div class="execution-changes">
-    <div v-if="files.length" class="execution-changes-box">
-    <div class="execution-changes-head">
-      <span>{{ t('已修改 {count} 个文件', { count: files.length }) }}</span>
+    <div class="execution-changes-box">
+    <button v-if="files.length" type="button" class="execution-changes-head" :aria-expanded="list_open" @click="list_open = !list_open">
+      <span class="execution-changes-title">{{ t('已修改 {count} 个文件', { count: files.length }) }}</span>
       <span v-if="counted" class="execution-changes-count"><b class="is-add">+{{ totals.added }}</b> <b class="is-del">-{{ totals.removed }}</b></span>
-    </div>
-    <ul class="execution-changes-list">
+      <UIcon name="i-lucide-chevron-down" class="execution-changes-chevron" />
+    </button>
+    <ul v-if="files.length && list_open" class="execution-changes-list">
       <li v-for="file in files" :key="file.path">
         <button type="button" class="execution-changes-row" :aria-expanded="open.has(file.path)" :title="file.path" @click="toggle(file.path)">
           <span class="execution-changes-path"><span class="execution-changes-folder">{{ folder(file.path) }}</span>{{ name(file.path) }}</span>
-          <span v-if="file.stat?.skipped" class="execution-changes-note">{{ file.stat.skipped === 'binary' ? t('二进制文件') : t('文件过大') }}</span>
+          <span v-if="file.stat?.skipped" class="execution-changes-note" :title="file.stat.skipped === 'binary' ? '' : t('文件超过 1 MB，只记录了改动，没有保存逐行差异')">{{ file.stat.skipped === 'binary' ? t('二进制文件') : t('未记录差异') }}</span>
           <span v-else-if="Number.isInteger(file.stat?.added)" class="execution-changes-count"><b class="is-add">+{{ file.stat.added }}</b> <b class="is-del">-{{ file.stat.removed }}</b></span>
           <UIcon v-if="file.stat && !file.stat.skipped" name="i-lucide-chevron-down" class="execution-changes-chevron" />
         </button>
@@ -89,10 +95,15 @@ function patch_lines(patch) {
         </div>
       </li>
     </ul>
-    </div>
-    <div v-if="others.length" class="execution-changes-others">
-      <button type="button" :aria-expanded="others_open" :title="t('这些文件在同一时间被改动，但不是这位成员的编辑工具写的，可能来自其他窗口或成员')" @click="others_open = !others_open">{{ t('另有 {count} 个文件同期被改动，不是它写的', { count: others.length }) }}<UIcon name="i-lucide-chevron-down" class="execution-changes-chevron" /></button>
-      <p v-if="others_open">{{ others.join('、') }}</p>
+    <template v-if="others.length">
+      <button type="button" class="execution-changes-head execution-changes-others" :aria-expanded="others_open" :title="t('同一时间被改动、但不是这位成员的编辑工具写的文件，可能来自其他窗口、成员或构建')" @click="others_open = !others_open">
+        <span class="execution-changes-title">{{ t('其他来源 {count} 个文件', { count: others.length }) }}</span>
+        <UIcon name="i-lucide-chevron-down" class="execution-changes-chevron" />
+      </button>
+      <ul v-if="others_open" class="execution-changes-list execution-changes-others-list">
+        <li v-for="path in others" :key="path" class="execution-changes-path" :title="path"><span class="execution-changes-folder">{{ folder(path) }}</span>{{ name(path) }}</li>
+      </ul>
+    </template>
     </div>
   </div>
 </template>
@@ -101,14 +112,21 @@ function patch_lines(patch) {
 /* As Codex shows a turn's changes: the list always fills the card, a file's diff opens inside that same width and
    scrolls sideways on its own, so opening or closing a file never changes the card's width (user 2026-11-16: on phones
    the list was narrower closed than open). */
-.execution-changes { width: 100%; min-width: 0; margin-top: 4px; }
-/* One box like Codex's: the summary is its header row, each file a row below it, no box nested in a box. */
+.execution-changes { width: 100%; min-width: 0; margin-top: 4px; line-height: 1.4; }
+/* One box like Codex's: the summary is its header row, each file a compact row below it, files from other sources a
+   last folded row; no box nested in a box (user 2026-11-17: rows were too tall). */
 .execution-changes-box { width: 100%; border: 1px solid var(--ui-border-muted); border-radius: 8px; overflow: hidden; }
-.execution-changes-head { display: flex; align-items: center; justify-content: space-between; gap: 8px; min-height: 32px; padding: 4px 10px; background: var(--ui-bg-elevated); color: var(--ui-text-toned); }
+.execution-changes-head { display: flex; align-items: center; gap: 10px; width: 100%; min-height: 28px; padding: 3px 10px; background: var(--ui-bg-elevated); color: var(--ui-text-toned); text-align: left; cursor: pointer; }
+.execution-changes-head + .execution-changes-head, .execution-changes-list + .execution-changes-head { border-top: 1px solid var(--ui-border-muted); }
+.execution-changes-title { flex: 1; min-width: 0; }
+.execution-changes-head[aria-expanded="true"] .execution-changes-chevron { transform: rotate(180deg); }
+.execution-changes-others { background: none; color: var(--ui-text-dimmed); }
+.execution-changes-others-list > li { padding: 2px 10px; direction: ltr; }
+.execution-changes-others-list > li + li { border-top: 0; }
 .execution-changes-list { width: 100%; margin: 0; padding: 0; list-style: none; border-top: 1px solid var(--ui-border-muted); }
 .execution-changes-list > li { min-width: 0; }
 .execution-changes-list > li + li { border-top: 1px solid var(--ui-border-muted); }
-.execution-changes-row { display: flex; align-items: center; gap: 10px; width: 100%; min-width: 0; min-height: 32px; padding: 4px 10px; text-align: left; cursor: pointer; }
+.execution-changes-row { display: flex; align-items: center; gap: 10px; width: 100%; min-width: 0; min-height: 28px; padding: 3px 10px; text-align: left; cursor: pointer; }
 .execution-changes-row:hover, .execution-changes-row[aria-expanded="true"] { background: var(--ui-bg-elevated); }
 .execution-changes-path { flex: 1; min-width: 0; overflow: hidden; color: var(--ui-text-highlighted); font-family: ui-monospace, SFMono-Regular, Consolas, monospace; font-size: 11.5px; text-overflow: ellipsis; white-space: nowrap; direction: rtl; text-align: left; }
 .execution-changes-folder { color: var(--ui-text-dimmed); }
@@ -137,5 +155,5 @@ function patch_lines(patch) {
 .execution-changes-others button { display: inline-flex; align-items: center; gap: 4px; padding: 0; color: inherit; cursor: pointer; }
 .execution-changes-others button[aria-expanded="true"] .execution-changes-chevron { transform: rotate(180deg); }
 .execution-changes-others p { margin: 2px 0 0; }
-@media (pointer: coarse) { .execution-changes-row { min-height: 40px; } }
+@media (pointer: coarse) { .execution-changes-row, .execution-changes-head { min-height: 30px; } }
 </style>

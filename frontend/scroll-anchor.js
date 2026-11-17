@@ -57,13 +57,19 @@ function share_of(node, top) {
  * @param {() => number} [options.reading_top] Viewport y where readable content starts (below an overlaid top bar).
  * @param {() => boolean} [options.stick_bottom] Overrides the pane's own "read to the end" detection.
  * @param {() => void} [options.after_restore] Runs after the position is restored.
- * @returns {{ stale: () => boolean, disconnect: () => void }} `stale` is true between a resize and its restore,
- *   while the pane's scrollTop belongs to the old layout.
+ * @param {() => boolean} [options.can_write] False while the reader is scrolling: a restore then waits for `settle`.
+ * @param {() => boolean} [options.ignore_scroll] True for a scroll event the page itself wrote (it calls `mark`).
+ * @returns {{ stale: () => boolean, drift: () => number | null, mark: () => void, settle: () => void, disconnect: () => void }}
+ *   `stale` is true between a resize and its restore, while the pane's scrollTop belongs to the old layout; `drift` is how
+ *   far (px, down positive) the content under the reading line has moved on screen since it was last recorded (on each
+ *   scroll, or by `mark`).
  */
 export function keep_reading_position(element, options = {}) {
   const reading_top = options.reading_top || (() => element.getBoundingClientRect().top);
+  const can_write = options.can_write || (() => true);
   let size = "";
   let anchor = null;
+  let restore_pending = false;
   const measure = () => `${element.clientWidth}x${element.clientHeight}`;
   const stale = () => Boolean(size) && measure() !== size;
 
@@ -76,13 +82,27 @@ export function keep_reading_position(element, options = {}) {
     anchor = {
       // Content that fits has no end to keep; treating it as read to the end would scroll new results to the bottom.
       bottom: overflow > 0 && overflow - element.scrollTop < BOTTOM_THRESHOLD,
-      node, share: node ? share_of(node, top) : 0,
+      node, share: node ? share_of(node, top) : 0, offset: node ? node.getBoundingClientRect().top - top : 0,
       // Re-rendering can replace the node; the nearest element with an id (a message card) is found again by id.
-      key: keyed && keyed !== element && element.contains(keyed) ? { id: keyed.id, share: share_of(keyed, top) } : null,
+      key: keyed && keyed !== element && element.contains(keyed)
+        ? { id: keyed.id, share: share_of(keyed, top), offset: keyed.getBoundingClientRect().top - top } : null,
     };
   }
 
+  /** Where the recorded anchor now is relative to where the reader left it (null without one); content above that grew moves it down. */
+  function drift() {
+    if (!anchor || !element.clientHeight || stale()) return null;
+    const top = reading_top();
+    if (anchor.node?.isConnected) return anchor.node.getBoundingClientRect().top - top - anchor.offset;
+    const keyed = anchor.key && element.querySelector(`[id="${CSS.escape(anchor.key.id)}"]`);
+    return keyed ? keyed.getBoundingClientRect().top - top - anchor.key.offset : null;
+  }
+
   function restore() {
+    // A resize while the reader scrolls (a phone's toolbars, the keyboard) waits: a scrollTop written into a running
+    // touch scroll lands on the browser's older offset on iOS and throws the page back.
+    if (!can_write()) { restore_pending = true; return; }
+    restore_pending = false;
     if (options.stick_bottom ? options.stick_bottom() : anchor?.bottom) element.scrollTop = element.scrollHeight;
     else if (anchor) {
       const keyed = anchor.key && element.querySelector(`[id="${CSS.escape(anchor.key.id)}"]`);
@@ -101,15 +121,24 @@ export function keep_reading_position(element, options = {}) {
     const measured = size;
     size = measure();
     if (measured) restore();
-    record();
+    if (!restore_pending) record();
   });
-  // Finding the anchor measures several boxes; once per frame is enough and keeps the scroll itself from stalling.
+  // Finding the anchor measures several boxes; once per frame is enough and keeps the scroll itself from stalling. A scroll
+  // the page wrote to keep the position records nothing: it marks the position itself, and a change landing before the
+  // next frame would otherwise be taken as where the reader left off.
   let frame = 0;
-  const schedule_record = () => { if (!frame) frame = requestAnimationFrame(() => { frame = 0; record(); }); };
+  const schedule_record = () => {
+    if (options.ignore_scroll?.()) return;
+    if (!frame) frame = requestAnimationFrame(() => { frame = 0; record(); });
+  };
   element.addEventListener("scroll", schedule_record, { passive: true });
   observer.observe(element);
   return {
     stale,
+    drift,
+    mark: record,
+    /** Run a restore that waited for the reader to stop scrolling. */
+    settle() { if (restore_pending) { restore(); record(); } },
     disconnect() {
       observer.disconnect();
       cancelAnimationFrame(frame);

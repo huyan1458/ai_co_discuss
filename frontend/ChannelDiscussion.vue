@@ -324,12 +324,21 @@ const PRELOAD_URGENT_BUDGET_MS = 14;
 const PRELOAD_JUMP_BUDGET_MS = 40;
 const PRELOAD_FIRST_SLICE = 2;
 const PRELOAD_MAX_SLICE = 20;
-// Idle slices wait this long at most (ms) for an idle moment, and hold off this long after the reader last scrolled.
+// Idle slices wait this long at most (ms) for an idle moment.
 const PRELOAD_IDLE_TIMEOUT_MS = 300;
-const SCROLL_SETTLE_MS = 150;
-// WebKit (every iOS browser) has no scroll anchoring and keeps scrollTop in whole pixels, so a slice rendered above would
-// shift the cards on screen by its sub-pixel remainder (the text wobbled); there a top pad under 1px makes each shift whole.
-const SCROLL_ANCHORING = CSS.supports("overflow-anchor", "auto");
+// The reader is still scrolling until this long (ms) after their last scroll event. iOS sends scroll events only for
+// whole-pixel moves, so the slow end of a swipe's momentum can go quiet for longer than a frame or two.
+const SCROLL_SETTLE_MS = 300;
+// Scroll events this soon (ms) after a wheel turn, a drag or a scroll key are the reader's; any other scroll the page did
+// not write (the browser's own anchoring, a clamp after content shrank) does not hold the page back.
+const READER_INPUT_MS = 1000;
+// Only Blink and Gecko keep the reading position themselves. Apple's WebKit (Safari and every iOS browser; the font keyword
+// -apple-system-body exists only there) reports overflow-anchor since its scroll anchoring shipped in 2026, but that does
+// not hold while a touch scroll runs: taking the report at its word, the page left the position to the browser and every
+// slice of earlier cards slid what the reader saw down, screen after screen, for seconds after a short swipe (2026-11-17
+// recordings). There channel.css turns the browser's anchoring off and the page keeps the position by hand (keep_reading),
+// in whole pixels, as WebKit scrolls: a top pad under 1px takes each shift's fraction, which made the text wobble.
+const SCROLL_ANCHORING = CSS.supports("overflow-anchor", "auto") && !CSS.supports("font", "-apple-system-body");
 const READING_OFFSET = 20;
 const room = computed(() => view.value.room);
 /** Whether two derived values hold the same data: identical leaves, or Maps, arrays and plain objects with equal entries. */
@@ -529,6 +538,11 @@ const shows_progress = (item) => capabilities(item)?.progress !== false;
  */
 /** A stop's recorded reason as the card says it; records made before the wording changed keep their old text. */
 const stop_reason_text = (result) => result === "用户立即发送" ? t("已打断：你立即发送了新消息，它会连同这条一起处理") : result;
+/** The voided execution whose stop has more to say (still generating, a late answer), or null. */
+function voided_detail(message) {
+  const execution = message.cancelled_execution || all_executions.value.find((item) => item.id === message.execution_id);
+  return execution && stop_state(execution).note ? execution : null;
+}
 function stop_state(execution) {
   const label = bridge.stop_label(execution);
   const name = bridge.display_name(execution.member);
@@ -639,7 +653,10 @@ function routes_by_scheduler(text) {
   const prose = String(text || "").replace(/```[\s\S]*?```/g, "").replace(/`[^`\n]*`/g, "").replace(/^>.*$/gm, "");
   return ![...ALL_ALIASES, ...SEQUENTIAL_ALIASES, ...free_members.value.map((member) => member.name)].some((name) => MENTION_PATTERN(name).test(prose));
 }
-const sending_routes = computed(() => Boolean(view.value.sending_preview) && routes_by_scheduler(view.value.sending_preview.text));
+// Only once the files are in and the message itself is on its way: a card for a message still uploading, or retrying
+// after a dropped send, would claim analysis the site has not started.
+const sending_routes = computed(() => Boolean(view.value.sending_preview) && !sending_uploads.value && !view.value.sending_preview.retrying
+  && routes_by_scheduler(view.value.sending_preview.text));
 watch(() => view.value.sending_preview?.saved_id, (id) => {
   if (!id || !sending_routes.value) return;
   pending_routing.value = new Set([...pending_routing.value, id]);
@@ -1395,15 +1412,113 @@ let preload_busy = false;
 // The map entry under the pointer is rendered ahead of a click; a click on one still being reached jumps once it is.
 let preload_wanted = null;
 let pending_jump = null;
-// Real scrolling (not the offsets written here) holds idle slices back: writing scrollTop ends an iOS momentum scroll.
+// The reader's own scrolling owns the position: a finger on the transcript, and the scroll events of their drag, wheel or
+// momentum until SCROLL_SETTLE_MS after the last. Meanwhile the page writes no scrollTop (on iOS one written into a touch
+// scroll also lands on the main thread's older offset, and the page jumps back), renders no earlier cards and keeps the
+// transcript as drawn (transcript_memo); what came in meanwhile is drawn once the reader stops, with the position kept in
+// the same frame. A tap scrolls nothing and holds nothing back.
 let last_scroll_at = 0;
+let reader_input_at = 0;
 let written_top = null;
-// A finger on the transcript, and the momentum after it, owns the position: on iOS a scrollTop written then also lands on
-// the main thread's older offset, so the page jumps back. Touch scrolling holds even the slices the reader waits on.
 let touch_active = false;
 let touch_scroll = false;
+// When the finger last went down or moved, and whether this touch has scrolled (a tap has not).
+let touch_at = 0;
+let touch_scrolled = false;
+// A finger resting this long (ms) without moving no longer holds the page: iOS may send no touchend after a long-press
+// selection, and the hold would never end.
+const TOUCH_HOLD_MS = 5000;
+const reader_scrolling = ref(false);
+let settle_timer = 0;
+// Follows to the end and position keeps that waited for the reader to stop.
+let follow_pending = false;
+let keep_pending = false;
 // The sub-pixel pad (px, 0 to 1) above the cards that keeps each slice's shift whole.
 let preload_pad = 0;
+/** Whether the reader is scrolling the transcript (or has a finger on it): the page must not move it now. */
+function reader_busy() {
+  const now = performance.now();
+  return (touch_active && now - touch_at < TOUCH_HOLD_MS) || now - last_scroll_at < SCROLL_SETTLE_MS;
+}
+/**
+ * Write the transcript's scroll position, marked as the page's own so its scroll event is not taken for the reader's,
+ * and take the reading position there at once (a jump, a follow to the end, a kept position all start from it).
+ */
+function write_scroll(element, top) {
+  element.scrollTop = top;
+  written_top = own_top = element.scrollTop;
+  reading_position?.mark();
+}
+// The last position the page wrote, kept until a scroll of someone else's: its scroll event records no reading position.
+let own_top = null;
+/** One of the reader's scroll events: hold the page back until they stop. */
+function mark_reader_scroll() {
+  last_scroll_at = performance.now();
+  if (touch_active) { touch_scrolled = true; touch_at = last_scroll_at; }
+  if (!reader_scrolling.value) {
+    reader_scrolling.value = true;
+    transcript.value?.setAttribute("data-reader-scrolling", "");
+  }
+  arm_settle();
+}
+/** Check back once the reader may have stopped; whatever waited runs then. */
+function arm_settle() {
+  if (!settle_timer) settle_timer = setTimeout(settle_reader, SCROLL_SETTLE_MS);
+}
+/** Once the reader has stopped, draw what came in meanwhile and run the follows and keeps that waited. */
+function settle_reader() {
+  settle_timer = 0;
+  const left = SCROLL_SETTLE_MS - (performance.now() - last_scroll_at);
+  if (reader_busy()) { settle_timer = setTimeout(settle_reader, Math.max(left, 50)); return; }
+  release_reader();
+}
+/** End the hold now: the reader stopped, tapped something, or the page has to move (sending, another room). */
+function release_reader() {
+  clearTimeout(settle_timer);
+  settle_timer = 0;
+  last_scroll_at = 0;
+  const element = transcript.value;
+  if (reader_scrolling.value) {
+    reader_scrolling.value = false;
+    element?.removeAttribute("data-reader-scrolling");
+    // Relayed images wait for this before taking their size (web/app.js load_relay_media).
+    element?.dispatchEvent(new Event("reader-settled"));
+  }
+  reading_position?.settle();
+  if (follow_pending) { follow_pending = false; follow_messages(); }
+  if (keep_pending) keep_reading();
+  if (element?.clientHeight) schedule_preload(preload_urgent(element));
+}
+/**
+ * The transcript's v-memo: while the reader scrolls it stays as drawn, so nothing arriving (messages, progress, reports,
+ * a timer tick) re-renders it or changes a height under their finger.
+ */
+let held_memo = null;
+function transcript_memo(memo) {
+  if (reader_scrolling.value && held_memo) return held_memo;
+  return held_memo = memo;
+}
+/**
+ * Where the browser does not keep the reading position (WebKit), scroll by however far the content under the reading
+ * line was pushed, so what the reader sees stays put. While the reader scrolls it waits; following the end is left to
+ * the end's own follow.
+ */
+function keep_reading() {
+  const element = transcript.value;
+  if (SCROLL_ANCHORING || !element || !reading_position || follow_tail.value) return;
+  if (reader_busy() || glide.isAnimating()) { keep_pending = true; if (reader_busy()) arm_settle(); return; }
+  keep_pending = false;
+  scroll_by_drift(element, reading_position.drift());
+}
+/** Scroll by `drift` (px, content pushed down positive) so the content stays put on screen, in whole pixels plus the pad. */
+function scroll_by_drift(element, drift) {
+  if (drift == null || Math.abs(drift) < 0.25) return;
+  const pad = (((preload_pad - drift) % 1) + 1) % 1;
+  element.style.setProperty("--preload-pad", `${pad}px`);
+  const top = element.scrollTop + Math.round(drift + pad - preload_pad);
+  preload_pad = pad;
+  write_scroll(element, top);
+}
 /** Whether the reader is waiting on earlier cards: near the top, or heading for one not rendered. */
 function preload_urgent(element) {
   return element.scrollTop < LOAD_EARLIER_MARGIN || not_rendered(pending_jump) || not_rendered(preload_wanted);
@@ -1435,7 +1550,9 @@ async function preload_slice() {
   // A hidden transcript has no layout to keep; showing it again tracks the scroll, which resumes the preload.
   if (preload_busy || !element?.clientHeight || !render_start.value) return;
   const urgent = preload_urgent(element);
-  if ((!urgent || touch_scroll) && (glide.isAnimating() || touch_active || performance.now() - last_scroll_at < SCROLL_SETTLE_MS)) return schedule_preload();
+  // Where the slice is offset by hand, the reader's scrolling holds every slice, even one they wait on near the top. Where
+  // the browser keeps the position, only touch scrolling holds those.
+  if (glide.isAnimating() || (reader_busy() && (!SCROLL_ANCHORING || !urgent || touch_scroll))) return schedule_preload();
   preload_busy = true;
   const started = performance.now();
   const top_before = element.scrollTop;
@@ -1445,20 +1562,26 @@ async function preload_slice() {
   // composer growing keeps the end in view) counts as a shift.
   const content_top = (node) => node.getBoundingClientRect().top - element.firstElementChild.getBoundingClientRect().top;
   const anchor_top = anchor && content_top(anchor);
+  const anchor_screen = anchor?.getBoundingClientRect().top;
   render_floor.value = floor_before(transcript_messages.value, render_start.value - preload_size);
   await nextTick();
-  if (anchor?.isConnected) {
-    // The cards moved down by `shift`, a fraction of a pixel included. The pad takes the fraction so the scroll position
-    // follows by whole screen pixels: a fractional follow rounds each card on screen differently and the text wobbled
-    // by 1px. Scroll anchoring follows in screen pixels (a fraction of a CSS pixel when zoomed); WebKit scrolls by CSS pixels.
-    const unit = SCROLL_ANCHORING ? 1 / window.devicePixelRatio : 1;
+  if (!SCROLL_ANCHORING && anchor?.isConnected) {
+    // By hand, the first card shown before (right below the new ones; at the very top the topic card stays above them)
+    // goes back where it was on screen. Measured on screen, so a shift the browser made by itself (WebKit's own
+    // anchoring, should it run despite overflow-anchor: none) is not counted twice. The reading position is then taken
+    // afresh, so the growth this slice causes is not offset a second time (keep_reading).
+    scroll_by_drift(element, anchor.getBoundingClientRect().top - anchor_screen);
+    reading_position?.mark();
+  } else if (anchor?.isConnected) {
+    // The browser follows by itself. The cards moved down by `shift`, a fraction of a pixel included; the pad takes the
+    // fraction so the browser follows by whole screen pixels (a fraction of a CSS pixel when zoomed): a fractional follow
+    // rounds each card on screen differently and the text wobbled by 1px.
+    const unit = 1 / window.devicePixelRatio;
     const shift = content_top(anchor) - anchor_top;
     const pad = (((preload_pad - shift) % unit) + unit) % unit;
     element.style.setProperty("--preload-pad", `${pad}px`);
-    // With scroll anchoring the browser follows by itself; the others are corrected before the frame paints.
-    written_top = Math.round((SCROLL_ANCHORING ? top_before : element.scrollTop) + shift + pad - preload_pad);
+    written_top = Math.round(top_before + shift + pad - preload_pad);
     preload_pad = pad;
-    if (!SCROLL_ANCHORING && element.scrollTop !== written_top) element.scrollTop = written_top;
   } else {
     written_top = element.scrollHeight - from_bottom;
     if (element.scrollTop !== written_top) element.scrollTop = written_top;
@@ -1474,10 +1597,18 @@ async function preload_slice() {
   }
   schedule_preload(preload_urgent(element));
 }
-/** Scroll events from the reader, told apart from the offsets the preload writes. */
+/**
+ * Scroll events from the reader, told apart from the offsets the page writes and from scrolls nobody asked for (the
+ * browser's own anchoring, a clamp): the reader's come with a finger down, soon after a drag, wheel or scroll key, or
+ * continue a scroll of theirs (momentum).
+ */
 function note_scroll() {
-  if (transcript.value?.scrollTop !== written_top) last_scroll_at = performance.now();
+  const ours = transcript.value?.scrollTop === written_top;
   written_top = null;
+  if (ours) return;
+  own_top = null;
+  const now = performance.now();
+  if (touch_active || now - reader_input_at < READER_INPUT_MS || (reader_scrolling.value && now - last_scroll_at < SCROLL_SETTLE_MS)) mark_reader_scroll();
 }
 /** Split continuous history at local calendar boundaries; a working card stays in the day of the card above it. */
 const message_groups = stable_computed(() => {
@@ -1491,6 +1622,13 @@ const message_groups = stable_computed(() => {
     groups.at(-1).messages.push(message);
   }
   return groups;
+});
+/** The sending card sits outside the day groups, so it carries its own divider when it opens a new day. */
+const sending_day_label = computed(() => {
+  const preview = view.value.sending_preview;
+  if (!preview) return "";
+  const date = new Date(preview.created_at);
+  return message_groups.value.at(-1)?.key === date.toLocaleDateString() ? "" : date_formatter.format(date);
 });
 
 /** Preserve room-wide round boundaries while navigating filtered history. */
@@ -1560,8 +1698,8 @@ function track_scroll() {
   if (reading_position?.stale()) return;
   schedule_preload(preload_urgent(element));
   const near_end = element.scrollHeight - element.scrollTop - element.clientHeight < FOLLOW_TAIL_THRESHOLD;
-  if (!near_end && follow_tail.value && !moved_by_hand && performance.now() < settle_until && jump_target.value == null && !pending_jump) {
-    element.scrollTop = element.scrollHeight - element.clientHeight;
+  if (!near_end && follow_tail.value && !moved_by_hand && !reader_busy() && performance.now() < settle_until && jump_target.value == null && !pending_jump) {
+    write_scroll(element, element.scrollHeight - element.clientHeight);
     return;
   }
   follow_tail.value = near_end;
@@ -1600,26 +1738,31 @@ onMounted(() => {
   reading_position = keep_reading_position(element, {
     // A send glide in flight keeps running toward the end; restoring only lands it where it is heading.
     reading_top: () => reading_top(element), stick_bottom: () => follow_tail.value, after_restore: track_scroll,
+    can_write: () => !reader_busy(), ignore_scroll: () => own_top !== null && element.scrollTop === own_top,
   });
 });
 onBeforeUnmount(() => reading_position?.disconnect());
+onBeforeUnmount(() => clearTimeout(settle_timer));
 
 // The transcript's scroll position while it glides to a newly sent message; a later retarget keeps its velocity.
 const glide = useSpring(0, SEND_SPRING);
-glide.on("change", (value) => { if (transcript.value) transcript.value.scrollTop = value; });
+glide.on("change", (value) => { if (transcript.value) write_scroll(transcript.value, value); });
 glide.on("animationComplete", () => track_scroll());
 
 /** Reveal saved messages without interrupting a reader of earlier records; `smooth` glides there on the send spring. */
 async function follow_messages(smooth = false) {
   await nextTick();
   const element = transcript.value;
-  if (follow_tail.value && element) {
+  // A reader scrolling near the end is still scrolling: the follow waits until they stop (release_reader). Only the glide
+  // of their own send goes at once.
+  if (follow_tail.value && element && smooth !== true && reader_busy()) { follow_pending = true; arm_settle(); }
+  else if (follow_tail.value && element) {
     const bottom = element.scrollHeight - element.clientHeight;
     // While a send is in flight every follow glides, whichever watcher sees the new card first.
     if ((smooth === true || glide.isAnimating() || view.value.sending_message) && document.documentElement.dataset.motion !== "off") {
       if (!glide.isAnimating()) glide.jump(element.scrollTop);
       glide.set(bottom);
-    } else element.scrollTop = bottom;
+    } else write_scroll(element, bottom);
   }
   track_scroll();
 }
@@ -1657,6 +1800,8 @@ send_entry.on("animationComplete", () => {
 // The sending card shows before the site answers; it rises in while the transcript glides to it.
 watch(() => Boolean(view.value.sending_preview), (shown) => {
   if (!shown) return;
+  // Sending is the reader's own move to the end; a scroll of theirs still settling no longer holds the transcript.
+  release_reader();
   send_entry.jump(0); send_entry.set(1);
   follow_messages(true);
 });
@@ -1678,6 +1823,9 @@ watch([() => view.value.room?.id, () => view.value.query, () => view.value.sourc
   pending_jump = preload_wanted = null;
   settle_until = performance.now() + ROOM_SETTLE_MS;
   moved_by_hand = false;
+  // Another room or filter starts from its end with its first slice small; nothing of the last one's scrolling holds it.
+  preload_size = PRELOAD_FIRST_SLICE;
+  release_reader();
 });
 watch(() => view.value.tab, (tab) => {
   reset_preview();
@@ -1695,9 +1843,9 @@ async function toggle_answer(message, event) {
   else expanded_answers.value.add(message.id);
   reset_preview();
   await nextTick();
-  if (!collapsing) transcript.value.scrollTop = scroll_position;
+  if (!collapsing) write_scroll(transcript.value, scroll_position);
   if (collapsing && card.getBoundingClientRect().top < reading_top(transcript.value)) {
-    transcript.value.scrollTop += card.getBoundingClientRect().top - reading_top(transcript.value) - READING_OFFSET;
+    write_scroll(transcript.value, transcript.value.scrollTop + card.getBoundingClientRect().top - reading_top(transcript.value) - READING_OFFSET);
   }
   track_scroll();
 }
@@ -1718,7 +1866,7 @@ function jump_to(id) {
   reader.state.following = false;
   jump_target.value = id;
   active_message.value = id;
-  element.scrollTop += message.getBoundingClientRect().top - reading_top(element) - READING_OFFSET;
+  write_scroll(element, element.scrollTop + message.getBoundingClientRect().top - reading_top(element) - READING_OFFSET);
   message.focus({ preventScroll: true });
   track_scroll();
 }
@@ -1726,6 +1874,11 @@ function jump_to(id) {
 /** Any manual scroll (wheel, touch drag, scroll keys, scrollbar) turns read-aloud following off; only its button turns it back on. */
 function stop_following(event) {
   if (event.type !== "keydown" || ["ArrowUp", "ArrowDown", "PageUp", "PageDown", "Home", "End", " "].includes(event.key)) moved_by_hand = true;
+  // A drag, a wheel turn, a scroll key or a press on the scrollbar: the scroll events right after it are the reader's. A
+  // finger that moved is scrolling even with no scroll event: at the very top it only stretches the page (iOS bounce).
+  if (event.type === "touchmove") { touch_at = performance.now(); touch_scrolled = true; }
+  if (event.type === "touchmove" || event.type === "wheel" || (event.type === "pointerdown" && event.target === event.currentTarget)
+      || (event.type === "keydown" && ["ArrowUp", "ArrowDown", "PageUp", "PageDown", "Home", "End", " "].includes(event.key))) reader_input_at = performance.now();
   if (!reader.state.following) return;
   if (event.type === "keydown" && !["ArrowUp", "ArrowDown", "PageUp", "PageDown", "Home", "End", " "].includes(event.key)) return;
   if (event.type === "pointerdown" && event.target !== event.currentTarget) return;
@@ -1737,15 +1890,21 @@ function resume_tracking(event) {
   if (event.type !== "keydown" || ["ArrowUp", "ArrowDown", "PageUp", "PageDown", "Home", "End", " "].includes(event.key)) moved_by_hand = true;
   glide.stop();
   touch_scroll = touch_active = event.type === "touchstart";
+  if (touch_active) { touch_at = performance.now(); touch_scrolled = false; }
   // Scrolling by hand drops a jump still waiting for its card.
   pending_jump = null;
   if (event.type !== "keydown" || ["ArrowUp", "ArrowDown", "PageUp", "PageDown", "Home", "End", " "].includes(event.key)) jump_target.value = null;
 }
 
-/** Lifting the finger starts the momentum; its scroll events keep the earlier-card preload waiting until it settles. */
+/**
+ * Lifting a finger that scrolled starts the momentum, whose scroll events carry the hold on until they stop. A tap scrolled
+ * nothing: on iOS it also stops a running momentum, so the reader has stopped and what waited goes now.
+ */
 function end_touch() {
   touch_active = false;
+  if (!touch_scrolled) { release_reader(); return; }
   last_scroll_at = performance.now();
+  arm_settle();
 }
 
 /** One Tab stop enters the map; arrow keys can inspect every compact tick. */
@@ -2036,18 +2195,25 @@ const dock_observer = new ResizeObserver(([entry]) => {
   if (height === composer_height) return;
   composer_height = height;
   entry.target.parentElement?.style.setProperty("--channel-composer-height", `${height}px`);
-  if (follow_tail.value && transcript.value) transcript.value.scrollTop = transcript.value.scrollHeight;
+  if (!follow_tail.value || !transcript.value) return;
+  if (reader_busy()) { follow_pending = true; arm_settle(); }
+  else write_scroll(transcript.value, transcript.value.scrollHeight);
 });
 onMounted(() => composer_dock.value && dock_observer.observe(composer_dock.value));
 // Cards that fill in after the messages (run reports, scheduler cards, process notes, a card measured once it nears the
 // screen) make the transcript taller without changing the messages, so a room just opened ended short of its end
 // (2026-11-16: 70–357px measured on first opening a room). While following the end, any growth of a message group
-// lands there again; a finger on the transcript or a send glide keeps its own course.
+// lands there again. Reading earlier cards where the browser does not keep the position (WebKit), growth above the
+// reading line (an image taking its size, a report filling in) is offset by hand (keep_reading). Neither moves the page
+// while the reader scrolls: a snap to the end during a swipe's momentum fought the reader and jumped the page
+// (2026-11-17 recording); both run once they stop (release_reader). A send glide keeps its own course.
 const growth_observer = new ResizeObserver(() => {
   const element = transcript.value;
-  if (!follow_tail.value || !element || touch_active || glide.isAnimating()) return;
+  if (!element || glide.isAnimating()) return;
+  if (!follow_tail.value) { keep_reading(); return; }
+  if (reader_busy()) { follow_pending = true; arm_settle(); return; }
   const bottom = element.scrollHeight - element.clientHeight;
-  if (Math.abs(element.scrollTop - bottom) > 1) element.scrollTop = bottom;
+  if (Math.abs(element.scrollTop - bottom) > 1) write_scroll(element, bottom);
 });
 const group_observer = new MutationObserver(() => {
   growth_observer.disconnect();
@@ -2399,7 +2565,7 @@ function copy_message(message) { act("copy", `${view.value.room_site}/r/${room.v
       <button type="submit" class="selection-comment-send" :aria-label="t('添加到对话')" :title="t('添加到对话（Enter）')"><UIcon name="i-lucide-arrow-up" /></button>
     </form>
     <ExcerptEditCard v-if="mark_editing" :key="mark_editing.excerpt.id" :class="{ 'is-docked': mark_editing.touch }" :comment="mark_editing.excerpt.comment" :style="mark_editing.touch ? {} : { left: `${mark_editing.left}px`, top: `${mark_editing.top}px` }" @save="save_mark" @cancel="close_mark" @remove="remove_mark" />
-    <div ref="transcript" v-memo="[message_groups, view.messages_loading, view.messages_failure, view.sending_preview, view.failed_sends, message_round_labels, free, room.session, can_manage, expanded_answers.size, reader.state.message_id, room.title, view.query, view.source_filter, view.authors, view.card_kinds, topic_anchor, end_anchor, request_badges, execution_reports, recommendations, adopting, scheduler_decisions, host_arrangements, pending, execution_notes, open_working_notes, editing, rewound_runs, retracting_id, armed_cards.size, menu_open_id, stopping_member, free_now, allowing, allow_errors, late_answers, has_draft, view.sending_message, routing_messages, speaking_turn, room.free]" class="channel-transcript" :aria-label="t('聊天记录')" @click="open_message_ref" @scroll="schedule_track_scroll" @wheel.passive="resume_tracking($event); stop_following($event)" @touchstart.passive="resume_tracking" @touchmove.passive="stop_following" @touchend.passive="end_touch" @touchcancel.passive="end_touch" @pointerdown="stop_following" @keydown="resume_tracking($event); stop_following($event)">
+    <div ref="transcript" v-memo="transcript_memo([message_groups,view.messages_loading, view.messages_failure, view.sending_preview, view.failed_sends, message_round_labels, free, room.session, can_manage, expanded_answers.size, reader.state.message_id, room.title, view.query, view.source_filter, view.authors, view.card_kinds, topic_anchor, end_anchor, request_badges, execution_reports, recommendations, adopting, scheduler_decisions, host_arrangements, pending, execution_notes, open_working_notes, editing, rewound_runs, retracting_id, armed_cards.size, menu_open_id, stopping_member, free_now, allowing, allow_errors, late_answers, has_draft, view.sending_message, routing_messages, speaking_turn, room.free])" class="channel-transcript" :aria-label="t('聊天记录')" @click="open_message_ref" @scroll="schedule_track_scroll" @wheel.passive="resume_tracking($event); stop_following($event)" @touchstart.passive="resume_tracking" @touchmove.passive="stop_following" @touchend.passive="end_touch" @touchcancel.passive="end_touch" @pointerdown="stop_following" @keydown="resume_tracking($event); stop_following($event)">
       <div v-if="!view.query && !view.source_filter && !topic_anchor && render_start === 0" class="channel-message-group channel-topic-group"><TopicCard :ref="(card) => topic_card = card" @edit="emit('edit')" /></div>
       <div v-for="group in message_groups" :key="group.key" class="channel-message-group">
         <USeparator :label="group.label" class="channel-date-divider" />
@@ -2421,25 +2587,23 @@ function copy_message(message) { act("copy", `${view.value.room_site}/r/${room.v
           <template #text>{{ message.text }}</template>
           <p class="channel-checkin-answer">{{ message.text }}</p>
         </ScheduleCard>
-        <UChatMessage v-else-if="message.cancelled_turn || message.cancelled_execution" :id="message.id" :data-author="bridge.identities[message.author]?.style" role="assistant" :parts="[]" side="left" variant="naked" color="neutral" class="channel-message is-voided" :ui="{ header: 'channel-message-header', container: 'channel-message-container', body: 'channel-message-body' }">
-          <template #body>
-            <div class="channel-message-byline">
-              <UAvatar :src="bridge.identities[message.author]?.icon" :text="bridge.identities[message.author]?.initials || '?'" :alt="bridge.display_name(message.author)" size="md" class="channel-avatar" :class="bridge.identities[message.author]?.style" />
-              <div class="channel-message-meta"><div class="channel-message-author"><strong>{{ bridge.display_name(message.author) }}</strong></div></div>
-              <span v-if="message.cancelled_turn" class="channel-message-provenance channel-message-elapsed">{{ t('已错过 · 安排 #{value1}', { value1: message.cancelled_turn.display_id || message.cancelled_turn.id }) }}</span>
-              <span v-else class="channel-message-provenance channel-message-elapsed">{{ t('{value1} · 执行 #{value2}', { value1: stop_state(message.cancelled_execution).label, value2: message.execution_id }) }}</span>
-            </div>
-            <!-- Stopped or skipped work reads apart from answers: a dashed card and a stop mark beside the reason. -->
-            <div class="channel-message-text channel-stop-reason" role="status"><UIcon :name="message.cancelled_turn ? 'i-lucide-skip-forward' : 'i-lucide-circle-stop'" /><span>{{ message.cancelled_turn ? t('本次发言已被跳过或取消，未回答。') : stop_reason_text(message.cancelled_execution.result) || t('本次执行已作废，未回答。') }}</span></div>
-            <template v-for="execution in [message.cancelled_execution || all_executions.find((item) => item.id === message.execution_id)].filter((item) => item && stop_state(item).note)" :key="execution.id">
-              <p class="channel-message-text channel-stop-note">{{ stop_state(execution).note }}</p>
-              <details v-if="execution.late_answer && view.access?.can_manage" class="channel-receipt" @toggle="load_late_answer(execution.id, $event)">
-                <summary :aria-label="t('查看 {value1} 未采纳的回答', { value1: bridge.display_name(execution.member) })">{{ t('未采纳的回答') }}</summary>
-                <div class="channel-message-text channel-late-answer">{{ late_answers.get(execution.id)?.text ?? t('正在读取…') }}</div>
-              </details>
-            </template>
+        <!-- Stopped, voided or skipped work is one compact line like the scheduler's cards, not a message card: it is an
+             event in the room, not something said (2026-11-17). Notes on how the stop went open from its chevron. -->
+        <ScheduleCard v-else-if="message.cancelled_turn || message.cancelled_execution" :id="message.id" class="channel-voided-card" plain
+          :icon="message.cancelled_turn ? 'i-lucide-skip-forward' : 'i-lucide-circle-stop'" :label="t('{value1} 已停止', { value1: bridge.display_name(message.author) })"
+          :expandable="Boolean(voided_detail(message))">
+          <template #text>{{ message.cancelled_turn ? t('{name} 的发言已跳过', { name: bridge.display_name(message.author) })
+            : t('{name} {state}：{reason}', { name: bridge.display_name(message.author), state: stop_state(message.cancelled_execution).label,
+              reason: stop_reason_text(message.cancelled_execution.result) || t('未回答') }) }}<small>{{ message.cancelled_turn
+              ? t('安排 #{value1}', { value1: message.cancelled_turn.display_id || message.cancelled_turn.id }) : t('执行 #{value1}', { value1: message.execution_id }) }}</small></template>
+          <template v-for="execution in [voided_detail(message)].filter(Boolean)" :key="execution.id">
+            <p class="channel-stop-note">{{ stop_state(execution).note }}</p>
+            <details v-if="execution.late_answer && view.access?.can_manage" class="channel-receipt" @toggle="load_late_answer(execution.id, $event)">
+              <summary :aria-label="t('查看 {value1} 未采纳的回答', { value1: bridge.display_name(execution.member) })">{{ t('未采纳的回答') }}</summary>
+              <div class="channel-message-text channel-late-answer">{{ late_answers.get(execution.id)?.text ?? t('正在读取…') }}</div>
+            </details>
           </template>
-        </UChatMessage>
+        </ScheduleCard>
         <!-- Work in progress is a compact card: who and how long, the stage as the main line with the stop key at its end, -->
         <!-- and the notes below as a subordinate thread, folded to the latest note with the count after it. -->
         <div v-else-if="message.slot_card && !message.failure && !message.retry" :id="`execution-${message.id}`" class="channel-working-strip" :data-author="bridge.identities[message.author]?.style">
@@ -2662,6 +2826,7 @@ function copy_message(message) { act("copy", `${view.value.room_site}/r/${room.v
       <!-- The message being sent shows at once; the saved copy replaces it when the site answers, and a failed send becomes a failed card above. -->
       <!-- It mirrors a saved card line for line, so the swap changes only "发送中…" into the message number. -->
       <motion.div v-if="view.sending_preview" class="channel-message-group" :style="{ opacity: send_entry, y: send_y }">
+        <USeparator v-if="sending_day_label" :label="sending_day_label" class="channel-date-divider" />
         <UChatMessage id="channel-sending-message" :data-author="bridge.identities[view.sending_preview.author]?.style" role="user" :parts="[]" side="left" variant="naked" color="neutral" class="channel-message channel-sending-message" :ui="{ header: 'channel-message-header', container: 'channel-message-container', body: 'channel-message-body' }">
           <template #body>
             <div class="channel-message-byline">
@@ -2674,7 +2839,7 @@ function copy_message(message) { act("copy", `${view.value.room_site}/r/${room.v
             <div class="channel-answer"><div class="channel-message-text markdown-body" v-html="sending_html"></div></div>
             <!-- The files show at once from this browser's own copy while they upload. -->
             <div v-if="view.sending_preview.files.some((file) => file.preview_url)" class="message-attachments">
-              <span v-for="file in view.sending_preview.files.filter((item) => item.preview_url)" :key="file.preview_url" class="attachment-image" :class="{ 'is-uploading': !file.uploaded && !view.sending_preview.saved_id }"><img :src="file.preview_url" :alt="file.name"><UIcon v-if="!file.uploaded && !view.sending_preview.saved_id" name="i-lucide-loader-circle" class="attachment-uploading" :aria-label="t('正在上传')" /></span>
+              <span v-for="file in view.sending_preview.files.filter((item) => item.preview_url)" :key="file.preview_url" class="attachment-image" :class="{ 'is-uploading': !file.uploaded && !view.sending_preview.saved_id }"><img :src="file.preview_url" :alt="file.name"><i v-if="!file.uploaded && !view.sending_preview.saved_id" class="attachment-uploading" role="progressbar" :aria-label="t('正在上传')" /></span>
             </div>
             <div v-if="view.sending_preview.files.some((file) => !file.preview_url)" class="channel-message-provenance">{{ t('附件：{value1}', { value1: view.sending_preview.files.filter((file) => !file.preview_url).map((file) => file.name).join('、') }) }}</div>
           </template>
@@ -2688,7 +2853,7 @@ function copy_message(message) { act("copy", `${view.value.room_site}/r/${room.v
         <DiscussionEndCard v-if="end_anchor === 'end'" />
       </div>
       <div v-if="view.messages_loading && !transcript_messages.length" class="channel-message-group channel-loading-skeleton grid gap-6 py-6" role="status" :aria-label="t('正在读取消息')"><div v-for="row in 3" :key="row" class="grid gap-3"><USkeleton class="h-5 w-28" /><USkeleton class="h-4 w-full" /><USkeleton class="h-4 w-2/3" /></div></div>
-      <div v-else-if="view.messages_failure" class="channel-empty" role="status"><p>{{ view.messages_failure }}</p><UButton :label="t('重新读取消息')" icon="i-lucide-refresh-cw" color="neutral" variant="soft" @click="act('refresh')" /></div>
+      <div v-else-if="view.messages_failure && !transcript_messages.length" class="channel-empty" role="status"><p>{{ view.messages_failure }}</p><UButton :label="t('重新读取消息')" icon="i-lucide-refresh-cw" color="neutral" variant="soft" @click="act('refresh')" /></div>
       <div v-else-if="!transcript_messages.length && !free_working.length && !view.sending_preview && !view.failed_sends.length" class="channel-empty"><UIcon :name="view.query || view.source_filter ? 'i-lucide-search' : 'i-lucide-hash'" /><h2>{{ view.query || view.source_filter ? t('没有找到消息') : room.title }}</h2><p>{{ view.query || view.source_filter ? t('试试其他关键词，或清除筛选。') : bridge.empty_discussion_message(room) }}</p></div>
     </div>
     <!-- Back from the background: the opening load covers the old cards until the room is read again (state.resuming). -->

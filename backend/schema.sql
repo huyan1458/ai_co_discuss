@@ -66,6 +66,9 @@ CREATE TABLE IF NOT EXISTS attachments (
     file_name TEXT NOT NULL, content_type TEXT NOT NULL,
     size INTEGER NOT NULL, sha256 TEXT NOT NULL,
     actor TEXT NOT NULL, submission_id TEXT NOT NULL, created_at TEXT NOT NULL,
+    -- Pixel size as shown (EXIF rotation applied) of PNG/JPEG/GIF/WebP images; 0 when the header gives none,
+    -- NULL when not measured yet.
+    width INTEGER, height INTEGER,
     UNIQUE(room_id, submission_id)
 );
 CREATE INDEX IF NOT EXISTS attachments_message ON attachments(message_id, position);

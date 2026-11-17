@@ -5,6 +5,7 @@ import collections
 import copy
 import hashlib
 import hmac
+import io
 import json
 import logging
 import mimetypes
@@ -13,6 +14,7 @@ import re
 import secrets
 import socket
 import sqlite3
+import struct
 import subprocess
 import threading
 import time
@@ -67,6 +69,8 @@ UPDATE_LOG_SIZE = 256
 MAX_BODY_BYTES = 512 * 1024
 MAX_IMPORT_BYTES = 32 * 1024 * 1024
 MAX_ATTACHMENT_BYTES = 20 * 1024 * 1024
+# Files uploaded while the message is still being written are dropped if never sent within this time.
+UNSENT_ATTACHMENT_TTL = timedelta(hours=24)
 MAX_MESSAGE_ATTACHMENTS = 10
 MAX_FILENAME_LENGTH = 255
 # A revision check names at most this many rooms; a runner or page asks only for the rooms it follows.
@@ -485,6 +489,11 @@ def init_database(database, seed=True):
         connection.executescript(SCHEMA)
         if "directories" not in {row[1] for row in connection.execute("PRAGMA table_info(topic_folders)")}:
             connection.execute("ALTER TABLE topic_folders ADD COLUMN directories TEXT NOT NULL DEFAULT '[]'")
+        # Images stored before sizes were recorded keep NULL here and are measured when first read (with_image_sizes).
+        attachment_columns = {row[1] for row in connection.execute("PRAGMA table_info(attachments)")}
+        for name in ("width", "height"):
+            if name not in attachment_columns:
+                connection.execute(f"ALTER TABLE attachments ADD COLUMN {name} INTEGER")
         migrate_free_tables(connection)
         if seed and is_new:
             seed_demo(connection)
@@ -512,8 +521,11 @@ def require_room(connection, room_id):
     room["texts"] = room_display_texts(connection, room)
     room["archived"] = bool(connection.execute("SELECT archived FROM room_directory WHERE room_id=?", (room_id,)).fetchone()[0])
     room["folder_id"] = connection.execute("SELECT folder_id FROM room_folder_assignments WHERE room_id=?", (room_id,)).fetchone()[0]
-    # The number the next sent file takes, so the composer shows `[图片 #n]` as it will be saved.
-    room["next_attachment_number"] = attachment_number_before(connection, room_id, None)
+    # The number the next sent file takes, so the composer shows `[图片 #n]` as it will be saved. Queued messages post
+    # first and take the numbers before it, so a new draft does not repeat a queued message's `[图片 #n]`.
+    queued_files = sum(len(json.loads(row[0]).get("attachment_ids") or []) for row in
+                       connection.execute("SELECT payload FROM queued_messages WHERE room_id=?", (room_id,)))
+    room["next_attachment_number"] = attachment_number_before(connection, room_id, None) + queued_files
     settings = connection.execute("SELECT host,background,boundaries,experts,focus FROM topic_settings WHERE room_id=?",
                                   (room_id,)).fetchone()
     room.update(dict(settings) if settings else topic_defaults())
@@ -1320,6 +1332,121 @@ def media_content_type(data):
     return "application/octet-stream"
 
 
+# Images whose pixel size is read from their header, so the page can hold their place before the bytes arrive.
+SIZED_IMAGE_TYPES = ("image/png", "image/jpeg", "image/gif", "image/webp")
+# JPEG markers that start a frame header (SOF0–SOF15 except DHT, JPG and DAC), which holds the image size.
+JPEG_FRAME_MARKERS = frozenset((0xC0, 0xC1, 0xC2, 0xC3, 0xC5, 0xC6, 0xC7, 0xC9, 0xCA, 0xCB, 0xCD, 0xCE, 0xCF))
+# JPEG markers without a length field.
+JPEG_STANDALONE_MARKERS = frozenset((0x01, *range(0xD0, 0xD8)))
+# EXIF orientations that turn the picture a quarter, so it shows with width and height swapped.
+EXIF_QUARTER_TURNS = (5, 6, 7, 8)
+EXIF_ORIENTATION_TAG = 0x0112
+
+
+def image_size(stream):
+    """Return the (width, height) a PNG/JPEG/GIF/WebP image shows at, read from its header without decoding it.
+
+    Args:
+        stream: A binary file object at the start of the image; only headers are read, a JPEG's segments skipped.
+
+    Returns:
+        Positive integers, or (0, 0) when the header is not one of those formats or gives no size.
+    """
+    try:
+        head = stream.read(32)
+        if head.startswith(b"\x89PNG\r\n\x1a\n") and head[12:16] == b"IHDR":
+            size = struct.unpack(">II", head[16:24])
+        elif head[:6] in (b"GIF87a", b"GIF89a"):
+            size = struct.unpack("<HH", head[6:10])
+        elif head.startswith(b"RIFF") and head[8:12] == b"WEBP":
+            size = webp_size(head)
+        elif head.startswith(b"\xff\xd8"):
+            stream.seek(2)
+            size = jpeg_size(stream)
+        else:
+            size = (0, 0)
+    except struct.error:
+        size = (0, 0)
+    return size if min(size) > 0 else (0, 0)
+
+
+def webp_size(head):
+    """The canvas size in the first chunk of a WebP file: lossy (VP8), lossless (VP8L) or extended (VP8X)."""
+    chunk = head[12:16]
+    if chunk == b"VP8 " and head[23:26] == b"\x9d\x01\x2a":
+        width, height = struct.unpack("<HH", head[26:30])
+        return width & 0x3FFF, height & 0x3FFF
+    if chunk == b"VP8L" and head[20] == 0x2F:
+        bits = struct.unpack("<I", head[21:25])[0]
+        return (bits & 0x3FFF) + 1, ((bits >> 14) & 0x3FFF) + 1
+    if chunk == b"VP8X":
+        return int.from_bytes(head[24:27], "little") + 1, int.from_bytes(head[27:30], "little") + 1
+    return 0, 0
+
+
+def jpeg_size(stream):
+    """Walk JPEG segments to the frame header; a quarter-turn EXIF orientation swaps the size, as browsers show it."""
+    orientation = 1
+    while stream.read(1) == b"\xff":
+        marker = stream.read(1)
+        while marker == b"\xff":
+            marker = stream.read(1)
+        if not marker or marker[0] in (0xD9, 0xDA):
+            break
+        if marker[0] in JPEG_STANDALONE_MARKERS:
+            continue
+        length = struct.unpack(">H", stream.read(2))[0]
+        if marker[0] in JPEG_FRAME_MARKERS:
+            height, width = struct.unpack(">xHH", stream.read(5))
+            return (height, width) if orientation in EXIF_QUARTER_TURNS else (width, height)
+        if marker[0] == 0xE1 and orientation == 1:
+            orientation = exif_orientation(stream.read(max(0, length - 2)))
+        else:
+            stream.seek(max(0, length - 2), io.SEEK_CUR)
+    return 0, 0
+
+
+def exif_orientation(segment):
+    """The orientation tag of an APP1 segment's EXIF data; 1 (upright) when it has none."""
+    if not segment.startswith(b"Exif\x00\x00"):
+        return 1
+    tiff = segment[6:]
+    order = {b"II": "<", b"MM": ">"}.get(tiff[:2])
+    try:
+        offset = struct.unpack(order + "I", tiff[4:8])[0]
+        for index in range(struct.unpack(order + "H", tiff[offset:offset + 2])[0]):
+            entry = offset + 2 + index * 12
+            if struct.unpack(order + "H", tiff[entry:entry + 2])[0] == EXIF_ORIENTATION_TAG:
+                return struct.unpack(order + "H", tiff[entry + 8:entry + 10])[0]
+    except (TypeError, struct.error):
+        pass
+    return 1
+
+
+def with_image_sizes(connection, rows):
+    """Return attachment rows as dicts, measuring once each image stored before sizes were recorded.
+
+    The size is written back; a read request commits it at once, a write transaction keeps it with its own changes.
+    An imported image whose bytes have not arrived yet stays unmeasured until they do.
+    """
+    files = [dict(row) for row in rows]
+    missing = [item for item in files if item.get("width") is None and item["content_type"] in SIZED_IMAGE_TYPES]
+    if not missing:
+        return files
+    began = connection.in_transaction
+    database = connection.execute("PRAGMA database_list").fetchone()["file"]
+    for item in missing:
+        try:
+            with attachment_path(database, item).open("rb") as stream:
+                item["width"], item["height"] = image_size(stream)
+        except OSError:
+            continue
+        connection.execute("UPDATE attachments SET width=?,height=? WHERE id=?", (item["width"], item["height"], item["id"]))
+    if not began:
+        connection.commit()
+    return files
+
+
 def attachment_view(row):
     """Return attachment metadata and room-scoped content URLs."""
     result = dict(row)
@@ -1381,8 +1508,9 @@ def message_with_attachments(connection, row):
         return {**message, "text": "", "summary": "", "suggestions": [], "attachments": []}
     message["texts"] = load_texts(connection, "message", message["id"])
     message["suggestions"] = message_suggestions(connection, message["id"])
-    files = connection.execute("SELECT * FROM attachments WHERE message_id=? ORDER BY position,id", (message["id"],)).fetchall()
-    first = attachment_number_before(connection, message["room_id"], message["id"]) if files else 0
+    files = with_image_sizes(connection, connection.execute("SELECT * FROM attachments WHERE message_id=? ORDER BY position,id",
+                                                            (message["id"],)))
+    first =attachment_number_before(connection, message["room_id"], message["id"]) if files else 0
     message["attachments"] = [{**attachment_view(item), "number": first + index} for index, item in enumerate(files)]
     return message
 
@@ -1418,8 +1546,8 @@ def query_attachments(connection, room_id, params, token=""):
         values.append(int(params["message_id"]))
     page = max(1, int(params.get("page", 1)))
     total = connection.execute(f"SELECT COUNT(*) FROM attachments WHERE {where}", values).fetchone()[0]
-    rows = connection.execute(f"SELECT * FROM attachments WHERE {where} ORDER BY created_at,id LIMIT ? OFFSET ?",
-                              [*values, PAGE_SIZE, (page - 1) * PAGE_SIZE])
+    rows = with_image_sizes(connection, connection.execute(f"SELECT * FROM attachments WHERE {where} ORDER BY created_at,id LIMIT ? OFFSET ?",
+                                                           [*values, PAGE_SIZE, (page - 1) * PAGE_SIZE]))
     return {"attachments": [{**attachment_view(row), **({"number": attachment_number_before(connection, room_id, row["message_id"]) + row["position"]}
                                                          if row["message_id"] is not None else {})} for row in rows], "page": page, "total": total,
             "pages": max(1, (total + PAGE_SIZE - 1) // PAGE_SIZE)}
@@ -1434,7 +1562,7 @@ def get_attachment(connection, room_id, identifier, params=None, token="", conte
     if cutoff is not None and row["message_id"] is not None and row["message_id"] > cutoff:
         raise BoundaryError(Text('该附件所在的消息超出本请求读取上界 #{until}', until=cutoff),
                             code="reading_boundary", read_scope={"request_read_until": cutoff, "boundary_applied": True})
-    return attachment_view(row)
+    return attachment_view(with_image_sizes(connection, [row])[0])
 
 
 def attachment_path(database, attachment):
@@ -1455,20 +1583,59 @@ def store_attachment(connection, database, room_id, metadata, data):
         if any(previous[key] != value for key, value in expected.items()):
             raise FileExistsError(Text('这个附件提交编号已被其他文件使用'))
         return {"attachment": attachment_view(previous), "duplicate": True}
-    record = {"id": uuid.uuid4().hex, "room_id": room_id, **expected, "created_at": utc_now()}
+    prune_unsent_attachments(connection, database, room_id)
+    # Kept out of `expected`: a retry of a file stored before sizes were recorded still matches it.
+    width, height = image_size(io.BytesIO(data)) if expected["content_type"] in SIZED_IMAGE_TYPES else (None, None)
+    record = {"id": uuid.uuid4().hex, "room_id": room_id, **expected, "width": width, "height": height, "created_at": utc_now()}
     path = attachment_path(database, record)
     path.parent.mkdir(parents=True, exist_ok=True)
     try:
         with path.open("xb") as target:
             target.write(data)
         connection.execute("""INSERT INTO attachments
-            (id,room_id,file_name,actor,submission_id,size,sha256,content_type,created_at)
-            VALUES (:id,:room_id,:file_name,:actor,:submission_id,:size,:sha256,:content_type,:created_at)""", record)
+            (id,room_id,file_name,actor,submission_id,size,sha256,content_type,width,height,created_at)
+            VALUES (:id,:room_id,:file_name,:actor,:submission_id,:size,:sha256,:content_type,:width,:height,:created_at)""", record)
         connection.commit()
     except Exception:
         path.unlink(missing_ok=True)
         raise
     return {"attachment": get_attachment(connection, room_id, record["id"]), "duplicate": False}
+
+
+def unsent_attachment_rows(connection, room_id):
+    """Files uploaded in this room that no message took and no queued message is waiting to send."""
+    queued = {identifier for row in connection.execute("SELECT payload FROM queued_messages WHERE room_id=?", (room_id,))
+              for identifier in json.loads(row[0]).get("attachment_ids") or []}
+    return [row for row in connection.execute("SELECT * FROM attachments WHERE room_id=? AND message_id IS NULL", (room_id,))
+            if row["id"] not in queued]
+
+
+def remove_attachment_files(connection, database, rows):
+    """Delete unsent uploads and their bytes; the caller commits."""
+    for row in rows:
+        connection.execute("DELETE FROM attachments WHERE id=? AND message_id IS NULL", (row["id"],))
+        attachment_path(database, row).unlink(missing_ok=True)
+
+
+def prune_unsent_attachments(connection, database, room_id):
+    """Drop files uploaded ahead of sending but never sent, once they are older than a draft could still be waiting."""
+    cutoff = datetime.now(timezone.utc) - UNSENT_ATTACHMENT_TTL
+    remove_attachment_files(connection, database, [row for row in unsent_attachment_rows(connection, room_id)
+                                                   if datetime.fromisoformat(row["created_at"]) < cutoff])
+
+
+def discard_attachment(connection, database, room_id, identifier, token):
+    """The uploader takes back a file it uploaded ahead of sending; a sent or queued file stays."""
+    attachment = get_attachment(connection, room_id, identifier)
+    actor = authorize_free_write(connection, room_id, token, "attachments", {"author": attachment["actor"]})
+    if (actor if isinstance(actor, str) else actor["name"]) != attachment["actor"]:
+        raise PermissionError(Text('只能撤下自己上传的附件'))
+    row = next((item for item in unsent_attachment_rows(connection, room_id) if item["id"] == identifier), None)
+    if row is None:
+        raise FileExistsError(Text('附件已随消息发出或正在排队，不能撤下'))
+    remove_attachment_files(connection, database, [row])
+    connection.commit()
+    return {"discarded": identifier}
 
 
 def check_message_attachments(connection, room_id, actor, identifiers):
@@ -3250,6 +3417,8 @@ class DiscussionHandler(BaseHTTPRequestHandler):
                 raise ValueError(Text('附件内容不完整'))
             result = store_attachment(connection, self.server.database, room_id, metadata, data)
             return self.respond(result, 200 if result["duplicate"] else 201)
+        if method == "POST" and len(parts) == 6 and parts[5] == "discard":
+            return self.respond(discard_attachment(connection, self.server.database, room_id, parts[4], self.headers.get("X-Discussion-Token", "")))
         if method == "POST" and len(parts) == 6 and parts[5] == "import":
             return self.import_attachment(connection, room_id, parts[4])
         if method == "GET" and len(parts) in (5, 6):

@@ -734,6 +734,59 @@ function theme_fixture(saved_theme = null, shared_storage = null) {
   return { context, nodes, classes, storage, loaded, buttons, notified, root: document.documentElement };
 }
 
+test('a relayed upload resends only lost parts, and a try after a failure carries on where it stopped', async () => {
+  const { context } = theme_fixture();
+  Object.assign(context, { Blob, btoa, atob, setTimeout: (resolve) => { resolve(); return 0; } });
+  // The computer keeps parts by upload id and number, answers which it lacks, and keeps a finished file's answer.
+  const computer = { parts: new Map(), finished: new Map() }, sent = [];
+  let lose = () => false;
+  context.relay_exchange = async (action, payload) => {
+    assert.equal(action, 'room-upload');
+    sent.push(payload.index);
+    if (lose(payload)) throw Object.assign(new Error('lost on the way'), { unconfirmed: true });
+    if (computer.finished.has(payload.id)) return computer.finished.get(payload.id);
+    const parts = computer.parts.get(payload.id) || new Map();
+    computer.parts.set(payload.id, parts.set(payload.index, payload.data));
+    const missing = [...Array(payload.total).keys()].filter((index) => !parts.has(index));
+    if (missing.length) return { status: 200, body: { received: payload.total - missing.length, missing } };
+    const answer = { status: 201, body: { attachment: { id: payload.id } } };
+    computer.finished.set(payload.id, answer);
+    return answer;
+  };
+  const whole = (id) => Buffer.concat([...computer.parts.get(id)].sort(([a], [b]) => a - b).map(([, data]) => Buffer.from(data, 'base64')));
+  const file = (fill) => new Uint8Array(3 * 128 * 1024 + 10).fill(fill);
+
+  // A part lost once is sent again; every other part goes once, and the file arrives whole.
+  const first = file(1);
+  lose = (payload) => payload.index === 1 && sent.filter((index) => index === 1).length === 1;
+  const done = await context.relay_upload('/api/rooms/r/attachments?submission_id=a', first);
+  assert.deepEqual([...sent].sort(), [0, 1, 1, 2, 3]);
+  assert.ok(whole(done.attachment.id).equals(Buffer.from(first)));
+
+  // A part that keeps getting lost fails the try; the next try of the same file sends only what the computer lacks.
+  const second = file(2);
+  sent.length = 0;
+  lose = (payload) => payload.index === 2;
+  await assert.rejects(context.relay_upload('/api/rooms/r/attachments?submission_id=b', second));
+  lose = () => false;
+  sent.length = 0;
+  const resumed = await context.relay_upload('/api/rooms/r/attachments?submission_id=b', second);
+  assert.ok(!sent.includes(0) && !sent.includes(1) && sent.includes(2), `resent ${sent}`);
+  assert.ok(whole(resumed.attachment.id).equals(Buffer.from(second)));
+  assert.equal([...computer.parts.keys()].length, 2, 'the resumed try kept its upload id');
+
+  // A computer that restarted and lost parts says which; those are sent again.
+  const third = file(3);
+  sent.length = 0;
+  lose = (payload) => {
+    if (payload.index === 3 && !computer.restarted) { computer.restarted = true; computer.parts.get(payload.id)?.delete(0); }
+    return false;
+  };
+  const restarted = await context.relay_upload('/api/rooms/r/attachments?submission_id=c', third);
+  assert.deepEqual([...sent].sort(), [0, 0, 1, 2, 3]);
+  assert.ok(whole(restarted.attachment.id).equals(Buffer.from(third)));
+});
+
 test('attachment button metadata reaches preview without a metadata or relay read first', async () => {
   const { context } = theme_fixture(), opened = [];
   Object.assign(context, {

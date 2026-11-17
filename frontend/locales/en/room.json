@@ -754,12 +754,19 @@
   "已重试，新的执行接在下方": "Retried; the new run follows below",
   "已修改 {count} 个文件": "Edited {count} files",
   "二进制文件": "Binary file",
-  "文件过大": "File too large",
+  "未记录差异": "No line diff",
+  "文件超过 1 MB，只记录了改动，没有保存逐行差异": "Over 1 MB: the change is recorded, its line diff is not",
   "正在读取改动…": "Reading changes…",
   "读取改动失败：{value1}": "Could not read changes: {value1}",
   "改动较长，只显示前面一部分": "Long change; only the first part is shown",
-  "这些文件在同一时间被改动，但不是这位成员的编辑工具写的，可能来自其他窗口或成员": "These files changed meanwhile but not through this member's edit tools; another window or member may have changed them",
-  "另有 {count} 个文件同期被改动，不是它写的": "{count} more files changed meanwhile, not by this member",
+  "其他来源 {count} 个文件": "{count} files from other sources",
+  "同一时间被改动、但不是这位成员的编辑工具写的文件，可能来自其他窗口、成员或构建": "Files changed at the same time but not written by this member's edit tools; they may come from another window, member or a build",
   "正在上传附件 {value1}/{value2}…": "Uploading attachments {value1}/{value2}…",
-  "正在上传": "Uploading"
+  "正在上传": "Uploading",
+  "{value1} 已停止": "{value1} stopped",
+  "{name} 的发言已跳过": "{name}'s turn was skipped",
+  "{name} {state}：{reason}": "{name} {state}: {reason}",
+  "未回答": "no answer",
+  "安排 #{value1}": "Arrangement #{value1}",
+  "执行 #{value1}": "Run #{value1}"
 }

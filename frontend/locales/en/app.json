@@ -83,6 +83,7 @@
   "进入房间后查看本次议题。": "Enter a room to see its topic.",
   "留言最多 {value1} 字，原文已保留，请调整后提交": "Messages can contain up to {value1} characters. Your draft is kept. Edit it and submit again.",
   "建房偏好未保存：{value1}": "Room preferences not saved: {value1}",
+  "模型与强度偏好未保存：{value1}": "Model and effort preference not saved: {value1}",
   "建房偏好未读取：{value1}": "Room preferences not loaded: {value1}",
   "默认描述未保存：{value1}": "Default description not saved: {value1}",
   "已存为预设「{value1}」": "Saved as preset “{value1}”",

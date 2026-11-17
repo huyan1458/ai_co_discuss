@@ -47,6 +47,8 @@ const UPLOAD_PATH = /^\/api\/rooms\/[A-Za-z0-9_-]+\/attachments(\/[A-Za-z0-9_-]+
 const UPLOAD_MAX_BYTES = 20 * 1024 * 1024;
 const UPLOAD_TTL_MS = 10 * 60 * 1000;
 const uploads = new Map();
+// Answers of uploads already handed to the local website, by upload id, kept as long as unfinished uploads are.
+const finished_uploads = new Map();
 // The hosted accounts' entry over the relay (backend/entry_worker.mjs): answer parts per frame (sent as base64 within the
 // 1 MiB frame), the largest request taken, and when to pause reading an answer the connection has not sent on yet.
 const ENTRY_PART_BYTES = 512 * 1024;
@@ -127,7 +129,9 @@ function bridge_headers(home, site) {
 
 /**
  * Collect one part of an attachment upload; once every part has arrived, send the whole file to the local website as
- * the bridge. Parts may be resent; an unfinished upload is dropped after ten minutes.
+ * the bridge. Parts may arrive in any order and be resent; an unfinished upload answers which parts it still lacks and
+ * is dropped after ten minutes. A part resent after the file was handed on (its answer lost on the way) gets that same
+ * answer, so the device does not start the file over.
  */
 export async function room_upload(home, site, payload, { fetcher = site_fetch, now = Date.now() } = {}) {
   const { id, path, index, total, size, content_type = 'application/octet-stream', data } = payload || {};
@@ -136,20 +140,34 @@ export async function room_upload(home, site, payload, { fetcher = site_fetch, n
       || !Number.isSafeInteger(size) || size < 0 || size > UPLOAD_MAX_BYTES || typeof data !== 'string' || typeof content_type !== 'string') {
     return { status: 400, body: { error: '附件上传请求无效' } };
   }
-  for (const [key, item] of uploads) if (now - item.at > UPLOAD_TTL_MS) uploads.delete(key);
+  for (const store of [uploads, finished_uploads]) for (const [key, item] of store) if (now - item.at > UPLOAD_TTL_MS) store.delete(key);
+  const finished = finished_uploads.get(id);
+  if (finished) return finished.path === path ? finished.answer : { status: 400, body: { error: '附件上传请求无效' } };
   const upload = uploads.get(id) ?? { path, total, size, parts: [], at: now };
   if (upload.path !== path || upload.total !== total || upload.size !== size) return { status: 400, body: { error: '附件上传请求无效' } };
   upload.parts[index] = Buffer.from(data, 'base64');
   upload.at = now;
   uploads.set(id, upload);
-  const received = upload.parts.filter(Boolean).length;
-  if (received < total) return { status: 200, body: { received } };
+  const missing = [];
+  for (let part = 0; part < total; part++) if (!upload.parts[part]) missing.push(part);
+  if (missing.length) return { status: 200, body: { received: total - missing.length, missing } };
   uploads.delete(id);
   const bytes = Buffer.concat(upload.parts);
   if (bytes.length !== size) return { status: 400, body: { error: '附件不完整，请重新上传' } };
-  const response = await fetcher(`${local_origin(home)}${path}`, { method: 'POST', redirect: 'error', body: bytes,
-    headers: { ...bridge_headers(home, site), 'Content-Type': content_type }, signal: AbortSignal.timeout(LOCAL_TIMEOUT_MS) });
-  return { status: response.status, body: await response.json() };
+  // Kept while the hand-over runs, so a part resent meanwhile waits for the same answer.
+  const answer = fetcher(`${local_origin(home)}${path}`, { method: 'POST', redirect: 'error', body: bytes,
+    headers: { ...bridge_headers(home, site), 'Content-Type': content_type }, signal: AbortSignal.timeout(LOCAL_TIMEOUT_MS) })
+    .then(async (response) => ({ status: response.status, body: await response.json() }));
+  finished_uploads.set(id, { path, at: now, answer });
+  try {
+    const result = await answer;
+    // A refused file is not kept: sending it again is a new attempt.
+    if (result.status >= 400) finished_uploads.delete(id);
+    return result;
+  } catch (error) {
+    finished_uploads.delete(id);
+    throw error;
+  }
 }
 
 /** Room credentials and website of the rooms this computer serves on its own local website, by room. */

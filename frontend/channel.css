@@ -448,6 +448,11 @@ html[data-theme^="channel"] .channel-nav-preview-text p { margin-bottom: 6px; }
 @supports (overflow-anchor: auto) and (not (font: -apple-system-body)) {
   .channel-transcript [data-message-id] { content-visibility: auto; contain-intrinsic-block-size: auto 240px; overflow-clip-margin: 64px; }
 }
+/* WebKit's own scroll anchoring (on by default since 2026) does not hold while a touch scroll runs, so there the page
+   keeps the reading position by hand (ChannelDiscussion keep_reading); both at once would move the cards twice. */
+@supports (font: -apple-system-body) {
+  .channel-transcript { overflow-anchor: none; }
+}
 /* The topic card reuses .channel-message box rules so its edges and text column match the message cards at every size. */
 .channel-topic-group { padding-top: 4px; }
 html[data-theme^="channel"] .channel-message.channel-topic-card { color: var(--ui-text); box-shadow: inset 3px 0 0 var(--channel-accent); }
@@ -495,16 +500,16 @@ html[data-theme^="channel"] .channel-message.channel-topic-card { color: var(--u
 /* Error/warning text gets its own box so a failure never reads like an answer; same left-bar tint as .access-failure. */
 .channel-message-text.channel-failure-reason { --failure-tone: var(--ui-error); margin: 0; padding: 1px 0 1px 12px; border-left: 2px solid color-mix(in srgb, var(--failure-tone) 60%, transparent); color: #b3bdcc; font-size: 14px; line-height: 1.65; white-space: pre-wrap; }
 .channel-message-text.channel-failure-reason.is-warning { --failure-tone: var(--ui-warning); }
-/* A file still uploading on the sending card: dimmed, with a spinner over it. */
-.attachment-image.is-uploading { position: relative; }
-.attachment-image.is-uploading img { opacity: .45; }
-.attachment-uploading { position: absolute; inset: 0; width: 26px; height: 26px; margin: auto; color: #fff; animation: attachment-spin 1s linear infinite; filter: drop-shadow(0 1px 2px #0008); }
-@keyframes attachment-spin { to { transform: rotate(360deg); } }
-@media (prefers-reduced-motion: reduce) { .attachment-uploading { animation: none; } }
+/* A file still uploading on the sending card keeps its look; a thin accent bar runs along its lower edge until it is in. */
+.attachment-image.is-uploading { position: relative; overflow: hidden; }
+.attachment-uploading { position: absolute; left: 0; right: 0; bottom: 0; height: 3px; background: color-mix(in srgb, var(--channel-accent, var(--ui-primary)) 25%, transparent); }
+.attachment-uploading::after { content: ""; position: absolute; top: 0; bottom: 0; width: 40%; border-radius: 2px; background: var(--channel-accent, var(--ui-primary)); animation: attachment-upload 1.1s ease-in-out infinite; }
+@keyframes attachment-upload { from { left: -40%; } to { left: 100%; } }
+@media (prefers-reduced-motion: reduce) { .attachment-uploading::after { animation: none; left: 0; width: 100%; opacity: .6; } }
 .channel-retried-note { display: flex; align-items: center; gap: 6px; margin-top: 8px; }
 .channel-retried-note > [class*="icon"] { width: 13px; height: 13px; }
 /* Stopped, voided or skipped work: a dashed, see-through card with a stop mark, so it never reads as an answer. */
-.channel-message.is-voided { border-style: dashed; border-color: var(--ui-border-accented, #ffffff24); background: transparent; }
+.channel-voided-card .channel-stop-note { margin: 0 0 4px; color: var(--ui-text-muted); font-size: 12px; }
 .channel-message-text.channel-stop-reason { display: flex; align-items: center; gap: 8px; margin: 0; padding: 1px 0 1px 12px; border-left: 2px solid var(--ui-border-accented, #ffffff24); color: var(--ui-text-muted); font-size: 14px; line-height: 1.65; }
 .channel-stop-reason > [class*="icon"] { flex-shrink: 0; width: 15px; height: 15px; color: var(--ui-text-dimmed); }
 .channel-stop-note { font-size: 14px; color: #b3bdcc; }
@@ -604,6 +609,9 @@ html[data-theme^="channel"] .channel-composer:is(:focus, :focus-within, :has(:fo
 .channel-editor::placeholder { color: #9ba3b1; }
 /* The textarea stays on top for typing and selection; the mirror behind it repeats the text with mentions colored. */
 .channel-editor-mirror { position: absolute; inset: 0; overflow: hidden; white-space: pre-wrap; overflow-wrap: break-word; pointer-events: none; scrollbar-gutter: stable; }
+/* iOS WebKit insets a textarea's text 3px on each side; without it the mirror lines wrap one character later than the
+   transparent text and the caret drifts off the painted words. -webkit-touch-callout exists only in iOS WebKit. */
+@supports (-webkit-touch-callout: none) { .channel-editor-mirror { inset: 0 3px; } }
 .channel-composer .channel-editor-mirror .channel-mention { padding: 0; background: none; }
 /* A file's [图片 #n] in the editor reads as one tag: the same colour as an @mention with a background; box-shadow gives
    it room without padding, which would push the painted text off the textarea's own. */

@@ -8,7 +8,8 @@ import { readFileSync, statSync } from 'node:fs';
 import { join } from 'node:path';
 
 // Files larger than this are listed without lines; patches are kept short enough to travel with the room.
-const MAX_DIFF_BYTES = 256 * 1024;
+// 1 MiB: the project's own largest sources (about 290 KB) still get lines (user 2026-11-17).
+const MAX_DIFF_BYTES = 1024 * 1024;
 const MAX_PATCH_LINES = 400;
 const MAX_TOTAL_PATCH_CHARS = 400 * 1024;
 const MAX_FILES = 200;

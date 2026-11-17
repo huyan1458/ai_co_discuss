@@ -736,7 +736,12 @@ test('new-room preferences persist separately from software defaults through loc
   const updated = { ...preferences, chain_rounds: 9 };
   save_launch_settings(f.home, { participants: { Codex: f.input.participants.Codex } });
   assert.deepEqual(launch_settings(f.home), { participants: { Codex: f.input.participants.Codex }, create_preferences: updated });
-  const before = readFileSync(join(f.home, 'launch-settings.json'), 'utf8');
+  // A model or effort picked on a platform card merges into that platform's saved software; empty goes back to its default.
+  save_launch_settings(f.home, { participant_choices: { Codex: { model: 'gpt-6-astra', effort: 'high' } } });
+  save_launch_settings(f.home, { participant_choices: { Codex: { effort: '' } } });
+  assert.deepEqual(launch_settings(f.home).participants, { Codex: { ...f.input.participants.Codex, model: 'gpt-6-astra' } });
+  assert.throws(() => save_launch_settings(f.home, { participant_choices: { 'Codex-2': { model: 'gpt-6-astra' } } }), /按平台保存/);
+  const before =readFileSync(join(f.home, 'launch-settings.json'), 'utf8');
   for (const invalid of [{ title: 'one room' }, { cwd: f.directory }, { participants: {} }, { host: 'Codex' },
     { session_id: 'session' }, { goal: 'room objective' }, { chain_rounds: 101 }, { max_minutes: 1441 },
     { scheduler: { api_key: 'must-not-persist' } }, { scheduler: { api_key_ref: 'key-ref' } }]) {
@@ -1755,11 +1760,14 @@ test('the relay channel reads and sends files in parts, and runs computer-room o
   const writer = async (url, options) => { sent.push({ url, options }); return Response.json({ attachment: { id: 'new' } }); };
   const upload = { id: 'upload-000000000001', path: '/api/rooms/abc123/attachments?file_name=a.png&actor=%E7%94%A8%E6%88%B7', total: 2, size: 6 };
   assert.deepEqual(await room_upload(home, 'https://site.test', { ...upload, index: 0, data: Buffer.from('abc').toString('base64') }, { fetcher: writer }),
-    { status: 200, body: { received: 1 } });
+    { status: 200, body: { received: 1, missing: [1] } });
   await room_upload(home, 'https://site.test', { ...upload, index: 0, data: Buffer.from('abc').toString('base64') }, { fetcher: writer });
   assert.equal(sent.length, 0);
   const done = await room_upload(home, 'https://site.test', { ...upload, index: 1, data: Buffer.from('def').toString('base64') }, { fetcher: writer });
   assert.deepEqual(done, { status: 200, body: { attachment: { id: 'new' } } });
+  assert.equal(sent.length, 1);
+  // A part sent again after its answer was lost gets the file's answer, and the file is not handed on twice.
+  assert.deepEqual(await room_upload(home, 'https://site.test', { ...upload, index: 1, data: Buffer.from('def').toString('base64') }, { fetcher: writer }), done);
   assert.equal(sent.length, 1);
   assert.equal(sent[0].url, `http://127.0.0.1:9876${upload.path}`);
   assert.equal(Buffer.from(sent[0].options.body).toString(), 'abcdef');

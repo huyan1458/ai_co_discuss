@@ -612,6 +612,32 @@ function valid_scheduler_preference(value) {
   return Object.entries(value).every(([field, item]) => Object.hasOwn(fields, field) && fields[field](item));
 }
 
+/** Model and effort picked on a platform's card are usage preferences, remembered as that platform's default. */
+function validate_participant_choices(input) {
+  if (!input || typeof input !== 'object' || Array.isArray(input)) throw new Error('模型与强度偏好须为对象');
+  for (const [name, choice] of Object.entries(input)) {
+    if (!clients_of(name) || platform_of(name) !== name) throw new Error(`本机默认配置按平台保存；${name} 的模型与强度只用于本场讨论`);
+    if (!choice || typeof choice !== 'object' || Array.isArray(choice)
+      || Object.entries(choice).some(([field, value]) => !['model', 'effort'].includes(field) || typeof value !== 'string')) throw new Error(`${name} 的模型与强度偏好无效`);
+  }
+  return input;
+}
+
+/** Merge only model and effort into each platform's saved software settings; empty text goes back to the software default. */
+function merge_participant_choices(participants, choices) {
+  const merged = { ...participants };
+  for (const [name, choice] of Object.entries(choices)) {
+    const profile = { ...merged[name] };
+    for (const [field, value] of Object.entries(choice)) {
+      if (value) profile[field] = value;
+      else delete profile[field];
+    }
+    validate_profile(name, profile);
+    merged[name] = profile;
+  }
+  return merged;
+}
+
 /** Update software defaults or form preferences independently, preserving the other section. */
 export function save_launch_settings(home, input) {
   const patch = {};
@@ -628,6 +654,7 @@ export function save_launch_settings(home, input) {
     validate_create_preferences(input.create_preferences);
     patch.create_preferences = input.create_preferences;
   }
+  const choices = Object.hasOwn(input, 'participant_choices') ? validate_participant_choices(input.participant_choices) : null;
   mkdirSync(home, { recursive: true, mode: 0o700 });
   const lock = new DatabaseSync(join(home, 'launch-settings-lock.sqlite3'));
   try {
@@ -635,6 +662,7 @@ export function save_launch_settings(home, input) {
     const previous = launch_settings(home);
     const settings = { ...previous, ...patch };
     if (patch.create_preferences) settings.create_preferences = { ...previous.create_preferences, ...patch.create_preferences };
+    if (choices) settings.participants = merge_participant_choices(settings.participants, choices);
     atomic_json(join(home, 'launch-settings.json'), settings);
     lock.exec('COMMIT');
     return settings;

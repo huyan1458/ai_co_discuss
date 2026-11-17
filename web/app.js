@@ -79,8 +79,23 @@ const RELAY_PROTOCOL = "codiscuss-relay";
 const RELAY_PING_MS = 25000;
 const ROOM_RELAY_PATH = /^\/api\/(rooms|folders|revisions)(\/|\?|$)/;
 // One part is base64-encoded, encrypted and base64-encoded again (about 16/9 of its size), and the sealed request
-// must stay inside the hosted site's 512 KiB request limit (backend/worker.mjs MAX_BODY_BYTES).
-const RELAY_UPLOAD_PART_BYTES = 256 * 1024;
+// must stay inside the hosted site's 512 KiB request limit (backend/worker.mjs MAX_BODY_BYTES). Parts stay small enough
+// for a slow phone network to carry one well inside its wait: 256 KiB parts took 3.4 s each on a phone, and one that ran
+// out of time failed the whole file, which then started over from its first part (2026-11-17: a 12 MiB recording
+// arrived on the fifth try, after 72 parts had been sent for nothing).
+const RELAY_UPLOAD_PART_BYTES = 128 * 1024;
+// Parts in flight at once: each pays a round trip through the relay to the computer, and two overlap it.
+const RELAY_UPLOAD_PARALLEL = 2;
+// How long (ms) the relay waits for the computer to take one part; the page allows this plus its margin, which also
+// covers sending the part over a slow network.
+const RELAY_UPLOAD_WAIT_MS = 30000;
+// A part lost on the way is sent again after these pauses; the computer keeps parts by number, so it stores it once.
+const RELAY_UPLOAD_RETRY_MS = [1000, 2000, 4000, 8000, 15000];
+// Passes over one file: its parts, then any the computer says it lacks.
+const RELAY_UPLOAD_ROUNDS = 4;
+// Uploads under way by file: a send tried again (SEND_RETRY_MS, or the composer's early upload) carries on from the parts
+// the computer already has, under the same upload id.
+const relay_uploads = new WeakMap();
 // Files of the computer's rooms come back in frames of about 1 MB over the one relay connection that also carries every
 // room read: only this many are read at once, so a room full of images cannot hold back its messages until they time out
 // (2026-11-16: opening a room with 51 screenshots read 46 MB at once; message reads and sends timed out, and the retried
@@ -213,6 +228,7 @@ state.create_api_max_requests = DEFAULT_API_MAX_REQUESTS;
 // Whether the new room lets its members draw with this computer's image service; chosen per room, never remembered.
 state.create_image_generation = false;
 let create_preferences_pending = {}, create_preferences_saving = null, create_preferences_version = 0;
+let participant_choices_pending = {}, participant_choices_saving = null;
 const PLATFORM_CLIENTS = { Codex: [{ value: "codex_cli", label: "Codex CLI" }, { value: "codex", label: "Codex App" }],
   Claude: [{ value: "claude", label: "Claude Code CLI" }],
   Antigravity: [{ value: "antigravity_cli", label: "Antigravity CLI" }, { value: "antigravity", label: "Antigravity App" }] };
@@ -1110,7 +1126,15 @@ async function refresh_room_content(room_id, version, versions) {
     await Promise.all([room_read, history_read]);
     if (current()) publish_view();
   } catch (error) {
-    if (current()) { state.messages_loading = false; state.messages_failure = error.message; publish_view(); }
+    // With the room's messages already on screen a failed re-read changes nothing there: the connection status says it,
+    // and reconnecting reads again by itself. Only a room with nothing to show tells why in its place (2026-11-17: a
+    // relay blip put a full-width error under the cards every few minutes).
+    if (current()) {
+      state.messages_loading = false;
+      if (!state.messages.length) state.messages_failure = error.message;
+      else set_connection(false);
+      publish_view();
+    }
     throw error;
   }
 }
@@ -1262,7 +1286,7 @@ async function select_room(room_id) {
   publish_view();
   const reading = state.opening = refresh_room();
   try { await reading; }
-  catch (error) { if (state.room?.id === room_id) state.messages_failure = error.message; throw error; }
+  catch (error) { if (state.room?.id === room_id && !state.messages.length) state.messages_failure = error.message; throw error; }
   finally {
     if (state.opening === reading) state.opening = null;
     if (state.messages_loading && state.room?.id === room_id) { state.messages_loading = false; publish_view(); }
@@ -1949,7 +1973,7 @@ async function send_message(event) {
   const reply_to = state.reply_to;
   cancel_reply();
   const preview = { author: payload.author, text: payload.text, created_at: new Date().toISOString(), attachment_start: draft_start(drafts) || 1,
-    files: drafts.map(file => ({ name: file.file.name, preview_url: file.preview_url })) };
+    files: drafts.map(file => ({ name: file.file.name, preview_url: file.preview_url, uploaded: Boolean(file.uploaded) })) };
   state.sending_drafts = drafts;
   state.attachment_drafts = [];
   // A message the site will likely queue shows at once as a row in the queue tray instead of a card in the transcript,
@@ -2055,6 +2079,8 @@ function discard_sending(id) {
   const failed = state.failed_sends.find((item) => item.id === id);
   if (!failed) return;
   release_files(failed.drafts);
+  // Files of a send the site never saved are taken back; one it did save refuses, and stays with its message.
+  failed.drafts.forEach(discard_draft_upload);
   state.failed_sends = state.failed_sends.filter((item) => item !== failed);
 }
 
@@ -2119,6 +2145,7 @@ function add_attachments(files, target = null) {
     renumber_placeholders(null);
     added.forEach(item => { item.placeholder = draft_placeholder(item, state.attachment_drafts.indexOf(item) + 1); });
     insert_placeholders(added.map(item => item.placeholder).join(" "), target);
+    preupload_drafts(added);
   }
   render_attachment_drafts();
   publish_view();
@@ -2213,6 +2240,7 @@ function remove_attachment(ids) {
     if (!file) continue;
     if (file.preview_url) URL.revokeObjectURL(file.preview_url);
     state.attachment_drafts = state.attachment_drafts.filter(item => item !== file);
+    discard_draft_upload(file);
     renumber_placeholders(file);
   }
   render_attachment_drafts();
@@ -2229,20 +2257,51 @@ function render_attachment_drafts() {
   element("attachment-status").textContent = state.upload_status;
 }
 
+/** Upload one draft file as `actor`; an earlier upload under another actor is replaced by a fresh submission. */
+async function upload_draft(room_id, actor, item) {
+  item.upload_submission ??= item.id;
+  if (item.actor && item.actor !== actor) { item.upload_submission = new_submission_id(); item.uploaded = null; }
+  item.actor = actor;
+  item.room_id = room_id;
+  const params = new URLSearchParams({ file_name: item.file.name, actor, submission_id: item.upload_submission });
+  const result = await post_room_file(`/api/rooms/${room_id}/attachments?${params}`, item.file, localStorage.getItem(`discuss-access:${room_id}`));
+  item.uploaded = result.attachment.id;
+}
+
+/**
+ * Start uploading files as soon as they are in the composer, one after another, so sending has only the text left to
+ * post. A failure here stays silent: sending uploads the file again and reports there. The welcome page has no room yet.
+ */
+let preupload_chain = Promise.resolve();
+function preupload_drafts(items) {
+  const room = state.room;
+  if (!room || room.archived) return;
+  for (const item of items) {
+    item.uploading = preupload_chain = preupload_chain.then(() => item.removed || item.uploaded ? null : upload_draft(room.id, "用户", item))
+      .catch(() => null).finally(() => { item.uploading = null; if (item.removed) discard_draft_upload(item); });
+  }
+}
+
+/** Take back a removed file uploaded ahead of sending; files never sent are also cleared by the site after a day. */
+function discard_draft_upload(item) {
+  item.removed = true;
+  if (item.uploading || !item.uploaded || !item.room_id) return;
+  const path = `/api/rooms/${encodeURIComponent(item.room_id)}/attachments/${encodeURIComponent(item.uploaded)}/discard`;
+  item.uploaded = null;
+  request_json(path, {}).catch(() => null);
+}
+
 /** Upload once per actual uploader, retaining receipts across ambiguous send failures. */
 async function upload_message_attachments(room_id, actor, drafts) {
   const identifiers = [];
   for (const [index, item] of drafts.entries()) {
+    // A file still uploading from the composer finishes first, so it is not sent twice.
+    if (item.uploading) await item.uploading;
     if (!item.uploaded || item.actor !== actor) {
-      item.upload_submission ??= item.id;
-      if (item.actor && item.actor !== actor) { item.upload_submission = new_submission_id(); item.uploaded = null; }
-      item.actor = actor;
       state.upload_status = t('正在上传 {value1}/{value2} · {value3}', { value1: index + 1, value2: drafts.length, value3: item.file.name });
       render_attachment_drafts();
       publish_view();
-      const params = new URLSearchParams({ file_name: item.file.name, actor, submission_id: item.upload_submission });
-      const result = await post_room_file(`/api/rooms/${room_id}/attachments?${params}`, item.file, localStorage.getItem(`discuss-access:${room_id}`));
-      item.uploaded = result.attachment.id;
+      await upload_draft(room_id, actor, item);
     }
     identifiers.push(item.uploaded);
     // The sending card shows each file as uploading until it is in; the card's status says what is left.
@@ -2300,6 +2359,21 @@ function link_attachment_placeholders(html, files = []) {
   });
 }
 
+// The largest box a message image shows in (frontend/markdown.css `.attachment-image img`).
+const ATTACHMENT_IMAGE_MAX_WIDTH = 360, ATTACHMENT_IMAGE_MAX_HEIGHT = 320;
+
+/**
+ * The size an image the site measured shows at, as CSS variables on its button: the image and its loading box both
+ * take it, so the image arriving pushes nothing below it down (2026-11-17: a screenshot growing from the 160×120 box
+ * to 320px moved the cards under it on a phone). An image without a size keeps the box and its own height.
+ */
+function attachment_image_style(file) {
+  const width = Number(file.width), height = Number(file.height);
+  if (!(width > 0 && height > 0)) return "";
+  const shown = Math.max(1, Math.floor(Math.min(width, ATTACHMENT_IMAGE_MAX_WIDTH, ATTACHMENT_IMAGE_MAX_HEIGHT * width / height)));
+  return ` style="--image-width: ${shown}px; --image-ratio: ${width} / ${height}"`;
+}
+
 /** Render immutable file cards shared by messages, original-message dialogs, and themes. */
 function attachment_markup(files = []) {
   if (!files.length) return "";
@@ -2310,7 +2384,7 @@ function attachment_markup(files = []) {
     // Files of the computer's rooms are not on this website: they are read through the relay once shown or clicked.
     const source = state.remote_rooms ? `data-relay-src="${url}"` : `src="${url}"`;
     const download = attachment_download_attributes(file);
-    if (file.content_type.startsWith("image/")) return `<button type="button" class="attachment-image" ${preview_attributes}>
+    if (file.content_type.startsWith("image/")) return `<button type="button" class="attachment-image" ${preview_attributes}${attachment_image_style(file)}>
       <img ${source} alt="${name}" loading="lazy"></button>`;
     // Audio and video play in place with the browser's own controls; a format it cannot decode still has its download.
     if (/^(audio|video)\//.test(file.content_type)) {
@@ -3213,17 +3287,56 @@ async function relay_room_bytes(path) {
   return new Blob(parts, { type });
 }
 
-/** Send a file to a room route on the computer in parts; the computer hands it to its website whole. */
+/** Send one part of an upload, again after a loss on the way (network, timeout, the relay reconnecting). */
+async function relay_upload_part(payload) {
+  for (let attempt = 0; ; attempt += 1) {
+    try {
+      const answer = await relay_exchange("room-upload", payload, RELAY_UPLOAD_WAIT_MS);
+      if (answer.status >= 400) throw Object.assign(new Error(server_text(answer.body?.error_text, answer.body?.error) || t('附件上传失败')), { status: answer.status, refused: true });
+      return answer;
+    } catch (error) {
+      const lost = !error.refused && (error.unconfirmed || error.offline || error instanceof TypeError || error.status >= 500 || error.status === 429);
+      if (!lost || attempt >= RELAY_UPLOAD_RETRY_MS.length) throw error;
+      await new Promise((resolve) => setTimeout(resolve, RELAY_UPLOAD_RETRY_MS[attempt]));
+    }
+  }
+}
+
+/**
+ * Send a file to a room route on the computer in parts, a few at a time; the computer hands it to its website whole.
+ * Parts it already has are not sent again when the same file is tried again (relay_uploads).
+ */
 async function relay_upload(path, data) {
   const bytes = new Uint8Array(data instanceof Blob ? await data.arrayBuffer() : data);
-  const id = crypto.randomUUID(), total = Math.max(1, Math.ceil(bytes.length / RELAY_UPLOAD_PART_BYTES));
-  let answer;
-  for (let index = 0; index < total; index++) {
-    const part = bytes.subarray(index * RELAY_UPLOAD_PART_BYTES, (index + 1) * RELAY_UPLOAD_PART_BYTES);
-    answer = await relay_exchange("room-upload", { id, path, index, total, size: bytes.length, data: bytes_to_base64(part) });
-    if (answer.status >= 400) throw Object.assign(new Error(server_text(answer.body?.error_text, answer.body?.error) || t('附件上传失败')), { status: answer.status });
+  const total = Math.max(1, Math.ceil(bytes.length / RELAY_UPLOAD_PART_BYTES));
+  let upload = relay_uploads.get(data);
+  if (upload?.path !== path || upload.total !== total) relay_uploads.set(data, upload = { path, total, id: crypto.randomUUID(), done: new Set() });
+  // Rounds: the parts not yet taken; then the parts the computer says it lacks (it restarted, or a part's answer went
+  // astray). A computer too old to say which starts over once, under a new id.
+  for (let round = 0; round < RELAY_UPLOAD_ROUNDS; round += 1) {
+    const queue = [...Array(total).keys()].filter((index) => !upload.done.has(index));
+    // Every part taken but no answer for the file (the last answer was lost): the last part asks for it again.
+    if (!queue.length) queue.push(total - 1);
+    let finished = null, missing = null, failure = null;
+    const send = async () => {
+      for (let index; !failure && (index = queue.shift()) !== undefined;) {
+        const payload = { id: upload.id, path, index, total, size: bytes.length,
+          data: bytes_to_base64(bytes.subarray(index * RELAY_UPLOAD_PART_BYTES, (index + 1) * RELAY_UPLOAD_PART_BYTES)) };
+        try {
+          const answer = await relay_upload_part(payload);
+          upload.done.add(index);
+          if (answer.body?.attachment) finished = answer.body;
+          else if (Array.isArray(answer.body?.missing)) missing = answer.body.missing;
+        } catch (error) { failure = error; }
+      }
+    };
+    await Promise.all(Array.from({ length: Math.min(RELAY_UPLOAD_PARALLEL, queue.length) }, send));
+    if (failure) throw failure;
+    if (finished) { relay_uploads.delete(data); return finished; }
+    if (missing) for (const index of missing) upload.done.delete(index);
+    else relay_uploads.set(data, upload = { path, total, id: crypto.randomUUID(), done: new Set() });
   }
-  return answer.body;
+  throw new Error(t('附件上传失败'));
 }
 
 /** Send file bytes to a room route on this website, or on the paired computer while its rooms are shown. */
@@ -3288,28 +3401,26 @@ function watch_relay_media(media) {
   relay_media_observer.observe(box);
 }
 
-// WebKit (every iPhone browser) has no scroll anchoring: an image above the screen growing from its spinner box to its
-// own height pushed everything shown down, and images arriving one after another over a slow relay made the transcript
-// glide on by itself (2026-11-16, iPhone). There the position is kept by hand when such an image has loaded.
-const NATIVE_SCROLL_ANCHORING = typeof CSS !== "undefined" && CSS.supports?.("overflow-anchor", "auto");
+/**
+ * Resolve once the reader has stopped scrolling the transcript (it carries data-reader-scrolling meanwhile). An image
+ * growing from its spinner box to its own height above the screen pushes what the reader sees down; landing after the
+ * scroll, that growth is offset in the same frame (by the page on WebKit, by the browser elsewhere), where in the middle
+ * of a touch scroll on an iPhone it could only jump (2026-11-17 recording: 320px).
+ */
+function transcript_settled(scroller) {
+  if (!scroller?.hasAttribute("data-reader-scrolling")) return Promise.resolve();
+  return new Promise(resolve => scroller.addEventListener("reader-settled", resolve, { once: true }));
+}
 
 /** Give one relayed image or media element its file; one that cannot be read keeps its name. */
 function load_relay_media(media) {
   if (!media.isConnected || media.getAttribute("src")) return;
-  relay_file_url(media.dataset.relaySrc).then(url => {
-    const scroller = !NATIVE_SCROLL_ANCHORING && media.closest(".channel-transcript");
-    if (scroller) {
-      const box = relay_media_box(media), before = box.getBoundingClientRect().height;
-      const keep = () => {
-        if (!box.isConnected) return;
-        // Only a box that was wholly above the top of the shown area (judged by its bottom before it grew) moves what
-        // the reader sees.
-        const rect = box.getBoundingClientRect(), grown = rect.height - before;
-        if (grown && rect.bottom - grown <= scroller.getBoundingClientRect().top) scroller.scrollTop += grown;
-      };
-      media.addEventListener("load", keep, { once: true });
-      media.addEventListener("loadedmetadata", keep, { once: true });
-    }
+  relay_file_url(media.dataset.relaySrc).then(async url => {
+    const scroller = media.closest(".channel-transcript");
+    // Decoded first, the image has its size the moment it gets its file, so the growth and its offset share one frame.
+    if (scroller && media.tagName === "IMG") await Object.assign(new Image(), { src: url }).decode().catch(() => null);
+    await transcript_settled(scroller);
+    if (!media.isConnected || media.getAttribute("src")) return;
     media.src = url;
   }).catch(() => { media.dataset.relayFailed = "1"; });
 }
@@ -3997,6 +4108,27 @@ function default_launch_entry(name) {
   if (!LAUNCH_CLIENTS[name]?.some(item => item.value !== "api") && !state.launch.profiles[name]?.adapter) write_launch_field(name, "adapter", "api");
 }
 
+/** A platform card's model and effort are usage preferences: remember them as that software's default, like other form
+ * choices. Instances from presets and a card switched to another entry than the saved one keep theirs to this room. */
+function remember_participant_choice(name, field, value) {
+  const saved = state.launch.saved_profiles?.[name];
+  if (!state.launch.available || platform_of(name) !== name || !saved || saved.adapter !== state.launch.profiles[name].adapter) return;
+  if ((saved[field] || "") === value) return;
+  if (value) saved[field] = value; else delete saved[field];
+  participant_choices_pending = { ...participant_choices_pending, [name]: { ...participant_choices_pending[name], [field]: value } };
+  flush_participant_choices();
+}
+
+/** Serialize choice saves so a slower earlier save cannot overwrite the latest pick. */
+function flush_participant_choices() {
+  if (participant_choices_saving || !Object.keys(participant_choices_pending).length) return;
+  const patch = participant_choices_pending;
+  participant_choices_pending = {};
+  participant_choices_saving = local_launch_request("settings", { participant_choices: patch })
+    .catch(error => notify("error", t('模型与强度偏好未保存：{value1}', { value1: error.message })))
+    .finally(() => { participant_choices_saving = null; flush_participant_choices(); });
+}
+
 /** Keep software drafts separate from shared room records and from discussion advancement mode. */
 function write_launch_field(name, field, value) {
   if (name === "workspace") state.launch.workspace[field] = value;
@@ -4014,6 +4146,7 @@ function write_launch_field(name, field, value) {
     }
     if (field === "base_url") delete state.launch.profiles[name].api_key_ref;
     fill_api_key(state.launch.profiles[name]);
+    if (["model", "effort"].includes(field)) remember_participant_choice(name, field, value);
   }
   if (field === "adapter") render_launch_settings();
   else render_launch_summaries();

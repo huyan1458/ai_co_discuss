@@ -1,10 +1,12 @@
 """Test CLI writes, read-only online instructions, and context provenance."""
 
 import hashlib
+import io
 import json
 import mimetypes
 import os
 import sqlite3
+import struct
 import tempfile
 import threading
 import time
@@ -17,12 +19,24 @@ from urllib.error import HTTPError
 from urllib.parse import parse_qs, urlencode, urlsplit
 from urllib.request import Request, urlopen
 
-from backend.server import DiscussionServer, connect_db, create_room, init_database, require_room
+from backend.server import DiscussionServer, connect_db, create_room, image_size, init_database, require_room
 from backend.texts import Text, incoming_text, load_texts, save_text
 
 
 # shutdown() waits for the server loop to notice; the default 0.5 s poll made every test end half a second late.
 SERVER_POLL_SECONDS = 0.02
+
+
+def png_header(width, height):
+    """The signature and IHDR chunk of a PNG of this size; nothing after it is read."""
+    return b"\x89PNG\r\n\x1a\n" + struct.pack(">I", 13) + b"IHDR" + struct.pack(">II", width, height) + bytes(9)
+
+
+def jpeg_header(width, height, exif=b""):
+    """A JPEG start, a JFIF segment, an optional EXIF segment and a baseline frame header of this size."""
+    app1 = b"\xff\xe1" + struct.pack(">H", len(exif) + 2) + exif if exif else b""
+    return (b"\xff\xd8\xff\xe0" + struct.pack(">H", 16) + b"JFIF\x00" + bytes(9) + app1
+            + b"\xff\xc0" + struct.pack(">HBHHB", 11, 8, height, width, 1) + bytes(3) + b"\xff\xd9")
 
 class DiscussionTests(unittest.TestCase):
     """Verify the observable POC workflow using isolated SQLite databases."""
@@ -639,6 +653,70 @@ class DiscussionTests(unittest.TestCase):
         third = {"author": "用户", "text": f"[图片 #{start + 3}]", "attachment_ids": [upload("d")], "attachment_start": start + 3, "submission_id": "numbered-3"}
         self.assertEqual(self.request(base + "/messages", third)[1]["message"]["text"], f"[图片 #{start + 3}]")
         self.assertEqual(self.request(base)[1]["next_attachment_number"], start + 4)
+
+    def test_image_size_reads_each_format_header(self):
+        """Sizes come from headers alone; a quarter-turn EXIF orientation swaps them as browsers show the picture."""
+        exif = b"Exif\x00\x00MM\x00\x2a" + struct.pack(">IH", 8, 1) + struct.pack(">HHIHH", 0x0112, 3, 1, 6, 0) + bytes(4)
+        cases = {
+            "png": (png_header(640, 480), (640, 480)),
+            "gif": (b"GIF89a" + struct.pack("<HH", 32, 16) + bytes(8), (32, 16)),
+            "webp lossy": (b"RIFF\0\0\0\0WEBPVP8 \0\0\0\0\0\0\0\x9d\x01\x2a" + struct.pack("<HH", 300, 200), (300, 200)),
+            "webp lossless": (b"RIFF\0\0\0\0WEBPVP8L\0\0\0\0\x2f" + struct.pack("<I", 299 | 199 << 14) + bytes(8), (300, 200)),
+            "webp extended": (b"RIFF\0\0\0\0WEBPVP8X\0\0\0\0" + bytes(4) + (299).to_bytes(3, "little") + (199).to_bytes(3, "little"), (300, 200)),
+            "jpeg rotated": (jpeg_header(400, 300, exif), (300, 400)),
+            "jpeg upright": (jpeg_header(400, 300), (400, 300)),
+            "truncated png": (b"\x89PNG\r\n\x1a\n", (0, 0)),
+            "not an image": (b"plain text", (0, 0)),
+        }
+        for name, (data, size) in cases.items():
+            with self.subTest(name):
+                self.assertEqual(image_size(io.BytesIO(data)), size)
+
+    def test_image_sizes_reach_messages_and_older_images_are_measured_once(self):
+        """Uploads record the size; images stored before the columns existed are measured on first read and kept."""
+        base = f"/api/rooms/{self.room['id']}"
+        params = urlencode({"actor": "用户", "file_name": "photo.jpg", "submission_id": "sized-photo"})
+        file = json.loads(self.attachment_request(base + "/attachments?" + params, jpeg_header(400, 300))[2])["attachment"]
+        self.assertEqual((file["width"], file["height"]), (400, 300))
+        payload = {"author": "用户", "text": "[图片 #1]", "attachment_ids": [file["id"]], "submission_id": "sized-message"}
+        message = self.request(base + "/messages", payload)[1]["message"]
+        self.assertEqual((message["attachments"][0]["width"], message["attachments"][0]["height"]), (400, 300))
+        if self.external:
+            return
+        # Back to the attachments table as released before sizes were recorded, then upgrade it the way startup does.
+        with closing(sqlite3.connect(self.database)) as connection, connection:
+            connection.execute("ALTER TABLE attachments DROP COLUMN width")
+            connection.execute("ALTER TABLE attachments DROP COLUMN height")
+        init_database(self.database, seed=False)
+        stored = "SELECT width,height FROM attachments WHERE id=?"
+        with closing(sqlite3.connect(self.database)) as connection:
+            self.assertEqual(connection.execute(stored, (file["id"],)).fetchone(), (None, None))
+        shown = self.request(base + "/messages")[1]["messages"][0]["attachments"][0]
+        self.assertEqual((shown["width"], shown["height"]), (400, 300))
+        with closing(sqlite3.connect(self.database)) as connection:
+            self.assertEqual(connection.execute(stored, (file["id"],)).fetchone(), (400, 300))
+        self.assertEqual(self.request(base + "/messages", payload)[1]["message"]["attachments"], [shown])
+
+    def test_unsent_uploads_can_be_taken_back_but_sent_files_stay(self):
+        """Files uploaded ahead of sending: the uploader may take one back; a sent file never goes; stale ones are cleared."""
+        base = f"/api/rooms/{self.room['id']}"
+
+        def upload(name):
+            params = urlencode({"actor": "用户", "file_name": f"{name}.png", "submission_id": f"early-{name}"})
+            return json.loads(self.attachment_request(base + "/attachments?" + params, b"\x89PNG\r\n\x1a\n" + name.encode())[2])["attachment"]["id"]
+
+        removed, sent = upload("removed"), upload("sent")
+        self.assertEqual(self.request(f"{base}/attachments/{removed}/discard", {})[0], 200)
+        self.assertEqual(self.request(f"{base}/attachments/{removed}")[0], 404)
+        self.request(base + "/messages", {"author": "用户", "text": "[图片 #1]", "attachment_ids": [sent], "submission_id": "early-message"})
+        self.assertEqual(self.request(f"{base}/attachments/{sent}/discard", {})[0], 409)
+        if getattr(self, "database", None):
+            stale = upload("stale")
+            with closing(sqlite3.connect(self.database)) as connection, connection:
+                connection.execute("UPDATE attachments SET created_at='2000-01-01T00:00:00+00:00' WHERE id IN (?,?)", (stale, sent))
+            upload("fresh")
+            self.assertEqual(self.request(f"{base}/attachments/{stale}")[0], 404)
+            self.assertEqual(self.request(f"{base}/attachments/{sent}")[0], 200)
 
     def test_attachments_reject_cross_room_owner_path_and_size(self):
         """Untrusted MIME and filenames cannot create executable or cross-room file access."""

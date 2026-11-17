@@ -63,10 +63,14 @@ html[data-theme="channel-light"] .markdown-body {
 
 .message-attachments { display: flex; flex-direction: column; align-items: flex-start; gap: 10px; margin: 10px 0 0; max-width: 100%; }
 .attachment-image { display: block; max-width: 100%; padding: 0; border: 0; border-radius: 8px; overflow: hidden; background: none; cursor: zoom-in; }
-.attachment-image img { display: block; width: auto; height: auto; max-width: min(360px, 100%); max-height: 320px; object-fit: contain; border-radius: inherit; }
+/* --image-width / --image-ratio (web/app.js `attachment_image_style`): the size the site measured, within the limits
+   below, so the image holds its place before its bytes arrive; without them it takes its own size once loaded. */
+.attachment-image img { display: block; width: var(--image-width, auto); height: auto; aspect-ratio: var(--image-ratio, auto);
+  max-width: min(360px, 100%); max-height: 320px; object-fit: contain; border-radius: inherit; }
 /* An image still coming through the relay (no src yet) shows a grey box with a spinning circle instead of its bare
-   file name; a failed one keeps the box and says so. */
-.attachment-image:has(img[data-relay-src]:not([src])) { position: relative; display: grid; place-items: center; width: 160px; height: 120px;
+   file name, at the image's own size when known; a failed one keeps the box and says so. */
+.attachment-image:has(img[data-relay-src]:not([src])) { position: relative; display: grid; place-items: center;
+  width: min(var(--image-width, 160px), 100%); aspect-ratio: var(--image-ratio, 4 / 3);
   color: inherit; background: color-mix(in srgb, currentColor 8%, transparent); }
 .attachment-image img[data-relay-src]:not([src]) { display: none; }
 .attachment-image:has(img[data-relay-src]:not([src]):not([data-relay-failed]))::after { content: ""; width: 24px; height: 24px;
