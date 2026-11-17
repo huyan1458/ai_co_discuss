@@ -723,6 +723,33 @@ const mirror = ref(null);
 function sync_mirror() {
   if (mirror.value && prompt.value?.textareaRef) mirror.value.scrollTop = prompt.value.textareaRef.scrollTop;
 }
+// Text measured to find how far the browser insets a textarea's text on each side (iOS WebKit has used 3px).
+const INSET_SAMPLE = "MMMMMMMMMMMMMMMMMMMM";
+const MAX_TEXT_INSET = 8;
+/**
+ * The textarea's own inset of its text on each side, measured: an unwrapped probe scrolls exactly as wide as the text
+ * plus both insets. A mirror narrower or wider than the transparent text wraps a character apart and the caret lands
+ * beside the painted word (user 2026-11-17, iPhone); the fixed 3px guess in channel.css stays when this cannot tell.
+ */
+function measure_text_inset(editor) {
+  const style = getComputedStyle(editor);
+  const shared = { position: "absolute", visibility: "hidden", left: "-9999px", top: "0", font: style.font, letterSpacing: style.letterSpacing, whiteSpace: "pre" };
+  const probe = document.createElement("textarea"), text = document.createElement("span");
+  probe.setAttribute("wrap", "off");
+  Object.assign(probe.style, shared, { width: "20px", height: "40px", padding: "0", border: "0", overflow: "scroll" });
+  probe.value = text.textContent = INSET_SAMPLE;
+  Object.assign(text.style, shared);
+  document.body.append(probe, text);
+  const inset = (probe.scrollWidth - text.getBoundingClientRect().width) / 2;
+  probe.remove(); text.remove();
+  // scrollWidth is whole pixels, so a browser without an inset can measure a fraction below zero.
+  return inset > -1 && inset <= MAX_TEXT_INSET ? Math.max(0, Math.round(inset)) : null;
+}
+watch(mirror, (element) => {
+  const editor = prompt.value?.textareaRef;
+  const inset = element && editor ? measure_text_inset(editor) : null;
+  if (inset !== null) element.style.insetInline = `${inset}px`;
+});
 // Creating the watch evaluates the mirror, which reads mention declarations further down; wait until setup has run them.
 onMounted(() => watch(mention_mirror, () => nextTick(sync_mirror), { flush: "post" }));
 

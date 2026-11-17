@@ -218,8 +218,10 @@ const shown = computed(() => {
   }
   return { ...timeline.value, executions: with_users.value.filter((item) => keys.has(`${item.source}:${item.id}`)) };
 });
+// Executions on show, without the owner's own rows the timeline adds between them (they are messages, not runs).
+const shown_runs = computed(() => shown.value?.executions.filter((item) => item.source !== "user").length || 0);
 const earlier_count = computed(() => timeline.value && !overview.value
-  ? timeline.value.executions.length - shown.value.executions.filter((item) => item.source !== "user").length : 0);
+  ? timeline.value.executions.length - shown_runs.value : 0);
 const when = (ms) => new Date(ms).toLocaleString(locale, { month: "numeric", day: "numeric", hour: "2-digit", minute: "2-digit", hour12: false });
 const tasks = computed(() => overview.value ? task_overview(segments.value) : []);
 // The site returns only the latest executions, so the first task may have begun before them.
@@ -606,7 +608,7 @@ const selected_notes = computed(() => {
         </button>
       </section>
 
-      <p v-if="earlier_count" class="wf-earlier">{{ t('显示最近 {value1} 次执行', { value1: shown.executions.length }) }}<button type="button" class="wf-text-button" @click="window_count += WINDOW_STEP">{{ t('显示更早的 {value1} 次', { value1: Math.min(WINDOW_STEP, earlier_count) }) }}</button></p>
+      <p v-if="earlier_count" class="wf-earlier">{{ t('显示最近 {value1} 次执行', { value1: shown_runs }) }}<button type="button" class="wf-text-button" @click="window_count += WINDOW_STEP">{{ t('显示更早的 {value1} 次', { value1: Math.min(WINDOW_STEP, earlier_count) }) }}</button></p>
       <ol v-if="overview" class="wf-runs" :aria-label="t('任务概览')">
         <li v-for="task in tasks" :key="task.key" :class="{ 'is-open': opened_tasks.has(task.key) }">
           <button type="button" class="wf-run" :aria-expanded="opened_tasks.has(task.key)" @click="toggle_task(task.key)">
@@ -1032,7 +1034,7 @@ const selected_notes = computed(() => {
 :is(.wf-end, .wf-name-end) small.is-failed { color: var(--wf-failed); }
 :is(.wf-end, .wf-name-end) small.is-running { color: var(--wf-accent); }
 
-/* Detail: a panel floating under the opened name; on a phone it opens in place under the row. Sections read top-down:
+/* Detail: a panel floating under the opened name; on a phone a sheet floating over the bottom. Sections read top-down:
    who and how long, where the time went, what was asked, what came of it, then the story in time order. */
 .wf-detail { position: absolute; z-index: 20; display: grid; gap: 14px; width: min(560px, calc(100% - 16px)); max-height: min(70vh, 600px); padding: 14px 16px 16px; overflow: auto;
   border: 1px solid var(--channel-edge-float, var(--wf-border)); border-radius: 12px; background: var(--ui-bg-elevated); box-shadow: var(--channel-shadow-float, 0 12px 32px rgb(0 0 0 / .3));
@@ -1124,6 +1126,7 @@ const selected_notes = computed(() => {
 
 @keyframes wf-ping { from { opacity: .7; transform: scale(1); } 70%, to { opacity: 0; transform: scale(2.8); } }
 @keyframes wf-spin { to { transform: rotate(360deg); } }
+@keyframes wf-sheet-in { from { opacity: 0; transform: translateY(24px); } }
 @keyframes wf-pulse { 50% { opacity: .45; } }
 /* Motion: the waterfall draws itself. Running bars grow every frame (in script), their leading edge fades out as a trace
    draws running spans, and a light sweeps along them; a row that appears slides in and its bars unroll from the left. */
@@ -1191,7 +1194,10 @@ const selected_notes = computed(() => {
 .wf-now-time { flex: none; margin-left: auto; color: var(--wf-muted); font-family: var(--wf-mono); font-size: 12px; font-variant-numeric: tabular-nums; }
 .wf-now-status { display: -webkit-box; font-size: 13px; line-height: 18px; white-space: normal; -webkit-box-orient: vertical; -webkit-line-clamp: 2; }
 .wf-now-note { overflow: hidden; color: var(--wf-muted); font-size: 12px; line-height: 17px; text-overflow: ellipsis; white-space: nowrap; }
-.wf.is-compact .wf-detail { position: static; width: auto; max-height: none; margin: 2px 10px 12px; padding: 14px; box-shadow: none; }
+/* On a phone the detail floats as a sheet over the bottom of the screen instead of opening inside the list, so the
+   rows keep their place (user 2026-11-17: the in-place panel broke the page apart). A tap outside closes it. */
+.wf.is-compact .wf-detail { position: fixed; inset: auto 8px calc(8px + env(safe-area-inset-bottom)) 8px; z-index: 60; width: auto; max-height: min(68dvh, 600px); margin: 0; padding: 14px;
+  border-radius: 16px; animation: wf-sheet-in 180ms cubic-bezier(.2, .8, .2, 1); }
 .wf.is-compact .wf-dist-key { grid-template-columns: repeat(2, minmax(0, 1fr)); }
 /* Touch: controls keep their look but take a fingertip; a note's tick is easier to hit. */
 @media (pointer: coarse) {
