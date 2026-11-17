@@ -659,5 +659,19 @@
   "自行决定": "Its own choice",
   "第 {value1} 行": "Line {value1}",
   "第 {value1}–{value2} 行": "Lines {value1}–{value2}",
-  "主持人声明 Goal 待你确认后，5 分钟内你没在房间回复，就发到微信；直接回复微信消息即作为你的发言发回该房间，引用某条通知回复则发回那条通知的房间。成员向你提的问题等你 5 分钟未答也会发来，回复选项编号即直接作答，其他文字交给主持人代为选择。只转发文字，登录凭据只存这台电脑。": "If you do not reply in the room within 5 minutes after the host marks a Goal as awaiting your confirmation, a notification is sent to Weixin. Reply in Weixin to post your message in that room; quoting a notification sends it to that notification's room. A question a member asks you is also sent once it has waited 5 minutes: reply with an option number to answer it directly, or anything else for the host to choose for you. Only text is forwarded. Login credentials stay on this computer."
+  "主持人声明 Goal 待你确认后，5 分钟内你没在房间回复，就发到微信；直接回复微信消息即作为你的发言发回该房间，引用某条通知回复则发回那条通知的房间。成员向你提的问题等你 5 分钟未答也会发来，回复选项编号即直接作答，其他文字交给主持人代为选择。只转发文字，登录凭据只存这台电脑。": "If you do not reply in the room within 5 minutes after the host marks a Goal as awaiting your confirmation, a notification is sent to Weixin. Reply in Weixin to post your message in that room; quoting a notification sends it to that notification's room. A question a member asks you is also sent once it has waited 5 minutes: reply with an option number to answer it directly, or anything else for the host to choose for you. Only text is forwarded. Login credentials stay on this computer.",
+  "配置 {value1}": "Configure {value1}",
+  "配置：软件、模型、描述与专属提示词（也可双击卡片）": "Configure: software, model, description and expert prompt (or double-click the card)",
+  "从工作流移除这张卡片": "Remove this card from the workflow",
+  "每张卡片的角色、软件、模型与专属提示词；改完点工作流页的“保存”写入。": "Each card's role, software, model and expert prompt; click Save on the workflow page to write the changes.",
+  "工作流里的卡片": "Cards in this workflow",
+  "角色名": "Role name",
+  "本机未配置 {value1}，换一个本机已配置的软件才能运行": "{value1} is not set up on this computer; switch to software that is to run this card",
+  "描述": "Description",
+  "一两句：这个角色负责什么": "A sentence or two: what this role is responsible for",
+  "这个软件不分强度": "This software has no strength levels",
+  "项目权限": "Project access",
+  "专属提示词": "Expert prompt",
+  "留空时使用软件预设": "Uses the software preset when empty",
+  "只发给这张卡片的成员，每次唤醒随任务发送": "Sent only to this card's member, with the task each time it is woken"
 }

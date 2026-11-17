@@ -822,6 +822,8 @@ html[data-theme^="channel"] .studio-modal.session-browser-modal { width: calc(10
   html[data-theme^="channel"] .studio-modal.session-browser-modal .dialog-body { flex: 1; min-height: 0; max-height: none; padding: 12px 14px 14px; overflow: hidden; }
 }
 html[data-theme^="channel"] .studio-modal.workflow-editor-modal { width: calc(100vw - 32px); max-width: 920px; }
+/* 专家配置 is a five-column table; the 540px studio width clipped its last columns (user 2026-11-17). */
+html[data-theme^="channel"] .studio-modal.workflow-experts-modal { width: calc(100vw - 32px); max-width: 920px; }
 html[data-theme^="channel"] .studio-modal.workflow-viewer-modal { width: calc(100vw - 32px); max-width: 760px; }
 html[data-theme^="channel"] .studio-modal.channel-consensus-modal { width: calc(100vw - 32px); max-width: 860px; }
 html[data-theme^="channel"] .channel-create-modal .dialog-body { padding: 0; max-height: none; overflow: hidden; }

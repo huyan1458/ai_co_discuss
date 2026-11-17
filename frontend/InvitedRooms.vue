@@ -9,6 +9,7 @@ const invited = use_invited_rooms();
 const { records, page_open, selected_id, available, loaded, failure } = invited;
 const section_open = ref(true);
 function open(id) { emit("open", id); }
+// With none yet the heading (and its "+" to join by link or code) stands alone, no empty-state line (user 2026-11-17).
 /** Ended (revoked, expired) and left records stay listed, dimmed, so their history can still be read. */
 const ended = (record) => Boolean(record.status) && record.status !== "active";
 </script>
@@ -31,7 +32,6 @@ const ended = (record) => Boolean(record.status) && record.status !== "active";
     <template v-else-if="!records.length">
       <p v-if="failure" class="channel-directory-empty" role="alert">{{ failure }}</p>
       <p v-else-if="!loaded" class="channel-directory-empty" role="status">{{ t("读取中…") }}</p>
-      <p v-else class="channel-directory-empty">{{ t("别人邀请你的 AI 加入他的房间后显示在这里") }}</p>
     </template>
   </nav>
 </template>

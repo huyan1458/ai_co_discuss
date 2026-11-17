@@ -16,7 +16,6 @@ import { MiniMap } from "@vue-flow/minimap";
 import "@vue-flow/core/dist/style.css";
 import "@vue-flow/controls/dist/style.css";
 import "@vue-flow/minimap/dist/style.css";
-import ExpertCard from "./ExpertCard.vue";
 import RosterAdd from "./RosterAdd.vue";
 import { access_label as source_access_label } from "../runner/expert_prompts.mjs";
 import { MAX_EDGE_LABEL, MAX_HOST_LABEL, empty_flow, flow_shape } from "../runner/workflow_flow.mjs";
@@ -26,7 +25,8 @@ const access_label = level => ({ read: t('只读'), write: t('可写'), auto: t(
 const flow = defineModel("flow", { type: Object, default: null });
 // Clicking SKILL.md in the "派活以 SKILL.md 为准" hint opens it.
 // A sub-workflow node asks to show that sub-workflow (`fresh` when it was just created).
-const emit = defineEmits(["open-skill", "open-sub"]);
+// "configure": a card's settings (software, model, description, prompt) open in the 专家配置 panel at that card.
+const emit = defineEmits(["open-skill", "open-sub", "configure"]);
 const agents = defineModel("agents", { type: Array, required: true });
 // On a sub-workflow's canvas: the main flow's cards, which may be placed here too; null on the main canvas.
 const shared = defineModel("shared", { type: Array, default: null });
@@ -43,12 +43,13 @@ const narrow = ref(false);
 const icons_only = computed(() => props.compact || narrow.value);
 // Sizes the layout leaves for each kind of node, and the gaps between columns and rows.
 // Member, host and sub-workflow cards are squares (the drag bar is inside the member's square).
-const NODE_WIDTH = { card: 272, start: 84, host: 136, sub: 136 };
-const NODE_HEIGHT = { card: 272, start: 40, host: 136, sub: 136 };
+// A card on the canvas only says who it is (user 2026-11-17); its settings live in the 专家配置 panel.
+const NODE_WIDTH = { card: 240, start: 84, host: 136, sub: 136 };
+const NODE_HEIGHT = { card: 96, start: 40, host: 136, sub: 136 };
 const COLUMN_GAP = 120, ROW_GAP = 28;
 // How far below a node's top its round connection points sit: in its middle. Layout lines these up, not the nodes'
 // tops, so arrows between nodes of different heights run straight.
-const HANDLE_Y = { card: 136, start: 20, host: 68, sub: 68 };
+const HANDLE_Y = { card: 48, start: 20, host: 68, sub: 68 };
 // An arrow's note sits on its middle: the gap it crosses leaves this much on each side of the note (ports, arrowhead).
 const NOTE_CHAR = 11, NOTE_PAD = 16, NOTE_MARGIN = 36;
 // A column an arrow skips over is lifted this far clear of the line the arrow runs along (room for its note too).
@@ -68,7 +69,6 @@ const HISTORY_LIMIT = 100, HISTORY_DELAY = 400;
 const LOOP_OUT = 24, LOOP_CLEARANCE = 32, LOOP_RADIUS = 14;
 // Each wider loop runs this much lower than the one inside it, so loops never share a line.
 const LOOP_STACK = 22;
-const STATUS = { text: "", tone: "" };
 const PRESET_PREFIX = "preset:";
 // A card ID becomes the member name's suffix; 16 characters at most, so a numbered one keeps room for its digits.
 const CARD_BASE = /^[a-z0-9_]{1,14}$/;
@@ -301,12 +301,6 @@ function remove_card(card) {
   const gone = new Set(nodes.value.filter((node) => node.type === "card" && node.data.card === card).map((node) => node.id));
   nodes.value = nodes.value.filter((node) => !gone.has(node.id));
   edges.value = edges.value.filter((edge) => !gone.has(edge.source) && !gone.has(edge.target));
-}
-
-/** Replace a card the expert card rewrote as a whole (its Cancel restores the earlier copy); a main-flow card in place. */
-function set_agent(card, value) {
-  if (own(card)) agents.value = agents.value.map((agent) => agent.card === card ? value : agent);
-  else shared.value = shared.value.map((agent) => agent.card === card ? value : agent);
 }
 
 /** Put a sub-workflow on the main canvas: where the flow turns to it. */
@@ -688,10 +682,19 @@ function drag_stop() { dragging = false; layered.value = true; stored.value = li
           <div class="workflow-card-grip" :title="t('按住拖动')">
             <UIcon name="i-lucide-grip-horizontal" class="workflow-icon" />
           </div>
-          <div class="workflow-card-body nodrag" :class="{ nopan: !TOUCH }">
-            <ExpertCard :preset="agent_of(node.data.card)" :name="agent_of(node.data.card).name" mode="cli" :status="STATUS"
-              :access_locked="Boolean(agent_of(node.data.card).requested_access && agent_of(node.data.card).project_access === 'read')"
-              @update:preset="(value) => set_agent(node.data.card, value)" @remove="remove_card(node.data.card)" />
+          <div v-for="agent in [agent_of(node.data.card)]" :key="agent.card" class="workflow-card-body nodrag" :class="{ nopan: !TOUCH }" :title="agent.description || undefined"
+            @dblclick="emit('configure', agent.card)">
+            <UAvatar :src="bridge.identities[bridge.platform_of(agent.name)]?.icon" :text="bridge.identities[bridge.platform_of(agent.name)]?.initials || '?'" size="md"
+              class="channel-avatar" :class="bridge.identities[bridge.platform_of(agent.name)]?.style" />
+            <div class="workflow-card-who">
+              <strong>{{ agent.label || bridge.default_name(agent.name) }}</strong>
+              <span>{{ bridge.default_name(bridge.platform_of(agent.name)) }}</span>
+              <small>{{ agent.model || t('软件默认模型') }} · {{ access_label(agent.project_access || 'read') }}</small>
+            </div>
+            <div class="workflow-card-tools">
+              <UButton icon="i-lucide-sliders-horizontal" size="xs" color="neutral" variant="ghost" :aria-label="t('配置 {value1}', { value1: agent.label || agent.card })" :title="t('配置：软件、模型、描述与专属提示词（也可双击卡片）')" @click="emit('configure', agent.card)" />
+              <UButton icon="i-lucide-x" size="xs" color="neutral" variant="ghost" :aria-label="t('移除 {value1}', { value1: agent.label || agent.card })" :title="t('从工作流移除这张卡片')" @click="remove_card(agent.card)" />
+            </div>
             <label v-if="agent_of(node.data.card).requested_access" class="workflow-card-grant">
               <input type="checkbox" :checked="agent_of(node.data.card).project_access !== 'read'" @change="grant(agent_of(node.data.card), $event.target.checked)" /> {{ t('允许「{value1}」', { value1: access_label(agent_of(node.data.card).requested_access) }) }}</label>
           </div>
@@ -815,16 +818,20 @@ function drag_stop() { dragging = false; layered.value = true; stored.value = li
 
 /* Members: one square frame, a drag bar on top and the expert card filling the rest. */
 .workflow-card { --workflow-card-edge: color-mix(in srgb, var(--channel-accent, var(--ui-primary)) 45%, var(--ui-border-accented));
-  position: relative; display: flex; flex-direction: column; width: 272px; height: 272px; border: 1.5px solid var(--workflow-card-edge); border-radius: 12px;
+  position: relative; display: flex; flex-direction: column; width: 240px; height: 96px; border: 1.5px solid var(--workflow-card-edge); border-radius: 12px;
   background: var(--ui-bg-elevated); box-shadow: 0 6px 18px rgb(0 0 0 / .28); color: var(--ui-text); }
 .workflow-card-grip { display: flex; flex-shrink: 0; align-items: center; justify-content: center; height: 22px; border-bottom: 1px solid var(--workflow-card-edge); border-radius: 10px 10px 0 0;
   background: color-mix(in srgb, var(--channel-accent, var(--ui-primary)) 16%, var(--ui-bg-elevated)); color: var(--ui-text-muted); cursor: grab; }
 .workflow-card-grip:active { cursor: grabbing; }
 .workflow-card.is-selected { border-color: var(--channel-accent, var(--ui-primary)); box-shadow: 0 0 0 3px color-mix(in srgb, var(--channel-accent, var(--ui-primary)) 30%, transparent), 0 6px 18px rgb(0 0 0 / .28); }
-.workflow-card-body { flex: 1; min-height: 0; cursor: default; }
-.workflow-card-body :deep(.expert-card) { height: 100%; }
-.workflow-card-body :deep(.expert-card-turn) { height: 100%; }
-.workflow-card-body :deep(.expert-card-face) { border: 0; border-radius: 0 0 10px 10px; background: transparent; box-shadow: none; }
+/* Who the card is: avatar, role, software, then model and project access in one dim line; its tools at the right. */
+.workflow-card-body { display: flex; flex: 1; align-items: center; gap: 10px; min-height: 0; padding: 0 6px 0 12px; cursor: default; }
+.workflow-card-who { display: flex; flex: 1; flex-direction: column; min-width: 0; line-height: 1.3; }
+.workflow-card-who > * { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.workflow-card-who strong { font-size: 14px; color: var(--ui-text-highlighted); }
+.workflow-card-who span { font-size: 12px; color: var(--ui-text-muted); }
+.workflow-card-who small { font-size: 11px; color: var(--ui-text-dimmed); }
+.workflow-card-tools { display: flex; flex-direction: column; align-self: stretch; justify-content: center; gap: 2px; }
 .workflow-canvas-skill { color: var(--channel-accent, var(--ui-primary)); text-decoration: underline; text-underline-offset: 3px; }
 .workflow-canvas-skill:hover { color: var(--ui-text-highlighted); }
 .workflow-card-grant { position: absolute; top: calc(100% + 6px); left: 0; display: flex; gap: 6px; align-items: center; color: var(--ui-warning, #e0a33a); font-size: 12px; white-space: nowrap; }

@@ -556,7 +556,11 @@ watch([open, active_id, () => Boolean(preview.value)], async () => {
 });
 
 /** Read the whole file from its first line after the front matter. */
+// The file a reading started from: it goes on while another file or the source is shown, and its highlight comes back
+// when that file's preview is shown again (user 2026-11-17: switching files stopped the reading).
+let reading_file = "";
 function read_file() {
+  reading_file = active_id.value;
   const front = FRONT_MATTER.exec(preview.value?.text || "")?.[0] || "";
   reader.read_document(markdown_body.value, { skip: (front.match(/[\p{L}\p{N}]/gu) || []).length, heading: preview_name.value });
 }
@@ -715,6 +719,7 @@ function listen_from_selection() {
   const { range } = offer.value;
   offer.value = null;
   document.getSelection()?.removeAllRanges();
+  reading_file = active_id.value;
   reader.read_document(markdown_body.value, { selection: range, heading: preview_name.value });
 }
 
@@ -761,7 +766,15 @@ function stop_following(event) {
 // also end the reading (closing every file clears the active tab), which goes on while folded.
 watch([open, active_id, source, rendered], () => { offer.value = null; cancel_comment(); close_mark(); });
 watch([open, active_id, source, rendered, font_scale, () => file_preview.excerpts.map((excerpt) => excerpt.id).join()], () => nextTick(place_file_marks), { flush: "post" });
-watch([active_id, source, rendered], () => { if (reader.state.message_id) reader.stop(); });
+// The reading stops only when every file is closed or its own file's text changes while shown; back on its file's
+// preview, its highlight is bound to the text rendered again.
+watch([active_id, source, rendered], async ([id, shown_source], [last_id, last_source]) => {
+  if (!reader.state.message_id) return;
+  if (!id) return reader.stop();
+  if (id === reading_file && id === last_id && shown_source === last_source) return reader.stop();
+  await nextTick();
+  if (id === reading_file && !shown_source && markdown_body.value) reader.rebind_document(markdown_body.value);
+});
 // Back on a readable preview without a confirmed speech key (an earlier read failed): ask again.
 watch([active_id, source], () => { if (!speech_ready.value && !source.value && format.value === "markdown") check_speech(); });
 // Unfolded, the text is laid out anew; the reading's highlight moves onto it.
