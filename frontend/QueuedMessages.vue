@@ -1,6 +1,7 @@
 <script setup>
 import { t } from './i18n.js';
-import { computed, inject, onBeforeUnmount, reactive, ref, watch } from "vue";
+import { computed, inject, nextTick, onBeforeUnmount, reactive, ref, watch } from "vue";
+import UploadPercent from "./UploadPercent.vue";
 
 /**
  * Owner messages the site holds while members work, listed above the composer like Codex's queued follow-ups:
@@ -14,17 +15,24 @@ const LONG_PRESS_MS = 350;
 const MOUSE_DRAG_THRESHOLD_PX = 4;
 const TOUCH_SLOP_PX = 8;
 const HAPTIC_MS = 10;
+const TRAY_RISE_MS = 200;
+const TRAY_RISE_EASING = "cubic-bezier(.2, .8, .2, 1)";
 const sending = ref(null);
+// The file of the message just sent that is still uploading.
+const uploading_file = computed(() => view.value.queueing_preview?.files.find((file) => !file.uploaded) ?? null);
 // The order shown between a drop and the site's answer, so the row stays where it was dropped.
 const local_order = ref(null);
 const list = ref(null);
 // The drag in progress: the row, its start, where it would land, and each row's slot measured at the start.
 const drag = ref(null);
-let press = null;
+// How far the lifted row follows the pointer: written straight to the row, so a move re-renders nothing.
+let drag_offset = 0;
+let press = null, tray_rise = null;
 
-// The row being sent now leaves the tray at once, even if a refresh in flight still lists it; a refusal brings it back.
+// The row being sent, or already moved to the composer for editing, leaves the tray at once, even if a refresh in flight
+// still lists it; a refusal brings it back.
 const items = computed(() => {
-  const queued = (props.queue.items || []).filter((item) => item.id !== sending.value);
+  const queued = (props.queue.items || []).filter((item) => item.id !== sending.value && !view.value.queue_taking?.includes(item.id));
   if (!local_order.value) return queued;
   const by_id = new Map(queued.map((item) => [item.id, item]));
   const ordered = local_order.value.map((id) => by_id.get(id)).filter(Boolean);
@@ -53,6 +61,29 @@ watch(items, (rows) => {
   }
 }, { immediate: true });
 
+/**
+ * A new row joins at the bottom and the rows before it move up (user 2026-11-18, #4544). The tray takes its new height at
+ * once and starts that much lower, behind the composer, then rises: only a transform moves, so nothing is laid out again.
+ */
+function rise_tray(height_before) {
+  const tray = list.value;
+  if (!tray) return;
+  if (tray.scrollHeight > tray.clientHeight) tray.scrollTo({ top: tray.scrollHeight, behavior: "smooth" });
+  const grown = tray.offsetHeight - height_before;
+  if (grown <= 0 || document.documentElement.dataset.motion === "off") return;
+  const under_way = tray_rise ? new DOMMatrix(getComputedStyle(tray).transform).m42 : 0;
+  tray_rise?.cancel();
+  tray_rise = tray.animate([{ transform: `translateY(${grown + under_way}px)` }, { transform: "translateY(0)" }], { duration: TRAY_RISE_MS, easing: TRAY_RISE_EASING });
+  tray_rise.onfinish = () => { tray_rise = null; };
+}
+
+// The row just sent becoming a queued row keeps the count, so only a message really joining the tray raises it.
+watch(() => items.value.length + (view.value.queueing_preview ? 1 : 0), (count, before) => {
+  if (count <= before) return;
+  const height_before = list.value?.offsetHeight || 0;
+  nextTick(() => rise_tray(height_before));
+});
+
 async function send_now(item) {
   sending.value = item.id;
   try { await act("queue_send", item.id); } finally { sending.value = null; }
@@ -73,8 +104,6 @@ function press_row(item, event) {
   window.addEventListener("pointermove", move_pointer);
   window.addEventListener("pointerup", end_pointer);
   window.addEventListener("pointercancel", cancel_pointer);
-  // Only a held finger blocks scrolling; the listener must not be passive to do so.
-  window.addEventListener("touchmove", hold_scroll, { passive: false });
 }
 
 /** Measure every row and lift the pressed one. */
@@ -87,7 +116,8 @@ function begin_drag() {
   press.row.setPointerCapture?.(press.pointer);
   if (press.touch) navigator.vibrate?.(HAPTIC_MS);
   window.getSelection()?.removeAllRanges();
-  drag.value = { id: press.id, from, to: from, offset: 0, slots, start: press.y };
+  drag_offset = 0;
+  drag.value = { id: press.id, from, to: from, slots, start: press.y };
 }
 
 function move_pointer(event) {
@@ -109,14 +139,17 @@ function move_pointer(event) {
   let to = from;
   if (offset < 0) { const above = slots.findIndex((slot, index) => index < from && middle <= centre(slot)); if (above >= 0) to = above; }
   else slots.forEach((slot, index) => { if (index > from && middle >= centre(slot)) to = index; });
-  drag.value = { ...drag.value, offset, to };
+  drag_offset = offset;
+  press.row.style.transform = `translateY(${offset}px)`;
+  // The other rows only change when the landing place does.
+  if (to !== drag.value.to) drag.value = { ...drag.value, to };
 }
 
 /** Shift for one row while dragging: the lifted row follows the pointer; rows it passed make room for it. */
 function shift(item) {
   const state = drag.value;
   if (!state) return undefined;
-  if (item.id === state.id) return { transform: `translateY(${state.offset}px)`, transition: "none" };
+  if (item.id === state.id) return { transform: `translateY(${drag_offset}px)`, transition: "none" };
   const index = state.slots.findIndex((slot) => slot.id === item.id);
   const room = state.slots[state.from].height;
   if (state.from < state.to && index > state.from && index <= state.to) return { transform: `translateY(${-room}px)` };
@@ -140,6 +173,7 @@ function cancel_pointer(event) {
   if (press && event.pointerId === press.pointer) release();
 }
 
+/** A lifted row keeps the finger: bound on the tray from the start, since iOS ignores a listener added once the touch began. */
 function hold_scroll(event) {
   if (drag.value && event.cancelable) event.preventDefault();
 }
@@ -151,26 +185,26 @@ function release() {
   window.removeEventListener("pointermove", move_pointer);
   window.removeEventListener("pointerup", end_pointer);
   window.removeEventListener("pointercancel", cancel_pointer);
-  window.removeEventListener("touchmove", hold_scroll);
 }
 
-onBeforeUnmount(release);
+onBeforeUnmount(() => { release(); tray_rise?.cancel(); });
 </script>
 
 <template>
-  <div v-if="items.length || view.queueing_preview" ref="list" class="queued-messages" :class="{ 'is-dragging': drag }" role="list" :aria-label="t('排队消息')">
+  <div v-if="items.length || view.queueing_preview" ref="list" class="queued-messages" :class="{ 'is-dragging': drag }" role="list" :aria-label="t('排队消息')" @touchmove="hold_scroll">
     <div v-if="queue.paused" class="queued-row queued-paused-row">
       <UIcon name="i-lucide-pause" class="queued-leading" />
       <span class="queued-text">{{ t('已暂停排队：你停止了运行') }}</span>
       <UButton :label="t('继续')" icon="i-lucide-play" size="xs" color="neutral" variant="ghost" :disabled="!!pending" @click="act('queue_resume')" />
     </div>
-    <TransitionGroup name="queued">
+    <!-- Rows glide only to a dropped order: when the row just sent turns into its queued row, nothing above it has moved. -->
+    <TransitionGroup name="queued" :move-class="local_order ? 'queued-move' : 'queued-still'">
       <div v-for="(item, index) in items" :key="item.id" role="listitem" :data-queued-id="item.id" class="queued-row"
-        :class="{ 'is-dimmed': sending === item.id, 'is-lifted': drag?.id === item.id, 'is-failed': item.failure, 'is-reorderable': reorderable }"
+        :class="{ 'is-dimmed': sending === item.id || view.queue_reading === item.id, 'is-lifted': drag?.id === item.id, 'is-failed': item.failure, 'is-reorderable': reorderable }"
         :style="shift(item)" @pointerdown="press_row(item, $event)" @contextmenu="drag && $event.preventDefault()">
         <UTooltip :disabled="!reorderable || !!drag" :text="t('拖动调整顺序（手机上长按）')" :delay-duration="PREVIEW_DELAY_MS">
           <span class="queued-leading" aria-hidden="true">
-            <UIcon v-if="sending === item.id" name="i-lucide-loader-circle" class="animate-spin" />
+            <UIcon v-if="sending === item.id || view.queue_reading === item.id" name="i-lucide-loader-circle" class="animate-spin" />
             <UIcon v-else-if="item.failure" name="i-lucide-triangle-alert" class="queued-warning" />
             <UIcon v-else name="i-lucide-list-end" />
           </span>
@@ -186,10 +220,11 @@ onBeforeUnmount(release);
             <div class="queued-preview-body">{{ item.text || summary(item) }}</div>
           </template>
         </UTooltip>
-        <span class="queued-sending-status" :class="{ 'is-waiting': sending !== item.id && !item.failure }">{{ sending === item.id ? t('投递中') : item.failure ? t('失败') : t('排队中') }}</span>
+        <span v-if="view.queue_reading === item.id" class="queued-sending-status" role="status">{{ t('正在取回附件…') }}</span>
+        <span v-else-if="sending === item.id || item.failure" class="queued-sending-status">{{ sending === item.id ? t('投递中') : t('失败') }}</span>
         <span class="queued-actions">
           <UTooltip :text="item.failure ? t('再次尝试发送这条排队消息') : t('立即发出；接收者正忙时先打断它这一轮，再处理这条（无法打断的成员继续排队）')" :ui="{ content: 'queued-tooltip' }">
-            <UButton :label="item.failure ? t('重试') : t('立即发送')" :icon="item.failure ? 'i-lucide-rotate-ccw' : 'i-lucide-corner-down-right'" size="xs" color="neutral" variant="ghost" class="queued-action"
+            <UButton :label="item.failure ? t('重试') : t('立即发送')" :aria-label="item.failure ? t('重试') : t('立即发送')" :icon="item.failure ? 'i-lucide-rotate-ccw' : 'i-lucide-corner-down-right'" size="xs" color="neutral" variant="ghost" class="queued-action queued-send-now"
               :disabled="!!pending || sending !== null" @click.stop="send_now(item)" />
           </UTooltip>
           <UButton icon="i-lucide-trash-2" size="xs" color="neutral" variant="ghost" class="queued-action" :aria-label="t('删除排队消息')" :disabled="sending === item.id || !!pending" @click.stop="act('queue_delete', item.id)" />
@@ -205,7 +240,7 @@ onBeforeUnmount(release);
     <div v-if="view.queueing_preview" role="listitem" class="queued-row">
       <span class="queued-leading" aria-hidden="true"><UIcon name="i-lucide-loader-circle" class="animate-spin" /></span>
       <span class="queued-text">{{ view.queueing_preview.text.replace(/\s+/g, " ").trim() || t('{value1} 个附件', { value1: view.queueing_preview.files.length }) }}</span>
-      <span class="queued-actions queued-sending-status" role="status">{{ t('发送中…') }}</span>
+      <span class="queued-actions queued-sending-status" role="status"><UploadPercent v-if="uploading_file" :id="uploading_file.id" v-slot="{ percent, phase }">{{ percent === null ? t('发送中…') : phase === 'compress' ? t('压缩中 {percent}%', { percent }) : t('上传中 {percent}%', { percent }) }}</UploadPercent><template v-else>{{ t('发送中…') }}</template></span>
     </div>
   </div>
 </template>
@@ -214,9 +249,10 @@ onBeforeUnmount(release);
 /* A tray tucked behind the composer's top edge, a little narrower than it, as in Codex. */
 .queued-messages { position: relative; display: flex; flex-direction: column; max-height: 30dvh; margin: 0 12px -12px; padding: 2px 4px 14px; overflow-x: hidden; overflow-y: auto; overscroll-behavior: contain;
   border: 1px solid var(--ui-border); border-bottom: 0; border-radius: 12px 12px 0 0; background: var(--ui-bg-elevated); }
-.queued-messages.is-dragging { overflow-y: hidden; }
+/* Rows slide aside only while a row is lifted: left on at the drop, the slide would start from the old place in the new order. */
 .queued-row { position: relative; display: flex; align-items: center; gap: 8px; min-height: 28px; padding: 0 2px 0 8px; border-radius: 8px; font-size: 13px; color: var(--ui-text-muted);
-  transition: transform .16s ease, opacity .18s, background .12s; -webkit-touch-callout: none; user-select: none; }
+  transition: opacity .18s, background .12s; -webkit-touch-callout: none; user-select: none; }
+.queued-messages.is-dragging .queued-row { transition: transform .16s ease, opacity .18s, background .12s; }
 .queued-row:hover { background: var(--ui-bg-accented); }
 .queued-row.is-reorderable { cursor: grab; }
 .queued-row.is-dimmed { opacity: .55; }
@@ -233,13 +269,14 @@ onBeforeUnmount(release);
 .queued-actions { display: flex; flex-shrink: 0; align-items: center; gap: 0; }
 .queued-action { color: var(--ui-text-dimmed); }
 .queued-action:hover:not(:disabled) { color: var(--ui-text-highlighted); }
+/* Phones keep the icon alone, leaving the row's width to the message (user 2026-11-18, #4558). */
+@media (max-width: 700px) { .queued-send-now :deep([data-slot="label"]) { display: none; } }
 .queued-sending-status { padding: 0 8px; font-size: 12px; color: var(--ui-text-dimmed); }
-.queued-sending-status.is-waiting { color: var(--ui-primary); }
 .queued-paused-row { cursor: default; }
 .queued-paused-row .queued-text { color: var(--ui-text-muted); }
 .queued-move { transition: transform .16s ease; }
 /* Rows appear at once (a new one takes the sending row's place) and fold away when they leave. */
-.queued-leave-active { overflow: hidden; transition: max-height .18s, opacity .18s; }
+.queued-leave-active { min-height: 0; overflow: hidden; transition: max-height .18s, opacity .18s; }
 .queued-leave-to { max-height: 0; opacity: 0; }
 .queued-leave-from { max-height: 40px; opacity: 1; }
 :global(.queued-tooltip) { max-width: 360px; text-align: center; white-space: normal; line-height: 1.4; }

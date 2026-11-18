@@ -4,20 +4,25 @@
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <!-- Tablets lay out the desktop page at the desktop width and scale it to fit, so cards and panels match the PC exactly. -->
-  <!-- iOS Safari zooms into inputs whose text renders below 16px; capping the zoom at the fitted scale stops that, and iOS still allows pinch zoom. Android keeps the plain viewport so pinch zoom stays available there. -->
+  <!-- Touch screens never zoom the page (user 2026-11-18, #4522), which also stops iOS Safari zooming into inputs whose text renders below 16px. Android obeys the viewport; iOS ignores it for pinches, so touch-action (pinch and double tap) and Safari's gesture events stop them there. The image viewer and the workflow canvas zoom their own content. -->
   <script>(function () {
     var meta = document.querySelector('meta[name="viewport"]');
-    var tablet = matchMedia("(pointer: coarse)").matches && Math.min(screen.width, screen.height) >= 600;
+    var coarse = matchMedia("(pointer: coarse)").matches;
+    var tablet = coarse && Math.min(screen.width, screen.height) >= 600;
     var ios = /iP(hone|ad|od)/.test(navigator.userAgent) || (navigator.platform === "MacIntel" && navigator.maxTouchPoints > 1);
+    if (!coarse && !ios) return;
     function apply() {
-      if (!ios) { if (tablet) meta.content = "width=1440"; return; }
-      if (!tablet) { meta.content = "width=device-width, initial-scale=1, maximum-scale=1"; return; }
+      if (!tablet) { meta.content = "width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no"; return; }
       var window_width = window.visualViewport ? visualViewport.width * visualViewport.scale : innerWidth;
       var scale = Math.round(window_width / 1440 * 10000) / 10000;
-      meta.content = "width=1440, initial-scale=" + scale + ", maximum-scale=" + scale;
+      meta.content = "width=1440, initial-scale=" + scale + ", minimum-scale=" + scale + ", maximum-scale=" + scale + ", user-scalable=no";
     }
     apply();
-    if (ios && tablet) addEventListener("resize", apply);
+    if (tablet) addEventListener("resize", apply);
+    document.documentElement.style.touchAction = "pan-x pan-y";
+    ["gesturestart", "gesturechange"].forEach(function (type) {
+      document.addEventListener(type, function (event) { event.preventDefault(); }, { passive: false });
+    });
   })();</script>
   <meta name="description" content="共议聊天室，让不同 AI 与人围绕同一份记录共同讨论。">
   <title>共议聊天室 · AI CoDiscuss</title>

@@ -393,9 +393,32 @@ test('setup sets the entry up only when hosting is asked for, and keeps it to th
   const data = mkdtempSync(join(tmpdir(), 'hosting-'));
   folders.push(data);
   const result = await configure_hosting(data, { hosting: true, 'entry-port': '8790' }, { interactive: false });
-  assert.deepEqual({ ...entry_settings(data) }, { port: 8790, public_url: '', running: true, tunnel: null, mode: 'local', relay_url: '' });
+  assert.deepEqual({ ...entry_settings(data) }, { port: 8790, public_url: '', running: true, tunnel: null, relay_enabled: false, tunnel_enabled: false, relay_url: '' });
   // No launcher in a fresh folder: starting with Windows is left for the owner, and said so.
   assert.ok(result.issues.some(issue => issue.includes('登录自启')));
+});
+
+test('the entry keeps the way an older version chose, and the relay and the tunnel can be on together', async () => {
+  const { entry_settings, save_entry_settings } = await import('../gateway/gateway.mjs');
+  const data = mkdtempSync(join(tmpdir(), 'entry-ways-'));
+  folders.push(data);
+  const tunnel = { name: 'codiscuss', host: 'entry.example.com', id: 'id', credentials: 'file' };
+  const ways = saved => {
+    writeFileSync(join(data, 'gateway-settings.json'), JSON.stringify(saved));
+    const { relay_enabled, tunnel_enabled } = entry_settings(data);
+    return { relay_enabled, tunnel_enabled };
+  };
+  assert.deepEqual(ways({ mode: 'relay', tunnel }), { relay_enabled: true, tunnel_enabled: false });
+  assert.deepEqual(ways({ mode: 'tunnel', tunnel }), { relay_enabled: false, tunnel_enabled: true });
+  assert.deepEqual(ways({ mode: 'local', tunnel }), { relay_enabled: false, tunnel_enabled: false });
+  assert.deepEqual(ways({ tunnel }), { relay_enabled: false, tunnel_enabled: true });
+  ways({ mode: 'relay', tunnel });
+  save_entry_settings(data, { tunnel_enabled: true });
+  assert.equal(entry_settings(data).relay_enabled, true, 'turning the tunnel on leaves the relay on');
+  assert.equal(entry_settings(data).tunnel_enabled, true);
+  save_entry_settings(data, { relay_enabled: false });
+  assert.equal(entry_settings(data).relay_enabled, false, 'a way turned off stays off whatever the old mode said');
+  assert.equal(entry_settings(data).tunnel_enabled, true);
 });
 
 test('setup asks for the outside address in a terminal, asks again after a wrong domain, and never asks with --yes', async () => {

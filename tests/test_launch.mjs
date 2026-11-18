@@ -322,6 +322,16 @@ test('room files use the saved project and require the authenticated bridge and 
   assert.equal(models.project_directory, project);
   assert.deepEqual((await room_files(f.home, input)).entries.map(item => item.name), ['报告.md']);
   assert.equal((await room_files(f.home, { ...input, path: '报告.md', cwd: f.directory })).text, '# 项目报告\n正文');
+  // The browser's cached file list: only a changed folder is sent again, and nothing outside the project is read.
+  mkdirSync(join(project, '缓存'));
+  const [first] = (await room_files(f.home, { ...input, folders: [{ path: '缓存' }] })).folders;
+  assert.deepEqual([first.path, first.kind, first.entries], ['缓存', 'directory', []]);
+  assert.deepEqual((await room_files(f.home, { ...input, folders: [{ path: '缓存', modified_at: first.modified_at }] })).folders, [{ path: '缓存', unchanged: true }]);
+  assert.deepEqual((await room_files(f.home, { ...input, folders: [{ path: '缓存', modified_at: '2000-01-01T00:00:00.000Z' }] })).folders[0].entries, []);
+  assert.deepEqual((await room_files(f.home, { ...input, folders: [{ path: '../' }, { path: '不存在' }, { path: '报告.md' }] })).folders.map(item => item.missing), [true, true, true]);
+  await assert.rejects(room_files(f.home, { ...input, folders: Array.from({ length: 101 }, () => ({ path: '' })) }), /文件夹列表无效/);
+  await assert.rejects(room_files(f.home, { ...input, token: 'invalid-owner', folders: [{ path: '' }] }), /403/);
+  rmSync(join(project, '缓存'), { recursive: true });
   mkdirSync(join(project, '章节', 'node_modules'), { recursive: true });
   writeFileSync(join(project, '章节', '第01集报告.md'), '');
   writeFileSync(join(project, '章节', 'node_modules', '报告.md'), '');

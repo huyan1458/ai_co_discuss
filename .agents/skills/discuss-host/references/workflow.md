@@ -4,7 +4,7 @@
 
 ## 按工作流做事
 
-`workflow` 字段表示本房间启用了用户的工作流。它像技能一样按需使用：请求与 `workflow.description` 相符或用户要求按它做时才用，其他请求照常处理。本会话还没读过、或 `workflow.revision` 变了，才读 `workflow.skill_path`（API 主持人读系统提示中的工作流正文）。工作流只带来做法和成员，不扩大你的权限。
+`workflow` 字段表示本房间启用了用户的工作流。每次处理请求先分流（discuss-host 硬约束 4）：请求与 `workflow.description` 或某个子工作流的 `description` 相符，或用户要求按它做时就用，其他请求照常处理。本会话还没读过、或 `workflow.revision` 变了，就先读 `workflow.skill_path`（API 主持人读系统提示中的工作流正文）。工作流只带来做法和成员，不扩大你的权限。
 
 - `workflow.members` 列出每张卡片由谁担任、是否在场、项目权限，只点名在场的成员。
 - `workflow.missing` 是启用后才新增、还没有成员的卡片，要用时运行 `<cli> launch workflow-join --card 卡片ID …`（API 主持人请用户在右栏点工作流的“刷新”）。

@@ -49,8 +49,8 @@ export const HELP = t(`用法：codiscuss admin <命令> [参数]（与管理面
 
 登录入口与访问方式（需打开托管管理）
   entry start|stop                         启动或停止登录入口
-  entry mode local|relay|tunnel            访问方式：仅这台电脑 | 线上中转 | 自有域名
-  entry join <接入码>                       用接入码接入线上站点并切换到线上中转
+  entry open|close relay|tunnel            开启或关闭访问方式：线上中转 | 自有域名，两种可同时开启
+  entry join <接入码>                       用接入码接入线上站点并开启线上中转
   entry connect <站点> <绑定令牌>           只绑定线上站点（管理员远程用），不改访问方式
   entry code [--config <wrangler.jsonc>] [--site <地址>]   在部署线上站点的电脑上生成接入码（不填用上次的）
   entry tunnel <域名> [隧道名]              设置自有域名（Cloudflare 隧道），输出授权链接；域名须已托管在 Cloudflare
@@ -329,7 +329,7 @@ async function update(call, data) {
 
 async function entry_command(call, [action, first, second], values) {
   if (action === 'start' || action === 'stop') return call(`entry/${action}`, {});
-  if (action === 'mode') return call('entry/mode', { mode: need(first, 'local|relay|tunnel') });
+  if (action === 'open' || action === 'close') return call('entry/way', { way: need(first, 'relay|tunnel'), enabled: action === 'open' });
   if (action === 'join') return call('relay/join', { code: need(first, t('接入码')) });
   if (action === 'connect') return call('site/connect', { site: need(first, t('站点')), setup_key: need(second, t('绑定令牌')) });
   if (action === 'code') return call('site/code', { config: values.config || '', site: values.site || '' });
@@ -356,7 +356,7 @@ function summary(state) {
   return { hosting: state.hosting, version: state.version, autostart: state.autostart,
     service: { running: service.running, url: service.url, version: service.version, error: service.error || undefined },
     ...(state.hosting ? {
-      entry: entry && { running: entry.running, mode: entry.mode, address: entry.address || `http://127.0.0.1:${entry.port}`, tunnel, problem: entry.relay?.problem || undefined },
+      entry: entry && { running: entry.running, relay_enabled: entry.relay_enabled, tunnel_enabled: entry.tunnel_enabled, address: entry.address || `http://127.0.0.1:${entry.port}`, tunnel, problem: entry.relay?.problem || undefined },
       runtime: state.clis,
       accounts: state.accounts.map(item => ({ name: item.name, isolated: Boolean(item.os_user), protected: item.protected, running: item.running, disabled: item.disabled })),
     } : {}) };

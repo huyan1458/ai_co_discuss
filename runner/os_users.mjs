@@ -13,7 +13,7 @@
  */
 import { spawnSync } from 'node:child_process';
 import { randomBytes } from 'node:crypto';
-import { cpSync, existsSync, mkdirSync, readFileSync, renameSync, rmSync, writeFileSync } from 'node:fs';
+import { cpSync, existsSync, mkdirSync, readFileSync, realpathSync, renameSync, rmSync, writeFileSync } from 'node:fs';
 import { homedir, tmpdir } from 'node:os';
 import { basename, dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -26,6 +26,10 @@ const SHARED_ROOT = join(process.env.ProgramData || 'C:\\ProgramData', 'CoDiscus
 const CLI_ROOT = join(SHARED_ROOT, 'cli');
 const APP_ROOT = join(SHARED_ROOT, 'app');
 const PYTHON_ROOT = join(SHARED_ROOT, 'python');
+// Holds the codiscuss command; an account's instance puts it on PATH so the AI members it starts can run it.
+const COMMAND_ROOT = join(SHARED_ROOT, 'bin');
+// Marks the root of Codex's standalone install: bin\codex.exe needs the helper programs and resources packaged around it.
+const CODEX_PACKAGE_FILE = 'codex-package.json';
 const PACKAGE_ROOT = dirname(dirname(fileURLToPath(import.meta.url)));
 // What an account's instance runs from the shared copy of this program.
 const APP_PARTS = ['package.json', 'server.py', 'runner', 'gateway', 'backend', 'web', '.agents', 'workflows'];
@@ -46,7 +50,7 @@ const ELEVATED_TIMEOUT_MS = 300_000;
 export function cli_sources(home = homedir(), env = process.env) {
   const app_data = env.APPDATA || join(home, 'AppData', 'Roaming');
   const local = env.LOCALAPPDATA || join(home, 'AppData', 'Local');
-  const codex = codex_source(app_data, env);
+  const codex = codex_source(app_data, env, home);
   return {
     claude: { label: 'Claude Code', source: installed_program(join(home, '.local', 'bin', 'claude.exe'), 'claude.exe', env), target: join(CLI_ROOT, 'claude.exe'), adapter: 'claude' },
     codex: codex.single
@@ -73,10 +77,11 @@ const CODEX_PLATFORM = process.arch === 'arm64' ? ['codex-win32-arm64', 'aarch64
 /**
  * Codex's native program as installed. npm puts it in a platform package with the tools it runs beside it (the whole
  * folder is what the shared copy takes): nested under @openai/codex, or beside it with newer npm, in the npm folder the
- * codex command is in (any prefix) or the default one. A standalone codex.exe on PATH is taken alone (`single`). Returns
- * { folder, program, single }; when Codex is not installed, the default npm place, so a message names where it was looked for.
+ * codex command is in (any prefix) or the default one. The standalone installer's release folder is taken whole too, found
+ * through the links it puts on PATH; any other codex.exe on PATH is taken alone (`single`). Returns { folder, program,
+ * single }; when Codex is not installed, the default npm place, so a message names where it was looked for.
  */
-function codex_source(app_data, env) {
+function codex_source(app_data, env, home) {
   const [platform, triple] = CODEX_PLATFORM;
   const command = on_path('codex.cmd', env);
   const npm_folders = [...new Set([command ? dirname(command) : '', join(app_data, 'npm')].filter(Boolean))];
@@ -84,8 +89,14 @@ function codex_source(app_data, env) {
     join(npm, 'node_modules', '@openai', platform, 'vendor', triple)]);
   const folder = folders.find(item => existsSync(join(item, 'bin', 'codex.exe')));
   if (folder) return { folder, program: join(folder, 'bin', 'codex.exe'), single: false };
-  const standalone = on_path('codex.exe', env);
-  if (standalone) return { folder: dirname(standalone), program: standalone, single: true };
+  // An SSH session's PATH can lack the installer's folder, so its usual place is looked at as well.
+  const usual = join(home, '.codex', 'packages', 'standalone', 'current', 'bin', 'codex.exe');
+  const standalone = on_path('codex.exe', env) || (existsSync(usual) ? usual : '');
+  if (standalone) {
+    const release = dirname(dirname(realpathSync(standalone)));
+    if (existsSync(join(release, CODEX_PACKAGE_FILE))) return { folder: release, program: join(release, 'bin', 'codex.exe'), single: false };
+    return { folder: dirname(standalone), program: standalone, single: true };
+  }
   return { folder: folders.at(-2), program: join(folders.at(-2), 'bin', 'codex.exe'), single: false };
 }
 
@@ -435,11 +446,16 @@ export function install_shared_runtime(python_source = '', { run = run_powershel
     if (!existsSync(cli.source)) { missing.push(cli.label); continue; }
     mkdirSync(dirname(cli.target), { recursive: true });
     const failed = cli.folder ? copy_over(cli.source, cli.target) : (() => { try { cpSync(cli.source, cli.target, { force: true }); return ''; } catch (error) { return error.message; } })();
-    if (failed) warnings.push(`${cli.label}：${failed}`); else installed.push(cli.label);
+    // Rooms created from a lone copy keep naming target\codex.exe in their saved settings: its helpers go beside it.
+    const legacy_failed = !failed && cli.folder && existsSync(join(cli.target, 'codex.exe')) ? copy_over(join(cli.source, 'bin'), cli.target) : '';
+    if (failed || legacy_failed) warnings.push(`${cli.label}：${failed || legacy_failed}`); else installed.push(cli.label);
   }
   mkdirSync(APP_ROOT, { recursive: true });
   const app_failed = APP_PARTS.filter(part => existsSync(join(PACKAGE_ROOT, part))).map(part => copy_over(join(PACKAGE_ROOT, part), join(APP_ROOT, part))).find(Boolean);
   if (app_failed) warnings.push(`共议程序：${app_failed}`); else installed.push('共议程序');
+  // The owner's npm command is inside the owner's profile, out of reach of an account's Windows user.
+  mkdirSync(COMMAND_ROOT, { recursive: true });
+  writeFileSync(join(COMMAND_ROOT, 'codiscuss.cmd'), `@"${process.execPath}" "${join(APP_ROOT, 'runner', 'codiscuss.mjs')}" %*\r\n`);
   if (python_source && existsSync(python_source)) {
     const failed = copy_over(dirname(python_source), PYTHON_ROOT, source => !PYTHON_SKIP.has(basename(source)));
     if (failed) warnings.push(`Python：${failed}`); else installed.push('Python');
@@ -556,6 +572,7 @@ export function start_instance_as_user(data, account, service_home, local_script
   place_account_file(data, account, START_SCRIPT, `﻿$flag = ${quote(join(SHARED_ROOT, 'keys', account, RUN_FLAG))}
 if (-not (Test-Path -LiteralPath $flag)) { exit 0 }
 $env:DISCUSS_SERVICE_HOME = ${quote(service_home)}
+$env:Path = ${quote(`${COMMAND_ROOT};`)} + $env:Path
 ${key_file ? `$env:DISCUSS_ENTRY_KEY_FILE = ${quote(key_file)}\n` : ''}Set-Location -LiteralPath ${quote(service_home)}
 & ${quote(node)} ${quote(local_script)} run
 exit $LASTEXITCODE

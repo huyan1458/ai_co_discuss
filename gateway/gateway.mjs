@@ -490,20 +490,23 @@ function run_instance(data, name, command) {
 
 // ---- The entry as a background process the panel starts and stops ----
 
-// How people outside reach the entry: this computer only, the online relay (no domain needed), or a Cloudflare tunnel
-// from the owner's own domain.
-export const ENTRY_MODES = ['local', 'relay', 'tunnel'];
+// How people outside can reach the entry, each on or off by itself: the online relay (no domain needed) and a Cloudflare
+// tunnel from the owner's own domain. With both off the entry opens on this computer only.
+export const ENTRY_WAYS = ['relay', 'tunnel'];
 
 /**
- * The entry's saved settings: the loopback port it listens on, the public address customers open, and how they reach it
- * (`mode`). Settings from before the mode was chosen read as the way they set up: the tunnel when one is, else local.
+ * The entry's saved settings: the loopback port it listens on, the public address customers open, and which ways from
+ * outside are on (`relay_enabled`, `tunnel_enabled`). Settings saved with the former single `mode` keep the way it chose;
+ * older ones still, without a mode, read as the tunnel when one is set up.
  */
 export function entry_settings(data) {
   const saved = read_json(join(data, ENTRY_SETTINGS_FILE));
   const tunnel = saved.tunnel && typeof saved.tunnel === 'object' && ['name', 'host', 'id', 'credentials'].every(key => saved.tunnel[key]) ? saved.tunnel : null;
-  const mode = ENTRY_MODES.includes(saved.mode) ? saved.mode : tunnel ? 'tunnel' : 'local';
+  const known_mode = ['local', 'relay', 'tunnel'].includes(saved.mode);
+  const relay_enabled = typeof saved.relay_enabled === 'boolean' ? saved.relay_enabled : saved.mode === 'relay';
+  const tunnel_enabled = typeof saved.tunnel_enabled === 'boolean' ? saved.tunnel_enabled : known_mode ? saved.mode === 'tunnel' : Boolean(tunnel);
   return { port: Number.isInteger(saved.port) ? saved.port : DEFAULT_ENTRY_PORT, public_url: typeof saved.public_url === 'string' ? saved.public_url : '',
-    running: saved.running === true, tunnel, mode, relay_url: typeof saved.relay_url === 'string' ? saved.relay_url : '' };
+    running: saved.running === true, tunnel, relay_enabled, tunnel_enabled, relay_url: typeof saved.relay_url === 'string' ? saved.relay_url : '' };
 }
 
 /**
@@ -512,18 +515,16 @@ export function entry_settings(data) {
  * Args:
  *   changes: `port` (1–65535), `public_url` (an https address, kept as its origin; empty clears it), `running`, the
  *     state the panel restores when it starts again, and `tunnel`, the Cloudflare tunnel the panel runs for the outside
- *     address ({ name, host, id, credentials } from hosting_tunnel.mjs, or null for none), `mode` (one of ENTRY_MODES)
- *     and `relay_url`, the address of the relay's entry Worker (an https origin; empty clears it).
+ *     address ({ name, host, id, credentials } from hosting_tunnel.mjs, or null for none), `relay_enabled` and
+ *     `tunnel_enabled`, whether each way from outside is on, and `relay_url`, the address of the relay's entry Worker (an https origin; empty clears it).
  *
  * Returns:
  *   The settings as saved.
  */
 export function save_entry_settings(data, changes) {
   const next = { ...entry_settings(data) };
-  if (changes.mode !== undefined) {
-    if (!ENTRY_MODES.includes(changes.mode)) throw new Error(`未知的外网访问方式：${changes.mode}`);
-    next.mode = changes.mode;
-  }
+  if (changes.relay_enabled !== undefined) next.relay_enabled = Boolean(changes.relay_enabled);
+  if (changes.tunnel_enabled !== undefined) next.tunnel_enabled = Boolean(changes.tunnel_enabled);
   if (changes.relay_url !== undefined) next.relay_url = public_origin(changes.relay_url);
   if (changes.port !== undefined) {
     const port = Number(changes.port);

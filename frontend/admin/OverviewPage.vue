@@ -1,11 +1,12 @@
 <script setup>
 /**
  * This computer: the owner's own service (status, start, restart, stop), with hosting on the accounts' entry and program
- * copy, and at the bottom updates with a report of every step and starting with Windows. Each account's own setup is on "账号".
+ * copy, and at the bottom updates with a report of every step, starting with Windows and the panel's language. Each account's own setup is on "账号".
  */
 import { computed, inject, onMounted, ref, watch } from "vue";
 import { call } from "./api.js";
 import HostingCards from "./HostingCards.vue";
+import LanguagePicker from "../LanguagePicker.vue";
 import { t } from '../i18n.js';
 
 const { state, reload, notify, refreshed } = inject("panel");
@@ -96,7 +97,7 @@ watch(refreshed, () => check(true));
 
     <HostingCards v-if="state.hosting" />
 
-    <h3 class="panel-section-title"><UIcon name="i-lucide-settings" />{{ t('更新与启动') }}</h3>
+    <h3 class="panel-section-title"><UIcon name="i-lucide-settings" />{{ t('设置') }}</h3>
     <div class="panel-rows">
       <div class="panel-row">
         <div class="panel-tile"><UIcon name="i-lucide-package" /></div>
@@ -122,6 +123,16 @@ watch(refreshed, () => check(true));
         <div class="panel-side">
           <USwitch :model-value="Boolean(state.autostart)" :loading="busy === 'autostart'" :disabled="Boolean(busy) || (!state.launcher && !state.autostart)" :aria-label="t('登录 Windows 时自动启动')" @update:model-value="toggle_autostart" />
         </div>
+      </div>
+
+      <div class="panel-row">
+        <div class="panel-tile"><UIcon name="i-lucide-languages" /></div>
+        <div class="panel-main">
+          <!-- Bilingual so someone who cannot read the current language still finds it. -->
+          <div class="panel-title">语言 · Language</div>
+          <span class="panel-sub">{{ t('管理面板的显示语言') }}</span>
+        </div>
+        <div class="panel-side"><LanguagePicker /></div>
       </div>
     </div>
   </section>

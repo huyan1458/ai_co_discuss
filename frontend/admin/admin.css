@@ -58,6 +58,11 @@ html { scrollbar-gutter: stable; }
 /* An action on a section title ("新建账号") sits at its right without making the row taller. */
 .panel-section-action { margin-left: auto; }
 .panel-section-title:first-child { margin-top: 0; }
+/* The first load: the shape of the overview, until the whole page can show at once. */
+.panel-skeleton-heading { width: 72px; height: 14px; margin: 28px 2px 18px; }
+.panel-skeleton > .panel-skeleton-heading:first-child { margin-top: 10px; }
+.panel-skeleton-title { width: 160px; height: 16px; margin-bottom: 8px; }
+.panel-skeleton-sub { width: min(320px, 100%); height: 12px; }
 .panel-list { display: flex; flex-direction: column; gap: 14px; }
 
 .panel-card { display: flex; align-items: center; gap: 16px; min-height: 86px; padding: 18px 22px; border: 1px solid var(--panel-line); border-radius: 18px; background: #fff;

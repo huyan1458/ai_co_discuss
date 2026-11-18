@@ -1,0 +1,164 @@
+{
+  "nodes": [
+    {
+      "id": "start",
+      "type": "start",
+      "x": 0,
+      "y": 0
+    },
+    {
+      "id": "dispatch",
+      "type": "host",
+      "label": "判定关键集·派人物",
+      "x": 0,
+      "y": 0
+    },
+    {
+      "id": "screenwriter",
+      "type": "card",
+      "card": "screenwriter",
+      "x": 0,
+      "y": 0
+    },
+    {
+      "id": "plan_character_a",
+      "type": "card",
+      "card": "character_a",
+      "x": 0,
+      "y": 0
+    },
+    {
+      "id": "plan_character_b",
+      "type": "card",
+      "card": "character_b",
+      "x": 0,
+      "y": 0
+    },
+    {
+      "id": "plan_character_c",
+      "type": "card",
+      "card": "character_c",
+      "x": 0,
+      "y": 0
+    },
+    {
+      "id": "brief",
+      "type": "host",
+      "label": "裁定·改任务书",
+      "x": 0,
+      "y": 0
+    },
+    {
+      "id": "review_character_a",
+      "type": "card",
+      "card": "character_a",
+      "x": 0,
+      "y": 0
+    },
+    {
+      "id": "review_character_b",
+      "type": "card",
+      "card": "character_b",
+      "x": 0,
+      "y": 0
+    },
+    {
+      "id": "review_character_c",
+      "type": "card",
+      "card": "character_c",
+      "x": 0,
+      "y": 0
+    },
+    {
+      "id": "ruling",
+      "type": "host",
+      "label": "逐条裁定",
+      "x": 0,
+      "y": 0
+    }
+  ],
+  "edges": [
+    {
+      "source": "start",
+      "target": "dispatch"
+    },
+    {
+      "source": "dispatch",
+      "target": "screenwriter",
+      "label": "同时派出"
+    },
+    {
+      "source": "dispatch",
+      "target": "plan_character_a",
+      "label": "同时推演"
+    },
+    {
+      "source": "dispatch",
+      "target": "plan_character_b",
+      "label": "同时推演"
+    },
+    {
+      "source": "dispatch",
+      "target": "plan_character_c",
+      "label": "同时推演"
+    },
+    {
+      "source": "screenwriter",
+      "target": "brief"
+    },
+    {
+      "source": "plan_character_a",
+      "target": "brief"
+    },
+    {
+      "source": "plan_character_b",
+      "target": "brief"
+    },
+    {
+      "source": "plan_character_c",
+      "target": "brief"
+    },
+    {
+      "source": "brief",
+      "target": "plan_character_a",
+      "label": "正面交锋·最多再一轮"
+    },
+    {
+      "source": "brief",
+      "target": "plan_character_b",
+      "label": "正面交锋·最多再一轮"
+    },
+    {
+      "source": "brief",
+      "target": "plan_character_c",
+      "label": "正面交锋·最多再一轮"
+    },
+    {
+      "source": "brief",
+      "target": "review_character_a",
+      "label": "写审通过后各审一次"
+    },
+    {
+      "source": "brief",
+      "target": "review_character_b",
+      "label": "写审通过后各审一次"
+    },
+    {
+      "source": "brief",
+      "target": "review_character_c",
+      "label": "写审通过后各审一次"
+    },
+    {
+      "source": "review_character_a",
+      "target": "ruling"
+    },
+    {
+      "source": "review_character_b",
+      "target": "ruling"
+    },
+    {
+      "source": "review_character_c",
+      "target": "ruling"
+    }
+  ]
+}

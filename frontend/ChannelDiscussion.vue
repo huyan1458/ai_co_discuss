@@ -8,6 +8,8 @@ import GoalNoticeCard from "./GoalNoticeCard.vue";
 import ExecutionDenials from "./ExecutionDenials.vue";
 import ExecutionNotes from "./ExecutionNotes.vue";
 import WorkingText from "./WorkingText.vue";
+import UploadPercent from "./UploadPercent.vue";
+import AttachmentUploadRing from "./AttachmentUploadRing.vue";
 import QueuedMessages from "./QueuedMessages.vue";
 import QuestionCard from "./QuestionCard.vue";
 import { active_workflow } from "./workflow-state.js";
@@ -28,6 +30,7 @@ import { motion, useSpring, useTransform } from "motion-v";
 import { locale, t } from './i18n.js';
 import ExternalMemberDialog from "./ExternalMemberDialog.vue";
 import { declined, awaiting_member } from "./external-members.js";
+import RequestStatus from "./RequestStatus.vue";
 
 const pending_seat = ref(null), pending_seat_open = ref(false);
 const emit = defineEmits(["detail", "edit"]);
@@ -608,7 +611,7 @@ const request_badges = stable_computed(() => {
     const answer_label = request.answer_id ? (answer_execution && answer_execution.request_message_id !== request.message_id
       ? t('在 #{id} 一并回答', { id: request.answer_id }) : t('查看回答 #{id}', { id: request.answer_id })) : "";
     badges.set(request.message_id, [...(badges.get(request.message_id) || []),
-      { key: request.id, label: `${bridge.display_name(request.member)} · ${label}`, color, title, answer_id: request.answer_id, answer_label }]);
+      { key: request.id, label: `${bridge.display_name(request.member)} · ${label}`, status: label.split("：")[0], color, title, answer_id: request.answer_id, answer_label }]);
   }
   return badges;
 });
@@ -1838,8 +1841,17 @@ let rising_id = null;
 const sending_uploads = computed(() => {
   const files = view.value.sending_preview?.files || [];
   const done = files.filter((file) => file.uploaded).length;
-  return files.length && done < files.length ? { done, total: files.length } : null;
+  const current = files.find((file) => !file.uploaded);
+  return current ? { done, total: files.length, id: current.id, image: Boolean(current.preview_url) } : null;
 });
+/** The sending card's status while its files upload; an image shows its own percent on its thumbnail, other files here. */
+function sending_upload_text(percent, phase) {
+  const { done, total, image } = sending_uploads.value;
+  if (image && total === 1) return t('发送中…');
+  if (image || percent === null) return t('正在上传附件 {value1}/{value2}…', { value1: done, value2: total });
+  if (phase === "compress") return t('正在压缩视频 {percent}%…', { percent });
+  return total === 1 ? t('正在上传附件 {percent}%…', { percent }) : t('正在上传附件 {current}/{total} · {percent}%…', { current: done + 1, total, percent });
+}
 const sending_html = computed(() => {
   const preview = view.value.sending_preview;
   if (!preview) return "";
@@ -2711,10 +2723,10 @@ function copy_message(message) { act("copy", `${view.value.room_site}/r/${room.v
               <template v-if="speaking_turn?.expert === message.author && message.discussion_request">
                 <UTooltip :text="t('暂停讨论')"><UButton icon="i-lucide-pause" size="xs" variant="ghost" color="neutral" :aria-label="t('暂停讨论，停止 {value1} 本次发言', { value1: bridge.display_name(message.author) })" :disabled="!!pending" :loading="pending === 'pause_discussion'" @click="act('pause_discussion')" /></UTooltip>
                 <UTooltip :text="t('停止本次发言，轮到下一位')"><UButton variant="solid" color="neutral" class="channel-stop-button" :aria-label="t('停止 {value1} 本次发言，轮到下一位', { value1: bridge.display_name(message.author) })" :disabled="!!pending" :loading="pending === 'skip_turn'"
-                  @click="act('skip_turn')"><span class="channel-stop-square" /></UButton></UTooltip>
+                  @click="act('skip_turn')"><span v-if="pending !== 'skip_turn'" class="channel-stop-square" /></UButton></UTooltip>
               </template>
               <UTooltip v-else :text="t('停止')"><UButton variant="solid" color="neutral" class="channel-stop-button" :aria-label="t('停止 {value1} 本次执行', { value1: bridge.display_name(message.author) })" :disabled="!!pending"
-                :loading="pending === 'change_member' && stopping_member === message.member_id" @click="stop_member(message)"><span class="channel-stop-square" /></UButton></UTooltip>
+                :loading="pending === 'change_member' && stopping_member === message.member_id" @click="stop_member(message)"><span v-if="!(pending === 'change_member' && stopping_member === message.member_id)" class="channel-stop-square" /></UButton></UTooltip>
           </span>
           </div>
           <!-- Private chat, as on the answered card: in the hover column outside the strip with a mouse; on touch screens the
@@ -2819,7 +2831,7 @@ function copy_message(message) { act("copy", `${view.value.room_site}/r/${room.v
             <div class="channel-message-byline">
               <UAvatar :src="bridge.identities[message.author]?.icon" :text="bridge.identities[message.author]?.initials || '?'" :alt="bridge.display_name(message.author)" size="md" class="channel-avatar" :class="bridge.identities[message.author]?.style" />
               <div class="channel-message-meta">
-                <div class="channel-message-author"><strong>{{ bridge.display_name(message.author) }}</strong><span class="channel-message-round">{{ card.round_label }}</span><UBadge size="xs" color="neutral" variant="soft" class="channel-source">{{ bridge.sources[message.source] }}</UBadge><UBadge v-if="message.kind === 'moderation'" size="xs" color="neutral" variant="soft" class="channel-source">{{ t('主持人') }}</UBadge><UBadge v-if="message.kind === 'receipt'" size="xs" color="neutral" variant="soft" class="channel-source">{{ t('运行回执') }}</UBadge><UBadge v-if="message.proactive" size="xs" color="neutral" variant="soft" class="channel-source" :title="t('成员在自己的窗口里应用户要求主动发言，不是在回答房间的请求')">{{ t('主动发言') }}</UBadge><UBadge v-if="card.waits" size="xs" color="warning" variant="soft" class="channel-source" :title="card.speaking_expert ? t('{value1} 说完后交给主持人处理', { value1: bridge.display_name(card.speaking_expert) }) : t('等待主持人处理')">{{ t('待主持人处理') }}</UBadge><template v-for="badge in card.badges" :key="badge.key"><span class="channel-source" :title="badge.title">{{ badge.label }}<span v-if="badge.title"> &middot; {{ badge.title }}</span></span><UButton v-if="badge.answer_id" :label="badge.answer_label" size="xs" color="neutral" variant="link" class="channel-message-reference" @click="locate({ id: badge.answer_id })" /></template></div>
+                <div class="channel-message-author"><strong>{{ bridge.display_name(message.author) }}</strong><span class="channel-message-round">{{ card.round_label }}</span><UBadge size="xs" color="neutral" variant="soft" class="channel-source">{{ bridge.sources[message.source] }}</UBadge><UBadge v-if="message.kind === 'moderation'" size="xs" color="neutral" variant="soft" class="channel-source">{{ t('主持人') }}</UBadge><UBadge v-if="message.kind === 'receipt'" size="xs" color="neutral" variant="soft" class="channel-source">{{ t('运行回执') }}</UBadge><UBadge v-if="message.proactive" size="xs" color="neutral" variant="soft" class="channel-source" :title="t('成员在自己的窗口里应用户要求主动发言，不是在回答房间的请求')">{{ t('主动发言') }}</UBadge><UBadge v-if="card.waits" size="xs" color="warning" variant="soft" class="channel-source" :title="card.speaking_expert ? t('{value1} 说完后交给主持人处理', { value1: bridge.display_name(card.speaking_expert) }) : t('等待主持人处理')">{{ t('待主持人处理') }}</UBadge><RequestStatus v-if="card.badges?.length" :badges="card.badges" @locate="(id) => locate({ id })" /></div>
                 <div class="channel-message-provenance"><time :title="new Date(message.created_at).toLocaleString(locale)">{{ bridge.format_time(message.created_at) }}</time><UButton :label="`#${message.id}`" color="neutral" variant="link" size="xs" :aria-label="t('查看原文 #{value1}', { value1: message.id })" class="channel-message-id" @click="emit('detail', message.id)" /><span v-if="message.submitted_by && message.submitted_by !== message.author && !(message.source === 'proxy' && message.submitted_by === '用户')">{{ t('{value1} 代发', { value1: bridge.display_name(message.submitted_by) }) }}</span><span v-if="message.source === 'auto'" :title="t('成员结束时没有提交回答，本机服务把它最后一段回复收录为本次回答')">{{ t('自动收录') }}</span></div>
               </div>
               <span v-if="card.elapsed !== null" class="channel-message-provenance channel-message-elapsed">{{ t('耗时 {value1}', { value1: format_elapsed(card.elapsed) }) }}</span>
@@ -2927,13 +2939,13 @@ function copy_message(message) { act("copy", `${view.value.room_site}/r/${room.v
               <UAvatar :src="bridge.identities[view.sending_preview.author]?.icon" :text="bridge.identities[view.sending_preview.author]?.initials || '?'" :alt="bridge.display_name(view.sending_preview.author)" size="md" class="channel-avatar" :class="bridge.identities[view.sending_preview.author]?.style" />
               <div class="channel-message-meta">
                 <div class="channel-message-author"><strong>{{ bridge.display_name(view.sending_preview.author) }}</strong></div>
-                <div class="channel-message-provenance"><time>{{ bridge.format_time(view.sending_preview.created_at) }}</time><span class="channel-sending-status" role="status">{{ view.sending_preview.saved_id ? `#${view.sending_preview.saved_id}` : view.sending_preview.retrying ? t('网络不稳，第 {value1} 次重试…', { value1: view.sending_preview.retrying }) : sending_uploads ? t('正在上传附件 {value1}/{value2}…', { value1: sending_uploads.done, value2: sending_uploads.total }) : t('发送中…') }}</span></div>
+                <div class="channel-message-provenance"><time>{{ bridge.format_time(view.sending_preview.created_at) }}</time><span class="channel-sending-status" role="status"><UploadPercent v-if="!view.sending_preview.saved_id && !view.sending_preview.retrying && sending_uploads" :id="sending_uploads.id" v-slot="{ percent, phase }">{{ sending_upload_text(percent, phase) }}</UploadPercent><template v-else>{{ view.sending_preview.saved_id ? `#${view.sending_preview.saved_id}` : view.sending_preview.retrying ? t('网络不稳，第 {value1} 次重试…', { value1: view.sending_preview.retrying }) : t('发送中…') }}</template></span></div>
               </div>
             </div>
             <div class="channel-answer"><div class="channel-message-text markdown-body" v-html="sending_html"></div></div>
             <!-- The files show at once from this browser's own copy while they upload. -->
             <div v-if="view.sending_preview.files.some((file) => file.preview_url)" class="message-attachments">
-              <span v-for="file in view.sending_preview.files.filter((item) => item.preview_url)" :key="file.preview_url" class="attachment-image" :class="{ 'is-uploading': !file.uploaded && !view.sending_preview.saved_id }"><img :src="file.preview_url" :alt="file.name"><i v-if="!file.uploaded && !view.sending_preview.saved_id" class="attachment-uploading" role="progressbar" :aria-label="t('正在上传')" /></span>
+              <span v-for="file in view.sending_preview.files.filter((item) => item.preview_url)" :key="file.preview_url" class="attachment-image is-uploading"><img :src="file.preview_url" :alt="file.name"><AttachmentUploadRing :id="file.id" pending :done="file.uploaded || Boolean(view.sending_preview.saved_id)" /></span>
             </div>
             <div v-if="view.sending_preview.files.some((file) => !file.preview_url)" class="channel-message-provenance">{{ t('附件：{value1}', { value1: view.sending_preview.files.filter((file) => !file.preview_url).map((file) => file.name).join('、') }) }}</div>
           </template>
@@ -3044,8 +3056,12 @@ function copy_message(message) { act("copy", `${view.value.room_site}/r/${room.v
               <img v-if="file.preview_url" :src="file.preview_url" :alt="file.file_name" :title="file.file_name">
               <template v-else>
                 <span v-html="bridge.attachment_file_icon(file.file_name)"></span>
-                <span class="attachment-name"><span :title="file.file_name">{{ file.file_name }}</span><small>{{ bridge.attachment_size(file.size) }}</small></span>
+                <span class="attachment-name"><span :title="file.file_name">{{ file.file_name }}</span><small>{{ bridge.attachment_size(file.size) }}<UploadPercent :id="file.id" v-slot="{ percent, phase }"><template v-if="percent !== null"> · {{ phase === 'compress' ? t('压缩中 {percent}%', { percent }) : percent < 100 ? t('上传中 {percent}%', { percent }) : t('已上传') }}</template></UploadPercent></small></span>
               </template>
+              <AttachmentUploadRing v-if="file.preview_url" :id="file.id" />
+              <UploadPercent v-else :id="file.id" v-slot="{ percent, phase }">
+                <span v-if="percent !== null && percent < 100" class="attachment-draft-progress" role="progressbar" aria-valuemin="0" aria-valuemax="100" :aria-valuenow="percent" :aria-label="phase === 'compress' ? t('压缩中 {percent}%', { percent }) : t('上传中 {percent}%', { percent })"><i :style="{ width: `${percent}%` }" /></span>
+              </UploadPercent>
               <button type="button" class="attachment-remove" :aria-label="t('移除 {value1}', { value1: file.file_name })" @click="act('remove_attachment', file.id)"><UIcon name="i-lucide-x" /></button>
             </div>
           </div>
@@ -3096,6 +3112,8 @@ function copy_message(message) { act("copy", `${view.value.room_site}/r/${room.v
 .channel-retry-button { background: #ffffff14; color: var(--ui-text-highlighted); }
 .channel-retry-button:hover:not(:disabled) { background: #ffffff24; }
 .channel-stop-square { width: 9px; height: 9px; border-radius: 2px; background: currentColor; }
+/* Pressed, the spinner takes the square's place at the centre of the key. */
+.channel-stop-button :deep([data-slot="leadingIcon"]) { flex-shrink: 0; width: 14px; height: 14px; }
 /* In the one-line strip the stop key shrinks to the row. */
 .channel-working-strip .channel-stop-button { width: 24px; height: 24px; }
 .channel-working-strip .channel-stop-square { width: 8px; height: 8px; }

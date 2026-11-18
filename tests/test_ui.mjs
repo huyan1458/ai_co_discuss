@@ -47,7 +47,7 @@ test('all providers expose API without installed software and keys never enter d
   assert.equal(calls.length, 1, 'API discovery is explicit, never automatic');
   await f.context.load_launch_models('Grok', true);
   assert.equal(f.context.launch_model_state('Grok').items[0].value, 'vendor/model.1');
-  assert.equal(f.context.launch_model_state('Grok').items[0].label, 'Vendor Model · vendor/model.1');
+  assert.equal(f.context.launch_model_state('Grok').items[0].label, 'vendor/model.1');
   f.context.write_launch_field('Grok', 'base_url', 'https://api.x.ai/v1');
   assert.equal(state.launch.profiles.Grok.api_key_ref, undefined);
 });
@@ -734,6 +734,66 @@ function theme_fixture(saved_theme = null, shared_storage = null) {
   return { context, nodes, classes, storage, loaded, buttons, notified, root: document.documentElement };
 }
 
+test('a video goes up compressed when that helps, and is never lost when compression fails', async () => {
+  const MIB = 1024 * 1024;
+  const { context, notified } = theme_fixture();
+  const uploaded = [];
+  let compress = async () => null, loads = 0;
+  context.document.dispatchEvent = () => {};
+  Object.assign(context, { console, AbortController, CustomEvent: class { constructor(type, options) { Object.assign(this, { type }, options); } }, VideoEncoder: function () {}, VideoDecoder: function () {},
+    render_attachment_drafts() {}, load_video_compressor: async () => { loads += 1; return { compress_video: (...input) => compress(...input) }; },
+    post_room_file: async (path, file) => { uploaded.push(file); return { attachment: { id: `saved-${uploaded.length}` } }; } });
+  context.test_state.remote_rooms = true;
+  const draft = (size, type = 'video/mp4') => ({ id: `draft-${size}-${loads}-${uploaded.length}`, file: { name: 'clip.mov', size, type } });
+  const smaller = { name: 'clip.mp4', size: MIB, type: 'video/mp4' };
+
+  const shrunk = draft(12 * MIB);
+  compress = async () => smaller;
+  await context.upload_draft('room', '用户', shrunk);
+  assert.equal(uploaded.at(-1), smaller, 'the smaller copy is what goes up');
+  await context.upload_draft('room', '其他成员', shrunk);
+  assert.equal(loads, 1, 'a video is compressed once, however often it is uploaded');
+
+  for (const failing of [async () => null, async () => { throw new Error('encoder gave up'); }]) {
+    const kept = draft(12 * MIB);
+    compress = failing;
+    await context.upload_draft('room', '用户', kept);
+    assert.equal(uploaded.at(-1), kept.file, 'a video the site can take goes up as it is');
+  }
+
+  const count = uploaded.length, oversized = draft(40 * MIB);
+  compress = async () => null;
+  await assert.rejects(context.upload_draft('room', '用户', oversized), (error) => error.video_too_large === true);
+  assert.equal(uploaded.length, count, 'a video the site would refuse is not sent');
+  compress = async () => smaller;
+  await context.upload_draft('room', '用户', oversized);
+  assert.equal(uploaded.at(-1), smaller, 'sending again tries the compression again');
+
+  const sent_before = uploaded.length, removed = draft(12 * MIB);
+  compress = async () => { context.discard_draft_upload(removed); return null; };
+  await context.upload_draft('room', '用户', removed);
+  assert.equal(uploaded.length, sent_before, 'a video taken out while it compresses is not uploaded');
+
+  const before = loads;
+  await context.upload_draft('room', '用户', draft(2 * MIB));
+  await context.upload_draft('room', '用户', draft(12 * MIB, 'application/pdf'));
+  context.test_state.remote_rooms = false;
+  await context.upload_draft('room', '用户', draft(12 * MIB));
+  assert.equal(loads, before, 'small videos, other files and uploads that skip the relay stay as they are');
+  assert.deepEqual(notified, []);
+});
+
+test('video compression plans a readable copy that fits the site, or declines', async () => {
+  const { plan_compression } = await import('../frontend/video-compress.js');
+  const MIB = 1024 * 1024, limit = 20 * MIB;
+  const recording = { width: 1206, height: 2622, duration: 7.4, size: 12.3 * MIB, audio_bitrate: 128000, packet_rate: 60 };
+  assert.deepEqual(plan_compression(recording, limit), { width: 588, height: 1280, bitrate: 1200000, frame_rate: 30 });
+  assert.equal(plan_compression({ ...recording, width: 592, height: 1280, size: MIB, packet_rate: 30 }, limit), null, 'already small');
+  const long = plan_compression({ ...recording, duration: 240, size: 400 * MIB }, limit);
+  assert.ok(long.bitrate < 1200000 && (long.bitrate + 128000) * 240 / 8 <= limit, 'a long video is planned to fit');
+  assert.equal(plan_compression({ ...recording, duration: 3600, size: 900 * MIB }, limit), null, 'too long to stay readable');
+});
+
 test('a relayed upload resends only lost parts, and a try after a failure carries on where it stopped', async () => {
   const { context } = theme_fixture();
   Object.assign(context, { Blob, btoa, atob, setTimeout: (resolve) => { resolve(); return 0; } });
@@ -759,8 +819,10 @@ test('a relayed upload resends only lost parts, and a try after a failure carrie
   // A part lost once is sent again; every other part goes once, and the file arrives whole.
   const first = file(1);
   lose = (payload) => payload.index === 1 && sent.filter((index) => index === 1).length === 1;
-  const done = await context.relay_upload('/api/rooms/r/attachments?submission_id=a', first);
+  const shares = [];
+  const done = await context.relay_upload('/api/rooms/r/attachments?submission_id=a', first, (share) => shares.push(share));
   assert.deepEqual([...sent].sort(), [0, 1, 1, 2, 3]);
+  assert.deepEqual(shares, [0, 0.25, 0.5, 0.75, 1], 'progress counts the parts the computer confirmed');
   assert.ok(whole(done.attachment.id).equals(Buffer.from(first)));
 
   // A part that keeps getting lost fails the try; the next try of the same file sends only what the computer lacks.
@@ -770,8 +832,10 @@ test('a relayed upload resends only lost parts, and a try after a failure carrie
   await assert.rejects(context.relay_upload('/api/rooms/r/attachments?submission_id=b', second));
   lose = () => false;
   sent.length = 0;
-  const resumed = await context.relay_upload('/api/rooms/r/attachments?submission_id=b', second);
+  const resumed_shares = [];
+  const resumed = await context.relay_upload('/api/rooms/r/attachments?submission_id=b', second, (share) => resumed_shares.push(share));
   assert.ok(!sent.includes(0) && !sent.includes(1) && sent.includes(2), `resent ${sent}`);
+  assert.ok(resumed_shares[0] >= 0.5, `a resumed try starts from what the computer has, not ${resumed_shares[0]}`);
   assert.ok(whole(resumed.attachment.id).equals(Buffer.from(second)));
   assert.equal([...computer.parts.keys()].length, 2, 'the resumed try kept its upload id');
 
@@ -1435,6 +1499,27 @@ function history_fixture(records) {
   };
   return { context, state: context.test_state, requests, load: () => context.load_message_history("scale50", context.test_state.refresh_version) };
 }
+
+test("rooms not on screen stay cached while working or after they change", async () => {
+  const records = [{ id: 1, room: "working", text: "进行中" }, { id: 2, room: "idle", text: "旧消息" }, { id: 3, room: "open", text: "当前房间" }];
+  const fixture = history_fixture(records);
+  fixture.state.room = { id: "open" };
+  const cached = id => {
+    const history = fixture.context.cached_message_history(id);
+    return history ? Array.from(history.messages, message => message.id) : undefined;
+  };
+  const directory = (idle_latest) => [{ id: "working", latest_id: 1, running: true }, { id: "idle", latest_id: idle_latest, running: false }, { id: "open", latest_id: 3, running: true }];
+
+  await fixture.context.sync_background_rooms(directory(2));
+  assert.deepEqual(cached("working"), [1]);
+  assert.equal(vm.runInContext("room_views.has('working')", fixture.context), true);
+  assert.equal(cached("idle"), undefined, "a room idle since the page opened is not read");
+  assert.equal(cached("open"), undefined, "the open room is read by the page itself");
+
+  records.push({ id: 4, room: "idle", text: "新消息" });
+  await fixture.context.sync_background_rooms(directory(4));
+  assert.deepEqual(cached("idle"), [2, 4]);
+});
 
 /** Hold real controller requests so UI state can be inspected before server replies. */
 function folder_fixture() {

@@ -124,6 +124,6 @@ In Codex, invoke them as `$discuss-host`. In other tools that do not discover th
 
 ## Attachments and Export
 
-- **Attachments** — up to 10 per message and 20 MiB each; images and PDFs preview in place. Uploading does not mean an agent has read the file.
+- **Attachments** — up to 10 per message and 20 MiB each; images and PDFs preview in place, and an opened image can be zoomed, rotated and saved. Videos of 3 MiB or more sent from another device through your computer are compressed in the browser first (1280 on the long side, sound kept), and larger videos are compressed to fit the limit when possible. If the browser can't compress a video of 20 MiB or less, the original is sent. Uploading does not mean an agent has read the file.
 - **Export and import** — **Export conversation** (导出对话) downloads the raw data and attachments; **Import room** (导入房间) on another site creates a copy you can keep using. Exported from a computer running the local service, the backup also carries each member's software settings and session; imported on that same computer, members resume their original sessions when brought back. Claude Code members come back as manual members and register again from their original window, so the session does not fork.
 - **Discussion history** — backups include past sessions, conclusions and speaker plans; early version 1 backups can no longer be imported. Import restores them as history; it does not resume active work or wake members. Markdown exports retain the links between plans and answers.

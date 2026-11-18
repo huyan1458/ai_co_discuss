@@ -7,8 +7,9 @@
  * file's bytes load together, and the loading animation covers the content while it lays out at its real size.
  * `url` is a stream address of the computer's website, an attachment's address, or a Blob URL read through the relay.
  */
-import { nextTick, onBeforeUnmount, ref, watch } from "vue";
+import { nextTick, onBeforeUnmount, onMounted, ref, watch } from "vue";
 import PreviewLoading from "./PreviewLoading.vue";
+import { attach_pinch_zoom } from "./pinch-zoom.js";
 import { t } from './i18n.js';
 
 // `scale` is the preview's size step for Word and Excel (1 = Word fitted to the width, Excel at its normal size).
@@ -27,10 +28,14 @@ const SHEET_STYLE = "<meta charset=\"utf-8\"><meta name=\"viewport\" content=\"w
 const PDF_MAX_PIXEL_RATIO = 2;
 const PDF_MAX_SCALE = 2;
 const PDF_GUTTER = 24;
+// The longest side of a drawn page: iOS leaves a larger canvas blank.
+const PDF_MAX_CANVAS_SIDE = 4096;
+// PDF and slides have no size steps, so two fingers zoom them, up to this many times their fitted size.
+const MAX_PINCH_ZOOM = 4;
 const state = ref("loading"), error = ref(""), sheets = ref([]), sheet = ref(0);
-const docx_frame = ref(null), sheet_frame = ref(null), slides_host = ref(null), pdf_host = ref(null), frame_loaded = ref(false);
+const root = ref(null), docx_frame = ref(null), sheet_frame = ref(null), slides_host = ref(null), pdf_host = ref(null), frame_loaded = ref(false);
 let viewer = null, pdf_task = null, pdf_document = null, page_observer = null, resize_observer = null, version = 0;
-let sheet_worker = null, cancel_sheet = null;
+let sheet_worker = null, cancel_sheet = null, pinch_zoom = 1, slides_fit = 1, detach_pinch = null;
 
 /** The file's bytes, for the renderers that take them rather than a URL. */
 async function file_bytes() {
@@ -92,16 +97,53 @@ async function show_docx(module, data, run) {
   resize_observer.observe(docx_frame.value);
 }
 
-/** Draw one PDF page into its canvas once it scrolls near the view. */
+/** Draw one PDF page at the current zoom once it scrolls near the view; the old picture stays until the new one is ready. */
 async function draw_pdf_page(canvas) {
-  if (canvas.dataset.drawn) return;
-  canvas.dataset.drawn = "1";
+  const zoom = String(pinch_zoom);
+  if (canvas.dataset.drawn === zoom) return;
+  canvas.dataset.drawn = zoom;
   const page = await pdf_document.getPage(Number(canvas.dataset.page));
-  const viewport = page.getViewport({ scale: Number(canvas.dataset.scale) });
-  const ratio = Math.min(window.devicePixelRatio || 1, PDF_MAX_PIXEL_RATIO);
-  canvas.width = Math.floor(viewport.width * ratio);
-  canvas.height = Math.floor(viewport.height * ratio);
-  await page.render({ canvasContext: canvas.getContext("2d"), viewport, transform: ratio === 1 ? null : [ratio, 0, 0, ratio, 0, 0] }).promise;
+  const viewport = page.getViewport({ scale: Number(canvas.dataset.scale) * pinch_zoom });
+  const ratio = Math.min(window.devicePixelRatio || 1, PDF_MAX_PIXEL_RATIO, PDF_MAX_CANVAS_SIDE / Math.max(viewport.width, viewport.height));
+  const drawing = document.createElement("canvas");
+  drawing.width = Math.floor(viewport.width * ratio);
+  drawing.height = Math.floor(viewport.height * ratio);
+  await page.render({ canvasContext: drawing.getContext("2d"), viewport, transform: ratio === 1 ? null : [ratio, 0, 0, ratio, 0, 0] }).promise;
+  if (canvas.dataset.drawn !== zoom) return;
+  canvas.width = drawing.width;
+  canvas.height = drawing.height;
+  canvas.getContext("2d").drawImage(drawing, 0, 0);
+}
+
+/** Give a PDF page its size on screen at the current zoom. */
+function size_pdf_page(canvas) {
+  canvas.style.width = `${Math.floor(Number(canvas.dataset.width) * pinch_zoom)}px`;
+  canvas.style.height = `${Math.floor(Number(canvas.dataset.height) * pinch_zoom)}px`;
+}
+
+/** Lay the PDF out at a new zoom; observing the pages again redraws those near the view. */
+function zoom_pdf(zoom) {
+  pinch_zoom = zoom;
+  for (const canvas of pdf_host.value.querySelectorAll("canvas")) {
+    size_pdf_page(canvas);
+    page_observer.unobserve(canvas);
+    page_observer.observe(canvas);
+  }
+}
+
+/** Have the deck viewer draw its slides at a new zoom, relative to the size it fitted them to. */
+async function zoom_slides(zoom) {
+  if (pinch_zoom === 1) slides_fit = viewer.getScale();
+  await viewer.setScale(slides_fit * zoom);
+  pinch_zoom = viewer.getScale() / slides_fit;
+}
+
+/** The element that scrolls the PDF pages or the slides, once they are shown. */
+function pinch_scroller() {
+  if (state.value !== "ready") return null;
+  if (props.kind === "pdf") return pdf_host.value;
+  if (props.kind !== "slides" || !viewer) return null;
+  return [...slides_host.value.querySelectorAll("*")].find((item) => /auto|scroll/.test(getComputedStyle(item).overflowY)) || null;
 }
 
 /** Lay out every PDF page at the window's width; each is drawn as it comes into view, the first shown at once. */
@@ -120,8 +162,8 @@ async function show_pdf(module, data, run) {
     const base = (await pdf_document.getPage(number)).getViewport({ scale: 1 });
     const scale = Math.min(width / base.width, PDF_MAX_SCALE);
     const canvas = document.createElement("canvas");
-    Object.assign(canvas.dataset, { page: String(number), scale: String(scale) });
-    Object.assign(canvas.style, { width: `${Math.floor(base.width * scale)}px`, height: `${Math.floor(base.height * scale)}px` });
+    Object.assign(canvas.dataset, { page: String(number), scale: String(scale), width: String(base.width * scale), height: String(base.height * scale) });
+    size_pdf_page(canvas);
     host.append(canvas);
     page_observer.observe(canvas);
     if (number === 1) { await draw_pdf_page(canvas); state.value = "ready"; }
@@ -146,6 +188,7 @@ function release() {
   page_observer?.disconnect();
   resize_observer?.disconnect();
   viewer = pdf_task = pdf_document = page_observer = resize_observer = null;
+  pinch_zoom = 1;
   pdf_host.value?.replaceChildren();
 }
 
@@ -177,11 +220,15 @@ async function render() {
 
 watch(() => [props.kind, props.url], render, { immediate: true });
 watch(() => props.scale, () => (props.kind === "docx" ? fit_docx() : scale_sheet()));
-onBeforeUnmount(() => { version++; release(); });
+onMounted(() => {
+  detach_pinch = attach_pinch_zoom(root.value, { scroller: pinch_scroller, get_zoom: () => pinch_zoom, max_zoom: MAX_PINCH_ZOOM,
+    set_zoom: (zoom) => (props.kind === "pdf" ? zoom_pdf(zoom) : zoom_slides(zoom)) });
+});
+onBeforeUnmount(() => { version++; detach_pinch?.(); release(); });
 </script>
 
 <template>
-  <div class="office-viewer">
+  <div ref="root" class="office-viewer">
     <iframe v-if="kind === 'docx'" ref="docx_frame" class="office-viewer-frame" sandbox="allow-same-origin" referrerpolicy="no-referrer" :srcdoc="DOCX_FRAME" :title="t('Word 文档预览')" @load="frame_loaded = true"></iframe>
     <template v-else-if="kind === 'sheet'">
       <nav v-if="sheets.length > 1" class="office-viewer-sheets" :aria-label="t('工作表')">
@@ -204,8 +251,9 @@ onBeforeUnmount(() => { version++; release(); });
 .office-viewer { position: relative; display: flex; flex: 1; flex-direction: column; width: 100%; min-width: 0; height: 100%; min-height: 0; }
 .office-viewer-frame { flex: 1; width: 100%; min-height: 0; border: 0; background: #fff; }
 .office-viewer-slides { flex: 1; width: 100%; min-height: 0; }
-.office-viewer-pages { display: flex; flex: 1; flex-direction: column; align-items: center; gap: 12px; width: 100%; min-height: 0; padding: 12px; overflow: auto; background: #e9ebef; }
-.office-viewer-pages :deep(canvas) { flex-shrink: 0; background: #fff; box-shadow: 0 2px 10px rgb(0 0 0 / .15); }
+/* Pages center with auto margins: centering by the flex container would cut off the left of a page zoomed wider than the window. */
+.office-viewer-pages { display: flex; flex: 1; flex-direction: column; align-items: flex-start; gap: 12px; width: 100%; min-height: 0; padding: 12px; overflow: auto; background: #e9ebef; }
+.office-viewer-pages :deep(canvas) { flex-shrink: 0; margin-inline: auto; background: #fff; box-shadow: 0 2px 10px rgb(0 0 0 / .15); }
 .office-viewer-cover { position: absolute; inset: 0; z-index: 1; background: var(--ui-bg); }
 .office-viewer-failed { display: flex; gap: 8px; align-items: center; justify-content: center; padding: 24px; color: var(--ui-text-muted); font-size: 13px; }
 .office-viewer-failed p { margin: 0; max-width: 520px; }

@@ -219,9 +219,8 @@
   "来自 Antigravity CLI 模型列表": "From the Antigravity CLI model list",
   "来自 API 模型列表": "From the API model list",
   "官方推荐，可输入其他模型 ID": "Official recommendations. Other model IDs can be entered.",
-  "软件默认（{value1}）": "Software default ({value1})",
+  "软件默认 · {value1}": "Software default · {value1}",
   "软件默认模型": "Software default model",
-  "{value1}（已保存，列表未确认）": "{value1} (saved, not confirmed in list)",
   "正在读取原生思考档位…": "Loading native effort levels…",
   "默认强度由 CLI 决定。": "The CLI determines the default effort.",
   "选择模型后显示可用思考强度；默认值由软件决定。": "Choose a model to see available effort levels. The software determines the default.",
@@ -386,5 +385,10 @@
   "请使用房主浏览器选择本房间成员": "Use the owner browser to select a member of this room",
   "已复制 {name} 的启动指令（含 token）": "Copied launch instructions for {name} (including token)",
   "已复制 {name} 的参与说明": "Copied participation instructions for {name}",
-  "输入框原有草稿已暂存，这条发出后恢复": "Your draft was set aside and will come back once this message is sent."
+  "输入框原有草稿已暂存，这条发出后恢复": "Your draft was set aside and will come back once this message is sent.",
+  "正在取回附件…": "Fetching attachments…",
+  "这条排队消息已发出或已删除": "This queued message was already sent or deleted.",
+  "未能编辑，消息仍在排队：{value1}": "Couldn't edit it. The message is still queued: {value1}",
+  "消息仍在排队，输入框里是副本，发送前请先删除排队中的原消息": "The message is still queued and the composer holds a copy. Delete the queued original before sending.",
+  "未能确认这条排队消息的状态，内容已保留在输入框，请确认未发出后再发送": "Couldn't confirm this queued message's status. Its text is kept in the composer. Check that it wasn't sent before sending it again."
 }

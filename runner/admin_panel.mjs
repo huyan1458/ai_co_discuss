@@ -18,7 +18,7 @@ import { fileURLToPath, pathToFileURL } from 'node:url';
 import { parseArgs } from 'node:util';
 
 import { account_home, add_account, data_home, entry_settings, entry_status, instance_home as plain_instance_home, read_accounts, remove_account, reset_password, save_entry_settings,
-  instance_key, set_account_disabled, set_account_protected, start_entry, stop_entry } from '../gateway/gateway.mjs';
+  instance_key, set_account_disabled, set_account_protected, start_entry, stop_entry, ENTRY_WAYS } from '../gateway/gateway.mjs';
 import { signed_site_url, verified_connection } from './entry_client.mjs';
 import { API_PROVIDERS, save_api_key } from './discussion_api.mjs';
 import { STT_PROVIDERS, TTS_PROVIDERS } from './tts_providers.mjs';
@@ -545,8 +545,8 @@ function run_instance(data, name, command) {
   const key_file = account.protected === true ? instance_key_file(name) : '';
   // An account without its own Windows user runs as the owner and could read everything the owner can; it is not let
   // run while people outside can reach the entry.
-  if (command === 'start' && process.platform === 'win32' && !read_os_users(data)[name] && entry_settings(data).mode !== 'local') {
-    throw panel_error('外网访问已开启，{value1} 未隔离（以你的身份运行），不能启动：请先隔离该账号，或把登录入口的访问方式改为“仅这台电脑”', { value1: name });
+  if (command === 'start' && process.platform === 'win32' && !read_os_users(data)[name] && (entry_settings(data).relay_enabled || entry_settings(data).tunnel_enabled)) {
+    throw panel_error('外网访问已开启，{value1} 未隔离（以你的身份运行），不能启动：请先隔离该账号，或关闭登录入口的线上中转和自有域名', { value1: name });
   }
   if (command === 'start' && read_os_users(data)[name]) {
     const { local_script } = shared_paths();
@@ -646,7 +646,7 @@ export function create_panel({ data, key, port, ops = {}, sessions = new Set() }
   const op = { list_accounts, add_account, reset_password, set_account_disabled, remove_account, run_instance, create_os_user, remove_os_user,
     login_status, apply_login, logout, start_login, login_progress, submit_login, cancel_login, install_runtime, prepare_account, account_env, account_skills, account_workflows, owner_env, owner_skills, owner_prompts, save_owner_prompt, shared_cli_state,
     save_api_key, list_keys, remove_key, use_shared_programs, service_overview, run_owner_service, latest_version, begin_update,
-    autostart_enabled, set_autostart, entry_overview, start_entry, stop_entry, keep_tunnel, start_tunnel_setup, set_entry_mode, set_relay_url, connect_site, make_access_code, join_relay, protect_account, start_verified, hand_over: () => {}, ...ops };
+    autostart_enabled, set_autostart, entry_overview, start_entry, stop_entry, keep_tunnel, start_tunnel_setup, set_entry_way, set_relay_url, connect_site, make_access_code, join_relay, protect_account, start_verified, hand_over: () => {}, ...ops };
   const hosts = new Set([`127.0.0.1:${port}`, `localhost:${port}`]);
 
   async function api(method, path, body) {
@@ -723,7 +723,7 @@ export function create_panel({ data, key, port, ops = {}, sessions = new Set() }
       return op.entry_overview(data);
     }
     // How people outside reach the entry, the relay's entry address, and binding this computer to an online site.
-    if (method === 'POST' && section === 'entry' && name === 'mode') return op.set_entry_mode(data, String(body.mode || ''));
+    if (method === 'POST' && section === 'entry' && name === 'way') return op.set_entry_way(data, String(body.way || ''), body.enabled === true);
     if (method === 'POST' && section === 'entry' && name === 'relay') return op.set_relay_url(data, body.url);
     if (method === 'POST' && section === 'site' && name === 'connect') return op.connect_site(data, body.site, body.setup_key);
     // The access code: made on the computer that deployed the online site, pasted on a hosting computer.
@@ -823,8 +823,8 @@ export function create_panel({ data, key, port, ops = {}, sessions = new Set() }
 /** The account entry as the hosting page shows it: whether it runs, its loopback port and the address customers open. */
 /** Keep the entry's tunnel as the settings say: running while hosting is on and the entry is meant to run. */
 function keep_tunnel(data) {
-  const { tunnel, port, running, mode } = entry_settings(data);
-  return ensure_tunnel(data, hosting_enabled(data) && mode === 'tunnel' ? tunnel : null, port, running);
+  const { tunnel, port, running, tunnel_enabled } = entry_settings(data);
+  return ensure_tunnel(data, hosting_enabled(data) && tunnel_enabled ? tunnel : null, port, running);
 }
 
 /** The online site this computer is bound to (`codiscuss local connect`) and its id there, or null. */
@@ -852,40 +852,46 @@ function relay_problem(relay, entry_running, service_running) {
 }
 
 async function entry_overview(data) {
-  const { port, public_url, tunnel, mode, relay_url } = entry_settings(data), status = await entry_status(data);
+  const { port, public_url, tunnel, relay_enabled, tunnel_enabled, relay_url } = entry_settings(data), status = await entry_status(data);
   const bound = bound_site(data);
   const relay = { url: relay_url, site: bound?.site || '', link: relay_url && bound ? `${relay_url}/?m=${bound.machine}` : '',
-    ...(mode === 'relay' && relay_url && bound ? await relay_status(relay_url, bound.machine) : {}) };
-  if (mode === 'relay') relay.problem = relay_problem(relay, status.running, Boolean(local_status(data).running));
-  // The address people open in the mode in use.
-  const address = mode === 'relay' ? relay.link : mode === 'tunnel' ? public_url : '';
-  return { running: status.running, port: status.running ? status.port : port, public_url, mode, address, relay,
+    ...(relay_enabled && relay_url && bound ? await relay_status(relay_url, bound.machine) : {}) };
+  if (relay_enabled) relay.problem = relay_problem(relay, status.running, Boolean(local_status(data).running));
+  // The address handed to people: the owner's domain when it is on (direct, and outside the Workers quota), else the relay.
+  const address = tunnel_enabled && public_url ? public_url : relay_enabled ? relay.link : '';
+  return { running: status.running, port: status.running ? status.port : port, public_url, relay_enabled, tunnel_enabled, address, relay,
     tunnel: tunnel ? { host: tunnel.host, name: tunnel.name, ...(await tunnel_status(data)) } : null };
 }
 
-/**
- * Switch how people outside reach the entry, once what that way needs is there. Reaching it from outside needs the entry
- * running, and the relay needs this computer's service (which holds the relay connection): both are started here rather
- * than left for the first person to find a broken link. The tunnel follows at once.
- */
-async function set_entry_mode(data, mode) {
+/** Make sure what a way from outside needs is there before it is turned on. */
+async function prepare_entry_way(data, way) {
   const settings = entry_settings(data);
-  if (mode === 'relay') {
+  if (way === 'relay') {
     const bound = bound_site(data);
     if (!bound) throw panel_error('这台电脑还没有接入线上站点：先用接入码接入');
     // Bound without an access code (`codiscuss local connect`): the site it is bound to gives the entry address.
     if (!settings.relay_url) await set_relay_url(data, await site_entry_url(bound.site));
   }
-  if (mode === 'tunnel' && !settings.tunnel) throw panel_error('还没有设好 Cloudflare 隧道：先点“设置”填写你的域名');
-  if (mode !== 'local' && process.platform === 'win32') {
+  if (way === 'tunnel' && !settings.tunnel) throw panel_error('还没有设好 Cloudflare 隧道：先点“设置”填写你的域名');
+  if (process.platform === 'win32') {
     const users = read_os_users(data), accounts = read_accounts(data);
     const exposed = [];
     for (const [name, account] of Object.entries(accounts)) if (!users[name] && await instance_running(account.port)) exposed.push(name);
-    if (exposed.length) throw panel_error('未隔离的账号正在运行（{value1}），它们以你的身份运行，改用线上中转或自有域名前请先停止或隔离', { value1: exposed.join('、') });
+    if (exposed.length) throw panel_error('未隔离的账号正在运行（{value1}），它们以你的身份运行，开启线上中转或自有域名前请先停止或隔离', { value1: exposed.join('、') });
   }
-  save_entry_settings(data, { mode });
-  if (mode !== 'local' && !(await entry_status(data)).running) { await start_entry(data); save_entry_settings(data, { running: true }); }
-  if (mode === 'relay' && !local_status(data).running) await run_owner_service(data, 'start');
+}
+
+/**
+ * Turn one way from outside on or off; the other way is left as it is. Reaching the entry from outside needs it running,
+ * and the relay needs this computer's service (which holds the relay connection): both are started here rather than left
+ * for the first person to find a broken link. The tunnel follows at once.
+ */
+async function set_entry_way(data, way, enabled) {
+  if (!ENTRY_WAYS.includes(way)) throw panel_error('未知的访问方式：{value1}', { value1: way });
+  if (enabled) await prepare_entry_way(data, way);
+  save_entry_settings(data, { [`${way}_enabled`]: enabled });
+  if (enabled && !(await entry_status(data)).running) { await start_entry(data); save_entry_settings(data, { running: true }); }
+  if (enabled && way === 'relay' && !local_status(data).running) await run_owner_service(data, 'start');
   await keep_tunnel(data);
   return entry_overview(data);
 }
@@ -934,7 +940,7 @@ function make_access_code(data, { config, site }) {
 
 /**
  * On a hosting computer: join the online relay with an access code, each step reported. Bind to the site (unless bound
- * already), take the entry address the site gives, then switch to the relay, which starts what it needs.
+ * already), take the entry address the site gives, then turn the relay on, which starts what it needs.
  */
 async function join_relay(data, text) {
   const value = String(text || '').trim();
@@ -947,8 +953,8 @@ async function join_relay(data, text) {
   const entry_url = await site_entry_url(site);
   await set_relay_url(data, entry_url);
   steps.push(t('入口地址 {value1}', { value1: entry_url }));
-  const overview = await set_entry_mode(data, 'relay');
-  steps.push(t('已切换到线上中转'));
+  const overview = await set_entry_way(data, 'relay', true);
+  steps.push(t('已开启线上中转'));
   return { steps, entry: overview };
 }
 
@@ -1122,20 +1128,38 @@ function open_panel_window(data, url, look_first = true) {
   launch_panel_window(data, url);
 }
 
+/**
+ * The Edge arguments that reopen the panel at the size the owner left it.
+ *
+ * Edge records an app window's size under app_window_placement when it closes but does not apply it on the next --app
+ * launch (seen on Edge 157), so the recorded size is passed back. The position is not: Edge does not keep a window given
+ * --window-position on screen, and the monitor it was recorded on may be gone.
+ *
+ * Args:
+ *   profile: The panel window's Edge profile directory.
+ *
+ * Returns:
+ *   The window arguments for Edge; the default size until Edge has recorded one.
+ */
+export function panel_window_args(profile) {
+  let placement = null;
+  // The record's key is the app name "127.0.0.1_/", which Edge splits into nested objects at each dot.
+  try { placement = JSON.parse(readFileSync(join(profile, 'Default', 'Preferences'), 'utf8')).browser.app_window_placement['127']['0']['0']['1_/']; } catch { placement = null; }
+  if (placement?.maximized) return ['--start-maximized'];
+  const width = placement?.right - placement?.left, height = placement?.bottom - placement?.top;
+  return [`--window-size=${width > 0 && height > 0 ? `${width},${height}` : WINDOW_SIZE}`];
+}
+
 function launch_panel_window(data, url) {
   const edge = EDGE_PATHS.find(path => existsSync(path));
   if (!edge) return open_browser(url);
   const profile = join(data, 'panel-window');
-  // Edge keeps the size and place the owner left the window at (app_window_placement), but --window-size overrides it,
-  // so the default size is given only until Edge has kept one.
-  let placed = false;
-  try { placed = readFileSync(join(profile, 'Default', 'Preferences'), 'utf8').includes('"app_window_placement"'); } catch { placed = false; }
-  spawn(edge, [`--app=${url}`, `--user-data-dir=${profile}`, ...(placed ? [] : [`--window-size=${WINDOW_SIZE}`]), '--no-first-run', '--no-default-browser-check', '--lang=zh-CN', '--disable-features=Translate,msTranslate'],
+  spawn(edge, [`--app=${url}`, `--user-data-dir=${profile}`, ...panel_window_args(profile), '--no-first-run', '--no-default-browser-check', '--lang=zh-CN', '--disable-features=Translate,msTranslate'],
     { detached: true, stdio: 'ignore', windowsHide: false }).unref();
 }
 
-// The window opens on the page's own address: Edge keeps an app window's size under its address's path, so opening
-// /enter and landing on / kept the owner's size under / and restored the older one under /enter each time.
+// The window opens on the page's own address: Edge records an app window's size under the path it was opened on, and
+// panel_window_args reads the record for /.
 function panel_url(state) {
   return `http://127.0.0.1:${state.port}/?key=${state.key}`;
 }

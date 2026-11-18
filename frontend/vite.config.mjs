@@ -129,6 +129,14 @@ export default defineConfig(({ mode }) => mode === "markdown" ? {
     },
   },
   worker: { format: "es" },
+} : mode === "video" ? {
+  // Compressing a video before upload is a module of its own, imported only when a video is attached.
+  build: {
+    outDir: "web", emptyOutDir: false,
+    lib: { entry: "frontend/video-compress.js", formats: ["es"], fileName: () => "video-compress.js" },
+    rolldownOptions: { output: { codeSplitting: false, minify: true, comments: false,
+      postBanner: "/*! Includes Mediabunny (MPL-2.0), source at https://github.com/Vanilagy/mediabunny */" } },
+  },
 } : mode === "admin" ? {
   // The computer owner's management panel (runner/admin_panel.mjs): its own page and bundle, light theme only.
   define: { "process.env.NODE_ENV": JSON.stringify("production") },

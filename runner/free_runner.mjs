@@ -270,7 +270,7 @@ export function free_task_files(config, member, execution, binding, { session = 
   const { instructions, prompt } = free_task_text({ name: member.label || member.name, role: member.role, discussion: direct_question,
     discussion_request, profile, cli,
     room: config.room, messages, read_after: execution.read_until, execution_id: execution.id, task_path,
-    access_file: bound_access ? '' : access_path, read_rule: read_rule(profile.adapter), inbox, extra_directories, attachments, requests });
+    access_file: bound_access ? '' : access_path, read_rule: read_rule(profile.adapter), inbox, extra_directories, attachments, requests, workflow: Boolean(host_workflow) });
   // Software that declares it takes images gets them with the prompt, like a screenshot pasted into its own window.
   const images = takes_images(profile) && !inbox
     ? attachments.filter(item => item.path && IMAGE_TYPES.has(item.content_type)).map(item => ({ path: item.path, content_type: item.content_type, size: item.size }))

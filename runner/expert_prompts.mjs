@@ -142,7 +142,7 @@ export const READ_RULE = '读含中文的文件用 rg --encoding utf-8 . 文件�
  * `extra_directories` are the room's other project directories this member works with, each read-only or writable.
  */
 export function free_task_text({ name, discussion, discussion_request, profile, cli, messages, read_after, task_path, access_file = '', read_rule = '',
-  extra_directories = [], attachments = [], requests = [] }) {
+  extra_directories = [], attachments = [], requests = [], workflow = false }) {
   const files = attachments_text(attachments, cli);
   const scope = discussion ? `讨论进行中，用户直接向你提问（${messages}）：只回答这个提问，不改变讨论安排和进度。` : '';
   const commands = runs_commands(profile, extra_directories) ? '' : `命令只用 subcommands 列出的 ${cli} 子命令。`;
@@ -160,11 +160,13 @@ export function free_task_text({ name, discussion, discussion_request, profile, 
   // The message numbers are already known, so the original is one `message view` away instead of a list (#3129).
   const quick = `问候、致谢等简单消息可跳过技能：${cli} message view 上面的消息编号${access} 看原文，${cli} message post --body "回答"${access} 回复（正文含引号时先写草稿再用 --body-file）。`;
   const opening = `${wake_opening(requests, name, discussion)}，对应消息 ${messages}。`;
+  // Choosing a sub-workflow was left to the host's memory and got skipped, so every host task now asks for it (#4487).
+  const route = workflow ? '本房间启用了工作流：派活或改文件之前，先读 workflow.skill_path，把这次请求对照主线和 workflow.sub_workflows 每一项的 description；命中就读它的 SKILL.md 并照做，不问要不要用，回答开头写明走的哪条；都不命中就写明按普通请求处理。' : '';
   // A message with files is never a mere greeting: the quick path would skip them (2026-11-14, #3143); nor is a
   // hand-back, notice, Goal or host assignment, so the shortcut only goes with a user's own message (#3145 四.5).
   const prompt = files || !from_user(requests)
-    ? `${opening}先读任务文件 ${task_path}，按其中列出的技能处理并提交一次回答。${read_rule}${files}`
-    : `${opening}${quick}其他请求先读任务文件 ${task_path}，按其中列出的技能处理并提交一次回答。${read_rule}`;
+    ? `${opening}先读任务文件 ${task_path}，按其中列出的技能处理并提交一次回答。${route}${read_rule}${files}`
+    : `${opening}${quick}其他请求先读任务文件 ${task_path}，按其中列出的技能处理并提交一次回答。${route}${read_rule}`;
   return { instructions, prompt };
 }
 

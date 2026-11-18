@@ -51,7 +51,7 @@ export async function build_pages(source_root = PROJECT_ROOT, output_root = PROJ
 }
 
 /** Assets referenced by fixed URLs; scoped Vue styles in modern.css only match the modern.js built with them. */
-const VERSIONED_ASSETS = ["modern.css", "modern.js", "markdown.css", "markdown.js", "backup.js", "i18n.js", "app.js"];
+const VERSIONED_ASSETS = ["modern.css", "modern.js", "markdown.css", "markdown.js", "backup.js", "i18n.js", "video-compress.js", "app.js"];
 
 /**
  * Append a content hash to each fixed asset URL so a browser never pairs a cached stylesheet or script

@@ -11,7 +11,7 @@ import { parseArgs } from 'node:util';
 
 import { account_projects, account_space, create_account_project, draft_folder } from './account_space.mjs';
 import { atomic_json } from './files.mjs';
-import { bundle_project_markdown, bundle_project_page, outside_directory, project_media, read_only_enforced, read_project_files, room_directories, search_project_roots } from './project_files.mjs';
+import { bundle_project_markdown, bundle_project_page, outside_directory, project_media, read_only_enforced, read_project_files, read_project_folders, room_directories, search_project_roots } from './project_files.mjs';
 import { guard_remote_request, list_remote_directories, remote_allows, remote_roots } from './remote_policy.mjs';
 import { list_devices, machine_fingerprint, revoke_device, start_pairing } from './device_auth.mjs';
 import { setup_sidecar } from './adapters/antigravity_app.mjs';
@@ -464,6 +464,7 @@ export async function room_files(home, raw, { trust = false } = {}) {
   if (input.query) return { room_id: input.room_id, ...search_project_roots(directories, input.query) };
   const root = input.root ?? 0;
   if (!Number.isSafeInteger(root) || root < 0 || (directories.length && root >= directories.length)) throw new Error('项目目录编号无效，请刷新后重试');
+  if (input.folders) return { room_id: input.room_id, root, folders: read_project_folders(directories[root], input.folders) };
   return { room_id: input.room_id, root, ...read_project_files(directories[root], input.path, input.offset) };
 }
 

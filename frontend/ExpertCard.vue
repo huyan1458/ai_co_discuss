@@ -9,6 +9,7 @@ import { t } from './i18n.js';
 import { computed, inject, nextTick, onBeforeUnmount, ref, watch } from "vue";
 import { motion, useSpring } from "motion-v";
 import EffortSlider from "./EffortSlider.vue";
+import ModelRefresh from "./ModelRefresh.vue";
 import ApiSettings from "./ApiSettings.vue";
 import MemberDescriptionDialog from "./MemberDescriptionDialog.vue";
 import MemberTextDialog from "./MemberTextDialog.vue";
@@ -478,7 +479,7 @@ onBeforeUnmount(() => { document.removeEventListener("pointerdown", close_on_out
           <div class="expert-card-field">
             <span>{{ t('模型') }}</span>
             <UInput v-if="preset_model_input" :model-value="profile.model || ''" :placeholder="t('留空使用默认模型')" :aria-label="t('{value1} 使用的模型', { value1: name })" size="xs" class="w-full" @update:model-value="write_model" />
-            <USelect v-else :model-value="profile.model || '__default__'" :items="models.items" :title="models.source" :aria-label="t('{value1} 使用的模型', { value1: name })" size="xs" class="w-full" @update:model-value="write_model" />
+            <div v-else class="model-picker"><USelect :model-value="profile.model || '__default__'" :items="models.items" :title="models.source" :ui="{ base: 'model-select', content: 'model-select-menu' }" :aria-label="t('{value1} 使用的模型', { value1: name })" size="xs" class="w-full" @update:model-value="write_model" /><ModelRefresh :loading="models.refreshing" :disabled="!view.launch.available" @refresh="load_models(true)" /></div>
           </div>
           <div v-if="models.loading || models.error" class="expert-card-catalog"><span>{{ models.loading ? t('正在读取软件模型列表…') : models.error }}</span><button v-if="!models.loading && models.error && view.launch.available" type="button" @click="load_models(true)">{{ t('重试') }}</button></div>
           <div v-if="effort_items" class="expert-card-effort">

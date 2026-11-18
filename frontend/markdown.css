@@ -119,9 +119,6 @@ html[data-theme="channel-light"] .markdown-body {
 .attachment-draft-image .attachment-remove { position: absolute; top: -5px; right: -5px; color: #fff; background: #444d60; border: 2px solid #fff; }
 .attachment-draft-image .attachment-remove:hover { background: #252d3e; }
 .attachment-draft-file { position: relative; gap: 10px; width: min(280px, 100%); padding: 10px; }
-/* A draft still being uploaded is covered by a spinning circle. */
-.attachment-uploading { position: absolute; inset: 0; z-index: 1; display: grid; place-items: center; border-radius: inherit; color: #fff; background: #0008; }
-.attachment-uploading > span { width: 26px; height: 26px; animation: attachment-spin .8s linear infinite; }
 @keyframes attachment-spin { to { transform: rotate(360deg); } }
 .attachment-draft-file > span:first-child { flex-shrink: 0; }
 .attachment-draft-file .attachment-file-icon { width: 28px; height: 34px; }

@@ -12,8 +12,9 @@ import { setTimeout as delay } from 'node:timers/promises';
 import { fileURLToPath } from 'node:url';
 import { listen_local } from './local_port.mjs';
 import { API_PROVIDERS, api_base_url, api_check, api_generate, api_history, api_models, api_request, api_response, api_tool_results, read_api_key, save_api_key } from '../runner/discussion_api.mjs';
-import { execute_tool, participant_tools, system_prompt } from '../runner/adapters/api.mjs';
+import { api_lockdown, execute_tool, participant_tools, system_prompt } from '../runner/adapters/api.mjs';
 import { pi_delivery } from '../runner/adapters/api_pi.mjs';
+import { fetch_page, html_text, is_private_address, parse_bing_results, parse_so_results, run_web_tool } from '../runner/adapters/api_web.mjs';
 import { deliver_task, execution_details } from '../runner/adapters/index.mjs';
 import { draw_image, launch_discussion, room_settings, validate_preset } from '../runner/discussion_launch.mjs';
 import { save_image_settings } from '../runner/image_service.mjs';
@@ -287,6 +288,46 @@ test('API host tools read the latest roster and expose discussion actions only f
   assert.ok(host.includes('arrange_turns') && host.includes('save_state') && host.includes('finish_discussion') && host.includes('host_message'));
   assert.ok(expert.includes('submit_chat') && !expert.includes('submit_opinion'));
   assert.ok(!ordinary.includes('host_message') && !expert.includes('host_message'));
+});
+
+test('API web tools reach public pages only and stay off for tasks confined to the room', async t => {
+  const names = context => participant_tools({ mode: 'free', role: 'member', ...context }).map(item => item.name);
+  for (const context of [{ project_access: 'read' }, { project_access: 'write', native_shell: true }]) assert.ok(names(context).includes('web_search') && names(context).includes('web_fetch'));
+  assert.ok(!names(api_lockdown({ tool_lockdown: true, api_context: {} }).api_context).includes('web_fetch'));
+  assert.ok(!names({ external_access: true }).includes('web_search'));
+
+  for (const address of ['127.0.0.1', '10.1.2.3', '100.71.206.50', '172.16.0.1', '192.168.1.1', '169.254.169.254', '::1', 'fd00::1', '::ffff:127.0.0.1']) assert.ok(is_private_address(address), address);
+  for (const address of ['8.8.8.8', '198.18.0.1', '2606:4700:4700::1111']) assert.ok(!is_private_address(address), address);
+
+  let hits = 0;
+  const server = createServer((request, response) => {
+    hits += 1;
+    response.writeHead(302, { location: `http://127.0.0.2:${server.address().port}/secret` }).end();
+  });
+  await new Promise(resolve => server.listen(0, '127.0.0.1', resolve));
+  t.after(() => server.close());
+  const origin = `http://127.0.0.1:${server.address().port}/`;
+  await assert.rejects(run_web_tool('web_fetch', { url: origin }), /本机或内网/);
+  await assert.rejects(run_web_tool('web_fetch', { url: `http://localhost:${server.address().port}/` }), /本机或内网/);
+  await assert.rejects(run_web_tool('web_fetch', { url: 'file:///C:/Windows/win.ini' }), /http/);
+  assert.equal(hits, 0);
+  // A public page must not redirect into a private address: only 127.0.0.2 counts as private here.
+  await assert.rejects(fetch_page(origin, { is_blocked: address => address === '127.0.0.2' }), /本机或内网/);
+  assert.equal(hits, 1);
+});
+
+test('API web tools turn result pages and HTML into readable text', () => {
+  const target = Buffer.from('https://example.com/报告?id=1').toString('base64url');
+  const page = `<ol><li class="b_algo"><h2><a href="https://www.bing.com/ck/a?!&amp;&amp;u=a1${target}&amp;ntb=1">宜康<strong>步态</strong>分析</a></h2><div class="b_caption"><p>采样频率 &amp; 量程</p></div></li>
+    <li class="b_ad"><h2><a href="https://ad.example">广告</a></h2></li><li class="b_algo"><h2><a href="https://example.org/b">第二条</a></h2></li></ol>`;
+  assert.deepEqual(parse_bing_results(page), [{ title: '宜康步态分析', url: 'https://example.com/报告?id=1', snippet: '采样频率 & 量程' },
+    { title: '第二条', url: 'https://example.org/b', snippet: '' }]);
+  const so_page = `<li class="res-list"><h3>其他人还搜了</h3></li><li class="res-list"><h3 class="res-title"><a href="https://www.so.com/link?m=x" data-mdurl="https://example.com/a" data-res='{"pos":1}'>步态<em>分析</em></a></h3>
+    <span class="res-list-summary" data-result-summary>采样频率<em>1000</em>赫兹</span></li><li class="res-list"><h3 class="res-title"><a href="https://www.so.com/link?m=y">无直链</a></h3><p class="res-desc">摘要</p></li>`;
+  assert.deepEqual(parse_so_results(so_page), [{ title: '步态分析', url: 'https://example.com/a', snippet: '采样频率1000赫兹' },
+    { title: '无直链', url: 'https://www.so.com/link?m=y', snippet: '摘要' }]);
+  assert.equal(html_text('<head><title>标题</title></head><script>alert(1)</script><h1>参数&nbsp;表</h1><table><tr><td>量程</td><td>±180&#176;</td></tr></table><ul><li>甲</li></ul>'),
+    '参数 表\n量程 | ±180° |\n- 甲');
 });
 
 test('free-room API replies bind to their reserved execution and complete the request', async t => {

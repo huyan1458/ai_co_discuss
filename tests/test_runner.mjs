@@ -3418,6 +3418,13 @@ test('a member whose model changed since its last delivery is told so in its nex
   assert.equal(change(), null);
 });
 
+test('a host in a room with a workflow is told to route the request before acting', async () => {
+  const { free_task_text } = await import('../runner/expert_prompts.mjs');
+  const base = { name: 'Claude', profile: { adapter: 'claude', project_access: 'read' }, cli: 'codiscuss', messages: '#5', read_after: 4, task_path: 't.json', requests: [{ purpose: 'route', created_by: 'user' }] };
+  assert.match(free_task_text({ ...base, workflow: true }).prompt, /workflow\.sub_workflows.*命中就读它的 SKILL\.md/);
+  assert.doesNotMatch(free_task_text(base).prompt, /sub_workflows/);
+});
+
 test('the wake-up opening says who asked: user, host, detached work, hand-back or notice', async () => {
   const { free_task_text } = await import('../runner/expert_prompts.mjs');
   const base = { name: 'Codex', profile: { adapter: 'claude', project_access: 'read' }, cli: 'codiscuss', messages: '#5', read_after: 4, task_path: 't.json' };

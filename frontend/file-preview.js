@@ -82,25 +82,63 @@ export function hold_selection(range) {
   else CSS.highlights.delete(PENDING_HIGHLIGHT);
 }
 
-// Listings already read (by room, project and path), kept in this browser so a folder opened before shows at once even
-// after a reload; the list reads it again behind it. The oldest beyond the cap are dropped.
-const FOLDER_LISTINGS_KEY = "codiscuss-folder-listings";
-const FOLDER_LISTINGS_LIMIT = 300;
+// Listings of a project's folders (by project directory and path), kept in this browser's database so the file list shows
+// at once, even after a reload (user 2026-11-18, #4585). Only names, sizes and times are kept, never file contents.
+const LISTINGS_DATABASE = "codiscuss-folder-listings";
+const LISTINGS_STORE = "listings";
+const LISTINGS_SAVE_MS = 400;
+const listings = new Map(), loaded_directories = new Map(), unsaved_listings = new Map();
+let listings_database = null, listings_save_timer = 0;
+// Listings used to live in localStorage, which is too small for a whole project.
+try { localStorage.removeItem(LISTINGS_DATABASE); } catch { /* Nothing to clear. */ }
 
-/** The saved listings, oldest first; empty when storage is unavailable or unreadable. */
-function stored_listings() {
-  try { return new Map(JSON.parse(localStorage.getItem(FOLDER_LISTINGS_KEY)) || []); } catch { return new Map(); }
+/** The browser's database of listings; rejects where storage is blocked, and the list then lasts for this page only. */
+function open_listings() {
+  listings_database ||= new Promise((resolve, reject) => {
+    const request = indexedDB.open(LISTINGS_DATABASE, 1);
+    request.onupgradeneeded = () => request.result.createObjectStore(LISTINGS_STORE);
+    request.onsuccess = () => resolve(request.result);
+    request.onerror = () => reject(request.error);
+  });
+  return listings_database;
 }
 
-const listings = stored_listings();
+/** Write the listings changed since the last save together. */
+async function save_listings() {
+  listings_save_timer = 0;
+  const changes = [...unsaved_listings];
+  unsaved_listings.clear();
+  try {
+    const store = (await open_listings()).transaction(LISTINGS_STORE, "readwrite").objectStore(LISTINGS_STORE);
+    for (const [key, listing] of changes) { if (listing) store.put(listing, key); else store.delete(key); }
+  } catch { /* Kept in memory only. */ }
+}
+
+/** Remember a change and save it shortly, with those that follow it. */
+function queue_listing(key, listing) {
+  unsaved_listings.set(key, listing);
+  listings_save_timer ||= setTimeout(save_listings, LISTINGS_SAVE_MS);
+}
+
+/** Read one project's saved listings into memory; anything read during this page's life stays newer. */
+async function read_saved_listings(directory) {
+  try {
+    const store = (await open_listings()).transaction(LISTINGS_STORE).objectStore(LISTINGS_STORE);
+    const range = IDBKeyRange.bound(`${directory}\n`, `${directory}\n￿`);
+    const answer = (request) => new Promise((resolve, reject) => { request.onsuccess = () => resolve(request.result); request.onerror = () => reject(request.error); });
+    const [keys, values] = await Promise.all([answer(store.getAllKeys(range)), answer(store.getAll(range))]);
+    keys.forEach((key, index) => { if (!listings.has(key)) listings.set(key, values[index]); });
+  } catch { /* Starts empty. */ }
+}
+
 export const folder_listings = {
   get: (key) => listings.get(key),
-  /** Remember one listing as the newest and save them all; a full or blocked storage keeps it for this page only. */
-  set(key, listing) {
-    listings.delete(key);
-    listings.set(key, listing);
-    while (listings.size > FOLDER_LISTINGS_LIMIT) listings.delete(listings.keys().next().value);
-    try { localStorage.setItem(FOLDER_LISTINGS_KEY, JSON.stringify([...listings])); } catch { /* Kept in memory only. */ }
+  set(key, listing) { listings.set(key, listing); queue_listing(key, listing); },
+  delete(key) { listings.delete(key); queue_listing(key, null); },
+  /** Make one project's saved listings available; asked again it answers at once. */
+  load(directory) {
+    if (!loaded_directories.has(directory)) loaded_directories.set(directory, read_saved_listings(directory));
+    return loaded_directories.get(directory);
   },
 };
 // For this page's lifetime: the folder each room's list last showed (`{ directory, path }`).

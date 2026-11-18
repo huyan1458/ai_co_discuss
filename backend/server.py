@@ -116,6 +116,7 @@ ASSETS = {"/": ("index.html", "text/html"),
           "/markdown.js": ("markdown.js", "text/javascript"),
           "/backup.js": ("backup.js", "text/javascript"),
           "/i18n.js": ("i18n.js", "text/javascript"),
+          "/video-compress.js": ("video-compress.js", "text/javascript"),
           "/markdown.css": ("markdown.css", "text/css"),
           "/icons/LICENSE.txt": ("icons/LICENSE.txt", "text/plain")}
 # Serve bundled images without maintaining a second list of brand names.

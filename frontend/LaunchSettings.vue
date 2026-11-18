@@ -1,6 +1,7 @@
 <script setup>
 import { computed, inject, watch } from "vue";
 import ApiSettings from "./ApiSettings.vue";
+import ModelRefresh from "./ModelRefresh.vue";
 import ProjectDirectoryField from "./ProjectDirectoryField.vue";
 import { access_options } from "../runner/expert_prompts.mjs";
 import { t } from './i18n.js';
@@ -45,7 +46,7 @@ watch(() => [props.modelSelection, view.value.launch.available, ...names.value.m
         <UFormField v-if="profile(name).adapter === 'antigravity'" :label="t('Sidecar IPC 目录')"><UInput :model-value="profile(name).ipc_directory || ''" :placeholder="t('已配置的 Sidecar 目录')" class="w-full" @update:model-value="write(name, 'ipc_directory', $event)" /></UFormField>
         <UFormField v-else-if="profile(name).adapter !== 'api'" :label="t('原生可执行文件路径')"><UInput :model-value="profile(name).executable || ''" :placeholder="t('Windows 填写 .exe 的完整路径')" class="w-full" @update:model-value="write(name, 'executable', $event)" @blur="props.modelSelection && bridge.load_launch_models(name)" /></UFormField>
         <ApiSettings v-if="profile(name).adapter === 'api'" :name="name" />
-        <UFormField v-else-if="props.modelSelection && models(name).supported" :label="t('模型')" :help="models(name).loading ? t('正在读取软件模型列表…') : models(name).error || models(name).source"><USelect :model-value="profile(name).model || '__default__'" :items="models(name).items" :loading="models(name).loading" class="w-full" @update:model-value="bridge.write_launch_model(name, $event)" /><button v-if="models(name).error && !models(name).loading" type="button" class="model-retry" @click="bridge.load_launch_models(name, true)">{{ t('重新读取模型列表') }}</button></UFormField>
+        <UFormField v-else-if="props.modelSelection && models(name).supported" :label="t('模型')" :help="models(name).loading ? t('正在读取软件模型列表…') : models(name).error || models(name).source"><div class="model-picker"><USelect :model-value="profile(name).model || '__default__'" :items="models(name).items" :loading="models(name).loading" :ui="{ base: 'model-select', content: 'model-select-menu' }" class="w-full" @update:model-value="bridge.write_launch_model(name, $event)" /><ModelRefresh :loading="models(name).refreshing" :disabled="!view.launch.available" @refresh="bridge.load_launch_models(name, true)" /></div><button v-if="models(name).error && !models(name).loading" type="button" class="model-retry" @click="bridge.load_launch_models(name, true)">{{ t('重新读取模型列表') }}</button></UFormField>
         <UFormField v-if="props.modelSelection && models(name).efforts?.length" :label="t('思考档位（可选）')"><USelect :model-value="profile(name).effort || 'default'" :items="effort_items(name)" class="w-full" @update:model-value="write(name, 'effort', $event === 'default' ? '' : $event)" /></UFormField>
         <UFormField v-if="profile(name).adapter === 'codex'" :label="t('来源聊天 ID')"><UInput :model-value="profile(name).source_thread_id || ''" :placeholder="t('用于在 Codex App 新建会话')" class="w-full" @update:model-value="write(name, 'source_thread_id', $event)" /></UFormField>
         <UFormField v-if="profile(name).adapter === 'claude'" :label="t('允许的工具（可选，每行一项）')"><UTextarea :model-value="(profile(name).allowed_tools || []).join('\n')" :rows="2" :placeholder="t('例如 Read、Write 及按需配置的 Bash 权限')" class="w-full" @update:model-value="write(name, 'allowed_tools', $event)" /></UFormField>

@@ -31,6 +31,10 @@ const SUBMISSION_ID_BYTES = 16;
 const MAX_MESSAGE_LENGTH = 32000;
 const MAX_SUMMARY_LENGTH = 1000;
 const MAX_ATTACHMENT_BYTES = 20 * 1024 * 1024;
+// Videos sent through the relay are shrunk from this size up; smaller ones cost little to carry as they are.
+const VIDEO_COMPRESS_MIN_BYTES = 3 * 1024 * 1024;
+// The largest video the page tries to shrink below MAX_ATTACHMENT_BYTES.
+const VIDEO_COMPRESS_MAX_BYTES = 1024 * 1024 * 1024;
 const MAX_MESSAGE_ATTACHMENTS = 10;
 const PDF_CANVAS_LIMIT = 4096;
 const DIRECTORY_DRAG_THRESHOLD = 4;
@@ -96,6 +100,8 @@ const RELAY_UPLOAD_ROUNDS = 4;
 // Uploads under way by file: a send tried again (SEND_RETRY_MS, or the composer's early upload) carries on from the parts
 // the computer already has, under the same upload id.
 const relay_uploads = new WeakMap();
+// The most an upload shows until the site has confirmed the whole file.
+const UPLOAD_PERCENT_BEFORE_SAVED = 99;
 // Files of the computer's rooms come back in frames of about 1 MB over the one relay connection that also carries every
 // room read: only this many are read at once, so a room full of images cannot hold back its messages until they time out
 // (2026-11-16: opening a room with 51 screenshots read 46 MB at once; message reads and sends timed out, and the retried
@@ -177,6 +183,12 @@ const ROOM_CACHE_LIMIT = 12;
 const room_views = new Map();
 const message_histories = new Map();
 const history_cards = new Map();
+// Rooms kept current in the background. Below ROOM_CACHE_LIMIT, so these reads never evict each other and re-read whole transcripts.
+const BACKGROUND_ROOM_LIMIT = 8;
+// A working room reports progress constantly; new messages and the end of its work are read at once regardless.
+const BACKGROUND_PROGRESS_INTERVAL_MS = 5000;
+// marks: what the directory said of each room when it was last read. queue: room id to the mark being read.
+const background_reads = { marks: new Map(), read_at: new Map(), queue: new Map(), running: false, generation: 0 };
 
 /** Cards of a later transcript batch replace the same ones read before; each kind is keyed by its id. */
 function merge_history_cards(base, batch) {
@@ -207,6 +219,9 @@ state.sending_message = false;
 state.sending_preview = null;
 // The message being sent that the site will likely queue, shown as a row in the queue tray until the site answers.
 state.queueing_preview = null;
+// The queued message whose files are being read for editing, and those already in the composer while the site removes them.
+state.queue_reading = 0;
+state.queue_taking = new Set();
 // Sends that failed, each kept as a card that sends it again: [{ id, preview, room_id, draft, drafts, reply_to, submission }].
 state.failed_sends = [];
 state.attachment_preview = null;
@@ -1078,21 +1093,84 @@ function history_batch_path(room_id, query, after) {
 /** Join bounded cursor batches for the interactive transcript; refresh only new records. */
 async function load_message_history(room_id, version) {
   const query = state.query;
+  const history = await read_message_history(room_id, query, () => version === state.refresh_version);
+  if (history) state.message_history = { key: `${room_id}?${new URLSearchParams({ q: query, withdrawn: "include" })}`, messages: history.messages };
+  return history;
+}
+
+/** Read the messages after the cached ones into the cache; null once `wanted` says the answer is no longer needed. */
+async function read_message_history(room_id, query, wanted) {
   const key = `${room_id}?${new URLSearchParams({ q: query, withdrawn: "include" })}`;
   const messages = [...message_histories.get(key) || []];
   let cards = history_cards.get(key) || null;
   let has_more = true;
   while (has_more) {
     const result = await request_json(history_batch_path(room_id, query, messages.at(-1)?.id || 0));
-    if (version !== state.refresh_version) return null;
+    if (!wanted()) return null;
     messages.push(...result.messages);
     if (result.cards) cards = merge_history_cards(cards, result.cards);
     has_more = result.has_more;
   }
   cache_room_entry(message_histories, key, messages);
   if (cards) cache_room_entry(history_cards, key, cards);
-  state.message_history = { key, messages };
   return { messages, cards, total: messages.length, page: 1, pages: 1 };
+}
+
+/** Forget background reads when the directory changes to another computer's rooms. */
+function reset_background_reads() {
+  background_reads.generation++;
+  background_reads.marks.clear();
+  background_reads.read_at.clear();
+  background_reads.queue.clear();
+}
+
+/**
+ * Queue the rooms not on screen that are working or changed since last read, so switching to one shows its latest state.
+ * A room idle since this page opened is left unread.
+ */
+function sync_background_rooms(rooms) {
+  const { marks, read_at, queue } = background_reads;
+  const now = Date.now();
+  const wanted = rooms.filter((room) => {
+    if (room.id === state.room?.id) return false;
+    const mark = `${room.latest_id}:${Boolean(room.running)}`;
+    const known = marks.get(room.id);
+    if (known === undefined && !room.running) { marks.set(room.id, mark); return false; }
+    return known !== mark || (room.running && now - (read_at.get(room.id) || 0) >= BACKGROUND_PROGRESS_INTERVAL_MS);
+  });
+  wanted.sort((first, second) => second.latest_id - first.latest_id);
+  for (const room of wanted.slice(0, BACKGROUND_ROOM_LIMIT)) queue.set(room.id, `${room.latest_id}:${Boolean(room.running)}`);
+  return run_background_reads();
+}
+
+/** Read queued rooms one at a time, so background rooms never crowd out the open room's reads. */
+async function run_background_reads() {
+  if (background_reads.running) return;
+  background_reads.running = true;
+  try {
+    while (background_reads.queue.size && !document.hidden) {
+      const [room_id, mark] = background_reads.queue.entries().next().value;
+      background_reads.queue.delete(room_id);
+      await read_background_room(room_id, mark);
+    }
+  } finally { background_reads.running = false; }
+}
+
+/** Cache one room's view and new messages; the open room's own reads take over if the user switches to it meanwhile. */
+async function read_background_room(room_id, mark) {
+  const generation = background_reads.generation;
+  const wanted = () => generation === background_reads.generation && state.room?.id !== room_id;
+  background_reads.read_at.set(room_id, Date.now());
+  try {
+    const [room, history] = await Promise.all([request_json(`/api/rooms/${room_id}`), read_message_history(room_id, "", wanted)]);
+    if (!history || !wanted()) return;
+    cache_room_entry(room_views, room_id, room);
+    background_reads.marks.set(room_id, mark);
+  } catch (error) {
+    // Nothing on screen depends on this read. A refused room waits for its next change; a network failure retries on the next directory read.
+    if (error.preflight && wanted()) background_reads.marks.set(room_id, mark);
+    console.debug("background room read failed", room_id, error);
+  }
 }
 
 /** The unfiltered transcript cached for a room, shaped like a loaded history, or null. */
@@ -1163,6 +1241,7 @@ async function refresh_room({ room: read_room = true } = {}) {
   if (reading) live_updates.refreshed_at = Date.now();
   const directory = await directory_read;
   if (version !== state.refresh_version) return;
+  sync_background_rooms(directory.rooms);
   if (!state.directory_pending.size && directory_version === state.directory_version) {
     state.rooms = directory.rooms.map((room) => merge_room_folder(room, folder_version, archive_version, directory_version));
     set_folder_directory(directory);
@@ -1901,34 +1980,89 @@ function fill_composer(text, drafts, reply) {
   render_attachment_drafts();
 }
 
-/**
- * Take a queued message off the queue and put it in the composer: the owner rewrites it and sends it as a new message.
- * A draft already in the composer is stashed and comes back once the next message leaves the composer (like Claude
- * Code's Ctrl+S). Its files come back as already uploaded drafts; they are read before the row is removed, so a failed
- * read leaves the message queued.
- */
-async function edit_queued(item) {
-  const room_id = state.room.id;
-  const files = await Promise.all(item.attachments.map(async (file) => {
-    const bytes = await read_room_file(`/api/rooms/${encodeURIComponent(room_id)}/attachments/${encodeURIComponent(file.id)}/content`);
-    return { id: file.id, file: new File([bytes], file.file_name, { type: file.content_type || "" }) };
-  }));
-  await queue_request({ action: "delete", id: item.id });
-  if (state.room?.id !== room_id) return;
+/** Read a queued message's files for the composer; its row says so meanwhile and the message stays queued. */
+async function read_queued_files(item, room_id) {
+  state.queue_reading = item.id;
+  publish_view();
+  try {
+    return await Promise.all(item.attachments.map(async (file) => {
+      const bytes = await read_room_file(`/api/rooms/${encodeURIComponent(room_id)}/attachments/${encodeURIComponent(file.id)}/content`);
+      return { id: file.id, file: new File([bytes], file.file_name, { type: file.content_type || "" }) };
+    }));
+  } finally { state.queue_reading = 0; }
+}
+
+/** Put a queued message in the composer, stashing a draft already there; returns what a failed removal has to undo. */
+function take_into_composer(item, files) {
   const typed = element("message-input").value;
+  let stash = null;
   if (typed.trim() || state.attachment_drafts.length) {
     const reply = state.reply_to ? { id: state.reply_to, label: element("reply-label").textContent } : null;
-    state.stashed_drafts.push({ text: typed, drafts: state.attachment_drafts, reply });
+    stash = { text: typed, drafts: state.attachment_drafts, reply };
+    state.stashed_drafts.push(stash);
     notify("info", t('输入框原有草稿已暂存，这条发出后恢复'));
   }
-  fill_composer(item.text, files.map(({ id, file }, index) => {
+  const drafts = files.map(({ id, file }, index) => {
     const draft = { id: new_submission_id(), file, preview_url: /^image\/(png|jpeg|gif|webp)$/.test(file.type) ? URL.createObjectURL(file) : "", uploaded: id, actor: "用户" };
     const placeholder = draft_placeholder(draft, index + 1);
     if (item.text.includes(placeholder)) draft.placeholder = placeholder;
     return draft;
-  }), null);
+  });
+  fill_composer(item.text, drafts, null);
+  return { drafts, count: drafts.length, stash };
+}
+
+/**
+ * The site refused or lost the removal of a message already in the composer. The composer only gives it back once the
+ * site confirms the message is still queued and nothing was changed; in every other case the text stays where it is.
+ */
+async function recover_taken_queued(item, room_id, taken, error) {
+  if (state.room?.id !== room_id) { notify("warning", t('未能确认这条排队消息的状态，内容已保留在输入框，请确认未发出后再发送')); return; }
+  let confirmed = true;
+  await refresh_room().catch(() => { confirmed = false; });
+  const queued = confirmed && state.room?.free?.queued_messages?.items?.some(entry => entry.id === item.id);
+  const untouched = element("message-input").value === item.text && state.attachment_drafts === taken.drafts && taken.drafts.length === taken.count;
+  if (queued && untouched) {
+    release_files(taken.drafts);
+    state.stashed_drafts = state.stashed_drafts.filter(entry => entry !== taken.stash);
+    fill_composer(taken.stash?.text ?? "", taken.stash?.drafts ?? [], taken.stash?.reply ?? null);
+    notify("error", t('未能编辑，消息仍在排队：{value1}', { value1: error.message }));
+  } else if (queued) notify("warning", t('消息仍在排队，输入框里是副本，发送前请先删除排队中的原消息'));
+  else notify("warning", t('未能确认这条排队消息的状态，内容已保留在输入框，请确认未发出后再发送'));
+}
+
+/** Remove a message from the queue behind the composer that already shows it; its row stays hidden until the site agrees. */
+async function finish_taking_queued(item, room_id, taken) {
+  try {
+    const queue = await request_json(`/api/rooms/${room_id}/queue`, { action: "delete", id: item.id });
+    if (state.room?.id === room_id && state.room.free) state.room = { ...state.room, free: { ...state.room.free, queued_messages: queue } };
+    publish_view();
+    if (state.room?.id === room_id) await refresh_room().catch(() => {});
+  } catch (error) {
+    await recover_taken_queued(item, room_id, taken, error);
+  } finally {
+    state.queue_taking.delete(item.id);
+    publish_view();
+  }
+}
+
+/**
+ * Take a queued message off the queue and put it in the composer: the owner rewrites it and sends it as a new message.
+ * The row and the composer change in one step, before the site is asked, so the message is on screen at every moment
+ * (user 2026-11-18, #4536). A draft already in the composer is stashed and comes back once the next message leaves the
+ * composer (like Claude Code's Ctrl+S). Its files come back as already uploaded drafts; they are read first, so a failed
+ * read leaves the message queued.
+ */
+async function edit_queued(item) {
+  const room_id = state.room.id;
+  const files = item.attachments.length ? await read_queued_files(item, room_id) : [];
+  if (state.room?.id !== room_id) return;
+  if (!state.room.free?.queued_messages?.items?.some(entry => entry.id === item.id)) throw new Error(t('这条排队消息已发出或已删除'));
+  const taken = take_into_composer(item, files);
+  state.queue_taking.add(item.id);
   state.queued_taken = (state.queued_taken || 0) + 1;
   publish_view();
+  finish_taking_queued(item, room_id, taken);
 }
 
 /** Send what the composer holds; once it has left the composer, the draft stashed by editing a queued message comes back. */
@@ -1980,7 +2114,7 @@ async function send_message(event) {
   const reply_to = state.reply_to;
   cancel_reply();
   const preview = { author: payload.author, text: payload.text, created_at: new Date().toISOString(), attachment_start: draft_start(drafts) || 1,
-    files: drafts.map(file => ({ name: file.file.name, preview_url: file.preview_url, uploaded: Boolean(file.uploaded) })) };
+    files: drafts.map(file => ({ id: file.id, name: file.file.name, preview_url: file.preview_url, uploaded: Boolean(file.uploaded) })) };
   state.sending_drafts = drafts;
   state.attachment_drafts = [];
   // A message the site will likely queue shows at once as a row in the queue tray instead of a card in the transcript,
@@ -2143,7 +2277,7 @@ function add_attachments(files, target = null) {
   if (state.room?.archived) return;
   const selected = Array.from(files);
   if (state.attachment_drafts.length + selected.length > MAX_MESSAGE_ATTACHMENTS) notify("warning", t('每条消息最多 10 个附件'));
-  else if (selected.some(file => file.size > MAX_ATTACHMENT_BYTES)) notify("warning", t('单个附件最多 20 MiB'));
+  else if (selected.some(file => file.size > MAX_ATTACHMENT_BYTES && !can_compress_video(file))) notify("warning", t('单个附件最多 20 MiB'));
   else {
     const added = selected.map(file => ({ id: new_submission_id(), file,
       preview_url: /^image\/(png|jpeg|gif|webp)$/.test(file.type) ? URL.createObjectURL(file) : "", uploaded: null, actor: null }));
@@ -2264,20 +2398,93 @@ function render_attachment_drafts() {
   element("attachment-status").textContent = state.upload_status;
 }
 
+/** Whether this browser can try to shrink this file. */
+function can_compress_video(file) {
+  return Boolean(file.type?.startsWith("video/")) && file.size <= VIDEO_COMPRESS_MAX_BYTES && typeof VideoEncoder === "function" && typeof VideoDecoder === "function";
+}
+
+/** A video is shrunk when the relay has to carry it, or when the site would not take it as it is. */
+function wants_compression(file) {
+  return can_compress_video(file) && (file.size > MAX_ATTACHMENT_BYTES || (state.remote_rooms && file.size >= VIDEO_COMPRESS_MIN_BYTES));
+}
+
+/** The compression module, loaded only when a video needs it. */
+function load_video_compressor() {
+  return import("/video-compress.js");
+}
+
+/**
+ * Replace a draft video with a smaller copy. Compression is an optimisation: whatever goes wrong, a video the site can
+ * take goes up as it is; only one too large for the site stops here.
+ */
+async function compress_draft(item) {
+  const original = item.file;
+  item.compression = new AbortController();
+  report_upload_percent(item, 0, "compress");
+  let compressed = null;
+  try {
+    const { compress_video } = await load_video_compressor();
+    compressed = await compress_video(original, { max_bytes: MAX_ATTACHMENT_BYTES, signal: item.compression.signal,
+      on_progress: (share) => report_upload_percent(item, Math.min(UPLOAD_PERCENT_BEFORE_SAVED, Math.floor(share * 100)), "compress") });
+  } catch (error) { console.warn("video compression failed", error); }
+  report_upload_percent(item, state.remote_rooms ? 0 : null);
+  if (compressed) {
+    item.file = compressed;
+    render_attachment_drafts();
+    publish_view();
+  } else if (original.size > MAX_ATTACHMENT_BYTES && !item.removed) {
+    throw Object.assign(new Error(t('这段视频无法压缩到 20 MiB 以内，请剪短后再发')), { video_too_large: true });
+  }
+}
+
+/** Shrink a draft video once, before its first upload; a try that failed is made again when it is sent. */
+async function prepare_draft_file(item) {
+  if (item.prepared || !wants_compression(item.file)) return;
+  item.preparing ??= compress_draft(item).finally(() => { item.preparing = null; });
+  await item.preparing;
+  item.prepared = true;
+}
+
 /** Upload one draft file as `actor`; an earlier upload under another actor is replaced by a fresh submission. */
 async function upload_draft(room_id, actor, item) {
+  await prepare_draft_file(item);
+  // Taken out of the composer while it was compressing: nothing goes up.
+  if (item.removed) return;
   item.upload_submission ??= item.id;
   if (item.actor && item.actor !== actor) { item.upload_submission = new_submission_id(); item.uploaded = null; }
   item.actor = actor;
   item.room_id = room_id;
   const params = new URLSearchParams({ file_name: item.file.name, actor, submission_id: item.upload_submission });
-  const result = await post_room_file(`/api/rooms/${room_id}/attachments?${params}`, item.file, localStorage.getItem(`discuss-access:${room_id}`));
+  // 100% is kept for the site having the file: every part can be in while the computer is still handing it over.
+  const result = await post_room_file(`/api/rooms/${room_id}/attachments?${params}`, item.file, localStorage.getItem(`discuss-access:${room_id}`),
+    (share) => report_upload_percent(item, Math.min(UPLOAD_PERCENT_BEFORE_SAVED, Math.floor(share * 100))))
+    .catch((error) => { report_upload_percent(item, null); throw error; });
   item.uploaded = result.attachment.id;
+  if (item.upload_percent != null) report_upload_percent(item, 100);
+}
+
+/**
+ * Tell the cards showing it how far one draft file has come in `phase` ("compress" or "upload"): a whole percent, or null
+ * when nothing is measured (a direct upload to this website reports none). It goes to them alone: a snapshot of the
+ * whole view for every part would redraw the room while the reader scrolls.
+ */
+function report_upload_percent(item, percent, phase = "upload") {
+  if ((item.upload_percent ?? null) === percent && (percent === null || item.upload_phase === phase)) return;
+  item.upload_percent = percent;
+  item.upload_phase = phase;
+  document.dispatchEvent(new CustomEvent("discuss:upload-percent", { detail: { id: item.id, percent, phase } }));
+}
+
+/** How far a draft file in the composer or being sent has come; its percent is null when none is measured. */
+function upload_progress(id) {
+  const item = [...state.attachment_drafts, ...(state.sending_drafts || [])].find(draft => draft.id === id);
+  return { percent: item?.upload_percent ?? null, phase: item?.upload_phase ?? "upload" };
 }
 
 /**
  * Start uploading files as soon as they are in the composer, one after another, so sending has only the text left to
- * post. A failure here stays silent: sending uploads the file again and reports there. The welcome page has no room yet.
+ * post. A failure here stays silent, as sending uploads the file again and reports there, except a video that cannot be
+ * made small enough, which the sender should hear about before writing the message. The welcome page has no room yet.
  */
 let preupload_chain = Promise.resolve();
 function preupload_drafts(items) {
@@ -2285,13 +2492,15 @@ function preupload_drafts(items) {
   if (!room || room.archived) return;
   for (const item of items) {
     item.uploading = preupload_chain = preupload_chain.then(() => item.removed || item.uploaded ? null : upload_draft(room.id, "用户", item))
-      .catch(() => null).finally(() => { item.uploading = null; if (item.removed) discard_draft_upload(item); });
+      .catch((error) => { if (error.video_too_large) notify("warning", error.message); })
+      .finally(() => { item.uploading = null; if (item.removed) discard_draft_upload(item); });
   }
 }
 
 /** Take back a removed file uploaded ahead of sending; files never sent are also cleared by the site after a day. */
 function discard_draft_upload(item) {
   item.removed = true;
+  item.compression?.abort();
   if (item.uploading || !item.uploaded || !item.room_id) return;
   const path = `/api/rooms/${encodeURIComponent(item.room_id)}/attachments/${encodeURIComponent(item.uploaded)}/discard`;
   item.uploaded = null;
@@ -2311,9 +2520,10 @@ async function upload_message_attachments(room_id, actor, drafts) {
       await upload_draft(room_id, actor, item);
     }
     identifiers.push(item.uploaded);
-    // The sending card shows each file as uploading until it is in; the card's status says what is left.
-    const preview = state.sending_drafts === drafts && state.sending_preview?.files?.[index];
-    if (preview && !preview.uploaded) { preview.uploaded = true; state.sending_preview = { ...state.sending_preview, files: [...state.sending_preview.files] }; publish_view(); }
+    // The sending card (or the queue tray's row) shows each file as uploading until it is in; its status says what is left.
+    const shown = state.sending_preview ? "sending_preview" : "queueing_preview";
+    const preview = state.sending_drafts === drafts && state[shown]?.files?.[index];
+    if (preview && !preview.uploaded) { preview.uploaded = true; state[shown] = { ...state[shown], files: [...state[shown].files] }; publish_view(); }
   }
   return identifiers;
 }
@@ -2662,8 +2872,12 @@ function prepare_room_request(signature) {
   return state.pending_room;
 }
 
-/** Show creation progress locally without blocking or later hijacking navigation. */
-async function submit_room(event, folder_id = null) {
+/**
+ * Show creation progress locally without blocking or later hijacking navigation. The new-room panel passes `accepted`,
+ * called once the form is valid so it closes at once while the new room shows as being created, and `rejected`, called
+ * when nothing was made and no retry record remains, so the form can come back as it was filled in.
+ */
+async function submit_room(event, folder_id = null, { accepted = null, rejected = null } = {}) {
   event.preventDefault();
   if (state.directory_pending.has("create-room")) return;
   const payload = room_creation_payload(folder_id);
@@ -2686,29 +2900,54 @@ async function submit_room(event, folder_id = null) {
   const navigation = state.navigation_version;
   if (!launching) element("room-dialog").close();
   const pending = prepare_room_request(signature);
+  const previous_room = state.room?.id;
+  if (accepted) {
+    accepted();
+    // Marked as the welcome state so a directory refresh does not open another room while this one is being made.
+    state.welcome = true;
+    run_action(() => select_room(null));
+  }
   const token = pending.token;
   pending.members ||= creation_members(payload.experts);
   // The website tracks the capability cli; a manual expert is a local reader and writer whose delivery lives in its member record.
   const experts = Object.fromEntries(Object.entries(payload.experts || {}).map(([name, mode]) => [name, mode === "manual" ? "cli" : mode]));
   const input = { ...(launch_draft || {}), room: { ...payload, ...(payload.experts ? { experts } : {}), members: pending.members, submission_id: pending.id }, token };
-  const room = await update_directory({ key: "create-room", label: t('「{value1}」创建', { value1: payload.title }),
-    error_message: launching ? error => `「${payload.title}」${error.message}` : null,
-    apply: () => { state.creating_room = payload; }, rollback: () => { state.creating_room = null; },
-    save: async () => (await submit_local_launch(input, payload.title, !launching, signature)).room,
-    commit: saved => {
-      state.creating_room = null;
-      if (!state.rooms.some(existing => existing.id === saved.id)) state.rooms.push(saved);
-    } });
+  const open_created = id => { state.archive_view = false; return select_room(id); };
+  let room, opening = null;
+  try {
+    room = await update_directory({ key: "create-room", label: t('「{value1}」创建', { value1: payload.title }),
+      error_message: launching ? error => `「${payload.title}」${error.message}` : null,
+      apply: () => { state.creating_room = { ...payload, opened: Boolean(accepted), submission_id: pending.id }; },
+      rollback: () => {
+        state.creating_room = null;
+        // Someone who moved on to another room stays there.
+        if (accepted && !state.room && previous_room) run_action(() => select_room(previous_room));
+      },
+      save: async () => (await submit_local_launch(input, payload.title, !launching, signature)).room,
+      commit: saved => {
+        state.creating_room = null;
+        if (!state.rooms.some(existing => existing.id === saved.id)) state.rooms.push(saved);
+        // The panel's room opens in the same update that ends its placeholder; a discussion or goal then starts in it.
+        if (accepted && !state.room) opening = open_created(saved.id);
+      } });
+  } catch (error) {
+    if (accepted && state.room?.id === previous_room && !localStorage.getItem(LAUNCH_PENDING_PREFIX + pending.id)) rejected?.();
+    throw error;
+  }
   state.pending_room = null;
-  if (discussion) await open_discussion_after_creation(room.id, discussion);
-  if (goal) await open_goal_after_creation(room.id, goal);
   if (signed(room_creation_payload(folder_id), launching ? creation_launch_options() : null) === signature) {
     element("room-form").reset();
     render_expert_inputs("new-expert-modes", default_experts());
     if (launching) element("room-dialog").close();
   }
   if (launching) clear_launch_overrides(launch_draft);
-  if (state.navigation_version === navigation) { state.archive_view = false; await select_room(room.id); }
+  const starting = (async () => {
+    if (discussion) await open_discussion_after_creation(room.id, discussion);
+    if (goal) await open_goal_after_creation(room.id, goal);
+  })();
+  await Promise.all([opening, starting]);
+  if (opening && (discussion || goal) && state.room?.id === room.id) await refresh_room();
+  if (!accepted && state.navigation_version === navigation) await open_created(room.id);
 }
 
 /**
@@ -3311,13 +3550,15 @@ async function relay_upload_part(payload) {
 
 /**
  * Send a file to a room route on the computer in parts, a few at a time; the computer hands it to its website whole.
- * Parts it already has are not sent again when the same file is tried again (relay_uploads).
+ * Parts it already has are not sent again when the same file is tried again (relay_uploads). `on_progress` gets the
+ * share of parts the computer has confirmed, from where a resumed try starts.
  */
-async function relay_upload(path, data) {
+async function relay_upload(path, data, on_progress) {
   const bytes = new Uint8Array(data instanceof Blob ? await data.arrayBuffer() : data);
   const total = Math.max(1, Math.ceil(bytes.length / RELAY_UPLOAD_PART_BYTES));
   let upload = relay_uploads.get(data);
   if (upload?.path !== path || upload.total !== total) relay_uploads.set(data, upload = { path, total, id: crypto.randomUUID(), done: new Set() });
+  on_progress?.(upload.done.size / total);
   // Rounds: the parts not yet taken; then the parts the computer says it lacks (it restarted, or a part's answer went
   // astray). A computer too old to say which starts over once, under a new id.
   for (let round = 0; round < RELAY_UPLOAD_ROUNDS; round += 1) {
@@ -3332,6 +3573,7 @@ async function relay_upload(path, data) {
         try {
           const answer = await relay_upload_part(payload);
           upload.done.add(index);
+          on_progress?.(upload.done.size / total);
           if (answer.body?.attachment) finished = answer.body;
           else if (Array.isArray(answer.body?.missing)) missing = answer.body.missing;
         } catch (error) { failure = error; }
@@ -3347,8 +3589,8 @@ async function relay_upload(path, data) {
 }
 
 /** Send file bytes to a room route on this website, or on the paired computer while its rooms are shown. */
-async function post_room_file(path, body, token) {
-  if (state.remote_rooms) return relay_upload(path, body);
+async function post_room_file(path, body, token, on_progress) {
+  if (state.remote_rooms) return relay_upload(path, body, on_progress);
   const response = await fetch(path, { method: "POST",
     headers: { "Content-Type": "application/octet-stream", ...(token ? { "X-Discussion-Token": token } : {}) }, body });
   const result = await response.json();
@@ -3512,6 +3754,7 @@ async function show_computer_rooms(remote) {
   room_views.clear();
   message_histories.clear();
   history_cards.clear();
+  reset_background_reads();
   state.remote_online = null;
   state.rooms = [];
   set_folder_directory({});
@@ -3862,8 +4105,8 @@ function reload_room_models() {
 }
 
 /** Read a directory or file from the room's saved project through the authenticated local connection. */
-function read_room_files(room_id, path = "", offset = 0, query = "", root = 0) {
-  return local_launch_request("room-files", { room_id, path, offset, ...(query ? { query } : { root }), token: localStorage.getItem(`discuss-access:${room_id}`) });
+function read_room_files(room_id, path = "", offset = 0, query = "", root = 0, folders = null) {
+  return local_launch_request("room-files", { room_id, path, offset, ...(query ? { query } : { root }), ...(folders ? { folders } : {}), token: localStorage.getItem(`discuss-access:${room_id}`) });
 }
 
 /** Read the selected member's local skill catalog through the same owner-authenticated connection. */
@@ -4016,6 +4259,26 @@ const MODEL_CLIENTS = ["codex_cli", "claude", "antigravity_cli"];
 const ACCESS_CLIENTS = [...MODEL_CLIENTS, "api"];
 const MODEL_SOURCE_LABELS = { "codex-app-server": t('来自 Codex CLI 模型列表'), "claude-cli": t('来自 Claude CLI 模型列表'), "antigravity-cli": t('来自 Antigravity CLI 模型列表') };
 
+// The last list each software gave, kept in this browser per computer: a list shows at once and is replaced when the
+// computer answers (through the relay that takes seconds). Only what a software reports about itself, never API settings.
+const MODEL_CATALOG_STORE = "codiscuss.model_catalogs";
+const MODEL_CATALOG_STORE_LIMIT = 12;
+
+/** Where this browser keeps one software's list: the computer it was read from, then the software. */
+const stored_catalog_key = (key) => `${state.launch.relay?.id || "local"}|${key}`;
+
+/** Every list kept in this browser; empty when storage is blocked or holds something unreadable. */
+function stored_catalogs() {
+  try { return JSON.parse(localStorage.getItem(MODEL_CATALOG_STORE)) || {}; } catch { return {}; }
+}
+
+/** Keep a software's fresh list for the next visit, dropping the lists unused the longest. */
+function store_catalog(key, { models, source, efforts, defaults }) {
+  const kept = { ...stored_catalogs(), [stored_catalog_key(key)]: { at: Date.now(), models, source, efforts, defaults } };
+  const newest = Object.entries(kept).sort(([, first], [, second]) => second.at - first.at).slice(0, MODEL_CATALOG_STORE_LIMIT);
+  try { localStorage.setItem(MODEL_CATALOG_STORE, JSON.stringify(Object.fromEntries(newest))); } catch { /* The list is read again next time. */ }
+}
+
 /** Keep discoveries separate for each software executable, shared by its participant instances. */
 function model_catalog_key(profile) {
   if (profile.adapter === "api") return JSON.stringify([profile.adapter, profile.base_url, profile.api_protocol, profile.api_key_ref]);
@@ -4047,18 +4310,20 @@ function launch_model_state(name, launch = state.launch, profile = launch.profil
     // Without the local service there are no presets, and two missing addresses are not an official match.
     const official = Boolean(preset) && profile.base_url?.replace(/\/$/, "") === preset.base_url;
     const models = catalog?.models || (official ? preset.models.map(id => ({ id, label: id })) : []);
-    return { supported: true, items: models.map(model => ({ label: model.label && model.label !== model.id ? `${model.label} · ${model.id}` : model.id, value: model.id })),
+    return { supported: true, items: models.map(model => ({ label: model.id, value: model.id })),
       loading: Boolean(catalog?.loading), error: catalog?.error || "", source: catalog ? t('来自 API 模型列表') : t('官方推荐，可输入其他模型 ID') };
   }
   const catalog = launch.model_catalogs?.[model_catalog_key(profile)];
   const models = catalog?.models || [];
   const selected = models.find(model => model.id === profile.model);
   const defaults = catalog?.defaults || {};
-  const items = [{ label: defaults.model ? t('软件默认（{value1}）', { value1: defaults.model }) : t('软件默认模型'), value: "__default__" }, ...models.map(model => ({ label: model.label || model.id, value: model.id }))];
-  if (profile.model && !selected) items.push({ label: t('{value1}（已保存，列表未确认）', { value1: profile.model }), value: profile.model, disabled: true });
-  return { supported: MODEL_CLIENTS.includes(profile.adapter), items, defaults, loading: Boolean(catalog?.loading),
+  // The list shows model IDs as they are; a list kept from last time needs no "reading" note while it is refreshed.
+  const items = [{ label: defaults.model ? t('软件默认 · {value1}', { value1: defaults.model }) : t('软件默认模型'), value: "__default__" }, ...models.map(model => ({ label: model.id, value: model.id }))];
+  if (profile.model && !selected) items.push({ label: profile.model, value: profile.model, disabled: true });
+  const loading = Boolean(catalog?.loading && !models.length);
+  return { supported: MODEL_CLIENTS.includes(profile.adapter), items, defaults, loading, refreshing: Boolean(catalog?.loading),
     efforts: profile.adapter === "antigravity_cli" ? catalog?.efforts : selected?.efforts, source: MODEL_SOURCE_LABELS[catalog?.source] || catalog?.source || "",
-    effort_note: profile.adapter === "antigravity_cli" ? catalog?.effort_error || (catalog?.loading ? t('正在读取原生思考档位…') : t('默认强度由 CLI 决定。')) : !selected
+    effort_note: profile.adapter === "antigravity_cli" ? catalog?.effort_error || (loading ? t('正在读取原生思考档位…') : t('默认强度由 CLI 决定。')) : !selected
       ? t('选择模型后显示可用思考强度；默认值由软件决定。') : t('所选模型不提供单独思考强度。'),
     error: catalog?.error || (!launch.available ? t('连接本机服务后读取模型列表') : !catalog ? t('尚未读取此软件的模型列表') : "") };
 }
@@ -4070,7 +4335,12 @@ async function load_launch_models(name, force = false, profile = state.launch.pr
   const catalogs = state.launch.model_catalogs ||= {}, key = model_catalog_key(profile);
   if (catalogs[key]?.loading || (!force && catalogs[key])) return;
   const fallback = profile.adapter === "antigravity_cli" ? catalogs[model_catalog_key({ ...profile, model: "" })] : null;
-  const current = { models: fallback?.models || [], loading: true, error: "", source: "" };
+  const stored = profile.adapter === "api" ? null : stored_catalogs()[stored_catalog_key(key)];
+  // What is on screen stays while the computer answers, so a refresh never empties the list.
+  const previous = catalogs[key];
+  const shown = [previous, fallback, stored].find(item => item?.models?.length);
+  const current = { ...stored, ...previous, models: shown?.models || [], loading: true, error: "", source: previous?.source || stored?.source || "" };
+  let failure = "";
   const input = profile.adapter === "api" ? { adapter: "api", base_url: profile.base_url, api_protocol: profile.api_protocol, model: profile.model || "discovery", api_key_ref: profile.api_key_ref }
     : { adapter: profile.adapter, ...(profile.executable ? { executable: profile.executable } : {}),
       ...(profile.adapter === "antigravity_cli" && profile.model ? { model: profile.model } : {}), ...(force ? { refresh: true } : {}) };
@@ -4079,15 +4349,25 @@ async function load_launch_models(name, force = false, profile = state.launch.pr
   try {
     const result = await local_launch_request("models", input);
     if (result.adapter !== input.adapter) throw new Error(t('模型列表与所选软件不一致'));
-    current.models = result.models || [];
-    current.source = result.source || "";
-    current.efforts = result.efforts;
-    current.defaults = result.defaults || {};
-    current.effort_error = result.effort_error || "";
-    current.error = result.error || (!current.models.length ? t('软件未返回可用模型，可使用默认模型') : "");
-  } catch (error) { current.error = error.message; }
+    failure = result.error || (!result.models?.length ? t('软件未返回可用模型，可使用默认模型') : "");
+    // A failed refresh leaves the list kept from last time in place.
+    if (result.models?.length || !current.models.length) {
+      current.models = result.models || [];
+      current.source = result.source || "";
+      current.efforts = result.efforts ?? current.efforts;
+      current.defaults = result.defaults || current.defaults || {};
+      current.effort_error = result.effort_error || "";
+      current.error = result.error || (!current.models.length ? t('软件未返回可用模型，可使用默认模型') : "");
+    }
+    if (result.models?.length && profile.adapter !== "api" && !result.error) store_catalog(key, current);
+  } catch (error) { failure = error.message; if (!current.models.length) current.error = failure; }
   finally {
     current.loading = false;
+    // Asked for by the refresh button: say how it went; without a list the reason already shows under the picker.
+    if (force && profile.adapter !== "api") {
+      if (!failure) notify("info", t('模型列表已更新'));
+      else if (current.models.length) notify("warning", t('刷新失败，继续使用当前列表：{value1}', { value1: failure }));
+    }
     if (state.launch.model_catalogs === catalogs) { render_launch_settings(); publish_view(); }
   }
 }
@@ -5755,7 +6035,7 @@ function view_snapshot() {
     directory_pending: [...state.directory_pending.keys()], folder_pending: [...state.folder_moves.keys()], creating_room: state.creating_room,
     connected: state.connected, reconnecting: state.reconnecting, rooms_loading: state.rooms_loading, observed_until: state.observed_until, resuming: state.resuming, backup_pending: Boolean(state.backup_pending), page: state.page, pages: state.pages, query: state.query,
     attachment_drafts: state.attachment_drafts.map(item => ({ id: item.id, file_name: item.file.name, size: item.file.size, preview_url: item.preview_url, placeholder: item.placeholder || "" })),
-    upload_status: state.upload_status, sending_message: state.sending_message, sending_preview: state.sending_preview, queueing_preview: state.queueing_preview,
+    upload_status: state.upload_status, sending_message: state.sending_message, sending_preview: state.sending_preview, queueing_preview: state.queueing_preview, queue_reading: state.queue_reading, queue_taking: [...state.queue_taking],
     failed_sends: state.failed_sends.map((failed) => ({ id: failed.id, ...failed.preview })),
     mention_only: state.mention_only, host_only: state.host_only, authors: state.authors, card_kinds: state.card_kinds,
     source_filter: state.mention_only || state.host_only || state.authors.length > 0 || state.card_kinds.length > 0, messages_loading: Boolean(state.messages_loading), messages_failure: state.messages_failure || "", reply_to: state.reply_to, queued_taken: state.queued_taken,
@@ -5994,7 +6274,7 @@ async function execute_view_action(name, value) {
   const actions = { refresh: refresh_room, room: select_room, tab: select_tab,
     archives: toggle_archives, backup: backup_room, backup_rooms, import_rooms, manage_channel, move_channel, create_folder, move_folder, rename_folder, delete_folder, sort_directory,
     send: () => send_from_composer(event), discard_sending, retry_sending, choose_attachments, remove_attachment, preview_attachment,
-    create: (folder_id) => submit_room(event, folder_id), quick_create: quick_create_room, welcome: open_welcome,
+    create: ({ folder_id, accepted, rejected }) => submit_room(event, folder_id, { accepted, rejected }), quick_create: quick_create_room, welcome: open_welcome,
     save_context: () => save_context(event), save_topic: () => save_topic(event),
     filter: filter_view, reply: set_view_reply, cancel_reply, skip_turn,
     copy_cli: () => copy_context(), copy_background,
@@ -6023,7 +6303,7 @@ function change_view_theme(theme) {
   try { localStorage.setItem(THEME_STORAGE_KEY, document.documentElement.dataset.theme); } catch { /* Keep the session preference. */ }
 }
 
-window.discuss_view = { snapshot: view_snapshot, write_field: write_view_field, write_create_preferences, notify, load_decision_input,
+window.discuss_view = { snapshot: view_snapshot, write_field: write_view_field, write_create_preferences, notify, load_decision_input, upload_progress,
   write_launch: write_launch_field, default_launch_entry, description_template, save_description_template, description_draft, write_description_draft, describe_member, set_chain_rounds, continue_chain, expert_presets, apply_expert_preset, unique_instance, member_label, default_name, label_draft, write_label_draft, preset_identity, save_expert_preset, delete_expert_preset, write_room_connection, write_room_adapter, launch_clients: LAUNCH_CLIENTS,
   launch_model_state, load_launch_models, write_launch_model, save_launch_api_key, create_launch_project, display_path, write_scheduler, save_scheduler_api_key, check_scheduler, write_named_followup, write_create_discussion, write_create_goal, write_create_chain_rounds, check_launch_api, launch_summary, launch_can_set_access, pick_launch_directory, browse_local_directory, list_remote_directories, save_launch_projects, restore_launch_profile, reset_create_form, empty_discussion_message,
   start_drag: start_directory_drag, reconnect: reconnect_live_updates, stop_label, local_request: local_launch_request,

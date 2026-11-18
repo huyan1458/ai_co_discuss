@@ -1,12 +1,12 @@
 <script setup>
 /**
- * The file preview's viewer for one image, video or audio file: Viewer.js (MIT) for images, zoomed, rotated, flipped
- * and dragged in place; the Video.js 10 (Apache-2.0) players with Chinese labels for video and audio. `url` is a
+ * The file preview's viewer for one image, video or audio file: Viewer.js (MIT) for images, zoomed, rotated, dragged and
+ * saved in place; the Video.js 10 (Apache-2.0) players with Chinese labels for video and audio. `url` is a
  * stream address of the computer's own website or a Blob URL read through the relay; a format the browser cannot
  * decode says so and keeps the download.
  */
 import { nextTick, onBeforeUnmount, onMounted, ref, watch } from "vue";
-import { IMAGE_TOOLBAR, IMAGE_ZOOM, Viewer } from "./image-viewer.js";
+import { IMAGE_ZOOM, Viewer, image_toolbar } from "./image-viewer.js";
 import PreviewLoading from "./PreviewLoading.vue";
 import "./media-players.js";
 
@@ -27,7 +27,7 @@ function mount_viewer() {
   viewer = null;
   if (props.kind !== "image" || !image.value) return;
   viewer = new Viewer(image.value, { inline: true, navbar: false, title: false, button: false, backdrop: false,
-    transition: false, toolbar: IMAGE_TOOLBAR, toggleOnDblclick: true, ...IMAGE_ZOOM, viewed: () => { loading.value = false; } });
+    transition: false, toolbar: image_toolbar(() => ({ url: props.url, name: props.name })), toggleOnDblclick: true, ...IMAGE_ZOOM, viewed: () => { loading.value = false; } });
 }
 
 /** Recreate the failed media element so the browser reads and decodes it again. */

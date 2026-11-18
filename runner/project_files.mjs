@@ -9,6 +9,9 @@ const DIRECTORY_PAGE_SIZE = 200;
 // Leave room for JSON escaping and base64 within the queued relay's 512 KiB encrypted envelope.
 const PREVIEW_MAX_BYTES = 128 * 1024;
 const DIRECTORY_MAX_BYTES = 128 * 1024;
+// One request checks this many folders, and its answer stays within what a relayed reply carries.
+const FOLDER_BATCH_LIMIT = 100;
+const FOLDER_BATCH_BYTES = 192 * 1024;
 
 /** Resolve a relative project path, including links, without allowing an escape from the project. */
 function project_path(root, path) {
@@ -210,6 +213,11 @@ export function read_project_files(cwd, path = '', offset = 0, query = '') {
   const normalized = path.replaceAll('\\', '/').split('/').filter(part => part && part !== '.').join('/');
   if (info.isFile()) return { path: normalized, kind: 'file', ...text_preview(target) };
   if (!info.isDirectory()) throw new Error('只能浏览文件夹或预览普通文件');
+  return directory_page(root, target, normalized, offset, info);
+}
+
+/** One page of a folder's entries, stamped with the folder's own change time read before its entries. */
+function directory_page(root, target, normalized, offset, info) {
   const items = readdirSync(target, { withFileTypes: true }).sort((left, right) =>
     Number(right.isDirectory()) - Number(left.isDirectory()) || left.name.localeCompare(right.name, 'zh-CN', { numeric: true }));
   const entries = [];
@@ -220,8 +228,36 @@ export function read_project_files(cwd, path = '', offset = 0, query = '') {
     if (entries.length && bytes > DIRECTORY_MAX_BYTES) break;
     entries.push(item);
   }
-  return { path: normalized, kind: 'directory', entries, total: items.length,
+  return { path: normalized, kind: 'directory', modified_at: info.mtime.toISOString(), entries, total: items.length,
     next_offset: offset + entries.length < items.length ? offset + entries.length : null };
+}
+
+/**
+ * Check many folders in one request, for the browser's cached file list. Each of `folders` (`{ path, modified_at }`, the
+ * change time the browser holds) is answered in order: `unchanged` when a folder still has that time, `missing` when it
+ * cannot be read, else its first page. An answer stops at the size a relayed reply carries; the caller asks again for the rest.
+ */
+export function read_project_folders(cwd, folders) {
+  if (!Array.isArray(folders) || !folders.length || folders.length > FOLDER_BATCH_LIMIT
+    || folders.some(folder => typeof folder?.path !== 'string')) throw new Error('文件夹列表无效');
+  const root = project_root(cwd);
+  const answers = [];
+  let bytes = 0;
+  for (const { path, modified_at: known } of folders) {
+    const normalized = path.replaceAll('\\', '/').split('/').filter(part => part && part !== '.').join('/');
+    let answer;
+    try {
+      const target = project_path(root, path);
+      const info = statSync(target);
+      if (!info.isDirectory()) answer = { path: normalized, missing: true };
+      else if (info.mtime.toISOString() === known) answer = { path: normalized, unchanged: true };
+      else answer = directory_page(root, target, normalized, 0, info);
+    } catch { answer = { path: normalized, missing: true }; }
+    bytes += Buffer.byteLength(JSON.stringify(answer));
+    if (answers.length && bytes > FOLDER_BATCH_BYTES) break;
+    answers.push(answer);
+  }
+  return answers;
 }
 
 // An HTML page with the files it refers to inlined stays within this size; references past it are left as they are.

@@ -8,14 +8,20 @@ import { computed, inject, nextTick, ref, watch } from "vue";
  * .dev/plans/Agent参与体验整改/DSH提问工具对照.md): one question per page with a pager, numbered rows for a single
  * choice and checkboxes for several, the recommended option marked and chosen in advance (choosing in advance is not
  * answering: nothing is sent until the owner submits), a free-answer row under the options, skip, collapse and close.
- * Enter goes on to the next question (submits on the last), Shift+Enter breaks a line. Beyond it, the room's own
- * actions: ask the host to recommend first, or leave the decision to it. One card at a time, in the site's order; the
- * others wait as one-line rows. Every write sends the version the card shows.
+ * Clicking a single-choice option confirms it: the card goes on to the next question, or submits on the last. Enter
+ * goes on the same way, Shift+Enter breaks a line. Beyond it, the room's own actions: ask the host to recommend first,
+ * or leave the decision to it. One card at a time, in the site's order; the others wait as one-line rows. Every write
+ * sends the version the card shows. A write leaves the card at once and runs behind it; a refused one brings the card
+ * back as the owner left it, with the error in the notice bar.
  */
 const props = defineProps({ questions: { type: Array, required: true } });
 const { bridge, act, pending } = inject("discussion");
-const current = computed(() => props.questions.find((item) => item.status === "waiting_user") || null);
-const waiting = computed(() => props.questions.filter((item) => item !== current.value));
+const card_key = (question) => `${question.id}:${question.version}`;
+// Cards the owner has already acted on: a snapshot read before the write landed must not bring them back.
+const sent = ref(new Set());
+const visible = computed(() => props.questions.filter((item) => item.status !== "waiting_user" || !sent.value.has(card_key(item))));
+const current = computed(() => visible.value.find((item) => item.status === "waiting_user") || null);
+const waiting = computed(() => visible.value.filter((item) => item !== current.value));
 const items = computed(() => current.value?.questions || []);
 // One draft per question {selected: option ids, custom: free answer}; a new card or a new version starts again.
 const drafts = ref([]);
@@ -23,10 +29,14 @@ const page = ref(0);
 const minimized = ref(false);
 const body = ref(null);
 let submission = "";
-watch(() => current.value && `${current.value.id}:${current.value.version}`, () => {
-  drafts.value = items.value.map((item) => ({ selected: item.options.filter((option) => option.recommended).map((option) => option.id), custom: "" }));
-  page.value = 0;
-  submission = "";
+// What each card held when it left the screen, so a refused write returns it unchanged and retries with the same id.
+const kept = new Map();
+watch(() => current.value && card_key(current.value), (key, previous) => {
+  if (previous) kept.set(previous, { drafts: drafts.value, page: page.value, submission });
+  const back = kept.get(key);
+  drafts.value = back?.drafts || items.value.map((item) => ({ selected: item.options.filter((option) => option.recommended).map((option) => option.id), custom: "" }));
+  page.value = back?.page || 0;
+  submission = back?.submission || "";
 }, { immediate: true });
 
 const item = computed(() => items.value[page.value]);
@@ -44,11 +54,19 @@ function update(change) {
   drafts.value = drafts.value.map((entry, index) => index === page.value ? { ...entry, ...change } : entry);
 }
 
-/** A single choice replaces the free answer, as a free answer replaces it; several choices keep it alongside. */
-function choose(option) {
+/**
+ * A single choice replaces the free answer and confirms the question; several choices keep the free answer alongside.
+ * The second click of a double click is dropped: it would land on the next question's option under the pointer.
+ */
+function choose(option, event) {
   const chosen = draft.value.selected;
-  if (item.value.multiSelect) update({ selected: chosen.includes(option.id) ? chosen.filter((id) => id !== option.id) : [...chosen, option.id] });
-  else update({ selected: [option.id], custom: "" });
+  if (item.value.multiSelect) {
+    update({ selected: chosen.includes(option.id) ? chosen.filter((id) => id !== option.id) : [...chosen, option.id] });
+    return;
+  }
+  if (event.detail > 1) return;
+  update({ selected: [option.id], custom: "" });
+  go_on();
 }
 
 function type_custom(value) {
@@ -77,6 +95,19 @@ function on_enter(event) {
   if (answered(draft.value) || !last.value) go_on();
 }
 
+/** Take the card off the screen and write behind it; a refused write puts it back. */
+async function write(question, operation, body) {
+  const key = card_key(question);
+  sent.value = new Set(sent.value).add(key);
+  if (await act("question_answer", { id: question.id, operation, body })) {
+    kept.delete(key);
+    return;
+  }
+  const remaining = new Set(sent.value);
+  remaining.delete(key);
+  sent.value = remaining;
+}
+
 /** Send one action for the current card; a retry of the same click keeps its submission id. */
 async function send(action) {
   const question = current.value;
@@ -85,17 +116,17 @@ async function send(action) {
   const answers = items.value.map((entry, index) => ({ id: entry.id, selected: drafts.value[index].selected,
     ...(drafts.value[index].custom.trim() ? { custom: drafts.value[index].custom } : {}) }));
   const payload = { version: question.version, action, submission_id: submission, ...(action === "answer" ? { answers } : {}) };
-  if (await act("question_answer", { id: question.id, operation: "answer", body: payload })) submission = "";
+  await write(question, "answer", payload);
 }
 
 async function cancel() {
   const question = current.value;
-  if (question) await act("question_answer", { id: question.id, operation: "cancel", body: { version: question.version } });
+  if (question) await write(question, "cancel", { version: question.version });
 }
 </script>
 
 <template>
-  <section v-if="questions.length" class="question-card" :class="{ 'is-minimized': minimized }" :aria-label="t('待你回答的问题')">
+  <section v-if="visible.length" class="question-card" :class="{ 'is-minimized': minimized }" :aria-label="t('待你回答的问题')">
     <template v-if="current && item">
       <header class="question-head">
         <div class="question-heading">
@@ -117,7 +148,7 @@ async function cancel() {
           <div class="question-options" :role="item.multiSelect ? 'group' : 'radiogroup'" :aria-label="item.question">
             <button v-for="(option, index) in item.options" :key="option.id" type="button" class="question-option"
               :class="{ 'is-selected': draft.selected.includes(option.id) }" :role="item.multiSelect ? 'checkbox' : 'radio'"
-              :aria-checked="draft.selected.includes(option.id)" :disabled="!!pending" @click="choose(option)" @keydown.enter="on_enter">
+              :aria-checked="draft.selected.includes(option.id)" :disabled="!!pending" @click="choose(option, $event)" @keydown.enter="item.multiSelect && on_enter($event)">
               <span v-if="item.multiSelect" class="question-check" aria-hidden="true"><UIcon v-if="draft.selected.includes(option.id)" name="i-lucide-check" /></span>
               <span v-else class="question-number" aria-hidden="true">{{ index + 1 }}</span>
               <span class="question-copy">
@@ -167,8 +198,8 @@ async function cancel() {
 
 <style scoped>
 /* A card over the composer, at most min(60vh, 520px) tall with its body scrolling, as in DeepSeek Harness. */
-/* No fill of its own: the card sits on the page's background, outlined only, so it does not read as a flat grey slab. */
-.question-card { display: flex; flex-direction: column; max-height: min(60vh, 520px); margin: 0 12px 8px; border: 1px solid var(--ui-border-accented); border-radius: 12px; background: transparent; font-size: 13px; overflow: hidden; }
+/* The title bar's frosted glass: messages scrolling behind the card stay out of the way of its text. */
+.question-card { display: flex; flex-direction: column; max-height: min(60vh, 520px); margin: 0 12px 8px; border: 1px solid var(--ui-border-accented); border-radius: 12px; background: var(--channel-topbar-bg); -webkit-backdrop-filter: var(--channel-glass-filter); backdrop-filter: var(--channel-glass-filter); font-size: 13px; overflow: hidden; }
 .question-card.is-minimized { max-height: none; }
 .question-head { display: flex; align-items: center; gap: 4px; padding: 8px 8px 4px 12px; }
 .question-heading { display: flex; flex: 1; flex-direction: column; min-width: 0; }

@@ -152,19 +152,15 @@ function form_id(key) {
   return `topic-${key}-${key === "host" ? "select" : "input"}`;
 }
 
-/** Close a write dialog only after the controller confirms a successful save. */
+/** Close the create panel as soon as its form is accepted; other write dialogs close once the save is confirmed. */
 async function save_form() {
   topic_limits.value?.settle();
-  const action = mode.value === "create" ? "create" : "save_topic";
-  if (action === "create") {
-    const folder_id = props.targetFolder?.id ?? null;
-    // Keep the dialog open while the local service starts members, matching submit_room.
-    const scheduler = view.value.launch.scheduler || {};
-    const launching = Object.values(view.value.experts['new-expert-modes'] || {}).includes('cli')
-      || (view.value.launch.available && Boolean(scheduler.enabled && scheduler.provider && scheduler.model && scheduler.api_key_ref));
-    if (!launching) mode.value = "";
-    if (await act(action, folder_id) && launching) mode.value = "";
-  } else if (await act(action)) mode.value = "";
+  if (mode.value !== "create") {
+    if (await act("save_topic")) mode.value = "";
+    return;
+  }
+  await act("create", { folder_id: props.targetFolder?.id ?? null, accepted: () => { mode.value = ""; },
+    rejected: () => { if (!mode.value) mode.value = "create"; } });
 }
 
 /** Close the overlay before switching its underlying renderer. */

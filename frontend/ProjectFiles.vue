@@ -10,18 +10,20 @@ const room_id = view.value.room.id;
 const shown = shown_folders.get(room_id);
 const root = ref(Math.max(0, props.directories.indexOf(shown?.directory)));
 const directory = computed(() => props.directories[root.value] || props.directories[0]);
-// The folder being shown changes on the click itself; its listing comes from the cache when it was opened before (in
-// this page, for this room and project), and is read again behind it, since another device waits on the relay.
+// The folder being shown changes on the click itself; its listing comes from this browser's cache and is read again
+// behind it. File contents are read only when a file is opened.
 const current_path = ref(shown?.directory === directory.value ? shown.path : "");
 const listing = ref(null);
 const loading = ref(false);
 let directory_request = 0;
-// Subfolders read ahead after a folder is shown, so opening one is instant; a few at a time, as each waits on the relay.
-const PREFETCH_LIMIT = 40, PREFETCH_PARALLEL = 3;
-let prefetch_run = 0;
-const cache_key = (path) => `${room_id}
-${directory.value}
+// The whole project's listings are kept current behind the page, top folders first: each pass asks only whether a folder
+// changed, so an unchanged project costs a few small requests. Generated folders are read when they are opened.
+const SWEEP_BATCH = 100, SWEEP_FOLDER_LIMIT = 10000, SWEEP_SETTLE_MS = 3000;
+const SWEEP_SKIPPED = new Set(["node_modules", ".git", "__pycache__", ".venv", "venv"]);
+let sweep_run = 0, sweep_timer = 0, left_page = false;
+const key_in = (top, path) => `${top}
 ${path}`;
+const cache_key = (path) => key_in(directory.value, path);
 
 /** Pick the row icon and tint for one listing entry. */
 function entry_icon(entry) {
@@ -34,11 +36,19 @@ const breadcrumbs = computed(() => crumbs_of(directory.value, current_path.value
 /** The last folder name of a directory, as its switch shows it. */
 const folder_name = (path) => String(path).split(/[\\/]+/).filter(Boolean).at(-1) || path;
 
+/** Show a folder of the current project from its saved listings, then bring the project's listings up to date. */
+async function open_project(path) {
+  await folder_listings.load(directory.value);
+  if (left_page) return;
+  read_directory(path);
+  sweep_folders();
+}
+
 /** Show another of the room's project directories from its top. */
 function switch_root(index) {
   if (index === root.value) return;
   root.value = index;
-  read_directory("");
+  open_project("");
 }
 
 /** Show a folder the preview's breadcrumb asked for, now or once this list is shown. */
@@ -47,19 +57,67 @@ function take_reveal() {
   if (path == null) return false;
   file_preview.reveal_path = null;
   if (props.directories[file_preview.reveal_root]) root.value = file_preview.reveal_root;
-  read_directory(path);
+  open_project(path);
   return true;
 }
-watch(() => file_preview.reveal_path, take_reveal);
-onMounted(() => { if (!take_reveal()) read_directory(current_path.value); });
-onBeforeUnmount(() => { directory_request++; prefetch_run++; });
 
-/** Show one folder at once (from the cache when it has been opened before) and read it again; a failed refresh keeps what is shown. */
+/** Check the project again shortly: several changes in a row need one pass. */
+function schedule_sweep() {
+  clearTimeout(sweep_timer);
+  sweep_timer = setTimeout(sweep_folders, SWEEP_SETTLE_MS);
+}
+const sweep_when_visible = () => { if (document.visibilityState === "visible") schedule_sweep(); };
+
+watch(() => file_preview.reveal_path, take_reveal);
+// A new message usually means a member finished some work, which may have changed files.
+watch(() => view.value.room?.latest_id, schedule_sweep);
+onMounted(() => {
+  document.addEventListener("visibilitychange", sweep_when_visible);
+  if (!take_reveal()) open_project(current_path.value);
+});
+onBeforeUnmount(() => {
+  left_page = true;
+  directory_request++;
+  sweep_run++;
+  clearTimeout(sweep_timer);
+  document.removeEventListener("visibilitychange", sweep_when_visible);
+});
+
+/** Save one folder's answer from the computer; the folder on screen shows it unless the user is reading it again. */
+function keep_answer(top, item) {
+  const key = key_in(top, item.path);
+  if (item.missing) folder_listings.delete(key);
+  else if (!item.unchanged) {
+    folder_listings.set(key, item);
+    if (top === directory.value && item.path === current_path.value && !loading.value) listing.value = item;
+  }
+  return (folder_listings.get(key)?.entries || []).filter((entry) => entry.kind === "directory" && !SWEEP_SKIPPED.has(entry.name)).map((entry) => entry.path);
+}
+
+/** Walk the project from its top, asking the computer about many folders at a time; a newer pass or leaving the page stops it. */
+async function sweep_folders() {
+  if (left_page) return;
+  const run = ++sweep_run, index = root.value, top = directory.value;
+  const queue = [""], seen = new Set(queue);
+  while (queue.length && run === sweep_run) {
+    const folders = queue.slice(0, SWEEP_BATCH).map((path) => ({ path, modified_at: folder_listings.get(key_in(top, path))?.modified_at || "" }));
+    let answer;
+    try { answer = await bridge.read_room_files(room_id, "", 0, "", index, folders); } catch { return; }
+    // A computer not yet updated answers without `folders`: the list then reads each folder as it is opened.
+    if (run !== sweep_run || !answer.folders?.length) return;
+    queue.splice(0, answer.folders.length);
+    for (const item of answer.folders) {
+      for (const path of keep_answer(top, item)) {
+        if (!seen.has(path) && seen.size < SWEEP_FOLDER_LIMIT) { seen.add(path); queue.push(path); }
+      }
+    }
+  }
+}
+
+/** Show one folder at once (from the cache when it is there) and read it again; a failed refresh keeps what is shown. */
 async function read_directory(path = "", append = false) {
   const request = ++directory_request;
   if (!append) {
-    // The folder asked for now goes ahead of any read-ahead still waiting on the relay.
-    prefetch_run++;
     current_path.value = path;
     shown_folders.set(room_id, { directory: directory.value, path });
     listing.value = folder_listings.get(cache_key(path)) || null;
@@ -70,27 +128,9 @@ async function read_directory(path = "", append = false) {
     if (request !== directory_request) return;
     listing.value = { ...result, entries: append ? [...listing.value.entries, ...result.entries] : result.entries };
     folder_listings.set(cache_key(path), listing.value);
-    if (!append) prefetch_subfolders(result.entries);
   } catch (error) {
     if (request === directory_request) bridge.notify("error", t('读取目录失败，{value1}', { value1: error.message }));
   } finally { if (request === directory_request) loading.value = false; }
-}
-
-/** Read the not yet cached subfolders of the shown folder into the cache; a newer folder, root or leaving the page stops it. */
-async function prefetch_subfolders(entries) {
-  const run = ++prefetch_run, index = root.value;
-  const queue = entries.filter((entry) => entry.kind === "directory" && !entry.name.startsWith(".") && !folder_listings.get(cache_key(entry.path)))
-    .slice(0, PREFETCH_LIMIT).map((entry) => ({ path: entry.path, key: cache_key(entry.path) }));
-  async function worker() {
-    while (queue.length && run === prefetch_run) {
-      const { path, key } = queue.shift();
-      try {
-        const result = await bridge.read_room_files(room_id, path, 0, "", index);
-        if (run === prefetch_run && !folder_listings.get(key)) folder_listings.set(key, result);
-      } catch { /* Read again when the folder is opened. */ }
-    }
-  }
-  await Promise.all(Array.from({ length: PREFETCH_PARALLEL }, worker));
 }
 </script>
 
@@ -98,7 +138,7 @@ async function prefetch_subfolders(entries) {
   <section class="project-files">
     <header class="project-files-heading">
       <div><h2>{{ t('项目文件') }}</h2><p>{{ bridge.display_path(directory) }}</p></div>
-      <UButton icon="i-lucide-refresh-cw" color="neutral" variant="ghost" size="sm" :aria-label="t('刷新')" :title="t('刷新')" :loading="loading" @click="read_directory(current_path)" />
+      <UButton icon="i-lucide-refresh-cw" color="neutral" variant="ghost" size="sm" :aria-label="t('刷新')" :title="t('刷新')" :loading="loading" @click="read_directory(current_path); sweep_folders()" />
     </header>
 
     <div v-if="directories.length > 1" class="project-roots" role="tablist" :aria-label="t('项目目录')">

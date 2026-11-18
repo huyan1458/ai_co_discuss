@@ -17,16 +17,16 @@ const runtime = computed(() => state.value.clis || {});
 const PARTS = [["claude", "Claude Code"], ["codex", "Codex"], ["agy", "Antigravity"], ["app", t('共议')], ["python", "Python"]];
 const runtime_ready = computed(() => PARTS.every(([key]) => runtime.value[key]));
 const runtime_stale = computed(() => runtime.value.app && runtime.value.app_version && runtime.value.app_version !== state.value.version);
-const entry = computed(() => state.value.entry || { running: false, port: 0, public_url: "", mode: "local", relay: {} });
+const entry = computed(() => state.value.entry || { running: false, port: 0, public_url: "", relay_enabled: false, tunnel_enabled: false, relay: {} });
 const entry_busy = ref(""), tunnel_open = ref(false), relay_open = ref(false);
-const MODES = [
-  { key: "local", icon: "i-lucide-monitor", label: t('仅这台电脑'), note: t('登录入口只在这台电脑上能打开，适合先自己试用。同一局域网的其他设备也打不开。') },
-  { key: "relay", icon: "i-lucide-cloud", label: t('线上中转'), note: t('不需要域名：经共议线上站点中转到这台电脑，手机和外地的电脑都能打开。需要先用接入码接入线上站点。') },
-  { key: "tunnel", icon: "i-lucide-globe", label: t('自有域名'), note: t('用你托管在 Cloudflare 的域名，经 Cloudflare 隧道连到这台电脑。需要有自己的域名。') },
+const WAYS = [
+  { key: "relay", icon: "i-lucide-cloud", label: t('线上中转'), note: t('不需要域名：经共议线上站点中转到这台电脑，手机和外地的电脑都能打开。需要先用接入码接入线上站点。'), turned_on: t('已开启线上中转'), turned_off: t('已关闭线上中转') },
+  { key: "tunnel", icon: "i-lucide-globe", label: t('自有域名'), note: t('用你托管在 Cloudflare 的域名，经 Cloudflare 隧道连到这台电脑。需要有自己的域名。'), turned_on: t('已开启自有域名'), turned_off: t('已关闭自有域名') },
 ];
-const current = computed(() => MODES.find((item) => item.key === entry.value.mode) || MODES[0]);
-// The relay needs this computer bound to an online site (its entry address is fetched on switching); the tunnel, its setup.
-const prepared = (mode) => mode === "local" || (mode === "relay" ? Boolean(entry.value.relay?.site) : Boolean(entry.value.tunnel));
+const enabled = (way) => Boolean(entry.value[`${way}_enabled`]);
+const ways_on = computed(() => WAYS.filter((item) => enabled(item.key)));
+// The relay needs this computer bound to an online site (its entry address is fetched on turning it on); the tunnel, its setup.
+const prepared = (way) => (way === "relay" ? Boolean(entry.value.relay?.site) : Boolean(entry.value.tunnel));
 // The tunnel as cloudflared reports it: connected to Cloudflare, running but not (yet) connected, or not running.
 const tunnel_state = computed(() => {
   const tunnel = entry.value.tunnel;
@@ -40,18 +40,17 @@ const relay_state = computed(() => {
   return problem ? { label: t('暂时打不开'), tag: "is-amber", hint: problem } : { label: t('可以访问'), tag: "is-green", hint: "" };
 });
 // What the row of a way shows under its explanation: its address and state once prepared.
-function detail(mode) {
-  if (mode === "local") return { text: `http://127.0.0.1:${entry.value.port}` };
-  if (mode === "relay" && prepared("relay")) {
-    return entry.value.relay?.link ? { text: entry.value.relay.link, state: entry.value.mode === "relay" ? relay_state.value : null } : { text: t('已接入 {value1}，改用时取得入口地址', { value1: entry.value.relay.site }) };
+function detail(way) {
+  if (way === "relay" && prepared("relay")) {
+    return entry.value.relay?.link ? { text: entry.value.relay.link, address: entry.value.relay.link, state: enabled("relay") ? relay_state.value : null } : { text: t('已接入 {value1}，开启时取得入口地址', { value1: entry.value.relay.site }) };
   }
-  if (mode === "tunnel" && prepared("tunnel")) return { text: entry.value.public_url, state: entry.value.mode === "tunnel" ? tunnel_state.value : null };
+  if (way === "tunnel" && prepared("tunnel")) return { text: entry.value.public_url, address: entry.value.public_url, state: enabled("tunnel") ? tunnel_state.value : null };
   return null;
 }
 
-/** Start or stop the entry, or switch the way in use. */
-async function entry_act(action, body = {}, message = "") {
-  entry_busy.value = action;
+/** Start or stop the entry, or turn one way from outside on or off. */
+async function entry_act(action, body = {}, message = "", busy = action) {
+  entry_busy.value = busy;
   try {
     await call(`entry/${action}`, body);
     if (message) notify("info", message);
@@ -60,15 +59,12 @@ async function entry_act(action, body = {}, message = "") {
   finally { entry_busy.value = ""; }
 }
 
-/** Use a way: switch to it when prepared, otherwise open its setup, which switches to it once done. */
-function use(mode) {
-  if (entry_busy.value || mode === entry.value.mode) return;
-  if (!prepared(mode)) return configure(mode);
-  entry_act("mode", { mode }, t('登录入口已改为{value1}', { value1: MODES.find((item) => item.key === mode).label }));
+function toggle_way(item, on) {
+  entry_act("way", { way: item.key, enabled: on }, on ? item.turned_on : item.turned_off, item.key);
 }
 
-function configure(mode) {
-  if (mode === "relay") relay_open.value = true; else tunnel_open.value = true;
+function configure(way) {
+  if (way === "relay") relay_open.value = true; else tunnel_open.value = true;
 }
 
 async function copy(text) {
@@ -95,7 +91,8 @@ async function install() {
       <div class="panel-tile"><UIcon name="i-lucide-door-open" /></div>
       <div class="panel-main">
         <div class="panel-title">{{ t('登录入口') }} <span class="panel-tag" :class="entry.running ? 'is-green' : 'is-gray'">{{ entry.running ? t('运行中') : t('已停止') }}</span>
-          <span class="panel-tag is-blue">{{ current.label }}</span></div>
+          <span v-for="item in ways_on" :key="item.key" class="panel-tag is-blue">{{ item.label }}</span>
+          <span v-if="!ways_on.length" class="panel-tag is-blue">{{ t('仅这台电脑') }}</span></div>
         <span class="panel-sub">{{ t('把这个地址发给使用者：') }}<a class="panel-link" :href="entry_address(entry)" target="_blank" rel="noopener">{{ entry_address(entry) }}</a></span>
       </div>
       <div class="panel-side">
@@ -107,23 +104,30 @@ async function install() {
       </div>
     </div>
     <div class="entry-ways">
-      <p class="entry-ways-title">{{ t('访问方式') }}<small>{{ t('使用者从哪里打开登录入口。三种都可以先配置好，同一时间使用其中一种。') }}</small></p>
-      <div v-for="item in MODES" :key="item.key" class="entry-way" :class="{ 'is-active': entry.mode === item.key }">
+      <p class="entry-ways-title">{{ t('访问方式') }}<small>{{ t('使用者从哪里打开登录入口。线上中转和自有域名可以同时开启；都开启时，默认发给使用者自有域名的地址。') }}</small></p>
+      <div class="entry-way">
+        <UIcon name="i-lucide-monitor" class="entry-way-icon" />
+        <div class="entry-way-main">
+          <div class="entry-way-title">{{ t('这台电脑') }}</div>
+          <span class="entry-way-note">{{ t('登录入口运行时，在这台电脑上总能打开，不需要开启。') }}</span>
+          <span class="entry-way-value">http://127.0.0.1:{{ entry.port }}</span>
+        </div>
+      </div>
+      <div v-for="item in WAYS" :key="item.key" class="entry-way" :class="{ 'is-active': enabled(item.key) }">
         <UIcon :name="item.icon" class="entry-way-icon" />
         <div class="entry-way-main">
           <div class="entry-way-title">{{ item.label }}
-            <span v-if="entry.mode === item.key" class="panel-tag is-blue"><UIcon name="i-lucide-check" />{{ t('使用中') }}</span>
-            <span v-else-if="!prepared(item.key)" class="panel-tag is-gray">{{ t('未配置') }}</span></div>
+            <span v-if="!prepared(item.key)" class="panel-tag is-gray">{{ t('未配置') }}</span></div>
           <span class="entry-way-note">{{ item.note }}</span>
           <span v-if="detail(item.key)" class="entry-way-value">{{ detail(item.key).text }}
             <span v-if="detail(item.key).state" class="panel-tag" :class="detail(item.key).state.tag" :title="detail(item.key).state.hint">{{ detail(item.key).state.label }}</span></span>
           <small v-if="detail(item.key)?.state?.hint" class="entry-way-hint">{{ detail(item.key).state.hint }}</small>
         </div>
         <div class="panel-side">
-          <button v-if="item.key !== 'local' && prepared(item.key)" type="button" class="panel-button is-plain is-small" @click="configure(item.key)"><UIcon name="i-lucide-pencil" />{{ t('修改') }}</button>
-          <button v-if="!prepared(item.key)" type="button" class="panel-button is-plain is-small" @click="configure(item.key)"><UIcon name="i-lucide-settings-2" />{{ t('配置') }}</button>
-          <button v-else-if="entry.mode !== item.key" type="button" class="panel-button is-primary is-small" :disabled="Boolean(entry_busy)" @click="use(item.key)">
-            <UIcon :name="entry_busy === 'mode' ? 'i-lucide-loader' : 'i-lucide-arrow-right-left'" :class="{ 'animate-spin': entry_busy === 'mode' }" />{{ t('改用') }}</button>
+          <button v-if="enabled(item.key) && detail(item.key)?.address" type="button" class="panel-button is-plain is-small" @click="copy(detail(item.key).address)"><UIcon name="i-lucide-copy" />{{ t('复制地址') }}</button>
+          <button v-if="prepared(item.key)" type="button" class="panel-button is-plain is-small" @click="configure(item.key)"><UIcon name="i-lucide-pencil" />{{ t('修改') }}</button>
+          <button v-else type="button" class="panel-button is-plain is-small" @click="configure(item.key)"><UIcon name="i-lucide-settings-2" />{{ t('配置') }}</button>
+          <USwitch v-if="prepared(item.key)" :model-value="enabled(item.key)" :loading="entry_busy === item.key" :disabled="Boolean(entry_busy)" :aria-label="t('开启或关闭{value1}', { value1: item.label })" @update:model-value="(on) => toggle_way(item, on)" />
         </div>
       </div>
     </div>

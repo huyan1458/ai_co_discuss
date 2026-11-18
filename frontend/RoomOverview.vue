@@ -10,6 +10,7 @@ import ImageService from "./ImageService.vue";
 import SchedulerSettings from "./SchedulerSettings.vue";
 import ChainRoundsField from "./ChainRoundsField.vue";
 import EffortSlider from "./EffortSlider.vue";
+import ModelRefresh from "./ModelRefresh.vue";
 import ExtraDirectoriesField from "./ExtraDirectoriesField.vue";
 import ProjectDirectoryField from "./ProjectDirectoryField.vue";
 import HostWorkflowSwitch from "./HostWorkflowSwitch.vue";
@@ -301,7 +302,7 @@ const created = computed(() => room.value.created_at ? new Date(room.value.creat
     <!-- The room's project directories lead the page: every member works in them. One row each, the main one locked once set. -->
     <section v-if="saved?.registered" class="overview-section overview-project" :aria-label="t('项目目录')">
       <header class="overview-project-head"><UIcon name="i-lucide-folder-tree" /><h3>{{ t("项目目录") }}</h3>
-        <span class="overview-muted">{{ saved.project_directory
+        <span class="overview-muted" :class="{ 'overview-phone-hidden': saved.project_directory }">{{ saved.project_directory
           ? t('成员按自己的项目权限读写其他目录，在别处工作的成员只读。改动从各成员下一次执行起生效，会话保留。')
           : t('主目录只能设置一次，之后不能更改。已在房间的成员保留原会话，按自己的项目权限读写它；之后邀请的成员在其中工作。') }}</span></header>
       <div class="overview-directories">
@@ -321,9 +322,9 @@ const created = computed(() => room.value.created_at ? new Date(room.value.creat
         </div>
       </div>
     </section>
-    <div class="page-heading"><div><h2>{{ t("成员与设置") }}</h2><p>{{ t("成员的接入、权限与全部操作，以及房间的协作设置；右栏成员菜单是同样操作的快捷入口。") }}</p></div><UButton v-if="!room.archived" icon="i-lucide-plus" :label="t('邀请 AI 加入')" variant="outline" color="neutral" class="channel-surface-button" :disabled="!view.access?.can_manage" @click="inviting = true" /></div>
+    <div class="page-heading overview-heading"><div><h2>{{ t("成员与设置") }}</h2><p class="overview-phone-hidden">{{ t("成员的接入、权限与全部操作，以及房间的协作设置；右栏成员菜单是同样操作的快捷入口。") }}</p></div><UButton v-if="!room.archived" icon="i-lucide-plus" :label="t('邀请 AI 加入')" variant="outline" color="neutral" class="channel-surface-button" :disabled="!view.access?.can_manage" @click="inviting = true" /></div>
     <section class="overview-section">
-      <h3>{{ t("成员") }}</h3>
+      <h3 class="overview-phone-hidden">{{ t("成员") }}</h3>
       <p v-if="local_state" class="overview-local" role="status">{{ local_state.text }}<button v-if="local_state.retry" type="button" class="subtle-link" @click="bridge.reload_room_models()">{{ t("重试") }}</button></p>
       <ul class="member-cards" :aria-label="t('成员')">
         <MemoBlock v-for="member in members" :key="member.name" :deps="[card_key(member)]">
@@ -363,7 +364,9 @@ const created = computed(() => room.value.created_at ? new Date(room.value.creat
               <UIcon name="i-lucide-triangle-alert" /><span>{{ t('主持人最近一次执行失败：{reason}。若它长期不可用（如额度用尽），在另一位成员卡片右上角点“设为主持人”换人。', { reason: live(member).execution.result || t('原因未知') }) }}</span></div>
           </dl>
           <footer class="member-card-actions" :aria-label="t('{name} 的操作', { name: member.name })">
-            <div><UButton v-for="item in actions(member).taking_part" :key="item.label" :icon="item.icon" :label="item.label" size="xs" variant="ghost" color="neutral" :disabled="item.disabled" @click="item.onSelect()" /></div>
+            <div><UButton v-for="item in actions(member).taking_part" :key="item.label" class="member-card-tool" :icon="item.icon" :label="item.label" size="xs" variant="ghost" color="neutral" :disabled="item.disabled" @click="item.onSelect()" />
+              <!-- A phone folds these into one menu, so a card's actions fit on a single line. -->
+              <UDropdownMenu v-if="actions(member).taking_part.length" :items="[actions(member).taking_part]" :content="{ align: 'start' }" :ui="{ content: 'channel-menu' }"><UButton class="member-card-more" icon="i-lucide-ellipsis" size="xs" variant="ghost" color="neutral" :aria-label="t('更多操作')" /></UDropdownMenu></div>
             <div v-if="actions(member).place.length"><UButton v-for="item in actions(member).place" :key="item.label" :icon="item.icon" :label="item.label" size="xs" variant="ghost" :color="item.color || 'neutral'" :disabled="item.disabled" @click="item.onSelect()" /></div>
           </footer>
         </li>
@@ -404,7 +407,7 @@ const created = computed(() => room.value.created_at ? new Date(room.value.creat
       <template #body>
         <form v-if="model_edit" class="overview-model-form" @submit.prevent="save_model">
           <label v-if="model_typed"><span>{{ t("模型 ID") }}</span><UInput v-model.trim="model_edit.draft.model" :aria-label="t('{name} 使用的模型 ID', { name: model_edit.name })" class="w-full" /></label>
-          <label v-else><span>{{ t("模型") }}</span><USelect :model-value="model_edit.draft.model || '__default__'" :items="model_state.items" :title="model_state.source" :aria-label="t('{name} 使用的模型', { name: model_edit.name })" class="w-full" @update:model-value="pick_model" /></label>
+          <label v-else><span>{{ t("模型") }}</span><div class="model-picker"><USelect :model-value="model_edit.draft.model || '__default__'" :items="model_state.items" :title="model_state.source" size="sm" :ui="{ base: 'model-select', content: 'model-select-menu' }" :aria-label="t('{name} 使用的模型', { name: model_edit.name })" class="w-full" @update:model-value="pick_model" /><ModelRefresh :loading="model_state.refreshing" :disabled="!view.launch.available" @refresh="bridge.load_launch_models(model_edit.name, true, model_edit.draft)" /></div></label>
           <p v-if="!model_typed && (model_state.loading || model_state.error)" class="overview-muted">{{ model_state.loading ? t('正在读取软件模型列表…') : model_state.error }}</p>
           <EffortSlider v-if="model_efforts" :caption="t('强度')" :items="model_efforts" :model-value="model_edit.draft.effort" :label="t('{name} 的思考强度', { name: model_edit.name })" @update:model-value="model_edit.draft.effort = $event" />
           <p v-else class="overview-muted">{{ model_state.effort_note }}</p>
@@ -465,6 +468,7 @@ const created = computed(() => room.value.created_at ? new Date(room.value.creat
 /* Taking-part actions on the left, the member's place in the room (ending with removal) on the right. */
 .member-card-actions { display: flex; flex-wrap: wrap; justify-content: space-between; gap: 4px 16px; padding: 6px 10px; border-top: 1px solid var(--ui-border-muted); }
 .member-card-actions > div { display: flex; flex-wrap: wrap; gap: 2px; }
+.member-card-more { display: none; }
 .overview-address { display: flex; align-items: center; gap: 4px; min-width: 0; }
 /* Spans the whole facts row so a long directory path is not squeezed into the narrow 项目文件 column. */
 .overview-outside { grid-column: 1 / -1; display: flex; align-items: center; gap: 4px; min-width: 0; margin-top: -8px; color: var(--ui-warning, #d9a441); font-size: 12px; }
@@ -497,16 +501,42 @@ const created = computed(() => room.value.created_at ? new Date(room.value.creat
 .overview-settings dt { flex: none; width: 112px; color: var(--ui-text-muted); font-size: 12px; }
 .overview-settings dd { flex: 1; min-width: 0; margin: 0; color: var(--ui-text); overflow-wrap: anywhere; }
 @media (max-width: 720px) {
-  /* minmax(0, …): a long model name is cut with an ellipsis instead of widening the card past the screen. */
-  .member-card-facts { grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); padding-left: 16px; }
-  .member-card-facts > div { min-width: 0; }
-  .member-card-facts > div:nth-child(3) { grid-column: 1 / -1; }
-  /* A phone gives each setting the full width: its name sits above the value instead of a 112px column beside it. */
-  .overview-settings > div { flex-direction: column; align-items: stretch; gap: 6px; padding: 12px 14px; }
-  .overview-settings dt { width: auto; }
+  /* A phone shows as much as it can at once (user 2026-11-18, #4568): explanations that repeat the page give way, labels sit
+     beside their values, and each card's actions share one line. */
+  .overview-phone-hidden { display: none; }
+  .overview-section { margin-bottom: 14px; }
+  .overview-section h3 { margin-bottom: 6px; }
+  .overview-heading { flex-wrap: nowrap; align-items: center; margin-bottom: 8px; }
+  .overview-heading h2 { margin-bottom: 0; }
+  .overview-heading > button { flex-shrink: 0; }
+  .member-cards { gap: 8px; }
   /* The name needs the head row's width on a phone, so 设为主持人 keeps only its crown. */
-  .member-card-head { gap: 8px; }
+  .member-card-head { gap: 8px; padding: 8px 10px 0; }
+  .member-card-head :deep(.channel-avatar) { width: 26px; height: 26px; }
   .member-card-host :deep([data-slot="label"]) { display: none; }
+  /* 接入 keeps its width and the model takes the rest of the line; a long model name is cut with an ellipsis. */
+  .member-card-facts { grid-template-columns: max-content minmax(0, 1fr); gap: 4px 12px; padding: 6px 10px; }
+  .member-card-facts > div { display: flex; align-items: center; gap: 6px; min-width: 0; }
+  .member-card-facts > div:nth-child(n + 3) { grid-column: 1 / -1; }
+  .member-card-facts dt { flex: none; margin-bottom: 0; }
+  .member-card-facts dd { flex: 1; }
+  /* The permission switch drops under its label only when the two do not fit on one line (a very narrow phone in English). */
+  .member-card-facts > div:nth-child(3) { flex-wrap: wrap; }
+  .member-card-facts > div:nth-child(3) dd { flex: 1 1 auto; }
+  .overview-switch button { padding: 0 8px; }
+  .overview-outside { margin-top: 0; }
+  .member-card-actions { flex-wrap: nowrap; align-items: center; gap: 4px; padding: 2px 6px; }
+  .member-card-actions > div { flex-wrap: nowrap; }
+  .member-card-tool { display: none; }
+  .member-card-more { display: inline-flex; }
+  .overview-project { padding: 10px; }
+  .overview-project-head { margin-bottom: 8px; }
+  .overview-directories { gap: 6px; }
+  .overview-main-prefix { width: 30px; }
+  .overview-main-path { padding-inline: 8px; font-size: 13px; }
+  /* A phone gives each setting the full width: its name sits above the value instead of a 112px column beside it. */
+  .overview-settings > div { flex-direction: column; align-items: stretch; gap: 2px; padding: 7px 10px; }
+  .overview-settings dt { width: auto; }
 }
 /* A member with a nickname also shows its ID, which AI messages, @ and records use. */
 .member-id { min-width: 0; overflow: hidden; text-overflow: ellipsis; margin-left: 4px; color: var(--ui-text-muted); font-size: 11px; font-weight: 400; }

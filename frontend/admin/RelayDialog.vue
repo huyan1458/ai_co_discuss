@@ -1,7 +1,7 @@
 <script setup>
 /**
  * The online relay for the hosted accounts' entry, in one step on each side. On a hosting computer: paste the access code
- * and join (binding to the online site, taking the entry address it gives, switching to the relay; each step shown). On
+ * and join (binding to the online site, taking the entry address it gives, turning the relay on; each step shown). On
  * the computer that deployed the online site: make the access code (a one-time binding token with the site's address,
  * written through wrangler with the site's deployment config). Deploying the online site itself stays with whoever runs
  * it; nothing here deploys anything.
@@ -26,7 +26,7 @@ watch(() => props.open, async (open) => {
 
 async function join() {
   busy.value = "join";
-  try { joined.value = await call("relay/join", { code: code.value.trim() }); notify("info", t('已切换到线上中转')); await reload(); }
+  try { joined.value = await call("relay/join", { code: code.value.trim() }); notify("info", t('已开启线上中转')); await reload(); }
   catch (failure) { notify("error", failure.message); }
   finally { busy.value = ""; }
 }
@@ -54,7 +54,7 @@ function close() { emit("update:open", false); }
           <label class="panel-field">{{ t('接入码') }} <textarea v-model="code" class="panel-input relay-code" placeholder="https://xxx.pages.dev/#codiscuss-bind=…" spellcheck="false" />
             <small>{{ t('向为你提供线上站点的人要（自己部署了线上站点的，在下面生成）。只能用一次。') }}</small></label>
           <div class="relay-actions"><button type="submit" class="panel-button is-primary is-small" :disabled="!code.trim() || Boolean(busy)">
-            <UIcon v-if="busy === 'join'" name="i-lucide-loader" class="animate-spin" />{{ t('接入并切换') }}</button></div>
+            <UIcon v-if="busy === 'join'" name="i-lucide-loader" class="animate-spin" />{{ t('接入并开启') }}</button></div>
         </form>
         <ul v-else class="relay-steps">
           <li v-for="line in joined.steps" :key="line"><UIcon name="i-lucide-circle-check" />{{ line }}</li>

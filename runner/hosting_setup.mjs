@@ -82,7 +82,7 @@ export async function configure_hosting(home, options, { interactive = Boolean(p
     try {
       const host = tunnel_host(options['public-host']);
       const tunnel = await prepare_tunnel({ host, name: options['tunnel-name'], interactive, say });
-      Object.assign(changes, { public_url: `https://${host}`, tunnel, mode: 'tunnel' });
+      Object.assign(changes, { public_url: `https://${host}`, tunnel, tunnel_enabled: true });
       lines.push(t('外网地址 https://{value1}，经 Cloudflare 隧道 {value2} 转到登录入口；隧道独立运行，由管理面板按设置维持', { value1: host, value2: tunnel.name }));
       if (remove_legacy_tunnel_start()) lines.push(t('已移除旧的“CoDiscuss Tunnel”开机任务，改由管理面板运行隧道'));
       // cert.pem manages the whole Cloudflare site, while the running tunnel needs only its own credentials.

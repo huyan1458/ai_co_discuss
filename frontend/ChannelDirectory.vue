@@ -6,6 +6,10 @@ import { ref as module_ref } from "vue";
 const open_folders = module_ref(new Set());
 // The room whose folder was last opened for it, so mounting the drawer again is not taken for opening that room.
 let revealed_for = "";
+// Sorted by recent activity, each folder first lists this many rooms. Which folders the user opened in full survives the
+// phone drawer being mounted anew, as open_folders does.
+const ROOM_PREVIEW_COUNT = 5;
+const full_lists = module_ref(new Set());
 </script>
 
 <script setup>
@@ -107,17 +111,42 @@ function recovery_items(item) {
   ]];
 }
 
+// The request still in flight is saved as a record too, but it shows as the room being created until its result is known.
+const unconfirmed_launches = computed(() => view.value.launch.recoveries.filter((item) => item.id !== view.value.creating_room?.submission_id));
+
 function room_row(room, index, count) {
   return { items: actions(room, index, room.folder_id || null, count), active: !workflow_page.value && room.id === view.value.room?.id, busy: Boolean(pending.value),
     archiving: view.value.archive_pending.includes(room.id), time: room_time(room), title: room_time_title(room),
-    running: room.id === view.value.room?.id ? open_room_running.value : Boolean(room.running) };
+    running: room_running(room) };
+}
+/** Whether a room is at work; the open room's own live state is the fresher one. */
+function room_running(room) {
+  return room.id === view.value.room?.id ? open_room_running.value : Boolean(room.running);
+}
+/** The rooms a folder lists now: all of them in manual order, else the latest few plus any at work or open. */
+function visible_rooms(folder) {
+  if (manual_order.value || full_lists.value.has(folder.id)) return folder.rooms;
+  return folder.rooms.filter((room, index) => index < ROOM_PREVIEW_COUNT || room_running(room) || room.id === view.value.room?.id);
+}
+/** The label of a folder's show-more control, empty when the folder has nothing to fold. */
+function list_toggle_label(folder) {
+  if (manual_order.value || folder.rooms.length <= ROOM_PREVIEW_COUNT) return "";
+  if (full_lists.value.has(folder.id)) return t("收起");
+  const hidden = folder.rooms.length - visible_rooms(folder).length;
+  return hidden ? t("显示其余 {count} 个", { count: hidden }) : "";
+}
+/** Show a folder's whole list or fold it back to the latest few. */
+function toggle_full_list(id) {
+  const next = new Set(full_lists.value);
+  if (!next.delete(id)) next.add(id);
+  full_lists.value = next;
 }
 /** Plain values for one folder's heading row, and the key it re-renders on; read here for the same reason as room_row. */
 function folder_head(folder, index) {
   const items = folder.id ? folder_actions(folder, index) : [];
   const head = { items, collapsed: !folder_open(folder.id), active: view.value.room?.folder_id === folder.id,
-    creating: view.value.directory_pending.includes("create-room") };
-  head.key = JSON.stringify([folder, head.collapsed, head.active, head.creating, items.map((group) => group.map((item) => [item.label, item.disabled]))]);
+    creating: view.value.directory_pending.includes("create-room"), running: !folder_open(folder.id) && folder.rooms.some((room) => room_running(room)) };
+  head.key = JSON.stringify([folder, head.collapsed, head.active, head.creating, head.running, items.map((group) => group.map((item) => [item.label, item.disabled]))]);
   return head;
 }
 const rooms_open = ref(true);
@@ -133,6 +162,10 @@ ${view.value.room?.folder_id || ""}`, (key) => {
   if (expanded.value.has(folder)) return;
   expanded.value = new Set([...expanded.value, folder]);
 }, { immediate: true });
+// A room being created in a closed folder is shown the same way.
+watch(() => view.value.creating_room?.folder_id, (folder) => {
+  if (folder && !expanded.value.has(folder)) expanded.value = new Set([...expanded.value, folder]);
+});
 /** Whether one folder's rooms are shown; the unfiled group is always shown. */
 function folder_open(id) { return !id || expanded.value.has(id); }
 
@@ -197,13 +230,13 @@ function actions(room, index, folder_id, folder_room_count) {
     <div class="channel-directory-heading">
       <button type="button" class="channel-section-toggle" :aria-expanded="rooms_open" @click="rooms_open = !rooms_open"><UIcon :name="rooms_open ? 'i-lucide-chevron-down' : 'i-lucide-chevron-right'" />{{ directory_title }}</button>
       <div class="channel-directory-actions">
-        <UTooltip :text="t('新建文件夹')"><UButton icon="i-lucide-plus" color="neutral" variant="ghost" size="xs" :aria-label="t('新建文件夹')" :disabled="view.directory_pending.includes('create-folder')" @click="emit('create-folder')" /></UTooltip>
+        <UTooltip :text="t('新建文件夹')"><UButton icon="i-lucide-folder-plus" color="neutral" variant="ghost" size="xs" :aria-label="t('新建文件夹')" :disabled="view.directory_pending.includes('create-folder')" @click="emit('create-folder')" /></UTooltip>
         <UDropdownMenu :items="directory_actions" :content="{ align: 'end', sideOffset: 4 }" :ui="{ content: 'channel-menu channel-directory-menu' }"><UButton icon="i-lucide-ellipsis" :aria-label="t('房间目录选项')" :title="t('排列、导入与导出')" size="xs" color="neutral" variant="ghost" /></UDropdownMenu>
         <input ref="import_input" type="file" accept=".zip,.json" multiple hidden :aria-label="t('选择房间备份')" @change="choose_imports">
       </div>
     </div>
-    <nav v-show="rooms_open" :aria-label="t('协作房间列表')" class="channel-room-list" data-room-directory>
-      <div v-for="item in view.launch.recoveries" :key="`launch-${item.id}`" class="channel-room-row channel-room-unconfirmed">
+    <nav v-show="rooms_open" :aria-label="t('协作房间列表')" class="channel-room-list" :class="{ 'is-recent': !manual_order }" data-room-directory>
+      <div v-for="item in unconfirmed_launches" :key="`launch-${item.id}`" class="channel-room-row channel-room-unconfirmed">
         <UIcon name="i-lucide-circle-alert" class="channel-room-alert" />
         <UDropdownMenu :items="recovery_items(item)" :content="{ align: 'start', side: 'bottom', sideOffset: 6 }" :ui="{ content: 'channel-menu channel-topic-menu' }">
           <button type="button" class="channel-room-select" :title="item.error || t('结果未确认，点击重试或删除记录')"><span>{{ item.title }}</span><small class="channel-room-time">{{ t("未确认") }}</small></button>
@@ -213,17 +246,16 @@ function actions(room, index, folder_id, folder_room_count) {
        <template v-for="head in [folder_head(folder, folder_index)]" :key="folder.order_id">
        <MemoBlock v-if="folder.id" :deps="[head.key]">
        <div class="channel-folder-row" :class="{ active: head.collapsed && head.active }">
-       <button class="channel-folder-heading" data-drop-folder data-drag-handle type="button" :disabled="folder.pending" :aria-label="`${folder.name} ${folder.rooms.length}`" :aria-expanded="!head.collapsed" :title="t('拖动文件夹排序；上下方向键移动')" @pointerdown="!pending && bridge.start_drag($event)" @keydown.up.prevent="act('move_folder', { id: folder.order_id, direction: -1 })" @keydown.down.prevent="act('move_folder', { id: folder.order_id, direction: 1 })" @click="toggle_folder(folder.id)"><UIcon :name="head.collapsed ? 'i-lucide-chevron-right' : 'i-lucide-chevron-down'" /><UIcon name="i-lucide-folder" /><span class="channel-folder-name">{{ folder.name }}</span><small class="channel-directory-count" aria-hidden="true">{{ folder.pending ? t('保存中') : folder.rooms.length || '' }}</small></button>
+       <button class="channel-folder-heading" data-drop-folder data-drag-handle type="button" :disabled="folder.pending" :aria-label="`${folder.name} ${folder.rooms.length}`" :aria-expanded="!head.collapsed" :title="t('拖动文件夹排序；上下方向键移动')" @pointerdown="!pending && bridge.start_drag($event)" @keydown.up.prevent="act('move_folder', { id: folder.order_id, direction: -1 })" @keydown.down.prevent="act('move_folder', { id: folder.order_id, direction: 1 })" @click="toggle_folder(folder.id)"><UIcon :name="head.collapsed ? 'i-lucide-chevron-right' : 'i-lucide-chevron-down'" /><UIcon name="i-lucide-folder" /><span class="channel-folder-name">{{ folder.name }}</span><i v-if="head.running && !folder.pending" class="channel-room-running" :title="t('正在执行')" /><small v-else class="channel-directory-count" aria-hidden="true">{{ folder.pending ? t('保存中') : folder.rooms.length || '' }}</small></button>
         <div class="channel-folder-actions">
-          <UTooltip :text="t('在{name}中新建对话', { name: folder.name })"><UButton icon="i-lucide-square-pen" :aria-label="t('在{name}中新建对话', { name: folder.name })" :disabled="folder.pending || head.creating" size="xs" color="neutral" variant="ghost" @click="emit('create', folder.id ? folder : null)" /></UTooltip>
+          <UTooltip :text="t('在{name}中新建对话', { name: folder.name })"><UButton icon="i-lucide-plus" :aria-label="t('在{name}中新建对话', { name: folder.name })" :disabled="folder.pending || head.creating" size="xs" color="neutral" variant="ghost" @click="emit('create', folder.id ? folder : null)" /></UTooltip>
           <UDropdownMenu :items="head.items" :content="{ align: 'start', side: 'bottom', sideOffset: 6 }" :ui="{ content: 'channel-menu channel-topic-menu' }"><UButton icon="i-lucide-ellipsis" :aria-label="t('管理文件夹 {name}', { name: folder.name })" :title="t('文件夹选项')" size="xs" color="neutral" variant="ghost" /></UDropdownMenu>
         </div>
        </div>
        </MemoBlock>
        </template>
        <div v-if="folder_open(folder.id)" :class="folder.id ? 'channel-folder-rooms' : 'channel-root-rooms'" :data-drop-folder="folder.id ? undefined : ''">
-      <p v-if="view.creating_room && (view.creating_room.folder_id || '') === folder.id" class="channel-directory-empty" role="status">{{ t("正在创建：{name}", { name: view.creating_room.title }) }}</p>
-      <MemoBlock v-for="(room, index) in folder.rooms" :key="room.id" :deps="[JSON.stringify(room), index, folder.rooms.length, row_state, room_time(room)]">
+      <MemoBlock v-for="(room, index) in visible_rooms(folder)" :key="room.id" :deps="[JSON.stringify(room), index, folder.rooms.length, row_state, room_time(room)]">
       <template v-for="row in [room_row(room, index, folder.rooms.length)]" :key="room.id">
       <UContextMenu :items="row.items" :ui="{ content: 'channel-menu channel-topic-menu' }">
         <div class="channel-room-row" :class="{ active: row.active }" :data-drag-room="room.id">
@@ -231,7 +263,7 @@ function actions(room, index, folder_id, folder_room_count) {
           <button class="channel-room-select" data-drag-title :title="row.title" :aria-label="room.title" :aria-current="row.active ? 'page' : undefined" @pointerdown="!pending && bridge.start_drag($event)" @click="emit('select', room.id)"><span>{{ room.title }}</span><i v-if="row.running" class="channel-room-running" :title="t('正在执行')" /><small v-else class="channel-room-time" aria-hidden="true">{{ row.time }}</small></button>
           <div class="channel-room-actions">
             <UTooltip :text="room.archived ? t('恢复房间') : t('存档房间')" :ui="{ content: 'channel-topic-tooltip' }">
-              <UButton :icon="room.archived ? 'i-lucide-archive-restore' : 'i-lucide-archive'" :aria-label="room.archived ? t('恢复 {name}', { name: room.title }) : t('存档 {name}', { name: room.title })" size="xs" color="neutral" variant="ghost" :disabled="row.busy || row.archiving" @click="emit('manage', { room, action: room.archived ? 'restore' : 'archive' })" />
+              <UButton :icon="room.archived ? 'i-lucide-archive-restore' : 'i-lucide-archive'" :aria-label="room.archived ? t('恢复 {name}', { name: room.title }) : t('存档 {name}', { name: room.title })" class="channel-room-archive" size="xs" color="neutral" variant="ghost" :disabled="row.busy || row.archiving" @click="emit('manage', { room, action: room.archived ? 'restore' : 'archive' })" />
             </UTooltip>
             <UDropdownMenu :items="row.items" :content="{ align: 'start', side: 'bottom', sideOffset: 6 }" :ui="{ content: 'channel-menu channel-topic-menu' }"><UButton icon="i-lucide-ellipsis" :aria-label="t('管理 {name}', { name: room.title })" :title="t('更多操作')" size="xs" color="neutral" variant="ghost" /></UDropdownMenu>
           </div>
@@ -239,6 +271,11 @@ function actions(room, index, folder_id, folder_room_count) {
       </UContextMenu>
       </template>
       </MemoBlock>
+      <button v-if="list_toggle_label(folder)" type="button" class="channel-room-more" @click="toggle_full_list(folder.id)">{{ list_toggle_label(folder) }}</button>
+      <div v-if="view.creating_room && (view.creating_room.folder_id || '') === folder.id" class="channel-room-row" :class="{ active: view.creating_room.opened && !view.room?.id }" role="status" :aria-label="t('正在创建：{name}', { name: view.creating_room.title })">
+        <span aria-hidden="true"></span>
+        <span class="channel-room-select"><span>{{ view.creating_room.title }}</span><UIcon name="i-lucide-loader-circle" class="animate-spin" /></span>
+      </div>
        </div>
       </section>
       <p v-if="!rooms.length" class="channel-directory-empty">{{ view.rooms_loading ? t("正在读取房间…") : t("暂无协作房间") }}</p>

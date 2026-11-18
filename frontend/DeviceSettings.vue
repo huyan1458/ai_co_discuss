@@ -190,7 +190,7 @@ const date = (time) => new Date(time).toLocaleString(locale, { month: "numeric",
 <template>
   <section v-if="local || remote || needs_pairing || device.needs" class="device-settings" aria-labelledby="device-heading">
     <h4 id="device-heading">{{ t('已配对的设备') }}</h4>
-    <p v-if="!needs_pairing" class="fine-print">{{ t('新设备须在电脑前扫码配对。') }}</p>
+    <p v-if="!needs_pairing" class="fine-print device-pair-note">{{ t('新设备须在电脑前扫码配对。') }}</p>
 
     <form v-if="needs_pairing" class="dialog-form device-pair" :aria-label="t('配对这台设备')" @submit.prevent="pair">
       <p class="fine-print">{{ t('扫描电脑本机网页 设置 → 添加设备 的二维码，或输入配对码。') }}</p>
@@ -279,6 +279,9 @@ const date = (time) => new Date(time).toLocaleString(locale, { month: "numeric",
 .device-audit small { color: var(--ui-text-muted); }
 .device-empty { color: var(--ui-text-dimmed); font-size: 12px; }
 .device-actions { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; }
+/* Another device has nothing to add here, and an empty row would still take a gap. */
+.device-actions:empty { display: none; }
+@media (max-width: 720px) { .device-pair-note { display: none; } }
 .device-invite { display: flex; flex-wrap: wrap; align-items: center; gap: 12px; padding: 10px; border: 1px solid var(--ui-border); border-radius: 10px; }
 .device-invite p { margin: 0 0 4px; font-size: 12px; }
 .device-expired { opacity: 0.35; filter: grayscale(1); }

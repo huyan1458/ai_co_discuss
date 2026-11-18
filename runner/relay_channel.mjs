@@ -284,7 +284,7 @@ async function forward_changes(home, socket, signal) {
 /**
  * Answer the hosted accounts' entry traffic the relay hands over (`entry` frames, apart from the administrator's signed
  * requests). Each request goes only to this computer's sign-in entry on loopback, never anywhere the frame names, and
- * only while its owner chose this way in the panel (entry settings `mode: 'relay'`), so a tampered website cannot open
+ * only while its owner chose this way in the panel (entry settings `relay_enabled`), so a tampered website cannot open
  * the channel on its own. The entry treats it like traffic from a tunnel: HTTPS outside, the browser's own Host.
  * Returns the frame handler; `send` puts a frame on the connection, `buffered` says how much it holds unsent.
  */
@@ -299,7 +299,7 @@ export function entry_proxy(home, { send, buffered = () => 0 }) {
   const forward = id => {
     const entry = open.get(id);
     const settings = entry_settings(home);
-    if (settings.mode !== 'relay') { open.delete(id); return refuse(id, 503, '这台电脑没有开启线上中转'); }
+    if (!settings.relay_enabled) { open.delete(id); return refuse(id, 503, '这台电脑没有开启线上中转'); }
     const body = Buffer.concat(entry.parts);
     const headers = {};
     for (const [name, value] of Array.isArray(entry.headers) ? entry.headers : []) {

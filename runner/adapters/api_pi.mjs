@@ -39,7 +39,7 @@ const TOOL_HEARTBEAT_MS = 30_000;
 const DIAGNOSTIC_CHARS = 1200;
 const REPLY_EXCERPT_CHARS = 300;
 // What a tool call's progress note shows of its arguments: what it targets, never content it writes.
-const NOTE_ARGS = ['id', 'file_path', 'path', 'pattern', 'after', 'page', 'batch_id', 'request_id', 'command'];
+const NOTE_ARGS = ['id', 'file_path', 'path', 'pattern', 'query', 'url', 'after', 'page', 'batch_id', 'request_id', 'command'];
 const NOTE_VALUE_CHARS = 80;
 
 /** One tool call as a progress note, e.g. `read_message id=3123`; names and values stay as they are, untranslated. */

@@ -266,6 +266,9 @@ function open_message_ref(event, open) {
   if (reference) open(Number(reference.dataset.messageRef));
 }
 
+// The title of the room being created from the panel, shown in the header until the room opens.
+const creating_title = computed(() => view.value.creating_room?.opened ? view.value.creating_room.title : "");
+
 /** Open the shared creation form from either navigation surface. */
 function create_channel(folder = null) {
   if (workflow_page.value) { workflow_library.close_page(() => create_channel(folder)); return; }
@@ -428,7 +431,7 @@ function resize_nav_by_key(event) {
           </template>
           <template v-else>
             <span class="channel-title-icon"><UIcon name="i-lucide-hash" /></span>
-            <div class="channel-title"><div class="channel-title-copy"><h1 :title="room?.title">{{ room?.title || t('共议') }}</h1></div><UBadge v-if="room?.archived" color="neutral" variant="subtle" size="sm">{{ t("已存档") }}</UBadge></div>
+            <div class="channel-title"><div class="channel-title-copy"><h1 :title="room?.title || creating_title">{{ room?.title || creating_title || t('共议') }}</h1></div><UBadge v-if="room?.archived" color="neutral" variant="subtle" size="sm">{{ t("已存档") }}</UBadge></div>
           </template>
           <span v-if="room && !middle_page" class="channel-header-context">{{ tabs.find((item) => item.value === view.tab)?.label }}<span>·</span>{{ t("{count} 条记录", { count: room.message_count }) }}<template v-if="created_label"><span>·</span><time :datetime="room.created_at" :title="new Date(room.created_at).toLocaleString(locale, { hour12: false })">{{ created_label }}</time></template></span>
           <div class="channel-header-actions">
@@ -490,6 +493,7 @@ function resize_nav_by_key(event) {
         <FilePreview />
         </div>
       </div>
+      <div v-else-if="view.creating_room?.opened && !middle_page" class="channel-body"><div class="channel-content"><div class="channel-message-group channel-loading-skeleton grid gap-6 py-6" role="status" :aria-label="t('正在创建：{name}', { name: view.creating_room.title })"><div v-for="row in 3" :key="row" class="grid gap-3"><USkeleton class="h-5 w-28" /><USkeleton class="h-4 w-full" /><USkeleton class="h-4 w-2/3" /></div></div></div></div>
       <div v-else-if="view.rooms_loading && !middle_page" class="grid flex-1 place-content-center justify-items-center gap-3 text-muted" role="status"><UIcon name="i-lucide-loader-circle" class="size-6 animate-spin" /><span>{{ t("正在读取房间…") }}</span></div>
       <RoomWelcome v-else-if="!middle_page" />
     </main>

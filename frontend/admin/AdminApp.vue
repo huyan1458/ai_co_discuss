@@ -12,7 +12,6 @@ import { locale, t } from "../i18n.js";
 import { call } from "./api.js";
 import OverviewPage from "./OverviewPage.vue";
 import AccountsPage from "./AccountsPage.vue";
-import LanguagePicker from "../LanguagePicker.vue";
 
 // Served beside the page by the panel server, not bundled.
 const MARK = "/mark.svg";
@@ -24,6 +23,9 @@ const pages = [OVERVIEW, ACCOUNTS];
 const chosen = ref(location.hash.slice(1) || "overview");
 const page = computed(() => (pages.some((item) => item.key === chosen.value) ? chosen.value : "overview"));
 const loading = ref(false);
+// The pages wait for the first answer: drawn from the empty state they showed the service as stopped and left out the
+// rows that depend on this computer, which then appeared one after another (user 2026-11-18, #4469).
+const ready = ref(false);
 // Shown beside the name as the website shows it, so the owner sees at a glance which version this computer runs.
 const version = computed(() => state.value.service?.version || state.value.version || "");
 const toast = useToast();
@@ -37,7 +39,7 @@ async function reload() {
   loading.value = true;
   try { state.value = await call("state"); return true; }
   catch (failure) { notify("error", failure.message); return false; }
-  finally { loading.value = false; }
+  finally { loading.value = false; ready.value = true; }
 }
 
 function choose(key) { chosen.value = key; history.replaceState(null, "", `#${key}`); }
@@ -72,12 +74,22 @@ onMounted(() => document.addEventListener("toast.viewportPause", (event) => even
             <UIcon :name="item.icon" />{{ item.label }}
           </button>
         </nav>
-        <LanguagePicker />
         <div class="panel-tools">
           <button type="button" class="panel-tool" :class="{ 'is-spinning': refreshing }" :disabled="refreshing" :title="t('刷新全部：服务、登录状态、账号与版本')" :aria-label="t('刷新全部')" @click="refresh_all"><UIcon name="i-lucide-refresh-cw" /></button>
         </div>
       </header>
-      <OverviewPage v-if="page === 'overview'" />
+      <section v-if="!ready" class="panel-skeleton" role="status" :aria-label="t('正在读取…')">
+        <template v-for="rows in [1, 3]" :key="rows">
+          <USkeleton class="panel-skeleton-heading" />
+          <div class="panel-rows">
+            <div v-for="row in rows" :key="row" class="panel-row">
+              <USkeleton class="panel-tile" />
+              <div class="panel-main"><USkeleton class="panel-skeleton-title" /><USkeleton class="panel-skeleton-sub" /></div>
+            </div>
+          </div>
+        </template>
+      </section>
+      <OverviewPage v-else-if="page === 'overview'" />
       <AccountsPage v-else />
     </div>
   </UApp>
