@@ -553,7 +553,6 @@
   "关闭排队": "Disable queue",
   "开启排队": "Enable queue",
   "排队消息": "Queued messages",
-  "{count} 条消息在排队，房间空闲后依次发出": "{count} queued, sent one by one once the room is free",
   "已暂停排队：你停止了运行": "Queue paused: you stopped the run",
   "拖动调整顺序（手机上长按）": "Drag to reorder (long-press on mobile)",
   "图片附件": "Image attachment",

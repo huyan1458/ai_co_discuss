@@ -18,6 +18,7 @@ import { fileURLToPath, pathToFileURL } from 'node:url';
 import { parseArgs } from 'node:util';
 
 import { ENTRY_KEY_PATTERN, verified_connection } from '../runner/entry_client.mjs';
+import { login_page } from './login_page.mjs';
 
 const SESSION_COOKIE = 'codiscuss_entry';
 const SESSION_SECONDS = 30 * 24 * 3600;
@@ -321,20 +322,6 @@ function load_sessions(data, at) {
 const PAGE_HEAD = title => `<!doctype html><html lang="zh-CN"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
 <title>${title} · AI CoDiscuss</title>`;
 
-function login_page(message = '') {
-  const notice = message ? `<p class="error">${message}</p>` : '';
-  return `${PAGE_HEAD('登录')}<style>
-body{margin:0;min-height:100vh;display:grid;place-items:center;font:16px system-ui,sans-serif;background:#f5f5f4;color:#1c1917}
-form{width:min(320px,calc(100vw - 48px));display:grid;gap:12px}h1{font-size:20px;margin:0 0 8px}
-input,button{font:inherit;padding:10px 12px;border-radius:8px;border:1px solid #d6d3d1}button{background:#1c1917;color:#fff;border:0}
-.error{color:#b91c1c;margin:0;font-size:14px}
-@media (prefers-color-scheme:dark){body{background:#1c1917;color:#f5f5f4}input{background:#292524;color:inherit;border-color:#44403c}button{background:#f5f5f4;color:#1c1917}}
-</style></head><body><form method="post" action="${LOGIN_PATH}"><h1>AI CoDiscuss</h1>${notice}
-<input name="name" placeholder="账号" autocomplete="username" autocapitalize="none" required>
-<input name="password" type="password" placeholder="密码" autocomplete="current-password" required>
-<button>登录</button></form></body></html>`;
-}
-
 /** What a person sees when their instance does not answer: no technical detail, a retry, and whom to ask. */
 function unavailable_page() {
   return `${PAGE_HEAD('暂时打不开')}<style>
@@ -448,17 +435,17 @@ export function create_gateway({ data, now = Date.now }) {
     const form = await read_form(request);
     const name = String(form.get('name') || '').trim().toLowerCase();
     const failed = failures.get(name);
-    if (failed && failed.until > now()) return send(response, 429, { 'Content-Type': 'text/html; charset=utf-8' }, login_page('尝试次数过多，请 10 分钟后再试'));
+    if (failed && failed.until > now()) return send(response, 429, { 'Content-Type': 'text/html; charset=utf-8' }, login_page({ action: LOGIN_PATH, refusal: 'locked', name }));
     // One snapshot both checks the password and fixes the session to it: a reset made meanwhile by the panel leaves this
     // session on the old version, so it never grants access.
     const account = NAME_PATTERN.test(name) ? read_accounts(data)[name] : null;
     if (!password_matches(account, form.get('password'))) {
       const count = (failed?.count || 0) + 1;
       if (NAME_PATTERN.test(name)) failures.set(name, { count, until: count >= MAX_FAILURES ? now() + LOCK_MS : 0 });
-      return send(response, 401, { 'Content-Type': 'text/html; charset=utf-8' }, login_page('账号或密码不正确'));
+      return send(response, 401, { 'Content-Type': 'text/html; charset=utf-8' }, login_page({ action: LOGIN_PATH, refusal: 'wrong', name }));
     }
     failures.delete(name);
-    if (account.disabled) return send(response, 403, { 'Content-Type': 'text/html; charset=utf-8' }, login_page('这个账号已停用，请联系为你开通的服务商'));
+    if (account.disabled) return send(response, 403, { 'Content-Type': 'text/html; charset=utf-8' }, login_page({ action: LOGIN_PATH, refusal: 'disabled', name }));
     const token = randomBytes(32).toString('hex');
     sessions.set(token_key(token), { name, expires: now() + SESSION_SECONDS * 1000, hash: account.hash, version: session_version(account) });
     save_sessions();
@@ -468,7 +455,7 @@ export function create_gateway({ data, now = Date.now }) {
   async function handle(request, response) {
     const path = new URL(request.url, 'http://entry').pathname;
     if (cross_origin(request)) return send_json(response, 403, { error: '不接受来自其他网站的请求' });
-    if (path === LOGIN_PATH && request.method === 'GET') return send(response, 200, { 'Content-Type': 'text/html; charset=utf-8' }, login_page());
+    if (path === LOGIN_PATH && request.method === 'GET') return send(response, 200, { 'Content-Type': 'text/html; charset=utf-8' }, login_page({ action: LOGIN_PATH }));
     if (path === LOGIN_PATH && request.method === 'POST') return login(request, response);
     if (path === LOGOUT_PATH && request.method === 'POST') {
       if (sessions.delete(token_key(session_token(request)))) save_sessions();

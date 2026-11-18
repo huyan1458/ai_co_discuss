@@ -82,8 +82,7 @@ const nav_collapsed = ref(saved_layout.collapsed);
 // The expanded brief floats over the messages, so it always starts collapsed instead of covering them.
 const brief_collapsed = ref(true);
 const rail_collapsed = ref(saved_layout.rail_collapsed);
-// A hosted account's instance is for a person who should not need to know members, hosts or turns: new conversations
-// start from the welcome page, and the room overview starts folded until they open it themselves.
+// A hosted account's instance starts with the right rail folded, until its owner opens or closes it.
 const hosted = computed(() => view.value.launch.projects_restricted === true);
 watch(hosted, (value) => { if (value && !saved_layout.rail_chosen) rail_collapsed.value = true; }, { immediate: true });
 const rail_inline = computed(() => viewport_width.value >= RAIL_BREAKPOINT);
@@ -272,7 +271,6 @@ function create_channel(folder = null) {
   if (workflow_page.value) { workflow_library.close_page(() => create_channel(folder)); return; }
   invited_rooms.close();
   nav_open.value = false;
-  if (hosted.value) { act("welcome", folder); return; }
   bridge.reset_create_form(folder); target_folder.value = folder; modal.value = "create";
 }
 
