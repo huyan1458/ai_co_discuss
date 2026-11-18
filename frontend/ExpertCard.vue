@@ -140,7 +140,8 @@ const effort_label = computed(() => profile.value.effort ? EFFORT_LABELS[profile
 // Apps and manual sessions keep their own settings.
 const sets_access = computed(() => Boolean(preset.value) || automatic.value && bridge.launch_can_set_access(props.name, view.value.launch));
 const local_connection = computed(() => !preset.value && automatic.value && profile.value.adapter !== "api");
-const access = computed(() => profile.value.project_access || view.value.launch.workspace?.project_access || "read");
+const full_only = computed(() => bridge.full_only_hint(profile.value.adapter));
+const access = computed(() => full_only.value ? "full" : profile.value.project_access || view.value.launch.workspace?.project_access || "read");
 // Who starts the member and whether it can host: the two things the delivery choice changes and a user must see before inviting.
 const launch_fact = computed(() => props.mode === "manual" ? t('你来启动 · 自主发言')
   : t('程序启动 · {value1}', { value1: resuming.value ? t('续接会话') : profile.value.adapter === "api" ? t('调用 API') : t('新会话') }));
@@ -470,7 +471,7 @@ onBeforeUnmount(() => { document.removeEventListener("pointerdown", close_on_out
         <div v-if="sets_access" class="expert-card-field">
           <span>{{ t('项目') }}</span>
           <div class="expert-card-modes" role="radiogroup" :aria-label="t('{value1} 的项目文件权限', { value1: name })">
-            <button v-for="option in access_options(profile.adapter)" :key="option.value" type="button" role="radio" :title="option.hint"
+            <button v-for="option in access_options(profile.adapter, full_only)" :key="option.value" type="button" role="radio" :title="option.hint"
               :disabled="access_locked || option.disabled" :aria-checked="access === option.value" @click="write_setting('project_access', option.value)">{{ option.label }}</button>
           </div>
         </div>

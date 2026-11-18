@@ -47,11 +47,15 @@ export const HELP = t(`用法：codiscuss admin <命令> [参数]（与管理面
   service start|stop|restart               只启停共议服务（网站与讨论服务）
   autostart on|off                         登录 Windows 时自动启动
 
+管理员入口
+  site status                              本地网页与线上网站的地址
+  site connect <站点> [绑定令牌]            绑定线上网站（管理员外出用）；在部署该网站的电脑上可不填令牌
+  site disconnect                          解绑线上网站，已配对的设备不能再连到这台电脑
+
 登录入口与访问方式（需打开托管管理）
   entry start|stop                         启动或停止登录入口
-  entry open|close relay|tunnel            开启或关闭访问方式：线上中转 | 自有域名，两种可同时开启
-  entry join <接入码>                       用接入码接入线上站点并开启线上中转
-  entry connect <站点> <绑定令牌>           只绑定线上站点（管理员远程用），不改访问方式
+  entry open|close relay|tunnel            开启或关闭访问方式：线上网站 | 自有域名，两种可同时开启
+  entry join <接入码>                       用接入码接入线上站点并开启线上网站
   entry code [--config <wrangler.jsonc>] [--site <地址>]   在部署线上站点的电脑上生成接入码（不填用上次的）
   entry tunnel <域名> [隧道名]              设置自有域名（Cloudflare 隧道），输出授权链接；域名须已托管在 Cloudflare
   entry tunnel status                      查看自有域名设置的进度
@@ -331,9 +335,19 @@ async function entry_command(call, [action, first, second], values) {
   if (action === 'start' || action === 'stop') return call(`entry/${action}`, {});
   if (action === 'open' || action === 'close') return call('entry/way', { way: need(first, 'relay|tunnel'), enabled: action === 'open' });
   if (action === 'join') return call('relay/join', { code: need(first, t('接入码')) });
-  if (action === 'connect') return call('site/connect', { site: need(first, t('站点')), setup_key: need(second, t('绑定令牌')) });
   if (action === 'code') return call('site/code', { config: values.config || '', site: values.site || '' });
   if (action === 'tunnel') return first === 'status' ? call('tunnel/setup') : setup_tunnel(call, need(first, t('域名')), second || '');
+  throw new Error(HELP);
+}
+
+/** The owner's own ways in: the local page and the online site this computer is bound to. */
+async function site_command(call, [action, first, second]) {
+  if (!action || action === 'status') {
+    const state = await call('state');
+    return { local: state.service.url || null, online: state.online_site || null };
+  }
+  if (action === 'connect') return call('site/connect', { site: need(first, t('站点')), setup_key: second || '' });
+  if (action === 'disconnect') return call('site/disconnect', {});
   throw new Error(HELP);
 }
 
@@ -355,8 +369,9 @@ function summary(state) {
   const tunnel = entry?.tunnel ? (entry.tunnel.connected ? t('已连接') : entry.tunnel.running ? t('连接中') : t('未运行')) : undefined;
   return { hosting: state.hosting, version: state.version, autostart: state.autostart,
     service: { running: service.running, url: service.url, version: service.version, error: service.error || undefined },
+    online_site: state.online_site || undefined,
     ...(state.hosting ? {
-      entry: entry && { running: entry.running, relay_enabled: entry.relay_enabled, tunnel_enabled: entry.tunnel_enabled, address: entry.address || `http://127.0.0.1:${entry.port}`, tunnel, problem: entry.relay?.problem || undefined },
+      entry: entry && { running: entry.running, relay_enabled: entry.relay_enabled, tunnel_enabled: entry.tunnel_enabled, address: entry.address || undefined, tunnel, problem: entry.relay?.problem || undefined },
       runtime: state.clis,
       accounts: state.accounts.map(item => ({ name: item.name, isolated: Boolean(item.os_user), protected: item.protected, running: item.running, disabled: item.disabled })),
     } : {}) };
@@ -404,6 +419,7 @@ export async function admin_cli(args, { client = panel_client, print = text => p
     service: () => call(`service/${need(rest[0], 'start|stop|restart')}`, {}),
     autostart: () => call('autostart', { on: need(rest[0], 'on|off') === 'on' }),
     update: () => (rest[0] === 'check' ? call('update/check') : update(call, data)),
+    site: () => site_command(call, rest),
     entry: () => entry_command(call, rest, values),
     runtime: () => (rest[0] === 'sync' ? call('clis/install', {}) : Promise.reject(new Error(HELP))),
     account: () => account_command(call, rest, values),

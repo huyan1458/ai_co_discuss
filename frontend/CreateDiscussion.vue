@@ -14,6 +14,7 @@ import SchedulerSettings from "./SchedulerSettings.vue";
 import ImageService from "./ImageService.vue";
 import HostWorkflowSwitch from "./HostWorkflowSwitch.vue";
 import ExternalExpertCard from "./ExternalExpertCard.vue";
+import PlatformConfigDialog from "./PlatformConfigDialog.vue";
 import { invite_after_creation } from "./external-members.js";
 import { t } from "./i18n.js";
 
@@ -153,11 +154,17 @@ const EXTERNAL_CHIP = "external:computer";
 const external_drafts = ref([]);
 let external_seq = 0;
 const panel_directories = computed(() => [view.value.launch.workspace?.cwd, ...(view.value.launch.workspace?.extra_directories || [])].filter(Boolean));
+// A platform not set up yet stays grey at the end of its row; its chip opens the setup instead of adding a member.
+const configuring = ref("");
+const unconfigured_chip = (name) => bridge.platform_configured(name) ? {} : { unconfigured: true, title: t("未配置，点击配置"), aria_label: t("配置 {value1}", { value1: bridge.default_name(bridge.platform_of(name)) }) };
+function configure_platform(value) {
+  configuring.value = bridge.platform_of(value.startsWith(PRESET_PREFIX) ? value.slice(PRESET_PREFIX.length) : value);
+}
 const library_items = computed(() => [...experts.map((name) => ({ value: name, name: bridge.default_name(name), ...bridge.identities[name],
-  disabled: !bridge.launch_clients[name], title: library_description(name), aria_label: t("添加 {name} 实例", { name }) })),
+  disabled: !bridge.launch_clients[name], title: library_description(name), aria_label: t("添加 {name} 实例", { name }), ...unconfigured_chip(name) })),
   ...view.value && bridge.expert_presets().map((preset, index) => ({ value: PRESET_PREFIX + preset.name, name: preset.label || preset.name, ...bridge.identities[bridge.platform_of(preset.name)],
-    separated: index === 0, title: preset.description || t("专家预设"), aria_label: t("添加预设 {name}", { name: preset.label || preset.name }), removable: true })),
-  ...view.value.launch.available || view.value.launch.remote ? [{ value: EXTERNAL_CHIP, name: t("外部专家"), lucide: "i-lucide-laptop-minimal", style: "external",
+    separated: index === 0, title: preset.description || t("专家预设"), aria_label: t("添加预设 {name}", { name: preset.label || preset.name }), removable: true, ...unconfigured_chip(preset.name) })),
+  ...view.value.launch.available || view.value.launch.remote ? [{ value: EXTERNAL_CHIP, name: t("外部专家"), icon: "/icons/external-expert.svg", style: "external",
     row: t("外部"), title: t("对方电脑上的 AI，只读本房间开放的内容"), aria_label: t("邀请外部专家") }] : []]);
 
 /** Admit one library role, woken by the local service until its card says otherwise; a preset adds its own named instance. */
@@ -217,8 +224,8 @@ const summary = computed(() => {
       <p v-if="targetFolder?.id" class="channel-create-location"><UIcon name="i-lucide-folder" />{{ targetFolder.name }}</p>
       <section class="create-section">
         <h3><span>1</span>{{ t("这次做什么") }}</h3>
-        <UFormField :label="t('话题名称')" required><UInput :model-value="value('title')" :maxlength="80" required autofocus size="lg" :placeholder="t('这次要一起做什么？')" class="w-full" @update:model-value="write('title', $event)" /></UFormField>
-        <UFormField :label="t('项目目录（可选）')" :description="view.launch.available ? t('本机唤醒的成员在此目录读写文件；不选则使用草稿空间，为这个房间单独建一个文件夹。') : relay ? t('由电脑「{computer}」唤醒的成员在所选项目中读写文件；不选则各用软件默认目录。', { computer: relay.name }) : t('连接本机服务后可指定：本机唤醒的成员将在此目录读写文件。')">
+        <UFormField class="create-title-field" :label="t('话题名称')" required><UInput :model-value="value('title')" :maxlength="80" required autofocus size="lg" :placeholder="t('这次要一起做什么？')" class="w-full" @update:model-value="write('title', $event)" /></UFormField>
+        <UFormField class="create-project-field" :label="t('项目目录（可选）')" :description="view.launch.available ? t('本机唤醒的成员在此目录读写文件；不选则使用草稿空间，为这个房间单独建一个文件夹。') : relay ? t('由电脑「{computer}」唤醒的成员在所选项目中读写文件；不选则各用软件默认目录。', { computer: relay.name }) : t('连接本机服务后可指定：本机唤醒的成员将在此目录读写文件。')">
           <ProjectDirectoryField :disabled="!launchable" />
           <!-- Rarely needed, so only a link under the main directory until the first extra one is added. -->
           <ExtraDirectoriesField v-if="view.launch.available && view.launch.workspace.cwd" class="create-extra-directories" :model-value="view.launch.workspace.extra_directories || []"
@@ -228,7 +235,8 @@ const summary = computed(() => {
 
       <section class="create-section">
         <h3><span>2</span>{{ t("谁来参与") }}</h3>
-        <RosterAdd ref="library" :label="t('添加 AI')" :items="library_items" @add="add_expert" @remove="(value) => bridge.delete_expert_preset(value.slice(PRESET_PREFIX.length))" />
+        <PlatformConfigDialog v-model="configuring" />
+        <RosterAdd ref="library" :label="t('添加 AI')" :items="library_items" @add="add_expert" @configure="configure_platform" @remove="(value) => bridge.delete_expert_preset(value.slice(PRESET_PREFIX.length))" />
         <div v-if="selected_names.length || external_drafts.length" class="create-experts" role="group" :aria-label="t('参与的 AI')">
           <ExpertCard v-for="name in selected_names" :key="name" :name="name" :mode="selected[name]" :choices="access_choices(name)"
             :status="expert_status(name)" :host="host === name" :hostable="host_options.includes(name)" hosting
@@ -344,9 +352,22 @@ const summary = computed(() => {
 
 @media (max-width: 600px) {
   .create-discussion { height: calc(100dvh - 130px); }
-  .create-scroll { padding: 18px 18px 20px; }
+  /* A phone shows as much of the form as it can at once (user 2026-11-18, #4771): tighter spacing, the topic's label beside its box. */
+  .create-scroll { padding: 10px 14px 12px; gap: 12px !important; }
+  .create-scroll > .channel-create-location { margin: 0 0 -6px; }
+  .create-section { gap: 8px; }
+  .create-section + .create-section { padding-top: 12px; }
+  .create-title-field { display: flex; align-items: center; gap: 10px; }
+  .create-title-field > :deep(:first-child) { flex: none; }
+  .create-title-field > :deep(:last-child) { flex: 1; min-width: 0; margin-top: 0; }
+  .create-project-field :deep([data-slot="description"]) { display: none; }
+  .create-extra-directories { margin-top: 2px; }
+  .create-section :deep(.roster-add) { gap: 4px 6px; }
+  .create-section :deep(.roster-add-chips) { gap: 4px; }
+  .create-experts-empty { padding: 8px 10px; }
+  .create-advanced { padding-top: 8px; }
   .create-modes { grid-template-columns: 1fr; }
-  .create-footer { padding: 12px 18px 14px; }
+  .create-footer { padding: 8px 14px 10px; }
   .create-summary:not(.is-blocked) { display: none; }
   .create-footer-row { justify-content: flex-end; }
 }

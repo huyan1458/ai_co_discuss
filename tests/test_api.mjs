@@ -763,6 +763,15 @@ test('read-aloud on the local service uses the token the setup skill saved and s
     assert.equal(converted.readUInt32LE(40), 4 + 48, 'the data chunk grows by the silence');
     assert.equal(converted.readUInt32LE(4), 96 - 8);
     assert.deepEqual({ ...spoken, audio: Buffer.from(spoken.audio, 'base64') }, { audio: Buffer.from([9]), format: 'm4a', marks: [] });
+    // A designed voice asks for its own model with a fixed description and seed, whatever the tone setting says.
+    await tts_speak(home, { text: '旁白', speaker: 'voxcpm2_middle_aged_male' }, { request, start, convert });
+    assert.equal(body.modelId, 'voxcpm2-bf16');
+    assert.equal(body.voxMode, 'design');
+    assert.equal(body.seed, 42);
+    assert.notEqual(body.voiceDescription, '慢一点');
+    assert.equal(body.speaker, undefined);
+    const missing = async () => new Response(JSON.stringify({ error: { code: '@yovoice.error.modelRequired' } }), { status: 400 });
+    await assert.rejects(tts_speak(home, { text: '未安装', speaker: 'voxcpm2_soft_female' }, { request: missing, start, convert }), /local-tts-setup/);
   } finally { rmSync(home, { recursive: true, force: true }); }
 });
 

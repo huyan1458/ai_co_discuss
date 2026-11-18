@@ -35,15 +35,19 @@ export class SegmentLog {
     log.next_note += 1;
     log.notes.push({ seq: log.next_note, text: text.slice(0, MAX_NOTE_LENGTH).replace(/[\uD800-\uDBFF]$/, '') });
   }
-  /** The software produced output now; a phase, when the output names one, starts a new segment unless it continues the open one. */
-  mark(id, phase = '', tool = '') {
+  /**
+   * The software produced output now; a phase, when the output names one, starts a new segment unless it continues the
+   * open one. `call` names one tool call where the software says so: calls of one tool in a row are then counted apart.
+   */
+  mark(id, phase = '', tool = '', call = '') {
     const log = this.executions.get(id);
     if (!log) return;
     log.last = this.now() - log.origin;
     if (log.open) log.open.end_ms = log.last;
     if (!phase) return;
     tool = tool.slice(0, MAX_SEGMENT_TOOL).replace(/[\uD800-\uDBFF]$/, '');
-    if (log.open?.phase === phase && log.open.tool === tool) return;
+    if (log.open?.phase === phase && log.open.tool === tool && (!call || call === log.open_call)) return;
+    log.open_call = call;
     if (log.open) log.closed.push(log.open);
     log.open = null;
     if (log.next_seq >= MAX_EXECUTION_SEGMENTS) return;

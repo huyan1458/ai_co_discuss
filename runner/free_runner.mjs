@@ -1084,7 +1084,7 @@ export class FreeRoomRunner {
         on_binding: session => this.store.bind(member.name, session),
         on_process: child => this.track(member.name, child, live()),
         on_output: (path, chunk) => { appendFileSync(path, chunk, { mode: 0o600 }); this.touch(live()); this.segments.mark(live()); },
-        on_activity: (phase, tool) => { worked = true; this.touch(live(), phase); this.segments.mark(live(), phase, tool); },
+        on_activity: (phase, tool, call) => { worked = true; this.touch(live(), phase); this.segments.mark(live(), phase, tool, call); },
         on_note: text => {
           this.note(live(), text);
           if (worked && current()) this.replies.set(live(), text);

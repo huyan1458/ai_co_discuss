@@ -348,6 +348,86 @@ const PULL_START = 10;
 // While pulled, the window shrinks by up to this much.
 const PULL_SHRINK = 0.15;
 const frame = ref(null);
+
+// On a wide window the preview is a split pane on the right, beside the messages; narrower ones keep the centered window.
+const DOCK_WIDTH_KEY = "ai-codiscuss-file-dock-width";
+// Whether the user last chose the floating window over the split pane, on this device.
+const FLOATING_KEY = "ai-codiscuss-file-preview-floating";
+const DOCK_MIN_WINDOW = 1024;
+const DOCK_MIN = 400;
+const DOCK_CHAT_MIN = 420;
+const DOCK_STEP = 24;
+// A touch screen with a shorter side than this is a phone (web/index.html tells tablets apart the same way).
+const TABLET_MIN_SIDE = 600;
+// The width the user dragged the pane to on this device; 0 until then, which splits the room evenly.
+const dock_preferred = ref(read_dock_width());
+// The width right of the room list that the messages and the pane share; 0 when the window is too narrow to split.
+const dock_room = ref(0);
+const dock_max = computed(() => dock_room.value - DOCK_CHAT_MIN);
+const can_dock = computed(() => dock_max.value >= DOCK_MIN);
+const clamp_dock = (width) => Math.round(Math.min(dock_max.value, Math.max(DOCK_MIN, width)));
+const dock_width = computed(() => can_dock.value ? clamp_dock(dock_preferred.value || dock_room.value / 2) : 0);
+const dock_chosen = ref(read_dock_choice());
+const docked = computed(() => open.value && can_dock.value && dock_chosen.value);
+let dock_drag = null;
+
+function read_dock_choice() {
+  try { return localStorage.getItem(FLOATING_KEY) !== "1"; } catch { return true; }
+}
+
+function read_dock_width() {
+  try { return Number(localStorage.getItem(DOCK_WIDTH_KEY)) || 0; } catch { return 0; }
+}
+function save_dock_width() {
+  try { localStorage.setItem(DOCK_WIDTH_KEY, String(dock_width.value)); } catch { /* Kept for this visit only. */ }
+}
+/**
+ * Split only on a computer or a tablet held sideways. A tablet is always laid out 1440px wide, so the window's width
+ * alone would also split it upright.
+ */
+function splits_here() {
+  if (window.innerWidth < DOCK_MIN_WINDOW) return false;
+  if (!window.matchMedia("(pointer: coarse)").matches) return true;
+  return Math.min(screen.width, screen.height) >= TABLET_MIN_SIDE && window.matchMedia("(orientation: landscape)").matches;
+}
+function measure_dock() {
+  const left = document.querySelector(".channel-main")?.getBoundingClientRect().left || 0;
+  dock_room.value = splits_here() ? window.innerWidth - left : 0;
+}
+/** Tell the workspace how much room the pane takes; what is laid out by the window's width follows the change. */
+function publish_dock(width) {
+  file_preview.dock_width = width;
+  if (width) document.documentElement.style.setProperty("--file-dock-width", `${width}px`);
+  else document.documentElement.style.removeProperty("--file-dock-width");
+  window.dispatchEvent(new Event("resize"));
+}
+watch(open, (value) => { if (value) measure_dock(); }, { flush: "sync" });
+watch(() => docked.value ? dock_width.value : 0, publish_dock, { flush: "post" });
+function dock_press(event) {
+  if (event.button !== 0) return;
+  event.currentTarget.setPointerCapture?.(event.pointerId);
+  dock_drag = { x: event.clientX, width: dock_width.value };
+}
+function dock_move(event) {
+  if (dock_drag) dock_preferred.value = clamp_dock(dock_drag.width + dock_drag.x - event.clientX);
+}
+function dock_release() {
+  if (dock_drag) save_dock_width();
+  dock_drag = null;
+}
+function dock_key(event) {
+  const widths = { ArrowLeft: dock_width.value + DOCK_STEP, ArrowRight: dock_width.value - DOCK_STEP, Home: dock_max.value, End: DOCK_MIN };
+  if (!(event.key in widths)) return;
+  event.preventDefault();
+  dock_preferred.value = clamp_dock(widths[event.key]);
+  save_dock_width();
+}
+// Beside the messages the pane stays open while the user works in them: only its own buttons fold or close it.
+const modal_content = {
+  onInteractOutside: (event) => event.preventDefault(),
+  onEscapeKeyDown: (event) => { if (docked.value) event.preventDefault(); },
+};
+
 const float_place = ref({ left: 0, top: FLOAT_FALLBACK_TOP });
 const reduced_motion = () => window.matchMedia("(prefers-reduced-motion: reduce)").matches;
 let pull = null, folding = false;
@@ -446,7 +526,7 @@ function fold(after) {
   place_float();
   const element = frame.value;
   const finish = () => { folding = false; minimize(); if (typeof after === "function") after(); };
-  if (!element || reduced_motion()) { finish(); return; }
+  if (!element || reduced_motion() || docked.value) { finish(); return; }
   folding = true;
   set_frame("none", { transition: false });
   const rect = element.getBoundingClientRect();
@@ -462,7 +542,7 @@ async function unfold() {
   open.value = true;
   await nextTick();
   // The reading's highlight is drawn and followed again once the window has its full size and its scroll back.
-  if (reduced_motion()) { requestAnimationFrame(() => reader.refresh()); return; }
+  if (reduced_motion() || docked.value) { requestAnimationFrame(() => reader.refresh()); return; }
   requestAnimationFrame(() => {
     const element = frame.value;
     if (!element) return;
@@ -479,12 +559,28 @@ async function unfold() {
 }
 
 /**
+ * Switch between the split pane and the floating window. The file stays mounted, so nothing is read or laid out again:
+ * the window takes its new place at once and is drawn moving there from the old one.
+ */
+async function toggle_dock() {
+  const element = frame.value, from = element?.getBoundingClientRect();
+  dock_chosen.value = !dock_chosen.value;
+  try { localStorage.setItem(FLOATING_KEY, dock_chosen.value ? "0" : "1"); } catch { /* Kept for this visit only. */ }
+  if (!element || reduced_motion()) return;
+  await nextTick();
+  const to = element.getBoundingClientRect();
+  set_frame(`translate(${from.left - to.left}px, ${from.top - to.top}px) scale(${from.width / to.width}, ${from.height / to.height})`, { transition: false });
+  element.getBoundingClientRect();
+  set_frame("", {});
+}
+
+/**
  * A downward pull on a touch screen: from the tab strip or breadcrumbs, or from the text once it is scrolled to the top.
  * Not while text is selected, so moving selection handles never folds the window.
  */
 function pull_start(event) {
   pull = null;
-  if (folding || event.touches.length !== 1 || !window.matchMedia("(pointer: coarse)").matches || commenting.value) return;
+  if (folding || docked.value || event.touches.length !== 1 || !window.matchMedia("(pointer: coarse)").matches || commenting.value) return;
   if (event.target.closest?.("input, textarea, .file-selection-offer, .file-listen-dock")) return;
   const selection = document.getSelection();
   if (selection && !selection.isCollapsed) return;
@@ -543,7 +639,7 @@ async function to_tab_room() {
 
 /** Jump the file list (of the file's room) to a folder named in the breadcrumb, folding the window away. */
 async function reveal_folder(path) {
-  fold();
+  if (!docked.value) fold();
   await to_tab_room();
   file_preview.reveal_root = tab.value?.root || 0;
   file_preview.reveal_path = path;
@@ -797,7 +893,8 @@ function add_excerpt() {
   cancel_comment();
   clear_selection();
   act("tab", "discussion");
-  fold(() => put_excerpt(excerpt));
+  if (docked.value) put_excerpt(excerpt);
+  else fold(() => put_excerpt(excerpt));
 }
 
 function comment_keydown(event) {
@@ -838,6 +935,8 @@ onMounted(() => {
   bridge.set_text_preview(open_attachment);
   bridge.set_image_viewer((file) => open_image_viewer(file, () => bridge.attachment_url(file)));
   place_float();
+  measure_dock();
+  window.addEventListener("resize", measure_dock);
   window.addEventListener("resize", place_float);
   narrow_query.addEventListener("change", track_narrow);
   window.addEventListener("resize", place_file_marks);
@@ -852,6 +951,8 @@ onBeforeUnmount(() => {
   window.removeEventListener("message", frame_selection);
   bridge.set_text_preview(null);
   bridge.set_image_viewer(null);
+  window.removeEventListener("resize", measure_dock);
+  publish_dock(0);
   window.removeEventListener("resize", place_float);
   narrow_query.removeEventListener("change", track_narrow);
   window.removeEventListener("resize", place_file_marks);
@@ -868,10 +969,12 @@ onBeforeUnmount(() => {
 </script>
 
 <template>
-  <UModal :open="open" :title="preview_name" :description="active_path" :content="{ onInteractOutside: event => event.preventDefault() }"
-    :ui="{ content: 'project-editor' }" @update:open="value => value ? (open = true) : fold()">
+  <UModal :open="open" :title="preview_name" :description="active_path" :content="modal_content" :modal="!can_dock" :overlay="!can_dock" :transition="!can_dock"
+    :ui="{ content: `project-editor${can_dock ? ' is-switchable' : ''}${docked ? ' is-docked' : ''}` }" @update:open="value => value ? (open = true) : fold()">
     <template #content>
-     <div ref="frame" class="project-editor-frame" @touchstart.passive="pull_start" @touchmove="pull_move" @touchend="pull_end" @touchcancel="pull_end">
+     <div ref="frame" class="project-editor-frame" :class="{ 'is-docked': docked }" @touchstart.passive="pull_start" @touchmove="pull_move" @touchend="pull_end" @touchcancel="pull_end">
+      <div v-if="docked" class="file-dock-resizer" role="separator" tabindex="0" aria-orientation="vertical" :aria-label="t('调整文件预览宽度')" :aria-valuemin="DOCK_MIN" :aria-valuemax="dock_max" :aria-valuenow="dock_width"
+        :title="t('拖动调整文件预览宽度，也可使用左右方向键')" @pointerdown="dock_press" @pointermove="dock_move" @pointerup="dock_release" @pointercancel="dock_release" @keydown="dock_key"></div>
       <div class="project-editor-head">
         <div class="project-editor-tablist" role="tablist" :aria-label="t('已打开的文件')">
           <div v-for="item in tabs" :key="item.id" class="project-editor-tab" :class="{ 'is-active': item.id === active_id }" :title="item.path">
@@ -899,7 +1002,8 @@ onBeforeUnmount(() => {
         </div>
         <div class="project-editor-window-actions">
           <UDropdownMenu v-if="narrow && file_menu.length" :items="file_menu" :content="{ align: 'end', sideOffset: 4 }" :ui="{ content: 'channel-menu' }"><UButton icon="i-lucide-ellipsis" color="neutral" variant="ghost" size="sm" :aria-label="t('文件操作')" :title="t('字号、朗读、显示方式')" /></UDropdownMenu>
-          <UButton :icon="narrow ? 'i-lucide-chevron-down' : 'i-lucide-minus'" color="neutral" variant="ghost" size="sm" :title="t('收起为悬浮窗（手机上也可下拉收起）')" :aria-label="t('收起预览')" @click="fold" />
+          <UButton v-if="can_dock" :icon="docked ? 'i-lucide-picture-in-picture-2' : 'i-lucide-panel-right'" color="neutral" variant="ghost" size="sm" :title="docked ? t('切换为悬浮窗口') : t('切换为右侧分屏')" :aria-label="docked ? t('切换为悬浮窗口') : t('切换为右侧分屏')" @click="toggle_dock" />
+          <UButton :icon="narrow ? 'i-lucide-chevron-down' : 'i-lucide-minus'" color="neutral" variant="ghost" size="sm" :title="t('收起到屏幕边缘（手机上也可下拉收起）')" :aria-label="t('收起预览')" @click="fold" />
           <UButton v-if="!narrow" icon="i-lucide-x" color="neutral" variant="ghost" size="sm" :title="tabs.length > 1 ? t('关闭全部文件') : t('关闭预览')" :aria-label="tabs.length > 1 ? t('关闭全部文件') : t('关闭预览')" @click="close_all" />
         </div>
         <nav ref="crumbs_nav" class="project-editor-breadcrumbs" :aria-label="t('文件位置')">
@@ -1012,6 +1116,11 @@ onBeforeUnmount(() => {
 /* The window itself, moved and scaled as a whole when it folds into the floating button or is pulled down. */
 .project-editor-frame { display: flex; flex: 1; flex-direction: column; min-height: 0; overflow: hidden; border: 1px solid var(--ui-border-accented); border-radius: 10px;
   background: var(--ui-bg); box-shadow: 0 24px 80px #0000008c; }
+/* Split pane: the full height of the window's right side, joined to the messages by a line that can be dragged. */
+:global(.project-editor.is-docked) { inset: 0 0 0 auto; width: var(--file-dock-width); height: 100dvh; margin: 0; }
+.project-editor-frame.is-docked { position: relative; border-width: 0 0 0 1px; border-color: var(--ui-border); border-radius: 0; box-shadow: none; }
+.file-dock-resizer { position: absolute; inset: 0 auto 0 0; z-index: 6; width: 6px; cursor: col-resize; touch-action: none; transition: background .12s; }
+.file-dock-resizer:hover, .file-dock-resizer:active, .file-dock-resizer:focus-visible { outline: none; background: var(--ui-primary); }
 /* Head: tabs, the file's actions and the window's on one row, breadcrumbs under them; narrow screens fold the file's
    actions into a "..." menu beside the window buttons. */
 .project-editor-head { display: grid; flex-shrink: 0; grid-template-columns: minmax(0, 1fr) auto auto; grid-template-rows: 38px 26px;
@@ -1139,6 +1248,11 @@ onBeforeUnmount(() => {
 </style>
 
 <style>
+/* Where the preview can switch, one window serves both places, so the floating window dims the page itself and the dimming
+   fades as it moves into the split pane. It also keeps clicks off the page behind the floating window. */
+.project-editor.is-switchable::before { content: ""; position: absolute; inset: -200vmax; z-index: -1; background: #000000a6; transition: opacity .24s ease; }
+.project-editor.is-switchable.is-docked::before { opacity: 0; pointer-events: none; }
+@media (prefers-reduced-motion: reduce) { .project-editor.is-switchable::before { transition: none; } }
 /* Shared by the file list and the preview. */
 .project-file-icon { flex-shrink: 0; width: 16px; height: 16px; }
 .project-crumb-separator { flex-shrink: 0; width: 13px; height: 13px; color: var(--ui-text-dimmed); }

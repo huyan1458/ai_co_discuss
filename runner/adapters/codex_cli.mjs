@@ -14,6 +14,7 @@ import { cli_delivery } from './cli.mjs';
 import { daemon_chat, daemon_link } from './codex_daemon.mjs';
 import { CALL_TIMEOUT_MS, edge_entries, launch_directory, log_entries, marked, model_entry, json_line, newest_record, not_sent,
   page_sessions, preview_messages, project_directory, prompt_text, prompt_title, query_catalog, same_path, typed_prompt } from './common.mjs';
+import { adapter_capabilities } from './profiles.mjs';
 
 /** Codex exec may linger after its final event; the finished turn is already saved, so stop it to free the session. */
 const CLI_EXIT_GRACE_MS = 1500;
@@ -21,13 +22,69 @@ const CODEX_PERMISSIONS_MIN_MINOR = 163;
 const FORK_TIMEOUT_MS = 60_000;
 const CODEX_BRIDGE = fileURLToPath(new URL('./codex_bridge.mjs', import.meta.url));
 
+const WINDOWS_SANDBOX_VALUE = String.raw`sandbox\s*=\s*["'](?:elevated|unelevated)["']`;
+const WINDOWS_SANDBOX_TOP_LEVEL = new RegExp(String.raw`^windows(?:\.|\s*=\s*\{[^}]*\b)${WINDOWS_SANDBOX_VALUE}`);
+const WINDOWS_SANDBOX_IN_SECTION = new RegExp(`^${WINDOWS_SANDBOX_VALUE}`);
+let sandbox_lookup = { key: '', missing: false };
+
+/** Whether a config.toml text chooses a Windows sandbox: `[windows] sandbox = …`, `windows.sandbox = …` or an inline table. */
+function chooses_windows_sandbox(text) {
+  let section = '';
+  for (const line of text.split(/\r?\n/).map(item => item.trim())) {
+    const header = line.match(/^\[([^[\]]+)\]/);
+    if (header) section = header[1].trim();
+    else if (section === 'windows' ? WINDOWS_SANDBOX_IN_SECTION.test(line) : !section && WINDOWS_SANDBOX_TOP_LEVEL.test(line)) return true;
+  }
+  return false;
+}
+
+/**
+ * Whether Codex on this Windows computer has no sandbox chosen: with none it refuses every command before starting it
+ * (`rejected: blocked by policy`, tested 0.169.0 on 2026-11-18). Read again only when the file changes, as the room
+ * runner asks often. Other systems have their own sandbox.
+ */
+export function codex_sandbox_missing(platform = process.platform, env = process.env) {
+  if (platform !== 'win32') return false;
+  const path = join(env.CODEX_HOME || join(homedir(), '.codex'), 'config.toml');
+  let key = `${path}:none`;
+  try { key = `${path}:${statSync(path).mtimeMs}`; } catch { /* no config file: nothing chosen */ }
+  if (key === sandbox_lookup.key) return sandbox_lookup.missing;
+  let text = '';
+  try { text = readFileSync(path, 'utf8'); } catch { /* no config file: nothing chosen */ }
+  sandbox_lookup = { key, missing: !chooses_windows_sandbox(text) };
+  return sandbox_lookup.missing;
+}
+
+/** 全放开, or a hosted background instance where the sandbox cannot start: its limits rest on the task's rules alone. */
+function runs_unsandboxed(config) {
+  return config.project_access === 'full' || Boolean(adapter_capabilities('codex_cli').no_sandbox);
+}
+
+/**
+ * The system-level rule of a thread that runs without a sandbox, or ''. It stays with the thread for good while the room's
+ * access can change later, so it defers to what each task says.
+ */
+export function codex_developer_instructions() {
+  return adapter_capabilities('codex_cli').no_sandbox
+    ? '这台电脑的后台环境没有 Codex 沙箱，系统不会拦截写入。任务说明写明项目文件只读时，只读全靠你遵守：不要创建、修改或删除项目文件，也不要运行会改动项目的命令，只在草稿目录写文件。' : '';
+}
+
+/**
+ * Why 只读 or 可写 cannot run on this computer, or ''. On a person's own computer nothing but the sandbox stands between
+ * Codex and all of that person's files, so its absence is reported instead of quietly running with full access.
+ */
+export function codex_sandbox_refusal(config, platform = process.platform, env = process.env) {
+  if (runs_unsandboxed(config) || ['auto', 'own'].includes(config.project_access) || !codex_sandbox_missing(platform, env)) return '';
+  return '这台电脑的 Codex 还没有配置 Windows 沙箱，只读和可写权限无法生效，未交付任务。请在管理员终端运行 codex sandbox setup --elevated --current-user 配置沙箱，或把这位成员的项目权限改成“全放开”（Codex 将拥有当前 Windows 账号的全部权限）。';
+}
+
 /**
  * Build a per-invocation profile without inheriting a user's custom profile of the same name. The room's other project
  * directories (`task.extra_directories`) get their own read or write entry.
  */
 export function codex_permissions(config, task, platform = process.platform) {
-  // 全放开 runs without approval or sandbox, so there is no profile to build or check.
-  if (config.project_access === 'full') return { name: '', args: ['--dangerously-bypass-approvals-and-sandbox'] };
+  // Running without approval or sandbox, there is no profile to build or check.
+  if (runs_unsandboxed(config)) return { name: '', args: ['--dangerously-bypass-approvals-and-sandbox'] };
   const name = `codiscuss-${randomUUID()}`;
   // A taken-over manual member writes like 可写: its own config may sandbox read-only and then could not save its answer draft.
   const base = ['auto', 'own'].includes(config.project_access) || (project_directory(config) && config.project_access === 'write')
@@ -111,10 +168,14 @@ async function check_codex_permissions(config, task, permissions, spawn_process)
  * thread; 全放开 has no profile and opens the thread without sandbox or approval instead.
  */
 function invocation(config, binding, task) {
+  const refusal = codex_sandbox_refusal(config);
+  if (refusal) throw not_sent(new Error(refusal));
   const permissions = codex_permissions(config, task);
-  const full = config.project_access === 'full';
+  const full = runs_unsandboxed(config);
+  const developer_instructions = codex_developer_instructions();
   const input = `${JSON.stringify({ prompt: task.prompt, thread_id: binding.session_id || '', cwd: launch_directory(config, task),
-    model: config.model || '', effort: config.effort || '', full, ...(task.images?.length ? { images: task.images.map(image => image.path) } : {}) })}\n`;
+    model: config.model || '', effort: config.effort || '', full, ...(developer_instructions ? { developer_instructions } : {}),
+    ...(task.images?.length ? { images: task.images.map(image => image.path) } : {}) })}\n`;
   return { executable: process.execPath, args: [CODEX_BRIDGE, config.executable, ...(full ? [] : permissions.args)], input,
     steer: text => `${JSON.stringify({ steer: text })}\n`,
     ...(permissions.name ? { check: spawn_process => check_codex_permissions(config, task, permissions, spawn_process) } : {}) };

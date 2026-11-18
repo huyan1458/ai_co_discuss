@@ -68,7 +68,7 @@ function monitor_cli(adapter, child, binding, task, restart) {
     catch { state.diagnostic = 'CLI 输出中存在无效 JSON，详情见本机日志'; return; }
     trace_cli_event(event, task);
     const phase = adapter.events.phase(event);
-    if (phase) task.on_activity?.(phase, adapter.events.tool(event));
+    if (phase) task.on_activity?.(phase, adapter.events.tool(event), adapter.events.call?.(event));
     const note = adapter.events.note(event, state.responses);
     if (note) task.on_note?.(note);
     report_edits(adapter, event, task);

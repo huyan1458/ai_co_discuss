@@ -13,10 +13,12 @@
  */
 import { spawnSync } from 'node:child_process';
 import { randomBytes } from 'node:crypto';
-import { cpSync, existsSync, mkdirSync, readFileSync, realpathSync, renameSync, rmSync, writeFileSync } from 'node:fs';
+import { cpSync, existsSync, mkdirSync, readFileSync, realpathSync, renameSync, rmSync, statSync, writeFileSync } from 'node:fs';
 import { homedir, tmpdir } from 'node:os';
 import { basename, dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
+
+import { NO_DESKTOP_VARIABLE } from './adapters/profiles.mjs';
 
 const USERS_FILE = 'os-users.json';
 const USER_PREFIX = 'cd-';
@@ -463,13 +465,22 @@ export function install_shared_runtime(python_source = '', { run = run_powershel
   return { installed, missing, warnings };
 }
 
-/** Which shared programs are installed: { claude, codex, agy, app, python } booleans, and the shared program's version. */
+/** The AI programs the owner upgraded after the shared copy was made: they update themselves, apart from this program. */
+export function outdated_programs(clis = cli_sources()) {
+  const modified = path => { try { return statSync(path).mtimeMs; } catch { return 0; } };
+  return Object.values(clis).filter(cli => {
+    const copy = modified(cli.executable || cli.target);
+    return copy > 0 && modified(cli.program || cli.source) > copy;
+  }).map(cli => cli.label);
+}
+
+/** Which shared programs are installed ({ claude, codex, agy, app, python } booleans), the shared program's version, and which are behind. */
 export function shared_cli_state() {
   const paths = shared_paths();
   let app_version = '';
   try { app_version = JSON.parse(readFileSync(join(APP_ROOT, 'package.json'), 'utf8')).version; } catch { /* not installed */ }
   return { ...Object.fromEntries(Object.entries(cli_sources()).map(([key, cli]) => [key, existsSync(cli.executable || cli.target)])),
-    app: existsSync(paths.local_script), python: existsSync(paths.python), app_version };
+    app: existsSync(paths.local_script), python: existsSync(paths.python), app_version, outdated: outdated_programs() };
 }
 
 // ---- The instance of an account with its own Windows user: a scheduled task ----
@@ -573,6 +584,7 @@ export function start_instance_as_user(data, account, service_home, local_script
 if (-not (Test-Path -LiteralPath $flag)) { exit 0 }
 $env:DISCUSS_SERVICE_HOME = ${quote(service_home)}
 $env:Path = ${quote(`${COMMAND_ROOT};`)} + $env:Path
+$env:${NO_DESKTOP_VARIABLE} = '1'
 ${key_file ? `$env:DISCUSS_ENTRY_KEY_FILE = ${quote(key_file)}\n` : ''}Set-Location -LiteralPath ${quote(service_home)}
 & ${quote(node)} ${quote(local_script)} run
 exit $LASTEXITCODE

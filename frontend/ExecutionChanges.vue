@@ -2,9 +2,10 @@
 /**
  * The files one execution changed, as "edited N files +a -b": a row per file with its added and removed lines. With a
  * mouse, pointing at a row previews its patch in a floating panel and a click keeps that panel open; on touch screens a
- * tap opens the patch inside the list (user 2026-11-17). Patches are read from the site on first use, owner only. Only files the member's own edit tools wrote
- * are listed: files changed meanwhile by anyone else, or by a software that cannot tell its own edits, are not shown
- * (user 2026-11-17: who changed it shows it; an unknown source shows nothing).
+ * tap opens the patch inside the list (user 2026-11-17). Patches are read from the site on first use, owner only. Files
+ * the member's own edit tools wrote are listed as its edits. When it also ran commands, the other files that changed
+ * meanwhile follow in a folded list of their own, marked as possibly its doing: a script names no files, and another
+ * window may have changed them instead (user 2026-11-18, #4881).
  */
 import { computed, inject, onBeforeUnmount, ref } from "vue";
 import { t } from "./i18n.js";
@@ -21,7 +22,7 @@ const PREVIEW_GAP = 4;
 const PREVIEW_MARGIN = 16;
 
 const props = defineProps({
-  /** The execution report: `changes`, `edited` (null when the software could not tell), `diff_stats`, `id`. */
+  /** The execution report: `changes`, `edited` (null when the software could not tell), `commands` run, `diff_stats`, `id`. */
   report: { type: Object, required: true },
   roomId: { type: String, required: true },
 });
@@ -29,15 +30,30 @@ const { bridge } = inject("discussion");
 
 const stats = computed(() => new Map((props.report.diff_stats || []).map((item) => [item.path, item])));
 const edited = computed(() => new Set(props.report.edited || []));
-const files = computed(() => (props.report.changes || []).filter((path) => edited.value.has(path))
-  .map((path) => ({ path, stat: stats.value.get(path) })));
-const totals = computed(() => files.value.reduce((sum, file) => ({ added: sum.added + (file.stat?.added || 0), removed: sum.removed + (file.stat?.removed || 0) }), { added: 0, removed: 0 }));
-const counted = computed(() => files.value.some((file) => Number.isInteger(file.stat?.added)));
+const file_rows = (paths) => paths.map((path) => ({ path, stat: stats.value.get(path) }));
+const totals_of = (files) => files.reduce((sum, file) => ({ added: sum.added + (file.stat?.added || 0), removed: sum.removed + (file.stat?.removed || 0) }), { added: 0, removed: 0 });
+// The member's own edits, then what may be its doing; each list has its own header, counts and fold.
+const sections = computed(() => {
+  const changes = props.report.changes || [];
+  const own = file_rows(changes.filter((path) => edited.value.has(path)));
+  const possible = props.report.commands > 0 ? file_rows(changes.filter((path) => !edited.value.has(path))) : [];
+  return [
+    { key: "own", files: own, title: t('已修改 {count} 个文件', { count: own.length }), hint: "" },
+    { key: "possible", files: possible, title: t('可能由命令或脚本修改 {count} 个文件', { count: possible.length }),
+      hint: t('这次执行运行过命令，这些文件在执行期间有变化，但无法确认是它改的，也可能来自其他窗口或成员。') },
+  ].filter((section) => section.files.length).map((section) => ({ ...section, totals: totals_of(section.files),
+    counted: section.files.some((file) => Number.isInteger(file.stat?.added)) }));
+});
 
 const open = ref(new Set());
 // A long list starts folded to its header row; the header opens and closes it (user 2026-11-17: 14 files filled the
-// screen with no way to fold them).
-const list_open = ref(files.value.length <= FOLDED_ABOVE);
+// screen with no way to fold them). What may be someone else's work always starts folded.
+const open_sections = ref(new Set(sections.value.filter((section) => section.key === "own" && section.files.length <= FOLDED_ABOVE).map((section) => section.key)));
+function toggle_section(key) {
+  const next = new Set(open_sections.value);
+  if (next.has(key)) next.delete(key); else next.add(key);
+  open_sections.value = next;
+}
 const patches = ref(null), loading = ref(false), failure = ref("");
 /** The patches of the whole execution, read once on first use. */
 async function load_patches() {
@@ -144,15 +160,16 @@ function patch_lines(patch) {
 </script>
 
 <template>
-  <div v-if="files.length" class="execution-changes">
-    <div class="execution-changes-box">
-    <button v-if="files.length" type="button" class="execution-changes-head" :aria-expanded="list_open" @click="list_open = !list_open">
-      <span class="execution-changes-title">{{ t('已修改 {count} 个文件', { count: files.length }) }}</span>
-      <span v-if="counted" class="execution-changes-count"><b class="is-add">+{{ totals.added }}</b> <b class="is-del">-{{ totals.removed }}</b></span>
+  <div v-if="sections.length" class="execution-changes">
+    <div v-for="section in sections" :key="section.key" class="execution-changes-box" :class="`is-${section.key}`">
+    <button type="button" class="execution-changes-head" :aria-expanded="open_sections.has(section.key)" :title="section.hint" @click="toggle_section(section.key)">
+      <span class="execution-changes-title">{{ section.title }}</span>
+      <span v-if="section.counted" class="execution-changes-count"><b class="is-add">+{{ section.totals.added }}</b> <b class="is-del">-{{ section.totals.removed }}</b></span>
       <UIcon name="i-lucide-chevron-down" class="execution-changes-chevron" />
     </button>
-    <ul v-if="files.length && list_open" class="execution-changes-list">
-      <li v-for="file in files" :key="file.path">
+    <p v-if="section.hint && open_sections.has(section.key)" class="execution-changes-hint">{{ section.hint }}</p>
+    <ul v-if="open_sections.has(section.key)" class="execution-changes-list">
+      <li v-for="file in section.files" :key="file.path">
         <button type="button" class="execution-changes-row" :aria-expanded="open.has(file.path) || (pinned && floating === file.path)" :title="file.path"
           @click="file.stat && !file.stat.skipped && press(file.path, $event)" @pointerenter="file.stat && !file.stat.skipped && enter_row(file.path, $event)" @pointerleave="leave">
           <span class="execution-changes-path"><span class="execution-changes-folder">{{ folder(file.path) }}</span>{{ name(file.path) }}</span>
@@ -171,9 +188,11 @@ function patch_lines(patch) {
           <p v-if="loading && !patches" class="execution-changes-note">{{ t('正在读取改动…') }}</p>
           <p v-else-if="failure" class="execution-changes-note">{{ t('读取改动失败：{value1}', { value1: failure }) }}</p>
           <template v-else-if="patches?.get(file.path)">
-            <pre><code><span v-for="(line, index) in patch_lines(patches.get(file.path).patch)" :key="index" :class="`is-${line.kind}`"><span class="execution-changes-number" aria-hidden="true">{{ line.number }}</span><span class="execution-changes-text">{{ line.text }}</span>
+            <!-- A patch too long to keep is stored empty (a minified file is one huge line), so there are no lines to draw. -->
+            <p v-if="!patches.get(file.path).patch" class="execution-changes-note">{{ patches.get(file.path).truncated ? t('改动太长，无法显示差异') : t('没有逐行内容变化') }}</p>
+            <pre v-else><code><span v-for="(line, index) in patch_lines(patches.get(file.path).patch)" :key="index" :class="`is-${line.kind}`"><span class="execution-changes-number" aria-hidden="true">{{ line.number }}</span><span class="execution-changes-text">{{ line.text }}</span>
 </span></code></pre>
-            <p v-if="patches.get(file.path).truncated" class="execution-changes-note">{{ t('改动较长，只显示前面一部分') }}</p>
+            <p v-if="patches.get(file.path).patch && patches.get(file.path).truncated" class="execution-changes-note">{{ t('改动较长，只显示前面一部分') }}</p>
           </template>
         </div>
         </Teleport>
@@ -195,6 +214,8 @@ function patch_lines(patch) {
 .execution-changes-head { display: flex; align-items: center; gap: 10px; width: 100%; min-height: 28px; padding: 3px 6px; border-radius: 4px; color: var(--ui-text-toned); text-align: left; cursor: pointer; }
 .execution-changes-head:hover { background: var(--ui-bg-elevated); }
 .execution-changes-title { flex: 1; min-width: 0; }
+.execution-changes-box.is-possible .execution-changes-title { color: var(--ui-text-dimmed); }
+.execution-changes-hint { margin: 0; padding: 0 6px 4px; color: var(--ui-text-dimmed); font-size: 11px; }
 .execution-changes-head[aria-expanded="true"] .execution-changes-chevron { transform: rotate(180deg); }
 .execution-changes-list { width: 100%; margin: 0; padding: 0; list-style: none; }
 .execution-changes-list > li { min-width: 0; }

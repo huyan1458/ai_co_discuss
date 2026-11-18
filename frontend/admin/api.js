@@ -34,6 +34,6 @@ export function provider_of(providers, base_url) {
 /** The address a hosted account's person opens: the entry's public address, else its address on this computer. */
 export function entry_address(entry) {
   if (!entry) return "";
-  // The address the panel picked among the ways turned on; this computer's own address when none is on.
-  return entry.address || `http://127.0.0.1:${entry.port}`;
+  // The address the panel picked among the ways turned on; none while no way is on, as the entry's port serves this computer alone.
+  return entry.address || "";
 }

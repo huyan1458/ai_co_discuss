@@ -6,7 +6,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { after, test } from 'node:test';
 
-import { add_account, instance_home, read_accounts, stop_entry } from '../gateway/gateway.mjs';
+import { add_account, instance_home, read_accounts, save_entry_settings, stop_entry } from '../gateway/gateway.mjs';
 import { managed_api_keys, save_api_key } from '../runner/discussion_api.mjs';
 import { create_panel, instance_conforms, instance_state, list_keys, protect_account, relay_operator_events, update_step } from '../runner/admin_panel.mjs';
 import { instance_key_file, os_user_name, place_instance_key, secure_folder, secure_shared_root } from '../runner/os_users.mjs';
@@ -55,6 +55,17 @@ test('update progress normalizes old updater records and preserves structured fa
     { text: '已安装 v1.0.0', failed: false }, { text: '安装失败：network', failed: true },
     { text: 'Failed logs removed', failed: false }, { text: 'Network unavailable', failed: true },
   ]);
+});
+
+test('an update npm cannot deliver yet is refused before anything is stopped', async () => {
+  const { data, ops } = fixture();
+  let begun = false;
+  const { request } = await serve(data, { ...ops, latest_version: async () => '9.9.9', begin_update: async () => { begun = true; return {}; },
+    check_package: async () => { throw new Error('npm 还在准备安装包'); } });
+  const cookie = (await request('/enter?key=owner-key')).headers.get('set-cookie').split(';')[0];
+  const response = await request('/api/update', { cookie, body: {} });
+  assert.equal(response.status, 400);
+  assert.equal(begun, false);
 });
 
 /** Serve the panel on a free port and return a request helper bound to its address. */
@@ -460,6 +471,31 @@ test('joining the online relay takes one access code, and a wrong one or a missi
   assert.match((await made.json()).error, /找不到线上站点的部署配置/);
 });
 
+test('the owner binds and leaves the online site without hosting, and never from under the hosted accounts', async () => {
+  const { data, ops } = fixture();
+  writeFileSync(join(data, 'local-settings.json'), JSON.stringify({ hosting: false }));
+  const links = (site) => writeFileSync(join(data, 'machine-links.json'), JSON.stringify({ sites: site ? { [site]: { id: 'a'.repeat(32), private_key: 'key' } } : {} }));
+  let bound = null;
+  ops.connect_site = async (_data, site) => { if (site === 'https://not-a-site.example') return null; links(site); bound = { site, machine: 'a'.repeat(32) }; return bound; };
+  const { request } = await serve(data, ops);
+  const cookie = (await request('/enter?key=owner-key')).headers.get('set-cookie').split(';')[0];
+  const post = async (path, body) => { const answer = await request(`/api/site/${path}`, { cookie, body }); return { status: answer.status, body: await answer.json() }; };
+  const online = async () => (await (await request('/api/state', { cookie })).json()).online_site;
+  assert.equal(await online(), '');
+  assert.match((await post('connect', { site: 'not an address' })).body.error, /站点地址格式不对/);
+  assert.match((await post('connect', { site: 'https://not-a-site.example' })).body.error, /不是共议线上站点/);
+  assert.equal((await post('connect', { site: 'https://site.example/path' })).status, 200);
+  assert.equal(await online(), 'https://site.example', 'kept as the site itself, with hosting off');
+  assert.match((await post('connect', { site: 'https://other.example' })).body.error, /已绑定 https:\/\/site\.example/);
+  // The hosted accounts' address runs over this binding: leaving it would cut them off silently.
+  save_entry_settings(data, { relay_enabled: true });
+  assert.match((await post('disconnect', {})).body.error, /请先关闭它/);
+  assert.equal(await online(), 'https://site.example');
+  save_entry_settings(data, { relay_enabled: false });
+  assert.deepEqual((await post('disconnect', {})).body, { disconnected: 'https://site.example' });
+  assert.equal(await online(), '');
+});
+
 test('the admin command line works the panel with the owner key only, and does what the panel does', async () => {
   const { data, ops } = fixture();
   const { port } = await serve(data, ops);
@@ -470,6 +506,7 @@ test('the admin command line works the panel with the owner key only, and does w
   await assert.rejects(run(['status']), /拒绝了钥匙/);
   writeFileSync(join(data, 'admin-panel.json'), JSON.stringify({ port, key: KEY, pid: process.pid }));
   assert.equal((await run(['status'])).hosting, true);
+  assert.deepEqual(await run(['site', 'status']), { local: null, online: null });
   const created = await run(['key', 'add', 'demo', '--base-url', 'https://api.deepseek.com/v1', '--key', 'sk-secret-5678']);
   assert.ok(created);
   const keys = await run(['key', 'list', 'demo']);

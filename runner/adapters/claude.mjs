@@ -251,6 +251,11 @@ const events = {
     const block = event.type === 'assistant' ? event.message?.content?.at(-1) : null;
     return block?.type === 'tool_use' ? String(block.name || '') : '';
   },
+  /** The id of the tool call an event starts, so calls of one tool made together are counted one by one. */
+  call(event) {
+    const block = event.type === 'assistant' ? event.message?.content?.at(-1) : null;
+    return block?.type === 'tool_use' ? String(block.id || '') : '';
+  },
   note(event) {
     if (event.type !== 'assistant') return '';
     return (event.message?.content || []).filter(block => block.type === 'text').map(block => block.text).join('\n').trim();
@@ -548,7 +553,7 @@ export function watch_window_turn({ file, offset, pid, marker, session_id = '', 
       ...(entry.toolUseResult?.isAsync ? { background: true } : {}) })}\n`);
     // Only entries of the turn that took the message reach here, so this is the window's own work, never "not started yet".
     const phase = events.phase(entry);
-    if (phase) task.on_activity?.(phase, events.tool(entry));
+    if (phase) task.on_activity?.(phase, events.tool(entry), events.call(entry));
     const note = events.note(entry);
     if (note) task.on_note?.(note);
   }

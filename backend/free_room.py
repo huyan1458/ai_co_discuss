@@ -794,6 +794,13 @@ def step_count(connection, execution_id):
         AND phase IN ('command','tool','editing')""", (execution_id,)).fetchone()[0]
 
 
+def tool_counts(connection, execution_id):
+    """How many times an execution called each tool, in the order it first used them."""
+    rows = connection.execute("""SELECT tool,phase,COUNT(*) AS count FROM execution_segments WHERE source='free' AND execution_id=?
+        AND phase IN ('command','tool','editing') GROUP BY tool,phase ORDER BY MIN(seq)""", (execution_id,))
+    return [dict(row) for row in rows]
+
+
 def execution_notes(connection, room_id, execution_id, token=""):
     """Read one execution's progress notes in order, with the same access as the room view."""
     execution = connection.execute("SELECT member_id FROM member_executions WHERE room_id=? AND id=?", (room_id, execution_id)).fetchone()
@@ -968,6 +975,9 @@ def recent_executions(connection, room_id, span=None):
         EXISTS(SELECT 1 FROM retried_requests WHERE execution_id=e.id) AS retried,
         (SELECT MIN({LAYOUT_AT_SQL}) FROM member_requests r WHERE r.execution_id=e.id) AS layout_at,
         (SELECT COUNT(*) FROM execution_notes WHERE execution_id=e.id) AS note_count,
+        (SELECT COUNT(*) FROM execution_segments WHERE source='free' AND execution_id=e.id
+            AND phase IN ('command','tool','editing')) AS step_count,
+        (SELECT COUNT(*) FROM execution_segments WHERE source='free' AND execution_id=e.id AND phase='command') AS command_count,
         (SELECT denials FROM execution_denials WHERE execution_id=e.id) AS denials,{CAPABILITY_COLUMNS},
         (SELECT failure_class FROM execution_failures WHERE execution_id=e.id) AS failure_class,
         (SELECT json_object('created_at',created_at) FROM late_answers WHERE execution_id=e.id) AS late_answer,
@@ -989,7 +999,7 @@ def recent_executions(connection, room_id, span=None):
             "edited": json.loads(row["edited"]) if row["edited"] else None, "diff_stats": diff_stats(row["diffs"]),
             "answer_id": row["answer_id"], "request_message_id": row["request_message_id"],
             "layout_after": row["layout_after"], "layout_at": row["layout_at"] or row["created_at"], "requests": requests,
-            "notes": row["note_count"], "denials": json.loads(row["denials"] or "[]"), "failure_class": row["failure_class"] or "",
+            "notes": row["note_count"], "steps": row["step_count"], "commands": row["command_count"], "denials": json.loads(row["denials"] or "[]"), "failure_class": row["failure_class"] or "",
             "capabilities": reported_capabilities(row), "stop_result": row["stop_result"] or "",
             "late_answer": json.loads(row["late_answer"]) if row["late_answer"] else None, "background": bool(row["background"]),
             "retried": bool(row["retried"]),
@@ -1096,6 +1106,7 @@ def free_view(connection, room_id):
             member["execution"]["stale"] = latest["lease_until"] <= now
             member["execution"]["notes"] = note_count(connection, latest["id"])
             member["execution"]["steps"] = step_count(connection, latest["id"])
+            member["execution"]["tools"] = tool_counts(connection, latest["id"])
             member["execution"]["retry"] = execution_retry(connection, latest["id"])
         member["pending"] = connection.execute("SELECT COUNT(*) FROM member_requests WHERE member_id=? AND status='pending'",
                                                (row["id"],)).fetchone()[0]

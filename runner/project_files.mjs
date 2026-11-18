@@ -2,7 +2,7 @@
 import { createHash } from 'node:crypto';
 import { closeSync, fstatSync, openSync, readdirSync, readFileSync, readSync, realpathSync, statSync } from 'node:fs';
 import { isAbsolute, posix, relative, resolve } from 'node:path';
-import { adapter_profile } from './adapters/profiles.mjs';
+import { adapter_capabilities, adapter_profile } from './adapters/profiles.mjs';
 import { PINYIN_TABLE } from './pinyin_table.mjs';
 
 const DIRECTORY_PAGE_SIZE = 200;
@@ -184,12 +184,13 @@ export function outside_directory(config, profile) {
 /**
  * Whether the room's directories stay read-only for this member by the software's own limits, not only by its task
  * text: at 只读 for any software whose levels the runner sets, at 可写 only where a sandbox or the file tools hold
- * (`limits_directories`); never for an App, a manual member's own permissions, 自动 or 全放开.
+ * (`limits_directories`); never for an App, a manual member's own permissions, 自动, 全放开 or software running without
+ * its sandbox here (`no_sandbox`).
  */
 export function read_only_enforced(profile) {
-  const facts = adapter_profile(profile?.adapter);
-  if (!facts?.access_levels) return false;
-  return profile.project_access === 'read' || (profile.project_access === 'write' && Boolean(facts.capabilities.limits_directories));
+  const facts = adapter_profile(profile?.adapter), capabilities = adapter_capabilities(profile?.adapter);
+  if (!facts?.access_levels || capabilities.no_sandbox) return false;
+  return profile.project_access === 'read' || (profile.project_access === 'write' && Boolean(capabilities.limits_directories));
 }
 
 /** The room's project root, resolved through links and required to be a folder. */

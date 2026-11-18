@@ -16,7 +16,7 @@ import { guard_remote_request, list_remote_directories, remote_allows, remote_ro
 import { list_devices, machine_fingerprint, revoke_device, start_pairing } from './device_auth.mjs';
 import { setup_sidecar } from './adapters/antigravity_app.mjs';
 import { adapter_of, adoption_adapter, BRANCHABLE_ADAPTERS, branch_session, execution_details, session_preview, session_settings, software_defaults, software_defaults_stamp, software_effort, software_models, software_sessions, software_skills } from './adapters/index.mjs';
-import { ADAPTER_IDS, ADAPTER_PROFILES, adapter_profile, DEFAULT_API_MAX_REQUESTS, MAX_API_MAX_REQUESTS, platform_adapters, same_session_family } from './adapters/profiles.mjs';
+import { ADAPTER_IDS, ADAPTER_PROFILES, adapter_capabilities, adapter_profile, DEFAULT_API_MAX_REQUESTS, MAX_API_MAX_REQUESTS, platform_adapters, same_session_family } from './adapters/profiles.mjs';
 import { API_PROVIDERS, api_check, api_models, managed_api_keys, save_api_key, saved_api_keys, validate_api_profile } from './discussion_api.mjs';
 import { DEFAULT_SCHEDULER_MODE, SCHEDULER_MODES, SCHEDULER_PROVIDERS, scheduler_check } from './scheduler.mjs';
 import { save_tts_settings, tts_release, tts_settings, tts_speak } from './tts.mjs';
@@ -2390,7 +2390,7 @@ export async function launch_main(args = process.argv.slice(2), input_text) {
   }
   let result;
   if (positionals[0] === 'settings') result = { ...(input ? save_launch_settings(home, input) : launch_settings(home)), api_providers: API_PROVIDERS,
-    scheduler_providers: SCHEDULER_PROVIDERS, scheduler_modes: SCHEDULER_MODES, scheduler_default_mode: DEFAULT_SCHEDULER_MODE, api_keys: saved_api_keys(home), managed_api_keys: restricted ? managed_api_keys(home) : [], projects: launch_projects(home).projects, projects_restricted: restricted, workspace: space.workspace, user_home: restricted ? homedir() : '', ...expert_presets(home), ...workflow_library(home) };
+    scheduler_providers: SCHEDULER_PROVIDERS, scheduler_modes: SCHEDULER_MODES, scheduler_default_mode: DEFAULT_SCHEDULER_MODE, api_keys: saved_api_keys(home), managed_api_keys: restricted ? managed_api_keys(home) : [], projects: launch_projects(home).projects, projects_restricted: restricted, full_access_only: ADAPTER_IDS.filter(id => adapter_capabilities(id).no_sandbox), workspace: space.workspace, user_home: restricted ? homedir() : '', ...expert_presets(home), ...workflow_library(home) };
   else if (positionals[0] === 'projects') result = input ? save_launch_projects(home, input) : launch_projects(home);
   else if (positionals[0] === 'presets') result = input ? save_expert_presets(home, input) : expert_presets(home);
   else if (positionals[0] === 'workflows') result = await workflows_command(home, input || {});

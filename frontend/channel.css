@@ -93,6 +93,7 @@ html[data-theme^="channel"] .channel-new-conversation:active:not(:disabled) { ba
 .channel-archive-label { text-align: left; }
 .channel-archive-count { color: var(--ui-text-dimmed); font-size: 11px; opacity: .8; font-variant-numeric: tabular-nums; }
 html[data-theme^="channel"] .channel-menu.channel-directory-menu { min-width: 156px; }
+html[data-theme^="channel"] .channel-directory-menu [data-slot="itemTrailingIcon"] { width: 14px; height: 14px; color: var(--ui-text-toned); }
 .channel-directory { width: 100%; }
 .channel-link { min-height: 36px; padding: 7px 10px !important; font-size: var(--channel-nav-text) !important; gap: 8px !important; border-radius: 5px !important; margin: 1px 0; color: #a7aeb9; }
 .channel-link-label { display: block; white-space: nowrap !important; overflow: hidden; text-overflow: ellipsis; line-height: 22px; font-weight: 400; }
@@ -113,8 +114,9 @@ html[data-theme^="channel"] .channel-menu.channel-directory-menu { min-width: 15
 .channel-avatar.user { background: #0f8f83; color: #fff5df; }
 /* Another computer's AI sits on the same light plate as the brand logos (a purple plate clashed beside them, user
    2026-11-16); its laptop glyph tells it apart. */
-.channel-avatar:is(.codex, .claude, .gemini, .deepseek, .qwen, .grok, .external) { background: #f7f8fa; color: #25272c; }
+.channel-avatar:is(.codex, .claude, .gemini, .deepseek, .qwen, .grok, .external, .custom) { background: #f7f8fa; color: #25272c; }
 .channel-avatar img { object-fit: contain; padding: 18%; border-radius: 0; }
+.channel-avatar.external > img { width: 100%; height: 100%; }
 .channel-avatar.user img { padding: 0; }
 .channel-sidebar-footer { display: flex; align-items: center; gap: 9px; min-height: 68px; padding: 12px; background: #1b1c21; }
 .channel-sidebar-footer > .channel-avatar { width: 34px; height: 34px; }
@@ -175,7 +177,7 @@ html[data-theme^="channel"] .channel-menu.channel-directory-menu { min-width: 15
   .channel-folder-row:is(:hover, :has(:focus-visible)) .channel-folder-actions, .channel-folder-row:has([data-state="open"]) .channel-folder-actions { display: flex; }
   /* The working dot stands in the time's place, so it gives way to the actions the same way. */
   .channel-room-row:is(:hover, :has(:focus-visible), [data-state="open"]) :is(.channel-room-time, .channel-room-running), .channel-room-row:has([aria-expanded="true"]) :is(.channel-room-time, .channel-room-running),
-  .channel-folder-row:is(:hover, :has(:focus-visible)) .channel-directory-count, .channel-folder-row:has([data-state="open"]) .channel-directory-count { display: none; }
+  .channel-folder-row:is(:hover, :has(:focus-visible)) :is(.channel-directory-count, .channel-room-running), .channel-folder-row:has([data-state="open"]) :is(.channel-directory-count, .channel-room-running) { display: none; }
 }
 /* Touch and narrow screens keep the name wide: archiving moves into the row's "…" menu, and what stays is big enough to tap. */
 @media (max-width: 700px), (hover: none), (pointer: coarse) {
@@ -184,7 +186,8 @@ html[data-theme^="channel"] .channel-menu.channel-directory-menu { min-width: 15
   :is(.channel-directory-actions, .channel-room-actions, .channel-folder-actions) button { width: 32px; height: 32px; padding: 9px; }
 }
 /* Sorted by recent activity a room has no place to be dragged to within its folder, so the grip gives its width back. */
-.channel-room-list.is-recent .channel-room-row:has(> .channel-room-grip) { grid-template-columns: minmax(0, 1fr) auto; padding-left: 8px; }
+/* The name then starts where the grip's dots stood, in line with the show-more control below it. */
+.channel-room-list.is-recent .channel-room-row:has(> .channel-room-grip) { grid-template-columns: minmax(0, 1fr) auto; padding-left: 4px; }
 .channel-room-list.is-recent .channel-room-grip { display: none; }
 .channel-room-more { display: block; width: 100%; padding: 6px 8px; border-radius: 8px; color: var(--ui-text-dimmed); font-size: var(--channel-nav-meta); text-align: left; cursor: pointer; }
 @media (hover: hover) { .channel-room-more:hover { color: var(--ui-text-toned); background: var(--channel-ghost-hover); } }
@@ -870,6 +873,9 @@ html[data-theme^="channel"] .channel-archive-toolbar .channel-archive-search inp
 .channel-archive-empty { padding: 24px 0; text-align: center; color: var(--ui-text-muted); font-size: 13px; }
 @media (max-width: 600px) {
   html[data-theme^="channel"] :is(.channel-create-modal, .pb-invite-modal) [data-slot="header"] { padding: 18px 18px 16px; }
+  html[data-theme^="channel"] .channel-create-modal [data-slot="header"] { padding: 12px 14px 10px; }
+  html[data-theme^="channel"] .channel-create-modal [data-slot="description"] { display: none; }
+  html[data-theme^="channel"] .channel-create-modal [data-slot="close"] { top: 8px; right: 8px; }
   html[data-theme^="channel"] .pb-invite-modal .dialog-body { padding: 18px 18px 20px; }
   html[data-theme^="channel"] .studio-modal.channel-archive-modal { width: calc(100vw - 24px); height: calc(100dvh - 32px); }
   html[data-theme^="channel"] .channel-archive-modal [data-slot="header"] { padding: 24px 20px; }
@@ -1230,7 +1236,7 @@ html[data-motion="off"] *, html[data-motion="off"] *::before, html[data-motion="
   .channel-person { padding-block: 9px; }
   .channel-person-label strong { font-weight: 600; }
   .channel-person-label small { color: #666666; }
-  .channel-avatar:is(.codex, .claude, .gemini, .deepseek, .qwen, .grok, .external) { background: #fafafa; box-shadow: inset 0 0 0 1px #e8e8e8; }
+  .channel-avatar:is(.codex, .claude, .gemini, .deepseek, .qwen, .grok, .external, .custom) { background: #fafafa; box-shadow: inset 0 0 0 1px #e8e8e8; }
   .channel-message-byline { gap: 12px; margin-bottom: 14px; }
   .channel-message-byline strong { color: var(--speaker-accent); font-size: 16px; font-weight: 650; letter-spacing: 0; }
   .channel-message-provenance, .channel-message-id, .channel-message-round { color: #666666; font-size: 11px; }
@@ -1268,6 +1274,7 @@ html[data-motion="off"] *, html[data-motion="off"] *::before, html[data-motion="
     .channel-message-provenance, .channel-message-round, .channel-message-id { font-size: 11px; }
     .channel-source { font-size: 11px !important; }
     .channel-message { padding: 22px 24px 26px !important; }
+    .channel-working-strip { padding-left: 24px; }
   }
   @media (max-width: 700px) {
     .channel-message-text { line-height: 1.8; letter-spacing: 0; }
@@ -1372,11 +1379,16 @@ html[data-motion="off"] *, html[data-motion="off"] *::before, html[data-motion="
 /* The correction opens as the lower half of its decision card: one box, the card's bottom edge giving way to it. */
 .channel-schedule-card:has(+ .channel-schedule-correction) { margin-bottom: 0 !important; border-bottom-style: none; border-bottom-left-radius: 0; border-bottom-right-radius: 0; }
 .channel-schedule-card:has(+ .channel-schedule-correction) + .channel-schedule-correction { margin-top: 0 !important; padding-top: 4px; border-top-style: none; border-top-left-radius: 0; border-top-right-radius: 0; }
-/* A retracted or rewound message keeps its place as one quiet line; a rewound run folds into its first line. */
-.channel-withdrawn { display: flex; align-items: center; gap: 8px; min-width: 0; margin: 0 16px 16px; padding: 6px 14px; border: 1px dashed var(--ui-border); border-radius: 8px; color: var(--ui-text-muted); font-size: 12px; }
+/* A retracted or rewound message keeps its place as one quiet box. Its head reads the same folded or open, with the toggle
+   staying at the right end; an open rewound run lists its messages under the head, inside the same box. */
+.channel-withdrawn { min-width: 0; margin: 0 16px 16px; padding: 6px 14px; border: 1px dashed var(--ui-border); border-radius: 8px; color: var(--ui-text-muted); font-size: 12px; }
+.channel-withdrawn-head { display: flex; align-items: center; gap: 8px; min-width: 0; min-height: 20px; }
 .channel-withdrawn-icon { flex: none; width: 14px; height: 14px; color: var(--ui-text-dimmed); }
-.channel-withdrawn strong { flex: none; font-weight: 500; color: var(--ui-text-toned); }
-.channel-withdrawn-text { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.channel-withdrawn-toggle { margin-left: auto; }
+.channel-withdrawn-list { display: grid; grid-template-columns: auto minmax(0, 1fr) auto; column-gap: 12px; margin: 6px 0 0; padding: 4px 0 0 22px; border-top: 1px solid color-mix(in srgb, var(--ui-border) 70%, transparent); list-style: none; }
+.channel-withdrawn-list li { display: grid; grid-column: 1 / -1; grid-template-columns: subgrid; align-items: center; min-height: 24px; }
+.channel-withdrawn strong { font-weight: 500; color: var(--ui-text-toned); white-space: nowrap; }
+.channel-withdrawn-text { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .channel-withdrawn button { flex: none; font-size: 12px !important; font-weight: 400; padding: 0 !important; }
 @media (min-width: 701px) { .channel-withdrawn { margin-right: var(--message-inset-end); } }
 @media (max-width: 700px) { .channel-withdrawn { margin: 0 8px 12px; } }
@@ -1456,7 +1468,8 @@ html[data-motion="off"] *, html[data-motion="off"] *::before, html[data-motion="
 }
 /* A member at work: who and how long on top, the stage as the main line with the stop key at its end, */
 /* the notes below as a subordinate thread (left rule, smaller and dimmer), folded to the latest note. */
-.channel-working-strip { position: relative; margin: 0 16px 16px; padding: 10px 10px 10px 12px; border: 1px solid color-mix(in srgb, var(--ui-border) 80%, transparent); border-radius: 10px; background: color-mix(in srgb, var(--ui-bg-elevated) 45%, transparent); color: var(--ui-text-muted); font-size: 12px; }
+/* The left padding follows .channel-message at every width, so the avatars of working and finished cards share one column. */
+.channel-working-strip { position: relative; margin: 0 16px 16px; padding: 10px 10px 10px 22px; border: 1px solid color-mix(in srgb, var(--ui-border) 80%, transparent); border-radius: 10px; background: color-mix(in srgb, var(--ui-bg-elevated) 45%, transparent); color: var(--ui-text-muted); font-size: 12px; }
 .channel-working-head { display: flex; align-items: center; gap: 8px; min-width: 0; }
 /* The avatar matches the message byline's at each width, so a member looks the same working and answered. */
 .channel-working-strip { --working-avatar: 28px; }
@@ -1466,6 +1479,9 @@ html[data-motion="off"] *, html[data-motion="off"] *::before, html[data-motion="
 .channel-working-main { display: flex; align-items: center; gap: 8px; min-height: 24px; margin-top: 4px; padding-left: calc(var(--working-avatar) + 8px); }
 .channel-working-status { flex: 1 1 auto; min-width: 0; overflow: hidden; color: var(--ui-text-highlighted); font-size: 15px; text-overflow: ellipsis; white-space: nowrap; }
 .channel-working-strip .channel-working-actions { display: inline-flex; flex-shrink: 0; align-items: center; gap: 4px; }
+.channel-working-tools { display: flex; flex-wrap: wrap; gap: 2px 14px; margin: 4px 0 0; padding: 0 34px 0 calc(var(--working-avatar) + 8px); color: var(--ui-text-dimmed); font-size: 12px; line-height: 1.6; list-style: none; font-variant-numeric: tabular-nums; }
+.channel-working-tools li { display: inline-flex; align-items: center; gap: 4px; min-width: 0; overflow-wrap: anywhere; }
+.channel-working-tool-count { display: inline-flex; flex-shrink: 0; gap: 1px; }
 .channel-working-notes { margin-top: 8px; padding: 8px 34px 0 calc(var(--working-avatar) + 8px); border-top: 1px solid color-mix(in srgb, var(--ui-border) 80%, transparent); color: var(--ui-text-dimmed); font-size: 12px; line-height: 1.6; }
 .channel-working-notes p { margin: 0; white-space: pre-wrap; overflow-wrap: anywhere; }
 .channel-working-notes.is-open { display: grid; gap: 4px; }
@@ -1482,7 +1498,7 @@ html[data-motion="off"] *, html[data-motion="off"] *::before, html[data-motion="
 .channel-working-notes.is-open .channel-working-count [class*="icon"] { transform: rotate(180deg); }
 .channel-working-count:hover { color: var(--ui-text-toned); }
 @media (min-width: 701px) { .channel-working-strip { margin-right: var(--message-inset-end); } }
-@media (max-width: 700px) { .channel-working-strip { --working-avatar: 32px; margin: 0 8px 12px; } }
+@media (max-width: 700px) { .channel-working-strip { --working-avatar: 32px; margin: 0 8px 12px; padding-left: 15px; } }
 /* Private chat is the last key of a card's toolbar group, at the end opposite "…": the bottom of the hover column with a
    mouse, the left end of the row on touch screens. The working strip has no "…": with a mouse its column holds only
    private chat; on touch screens the key sits inside the strip's bottom-right corner. */

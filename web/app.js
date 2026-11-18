@@ -109,6 +109,10 @@ const UPLOAD_PERCENT_BEFORE_SAVED = 99;
 const RELAY_FILE_CONCURRENCY = 2;
 // Images and media of the computer's rooms are read once they come this near the screen, not all when a room opens.
 const RELAY_MEDIA_MARGIN = "1000px 0px";
+// How long a relayed image or media element may keep its spinner before it says it failed; a file arriving later still shows.
+const RELAY_MEDIA_TIMEOUT_MS = 90000;
+// How long an image is given to decode ahead of being shown; a decode that never answers must not hold the image back.
+const RELAY_MEDIA_DECODE_MS = 3000;
 const COMPUTER_UNREACHABLE = t('电脑未连接：请先与电脑配对，并确认电脑开机且运行 codiscuss');
 let local_connection = null;
 let computer_connecting = false;
@@ -132,18 +136,18 @@ const SOURCE_LABELS = { demo: t('示例'), user: t('本人发言'), proxy: t('�
 const TURN_LABELS = { pending: t('待处理'), notified: t('已通知，待回答'), answered: t('已回答'), cancelled: t('已取消') };
 const PLATFORM_IDENTITIES = {
   "用户": { label: "User", initials: "U", style: "user", icon: "/icons/user.svg", description: t('发起与协助') },
-  Codex: { initials: "CX", style: "codex", icon: "/icons/openai.svg", api_label: "OpenAI API", description: t('AI 身份') },
   Claude: { initials: "CL", style: "claude", icon: "/icons/claude.svg", description: t('AI 身份') },
+  Codex: { initials: "CX", style: "codex", icon: "/icons/openai.svg", api_label: "OpenAI API", description: t('AI 身份') },
   // The platform ID is Antigravity (the software); screens show its nickname Gemini.
   Antigravity: { label: "Gemini", initials: "GM", style: "gemini", icon: "/icons/gemini.svg", description: t('AI 身份') },
   DeepSeek: { initials: "DS", style: "deepseek", icon: "/icons/deepseek.svg", description: t('AI 身份') },
   Qwen: { initials: "QW", style: "qwen", icon: "/icons/qwen.svg", description: t('AI 身份') },
   Grok: { initials: "GK", style: "grok", icon: "/icons/grok.svg", description: t('AI 身份') },
   OpenAI: { initials: "OA", style: "codex", icon: "/icons/openai.svg", description: t('AI 身份') },
-  Custom: { label: t('自定义 API'), initials: "API", style: "custom", api_label: t('自定义 API'), description: t('AI 身份') },
+  Custom: { label: t('自定义 API'), initials: "API", style: "custom", icon: "/icons/custom-api.svg", api_label: t('自定义 API'), description: t('AI 身份') },
 };
 // An instance shows its platform's nickname with its own suffix: Antigravity-2 → Gemini-2.
-const EXTERNAL_ICON = 'data:image/svg+xml,' + encodeURIComponent('<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="#a5a8b3" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="4" y="3" width="16" height="12" rx="2"/><path d="M2 19h20"/></svg>');
+const EXTERNAL_ICON = "/icons/external-expert.svg";
 const IDENTITIES = by_platform(PLATFORM_IDENTITIES, (identity, name) => external_identity(name)
   ? { label: t('外部专家'), icon: EXTERNAL_ICON, style: 'external', description: t('外部专家') }
   : ({ ...identity, label: identity.label ? identity.label + name.slice(platform_of(name).length) : name, description: t('AI 实例') }));
@@ -244,8 +248,8 @@ state.create_api_max_requests = DEFAULT_API_MAX_REQUESTS;
 state.create_image_generation = false;
 let create_preferences_pending = {}, create_preferences_saving = null, create_preferences_version = 0;
 let participant_choices_pending = {}, participant_choices_saving = null;
-const PLATFORM_CLIENTS = { Codex: [{ value: "codex_cli", label: "Codex CLI" }, { value: "codex", label: "Codex App" }],
-  Claude: [{ value: "claude", label: "Claude Code CLI" }],
+const PLATFORM_CLIENTS = { Claude: [{ value: "claude", label: "Claude Code CLI" }],
+  Codex: [{ value: "codex_cli", label: "Codex CLI" }, { value: "codex", label: "Codex App" }],
   Antigravity: [{ value: "antigravity_cli", label: "Antigravity CLI" }, { value: "antigravity", label: "Antigravity App" }] };
 for (const name of Object.keys(PLATFORM_IDENTITIES).filter(name => name !== "用户")) {
   (PLATFORM_CLIENTS[name] ||= []).push({ value: "api", label: PLATFORM_IDENTITIES[name].api_label || `${PLATFORM_IDENTITIES[name].label || name} API` });
@@ -1194,7 +1198,10 @@ async function refresh_room_content(room_id, version, versions) {
     if (!history_read || !state.messages.length) publish_view();
     load_room_models();
   });
-  const history_read = state.tab === "discussion" ? load_message_history(room_id, version).then((result) => {
+  const history_read = state.tab === "discussion" ? load_message_history(room_id, version).then(async (result) => {
+    // A room opened for the first time has only its directory entry: the topic card and the transcript wait for each
+    // other and show together, so neither pushes the other down when it arrives (user 2026-11-18, #4818).
+    if (!state.room?.experts) await room_read;
     if (current() && result) { render_messages(result); publish_view(); }
   }) : null;
   // Only a transcript not yet read shows the loading state; re-reading an empty room keeps its empty view.
@@ -1647,7 +1654,7 @@ function unique_instance(base, taken) {
 /** Start an instance's card from its platform's software settings plus the preset's choices. */
 function apply_expert_preset(name, preset) {
   const { session_id, system_prompt, ...base } = state.launch.profiles[platform_of(name)] || {};
-  const profile = { ...structuredClone(base), project_access: preset.project_access || "read" };
+  const profile = { ...structuredClone(base), project_access: full_only_hint(base.adapter) ? "full" : preset.project_access || "read" };
   for (const field of ["model", "effort", "system_prompt"]) if (Object.hasOwn(preset, field)) profile[field] = preset[field];
   state.launch.profiles[name] = profile;
   description_drafts[name] = preset.description || "";
@@ -1864,8 +1871,9 @@ async function invite_member({ name, access, project_access = "read", session_id
   const token = localStorage.getItem(`discuss-access:${room_id}`) || "";
   const taken = new Set((state.room.free?.members || state.room.members || []).map(member => member.name));
   const instance = unique_instance(name, taken);
+  const adapter = (state.launch.profiles[name] || state.launch.profiles[platform_of(name)])?.adapter;
   const record = prepare_member_request(room_id, `add:${name}:${access}`, { name: instance, access, adapter: "", session_mode: "new" },
-    { project_access, session_id: session_id.trim() });
+    { project_access: full_only_hint(adapter) ? "full" : project_access, session_id: session_id.trim() });
   let result;
   if (access === "runner") {
     const draft = launch_options();
@@ -2118,11 +2126,11 @@ async function send_message(event) {
   state.sending_drafts = drafts;
   state.attachment_drafts = [];
   // A message the site will likely queue shows at once as a row in the queue tray instead of a card in the transcript,
-  // which would flash before moving above the composer. Like the site, a message naming only the host is never queued.
+  // which would flash before moving above the composer. Like the site, a message naming only a host that is not busy is not queued.
   const queue = state.room.free?.queued_messages;
   const named = new Set(payload.to || []);
   const only_host = named.size === 1 && (state.room.free?.members || []).some(member => named.has(member.name) && member.role === "host" && member.status === "active");
-  const likely_queued = payload.queue && !only_host && (queue?.busy || queue?.items?.length);
+  const likely_queued = payload.queue && !(only_host && !queue?.host_busy) && (queue?.busy || queue?.items?.length);
   state.sending_preview = likely_queued ? null : preview;
   // The rows already queued, so the first snapshot listing a new one swaps it in for this row (see publish_view).
   state.queueing_preview = likely_queued ? { ...preview, queued_ids: (queue.items || []).map(item => item.id) } : null;
@@ -3664,14 +3672,18 @@ function transcript_settled(scroller) {
 /** Give one relayed image or media element its file; one that cannot be read keeps its name. */
 function load_relay_media(media) {
   if (!media.isConnected || media.getAttribute("src")) return;
+  const mark_failed = () => { if (!media.getAttribute("src")) media.dataset.relayFailed = "1"; };
+  const deadline = setTimeout(mark_failed, RELAY_MEDIA_TIMEOUT_MS);
   relay_file_url(media.dataset.relaySrc).then(async url => {
     const scroller = media.closest(".channel-transcript");
     // Decoded first, the image has its size the moment it gets its file, so the growth and its offset share one frame.
-    if (scroller && media.tagName === "IMG") await Object.assign(new Image(), { src: url }).decode().catch(() => null);
+    if (scroller && media.tagName === "IMG") await Promise.race([Object.assign(new Image(), { src: url }).decode().catch(() => null),
+      new Promise(resolve => setTimeout(resolve, RELAY_MEDIA_DECODE_MS))]);
     await transcript_settled(scroller);
     if (!media.isConnected || media.getAttribute("src")) return;
     media.src = url;
-  }).catch(() => { media.dataset.relayFailed = "1"; });
+    delete media.dataset.relayFailed;
+  }).catch(mark_failed).finally(() => clearTimeout(deadline));
 }
 
 /** Show images of the computer's rooms as they appear; one that cannot be read keeps its name. */
@@ -3970,6 +3982,9 @@ async function load_launch_settings({ relay_known = () => {} } = {}) {
     }
     relay_known();
     const settings = await local_launch_request("settings");
+    // Software this computer can run only without its sandbox starts every new card at the one level it offers.
+    state.launch.full_access_only = settings.full_access_only || [];
+    for (const profile of Object.values(settings.participants || {})) if (full_only_hint(profile.adapter)) profile.project_access = "full";
     // Keep the saved machine defaults so every new form can start from them again.
     state.launch.saved_profiles = JSON.parse(JSON.stringify(settings.participants || {}));
     state.launch.create_preferences = { ...settings.create_preferences, ...create_preferences_pending };
@@ -4392,7 +4407,33 @@ function fill_api_key(profile) {
 
 /** A card woken by the local service on a platform without local software starts on its API, unless it already names an entry. */
 function default_launch_entry(name) {
-  if (!LAUNCH_CLIENTS[name]?.some(item => item.value !== "api") && !state.launch.profiles[name]?.adapter) write_launch_field(name, "adapter", "api");
+  const profile = state.launch.profiles[name];
+  if (profile?.adapter === "api" || local_entry_ready(profile)) return;
+  const local_software = LAUNCH_CLIENTS[name]?.some(item => item.value !== "api");
+  if (provider_api_key(name) || (!local_software && !profile?.adapter)) write_launch_field(name, "adapter", "api");
+}
+
+/** Whether a profile names local software this computer can start. */
+function local_entry_ready(profile) {
+  return Boolean(profile?.adapter && profile.adapter !== "api" && (profile.adapter === "antigravity" ? profile.ipc_directory : profile.executable));
+}
+
+/** The key saved for a platform's official API address, or an empty string. */
+function provider_api_key(name) {
+  const base_url = state.launch.api_providers?.[platform_of(name)]?.base_url;
+  if (!base_url) return "";
+  try { return state.launch.api_keys?.[new URL(base_url).href.replace(/\/+$/, "")] || ""; } catch { return ""; }
+}
+
+/**
+ * Whether a platform can join a room: its local software is set up or its API has a key. While this page cannot read the
+ * computer's settings nothing can be known, and members can still be started by hand, so every platform stays available.
+ */
+function platform_configured(name) {
+  const platform = platform_of(name);
+  if (!state.launch.available) return true;
+  const profile = state.launch.profiles[platform];
+  return local_entry_ready(profile) || Boolean(profile?.adapter === "api" && profile.base_url && profile.api_key_ref) || Boolean(provider_api_key(platform));
 }
 
 /** A platform card's model and effort are usage preferences: remember them as that software's default, like other form
@@ -4733,6 +4774,11 @@ function launch_can_set_access(name, launch = state.launch) {
 
 function launch_access(name) {
   return state.launch.profiles[name]?.project_access || state.launch.workspace.project_access || "read";
+}
+
+/** Why only 全放开 can be chosen for this software here, or '' when every level it supports is open. */
+function full_only_hint(adapter) {
+  return state.launch.full_access_only?.includes(adapter) ? t('托管账号的后台环境无法启用这个软件的沙箱，只能使用全放开') : "";
 }
 
 /** Classic select options; an empty value inherits the launch-wide setting. */
@@ -6304,8 +6350,8 @@ function change_view_theme(theme) {
 }
 
 window.discuss_view = { snapshot: view_snapshot, write_field: write_view_field, write_create_preferences, notify, load_decision_input, upload_progress,
-  write_launch: write_launch_field, default_launch_entry, description_template, save_description_template, description_draft, write_description_draft, describe_member, set_chain_rounds, continue_chain, expert_presets, apply_expert_preset, unique_instance, member_label, default_name, label_draft, write_label_draft, preset_identity, save_expert_preset, delete_expert_preset, write_room_connection, write_room_adapter, launch_clients: LAUNCH_CLIENTS,
-  launch_model_state, load_launch_models, write_launch_model, save_launch_api_key, create_launch_project, display_path, write_scheduler, save_scheduler_api_key, check_scheduler, write_named_followup, write_create_discussion, write_create_goal, write_create_chain_rounds, check_launch_api, launch_summary, launch_can_set_access, pick_launch_directory, browse_local_directory, list_remote_directories, save_launch_projects, restore_launch_profile, reset_create_form, empty_discussion_message,
+  write_launch: write_launch_field, default_launch_entry, platform_configured, description_template, save_description_template, description_draft, write_description_draft, describe_member, set_chain_rounds, continue_chain, expert_presets, apply_expert_preset, unique_instance, member_label, default_name, label_draft, write_label_draft, preset_identity, save_expert_preset, delete_expert_preset, write_room_connection, write_room_adapter, launch_clients: LAUNCH_CLIENTS,
+  launch_model_state, load_launch_models, write_launch_model, save_launch_api_key, create_launch_project, display_path, write_scheduler, save_scheduler_api_key, check_scheduler, write_named_followup, write_create_discussion, write_create_goal, write_create_chain_rounds, check_launch_api, launch_summary, launch_can_set_access, full_only_hint, pick_launch_directory, browse_local_directory, list_remote_directories, save_launch_projects, restore_launch_profile, reset_create_form, empty_discussion_message,
   start_drag: start_directory_drag, reconnect: reconnect_live_updates, stop_label, local_request: local_launch_request,
   attachment_markup, attachment_size, attachment_file_icon, drop_attachments, paste_attachments, drop_unreferenced_attachments, set_text_preview: (open) => { state.text_preview = open; }, set_image_viewer: (open) => { state.image_viewer = open; }, attachment_url,
   write_expert: write_view_expert, add_instance: add_view_instance, add_preset: add_preset_instance, platform_of, execute: execute_view_action, theme: change_view_theme,

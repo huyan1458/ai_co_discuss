@@ -32,14 +32,21 @@ import { pi_provider } from '../runner/adapters/api_pi.mjs';
 import { glob_regex, open_project, run_file_tool } from '../runner/adapters/api_files.mjs';
 import { DiscussionService, migrate_platform_ids, migrate_service_home, persisted_env, read_registry, register_room, remove_room_files, service_pid, service_ready, start_service, sweep_service_home, unregister_room } from '../runner/discussion_service.mjs';
 import { restore_room, room_profiles, save_launch_settings } from '../runner/discussion_launch.mjs';
-import { adapter_of, deliver_task, execution_details } from '../runner/adapters/index.mjs';
+import { adapter_of, capabilities_of, deliver_task, execution_details } from '../runner/adapters/index.mjs';
+import { NO_DESKTOP_VARIABLE } from '../runner/adapters/profiles.mjs';
+import { read_only_enforced } from '../runner/project_files.mjs';
 import { adopted_fork, claude_api_error, claude_input, claude_permissions, claude_exit_error, claude_inbox_ready, claude_rule_path, standalone_claude_env, watch_window_turn } from '../runner/adapters/claude.mjs';
-import { codex_permissions } from '../runner/adapters/codex_cli.mjs';
+import { codex_developer_instructions, codex_permissions, codex_sandbox_missing, codex_sandbox_refusal } from '../runner/adapters/codex_cli.mjs';
 import { agy_rule, prepare_agy_project, remove_agy_projects, sweep_legacy_agy_projects } from '../runner/adapters/antigravity_cli.mjs';
 import { kill_process_tree, run_program, TASK_SUBCOMMANDS } from '../runner/adapters/common.mjs';
 
 // The service and setup install Pi from npm unless one is given; tests never download it.
 process.env.CODISCUSS_PI_CLI ??= 'pi-not-needed-in-this-test';
+// Codex's permission tests must not depend on whether this computer's own Codex has a Windows sandbox set up.
+const codex_test_home = mkdtempSync(join(tmpdir(), 'codex-home-'));
+writeFileSync(join(codex_test_home, 'config.toml'), '[windows]\nsandbox = "elevated"\n');
+process.env.CODEX_HOME = codex_test_home;
+process.on('exit', () => rmSync(codex_test_home, { recursive: true, force: true }));
 const activity_phase = (adapter, event) => adapter_of(adapter).events.phase(event);
 import { save_api_key, saved_api_keys } from '../runner/discussion_api.mjs';
 import { certainty, decide, decide_interjection, decide_next_speaker, decide_round, ROUTE_CONFIDENCE, ROUTE_WIDE_CONFIDENCE, route_free_message, scheduler_thresholds, scheduler_answers, scheduler_check, scheduler_request, SCHEDULER_PROVIDERS, scheduler_state, validate_scheduler } from '../runner/scheduler.mjs';
@@ -1643,6 +1650,57 @@ test('codex 自动 lets its automatic review approve escalations and 全放开 d
   assert.match(auto.find(arg => arg.startsWith('permissions.')), /extends=":workspace"/);
   assert.ok(codex_permissions({ cwd: tmpdir(), project_access: 'write' }, task).args.includes('approval_policy="never"'));
   assert.deepEqual(codex_permissions({ project_access: 'full' }, task), { name: '', args: ['--dangerously-bypass-approvals-and-sandbox'] });
+});
+
+test('codex in a background instance without a desktop runs unsandboxed and never claims enforced read-only', t => {
+  const task = { directory: tmpdir(), draft_directory: tmpdir() };
+  const read_only = { adapter: 'codex_cli', cwd: tmpdir(), project_access: 'read' };
+  assert.equal(capabilities_of('codex_cli').enforces_read_only, true);
+  assert.equal(read_only_enforced(read_only), true);
+  assert.equal(codex_developer_instructions(), '');
+  process.env[NO_DESKTOP_VARIABLE] = '1';
+  t.after(() => { delete process.env[NO_DESKTOP_VARIABLE]; });
+  for (const project_access of ['read', 'write', 'auto']) {
+    assert.deepEqual(codex_permissions({ cwd: tmpdir(), project_access }, task).args, ['--dangerously-bypass-approvals-and-sandbox']);
+  }
+  assert.equal(capabilities_of('codex_cli').enforces_read_only, false);
+  assert.equal(capabilities_of('codex_cli').limits_directories, false);
+  assert.equal(read_only_enforced(read_only), false);
+  assert.match(codex_developer_instructions(), /不要创建、修改或删除项目文件/);
+  assert.equal(software_rules(read_only, 'codiscuss.cmd'), '', 'the rule is at system level, not in the task text');
+  assert.equal(capabilities_of('claude').no_sandbox, undefined);
+});
+
+test('codex on a personal Windows computer without a sandbox refuses 只读 and 可写 instead of widening access', t => {
+  const home = mkdtempSync(join(tmpdir(), 'codex-no-sandbox-'));
+  t.after(() => rmSync(home, { recursive: true, force: true }));
+  const env = { CODEX_HOME: home };
+  for (const project_access of ['read', 'write']) assert.match(codex_sandbox_refusal({ project_access }, 'win32', env), /codex sandbox setup --elevated/);
+  for (const project_access of ['full', 'auto', 'own']) assert.equal(codex_sandbox_refusal({ project_access }, 'win32', env), '');
+  assert.equal(codex_sandbox_refusal({ project_access: 'read' }, 'linux', env), '');
+  writeFileSync(join(home, 'config.toml'), '[windows]\nsandbox = "elevated"\n');
+  assert.equal(codex_sandbox_refusal({ project_access: 'read' }, 'win32', env), '');
+  rmSync(join(home, 'config.toml'));
+  process.env[NO_DESKTOP_VARIABLE] = '1';
+  t.after(() => { delete process.env[NO_DESKTOP_VARIABLE]; });
+  assert.equal(codex_sandbox_refusal({ project_access: 'read' }, 'win32', env), '', 'a hosted instance runs on the task rules');
+});
+
+test('codex on Windows reads the sandbox chosen in its config', t => {
+  const home = mkdtempSync(join(tmpdir(), 'codex-sandbox-'));
+  t.after(() => rmSync(home, { recursive: true, force: true }));
+  const env = { CODEX_HOME: home };
+  const config = join(home, 'config.toml');
+  assert.equal(codex_sandbox_missing('win32', env), true, 'no config file');
+  const cases = [['model = "m"\n', true], ['[windows]\nsandbox = "elevated"\n', false], ['[windows]\r\nsandbox = "unelevated"\r\n', false],
+    ['windows.sandbox = "elevated"\n', false], ['windows = { sandbox = "elevated" }\n', false],
+    ['[other]\nsandbox = "elevated"\n', true], ['[windows]\n# sandbox = "elevated"\n', true]];
+  cases.forEach(([text, missing], index) => {
+    writeFileSync(config, text);
+    utimesSync(config, new Date(), new Date(Date.now() + (index + 1) * 2000));
+    assert.equal(codex_sandbox_missing('win32', env), missing, text);
+  });
+  assert.equal(codex_sandbox_missing('linux', env), false);
 });
 
 test('tasks state whether the discussion project is read-only or writable', t => {

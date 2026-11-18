@@ -39,7 +39,7 @@ const directory_title = computed(() => {
 const directory_actions = computed(() => [
   { label: t("对话排列方式"), type: "label" },
   ...[{ value: "manual", label: t("手动排序") }, { value: "recent", label: t("最近发言") }].map((item) => ({
-    label: item.label, icon: (view.value.directory_sort || "manual") === item.value ? "i-lucide-check" : undefined,
+    label: item.label, type: "checkbox", checked: (view.value.directory_sort || "manual") === item.value,
     onSelect: () => act("sort_directory", item.value),
   })),
   { type: "separator" },

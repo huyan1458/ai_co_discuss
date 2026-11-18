@@ -45,8 +45,17 @@
  * - `session_family`: profiles sharing one session store; switching among them keeps the conversation.
  * - `windows_command`: how its shell names the codiscuss CLI on Windows.
  * - `task_rules(cli, {runs_commands})`: fixed task text this software needs, added by the runner so no member prompt drops it.
+ * - `sandbox_needs_desktop`: its sandbox cannot start in a background session without a desktop, so there it runs without
+ *   one and `adapter_capabilities` reports `no_sandbox` and no enforced limits (see `NO_DESKTOP_VARIABLE`).
  */
 const ALL_ACCESS = ['read', 'write', 'auto', 'full'];
+/**
+ * Set to '1' by the start script of an instance running as a background task of its own Windows user. Codex CLI 0.169's
+ * sandbox process exits with 0xC0000142 there, while the same settings start on a desktop (tested 2026-11-18).
+ */
+export const NO_DESKTOP_VARIABLE = 'CODISCUSS_NO_DESKTOP';
+// The web page bundles this file and has no process.
+const no_desktop = () => globalThis.process?.env?.[NO_DESKTOP_VARIABLE] === '1';
 /** API slot defaults; identity and wire protocol stay independent, and a custom slot starts without a provider. */
 export const API_PROVIDERS = {
   Codex: { label: 'OpenAI', base_url: 'https://api.openai.com/v1', api_protocol: 'responses', models: ['gpt-6.1-sol', 'gpt-6-astra', 'gpt-6-luna'] },
@@ -82,6 +91,7 @@ export const ADAPTER_PROFILES = {
       auto: '沙箱外的操作由模型申请提权，Codex 自动审核代替人工批准', full: '无沙箱、无审批（--dangerously-bypass-approvals-and-sandbox）' },
     client: 'codex', adopt: 'session', host_existing: true, session_family: 'codex', browse_sessions: true,
     lockdown_hint: '沙箱只读档仍可读整个磁盘、运行任意只读命令，无法只放行 codiscuss 命令',
+    sandbox_needs_desktop: true,
     capabilities: { delivery: PROCESS, rewind: 'cut', project: true, access_env: true, enforces_read_only: true, limits_directories: true, ripgrep: true, chat: true, resume: true, images: true, capture: FINAL_REMARK,
       tool_lockdown: false,
       // Codex CLI 0.163 records a command's output in its session about 0.1 s after reporting it done (2026-11-15).
@@ -190,5 +200,8 @@ export function lockdown_support(id, config = {}) {
 
 /** What an adapter can do; an unknown adapter can do nothing. */
 export function adapter_capabilities(id) {
-  return ADAPTER_PROFILES[id]?.capabilities || { delivery: IN_APP, rewind: 'kept', project: false, capture: false };
+  const profile = ADAPTER_PROFILES[id];
+  if (!profile) return { delivery: IN_APP, rewind: 'kept', project: false, capture: false };
+  return profile.sandbox_needs_desktop && no_desktop()
+    ? { ...profile.capabilities, no_sandbox: true, enforces_read_only: false, limits_directories: false } : profile.capabilities;
 }

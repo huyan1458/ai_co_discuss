@@ -20,6 +20,7 @@ import { use_read_aloud } from "./read-aloud.js";
 import { use_broadcast } from "./broadcast.js";
 import { format_voice_time, use_voice_input, use_voice_press } from "./voice-input.js";
 import ExcerptEditCard from "./ExcerptEditCard.vue";
+import AnswerFiles from "./AnswerFiles.vue";
 import ExecutionChanges from "./ExecutionChanges.vue";
 import { add_excerpt, excerpt_mark_place, excerpt_range, excerpt_source, excerpts_markdown, file_preview, hold_selection, text_offset } from "./file-preview.js";
 import { keep_reading_position } from "./scroll-anchor.js";
@@ -27,6 +28,7 @@ import { guard_token_edit, snap_caret, step_over_token, token_mirror } from "./a
 import MemoBlock from "./memo-block.js";
 import UTooltip from "@nuxt/ui/components/Tooltip.vue";
 import { motion, useSpring, useTransform } from "motion-v";
+import FlipDigit from "./FlipDigit.vue";
 import { locale, t } from './i18n.js';
 import ExternalMemberDialog from "./ExternalMemberDialog.vue";
 import { declined, awaiting_member } from "./external-members.js";
@@ -265,11 +267,96 @@ const MESSAGE_PREVIEW_LENGTH = 160;
 const MESSAGE_PREVIEW_MIN_LENGTH = 100;
 const MESSAGE_PREVIEW_CODE_LINES = 4;
 const MESSAGE_PREVIEW_TABLE_ROWS = 3;
+// A message folds only when shown whole it would take more than this share of the window, so what counts as long follows
+// the screen it is read on (user 2026-11-18, #4871: an answer of a few lines was folded for passing a character count).
+const MESSAGE_FOLD_SCREEN_SHARE = 0.7;
+// The message text's size in px (frontend/channel.css `.channel-message-text`), for estimating its height without laying it out.
+const MESSAGE_FONT_PX = 16;
+const MESSAGE_LINE_PX = 26;
+// Space a card takes from the transcript's column on each kind of screen: its margins, padding and borders.
+const MESSAGE_CARD_INSET_PX = 78;
+const MESSAGE_CARD_INSET_NARROW_PX = 48;
+const MESSAGE_READING_WIDTH_PX = 960;
+// The share of a line a Latin character takes against a Chinese one.
+const MESSAGE_LATIN_WIDTH = 0.47;
+// A table cell's padding across and down (frontend/channel.css), and the narrowest a column wraps to before the table scrolls.
+const MESSAGE_TABLE_CELL_PADDING_PX = 26;
+const MESSAGE_TABLE_ROW_PADDING_PX = 15;
+const MESSAGE_TABLE_COLUMN_MIN_PX = 96;
+// Widths closer than this fold the same, so a scrollbar appearing does not refold the room.
+const MESSAGE_FOLD_WIDTH_STEP_PX = 40;
+const MESSAGE_BLOCK_TAGS = /^(P|H[1-6]|UL|OL|PRE|TABLE|BLOCKQUOTE|HR|DIV|SECTION|DETAILS|FIGURE)$/;
+
+/** The text width of a message card and the height above which it folds, for this window. */
+function read_fold_area(box) {
+  const reading = box ? parseFloat(getComputedStyle(box).getPropertyValue("--channel-reading-width")) || MESSAGE_READING_WIDTH_PX : MESSAGE_READING_WIDTH_PX;
+  const column = Math.min(box?.clientWidth || window.innerWidth, reading);
+  const width = Math.max(MESSAGE_FOLD_WIDTH_STEP_PX, column - (narrow_query.matches ? MESSAGE_CARD_INSET_NARROW_PX : MESSAGE_CARD_INSET_PX));
+  return { width: Math.round(width / MESSAGE_FOLD_WIDTH_STEP_PX) * MESSAGE_FOLD_WIDTH_STEP_PX, limit: Math.round(window.innerHeight * MESSAGE_FOLD_SCREEN_SHARE) };
+}
+
+/** How wide a run of text stands on one line, in px. */
+function estimated_text_width(text) {
+  let units = 0;
+  for (const character of text.trim()) units += character.codePointAt(0) > 0x2E7F ? 1 : MESSAGE_LATIN_WIDTH;
+  return units * MESSAGE_FONT_PX;
+}
+
+/** The height of a run of text wrapped to `width`. */
+function estimated_text_height(text, width, line = MESSAGE_LINE_PX) {
+  return Math.max(1, Math.ceil(estimated_text_width(text) / Math.max(MESSAGE_FONT_PX, width))) * line;
+}
+
+/** The height of one table: columns share the width by how much they hold, and a table too wide for the card scrolls sideways. */
+function estimated_table_height(table, width) {
+  const rows = [...table.querySelectorAll("tr")].map((row) => [...row.children].map((cell) => estimated_text_width(cell.textContent)));
+  const columns = [];
+  for (const row of rows) row.forEach((cell, index) => { columns[index] = Math.max(columns[index] || 0, cell); });
+  const content = columns.reduce((total, column) => total + column, 0) || 1;
+  const share = (index) => Math.max(MESSAGE_TABLE_COLUMN_MIN_PX, width * columns[index] / content - MESSAGE_TABLE_CELL_PADDING_PX);
+  return rows.reduce((height, row) => height + MESSAGE_TABLE_ROW_PADDING_PX
+    + Math.max(MESSAGE_LINE_PX, ...row.map((cell, index) => Math.ceil(cell / share(index)) * MESSAGE_LINE_PX)), 0);
+}
+
+/** The height of one block element, margins included. */
+function estimated_block_height(block, width) {
+  const tag = block.tagName;
+  if (tag === "PRE") return block.textContent.trimEnd().split("\n").length * MESSAGE_LINE_PX + 54;
+  if (tag === "TABLE") return estimated_table_height(block, width) + MESSAGE_FONT_PX;
+  if (tag === "HR") return 42;
+  if (/^H[1-6]$/.test(tag)) return estimated_text_height(block.textContent, width / 1.2, 32) + 30;
+  if (tag === "UL" || tag === "OL") return [...block.children].reduce((height, item) => height + estimated_blocks_height(item, width - 30) + 4, 22);
+  if (tag === "BLOCKQUOTE") return estimated_blocks_height(block, width - 35) + 38;
+  if (tag === "P") return estimated_text_height(block.textContent, width) + 13;
+  return estimated_blocks_height(block, width);
+}
+
+/** Estimate how tall rendered message content stands at `width`, without laying it out: this runs for every message. */
+function estimated_blocks_height(parent, width) {
+  let height = 0, inline = "";
+  const end_inline = () => { if (inline.trim()) height += estimated_text_height(inline, width); inline = ""; };
+  for (const node of parent.childNodes) {
+    if (node.nodeType === Node.ELEMENT_NODE && MESSAGE_BLOCK_TAGS.test(node.tagName)) { end_inline(); height += estimated_block_height(node, width); }
+    else inline += node.textContent;
+  }
+  end_inline();
+  return height;
+}
+
+const fold_area = ref(read_fold_area(null));
+const fold_area_observer = new ResizeObserver(() => {
+  const area = read_fold_area(transcript.value);
+  // Only a new width refolds: a phone's keyboard or address bar changes the height alone, and must not refold what is being read.
+  if (area.width !== fold_area.value.width) fold_area.value = area;
+});
+onMounted(() => { if (transcript.value) { fold_area.value = read_fold_area(transcript.value); fold_area_observer.observe(transcript.value); } });
+onBeforeUnmount(() => fold_area_observer.disconnect());
 const answer_preview_cache = new WeakMap();
-/** Reuse immutable message excerpts while the room refreshes. */
+/** Reuse immutable message excerpts while the room refreshes; they are made again for a screen of another size. */
 const answer_previews = computed(() => new Map(view.value.messages.map((message) => {
-  if (!answer_preview_cache.has(message)) answer_preview_cache.set(message, build_answer_preview(message));
-  return [message.id, answer_preview_cache.get(message)];
+  let cached = answer_preview_cache.get(message);
+  if (cached?.area !== fold_area.value) answer_preview_cache.set(message, cached = { area: fold_area.value, preview: build_answer_preview(message, fold_area.value) });
+  return [message.id, cached.preview];
 })));
 const message_map = ref(null);
 const navigation_keyboard = ref(false);
@@ -410,7 +497,7 @@ const all_decisions = computed(() => with_history("scheduler_decisions", room.va
 const all_arrangements = computed(() => with_history("host_arrangements", room.value.host_arrangements));
 const all_cancelled_turns = computed(() => with_history("cancelled_turns", room.value.cancelled_turns));
 /** What the runner last saw a member's software doing; unknown phases keep the generic text. Declared before `free_busy`, which an immediate watch reads during setup. */
-const ACTIVITY_LABELS = { thinking: t('思考中'), command: t('正在运行命令'), tool: t('正在调用工具'), editing: t('正在修改文件'), writing: t('正在撰写回答') };
+const ACTIVITY_LABELS = { thinking: t('正在执行'), command: t('正在运行命令'), tool: t('正在调用工具'), editing: t('正在修改文件'), writing: t('正在撰写回答') };
 /** All room work uses member executions; queued requests stay in the side panel. */
 const free_busy = computed(() => {
   if (room.value.archived) return [];
@@ -426,7 +513,7 @@ const free_busy = computed(() => {
         text: execution.stale ? t('执行失联：网站已不再接受本次回答，软件停止未确认') : retry ? t('投递未成功，等待自动重试')
           : execution.paused_at ? t('已在私聊中暂停，等你补充后接着做') : ACTIVITY_LABELS[execution.activity] || t('正在处理'),
         paused: Boolean(execution.paused_at), working: !execution.stale && !retry, created_at: execution.created_at, adapter: member.adapter, capabilities: execution.capabilities,
-        activity: execution.activity, activity_at: execution.activity_at, notes: execution.notes || 0, steps: execution.steps || 0,
+        activity: execution.activity, activity_at: execution.activity_at, notes: execution.notes || 0, steps: execution.steps || 0, tools: execution.tools || [],
         execution_id: execution.id, request_message_id: reports.get(execution.id)?.request_message_id, layout_after: reports.get(execution.id)?.layout_after,
         layout_at: reports.get(execution.id)?.layout_at ?? execution.created_at, background: Boolean(reports.get(execution.id)?.background),
         discussion_request: reports.get(execution.id)?.requests?.find((request) => request.discussion_session_id) }];
@@ -462,6 +549,9 @@ async function load_late_answer(execution_id, event) {
     bridge.notify("error", t('未采纳的回答读取失败：{value1}', { value1: error.message }));
   }
 }
+/** What a working card calls a tool: its own name, or the kind of action for software that does not report names. */
+const TOOL_KIND_LABELS = { command: t('命令'), editing: t('编辑'), tool: t('工具') };
+const tool_label = (item) => item.tool || TOOL_KIND_LABELS[item.phase];
 /** Notes read so far for a working item's execution. */
 function working_notes(message) {
   return execution_notes.value.get(message.execution_id) || [];
@@ -502,7 +592,7 @@ function working_status(message) {
   if (!message.working || !shows_progress(message) || silent < STALL_SECONDS) return { text: message.text, live: message.working };
   if (message.activity === "command") return { text: t('命令已运行 {value1}', { value1: format_elapsed(silent) }), live: true };
   // Deep reasoning reports nothing until it ends; only a much longer silence there suggests a hang.
-  if (message.activity === "thinking" && silent < THINKING_STALL_SECONDS) return { text: t('思考中，已 {value1}无中间输出', { value1: format_elapsed(silent) }), live: true };
+  if (message.activity === "thinking" && silent < THINKING_STALL_SECONDS) return { text: t('正在执行，已 {value1}无中间输出', { value1: format_elapsed(silent) }), live: true };
   return { text: t('已 {value1}无输出，可能卡住', { value1: format_elapsed(silent) }), live: false, warning: true };
 }
 // A relay stopped at a user gate takes the owner's next unaddressed message as the owner's step.
@@ -567,11 +657,12 @@ const shows_progress = (item) => capabilities(item)?.progress !== false;
  */
 /** A stop's recorded reason as the card says it; records made before the wording changed keep their old text. */
 const stop_reason_text = (result) => result === "用户立即发送" ? t("已打断：你立即发送了新消息，它会连同这条一起处理") : result;
-/** The voided execution whose stop has more to say (still generating, a late answer), or null. */
-function voided_detail(message) {
-  const execution = message.cancelled_execution || all_executions.value.find((item) => item.id === message.execution_id);
-  return execution && stop_state(execution).note ? execution : null;
+/** The execution behind a stopped or skipped card, when the room still lists it. */
+function voided_execution(message) {
+  return message.cancelled_execution || all_executions.value.find((item) => item.id === message.execution_id) || null;
 }
+/** Seconds an ended execution ran, or null while it has not ended. */
+const execution_seconds = (execution) => execution.finished_at ? Math.max(0, execution.finished_at - execution.created_at) : null;
 function stop_state(execution) {
   const label = bridge.stop_label(execution);
   const name = bridge.display_name(execution.member);
@@ -621,8 +712,10 @@ const execution_reports = stable_computed(() => {
   if (!room.value.free) return reports;
   for (const execution of all_executions.value) {
     if (!["completed", "failed", "cancelled"].includes(execution.status)) continue;
-    // A clean completion adds nothing to the message header; only failures, observed file changes and refused operations earn a card.
-    if (execution.status === "completed" && !execution.changes?.length && !execution.denials?.length) continue;
+    // A clean completion adds nothing to the message header; only failures, files the member changed or may have changed
+    // by running commands, and refused operations earn a card. Without commands, other files changing are someone else's.
+    const listed_changes = execution.changes?.some((path) => execution.commands > 0 || execution.edited?.includes(path));
+    if (execution.status === "completed" && !listed_changes && !execution.denials?.length) continue;
     // A failed free-room execution keeps its own card in the slot it worked in, and so does a delivered one that was voided.
     if (execution.status === "failed" || (execution.status === "cancelled" && execution.capabilities)) continue;
     const message_id = execution.answer_id || execution.request_message_id;
@@ -1244,12 +1337,30 @@ function trim_preview_blocks(fragment) {
   return false;
 }
 
-/** Clip rendered text at a nearby sentence boundary while keeping valid markup. */
-function build_answer_preview(message) {
+/**
+ * Put back the rows an excerpt cut from its last table, hidden: a table's columns are as wide as all its rows need, so
+ * without them the table changed width on expanding (user 2026-11-18, #4885).
+ */
+function keep_table_columns(fragment, html) {
+  const tables = fragment.querySelectorAll("table");
+  if (!tables.length) return;
+  const source = document.createElement("template");
+  source.innerHTML = html;
+  const whole = source.content.querySelectorAll("table")[tables.length - 1];
+  const clipped = tables[tables.length - 1], shown = clipped.querySelectorAll("tr").length;
+  const rows = [...whole.querySelectorAll("tr")];
+  if (rows.length <= shown) return;
+  for (const row of rows.slice(shown)) row.classList.add("markdown-folded-row");
+  clipped.replaceWith(whole);
+}
+
+/** Clip rendered text that is too tall for this screen at a nearby sentence boundary while keeping valid markup. */
+function build_answer_preview(message, area) {
   const full = { truncated: false, html: message.rendered_text };
   if (message.kind === "receipt") return full;
   const template = document.createElement("template");
   template.innerHTML = message.rendered_text;
+  if (estimated_blocks_height(template.content, area.width) <= area.limit) return full;
   const clipped_blocks = trim_preview_blocks(template.content);
   const walker = document.createTreeWalker(template.content, NodeFilter.SHOW_TEXT, {
     acceptNode: (node) => node.parentElement?.closest('.katex-mathml') ? NodeFilter.FILTER_REJECT : NodeFilter.FILTER_ACCEPT,
@@ -1257,7 +1368,10 @@ function build_answer_preview(message) {
   const nodes = [];
   while (walker.nextNode()) nodes.push(walker.currentNode);
   const characters = [...nodes.map((node) => node.textContent).join("").trimEnd()];
-  if (characters.length <= MESSAGE_PREVIEW_LENGTH) return { truncated: clipped_blocks, html: template.innerHTML };
+  if (characters.length <= MESSAGE_PREVIEW_LENGTH) {
+    if (clipped_blocks) keep_table_columns(template.content, message.rendered_text);
+    return { truncated: clipped_blocks, html: template.innerHTML };
+  }
   const prefix = characters.slice(0, MESSAGE_PREVIEW_LENGTH).join("");
   const boundary = [...prefix.matchAll(/[。！？；]\s*|[.!?;](?:\s|$)|\n/gu)].at(-1);
   const boundary_end = boundary ? boundary.index + boundary[0].length : 0;
@@ -1277,6 +1391,7 @@ function build_answer_preview(message) {
     if (!natural_end && !formula && !row) node.textContent += "…";
     break;
   }
+  keep_table_columns(template.content, message.rendered_text);
   return { truncated: true, html: template.innerHTML };
 }
 
@@ -1363,15 +1478,15 @@ function undeliverable_requests() {
       failure: { role: blocked.get(request.member_id).role, result: blocked.get(request.member_id).adopt_error } }));
 }
 const expanded_rewinds = ref(new Set());
-/** Consecutive rewound messages fold into one line at the first of them until expanded; a retracted one is a line of its own. */
+/** Consecutive rewound messages share one box at the first of them, which lists them when expanded; a retracted one is a line of its own. */
 const rewound_runs = stable_computed(() => {
   const runs = new Map(), hidden = new Set();
   let start = null;
   for (const message of view.value.messages) {
     if (message.withdrawn !== "rewound") { start = null; continue; }
-    if (start === null) { start = message.id; runs.set(start, 0); }
-    runs.set(start, runs.get(start) + 1);
-    if (start !== message.id && !expanded_rewinds.value.has(start)) hidden.add(message.id);
+    if (start === null) { start = message.id; runs.set(start, []); }
+    runs.get(start).push(message);
+    if (start !== message.id) hidden.add(message.id);
   }
   return { runs, hidden };
 });
@@ -2498,7 +2613,7 @@ function message_card(message) {
     marks: excerpt_marks.value.get(message.id) || NO_ITEMS, waits, speaking_expert: waits ? speaking_turn.value?.expert : null,
     badges: request_badges.value.get(message.id) || NO_ITEMS, elapsed: message_elapsed(message),
     recommendation: recommendations.value.get(message.id), adopting: adopting.value === message.id,
-    execution_id: execution?.id, notes_count: execution?.notes, notes: execution ? execution_notes.value.get(execution.id) : undefined,
+    execution_id: execution?.id, execution_started_at: execution?.created_at, notes_count: execution?.notes, notes: execution ? execution_notes.value.get(execution.id) : undefined,
     reports: reports || NO_ITEMS, allowing: reports ? allowing.value : 0, allow_errors: reports ? allow_errors.value : null,
     launch_available: reports ? view.value.launch?.available : null, report_messages: reports ? view.value.messages : null,
     armed: armed_cards.has(message.id), menu_open: menu_open_id.value === message.id,
@@ -2667,7 +2782,7 @@ function copy_message(message) { act("copy", `${view.value.room_site}/r/${room.v
       <button type="submit" class="selection-comment-send" :aria-label="t('添加到对话')" :title="t('添加到对话（Enter）')"><UIcon name="i-lucide-arrow-up" /></button>
     </form>
     <ExcerptEditCard v-if="mark_editing" :key="mark_editing.excerpt.id" :class="{ 'is-docked': mark_editing.touch }" :comment="mark_editing.excerpt.comment" :context="mark_editing.touch ? mark_context(mark_editing.excerpt) : ''" :style="mark_editing.touch ? {} : { left: `${mark_editing.left}px`, top: `${mark_editing.top}px` }" @save="save_mark" @cancel="close_mark" @remove="remove_mark" />
-    <div ref="transcript" v-memo="transcript_memo([message_groups,view.messages_loading, view.messages_failure, view.sending_preview, view.failed_sends, message_round_labels, free, room.session, can_manage, expanded_answers.size, reader.state.message_id, room.title, view.query, view.source_filter, view.authors, view.card_kinds, topic_anchor, end_anchor, request_badges, execution_reports, recommendations, adopting, scheduler_decisions, host_arrangements, pending, execution_notes, open_working_notes, editing, rewound_runs, retracting_id, armed_cards.size, menu_open_id, stopping_member, free_now, allowing, allow_errors, late_answers, has_draft, view.sending_message, routing_messages, speaking_turn, room.free])" class="channel-transcript" :aria-label="t('聊天记录')" @click.capture="keep_toggle_place" @click="open_message_ref" @scroll="schedule_track_scroll" @wheel.passive="resume_tracking($event); stop_following($event)" @touchstart.passive="resume_tracking" @touchmove.passive="stop_following" @touchend.passive="end_touch" @touchcancel.passive="end_touch" @pointerdown="stop_following" @keydown="resume_tracking($event); stop_following($event)">
+    <div ref="transcript" v-memo="transcript_memo([fold_area, expanded_rewinds.size, message_groups,view.messages_loading, view.messages_failure, view.sending_preview, view.failed_sends, message_round_labels, free, room.session, can_manage, expanded_answers.size, reader.state.message_id, room.title, view.query, view.source_filter, view.authors, view.card_kinds, topic_anchor, end_anchor, request_badges, execution_reports, recommendations, adopting, scheduler_decisions, host_arrangements, pending, execution_notes, open_working_notes, editing, rewound_runs, retracting_id, armed_cards.size, menu_open_id, stopping_member, free_now, allowing, allow_errors, late_answers, has_draft, view.sending_message, routing_messages, speaking_turn, room.free])" class="channel-transcript" :aria-label="t('聊天记录')" @click.capture="keep_toggle_place" @click="open_message_ref" @scroll="schedule_track_scroll" @wheel.passive="resume_tracking($event); stop_following($event)" @touchstart.passive="resume_tracking" @touchmove.passive="stop_following" @touchend.passive="end_touch" @touchcancel.passive="end_touch" @pointerdown="stop_following" @keydown="resume_tracking($event); stop_following($event)">
       <div v-if="!view.query && !view.source_filter && !topic_anchor && render_start === 0" class="channel-message-group channel-topic-group"><TopicCard :ref="(card) => topic_card = card" @edit="emit('edit')" /></div>
       <div v-for="group in message_groups" :key="group.key" class="channel-message-group">
         <USeparator :label="group.label" class="channel-date-divider" />
@@ -2693,21 +2808,25 @@ function copy_message(message) { act("copy", `${view.value.room_site}/r/${room.v
              in the name row and the reason as its text, so it reads as that member's turn that was cut short (user
              2026-11-18, replacing the 11-17 one-line event card). -->
         <UChatMessage v-else-if="message.cancelled_turn || message.cancelled_execution" :id="message.id" :data-author="bridge.identities[message.author]?.style" role="assistant" :parts="[]" side="left" variant="naked" color="neutral" class="channel-message is-voided" :ui="{ header: 'channel-message-header', container: 'channel-message-container', body: 'channel-message-body' }">
-          <template #body>
+          <template #body><template v-for="run in [voided_execution(message)]" :key="message.id">
             <div class="channel-message-byline">
               <UAvatar :src="bridge.identities[message.author]?.icon" :text="bridge.identities[message.author]?.initials || '?'" :alt="bridge.display_name(message.author)" size="md" class="channel-avatar" :class="bridge.identities[message.author]?.style" />
-              <div class="channel-message-meta"><div class="channel-message-author"><strong>{{ bridge.display_name(message.author) }}</strong><UBadge size="xs" color="warning" variant="soft" class="channel-source" :icon="message.cancelled_turn ? 'i-lucide-skip-forward' : 'i-lucide-circle-stop'">{{ message.cancelled_turn ? t('已跳过') : stop_state(message.cancelled_execution).label }}</UBadge></div></div>
-              <span class="channel-message-provenance channel-message-elapsed">{{ message.cancelled_turn ? t('安排 #{value1}', { value1: message.cancelled_turn.display_id || message.cancelled_turn.id }) : t('执行 #{value1}', { value1: message.execution_id }) }}</span>
+              <div class="channel-message-meta">
+                <div class="channel-message-author"><strong>{{ bridge.display_name(message.author) }}</strong><UBadge size="xs" color="warning" variant="soft" class="channel-source" :icon="message.cancelled_turn ? 'i-lucide-skip-forward' : 'i-lucide-circle-stop'">{{ message.cancelled_turn ? t('已跳过') : stop_state(message.cancelled_execution).label }}</UBadge></div>
+                <div class="channel-message-provenance"><time v-if="run" :title="new Date(run.created_at * 1000).toLocaleString(locale)">{{ bridge.format_time(run.created_at * 1000) }}</time><span v-if="message.cancelled_turn">{{ t('安排 #{value1}', { value1: message.cancelled_turn.display_id || message.cancelled_turn.id }) }}</span><span v-if="run">{{ t('执行 #{value1}', { value1: run.id }) }}</span><span v-if="run?.steps">{{ t('已执行 {value1} 步', { value1: run.steps }) }}</span></div>
+              </div>
+              <span v-if="run && execution_seconds(run) !== null" class="channel-message-provenance channel-message-elapsed">{{ t('耗时 {value1}', { value1: format_elapsed(execution_seconds(run)) }) }}</span>
             </div>
             <div class="channel-message-text channel-stop-reason" role="status"><span>{{ message.cancelled_turn ? t('本次发言已被跳过或取消，未回答。') : stop_reason_text(message.cancelled_execution.result) || t('本次执行已作废，未回答。') }}</span></div>
-            <template v-for="execution in [voided_detail(message)].filter(Boolean)" :key="execution.id">
-              <p class="channel-message-text channel-stop-note">{{ stop_state(execution).note }}</p>
-              <details v-if="execution.late_answer && view.access?.can_manage" class="channel-receipt" @toggle="load_late_answer(execution.id, $event)">
-                <summary :aria-label="t('查看 {value1} 未采纳的回答', { value1: bridge.display_name(execution.member) })">{{ t('未采纳的回答') }}</summary>
-                <div class="channel-message-text channel-late-answer">{{ late_answers.get(execution.id)?.text ?? t('正在读取…') }}</div>
+            <template v-if="run && stop_state(run).note">
+              <p class="channel-message-text channel-stop-note">{{ stop_state(run).note }}</p>
+              <details v-if="run.late_answer && view.access?.can_manage" class="channel-receipt" @toggle="load_late_answer(run.id, $event)">
+                <summary :aria-label="t('查看 {value1} 未采纳的回答', { value1: bridge.display_name(run.member) })">{{ t('未采纳的回答') }}</summary>
+                <div class="channel-message-text channel-late-answer">{{ late_answers.get(run.id)?.text ?? t('正在读取…') }}</div>
               </details>
             </template>
-          </template>
+            <ExecutionNotes v-if="run?.notes" :count="run.notes" :notes="execution_notes.get(run.id)" :load="() => load_notes(run.id)" />
+          </template></template>
         </UChatMessage>
         <!-- Work in progress is a compact card: who and how long, the stage as the main line with the stop key at its end, -->
         <!-- and the notes below as a subordinate thread, folded to the latest note with the count after it. -->
@@ -2743,6 +2862,9 @@ function copy_message(message) { act("copy", `${view.value.room_site}/r/${room.v
               <span v-else>{{ status.text }}</span>
             </span>
           </div>
+          <ul v-if="message.tools?.length" class="channel-working-tools" :aria-label="t('工具调用次数')">
+            <li v-for="item in message.tools" :key="`${item.phase}:${item.tool}`"><span>{{ tool_label(item) }} ×</span><span class="channel-working-tool-count" role="img" :aria-label="String(item.count)"><FlipDigit v-for="(digit, index) in String(item.count)" :key="String(item.count).length - index" :digit="digit" /></span></li>
+          </ul>
           <div v-for="notes in [working_notes(message)].filter((list) => list.length)" :key="message.execution_id" class="channel-working-notes" :class="{ 'is-open': open_working_notes.has(message.execution_id), 'is-single': notes.length === 1 }">
             <template v-if="open_working_notes.has(message.execution_id)"><p v-for="note in notes.slice(0, -1)" :key="note.seq">{{ note.text }}</p></template>
             <p class="channel-working-latest" @click="notes.length === 1 || open_working_notes.has(message.execution_id) || toggle_working_notes(message.execution_id)">
@@ -2810,17 +2932,20 @@ function copy_message(message) { act("copy", `${view.value.room_site}/r/${room.v
             :busy="allowing === message.failure.id" :error="allow_errors[message.failure.id]" @allow="allow_and_resend(message.failure)" />
         </section>
         <div v-else-if="message.withdrawn" :id="String(message.id)" :data-message-id="message.id" class="channel-withdrawn" :data-author="bridge.identities[message.author]?.style">
-          <UIcon :name="message.withdrawn === 'retracted' ? 'i-lucide-undo-2' : 'i-lucide-history'" class="channel-withdrawn-icon" />
-          <span v-if="message.withdrawn === 'retracted'">{{ t('{value1} 撤回了一条消息', { value1: bridge.display_name(message.author) }) }}</span>
-          <template v-else-if="rewound_runs.runs.has(message.id) && !expanded_rewinds.has(message.id)">
-            <span>{{ t('已回退 {value1} 条记录', { value1: rewound_runs.runs.get(message.id) }) }}</span>
-            <UButton :label="t('展开')" size="xs" variant="link" color="neutral" :aria-label="t('展开从 #{value1} 起已回退的记录', { value1: message.id })" @click="toggle_rewound(message.id)" />
-          </template>
-          <template v-else>
-            <strong>{{ bridge.display_name(message.author) }}</strong><span class="channel-withdrawn-text">{{ message.text }}</span>
-            <UButton :label="`#${message.id}`" size="xs" variant="link" color="neutral" :aria-label="t('查看已回退的原文 #{value1}', { value1: message.id })" @click="emit('detail', message.id)" />
-            <UButton v-if="rewound_runs.runs.has(message.id)" :label="t('收起')" size="xs" variant="link" color="neutral" :aria-label="t('收起从 #{value1} 起已回退的记录', { value1: message.id })" @click="toggle_rewound(message.id)" />
-          </template>
+          <div class="channel-withdrawn-head">
+            <UIcon :name="message.withdrawn === 'retracted' ? 'i-lucide-undo-2' : 'i-lucide-history'" class="channel-withdrawn-icon" />
+            <span v-if="message.withdrawn === 'retracted'">{{ t('{value1} 撤回了一条消息', { value1: bridge.display_name(message.author) }) }}</span>
+            <template v-else>
+              <span>{{ t('已回退 {value1} 条记录', { value1: rewound_runs.runs.get(message.id)?.length }) }}</span>
+              <UButton :label="expanded_rewinds.has(message.id) ? t('收起') : t('展开')" :trailing-icon="expanded_rewinds.has(message.id) ? 'i-lucide-chevron-up' : 'i-lucide-chevron-down'" size="xs" variant="link" color="neutral" class="channel-withdrawn-toggle" :aria-expanded="expanded_rewinds.has(message.id)" :aria-label="expanded_rewinds.has(message.id) ? t('收起从 #{value1} 起已回退的记录', { value1: message.id }) : t('展开从 #{value1} 起已回退的记录', { value1: message.id })" @click="toggle_rewound(message.id)" />
+            </template>
+          </div>
+          <ul v-if="message.withdrawn === 'rewound' && expanded_rewinds.has(message.id)" class="channel-withdrawn-list">
+            <li v-for="item in rewound_runs.runs.get(message.id)" :key="item.id" :data-message-id="item.id">
+              <strong>{{ bridge.display_name(item.author) }}</strong><span class="channel-withdrawn-text" :title="item.text">{{ item.text }}</span>
+              <UButton :label="`#${item.id}`" size="xs" variant="link" color="neutral" :aria-label="t('查看已回退的原文 #{value1}', { value1: item.id })" @click="emit('detail', item.id)" />
+            </li>
+          </ul>
         </div>
         <template v-else>
         <!-- Each card keeps its own render cache and reads only its card object; a room refresh re-renders only the cards whose inputs changed. -->
@@ -2855,6 +2980,7 @@ function copy_message(message) { act("copy", `${view.value.room_site}/r/${room.v
               <UButton v-if="card.preview.truncated" :label="card.expanded ? t('收起') : t('展开全文')" :trailing-icon="card.expanded ? 'i-lucide-chevron-up' : 'i-lucide-chevron-down'" variant="link" color="neutral" size="xs" class="channel-answer-toggle" :aria-label="`${card.expanded ? t('收起回答') : t('展开完整回答')} #${message.id}`" :aria-expanded="card.expanded" :aria-controls="`channel-answer-${message.id}`" @click="toggle_answer(message, $event)" />
             </div>
             <div v-if="message.summary" class="channel-answer-summary"><small>{{ t('回答摘要') }}<span v-if="message.summary_by && message.summary_by !== message.author"> {{ t('· {value1} 整理', { value1: bridge.display_name(message.summary_by) }) }}</span></small><div class="channel-message-text markdown-body" v-html="message.rendered_summary"></div></div>
+            <AnswerFiles v-if="card.execution_started_at" :message="message" :room-id="room.id" :started-at="card.execution_started_at" />
             <ExecutionNotes v-if="card.notes_count" :count="card.notes_count" :notes="card.notes" :load="() => load_notes(card.execution_id)" />
             <div v-if="message.attachments?.length" v-html="bridge.attachment_markup(message.attachments)"></div>
             <div v-if="card.recommendation" class="channel-recommendation" :class="`is-${card.recommendation.status}`" :aria-label="t('智能调度推荐')" aria-live="polite">

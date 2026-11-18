@@ -8,8 +8,8 @@ import { computed, inject, nextTick, ref, watch } from "vue";
  * .dev/plans/Agent参与体验整改/DSH提问工具对照.md): one question per page with a pager, numbered rows for a single
  * choice and checkboxes for several, the recommended option marked and chosen in advance (choosing in advance is not
  * answering: nothing is sent until the owner submits), a free-answer row under the options, skip, collapse and close.
- * Clicking a single-choice option confirms it: the card goes on to the next question, or submits on the last. Enter
- * goes on the same way, Shift+Enter breaks a line. Beyond it, the room's own actions: ask the host to recommend first,
+ * Clicking a single-choice option confirms it and goes on to the next question; on the last one it only chooses, and
+ * only the submit button or Enter submits. Enter goes on or submits, Shift+Enter breaks a line. Beyond it, the room's own actions: ask the host to recommend first,
  * or leave the decision to it. One card at a time, in the site's order; the others wait as one-line rows. Every write
  * sends the version the card shows. A write leaves the card at once and runs behind it; a refused one brings the card
  * back as the owner left it, with the error in the notice bar.
@@ -55,8 +55,9 @@ function update(change) {
 }
 
 /**
- * A single choice replaces the free answer and confirms the question; several choices keep the free answer alongside.
- * The second click of a double click is dropped: it would land on the next question's option under the pointer.
+ * A single choice replaces the free answer and goes on, except on the last question, which waits for the submit;
+ * several choices keep the free answer alongside. The second click of a double click is dropped: it would land on the
+ * next question's option under the pointer. The clicked option takes focus (Safari leaves it out) so Enter can submit.
  */
 function choose(option, event) {
   const chosen = draft.value.selected;
@@ -66,7 +67,14 @@ function choose(option, event) {
   }
   if (event.detail > 1) return;
   update({ selected: [option.id], custom: "" });
-  go_on();
+  if (last.value) event.currentTarget.focus();
+  else go_on();
+}
+
+/** Enter on an option: a single choice takes that option first, then the card goes on or submits. */
+function on_option_enter(option, event) {
+  if (!item.value.multiSelect && !event.isComposing && !event.shiftKey && !event.repeat) update({ selected: [option.id], custom: "" });
+  on_enter(event);
 }
 
 function type_custom(value) {
@@ -79,9 +87,11 @@ async function turn(index) {
   body.value?.scrollTo?.({ top: 0 });
 }
 
-function go_on() {
-  if (last.value) send("answer");
-  else turn(page.value + 1);
+/** Next question, with focus on it so Enter keeps working; the last one submits. */
+async function go_on() {
+  if (last.value) return send("answer");
+  await turn(page.value + 1);
+  body.value?.focus({ preventScroll: true });
 }
 
 function skip() {
@@ -92,7 +102,8 @@ function skip() {
 function on_enter(event) {
   if (event.isComposing || event.shiftKey) return;
   event.preventDefault();
-  if (answered(draft.value) || !last.value) go_on();
+  // A held key repeats: one press moves one question, and never runs on into the submit.
+  if (!event.repeat && (answered(draft.value) || !last.value)) go_on();
 }
 
 /** Take the card off the screen and write behind it; a refused write puts it back. */
@@ -141,14 +152,14 @@ async function cancel() {
           :title="t('取消这个问题；绑定接力的问题取消后接力停止')" :disabled="!!pending" @click="cancel" />
       </header>
       <template v-if="!minimized">
-        <div ref="body" class="question-body">
+        <div ref="body" class="question-body" tabindex="-1" @keydown.enter.self="on_enter">
           <p class="question-title">{{ item.question }}</p>
           <p v-if="item.detail" class="question-detail">{{ item.detail }}</p>
           <p v-if="current.recommendation_message_id" class="question-note">{{ t('主持人已给推荐（消息 #{value1}），请确认或另选', { value1: current.recommendation_message_id }) }}</p>
           <div class="question-options" :role="item.multiSelect ? 'group' : 'radiogroup'" :aria-label="item.question">
             <button v-for="(option, index) in item.options" :key="option.id" type="button" class="question-option"
               :class="{ 'is-selected': draft.selected.includes(option.id) }" :role="item.multiSelect ? 'checkbox' : 'radio'"
-              :aria-checked="draft.selected.includes(option.id)" :disabled="!!pending" @click="choose(option, $event)" @keydown.enter="item.multiSelect && on_enter($event)">
+              :aria-checked="draft.selected.includes(option.id)" :disabled="!!pending" @click="choose(option, $event)" @keydown.enter="on_option_enter(option, $event)">
               <span v-if="item.multiSelect" class="question-check" aria-hidden="true"><UIcon v-if="draft.selected.includes(option.id)" name="i-lucide-check" /></span>
               <span v-else class="question-number" aria-hidden="true">{{ index + 1 }}</span>
               <span class="question-copy">
@@ -207,6 +218,7 @@ async function cancel() {
 .question-meta, .question-scope, .question-status, .question-progress { color: var(--ui-text-dimmed); font-size: 12px; }
 .question-card.is-minimized .question-title { overflow: hidden; white-space: nowrap; text-overflow: ellipsis; }
 .question-body { display: flex; flex-direction: column; gap: 8px; min-height: 0; padding: 4px 12px 8px; overflow-y: auto; overscroll-behavior: contain; }
+.question-body:focus { outline: none; }
 .question-title { color: var(--ui-text-highlighted); font-weight: 600; }
 .question-detail, .question-note { color: var(--ui-text-toned); white-space: pre-wrap; }
 .question-options { display: flex; flex-direction: column; gap: 2px; }

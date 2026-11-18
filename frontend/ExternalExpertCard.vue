@@ -39,7 +39,7 @@ const uid = useId();
       <div class="expert-card-face expert-card-front" :inert="back" :aria-hidden="back">
         <button type="button" class="expert-card-open" :aria-label="t('邀请外部专家')" :title="t('点击翻面设置')" @click="open_back">
           <span class="expert-card-identity">
-            <span class="expert-card-avatar channel-avatar external" aria-hidden="true"><UIcon name="i-lucide-laptop-minimal" /></span>
+            <span class="expert-card-avatar channel-avatar external" aria-hidden="true"><img :src="'/icons/external-expert.svg'" alt="" /></span>
             <span class="expert-card-names"><span><strong>{{ t("外部专家") }}</strong></span><small :title="t('对方电脑上的 AI，只读本房间开放的内容')">{{ t("对方电脑上的 AI，只读本房间开放的内容") }}</small></span>
           </span>
           <dl class="expert-card-facts">

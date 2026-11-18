@@ -5,7 +5,7 @@
  */
 import { computed, inject, onMounted, ref, watch } from "vue";
 import { call } from "./api.js";
-import HostingCards from "./HostingCards.vue";
+import EntryTabs from "./EntryTabs.vue";
 import LanguagePicker from "../LanguagePicker.vue";
 import { t } from '../i18n.js';
 
@@ -95,7 +95,7 @@ watch(refreshed, () => check(true));
       </div>
     </div>
 
-    <HostingCards v-if="state.hosting" />
+    <EntryTabs />
 
     <h3 class="panel-section-title"><UIcon name="i-lucide-settings" />{{ t('设置') }}</h3>
     <div class="panel-rows">

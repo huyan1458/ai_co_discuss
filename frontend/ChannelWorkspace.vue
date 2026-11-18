@@ -19,6 +19,7 @@ import ConfirmDialog from "./ConfirmDialog.vue";
 import { use_workflow_library } from "./workflow-library.js";
 import PrivateChat from "./PrivateChat.vue";
 import FilePreview from "./FilePreview.vue";
+import { file_preview } from "./file-preview.js";
 import RoomWelcome from "./RoomWelcome.vue";
 import { busy } from "./member-actions.js";
 import { locale, t } from "./i18n.js";
@@ -89,8 +90,10 @@ const rail_inline = computed(() => viewport_width.value >= RAIL_BREAKPOINT);
 // Below the rail breakpoint the room sidebar opens as a drawer too, instead of squeezing the transcript.
 const nav_docked = computed(() => rail_inline.value && !nav_collapsed.value);
 // The rail and channel tools stay in place without a room so the layout never jumps; room-only controls are disabled.
-const show_rail = computed(() => (invited_page.value || !workflow_page.value && view.value.tab === "discussion") && !rail_collapsed.value);
-const info_label = computed(() => rail_inline.value && (invited_page.value || view.value.tab === "discussion") ? (rail_collapsed.value ? t("展开房间概览") : t("收起房间概览")) : t("讨论进度"));
+// A file preview docked beside the messages takes the rail's place until it closes; the rail's own setting is kept.
+const show_rail = computed(() => (invited_page.value || !workflow_page.value && view.value.tab === "discussion") && !rail_collapsed.value && !file_preview.dock_width);
+const rail_toggles = computed(() => rail_inline.value && !file_preview.dock_width);
+const info_label = computed(() => rail_toggles.value && (invited_page.value || view.value.tab === "discussion") ? (rail_collapsed.value ? t("展开房间概览") : t("收起房间概览")) : t("讨论进度"));
 const LIVE_EXECUTION = ["dispatched", "started"];
 const STATUS_AVATARS = 4;
 /** Who is working right now, for the title bar whenever the rail is out of sight; same rule as the rail's 处理中. */
@@ -163,6 +166,7 @@ const layout_style = computed(() => ({
   "--channel-rail-width": `${rail_width.value}px`,
   "--channel-topbar-height": `${topbar_height.value}px`,
   "--channel-main-columns": !nav_docked.value ? "minmax(0, 1fr)" : `${effective_nav_width.value}px ${DIVIDER_WIDTH}px minmax(0, 1fr)`,
+  paddingRight: file_preview.dock_width ? `${file_preview.dock_width}px` : "",
 }));
 const width_options = Object.entries(READING_WIDTHS).map(([value, option]) => ({ value, label: option.label }));
 watch(reading_width, save_layout);
@@ -320,7 +324,7 @@ function save_layout() {
 
 /** Toggle the inline overview rail on wide discussion views; otherwise open channel details. */
 function toggle_info() {
-  if (rail_inline.value && (invited_page.value || view.value.tab === "discussion")) rail_collapsed.value = !rail_collapsed.value;
+  if (rail_toggles.value && (invited_page.value || view.value.tab === "discussion")) rail_collapsed.value = !rail_collapsed.value;
   else info_open.value = true;
 }
 
@@ -446,7 +450,7 @@ function resize_nav_by_key(event) {
             </form>
             <UDropdownMenu v-if="!middle_page && view.tab === 'discussion'" :items="source_filter_items" :disabled="!room" :content="source_filter_content" :ui="{ content: 'channel-menu channel-source-menu' }"><UButton icon="i-lucide-list-filter" :variant="view.source_filter ? 'soft' : 'ghost'" color="neutral" size="sm" class="channel-icon-button channel-source-filter" :aria-pressed="view.source_filter" :aria-label="t('筛选消息与卡片')" :title="t('筛选消息与卡片')" :disabled="!room" /></UDropdownMenu>
           </div>
-          <UTooltip v-if="!workflow_page" :text="info_label"><UButton icon="i-lucide-panel-right" color="neutral" variant="ghost" size="sm" class="channel-icon-button channel-panel-toggle channel-info-button" :aria-label="info_label" :disabled="!room && !invited_page && !(rail_inline && view.tab === 'discussion')" :aria-expanded="rail_inline && (invited_page || view.tab === 'discussion') ? show_rail : info_open" @click="toggle_info" /></UTooltip>
+          <UTooltip v-if="!workflow_page" :text="info_label"><UButton icon="i-lucide-panel-right" color="neutral" variant="ghost" size="sm" class="channel-icon-button channel-panel-toggle channel-info-button" :aria-label="info_label" :disabled="!room && !invited_page && !(rail_inline && view.tab === 'discussion')" :aria-expanded="rail_toggles && (invited_page || view.tab === 'discussion') ? show_rail : info_open" @click="toggle_info" /></UTooltip>
         </header>
         <div v-if="room && !middle_page" class="channel-tabbar">
           <UTabs v-model="selected_tab" :items="tabs" :content="false" variant="pill" color="neutral" size="sm" class="channel-tabs" :aria-label="t('房间视图')" />

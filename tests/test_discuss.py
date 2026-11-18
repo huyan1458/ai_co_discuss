@@ -280,10 +280,45 @@ class CliTests(unittest.TestCase):
                                "--access-file", path, "--dry-run"])
         self.assertEqual(preview.returncode, 0, preview.stderr)
         self.assertNotIn(secret, preview.stdout + preview.stderr)
-        error = self.rejected(["run", "view", "other-room", "--access-file", path])
+        error = self.rejected(["run", "pause", "other-room", "--revision", "idle", "--access-file", path])
         self.assertIn("凭据文件不属于", str(error))
         path.write_text(json.dumps({"site": "http://localhost:1", "room": self.room, "token": secret}), encoding="utf-8")
         self.assertIn("凭据文件不属于", str(self.rejected(["run", "view", self.room, "--access-file", path])))
+
+    def test_room_credential_reads_another_room_but_cannot_change_it(self):
+        """Every plain read of another room works; writes, state-changing reads and private chats stay closed."""
+        if self.external:
+            self.skipTest("The loopback owner rule exists only on the Python backend")
+        other = self.cli("room", "create", "--title", "另一房间", "--goal", "只读", "--as", "Codex",
+                         "--submission-id", str(uuid.uuid4()))["id"]
+        posted = self.cli("message", "post", other, "--as", "用户", "--body", "跨房间原文", "--submission-id", str(uuid.uuid4()))
+        message_id = posted["message"]["id"]
+        environment = {"DISCUSS_ACCESS_FILE": str(self.room_access[self.room]["用户"])}
+        read = lambda *arguments, **extra: self.invoke(arguments, environment={**environment, **extra})
+
+        self.assertEqual(json.loads(read("room", "view", other).stdout)["data"]["id"], other)
+        self.assertEqual(json.loads(read("message", "list", other).stdout)["data"]["messages"][-1]["text"], "跨房间原文")
+        self.assertEqual(json.loads(read("message", "view", other, message_id).stdout)["data"]["text"], "跨房间原文")
+
+        events = read("room", "events", other)
+        self.assertEqual(events.returncode, 0, events.stderr)
+        self.assertNotIn("跨房间原文", events.stdout, "the event log leaves message text to the message commands")
+        self.assertIn(other, [room["id"] for room in json.loads(read("room", "list").stdout)["data"]["rooms"]])
+
+        for refused in (read("message", "post", other, "--as", "用户", "--body", "越权", "--submission-id", str(uuid.uuid4())),
+                        read("room", "view", other, CODISCUSS_TOOL_LOCKDOWN="1")):
+            self.assertNotEqual(refused.returncode, 0)
+            self.assertIn("凭据文件不属于", refused.stderr)
+
+        for path in ("inbox", "external-members", "members/1/chat"):
+            plan = discuss.RequestPlan(f"/api/rooms/{other}/{path}")
+            with self.assertRaises(discuss.CliError) as denied:
+                discuss.send_request(plan, self.base + plan.path, 10, {discuss.READ_ONLY_HEADER: "1"})
+            self.assertEqual(denied.exception.details.get("http_status"), 403, path)
+        write = discuss.RequestPlan(f"/api/rooms/{other}/stop", "POST", {})
+        with self.assertRaises(discuss.CliError) as denied:
+            discuss.send_request(write, self.base + write.path, 10, {discuss.READ_ONLY_HEADER: "1"})
+        self.assertEqual(denied.exception.details.get("http_status"), 403)
 
     def test_task_credential_supplies_room_operator_and_execution(self):
         """A runner task posts with only its content: room, operator, execution and submission ID come from the credential."""
@@ -313,7 +348,7 @@ class CliTests(unittest.TestCase):
         self.assertEqual(self.cli("message", "view", self.room, posted_id)["text"], "环境绑定")
         preview = self.invoke(["run", "pause", self.room, "--revision", "idle", "--dry-run"], environment=env)
         self.assertNotIn(json.loads(text)["token"], preview.stdout + preview.stderr)
-        wrong_room = self.invoke(["run", "view", "other-room"], environment=env)
+        wrong_room = self.invoke(["run", "pause", "other-room", "--revision", "idle"], environment=env)
         self.assertNotEqual(wrong_room.returncode, 0)
         self.assertIn("凭据文件不属于", wrong_room.stderr)
         override = self.invoke(["room", "view", self.room, "--access-file", path],
@@ -332,7 +367,7 @@ class CliTests(unittest.TestCase):
         preview = self.invoke(["run", "pause", self.room, "--revision", "idle", "--dry-run"], environment={"DISCUSS_ACCESS": text})
         self.assertEqual(preview.returncode, 0, preview.stderr)
         self.assertNotIn(secret, preview.stdout + preview.stderr)
-        other = self.invoke(["run", "view", "other-room"], environment={"DISCUSS_ACCESS": text})
+        other = self.invoke(["run", "pause", "other-room", "--revision", "idle"], environment={"DISCUSS_ACCESS": text})
         self.assertIn("凭据文件不属于", other.stderr)
         broken = self.invoke(["run", "view", self.room], environment={"DISCUSS_ACCESS": "{bad"})
         self.assertIn("DISCUSS_ACCESS", broken.stderr)

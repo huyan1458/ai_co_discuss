@@ -60,13 +60,16 @@ export function access_levels(adapter) {
 
 /**
  * All four levels labelled for the page, with what each does in this software on hover; ones it lacks are shown but
- * disabled, so every CLI card lines up the same four levels.
+ * disabled, so every CLI card lines up the same four levels. `full_only_hint`, given where this computer can run the
+ * software only without its sandbox, disables every level but 全放开 and says why.
  */
-export function access_options(adapter) {
+export function access_options(adapter, full_only_hint = '') {
   const levels = access_levels(adapter), profile = adapter_profile(adapter);
-  return PROJECT_ACCESS.map(value => levels.includes(value)
-    ? { value, label: ACCESS_LABELS[value], hint: profile?.access_hints?.[value] || '' }
-    : { value, label: ACCESS_LABELS[value], hint: profile?.unsupported_hints?.[value] || '该软件不支持此档位', disabled: true });
+  return PROJECT_ACCESS.map(value => {
+    if (!levels.includes(value)) return { value, label: ACCESS_LABELS[value], hint: profile?.unsupported_hints?.[value] || '该软件不支持此档位', disabled: true };
+    if (full_only_hint && value !== 'full') return { value, label: ACCESS_LABELS[value], hint: full_only_hint, disabled: true };
+    return { value, label: ACCESS_LABELS[value], hint: profile?.access_hints?.[value] || '' };
+  });
 }
 
 /** The page's name for a level; `own` reads as decided by the member's own session. */

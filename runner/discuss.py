@@ -32,6 +32,9 @@ MAX_ATTACHMENT_BYTES = 20 * 1024 * 1024
 MAX_MESSAGE_ATTACHMENTS = 10
 # Environment variables a hosting AI session exposes its own ID through, with the client name the room records.
 SESSION_VARIABLES = (("CLAUDE_CODE_SESSION_ID", "claude"), ("CODEX_THREAD_ID", "codex"), ("ANTIGRAVITY_CONVERSATION_ID", "antigravity"))
+READ_ONLY_HEADER = "X-Discussion-Read-Only"
+# What a room-scoped credential may read beyond its room on its site: the room list and every room's read routes.
+CROSS_ROOM_READ_PATH = re.compile(r"/api/rooms(?:/[^/]+(?:/.*)?)?|/r/[^/]+(?:/.*)?")
 MAX_TEXT_LENGTH = 32000
 MAX_SUMMARY_LENGTH = 1000
 MAX_BRIEF_LENGTH = 1600
@@ -1647,8 +1650,15 @@ def finish_creation_access(args, site, plan, value):
     return {"owner_access_file": str(path), "member_access_files": paths}
 
 
-def access_headers(args, site, path):
-    """Load a room-scoped secret only for its exact site and room."""
+def cross_room_read(access, site, method, target):
+    """Whether this is a plain read of another room on the credential's own site, outside a restricted run."""
+    restricted = os.getenv("CODISCUSS_TOOL_LOCKDOWN") == "1" or access.get("tool_lockdown")
+    return (method == "GET" and not restricted and access.get("site", "").rstrip("/") == site
+            and CROSS_ROOM_READ_PATH.fullmatch(target) is not None)
+
+
+def access_headers(args, site, path, method="GET"):
+    """Load a room-scoped secret only for its exact site and room; another room is read without it, declared read-only."""
     access = load_access(args)
     if not access:
         return {}
@@ -1657,6 +1667,8 @@ def access_headers(args, site, path):
     creation = target == "/api/rooms" and bool(access.get("submission_id"))
     reading = f"/r/{access.get('room', '')}"
     if access.get("site", "").rstrip("/") != site or not (creation or target == expected or target.startswith(expected + "/") or target == reading or target.startswith(reading + "/")):
+        if cross_room_read(access, site, method, target):
+            return {READ_ONLY_HEADER: "1"}
         raise CliError("凭据文件不属于本次站点和房间")
     token = access.get("token")
     if not isinstance(token, str) or not 32 <= len(token) <= 256:
@@ -1783,7 +1795,7 @@ def run(args, registry):
             # The member-scope routes answer in their own shape (子Task1 CONTRACT §3); it is passed on as is.
             result = external_send(plan, access, timeout)
         else:
-            headers = access_headers(args, site, plan.path)
+            headers = access_headers(args, site, plan.path, plan.method)
             value = send_request(plan, url, timeout, headers) if headers else send_request(plan, url, timeout)
             result = project_result(value, plan, site)
         if getattr(args, "operation", "") == "room create":

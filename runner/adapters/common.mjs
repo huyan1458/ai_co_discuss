@@ -113,7 +113,7 @@ export function watch_events(adapter, stream, task) {
     let event;
     try { event = JSON.parse(line); } catch { return; }
     const phase = adapter.events.phase(event);
-    if (phase) task.on_activity?.(phase, adapter.events.tool(event));
+    if (phase) task.on_activity?.(phase, adapter.events.tool(event), adapter.events.call?.(event));
     const note = adapter.events.note(event);
     if (note) task.on_note?.(note);
     report_edits(adapter, event, task);

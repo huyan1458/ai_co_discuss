@@ -55,6 +55,16 @@ const LOCAL_HOST = '127.0.0.1';
 const LOCAL_KEY_URL = 'http://127.0.0.1/yovoice';
 const LOCAL_LEGACY_KEY_URL = 'http://127.0.0.1:18765';
 const LOCAL_MODEL = 'qwen3-tts-customvoice-q8';
+// Optional second model: VoxCPM2 has no built-in speakers, so each voice is a fixed description, and the fixed seed keeps
+// the voice from drifting between the paragraphs of one reading.
+const LOCAL_DESIGN_MODEL = 'voxcpm2-bf16';
+const LOCAL_DESIGN_SEED = 42;
+const LOCAL_DESIGNED_VOICES = {
+  voxcpm2_soft_female: '成年女性有声书朗读者，声音柔和沉静，语速偏慢，语调平缓，情绪起伏很小，自然松弛，不表演不夸张',
+  voxcpm2_low_female: '中年女性有声书朗读者，声线略低，从容平稳，语速偏慢，语气淡然，情绪起伏很小，不表演不夸张',
+  voxcpm2_elderly_male: '六十多岁的老年男性，嗓音低沉略带沙哑，说话很慢，像老人在家里平平淡淡地回忆往事，朴素自然，没有播音腔',
+  voxcpm2_middle_aged_male: '五十岁左右的普通中年男性，声音低沉厚实，说话很慢，语气平淡朴实，像和熟人闲聊，没有播音腔，不像短视频解说',
+};
 const LOCAL_DIR = 'yovoice';
 const LOCAL_START_MS = 30_000;
 const LOCAL_POLL_MS = 500;
@@ -127,6 +137,8 @@ const LOCAL_VOICES = [
   ['Vivian', 'Vivian · 明亮女声'], ['Serena', 'Serena · 温柔女声'], ['Uncle_Fu', 'Uncle Fu · 低沉男声'],
   ['Dylan', 'Dylan · 北京青年男声'], ['Eric', 'Eric · 成都男声'], ['Ryan', 'Ryan · 英语男声'], ['Aiden', 'Aiden · 美式男声'],
   ['Ono_Anna', 'Ono Anna · 日语女声'], ['Sohee', 'Sohee · 韩语女声'],
+  ['voxcpm2_soft_female', 'VoxCPM2 · 柔和女声 / Soft female'], ['voxcpm2_low_female', 'VoxCPM2 · 低声线女声 / Low female'],
+  ['voxcpm2_elderly_male', 'VoxCPM2 · 老年男声 / Elderly male'], ['voxcpm2_middle_aged_male', 'VoxCPM2 · 中年男声 / Middle-aged male'],
 ];
 // gpt-4o-mini-tts's built-in voices; the docs call them optimized for English and recommend marin or cedar.
 const OPENAI_VOICES = [
@@ -314,11 +326,18 @@ export function wav_with_silence(wav, silence_ms) {
   return result;
 }
 
-/** Ask the local service for one paragraph; the answer is a 24 kHz mono WAV. */
+/** The generation request for a voice; a designed voice's description replaces the tone instruction. */
+function local_generation(text, speaker, context) {
+  const design = LOCAL_DESIGNED_VOICES[speaker];
+  if (design) return { text, modelId: LOCAL_DESIGN_MODEL, voxMode: 'design', voiceDescription: design, language: 'zh', seed: LOCAL_DESIGN_SEED };
+  return { text, modelId: LOCAL_MODEL, speaker, language: 'zh', ...(context ? { voiceDescription: context } : {}) };
+}
+
+/** Ask the local service for one paragraph; the answer is a mono WAV (24 kHz from Qwen3-TTS, 48 kHz from VoxCPM2). */
 function local_generate({ home, key, text, speaker, context }, request) {
   return request(`${local_url(home, 'tts')}/v1/generate`, { method: 'POST', redirect: 'error', signal: AbortSignal.timeout(TTS_TIMEOUT_MS),
     headers: { Authorization: `Bearer ${key}`, 'Content-Type': 'application/json' },
-    body: JSON.stringify({ text, modelId: LOCAL_MODEL, speaker, language: 'zh', ...(context ? { voiceDescription: context } : {}) }) });
+    body: JSON.stringify(local_generation(text, speaker, context)) });
 }
 
 /**
@@ -432,6 +451,7 @@ async function local_once({ home, key, text, speaker, context, silence }, { requ
   if (response.status === 409) throw new Error('本机语音一直在忙，请稍后再试');
   if (!response.ok) {
     const code = (await response.json().catch(() => ({}))).error?.code;
+    if (code === '@yovoice.error.modelRequired') throw new Error('这个音色的模型尚未安装：请让本机 AI 按 local-tts-setup 技能安装');
     throw new Error(`本机语音合成失败（HTTP ${response.status}${code ? ` ${code}` : ''}），请查看 ${join(home, LOCAL_DIR, 'data', 'logs')}`);
   }
   const audio = await convert(home, wav_with_silence(Buffer.from(await response.arrayBuffer()), silence));

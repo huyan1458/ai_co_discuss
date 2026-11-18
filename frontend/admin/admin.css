@@ -169,3 +169,18 @@ a.panel-link:hover { text-decoration: underline; }
   .panel-tab { flex: 1; justify-content: center; padding: 0 8px; }
   .panel-logins, .panel-form-row { grid-template-columns: 1fr; }
 }
+
+/* The ways into this computer: three equal cards on each entry tab, one above the other on a phone. */
+.entry-grid { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 12px; }
+.entry-services { margin-top: 12px; }
+.entry-state { align-items: center; margin-bottom: 12px; }
+.entry-state > span { flex: 1; }
+@media (max-width: 760px) {
+  .entry-grid { grid-template-columns: minmax(0, 1fr); }
+}
+@media (max-width: 640px) {
+  .entry-services .panel-row { flex-wrap: wrap; }
+  .entry-services .panel-main { flex-basis: calc(100% - 62px); }
+  .entry-services .panel-sub { white-space: normal; }
+  .entry-services .panel-side { width: 100%; justify-content: flex-end; }
+}

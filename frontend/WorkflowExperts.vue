@@ -59,7 +59,7 @@ function effort_items(agent) {
 }
 
 function access_items(agent) {
-  return access_options(profile(agent).adapter).map((option) => ({ label: { read: t('只读'), write: t('可写'), auto: t('自动'), full: t('全放开') }[option.value] || option.label, value: option.value, disabled: option.disabled }));
+  return access_options(profile(agent).adapter, bridge.full_only_hint(profile(agent).adapter)).map((option) => ({ label: { read: t('只读'), write: t('可写'), auto: t('自动'), full: t('全放开') }[option.value] || option.label, value: option.value, disabled: option.disabled }));
 }
 
 /** The software's preset prompt, sent when the card has none of its own. */
@@ -73,9 +73,9 @@ function update(part, card, patch) {
 /** Another platform keeps the card's role; the old model and strength belong to the old software, so they reset. */
 function change_platform(part, agent, name) {
   const adapter = view.value.launch.profiles[name]?.adapter;
-  const allowed = access_options(adapter).filter((option) => !option.disabled).map((option) => option.value);
+  const allowed = access_options(adapter, bridge.full_only_hint(adapter)).filter((option) => !option.disabled).map((option) => option.value);
   update(part, agent.card, { name: `${name}-${agent.card}`, model: "", effort: "",
-    project_access: allowed.includes(agent.project_access) ? agent.project_access : "read" });
+    project_access: allowed.includes(agent.project_access) ? agent.project_access : allowed.includes("read") ? "read" : allowed[0] });
 }
 
 function change_model(part, agent, value) {

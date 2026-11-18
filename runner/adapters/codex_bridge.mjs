@@ -3,8 +3,8 @@
  * its event handling while the owner can interject mid-turn (`turn/steer`), which `codex exec` cannot take.
  *
  * usage: node codex_bridge.mjs <codex executable> [codex app-server options...]
- * stdin: first line `{prompt, thread_id?, cwd, model?, effort?, full?, images?}` (`images`: local image paths sent with
- * the prompt); every later line `{steer: text}`.
+ * stdin: first line `{prompt, thread_id?, cwd, model?, effort?, full?, images?, developer_instructions?}` (`images`: local
+ * image paths sent with the prompt; `developer_instructions`: system-level rules of a new thread); every later line `{steer: text}`.
  * stdout: `thread.started`, `turn.started`, `item.started|completed`, `turn.completed|failed`, `error` events in the
  * shape `codex exec --json` prints. The process exits when the turn ends; exit 1 with the reason on stderr otherwise.
  * One process per execution: an app-server keeps the thread it loaded as its writer until it exits.
@@ -121,8 +121,9 @@ async function start(task) {
   server.stdin.write(`${JSON.stringify({ jsonrpc: '2.0', method: 'initialized', params: {} })}\n`);
   // 全放开 has no permission profile; the thread itself runs without sandbox or approval.
   const access = task.full ? { sandbox: 'danger-full-access', approvalPolicy: 'never' } : {};
+  // Codex keeps a thread's developer instructions from its start: a resumed thread ignores new ones (tested 0.169.1).
   const opened = task.thread_id ? await request('thread/resume', { threadId: task.thread_id, cwd: task.cwd, ...access })
-    : await request('thread/start', { cwd: task.cwd, ...access });
+    : await request('thread/start', { cwd: task.cwd, ...access, ...(task.developer_instructions ? { developerInstructions: task.developer_instructions } : {}) });
   thread_id = opened.thread.id;
   emit({ type: 'thread.started', thread_id });
   // The task's images go in as `localImage` inputs after the text, as a screenshot attached in Codex itself does.

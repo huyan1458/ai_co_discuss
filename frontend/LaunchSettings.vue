@@ -16,7 +16,7 @@ const write = (name, field, value) => bridge.write_launch(name, field, value);
 const ACCESS = [{ label: t('只读'), value: "read" }, { label: t('可写'), value: "write" }];
 // Select items cannot use an empty value, so "inherit" stands for following the launch-wide setting.
 // The shared setting stays 只读 / 可写, which every CLI supports; each AI can pick any level its software offers.
-const participant_access = name => [{ label: t('沿用本次设置'), value: "inherit" }, ...access_options(profile(name).adapter).map(option => ({ ...option,
+const participant_access = name => [{ label: t('沿用本次设置'), value: "inherit" }, ...access_options(profile(name).adapter, bridge.full_only_hint(profile(name).adapter)).map(option => ({ ...option,
   label: { read: t('只读'), write: t('可写'), auto: t('自动'), full: t('全放开') }[option.value] || option.label }))];
 const write_access = (name, value) => write(name, "project_access", value === "inherit" ? "" : value);
 const models = name => bridge.launch_model_state(name, view.value.launch);

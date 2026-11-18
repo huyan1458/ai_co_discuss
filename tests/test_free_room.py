@@ -659,17 +659,37 @@ class SingleMemberTests(FreeRoomTests):
         self.assertEqual(self.reserve()[1]["rewound_executions"], [taken["id"]])
         self.assertEqual(self.request(f"{self.path}/rewind?message_id={first_answer}", None, self.owner)[0], 400)
 
+    def test_running_execution_counts_each_tool_in_the_order_first_used(self):
+        """The room view tells a working card how many times each tool ran; thinking and writing are not tool calls."""
+        self.say("一")
+        running = self.reserve()[1]
+        room_id = self.path.rsplit("/", 1)[-1]
+        calls = [("thinking", ""), ("tool", "Read"), ("tool", "Read"), ("command", "Bash"), ("editing", "Edit"), ("tool", "Read"), ("writing", "")]
+        with closing(sqlite3.connect(self.database)) as connection, connection:
+            connection.executemany("INSERT INTO execution_segments (source,execution_id,seq,room_id,phase,tool,start_ms,end_ms) VALUES ('free',?,?,?,?,?,0,1)",
+                                   [(running["id"], seq, room_id, phase, tool) for seq, (phase, tool) in enumerate(calls, 1)])
+        execution = self.request(self.path)[1]["free"]["members"][0]["execution"]
+        self.assertEqual([(item["tool"], item["count"]) for item in execution["tools"]], [("Read", 3), ("Bash", 1), ("Edit", 1)])
+
     def test_interrupt_voids_the_running_turn_and_keeps_what_arrived_meanwhile(self):
         """Stopping a member voids its running turn; a message sent meanwhile waits for its next turn, with any new one."""
         self.say("一")
         stopped = self.reserve()[1]
+        room_id = self.path.rsplit("/", 1)[-1]
+        with closing(sqlite3.connect(self.database)) as connection, connection:
+            connection.executemany("INSERT INTO execution_segments (source,execution_id,seq,room_id,phase,start_ms,end_ms) VALUES ('free',?,?,?,?,0,1)",
+                                   [(stopped["id"], seq, room_id, phase) for seq, phase in enumerate(("thinking", "command", "editing"))])
         self.say("二")
         member_id = self.request(self.path)[1]["free"]["members"][0]["id"]
         view = self.request(f"{self.path}/members/{member_id}/interrupt", {}, self.owner)[1]
         self.assertEqual([item["status"] for item in view["requests"]], ["cancelled", "pending"])
         free = self.request(self.path)[1]["free"]
         self.assertEqual(free["requests"][0]["cancel_reason"], "user_stop")
-        self.assertEqual(next(item for item in free["executions"] if item["id"] == stopped["id"])["status"], "cancelled")
+        voided = next(item for item in free["executions"] if item["id"] == stopped["id"])
+        self.assertEqual(voided["status"], "cancelled")
+        # The stopped card still shows how long the work ran and how many actions it took.
+        self.assertEqual(voided["steps"], 2)
+        self.assertGreater(voided["finished_at"], 0)
         self.say("三")
         execution = self.reserve()[1]
         self.assertEqual(len(execution["requests"]), 2)
@@ -1778,8 +1798,8 @@ class HostTests(HostRoomTests):
         self.assertFalse(any(member == "Antigravity" for member, _, status in self.requests() if status == "pending"))
         self.assertNotIn(("Claude", "handoff", "pending"), self.requests())
 
-    def test_naming_only_the_host_skips_the_queue_and_leaves_its_relay_running(self):
-        """A side question to the host goes out at once, even while it works; the relay goes on."""
+    def test_naming_only_an_idle_host_skips_the_queue_and_a_busy_host_keeps_the_order(self):
+        """A side question to an idle host goes out at once and the relay goes on; a busy host's message waits its turn."""
         FreeRoomTests.say(self, "写到第 10 集")
         self.host_dispatch(to=["Codex", "Antigravity"], sequential=True, loop=True)
         relay_step = self.reserve_for("Codex")[1]
@@ -1787,8 +1807,8 @@ class HostTests(HostRoomTests):
         self.assertEqual((status, "queued" in asked), (201, False), asked)
         host_execution = self.reserve_for("Claude")[1]
         status, again = FreeRoomTests.say(self, "还有呢", to=["Claude"], queue=True)
-        self.assertEqual((status, "queued" in again), (201, False), "a busy host takes it next instead of the queue")
-        self.assertIn(("Claude", "ask", "pending"), self.requests())
+        self.assertTrue(again.get("queued"), "a busy host could not answer sooner, so the message keeps its place")
+        self.assertNotIn(("Claude", "ask", "pending"), self.requests())
         for name, execution in (("Claude", host_execution), ("Codex", relay_step)):
             status, saved = self.request(f"{self.path}/messages", {"author": name, "text": f"{name} 完成", "source": "cli",
                                                                    "submission_id": uuid.uuid4().hex, "execution_id": execution["id"]}, self.tokens[name])

@@ -54,6 +54,11 @@ html[data-theme="channel-light"] .markdown-body {
   border: 0; border-radius: 5px; color: inherit; background: var(--markdown-panel); opacity: .55; cursor: pointer; user-select: none; }
 .markdown-body .markdown-copy:hover, .markdown-body .markdown-copy:focus-visible { opacity: 1; }
 .markdown-body th { background: var(--markdown-panel); font-weight: 650; }
+/* Rows a folded message does not show: they take no height but still set the column widths, so expanding keeps the table's width.
+   The zero line height and padding hold the row flat where a browser treats `collapse` as `hidden`. */
+.markdown-body tr.markdown-folded-row { visibility: collapse; }
+.markdown-body tr.markdown-folded-row > :is(th, td) { padding-block: 0; border-block-width: 0; line-height: 0; }
+.markdown-body tr.markdown-folded-row * { line-height: 0; }
 .markdown-body img { max-width: 100%; height: auto; }
 .markdown-body .mention { color: var(--markdown-link); background: none; border-radius: 3px; padding: 0 2px; }
 .markdown-body .skill-ref { display: inline-flex; align-items: center; gap: 3px; color: var(--markdown-link); font-weight: 600; }

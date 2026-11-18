@@ -1,0 +1,12 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none">
+  <title>External expert</title>
+  <defs>
+    <linearGradient id="external-expert-fill" x1="2" y1="3" x2="22" y2="21" gradientUnits="userSpaceOnUse">
+      <stop stop-color="#7c3aed"/>
+      <stop offset="1" stop-color="#e11d74"/>
+    </linearGradient>
+  </defs>
+  <rect x="3.7" y="3.2" width="16.6" height="13.2" rx="2.6" stroke="url(#external-expert-fill)" stroke-width="2.4"/>
+  <path d="M1.8 20.8h20.4" stroke="url(#external-expert-fill)" stroke-width="2.6" stroke-linecap="round"/>
+  <path d="M12 5.9l1.1 2.9 2.9 1.1-2.9 1.1-1.1 2.9-1.1-2.9-2.9-1.1 2.9-1.1z" fill="url(#external-expert-fill)"/>
+</svg>

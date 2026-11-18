@@ -423,6 +423,7 @@ function expert_card_fixture(initial_preset = null) {
   const reads = [];
   const bridge = { launch_clients: { Codex: [{ value: "codex_cli", label: "Codex CLI" }, { value: "codex", label: "Codex App" }] },
     launch_can_set_access: (name, launch) => ['codex_cli', 'claude', 'antigravity_cli', 'api'].includes(launch.profiles[name]?.adapter),
+    full_only_hint: () => '',
     launch_model_state: (name, launch, profile = launch.profiles[name]) => ({ supported: profile?.adapter === "codex_cli", efforts: ["low", "high"] }),
     load_launch_models: name => reads.push(name),
     write_launch: (name, field, value) => { view.value.launch.profiles[name][field] = value; },

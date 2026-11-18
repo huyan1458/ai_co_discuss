@@ -28,11 +28,17 @@ async function measure() {
 }
 watch(() => JSON.stringify(topic.value), measure, { immediate: true });
 watch(() => view.value.tab, measure);
+/**
+ * Hidden until the room's details and transcript are both read: the directory entry a new room opens with has no members
+ * or request, so showing it early made the card grow as they arrived (user 2026-11-18, #4818).
+ */
+const ready = computed(() => Boolean(room.value?.experts) && !view.value.messages_loading);
+watch(ready, measure);
 defineExpose({ measure });
 </script>
 
 <template>
-  <section class="channel-message channel-topic-card" :class="{ 'is-expanded': topic_expanded }" :aria-label="t('议题')">
+  <section v-if="ready" class="channel-message channel-topic-card" :class="{ 'is-expanded': topic_expanded }" :aria-label="t('议题')">
     <header class="channel-topic-heading"><span class="channel-topic-eyebrow"><UIcon name="i-lucide-target" />{{ t('议题') }}</span><h2>{{ room.title }}</h2><UButton icon="i-lucide-pencil" :label="t('编辑')" color="neutral" variant="ghost" size="xs" @click="emit('edit')" /></header>
     <div ref="topic_body" class="channel-topic-body" :class="{ 'is-clamped': topic_overflows && !topic_expanded }">
     <div v-if="topic.request" class="channel-topic-section channel-topic-request"><h3>{{ topic.request.label }}</h3><p class="channel-topic-text">{{ topic.request.text }}</p></div>

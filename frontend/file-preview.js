@@ -9,9 +9,10 @@ import { locale, t } from './i18n.js';
  * `open(path, directory, root)` is set by the preview while it is mounted (`root` is the index of the room's project
  * directory the path is in, 0 for the main one); `reveal_path` is a folder of directory `reveal_root` the file list should show next (it
  * may not be shown yet); `excerpts` are `{ id, path, name, start, end, text, comment }` waiting in the composer;
- * `focus_composer` counts requests to focus it.
+ * `focus_composer` counts requests to focus it; `dock_width` is the width in pixels the preview takes beside the messages
+ * as a split pane, 0 while it is not docked.
  */
-export const file_preview = reactive({ open: null, reveal_path: null, reveal_root: 0, excerpts: [], focus_composer: 0 });
+export const file_preview = reactive({ open: null, reveal_path: null, reveal_root: 0, excerpts: [], focus_composer: 0, dock_width: 0 });
 let excerpt_serial = 0;
 // Name of the CSS highlight that keeps a selection visible while its comment is typed.
 const PENDING_HIGHLIGHT = "excerpt-pending";

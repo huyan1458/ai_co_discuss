@@ -26,7 +26,7 @@ watch(() => props.open, async (open) => {
 
 async function join() {
   busy.value = "join";
-  try { joined.value = await call("relay/join", { code: code.value.trim() }); notify("info", t('已开启线上中转')); await reload(); }
+  try { joined.value = await call("relay/join", { code: code.value.trim() }); notify("info", t('已开启线上网站')); await reload(); }
   catch (failure) { notify("error", failure.message); }
   finally { busy.value = ""; }
 }
@@ -45,7 +45,7 @@ function close() { emit("update:open", false); }
 </script>
 
 <template>
-  <UModal :open="open" :title="t('线上中转')" :description="t('托管账号的使用者经共议线上站点访问这台电脑，不需要自有域名')" @update:open="(value) => !value && close()">
+  <UModal :open="open" :title="t('线上网站')" :description="t('托管账号的使用者经共议线上站点访问这台电脑，不需要自有域名')" @update:open="(value) => !value && close()">
     <template #body>
       <div class="relay">
         <p v-if="relay.site" class="relay-current">{{ t('已接入 {value1}', { value1: relay.site }) }}<template v-if="relay.url"> {{ t('· 入口 {value1}', { value1: relay.url }) }}</template>{{ t('。换站点时粘贴新的接入码。') }}</p>
@@ -76,7 +76,7 @@ function close() { emit("update:open", false); }
           </template>
         </section>
 
-        <p class="panel-note"><UIcon name="i-lucide-info" />{{ t('线上中转和自有域名隧道一样，Cloudflare 能看到托管账号的往来内容；登录、会话与入口保护仍由这台电脑负责。每个页面的请求都经过 Cloudflare Workers，免费额度适合少量使用者，人多时改用自有域名。') }}</p>
+        <p class="panel-note"><UIcon name="i-lucide-info" />{{ t('线上网站和自有域名隧道一样，Cloudflare 能看到托管账号的往来内容；登录、会话与入口保护仍由这台电脑负责。每个页面的请求都经过 Cloudflare Workers，免费额度适合少量使用者，人多时改用自有域名。') }}</p>
       </div>
       <div class="panel-form-foot"><button type="button" class="panel-button is-primary" @click="close">{{ joined ? t('完成') : t('关闭') }}</button></div>
     </template>

@@ -30,7 +30,7 @@ import { clear_instance_flag, create_os_user, install_shared_runtime, instance_k
 import { install_workflows, shipped_workflows } from './discussion_skills.mjs';
 import { list_workflows, workflows_home } from './workflows.mjs';
 import { hosted_prompt, import_skill, library_root, list_library, remove_library_skill, save_hosted_prompt } from './skill_library.mjs';
-import { local_status } from './discussion_local.mjs';
+import { local_status, save_site_connection } from './discussion_local.mjs';
 import { autostart_enabled, launcher_path, set_autostart } from './launcher.mjs';
 import { show_tray } from './tray.mjs';
 import { OPERATOR_EVENTS_FILE } from './account_space.mjs';
@@ -56,6 +56,8 @@ const STATE_FILE = 'admin-panel.json';
 // unfinished one blocks another.
 const UPDATE_JOB_FILE = 'panel-update.json';
 const UPDATE_STALE_MS = 10 * 60 * 1000;
+// How often a running panel looks for an install to finish: one started during the install never gets the updater's start.
+const UPDATE_FINISH_CHECK_MS = 3000;
 const OWNER_ENV_TIMEOUT_MS = 120_000;
 // How often the panel makes sure the entry's tunnel runs as set, and how long an update waits for the entry to be back.
 const TUNNEL_CHECK_MS = 60_000;
@@ -107,10 +109,10 @@ let latest = { at: 0, version: '' };
  * while the next one answers in under two (seen 2026-11-14). Failing is reported naming the host, not as a problem of
  * the site.
  */
-async function fetch_outside(url, timeout_ms) {
+async function fetch_outside(url, timeout_ms, init = {}) {
   for (let attempt = 1; ; attempt += 1) {
     try {
-      return await fetch(url, { signal: AbortSignal.timeout(timeout_ms) });
+      return await fetch(url, { ...init, signal: AbortSignal.timeout(timeout_ms) });
     } catch (error) {
       const timed_out = error.name === 'TimeoutError';
       if (attempt < OUTSIDE_ATTEMPTS) continue;
@@ -127,6 +129,12 @@ async function latest_version(force = false) {
   if (!response.ok) throw panel_error('查询新版本失败（HTTP {value1}）', { value1: response.status });
   latest = { at: Date.now(), version: String((await response.json()).version || '') };
   return latest.version;
+}
+
+/** Refuse an update npm cannot deliver yet, before anything is stopped: a new version is listed minutes before its package downloads. */
+async function check_package(version) {
+  const response = await fetch_outside(`https://registry.npmjs.org/${NPM_PACKAGE}/-/${NPM_PACKAGE}-${version}.tgz`, OUTSIDE_TIMEOUT_MS, { method: 'HEAD' });
+  if (response.status === 404) throw panel_error('v{value1} 刚发布，npm 还在准备安装包，请过几分钟再更新；当前版本和服务没有受影响', { value1: version });
 }
 
 /** Whether version a is newer than b (plain x.y.z). */
@@ -228,7 +236,7 @@ async function finish_update(data) {
   // The panel itself starts an entry left on (run_panel); the report says once it serves again.
   if (hosting_enabled(data) && entry_settings(data).running) await update_step(steps, t('已重新启动登录入口'), async () => {
     for (let waited = 0; waited < ENTRY_BACK_MS; waited += 500) { if ((await entry_status(data)).running) return; await new Promise(done => setTimeout(done, 500)); }
-    throw panel_error('入口没有重新启动，在“概览”页“托管”下点“启动”看原因');
+    throw panel_error('入口没有重新启动，在“概览 → 登录入口 → 托管账号入口”点“启动”看原因');
   });
   if (hosting_enabled(data)) {
     const accounts = await list_accounts(data);
@@ -392,7 +400,7 @@ function install_runtime(data) {
  */
 function account_env(data, name, action, request = {}, folders = {}) {
   const { env_script } = shared_paths();
-  if (!existsSync(env_script)) throw panel_error('还没有安装隔离账号的程序副本，请先在“概览 → 托管 → 程序副本”中同步');
+  if (!existsSync(env_script)) throw panel_error('还没有安装隔离账号的程序副本，请先在“概览 → 登录入口 → 托管账号入口”中同步');
   const text = run_as_user(data, name, `& ${ps_quote(process.execPath)} ${ps_quote(env_script)} ${action} $Job`,
     { files: { 'request.json': JSON.stringify(request) }, folders, timeout: 120_000 });
   const line = text.split(/\r?\n/).reverse().find(item => item.trim().startsWith('{'));
@@ -546,11 +554,11 @@ function run_instance(data, name, command) {
   // An account without its own Windows user runs as the owner and could read everything the owner can; it is not let
   // run while people outside can reach the entry.
   if (command === 'start' && process.platform === 'win32' && !read_os_users(data)[name] && (entry_settings(data).relay_enabled || entry_settings(data).tunnel_enabled)) {
-    throw panel_error('外网访问已开启，{value1} 未隔离（以你的身份运行），不能启动：请先隔离该账号，或关闭登录入口的线上中转和自有域名', { value1: name });
+    throw panel_error('外网访问已开启，{value1} 未隔离（以你的身份运行），不能启动：请先隔离该账号，或关闭登录入口的线上网站和自有域名', { value1: name });
   }
   if (command === 'start' && read_os_users(data)[name]) {
     const { local_script } = shared_paths();
-    if (!existsSync(local_script)) throw panel_error('还没有安装隔离账号的程序副本，请先在“概览 → 托管 → 程序副本”中同步');
+    if (!existsSync(local_script)) throw panel_error('还没有安装隔离账号的程序副本，请先在“概览 → 登录入口 → 托管账号入口”中同步');
     // Whatever was set up first, the instance starts on the shared copies its Windows user can run.
     use_shared_programs(data, name);
     return start_instance_as_user(data, name, service, local_script, process.execPath, { key_file });
@@ -645,7 +653,7 @@ function cookie(request, name) {
 export function create_panel({ data, key, port, ops = {}, sessions = new Set() }) {
   const op = { list_accounts, add_account, reset_password, set_account_disabled, remove_account, run_instance, create_os_user, remove_os_user,
     login_status, apply_login, logout, start_login, login_progress, submit_login, cancel_login, install_runtime, prepare_account, account_env, account_skills, account_workflows, owner_env, owner_skills, owner_prompts, save_owner_prompt, shared_cli_state,
-    save_api_key, list_keys, remove_key, use_shared_programs, service_overview, run_owner_service, latest_version, begin_update,
+    save_api_key, list_keys, remove_key, use_shared_programs, service_overview, run_owner_service, latest_version, check_package, begin_update,
     autostart_enabled, set_autostart, entry_overview, start_entry, stop_entry, keep_tunnel, start_tunnel_setup, set_entry_way, set_relay_url, connect_site, make_access_code, join_relay, protect_account, start_verified, hand_over: () => {}, ...ops };
   const hosts = new Set([`127.0.0.1:${port}`, `localhost:${port}`]);
 
@@ -656,7 +664,7 @@ export function create_panel({ data, key, port, ops = {}, sessions = new Set() }
     const hosting = hosting_enabled(data);
     if (method === 'GET' && section === 'state') {
       const windows = process.platform === 'win32';
-      return { hosting, version: VERSION, service: op.service_overview(data), platform: process.platform,
+      return { hosting, version: VERSION, service: op.service_overview(data), online_site: bound_site(data)?.site || '', platform: process.platform,
         launcher: windows && existsSync(launcher_path(data)), autostart: windows && op.autostart_enabled(), login_methods: LOGIN_METHODS, providers: API_PROVIDERS,
         ...(hosting ? { accounts: await op.list_accounts(data), clis: op.shared_cli_state(), entry: await op.entry_overview(data) }
           : { accounts: [], clis: {}, entry: null }) };
@@ -674,7 +682,11 @@ export function create_panel({ data, key, port, ops = {}, sessions = new Set() }
       const current = op.service_overview(data).version || VERSION, version = await op.latest_version(name === 'check');
       return { current, latest: version, available: newer_version(version, current) };
     }
-    if (method === 'POST' && section === 'update') return op.begin_update(data, await op.latest_version(true), op.hand_over);
+    if (method === 'POST' && section === 'update') {
+      const version = await op.latest_version(true);
+      await op.check_package(version);
+      return op.begin_update(data, version, op.hand_over);
+    }
     if (method === 'POST' && section === 'autostart') return { autostart: op.set_autostart(Boolean(body.on), data) };
     // Command-line sign-in: '_' is the owner; an account name is a hosted account with its own Windows user.
     if (section === 'login-jobs') {
@@ -711,6 +723,9 @@ export function create_panel({ data, key, port, ops = {}, sessions = new Set() }
       if (method === 'POST' && !name) return import_skill(data, body);
       if (method === 'POST' && action === 'remove') { remove_library_skill(data, name); return { ok: true }; }
     }
+    // The owner's own online site: bound, checked and left here whether or not this computer hosts accounts.
+    if (method === 'POST' && section === 'site' && name === 'connect') return bind_online_site(data, body, op.connect_site);
+    if (method === 'POST' && section === 'site' && name === 'disconnect') return disconnect_site(data);
     // Hosting: only once the owner turned it on in setup.
     if (!hosting) throw panel_error('托管管理未打开：运行 codiscuss setup 勾选“托管管理（管理面板）”');
     if (method === 'POST' && section === 'clis' && name === 'install') return op.install_runtime(data);
@@ -725,7 +740,6 @@ export function create_panel({ data, key, port, ops = {}, sessions = new Set() }
     // How people outside reach the entry, the relay's entry address, and binding this computer to an online site.
     if (method === 'POST' && section === 'entry' && name === 'way') return op.set_entry_way(data, String(body.way || ''), body.enabled === true);
     if (method === 'POST' && section === 'entry' && name === 'relay') return op.set_relay_url(data, body.url);
-    if (method === 'POST' && section === 'site' && name === 'connect') return op.connect_site(data, body.site, body.setup_key);
     // The access code: made on the computer that deployed the online site, pasted on a hosting computer.
     if (method === 'GET' && section === 'site' && name === 'code') return { ...deploy_settings(data), site: deploy_settings(data).site || bound_site(data)?.site || '' };
     if (method === 'POST' && section === 'site' && name === 'code') return op.make_access_code(data, body);
@@ -877,7 +891,7 @@ async function prepare_entry_way(data, way) {
     const users = read_os_users(data), accounts = read_accounts(data);
     const exposed = [];
     for (const [name, account] of Object.entries(accounts)) if (!users[name] && await instance_running(account.port)) exposed.push(name);
-    if (exposed.length) throw panel_error('未隔离的账号正在运行（{value1}），它们以你的身份运行，开启线上中转或自有域名前请先停止或隔离', { value1: exposed.join('、') });
+    if (exposed.length) throw panel_error('未隔离的账号正在运行（{value1}），它们以你的身份运行，开启线上网站或自有域名前请先停止或隔离', { value1: exposed.join('、') });
   }
 }
 
@@ -891,6 +905,12 @@ async function set_entry_way(data, way, enabled) {
   if (enabled) await prepare_entry_way(data, way);
   save_entry_settings(data, { [`${way}_enabled`]: enabled });
   if (enabled && !(await entry_status(data)).running) { await start_entry(data); save_entry_settings(data, { running: true }); }
+  // With no way left on nobody can reach the entry, so it does not keep running.
+  const settings = entry_settings(data);
+  if (!enabled && !settings.relay_enabled && !settings.tunnel_enabled) {
+    if ((await entry_status(data)).running) await stop_entry(data);
+    save_entry_settings(data, { running: false });
+  }
   if (enabled && way === 'relay' && !local_status(data).running) await run_owner_service(data, 'start');
   await keep_tunnel(data);
   return entry_overview(data);
@@ -954,7 +974,7 @@ async function join_relay(data, text) {
   await set_relay_url(data, entry_url);
   steps.push(t('入口地址 {value1}', { value1: entry_url }));
   const overview = await set_entry_way(data, 'relay', true);
-  steps.push(t('已开启线上中转'));
+  steps.push(t('已开启线上网站'));
   return { steps, entry: overview };
 }
 
@@ -986,6 +1006,26 @@ function connect_site(data, site, setup_key) {
     child.on('error', fail);
     child.on('exit', code => (code === 0 ? done(bound_site(data)) : fail(errors.trim() ? new Error(errors.trim().split(/\r?\n/).pop()) : panel_error('绑定失败（退出码 {value1}）', { value1: code }))));
   });
+}
+
+/** Bind this computer to the owner's online site; it has one at a time, and the address must be such a site. */
+async function bind_online_site(data, { site, setup_key }, connect) {
+  const bound = bound_site(data);
+  let origin;
+  try { origin = new URL(String(site || '').trim()).origin; } catch { throw panel_error('站点地址格式不对，例如 https://xxx.pages.dev'); }
+  if (bound && bound.site !== origin) throw panel_error('这台电脑已绑定 {value1}，请先解绑', { value1: bound.site });
+  const result = await connect(data, origin, setup_key);
+  if (!result) throw panel_error('这个地址不是共议线上站点：{value1}', { value1: origin });
+  return result;
+}
+
+/** Leave the online site: its paired devices can no longer reach this computer. The hosted accounts' address depends on it. */
+function disconnect_site(data) {
+  const bound = bound_site(data);
+  if (!bound) return { disconnected: '' };
+  if (entry_settings(data).relay_enabled) throw panel_error('托管账号入口的线上网站还开着，请先关闭它');
+  save_site_connection(data, bound.site);
+  return { disconnected: bound.site };
 }
 
 // ---- Hosted accounts' failures, to the owner's Weixin ----
@@ -1230,6 +1270,8 @@ function run_panel(data, port) {
   const keeper = setInterval(keep, TUNNEL_CHECK_MS);
   // Hosted accounts' failures reach the owner's Weixin; one pass at a time.
   let relaying = false;
+  const finisher = setInterval(() => finish_update(data).catch(error => process.stderr.write(t(`更新收尾失败：{value1}
+`, { value1: error.message }))), UPDATE_FINISH_CHECK_MS);
   const relay = setInterval(() => {
     if (relaying) return;
     relaying = true;
@@ -1265,6 +1307,7 @@ function run_panel(data, port) {
   } });
   function shutdown(exit = true) {
     clearInterval(relay);
+    clearInterval(finisher);
     // The tunnel runs on without the panel, like the entry.
     clearInterval(keeper);
     tray?.close();

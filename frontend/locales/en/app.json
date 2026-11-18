@@ -263,6 +263,7 @@
   "自动": "Automatic",
   "完全放开": "Full access",
   "全放开": "Full access",
+  "托管账号的后台环境无法启用这个软件的沙箱，只能使用全放开": "This software's sandbox can't run in a hosted account's background environment, so only Full access is available",
   "{value1} · 工作目录：{value2}（{value3}） · 项目：{value4}": "{value1} · Working directory: {value2} ({value3}) · Project: {value4}",
   "已保存本机软件配置，后续讨论可复用": "Local software settings saved for future discussions",
   "此浏览器缺少房间凭据，请使用原浏览器或原接入配置": "This browser lacks room credentials. Use the original browser or connection settings.",

@@ -352,7 +352,7 @@ const created = computed(() => room.value.created_at ? new Date(room.value.creat
               <UButton v-if="model_editable(member)" icon="i-lucide-pencil" size="xs" variant="ghost" color="neutral" :aria-label="t('更改 {name} 的模型与强度', { name: member.name })" :title="t('更改模型与思考强度')" @click="edit_model(member)" /></dd></div>
             <div><dt>{{ t("项目文件") }}</dt><dd>
               <div v-if="files(member).value" class="expert-card-modes overview-switch" :class="{ 'is-locked': !files(member).editable }" role="radiogroup" :aria-label="t('{name} 的项目文件权限', { name: member.name })" :aria-busy="switching === member.name" :title="files(member).hint || undefined">
-                <button v-for="option in access_options(saved?.participants?.[member.name]?.adapter)" :key="option.value" type="button" role="radio" :aria-checked="files(member).value === option.value" :title="option.hint"
+                <button v-for="option in access_options(saved?.participants?.[member.name]?.adapter, bridge.full_only_hint?.(saved?.participants?.[member.name]?.adapter))" :key="option.value" type="button" role="radio" :aria-checked="files(member).value === option.value" :title="option.hint"
                   :disabled="option.disabled || !files(member).editable || Boolean(switching)" @click="switch_access(member, option.value)">{{ option.label }}</button>
               </div>
               <span v-else class="overview-muted" :title="files(member).hint">{{ files(member).text }}</span>
@@ -513,6 +513,8 @@ const created = computed(() => room.value.created_at ? new Date(room.value.creat
   /* The name needs the head row's width on a phone, so 设为主持人 keeps only its crown. */
   .member-card-head { gap: 8px; padding: 8px 10px 0; }
   .member-card-head :deep(.channel-avatar) { width: 26px; height: 26px; }
+  /* The card's left padding is too narrow for the grip here, and a phone has no hover: it takes its own place at the row's end. */
+  .member-card-grip { position: static; order: 1; flex-shrink: 0; width: 20px; height: 20px; margin-right: -4px; opacity: 1; }
   .member-card-host :deep([data-slot="label"]) { display: none; }
   /* 接入 keeps its width and the model takes the rest of the line; a long model name is cut with an ellipsis. */
   .member-card-facts { grid-template-columns: max-content minmax(0, 1fr); gap: 4px 12px; padding: 6px 10px; }

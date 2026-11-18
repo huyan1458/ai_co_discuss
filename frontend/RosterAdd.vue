@@ -5,10 +5,10 @@ import { computed, ref } from "vue";
 
 const props = defineProps({
   label: { type: String, required: true },
-  // Each item: { value, name, icon, lucide, initials, style, title, aria_label, disabled, selected, separated, removable, row }; separated starts a second row (the presets); row puts the item on its own row under that label, after the others; selected marks the chip filling a single slot; removable lets the row's 管理 mode show a delete button that emits remove.
+  // Each item: { value, name, icon, lucide, initials, style, title, aria_label, disabled, unconfigured, selected, separated, removable, row }; unconfigured greys the chip, puts it last in its row and makes a click emit configure instead of add; separated starts a second row (the presets); row puts the item on its own row under that label, after the others; selected marks the chip filling a single slot; removable lets the row's 管理 mode show a delete button that emits remove.
   items: { type: Array, required: true },
 });
-const emit = defineEmits(["add", "remove"]);
+const emit = defineEmits(["add", "remove", "configure"]);
 const row = ref(null);
 // Delete buttons show only while the user manages the row, so a stray click cannot delete a preset.
 const managing = ref(false);
@@ -21,7 +21,8 @@ const groups = computed(() => {
     const row = rows.find((group) => group.label === item.row);
     if (row) row.items.push(item); else rows.push({ label: item.row, items: [item] });
   }
-  return rows.filter((group) => group.items.length);
+  return rows.filter((group) => group.items.length)
+    .map((group) => ({ ...group, items: [...group.items.filter((item) => !item.unconfigured), ...group.items.filter((item) => item.unconfigured)] }));
 });
 /** Return keyboard focus to the first chip that can still be added. */
 function focus_first() {
@@ -35,9 +36,9 @@ defineExpose({ focus_first });
     <template v-for="group in groups" :key="group.label">
       <span class="roster-add-label">{{ group.label }}</span>
       <div class="roster-add-chips">
-        <span v-for="item in group.items" :key="item.value" class="roster-add-chip" :class="{ 'is-selected': item.selected, 'is-disabled': item.disabled, 'is-removable': managing && item.removable }">
-          <button type="button" class="roster-add-main" :disabled="item.disabled" :title="item.title" :aria-label="item.aria_label" :aria-pressed="item.selected === undefined ? undefined : item.selected" @click="emit('add', item.value)">
-            <UAvatar :src="item.icon" :icon="item.lucide" :text="item.initials" :alt="item.name" size="3xs" class="channel-avatar" :class="item.style" /><span class="roster-add-name">{{ item.name }}</span><UIcon :name="item.selected ? 'i-lucide-check' : 'i-lucide-plus'" class="roster-add-mark" />
+        <span v-for="item in group.items" :key="item.value" class="roster-add-chip" :class="{ 'is-selected': item.selected, 'is-disabled': item.disabled || item.unconfigured, 'is-removable': managing && item.removable }">
+          <button type="button" class="roster-add-main" :disabled="item.disabled" :title="item.title" :aria-label="item.aria_label" :aria-pressed="item.selected === undefined ? undefined : item.selected" @click="emit(item.unconfigured ? 'configure' : 'add', item.value)">
+            <UAvatar :src="item.icon" :icon="item.lucide" :text="item.initials" :alt="item.name" size="3xs" class="channel-avatar" :class="item.style" /><span class="roster-add-name">{{ item.name }}</span><UIcon :name="item.selected ? 'i-lucide-check' : item.unconfigured ? 'i-lucide-settings-2' : 'i-lucide-plus'" class="roster-add-mark" />
           </button>
           <button v-if="managing && item.removable" type="button" class="roster-add-remove" :title="t('删除预设「{value1}」', { value1: item.name })" :aria-label="t('删除预设 {value1}', { value1: item.name })" @click="emit('remove', item.value)"><UIcon name="i-lucide-x" /></button>
         </span>

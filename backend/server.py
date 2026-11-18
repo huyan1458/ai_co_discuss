@@ -43,7 +43,7 @@ from .private_chat import chat_action, member_chat
 from .external_members import external_api, guard_route as guard_external_route, is_external_path, owner_api as external_owner_api
 from .free_room import describe_members, execution_notes, label_members, set_host_checkin, withdraw_dispatch, member_descriptions, member_display_names, member_handles, member_labels, reorder_speakers, resolve_member_fields, set_chain_rounds, speaking_order, stop_room, stop_room_work
 from .free_room import (ADAPTER_VALUE, LAYOUT_AFTER_SQL, LAYOUT_AT_SQL, continue_chain, execution_timeline, group_route_plan, retract_message, rewind_plan, rewind_room,
-                        room_event_log, withdrawals)
+                        host_event, host_hidden_event, room_event_log, withdrawals)
 from .free_room import review_capability, review_roster, checked_review_plan, save_review_plan, check_review_retry
 from .free_room import review_ready, advance_review, late_answer, execution_diffs
 from .free_room import checked_sequence, continue_sequence, sequence_view
@@ -1810,6 +1810,9 @@ def answers_direct_question(payload):
 
 # The header `launch host-control` adds: the acting host's own member credential, beside the owner's it writes with.
 ACTING_MEMBER_HEADER = "X-Acting-Member-Token"
+READ_ONLY_HEADER = "X-Discussion-Read-Only"
+# Reads that change the room: the runner's inbox fires timers and expiries, the external list ends expired members.
+READ_ONLY_CLOSED = (["inbox"], ["external-members"])
 
 # How much of a summary a receipt keeps; the full summary stays one `message view` away.
 RECEIPT_SUMMARY_CHARS = 200
@@ -3029,6 +3032,15 @@ class DiscussionHandler(BaseHTTPRequestHandler):
         if row and row[0]:
             self.headers["X-Discussion-Token"] = owner_proxy_token(row[0])
 
+    def read_only_request(self):
+        """Whether a task of another room is reading this one: it may read, and nothing it does may change the room."""
+        return bool(self.headers.get(READ_ONLY_HEADER))
+
+    def refuse_read_only(self, parts, method):
+        """Keep a cross-room reader to plain reads: no writes, no reads that change state, no private chats."""
+        if self.read_only_request() and (method != "GET" or parts[3:4] in READ_ONLY_CLOSED or parts[5:6] == ["chat"]):
+            raise PermissionError(Text('需要本房间的控制凭据'))
+
     def handle_admin_api(self, connection, parts, method):
         """Serve administrator registration, login sessions and profile."""
         token = self.admin_token()
@@ -3173,6 +3185,7 @@ class DiscussionHandler(BaseHTTPRequestHandler):
         room_id = parts[2]
         if parts[3:] == ["progress"] and method == "GET":
             return self.respond(room_progress(connection, room_id))
+        self.refuse_read_only(parts, method)
         self.admin_as_owner(connection, room_id)
         token = self.headers.get("X-Discussion-Token", "")
         if self.headers.get("X-Discussion-Session"):
@@ -3245,7 +3258,10 @@ class DiscussionHandler(BaseHTTPRequestHandler):
         if parts[3:4] == ["questions"]:
             return self.handle_questions(connection, parts, params, method, token)
         if parts[3:] == ["events"] and method == "GET":
-            return self.respond(room_event_log(connection, room_id, token, params.get("after", 0), params.get("before", 0)))
+            log = room_event_log(connection, room_id, token, params.get("after", 0), params.get("before", 0))
+            if self.read_only_request():
+                log["events"] = [host_event(event) for event in log["events"] if not host_hidden_event(event)]
+            return self.respond(log)
         if parts[3:] == ["register"] and method == "POST":
             result = register_member(connection, room_id, token, utc_now())
             connection.commit()
@@ -3622,7 +3638,8 @@ class DiscussionHandler(BaseHTTPRequestHandler):
             result = set_host_checkin(connection, room_id, token, self.read_payload())
         else:
             raise LookupError(Text('地址不存在'))
-        drain_room_queue(connection, room_id)
+        if not self.read_only_request():
+            drain_room_queue(connection, room_id)
         connection.commit()
         return self.respond(result)
 

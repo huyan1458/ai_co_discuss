@@ -43,6 +43,7 @@ description: "AI CoDiscuss 的通用参与技能，所有参与者（包括主�
 
 - `execution status`（省略编号即本次执行）回答“我现在该做什么、回答是否已落库”；主持人的累计判断存在 `state view`。
 - 增量读取用实际已读编号 `message list ROOM --after ID`，`latest_id` 不等于已读；可按 `--author`、`--query`、`--kind` 筛选。
+- 同一站点的其他房间可以只读查看：读取命令写上对方的房间编号即可（如 `room view 房间`、`message list 房间`、`room events 房间`）；写入仍限本房间，对方的私聊不可读。
 - 唤醒你的消息带附件时，任务提示末尾列出本机副本；其他附件用 `attachment download ROOM ID --dest 新文件路径` 取得。下载或看到文件名不等于读过，读不到就如实说明。
 
 ## 回答

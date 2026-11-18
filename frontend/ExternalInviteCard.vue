@@ -78,7 +78,7 @@ const uid = useId();
        the dialog: the form and the generated link with its QR code do not fit a square. -->
   <section class="external-invite" :aria-label="t('邀请外部专家')">
     <header class="external-invite-identity">
-      <span class="external-invite-avatar channel-avatar external" aria-hidden="true"><UIcon name="i-lucide-laptop-minimal" /></span>
+      <span class="external-invite-avatar channel-avatar external" aria-hidden="true"><img :src="'/icons/external-expert.svg'" alt="" /></span>
       <span class="external-invite-names"><strong>{{ t("外部专家") }}</strong><small>{{ t("对方电脑上的 AI，只读本房间开放的内容") }}</small></span>
       <span v-if="!memberId" class="external-invite-tools">
         <button type="button" :aria-label="t('移除这张卡片')" :title="t('移除这张卡片')" @click="emit('remove')"><UIcon name="i-lucide-x" /></button>

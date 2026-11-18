@@ -83,9 +83,9 @@ const ICONS = { pending: "i-lucide-circle", running: "i-lucide-loader", done: "i
       <template v-if="password">
         <p v-if="finished" class="panel-note"><UIcon name="i-lucide-circle-check" style="color: #16a34a" />{{ t('账号已创建。请将入口地址、账号名与下方密码交给使用者（密码仅显示一次）；随后在账号页{value1}配置 API 密钥。', { value1: isolate ? t('登录命令行、') : "" }) }}</p>
         <p v-else class="panel-note"><UIcon name="i-lucide-key-round" />{{ t('账号的登录密码如下，仅显示一次，请先复制保存。') }}</p>
-        <div class="panel-secret"><span>{{ entry_address(state.entry) }} · {{ name.trim() }} · {{ password }}</span>
-          <button type="button" class="panel-icon-button" :aria-label="t('复制地址、账号和密码')" @click="copy(t('地址 {value1}，账号 {value2}，密码 {value3}', { value1: entry_address(state.entry), value2: name.trim(), value3: password }))"><UIcon name="i-lucide-copy" /></button></div>
-        <p v-if="!state.entry?.address" class="panel-note is-amber"><UIcon name="i-lucide-triangle-alert" />{{ t('登录入口没有开启线上中转或自有域名，这个地址在其他设备上打不开。请在“概览 → 登录入口 → 访问方式”里开启。') }}</p>
+        <div class="panel-secret"><span>{{ [entry_address(state.entry), name.trim(), password].filter(Boolean).join(' · ') }}</span>
+          <button type="button" class="panel-icon-button" :aria-label="t('复制地址、账号和密码')" @click="copy(entry_address(state.entry) ? t('地址 {value1}，账号 {value2}，密码 {value3}', { value1: entry_address(state.entry), value2: name.trim(), value3: password }) : t('账号 {value1}，密码 {value2}', { value1: name.trim(), value2: password }))"><UIcon name="i-lucide-copy" /></button></div>
+        <p v-if="!state.entry?.address" class="panel-note is-amber"><UIcon name="i-lucide-triangle-alert" />{{ t('登录入口没有开启线上网站或自有域名，还没有可以发给使用者的地址。请在“概览 → 登录入口 → 托管账号入口”里开启。') }}</p>
       </template>
     </div>
 

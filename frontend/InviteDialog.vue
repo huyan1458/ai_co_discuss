@@ -4,6 +4,7 @@ import { computed, inject, onBeforeUnmount, ref, watch } from "vue";
 import ExpertCard from "./ExpertCard.vue";
 import ExternalExpertCard from "./ExternalExpertCard.vue";
 import ExternalInviteCard from "./ExternalInviteCard.vue";
+import PlatformConfigDialog from "./PlatformConfigDialog.vue";
 import RosterAdd from "./RosterAdd.vue";
 import { room_operations, runner_text, seat_options } from "./external-members.js";
 import { t } from "./i18n.js";
@@ -97,12 +98,18 @@ function add_invite(name) {
 
 // The same add row as the create form: platforms first, presets and the other computer on their own rows.
 const PRESET_PREFIX = "preset:";
+// A platform not set up yet stays grey at the end of its row; its chip opens the setup instead of adding a member.
+const configuring = ref("");
+const unconfigured_chip = (name) => bridge.platform_configured(name) ? {} : { unconfigured: true, title: t("未配置，点击配置"), aria_label: t("配置 {value1}", { value1: bridge.default_name(bridge.platform_of(name)) }) };
+function configure_platform(value) {
+  configuring.value = bridge.platform_of(value.startsWith(PRESET_PREFIX) ? value.slice(PRESET_PREFIX.length) : value);
+}
 const library_items = computed(() => [...invite_choices.value.map((name) => ({ value: name, name: bridge.default_name(name), ...bridge.identities[name],
-  title: invite_count(name) ? t("已在场 {count} 位 · 将添加新实例", { count: invite_count(name) }) : "", aria_label: t("添加 {name} 实例", { name }) })),
+  title: invite_count(name) ? t("已在场 {count} 位 · 将添加新实例", { count: invite_count(name) }) : "", aria_label: t("添加 {name} 实例", { name }), ...unconfigured_chip(name) })),
   ...invite_presets.value.map((preset, index) => ({ value: PRESET_PREFIX + preset.name, name: preset.label || preset.name, ...bridge.identities[bridge.platform_of(preset.name)],
-    separated: index === 0, title: preset.description || t("专家预设"), aria_label: t("添加预设 {name}", { name: preset.label || preset.name }), removable: true })),
+    separated: index === 0, title: preset.description || t("专家预设"), aria_label: t("添加预设 {name}", { name: preset.label || preset.name }), removable: true, ...unconfigured_chip(preset.name) })),
   // Its own row: it opens the invitation panel instead of adding a card.
-  { value: EXTERNAL_CHIP, name: t("外部专家"), lucide: "i-lucide-laptop-minimal", style: "external", row: t("外部"),
+  { value: EXTERNAL_CHIP, name: t("外部专家"), icon: "/icons/external-expert.svg", style: "external", row: t("外部"),
     title: t("对方电脑上的 AI，只读本房间开放的内容"), aria_label: t("邀请外部专家") },
 ]);
 
@@ -237,7 +244,8 @@ async function refresh_after(invited_any) {
       <form v-else class="pb-invite" :aria-label="t('邀请专家')" @submit.prevent="invite">
         <!-- A workflow invitation only confirms the workflow's own cards; the platform and preset rows belong to ordinary invitations. -->
         <template v-if="!invite_workflow">
-          <RosterAdd :label="t('选择 AI（可多选）')" :items="library_items" @add="add_library_item" @remove="(value) => bridge.delete_expert_preset(value.slice(PRESET_PREFIX.length))" />
+          <PlatformConfigDialog v-model="configuring" />
+          <RosterAdd :label="t('选择 AI（可多选）')" :items="library_items" @add="add_library_item" @configure="configure_platform" @remove="(value) => bridge.delete_expert_preset(value.slice(PRESET_PREFIX.length))" />
         </template>
         <p v-for="member in invite_workflow?.existing || []" :key="member.card" class="fine-print">{{ bridge.display_name(member.name) }}{{ t('：') }}{{ record(member.name)?.status === 'away' ? t('确认后请回，保留原会话') : t('已在场，沿用原成员') }}</p>
         <ExternalInviteCard v-for="seat in external_seats" :key="seat.member_id" :member-id="seat.member_id" :settings="seat.settings" />

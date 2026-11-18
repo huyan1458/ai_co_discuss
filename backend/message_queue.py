@@ -1,8 +1,9 @@
 """Owner messages queued while members work, posted one by one once the room is idle.
 
 The owner's composer sends with `queue: true`; when the room is busy (or earlier messages still wait) the message is kept
-here instead of being posted. A message naming only the host is never queued: it is a side question the host answers
-next, beside members still at work, so the owner can always ask how the work stands. Each idle moment posts the head through the normal message path with its own submission_id,
+here instead of being posted. A message naming only a host with no open request is not queued: it is a side question the host
+answers beside members still at work, so the owner can ask how the work stands. A host that is itself busy could not answer any
+sooner, so that message keeps its place in the queue. Each idle moment posts the head through the normal message path with its own submission_id,
 so a repeated drain finds the posted message and only removes the row. A failed post keeps the row with its reason and holds
 the queue; the owner's stop pauses it. The owner may send one at once, edit, delete, reorder or resume the queue.
 """
@@ -49,24 +50,33 @@ def queue_view(connection, room_id):
                       "created_at": row["created_at"]})
     paused = connection.execute("SELECT 1 FROM queued_message_pauses WHERE room_id=?", (room_id,)).fetchone() is not None
     return {"items": items, "paused": paused and bool(items), "busy": room_busy(connection, room_id),
-            "queueing": queueing_enabled(connection)}
+            "host_busy": host_busy(connection, room_id), "queueing": queueing_enabled(connection)}
 
 
 def should_queue(connection, room_id, payload):
     """Queue an owner message that asked for it while the room is busy or earlier messages still wait."""
-    if payload.get("queue") is not True or names_only_host(connection, room_id, payload):
+    if payload.get("queue") is not True:
+        return False
+    if names_only_host(connection, room_id, payload) and not host_busy(connection, room_id):
         return False
     return room_busy(connection, room_id) or connection.execute(
         "SELECT 1 FROM queued_messages WHERE room_id=? LIMIT 1", (room_id,)).fetchone() is not None
 
 
 def names_only_host(connection, room_id, payload):
-    """The owner's message names the active host alone: a side question, answered next and kept out of the queue."""
+    """The owner's message names the active host alone."""
     named = payload.get("to")
     if not isinstance(named, list) or len(set(named)) != 1:
         return False
     return connection.execute("SELECT 1 FROM room_members WHERE room_id=? AND name=? AND role='host' AND status='active'",
                               (room_id, named[0])).fetchone() is not None
+
+
+def host_busy(connection, room_id):
+    """The active host still has a request waiting or being worked on."""
+    return connection.execute("""SELECT 1 FROM member_requests r JOIN room_members m ON m.id=r.member_id
+        WHERE r.room_id=? AND r.status IN ('pending','delivering') AND m.role='host' AND m.status='active' LIMIT 1""",
+                              (room_id,)).fetchone() is not None
 
 
 def enqueue(connection, room_id, payload):
