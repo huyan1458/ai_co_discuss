@@ -3,7 +3,8 @@
 The owner's composer sends with `queue: true`; when the room is busy (or earlier messages still wait) the message is kept
 here instead of being posted. A message naming only a host with no open request is not queued: it is a side question the host
 answers beside members still at work, so the owner can ask how the work stands. A host that is itself busy could not answer any
-sooner, so that message keeps its place in the queue. Each idle moment posts the head through the normal message path with its own submission_id,
+sooner, so that message waits until the host is free, and then goes ahead of the messages waiting for the whole room. Each idle
+moment posts the next message through the normal message path with its own submission_id,
 so a repeated drain finds the posted message and only removes the row. A failed post keeps the row with its reason and holds
 the queue; the owner's stop pauses it. The owner may send one at once, edit, delete, reorder or resume the queue.
 """
@@ -118,17 +119,27 @@ def post_item(connection, room_id, row, post):
     return result
 
 
+def next_queued(connection, room_id):
+    """The queued message that may go now: the head of an idle room; while members work, the first naming only a free host."""
+    rows = connection.execute("SELECT * FROM queued_messages WHERE room_id=? ORDER BY position,id", (room_id,)).fetchall()
+    if not room_busy(connection, room_id):
+        return rows[0] if rows else None
+    if host_busy(connection, room_id):
+        return None
+    return next((row for row in rows if names_only_host(connection, room_id, json.loads(row["payload"]))), None)
+
+
 def drain(connection, room_id, post):
-    """Post the head while the room is idle, unpaused and the head has not failed; stops at the first message that keeps it busy."""
+    """Post what may go now, one message at a time, unless the queue is paused; stops at a failed message or when nothing may go."""
     if not connection.execute("SELECT 1 FROM queued_messages WHERE room_id=? LIMIT 1", (room_id,)).fetchone():
         return
     begin_write(connection)
     archived = connection.execute("SELECT archived FROM room_directory WHERE room_id=?", (room_id,)).fetchone()
     if archived is None or archived[0] or connection.execute("SELECT 1 FROM queued_message_pauses WHERE room_id=?", (room_id,)).fetchone():
         return
-    while not room_busy(connection, room_id):
-        head = connection.execute("SELECT * FROM queued_messages WHERE room_id=? ORDER BY position,id LIMIT 1", (room_id,)).fetchone()
-        if head is None or head["failure"] or not post_item(connection, room_id, head, post):
+    while True:
+        row = next_queued(connection, room_id)
+        if row is None or row["failure"] or not post_item(connection, room_id, row, post):
             return
 
 

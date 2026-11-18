@@ -354,6 +354,11 @@ function close_drawer_on_touch(event) {
   info_open.value = false;
 }
 
+/** The floating file button stays usable over the progress drawer, so pressing it does not close the drawer. */
+function keep_drawer_for_file_float(event) {
+  if (event.detail.originalEvent.target?.closest?.(".file-float")) event.preventDefault();
+}
+
 /** Capture the divider so dragging continues outside its narrow hit area. */
 function start_rail_resize(event) {
   if (event.button !== 0) return;
@@ -550,7 +555,7 @@ function resize_nav_by_key(event) {
     <USlideover v-model:open="nav_open" side="left" :title="t('房间导航')" :ui="{ overlay: 'channel-drawer-overlay', content: 'channel-navigation-drawer' }">
       <template #content><ChannelSidebar :tabs="tabs" @select="choose_room" @manage="manage_room" @create="create_channel" @create-folder="create_folder" @manage-folder="edit_folder" @delete-folder="remove_folder" @archive-folder="archive_folder" @archives="open_archives" @workflows="open_workflows" @invited="open_invited" @tab="choose_tab" @settings="nav_open = false; modal = 'settings'" /></template>
     </USlideover>
-    <USlideover v-if="room || invited_page" v-model:open="info_open" side="right" :title="invited_page ? t('被邀请的房间') : t('讨论进度')" :description="invited_page ? [invited_record?.room_title, invited_record?.machine_name].filter(Boolean).join(' · ') : room.title" :ui="{ overlay: 'channel-drawer-overlay', content: 'progress-drawer', body: 'progress-drawer-body' }">
+    <USlideover v-if="room || invited_page" v-model:open="info_open" side="right" :content="{ onInteractOutside: keep_drawer_for_file_float }" :title="invited_page ? t('被邀请的房间') : room.title" :description="invited_page ? [invited_record?.room_title, invited_record?.machine_name].filter(Boolean).join(' · ') : room.host ? t('{value1} 主持', { value1: bridge.display_name(room.host) }) : ''" :ui="{ overlay: 'channel-drawer-overlay', content: 'progress-drawer', body: 'progress-drawer-body' }">
       <template #body><InvitedRoomRail v-if="invited_page" drawer /><FreeBoard v-else @history="info_open = false; open_consensus()" /></template>
     </USlideover>
     <JoinInvitedDialog />

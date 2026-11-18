@@ -1815,6 +1815,22 @@ class HostTests(HostRoomTests):
             self.assertEqual(status, 201, saved)
         self.assertIn("pending", [status for member, _, status in self.requests() if member == "Antigravity"], "the relay goes on")
 
+    def test_queued_messages_naming_only_the_host_go_one_by_one_once_the_host_is_free(self):
+        """2026-11-18 #5042: members still at work hold other queued messages, not those for a host that has finished."""
+        queued = lambda: [item["text"] for item in self.request(self.path)[1]["free"]["queued_messages"]["items"]]
+        FreeRoomTests.say(self, "写到第 10 集")
+        for text, extra in (("问一", {"to": ["Claude"]}), ("普通", {}), ("问二", {"to": ["Claude"]})):
+            self.assertTrue(FreeRoomTests.say(self, text, queue=True, **extra)[1].get("queued"))
+        self.host_dispatch(to=["Codex"])
+        self.assertEqual(queued(), ["普通", "问二"], "the first goes out as soon as the host has finished")
+        self.work("Claude")
+        self.assertEqual(queued(), ["普通"], "the next waits for the host's answer to the first")
+        self.work("Claude")
+        self.assertEqual(queued(), ["普通"], "a message for the room still waits for the member at work")
+        self.work("Codex")
+        self.work("Claude")
+        self.assertEqual(queued(), [], "an idle room posts the rest")
+
     def test_background_work_does_not_hold_the_owners_messages(self):
         """2026-11-16: a member the host left working in the background does not queue the owner's next message."""
         FreeRoomTests.say(self, "Antigravity 写，Codex 在后台记账")

@@ -347,6 +347,19 @@ html[data-theme^="channel"] .pb-end:hover { border-color: color-mix(in srgb, #f0
 .pb-free-invite { display: flex; flex-wrap: wrap; gap: 6px; }
 .progress-drawer { max-width: min(420px, 100vw); }
 .progress-drawer-body { display: flex; flex-direction: column; padding: 0; scrollbar-gutter: stable; }
+/* The drawer's one header line carries the room and its host, so the board's own header steps aside. */
+.progress-drawer [data-slot="header"] { align-items: center; min-height: 44px; padding: 6px 44px 6px 12px; }
+.progress-drawer [data-slot="wrapper"] { display: flex; align-items: baseline; gap: 8px; min-width: 0; }
+.progress-drawer [data-slot="title"] { overflow: hidden; min-width: 0; font-size: 14px; white-space: nowrap; text-overflow: ellipsis; }
+.progress-drawer [data-slot="description"] { flex-shrink: 0; max-width: 60%; overflow: hidden; margin: 0; font-size: 12px; white-space: nowrap; text-overflow: ellipsis; }
+.progress-drawer [data-slot="close"] { top: 6px; inset-inline-end: 6px; }
+.progress-drawer .pb-header { display: none; }
+.progress-drawer .progress-board > section { margin-top: 12px; padding: 0 12px; }
+.progress-drawer .progress-board > .pb-status { margin-top: 8px; }
+.progress-drawer .pb-status-detail { margin-top: 2px; }
+.progress-drawer .pb-section h4 { margin-bottom: 2px; }
+/* An open drawer turns off pointer events on the page; the floating file button shown above it keeps working. */
+body:has(.progress-drawer) .file-float { pointer-events: auto; }
 @media (max-width: 700px) {
   .progress-drawer { max-width: 310px; }
 }
