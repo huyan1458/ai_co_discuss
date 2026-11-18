@@ -112,18 +112,18 @@ function start_resize(event) {
     </div></div>
     <div v-show="!stacked || pane === 'canvas' || (!draft && !loading)" class="workflow-library-stage">
       <WorkflowCanvas v-if="draft" ref="canvas" :key="canvas_key" v-model:flow="current.flow" v-model:agents="current.agents" :reserved="reserved" :compact="stacked"
-        :shared="scope ? draft.agents : null" :subs="scope ? null : subs" :new-sub="() => library.add_sub(false)"
+        :shared="scope ? draft.agents : null" :subs="scope ? null : subs"
         @update:shared="(value) => { draft.agents = value; }" @open-sub="library.enter_sub" @open-skill="show_skill_text" @configure="(card) => { experts_focus = card; experts_open = true; }">
         <template #actions="{ iconsOnly }">
           <UTooltip :text="experts_missing ? t('专家配置：有卡片的软件本机未配置') : t('专家配置：每张卡片的软件、模型、强度与项目权限')"><span class="workflow-library-save">
-            <UButton :icon="experts_missing ? 'i-lucide-triangle-alert' : 'i-lucide-sliders-horizontal'" :label="iconsOnly ? undefined : t('专家配置')" :aria-label="t('专家配置')" size="sm" :color="experts_missing ? 'warning' : 'neutral'" variant="ghost" @click="experts_focus = ''; experts_open = true" /></span></UTooltip>
+            <UButton :icon="experts_missing ? 'i-lucide-triangle-alert' : 'i-lucide-sliders-horizontal'" :label="iconsOnly ? undefined : t('专家配置')" :aria-label="t('专家配置')" :size="stacked ? 'xs' : 'sm'" :color="experts_missing ? 'warning' : 'neutral'" variant="ghost" @click="experts_focus = ''; experts_open = true" /></span></UTooltip>
           <UTooltip v-if="!skill_open && !stacked" :text="t('展开 SKILL.md：主持人照它派活')"><UButton icon="i-lucide-panel-right-open" :label="iconsOnly ? undefined : 'SKILL.md'" :aria-label="t('展开 SKILL.md')" size="sm" color="neutral" variant="ghost" @click="set_skill_open(true)" /></UTooltip>
           <UTooltip :text="dirty ? t('保存（Ctrl+S）：有未保存的修改') : t('没有未保存的修改')"><span class="workflow-library-save">
-            <UButton icon="i-lucide-save" :label="iconsOnly ? undefined : t('保存')" :aria-label="t('保存')" :size="stacked ? 'xs' : 'sm'" class="channel-primary-button" :disabled="!dirty" :loading="busy" @click="library.save()" />
+            <UButton icon="i-lucide-save" :label="iconsOnly ? undefined : t('保存')" :aria-label="t('保存')" :size="stacked ? 'xs' : 'sm'" :class="{ 'channel-primary-button': !stacked }" :color="stacked ? 'primary' : undefined" :variant="stacked ? 'ghost' : undefined" :disabled="!dirty" :loading="busy" @click="library.save()" />
             <i v-if="dirty" class="workflow-library-dirty" /></span></UTooltip>
         </template>
       </WorkflowCanvas>
-      <WorkflowParts v-if="draft" :compact="stacked" />
+      <WorkflowParts v-if="draft" :compact="stacked" @place="(id) => canvas?.add_sub_node(id)" />
       <WorkflowExperts v-if="draft" v-model:open="experts_open" v-model:focus="experts_focus" />
       <template v-else-if="loading">
         <WorkflowCanvas v-model:flow="placeholder.flow" v-model:agents="placeholder.agents" :compact="stacked" class="workflow-library-placeholder" inert />
@@ -163,8 +163,9 @@ function start_resize(event) {
 .workflow-library-empty { display: grid; place-content: center; justify-items: center; gap: 12px; height: 100%; color: var(--ui-text-muted); font-size: 13px; }
 .workflow-library-empty > span:first-child { width: 36px; height: 36px; color: var(--ui-text-dimmed); }
 .workflow-library-empty p { margin: 0; }
-/* The loading placeholder keeps the grid and toolbar only; its default start node would sit under the spinner. */
-.workflow-library-placeholder :deep(.vue-flow__nodes), .workflow-library-placeholder :deep(.vue-flow__edges) { visibility: hidden; }
+/* The loading placeholder keeps the grid and toolbar only; its default start node would sit under the spinner. Not
+   `visibility`: Vue Flow makes each node visible again. */
+.workflow-library-placeholder :deep(.vue-flow__nodes), .workflow-library-placeholder :deep(.vue-flow__edges) { display: none; }
 .workflow-library-loading { position: absolute; inset: 0; display: grid; place-content: center; justify-items: center; gap: 12px; color: var(--ui-text-dimmed); pointer-events: none; font-size: 13px; }
 .workflow-library-loading > span { width: 28px; height: 28px; }
 .workflow-library-loading > span:last-child { width: auto; height: auto; }

@@ -32,8 +32,8 @@ const agents = defineModel("agents", { type: Array, required: true });
 const shared = defineModel("shared", { type: Array, default: null });
 // On a phone the canvas is small: tools show icons only, and the minimap and the SKILL.md hint step aside.
 // `reserved`: card IDs the workflow's other canvases (its main flow or sub-workflows) already use; IDs are unique across them.
-// `subs`: the workflow's sub-workflows, on the main canvas only; `newSub` creates an empty one and returns its ID.
-const props = defineProps({ compact: Boolean, reserved: { type: Array, default: () => [] }, subs: { type: Array, default: null }, newSub: { type: Function, default: null } });
+// `subs`: the workflow's sub-workflows, on the main canvas only.
+const props = defineProps({ compact: Boolean, reserved: { type: Array, default: () => [] }, subs: { type: Array, default: null } });
 const { view, bridge } = inject("discussion");
 const tool_size = computed(() => (props.compact ? "xs" : "sm"));
 // Below this canvas width the labelled toolbar would run under the zoom buttons, so it shows icons only
@@ -309,15 +309,6 @@ function add_sub_node(id) {
   add_node(to_node({ id: next_id("sub_"), type: "sub", sub: id }));
 }
 
-/** Create an empty sub-workflow, place its node, then enter it to write its SKILL.md. */
-function new_sub() {
-  const id = props.newSub?.();
-  if (!id) { adding.value = false; return; }
-  add_sub_node(id);
-  // The node's arrow is drawn on the next tick; the canvas is handed back before the page switches to the sub-workflow.
-  setTimeout(() => open_sub(id, true), 0);
-}
-
 /** Show a sub-workflow; this canvas, about to be replaced, hands back its latest state first. */
 function open_sub(id, fresh = false) {
   flow.value = live.value;
@@ -453,7 +444,7 @@ function fit_options() {
 function fit() {
   if (instance.value) open_view();
 }
-defineExpose({ fit });
+defineExpose({ fit, add_sub_node });
 
 /** A double click on empty canvas (not a card, an arrow or a floating tool) resets the view to the whole workflow. */
 function pane_double_click(event) {
@@ -722,7 +713,6 @@ function drag_stop() { dragging = false; layered.value = true; stored.value = li
       <Panel position="top-left" class="workflow-canvas-toolbar">
         <UTooltip :text="t('添加成员（也可从圆点拖线到空白处）')"><UButton icon="i-lucide-user-plus" :label="icons_only ? undefined : t('成员')" :aria-label="t('添加成员')" :size="tool_size" color="neutral" variant="ghost" @click="open_add" /></UTooltip>
         <UTooltip :text="t('主持人节点：示意交回主持人判断的地方')"><UButton icon="i-lucide-crown" :label="icons_only ? undefined : t('主持人')" :aria-label="t('添加主持人节点')" :size="tool_size" color="neutral" variant="ghost" @click="add_host" /></UTooltip>
-        <UTooltip v-if="props.subs" :text="t('子工作流节点：示意这里转去某个子工作流')"><UButton icon="i-lucide-git-branch" :label="icons_only ? undefined : t('子工作流')" :aria-label="t('添加子工作流节点')" :size="tool_size" color="neutral" variant="ghost" @click="open_add" /></UTooltip>
         <span class="workflow-canvas-divider" />
         <UTooltip :text="t('撤销 (Ctrl+Z)')"><UButton icon="i-lucide-undo-2" :size="tool_size" color="neutral" variant="ghost" :aria-label="t('撤销')" :disabled="!past.length" @click="undo" /></UTooltip>
         <UTooltip :text="t('重做 (Ctrl+Shift+Z)')"><UButton icon="i-lucide-redo-2" :size="tool_size" color="neutral" variant="ghost" :aria-label="t('重做')" :disabled="!future.length" @click="redo" /></UTooltip>
@@ -749,11 +739,11 @@ function drag_stop() { dragging = false; layered.value = true; stored.value = li
             <UButton v-for="agent in shared" :key="agent.card" :label="label_of(agent.card)" icon="i-lucide-user-round-plus" size="xs" color="neutral" variant="soft"
               :title="t('把主线的「{value1}」放进这个子工作流：同一张卡片，示意它在这里参与', { value1: label_of(agent.card) })" @click="place_again(agent.card)" />
           </div>
-          <div v-if="props.subs" class="workflow-canvas-add-again">
+          <!-- A line dropped on empty canvas may end at a sub-workflow; everything else about them is in the parts list. -->
+          <div v-if="drop && props.subs?.length" class="workflow-canvas-add-again">
             <span>{{ t('子工作流') }}</span>
             <UButton v-for="sub in props.subs" :key="sub.id" :label="sub.label || sub.id" icon="i-lucide-git-branch" size="xs" color="neutral" variant="soft"
               :title="sub.description || t('示意这里转去这个子工作流')" @click="add_sub_node(sub.id)" />
-            <UButton :label="t('新建子工作流')" icon="i-lucide-plus" size="xs" color="neutral" variant="soft" :title="t('新建一个子工作流，放在这里，再进入它写 SKILL.md')" @click="new_sub" />
           </div>
           <div class="workflow-canvas-add-more">
             <UButton v-if="drop" icon="i-lucide-crown" :label="t('主持人')" size="xs" color="neutral" variant="soft" @click="add_host" />
@@ -887,4 +877,11 @@ html[data-theme="channel-light"] .workflow-canvas .workflow-edge-note.is-loop { 
 .workflow-canvas-add-more:empty { display: none; }
 .workflow-canvas-add-again { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; max-width: 520px; padding-top: 8px; border-top: 1px solid var(--ui-border-muted); }
 .workflow-canvas-add-again > span { width: 100%; color: var(--ui-text-muted); font-size: 12px; }
+.workflow-canvas-add-again:first-child { padding-top: 0; border-top: 0; }
+/* Phone: each label sits above its chips, so the chips use the whole width and line up with the sections below. */
+@media (max-width: 640px) {
+  .workflow-canvas-add .roster-add { grid-template-columns: minmax(0, 1fr); gap: 4px; width: 100%; }
+  .workflow-canvas-add .roster-add .roster-add-label { color: var(--ui-text-muted); line-height: 20px; }
+  .workflow-canvas-add .roster-add .roster-add-chips + .roster-add-label { margin-top: 6px; }
+}
 </style>

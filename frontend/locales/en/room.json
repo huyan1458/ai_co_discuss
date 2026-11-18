@@ -1,4 +1,6 @@
 {
+  "把 {value1} 放到画布": "Place {value1} on the canvas",
+  "放到画布：示意流程走到这里转去这个子工作流": "Place on the canvas: shows the flow turning to this sub-workflow here",
   "程序固定附加的说明（只读）": "Instructions automatically added by the runner (read-only)",
   "每次唤醒随消息发送；填了专属提示词时，后面另起一段“{heading}”再接它": "Sent with each wake-up message. If a member prompt is set, it follows under a separate “{heading}” heading.",
   "任务文件中的说明（由 AI 读取）": "Instructions in the task file (read by AI)",

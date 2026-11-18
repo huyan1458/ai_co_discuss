@@ -8,6 +8,7 @@ import { ref, watch } from "vue";
 import { use_workflow_library } from "./workflow-library.js";
 
 const props = defineProps({ compact: Boolean });
+const emit = defineEmits(["place"]);
 const library = use_workflow_library();
 const { draft, scope, subs } = library;
 const open = ref(!props.compact);
@@ -26,6 +27,12 @@ function member_count(sub) {
   const known = new Set([...draft.value.agents, ...sub.agents].map((agent) => agent.card));
   const placed = (sub.flow?.nodes || []).filter((node) => node.type === "card" && known.has(node.card)).map((node) => node.card);
   return new Set([...sub.agents.map((agent) => agent.card), ...placed]).size;
+}
+
+/** Put a sub-workflow on the main canvas; a phone folds the list so the new node shows. */
+function place(id) {
+  emit("place", id);
+  if (props.compact) open.value = false;
 }
 
 function remove(id) {
@@ -63,6 +70,9 @@ function remove(id) {
           <button type="button" class="workflow-parts-item is-sub" :aria-current="scope === sub.id ? 'page' : undefined" :title="sub.description || sub.label" @click="pick(sub.id)">
             <UIcon name="i-lucide-git-branch" class="workflow-parts-icon" /><span>{{ sub.label || sub.id }}</span><small>{{ t('{value1} 位', { value1: member_count(sub) }) }}</small>
           </button>
+          <button v-if="!scope" type="button" class="workflow-parts-place" :aria-label="t('把 {value1} 放到画布', { value1: sub.label || sub.id })" :title="t('放到画布：示意流程走到这里转去这个子工作流')" @click="place(sub.id)">
+            <UIcon name="i-lucide-square-plus" class="workflow-parts-icon" />
+          </button>
           <button type="button" class="workflow-parts-remove" :aria-label="t('删除子工作流 {value1}', { value1: sub.label || sub.id })" :title="t('删除子工作流')" @click="confirming = sub.id">
             <UIcon name="i-lucide-trash-2" class="workflow-parts-icon" />
           </button>
@@ -84,7 +94,7 @@ function remove(id) {
 .workflow-parts:not(.is-open) { width: auto; }
 .workflow-parts-icon { flex-shrink: 0; width: 14px; height: 14px; }
 .workflow-parts-head { display: flex; align-items: center; gap: 2px; }
-.workflow-parts-toggle, .workflow-parts-back, .workflow-parts-item, .workflow-parts-remove { display: flex; align-items: center; gap: 7px; min-height: 30px; border-radius: 7px; color: var(--ui-text-muted); }
+.workflow-parts-toggle, .workflow-parts-back, .workflow-parts-item, .workflow-parts-place, .workflow-parts-remove { display: flex; align-items: center; gap: 7px; min-height: 30px; border-radius: 7px; color: var(--ui-text-muted); }
 .workflow-parts-toggle { flex: 1; min-width: 0; padding: 0 8px; color: var(--ui-text-highlighted); font-weight: 500; }
 .workflow-parts-back { justify-content: center; width: 30px; }
 .workflow-parts-where { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
@@ -100,14 +110,16 @@ function remove(id) {
 .workflow-parts-item.is-add { color: var(--channel-accent, var(--ui-primary)); }
 .workflow-parts-item[aria-current="page"] { background: color-mix(in srgb, var(--channel-accent, var(--ui-primary)) 14%, transparent); color: var(--ui-text-highlighted); }
 .workflow-parts-toggle:hover, .workflow-parts-back:hover, .workflow-parts-item:hover { background: var(--ui-bg-accented); color: var(--ui-text-highlighted); }
+.workflow-parts-place { justify-content: center; flex-shrink: 0; width: 28px; }
+.workflow-parts-place:hover { color: var(--ui-text-highlighted); background: var(--ui-bg-accented); }
 .workflow-parts-remove { justify-content: center; flex-shrink: 0; width: 28px; color: var(--ui-text-dimmed); opacity: 0; transition: opacity .15s; }
 .workflow-parts-row:hover .workflow-parts-remove, .workflow-parts-remove:focus-visible { opacity: 1; }
 .workflow-parts-remove:hover { color: var(--ui-error, #e5484d); background: var(--ui-bg-accented); }
 .workflow-parts-confirm { flex: 1; min-width: 0; padding: 0 6px; overflow: hidden; color: var(--ui-text-highlighted); font-size: 12px; text-overflow: ellipsis; white-space: nowrap; }
 /* Touch (tablet, phone): larger targets, and the delete button always shows since there is no hover. */
 @media (pointer: coarse) {
-  .workflow-parts-toggle, .workflow-parts-back, .workflow-parts-item, .workflow-parts-remove { min-height: 40px; }
-  .workflow-parts-back, .workflow-parts-remove { width: 40px; }
+  .workflow-parts-toggle, .workflow-parts-back, .workflow-parts-item, .workflow-parts-place, .workflow-parts-remove { min-height: 40px; }
+  .workflow-parts-back, .workflow-parts-place, .workflow-parts-remove { width: 40px; }
   .workflow-parts-remove { opacity: 1; }
   .workflow-parts { top: 66px; }
 }
