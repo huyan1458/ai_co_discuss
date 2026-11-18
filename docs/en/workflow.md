@@ -4,6 +4,8 @@ English | [简体中文](../workflow.md)
 
 How collaboration works inside a room. For installation, see [Setup](runner.md).
 
+Message cards show each recipient's waiting, delivery, processing, answer or cancellation status. When a recipient is busy, the card says it is waiting for the current run to finish. Answer links locate the reply, including replies that answer several requests together. Queued messages remain in the queue area.
+
 > The web UI is currently in Chinese; UI labels are given in parentheses.
 
 ## Concepts

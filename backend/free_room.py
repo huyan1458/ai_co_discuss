@@ -1344,6 +1344,8 @@ def after_proactive(connection, room_id, message_id, member, payload):
     elif payload.get("to"):
         dispatch(connection, room_id, member, message_id, payload["to"], message_id, payload.get("handoff") is True,
                  payload.get("no_handoff") is True, {"need": need_plan(payload)}, payload.get("detach"))
+    elif payload.get("detach"):
+        send_detached(connection, room_id, member, message_id, message_id, payload["detach"])
     remember_continue(connection, room_id, member, message_id, message_id, payload)
     settle_batches(connection, room_id)
 
@@ -1863,8 +1865,7 @@ def dispatch(connection, room_id, host, message_id, names, chain_id, handoff=Fal
         return
     for member_id in member_ids:
         insert_request(connection, room_id, member_id, message_id, chain_id, "ask", "host", batch_id=message_id)
-    for member_id in named_members(active_members(connection, room_id), detach or [], exclude=host["name"]):
-        insert_request(connection, room_id, member_id, message_id, chain_id, "ask", "host")
+    send_detached(connection, room_id, host, message_id, chain_id, detach)
     connection.execute("INSERT INTO free_batches (room_id,batch_id,chain_id,host_id) VALUES (?,?,?,?)",
                        (room_id, message_id, chain_id, host["id"]))
     if plan.get("relay"):
@@ -1875,6 +1876,14 @@ def dispatch(connection, room_id, host, message_id, names, chain_id, handoff=Fal
         connection.execute("INSERT INTO free_handoffs (room_id,batch_id) VALUES (?,?)", (room_id, message_id))
     if direct:
         connection.execute("INSERT INTO free_direct_batches (room_id,batch_id) VALUES (?,?)", (room_id, message_id))
+
+
+def send_detached(connection, room_id, host, message_id, chain_id, detach):
+    """Start background members (`detach`): outside any batch, so nothing waits for them, the room does not count them as
+    busy and their answer stays in the room; a failure reaches the host like any request outside a batch. Sent alone
+    (without `to`) they use no round: they never hand back, so they cannot carry the chain on."""
+    for member_id in named_members(active_members(connection, room_id), detach or [], exclude=host["name"]):
+        insert_request(connection, room_id, member_id, message_id, chain_id, "ask", "host")
 
 
 def settle_batches(connection, room_id):
@@ -2019,7 +2028,7 @@ def checked_sequence(actor, payload):
 
 
 def checked_detach(actor, payload):
-    """`detach`: members the host sends along with a dispatch without waiting for them; they are not among those in `to`."""
+    """`detach`: members the host sends to work in the background, alone or along with a dispatch; never among those in `to`."""
     detach = payload.get("detach")
     if detach is None:
         return
@@ -2029,8 +2038,8 @@ def checked_detach(actor, payload):
     if (not isinstance(detach, list) or not detach or any(not isinstance(name, str) for name in detach)
             or len(set(detach)) != len(detach)):
         raise ValueError(Text("detach 须为不重复的成员名列表"))
-    if not names or set(detach) & set(names):
-        raise ValueError(Text("detach 须与 to 同用，且不包含 to 中的成员"))
+    if set(detach) & set(names):
+        raise ValueError(Text("detach 不能包含 to 中的成员"))
 
 
 def relay_order(names, parallel):
@@ -2582,6 +2591,8 @@ def after_free_message(connection, room_id, message_id, actor, payload):
     elif actor["role"] == "host" and payload.get("to"):
         dispatch(connection, room_id, actor, message_id, payload["to"], chain_id, payload.get("handoff") is True or bool(payload.get("next_review")),
                  payload.get("no_handoff") is True, {"need": need_plan(payload)}, payload.get("detach"))
+    elif actor["role"] == "host" and payload.get("detach"):
+        send_detached(connection, room_id, actor, message_id, chain_id, payload["detach"])
     if payload.get("keep_working") is True:
         keep_working(connection, room_id, actor, message_id, chain_id, payload["execution_id"])
     if actor["role"] == "host":

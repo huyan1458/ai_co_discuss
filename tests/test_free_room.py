@@ -2156,7 +2156,6 @@ class HostTests(HostRoomTests):
         post = lambda **extra: self.request(f"{self.path}/messages", {"author": "Claude", "text": "派活", "source": "cli",
             "submission_id": uuid.uuid4().hex, "execution_id": execution, **extra}, self.member)
         self.assertEqual(post(to=["Codex"], detach=["Codex"])[0], 400, "a detached member is not also waited for")
-        self.assertEqual(post(detach=["Codex"])[0], 400, "detach rides on a dispatch")
         status, saved = post(to=["Codex"], detach=["Antigravity"])
         self.assertEqual(status, 201, saved)
         self.assertEqual(self.requests()[-2:], [("Codex", "ask", "pending"), ("Antigravity", "ask", "pending")])
@@ -2167,6 +2166,25 @@ class HostTests(HostRoomTests):
         failing = self.reserve_for("Antigravity")[1]
         self.request(f"{self.path}/executions/{failing['id']}", {"action": "fail", "reason": "超时"}, self.owner)
         self.assertEqual(self.requests()[-1], ("Claude", "notice", "pending"), "a detached failure reaches the host")
+
+    def test_a_detached_member_alone_works_in_the_background_without_holding_the_room(self):
+        """`detach` without `to` sends one member to work in the background: the owner's next message is not queued
+        behind it, its execution shows as background, and nothing hands back to the host when it is done."""
+        FreeRoomTests.say(self, "改完了，记一下账")
+        execution = self.reserve_for("Claude")[1]["id"]
+        status, saved = self.request(f"{self.path}/messages", {"author": "Claude", "text": "派记录员记账", "source": "cli",
+            "submission_id": uuid.uuid4().hex, "execution_id": execution, "detach": ["Codex"]}, self.member)
+        self.assertEqual(status, 201, saved)
+        self.assertEqual(self.requests()[-1], ("Codex", "ask", "pending"))
+        running = self.reserve_for("Codex")[1]
+        codex = next(item for item in self.request(self.path)[1]["free"]["executions"] if item["id"] == running["id"])
+        self.assertTrue(codex["background"])
+        status, sent = FreeRoomTests.say(self, "接着改第 11 集", queue=True)
+        self.assertEqual((status, "queued" in sent), (201, False), "background work does not hold the owner's message")
+        status, done = self.request(f"{self.path}/messages", {"author": "Codex", "text": "账记好了", "source": "cli",
+            "submission_id": uuid.uuid4().hex, "execution_id": running["id"]}, self.tokens["Codex"])
+        self.assertEqual(status, 201, done)
+        self.assertNotIn(("Claude", "handoff", "pending"), self.requests(), "background work does not hand back")
 
     def test_keep_working_closes_the_dispatch_and_carries_the_turn_on_a_new_execution(self):
         """`keep_working`: the dispatch ends the host's execution, a new one under it takes the answer still bound to the

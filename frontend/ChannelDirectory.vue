@@ -93,6 +93,20 @@ const open_room_running = computed(() => (view.value.room?.free?.members || [])
  * Plain values for one room row. They are read here, in the row's own render, because the menu and tooltip slots are run
  * by those components, which would otherwise track the view and re-render every row on each publish.
  */
+/**
+ * A create or start request whose result never came back (say the computer was offline), kept in this browser: listed
+ * as a room that did not get made, like a message that failed to send; its menu retries the same request (no second
+ * room), opens the room when one is known, or drops the record (user 2026-11-18, replacing the banner over every room).
+ */
+function recovery_items(item) {
+  const busy = Boolean(pending.value);
+  return [[
+    { label: t("重试"), icon: "i-lucide-rotate-cw", disabled: busy, onSelect: () => act("resume_launch", item.id) },
+    ...(item.room_id ? [{ label: t("查看房间"), icon: "i-lucide-arrow-right", onSelect: () => emit("select", item.room_id) }] : []),
+    { label: t("删除记录"), icon: "i-lucide-trash-2", disabled: busy, onSelect: () => act("discard_launch", item.id) },
+  ]];
+}
+
 function room_row(room, index, count) {
   return { items: actions(room, index, room.folder_id || null, count), active: !workflow_page.value && room.id === view.value.room?.id, busy: Boolean(pending.value),
     archiving: view.value.archive_pending.includes(room.id), time: room_time(room), title: room_time_title(room),
@@ -189,6 +203,12 @@ function actions(room, index, folder_id, folder_room_count) {
       </div>
     </div>
     <nav v-show="rooms_open" :aria-label="t('协作房间列表')" class="channel-room-list" data-room-directory>
+      <div v-for="item in view.launch.recoveries" :key="`launch-${item.id}`" class="channel-room-row channel-room-unconfirmed">
+        <UIcon name="i-lucide-circle-alert" class="channel-room-alert" />
+        <UDropdownMenu :items="recovery_items(item)" :content="{ align: 'start', side: 'bottom', sideOffset: 6 }" :ui="{ content: 'channel-menu channel-topic-menu' }">
+          <button type="button" class="channel-room-select" :title="item.error || t('结果未确认，点击重试或删除记录')"><span>{{ item.title }}</span><small class="channel-room-time">{{ t("未确认") }}</small></button>
+        </UDropdownMenu>
+      </div>
       <section v-for="(folder, folder_index) in folders" :key="folder.order_id" class="channel-folder-section" :data-room-folder="folder.id" :data-drag-folder="folder.order_id">
        <template v-for="head in [folder_head(folder, folder_index)]" :key="folder.order_id">
        <MemoBlock v-if="folder.id" :deps="[head.key]">
@@ -227,3 +247,7 @@ function actions(room, index, folder_id, folder_room_count) {
     <ImportDialog v-model:open="import_open" />
   </div>
 </template>
+
+<style scoped>
+.channel-room-alert { justify-self: center; width: 14px; height: 14px; color: var(--ui-error); }
+</style>

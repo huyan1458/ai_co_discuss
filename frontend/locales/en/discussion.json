@@ -1,4 +1,9 @@
 {
+  "已跳过": "Skipped",
+  "等待中": "Waiting",
+  "等待中：等当前执行结束": "Waiting for the current run to finish",
+  "在 #{id} 一并回答": "Answered together in #{id}",
+  "查看回答 #{id}": "View answer #{id}",
   "额度已用尽，请等待重置或改派其他成员。": "Usage limit reached. Wait for it to reset or assign another member.",
   "登录已失效，请在本机重新登录后再试。": "Sign-in has expired. Sign in again on this computer before retrying.",
   "输出达到上限，请缩短要求的输出或拆分任务。": "Output limit reached. Request a shorter answer or split the task.",

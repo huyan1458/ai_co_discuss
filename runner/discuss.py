@@ -394,7 +394,7 @@ def message_commands(subcommands, registry):
     post.add_argument("--also-request", dest="also_requests", type=positive_int, action="append", default=[], metavar="REQUEST",
                       help="执行中又排队给你的普通请求（execution view 的 queued_requests）与本次任务相关、这条回答已一并交付时，用它同时关闭；可重复")
     post.add_argument("--detach", type=member_handle, action="append", default=[], metavar="MEMBER",
-                      help="自由房间主持人：与 --to 同用，点名一位与这次派活同时开工、但不等它的成员（不计入交回或下一棒的等待）；它失败时程序通知你；可重复")
+                      help="自由房间主持人：点名一位在后台工作、不等它的成员：不交回你、不占住房间（用户发消息不排队），也不计入交回或下一棒的等待；可单独用，也可与 --to 同用；它失败时程序通知你；可重复")
     post.add_argument("--with", dest="to", type=member_handle, action=JoinPreviousStep, metavar="MEMBER",
                       help="与 --sequential 同用：点名一位成员，与紧挨在前的 --to（或 --with）同一棒、同时做；这一组全部结束才交下一棒，组里有人失败则接力停下交回你；可重复")
     post.add_argument("--need-rounds", type=positive_int, metavar="N",
@@ -869,8 +869,6 @@ def plan_message(args):
     if args.loop and not args.sequential:
         raise CliError("--loop 须与 --sequential 一起使用")
     if args.detach:
-        if not args.to:
-            raise CliError("--detach 须与 --to 一起使用")
         payload["detach"] = args.detach
     if getattr(args, "also_requests", None):
         payload["also_request_ids"] = args.also_requests

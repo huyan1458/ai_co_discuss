@@ -159,6 +159,8 @@ onBeforeUnmount(release);
 
 <template>
   <div v-if="items.length || view.queueing_preview" ref="list" class="queued-messages" :class="{ 'is-dragging': drag }" role="list" :aria-label="t('排队消息')">
+    <!-- Says what the rows are, so a message sent while the room is busy is not taken for lost (user 2026-11-18, #4393). -->
+    <div v-if="!queue.paused" class="queued-heading" role="status">{{ t('{count} 条消息在排队，房间空闲后依次发出', { count: items.length + (view.queueing_preview ? 1 : 0) }) }}</div>
     <div v-if="queue.paused" class="queued-row queued-paused-row">
       <UIcon name="i-lucide-pause" class="queued-leading" />
       <span class="queued-text">{{ t('已暂停排队：你停止了运行') }}</span>
@@ -186,6 +188,7 @@ onBeforeUnmount(release);
             <div class="queued-preview-body">{{ item.text || summary(item) }}</div>
           </template>
         </UTooltip>
+        <span class="queued-sending-status" :class="{ 'is-waiting': sending !== item.id && !item.failure }">{{ sending === item.id ? t('投递中') : item.failure ? t('失败') : t('排队中') }}</span>
         <span class="queued-actions">
           <UTooltip :text="item.failure ? t('再次尝试发送这条排队消息') : t('立即发出；接收者正忙时先打断它这一轮，再处理这条（无法打断的成员继续排队）')" :ui="{ content: 'queued-tooltip' }">
             <UButton :label="item.failure ? t('重试') : t('立即发送')" :icon="item.failure ? 'i-lucide-rotate-ccw' : 'i-lucide-corner-down-right'" size="xs" color="neutral" variant="ghost" class="queued-action"
@@ -201,7 +204,7 @@ onBeforeUnmount(release);
     </TransitionGroup>
     <!-- The message just sent, shown at once while the site queues it. The queued row takes its place in the same render,
          so neither animates: a row fading in beside one fading out showed the message twice and made the tray jump. -->
-    <div v-if="view.queueing_preview" role="listitem" class="queued-row is-dimmed">
+    <div v-if="view.queueing_preview" role="listitem" class="queued-row">
       <span class="queued-leading" aria-hidden="true"><UIcon name="i-lucide-loader-circle" class="animate-spin" /></span>
       <span class="queued-text">{{ view.queueing_preview.text.replace(/\s+/g, " ").trim() || t('{value1} 个附件', { value1: view.queueing_preview.files.length }) }}</span>
       <span class="queued-actions queued-sending-status" role="status">{{ t('发送中…') }}</span>
@@ -233,6 +236,8 @@ onBeforeUnmount(release);
 .queued-action { color: var(--ui-text-dimmed); }
 .queued-action:hover:not(:disabled) { color: var(--ui-text-highlighted); }
 .queued-sending-status { padding: 0 8px; font-size: 12px; color: var(--ui-text-dimmed); }
+.queued-sending-status.is-waiting { color: var(--ui-primary); }
+.queued-heading { padding: 4px 8px 2px; font-size: 12px; color: var(--ui-text-muted); }
 .queued-paused-row { cursor: default; }
 .queued-paused-row .queued-text { color: var(--ui-text-muted); }
 .queued-move { transition: transform .16s ease; }

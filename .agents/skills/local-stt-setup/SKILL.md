@@ -9,7 +9,7 @@ description: "为 AI CoDiscuss 安装本机语音识别：下载 CrispASR 与 Qw
 
 - `SERVICE_HOME/crispasr/cli/`：CrispASR 程序（`crispasr.exe` 及其 DLL）；`SERVICE_HOME/crispasr/models/qwen3-asr-0.6b-q8_0.gguf`：识别模型（约 1 GB）。`SERVICE_HOME` 见“前提”第 2 条。
 - 访问令牌存在 CoDiscuss 的本机私有密钥里（地址 `http://127.0.0.1/crispasr`，只用来标识本机识别服务，不含端口），不写进其他文件或命令行。
-- 语音输入切到“本机”。CrispASR 由 CoDiscuss 本机程序在识别时自动启动，只监听本机地址，优先用端口 37642，被占用时自动换一个空闲端口；1 分钟没有识别请求自动结束并释放显存（CoDiscuss 崩溃也一样），不需要开机自启。
+- 语音输入切到“本机”。CrispASR 由 CoDiscuss 本机程序在识别时自动启动，只监听本机地址，优先用端口 37642，被占用时自动换一个空闲端口；5 分钟没有识别请求自动结束并释放显存（CoDiscuss 崩溃也一样），不需要开机自启。
 
 全程只在用户电脑上操作：不改 CoDiscuss 源码，不把令牌写进回复、日志或命令行参数；下载与安装前把预计占用（下文“前提”）告诉用户。
 
@@ -31,7 +31,7 @@ description: "为 AI CoDiscuss 安装本机语音识别：下载 CrispASR 与 Qw
    | Linux x64 | NVIDIA / 其他独显 / 无 | `crispasr-linux-x86_64-cuda13.tar.gz`（或 `-cuda`）/ `-vulkan.tar.gz` / `crispasr-linux-x86_64.tar.gz` |
 
    只能用 CPU 时先告诉用户：识别速度约等于录音时长（一段 1 分钟的话要等约 1 分钟），用户同意再装。
-4. **显存与磁盘**：识别服务运行时约占 2.5 GB 显存；与本机朗读（约 3 GB）同时运行时，8 GB 显卡余量很紧，两者都是用完 1 分钟后自动退出。磁盘约 1.7 GB（Windows CUDA 13 程序约 0.7 GB + 模型约 1 GB）。
+4. **显存与磁盘**：识别服务运行时约占 2.5 GB 显存；与本机朗读（约 3 GB）同时运行时，8 GB 显卡余量很紧，两者都是闲置 5 分钟后自动退出。磁盘约 1.7 GB（Windows CUDA 13 程序约 0.7 GB + 模型约 1 GB）。
 
 ## 安装
 

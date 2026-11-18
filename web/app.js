@@ -1835,6 +1835,13 @@ async function finish_message(result, room_id, drafts) {
   // place in the same render as the room's other changes (its request, the host's working card). Swapping it in first
   // and the rest a moment later laid the transcript out twice, and on a phone the page jumped and flashed in between.
   const saved_id = result.message.id;
+  // Shown in the queue tray because the room looked busy, but the site posted it (the work had just ended): the row moves
+  // into the transcript as the sending card, so the message is never off screen until the room is read again (#4391).
+  if (!state.sending_preview && state.queueing_preview) {
+    const { queued_ids, ...shown } = state.queueing_preview;
+    state.sending_preview = shown;
+    state.queueing_preview = null;
+  }
   if (state.sending_preview) state.sending_preview = { ...state.sending_preview, saved_id };
   publish_view();
   refresh_room().catch(() => {}).finally(() => {

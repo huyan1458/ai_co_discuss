@@ -46,8 +46,8 @@ const SILENT_AAC_FRAME = Buffer.from([0xff, 0xf1, 0x58, 0x40, 0x01, 0x7f, 0xfc, 
 const SILENT_AAC_FRAME_MS = 1024 / 24;
 // Local speech: yovoice serving Qwen3-TTS CustomVoice on this computer, installed by the local-tts-setup skill into
 // `<service home>/yovoice` (CLI in `cli/`, engine and model in `data/`). Like voice input's local service, the runner
-// starts it through a supervisor (`local_speech_service.mjs`) and renews its lease on every request; a minute without
-// one, or the user stopping reading, stops it, so the model does not hold graphics memory between uses, even when the
+// starts it through a supervisor (`local_speech_service.mjs`) and renews its lease on every request; five minutes without
+// one (or an explicit release) stops it, so the model does not hold graphics memory between uses, even when the
 // runner has crashed.
 const LOCAL_HOST = '127.0.0.1';
 // A local service's token is bound to the service, not to a port, since the port can change from one start to the next.
@@ -322,7 +322,7 @@ function local_generate({ home, key, text, speaker, context }, request) {
 }
 
 /**
- * Renew a local service's lease (in its directory); its supervisor stops the service once the lease is a minute old. A
+ * Renew a local service's lease (in its directory); its supervisor stops the service once the lease is five minutes old. A
  * renewal when a request ends keeps a release that came meanwhile (the user stopped reading), so the release still stops it.
  */
 function local_renew(directory, { keep_release = false } = {}) {

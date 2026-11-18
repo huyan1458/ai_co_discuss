@@ -9,7 +9,7 @@ description: "为 AI CoDiscuss 安装本机朗读语音：下载 yovoice CLI、�
 
 - `SERVICE_HOME/yovoice/cli/`：yovoice CLI（含 `tools/` 下的音频转换器）；`SERVICE_HOME/yovoice/data/`：推理引擎与模型，只给 CoDiscuss 用，不与 yovoice 桌面应用共用（`SERVICE_HOME` 见“前提”第 2 条）。
 - 访问令牌存在 CoDiscuss 的本机私有密钥里（地址 `http://127.0.0.1/yovoice`，只用来标识本机朗读服务，不含端口），不写进其他文件。
-- 朗读设置切到“本机”。yovoice 服务由 CoDiscuss 本机程序在朗读时自动启动，只监听本机地址，优先用端口 37641，被占用时自动换一个空闲端口；用户点停止朗读后 5 秒内、或 1 分钟没有朗读请求时自动结束并释放显存（CoDiscuss 崩溃也一样），不需要开机自启。
+- 朗读设置切到“本机”。yovoice 服务由 CoDiscuss 本机程序在朗读时自动启动，只监听本机地址，优先用端口 37641，被占用时自动换一个空闲端口；5 分钟没有朗读请求时自动结束并释放显存（CoDiscuss 崩溃也一样），不需要开机自启。
 
 全程只在用户电脑上操作：不改 CoDiscuss 源码，不把令牌写进回复、日志或命令行参数；下载与安装前把预计占用（下文“前提”）告诉用户。
 

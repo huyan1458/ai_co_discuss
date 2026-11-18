@@ -182,7 +182,7 @@ function step(event, index, direction) {
 </template>
 
 <style scoped>
-.speaking-order-row { position: relative; grid-template-columns: 18px auto minmax(0, 1fr) auto; }
+.speaking-order-row { position: relative; grid-template-columns: 18px auto minmax(0, 1fr) auto; gap: 8px; min-height: 0; padding: 4px 8px; }
 .speaking-order-row.is-done, .speaking-order-row.is-away { opacity: .6; }
 .speaking-order-row.is-speaking { background: color-mix(in srgb, var(--channel-accent, var(--ui-primary)) 10%, transparent); }
 .speaking-order-place, .speaking-order-grip { display: grid; place-items: center; align-self: center; width: 18px; height: 24px; color: var(--ui-text-dimmed); font-size: 11px; font-variant-numeric: tabular-nums; }

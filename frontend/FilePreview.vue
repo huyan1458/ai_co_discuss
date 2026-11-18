@@ -8,7 +8,7 @@ import OfficeViewer from "./OfficeViewer.vue";
 import PreviewLoading from "./PreviewLoading.vue";
 import Papa from "papaparse";
 import { gunzip } from "fflate";
-import { add_excerpt as put_excerpt, crumbs_of, document_kind_of, excerpt_mark_place, excerpt_range, file_preview, file_size, file_type, hold_selection, inline_markdown_images, media_of, modified_time, subtitle_cues, text_kind_of, text_offset } from "./file-preview.js";
+import { add_excerpt as put_excerpt, crumbs_of, document_kind_of, excerpt_range, file_preview, file_size, file_type, hold_selection, inline_markdown_images, media_of, modified_time, subtitle_cues, text_kind_of, text_offset } from "./file-preview.js";
 import { t } from './i18n.js';
 
 // The file preview window: several files open as tabs; it folds into a floating button that keeps every tab, its mode
@@ -152,6 +152,8 @@ const comment = ref("");
 // reopened for editing: `{ excerpt, left, top }`.
 const file_marks = ref([]);
 const mark_editing = ref(null);
+// The CSS highlight underlining the shown file's quoted passages.
+const MARKED_HIGHLIGHT = "excerpt-marked";
 const MARK_CARD_WIDTH = 300;
 const MARK_CARD_HEIGHT = 110;
 let offer_timer = 0, pointer_down = false;
@@ -626,14 +628,17 @@ function source_index(container, offset) {
   return lines.value.slice(0, line).reduce((sum, text) => sum + text.length + 1, 0) + at;
 }
 
-/** A selection in the source view as `{ text, start, end }` taken from the file itself, so line numbers never get in. */
+/**
+ * A selection in the source view as `{ text, start, end }` taken from the file itself, so line numbers never get in;
+ * `from`–`to` are its characters in the file, for its mark in the source view (`in_source`).
+ */
 function source_selection(range) {
   const from = source_index(range.startContainer, range.startOffset), to = source_index(range.endContainer, range.endOffset);
   if (from < 0 || to <= from) return null;
   const all = preview.value.text, line_of = (index) => all.slice(0, index).split("\n").length;
   const text = all.slice(from, to);
   const start = line_of(from + (text.length - text.trimStart().length));
-  return { text: offer_text(text), start, end: Math.max(start, line_of(from + text.trimEnd().length)) };
+  return { text: offer_text(text), start, end: Math.max(start, line_of(from + text.trimEnd().length)), from, to, in_source: true };
 }
 
 /** Offer quoting (and reading from) a selection made in the Markdown preview or the source view: above it, or in the bottom dock on touch screens. */
@@ -681,20 +686,67 @@ function clear_selection() {
   html_frame.value?.contentWindow?.postMessage({ codiscuss_clear: true }, "*");
 }
 
-/** Re-measure where each excerpt of the shown file ends, for its number mark. */
+/** Where character `index` of the file sits in the wrapped source view (one row per line), as `[node, offset]`. */
+function wrapped_point(index) {
+  let line = 0, left = index;
+  while (line < lines.value.length - 1 && left > lines.value[line].length) { left -= lines.value[line].length + 1; line++; }
+  const span = code_scroll.value?.querySelector(`.project-code-row[data-line="${line + 1}"] .project-code-line`);
+  if (!span) return null;
+  return span.firstChild ? [span.firstChild, Math.min(left, span.firstChild.length)] : [span, 0];
+}
+
+/** The shown text of an excerpt of this file, in the view it was quoted from (preview or source); null when not shown. */
+function passage_range(excerpt) {
+  if (excerpt.message_id || excerpt.path !== reference_path.value || showing_source.value !== Boolean(excerpt.in_source)) return null;
+  if (!excerpt.in_source) return excerpt_range(markdown_body.value, excerpt.from, excerpt.to);
+  if (code_text.value) return excerpt_range(code_text.value, excerpt.from, excerpt.to);
+  const start = wrapped_point(excerpt.from), end = wrapped_point(excerpt.to);
+  if (!start || !end) return null;
+  const range = document.createRange();
+  range.setStart(...start);
+  range.setEnd(...end);
+  return range;
+}
+
+/**
+ * Underline each excerpt of the shown file and re-measure where it ends, for its number mark. The underline is a CSS
+ * highlight, so the file's own text and the selection stay untouched.
+ */
 function place_file_marks() {
-  const body = markdown_body.value, host = markdown_scroll.value;
-  file_marks.value = !open.value || !body || !host ? [] : file_preview.excerpts.flatMap((excerpt, index) => {
-    const place = !excerpt.message_id && excerpt.path === reference_path.value ? excerpt_mark_place(body, host, excerpt.to) : null;
-    return place ? [{ id: excerpt.id, number: index + 1, ...place }] : [];
+  const host = showing_source.value ? code_scroll.value : markdown_scroll.value;
+  const shown = !open.value || !host ? [] : file_preview.excerpts.flatMap((excerpt, index) => {
+    const range = passage_range(excerpt);
+    if (!range) return [];
+    const tail = document.createRange();
+    tail.setStart(range.endContainer, Math.max(0, range.endOffset - 1));
+    tail.setEnd(range.endContainer, range.endOffset);
+    const rects = tail.getClientRects(), rect = rects[rects.length - 1];
+    if (!rect) return [];
+    const origin = host.getBoundingClientRect();
+    return [{ id: excerpt.id, number: index + 1, range, left: rect.right - origin.left + host.scrollLeft, top: rect.top - origin.top + host.scrollTop }];
   });
+  file_marks.value = shown.map(({ range, ...mark }) => mark);
+  if (!globalThis.CSS?.highlights || typeof Highlight !== "function") return;
+  if (shown.length) CSS.highlights.set(MARKED_HIGHLIGHT, new Highlight(...shown.map((item) => item.range)));
+  else CSS.highlights.delete(MARKED_HIGHLIGHT);
+}
+
+/** A click inside an underlined passage opens its edit card, as its number mark does. */
+function open_mark_at(event) {
+  if (!document.getSelection()?.isCollapsed || event.target.closest?.(".excerpt-mark")) return;
+  const caret = document.caretPositionFromPoint?.(event.clientX, event.clientY);
+  const fallback = !caret && document.caretRangeFromPoint?.(event.clientX, event.clientY);
+  const point = caret ? [caret.offsetNode, caret.offset] : fallback ? [fallback.startContainer, fallback.startOffset] : null;
+  if (!point) return;
+  const hit = file_preview.excerpts.find((excerpt) => passage_range(excerpt)?.isPointInRange(...point));
+  if (hit) open_mark(hit.id);
 }
 
 /** Open a quoted passage's edit card from its number mark, highlighting the passage again. */
 function open_mark(excerpt_id) {
   cancel_comment();
   const excerpt = file_preview.excerpts.find((item) => item.id === excerpt_id);
-  const range = excerpt && excerpt_range(markdown_body.value, excerpt.from, excerpt.to);
+  const range = excerpt && passage_range(excerpt);
   if (!range) return;
   hold_selection(range);
   // Docked at the bottom on touch screens, as adding a note is.
@@ -740,8 +792,8 @@ function cancel_comment() { commenting.value = null; hold_selection(null); }
 
 /** Put the selection (and comment) in the composer of the room shown now as an excerpt, fold the window and go to the messages. */
 function add_excerpt() {
-  const { text, start, end, from, to } = commenting.value;
-  const excerpt = { path: reference_path.value, name: preview_name.value, start, end, text, from, to, comment: comment.value.trim() };
+  const { text, start, end, from, to, in_source = false } = commenting.value;
+  const excerpt = { path: reference_path.value, name: preview_name.value, start, end, text, from, to, in_source, comment: comment.value.trim() };
   cancel_comment();
   clear_selection();
   act("tab", "discussion");
@@ -765,7 +817,7 @@ function stop_following(event) {
 // Folding or closing the window, switching tabs or to source, or the text changing ends any quoting; all but folding
 // also end the reading (closing every file clears the active tab), which goes on while folded.
 watch([open, active_id, source, rendered], () => { offer.value = null; cancel_comment(); close_mark(); });
-watch([open, active_id, source, rendered, font_scale, () => file_preview.excerpts.map((excerpt) => excerpt.id).join()], () => nextTick(place_file_marks), { flush: "post" });
+watch([open, active_id, source, rendered, font_scale, wrap, showing_source, () => file_preview.excerpts.map((excerpt) => excerpt.id).join()], () => nextTick(place_file_marks), { flush: "post" });
 // The reading stops only when every file is closed or its own file's text changes while shown; back on its file's
 // preview, its highlight is bound to the text rendered again.
 watch([active_id, source, rendered], async ([id, shown_source], [last_id, last_source]) => {
@@ -779,6 +831,7 @@ watch([active_id, source, rendered], async ([id, shown_source], [last_id, last_s
 watch([active_id, source], () => { if (!speech_ready.value && !source.value && format.value === "markdown") check_speech(); });
 // Unfolded, the text is laid out anew; the reading's highlight moves onto it.
 watch(markdown_body, (root) => { if (root) { reader.rebind_document(root); nextTick(place_file_marks); } });
+watch(code_scroll, (root) => { if (root) nextTick(place_file_marks); });
 onMounted(() => {
   file_preview.open = open_file;
   window.addEventListener("message", frame_selection);
@@ -802,6 +855,7 @@ onBeforeUnmount(() => {
   window.removeEventListener("resize", place_float);
   narrow_query.removeEventListener("change", track_narrow);
   window.removeEventListener("resize", place_file_marks);
+  globalThis.CSS?.highlights?.delete(MARKED_HIGHLIGHT);
   hold_selection(null);
   for (const item of tabs.value) item.request++;
   document.removeEventListener("selectionchange", schedule_offer);
@@ -874,12 +928,14 @@ onBeforeUnmount(() => {
           <PreviewLoading v-else :label="tab.media_progress ? t('正在经电脑读取… {value1}%', { value1: Math.round(tab.media_progress * 100) }) : t('正在打开…')" :progress="tab.media_progress || 0" />
         </template>
         <div v-else-if="preview?.text === null" class="project-editor-state"><UIcon :name="preview_type[1]" /><p>{{ preview.reason || t('这个格式只能下载后用本机软件打开') }}</p></div>
-        <div v-else-if="showing_source && wrap" ref="code_scroll" class="project-code is-wrapped" tabindex="0" @scroll.passive="schedule_offer" :aria-label="t('文件内容')" :style="{ '--digits': String(line_count).length }">
+        <div v-else-if="showing_source && wrap" ref="code_scroll" class="project-code is-wrapped" tabindex="0" @scroll.passive="schedule_offer" @click="open_mark_at" :aria-label="t('文件内容')" :style="{ '--digits': String(line_count).length }">
           <div v-for="(line, index) in lines" :key="index" class="project-code-row" :data-line="index + 1"><span class="project-code-number" aria-hidden="true">{{ index + 1 }}</span><span class="project-code-line">{{ line }}</span></div>
+          <button v-for="mark in file_marks" :key="mark.id" type="button" class="excerpt-mark" :style="{ left: `${mark.left}px`, top: `${mark.top}px` }" :title="t('注释 {value1}：点击修改批注', { value1: mark.number })" :aria-label="t('修改注释 {value1} 的批注', { value1: mark.number })" @click="open_mark(mark.id)">{{ mark.number }}</button>
         </div>
-        <div v-else-if="showing_source" ref="code_scroll" v-keep-reading class="project-code" tabindex="0" @scroll.passive="schedule_offer" :aria-label="t('文件内容')">
+        <div v-else-if="showing_source" ref="code_scroll" v-keep-reading class="project-code" tabindex="0" @scroll.passive="schedule_offer" @click="open_mark_at" :aria-label="t('文件内容')">
           <pre class="project-code-gutter" aria-hidden="true">{{ gutter }}</pre>
           <pre class="project-code-text"><code ref="code_text">{{ preview.text }}</code></pre>
+          <button v-for="mark in file_marks" :key="mark.id" type="button" class="excerpt-mark" :style="{ left: `${mark.left}px`, top: `${mark.top}px` }" :title="t('注释 {value1}：点击修改批注', { value1: mark.number })" :aria-label="t('修改注释 {value1} 的批注', { value1: mark.number })" @click="open_mark(mark.id)">{{ mark.number }}</button>
         </div>
         <div v-else-if="preview && format === 'table'" class="project-table-scroll" tabindex="0" :aria-label="t('表格内容')">
           <p v-if="table.cut" class="project-table-note">{{ t('只显示前 {value1} 行，完整内容见源码。', { value1: table.rows.length }) }}</p>
@@ -895,7 +951,7 @@ onBeforeUnmount(() => {
         </div>
         <PreviewLoading v-else-if="preview && format === 'html' && tab?.loading && !tab.page" :label="t('正在载入页面引用的文件…')" />
         <iframe v-else-if="preview && format === 'html'" ref="html_frame" class="project-html-preview" :sandbox="HTML_SANDBOX" referrerpolicy="no-referrer" :srcdoc="html_preview" :title="t('HTML 文件预览')"></iframe>
-        <div v-else-if="preview" ref="markdown_scroll" v-keep-reading class="project-markdown-scroll" tabindex="0" @scroll.passive="schedule_offer"
+        <div v-else-if="preview" ref="markdown_scroll" v-keep-reading class="project-markdown-scroll" tabindex="0" @scroll.passive="schedule_offer" @click="open_mark_at"
           @wheel.passive="stop_following" @touchmove.passive="stop_following" @keydown="stop_following" @pointerdown="stop_following"><div ref="markdown_body" class="markdown-body project-markdown-preview" v-html="rendered"></div>
           <button v-for="mark in file_marks" :key="mark.id" type="button" class="excerpt-mark" :style="{ left: `${mark.left}px`, top: `${mark.top}px` }" :title="t('注释 {value1}：点击修改批注', { value1: mark.number })" :aria-label="t('修改注释 {value1} 的批注', { value1: mark.number })" @click="open_mark(mark.id)">{{ mark.number }}</button></div>
         <ExcerptEditCard v-if="mark_editing" :key="mark_editing.excerpt.id" class="file-selection-offer file-comment" :class="{ 'is-docked': mark_editing.touch }" :comment="mark_editing.excerpt.comment" :style="mark_editing.touch ? {} : { left: `${mark_editing.left}px`, top: `${mark_editing.top}px` }"
@@ -1002,7 +1058,7 @@ onBeforeUnmount(() => {
 .project-editor-state { display: flex; flex: 1; flex-direction: column; align-items: center; justify-content: center; gap: 12px; padding: 24px; text-align: center; font-size: 13px; color: var(--ui-text-muted); }
 .project-editor-state > span:first-child { width: 28px; height: 28px; color: var(--ui-text-dimmed); }
 .project-editor-state p { margin: 0; max-width: 480px; }
-.project-code { display: flex; flex: 1; align-items: flex-start; min-width: 0; overflow: auto; tab-size: 4;
+.project-code { position: relative; display: flex; flex: 1; align-items: flex-start; min-width: 0; overflow: auto; tab-size: 4;
   font: calc(13px * var(--file-font-scale, 1))/calc(20px * var(--file-font-scale, 1)) ui-monospace, "Cascadia Code", Consolas, monospace; }
 .project-code:focus-visible, .project-markdown-scroll:focus-visible { outline: none; }
 .project-code pre { margin: 0; padding: 10px 0 24px; white-space: pre; font: inherit; }
@@ -1015,7 +1071,7 @@ onBeforeUnmount(() => {
 .project-code-line { flex: 1; min-width: 0; padding-right: 20px; color: var(--ui-text); white-space: pre-wrap; overflow-wrap: anywhere; }
 .project-markdown-scroll { position: relative; flex: 1; min-width: 0; overflow: auto; }
 /* Positioned and isolated so the read-aloud highlight layer sits under the text, as in a message card. */
-.project-markdown-preview { position: relative; isolation: isolate; max-width: 860px; margin: 0 auto; padding: 28px 40px 48px; overflow-wrap: anywhere; font-size: calc(14px * var(--file-font-scale, 1)); }
+.project-markdown-preview { position: relative; isolation: isolate; max-width: 860px; margin: 0 auto; padding: 28px 40px 48px; overflow-wrap: anywhere; font-size: calc(15px * var(--file-font-scale, 1)); line-height: 1.8; }
 /* Selection offers and read-aloud controls stay inside the dialog: under the selection with a pointer, in a bottom dock otherwise. */
 .file-offer-marks { position: absolute; z-index: 4; display: flex; gap: 6px; }
 .file-offer-marks .channel-listen-mark { position: static; }
@@ -1101,4 +1157,14 @@ onBeforeUnmount(() => {
 .project-table tr.is-head td, .project-table th { position: sticky; top: 0; z-index: 1; font-weight: 600; background: var(--ui-bg-elevated); }
 .project-table .project-table-number { color: var(--ui-text-dimmed); text-align: right; user-select: none; }
 .project-table.is-subtitle .is-text { white-space: pre-wrap; min-width: 240px; }
+/* Reading a document, not a chat message: roomier lines and headings set apart from the text (2026-11-17, #4335). */
+.project-markdown-preview :is(h1, h2, h3, h4, h5, h6) { margin: 1.8em 0 .7em; line-height: 1.35; color: var(--ui-text-highlighted); letter-spacing: .01em; }
+.project-markdown-preview > :is(h1, h2, h3):first-child { margin-top: 0; }
+.project-markdown-preview h1 { font-size: 1.75em; font-weight: 700; padding-bottom: .35em; border-bottom: 1px solid var(--markdown-line); }
+.project-markdown-preview h2 { font-size: 1.4em; padding-bottom: .3em; border-bottom: 1px solid color-mix(in srgb, var(--markdown-line) 60%, transparent); }
+.project-markdown-preview h3 { font-size: 1.18em; }
+.project-markdown-preview p { margin: 0 0 1em; }
+.project-markdown-preview li { margin: .4em 0; }
+.project-markdown-preview code { font-family: "Cascadia Code", ui-monospace, Consolas, "Microsoft YaHei", monospace; font-size: .86em; }
+.project-markdown-preview pre { line-height: 1.65; }
 </style>

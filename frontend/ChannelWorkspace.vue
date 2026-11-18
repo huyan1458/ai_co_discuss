@@ -447,14 +447,6 @@ function resize_nav_by_key(event) {
           </div>
           <UTooltip v-if="!workflow_page" :text="info_label"><UButton icon="i-lucide-panel-right" color="neutral" variant="ghost" size="sm" class="channel-icon-button channel-panel-toggle channel-info-button" :aria-label="info_label" :disabled="!room && !invited_page && !(rail_inline && view.tab === 'discussion')" :aria-expanded="rail_inline && (invited_page || view.tab === 'discussion') ? show_rail : info_open" @click="toggle_info" /></UTooltip>
         </header>
-        <section v-if="view.launch.recoveries.length" class="channel-launch-recovery" :aria-label="t('未完成的创建或启动请求')">
-          <h2>{{ t("继续未完成的请求") }}</h2>
-          <article v-for="item in view.launch.recoveries" :key="item.id">
-            <strong>{{ item.title }}</strong><p role="status">{{ item.error || t('启动结果尚未确认；原请求已保存在此浏览器中。') }}</p>
-            <div class="button-row"><UButton :label="item.direct ? t('继续创建房间') : t('继续本次启动')" size="sm" :loading="pending === 'resume_launch'" :disabled="Boolean(pending)" @click="act('resume_launch', item.id)" /><UButton v-if="item.room_id" :label="t('查看原房间')" color="neutral" variant="outline" class="pb-action" size="sm" @click="act('room', item.room_id)" /><UButton :label="t('移除待办')" color="neutral" variant="ghost" size="sm" :disabled="Boolean(pending)" @click="act('discard_launch', item.id)" /></div>
-          </article>
-          <small>{{ t("移除待办不会删除房间或停止讨论。") }}</small>
-        </section>
         <div v-if="room && !middle_page" class="channel-tabbar">
           <UTabs v-model="selected_tab" :items="tabs" :content="false" variant="pill" color="neutral" size="sm" class="channel-tabs" :aria-label="t('房间视图')" />
         </div>

@@ -1,6 +1,7 @@
 /**
  * Supervisor of a local speech service (read-aloud's yovoice, voice input's CrispASR): runs it and stops it once its
- * lease has not been renewed for a minute, or was released. The runner renews the lease (touches `<service dir>/lease`)
+ * lease has not been renewed for five minutes (a minute restarted it too often between readings, user 2026-11-18), or
+ * was released. The runner renews the lease (touches `<service dir>/lease`)
  * on every request, so the service lives while it is used and ends after, also when the runner that started it exited
  * or crashed. Started detached by `runner/tts_providers.mjs`:
  *   node local_speech_service.mjs <service dir> <executable> [arguments...]
@@ -12,7 +13,7 @@ import { spawn } from 'node:child_process';
 import { closeSync, openSync, readFileSync, rmSync, statSync } from 'node:fs';
 import { join } from 'node:path';
 
-const LEASE_MS = 60_000;
+const LEASE_MS = 5 * 60_000;
 const CHECK_MS = 5_000;
 
 const [directory, executable, ...service_arguments] = process.argv.slice(2);

@@ -518,7 +518,17 @@ const recipient_hint = computed(() => {
 });
 /** Project files picked after @: their @path stays in the draft, and they also show as cards and go out as a trailing line of paths (code-quoted, so they never wake a member). */
 const file_refs = ref([]);
-watch(() => room.value?.id, () => { file_refs.value = []; file_preview.excerpts = []; });
+// Each room keeps its unsent file cards and quoted passages while another room is open, as its text is kept (app.js
+// `room_composer_drafts`), until this page closes.
+const room_quotes = new Map();
+watch(() => room.value?.id, (next, previous) => {
+  if (previous && (file_refs.value.length || file_preview.excerpts.length)) room_quotes.set(previous, { refs: file_refs.value, excerpts: file_preview.excerpts });
+  else if (previous) room_quotes.delete(previous);
+  const kept = next && room_quotes.get(next);
+  if (kept) room_quotes.delete(next);
+  file_refs.value = kept?.refs || [];
+  file_preview.excerpts = kept?.excerpts || [];
+});
 const file_refs_line = () => file_refs.value.length
   ? t('引用文件：{value1}', { value1: file_refs.value.map((ref) => `\`${ref.path}${ref.kind === "directory" ? "/" : ""}\``).join("、") }) : "";
 // Passages quoted from the file preview ("添加到对话") wait as cards and go out after the text, each as a quote with its comment.
@@ -574,8 +584,9 @@ const MAX_DELIVERY_RETRIES = 3;
 const STALL_SECONDS = 180;
 /** Thinking emits no events until it ends (gpt xhigh was seen silent for 4 min), so it warns only after this long. */
 const THINKING_STALL_SECONDS = 600;
-const FREE_REQUEST_LABELS = { pending: [t('待投递'), "neutral"], delivering: [t('处理中'), "info"], completed: [t('已回复'), "success"],
+const FREE_REQUEST_LABELS = { pending: [t('等待中'), "neutral"], delivering: [t('投递中'), "info"], completed: [t('已回答'), "success"],
   cancelled: [t('已取消'), "neutral"], failed: [t('失败'), "error"] };
+const REQUEST_CANCEL_REASONS = { user_stop: t('用户停止'), member_away: t('成员暂离'), member_removed: t('成员移除'), rerouted: t('改派'), no_reply: t('未回复'), archived: t('房间归档') };
 /** Each user message in a free room shows what happened to its request for every named member. */
 const request_badges = stable_computed(() => {
   const badges = new Map();
@@ -587,11 +598,17 @@ const request_badges = stable_computed(() => {
     // A request voided after reaching the software reads as its stop really went; one never delivered was only cancelled.
     const voided = request.status === "cancelled" && executions.get(request.execution_id)?.capabilities ? executions.get(request.execution_id) : null;
     // An external member's computer turned the request down or let it wait out: the other side did not agree.
-    const [label, color] = declined(request) ? [t('对方未同意'), "warning"] : voided ? [stop_state(voided).label, "neutral"] : FREE_REQUEST_LABELS[request.status];
+    let [label, color] = declined(request) ? [t('对方未同意'), "warning"] : voided ? [stop_state(voided).label, "neutral"] : FREE_REQUEST_LABELS[request.status];
+    const execution = executions.get(request.execution_id);
+    if (request.status === "delivering" && execution?.status === "started") label = t('处理中');
+    if (request.status === "pending" && (source.executions || []).some((item) => item.member === request.member && ["dispatched", "started"].includes(item.status))) label = t('等待中：等当前执行结束');
     const title = declined(request) ? (request.external_outcome === "timeout" ? t('对方电脑在时限内没有确认唤醒') : t('对方电脑拒绝了这次唤醒'))
-      : request.status === "failed" ? failures.get(request.execution_id) || t('执行失败') : "";
+      : request.status === "failed" ? failures.get(request.execution_id) || t('执行失败') : REQUEST_CANCEL_REASONS[request.cancel_reason] || request.cancel_reason || "";
+    const answer_execution = (source.executions || []).find((item) => item.answer_id === request.answer_id);
+    const answer_label = request.answer_id ? (answer_execution && answer_execution.request_message_id !== request.message_id
+      ? t('在 #{id} 一并回答', { id: request.answer_id }) : t('查看回答 #{id}', { id: request.answer_id })) : "";
     badges.set(request.message_id, [...(badges.get(request.message_id) || []),
-      { key: request.id, label: `${bridge.display_name(request.member)} · ${label}`, color, title }]);
+      { key: request.id, label: `${bridge.display_name(request.member)} · ${label}`, color, title, answer_id: request.answer_id, answer_label }]);
   }
   return badges;
 });
@@ -2660,23 +2677,26 @@ function copy_message(message) { act("copy", `${view.value.room_site}/r/${room.v
           <template #text>{{ message.text }}</template>
           <p class="channel-checkin-answer">{{ message.text }}</p>
         </ScheduleCard>
-        <!-- Stopped, voided or skipped work is one compact line like the scheduler's cards, not a message card: it is an
-             event in the room, not something said (2026-11-17). Notes on how the stop went open from its chevron. -->
-        <ScheduleCard v-else-if="message.cancelled_turn || message.cancelled_execution" :id="message.id" class="channel-voided-card" plain
-          :icon="message.cancelled_turn ? 'i-lucide-skip-forward' : 'i-lucide-circle-stop'" :label="t('{value1} 已停止', { value1: bridge.display_name(message.author) })"
-          :expandable="Boolean(voided_detail(message))">
-          <template #text>{{ message.cancelled_turn ? t('{name} 的发言已跳过', { name: bridge.display_name(message.author) })
-            : t('{name} {state}：{reason}', { name: bridge.display_name(message.author), state: stop_state(message.cancelled_execution).label,
-              reason: stop_reason_text(message.cancelled_execution.result) || t('未回答') }) }}<small>{{ message.cancelled_turn
-              ? t('安排 #{value1}', { value1: message.cancelled_turn.display_id || message.cancelled_turn.id }) : t('执行 #{value1}', { value1: message.execution_id }) }}</small></template>
-          <template v-for="execution in [voided_detail(message)].filter(Boolean)" :key="execution.id">
-            <p class="channel-stop-note">{{ stop_state(execution).note }}</p>
-            <details v-if="execution.late_answer && view.access?.can_manage" class="channel-receipt" @toggle="load_late_answer(execution.id, $event)">
-              <summary :aria-label="t('查看 {value1} 未采纳的回答', { value1: bridge.display_name(execution.member) })">{{ t('未采纳的回答') }}</summary>
-              <div class="channel-message-text channel-late-answer">{{ late_answers.get(execution.id)?.text ?? t('正在读取…') }}</div>
-            </details>
+        <!-- Stopped, voided or skipped work keeps the member's ordinary message card (avatar, name, time), with a stop badge
+             in the name row and the reason as its text, so it reads as that member's turn that was cut short (user
+             2026-11-18, replacing the 11-17 one-line event card). -->
+        <UChatMessage v-else-if="message.cancelled_turn || message.cancelled_execution" :id="message.id" :data-author="bridge.identities[message.author]?.style" role="assistant" :parts="[]" side="left" variant="naked" color="neutral" class="channel-message is-voided" :ui="{ header: 'channel-message-header', container: 'channel-message-container', body: 'channel-message-body' }">
+          <template #body>
+            <div class="channel-message-byline">
+              <UAvatar :src="bridge.identities[message.author]?.icon" :text="bridge.identities[message.author]?.initials || '?'" :alt="bridge.display_name(message.author)" size="md" class="channel-avatar" :class="bridge.identities[message.author]?.style" />
+              <div class="channel-message-meta"><div class="channel-message-author"><strong>{{ bridge.display_name(message.author) }}</strong><UBadge size="xs" color="warning" variant="soft" class="channel-source" :icon="message.cancelled_turn ? 'i-lucide-skip-forward' : 'i-lucide-circle-stop'">{{ message.cancelled_turn ? t('已跳过') : stop_state(message.cancelled_execution).label }}</UBadge></div></div>
+              <span class="channel-message-provenance channel-message-elapsed">{{ message.cancelled_turn ? t('安排 #{value1}', { value1: message.cancelled_turn.display_id || message.cancelled_turn.id }) : t('执行 #{value1}', { value1: message.execution_id }) }}</span>
+            </div>
+            <div class="channel-message-text channel-stop-reason" role="status"><span>{{ message.cancelled_turn ? t('本次发言已被跳过或取消，未回答。') : stop_reason_text(message.cancelled_execution.result) || t('本次执行已作废，未回答。') }}</span></div>
+            <template v-for="execution in [voided_detail(message)].filter(Boolean)" :key="execution.id">
+              <p class="channel-message-text channel-stop-note">{{ stop_state(execution).note }}</p>
+              <details v-if="execution.late_answer && view.access?.can_manage" class="channel-receipt" @toggle="load_late_answer(execution.id, $event)">
+                <summary :aria-label="t('查看 {value1} 未采纳的回答', { value1: bridge.display_name(execution.member) })">{{ t('未采纳的回答') }}</summary>
+                <div class="channel-message-text channel-late-answer">{{ late_answers.get(execution.id)?.text ?? t('正在读取…') }}</div>
+              </details>
+            </template>
           </template>
-        </ScheduleCard>
+        </UChatMessage>
         <!-- Work in progress is a compact card: who and how long, the stage as the main line with the stop key at its end, -->
         <!-- and the notes below as a subordinate thread, folded to the latest note with the count after it. -->
         <div v-else-if="message.slot_card && !message.failure && !message.retry" :id="`execution-${message.id}`" class="channel-working-strip" :data-author="bridge.identities[message.author]?.style">
@@ -2799,7 +2819,7 @@ function copy_message(message) { act("copy", `${view.value.room_site}/r/${room.v
             <div class="channel-message-byline">
               <UAvatar :src="bridge.identities[message.author]?.icon" :text="bridge.identities[message.author]?.initials || '?'" :alt="bridge.display_name(message.author)" size="md" class="channel-avatar" :class="bridge.identities[message.author]?.style" />
               <div class="channel-message-meta">
-                <div class="channel-message-author"><strong>{{ bridge.display_name(message.author) }}</strong><span class="channel-message-round">{{ card.round_label }}</span><UBadge size="xs" color="neutral" variant="soft" class="channel-source">{{ bridge.sources[message.source] }}</UBadge><UBadge v-if="message.kind === 'moderation'" size="xs" color="neutral" variant="soft" class="channel-source">{{ t('主持人') }}</UBadge><UBadge v-if="message.kind === 'receipt'" size="xs" color="neutral" variant="soft" class="channel-source">{{ t('运行回执') }}</UBadge><UBadge v-if="message.proactive" size="xs" color="neutral" variant="soft" class="channel-source" :title="t('成员在自己的窗口里应用户要求主动发言，不是在回答房间的请求')">{{ t('主动发言') }}</UBadge><UBadge v-if="card.waits" size="xs" color="warning" variant="soft" class="channel-source" :title="card.speaking_expert ? t('{value1} 说完后交给主持人处理', { value1: bridge.display_name(card.speaking_expert) }) : t('等待主持人处理')">{{ t('待主持人处理') }}</UBadge><UBadge v-for="badge in card.badges" :key="badge.key" size="xs" :color="badge.color" variant="soft" class="channel-source" :title="badge.title">{{ badge.label }}</UBadge></div>
+                <div class="channel-message-author"><strong>{{ bridge.display_name(message.author) }}</strong><span class="channel-message-round">{{ card.round_label }}</span><UBadge size="xs" color="neutral" variant="soft" class="channel-source">{{ bridge.sources[message.source] }}</UBadge><UBadge v-if="message.kind === 'moderation'" size="xs" color="neutral" variant="soft" class="channel-source">{{ t('主持人') }}</UBadge><UBadge v-if="message.kind === 'receipt'" size="xs" color="neutral" variant="soft" class="channel-source">{{ t('运行回执') }}</UBadge><UBadge v-if="message.proactive" size="xs" color="neutral" variant="soft" class="channel-source" :title="t('成员在自己的窗口里应用户要求主动发言，不是在回答房间的请求')">{{ t('主动发言') }}</UBadge><UBadge v-if="card.waits" size="xs" color="warning" variant="soft" class="channel-source" :title="card.speaking_expert ? t('{value1} 说完后交给主持人处理', { value1: bridge.display_name(card.speaking_expert) }) : t('等待主持人处理')">{{ t('待主持人处理') }}</UBadge><template v-for="badge in card.badges" :key="badge.key"><span class="channel-source" :title="badge.title">{{ badge.label }}<span v-if="badge.title"> &middot; {{ badge.title }}</span></span><UButton v-if="badge.answer_id" :label="badge.answer_label" size="xs" color="neutral" variant="link" class="channel-message-reference" @click="locate({ id: badge.answer_id })" /></template></div>
                 <div class="channel-message-provenance"><time :title="new Date(message.created_at).toLocaleString(locale)">{{ bridge.format_time(message.created_at) }}</time><UButton :label="`#${message.id}`" color="neutral" variant="link" size="xs" :aria-label="t('查看原文 #{value1}', { value1: message.id })" class="channel-message-id" @click="emit('detail', message.id)" /><span v-if="message.submitted_by && message.submitted_by !== message.author && !(message.source === 'proxy' && message.submitted_by === '用户')">{{ t('{value1} 代发', { value1: bridge.display_name(message.submitted_by) }) }}</span><span v-if="message.source === 'auto'" :title="t('成员结束时没有提交回答，本机服务把它最后一段回复收录为本次回答')">{{ t('自动收录') }}</span></div>
               </div>
               <span v-if="card.elapsed !== null" class="channel-message-provenance channel-message-elapsed">{{ t('耗时 {value1}', { value1: format_elapsed(card.elapsed) }) }}</span>

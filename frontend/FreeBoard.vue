@@ -348,8 +348,7 @@ watch(() => room.value.id, () => { starting.value = false; });
             <UAvatar :src="bridge.identities[member.name]?.icon" :text="bridge.identities[member.name]?.initials" :alt="member.name" size="xs" class="channel-avatar" :class="[bridge.identities[member.name]?.style, { 'is-external': external_of(member) }]" />
             <div class="pb-member-body">
               <div class="pb-member-name" :title="room.descriptions?.[member.name] || undefined">{{ bridge.display_name(member.name) }}<span v-if="!external_of(member) && bridge.display_name(member.name) !== member.name" class="member-id">{{ member.name }}</span><UIcon v-if="member.role === 'host'" name="i-lucide-crown" :title="t('主持人')" /><small :title="member_tag(member) || undefined">{{ member_tag(member) }}</small></div>
-              <small v-if="in_workflow(member.name)" class="pb-workflow-member" :title="t('来自工作流「{value1}」', { value1: workflow.label })">{{ t('工作流') }}</small>
-              <div v-if="member_setup(member)" class="pb-member-model" :title="external_of(member) ? external_tag(member, clock, { full: true }) : bridge.participant_session_hint(member.name, room, view.launch.room_models)">{{ member_setup(member) }}</div>
+              <div v-if="member_setup(member) || in_workflow(member.name)" class="pb-member-model" :title="external_of(member) ? external_tag(member, clock, { full: true }) : bridge.participant_session_hint(member.name, room, view.launch.room_models)"><small v-if="in_workflow(member.name)" class="pb-workflow-member" :title="t('来自工作流「{value1}」', { value1: workflow.label })">{{ t('工作流') }}</small>{{ member_setup(member) }}</div>
               <div class="pb-member-status" :class="`is-${member_tone(member)}`"><span class="pb-dot"></span><span class="pb-member-status-text" :title="member.execution?.status === 'failed' ? member.execution.result : member.held_until ? member_status(member, item.state) : undefined">{{ member_status(member, item.state) }}</span></div>
             </div>
             <UDropdownMenu :items="member_menu(member)" :content="{ align: 'end' }" :ui="{ content: 'channel-menu' }"><UButton icon="i-lucide-ellipsis" color="neutral" variant="ghost" size="xs" class="pb-member-more" :aria-label="t('{value1} 的更多操作', { value1: member.name })" /></UDropdownMenu>
@@ -388,8 +387,11 @@ watch(() => room.value.id, () => { starting.value = false; });
 .pb-start-pair .pb-action { justify-content: center; }
 .pb-goal-usage { margin: 4px 0 0; color: var(--ui-text-muted); font-size: 11px; }
 .pb-goal-actions { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 8px; }
+/* Speaking-order rows stay compact: name, then the workflow tag and setup on one line, then the status. */
+.speaking-order-row .pb-member-body { line-height: 1.35; }
 .pb-workflow-member { color: var(--ui-text-muted); font-size: 10px; }
-.pb-member-model { margin: 2px 0; color: var(--ui-text-muted); font-size: 11px; line-height: 1.5; overflow-wrap: anywhere; }
+.pb-workflow-member:not(:last-child)::after { content: " · "; }
+.pb-member-model { margin: 1px 0; color: var(--ui-text-muted); font-size: 11px; line-height: 1.35; overflow-wrap: anywhere; }
 /* A member with a nickname also shows its ID, which AI messages, @ and records use. */
 .member-id { margin-left: 4px; color: var(--ui-text-muted); font-size: 11px; font-weight: 400; }
 </style>

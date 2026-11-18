@@ -296,10 +296,16 @@ export function use_read_aloud({ bridge, container, prepare = async () => {}, me
     layer?.remove();
     layer = null;
     current = sentence;
-    const host = sentence?.ranges[0]?.startContainer.parentElement?.closest(hosts);
-    if (!host) return;
+    const text = sentence?.ranges[0]?.startContainer.parentElement;
+    const outer = text?.closest(hosts);
+    if (!outer) return;
+    // Inside a box that scrolls or clips (a wide table), draw in that box: the boxes then scroll with the text and stop at
+    // its edge, instead of running past the clipped cell to the side of the page (user 2026-11-18, #4376).
+    const host = clipping_box(text, outer) || outer;
+    if (host !== outer) host.classList.add("channel-reading-host");
     if (watched !== host) { layout_watch?.disconnect(); layout_watch?.observe(host); watched = host; }
-    const origin = host.getBoundingClientRect();
+    const bounds = host.getBoundingClientRect();
+    const origin = { left: bounds.left + host.clientLeft - host.scrollLeft, top: bounds.top + host.clientTop - host.scrollTop };
     layer = document.createElement("div");
     layer.className = "channel-reading-layer";
     layer.classList.toggle("is-paused", state.paused);
@@ -310,6 +316,15 @@ export function use_read_aloud({ bridge, container, prepare = async () => {}, me
       layer.append(box);
     }
     host.append(layer);
+  }
+
+  /** The nearest element between the text and its host that scrolls or clips its overflow, if any. */
+  function clipping_box(node, outer) {
+    for (let item = node; item && item !== outer; item = item.parentElement) {
+      const style = getComputedStyle(item);
+      if (style.overflowX !== "visible" || style.overflowY !== "visible") return item;
+    }
+    return null;
   }
 
   /** Keep the sentence being read in view: once it leaves the comfortable band, bring it to about a third from the top. */
@@ -396,19 +411,16 @@ export function use_read_aloud({ bridge, container, prepare = async () => {}, me
   /**
    * Requests for reading flattened text from position `from`. They are always cut from `base` (the start of the message,
    * or of a file after its front matter), so the same text makes the same requests and a replay hits the cache. Starting
-   * inside a request reads the rest of that one as a single new request, then goes on with the regular ones.
+   * inside a request plays that same request from the sentence holding `from` (`seek`), so going back to a paragraph
+   * already heard reuses its audio instead of waiting for a new one (user 2026-11-18, #4389).
    */
   function chunks_from(flat, base, from, prefix) {
     const chunks = chunks_of(split_sentences(flat, base), prefix);
     if (from <= base) return chunks;
     const index = chunks.findIndex((chunk) => chunk.end > from);
     if (index < 0) return [];
-    const { sentences, silence } = chunks[index];
-    const cut = sentences.find((sentence) => sentence.start < from && sentence.end > from);
-    const rest = [...(cut ? split_sentences(flat, from, cut.end) : []), ...sentences.filter((sentence) => sentence.start >= from)];
-    const [head] = chunks_of(rest, "", MAX_CHUNK);
-    if (head) head.silence = silence;
-    return [...(head ? [head] : []), ...chunks.slice(index + 1)];
+    const seek = chunks[index].sentences.findIndex((sentence) => sentence.end > from);
+    return [seek > 0 ? { ...chunks[index], seek } : chunks[index], ...chunks.slice(index + 1)];
   }
 
   /**
@@ -500,9 +512,11 @@ export function use_read_aloud({ bridge, container, prepare = async () => {}, me
       const audio = player();
       let frame = 0, shown = -1, starts = null, learned = false;
       const done = (error) => {
-        cancelAnimationFrame(frame); ending = null; audio.onended = audio.onerror = audio.ontimeupdate = null; error ? reject(error) : resolve();
+        cancelAnimationFrame(frame); ending = null; audio.onended = audio.onerror = audio.ontimeupdate = audio.onloadedmetadata = audio.onseeked = null;
+        audio.muted = false; error ? reject(error) : resolve();
       };
       const sync = () => {
+        if (audio.muted && chunk.seek) return;
         starts ||= Number.isFinite(audio.duration) ? sentence_starts(chunk, marks, audio.duration * 1000 - chunk.silence) : null;
         const elapsed = audio.currentTime * 1000;
         let index = 0;
@@ -521,6 +535,14 @@ export function use_read_aloud({ bridge, container, prepare = async () => {}, me
       const follow = () => { sync(); frame = requestAnimationFrame(follow); };
       audio.onended = () => done();
       audio.onerror = () => done(new Error(t('音频无法播放')));
+      // Starting inside the request: silent until the audio has moved to that sentence, so nothing before it is heard.
+      audio.muted = Boolean(chunk.seek);
+      audio.onloadedmetadata = !chunk.seek ? null : () => {
+        audio.onloadedmetadata = null;
+        starts ||= sentence_starts(chunk, marks, audio.duration * 1000 - chunk.silence);
+        audio.onseeked = () => { audio.onseeked = null; audio.muted = false; };
+        audio.currentTime = (starts[chunk.seek] || 0) / 1000;
+      };
       switching = true;
       audio.src = url;
       audio.play().then(() => { switching = false; follow(); }, (error) => { switching = false; done(error); });
@@ -628,13 +650,12 @@ export function use_read_aloud({ bridge, container, prepare = async () => {}, me
   }
 
   /**
-   * The user stopped or left reading: stop, and tell this computer reading is over, so a speech model running there
-   * frees its memory now rather than a minute later. Stops inside a reading (starting another, the next item) do not.
+   * The user stopped or left reading. The computer's speech model is not let go here: going back to hear a passage again
+   * soon after is common, and a restart takes longer than the reading itself; it ends by itself after five idle minutes
+   * (user 2026-11-18, #4393).
    */
   function stop_reading() {
-    const playing = Boolean(state.message_id);
     stop();
-    if (playing && !reading_elsewhere()) bridge.local_request("tts-release", {}).catch(() => {});
   }
 
   /** Stop any other reader on the page that is playing, so a reading on request is heard alone. */
