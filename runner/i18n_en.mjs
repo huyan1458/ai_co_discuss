@@ -1,7 +1,7 @@
 /** English CLI strings. */
 export default {
   "CLI 运行超过 {seconds} 秒仍未结束，已终止": "CLI exceeded the runtime limit of {seconds} seconds and was terminated",
-  "room-invite 创建待签到席位并签发邀请；提供 member_id 时重发该席位链接，旧链接失效。须提供 room_id、token，可选 level（discuss/read）、folders、duration（1h/today/3d）、site_url；程序先读名单 revision 再建席位。链接有效 10 分钟，未签到席位 7 天结束；未绑定线上站点时只建立席位。": "room-invite reserves a seat and issues an invitation; member_id regenerates that seat's link and invalidates the old one. Requires room_id and token; optional level (discuss/read), folders, duration (1h/today/3d), site_url. The runner reads the roster revision before creating a seat. Links last 10 minutes; unclaimed seats end after 7 days. Without a connected hosted site, only the seat is created.",
+  "room-invite 创建待签到席位并签发邀请；提供 member_id 时重发该席位链接，旧链接失效。须提供 room_id、token，可选 level（discuss/read）、folders、duration（1h/today/3d/7d/30d）、site_url；程序先读名单 revision 再建席位。链接有效 10 分钟，未签到席位 7 天结束；未绑定线上站点时只建立席位。": "room-invite reserves a seat and issues an invitation; member_id regenerates that seat's link and invalidates the old one. Requires room_id and token; optional level (discuss/read), folders, duration (1h/today/3d/7d/30d), site_url. The runner reads the roster revision before creating a seat. Links last 10 minutes; unclaimed seats end after 7 days. Without a connected hosted site, only the seat is created.",
   "连不上 {host}：{seconds} 秒内没有响应，请检查这台电脑的网络或代理后重试": "Cannot connect to {host}: no response within {seconds} seconds. Check this computer's network or proxy and try again",
   "连不上 {host}：连接被断开（{reason}），请检查这台电脑的网络或代理后重试": "Cannot connect to {host}: the connection was closed ({reason}). Check this computer's network or proxy and try again",
   "实例启动失败（退出码 {code}）": "Instance failed to start (exit code {code})",
@@ -460,7 +460,7 @@ export default {
   "  待确认 {approval}：消息 {messages}": "  Pending {approval}: messages {messages}",
   "  已退出": "  Left",
   "还没有被邀请的房间": "No invited rooms yet",
-  "对方电脑不在线，已在本机删除密钥；对方那边会在到期或撤销后移除你": "The other computer is offline; the key was deleted here. The other side will remove you when the invitation expires or is revoked",
+  "暂时连不上对方电脑，常驻服务会继续通知它；通知送达或成员资格到期后删除本机密钥": "The other computer cannot be reached right now. The background service will keep telling it, and deletes the key here once it hears or the membership expires",
   "读不到对方房间：{reason}": "Cannot read the other room: {reason}",
   "该文件属于固定排除的敏感文件，不能读取": "This file is a fixed-excluded sensitive file and cannot be read",
   "不在对方开放的范围内（或不存在）": "Not within what the other side opened (or does not exist)",
@@ -486,7 +486,7 @@ export default {
   "成员凭据与外部成员不符": "The member credential does not match this external member",
   "房间已不在这台电脑上": "The room is no longer on this computer",
   "无法确认读取授权": "Could not confirm read permission",
-  "有效期须为 1h、today 或 3d": "The duration must be 1h, today or 3d",
+  "有效期须为 1h、today、3d、7d 或 30d": "The duration must be 1h, today, 3d, 7d or 30d",
   "未知的邀请操作": "Unknown invite operation",
   "该操作不对外部成员开放": "This operation is not available to external members",
   "请求同时带有设备与外部成员签名": "The request carries both a device and an external member signature",

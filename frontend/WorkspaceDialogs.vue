@@ -253,7 +253,7 @@ const keep_open = (event) => event.preventDefault();
       </form>
       <form v-else-if="folder_dialog" class="dialog-form" @submit.prevent="save_folder">
         <UInput v-model="folder_name" icon="i-lucide-folder" :aria-label="rendered_mode === 'folder' ? t('新文件夹名称') : t('文件夹名称')" :placeholder="t('文件夹名称')" autofocus required :maxlength="40" class="w-full" autocomplete="off" :readonly="Boolean(pending)" @keydown.enter.prevent="!$event.isComposing && save_folder()" />
-        <UFormField v-if="['folder', 'rename-folder'].includes(rendered_mode)" :label="t('项目路径（可选）')" :description="t('在此文件夹中新建对话时自动带入，已有对话不受影响。')">
+        <UFormField v-if="['folder', 'rename-folder'].includes(rendered_mode)" :label="t('项目路径（可选）')" :description="t('在此文件夹中新建房间时自动带入，已有房间不受影响。')">
           <div v-if="view.launch.available" class="channel-folder-directories">
             <div class="channel-folder-directory">
               <ProjectDirectoryField v-model="folder_main" compact :placeholder="t('主目录的完整路径，或选择项目')" :disabled="Boolean(pending)">

@@ -1932,6 +1932,8 @@ test("external members read the room view's external field, and only declined or
   assert.deepEqual(external_of(member), { level: "read", expires_at: (Math.floor(now / 1000) + 2 * 3600 + 60) * 1000, directories: ["app"], computer: "A 的笔记本", pending: false, ended: false });
   assert.equal(external_tag(member, now), "外部 · 只读文件 · 剩 2 小时", "short enough for the rail at 1440 wide");
   assert.equal(external_tag(member, now, { full: true }), "外部 · 只读项目 · 剩余 2 小时", "the full wording for its hover text");
+  assert.equal(external_tag({ ...member, adapter: "api", external: { ...member.external, platform: "DeepSeek", model: "deepseek-flash" } }, now, { full: true }),
+    "外部 · DeepSeek · deepseek-flash · 只读项目 · 剩余 2 小时", "hover names the vendor the other computer reports");
   assert.equal(external_tag({ ...member, status: "removed" }, now), "外部 · 已结束");
   assert.equal(external_of({ id: 1, name: "Codex", access: "runner" }), null, "an ordinary member is not external");
   assert.equal(remaining_label(now - 1, now), "已到期");
@@ -1941,12 +1943,13 @@ test("external members read the room view's external field, and only declined or
   // 延长 counts from the later of now and the current end, in seconds as the room backend takes it.
   assert.equal(extended_until(now / 1000 + 600, "1h", now), Math.floor(now / 1000) + 600 + 3600);
   assert.equal(extended_until(now / 1000 - 600, "3d", now), Math.floor(now / 1000) + 3 * 86400);
+  assert.equal(extended_until(now / 1000 - 600, "30d", now), Math.floor(now / 1000) + 30 * 86400);
 });
 
 test("an external member's menu offers its read log and revoking, never credentials, launch or hosting", () => {
   const member = { id: 7, name: "Claude-ext", access: "external", status: "active", external: { scope: "read", expires_at: 0 } };
   const opened = [];
-  const groups = member_actions(member, { view: { access: { can_manage: true }, launch: {} }, act: () => {}, describe: () => {}, external: (target, focus) => opened.push(focus || "open") });
+  const groups = member_actions(member, { view: { access: { can_manage: true }, launch: {} }, act: () => {}, describe: () => {}, external: () => opened.push("open"), revoke: () => opened.push("revoke") });
   const labels = groups.flat().map((item) => item.label);
   assert.deepEqual(labels, ["读取记录与权限", "名称与描述", "撤销授权"]);
   groups.flat().find((item) => item.label === "撤销授权").onSelect();

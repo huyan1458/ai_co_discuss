@@ -9,7 +9,7 @@
  */
 import { computed, effectScope, inject, ref, shallowRef, watch } from "vue";
 import { locale, t } from "./i18n.js";
-import { lockdown_support } from "../runner/adapters/profiles.mjs";
+import { adapter_profile, API_PROVIDERS, lockdown_support } from "../runner/adapters/profiles.mjs";
 import runner_english from "../runner/i18n_en.mjs";
 
 // Local service operations (runner), in one table so a renamed operation changes here only.
@@ -38,7 +38,7 @@ export const ROUTES = {
 /** What B opens to an external member (`scope` in the room backend, `level` in invitations). */
 export const LEVELS = [
   { value: "discuss", label: t("只讨论"), description: t("只看房间里点名给它的请求并回答，不读项目文件") },
-  { value: "read", label: t("可读项目"), description: t("另可列目录、读文件、搜索所选目录；不能写入或执行") },
+  { value: "read", label: t("可读项目"), description: t("另可列目录、读文件、搜索本房间的项目目录；不能写入或执行") },
 ];
 /** The short form for the rail and the records list. */
 export const LEVEL_SHORT = { discuss: t("只讨论"), read: t("只读项目") };
@@ -46,8 +46,11 @@ export const LEVEL_SHORT = { discuss: t("只讨论"), read: t("只读项目") };
 export const DURATIONS = [
   { value: "1h", label: t("1 小时") },
   { value: "today", label: t("今天") },
-  { value: "3d", label: t("3 天") },
+  { value: "7d", label: t("7 天") },
+  { value: "30d", label: t("30 天") },
 ];
+// Whole-day durations; 3d is no longer offered but seats and links made with it stay valid.
+const DURATION_DAYS = { "3d": 3, "7d": 7, "30d": 30 };
 /** A's three trust levels, recorded per inviting computer. */
 export const TRUST_LEVELS = [
   { value: "default", label: t("默认"), description: t("对方点名后先问你，同意才唤醒；AI 只能用共议命令") },
@@ -121,6 +124,15 @@ export function external_of(member) {
   };
 }
 
+/** The AI the other computer says it sends, as "Claude Code · claude-opus-5-5"; "" before it has said. */
+export function external_ai(member) {
+  const profile = adapter_profile(member?.adapter);
+  if (!profile) return "";
+  const details = member.external || {};
+  const name = profile.kind === "api" ? t(API_PROVIDERS[details.platform]?.label || profile.label) : profile.label;
+  return [name, details.model].filter(Boolean).join(" · ");
+}
+
 /** The rail's quiet line for an external member: "外部 · 只读项目 · 剩余 2 小时". */
 // The rail's line is narrow: the tiniest level names and time left ("剩 59 分" / "59m"), the full wording on hover.
 const LEVEL_TINY = { discuss: t("仅讨论"), read: t("只读文件") };
@@ -145,7 +157,7 @@ export function external_tag(member, now = Date.now(), { full = false } = {}) {
   if (!info) return "";
   if (info.pending) return t("外部专家 · 待签到");
   if (info.ended) return t("外部 · 已结束");
-  return full ? [t("外部"), LEVEL_SHORT[info.level], remaining_label(info.expires_at, now)].filter(Boolean).join(" · ")
+  return full ? [t("外部"), external_ai(member), LEVEL_SHORT[info.level], remaining_label(info.expires_at, now)].filter(Boolean).join(" · ")
     : [t("外部"), LEVEL_TINY[info.level], remaining_short(info.expires_at, now)].filter(Boolean).join(" · ");
 }
 
@@ -153,13 +165,13 @@ export function external_tag(member, now = Date.now(), { full = false } = {}) {
 export const declined = (request) => request?.external_outcome === "declined" || request?.external_outcome === "timeout";
 
 /**
- * A later end for 延长, in seconds: an hour or three days past the current end (or now, if already past), or the end
- * of today when that is later.
+ * A later end for 延长, in seconds: an hour or the chosen days past the current end (or now, if already past), or the
+ * end of today when that is later.
  */
 export function extended_until(expires_at, duration, now = Date.now()) {
   const base = Math.max(time_ms(expires_at), now);
   if (duration === "1h") return Math.floor((base + HOUR_MS) / 1000);
-  if (duration === "3d") return Math.floor((base + 3 * DAY_MS) / 1000);
+  if (DURATION_DAYS[duration]) return Math.floor((base + DURATION_DAYS[duration] * DAY_MS) / 1000);
   const tonight = new Date(now);
   tonight.setHours(23, 59, 59, 0);
   return Math.floor(Math.max(tonight.getTime(), base + MINUTE_MS) / 1000);
@@ -200,6 +212,16 @@ export function room_operations(bridge) {
     update: (room_id, member_id, changes) => bridge.request(ROUTES.member(room_id, member_id), { action: "update", ...changes }, owner(room_id) || undefined),
     revoke: (room_id, member_id) => bridge.request(ROUTES.member(room_id, member_id), { action: "revoke" }, owner(room_id) || undefined),
   };
+}
+
+/** End an external member from its menu at once: a seat awaiting check-in is removed, a joined member loses its access. */
+export async function revoke_member(bridge, act, room_id, member) {
+  const pending = external_of(member).pending;
+  try {
+    await room_operations(bridge).revoke(room_id, member.id);
+    bridge.notify("info", pending ? t("席位已移除") : t("已撤销，对方之后的请求都会被拒绝"));
+    await act("refresh");
+  } catch (error) { bridge.notify("error", error.message); }
 }
 
 // A reads its records this often while the local service is reachable: a default-level request waits for an answer.
@@ -376,8 +398,8 @@ function create_invited({ view, bridge }) {
   async function leave(id) {
     const done = await run("leave", OPERATIONS.invited_leave, { id });
     if (!done) return done;
-    bridge.notify(done.remote === "unreachable" ? "warning" : "info", done.remote === "unreachable"
-      ? t("已在这台电脑上退出；对方电脑不在线，它那边要等撤销或到期才会移除") : t("已退出该房间"));
+    bridge.notify(done.record?.leave_pending ? "warning" : "info", done.record?.leave_pending
+      ? t("已在这台电脑上退出；暂时连不上对方电脑，会在后台继续通知它") : t("已退出该房间"));
     if (selected_id.value === id) page_open.value = false;
     return done;
   }

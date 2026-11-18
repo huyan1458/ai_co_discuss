@@ -15,7 +15,7 @@ import MemberDescriptionDialog from "./MemberDescriptionDialog.vue";
 import { busy, member_actions } from "./member-actions.js";
 import MemoBlock from "./memo-block.js";
 import ExternalMemberDialog from "./ExternalMemberDialog.vue";
-import { declined, external_of, external_tag } from "./external-members.js";
+import { declined, external_of, external_tag, revoke_member } from "./external-members.js";
 
 const { view, bridge, act, pending } = inject("discussion");
 const LIVE = ["dispatched", "started"];
@@ -238,12 +238,13 @@ function member_row_key(member, state) {
 /** The rail's quick entry to a member's actions; the room overview lays the same list out in full. */
 function member_menu(member) {
   return member_actions(member, { view: view.value, act, describe: (name) => { describing.value = name; },
-    external: (target, focus = "") => { external_member.value = target; external_focus.value = focus; external_open.value = true; } });
+    external: (target) => { external_member.value = target; external_open.value = true; },
+    revoke: (target) => revoke_member(bridge, act, room.value.id, target) });
 }
 
 const inviting = ref(false);
-// The external member whose dialog is open, and whether it opened on revoking.
-const external_member = ref(null), external_focus = ref(""), external_open = ref(false);
+// The external member whose dialog is open.
+const external_member = ref(null), external_open = ref(false);
 // Remaining times count down on the rail; a minute is fine-grained enough for "剩余 N 分钟".
 const CLOCK_TICK_MS = 30_000;
 const clock = ref(Date.now());
@@ -345,7 +346,7 @@ watch(() => room.value.id, () => { starting.value = false; });
       <SpeakingOrder :away="away_names" :round="current_round">
         <template #default="{ item }">
           <MemoBlock v-for="member in [member_named(item.name)].filter(Boolean)" :key="member.id" :deps="[member_row_key(member, item.state)]">
-            <UAvatar :src="bridge.identities[member.name]?.icon" :text="bridge.identities[member.name]?.initials" :alt="member.name" size="xs" class="channel-avatar" :class="[bridge.identities[member.name]?.style, { 'is-external': external_of(member) }]" />
+            <UAvatar :src="bridge.identities[member.name]?.icon" :text="bridge.identities[member.name]?.initials" :alt="member.name" size="xs" class="channel-avatar" :class="bridge.identities[member.name]?.style" />
             <div class="pb-member-body">
               <div class="pb-member-name" :title="room.descriptions?.[member.name] || undefined">{{ bridge.display_name(member.name) }}<span v-if="!external_of(member) && bridge.display_name(member.name) !== member.name" class="member-id">{{ member.name }}</span><UIcon v-if="member.role === 'host'" name="i-lucide-crown" :title="t('主持人')" /><small :title="member_tag(member) || undefined">{{ member_tag(member) }}</small></div>
               <div v-if="member_setup(member) || in_workflow(member.name)" class="pb-member-model" :title="external_of(member) ? external_tag(member, clock, { full: true }) : bridge.participant_session_hint(member.name, room, view.launch.room_models)"><small v-if="in_workflow(member.name)" class="pb-workflow-member" :title="t('来自工作流「{value1}」', { value1: workflow.label })">{{ t('工作流') }}</small>{{ member_setup(member) }}</div>
@@ -368,7 +369,7 @@ watch(() => room.value.id, () => { starting.value = false; });
   <StartDiscussionDialog v-model:open="starting" />
   <StartGoalDialog v-model:open="goal_dialog" :edit="Boolean(goal)" :initial="goal" />
   <InviteDialog v-model:open="inviting" :workflow-id="invite_workflow_id" :description="t('新成员加入后不打断其他成员；点卡片翻面可设置软件、模型、项目权限和要续接的已有会话。')" />
-  <ExternalMemberDialog v-model:open="external_open" :member="external_member" :focus="external_focus" />
+  <ExternalMemberDialog v-model:open="external_open" :member="external_member" />
   <MemberDescriptionDialog :open="Boolean(describing)" :name="describing || ' '" :platform="describing ? bridge.default_name(bridge.platform_of(describing)) : ''" :default_label="describing ? bridge.default_name(describing) : ''"
     :text="room.descriptions?.[describing] || ''" :label="room.labels?.[describing] || ''" :template="describing ? bridge.description_template(describing) : ''" :saving="describing_saving"
     @update:open="(open) => { if (!open) describing = ''; }" @save="save_description" />
@@ -378,7 +379,6 @@ watch(() => room.value.id, () => { starting.value = false; });
 <style scoped>
 .pb-member.is-away { opacity: .6; }
 /* A member from another computer: a dashed ring marks it apart from this computer's own AIs. */
-.channel-avatar.is-external { outline: 1px dashed var(--ui-text-dimmed); outline-offset: 1px; }
 .pb-goal-status { display: flex; align-items: center; gap: 6px; font-size: 12px; }
 .pb-goal-status.is-paused { color: var(--ui-text-muted); }
 /* The two start buttons share one row; the note on why they are disabled sits below them. */

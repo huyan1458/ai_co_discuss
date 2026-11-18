@@ -6,10 +6,10 @@ import { ref as module_ref } from "vue";
 const open_folders = module_ref(new Set());
 // The room whose folder was last opened for it, so mounting the drawer again is not taken for opening that room.
 let revealed_for = "";
-// Sorted by recent activity, each folder first lists this many rooms. Which folders the user opened in full survives the
-// phone drawer being mounted anew, as open_folders does.
-const ROOM_PREVIEW_COUNT = 5;
-const full_lists = module_ref(new Set());
+// Sorted by recent activity, each folder first lists this many rooms, and each "show more" reveals this many again. How far
+// the user has opened each folder survives the phone drawer being mounted anew, as open_folders does.
+const ROOM_BATCH_COUNT = 5;
+const listed_counts = module_ref(new Map());
 </script>
 
 <script setup>
@@ -65,9 +65,14 @@ function choose_imports(event) {
   import_open.value = true;
   act("import_rooms", { files, folder_id: import_folder });
 }
+/** The latest message from the owner or a member; a computer not yet updated only reports the latest of any kind. */
+function room_speech_at(room) {
+  return room.latest_speech_at === undefined ? room.latest_at : room.latest_speech_at;
+}
+
 /** Short relative last-activity label ("3小时前"); falls back to creation time. */
 function room_time(room) {
-  const time = new Date(room.latest_at || room.created_at || "").getTime();
+  const time = new Date(room_speech_at(room) || room.created_at || "").getTime();
   if (Number.isNaN(time)) return "";
   const minutes = Math.max(0, Math.floor((Date.now() - time) / 60000));
   const days = Math.floor(minutes / 1440);
@@ -83,7 +88,7 @@ function room_time(room) {
 /** Full timestamps for the row tooltip. */
 function room_time_title(room) {
   const format = (value) => new Date(value).toLocaleString("zh-CN", { hour12: false });
-  return [room.title, room.latest_at && t("最近发言 {time}", { time: format(room.latest_at) }), room.created_at && t("创建于 {time}", { time: format(room.created_at) })]
+  return [room.title, room_speech_at(room) && t("最近发言 {time}", { time: format(room_speech_at(room)) }), room.created_at && t("创建于 {time}", { time: format(room.created_at) })]
     .filter(Boolean).join("\n");
 }
 // Everything a room row and its menus read besides the room itself, so a row re-renders only when this, the room or its
@@ -123,23 +128,29 @@ function room_row(room, index, count) {
 function room_running(room) {
   return room.id === view.value.room?.id ? open_room_running.value : Boolean(room.running);
 }
-/** The rooms a folder lists now: all of them in manual order, else the latest few plus any at work or open. */
+/** How many of a folder's latest rooms are listed now. */
+function listed_count(id) {
+  return listed_counts.value.get(id) || ROOM_BATCH_COUNT;
+}
+/** The rooms a folder lists now: all of them in manual order, else the latest ones opened so far plus any at work or open. */
 function visible_rooms(folder) {
-  if (manual_order.value || full_lists.value.has(folder.id)) return folder.rooms;
-  return folder.rooms.filter((room, index) => index < ROOM_PREVIEW_COUNT || room_running(room) || room.id === view.value.room?.id);
+  if (manual_order.value) return folder.rooms;
+  return folder.rooms.filter((room, index) => index < listed_count(folder.id) || room_running(room) || room.id === view.value.room?.id);
 }
 /** The label of a folder's show-more control, empty when the folder has nothing to fold. */
 function list_toggle_label(folder) {
-  if (manual_order.value || folder.rooms.length <= ROOM_PREVIEW_COUNT) return "";
-  if (full_lists.value.has(folder.id)) return t("收起");
-  const hidden = folder.rooms.length - visible_rooms(folder).length;
-  return hidden ? t("显示其余 {count} 个", { count: hidden }) : "";
+  if (manual_order.value || folder.rooms.length <= ROOM_BATCH_COUNT) return "";
+  if (folder.rooms.length > visible_rooms(folder).length) return t("显示更多");
+  return listed_count(folder.id) > ROOM_BATCH_COUNT ? t("收起") : "";
 }
-/** Show a folder's whole list or fold it back to the latest few. */
-function toggle_full_list(id) {
-  const next = new Set(full_lists.value);
-  if (!next.delete(id)) next.add(id);
-  full_lists.value = next;
+/** Reveal the next batch of hidden rooms, or fold back to the first batch once none are hidden. */
+function toggle_room_list(folder) {
+  const next = new Map(listed_counts.value);
+  const visible = new Set(visible_rooms(folder));
+  const hidden = folder.rooms.flatMap((room, index) => (visible.has(room) ? [] : [index]));
+  if (hidden.length) next.set(folder.id, hidden[Math.min(ROOM_BATCH_COUNT, hidden.length) - 1] + 1);
+  else next.delete(folder.id);
+  listed_counts.value = next;
 }
 /** Plain values for one folder's heading row, and the key it re-renders on; read here for the same reason as room_row. */
 function folder_head(folder, index) {
@@ -226,7 +237,7 @@ function actions(room, index, folder_id, folder_room_count) {
 
 <template>
   <div class="channel-directory-manager">
-    <UButton :label="t('新建对话')" icon="i-lucide-plus" color="neutral" class="channel-primary-button channel-new-conversation" :disabled="view.directory_pending.includes('create-room')" @click="emit('create', null)" />
+    <UButton :label="t('新建房间')" icon="i-lucide-plus" color="neutral" class="channel-primary-button channel-new-conversation" :disabled="view.directory_pending.includes('create-room')" @click="emit('create', null)" />
     <div class="channel-directory-heading">
       <button type="button" class="channel-section-toggle" :aria-expanded="rooms_open" @click="rooms_open = !rooms_open"><UIcon :name="rooms_open ? 'i-lucide-chevron-down' : 'i-lucide-chevron-right'" />{{ directory_title }}</button>
       <div class="channel-directory-actions">
@@ -248,7 +259,7 @@ function actions(room, index, folder_id, folder_room_count) {
        <div class="channel-folder-row" :class="{ active: head.collapsed && head.active }">
        <button class="channel-folder-heading" data-drop-folder data-drag-handle type="button" :disabled="folder.pending" :aria-label="`${folder.name} ${folder.rooms.length}`" :aria-expanded="!head.collapsed" :title="t('拖动文件夹排序；上下方向键移动')" @pointerdown="!pending && bridge.start_drag($event)" @keydown.up.prevent="act('move_folder', { id: folder.order_id, direction: -1 })" @keydown.down.prevent="act('move_folder', { id: folder.order_id, direction: 1 })" @click="toggle_folder(folder.id)"><UIcon :name="head.collapsed ? 'i-lucide-chevron-right' : 'i-lucide-chevron-down'" /><UIcon name="i-lucide-folder" /><span class="channel-folder-name">{{ folder.name }}</span><i v-if="head.running && !folder.pending" class="channel-room-running" :title="t('正在执行')" /><small v-else class="channel-directory-count" aria-hidden="true">{{ folder.pending ? t('保存中') : folder.rooms.length || '' }}</small></button>
         <div class="channel-folder-actions">
-          <UTooltip :text="t('在{name}中新建对话', { name: folder.name })"><UButton icon="i-lucide-plus" :aria-label="t('在{name}中新建对话', { name: folder.name })" :disabled="folder.pending || head.creating" size="xs" color="neutral" variant="ghost" @click="emit('create', folder.id ? folder : null)" /></UTooltip>
+          <UTooltip :text="t('在{name}中新建房间', { name: folder.name })"><UButton icon="i-lucide-plus" :aria-label="t('在{name}中新建房间', { name: folder.name })" :disabled="folder.pending || head.creating" size="xs" color="neutral" variant="ghost" @click="emit('create', folder.id ? folder : null)" /></UTooltip>
           <UDropdownMenu :items="head.items" :content="{ align: 'start', side: 'bottom', sideOffset: 6 }" :ui="{ content: 'channel-menu channel-topic-menu' }"><UButton icon="i-lucide-ellipsis" :aria-label="t('管理文件夹 {name}', { name: folder.name })" :title="t('文件夹选项')" size="xs" color="neutral" variant="ghost" /></UDropdownMenu>
         </div>
        </div>
@@ -271,8 +282,8 @@ function actions(room, index, folder_id, folder_room_count) {
       </UContextMenu>
       </template>
       </MemoBlock>
-      <button v-if="list_toggle_label(folder)" type="button" class="channel-room-more" @click="toggle_full_list(folder.id)">{{ list_toggle_label(folder) }}</button>
-      <div v-if="view.creating_room && (view.creating_room.folder_id || '') === folder.id" class="channel-room-row" :class="{ active: view.creating_room.opened && !view.room?.id }" role="status" :aria-label="t('正在创建：{name}', { name: view.creating_room.title })">
+      <button v-if="list_toggle_label(folder)" type="button" class="channel-room-more" @click="toggle_room_list(folder)">{{ list_toggle_label(folder) }}</button>
+      <div v-if="view.creating_room && (view.creating_room.folder_id || '') === folder.id" class="channel-room-row channel-room-creating" :class="{ active: view.creating_room.opened && !view.room?.id }" role="status" :aria-label="t('正在创建：{name}', { name: view.creating_room.title })">
         <span aria-hidden="true"></span>
         <span class="channel-room-select"><span>{{ view.creating_room.title }}</span><UIcon name="i-lucide-loader-circle" class="animate-spin" /></span>
       </div>

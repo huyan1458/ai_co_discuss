@@ -424,8 +424,8 @@ onBeforeUnmount(() => { document.removeEventListener("pointerdown", close_on_out
           <span class="expert-card-identity">
             <UAvatar :src="bridge.identities[name]?.icon" :text="bridge.identities[name]?.initials" :alt="name" size="sm" class="channel-avatar expert-card-avatar" :class="bridge.identities[name]?.style" />
             <span class="expert-card-names">
-              <span v-if="manual"><strong>{{ t('{value1}（手动）', { value1: bridge.display_name(name) }) }}<span v-if="bridge.display_name(name) !== name" class="member-id">{{ name }}</span></strong><span v-if="host && !hostable" class="expert-card-badge">{{ t('主持') }}</span></span>
-              <span v-else><strong>{{ member_label }}<span v-if="member_label !== name" class="member-id">{{ name }}</span></strong><span v-if="host && !hostable" class="expert-card-badge">{{ t('主持') }}</span></span>
+              <span v-if="manual"><strong>{{ t('{value1}（手动）', { value1: bridge.display_name(name) }) }}</strong><span v-if="host && !hostable" class="expert-card-badge">{{ t('主持') }}</span></span>
+              <span v-else><strong>{{ member_label }}</strong><span v-if="host && !hostable" class="expert-card-badge">{{ t('主持') }}</span></span>
               <small v-if="description && !preset" :title="description">{{ description }}</small>
             </span>
           </span>
@@ -610,7 +610,6 @@ onBeforeUnmount(() => { document.removeEventListener("pointerdown", close_on_out
 .expert-card-manual > p { margin: 0; }
 .expert-card-note > span { flex-shrink: 0; width: 13px; height: 13px; margin-top: 3px; }
 /* A member with a nickname also shows its ID, which AI messages, @ and records use. */
-.member-id { margin-left: 4px; color: var(--ui-text-muted); font-size: 11px; font-weight: 400; }
 /* Narrow card (two per row on a phone): the name moves under the avatar so the corner tools leave it the full
    width, the card grows by that line, and 恢复默认 joins the settings flow instead of sitting under the actions. */
 @container (max-width: 220px) {

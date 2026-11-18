@@ -7,10 +7,10 @@
 import { computed, inject, ref, useId, watch } from "vue";
 import ExternalInviteCard from "./ExternalInviteCard.vue";
 import ConfirmDialog from "./ConfirmDialog.vue";
-import { DURATIONS, LEVEL_SHORT, extended_until, external_of, remaining_label, room_operations, time_ms } from "./external-members.js";
+import { DURATIONS, LEVEL_SHORT, extended_until, external_ai, external_of, remaining_label, room_operations, time_ms } from "./external-members.js";
 import { t } from "./i18n.js";
 
-const props = defineProps({ member: { type: Object, default: null }, focus: { type: String, default: "" } });
+const props = defineProps({ member: { type: Object, default: null } });
 const open = defineModel("open", { type: Boolean, default: false });
 const { view, bridge, act } = inject("discussion");
 const operations = room_operations(bridge);
@@ -36,7 +36,7 @@ async function load() {
   } catch (error) { failure.value = error.message; }
   finally { loading.value = false; }
 }
-watch(open, (value) => { if (!value) return; reads.value = []; detail.value = null; load(); confirming.value = props.focus === "revoke"; });
+watch(open, (value) => { if (!value) return; reads.value = []; detail.value = null; load(); });
 
 /** One change through the room backend; the room is read again so the rail shows it. */
 async function change(action, extra, success) {
@@ -71,9 +71,12 @@ function size(bytes) {
     :description="info ? [info.computer, LEVEL_SHORT[info.level], info.ended ? t('已结束') : info.pending ? [t('待签到'), pending_expiry].join(' · ') : remaining_label(info.expires_at)].filter(Boolean).join(' · ') : ''" :ui="{ content: 'glass-panel studio-modal', body: 'dialog-body' }">
     <template #body>
       <ExternalInviteCard v-if="detail?.claimed_at === 0 && !info?.ended" :key="member.id" :member-id="member.id" :settings="{ level: detail.scope, duration: detail.duration, directories: detail.directories, invite_version: detail.invite_version }" />
-      <div v-if="info" class="external-member">
+      <!-- A seat awaiting check-in opens on its invitation: nothing else shows until that has been read. -->
+      <div v-if="info?.pending && !detail && !failure" class="external-member-invite-loading" role="status" :aria-label="t('正在读取邀请')"><USkeleton class="external-member-invite-skeleton" /></div>
+      <div v-else-if="info" class="external-member">
         <!-- What is open now, laid out like an expert card's facts: a label column and a value column. -->
         <dl class="external-member-facts">
+          <div v-if="external_ai(member)"><dt>{{ t("对方的 AI") }}</dt><dd>{{ t("{name}（对方自报）", { name: external_ai(member) }) }}</dd></div>
           <div><dt>{{ t("能做什么") }}</dt><dd>{{ LEVEL_SHORT[info.level] }}</dd></div>
           <div v-if="info.level === 'read'"><dt>{{ t("开放目录") }}</dt><dd :title="info.directories.join('、')">{{ info.directories.join("、") || "—" }}</dd></div>
           <div v-if="!info.pending"><dt>{{ t("剩余时间") }}</dt><dd>{{ info.ended ? t("已结束") : remaining_label(info.expires_at) || "—" }}</dd></div>
@@ -129,6 +132,7 @@ function size(bytes) {
 .external-member-ended > span { flex-shrink: 0; width: 14px; height: 14px; color: var(--ui-text-dimmed); }
 .external-member-reads h4 { margin: 0 0 8px; color: var(--ui-text-highlighted); font-size: 13px; font-weight: 600; }
 .external-member-skeleton { height: 22px; margin-bottom: 4px; }
+.external-member-invite-skeleton { height: 360px; border-radius: 8px; }
 /* Empty and error states match the invite dialog's dashed box and the device records' inline retry. */
 .external-member-empty { margin: 0 0 8px; padding: 18px 12px; border: 1px dashed var(--ui-border); border-radius: 8px; text-align: center; color: var(--ui-text-muted); font-size: 12px; }
 .external-member-error { display: flex; align-items: center; gap: 6px; margin: 0 0 8px; color: var(--ui-error); font-size: 12px; }

@@ -188,6 +188,7 @@ def reported_capabilities(row):
             "resume": bool(row["resume"])}
 # Columns added after the first free-room tables; Python databases created by that build gain them here.
 LATER_COLUMNS = {"room_members": {"access": "TEXT NOT NULL DEFAULT 'runner'", "session_mode": "TEXT NOT NULL DEFAULT 'new'"},
+                 "external_members": {"platform": "TEXT NOT NULL DEFAULT ''", "model": "TEXT NOT NULL DEFAULT ''"},
                  "member_executions": {"changes": "TEXT NOT NULL DEFAULT ''", "edited": "TEXT NOT NULL DEFAULT ''", "cwd": "TEXT NOT NULL DEFAULT ''",
                                        "diffs": "TEXT NOT NULL DEFAULT ''",
                                        "activity": "TEXT NOT NULL DEFAULT ''", "activity_at": "INTEGER NOT NULL DEFAULT 0",

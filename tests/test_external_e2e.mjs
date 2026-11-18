@@ -65,7 +65,7 @@ async function invite(b, options = {}) {
 async function redeem(b, code, signer = null) {
   const key = signer ?? await external_signer(b.link.id);
   const answer = await relay_call(b.relay.url, b.machine, { action: 'external-redeem',
-    payload: { public_key: key.public_key, proof: invite_proof(code, b.link.id, key.raw), label: 'A 的电脑', platform: 'Claude', adapter: 'claude' } }, { signer: key, as: 'proof', route: 'pair' });
+    payload: { public_key: key.public_key, proof: invite_proof(code, b.link.id, key.raw), label: 'A 的电脑', platform: 'Claude', adapter: 'claude', model: 'claude-opus-5-5' } }, { signer: key, as: 'proof', route: 'pair' });
   return { ...answer, signer: key };
 }
 
@@ -134,6 +134,9 @@ test('protocol: join, B names the member, it claims, reads B\'s file and answers
   const before = await owner_external(b, member_id);
   assert.equal(before.view.status, 'active');
   assert.equal(before.view.scope, 'read');
+  assert.deepEqual([before.view.adapter, before.view.platform, before.view.model], ['claude', 'Claude', 'claude-opus-5-5'], 'the room keeps the AI reported at check-in');
+  assert.equal((await member_api(b, a, 'POST', '/ai', { adapter: 'codex_cli', platform: 'Codex', model: 'gpt-6.1-sol' })).status, 200, 'a later switch passes the gateway');
+  assert.equal((await owner_external(b, member_id)).view.platform, 'Codex');
   assert.deepEqual(before.view.directories.map(item => item.replaceAll('\\', '/')), [b.files.project.replaceAll('\\', '/')]);
 
   const said = await b.room.say('请读 src/main.js，告诉我 ANSWER 的值', { to: [a.member.name] });

@@ -92,6 +92,38 @@ class OwnerGrantTests(ExternalMemberTests):
         self.request(path, {"action": "revoke"}, self.owner)
         self.assertEqual(self.request(path, binding, self.owner)[0], 409)
 
+    def test_reported_ai_is_shown_and_changes_nothing_the_member_may_do(self):
+        seat = self.create(pending=True)
+        path = f"{self.owner_path}/{seat['member_id']}"
+        version = self.request(path, {"action": "invite"}, self.owner)[1]["invite_version"]
+        binding = {"invite_version": version, "token": self.external, "machine": "ext:test", "expires_at": int(time.time()) + 3600,
+                   "adapter": "api", "platform": "DeepSeek", "model": "deepseek-flash"}
+        self.request(path, {**binding, "action": "bind"}, self.owner)
+        self.request(path, {**binding, "action": "activate"}, self.owner)
+        shown = lambda: next(item for item in self.request(self.path, token=self.owner)[1]["free"]["members"] if item["name"] == EXTERNAL)
+        self.assertEqual((shown()["adapter"], shown()["external"]["platform"], shown()["external"]["model"]), ("api", "DeepSeek", "deepseek-flash"))
+        before = self.request(path, token=self.owner)[1]
+        self.assertEqual(self.ext("ai", {"adapter": "claude", "platform": "Claude", "model": "claude-opus-5-5"})[0], 200)
+        self.assertEqual((shown()["adapter"], shown()["external"]["platform"], shown()["external"]["model"]), ("claude", "Claude", "claude-opus-5-5"))
+        after = self.request(path, token=self.owner)[1]
+        self.assertEqual([after[key] for key in ("scope", "directories", "expires_at", "quota")], [before[key] for key in ("scope", "directories", "expires_at", "quota")])
+        self.assertEqual(self.ext("ai", {"adapter": "claude", "platform": "NotAVendor"})[0], 200)
+        self.assertEqual(shown()["external"]["platform"], "", "an unknown vendor reads as none")
+        self.assertEqual(self.ext("ai", {"platform": "Claude"})[0], 400)
+        self.assertEqual(self.ext("ai", {"adapter": "claude", "model": "m" * 121})[0], 400)
+        self.assertEqual(self.ext("ai", {"adapter": "claude"}, token=uuid.uuid4().hex)[0], 403)
+
+    def test_databases_from_before_reported_ai_gain_its_columns_and_keep_their_members(self):
+        from backend.free_room import migrate_free_tables
+        member = self.create()
+        with closing(self.db()) as connection, connection:
+            connection.execute("ALTER TABLE external_members DROP COLUMN platform")
+            connection.execute("ALTER TABLE external_members DROP COLUMN model")
+            migrate_free_tables(connection)
+            migrate_free_tables(connection)
+            row = connection.execute("SELECT machine,platform,model FROM external_members WHERE member_id=?", (member["member_id"],)).fetchone()
+        self.assertEqual(tuple(row), ("fp:test", "", ""))
+
     def test_pending_seats_are_excluded_from_dispatch_and_expire_in_seven_days(self):
         from backend.free_room import active_members, recipients
         ready = self.create()

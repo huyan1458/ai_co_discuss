@@ -401,6 +401,9 @@ test('the local website\'s own page issues and lists invites without a credentia
   const listed = await local('room-invites', { room_id: room.room.id });
   assert.deepEqual(listed.body.invites.map(item => item.invite_id), [issued.body.invite_id]);
   assert.deepEqual((await local('room-invite-revoke', { room_id: room.room.id, invite_id: issued.body.invite_id })).body, { ok: true, revoked: true });
+  // The longest choice on the page passes both the gateway and the room backend.
+  const month = await local('room-invite', { room_id: room.room.id, level: 'read', duration: '30d' });
+  assert.equal(month.status, 200, JSON.stringify(month.body));
   // A credential the website does not accept for the owner is still refused, with a code and a translatable template.
   const forged = await local('room-invites', { room_id: room.room.id, token: 'f'.repeat(64) });
   assert.deepEqual([forged.status, forged.body.code, forged.body.error_text?.template], [400, 'owner_required', '需要本房间的控制凭据，且房间须在这台电脑上']);

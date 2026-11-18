@@ -906,6 +906,10 @@ def list_rooms(connection, params=None):
     rows = connection.execute(f"""SELECT rooms.*,
         COALESCE(stats.message_count,0) AS message_count,COALESCE(stats.latest_id,0) AS latest_id,
         (SELECT created_at FROM messages WHERE id=stats.latest_id) AS latest_at,
+        (SELECT m.created_at FROM messages m WHERE m.room_id=rooms.id AND m.source<>'system'
+            AND m.author NOT IN ('系统','系统任务')
+            AND NOT EXISTS (SELECT 1 FROM message_withdrawals w WHERE w.message_id=m.id)
+            ORDER BY m.id DESC LIMIT 1) AS latest_speech_at,
         EXISTS (SELECT 1 FROM member_executions e WHERE e.room_id=rooms.id
             AND e.status IN ('dispatched','started') AND e.lease_until>?) AS running
         FROM rooms LEFT JOIN room_message_stats stats ON stats.room_id=rooms.id {where}

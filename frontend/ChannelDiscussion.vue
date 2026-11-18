@@ -556,12 +556,44 @@ const tool_label = (item) => item.tool || TOOL_KIND_LABELS[item.phase];
 function working_notes(message) {
   return execution_notes.value.get(message.execution_id) || [];
 }
+async function read_note_texts(room_id, execution_id) {
+  const { notes } = await bridge.request(`/api/rooms/${room_id}/executions/${execution_id}/notes`);
+  return notes;
+}
 async function load_notes(execution_id) {
   const room_id = room.value.id;
+  const early = note_preloads.get(execution_id);
+  note_preloads.delete(execution_id);
   try {
-    const { notes } = await bridge.request(`/api/rooms/${room_id}/executions/${execution_id}/notes`);
+    const notes = await (early ? early.catch(() => read_note_texts(room_id, execution_id)) : read_note_texts(room_id, execution_id));
     if (room.value.id === room_id) execution_notes.value = new Map(execution_notes.value).set(execution_id, notes);
   } catch (error) { return error.message || t('过程说明读取失败'); }
+}
+// Reads of folded notes, by execution. Kept out of execution_notes until opened: that map redraws the transcript,
+// which must not happen for every card scrolled past.
+const NOTE_PRELOAD_CONCURRENCY = 2;
+const note_preloads = new Map();
+const note_preload_queue = new Set();
+let note_preloads_running = 0;
+watch(() => room.value.id, () => { note_preloads.clear(); note_preload_queue.clear(); });
+/** Queue a folded row's notes while it is near the screen; the row reached last is read first. */
+function preload_notes(execution_id, near) {
+  if (!near) { note_preload_queue.delete(execution_id); return; }
+  if (note_preloads.has(execution_id)) return;
+  note_preload_queue.add(execution_id);
+  run_note_preloads();
+}
+function run_note_preloads() {
+  while (note_preloads_running < NOTE_PRELOAD_CONCURRENCY && note_preload_queue.size) {
+    const execution_id = [...note_preload_queue].at(-1);
+    note_preload_queue.delete(execution_id);
+    note_preloads_running += 1;
+    const reading = read_note_texts(room.value.id, execution_id);
+    note_preloads.set(execution_id, reading);
+    // A failed read is forgotten: opening the row reads again and reports any failure there.
+    reading.catch(() => { if (note_preloads.get(execution_id) === reading) note_preloads.delete(execution_id); })
+      .finally(() => { note_preloads_running -= 1; run_note_preloads(); });
+  }
 }
 /** Execution ids whose working notes are unfolded; folded by default to the latest note. */
 const open_working_notes = ref(new Set());
@@ -2825,7 +2857,7 @@ function copy_message(message) { act("copy", `${view.value.room_site}/r/${room.v
                 <div class="channel-message-text channel-late-answer">{{ late_answers.get(run.id)?.text ?? t('正在读取…') }}</div>
               </details>
             </template>
-            <ExecutionNotes v-if="run?.notes" :count="run.notes" :notes="execution_notes.get(run.id)" :load="() => load_notes(run.id)" />
+            <ExecutionNotes v-if="run?.notes" :count="run.notes" :notes="execution_notes.get(run.id)" :load="() => load_notes(run.id)" :preload="(near) => preload_notes(run.id, near)" />
           </template></template>
         </UChatMessage>
         <!-- Work in progress is a compact card: who and how long, the stage as the main line with the stop key at its end, -->
@@ -2927,7 +2959,7 @@ function copy_message(message) { act("copy", `${view.value.room_site}/r/${room.v
                the reason, full width, so a long reason is not squeezed into half the card beside it. -->
           <p v-if="message.failure.retried" class="channel-message-provenance channel-retried-note"><UIcon name="i-lucide-corner-down-right" />{{ t('已重试，新的执行接在下方') }}</p>
           <p v-if="failure_advice(message.failure)" class="channel-message-text">{{ failure_advice(message.failure) }}</p>
-          <ExecutionNotes v-if="message.failure.notes" :count="message.failure.notes" :notes="execution_notes.get(message.failure.id)" :load="() => load_notes(message.failure.id)" />
+          <ExecutionNotes v-if="message.failure.notes" :count="message.failure.notes" :notes="execution_notes.get(message.failure.id)" :load="() => load_notes(message.failure.id)" :preload="(near) => preload_notes(message.failure.id, near)" />
           <ExecutionDenials v-if="message.failure.denials?.length" :denials="message.failure.denials" :allowable="Boolean(denial_allowance(message.failure))"
             :busy="allowing === message.failure.id" :error="allow_errors[message.failure.id]" @allow="allow_and_resend(message.failure)" />
         </section>
@@ -2981,7 +3013,7 @@ function copy_message(message) { act("copy", `${view.value.room_site}/r/${room.v
             </div>
             <div v-if="message.summary" class="channel-answer-summary"><small>{{ t('回答摘要') }}<span v-if="message.summary_by && message.summary_by !== message.author"> {{ t('· {value1} 整理', { value1: bridge.display_name(message.summary_by) }) }}</span></small><div class="channel-message-text markdown-body" v-html="message.rendered_summary"></div></div>
             <AnswerFiles v-if="card.execution_started_at" :message="message" :room-id="room.id" :started-at="card.execution_started_at" />
-            <ExecutionNotes v-if="card.notes_count" :count="card.notes_count" :notes="card.notes" :load="() => load_notes(card.execution_id)" />
+            <ExecutionNotes v-if="card.notes_count" :count="card.notes_count" :notes="card.notes" :load="() => load_notes(card.execution_id)" :preload="(near) => preload_notes(card.execution_id, near)" />
             <div v-if="message.attachments?.length" v-html="bridge.attachment_markup(message.attachments)"></div>
             <div v-if="card.recommendation" class="channel-recommendation" :class="`is-${card.recommendation.status}`" :aria-label="t('智能调度推荐')" aria-live="polite">
               <template v-for="item in [card.recommendation]" :key="item.message_id">

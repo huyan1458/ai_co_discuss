@@ -111,7 +111,7 @@ const uid = useId();
       </template>
       <p v-if="seat_id" class="external-invite-hint">{{ t("待生成链接") }} · {{ t("链接只在生成时显示；请重新生成。未绑定线上网站时，需先在设置中绑定。") }}</p>
       <footer class="external-invite-footer">
-        <p class="external-invite-warning" role="note"><UIcon name="i-lucide-triangle-alert" />{{ level === 'read' ? t("项目内容会经对方的 AI 发送给其模型服务商；读出去的内容收不回，撤销只阻止以后的读取。") : t("房间里发给它的内容会经对方的 AI 发送给其模型服务商。") }}</p>
+        <p class="external-invite-warning" role="note"><UIcon name="i-lucide-triangle-alert" />{{ level === 'read' ? t("项目内容会发给对方模型服务商") : t("消息会发给对方模型服务商") }}</p>
         <p v-if="!view.launch.available && !view.launch.remote" class="external-invite-warning is-error" role="alert"><UIcon name="i-lucide-plug-zap" />{{ t("生成邀请需要本机服务，请在这台电脑打开本机网站。") }}</p>
         <UButton icon="i-lucide-link" :label="seat_id ? (settings?.invite_version ? t('重新生成链接') : t('生成链接')) : t('添加待签到席位')" size="sm" class="channel-primary-button external-invite-generate" :loading="busy === 'create'" :disabled="Boolean(busy) || (!seat_id && needs_directory) || !view.launch.available && !view.launch.remote" @click="generate" />
       </footer>

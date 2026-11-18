@@ -1,20 +1,27 @@
 /**
  * Web tools of a model API member: web_search and web_fetch. Claude Code, Codex and Antigravity bring their own; a model
  * API brings none, so the runner supplies them at every project access level (not on a task confined to the room).
+ * They follow DeepSeek Harness's defaults (packages/web, https://github.com/deepseek-ai/deepseek-harness at 39163dd30f,
+ * MIT License, Copyright (c) 2026 DeepSeek): search is the DeepSeek Search API, billed to a DeepSeek API key, and fetch
+ * is an anonymous local request.
  *
  * Input: a search query, or a public http(s) address. Output: search results, or the page as plain text in slices.
- * Requests leave from this computer, which also runs the site and other private services, so an address that resolves
+ * Fetches leave from this computer, which also runs the site and other private services, so an address that resolves
  * to loopback, a private network or Tailscale is refused at connection time, on every redirect. Node's built-in modules
- * only. Search reads public result pages, which need no key and may change their layout: 360 Search first for Chinese
- * queries (Bing returned unrelated pages for them, measured 2026-11-18), Bing first for the rest, the other as fallback.
+ * only.
  */
 import { lookup } from 'node:dns';
 import { request as http_request } from 'node:http';
 import { request as https_request } from 'node:https';
 import { BlockList, isIP } from 'node:net';
 import { createBrotliDecompress, createGunzip, createInflate } from 'node:zlib';
+import { read_saved_api_key, saved_api_keys } from '../discussion_api.mjs';
 
 const REQUEST_TIMEOUT_MS = 20_000;
+const SEARCH_ENDPOINT = 'https://api.deepseek.com/v1/tools/search';
+const SEARCH_KEY_HOST = 'api.deepseek.com';
+const SEARCH_TIMEOUT_MS = 60_000;
+const SEARCH_ERROR_CHARS = 300;
 const MAX_REDIRECTS = 5;
 const MAX_PAGE_BYTES = 2 * 1024 * 1024;
 const DEFAULT_PAGE_CHARS = 20_000;
@@ -23,7 +30,6 @@ const DEFAULT_RESULTS = 8;
 const MAX_RESULTS = 10;
 const MAX_QUERY_CHARS = 400;
 const CHARSET_SNIFF_BYTES = 2048;
-const CJK_TEXT = /[㐀-鿿]/;
 const USER_AGENT = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/130.0 Safari/537.36';
 const TEXT_TYPES = /^(text\/|application\/(json|xml|xhtml\+xml|ld\+json|rss\+xml|atom\+xml)\b)/i;
 const ENTITIES = { amp: '&', lt: '<', gt: '>', quot: '"', apos: "'", nbsp: ' ', ensp: ' ', emsp: ' ', middot: '·', hellip: '…', mdash: '—', ndash: '–',
@@ -149,67 +155,39 @@ export function html_text(html) {
   return decode_entities(text).split('\n').map(line => line.replace(/[ \t 　]+/g, ' ').trim()).filter(Boolean).join('\n');
 }
 
-/** The real address behind a Bing result link, which wraps it in base64 after `u=a1`. */
-function result_url(link) {
-  const address = decode_entities(link);
+/**
+ * The DeepSeek API key web_search bills: the member's own when it runs on DeepSeek, else the one saved on this computer.
+ *
+ * @param {string} home - the service directory holding saved keys.
+ * @param {{base_url?: string}} profile - the member's model API settings.
+ * @param {string} member_key - the member's own API key.
+ * @returns {string} the key, or '' when this computer has none, which withholds web_search.
+ */
+export function web_search_key(home, profile, member_key) {
+  const on_deepseek = address => { try { return new URL(address).hostname === SEARCH_KEY_HOST; } catch { return false; } };
+  if (member_key && on_deepseek(profile?.base_url)) return member_key;
   try {
-    const url = new URL(address);
-    const wrapped = url.hostname.endsWith('bing.com') && url.pathname.startsWith('/ck/') ? url.searchParams.get('u') : '';
-    return wrapped?.startsWith('a1') ? Buffer.from(wrapped.slice(2), 'base64url').toString('utf8') : address;
-  } catch { return address; }
+    const saved = saved_api_keys(home);
+    const root = Object.keys(saved).find(on_deepseek);
+    return root ? read_saved_api_key(home, root, saved[root]) : '';
+  } catch { return ''; }
 }
 
-/** The organic results of a Bing result page. */
-export function parse_bing_results(html, limit = DEFAULT_RESULTS) {
-  const results = [];
-  for (const block of html.split(/<li\b[^>]*class="[^"]*\bb_algo\b[^"]*"[^>]*>/i).slice(1)) {
-    const heading = /<h2\b[^>]*>\s*<a\b[^>]*href="([^"]+)"[^>]*>([\s\S]*?)<\/a>/i.exec(block);
-    if (!heading) continue;
-    const snippet = /<p\b[^>]*>([\s\S]*?)<\/p>/i.exec(block)?.[1] || '';
-    results.push({ title: inline_text(heading[2]), url: result_url(heading[1]), snippet: inline_text(snippet) });
-    if (results.length >= limit) break;
-  }
-  return results;
-}
-
-/** The organic results of a 360 Search result page; `data-mdurl` holds the real address when the page gives one. */
-export function parse_so_results(html, limit = DEFAULT_RESULTS) {
-  const results = [];
-  for (const block of html.split(/<li\b[^>]*class="res-list"[^>]*>/i).slice(1)) {
-    const heading = /<h3\b[^>]*res-title[^>]*>\s*<a\b([^>]*)>([\s\S]*?)<\/a>/i.exec(block);
-    const link = heading && (/data-mdurl="([^"]+)"/i.exec(heading[1]) || /\bhref="([^"]+)"/i.exec(heading[1]))?.[1];
-    if (!link) continue;
-    const snippet = /class=["'][^"']*\b(?:res-desc|res-list-summary)\b[^"']*["'][^>]*>([\s\S]*?)<\/(?:p|span|div)>/i.exec(block)?.[1] || '';
-    results.push({ title: inline_text(heading[2]), url: decode_entities(link), snippet: inline_text(snippet) });
-    if (results.length >= limit) break;
-  }
-  return results;
-}
-
-const SEARCH_ENGINES = {
-  so: { url: query => `https://www.so.com/s?${new URLSearchParams({ q: query })}`, parse: parse_so_results },
-  bing: { url: query => `https://www.bing.com/search?${new URLSearchParams({ q: query, count: String(MAX_RESULTS) })}`, parse: parse_bing_results },
-};
-
-async function run_search(args, signal) {
+/** One search through the DeepSeek Search API; a redirect fails, so the key never reaches another address. */
+async function run_search(args, signal, key) {
   const query = String(args.query || '').trim();
   if (!query) throw new Error('query 不能为空');
   if (query.length > MAX_QUERY_CHARS) throw new Error(`query 不能超过 ${MAX_QUERY_CHARS} 个字符`);
-  const limit = Math.min(Math.max(Number(args.limit) || DEFAULT_RESULTS, 1), MAX_RESULTS);
-  let failure = null;
-  for (const name of CJK_TEXT.test(query) ? ['so', 'bing'] : ['bing', 'so']) {
-    try {
-      const page = await fetch_page(SEARCH_ENGINES[name].url(query), { signal });
-      if (page.status !== 200) throw new Error(`搜索服务返回 HTTP ${page.status}`);
-      const results = SEARCH_ENGINES[name].parse(decode_page(page.body, String(page.headers['content-type'] || '')), limit);
-      if (results.length) return { query, results };
-    } catch (error) {
-      if (signal?.aborted) throw error;
-      failure = error;
-    }
-  }
-  if (failure) throw failure;
-  return { query, results: [], note: '没有解析到搜索结果：换个关键词再试；仍然没有时在回答里说明搜索不可用，不要编造来源' };
+  const count = Math.min(Math.max(Number(args.limit) || DEFAULT_RESULTS, 1), MAX_RESULTS);
+  const limit = AbortSignal.timeout(SEARCH_TIMEOUT_MS);
+  const response = await fetch(SEARCH_ENDPOINT, { method: 'POST', redirect: 'error', signal: signal ? AbortSignal.any([signal, limit]) : limit,
+    headers: { authorization: `Bearer ${key}`, 'content-type': 'application/json', accept: 'application/json' },
+    body: JSON.stringify({ query, count, need_content: false }) });
+  const body = await response.json().catch(() => null);
+  if (!response.ok) throw new Error(`DeepSeek 搜索返回 HTTP ${response.status}：${String(body?.error?.message || '').slice(0, SEARCH_ERROR_CHARS)}`);
+  if (!Array.isArray(body?.results)) throw new Error('DeepSeek 搜索的返回格式无法识别');
+  return { query, results: body.results.filter(item => typeof item?.url === 'string' && item.url).map(item => ({ title: String(item.title || ''), url: item.url,
+    snippet: String(item.snippet || ''), ...(item.summary ? { summary: String(item.summary) } : {}), ...(item.date ? { date: String(item.date) } : {}) })) };
 }
 
 async function run_fetch(args, signal) {
@@ -236,9 +214,10 @@ const WEB_TOOLS = [
     parameters: { type: 'object', properties: { url: { type: 'string' }, offset: { type: 'integer', minimum: 0 }, limit: { type: 'integer', minimum: 1, maximum: MAX_PAGE_CHARS } }, required: ['url'], additionalProperties: false } },
 ];
 
-/** The web tools this task may use: none when it is confined to the room (`no_web`). */
+/** The web tools this task may use: none when confined to the room (`no_web`), and no search without a DeepSeek key. */
 export function web_tools(context) {
-  return context.no_web ? [] : WEB_TOOLS;
+  if (context.no_web) return [];
+  return context.web_search_key ? WEB_TOOLS : WEB_TOOLS.filter(item => item.name !== 'web_search');
 }
 
 /** Whether a tool name is one of the web tools. */
@@ -247,6 +226,6 @@ export function is_web_tool(name) {
 }
 
 /** Run one web tool; a failure is thrown for the caller to hand back to the model. */
-export function run_web_tool(name, args, signal) {
-  return name === 'web_search' ? run_search(args, signal) : run_fetch(args, signal);
+export function run_web_tool(name, args, signal, search_key = '') {
+  return name === 'web_search' ? run_search(args, signal, search_key) : run_fetch(args, signal);
 }

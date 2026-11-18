@@ -1122,6 +1122,22 @@ class DiscussionTests(unittest.TestCase):
         self.assertIsNone(created["folder_id"])
         self.assertEqual(self.request("/api/rooms", {**ungrouped, "folder_id": None})[1]["id"], created["id"])
 
+    def test_room_list_latest_speech_follows_the_owner_and_members(self):
+        """The recent-activity order moves on the owner's messages and on a member's reply."""
+        def latest_speech():
+            rooms = self.request("/api/rooms")[1]["rooms"]
+            return next(room for room in rooms if room["id"] == self.room["id"])["latest_speech_at"]
+
+        self.configure_host(experts={"Codex": "cli", "Antigravity": "cli"})
+        status, sent = self.post("用户追问", uuid.uuid4().hex)
+        self.assertEqual(status, 201, sent)
+        self.assertEqual(latest_speech(), sent["message"]["created_at"])
+        payload = {"author": "Antigravity", "text": "专家答复", "source": "cli", "submission_id": uuid.uuid4().hex}
+        payload.update(self.prepare_speech("Antigravity"))
+        status, saved = self.request(f"/api/rooms/{self.room['id']}/messages", payload)
+        self.assertEqual(status, 201, saved)
+        self.assertEqual(latest_speech(), saved["message"]["created_at"])
+
     def test_revisions_change_only_with_the_room_or_the_directory(self):
         """A room's revision moves with its own writes; the site revision moves with any room or directory change."""
         other = self.request("/api/rooms", {"title": "另一议题", "goal": "保持完整记录"})[1]

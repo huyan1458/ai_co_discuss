@@ -14,7 +14,7 @@ import { listen_local } from './local_port.mjs';
 import { API_PROVIDERS, api_base_url, api_check, api_generate, api_history, api_models, api_request, api_response, api_tool_results, read_api_key, save_api_key } from '../runner/discussion_api.mjs';
 import { api_lockdown, execute_tool, participant_tools, system_prompt } from '../runner/adapters/api.mjs';
 import { pi_delivery } from '../runner/adapters/api_pi.mjs';
-import { fetch_page, html_text, is_private_address, parse_bing_results, parse_so_results, run_web_tool } from '../runner/adapters/api_web.mjs';
+import { fetch_page, html_text, is_private_address, run_web_tool, web_search_key } from '../runner/adapters/api_web.mjs';
 import { deliver_task, execution_details } from '../runner/adapters/index.mjs';
 import { draw_image, launch_discussion, room_settings, validate_preset } from '../runner/discussion_launch.mjs';
 import { save_image_settings } from '../runner/image_service.mjs';
@@ -292,9 +292,12 @@ test('API host tools read the latest roster and expose discussion actions only f
 
 test('API web tools reach public pages only and stay off for tasks confined to the room', async t => {
   const names = context => participant_tools({ mode: 'free', role: 'member', ...context }).map(item => item.name);
-  for (const context of [{ project_access: 'read' }, { project_access: 'write', native_shell: true }]) assert.ok(names(context).includes('web_search') && names(context).includes('web_fetch'));
+  for (const context of [{ project_access: 'read' }, { project_access: 'write', native_shell: true }]) {
+    assert.ok(names({ ...context, web_search_key: 'key' }).includes('web_search') && names(context).includes('web_fetch'));
+    assert.ok(!names(context).includes('web_search'), 'no DeepSeek key, no search');
+  }
   assert.ok(!names(api_lockdown({ tool_lockdown: true, api_context: {} }).api_context).includes('web_fetch'));
-  assert.ok(!names({ external_access: true }).includes('web_search'));
+  assert.ok(!names({ external_access: true, web_search_key: 'key' }).includes('web_search'));
 
   for (const address of ['127.0.0.1', '10.1.2.3', '100.71.206.50', '172.16.0.1', '192.168.1.1', '169.254.169.254', '::1', 'fd00::1', '::ffff:127.0.0.1']) assert.ok(is_private_address(address), address);
   for (const address of ['8.8.8.8', '198.18.0.1', '2606:4700:4700::1111']) assert.ok(!is_private_address(address), address);
@@ -316,16 +319,32 @@ test('API web tools reach public pages only and stay off for tasks confined to t
   assert.equal(hits, 1);
 });
 
-test('API web tools turn result pages and HTML into readable text', () => {
-  const target = Buffer.from('https://example.com/报告?id=1').toString('base64url');
-  const page = `<ol><li class="b_algo"><h2><a href="https://www.bing.com/ck/a?!&amp;&amp;u=a1${target}&amp;ntb=1">宜康<strong>步态</strong>分析</a></h2><div class="b_caption"><p>采样频率 &amp; 量程</p></div></li>
-    <li class="b_ad"><h2><a href="https://ad.example">广告</a></h2></li><li class="b_algo"><h2><a href="https://example.org/b">第二条</a></h2></li></ol>`;
-  assert.deepEqual(parse_bing_results(page), [{ title: '宜康步态分析', url: 'https://example.com/报告?id=1', snippet: '采样频率 & 量程' },
-    { title: '第二条', url: 'https://example.org/b', snippet: '' }]);
-  const so_page = `<li class="res-list"><h3>其他人还搜了</h3></li><li class="res-list"><h3 class="res-title"><a href="https://www.so.com/link?m=x" data-mdurl="https://example.com/a" data-res='{"pos":1}'>步态<em>分析</em></a></h3>
-    <span class="res-list-summary" data-result-summary>采样频率<em>1000</em>赫兹</span></li><li class="res-list"><h3 class="res-title"><a href="https://www.so.com/link?m=y">无直链</a></h3><p class="res-desc">摘要</p></li>`;
-  assert.deepEqual(parse_so_results(so_page), [{ title: '步态分析', url: 'https://example.com/a', snippet: '采样频率1000赫兹' },
-    { title: '无直链', url: 'https://www.so.com/link?m=y', snippet: '摘要' }]);
+test('API web search bills only a DeepSeek key, sends it only to the DeepSeek Search API and reports its failures', async t => {
+  const home = mkdtempSync(join(tmpdir(), 'codiscuss-web-search-'));
+  t.after(() => rmSync(home, { recursive: true, force: true }));
+  const openai = { base_url: 'https://api.openai.com/v1' };
+  save_api_key(home, { ...openai, api_key: 'openai-key' });
+  assert.equal(web_search_key(home, openai, 'openai-key'), '', 'another provider\'s key never pays for search');
+  save_api_key(home, { base_url: 'https://api.deepseek.com/v1', api_key: 'saved-deepseek-key' });
+  assert.equal(web_search_key(home, openai, 'openai-key'), 'saved-deepseek-key');
+  assert.equal(web_search_key(home, { base_url: 'https://api.deepseek.com/v1' }, 'member-key'), 'member-key');
+
+  const original = globalThis.fetch;
+  t.after(() => { globalThis.fetch = original; });
+  const calls = [];
+  let reply = new Response(JSON.stringify({ results: [{ url: 'https://example.com/a', title: '步态', snippet: '摘要', summary: '概述', date: null }] }));
+  globalThis.fetch = async (url, init) => { calls.push({ url, init }); return reply; };
+  const found = await run_web_tool('web_search', { query: ' 步态分析 ', limit: 3 }, undefined, 'saved-deepseek-key');
+  assert.deepEqual(found, { query: '步态分析', results: [{ title: '步态', url: 'https://example.com/a', snippet: '摘要', summary: '概述' }] });
+  assert.equal(calls[0].url, 'https://api.deepseek.com/v1/tools/search');
+  assert.equal(calls[0].init.headers.authorization, 'Bearer saved-deepseek-key');
+  assert.equal(calls[0].init.redirect, 'error');
+  assert.deepEqual(JSON.parse(calls[0].init.body), { query: '步态分析', count: 3, need_content: false });
+  reply = new Response(JSON.stringify({ error: { message: 'Insufficient Balance' } }), { status: 402 });
+  await assert.rejects(run_web_tool('web_search', { query: '步态' }, undefined, 'saved-deepseek-key'), /HTTP 402：Insufficient Balance/);
+});
+
+test('API web tools turn HTML into readable text', () => {
   assert.equal(html_text('<head><title>标题</title></head><script>alert(1)</script><h1>参数&nbsp;表</h1><table><tr><td>量程</td><td>±180&#176;</td></tr></table><ul><li>甲</li></ul>'),
     '参数 表\n量程 | ±180° |\n- 甲');
 });

@@ -15,11 +15,11 @@ export const busy = (member) => member.pending > 0 || LIVE.includes(member.execu
  * @param {object} context `view` (the current snapshot), `act` and `describe` (opens the description editor).
  * @returns {object[][]} Groups of `{ label, icon, disabled?, color?, onSelect }`.
  */
-export function member_actions(member, { view, act, describe, external }) {
+export function member_actions(member, { view, act, describe, external, revoke }) {
   const access = view.access;
   // A member from another computer has no credentials or launch here: its own dialog holds the reading record and
   // the protections (extend, downgrade, revoke); it is never the host.
-  if (external_of(member)) return external_actions(member, { view, act, describe, external });
+  if (external_of(member)) return external_actions(member, { view, act, describe, external, revoke });
   const available = access?.members?.find((entry) => entry.name === member.name)?.available;
   const locked = !access?.can_manage;
   const session_running = ["active", "paused"].includes(view.room?.session?.status);
@@ -39,8 +39,8 @@ export function member_actions(member, { view, act, describe, external }) {
   ], ...(current_host ? [] : [[{ ...change(t('移除'), "i-lucide-trash-2", "remove"), color: "error" }]])];
 }
 
-/** Action groups for an external member; `external(member, focus)` opens its dialog, focused on revoking when asked. */
-function external_actions(member, { view, act, describe, external }) {
+/** Action groups for an external member; `external(member)` opens its dialog, `revoke(member)` ends it at once. */
+function external_actions(member, { view, act, describe, external, revoke }) {
   const locked = !view.access?.can_manage;
   return [[
     { label: external_of(member).pending ? t('邀请链接') : t('读取记录与权限'), icon: "i-lucide-shield-check", disabled: locked, onSelect: () => external?.(member) },
@@ -48,5 +48,5 @@ function external_actions(member, { view, act, describe, external }) {
   ], [
     ...(busy(member) ? [{ label: t('停止'), icon: "i-lucide-circle-stop", color: "error", disabled: locked,
       onSelect: () => act("change_member", { member_id: member.id, name: member.name, action: "interrupt" }) }] : []),
-  ], [{ label: external_of(member).pending ? t('移除席位') : t('撤销授权'), icon: "i-lucide-ban", color: "error", disabled: locked || external_of(member).ended, onSelect: () => external?.(member, "revoke") }]].filter((group) => group.length);
+  ], [{ label: external_of(member).pending ? t('移除席位') : t('撤销授权'), icon: "i-lucide-ban", color: "error", disabled: locked || external_of(member).ended, onSelect: () => revoke?.(member) }]].filter((group) => group.length);
 }

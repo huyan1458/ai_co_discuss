@@ -33,7 +33,9 @@ const CODE_LENGTH = 12;
 const INVITE_CONTEXT = 'codiscuss-invite-v1';
 const LABEL_LIMIT = 80;
 const LOCAL_TIMEOUT_MS = 8000;
-const DURATIONS = new Set(['1h', 'today', '3d']);
+// Whole-day durations; 3d is no longer offered on the page but seats and links made with it stay valid.
+const DURATION_DAYS = { '3d': 3, '7d': 7, '30d': 30 };
+const DURATIONS = new Set(['1h', 'today', ...Object.keys(DURATION_DAYS)]);
 const LEVELS = new Set(['discuss', 'read']);
 // The only actions an external signer has; redeeming an invite is the one that goes without a registered key.
 export const EXTERNAL_SIGNED_ACTIONS = new Set(['external-api', 'external-repo', 'external-leave']);
@@ -41,6 +43,7 @@ export const EXTERNAL_ACTIONS = new Set(['external-redeem', ...EXTERNAL_SIGNED_A
 export const INVITE_COMMANDS = new Set(['room-invite', 'room-invites', 'room-invite-revoke']);
 const QUERY = /^(\?[A-Za-z0-9_.~%=&,:+-]*)?$/;
 const SUB_PATH = /^[A-Za-z0-9_.~-]+(\/[A-Za-z0-9_.~-]+)*$/;
+const MODEL_LIMIT = 120;
 
 /** A shown text with the template and parameters a page translates by its own language (the backend's `error_text`). */
 const text_of = (template, params = {}) => ({ error: t(template, params), error_text: { template, params } });
@@ -167,7 +170,7 @@ async function local_call(room, method, path, { token, body, external = false, s
 
 /** When a membership chosen at the invite ends, in seconds as the local website keeps it. */
 function membership_end(duration, now) {
-  if (duration === '3d') return Math.floor((now + 3 * DAY_MS) / 1000);
+  if (DURATION_DAYS[duration]) return Math.floor((now + DURATION_DAYS[duration] * DAY_MS) / 1000);
   if (duration === 'today') {
     const end = new Date(now);
     end.setHours(23, 59, 59, 0);
@@ -201,7 +204,7 @@ export async function create_invite(home, { room_id, token, level = 'read', fold
     folders = current.body.directories.map(path => room.directories.indexOf(path));
   }
   if (!LEVELS.has(level)) throw new GatewayError(400, '开放等级须为 discuss 或 read');
-  if (!DURATIONS.has(duration)) throw new GatewayError(400, '有效期须为 1h、today 或 3d');
+  if (!DURATIONS.has(duration)) throw new GatewayError(400, '有效期须为 1h、today、3d、7d 或 30d');
   const chosen = level === 'discuss' ? [] : folders === undefined ? [0] : folders;
   if (!Array.isArray(chosen) || (level === 'read' && !chosen.length) || chosen.some(index => !Number.isSafeInteger(index) || index < 0 || index >= room.directories.length)
       || new Set(chosen).size !== chosen.length) {
@@ -347,7 +350,7 @@ function external_name(platform, taken) {
  * local website to add the external member, and the key is registered and published at once.
  */
 async function redeem(home, ctx, id, sealed, request) {
-  const { public_key, proof, label, platform, adapter } = request.payload || {};
+  const { public_key, proof, label, platform, adapter, model } = request.payload || {};
   let external_id;
   try { external_id = device_id_of(public_key); } catch { throw new GatewayError(400, '外部成员公钥须为 P-256'); }
   if (!await verify_signature(public_key, sealed.signature, `${id}\n${sealed.body}`)) throw new GatewayError(400, '外部成员签名无效', {}, 'bad_signature');
@@ -368,7 +371,8 @@ async function redeem(home, ctx, id, sealed, request) {
   const token = createHmac('sha256', invite.code_hash).update(`seat-token-v1:${invite.invite_id}:${external_id}`).digest('hex');
   const clean_label = String(label || '').replace(/[\u0000-\u001f]/g, ' ').trim().slice(0, LABEL_LIMIT);
   const binding = { invite_version: invite.invite_version, token, machine: `ext:${external_id}`,
-    machine_label: clean_label, adapter: String(adapter || '').slice(0, 40), expires_at: invite.member_expires_at };
+    machine_label: clean_label, adapter: String(adapter || '').slice(0, 40), platform, model: String(model || '').slice(0, MODEL_LIMIT),
+    expires_at: invite.member_expires_at };
   const seat_path = `${base}/external-members/${invite.member_id}`;
   const created = await local_call(room, 'POST', seat_path, { token: room.token, fetcher: ctx.fetcher,
     body: { action: 'bind', ...binding } });

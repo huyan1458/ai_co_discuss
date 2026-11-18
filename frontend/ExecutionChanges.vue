@@ -39,7 +39,7 @@ const sections = computed(() => {
   const possible = props.report.commands > 0 ? file_rows(changes.filter((path) => !edited.value.has(path))) : [];
   return [
     { key: "own", files: own, title: t('已修改 {count} 个文件', { count: own.length }), hint: "" },
-    { key: "possible", files: possible, title: t('可能由命令或脚本修改 {count} 个文件', { count: possible.length }),
+    { key: "possible", files: possible, title: t('其他改动 {count} 个文件', { count: possible.length }),
       hint: t('这次执行运行过命令，这些文件在执行期间有变化，但无法确认是它改的，也可能来自其他窗口或成员。') },
   ].filter((section) => section.files.length).map((section) => ({ ...section, totals: totals_of(section.files),
     counted: section.files.some((file) => Number.isInteger(file.stat?.added)) }));

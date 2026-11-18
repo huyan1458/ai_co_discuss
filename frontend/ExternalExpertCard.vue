@@ -2,7 +2,7 @@
 /**
  * An external expert to be invited (new-room panel, invite dialog), laid out as a member card (ExpertCard.vue): the
  * front sums up the choices, 设置 turns to the back to edit them, 完成 keeps them and 取消 restores them.
- * `draft` holds `{ level, duration, directories }` over `paths` (the project directories it may read).
+ * `draft` holds `{ level, duration, directories }`; reading opens all of `paths` (the room's project directories).
  */
 import { computed, ref, useId, watch } from "vue";
 import { DURATIONS, LEVELS } from "./external-members.js";
@@ -12,24 +12,21 @@ const emit = defineEmits(["remove"]);
 const draft = defineModel("draft", { type: Object, required: true });
 const props = defineProps({ paths: { type: Array, default: () => [] } });
 const level = ref(draft.value.level || "read"), duration = ref(draft.value.duration || "1h");
-const directories = ref([...(draft.value.directories || [])]);
 const paths = computed(() => props.paths.filter(Boolean));
-// The directories may still be loading: an empty list keeps the choice; the main one is chosen by default.
-watch(paths, (list) => { if (!list.length) return; directories.value = directories.value.filter((item) => list.includes(item)); if (!directories.value.length) directories.value = [list[0]]; }, { immediate: true });
-watch([level, duration, directories], () => { draft.value = { level: level.value, duration: duration.value, directories: [...directories.value] }; }, { immediate: true });
+watch([level, duration, paths], () => { draft.value = { level: level.value, duration: duration.value, directories: [...paths.value] }; }, { immediate: true });
 // Reading needs a directory: without one it is invited for discussing, so the front says so.
-const shown_level = computed(() => level.value === "read" && !directories.value.length ? "discuss" : level.value);
+const shown_level = computed(() => level.value === "read" && !paths.value.length ? "discuss" : level.value);
 const leaf = (path) => path.split(/[\\/]/).filter(Boolean).pop() || path;
 const facts = computed(() => [
   { label: t("状态"), value: t("待签到"), tone: "warn" },
-  { label: t("项目"), value: shown_level.value === "read" ? t("可读：{dirs}", { dirs: directories.value.map(leaf).join("、") }) : t("只讨论") },
+  { label: t("项目"), value: shown_level.value === "read" ? t("可读：{dirs}", { dirs: paths.value.map(leaf).join("、") }) : t("只讨论") },
   { label: t("有效期"), value: DURATIONS.find((option) => option.value === duration.value)?.label },
 ]);
 
 const back = ref(false);
 let saved = null;
-function open_back() { saved = { level: level.value, duration: duration.value, directories: [...directories.value] }; back.value = true; }
-function cancel() { if (saved) { level.value = saved.level; duration.value = saved.duration; directories.value = saved.directories; } back.value = false; }
+function open_back() { saved = { level: level.value, duration: duration.value }; back.value = true; }
+function cancel() { if (saved) { level.value = saved.level; duration.value = saved.duration; } back.value = false; }
 const uid = useId();
 </script>
 
@@ -60,21 +57,14 @@ const uid = useId();
               <button v-for="option in LEVELS" :key="option.value" type="button" role="radio" :title="option.description" :aria-checked="level === option.value" @click="level = option.value">{{ option.label }}</button>
             </div>
           </div>
-          <div v-if="level === 'read'" class="expert-card-field is-top" role="group" :aria-labelledby="`${uid}-folders`">
-            <span :id="`${uid}-folders`">{{ t("目录") }}</span>
-            <p v-if="!paths.length" class="expert-card-empty">{{ t("还没有选项目目录，只能选“只讨论”。") }}</p>
-            <div v-else class="expert-card-folders" :title="t('只读：已跟踪与未忽略的文件，固定排除 .env、密钥、凭据、data/ 与 .git。')">
-              <UCheckbox v-for="path in paths" :key="path" :title="path" :model-value="directories.includes(path)" :label="leaf(path)" size="xs"
-                @update:model-value="(on) => directories = on ? [...directories, path] : directories.filter((item) => item !== path)" />
-            </div>
-          </div>
+          <p v-if="level === 'read' && !paths.length" class="expert-card-empty">{{ t("还没有选项目目录，只能选“只讨论”。") }}</p>
           <div class="expert-card-field">
             <span :id="`${uid}-duration`">{{ t("有效期") }}</span>
             <div class="expert-card-modes" role="radiogroup" :aria-labelledby="`${uid}-duration`">
               <button v-for="option in DURATIONS" :key="option.value" type="button" role="radio" :aria-checked="duration === option.value" @click="duration = option.value">{{ option.label }}</button>
             </div>
           </div>
-          <p class="expert-card-warning" role="note"><UIcon name="i-lucide-triangle-alert" />{{ level === 'read' ? t("项目内容会经对方的 AI 发送给其模型服务商；读出去的内容收不回，撤销只阻止以后的读取。") : t("房间里发给它的内容会经对方的 AI 发送给其模型服务商。") }}</p>
+          <p class="expert-card-warning" role="note" :title="level === 'read' ? t('只读：已跟踪与未忽略的文件，固定排除 .env、密钥、凭据、data/ 与 .git。') : undefined"><UIcon name="i-lucide-triangle-alert" />{{ level === 'read' ? t("项目内容会发给对方模型服务商") : t("消息会发给对方模型服务商") }}</p>
         </div>
         <span class="expert-card-flip-actions">
           <button type="button" class="expert-card-flip is-cancel" @click="cancel">{{ t("取消") }}</button>
@@ -127,11 +117,7 @@ const uid = useId();
 .expert-card-heading strong > span { font-size: 10px; font-weight: 400; color: var(--ui-text-muted); }
 /* Labels are three characters here (有效期), so the column is wider than the member card's 26px. */
 .expert-card-field { display: grid; grid-template-columns: 3em minmax(0, 1fr); align-items: center; gap: 8px; color: var(--ui-text-dimmed); font-size: 11px; }
-.expert-card-field.is-top { align-items: start; }
-.expert-card-field.is-top > span { line-height: 20px; }
 .expert-card-field .expert-card-modes button { padding: 0 6px; white-space: nowrap; }
-.expert-card-folders { display: flex; flex-wrap: wrap; gap: 4px 12px; min-width: 0; padding-top: 2px; }
-.expert-card-folders > * { min-width: 0; max-width: 100%; }
 .expert-card-empty { margin: 0; color: var(--ui-text-muted); font-size: 11px; line-height: 20px; }
 .expert-card-warning { display: flex; gap: 6px; margin: auto 0 0; color: var(--ui-warning, #e0a33a); font-size: 11px; line-height: 16px; }
 .expert-card-warning > :first-child { flex: none; width: 12px; height: 12px; margin-top: 2px; }

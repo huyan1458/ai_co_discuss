@@ -5,6 +5,7 @@ import TopicPanel from "./TopicPanel.vue";
 import WorkspaceDialogs from "./WorkspaceDialogs.vue";
 import ChannelSidebar from "./ChannelSidebar.vue";
 import FreeBoard from "./FreeBoard.vue";
+import TopicCard from "./TopicCard.vue";
 import DiscussionHistory from "./DiscussionHistory.vue";
 import RoomOverview from "./RoomOverview.vue";
 import ExecutionTimeline from "./ExecutionTimeline.vue";
@@ -272,6 +273,13 @@ function open_message_ref(event, open) {
 
 // The title of the room being created from the panel, shown in the header until the room opens.
 const creating_title = computed(() => view.value.creating_room?.opened ? view.value.creating_room.title : "");
+/** The room being created, shaped like a room from what the new-room panel already knows. */
+const creating_preview = computed(() => {
+  const creating = view.value.creating_room;
+  if (!creating?.opened) return null;
+  const members = Object.entries(creating.experts || {}).map(([name, mode]) => ({ name, access: mode === "manual" ? "manual" : "runner", adapter: view.value.launch.profiles?.[name]?.adapter }));
+  return { ...creating, members };
+});
 
 /** Open the shared creation form from either navigation surface. */
 function create_channel(folder = null) {
@@ -417,7 +425,7 @@ function resize_nav_by_key(event) {
     <div v-if="nav_docked" class="channel-nav-resizer" role="separator" tabindex="0" :aria-label="t('调整房间栏宽度')" aria-orientation="vertical" aria-controls="channel-sidebar" :aria-valuemin="NAV_MIN" :aria-valuemax="nav_max" :aria-valuenow="effective_nav_width" :aria-valuetext="t('{count} 像素', { count: effective_nav_width })" :title="t('拖动调整房间栏宽度，也可使用方向键')" @pointerdown="start_nav_resize" @pointermove="resize_nav" @pointerup="finish_nav_resize" @pointercancel="finish_nav_resize" @lostpointercapture="finish_nav_resize" @keydown="resize_nav_by_key"></div>
 
     <main class="channel-main">
-      <div ref="topbar" class="channel-topbar" :class="{ 'is-overlay': !middle_page && room && view.tab === 'discussion' }">
+      <div ref="topbar" class="channel-topbar" :class="{ 'is-overlay': !middle_page && (room || creating_preview) && view.tab === 'discussion' }">
         <header class="channel-header">
           <UTooltip v-if="rail_inline" :text="nav_collapsed ? t('展开房间栏') : t('收起房间栏')"><UButton icon="i-lucide-panel-left" color="neutral" variant="ghost" size="sm" class="channel-desktop-nav channel-icon-button channel-panel-toggle" :aria-label="nav_collapsed ? t('展开房间栏') : t('收起房间栏')" :aria-expanded="!nav_collapsed" aria-controls="channel-sidebar" @click="nav_collapsed = !nav_collapsed" /></UTooltip>
           <UButton v-else icon="i-lucide-panel-left" color="neutral" variant="ghost" size="sm" class="channel-mobile-nav channel-icon-button channel-panel-toggle" :aria-label="t('打开房间导航')" :aria-expanded="nav_open" @click="nav_open = true" />
@@ -441,7 +449,7 @@ function resize_nav_by_key(event) {
           <div class="channel-header-actions">
             <button v-if="show_work_status" type="button" class="channel-work-status" :class="`is-${work_status.tone}`" :title="work_status.title" :aria-label="t('执行状态：{status}；打开房间概览', { status: work_status.title.replaceAll('\n', t('，')) })" @click="toggle_info">
               <span v-if="work_status.members.length" class="channel-work-avatars"><UAvatar v-for="member in work_status.members" :key="member.id" :src="bridge.identities[member.name]?.icon" :text="bridge.identities[member.name]?.initials" :alt="member.name" size="2xs" class="channel-avatar" :class="bridge.identities[member.name]?.style" /></span>
-              <span class="pb-dot"></span><span class="channel-work-text" role="status">{{ work_status.text }}</span>
+              <span class="channel-work-text" role="status">{{ work_status.text }}</span><span class="pb-dot"></span>
             </button>
             <form v-if="!middle_page && view.tab === 'discussion'" class="channel-search" @submit.prevent="act('filter', { query: search })">
               <UInput v-model="search" icon="i-lucide-search" variant="none" size="sm" :placeholder="t('搜索消息')" :aria-label="t('搜索讨论记录')" :disabled="!room" class="channel-search-input">
@@ -497,7 +505,7 @@ function resize_nav_by_key(event) {
         <FilePreview />
         </div>
       </div>
-      <div v-else-if="view.creating_room?.opened && !middle_page" class="channel-body"><div class="channel-content"><div class="channel-message-group channel-loading-skeleton grid gap-6 py-6" role="status" :aria-label="t('正在创建：{name}', { name: view.creating_room.title })"><div v-for="row in 3" :key="row" class="grid gap-3"><USkeleton class="h-5 w-28" /><USkeleton class="h-4 w-full" /><USkeleton class="h-4 w-2/3" /></div></div></div></div>
+      <div v-else-if="creating_preview && !middle_page" class="channel-body channel-body-discussion"><div class="channel-content"><section class="channel-conversation"><div class="channel-transcript" role="status" :aria-label="t('正在创建：{name}', { name: creating_preview.title })"><div class="channel-message-group channel-topic-group"><TopicCard :preview="creating_preview" /></div></div></section></div></div>
       <div v-else-if="view.rooms_loading && !middle_page" class="grid flex-1 place-content-center justify-items-center gap-3 text-muted" role="status"><UIcon name="i-lucide-loader-circle" class="size-6 animate-spin" /><span>{{ t("正在读取房间…") }}</span></div>
       <RoomWelcome v-else-if="!middle_page" />
     </main>
@@ -508,12 +516,12 @@ function resize_nav_by_key(event) {
       @update:open="(value) => { if (!value) workflow_deleting = ''; }" @confirm="workflow_library.remove" />
     <ConfirmDialog :open="Boolean(workflow_leaving)" :title="t('放弃未保存的修改？')" :description="t('当前工作流的修改还没有保存。')" :items="[]" :confirm-label="t('放弃修改')" danger
       @update:open="(value) => { if (!value) workflow_leaving = null; }" @confirm="workflow_library.discard" />
-    <UModal :content="{ onInteractOutside: (event) => event.preventDefault() }" v-if="room" v-model:open="consensus_open" :title="t('共识与讨论记录')" :description="t('主持人整理的结论、共识与分歧，以及每场讨论结束时的结论。')" :ui="{ content: 'glass-panel studio-modal channel-consensus-modal', body: 'dialog-body' }">
+    <UModal :content="{ onInteractOutside: (event) => event.preventDefault() }" v-if="room" v-model:open="consensus_open" :title="t('共识与讨论记录')" :ui="{ content: 'glass-panel studio-modal channel-consensus-modal', body: 'dialog-body' }">
       <template #body>
         <div class="merged-page channel-consensus-body">
           <TopicPanel v-if="!free_room" section="host" @open="open_from_consensus" @detail="detail_from_consensus" />
           <section class="merged-section channel-summary" :aria-label="t('当前共识')">
-            <div class="page-heading"><div><h2>{{ t("当前共识") }}</h2><p>{{ t("主持人整理的结论、共识与分歧，用 #消息编号 保留依据；讨论结束时保存进下方记录。") }}</p></div><UButton v-if="!editing_context" icon="i-lucide-pencil" :label="t('编辑')" variant="outline" color="neutral" class="channel-surface-button" @click="editing_context = true" /></div>
+            <div class="page-heading"><h2>{{ t("当前共识") }}<small v-if="!editing_context && !room.host_brief?.text && !room.state_text">{{ t("暂无") }}</small></h2><UButton v-if="!editing_context" icon="i-lucide-pencil" :label="t('编辑')" variant="ghost" color="neutral" size="xs" @click="editing_context = true" /></div>
             <form v-if="editing_context" class="summary-form" @submit.prevent="save_consensus">
               <UFormField :label="t('主持简报')" :description="t('简述结论、共识、歧义，以及接下来要追问或调整什么、为什么。')" class="channel-brief-editor"><UTextarea v-model="brief" :aria-label="t('主持简报正文')" :rows="4" class="w-full summary-brief-editor" :placeholder="t('让返回房间的人快速理解讨论进展和主持意图。')" /></UFormField>
               <UFormField :label="t('详细共识与进度')" :description="t('已达成的共识、尚未解决的问题与下一步，用 #消息编号 标注依据。')" class="channel-state-field"><UTextarea v-model="summary" :aria-label="t('共识与分歧正文')" :rows="12" :maxlength="4000" class="summary-editor" :placeholder="t('已达成的共识、尚未解决的问题与下一步…')" /></UFormField>
@@ -523,7 +531,6 @@ function resize_nav_by_key(event) {
               <div class="consensus-card is-brief"><h3>{{ t("主持简报") }}<button v-if="room.state_until" type="button" class="subtle-link" @click="detail_from_consensus(room.state_until)">{{ t("整理至 #{id}", { id: room.state_until }) }}</button></h3><div class="markdown-body" @click="open_message_ref($event, detail_from_consensus)" v-html="room.rendered_brief"></div></div>
               <details v-if="rendered_state" class="consensus-card"><summary><h3>{{ t("详细共识与进度") }}</h3><span>{{ t("依据、已处理内容、未决问题与下一步") }}</span><UIcon name="i-lucide-chevron-down" class="disclosure-icon" /></summary><div class="markdown-body consensus-state" @click="open_message_ref($event, detail_from_consensus)" v-html="rendered_state"></div></details>
             </template>
-            <p v-else class="fine-print">{{ t("还没有共识。主持人会在讨论中整理，也可以点“编辑”自己写。") }}</p>
           </section>
           <DiscussionHistory @detail="detail_from_consensus" />
         </div>
@@ -532,6 +539,11 @@ function resize_nav_by_key(event) {
     <div v-if="show_rail" class="channel-rail-resizer" role="separator" tabindex="0" :aria-label="t('调整右侧栏宽度')" aria-orientation="vertical" aria-controls="channel-member-rail" :aria-valuemin="RAIL_MIN" :aria-valuemax="RAIL_MAX" :aria-valuenow="rail_width" :aria-valuetext="t('{count} 像素', { count: rail_width })" :title="t('拖动调整右侧栏宽度，也可使用左右方向键')" @pointerdown="start_rail_resize" @pointermove="resize_rail" @pointerup="finish_rail_resize" @pointercancel="finish_rail_resize" @lostpointercapture="finish_rail_resize" @keydown="resize_rail_by_key"></div>
     <aside v-if="show_rail" id="channel-member-rail" v-keep-reading class="channel-member-rail" :aria-label="t('当前焦点与讨论进度')">
       <section class="channel-rail-board"><InvitedRoomRail v-if="invited_page" /><FreeBoard v-else-if="room" @history="open_consensus()" />
+        <div v-else-if="creating_preview" class="progress-board is-docked"><header class="pb-header"><strong>{{ t("房间") }}</strong></header>
+          <section class="pb-section" :aria-label="t('发言顺序')"><h4>{{ t('发言顺序') }}</h4><ul class="pb-members">
+            <li v-for="member in creating_preview.members" :key="member.name" class="pb-member"><UAvatar :src="bridge.identities[member.name]?.icon" :text="bridge.identities[member.name]?.initials" :alt="member.name" size="xs" class="channel-avatar" :class="bridge.identities[member.name]?.style" />
+              <div class="pb-member-body"><div class="pb-member-name">{{ bridge.display_name(member.name) }}<UIcon v-if="member.name === creating_preview.host" name="i-lucide-crown" :title="t('主持人')" /></div><div class="pb-member-status"><span class="pb-dot"></span><span class="pb-member-status-text">{{ t("正在启动") }}</span></div></div></li>
+          </ul></section></div>
         <div v-else class="progress-board is-docked"><header class="pb-header"><strong>{{ t("讨论进度") }}</strong></header><p class="channel-rail-empty">{{ t("暂无房间，新建讨论后在这里查看进度与参与者。") }}</p></div></section>
     </aside>
 

@@ -55,8 +55,7 @@ const NOTE_CHAR = 11, NOTE_PAD = 16, NOTE_MARGIN = 36;
 // A column an arrow skips over is lifted this far clear of the line the arrow runs along (room for its note too).
 const BYPASS_CLEARANCE = 44;
 // A card moves only by its top bar, with a mouse or a finger alike; its body works like the card on the new-room page.
-// A swipe on the body pans the canvas on touch; with a mouse the body neither pans nor drags, so its text can be selected.
-const TOUCH = window.matchMedia("(pointer: coarse)").matches;
+// A swipe on the body pans the canvas on touch (touch_start); with a mouse the body neither pans nor drags, so its text can be selected.
 const CARD_HANDLE = ".workflow-card-grip";
 // The whole-workflow view (double click, the fit button): as far out as it takes, on a phone further still.
 const FIT = { padding: 0.08, maxZoom: 1, minZoom: 0.25 };
@@ -456,14 +455,22 @@ function reset_view() {
   instance.value?.fitView({ ...fit_options(), duration: 250 });
 }
 
-/** A middle-button double press anywhere on the canvas resets the view too (browsers fire no dblclick for it). */
-const MIDDLE_BUTTON = 1, DOUBLE_PRESS_MS = 400;
-let middle_pressed_at = 0;
+/**
+ * A quick middle-button double press on one spot of the canvas resets the view too (browsers fire no dblclick for it).
+ * The middle button also pans: a new drag started soon after the last one begins elsewhere, so it is no double press
+ * (user 2026-11-18, #4919: panning in short strokes kept resetting the view).
+ */
+const MIDDLE_BUTTON = 1, DOUBLE_PRESS_MS = 250, DOUBLE_PRESS_REACH_PX = 6;
+let middle_pressed = null;
 function middle_press(event) {
   if (event.button !== MIDDLE_BUTTON) return;
+  const previous = middle_pressed;
+  middle_pressed = { at: event.timeStamp, x: event.clientX, y: event.clientY };
+  if (!previous || event.timeStamp - previous.at >= DOUBLE_PRESS_MS) return;
+  if (Math.hypot(event.clientX - previous.x, event.clientY - previous.y) > DOUBLE_PRESS_REACH_PX) return;
+  middle_pressed = null;
   // The pan this press starts stops any view animation, so the reset runs once the press has been handled.
-  if (event.timeStamp - middle_pressed_at < DOUBLE_PRESS_MS) { middle_pressed_at = 0; setTimeout(reset_view, 0); return; }
-  middle_pressed_at = event.timeStamp;
+  setTimeout(reset_view, 0);
 }
 
 // ── Two-finger pinch: it always zooms the view, wherever the fingers land, cards included (Vue Flow leaves a touch
@@ -485,6 +492,8 @@ function view_settled() {
   requestAnimationFrame(() => requestAnimationFrame(() => { layered.value = true; }));
 }
 let pinch = null, pinch_frame = 0, pinch_target = null, touch_positions = null;
+// One finger on a card's body pans the view here: Vue Flow marks every draggable node `nopan`, so its own pan never starts there.
+let card_pan = null, card_pan_frame = 0;
 
 /** The touches currently down on the canvas. */
 function canvas_touches(event) {
@@ -499,8 +508,13 @@ function touch_pair([first, second]) {
 /** Remember the cards' places as a touch begins; a second finger turns it into a pinch, and the cards go back. */
 function touch_start(event) {
   const touches = canvas_touches(event);
-  if (!pinch && touches.length === 1) touch_positions = new Map(nodes.value.map((node) => [node.id, { ...node.position }]));
+  if (!pinch && touches.length === 1) {
+    touch_positions = new Map(nodes.value.map((node) => [node.id, { ...node.position }]));
+    const on_body = instance.value && event.target.closest?.(".workflow-card-body");
+    card_pan = on_body ? { from: { x: touches[0].clientX, y: touches[0].clientY }, to: null, view: instance.value.getViewport() } : null;
+  }
   if (touches.length < 2 || !instance.value) return;
+  card_pan = null;
   event.stopPropagation();
   event.preventDefault();
   if (!pinch) {
@@ -523,11 +537,24 @@ function begin_pinch(touches) {
 function touch_move(event) {
   const touches = canvas_touches(event);
   if (touches.length >= 2) event.preventDefault();
+  if (card_pan && touches.length === 1) {
+    event.preventDefault();
+    card_pan.to = { x: touches[0].clientX, y: touches[0].clientY };
+    if (!card_pan_frame) card_pan_frame = requestAnimationFrame(apply_card_pan);
+  }
   if (!pinch) return;
   event.stopPropagation();
   if (touches.length < 2) return;
   pinch_target = touch_pair(touches);
   if (!pinch_frame) pinch_frame = requestAnimationFrame(apply_pinch);
+}
+
+/** Follow the finger on a card's body, one viewport change per frame. */
+function apply_card_pan() {
+  card_pan_frame = 0;
+  if (!card_pan?.to || !instance.value) return;
+  const { from, to, view } = card_pan;
+  instance.value.setViewport({ x: view.x + to.x - from.x, y: view.y + to.y - from.y, zoom: view.zoom });
 }
 
 function apply_pinch() {
@@ -540,8 +567,9 @@ function apply_pinch() {
 
 /** A lifted finger lets the card drags and the pane end; the pinch lasts until every finger is up. */
 function touch_end(event) {
-  if (!pinch) return;
   const touches = canvas_touches(event);
+  if (!touches.length) card_pan = null;
+  if (!pinch) return;
   // Two fingers still down (a third was lifted): carry on from where they are, without a jump.
   if (touches.length >= 2) begin_pinch(touches);
   else if (!touches.length) { pinch = null; pinch_target = null; view_settled(); }
@@ -568,6 +596,7 @@ onBeforeUnmount(() => {
   width_watcher.disconnect();
   for (const [type, listener] of TOUCH_LISTENERS) canvas_element.value?.removeEventListener(type, listener, { capture: true });
   cancelAnimationFrame(pinch_frame);
+  cancelAnimationFrame(card_pan_frame);
 });
 
 // ── Undo and redo: snapshots of the canvas and its cards; a drag counts once it ends. ──
@@ -673,7 +702,7 @@ function drag_stop() { dragging = false; layered.value = true; stored.value = li
           <div class="workflow-card-grip" :title="t('按住拖动')">
             <UIcon name="i-lucide-grip-horizontal" class="workflow-icon" />
           </div>
-          <div v-for="agent in [agent_of(node.data.card)]" :key="agent.card" class="workflow-card-body nodrag" :class="{ nopan: !TOUCH }" :title="agent.description || undefined"
+          <div v-for="agent in [agent_of(node.data.card)]" :key="agent.card" class="workflow-card-body nodrag" :title="agent.description || undefined"
             @dblclick="emit('configure', agent.card)">
             <UAvatar :src="bridge.identities[bridge.platform_of(agent.name)]?.icon" :text="bridge.identities[bridge.platform_of(agent.name)]?.initials || '?'" size="md"
               class="channel-avatar" :class="bridge.identities[bridge.platform_of(agent.name)]?.style" />

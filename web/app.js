@@ -149,8 +149,15 @@ const PLATFORM_IDENTITIES = {
 // An instance shows its platform's nickname with its own suffix: Antigravity-2 → Gemini-2.
 const EXTERNAL_ICON = "/icons/external-expert.svg";
 const IDENTITIES = by_platform(PLATFORM_IDENTITIES, (identity, name) => external_identity(name)
-  ? { label: t('外部专家'), icon: EXTERNAL_ICON, style: 'external', description: t('外部专家') }
+  ? external_member_identity(name)
   : ({ ...identity, label: identity.label ? identity.label + name.slice(platform_of(name).length) : name, description: t('AI 实例') }));
+
+/** An external member shows the vendor its computer reports; a custom endpoint, or none reported yet, shows the external mark. */
+function external_member_identity(name) {
+  const platform = state.room?.free?.members?.find(member => member.name === name)?.external?.platform;
+  const vendor = platform && platform !== "Custom" ? PLATFORM_IDENTITIES[platform] : null;
+  return { label: t('外部专家'), icon: vendor?.icon || EXTERNAL_ICON, style: vendor?.style || 'external', description: t('外部专家') };
+}
 
 /** Reserved external names also retain their identity when shown in historical records. */
 function external_identity(name) {
@@ -158,7 +165,7 @@ function external_identity(name) {
 }
 const state = { rooms: [], folders: [], room: null, page: 1, pages: 1, query: "", mention_only: false, host_only: false, authors: [], card_kinds: [],
   named_followup: false, create_discussion: false, create_goal: null,
-  archive_view: false, directory_sort: "manual", management: null, dragged_room: null, folder_moves: new Map(), folder_version: 0,
+  archive_view: false, directory_sort: "manual", management: null, dragged_room: null, folder_moves: new Map(), folder_version: 0, removing_members: new Set(),
   reply_to: null, tab: "discussion", refresh_version: 0, context_dirty: false, topic_dirty: false,
   snapshot_id: 0, pending_submission: null, pending_room: null, toast_timer: null, queued_taken: 0,
   // When live room data stopped (page hidden, connection lost); null while it is current. Silence is judged only up to here.
@@ -185,6 +192,10 @@ state.remote_site = "";
 // and only messages after the cached ones are fetched. A later retract or rewind reaches them through the room's withdrawal list.
 const ROOM_CACHE_LIMIT = 12;
 const room_views = new Map();
+// Member settings read for a new room before it opens, used once by its first load_room_models.
+const preloaded_room_models = new Map();
+// How long a new room's placeholder waits for the room's content before opening it anyway.
+const ROOM_PRELOAD_LIMIT_MS = 4000;
 const message_histories = new Map();
 const history_cards = new Map();
 // Rooms kept current in the background. Below ROOM_CACHE_LIMIT, so these reads never evict each other and re-read whole transcripts.
@@ -655,8 +666,17 @@ function visible_rooms() {
 /** Sort the displayed conversations without overwriting their saved manual order. */
 function ordered_rooms() {
   if (state.directory_sort !== "recent") return state.rooms;
-  return [...state.rooms].sort((left, right) => (right.latest_id || 0) - (left.latest_id || 0)
-    || (right.created_at || "").localeCompare(left.created_at || ""));
+  return [...state.rooms].sort((left, right) => room_activity_time(right) - room_activity_time(left)
+    || (right.latest_id || 0) - (left.latest_id || 0));
+}
+
+/**
+ * When a room last moved in the list: the latest message from the owner or a member, or its creation before the first
+ * one, as the row's time shows. System notices leave it in place. A computer not yet updated only reports latest_at.
+ */
+function room_activity_time(room) {
+  const speech = room.latest_speech_at === undefined ? room.latest_at : room.latest_speech_at;
+  return Date.parse(speech || room.created_at || "") || 0;
 }
 
 /** Restore a supported local directory preference before rendering. */
@@ -1368,7 +1388,12 @@ async function select_room(room_id) {
   state.messages_failure = "";
   render_rooms();
   if (cached) render_room();
-  if (cached_history) render_messages(cached_history);
+  if (preloaded_room_models.has(room_id)) load_room_models();
+  if (cached_history) {
+    render_messages(cached_history);
+    // Marks the transcript as read, so re-reading an empty room does not bring the loading state back.
+    state.message_history = { key: `${room_id}?${new URLSearchParams({ q: "", withdrawn: "include" })}`, messages: cached_history.messages };
+  }
   publish_view();
   const reading = state.opening = refresh_room();
   try { await reading; }
@@ -1834,9 +1859,36 @@ async function set_member_adapter({ name, adapter }) {
   await load_room_models();
 }
 
+/** The open room as the page shows it: a member being removed is already gone while the site confirms. */
+function shown_room() {
+  const room = state.room;
+  const removing = (room?.free?.members || room?.members || []).filter(member => state.removing_members.has(member.id)).map(member => member.name);
+  if (!removing.length) return room;
+  const kept = member => !state.removing_members.has(member.id);
+  const named = name => !removing.includes(name);
+  const order = room.speaking_order;
+  const experts = room.experts && Object.fromEntries(Object.entries(room.experts).filter(([name]) => named(name)));
+  return { ...room, experts, members: room.members?.filter(kept), free: room.free && { ...room.free, members: room.free.members?.filter(kept) },
+    speaking_order: order && { ...order, items: order.items?.filter(item => named(item.name)), movable: order.movable?.filter(named), default: order.default?.filter(named) } };
+}
+
+/** Take a member off the page at once and save in the background; a refused removal brings the member back. */
+async function remove_member(room_id, member_id) {
+  state.removing_members.add(member_id);
+  publish_view();
+  try {
+    await request_json(`/api/rooms/${room_id}/members/${member_id}`, { action: "remove" });
+    if (state.room?.id === room_id) await refresh_room();
+  } finally {
+    state.removing_members.delete(member_id);
+    publish_view();
+  }
+}
+
 /** Owner changes use the website; only automatic members need the local service to reconnect. */
 async function change_member({ member_id, name, action, role, latest_id, quiet = false }) {
   const room_id = state.room.id;
+  if (action === "remove") return remove_member(room_id, member_id);
   if (action === "rejoin") {
     const member = (state.room.free?.members || state.room.members).find(item => item.id === member_id);
     const token = localStorage.getItem(`discuss-access:${room_id}`);
@@ -2162,6 +2214,8 @@ async function send_message(event) {
       }
     }
     saved = true;
+    // The sender's room rises as soon as the message is saved, without waiting for the next directory read.
+    if (result.message?.created_at) patch_directory_room(room_id, { latest_speech_at: result.message.created_at });
     if (result.queued) await finish_queued(result, room_id, drafts);
     else await finish_message(result, room_id, drafts);
   } catch (error) {
@@ -2881,6 +2935,21 @@ function prepare_room_request(signature) {
 }
 
 /**
+ * Read a new room's details, transcript and member settings together while its placeholder shows, so the room then opens
+ * complete in one step. Answers the room's details, or null when they are slow or fail and the room opens the usual way.
+ */
+async function preload_room(room_id) {
+  const reads = Promise.all([request_json(`/api/rooms/${room_id}`), read_message_history(room_id, "", () => true),
+    state.launch.available ? local_launch_request("room-models", { room_id, quick: true }).catch(() => null) : null]).catch(() => null);
+  const loaded = await Promise.race([reads, new Promise(resolve => setTimeout(resolve, ROOM_PRELOAD_LIMIT_MS, null))]);
+  if (!loaded) return null;
+  const [room, , models] = loaded;
+  cache_room_entry(room_views, room_id, room);
+  if (models) preloaded_room_models.set(room_id, models);
+  return room;
+}
+
+/**
  * Show creation progress locally without blocking or later hijacking navigation. The new-room panel passes `accepted`,
  * called once the form is valid so it closes at once while the new room shows as being created, and `rejected`, called
  * when nothing was made and no retry record remains, so the form can come back as it was filled in.
@@ -2931,7 +3000,11 @@ async function submit_room(event, folder_id = null, { accepted = null, rejected 
         // Someone who moved on to another room stays there.
         if (accepted && !state.room && previous_room) run_action(() => select_room(previous_room));
       },
-      save: async () => (await submit_local_launch(input, payload.title, !launching, signature)).room,
+      save: async () => {
+        const created = (await submit_local_launch(input, payload.title, !launching, signature)).room;
+        // Only a placeholder still on screen waits: someone who moved on to another room is not opened into this one.
+        return accepted && !state.room ? { ...created, ...await preload_room(created.id) } : created;
+      },
       commit: saved => {
         state.creating_room = null;
         if (!state.rooms.some(existing => existing.id === saved.id)) state.rooms.push(saved);
@@ -4065,6 +4138,14 @@ async function retry_launch_connection() {
 let members_seen = null;
 
 /** Read saved choices for the active room without using drafts or delaying discussion refreshes. */
+/** The parts of the computer's room-models answer the page keeps. */
+function room_models_fields(result) {
+  return { participants: result.participants, registered: result.registered,
+    scheduler: result.scheduler || null, project_directory: result.project_directory || "", extra_directories: result.extra_directories || [],
+    workflow: result.workflow || null, host_workflows: Boolean(result.host_workflows), api_max_requests: result.api_max_requests,
+    image_generation: Boolean(result.image_generation), image_configured: Boolean(result.image_configured) };
+}
+
 async function load_room_models() {
   const room = state.room;
   // The saved project directory also applies to rooms containing only manual members.
@@ -4080,16 +4161,16 @@ async function load_room_models() {
   const same_room = previous?.room_id === room.id;
   const current = { room_id: room.id, revision, loading: true, participants: same_room ? previous.participants : null,
     project_directory: same_room ? previous.project_directory : "", extra_directories: same_room ? previous.extra_directories : [] };
+  const preloaded = preloaded_room_models.get(room.id);
+  preloaded_room_models.delete(room.id);
+  if (preloaded) Object.assign(current, room_models_fields(preloaded), { loading: false });
   state.launch.room_models = current;
   publish_view();
   const live = () => state.launch.room_models === current && state.room?.id === room.id;
   // agy is run to name its default model, which takes seconds; everything else is shown first and agy follows.
   try {
-    const result = await local_launch_request("room-models", { room_id: room.id, quick: true });
-    if (live() && result.room_id === room.id) Object.assign(current, { participants: result.participants, registered: result.registered,
-      scheduler: result.scheduler || null, project_directory: result.project_directory || "", extra_directories: result.extra_directories || [],
-      workflow: result.workflow || null, host_workflows: Boolean(result.host_workflows), api_max_requests: result.api_max_requests,
-      image_generation: Boolean(result.image_generation), image_configured: Boolean(result.image_configured) });
+    const result = preloaded || await local_launch_request("room-models", { room_id: room.id, quick: true });
+    if (live() && result.room_id === room.id) Object.assign(current, room_models_fields(result));
     if (live() && result.room_id === room.id) {
       // Compared with the last answer for this room, which a reload clears from the state but not from here.
       if (members_seen?.room_id === room.id) warn_outside_members(members_seen.participants, result.participants);
@@ -4734,6 +4815,14 @@ async function save_scheduler_api_key(api_key, provider = state.launch.scheduler
   if (state.launch.scheduler === scheduler && state.launch.scheduler_providers[scheduler.provider]?.base_url === base_url) scheduler.api_key_ref = result.api_key_ref;
   publish_view();
   return result.api_key_ref;
+}
+
+/** Save the DeepSeek API key API members search with; every room on this computer shares it. */
+async function save_search_api_key(api_key) {
+  const base_url = "https://api.deepseek.com/v1";
+  const result = await local_launch_request("api-key", { base_url, api_key });
+  state.launch.api_keys = { ...state.launch.api_keys, [base_url]: result.api_key_ref };
+  publish_view();
 }
 
 /** Describe effective placement and binding from the same explicit draft sent to the launcher. */
@@ -6076,7 +6165,7 @@ function view_snapshot() {
   const experts = Object.fromEntries(["new-expert-modes"].map((id) =>
     [id, element(id) ? read_expert_inputs(id) : {}]));
   return { room_source: { computer: computer_rooms_only(), signed_in: state.admin.logged_in, remote: state.remote_rooms, online: state.remote_online },
-    room_site: room_site(), rooms: ordered_rooms(), folders: state.folders, folder_groups: ordered_folders(), room: state.room, archive_view: state.archive_view, directory_sort: state.directory_sort, messages: state.messages, history_cards: state.history_cards, total: state.message_total,
+    room_site: room_site(), rooms: ordered_rooms(), folders: state.folders, folder_groups: ordered_folders(), room: shown_room(), archive_view: state.archive_view, directory_sort: state.directory_sort, messages: state.messages, history_cards: state.history_cards, total: state.message_total,
     archive_pending: [...state.archive_changes.keys()], import_progress: structuredClone(state.import_progress),
     directory_pending: [...state.directory_pending.keys()], folder_pending: [...state.folder_moves.keys()], creating_room: state.creating_room,
     connected: state.connected, reconnecting: state.reconnecting, rooms_loading: state.rooms_loading, observed_until: state.observed_until, resuming: state.resuming, backup_pending: Boolean(state.backup_pending), page: state.page, pages: state.pages, query: state.query,
@@ -6351,7 +6440,7 @@ function change_view_theme(theme) {
 
 window.discuss_view = { snapshot: view_snapshot, write_field: write_view_field, write_create_preferences, notify, load_decision_input, upload_progress,
   write_launch: write_launch_field, default_launch_entry, platform_configured, description_template, save_description_template, description_draft, write_description_draft, describe_member, set_chain_rounds, continue_chain, expert_presets, apply_expert_preset, unique_instance, member_label, default_name, label_draft, write_label_draft, preset_identity, save_expert_preset, delete_expert_preset, write_room_connection, write_room_adapter, launch_clients: LAUNCH_CLIENTS,
-  launch_model_state, load_launch_models, write_launch_model, save_launch_api_key, create_launch_project, display_path, write_scheduler, save_scheduler_api_key, check_scheduler, write_named_followup, write_create_discussion, write_create_goal, write_create_chain_rounds, check_launch_api, launch_summary, launch_can_set_access, full_only_hint, pick_launch_directory, browse_local_directory, list_remote_directories, save_launch_projects, restore_launch_profile, reset_create_form, empty_discussion_message,
+  launch_model_state, load_launch_models, write_launch_model, save_launch_api_key, create_launch_project, display_path, write_scheduler, save_scheduler_api_key, save_search_api_key, check_scheduler, write_named_followup, write_create_discussion, write_create_goal, write_create_chain_rounds, check_launch_api, launch_summary, launch_can_set_access, full_only_hint, pick_launch_directory, browse_local_directory, list_remote_directories, save_launch_projects, restore_launch_profile, reset_create_form, empty_discussion_message,
   start_drag: start_directory_drag, reconnect: reconnect_live_updates, stop_label, local_request: local_launch_request,
   attachment_markup, attachment_size, attachment_file_icon, drop_attachments, paste_attachments, drop_unreferenced_attachments, set_text_preview: (open) => { state.text_preview = open; }, set_image_viewer: (open) => { state.image_viewer = open; }, attachment_url,
   write_expert: write_view_expert, add_instance: add_view_instance, add_preset: add_preset_instance, platform_of, execute: execute_view_action, theme: change_view_theme,

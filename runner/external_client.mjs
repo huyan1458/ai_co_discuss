@@ -14,7 +14,7 @@ import { fileURLToPath } from 'node:url';
 import { parseArgs } from 'node:util';
 import { gunzipSync } from 'node:zlib';
 
-import { adapter_profile, lockdown_support } from './adapters/profiles.mjs';
+import { adapter_profile, API_PROVIDERS, lockdown_support } from './adapters/profiles.mjs';
 import { external_task_text, TASK_SUBCOMMANDS } from './expert_prompts.mjs';
 import { atomic_json } from './files.mjs';
 import { t } from './i18n.mjs';
@@ -29,6 +29,7 @@ export const BORROW_DEFAULTS = { max_wakes: 20, hours: 24 };
 const MAX_WAKES_LIMIT = 1000;
 const MAX_HOURS = 720;
 const HISTORY_LIMIT = 50;
+const MODEL_LIMIT = 120;
 // What this computer keeps of each request its AI received and each answer it gave, so the history still reads after the
 // inviting room can no longer be reached.
 const TEXT_LIMIT = 4000;
@@ -38,6 +39,10 @@ const HOUR_MS = 3600000;
 // The website gives up on a relayed request after 9 seconds; ask for an answer within that.
 const RELAY_WAIT_MS = 8000;
 const REQUEST_TIMEOUT_MS = 15000;
+// The pauses before sending a request again after a network failure.
+const RETRY_DELAYS_MS = [500, 1500];
+// Network failures that happen before a request leaves this computer, so sending a write again cannot repeat it.
+const NOT_SENT_CODES = new Set(['ENOTFOUND', 'EAI_AGAIN', 'ECONNREFUSED', 'ENETUNREACH', 'EHOSTUNREACH', 'UND_ERR_CONNECT_TIMEOUT']);
 const RELAY_CIPHER_INFO = 'codiscuss-relay-v1';
 const INVITE_CONTEXT = 'codiscuss-invite-v1';
 const STORE_FILE = 'invited.json';
@@ -61,6 +66,7 @@ export const MEMBER_API = {
   execution: (room, execution) => `${EXTERNAL_PREFIX(room)}/executions/${execution}`,
   answer: room => `${EXTERNAL_PREFIX(room)}/answer`,
   messages: room => `${EXTERNAL_PREFIX(room)}/messages`,
+  ai: room => `${EXTERNAL_PREFIX(room)}/ai`,
 };
 
 // ---- Secrets: sealed with DPAPI for the signed-in Windows user, 0600 elsewhere (as machine-links.json). ----
@@ -151,7 +157,7 @@ function with_store(home, task) {
 export function record_view(record, store) {
   const machine = store.machines[record.machine_fingerprint] || {};
   const trust = TRUST_LEVELS.includes(machine.trust) ? machine.trust : 'default';
-  const { session_id, machine_key, ...shown } = record;
+  const { session_id, machine_key, ai_reported, ...shown } = record;
   return { ...shown, trust, lockdown: trust !== 'trusted', approvals: (record.approvals || []).filter(item => item.status === 'waiting') };
 }
 
@@ -227,14 +233,33 @@ export function invite_proof(code, machine, jwk) {
   return createHmac('sha256', key).update(`${INVITE_CONTEXT}\n${machine}\n${raw_point(jwk).toString('base64url')}`).digest('base64url');
 }
 
+const site_unreachable = (site, error) => failure('site_unreachable', '连不上对方的线上站点 {site}：{reason}', { site, reason: error.message },
+  { offline: true, network_code: error.cause?.code, timed_out: error.name === 'TimeoutError' || error.name === 'AbortError' });
+
+/**
+ * Run a request, sending it again after a brief network failure. A request that may have reached the other side is sent
+ * again only when `repeatable`; a timeout is not retried, since the wait has already been spent.
+ */
+async function retry_unreachable(send, { repeatable = false, delays = RETRY_DELAYS_MS } = {}) {
+  for (let attempt = 0; ; attempt += 1) {
+    try { return await send(); }
+    catch (error) {
+      const retry = error.code === 'site_unreachable' && !error.timed_out && attempt < delays.length && (repeatable || NOT_SENT_CODES.has(error.network_code));
+      if (!retry) throw error;
+      await new Promise(done => setTimeout(done, delays[attempt]));
+    }
+  }
+}
+
 /**
  * The inviting computer's public keys, from the website's public machine list. Without a computer id the site must list
  * exactly one computer.
  */
-export async function machine_keys(site, machine, { fetcher = fetch } = {}) {
-  let response;
-  try { response = await fetcher(`${site}/api/machines`, { signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS) }); }
-  catch (error) { throw Object.assign(failure('site_unreachable', '连不上对方的线上站点 {site}：{reason}', { site, reason: error.message }), { offline: true }); }
+export async function machine_keys(site, machine, { fetcher = fetch, retry_delays } = {}) {
+  const response = await retry_unreachable(async () => {
+    try { return await fetcher(`${site}/api/machines`, { signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS) }); }
+    catch (error) { throw site_unreachable(site, error); }
+  }, { repeatable: true, delays: retry_delays });
   const body = await response.json().catch(() => ({}));
   const list = (Array.isArray(body) ? body : body.machines || []).filter(item => item?.public_key && item?.sign_key);
   if (!machine && list.length > 1) throw failure('machine_required', '对方站点连着多台电脑，请用 --machine 指定电脑编号：{ids}', { ids: list.map(item => `${item.id}（${item.name || ''}）`).join('、') });
@@ -271,9 +296,15 @@ function key_pair() {
  * Send one action to the inviting computer and open its answer `{status, body}`. `identity` is `{key_id, private_key,
  * room}`; the redeem (`room` absent) goes unregistered to the pairing entry, signed only to prove the key is held, the
  * rest to the relay with the registered key. Throws with `offline` when the computer is not connected, `unconfirmed` when
- * it did not answer in time.
+ * it did not answer in time. A brief network failure is retried as a new relay request: always for a read or a leave
+ * (leaving twice changes nothing), and for any other write only when it never left this computer.
  */
-export async function relay_send(target, identity, action, payload, { fetcher = fetch, wait = RELAY_WAIT_MS } = {}) {
+export function relay_send(target, identity, action, payload, deps = {}) {
+  const repeatable = action === 'external-leave' || (action === 'external-api' && payload.method === 'GET');
+  return retry_unreachable(() => relay_send_once(target, identity, action, payload, deps), { repeatable, delays: deps.retry_delays });
+}
+
+async function relay_send_once(target, identity, action, payload, { fetcher = fetch, wait = RELAY_WAIT_MS }) {
   const id = randomUUID();
   const redeem = action === 'external-redeem';
   const body = JSON.stringify({ action, payload, machine: target.machine, ...(redeem ? {} : { room: identity.room }), sent_at: Date.now() });
@@ -297,7 +328,7 @@ export async function relay_send(target, identity, action, payload, { fetcher = 
       signal: AbortSignal.timeout(wait + REQUEST_TIMEOUT_MS) });
   } catch (error) {
     if (error.name === 'TimeoutError' || error.name === 'AbortError') throw Object.assign(failure('unconfirmed', '对方电脑未在限时内答复，结果待确认'), { unconfirmed: true });
-    throw Object.assign(failure('site_unreachable', '连不上对方的线上站点 {site}：{reason}', { site: target.site, reason: error.message }), { offline: true });
+    throw site_unreachable(target.site, error);
   }
   const result = await response.json().catch(() => ({}));
   if (!response.ok) throw remote_failure(result, 'site_refused', '对方站点拒绝了请求（HTTP {status}）', { status: response.status }, { status: response.status });
@@ -357,6 +388,25 @@ function check_ai(input) {
   return { adapter, model: String(input.model || ''), effort: String(input.effort || '') };
 }
 
+/** The saved model API this AI runs on, as `[participant name, settings]`; empty when this computer has none. */
+function saved_api(home, ai) {
+  const settings = read_json(join(home, 'launch-settings.json'), { participants: {} });
+  const saved = Object.entries(settings.participants || {}).filter(([, profile]) => profile?.adapter === ai.adapter && profile.base_url);
+  return saved.find(([, profile]) => !ai.model || profile.model === ai.model) || saved[0] || [];
+}
+
+/**
+ * What the inviting room shows about this AI: its adapter, platform and model. A model API takes its platform from the
+ * provider slot it is saved under; a custom endpoint has none of its own.
+ */
+function ai_identity(home, ai) {
+  const profile = adapter_profile(ai.adapter);
+  if (profile?.kind !== 'api') return { adapter: ai.adapter, platform: profile?.platform || 'Custom', model: String(ai.model || '').slice(0, MODEL_LIMIT) };
+  const [name, api] = saved_api(home, ai);
+  const platform = String(name || '').split('-')[0];
+  return { adapter: ai.adapter, platform: Object.hasOwn(API_PROVIDERS, platform) ? platform : 'Custom', model: String(ai.model || api?.model || '').slice(0, MODEL_LIMIT) };
+}
+
 /** Accept an invitation: check the computer's fingerprint when the link carries one, redeem with a new key, keep the record. */
 export async function join_invite(home, input, deps = {}) {
   const invite = parse_invite(input.invite, input);
@@ -376,11 +426,9 @@ export async function join_invite(home, input, deps = {}) {
   });
   const existing = read_store(home);
   if (existing.records[attempt.id] && read_secrets(home)[attempt.id]?.token) return { record: record_view(existing.records[attempt.id], existing) };
-  const pair = attempt.pair, key_id = key_id_of(pair.public_key);
+  const pair = attempt.pair, key_id = key_id_of(pair.public_key), identity = ai_identity(home, ai);
   const answer = await relay_send({ site: invite.site, machine: keys.id, machine_key: keys.public_key }, { key_id, private_key: pair.private_key }, 'external-redeem',
-    { public_key: pair.public_key, proof: invite_proof(invite.code, keys.id, pair.public_key), label: String(input.label || hostname()).slice(0, 80),
-      // The model API has no platform name of its own; the inviting room names it as a custom AI.
-      platform: adapter_profile(ai.adapter).platform || 'Custom', adapter: ai.adapter }, deps);
+    { public_key: pair.public_key, proof: invite_proof(invite.code, keys.id, pair.public_key), label: String(input.label || hostname()).slice(0, 80), ...identity }, deps);
   if (answer.status >= 400) throw remote_failure(answer.body, 'invite_invalid', '邀请无效或已过期');
   const joined = answer.body || {};
   if (!ROOM_ID.test(joined.room?.id || '') || typeof joined.member?.name !== 'string' || typeof joined.token !== 'string') {
@@ -395,7 +443,7 @@ export async function join_invite(home, input, deps = {}) {
       machine_key: keys.public_key, fingerprint_checked: Boolean(invite.fingerprint), room: joined.room.id, room_title: String(joined.room.name || invite.room_name),
       member: joined.member.name, member_id: joined.member.id ?? null, key_id, open_level: joined.level || invite.level || 'read',
       directories: Array.isArray(joined.directories) ? joined.directories : [],
-      expires_at: Number(joined.expires_at) ? Number(joined.expires_at) * 1000 : null, ai, limits: null, wakes: 0, last_wake_at: null, paused: false,
+      expires_at: Number(joined.expires_at) ? Number(joined.expires_at) * 1000 : null, ai, ai_reported: JSON.stringify(identity), limits: null, wakes: 0, last_wake_at: null, paused: false,
       status: 'active', contact: { at: now, state: 'online', error: '' }, approvals: [], history: [], running: null, joined_at: now };
     secrets.get()[id] = { private_key: pair.private_key, token: joined.token };
     secrets.changed = true;
@@ -476,18 +524,45 @@ export async function leave(home, { id }, deps = {}) {
   try {
     const answer = await record_send(home, id, 'external-leave', {}, deps);
     if (answer.status >= 400 && answer.body?.code !== 'external_ended') remote = 'refused';
-  } catch (error) { remote = error.offline ? 'unreachable' : 'refused'; deps.log?.(error.message); }
+  } catch (error) { remote = error.offline ? 'unreachable' : error.unconfirmed ? 'unconfirmed' : 'refused'; deps.log?.(error.message); }
+  // Not heard over there yet: the key stays until the pull loop has told the other computer (`deliver_leave`).
+  const undelivered = remote === 'unreachable' || remote === 'unconfirmed';
   return with_store(home, (store, secrets, now) => {
     const record = find_record(store, id);
-    Object.assign(record, { status: 'left', approvals: [], paused: true });
+    Object.assign(record, { status: 'left', approvals: [], paused: true, leave_pending: undelivered });
     remember(record, { outcome: 'left', remote }, now);
-    delete secrets.get()[id];
-    for (const [key, value] of Object.entries(secrets.get())) {
-      if (key.startsWith('join:') && value.id === id) delete secrets.get()[key];
-    }
-    secrets.changed = true;
+    if (!undelivered) forget_keys(secrets, id);
     return { record: record_view(record, store), remote };
   });
+}
+
+/** Delete what this computer holds for a record it has left: its key, credential and join attempt. */
+function forget_keys(secrets, id) {
+  delete secrets.get()[id];
+  for (const [key, value] of Object.entries(secrets.get())) {
+    if (key.startsWith('join:') && value.id === id) delete secrets.get()[key];
+  }
+  secrets.changed = true;
+}
+
+/**
+ * Tell the inviting computer about a leave it has not heard yet. Any answer from it settles the matter; while it cannot
+ * be reached the next pass tries again, until the membership has run out over there by itself.
+ */
+async function deliver_leave(home, id, deps = {}) {
+  const record = read_store(home).records[id];
+  if (!(record.expires_at && record.expires_at <= (deps.now?.() ?? Date.now()))) {
+    try { await record_send(home, id, 'external-leave', {}, deps); }
+    catch (error) {
+      if (error.offline || error.unconfirmed) return { leave_pending: true };
+      deps.log?.(error.message);
+    }
+  }
+  with_store(home, (store, secrets) => {
+    store.records[id].leave_pending = false;
+    forget_keys(secrets, id);
+  });
+  return { leave_pending: false };
 }
 
 /** Keep the record in line with what the inviting room grants now (`/view` `me`): level, deadline and opened directories. */
@@ -571,14 +646,14 @@ export const INVITED_ACTIONS = new Set(['invited-list', 'invited-join', 'invited
  * API's endpoint fields (its key stays a reference into this computer's key store). Null when this computer has none.
  */
 function software_profile(home, ai) {
-  const settings = read_json(join(home, 'launch-settings.json'), { participants: {} });
-  const saved = Object.values(settings.participants || {}).filter(profile => profile?.adapter === ai.adapter);
   if (adapter_profile(ai.adapter)?.kind === 'api') {
-    const api = saved.find(profile => profile.base_url && (!ai.model || profile.model === ai.model)) || saved.find(profile => profile.base_url);
+    const [, api] = saved_api(home, ai);
     if (!api) return null;
     const { base_url, api_protocol, api_key_ref, image_input, model } = api;
     return { base_url, api_protocol, api_key_ref, image_input, model };
   }
+  const settings = read_json(join(home, 'launch-settings.json'), { participants: {} });
+  const saved = Object.values(settings.participants || {}).filter(profile => profile?.adapter === ai.adapter);
   const executable = saved.find(profile => profile.executable)?.executable;
   return executable ? { executable } : null;
 }
@@ -738,14 +813,28 @@ async function expire_approvals(home, id, deps, now) {
 }
 
 /**
+ * Tell the inviting room when this AI differs from what it last heard. Retried on later passes until that computer
+ * answers; one that refuses (an older version has no such route) is not asked again for this AI.
+ */
+async function report_ai(home, record, deps) {
+  const identity = ai_identity(home, record.ai), reported = JSON.stringify(identity);
+  if (record.ai_reported === reported) return;
+  try { await member_api(home, record.id, 'POST', MEMBER_API.ai(record.room), identity, deps); }
+  catch (error) { if (!(error.status >= 400 && error.status < 500)) return; }
+  change_record(home, record.id, current => { current.ai_reported = reported; });
+}
+
+/**
  * One pass for one record: expire waiting approvals; renew a running execution; otherwise read the requests named for
  * this member and wake the AI when the owner approved them or the trust level allows it, or queue them for consent.
  */
 export async function poll_record(home, id, deps = {}) {
+  if (read_store(home).records[id]?.leave_pending) return deliver_leave(home, id, deps);
   const now = deps.now?.() ?? Date.now();
   await expire_approvals(home, id, deps, now);
   const store = read_store(home), record = store.records[id];
   if (!record || record.status !== 'active') return { skipped: true };
+  await report_ai(home, record, deps);
   if (record.running) {
     if (now - record.running.last_renew < RENEW_MS) return { running: record.running.execution_id };
     await member_api(home, id, 'POST', MEMBER_API.execution(record.room, record.running.execution_id), { action: 'renew' }, deps);
@@ -782,7 +871,7 @@ export async function poll_record(home, id, deps = {}) {
 export function start_external_client(home, { log = () => {}, signal, deps = {} } = {}) {
   const loop = async () => {
     while (!signal?.aborted) {
-      const ids = Object.values(read_store(home).records).filter(record => record.status === 'active').map(record => record.id);
+      const ids = Object.values(read_store(home).records).filter(record => record.status === 'active' || record.leave_pending).map(record => record.id);
       for (const id of ids) {
         try { await poll_record(home, id, { log, ...deps }); }
         catch (error) { if (!error.offline) log(t('被邀请房间 {id} 拉取失败：{reason}', { id, reason: error.message })); }
@@ -965,5 +1054,5 @@ export async function external_main(command, args, { home, deps = {}, write = te
   }
   if (values.json) return out(result);
   if (result.records) return write(`${result.records.length ? result.records.map(print_record).join('\n') : t('还没有被邀请的房间')}\n`);
-  return write(`${print_record(result.record)}${result.remote === 'unreachable' ? `\n${t('对方电脑不在线，已在本机删除密钥；对方那边会在到期或撤销后移除你')}` : ''}${result.error ? `\n${t('读不到对方房间：{reason}', { reason: result.error })}` : ''}\n`);
+  return write(`${print_record(result.record)}${result.record?.leave_pending ? `\n${t('暂时连不上对方电脑，常驻服务会继续通知它；通知送达或成员资格到期后删除本机密钥')}` : ''}${result.error ? `\n${t('读不到对方房间：{reason}', { reason: result.error })}` : ''}\n`);
 }

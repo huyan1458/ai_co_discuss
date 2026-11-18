@@ -10,7 +10,7 @@ import { fileURLToPath } from 'node:url';
 import { gzipSync } from 'node:zlib';
 
 import { external_task_text, TASK_SUBCOMMANDS } from '../runner/expert_prompts.mjs';
-import { APPROVAL_TIMEOUT_MS, fingerprint_of, invite_proof, invited_command, key_id_of, MEMBER_API, parse_invite, poll_record, proxy_request,
+import { APPROVAL_TIMEOUT_MS, fingerprint_of, invite_proof, invited_command, key_id_of, member_api, MEMBER_API, parse_invite, poll_record, proxy_request,
   lockdown_launch_guard, read_store, RENEW_MS, repo_command, use_plain_secrets } from '../runner/external_client.mjs';
 
 use_plain_secrets();
@@ -44,7 +44,7 @@ async function verify(jwk, signature, text) {
  */
 function fake_b() {
   const ecdh = jwk_pair(), sign = jwk_pair();
-  const state = { online: true, registered: {}, pending: [], open: new Set(), declines: [], executions: [], claims: 0, answers: [], leaves: 0, posts: 0,
+  const state = { online: true, registered: {}, ai_reports: [], pending: [], open: new Set(), declines: [], executions: [], claims: 0, answers: [], leaves: 0, posts: 0,
     calls: [], next_execution: 100, ended: '', me: { name: 'Claude-ext', scope: 'read', expires_at: 1763203600, directories: [{ root: 0, name: 'app' }] } };
   const api = (method, path, body) => {
     state.calls.push(`${method} ${path}`);
@@ -70,6 +70,7 @@ function fake_b() {
       return { status: 200, body: { id: Number(execution[1]) } };
     }
     if (path === MEMBER_API.answer(ROOM)) { state.answers.push(body); state.open.delete(body.execution_id); return { status: 201, body: { id: 77 } }; }
+    if (path === MEMBER_API.ai(ROOM)) { state.ai_reports.push(body); return state.ai_refused ? { status: 404, body: { error: '地址不存在' } } : { status: 200, body: { reported: true } }; }
     if (path === MEMBER_API.view(ROOM)) return { status: 200, body: { room: { id: ROOM }, me: state.me } };
     const one = path.match(new RegExp(`^${MEMBER_API.messages(ROOM)}/(\\d+)$`));
     if (one) return { status: 200, body: { message: { id: Number(one[1]), author: '用户', text: `请求正文 ${one[1]} ` + 'x'.repeat(5000) } } };
@@ -83,6 +84,7 @@ function fake_b() {
     if (action === 'external-redeem') {
       if (payload.proof !== invite_proof(CODE, MACHINE, payload.public_key)) return { status: 400, body: { error: '邀请码不对或已过期' } };
       state.registered[key_id_of(payload.public_key)] = payload.public_key;
+      state.redeemed = payload;
       return { status: 200, body: { external_id: key_id_of(payload.public_key), site: SITE, machine: { id: MACHINE, name: 'B-PC', fingerprint: fingerprint_of(ecdh.public_key, sign.public_key) },
         room: { id: ROOM, name: '求助' }, member: { id: 7, name: `${payload.platform}-ext` }, token: TOKEN, level: 'read', directories: [{ root: 0, name: 'app' }], expires_at: 1763203600 } };
     }
@@ -183,6 +185,30 @@ test('joining keeps the key and credential out of the record and every command o
   assert.ok(readFileSync(join(home, 'external', 'secrets.json'), 'utf8').includes(TOKEN));
 });
 
+test('the inviting room hears which AI joined and, once per change, which AI replaced it', async t => {
+  const b = fake_b(), home = home_dir(t);
+  writeFileSync(join(home, 'launch-settings.json'), JSON.stringify({ participants: {
+    'DeepSeek-2': { adapter: 'api', base_url: 'https://api.deepseek.com/v1', model: 'deepseek-flash' },
+    Custom: { adapter: 'api', base_url: 'https://llm.example/v1', model: 'house-model' } } }));
+  const { record } = await invited_command(home, 'invited-join', { invite: link(b.fingerprint), adapter: 'api', model: 'deepseek-flash' }, { fetcher: b.fetcher });
+  assert.deepEqual([b.state.redeemed.adapter, b.state.redeemed.platform, b.state.redeemed.model], ['api', 'DeepSeek', 'deepseek-flash']);
+  assert.ok(!('ai_reported' in record), 'bookkeeping stays out of what commands show');
+  await poll_record(home, record.id, { fetcher: b.fetcher });
+  assert.deepEqual(b.state.ai_reports, [], 'nothing changed since joining');
+  await invited_command(home, 'invited-ai', { id: record.id, adapter: 'api', model: 'house-model' });
+  b.state.online = false;
+  await poll_record(home, record.id, { fetcher: b.fetcher }).catch(() => {});
+  b.state.online = true;
+  await poll_record(home, record.id, { fetcher: b.fetcher });
+  await poll_record(home, record.id, { fetcher: b.fetcher });
+  assert.deepEqual(b.state.ai_reports, [{ adapter: 'api', platform: 'Custom', model: 'house-model' }], 'sent once the computer is back, and only once');
+  b.state.ai_refused = true;
+  await invited_command(home, 'invited-ai', { id: record.id, adapter: 'claude', model: '' });
+  await poll_record(home, record.id, { fetcher: b.fetcher });
+  await poll_record(home, record.id, { fetcher: b.fetcher });
+  assert.equal(b.state.ai_reports.length, 2, 'an older inviting computer is not asked again');
+});
+
 test('joining after a lost response reuses the persisted signing key and record', async t => {
   const b = fake_b(), home = home_dir(t);
   const input = { invite: link(b.fingerprint), adapter: 'claude' };
@@ -201,6 +227,26 @@ test('joining after a lost response reuses the persisted signing key and record'
   assert.equal(retry.record.id, again.record.id);
   assert.equal(Object.keys(b.state.registered).length, 1);
   assert.equal(Object.keys(read_store(home).records).length, 1);
+});
+
+test('a network failure is retried for reads, and for writes only when the request never left', async t => {
+  const b = fake_b();
+  const { home, record } = await joined(t, b);
+  const flaky = (code, failures) => async (url, init) => {
+    if (failures-- > 0) throw Object.assign(new TypeError('fetch failed'), { cause: { code } });
+    return b.fetcher(url, init);
+  };
+  const send = (method, path, body, code, failures) => member_api(home, record.id, method, path, body, { fetcher: flaky(code, failures), retry_delays: [0, 0] });
+  const claim = { client_id: 'client-retry-test' };
+  b.state.pending = [{ id: 1, message_id: 7 }];
+
+  assert.equal((await send('GET', MEMBER_API.inbox(ROOM), undefined, 'ECONNRESET', 2)).pending.length, 1);
+  await assert.rejects(send('GET', MEMBER_API.inbox(ROOM), undefined, 'ECONNRESET', 3), { code: 'site_unreachable' });
+  // The connection dropped after sending: the claim may have arrived, so it is not sent twice.
+  await assert.rejects(send('POST', MEMBER_API.claim(ROOM), claim, 'ECONNRESET', 1), { code: 'site_unreachable' });
+  assert.equal(b.state.claims, 0);
+  await send('POST', MEMBER_API.claim(ROOM), claim, 'ECONNREFUSED', 1);
+  assert.equal(b.state.claims, 1);
 });
 
 test('a link whose fingerprint does not match is refused before anything is sent', async t => {
@@ -378,6 +424,28 @@ test('leaving tells the inviting computer and drops the key here', async t => {
   assert.ok(!readFileSync(join(home, 'external', 'secrets.json'), 'utf8').includes(TOKEN));
 });
 
+test('a leave the inviting computer did not hear is delivered later, and the key goes only then', async t => {
+  const b = fake_b();
+  const { home, record } = await joined(t, b);
+  const secrets = () => readFileSync(join(home, 'external', 'secrets.json'), 'utf8');
+  b.state.online = false;
+  const { record: left, remote } = await invited_command(home, 'invited-leave', { id: record.id }, { fetcher: b.fetcher });
+  assert.equal(remote, 'unreachable');
+  assert.equal(left.status, 'left');
+  assert.ok(secrets().includes(TOKEN), 'the key is needed to tell the other computer');
+
+  const before_expiry = { fetcher: b.fetcher, now: () => b.state.me.expires_at * 1000 - 60000 };
+  await poll_record(home, record.id, before_expiry);
+  assert.equal(b.state.leaves, 0);
+  assert.ok(secrets().includes(TOKEN));
+  b.state.online = true;
+  await poll_record(home, record.id, before_expiry);
+  await poll_record(home, record.id, before_expiry);
+  assert.equal(b.state.leaves, 1);
+  assert.equal(read_store(home).records[record.id].leave_pending, false);
+  assert.ok(!secrets().includes(TOKEN));
+});
+
 test('the external task text points the AI at repo and its own access file', () => {
   assert.ok(TASK_SUBCOMMANDS.includes('repo'));
   const { prompt } = external_task_text({ name: 'Claude-ext', messages: '#40', cli: 'codiscuss', access_file: '/x/a.json', task_path: '/x/t.json', lockdown: true,
@@ -506,7 +574,7 @@ test('a model API member joins and runs with its saved endpoint and an external 
   writeFileSync(join(home, 'launch-settings.json'), JSON.stringify({ participants: { DeepSeek: { adapter: 'api', base_url: 'https://api.example.com/v1',
     api_protocol: 'openai-completions', api_key_ref: 'key-1', model: 'deepseek-chat' } } }));
   const { record } = await invited_command(home, 'invited-join', { invite: link(b.fingerprint), adapter: 'api' }, { fetcher: b.fetcher });
-  assert.equal(record.member, 'Custom-ext');
+  assert.deepEqual([b.state.redeemed.platform, b.state.redeemed.model], ['DeepSeek', 'deepseek-chat'], 'the vendor comes from the slot the API is saved under');
   await invited_command(home, 'invited-trust', { id: record.id, trust: 'borrow' });
   b.state.pending = [{ id: 30, message_id: 90 }];
   await poll_record(home, record.id, { fetcher: b.fetcher, deliver: delivery.deliver });

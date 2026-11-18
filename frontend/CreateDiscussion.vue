@@ -12,6 +12,7 @@ import ProjectDirectoryField from "./ProjectDirectoryField.vue";
 import RosterAdd from "./RosterAdd.vue";
 import SchedulerSettings from "./SchedulerSettings.vue";
 import ImageService from "./ImageService.vue";
+import WebSearchSettings from "./WebSearchSettings.vue";
 import HostWorkflowSwitch from "./HostWorkflowSwitch.vue";
 import ExternalExpertCard from "./ExternalExpertCard.vue";
 import PlatformConfigDialog from "./PlatformConfigDialog.vue";
@@ -250,6 +251,7 @@ const summary = computed(() => {
         </div>
         <SchedulerSettings :free="true" :blocker="scheduling_blocker" />
         <ImageService v-if="view.launch.available || view.launch.remote" :enabled="view.create_image_generation" @update:enabled="bridge.write_create_image_generation" />
+        <WebSearchSettings v-if="view.launch.available || view.launch.remote" />
       </section>
 
       <section class="create-section">

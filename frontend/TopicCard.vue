@@ -2,13 +2,15 @@
 import { t } from './i18n.js';
 import { computed, inject, nextTick, ref, watch } from "vue";
 
+// preview: a room still being created, shown from what the new-room panel already knows.
+const props = defineProps({ preview: { type: Object, default: null } });
 const emit = defineEmits(["edit"]);
 const { view, bridge } = inject("discussion");
 const TOPIC_BODY_MAX_HEIGHT = 240;
 const topic_expanded = ref(false);
 const topic_body = ref(null);
 const topic_overflows = ref(false);
-const room = computed(() => view.value.room);
+const room = computed(() => props.preview || view.value.room);
 /** The channel's purpose; old rooms without a user request fall back to background. */
 const topic = computed(() => {
   const value = room.value || {};
@@ -32,14 +34,14 @@ watch(() => view.value.tab, measure);
  * Hidden until the room's details and transcript are both read: the directory entry a new room opens with has no members
  * or request, so showing it early made the card grow as they arrived (user 2026-11-18, #4818).
  */
-const ready = computed(() => Boolean(room.value?.experts) && !view.value.messages_loading);
+const ready = computed(() => Boolean(props.preview) || Boolean(room.value?.experts) && !view.value.messages_loading);
 watch(ready, measure);
 defineExpose({ measure });
 </script>
 
 <template>
   <section v-if="ready" class="channel-message channel-topic-card" :class="{ 'is-expanded': topic_expanded }" :aria-label="t('议题')">
-    <header class="channel-topic-heading"><span class="channel-topic-eyebrow"><UIcon name="i-lucide-target" />{{ t('议题') }}</span><h2>{{ room.title }}</h2><UButton icon="i-lucide-pencil" :label="t('编辑')" color="neutral" variant="ghost" size="xs" @click="emit('edit')" /></header>
+    <header class="channel-topic-heading"><span class="channel-topic-eyebrow"><UIcon name="i-lucide-target" />{{ t('议题') }}</span><h2>{{ room.title }}</h2><UButton v-if="!preview" icon="i-lucide-pencil" :label="t('编辑')" color="neutral" variant="ghost" size="xs" @click="emit('edit')" /></header>
     <div ref="topic_body" class="channel-topic-body" :class="{ 'is-clamped': topic_overflows && !topic_expanded }">
     <div v-if="topic.request" class="channel-topic-section channel-topic-request"><h3>{{ topic.request.label }}</h3><p class="channel-topic-text">{{ topic.request.text }}</p></div>
     <div v-if="topic.goal" class="channel-topic-section"><h3>{{ t('目标') }}</h3><p class="channel-topic-text">{{ topic.goal }}</p></div>

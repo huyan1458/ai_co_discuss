@@ -14,7 +14,7 @@ import time
 from datetime import datetime, timezone
 
 from . import free_room
-from .identity import MAX_ROOM_AGENTS, is_ai
+from .identity import AI_PLATFORMS, MAX_ROOM_AGENTS, is_ai
 from .runtime import begin_write, require_owner, token_hash
 from .texts import Text, text_payload
 
@@ -32,6 +32,7 @@ MAX_DIRECTORY_LENGTH = 500
 MAX_MACHINE = 200
 MAX_MACHINE_LABEL = 80
 MAX_ADAPTER = 40
+MAX_MODEL = 120
 HOUR_SECONDS = 3600
 READ_OPS = ("ls", "read", "grep")
 READ_OUTCOMES = ("ok", "denied")
@@ -48,7 +49,7 @@ MESSAGE_PARAMS = ("after", "limit", "page", "q", "author", "mention", "execution
 ANSWER_FIELDS = ("text", "text_text", "execution_id", "submission_id", "reply_to")
 ENDED_TEXTS = {"revoked": Text("外部成员已被撤销"), "expired": Text("外部成员已到期"), "left": Text("外部成员已退出")}
 EXTERNAL_SQL = """SELECT m.id,m.room_id,m.name,m.adapter,m.role,m.status,m.access,m.session_mode,m.read_until,m.token_hash,
-    x.machine,x.machine_label,x.scope,x.directories,x.expires_at,x.hourly_bytes,x.total_bytes,x.hourly_reads,
+    x.machine,x.machine_label,x.platform,x.model,x.scope,x.directories,x.expires_at,x.hourly_bytes,x.total_bytes,x.hourly_reads,
     x.created_at,x.updated_at,x.ended_at,x.end_reason,x.claimed_at,x.invite_version,x.invite_duration,x.token_hash AS binding_hash
     FROM external_members x JOIN room_members m ON m.id=x.member_id"""
 
@@ -111,8 +112,8 @@ def owner_view(connection, row):
     """Describe one external member for the owner, with full directory paths and current usage."""
     labels = free_room.member_display_names(connection, row["room_id"])
     return {"member_id": row["id"], "name": row["name"], "label": labels.get(row["name"], row["name"]), "adapter": row["adapter"],
-            "status": row["status"], "machine": row["machine"], "machine_label": row["machine_label"], "scope": row["scope"],
-            "directories": json.loads(row["directories"]), "expires_at": row["expires_at"], "quota": quota_of(row),
+            "status": row["status"], "machine": row["machine"], "machine_label": row["machine_label"], "platform": row["platform"],
+            "model": row["model"], "scope": row["scope"], "directories": json.loads(row["directories"]), "expires_at": row["expires_at"], "quota": quota_of(row),
             "usage": usage_of(connection, row["id"]), "created_at": row["created_at"], "updated_at": row["updated_at"],
             "ended_at": row["ended_at"], "end_reason": row["end_reason"],
             "claimed_at": row["claimed_at"], "invite_version": row["invite_version"], "duration": row["invite_duration"]}
@@ -120,11 +121,12 @@ def owner_view(connection, row):
 
 def room_view_field(connection, member_id):
     """The `external` field of a member in the room view, or None for a local member; no local paths."""
-    row = connection.execute("SELECT scope,expires_at,machine_label,directories,claimed_at,invite_version FROM external_members WHERE member_id=?",
+    row = connection.execute("SELECT scope,expires_at,machine_label,platform,model,directories,claimed_at,invite_version FROM external_members WHERE member_id=?",
                              (member_id,)).fetchone()
     if not row:
         return None
     return {"scope": row["scope"], "expires_at": row["expires_at"], "machine_label": row["machine_label"],
+            "platform": row["platform"], "model": row["model"],
             "directories": directory_names(json.loads(row["directories"])), "claimed_at": row["claimed_at"],
             "invite_version": row["invite_version"]}
 
@@ -213,6 +215,15 @@ def checked_text(value, limit, field, required=False):
     return value
 
 
+def save_ai(connection, member_id, payload, now):
+    """Keep the AI the other computer reports, for display only; an unknown platform reads as none."""
+    adapter = checked_text(payload.get("adapter", ""), MAX_ADAPTER, "adapter")
+    model = " ".join(checked_text(payload.get("model", ""), MAX_MODEL, "model").split())
+    platform = payload.get("platform") if payload.get("platform") in AI_PLATFORMS else ""
+    connection.execute("UPDATE room_members SET adapter=? WHERE id=?", (adapter, member_id))
+    connection.execute("UPDATE external_members SET platform=?,model=?,updated_at=? WHERE member_id=?", (platform, model, now, member_id))
+
+
 def list_external(connection, room_id, token):
     """The owner's read entry before adding an external member: every external member and the roster revision."""
     require_owner(connection, room_id, token)
@@ -276,7 +287,7 @@ def create_external(connection, room_id, token, payload, now):
                         expires_at, quota["hourly_bytes"], quota["total_bytes"], quota["hourly_reads"], now, now, 0 if pending else now))
     if pending:
         duration = payload.get("duration", "1h")
-        if duration not in ("1h", "today", "3d"):
+        if duration not in ("1h", "today", "3d", "7d", "30d"):
             raise ValueError(Text("外部成员不存在"))
         connection.execute("UPDATE external_members SET claimed_at=0,invite_duration=? WHERE member_id=?", (duration, cursor.lastrowid))
         suffix = name.removeprefix("Custom-ext") if name.startswith("Custom-ext") else f"-{cursor.lastrowid}"
@@ -344,8 +355,7 @@ def seat_action(connection, row, payload, now):
         if action == "bind" and not row["machine"]:
             expiry = checked_expiry(payload.get("expires_at"), now)
             label = checked_text(payload.get("machine_label"), MAX_MACHINE_LABEL, "machine_label")
-            adapter = checked_text(payload.get("adapter", ""), MAX_ADAPTER, "adapter")
-            connection.execute("UPDATE room_members SET adapter=? WHERE id=?", (adapter, row["id"]))
+            save_ai(connection, row["id"], payload, now)
             connection.execute("UPDATE external_members SET machine=?,machine_label=?,token_hash=?,expires_at=? WHERE member_id=?",
                                (machine, label, hashed, expiry, row["id"]))
         elif action == "activate":
@@ -516,6 +526,13 @@ def answer_payload(member, payload):
     return {**{key: payload[key] for key in ANSWER_FIELDS if key in payload}, "author": member["name"], "source": "cli"}
 
 
+def report_ai(connection, member, payload):
+    """The member's computer switched its AI: only what the room displays changes, never what the member may do."""
+    checked_text(payload.get("adapter"), MAX_ADAPTER, "adapter", required=True)
+    save_ai(connection, member["id"], payload, int(time.time()))
+    return {"reported": True}
+
+
 def leave_room(connection, member):
     """The external member leaves on its own; its credential stops working at once."""
     end_member(connection, member, "left")
@@ -558,6 +575,8 @@ def external_api(connection, parts, params, method, token, read_payload, hooks):
         return free_room.execution_action(connection, room_id, int(route[1]), token, payload, member=member), 200
     if route == ["answer"]:
         return hooks["answer"](connection, room_id, answer_payload(member, payload), member), 201
+    if route == ["ai"]:
+        return report_ai(connection, member, payload), 200
     if route == ["leave"]:
         return leave_room(connection, member), 200
     raise LookupError(Text("地址不存在"))

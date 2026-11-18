@@ -563,6 +563,9 @@ CREATE TABLE IF NOT EXISTS external_members (
     invite_version INTEGER NOT NULL DEFAULT 0,
     invite_duration TEXT NOT NULL DEFAULT '1h',
     machine_label TEXT NOT NULL DEFAULT '',
+    -- What the other computer says it runs, for display only: an AI platform name and a model ID.
+    platform TEXT NOT NULL DEFAULT '',
+    model TEXT NOT NULL DEFAULT '',
     scope TEXT NOT NULL CHECK(scope IN ('discuss','read')),
     directories TEXT NOT NULL DEFAULT '[]',
     expires_at INTEGER NOT NULL,

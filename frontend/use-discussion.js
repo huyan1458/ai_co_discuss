@@ -33,6 +33,8 @@ export function use_discussion() {
     if (LOCAL_ACTIONS.has(name)) return bridge.execute(name, value);
     // The question card has already closed when this runs: its write stays in the background and blocks nothing else.
     if (name === "question_answer") return bridge.execute(name, value);
+    // A removed member has already left the page: saving it stays in the background and blocks nothing else.
+    if (name === "change_member" && value?.action === "remove") return bridge.execute(name, value);
     if (pending.value) return bridge.execute("busy", pending.value);
     pending.value = name;
     try { return await bridge.execute(name, value); }

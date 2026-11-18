@@ -1,10 +1,35 @@
+<script>
+// How far outside the transcript's visible area a folded row starts reading its texts.
+const PRELOAD_MARGIN = "800px 0px";
+// One observer per transcript, however many rows it holds.
+const near_observers = new WeakMap();
+
+/** Report whether `element` is near the transcript's visible area; returns the function that stops reporting. */
+function observe_near(element, report) {
+  const root = element.closest(".channel-transcript");
+  if (!root || typeof IntersectionObserver === "undefined") return () => {};
+  let shared = near_observers.get(root);
+  if (!shared) {
+    const reports = new Map();
+    const observer = new IntersectionObserver((entries) => {
+      for (const entry of entries) reports.get(entry.target)?.(entry.isIntersecting);
+    }, { root, rootMargin: PRELOAD_MARGIN });
+    shared = { observer, reports };
+    near_observers.set(root, shared);
+  }
+  shared.reports.set(element, report);
+  shared.observer.observe(element);
+  return () => { shared.reports.delete(element); shared.observer.unobserve(element); };
+}
+</script>
+
 <script setup>
 /**
  * An execution's progress notes as a secondary row, laid out like the answer summary.
- * While the member works the row is open and is the card's content; afterwards it folds after the result,
- * and the texts are read only when the user opens it. It owns its open state so toggling never re-renders the list.
+ * While the member works the row is open and is the card's content; afterwards it folds after the result, and the
+ * texts are read ahead as the row nears the screen. It owns its open state so toggling never re-renders the list.
  */
-import { ref } from "vue";
+import { onBeforeUnmount, onMounted, ref } from "vue";
 
 const props = defineProps({
   /** Number of notes the execution has; the texts may not be loaded yet. */
@@ -15,9 +40,25 @@ const props = defineProps({
   live: Boolean,
   /** Read missing notes; returns a failure message, or nothing after success. */
   load: { type: Function, default: null },
+  /** Told whether the folded row is near the screen, so its texts can be read before it is opened. */
+  preload: { type: Function, default: null },
 });
 const open = ref(false);
 const loading = ref(false), failure = ref("");
+const row = ref(null);
+let stop_observing = null;
+
+onMounted(() => {
+  if (props.live || !props.preload) return;
+  stop_observing = observe_near(row.value, (near) => {
+    if (!near) props.preload(false);
+    else if ((props.notes?.length ?? -1) < props.count) props.preload(true);
+  });
+});
+onBeforeUnmount(() => {
+  stop_observing?.();
+  props.preload?.(false);
+});
 
 async function read() {
   if (loading.value || !props.load) return;
@@ -35,7 +76,7 @@ function toggle() {
 </script>
 
 <template>
-  <div class="channel-answer-summary channel-execution-notes">
+  <div ref="row" class="channel-answer-summary channel-execution-notes">
     <small>{{ t("过程说明") }}</small>
     <div class="channel-message-text">
       <ol v-if="live || open" :class="{ 'is-live': live }">

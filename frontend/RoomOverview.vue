@@ -1,5 +1,5 @@
 <script setup>
-import { awaiting_member } from "./external-members.js";
+import { awaiting_member, revoke_member } from "./external-members.js";
 /**
  * Everything about who is in the room and how it is set up, laid out in full: the rail's member menu is only the quick
  * entry to the same actions, so nothing here hides behind a menu.
@@ -8,6 +8,7 @@ import { computed, inject, ref, watch } from "vue";
 import ApiRequestsField from "./ApiRequestsField.vue";
 import ImageService from "./ImageService.vue";
 import SchedulerSettings from "./SchedulerSettings.vue";
+import WebSearchSettings from "./WebSearchSettings.vue";
 import ChainRoundsField from "./ChainRoundsField.vue";
 import EffortSlider from "./EffortSlider.vue";
 import ModelRefresh from "./ModelRefresh.vue";
@@ -259,7 +260,8 @@ const HOST_LABEL = t("设为主持人");
  * from the progress board, so there only the taking-part actions (instructions, credentials, description) apply.
  */
 function actions(member) {
-  const [taking_part, place, removal] = member_actions(live(member), { view: view.value, act, describe: (name) => { describing.value = name; } });
+  const [taking_part, place, removal] = member_actions(live(member), { view: view.value, act, describe: (name) => { describing.value = name; },
+    revoke: (target) => revoke_member(bridge, act, view.value.room.id, target) });
   if (!free.value) return { taking_part, host: null, place: [] };
   return { taking_part, host: place.find((item) => item.label === HOST_LABEL) || null, place: [...place.filter((item) => item.label !== HOST_LABEL), ...removal] };
 }
@@ -383,6 +385,8 @@ const created = computed(() => room.value.created_at ? new Date(room.value.creat
           <template v-else>{{ scheduler }}</template></dd></div>
         <div v-if="saved?.registered"><dt>{{ t("生图") }}</dt><dd>
           <ImageService compact :enabled="Boolean(saved.image_generation)" :disabled="!view.access?.can_manage || room.archived" @update:enabled="bridge.set_room_image_generation($event).catch(() => {})" /></dd></div>
+        <div v-if="saved?.registered"><dt>{{ t("联网搜索") }}</dt><dd>
+          <WebSearchSettings compact :disabled="!view.access?.can_manage || room.archived || !(view.launch.available || view.launch.remote)" /></dd></div>
         <div><dt>{{ t("工作流") }}</dt><dd class="overview-workflow">
           <WorkflowControl v-if="workflow" :workflow="workflow" />
           <span v-else class="overview-muted">{{ t("没有进行中的工作流；在输入框打 / 或邀请成员时选择") }}</span>

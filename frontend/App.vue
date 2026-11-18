@@ -30,7 +30,12 @@ provide("discussion", discussion);
 const NOTICE_EVENTS = {
   onMousedown: (event) => event.preventDefault(),
   onPointermove: (event) => { if (event.pointerType !== "mouse") event.stopPropagation(); },
+  "onUpdate:open": (open) => { if (!open) resume_notices(); },
 };
+/** The toaster resumes on pointer leave, which never fires when the notice under the mouse closes; later notices then sat frozen. */
+function resume_notices() {
+  setTimeout(() => document.querySelector('ol[data-slot="viewport"]')?.dispatchEvent(new PointerEvent("pointerleave")));
+}
 // The close button is a bare icon; on touch screens its tap area is widened without moving it.
 const NOTICE_UI = { close: "pointer-coarse:p-2.5 pointer-coarse:-m-2.5" };
 
@@ -76,7 +81,13 @@ function show_undo({ detail }) {
     orientation: "horizontal", duration: detail.duration, actions: [
       { label: t("查看"), color: "neutral", variant: "soft", size: "xs", onClick: () => detail.view?.() },
       { label: t("撤销"), color: "neutral", variant: "solid", size: "xs", onClick: () => settle_undo(detail.id, false) },
-    ], "onUpdate:open": (open) => { if (!open) { settle_undo(detail.id, true); if (undo_toasts.get(detail.id) === toast_id) undo_toasts.delete(detail.id); } } });
+    ], "onUpdate:open": (open) => {
+      if (open) return;
+      resume_notices();
+      if (undo_toasts.get(detail.id) === toast_id) undo_toasts.delete(detail.id);
+      // An action button closes the toast before its own click handler runs, so "撤销" must get its say first.
+      setTimeout(() => { if (undo_settles.get(detail.id) === detail.settle) settle_undo(detail.id, true); });
+    } });
 }
 document.addEventListener("discuss:undo", show_undo);
 onBeforeUnmount(() => document.removeEventListener("discuss:undo", show_undo));
