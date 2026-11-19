@@ -31,6 +31,9 @@ function same_path(left, right) {
   const normalize = (value) => String(value || "").replace(/[\\/]+$/, "").toLowerCase();
   return Boolean(left) && normalize(left) === normalize(right);
 }
+// A typed or browsed path that is not in the saved list applies here only, until the user adds it to the list.
+const temporary = computed(() => Boolean(cwd.value.trim()) && !chosen.value);
+const prefix_label = computed(() => chosen.value ? chosen.value.name : temporary.value ? t('临时路径') : t('常用项目'));
 const write_cwd = (path) => bound.value ? emit("update:modelValue", path) : bridge.write_launch("workspace", "cwd", path);
 const choose = (project) => relay.value ? bridge.write_launch("workspace", "local_project", project?.id || "") : write_cwd(project.path);
 
@@ -137,6 +140,12 @@ function open_manager() {
   managing.value = true;
 }
 
+/** Open the manager with the temporary path already filled in, so saving it is one more click. */
+function save_temporary() {
+  open_manager();
+  adding.value = { name: folder_name(cwd.value), path: cwd.value.trim() };
+}
+
 function start_adding() {
   editing.value = -1;
   adding.value = { name: "", path: "" };
@@ -195,30 +204,36 @@ async function save_projects() {
   </div>
 
   <div v-else-if="restricted" class="project-field">
-    <UDropdownMenu :items="restricted_items" :content="{ align: 'start', sideOffset: 4 }" :ui="{ content: 'channel-menu project-menu project-menu-field' }" :disabled="props.disabled">
-      <button type="button" class="project-select" :class="{ 'is-empty': !chosen && bound }" :disabled="props.disabled">
-        <UIcon :name="chosen ? 'i-lucide-folder' : bound ? 'i-lucide-folder-search' : 'i-lucide-folder-open'" class="project-select-icon" />
-        <span>{{ chosen ? chosen.name : bound ? t('选择项目') : t('草稿空间') }}</span>
-        <UIcon name="i-lucide-chevron-down" class="project-select-chevron" />
-      </button>
-    </UDropdownMenu>
+    <div class="project-select-wrap" :class="{ 'has-actions': $slots.actions }">
+      <UDropdownMenu :items="restricted_items" :content="{ align: 'start', sideOffset: 4 }" :ui="{ content: 'channel-menu project-menu project-menu-field' }" :disabled="props.disabled">
+        <button type="button" class="project-select" :class="{ 'is-empty': !chosen && bound }" :disabled="props.disabled">
+          <UIcon :name="chosen ? 'i-lucide-folder' : bound ? 'i-lucide-folder-search' : 'i-lucide-folder-open'" class="project-select-icon" />
+          <span>{{ chosen ? chosen.name : bound ? t('选择项目') : t('草稿空间') }}</span>
+          <UIcon name="i-lucide-chevron-down" class="project-select-chevron" />
+        </button>
+      </UDropdownMenu>
+      <span v-if="$slots.actions" class="project-select-actions"><slot name="actions" /></span>
+    </div>
   </div>
 
-  <!-- One field in two parts: the saved-project picker leads, naming the chosen project, and the typed path follows,
-       with the computer's folder dialog at its end like any input's trailing action. -->
-  <div v-else class="project-box" :class="{ 'is-disabled': props.disabled, 'is-chosen': chosen }">
+  <!-- One field in two parts: the leading picker says what the path is (a saved project or a temporary path) and manages
+       the saved list; the path follows, with its actions at the end, including the row's own `actions` so that every row
+       keeps the full width. -->
+  <div v-else class="project-box" :class="{ 'is-disabled': props.disabled, 'is-chosen': chosen, 'is-compact': props.compact }">
     <UDropdownMenu v-if="projects.length" :items="menu_items" :content="{ align: 'start', sideOffset: 6 }" :ui="{ content: 'channel-menu project-menu' }" :disabled="props.disabled">
       <button type="button" class="project-prefix" :class="{ 'is-chosen': chosen }" :title="chosen ? bridge.display_path(chosen.path) : t('从常用项目中选择')" :aria-label="t('选择常用项目')" :disabled="props.disabled">
-        <UIcon :name="chosen ? 'i-lucide-folder' : 'i-lucide-folders'" /><span v-if="!props.compact">{{ chosen ? chosen.name : t('常用项目') }}</span><UIcon name="i-lucide-chevron-down" class="project-prefix-chevron" />
+        <UIcon :name="chosen ? 'i-lucide-folder' : temporary ? 'i-lucide-pencil-line' : 'i-lucide-folders'" /><span>{{ prefix_label }}</span><UIcon name="i-lucide-chevron-down" class="project-prefix-chevron" />
       </button>
     </UDropdownMenu>
-    <button v-else type="button" class="project-prefix" :aria-label="t('添加常用项目')" :title="t('保存常用项目，之后一键选择；其他设备也能用')" :disabled="props.disabled" @click="open_manager">
-      <UIcon name="i-lucide-plus" /><span v-if="!props.compact">{{ t('常用项目') }}</span>
+    <button v-else type="button" class="project-prefix" :aria-label="t('添加常用项目')" :title="t('保存常用项目，之后一键选择；其他设备也能用')" :disabled="props.disabled" @click="temporary ? save_temporary() : open_manager()">
+      <UIcon :name="temporary ? 'i-lucide-pencil-line' : 'i-lucide-plus'" /><span>{{ prefix_label }}</span>
     </button>
     <UInput :model-value="cwd" :placeholder="props.placeholder" variant="none" class="project-path" :aria-label="t('项目目录完整路径')" :disabled="props.disabled" @update:model-value="write_cwd" />
     <slot name="badge" />
+    <UButton v-if="temporary" icon="i-lucide-bookmark-plus" color="neutral" variant="ghost" size="xs" class="project-browse" :aria-label="t('加入常用项目')" :title="t('加入常用项目')" :disabled="props.disabled" @click="save_temporary" />
     <UButton v-if="browsable" icon="i-lucide-folder-open" color="neutral" variant="ghost" size="xs" class="project-browse" :aria-label="native ? t('在本机选择项目目录') : t('浏览电脑上的文件夹')"
       :title="!native ? t('浏览电脑上常用项目中的文件夹') : picking ? t('目录选择窗口已打开，请在本机窗口中选择') : t('在本机选择文件夹')" :loading="picking" :disabled="props.disabled" @click="pick_directory" />
+    <slot name="actions" />
   </div>
 
   <UModal :content="{ onInteractOutside: (event) => event.preventDefault() }" v-model:open="managing" :title="t('常用项目')" :description="t('保存在运行 codiscuss 的这台电脑上。登录同一网站的手机、平板可直接选择，路径不会离开这台电脑。')"
@@ -319,6 +334,7 @@ async function save_projects() {
 .project-prefix { display: inline-flex; flex-shrink: 0; align-items: center; gap: 5px; max-width: 200px; padding: 0 8px 0 10px; border-right: 1px solid var(--ui-border-muted);
   border-radius: 5px 0 0 5px; color: var(--ui-text-muted); font-size: 12px; white-space: nowrap; transition: background-color .15s, color .15s; }
 .project-prefix:hover:not(:disabled) { background: var(--channel-ghost-hover, var(--ui-bg-elevated)); color: var(--ui-text-highlighted); }
+.project-box.is-compact .project-prefix { max-width: 148px; }
 .project-prefix > span { overflow: hidden; text-overflow: ellipsis; }
 .project-prefix > [class*="icon"] { flex-shrink: 0; width: 13px; height: 13px; }
 .project-prefix > .project-prefix-chevron { width: 12px; height: 12px; color: var(--ui-text-dimmed); }
@@ -337,6 +353,9 @@ async function save_projects() {
 .project-select:disabled { cursor: not-allowed; opacity: .6; }
 .project-select.is-empty { color: var(--ui-text-dimmed); }
 .project-select > span { flex: 1; min-width: 0; overflow: hidden; white-space: nowrap; text-overflow: ellipsis; }
+.project-select-wrap { position: relative; }
+.project-select-wrap.has-actions .project-select { padding-right: 34px; }
+.project-select-actions { position: absolute; top: 50%; right: 3px; display: flex; transform: translateY(-50%); }
 .project-select-icon { flex-shrink: 0; width: 14px; height: 14px; color: var(--channel-accent); }
 .project-select.is-empty .project-select-icon, .project-select-chevron { flex-shrink: 0; width: 14px; height: 14px; color: var(--ui-text-muted); }
 .project-note { display: flex; align-items: center; gap: 6px; margin: 0; color: var(--ui-text-muted); font-size: 12px; }
@@ -377,5 +396,16 @@ async function save_projects() {
 .folder-entry > [class*="icon"] { flex-shrink: 0; width: 14px; height: 14px; color: var(--channel-accent); }
 .folder-empty { padding: 12px 8px; color: var(--ui-text-dimmed); font-size: 12px; }
 @media (hover: none), (max-width: 600px) { .project-actions { opacity: 1; } }
-@media (max-width: 600px) { .project-prefix { max-width: 120px; } }
+/* Touch: the field's own buttons, including the row's `actions`, stay large enough for a finger. */
+@media (hover: none), (pointer: coarse), (max-width: 600px) {
+  .project-box > :deep(button:not(.project-prefix)) { justify-content: center; min-width: 36px; min-height: 36px; }
+  .project-select-wrap.has-actions .project-select { padding-right: 44px; }
+  .project-select-actions :deep(button) { justify-content: center; min-width: 36px; min-height: 36px; }
+}
+/* Phone: the picker and actions share the first line, so the path keeps a full line of its own. */
+@media (max-width: 600px) {
+  .project-box { flex-wrap: wrap; align-items: center; }
+  .project-box .project-prefix, .project-box.is-compact .project-prefix { flex: 0 1 auto; min-width: 0; min-height: 40px; max-width: none; margin-right: auto; border-right: 0; }
+  .project-path { flex: 1 0 100%; order: 1; margin-right: -3px; border-top: 1px solid var(--ui-border-muted); }
+}
 </style>

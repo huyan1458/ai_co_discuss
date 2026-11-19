@@ -203,10 +203,15 @@ function folder_export(folder) {
     onSelect: () => act("backup_rooms", { ids, name: folder.name || t("未分组") }) };
 }
 
-/** Open or close one folder for this page load. */
+/** Open or close one folder for this page load; closing it also folds its list back to the first batch. */
 function toggle_folder(id) {
   const next = new Set(expanded.value);
-  if (folder_open(id)) next.delete(id); else next.add(id);
+  if (folder_open(id)) {
+    next.delete(id);
+    const counts = new Map(listed_counts.value);
+    counts.delete(id);
+    listed_counts.value = counts;
+  } else next.add(id);
   expanded.value = next;
 }
 

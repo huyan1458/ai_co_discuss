@@ -23,10 +23,9 @@ const add = () => emit("update:modelValue", [...props.modelValue, ""]);
 <template>
   <div class="extra-directories">
     <template v-if="editable">
-      <div v-for="(path, index) in props.modelValue" :key="index" class="extra-directory">
-        <ProjectDirectoryField :model-value="path" compact :placeholder="t('另一个项目目录的完整路径')" :disabled="props.disabled" @update:model-value="write(index, $event)" />
-        <UButton icon="i-lucide-x" color="neutral" variant="ghost" size="xs" :aria-label="t('移除项目目录 {value1}', { value1: path })" :disabled="props.disabled" @click="remove(index)" />
-      </div>
+      <ProjectDirectoryField v-for="(path, index) in props.modelValue" :key="index" :model-value="path" compact :placeholder="t('另一个项目目录的完整路径')" :disabled="props.disabled" @update:model-value="write(index, $event)">
+        <template #actions><UButton icon="i-lucide-x" color="neutral" variant="ghost" size="xs" class="self-center" :aria-label="t('移除项目目录 {value1}', { value1: path })" :disabled="props.disabled" @click="remove(index)" /></template>
+      </ProjectDirectoryField>
     </template>
     <code v-for="path in editable ? [] : props.modelValue" :key="path" class="extra-directory-path">{{ path }}</code>
     <button v-if="editable && props.modelValue.length < MAX_DIRECTORIES" type="button" class="extra-directory-add" :disabled="props.disabled" @click="add">
@@ -37,8 +36,6 @@ const add = () => emit("update:modelValue", [...props.modelValue, ""]);
 
 <style scoped>
 .extra-directories { display: flex; flex-direction: column; gap: 6px; width: 100%; }
-.extra-directory { display: flex; align-items: center; gap: 4px; }
-.extra-directory > :first-child { flex: 1; min-width: 0; }
 .extra-directory-add { display: inline-flex; align-self: flex-start; align-items: center; gap: 5px; padding: 3px 2px; color: var(--ui-text-muted); font-size: 12px; }
 .extra-directory-add:hover:not(:disabled) { color: var(--ui-text-highlighted); }
 .extra-directory-add:disabled { cursor: not-allowed; opacity: .6; }

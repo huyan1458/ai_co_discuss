@@ -89,7 +89,7 @@ function remove(id) {
 
 <style scoped>
 /* Under the canvas toolbar (Vue Flow panels sit 15px in); above the canvas, below popovers. */
-.workflow-parts { position: absolute; top: 60px; left: 15px; z-index: 6; display: grid; width: 232px; max-width: calc(100% - 30px); padding: 3px;
+.workflow-parts { position: absolute; top: 60px; left: 15px; z-index: 6; display: grid; grid-template-columns: minmax(0, 1fr); width: 272px; max-width: calc(100% - 30px); padding: 3px;
   border: 1px solid var(--ui-border-muted); border-radius: 10px; background: var(--ui-bg-elevated); box-shadow: 0 6px 20px rgb(0 0 0 / .14); font-size: 13px; }
 .workflow-parts:not(.is-open) { width: auto; }
 .workflow-parts-icon { flex-shrink: 0; width: 14px; height: 14px; }
@@ -102,7 +102,7 @@ function remove(id) {
 .workflow-parts-chevron { margin-left: auto; transition: transform .15s; }
 .workflow-parts-toggle small + .workflow-parts-chevron { margin-left: 2px; }
 .workflow-parts.is-open .workflow-parts-chevron { transform: rotate(180deg); }
-.workflow-parts-list { display: grid; gap: 1px; margin: 3px 0 0; padding: 3px 0 0; border-top: 1px solid var(--ui-border-muted); list-style: none; }
+.workflow-parts-list { display: grid; grid-template-columns: minmax(0, 1fr); gap: 1px; margin: 3px 0 0; padding: 3px 0 0; border-top: 1px solid var(--ui-border-muted); list-style: none; }
 .workflow-parts-row { display: flex; align-items: center; gap: 2px; }
 .workflow-parts-item { width: 100%; min-width: 0; padding: 0 8px; text-align: left; }
 .workflow-parts-item span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }

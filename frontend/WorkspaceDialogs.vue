@@ -255,12 +255,10 @@ const keep_open = (event) => event.preventDefault();
         <UInput v-model="folder_name" icon="i-lucide-folder" :aria-label="rendered_mode === 'folder' ? t('新文件夹名称') : t('文件夹名称')" :placeholder="t('文件夹名称')" autofocus required :maxlength="40" class="w-full" autocomplete="off" :readonly="Boolean(pending)" @keydown.enter.prevent="!$event.isComposing && save_folder()" />
         <UFormField v-if="['folder', 'rename-folder'].includes(rendered_mode)" :label="t('项目路径（可选）')" :description="t('在此文件夹中新建房间时自动带入，已有房间不受影响。')">
           <div v-if="view.launch.available" class="channel-folder-directories">
-            <div class="channel-folder-directory">
-              <ProjectDirectoryField v-model="folder_main" compact :placeholder="t('主目录的完整路径，或选择项目')" :disabled="Boolean(pending)">
-                <template v-if="folder_main.trim()" #badge><span class="channel-folder-primary">{{ t("主目录") }}</span></template>
-              </ProjectDirectoryField>
-              <UButton icon="i-lucide-x" color="neutral" variant="ghost" size="xs" :aria-label="t('移除主目录 {path}', { path: folder_main })" :class="{ invisible: !folder_main.trim() }" :disabled="Boolean(pending)" @click="remove_folder_main" />
-            </div>
+            <ProjectDirectoryField v-model="folder_main" compact :placeholder="t('粘贴或输入临时路径')" :disabled="Boolean(pending)">
+              <template v-if="folder_main.trim()" #badge><span class="channel-folder-primary">{{ t("主目录") }}</span></template>
+              <template v-if="folder_main.trim()" #actions><UButton icon="i-lucide-x" color="neutral" variant="ghost" size="xs" class="self-center" :aria-label="t('移除主目录 {path}', { path: folder_main })" :disabled="Boolean(pending)" @click="remove_folder_main" /></template>
+            </ProjectDirectoryField>
             <ExtraDirectoriesField v-if="folder_main.trim()" v-model="folder_extras" :disabled="Boolean(pending)" />
           </div>
           <div v-else class="channel-folder-directories">

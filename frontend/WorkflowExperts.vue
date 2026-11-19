@@ -19,6 +19,8 @@ const { view, bridge } = inject("discussion");
 const { draft, subs } = use_workflow_library();
 const EFFORT_LABELS = { low: "Low", medium: "Medium", high: "High", xhigh: "Extra High", max: "Max", ultra: "Ultra" };
 const DEFAULT_MODEL = "__default__";
+// A select option cannot have an empty value; the card stores the default strength as "".
+const DEFAULT_EFFORT = "__default__";
 // A description is one or two sentences: what this role answers for, shown on the canvas card when pointed at.
 const MAX_DESCRIPTION = 200;
 // A role name fits a card's title line.
@@ -55,7 +57,7 @@ function models(agent) { return bridge.launch_model_state(agent.name, view.value
 
 function effort_items(agent) {
   const levels = models(agent).efforts || adapter_profile(profile(agent).adapter)?.efforts;
-  return levels?.length ? [{ label: t('默认'), value: "" }, ...levels.map((level) => ({ label: EFFORT_LABELS[level] || level, value: level }))] : null;
+  return levels?.length ? [{ label: t('默认'), value: DEFAULT_EFFORT }, ...levels.map((level) => ({ label: EFFORT_LABELS[level] || level, value: level }))] : null;
 }
 
 function access_items(agent) {
@@ -117,7 +119,7 @@ watch([open, () => entries.value.map((entry) => entry.agent.name).join()], ([sho
           <p v-if="missing(current.agent)" class="workflow-experts-missing"><UIcon name="i-lucide-triangle-alert" />{{ t('本机未配置 {value1}，换一个本机已配置的软件才能运行', { value1: bridge.default_name(platform(current.agent)) }) }}</p>
           <label class="workflow-experts-field">
             <span>{{ t('描述') }}</span>
-            <UTextarea :model-value="current.agent.description || ''" :rows="2" autoresize :maxrows="4" :maxlength="MAX_DESCRIPTION" :placeholder="t('一两句：这个角色负责什么')"
+            <UTextarea :model-value="current.agent.description || ''" :rows="4" :maxlength="MAX_DESCRIPTION" :placeholder="t('一两句：这个角色负责什么')"
               @update:model-value="update(current.part, current.agent.card, { description: $event.replace(/\s*\n\s*/g, ' ') })" />
           </label>
           <div class="workflow-experts-grid">
@@ -128,8 +130,8 @@ watch([open, () => entries.value.map((entry) => entry.agent.name).join()], ([sho
               <USelect v-else :model-value="current.agent.model || DEFAULT_MODEL" :items="models(current.agent).items" :loading="models(current.agent).loading"
                 :title="models(current.agent).error || models(current.agent).source" class="w-full" @update:model-value="change_model(current.part, current.agent, $event)" /></label>
             <label class="workflow-experts-field"><span>{{ t('强度') }}</span>
-              <USelect v-if="effort_items(current.agent)" :model-value="current.agent.effort || ''" :items="effort_items(current.agent)" class="w-full"
-                @update:model-value="update(current.part, current.agent.card, { effort: $event })" />
+              <USelect v-if="effort_items(current.agent)" :model-value="current.agent.effort || DEFAULT_EFFORT" :items="effort_items(current.agent)" class="w-full"
+                @update:model-value="update(current.part, current.agent.card, { effort: $event === DEFAULT_EFFORT ? '' : $event })" />
               <span v-else class="workflow-experts-none">{{ t('这个软件不分强度') }}</span></label>
             <label class="workflow-experts-field"><span>{{ t('项目权限') }}</span>
               <USelect :model-value="current.agent.project_access || 'read'" :items="access_items(current.agent)" class="w-full"
@@ -138,7 +140,7 @@ watch([open, () => entries.value.map((entry) => entry.agent.name).join()], ([sho
           </div>
           <label class="workflow-experts-field workflow-experts-prompt">
             <span>{{ t('专属提示词') }}<small>{{ current.agent.system_prompt?.trim() ? t('自定义') : preset_prompt(current.agent) ? t('留空时使用软件预设') : t('留空表示不使用') }}</small></span>
-            <UTextarea :model-value="current.agent.system_prompt || ''" :rows="8" autoresize :maxrows="18" :maxlength="MAX_EXPERT_PROMPT"
+            <UTextarea :model-value="current.agent.system_prompt || ''" :rows="18" :maxlength="MAX_EXPERT_PROMPT"
               :placeholder="preset_prompt(current.agent) || t('只发给这张卡片的成员，每次唤醒随任务发送')"
               @update:model-value="update(current.part, current.agent.card, { system_prompt: $event })" />
           </label>
@@ -175,6 +177,14 @@ watch([open, () => entries.value.map((entry) => entry.agent.name).join()], ([sho
 .workflow-experts-prompt :deep(textarea) { font-family: ui-monospace, SFMono-Regular, Consolas, monospace; font-size: 12px; line-height: 1.6; }
 .workflow-experts-none { display: flex; align-items: center; min-height: 32px; color: var(--ui-text-dimmed); font-size: 12px; }
 .workflow-experts-note { margin: 0 0 8px; color: var(--ui-text-muted); font-size: 12px; }
+/* The dialog keeps one height for every card; the prompt box takes what the window leaves, and only a very short window scrolls. */
+@media (min-width: 641px) {
+  .workflow-experts { flex: 1; grid-template-rows: minmax(0, 1fr); min-height: 0; }
+  .workflow-experts-detail { min-height: 0; overflow-y: auto; }
+  .workflow-experts-prompt { flex: 1; min-height: 160px; }
+  .workflow-experts-prompt :deep(> div) { flex: 1; min-height: 0; }
+  .workflow-experts-prompt :deep(textarea) { height: 100%; }
+}
 @media (max-width: 640px) {
   .workflow-experts { grid-template-columns: minmax(0, 1fr); gap: 14px; min-height: 0; }
   .workflow-experts-list { flex-direction: row; gap: 4px; padding: 0 0 8px; border-right: 0; border-bottom: 1px solid var(--ui-border-muted); overflow-x: auto; overflow-y: hidden; }

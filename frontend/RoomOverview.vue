@@ -310,10 +310,9 @@ const created = computed(() => room.value.created_at ? new Date(room.value.creat
       <div class="overview-directories">
         <template v-if="saved.project_directory">
           <!-- Shaped like the extra directory rows below, but locked: the lock replaces the project picker, copy replaces removal. -->
-          <div class="overview-main-directory">
-            <div class="overview-main-box" :title="t('主目录，设置后不能更改')"><span class="overview-main-prefix"><UIcon name="i-lucide-lock" /></span>
-              <span class="overview-main-path">{{ bridge.display_path(saved.project_directory) }}</span><span class="overview-main-tag">{{ t("主目录") }}</span></div>
-            <UButton v-if="!view.launch.projects_restricted" icon="i-lucide-copy" color="neutral" variant="ghost" size="xs" :aria-label="t('复制项目目录')" :title="t('复制路径')" @click="act('copy', saved.project_directory)" /></div>
+          <div class="overview-main-box" :title="t('主目录，设置后不能更改')"><span class="overview-main-prefix"><UIcon name="i-lucide-lock" /></span>
+            <span class="overview-main-path">{{ bridge.display_path(saved.project_directory) }}</span><span class="overview-main-tag">{{ t("主目录") }}</span>
+            <UButton v-if="!view.launch.projects_restricted" icon="i-lucide-copy" color="neutral" variant="ghost" size="xs" class="self-center" :aria-label="t('复制项目目录')" :title="t('复制路径')" @click="act('copy', saved.project_directory)" /></div>
           <ExtraDirectoriesField v-model="directories_draft" :disabled="!directories_editable || saving_directories" />
         </template>
         <ProjectDirectoryField v-else-if="directories_editable" v-model="main_draft" compact :placeholder="t('为本房间设置项目目录的完整路径')" :disabled="saving_directories" />
@@ -487,7 +486,6 @@ const created = computed(() => room.value.created_at ? new Date(room.value.creat
 .overview-project-head > span { flex-basis: 100%; font-size: 12px; line-height: 1.5; }
 .overview-directories { display: flex; flex-direction: column; gap: 8px; }
 /* Matches ProjectDirectoryField's box so the locked main directory reads as the same kind of row, only dimmer. */
-.overview-main-directory { display: flex; align-items: center; gap: 4px; }
 .overview-main-box { display: flex; flex: 1; align-items: stretch; min-width: 0; min-height: 32px; border: 1px solid var(--ui-border-muted);
   border-radius: 6px; background: color-mix(in srgb, var(--ui-bg) 55%, transparent); cursor: default; }
 .overview-main-prefix { display: inline-flex; flex-shrink: 0; align-items: center; justify-content: center; width: 49px; border-right: 1px solid var(--ui-border-muted); color: var(--ui-text-dimmed); }
