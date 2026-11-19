@@ -354,14 +354,11 @@ const summary = computed(() => {
 
 @media (max-width: 600px) {
   .create-discussion { height: calc(100dvh - 130px); }
-  /* A phone shows as much of the form as it can at once (user 2026-11-18, #4771): tighter spacing, the topic's label beside its box. */
+  /* A phone shows as much of the form as it can at once (user 2026-11-18, #4771): tighter spacing. The topic keeps its label on its own line like the other fields (user 2026-11-19, #5426). */
   .create-scroll { padding: 10px 14px 12px; gap: 12px !important; }
   .create-scroll > .channel-create-location { margin: 0 0 -6px; }
   .create-section { gap: 8px; }
   .create-section + .create-section { padding-top: 12px; }
-  .create-title-field { display: flex; align-items: center; gap: 10px; }
-  .create-title-field > :deep(:first-child) { flex: none; }
-  .create-title-field > :deep(:last-child) { flex: 1; min-width: 0; margin-top: 0; }
   .create-project-field :deep([data-slot="description"]) { display: none; }
   .create-extra-directories { margin-top: 2px; }
   .create-section :deep(.roster-add) { gap: 4px 6px; }

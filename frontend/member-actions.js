@@ -43,7 +43,7 @@ export function member_actions(member, { view, act, describe, external, revoke }
 function external_actions(member, { view, act, describe, external, revoke }) {
   const locked = !view.access?.can_manage;
   return [[
-    { label: external_of(member).pending ? t('邀请链接') : t('读取记录与权限'), icon: "i-lucide-shield-check", disabled: locked, onSelect: () => external?.(member) },
+    { label: external_of(member).pending ? t('邀请详情') : t('读取记录与权限'), icon: "i-lucide-shield-check", disabled: locked, onSelect: () => external?.(member) },
     { label: t('名称与描述'), icon: "i-lucide-user-pen", disabled: locked, onSelect: () => describe(member.name) },
   ], [
     ...(busy(member) ? [{ label: t('停止'), icon: "i-lucide-circle-stop", color: "error", disabled: locked,

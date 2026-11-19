@@ -381,7 +381,7 @@ export default {
   "外网地址正在设置中，请等它完成": "Public address setup is already running; wait for it to finish",
   "准备": "Preparing",
   "启动隧道": "Start tunnel",
-  " if ($env:SC_ICON) { $s.IconLocation=$env:SC_ICON }; $s.Description='启动共议'; $s.Save(); Write-Output $p": " if ($env:SC_ICON) { $s.IconLocation=$env:SC_ICON }; $s.Description='Start CoDiscuss'; $s.Save(); Write-Output $p",
+  "启动共议": "Start CoDiscuss",
   "创建快捷方式失败：{value1}": "Failed to create shortcut: {value1}",
   "还没有“共议”程序：先在 codiscuss setup 里勾选创建桌面快捷方式，或运行 codiscuss launcher": "CoDiscuss launcher not found. Select Create desktop shortcut in codiscuss setup, or run codiscuss launcher.",
   "启动器仅支持 Windows": "The launcher supports Windows only",

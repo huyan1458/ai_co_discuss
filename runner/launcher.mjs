@@ -538,13 +538,45 @@ function installed_script(name) {
   return installed && existsSync(installed) ? installed : join(RUNNER, name);
 }
 
+// IShellLinkW keeps the Chinese file and target names intact. WScript.Shell passes them through the ANSI code page, so on a
+// computer whose non-Unicode language is not Chinese "共议" turns into "??" and Save() fails (test machine, 2026-11-19).
+const SHELL_LINK_SOURCE = `using System; using System.Runtime.InteropServices; using System.Runtime.InteropServices.ComTypes; using System.Text;
+public static class CoShortcut {
+  [ComImport, Guid("00021401-0000-0000-C000-000000000046")] class ShellLink {}
+  [ComImport, InterfaceType(ComInterfaceType.InterfaceIsIUnknown), Guid("000214F9-0000-0000-C000-000000000046")]
+  interface IShellLinkW {
+    void GetPath([Out, MarshalAs(UnmanagedType.LPWStr)] StringBuilder file, int size, IntPtr data, int flags);
+    void GetIDList(out IntPtr list); void SetIDList(IntPtr list);
+    void GetDescription([Out, MarshalAs(UnmanagedType.LPWStr)] StringBuilder name, int size);
+    void SetDescription([MarshalAs(UnmanagedType.LPWStr)] string name);
+    void GetWorkingDirectory([Out, MarshalAs(UnmanagedType.LPWStr)] StringBuilder dir, int size);
+    void SetWorkingDirectory([MarshalAs(UnmanagedType.LPWStr)] string dir);
+    void GetArguments([Out, MarshalAs(UnmanagedType.LPWStr)] StringBuilder args, int size);
+    void SetArguments([MarshalAs(UnmanagedType.LPWStr)] string args);
+    void GetHotkey(out short key); void SetHotkey(short key);
+    void GetShowCmd(out int show); void SetShowCmd(int show);
+    void GetIconLocation([Out, MarshalAs(UnmanagedType.LPWStr)] StringBuilder path, int size, out int index);
+    void SetIconLocation([MarshalAs(UnmanagedType.LPWStr)] string path, int index);
+    void SetRelativePath([MarshalAs(UnmanagedType.LPWStr)] string path, int reserved);
+    void Resolve(IntPtr window, int flags);
+    void SetPath([MarshalAs(UnmanagedType.LPWStr)] string file);
+  }
+  public static void Save(string path, string target, string args, string cwd, string icon, string description) {
+    IShellLinkW link = (IShellLinkW)new ShellLink();
+    link.SetPath(target); link.SetArguments(args); link.SetWorkingDirectory(cwd); link.SetDescription(description);
+    if (!String.IsNullOrEmpty(icon)) link.SetIconLocation(icon, 0);
+    ((IPersistFile)link).Save(path, true);
+  }
+}`;
+
 /** Put a shortcut to the exe in a special folder (Desktop, Programs or Startup); values pass through the environment. */
 function write_shortcut(folder, exe, icon, args = '') {
-  const script = "$d=[Environment]::GetFolderPath($env:SC_FOLDER); $p=Join-Path $d $env:SC_NAME;"
-    + " $s=(New-Object -ComObject WScript.Shell).CreateShortcut($p); $s.TargetPath=$env:SC_TARGET; $s.Arguments=$env:SC_ARGS; $s.WorkingDirectory=$env:SC_CWD;"
-    + t(' if ($env:SC_ICON) { $s.IconLocation=$env:SC_ICON }; $s.Description=\'启动共议\'; $s.Save(); Write-Output $p');
+  const script = "$ErrorActionPreference='Stop'; Add-Type -TypeDefinition $env:SC_SOURCE;"
+    + " $p=Join-Path ([Environment]::GetFolderPath($env:SC_FOLDER)) $env:SC_NAME;"
+    + " [CoShortcut]::Save($p, $env:SC_TARGET, $env:SC_ARGS, $env:SC_CWD, $env:SC_ICON, $env:SC_DESC); Write-Output $p";
   const result = spawnSync('powershell.exe', ['-NoProfile', '-NonInteractive', '-Command', `[Console]::OutputEncoding=[Text.Encoding]::UTF8; ${script}`],
-    { encoding: 'utf8', windowsHide: true, env: { ...process.env, SC_FOLDER: folder, SC_NAME: SHORTCUT_NAME, SC_TARGET: exe, SC_ARGS: args, SC_CWD: dirname(exe), SC_ICON: icon || '' } });
+    { encoding: 'utf8', windowsHide: true, env: { ...process.env, SC_SOURCE: SHELL_LINK_SOURCE, SC_FOLDER: folder, SC_NAME: SHORTCUT_NAME, SC_TARGET: exe,
+      SC_ARGS: args, SC_CWD: dirname(exe), SC_ICON: icon || '', SC_DESC: t('启动共议') } });
   if (result.status !== 0) throw new Error(t('创建快捷方式失败：{value1}', { value1: result.stderr }));
   return result.stdout.trim();
 }

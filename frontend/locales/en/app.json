@@ -149,6 +149,7 @@
   "本机连接链接无效或无法保存，请重新运行连接命令；尚未发送启动请求": "The local connection link is invalid or could not be saved. Run the connection command again. No launch request was sent.",
   "无法连接本机服务：请在这台电脑运行 codiscuss local open，并允许浏览器访问本机网络，再重试原请求": "Cannot connect to the local service. Run codiscuss local open on this computer, allow the browser to access the local network, then retry the original request.",
   "本机启动请求失败": "Local launch request failed",
+  "本机服务返回了无法识别的内容（HTTP {status}）：{excerpt}": "The local service returned an unrecognized response (HTTP {status}): {excerpt}",
   "未知设备": "Unknown device",
   "请在已配对的设备上操作": "Use a paired device",
   "网站上还没有绑定电脑，或电脑的 codiscuss 版本过旧": "No computer is bound to this site, or its codiscuss version is too old",

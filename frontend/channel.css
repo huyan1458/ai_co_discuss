@@ -685,9 +685,15 @@ html[data-theme^="channel"] .channel-round-button:active:not(:disabled) { transf
 }
 .channel-reply-draft { display: flex; gap: 7px; align-items: center; padding: 7px 12px; border-bottom: 1px solid #ffffff0b; color: #c6d1ef; font-size: 12px; background: #2d3038; }
 .channel-reply-draft > button { margin-left: auto; }
+/* Several buttons sit together at the right end instead of spreading across the row (user 2026-11-19, #5432). */
+.channel-reply-draft > button + button { margin-left: 0; }
 .channel-queue-hint > .channel-launch-copy { flex-shrink: 0; gap: 5px; min-height: 28px; padding: 4px 6px; border: 0; border-radius: 4px; background: transparent; box-shadow: none; color: inherit; font-size: 12px; font-weight: 500; white-space: nowrap; }
 .channel-queue-hint > .channel-launch-copy:hover { background: color-mix(in srgb, currentColor 8%, transparent); }
 .channel-launch-copy [data-slot="leadingIcon"] { width: 13px; height: 13px; }
+/* Both labels share one grid cell so switching to "copied" keeps the button width and its neighbours still (user 2026-11-19, #5430). */
+.channel-launch-copy-label { display: grid; }
+.channel-launch-copy-label > span { grid-area: 1 / 1; }
+.channel-launch-copy-label > .is-hidden { visibility: hidden; }
 .channel-composer-note { display: flex; justify-content: space-between; gap: 10px; padding: 7px 4px 0; font-size: 11px; line-height: 16px; color: #929cad; }
 .channel-note-divider { margin-inline: 6px; color: #677181; }
 .channel-draft-length { white-space: nowrap; font-variant-numeric: tabular-nums; color: #858f9f; }

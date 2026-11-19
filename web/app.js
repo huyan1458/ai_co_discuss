@@ -3178,7 +3178,11 @@ async function local_launch_request(action, payload) {
     if (!local_connection) throw error;
     throw new Error(t('无法连接本机服务：请在这台电脑运行 codiscuss local open，并允许浏览器访问本机网络，再重试原请求'));
   }
-  const result = await response.json();
+  // A proxy or tunnel in between may answer with a page instead of JSON; its status says more than the browser's parse error.
+  const raw = await response.text();
+  let result;
+  try { result = JSON.parse(raw); }
+  catch { throw new Error(t('本机服务返回了无法识别的内容（HTTP {status}）：{excerpt}', { status: response.status, excerpt: raw.replace(/<[^>]*>/g, " ").replace(/\s+/g, " ").trim().slice(0, 80) })); }
   if (!response.ok) throw Object.assign(new Error(server_text(result.error_text, result.error) || t('本机启动请求失败')), { launch: result.launch });
   return result;
 }
