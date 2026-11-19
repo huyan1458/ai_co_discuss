@@ -42,13 +42,16 @@ const saved = computed(() => view.value.launch.room_models?.room_id === room.val
  */
 const local_state = computed(() => {
   if (!view.value.launch.available) return { text: t("未连接本机服务，模型与权限暂不可见。") };
-  if (!saved.value || saved.value.loading) return { text: t("正在读取本机配置…") };
+  // A re-read keeps showing the last answer, so only the first read says it is reading.
+  if (!saved.value || (saved.value.loading && !saved.value.participants)) return { text: t("正在读取本机配置…") };
   if (saved.value.error) return { text: t("读取本机配置失败：{error}", { error: saved.value.error }), retry: true };
   return saved.value.registered === false ? { text: t("本机没有登记此房间，模型与权限不可见。") } : null;
 });
 /** An agy member waits for its default model to be read, so its switches stay greyed out until then. */
 const waiting = (name) => Boolean(saved.value?.participants?.[name]?.defaults_pending);
-const switching = ref("");
+// Members whose switch is being saved: the new choice already shows, and only that member's switches wait.
+const switching = ref(new Set());
+const set_switching = (name, on) => { const names = new Set(switching.value); if (on) names.add(name); else names.delete(name); switching.value = names; };
 // The round limit the field shows: the saved one, or the value being saved until the room refreshes.
 const saving_rounds = ref(false), rounds_shown = ref(0);
 watch(() => room.value.free?.max_rounds, (value) => { rounds_shown.value = value || 0; }, { immediate: true });
@@ -166,13 +169,13 @@ function live(member) {
 
 /** Switch a Codex member between App and CLI; its conversation stays. */
 async function switch_adapter(member, adapter) {
-  if (switching.value || access(live(member)).value === adapter) return;
-  switching.value = member.name;
+  if (switching.value.has(member.name) || access(live(member)).value === adapter) return;
+  set_switching(member.name, true);
   try {
     await bridge.set_member_adapter({ name: member.name, adapter });
     bridge.notify("info", t("{name} 已改为 {adapter} 接入，下次处理请求起生效。", { name: bridge.display_name(member.name), adapter: adapter === "codex" ? "App" : "CLI" }));
   } catch (error) { bridge.notify("error", error.message); }
-  finally { switching.value = ""; }
+  finally { set_switching(member.name, false); }
 }
 
 /** Project file access, and whether it can be switched here; anything that cannot says why on hover. */
@@ -189,13 +192,13 @@ function files(member) {
 
 /** Switch one member's project files; the change applies from its next request and keeps its session. */
 async function switch_access(member, project_access) {
-  if (switching.value || files(member).value === project_access) return;
-  switching.value = member.name;
+  if (switching.value.has(member.name) || files(member).value === project_access) return;
+  set_switching(member.name, true);
   try {
     await bridge.set_member_access({ name: member.name, project_access });
     bridge.notify("info", t("{name} 已改为{access}，下次处理请求起生效。", { name: bridge.display_name(member.name), access: access_label(project_access) }));
   } catch (error) { bridge.notify("error", error.message); }
-  finally { switching.value = ""; }
+  finally { set_switching(member.name, false); }
 }
 
 const EFFORT_LABELS = { low: "Low", medium: "Medium", high: "High", xhigh: "Extra High", max: "Max", ultra: "Ultra" };
@@ -209,7 +212,7 @@ function model_editable(member) {
 }
 
 // The member whose model is being changed, with the draft the dialog edits.
-const model_edit = ref(null), model_saving = ref(false);
+const model_edit = ref(null);
 const model_state = computed(() => model_edit.value && bridge.launch_model_state(model_edit.value.name, view.value.launch, model_edit.value.draft));
 // A software that lists no models (a model API) takes a typed model ID and offers its declared effort levels.
 const model_typed = computed(() => model_edit.value && !adapter_profile(model_edit.value.draft.adapter)?.models);
@@ -234,16 +237,17 @@ function pick_model(value) {
   if (!model_state.value?.efforts?.includes(draft.effort)) draft.effort = "";
 }
 
-/** Save the model and effort; they apply from the member's next request and keep its session. */
+/**
+ * Save the model and effort; they apply from the member's next request and keep its session. The dialog closes and the
+ * card shows the choice at once; a refused save puts the old one back and says why.
+ */
 async function save_model() {
   const { name, draft } = model_edit.value;
-  model_saving.value = true;
+  model_edit.value = null;
   try {
     await bridge.set_member_model({ name, model: draft.model, effort: draft.effort });
     bridge.notify("info", t("{name} 的模型与强度已更新，下次处理请求起生效，保留原会话。", { name: bridge.display_name(name) }));
-    model_edit.value = null;
   } catch (error) { bridge.notify("error", error.message); }
-  finally { model_saving.value = false; }
 }
 
 /** The smart scheduler lives in the local registration, so a page without the local service cannot tell. */
@@ -275,7 +279,7 @@ function card_key(member) {
   const identity = bridge.identities[member.name];
   return JSON.stringify([member, live(member), saved.value?.participants?.[member.name], view.value.access, view.value.launch.available, free.value,
     reorderable.value && order.value.movable.includes(member.name), dragged.value === member.name, drop_target.value === member.name,
-    grabbed.value === member.name, switching.value, in_workflow(member.name) && workflow.value.label, room.value.descriptions?.[member.name],
+    grabbed.value === member.name, switching.value.has(member.name), in_workflow(member.name) && workflow.value.label, room.value.descriptions?.[member.name],
     identity?.icon, identity?.initials, identity?.style, bridge.display_name(member.name), bridge.participant_model(member.name, room.value, saved.value),
     bridge.participant_access(member.name, room.value), room.value.session?.status]);
 }
@@ -346,16 +350,16 @@ const created = computed(() => room.value.created_at ? new Date(room.value.creat
             <div><dt>{{ t("接入") }}</dt><dd>
               <div v-if="access(live(member)).value" class="expert-card-modes overview-switch" :class="{ 'is-locked': !access(live(member)).editable }" role="radiogroup" :aria-label="t('{name} 的接入方式', { name: member.name })" :title="access(live(member)).hint">
                 <button v-for="option in CODEX_OPTIONS" :key="option.value" type="button" role="radio" :aria-checked="access(live(member)).value === option.value"
-                  :disabled="!access(live(member)).editable || Boolean(switching)" @click="switch_adapter(member, option.value)">{{ option.label }}</button>
+                  :disabled="!access(live(member)).editable || switching.has(member.name)" @click="switch_adapter(member, option.value)">{{ option.label }}</button>
               </div>
               <span v-else>{{ access(member).text }}</span>
             </dd></div>
             <div><dt>{{ t("模型") }}</dt><dd class="overview-model" :class="{ 'overview-muted': waiting(member.name) }" :title="bridge.participant_model(member.name, room, saved) || undefined"><span>{{ member.access === 'runner' ? bridge.participant_model(member.name, room, saved) || '—' : t('在它自己的会话里设置') }}</span>
               <UButton v-if="model_editable(member)" icon="i-lucide-pencil" size="xs" variant="ghost" color="neutral" :aria-label="t('更改 {name} 的模型与强度', { name: member.name })" :title="t('更改模型与思考强度')" @click="edit_model(member)" /></dd></div>
             <div><dt>{{ t("项目文件") }}</dt><dd>
-              <div v-if="files(member).value" class="expert-card-modes overview-switch" :class="{ 'is-locked': !files(member).editable }" role="radiogroup" :aria-label="t('{name} 的项目文件权限', { name: member.name })" :aria-busy="switching === member.name" :title="files(member).hint || undefined">
+              <div v-if="files(member).value" class="expert-card-modes overview-switch" :class="{ 'is-locked': !files(member).editable }" role="radiogroup" :aria-label="t('{name} 的项目文件权限', { name: member.name })" :aria-busy="switching.has(member.name)" :title="files(member).hint || undefined">
                 <button v-for="option in access_options(saved?.participants?.[member.name]?.adapter, bridge.full_only_hint?.(saved?.participants?.[member.name]?.adapter))" :key="option.value" type="button" role="radio" :aria-checked="files(member).value === option.value" :title="option.hint"
-                  :disabled="option.disabled || !files(member).editable || Boolean(switching)" @click="switch_access(member, option.value)">{{ option.label }}</button>
+                  :disabled="option.disabled || !files(member).editable || switching.has(member.name)" @click="switch_access(member, option.value)">{{ option.label }}</button>
               </div>
               <span v-else class="overview-muted" :title="files(member).hint">{{ files(member).text }}</span>
             </dd></div>
@@ -417,7 +421,7 @@ const created = computed(() => room.value.created_at ? new Date(room.value.creat
           <p v-else class="overview-muted">{{ model_state.effort_note }}</p>
           <div class="overview-model-actions">
             <UButton :label="t('取消')" color="neutral" variant="ghost" @click="model_edit = null" />
-            <UButton type="submit" :label="t('保存')" class="channel-primary-button" :loading="model_saving" />
+            <UButton type="submit" :label="t('保存')" class="channel-primary-button" />
           </div>
         </form>
       </template>

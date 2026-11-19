@@ -5,7 +5,7 @@
  * check that the entry answers here and outside. Safe to run again: what is already done is kept.
  */
 import { spawnSync } from 'node:child_process';
-import { existsSync } from 'node:fs';
+import { existsSync, readFileSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -81,6 +81,11 @@ export async function configure_hosting(home, options, { interactive = Boolean(p
   if (options['public-host']) {
     try {
       const host = tunnel_host(options['public-host']);
+      // As the panel refuses (#5625): accounts reached on the current domain would keep inviting to the old address.
+      const current = String(entry_settings(home).tunnel?.host || '').toLowerCase();
+      let direct = false;
+      try { direct = Object.values(JSON.parse(readFileSync(join(home, 'account-sites.json'), 'utf8'))).some(record => record?.direct); } catch { direct = false; }
+      if (direct && current && current !== host.toLowerCase()) throw new Error(t('还有托管账号经自有域名邀请外部专家，请先在“账号”页关闭它们的“允许邀请外部专家”'));
       const tunnel = await prepare_tunnel({ host, name: options['tunnel-name'], interactive, say });
       Object.assign(changes, { public_url: `https://${host}`, tunnel, tunnel_enabled: true });
       lines.push(t('外网地址 https://{value1}，经 Cloudflare 隧道 {value2} 转到登录入口；隧道独立运行，由管理面板按设置维持', { value1: host, value2: tunnel.name }));

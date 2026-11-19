@@ -376,7 +376,6 @@
   "已允许该账号邀请外部专家": "This account can now invite external experts",
   "已停止该账号邀请外部专家": "This account can no longer invite external experts",
   "允许邀请外部专家": "Allow inviting external experts",
-  "这台电脑未绑定线上网站，请先在“概览 → 本机 → 线上网站”绑定": "This computer is not bound to an online site. Bind it first under Overview → This computer → Online site",
   "扫码配对过的设备可以在外面使用这台电脑": "Devices paired by QR code can use this computer from elsewhere",
   "需先在“本机 → 线上网站”绑定": "Bind under This computer → Online site first",
   "经线上网站中转": "Through the online site",
@@ -388,6 +387,7 @@
   "绑定共议线上网站（形如 https://xxx.pages.dev），不是你的自有域名": "Bind the CoDiscuss online site (like https://xxx.pages.dev), not your own domain",
   "在部署线上网站的电脑上生成（它的管理面板“本机 → 线上网站 → 生成接入码”，或运行 codiscuss admin entry code），只能用一次。就在那台电脑上绑定时，只填站点地址即可。": "Generate it on the computer that deployed the online site (its management panel: This computer → Online site → Generate access code, or run codiscuss admin entry code); each code works once. On that computer itself, the site address alone is enough.",
   "发给要绑定的电脑，在它的管理面板“本机 → 线上网站 → 绑定”里粘贴。只能用一次；再生成一个会让之前没用过的作废。": "Send it to the computer to bind and paste it in its management panel under This computer → Online site → Bind. It works once; generating another voids any unused earlier one.",
-  "打开后自动替这个账号绑定线上网站，它就能在房间里邀请另一台电脑上的 AI": "Turning this on binds the account to the online site for it, so it can invite AI on other computers into its rooms",
-  "不需要域名：经共议线上网站中转到这台电脑，手机和外地的电脑都能打开。": "No domain needed: relayed through the CoDiscuss online site to this computer, so phones and computers elsewhere can open it."
+  "不需要域名：经共议线上网站中转到这台电脑，手机和外地的电脑都能打开。": "No domain needed: relayed through the CoDiscuss online site to this computer, so phones and computers elsewhere can open it.",
+  "打开后，这个账号就能在房间里邀请另一台电脑上的 AI；关闭再打开后，之前加入的外部专家需要重新邀请": "Turned on, this account can invite AI on other computers into its rooms; after turning it off and on again, external experts who joined must be invited again",
+  "需要先开启托管账号入口的自有域名，或在“概览 → 本机 → 线上网站”绑定线上网站": "Turn on your own domain for the hosted account entry, or bind an online site under Overview → This computer → Online site, first"
 }

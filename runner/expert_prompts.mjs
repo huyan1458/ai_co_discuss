@@ -192,7 +192,7 @@ export function free_task_text({ name, discussion, discussion_request, profile, 
   const quick = `问候、致谢等简单消息可跳过技能：${cli} message view 上面的消息编号${access} 看原文，${cli} message post --body "回答"${access} 回复（${INLINE_BODY_RULE}）。`;
   const opening = `${wake_opening(requests, name, discussion)}，对应消息 ${messages}。`;
   // Choosing a sub-workflow was left to the host's memory and got skipped, so every host task now asks for it (#4487).
-  const route = workflow ? '本房间启用了工作流：派活或改文件之前，先读 workflow.skill_path，把这次请求对照主线和 workflow.sub_workflows 每一项的 description；命中就读它的 SKILL.md 并照做，不问要不要用，回答开头写明走的哪条；都不命中就写明按普通请求处理。' : '';
+  const route = workflow ? '本房间启用了工作流：派活或改文件之前，先读 workflow.skill_path，把这次请求对照主线和 workflow.sub_workflows 每一项的 description；命中就读它的 SKILL.md 并照做，不问要不要用，回答开头用一句话写明走的哪条；都不命中就按普通请求处理，回答里不必说明。' : '';
   // A message with files is never a mere greeting: the quick path would skip them (2026-11-14, #3143); nor is a
   // hand-back, notice, Goal or host assignment, so the shortcut only goes with a user's own message (#3145 四.5).
   const prompt = files || !from_user(requests)

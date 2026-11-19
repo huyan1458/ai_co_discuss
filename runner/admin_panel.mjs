@@ -24,6 +24,7 @@ import { API_PROVIDERS, save_api_key } from './discussion_api.mjs';
 import { STT_PROVIDERS, TTS_PROVIDERS } from './tts_providers.mjs';
 import { ensure_tunnel, start_tunnel_setup, tunnel_setup_state, tunnel_status } from './hosting_tunnel.mjs';
 import { machine_links } from './remote_launch.mjs';
+import { DIRECT_ACCOUNTS_FILE } from '../gateway/direct.mjs';
 import { apply_login, cancel_login, LOGIN_METHODS, login_progress, login_status, logout, start_login, submit_login } from './cli_login.mjs';
 import { clear_instance_flag, create_os_user, install_shared_runtime, instance_key_file, place_instance_key, read_os_users, remove_os_user, run_as_user, shared_cli_state, shared_executables, shared_paths,
   start_instance_as_user } from './os_users.mjs';
@@ -741,7 +742,10 @@ export function create_panel({ data, key, port, ops = {}, sessions = new Set() }
       return op.entry_overview(data);
     }
     // How people outside reach the entry, the relay's entry address, and binding this computer to an online site.
-    if (method === 'POST' && section === 'entry' && name === 'way') return op.set_entry_way(data, String(body.way || ''), body.enabled === true);
+    if (method === 'POST' && section === 'entry' && name === 'way') {
+      if (body.way === 'tunnel' && body.enabled !== true) keep_direct_domain(data);
+      return op.set_entry_way(data, String(body.way || ''), body.enabled === true);
+    }
     if (method === 'POST' && section === 'entry' && name === 'relay') return op.set_relay_url(data, body.url);
     // The access code: made on the computer that deployed the online site, pasted on a hosting computer.
     if (method === 'GET' && section === 'site' && name === 'code') return { ...deploy_settings(data), site: deploy_settings(data).site || bound_site(data)?.site || '' };
@@ -750,6 +754,8 @@ export function create_panel({ data, key, port, ops = {}, sessions = new Set() }
     // The outside address: a Cloudflare tunnel set up by a job of its own (it waits for the owner in the browser).
     if (section === 'tunnel' && name === 'setup') {
       if (method === 'GET') return tunnel_setup_state(data);
+      // Another domain would leave the accounts reached through this one with invites to the old address.
+      if (method === 'POST' && String(body.host || '').toLowerCase() !== String(entry_settings(data).tunnel?.host || '').toLowerCase()) keep_direct_domain(data);
       if (method === 'POST') return op.start_tunnel_setup(data, body.host, body.name);
     }
     if (method === 'POST' && section === 'entry' && name === 'settings') { save_entry_settings(data, { public_url: body.public_url }); return op.entry_overview(data); }
@@ -1043,7 +1049,8 @@ function disconnect_site(data) {
   const bound = bound_site(data);
   if (!bound) return { disconnected: '' };
   if (entry_settings(data).relay_enabled) throw panel_error('托管账号入口的线上网站还开着，请先关闭它');
-  if (Object.keys(read_account_sites(data)).length) throw panel_error('还有托管账号开着“允许邀请外部专家”，请先在“账号”页关闭');
+  // Accounts reached on the owner's domain do not use the online site; only the ones bound to it hold it (#5617).
+  if (Object.values(read_account_sites(data)).some(record => !record.direct)) throw panel_error('还有托管账号开着“允许邀请外部专家”，请先在“账号”页关闭');
   save_site_connection(data, bound.site);
   return { disconnected: bound.site };
 }
@@ -1064,12 +1071,20 @@ function read_account_sites(data) {
  * under the cap comes back; a failure stops here for a retry), then the account's own binding is removed. An account
  * being removed lets go of the record whatever happens. Off by default.
  */
-async function set_account_external(data, name, on, bind = bind_account_site, { removing = false } = {}) {
+async function set_account_external(data, name, on, bind = bind_account_site, { removing = false, direct = direct_account_site } = {}) {
   const sites = read_account_sites(data);
   const save = () => write_settings(join(data, ACCOUNT_SITES_FILE), sites);
   if (!on) {
     const record = sites[name];
     if (!record) return { external: false };
+    if (record.direct) {
+      // Reached on the owner's domain: the entry stops answering for it first, then its direct identity goes.
+      write_direct_accounts(data, Object.fromEntries(Object.entries(read_direct_accounts(data)).filter(([, account]) => account !== name)));
+      try { await direct(data, name, { site: record.site, remove: true }); } catch (error) { if (!removing) throw error; }
+      delete sites[name];
+      save();
+      return { external: false };
+    }
     // The site's slot first: a failure stops here so it can be retried, never leaving a slot held with nothing bound.
     // An account being removed lets go of the record whatever happens, or the owner could never unbind afterwards.
     try { await release_account_site(data, record); } catch (error) { if (!removing) throw error; }
@@ -1077,6 +1092,24 @@ async function set_account_external(data, name, on, bind = bind_account_site, { 
     delete sites[name];
     save();
     return { external: false };
+  }
+  // With the owner's domain on, external members reach the account through it, never the online relay (#5588).
+  const settings = entry_settings(data);
+  const wants_direct = Boolean(settings.tunnel_enabled && settings.tunnel?.host);
+  // Already on: the same way stays; the other way is turned off first, so no slot or identity is left behind (#5617).
+  if (sites[name]) {
+    if (Boolean(sites[name].direct) === wants_direct) return { external: true, site: sites[name].site };
+    await set_account_external(data, name, false, bind, { direct });
+    delete sites[name];
+  }
+  if (wants_direct) {
+    const site = `https://${settings.tunnel.host}`;
+    const result = await direct(data, name, { site });
+    if (!/^[0-9a-f]{32}$/.test(String(result.machine || ''))) throw panel_error('没有建立直连身份');
+    write_direct_accounts(data, { ...Object.fromEntries(Object.entries(read_direct_accounts(data)).filter(([, account]) => account !== name)), [result.machine]: name });
+    sites[name] = { site, machine: result.machine, direct: true, at: Date.now() };
+    save();
+    return { external: true, site };
   }
   const bound = bound_site(data);
   if (!bound) throw panel_error('这台电脑未绑定线上网站，请在管理面板“本机 → 线上网站”处绑定');
@@ -1095,6 +1128,30 @@ async function set_account_external(data, name, on, bind = bind_account_site, { 
   sites[name] = { site: bound.site, machine: result.machine || '', at: Date.now() };
   save();
   return { external: true, site: bound.site };
+}
+
+/** Refuse a change to the owner's domain while accounts are reached through it: their members would be cut off (#5617). */
+function keep_direct_domain(data) {
+  if (Object.values(read_account_sites(data)).some(record => record.direct)) {
+    throw panel_error('还有托管账号经自有域名邀请外部专家，请先在“账号”页关闭它们的“允许邀请外部专家”');
+  }
+}
+
+/** Which computer id is which account on the owner's domain, for the sign-in entry (gateway/direct.mjs). */
+function read_direct_accounts(data) {
+  try { return JSON.parse(readFileSync(join(data, DIRECT_ACCOUNTS_FILE), 'utf8')); } catch { return {}; }
+}
+function write_direct_accounts(data, mapping) {
+  write_settings(join(data, DIRECT_ACCOUNTS_FILE), mapping);
+}
+
+/** Create or remove an account's direct identity, as its own Windows user when it has one (the identity is sealed for it). */
+async function direct_account_site(data, name, { site, remove = false }) {
+  const home = instance_home(data, name);
+  if (read_os_users(data)[name]) return account_env(data, name, 'direct', { home, site, remove });
+  const { create_direct_link, remove_direct_link } = await import('./remote_launch.mjs');
+  if (remove) { remove_direct_link(home); return { ok: true }; }
+  return { machine: create_direct_link(home, site).id };
 }
 
 /** Ask the online site to let go of an account's computer; a site without this (older) or without it any more is done. */

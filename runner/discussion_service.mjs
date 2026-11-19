@@ -742,7 +742,7 @@ export async function run_service(home, output = () => {}) {
   service.push = true;
   const stop_path = join(home, 'stop.request');
   if (existsSync(stop_path)) unlinkSync(stop_path);
-  let stopped = false, syncing = null, relaying = null, channels = null, receiving = null, updating_pi = null, pi_checked = false;
+  let stopped = false, syncing = null, relaying = null, channels = null, direct = null, receiving = null, updating_pi = null, pi_checked = false;
   const relay_stop = new AbortController();
   const stop = () => { stopped = true; relay_stop.abort(); };
   process.once('SIGINT', stop);
@@ -756,6 +756,9 @@ export async function run_service(home, output = () => {}) {
     const { start_relay_channels } = await import('./relay_channel.mjs');
     if ((await import('./admin_account.mjs')).remove_legacy_admin_accounts(home)) log_line('已删除旧版本明文保存的管理员密码文件 admin-accounts.json');
     channels = start_relay_channels(home, { log: log_line, signal: relay_stop.signal });
+    // A hosted account reached on its owner's domain answers external members here instead of over the relay (#5588).
+    direct = (await import('./direct_entry.mjs')).direct_receiver(home, { log: log_line });
+    direct.refresh();
     // Rooms on other computers this one was invited to: pull the requests named for its AI (runner/external_client.mjs).
     (await import('./external_client.mjs')).start_external_client(home, { log: log_line, signal: relay_stop.signal });
     // The owner's Weixin replies come back here and go to the room their notice came from.
@@ -791,6 +794,7 @@ export async function run_service(home, output = () => {}) {
       if (!syncing && Date.now() - synced_at >= REMOTE_SYNC_MS) {
         synced_at = Date.now();
         channels.refresh();
+        direct.refresh();
         syncing = sync_remote_launches(home, { log: log_line, throttle: true }).catch(error => log_line(`远程启动检查失败：${error.message}`))
           .finally(() => { syncing = null; });
       }
@@ -806,6 +810,7 @@ export async function run_service(home, output = () => {}) {
     }
   } finally {
     relay_stop.abort();
+    direct?.close();
     await Promise.all([syncing, relaying, channels?.done(), receiving, updating_pi]);
     await service.close();
     if (existsSync(stop_path)) unlinkSync(stop_path);

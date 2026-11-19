@@ -1834,32 +1834,44 @@ async function allow_denials({ name, rules }) {
   await local_launch_request("room-member-allow", { room_id, token: localStorage.getItem(`discuss-access:${room_id}`), name, rules });
 }
 
-/** Switch a woken member's project files between read-only and writable; the local service applies it from its next run. */
-async function set_member_access({ name, project_access }) {
+/**
+ * Save one choice of a woken member (project files, model and effort, App or CLI) on this computer. The page shows
+ * the new choice at once and the save runs behind it; a refused save puts the old choice back and throws.
+ * @param {string} command The local service's command.
+ * @param {string} name The member.
+ * @param {object} choice The changed fields of its saved profile, also sent as the command's payload.
+ */
+async function save_member_choice(command, name, choice) {
   const room_id = state.room.id;
-  await local_launch_request("room-member-access", { room_id, token: localStorage.getItem(`discuss-access:${room_id}`), name, project_access });
+  const saved = state.launch.room_models?.room_id === room_id ? state.launch.room_models : null;
+  const before = saved?.participants?.[name];
+  const show = (profile) => {
+    if (!before || state.launch.room_models?.room_id !== room_id || !state.launch.room_models.participants?.[name]) return;
+    state.launch.room_models.participants = { ...state.launch.room_models.participants, [name]: profile };
+    publish_view();
+  };
+  show({ ...before, ...choice });
+  try { await local_launch_request(command, { room_id, token: localStorage.getItem(`discuss-access:${room_id}`), name, ...choice }); }
+  catch (error) { show(before); throw error; }
   if (state.room?.id !== room_id) return;
-  // The saved choices are cached per runtime revision, which this change leaves alone.
-  state.launch.room_models = null;
+  // The saved choices are cached per runtime revision, which this change leaves alone; what is shown stays while they are read again.
+  if (state.launch.room_models?.room_id === room_id) state.launch.room_models = { ...state.launch.room_models, revision: "", loading: false };
   await load_room_models();
+}
+
+/** Switch a woken member's project files between read-only and writable; the local service applies it from its next run. */
+function set_member_access({ name, project_access }) {
+  return save_member_choice("room-member-access", name, { project_access });
 }
 
 /** Change a woken CLI member's model and effort; the local service applies them from its next run and keeps its session. */
-async function set_member_model({ name, model, effort }) {
-  const room_id = state.room.id;
-  await local_launch_request("room-member-model", { room_id, token: localStorage.getItem(`discuss-access:${room_id}`), name, model, effort });
-  if (state.room?.id !== room_id) return;
-  state.launch.room_models = null;
-  await load_room_models();
+function set_member_model({ name, model, effort }) {
+  return save_member_choice("room-member-model", name, { model, effort });
 }
 
 /** Switch an idle Codex member between the App and the CLI; its conversation stays. */
-async function set_member_adapter({ name, adapter }) {
-  const room_id = state.room.id;
-  await local_launch_request("room-member-adapter", { room_id, token: localStorage.getItem(`discuss-access:${room_id}`), name, adapter });
-  if (state.room?.id !== room_id) return;
-  state.launch.room_models = null;
-  await load_room_models();
+function set_member_adapter({ name, adapter }) {
+  return save_member_choice("room-member-adapter", name, { adapter });
 }
 
 /** The open room as the page shows it: a member being removed is already gone while the site confirms. */
@@ -4171,8 +4183,7 @@ async function load_room_models() {
     && (previous.loading || previous.participants)) return;
   // The last answer stays on screen while the new one is read.
   const same_room = previous?.room_id === room.id;
-  const current = { room_id: room.id, revision, loading: true, participants: same_room ? previous.participants : null,
-    project_directory: same_room ? previous.project_directory : "", extra_directories: same_room ? previous.extra_directories : [] };
+  const current = { participants: null, project_directory: "", extra_directories: [], ...(same_room ? previous : {}), room_id: room.id, revision, loading: true, error: "" };
   const preloaded = preloaded_room_models.get(room.id);
   preloaded_room_models.delete(room.id);
   if (preloaded) Object.assign(current, room_models_fields(preloaded), { loading: false });
@@ -4321,8 +4332,12 @@ function participant_model(name, room, saved) {
   const default_effort = profile.adapter === "antigravity_cli" && model !== profile.default_model ? "" : profile.default_effort;
   const effort = (app ? profile.actual_effort : profile.actual_effort || profile.effort || default_effort) || t('默认');
   const shown = model === t('默认') && effort === t('默认') ? t('默认') : `${model} · ${effort}`;
-  return !app && profile.actual_model && profile.model && profile.model !== profile.actual_model
-    ? t('{shown}（设置为 {model}）', { shown, model: profile.model }) : shown;
+  if (app || !profile.actual_model) return shown;
+  if (profile.model) return profile.model !== profile.actual_model ? t('{shown}（设置为 {model}）', { shown, model: profile.model }) : shown;
+  // Left to the software's default: only a default read as a model ID (by asking the software) can be told from what last ran.
+  const follows = window.discuss_backup?.adapter_profile(profile.adapter)?.defaults_by_query && profile.default_model;
+  return follows && profile.default_model !== profile.actual_model
+    ? t('{shown}（设置为 {model}）', { shown, model: t('软件默认 · {value1}', { value1: profile.default_model }) }) : shown;
 }
 
 /** A woken member's project files as 只读 / 可写; empty when the site does not decide them (App, its own agy project, a taken-over manual member, unread settings). */

@@ -15,6 +15,8 @@
  *   status   the skills installed, the prompt, and whether the layout is complete.
  *   skills   install the skill folders in <job>/skills/ (replacing a copy of the same name) and remove request.remove.
  *   prompt   write request.prompt as the system prompt of all three.
+ *   direct   create (request.site, the owner's domain) or remove (request.remove) the direct identity of the service
+ *            home request.home, with which external members reach this account on that domain; sealed for this user.
  *   site     bind the service home request.home to the online site request.site with the one-time child token
  *            request.setup_key, or remove that binding (request.unbind); the binding file is sealed for this user.
  */
@@ -153,13 +155,20 @@ async function site(request) {
   return { machine: await bind_machine(request.home, request.site, request.setup_key) };
 }
 
+/** Create or remove this user's direct identity; the panel records which computer id is which account. */
+async function direct(request) {
+  const { create_direct_link, remove_direct_link } = await import('./remote_launch.mjs');
+  if (request.remove) { remove_direct_link(request.home); return { ok: true }; }
+  return { machine: create_direct_link(request.home, request.site).id };
+}
+
 async function main() {
   const [action, job] = process.argv.slice(2);
   const path = join(job, 'request.json');
   const request = existsSync(path) ? JSON.parse(readFileSync(path, 'utf8')) : {};
   // The job folder is the owner's; the request goes when the owner removes it.
   try { rmSync(path, { force: true }); } catch { /* removed with the job folder */ }
-  const run = { init, status, skills: () => skills(job, request), prompt, site }[action];
+  const run = { init, status, skills: () => skills(job, request), prompt, site, direct }[action];
   if (!run) throw new Error(`未知操作：${action}`);
   process.stdout.write(`${JSON.stringify(await run(request))}\n`);
 }

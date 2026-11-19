@@ -147,10 +147,10 @@ async function copy(text) {
           <div class="panel-tile"><UIcon name="i-lucide-user-plus" /></div>
           <div class="panel-main">
             <div class="panel-title">{{ t('允许邀请外部专家') }}</div>
-            <span class="panel-sub">{{ state.online_site || account.external ? t('打开后自动替这个账号绑定线上网站，它就能在房间里邀请另一台电脑上的 AI') : t('这台电脑未绑定线上网站，请先在“概览 → 本机 → 线上网站”绑定') }}</span>
+            <span class="panel-sub">{{ state.online_site || state.entry?.tunnel_enabled || account.external ? t('打开后，这个账号就能在房间里邀请另一台电脑上的 AI；关闭再打开后，之前加入的外部专家需要重新邀请') : t('需要先开启托管账号入口的自有域名，或在“概览 → 本机 → 线上网站”绑定线上网站') }}</span>
           </div>
           <div class="panel-side">
-            <USwitch :model-value="Boolean(account.external)" :loading="busy === 'external'" :disabled="Boolean(busy) || (!state.online_site && !account.external)" :aria-label="t('允许邀请外部专家')" @update:model-value="set_external" />
+            <USwitch :model-value="Boolean(account.external)" :loading="busy === 'external'" :disabled="Boolean(busy) || (!state.online_site && !state.entry?.tunnel_enabled && !account.external)" :aria-label="t('允许邀请外部专家')" @update:model-value="set_external" />
           </div>
         </div>
       </div>

@@ -83,7 +83,7 @@ export function bridge_token(home, site) {
 }
 
 /** Encrypt a compressed answer bound to its request, so the website cannot swap one answer into another request. */
-async function seal_compressed(key, value, label) {
+export async function seal_compressed(key, value, label) {
   const iv = crypto.getRandomValues(new Uint8Array(12));
   const data = await crypto.subtle.encrypt({ name: 'AES-GCM', iv, additionalData: new TextEncoder().encode(label) }, key,
     gzipSync(Buffer.from(JSON.stringify(value))));

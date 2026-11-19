@@ -81,7 +81,7 @@ function with_registry(home, task) {
 }
 
 /** Read the registry without changing it. */
-function read_registry(home) {
+export function read_registry(home) {
   const file = join(home, REGISTRY_FILE);
   const registry = existsSync(file) ? JSON.parse(readFileSync(file, 'utf8')) : {};
   registry.invites ||= {}; registry.externals ||= {};
@@ -180,9 +180,14 @@ function membership_end(duration, now) {
   return Math.floor((now + HOUR_MS) / 1000);
 }
 
-/** Pick the online site an invite names: the one asked for, or the only one this computer is bound to. */
+/**
+ * Pick the site an invite names: the one asked for, else this account's own domain when it is reached directly (#5588),
+ * else the only online site this computer is bound to.
+ */
 async function invite_site(home, site_url) {
-  const { keyed_links } = await import('./remote_launch.mjs');
+  const { direct_link, keyed_links } = await import('./remote_launch.mjs');
+  const direct = direct_link(home);
+  if (direct && (!site_url || site_url === direct.site)) return { site: direct.site, link: direct };
   const sites = Object.entries(keyed_links(home).sites);
   const found = site_url ? sites.find(([origin]) => origin === site_url) : sites.length === 1 ? sites[0] : null;
   if (!found) throw sites.length ? new GatewayError(400, '这台电脑绑定了多个线上网站，请指定邀请使用的网站', {}, 'site_required')
@@ -360,6 +365,8 @@ async function redeem(home, ctx, id, sealed, request) {
   let external_id;
   try { external_id = device_id_of(public_key); } catch { throw new GatewayError(400, '外部成员公钥须为 P-256'); }
   if (!await verify_signature(public_key, sealed.signature, `${id}\n${sealed.body}`)) throw new GatewayError(400, '外部成员签名无效', {}, 'bad_signature');
+  // Only a signed redemption is remembered against replay: unsigned ones, which anyone can make, never grow that record.
+  claim_relayed_command(home, id, request.sent_at);
   if (typeof platform !== 'string' || !/^[A-Za-z]{2,20}$/.test(platform)) throw new GatewayError(400, '请说明派来的是哪个 AI');
   const previous = read_registry(home).externals[external_id];
   if (previous) {
@@ -527,7 +534,6 @@ export async function answer_external(home, ctx, id, sealed) {
       request = JSON.parse(sealed.body);
       if (request.action !== 'external-redeem') throw new GatewayError(403, '该操作不对外部成员开放', {}, 'action_forbidden');
       if (request.machine !== ctx.machine_id) throw new GatewayError(403, '这条请求是发给另一台电脑的', {}, 'wrong_machine');
-      claim_relayed_command(home, id, request.sent_at);
       response = await redeem(home, ctx, id, sealed, request);
     } else {
       const opened = await open_external(home, id, sealed, ctx.machine_id);

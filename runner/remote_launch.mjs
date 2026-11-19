@@ -118,6 +118,37 @@ export function machine_link(home, site) {
   return { id, token, name };
 }
 
+/**
+ * The direct identity of a hosted account whose computer is reached on its owner's domain (#5588): an id, a token and
+ * both key pairs like a site's, kept in the same sealed file but outside `sites`, so syncing, the relay and command
+ * polling never use it. Only invites and the direct receiver (runner/direct_entry.mjs) do. Null when there is none.
+ */
+export function direct_link(home) {
+  return machine_links(home).direct || null;
+}
+
+/** Create (or keep, for the same address) the direct identity for `site`, the owner's domain; returns its public part. */
+export function create_direct_link(home, site) {
+  const origin = new URL(site).origin;
+  const links = machine_links(home);
+  if (links.direct?.site !== origin) {
+    links.direct = { site: origin, id: randomUUID().replaceAll('-', ''), token: randomBytes(MACHINE_TOKEN_BYTES).toString('hex'),
+      name: (hostname() || '本机').slice(0, MACHINE_NAME_MAX), ...command_keys() };
+    mkdirSync(home, { recursive: true, mode: 0o700 });
+    save_machine_links(home, links);
+  }
+  const { id, public_key, sign_public_key } = links.direct;
+  return { id, site: origin, public_key, sign_key: sign_public_key };
+}
+
+/** Forget the direct identity; invites issued with it stop working. */
+export function remove_direct_link(home) {
+  const links = machine_links(home);
+  if (!links.direct) return;
+  delete links.direct;
+  save_machine_links(home, links);
+}
+
 /** Forget a site's pairing so it can no longer hand launches to this computer. */
 export function unlink_machine(home, site) {
   const links = machine_links(home);

@@ -543,3 +543,31 @@ test('one switch lets a hosted account invite external experts: the panel binds 
     'turning it off gives the slot on the site back');
   assert.equal(machine_links(instance_home(data, 'demo')).sites[site], undefined);
 });
+
+test('with the owner\'s domain on, the switch gives the account a direct identity instead of the online site', async () => {
+  const { direct_link } = await import('../runner/remote_launch.mjs');
+  const { data, ops } = fixture();
+  writeFileSync(join(data, 'gateway-settings.json'), JSON.stringify({ tunnel: { name: 'n', host: 'codiscuss.example', id: 'i', credentials: 'c' }, tunnel_enabled: true }));
+  const real = globalThis.fetch, outside = [];
+  globalThis.fetch = async (url, init) => { if (!String(url).startsWith('http://127.0.0.1')) outside.push(String(url)); return real(url, init); };
+  after(() => { globalThis.fetch = real; });
+  const { request } = await serve(data, ops);
+  const cookie = (await request('/enter?key=owner-key')).headers.get('set-cookie').split(';')[0];
+  const post = async (path, body = {}) => { const answer = await request(`/api/${path}`, { cookie, body }); return { status: answer.status, body: await answer.json() }; };
+  const turned = await post('accounts/demo/external', { on: true });
+  assert.deepEqual(turned.body, { external: true, site: 'https://codiscuss.example' }, turned.body.error);
+  assert.deepEqual(outside, [], 'no online site is asked');
+  const link = direct_link(instance_home(data, 'demo'));
+  assert.equal(link.site, 'https://codiscuss.example');
+  assert.deepEqual(JSON.parse(readFileSync(join(data, 'direct-accounts.json'), 'utf8')), { [link.id]: 'demo' }, 'the entry learns which id is which account');
+  assert.deepEqual((await post('accounts/demo/external', { on: true })).body, { external: true, site: 'https://codiscuss.example' }, 'turning it on again keeps the same way');
+  assert.equal(direct_link(instance_home(data, 'demo')).id, link.id);
+  // The domain stays while accounts are reached through it; the online site is not held by them.
+  assert.match((await post('entry/way', { way: 'tunnel', enabled: false })).body.error, /允许邀请外部专家/);
+  assert.match((await post('tunnel/setup', { host: 'other.example', name: 'n' })).body.error, /允许邀请外部专家/);
+  writeFileSync(join(data, 'machine-links.json'), JSON.stringify({ sites: { 'https://site.example': { id: 'f'.repeat(32), private_key: 'key', token: 'b'.repeat(64) } } }));
+  assert.deepEqual((await post('site/disconnect')).body, { disconnected: 'https://site.example' });
+  assert.deepEqual((await post('accounts/demo/external', { on: false })).body, { external: false });
+  assert.equal(direct_link(instance_home(data, 'demo')), null);
+  assert.deepEqual(JSON.parse(readFileSync(join(data, 'direct-accounts.json'), 'utf8')), {});
+});

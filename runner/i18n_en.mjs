@@ -509,6 +509,8 @@ export default {
   "这台电脑未绑定线上网站，请在管理面板“本机 → 线上网站”处绑定": "This computer is not bound to an online site. Bind it under This computer → Online site in the management panel.",
   "还有托管账号开着“允许邀请外部专家”，请先在“账号”页关闭": "Some hosted accounts still allow inviting external experts; turn that off on the Accounts page first",
   "{value1} 的线上网站版本过旧，请部署方更新线上网站后再试": "The online site at {value1} is too old; ask whoever deploys it to update it, then try again",
+  "还有托管账号经自有域名邀请外部专家，请先在“账号”页关闭它们的“允许邀请外部专家”": "Some hosted accounts invite external experts through your own domain; turn off Allow inviting external experts for them on the Accounts page first",
+  "没有建立直连身份": "The direct identity was not created",
   "绑定令牌已过期，请重试": "The binding token expired; try again",
   "线上网站没有释放这个账号：{value1}": "The online site did not release this account: {value1}",
   "请先关闭该账号的“允许邀请外部专家”，再更改隔离": "Turn off Allow inviting external experts for this account before changing its isolation",

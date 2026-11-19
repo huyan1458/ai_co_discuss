@@ -18,6 +18,7 @@ import { fileURLToPath, pathToFileURL } from 'node:url';
 import { parseArgs } from 'node:util';
 
 import { ENTRY_KEY_PATTERN, verified_connection } from '../runner/entry_client.mjs';
+import { create_direct } from './direct.mjs';
 import { login_page } from './login_page.mjs';
 
 const SESSION_COOKIE = 'codiscuss_entry';
@@ -417,6 +418,8 @@ export function instance_key(data, name) {
 export function create_gateway({ data, now = Date.now }) {
   const sessions = load_sessions(data, now());
   const failures = new Map();
+  // External members' computers reach hosted accounts on the owner's domain without the online relay (#5588).
+  const direct = create_direct({ data, read_accounts, entry_settings, instance_home, now });
   const save_sessions = () => write_json(join(data, SESSIONS_FILE), Object.fromEntries(sessions));
 
   /** The account a request's session still grants, or null; a session that no longer grants access is dropped. */
@@ -462,6 +465,7 @@ export function create_gateway({ data, now = Date.now }) {
       return send(response, 303, { Location: LOGIN_PATH, 'Set-Cookie': cookie_header(request, '', 0) });
     }
     const account = account_of(request);
+    if (await direct(request, response, Boolean(account))) return;
     // The site asks this to tell a page opened through the entry from one opened at the instance itself.
     if (path === SESSION_PATH && request.method === 'GET') return account ? send_json(response, 200, { signed_in: true }) : send_json(response, 401, { error: '请先登录' });
     if (account) return forward(request, response, account.port, { protected: account.protected === true, key: account.protected === true ? instance_key(data, account.name) : '' });
