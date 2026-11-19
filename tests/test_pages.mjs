@@ -499,3 +499,94 @@ test('the online site tells a hosting computer where its entry Worker is', async
   assert.deepEqual(await ask({ ENTRY_URL: 'https://codiscuss-entry.example.workers.dev' }), { entry_url: 'https://codiscuss-entry.example.workers.dev' });
   assert.deepEqual(await ask({}), { entry_url: '' }, 'a site deployed without one says so');
 });
+
+test('an idle computer sends its state once per heartbeat, and at once when its device list changes', async t => {
+  const { sync_remote_launches } = await import('../runner/remote_launch.mjs');
+  const { list_devices, revoke_device } = await import('../runner/device_auth.mjs');
+  const f = await bound_fixture(t);
+  const sent = [], inner = globalThis.fetch;
+  globalThis.fetch = (url, options) => {
+    if (String(url).endsWith('/sync')) sent.push(JSON.parse(options.body));
+    return inner(url, options);
+  };
+  await sync_remote_launches(f.home, { throttle: true });
+  assert.equal(sent.length, 0, 'nothing changed within the heartbeat the website asked for');
+  const before = JSON.parse(f.sql.prepare('SELECT body FROM machine_devices').get().body).issued_at;
+  revoke_device(f.home, list_devices(f.home).devices[0].id);
+  await sync_remote_launches(f.home, { throttle: true });
+  assert.equal(sent.length, 1, 'a revoked device goes out on the next round');
+  const list = JSON.parse(sent[0].devices.body);
+  assert.deepEqual(list.devices, []);
+  assert.ok(list.issued_at > before, 'issued_at moves when the content changes');
+  await sync_remote_launches(f.home);
+  assert.equal(sent[1].devices.body, sent[0].devices.body, 'an unchanged list keeps its issued_at and signature');
+});
+
+test('the website stores a device list only when its content changes, and only then tells the relay', async t => {
+  const { keyed_links } = await import('../runner/remote_launch.mjs');
+  const f = await bound_fixture(t);
+  const told = [];
+  f.env.RELAY = { idFromName: name => name, get: () => ({ fetch: async (url, init) => { told.push(JSON.parse(init.body)); return new Response('{}'); } }) };
+  const link = keyed_links(f.home).sites['https://discussion.test'];
+  const stored = () => f.sql.prepare('SELECT body FROM machine_devices WHERE machine_id=?').get(f.machine_id).body;
+  const key = await crypto.subtle.importKey('jwk', link.sign_private_key, { name: 'ECDSA', namedCurve: 'P-256' }, false, ['sign']);
+  let issued = Date.now() + 1000;
+  // An older computer re-signs the same list with a newer issued_at on every heartbeat.
+  const sync = async (devices, private_key = key, public_key = link.sign_public_key) => {
+    const body = JSON.stringify({ machine: f.machine_id, issued_at: issued++, devices });
+    const signature = Buffer.from(await crypto.subtle.sign({ name: 'ECDSA', hash: 'SHA-256' }, private_key, new TextEncoder().encode(body))).toString('base64url');
+    return call(f, `/api/machines/${f.machine_id}/sync`, { projects: [], clients: {}, sign_key: public_key, devices: { body, signature } }, { 'X-Machine-Token': link.token });
+  };
+  const first = stored();
+  const answer = await sync(JSON.parse(first).devices);
+  assert.equal(answer.status, 200, answer.body.error);
+  assert.equal(answer.body.sync_seconds, 60, 'the website tells the computer its heartbeat');
+  assert.equal(stored(), first, 'the same devices under a newer issued_at are not rewritten');
+  assert.equal(told.length, 0, 'an unchanged list does not wake the relay');
+  assert.equal((await sync([])).status, 200);
+  assert.deepEqual(JSON.parse(stored()).devices, []);
+  assert.deepEqual(told, [{ devices: [] }], 'a removed device still makes the relay close its socket');
+  // A new signing key with the same devices: the stored list is replaced by one the new key verifies.
+  const pair = await crypto.subtle.generateKey({ name: 'ECDSA', namedCurve: 'P-256' }, true, ['sign', 'verify']);
+  const { kty, crv, x, y } = await crypto.subtle.exportKey('jwk', pair.publicKey);
+  assert.equal((await sync([], pair.privateKey, { kty, crv, x, y })).status, 200);
+  const row = f.sql.prepare('SELECT body, signature FROM machine_devices WHERE machine_id=?').get(f.machine_id);
+  assert.ok(await crypto.subtle.verify({ name: 'ECDSA', hash: 'SHA-256' }, pair.publicKey, Buffer.from(row.signature, 'base64url'), new TextEncoder().encode(row.body)),
+    'devices stay checkable after the computer changes its signing key');
+});
+
+test('a bound computer binds its hosted accounts with one-time child tokens, and nothing else can', async t => {
+  const { keyed_links } = await import('../runner/remote_launch.mjs');
+  const f = await bound_fixture(t, { pair: false });
+  const parent = keyed_links(f.home).sites['https://discussion.test'];
+  const issue = (id, token) => call(f, `/api/machines/${id}/setup`, {}, token ? { 'X-Machine-Token': token } : {});
+  assert.equal((await issue(f.machine_id)).status, 401, 'no computer credential');
+  assert.equal((await issue(f.machine_id, 'ef'.repeat(32))).status, 401, 'a wrong computer credential');
+  const deployer = 'ab'.repeat(32);
+  f.sql.prepare('INSERT INTO admin_setup (id,token_hash,created_at) VALUES (1,?,0)').run(createHash('sha256').update(deployer).digest('hex'));
+  const issued = await issue(f.machine_id, parent.token);
+  assert.equal(issued.status, 200, issued.body.error);
+  const account = { id: 'c'.repeat(32), token: 'cd'.repeat(32), name: '托管账号' };
+  assert.equal((await call(f, '/api/machines', { ...account, setup_key: issued.body.setup_key })).status, 200);
+  assert.equal((await call(f, '/api/machines', { ...account, id: 'd'.repeat(32), setup_key: issued.body.setup_key })).status, 403, 'a child token works once');
+  assert.equal(f.sql.prepare('SELECT COUNT(*) AS count FROM admin_setup').get().count, 1, 'the deployer token is untouched');
+  assert.equal((await issue(account.id, account.token)).status, 403, 'a hosted account cannot issue tokens of its own');
+  const another = await issue(f.machine_id, parent.token);
+  assert.equal((await call(f, '/api/machines', { id: f.machine_id, token: 'ee'.repeat(32), name: '冒充', setup_key: another.body.setup_key })).status, 409,
+    'a child token cannot rebind the computer that issued it');
+  f.sql.prepare('UPDATE machine_setup SET created_at=created_at-601').run();
+  assert.equal((await call(f, '/api/machines', { ...account, id: 'e'.repeat(32), setup_key: another.body.setup_key })).status, 403, 'an expired child token');
+  const machines = (await call(f, '/api/machines')).body.machines;
+  assert.deepEqual(machines.map(machine => [machine.id, machine.parent]), [[f.machine_id, undefined], [account.id, f.machine_id]],
+    'hosted accounts are marked and listed after their computer');
+  // Turning the switch off releases the account's slot; only the computer that bound it can.
+  const release = (id, token) => call(f, `/api/machines/${id}/release`, { machine: account.id }, { 'X-Machine-Token': token });
+  assert.equal((await release(account.id, account.token)).status, 404, 'a hosted account releases nobody');
+  const other = { id: 'f'.repeat(32), token: 'fa'.repeat(32), name: '另一台' };
+  assert.equal((await call(f, '/api/machines', { ...other, setup_key: deployer })).status, 200);
+  assert.equal((await release(other.id, other.token)).status, 404, 'another computer cannot release it');
+  assert.equal((await release(f.machine_id, parent.token)).status, 200);
+  assert.ok(!(await call(f, '/api/machines')).body.machines.some(machine => machine.id === account.id), 'gone from the list');
+  assert.equal((await issue(account.id, account.token)).status, 401, 'its credential no longer works');
+  assert.equal(f.sql.prepare('SELECT COUNT(*) AS count FROM machine_parents WHERE parent_id=?').get(f.machine_id).count, 0, 'the slot is back');
+});

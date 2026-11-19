@@ -791,7 +791,7 @@ export async function run_service(home, output = () => {}) {
       if (!syncing && Date.now() - synced_at >= REMOTE_SYNC_MS) {
         synced_at = Date.now();
         channels.refresh();
-        syncing = sync_remote_launches(home, { log: log_line }).catch(error => log_line(`远程启动检查失败：${error.message}`))
+        syncing = sync_remote_launches(home, { log: log_line, throttle: true }).catch(error => log_line(`远程启动检查失败：${error.message}`))
           .finally(() => { syncing = null; });
       }
       if (!relaying && Date.now() - relay_failed_at >= REMOTE_SYNC_MS) start_relay();

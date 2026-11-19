@@ -84,7 +84,7 @@ async function connect_site(home, site, no_open, setup_key) {
  * Register this computer with an online website using a one-time setup token, then publish its keys and signed device
  * list. Without a token given, the deploying computer creates one through wrangler, as `codiscuss token` does.
  */
-async function bind_machine(home, origin, setup_key) {
+export async function bind_machine(home, origin, setup_key) {
   const { machine_link, sync_remote_launches } = await import('./remote_launch.mjs');
   let key = setup_key;
   if (!key) {
@@ -99,6 +99,7 @@ async function bind_machine(home, origin, setup_key) {
   // From now on this website reaches the local one only as the relay's bridge, never with a browser connection credential.
   (await import('./relay_channel.mjs')).bridge_token(home, origin);
   await sync_remote_launches(home);
+  return link.id;
 }
 
 /** Read the website supervisor's lock and last startup receipt. */

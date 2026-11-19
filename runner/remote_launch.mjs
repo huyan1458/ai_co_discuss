@@ -157,18 +157,29 @@ async function machine_request(site, link, path, body, { timeout = SYNC_TIMEOUT_
  * Publish projects, clients and this computer's key to each paired site. Launch tasks a site returns are never run:
  * every remote operation must arrive as a device-signed command, and a site's own answer proves nothing.
  */
-export async function sync_remote_launches(home, { log = () => {} } = {}) {
+export async function sync_remote_launches(home, { log = () => {}, throttle = false } = {}) {
   const projects = launch_projects(home).projects.filter(project => project.id).map(({ id, name }) => ({ id, name }));
   const clients = ready_clients(home);
   for (const [site, link] of Object.entries(keyed_links(home).sites)) {
-    let launches;
+    let launches, sync_seconds;
     // The device list is signed here, so the website can check devices against it but never add one itself.
-    try { ({ launches } = await machine_request(site, link, '/sync', { projects, clients, public_key: link.public_key, sign_key: link.sign_public_key,
-      devices: await signed_device_list(home, link, Date.now(), external_entries(home, site)) })); }
+    const payload = { projects, clients, public_key: link.public_key, sign_key: link.sign_public_key,
+      devices: await signed_device_list(home, link, Date.now(), external_entries(home, site)) };
+    // The service's 3-second loop sends only what changed, plus a heartbeat at the interval the website asks for
+    // (an older website gives none, which keeps 3 seconds); explicit calls after a change always send (#5500).
+    const key = [home, site].join('|'), content = JSON.stringify(payload), last = last_syncs.get(key);
+    if (throttle && last?.content === content && Date.now() - last.at < last.interval * 1000) continue;
+    try { ({ launches, sync_seconds } = await machine_request(site, link, '/sync', payload)); }
     catch (error) { log(`${site}: 同步电脑状态失败：${error.message}`); continue; }
+    const interval = Number.isFinite(sync_seconds) ? Math.min(Math.max(sync_seconds, SYNC_MIN_SECONDS), SYNC_MAX_SECONDS) : SYNC_MIN_SECONDS;
+    last_syncs.set(key, { content, at: Date.now(), interval });
     if (launches?.length) log(`${site}: 网站返回了 ${launches.length} 个旧格式启动任务，已忽略；远程启动须由已配对设备签名`);
   }
 }
+// The last state each service directory sent each site: { content, at, interval }.
+const last_syncs = new Map();
+const SYNC_MIN_SECONDS = 3;
+const SYNC_MAX_SECONDS = 600;
 
 /** The AES-GCM key shared with one sending device, derived from its ephemeral key and this computer's private key. */
 export async function relay_cipher(private_jwk, public_jwk) {

@@ -15,6 +15,8 @@
  *   status   the skills installed, the prompt, and whether the layout is complete.
  *   skills   install the skill folders in <job>/skills/ (replacing a copy of the same name) and remove request.remove.
  *   prompt   write request.prompt as the system prompt of all three.
+ *   site     bind the service home request.home to the online site request.site with the one-time child token
+ *            request.setup_key, or remove that binding (request.unbind); the binding file is sealed for this user.
  */
 import { cpSync, existsSync, linkSync, lstatSync, mkdirSync, readdirSync, readFileSync, readlinkSync, renameSync, rmSync, symlinkSync, unlinkSync, writeFileSync } from 'node:fs';
 import { homedir } from 'node:os';
@@ -144,15 +146,22 @@ function prompt(request) {
   return { ok: true, layout: layout_status() };
 }
 
-function main() {
+/** Bind or unbind this user's service home on the online site; the panel gave a one-time child token. */
+async function site(request) {
+  const { bind_machine, save_site_connection } = await import('./discussion_local.mjs');
+  if (request.unbind) { save_site_connection(request.home, request.site); return { ok: true }; }
+  return { machine: await bind_machine(request.home, request.site, request.setup_key) };
+}
+
+async function main() {
   const [action, job] = process.argv.slice(2);
   const path = join(job, 'request.json');
   const request = existsSync(path) ? JSON.parse(readFileSync(path, 'utf8')) : {};
   // The job folder is the owner's; the request goes when the owner removes it.
   try { rmSync(path, { force: true }); } catch { /* removed with the job folder */ }
-  const run = { init, status, skills: () => skills(job, request), prompt }[action];
+  const run = { init, status, skills: () => skills(job, request), prompt, site }[action];
   if (!run) throw new Error(`未知操作：${action}`);
-  process.stdout.write(`${JSON.stringify(run(request))}\n`);
+  process.stdout.write(`${JSON.stringify(await run(request))}\n`);
 }
 
-try { main(); } catch (error) { process.stdout.write(`${JSON.stringify({ error: error.message })}\n`); process.exitCode = 1; }
+main().catch(error => { process.stdout.write(`${JSON.stringify({ error: error.message })}\n`); process.exitCode = 1; });

@@ -64,6 +64,17 @@ async function confirm() {
   await act(action, message);
 }
 
+/** Let the account invite external experts, or stop: the panel binds or unbinds it on this computer's online site. */
+async function set_external(on) {
+  busy.value = "external";
+  try {
+    await call(`accounts/${props.name}/external`, { on });
+    notify("info", on ? t('已允许该账号邀请外部专家') : t('已停止该账号邀请外部专家'));
+    await reload();
+  } catch (failure) { notify("error", failure.message); }
+  finally { busy.value = ""; }
+}
+
 /** Turn entry protection on or off; a running instance restarts so the change applies at once. */
 async function protect(on, message) {
   busy.value = "protect";
@@ -127,6 +138,19 @@ async function copy(text) {
           <div class="panel-side">
             <button v-if="address" type="button" class="panel-button is-outline is-small" @click="copy(t('地址 {value1}，账号 {value2}', { value1: address, value2: account.name }))"><UIcon name="i-lucide-copy" />{{ t('复制') }}</button>
             <button type="button" class="panel-button is-plain is-small" :disabled="Boolean(busy)" @click="act('password')"><UIcon name="i-lucide-key-round" />{{ t('重设密码') }}</button>
+          </div>
+        </div>
+      </div>
+
+      <div class="panel-rows">
+        <div class="panel-row">
+          <div class="panel-tile"><UIcon name="i-lucide-user-plus" /></div>
+          <div class="panel-main">
+            <div class="panel-title">{{ t('允许邀请外部专家') }}</div>
+            <span class="panel-sub">{{ state.online_site || account.external ? t('打开后自动替这个账号绑定线上网站，它就能在房间里邀请另一台电脑上的 AI') : t('这台电脑未绑定线上网站，请先在“概览 → 本机 → 线上网站”绑定') }}</span>
+          </div>
+          <div class="panel-side">
+            <USwitch :model-value="Boolean(account.external)" :loading="busy === 'external'" :disabled="Boolean(busy) || (!state.online_site && !account.external)" :aria-label="t('允许邀请外部专家')" @update:model-value="set_external" />
           </div>
         </div>
       </div>

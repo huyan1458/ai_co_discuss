@@ -6,6 +6,7 @@
 import { computed, inject, onMounted, ref, watch } from "vue";
 import { call } from "./api.js";
 import EntryTabs from "./EntryTabs.vue";
+import OnlineSiteRow from "./OnlineSiteRow.vue";
 import LanguagePicker from "../LanguagePicker.vue";
 import { t } from '../i18n.js';
 
@@ -93,6 +94,7 @@ watch(refreshed, () => check(true));
             <UIcon :name="busy === 'start' ? 'i-lucide-loader' : 'i-lucide-play'" :class="{ 'animate-spin': busy === 'start' }" />{{ t('启动') }}</button>
         </div>
       </div>
+      <OnlineSiteRow />
     </div>
 
     <EntryTabs />

@@ -362,7 +362,8 @@ async function list_accounts(data) {
   return Promise.all(Object.entries(read_accounts(data)).map(async ([name, account]) => ({ name, port: account.port, home: account_home(data, name), disabled: Boolean(account.disabled), protected: account.protected === true,
     os_user: users[name]?.user || '', running: await instance_running(account.port), keys: list_keys(instance_home(data, name)).length,
     // The AI environment is set up once account_env.mjs has run for its Windows user (it records skills in the service home).
-    skills: Boolean(users[name]) && existsSync(join(instance_home(data, name), SKILL_RECORD)) })));
+    skills: Boolean(users[name]) && existsSync(join(instance_home(data, name), SKILL_RECORD)),
+    external: Boolean(read_account_sites(data)[name]) })));
 }
 
 function write_settings(path, value) {
@@ -654,7 +655,7 @@ export function create_panel({ data, key, port, ops = {}, sessions = new Set() }
   const op = { list_accounts, add_account, reset_password, set_account_disabled, remove_account, run_instance, create_os_user, remove_os_user,
     login_status, apply_login, logout, start_login, login_progress, submit_login, cancel_login, install_runtime, prepare_account, account_env, account_skills, account_workflows, owner_env, owner_skills, owner_prompts, save_owner_prompt, shared_cli_state,
     save_api_key, list_keys, remove_key, use_shared_programs, service_overview, run_owner_service, latest_version, check_package, begin_update,
-    autostart_enabled, set_autostart, entry_overview, start_entry, stop_entry, keep_tunnel, start_tunnel_setup, set_entry_way, set_relay_url, connect_site, make_access_code, join_relay, protect_account, start_verified, hand_over: () => {}, ...ops };
+    set_account_external, autostart_enabled, set_autostart, entry_overview, start_entry, stop_entry, keep_tunnel, start_tunnel_setup, set_entry_way, set_relay_url, connect_site, make_access_code, join_relay, protect_account, start_verified, hand_over: () => {}, ...ops };
   const hosts = new Set([`127.0.0.1:${port}`, `localhost:${port}`]);
 
   async function api(method, path, body) {
@@ -764,10 +765,19 @@ export function create_panel({ data, key, port, ops = {}, sessions = new Set() }
     if (method === 'POST' && action === 'protect') return op.protect_account(data, name, body.on !== false);
     if (method === 'POST' && (action === 'disable' || action === 'enable')) { op.set_account_disabled(data, name, action === 'disable'); return { disabled: action === 'disable' }; }
     // The instance stops first: its port goes to the next new account, which must not reach this one's instance.
-    if (method === 'POST' && action === 'remove') { await op.run_instance(data, name, 'stop'); op.remove_account(data, name); return { removed: name, kept: account_home(data, name) }; }
+    if (method === 'POST' && action === 'remove') {
+      await op.run_instance(data, name, 'stop');
+      // Its online-site binding goes first, or the owner could never unbind the computer afterwards.
+      await op.set_account_external(data, name, false, undefined, { removing: true }).catch(() => {});
+      op.remove_account(data, name);
+      return { removed: name, kept: account_home(data, name) };
+    }
+    if (method === 'POST' && action === 'external') return op.set_account_external(data, name, body.on !== false);
     // A start is reported only once the instance serves as the account is set (protected or not).
     if (method === 'POST' && action === 'start') { await op.start_verified(data, name); return { ok: true }; }
     if (method === 'POST' && action === 'stop') { await op.run_instance(data, name, action); return { ok: true }; }
+    // Its binding file is sealed for whichever Windows user wrote it: changing that user would leave it unreadable.
+    if (method === 'POST' && action === 'os-user' && read_account_sites(data)[name]) throw panel_error('请先关闭该账号的“允许邀请外部专家”，再更改隔离');
     if (method === 'POST' && action === 'os-user' && extra === 'remove') { op.remove_os_user(data, name); return { ok: true }; }
     if (method === 'POST' && action === 'os-user') {
       const result = op.create_os_user(data, name, account_home(data, name));
@@ -1033,8 +1043,81 @@ function disconnect_site(data) {
   const bound = bound_site(data);
   if (!bound) return { disconnected: '' };
   if (entry_settings(data).relay_enabled) throw panel_error('托管账号入口的线上网站还开着，请先关闭它');
+  if (Object.keys(read_account_sites(data)).length) throw panel_error('还有托管账号开着“允许邀请外部专家”，请先在“账号”页关闭');
   save_site_connection(data, bound.site);
   return { disconnected: bound.site };
+}
+
+// ---- Hosted accounts on the online site (#5494) ----
+
+const ACCOUNT_SITES_FILE = 'account-sites.json';
+
+/** The accounts this panel bound to the online site: { name: { site, machine, at } }; their own files are sealed for them. */
+function read_account_sites(data) {
+  try { return JSON.parse(readFileSync(join(data, ACCOUNT_SITES_FILE), 'utf8')); } catch { return {}; }
+}
+
+/**
+ * Let a hosted account invite external experts, or stop. On: this computer, bound to the online site, asks it for a
+ * one-time child token and binds the account's own service home with it, so the account is a computer of its own there
+ * and every external-member protection works as for the owner. Off: the site releases that computer first (its slot
+ * under the cap comes back; a failure stops here for a retry), then the account's own binding is removed. An account
+ * being removed lets go of the record whatever happens. Off by default.
+ */
+async function set_account_external(data, name, on, bind = bind_account_site, { removing = false } = {}) {
+  const sites = read_account_sites(data);
+  const save = () => write_settings(join(data, ACCOUNT_SITES_FILE), sites);
+  if (!on) {
+    const record = sites[name];
+    if (!record) return { external: false };
+    // The site's slot first: a failure stops here so it can be retried, never leaving a slot held with nothing bound.
+    // An account being removed lets go of the record whatever happens, or the owner could never unbind afterwards.
+    try { await release_account_site(data, record); } catch (error) { if (!removing) throw error; }
+    try { await bind(data, name, { site: record.site, unbind: true }); } catch (error) { if (!removing) throw error; }
+    delete sites[name];
+    save();
+    return { external: false };
+  }
+  const bound = bound_site(data);
+  if (!bound) throw panel_error('这台电脑未绑定线上网站，请在管理面板“本机 → 线上网站”处绑定');
+  const answer = await fetch_outside(`${bound.site}/api/machines/${bound.machine}/setup`, OUTSIDE_TIMEOUT_MS,
+    { method: 'POST', headers: { 'Content-Type': 'application/json', 'X-Machine-Token': machine_links(data).sites[bound.site].token }, body: '{}' });
+  const given = await answer.json().catch(() => ({}));
+  if (answer.status === 404) throw panel_error('{value1} 的线上网站版本过旧，请部署方更新线上网站后再试', { value1: bound.site });
+  if (!answer.ok || !given.setup_key) throw panel_error('线上网站没有签发绑定令牌：{value1}', { value1: given.error || answer.status });
+  let result;
+  try { result = await bind(data, name, { site: bound.site, setup_key: given.setup_key }); }
+  catch (error) {
+    // The website words a used or expired token for someone running codiscuss token by hand.
+    if (String(error.message).includes('绑定令牌错误或已用过')) throw panel_error('绑定令牌已过期，请重试');
+    throw error;
+  }
+  sites[name] = { site: bound.site, machine: result.machine || '', at: Date.now() };
+  save();
+  return { external: true, site: bound.site };
+}
+
+/** Ask the online site to let go of an account's computer; a site without this (older) or without it any more is done. */
+async function release_account_site(data, record) {
+  const owner = machine_links(data).sites[record.site];
+  if (!owner?.token || !record.machine) return;
+  const answer = await fetch_outside(`${record.site}/api/machines/${owner.id}/release`, OUTSIDE_TIMEOUT_MS,
+    { method: 'POST', headers: { 'Content-Type': 'application/json', 'X-Machine-Token': owner.token }, body: JSON.stringify({ machine: record.machine }) });
+  if (answer.ok || answer.status === 404) return;
+  const given = await answer.json().catch(() => ({}));
+  throw panel_error('线上网站没有释放这个账号：{value1}', { value1: given.error || answer.status });
+}
+
+/**
+ * Bind or unbind one account's service home without starting anything (its instance re-reads bindings by itself), as
+ * the account's own Windows user when it has one: the binding file is sealed for whoever writes it.
+ */
+async function bind_account_site(data, name, { site, setup_key = '', unbind = false }) {
+  const home = instance_home(data, name);
+  if (read_os_users(data)[name]) return account_env(data, name, 'site', { home, site, setup_key, unbind });
+  if (unbind) { save_site_connection(home, site); return { ok: true }; }
+  const { bind_machine } = await import('./discussion_local.mjs');
+  return { machine: await bind_machine(home, site, setup_key) };
 }
 
 // ---- Hosted accounts' failures, to the owner's Weixin ----

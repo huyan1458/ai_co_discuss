@@ -43,6 +43,32 @@ export function text_offset(root, node, offset) {
 }
 
 /**
+ * Whether a box scrolled sideways inside `root` (a wide table, a code block) has moved the point at viewport `x`
+ * of `node` out of what it shows, so a number mark there would float over other content.
+ */
+export function scrolled_out(node, root, x) {
+  for (let box = node.parentElement; box && box !== root; box = box.parentElement) {
+    if (box.scrollWidth <= box.clientWidth || getComputedStyle(box).overflowX === "visible") continue;
+    const shown = box.getBoundingClientRect();
+    if (x < shown.left || x > shown.right + 1) return true;
+  }
+  return false;
+}
+
+/**
+ * Run `place` once per frame while a box inside `host` scrolls (scroll events do not bubble, so this listens in the
+ * capture phase); `host`'s own scrolling is left to the caller.
+ * @returns {(event: Event) => void} The scroll listener to add to `host` with `{ capture: true, passive: true }`.
+ */
+export function inner_scroll_follower(place) {
+  let frame = 0;
+  return (event) => {
+    if (event.target === event.currentTarget || frame) return;
+    frame = requestAnimationFrame(() => { frame = 0; place(); });
+  };
+}
+
+/**
  * Where the character ending at `end` of `root`'s text sits, relative to `host`'s content (scrolled hosts included),
  * for an excerpt's number mark; null when that text is not shown.
  */
@@ -55,7 +81,7 @@ export function excerpt_mark_place(root, host, end) {
     range.setStart(node, left - 1);
     range.setEnd(node, left);
     const rects = range.getClientRects(), rect = rects[rects.length - 1];
-    if (!rect) return null;
+    if (!rect || scrolled_out(node, root, rect.right)) return null;
     const origin = host.getBoundingClientRect();
     return { left: rect.right - origin.left + host.scrollLeft, top: rect.top - origin.top + host.scrollTop };
   }

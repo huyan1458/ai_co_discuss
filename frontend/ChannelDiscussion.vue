@@ -22,7 +22,7 @@ import { format_voice_time, use_voice_input, use_voice_press } from "./voice-inp
 import ExcerptEditCard from "./ExcerptEditCard.vue";
 import AnswerFiles from "./AnswerFiles.vue";
 import ExecutionChanges from "./ExecutionChanges.vue";
-import { add_excerpt, excerpt_mark_place, excerpt_range, excerpt_source, excerpts_markdown, file_preview, hold_selection, text_offset } from "./file-preview.js";
+import { add_excerpt, excerpt_mark_place, excerpt_range, inner_scroll_follower, excerpt_source, excerpts_markdown, file_preview, hold_selection, text_offset } from "./file-preview.js";
 import { keep_reading_position } from "./scroll-anchor.js";
 import { guard_token_edit, snap_caret, step_over_token, token_mirror } from "./attachment-tokens.js";
 import { FILE_MENTION_PATTERN } from "./file-mention.mjs";
@@ -263,6 +263,8 @@ onMounted(() => {
   transcript.value?.addEventListener("scroll", schedule_listen, { passive: true });
   transcript.value?.addEventListener("scroll", place_quote, { passive: true });
   window.addEventListener("resize", place_marks);
+  // A wide table or code block scrolls sideways inside its message: its marks follow it.
+  transcript.value?.addEventListener("scroll", inner_scroll_follower(() => { if (file_preview.excerpts.length) place_marks(); }), { capture: true, passive: true });
   watch(() => room.value?.id, () => { reader.stop(); voice.cancel(); cancel_quote(); });
   speech_configured().then(set_speech_ready);
 });

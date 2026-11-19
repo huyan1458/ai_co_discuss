@@ -82,5 +82,10 @@
   "绑定失败（退出码 {value1}）": "Binding failed (exit code {value1})",
   "这台电脑已绑定 {value1}，请先解绑": "This computer is already bound to {value1}. Unbind it first",
   "这个地址不是共议线上站点：{value1}": "This address is not a CoDiscuss online site: {value1}",
-  "托管账号入口的线上网站还开着，请先关闭它": "The hosted accounts' online site is still on. Turn it off first"
+  "托管账号入口的线上网站还开着，请先关闭它": "The hosted accounts' online site is still on. Turn it off first",
+  "这个电脑编号已绑定，不能用托管账号的令牌改绑": "This computer id is already bound and cannot be rebound with a hosted account's token",
+  "托管账号的电脑不能再签发绑定令牌": "A hosted account's computer cannot issue binding tokens",
+  "未使用的绑定令牌过多，请稍后再试": "Too many unused binding tokens; try again later",
+  "这台电脑绑定的托管账号已达上限 {max} 个": "This computer has reached its limit of {max} bound hosted accounts",
+  "这台电脑名下没有这个托管账号": "This computer has no such hosted account"
 }

@@ -513,3 +513,33 @@ test('the admin command line works the panel with the owner key only, and does w
   assert.ok(keys.some(item => item.managed) && !JSON.stringify(keys).includes('sk-secret-5678'), 'added as the owner gives it, never shown in full');
 });
 
+
+test('one switch lets a hosted account invite external experts: the panel binds its own service home under this computer', async () => {
+  const { machine_links } = await import('../runner/remote_launch.mjs');
+  const { data, ops } = fixture();
+  const owner = 'a'.repeat(32), site = 'https://site.example';
+  writeFileSync(join(data, 'machine-links.json'), JSON.stringify({ sites: { [site]: { id: owner, private_key: 'key', token: 'b'.repeat(64) } } }));
+  const seen = [], real = globalThis.fetch;
+  globalThis.fetch = async (url, init = {}) => {
+    if (!String(url).startsWith(`${site}/`)) return real(url, init);
+    seen.push({ path: new URL(String(url)).pathname, token: new Headers(init.headers).get('X-Machine-Token'), body: init.body ? JSON.parse(init.body) : null });
+    return Response.json(String(url).endsWith('/setup') ? { setup_key: 'c'.repeat(64), expires_at: 0 } : { launches: [] });
+  };
+  after(() => { globalThis.fetch = real; });
+  const { request } = await serve(data, ops);
+  const cookie = (await request('/enter?key=owner-key')).headers.get('set-cookie').split(';')[0];
+  const post = async (path, body = {}) => { const answer = await request(`/api/${path}`, { cookie, body }); return { status: answer.status, body: await answer.json() }; };
+  const turned = await post('accounts/demo/external', { on: true });
+  assert.equal(turned.status, 200, turned.body.error);
+  assert.deepEqual(seen[0], { path: `/api/machines/${owner}/setup`, token: 'b'.repeat(64), body: {} }, 'the token is asked for with this computer\'s own credential');
+  const bound = seen.find(item => item.path === '/api/machines');
+  assert.equal(bound.body.setup_key, 'c'.repeat(64));
+  assert.notEqual(bound.body.id, owner, 'the account binds as a computer of its own');
+  assert.equal(machine_links(instance_home(data, 'demo')).sites[site]?.id, bound.body.id, 'the binding is in the account\'s own service home');
+  assert.match((await post('site/disconnect')).body.error, /允许邀请外部专家/, 'the owner cannot leave the site from under the account');
+  assert.match((await post('accounts/demo/os-user')).body.error, /允许邀请外部专家/, 'nor change which Windows user its binding is sealed for');
+  assert.deepEqual((await post('accounts/demo/external', { on: false })).body, { external: false });
+  assert.deepEqual(seen.find(item => item.path.endsWith('/release')), { path: `/api/machines/${owner}/release`, token: 'b'.repeat(64), body: { machine: bound.body.id } },
+    'turning it off gives the slot on the site back');
+  assert.equal(machine_links(instance_home(data, 'demo')).sites[site], undefined);
+});

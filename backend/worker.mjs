@@ -201,7 +201,10 @@ async function handle_admin_api(database, request, parts, setup_key) {
 }
 
 // Remote launches relayed to a paired computer.
-const MACHINE_ONLINE_SECONDS = 30;
+// A computer sends its state only on change plus a heartbeat every MACHINE_SYNC_SECONDS (it learns this from /sync);
+// online allows two missed heartbeats (#5500). Older computers still send every 3 seconds.
+const MACHINE_SYNC_SECONDS = 60;
+const MACHINE_ONLINE_SECONDS = 150;
 // Heartbeats refresh seen_at at most this often (well inside the online window) so frequent polls do not each spend a D1 row write.
 const MACHINE_SEEN_REFRESH_SECONDS = 10;
 const MACHINE_NAME_MAX = 60;
@@ -214,7 +217,11 @@ const COMMAND_WAIT_MAX = 20;
 const COMMAND_POLL_MS = 250;
 const ENVELOPE_DATA_MAX = 512 * 1024;
 const RELAY_PROTOCOL = "codiscuss-relay";
-const MACHINE_SELECT = "SELECT m.*, k.public_key, s.sign_key FROM local_machines m LEFT JOIN machine_keys k ON k.machine_id=m.id LEFT JOIN machine_sign_keys s ON s.machine_id=m.id";
+const MACHINE_SELECT = "SELECT m.*, k.public_key, s.sign_key, p.parent_id FROM local_machines m LEFT JOIN machine_keys k ON k.machine_id=m.id LEFT JOIN machine_sign_keys s ON s.machine_id=m.id LEFT JOIN machine_parents p ON p.machine_id=m.id";
+// A bound computer binds its hosted accounts with one-time child tokens (#5494).
+const CHILD_SETUP_SECONDS = 600;
+const CHILD_SETUP_PENDING_MAX = 5;
+const CHILD_MACHINES_MAX = 50;
 
 /** Hash a machine token; malformed values hash to an empty string and never match. */
 async function machine_token_digest(token) {
@@ -228,7 +235,7 @@ async function machine_token_digest(token) {
 function machine_view(row, now, paired = false) {
   return { id: row.id, name: row.name, ...(paired ? { projects: JSON.parse(row.projects), clients: JSON.parse(row.clients) } : { projects: [], clients: {} }),
     public_key: row.public_key ? JSON.parse(row.public_key) : null, sign_key: row.sign_key ? JSON.parse(row.sign_key) : null,
-    seen_at: row.seen_at, online: now - row.seen_at <= MACHINE_ONLINE_SECONDS };
+    seen_at: row.seen_at, online: now - row.seen_at <= MACHINE_ONLINE_SECONDS, ...(row.parent_id ? { parent: row.parent_id } : {}) };
 }
 
 /**
@@ -239,18 +246,64 @@ async function pair_machine(database, payload, now, setup_key) {
   const supplied = await digest_hex(typeof payload.setup_key === "string" ? payload.setup_key.trim() : "");
   const setup = await database.prepare("SELECT token_hash FROM admin_setup WHERE id=1").first();
   const matches = (setup_key && constant_time_equal(supplied, await digest_hex(String(setup_key)))) || (setup && constant_time_equal(supplied, setup.token_hash));
-  if (!matches) throw new HttpError(403, "绑定令牌错误或已用过：请在部署网站的电脑上运行 codiscuss token 重新生成");
+  // A child token from a bound computer binds one hosted account under it; the deployer's token stays untouched.
+  const child = matches ? null : await database.prepare("SELECT parent_id FROM machine_setup WHERE token_hash=? AND created_at>=?")
+    .bind(supplied, now - CHILD_SETUP_SECONDS).first();
+  if (!matches && !child) throw new HttpError(403, "绑定令牌错误或已用过：请在部署网站的电脑上运行 codiscuss token 重新生成");
   const { id, token } = payload;
   const name = typeof payload.name === "string" ? payload.name.trim() : "";
   const hashed = await machine_token_digest(token);
   if (typeof id !== "string" || !/^[0-9a-f]{32}$/.test(id) || !hashed) throw new HttpError(400, "电脑编号或凭据无效");
   if (name.length < 1 || name.length > MACHINE_NAME_MAX) throw new HttpError(400, "电脑名称需为 1–{max} 个字符", { max: MACHINE_NAME_MAX });
-  await database.batch([
-    database.prepare("INSERT INTO local_machines (id,name,token_hash,created_at) VALUES (?,?,?,?) ON CONFLICT(id) DO UPDATE SET name=excluded.name, token_hash=excluded.token_hash")
-      .bind(id, name, hashed, now),
-    database.prepare("DELETE FROM admin_setup"),
-  ]);
+  const upsert = database.prepare("INSERT INTO local_machines (id,name,token_hash,created_at) VALUES (?,?,?,?) ON CONFLICT(id) DO UPDATE SET name=excluded.name, token_hash=excluded.token_hash")
+    .bind(id, name, hashed, now);
+  if (child) {
+    // A child token cannot take over another computer, only rebind one of the same parent's own accounts.
+    const existing = await database.prepare("SELECT m.id, p.parent_id FROM local_machines m LEFT JOIN machine_parents p ON p.machine_id=m.id WHERE m.id=?").bind(id).first();
+    if (id === child.parent_id || (existing && existing.parent_id !== child.parent_id)) throw new HttpError(409, "这个电脑编号已绑定，不能用托管账号的令牌改绑");
+    await database.batch([upsert,
+      database.prepare("INSERT INTO machine_parents (machine_id,parent_id) VALUES (?,?) ON CONFLICT(machine_id) DO UPDATE SET parent_id=excluded.parent_id").bind(id, child.parent_id),
+      database.prepare("DELETE FROM machine_setup WHERE token_hash=?").bind(supplied)]);
+  } else {
+    await database.batch([upsert, database.prepare("DELETE FROM admin_setup")]);
+  }
   return machine_view(await database.prepare(`${MACHINE_SELECT} WHERE m.id=?`).bind(id).first(), now);
+}
+
+/**
+ * Release one of this computer's hosted accounts from the website, so its slot under CHILD_MACHINES_MAX comes back and
+ * its credential stops working. Only the parent that bound it can; anything else is 404. Rows of the child in every
+ * table go too, without relying on the database enforcing ON DELETE CASCADE.
+ */
+async function release_child(database, machine_id, token, payload) {
+  await require_machine(database, machine_id, token);
+  const child = typeof payload.machine === "string" ? payload.machine : "";
+  if (!await database.prepare("SELECT 1 AS found FROM machine_parents WHERE machine_id=? AND parent_id=?").bind(child, machine_id).first()) {
+    throw new HttpError(404, "这台电脑名下没有这个托管账号");
+  }
+  await database.batch(["machine_parents", "machine_keys", "machine_sign_keys", "machine_devices", "machine_commands", "remote_launches"]
+    .map(table => database.prepare(`DELETE FROM ${table} WHERE machine_id=?`).bind(child))
+    .concat(database.prepare("DELETE FROM local_machines WHERE id=?").bind(child)));
+  return { released: child };
+}
+
+/**
+ * Issue a one-time child binding token for a hosted account on this bound computer, valid CHILD_SETUP_SECONDS. A child
+ * cannot issue (no chains); unused tokens and children per computer are capped.
+ */
+async function issue_child_setup(database, machine_id, token, now) {
+  await require_machine(database, machine_id, token);
+  if (await database.prepare("SELECT 1 AS found FROM machine_parents WHERE machine_id=?").bind(machine_id).first()) {
+    throw new HttpError(403, "托管账号的电脑不能再签发绑定令牌");
+  }
+  await database.prepare("DELETE FROM machine_setup WHERE parent_id=? AND created_at<?").bind(machine_id, now - CHILD_SETUP_SECONDS).run();
+  const pending = await database.prepare("SELECT COUNT(*) AS count FROM machine_setup WHERE parent_id=?").bind(machine_id).first("count");
+  if (pending >= CHILD_SETUP_PENDING_MAX) throw new HttpError(429, "未使用的绑定令牌过多，请稍后再试");
+  const children = await database.prepare("SELECT COUNT(*) AS count FROM machine_parents WHERE parent_id=?").bind(machine_id).first("count");
+  if (children >= CHILD_MACHINES_MAX) throw new HttpError(409, "这台电脑绑定的托管账号已达上限 {max} 个", { max: CHILD_MACHINES_MAX });
+  const setup_key = [...crypto.getRandomValues(new Uint8Array(32))].map(byte => byte.toString(16).padStart(2, "0")).join("");
+  await database.prepare("INSERT INTO machine_setup (token_hash,parent_id,created_at) VALUES (?,?,?)").bind(await digest_hex(setup_key), machine_id, now).run();
+  return { setup_key, expires_at: now + CHILD_SETUP_SECONDS };
 }
 
 /** Authenticate the computer itself by its own token. */
@@ -304,20 +357,28 @@ async function machine_sync(database, machine_id, token, payload, now, relay = n
   const projects = valid_projects(payload.projects), clients = valid_clients(payload.clients);
   const public_key = "public_key" in payload ? valid_public_key(payload.public_key) : null;
   const sign_key = "sign_key" in payload ? valid_public_key(payload.sign_key) : null;
+  let key_changed = false;
   if (sign_key) {
-    await database.prepare("INSERT INTO machine_sign_keys (machine_id,sign_key) VALUES (?,?) ON CONFLICT(machine_id) DO UPDATE SET sign_key=excluded.sign_key WHERE machine_sign_keys.sign_key IS NOT excluded.sign_key")
+    const saved = await database.prepare("INSERT INTO machine_sign_keys (machine_id,sign_key) VALUES (?,?) ON CONFLICT(machine_id) DO UPDATE SET sign_key=excluded.sign_key WHERE machine_sign_keys.sign_key IS NOT excluded.sign_key")
       .bind(machine_id, JSON.stringify(sign_key)).run();
+    key_changed = Boolean(saved.meta?.changes);
   }
   if (sign_key && payload.devices && typeof payload.devices.body === "string" && typeof payload.devices.signature === "string") {
     const key = await crypto.subtle.importKey("jwk", sign_key, { name: "ECDSA", namedCurve: "P-256" }, false, ["verify"]);
     const valid = await crypto.subtle.verify({ name: "ECDSA", hash: "SHA-256" }, key, b64url_bytes(payload.devices.signature), new TextEncoder().encode(payload.devices.body));
     const list = valid ? JSON.parse(payload.devices.body) : null;
     if (!list || list.machine !== machine_id || !Array.isArray(list.devices)) throw new HttpError(400, "设备名单签名无效");
-    const stored = await database.prepare(`INSERT INTO machine_devices (machine_id,body,signature,issued_at) VALUES (?,?,?,?) ON CONFLICT(machine_id) DO UPDATE SET
+    // Judged by content, not issued_at: an older computer re-signs the same list on every heartbeat, which would
+    // otherwise write a row and wake the relay each time (#5500).
+    const current = await database.prepare("SELECT body FROM machine_devices WHERE machine_id=?").bind(machine_id).first();
+    let unchanged = false;
+    // A new signing key needs the list it signed: devices are checked against the stored signature with the current key.
+    try { unchanged = !key_changed && Boolean(current) && JSON.stringify(JSON.parse(current.body).devices) === JSON.stringify(list.devices); } catch { unchanged = false; }
+    const stored = unchanged ? null : await database.prepare(`INSERT INTO machine_devices (machine_id,body,signature,issued_at) VALUES (?,?,?,?) ON CONFLICT(machine_id) DO UPDATE SET
       body=excluded.body, signature=excluded.signature, issued_at=excluded.issued_at WHERE excluded.issued_at>machine_devices.issued_at`)
       .bind(machine_id, payload.devices.body, payload.devices.signature, list.issued_at).run();
-    // A new list closes the live sockets of devices it no longer holds; unchanged heartbeats do not wake the relay.
-    if (relay && stored.meta?.changes) {
+    // A changed list closes the live sockets of devices it no longer holds; an unchanged one writes nothing and leaves the relay asleep.
+    if (relay && stored?.meta?.changes) {
       await relay.get(relay.idFromName(machine_id)).fetch("https://relay.internal/", { method: "POST", headers: { "Content-Type": "application/json", "X-Relay-Role": "devices" },
         body: JSON.stringify({ devices: list.devices.filter(item => item.kind !== "external").map(item => ({ id: item.id, expires_at: item.expires_at })) }) }).catch(() => {});
     }
@@ -331,7 +392,7 @@ async function machine_sync(database, machine_id, token, payload, now, relay = n
       WHERE machine_keys.public_key IS NOT excluded.public_key`)
       .bind(machine_id, JSON.stringify(public_key)).run();
   }
-  return { launches: [] };
+  return { launches: [], sync_seconds: MACHINE_SYNC_SECONDS };
 }
 
 /** Queue one encrypted local-service operation for the paired computer. */
@@ -469,6 +530,12 @@ async function require_paired_machine(database, machine_id) {
 /** Pair computers and queue their commands; a computer authenticates with its own token, everything else as the administrator. */
 async function handle_remote_launch_api(database, request, parts, setup_key, relay) {
   const now = now_seconds(), method = request.method;
+  if (parts.length === 4 && parts[1] === "machines" && parts[3] === "release" && method === "POST") {
+    return respond(await release_child(database, parts[2], request.headers.get("X-Machine-Token") ?? "", await read_payload(request)));
+  }
+  if (parts.length === 4 && parts[1] === "machines" && parts[3] === "setup" && method === "POST") {
+    return respond(await issue_child_setup(database, parts[2], request.headers.get("X-Machine-Token") ?? "", now));
+  }
   if (parts.length === 4 && parts[1] === "machines" && parts[3] === "sync" && method === "POST") {
     return respond(await machine_sync(database, parts[2], request.headers.get("X-Machine-Token") ?? "", await read_payload(request), now, relay));
   }
@@ -481,7 +548,8 @@ async function handle_remote_launch_api(database, request, parts, setup_key, rel
   if (parts.length === 5 && parts[3] === "commands" && method === "GET") return respond(await machine_command_status(database, parts[2], parts[4]));
   if (parts.length === 2 && method === "GET") {
     const signed = request.headers.get("X-CoDiscuss-Device") ? await device_identity(database, request.headers.get("X-CoDiscuss-Device"), "GET", "/api/machines") : null;
-    const { results } = await database.prepare(`${MACHINE_SELECT} ORDER BY m.seen_at DESC, m.created_at DESC`).all();
+    // Hosted accounts' computers come after the owners' own, so a page that picks the first never lands on one.
+    const { results } = await database.prepare(`${MACHINE_SELECT} ORDER BY (p.parent_id IS NOT NULL), m.seen_at DESC, m.created_at DESC`).all();
     return respond({ machines: results.map(row => machine_view(row, now, signed?.machine_id === row.id)) });
   }
   if (parts.length === 2 && method === "POST") return respond(await pair_machine(database, await read_payload(request), now, setup_key));

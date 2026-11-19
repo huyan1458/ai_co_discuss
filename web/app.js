@@ -4111,7 +4111,8 @@ async function load_relay_machine() {
       notify("error", t('网站上找不到与这台设备配对的电脑，已停止连接；如果电脑确实换过绑定，请在电脑前重新扫码配对'));
       return null;
     }
-    const machine = machines.find(item => item.id === record?.machine_id) || machines[0] || null;
+    // Without a pairing a page defaults to an owner's computer, never a hosted account's (`parent`, #5494).
+    const machine = machines.find(item => item.id === record?.machine_id) || machines.find(item => !item.parent) || null;
     if (machine && record?.machine_id === machine.id && record.fingerprint && record.fingerprint !== await machine_fingerprint(machine)) {
       notify("error", t('网站给出的电脑身份与配对时不符，已停止连接；请在电脑前重新扫码配对'));
       return null;

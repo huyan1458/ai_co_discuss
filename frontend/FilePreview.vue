@@ -8,7 +8,7 @@ import OfficeViewer from "./OfficeViewer.vue";
 import PreviewLoading from "./PreviewLoading.vue";
 import Papa from "papaparse";
 import { gunzip } from "fflate";
-import { add_excerpt as put_excerpt, crumbs_of, document_kind_of, excerpt_range, file_preview, file_size, file_type, hold_selection, inline_markdown_images, media_of, modified_time, subtitle_cues, text_kind_of, text_offset } from "./file-preview.js";
+import { add_excerpt as put_excerpt, crumbs_of, document_kind_of, excerpt_range, file_preview, file_size, file_type, hold_selection, inline_markdown_images, inner_scroll_follower, media_of, modified_time, scrolled_out, subtitle_cues, text_kind_of, text_offset } from "./file-preview.js";
 import { t } from './i18n.js';
 
 // The file preview window: several files open as tabs; it folds into a floating button that keeps every tab, its mode
@@ -819,13 +819,15 @@ function place_file_marks() {
     const rects = tail.getClientRects(), rect = rects[rects.length - 1];
     if (!rect) return [];
     const origin = host.getBoundingClientRect();
-    return [{ id: excerpt.id, number: index + 1, range, left: rect.right - origin.left + host.scrollLeft, top: rect.top - origin.top + host.scrollTop }];
+    return [{ id: excerpt.id, number: index + 1, range, hidden: scrolled_out(range.endContainer, host, rect.right), left: rect.right - origin.left + host.scrollLeft, top: rect.top - origin.top + host.scrollTop }];
   });
-  file_marks.value = shown.map(({ range, ...mark }) => mark);
+  file_marks.value = shown.filter((item) => !item.hidden).map(({ range, hidden, ...mark }) => mark);
   if (!globalThis.CSS?.highlights || typeof Highlight !== "function") return;
   if (shown.length) CSS.highlights.set(MARKED_HIGHLIGHT, new Highlight(...shown.map((item) => item.range)));
   else CSS.highlights.delete(MARKED_HIGHLIGHT);
 }
+/** A wide table or code block scrolls sideways inside the preview: its marks follow it. */
+const follow_inner_scroll = inner_scroll_follower(() => { if (file_preview.excerpts.length) place_file_marks(); });
 
 /** A click inside an underlined passage opens its edit card, as its number mark does. */
 function open_mark_at(event) {
@@ -1055,7 +1057,7 @@ onBeforeUnmount(() => {
         </div>
         <PreviewLoading v-else-if="preview && format === 'html' && tab?.loading && !tab.page" :label="t('正在载入页面引用的文件…')" />
         <iframe v-else-if="preview && format === 'html'" ref="html_frame" class="project-html-preview" :sandbox="HTML_SANDBOX" referrerpolicy="no-referrer" :srcdoc="html_preview" :title="t('HTML 文件预览')"></iframe>
-        <div v-else-if="preview" ref="markdown_scroll" v-keep-reading class="project-markdown-scroll" tabindex="0" @scroll.passive="schedule_offer" @click="open_mark_at"
+        <div v-else-if="preview" ref="markdown_scroll" v-keep-reading class="project-markdown-scroll" tabindex="0" @scroll.passive="schedule_offer" @scroll.capture.passive="follow_inner_scroll" @click="open_mark_at"
           @wheel.passive="stop_following" @touchmove.passive="stop_following" @keydown="stop_following" @pointerdown="stop_following"><div ref="markdown_body" class="markdown-body project-markdown-preview" v-html="rendered"></div>
           <button v-for="mark in file_marks" :key="mark.id" type="button" class="excerpt-mark" :style="{ left: `${mark.left}px`, top: `${mark.top}px` }" :title="t('注释 {value1}：点击修改批注', { value1: mark.number })" :aria-label="t('修改注释 {value1} 的批注', { value1: mark.number })" @click="open_mark(mark.id)">{{ mark.number }}</button></div>
         <ExcerptEditCard v-if="mark_editing" :key="mark_editing.excerpt.id" class="file-selection-offer file-comment" :class="{ 'is-docked': mark_editing.touch }" :comment="mark_editing.excerpt.comment" :style="mark_editing.touch ? {} : { left: `${mark_editing.left}px`, top: `${mark_editing.top}px` }"

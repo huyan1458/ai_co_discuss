@@ -1122,6 +1122,17 @@ CREATE TABLE IF NOT EXISTS local_machines (
     seen_at INTEGER NOT NULL DEFAULT 0,
     created_at INTEGER NOT NULL
 );
+-- One-time binding tokens a bound computer issues for a hosted account on itself (10 minutes, hash only); a computer
+-- bound this way is that computer's child and cannot issue tokens of its own (2026-11-19, #5494).
+CREATE TABLE IF NOT EXISTS machine_setup (
+    token_hash TEXT PRIMARY KEY,
+    parent_id TEXT NOT NULL REFERENCES local_machines(id) ON DELETE CASCADE,
+    created_at INTEGER NOT NULL
+);
+CREATE TABLE IF NOT EXISTS machine_parents (
+    machine_id TEXT PRIMARY KEY REFERENCES local_machines(id) ON DELETE CASCADE,
+    parent_id TEXT NOT NULL REFERENCES local_machines(id) ON DELETE CASCADE
+);
 -- A room launch submitted from a device without the local service; the paired computer claims and runs it.
 -- The request (with the room's new credentials) is cleared once the launch finishes or fails.
 CREATE TABLE IF NOT EXISTS remote_launches (
