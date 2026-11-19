@@ -60,6 +60,27 @@ function check_agy_shell(user_home) {
   }
 }
 
+/** Whether a saved allow rule only runs codiscuss: `command(codiscuss …)`, optionally after this tool's old access prefix. */
+function codiscuss_only(rule) {
+  const body = /^command\((.*)\)$/s.exec(String(rule))?.[1];
+  if (!body) return false;
+  const text = body.replace(/^regex:\^?/, '').replace(/^\(\\\$env:DISCUSS_ACCESS[^)]*\)\?/, '').replace(/^\$env:DISCUSS_ACCESS\s*=\s*'[^']*';\s*/, '');
+  return /^codiscuss/.test(text);
+}
+
+/**
+ * What the user allowed agy in its global and outside-of-project settings beyond the codiscuss commands. A confined
+ * task (`tool_lockdown`) denies each of them in its own session, since a deny rule wins over an allow (agy's documented
+ * order: deny > ask > allow); the user's settings are left as they are.
+ */
+function agy_saved_grants(user_home) {
+  const cli = read_json(join(user_home, '.gemini', 'antigravity-cli', 'settings.json'));
+  const shared = read_json(join(user_home, '.gemini', 'config', 'config.json'));
+  const outside = read_json(join(user_home, '.gemini', 'config', 'projects', `${AGY_OUTSIDE_PROJECT}.json`));
+  return [...(cli.permissions?.allow || []), ...(shared.userSettings?.globalPermissionGrants?.allow || []),
+    ...(outside.permissionGrants?.permissionGrants?.allow || [])].filter(rule => typeof rule === 'string' && !codiscuss_only(rule));
+}
+
 /**
  * Skill folders agy loads by itself: its own folder and every entry in its global skills.json. agy shows the model these
  * skills' paths, so a run must be able to read them (1.5.3 refuses reads outside the added directories); agy leaves ~/
@@ -202,6 +223,7 @@ function agy_folders(config, task, root) {
  * directories this member may only read are protected whatever its own access.
  */
 function agy_project_grants(config, task, folders, user_home) {
+  if (task.tool_lockdown) return agy_lockdown_grants(task, user_home);
   const read_only = (task.extra_directories || []).filter(item => item.access === 'read').map(item => item.path);
   const projects = [...new Set([project_directory(config), ...folders].filter(directory => directory && !same_path(directory, task.draft_directory)
     && !read_only.some(path => same_path(path, directory))))];
@@ -218,6 +240,24 @@ function agy_project_grants(config, task, folders, user_home) {
     // Grants the owner allowed from a refused operation on the page.
     ...(config.allowed_tools || [])],
   deny: [...new Set(protected_paths.map(write_rule)), ...(full ? [] : ['mcp(*)'])] };
+}
+
+/**
+ * A confined task: only the codiscuss commands and writing its drafts; its runtime folder, skills, `~/.gemini` and its
+ * empty working folder stay unwritable, MCP tools and web page reads are refused, and the member's project, the room's
+ * other directories and the owner's allowed tools are ignored, and what the user allowed agy for itself is denied here.
+ * On agy 1.5.12 (2026-11-19, Ref_外部软件通信.md §7 实测
+ * 记录) reads outside the workspace, other commands, run_workflow, subagents and swarm workers were all refused; web
+ * search has no rule and stays available.
+ */
+function agy_lockdown_grants(task, user_home) {
+  const write_rule = directory => `write_file(${resolve(directory).replaceAll('\\', '/')})`;
+  const protected_paths = [task.member_directory, ...task.skill_directories, ...agy_skill_directories(user_home), join(user_home, '.gemini')];
+  if (protected_paths.some(directory => within_directory(directory, task.draft_directory))) {
+    throw new Error('agy 草稿目录不能位于运行目录、技能或 .gemini 配置目录中，未交付任务');
+  }
+  return { allow: [agy_rule(), write_rule(task.draft_directory)],
+    deny: [...new Set([...protected_paths.map(write_rule), 'mcp(*)', 'read_url(*)', ...agy_saved_grants(user_home)])] };
 }
 
 /** Initialize Antigravity's hidden placeholder project once on CLI-only setups; never overwrite an existing file. */
@@ -244,7 +284,8 @@ export function prepare_agy_project(config, binding, task, user_home = homedir()
   if (record.session_id && record.session_id !== binding.session_id) throw new Error('agy 项目记录与会话绑定不符，未交付讨论任务');
   check_agy_shell(user_home);
   const root = join(user_home, '.gemini', 'config');
-  const directories = agy_folders(config, task, root);
+  // A confined task opens no project: only its own working folder, which holds nothing of this computer.
+  const directories = task.tool_lockdown ? [] : agy_folders(config, task, root);
   const grants = agy_project_grants(config, task, directories, user_home);
   if (record.project_id && record.project_id !== AGY_OUTSIDE_PROJECT && !/^[a-f0-9-]{36}$/.test(record.project_id)) {
     throw new Error('agy 项目记录无效，未交付讨论任务');
@@ -283,6 +324,7 @@ export function remove_agy_projects(directory, user_home = homedir()) {
 
 /** Native agy arguments; an expert the owner chose to host keeps its own conversation's project and permissions. */
 function invocation(config, binding, task, user_home) {
+  if (task.tool_lockdown && config.session_id) throw new Error('托管的已有会话沿用它自己的权限，无法收窄，未交付任务');
   const project = config.session_id ? null : prepare_agy_project(config, binding, task, user_home);
   const cwd = launch_directory(config, task);
   const extra = (project ? project.directories : (task.extra_directories || []).map(item => item.path))
@@ -294,13 +336,15 @@ function invocation(config, binding, task, user_home) {
     ...added.flatMap(directory => ['--add-dir', directory])];
   // Headless agy refuses `--mode auto` ("not available for this account", 1.4.10–1.4.11) though its interactive window
   // offers it; 全放开 uses the flag its own denial message suggests on top of the open session grants.
-  args.push('--mode', 'accept-edits', ...(config.project_access === 'full' ? ['--dangerously-skip-permissions'] : []),
+  args.push('--mode', 'accept-edits', ...(config.project_access === 'full' && !task.tool_lockdown ? ['--dangerously-skip-permissions'] : []),
     ...(project ? ['--project', project.project_id, '--settings', project.settings_path] : []));
   if (binding.session_id) args.push('--conversation', binding.session_id);
   if (config.model) args.push('--model', config.model);
   if (config.effort) args.push('--effort', config.effort);
   args.push('-p', task.prompt);
-  return { args, ...(project ? { on_session: project.bind } : {}) };
+  // The codiscuss CLI is told it runs confined, so its file arguments may name only the drafts.
+  const env = task.tool_lockdown ? { CODISCUSS_TOOL_LOCKDOWN: '1', CODISCUSS_LOCKDOWN_DIRECTORY: task.draft_directory } : null;
+  return { args, ...(env ? { env } : {}), ...(project ? { on_session: project.bind } : {}) };
 }
 
 /** Consume only documented lifecycle events, and remember refused operations so the page can name and allow them. */

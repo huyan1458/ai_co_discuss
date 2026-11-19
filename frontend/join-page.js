@@ -43,7 +43,7 @@
     const ms = value ? to_ms(value) : NaN;
     return Number.isNaN(ms) ? "" : new Date(ms).toLocaleString(english ? "en" : "zh-CN", { hour12: false });
   };
-  const LEVELS = { discuss: t("只讨论：只看点名给它的请求并回答"), read: t("可读项目：另可读对方开放的目录，不能写入或执行") };
+  const LEVELS = { discuss: t("房间消息：只看点名给它的消息"), read: t("消息和项目：另可只读对方开放的目录") };
 
   function element(tag, attributes = {}, children = []) {
     const node = document.createElement(tag);

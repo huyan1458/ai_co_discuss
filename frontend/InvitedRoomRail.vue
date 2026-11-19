@@ -1,12 +1,12 @@
 <script setup>
 /**
- * The right rail of an invited room: requests waiting for you (默认 level), the trust level and its limits, time
+ * The right rail of an invited room: requests waiting for you, how it answers when named, time
  * left, how many times the AI was woken, and pause, adjust and leave.
  */
 import { computed, ref, watch } from "vue";
 import ConfirmDialog from "./ConfirmDialog.vue";
 import TrustLevelField from "./TrustLevelField.vue";
-import { LEVEL_SHORT, TRUST_LABELS, end_label, lockdown_problem, remaining_label, runner_message, time_ms, use_invited_rooms } from "./external-members.js";
+import { LEVEL_SHORT, WAKE_LABELS, end_label, lockdown_problem, remaining_label, runner_message, scope_label, time_ms, use_invited_rooms } from "./external-members.js";
 import { t } from "./i18n.js";
 
 // In the narrow-screen drawer the drawer's own title already names the page, so the rail drops its header there.
@@ -14,31 +14,24 @@ defineProps({ drawer: Boolean });
 const invited = use_invited_rooms();
 const record = invited.selected;
 const editing = ref(false), leaving = ref(false), removing = ref(false);
-const trust = ref({ trust: "default", max_wakes: 20, hours: 24 });
-const HOUR_MS = 3_600_000;
+const trust = ref({ wake: "auto", confined: true });
 watch(() => record.value?.id, () => { editing.value = false; });
 function start_edit() {
-  const value = record.value;
-  const left = time_ms(value.limits?.until) - Date.now();
-  trust.value = { trust: value.trust || "default", max_wakes: value.limits?.max_wakes || 20, hours: left > 0 ? Math.min(720, Math.max(1, Math.round(left / HOUR_MS))) : 24 };
+  trust.value = { wake: record.value.wake || "ask", confined: record.value.confined !== false };
   editing.value = true;
 }
-async function save() {
-  // 信任设备 cannot be chosen through the relay (D6a): a record already trusted keeps its level until changed here or locally.
-  if (!invited.trust_local.value && trust.value.trust === "trusted") { editing.value = false; return; }
+function save() {
   editing.value = false;
-  invited.set_trust(record.value.id, trust.value, t("信任等级已更新"));
+  invited.set_trust(record.value.id, trust.value, t("设置已更新"));
 }
 const usage = computed(() => {
   const value = record.value;
   if (!value) return "";
   const count = value.wakes || 0;
   // Whole sentences per case, so each language can say "once" and "of N" its own way.
-  if (value.trust === "borrow" && value.limits?.max_wakes) return t("已唤醒 {count} / {limit} 次", { count, limit: value.limits.max_wakes });
   return count === 1 ? t("已唤醒 1 次") : t("已唤醒 {count} 次", { count });
 });
 // 完全借用 runs until its own end; past it (or out of wakes) requests wait for you again.
-const borrow_until = computed(() => record.value?.trust === "borrow" ? remaining_label(record.value.limits?.until) : "");
 const CONTACT = { offline: t("对方电脑不在线"), error: t("通信出错") };
 const BY ={ user: t("对方房主"), host: t("对方主持人") };
 const leave_items = [t("对方房间里的成员身份立即结束，之后点名不再唤醒你的 AI。"), t("你的 AI 已经读到的内容仍留在它的会话里。")];
@@ -52,8 +45,8 @@ const expires_at = computed(() => me.value?.expires_at || record.value?.expires_
 // An ended or left record keeps its facts here; only the controls go, as there is nothing left to adjust.
 const ended = computed(() => end_label(record.value));
 const ended_at = computed(() => ended.value ? (record.value.history || []).findLast((entry) => ["ended", "left"].includes(entry.outcome))?.at || 0 : 0);
-// Why this record's software cannot serve below 信任设备, in the page language; "" when it can or is trusted.
-const lockdown = computed(() => record.value && record.value.trust !== "trusted" ? lockdown_problem(record.value.ai?.adapter) : "");
+// Why this record's software cannot run confined, in the page language; "" when it can or runs unrestricted.
+const lockdown = computed(() => record.value && record.value.confined !== false ? lockdown_problem(record.value.ai?.adapter) : "");
 /** The one line that says how this membership stands now, most urgent first, in the room rail's status style. */
 const status = computed(() => {
   const value = record.value;
@@ -92,7 +85,7 @@ const status = computed(() => {
         <UIcon name="i-lucide-triangle-alert" />
         <div>
           <strong>{{ t("被点名时不会启动") }}</strong>
-          <p>{{ t("这个 AI 软件只能在“信任设备”等级下服务。") }}</p>
+          <p>{{ t("这个 AI 只能不受限运行。") }}</p>
         </div>
       </div>
     </section>
@@ -101,8 +94,8 @@ const status = computed(() => {
       <dl class="invited-facts">
         <div><dt>{{ t("对方开放") }}</dt><dd>{{ LEVEL_SHORT[open_level] || open_level }}</dd></div>
         <div><dt>{{ t("你的 AI") }}</dt><dd>{{ [record.member_label || record.member, record.ai?.model, record.ai?.effort].filter(Boolean).join(" · ") }}</dd></div>
-        <div><dt>{{ t("信任等级") }}</dt><dd>{{ TRUST_LABELS[record.trust] || record.trust }}</dd></div>
-        <div v-if="borrow_until && !ended"><dt>{{ t("借用至") }}</dt><dd>{{ borrow_until }}</dd></div>
+        <div><dt>{{ t("被点名时") }}</dt><dd>{{ WAKE_LABELS[record.wake] || record.wake }}</dd></div>
+        <div><dt>{{ t("在这台电脑上") }}</dt><dd>{{ scope_label(record.confined) }}</dd></div>
         <!-- Countdowns stop with the membership: an ended record says when it ended instead. -->
         <div v-if="ended && ended_at"><dt>{{ t("结束于") }}</dt><dd>{{ date(ended_at) }}</dd></div>
         <div v-if="ended"><dt>{{ t("唤醒") }}</dt><dd>{{ usage }}</dd></div>
@@ -112,18 +105,17 @@ const status = computed(() => {
     </section>
     <section v-if="!ended" class="pb-section" :aria-label="t('调整')">
       <template v-if="editing">
-        <TrustLevelField v-model="trust" :trusted_locked="!invited.trust_local.value" />
+        <TrustLevelField v-model="trust" :confine_reason="lockdown_problem(record.ai?.adapter)" />
         <div class="invited-edit-actions">
           <UButton :label="t('取消')" size="xs" color="neutral" variant="ghost" @click="editing = false" />
           <UButton :label="t('保存')" size="xs" class="channel-primary-button" :loading="busy === 'trust'" :disabled="Boolean(busy)" @click="save" />
         </div>
-        <p class="fine-print">{{ t("信任等级按对方电脑记录：这台电脑邀请的所有房间一起生效。") }}</p>
       </template>
       <div v-else class="invited-actions">
-        <UButton :label="t('调整信任等级')" icon="i-lucide-shield" size="sm" color="neutral" variant="outline" class="pb-action pb-action-block" @click="start_edit" />
+        <UButton :label="t('调整设置')" icon="i-lucide-shield" size="sm" color="neutral" variant="outline" class="pb-action pb-action-block" @click="start_edit" />
         <div class="invited-action-row">
           <UButton :label="record.paused ? t('恢复唤醒') : t('暂停')" :icon="record.paused ? 'i-lucide-play' : 'i-lucide-pause'" size="sm" color="neutral" variant="outline" class="pb-action pb-action-block"
-            :title="record.paused ? t('恢复后，对方点名按信任等级处理') : t('暂停期间不领取也不唤醒；已在等你确认的请求到时照常算作未同意')" :loading="busy === 'pause'" :disabled="Boolean(busy)"
+            :title="record.paused ? t('恢复后，对方点名按设置处理') : t('暂停期间不领取也不唤醒；已在等你确认的请求到时照常算作未同意')" :loading="busy === 'pause'" :disabled="Boolean(busy)"
             @click="invited.set_paused(record.id, !record.paused)" />
           <UButton :label="t('退出房间')" icon="i-lucide-log-out" size="sm" color="neutral" variant="outline" class="pb-action pb-action-block invited-leave" :disabled="Boolean(busy)" @click="leaving = true" />
         </div>

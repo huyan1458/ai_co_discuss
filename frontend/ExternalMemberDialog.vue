@@ -77,7 +77,7 @@ function size(bytes) {
         <!-- What is open now, laid out like an expert card's facts: a label column and a value column. -->
         <dl class="external-member-facts">
           <div v-if="external_ai(member)"><dt>{{ t("对方的 AI") }}</dt><dd>{{ t("{name}（对方自报）", { name: external_ai(member) }) }}</dd></div>
-          <div><dt>{{ t("能做什么") }}</dt><dd>{{ LEVEL_SHORT[info.level] }}</dd></div>
+          <div><dt>{{ t("对方能看到") }}</dt><dd>{{ LEVEL_SHORT[info.level] }}</dd></div>
           <div v-if="info.level === 'read'"><dt>{{ t("开放目录") }}</dt><dd :title="info.directories.join('、')">{{ info.directories.join("、") || "—" }}</dd></div>
           <div v-if="!info.pending"><dt>{{ t("剩余时间") }}</dt><dd>{{ info.ended ? t("已结束") : remaining_label(info.expires_at) || "—" }}</dd></div>
           <div v-if="!info.pending && detail?.usage"><dt>{{ t("用量") }}</dt><dd>{{ t("{used} / {limit} · 本小时 {hour} / {hour_limit} · 被拒 {denied} 次", { used: size(detail.usage.total_bytes), limit: size(detail.quota?.total_bytes), hour: size(detail.usage.hour_bytes), hour_limit: size(detail.quota?.hourly_bytes), denied: detail.usage.denied || 0 }) }}</dd></div>
@@ -91,7 +91,7 @@ function size(bytes) {
             <UButton :label="t('延长')" icon="i-lucide-clock-plus" size="xs" color="neutral" variant="outline" class="pb-action" :loading="busy === 'extend'" :disabled="Boolean(busy)" @click="change('extend', { expires_at: extended_until(info.expires_at, extend_to) }, t('已延长'))" />
           </div>
           <div class="external-member-buttons">
-            <UButton v-if="!info.pending && info.level === 'read'" :label="t('降为只讨论')" icon="i-lucide-eye-off" size="xs" color="neutral" variant="outline" class="pb-action" :loading="busy === 'downgrade'" :disabled="Boolean(busy)" @click="change('downgrade', { scope: 'discuss' }, t('已降为只讨论，之后不能再读项目文件'))" />
+            <UButton v-if="!info.pending && info.level === 'read'" :label="t('改为只看消息')" icon="i-lucide-eye-off" size="xs" color="neutral" variant="outline" class="pb-action" :loading="busy === 'downgrade'" :disabled="Boolean(busy)" @click="change('downgrade', { scope: 'discuss' }, t('已降为只讨论，之后不能再读项目文件'))" />
             <UButton :label="info.pending ? t('移除席位') : t('撤销授权')" icon="i-lucide-ban" size="xs" color="error" variant="soft" :disabled="Boolean(busy)" @click="confirming = true" />
           </div>
         </section>

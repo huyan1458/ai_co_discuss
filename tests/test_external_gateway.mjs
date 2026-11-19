@@ -371,7 +371,7 @@ test('a paired device manages this computer\'s invited rooms as the computer doe
     const id = next_id(), ephemeral = await crypto.subtle.generateKey({ name: 'ECDH', namedCurve: 'P-256' }, true, ['deriveBits']);
     const shared = await relay_cipher(await crypto.subtle.exportKey('jwk', ephemeral.privateKey), env.link.public_key);
     const { kty, crv, x, y } = await crypto.subtle.exportKey('jwk', ephemeral.publicKey);
-    const payload = { id: 'record-1', invite: 'https://b.pages.dev/join#x', trust: 'borrow' };
+    const payload = { id: 'record-1', invite: 'https://b.pages.dev/join#x', wake: 'auto' };
     const answer = await deliver(env, { shared, frame: { id, envelope: { ...await seal(shared, await device.seal(id, { action, payload, target: 'computer' }), id), key: { kty, crv, x, y } } } }, options);
     assert.equal(answer.status, 200, `${action}: ${answer.body.error}`);
   }
@@ -409,16 +409,13 @@ test('the local website\'s own page issues and lists invites without a credentia
   assert.deepEqual([forged.status, forged.body.code, forged.body.error_text?.template], [400, 'owner_required', '需要本房间的控制凭据，且房间须在这台电脑上']);
 });
 
-test('only this computer may make an inviting computer a trusted device; going back to default or borrowing works from afar', () => {
+test('a paired device may set every invited-room setting, unrestricted included, as this computer can', () => {
   const home = mkdtempSync(join(tmpdir(), 'codiscuss-trust-'));
   try {
     const policy = (command, input) => guard_remote_request(command, input, { projects: [], participants: {}, home });
-    for (const [command, input] of [['invited-trust', { id: 'record-1', trust: 'trusted' }], ['invited-join', { invite: 'https://b.pages.dev/join#x', adapter: 'claude', trust: 'trusted' }]]) {
-      assert.throws(() => policy(command, input), error => error.code === 'trusted_local_only'
-        && error.error_text.template === '“信任设备”只能在这台电脑上设置；其他设备可以改回“默认”或“完全借用”', command);
+    for (const input of [{ id: 'record-1', wake: 'ask', confined: false }, { id: 'record-1', wake: 'auto', confined: true }, { id: 'record-1', trust: 'trusted' }]) {
+      assert.doesNotThrow(() => policy('invited-trust', input));
     }
-    assert.doesNotThrow(() => policy('invited-trust', { id: 'record-1', trust: 'default' }));
-    assert.doesNotThrow(() => policy('invited-trust', { id: 'record-1', trust: 'borrow', max_wakes: 5, hours: 2 }));
     assert.doesNotThrow(() => policy('invited-join', { invite: 'https://b.pages.dev/join#x', adapter: 'claude' }));
   } finally { rmSync(home, { recursive: true, force: true }); }
 });

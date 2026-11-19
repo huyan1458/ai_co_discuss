@@ -2,10 +2,11 @@
 // confined to the codiscuss subcommands; these check the arguments the adapters build, without starting any AI software.
 import assert from 'node:assert/strict';
 import { EventEmitter } from 'node:events';
-import { mkdtempSync, mkdirSync, rmSync, writeFileSync } from 'node:fs';
+import { mkdtempSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { test } from 'node:test';
+import { agy_rule, antigravity_cli } from '../runner/adapters/antigravity_cli.mjs';
 import { api_lockdown, execute_tool, participant_tools, system_prompt } from '../runner/adapters/api.mjs';
 import { claude_lockdown, claude_lockdown_env, claude_rule_path } from '../runner/adapters/claude.mjs';
 import { TASK_SUBCOMMANDS } from '../runner/adapters/common.mjs';
@@ -46,14 +47,14 @@ test('every adapter declares whether it can be confined, and says why when it ca
     assert.equal(support.supported, declared, id);
     if (!declared) assert.ok(support.reason, `${id} gives a reason`);
   }
-  assert.deepEqual(ADAPTER_IDS.filter(id => lockdown_support(id).supported), ['claude', 'api']);
+  assert.deepEqual(ADAPTER_IDS.filter(id => lockdown_support(id).supported).sort(), ['antigravity_cli', 'api', 'claude']);
   assert.equal(lockdown_support('claude', { project_access: 'own' }).supported, false, 'a taken-over session keeps its own permissions');
   assert.equal(lockdown_support('nope').supported, false);
 });
 
 test('a confined task on software that cannot be confined starts nothing and says why', async t => {
   const { task } = fixture(t);
-  for (const [config, pattern] of [[{ adapter: 'codex_cli' }, /Codex CLI 不能收窄/], [{ adapter: 'antigravity_cli' }, /Antigravity CLI 不能收窄/],
+  for (const [config, pattern] of [[{ adapter: 'codex_cli' }, /Codex CLI 不能收窄/],
     [{ adapter: 'claude', project_access: 'own', session_id: 'abc' }, /托管的已有会话/]]) {
     const { calls, spawn_process } = recorder();
     await assert.rejects(deliver_task(config, {}, task, spawn_process), error =>
@@ -97,6 +98,31 @@ test('confined Claude runs only the codiscuss subcommands and reads only its ski
   assert.equal(plain[0].options.env.CODISCUSS_TOOL_LOCKDOWN, undefined);
 });
 
+test('confined agy allows only the codiscuss commands, opens no project and denies what the user allowed agy for itself', t => {
+  const { root, paths, task: base } = fixture(t);
+  const task = { ...base, participant: 'Gemini-ext' };
+  const home = join(root, 'home'), cli_settings = join(home, '.gemini', 'antigravity-cli');
+  mkdirSync(cli_settings, { recursive: true });
+  const config = { adapter: 'antigravity_cli', executable: 'agy.exe', cwd: paths.project, project_access: 'full', allowed_tools: ['command(git *)'] };
+  const { args, env } = antigravity_cli.invocation(config, {}, task, home);
+  const settings = JSON.parse(readFileSync(args[args.indexOf('--settings') + 1], 'utf8')).permissions;
+  const rule = path => `write_file(${path.replaceAll('\\', '/')})`;
+  assert.deepEqual(settings.allow, [agy_rule(), rule(paths.drafts)], 'no project, no other command, no owner grant');
+  assert.ok(settings.deny.includes('mcp(*)') && settings.deny.includes('read_url(*)'));
+  assert.ok(!args.includes('--dangerously-skip-permissions'), 'full access is ignored');
+  for (const path of [paths.project, paths.other]) assert.ok(!args.includes(path), path);
+  assert.deepEqual(env, { CODISCUSS_TOOL_LOCKDOWN: '1', CODISCUSS_LOCKDOWN_DIRECTORY: paths.drafts });
+
+  // The user's own grants stay in their settings; beyond codiscuss commands, the confined session denies each of them.
+  const own = ["command(regex:^(\\$env:DISCUSS_ACCESS='[^']*'; )?codiscuss(\\.cmd)?( [^;&|]*)?$)", 'command(lark-cli docs +fetch)', 'read_file(*)'];
+  writeFileSync(join(cli_settings, 'settings.json'), JSON.stringify({ permissions: { allow: own } }));
+  const again = antigravity_cli.invocation(config, {}, task, home).args;
+  const denied = JSON.parse(readFileSync(again[again.indexOf('--settings') + 1], 'utf8')).permissions.deny;
+  assert.ok(denied.includes('command(lark-cli docs +fetch)') && denied.includes('read_file(*)'));
+  assert.ok(!denied.includes(own[0]), 'codiscuss grants are left alone');
+  assert.throws(() => antigravity_cli.invocation({ ...config, session_id: 's' }, { session_id: 's' }, task, home), /托管的已有会话/);
+});
+
 test('confined Claude keeps the user settings env, which --restricted would drop', t => {
   const { root, task } = fixture(t);
   writeFileSync(join(root, 'settings.json'), JSON.stringify({ env: { ANTHROPIC_BASE_URL: 'https://proxy.example', BAD: 1 }, permissions: { allow: ['Bash'] } }));
@@ -111,7 +137,7 @@ test('a confined model API member keeps only its room tools', () => {
   const api_context = { site: 'http://127.0.0.1:1', room: 'r', token: 't', cwd: '/project', workdir: '/project', project_access: 'write',
     extra_directories: [{ path: '/other', access: 'write' }], commands: { directory: '/wf', list: [{ id: 'x', access: 'read' }] }, image_generation: true };
   const confined = api_lockdown({ tool_lockdown: true, api_context }).api_context;
-  assert.deepEqual(confined, { site: 'http://127.0.0.1:1', room: 'r', token: 't', project_access: 'read' });
+  assert.deepEqual(confined, { site: 'http://127.0.0.1:1', room: 'r', token: 't', project_access: 'read', no_web: true });
   const plain = { tool_lockdown: false, api_context };
   assert.equal(api_lockdown(plain), plain);
 });

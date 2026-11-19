@@ -135,7 +135,7 @@ export async function cli_delivery(adapter, config, binding, task, spawn_process
   const launch = () => {
     const child = spawn_process(invocation.executable || config.executable, invocation.args, {
       cwd: launch_directory(config, task), windowsHide: true, shell: false, stdio: ['pipe', 'pipe', 'pipe'],
-      env: { ...process.env, DISCUSS_ACCESS_FILE: task.access_path },
+      env: { ...process.env, ...(invocation.env || {}), DISCUSS_ACCESS_FILE: task.access_path },
     });
     tree_killable(child);
     const state = monitor_cli(adapter, child, binding, task, restart);

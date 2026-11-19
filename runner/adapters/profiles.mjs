@@ -126,8 +126,8 @@ export const ADAPTER_PROFILES = {
     unsupported_hints: { auto: 'agy 只在交互窗口提供自动模式，后台运行（-p）不支持' },
     // Only a conversation this tool created gets its session rules; an existing one keeps its own project and permissions.
     client: 'antigravity', adopt: 'session', host_existing: false, own_project_when_bound: true, browse_sessions: true,
-    lockdown_hint: '文件读取、网页读取与搜索工具是否全部受权限规则约束尚未核实，无法保证只放行 codiscuss 命令',
-    capabilities: { delivery: PROCESS, rewind: 'cut', project: true, access_env: true, chat: true, capture: FINAL_REMARK, tool_lockdown: false },
+    // Confined by session rules that allow only the codiscuss commands and deny MCP and web reads (agy_lockdown_grants).
+    capabilities: { delivery: PROCESS, rewind: 'cut', project: true, access_env: true, chat: true, capture: FINAL_REMARK, tool_lockdown: true },
     // A read-only agy session allows only codiscuss commands and headless agy ends the turn on a denied one; agy streams no
     // thinking text, so without a word at each turning point the page cannot show how far it got.
     task_rules: (cli, { runs_commands }) => (runs_commands ? ''

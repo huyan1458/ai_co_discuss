@@ -19,15 +19,14 @@ import { external_task_text, TASK_SUBCOMMANDS } from './expert_prompts.mjs';
 import { atomic_json } from './files.mjs';
 import { t } from './i18n.mjs';
 
-export const TRUST_LEVELS = ['default', 'borrow', 'trusted'];
+export const WAKES = ['auto', 'ask'];
+// The single level records had before `wake` and `confined`, still accepted by `invited-trust` as a shorthand.
+const LEGACY_TRUST = { default: { wake: 'ask', confined: true }, borrow: { wake: 'auto', confined: true }, trusted: { wake: 'auto', confined: false } };
 export const APPROVAL_TIMEOUT_MS = 15 * 60000;
 export const POLL_MS = 5000;
 // The inviting room fails an execution whose lease lapses; renew it as the room runner does.
 export const RENEW_MS = 30000;
 // What “完全借用” allows when the owner sets no limit of their own.
-export const BORROW_DEFAULTS = { max_wakes: 20, hours: 24 };
-const MAX_WAKES_LIMIT = 1000;
-const MAX_HOURS = 720;
 const HISTORY_LIMIT = 50;
 const MODEL_LIMIT = 120;
 // What this computer keeps of each request its AI received and each answer it gave, so the history still reads after the
@@ -35,7 +34,6 @@ const MODEL_LIMIT = 120;
 const TEXT_LIMIT = 4000;
 // How often a pass also reads the member's current grant (`/view`) when nothing is woken; a wake and the room view always read it.
 const VIEW_REFRESH_MS = 60000;
-const HOUR_MS = 3600000;
 // The website gives up on a relayed request after 9 seconds; ask for an answer within that.
 const RELAY_WAIT_MS = 8000;
 const REQUEST_TIMEOUT_MS = 15000;
@@ -155,12 +153,21 @@ function with_store(home, task) {
   } finally { rmSync(lock, { force: true }); }
 }
 
+/**
+ * How a record treats being named, `{wake, confined}`: `wake` is `auto` (start at once) or
+ * `ask` (wait for the owner), `confined` whether the AI may run only the codiscuss commands. Each record keeps its own;
+ * one joined before these two settings follows the level its inviting computer had (default / borrow / trusted).
+ */
+function record_settings(record, store) {
+  if (WAKES.includes(record.wake)) return { wake: record.wake, confined: record.confined !== false };
+  return LEGACY_TRUST[store.machines[record.machine_fingerprint]?.trust] || LEGACY_TRUST.default;
+}
+
 /** A record as every command shows it: no key, no credential. */
 export function record_view(record, store) {
-  const machine = store.machines[record.machine_fingerprint] || {};
-  const trust = TRUST_LEVELS.includes(machine.trust) ? machine.trust : 'default';
+  const settings = record_settings(record, store);
   const { session_id, machine_key, ai_reported, ...shown } = record;
-  return { ...shown, trust, lockdown: trust !== 'trusted', approvals: (record.approvals || []).filter(item => item.status === 'waiting') };
+  return { ...shown, ...settings, lockdown: settings.confined, approvals: (record.approvals || []).filter(item => item.status === 'waiting') };
 }
 
 function find_record(store, id) {
@@ -439,15 +446,15 @@ export async function join_invite(home, input, deps = {}) {
   return with_store(home, (store, secrets, now) => {
     const id = attempt.id;
     const name = joined.machine?.name || keys.name || invite.machine_name;
-    // Accepting the invitation is the consent: a new computer starts at 完全借用, within its limits.
-    const machine = store.machines[keys.fingerprint] ||= { trust: 'borrow' };
+    // Accepting the invitation is the consent: a new record answers at once, confined.
+    const machine = store.machines[keys.fingerprint] ||= {};
     Object.assign(machine, { machine: keys.id, site: invite.site, machine_name: name, updated_at: now });
     store.records[id] = { id, site: invite.site, machine: keys.id, machine_name: name, machine_fingerprint: keys.fingerprint,
       machine_key: keys.public_key, fingerprint_checked: Boolean(invite.fingerprint), room: joined.room.id, room_title: String(joined.room.name || invite.room_name),
       member: joined.member.name, member_id: joined.member.id ?? null, key_id, open_level: joined.level || invite.level || 'read',
       directories: Array.isArray(joined.directories) ? joined.directories : [],
-      expires_at: Number(joined.expires_at) ? Number(joined.expires_at) * 1000 : null, ai, ai_reported: JSON.stringify(identity),
-      limits: machine.trust === 'borrow' ? { max_wakes: BORROW_DEFAULTS.max_wakes, until: now + BORROW_DEFAULTS.hours * HOUR_MS, used: 0 } : null, wakes: 0, last_wake_at: null, paused: false,
+      expires_at: Number(joined.expires_at) ? Number(joined.expires_at) * 1000 : null, ai, ai_reported: JSON.stringify(identity), wake: 'auto', confined: true,
+      limits: null, wakes: 0, last_wake_at: null, paused: false,
       status: 'active', contact: { at: now, state: 'online', error: '' }, approvals: [], history: [], running: null, joined_at: now };
     secrets.get()[id] = { private_key: pair.private_key, token: joined.token };
     secrets.changed = true;
@@ -455,34 +462,25 @@ export async function join_invite(home, input, deps = {}) {
   });
 }
 
-function bounded(value, max, label) {
-  const number = Number(value);
-  if (!Number.isInteger(number) || number < 1 || number > max) throw failure('invalid_number', '{label} 须为 1–{max} 的整数', { label, max });
-  return number;
-}
 
-/** Set the trust of the record's computer and, for 完全借用, the record's own limits (counted afresh from now). */
-export function set_trust(home, { id, trust, max_wakes, hours, until }) {
-  if (!TRUST_LEVELS.includes(trust)) throw failure('invalid_trust', '信任等级只能是 default、borrow 或 trusted');
+/**
+ * Set how this record treats being named: `wake` (auto / ask) and `confined`, either of which may be left out, or the old
+ * single `trust` level. Answering at once has no wake count or time limit (2026-11-19, user); any a record had is dropped.
+ */
+export function set_trust(home, { id, trust, wake, confined }) {
+  if (trust !== undefined && !LEGACY_TRUST[trust]) throw failure('invalid_trust', '信任等级只能是 default、borrow 或 trusted');
+  if (wake !== undefined && !WAKES.includes(wake)) throw failure('invalid_wake', '被点名时只能是 auto 或 ask');
+  const chosen = trust !== undefined ? LEGACY_TRUST[trust] : { wake, confined: confined === undefined ? undefined : confined !== false && confined !== 'false' };
   return change_record(home, id, (record, now, store) => {
-    const machine = store.machines[record.machine_fingerprint] ||= { machine: record.machine, site: record.site };
-    Object.assign(machine, { trust, updated_at: now });
-    if (trust === 'borrow') {
-      const limit = max_wakes === undefined ? record.limits?.max_wakes ?? BORROW_DEFAULTS.max_wakes : bounded(max_wakes, MAX_WAKES_LIMIT, 'max_wakes');
-      const end = until !== undefined ? Number(until) : hours !== undefined ? now + bounded(hours, MAX_HOURS, 'hours') * HOUR_MS
-        : record.limits?.until > now ? record.limits.until : now + BORROW_DEFAULTS.hours * HOUR_MS;
-      if (!Number.isFinite(end) || end <= now) throw failure('invalid_deadline', '借用期限须晚于现在');
-      record.limits = { max_wakes: limit, until: end, used: 0 };
-    }
+    const current = record_settings(record, store);
+    Object.assign(record, { wake: chosen.wake ?? current.wake, confined: chosen.confined ?? current.confined, limits: null });
     return { record: record_view(record, store) };
   });
 }
 
-/** Whether a request may wake the AI without asking: a trusted computer, or 完全借用 within its limits. */
-export function wakes_directly(record, store, now = Date.now()) {
-  const trust = record_view(record, store).trust;
-  if (trust === 'trusted') return true;
-  return trust === 'borrow' && Boolean(record.limits) && record.limits.used < record.limits.max_wakes && record.limits.until > now;
+/** Whether a request may wake the AI without asking: the record answers at once. */
+export function wakes_directly(record, store) {
+  return record_settings(record, store).wake === 'auto';
 }
 
 /**
@@ -654,7 +652,7 @@ export async function invited_command(home, action, input = {}, deps = {}) {
   if (action === 'invited-list') {
     const store = read_store(home);
     return { records: Object.values(store.records).map(record => record_view(record, store)).sort((a, b) => b.joined_at - a.joined_at),
-      machines: Object.entries(store.machines).map(([fingerprint, item]) => ({ fingerprint, trust: item.trust || 'default', machine_name: item.machine_name || '', site: item.site || '' })) };
+      machines: Object.entries(store.machines).map(([fingerprint, item]) => ({ fingerprint, machine_name: item.machine_name || '', site: item.site || '' })) };
   }
   if (action === 'invited-join') return join_invite(home, input, deps);
   if (action === 'invited-trust') return set_trust(home, input);
@@ -1012,13 +1010,11 @@ function load_access(path) {
 const integer = value => value === undefined ? undefined : Number(value);
 
 function print_record(record) {
-  const trust = { default: t('每次询问（每次须你同意）'), borrow: t('完全借用'), trusted: t('信任设备') }[record.trust];
+  const wake = record.wake === 'ask' ? t('先问我') : t('直接回答');
+  const scope = record.confined ? t('只在房间里发言') : t('不受限');
   const contact = { online: t('在线'), offline: t('不在线'), error: t('出错'), unknown: t('未知') }[record.contact?.state || 'unknown'];
   const lines = [t('{id}  {room}（{site}）成员 {member}', { id: record.id, room: record.room_title || record.room, site: record.site, member: record.member }),
-    t('  信任等级：{trust}；已唤醒 {wakes} 次；对方电脑：{contact}{paused}', { trust, wakes: record.wakes, contact, paused: record.paused ? t('；已暂停') : '' })];
-  if (record.trust === 'borrow' && record.limits) {
-    lines.push(t('  借用上限：{used}/{max} 次，至 {until}', { used: record.limits.used, max: record.limits.max_wakes, until: new Date(record.limits.until).toLocaleString() }));
-  }
+    t('  被点名时：{wake}；在这台电脑上：{scope}；已唤醒 {wakes} 次；对方电脑：{contact}{paused}', { wake, scope, wakes: record.wakes, contact, paused: record.paused ? t('；已暂停') : '' })];
   for (const item of record.approvals) lines.push(t('  待确认 {approval}：消息 {messages}', { approval: item.id, messages: item.message_ids.map(n => `#${n}`).join(', ') }));
   if (record.status === 'left') lines.push(t('  已退出'));
   if (record.status === 'ended') lines.push(t('  对方已结束你的成员资格（{reason}）', { reason: record.end_reason }));
@@ -1030,7 +1026,7 @@ const HELP = () => t(`被邀请的房间（本机 AI 作为外部成员参加另
 用法：
   codiscuss join <链接|配对码> [--site 站点] [--machine 电脑编号] --adapter 软件 [--model M] [--effort E]
   codiscuss invited list
-  codiscuss invited trust ID default|borrow|trusted [--max-wakes N] [--hours N]
+  codiscuss invited trust ID auto|ask [--unconfined|--confined]
   codiscuss invited ai ID [--adapter 软件] [--model M] [--effort E]
   codiscuss invited pause ID | resume ID
   codiscuss invited approve ID 待确认编号 | refuse ID 待确认编号
@@ -1038,7 +1034,8 @@ const HELP = () => t(`被邀请的房间（本机 AI 作为外部成员参加另
   codiscuss invited remove ID
   codiscuss invited room ID
 
-信任等级：default 每次点名须你同意；borrow 直接唤醒，受次数与期限上限；trusted 直接唤醒、不设上限、不收窄。
+被点名时：auto 直接回答；ask 每次先问你。
+在这台电脑上：默认只在房间里发言（只能运行共议命令）；--unconfined 不受限，可读本机文件、联网。
 同意后由本机服务唤醒 AI，请保持 codiscuss 服务运行。加 --json 输出 JSON。
 `);
 
@@ -1057,7 +1054,8 @@ export async function external_main(command, args, { home, deps = {}, write = te
   const service = home || (await import('./discussion_service.mjs')).service_home();
   const { values, positionals } = parseArgs({ args, allowPositionals: true, options: {
     site: { type: 'string' }, machine: { type: 'string' }, adapter: { type: 'string' }, model: { type: 'string' }, effort: { type: 'string' },
-    label: { type: 'string' }, 'max-wakes': { type: 'string' }, hours: { type: 'string' }, json: { type: 'boolean' }, help: { type: 'boolean', short: 'h' },
+    label: { type: 'string' }, json: { type: 'boolean' }, help: { type: 'boolean', short: 'h' },
+    unconfined: { type: 'boolean' }, confined: { type: 'boolean' },
     'access-file': { type: 'string' }, root: { type: 'string' }, offset: { type: 'string' }, limit: { type: 'string' }, 'max-bytes': { type: 'string' },
     path: { type: 'string' }, 'case-sensitive': { type: 'boolean' }, 'max-results': { type: 'string' },
   } });
@@ -1081,7 +1079,10 @@ export async function external_main(command, args, { home, deps = {}, write = te
     const action = { list: 'invited-list', trust: 'invited-trust', ai: 'invited-ai', pause: 'invited-pause', resume: 'invited-pause', approve: 'invited-approve',
       refuse: 'invited-refuse', leave: 'invited-leave', remove: 'invited-remove', room: 'invited-room' }[verb];
     if (!action) return write(HELP());
-    const input = { id, ...(verb === 'trust' ? { trust: extra, ...(values['max-wakes'] ? { max_wakes: values['max-wakes'] } : {}), ...(values.hours ? { hours: values.hours } : {}) } : {}),
+    // `trust ID auto|ask` sets how it answers; the old single levels (default / borrow / trusted) are still understood.
+    const setting = !extra ? {} : LEGACY_TRUST[extra] ? { trust: extra } : { wake: extra };
+    const scope = values.unconfined ? { confined: false } : values.confined ? { confined: true } : {};
+    const input = { id, ...(verb === 'trust' ? { ...setting, ...scope } : {}),
       ...(verb === 'ai' ? ai : {}), ...(['pause', 'resume'].includes(verb) ? { paused: verb === 'pause' } : {}), ...(['approve', 'refuse'].includes(verb) ? { approval: extra } : {}) };
     result = await invited_command(service, action, input, deps);
   }

@@ -19,7 +19,7 @@ const shown_level = computed(() => level.value === "read" && !paths.value.length
 const leaf = (path) => path.split(/[\\/]/).filter(Boolean).pop() || path;
 const facts = computed(() => [
   { label: t("状态"), value: t("待签到"), tone: "warn" },
-  { label: t("项目"), value: shown_level.value === "read" ? t("可读：{dirs}", { dirs: paths.value.map(leaf).join("、") }) : t("只讨论") },
+  { label: t("对方能看到"), value: shown_level.value === "read" ? t("消息和项目：{dirs}", { dirs: paths.value.map(leaf).join("、") }) : t("房间消息") },
   { label: t("有效期"), value: DURATIONS.find((option) => option.value === duration.value)?.label },
 ]);
 
@@ -52,12 +52,12 @@ const uid = useId();
         <div class="expert-card-back-body">
           <div class="expert-card-heading"><strong>{{ t("外部专家") }}<span>{{ t("设置") }}</span></strong></div>
           <div class="expert-card-field">
-            <span :id="`${uid}-level`">{{ t("项目") }}</span>
+            <span :id="`${uid}-level`">{{ t("对方能看到") }}</span>
             <div class="expert-card-modes" role="radiogroup" :aria-labelledby="`${uid}-level`">
               <button v-for="option in LEVELS" :key="option.value" type="button" role="radio" :title="option.description" :aria-checked="level === option.value" @click="level = option.value">{{ option.label }}</button>
             </div>
           </div>
-          <p v-if="level === 'read' && !paths.length" class="expert-card-empty">{{ t("还没有选项目目录，只能选“只讨论”。") }}</p>
+          <p v-if="level === 'read' && !paths.length" class="expert-card-empty">{{ t("还没有选项目目录，只能选“房间消息”。") }}</p>
           <div class="expert-card-field">
             <span :id="`${uid}-duration`">{{ t("有效期") }}</span>
             <div class="expert-card-modes" role="radiogroup" :aria-labelledby="`${uid}-duration`">

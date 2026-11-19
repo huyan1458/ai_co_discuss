@@ -38,11 +38,11 @@ export const ROUTES = {
 
 /** What B opens to an external member (`scope` in the room backend, `level` in invitations). */
 export const LEVELS = [
-  { value: "discuss", label: t("只讨论"), description: t("只看房间里点名给它的请求并回答，不读项目文件") },
-  { value: "read", label: t("可读项目"), description: t("另可列目录、读文件、搜索本房间的项目目录；不能写入或执行") },
+  { value: "discuss", label: t("房间消息"), description: t("只看点名给它的消息") },
+  { value: "read", label: t("消息和项目"), description: t("另可只读本房间的项目目录") },
 ];
 /** The short form for the rail and the records list. */
-export const LEVEL_SHORT = { discuss: t("只讨论"), read: t("只读项目") };
+export const LEVEL_SHORT = { discuss: t("房间消息"), read: t("消息和项目") };
 /** How long an invitation's member stays in the room. */
 export const DURATIONS = [
   { value: "1h", label: t("1 小时") },
@@ -52,19 +52,11 @@ export const DURATIONS = [
 ];
 // Whole-day durations; 3d is no longer offered but seats and links made with it stay valid.
 const DURATION_DAYS = { "3d": 3, "7d": 7, "30d": 30 };
-/** A's three trust levels, recorded per inviting computer. */
-export const TRUST_LEVELS = [
-  { value: "default", label: t("每次询问"), description: t("对方点名后先问你，同意才唤醒；AI 只能用共议命令") },
-  { value: "borrow", label: t("完全借用"), description: t("点名即唤醒，受下面的次数与期限上限；AI 只能用共议命令") },
-  { value: "trusted", label: t("信任设备"), description: t("点名即唤醒，不设上限，按普通只读成员运行；这台电脑之后的邀请直接接受") },
-];
-export const TRUST_LABELS = Object.fromEntries(TRUST_LEVELS.map((item) => [item.value, item.label]));
-/** How long 完全借用 lasts, in hours (`invited-trust` takes 1–720). */
-export const BORROW_HOURS = [
-  { value: 24, label: t("1 天") },
-  { value: 72, label: t("3 天") },
-  { value: 168, label: t("7 天") },
-];
+/** A's two settings per invited room: how it answers when named, and how far its AI reaches on this computer. */
+export const WAKES = [{ value: "auto", label: t("直接回答") }, { value: "ask", label: t("先问我") }];
+export const SCOPES = [{ value: true, label: t("只在房间里发言") }, { value: false, label: t("不受限") }];
+export const WAKE_LABELS = Object.fromEntries(WAKES.map((item) => [item.value, item.label]));
+export const scope_label = (confined) => SCOPES.find((item) => item.value === (confined !== false)).label;
 
 // Why an adapter cannot be confined to the codiscuss subcommands (runner/adapters/profiles.mjs `lockdown_hint` and
 // `lockdown_support`), in the page language; text the adapter layer adds later shows as written until listed here.
@@ -338,8 +330,6 @@ function create_invited({ view, bridge }) {
   const room_messages = new Map();
   // The invitation being accepted, listed in the sidebar while its answer crosses the relay.
   const pending_join = ref(null);
-  // D6a: 信任设备 is set only on this computer's own page; through the relay or from an online page it stays greyed.
-  const trust_local = computed(() => Boolean(view.value.admin?.local) || ["127.0.0.1", "localhost", "[::1]"].includes(location.hostname));
   const busy = ref("");
   const announced = new Set();
   let timer = 0;
@@ -392,14 +382,12 @@ function create_invited({ view, bridge }) {
 
   const open = (id) => { selected_id.value = id; page_open.value = true; };
   const close = () => { page_open.value = false; };
-  /** Join, then apply the chosen trust level and 完全借用 limits (`invited-join` starts at the computer's level). */
+  /** Join, then apply the chosen settings. */
   async function join({ trust, room_title = "", ...payload }) {
     pending_join.value = { room_title };
     try {
       const result = await bridge.local_request(OPERATIONS.invited_join, payload);
-      if (result?.record && trust && (trust.trust !== result.record.trust || trust.trust === "borrow")) {
-        await bridge.local_request(OPERATIONS.invited_trust, trust_payload(result.record.id, trust));
-      }
+      if (result?.record && trust) await bridge.local_request(OPERATIONS.invited_trust, trust_payload(result.record.id, trust));
       await load();
       return result || {};
     } catch (error) {
@@ -407,10 +395,10 @@ function create_invited({ view, bridge }) {
       return null;
     } finally { pending_join.value = null; }
   }
-  const trust_payload = (id, { trust, max_wakes, hours }) => ({ id, trust, ...(trust === "borrow" ? { max_wakes, hours } : {}) });
-  /** `trust`: { trust, max_wakes, hours }; the limits apply to 完全借用 only. */
+  const trust_payload = (id, { wake, confined }) => ({ id, wake, confined });
+  /** `trust`: { wake, confined }. */
   function set_trust(id, trust, success = "") {
-    patch_record(id, () => ({ trust: trust.trust }));
+    patch_record(id, () => ({ wake: trust.wake, confined: trust.confined, lockdown: trust.confined }));
     return run("trust", OPERATIONS.invited_trust, trust_payload(id, trust), success);
   }
   function set_paused(id, paused) {
@@ -445,7 +433,7 @@ function create_invited({ view, bridge }) {
   /** Open the join dialog, optionally filled with a link or code. */
   function start_join(text = "") { join_text.value = text; joining.value = true; }
 
-  return { available, records, loaded, failure, page_open, selected_id, selected, joining, join_text, busy, room_me, room_messages, pending_join, trust_local,
+  return { available, records, loaded, failure, page_open, selected_id, selected, joining, join_text, busy, room_me, room_messages, pending_join,
     load, open, close, join, set_trust, set_paused, approve, refuse, leave, remove, read_room, start_join };
 }
 

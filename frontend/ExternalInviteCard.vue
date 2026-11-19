@@ -88,7 +88,7 @@ const uid = useId();
     <template v-if="!invite">
       <template v-if="!seat_id">
       <div class="external-invite-field">
-        <span :id="`${uid}-level`" class="external-invite-label">{{ t("能做什么") }}</span>
+        <span :id="`${uid}-level`" class="external-invite-label">{{ t("对方能看到") }}</span>
         <div class="expert-card-modes" role="radiogroup" :aria-labelledby="`${uid}-level`">
           <button v-for="option in LEVELS" :key="option.value" type="button" role="radio" :aria-checked="level === option.value" :aria-label="option.label" @click="level = option.value">{{ option.label }}</button>
         </div>
@@ -96,7 +96,7 @@ const uid = useId();
       </div>
       <div v-if="level === 'read'" class="external-invite-field" role="group" :aria-labelledby="`${uid}-folders`">
         <span :id="`${uid}-folders`" class="external-invite-label">{{ t("开放目录") }}</span>
-        <p v-if="!room_directories.length" class="external-invite-empty">{{ t("本房间还没有项目目录，只能选“只讨论”。") }}</p>
+        <p v-if="!room_directories.length" class="external-invite-empty">{{ t("本房间还没有项目目录，只能选“房间消息”。") }}</p>
         <div v-else class="external-invite-folders">
           <UCheckbox v-for="path in room_directories" :key="path" :title="path" :model-value="directories.includes(path)" :label="leaf(path)" size="xs"
             @update:model-value="(on) => directories = on ? [...directories, path] : directories.filter((item) => item !== path)" />

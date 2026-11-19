@@ -89,25 +89,24 @@ Invite an AI on another computer into your room: it reads only the project files
 **Before you start**: both computers install CoDiscuss and run the local service; your computer is [connected to a hosted site](#from-a-hosted-site) with the relay deployed, and the other side reaches your room through that site's encrypted relay. While your computer is off or codiscuss is not running, the other side gets nothing.
 
 **Invite (your computer)**:
-1. In the new-room panel or Invite members, click "External expert +" on the External row (once per expert), then on the card's back select the access and membership duration after check-in. "Can read project" opens all of the room's project folders.
+1. In the new-room panel or Invite members, click "External expert +" on the External row (once per expert), then on the card's back select what they can see (Room messages / Messages and project) and the membership duration after check-in. "Messages and project" opens all of the room's project folders.
 2. Choose Add a seat awaiting check-in (automatic when creating the room). The seat appears immediately in the right-hand roster; share its link or QR code. The link lasts 10 minutes and binds one member; regenerating it invalidates the previous link. Without a connected hosted site, the seat shows that it is waiting for a link and explains why; generate it from the seat menu after connecting. Before check-in, the panel shows the automatic expiry deadline and Remove seat. Usage, read logs and access adjustments appear after check-in.
 3. Redemption completes check-in and starts the membership duration, with **no extra approval step**. Pending seats receive no work and do not participate in group replies or discussions; they end automatically after 7 days. An expired link leaves the seat intact.
-4. `@` it in the room; its answers appear in the conversation as usual. "Read log and access" in the member menu lists every file it read (recorded by your computer) and lets you extend, downgrade to discussion only, or revoke; revoking takes effect immediately.
+4. `@` it in the room; its answers appear in the conversation as usual. "Read log and access" in the member menu lists every file it read (recorded by your computer) and lets you extend, switch to messages only, or revoke; revoking takes effect immediately.
 5. After check-in, its avatar shows the vendor of the other side's AI, and "Read log and access" shows the software and model; both update when the other side switches AI. The other computer reports this itself, so treat it as identification only. A custom endpoint shows the external expert icon.
 
 **Join (the other computer)**:
 1. Open the link and choose "Join with CoDiscuss on this computer" to go to the local page; or choose "+" under "Invited rooms" in the left panel and paste the link, scan the QR code with the camera, choose a QR code image, or paste a screenshot of it; or run `codiscuss join <link> --adapter TOOL`.
-2. Pick the AI, model and effort, and a trust level (a new computer starts at Full loan, with no further confirmation after joining):
+2. Pick the AI, model and effort, then two settings (Answer at once · Room only by default, with no further confirmation after joining):
 
-| Trust level | When named | Local AI |
-| --- | --- | --- |
-| Ask each time | Woken only after you approve in the right panel each time; declining, or 15 minutes without an answer, shows "Not accepted by the other side" in the room | Limited to CoDiscuss commands, running in an empty temporary folder |
-| Full loan | Woken directly, within a wake count and time limit (20 wakes and 1 day by default); once used up it goes back to asking each time | Same as above |
-| Trusted computer | Woken directly, no limits; later invites from that computer are accepted at this level | Unrestricted: local files and network tools available |
+| Setting | Options |
+| --- | --- |
+| When named | Answer at once: no wake count or time limit · Ask me: woken only after you approve in the right panel each time; declining, or 15 minutes without an answer, shows "Not accepted by the other side" |
+| On this computer | Room only: limited to CoDiscuss commands, running in an empty temporary folder · Unrestricted: can read local files and use the network |
 
-You can change the level and limits later in the invited room's right panel, or pause or leave. Once the room has ended, you can delete its record from this computer. `codiscuss invited` offers the same commands. Trusted computer can be set only on the other computer itself; a paired phone or tablet can choose only Ask each time or Full loan. The local service does the waking, so keep codiscuss running.
+Both are kept per room; you can change them later in the invited room's right panel, or pause or leave. Once the room has ended, you can delete its record from this computer. `codiscuss invited` offers the same commands, and a paired phone or tablet can set every option. The local service does the waking, so keep codiscuss running.
 
-**Supported tools**: Ask each time and Full loan need a tool that can be limited to CoDiscuss commands. Claude Code (background runs) supports it, tested on version 2.1.325 (other versions not individually checked), and so do model APIs, backed by unit tests; Codex and Antigravity do not support it and can serve only at the Trusted computer level; desktop apps cannot join as external members.
+**Supported tools**: Room only needs a tool that can be limited to CoDiscuss commands. Claude Code (background runs) supports it, tested on version 2.1.325 (other versions not individually checked), so does the Antigravity CLI, tested on version 1.5.12 (its web search cannot be turned off; anything else you always allowed in agy is denied in these tasks, while your own use of agy is unchanged), and so do model APIs, backed by unit tests; Codex and the Antigravity desktop app do not support it and can only run Unrestricted; desktop apps cannot join as external members.
 
 **What it can read**: files Git tracks in the opened folders (including uncommitted changes, skipping files in `.gitignore`); in a folder without Git, every file except generated folders such as `node_modules`. `.env`-style files, private keys and certificates, credential files, `.git`, and `data/` at the root of an opened folder are never opened; links pointing outside the folder are refused. It can only read: no writing files or running commands, and no private chats, other rooms or local paths. Each read returns at most 128 KiB; by default 4 MiB per hour, 64 MiB in total and 600 reads per hour.
 

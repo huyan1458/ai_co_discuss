@@ -351,7 +351,7 @@ test('A chain: join by link; at the default level a request waits for A, and A r
   const b = await computer_b_with_project(t), a = computer_a(t);
   const { invited_command, poll_record, APPROVAL_TIMEOUT_MS } = await import('../runner/external_client.mjs');
   const record = await cli_join(a, b);
-  assert.equal(record.trust, 'borrow');
+  assert.equal(record.wake, 'auto');
   await invited_command(a.home, 'invited-trust', { id: record.id, trust: 'default' });
   assert.equal(record.lockdown, true);
   assert.equal(record.fingerprint_checked, true, 'the link\'s fingerprint was checked against B\'s keys');
@@ -388,7 +388,7 @@ test('A chain: borrowed, A\'s fake AI reads B\'s file with codiscuss repo and an
   const b = await computer_b_with_project(t), a = computer_a(t);
   const { invited_command, poll_record } = await import('../runner/external_client.mjs');
   const record = await cli_join(a, b);
-  assert.equal((await invited_command(a.home, 'invited-trust', { id: record.id, trust: 'borrow', max_wakes: 5, hours: 1 })).record.trust, 'borrow');
+  assert.equal((await invited_command(a.home, 'invited-trust', { id: record.id, wake: 'auto' })).record.wake, 'auto');
   const fake = write_fake_ai(join(a.home, 'fake-ai'), [
     ['repo', 'read', 'src/main.js', '--root', '0'],
     ['repo', 'read', '.env', '--root', '0'],

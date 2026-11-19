@@ -179,7 +179,7 @@ const reported = (b, action) => () => b.state.executions.some(item => item.actio
 test('joining keeps the key and credential out of the record and every command output', async t => {
   const b = fake_b();
   const { home, record } = await joined(t, b);
-  assert.equal(record.trust, 'borrow');
+  assert.deepEqual([record.wake, record.confined], ['auto', true]);
   assert.equal(record.fingerprint_checked, true);
   assert.equal(record.member, 'Claude-ext');
   assert.deepEqual(record.directories, [{ root: 0, name: 'app' }]);
@@ -356,33 +356,40 @@ test('refusing or letting a request time out tells the inviting room it was not 
   assert.deepEqual(read_store(home).records[record.id].history.map(item => item.outcome), ['refused', 'timeout']);
 });
 
-test('full borrowing wakes directly within its limits, then falls back to asking', async t => {
+test('answering at once has no wake limit, even for a room that had one before', async t => {
   const b = fake_b(), delivery = fake_deliver();
   const { home, record } = await joined(t, b);
-  await invited_command(home, 'invited-trust', { id: record.id, trust: 'borrow', max_wakes: 1, hours: 2 });
+  const path = join(home, 'external', 'invited.json');
+  const store = JSON.parse(readFileSync(path, 'utf8'));
+  store.records[record.id].limits = { max_wakes: 1, until: Date.now() + 3600000, used: 1 };
+  writeFileSync(path, JSON.stringify(store));
   b.state.pending = [{ id: 10, message_id: 50 }];
   assert.equal((await poll_record(home, record.id, deps(b, delivery))).execution_id, 100);
   assert.equal(delivery.runs[0].task.tool_lockdown, true);
   delivery.runs[0].task.on_failure(new Error('模型额度用尽'));
   await wait_for(reported(b, 'fail'));
   assert.equal(b.state.executions.at(-1).reason, '模型额度用尽');
-  b.state.pending = [{ id: 11, message_id: 51 }];
-  assert.ok((await poll_record(home, record.id, deps(b, delivery))).approval, 'limit used up: ask the owner');
-  assert.equal(delivery.runs.length, 1);
-  const shown = (await invited_command(home, 'invited-list')).records[0];
-  assert.equal(shown.wakes, 1);
-  assert.equal(shown.limits.used, 1);
+  const set = await invited_command(home, 'invited-trust', { id: record.id, wake: 'auto' });
+  assert.equal(set.record.limits, null, 'changing the settings drops an old limit');
 });
 
-test('a trusted computer wakes without lockdown, and its later invitations join as trusted', async t => {
+test('an unrestricted room wakes without lockdown; a room joined before keeps the level its computer had', async t => {
   const b = fake_b(), delivery = fake_deliver();
   const { home, record } = await joined(t, b);
-  await invited_command(home, 'invited-trust', { id: record.id, trust: 'trusted' });
+  const set = await invited_command(home, 'invited-trust', { id: record.id, wake: 'auto', confined: false });
+  assert.deepEqual([set.record.wake, set.record.confined, set.record.lockdown], ['auto', false, false]);
   b.state.pending = [{ id: 12, message_id: 60 }];
   await poll_record(home, record.id, deps(b, delivery));
   assert.equal(delivery.runs[0].task.tool_lockdown, false);
-  const again = await invited_command(home, 'invited-join', { invite: link(b.fingerprint), adapter: 'claude' }, { fetcher: b.fetcher });
-  assert.equal(again.record.trust, 'trusted');
+  // Records from before these settings kept one level per inviting computer.
+  const path = join(home, 'external', 'invited.json');
+  const store = JSON.parse(readFileSync(path, 'utf8'));
+  const old = store.records[record.id];
+  delete old.wake; delete old.confined;
+  store.machines[old.machine_fingerprint] = { ...store.machines[old.machine_fingerprint], trust: 'default' };
+  writeFileSync(path, JSON.stringify(store));
+  const shown = (await invited_command(home, 'invited-list')).records[0];
+  assert.deepEqual([shown.wake, shown.confined], ['ask', true]);
 });
 
 test('software that cannot be locked down is not started below the trusted level', async t => {
