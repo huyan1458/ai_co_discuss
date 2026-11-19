@@ -15,7 +15,7 @@ import MemberDescriptionDialog from "./MemberDescriptionDialog.vue";
 import { busy, member_actions } from "./member-actions.js";
 import MemoBlock from "./memo-block.js";
 import ExternalMemberDialog from "./ExternalMemberDialog.vue";
-import { declined, external_of, external_tag, revoke_member } from "./external-members.js";
+import { copy_seat_link, declined, external_of, external_tag, revoke_member } from "./external-members.js";
 
 const { view, bridge, act, pending } = inject("discussion");
 const LIVE = ["dispatched", "started"];
@@ -243,7 +243,8 @@ function member_row_key(member, state) {
 function member_menu(member) {
   return member_actions(member, { view: view.value, act, describe: (name) => { describing.value = name; },
     external: (target) => { external_member.value = target; external_reinvite.value = false; external_open.value = true; },
-    revoke: (target) => revoke_member(bridge, act, room.value.id, target) });
+    revoke: (target) => revoke_member(bridge, act, room.value.id, target),
+    copy_link: async (target) => { if (await copy_seat_link(bridge, room.value.id, target.id)) bridge.notify("info", t("已复制邀请链接")); } });
 }
 
 const inviting = ref(false);

@@ -7,6 +7,7 @@
  * The same as `codiscuss join <link>`.
  */
 import { computed, inject, ref, watch } from "vue";
+import PlatformConfigDialog from "./PlatformConfigDialog.vue";
 import RosterAdd from "./RosterAdd.vue";
 import ExpertCard from "./ExpertCard.vue";
 import { LEVEL_SHORT, lockdown_problem, use_invited_rooms } from "./external-members.js";
@@ -43,26 +44,18 @@ function paste_image(event) {
   event.preventDefault();
   read_image(file);
 }
-/**
- * The AI chosen when the dialog opens with none: as the new-room panel picks one, the first configured software in the
- * list, preferring one that can be confined to codiscuss commands.
- */
-function default_platform() {
-  const configured = platforms.value.filter((name) => bridge.platform_configured(name));
-  return configured.find((name) => !lockdown_problem(view.value.launch.profiles[name]?.adapter, view.value.launch.profiles[name])) || configured[0] || "";
-}
+// Opens with no AI picked, as the new-room panel starts with no member (user 2026-11-19, #5458).
 watch(open, (value) => {
   if (!value) return stop_scan();
   check_camera();
   text.value = invited.join_text.value;
-  if (!platform.value) {
-    const name = default_platform();
-    if (name) choose(name);
-  }
 });
 const platforms = computed(() => Object.keys(bridge.launch_clients));
+// As in the new-room panel, software not set up yet stays grey at the end of the row and its chip opens the setup.
+const configuring = ref("");
 const items = computed(() => platforms.value.map((name) => ({ value: name, name: bridge.default_name(name), ...bridge.identities[name],
-  selected: platform.value === name, aria_label: t("派 {name} 加入", { name: bridge.default_name(name) }) })));
+  selected: platform.value === name, aria_label: t("派 {name} 加入", { name: bridge.default_name(name) }),
+  ...(bridge.platform_configured(name) ? {} : { unconfigured: true, title: t("未配置，点击配置"), aria_label: t("配置 {value1}", { value1: bridge.default_name(name) }) }) })));
 function choose(name) {
   platform.value = name;
   bridge.load_launch_models(name);
@@ -117,7 +110,7 @@ async function submit() {
 
 <template>
   <UModal :content="{ onInteractOutside: (event) => event.preventDefault() }" v-model:open="open" :title="t('加入另一台电脑的房间')"
-    :description="t('你的 AI 在这台电脑上运行，只读对方开放的目录，在对方房间里回答。')" :ui="{ content: 'glass-panel studio-modal', body: 'dialog-body' }">
+    :description="t('你的 AI 在这台电脑上运行，只读对方开放的目录，在对方房间里回答。')" :ui="{ content: 'glass-panel studio-modal join-invited-modal', body: 'dialog-body' }">
     <template #body>
       <form class="join-invited" @submit.prevent="submit" @paste="paste_image">
         <UFormField :label="t('邀请链接')">
@@ -135,11 +128,13 @@ async function submit() {
         </div>
         <p v-if="text.trim() && !is_link" class="fine-print" role="alert">{{ t("这不是邀请链接，请粘贴对方发来的完整链接。") }}</p>
         <p v-else-if="LEVEL_SHORT[offered.level]" class="fine-print" role="note">{{ t("对方开放：{level}", { level: LEVEL_SHORT[offered.level] }) }}</p>
-        <RosterAdd :label="t('派哪个 AI')" :items="items" @add="choose" />
+        <PlatformConfigDialog v-model="configuring" />
+        <RosterAdd :label="t('派哪个 AI')" :items="items" @add="choose" @configure="(name) => { configuring = name; }" />
         <p v-if="!platforms.length && invited.available.value" class="fine-print" role="note">{{ t("这台电脑还没有可派出的 AI 软件，请先在设置里配置。") }}</p>
         <div v-if="platform" class="join-invited-card">
           <ExpertCard :key="platform" :name="platform" mode="cli" :choices="['cli', 'manual']" :status="card_status" joining v-model:trust="trust" :confine_reason="lockdown" />
         </div>
+        <p v-else-if="platforms.length" class="join-invited-empty">{{ t("选择一个 AI 派去对方房间，点卡片翻面可设置软件、模型和本机权限。") }}</p>
         <p v-if="lockdown" class="fine-print" role="note" :title="lockdown">{{ t("这个 AI 只能不受限运行。") }}</p>
         <p v-if="!invited.available.value" class="fine-print" role="alert">{{ t("加入需要本机服务，请在运行 AI 的电脑打开本机网站。") }}</p>
         <div class="join-invited-footer">
@@ -161,4 +156,16 @@ async function submit() {
 .join-invited-footer { display: flex; justify-content: flex-end; gap: 8px; }
 /* One card at the invite dialog's card size. */
 .join-invited-card { width: min(272px, 100%); }
+.join-invited-empty { margin: 0; padding: 18px 12px; border: 1px dashed var(--ui-border); border-radius: 8px; text-align: center; color: var(--ui-text-muted); font-size: 12px; }
+/* A phone gets the new-room panel's spacing (user 2026-11-19, #5458). */
+@media (max-width: 600px) {
+  .join-invited { gap: 10px; }
+  .join-invited :deep(.roster-add) { gap: 4px 6px; }
+  .join-invited :deep(.roster-add-chips) { gap: 4px; }
+  .join-invited-empty { padding: 8px 10px; }
+  :global(html[data-theme^="channel"] .join-invited-modal [data-slot="header"]) { padding: 12px 14px 10px; }
+  :global(html[data-theme^="channel"] .join-invited-modal [data-slot="description"]) { display: none; }
+  :global(html[data-theme^="channel"] .join-invited-modal [data-slot="close"]) { top: 8px; right: 8px; }
+  :global(html[data-theme^="channel"] .join-invited-modal .dialog-body) { padding: 10px 14px 12px; }
+}
 </style>

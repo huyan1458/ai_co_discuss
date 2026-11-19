@@ -1,5 +1,5 @@
 <script setup>
-import { awaiting_member, revoke_member } from "./external-members.js";
+import { awaiting_member, copy_seat_link, revoke_member } from "./external-members.js";
 /**
  * Everything about who is in the room and how it is set up, laid out in full: the rail's member menu is only the quick
  * entry to the same actions, so nothing here hides behind a menu.
@@ -261,7 +261,8 @@ const HOST_LABEL = t("设为主持人");
  */
 function actions(member) {
   const [taking_part, place, removal] = member_actions(live(member), { view: view.value, act, describe: (name) => { describing.value = name; },
-    revoke: (target) => revoke_member(bridge, act, view.value.room.id, target) });
+    revoke: (target) => revoke_member(bridge, act, view.value.room.id, target),
+    copy_link: async (target) => { if (await copy_seat_link(bridge, view.value.room.id, target.id)) bridge.notify("info", t("已复制邀请链接")); } });
   if (!free.value) return { taking_part, host: null, place: [] };
   return { taking_part, host: place.find((item) => item.label === HOST_LABEL) || null, place: [...place.filter((item) => item.label !== HOST_LABEL), ...removal] };
 }

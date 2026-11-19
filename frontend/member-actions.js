@@ -15,11 +15,11 @@ export const busy = (member) => member.pending > 0 || LIVE.includes(member.execu
  * @param {object} context `view` (the current snapshot), `act` and `describe` (opens the description editor).
  * @returns {object[][]} Groups of `{ label, icon, disabled?, color?, onSelect }`.
  */
-export function member_actions(member, { view, act, describe, external, revoke }) {
+export function member_actions(member, { view, act, describe, external, revoke, copy_link }) {
   const access = view.access;
   // A member from another computer has no credentials or launch here: its own dialog holds the reading record and
   // the protections (extend, downgrade, revoke); it is never the host.
-  if (external_of(member)) return external_actions(member, { view, act, describe, external, revoke });
+  if (external_of(member)) return external_actions(member, { view, act, describe, external, revoke, copy_link });
   const available = access?.members?.find((entry) => entry.name === member.name)?.available;
   const locked = !access?.can_manage;
   const session_running = ["active", "paused"].includes(view.room?.session?.status);
@@ -39,10 +39,14 @@ export function member_actions(member, { view, act, describe, external, revoke }
   ], ...(current_host ? [] : [[{ ...change(t('移除'), "i-lucide-trash-2", "remove"), color: "error" }]])];
 }
 
-/** Action groups for an external member; `external(member)` opens its dialog, `revoke(member)` ends it at once. */
-function external_actions(member, { view, act, describe, external, revoke }) {
+/**
+ * Action groups for an external member; `external(member)` opens its dialog, `revoke(member)` ends it at once and
+ * `copy_link(member)` copies a waiting seat's invitation link, as a manual member's menu copies its launch instruction.
+ */
+function external_actions(member, { view, act, describe, external, revoke, copy_link }) {
   const locked = !view.access?.can_manage;
   return [[
+    ...(external_of(member).pending && copy_link ? [{ label: t('复制邀请链接'), icon: "i-lucide-link", disabled: locked, onSelect: () => copy_link(member) }] : []),
     { label: external_of(member).pending ? t('邀请详情') : t('读取记录与权限'), icon: "i-lucide-shield-check", disabled: locked, onSelect: () => external?.(member) },
     { label: t('名称与描述'), icon: "i-lucide-user-pen", disabled: locked, onSelect: () => describe(member.name) },
   ], [

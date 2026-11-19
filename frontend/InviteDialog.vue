@@ -5,7 +5,7 @@ import ExpertCard from "./ExpertCard.vue";
 import ExternalExpertCard from "./ExternalExpertCard.vue";
 import PlatformConfigDialog from "./PlatformConfigDialog.vue";
 import RosterAdd from "./RosterAdd.vue";
-import { room_operations, runner_text, seat_options } from "./external-members.js";
+import { copy_seat_link, external_of, room_operations, runner_text, seat_options } from "./external-members.js";
 import { t } from "./i18n.js";
 
 const props = defineProps({ description: { type: String, default: () => t("新成员由程序按本机软件配置启动，或由你手动启动。") }, workflowId: { type: String, default: "" } });
@@ -24,11 +24,19 @@ async function copy_launch(name) {
   launch_copied.value = name;
   launch_copy_timer = setTimeout(() => { launch_copied.value = ""; }, COPY_FEEDBACK_MS);
 }
+/** Copy a just-added external seat's invitation link, with the same feedback as a launch instruction. */
+async function copy_seat(member_id) {
+  clearTimeout(launch_copy_timer);
+  launch_copied.value = "";
+  if (!await copy_seat_link(bridge, room.value.id, member_id)) return;
+  launch_copied.value = `seat:${member_id}`;
+  launch_copy_timer = setTimeout(() => { launch_copied.value = ""; }, COPY_FEEDBACK_MS);
+}
 // Everyone picked for one invitation, one card per platform: [{ name, mode }].
 const invite_picks = ref([]);
 let invite_pick_seq = 0;
-// External expert cards among the picks, each `{ id, draft }`; 邀请 adds their seats awaiting check-in. The link is
-// shared later from the seat's 邀请详情 above the composer, as a manual member's launch instruction is.
+// External expert cards among the picks, each `{ id, draft }`; 邀请 adds their seats awaiting check-in, and the dialog
+// then offers each seat's invitation link as it offers a manual member's launch instruction (user 2026-11-19, #5450).
 const external_drafts = ref([]);
 let external_seq = 0;
 const room_directories = computed(() => {
@@ -38,6 +46,18 @@ const room_directories = computed(() => {
 const EXTERNAL_CHIP = "external:computer";
 // Instance names of just-invited manual members; the dialog then shows their start step.
 const invited_manual = ref([]);
+// Member ids of just-added external seats, listed beside the manual members in that step.
+const invited_external = ref([]);
+const seat_record = (id) => (room.value.members || []).find((member) => member.id === id);
+const invited_any_seat = computed(() => (invited_manual.value.length || invited_external.value.length) && !invite_picks.value.length && !external_drafts.value.length);
+const launch_lead = computed(() => {
+  const manual = invited_manual.value.length, external = invited_external.value.length;
+  if (manual && external) return t("成员已加入：手动成员把启动指令交给各自的 AI 会话，外部专家把邀请链接发给对方；注册或签到后才算到场。");
+  if (external) return external > 1 ? t("{count} 个外部专家席位已加好，把邀请链接分别发给对方，对方签到后才算到场。", { count: external })
+    : t("外部专家席位已加好，把邀请链接发给对方，对方签到后才算到场。");
+  return manual > 1 ? t("{count} 位手动成员已加入，把启动指令交给各自的 AI 会话，注册后才算到场。", { count: manual })
+    : t("手动成员已加入，把启动指令交给各自的 AI 会话，注册后才算到场。");
+});
 // Board errors from earlier actions stay out of the dialog until this invite is submitted.
 const invite_tried = ref(false);
 const invite_choices = computed(() => Object.keys(bridge.launch_clients));
@@ -84,6 +104,7 @@ watch(inviting, async (open) => {
   external_drafts.value = [];
   invite_tried.value = false;
   invited_manual.value = [];
+  invited_external.value = [];
   if (props.workflowId) await choose_workflow(props.workflowId);
 });
 watch(() => room.value.id, () => { inviting.value = false; invite_picks.value = []; });
@@ -196,7 +217,7 @@ async function submit_invitation() {
     if (!await act("enable_room_workflow", { id: workflow.id, members: workflow.members })) return await refresh_after(invited_any);
     invite_workflow.value = null;
   }
-  if (!invite_picks.value.length && !invited_manual.value.length) inviting.value = false;
+  if (!invite_picks.value.length && !invited_manual.value.length && !invited_external.value.length) inviting.value = false;
   await refresh_after(invited_any);
 }
 
@@ -205,7 +226,8 @@ async function add_external_seats() {
   let added = false;
   for (const item of [...external_drafts.value]) {
     try {
-      await room_operations(bridge).create_invite(room.value.id, seat_options(item.draft, room_directories.value));
+      const seat = await room_operations(bridge).create_invite(room.value.id, seat_options(item.draft, room_directories.value));
+      invited_external.value = [...invited_external.value, seat.member_id];
       external_drafts.value = external_drafts.value.filter((entry) => entry !== item);
       added = true;
     } catch (error) { bridge.notify("error", runner_text(error.message)); break; }
@@ -224,8 +246,8 @@ async function refresh_after(invited_any) {
     <template #body>
       <div v-if="loading" class="pb-invite-cards" role="status" :aria-label="t('正在读取工作流成员')"><USkeleton v-for="card in 2" :key="card" class="pb-invite-skeleton w-full" /></div>
       <div v-else-if="failure" class="pb-invite" role="status"><p>{{ failure }}</p><UButton :label="t('重试')" icon="i-lucide-refresh-cw" color="neutral" variant="soft" @click="choose_workflow(workflowId)" /></div>
-      <div v-else-if="invited_manual.length && !invite_picks.length" class="pb-invite" :aria-label="t('启动手动成员')">
-        <p class="pb-invite-lead">{{ invited_manual.length > 1 ? t('{count} 位手动成员已加入，把启动指令交给各自的 AI 会话，注册后才算到场。', { count: invited_manual.length }) : t('手动成员已加入，把启动指令交给各自的 AI 会话，注册后才算到场。') }}</p>
+      <div v-else-if="invited_any_seat" class="pb-invite" :aria-label="t('启动新成员')">
+        <p class="pb-invite-lead">{{ launch_lead }}</p>
         <ul class="pb-invite-launches">
           <li v-for="name in invited_manual" :key="name">
             <UAvatar :src="bridge.identities[bridge.platform_of(name)]?.icon" :text="bridge.identities[bridge.platform_of(name)]?.initials" :alt="name" size="xs" class="channel-avatar" :class="bridge.identities[bridge.platform_of(name)]?.style" />
@@ -233,8 +255,15 @@ async function refresh_after(invited_any) {
             <small :class="{ 'is-registered': record(name)?.registered_at }">{{ record(name)?.registered_at ? t('已注册') : t('待注册') }}</small>
             <UButton :icon="launch_copied === name ? 'i-lucide-check' : 'i-lucide-rocket'" :label="launch_copied === name ? t('已复制') : t('复制启动指令')" size="sm" :color="launch_copied === name ? 'success' : 'primary'" variant="soft" class="pb-launch-button" :loading="pending === 'copy_member_launch'" :disabled="Boolean(pending)" @click="copy_launch(name)" />
           </li>
+          <li v-for="id in invited_external" :key="`seat-${id}`">
+            <UAvatar src="/icons/external-expert.svg" :alt="t('外部专家')" size="xs" class="channel-avatar external" />
+            <strong>{{ seat_record(id) ? bridge.display_name(seat_record(id).name) : t('外部专家') }}</strong>
+            <small :class="{ 'is-registered': seat_record(id) && !external_of(seat_record(id)).pending }">{{ seat_record(id) && !external_of(seat_record(id)).pending ? t('已签到') : t('待签到') }}</small>
+            <UButton :icon="launch_copied === `seat:${id}` ? 'i-lucide-check' : 'i-lucide-link'" :label="launch_copied === `seat:${id}` ? t('已复制') : t('复制邀请链接')" size="sm" :color="launch_copied === `seat:${id}` ? 'success' : 'primary'" variant="soft" class="pb-launch-button" @click="copy_seat(id)" />
+          </li>
         </ul>
-        <p class="fine-print">{{ t("指令含该成员的凭证，只交给对应的会话；关闭后仍可在参与者列表中复制。") }}</p>
+        <p v-if="invited_manual.length" class="fine-print">{{ t("指令含该成员的凭证，只交给对应的会话；关闭后仍可在参与者列表中复制。") }}</p>
+        <p v-if="invited_external.length" class="fine-print">{{ t("邀请链接只发给要邀请的人；关闭后仍可在输入框上方或成员菜单的“邀请详情”里复制。") }}</p>
         <div class="pb-invite-footer"><UButton :label="t('完成')" class="channel-primary-button" @click="inviting = false" /></div>
       </div>
       <form v-else class="pb-invite" :aria-label="t('邀请专家')" @submit.prevent="invite">

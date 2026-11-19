@@ -12,7 +12,7 @@ const { state, reload, notify } = inject("panel");
 const service = computed(() => state.value.service || {});
 const online_site = computed(() => state.value.online_site || "");
 const binding = ref(false), unbinding = ref(false), busy = ref("");
-const form = ref({ site: "", setup_key: "" });
+const form = ref({ site: "" });
 
 /** Open the local page in the default browser; the panel makes the link, which a protected site requires. */
 async function open_local() {
@@ -20,7 +20,7 @@ async function open_local() {
 }
 
 function start_binding() {
-  form.value = { site: "", setup_key: "" };
+  form.value = { site: "" };
   binding.value = true;
 }
 
@@ -60,10 +60,9 @@ async function change(action, body, message) {
 
   <UModal :open="binding" :title="t('绑定线上网站')" :description="t('你部署的共议线上网站，绑定后在本地网页的“设置”里给手机等设备配对')" @update:open="(open) => !open && (binding = false)">
     <template #body>
-      <form class="admin-entry-form" @submit.prevent="change('connect', { site: form.site.trim(), setup_key: form.setup_key.trim() }, t('已绑定线上网站'))">
-        <label class="panel-field">{{ t('站点地址') }}<input v-model="form.site" class="panel-input" placeholder="https://xxx.pages.dev" spellcheck="false" /></label>
-        <label class="panel-field">{{ t('绑定令牌') }}<input v-model="form.setup_key" class="panel-input" autocomplete="off" spellcheck="false" />
-          <small>{{ t('在部署这个网站的电脑上运行 codiscuss token 获得，只能用一次；就在那台电脑上绑定时可以不填') }}</small></label>
+      <form class="admin-entry-form" @submit.prevent="change('connect', { site: form.site.trim() }, t('已绑定线上网站'))">
+        <label class="panel-field">{{ t('接入码') }}<textarea v-model="form.site" class="panel-input" rows="3" placeholder="https://xxx.pages.dev/#codiscuss-bind=…" autocomplete="off" spellcheck="false"></textarea>
+          <small>{{ t('在部署线上网站的电脑上生成（运行 codiscuss admin entry code，或在其管理面板“托管账号入口 → 线上网站”里生成），只能用一次。就在那台电脑上绑定时，只填站点地址即可。') }}</small></label>
         <div class="panel-form-foot">
           <button type="button" class="panel-button is-plain" @click="binding = false">{{ t('取消') }}</button>
           <button type="submit" class="panel-button is-primary" :disabled="!form.site.trim() || Boolean(busy)"><UIcon v-if="busy === 'connect'" name="i-lucide-loader" class="animate-spin" />{{ t('绑定') }}</button>

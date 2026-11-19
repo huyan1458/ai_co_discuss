@@ -373,7 +373,6 @@
   "绑定线上网站": "Bind online site",
   "你部署的共议线上网站，绑定后在本地网页的“设置”里给手机等设备配对": "The CoDiscuss online site you deployed. Once bound, pair phones and other devices under Settings on the local page",
   "绑定令牌": "Binding token",
-  "在部署这个网站的电脑上运行 codiscuss token 获得，只能用一次；就在那台电脑上绑定时可以不填": "Run codiscuss token on the computer that deployed this site. It works once. Leave it empty when binding on that computer",
   "已绑定线上网站": "Online site bound",
   "已解绑线上网站": "Online site unbound",
   "解绑线上网站": "Unbind online site",
@@ -387,5 +386,6 @@
   "你自己使用这台电脑的入口。": "Your own ways into this computer.",
   "{value1} 有新版本": "New version of {value1}",
   "托管账号从这份副本运行。更新共议时会自动同步；Claude Code 等程序单独升级后，在这里同步一次。": "Hosted accounts run from this copy. Updating CoDiscuss syncs it automatically; sync here once after upgrading Claude Code or another program on its own.",
-  "登录入口未运行，使用者暂时无法登录": "The sign-in entry is not running, so users cannot sign in for now"
+  "登录入口未运行，使用者暂时无法登录": "The sign-in entry is not running, so users cannot sign in for now",
+  "在部署线上网站的电脑上生成（运行 codiscuss admin entry code，或在其管理面板“托管账号入口 → 线上网站”里生成），只能用一次。就在那台电脑上绑定时，只填站点地址即可。": "Generate it on the computer that deployed the online site (run codiscuss admin entry code, or use Hosted accounts entry → Online site in its management panel); each code works once. On that computer itself, the site address alone is enough."
 }

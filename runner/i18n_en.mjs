@@ -506,7 +506,7 @@ export default {
   "这位外部成员只能讨论，不能读取项目": "This external member can discuss but cannot read the project",
   "这位外部成员未登记或已移除": "This external member is not registered or has been removed",
   "这台电脑绑定了多个线上网站，请指定邀请使用的网站": "This computer is connected to several online sites. Choose the site for the invite",
-  "这台电脑还没有绑定线上网站，请先运行 codiscuss local connect 网站地址": "This computer is not connected to an online site yet. Run codiscuss local connect <site address> first",
+  "这台电脑未绑定线上网站，请在管理面板“线上网站”处绑定": "This computer is not bound to an online site. Bind it under Online site in the management panel.",
   "这把密钥已经加入过房间，请为新的邀请生成新密钥": "This key has already joined a room. Generate a new key for a new invite",
   "这条请求是发给另一台电脑的": "This request was meant for another computer",
   "邀请对应的房间已不在这台电脑上": "The invited room is no longer on this computer",

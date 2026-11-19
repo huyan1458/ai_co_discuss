@@ -34,11 +34,17 @@ const disabled = (option) => option.value && Boolean(props.confine_reason);
 </template>
 
 <style scoped>
-.trust-level { display: flex; flex-direction: column; gap: 8px; min-width: 0; font-size: 12px; }
-.trust-row { display: flex; flex-wrap: wrap; align-items: center; gap: 6px 8px; color: var(--ui-text-toned); }
+.trust-level { display: flex; flex-direction: column; gap: 10px; min-width: 0; font-size: 12px; container-type: inline-size; }
+.trust-row { display: flex; align-items: center; gap: 8px; color: var(--ui-text-toned); }
 .trust-label { flex: 0 0 72px; color: var(--ui-text-toned); }
-.trust-segments { display: flex; gap: 3px; padding: 3px; border-radius: 6px; background: var(--ui-bg-muted); }
-.trust-segments button { min-width: 48px; min-height: 26px; padding: 0 10px; border-radius: 4px; font-size: 12px; color: var(--ui-text-muted); }
+/* Options share the row equally, so both rows line up whatever the labels. */
+.trust-segments { display: flex; flex: 1; min-width: 0; gap: 3px; padding: 3px; border-radius: 6px; background: var(--ui-bg-muted); }
+.trust-segments button { flex: 1 1 0; min-width: 0; min-height: 26px; padding: 0 8px; border-radius: 4px; font-size: 12px; color: var(--ui-text-muted); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+/* A narrow rail puts each label above its options instead of squeezing them beside it (user 2026-11-19, #5446). */
+@container (max-width: 320px) {
+  .trust-row { flex-direction: column; align-items: stretch; gap: 6px; }
+  .trust-label { flex: none; color: var(--ui-text-muted); }
+}
 .trust-segments button.is-selected { color: var(--ui-text-highlighted); background: var(--ui-bg-elevated); box-shadow: var(--channel-shadow-control); }
 .trust-segments button:disabled { opacity: .45; cursor: not-allowed; }
 .trust-warning { margin: 0; color: var(--ui-warning, #e0a33a); font-size: 12px; }

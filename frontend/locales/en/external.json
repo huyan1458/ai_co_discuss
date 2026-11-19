@@ -212,5 +212,14 @@
   "{count} 天内未签到自动结束": "Ends automatically if not checked in within {count} days",
   "移除席位": "Remove seat",
   "席位已移除": "Seat removed",
-  "生成链接": "Generate link"
+  "生成链接": "Generate link",
+  "成员已加入：手动成员把启动指令交给各自的 AI 会话，外部专家把邀请链接发给对方；注册或签到后才算到场。": "Members added: give each manual member's launch instruction to its own AI session and send each external expert their invitation link; they count as present once registered or checked in.",
+  "{count} 个外部专家席位已加好，把邀请链接分别发给对方，对方签到后才算到场。": "{count} external expert seats added. Send each invitation link to its invitee; they count as present once they check in.",
+  "外部专家席位已加好，把邀请链接发给对方，对方签到后才算到场。": "External expert seat added. Send the invitation link to the invitee; they count as present once they check in.",
+  "邀请链接只发给要邀请的人；关闭后仍可在输入框上方或成员菜单的“邀请详情”里复制。": "Send the invitation link only to the person you are inviting. After closing, you can still copy it above the message box or from Invitation details in the member menu.",
+  "已签到": "Checked in",
+  "启动新成员": "Start new members",
+  "已复制邀请链接": "Invitation link copied",
+  "{value1} 待签到：把邀请链接发给对方": "{value1} awaiting check-in: send the invitation link to the invitee",
+  "选择一个 AI 派去对方房间，点卡片翻面可设置软件、模型和本机权限。": "Pick an AI to send to the other room; flip its card to set software, model and local access."
 }

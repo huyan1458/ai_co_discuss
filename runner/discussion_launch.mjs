@@ -2445,7 +2445,7 @@ export async function launch_main(args = process.argv.slice(2), input_text) {
     // The QR code opens the paired website and carries this computer's key fingerprint for the new device to check.
     const { keyed_links } = await import('./remote_launch.mjs');
     const [site, link] = Object.entries(keyed_links(home).sites).find(([origin]) => !input?.site || origin === input.site) || [];
-    if (!link) throw new Error('这台电脑还没有绑定线上网站，请先运行 codiscuss local connect 网站地址');
+    if (!link) throw new Error('这台电脑未绑定线上网站，请在管理面板“线上网站”处绑定');
     result = start_pairing(home, { site, fingerprint: machine_fingerprint(link), temporary: input?.temporary === true, without_passkey: input?.without_passkey === true });
   }
   else if (positionals[0] === 'devices' && !values.remote) {

@@ -207,6 +207,19 @@ export function room_operations(bridge) {
   };
 }
 
+/**
+ * Copy a seat's invitation link: the one this page last generated while it can still be redeemed, else a new one
+ * (which voids the old). True once the link is on the clipboard; failures are told through a notice.
+ */
+export async function copy_seat_link(bridge, room_id, member_id) {
+  try {
+    let invite = seat_invites.get(`${room_id}:${member_id}`);
+    if (!invite?.url || time_ms(invite.expires_at) <= Date.now()) invite = await room_operations(bridge).create_invite(room_id, { member_id });
+    if (!invite.url) { bridge.notify("warning", runner_message(invite.reason_text, invite.reason)); return false; }
+    return Boolean(await bridge.execute("copy", invite.url));
+  } catch (error) { bridge.notify("error", runner_text(error.message)); return false; }
+}
+
 /** End an external member from its menu at once: a seat awaiting check-in is removed, a joined member loses its access. */
 export async function revoke_member(bridge, act, room_id, member) {
   const pending = external_of(member).pending;

@@ -1017,6 +1017,9 @@ function connect_site(data, site, setup_key) {
 /** Bind this computer to the owner's online site; it has one at a time, and the address must be such a site. */
 async function bind_online_site(data, { site, setup_key }, connect) {
   const bound = bound_site(data);
+  // An access code (`站点/#codiscuss-bind=令牌`) carries both, so one paste binds (user 2026-11-19, #5469).
+  const text = String(site || '').trim(), at = text.indexOf(BIND_MARK);
+  if (at >= 0) { setup_key = text.slice(at + BIND_MARK.length); site = text.slice(0, at); }
   let origin;
   try { origin = new URL(String(site || '').trim()).origin; } catch { throw panel_error('站点地址格式不对，例如 https://xxx.pages.dev'); }
   if (bound && bound.site !== origin) throw panel_error('这台电脑已绑定 {value1}，请先解绑', { value1: bound.site });

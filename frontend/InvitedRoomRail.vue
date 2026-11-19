@@ -112,17 +112,17 @@ const status = computed(() => {
         </div>
       </template>
       <div v-else class="invited-actions">
-        <UButton :label="t('调整设置')" icon="i-lucide-shield" size="sm" color="neutral" variant="outline" class="pb-action pb-action-block" @click="start_edit" />
+        <UButton :label="t('调整设置')" icon="i-lucide-shield" size="sm" color="neutral" variant="outline" class="pb-action pb-action-block" data-tone="accent" @click="start_edit" />
         <div class="invited-action-row">
-          <UButton :label="record.paused ? t('恢复唤醒') : t('暂停')" :icon="record.paused ? 'i-lucide-play' : 'i-lucide-pause'" size="sm" color="neutral" variant="outline" class="pb-action pb-action-block"
+          <UButton :label="record.paused ? t('恢复唤醒') : t('暂停')" :icon="record.paused ? 'i-lucide-play' : 'i-lucide-pause'" size="sm" color="neutral" variant="outline" class="pb-action pb-action-block" :data-tone="record.paused ? 'success' : 'warning'"
             :title="record.paused ? t('恢复后，对方点名按设置处理') : t('暂停期间不领取也不唤醒；已在等你确认的请求到时照常算作未同意')" :loading="busy === 'pause'" :disabled="Boolean(busy)"
             @click="invited.set_paused(record.id, !record.paused)" />
-          <UButton :label="t('退出房间')" icon="i-lucide-log-out" size="sm" color="neutral" variant="outline" class="pb-action pb-action-block invited-leave" :disabled="Boolean(busy)" @click="leaving = true" />
+          <UButton :label="t('退出房间')" icon="i-lucide-log-out" size="sm" color="neutral" variant="outline" class="pb-action pb-action-block invited-leave" data-tone="danger" :disabled="Boolean(busy)" @click="leaving = true" />
         </div>
       </div>
     </section>
     <section v-else class="pb-section" :aria-label="t('删除记录')">
-      <UButton :label="t('删除记录')" icon="i-lucide-trash-2" size="sm" color="neutral" variant="outline" class="pb-action pb-action-block invited-leave"
+      <UButton :label="t('删除记录')" icon="i-lucide-trash-2" size="sm" color="neutral" variant="outline" class="pb-action pb-action-block invited-leave" data-tone="danger"
         :title="record.leave_pending ? t('退出通知还没送达对方电脑，送达后才能删除记录') : undefined" :loading="busy === 'remove'" :disabled="Boolean(busy) || record.leave_pending" @click="removing = true" />
     </section>
     <ConfirmDialog v-model:open="leaving" :title="t('退出「{room}」', { room: record.room_title || '' })" :items="leave_items" :confirm-label="t('退出房间')" danger @confirm="invited.leave(record.id)" />
@@ -147,7 +147,6 @@ const status = computed(() => {
 .invited-actions { display: flex; flex-direction: column; gap: 6px; }
 .invited-action-row { display: grid; grid-template-columns: repeat(auto-fit, minmax(96px, 1fr)); gap: 6px; }
 /* Leaving is rare: it stays quiet beside 暂停 and turns red only when pointed at. */
-:global(html[data-theme^="channel"] .pb-action.invited-leave:hover:not(:disabled)) { border-color: color-mix(in srgb, var(--ui-error) 42%, transparent); background: color-mix(in srgb, var(--ui-error) 12%, transparent); color: var(--ui-error); }
-.invited-edit-actions { margin-top: 8px; }
+.invited-edit-actions { margin-top: 10px; }
 .invited-rail .fine-print { margin: 10px 0 0; font-size: 11.5px; line-height: 1.5; }
 </style>
